@@ -25,9 +25,9 @@ Milestones:
 
 | Status | Count |
 |---|---|
-| done | 28 |
+| done | 30 |
 | in progress | 0 |
-| planned | 51 |
+| planned | 49 |
 | won't do | 3 |
 
 ## Performance optimization
@@ -45,8 +45,8 @@ Milestones:
 | Flow-based target discovery (NetFlow v5/v9, IPFIX, sFlow) | 2.7.1 Irpflowd | done | v0.1 | source (`flow`) | #5 |
 | Passive problem detection from flows | 2.7 Collector | planned | v0.2 | source | #21 |
 | SPAN / mirrored-traffic collector | 2.7.2 Irpspand | planned | v0.2 | source (`span`) | #21 |
-| AS-pattern outage/congestion detection (re-probe prefixes crossing a sick ASN) | 1.2.6 Outage Detection | planned | v0.2 | source (detector) | #16 |
-| Circuit issues detection | 1.2.23 | planned | v0.2 | source (detector) | #16 |
+| AS-pattern outage/congestion detection (re-probe prefixes crossing a sick ASN) | 1.2.6 Outage Detection | done | v0.2 | source (`outage`) | #16 |
+| Circuit issues detection | 1.2.23 | done | v0.2 | source (`outage`) | #16 |
 | VIP (critical) prefixes/ASNs with more frequent probing | 1.2.7 VIP Improvements | done | v0.2 | source (`vip`) | #15 |
 | Retry / aggressive probing | 1.2.8 Retry Probing | done | v0.2 | core (probe engine) | #15 |
 | Hysteresis, thresholds, hold time before flip | 1.3.1 | done | v0.1 | scorer | #7 |
@@ -54,6 +54,8 @@ Milestones:
 | Improvement retirement / periodic re-probe of improvements (including a staleness timer when a probe round never finishes) | 4.8 Core settings | done | v0.1 | core | #7, #46 |
 
 UDP unreachable replies count only when the ICMP source is the probed target (#15). Traceroute discovery runs in the background under `budget` and does not block a probe round. VIP ASN expansion is capped by `max_targets` and rebuilt only when the RIB changes; the VIP interval must be shorter than the staleness window.
+
+The `outage` source (#16) correlates probe results inside `window` (default 2m). An ASN incident needs `min_prefixes` (default 3, minimum 2) degraded prefixes whose learned path contains that ASN and that are degraded on every measured provider. A provider incident is the same count of prefixes degraded on that provider and healthy on another, and not already explained by a sick ASN. One noisy prefix does not fire. The probe loop wakes and re-queues the affected prefixes, including other learned prefixes that cross the sick ASN, capped by `max_targets`. Events go to the configured notifiers. The source does not announce.
 
 ## Cost / commit
 

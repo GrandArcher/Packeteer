@@ -16,6 +16,7 @@ import (
 	"github.com/GrandArcher/Packeteer/internal/plugins/prober/udp"
 	"github.com/GrandArcher/Packeteer/internal/plugins/scorer/weighted"
 	"github.com/GrandArcher/Packeteer/internal/plugins/source/flow"
+	"github.com/GrandArcher/Packeteer/internal/plugins/source/outage"
 	"github.com/GrandArcher/Packeteer/internal/plugins/source/static"
 	"github.com/GrandArcher/Packeteer/internal/plugins/source/traceroute"
 	"github.com/GrandArcher/Packeteer/internal/plugins/source/vip"
@@ -41,6 +42,7 @@ func TestConfigDocCoversStructs(t *testing.T) {
 		static.Config{},
 		flow.Config{},
 		traceroute.Config{},
+		outage.Config{},
 		vip.Config{},
 		weighted.Config{},
 		webhook.Config{},

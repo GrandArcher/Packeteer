@@ -154,7 +154,7 @@ Leave graceful restart off on the session. Guides:
 
 A flow export (NetFlow, IPFIX, or sFlow) is optional. It only adds probe targets. It does not inject routes. With host networking the collector's UDP port is a host port; firewall it to the exporter.
 
-A `udp` prober is an optional fallback after ICMP and TCP. It counts a reply from the target, not an ICMP unreachable from a firewall on the path. A `traceroute` source discovers the probe host in the background and moves the probe onto the last stable hop when the configured host does not answer. A `vip` source probes a capped prefix list, and a capped set of prefixes whose learned AS path contains a listed ASN, on an interval that must stay inside the staleness window. Set `probe.retry_loss_pct` to re-measure a lossy sample with more packets before it is stored; the default is off. None of these announce a route. The global packet rate limit still applies. Details are in [docs/PLUGINS.md](docs/PLUGINS.md).
+A `udp` prober is an optional fallback after ICMP and TCP. It counts a reply from the target, not an ICMP unreachable from a firewall on the path. A `traceroute` source discovers the probe host in the background and moves the probe onto the last stable hop when the configured host does not answer. A `vip` source probes a capped prefix list, and a capped set of prefixes whose learned AS path contains a listed ASN, on an interval that must stay inside the staleness window. Set `probe.retry_loss_pct` to re-measure a lossy sample with more packets before it is stored; the default is off. An `outage` source watches completed rounds. When several prefixes that share an ASN, or that fail on one provider only, degrade together, it re-queues them and emits `outage.as` or `outage.circuit` to the configured notifiers. One noisy prefix does not. The re-queue is capped and is not an announcement. None of these announce a route. The global packet rate limit still applies. Details are in [docs/PLUGINS.md](docs/PLUGINS.md).
 
 ## Start in observe
 
@@ -263,7 +263,7 @@ Prometheus metrics are `packeteer_up`, `packeteer_ready`, `packeteer_build_info`
 
 ## Plugins
 
-Probers, target sources, the scorer, the announcer, and notifiers are plugins selected by `type` in the config. Unknown types and unknown keys inside a plugin `config` block refuse startup. Built-ins in this release: probers `icmp`, `tcp`, and `fixed` (labs only); sources `static` and `flow`; scorer `weighted`; announcer `gobgp`; notifier `webhook`. An `exec` plugin is any executable you mount at `/etc/packeteer/plugins` and works in the stock image. Announcers are in-process only.
+Probers, target sources, the scorer, the announcer, and notifiers are plugins selected by `type` in the config. Unknown types and unknown keys inside a plugin `config` block refuse startup. Built-ins: probers `icmp`, `tcp`, `udp`, and `fixed` (labs only); sources `static`, `flow`, `traceroute`, `vip`, and `outage`; scorer `weighted`; announcer `gobgp`; notifier `webhook`. An `exec` plugin is any executable you mount at `/etc/packeteer/plugins` and works in the stock image. Announcers are in-process only.
 
 Details, the exec protocol, and a shell example: [docs/PLUGINS.md](docs/PLUGINS.md). Keys: [docs/CONFIG.md](docs/CONFIG.md).
 

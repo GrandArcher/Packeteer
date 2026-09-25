@@ -89,7 +89,7 @@ A learned prefix is eligible when it is equal to an entry or more specific and i
 
 A measurement older than `3 * interval + packets * timeout` is stale. When retry is enabled the window is `3 * interval + (packets + retry_packets) * timeout`. That same duration is the deadline for one probe round. The decision loop also wakes every `interval`, so a round that never finishes still withdraws once results are stale.
 
-The retry sample replaces the first one. Both waits go through `rate_limit_pps`. Targets from the `vip` source carry their own interval; the scheduler probes a prefix when that interval has elapsed and leaves the other results in place. A VIP interval can only shorten the cadence. An unset target interval means `probe.interval`, so a longer VIP interval does not slow a prefix that static or flow already listed. Sources that do not carry a shorter interval are re-read on `probe.interval`, not on every VIP wake. A completed round, including one that only probed VIP prefixes, still runs the decision engine. `Run` is what the process uses. A prefix that disappears from every source is dropped on the next completed round, including a round that probes nothing because nothing is due.
+The retry sample replaces the first one. Both waits go through `rate_limit_pps`. Targets from the `vip` source carry their own interval; the scheduler probes a prefix when that interval has elapsed and leaves the other results in place. A VIP interval can only shorten the cadence. An unset target interval means `probe.interval`, so a longer VIP interval does not slow a prefix that static or flow already listed. Sources that do not carry a shorter interval are re-read on `probe.interval`, not on every VIP wake. The `outage` source is the exception: it is read on every round, including a short VIP wake, so a pattern detected at the end of a round is a target on the next one. A new incident also wakes the probe loop immediately, and those prefixes are marked urgent for that one pass. A completed round, including one that only probed VIP prefixes, still runs the decision engine. `Run` is what the process uses. A prefix that disappears from every source is dropped on the next completed round, including a round that probes nothing because nothing is due.
 
 ### `log`
 
@@ -265,6 +265,28 @@ Off unless this source is listed. Critical prefixes, and prefixes whose learned 
 | `max_targets` | 100 | 1–10000. Cap on configured prefixes plus ASN matches. The list is truncated and a warning is logged. The expansion is rebuilt only when the RIB changes. |
 
 At least one prefix or ASN is required. The prefix list cannot be longer than `max_targets`. A prefix that is also returned by an earlier source keeps that source's host. A later interval wins only when it is shorter than the interval already chosen, and an unset interval means `probe.interval`. Listing a transit ASN does not turn the whole table into targets.
+
+### Source `outage`
+
+Off unless this source is listed. After each completed probe round it correlates degraded samples by learned AS path and by provider. A new incident re-queues prefixes and emits `outage.as` or `outage.circuit` (severity `critical`). Recovery emits `outage.cleared` (severity `warning`). Nothing is announced. Disable it by removing the source.
+
+A sample is degraded when the probe failed, when loss is at least `loss_pct`, or, when `rtt_ms` is set, when average RTT is at least that many milliseconds. The newest sample for each provider and prefix inside `window` wins. A timestamp of zero is outside the window.
+
+An ASN is sick when at least `min_prefixes` degraded prefixes contain it and every provider just measured for those prefixes is degraded. A prefix that is still healthy on another provider does not count toward the ASN: that pattern is the circuit. `ignore_asns` drops ASNs that sit on every path. iBGP paths usually omit the local ASN already.
+
+A provider is sick when at least `min_prefixes` prefixes are degraded on it and healthy on another provider, and a sick ASN does not already explain those prefixes. With only one provider in the window, prefixes that do not share a sick ASN still count, so a dead circuit with mixed destinations is reported and a shared transit ASN is not reported twice.
+
+The re-queue is probe targets only. An AS incident includes every learned prefix whose path contains that ASN, degraded ones first, up to `max_targets`. A circuit incident includes the prefixes that counted, then other prefixes sampled on that provider, then learned prefixes whose native provider is that circuit, up to the same cap. A default route is never added. The first pass is urgent (the probe loop wakes immediately). Later passes use `interval`. One prefix never fires, and `min_prefixes` cannot be set below 2. AS correlation is empty until the RIB is ready. The global `probe.rate_limit_pps` still applies.
+
+| Key | Default | Bounds |
+|---|---|---|
+| `min_prefixes` | 3 | 2–10000. Zero uses the default. One noisy prefix is not an incident. |
+| `window` | `2m` | `1s`–`24h`. Zero uses the default. |
+| `loss_pct` | 20 | 0–100. Zero uses the default of 20, so loss detection stays on. A failed probe still counts when loss is below this. |
+| `rtt_ms` | 0 | Not negative. Zero disables the RTT check. A positive value also treats average RTT at or above this many milliseconds as degraded. |
+| `interval` | `5s` | `1s`–`24h`. Zero uses the default. Must be shorter than `probe.interval` and shorter than the staleness window. The controller refuses to start otherwise. |
+| `max_targets` | 100 | 1–10000. Cap on the re-queue. Truncation is logged. Degraded prefixes are kept first. |
+| `ignore_asns` | none | Non-zero ASNs, no duplicates. Skipped when looking for a sick ASN. |
 
 ### Source `flow`
 

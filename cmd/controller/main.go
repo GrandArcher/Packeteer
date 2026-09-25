@@ -27,6 +27,7 @@ import (
 	"github.com/GrandArcher/Packeteer/internal/httpapi"
 	"github.com/GrandArcher/Packeteer/internal/pluginhost"
 	_ "github.com/GrandArcher/Packeteer/internal/plugins/all"
+	"github.com/GrandArcher/Packeteer/internal/plugins/source/outage"
 	"github.com/GrandArcher/Packeteer/internal/plugins/source/vip"
 	"github.com/GrandArcher/Packeteer/internal/policy"
 	"github.com/GrandArcher/Packeteer/internal/probe"
@@ -142,6 +143,10 @@ func run(ctx context.Context, args []string, getenv func(string) string, stdout,
 		return 1
 	}
 	if err := checkVIPIntervals(cfg, plugins); err != nil {
+		fmt.Fprintf(stderr, "packeteer: refusing to start: %v\n", err)
+		return 1
+	}
+	if err := checkOutageIntervals(cfg, plugins); err != nil {
 		fmt.Fprintf(stderr, "packeteer: refusing to start: %v\n", err)
 		return 1
 	}
@@ -261,13 +266,18 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 		view.OnChange(poke)
 	}
 	var engine *probe.Engine
-	engine, err = newEngine(cfg, plugins, log, poke)
+	onRound := func() {
+		poke()
+		noteOutages(plugins, engine)
+	}
+	engine, err = newEngine(cfg, plugins, log, onRound)
 	if err != nil {
 		log.Error("refusing to start", "err", err)
 		return 1
 	}
 	wirePrefixLookup(plugins, view)
 	wireLearnedRoutes(plugins, view)
+	wireOutage(plugins, engine, view, log)
 	col.Attach(engine, decider, view)
 	if err := plugins.Start(ctx); err != nil {
 		log.Error("refusing to start", "err", err)
@@ -527,6 +537,147 @@ func wireLearnedRoutes(plugins *pluginhost.Set, view *rib.View) {
 // checkVIPIntervals rejects a VIP cadence that is not inside the staleness
 // window. A longer interval leaves that prefix permanently stale, and the
 // controller withdraws any improvement on it.
+// noteOutages correlates the round that just finished. A new incident
+// wakes the probe loop so the re-queued prefixes are measured without
+// waiting out probe.interval. Observe and inject both call this; the
+// source only adds probe targets.
+func noteOutages(plugins *pluginhost.Set, engine *probe.Engine) {
+	if plugins == nil || engine == nil {
+		return
+	}
+	now := time.Now()
+	for _, src := range plugins.Sources {
+		s, ok := src.Plugin.(*outage.Source)
+		if !ok {
+			continue
+		}
+		if s.Evaluate(now) {
+			engine.Wake()
+		}
+	}
+}
+
+// outageSnap caches the copied RIB for one generation. Evaluate runs once
+// per completed round and must not copy every AS path when nothing changed.
+type outageSnap struct {
+	mu  sync.Mutex
+	gen uint64
+	ok  bool
+	out []outage.Route
+}
+
+func (s *outageSnap) get(view learnedView) []outage.Route {
+	if view == nil || !view.Ready() {
+		return nil
+	}
+	g := view.Generation()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.ok && s.gen == g {
+		return s.out
+	}
+	routes := view.Routes()
+	out := make([]outage.Route, 0, len(routes))
+	for _, rt := range routes {
+		if !rt.Prefix.IsValid() || rt.Prefix.Bits() == 0 {
+			continue
+		}
+		out = append(out, outage.Route{
+			Prefix:   rt.Prefix,
+			Provider: rt.Provider,
+			ASPath:   append([]uint32(nil), rt.ASPath...),
+		})
+	}
+	s.gen, s.ok, s.out = g, true, out
+	return out
+}
+
+// wireOutage gives the outage source the probe results and the learned
+// RIB, and fans its events out to the configured notifiers. A missing or
+// unready RIB yields no routes, so AS correlation stays quiet. Notifier
+// delivery is asynchronous so a slow webhook cannot hold the probe loop.
+func wireOutage(plugins *pluginhost.Set, engine *probe.Engine, view *rib.View, log *slog.Logger) {
+	if plugins == nil {
+		return
+	}
+	var snap outageSnap
+	samples := func() []outage.Sample {
+		if engine == nil {
+			return nil
+		}
+		return outageSamples(engine.Results())
+	}
+	routes := func() []outage.Route { return snap.get(view) }
+	notify := func(ev plugin.Event) {
+		if len(plugins.Notifiers) == 0 {
+			return
+		}
+		go deliverOutage(plugins, log, ev)
+	}
+	for _, src := range plugins.Sources {
+		s, ok := src.Plugin.(*outage.Source)
+		if !ok {
+			continue
+		}
+		s.SetSnapshots(samples, routes)
+		s.SetNotify(notify)
+	}
+}
+
+func deliverOutage(plugins *pluginhost.Set, log *slog.Logger, ev plugin.Event) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	for _, n := range plugins.Notifiers {
+		if err := n.Plugin.Notify(ctx, ev); err != nil && log != nil {
+			log.Warn("notify", "notifier", n.Name, "kind", ev.Kind, "err", err)
+		}
+	}
+}
+
+func outageSamples(rs []probe.Result) []outage.Sample {
+	out := make([]outage.Sample, len(rs))
+	for i, r := range rs {
+		out[i] = outage.Sample{
+			Provider: r.Provider,
+			Prefix:   r.Prefix,
+			LossPct:  r.Stats.LossPct,
+			RTT:      r.Stats.RTTAvg,
+			Failed:   !r.OK(),
+			Time:     r.Time,
+		}
+	}
+	return out
+}
+
+// checkOutageIntervals rejects a reprobe cadence that is not faster than
+// the normal probe interval, or that is outside the staleness window. A
+// longer interval would leave the re-queued prefixes stale, and the
+// controller would withdraw any improvement on them.
+func checkOutageIntervals(cfg *config.Config, plugins *pluginhost.Set) error {
+	if plugins == nil {
+		return nil
+	}
+	window := maxResultAge(cfg)
+	var errs []error
+	for _, src := range plugins.Sources {
+		s, ok := src.Plugin.(*outage.Source)
+		if !ok {
+			continue
+		}
+		iv := s.Interval()
+		if iv >= cfg.Probe.Interval {
+			errs = append(errs, fmt.Errorf("source %s: interval %s must be shorter than probe.interval %s", src.Name, iv, cfg.Probe.Interval))
+		}
+		if iv >= window {
+			errs = append(errs, fmt.Errorf("source %s: interval %s must be shorter than the staleness window %s (3*probe.interval + packets*timeout, plus retry packets when retry is on)", src.Name, iv, window))
+		}
+	}
+	if len(errs) == 0 {
+		return nil
+	}
+	return errors.Join(errs...)
+}
+
 func checkVIPIntervals(cfg *config.Config, plugins *pluginhost.Set) error {
 	if plugins == nil {
 		return nil

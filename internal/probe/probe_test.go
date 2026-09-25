@@ -681,7 +681,10 @@ type countingSource struct {
 	n       int
 	targets []plugin.Target
 	err     error
+	fresh   bool
 }
+
+func (s *countingSource) Fresh() bool { return s.fresh }
 
 func (s *countingSource) Calls() int {
 	s.mu.Lock()
@@ -810,6 +813,132 @@ func TestRunSchedulesVIPAheadOfEngineInterval(t *testing.T) {
 	}
 	if hits["203.0.113.10"] != 1 {
 		t.Fatalf("normal probes = %d, want 1 in a 100ms interval", hits["203.0.113.10"])
+	}
+}
+
+func TestFreshSourceReadOnShortWake(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0)
+	o := opts()
+	o.Now = func() time.Time { return now }
+	o.Interval = 30 * time.Second
+	static := &countingSource{targets: []plugin.Target{{Prefix: pfx2, Host: netip.MustParseAddr("203.0.113.10")}}}
+	fresh := &countingSource{fresh: true, targets: []plugin.Target{{Prefix: pfx1, Host: netip.MustParseAddr("198.51.100.10")}}}
+	e, err := New([]Provider{provA}, []NamedProber{{"p", &fakeProber{fn: ok(1)}}}, []NamedSource{
+		{Name: "static", Source: static},
+		{Name: "outage", Source: fresh},
+	}, o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 3; i++ {
+		if _, done := e.runRound(context.Background(), func(plugin.Target) bool { return true }, true); !done {
+			t.Fatal("round did not complete")
+		}
+		now = now.Add(time.Second)
+	}
+	if static.Calls() != 1 {
+		t.Fatalf("static source calls = %d, want 1", static.Calls())
+	}
+	if fresh.Calls() != 3 {
+		t.Fatalf("fresh source calls = %d, want 3", fresh.Calls())
+	}
+}
+
+func TestUrgentProbesBeforeInterval(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0)
+	o := opts()
+	o.Now = func() time.Time { return now }
+	o.Interval = time.Minute
+	var hits atomic.Int32
+	p := &fakeProber{fn: func(context.Context, plugin.ProbeRequest) (plugin.ProbeResult, error) {
+		hits.Add(1)
+		return plugin.ProbeResult{Sent: 1, RTTs: ms(1)}, nil
+	}}
+	o.Packets = 1
+	src := &countingSource{fresh: true, targets: []plugin.Target{{Prefix: pfx1, Host: netip.MustParseAddr("198.51.100.10"), Urgent: true, Interval: 5 * time.Second}}}
+	e, err := New([]Provider{provA}, []NamedProber{{"p", p}}, []NamedSource{{Name: "outage", Source: src}}, o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	last := map[netip.Prefix]time.Time{pfx1: now}
+	probed, done := e.runRound(context.Background(), func(tg plugin.Target) bool {
+		return e.targetDue(tg, last)
+	}, true)
+	if !done || len(probed) != 1 || hits.Load() != 1 {
+		t.Fatalf("urgent probed=%v done=%v hits=%d", probed, done, hits.Load())
+	}
+	src.targets = []plugin.Target{{Prefix: pfx1, Host: netip.MustParseAddr("198.51.100.10"), Interval: 5 * time.Second}}
+	probed, done = e.runRound(context.Background(), func(tg plugin.Target) bool {
+		return e.targetDue(tg, last)
+	}, true)
+	if !done || len(probed) != 0 || hits.Load() != 1 {
+		t.Fatalf("second pass probed=%v done=%v hits=%d", probed, done, hits.Load())
+	}
+}
+
+func TestUrgentFromLaterSource(t *testing.T) {
+	o := opts()
+	o.Interval = 30 * time.Second
+	e, err := New([]Provider{provA}, []NamedProber{{"p", &fakeProber{fn: ok(1)}}}, []NamedSource{
+		{Name: "static", Source: &fakeSource{targets: []plugin.Target{{Prefix: pfx1, Host: netip.MustParseAddr("198.51.100.9")}}}},
+		{Name: "outage", Source: &fakeSource{targets: []plugin.Target{{Prefix: pfx1, Urgent: true, Interval: 5 * time.Second}}}},
+	}, o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ts := e.Targets(context.Background())
+	if len(ts) != 1 || !ts[0].Urgent || ts[0].Interval != 5*time.Second || ts[0].Host.String() != "198.51.100.9" {
+		t.Fatalf("merged = %+v", ts)
+	}
+}
+
+func TestWakeSkipsRemainderOfInterval(t *testing.T) {
+	e := &Engine{wake: make(chan struct{}, 1)}
+	e.Wake()
+	start := time.Now()
+	if err := e.sleep(context.Background(), time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if time.Since(start) > time.Second {
+		t.Fatalf("wake did not skip the wait: %s", time.Since(start))
+	}
+
+	now := time.Unix(1_700_000_000, 0)
+	o := opts()
+	o.Now = func() time.Time { return now }
+	o.Interval = time.Hour
+	o.Packets = 1
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	src := &countingSource{fresh: true, targets: []plugin.Target{{Prefix: pfx1, Host: netip.MustParseAddr("198.51.100.1")}}}
+	var probes atomic.Int32
+	eng, err := New([]Provider{provA}, []NamedProber{{"p", &fakeProber{fn: func(context.Context, plugin.ProbeRequest) (plugin.ProbeResult, error) {
+		probes.Add(1)
+		return plugin.ProbeResult{Sent: 1, RTTs: ms(1)}, nil
+	}}}}, []NamedSource{{Name: "s", Source: src}}, o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rounds := 0
+	eng.opt.OnRound = func() {
+		rounds++
+		if rounds == 1 {
+			eng.Wake()
+		}
+	}
+	slept := 0
+	eng.opt.Sleep = func(context.Context, time.Duration) error {
+		slept++
+		cancel()
+		return context.Canceled
+	}
+	if err := eng.Run(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Run = %v", err)
+	}
+	// The waking round probes once. The next round starts before any sleep
+	// and finds the prefix not due, so it does not probe again.
+	if rounds != 1 || src.Calls() != 2 || probes.Load() != 1 || slept != 1 {
+		t.Fatalf("rounds=%d sourceCalls=%d probes=%d sleeps=%d", rounds, src.Calls(), probes.Load(), slept)
 	}
 }
 

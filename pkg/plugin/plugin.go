@@ -112,6 +112,10 @@ type Target struct {
 	// measured more often. Zero means the engine interval. Run honors
 	// it; RunOnce still measures every target.
 	Interval time.Duration
+	// Urgent asks for a measurement on this round even when Interval has
+	// not elapsed. The outage source sets it for one pass after a new
+	// incident. Leaving it set on every call makes the scheduler spin.
+	Urgent bool
 }
 
 // TargetSource supplies the set of prefixes to probe.
