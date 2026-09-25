@@ -3,8 +3,10 @@
 package all
 
 import (
+	_ "github.com/GrandArcher/Packeteer/internal/plugins/announcer/gobgp"  // gobgp announcer
 	_ "github.com/GrandArcher/Packeteer/internal/plugins/exec"             // exec prober/source/notifier
 	_ "github.com/GrandArcher/Packeteer/internal/plugins/notifier/webhook" // webhook notifier
+	_ "github.com/GrandArcher/Packeteer/internal/plugins/prober/fixed"     // fixed (lab) prober
 	_ "github.com/GrandArcher/Packeteer/internal/plugins/prober/icmp"      // icmp prober
 	_ "github.com/GrandArcher/Packeteer/internal/plugins/prober/tcp"       // tcp prober
 	_ "github.com/GrandArcher/Packeteer/internal/plugins/scorer/weighted"  // weighted scorer

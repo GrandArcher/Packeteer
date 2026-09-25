@@ -1,0 +1,7 @@
+# transit-b is clearly faster, so the decision engine steers to it.
+sent: 4
+paths:
+  - provider: transit-a
+    rtt_ms: 80
+  - provider: transit-b
+    rtt_ms: 10

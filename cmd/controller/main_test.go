@@ -92,6 +92,44 @@ func TestRunDefaultPath(t *testing.T) {
 	}
 }
 
+func TestRunInjectCheck(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "c.yaml")
+	body := `
+mode: inject
+asn: 64512
+router_id: 192.0.2.10
+packeteer_community: "64512:666"
+local_pref: 250
+more_specific_bits: 1
+hold_time: 1m
+thresholds: {min_loss_delta_pct: 1, min_rtt_delta_ms: 15}
+providers:
+  - {name: transit-a, source_ip: 192.0.2.11, next_hop: 192.0.2.1}
+allowlist: {prefixes: ["198.51.100.0/24"]}
+bgp:
+  neighbors:
+    - {address: 192.0.2.254}
+announcer: {type: gobgp}
+probers:
+  - type: fixed
+    config:
+      paths:
+        - {provider: transit-a, rtt_ms: 1}
+`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out, errOut bytes.Buffer
+	if code := run(context.Background(), []string{"-check", "-config", path}, noEnv, &out, &errOut); code != 0 {
+		t.Fatalf("exit %d stderr %s", code, errOut.String())
+	}
+	for _, want := range []string{"mode: inject", "announce: gobgp local_pref=250 more_specific_bits=1", "check: ok"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("stdout missing %q:\n%s", want, out.String())
+		}
+	}
+}
+
 func TestRunVersion(t *testing.T) {
 	var out, errOut bytes.Buffer
 	if code := run(context.Background(), []string{"-version"}, noEnv, &out, &errOut); code != 0 || !strings.Contains(out.String(), "packeteer dev") {

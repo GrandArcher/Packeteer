@@ -80,3 +80,11 @@ jobs:
           grep -q "prober=icmp" /tmp/pk.log
           grep -q "loss_pct=0" /tmp/pk.log
           grep -q "shutting down" /tmp/pk.log
+
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - name: FRR announce/withdraw lab
+        run: bash lab/e2e.sh

@@ -25,9 +25,9 @@ Milestones:
 
 | Status | Count |
 |---|---|
-| done | 14 |
+| done | 19 |
 | in progress | 0 |
-| planned | 64 |
+| planned | 59 |
 | won't do | 3 |
 
 ## Performance optimization
@@ -90,16 +90,16 @@ Milestones:
 | Policies by country (GeoIP) | 3.7 | planned | v0.2 | scorer (policy filter) | #20 |
 | Provider exclusions | 4.15 cc_disable, 3.7 | done | v0.1 | scorer | #7 |
 | Maintenance windows | 1.2.21, 3.19 | planned | v0.2 | scorer (policy filter) | #20 |
-| Inject allowlist (Packeteer safety addition) | - | planned | v0.1 | core | #7, #8 |
+| Inject allowlist (Packeteer safety addition) | - | done | v0.1 | core + announcer | #7, #8 |
 
 ## BGP
 
 | Capability | IRP doc ref | Status | Milestone | Plugin kind | Issue |
 |---|---|---|---|---|---|
-| iBGP injection with local-pref, communities, next-hop | 1.2.2 Bgpd | planned | v0.1 | announcer (`gobgp`) | #8 |
-| More-specific injection | 2.9 Bgpd | planned | v0.1 | announcer (`gobgp`) | #8 |
+| iBGP injection with local-pref, communities, next-hop | 1.2.2 Bgpd | done | v0.1 | announcer (`gobgp`) | #8 |
+| More-specific injection | 2.9 Bgpd | done | v0.1 | announcer (`gobgp`) | #8 |
 | RIB view from iBGP (learn current best exits) | 2.9 Bgpd | done | v0.1 | core (`internal/rib`) | #6 |
-| BGP session health and automatic withdraw (no stale intent) | 2.9 | planned | v0.1 | announcer | #8 |
+| BGP session health and automatic withdraw (no stale intent) | 2.9 | done | v0.1 | announcer | #8 |
 | AS-path behavior options | 2.9.1 | planned | v0.3 | announcer | #27 |
 | BGP additional paths (add-path) | 2.9.3 | planned | v0.3 | RIB source | #26 |
 | BMP monitoring (incl. inactive IX paths) | 1.2.5, 2.10 | planned | v0.3 | RIB source (`bmp`) | #26 |
@@ -156,7 +156,7 @@ Milestones:
 |---|---|---|---|---|---|
 | Single-container install (Docker, multi-arch GHCR image) | 1.2.3 Technical requirements | done | v0.1 | - | #4 |
 | Plugin system (in-process + exec + webhook) | - | done | v0.1 | all kinds | #13 |
-| Simulated-router e2e lab | - | planned | v0.1 | - | #10 |
+| Simulated-router e2e lab | - | done | v0.1 | - | #10 |
 | Software management / upgrades via package manager | 2.1 | won't do (Replaced by container images and tags; upgrade = pull a new tag.) | - | - | - |
 | IRP Lite (feature-restricted free edition) | - | won't do (Packeteer is fully open source; there are no editions.) | - | - | - |
 | NOC-as-a-service, Tier 1 reports, training | - | won't do (Commercial services, not software features.) | - | - | - |

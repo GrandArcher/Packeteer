@@ -29,11 +29,15 @@ Or with Compose, using [docker-compose.yml](docker-compose.yml): `docker compose
 - Out-of-process plugins can be mounted at `/etc/packeteer/plugins`.
 - Images are built for linux/amd64 and linux/arm64.
 
-Right now Packeteer runs in observe mode. It probes every target from each provider's source IP (ICMP echo, falling back to TCP 443) and logs loss, RTT min/avg/max, and jitter per provider. If `bgp.neighbors` is set, it also keeps a **learn-only** iBGP session with the edge router(s) and learns which provider each prefix uses today (see [docs/mikrotik.md](docs/mikrotik.md)). It announces nothing yet.
+In `observe` (the default) and `suggest`, Packeteer probes every target from each provider's source IP (ICMP echo, falling back to TCP 443) and logs loss, RTT min/avg/max, and jitter per provider. If `bgp.neighbors` is set, it keeps an iBGP session with the edge router(s) and learns which provider each prefix uses today. It announces nothing in those modes.
+
+`mode: inject` is opt-in. The `gobgp` announcer then advertises allowlisted improvements on that same iBGP session: the provider's next hop, your `local_pref`, `packeteer_community`, and `no-export`. The edge must accept only that community from Packeteer and must not export it to eBGP. See [docs/mikrotik.md](docs/mikrotik.md) and [docs/routers.md](docs/routers.md). Stopping the container, or switching back to `observe`, withdraws the routes. Graceful restart is never enabled.
 
 - Validate a config without probing: `docker run --rm -v "$PWD/config.yaml:/etc/packeteer/config.yaml:ro" ghcr.io/grandarcher/packeteer:edge -check`
 - Each provider's `source_ip` must leave through that transit. See [docs/policy-routing.md](docs/policy-routing.md) for the Linux `ip rule` recipe and the MikroTik equivalent.
 - Set `PACKETEER_LOG_LEVEL=debug` for more detail.
+
+The CI lab (`lab/e2e.sh`, GitHub Actions job `e2e`) peers this image with FRR and checks that an injected route appears and is withdrawn. See [lab/README.md](lab/README.md).
 
 ### Security notes
 
@@ -69,9 +73,12 @@ Read [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md) and [AGENTS.md](AGENTS.md) bef
 cmd/controller/     # entrypoint
 internal/probe/     # per-provider sourced measurements
 internal/policy/    # score + hysteresis
-internal/announce/  # ExaBGP / GoBGP speaker
-deploy/             # example ExaBGP + MikroTik notes
+internal/announce/  # inject-mode gate in front of the announcer plugin
+internal/rib/       # learn-only iBGP view (embedded GoBGP)
+lab/                # FRR e2e lab (CI job e2e)
 ```
+
+Router filters: [docs/mikrotik.md](docs/mikrotik.md), [docs/routers.md](docs/routers.md).
 
 ## License
 
