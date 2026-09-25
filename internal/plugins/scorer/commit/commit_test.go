@@ -188,6 +188,24 @@ func TestNoMoveWithoutVolumeOrFreshUsage(t *testing.T) {
 	if moves := s.Plan(stale); len(moves) != 0 {
 		t.Fatalf("stale telemetry moved traffic: %+v", moves)
 	}
+	// Decide reads its clock before telemetry, so a row from this round is
+	// stamped just after Now. That row is fresh. One far ahead is not.
+	justRead := base
+	justRead.Providers = append([]plugin.PlanProvider(nil), base.Providers...)
+	for i := range justRead.Providers {
+		justRead.Providers[i].Usage.Updated = t0.Add(time.Millisecond)
+	}
+	if got := movesTo(s.Plan(justRead)); got[p1] != "b" {
+		t.Fatalf("telemetry read after the decision clock was ignored: %v", got)
+	}
+	future := justRead
+	future.Providers = append([]plugin.PlanProvider(nil), justRead.Providers...)
+	for i := range future.Providers {
+		future.Providers[i].Usage.Updated = t0.Add(time.Hour)
+	}
+	if moves := s.Plan(future); len(moves) != 0 {
+		t.Fatalf("telemetry from a clock an hour ahead moved traffic: %+v", moves)
+	}
 	novol := base
 	novol.Prefixes = []plugin.PlanPrefix{prefix(p1, "a", 0, path("a", 0), path("b", 0))}
 	if moves := s.Plan(novol); len(moves) != 0 {

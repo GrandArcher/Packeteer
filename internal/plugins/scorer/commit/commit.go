@@ -40,6 +40,7 @@ const (
 	defaultPrecedence = 100
 	defaultSlack      = 0.10
 	defaultMaxAge     = 15 * time.Minute
+	maxFutureSkew     = time.Minute
 
 	balanceOff          = "off"
 	balanceEqual        = "equal"
@@ -259,8 +260,11 @@ func (s *Scorer) fresh(u plugin.Usage, now time.Time) bool {
 	if u.Updated.IsZero() || s.maxAge <= 0 || now.IsZero() {
 		return true
 	}
+	// The decision clock is read before telemetry is snapshotted, so a row
+	// read in the same round is stamped slightly after now. A row further
+	// ahead than maxFutureSkew is a bad clock and is not fresh.
 	age := now.Sub(u.Updated)
-	return age >= 0 && age <= s.maxAge
+	return age >= -maxFutureSkew && age <= s.maxAge
 }
 
 // relieve moves prefixes off providers whose projected usage is over commit.
