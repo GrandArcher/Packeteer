@@ -70,7 +70,8 @@ scorer:
 
 # iBGP to the edge router(s). Same ASN as `asn`. The session learns best
 # paths and, only in mode: inject, carries improvements back. Graceful
-# restart is never enabled. Filters: docs/mikrotik.md and docs/routers.md.
+# restart is never enabled. Packeteer proposes a 90s hold time; the router's
+# shorter timer wins. Filters: docs/mikrotik.md and docs/routers.md.
 # bgp:
 #   listen_port: 179      # optional; 0/omitted = connect out only
 #   neighbors:

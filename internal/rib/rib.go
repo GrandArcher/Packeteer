@@ -7,7 +7,7 @@
 // The view maps every prefix a neighbor still advertises to its next-hop and,
 // through providers[].next_hop, to the provider. The speaker is learn-only:
 // its global export policy rejects everything, and graceful restart is never
-// enabled.
+// enabled. It proposes a 90s hold time so a silent session still drops.
 package rib
 
 import (
@@ -26,6 +26,12 @@ import (
 	gobgplog "github.com/osrg/gobgp/v3/pkg/log"
 	"github.com/osrg/gobgp/v3/pkg/server"
 	"google.golang.org/protobuf/types/known/anypb"
+)
+
+// Proposed BGP timers. The peer's OPEN can only shorten the hold time.
+const (
+	bgpHoldTime  = 90
+	bgpKeepalive = 30
 )
 
 // Neighbor is one iBGP session to an edge router.
@@ -178,7 +184,13 @@ func (v *View) Start(ctx context.Context) error {
 				{Config: &api.AfiSafiConfig{Family: &api.Family{Afi: api.Family_AFI_IP, Safi: api.Family_SAFI_UNICAST}, Enabled: true}},
 				{Config: &api.AfiSafiConfig{Family: &api.Family{Afi: api.Family_AFI_IP6, Safi: api.Family_SAFI_UNICAST}, Enabled: true}},
 			},
-			Timers: &api.Timers{Config: &api.TimersConfig{ConnectRetry: 5}},
+			// A hold time of zero negotiates the hold timer off (RFC 4271), so a
+			// session that stops sending without closing TCP would keep routes.
+			// 90/30 is the usual BGP default. The router's shorter hold time
+			// wins; the lab sets 9s and the crash test bounds on that.
+			Timers: &api.Timers{Config: &api.TimersConfig{
+				ConnectRetry: 5, HoldTime: bgpHoldTime, KeepaliveInterval: bgpKeepalive,
+			}},
 			// GracefulRestart deliberately left unset: no stale routes.
 		}
 		if n.LocalAddress.IsValid() {

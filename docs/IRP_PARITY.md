@@ -156,7 +156,7 @@ Milestones:
 |---|---|---|---|---|---|
 | Single-container install (Docker, multi-arch GHCR image) | 1.2.3 Technical requirements | done | v0.1 | - | #4 |
 | Plugin system (in-process + exec + webhook) | - | done | v0.1 | all kinds | #13 |
-| Simulated-router e2e lab | - | done | v0.1 | - | #10 |
+| Simulated-router e2e lab (announce, clean withdraw, SIGKILL session-loss within the BGP hold timer) | - | done | v0.1 | - | #10, #45 |
 | Software management / upgrades via package manager | 2.1 | won't do (Replaced by container images and tags; upgrade = pull a new tag.) | - | - | - |
 | IRP Lite (feature-restricted free edition) | - | won't do (Packeteer is fully open source; there are no editions.) | - | - | - |
 | NOC-as-a-service, Tier 1 reports, training | - | won't do (Commercial services, not software features.) | - | - | - |

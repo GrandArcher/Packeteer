@@ -37,7 +37,7 @@ In `observe` (the default) and `suggest`, Packeteer probes every target from eac
 - Each provider's `source_ip` must leave through that transit. See [docs/policy-routing.md](docs/policy-routing.md) for the Linux `ip rule` recipe and the MikroTik equivalent.
 - Set `PACKETEER_LOG_LEVEL=debug` for more detail.
 
-The CI lab (`lab/e2e.sh`, GitHub Actions job `e2e`) peers this image with FRR and checks that an injected route appears, is withdrawn when FRR drops a native route it was still advertising, stays up when FRR hides that route because Packeteer's path won, and is withdrawn when Packeteer stops. See [lab/README.md](lab/README.md).
+The CI lab (`lab/e2e.sh`, GitHub Actions job `e2e`) peers this image with FRR and checks that an injected route appears, is withdrawn when FRR drops a native route it was still advertising, stays up when FRR hides that route because Packeteer's path won, is withdrawn when Packeteer stops cleanly, and is gone after `SIGKILL` once the BGP session drops (within the router's hold timer). See [lab/README.md](lab/README.md).
 
 ### Security notes
 
