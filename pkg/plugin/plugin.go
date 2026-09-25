@@ -23,6 +23,7 @@ package plugin
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"net/netip"
 	"time"
@@ -178,3 +179,8 @@ type Notifier interface {
 	Lifecycle
 	Notify(ctx context.Context, e Event) error
 }
+
+// ErrSourceUnavailable is returned (wrapped) by probers when the requested
+// source address cannot be used, e.g. it is not configured on the host. The
+// core treats it as "provider down" and fails closed instead of guessing.
+var ErrSourceUnavailable = errors.New("probe source address unavailable")

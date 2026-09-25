@@ -31,8 +31,8 @@ Each entry has `type` (required), an optional `name` (defaults to the type and m
 
 | Kind | Interface | Built-ins (v0.1) | Out-of-process |
 |---|---|---|---|
-| `prober` | `Probe(ctx, ProbeRequest) (ProbeResult, error)` | `icmp`, `tcp` (#2) | `exec` |
-| `source` | `Targets(ctx) ([]Target, error)` | `static` (#2), flow (#5) | `exec` |
+| `prober` | `Probe(ctx, ProbeRequest) (ProbeResult, error)` | `icmp`, `tcp` | `exec` |
+| `source` | `Targets(ctx) ([]Target, error)` | `static`, flow (#5) | `exec` |
 | `scorer` | `Score(PathStats) float64` (lower is better) | weighted (#7) | none |
 | `announcer` | `Announce`, `Withdraw`, `WithdrawAll` | `gobgp` (#8) | **never** |
 | `notifier` | `Notify(ctx, Event) error` | `webhook` | `exec` |
@@ -50,6 +50,14 @@ Announcers run **in-process only**, so an external process can never inject rout
 3. **`Stop(ctx)`.** Releases everything before `ctx` expires. Plugins stop in reverse order, so the announcer stops first and routes are withdrawn early.
 
 Embed `plugin.Base` for no-op `Start`/`Stop`.
+
+### Built-in configuration
+
+- `icmp`: `socket: auto|raw|udp` (default `auto`, which tries raw and then unprivileged datagram), `packet_interval` (default 100ms).
+- `tcp`: `port` (default 443), `packet_interval` (default 100ms). A SYN-ACK or a RST both count as a reply.
+- `static`: `targets: [{prefix, host?, weight?}]`. `host` must be inside `prefix` and defaults to the first address.
+- `exec`: see below.
+- `webhook`: `url`, `timeout`, `headers`, `min_severity`.
 
 ## Writing a Go plugin (compiled in)
 

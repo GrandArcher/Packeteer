@@ -124,6 +124,13 @@ func TestDefaults(t *testing.T) {
 	if cfg.Probe.Packets != DefaultProbePackets {
 		t.Errorf("Probe.Packets = %d, want %d", cfg.Probe.Packets, DefaultProbePackets)
 	}
+	if cfg.Probe.Workers != DefaultProbeWorkers || cfg.Probe.RateLimitPPS != DefaultProbeRateLimitPPS ||
+		cfg.Probe.PerTargetConcurrency != DefaultProbePerTargetConcurrency {
+		t.Errorf("probe defaults = %+v", cfg.Probe)
+	}
+	if len(cfg.Probers) != 2 || cfg.Probers[0].Type != "icmp" || cfg.Probers[1].Type != "tcp" {
+		t.Errorf("default probers = %+v", cfg.Probers)
+	}
 }
 
 func TestLoadExampleConfig(t *testing.T) {
@@ -199,6 +206,11 @@ func TestParseErrors(t *testing.T) {
 		{"timeout not shorter than interval", edit(t, validYAML, "timeout: 2s", "timeout: 30s"), "must be shorter than probe.interval"},
 		{"negative packets", edit(t, validYAML, "packets: 10", "packets: -1"), "probe.packets -1 must be between 1"},
 		{"too many packets", edit(t, validYAML, "packets: 10", "packets: 1001"), "must be between 1 and 1000"},
+		{"negative workers", edit(t, validYAML, "packets: 10", "packets: 10\n  workers: -1"), "probe.workers -1 must be between 1"},
+		{"too many workers", edit(t, validYAML, "packets: 10", "packets: 10\n  workers: 5000"), "probe.workers 5000"},
+		{"negative pps", edit(t, validYAML, "packets: 10", "packets: 10\n  rate_limit_pps: -5"), "probe.rate_limit_pps -5"},
+		{"too high pps", edit(t, validYAML, "packets: 10", "packets: 10\n  rate_limit_pps: 200000"), "probe.rate_limit_pps 200000"},
+		{"bad per-target", edit(t, validYAML, "packets: 10", "packets: 10\n  per_target_concurrency: 65"), "probe.per_target_concurrency 65"},
 		{"inject without allowlist", edit(t, injectYAML, "prefixes:\n    - 198.51.100.0/24\n    - 2001:db8:100::/48\n", "prefixes: []\n"), "mode inject requires a non-empty allowlist"},
 		{"inject without community", edit(t, injectYAML, "packeteer_community: \"64512:666\"\n", ""), "mode inject requires packeteer_community"},
 		{"inject without hold_time", edit(t, injectYAML, "hold_time: 15m\n", ""), "mode inject requires a positive hold_time"},

@@ -29,7 +29,11 @@ Or with Compose, using [docker-compose.yml](docker-compose.yml): `docker compose
 - Out-of-process plugins can be mounted at `/etc/packeteer/plugins`.
 - Images are built for linux/amd64 and linux/arm64.
 
-Right now the controller validates the config, prints the effective mode and providers, and exits. It sends no probes and opens no BGP sessions yet.
+Right now Packeteer runs in observe mode. It probes every target from each provider's source IP (ICMP echo, falling back to TCP 443) and logs loss, RTT min/avg/max, and jitter per provider. It opens no BGP sessions yet.
+
+- Validate a config without probing: `docker run --rm -v "$PWD/config.yaml:/etc/packeteer/config.yaml:ro" ghcr.io/grandarcher/packeteer:edge -check`
+- Each provider's `source_ip` must leave through that transit. See [docs/policy-routing.md](docs/policy-routing.md) for the Linux `ip rule` recipe and the MikroTik equivalent.
+- Set `PACKETEER_LOG_LEVEL=debug` for more detail.
 
 ### Security notes
 
@@ -39,7 +43,7 @@ The process runs as root inside the container because raw ICMP sockets and BGP p
 
 ```sh
 go build -o packeteer ./cmd/controller
-./packeteer -config config.example.yaml
+./packeteer -check -config config.example.yaml
 docker build -t packeteer .
 ```
 

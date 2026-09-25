@@ -35,6 +35,13 @@ const (
 	DefaultProbeTimeout  = 2 * time.Second
 	DefaultProbePackets  = 10
 	MaxProbePackets      = 1000
+
+	DefaultProbeWorkers              = 8
+	MaxProbeWorkers                  = 1024
+	DefaultProbeRateLimitPPS         = 100
+	MaxProbeRateLimitPPS             = 100000
+	DefaultProbePerTargetConcurrency = 2
+	MaxProbePerTargetConcurrency     = 64
 )
 
 // Config is the top-level controller configuration.
@@ -102,6 +109,12 @@ type Probe struct {
 	Interval time.Duration `yaml:"interval"`
 	Timeout  time.Duration `yaml:"timeout"`
 	Packets  int           `yaml:"packets"`
+	// Workers is the number of concurrent probe runs.
+	Workers int `yaml:"workers"`
+	// RateLimitPPS caps the global probe packet rate (packets per second).
+	RateLimitPPS int `yaml:"rate_limit_pps"`
+	// PerTargetConcurrency caps concurrent probe runs toward one host.
+	PerTargetConcurrency int `yaml:"per_target_concurrency"`
 }
 
 // Load reads, parses, defaults, and validates the config file at path.
@@ -154,6 +167,19 @@ func (c *Config) applyDefaults() {
 	}
 	if c.Probe.Packets == 0 {
 		c.Probe.Packets = DefaultProbePackets
+	}
+	if c.Probe.Workers == 0 {
+		c.Probe.Workers = DefaultProbeWorkers
+	}
+	if c.Probe.RateLimitPPS == 0 {
+		c.Probe.RateLimitPPS = DefaultProbeRateLimitPPS
+	}
+	if c.Probe.PerTargetConcurrency == 0 {
+		c.Probe.PerTargetConcurrency = DefaultProbePerTargetConcurrency
+	}
+	if len(c.Probers) == 0 {
+		// ICMP echo with TCP-SYN (port 443) fallback.
+		c.Probers = []PluginSpec{{Type: "icmp"}, {Type: "tcp"}}
 	}
 	if c.PluginDir == "" {
 		c.PluginDir = DefaultPluginDir
@@ -291,6 +317,16 @@ func (c *Config) Validate() error {
 	}
 	if c.Announcer != nil && c.Announcer.Type == "" {
 		add("announcer: type is required")
+	}
+
+	if c.Probe.Workers < 1 || c.Probe.Workers > MaxProbeWorkers {
+		add("probe.workers %d must be between 1 and %d", c.Probe.Workers, MaxProbeWorkers)
+	}
+	if c.Probe.RateLimitPPS < 1 || c.Probe.RateLimitPPS > MaxProbeRateLimitPPS {
+		add("probe.rate_limit_pps %d must be between 1 and %d", c.Probe.RateLimitPPS, MaxProbeRateLimitPPS)
+	}
+	if c.Probe.PerTargetConcurrency < 1 || c.Probe.PerTargetConcurrency > MaxProbePerTargetConcurrency {
+		add("probe.per_target_concurrency %d must be between 1 and %d", c.Probe.PerTargetConcurrency, MaxProbePerTargetConcurrency)
 	}
 
 	// Inject mode has extra safety requirements (see AGENTS.md).

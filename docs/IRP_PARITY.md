@@ -25,8 +25,8 @@ Milestones:
 
 | Status | Count |
 |---|---|
-| done | 4 |
-| in progress | 5 |
+| done | 8 |
+| in progress | 1 |
 | planned | 69 |
 | won't do | 3 |
 
@@ -34,14 +34,14 @@ Milestones:
 
 | Capability | IRP doc ref | Status | Milestone | Plugin kind | Issue |
 |---|---|---|---|---|---|
-| Active probing per provider: ICMP | 1.3.1, Explorer | in progress | v0.1 | prober (`icmp`) | #2 |
-| Active probing per provider: TCP | 1.3.1, Explorer | in progress | v0.1 | prober (`tcp`) | #2 |
+| Active probing per provider: ICMP | 1.3.1, Explorer | done | v0.1 | prober (`icmp`) | #2 |
+| Active probing per provider: TCP | 1.3.1, Explorer | done | v0.1 | prober (`tcp`) | #2 |
 | Active probing per provider: UDP | Explorer | planned | v0.2 | prober (`udp`) | #15 |
 | Traceroute-based probe target discovery | Explorer | planned | v0.2 | source (`traceroute`) | #15 |
 | Loss / latency / jitter measurement and scoring | 1.3.1 | in progress | v0.1 | prober + scorer (`weighted`) | #2, #7 |
 | Throughput-aware scoring (prefix volume weighting) | 1.2.13 Improvements weight | planned | v0.2 | scorer | #23, #18 |
-| Probe sources per provider (IRP uses PBR; we use source-IP policy routing) | 2.8 Explorer, 2.8.1 PBR | in progress | v0.1 | core + docs | #2 |
-| Static probe target lists | - | in progress | v0.1 | source (`static`) | #2 |
+| Probe sources per provider (IRP uses PBR; we use source-IP policy routing) | 2.8 Explorer, 2.8.1 PBR | done | v0.1 | core + docs | #2 |
+| Static probe target lists | - | done | v0.1 | source (`static`) | #2 |
 | Flow-based target discovery (NetFlow v5/v9, IPFIX, sFlow) | 2.7.1 Irpflowd | planned | v0.1 | source (`flow`) | #5 |
 | Passive problem detection from flows | 2.7 Collector | planned | v0.2 | source | #21 |
 | SPAN / mirrored-traffic collector | 2.7.2 Irpspand | planned | v0.2 | source (`span`) | #21 |
