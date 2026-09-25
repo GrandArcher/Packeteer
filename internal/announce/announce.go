@@ -3,17 +3,15 @@
 // It runs only in inject mode. Observe and suggest never touch the
 // announcer. A route is published only when the decided prefix is allowlisted
 // and present in the RIB, the provider has a next hop, and the improvement
-// cap has room. Every Sync re-checks prefixes already on the wire, including
-// provider switches. A route already on the wire stays while the decision
-// engine still wants it, even if the neighbor stopped advertising the prefix:
-// that is what the router does once Packeteer's route is best, and
-// withdrawing it would flap. A real leave arrives as the improvement leaving
-// the wanted set, and Sync withdraws it. Every route carries the configured
-// local preference and community; the announcer adds NO_EXPORT.
-//
-// more_specific_bits, when non-zero, publishes the 2^n covering
-// more-specifics of the decided prefix instead of the prefix itself. The
-// parent must still be the prefix that is in the RIB and on the allowlist.
+// cap has room. The announced prefix is that exact prefix. Packeteer does
+// not synthesize more-specifics. Every Sync re-checks prefixes already on
+// the wire, including provider switches. A route already on the wire stays
+// while the decision engine still wants it, even if the neighbor stopped
+// advertising the prefix: that is what the router does once Packeteer's
+// route is best, and withdrawing it would flap. A real leave arrives as the
+// improvement leaving the wanted set, and Sync withdraws it. Every route
+// carries the configured local preference and community; the announcer adds
+// NO_EXPORT.
 package announce
 
 import (
@@ -21,10 +19,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"math/big"
 	"net/netip"
 	"sort"
-	"strings"
 	"sync"
 
 	"github.com/GrandArcher/Packeteer/internal/config"
@@ -45,13 +41,12 @@ type RIB interface {
 
 // Config is the injection policy. It is ignored unless Mode is inject.
 type Config struct {
-	Mode             string
-	LocalPref        uint32
-	Community        string
-	MoreSpecificBits int
-	MaxImprovements  int
-	Allowlist        []netip.Prefix
-	NextHops         map[string]netip.Addr // provider name -> next hop
+	Mode            string
+	LocalPref       uint32
+	Community       string
+	MaxImprovements int
+	Allowlist       []netip.Prefix
+	NextHops        map[string]netip.Addr // provider name -> next hop
 }
 
 // Controller applies decision changes to an announcer.
@@ -62,13 +57,12 @@ type Controller struct {
 	log *slog.Logger
 
 	mu     sync.Mutex
-	active map[netip.Prefix]slot // decided prefix -> what is on the wire
+	active map[netip.Prefix]slot // exact learned prefix -> what is on the wire
 }
 
-// slot is one decided prefix's published routes.
+// slot is the route published for one learned prefix.
 type slot struct {
 	provider string
-	prefixes []netip.Prefix
 }
 
 // New validates inject settings and returns a controller. ann and rib may be
@@ -89,9 +83,6 @@ func New(cfg Config, ann plugin.Announcer, rib RIB, log *slog.Logger) (*Controll
 		}
 		if cfg.MaxImprovements < 1 {
 			return nil, errors.New("announce: max_improvements must be positive")
-		}
-		if cfg.MoreSpecificBits < 0 || cfg.MoreSpecificBits > config.MaxMoreSpecificBits {
-			return nil, fmt.Errorf("announce: more_specific_bits %d is out of range", cfg.MoreSpecificBits)
 		}
 	}
 	if log == nil {
@@ -199,26 +190,14 @@ func (c *Controller) withdrawAllLocked(ctx context.Context) error {
 
 func (c *Controller) withdrawLocked(ctx context.Context, p netip.Prefix) error {
 	p = p.Masked()
-	announced := c.active[p].prefixes
-	if len(announced) == 0 {
-		announced = []netip.Prefix{p}
+	if _, ok := c.active[p]; !ok {
+		return nil
 	}
-	var errs []error
-	var left []netip.Prefix
-	for _, q := range announced {
-		if err := c.ann.Withdraw(ctx, q); err != nil {
-			errs = append(errs, err)
-			left = append(left, q)
-			continue
-		}
+	if err := c.ann.Withdraw(ctx, p); err != nil {
+		return err
 	}
-	if len(left) == 0 {
-		delete(c.active, p)
-	} else if s, ok := c.active[p]; ok {
-		s.prefixes = left
-		c.active[p] = s
-	}
-	return errors.Join(errs...)
+	delete(c.active, p)
+	return nil
 }
 
 func (c *Controller) announceLocked(ctx context.Context, imp policy.Improvement) error {
@@ -236,56 +215,19 @@ func (c *Controller) announceLocked(ctx context.Context, imp policy.Improvement)
 	if _, exists := c.active[p]; !exists && len(c.active) >= c.cfg.MaxImprovements {
 		return fmt.Errorf("announce: max_improvements (%d) reached", c.cfg.MaxImprovements)
 	}
-	prefixes, err := expand(p, c.cfg.MoreSpecificBits)
-	if err != nil {
+	rt := plugin.Route{
+		Prefix:      p,
+		NextHop:     nh,
+		Provider:    imp.Provider,
+		LocalPref:   c.cfg.LocalPref,
+		Communities: []string{c.cfg.Community},
+	}
+	if err := c.ann.Announce(ctx, rt); err != nil {
 		return err
 	}
-	for _, q := range prefixes {
-		if !allowed(c.cfg.Allowlist, q) {
-			return fmt.Errorf("announce: more-specific %s of %s is not allowlisted", q, p)
-		}
-	}
-	var announced []netip.Prefix
-	for _, q := range prefixes {
-		rt := plugin.Route{
-			Prefix:      q,
-			NextHop:     nh,
-			Provider:    imp.Provider,
-			LocalPref:   c.cfg.LocalPref,
-			Communities: []string{c.cfg.Community},
-		}
-		if err := c.ann.Announce(ctx, rt); err != nil {
-			for _, done := range announced {
-				_ = c.ann.Withdraw(ctx, done)
-			}
-			return err
-		}
-		announced = append(announced, q)
-	}
-	// Drop any previous more-specifics that this round no longer publishes.
-	prev := map[netip.Prefix]bool{}
-	for _, q := range c.active[p].prefixes {
-		prev[q] = true
-	}
-	for _, q := range announced {
-		delete(prev, q)
-	}
-	for q := range prev {
-		if err := c.ann.Withdraw(ctx, q); err != nil {
-			c.log.Error("withdraw stale more-specific", "prefix", q, "err", err)
-		}
-	}
-	c.active[p] = slot{provider: imp.Provider, prefixes: announced}
-	c.log.Info("injected", "prefix", p, "announced", fmtPrefixes(announced), "provider", imp.Provider, "next_hop", nh, "local_pref", c.cfg.LocalPref)
+	c.active[p] = slot{provider: imp.Provider}
+	c.log.Info("injected", "prefix", p, "provider", imp.Provider, "next_hop", nh, "local_pref", c.cfg.LocalPref)
 	return nil
-}
-
-func fmtPrefixes(ps []netip.Prefix) string {
-	out := make([]string, len(ps))
-	for i, p := range ps {
-		out[i] = p.String()
-	}
-	return strings.Join(out, ",")
 }
 
 func sortPrefixes(ps []netip.Prefix) {
@@ -297,6 +239,8 @@ func sortPrefixes(ps []netip.Prefix) {
 	})
 }
 
+// allowed reports whether p is an allowlist entry or covered by one.
+// Announce publishes p itself, and only when that exact prefix is in the RIB.
 func allowed(list []netip.Prefix, p netip.Prefix) bool {
 	p = p.Masked()
 	for _, a := range list {
@@ -305,61 +249,4 @@ func allowed(list []netip.Prefix, p netip.Prefix) bool {
 		}
 	}
 	return false
-}
-
-// expand returns the prefixes to announce for p. bits == 0 returns p itself.
-// bits > 0 returns the 2^bits more-specifics of length len(p)+bits that
-// together cover p exactly.
-func expand(p netip.Prefix, bits int) ([]netip.Prefix, error) {
-	p = p.Masked()
-	if !p.IsValid() {
-		return nil, fmt.Errorf("announce: prefix %s is invalid", p)
-	}
-	if bits == 0 {
-		return []netip.Prefix{p}, nil
-	}
-	if bits < 0 {
-		return nil, fmt.Errorf("announce: more_specific_bits %d is negative", bits)
-	}
-	width := p.Addr().BitLen()
-	newLen := p.Bits() + bits
-	if newLen > width {
-		return nil, fmt.Errorf("announce: more_specific_bits %d does not fit in %s", bits, p)
-	}
-	n := 1 << bits
-	shift := width - newLen
-	stride := new(big.Int).Lsh(big.NewInt(1), uint(shift))
-	out := make([]netip.Prefix, 0, n)
-	addr := p.Addr()
-	for i := 0; i < n; i++ {
-		child, err := addr.Prefix(newLen)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, child.Masked())
-		if i+1 == n {
-			break
-		}
-		next, err := addAddr(addr, stride)
-		if err != nil {
-			return nil, err
-		}
-		addr = next
-	}
-	return out, nil
-}
-
-func addAddr(a netip.Addr, delta *big.Int) (netip.Addr, error) {
-	raw := a.AsSlice()
-	sum := new(big.Int).Add(new(big.Int).SetBytes(raw), delta)
-	if sum.Sign() < 0 || sum.BitLen() > len(raw)*8 {
-		return netip.Addr{}, fmt.Errorf("announce: address overflow adding to %s", a)
-	}
-	buf := make([]byte, len(raw))
-	sum.FillBytes(buf)
-	out, ok := netip.AddrFromSlice(buf)
-	if !ok {
-		return netip.Addr{}, fmt.Errorf("announce: bad address after adding to %s", a)
-	}
-	return out, nil
 }

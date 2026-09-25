@@ -105,7 +105,6 @@ asn: 64512
 router_id: 192.0.2.10
 packeteer_community: "64512:666"
 local_pref: 250
-more_specific_bits: 1
 hold_time: 1m
 thresholds: {min_loss_delta_pct: 1, min_rtt_delta_ms: 15}
 providers:
@@ -128,7 +127,7 @@ probers:
 	if code := run(context.Background(), []string{"-check", "-config", path}, noEnv, &out, &errOut); code != 0 {
 		t.Fatalf("exit %d stderr %s", code, errOut.String())
 	}
-	for _, want := range []string{"mode: inject", "announce: gobgp local_pref=250 more_specific_bits=1", "check: ok"} {
+	for _, want := range []string{"mode: inject", "announce: gobgp local_pref=250", "check: ok"} {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("stdout missing %q:\n%s", want, out.String())
 		}

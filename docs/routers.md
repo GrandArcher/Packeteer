@@ -2,7 +2,7 @@
 
 Packeteer peers with the edge over **iBGP** (the router's own ASN). It learns the paths that router advertises — one best path per prefix, unless the router is set to keep sending the native path as well — and, only in `mode: inject`, advertises improvements back on that same session:
 
-- the decided prefix, or the configured more-specifics (`more_specific_bits`)
+- the exact prefix learned from the router
 - next hop = the chosen provider's `next_hop`
 - `local_pref` from the config
 - `packeteer_community` **and** the well-known `no-export` community

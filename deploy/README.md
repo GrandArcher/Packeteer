@@ -5,7 +5,7 @@ Lab only until observe mode is stable.
 ## Edge requirements
 
 - iBGP session from Packeteer (embedded GoBGP) to each edge. One session learns the RIB and, in inject mode, carries improvements.
-- Injected routes use `local_pref` plus `packeteer_community` and NO_EXPORT.
+- Injected routes are the exact prefix learned from the edge, with `local_pref` plus `packeteer_community` and NO_EXPORT.
 - Input filter: accept only routes with the Packeteer community from Packeteer.
 - Outbound eBGP filter: do not advertise routes with that community.
 - Graceful restart off on the session. If Packeteer is gone, the edge falls back to native BGP.

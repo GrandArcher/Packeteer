@@ -40,9 +40,9 @@ const (
 func init() { plugin.Announcers.Register(TypeName, New) }
 
 // Config is the gobgp announcer's config block. It is empty on purpose:
-// local-pref, the community, and more-specific length are controller
-// settings (see docs/PLUGINS.md), and the plugin refuses routes that do not
-// carry them.
+// local-pref and the community are controller settings (see docs/PLUGINS.md),
+// and the plugin refuses routes that do not carry them. The announced
+// prefix is the exact one the controller learned from the RIB.
 type Config struct{}
 
 // Announcer publishes routes on an existing GoBGP speaker.

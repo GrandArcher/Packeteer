@@ -42,10 +42,6 @@ const (
 	MaxProbeRateLimitPPS             = 100000
 	DefaultProbePerTargetConcurrency = 2
 	MaxProbePerTargetConcurrency     = 64
-
-	// MaxMoreSpecificBits is the largest more_specific_bits value. 8 covers
-	// a prefix with at most 256 more-specifics.
-	MaxMoreSpecificBits = 8
 )
 
 // Config is the top-level controller configuration.
@@ -56,10 +52,10 @@ type Config struct {
 	PacketeerCommunity string `yaml:"packeteer_community"`
 	// LocalPref is set on every injected route. Required when mode is inject.
 	LocalPref uint32 `yaml:"local_pref"`
-	// MoreSpecificBits, when non-zero, announces every more-specific that is
-	// this many bits longer than the decided prefix (2^n routes that cover
-	// it). 0 announces the prefix unchanged.
-	MoreSpecificBits int           `yaml:"more_specific_bits"`
+	// MoreSpecificBits is accepted only so a leftover more_specific_bits key
+	// fails closed. Any value, including 0, is an error. Packeteer announces
+	// the exact prefix learned from the RIB.
+	MoreSpecificBits *int          `yaml:"more_specific_bits"`
 	MaxImprovements  *int          `yaml:"max_improvements"`
 	HoldTime         time.Duration `yaml:"hold_time"`
 	// ImprovementTTL retires an improvement after this long so the native
@@ -408,8 +404,8 @@ func (c *Config) Validate() error {
 	}
 
 	// Inject mode has extra safety requirements (see AGENTS.md).
-	if c.MoreSpecificBits < 0 || c.MoreSpecificBits > MaxMoreSpecificBits {
-		add("more_specific_bits %d must be between 0 and %d", c.MoreSpecificBits, MaxMoreSpecificBits)
+	if c.MoreSpecificBits != nil {
+		add("more_specific_bits is removed: Packeteer announces only the exact prefix learned from the RIB")
 	}
 
 	if c.Mode == ModeInject {

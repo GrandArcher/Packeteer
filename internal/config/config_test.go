@@ -114,6 +114,9 @@ func TestParseInjectValid(t *testing.T) {
 	if cfg.LocalPref != 200 || cfg.Announcer == nil || cfg.Announcer.Type != "gobgp" {
 		t.Errorf("local_pref=%d announcer=%v", cfg.LocalPref, cfg.Announcer)
 	}
+	if cfg.MoreSpecificBits != nil {
+		t.Fatalf("more_specific_bits = %d, want the key absent", *cfg.MoreSpecificBits)
+	}
 }
 
 func TestDefaults(t *testing.T) {
@@ -236,7 +239,9 @@ func TestParseErrors(t *testing.T) {
 		{"inject without community", edit(t, injectYAML, "packeteer_community: \"64512:666\"\n", ""), "mode inject requires packeteer_community"},
 		{"inject without local_pref", edit(t, injectYAML, "local_pref: 200\n", ""), "mode inject requires local_pref"},
 		{"inject without announcer", edit(t, injectYAML, "announcer:\n  type: gobgp\n", ""), "mode inject requires an announcer"},
-		{"more_specific_bits too high", minimalYAML + "more_specific_bits: 9\n", "more_specific_bits 9 must be between 0 and 8"},
+		{"more_specific_bits zero", minimalYAML + "more_specific_bits: 0\n", "more_specific_bits is removed"},
+		{"more_specific_bits set", minimalYAML + "more_specific_bits: 1\n", "more_specific_bits is removed"},
+		{"more_specific_bits too high", minimalYAML + "more_specific_bits: 9\n", "more_specific_bits is removed"},
 		{"inject without hold_time", edit(t, injectYAML, "hold_time: 15m\n", ""), "mode inject requires a positive hold_time"},
 		{"inject without thresholds", edit(t, injectYAML, "min_rtt_delta_ms: 15", "min_rtt_delta_ms: 0"), "mode inject requires positive thresholds"},
 	}

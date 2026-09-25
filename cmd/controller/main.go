@@ -116,7 +116,7 @@ func run(ctx context.Context, args []string, getenv func(string) string, stdout,
 	}
 	switch {
 	case cfg.Mode == config.ModeInject:
-		fmt.Fprintf(stdout, "announce: %s local_pref=%d more_specific_bits=%d\n", plugins.Announcer.Type, cfg.LocalPref, cfg.MoreSpecificBits)
+		fmt.Fprintf(stdout, "announce: %s local_pref=%d\n", plugins.Announcer.Type, cfg.LocalPref)
 	case plugins.Announcer != nil:
 		fmt.Fprintln(stdout, "announce: configured but inactive (mode is not inject)")
 	default:
@@ -258,12 +258,11 @@ func newController(cfg *config.Config, plugins *pluginhost.Set, view *rib.View, 
 		ann = plugins.Announcer.Plugin
 	}
 	ac := announce.Config{
-		Mode:             cfg.Mode,
-		LocalPref:        cfg.LocalPref,
-		Community:        cfg.PacketeerCommunity,
-		MoreSpecificBits: cfg.MoreSpecificBits,
-		MaxImprovements:  *cfg.MaxImprovements,
-		NextHops:         map[string]netip.Addr{},
+		Mode:            cfg.Mode,
+		LocalPref:       cfg.LocalPref,
+		Community:       cfg.PacketeerCommunity,
+		MaxImprovements: *cfg.MaxImprovements,
+		NextHops:        map[string]netip.Addr{},
 	}
 	for _, p := range cfg.Providers {
 		nh, err := parseAddr(p.NextHop)
