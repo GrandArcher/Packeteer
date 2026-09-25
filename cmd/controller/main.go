@@ -194,24 +194,13 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 	loopWG.Add(1)
 	go func() {
 		defer loopWG.Done()
-		for {
-			select {
-			case <-loopCtx.Done():
-				return
-			case <-kick:
-			}
-			if loopCtx.Err() != nil {
-				return
-			}
-			now := time.Now()
-			changes := decider.Evaluate(decisionInput(engine, view), now)
-			logChanges(log, cfg.Mode, changes)
-			actx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-			if err := ctl.Sync(actx, decider.Improvements()); err != nil {
-				log.Error("announce", "err", err)
-			}
-			cancel()
-		}
+		// The ticker is independent of probe rounds and RIB updates. A round
+		// that never completes (a prober or target source that ignores
+		// cancellation) must still withdraw once measurements exceed
+		// MaxResultAge.
+		decideLoop(loopCtx, cfg.Probe.Interval, kick, func(now time.Time) {
+			runDecision(now, decider, decisionInput(engine, view), ctl, log, cfg.Mode)
+		})
 	}()
 
 	announcing := "disabled"
@@ -308,11 +297,53 @@ func newEngine(cfg *config.Config, plugins *pluginhost.Set, log *slog.Logger, on
 		Packets:              cfg.Probe.Packets,
 		Workers:              cfg.Probe.Workers,
 		PerTargetConcurrency: cfg.Probe.PerTargetConcurrency,
+		RoundTimeout:         maxResultAge(cfg),
 		Limiter:              rate.NewLimiter(rate.Limit(cfg.Probe.RateLimitPPS), burst),
 		Logger:               log,
 		OnResult:             func(r probe.Result) { logResult(log, r) },
 		OnRound:              onRound,
 	})
+}
+
+// decideLoop evaluates on kick (a finished probe round or a RIB change)
+// and on a staleness ticker. The ticker is what withdraws improvements
+// when no round ever completes.
+func decideLoop(ctx context.Context, interval time.Duration, kick <-chan struct{}, eval func(now time.Time)) {
+	if interval <= 0 {
+		interval = time.Second
+	}
+	staleness := time.NewTicker(interval)
+	defer staleness.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-kick:
+		case <-staleness.C:
+		}
+		if ctx.Err() != nil {
+			return
+		}
+		eval(time.Now())
+	}
+}
+
+// runDecision applies one evaluation to the announcer.
+func runDecision(now time.Time, decider *policy.Engine, in policy.Input, ctl *announce.Controller, log *slog.Logger, mode string) {
+	changes := decider.Evaluate(in, now)
+	logChanges(log, mode, changes)
+	actx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := ctl.Sync(actx, decider.Improvements()); err != nil {
+		log.Error("announce", "err", err)
+	}
+}
+
+// maxResultAge is how old a measurement may be before Decide treats it as
+// stale. It is also the overall probe-round deadline, so a stuck round
+// cannot outlive the freshness window.
+func maxResultAge(cfg *config.Config) time.Duration {
+	return 3*cfg.Probe.Interval + time.Duration(cfg.Probe.Packets)*cfg.Probe.Timeout
 }
 
 func logResult(log *slog.Logger, r probe.Result) {
@@ -417,8 +448,9 @@ func newDecider(cfg *config.Config, plugins *pluginhost.Set) (*policy.Engine, er
 		MinRTTDelta:     time.Duration(cfg.Thresholds.MinRTTDeltaMs * float64(time.Millisecond)),
 		HoldTime:        cfg.HoldTime,
 		MaxImprovements: *cfg.MaxImprovements,
-		// A result older than ~3 rounds is stale.
-		MaxResultAge: 3*cfg.Probe.Interval + time.Duration(cfg.Probe.Packets)*cfg.Probe.Timeout,
+		// A result older than ~3 rounds is stale. The decision loop
+		// re-checks this on a ticker even when no round completes.
+		MaxResultAge: maxResultAge(cfg),
 		Excluded:     map[string]bool{},
 	}
 	if cfg.ImprovementTTL > 0 {
