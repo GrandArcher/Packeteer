@@ -4,6 +4,7 @@ import (
 	"net/netip"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
 )
@@ -44,7 +45,7 @@ rules:
   - {name: skip, action: ignore, prefixes: [192.0.2.0/24]}
   - {name: only-a, action: allow, providers: [transit-a], prefixes: [198.51.100.0/25]}
   - {name: no-b, action: deny, providers: [transit-b], prefixes: [198.51.100.128/25]}
-  - {name: pin-c, action: static, providers: [transit-c], prefixes: [203.0.113.0/25]}
+  - {name: pin-c, action: static, providers: [transit-c], prefixes: [203.0.113.0/25], max_loss_pct: 2, max_rtt: 80ms}
   - {name: gold, action: vip, prefixes: [203.0.113.128/25]}
 `)
 	tests := []struct {
@@ -71,6 +72,9 @@ rules:
 			if !strings.HasPrefix(v.Match, "prefix ") {
 				t.Fatalf("match = %q", v.Match)
 			}
+			if tt.action == plugin.PolicyStatic && (v.MaxLossPct != 2 || v.MaxRTT != 80*time.Millisecond) {
+				t.Fatalf("static ceiling = %v %v", v.MaxLossPct, v.MaxRTT)
+			}
 		})
 	}
 	// A less specific prefix than the rule does not match.
@@ -92,7 +96,7 @@ rules:
   - {name: asn-64500, action: allow, providers: [transit-b], asns: [64500]}
   - {name: asn-64500-late, action: ignore, asns: [64500]}
   - {name: wide, action: deny, providers: [transit-c], prefixes: [192.0.2.0/23]}
-  - {name: narrow, action: static, providers: [transit-b], prefixes: [192.0.2.0/25]}
+  - {name: narrow, action: static, providers: [transit-b], prefixes: [192.0.2.0/25], max_loss_pct: 1}
   - {name: first-equal, action: vip, prefixes: [198.51.100.0/24]}
   - {name: second-equal, action: ignore, prefixes: [198.51.100.0/24]}
 `)
@@ -150,7 +154,12 @@ func TestValidation(t *testing.T) {
 		{"no match", `rules: [{action: vip}]`, "at least one of prefixes, asns, or countries"},
 		{"deny without providers", `rules: [{action: deny, prefixes: [192.0.2.0/24]}]`, "needs at least one provider"},
 		{"allow without providers", `rules: [{action: allow, prefixes: [192.0.2.0/24]}]`, "needs at least one provider"},
-		{"static two providers", `rules: [{action: static, providers: [transit-a, transit-b], prefixes: [192.0.2.0/24]}]`, "exactly one provider"},
+		{"static two providers", `rules: [{action: static, providers: [transit-a, transit-b], prefixes: [192.0.2.0/24], max_loss_pct: 1}]`, "exactly one provider"},
+		{"static without loss ceiling", `rules: [{action: static, providers: [transit-a], prefixes: [192.0.2.0/24]}]`, "needs max_loss_pct"},
+		{"static loss ceiling over 100", `rules: [{action: static, providers: [transit-a], prefixes: [192.0.2.0/24], max_loss_pct: 101}]`, "must be 0-100"},
+		{"static negative loss ceiling", `rules: [{action: static, providers: [transit-a], prefixes: [192.0.2.0/24], max_loss_pct: -1}]`, "must be 0-100"},
+		{"static negative rtt", `rules: [{action: static, providers: [transit-a], prefixes: [192.0.2.0/24], max_loss_pct: 1, max_rtt: -1s}]`, "max_rtt must not be negative"},
+		{"ceiling on non-static", `rules: [{action: vip, prefixes: [192.0.2.0/24], max_loss_pct: 1}]`, "apply only to action static"},
 		{"ignore with providers", `rules: [{action: ignore, providers: [transit-a], prefixes: [192.0.2.0/24]}]`, "takes no providers"},
 		{"unknown provider", `rules: [{action: deny, providers: [transit-z], prefixes: [192.0.2.0/24]}]`, `provider "transit-z" is not configured`},
 		{"duplicate provider", `rules: [{action: deny, providers: [transit-a, transit-a], prefixes: [192.0.2.0/24]}]`, "duplicate provider"},

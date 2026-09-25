@@ -206,6 +206,13 @@ func TestCron(t *testing.T) {
 		{"0 0 */2 * *", "2026-09-03T00:00:00Z", true},
 		{"0 0 */2 * *", "2026-09-04T00:00:00Z", false},
 		{"5/20 * * * *", "2026-09-25T00:25:00Z", true},
+		// A day field starting with * is unrestricted, as in Vixie cron:
+		// the two day fields are AND-ed.
+		{"0 0 */2 * 1", "2026-09-07T00:00:00Z", true},  // Monday the 7th (*/2 is odd days)
+		{"0 0 */2 * 1", "2026-09-14T00:00:00Z", false}, // Monday, but the 14th is even
+		{"0 0 */2 * 1", "2026-09-03T00:00:00Z", false}, // the 3rd, a Thursday
+		{"0 0 1 * */2", "2026-09-01T00:00:00Z", true},  // Tuesday the 1st
+		{"0 0 1 * */2", "2026-07-01T00:00:00Z", false}, // Wednesday the 1st
 	}
 	for _, tt := range tests {
 		s, err := parseSchedule(tt.expr)
@@ -215,5 +222,55 @@ func TestCron(t *testing.T) {
 		if got := s.matches(ts(tt.at)); got != tt.want {
 			t.Errorf("%s at %s = %v, want %v", tt.expr, tt.at, got, tt.want)
 		}
+	}
+}
+
+// lastStart skips months, days, and hours; it must agree with a
+// minute-by-minute walk, including across DST changes.
+func TestLastStartMatchesBruteForce(t *testing.T) {
+	ny, err := time.LoadLocation("America/New_York")
+	if err != nil {
+		t.Fatal(err)
+	}
+	brute := func(s schedule, now time.Time, d time.Duration, loc *time.Location) (time.Time, bool) {
+		for m := now.In(loc).Truncate(time.Minute); m.Add(d).After(now); m = m.Add(-time.Minute) {
+			if s.matches(m) {
+				return m, true
+			}
+		}
+		return time.Time{}, false
+	}
+	exprs := []string{"* * * * *", "0 2 * * *", "30 1 * * 0", "59 23 31 12 *", "0 0 29 2 *",
+		"15 */3 1,15 * *", "0 0 */2 * 1", "0 12 1 * 5", "45 1 * 3,11 *", "0 3 * 1 1-5"}
+	nows := []string{"2026-03-08T07:30:00Z", "2026-11-01T06:10:00Z", "2026-12-31T23:59:30Z",
+		"2027-01-01T00:00:00Z", "2026-09-25T10:17:00Z", "2028-03-01T00:30:00Z"}
+	for _, e := range exprs {
+		s, err := parseSchedule(e)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, n := range nows {
+			for _, loc := range []*time.Location{time.UTC, ny} {
+				for _, d := range []time.Duration{time.Minute, 90 * time.Minute, 26 * time.Hour, MaxDuration} {
+					now := ts(n)
+					got, gok := s.lastStart(now, d, loc)
+					want, wok := brute(s, now, d, loc)
+					if gok != wok || !got.Equal(want) {
+						t.Errorf("%q now=%s loc=%s d=%s: got %v %v, want %v %v", e, n, loc, d, got, gok, want, wok)
+					}
+				}
+			}
+		}
+	}
+}
+
+func BenchmarkLastStartRare(b *testing.B) {
+	s, err := parseSchedule("59 23 31 12 *")
+	if err != nil {
+		b.Fatal(err)
+	}
+	now := ts("2026-09-25T10:17:00Z")
+	for b.Loop() {
+		s.lastStart(now, MaxDuration, time.UTC)
 	}
 }

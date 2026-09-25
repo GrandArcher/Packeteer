@@ -24,7 +24,7 @@ const (
 	// PolicyDeny never lets the listed providers carry an improvement.
 	PolicyDeny = "deny"
 	// PolicyStatic pins the prefix to one provider while its path is
-	// usable, regardless of performance thresholds.
+	// usable and inside the rule's loss (and optional latency) ceiling.
 	PolicyStatic = "static"
 	// PolicyVIP ranks the prefix's performance moves ahead of other
 	// performance moves when max_improvements binds.
@@ -61,6 +61,11 @@ type PolicyVerdict struct {
 	// "prefix 198.51.100.0/24"). Both are for operators and logs.
 	Rule  string
 	Match string
+	// MaxLossPct and MaxRTT are the ceiling a PolicyStatic path must stay
+	// inside, before the pin is announced and while it is held. MaxRTT 0
+	// means no latency ceiling.
+	MaxLossPct float64
+	MaxRTT     time.Duration
 }
 
 // Policy matches prefixes to verdicts. Match must be safe for concurrent

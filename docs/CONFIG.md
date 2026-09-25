@@ -386,7 +386,7 @@ At least one weight must be positive.
 | `ignore` | Native routing only. An active improvement is retired at once. No new improvement, and commit or cost planners do not see the prefix. |
 | `allow` | Only the listed providers may carry an improvement. |
 | `deny` | The listed providers never carry an improvement. |
-| `static` | Pin to the one listed provider while its path is usable (fresh probe, provider up, not excluded or in maintenance), without waiting for `thresholds` or `hold_time`. When the pinned provider is native, nothing is announced. When the pinned path fails, the pin is withdrawn and waits out `hold_time`. A pin does not expire on `improvement_ttl`. Cause `static`. |
+| `static` | Pin to the one listed provider while its path is usable (fresh probe, provider up, not excluded or in maintenance) and healthy: loss at or under the rule's required `max_loss_pct`, RTT at or under `max_rtt` when set, and loss not worse than a measured native path by `thresholds.min_loss_delta_pct` or more. The check runs before the pin is announced and on every round while it is held. A pin that fails it, or whose path becomes unusable, is withdrawn at once and waits out `hold_time` before it can return. Moving an existing improvement onto the pinned provider waits until that improvement has lived `hold_time`. When the pinned provider is native, nothing is announced. A pin does not expire on `improvement_ttl`; the health check is what moves it off a bad path. Cause `static`. |
 | `vip` | Normal thresholds, but its performance moves are admitted ahead of other performance moves when `max_improvements` binds. Pair it with the `vip` source for faster probing. |
 
 `allow` and `deny` never block the native provider: they decide where Packeteer may steer, not whether native routing is used. An active improvement on a provider that a policy now forbids is retired at once, even inside `hold_time`. When the cap binds, `static` pins are admitted first, then `vip` moves, then other performance moves, then commit and cost moves.
@@ -408,6 +408,8 @@ Each rule:
 | `prefixes` | CIDRs. A rule prefix matches itself and every more-specific probed prefix. |
 | `asns` | Origin ASNs (the last ASN of the learned AS path). Matches only while the RIB view is ready. |
 | `countries` | ISO 3166-1 alpha-2 codes. Looked up for the first address of the probed prefix, `country` first, then `registered_country`. |
+| `max_loss_pct` | Required for `static`, 0–100: the highest loss the pinned path may show. Not allowed on other actions. |
+| `max_rtt` | Optional for `static`: the highest average RTT the pinned path may show (for example `150ms`). 0 or unset means no latency ceiling. |
 
 A rule needs at least one of `prefixes`, `asns`, or `countries`, and matches when any of them match. When several rules match one prefix, a prefix match beats an ASN match, which beats a country match. Among prefix matches the longest rule prefix wins. Remaining ties go to the rule listed first.
 
@@ -427,12 +429,12 @@ Each window:
 |---|---|
 | `name` | Optional, unique. The window ID is `schedule-<name>`. |
 | `providers` | Required. Configured provider names. |
-| `schedule` | Five-field cron start time: minute, hour, day of month, month, day of week (0–7, 0 and 7 are Sunday). `*`, numbers, ranges `a-b`, steps `*/n` or `a-b/n`, and comma lists. When both day fields are restricted, either one matches. Use with `duration`. |
+| `schedule` | Five-field cron start time: minute, hour, day of month, month, day of week (0–7, 0 and 7 are Sunday). `*`, numbers, ranges `a-b`, steps `*/n` or `a-b/n`, and comma lists. When both day fields are restricted, either one matches; as in Vixie cron, a day field that starts with `*` (such as `*/2`) counts as unrestricted, so the fields are then AND-ed. Use with `duration`. |
 | `duration` | 1m–7 days. How long each scheduled window stays open. |
 | `start`, `end` | RFC 3339 timestamps for a one-off window. Use instead of `schedule` and `duration`. |
 | `reason` | Optional text shown in the API. |
 
-On-demand windows go through the ops API and live in memory only; a restart ends them. They require HTTP basic auth (`PACKETEER_HTTP_USER` and `PACKETEER_HTTP_PASSWORD`); without it the API refuses to open or close windows.
+On-demand windows go through the ops API and live in memory only; a restart ends them, and the controller logs this at startup. Put a planned window in `windows` if it must survive a restart. The controller checks windows every 15 seconds and wakes the decision loop when a scheduled window opens or closes, so it does not wait for the next probe round. They require HTTP basic auth (`PACKETEER_HTTP_USER` and `PACKETEER_HTTP_PASSWORD`); without it the API refuses to open or close windows.
 
 ```sh
 curl -u "$USER:$PASS" -H 'Content-Type: application/json' \

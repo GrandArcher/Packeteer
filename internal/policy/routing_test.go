@@ -13,6 +13,12 @@ func verdict(action string, providers ...string) plugin.PolicyVerdict {
 	return plugin.PolicyVerdict{Action: action, Providers: providers, Rule: "r1", Match: "prefix 198.51.100.0/24"}
 }
 
+func staticVerdict(provider string, maxLoss float64, maxRTT time.Duration) plugin.PolicyVerdict {
+	v := verdict(plugin.PolicyStatic, provider)
+	v.MaxLossPct, v.MaxRTT = maxLoss, maxRTT
+	return v
+}
+
 func withPolicy(input Input, p netip.Prefix, v plugin.PolicyVerdict) Input {
 	if input.Policies == nil {
 		input.Policies = map[netip.Prefix]plugin.PolicyVerdict{}
@@ -52,6 +58,25 @@ func TestRoutingPolicyNewDecisions(t *testing.T) {
 			ActionImprove, "c", plugin.CauseStatic, "policy static (r1)"},
 		{"static pins native", func(i *Input, _ *Config) { *i = withPolicy(*i, pA, verdict(plugin.PolicyStatic, "a")) },
 			ActionNone, "", plugin.CauseStatic, "native is the pinned provider"},
+		{"static pin over loss ceiling", func(i *Input, _ *Config) {
+			*i = withPolicy(*i, pA, staticVerdict("c", 5, 0))
+			i.Results = results(t0, pA, m{"a", 0, 90}, m{"b", 0, 30}, m{"c", 10, 50})
+		}, ActionNone, "", plugin.CauseStatic, "loss 10.0% over max_loss_pct 5.0%"},
+		{"static pin at 100% loss", func(i *Input, _ *Config) {
+			*i = withPolicy(*i, pA, staticVerdict("c", 50, 0))
+			i.Results = results(t0, pA, m{"a", 0, 90}, m{"b", 0, 30}, m{"c", 100, 0})
+		}, ActionNone, "", plugin.CauseStatic, "over max_loss_pct"},
+		{"static pin over rtt ceiling", func(i *Input, _ *Config) {
+			*i = withPolicy(*i, pA, staticVerdict("c", 5, 40*time.Millisecond))
+		}, ActionNone, "", plugin.CauseStatic, "rtt 50ms over max_rtt 40ms"},
+		{"static pin inside ceilings", func(i *Input, _ *Config) {
+			*i = withPolicy(*i, pA, staticVerdict("c", 5, 60*time.Millisecond))
+			i.Results = results(t0, pA, m{"a", 0, 90}, m{"b", 0, 30}, m{"c", 0.5, 50})
+		}, ActionImprove, "c", plugin.CauseStatic, "policy static (r1)"},
+		{"static pin lossier than native", func(i *Input, _ *Config) {
+			*i = withPolicy(*i, pA, staticVerdict("c", 5, 0))
+			i.Results = results(t0, pA, m{"a", 0, 90}, m{"b", 0, 30}, m{"c", 3, 50})
+		}, ActionNone, "", plugin.CauseStatic, "worse than native"},
 		{"static provider down", func(i *Input, _ *Config) {
 			*i = withPolicy(*i, pA, verdict(plugin.PolicyStatic, "c"))
 			i.ProviderUp = map[string]bool{"a": true, "b": true}
@@ -129,7 +154,7 @@ func TestRoutingPolicyActiveImprovement(t *testing.T) {
 		{"allow elsewhere retires", func(i *Input) { *i = withPolicy(*i, pA, verdict(plugin.PolicyAllow, "c")) }, ActionRetire, "", "", "unusable"},
 		{"allow same keeps", func(i *Input) { *i = withPolicy(*i, pA, verdict(plugin.PolicyAllow, "b")) }, ActionKeep, "b", plugin.CausePerformance, ""},
 		{"static on current provider relabels", func(i *Input) { *i = withPolicy(*i, pA, verdict(plugin.PolicyStatic, "b")) }, ActionKeep, "b", plugin.CauseStatic, "policy static"},
-		{"static switches at once", func(i *Input) { *i = withPolicy(*i, pA, verdict(plugin.PolicyStatic, "c")) }, ActionSwitch, "c", plugin.CauseStatic, "policy static"},
+		{"static waits out hold_time before switching", func(i *Input) { *i = withPolicy(*i, pA, verdict(plugin.PolicyStatic, "c")) }, ActionKeep, "b", plugin.CausePerformance, "hold_time not elapsed"},
 		{"static to native retires", func(i *Input) { *i = withPolicy(*i, pA, verdict(plugin.PolicyStatic, "a")) }, ActionRetire, "", "", "native is the pinned provider"},
 		{"maintenance retires", func(i *Input) { i.Maintenance = []string{"b"} }, ActionRetire, "", "", "provider in maintenance"},
 		{"maintenance elsewhere keeps", func(i *Input) { i.Maintenance = []string{"c"} }, ActionKeep, "b", plugin.CausePerformance, ""},
@@ -310,6 +335,70 @@ func TestStaticLifecycle(t *testing.T) {
 	st, out = Decide(st, input, c, scorer(t), now)
 	if _, ok := st.Improvements[pA]; ok || !strings.Contains(decision(t, out, pA).Reason, "static policy removed") {
 		t.Fatalf("pin survived its policy: %+v", decision(t, out, pA))
+	}
+}
+
+// A pin is held only while its path stays inside the ceiling. A lossy pin
+// is withdrawn at once and cannot return inside hold_time. Switching an
+// existing improvement onto the pin waits out hold_time.
+func TestStaticQualityGate(t *testing.T) {
+	c := cfg()
+	pin := func(now time.Time, cLoss float64) Input {
+		input := withPolicy(routingInput(), pA, staticVerdict("c", 5, 0))
+		input.Results = results(now, pA, m{"a", 0, 90}, m{"b", 0, 30}, m{"c", cLoss, 50})
+		return input
+	}
+	st, _ := Decide(NewState(), pin(t0, 0), c, scorer(t), t0)
+	if st.Improvements[pA].Provider != "c" {
+		t.Fatalf("not pinned: %+v", st.Improvements)
+	}
+	// Inside the ceiling but lossier than native by less than the delta: kept.
+	now := t0.Add(time.Minute)
+	st, out := Decide(st, pin(now, 0.5), c, scorer(t), now)
+	if d := decision(t, out, pA); d.Action != ActionKeep || st.Improvements[pA].Provider != "c" {
+		t.Fatalf("pin dropped inside ceiling: %+v", d)
+	}
+	// The pinned path goes 100% lossy inside hold_time: withdraw now.
+	now = now.Add(time.Minute)
+	st, out = Decide(st, pin(now, 100), c, scorer(t), now)
+	if _, ok := st.Improvements[pA]; ok || len(out.Changes) != 1 || out.Changes[0].Action != ActionRetire {
+		t.Fatalf("lossy pin not withdrawn: %+v", out.Changes)
+	}
+	if d := decision(t, out, pA); !strings.Contains(d.Reason, "over max_loss_pct") {
+		t.Fatalf("reason = %q", d.Reason)
+	}
+	// The path recovers: the pin waits out the cooldown.
+	now = now.Add(time.Minute)
+	st, out = Decide(st, pin(now, 0), c, scorer(t), now)
+	if _, ok := st.Improvements[pA]; ok || !strings.Contains(decision(t, out, pA).Reason, "cooldown") {
+		t.Fatalf("re-pinned during cooldown: %+v", decision(t, out, pA))
+	}
+	now = now.Add(c.HoldTime)
+	st, _ = Decide(st, pin(now, 0), c, scorer(t), now)
+	if st.Improvements[pA].Provider != "c" {
+		t.Fatalf("not re-pinned after hold: %+v", st.Improvements)
+	}
+
+	// Switching a performance improvement onto the pin waits out hold_time.
+	st, _ = Decide(NewState(), routingInput(), c, scorer(t), t0)
+	if st.Improvements[pA].Provider != "b" {
+		t.Fatalf("setup: %+v", st.Improvements)
+	}
+	now = t0.Add(c.HoldTime - time.Second)
+	st, out = Decide(st, pin(now, 0), c, scorer(t), now)
+	if d := decision(t, out, pA); d.Action != ActionKeep || d.Recommended != "c" || st.Improvements[pA].Provider != "b" || len(out.Changes) != 0 {
+		t.Fatalf("switched inside hold_time: %+v %+v", d, out.Changes)
+	}
+	// A lossy pin never takes over, even after hold_time: the performance
+	// improvement is retired back to native instead.
+	now = t0.Add(c.HoldTime)
+	st2, out := Decide(st, pin(now, 20), c, scorer(t), now)
+	if _, ok := st2.Improvements[pA]; ok || out.Changes[0].Action != ActionRetire {
+		t.Fatalf("lossy pin: %+v", out.Changes)
+	}
+	st, out = Decide(st, pin(now, 0), c, scorer(t), now)
+	if imp := st.Improvements[pA]; imp.Provider != "c" || imp.Cause != plugin.CauseStatic || out.Changes[0].Action != ActionSwitch {
+		t.Fatalf("no switch after hold_time: %+v", out.Changes)
 	}
 }
 

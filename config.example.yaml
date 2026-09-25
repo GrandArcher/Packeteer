@@ -206,6 +206,8 @@ http:
 #           action: static          # ignore, allow, deny, static, or vip
 #           providers: [transit-a]
 #           prefixes: [203.0.113.0/24]
+#           max_loss_pct: 1         # required for static: pin only while loss <= 1%
+#           max_rtt: 150ms          # optional latency ceiling for static
 #         - name: no-b-for-64500
 #           action: deny
 #           providers: [transit-b]

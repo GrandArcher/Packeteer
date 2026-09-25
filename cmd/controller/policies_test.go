@@ -1,7 +1,9 @@
 package main
 
 import (
+	"context"
 	"net/netip"
+	"sync"
 	"testing"
 	"time"
 
@@ -120,4 +122,47 @@ func TestMaintenanceControlWakesDecisions(t *testing.T) {
 	if _, err := mc.Open([]string{"transit-z"}, time.Hour, "", now); err == nil || woke != 2 {
 		t.Fatal("bad open accepted or woke the loop")
 	}
+}
+
+// A scheduled window that opens or closes wakes the decision loop once per
+// change, without a probe round.
+func TestWatchMaintenanceWakesOnChange(t *testing.T) {
+	var mu sync.Mutex
+	open := false
+	active := func(time.Time) []plugin.MaintenanceWindow {
+		mu.Lock()
+		defer mu.Unlock()
+		if !open {
+			return nil
+		}
+		return []plugin.MaintenanceWindow{{Providers: []string{"transit-b", "transit-a"}}}
+	}
+	woke := make(chan struct{}, 10)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go watchMaintenance(ctx, active, 5*time.Millisecond, nil, func() { woke <- struct{}{} })
+
+	expect := func(want bool) {
+		t.Helper()
+		select {
+		case <-woke:
+			if !want {
+				t.Fatal("woke without a change")
+			}
+		case <-time.After(100 * time.Millisecond):
+			if want {
+				t.Fatal("change did not wake the loop")
+			}
+		}
+	}
+	expect(false)
+	mu.Lock()
+	open = true
+	mu.Unlock()
+	expect(true)
+	expect(false)
+	mu.Lock()
+	open = false
+	mu.Unlock()
+	expect(true)
 }

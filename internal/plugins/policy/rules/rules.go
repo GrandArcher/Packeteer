@@ -23,6 +23,7 @@ import (
 	"os"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/oschwald/maxminddb-golang/v2"
 
@@ -58,6 +59,11 @@ type Rule struct {
 	// Countries are ISO 3166-1 alpha-2 codes, looked up for the first
 	// address of the prefix.
 	Countries []string `yaml:"countries"`
+	// MaxLossPct is required for static: the pinned path must stay at or
+	// under this loss, or the pin is not made (or is withdrawn).
+	MaxLossPct *float64 `yaml:"max_loss_pct"`
+	// MaxRTT is an optional latency ceiling for static. 0 means none.
+	MaxRTT time.Duration `yaml:"max_rtt"`
 }
 
 type rule struct {
@@ -158,10 +164,22 @@ func compile(in []Rule, providers []string) ([]rule, bool, error) {
 			if len(r.Providers) != 1 {
 				add("%s: action static needs exactly one provider", label)
 			}
+			switch {
+			case r.MaxLossPct == nil:
+				add("%s: action static needs max_loss_pct (0-100)", label)
+			case *r.MaxLossPct < 0 || *r.MaxLossPct > 100 || *r.MaxLossPct != *r.MaxLossPct:
+				add("%s: max_loss_pct %v must be 0-100", label, *r.MaxLossPct)
+			}
+			if r.MaxRTT < 0 {
+				add("%s: max_rtt must not be negative", label)
+			}
 		case "":
 			add("%s: action is required (ignore, allow, deny, static, or vip)", label)
 		default:
 			add("%s: action %q is invalid (want ignore, allow, deny, static, or vip)", label, r.Action)
+		}
+		if action != plugin.PolicyStatic && (r.MaxLossPct != nil || r.MaxRTT != 0) {
+			add("%s: max_loss_pct and max_rtt apply only to action static", label)
 		}
 		seenProv := map[string]bool{}
 		for _, pn := range r.Providers {
@@ -173,7 +191,10 @@ func compile(in []Rule, providers []string) ([]rule, bool, error) {
 			}
 			seenProv[pn] = true
 		}
-		cr.verdict = plugin.PolicyVerdict{Action: action, Providers: slices.Clone(r.Providers), Rule: name}
+		cr.verdict = plugin.PolicyVerdict{Action: action, Providers: slices.Clone(r.Providers), Rule: name, MaxRTT: r.MaxRTT}
+		if r.MaxLossPct != nil {
+			cr.verdict.MaxLossPct = *r.MaxLossPct
+		}
 
 		for j, s := range r.Prefixes {
 			p, err := netip.ParsePrefix(strings.TrimSpace(s))

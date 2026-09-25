@@ -15,6 +15,7 @@ import (
 	"net/netip"
 	"os"
 	"os/signal"
+	"slices"
 	"strings"
 	"sync"
 	"syscall"
@@ -209,10 +210,17 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 		}
 	}
 	col := httpapi.NewCollector(version, cfg.Mode, cfg.Providers)
+	maint := newMaintenanceControl(plugins, log, poke)
+	if mc, ok := maint.(*maintenanceControl); ok {
+		if mc.CanOpen() {
+			log.Info("on-demand maintenance windows are kept in memory only; windows opened through the API before a restart are gone")
+		}
+		go watchMaintenance(ctx, mc.Active, maintenanceWatchInterval, log, poke)
+	}
 	if addr := cfg.HTTPListen(); addr != "" {
 		srv, err := httpapi.New(httpapi.Options{
 			Addr: addr, User: httpUser, Password: httpPass, Snapshot: col.Snapshot, Logger: log,
-			Maintenance: newMaintenanceControl(plugins, log, poke),
+			Maintenance: maint,
 		})
 		if err != nil {
 			log.Error("refusing to start", "err", err)
@@ -1018,6 +1026,40 @@ func (mc *maintenanceControl) Close(id string) bool {
 		mc.poke()
 	}
 	return true
+}
+
+// maintenanceWatchInterval is how often scheduled windows are checked.
+const maintenanceWatchInterval = 15 * time.Second
+
+// watchMaintenance wakes the decision loop when the set of providers in
+// maintenance changes, so a scheduled window that opens or closes takes
+// effect without waiting for the next probe round.
+func watchMaintenance(ctx context.Context, active func(time.Time) []plugin.MaintenanceWindow, every time.Duration, log *slog.Logger, poke func()) {
+	key := func(now time.Time) string {
+		var names []string
+		for _, w := range active(now) {
+			names = append(names, w.Providers...)
+		}
+		slices.Sort(names)
+		return strings.Join(slices.Compact(names), ",")
+	}
+	last := key(time.Now())
+	t := time.NewTicker(every)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case now := <-t.C:
+			if k := key(now); k != last {
+				if log != nil {
+					log.Info("providers in maintenance changed", "providers", k)
+				}
+				last = k
+				poke()
+			}
+		}
+	}
 }
 
 // scorerPlans reports whether commit control is on for this process.

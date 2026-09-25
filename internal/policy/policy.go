@@ -374,6 +374,27 @@ func Decide(prev State, in Input, cfg Config, scorer plugin.Scorer, now time.Tim
 				continue
 			}
 			if static != "" {
+				if static == imp.Native {
+					reason := "policy static: native is the pinned provider"
+					retire(p, reason, false)
+					setDecision(d, ActionRetire, reason, imp.Native, imp.Native, plugin.CauseStatic)
+					continue
+				}
+				pin, ok := get(static)
+				if !ok || cfg.Excluded[static] {
+					reason := "policy static: " + static + " not usable (" + staticWhy(cands, cfg, static) + ")"
+					retire(p, reason, true)
+					setDecision(d, ActionRetire, reason, imp.Native, "", plugin.CauseStatic)
+					continue
+				}
+				if fault := pinFault(pin, cands, imp.Native, verdict, cfg); fault != "" {
+					// The pinned path is lossy or slow: withdraw now and wait
+					// out hold_time so a flapping path does not re-pin.
+					reason := "policy static: " + static + " " + fault
+					retire(p, reason, true)
+					setDecision(d, ActionRetire, reason, imp.Native, "", plugin.CauseStatic)
+					continue
+				}
 				if imp.Provider == static {
 					// Already on the pinned provider: relabel, do not re-announce.
 					imp.Cause, imp.Reason = plugin.CauseStatic, "policy static ("+verdict.Rule+")"
@@ -381,16 +402,9 @@ func Decide(prev State, in Input, cfg Config, scorer plugin.Scorer, now time.Tim
 					setDecision(d, ActionKeep, imp.Reason, imp.Provider, imp.Provider, plugin.CauseStatic)
 					continue
 				}
-				if static == imp.Native {
-					reason := "policy static: native is the pinned provider"
-					retire(p, reason, false)
-					setDecision(d, ActionRetire, reason, imp.Native, imp.Native, plugin.CauseStatic)
-					continue
-				}
-				if _, ok := get(static); !ok || cfg.Excluded[static] {
-					reason := "policy static: " + static + " not usable (" + staticWhy(cands, cfg, static) + ")"
-					retire(p, reason, true)
-					setDecision(d, ActionRetire, reason, imp.Native, "", plugin.CauseStatic)
+				if now.Sub(imp.Since) < cfg.HoldTime {
+					d.Recommended, d.Cause = static, plugin.CauseStatic
+					d.Action, d.Reason = ActionKeep, "policy static: hold_time not elapsed before switching to "+static
 					continue
 				}
 				n := Improvement{Prefix: p, Provider: static, Native: imp.Native, Since: now,
@@ -461,12 +475,17 @@ func Decide(prev State, in Input, cfg Config, scorer plugin.Scorer, now time.Tim
 		}
 		if static != "" {
 			d.Cause = plugin.CauseStatic
-			switch _, usable := get(static); {
+			pin, usable := get(static)
+			switch {
 			case static == d.Native:
 				d.Recommended, d.Reason = static, "policy static: native is the pinned provider"
 				continue
 			case !usable || cfg.Excluded[static]:
 				d.Reason = "policy static: " + static + " not usable (" + staticWhy(cands, cfg, static) + ")"
+				continue
+			}
+			if fault := pinFault(pin, cands, d.Native, verdict, cfg); fault != "" {
+				d.Reason = "policy static: " + static + " " + fault
 				continue
 			}
 			d.Recommended = static
@@ -742,6 +761,26 @@ func policyText(v plugin.PolicyVerdict) string {
 		s += " (" + strings.TrimSpace(v.Rule+": "+v.Match) + ")"
 	}
 	return s
+}
+
+// pinFault says why a usable static path may not carry the prefix, or ""
+// when it may. The path must be inside the rule's loss ceiling (and latency
+// ceiling, when set), and its loss must not exceed a usable native path's
+// by min_loss_delta_pct or more. It is checked before a pin is announced
+// and on every round while the pin is held.
+func pinFault(pin Candidate, cands []Candidate, native string, v plugin.PolicyVerdict, cfg Config) string {
+	if pin.LossPct > v.MaxLossPct {
+		return fmt.Sprintf("loss %.1f%% over max_loss_pct %.1f%%", pin.LossPct, v.MaxLossPct)
+	}
+	if v.MaxRTT > 0 && pin.RTTAvg > v.MaxRTT {
+		return fmt.Sprintf("rtt %s over max_rtt %s", pin.RTTAvg.Round(time.Millisecond), v.MaxRTT)
+	}
+	for _, c := range cands {
+		if c.Provider == native && c.Usable && cfg.MinLossDeltaPct > 0 && pin.LossPct-c.LossPct >= cfg.MinLossDeltaPct {
+			return fmt.Sprintf("loss %.1f%% worse than native %.1f%% by min_loss_delta_pct or more", pin.LossPct, c.LossPct)
+		}
+	}
+	return ""
 }
 
 func staticWhy(cands []Candidate, cfg Config, name string) string {
