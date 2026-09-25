@@ -359,6 +359,114 @@ func TestNewValidation(t *testing.T) {
 	}
 }
 
+// blockAfterProber answers the first allow calls, then blocks ignoring ctx.
+type blockAfterProber struct {
+	plugin.Base
+	mu      sync.Mutex
+	calls   int
+	allow   int
+	release chan struct{}
+}
+
+func (p *blockAfterProber) Probe(context.Context, plugin.ProbeRequest) (plugin.ProbeResult, error) {
+	p.mu.Lock()
+	p.calls++
+	n := p.calls
+	p.mu.Unlock()
+	if n > p.allow {
+		<-p.release
+		return plugin.ProbeResult{}, errors.New("released")
+	}
+	return plugin.ProbeResult{Sent: 1, RTTs: ms(1)}, nil
+}
+
+// blockAfterSource returns one target once, then blocks ignoring ctx.
+type blockAfterSource struct {
+	plugin.Base
+	mu      sync.Mutex
+	calls   int
+	release chan struct{}
+}
+
+func (s *blockAfterSource) Targets(context.Context) ([]plugin.Target, error) {
+	s.mu.Lock()
+	s.calls++
+	n := s.calls
+	s.mu.Unlock()
+	if n > 1 {
+		<-s.release
+		return nil, errors.New("released")
+	}
+	return []plugin.Target{{Prefix: pfx1}}, nil
+}
+
+func waitRound(t *testing.T, e *Engine) {
+	t.Helper()
+	done := make(chan struct{})
+	go func() {
+		e.RunOnce(context.Background())
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("round was not bounded by the overall timeout")
+	}
+}
+
+func TestRunOnceHungProberKeepsResults(t *testing.T) {
+	release := make(chan struct{})
+	defer close(release)
+	p := &blockAfterProber{allow: 1, release: release}
+	o := opts()
+	o.RoundTimeout = 80 * time.Millisecond
+	o.Workers = 1
+	var rounds atomic.Int32
+	o.OnRound = func() { rounds.Add(1) }
+	e, err := New([]Provider{provA}, []NamedProber{{"hung", p}}, src(plugin.Target{Prefix: pfx1}), o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitRound(t, e)
+	if rounds.Load() != 1 || len(e.Results()) != 1 || !e.Results()[0].OK() {
+		t.Fatalf("first round rounds=%d results=%+v", rounds.Load(), e.Results())
+	}
+	waitRound(t, e) // prober ignores ctx; the round deadline must win
+	if rounds.Load() != 1 || len(e.Results()) != 1 || !e.Results()[0].OK() {
+		t.Fatalf("hung round replaced results: rounds=%d %+v", rounds.Load(), e.Results())
+	}
+	start := time.Now()
+	waitRound(t, e) // previous probes still stuck: skip, do not start another
+	if time.Since(start) > 500*time.Millisecond {
+		t.Fatalf("in-flight round was not skipped: %s", time.Since(start))
+	}
+	if rounds.Load() != 1 || len(e.Results()) != 1 {
+		t.Fatalf("skipped round changed state: rounds=%d %+v", rounds.Load(), e.Results())
+	}
+}
+
+func TestRunOnceHungTargetSourceKeepsResults(t *testing.T) {
+	release := make(chan struct{})
+	defer close(release)
+	o := opts()
+	o.RoundTimeout = 80 * time.Millisecond
+	var rounds atomic.Int32
+	o.OnRound = func() { rounds.Add(1) }
+	e, err := New([]Provider{provA}, []NamedProber{{"p", &fakeProber{fn: ok(1, 1, 1)}}},
+		[]NamedSource{{Name: "slow", Source: &blockAfterSource{release: release}}}, o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitRound(t, e)
+	if rounds.Load() != 1 || len(e.Results()) != 1 {
+		t.Fatalf("first round rounds=%d results=%d", rounds.Load(), len(e.Results()))
+	}
+	waitRound(t, e)
+	if rounds.Load() != 1 || len(e.Results()) != 1 || !e.Results()[0].OK() {
+		t.Fatalf("hung target source replaced results: rounds=%d %+v", rounds.Load(), e.Results())
+	}
+}
+
 func TestOnRoundAfterCommit(t *testing.T) {
 	o := opts()
 	var e *Engine

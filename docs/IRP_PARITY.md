@@ -51,7 +51,7 @@ Milestones:
 | Retry / aggressive probing | 1.2.8 Retry Probing | planned | v0.2 | core (probe engine) | #15 |
 | Hysteresis, thresholds, hold time before flip | 1.3.1 | done | v0.1 | scorer | #7 |
 | Max improvements cap | 4.8 Core settings | done | v0.1 | core | #7 |
-| Improvement retirement / periodic re-probe of improvements | 4.8 Core settings | done | v0.1 | core | #7 |
+| Improvement retirement / periodic re-probe of improvements (including a staleness timer when a probe round never finishes) | 4.8 Core settings | done | v0.1 | core | #7, #46 |
 
 ## Cost / commit
 

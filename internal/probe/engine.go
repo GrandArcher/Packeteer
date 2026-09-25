@@ -48,6 +48,11 @@ type Options struct {
 	Now                  func() time.Time
 	OnResult             func(Result) // called for every result (optional)
 	OnRound              func()       // called after each completed round (optional)
+	// RoundTimeout bounds one round, including target collection. Zero
+	// derives a bound from the interval and the per-probe deadline. A round
+	// that exceeds it keeps the previous results: a prober or target source
+	// that ignores cancellation must not pin stale improvements forever.
+	RoundTimeout time.Duration
 }
 
 // Result is the latest measurement of one provider toward one prefix.
@@ -97,7 +102,19 @@ type Engine struct {
 
 	semMu sync.Mutex
 	sems  map[netip.Addr]chan struct{}
+
+	// stateMu guards probeBusy and srcBusy. A timed-out round leaves its
+	// probes (or a target source that ignores cancellation) running, and
+	// further rounds are skipped until that work returns, so a stuck
+	// prober cannot pile up goroutines.
+	stateMu   sync.Mutex
+	probeBusy bool
+	srcBusy   map[string]bool
 }
+
+// errSourceBusy is returned when a target source's previous call has not
+// returned. The round is treated as incomplete and previous results stay.
+var errSourceBusy = errors.New("previous call still running")
 
 // New validates inputs and returns an engine.
 func New(providers []Provider, probers []NamedProber, sources []NamedSource, opt Options) (*Engine, error) {
@@ -146,15 +163,50 @@ func (e *Engine) Run(ctx context.Context) error {
 	}
 }
 
+// roundBudget is the overall deadline for one round. An explicit
+// RoundTimeout wins; otherwise the bound is long enough for a probe to
+// use its own deadline and for about three intervals of target collection,
+// which matches how old a measurement may be before it is stale.
+func (e *Engine) roundBudget() time.Duration {
+	if e.opt.RoundTimeout > 0 {
+		return e.opt.RoundTimeout
+	}
+	per := time.Duration(e.opt.Packets)*e.opt.Timeout + time.Second
+	d := 3*e.opt.Interval + per
+	if d < per+time.Second {
+		d = per + time.Second
+	}
+	return d
+}
+
 // Targets collects and de-duplicates targets from every source. A failing
-// source is logged and skipped so the others keep working.
+// source is logged and skipped so the others keep working. The context's
+// deadline is an overall timeout: a source that ignores cancellation does
+// not block the caller past it.
 func (e *Engine) Targets(ctx context.Context) []plugin.Target {
+	ts, _ := e.gatherTargets(ctx)
+	return ts
+}
+
+// gatherTargets reports incomplete when a source missed the deadline or is
+// still stuck from an earlier call. Callers must not replace stored results
+// in that case.
+func (e *Engine) gatherTargets(ctx context.Context) ([]plugin.Target, bool) {
 	seen := map[netip.Prefix]bool{}
 	var out []plugin.Target
+	incomplete := false
 	for _, s := range e.sources {
-		ts, err := s.Source.Targets(ctx)
+		if ctx.Err() != nil {
+			incomplete = true
+			break
+		}
+		ts, err := e.oneSource(ctx, s)
 		if err != nil {
 			e.log.Warn("target source failed", "source", s.Name, "err", err)
+			if errors.Is(err, errSourceBusy) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+				incomplete = true
+				break
+			}
 			continue
 		}
 		for _, t := range ts {
@@ -169,12 +221,79 @@ func (e *Engine) Targets(ctx context.Context) []plugin.Target {
 			out = append(out, t)
 		}
 	}
-	return out
+	return out, incomplete
+}
+
+func (e *Engine) oneSource(ctx context.Context, s NamedSource) ([]plugin.Target, error) {
+	e.stateMu.Lock()
+	if e.srcBusy == nil {
+		e.srcBusy = map[string]bool{}
+	}
+	if e.srcBusy[s.Name] {
+		e.stateMu.Unlock()
+		return nil, errSourceBusy
+	}
+	e.srcBusy[s.Name] = true
+	e.stateMu.Unlock()
+
+	type result struct {
+		ts  []plugin.Target
+		err error
+	}
+	ch := make(chan result, 1)
+	go func() {
+		ts, err := s.Source.Targets(ctx)
+		ch <- result{ts, err}
+	}()
+	select {
+	case r := <-ch:
+		e.clearSource(s.Name)
+		return r.ts, r.err
+	case <-ctx.Done():
+		go func() {
+			<-ch
+			e.clearSource(s.Name)
+		}()
+		return nil, ctx.Err()
+	}
+}
+
+func (e *Engine) clearSource(name string) {
+	e.stateMu.Lock()
+	delete(e.srcBusy, name)
+	e.stateMu.Unlock()
+}
+
+func (e *Engine) setProbeBusy(busy bool) {
+	e.stateMu.Lock()
+	e.probeBusy = busy
+	e.stateMu.Unlock()
+}
+
+func (e *Engine) probesBusy() bool {
+	e.stateMu.Lock()
+	defer e.stateMu.Unlock()
+	return e.probeBusy
 }
 
 // RunOnce performs one probe round over all providers and targets.
+// The round has an overall deadline. If it expires, or a target source
+// does not return, previous results are kept and OnRound is not called.
 func (e *Engine) RunOnce(ctx context.Context) {
-	targets := e.Targets(ctx)
+	if e.probesBusy() {
+		e.log.Debug("previous probe round still running; skipping")
+		return
+	}
+	roundCtx, cancel := context.WithTimeout(ctx, e.roundBudget())
+	defer cancel()
+
+	targets, incomplete := e.gatherTargets(roundCtx)
+	if incomplete || roundCtx.Err() != nil {
+		if ctx.Err() == nil {
+			e.log.Warn("probe round timed out listing targets; keeping previous results")
+		}
+		return
+	}
 	var jobs []job
 	for _, t := range targets {
 		for _, p := range e.providers {
@@ -197,8 +316,15 @@ func (e *Engine) RunOnce(ctx context.Context) {
 		go func() {
 			defer wg.Done()
 			for j := range ch {
-				r, down := e.probe(ctx, j)
-				outs <- outcome{r, down}
+				if roundCtx.Err() != nil {
+					return
+				}
+				r, down := e.probe(roundCtx, j)
+				select {
+				case outs <- outcome{r, down}:
+				case <-roundCtx.Done():
+					return
+				}
 			}
 		}()
 	}
@@ -206,12 +332,33 @@ feed:
 	for _, j := range jobs {
 		select {
 		case ch <- j:
-		case <-ctx.Done():
+		case <-roundCtx.Done():
 			break feed
 		}
 	}
 	close(ch)
-	wg.Wait()
+
+	finished := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(finished)
+	}()
+	select {
+	case <-finished:
+	case <-roundCtx.Done():
+		e.leaveProbes(finished)
+		if ctx.Err() == nil {
+			e.log.Warn("probe round timed out; keeping previous results")
+		}
+		return
+	}
+	if roundCtx.Err() != nil {
+		// Workers exited because the deadline fired. Do not commit a partial round.
+		if ctx.Err() == nil {
+			e.log.Warn("probe round timed out; keeping previous results")
+		}
+		return
+	}
 	close(outs)
 
 	down := map[string]string{}
@@ -227,14 +374,27 @@ feed:
 			e.opt.OnResult(o.res)
 		}
 	}
-	if ctx.Err() != nil {
-		return // incomplete round: keep previous state
-	}
 
 	e.commit(fresh, ran, down)
 	if e.opt.OnRound != nil {
 		e.opt.OnRound()
 	}
+}
+
+// leaveProbes records that workers from a timed-out round may still be
+// inside a prober that ignores cancellation. The next round waits until
+// they return instead of starting another.
+func (e *Engine) leaveProbes(finished <-chan struct{}) {
+	select {
+	case <-finished:
+		return
+	default:
+	}
+	e.setProbeBusy(true)
+	go func() {
+		<-finished
+		e.setProbeBusy(false)
+	}()
 }
 
 func (e *Engine) commit(fresh map[key]Result, ran map[string]bool, down map[string]string) {
