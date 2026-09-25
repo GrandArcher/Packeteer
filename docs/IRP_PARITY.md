@@ -53,6 +53,8 @@ Milestones:
 | Max improvements cap | 4.8 Core settings | done | v0.1 | core | #7 |
 | Improvement retirement / periodic re-probe of improvements (including a staleness timer when a probe round never finishes) | 4.8 Core settings | done | v0.1 | core | #7, #46 |
 
+UDP unreachable replies count only when the ICMP source is the probed target (#15). Traceroute discovery runs in the background under `budget` and does not block a probe round. VIP ASN expansion is capped by `max_targets` and rebuilt only when the RIB changes; the VIP interval must be shorter than the staleness window.
+
 ## Cost / commit
 
 | Capability | IRP doc ref | Status | Milestone | Plugin kind | Issue |

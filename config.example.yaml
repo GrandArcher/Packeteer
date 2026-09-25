@@ -73,15 +73,17 @@ scorer:
 #       aggregate_v6: 48
 #       exclude:
 #         - 192.0.2.0/24              # destinations inside these prefixes are ignored
-#   - type: traceroute          # last stable hop when the host does not answer. Cached.
-#     config:
+#   - type: traceroute          # last stable hop when the host does not answer.
+#     config:                   # Discovery is background. Targets returns the cache.
 #       interval: 5m
+#       budget: 10s             # one pass; under the default round deadline
 #       targets:
 #         - prefix: 198.51.100.0/24
 #           host: 198.51.100.1
 #   - type: vip                 # own interval. ASNs match the learned path only.
-#     config:
+#     config:                   # interval must be inside the staleness window.
 #       interval: 10s
+#       max_targets: 100        # cap on prefixes plus ASN matches
 #       prefixes:
 #         - prefix: 203.0.113.0/24
 #           host: 203.0.113.1

@@ -1,7 +1,9 @@
 package vip
 
 import (
+	"bytes"
 	"context"
+	"log/slog"
 	"net/netip"
 	"strings"
 	"testing"
@@ -98,19 +100,92 @@ asns: [64496, 64500]
 	}
 }
 
+func TestMaxTargetsTruncates(t *testing.T) {
+	var buf bytes.Buffer
+	c, err := plugin.ConfigFromYAML(`
+interval: 5s
+max_targets: 2
+prefixes:
+  - {prefix: 203.0.113.0/24}
+asns: [64496]
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := plugin.Sources.New(TypeName, c, plugin.Env{Logger: slog.New(slog.NewTextHandler(&buf, nil))})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := raw.(*Source)
+	s.SetRouteSnapshot(func() (uint64, []LearnedRoute) {
+		return 1, []LearnedRoute{
+			{Prefix: netip.MustParsePrefix("198.51.100.0/24"), ASPath: []uint32{64496}},
+			{Prefix: netip.MustParsePrefix("198.51.100.0/25"), ASPath: []uint32{64496}},
+			{Prefix: netip.MustParsePrefix("2001:db8::/32"), ASPath: []uint32{64496}},
+		}
+	})
+	ts, err := s.Targets(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ts) != 2 {
+		t.Fatalf("targets = %+v, want 2", ts)
+	}
+	if !strings.Contains(buf.String(), "truncated") {
+		t.Fatalf("log = %q, want truncated", buf.String())
+	}
+	buf.Reset()
+	if _, err := s.Targets(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if buf.Len() != 0 {
+		t.Fatalf("cached expansion logged again: %s", buf.String())
+	}
+}
+
+func TestExpansionCachedUntilGenerationChanges(t *testing.T) {
+	raw, err := build(`
+interval: 5s
+asns: [64496]
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := raw.(*Source)
+	gen := uint64(4)
+	routes := []LearnedRoute{{Prefix: netip.MustParsePrefix("198.51.100.0/24"), ASPath: []uint32{64496}}}
+	s.SetRouteSnapshot(func() (uint64, []LearnedRoute) { return gen, routes })
+	ts, err := s.Targets(context.Background())
+	if err != nil || len(ts) != 1 {
+		t.Fatalf("first = %+v %v", ts, err)
+	}
+	routes = nil
+	ts, err = s.Targets(context.Background())
+	if err != nil || len(ts) != 1 || ts[0].Prefix.String() != "198.51.100.0/24" {
+		t.Fatalf("cached = %+v %v", ts, err)
+	}
+	gen = 5
+	ts, err = s.Targets(context.Background())
+	if err != nil || len(ts) != 0 {
+		t.Fatalf("new generation = %+v %v", ts, err)
+	}
+}
+
 func TestConfigErrors(t *testing.T) {
 	tests := map[string]string{
 		"interval: 10s": "at least one prefix or asn",
-		"prefixes:\n  - {prefix: 198.51.100.0/24}":                                               "interval is required",
-		"interval: 10ms\nprefixes:\n  - {prefix: 198.51.100.0/24}":                               "at least 1s",
-		"interval: -1s\nprefixes:\n  - {prefix: 198.51.100.0/24}":                                "must be positive",
-		"interval: 10s\nprefixes:\n  - {prefix: 198.51.100.7/24}":                                "did you mean 198.51.100.0/24",
-		"interval: 10s\nprefixes:\n  - {prefix: 198.51.100.0/24, host: 203.0.113.1}":             "must be an address inside",
-		"interval: 10s\nprefixes:\n  - {prefix: 0.0.0.0/0}":                                      "default route",
-		"interval: 10s\nprefixes:\n  - {prefix: 198.51.100.0/24}\n  - {prefix: 198.51.100.0/24}": "duplicate prefix",
-		"interval: 10s\nasns: [0]":                                                               "must be non-zero",
-		"interval: 10s\nasns: [64496, 64496]":                                                    "duplicate asn",
-		"interval: 10s\nprefixes:\n  - {prefix: 198.51.100.0/24}\nvips: []":                      "field vips not found",
+		"prefixes:\n  - {prefix: 198.51.100.0/24}":                                                              "interval is required",
+		"interval: 10ms\nprefixes:\n  - {prefix: 198.51.100.0/24}":                                              "at least 1s",
+		"interval: -1s\nprefixes:\n  - {prefix: 198.51.100.0/24}":                                               "must be positive",
+		"interval: 10s\nprefixes:\n  - {prefix: 198.51.100.7/24}":                                               "did you mean 198.51.100.0/24",
+		"interval: 10s\nprefixes:\n  - {prefix: 198.51.100.0/24, host: 203.0.113.1}":                            "must be an address inside",
+		"interval: 10s\nprefixes:\n  - {prefix: 0.0.0.0/0}":                                                     "default route",
+		"interval: 10s\nprefixes:\n  - {prefix: 198.51.100.0/24}\n  - {prefix: 198.51.100.0/24}":                "duplicate prefix",
+		"interval: 10s\nasns: [0]":                                                                              "must be non-zero",
+		"interval: 10s\nasns: [64496, 64496]":                                                                   "duplicate asn",
+		"interval: 10s\nmax_targets: -1\nprefixes:\n  - {prefix: 198.51.100.0/24}":                              "max_targets",
+		"interval: 10s\nmax_targets: 1\nprefixes:\n  - {prefix: 198.51.100.0/24}\n  - {prefix: 203.0.113.0/24}": "above max_targets",
+		"interval: 10s\nprefixes:\n  - {prefix: 198.51.100.0/24}\nvips: []":                                     "field vips not found",
 	}
 	for y, want := range tests {
 		if _, err := build(y); err == nil || !strings.Contains(err.Error(), want) {

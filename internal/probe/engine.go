@@ -46,8 +46,11 @@ type Options struct {
 	Limiter              Limiter       // nil: unlimited
 	Logger               *slog.Logger
 	Now                  func() time.Time
-	OnResult             func(Result) // called for every result (optional)
-	OnRound              func()       // called after each completed round (optional)
+	// Sleep waits between rounds. Nil uses a timer. Tests set it so Run's
+	// scheduler can be stepped without waiting on the wall clock.
+	Sleep    func(context.Context, time.Duration) error
+	OnResult func(Result) // called for every result (optional)
+	OnRound  func()       // called after each completed round (optional)
 	// RoundTimeout bounds one round, including target collection. Zero
 	// derives a bound from the interval and the per-probe deadline. A round
 	// that exceeds it keeps the previous results: a prober or target source
@@ -107,6 +110,10 @@ type Engine struct {
 	// cadence is the probe interval per prefix from the last complete
 	// target list. Positive target intervals override Options.Interval.
 	cadence map[netip.Prefix]time.Duration
+	// srcCache holds the last target list for sources that are not on a
+	// shorter cadence than Options.Interval. A VIP wake does not start
+	// those sources again.
+	srcCache map[string]sourceSnap
 
 	semMu sync.Mutex
 	sems  map[netip.Addr]chan struct{}
@@ -123,6 +130,16 @@ type Engine struct {
 // errSourceBusy is returned when a target source's previous call has not
 // returned. The round is treated as incomplete and previous results stay.
 var errSourceBusy = errors.New("previous call still running")
+
+// sourceSnap is one source's last target list. fast is true when any
+// target asked for a shorter interval than the engine, and that source
+// is read on every wake.
+type sourceSnap struct {
+	at      time.Time
+	targets []plugin.Target
+	err     error
+	fast    bool
+}
 
 // New validates inputs and returns an engine.
 func New(providers []Provider, probers []NamedProber, sources []NamedSource, opt Options) (*Engine, error) {
@@ -165,8 +182,11 @@ func New(providers []Provider, probers []NamedProber, sources []NamedSource, opt
 // Run probes immediately and then whenever a prefix is due. A target
 // with a positive Interval (the vip source) is measured on that cadence.
 // Other targets use Options.Interval. Results for prefixes that are not
-// due are left in place. The global rate limit applies to every probe,
-// including the shorter cadence and any retry. It returns ctx.Err().
+// due are left in place. Sources that do not carry a shorter interval are
+// re-read on Options.Interval, not on every wake. A completed round,
+// including one that only probed the shorter cadence, still calls OnRound.
+// The global rate limit applies to every probe, including the shorter
+// cadence and any retry. It returns ctx.Err().
 func (e *Engine) Run(ctx context.Context) error {
 	last := map[netip.Prefix]time.Time{}
 	for {
@@ -200,13 +220,23 @@ func (e *Engine) Run(ctx context.Context) error {
 		if wait < 0 {
 			wait = 0
 		}
-		timer := time.NewTimer(wait)
-		select {
-		case <-ctx.Done():
-			timer.Stop()
-			return ctx.Err()
-		case <-timer.C:
+		if err := e.sleep(ctx, wait); err != nil {
+			return err
 		}
+	}
+}
+
+func (e *Engine) sleep(ctx context.Context, d time.Duration) error {
+	if e.opt.Sleep != nil {
+		return e.opt.Sleep(ctx, d)
+	}
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
 	}
 }
 
@@ -295,9 +325,11 @@ func (e *Engine) gatherTargets(ctx context.Context) ([]plugin.Target, bool) {
 			incomplete = true
 			break
 		}
-		ts, err := e.oneSource(ctx, s)
+		ts, err, called := e.targetsFrom(ctx, s)
 		if err != nil {
-			e.log.Warn("target source failed", "source", s.Name, "err", err)
+			if called {
+				e.log.Warn("target source failed", "source", s.Name, "err", err)
+			}
 			if errors.Is(err, errSourceBusy) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
 				incomplete = true
 				break
@@ -313,12 +345,11 @@ func (e *Engine) gatherTargets(ctx context.Context) ([]plugin.Target, bool) {
 				t.Host = DefaultHost(t.Prefix)
 			}
 			// The first source keeps the host. A later source can only
-			// shorten the interval, so a VIP listing still wins when the
-			// same prefix also came from flow or static.
+			// shorten the interval. A stored interval of zero means the
+			// engine interval, so a longer VIP interval does not slow a
+			// prefix that static or flow already listed.
 			if i, ok := seen[t.Prefix]; ok {
-				if t.Interval > 0 && (out[i].Interval == 0 || t.Interval < out[i].Interval) {
-					out[i].Interval = t.Interval
-				}
+				e.shortenInterval(&out[i], t.Interval)
 				continue
 			}
 			seen[t.Prefix] = len(out)
@@ -326,6 +357,82 @@ func (e *Engine) gatherTargets(ctx context.Context) ([]plugin.Target, bool) {
 		}
 	}
 	return out, incomplete
+}
+
+// shortenInterval sets dst.Interval when next is a strictly shorter
+// cadence. Zero on either side means Options.Interval.
+func (e *Engine) shortenInterval(dst *plugin.Target, next time.Duration) {
+	want := next
+	if want <= 0 {
+		want = e.opt.Interval
+	}
+	cur := dst.Interval
+	if cur <= 0 {
+		cur = e.opt.Interval
+	}
+	if want >= cur {
+		return
+	}
+	if next > 0 {
+		dst.Interval = next
+		return
+	}
+	dst.Interval = 0
+}
+
+// targetsFrom returns a cached target list for sources that are not on a
+// shorter cadence. called is false when the cache was used. A deadline or
+// a stuck source is not cached.
+func (e *Engine) targetsFrom(ctx context.Context, s NamedSource) (ts []plugin.Target, err error, called bool) {
+	if c, ok := e.loadSource(s.Name); ok {
+		return c.targets, c.err, false
+	}
+	ts, err = e.oneSource(ctx, s)
+	called = true
+	if err != nil && (errors.Is(err, errSourceBusy) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled)) {
+		return nil, err, true
+	}
+	e.storeSource(s.Name, ts, err)
+	return ts, err, true
+}
+
+func (e *Engine) loadSource(name string) (sourceSnap, bool) {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	c, ok := e.srcCache[name]
+	if !ok || c.fast {
+		return sourceSnap{}, false
+	}
+	if !e.opt.Now().Before(c.at.Add(e.opt.Interval)) {
+		return sourceSnap{}, false
+	}
+	c.targets = cloneTargets(c.targets)
+	return c, true
+}
+
+func (e *Engine) storeSource(name string, ts []plugin.Target, err error) {
+	fast := false
+	for _, t := range ts {
+		if t.Interval > 0 && t.Interval < e.opt.Interval {
+			fast = true
+			break
+		}
+	}
+	e.mu.Lock()
+	if e.srcCache == nil {
+		e.srcCache = map[string]sourceSnap{}
+	}
+	e.srcCache[name] = sourceSnap{at: e.opt.Now(), targets: cloneTargets(ts), err: err, fast: fast}
+	e.mu.Unlock()
+}
+
+func cloneTargets(in []plugin.Target) []plugin.Target {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]plugin.Target, len(in))
+	copy(out, in)
+	return out
 }
 
 func (e *Engine) oneSource(ctx context.Context, s NamedSource) ([]plugin.Target, error) {
@@ -428,9 +535,15 @@ func (e *Engine) runRound(ctx context.Context, allow func(plugin.Target) bool, m
 		}
 	}
 	// Targets exist but none are due. Keep stored results and let the
-	// scheduler sleep. An empty target list still commits, so a prefix
-	// that left every source is dropped.
+	// scheduler sleep. A prefix that left every source is still dropped,
+	// which is the completed round CONFIG.md describes.
 	if allow != nil && len(probed) == 0 && len(targets) > 0 {
+		if e.droppedAny(keep) {
+			e.commit(nil, nil, nil, keep, true)
+			if e.opt.OnRound != nil {
+				e.opt.OnRound()
+			}
+		}
 		return probed, true
 	}
 
@@ -510,6 +623,19 @@ feed:
 		e.opt.OnRound()
 	}
 	return probed, true
+}
+
+// droppedAny reports whether a stored result belongs to a prefix that is
+// no longer in the target list.
+func (e *Engine) droppedAny(keep map[netip.Prefix]bool) bool {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	for k := range e.results {
+		if !keep[k.prefix] {
+			return true
+		}
+	}
+	return false
 }
 
 func (e *Engine) noteCadence(targets []plugin.Target) {

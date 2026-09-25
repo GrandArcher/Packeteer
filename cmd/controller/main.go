@@ -7,6 +7,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -138,6 +139,10 @@ func run(ctx context.Context, args []string, getenv func(string) string, stdout,
 	plugins, err := pluginhost.Build(cfg, pluginhost.Options{Logger: log, Getenv: getenv, PluginDir: getenv(PluginDirEnv)})
 	if err != nil {
 		fmt.Fprintf(stderr, "packeteer: refusing to start: plugins: %v\n", err)
+		return 1
+	}
+	if err := checkVIPIntervals(cfg, plugins); err != nil {
+		fmt.Fprintf(stderr, "packeteer: refusing to start: %v\n", err)
 		return 1
 	}
 
@@ -459,38 +464,88 @@ type prefixLookup interface {
 	SetPrefixLookup(func(netip.Addr) (netip.Prefix, bool))
 }
 
-// learnedSetter is implemented by the vip source.
-type learnedSetter interface {
-	SetLearnedRoutes(func() []vip.LearnedRoute)
+// learnedView is the RIB surface VIP expansion reads. *rib.View implements it.
+type learnedView interface {
+	Ready() bool
+	Generation() uint64
+	Routes() []rib.Route
+}
+
+// routeSnapshotSetter is implemented by the vip source.
+type routeSnapshotSetter interface {
+	SetRouteSnapshot(func() (uint64, []vip.LearnedRoute))
+}
+
+// learnedSnap caches the copied RIB for one generation. A VIP interval as
+// short as a second must not copy every AS path on every wake.
+type learnedSnap struct {
+	mu  sync.Mutex
+	gen uint64
+	ok  bool
+	out []vip.LearnedRoute
+}
+
+func (s *learnedSnap) get(view learnedView) (uint64, []vip.LearnedRoute) {
+	if view == nil || !view.Ready() {
+		return 0, nil
+	}
+	g := view.Generation()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.ok && s.gen == g {
+		return g, s.out
+	}
+	routes := view.Routes()
+	out := make([]vip.LearnedRoute, 0, len(routes))
+	for _, rt := range routes {
+		if !rt.Prefix.IsValid() || rt.Prefix.Bits() == 0 {
+			continue
+		}
+		out = append(out, vip.LearnedRoute{Prefix: rt.Prefix, ASPath: append([]uint32(nil), rt.ASPath...)})
+	}
+	s.gen, s.ok, s.out = g, true, out
+	return g, out
 }
 
 // wireLearnedRoutes gives the vip source the current RIB. The callback
 // returns nothing while the view is missing or not ready, and it drops
 // default routes, so an ASN list cannot invent targets from stale state.
+// The copy is rebuilt only when the view's generation changes.
 func wireLearnedRoutes(plugins *pluginhost.Set, view *rib.View) {
 	if plugins == nil {
 		return
 	}
-	fn := func() []vip.LearnedRoute {
-		if view == nil || !view.Ready() {
-			return nil
-		}
-		routes := view.Routes()
-		out := make([]vip.LearnedRoute, 0, len(routes))
-		for _, rt := range routes {
-			if !rt.Prefix.IsValid() || rt.Prefix.Bits() == 0 {
-				continue
-			}
-			path := append([]uint32(nil), rt.ASPath...)
-			out = append(out, vip.LearnedRoute{Prefix: rt.Prefix, ASPath: path})
-		}
-		return out
-	}
+	var snap learnedSnap
+	fn := func() (uint64, []vip.LearnedRoute) { return snap.get(view) }
 	for _, src := range plugins.Sources {
-		if s, ok := src.Plugin.(learnedSetter); ok {
-			s.SetLearnedRoutes(fn)
+		if s, ok := src.Plugin.(routeSnapshotSetter); ok {
+			s.SetRouteSnapshot(fn)
 		}
 	}
+}
+
+// checkVIPIntervals rejects a VIP cadence that is not inside the staleness
+// window. A longer interval leaves that prefix permanently stale, and the
+// controller withdraws any improvement on it.
+func checkVIPIntervals(cfg *config.Config, plugins *pluginhost.Set) error {
+	if plugins == nil {
+		return nil
+	}
+	window := maxResultAge(cfg)
+	var errs []error
+	for _, src := range plugins.Sources {
+		v, ok := src.Plugin.(*vip.Source)
+		if !ok {
+			continue
+		}
+		if v.Interval() >= window {
+			errs = append(errs, fmt.Errorf("source %s: interval %s must be shorter than the staleness window %s (3*probe.interval + packets*timeout, plus retry packets when retry is on)", src.Name, v.Interval(), window))
+		}
+	}
+	if len(errs) == 0 {
+		return nil
+	}
+	return errors.Join(errs...)
 }
 
 func wirePrefixLookup(plugins *pluginhost.Set, view *rib.View) {

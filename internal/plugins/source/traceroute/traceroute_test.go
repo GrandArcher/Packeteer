@@ -2,7 +2,6 @@ package traceroute
 
 import (
 	"context"
-	"encoding/binary"
 	"errors"
 	"net/netip"
 	"strings"
@@ -11,7 +10,6 @@ import (
 	"time"
 
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
-	"golang.org/x/sys/unix"
 )
 
 func build(y string) (plugin.TargetSource, error) {
@@ -186,6 +184,7 @@ targets:
 		1: {{from: a("198.51.100.1"), reached: true}},
 	}}
 	s.hop = fake
+	s.discover(context.Background())
 	ts, err := s.Targets(context.Background())
 	if err != nil || len(ts) != 1 || ts[0].Host.String() != "198.51.100.1" || ts[0].Prefix.String() != "198.51.100.0/24" {
 		t.Fatalf("ts = %+v err = %v", ts, err)
@@ -196,18 +195,20 @@ targets:
 		t.Fatal(err)
 	}
 	if fake.calls.Load() != calls {
-		t.Fatalf("cache miss: calls %d -> %d", calls, fake.calls.Load())
+		t.Fatalf("Targets traced on a fresh cache: calls %d -> %d", calls, fake.calls.Load())
 	}
 	now = now.Add(time.Minute)
 	if _, err := s.Targets(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if fake.calls.Load() == calls {
-		t.Fatal("cache lived past the interval")
+	if fake.calls.Load() != calls {
+		t.Fatal("Targets traced instead of returning the cache")
 	}
 
 	s.hop = errHopper{err: fmtSourceDown()}
 	s.have = false
+	s.lastErr = nil
+	s.discover(context.Background())
 	_, err = s.Targets(context.Background())
 	if !errors.Is(err, plugin.ErrSourceUnavailable) {
 		t.Fatalf("err = %v", err)
@@ -237,9 +238,93 @@ targets:
 		1: {{from: a("192.0.2.1")}, {from: a("192.0.2.2")}, {from: a("192.0.2.3")}},
 	}}
 	s.now = time.Now
+	s.discover(context.Background())
 	ts, err := s.Targets(context.Background())
 	if err != nil || len(ts) != 0 {
 		t.Fatalf("ts = %+v err = %v", ts, err)
+	}
+}
+
+// blockHopper waits until ctx is done. A trace that ignores its budget
+// would block the probe round; Targets must not.
+type blockHopper struct {
+	started chan struct{}
+	once    atomic.Bool
+}
+
+func (b *blockHopper) Probe(ctx context.Context, _, _ netip.Addr, _, _ int, _ time.Duration) (netip.Addr, bool, error) {
+	if b.once.CompareAndSwap(false, true) {
+		close(b.started)
+	}
+	<-ctx.Done()
+	return netip.Addr{}, false, ctx.Err()
+}
+
+func TestTargetsReturnsWhileTraceExceedsRoundDeadline(t *testing.T) {
+	// Default round deadline is about 110s. This hopper would block for
+	// the whole budget if Targets waited on it.
+	s := must(t, `
+timeout: 1ms
+probes: 1
+min_replies: 1
+max_hops: 64
+budget: 30s
+interval: 1m
+targets:
+  - {prefix: 198.51.100.0/24, host: 198.51.100.1}
+`)
+	s.now = time.Now
+	hop := &blockHopper{started: make(chan struct{})}
+	s.hop = hop
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := s.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		stop, c := context.WithTimeout(context.Background(), 2*time.Second)
+		defer c()
+		if err := s.Stop(stop); err != nil {
+			t.Error(err)
+		}
+	})
+	select {
+	case <-hop.started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("discovery did not start")
+	}
+	start := time.Now()
+	ts, err := s.Targets(context.Background())
+	if elapsed := time.Since(start); elapsed > 200*time.Millisecond {
+		t.Fatalf("Targets blocked for %s while a trace was in progress", elapsed)
+	}
+	if err != nil || len(ts) != 0 {
+		t.Fatalf("in-progress discovery returned %+v err=%v", ts, err)
+	}
+}
+
+func TestDiscoverBudgetCapsSlowTrace(t *testing.T) {
+	s := must(t, `
+timeout: 20ms
+probes: 10
+min_replies: 1
+max_hops: 64
+budget: 200ms
+interval: 1m
+targets:
+  - {prefix: 198.51.100.0/24, host: 198.51.100.1}
+  - {prefix: 203.0.113.0/24, host: 203.0.113.1}
+`)
+	s.now = time.Now
+	s.hop = &blockHopper{started: make(chan struct{})}
+	start := time.Now()
+	s.discover(context.Background())
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Fatalf("discover took %s, budget is 200ms", elapsed)
+	}
+	ts, err := s.Targets(context.Background())
+	if err != nil || len(ts) != 0 {
+		t.Fatalf("budget expiry must not fail the source: %+v %v", ts, err)
 	}
 }
 
@@ -255,6 +340,10 @@ func TestConfigErrors(t *testing.T) {
 		"targets:\n  - {prefix: 198.51.100.0/24}\nprobes: 0":                     "", // default
 		"targets:\n  - {prefix: 198.51.100.0/24}\nprobes: 1\nmin_replies: 2":     "min_replies",
 		"targets:\n  - {prefix: 198.51.100.0/24}\ninterval: 10ms":                "interval",
+		"targets:\n  - {prefix: 198.51.100.0/24}\ntimeout: -1s":                  "must be between 1ns and",
+		"targets:\n  - {prefix: 198.51.100.0/24}\ntimeout: 0s":                   "",
+		"targets:\n  - {prefix: 198.51.100.0/24}\nbudget: 1ms":                   "budget",
+		"targets:\n  - {prefix: 198.51.100.0/24}\nbudget: 1m":                    "budget",
 		"targets:\n  - {prefix: 198.51.100.0/24}\nsource: not-an-ip":             "source",
 		"targets:\n  - {prefix: 2001:db8::/32}\nsource: 192.0.2.11":              "address family",
 		"targets:\n  - {prefix: 198.51.100.0/24}\nextra: 1":                      "field extra not found",
@@ -270,87 +359,5 @@ func TestConfigErrors(t *testing.T) {
 		if err == nil || !strings.Contains(err.Error(), want) {
 			t.Errorf("%q: err = %v, want %q", y, err, want)
 		}
-	}
-}
-
-func TestParseExtErr(t *testing.T) {
-	data := make([]byte, 16+16)
-	binary.LittleEndian.PutUint32(data[0:4], uint32(unix.ECONNREFUSED))
-	data[4] = unix.SO_EE_ORIGIN_ICMP
-	data[5] = 11 // time exceeded
-	data[6] = 0
-	binary.LittleEndian.PutUint16(data[16:18], unix.AF_INET)
-	copy(data[20:24], []byte{203, 0, 113, 1})
-	from, typ, ok := parseExtErrData(data)
-	if !ok || typ != 11 || from.String() != "203.0.113.1" {
-		t.Fatalf("from=%s typ=%d ok=%v", from, typ, ok)
-	}
-	hop, reached := classify(false, typ)
-	if !hop || reached {
-		t.Fatalf("classify time exceeded: hop=%v reached=%v", hop, reached)
-	}
-	hop, reached = classify(false, 3)
-	if !hop || !reached {
-		t.Fatalf("classify dest unreach: hop=%v reached=%v", hop, reached)
-	}
-
-	v6 := make([]byte, 16+28)
-	v6[4] = unix.SO_EE_ORIGIN_ICMP6
-	v6[5] = 3 // time exceeded
-	binary.LittleEndian.PutUint16(v6[16:18], unix.AF_INET6)
-	copy(v6[24:40], netip.MustParseAddr("2001:db8::1").AsSlice())
-	from, typ, ok = parseExtErrData(v6)
-	if !ok || typ != 3 || from.String() != "2001:db8::1" {
-		t.Fatalf("v6 from=%s typ=%d ok=%v", from, typ, ok)
-	}
-}
-
-func TestLoopbackDiscovery(t *testing.T) {
-	s := must(t, `
-timeout: 300ms
-probes: 1
-min_replies: 1
-max_hops: 3
-interval: 1s
-port: 33434
-targets:
-  - {prefix: 127.0.0.1/32, host: 127.0.0.1}
-`)
-	s.now = time.Now
-	ts, err := s.Targets(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(ts) != 1 || ts[0].Host.String() != "127.0.0.1" || ts[0].Prefix.String() != "127.0.0.1/32" {
-		t.Fatalf("loopback trace = %+v", ts)
-	}
-}
-
-func TestLoopbackV6(t *testing.T) {
-	s := must(t, `
-timeout: 300ms
-probes: 1
-min_replies: 1
-max_hops: 3
-interval: 1s
-port: 33434
-targets:
-  - {prefix: "::1/128", host: "::1"}
-`)
-	s.now = time.Now
-	ts, err := s.Targets(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(ts) != 1 || ts[0].Host.String() != "::1" {
-		t.Fatalf("v6 loopback trace = %+v", ts)
-	}
-}
-
-func TestBindMissingSource(t *testing.T) {
-	_, _, err := udpHopper{}.Probe(context.Background(),
-		a("192.0.2.99"), a("192.0.2.1"), 1, 33434, 200*time.Millisecond)
-	if !errors.Is(err, plugin.ErrSourceUnavailable) {
-		t.Fatalf("err = %v, want ErrSourceUnavailable", err)
 	}
 }

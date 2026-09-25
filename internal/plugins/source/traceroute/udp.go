@@ -1,3 +1,5 @@
+//go:build linux
+
 package traceroute
 
 import (
@@ -12,13 +14,10 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// udpHopper is a UDP traceroute. ICMP time-exceeded and destination-
-// unreachable come back on the socket error queue (IP_RECVERR), so it
+// Probe implements hopper. ICMP time-exceeded and destination-
+// unreachable come back on the socket error queue (IP_RECVERR), so this
 // does not open a raw socket. A UDP payload from the destination counts
 // as the destination answering.
-type udpHopper struct{}
-
-// Probe implements hopper.
 func (udpHopper) Probe(ctx context.Context, src, dst netip.Addr, ttl, port int, timeout time.Duration) (netip.Addr, bool, error) {
 	if err := ctx.Err(); err != nil {
 		return netip.Addr{}, false, err

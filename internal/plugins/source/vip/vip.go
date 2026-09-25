@@ -3,7 +3,8 @@
 //
 // Configured prefixes are returned even when no RIB is attached. ASN matches
 // come only from the callback installed by the controller, and only while
-// that callback returns routes. A default route is never a target. This
+// that callback returns routes. Expansion stops at max_targets and is cached
+// until the RIB generation changes. A default route is never a target. This
 // source does not announce; the decision engine still requires the prefix
 // in the learned RIB before any injection.
 package vip
@@ -11,6 +12,7 @@ package vip
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"net/netip"
 	"sync"
 	"time"
@@ -25,13 +27,24 @@ const TypeName = "vip"
 // the scheduler and is rejected at load time.
 const MinInterval = time.Second
 
+// DefaultMaxTargets caps ASN expansion. A transit ASN can match most of
+// the table; without a cap the probe round never finishes and every
+// result, including non-VIP prefixes, goes stale. 100 targets is two
+// providers of 10 packets at the default 100 packets/s, inside one
+// default probe interval.
+const DefaultMaxTargets = 100
+
+// MaxTargetsLimit is the largest max_targets config accepts.
+const MaxTargetsLimit = 10000
+
 func init() { plugin.Sources.Register(TypeName, New) }
 
 // Config is the vip source's config block.
 type Config struct {
-	Interval time.Duration `yaml:"interval"`
-	Prefixes []prefixSpec  `yaml:"prefixes"`
-	ASNs     []uint32      `yaml:"asns"`
+	Interval   time.Duration `yaml:"interval"`
+	Prefixes   []prefixSpec  `yaml:"prefixes"`
+	ASNs       []uint32      `yaml:"asns"`
+	MaxTargets int           `yaml:"max_targets"`
 }
 
 type prefixSpec struct {
@@ -48,16 +61,21 @@ type LearnedRoute struct {
 // Source returns VIP targets.
 type Source struct {
 	plugin.Base
-	interval time.Duration
-	prefixes []plugin.Target
-	asns     map[uint32]struct{}
+	log        *slog.Logger
+	interval   time.Duration
+	maxTargets int
+	prefixes   []plugin.Target
+	asns       map[uint32]struct{}
 
-	mu     sync.RWMutex
-	routes func() []LearnedRoute
+	mu         sync.Mutex
+	snap       func() (uint64, []LearnedRoute)
+	cacheGen   uint64
+	cacheExtra []plugin.Target
+	cacheOK    bool
 }
 
 // New is the plugin factory. It does no I/O.
-func New(c plugin.Config, _ plugin.Env) (plugin.TargetSource, error) {
+func New(c plugin.Config, env plugin.Env) (plugin.TargetSource, error) {
 	var cfg Config
 	if err := c.Decode(&cfg); err != nil {
 		return nil, err
@@ -68,10 +86,19 @@ func New(c plugin.Config, _ plugin.Env) (plugin.TargetSource, error) {
 	if cfg.Interval < MinInterval {
 		return nil, fmt.Errorf("interval %s must be at least %s", cfg.Interval, MinInterval)
 	}
+	if cfg.MaxTargets == 0 {
+		cfg.MaxTargets = DefaultMaxTargets
+	}
+	if cfg.MaxTargets < 1 || cfg.MaxTargets > MaxTargetsLimit {
+		return nil, fmt.Errorf("max_targets %d must be between 1 and %d", cfg.MaxTargets, MaxTargetsLimit)
+	}
 	if len(cfg.Prefixes) == 0 && len(cfg.ASNs) == 0 {
 		return nil, fmt.Errorf("at least one prefix or asn is required")
 	}
-	s := &Source{interval: cfg.Interval, asns: map[uint32]struct{}{}}
+	if env.Logger == nil {
+		env.Logger = slog.Default()
+	}
+	s := &Source{log: env.Logger, interval: cfg.Interval, maxTargets: cfg.MaxTargets, asns: map[uint32]struct{}{}}
 	seen := map[netip.Prefix]bool{}
 	for i, t := range cfg.Prefixes {
 		p, err := netip.ParsePrefix(t.Prefix)
@@ -107,36 +134,84 @@ func New(c plugin.Config, _ plugin.Env) (plugin.TargetSource, error) {
 		}
 		s.asns[asn] = struct{}{}
 	}
+	if len(s.prefixes) > s.maxTargets {
+		return nil, fmt.Errorf("prefixes has %d entries, which is above max_targets %d", len(s.prefixes), s.maxTargets)
+	}
 	return s, nil
 }
+
+// Interval is the probe cadence applied to every target from this source.
+// The controller rejects a value that is not inside the staleness window.
+func (s *Source) Interval() time.Duration { return s.interval }
 
 // SetLearnedRoutes attaches the RIB. fn may be nil. The controller passes
 // a callback that returns nothing unless the view is ready, and never a
 // default route. The source also ignores a default route if one appears.
+// A generation of zero does not cache the expansion.
 func (s *Source) SetLearnedRoutes(fn func() []LearnedRoute) {
+	if fn == nil {
+		s.SetRouteSnapshot(nil)
+		return
+	}
+	s.SetRouteSnapshot(func() (uint64, []LearnedRoute) { return 0, fn() })
+}
+
+// SetRouteSnapshot attaches a versioned RIB read. The same non-zero
+// generation is not expanded again, so a short VIP interval does not walk
+// the table on every wake. Generation zero always recomputes.
+func (s *Source) SetRouteSnapshot(fn func() (uint64, []LearnedRoute)) {
 	s.mu.Lock()
-	s.routes = fn
+	s.snap = fn
+	s.cacheOK = false
 	s.mu.Unlock()
 }
 
 // Targets implements plugin.TargetSource.
 func (s *Source) Targets(context.Context) ([]plugin.Target, error) {
-	out := make([]plugin.Target, len(s.prefixes))
-	copy(out, s.prefixes)
+	base := make([]plugin.Target, len(s.prefixes))
+	copy(base, s.prefixes)
 	if len(s.asns) == 0 {
-		return out, nil
+		return base, nil
 	}
-	s.mu.RLock()
-	fn := s.routes
-	s.mu.RUnlock()
+	s.mu.Lock()
+	fn := s.snap
+	s.mu.Unlock()
 	if fn == nil {
-		return out, nil
+		return base, nil
 	}
+	gen, routes := fn()
+	if gen != 0 {
+		s.mu.Lock()
+		if s.cacheOK && s.cacheGen == gen {
+			extra := cloneTargets(s.cacheExtra)
+			s.mu.Unlock()
+			return append(base, extra...), nil
+		}
+		s.mu.Unlock()
+	}
+	extra, truncated := s.expand(base, routes)
+	if gen != 0 {
+		s.mu.Lock()
+		s.cacheGen = gen
+		s.cacheExtra = cloneTargets(extra)
+		s.cacheOK = true
+		s.mu.Unlock()
+	}
+	if truncated {
+		s.log.Warn("vip target list truncated", "max_targets", s.maxTargets, "returned", len(base)+len(extra))
+	}
+	return append(base, extra...), nil
+}
+
+// expand adds learned prefixes whose AS path contains a listed ASN, up to
+// maxTargets including the configured prefixes. It stops at the cap so a
+// transit ASN does not walk the rest of the table into memory as targets.
+func (s *Source) expand(base []plugin.Target, routes []LearnedRoute) (extra []plugin.Target, truncated bool) {
 	seen := map[netip.Prefix]bool{}
-	for _, t := range out {
+	for _, t := range base {
 		seen[t.Prefix] = true
 	}
-	for _, rt := range fn() {
+	for _, rt := range routes {
 		p := rt.Prefix.Masked()
 		if !p.IsValid() || p.Bits() == 0 || seen[p] {
 			continue
@@ -144,10 +219,22 @@ func (s *Source) Targets(context.Context) ([]plugin.Target, error) {
 		if !pathContains(rt.ASPath, s.asns) {
 			continue
 		}
+		if len(base)+len(extra) >= s.maxTargets {
+			return extra, true
+		}
 		seen[p] = true
-		out = append(out, plugin.Target{Prefix: p, Interval: s.interval})
+		extra = append(extra, plugin.Target{Prefix: p, Interval: s.interval})
 	}
-	return out, nil
+	return extra, false
+}
+
+func cloneTargets(in []plugin.Target) []plugin.Target {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]plugin.Target, len(in))
+	copy(out, in)
+	return out
 }
 
 func pathContains(path []uint32, want map[uint32]struct{}) bool {

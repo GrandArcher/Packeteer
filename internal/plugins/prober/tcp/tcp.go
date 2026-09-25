@@ -1,6 +1,12 @@
 // Package tcp implements the "tcp" prober: it times TCP handshakes to a
 // port (default 443) from the provider's source address. A SYN-ACK or a RST
 // both count as a reply; the handshake is aborted with RST right away.
+//
+// A middlebox RST is indistinguishable from the target's RST: the kernel
+// reports both as ECONNREFUSED and the RST is often sourced from the
+// destination address. A firewall that rejects with tcp-reset can therefore
+// look like a healthy low-latency path. The UDP prober does not have this
+// gap for ICMP, because the unreachable names the host that sent it.
 package tcp
 
 import (

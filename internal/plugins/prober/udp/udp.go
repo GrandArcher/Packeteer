@@ -1,16 +1,16 @@
 // Package udp implements the "udp" prober: it sends one datagram per
 // packet to a port (default 33434) from the provider's source address.
-// A UDP reply or an ICMP port-unreachable both count as a reply. The
-// kernel delivers the unreachable to the connected socket, so this
+// A UDP reply counts. On Linux, an ICMP destination-unreachable counts
+// only when the host that sent it is the target. A firewall REJECT
+// (icmp-port-unreachable from some other address) is loss, not a reply.
+// The kernel delivers the unreachable on the socket error queue, so this
 // prober does not need a raw socket.
 package udp
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"net"
-	"syscall"
 	"time"
 
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
@@ -96,41 +96,4 @@ func (p *Prober) Probe(ctx context.Context, req plugin.ProbeRequest) (plugin.Pro
 		}
 	}
 	return res, nil
-}
-
-// onePacket sends one datagram. ok is true when the host answered with
-// a payload or with ICMP port-unreachable. A missing source address is
-// an error so the engine can fail closed.
-func onePacket(ctx context.Context, network string, laddr, raddr *net.UDPAddr, timeout time.Duration, start time.Time) (time.Duration, bool, error) {
-	c, err := net.DialUDP(network, laddr, raddr)
-	if err != nil {
-		if errors.Is(err, syscall.EADDRNOTAVAIL) {
-			return 0, false, fmt.Errorf("%w: %s: %v", plugin.ErrSourceUnavailable, laddr.IP, err)
-		}
-		return 0, false, nil
-	}
-	defer c.Close()
-	deadline := start.Add(timeout)
-	if d, ok := ctx.Deadline(); ok && d.Before(deadline) {
-		deadline = d
-	}
-	_ = c.SetDeadline(deadline)
-	if _, err := c.Write([]byte{0}); err != nil {
-		if errors.Is(err, syscall.EADDRNOTAVAIL) {
-			return 0, false, fmt.Errorf("%w: %v", plugin.ErrSourceUnavailable, err)
-		}
-		if errors.Is(err, syscall.ECONNREFUSED) {
-			return time.Since(start), true, nil
-		}
-		return 0, false, nil
-	}
-	buf := make([]byte, 64)
-	_, err = c.Read(buf)
-	if err == nil || errors.Is(err, syscall.ECONNREFUSED) {
-		return time.Since(start), true, nil
-	}
-	if ctx.Err() != nil {
-		return 0, false, ctx.Err()
-	}
-	return 0, false, nil
 }
