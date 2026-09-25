@@ -43,6 +43,10 @@ go build -o packeteer ./cmd/controller
 docker build -t packeteer .
 ```
 
+## Roadmap
+
+Feature parity with Noction IRP is the top priority. See [docs/IRP_PARITY.md](docs/IRP_PARITY.md) for the capability matrix and the milestones (v0.1 through v0.4).
+
 ## Safety
 
 - Default mode is `observe`
