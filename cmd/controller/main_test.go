@@ -174,3 +174,37 @@ sources:
 		}
 	}
 }
+
+func TestDaemonWithBGPNeighborStartsAndStops(t *testing.T) {
+	ln, _ := net.Listen("tcp", "127.0.0.1:0")
+	port := ln.Addr().(*net.TCPAddr).Port
+	ln.Close() // no router listening: session stays down, daemon must still run and stop cleanly
+	cfg := fmt.Sprintf(`mode: observe
+asn: 64512
+router_id: 192.0.2.10
+providers:
+  - {name: a, source_ip: 127.0.0.1, next_hop: 192.0.2.1}
+probers: [{type: tcp}]
+bgp:
+  neighbors:
+    - {address: 127.0.0.1, port: %d, description: edge1}
+`, port)
+	path := filepath.Join(t.TempDir(), "c.yaml")
+	if err := os.WriteFile(path, []byte(cfg), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out, errOut bytes.Buffer
+	if code := run(context.Background(), []string{"-check", "-config", path}, noEnv, &out, &errOut); code != 0 || !strings.Contains(out.String(), "bgp neighbors (1, learn-only)") {
+		t.Fatalf("check: code %d out %q err %q", code, out.String(), errOut.String())
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	out.Reset()
+	errOut.Reset()
+	if code := run(ctx, []string{"-config", path}, noEnv, &out, &errOut); code != 0 {
+		t.Fatalf("exit code %d\n%s", code, errOut.String())
+	}
+	if !strings.Contains(errOut.String(), "bgp_neighbors=1") || !strings.Contains(errOut.String(), "shutting down") {
+		t.Errorf("logs:\n%s", errOut.String())
+	}
+}

@@ -47,6 +47,14 @@ probers:
 #           host: 198.51.100.1        # optional; defaults to the first address
 #         - prefix: 203.0.113.0/24
 
+# iBGP to the edge router(s) for the RIB view (learn-only for now; see
+# docs/mikrotik.md). Same ASN as `asn`. Graceful restart is never enabled.
+# bgp:
+#   listen_port: 179      # optional; 0/omitted = connect out only
+#   neighbors:
+#     - address: 192.0.2.254
+#       description: edge1
+
 # Plugins (docs/PLUGINS.md). Out-of-process plugins live in plugin_dir.
 plugin_dir: /etc/packeteer/plugins
 # notifiers:

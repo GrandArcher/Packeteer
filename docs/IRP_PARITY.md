@@ -25,9 +25,9 @@ Milestones:
 
 | Status | Count |
 |---|---|
-| done | 8 |
+| done | 9 |
 | in progress | 1 |
-| planned | 69 |
+| planned | 68 |
 | won't do | 3 |
 
 ## Performance optimization
@@ -98,7 +98,7 @@ Milestones:
 |---|---|---|---|---|---|
 | iBGP injection with local-pref, communities, next-hop | 1.2.2 Bgpd | planned | v0.1 | announcer (`gobgp`) | #8 |
 | More-specific injection | 2.9 Bgpd | planned | v0.1 | announcer (`gobgp`) | #8 |
-| RIB view from iBGP (learn current best exits) | 2.9 Bgpd | planned | v0.1 | core (`internal/rib`) | #6 |
+| RIB view from iBGP (learn current best exits) | 2.9 Bgpd | done | v0.1 | core (`internal/rib`) | #6 |
 | BGP session health and automatic withdraw (no stale intent) | 2.9 | planned | v0.1 | announcer | #8 |
 | AS-path behavior options | 2.9.1 | planned | v0.3 | announcer | #27 |
 | BGP additional paths (add-path) | 2.9.3 | planned | v0.3 | RIB source | #26 |

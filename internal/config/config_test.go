@@ -47,6 +47,9 @@ providers:
 `
 
 const injectYAML = `
+bgp:
+  neighbors:
+    - address: 192.0.2.1
 mode: inject
 asn: 64512
 router_id: 192.0.2.10
@@ -211,6 +214,15 @@ func TestParseErrors(t *testing.T) {
 		{"negative pps", edit(t, validYAML, "packets: 10", "packets: 10\n  rate_limit_pps: -5"), "probe.rate_limit_pps -5"},
 		{"too high pps", edit(t, validYAML, "packets: 10", "packets: 10\n  rate_limit_pps: 200000"), "probe.rate_limit_pps 200000"},
 		{"bad per-target", edit(t, validYAML, "packets: 10", "packets: 10\n  per_target_concurrency: 65"), "probe.per_target_concurrency 65"},
+		{"bgp bad listen port", minimalYAML + "bgp: {listen_port: 70000}\n", "bgp.listen_port 70000"},
+		{"bgp bad listen address", minimalYAML + "bgp: {listen_addresses: [nope]}\n", `bgp.listen_addresses[0]: "nope"`},
+		{"bgp bad neighbor", minimalYAML + "bgp:\n  neighbors:\n    - address: router1\n", `bgp.neighbors[0]: address "router1"`},
+		{"bgp duplicate neighbor", minimalYAML + "bgp:\n  neighbors:\n    - address: 192.0.2.1\n    - address: 192.0.2.1\n", "duplicate neighbor 192.0.2.1"},
+		{"bgp bad port", minimalYAML + "bgp:\n  neighbors:\n    - {address: 192.0.2.1, port: -1}\n", "port -1 must be between"},
+		{"bgp bad local address", minimalYAML + "bgp:\n  neighbors:\n    - {address: 192.0.2.1, local_address: x}\n", `local_address "x"`},
+		{"bgp passive without listen", minimalYAML + "bgp:\n  neighbors:\n    - {address: 192.0.2.1, passive: true}\n", "passive requires bgp.listen_port"},
+		{"bgp graceful restart is not a thing", minimalYAML + "bgp:\n  graceful_restart: true\n", "field graceful_restart not found"},
+		{"inject without bgp", edit(t, injectYAML, "bgp:\n  neighbors:\n    - address: 192.0.2.1\n", ""), "mode inject requires at least one bgp.neighbors"},
 		{"inject without allowlist", edit(t, injectYAML, "prefixes:\n    - 198.51.100.0/24\n    - 2001:db8:100::/48\n", "prefixes: []\n"), "mode inject requires a non-empty allowlist"},
 		{"inject without community", edit(t, injectYAML, "packeteer_community: \"64512:666\"\n", ""), "mode inject requires packeteer_community"},
 		{"inject without hold_time", edit(t, injectYAML, "hold_time: 15m\n", ""), "mode inject requires a positive hold_time"},

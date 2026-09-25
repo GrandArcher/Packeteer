@@ -57,6 +57,9 @@ type Config struct {
 	Allowlist          Allowlist     `yaml:"allowlist"`
 	Probe              Probe         `yaml:"probe"`
 
+	// BGP holds the iBGP sessions to the edge routers (RIB view, #6).
+	BGP BGP `yaml:"bgp"`
+
 	// Plugins. Each entry selects an implementation by type; see
 	// docs/PLUGINS.md. Plugin-specific settings live under `config` and are
 	// validated by the plugin itself when the plugin set is built.
@@ -66,6 +69,24 @@ type Config struct {
 	Scorer    *PluginSpec  `yaml:"scorer"`
 	Announcer *PluginSpec  `yaml:"announcer"`
 	Notifiers []PluginSpec `yaml:"notifiers"`
+}
+
+// BGP configures the embedded BGP speaker.
+type BGP struct {
+	// ListenPort accepts sessions from routers (e.g. 179). 0 = do not
+	// listen; Packeteer connects out to each neighbor instead.
+	ListenPort      int           `yaml:"listen_port"`
+	ListenAddresses []string      `yaml:"listen_addresses"`
+	Neighbors       []BGPNeighbor `yaml:"neighbors"`
+}
+
+// BGPNeighbor is an edge router peered over iBGP (same ASN as asn).
+type BGPNeighbor struct {
+	Address      string `yaml:"address"`
+	Port         int    `yaml:"port"`          // remote port, default 179
+	LocalAddress string `yaml:"local_address"` // optional session source
+	Passive      bool   `yaml:"passive"`       // wait for the router to connect
+	Description  string `yaml:"description"`
 }
 
 // PluginSpec selects one plugin instance.
@@ -295,6 +316,39 @@ func (c *Config) Validate() error {
 		add("probe.packets %d must be between 1 and %d", c.Probe.Packets, MaxProbePackets)
 	}
 
+	if c.BGP.ListenPort < 0 || c.BGP.ListenPort > 65535 {
+		add("bgp.listen_port %d must be between 0 and 65535", c.BGP.ListenPort)
+	}
+	for i, a := range c.BGP.ListenAddresses {
+		if _, err := netip.ParseAddr(a); err != nil {
+			add("bgp.listen_addresses[%d]: %q is not a valid IP address", i, a)
+		}
+	}
+	nbrs := map[netip.Addr]bool{}
+	for i, n := range c.BGP.Neighbors {
+		label := fmt.Sprintf("bgp.neighbors[%d]", i)
+		a, err := netip.ParseAddr(n.Address)
+		if err != nil {
+			add("%s: address %q is not a valid IP address", label, n.Address)
+		} else {
+			if nbrs[a] {
+				add("%s: duplicate neighbor %s", label, a)
+			}
+			nbrs[a] = true
+		}
+		if n.Port < 0 || n.Port > 65535 {
+			add("%s: port %d must be between 0 and 65535", label, n.Port)
+		}
+		if n.LocalAddress != "" {
+			if _, err := netip.ParseAddr(n.LocalAddress); err != nil {
+				add("%s: local_address %q is not a valid IP address", label, n.LocalAddress)
+			}
+		}
+		if n.Passive && c.BGP.ListenPort == 0 {
+			add("%s: passive requires bgp.listen_port", label)
+		}
+	}
+
 	validateSpecs := func(field string, specs []PluginSpec) {
 		seen := map[string]bool{}
 		for i, sp := range specs {
@@ -333,6 +387,9 @@ func (c *Config) Validate() error {
 	if c.Mode == ModeInject {
 		if len(c.Allowlist.Prefixes) == 0 {
 			add("mode inject requires a non-empty allowlist.prefixes")
+		}
+		if len(c.BGP.Neighbors) == 0 {
+			add("mode inject requires at least one bgp.neighbors entry")
 		}
 		if c.PacketeerCommunity == "" {
 			add("mode inject requires packeteer_community to tag injected routes")
