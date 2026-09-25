@@ -45,7 +45,6 @@ asn: 64512
 router_id: 192.0.2.10
 packeteer_community: "64512:666"
 local_pref: 250               # required for mode: inject; higher than the native paths
-# more_specific_bits: 0       # 0 = the same prefix; 1 = two covering more-specifics
 bgp:
   listen_port: 179            # optional: let the router connect in
   neighbors:
@@ -55,7 +54,7 @@ announcer:
   type: gobgp
 ```
 
-`local_pref`, `more_specific_bits`, and `announcer` are used only when `mode: inject`. Inject also requires a non-empty allowlist, at least one BGP neighbor, a positive hold time, and positive loss and latency thresholds.
+`local_pref` and `announcer` are used only when `mode: inject`. An injected route is the exact prefix learned from this session. `more_specific_bits` is not a setting; a config that includes it is rejected. Inject also requires a non-empty allowlist, at least one BGP neighbor, a positive hold time, and positive loss and latency thresholds.
 
 RouterOS 7 syntax changes between minor releases, so check these commands against your version.
 

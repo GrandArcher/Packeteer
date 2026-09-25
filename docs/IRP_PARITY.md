@@ -16,18 +16,18 @@ Milestones:
 
 | Milestone | Capabilities |
 |---|---|
-| v0.1 | 24 |
+| v0.1 | 23 |
 | v0.2 | 26 |
-| v0.3 | 16 |
+| v0.3 | 17 |
 | v0.4 | 12 |
 | won't do | 3 |
 | **total** | 81 |
 
 | Status | Count |
 |---|---|
-| done | 20 |
+| done | 19 |
 | in progress | 0 |
-| planned | 58 |
+| planned | 59 |
 | won't do | 3 |
 
 ## Performance optimization
@@ -97,7 +97,7 @@ Milestones:
 | Capability | IRP doc ref | Status | Milestone | Plugin kind | Issue |
 |---|---|---|---|---|---|
 | iBGP injection with local-pref, communities, next-hop | 1.2.2 Bgpd | done | v0.1 | announcer (`gobgp`) | #8 |
-| More-specific injection | 2.9 Bgpd | done | v0.1 | announcer (`gobgp`) | #8 |
+| More-specific injection | 2.9 Bgpd | planned | v0.3 | announcer (`gobgp`) | #56 |
 | RIB view from iBGP (learn current best exits) | 2.9 Bgpd | done | v0.1 | core (`internal/rib`) | #6 |
 | BGP session health and withdraw when a still-advertised prefix leaves the RIB (a best-path hide is kept, not flapped) | 2.9 | done | v0.1 | announcer | #8, #43 |
 | AS-path behavior options | 2.9.1 | planned | v0.3 | announcer | #27 |

@@ -7,7 +7,7 @@ Packeteer can change how a network forwards packets. Failure modes matter more t
 - **Flap** — oscillating improvements. Mitigate with hold time, hysteresis, and by keeping an improvement when the router hides the native path because Packeteer's route won. Withdrawing on that hide brings the native path back and the next round injects again.
 - **Leak** — more-specifics learned from Packeteer advertised to transit. Mitigate with a well-known community and outbound filters on every eBGP session.
 - **Blackhole** — inject toward a next-hop that is down. Mitigate by requiring a live RIB path and withdrawing on probe-source or session failure.
-- **Over-injection** — thousands of more-specifics exhaust TCAM. Mitigate with max-improvements and prefix aggregation policy.
+- **Over-injection** — synthesizing more-specifics can exhaust TCAM. Packeteer announces only the exact prefix a neighbor advertised, so `max_improvements` bounds the number of routes. A config that sets `more_specific_bits` is rejected.
 - **Stale intent** — controller dies, or keeps announcing a prefix the edge no longer has. Packeteer withdraws on shutdown, when a prefix the router was still advertising disappears, and at `improvement_ttl` when the native path is hidden by Packeteer's own route. It never enables graceful restart. The BGP hold timer is the backstop if the process is killed before the withdraw is sent.
 
 ## Flow input

@@ -269,78 +269,83 @@ func TestHiddenPrefixDoesNotWithdrawActiveRoute(t *testing.T) {
 	}
 }
 
-func TestMoreSpecifics(t *testing.T) {
+func TestAnnounceExactLearnedPrefixOnly(t *testing.T) {
 	ctx := context.Background()
-	rib := memRIB{ready: true, has: map[netip.Prefix]bool{pfx("198.51.100.0/24"): true, pfx("2001:db8::/32"): true}}
-	cfg := testCfg()
-	cfg.MoreSpecificBits = 1
+	parent := pfx("198.51.100.0/24")
+	child := pfx("198.51.100.0/25")
+	rib := memRIB{ready: true, has: map[netip.Prefix]bool{parent: true}}
 	ann := &fakeAnn{}
-	c, err := New(cfg, ann, rib, nil)
+	c, err := New(testCfg(), ann, &rib, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := c.Sync(ctx, []policy.Improvement{imp("198.51.100.0/24", "b")}); err != nil {
+	if err := c.Sync(ctx, []policy.Improvement{imp(parent.String(), "b")}); err != nil {
 		t.Fatal(err)
 	}
-	for _, s := range []string{"198.51.100.0/25", "198.51.100.128/25"} {
-		rt, ok := ann.routes[pfx(s)]
-		if !ok || rt.NextHop.String() != "192.0.2.2" || rt.LocalPref != 250 || rt.Communities[0] != "64512:666" {
-			t.Fatalf("%s = %+v ok=%v", s, rt, ok)
-		}
+	if ann.count() != 1 {
+		t.Fatalf("announced %d routes, want 1", ann.count())
 	}
-	if _, ok := ann.routes[pfx("198.51.100.0/24")]; ok {
-		t.Fatal("announced the covering prefix as well as the more-specifics")
+	rt, ok := ann.routes[parent]
+	if !ok || rt.NextHop.String() != "192.0.2.2" || rt.LocalPref != 250 || len(rt.Communities) != 1 || rt.Communities[0] != "64512:666" {
+		t.Fatalf("route = %+v ok=%v", rt, ok)
+	}
+	if _, ok := ann.routes[child]; ok {
+		t.Fatal("announced a more-specific that is not in the RIB")
+	}
+
+	// Covered by the allowlist, and its parent was learned. Still refused:
+	// the more-specific itself was never in the RIB.
+	err = c.Sync(ctx, []policy.Improvement{imp(child.String(), "b")})
+	if err == nil || !strings.Contains(err.Error(), "not in the RIB") {
+		t.Fatalf("err = %v", err)
+	}
+	if _, ok := ann.routes[child]; ok {
+		t.Fatal("announced an unlearned more-specific")
+	}
+	if ann.count() != 0 {
+		t.Fatalf("parent route left behind: %d", ann.count())
+	}
+
+	// A more-specific the neighbor did advertise is announced as itself.
+	rib.has[child] = true
+	if err := c.Sync(ctx, []policy.Improvement{imp(child.String(), "b")}); err != nil {
+		t.Fatal(err)
+	}
+	if ann.count() != 1 {
+		t.Fatalf("announced %d routes, want the learned more-specific only", ann.count())
+	}
+	if _, ok := ann.routes[child]; !ok {
+		t.Fatal("learned more-specific was not announced")
+	}
+	if _, ok := ann.routes[parent]; ok {
+		t.Fatal("announced the parent of a learned more-specific")
 	}
 	if err := c.Sync(ctx, nil); err != nil {
 		t.Fatal(err)
 	}
 	if ann.count() != 0 {
-		t.Fatalf("more-specifics left after withdraw: %d", ann.count())
+		t.Fatalf("route left after withdraw: %d", ann.count())
 	}
 
-	cfg.MoreSpecificBits = 1
-	ann = &fakeAnn{}
-	c, err = New(cfg, ann, rib, nil)
+	// The cap counts routes. One improvement cannot install several.
+	rib.has[pfx("203.0.113.0/24")] = true
+	cfg := testCfg()
+	cfg.MaxImprovements = 1
+	ann2 := &fakeAnn{}
+	c2, err := New(cfg, ann2, &rib, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := c.Sync(ctx, []policy.Improvement{{Prefix: pfx("2001:db8::/32"), Provider: "c", Native: "a"}}); err != nil {
-		t.Fatal(err)
-	}
-	for _, s := range []string{"2001:db8::/33", "2001:db8:8000::/33"} {
-		rt, ok := ann.routes[pfx(s)]
-		if !ok || rt.NextHop.String() != "2001:db8::2" {
-			t.Fatalf("%s = %+v ok=%v", s, rt, ok)
-		}
-	}
-
-	cfg.Allowlist = []netip.Prefix{pfx("198.51.100.1/32")}
-	c, err = New(cfg, &fakeAnn{}, memRIB{ready: true, has: map[netip.Prefix]bool{pfx("198.51.100.1/32"): true}}, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	err = c.Sync(ctx, []policy.Improvement{{Prefix: pfx("198.51.100.1/32"), Provider: "b"}})
-	if err == nil || !strings.Contains(err.Error(), "does not fit") {
+	err = c2.Sync(ctx, []policy.Improvement{imp(parent.String(), "b"), imp("203.0.113.0/24", "b")})
+	if err == nil || !strings.Contains(err.Error(), "max_improvements") {
 		t.Fatalf("err = %v", err)
 	}
-}
-
-func TestExpand(t *testing.T) {
-	got, err := expand(pfx("198.51.100.0/24"), 2)
-	if err != nil {
-		t.Fatal(err)
+	if ann2.count() != 1 {
+		t.Fatalf("cap installed %d routes, want 1", ann2.count())
 	}
-	want := []string{"198.51.100.0/26", "198.51.100.64/26", "198.51.100.128/26", "198.51.100.192/26"}
-	if len(got) != len(want) {
-		t.Fatalf("got %v", got)
-	}
-	for i, s := range want {
-		if got[i].String() != s {
-			t.Fatalf("got[%d] = %s, want %s", i, got[i], s)
+	for p := range ann2.routes {
+		if p != parent && p != pfx("203.0.113.0/24") {
+			t.Fatalf("announced %s, which was not decided", p)
 		}
-	}
-	same, err := expand(pfx("203.0.113.0/24"), 0)
-	if err != nil || len(same) != 1 || same[0].String() != "203.0.113.0/24" {
-		t.Fatalf("same = %v err=%v", same, err)
 	}
 }

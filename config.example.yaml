@@ -79,10 +79,9 @@ scorer:
 
 # Injection (used only when mode: inject). local_pref is set on every
 # injected route and should beat the edge's native local preference.
-# more_specific_bits 0 announces the prefix itself; 1 announces the two
-# covering more-specifics, up to 8. The announcer adds NO_EXPORT itself.
+# The announcer publishes that exact learned prefix and adds NO_EXPORT.
+# more_specific_bits is rejected.
 # local_pref: 250
-# more_specific_bits: 0
 # announcer:
 #   type: gobgp
 

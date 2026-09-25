@@ -5,7 +5,6 @@ asn: 64512
 router_id: 192.0.2.10
 packeteer_community: "64512:666"
 local_pref: 250
-more_specific_bits: 0
 max_improvements: 50
 hold_time: 5s
 improvement_ttl: 1h
