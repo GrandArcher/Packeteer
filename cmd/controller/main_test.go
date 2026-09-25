@@ -5,11 +5,16 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/GrandArcher/Packeteer/internal/pluginhost"
+	"github.com/GrandArcher/Packeteer/internal/rib"
+	"github.com/GrandArcher/Packeteer/pkg/plugin"
 )
 
 func noEnv(string) string { return "" }
@@ -210,6 +215,67 @@ sources:
 		if !strings.Contains(logs, want) {
 			t.Errorf("logs missing %q:\n%s", want, logs)
 		}
+	}
+}
+
+func TestCheckFlowSourceDoesNotBind(t *testing.T) {
+	ln, err := net.ListenPacket("udp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	cfg := fmt.Sprintf(`mode: observe
+asn: 64512
+router_id: 192.0.2.10
+providers:
+  - {name: a, source_ip: 192.0.2.11, next_hop: 192.0.2.1}
+sources:
+  - type: flow
+    config:
+      listen: %q
+`, ln.LocalAddr().String())
+	path := filepath.Join(t.TempDir(), "c.yaml")
+	if err := os.WriteFile(path, []byte(cfg), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out, errOut bytes.Buffer
+	if code := run(context.Background(), []string{"-check", "-config", path}, noEnv, &out, &errOut); code != 0 {
+		t.Fatalf("exit %d\n%s", code, errOut.String())
+	}
+	if !strings.Contains(out.String(), "source flow") {
+		t.Fatalf("stdout = %s", out.String())
+	}
+}
+
+type lookupSource struct {
+	plugin.Base
+	fn func(netip.Addr) (netip.Prefix, bool)
+}
+
+func (lookupSource) Targets(context.Context) ([]plugin.Target, error) { return nil, nil }
+
+func (s *lookupSource) SetPrefixLookup(fn func(netip.Addr) (netip.Prefix, bool)) { s.fn = fn }
+
+func TestWirePrefixLookupSkipsUnreadyRIB(t *testing.T) {
+	view, err := rib.New(rib.Options{
+		ASN: 64512, RouterID: netip.MustParseAddr("192.0.2.10"),
+		Neighbors: []rib.Neighbor{{Address: netip.MustParseAddr("192.0.2.1")}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	src := &lookupSource{}
+	set := &pluginhost.Set{Sources: []pluginhost.Instance[plugin.TargetSource]{{Name: "flow", Plugin: src}}}
+	wirePrefixLookup(set, nil)
+	if src.fn != nil {
+		t.Fatal("nil view should not install a lookup")
+	}
+	wirePrefixLookup(set, view)
+	if src.fn == nil {
+		t.Fatal("lookup was not installed")
+	}
+	if _, ok := src.fn(netip.MustParseAddr("198.51.100.1")); ok {
+		t.Fatal("a RIB that is not ready must not map destinations")
 	}
 }
 

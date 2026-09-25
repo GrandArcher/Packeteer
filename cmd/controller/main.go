@@ -180,6 +180,7 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 		log.Error("refusing to start", "err", err)
 		return 1
 	}
+	wirePrefixLookup(plugins, view)
 	if err := plugins.Start(ctx); err != nil {
 		log.Error("refusing to start", "err", err)
 		return 1
@@ -324,6 +325,34 @@ func logResult(log *slog.Logger, r probe.Result) {
 	log.Info("probe", "provider", r.Provider, "prefix", r.Prefix, "target", r.Target, "prober", r.Prober,
 		"loss_pct", s.LossPct, "rtt_avg", s.RTTAvg, "rtt_min", s.RTTMin, "rtt_max", s.RTTMax, "jitter", s.Jitter,
 		"sent", s.Sent, "received", s.Received)
+}
+
+// prefixLookup is implemented by target sources that map a destination
+// onto the learned RIB (the flow source). A default route is not a target,
+// and a view that is not ready must not contribute prefixes.
+type prefixLookup interface {
+	SetPrefixLookup(func(netip.Addr) (netip.Prefix, bool))
+}
+
+func wirePrefixLookup(plugins *pluginhost.Set, view *rib.View) {
+	if plugins == nil || view == nil {
+		return
+	}
+	fn := func(addr netip.Addr) (netip.Prefix, bool) {
+		if !view.Ready() {
+			return netip.Prefix{}, false
+		}
+		rt, ok := view.Lookup(addr)
+		if !ok || !rt.Prefix.IsValid() || rt.Prefix.Bits() == 0 || !rt.Prefix.Contains(addr) {
+			return netip.Prefix{}, false
+		}
+		return rt.Prefix, true
+	}
+	for _, src := range plugins.Sources {
+		if s, ok := src.Plugin.(prefixLookup); ok {
+			s.SetPrefixLookup(fn)
+		}
+	}
 }
 
 // newRIB builds the learn-only RIB view, or returns nil when no BGP

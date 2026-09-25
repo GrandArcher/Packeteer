@@ -32,7 +32,7 @@ Each entry has `type` (required), an optional `name` (defaults to the type and m
 | Kind | Interface | Built-ins (v0.1) | Out-of-process |
 |---|---|---|---|
 | `prober` | `Probe(ctx, ProbeRequest) (ProbeResult, error)` | `icmp`, `tcp`, `fixed` (labs) | `exec` |
-| `source` | `Targets(ctx) ([]Target, error)` | `static`, flow (#5) | `exec` |
+| `source` | `Targets(ctx) ([]Target, error)` | `static`, `flow` | `exec` |
 | `scorer` | `Score(PathStats) float64` (lower is better) | weighted (#7) | none |
 | `announcer` | `Announce`, `Withdraw`, `WithdrawAll` | `gobgp` | **never** |
 | `notifier` | `Notify(ctx, Event) error` | `webhook` | `exec` |
@@ -57,6 +57,7 @@ Embed `plugin.Base` for no-op `Start`/`Stop`.
 - `tcp`: `port` (default 443), `packet_interval` (default 100ms). A SYN-ACK or a RST both count as a reply.
 - `fixed`: returns configured results and **sends no packets**. For labs and tests (`lab/`), not for measuring a transit. `paths: [{provider, sent?, rtt_ms?, loss_pct?, source_down?}]`, plus optional top-level `sent` and `rtt_ms`. `source_down: true` fails the probe source closed. `file` is re-read on every probe (same schema, without `file`) so a lab can flip results without a restart.
 - `static`: `targets: [{prefix, host?, weight?}]`. `host` must be inside `prefix` and defaults to the first address.
+- `flow`: UDP collector for NetFlow v5, NetFlow v9, IPFIX, and sFlow v5. Off unless the source is listed. `listen` (required, one `host:port` or a list), `window` (default 5m), `top_n` (default 100), `min_bytes` (default 0), `aggregate_v4` / `aggregate_v6` (default 24 and 48), `exclude` (prefixes to ignore). Each destination is summed over the window and mapped to the covering prefix in the RIB view when that view is ready and the match is not a default route; otherwise it is aggregated to `aggregate_v4` or `aggregate_v6`. The probe host is a destination that contributed bytes inside the prefix. `weight` is the byte total. Private, ULA, loopback, link-local, and multicast addresses are dropped. Raw records are not stored. Each time bucket keeps at most 20000 prefixes. NetFlow v9/IPFIX templates are kept in memory per exporter address and observation domain (capped) and are not written out. With `--network host` the listen ports are host ports; do not publish them. Firewall UDP to the exporter. See [mikrotik.md](mikrotik.md) and [routers.md](routers.md).
 - `exec`: see below.
 - `webhook`: `url`, `timeout`, `headers`, `min_severity`.
 - `gobgp`: no plugin config block. It publishes on the iBGP speaker the RIB view already opened. `local_pref`, `packeteer_community`, and `more_specific_bits` are top-level controller settings. Every route gets the community plus NO_EXPORT. The export policy accepts only Packeteer's own routes that carry the community. `Stop` withdraws them. Graceful restart is never turned on. Required, along with `local_pref`, when `mode: inject`.
