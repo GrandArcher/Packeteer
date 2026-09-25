@@ -80,6 +80,10 @@ lab/                # FRR e2e lab (CI job e2e)
 
 Router filters: [docs/mikrotik.md](docs/mikrotik.md), [docs/routers.md](docs/routers.md).
 
+## Support the project
+
+Packeteer is free and open source. If it helps your network, you can chip in to cover development and lab costs through [PayPal](https://paypal.me/GrandArcher) or the **Sponsor** button at the top of this page. Thank you!
+
 ## License
 
 Apache-2.0. See [LICENSE](LICENSE).
