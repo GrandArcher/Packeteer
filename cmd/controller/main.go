@@ -23,6 +23,7 @@ import (
 	"github.com/GrandArcher/Packeteer/internal/config"
 	"github.com/GrandArcher/Packeteer/internal/pluginhost"
 	_ "github.com/GrandArcher/Packeteer/internal/plugins/all"
+	"github.com/GrandArcher/Packeteer/internal/policy"
 	"github.com/GrandArcher/Packeteer/internal/probe"
 	"github.com/GrandArcher/Packeteer/internal/rib"
 )
@@ -121,11 +122,6 @@ func run(ctx context.Context, args []string, getenv func(string) string, stdout,
 }
 
 func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, log *slog.Logger) int {
-	engine, err := newEngine(cfg, plugins, log)
-	if err != nil {
-		log.Error("refusing to start", "err", err)
-		return 1
-	}
 	view, err := newRIB(cfg, log)
 	if err != nil {
 		log.Error("refusing to start", "err", err)
@@ -138,6 +134,20 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 		}
 		defer func() { _ = view.Stop(context.Background()) }()
 		go logRIB(ctx, view, log)
+	}
+	decider, err := newDecider(cfg, plugins)
+	if err != nil {
+		log.Error("refusing to start", "err", err)
+		return 1
+	}
+	var engine *probe.Engine
+	engine, err = newEngine(cfg, plugins, log, func() {
+		changes := decider.Evaluate(decisionInput(engine, view), time.Now())
+		logChanges(log, cfg.Mode, changes)
+	})
+	if err != nil {
+		log.Error("refusing to start", "err", err)
+		return 1
 	}
 	if err := plugins.Start(ctx); err != nil {
 		log.Error("refusing to start", "err", err)
@@ -159,7 +169,7 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 	return 0
 }
 
-func newEngine(cfg *config.Config, plugins *pluginhost.Set, log *slog.Logger) (*probe.Engine, error) {
+func newEngine(cfg *config.Config, plugins *pluginhost.Set, log *slog.Logger, onRound func()) (*probe.Engine, error) {
 	var providers []probe.Provider
 	for _, p := range cfg.Providers {
 		src, err := parseAddr(p.SourceIP)
@@ -189,6 +199,7 @@ func newEngine(cfg *config.Config, plugins *pluginhost.Set, log *slog.Logger) (*
 		Limiter:              rate.NewLimiter(rate.Limit(cfg.Probe.RateLimitPPS), burst),
 		Logger:               log,
 		OnResult:             func(r probe.Result) { logResult(log, r) },
+		OnRound:              onRound,
 	})
 }
 
@@ -252,6 +263,66 @@ func logRIB(ctx context.Context, v *rib.View, log *slog.Logger) {
 			return
 		case <-t.C:
 			log.Info("rib", "ready", v.Ready(), "prefixes", v.Len())
+		}
+	}
+}
+
+func newDecider(cfg *config.Config, plugins *pluginhost.Set) (*policy.Engine, error) {
+	if plugins.Scorer == nil {
+		return nil, fmt.Errorf("no scorer configured")
+	}
+	pc := policy.Config{
+		Mode:            cfg.Mode,
+		MinLossDeltaPct: cfg.Thresholds.MinLossDeltaPct,
+		MinRTTDelta:     time.Duration(cfg.Thresholds.MinRTTDeltaMs * float64(time.Millisecond)),
+		HoldTime:        cfg.HoldTime,
+		MaxImprovements: *cfg.MaxImprovements,
+		// A result older than ~3 rounds is stale.
+		MaxResultAge: 3*cfg.Probe.Interval + time.Duration(cfg.Probe.Packets)*cfg.Probe.Timeout,
+		Excluded:     map[string]bool{},
+	}
+	if cfg.ImprovementTTL > 0 {
+		pc.ImprovementTTL = cfg.ImprovementTTL
+	}
+	for _, p := range cfg.Providers {
+		if p.Exclude {
+			pc.Excluded[p.Name] = true
+		}
+	}
+	for _, s := range cfg.Allowlist.Prefixes {
+		p, err := netip.ParsePrefix(s)
+		if err != nil {
+			return nil, err
+		}
+		pc.Allowlist = append(pc.Allowlist, p)
+	}
+	return policy.NewEngine(pc, plugins.Scorer.Plugin), nil
+}
+
+// decisionInput snapshots probe results, provider health and the RIB view.
+func decisionInput(engine *probe.Engine, view *rib.View) policy.Input {
+	in := policy.Input{Results: engine.Results(), ProviderUp: map[string]bool{}, Native: map[netip.Prefix]string{}}
+	for _, p := range engine.Providers() {
+		in.ProviderUp[p.Name] = p.Up
+	}
+	if view != nil {
+		in.RIBEnabled, in.RIBReady = true, view.Ready()
+		for _, r := range in.Results {
+			if rt, ok := view.Exact(r.Prefix); ok {
+				in.Native[r.Prefix] = rt.Provider
+			}
+		}
+	}
+	return in
+}
+
+func logChanges(log *slog.Logger, mode string, changes []policy.Change) {
+	for _, c := range changes {
+		switch c.Action {
+		case policy.ActionRetire:
+			log.Info("improvement retired", "mode", mode, "prefix", c.Old.Prefix, "provider", c.Old.Provider, "native", c.Old.Native, "reason", c.Old.Reason)
+		default:
+			log.Info("improvement "+c.Action, "mode", mode, "prefix", c.New.Prefix, "provider", c.New.Provider, "native", c.New.Native, "reason", c.New.Reason)
 		}
 	}
 }

@@ -5,7 +5,8 @@ asn: 64512
 router_id: 192.0.2.10
 packeteer_community: "64512:666"
 max_improvements: 50
-hold_time: 15m
+hold_time: 15m              # min life of an improvement; also cooldown after a flip-back
+improvement_ttl: 1h         # retire and re-measure the native path after this long
 
 thresholds:
   min_loss_delta_pct: 1.0
@@ -18,6 +19,7 @@ providers:
   - name: transit-b
     source_ip: 192.0.2.12
     next_hop: 192.0.2.2
+    # exclude: true           # measure, but never steer traffic to this provider
 
 allowlist:
   prefixes: []
@@ -37,6 +39,11 @@ probers:
   - type: tcp
     config:
       port: 443
+
+# Path scoring (lower is better): loss dominates, then latency, then jitter.
+scorer:
+  type: weighted
+  config: {loss_weight: 100, rtt_weight: 1, jitter_weight: 0.5}
 
 # What to probe. Uncomment and use prefixes you actually serve traffic to.
 # sources:

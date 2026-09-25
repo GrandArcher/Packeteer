@@ -25,9 +25,9 @@ Milestones:
 
 | Status | Count |
 |---|---|
-| done | 9 |
-| in progress | 1 |
-| planned | 68 |
+| done | 14 |
+| in progress | 0 |
+| planned | 64 |
 | won't do | 3 |
 
 ## Performance optimization
@@ -38,7 +38,7 @@ Milestones:
 | Active probing per provider: TCP | 1.3.1, Explorer | done | v0.1 | prober (`tcp`) | #2 |
 | Active probing per provider: UDP | Explorer | planned | v0.2 | prober (`udp`) | #15 |
 | Traceroute-based probe target discovery | Explorer | planned | v0.2 | source (`traceroute`) | #15 |
-| Loss / latency / jitter measurement and scoring | 1.3.1 | in progress | v0.1 | prober + scorer (`weighted`) | #2, #7 |
+| Loss / latency / jitter measurement and scoring | 1.3.1 | done | v0.1 | prober + scorer (`weighted`) | #2, #7 |
 | Throughput-aware scoring (prefix volume weighting) | 1.2.13 Improvements weight | planned | v0.2 | scorer | #23, #18 |
 | Probe sources per provider (IRP uses PBR; we use source-IP policy routing) | 2.8 Explorer, 2.8.1 PBR | done | v0.1 | core + docs | #2 |
 | Static probe target lists | - | done | v0.1 | source (`static`) | #2 |
@@ -49,9 +49,9 @@ Milestones:
 | Circuit issues detection | 1.2.23 | planned | v0.2 | source (detector) | #16 |
 | VIP (critical) prefixes/ASNs with more frequent probing | 1.2.7 VIP Improvements | planned | v0.2 | source / policy | #15 |
 | Retry / aggressive probing | 1.2.8 Retry Probing | planned | v0.2 | core (probe engine) | #15 |
-| Hysteresis, thresholds, hold time before flip | 1.3.1 | planned | v0.1 | scorer | #7 |
-| Max improvements cap | 4.8 Core settings | planned | v0.1 | core | #7 |
-| Improvement retirement / periodic re-probe of improvements | 4.8 Core settings | planned | v0.1 | core | #7 |
+| Hysteresis, thresholds, hold time before flip | 1.3.1 | done | v0.1 | scorer | #7 |
+| Max improvements cap | 4.8 Core settings | done | v0.1 | core | #7 |
+| Improvement retirement / periodic re-probe of improvements | 4.8 Core settings | done | v0.1 | core | #7 |
 
 ## Cost / commit
 
@@ -88,7 +88,7 @@ Milestones:
 | Allow / deny / static provider / VIP policies by prefix | 1.2.9, 3.7 Routing Policies | planned | v0.2 | scorer (policy filter) | #20 |
 | Policies by ASN | 3.7 | planned | v0.2 | scorer (policy filter) | #20 |
 | Policies by country (GeoIP) | 3.7 | planned | v0.2 | scorer (policy filter) | #20 |
-| Provider exclusions | 4.15 cc_disable, 3.7 | planned | v0.1 | scorer | #7 |
+| Provider exclusions | 4.15 cc_disable, 3.7 | done | v0.1 | scorer | #7 |
 | Maintenance windows | 1.2.21, 3.19 | planned | v0.2 | scorer (policy filter) | #20 |
 | Inject allowlist (Packeteer safety addition) | - | planned | v0.1 | core | #7, #8 |
 

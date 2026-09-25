@@ -358,3 +358,15 @@ func TestNewValidation(t *testing.T) {
 		t.Error("want error for zero packets")
 	}
 }
+
+func TestOnRoundAfterCommit(t *testing.T) {
+	o := opts()
+	var e *Engine
+	got := -1
+	o.OnRound = func() { got = len(e.Results()) } // must not deadlock and must see fresh results
+	e, _ = New([]Provider{provA}, []NamedProber{{"p", &fakeProber{fn: ok(1)}}}, src(plugin.Target{Prefix: pfx1}), o)
+	e.RunOnce(context.Background())
+	if got != 1 {
+		t.Fatalf("OnRound saw %d results", got)
+	}
+}

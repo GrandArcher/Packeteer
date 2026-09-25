@@ -7,5 +7,6 @@ import (
 	_ "github.com/GrandArcher/Packeteer/internal/plugins/notifier/webhook" // webhook notifier
 	_ "github.com/GrandArcher/Packeteer/internal/plugins/prober/icmp"      // icmp prober
 	_ "github.com/GrandArcher/Packeteer/internal/plugins/prober/tcp"       // tcp prober
+	_ "github.com/GrandArcher/Packeteer/internal/plugins/scorer/weighted"  // weighted scorer
 	_ "github.com/GrandArcher/Packeteer/internal/plugins/source/static"    // static target source
 )

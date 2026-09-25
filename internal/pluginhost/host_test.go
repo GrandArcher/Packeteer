@@ -73,7 +73,7 @@ func TestBuildAndLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := strings.Join(s.Summary(), ";"); got != "source s1;prober icmp;prober tcp;notifier test-notifier" {
+	if got := strings.Join(s.Summary(), ";"); got != "source s1;prober icmp;prober tcp;scorer weighted;notifier test-notifier" {
 		t.Errorf("Summary = %s", got)
 	}
 	if err := s.Start(context.Background()); err != nil {

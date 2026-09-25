@@ -52,10 +52,13 @@ type Config struct {
 	PacketeerCommunity string        `yaml:"packeteer_community"`
 	MaxImprovements    *int          `yaml:"max_improvements"`
 	HoldTime           time.Duration `yaml:"hold_time"`
-	Thresholds         Thresholds    `yaml:"thresholds"`
-	Providers          []Provider    `yaml:"providers"`
-	Allowlist          Allowlist     `yaml:"allowlist"`
-	Probe              Probe         `yaml:"probe"`
+	// ImprovementTTL retires an improvement after this long so the native
+	// path is re-measured (default 1h; negative disables).
+	ImprovementTTL time.Duration `yaml:"improvement_ttl"`
+	Thresholds     Thresholds    `yaml:"thresholds"`
+	Providers      []Provider    `yaml:"providers"`
+	Allowlist      Allowlist     `yaml:"allowlist"`
+	Probe          Probe         `yaml:"probe"`
 
 	// BGP holds the iBGP sessions to the edge routers (RIB view, #6).
 	BGP BGP `yaml:"bgp"`
@@ -104,6 +107,9 @@ func (p PluginSpec) InstanceName() string {
 	return p.Type
 }
 
+// DefaultImprovementTTL is how long an improvement lives before re-evaluation.
+const DefaultImprovementTTL = time.Hour
+
 // DefaultPluginDir is where out-of-process plugins are looked up.
 const DefaultPluginDir = "/etc/packeteer/plugins"
 
@@ -118,6 +124,8 @@ type Provider struct {
 	Name     string `yaml:"name"`
 	SourceIP string `yaml:"source_ip"`
 	NextHop  string `yaml:"next_hop"`
+	// Exclude keeps the provider measured but never chosen for an improvement.
+	Exclude bool `yaml:"exclude"`
 }
 
 // Allowlist restricts which prefixes may ever be injected.
@@ -204,6 +212,12 @@ func (c *Config) applyDefaults() {
 	}
 	if c.PluginDir == "" {
 		c.PluginDir = DefaultPluginDir
+	}
+	if c.Scorer == nil {
+		c.Scorer = &PluginSpec{Type: "weighted"}
+	}
+	if c.ImprovementTTL == 0 {
+		c.ImprovementTTL = DefaultImprovementTTL
 	}
 }
 
