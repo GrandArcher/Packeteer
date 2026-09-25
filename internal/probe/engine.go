@@ -125,6 +125,10 @@ type Engine struct {
 	stateMu   sync.Mutex
 	probeBusy bool
 	srcBusy   map[string]bool
+
+	// wake is a one-slot signal. OnRound calls Wake when a detector has
+	// new prefixes so sleep returns without waiting out the interval.
+	wake chan struct{}
 }
 
 // errSourceBusy is returned when a target source's previous call has not
@@ -171,7 +175,8 @@ func New(providers []Provider, probers []NamedProber, sources []NamedSource, opt
 		opt.Now = time.Now
 	}
 	e := &Engine{providers: providers, probers: probers, sources: sources, opt: opt, log: opt.Logger,
-		results: map[key]Result{}, status: map[string]ProviderStatus{}, sems: map[netip.Addr]chan struct{}{}}
+		results: map[key]Result{}, status: map[string]ProviderStatus{}, sems: map[netip.Addr]chan struct{}{},
+		wake: make(chan struct{}, 1)}
 	now := opt.Now()
 	for _, p := range providers {
 		e.status[p.Name] = ProviderStatus{Name: p.Name, Source: p.Source, Up: true, Since: now}
@@ -226,7 +231,38 @@ func (e *Engine) Run(ctx context.Context) error {
 	}
 }
 
+// Wake asks Run to start the next round without waiting out the interval.
+// The outage source calls it from OnRound when a new incident re-queues
+// prefixes. One pending wake is enough; extra calls are dropped.
+func (e *Engine) Wake() {
+	if e == nil || e.wake == nil {
+		return
+	}
+	select {
+	case e.wake <- struct{}{}:
+	default:
+	}
+}
+
+func (e *Engine) consumeWake() bool {
+	if e == nil || e.wake == nil {
+		return false
+	}
+	select {
+	case <-e.wake:
+		return true
+	default:
+		return false
+	}
+}
+
 func (e *Engine) sleep(ctx context.Context, d time.Duration) error {
+	if e.consumeWake() {
+		return nil
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if e.opt.Sleep != nil {
 		return e.opt.Sleep(ctx, d)
 	}
@@ -237,11 +273,18 @@ func (e *Engine) sleep(ctx context.Context, d time.Duration) error {
 		return ctx.Err()
 	case <-timer.C:
 		return nil
+	case <-e.wake:
+		return nil
 	}
 }
 
-// targetDue reports whether prefix t should be probed now.
+// targetDue reports whether prefix t should be probed now. Urgent is a
+// one-shot from a source that just re-queued the prefix; the interval
+// still applies on the following rounds.
 func (e *Engine) targetDue(t plugin.Target, last map[netip.Prefix]time.Time) bool {
+	if t.Urgent {
+		return true
+	}
 	every := e.opt.Interval
 	if t.Interval > 0 {
 		every = t.Interval
@@ -350,6 +393,9 @@ func (e *Engine) gatherTargets(ctx context.Context) ([]plugin.Target, bool) {
 			// prefix that static or flow already listed.
 			if i, ok := seen[t.Prefix]; ok {
 				e.shortenInterval(&out[i], t.Interval)
+				if t.Urgent {
+					out[i].Urgent = true
+				}
 				continue
 			}
 			seen[t.Prefix] = len(out)
@@ -380,12 +426,28 @@ func (e *Engine) shortenInterval(dst *plugin.Target, next time.Duration) {
 	dst.Interval = 0
 }
 
+// freshTargetSource is a target source whose list changes because of a
+// probe round or a RIB read and must not be cached for Options.Interval.
+// The outage source is fresh. static, flow, traceroute, and vip are not:
+// vip is re-read when it carries a shorter interval, which the cache
+// already treats as fast.
+type freshTargetSource interface {
+	Fresh() bool
+}
+
+func sourceFresh(s plugin.TargetSource) bool {
+	f, ok := s.(freshTargetSource)
+	return ok && f.Fresh()
+}
+
 // targetsFrom returns a cached target list for sources that are not on a
-// shorter cadence. called is false when the cache was used. A deadline or
-// a stuck source is not cached.
+// shorter cadence and are not fresh. called is false when the cache was
+// used. A deadline or a stuck source is not cached.
 func (e *Engine) targetsFrom(ctx context.Context, s NamedSource) (ts []plugin.Target, err error, called bool) {
-	if c, ok := e.loadSource(s.Name); ok {
-		return c.targets, c.err, false
+	if !sourceFresh(s.Source) {
+		if c, ok := e.loadSource(s.Name); ok {
+			return c.targets, c.err, false
+		}
 	}
 	ts, err = e.oneSource(ctx, s)
 	called = true

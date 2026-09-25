@@ -89,6 +89,16 @@ scorer:
 #           host: 203.0.113.1
 #       asns:
 #         - 64496
+#   - type: outage              # re-probe when many prefixes fail together. Does not announce.
+#     config:
+#       min_prefixes: 3         # minimum is 2; one noisy prefix never fires
+#       window: 2m
+#       loss_pct: 20            # 0 uses this default
+#       # rtt_ms: 200           # also treat high RTT as degraded; 0 disables
+#       interval: 5s            # shorter than probe.interval and the staleness window
+#       max_targets: 100
+#       ignore_asns:
+#         - 64512               # an ASN that sits on every learned path
 
 # iBGP to the edge router(s). Same ASN as `asn`. The session learns best
 # paths and, only in mode: inject, carries improvements back. Graceful

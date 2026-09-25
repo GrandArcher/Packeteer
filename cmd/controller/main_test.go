@@ -143,6 +143,38 @@ probers:
 	}
 }
 
+func TestRunOutageCheck(t *testing.T) {
+	example, err := os.ReadFile(filepath.Join("..", "..", "config.example.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "c.yaml")
+	good := string(example) + "\nsources:\n  - type: outage\n    config: {interval: 5s, min_prefixes: 3, window: 2m}\n"
+	if err := os.WriteFile(path, []byte(good), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out, errOut bytes.Buffer
+	if code := run(context.Background(), []string{"-check", "-config", path}, noEnv, &out, &errOut); code != 0 {
+		t.Fatalf("exit %d stderr %s", code, errOut.String())
+	}
+	if !strings.Contains(out.String(), "source outage") {
+		t.Fatalf("stdout missing outage source:\n%s", out.String())
+	}
+
+	bad := string(example) + "\nsources:\n  - type: outage\n    config: {interval: 30s}\n"
+	if err := os.WriteFile(path, []byte(bad), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	errOut.Reset()
+	if code := run(context.Background(), []string{"-check", "-config", path}, noEnv, &out, &errOut); code != 1 {
+		t.Fatalf("exit %d, want 1; stderr %s", code, errOut.String())
+	}
+	if !strings.Contains(errOut.String(), "must be shorter than probe.interval") {
+		t.Fatalf("stderr = %q", errOut.String())
+	}
+}
+
 func TestRunVersion(t *testing.T) {
 	var out, errOut bytes.Buffer
 	if code := run(context.Background(), []string{"-version"}, noEnv, &out, &errOut); code != 0 || !strings.Contains(out.String(), "packeteer dev") {
