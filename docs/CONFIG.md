@@ -69,6 +69,7 @@ A candidate wins when its score is lower and either loss improves by at least `m
 | `group` | no | Load-balancing group. Empty means the provider is not in a group. Letters, digits, `_`, `.`, `-`, at most 64 characters, starting with a letter or digit. |
 | `precedence` | no | Commit-control preference. Lower is preferred. `0` or omitted means 100. 0–10000. The highest precedence among providers that can take commit traffic is the last resort. |
 | `cc_disable` | no | `true`: leave this provider out of commit control in both directions. Performance improvements can still select it. |
+| `cost` | no | Price per Mbps, 0–1000000000, in one currency across all providers. Omitted means no cost: the `cost` scorer never moves a prefix onto this provider or off it for price. Improvements between two priced providers carry `cost_delta` and `est_savings` on `/api/improvements`. |
 
 ### `allowlist`
 
@@ -343,6 +344,35 @@ A prefix already on a performance steer, and a performance move waiting on the c
 | `balance_slack` | `0.10` | 0–1. Fractional imbalance that does not move traffic. `0` is explicit. |
 | `max_age` | `15m` | Not negative. `0` uses the default. Telemetry older than this is ignored. |
 | `min_mbps` | 0 | Not negative. Prefixes below this volume are not moved for commit. |
+
+At least one weight must be positive.
+
+### Scorer `cost`
+
+Optional. Same performance score as `weighted`, plus cost optimization. Select it with `scorer.type: cost`. It needs `cost` on at least two providers. The default scorer stays `weighted`. Switching back to `weighted` and restarting withdraws improvements whose cause is `cost` (the rollback).
+
+A cost move sends a prefix to the cheapest provider whose path is inside the performance floor. The floor is measured from the best path, not from native: a path is inside when its loss is at most `floor.max_loss_pct` above the lowest loss and its RTT is at most `floor.max_rtt` above the lowest RTT among usable providers that are not excluded. The destination must have a `cost` lower than the native provider's. A provider without a `cost`, an excluded provider, and a provider that is down are never destinations. A prefix whose native provider has no `cost` is not moved. The prefix must be in the learned RIB, allowlisted in inject mode, and out of cooldown, and the move counts toward `max_improvements`. Decide checks the floor and the price itself, so a planner cannot push a cost move outside them.
+
+An active cost steer is kept while it stays inside the floor. When its path leaves the floor it is withdrawn at once, even inside `hold_time`, and the prefix takes a `hold_time` cooldown. When a cheaper path inside the floor appears, the steer moves after `hold_time`. When no cheaper path is left, it is released after `hold_time`. Equal prices keep the current provider.
+
+`precedence` decides between performance and cost:
+
+- `performance` (default): a performance move (the thresholds in `thresholds`) wins. Cost only moves prefixes whose native path is already best within those thresholds. After `hold_time`, a cost steer switches to a performance move when one clears the thresholds against native. When the cap binds, performance moves are admitted first and a new performance move displaces the cost steer with the smallest volume.
+- `cost`: a native path inside the floor is kept even when a faster path clears the thresholds. When native is outside the floor, the cheapest path inside the floor that is cheaper than native is used (cause `cost`). If there is none, the normal performance move is made. An active cost steer is not switched for performance while it is inside the floor.
+
+When the cap binds between cost moves, the largest estimated saving wins: the price difference times the prefix volume (flow or static `mbps`), or the price difference alone when the volume is unknown. Equal savings break by prefix.
+
+Every improvement whose native and steered providers both have a `cost` reports `cost_delta` (native price minus steered price, per Mbps) and `est_savings` (`cost_delta` times the prefix volume when one is known) on `/api/improvements`, and `packeteer_estimated_savings` sums `est_savings`. A negative value is extra spend, for example a performance move onto a dearer provider. These are estimates for reports; they do not change a decision. This scorer does not do commit control: a cheap provider can still fill up. Use the `commit` scorer when commits bind.
+
+| Key | Default | Bounds |
+|---|---|---|
+| `loss_weight` | 100 | Not negative. Same meaning as `weighted`. |
+| `rtt_weight` | 1 | Not negative. |
+| `jitter_weight` | 0.5 | Not negative. |
+| `precedence` | `performance` | `performance` or `cost`. |
+| `floor` | | Block with `max_loss_pct` and `max_rtt`. |
+| `max_loss_pct` | 0 | 0–100. Loss percentage points a cost path may carry above the lowest loss. |
+| `max_rtt` | `10ms` | 0–10s. Latency a cost path may add over the lowest RTT. |
 
 At least one weight must be positive.
 

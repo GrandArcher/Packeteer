@@ -50,13 +50,16 @@ type Config struct {
 	Providers []ProviderPolicy
 }
 
-// ProviderPolicy is the commit-control configuration of one provider.
-// Precedence 0 means the default (100); lower is preferred.
+// ProviderPolicy is the commit-control and cost configuration of one
+// provider. Precedence 0 means the default (100); lower is preferred.
+// HasCost is false when the provider has no cost configured.
 type ProviderPolicy struct {
 	Name       string
 	Group      string
 	Precedence int
 	CCDisable  bool
+	Cost       float64
+	HasCost    bool
 }
 
 // Input is everything Decide looks at.
@@ -91,9 +94,16 @@ type Improvement struct {
 	Native   string       `json:"native"`   // provider the RIB used before
 	Since    time.Time    `json:"since"`
 	Reason   string       `json:"reason"`
-	// Cause is performance or commit. Empty means performance (state from
-	// before commit control, or a test that did not set it).
+	// Cause is performance, commit, or cost. Empty means performance
+	// (state from before commit control, or a test that did not set it).
 	Cause string `json:"cause,omitempty"`
+	// CostDelta is the native provider's cost per Mbps minus the steered
+	// provider's. Positive is a saving. EstSavings is CostDelta times the
+	// prefix volume when a source reports one. Both are set only when both
+	// providers have a cost, and are estimates for reports: they do not
+	// change a decision.
+	CostDelta  float64 `json:"cost_delta,omitempty"`
+	EstSavings float64 `json:"est_savings,omitempty"`
 
 	// nativeSeen is the first decision, after this improvement already
 	// existed, that still saw the prefix in the RIB. nativeHeld is that
@@ -305,8 +315,8 @@ func Decide(prev State, in Input, cfg Config, scorer plugin.Scorer, now time.Tim
 				d.Action, d.Reason, d.Current = ActionRetire, "ttl expired", imp.Native
 				continue
 			}
-			if imp.Cause == plugin.CauseCommit {
-				if ccDisabled(cfg, imp.Provider) {
+			if planned(imp.Cause) {
+				if imp.Cause == plugin.CauseCommit && ccDisabled(cfg, imp.Provider) {
 					retire(p, "provider excluded from commit control", false)
 					d.Action, d.Reason, d.Current, d.Cause = ActionRetire, "provider excluded from commit control", imp.Native, plugin.CauseCommit
 					continue
@@ -373,6 +383,16 @@ func Decide(prev State, in Input, cfg Config, scorer plugin.Scorer, now time.Tim
 			d.Recommended, d.Reason = alt.Provider, "better path exists but prefix not allowlisted"
 			continue
 		}
+		if cp, ok := costFirst(scorer); ok {
+			// Cost precedence: the planner may replace this move with a
+			// cheaper path inside the floor. A native path already inside
+			// the floor is kept.
+			commitOK[p] = true
+			if maxLoss, maxRTT := cp.Floor(); inFloor(cands, cfg.Excluded, d.Native, maxLoss, maxRTT) {
+				d.Recommended, d.Reason, d.Cause = d.Native, "native path inside performance floor (cost precedence)", plugin.CauseCost
+				continue
+			}
+		}
 		wants = append(wants, pending{d: d, gain: natC.Score - alt.Score,
 			imp: Improvement{Prefix: p, Provider: alt.Provider, Native: d.Native, Since: now, Reason: reasonText(alt, natC), Cause: plugin.CausePerformance}})
 	}
@@ -407,8 +427,44 @@ func Decide(prev State, in Input, cfg Config, scorer plugin.Scorer, now time.Tim
 		out.Changes = append(out.Changes, Change{Action: ActionImprove, New: w.imp})
 		w.d.Action, w.d.Reason, w.d.Current, w.d.Recommended = ActionImprove, w.imp.Reason, w.imp.Provider, w.imp.Provider
 	}
+	annotateCost(st, cfg, in.VolumeMbps)
 	out.Decisions = decisions
 	return st, out
+}
+
+// planned reports whether an improvement belongs to the planner lane.
+func planned(cause string) bool {
+	return cause == plugin.CauseCommit || cause == plugin.CauseCost
+}
+
+// costFirst returns the scorer's cost policy when it asks for cost
+// precedence.
+func costFirst(scorer plugin.Scorer) (plugin.CostPolicy, bool) {
+	cp, ok := scorer.(plugin.CostPolicy)
+	if !ok || !cp.CostFirst() {
+		return nil, false
+	}
+	if _, plans := scorer.(plugin.Planner); !plans {
+		return nil, false
+	}
+	return cp, true
+}
+
+// annotateCost sets the cost estimate on every improvement whose native
+// and steered providers both have a cost. It does not change a decision.
+func annotateCost(st State, cfg Config, volume map[netip.Prefix]float64) {
+	for p, imp := range st.Improvements {
+		imp.CostDelta, imp.EstSavings = 0, 0
+		nat, ok1 := providerCost(cfg, imp.Native)
+		cur, ok2 := providerCost(cfg, imp.Provider)
+		if ok1 && ok2 {
+			imp.CostDelta = nat - cur
+			if volume != nil && volume[p] > 0 {
+				imp.EstSavings = imp.CostDelta * volume[p]
+			}
+		}
+		st.Improvements[p] = imp
+	}
 }
 
 // better reports whether a is better than b by the configured thresholds:
@@ -478,8 +534,8 @@ func lessPrefix(a, b netip.Prefix) bool {
 	return a.Bits() < b.Bits()
 }
 
-// displaceCommit retires one commit improvement so a performance move can
-// use the slot. The smallest volume goes first (it relieves the least);
+// displaceCommit retires one commit or cost improvement so a performance
+// move can use the slot. The smallest volume goes first (it relieves the least);
 // equal volume breaks by prefix. The prefix takes a hold_time cooldown so
 // the commit steer cannot return on the next round and take the slot back.
 func displaceCommit(st State, decIdx map[netip.Prefix]*Decision, volume map[netip.Prefix]float64, retire func(netip.Prefix, string, bool)) bool {
@@ -487,7 +543,7 @@ func displaceCommit(st State, decIdx map[netip.Prefix]*Decision, volume map[neti
 	var pickVol float64
 	found := false
 	for p, imp := range st.Improvements {
-		if imp.Cause != plugin.CauseCommit {
+		if !planned(imp.Cause) {
 			continue
 		}
 		vol := 0.0
@@ -504,7 +560,7 @@ func displaceCommit(st State, decIdx map[netip.Prefix]*Decision, volume map[neti
 	imp := st.Improvements[pick]
 	const reason = "displaced by a performance improvement"
 	retire(pick, reason, true)
-	setDecision(decIdx[pick], ActionRetire, reason, imp.Native, "", plugin.CauseCommit)
+	setDecision(decIdx[pick], ActionRetire, reason, imp.Native, "", imp.Cause)
 	return true
 }
 

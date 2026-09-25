@@ -138,6 +138,10 @@ type Improvement struct {
 	Since    time.Time `json:"since,omitempty"`
 	Reason   string    `json:"reason,omitempty"`
 	Cause    string    `json:"cause,omitempty"`
+	// CostDelta is the native cost per Mbps minus the steered provider's;
+	// EstSavings is that times the prefix volume. Estimates for reports.
+	CostDelta  float64 `json:"cost_delta,omitempty"`
+	EstSavings float64 `json:"est_savings,omitempty"`
 }
 
 // Telemetry is one provider's interface usage for the open billing period.
@@ -332,12 +336,14 @@ func assembleImprovements(in []policy.Improvement) []Improvement {
 			continue
 		}
 		out = append(out, Improvement{
-			Prefix:   im.Prefix.String(),
-			Provider: im.Provider,
-			Native:   im.Native,
-			Since:    im.Since,
-			Reason:   im.Reason,
-			Cause:    im.Cause,
+			Prefix:     im.Prefix.String(),
+			Provider:   im.Provider,
+			Native:     im.Native,
+			Since:      im.Since,
+			Reason:     im.Reason,
+			Cause:      im.Cause,
+			CostDelta:  im.CostDelta,
+			EstSavings: im.EstSavings,
 		})
 	}
 	sort.Slice(out, func(i, j int) bool { return lessPrefix(out[i].Prefix, out[j].Prefix) < 0 })
