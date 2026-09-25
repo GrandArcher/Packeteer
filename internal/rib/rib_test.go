@@ -134,6 +134,29 @@ func newView(t *testing.T, r *fakeRouter) *View {
 	return v
 }
 
+func TestPeerHoldTimerIsBounded(t *testing.T) {
+	r := newRouter(t)
+	v := newView(t, r)
+	var peer *api.Peer
+	err := v.Server().ListPeer(context.Background(), &api.ListPeerRequest{Address: "127.0.0.1"}, func(p *api.Peer) {
+		peer = p
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if peer == nil || peer.GetTimers().GetConfig() == nil {
+		t.Fatalf("peer timers missing: %+v", peer)
+	}
+	cfg := peer.GetTimers().GetConfig()
+	if cfg.HoldTime != bgpHoldTime || cfg.KeepaliveInterval != bgpKeepalive {
+		t.Fatalf("hold=%d keepalive=%d, want %d/%d", cfg.HoldTime, cfg.KeepaliveInterval, bgpHoldTime, bgpKeepalive)
+	}
+	gr := peer.GetGracefulRestart()
+	if gr != nil && (gr.Enabled || gr.LocalRestarting || gr.LonglivedEnabled) {
+		t.Fatalf("graceful restart enabled: %+v", gr)
+	}
+}
+
 func TestLearnRoutesAndWithdraw(t *testing.T) {
 	r := newRouter(t)
 	r.add(t, "198.51.100.0/24", "192.0.2.1")

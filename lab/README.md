@@ -9,11 +9,12 @@ A simulated edge router (FRR) peered over iBGP with Packeteer. Addresses are doc
 3. Restoring the original results announces it again. The route then has to stay up while FRR is still advertising the native path (the network statement's weight keeps it best).
 4. Removing FRR's `network 198.51.100.0/24` withdraws Packeteer's route within seconds, while Packeteer is still running. That is a real leave: FRR had kept sending the prefix.
 5. The network statement is put back and Packeteer's import weight is raised to match, so local preference wins the way a real eBGP path loses. FRR stops advertising the prefix to Packeteer. Packeteer's route has to stay; withdrawing it would flap.
-6. Stopping Packeteer withdraws it. Graceful restart is off on both sides.
+6. Stopping Packeteer with SIGTERM withdraws it (`WithdrawAll` while the session is still up).
+7. Packeteer is started again and the route comes back. `docker kill -s KILL` stops it with no withdraw. FRR's negotiated hold time is the configured 9 seconds. The injected route must be gone once the session is no longer Established, and no later than that hold time plus a few seconds. A withdraw while the session is still Established fails this step. Graceful restart is off on both sides.
 
 The fixed prober (`type: fixed`) returns configured RTTs and sends no packets. It is for this lab and for tests. A real deployment uses `icmp` and `tcp`.
 
-GitHub Actions runs this as the `e2e` job. Docker is required; the script does not run in the unit-test job.
+GitHub Actions runs this as the `e2e` job. Docker and Go are required (the script builds `lab/checkroute`); it does not run in the unit-test job. `go test ./lab/checkroute` covers the route check itself.
 
 ```sh
 bash lab/e2e.sh
