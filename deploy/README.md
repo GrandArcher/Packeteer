@@ -13,3 +13,5 @@ Lab only until observe mode is stable.
 Recipes: [docs/mikrotik.md](../docs/mikrotik.md) and [docs/routers.md](../docs/routers.md). The simulated-router lab is [lab/](../lab/).
 
 Flow exports (NetFlow, IPFIX, sFlow) use the same host network. The `flow` source's listen ports are host UDP ports; there is no Docker port map. Firewall them to the exporter.
+
+The read-only HTTP server (dashboard, `/metrics`, `/api`) binds `http.listen`, default `127.0.0.1:8080`. The image exposes port 8080. With `--network host` that address is on the host. Set `PACKETEER_HTTP_USER` and `PACKETEER_HTTP_PASSWORD` before binding a non-loopback address. `PACKETEER_HTTP_LISTEN=off` disables the server.

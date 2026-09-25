@@ -61,6 +61,8 @@ jobs:
           mode: observe
           asn: 64512
           router_id: 192.0.2.10
+          http:
+            listen: "127.0.0.1:18080"
           providers:
             - name: loopback
               source_ip: 127.0.0.1
@@ -73,7 +75,28 @@ jobs:
           YAML
           docker run -d --name pk --network host --cap-add NET_RAW --cap-add NET_ADMIN \
             -v /tmp/lab.yaml:/etc/packeteer/config.yaml:ro packeteer:ci
-          sleep 5
+          trap 'docker logs pk >&2 || true' EXIT
+          dump() { docker logs pk >&2 || true; }
+          ready=0
+          for _ in 1 2 3 4 5 6 7 8 9 10; do
+            if curl -fsS http://127.0.0.1:18080/healthz >/dev/null 2>&1 \
+              && curl -fsS http://127.0.0.1:18080/readyz >/dev/null 2>&1 \
+              && curl -fsS http://127.0.0.1:18080/metrics -o /tmp/metrics.txt \
+              && grep -q packeteer_probe_rtt_seconds /tmp/metrics.txt \
+              && grep -q packeteer_probe_loss_ratio /tmp/metrics.txt \
+              && grep -q packeteer_probe_jitter_seconds /tmp/metrics.txt; then
+              ready=1
+              break
+            fi
+            sleep 2
+          done
+          if [ "$ready" != 1 ]; then dump; echo "ops endpoints not ready"; exit 1; fi
+          grep -q packeteer_decisions /tmp/metrics.txt
+          grep -q packeteer_improvements_active /tmp/metrics.txt
+          grep -q packeteer_ready /tmp/metrics.txt
+          curl -fsS http://127.0.0.1:18080/ | grep -q Packeteer
+          curl -fsS http://127.0.0.1:18080/api/providers | grep -q loopback
+          test "$(curl -s -o /dev/null -w '%{http_code}' -X POST http://127.0.0.1:18080/api/improvements)" = "405"
           docker stop -t 15 pk
           docker logs pk 2>&1 | tee /tmp/pk.log
           test "$(docker inspect -f '{{.State.ExitCode}}' pk)" = "0"

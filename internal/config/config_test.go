@@ -146,6 +146,12 @@ func TestDefaults(t *testing.T) {
 	if len(cfg.Probers) != 2 || cfg.Probers[0].Type != "icmp" || cfg.Probers[1].Type != "tcp" {
 		t.Errorf("default probers = %+v", cfg.Probers)
 	}
+	if cfg.Log.Level != "info" || cfg.Log.Format != "text" {
+		t.Errorf("log defaults = %+v", cfg.Log)
+	}
+	if cfg.HTTPListen() != DefaultHTTPListen {
+		t.Errorf("http listen = %q, want %s", cfg.HTTPListen(), DefaultHTTPListen)
+	}
 }
 
 func TestLoadExampleConfig(t *testing.T) {
@@ -156,6 +162,9 @@ func TestLoadExampleConfig(t *testing.T) {
 	// The public example must never enable injection (docs/THREAT_MODEL.md).
 	if cfg.Mode != ModeObserve {
 		t.Fatalf("config.example.yaml mode = %q, must be %q", cfg.Mode, ModeObserve)
+	}
+	if cfg.HTTPListen() != "127.0.0.1:8080" {
+		t.Fatalf("config.example.yaml http.listen = %q, want loopback", cfg.HTTPListen())
 	}
 	if len(cfg.Providers) == 0 {
 		t.Fatal("config.example.yaml has no providers")
@@ -316,5 +325,37 @@ announcer:
 				t.Fatalf("err = %v, want %q", err, tt.wantErr)
 			}
 		})
+	}
+}
+
+func TestHTTPAndLog(t *testing.T) {
+	cfg, err := Parse([]byte(minimalYAML + "http:\n  listen: \"\"\nlog:\n  level: INFO\n  format: JSON\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.HTTPListen() != "" {
+		t.Fatalf("listen = %q, want disabled", cfg.HTTPListen())
+	}
+	if cfg.Log.Level != "info" || cfg.Log.Format != "json" {
+		t.Fatalf("log was not normalized: %+v", cfg.Log)
+	}
+	if _, err := Parse([]byte(minimalYAML + "log: {level: LOUD, format: text}\n")); err == nil || !strings.Contains(err.Error(), `log.level "loud"`) {
+		t.Fatalf("err = %v", err)
+	}
+	if _, err := Parse([]byte(minimalYAML + "log: {format: yaml}\n")); err == nil || !strings.Contains(err.Error(), `log.format "yaml"`) {
+		t.Fatalf("err = %v", err)
+	}
+	for _, addr := range []string{"127.0.0.1", "127.0.0.1:99999", "[2001:db8::1]"} {
+		_, err := Parse([]byte(minimalYAML + "http:\n  listen: \"" + addr + "\"\n"))
+		if err == nil || !strings.Contains(err.Error(), "http.listen") {
+			t.Errorf("listen %q err = %v", addr, err)
+		}
+	}
+	cfg, err = Parse([]byte(minimalYAML + "http:\n  listen: \"[2001:db8::1]:8080\"\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.HTTPListen() != "[2001:db8::1]:8080" {
+		t.Fatalf("listen = %q", cfg.HTTPListen())
 	}
 }

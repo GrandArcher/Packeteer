@@ -14,6 +14,10 @@ Packeteer can change how a network forwards packets. Failure modes matter more t
 
 The flow source accepts unauthenticated UDP. Anyone who can reach a listen port can add probe targets and spend probe budget. That does not inject routes: inject mode still requires the prefix in the learned RIB, the allowlist, thresholds, hold time, and the improvement cap. Run with host networking and firewall the port to the exporter. Counters live in memory for one window. Raw flow records are not written to disk.
 
+## Ops surface
+
+The HTTP server accepts GET and HEAD only. It defaults to `127.0.0.1:8080`. Set `http.listen` to `""` (or `PACKETEER_HTTP_LISTEN=off`) to disable it. A non-loopback listen address exposes probe results, decisions, active improvements, and learned exits for probed prefixes to anyone who can open the port. Set `PACKETEER_HTTP_USER` and `PACKETEER_HTTP_PASSWORD` together before doing that; setting only one refuses to start. The dashboard loads no remote assets. The API does not announce routes. It does not list RIB prefixes that Packeteer is not probing.
+
 ## Measurement failures
 
 - Asymmetric return path on probes

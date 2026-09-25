@@ -23,6 +23,7 @@ import (
 
 	"github.com/GrandArcher/Packeteer/internal/announce"
 	"github.com/GrandArcher/Packeteer/internal/config"
+	"github.com/GrandArcher/Packeteer/internal/httpapi"
 	"github.com/GrandArcher/Packeteer/internal/pluginhost"
 	_ "github.com/GrandArcher/Packeteer/internal/plugins/all"
 	"github.com/GrandArcher/Packeteer/internal/policy"
@@ -36,9 +37,13 @@ const DefaultConfigPath = "/etc/packeteer/config.yaml"
 
 // Environment variables.
 const (
-	ConfigEnv    = "PACKETEER_CONFIG"     // config path when -config is not given
-	PluginDirEnv = "PACKETEER_PLUGIN_DIR" // overrides plugin_dir
-	LogLevelEnv  = "PACKETEER_LOG_LEVEL"  // debug, info, warn, error
+	ConfigEnv     = "PACKETEER_CONFIG"      // config path when -config is not given
+	PluginDirEnv  = "PACKETEER_PLUGIN_DIR"  // overrides plugin_dir
+	LogLevelEnv   = "PACKETEER_LOG_LEVEL"   // debug, info, warn, error; overrides log.level
+	LogFormatEnv  = "PACKETEER_LOG_FORMAT"  // text or json; overrides log.format
+	HTTPListenEnv = "PACKETEER_HTTP_LISTEN" // overrides http.listen; "off" disables
+	HTTPUserEnv   = "PACKETEER_HTTP_USER"
+	HTTPPassEnv   = "PACKETEER_HTTP_PASSWORD"
 )
 
 // version is set at build time with -ldflags "-X main.version=...".
@@ -50,7 +55,7 @@ func main() {
 	os.Exit(run(ctx, os.Args[1:], os.Getenv, os.Stdout, os.Stderr))
 }
 
-func newLogger(w io.Writer, level string) *slog.Logger {
+func newLogger(w io.Writer, level, format string) *slog.Logger {
 	var l slog.Level
 	switch strings.ToLower(level) {
 	case "debug":
@@ -62,7 +67,38 @@ func newLogger(w io.Writer, level string) *slog.Logger {
 	default:
 		l = slog.LevelInfo
 	}
-	return slog.New(slog.NewTextHandler(w, &slog.HandlerOptions{Level: l}))
+	opt := &slog.HandlerOptions{Level: l}
+	var h slog.Handler
+	if strings.ToLower(format) == "json" {
+		h = slog.NewJSONHandler(w, opt)
+	} else {
+		h = slog.NewTextHandler(w, opt)
+	}
+	return slog.New(h)
+}
+
+// applyRuntimeEnv overlays process environment on an already-validated
+// config and validates again. An empty PACKETEER_HTTP_LISTEN does not
+// change the file (unset and empty look the same); "off" disables HTTP.
+func applyRuntimeEnv(cfg *config.Config, getenv func(string) string) error {
+	if v := strings.TrimSpace(getenv(LogLevelEnv)); v != "" {
+		cfg.Log.Level = v
+	}
+	if v := strings.TrimSpace(getenv(LogFormatEnv)); v != "" {
+		cfg.Log.Format = v
+	}
+	if v := strings.TrimSpace(getenv(HTTPListenEnv)); v != "" {
+		if strings.EqualFold(v, "off") {
+			empty := ""
+			cfg.HTTP.Listen = &empty
+		} else {
+			cfg.HTTP.Listen = &v
+		}
+	}
+	if err := cfg.Validate(); err != nil {
+		return fmt.Errorf("environment: %w", err)
+	}
+	return nil
 }
 
 func run(ctx context.Context, args []string, getenv func(string) string, stdout, stderr io.Writer) int {
@@ -88,7 +124,16 @@ func run(ctx context.Context, args []string, getenv func(string) string, stdout,
 		fmt.Fprintf(stderr, "packeteer: refusing to start: %v\n", err)
 		return 1
 	}
-	log := newLogger(stderr, getenv(LogLevelEnv))
+	if err := applyRuntimeEnv(cfg, getenv); err != nil {
+		fmt.Fprintf(stderr, "packeteer: refusing to start: %v\n", err)
+		return 1
+	}
+	httpUser, httpPass := getenv(HTTPUserEnv), getenv(HTTPPassEnv)
+	if (httpUser == "") != (httpPass == "") {
+		fmt.Fprintf(stderr, "packeteer: refusing to start: set both %s and %s, or neither\n", HTTPUserEnv, HTTPPassEnv)
+		return 1
+	}
+	log := newLogger(stderr, cfg.Log.Level, cfg.Log.Format)
 	plugins, err := pluginhost.Build(cfg, pluginhost.Options{Logger: log, Getenv: getenv, PluginDir: getenv(PluginDirEnv)})
 	if err != nil {
 		fmt.Fprintf(stderr, "packeteer: refusing to start: plugins: %v\n", err)
@@ -122,14 +167,49 @@ func run(ctx context.Context, args []string, getenv func(string) string, stdout,
 	default:
 		fmt.Fprintln(stdout, "announce: disabled")
 	}
+	fmt.Fprintf(stdout, "log: %s %s\n", cfg.Log.Level, cfg.Log.Format)
+	if cfg.HTTPListen() == "" {
+		fmt.Fprintln(stdout, "http: disabled")
+	} else {
+		fmt.Fprintf(stdout, "http: %s\n", cfg.HTTPListen())
+		if httpUser != "" {
+			fmt.Fprintf(stdout, "http auth: basic (user %s)\n", httpUser)
+		} else {
+			fmt.Fprintln(stdout, "http auth: off")
+		}
+	}
 	if *check {
 		fmt.Fprintln(stdout, "check: ok (no probes sent, no BGP sessions opened)")
 		return 0
 	}
-	return daemon(ctx, cfg, plugins, log)
+	return daemon(ctx, cfg, plugins, log, httpUser, httpPass)
 }
 
-func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, log *slog.Logger) int {
+func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, log *slog.Logger, httpUser, httpPass string) int {
+	col := httpapi.NewCollector(version, cfg.Mode, cfg.Providers)
+	if addr := cfg.HTTPListen(); addr != "" {
+		srv, err := httpapi.New(httpapi.Options{
+			Addr: addr, User: httpUser, Password: httpPass, Snapshot: col.Snapshot, Logger: log,
+		})
+		if err != nil {
+			log.Error("refusing to start", "err", err)
+			return 1
+		}
+		if err := srv.Start(); err != nil {
+			log.Error("refusing to start", "err", err)
+			return 1
+		}
+		defer func() {
+			stopCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if err := srv.Shutdown(stopCtx); err != nil {
+				log.Error("http shutdown", "err", err)
+			}
+		}()
+	} else {
+		log.Info("http disabled")
+	}
+
 	view, err := newRIB(cfg, log)
 	if err != nil {
 		log.Error("refusing to start", "err", err)
@@ -181,10 +261,13 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 		return 1
 	}
 	wirePrefixLookup(plugins, view)
+	col.Attach(engine, decider, view)
 	if err := plugins.Start(ctx); err != nil {
 		log.Error("refusing to start", "err", err)
 		return 1
 	}
+	col.SetStarted(true)
+	defer col.SetStarted(false)
 	if len(plugins.Sources) == 0 {
 		log.Warn("no target sources configured; nothing to probe (add a `sources:` entry)")
 	}

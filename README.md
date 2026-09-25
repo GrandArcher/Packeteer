@@ -35,9 +35,28 @@ In `observe` (the default) and `suggest`, Packeteer probes every target from eac
 
 - Validate a config without probing: `docker run --rm -v "$PWD/config.yaml:/etc/packeteer/config.yaml:ro" ghcr.io/grandarcher/packeteer:edge -check`
 - Each provider's `source_ip` must leave through that transit. See [docs/policy-routing.md](docs/policy-routing.md) for the Linux `ip rule` recipe and the MikroTik equivalent.
-- Set `PACKETEER_LOG_LEVEL=debug` for more detail.
+- Set `PACKETEER_LOG_LEVEL=debug` for more detail. `log.format: json` or `PACKETEER_LOG_FORMAT=json` switches logs to JSON.
+- The dashboard, JSON API, and Prometheus metrics listen on `127.0.0.1:8080` by default. With `--network host` that is the host loopback: `http://127.0.0.1:8080`. The image exposes port 8080.
 
 The CI lab (`lab/e2e.sh`, GitHub Actions job `e2e`) peers this image with FRR and checks that an injected route appears, is withdrawn when FRR drops a native route it was still advertising, stays up when FRR hides that route because Packeteer's path won, is withdrawn when Packeteer stops cleanly, and is gone after `SIGKILL` once the BGP session drops (within the router's hold timer). See [lab/README.md](lab/README.md).
+
+### Dashboard, API, and metrics
+
+The ops server is read-only (GET and HEAD). `http.listen` defaults to `127.0.0.1:8080`. Set it to `""`, or set `PACKETEER_HTTP_LISTEN=off`, to disable it. Any other value of `PACKETEER_HTTP_LISTEN` replaces `http.listen`.
+
+| Path | Body |
+|---|---|
+| `/` | Dashboard: provider health, per-prefix loss / RTT / jitter, current vs recommended exit, active improvements. Refreshes every 5s. No remote assets. |
+| `/healthz` | Liveness. |
+| `/readyz` | Readiness. 503 until startup finishes, and until an iBGP session is up when `bgp.neighbors` is set. |
+| `/metrics` | Prometheus text: probe RTT, loss, and jitter per provider and prefix; decisions; active improvements; BGP session state. |
+| `/api/providers` | Providers, probe-source health, and BGP sessions. |
+| `/api/probes` | Latest probe per provider and prefix. |
+| `/api/prefixes` | Probed prefixes with measurements, current exit, and recommended exit. Prefixes that are only in the RIB are not listed. |
+| `/api/decisions` | Latest per-prefix decision. |
+| `/api/improvements` | Active improvements. |
+
+Basic auth is off unless both `PACKETEER_HTTP_USER` and `PACKETEER_HTTP_PASSWORD` are set. Setting only one refuses to start. Use both when `http.listen` is not loopback. The password is not read from the config file and is not written to the log.
 
 ### Security notes
 
@@ -71,6 +90,7 @@ Read [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md) and [AGENTS.md](AGENTS.md) bef
 
 ```
 cmd/controller/     # entrypoint
+internal/httpapi/   # health, metrics, JSON API, embedded dashboard
 internal/probe/     # per-provider sourced measurements
 internal/policy/    # score + hysteresis
 internal/announce/  # inject-mode gate in front of the announcer plugin

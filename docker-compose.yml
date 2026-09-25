@@ -14,6 +14,13 @@ services:
     volumes:
       - ./config.yaml:/etc/packeteer/config.yaml:ro
       - ./plugins:/etc/packeteer/plugins:ro
+    # Dashboard, JSON API, and Prometheus metrics. Host networking means
+    # http.listen (default 127.0.0.1:8080) is an address on the host, so
+    # there is no ports: mapping. The image EXPOSEs 8080. Disable the
+    # server with PACKETEER_HTTP_LISTEN=off. Optional basic auth, set both:
+    #   PACKETEER_HTTP_USER / PACKETEER_HTTP_PASSWORD
+    expose:
+      - "8080"
     environment:
       PACKETEER_CONFIG: /etc/packeteer/config.yaml
     restart: unless-stopped
