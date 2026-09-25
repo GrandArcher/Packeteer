@@ -30,6 +30,7 @@ wait_route() {
 	done
 	echo "timed out waiting for route to be $mode" >&2
 	"${compose[@]}" exec -T edge vtysh -c 'show bgp summary' >&2 || true
+	"${compose[@]}" exec -T edge vtysh -c 'show bgp ipv4 unicast 198.51.100.0/24' >&2 || true
 	"${compose[@]}" exec -T edge vtysh -c 'show bgp ipv4 unicast json' >&2 || true
 	"${compose[@]}" exec -T edge vtysh -c 'show running-config' >&2 || true
 	"${compose[@]}" logs --no-color packeteer >&2 || true
