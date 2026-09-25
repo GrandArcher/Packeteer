@@ -1,10 +1,13 @@
-// Package rib maintains Packeteer's view of the edge router's routing table.
+// Package rib maintains Packeteer's view of routes learned from edge routers.
 //
 // An embedded GoBGP speaker holds iBGP sessions with the configured edge
-// routers and learns their best paths. The view maps every learned prefix to
-// its current next-hop and, through providers[].next_hop, to the provider
-// (transit) currently used for it. The speaker is learn-only: its global
-// export policy rejects everything, and graceful restart is never enabled.
+// routers. The view records each neighbor's adj-RIB-in — paths that neighbor
+// advertised — and not Packeteer's own best path. A route Packeteer injects
+// can become the local best path; that must not remove the neighbor's prefix.
+// The view maps every prefix a neighbor still advertises to its next-hop and,
+// through providers[].next_hop, to the provider. The speaker is learn-only:
+// its global export policy rejects everything, and graceful restart is never
+// enabled.
 package rib
 
 import (
@@ -13,6 +16,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/netip"
+	"slices"
 	"sort"
 	"strconv"
 	"sync"
@@ -46,7 +50,7 @@ type Options struct {
 	Logger    *slog.Logger
 }
 
-// Route is the current best path for a prefix as seen by the edge router.
+// Route is a path a configured neighbor is advertising for a prefix.
 type Route struct {
 	Prefix   netip.Prefix `json:"prefix"`
 	NextHop  netip.Addr   `json:"next_hop"`
@@ -54,6 +58,8 @@ type Route struct {
 	ASPath   []uint32     `json:"as_path,omitempty"`
 	Neighbor netip.Addr   `json:"neighbor"`
 	Age      time.Time    `json:"since"`
+
+	localPref uint32 // selection only; 100 when the attribute is absent
 }
 
 // PeerState is the state of one iBGP session.
@@ -74,7 +80,8 @@ type View struct {
 	wg     sync.WaitGroup
 
 	mu        sync.RWMutex
-	routes    map[netip.Prefix]Route
+	routes    map[netip.Prefix]Route                // selected learned path per prefix
+	adj       map[netip.Prefix]map[netip.Addr]Route // prefix -> neighbor -> advertised path
 	peers     map[netip.Addr]PeerState
 	neighbors map[netip.Addr]bool
 	onChange  []func()
@@ -92,6 +99,7 @@ func New(opt Options) (*View, error) {
 		opt.Logger = slog.Default()
 	}
 	v := &View{opt: opt, log: opt.Logger, routes: map[netip.Prefix]Route{},
+		adj:   map[netip.Prefix]map[netip.Addr]Route{},
 		peers: map[netip.Addr]PeerState{}, neighbors: map[netip.Addr]bool{}}
 	for _, n := range opt.Neighbors {
 		if !n.Address.IsValid() {
@@ -140,9 +148,17 @@ func (v *View) Start(ctx context.Context) error {
 
 	wctx, cancel := context.WithCancel(context.Background())
 	v.cancel = cancel
+	// Adj-RIB-In, before import policy: a path a later import policy rejected
+	// would still show up here. This is not the local best path. A Packeteer
+	// route can win best-path selection on this speaker; that event must not
+	// look like a withdraw of a prefix the neighbor is still sending. The
+	// router may separately stop sending the prefix once that route is its
+	// best; policy tells that apart from a real withdraw.
 	err := v.srv.WatchEvent(wctx, &api.WatchEventRequest{
-		Peer:  &api.WatchEventRequest_Peer{},
-		Table: &api.WatchEventRequest_Table{Filters: []*api.WatchEventRequest_Table_Filter{{Type: api.WatchEventRequest_Table_Filter_BEST, Init: true}}},
+		Peer: &api.WatchEventRequest_Peer{},
+		Table: &api.WatchEventRequest_Table{Filters: []*api.WatchEventRequest_Table_Filter{
+			{Type: api.WatchEventRequest_Table_Filter_ADJIN, Init: true},
+		}},
 	}, v.handleEvent)
 	if err != nil {
 		cancel()
@@ -192,6 +208,7 @@ func (v *View) Stop(context.Context) error {
 	v.stopServer()
 	v.mu.Lock()
 	v.routes = map[netip.Prefix]Route{}
+	v.adj = map[netip.Prefix]map[netip.Addr]Route{}
 	for a, p := range v.peers {
 		p.State, p.Established = "idle", false
 		v.peers[a] = p
@@ -224,12 +241,10 @@ func (v *View) handleEvent(r *api.WatchEventResponse) {
 				v.peers[addr.Unmap()] = ps
 				changed = true
 				if !est {
-					// Session lost: drop everything learned from it now rather
-					// than waiting for implicit withdraws.
-					for p, rt := range v.routes {
-						if rt.Neighbor == addr.Unmap() {
-							delete(v.routes, p)
-						}
+					// Session lost: drop that neighbor's adj-RIB-in now.
+					// Another session staying up does not keep these paths.
+					if v.forgetNeighborLocked(addr.Unmap()) {
+						changed = true
 					}
 				}
 			}
@@ -253,33 +268,93 @@ func (v *View) handleEvent(r *api.WatchEventResponse) {
 	}
 }
 
-// applyPath updates the route map from one best-path event. Caller holds mu.
+// applyPath updates the adj-RIB-in from one neighbor path event. Paths that
+// are not from a configured neighbor (including Packeteer's own) are ignored
+// and never remove a prefix. Caller holds mu.
 func (v *View) applyPath(p *api.Path) bool {
 	prefix, ok := decodePrefix(p.Nlri)
 	if !ok {
 		return false
 	}
 	neighbor, err := netip.ParseAddr(p.NeighborIp)
-	if p.IsWithdraw {
-		if old, exists := v.routes[prefix]; exists && (err != nil || old.Neighbor == neighbor.Unmap()) {
-			delete(v.routes, prefix)
-			return true
-		}
-		return false
-	}
-	// Only routes learned from a configured edge router count; never our own.
 	if err != nil || !v.neighbors[neighbor.Unmap()] {
-		if _, exists := v.routes[prefix]; exists {
-			delete(v.routes, prefix) // best path is now something else (e.g. local)
-			return true
-		}
 		return false
 	}
-	nh, asPath := decodeAttrs(p.Pattrs)
-	rt := Route{Prefix: prefix, NextHop: nh, Provider: v.opt.Providers[nh.Unmap()], ASPath: asPath,
-		Neighbor: neighbor.Unmap(), Age: time.Now()}
-	v.routes[prefix] = rt
+	neighbor = neighbor.Unmap()
+	if p.IsWithdraw {
+		nbrs := v.adj[prefix]
+		if _, exists := nbrs[neighbor]; !exists {
+			return false
+		}
+		delete(nbrs, neighbor)
+		if len(nbrs) == 0 {
+			delete(v.adj, prefix)
+		}
+		return v.republishLocked(prefix)
+	}
+	nh, asPath, lp := decodeAttrs(p.Pattrs)
+	if v.adj[prefix] == nil {
+		v.adj[prefix] = map[netip.Addr]Route{}
+	}
+	v.adj[prefix][neighbor] = Route{
+		Prefix: prefix, NextHop: nh, Provider: v.opt.Providers[nh.Unmap()], ASPath: asPath,
+		Neighbor: neighbor, Age: time.Now(), localPref: lp,
+	}
+	return v.republishLocked(prefix)
+}
+
+// forgetNeighborLocked drops every path learned from addr. Caller holds mu.
+func (v *View) forgetNeighborLocked(addr netip.Addr) bool {
+	changed := false
+	for p, nbrs := range v.adj {
+		if _, ok := nbrs[addr]; !ok {
+			continue
+		}
+		delete(nbrs, addr)
+		if len(nbrs) == 0 {
+			delete(v.adj, p)
+		}
+		if v.republishLocked(p) {
+			changed = true
+		}
+	}
+	return changed
+}
+
+// republishLocked sets the published route for p from the remaining adj-RIB-in
+// paths. Caller holds mu.
+func (v *View) republishLocked(p netip.Prefix) bool {
+	best, ok := selectRoute(v.adj[p])
+	if !ok {
+		if _, exists := v.routes[p]; !exists {
+			return false
+		}
+		delete(v.routes, p)
+		return true
+	}
+	if old, exists := v.routes[p]; exists && sameRoute(old, best) {
+		return false
+	}
+	v.routes[p] = best
 	return true
+}
+
+// selectRoute picks one advertised path. Higher local preference wins; equal
+// preference breaks toward the lower neighbor address.
+func selectRoute(paths map[netip.Addr]Route) (Route, bool) {
+	var best Route
+	ok := false
+	for _, rt := range paths {
+		if !ok || rt.localPref > best.localPref || (rt.localPref == best.localPref && rt.Neighbor.Less(best.Neighbor)) {
+			best, ok = rt, true
+		}
+	}
+	return best, ok
+}
+
+func sameRoute(a, b Route) bool {
+	return a.Prefix == b.Prefix && a.NextHop == b.NextHop && a.Provider == b.Provider &&
+		a.Neighbor == b.Neighbor && a.localPref == b.localPref && slices.Equal(a.ASPath, b.ASPath)
 }
 
 func decodePrefix(a *anypb.Any) (netip.Prefix, bool) {
@@ -297,13 +372,15 @@ func decodePrefix(a *anypb.Any) (netip.Prefix, bool) {
 	return p.Masked(), true
 }
 
-func decodeAttrs(attrs []*anypb.Any) (netip.Addr, []uint32) {
+func decodeAttrs(attrs []*anypb.Any) (netip.Addr, []uint32, uint32) {
 	var nh netip.Addr
 	var path []uint32
+	lp := uint32(100) // iBGP default when the attribute is absent
 	for _, a := range attrs {
 		var nhA api.NextHopAttribute
 		var mp api.MpReachNLRIAttribute
 		var asp api.AsPathAttribute
+		var lpA api.LocalPrefAttribute
 		switch {
 		case a.MessageIs(&nhA):
 			if a.UnmarshalTo(&nhA) == nil {
@@ -323,15 +400,21 @@ func decodeAttrs(attrs []*anypb.Any) (netip.Addr, []uint32) {
 					path = append(path, seg.Numbers...)
 				}
 			}
+		case a.MessageIs(&lpA):
+			if a.UnmarshalTo(&lpA) == nil {
+				lp = lpA.LocalPref
+			}
 		}
 	}
-	return nh, path
+	return nh, path, lp
 }
 
 // ---- queries ----
 
-// Ready reports whether at least one session is established. When false the
-// view is stale and consumers must not act on it (and must withdraw).
+// Ready reports whether at least one session is established. One session
+// going down does not make the view unready; paths from that neighbor are
+// removed instead. When no session is up the view is stale and consumers
+// must withdraw.
 func (v *View) Ready() bool {
 	v.mu.RLock()
 	defer v.mu.RUnlock()

@@ -1,6 +1,6 @@
 # Edge router guides
 
-Packeteer peers with the edge over **iBGP** (the router's own ASN). It learns best paths and, only in `mode: inject`, advertises improvements back on that same session:
+Packeteer peers with the edge over **iBGP** (the router's own ASN). It learns the paths that router advertises — one best path per prefix, unless the router is set to keep sending the native path as well — and, only in `mode: inject`, advertises improvements back on that same session:
 
 - the decided prefix, or the configured more-specifics (`more_specific_bits`)
 - next hop = the chosen provider's `next_hop`
@@ -13,6 +13,19 @@ Two filters are required on the router:
 2. **Toward eBGP (every transit and peer)**: reject routes that carry `packeteer_community`. `no-export` is a second layer; the filter is the one you control.
 
 Leave BGP graceful restart **off** on the Packeteer session. Packeteer never enables it, withdraws on shutdown, and the session drop is the backstop. If Packeteer disappears, the edge falls back to the paths it learned from its providers.
+
+## When the native path disappears
+
+On a best-path-only session the router stops advertising a prefix to Packeteer once Packeteer's route is its best path. iBGP does not send a route back to the neighbor it was learned from, and it does not send the native path while that path is not best. An eBGP-learned route has no weight advantage over Packeteer's local preference, so this is the normal case. MikroTik has no weight attribute; the same local-pref comparison applies.
+
+Packeteer keeps that improvement. Treating the missing advertisement as "the prefix left" would withdraw the route, the router would advertise the native path again, and the next probe round would inject it again.
+
+Packeteer withdraws immediately when the router withdraws a prefix it was **still advertising** after the improvement had been up for a few seconds, and then holds the prefix for `hold_time` so a bad reading cannot re-inject on the next round. The router is still advertising when:
+
+- the native path stays best (FRR gives a `network` statement weight 32768, which beats local preference; the lab uses this for one of its checks), or
+- the router is told to keep sending the native path anyway. On FRR: `neighbor 192.0.2.10 advertise-best-external` in the address-family. On Cisco IOS: `neighbor 192.0.2.10 advertise best-external`. That is the configuration to use on a real edge if a provider withdraw should clear the improvement at once.
+
+If the native path is already hidden and the provider then withdraws it, a single-path session shows Packeteer nothing new. The improvement stays until flip-back or `improvement_ttl`. BGP additional-paths and BMP, which would show that withdraw too, are #26.
 
 The examples use documentation addresses (RFC 5737 / RFC 3849) and the private ASN 64512. Replace them. MikroTik is covered in full in [mikrotik.md](mikrotik.md); the snippet below matches that recipe.
 
@@ -31,7 +44,7 @@ set [find where name=packeteer] input.filter=packeteer-in
 set [find where remote.as!=64512] output.filter=ebgp-out
 ```
 
-`output.redistribute=bgp` on the Packeteer connection stays as documented in [mikrotik.md](mikrotik.md) so Packeteer can see the router's best paths. That is the opposite direction from `input.filter`.
+`output.redistribute=bgp` on the Packeteer connection stays as documented in [mikrotik.md](mikrotik.md) so Packeteer receives the router's best paths. That feed is best-path-only; see [When the native path disappears](#when-the-native-path-disappears). It is the opposite direction from `input.filter`.
 
 ## FRR
 

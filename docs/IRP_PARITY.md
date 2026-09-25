@@ -99,7 +99,7 @@ Milestones:
 | iBGP injection with local-pref, communities, next-hop | 1.2.2 Bgpd | done | v0.1 | announcer (`gobgp`) | #8 |
 | More-specific injection | 2.9 Bgpd | done | v0.1 | announcer (`gobgp`) | #8 |
 | RIB view from iBGP (learn current best exits) | 2.9 Bgpd | done | v0.1 | core (`internal/rib`) | #6 |
-| BGP session health and automatic withdraw (no stale intent) | 2.9 | done | v0.1 | announcer | #8 |
+| BGP session health and withdraw when a still-advertised prefix leaves the RIB (a best-path hide is kept, not flapped) | 2.9 | done | v0.1 | announcer | #8, #43 |
 | AS-path behavior options | 2.9.1 | planned | v0.3 | announcer | #27 |
 | BGP additional paths (add-path) | 2.9.3 | planned | v0.3 | RIB source | #26 |
 | BMP monitoring (incl. inactive IX paths) | 1.2.5, 2.10 | planned | v0.3 | RIB source (`bmp`) | #26 |

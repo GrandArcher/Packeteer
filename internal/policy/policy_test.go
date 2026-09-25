@@ -207,7 +207,7 @@ func TestActiveImprovementSafetyRetirements(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			input, c := in(results(tt.now, pA, ms...), nil), cfg()
+			input, c := in(results(tt.now, pA, ms...), map[netip.Prefix]string{pA: "a"}), cfg()
 			tt.mutate(&input, &c)
 			st, out := Decide(base(), input, c, scorer(t), tt.now)
 			if _, ok := st.Improvements[pA]; ok {
@@ -223,10 +223,95 @@ func TestActiveImprovementSafetyRetirements(t *testing.T) {
 	}
 }
 
+// TestHiddenNativeIsNotALeave is the real edge: once Packeteer's route wins,
+// the router withdraws the native advertisement and does not send it back.
+// That must not retire the improvement, including across later rounds.
+func TestHiddenNativeIsNotALeave(t *testing.T) {
+	c, s := cfg(), scorer(t)
+	st, out := Decide(NewState(), in(results(t0, pA, m{"a", 0, 90}, m{"b", 0, 30}), map[netip.Prefix]string{pA: "a"}), c, s, t0)
+	if decision(t, out, pA).Action != ActionImprove {
+		t.Fatalf("t0: %+v", out.Decisions)
+	}
+	hidden := map[netip.Prefix]string{}
+	for _, d := range []time.Duration{time.Second, 2 * time.Second, time.Minute, 30 * time.Minute} {
+		var next Output
+		st, next = Decide(st, in(results(t0.Add(d), pA, m{"a", 0, 90}, m{"b", 0, 30}), hidden), c, s, t0.Add(d))
+		got := decision(t, next, pA)
+		if _, ok := st.Improvements[pA]; !ok || got.Action != ActionKeep || len(next.Changes) != 0 {
+			t.Fatalf("at %s: action %s changes %+v", d, got.Action, next.Changes)
+		}
+		if _, cool := st.Cooldown[pA]; cool {
+			t.Fatalf("at %s: hide started a cooldown", d)
+		}
+	}
+}
+
+// TestBriefNativeSightingIsNotALeave arms confirmation only after the
+// neighbor has kept advertising past nativePathConfirm. A sighting that
+// disappears inside that window is the best-path hide, not a leave.
+func TestBriefNativeSightingIsNotALeave(t *testing.T) {
+	c, s := cfg(), scorer(t)
+	native := map[netip.Prefix]string{pA: "a"}
+	hidden := map[netip.Prefix]string{}
+	ms := []m{{"a", 0, 90}, {"b", 0, 30}}
+	st := NewState()
+	st.Improvements[pA] = Improvement{Prefix: pA, Provider: "b", Native: "a", Since: t0}
+
+	st, _ = Decide(st, in(results(t0.Add(time.Second), pA, ms...), native), c, s, t0.Add(time.Second))
+	if st.Improvements[pA].nativeSeen.IsZero() || !st.Improvements[pA].nativeHeld {
+		t.Fatalf("sighting not recorded: %+v", st.Improvements[pA])
+	}
+	st, out := Decide(st, in(results(t0.Add(2*time.Second), pA, ms...), hidden), c, s, t0.Add(2*time.Second))
+	if _, ok := st.Improvements[pA]; !ok || decision(t, out, pA).Action != ActionKeep {
+		t.Fatalf("retired inside confirm window: %+v", out)
+	}
+	if !st.Improvements[pA].nativeSeen.IsZero() || st.Improvements[pA].nativeHeld {
+		t.Fatal("unconfirmed sighting was kept")
+	}
+	st, out = Decide(st, in(results(t0.Add(time.Hour), pA, ms...), hidden), c, s, t0.Add(time.Hour))
+	if _, ok := st.Improvements[pA]; !ok || decision(t, out, pA).Action != ActionKeep || len(out.Changes) != 0 {
+		t.Fatalf("later round retired a hidden prefix: %+v", out)
+	}
+}
+
+// TestConfirmedNativeWithdrawRetires is the router that kept sending the
+// native path (higher weight, best-external) and then withdrew it.
+func TestConfirmedNativeWithdrawRetires(t *testing.T) {
+	c, s := cfg(), scorer(t)
+	native := map[netip.Prefix]string{pA: "a"}
+	ms := []m{{"a", 0, 90}, {"b", 0, 30}}
+	st := NewState()
+	st.Improvements[pA] = Improvement{Prefix: pA, Provider: "b", Native: "a", Since: t0}
+
+	seenAt := t0.Add(time.Second)
+	st, _ = Decide(st, in(results(seenAt, pA, ms...), native), c, s, seenAt)
+	still := seenAt.Add(nativePathConfirm)
+	st, out := Decide(st, in(results(still, pA, ms...), native), c, s, still)
+	if decision(t, out, pA).Action != ActionKeep || st.Improvements[pA].nativeSeen != seenAt {
+		t.Fatalf("confirmation decision: %+v seen %s", out.Decisions, st.Improvements[pA].nativeSeen)
+	}
+	left := still.Add(time.Second)
+	st, out = Decide(st, in(results(left, pA, ms...), map[netip.Prefix]string{}), c, s, left)
+	if _, ok := st.Improvements[pA]; ok || decision(t, out, pA).Action != ActionRetire || !strings.Contains(decision(t, out, pA).Reason, "no longer in RIB") {
+		t.Fatalf("confirmed leave: %+v", out)
+	}
+	if _, cool := st.Cooldown[pA]; !cool {
+		t.Fatal("confirmed leave did not start a cooldown")
+	}
+	// Prefix is back and still the worse path, but cooldown blocks re-injection.
+	st, out = Decide(st, in(results(left.Add(time.Second), pA, ms...), native), c, s, left.Add(time.Second))
+	if decision(t, out, pA).Action != ActionNone || !strings.Contains(decision(t, out, pA).Reason, "cooldown") {
+		t.Fatalf("re-inject during cooldown: %+v", out.Decisions)
+	}
+	if _, ok := st.Improvements[pA]; ok {
+		t.Fatal("cooldown did not block re-injection")
+	}
+}
+
 func TestNativeDownKeepsImprovement(t *testing.T) {
 	s := NewState()
 	s.Improvements[pA] = Improvement{Prefix: pA, Provider: "b", Native: "a", Since: t0}
-	input := in(results(t0.Add(time.Hour), pA, m{"a", 0, 10}, m{"b", 0, 30}), nil)
+	input := in(results(t0.Add(time.Hour), pA, m{"a", 0, 10}, m{"b", 0, 30}), map[netip.Prefix]string{pA: "a"})
 	input.ProviderUp = map[string]bool{"b": true}
 	st, out := Decide(s, input, cfg(), scorer(t), t0.Add(time.Hour))
 	if _, ok := st.Improvements[pA]; !ok || decision(t, out, pA).Action != ActionKeep {
@@ -236,15 +321,20 @@ func TestNativeDownKeepsImprovement(t *testing.T) {
 
 func TestSwitchAfterHold(t *testing.T) {
 	s := NewState()
-	s.Improvements[pA] = Improvement{Prefix: pA, Provider: "b", Native: "a", Since: t0}
+	s.Improvements[pA] = Improvement{Prefix: pA, Provider: "b", Native: "a", Since: t0, nativeSeen: t0, nativeHeld: true}
 	ms := []m{{"a", 0, 90}, {"b", 0, 60}, {"c", 0, 20}}
-	_, out := Decide(s, in(results(t0.Add(time.Minute), pA, ms...), nil), cfg(), scorer(t), t0.Add(time.Minute))
+	native := map[netip.Prefix]string{pA: "a"}
+	_, out := Decide(s, in(results(t0.Add(time.Minute), pA, ms...), native), cfg(), scorer(t), t0.Add(time.Minute))
 	if d := decision(t, out, pA); d.Action != ActionKeep {
 		t.Fatalf("inside hold: %+v", d)
 	}
-	st, out := Decide(s, in(results(t0.Add(20*time.Minute), pA, ms...), nil), cfg(), scorer(t), t0.Add(20*time.Minute))
-	if st.Improvements[pA].Provider != "c" || out.Changes[0].Action != ActionSwitch || out.Changes[0].Old.Provider != "b" {
-		t.Fatalf("switch: %+v %+v", st.Improvements[pA], out.Changes)
+	st, out := Decide(s, in(results(t0.Add(20*time.Minute), pA, ms...), native), cfg(), scorer(t), t0.Add(20*time.Minute))
+	got := st.Improvements[pA]
+	if got.Provider != "c" || out.Changes[0].Action != ActionSwitch || out.Changes[0].Old.Provider != "b" {
+		t.Fatalf("switch: %+v %+v", got, out.Changes)
+	}
+	if got.nativeSeen != t0 || !got.nativeHeld {
+		t.Fatalf("switch dropped RIB confirmation: %+v", got)
 	}
 }
 

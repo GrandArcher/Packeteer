@@ -214,6 +214,61 @@ func TestInjectAnnounceWithdrawAndGuards(t *testing.T) {
 	}
 }
 
+func TestHiddenPrefixDoesNotWithdrawActiveRoute(t *testing.T) {
+	ctx := context.Background()
+	rib := memRIB{ready: true, has: map[netip.Prefix]bool{pfx("198.51.100.0/24"): true}}
+	ann := &fakeAnn{}
+	c, err := New(testCfg(), ann, &rib, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Sync(ctx, []policy.Improvement{imp("198.51.100.0/24", "b")}); err != nil {
+		t.Fatal(err)
+	}
+
+	// The router stopped advertising the prefix because our route won.
+	// The decision engine still wants the improvement. Withdrawing here
+	// would bring the native path back and the next round would re-announce.
+	delete(rib.has, pfx("198.51.100.0/24"))
+	if err := c.Sync(ctx, []policy.Improvement{imp("198.51.100.0/24", "b")}); err != nil {
+		t.Fatal(err)
+	}
+	if ann.count() != 1 || ann.withdraws != 0 {
+		t.Fatalf("hidden prefix withdrew the route: routes=%d withdraws=%d", ann.count(), ann.withdraws)
+	}
+	if err := c.Sync(ctx, []policy.Improvement{imp("198.51.100.0/24", "b")}); err != nil {
+		t.Fatal(err)
+	}
+	if ann.count() != 1 || ann.withdraws != 0 {
+		t.Fatalf("second sync flapped: routes=%d withdraws=%d", ann.count(), ann.withdraws)
+	}
+
+	// A provider switch of a route already on the wire is still applied.
+	if err := c.Sync(ctx, []policy.Improvement{imp("198.51.100.0/24", "a")}); err != nil {
+		t.Fatal(err)
+	}
+	if ann.routes[pfx("198.51.100.0/24")].NextHop.String() != "192.0.2.1" || ann.count() != 1 {
+		t.Fatalf("switch while hidden: %+v count=%d", ann.routes[pfx("198.51.100.0/24")], ann.count())
+	}
+
+	// The decision engine retired it (confirmed leave, flip-back, ttl).
+	if err := c.Sync(ctx, nil); err != nil {
+		t.Fatal(err)
+	}
+	if ann.count() != 0 {
+		t.Fatalf("retired improvement left a route: %d", ann.count())
+	}
+
+	// It cannot be announced again until a neighbor is advertising it.
+	err = c.Sync(ctx, []policy.Improvement{imp("198.51.100.0/24", "b")})
+	if err == nil || !strings.Contains(err.Error(), "not in the RIB") {
+		t.Fatalf("err = %v", err)
+	}
+	if ann.count() != 0 {
+		t.Fatal("announced a prefix that is not in the RIB")
+	}
+}
+
 func TestMoreSpecifics(t *testing.T) {
 	ctx := context.Background()
 	rib := memRIB{ready: true, has: map[netip.Prefix]bool{pfx("198.51.100.0/24"): true, pfx("2001:db8::/32"): true}}

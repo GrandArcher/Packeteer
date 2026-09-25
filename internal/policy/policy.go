@@ -25,6 +25,15 @@ const (
 	ActionCapped  = "capped"  // would improve, but max_improvements reached
 )
 
+// nativePathConfirm is how long a neighbor must keep advertising a prefix
+// after an improvement is already active before a later withdraw is treated
+// as the prefix leaving. A shorter gap is the router suppressing the native
+// path because Packeteer's route became best: iBGP does not send that route
+// back to Packeteer, and it does not send a non-best path either. Retiring
+// on that gap withdraws the improvement, the native path returns, and the
+// next round injects it again.
+const nativePathConfirm = 5 * time.Second
+
 // Config tunes decisions.
 type Config struct {
 	Mode            string        // observe, suggest, inject
@@ -48,8 +57,12 @@ type Input struct {
 	// RIBReady false while enabled means the view is stale: every
 	// improvement is retired and nothing new is decided.
 	RIBReady bool
-	// Native maps a probed prefix to the provider of its current RIB best
-	// path. A prefix missing here is not in the RIB.
+	// Native maps a probed prefix to the provider of the path a neighbor is
+	// still advertising. A prefix missing here is not in the learned RIB.
+	// An active improvement whose prefix was still advertised for
+	// nativePathConfirm, and is then missing, is retired. An improvement
+	// whose prefix disappears sooner is kept: that is the router hiding the
+	// native path because Packeteer's route won, not the prefix leaving.
 	Native map[netip.Prefix]string
 }
 
@@ -60,6 +73,13 @@ type Improvement struct {
 	Native   string       `json:"native"`   // provider the RIB used before
 	Since    time.Time    `json:"since"`
 	Reason   string       `json:"reason"`
+
+	// nativeSeen is the first decision, after this improvement already
+	// existed, that still saw the prefix in the RIB. nativeHeld is that
+	// previous decision's observation. Both stay zero until then so the
+	// sighting that created the improvement does not count.
+	nativeSeen time.Time
+	nativeHeld bool
 }
 
 // State is carried between Decide calls.
@@ -210,6 +230,32 @@ func Decide(prev State, in Input, cfg Config, scorer plugin.Scorer, now time.Tim
 		imp, active := st.Improvements[p]
 		if active {
 			d.Native, d.Current = imp.Native, imp.Provider
+			if in.RIBEnabled {
+				_, inRIB := in.Native[p]
+				switch {
+				case inRIB:
+					if imp.nativeSeen.IsZero() {
+						imp.nativeSeen = now
+					}
+					imp.nativeHeld = true
+					st.Improvements[p] = imp
+				case imp.nativeHeld && !imp.nativeSeen.IsZero() && now.Sub(imp.nativeSeen) >= nativePathConfirm:
+					// The neighbor kept sending this prefix after the
+					// improvement was active, then stopped. That is a real
+					// withdraw. Cooldown stops a mis-read from being
+					// re-injected on the next round.
+					retire(p, "prefix no longer in RIB", true)
+					d.Action, d.Reason, d.Current = ActionRetire, "prefix no longer in RIB", imp.Native
+					continue
+				default:
+					// Gone before it was confirmed, or never seen while
+					// active. The router stopped advertising the native path
+					// because our route is best. Keep the improvement.
+					imp.nativeSeen = time.Time{}
+					imp.nativeHeld = false
+					st.Improvements[p] = imp
+				}
+			}
 			cur, ok := get(imp.Provider)
 			switch {
 			case !ok:
@@ -243,7 +289,7 @@ func Decide(prev State, in Input, cfg Config, scorer plugin.Scorer, now time.Tim
 			// Move to a clearly better alternative.
 			if alt, ok := bestCandidate(cands, cfg.Excluded, imp.Native); ok && alt.Provider != imp.Provider && better(alt, cur, cfg) && !held {
 				n := Improvement{Prefix: p, Provider: alt.Provider, Native: imp.Native, Since: now,
-					Reason: reasonText(alt, cur)}
+					Reason: reasonText(alt, cur), nativeSeen: imp.nativeSeen, nativeHeld: imp.nativeHeld}
 				st.Improvements[p] = n
 				out.Changes = append(out.Changes, Change{Action: ActionSwitch, Old: imp, New: n})
 				d.Action, d.Reason, d.Current = ActionSwitch, n.Reason, n.Provider
