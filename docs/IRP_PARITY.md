@@ -25,9 +25,9 @@ Milestones:
 
 | Status | Count |
 |---|---|
-| done | 32 |
+| done | 35 |
 | in progress | 0 |
-| planned | 47 |
+| planned | 44 |
 | won't do | 3 |
 
 ## Performance optimization
@@ -63,14 +63,16 @@ The `outage` source (#16) correlates probe results inside `window` (default 2m).
 |---|---|---|---|---|---|
 | SNMP interface bandwidth collection | 3.13.9 SNMP hosts | done | v0.2 | telemetry (`snmp`) | #17 |
 | 95th percentile tracking (separate / greater-of modes, billing day) | 1.3.3, 4.15 | done | v0.2 | telemetry (`snmp`) | #17 |
-| Outbound commit control (keep providers under commit) | 1.3.3 Commit Control | planned | v0.2 | scorer (`commit`) | #18 |
-| Provider groups and load balancing in group | 4.15 group_loadbalance | planned | v0.2 | scorer | #18 |
-| Provider precedence / last-resort provider | 4.15 precedence | planned | v0.2 | scorer | #18 |
+| Outbound commit control (keep providers under commit) | 1.3.3 Commit Control | done | v0.2 | scorer (`commit`) | #18 |
+| Provider groups and load balancing in group | 4.15 group_loadbalance | done | v0.2 | scorer (`commit`) | #18 |
+| Provider precedence / last-resort provider | 4.15 precedence | done | v0.2 | scorer (`commit`) | #18 |
 | Cost optimization mode (cheapest provider meeting a performance floor) | 1.3.2 Cost optimization | planned | v0.2 | scorer (`cost`) | #19 |
 | Precedence rules performance vs cost | 1.3.2 | planned | v0.2 | scorer | #19 |
 | Global commit across POPs | 3.12 Global Commit | planned | v0.4 | core (multi-instance) | #30 |
 
-The `snmp` telemetry plugin (#17) polls `ifHCInOctets` and `ifHCOutOctets` (32-bit octet counters when the 64-bit ones are absent). The community and v3 passphrases are environment variables named in the config, not values in the file. Samples stay in memory for the open UTC billing period (`billing_day` 1–28). A restart clears them. The 95th percentile is nearest rank, ceil(0.95 × N). `separate` keeps the inbound and outbound 95ths apart. `greater` is the 95th of max(in, out) on each sample. `greater_separate` is the greater of those two 95ths. The numbers are on `/api/telemetry` and `packeteer_telemetry_*`. The plugin does not announce and does not change a decision. Commit control that spends them is #18.
+The `snmp` telemetry plugin (#17) polls `ifHCInOctets` and `ifHCOutOctets` (32-bit octet counters when the 64-bit ones are absent). The community and v3 passphrases are environment variables named in the config, not values in the file. Samples stay in memory for the open UTC billing period (`billing_day` 1–28). A restart clears them. The 95th percentile is nearest rank, ceil(0.95 × N). `separate` keeps the inbound and outbound 95ths apart. `greater` is the 95th of max(in, out) on each sample. `greater_separate` is the greater of those two 95ths. The numbers are on `/api/telemetry` and `packeteer_telemetry_*`. The plugin does not announce.
+
+The `commit` scorer (#18) is off unless `scorer.type` is `commit`. Its performance score matches `weighted`. When telemetry has a fresh billable 95th (`usage_mbps`, or the outbound 95th when the mode is `separate`) and a source reports per-prefix volume (the flow window, or `mbps` on a static target), it moves prefixes off a provider that is over `commit_mbps` onto one with room for that volume. A move that would increase loss is refused unless `loss_override` is set, and Decide refuses that move even if another planner emits it. A move onto the native provider is not a steer. An active commit steer whose loss exceeds the native path by `min_loss_delta_pct` is withdrawn at once and waits out `hold_time` before it can return; a smaller gap stays. `cc_disable` leaves a provider out of these moves. `balance` `equal` or `proportional` balances providers that share `group`; `off` only relieves over-commit. `precedence` (lower is preferred, omitted means 100) orders relieve destinations ahead of group membership, and the highest precedence is used only when every lower one lacks room. Each improvement is tagged `performance` or `commit` and counts toward `max_improvements`. Equal relief breaks by prefix. A new performance move displaces the smallest commit steer when the cap is full, and that prefix takes a cooldown. Performance volume is passed to the planner as locked so it is not commit-steered as well. The prefix must be in the learned RIB. Volumes are read only when the scorer plans. Switching the scorer back to `weighted` and restarting withdraws commit improvements. Observe stays the default. The FRR lab's commit job announces a commit-cause route, withdraws it when the usage file drops under commit, and checks SIGTERM and SIGKILL.
 
 ## Inbound
 

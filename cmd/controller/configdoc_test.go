@@ -14,12 +14,14 @@ import (
 	"github.com/GrandArcher/Packeteer/internal/plugins/prober/icmp"
 	"github.com/GrandArcher/Packeteer/internal/plugins/prober/tcp"
 	"github.com/GrandArcher/Packeteer/internal/plugins/prober/udp"
+	"github.com/GrandArcher/Packeteer/internal/plugins/scorer/commit"
 	"github.com/GrandArcher/Packeteer/internal/plugins/scorer/weighted"
 	"github.com/GrandArcher/Packeteer/internal/plugins/source/flow"
 	"github.com/GrandArcher/Packeteer/internal/plugins/source/outage"
 	"github.com/GrandArcher/Packeteer/internal/plugins/source/static"
 	"github.com/GrandArcher/Packeteer/internal/plugins/source/traceroute"
 	"github.com/GrandArcher/Packeteer/internal/plugins/source/vip"
+	telemetryfixed "github.com/GrandArcher/Packeteer/internal/plugins/telemetry/fixed"
 	"github.com/GrandArcher/Packeteer/internal/plugins/telemetry/snmp"
 )
 
@@ -41,12 +43,16 @@ func TestConfigDocCoversStructs(t *testing.T) {
 		fixed.Config{},
 		fixed.PathSpec{},
 		static.Config{},
+		static.Target{},
 		flow.Config{},
 		traceroute.Config{},
 		outage.Config{},
 		vip.Config{},
 		snmp.Config{},
+		telemetryfixed.Config{},
+		telemetryfixed.Provider{},
 		weighted.Config{},
+		commit.Config{},
 		webhook.Config{},
 		exec.Config{},
 		gobgp.Config{},

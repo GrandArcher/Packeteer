@@ -66,6 +66,9 @@ A candidate wins when its score is lower and either loss improves by at least `m
 | `source_ip` | yes | Source address of probes. Unique across providers. Must be configured on the host. Same address family as `next_hop`. |
 | `next_hop` | yes | BGP next hop used if this provider is selected. Also how a learned route is matched to a provider. |
 | `exclude` | no | `true`: still probe, never select for an improvement. |
+| `group` | no | Load-balancing group. Empty means the provider is not in a group. Letters, digits, `_`, `.`, `-`, at most 64 characters, starting with a letter or digit. |
+| `precedence` | no | Commit-control preference. Lower is preferred. `0` or omitted means 100. 0–10000. The highest precedence among providers that can take commit traffic is the last resort. |
+| `cc_disable` | no | `true`: leave this provider out of commit control in both directions. Performance improvements can still select it. |
 
 ### `allowlist`
 
@@ -235,6 +238,7 @@ Each target:
 | `prefix` | Required CIDR, no host bits. Unique in the list. |
 | `host` | Optional address inside `prefix`. Default is the first address of the prefix. |
 | `weight` | Optional, not negative. |
+| `mbps` | Optional, 0–100000000. Declared traffic in decimal megabits per second. The `commit` scorer reads it when this source is configured. Zero omits the prefix. |
 
 ### Source `traceroute`
 
@@ -303,7 +307,7 @@ Off unless this source is listed. NetFlow v5, NetFlow v9, IPFIX, and sFlow v5. R
 | `aggregate_v6` | 48 | 1–128. |
 | `exclude` | none | CIDRs to ignore, no host bits, no duplicates. |
 
-With `--network host`, `listen` binds host UDP ports. Do not publish them. Each time bucket keeps at most 20000 prefixes.
+With `--network host`, `listen` binds host UDP ports. Do not publish them. Each time bucket keeps at most 20000 prefixes. The commit scorer reads every prefix in the window as a rate (bytes × 8 / window, decimal megabits per second), including prefixes `top_n` or `min_bytes` did not offer as probe targets.
 
 ### Scorer `weighted`
 
@@ -316,6 +320,31 @@ With `--network host`, `listen` binds host UDP ports. Do not publish them. Each 
 | `jitter_weight` | 0.5 | Not negative. |
 
 At least one weight must be positive. Omit the block to keep the defaults.
+
+### Scorer `commit`
+
+Optional. Same performance score as `weighted`, plus commit control and provider-group balancing. Select it with `scorer.type: commit`. The default scorer stays `weighted`, which does not move traffic for commit. Switching back to `weighted` withdraws improvements whose cause is `commit`.
+
+The billable figure comes from telemetry. `greater` and `greater_separate` use `usage_mbps`. `separate` uses the outbound 95th, because this steers traffic the edge sends. A row older than `max_age`, or a row with no samples, is ignored. A zero timestamp is not aged out. Prefix volume comes from a source that implements volume reporting (the `flow` source: bytes over its window, as decimal megabits per second). A prefix with no volume is not moved for commit. The prefix must still be in the learned RIB. A commit move does not replace a performance move.
+
+A move onto a path with higher loss is refused unless `loss_override` is true. Decide enforces that itself: a planner that does not implement the loss override is treated as refusing the move, and a move onto the native provider is not a steer. An active commit steer is withdrawn when the steered path's loss exceeds the native path by `thresholds.min_loss_delta_pct` and the score is worse. A smaller gap is probe noise and stays. That withdraw starts a `hold_time` cooldown, so the next clean sample cannot announce the same steer again. Latency alone does not withdraw a commit steer.
+
+`cc_disable` providers are neither sources nor destinations of these moves. `balance: off` only relieves a provider whose billable figure is over its commit. `equal` shares a group's traffic evenly. `proportional` shares it in proportion to each member's commit. Balance stays inside the group and does not push a provider over its commit. When relieving over-commit, `precedence` (lower is preferred) orders destinations ahead of spare capacity. Sharing a group does not outrank a better precedence. The highest `precedence` receives traffic only when every lower precedence lacks room for that prefix.
+
+A prefix already on a performance steer, and a performance move waiting on the cap this round, are passed to the planner as locked: that volume is taken off the native provider so commit control does not move the same traffic as well. Both causes count toward `max_improvements`. When the cap binds, the largest performance gain wins, then the largest commit relief. Equal relief breaks by prefix. A new performance move displaces the commit steer with the smallest volume if every slot is taken. That prefix takes a `hold_time` cooldown. Volumes and telemetry are read on the decision loop only when the scorer implements planning, so `weighted` does not walk the flow table.
+
+| Key | Default | Bounds |
+|---|---|---|
+| `loss_weight` | 100 | Not negative. Same meaning as `weighted`. |
+| `rtt_weight` | 1 | Not negative. |
+| `jitter_weight` | 0.5 | Not negative. |
+| `loss_override` | false | `true` allows a commit move onto higher loss. |
+| `balance` | `off` | `off`, `equal`, or `proportional`. |
+| `balance_slack` | `0.10` | 0–1. Fractional imbalance that does not move traffic. `0` is explicit. |
+| `max_age` | `15m` | Not negative. `0` uses the default. Telemetry older than this is ignored. |
+| `min_mbps` | 0 | Not negative. Prefixes below this volume are not moved for commit. |
+
+At least one weight must be positive.
 
 ### Notifier `webhook`
 
@@ -336,9 +365,28 @@ At least one weight must be positive. Omit the block to keep the defaults.
 | `env` | none | Passed to the process, plus `PATH` and `PACKETEER_PLUGIN_KIND`. Values expand `${VAR}`. Names cannot contain `=` or NUL. |
 | `config` | none | Forwarded verbatim in every JSON request. |
 
+### Telemetry `fixed`
+
+Labs and tests only. Reports the usage in the config or the file. It does not poll, and it does not announce. A real edge uses `snmp`.
+
+| Key | Meaning |
+|---|---|
+| `file` | Re-read on every snapshot. Same `providers` list as below, without `file`. Larger than 1 MiB is an error. |
+| `providers` | Rows used when `file` is empty. At least one of `file` or `providers` is required. |
+
+Each provider:
+
+| Key | Meaning |
+|---|---|
+| `name` | Required. Must match a top-level provider `name`. Unique in the list. |
+| `commit_mbps` | Required. Greater than 0, at most 100000000. |
+| `usage_mbps` | Required. 0–100000000. Reported as the single billable figure (`greater_separate`). |
+
+The row's timestamp is the time of the read, so `max_age` on the commit scorer does not age it out. A file that fails to parse yields no rows for that decision.
+
 ### Telemetry `snmp`
 
-Off unless a `telemetry` entry lists `type: snmp`. It polls IF-MIB counters and keeps 95th-percentile usage for the open billing period. It does not announce and it does not change decisions. Samples live in memory. A restart clears the window. Commit control that acts on these numbers is a later change.
+Off unless a `telemetry` entry lists `type: snmp`. It polls IF-MIB counters and keeps 95th-percentile usage for the open billing period. It does not announce. The `commit` scorer reads the snapshot when that scorer is selected; the collector itself does not change a decision. A failed poll does not withdraw performance improvements. Samples live in memory. A restart clears the window.
 
 The billing period is `[start, end)` in UTC, opening at 00:00 UTC on `billing_day`. `billing_day` is 1–28 so the day exists in every month.
 
@@ -391,7 +439,7 @@ Each provider:
 | `name` | Required. Must match a top-level provider `name`. Unique in this plugin. |
 | `host` | Required. A `hosts[].name`. |
 | `interface` | Required. `ifName`, `ifDescr`, or a decimal `ifIndex`. |
-| `commit_mbps` | Required. Greater than 0, at most 100000000. Reported, not enforced. |
+| `commit_mbps` | Required. Greater than 0, at most 100000000. The `commit` scorer compares the billable 95th with this. The collector does not enforce it. |
 | `billing_day` | Required. 1–28. UTC. |
 | `percentile` | Required. `separate`, `greater`, or `greater_separate`. |
 

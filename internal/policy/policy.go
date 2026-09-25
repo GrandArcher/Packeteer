@@ -45,6 +45,18 @@ type Config struct {
 	MaxResultAge    time.Duration // probe results older than this are stale
 	Excluded        map[string]bool
 	Allowlist       []netip.Prefix // inject mode: only these (or more-specifics of them)
+	// Providers carries group, precedence, and cc_disable. Empty means
+	// commit control has no provider policy (the weighted scorer ignores it).
+	Providers []ProviderPolicy
+}
+
+// ProviderPolicy is the commit-control configuration of one provider.
+// Precedence 0 means the default (100); lower is preferred.
+type ProviderPolicy struct {
+	Name       string
+	Group      string
+	Precedence int
+	CCDisable  bool
 }
 
 // Input is everything Decide looks at.
@@ -64,6 +76,12 @@ type Input struct {
 	// whose prefix disappears sooner is kept: that is the router hiding the
 	// native path because Packeteer's route won, not the prefix leaving.
 	Native map[netip.Prefix]string
+	// Usage is the latest telemetry snapshot. Commit control reads it only
+	// when the scorer implements plugin.Planner.
+	Usage []plugin.Usage
+	// VolumeMbps is observed traffic per prefix, decimal megabits per second.
+	// A missing or zero entry is not moved for commit or balance.
+	VolumeMbps map[netip.Prefix]float64
 }
 
 // Improvement is an active (or, outside inject mode, recommended) steer.
@@ -73,6 +91,9 @@ type Improvement struct {
 	Native   string       `json:"native"`   // provider the RIB used before
 	Since    time.Time    `json:"since"`
 	Reason   string       `json:"reason"`
+	// Cause is performance or commit. Empty means performance (state from
+	// before commit control, or a test that did not set it).
+	Cause string `json:"cause,omitempty"`
 
 	// nativeSeen is the first decision, after this improvement already
 	// existed, that still saw the prefix in the RIB. nativeHeld is that
@@ -124,6 +145,7 @@ type Decision struct {
 	Current     string       `json:"current,omitempty"` // native, or the improvement's provider
 	Recommended string       `json:"recommended,omitempty"`
 	Action      string       `json:"action"`
+	Cause       string       `json:"cause,omitempty"`
 	Reason      string       `json:"reason"`
 	Candidates  []Candidate  `json:"candidates"`
 }
@@ -133,6 +155,15 @@ type Change struct {
 	Action string      `json:"action"` // improve, switch, retire
 	Old    Improvement `json:"old,omitempty"`
 	New    Improvement `json:"new,omitempty"`
+}
+
+// pending is a new improvement waiting on the max_improvements cap.
+// Performance entries are admitted before commit entries.
+type pending struct {
+	d      *Decision
+	imp    Improvement
+	gain   float64
+	commit bool
 }
 
 // Output of one evaluation.
@@ -196,12 +227,10 @@ func Decide(prev State, in Input, cfg Config, scorer plugin.Scorer, now time.Tim
 		}
 	}
 
-	type pending struct {
-		d    *Decision
-		imp  Improvement
-		gain float64
-	}
 	var wants []pending
+	commitOK := map[netip.Prefix]bool{}
+	decIdx := map[netip.Prefix]*Decision{}
+	var holds []commitHold
 	prefixes := make([]netip.Prefix, 0, len(byPrefix))
 	for p := range byPrefix {
 		prefixes = append(prefixes, p)
@@ -214,6 +243,7 @@ func Decide(prev State, in Input, cfg Config, scorer plugin.Scorer, now time.Tim
 		sort.Slice(cands, func(a, b int) bool { return cands[a].Provider < cands[b].Provider })
 		d := &decisions[i]
 		*d = Decision{Prefix: p, Candidates: cands, Action: ActionNone}
+		decIdx[p] = d
 		get := func(name string) (Candidate, bool) {
 			for _, c := range cands {
 				if c.Provider == name && c.Usable {
@@ -275,6 +305,15 @@ func Decide(prev State, in Input, cfg Config, scorer plugin.Scorer, now time.Tim
 				d.Action, d.Reason, d.Current = ActionRetire, "ttl expired", imp.Native
 				continue
 			}
+			if imp.Cause == plugin.CauseCommit {
+				if ccDisabled(cfg, imp.Provider) {
+					retire(p, "provider excluded from commit control", false)
+					d.Action, d.Reason, d.Current, d.Cause = ActionRetire, "provider excluded from commit control", imp.Native, plugin.CauseCommit
+					continue
+				}
+				holds = append(holds, commitHold{imp: imp, d: d, held: now.Sub(imp.Since) < cfg.HoldTime})
+				continue
+			}
 			held := now.Sub(imp.Since) < cfg.HoldTime
 			// Flip back when the native path is now clearly better.
 			if nat, ok := get(imp.Native); ok && better(nat, cur, cfg) {
@@ -289,10 +328,10 @@ func Decide(prev State, in Input, cfg Config, scorer plugin.Scorer, now time.Tim
 			// Move to a clearly better alternative.
 			if alt, ok := bestCandidate(cands, cfg.Excluded, imp.Native); ok && alt.Provider != imp.Provider && better(alt, cur, cfg) && !held {
 				n := Improvement{Prefix: p, Provider: alt.Provider, Native: imp.Native, Since: now,
-					Reason: reasonText(alt, cur), nativeSeen: imp.nativeSeen, nativeHeld: imp.nativeHeld}
+					Reason: reasonText(alt, cur), Cause: plugin.CausePerformance, nativeSeen: imp.nativeSeen, nativeHeld: imp.nativeHeld}
 				st.Improvements[p] = n
 				out.Changes = append(out.Changes, Change{Action: ActionSwitch, Old: imp, New: n})
-				d.Action, d.Reason, d.Current = ActionSwitch, n.Reason, n.Provider
+				d.Action, d.Reason, d.Current, d.Cause = ActionSwitch, n.Reason, n.Provider, plugin.CausePerformance
 				continue
 			}
 			d.Action, d.Reason = ActionKeep, "improvement still valid"
@@ -323,6 +362,7 @@ func Decide(prev State, in Input, cfg Config, scorer plugin.Scorer, now time.Tim
 		alt, ok := bestCandidate(cands, cfg.Excluded, d.Native)
 		if !ok || !better(alt, natC, cfg) {
 			d.Reason = "native path is best (within thresholds)"
+			commitOK[p] = true
 			continue
 		}
 		if until, cool := st.Cooldown[p]; cool {
@@ -334,14 +374,33 @@ func Decide(prev State, in Input, cfg Config, scorer plugin.Scorer, now time.Tim
 			continue
 		}
 		wants = append(wants, pending{d: d, gain: natC.Score - alt.Score,
-			imp: Improvement{Prefix: p, Provider: alt.Provider, Native: d.Native, Since: now, Reason: reasonText(alt, natC)}})
+			imp: Improvement{Prefix: p, Provider: alt.Provider, Native: d.Native, Since: now, Reason: reasonText(alt, natC), Cause: plugin.CausePerformance}})
 	}
 
-	// Biggest gains first when the cap binds.
-	sort.SliceStable(wants, func(a, b int) bool { return wants[a].gain > wants[b].gain })
+	integrateCommit(st, &out, decIdx, holds, commitOK, byPrefix, &wants, cfg, scorer, in, now, retire)
+
+	// Performance moves take the cap first. A commit steer already in the
+	// table gives up its slot to a new performance move. Commit moves then
+	// take what is left, largest relief first. Equal relief breaks by
+	// prefix so the same inputs always pick the same prefix.
+	sort.Slice(wants, func(a, b int) bool {
+		if wants[a].commit != wants[b].commit {
+			return !wants[a].commit
+		}
+		if wants[a].gain != wants[b].gain {
+			return wants[a].gain > wants[b].gain
+		}
+		return lessPrefix(wants[a].imp.Prefix, wants[b].imp.Prefix)
+	})
 	for _, w := range wants {
-		if len(st.Improvements) >= cfg.MaxImprovements {
-			w.d.Action, w.d.Reason, w.d.Recommended = ActionCapped, fmt.Sprintf("max_improvements (%d) reached", cfg.MaxImprovements), w.imp.Provider
+		w.d.Cause = w.imp.Cause
+		for len(st.Improvements) >= cfg.MaxImprovements {
+			if w.commit || cfg.MaxImprovements <= 0 || !displaceCommit(st, decIdx, in.VolumeMbps, retire) {
+				w.d.Action, w.d.Reason, w.d.Recommended = ActionCapped, fmt.Sprintf("max_improvements (%d) reached", cfg.MaxImprovements), w.imp.Provider
+				break
+			}
+		}
+		if w.d.Action == ActionCapped {
 			continue
 		}
 		st.Improvements[w.imp.Prefix] = w.imp
@@ -409,12 +468,44 @@ func allowed(list []netip.Prefix, p netip.Prefix) bool {
 }
 
 func sortPrefixes(ps []netip.Prefix) {
-	sort.Slice(ps, func(i, j int) bool {
-		if c := ps[i].Addr().Compare(ps[j].Addr()); c != 0 {
-			return c < 0
+	sort.Slice(ps, func(i, j int) bool { return lessPrefix(ps[i], ps[j]) })
+}
+
+func lessPrefix(a, b netip.Prefix) bool {
+	if c := a.Addr().Compare(b.Addr()); c != 0 {
+		return c < 0
+	}
+	return a.Bits() < b.Bits()
+}
+
+// displaceCommit retires one commit improvement so a performance move can
+// use the slot. The smallest volume goes first (it relieves the least);
+// equal volume breaks by prefix. The prefix takes a hold_time cooldown so
+// the commit steer cannot return on the next round and take the slot back.
+func displaceCommit(st State, decIdx map[netip.Prefix]*Decision, volume map[netip.Prefix]float64, retire func(netip.Prefix, string, bool)) bool {
+	var pick netip.Prefix
+	var pickVol float64
+	found := false
+	for p, imp := range st.Improvements {
+		if imp.Cause != plugin.CauseCommit {
+			continue
 		}
-		return ps[i].Bits() < ps[j].Bits()
-	})
+		vol := 0.0
+		if volume != nil {
+			vol = volume[p]
+		}
+		if !found || vol < pickVol || (vol == pickVol && lessPrefix(p, pick)) {
+			pick, pickVol, found = p, vol, true
+		}
+	}
+	if !found {
+		return false
+	}
+	imp := st.Improvements[pick]
+	const reason = "displaced by a performance improvement"
+	retire(pick, reason, true)
+	setDecision(decIdx[pick], ActionRetire, reason, imp.Native, "", plugin.CauseCommit)
+	return true
 }
 
 func sortedKeys(m map[netip.Prefix]Improvement) []netip.Prefix {

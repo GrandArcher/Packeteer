@@ -282,7 +282,7 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 	wirePrefixLookup(plugins, view)
 	wireLearnedRoutes(plugins, view)
 	wireOutage(plugins, engine, view, log)
-	col.SetTelemetry(func() []plugin.Usage { return collectTelemetry(plugins) })
+	col.SetTelemetry(func() []plugin.Usage { return collectTelemetry(context.Background(), plugins) })
 	col.Attach(engine, decider, view)
 	if err := plugins.Start(ctx); err != nil {
 		log.Error("refusing to start", "err", err)
@@ -304,7 +304,7 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 		// cancellation) must still withdraw once measurements exceed
 		// MaxResultAge.
 		decideLoop(loopCtx, cfg.Probe.Interval, kick, func(now time.Time) {
-			runDecision(now, decider, decisionInput(engine, view), ctl, log, cfg.Mode)
+			runDecision(now, decider, decisionInput(loopCtx, engine, view, plugins), ctl, log, cfg.Mode)
 		})
 	}()
 
@@ -685,13 +685,19 @@ func checkTelemetryProviders(plugins *pluginhost.Set) error {
 	return nil
 }
 
-func collectTelemetry(plugins *pluginhost.Set) []plugin.Usage {
+func collectTelemetry(ctx context.Context, plugins *pluginhost.Set) []plugin.Usage {
 	if plugins == nil {
 		return nil
 	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	var out []plugin.Usage
 	for _, t := range plugins.Telemetry {
-		rows, err := t.Plugin.Snapshot(context.Background())
+		if ctx.Err() != nil {
+			return out
+		}
+		rows, err := t.Plugin.Snapshot(ctx)
 		if err != nil {
 			continue
 		}
@@ -842,6 +848,9 @@ func newDecider(cfg *config.Config, plugins *pluginhost.Set) (*policy.Engine, er
 		if p.Exclude {
 			pc.Excluded[p.Name] = true
 		}
+		pc.Providers = append(pc.Providers, policy.ProviderPolicy{
+			Name: p.Name, Group: p.Group, Precedence: p.Precedence, CCDisable: p.CCDisable,
+		})
 	}
 	for _, s := range cfg.Allowlist.Prefixes {
 		p, err := netip.ParsePrefix(s)
@@ -853,8 +862,10 @@ func newDecider(cfg *config.Config, plugins *pluginhost.Set) (*policy.Engine, er
 	return policy.NewEngine(pc, plugins.Scorer.Plugin), nil
 }
 
-// decisionInput snapshots probe results, provider health and the RIB view.
-func decisionInput(engine *probe.Engine, view *rib.View) policy.Input {
+// decisionInput snapshots probe results, provider health, the RIB view,
+// and, when the scorer plans commit moves, telemetry and flow volumes.
+// A weighted scorer does not implement planning, so those reads are skipped.
+func decisionInput(ctx context.Context, engine *probe.Engine, view *rib.View, plugins *pluginhost.Set) policy.Input {
 	in := policy.Input{Results: engine.Results(), ProviderUp: map[string]bool{}, Native: map[netip.Prefix]string{}}
 	for _, p := range engine.Providers() {
 		in.ProviderUp[p.Name] = p.Up
@@ -867,16 +878,79 @@ func decisionInput(engine *probe.Engine, view *rib.View) policy.Input {
 			}
 		}
 	}
+	fillPlannerInputs(ctx, &in, plugins)
 	return in
+}
+
+// scorerPlans reports whether commit control is on for this process.
+func scorerPlans(plugins *pluginhost.Set) bool {
+	if plugins == nil || plugins.Scorer == nil || plugins.Scorer.Plugin == nil {
+		return false
+	}
+	_, ok := plugins.Scorer.Plugin.(plugin.Planner)
+	return ok
+}
+
+// fillPlannerInputs reads telemetry and per-prefix volume only for a scorer
+// that implements plugin.Planner. The weighted scorer does not, and summing
+// the flow window on every decision is wasted work. ctx is the decision
+// loop's context, so shutdown cancels the read.
+func fillPlannerInputs(ctx context.Context, in *policy.Input, plugins *pluginhost.Set) {
+	if in == nil || !scorerPlans(plugins) {
+		return
+	}
+	in.Usage = collectTelemetry(ctx, plugins)
+	in.VolumeMbps = collectVolumes(ctx, plugins)
+}
+
+// collectVolumes reads optional volume reports from target sources. The
+// largest rate wins when two sources name one prefix. A source that does
+// not implement VolumeSource is skipped. This does not announce.
+func collectVolumes(ctx context.Context, plugins *pluginhost.Set) map[netip.Prefix]float64 {
+	if plugins == nil {
+		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	var out map[netip.Prefix]float64
+	for _, src := range plugins.Sources {
+		if ctx.Err() != nil {
+			return out
+		}
+		vs, ok := src.Plugin.(plugin.VolumeSource)
+		if !ok {
+			continue
+		}
+		rows, err := vs.Volumes(ctx)
+		if err != nil {
+			continue
+		}
+		for _, row := range rows {
+			mbps := row.Mbps()
+			if mbps <= 0 || !row.Prefix.IsValid() {
+				continue
+			}
+			if out == nil {
+				out = map[netip.Prefix]float64{}
+			}
+			if mbps > out[row.Prefix] {
+				out[row.Prefix] = mbps
+			}
+		}
+	}
+	return out
 }
 
 func logChanges(log *slog.Logger, mode string, changes []policy.Change) {
 	for _, c := range changes {
 		switch c.Action {
 		case policy.ActionRetire:
-			log.Info("improvement retired", "mode", mode, "prefix", c.Old.Prefix, "provider", c.Old.Provider, "native", c.Old.Native, "reason", c.Old.Reason)
+			log.Info("improvement retired", "mode", mode, "prefix", c.Old.Prefix, "provider", c.Old.Provider, "native", c.Old.Native, "cause", c.Old.Cause, "reason", c.Old.Reason)
 		default:
-			log.Info("improvement "+c.Action, "mode", mode, "prefix", c.New.Prefix, "provider", c.New.Provider, "native", c.New.Native, "reason", c.New.Reason)
+			log.Info("improvement "+c.Action, "mode", mode, "prefix", c.New.Prefix, "provider", c.New.Provider, "native", c.New.Native, "cause", c.New.Cause, "reason", c.New.Reason)
 		}
 	}
 }

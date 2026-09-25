@@ -38,6 +38,29 @@ func TestTargets(t *testing.T) {
 	}
 }
 
+func TestVolumes(t *testing.T) {
+	s, err := build(`targets:
+  - {prefix: 198.51.100.0/24, host: 198.51.100.1, mbps: 80}
+  - {prefix: 203.0.113.0/24}
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	vs, ok := s.(plugin.VolumeSource)
+	if !ok {
+		t.Fatal("static source does not report volume")
+	}
+	rows, err := vs.Volumes(context.Background())
+	if err != nil || len(rows) != 1 || rows[0].Mbps() != 80 {
+		t.Fatalf("rows %+v err %v", rows, err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := vs.Volumes(ctx); err == nil {
+		t.Fatal("cancelled context returned rows")
+	}
+}
+
 func TestConfigErrors(t *testing.T) {
 	tests := map[string]string{
 		"targets:\n  - {prefix: 198.51.100.0/33}":                                "not a valid CIDR",
@@ -45,6 +68,7 @@ func TestConfigErrors(t *testing.T) {
 		"targets:\n  - {prefix: 198.51.100.0/24}\n  - {prefix: 198.51.100.0/24}": "duplicate prefix",
 		"targets:\n  - {prefix: 198.51.100.0/24, host: 203.0.113.1}":             "must be an address inside",
 		"targets:\n  - {prefix: 198.51.100.0/24, weight: -1}":                    "weight must not be negative",
+		"targets:\n  - {prefix: 198.51.100.0/24, mbps: -1}":                      "mbps must be between",
 		"prefixes: []": "field prefixes not found",
 	}
 	for y, want := range tests {

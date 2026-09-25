@@ -169,6 +169,17 @@ type Provider struct {
 	NextHop  string `yaml:"next_hop"`
 	// Exclude keeps the provider measured but never chosen for an improvement.
 	Exclude bool `yaml:"exclude"`
+	// Group is an optional load-balancing group. Empty means the provider
+	// is not in a group. Commit control balances only inside a group, and
+	// only when the commit scorer's balance mode is not off.
+	Group string `yaml:"group"`
+	// Precedence is the commit-control preference. Lower is preferred.
+	// 0 means the default of 100. The highest precedence is a last resort:
+	// it receives commit traffic only when every lower precedence lacks room.
+	Precedence int `yaml:"precedence"`
+	// CCDisable leaves this provider out of commit control. Performance
+	// improvements can still select it unless Exclude is set.
+	CCDisable bool `yaml:"cc_disable"`
 }
 
 // Allowlist restricts which prefixes may ever be injected.
@@ -369,6 +380,12 @@ func (c *Config) Validate() error {
 		} else if src.IsValid() && src.Is4() != nh.Is4() {
 			add("%s: source_ip and next_hop must be the same address family", label)
 		}
+		if !validProviderGroup(p.Group) {
+			add("%s: group %q must be 1-64 characters of letters, digits, '_', '.' or '-', starting with a letter or digit", label, p.Group)
+		}
+		if p.Precedence < 0 || p.Precedence > 10000 {
+			add("%s: precedence %d must be between 0 and 10000 (0 means the default 100)", label, p.Precedence)
+		}
 	}
 
 	seen := map[netip.Prefix]bool{}
@@ -526,6 +543,9 @@ func (c *Config) Validate() error {
 func (c *Config) normalize() {
 	c.Log.Level = strings.ToLower(strings.TrimSpace(c.Log.Level))
 	c.Log.Format = strings.ToLower(strings.TrimSpace(c.Log.Format))
+	for i := range c.Providers {
+		c.Providers[i].Group = strings.TrimSpace(c.Providers[i].Group)
+	}
 	if c.HTTP.Listen != nil {
 		s := strings.TrimSpace(*c.HTTP.Listen)
 		c.HTTP.Listen = &s
@@ -547,6 +567,26 @@ func validateListen(addr string) error {
 		return fmt.Errorf("%q port must be between 0 and 65535", addr)
 	}
 	return nil
+}
+
+// validProviderGroup accepts an empty group or a short token. Empty means
+// the provider is not a member of a load-balancing group.
+func validProviderGroup(s string) bool {
+	if s == "" {
+		return true
+	}
+	if len(s) > 64 {
+		return false
+	}
+	for i, r := range s {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+		case i > 0 && (r == '_' || r == '.' || r == '-'):
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // validateCommunity checks a standard RFC 1997 community in "asn:value" form.

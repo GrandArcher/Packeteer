@@ -122,6 +122,32 @@ func (s *slide) prune(now time.Time) {
 }
 
 func (s *slide) top(now time.Time, n int, minBytes uint64) []rank {
+	rows := s.aggregate(now)
+	out := make([]rank, 0, len(rows))
+	for _, r := range rows {
+		if r.bytes == 0 || r.bytes < minBytes {
+			continue
+		}
+		out = append(out, r)
+	}
+	if n < len(out) {
+		out = out[:n]
+	}
+	return out
+}
+
+// totals returns every prefix in the window, largest first, capped at max.
+// Unlike top, it does not apply min_bytes: commit control needs the volume
+// of a prefix another source is already probing.
+func (s *slide) totals(now time.Time, max int) []rank {
+	rows := s.aggregate(now)
+	if max > 0 && len(rows) > max {
+		rows = rows[:max]
+	}
+	return rows
+}
+
+func (s *slide) aggregate(now time.Time) []rank {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.prune(now)
@@ -142,7 +168,7 @@ func (s *slide) top(now time.Time, n int, minBytes uint64) []rank {
 	}
 	out := make([]rank, 0, len(acc))
 	for p, a := range acc {
-		if a.bytes == 0 || a.bytes < minBytes {
+		if a.bytes == 0 {
 			continue
 		}
 		out = append(out, rank{prefix: p, host: a.host, bytes: a.bytes})
@@ -153,8 +179,5 @@ func (s *slide) top(now time.Time, n int, minBytes uint64) []rank {
 		}
 		return out[i].prefix.String() < out[j].prefix.String()
 	})
-	if n < len(out) {
-		out = out[:n]
-	}
 	return out
 }

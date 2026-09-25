@@ -1,0 +1,53 @@
+# Lab only. Documentation prefix, private ASN. Commit control is what
+# announces: the fixed prober keeps both providers inside the latency
+# threshold, and lab/e2e-commit.sh rewrites the usage file to withdraw.
+mode: inject
+asn: 64512
+router_id: 192.0.2.10
+packeteer_community: "64512:666"
+local_pref: 250
+max_improvements: 50
+hold_time: 5s
+improvement_ttl: 1h
+thresholds:
+  min_loss_delta_pct: 1
+  min_rtt_delta_ms: 15
+providers:
+  - name: transit-a
+    source_ip: 192.0.2.11
+    next_hop: 192.0.2.1
+  - name: transit-b
+    source_ip: 192.0.2.12
+    next_hop: 192.0.2.2
+allowlist:
+  prefixes:
+    - 198.51.100.0/24
+probe:
+  interval: 2s
+  timeout: 500ms
+  packets: 4
+  workers: 2
+  rate_limit_pps: 50
+bgp:
+  neighbors:
+    - address: 192.0.2.254
+      description: edge
+sources:
+  - type: static
+    config:
+      targets:
+        - prefix: 198.51.100.0/24
+          host: 198.51.100.1
+          mbps: 80
+probers:
+  - type: fixed
+    config:
+      file: /etc/packeteer/probes/state.yaml
+scorer:
+  type: commit
+telemetry:
+  - type: fixed
+    config:
+      file: /etc/packeteer/probes/usage.yaml
+announcer:
+  type: gobgp

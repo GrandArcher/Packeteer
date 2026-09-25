@@ -7,6 +7,7 @@ set -euo pipefail
 
 root=$(cd "$(dirname "$0")/.." && pwd)
 cd "$root"
+export PACKETEER_LAB_CONFIG="$root/lab/packeteer.yaml"
 compose=(docker compose -f lab/docker-compose.yml)
 
 lab_dir=$(mktemp -d)

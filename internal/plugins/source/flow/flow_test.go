@@ -101,6 +101,19 @@ exclude: ["192.0.2.0/24"]
 	if len(ts) != 1 || ts[0].Prefix.String() != "198.51.100.0/24" || ts[0].Weight != 1500 || ts[0].Host.String() != "198.51.100.10" {
 		t.Fatalf("targets = %+v", ts)
 	}
+	vols, err := s.Volumes(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	gotV := map[string]float64{}
+	for _, v := range vols {
+		gotV[v.Prefix.String()] = v.Mbps()
+	}
+	// 1500 bytes over the 30s window, and the 800-byte prefix that top_n
+	// and min_bytes kept out of the probe list. 1500*8/30/1e6 = 0.0004.
+	if len(gotV) != 2 || gotV["198.51.100.0/24"] != 1500*8/30.0/1e6 || gotV["203.0.113.0/24"] != 800*8/30.0/1e6 {
+		t.Fatalf("volumes = %v", gotV)
+	}
 	s.now = func() time.Time { return t0.Add(31 * time.Second) }
 	if got := targetsOf(t, s); len(got) != 0 {
 		t.Fatalf("window did not expire: %+v", got)

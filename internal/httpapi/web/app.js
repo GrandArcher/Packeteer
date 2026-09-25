@@ -75,6 +75,8 @@ function renderProviders(data) {
     var name = el("td");
     name.appendChild(document.createTextNode(p.name || ""));
     if (p.exclude) name.appendChild(el("span", "badge", "excluded"));
+    if (p.group) name.appendChild(el("span", "badge", p.group));
+    if (p.cc_disable) name.appendChild(el("span", "badge", "commit off"));
     tr.appendChild(name);
     tr.appendChild(el("td", "mono", p.source || "—"));
     tr.appendChild(el("td", "mono", p.next_hop || "—"));
@@ -187,7 +189,7 @@ function renderImprovements(data) {
   }
   var table = el("table");
   var hr = el("tr");
-  ["Prefix", "Native exit", "Steered to", "Since", "Reason"].forEach(function (h) {
+  ["Prefix", "Native exit", "Steered to", "Cause", "Since", "Reason"].forEach(function (h) {
     hr.appendChild(el("th", "", h));
   });
   var thead = el("thead");
@@ -199,6 +201,7 @@ function renderImprovements(data) {
     tr.appendChild(el("td", "mono", im.prefix));
     tr.appendChild(el("td", "", im.native || "—"));
     tr.appendChild(el("td", "", im.provider || "—"));
+    tr.appendChild(el("td", "", im.cause || "—"));
     tr.appendChild(el("td", "", fmtTime(im.since)));
     tr.appendChild(el("td", "", im.reason || ""));
     tb.appendChild(tr);

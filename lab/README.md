@@ -14,8 +14,11 @@ A simulated edge router (FRR) peered over iBGP with Packeteer. Addresses are doc
 
 The fixed prober (`type: fixed`) returns configured RTTs and sends no packets. It is for this lab and for tests. A real deployment uses `icmp` and `tcp`.
 
-GitHub Actions runs this as the `e2e` job. Docker and Go are required (the script builds `lab/checkroute`); it does not run in the unit-test job. `go test ./lab/checkroute` covers the route check itself.
+`lab/e2e-commit.sh` is the commit-cause path on the same FRR edge. Probe RTTs stay inside the latency threshold. A static target declares 80 Mbps and the `fixed` telemetry plugin reports transit-a over its commit, so the injected route is a commit steer (`cause=commit` in the log). Rewriting the usage file so transit-a can take the prefix back withdraws it. The script then restores the over-commit file, stops Packeteer with SIGTERM, and SIGKILLs it. The route is gone once the session drops, and no later than the BGP hold timer. `fixed` telemetry is for this lab. A real edge uses `snmp` and flow volume.
+
+GitHub Actions runs both scripts as the `e2e` job. Docker and Go are required (the script builds `lab/checkroute`); it does not run in the unit-test job. `go test ./lab/checkroute` covers the route check itself.
 
 ```sh
 bash lab/e2e.sh
+bash lab/e2e-commit.sh
 ```
