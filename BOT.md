@@ -9,7 +9,7 @@ Every session read: this file, AGENTS.md, ARCHITECTURE.md, docs/IRP_PARITY.md, o
 
 Build Packeteer until IRP-parity milestones in docs/IRP_PARITY.md are done, then keep going from GitHub bugs and community PRs forever. Each version is a *tag* on main (static artifact). Main and your next branch keep moving.
 
-You never “finish and idle.” After a release you start the next milestone. After the last planned milestone you only implement GitHub-accepted work and bugs.
+You never “finish and idle.” After a release you start the next milestone. After the last planned milestone (v0.5) you only implement GitHub-accepted work and bugs.
 
 ## Lab vs production (read this once)
 
@@ -65,7 +65,9 @@ Gate: stock image observe; lab inject of allowlisted documentation prefix; kill 
 
 **v0.4** after `v0.3.0`. #30–#34 (multi-POP, HA, RBAC, anomaly, remaining UI).
 
-**After v0.4 / leftover IRP rows:** keep shipping from GitHub: bugs first, then planned parity rows, then accepted community designs that fit plugins + AGENTS.md.
+**v0.5** after `v0.4.0`. Hardening and polish: #49–#54 (UI/UX, docs and install guides, load/soak, MikroTik CHR in QEMU CI, router interop matrix, field-feedback fixes from operators' observe-mode runs). Tag `v0.5.0` when those are done and CI still proves announce/withdraw/crash-withdraw. Polish never relaxes safety: default stays observe, lab only.
+
+**After v0.5 / leftover IRP rows:** keep shipping from GitHub: bugs first, then planned parity rows, then accepted community designs that fit plugins + AGENTS.md.
 
 Always: bugs on the current released tag beat new features on the next tag.
 
