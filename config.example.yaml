@@ -46,6 +46,8 @@ scorer:
   config: {loss_weight: 100, rtt_weight: 1, jitter_weight: 0.5}
 
 # What to probe. Uncomment and use prefixes you actually serve traffic to.
+# The flow source is off unless you add it. With --network host its UDP
+# ports are host ports; do not publish them. Docs: docs/mikrotik.md.
 # sources:
 #   - type: static
 #     config:
@@ -53,6 +55,18 @@ scorer:
 #         - prefix: 198.51.100.0/24
 #           host: 198.51.100.1        # optional; defaults to the first address
 #         - prefix: 203.0.113.0/24
+#   - type: flow
+#     config:
+#       listen:
+#         - "0.0.0.0:2055"            # NetFlow v5/v9 and IPFIX
+#         - "0.0.0.0:6343"            # sFlow
+#       window: 5m
+#       top_n: 100
+#       min_bytes: 1000000
+#       aggregate_v4: 24
+#       aggregate_v6: 48
+#       exclude:
+#         - 192.0.2.0/24              # destinations inside these prefixes are ignored
 
 # iBGP to the edge router(s). Same ASN as `asn`. The session learns best
 # paths and, only in mode: inject, carries improvements back. Graceful

@@ -5,6 +5,7 @@ This guide grows with each milestone. It currently covers:
 1. **Probe sourcing**: see [policy-routing.md](policy-routing.md#mikrotik-routeros-7-probe-box-behind-the-router).
 2. **iBGP session** so Packeteer can see the router's best paths: below.
 3. **Injected routes**: accept only the Packeteer community from that session, and never export it to eBGP. FRR, Junos, and IOS snippets are in [routers.md](routers.md).
+4. **Traffic Flow** (NetFlow / IPFIX) so Packeteer can pick probe targets from real traffic: below.
 
 ## iBGP session to Packeteer
 
@@ -60,3 +61,38 @@ RouterOS 7 syntax changes between minor releases, so check these commands agains
 Check the session with `/routing bgp session print`. Packeteer logs `bgp session ... state=ESTABLISHED`, then a periodic `rib ready=true prefixes=N`. In inject mode an accepted route shows up in `/routing route print where bgp-communities~"64512:666"`. Clearing it is `mode: observe` (Packeteer withdraws) or stopping the container (the session drops; graceful restart is off, so the route does not stick).
 
 FRR, Junos, and IOS equivalents: [routers.md](routers.md).
+
+## Traffic Flow (NetFlow / IPFIX)
+
+RouterOS exports NetFlow v5, NetFlow v9, and IPFIX. It does not export sFlow. Point the target at Packeteer's address and at a `listen` port on the `flow` source. Packeteer runs with `--network host`, so that port is a port on the host: do not publish it with Docker `-p`.
+
+```routeros
+# Packeteer at 192.0.2.10, router at 192.0.2.254. Documentation addresses.
+/ip traffic-flow
+set enabled=yes interfaces=all cache-entries=16k \
+    active-flow-timeout=1m inactive-flow-timeout=15s
+/ip traffic-flow target
+add dst-address=192.0.2.10 port=2055 version=9 src-address=192.0.2.254 \
+    v9-template-timeout=5m
+```
+
+`version=5` and `version=ipfix` (port 4739 is the usual IPFIX port) work too. v9 and IPFIX resend templates; Packeteer keeps them in memory per exporter and does not store the raw records. Check the export with `/ip traffic-flow print` and `/ip traffic-flow target print`.
+
+Packeteer drops RFC1918 and IPv6 ULA destinations, then keeps the top prefixes by bytes over `window`. If you enable `packet-sampling`, byte totals are multiplied by the sampling interval only when the export carries it (NetFlow v5 header, or information element 34, 50, or 305). If the top prefixes look too small by a constant factor, the exporter omitted that field.
+
+```yaml
+sources:
+  - type: static          # listed first: its host wins when a prefix is in both
+    config:
+      targets:
+        - {prefix: 198.51.100.0/24, host: 198.51.100.1}
+  - type: flow
+    config:
+      listen: ["0.0.0.0:2055"]
+      window: 5m
+      top_n: 100
+      min_bytes: 1000000
+      exclude: ["192.0.2.0/24"]
+```
+
+Allow UDP/2055 on the host firewall from the router only. The socket is not authenticated. Flow targets are probe targets: they are not announced unless they are also in the learned RIB and pass the inject checks.

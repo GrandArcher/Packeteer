@@ -128,3 +128,29 @@ router bgp 64512
 ```
 
 Apply `EBGP-OUT` on every external neighbor. IOS honors `no-export` as well; the community-list is still required so a missing well-known community cannot leak a more-specific.
+
+## Flow export
+
+Packeteer's `flow` source learns probe targets from NetFlow v5/v9, IPFIX, or sFlow. It does not speak BGP. MikroTik's Traffic Flow setup is in [mikrotik.md](mikrotik.md). FRR does not export flows. On a Linux host running FRR, run an exporter beside it and send UDP to Packeteer.
+
+Packeteer uses `--network host`, so `listen: "0.0.0.0:2055"` is the host's UDP/2055. Docker port publishing does not apply and is not required. Firewall that UDP port to the exporter.
+
+[pmacct](http://www.pmacct.net/) can read a capture interface and export. `pmacctd` is the exporter here; `nfacctd` is a collector and is the wrong daemon.
+
+```
+pcap_interface: eth0
+plugins: nfprobe
+nfprobe_receiver: 192.0.2.10:2055
+nfprobe_version: 9
+```
+
+sFlow from the same host:
+
+```
+pcap_interface: eth0
+plugins: sfprobe
+sfprobe_receiver: 192.0.2.10:6343
+sfprobe_agentip: 192.0.2.254
+```
+
+`softflowd -i eth0 -n 192.0.2.10:2055 -v 9` is the same idea. Use documentation addresses in any config you commit; the addresses above are RFC 5737.

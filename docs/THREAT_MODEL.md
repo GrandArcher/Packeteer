@@ -10,6 +10,10 @@ Packeteer can change how a network forwards packets. Failure modes matter more t
 - **Over-injection** — thousands of more-specifics exhaust TCAM. Mitigate with max-improvements and prefix aggregation policy.
 - **Stale intent** — controller dies, routes remain. Packeteer withdraws on shutdown and never enables graceful restart; the BGP hold timer is the backstop if the process is killed before the withdraw is sent.
 
+## Flow input
+
+The flow source accepts unauthenticated UDP. Anyone who can reach a listen port can add probe targets and spend probe budget. That does not inject routes: inject mode still requires the prefix in the learned RIB, the allowlist, thresholds, hold time, and the improvement cap. Run with host networking and firewall the port to the exporter. Counters live in memory for one window. Raw flow records are not written to disk.
+
 ## Measurement failures
 
 - Asymmetric return path on probes

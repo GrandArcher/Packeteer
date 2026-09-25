@@ -29,7 +29,7 @@ Or with Compose, using [docker-compose.yml](docker-compose.yml): `docker compose
 - Out-of-process plugins can be mounted at `/etc/packeteer/plugins`.
 - Images are built for linux/amd64 and linux/arm64.
 
-In `observe` (the default) and `suggest`, Packeteer probes every target from each provider's source IP (ICMP echo, falling back to TCP 443) and logs loss, RTT min/avg/max, and jitter per provider. If `bgp.neighbors` is set, it keeps an iBGP session with the edge router(s) and learns which provider each prefix uses today. It announces nothing in those modes.
+In `observe` (the default) and `suggest`, Packeteer probes every target from each provider's source IP (ICMP echo, falling back to TCP 443) and logs loss, RTT min/avg/max, and jitter per provider. Targets come from `sources`. A `static` list is fixed. A `flow` source listens for NetFlow v5/v9, IPFIX, and sFlow, keeps the top destinations by bytes, and maps each one onto the covering prefix in the RIB (or a /24 or /48 when the RIB has no covering prefix). With `--network host` those UDP ports are the host's ports; there is nothing to publish. See [docs/PLUGINS.md](docs/PLUGINS.md) and [docs/mikrotik.md](docs/mikrotik.md). If `bgp.neighbors` is set, Packeteer keeps an iBGP session with the edge router(s) and learns which provider each prefix uses today. It announces nothing in `observe` or `suggest`.
 
 `mode: inject` is opt-in. The `gobgp` announcer then advertises allowlisted improvements on that same iBGP session: the provider's next hop, your `local_pref`, `packeteer_community`, and `no-export`. The edge must accept only that community from Packeteer and must not export it to eBGP. See [docs/mikrotik.md](docs/mikrotik.md) and [docs/routers.md](docs/routers.md). Stopping the container, or switching back to `observe`, withdraws the routes. Graceful restart is never enabled.
 
@@ -75,6 +75,7 @@ internal/probe/     # per-provider sourced measurements
 internal/policy/    # score + hysteresis
 internal/announce/  # inject-mode gate in front of the announcer plugin
 internal/rib/       # learn-only iBGP view (embedded GoBGP)
+internal/plugins/   # probers, target sources (static, flow), scorer, announcer
 lab/                # FRR e2e lab (CI job e2e)
 ```
 

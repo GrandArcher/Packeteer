@@ -25,9 +25,9 @@ Milestones:
 
 | Status | Count |
 |---|---|
-| done | 19 |
+| done | 20 |
 | in progress | 0 |
-| planned | 59 |
+| planned | 58 |
 | won't do | 3 |
 
 ## Performance optimization
@@ -42,7 +42,7 @@ Milestones:
 | Throughput-aware scoring (prefix volume weighting) | 1.2.13 Improvements weight | planned | v0.2 | scorer | #23, #18 |
 | Probe sources per provider (IRP uses PBR; we use source-IP policy routing) | 2.8 Explorer, 2.8.1 PBR | done | v0.1 | core + docs | #2 |
 | Static probe target lists | - | done | v0.1 | source (`static`) | #2 |
-| Flow-based target discovery (NetFlow v5/v9, IPFIX, sFlow) | 2.7.1 Irpflowd | planned | v0.1 | source (`flow`) | #5 |
+| Flow-based target discovery (NetFlow v5/v9, IPFIX, sFlow) | 2.7.1 Irpflowd | done | v0.1 | source (`flow`) | #5 |
 | Passive problem detection from flows | 2.7 Collector | planned | v0.2 | source | #21 |
 | SPAN / mirrored-traffic collector | 2.7.2 Irpspand | planned | v0.2 | source (`span`) | #21 |
 | AS-pattern outage/congestion detection (re-probe prefixes crossing a sick ASN) | 1.2.6 Outage Detection | planned | v0.2 | source (detector) | #16 |

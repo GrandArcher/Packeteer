@@ -4,8 +4,9 @@ services:
   packeteer:
     image: ghcr.io/grandarcher/packeteer:edge
     container_name: packeteer
-    # Host networking: probes must leave via each transit's source IP and the
-    # iBGP session must reach the edge router.
+    # Host networking: probes must leave via each transit's source IP, the
+    # iBGP session must reach the edge router, and a flow source binds its
+    # UDP ports directly on the host. Do not publish those ports.
     network_mode: host
     cap_add:
       - NET_RAW    # ICMP probes
