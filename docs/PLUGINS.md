@@ -1,6 +1,6 @@
 # Plugins
 
-Packeteer's core is small. The pieces that differ between deployments are **plugins** behind small Go interfaces. You select them by `type` in config:
+Packeteer's core is small. The pieces that differ between deployments are **plugins** behind small Go interfaces. You select them by `type` in config. Every key is listed in [CONFIG.md](CONFIG.md).
 
 ```yaml
 plugin_dir: /etc/packeteer/plugins   # default; env PACKETEER_PLUGIN_DIR overrides it

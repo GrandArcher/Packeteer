@@ -7,7 +7,7 @@ Every parity feature ships as a plugin behind the interfaces in `pkg/plugin` whe
 Statuses: **done** (merged to `main`), **in progress** (open PR or active branch), **planned** (issue exists), **won't do** (reason given).
 
 Milestones:
-- **v0.1**: installable core outbound performance loop: probing, targets from static lists and flows, RIB via iBGP, scoring with hysteresis, injection via GoBGP, web UI + API + metrics, Docker, e2e lab.
+- **v0.1**: installable core outbound performance loop: probing, targets from static lists and flows, RIB via iBGP, scoring with hysteresis, injection via GoBGP, web UI + API + metrics, Docker, e2e lab, operator quick start and config reference.
 - **v0.2**: cost and commit control, SNMP, VIP and AS-pattern detection, policies (prefix/ASN/country), alerts, reports.
 - **v0.3**: inbound optimization, BMP, multiple routers and IX, FlowSpec/RTBH, transit optimization.
 - **v0.4**: multi-POP, HA, RBAC, anomaly detection, remaining parity.
@@ -16,16 +16,16 @@ Milestones:
 
 | Milestone | Capabilities |
 |---|---|
-| v0.1 | 23 |
+| v0.1 | 24 |
 | v0.2 | 26 |
 | v0.3 | 17 |
 | v0.4 | 12 |
 | won't do | 3 |
-| **total** | 81 |
+| **total** | 82 |
 
 | Status | Count |
 |---|---|
-| done | 23 |
+| done | 24 |
 | in progress | 0 |
 | planned | 55 |
 | won't do | 3 |
@@ -155,6 +155,7 @@ Milestones:
 | Capability | IRP doc ref | Status | Milestone | Plugin kind | Issue |
 |---|---|---|---|---|---|
 | Single-container install (Docker, multi-arch GHCR image) | 1.2.3 Technical requirements | done | v0.1 | - | #4 |
+| Operator quick start, config reference, and changelog | - | done | v0.1 | - | #11 |
 | Plugin system (in-process + exec + webhook) | - | done | v0.1 | all kinds | #13 |
 | Simulated-router e2e lab (announce, clean withdraw, SIGKILL session-loss within the BGP hold timer) | - | done | v0.1 | - | #10, #45 |
 | Software management / upgrades via package manager | 2.1 | won't do (Replaced by container images and tags; upgrade = pull a new tag.) | - | - | - |

@@ -1,4 +1,5 @@
 # Example only. Keep mode: observe in this repository.
+# Every key, default, and bound: docs/CONFIG.md
 mode: observe
 
 asn: 64512
@@ -73,9 +74,13 @@ scorer:
 # restart is never enabled. Packeteer proposes a 90s hold time; the router's
 # shorter timer wins. Filters: docs/mikrotik.md and docs/routers.md.
 # bgp:
-#   listen_port: 179      # optional; 0/omitted = connect out only
+#   listen_port: 179            # optional; 0/omitted = connect out only
+#   # listen_addresses: ["192.0.2.10"]
 #   neighbors:
 #     - address: 192.0.2.254
+#       # port: 179             # remote port; 0/omitted = 179
+#       # local_address: 192.0.2.10
+#       # passive: false        # true waits for the router and needs listen_port
 #       description: edge1
 
 # Injection (used only when mode: inject). local_pref is set on every

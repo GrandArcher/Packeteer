@@ -2,6 +2,7 @@
 # Keep mode: observe until you have read docs/THREAT_MODEL.md.
 services:
   packeteer:
+    # :edge tracks main. Pin a release with ghcr.io/grandarcher/packeteer:0.1.0
     image: ghcr.io/grandarcher/packeteer:edge
     container_name: packeteer
     # Host networking: probes must leave via each transit's source IP, the
