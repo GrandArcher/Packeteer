@@ -27,6 +27,7 @@ type Set struct {
 	Scorer    *Instance[plugin.Scorer]
 	Announcer *Instance[plugin.Announcer]
 	Notifiers []Instance[plugin.Notifier]
+	Telemetry []Instance[plugin.Telemetry]
 
 	started []namedLifecycle
 }
@@ -72,13 +73,14 @@ func Build(cfg *config.Config, opts Options) (*Set, error) {
 	if opts.PluginDir != "" {
 		dir = opts.PluginDir
 	}
-	base := plugin.Env{Logger: opts.Logger, PluginDir: dir, Getenv: opts.Getenv}
+	base := plugin.Env{Logger: opts.Logger, PluginDir: dir, Getenv: opts.Getenv, Providers: providerNames(cfg)}
 
 	var errs []error
 	s := &Set{
 		Probers:   build(plugin.Probers, "probers", cfg.Probers, base, &errs),
 		Sources:   build(plugin.Sources, "sources", cfg.Sources, base, &errs),
 		Notifiers: build(plugin.Notifiers, "notifiers", cfg.Notifiers, base, &errs),
+		Telemetry: build(plugin.Telemetries, "telemetry", cfg.Telemetry, base, &errs),
 	}
 	if cfg.Scorer != nil {
 		if b := build(plugin.Scorers, "scorer", []config.PluginSpec{*cfg.Scorer}, base, &errs); len(b) == 1 {
@@ -109,6 +111,9 @@ func (s *Set) all() []namedLifecycle {
 	}
 	if s.Scorer != nil {
 		add(plugin.KindScorer, s.Scorer.Name, s.Scorer.Plugin)
+	}
+	for _, p := range s.Telemetry {
+		add(plugin.KindTelemetry, p.Name, p.Plugin)
 	}
 	for _, p := range s.Notifiers {
 		add(plugin.KindNotifier, p.Name, p.Plugin)
@@ -144,6 +149,16 @@ func (s *Set) Stop(ctx context.Context) error {
 	}
 	s.started = nil
 	return errors.Join(errs...)
+}
+
+func providerNames(cfg *config.Config) []string {
+	out := make([]string, 0, len(cfg.Providers))
+	for _, p := range cfg.Providers {
+		if p.Name != "" {
+			out = append(out, p.Name)
+		}
+	}
+	return out
 }
 
 // Summary describes the plugin set, one line per instance.

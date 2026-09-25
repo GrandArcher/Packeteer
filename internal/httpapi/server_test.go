@@ -18,6 +18,7 @@ import (
 	"github.com/GrandArcher/Packeteer/internal/policy"
 	"github.com/GrandArcher/Packeteer/internal/probe"
 	"github.com/GrandArcher/Packeteer/internal/rib"
+	"github.com/GrandArcher/Packeteer/pkg/plugin"
 )
 
 func sampleInput() Input {
@@ -120,7 +121,7 @@ func TestEndpoints(t *testing.T) {
 	ts := newTestServer(t, snap, "", "")
 	paths := []string{
 		"/healthz", "/readyz", "/metrics",
-		"/api/providers", "/api/probes", "/api/prefixes", "/api/decisions", "/api/improvements",
+		"/api/providers", "/api/probes", "/api/prefixes", "/api/decisions", "/api/improvements", "/api/telemetry",
 		"/", "/app.js", "/app.css",
 	}
 	for _, p := range paths {
@@ -312,6 +313,60 @@ func TestMetrics(t *testing.T) {
 	}
 	if !strings.Contains(text, `prefix="203.0.113.0/24"`) || !strings.Contains(text, "packeteer_probe_success{") {
 		t.Fatalf("failed probe success series missing:\n%s", text)
+	}
+}
+
+func TestTelemetryAPI(t *testing.T) {
+	in := sampleInput()
+	usage := 40.0
+	in.Telemetry = []plugin.Usage{
+		{
+			Provider: "transit-b", Host: "edge", Interface: "ether2", IfIndex: 6,
+			CommitMbps: 500, BillingDay: 1, Mode: plugin.PercentileGreater,
+			PeriodStart: in.At, PeriodEnd: in.At.Add(24 * time.Hour),
+			Samples: 4, InMbps: 10, OutMbps: 20, InMbps95: 15, OutMbps95: 25,
+			UsageMbps: usage, Single: true, Polled: in.At,
+		},
+		{
+			Provider: "transit-a", Host: "edge", Interface: "ether1", IfIndex: 5,
+			CommitMbps: 1000, BillingDay: 1, Mode: plugin.PercentileSeparate,
+			PeriodStart: in.At, PeriodEnd: in.At.Add(24 * time.Hour),
+			Samples: 4, InMbps: 100, OutMbps: 40, InMbps95: 90, OutMbps95: 30,
+			Polled: in.At,
+		},
+	}
+	snap := Assemble(in)
+	if len(snap.Telemetry) != 2 || snap.Telemetry[0].Provider != "transit-a" || snap.Telemetry[0].UsageMbps != nil {
+		t.Fatalf("separate row = %+v", snap.Telemetry)
+	}
+	if snap.Telemetry[1].UsageMbps == nil || *snap.Telemetry[1].UsageMbps != 40 {
+		t.Fatalf("greater row = %+v", snap.Telemetry[1])
+	}
+	ts := newTestServer(t, snap, "", "")
+	code, _, body := do(t, http.MethodGet, ts.URL+"/api/telemetry", "", "")
+	if code != http.StatusOK {
+		t.Fatalf("status %d %s", code, body)
+	}
+	if !strings.Contains(string(body), `"percentile":"separate"`) || strings.Contains(string(body), `"usage_mbps":0`) {
+		t.Fatalf("body = %s", body)
+	}
+	text := string(Metrics(snap))
+	for _, want := range []string{
+		`packeteer_telemetry_up{provider="transit-a",interface="ether1",percentile="separate"} 1`,
+		`packeteer_telemetry_in_95th_bps{provider="transit-a",interface="ether1",percentile="separate"} 9e+07`,
+		`packeteer_telemetry_usage_bps{provider="transit-b",interface="ether2",percentile="greater"} 4e+07`,
+		`packeteer_telemetry_commit_bps{provider="transit-a",interface="ether1",percentile="separate"} 1e+09`,
+	} {
+		if !strings.Contains(text, want) {
+			t.Errorf("metrics missing %q\n%s", want, text)
+		}
+	}
+	if strings.Contains(text, `percentile="separate"}`) && strings.Contains(text, "packeteer_telemetry_usage_bps{") {
+		for _, line := range strings.Split(text, "\n") {
+			if strings.Contains(line, "packeteer_telemetry_usage_bps{") && strings.Contains(line, `percentile="separate"`) {
+				t.Errorf("separate mode exported a single usage: %s", line)
+			}
+		}
 	}
 }
 

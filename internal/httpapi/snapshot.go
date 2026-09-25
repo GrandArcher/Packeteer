@@ -10,6 +10,7 @@ import (
 	"github.com/GrandArcher/Packeteer/internal/policy"
 	"github.com/GrandArcher/Packeteer/internal/probe"
 	"github.com/GrandArcher/Packeteer/internal/rib"
+	"github.com/GrandArcher/Packeteer/pkg/plugin"
 )
 
 // Input is a point-in-time read of controller state. Routes must be the
@@ -33,6 +34,9 @@ type Input struct {
 	RIBReady      bool
 	Peers         []rib.PeerState
 	Routes        map[netip.Prefix]rib.Route
+
+	// Telemetry is interface usage. It is not a routing decision.
+	Telemetry []plugin.Usage
 }
 
 // Snapshot is the read-only document the HTTP handlers serve.
@@ -51,6 +55,7 @@ type Snapshot struct {
 	Decisions    []Decision
 	Improvements []Improvement
 	Peers        []Peer
+	Telemetry    []Telemetry
 }
 
 // Provider is one configured transit plus its probe-source health.
@@ -130,6 +135,31 @@ type Improvement struct {
 	Reason   string    `json:"reason,omitempty"`
 }
 
+// Telemetry is one provider's interface usage for the open billing period.
+// Rates are decimal megabits per second. usage_mbps is omitted when the
+// percentile mode keeps inbound and outbound apart, and when no sample
+// has been stored yet.
+type Telemetry struct {
+	Provider    string     `json:"provider"`
+	Host        string     `json:"host,omitempty"`
+	Interface   string     `json:"interface,omitempty"`
+	IfIndex     int        `json:"if_index,omitempty"`
+	CommitMbps  float64    `json:"commit_mbps"`
+	BillingDay  int        `json:"billing_day"`
+	Percentile  string     `json:"percentile"`
+	PeriodStart time.Time  `json:"period_start"`
+	PeriodEnd   time.Time  `json:"period_end"`
+	Samples     int        `json:"samples"`
+	InMbps      float64    `json:"in_mbps"`
+	OutMbps     float64    `json:"out_mbps"`
+	InMbps95    float64    `json:"in_mbps_95"`
+	OutMbps95   float64    `json:"out_mbps_95"`
+	UsageMbps   *float64   `json:"usage_mbps,omitempty"`
+	Updated     *time.Time `json:"updated,omitempty"`
+	Polled      *time.Time `json:"polled,omitempty"`
+	Error       string     `json:"error,omitempty"`
+}
+
 // Peer is one iBGP session.
 type Peer struct {
 	Address     string    `json:"address"`
@@ -172,6 +202,7 @@ func Assemble(in Input) Snapshot {
 		Decisions:     assembleDecisions(in.Decisions),
 		Improvements:  assembleImprovements(in.Improvements),
 		Peers:         assemblePeers(in.Peers),
+		Telemetry:     assembleTelemetry(in.Telemetry),
 	}
 	snap.zeroNil()
 	return snap
@@ -184,6 +215,7 @@ func (s *Snapshot) zeroNil() {
 	s.Decisions = nz(s.Decisions)
 	s.Improvements = nz(s.Improvements)
 	s.Peers = nz(s.Peers)
+	s.Telemetry = nz(s.Telemetry)
 	for i := range s.Decisions {
 		s.Decisions[i].Candidates = nz(s.Decisions[i].Candidates)
 	}
@@ -299,6 +331,52 @@ func assembleImprovements(in []policy.Improvement) []Improvement {
 		})
 	}
 	sort.Slice(out, func(i, j int) bool { return lessPrefix(out[i].Prefix, out[j].Prefix) < 0 })
+	return out
+}
+
+func assembleTelemetry(in []plugin.Usage) []Telemetry {
+	out := make([]Telemetry, 0, len(in))
+	for _, u := range in {
+		if u.Provider == "" {
+			continue
+		}
+		row := Telemetry{
+			Provider:    u.Provider,
+			Host:        u.Host,
+			Interface:   u.Interface,
+			IfIndex:     u.IfIndex,
+			CommitMbps:  jsonFloat(u.CommitMbps),
+			BillingDay:  u.BillingDay,
+			Percentile:  string(u.Mode),
+			PeriodStart: u.PeriodStart.UTC(),
+			PeriodEnd:   u.PeriodEnd.UTC(),
+			Samples:     u.Samples,
+			InMbps:      jsonFloat(u.InMbps),
+			OutMbps:     jsonFloat(u.OutMbps),
+			InMbps95:    jsonFloat(u.InMbps95),
+			OutMbps95:   jsonFloat(u.OutMbps95),
+			Error:       u.Error,
+		}
+		if u.Single && u.Samples > 0 {
+			v := jsonFloat(u.UsageMbps)
+			row.UsageMbps = &v
+		}
+		if !u.Updated.IsZero() {
+			t := u.Updated.UTC()
+			row.Updated = &t
+		}
+		if !u.Polled.IsZero() {
+			t := u.Polled.UTC()
+			row.Polled = &t
+		}
+		out = append(out, row)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Provider != out[j].Provider {
+			return out[i].Provider < out[j].Provider
+		}
+		return out[i].Interface < out[j].Interface
+	})
 	return out
 }
 

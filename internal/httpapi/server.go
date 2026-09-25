@@ -116,6 +116,7 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("GET /api/prefixes", s.handlePrefixes)
 	mux.HandleFunc("GET /api/decisions", s.handleDecisions)
 	mux.HandleFunc("GET /api/improvements", s.handleImprovements)
+	mux.HandleFunc("GET /api/telemetry", s.handleTelemetry)
 	mux.Handle("GET /", http.FileServer(http.FS(webRoot)))
 
 	var h http.Handler = mux
@@ -210,6 +211,14 @@ func (s *Server) handleImprovements(w http.ResponseWriter, _ *http.Request) {
 		meta
 		Improvements []Improvement `json:"improvements"`
 	}{meta: snap.meta(), Improvements: nz(snap.Improvements)})
+}
+
+func (s *Server) handleTelemetry(w http.ResponseWriter, _ *http.Request) {
+	snap := s.snapshot()
+	writeJSON(w, http.StatusOK, struct {
+		meta
+		Telemetry []Telemetry `json:"telemetry"`
+	}{meta: snap.meta(), Telemetry: nz(snap.Telemetry)})
 }
 
 type meta struct {

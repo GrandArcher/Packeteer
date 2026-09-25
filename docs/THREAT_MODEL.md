@@ -14,6 +14,10 @@ Packeteer can change how a network forwards packets. Failure modes matter more t
 
 The `outage` source can add up to `max_targets` probe targets from the learned RIB when a pattern matches. That spends probe budget. It does not announce: inject mode still requires the prefix in the learned RIB, the allowlist, thresholds, hold time, and the improvement cap. `min_prefixes` cannot be set below 2. Remove the source to turn it off. Events go to the configured notifiers and are not routes.
 
+## SNMP telemetry
+
+The `snmp` plugin reads interface counters from an agent you configure. The community and v3 passphrases come from the container environment, not from the config file, and they are not written to the log or the API. A failed poll does not withdraw routes and does not change a decision. The 95th-percentile window is in memory for the open billing period. `/api/telemetry` exposes rates and the commit figure to anyone who can open the HTTP port; the same loopback and basic-auth notes as the rest of the API apply. Removing the `telemetry` entry turns collection off.
+
 ## Flow input
 
 The flow source accepts unauthenticated UDP. Anyone who can reach a listen port can add probe targets and spend probe budget. That does not inject routes: inject mode still requires the prefix in the learned RIB, the allowlist, thresholds, hold time, and the improvement cap. Run with host networking and firewall the port to the exporter. Counters live in memory for one window. Raw flow records are not written to disk.

@@ -150,6 +150,10 @@ func run(ctx context.Context, args []string, getenv func(string) string, stdout,
 		fmt.Fprintf(stderr, "packeteer: refusing to start: %v\n", err)
 		return 1
 	}
+	if err := checkTelemetryProviders(plugins); err != nil {
+		fmt.Fprintf(stderr, "packeteer: refusing to start: %v\n", err)
+		return 1
+	}
 
 	fmt.Fprintf(stdout, "packeteer %s: config %s loaded\n", version, *path)
 	fmt.Fprintf(stdout, "mode: %s\n", cfg.Mode)
@@ -278,6 +282,7 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 	wirePrefixLookup(plugins, view)
 	wireLearnedRoutes(plugins, view)
 	wireOutage(plugins, engine, view, log)
+	col.SetTelemetry(func() []plugin.Usage { return collectTelemetry(plugins) })
 	col.Attach(engine, decider, view)
 	if err := plugins.Start(ctx); err != nil {
 		log.Error("refusing to start", "err", err)
@@ -653,6 +658,48 @@ func outageSamples(rs []probe.Result) []outage.Sample {
 // the normal probe interval, or that is outside the staleness window. A
 // longer interval would leave the re-queued prefixes stale, and the
 // controller would withdraw any improvement on them.
+// providerNamer is implemented by telemetry plugins that bind providers.
+type providerNamer interface {
+	ProviderNames() []string
+}
+
+// checkTelemetryProviders rejects the same provider on two telemetry
+// plugins. Each plugin already rejects a name that is not configured.
+func checkTelemetryProviders(plugins *pluginhost.Set) error {
+	if plugins == nil {
+		return nil
+	}
+	seen := map[string]string{}
+	for _, t := range plugins.Telemetry {
+		namer, ok := t.Plugin.(providerNamer)
+		if !ok {
+			continue
+		}
+		for _, name := range namer.ProviderNames() {
+			if prev, ok := seen[name]; ok {
+				return fmt.Errorf("telemetry: provider %q is listed on both %s and %s", name, prev, t.Name)
+			}
+			seen[name] = t.Name
+		}
+	}
+	return nil
+}
+
+func collectTelemetry(plugins *pluginhost.Set) []plugin.Usage {
+	if plugins == nil {
+		return nil
+	}
+	var out []plugin.Usage
+	for _, t := range plugins.Telemetry {
+		rows, err := t.Plugin.Snapshot(context.Background())
+		if err != nil {
+			continue
+		}
+		out = append(out, rows...)
+	}
+	return out
+}
+
 func checkOutageIntervals(cfg *config.Config, plugins *pluginhost.Set) error {
 	if plugins == nil {
 		return nil

@@ -9,6 +9,7 @@ import (
 	"github.com/GrandArcher/Packeteer/internal/policy"
 	"github.com/GrandArcher/Packeteer/internal/probe"
 	"github.com/GrandArcher/Packeteer/internal/rib"
+	"github.com/GrandArcher/Packeteer/pkg/plugin"
 )
 
 // Collector reads the live probe engine, decision engine, and RIB view.
@@ -18,11 +19,12 @@ type Collector struct {
 	mode      string
 	providers []config.Provider
 
-	mu      sync.RWMutex
-	started bool
-	engine  *probe.Engine
-	decider *policy.Engine
-	view    *rib.View
+	mu        sync.RWMutex
+	started   bool
+	engine    *probe.Engine
+	decider   *policy.Engine
+	view      *rib.View
+	telemetry func() []plugin.Usage
 }
 
 // NewCollector copies providers. The caller may reuse the slice afterward.
@@ -41,6 +43,14 @@ func (c *Collector) Attach(engine *probe.Engine, decider *policy.Engine, view *r
 	c.mu.Unlock()
 }
 
+// SetTelemetry installs the read of interface usage. Nil leaves the
+// telemetry list empty. The function may run while Snapshot is called.
+func (c *Collector) SetTelemetry(fn func() []plugin.Usage) {
+	c.mu.Lock()
+	c.telemetry = fn
+	c.mu.Unlock()
+}
+
 // SetStarted marks process startup finished (or shutting down).
 func (c *Collector) SetStarted(v bool) {
 	c.mu.Lock()
@@ -52,7 +62,7 @@ func (c *Collector) SetStarted(v bool) {
 // already probed, decided, or improved, never the whole RIB.
 func (c *Collector) Snapshot() Snapshot {
 	c.mu.RLock()
-	started, engine, decider, view := c.started, c.engine, c.decider, c.view
+	started, engine, decider, view, telemetry := c.started, c.engine, c.decider, c.view, c.telemetry
 	c.mu.RUnlock()
 
 	in := Input{
@@ -61,6 +71,9 @@ func (c *Collector) Snapshot() Snapshot {
 		Started:   started,
 		At:        time.Now().UTC(),
 		Providers: c.providers,
+	}
+	if telemetry != nil {
+		in.Telemetry = telemetry()
 	}
 	if engine != nil {
 		in.Status = engine.Providers()

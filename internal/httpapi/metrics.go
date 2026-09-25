@@ -102,6 +102,30 @@ func Metrics(s Snapshot) []byte {
 		sample{value: boolFloat(s.BGPConfigured)})
 	writeGauge(&b, "packeteer_bgp_ready", "1 if BGP is not configured or at least one iBGP session is established.",
 		sample{value: bgpReady})
+
+	var telUp, telIn, telOut, telIn95, telOut95, telUsage, telCommit, telSamples []sample
+	for _, u := range s.Telemetry {
+		base := []lbl{{"provider", u.Provider}, {"interface", u.Interface}, {"percentile", u.Percentile}}
+		up := u.Error == "" && u.Polled != nil
+		telUp = append(telUp, sample{labels: base, value: boolFloat(up)})
+		telIn = append(telIn, sample{labels: base, value: u.InMbps * 1e6})
+		telOut = append(telOut, sample{labels: base, value: u.OutMbps * 1e6})
+		telIn95 = append(telIn95, sample{labels: base, value: u.InMbps95 * 1e6})
+		telOut95 = append(telOut95, sample{labels: base, value: u.OutMbps95 * 1e6})
+		if u.UsageMbps != nil {
+			telUsage = append(telUsage, sample{labels: base, value: *u.UsageMbps * 1e6})
+		}
+		telCommit = append(telCommit, sample{labels: base, value: u.CommitMbps * 1e6})
+		telSamples = append(telSamples, sample{labels: base, value: float64(u.Samples)})
+	}
+	writeGauge(&b, "packeteer_telemetry_up", "1 if the last SNMP poll of this provider succeeded.", telUp...)
+	writeGauge(&b, "packeteer_telemetry_in_bps", "Latest inbound interface rate, bits per second.", telIn...)
+	writeGauge(&b, "packeteer_telemetry_out_bps", "Latest outbound interface rate, bits per second.", telOut...)
+	writeGauge(&b, "packeteer_telemetry_in_95th_bps", "95th percentile inbound rate for the open billing period, bits per second.", telIn95...)
+	writeGauge(&b, "packeteer_telemetry_out_95th_bps", "95th percentile outbound rate for the open billing period, bits per second.", telOut95...)
+	writeGauge(&b, "packeteer_telemetry_usage_bps", "Billable 95th percentile for modes that collapse to one figure, bits per second.", telUsage...)
+	writeGauge(&b, "packeteer_telemetry_commit_bps", "Configured commit rate, bits per second.", telCommit...)
+	writeGauge(&b, "packeteer_telemetry_samples", "Rate samples stored in the open billing period.", telSamples...)
 	if s.BGPConfigured {
 		var sessionUp, sessionState []sample
 		for _, p := range s.Peers {

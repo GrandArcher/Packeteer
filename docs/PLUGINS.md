@@ -23,6 +23,21 @@ notifiers:
       min_severity: warning
 announcer:
   type: gobgp
+telemetry:                           # optional; does not announce
+  - type: snmp
+    config:
+      hosts:
+        - name: edge1
+          address: 192.0.2.254
+          version: 2c
+          community_env: PACKETEER_SNMP_COMMUNITY
+      providers:
+        - name: transit-a
+          host: edge1
+          interface: ether1
+          commit_mbps: 1000
+          billing_day: 1
+          percentile: greater_separate
 ```
 
 Each entry has `type` (required), an optional `name` (defaults to the type and must be unique within its list), and an optional `config` block. The plugin decodes `config` itself, strictly: unknown fields are errors. **All plugins are built and validated at startup.** If a type is unknown or a config is invalid, Packeteer refuses to start and prints an error naming the entry, e.g. `notifiers[0] (nope): unknown notifier type "nope" (available: exec, webhook)`.
@@ -36,8 +51,9 @@ Each entry has `type` (required), an optional `name` (defaults to the type and m
 | `scorer` | `Score(PathStats) float64` (lower is better) | weighted (#7) | none |
 | `announcer` | `Announce`, `Withdraw`, `WithdrawAll` | `gobgp` | **never** |
 | `notifier` | `Notify(ctx, Event) error` | `webhook` | `exec` |
+| `telemetry` | `Snapshot(ctx) ([]Usage, error)` | `snmp` | none |
 
-Metrics exporters are planned; for now Prometheus metrics are built into the ops surface (#9).
+Metrics exporters are planned; for now Prometheus metrics are built into the ops surface (#9). Interface usage from the `snmp` telemetry plugin is on `/api/telemetry` and in `packeteer_telemetry_*` gauges. It is not a routing input.
 
 Probers return raw results (packets sent plus one RTT per reply). The core computes loss, RTT min/avg/max, and jitter the same way for every prober. A prober that cannot use its source address must return an error, not "100% loss", so the core can fail closed.
 
@@ -46,7 +62,7 @@ Announcers run **in-process only**, so an external process can never inject rout
 ## Lifecycle
 
 1. **Factory (Init).** `func(cfg plugin.Config, env plugin.Env) (T, error)`. It decodes and validates config with `cfg.Decode(&myStruct)`. It must do no network I/O. `env` provides the instance name, a scoped `slog` logger, the plugin dir, and `Getenv`.
-2. **`Start(ctx)`.** Begins background work in goroutines and must not block. Plugins start in this order: sources, probers, scorer, notifiers, announcer. If one fails, the ones already started are stopped.
+2. **`Start(ctx)`.** Begins background work in goroutines and must not block. Plugins start in this order: sources, probers, scorer, telemetry, notifiers, announcer. If one fails, the ones already started are stopped.
 3. **`Stop(ctx)`.** Releases everything before `ctx` expires. Plugins stop in reverse order, so the announcer stops first and routes are withdrawn early.
 
 Embed `plugin.Base` for no-op `Start`/`Stop`.
@@ -65,6 +81,7 @@ Embed `plugin.Base` for no-op `Start`/`Stop`.
 - `exec`: see below.
 - `webhook`: `url`, `timeout`, `headers`, `min_severity`.
 - `gobgp`: no plugin config block. It publishes on the iBGP speaker the RIB view already opened. `local_pref` and `packeteer_community` are top-level controller settings. Each route is the exact prefix learned from the RIB; a config that sets `more_specific_bits` is rejected. Every route gets the community plus NO_EXPORT. The export policy accepts only Packeteer's own routes that carry the community. `Stop` withdraws them. Graceful restart is never turned on. Required, along with `local_pref`, when `mode: inject`.
+- `snmp`: polls `ifHCInOctets` and `ifHCOutOctets` (or the 32-bit octet counters when the 64-bit ones are absent) and tracks 95th-percentile usage for the open UTC billing period. `percentile` is `separate` (inbound and outbound 95ths kept apart), `greater` (95th of max(in, out) per sample), or `greater_separate` (the greater of the two 95ths). The community and v3 passphrases are environment variables named by `community_env`, `auth_env`, and `priv_env`. They are not config values. A failed poll keeps the samples already stored. The plugin does not announce. See [CONFIG.md](CONFIG.md).
 
 ## Writing a Go plugin (compiled in)
 

@@ -254,16 +254,17 @@ The server is read-only (GET and HEAD). The dashboard loads no remote assets and
 | `/api/prefixes` | Probed prefixes with measurements, current exit, and recommended exit. Prefixes that are only in the RIB are not listed. |
 | `/api/decisions` | Latest per-prefix decision. |
 | `/api/improvements` | Active improvements. In observe and suggest these are recommendations. In inject they are the routes being announced. |
+| `/api/telemetry` | Interface rates and 95th-percentile usage when a telemetry plugin is configured. Empty when it is not. This does not announce. |
 
 Basic auth is off unless both `PACKETEER_HTTP_USER` and `PACKETEER_HTTP_PASSWORD` are set. Setting only one refuses to start. Set both when `http.listen` is not loopback. The password is not read from the config file and is not written to the log.
 
-Prometheus metrics are `packeteer_up`, `packeteer_ready`, `packeteer_build_info`, `packeteer_provider_up`, `packeteer_probe_success`, `packeteer_probe_rtt_seconds`, `packeteer_probe_rtt_min_seconds`, `packeteer_probe_rtt_max_seconds`, `packeteer_probe_loss_ratio`, `packeteer_probe_jitter_seconds`, `packeteer_decisions`, `packeteer_decision`, `packeteer_improvements_active`, `packeteer_improvement`, `packeteer_bgp_configured`, `packeteer_bgp_ready`, `packeteer_bgp_session_up`, and `packeteer_bgp_session`. Scrape `http://127.0.0.1:8080/metrics` on the host.
+Prometheus metrics are `packeteer_up`, `packeteer_ready`, `packeteer_build_info`, `packeteer_provider_up`, `packeteer_probe_success`, `packeteer_probe_rtt_seconds`, `packeteer_probe_rtt_min_seconds`, `packeteer_probe_rtt_max_seconds`, `packeteer_probe_loss_ratio`, `packeteer_probe_jitter_seconds`, `packeteer_decisions`, `packeteer_decision`, `packeteer_improvements_active`, `packeteer_improvement`, `packeteer_bgp_configured`, `packeteer_bgp_ready`, `packeteer_bgp_session_up`, `packeteer_bgp_session`, and, when telemetry is configured, `packeteer_telemetry_up`, `packeteer_telemetry_in_bps`, `packeteer_telemetry_out_bps`, `packeteer_telemetry_in_95th_bps`, `packeteer_telemetry_out_95th_bps`, `packeteer_telemetry_usage_bps`, `packeteer_telemetry_commit_bps`, and `packeteer_telemetry_samples`. Scrape `http://127.0.0.1:8080/metrics` on the host.
 
 `PACKETEER_LOG_LEVEL=debug` adds detail. `log.format: json` or `PACKETEER_LOG_FORMAT=json` switches the log to JSON.
 
 ## Plugins
 
-Probers, target sources, the scorer, the announcer, and notifiers are plugins selected by `type` in the config. Unknown types and unknown keys inside a plugin `config` block refuse startup. Built-ins: probers `icmp`, `tcp`, `udp`, and `fixed` (labs only); sources `static`, `flow`, `traceroute`, `vip`, and `outage`; scorer `weighted`; announcer `gobgp`; notifier `webhook`. An `exec` plugin is any executable you mount at `/etc/packeteer/plugins` and works in the stock image. Announcers are in-process only.
+Probers, target sources, the scorer, the announcer, notifiers, and telemetry are plugins selected by `type` in the config. Unknown types and unknown keys inside a plugin `config` block refuse startup. Built-ins: probers `icmp`, `tcp`, `udp`, and `fixed` (labs only); sources `static`, `flow`, `traceroute`, `vip`, and `outage`; scorer `weighted`; announcer `gobgp`; notifier `webhook`; telemetry `snmp` (interface counters and 95th percentile; credentials from the environment; does not announce). An `exec` plugin is any executable you mount at `/etc/packeteer/plugins` and works in the stock image. Announcers are in-process only. Telemetry is built in.
 
 Details, the exec protocol, and a shell example: [docs/PLUGINS.md](docs/PLUGINS.md). Keys: [docs/CONFIG.md](docs/CONFIG.md).
 
@@ -319,7 +320,7 @@ internal/probe/     # per-provider sourced measurements
 internal/policy/    # score + hysteresis
 internal/announce/  # inject-mode gate in front of the announcer plugin
 internal/rib/       # learn-only iBGP view (embedded GoBGP)
-internal/plugins/   # probers, target sources, scorer, announcer, notifier
+internal/plugins/   # probers, target sources, scorer, announcer, notifier, telemetry
 docs/CONFIG.md      # config reference
 lab/                # FRR e2e lab (CI job e2e)
 ```

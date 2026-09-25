@@ -78,9 +78,10 @@ func (r *Registry[T]) New(name string, cfg Config, env Env) (T, error) {
 
 // Global registries. Built-in plugins register themselves from init().
 var (
-	Probers    = NewRegistry[Prober](KindProber)
-	Sources    = NewRegistry[TargetSource](KindSource)
-	Scorers    = NewRegistry[Scorer](KindScorer)
-	Announcers = NewRegistry[Announcer](KindAnnouncer)
-	Notifiers  = NewRegistry[Notifier](KindNotifier)
+	Probers     = NewRegistry[Prober](KindProber)
+	Sources     = NewRegistry[TargetSource](KindSource)
+	Scorers     = NewRegistry[Scorer](KindScorer)
+	Announcers  = NewRegistry[Announcer](KindAnnouncer)
+	Notifiers   = NewRegistry[Notifier](KindNotifier)
+	Telemetries = NewRegistry[Telemetry](KindTelemetry)
 )
