@@ -25,3 +25,29 @@ jobs:
           fi
       - name: test
         run: go test ./...
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: build image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          tags: packeteer:ci
+          build-args: VERSION=ci-${{ github.sha }}
+      - name: smoke test (mounted config, dry run)
+        run: |
+          out="$(docker run --rm --network host --cap-add NET_RAW --cap-add NET_ADMIN \
+            -v "$PWD/config.example.yaml:/etc/packeteer/config.yaml:ro" packeteer:ci)"
+          echo "$out"
+          echo "$out" | grep -q "mode: observe"
+          echo "$out" | grep -q "no BGP sessions opened"
+      - name: smoke test (PACKETEER_CONFIG env)
+        run: |
+          docker run --rm -e PACKETEER_CONFIG=/etc/packeteer/config.example.yaml packeteer:ci | grep -q "mode: observe"
+      - name: missing config must fail
+        run: |
+          if docker run --rm packeteer:ci; then echo "expected failure without config"; exit 1; fi
