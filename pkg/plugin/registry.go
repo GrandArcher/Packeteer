@@ -84,4 +84,5 @@ var (
 	Announcers  = NewRegistry[Announcer](KindAnnouncer)
 	Notifiers   = NewRegistry[Notifier](KindNotifier)
 	Telemetries = NewRegistry[Telemetry](KindTelemetry)
+	Policies    = NewRegistry[Policy](KindPolicy)
 )

@@ -234,7 +234,7 @@ func integrateCommit(
 			replaced[p] = true
 		}
 		fresh = append(fresh, pending{
-			d: d, commit: true, gain: gain,
+			d: d, commit: true, gain: gain, rank: rankPlanned,
 			imp: Improvement{
 				Prefix: p, Provider: mv.Provider, Native: d.Native, Since: now,
 				Reason: mv.Reason, Cause: mv.Cause,

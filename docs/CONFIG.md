@@ -46,6 +46,7 @@ The image entrypoint is the same binary. Flags go after the image name.
 | `announcer` | none | inject | In-process only. `type: gobgp` publishes on the RIB session. |
 | `notifiers` | none | no | Events. A failure here does not withdraw routes by itself. |
 | `telemetry` | none | no | Interface counters and 95th-percentile usage. Off unless listed. Does not announce. |
+| `policies` | none | no | Routing policies and maintenance windows, asked in order before each decision. Off unless listed. Does not announce. See [Policies](#policies). |
 
 `mode: observe` and `mode: suggest` use the same decision path and announce nothing. `suggest` is the checkpoint: read the log, the dashboard, and `/api/decisions` before you change `mode`. The allowlist is enforced only in `inject`.
 
@@ -135,7 +136,7 @@ One established session is enough for the view to be ready. All sessions down dr
 
 ### Plugin entries
 
-`probers`, `sources`, `notifiers`, and `telemetry` are lists. `scorer` and `announcer` are single objects.
+`probers`, `sources`, `notifiers`, `telemetry`, and `policies` are lists. `scorer` and `announcer` are single objects.
 
 | Key | Meaning |
 |---|---|
@@ -375,6 +376,73 @@ Every improvement whose native and steered providers both have a `cost` reports 
 | `max_rtt` | `10ms` | 0–10s. Latency a cost path may add over the lowest RTT. |
 
 At least one weight must be positive.
+
+### Policies
+
+`policies` is a chain of policy plugins. Before each decision the controller asks each policy, in list order, about every probed prefix. The first one that matches decides that prefix; later ones are not asked. Maintenance windows from every `maintenance` entry apply together. A policy only restricts or pins what the decision engine may choose. The prefix must still be in the learned RIB, allowlisted in inject mode, and under `max_improvements`, and every injected route still carries `packeteer_community` and NO_EXPORT. Removing the `policies` block and restarting is the rollback: pins are withdrawn and the normal thresholds apply again.
+
+| Action | Effect |
+|---|---|
+| `ignore` | Native routing only. An active improvement is retired at once. No new improvement, and commit or cost planners do not see the prefix. |
+| `allow` | Only the listed providers may carry an improvement. |
+| `deny` | The listed providers never carry an improvement. |
+| `static` | Pin to the one listed provider while its path is usable (fresh probe, provider up, not excluded or in maintenance), without waiting for `thresholds` or `hold_time`. When the pinned provider is native, nothing is announced. When the pinned path fails, the pin is withdrawn and waits out `hold_time`. A pin does not expire on `improvement_ttl`. Cause `static`. |
+| `vip` | Normal thresholds, but its performance moves are admitted ahead of other performance moves when `max_improvements` binds. Pair it with the `vip` source for faster probing. |
+
+`allow` and `deny` never block the native provider: they decide where Packeteer may steer, not whether native routing is used. An active improvement on a provider that a policy now forbids is retired at once, even inside `hold_time`. When the cap binds, `static` pins are admitted first, then `vip` moves, then other performance moves, then commit and cost moves.
+
+#### Policy `rules`
+
+| Key | Default | Meaning |
+|---|---|---|
+| `geoip_db` | none | Path of a MaxMind-format country database (for example GeoLite2-Country) mounted into the container. Required when a rule lists `countries`. Read once at startup; restart to load a new file. Packeteer does not ship one. |
+| `rules` | none | Required, 1–10000 entries. |
+
+Each rule:
+
+| Key | Meaning |
+|---|---|
+| `name` | Optional, unique. Shown in decisions and logs. Defaults to `rules[i]`. |
+| `action` | Required. `ignore`, `allow`, `deny`, `static`, or `vip`. |
+| `providers` | Configured provider names. `allow` and `deny` need at least one, `static` exactly one, `ignore` and `vip` none. |
+| `prefixes` | CIDRs. A rule prefix matches itself and every more-specific probed prefix. |
+| `asns` | Origin ASNs (the last ASN of the learned AS path). Matches only while the RIB view is ready. |
+| `countries` | ISO 3166-1 alpha-2 codes. Looked up for the first address of the probed prefix, `country` first, then `registered_country`. |
+
+A rule needs at least one of `prefixes`, `asns`, or `countries`, and matches when any of them match. When several rules match one prefix, a prefix match beats an ASN match, which beats a country match. Among prefix matches the longest rule prefix wins. Remaining ties go to the rule listed first.
+
+#### Policy `maintenance`
+
+While a window is open, its providers are excluded: improvements on them are retired at once, and no move of any cause (performance, static, commit, cost) may land on them. A prefix that was steered onto the provider returns to native, and on the next evaluation it may be improved onto another provider under the normal rules. Native traffic through the provider is not moved.
+
+| Key | Default | Meaning |
+|---|---|---|
+| `timezone` | `UTC` | IANA zone for `schedule`. Zone data is built into the binary. |
+| `windows` | none | Configured windows (up to 1000). May be empty when only the API is used. |
+| `max_api_duration` | `24h` | Longest on-demand window, 1m–7 days. |
+
+Each window:
+
+| Key | Meaning |
+|---|---|
+| `name` | Optional, unique. The window ID is `schedule-<name>`. |
+| `providers` | Required. Configured provider names. |
+| `schedule` | Five-field cron start time: minute, hour, day of month, month, day of week (0–7, 0 and 7 are Sunday). `*`, numbers, ranges `a-b`, steps `*/n` or `a-b/n`, and comma lists. When both day fields are restricted, either one matches. Use with `duration`. |
+| `duration` | 1m–7 days. How long each scheduled window stays open. |
+| `start`, `end` | RFC 3339 timestamps for a one-off window. Use instead of `schedule` and `duration`. |
+| `reason` | Optional text shown in the API. |
+
+On-demand windows go through the ops API and live in memory only; a restart ends them. They require HTTP basic auth (`PACKETEER_HTTP_USER` and `PACKETEER_HTTP_PASSWORD`); without it the API refuses to open or close windows.
+
+```sh
+curl -u "$USER:$PASS" -H 'Content-Type: application/json' \
+  -d '{"providers":["transit-b"],"duration":"2h","reason":"provider ticket"}' \
+  http://127.0.0.1:8080/api/maintenance
+curl -u "$USER:$PASS" http://127.0.0.1:8080/api/maintenance
+curl -u "$USER:$PASS" -X DELETE http://127.0.0.1:8080/api/maintenance/api-1
+```
+
+`GET /api/maintenance` lists open windows from every maintenance policy. `POST` opens a window on the first `maintenance` entry (JSON only; at most 100 open at a time). `DELETE /api/maintenance/<id>` closes an on-demand window; configured windows cannot be closed from the API.
 
 ### Notifier `webhook`
 

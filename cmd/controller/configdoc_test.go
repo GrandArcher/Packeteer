@@ -10,6 +10,8 @@ import (
 	"github.com/GrandArcher/Packeteer/internal/plugins/announcer/gobgp"
 	"github.com/GrandArcher/Packeteer/internal/plugins/exec"
 	"github.com/GrandArcher/Packeteer/internal/plugins/notifier/webhook"
+	"github.com/GrandArcher/Packeteer/internal/plugins/policy/maintenance"
+	"github.com/GrandArcher/Packeteer/internal/plugins/policy/rules"
 	"github.com/GrandArcher/Packeteer/internal/plugins/prober/fixed"
 	"github.com/GrandArcher/Packeteer/internal/plugins/prober/icmp"
 	"github.com/GrandArcher/Packeteer/internal/plugins/prober/tcp"
@@ -59,6 +61,10 @@ func TestConfigDocCoversStructs(t *testing.T) {
 		webhook.Config{},
 		exec.Config{},
 		gobgp.Config{},
+		rules.Config{},
+		rules.Rule{},
+		maintenance.Config{},
+		maintenance.Window{},
 	) {
 		if !strings.Contains(text, "`"+key+"`") {
 			missing = append(missing, key)

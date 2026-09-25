@@ -4,6 +4,7 @@ go 1.26.0
 
 require (
 	github.com/gosnmp/gosnmp v1.42.1
+	github.com/oschwald/maxminddb-golang/v2 v2.6.0
 	github.com/osrg/gobgp/v3 v3.37.0
 	golang.org/x/net v0.59.0
 	golang.org/x/sys v0.48.0
