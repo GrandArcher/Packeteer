@@ -158,14 +158,13 @@ func TestFlapPrevention(t *testing.T) {
 	if d.Action != ActionImprove {
 		t.Fatalf("t0: %+v", d)
 	}
-	// While improved the router no longer advertises the native path to us.
-	nat := map[netip.Prefix]string{}
+	// The prefix stays in the learned RIB for the life of the improvement.
 	recovered := []m{{"a", 0, 10}, {"b", 0, 30}}
-	st, d = step(st, t0.Add(time.Minute), recovered, nat)
+	st, d = step(st, t0.Add(time.Minute), recovered, native)
 	if d.Action != ActionKeep || !strings.Contains(d.Reason, "hold_time") {
 		t.Fatalf("t0+1m: %+v", d)
 	}
-	st, d = step(st, t0.Add(16*time.Minute), recovered, nat)
+	st, d = step(st, t0.Add(16*time.Minute), recovered, native)
 	if d.Action != ActionRetire || !strings.Contains(d.Reason, "native path better") {
 		t.Fatalf("t0+16m: %+v", d)
 	}
@@ -202,12 +201,13 @@ func TestActiveImprovementSafetyRetirements(t *testing.T) {
 		{"provider excluded", func(_ *Input, c *Config) { c.Excluded = map[string]bool{"b": true} }, at, "excluded"},
 		{"allowlist no longer covers", func(_ *Input, c *Config) { c.Mode = "inject"; c.Allowlist = []netip.Prefix{pB} }, at, "not allowlisted"},
 		{"rib session lost", func(i *Input, _ *Config) { i.RIBReady = false }, at, "rib not ready"},
+		{"prefix left the RIB", func(i *Input, _ *Config) { i.Native = map[netip.Prefix]string{} }, at, "no longer in RIB"},
 		{"prefix no longer probed", func(i *Input, _ *Config) { i.Results = results(at, pB, ms...) }, at, "no longer probed"},
 		{"ttl expired", func(_ *Input, c *Config) { c.ImprovementTTL = 30 * time.Minute }, t0.Add(31 * time.Minute), "ttl"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			input, c := in(results(tt.now, pA, ms...), nil), cfg()
+			input, c := in(results(tt.now, pA, ms...), map[netip.Prefix]string{pA: "a"}), cfg()
 			tt.mutate(&input, &c)
 			st, out := Decide(base(), input, c, scorer(t), tt.now)
 			if _, ok := st.Improvements[pA]; ok {
@@ -226,7 +226,7 @@ func TestActiveImprovementSafetyRetirements(t *testing.T) {
 func TestNativeDownKeepsImprovement(t *testing.T) {
 	s := NewState()
 	s.Improvements[pA] = Improvement{Prefix: pA, Provider: "b", Native: "a", Since: t0}
-	input := in(results(t0.Add(time.Hour), pA, m{"a", 0, 10}, m{"b", 0, 30}), nil)
+	input := in(results(t0.Add(time.Hour), pA, m{"a", 0, 10}, m{"b", 0, 30}), map[netip.Prefix]string{pA: "a"})
 	input.ProviderUp = map[string]bool{"b": true}
 	st, out := Decide(s, input, cfg(), scorer(t), t0.Add(time.Hour))
 	if _, ok := st.Improvements[pA]; !ok || decision(t, out, pA).Action != ActionKeep {
@@ -238,11 +238,12 @@ func TestSwitchAfterHold(t *testing.T) {
 	s := NewState()
 	s.Improvements[pA] = Improvement{Prefix: pA, Provider: "b", Native: "a", Since: t0}
 	ms := []m{{"a", 0, 90}, {"b", 0, 60}, {"c", 0, 20}}
-	_, out := Decide(s, in(results(t0.Add(time.Minute), pA, ms...), nil), cfg(), scorer(t), t0.Add(time.Minute))
+	native := map[netip.Prefix]string{pA: "a"}
+	_, out := Decide(s, in(results(t0.Add(time.Minute), pA, ms...), native), cfg(), scorer(t), t0.Add(time.Minute))
 	if d := decision(t, out, pA); d.Action != ActionKeep {
 		t.Fatalf("inside hold: %+v", d)
 	}
-	st, out := Decide(s, in(results(t0.Add(20*time.Minute), pA, ms...), nil), cfg(), scorer(t), t0.Add(20*time.Minute))
+	st, out := Decide(s, in(results(t0.Add(20*time.Minute), pA, ms...), native), cfg(), scorer(t), t0.Add(20*time.Minute))
 	if st.Improvements[pA].Provider != "c" || out.Changes[0].Action != ActionSwitch || out.Changes[0].Old.Provider != "b" {
 		t.Fatalf("switch: %+v %+v", st.Improvements[pA], out.Changes)
 	}

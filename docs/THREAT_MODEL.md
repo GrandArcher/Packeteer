@@ -8,7 +8,7 @@ Packeteer can change how a network forwards packets. Failure modes matter more t
 - **Leak** — more-specifics learned from Packeteer advertised to transit. Mitigate with a well-known community and outbound filters on every eBGP session.
 - **Blackhole** — inject toward a next-hop that is down. Mitigate by requiring a live RIB path and withdrawing on probe-source or session failure.
 - **Over-injection** — thousands of more-specifics exhaust TCAM. Mitigate with max-improvements and prefix aggregation policy.
-- **Stale intent** — controller dies, routes remain. Packeteer withdraws on shutdown and never enables graceful restart; the BGP hold timer is the backstop if the process is killed before the withdraw is sent.
+- **Stale intent** — controller dies, or keeps announcing a prefix the edge no longer has. Packeteer withdraws on shutdown and as soon as the prefix leaves the learned RIB, and never enables graceful restart; the BGP hold timer is the backstop if the process is killed before the withdraw is sent.
 
 ## Flow input
 

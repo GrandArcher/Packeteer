@@ -214,6 +214,43 @@ func TestInjectAnnounceWithdrawAndGuards(t *testing.T) {
 	}
 }
 
+func TestActiveRouteWithdrawnWhenPrefixLeavesRIB(t *testing.T) {
+	ctx := context.Background()
+	rib := memRIB{ready: true, has: map[netip.Prefix]bool{pfx("198.51.100.0/24"): true}}
+	ann := &fakeAnn{}
+	c, err := New(testCfg(), ann, &rib, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Sync(ctx, []policy.Improvement{imp("198.51.100.0/24", "b")}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Same provider, prefix gone: the early "already announced" skip must not keep it.
+	delete(rib.has, pfx("198.51.100.0/24"))
+	err = c.Sync(ctx, []policy.Improvement{imp("198.51.100.0/24", "b")})
+	if err == nil || !strings.Contains(err.Error(), "not in the RIB") {
+		t.Fatalf("err = %v", err)
+	}
+	if ann.count() != 0 {
+		t.Fatalf("route still announced after the prefix left the RIB: %d", ann.count())
+	}
+
+	// A provider switch must not re-announce a prefix that is no longer learned.
+	rib.has[pfx("198.51.100.0/24")] = true
+	if err := c.Sync(ctx, []policy.Improvement{imp("198.51.100.0/24", "b")}); err != nil {
+		t.Fatal(err)
+	}
+	delete(rib.has, pfx("198.51.100.0/24"))
+	err = c.Sync(ctx, []policy.Improvement{imp("198.51.100.0/24", "a")})
+	if err == nil || !strings.Contains(err.Error(), "not in the RIB") {
+		t.Fatalf("err = %v", err)
+	}
+	if ann.count() != 0 {
+		t.Fatal("provider switch announced a prefix that is not in the RIB")
+	}
+}
+
 func TestMoreSpecifics(t *testing.T) {
 	ctx := context.Background()
 	rib := memRIB{ready: true, has: map[netip.Prefix]bool{pfx("198.51.100.0/24"): true, pfx("2001:db8::/32"): true}}

@@ -48,8 +48,9 @@ type Input struct {
 	// RIBReady false while enabled means the view is stale: every
 	// improvement is retired and nothing new is decided.
 	RIBReady bool
-	// Native maps a probed prefix to the provider of its current RIB best
-	// path. A prefix missing here is not in the RIB.
+	// Native maps a probed prefix to the provider of the path a neighbor is
+	// still advertising. A prefix missing here is not in the learned RIB.
+	// Active improvements are retired when their prefix is missing.
 	Native map[netip.Prefix]string
 }
 
@@ -210,6 +211,13 @@ func Decide(prev State, in Input, cfg Config, scorer plugin.Scorer, now time.Tim
 		imp, active := st.Improvements[p]
 		if active {
 			d.Native, d.Current = imp.Native, imp.Provider
+			if in.RIBEnabled {
+				if _, inRIB := in.Native[p]; !inRIB {
+					retire(p, "prefix no longer in RIB", false)
+					d.Action, d.Reason, d.Current = ActionRetire, "prefix no longer in RIB", imp.Native
+					continue
+				}
+			}
 			cur, ok := get(imp.Provider)
 			switch {
 			case !ok:

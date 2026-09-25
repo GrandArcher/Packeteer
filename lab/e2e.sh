@@ -19,8 +19,10 @@ echo "building lab"
 
 wait_route() {
 	local mode=$1
+	local tries=${2:-40}
+	local pause=${3:-2}
 	local i
-	for i in $(seq 1 40); do
+	for i in $(seq 1 "$tries"); do
 		local json
 		# Summary JSON (FRR 10.2 omits communities) plus the detail text
 		# form, which prints "Community: 64512:666 no-export".
@@ -30,7 +32,7 @@ wait_route() {
 		if printf '%s\n' "$json" | python3 lab/check_route.py "$mode"; then
 			return 0
 		fi
-		sleep 2
+		sleep "$pause"
 	done
 	echo "timed out waiting for route to be $mode" >&2
 	"${compose[@]}" exec -T edge vtysh -c 'show bgp summary' >&2 || true
@@ -59,6 +61,16 @@ wait_route absent
 echo "restoring the improvement (after flip-back cooldown)"
 flip lab/probes/prefer-b.yaml
 wait_route present
+
+echo "withdrawing the native route on FRR"
+"${compose[@]}" exec -T edge vtysh \
+	-c 'configure terminal' \
+	-c 'router bgp 64512' \
+	-c 'address-family ipv4 unicast' \
+	-c 'no network 198.51.100.0/24' \
+	-c 'end'
+echo "waiting for Packeteer's route to disappear"
+wait_route absent 20 1
 
 echo "stopping packeteer"
 "${compose[@]}" stop -t 20 packeteer

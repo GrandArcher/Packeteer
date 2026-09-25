@@ -6,7 +6,7 @@ router_id: 192.0.2.10
 packeteer_community: "64512:666"
 max_improvements: 50
 hold_time: 15m              # min life of an improvement; also cooldown after a flip-back
-improvement_ttl: 1h         # retire and re-measure the native path after this long
+improvement_ttl: 1h         # re-measure the native path after this long; a prefix that leaves the learned RIB is withdrawn immediately
 
 thresholds:
   min_loss_delta_pct: 1.0

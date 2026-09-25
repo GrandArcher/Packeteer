@@ -3,8 +3,10 @@
 // It runs only in inject mode. Observe and suggest never touch the
 // announcer. A route is published only when the decided prefix is allowlisted
 // and present in the RIB, the provider has a next hop, and the improvement
-// cap has room. Every route carries the configured local preference and
-// community; the announcer adds NO_EXPORT.
+// cap has room. Every Sync re-checks prefixes already on the wire, including
+// provider switches, and withdraws any whose prefix has left the RIB. Every
+// route carries the configured local preference and community; the announcer
+// adds NO_EXPORT.
 //
 // more_specific_bits, when non-zero, publishes the 2^n covering
 // more-specifics of the decided prefix instead of the prefix itself. The
@@ -28,7 +30,9 @@ import (
 )
 
 // RIB is the slice of the RIB view the controller needs. Ready is false when
-// no BGP session is up; Contains reports an exact prefix match.
+// no BGP session is up. Contains reports an exact prefix still advertised by
+// a configured neighbor, which stays true while Packeteer's own route is the
+// local best path and becomes false when the neighbor withdraws it.
 type RIB interface {
 	Ready() bool
 	Contains(netip.Prefix) bool
@@ -114,7 +118,8 @@ func (c *Controller) Bind(srv any) error {
 // improvements. In observe and suggest it returns immediately and does not
 // call the announcer. When the RIB is not ready every announced route is
 // withdrawn, even if imps is non-empty. Calling Sync again with the same
-// improvements does not re-advertise.
+// improvements does not re-advertise. A prefix that is no longer in the RIB
+// is withdrawn even when the improvement is still requested.
 func (c *Controller) Sync(ctx context.Context, imps []policy.Improvement) error {
 	if c == nil || c.cfg.Mode != config.ModeInject {
 		return nil
@@ -144,6 +149,15 @@ func (c *Controller) Sync(ctx context.Context, imps []policy.Improvement) error 
 	sortPrefixes(order)
 	for _, p := range order {
 		im := want[p]
+		if !c.rib.Contains(p) {
+			if _, on := c.active[p]; on {
+				if err := c.withdrawLocked(ctx, p); err != nil {
+					errs = append(errs, err)
+				}
+			}
+			errs = append(errs, fmt.Errorf("announce: %s is not in the RIB", p))
+			continue
+		}
 		if s, on := c.active[p]; on && s.provider == im.Provider {
 			continue
 		}
@@ -210,9 +224,7 @@ func (c *Controller) announceLocked(ctx context.Context, imp policy.Improvement)
 	if !allowed(c.cfg.Allowlist, p) {
 		return fmt.Errorf("announce: %s is not allowlisted", p)
 	}
-	if _, on := c.active[p]; !on && !c.rib.Contains(p) {
-		// An active improvement may already have displaced the native path
-		// (iBGP does not reflect our own route). A new one must be in the RIB.
+	if !c.rib.Contains(p) {
 		return fmt.Errorf("announce: %s is not in the RIB", p)
 	}
 	nh, ok := c.cfg.NextHops[imp.Provider]
