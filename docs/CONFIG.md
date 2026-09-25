@@ -66,6 +66,9 @@ A candidate wins when its score is lower and either loss improves by at least `m
 | `source_ip` | yes | Source address of probes. Unique across providers. Must be configured on the host. Same address family as `next_hop`. |
 | `next_hop` | yes | BGP next hop used if this provider is selected. Also how a learned route is matched to a provider. |
 | `exclude` | no | `true`: still probe, never select for an improvement. |
+| `group` | no | Load-balancing group. Empty means the provider is not in a group. Letters, digits, `_`, `.`, `-`, at most 64 characters, starting with a letter or digit. |
+| `precedence` | no | Commit-control preference. Lower is preferred. `0` or omitted means 100. 0–10000. The highest precedence among providers that can take commit traffic is the last resort. |
+| `cc_disable` | no | `true`: leave this provider out of commit control in both directions. Performance improvements can still select it. |
 
 ### `allowlist`
 
@@ -303,7 +306,7 @@ Off unless this source is listed. NetFlow v5, NetFlow v9, IPFIX, and sFlow v5. R
 | `aggregate_v6` | 48 | 1–128. |
 | `exclude` | none | CIDRs to ignore, no host bits, no duplicates. |
 
-With `--network host`, `listen` binds host UDP ports. Do not publish them. Each time bucket keeps at most 20000 prefixes.
+With `--network host`, `listen` binds host UDP ports. Do not publish them. Each time bucket keeps at most 20000 prefixes. The commit scorer reads every prefix in the window as a rate (bytes × 8 / window, decimal megabits per second), including prefixes `top_n` or `min_bytes` did not offer as probe targets.
 
 ### Scorer `weighted`
 
@@ -316,6 +319,27 @@ With `--network host`, `listen` binds host UDP ports. Do not publish them. Each 
 | `jitter_weight` | 0.5 | Not negative. |
 
 At least one weight must be positive. Omit the block to keep the defaults.
+
+### Scorer `commit`
+
+Optional. Same performance score as `weighted`, plus commit control and provider-group balancing. Select it with `scorer.type: commit`. The default scorer stays `weighted`, which does not move traffic for commit. Switching back to `weighted` withdraws improvements whose cause is `commit`.
+
+The billable figure comes from telemetry. `greater` and `greater_separate` use `usage_mbps`. `separate` uses the outbound 95th, because this steers traffic the edge sends. A row older than `max_age`, or a row with no samples, is ignored. A zero timestamp is not aged out. Prefix volume comes from a source that implements volume reporting (the `flow` source: bytes over its window, as decimal megabits per second). A prefix with no volume is not moved for commit. The prefix must still be in the learned RIB. Performance moves are decided first and are not overridden. Both causes count toward `max_improvements`.
+
+A move onto a path with higher loss is refused unless `loss_override` is true. `cc_disable` providers are neither sources nor destinations of these moves. `balance: off` only relieves a provider whose billable figure is over its commit. `equal` shares a group's traffic evenly. `proportional` shares it in proportion to each member's commit. Balance stays inside the group and does not push a provider over its commit. The highest `precedence` receives traffic only when every lower precedence lacks room for that prefix.
+
+| Key | Default | Bounds |
+|---|---|---|
+| `loss_weight` | 100 | Not negative. Same meaning as `weighted`. |
+| `rtt_weight` | 1 | Not negative. |
+| `jitter_weight` | 0.5 | Not negative. |
+| `loss_override` | false | `true` allows a commit move onto higher loss. |
+| `balance` | `off` | `off`, `equal`, or `proportional`. |
+| `balance_slack` | `0.10` | 0–1. Fractional imbalance that does not move traffic. `0` is explicit. |
+| `max_age` | `15m` | Not negative. `0` uses the default. Telemetry older than this is ignored. |
+| `min_mbps` | 0 | Not negative. Prefixes below this volume are not moved for commit. |
+
+At least one weight must be positive.
 
 ### Notifier `webhook`
 
@@ -338,7 +362,7 @@ At least one weight must be positive. Omit the block to keep the defaults.
 
 ### Telemetry `snmp`
 
-Off unless a `telemetry` entry lists `type: snmp`. It polls IF-MIB counters and keeps 95th-percentile usage for the open billing period. It does not announce and it does not change decisions. Samples live in memory. A restart clears the window. Commit control that acts on these numbers is a later change.
+Off unless a `telemetry` entry lists `type: snmp`. It polls IF-MIB counters and keeps 95th-percentile usage for the open billing period. It does not announce. The `commit` scorer reads the snapshot when that scorer is selected; the collector itself does not change a decision. A failed poll does not withdraw performance improvements. Samples live in memory. A restart clears the window.
 
 The billing period is `[start, end)` in UTC, opening at 00:00 UTC on `billing_day`. `billing_day` is 1–28 so the day exists in every month.
 
@@ -391,7 +415,7 @@ Each provider:
 | `name` | Required. Must match a top-level provider `name`. Unique in this plugin. |
 | `host` | Required. A `hosts[].name`. |
 | `interface` | Required. `ifName`, `ifDescr`, or a decimal `ifIndex`. |
-| `commit_mbps` | Required. Greater than 0, at most 100000000. Reported, not enforced. |
+| `commit_mbps` | Required. Greater than 0, at most 100000000. The `commit` scorer compares the billable 95th with this. The collector does not enforce it. |
 | `billing_day` | Required. 1–28. UTC. |
 | `percentile` | Required. `separate`, `greater`, or `greater_separate`. |
 

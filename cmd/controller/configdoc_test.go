@@ -14,6 +14,7 @@ import (
 	"github.com/GrandArcher/Packeteer/internal/plugins/prober/icmp"
 	"github.com/GrandArcher/Packeteer/internal/plugins/prober/tcp"
 	"github.com/GrandArcher/Packeteer/internal/plugins/prober/udp"
+	"github.com/GrandArcher/Packeteer/internal/plugins/scorer/commit"
 	"github.com/GrandArcher/Packeteer/internal/plugins/scorer/weighted"
 	"github.com/GrandArcher/Packeteer/internal/plugins/source/flow"
 	"github.com/GrandArcher/Packeteer/internal/plugins/source/outage"
@@ -47,6 +48,7 @@ func TestConfigDocCoversStructs(t *testing.T) {
 		vip.Config{},
 		snmp.Config{},
 		weighted.Config{},
+		commit.Config{},
 		webhook.Config{},
 		exec.Config{},
 		gobgp.Config{},

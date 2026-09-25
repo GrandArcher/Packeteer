@@ -63,6 +63,7 @@ func sampleInput() Input {
 		DecidedAt: at,
 		Improvements: []policy.Improvement{{
 			Prefix: p198, Provider: "transit-b", Native: "transit-a", Since: at, Reason: "loss",
+			Cause: plugin.CausePerformance,
 		}},
 		BGPConfigured: true,
 		RIBReady:      true,
@@ -266,7 +267,7 @@ func TestJSONAPI(t *testing.T) {
 	if err := json.Unmarshal(body, &doc); err != nil {
 		t.Fatal(err)
 	}
-	if len(doc.Improvements) != 1 || doc.Improvements[0].Provider != "transit-b" || doc.Improvements[0].Native != "transit-a" || doc.Improvements[0].Prefix != "198.51.100.0/24" {
+	if len(doc.Improvements) != 1 || doc.Improvements[0].Provider != "transit-b" || doc.Improvements[0].Native != "transit-a" || doc.Improvements[0].Prefix != "198.51.100.0/24" || doc.Improvements[0].Cause != "performance" {
 		t.Fatalf("improvements = %+v", doc.Improvements)
 	}
 }
@@ -291,7 +292,7 @@ func TestMetrics(t *testing.T) {
 		`packeteer_decisions{action="none"} 0`,
 		`packeteer_decision{prefix="198.51.100.0/24",action="improve",native="transit-a",current="transit-a",recommended="transit-b"} 1`,
 		"packeteer_improvements_active 1",
-		`packeteer_improvement{prefix="198.51.100.0/24",provider="transit-b",native="transit-a"} 1`,
+		`packeteer_improvement{prefix="198.51.100.0/24",provider="transit-b",native="transit-a",cause="performance"} 1`,
 		`packeteer_bgp_session_up{peer="192.0.2.254"} 0`,
 		`packeteer_bgp_session{peer="192.0.2.254",state="IDLE"} 1`,
 		`packeteer_bgp_session{peer="192.0.2.254",state="ESTABLISHED"} 0`,

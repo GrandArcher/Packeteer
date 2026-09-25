@@ -60,13 +60,16 @@ type Snapshot struct {
 
 // Provider is one configured transit plus its probe-source health.
 type Provider struct {
-	Name    string    `json:"name"`
-	Source  string    `json:"source,omitempty"`
-	NextHop string    `json:"next_hop,omitempty"`
-	Exclude bool      `json:"exclude"`
-	Up      bool      `json:"up"`
-	Reason  string    `json:"reason,omitempty"`
-	Since   time.Time `json:"since,omitempty"`
+	Name       string    `json:"name"`
+	Source     string    `json:"source,omitempty"`
+	NextHop    string    `json:"next_hop,omitempty"`
+	Exclude    bool      `json:"exclude"`
+	Group      string    `json:"group,omitempty"`
+	Precedence int       `json:"precedence,omitempty"`
+	CCDisable  bool      `json:"cc_disable,omitempty"`
+	Up         bool      `json:"up"`
+	Reason     string    `json:"reason,omitempty"`
+	Since      time.Time `json:"since,omitempty"`
 }
 
 // Probe is the latest measurement of one provider toward one prefix.
@@ -121,6 +124,7 @@ type Decision struct {
 	Current     string      `json:"current,omitempty"`
 	Recommended string      `json:"recommended,omitempty"`
 	Action      string      `json:"action"`
+	Cause       string      `json:"cause,omitempty"`
 	Reason      string      `json:"reason,omitempty"`
 	Candidates  []Candidate `json:"candidates"`
 }
@@ -133,6 +137,7 @@ type Improvement struct {
 	Native   string    `json:"native,omitempty"`
 	Since    time.Time `json:"since,omitempty"`
 	Reason   string    `json:"reason,omitempty"`
+	Cause    string    `json:"cause,omitempty"`
 }
 
 // Telemetry is one provider's interface usage for the open billing period.
@@ -239,7 +244,10 @@ func assembleProviders(in Input) []Provider {
 		out = append(out, p)
 	}
 	for _, p := range in.Providers {
-		row := Provider{Name: p.Name, Source: p.SourceIP, NextHop: p.NextHop, Exclude: p.Exclude}
+		row := Provider{
+			Name: p.Name, Source: p.SourceIP, NextHop: p.NextHop, Exclude: p.Exclude,
+			Group: p.Group, Precedence: p.Precedence, CCDisable: p.CCDisable,
+		}
 		if st, ok := status[p.Name]; ok {
 			row.Up, row.Reason, row.Since = st.Up, st.Reason, st.Since
 		} else if !in.Started {
@@ -296,6 +304,7 @@ func assembleDecisions(in []policy.Decision) []Decision {
 			Current:     d.Current,
 			Recommended: d.Recommended,
 			Action:      d.Action,
+			Cause:       d.Cause,
 			Reason:      d.Reason,
 			Candidates:  make([]Candidate, 0, len(d.Candidates)),
 		}
@@ -328,6 +337,7 @@ func assembleImprovements(in []policy.Improvement) []Improvement {
 			Native:   im.Native,
 			Since:    im.Since,
 			Reason:   im.Reason,
+			Cause:    im.Cause,
 		})
 	}
 	sort.Slice(out, func(i, j int) bool { return lessPrefix(out[i].Prefix, out[j].Prefix) < 0 })

@@ -1,7 +1,8 @@
 // Package snmp is the telemetry plugin that polls interface counters and
 // tracks 95th-percentile usage for a billing period.
 //
-// It does not announce routes and it does not change decisions. A failed
+// It does not announce routes. The commit scorer reads the snapshot when
+// it is selected; this plugin does not itself change a decision. A failed
 // poll records an error and leaves the samples already stored. Credentials
 // come from the environment named in the config. They are not logged.
 package snmp

@@ -146,6 +146,43 @@ type Scorer interface {
 	Score(s PathStats) float64
 }
 
+// Causes recorded on an improvement.
+const (
+	// CausePerformance is a move that cleared the loss or latency thresholds.
+	CausePerformance = "performance"
+	// CauseCommit is a move that keeps a provider under its commit or
+	// balances a provider group. It is not a performance win.
+	CauseCommit = "commit"
+)
+
+// PrefixVolume is observed traffic for one prefix. Bytes is the total over
+// Window. A source that cannot time the window leaves both zero.
+type PrefixVolume struct {
+	Prefix netip.Prefix
+	Bytes  uint64
+	Window time.Duration
+}
+
+// Mbps is the average rate over Window, in decimal megabits per second.
+// It is zero when Bytes or Window is zero.
+func (v PrefixVolume) Mbps() float64 {
+	if v.Bytes == 0 || v.Window <= 0 {
+		return 0
+	}
+	sec := v.Window.Seconds()
+	if sec <= 0 {
+		return 0
+	}
+	return float64(v.Bytes) * 8 / sec / 1e6
+}
+
+// VolumeSource is optional on a target source that sees traffic. The
+// decision engine reads it when the scorer plans commit moves. Volumes
+// must not announce routes.
+type VolumeSource interface {
+	Volumes(ctx context.Context) ([]PrefixVolume, error)
+}
+
 // ---- Announcer ----
 
 // Route is a route Packeteer wants the edge router to use.
@@ -260,6 +297,21 @@ type Usage struct {
 	// Error is the last poll error. Empty when the last poll succeeded.
 	// A poll error does not drop samples already stored.
 	Error string
+}
+
+// BillableMbps is the figure outbound commit control compares with
+// CommitMbps. A single-figure percentile mode uses UsageMbps. separate
+// keeps the two directions apart, so the outbound 95th is the figure:
+// commit control steers traffic the edge sends. ok is false when no
+// sample is stored or the commit is not positive.
+func (u Usage) BillableMbps() (float64, bool) {
+	if u.Samples <= 0 || u.CommitMbps <= 0 {
+		return 0, false
+	}
+	if u.Single {
+		return u.UsageMbps, true
+	}
+	return u.OutMbps95, true
 }
 
 // Telemetry collects per-provider interface usage. Implementations must

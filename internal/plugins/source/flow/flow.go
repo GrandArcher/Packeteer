@@ -43,6 +43,9 @@ const (
 
 func init() { plugin.Sources.Register(TypeName, New) }
 
+// Source implements VolumeSource so commit control can read per-prefix rates.
+var _ plugin.VolumeSource = (*Source)(nil)
+
 // Config is the flow source's config block.
 type Config struct {
 	Listen      listenList    `yaml:"listen"`
@@ -318,6 +321,20 @@ func udpAddr(a *net.UDPAddr) netip.Addr {
 		return netip.Addr{}
 	}
 	return ip.Unmap()
+}
+
+// Volumes implements plugin.VolumeSource. Mbps is bytes over the configured
+// window. The list is not limited to top_n. It does not announce.
+func (s *Source) Volumes(context.Context) ([]plugin.PrefixVolume, error) {
+	rows := s.win.totals(s.now(), maxPrefixes)
+	out := make([]plugin.PrefixVolume, 0, len(rows))
+	for _, r := range rows {
+		if r.bytes == 0 {
+			continue
+		}
+		out = append(out, plugin.PrefixVolume{Prefix: r.prefix, Bytes: r.bytes, Window: s.window})
+	}
+	return out, nil
 }
 
 // Targets returns the current top prefixes. An idle collector returns an

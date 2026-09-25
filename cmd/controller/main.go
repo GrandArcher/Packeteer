@@ -304,7 +304,7 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 		// cancellation) must still withdraw once measurements exceed
 		// MaxResultAge.
 		decideLoop(loopCtx, cfg.Probe.Interval, kick, func(now time.Time) {
-			runDecision(now, decider, decisionInput(engine, view), ctl, log, cfg.Mode)
+			runDecision(now, decider, decisionInput(engine, view, plugins), ctl, log, cfg.Mode)
 		})
 	}()
 
@@ -842,6 +842,9 @@ func newDecider(cfg *config.Config, plugins *pluginhost.Set) (*policy.Engine, er
 		if p.Exclude {
 			pc.Excluded[p.Name] = true
 		}
+		pc.Providers = append(pc.Providers, policy.ProviderPolicy{
+			Name: p.Name, Group: p.Group, Precedence: p.Precedence, CCDisable: p.CCDisable,
+		})
 	}
 	for _, s := range cfg.Allowlist.Prefixes {
 		p, err := netip.ParsePrefix(s)
@@ -853,8 +856,10 @@ func newDecider(cfg *config.Config, plugins *pluginhost.Set) (*policy.Engine, er
 	return policy.NewEngine(pc, plugins.Scorer.Plugin), nil
 }
 
-// decisionInput snapshots probe results, provider health and the RIB view.
-func decisionInput(engine *probe.Engine, view *rib.View) policy.Input {
+// decisionInput snapshots probe results, provider health, the RIB view,
+// telemetry, and flow volumes. Volumes and usage are inputs to the commit
+// scorer only. A weighted scorer ignores them.
+func decisionInput(engine *probe.Engine, view *rib.View, plugins *pluginhost.Set) policy.Input {
 	in := policy.Input{Results: engine.Results(), ProviderUp: map[string]bool{}, Native: map[netip.Prefix]string{}}
 	for _, p := range engine.Providers() {
 		in.ProviderUp[p.Name] = p.Up
@@ -867,16 +872,53 @@ func decisionInput(engine *probe.Engine, view *rib.View) policy.Input {
 			}
 		}
 	}
+	in.Usage = collectTelemetry(plugins)
+	in.VolumeMbps = collectVolumes(plugins)
 	return in
+}
+
+// collectVolumes reads optional volume reports from target sources. The
+// largest rate wins when two sources name one prefix. A source that does
+// not implement VolumeSource is skipped. This does not announce.
+func collectVolumes(plugins *pluginhost.Set) map[netip.Prefix]float64 {
+	if plugins == nil {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	var out map[netip.Prefix]float64
+	for _, src := range plugins.Sources {
+		vs, ok := src.Plugin.(plugin.VolumeSource)
+		if !ok {
+			continue
+		}
+		rows, err := vs.Volumes(ctx)
+		if err != nil {
+			continue
+		}
+		for _, row := range rows {
+			mbps := row.Mbps()
+			if mbps <= 0 || !row.Prefix.IsValid() {
+				continue
+			}
+			if out == nil {
+				out = map[netip.Prefix]float64{}
+			}
+			if mbps > out[row.Prefix] {
+				out[row.Prefix] = mbps
+			}
+		}
+	}
+	return out
 }
 
 func logChanges(log *slog.Logger, mode string, changes []policy.Change) {
 	for _, c := range changes {
 		switch c.Action {
 		case policy.ActionRetire:
-			log.Info("improvement retired", "mode", mode, "prefix", c.Old.Prefix, "provider", c.Old.Provider, "native", c.Old.Native, "reason", c.Old.Reason)
+			log.Info("improvement retired", "mode", mode, "prefix", c.Old.Prefix, "provider", c.Old.Provider, "native", c.Old.Native, "cause", c.Old.Cause, "reason", c.Old.Reason)
 		default:
-			log.Info("improvement "+c.Action, "mode", mode, "prefix", c.New.Prefix, "provider", c.New.Provider, "native", c.New.Native, "reason", c.New.Reason)
+			log.Info("improvement "+c.Action, "mode", mode, "prefix", c.New.Prefix, "provider", c.New.Provider, "native", c.New.Native, "cause", c.New.Cause, "reason", c.New.Reason)
 		}
 	}
 }

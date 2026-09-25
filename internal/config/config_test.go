@@ -221,6 +221,8 @@ func TestParseErrors(t *testing.T) {
 		{"bad source_ip", edit(t, minimalYAML, "source_ip: 192.0.2.11", "source_ip: 192.0.2.300"), `source_ip "192.0.2.300" is not a valid IP`},
 		{"bad next_hop", edit(t, minimalYAML, "next_hop: 192.0.2.1", "next_hop: gateway"), `next_hop "gateway" is not a valid IP`},
 		{"mixed address family", edit(t, minimalYAML, "next_hop: 192.0.2.1", "next_hop: 2001:db8::1"), "same address family"},
+		{"bad provider group", edit(t, minimalYAML, "next_hop: 192.0.2.1", "next_hop: 192.0.2.1\n    group: \"has space\""), "group"},
+		{"precedence out of range", edit(t, minimalYAML, "next_hop: 192.0.2.1", "next_hop: 192.0.2.1\n    precedence: -1"), "precedence"},
 		{"bad allowlist cidr", edit(t, injectYAML, "198.51.100.0/24", "198.51.100.0/33"), "is not a valid CIDR"},
 		{"allowlist not a cidr", edit(t, injectYAML, "198.51.100.0/24", "198.51.100.0"), "is not a valid CIDR"},
 		{"allowlist host bits", edit(t, injectYAML, "198.51.100.0/24", "198.51.100.7/24"), "did you mean 198.51.100.0/24"},

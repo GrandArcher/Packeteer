@@ -21,6 +21,9 @@ providers:
     source_ip: 192.0.2.12
     next_hop: 192.0.2.2
     # exclude: true           # measure, but never steer traffic to this provider
+    # group: edge             # load-balance with other providers in this group
+    # precedence: 100         # lower is preferred; 0 or omitted means 100
+    # cc_disable: false       # true: leave this provider out of commit control
 
 allowlist:
   prefixes: []
@@ -47,9 +50,20 @@ probers:
   #     port: 33434
 
 # Path scoring (lower is better): loss dominates, then latency, then jitter.
+# `weighted` is the default and does not steer for commit. `commit` uses the
+# same score and, with telemetry plus flow volume, keeps providers under
+# their commit. Leave this as weighted unless you want that.
 scorer:
   type: weighted
   config: {loss_weight: 100, rtt_weight: 1, jitter_weight: 0.5}
+# scorer:
+#   type: commit
+#   config:
+#     loss_override: false    # true allows a commit move onto higher loss
+#     balance: off            # off, equal, or proportional
+#     balance_slack: 0.10
+#     max_age: 15m            # ignore telemetry older than this
+#     min_mbps: 0
 
 # What to probe. Uncomment and use prefixes you actually serve traffic to.
 # The flow source is off unless you add it. With --network host its UDP
