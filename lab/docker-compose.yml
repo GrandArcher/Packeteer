@@ -1,0 +1,44 @@
+# Simulated edge. Documentation addresses only (RFC 5737), private ASN 64512.
+# Brought up by lab/e2e.sh, which sets PACKETEER_LAB_DIR to a directory
+# containing state.yaml (the fixed prober re-reads that file).
+name: packeteer-e2e
+services:
+  edge:
+    image: quay.io/frrouting/frr:10.2.4
+    hostname: edge
+    privileged: true
+    entrypoint: ["/bin/sh", "/etc/frr/start.sh"]
+    volumes:
+      - ./frr:/etc/frr
+    networks:
+      lab:
+        ipv4_address: 192.0.2.254
+  packeteer:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+      args:
+        VERSION: e2e
+    image: packeteer:e2e
+    depends_on:
+      - edge
+    cap_add:
+      - NET_RAW
+      - NET_ADMIN
+      - NET_BIND_SERVICE
+    environment:
+      PACKETEER_CONFIG: /etc/packeteer/config.yaml
+      PACKETEER_LOG_LEVEL: debug
+    volumes:
+      - ./packeteer.yaml:/etc/packeteer/config.yaml:ro
+      - ${PACKETEER_LAB_DIR}:/etc/packeteer/probes:ro
+    networks:
+      lab:
+        ipv4_address: 192.0.2.10
+networks:
+  lab:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 192.0.2.0/24
+          gateway: 192.0.2.3

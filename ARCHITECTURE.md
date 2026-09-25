@@ -13,7 +13,7 @@ flow/SNMP/static prefix list
    RIB view (iBGP/BMP) --> policy engine (score + hysteresis)
                                    |
                     observe: log only
-                    inject:  announce via ExaBGP/GoBGP iBGP
+                    inject:  gobgp announcer on the same iBGP session
 ```
 
 ## Components
@@ -29,7 +29,7 @@ flow/SNMP/static prefix list
   - in inject mode, an allowlisted prefix
 
   An improvement is kept for at least `hold_time`. After that it flips back when the native path is better again, and a flip-back starts a `hold_time` cooldown so the prefix cannot flap. It switches to a clearly better alternative, and it retires after `improvement_ttl` so the native path gets re-measured. It is retired immediately, ignoring hold time, when its provider goes down or its data goes stale, when the provider is excluded or the prefix leaves the allowlist or the probe set, or when the RIB is not ready (BGP session lost). While an improvement is active the router stops advertising the native path to Packeteer (iBGP never reflects a route back to where it came from), so the native provider is taken from the improvement record rather than from the RIB.
-- **Announcer** speaks BGP to the edge as an iBGP peer. Injected routes use a higher local-pref (or community the edge maps to local-pref) and a Packeteer community. Edges must not re-advertise those more-specifics to eBGP peers.
+- **Announcer** (`internal/announce` + the `gobgp` plugin) publishes inject-mode improvements on the RIB view's existing iBGP session. It does not open a second session. Each route uses the chosen provider's next hop, the configured `local_pref`, `packeteer_community`, and NO_EXPORT. `more_specific_bits` (default 0) can announce the 2^n covering more-specifics instead of the prefix itself. The export policy accepts only local routes that carry the Packeteer community, so learned routes are never reflected. Observe and suggest never call the announcer. Routes are withdrawn on flip-back, expiry, a dead probe source, stale measurements, RIB session loss, and on shutdown. Graceful restart stays off. Edges must accept only the Packeteer community and must not export it to eBGP ([docs/routers.md](docs/routers.md)).
 
 ## Plugins
 

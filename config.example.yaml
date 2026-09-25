@@ -54,13 +54,23 @@ scorer:
 #           host: 198.51.100.1        # optional; defaults to the first address
 #         - prefix: 203.0.113.0/24
 
-# iBGP to the edge router(s) for the RIB view (learn-only for now; see
-# docs/mikrotik.md). Same ASN as `asn`. Graceful restart is never enabled.
+# iBGP to the edge router(s). Same ASN as `asn`. The session learns best
+# paths and, only in mode: inject, carries improvements back. Graceful
+# restart is never enabled. Filters: docs/mikrotik.md and docs/routers.md.
 # bgp:
 #   listen_port: 179      # optional; 0/omitted = connect out only
 #   neighbors:
 #     - address: 192.0.2.254
 #       description: edge1
+
+# Injection (used only when mode: inject). local_pref is set on every
+# injected route and should beat the edge's native local preference.
+# more_specific_bits 0 announces the prefix itself; 1 announces the two
+# covering more-specifics, up to 8. The announcer adds NO_EXPORT itself.
+# local_pref: 250
+# more_specific_bits: 0
+# announcer:
+#   type: gobgp
 
 # Plugins (docs/PLUGINS.md). Out-of-process plugins live in plugin_dir.
 plugin_dir: /etc/packeteer/plugins

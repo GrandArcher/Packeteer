@@ -1,8 +1,8 @@
 // Command controller is the Packeteer entrypoint.
 //
-// It loads and validates the config and plugins, then runs the probe engine
-// in observe mode, logging per-provider loss/RTT/jitter for every target.
-// It does not speak BGP yet.
+// It loads and validates the config and plugins, then runs the probe engine.
+// In inject mode, improvements from the decision engine are announced on the
+// existing iBGP session. Observe and suggest announce nothing.
 package main
 
 import (
@@ -15,17 +15,20 @@ import (
 	"os"
 	"os/signal"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
 	"golang.org/x/time/rate"
 
+	"github.com/GrandArcher/Packeteer/internal/announce"
 	"github.com/GrandArcher/Packeteer/internal/config"
 	"github.com/GrandArcher/Packeteer/internal/pluginhost"
 	_ "github.com/GrandArcher/Packeteer/internal/plugins/all"
 	"github.com/GrandArcher/Packeteer/internal/policy"
 	"github.com/GrandArcher/Packeteer/internal/probe"
 	"github.com/GrandArcher/Packeteer/internal/rib"
+	"github.com/GrandArcher/Packeteer/pkg/plugin"
 )
 
 // DefaultConfigPath is where the container image expects the mounted config.
@@ -111,8 +114,13 @@ func run(ctx context.Context, args []string, getenv func(string) string, stdout,
 	for _, line := range plugins.Summary() {
 		fmt.Fprintf(stdout, "  - %s\n", line)
 	}
-	if cfg.Mode == config.ModeInject {
-		fmt.Fprintln(stdout, "note: inject mode is not implemented yet; nothing will be announced")
+	switch {
+	case cfg.Mode == config.ModeInject:
+		fmt.Fprintf(stdout, "announce: %s local_pref=%d more_specific_bits=%d\n", plugins.Announcer.Type, cfg.LocalPref, cfg.MoreSpecificBits)
+	case plugins.Announcer != nil:
+		fmt.Fprintln(stdout, "announce: configured but inactive (mode is not inject)")
+	default:
+		fmt.Fprintln(stdout, "announce: disabled")
 	}
 	if *check {
 		fmt.Fprintln(stdout, "check: ok (no probes sent, no BGP sessions opened)")
@@ -127,6 +135,16 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 		log.Error("refusing to start", "err", err)
 		return 1
 	}
+	decider, err := newDecider(cfg, plugins)
+	if err != nil {
+		log.Error("refusing to start", "err", err)
+		return 1
+	}
+	ctl, err := newController(cfg, plugins, view, log)
+	if err != nil {
+		log.Error("refusing to start", "err", err)
+		return 1
+	}
 	if view != nil {
 		if err := view.Start(ctx); err != nil {
 			log.Error("refusing to start", "err", err)
@@ -135,16 +153,29 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 		defer func() { _ = view.Stop(context.Background()) }()
 		go logRIB(ctx, view, log)
 	}
-	decider, err := newDecider(cfg, plugins)
-	if err != nil {
-		log.Error("refusing to start", "err", err)
-		return 1
+	if cfg.Mode == config.ModeInject {
+		if view == nil || view.Server() == nil {
+			log.Error("refusing to start", "err", "inject mode requires an iBGP session")
+			return 1
+		}
+		if err := ctl.Bind(view.Server()); err != nil {
+			log.Error("refusing to start", "err", err)
+			return 1
+		}
+	}
+
+	kick := make(chan struct{}, 1)
+	poke := func() {
+		select {
+		case kick <- struct{}{}:
+		default:
+		}
+	}
+	if view != nil {
+		view.OnChange(poke)
 	}
 	var engine *probe.Engine
-	engine, err = newEngine(cfg, plugins, log, func() {
-		changes := decider.Evaluate(decisionInput(engine, view), time.Now())
-		logChanges(log, cfg.Mode, changes)
-	})
+	engine, err = newEngine(cfg, plugins, log, poke)
 	if err != nil {
 		log.Error("refusing to start", "err", err)
 		return 1
@@ -156,17 +187,98 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 	if len(plugins.Sources) == 0 {
 		log.Warn("no target sources configured; nothing to probe (add a `sources:` entry)")
 	}
-	log.Info("packeteer running", "version", version, "mode", cfg.Mode, "bgp_neighbors", len(cfg.BGP.Neighbors), "announce", "disabled")
+
+	loopCtx, loopCancel := context.WithCancel(ctx)
+	var loopWG sync.WaitGroup
+	loopWG.Add(1)
+	go func() {
+		defer loopWG.Done()
+		for {
+			select {
+			case <-loopCtx.Done():
+				return
+			case <-kick:
+			}
+			if loopCtx.Err() != nil {
+				return
+			}
+			now := time.Now()
+			changes := decider.Evaluate(decisionInput(engine, view), now)
+			logChanges(log, cfg.Mode, changes)
+			actx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			if err := ctl.Sync(actx, decider.Improvements()); err != nil {
+				log.Error("announce", "err", err)
+			}
+			cancel()
+		}
+	}()
+
+	announcing := "disabled"
+	if cfg.Mode == config.ModeInject {
+		announcing = plugins.Announcer.Type
+	}
+	log.Info("packeteer running", "version", version, "mode", cfg.Mode, "bgp_neighbors", len(cfg.BGP.Neighbors), "announce", announcing)
 	_ = engine.Run(ctx)
 
 	log.Info("shutting down")
+	loopCancel()
+	loopWG.Wait()
 	stopCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
+	// Withdraw while the session is still up, then stop plugins (the announcer
+	// withdraws again) and finally drop the session. Graceful restart is never
+	// enabled, so a missed withdraw still disappears with the session.
+	if err := ctl.WithdrawAll(stopCtx); err != nil {
+		log.Error("withdraw on shutdown", "err", err)
+	}
 	if err := plugins.Stop(stopCtx); err != nil {
 		log.Error("plugin shutdown", "err", err)
 		return 1
 	}
 	return 0
+}
+
+// ribGate is the RIB surface the announcer controller consults.
+type ribGate struct{ v *rib.View }
+
+func (g ribGate) Ready() bool { return g.v != nil && g.v.Ready() }
+
+func (g ribGate) Contains(p netip.Prefix) bool {
+	if g.v == nil {
+		return false
+	}
+	_, ok := g.v.Exact(p)
+	return ok
+}
+
+func newController(cfg *config.Config, plugins *pluginhost.Set, view *rib.View, log *slog.Logger) (*announce.Controller, error) {
+	var ann plugin.Announcer
+	if plugins.Announcer != nil {
+		ann = plugins.Announcer.Plugin
+	}
+	ac := announce.Config{
+		Mode:             cfg.Mode,
+		LocalPref:        cfg.LocalPref,
+		Community:        cfg.PacketeerCommunity,
+		MoreSpecificBits: cfg.MoreSpecificBits,
+		MaxImprovements:  *cfg.MaxImprovements,
+		NextHops:         map[string]netip.Addr{},
+	}
+	for _, p := range cfg.Providers {
+		nh, err := parseAddr(p.NextHop)
+		if err != nil {
+			return nil, err
+		}
+		ac.NextHops[p.Name] = nh
+	}
+	for _, s := range cfg.Allowlist.Prefixes {
+		p, err := netip.ParsePrefix(s)
+		if err != nil {
+			return nil, err
+		}
+		ac.Allowlist = append(ac.Allowlist, p)
+	}
+	return announce.New(ac, ann, ribGate{view}, log)
 }
 
 func newEngine(cfg *config.Config, plugins *pluginhost.Set, log *slog.Logger, onRound func()) (*probe.Engine, error) {
