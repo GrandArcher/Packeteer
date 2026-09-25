@@ -26,3 +26,12 @@ probe:
   interval: 30s
   timeout: 2s
   packets: 10
+
+# Plugins (docs/PLUGINS.md). Out-of-process plugins live in plugin_dir.
+plugin_dir: /etc/packeteer/plugins
+# notifiers:
+#   - type: webhook
+#     config:
+#       url: https://hooks.example.invalid/packeteer
+#       headers:
+#         Authorization: "Bearer ${HOOK_TOKEN}"

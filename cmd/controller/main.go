@@ -11,6 +11,8 @@ import (
 	"os"
 
 	"github.com/GrandArcher/Packeteer/internal/config"
+	"github.com/GrandArcher/Packeteer/internal/pluginhost"
+	_ "github.com/GrandArcher/Packeteer/internal/plugins/all"
 )
 
 // DefaultConfigPath is where the container image expects the mounted config.
@@ -18,6 +20,9 @@ const DefaultConfigPath = "/etc/packeteer/config.yaml"
 
 // ConfigEnv overrides the default config path when -config is not given.
 const ConfigEnv = "PACKETEER_CONFIG"
+
+// PluginDirEnv overrides the plugin directory from config.
+const PluginDirEnv = "PACKETEER_PLUGIN_DIR"
 
 // version is set at build time with -ldflags "-X main.version=...".
 var version = "dev"
@@ -49,12 +54,22 @@ func run(args []string, getenv func(string) string, stdout, stderr io.Writer) in
 		return 1
 	}
 
+	plugins, err := pluginhost.Build(cfg, pluginhost.Options{Getenv: getenv, PluginDir: getenv(PluginDirEnv)})
+	if err != nil {
+		fmt.Fprintf(stderr, "packeteer: refusing to start: plugins: %v\n", err)
+		return 1
+	}
+
 	fmt.Fprintf(stdout, "packeteer %s: config %s loaded\n", version, *path)
 	fmt.Fprintf(stdout, "mode: %s\n", cfg.Mode)
 	fmt.Fprintf(stdout, "max_improvements: %d\n", *cfg.MaxImprovements)
 	fmt.Fprintf(stdout, "providers (%d):\n", len(cfg.Providers))
 	for _, p := range cfg.Providers {
 		fmt.Fprintf(stdout, "  - %s source_ip=%s next_hop=%s\n", p.Name, p.SourceIP, p.NextHop)
+	}
+	fmt.Fprintf(stdout, "plugins (%d):\n", len(plugins.Summary()))
+	for _, line := range plugins.Summary() {
+		fmt.Fprintf(stdout, "  - %s\n", line)
 	}
 	if cfg.Mode == config.ModeInject {
 		fmt.Fprintln(stdout, "note: inject mode is not implemented yet; nothing will be announced")
