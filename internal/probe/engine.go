@@ -47,6 +47,7 @@ type Options struct {
 	Logger               *slog.Logger
 	Now                  func() time.Time
 	OnResult             func(Result) // called for every result (optional)
+	OnRound              func()       // called after each completed round (optional)
 }
 
 // Result is the latest measurement of one provider toward one prefix.
@@ -230,6 +231,13 @@ feed:
 		return // incomplete round: keep previous state
 	}
 
+	e.commit(fresh, ran, down)
+	if e.opt.OnRound != nil {
+		e.opt.OnRound()
+	}
+}
+
+func (e *Engine) commit(fresh map[key]Result, ran map[string]bool, down map[string]string) {
 	now := e.opt.Now()
 	e.mu.Lock()
 	defer e.mu.Unlock()

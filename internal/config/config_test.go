@@ -131,6 +131,9 @@ func TestDefaults(t *testing.T) {
 		cfg.Probe.PerTargetConcurrency != DefaultProbePerTargetConcurrency {
 		t.Errorf("probe defaults = %+v", cfg.Probe)
 	}
+	if cfg.Scorer == nil || cfg.Scorer.Type != "weighted" || cfg.ImprovementTTL != DefaultImprovementTTL {
+		t.Errorf("scorer/ttl defaults = %+v %s", cfg.Scorer, cfg.ImprovementTTL)
+	}
 	if len(cfg.Probers) != 2 || cfg.Probers[0].Type != "icmp" || cfg.Probers[1].Type != "tcp" {
 		t.Errorf("default probers = %+v", cfg.Probers)
 	}
@@ -271,6 +274,9 @@ announcer:
 	cfg, err := Parse([]byte(good))
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
+	}
+	if cfg.Scorer == nil || cfg.Scorer.Type != "weighted" || cfg.ImprovementTTL != DefaultImprovementTTL {
+		t.Errorf("scorer/ttl defaults = %+v %s", cfg.Scorer, cfg.ImprovementTTL)
 	}
 	if len(cfg.Probers) != 2 || cfg.Probers[1].InstanceName() != "custom" || cfg.Probers[0].InstanceName() != "icmp" {
 		t.Errorf("Probers = %+v", cfg.Probers)
