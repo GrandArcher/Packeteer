@@ -30,7 +30,7 @@ services:
       PACKETEER_CONFIG: /etc/packeteer/config.yaml
       PACKETEER_LOG_LEVEL: debug
     volumes:
-      - ./packeteer.yaml:/etc/packeteer/config.yaml:ro
+      - ${PACKETEER_LAB_CONFIG:-./packeteer.yaml}:/etc/packeteer/config.yaml:ro
       - ${PACKETEER_LAB_DIR}:/etc/packeteer/probes:ro
     networks:
       lab:

@@ -292,6 +292,45 @@ func TestProportionalBalance(t *testing.T) {
 	}
 }
 
+func TestRelievePrefersPrecedenceOverGroup(t *testing.T) {
+	s := build(t, "")
+	// b shares a's group but has a worse precedence than c. d is the last
+	// resort, so b is not excluded by that rule. c must win.
+	in := plugin.PlanInput{
+		Now: t0,
+		Providers: []plugin.PlanProvider{
+			prov("a", "edge", 10, usage("a", 100, 160)),
+			prov("b", "edge", 40, usage("b", 100, 10)),
+			prov("c", "", 20, usage("c", 100, 10)),
+			prov("d", "", 100, usage("d", 100, 10)),
+		},
+		Prefixes: []plugin.PlanPrefix{
+			prefix(p1, "a", 50, path("a", 0), path("b", 0), path("c", 0), path("d", 0)),
+		},
+	}
+	if got := movesTo(s.Plan(in)); got[p1] != "c" {
+		t.Fatalf("same group outranked a better precedence: %v", got)
+	}
+}
+
+func TestLockedPerformanceVolumeIsAlreadyLeaving(t *testing.T) {
+	s := build(t, "")
+	in := plugin.PlanInput{
+		Now: t0,
+		Providers: []plugin.PlanProvider{
+			prov("a", "", 10, usage("a", 100, 150)),
+			prov("b", "", 10, usage("b", 100, 10)),
+		},
+		Prefixes: []plugin.PlanPrefix{
+			{Prefix: p1, Native: "a", Current: "b", VolumeMbps: 60, Locked: true, Paths: []plugin.PlanPath{path("a", 0), path("b", 0)}},
+			prefix(p2, "a", 40, path("a", 0), path("b", 0)),
+		},
+	}
+	if moves := s.Plan(in); len(moves) != 0 {
+		t.Fatalf("commit moved traffic a performance steer is already taking: %+v", moves)
+	}
+}
+
 func TestReversibleCommitIsKeptUntilTheFigureDrops(t *testing.T) {
 	s := build(t, "")
 	kept := plugin.PlanPrefix{

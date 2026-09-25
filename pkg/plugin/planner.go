@@ -14,10 +14,11 @@ type PlanPath struct {
 }
 
 // PlanPrefix is a prefix the planner may steer. VolumeMbps is observed
-// traffic. Locked prefixes (an active performance improvement) are context
-// only. Reversible is an active commit improvement: the planner puts its
-// volume back on Native before choosing, and the result is the full set of
-// commit steers that should exist.
+// traffic. Locked is a performance steer (active, or chosen this round and
+// waiting on the cap): the planner moves its volume from Native to Current
+// and does not emit a commit move for it. Reversible is an active commit
+// improvement: the planner puts its volume back on Native before choosing,
+// and the result is the full set of commit steers that should exist.
 type PlanPrefix struct {
 	Prefix     netip.Prefix
 	Native     string
@@ -70,6 +71,8 @@ type Planner interface {
 // LossOverride is optional on a Planner. AllowLoss reports whether a
 // commit move may land on a path with higher loss than the one it leaves.
 // A scorer that does not implement it is treated as refusing that move.
+// Decide enforces the same rule when it accepts a PlanMove, including a
+// move whose destination is the native provider (that is not a steer).
 type LossOverride interface {
 	AllowLoss() bool
 }

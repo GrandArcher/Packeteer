@@ -2,6 +2,7 @@ package policy
 
 import (
 	"net/netip"
+	"sort"
 	"time"
 
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
@@ -51,7 +52,7 @@ func integrateCommit(
 	if lp, ok := scorer.(plugin.LossOverride); ok {
 		allowLoss = lp.AllowLoss()
 	}
-	moves := planner.Plan(buildPlan(cfg, in, byPrefix, decIdx, holds, commitOK, now))
+	moves := planner.Plan(buildPlan(cfg, in, byPrefix, decIdx, holds, commitOK, st, *wants, now))
 	want := map[netip.Prefix]plugin.PlanMove{}
 	for _, m := range moves {
 		if m.Provider == "" || !m.Prefix.IsValid() {
@@ -69,8 +70,12 @@ func integrateCommit(
 		handled[p] = true
 		d := h.d
 		cands := byPrefix[p]
-		if !allowLoss && lossRegressed(cands, h.imp.Native, h.imp.Provider) {
-			retire(p, "commit path loss regressed", false)
+		// A real loss regression (the same margin better() uses) leaves
+		// immediately. The cooldown is what stops the next equal sample
+		// from announcing the same steer again. A gap under the threshold
+		// is probe noise and is not a regression.
+		if !allowLoss && lossRegressed(cands, h.imp.Native, h.imp.Provider, cfg) {
+			retire(p, "commit path loss regressed", true)
 			setDecision(d, ActionRetire, "commit path loss regressed", h.imp.Native, "", plugin.CauseCommit)
 			continue
 		}
@@ -92,8 +97,16 @@ func integrateCommit(
 			}
 		}
 		mv, wanted := want[p]
-		if wanted && !moveAllowed(mv, cands, cfg) {
-			wanted = false
+		if wanted && mv.Provider != h.imp.Provider && !moveAllowed(mv, cands, cfg, allowLoss, h.imp.Native, h.imp.Provider) {
+			if mv.Provider == h.imp.Native {
+				// Back to native is a release, not a steer.
+				wanted = false
+			} else {
+				// A higher-loss (or excluded) alternate is ignored. The
+				// current steer stays; withdrawing it would flap.
+				setDecision(d, ActionKeep, "commit move refused", h.imp.Provider, "", plugin.CauseCommit)
+				continue
+			}
 		}
 		if wanted && mv.Provider == h.imp.Provider {
 			imp := h.imp
@@ -125,8 +138,11 @@ func integrateCommit(
 		setDecision(d, ActionRetire, "commit relieved", h.imp.Native, "", plugin.CauseCommit)
 	}
 
-	for p, ok := range commitOK {
-		if !ok || handled[p] {
+	// Gather in prefix order so equal relief does not depend on map iteration.
+	// Decide breaks remaining ties the same way when the cap binds.
+	var fresh []pending
+	for _, p := range sortedCommitOK(commitOK) {
+		if handled[p] {
 			continue
 		}
 		d := decIdx[p]
@@ -137,25 +153,29 @@ func integrateCommit(
 		if !wanted {
 			continue
 		}
-		if _, cool := st.Cooldown[p]; cool {
+		if until, cool := st.Cooldown[p]; cool {
+			d.Reason = "cooldown after flip-back until " + until.Format(time.RFC3339)
+			d.Recommended = mv.Provider
+			d.Cause = plugin.CauseCommit
 			continue
 		}
 		if cfg.Mode == "inject" && !allowed(cfg.Allowlist, p) {
-			if d != nil {
-				d.Recommended = mv.Provider
-				d.Reason = "commit move available but prefix not allowlisted"
-				d.Cause = plugin.CauseCommit
-			}
+			d.Recommended = mv.Provider
+			d.Reason = "commit move available but prefix not allowlisted"
+			d.Cause = plugin.CauseCommit
 			continue
 		}
 		cands := byPrefix[p]
-		if !moveAllowed(mv, cands, cfg) {
+		if !moveAllowed(mv, cands, cfg, allowLoss, d.Native, d.Native) {
+			d.Recommended = mv.Provider
+			d.Reason = "commit move refused"
+			d.Cause = plugin.CauseCommit
 			continue
 		}
 		if _, ok := usableCand(cands, d.Native); !ok {
 			continue
 		}
-		*wants = append(*wants, pending{
+		fresh = append(fresh, pending{
 			d: d, commit: true, gain: mv.ReliefMbps,
 			imp: Improvement{
 				Prefix: p, Provider: mv.Provider, Native: d.Native, Since: now,
@@ -163,6 +183,18 @@ func integrateCommit(
 			},
 		})
 	}
+	*wants = append(*wants, fresh...)
+}
+
+func sortedCommitOK(ok map[netip.Prefix]bool) []netip.Prefix {
+	out := make([]netip.Prefix, 0, len(ok))
+	for p, yes := range ok {
+		if yes {
+			out = append(out, p)
+		}
+	}
+	sortPrefixes(out)
+	return out
 }
 
 func setDecision(d *Decision, action, reason, current, recommended, cause string) {
@@ -187,6 +219,8 @@ func buildPlan(
 	decIdx map[netip.Prefix]*Decision,
 	holds []commitHold,
 	commitOK map[netip.Prefix]bool,
+	st State,
+	wants []pending,
 	now time.Time,
 ) plugin.PlanInput {
 	usage := map[string]plugin.Usage{}
@@ -213,28 +247,53 @@ func buildPlan(
 			Up: in.ProviderUp[p.Name], Usage: u, HaveRow: have,
 		})
 	}
-	add := func(p netip.Prefix, native, current string, reversible bool) {
+	added := map[netip.Prefix]bool{}
+	add := func(p netip.Prefix, native, current string, reversible, locked bool) {
+		if !p.IsValid() || added[p] {
+			return
+		}
+		added[p] = true
 		vol := 0.0
 		if in.VolumeMbps != nil {
 			vol = in.VolumeMbps[p]
 		}
 		out.Prefixes = append(out.Prefixes, plugin.PlanPrefix{
 			Prefix: p, Native: native, Current: current, VolumeMbps: vol,
-			Reversible: reversible, Paths: planPaths(byPrefix[p]),
+			Reversible: reversible, Locked: locked, Paths: planPaths(byPrefix[p]),
 		})
 	}
-	for p, ok := range commitOK {
-		if !ok {
+	// Performance steers already taken, and performance moves waiting on
+	// the cap, are locked context. The planner shifts their volume off
+	// Native so it does not also commit-steer that traffic.
+	var perf []Improvement
+	for _, imp := range st.Improvements {
+		if imp.Cause == plugin.CauseCommit {
 			continue
 		}
+		perf = append(perf, imp)
+	}
+	for _, w := range wants {
+		if !w.commit {
+			perf = append(perf, w.imp)
+		}
+	}
+	sort.Slice(perf, func(i, j int) bool { return lessPrefix(perf[i].Prefix, perf[j].Prefix) })
+	for _, imp := range perf {
+		cur := imp.Provider
+		if cur == "" {
+			cur = imp.Native
+		}
+		add(imp.Prefix, imp.Native, cur, false, true)
+	}
+	for _, p := range sortedCommitOK(commitOK) {
 		d := decIdx[p]
 		if d == nil || d.Native == "" {
 			continue
 		}
-		add(p, d.Native, d.Native, false)
+		add(p, d.Native, d.Native, false, false)
 	}
 	for _, h := range holds {
-		add(h.imp.Prefix, h.imp.Native, h.imp.Provider, true)
+		add(h.imp.Prefix, h.imp.Native, h.imp.Provider, true, false)
 	}
 	return out
 }
@@ -258,21 +317,50 @@ func usableCand(cands []Candidate, name string) (Candidate, bool) {
 	return Candidate{}, false
 }
 
-func lossRegressed(cands []Candidate, native, current string) bool {
+// lossRegressed reports whether the commit path's loss is worse than native
+// by at least the loss margin in better(). Latency alone does not count:
+// a commit move may trade latency. A smaller loss gap is one probe of noise.
+func lossRegressed(cands []Candidate, native, current string, cfg Config) bool {
 	nat, ok1 := usableCand(cands, native)
 	cur, ok2 := usableCand(cands, current)
 	if !ok1 || !ok2 {
 		return false
 	}
-	return cur.LossPct > nat.LossPct+commitLossEps
-}
-
-func moveAllowed(mv plugin.PlanMove, cands []Candidate, cfg Config) bool {
-	if mv.Provider == "" || cfg.Excluded[mv.Provider] || ccDisabled(cfg, mv.Provider) {
+	if nat.Score >= cur.Score {
 		return false
 	}
-	_, ok := usableCand(cands, mv.Provider)
-	return ok
+	margin := cfg.MinLossDeltaPct
+	if margin <= 0 {
+		margin = commitLossEps
+	}
+	return cur.LossPct-nat.LossPct >= margin
+}
+
+// moveAllowed is Decide's check on a planner proposal. A destination that
+// is the native provider is not a steer. A scorer that does not implement
+// LossOverride, or one whose AllowLoss is false, may not land on higher
+// loss than the provider the traffic is leaving. leaving is that provider
+// (native for a new move, the current provider for a switch).
+func moveAllowed(mv plugin.PlanMove, cands []Candidate, cfg Config, allowLoss bool, native, leaving string) bool {
+	if mv.Provider == "" || mv.Provider == native || cfg.Excluded[mv.Provider] || ccDisabled(cfg, mv.Provider) {
+		return false
+	}
+	dest, ok := usableCand(cands, mv.Provider)
+	if !ok {
+		return false
+	}
+	if allowLoss {
+		return true
+	}
+	base := leaving
+	if base == "" {
+		base = native
+	}
+	from, ok := usableCand(cands, base)
+	if !ok {
+		return false
+	}
+	return dest.LossPct <= from.LossPct+commitLossEps
 }
 
 func ccDisabled(cfg Config, name string) bool {

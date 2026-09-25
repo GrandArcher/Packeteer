@@ -5,7 +5,9 @@ package static
 import (
 	"context"
 	"fmt"
+	"math"
 	"net/netip"
+	"time"
 
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
 )
@@ -15,19 +17,33 @@ const TypeName = "static"
 
 func init() { plugin.Sources.Register(TypeName, New) }
 
+// Source implements VolumeSource when a target sets mbps.
+var _ plugin.VolumeSource = (*Source)(nil)
+
+// maxMbps matches the telemetry commit cap. A larger declared rate is a
+// typo, not a prefix Packeteer should steer.
+const maxMbps = 100000000
+
 // Config is the static source's config block.
 type Config struct {
-	Targets []struct {
-		Prefix string  `yaml:"prefix"`
-		Host   string  `yaml:"host"`
-		Weight float64 `yaml:"weight"`
-	} `yaml:"targets"`
+	Targets []Target `yaml:"targets"`
+}
+
+// Target is one configured prefix.
+type Target struct {
+	Prefix string  `yaml:"prefix"`
+	Host   string  `yaml:"host"`
+	Weight float64 `yaml:"weight"`
+	// Mbps is an optional declared rate for commit control, decimal
+	// megabits per second. Zero means this prefix has no volume.
+	Mbps float64 `yaml:"mbps"`
 }
 
 // Source returns a fixed target list.
 type Source struct {
 	plugin.Base
 	targets []plugin.Target
+	vols    []plugin.PrefixVolume
 }
 
 // New is the plugin factory.
@@ -61,9 +77,31 @@ func New(c plugin.Config, _ plugin.Env) (plugin.TargetSource, error) {
 		if t.Weight < 0 {
 			return nil, fmt.Errorf("targets[%d]: weight must not be negative", i)
 		}
+		if math.IsNaN(t.Mbps) || math.IsInf(t.Mbps, 0) || t.Mbps < 0 || t.Mbps > maxMbps {
+			return nil, fmt.Errorf("targets[%d]: mbps must be between 0 and 100000000", i)
+		}
 		s.targets = append(s.targets, tg)
+		if t.Mbps > 0 {
+			// Mbps() = bytes * 8 / seconds / 1e6. One second makes bytes
+			// the rate in bits divided by 8.
+			bytes := uint64(math.Round(t.Mbps * 1e6 / 8))
+			if bytes > 0 {
+				s.vols = append(s.vols, plugin.PrefixVolume{Prefix: p, Bytes: bytes, Window: time.Second})
+			}
+		}
 	}
 	return s, nil
+}
+
+// Volumes implements plugin.VolumeSource. Prefixes without mbps are omitted.
+// This does not announce.
+func (s *Source) Volumes(ctx context.Context) ([]plugin.PrefixVolume, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	out := make([]plugin.PrefixVolume, len(s.vols))
+	copy(out, s.vols)
+	return out, nil
 }
 
 // Targets implements plugin.TargetSource.

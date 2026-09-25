@@ -74,6 +74,7 @@ scorer:
 #       targets:
 #         - prefix: 198.51.100.0/24
 #           host: 198.51.100.1        # optional; defaults to the first address
+#           mbps: 0                   # optional; declared Mbps for the commit scorer
 #         - prefix: 203.0.113.0/24
 #   - type: flow
 #     config:

@@ -1,0 +1,8 @@
+# Loss is equal and the RTT gap is inside the 15ms threshold, so this is
+# not a performance move. Commit control is what steers.
+sent: 4
+paths:
+  - provider: transit-a
+    rtt_ms: 40
+  - provider: transit-b
+    rtt_ms: 50

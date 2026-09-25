@@ -181,20 +181,51 @@ func TestCommitHoldThenRelease(t *testing.T) {
 	}
 }
 
-func TestCommitLossRegressionRetiresImmediately(t *testing.T) {
+func TestCommitLossRegressionStartsCooldown(t *testing.T) {
+	c, s := commitCfg(), commitScorer(t, "")
 	prev := NewState()
 	prev.Improvements[pA] = Improvement{
 		Prefix: pA, Provider: "b", Native: "a", Since: t0, Cause: plugin.CauseCommit,
 	}
-	input := in(results(t0.Add(time.Minute), pA, m{"a", 0, 40}, m{"b", 5, 50}), map[netip.Prefix]string{pA: "a"})
+	now := t0.Add(time.Minute)
+	input := in(results(now, pA, m{"a", 0, 40}, m{"b", 0.5, 50}), map[netip.Prefix]string{pA: "a"})
 	input.Usage = []plugin.Usage{billable("a", 100, 150), billable("b", 100, 20)}
 	input.VolumeMbps = map[netip.Prefix]float64{pA: 60}
-	st, out := Decide(prev, input, commitCfg(), commitScorer(t, ""), t0.Add(time.Minute))
-	if _, ok := st.Improvements[pA]; ok || !strings.Contains(decision(t, out, pA).Reason, "loss regressed") {
-		t.Fatalf("loss: %+v", decision(t, out, pA))
+	// Under min_loss_delta_pct (1). One noisy probe must not withdraw.
+	st, out := Decide(prev, input, c, s, now)
+	if decision(t, out, pA).Action == ActionRetire || st.Improvements[pA].Provider != "b" {
+		t.Fatalf("sub-threshold loss withdrew: %+v %+v", decision(t, out, pA), st.Improvements)
 	}
-	if _, cool := st.Cooldown[pA]; cool {
-		t.Fatal("loss regression started a cooldown")
+
+	// A real margin withdraws at once, including inside hold_time, and the
+	// cooldown stops the same steer coming back when the next sample is clean.
+	now = now.Add(time.Minute)
+	input.Results = results(now, pA, m{"a", 0, 40}, m{"b", 10, 50})
+	st, out = Decide(st, input, c, s, now)
+	if _, ok := st.Improvements[pA]; ok || !strings.Contains(decision(t, out, pA).Reason, "loss regressed") {
+		t.Fatalf("loss: %+v %+v", decision(t, out, pA), st.Improvements)
+	}
+	until, cool := st.Cooldown[pA]
+	if !cool || !until.Equal(now.Add(c.HoldTime)) {
+		t.Fatalf("cooldown = %s ok=%v, want %s", until, cool, now.Add(c.HoldTime))
+	}
+	now = now.Add(time.Minute)
+	input.Results = results(now, pA, m{"a", 0, 40}, m{"b", 0, 50})
+	st, out = Decide(st, input, c, s, now)
+	if _, ok := st.Improvements[pA]; ok || decision(t, out, pA).Action == ActionImprove || !strings.Contains(decision(t, out, pA).Reason, "cooldown") {
+		t.Fatalf("steer flapped back during cooldown: %+v %+v", decision(t, out, pA), st.Improvements)
+	}
+
+	now = until
+	input.Results = results(now, pA, m{"a", 0, 40}, m{"b", 0, 50})
+	// The 95th has to be fresh. A row timestamped at t0 is older than max_age
+	// once hold_time (15m) has elapsed.
+	for i := range input.Usage {
+		input.Usage[i].Updated = now
+	}
+	st, out = Decide(st, input, c, s, now)
+	if st.Improvements[pA].Cause != plugin.CauseCommit || decision(t, out, pA).Action != ActionImprove {
+		t.Fatalf("after cooldown: %+v %+v", decision(t, out, pA), st.Improvements[pA])
 	}
 }
 
@@ -215,6 +246,139 @@ func TestGroupBalanceDecisionStaysInGroup(t *testing.T) {
 	}
 	if st.Improvements[pA].Provider != "b" {
 		t.Fatalf("improvement %+v", st.Improvements[pA])
+	}
+}
+
+// planStub is a planner that returns a fixed set of moves. It exists so
+// Decide's own loss and native checks are tested apart from the commit scorer.
+type planStub struct {
+	plugin.Base
+	moves []plugin.PlanMove
+	allow bool
+	// override is false when the stub does not implement LossOverride.
+	override bool
+}
+
+func (p planStub) Score(s plugin.PathStats) float64 {
+	return s.LossPct*100 + float64(s.RTTAvg)/float64(time.Millisecond)
+}
+
+func (p planStub) Plan(plugin.PlanInput) []plugin.PlanMove { return p.moves }
+
+func (p planStub) AllowLoss() bool {
+	if !p.override {
+		return false
+	}
+	return p.allow
+}
+
+// planBare does not implement LossOverride. Decide must refuse a higher-loss move.
+type planBare struct {
+	plugin.Base
+	moves []plugin.PlanMove
+}
+
+func (p planBare) Score(s plugin.PathStats) float64 {
+	return s.LossPct*100 + float64(s.RTTAvg)/float64(time.Millisecond)
+}
+
+func (p planBare) Plan(plugin.PlanInput) []plugin.PlanMove { return p.moves }
+
+func commitInput() Input {
+	input := in(results(t0, pA, m{"a", 0, 40}, m{"b", 0, 50}, m{"c", 0, 45}), map[netip.Prefix]string{pA: "a"})
+	input.Usage = []plugin.Usage{billable("a", 100, 150), billable("b", 100, 20), billable("c", 100, 20)}
+	input.VolumeMbps = map[netip.Prefix]float64{pA: 60}
+	return input
+}
+
+func TestDecideRefusesHigherLossAndNativeCommitMoves(t *testing.T) {
+	c := commitCfg()
+	input := commitInput()
+	input.Results = results(t0, pA, m{"a", 0, 40}, m{"b", 2, 50})
+	mv := plugin.PlanMove{Prefix: pA, Provider: "b", Reason: "stub", ReliefMbps: 60}
+
+	st, out := Decide(NewState(), input, c, planBare{moves: []plugin.PlanMove{mv}}, t0)
+	if len(st.Improvements) != 0 || !strings.Contains(decision(t, out, pA).Reason, "refused") {
+		t.Fatalf("bare planner higher loss: %+v %+v", decision(t, out, pA), st.Improvements)
+	}
+
+	st, out = Decide(NewState(), input, c, planStub{moves: []plugin.PlanMove{mv}, override: true, allow: true}, t0)
+	if st.Improvements[pA].Provider != "b" || st.Improvements[pA].Cause != plugin.CauseCommit {
+		t.Fatalf("loss override: %+v", st.Improvements)
+	}
+
+	input = commitInput()
+	native := plugin.PlanMove{Prefix: pA, Provider: "a", Reason: "stub", ReliefMbps: 60}
+	st, out = Decide(NewState(), input, c, planStub{moves: []plugin.PlanMove{native}, override: true, allow: true}, t0)
+	if len(st.Improvements) != 0 {
+		t.Fatalf("steered onto native: %+v", st.Improvements)
+	}
+}
+
+func TestCommitCapTieBreakIsTheLowerPrefix(t *testing.T) {
+	c, s := commitCfg(), commitScorer(t, "")
+	c.MaxImprovements = 1
+	var res []probe.Result
+	res = append(res, results(t0, pA, m{"a", 0, 40}, m{"b", 0, 45})...)
+	res = append(res, results(t0, pB, m{"a", 0, 40}, m{"b", 0, 45})...)
+	input := in(res, map[netip.Prefix]string{pA: "a", pB: "a"})
+	input.Usage = []plugin.Usage{billable("a", 100, 220), billable("b", 200, 10)}
+	input.VolumeMbps = map[netip.Prefix]float64{pA: 60, pB: 60}
+	for i := 0; i < 20; i++ {
+		st, out := Decide(NewState(), input, c, s, t0)
+		if st.Improvements[pA].Cause != plugin.CauseCommit {
+			t.Fatalf("iter %d winner %+v", i, st.Improvements)
+		}
+		if _, ok := st.Improvements[pB]; ok || decision(t, out, pB).Action != ActionCapped {
+			t.Fatalf("iter %d loser %+v decision %+v", i, st.Improvements[pB], decision(t, out, pB))
+		}
+	}
+}
+
+func TestPerformanceDisplacesCommitWhenTheCapBinds(t *testing.T) {
+	c, s := commitCfg(), commitScorer(t, "")
+	c.MaxImprovements = 2
+	prev := NewState()
+	prev.Improvements[pB] = Improvement{Prefix: pB, Provider: "b", Native: "a", Since: t0, Cause: plugin.CauseCommit}
+	prev.Improvements[pC] = Improvement{Prefix: pC, Provider: "b", Native: "a", Since: t0, Cause: plugin.CauseCommit}
+	var res []probe.Result
+	res = append(res, results(t0, pA, m{"a", 0, 90}, m{"b", 0, 30})...)
+	res = append(res, results(t0, pB, m{"a", 0, 40}, m{"b", 0, 45})...)
+	res = append(res, results(t0, pC, m{"a", 0, 40}, m{"b", 0, 45})...)
+	input := in(res, map[netip.Prefix]string{pA: "a", pB: "a", pC: "a"})
+	input.Usage = []plugin.Usage{billable("a", 100, 200), billable("b", 400, 10)}
+	input.VolumeMbps = map[netip.Prefix]float64{pA: 70, pB: 10, pC: 80}
+	st, out := Decide(prev, input, c, s, t0)
+	if st.Improvements[pA].Cause != plugin.CausePerformance {
+		t.Fatalf("performance did not take a slot: %+v", st.Improvements)
+	}
+	if _, ok := st.Improvements[pB]; ok || !strings.Contains(decision(t, out, pB).Reason, "displaced") {
+		t.Fatalf("smaller commit steer was kept: %+v %+v", decision(t, out, pB), st.Improvements[pB])
+	}
+	if _, cool := st.Cooldown[pB]; !cool {
+		t.Fatal("displaced commit steer has no cooldown")
+	}
+	if st.Improvements[pC].Cause != plugin.CauseCommit {
+		t.Fatalf("larger commit steer was dropped: %+v", st.Improvements[pC])
+	}
+}
+
+func TestLockedPerformanceVolumeIsNotMovedAgain(t *testing.T) {
+	c, s := commitCfg(), commitScorer(t, "")
+	// pA is a performance move of 60 Mbps. That brings a from 150 to 90,
+	// under the commit of 100, so pB must not also be commit-steered.
+	var res []probe.Result
+	res = append(res, results(t0, pA, m{"a", 0, 90}, m{"b", 0, 30})...)
+	res = append(res, results(t0, pB, m{"a", 0, 40}, m{"b", 0, 45})...)
+	input := in(res, map[netip.Prefix]string{pA: "a", pB: "a"})
+	input.Usage = []plugin.Usage{billable("a", 100, 150), billable("b", 100, 10)}
+	input.VolumeMbps = map[netip.Prefix]float64{pA: 60, pB: 40}
+	st, out := Decide(NewState(), input, c, s, t0)
+	if st.Improvements[pA].Cause != plugin.CausePerformance {
+		t.Fatalf("performance: %+v", decision(t, out, pA))
+	}
+	if _, ok := st.Improvements[pB]; ok {
+		t.Fatalf("commit moved traffic the performance steer already shifts: %+v", st.Improvements[pB])
 	}
 }
 

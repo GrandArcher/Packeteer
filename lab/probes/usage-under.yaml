@@ -1,0 +1,9 @@
+# The steer is active, so the 80 Mbps sits on transit-b in this snapshot.
+# Putting it back leaves transit-a at 20+80 = 100, which is not over commit.
+providers:
+  - name: transit-a
+    commit_mbps: 100
+    usage_mbps: 20
+  - name: transit-b
+    commit_mbps: 100
+    usage_mbps: 90

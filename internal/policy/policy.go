@@ -379,18 +379,28 @@ func Decide(prev State, in Input, cfg Config, scorer plugin.Scorer, now time.Tim
 
 	integrateCommit(st, &out, decIdx, holds, commitOK, byPrefix, &wants, cfg, scorer, in, now, retire)
 
-	// Performance moves take the cap first. Commit moves then take what is
-	// left, largest relief first. Both count toward max_improvements.
-	sort.SliceStable(wants, func(a, b int) bool {
+	// Performance moves take the cap first. A commit steer already in the
+	// table gives up its slot to a new performance move. Commit moves then
+	// take what is left, largest relief first. Equal relief breaks by
+	// prefix so the same inputs always pick the same prefix.
+	sort.Slice(wants, func(a, b int) bool {
 		if wants[a].commit != wants[b].commit {
 			return !wants[a].commit
 		}
-		return wants[a].gain > wants[b].gain
+		if wants[a].gain != wants[b].gain {
+			return wants[a].gain > wants[b].gain
+		}
+		return lessPrefix(wants[a].imp.Prefix, wants[b].imp.Prefix)
 	})
 	for _, w := range wants {
 		w.d.Cause = w.imp.Cause
-		if len(st.Improvements) >= cfg.MaxImprovements {
-			w.d.Action, w.d.Reason, w.d.Recommended = ActionCapped, fmt.Sprintf("max_improvements (%d) reached", cfg.MaxImprovements), w.imp.Provider
+		for len(st.Improvements) >= cfg.MaxImprovements {
+			if w.commit || cfg.MaxImprovements <= 0 || !displaceCommit(st, decIdx, in.VolumeMbps, retire) {
+				w.d.Action, w.d.Reason, w.d.Recommended = ActionCapped, fmt.Sprintf("max_improvements (%d) reached", cfg.MaxImprovements), w.imp.Provider
+				break
+			}
+		}
+		if w.d.Action == ActionCapped {
 			continue
 		}
 		st.Improvements[w.imp.Prefix] = w.imp
@@ -458,12 +468,44 @@ func allowed(list []netip.Prefix, p netip.Prefix) bool {
 }
 
 func sortPrefixes(ps []netip.Prefix) {
-	sort.Slice(ps, func(i, j int) bool {
-		if c := ps[i].Addr().Compare(ps[j].Addr()); c != 0 {
-			return c < 0
+	sort.Slice(ps, func(i, j int) bool { return lessPrefix(ps[i], ps[j]) })
+}
+
+func lessPrefix(a, b netip.Prefix) bool {
+	if c := a.Addr().Compare(b.Addr()); c != 0 {
+		return c < 0
+	}
+	return a.Bits() < b.Bits()
+}
+
+// displaceCommit retires one commit improvement so a performance move can
+// use the slot. The smallest volume goes first (it relieves the least);
+// equal volume breaks by prefix. The prefix takes a hold_time cooldown so
+// the commit steer cannot return on the next round and take the slot back.
+func displaceCommit(st State, decIdx map[netip.Prefix]*Decision, volume map[netip.Prefix]float64, retire func(netip.Prefix, string, bool)) bool {
+	var pick netip.Prefix
+	var pickVol float64
+	found := false
+	for p, imp := range st.Improvements {
+		if imp.Cause != plugin.CauseCommit {
+			continue
 		}
-		return ps[i].Bits() < ps[j].Bits()
-	})
+		vol := 0.0
+		if volume != nil {
+			vol = volume[p]
+		}
+		if !found || vol < pickVol || (vol == pickVol && lessPrefix(p, pick)) {
+			pick, pickVol, found = p, vol, true
+		}
+	}
+	if !found {
+		return false
+	}
+	imp := st.Improvements[pick]
+	const reason = "displaced by a performance improvement"
+	retire(pick, reason, true)
+	setDecision(decIdx[pick], ActionRetire, reason, imp.Native, "", plugin.CauseCommit)
+	return true
 }
 
 func sortedKeys(m map[netip.Prefix]Improvement) []netip.Prefix {

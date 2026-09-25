@@ -325,7 +325,10 @@ func udpAddr(a *net.UDPAddr) netip.Addr {
 
 // Volumes implements plugin.VolumeSource. Mbps is bytes over the configured
 // window. The list is not limited to top_n. It does not announce.
-func (s *Source) Volumes(context.Context) ([]plugin.PrefixVolume, error) {
+func (s *Source) Volumes(ctx context.Context) ([]plugin.PrefixVolume, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	rows := s.win.totals(s.now(), maxPrefixes)
 	out := make([]plugin.PrefixVolume, 0, len(rows))
 	for _, r := range rows {

@@ -7,10 +7,15 @@
 //
 // The projection starts from the telemetry billable figure. An active commit
 // improvement is put back on its native provider first, so the result is the
-// set of steers that should exist, not a delta on top of last round. Flow
-// volume is the traffic a prefix move takes with it. A move that would raise
-// loss is refused unless loss_override is set. The highest precedence is used
-// only when every lower precedence lacks room. Plan does not announce.
+// set of steers that should exist, not a delta on top of last round. A locked
+// prefix is a performance steer: its volume is taken off Native and put on
+// Current, because that shift is not in the 95th yet, and it is not a commit
+// candidate. Flow volume is the traffic a prefix move takes with it. A move
+// that would raise loss is refused unless loss_override is set. Precedence
+// (lower is preferred) orders destinations ahead of spare capacity and ahead
+// of sharing a group. The highest precedence is used only when every lower
+// precedence lacks room. Balance moves are the ones that stay inside the
+// group. Plan does not announce.
 package commit
 
 import (
@@ -195,7 +200,13 @@ func (s *Scorer) Plan(in plugin.PlanInput) []plugin.PlanMove {
 
 	var prefs []placed
 	for _, px := range in.Prefixes {
-		if px.Locked || px.Prefix == (netip.Prefix{}) {
+		if px.Prefix == (netip.Prefix{}) {
+			continue
+		}
+		if px.Locked {
+			// Performance already claimed this volume. Count it on the
+			// provider it is moving to, and do not commit-steer it.
+			shiftLocked(provs, px)
 			continue
 		}
 		if px.VolumeMbps < s.minMbps || px.VolumeMbps <= mbpsEps {
@@ -440,17 +451,16 @@ func (s *Scorer) chooseDest(provs map[string]*live, src *live, pf *placed, sameG
 		return ""
 	}
 	sort.SliceStable(cands, func(i, j int) bool {
-		return betterDest(src, cands[i], cands[j])
+		return betterDest(cands[i], cands[j])
 	})
 	return cands[0].name
 }
 
-func betterDest(src, a, b *live) bool {
-	ag := src.group != "" && a.group == src.group
-	bg := src.group != "" && b.group == src.group
-	if ag != bg {
-		return ag
-	}
+// betterDest orders commit destinations. Lower precedence wins. Group
+// membership does not: balance moves are already limited to the group by
+// canTake, and a relieve step must not pick a same-group peer ahead of a
+// preferred precedence.
+func betterDest(a, b *live) bool {
 	if a.prec != b.prec {
 		return a.prec < b.prec
 	}
@@ -522,6 +532,28 @@ func (s *Scorer) apply(src, dst *live, pf *placed, balancing bool, moved map[net
 	*moves = append(*moves, plugin.PlanMove{
 		Prefix: pf.Prefix, Provider: dst.name, Reason: reason, ReliefMbps: vol,
 	})
+}
+
+// shiftLocked moves a performance steer's volume off Native onto Current.
+// The 95th still has that traffic on Native. Leaving it there makes commit
+// control move the same traffic a second time.
+func shiftLocked(provs map[string]*live, px plugin.PlanPrefix) {
+	if px.VolumeMbps <= mbpsEps {
+		return
+	}
+	from, to := px.Native, px.Current
+	if from == "" || to == "" || from == to {
+		return
+	}
+	if src := provs[from]; src != nil && src.have {
+		src.projected -= px.VolumeMbps
+		if src.projected < 0 {
+			src.projected = 0
+		}
+	}
+	if dst := provs[to]; dst != nil && dst.have {
+		dst.projected += px.VolumeMbps
+	}
 }
 
 func heaviestOver(provs map[string]*live, skip map[string]bool) (*live, float64) {
