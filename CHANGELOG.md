@@ -6,6 +6,7 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 
 ### Added
 
+- `snmp` telemetry plugin. Polls interface octet counters over SNMP v2c or v3 and tracks 95th-percentile usage for the open UTC billing period (`separate`, `greater`, and `greater_separate`). Credentials are environment variables. The collector does not announce. Samples are in memory and are cleared on restart. `/api/telemetry` and `packeteer_telemetry_*` expose them. Commit control is not in this change.
 - `outage` target source. Probe results inside a window are correlated by learned AS path and by provider. Enough prefixes failing together re-queues the affected prefixes (capped) and emits `outage.as` or `outage.circuit`. One prefix does not. The source does not announce.
 - `udp` prober. A datagram reply counts. An ICMP destination-unreachable counts only when the sender is the target, so a firewall `REJECT` is loss. It is not in the default chain. A TCP RST from a middlebox is still indistinguishable from the target.
 - `traceroute` target source. When the configured host does not answer, probes move to the last stable hop. The prefix is unchanged and the hop is not announced. Discovery runs in the background, returns the last cache immediately, and is capped by `budget` (default 10s).

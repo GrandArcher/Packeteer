@@ -16,4 +16,5 @@ import (
 	_ "github.com/GrandArcher/Packeteer/internal/plugins/source/static"     // static target source
 	_ "github.com/GrandArcher/Packeteer/internal/plugins/source/traceroute" // traceroute target discovery
 	_ "github.com/GrandArcher/Packeteer/internal/plugins/source/vip"        // VIP prefix/ASN target source
+	_ "github.com/GrandArcher/Packeteer/internal/plugins/telemetry/snmp"    // SNMP interface telemetry
 )

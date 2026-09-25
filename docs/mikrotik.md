@@ -6,6 +6,7 @@ This guide grows with each milestone. It currently covers:
 2. **iBGP session** so Packeteer can see the paths the router advertises: below.
 3. **Injected routes**: accept only the Packeteer community from that session, and never export it to eBGP. FRR, Junos, and IOS snippets are in [routers.md](routers.md).
 4. **Traffic Flow** (NetFlow / IPFIX) so Packeteer can pick probe targets from real traffic: below.
+5. **SNMP** so Packeteer can read interface counters for 95th-percentile tracking: below. The community stays in the container environment.
 
 ## iBGP session to Packeteer
 
@@ -96,3 +97,37 @@ sources:
 ```
 
 Allow UDP/2055 on the host firewall from the router only. The socket is not authenticated. Flow targets are probe targets: they are not announced unless they are also in the learned RIB and pass the inject checks.
+
+## SNMP interface counters
+
+Packeteer's `snmp` telemetry plugin reads `ifHCInOctets` and `ifHCOutOctets` (the interface name is `ifName`, which on RouterOS is `ether1` and the like). It does not announce. Put the community in `PACKETEER_SNMP_COMMUNITY` (or whatever name `community_env` uses) on the container. Do not commit it.
+
+```routeros
+# Packeteer at 192.0.2.10. Replace CHANGE-ME on the router only.
+# The same string goes in the container environment, not in config.yaml.
+/snmp set enabled=yes
+/snmp community add name=CHANGE-ME addresses=192.0.2.10 read-access=yes write-access=no
+```
+
+Restrict `addresses` to Packeteer. Disable the default community if it is still enabled (`/snmp community print`). `interface` in the telemetry config is the RouterOS interface name. `commit_mbps` and `billing_day` are recorded for the 95th-percentile window. They do not steer traffic.
+
+```yaml
+telemetry:
+  - type: snmp
+    config:
+      interval: 5m
+      hosts:
+        - name: edge1
+          address: 192.0.2.254
+          version: 2c
+          community_env: PACKETEER_SNMP_COMMUNITY
+      providers:
+        - name: transit-a
+          host: edge1
+          interface: ether1
+          commit_mbps: 1000
+          billing_day: 1
+          percentile: greater_separate
+```
+
+`percentile: greater_separate` is the greater of the inbound 95th and the outbound 95th. `separate` keeps the two directions apart. `greater` takes max(in, out) on each sample and then the 95th. The billing day is 00:00 UTC. The window is in memory and starts over on restart. `/api/telemetry` shows the latest rates. SNMPv3 uses `username_env`, `auth_env`, and `priv_env` the same way: names in the file, values in the environment.

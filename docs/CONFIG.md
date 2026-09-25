@@ -45,6 +45,7 @@ The image entrypoint is the same binary. Flags go after the image name.
 | `scorer` | `weighted` | no | One scorer. Lower score is better. |
 | `announcer` | none | inject | In-process only. `type: gobgp` publishes on the RIB session. |
 | `notifiers` | none | no | Events. A failure here does not withdraw routes by itself. |
+| `telemetry` | none | no | Interface counters and 95th-percentile usage. Off unless listed. Does not announce. |
 
 `mode: observe` and `mode: suggest` use the same decision path and announce nothing. `suggest` is the checkpoint: read the log, the dashboard, and `/api/decisions` before you change `mode`. The allowlist is enforced only in `inject`.
 
@@ -130,7 +131,7 @@ One established session is enough for the view to be ready. All sessions down dr
 
 ### Plugin entries
 
-`probers`, `sources`, and `notifiers` are lists. `scorer` and `announcer` are single objects.
+`probers`, `sources`, `notifiers`, and `telemetry` are lists. `scorer` and `announcer` are single objects.
 
 | Key | Meaning |
 |---|---|
@@ -334,6 +335,65 @@ At least one weight must be positive. Omit the block to keep the defaults.
 | `timeout` | `30s` | Per call. Not negative. |
 | `env` | none | Passed to the process, plus `PATH` and `PACKETEER_PLUGIN_KIND`. Values expand `${VAR}`. Names cannot contain `=` or NUL. |
 | `config` | none | Forwarded verbatim in every JSON request. |
+
+### Telemetry `snmp`
+
+Off unless a `telemetry` entry lists `type: snmp`. It polls IF-MIB counters and keeps 95th-percentile usage for the open billing period. It does not announce and it does not change decisions. Samples live in memory. A restart clears the window. Commit control that acts on these numbers is a later change.
+
+The billing period is `[start, end)` in UTC, opening at 00:00 UTC on `billing_day`. `billing_day` is 1–28 so the day exists in every month.
+
+The 95th percentile is nearest rank: sort the samples ascending and take 1-based rank ceil(0.95 × N), computed as `(95×N+99)/100`. For a multiple of 20 that is the sample left after the top 5% are discarded. For N of 10 the rank is 10.
+
+| `percentile` | Billable figure |
+|---|---|
+| `separate` | Inbound 95th and outbound 95th, kept apart. No single `usage_mbps`. |
+| `greater` | 95th percentile of max(in, out) at each sample. |
+| `greater_separate` | The greater of the inbound 95th and the outbound 95th. |
+
+Rates are decimal megabits per second (bits / 1e6). The first successful poll only records a counter baseline. A later poll turns the delta into a rate. A gap longer than two intervals, a backwards `sysUpTime`, or a delta above twice the reported interface speed (or above 100 Tbit/s when speed is unknown) resets the baseline and does not store a sample. 64-bit `ifHCInOctets` / `ifHCOutOctets` are preferred. 32-bit `ifInOctets` / `ifOutOctets` are used when the 64-bit counters are absent.
+
+`interface` is an exact `ifName`, or `ifDescr` when `ifName` has no match, or a decimal `ifIndex` (`5`, not `05`).
+
+Credentials are environment variables named in the config. The file must not contain the community or the passphrase. `-check` fails while a named variable is empty. A change to the variable is read on the next start.
+
+| Key | Default | Bounds |
+|---|---|---|
+| `interval` | `5m` | `30s`–`1h`. Time between polls. |
+| `timeout` | `5s` | At least `100ms`, shorter than `interval`. Per SNMP request. |
+| `retries` | 1 | 0–5. Extra attempts after the first. `0` does not retry. |
+| `max_samples` | 100000 | 1–1000000. Oldest samples in the open period are dropped past this. `0` uses the default. |
+| `hosts` | none | Required. One SNMP agent. Several providers can share a host. |
+| `providers` | none | Required. Each entry names a configured provider. |
+
+Each host:
+
+| Key | Default | Meaning |
+|---|---|---|
+| `name` | required | Unique in `hosts`. |
+| `address` | required | IP address or hostname. It is not resolved at startup. |
+| `port` | 161 | 1–65535. |
+| `version` | required | `2c` or `3`. |
+| `community_env` | v2c: required | Environment variable that holds the community. v2c only. |
+| `username_env` | v3: required | Environment variable that holds the v3 user name. |
+| `security_level` | v3: required | `noAuthNoPriv`, `authNoPriv`, or `authPriv`. |
+| `auth_protocol` | with auth | `MD5`, `SHA`, `SHA224`, `SHA256`, `SHA384`, or `SHA512`. |
+| `auth_env` | with auth | Environment variable that holds the auth passphrase (at least 8 characters). |
+| `priv_protocol` | with privacy | `DES`, `AES`, `AES192`, `AES256`, `AES192C`, or `AES256C`. |
+| `priv_env` | with privacy | Environment variable that holds the privacy passphrase (at least 8 characters). |
+| `context_name` | empty | SNMP context. v3 only. Not a credential. |
+
+v2c accepts `community_env` only. v3 rejects `community_env`. `noAuthNoPriv` rejects auth and privacy keys.
+
+Each provider:
+
+| Key | Meaning |
+|---|---|
+| `name` | Required. Must match a top-level provider `name`. Unique in this plugin. |
+| `host` | Required. A `hosts[].name`. |
+| `interface` | Required. `ifName`, `ifDescr`, or a decimal `ifIndex`. |
+| `commit_mbps` | Required. Greater than 0, at most 100000000. Reported, not enforced. |
+| `billing_day` | Required. 1–28. UTC. |
+| `percentile` | Required. `separate`, `greater`, or `greater_separate`. |
 
 ### Announcer `gobgp`
 

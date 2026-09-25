@@ -182,6 +182,58 @@ func TestRunVersion(t *testing.T) {
 	}
 }
 
+func TestRunSNMPCheck(t *testing.T) {
+	example, err := os.ReadFile(filepath.Join("..", "..", "config.example.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "c.yaml")
+	cfg := string(example) + `
+telemetry:
+  - type: snmp
+    config:
+      hosts:
+        - name: edge1
+          address: 192.0.2.254
+          version: 2c
+          community_env: PACKETEER_SNMP_COMMUNITY
+      providers:
+        - name: transit-a
+          host: edge1
+          interface: ether1
+          commit_mbps: 1000
+          billing_day: 1
+          percentile: separate
+`
+	if err := os.WriteFile(path, []byte(cfg), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out, errOut bytes.Buffer
+	if code := run(context.Background(), []string{"-check", "-config", path}, noEnv, &out, &errOut); code != 1 {
+		t.Fatalf("exit %d, want 1; stderr %s", code, errOut.String())
+	}
+	if !strings.Contains(errOut.String(), "empty or unset") || strings.Contains(errOut.String(), "lab-community-value") {
+		t.Fatalf("stderr = %q", errOut.String())
+	}
+	getenv := func(k string) string {
+		if k == "PACKETEER_SNMP_COMMUNITY" {
+			return "lab-community-value"
+		}
+		return ""
+	}
+	out.Reset()
+	errOut.Reset()
+	if code := run(context.Background(), []string{"-check", "-config", path}, getenv, &out, &errOut); code != 0 {
+		t.Fatalf("exit %d stderr %s", code, errOut.String())
+	}
+	if !strings.Contains(out.String(), "telemetry snmp") || strings.Contains(out.String(), "lab-community-value") {
+		t.Fatalf("stdout =\n%s", out.String())
+	}
+	if !strings.Contains(out.String(), "mode: observe") || !strings.Contains(out.String(), "announce: disabled") {
+		t.Fatalf("stdout =\n%s", out.String())
+	}
+}
+
 func TestRunUnknownPluginType(t *testing.T) {
 	example, err := os.ReadFile(filepath.Join("..", "..", "config.example.yaml"))
 	if err != nil {

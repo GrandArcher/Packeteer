@@ -136,6 +136,27 @@ log:
 http:
   listen: "127.0.0.1:8080"
 
+# Interface counters and 95th-percentile usage. Off unless listed.
+# The community and v3 passphrases are environment variables named here,
+# never values in this file. The collector does not announce.
+# Docs: docs/PLUGINS.md and docs/CONFIG.md.
+# telemetry:
+#   - type: snmp
+#     config:
+#       interval: 5m
+#       hosts:
+#         - name: edge1
+#           address: 192.0.2.254
+#           version: 2c
+#           community_env: PACKETEER_SNMP_COMMUNITY
+#       providers:
+#         - name: transit-a
+#           host: edge1
+#           interface: ether1
+#           commit_mbps: 1000
+#           billing_day: 1
+#           percentile: greater_separate
+
 # Plugins (docs/PLUGINS.md). Out-of-process plugins live in plugin_dir.
 plugin_dir: /etc/packeteer/plugins
 # notifiers:

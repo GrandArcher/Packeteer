@@ -20,6 +20,7 @@ import (
 	"github.com/GrandArcher/Packeteer/internal/plugins/source/static"
 	"github.com/GrandArcher/Packeteer/internal/plugins/source/traceroute"
 	"github.com/GrandArcher/Packeteer/internal/plugins/source/vip"
+	"github.com/GrandArcher/Packeteer/internal/plugins/telemetry/snmp"
 )
 
 // TestConfigDocCoversStructs fails when a yaml tag on a config struct, or an
@@ -44,6 +45,7 @@ func TestConfigDocCoversStructs(t *testing.T) {
 		traceroute.Config{},
 		outage.Config{},
 		vip.Config{},
+		snmp.Config{},
 		weighted.Config{},
 		webhook.Config{},
 		exec.Config{},

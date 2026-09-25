@@ -2,7 +2,7 @@
 //
 // Every capability that could reasonably vary between deployments (how to
 // probe, where targets come from, how paths are scored, how routes reach the
-// router, where alerts go) is a small interface here. Implementations register
+// router, where alerts go, how interface usage is collected) is a small interface here. Implementations register
 // a Factory under a type name in the matching Registry, and the operator
 // selects them in config by that name:
 //
@@ -39,6 +39,7 @@ const (
 	KindScorer    Kind = "scorer"
 	KindAnnouncer Kind = "announcer"
 	KindNotifier  Kind = "notifier"
+	KindTelemetry Kind = "telemetry"
 )
 
 // Lifecycle is implemented by every plugin.
@@ -70,6 +71,11 @@ type Env struct {
 	PluginDir string
 	// Getenv reads the process environment (injectable for tests).
 	Getenv func(string) string
+	// Providers lists configured provider names. Telemetry plugins reject
+	// a binding that is not in this list. Nil means the caller is not
+	// asking for that check (unit tests). An empty non-nil slice rejects
+	// every name.
+	Providers []string
 }
 
 // ---- Prober ----
@@ -187,6 +193,80 @@ type Event struct {
 type Notifier interface {
 	Lifecycle
 	Notify(ctx context.Context, e Event) error
+}
+
+// ---- Telemetry ----
+
+// PercentileMode selects how a billing period's interface samples become
+// a usage figure. Rates are whatever unit the caller stored; the mode
+// only combines them.
+type PercentileMode string
+
+// 95th-percentile billing modes.
+const (
+	// PercentileSeparate keeps inbound and outbound 95ths apart. There is
+	// no single billable figure; compare each direction to the commit.
+	PercentileSeparate PercentileMode = "separate"
+	// PercentileGreater is the 95th percentile of max(in, out) at each sample.
+	PercentileGreater PercentileMode = "greater"
+	// PercentileGreaterSeparate is the greater of the inbound 95th and the
+	// outbound 95th, each computed on its own.
+	PercentileGreaterSeparate PercentileMode = "greater_separate"
+)
+
+// RateSample is one interface observation. In and Out are the same unit.
+type RateSample struct {
+	In  float64
+	Out float64
+}
+
+// PercentileSummary is the 95th-percentile reading of one billing window.
+// Single is false for PercentileSeparate and when Samples is 0: Usage is
+// then not a billable figure.
+type PercentileSummary struct {
+	In95    float64
+	Out95   float64
+	Usage   float64
+	Single  bool
+	Samples int
+}
+
+// Usage is one provider's interface telemetry for the open billing period.
+// Rates are decimal megabits per second (bits/1e6, not 1024^2). A telemetry
+// plugin reports usage. It must not announce routes.
+type Usage struct {
+	Provider    string
+	Host        string
+	Interface   string
+	IfIndex     int
+	CommitMbps  float64
+	BillingDay  int
+	Mode        PercentileMode
+	PeriodStart time.Time
+	PeriodEnd   time.Time
+	Samples     int
+	// InMbps and OutMbps are the latest accepted sample. They stay set
+	// after the billing period rolls until the next sample, so a reader
+	// can see PeriodStart and Updated together.
+	InMbps    float64
+	OutMbps   float64
+	InMbps95  float64
+	OutMbps95 float64
+	// UsageMbps is the single billable figure when Single is true.
+	UsageMbps float64
+	Single    bool
+	Updated   time.Time
+	Polled    time.Time
+	// Error is the last poll error. Empty when the last poll succeeded.
+	// A poll error does not drop samples already stored.
+	Error string
+}
+
+// Telemetry collects per-provider interface usage. Implementations must
+// not announce routes or change decisions.
+type Telemetry interface {
+	Lifecycle
+	Snapshot(ctx context.Context) ([]Usage, error)
 }
 
 // ErrSourceUnavailable is returned (wrapped) by probers when the requested

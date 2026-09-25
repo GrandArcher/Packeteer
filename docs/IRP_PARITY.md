@@ -25,9 +25,9 @@ Milestones:
 
 | Status | Count |
 |---|---|
-| done | 30 |
+| done | 32 |
 | in progress | 0 |
-| planned | 49 |
+| planned | 47 |
 | won't do | 3 |
 
 ## Performance optimization
@@ -61,14 +61,16 @@ The `outage` source (#16) correlates probe results inside `window` (default 2m).
 
 | Capability | IRP doc ref | Status | Milestone | Plugin kind | Issue |
 |---|---|---|---|---|---|
-| SNMP interface bandwidth collection | 3.13.9 SNMP hosts | planned | v0.2 | telemetry (`snmp`, new kind) | #17 |
-| 95th percentile tracking (separate / greater-of modes, billing day) | 1.3.3, 4.15 | planned | v0.2 | telemetry | #17 |
+| SNMP interface bandwidth collection | 3.13.9 SNMP hosts | done | v0.2 | telemetry (`snmp`) | #17 |
+| 95th percentile tracking (separate / greater-of modes, billing day) | 1.3.3, 4.15 | done | v0.2 | telemetry (`snmp`) | #17 |
 | Outbound commit control (keep providers under commit) | 1.3.3 Commit Control | planned | v0.2 | scorer (`commit`) | #18 |
 | Provider groups and load balancing in group | 4.15 group_loadbalance | planned | v0.2 | scorer | #18 |
 | Provider precedence / last-resort provider | 4.15 precedence | planned | v0.2 | scorer | #18 |
 | Cost optimization mode (cheapest provider meeting a performance floor) | 1.3.2 Cost optimization | planned | v0.2 | scorer (`cost`) | #19 |
 | Precedence rules performance vs cost | 1.3.2 | planned | v0.2 | scorer | #19 |
 | Global commit across POPs | 3.12 Global Commit | planned | v0.4 | core (multi-instance) | #30 |
+
+The `snmp` telemetry plugin (#17) polls `ifHCInOctets` and `ifHCOutOctets` (32-bit octet counters when the 64-bit ones are absent). The community and v3 passphrases are environment variables named in the config, not values in the file. Samples stay in memory for the open UTC billing period (`billing_day` 1–28). A restart clears them. The 95th percentile is nearest rank, ceil(0.95 × N). `separate` keeps the inbound and outbound 95ths apart. `greater` is the 95th of max(in, out) on each sample. `greater_separate` is the greater of those two 95ths. The numbers are on `/api/telemetry` and `packeteer_telemetry_*`. The plugin does not announce and does not change a decision. Commit control that spends them is #18.
 
 ## Inbound
 

@@ -90,6 +90,8 @@ type Config struct {
 	Scorer    *PluginSpec  `yaml:"scorer"`
 	Announcer *PluginSpec  `yaml:"announcer"`
 	Notifiers []PluginSpec `yaml:"notifiers"`
+	// Telemetry collects per-provider interface usage. It does not announce.
+	Telemetry []PluginSpec `yaml:"telemetry"`
 }
 
 // Log configures slog output.
@@ -455,6 +457,7 @@ func (c *Config) Validate() error {
 	validateSpecs("probers", c.Probers)
 	validateSpecs("sources", c.Sources)
 	validateSpecs("notifiers", c.Notifiers)
+	validateSpecs("telemetry", c.Telemetry)
 	if c.Scorer != nil && c.Scorer.Type == "" {
 		add("scorer: type is required")
 	}
