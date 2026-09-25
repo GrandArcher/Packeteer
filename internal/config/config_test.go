@@ -223,6 +223,7 @@ func TestParseErrors(t *testing.T) {
 		{"mixed address family", edit(t, minimalYAML, "next_hop: 192.0.2.1", "next_hop: 2001:db8::1"), "same address family"},
 		{"bad provider group", edit(t, minimalYAML, "next_hop: 192.0.2.1", "next_hop: 192.0.2.1\n    group: \"has space\""), "group"},
 		{"precedence out of range", edit(t, minimalYAML, "next_hop: 192.0.2.1", "next_hop: 192.0.2.1\n    precedence: -1"), "precedence"},
+		{"negative cost", edit(t, minimalYAML, "next_hop: 192.0.2.1", "next_hop: 192.0.2.1\n    cost: -1"), "cost -1 must be between 0"},
 		{"bad allowlist cidr", edit(t, injectYAML, "198.51.100.0/24", "198.51.100.0/33"), "is not a valid CIDR"},
 		{"allowlist not a cidr", edit(t, injectYAML, "198.51.100.0/24", "198.51.100.0"), "is not a valid CIDR"},
 		{"allowlist host bits", edit(t, injectYAML, "198.51.100.0/24", "198.51.100.7/24"), "did you mean 198.51.100.0/24"},
@@ -318,6 +319,23 @@ announcer:
 		{"duplicate instance", minimalYAML + "notifiers:\n  - type: webhook\n  - type: webhook\n", `notifiers[1]: duplicate instance name "webhook"`},
 		{"unknown spec field", minimalYAML + "sources:\n  - type: static\n    prefixes: []\n", "field prefixes not found"},
 		{"scorer missing type", minimalYAML + "scorer: {name: x}\n", "scorer: type is required"},
+		{"cost scorer without costs", minimalYAML + "scorer: {type: cost}\n", "needs a cost on at least two non-excluded providers"},
+		{"cost scorer with an excluded priced provider", `
+mode: observe
+asn: 64512
+router_id: 192.0.2.10
+providers:
+  - name: transit-a
+    source_ip: 192.0.2.11
+    next_hop: 192.0.2.1
+    cost: 10
+  - name: transit-b
+    source_ip: 192.0.2.12
+    next_hop: 192.0.2.2
+    cost: 5
+    exclude: true
+scorer: {type: cost}
+`, "needs a cost on at least two non-excluded providers"},
 		{"announcer missing type", minimalYAML + "announcer: {name: x}\n", "announcer: type is required"},
 	}
 	for _, tt := range tests {

@@ -41,6 +41,11 @@ type PlanProvider struct {
 	Up         bool
 	Usage      Usage
 	HaveRow    bool
+	// Cost is the provider's price per Mbps. HasCost is false when the
+	// provider has no cost configured; such a provider is not a cost
+	// destination and a prefix native to it is not cost-steered.
+	Cost    float64
+	HasCost bool
 }
 
 // PlanInput is a snapshot. Plan must not announce or touch the network.
@@ -53,12 +58,19 @@ type PlanInput struct {
 // PlanMove is a commit steer that should exist after this evaluation.
 // Provider is the provider that should carry the prefix, which may already
 // be the current one. ReliefMbps is the volume taken off the provider the
-// move relieves, used when the improvement cap binds.
+// move relieves, used when the improvement cap binds. Cause is CauseCommit
+// (the default when empty) or CauseCost. A cost move ranks by Savings
+// instead of ReliefMbps when the cap binds.
 type PlanMove struct {
 	Prefix     netip.Prefix
 	Provider   string
 	Reason     string
 	ReliefMbps float64
+	Cause      string
+	// Savings is the estimated saving of a cost move: price difference
+	// per Mbps times the prefix volume, or the price difference alone
+	// when the volume is unknown.
+	Savings float64
 }
 
 // Planner is optional. A scorer that also steers for commit and provider
@@ -75,4 +87,22 @@ type Planner interface {
 // move whose destination is the native provider (that is not a steer).
 type LossOverride interface {
 	AllowLoss() bool
+}
+
+// CostPolicy is required on a Planner that emits CauseCost moves. Decide
+// refuses a cost move from a scorer that does not implement it.
+//
+// A path is inside the floor when its loss is at most MaxLossPct above
+// the lowest loss, and its RTT is at most MaxRTT above the lowest RTT,
+// among usable providers that are not excluded. Decide accepts a cost
+// move only onto a path inside the floor that is cheaper than the native
+// provider, and withdraws an active cost steer at once when its path
+// leaves the floor.
+type CostPolicy interface {
+	Floor() (maxLossPct float64, maxRTT time.Duration)
+	// CostFirst is true for cost precedence: a prefix with a performance
+	// move is offered to the planner too, and a valid cost move replaces
+	// that performance move. With performance precedence (false) a
+	// performance move is locked and wins.
+	CostFirst() bool
 }

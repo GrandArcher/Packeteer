@@ -848,9 +848,13 @@ func newDecider(cfg *config.Config, plugins *pluginhost.Set) (*policy.Engine, er
 		if p.Exclude {
 			pc.Excluded[p.Name] = true
 		}
-		pc.Providers = append(pc.Providers, policy.ProviderPolicy{
+		pp := policy.ProviderPolicy{
 			Name: p.Name, Group: p.Group, Precedence: p.Precedence, CCDisable: p.CCDisable,
-		})
+		}
+		if p.Cost != nil {
+			pp.Cost, pp.HasCost = *p.Cost, true
+		}
+		pc.Providers = append(pc.Providers, pp)
 	}
 	for _, s := range cfg.Allowlist.Prefixes {
 		p, err := netip.ParsePrefix(s)

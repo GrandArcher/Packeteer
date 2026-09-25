@@ -24,6 +24,7 @@ providers:
     # group: edge             # load-balance with other providers in this group
     # precedence: 100         # lower is preferred; 0 or omitted means 100
     # cc_disable: false       # true: leave this provider out of commit control
+    # cost: 5                 # price per Mbps; the cost scorer only moves between priced providers
 
 allowlist:
   prefixes: []
@@ -64,6 +65,16 @@ scorer:
 #     balance_slack: 0.10
 #     max_age: 15m            # ignore telemetry older than this
 #     min_mbps: 0
+# `cost` uses the same score and moves prefixes to the cheapest provider
+# (providers[].cost) whose path is inside the floor versus the best path.
+# Needs cost on at least two providers. Rollback: switch back to weighted.
+# scorer:
+#   type: cost
+#   config:
+#     precedence: performance # performance (default) or cost
+#     floor:
+#       max_loss_pct: 0       # extra loss allowed over the best path
+#       max_rtt: 10ms         # extra latency allowed over the best path
 
 # What to probe. Uncomment and use prefixes you actually serve traffic to.
 # The flow source is off unless you add it. With --network host its UDP

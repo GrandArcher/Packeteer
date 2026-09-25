@@ -86,13 +86,17 @@ func Metrics(s Snapshot) []byte {
 	writeGauge(&b, "packeteer_improvements_active", "Number of active improvements.",
 		sample{value: float64(len(s.Improvements))})
 	var imps []sample
+	savings := 0.0
 	for _, im := range s.Improvements {
 		imps = append(imps, sample{
 			labels: []lbl{{"prefix", im.Prefix}, {"provider", im.Provider}, {"native", im.Native}, {"cause", im.Cause}},
 			value:  1,
 		})
+		savings += im.EstSavings
 	}
-	writeGauge(&b, "packeteer_improvement", "Active improvement. cause is performance or commit. The value is always 1.", imps...)
+	writeGauge(&b, "packeteer_improvement", "Active improvement. cause is performance, commit, or cost. The value is always 1.", imps...)
+	writeGauge(&b, "packeteer_estimated_savings", "Sum of est_savings over active improvements: native cost per Mbps minus steered cost per Mbps, times prefix volume. Negative is extra spend.",
+		sample{value: savings})
 
 	bgpReady := 1.0
 	if s.BGPConfigured && !s.RIBReady {

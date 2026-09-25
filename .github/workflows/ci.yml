@@ -116,3 +116,5 @@ jobs:
         run: bash lab/e2e.sh
       - name: FRR commit-control lab
         run: bash lab/e2e-commit.sh
+      - name: FRR cost-mode lab
+        run: bash lab/e2e-cost.sh

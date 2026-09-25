@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net"
 	"net/netip"
 	"os"
@@ -180,6 +181,10 @@ type Provider struct {
 	// CCDisable leaves this provider out of commit control. Performance
 	// improvements can still select it unless Exclude is set.
 	CCDisable bool `yaml:"cc_disable"`
+	// Cost is the provider's price per Mbps, in any currency as long as
+	// every provider uses the same one. Nil means no cost: the cost scorer
+	// never moves traffic onto this provider or off it for price.
+	Cost *float64 `yaml:"cost"`
 }
 
 // Allowlist restricts which prefixes may ever be injected.
@@ -386,6 +391,9 @@ func (c *Config) Validate() error {
 		if p.Precedence < 0 || p.Precedence > 10000 {
 			add("%s: precedence %d must be between 0 and 10000 (0 means the default 100)", label, p.Precedence)
 		}
+		if p.Cost != nil && (math.IsNaN(*p.Cost) || *p.Cost < 0 || *p.Cost > 1e9) {
+			add("%s: cost %v must be between 0 and 1000000000", label, *p.Cost)
+		}
 	}
 
 	seen := map[netip.Prefix]bool{}
@@ -475,6 +483,17 @@ func (c *Config) Validate() error {
 	validateSpecs("sources", c.Sources)
 	validateSpecs("notifiers", c.Notifiers)
 	validateSpecs("telemetry", c.Telemetry)
+	if c.Scorer != nil && c.Scorer.Type == "cost" {
+		priced := 0
+		for _, p := range c.Providers {
+			if p.Cost != nil && !p.Exclude {
+				priced++
+			}
+		}
+		if priced < 2 {
+			add("scorer: type cost needs a cost on at least two non-excluded providers (providers[].cost)")
+		}
+	}
 	if c.Scorer != nil && c.Scorer.Type == "" {
 		add("scorer: type is required")
 	}

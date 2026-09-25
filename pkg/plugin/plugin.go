@@ -153,6 +153,9 @@ const (
 	// CauseCommit is a move that keeps a provider under its commit or
 	// balances a provider group. It is not a performance win.
 	CauseCommit = "commit"
+	// CauseCost is a move onto a cheaper provider whose path is inside the
+	// cost scorer's performance floor. It is not a performance win.
+	CauseCost = "cost"
 )
 
 // PrefixVolume is observed traffic for one prefix. Bytes is the total over
