@@ -306,15 +306,9 @@ func TestStaticLifecycle(t *testing.T) {
 	if st.Improvements[pA].Cause != plugin.CauseStatic {
 		t.Fatalf("not pinned: %+v", st.Improvements)
 	}
-	// Past improvement_ttl a pin is kept: it does not depend on native.
-	now := t0.Add(time.Hour)
-	st, out := Decide(st, pin(now, nil), c, scorer(t), now)
-	if len(out.Changes) != 0 || st.Improvements[pA].Provider != "c" {
-		t.Fatalf("pin churned past ttl: %+v", out.Changes)
-	}
 	// The pinned path fails: withdraw, and wait out hold_time.
-	now = now.Add(time.Minute)
-	st, out = Decide(st, pin(now, map[string]bool{"a": true, "b": true}), c, scorer(t), now)
+	now := t0.Add(time.Minute)
+	st, out := Decide(st, pin(now, map[string]bool{"a": true, "b": true}), c, scorer(t), now)
 	if _, ok := st.Improvements[pA]; ok || len(out.Changes) != 1 {
 		t.Fatalf("not retired: %+v", out.Changes)
 	}
@@ -437,5 +431,54 @@ func TestApplyPolicyLeavesNativeAndUnusable(t *testing.T) {
 	applyPolicy(cands, verdict(plugin.PolicyDeny, "a", "b", "c"), "a")
 	if !cands[0].Usable || cands[1].Usable || cands[1].Why != "policy deny (r1)" || cands[2].Why != "stale" {
 		t.Fatalf("cands = %+v", cands)
+	}
+}
+
+func TestStaticPinRetiredByTTL(t *testing.T) {
+	c := cfg()
+	c.ImprovementTTL = 10 * time.Minute
+	pin := func(now time.Time, native map[netip.Prefix]string) Input {
+		input := withPolicy(in(results(now, pA, m{"a", 0, 90}, m{"b", 0, 30}, m{"c", 0, 50}), native), pA, verdict(plugin.PolicyStatic, "c"))
+		return input
+	}
+	withNative := map[netip.Prefix]string{pA: "a"}
+	st, _ := Decide(NewState(), pin(t0, withNative), c, scorer(t), t0)
+	if st.Improvements[pA].Cause != plugin.CauseStatic {
+		t.Fatalf("not pinned: %+v", st.Improvements)
+	}
+	// Hidden native: the router stops sending the native path once the pin
+	// wins, so the RIB block keeps the pin. Then the origin withdraws.
+	now := t0
+	for i := 0; i < 9; i++ {
+		now = now.Add(time.Minute)
+		var out Output
+		st, out = Decide(st, pin(now, map[netip.Prefix]string{}), c, scorer(t), now)
+		if len(out.Changes) != 0 || st.Improvements[pA].Provider != "c" {
+			t.Fatalf("pin dropped before ttl at %v: %+v", now.Sub(t0), out.Changes)
+		}
+	}
+	// Past improvement_ttl the pin is retired, not kept on stale intent.
+	now = t0.Add(c.ImprovementTTL)
+	st, out := Decide(st, pin(now, map[netip.Prefix]string{}), c, scorer(t), now)
+	if _, ok := st.Improvements[pA]; ok || len(out.Changes) != 1 || out.Changes[0].Action != ActionRetire {
+		t.Fatalf("pin not retired by ttl: %+v", out.Changes)
+	}
+	if !strings.Contains(out.Changes[0].Old.Reason, "ttl") {
+		t.Fatalf("retire reason: %q", out.Changes[0].Old.Reason)
+	}
+	if _, cool := st.Cooldown[pA]; cool {
+		t.Fatalf("ttl retire set a cooldown")
+	}
+	// The prefix is gone upstream: nothing is re-announced.
+	now = now.Add(time.Minute)
+	st, out = Decide(st, pin(now, map[netip.Prefix]string{}), c, scorer(t), now)
+	if _, ok := st.Improvements[pA]; ok || len(out.Changes) != 0 || decision(t, out, pA).Reason != "prefix not in RIB" {
+		t.Fatalf("re-pinned a prefix not in the RIB: %+v %+v", out.Changes, decision(t, out, pA))
+	}
+	// The native path is back: the pin returns on the next round.
+	now = now.Add(time.Minute)
+	st, _ = Decide(st, pin(now, withNative), c, scorer(t), now)
+	if st.Improvements[pA].Provider != "c" || st.Improvements[pA].Cause != plugin.CauseStatic {
+		t.Fatalf("pin did not return: %+v", st.Improvements)
 	}
 }

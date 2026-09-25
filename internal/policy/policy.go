@@ -368,7 +368,11 @@ func Decide(prev State, in Input, cfg Config, scorer plugin.Scorer, now time.Tim
 				retire(p, "not allowlisted", false)
 				d.Action, d.Reason, d.Current = ActionRetire, "not allowlisted", imp.Native
 				continue
-			case cfg.ImprovementTTL > 0 && imp.Cause != plugin.CauseStatic && now.Sub(imp.Since) >= cfg.ImprovementTTL:
+			case cfg.ImprovementTTL > 0 && now.Sub(imp.Since) >= cfg.ImprovementTTL:
+				// Static pins expire too: while a pin is active the router
+				// may hide the native path, so the TTL is what notices an
+				// upstream withdraw. No cooldown, so a pin whose prefix is
+				// still in the RIB returns on the next round.
 				retire(p, "ttl expired; re-evaluating native path", false)
 				d.Action, d.Reason, d.Current = ActionRetire, "ttl expired", imp.Native
 				continue
