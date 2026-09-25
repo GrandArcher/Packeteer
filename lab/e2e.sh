@@ -22,7 +22,11 @@ wait_route() {
 	local i
 	for i in $(seq 1 40); do
 		local json
-		json=$("${compose[@]}" exec -T edge vtysh -c 'show bgp ipv4 unicast json' 2>/dev/null || true)
+		# Summary JSON (FRR 10.2 omits communities) plus the detail text
+		# form, which prints "Community: 64512:666 no-export".
+		json=$("${compose[@]}" exec -T edge vtysh \
+			-c 'show bgp ipv4 unicast json' \
+			-c 'show bgp ipv4 unicast 198.51.100.0/24' 2>/dev/null || true)
 		if printf '%s\n' "$json" | python3 lab/check_route.py "$mode"; then
 			return 0
 		fi

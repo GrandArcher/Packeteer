@@ -100,23 +100,40 @@ def is_injected(path):
     )
 
 
+def nh_and_pref(path):
+    return NEXTHOP in nexthops(path) and local_pref(path) == LOCAL_PREF
+
+
+def text_has_injected(text):
+    # FRR 10.2's `show bgp ipv4 unicast json` omits the community object.
+    # The detail text form prints it on its own line.
+    return (
+        "192.0.2.2 from 192.0.2.10" in text
+        and "localpref 250" in text
+        and "Community: 64512:666 no-export" in text
+    )
+
+
+def text_has_community(text):
+    return "64512:666" in text or "no-export" in text
+
+
 def main(argv):
     if len(argv) == 2 and argv[1] == "--self-test":
         return self_test()
     if len(argv) != 2 or argv[1] not in ("present", "absent"):
         print("usage: check_route.py present|absent", file=sys.stderr)
         return 2
-    doc = load(sys.stdin.read())
+    raw = sys.stdin.read()
+    doc = load(raw)
     paths = list(walk(doc)) if doc is not None else []
-    injected = [p for p in paths if is_injected(p)]
-    tagged = [p for p in paths if has_packeteer(p)]
+    json_full = any(is_injected(p) for p in paths)
+    json_nh = any(nh_and_pref(p) for p in paths)
     if argv[1] == "present":
-        if injected:
+        if json_full or (json_nh and text_has_injected(raw)) or text_has_injected(raw):
             return 0
-        print("injected route not found in bgp table", file=sys.stderr)
         return 1
-    if tagged:
-        print("packeteer community still present", file=sys.stderr)
+    if any(has_packeteer(p) for p in paths) or text_has_community(raw):
         return 1
     return 0
 
@@ -134,16 +151,35 @@ def self_test():
             ]
         }
     }
+    # FRR 10.2 summary JSON has next hop and local-pref but no community.
+    summary = {
+        "routes": {
+            PREFIX: [
+                {"locPrf": LOCAL_PREF, "nexthops": [{"ip": NEXTHOP}]},
+            ]
+        }
+    }
+    summary_text = json.dumps(summary) + """
+BGP routing table entry for 198.51.100.0/24
+    192.0.2.2 from 192.0.2.10 (192.0.2.10)
+      Origin IGP, localpref 250, valid, internal
+      Community: 64512:666 no-export
+"""
     absent = {"routes": {PREFIX: [{"locPrf": 100, "nexthops": [{"ip": "192.0.2.1"}]}]}}
     if main_on(present, "present") != 0 or main_on(absent, "absent") != 0:
         return 1
     if main_on(absent, "present") == 0 or main_on(present, "absent") == 0:
         return 1
+    if main_on_raw(summary_text, "present") != 0 or main_on_raw(summary_text, "absent") == 0:
+        return 1
     return 0
 
 
 def main_on(doc, mode):
-    raw = json.dumps(doc)
+    return main_on_raw(json.dumps(doc), mode)
+
+
+def main_on_raw(raw, mode):
     old = sys.stdin
     sys.stdin = __import__("io").StringIO(raw)
     try:
