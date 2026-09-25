@@ -148,9 +148,12 @@ func (v *View) Start(ctx context.Context) error {
 
 	wctx, cancel := context.WithCancel(context.Background())
 	v.cancel = cancel
-	// Adj-RIB-In, not the local best path. A Packeteer route can win best-path
-	// selection on this speaker; that event must not look like a withdraw of
-	// the prefix the neighbor is still sending.
+	// Adj-RIB-In, before import policy: a path a later import policy rejected
+	// would still show up here. This is not the local best path. A Packeteer
+	// route can win best-path selection on this speaker; that event must not
+	// look like a withdraw of a prefix the neighbor is still sending. The
+	// router may separately stop sending the prefix once that route is its
+	// best; policy tells that apart from a real withdraw.
 	err := v.srv.WatchEvent(wctx, &api.WatchEventRequest{
 		Peer: &api.WatchEventRequest_Peer{},
 		Table: &api.WatchEventRequest_Table{Filters: []*api.WatchEventRequest_Table_Filter{
@@ -351,7 +354,7 @@ func selectRoute(paths map[netip.Addr]Route) (Route, bool) {
 
 func sameRoute(a, b Route) bool {
 	return a.Prefix == b.Prefix && a.NextHop == b.NextHop && a.Provider == b.Provider &&
-		a.Neighbor == b.Neighbor && slices.Equal(a.ASPath, b.ASPath)
+		a.Neighbor == b.Neighbor && a.localPref == b.localPref && slices.Equal(a.ASPath, b.ASPath)
 }
 
 func decodePrefix(a *anypb.Any) (netip.Prefix, bool) {

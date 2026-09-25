@@ -3,13 +3,13 @@
 This guide grows with each milestone. It currently covers:
 
 1. **Probe sourcing**: see [policy-routing.md](policy-routing.md#mikrotik-routeros-7-probe-box-behind-the-router).
-2. **iBGP session** so Packeteer can see the router's best paths: below.
+2. **iBGP session** so Packeteer can see the paths the router advertises: below.
 3. **Injected routes**: accept only the Packeteer community from that session, and never export it to eBGP. FRR, Junos, and IOS snippets are in [routers.md](routers.md).
 4. **Traffic Flow** (NetFlow / IPFIX) so Packeteer can pick probe targets from real traffic: below.
 
 ## iBGP session to Packeteer
 
-Packeteer needs the router's **best paths** to know which provider each prefix uses today. It peers over iBGP with the router's own ASN. In `observe` and `suggest` it announces nothing. In `inject` it announces only allowlisted improvements, each tagged with `packeteer_community` and `no-export`.
+Packeteer learns the **paths this router advertises** (its best path per prefix) to know which provider each prefix uses today. It peers over iBGP with the router's own ASN. In `observe` and `suggest` it announces nothing. In `inject` it announces only allowlisted improvements, each tagged with `packeteer_community` and `no-export`.
 
 ```routeros
 # Router ASN 64512, router loopback 192.0.2.254, Packeteer at 192.0.2.10.
@@ -33,7 +33,8 @@ Packeteer needs the router's **best paths** to know which provider each prefix u
 /routing bgp connection set [find where remote.as!=64512] output.filter=ebgp-out
 ```
 
-- `output.redistribute=bgp` sends the eBGP-learned best paths (the full table if you take one) to Packeteer. Route reflection is not needed for a single edge. For iBGP-learned routes, make the router a route reflector for this session (`/routing bgp template set packeteer route-reflect=yes`) or use BMP later (#26).
+- `output.redistribute=bgp` sends the eBGP-learned best paths (the full table if you take one) to Packeteer. It is best-path-only. Once an injected route wins, RouterOS stops advertising that prefix back to Packeteer. Packeteer keeps the improvement; it does not withdraw and re-announce. A provider withdraw after that point is caught at `improvement_ttl`, not immediately. Immediate withdraw needs the router to keep sending the native path (FRR and Cisco: `advertise-best-external`; additional-paths and BMP are #26). Details: [routers.md](routers.md#when-the-native-path-disappears).
+- Route reflection is not needed for a single edge. For iBGP-learned routes, make the router a route reflector for this session (`/routing bgp template set packeteer route-reflect=yes`) or use BMP later (#26).
 - Keep graceful restart **off** on this session. Packeteer never enables it, so its routes can never linger after it dies.
 
 Packeteer side (`config.yaml`):

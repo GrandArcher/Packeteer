@@ -4,9 +4,12 @@
 // announcer. A route is published only when the decided prefix is allowlisted
 // and present in the RIB, the provider has a next hop, and the improvement
 // cap has room. Every Sync re-checks prefixes already on the wire, including
-// provider switches, and withdraws any whose prefix has left the RIB. Every
-// route carries the configured local preference and community; the announcer
-// adds NO_EXPORT.
+// provider switches. A route already on the wire stays while the decision
+// engine still wants it, even if the neighbor stopped advertising the prefix:
+// that is what the router does once Packeteer's route is best, and
+// withdrawing it would flap. A real leave arrives as the improvement leaving
+// the wanted set, and Sync withdraws it. Every route carries the configured
+// local preference and community; the announcer adds NO_EXPORT.
 //
 // more_specific_bits, when non-zero, publishes the 2^n covering
 // more-specifics of the decided prefix instead of the prefix itself. The
@@ -30,9 +33,11 @@ import (
 )
 
 // RIB is the slice of the RIB view the controller needs. Ready is false when
-// no BGP session is up. Contains reports an exact prefix still advertised by
-// a configured neighbor, which stays true while Packeteer's own route is the
-// local best path and becomes false when the neighbor withdraws it.
+// no BGP session is up. Contains reports an exact prefix a configured
+// neighbor is still advertising. It is false both when the prefix has left
+// and when the router has stopped sending it because Packeteer's route won.
+// Sync uses Contains to refuse a new announcement. It does not, by itself,
+// withdraw an improvement the decision engine still wants.
 type RIB interface {
 	Ready() bool
 	Contains(netip.Prefix) bool
@@ -118,8 +123,10 @@ func (c *Controller) Bind(srv any) error {
 // improvements. In observe and suggest it returns immediately and does not
 // call the announcer. When the RIB is not ready every announced route is
 // withdrawn, even if imps is non-empty. Calling Sync again with the same
-// improvements does not re-advertise. A prefix that is no longer in the RIB
-// is withdrawn even when the improvement is still requested.
+// improvements does not re-advertise. A prefix that is not in the RIB is not
+// announced. One that is already announced is kept or moved while the
+// improvement is still requested; a real RIB leave comes in as the
+// improvement disappearing from imps.
 func (c *Controller) Sync(ctx context.Context, imps []policy.Improvement) error {
 	if c == nil || c.cfg.Mode != config.ModeInject {
 		return nil
@@ -149,12 +156,7 @@ func (c *Controller) Sync(ctx context.Context, imps []policy.Improvement) error 
 	sortPrefixes(order)
 	for _, p := range order {
 		im := want[p]
-		if !c.rib.Contains(p) {
-			if _, on := c.active[p]; on {
-				if err := c.withdrawLocked(ctx, p); err != nil {
-					errs = append(errs, err)
-				}
-			}
+		if _, on := c.active[p]; !on && !c.rib.Contains(p) {
 			errs = append(errs, fmt.Errorf("announce: %s is not in the RIB", p))
 			continue
 		}
@@ -224,7 +226,7 @@ func (c *Controller) announceLocked(ctx context.Context, imp policy.Improvement)
 	if !allowed(c.cfg.Allowlist, p) {
 		return fmt.Errorf("announce: %s is not allowlisted", p)
 	}
-	if !c.rib.Contains(p) {
+	if _, on := c.active[p]; !on && !c.rib.Contains(p) {
 		return fmt.Errorf("announce: %s is not in the RIB", p)
 	}
 	nh, ok := c.cfg.NextHops[imp.Provider]

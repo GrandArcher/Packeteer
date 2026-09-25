@@ -6,9 +6,10 @@ A simulated edge router (FRR) peered over iBGP with Packeteer. Addresses are doc
 
 1. `198.51.100.0/24` appears with next hop `192.0.2.2` (transit-b), local preference 250, community `64512:666`, and `no-export`.
 2. Rewriting the fixed-prober file so transit-a is faster withdraws that route (flip-back, after `hold_time`).
-3. Restoring the original results announces it again.
-4. Removing FRR's `network 198.51.100.0/24` withdraws Packeteer's route within seconds, while Packeteer is still running.
-5. Stopping Packeteer withdraws it. Graceful restart is off on both sides.
+3. Restoring the original results announces it again. The route then has to stay up while FRR is still advertising the native path (the network statement's weight keeps it best).
+4. Removing FRR's `network 198.51.100.0/24` withdraws Packeteer's route within seconds, while Packeteer is still running. That is a real leave: FRR had kept sending the prefix.
+5. The network statement is put back and Packeteer's import weight is raised to match, so local preference wins the way a real eBGP path loses. FRR stops advertising the prefix to Packeteer. Packeteer's route has to stay; withdrawing it would flap.
+6. Stopping Packeteer withdraws it. Graceful restart is off on both sides.
 
 The fixed prober (`type: fixed`) returns configured RTTs and sends no packets. It is for this lab and for tests. A real deployment uses `icmp` and `tcp`.
 

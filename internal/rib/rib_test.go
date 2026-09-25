@@ -319,6 +319,48 @@ func TestSessionLossDropsOnlyThatNeighbor(t *testing.T) {
 	}
 }
 
+func TestLocalPrefChangeUpdatesRoute(t *testing.T) {
+	p := netip.MustParsePrefix("198.51.100.0/24")
+	nbr := netip.MustParseAddr("192.0.2.254")
+	nh := netip.MustParseAddr("192.0.2.1")
+	v := &View{
+		opt:       Options{Providers: map[netip.Addr]string{nh: "transit-a"}},
+		neighbors: map[netip.Addr]bool{nbr: true},
+		routes:    map[netip.Prefix]Route{},
+		adj:       map[netip.Prefix]map[netip.Addr]Route{},
+	}
+	if !v.applyPath(learned(t, "198.51.100.0/24", "192.0.2.1", nbr.String(), 100, false)) {
+		t.Fatal("first path did not publish")
+	}
+	rt, ok := v.Exact(p)
+	if !ok || rt.localPref != 100 || rt.Provider != "transit-a" {
+		t.Fatalf("route = %+v ok=%v", rt, ok)
+	}
+	if v.applyPath(learned(t, "198.51.100.0/24", "192.0.2.1", nbr.String(), 100, false)) {
+		t.Fatal("identical path published again")
+	}
+	if !v.applyPath(learned(t, "198.51.100.0/24", "192.0.2.1", nbr.String(), 250, false)) {
+		t.Fatal("local-pref change was ignored")
+	}
+	rt, ok = v.Exact(p)
+	if !ok || rt.localPref != 250 {
+		t.Fatalf("after local-pref change = %+v ok=%v", rt, ok)
+	}
+}
+
+func learned(t *testing.T, prefix, nexthop, neighbor string, lp uint32, withdraw bool) *api.Path {
+	t.Helper()
+	p := path(t, prefix, nexthop)
+	p.NeighborIp = neighbor
+	p.IsWithdraw = withdraw
+	attr, err := anypb.New(&api.LocalPrefAttribute{LocalPref: lp})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.Pattrs = append(p.Pattrs, attr)
+	return p
+}
+
 func TestSelectRoute(t *testing.T) {
 	p := netip.MustParsePrefix("198.51.100.0/24")
 	low := Route{Prefix: p, NextHop: netip.MustParseAddr("192.0.2.1"), Neighbor: netip.MustParseAddr("192.0.2.11"), localPref: 100}
