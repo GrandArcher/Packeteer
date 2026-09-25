@@ -26,6 +26,26 @@ probe:
   interval: 30s
   timeout: 2s
   packets: 10
+  workers: 8                  # concurrent probe runs
+  rate_limit_pps: 100         # global cap on probe packets per second
+  per_target_concurrency: 2   # concurrent runs toward one destination host
+
+# Probers are tried in order: ICMP echo, then TCP connect to port 443 when
+# ICMP errors or gets no replies. This is also the default when omitted.
+probers:
+  - type: icmp
+  - type: tcp
+    config:
+      port: 443
+
+# What to probe. Uncomment and use prefixes you actually serve traffic to.
+# sources:
+#   - type: static
+#     config:
+#       targets:
+#         - prefix: 198.51.100.0/24
+#           host: 198.51.100.1        # optional; defaults to the first address
+#         - prefix: 203.0.113.0/24
 
 # Plugins (docs/PLUGINS.md). Out-of-process plugins live in plugin_dir.
 plugin_dir: /etc/packeteer/plugins

@@ -25,6 +25,10 @@ jobs:
           fi
       - name: test
         run: go test ./...
+      - name: icmp prober with raw sockets (root)
+        run: |
+          go test -c -o icmp.test ./internal/plugins/prober/icmp/
+          sudo ./icmp.test -test.v
 
   docker:
     runs-on: ubuntu-latest
@@ -41,13 +45,38 @@ jobs:
       - name: smoke test (mounted config, dry run)
         run: |
           out="$(docker run --rm --network host --cap-add NET_RAW --cap-add NET_ADMIN \
-            -v "$PWD/config.example.yaml:/etc/packeteer/config.yaml:ro" packeteer:ci)"
+            -v "$PWD/config.example.yaml:/etc/packeteer/config.yaml:ro" packeteer:ci -check)"
           echo "$out"
           echo "$out" | grep -q "mode: observe"
-          echo "$out" | grep -q "no BGP sessions opened"
+          echo "$out" | grep -q "check: ok"
       - name: smoke test (PACKETEER_CONFIG env)
         run: |
-          docker run --rm -e PACKETEER_CONFIG=/etc/packeteer/config.example.yaml packeteer:ci | grep -q "mode: observe"
+          docker run --rm -e PACKETEER_CONFIG=/etc/packeteer/config.example.yaml packeteer:ci -check | grep -q "mode: observe"
       - name: missing config must fail
         run: |
-          if docker run --rm packeteer:ci; then echo "expected failure without config"; exit 1; fi
+          if docker run --rm packeteer:ci -check; then echo "expected failure without config"; exit 1; fi
+      - name: daemon smoke test (ICMP in container, clean shutdown)
+        run: |
+          cat > /tmp/lab.yaml <<'YAML'
+          mode: observe
+          asn: 64512
+          router_id: 192.0.2.10
+          providers:
+            - name: loopback
+              source_ip: 127.0.0.1
+              next_hop: 127.0.0.1
+          probe: {interval: 2s, timeout: 500ms, packets: 3}
+          sources:
+            - type: static
+              config:
+                targets: [{prefix: 127.0.0.1/32}]
+          YAML
+          docker run -d --name pk --network host --cap-add NET_RAW --cap-add NET_ADMIN \
+            -v /tmp/lab.yaml:/etc/packeteer/config.yaml:ro packeteer:ci
+          sleep 5
+          docker stop -t 15 pk
+          docker logs pk 2>&1 | tee /tmp/pk.log
+          test "$(docker inspect -f '{{.State.ExitCode}}' pk)" = "0"
+          grep -q "prober=icmp" /tmp/pk.log
+          grep -q "loss_pct=0" /tmp/pk.log
+          grep -q "shutting down" /tmp/pk.log
