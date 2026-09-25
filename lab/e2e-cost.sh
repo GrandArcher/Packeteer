@@ -99,6 +99,22 @@ if printf '%s\n' "$logs" | grep -q 'cause=performance'; then
 	exit 1
 fi
 
+echo "cost steer must hold past hold_time (5s) without flapping"
+for _ in $(seq 1 8); do
+	if ! route_is present; then
+		echo "cost steer withdrawn while still cheapest inside the floor" >&2
+		dump_bgp
+		exit 1
+	fi
+	sleep 2
+done
+logs=$("${compose[@]}" logs --no-color packeteer)
+if printf '%s\n' "$logs" | grep -q 'no longer cheapest'; then
+	echo "cost steer was retired while still cheapest inside the floor" >&2
+	dump_bgp
+	exit 1
+fi
+
 echo "cheap path leaves the floor; the steer must withdraw"
 flip_probes lab/probes/cost-outside.yaml
 wait_route absent

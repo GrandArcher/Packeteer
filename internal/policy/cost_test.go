@@ -203,8 +203,12 @@ func TestCostSteerLifecycle(t *testing.T) {
 	}
 	t3 := t2.Add(time.Minute)
 	input.Results = results(t3, pA, m{"a", 0, 40}, m{"b", 0, 45}, m{"c", 0, 80})
-	if st2, _ := Decide(st, input, c, s, t3); len(st2.Improvements) != 0 {
+	st2, out2 := Decide(st, input, c, s, t3)
+	if len(st2.Improvements) != 0 {
 		t.Fatal("cost steer returned during cooldown")
+	}
+	if d := decision(t, out2, pA); d.Cause != plugin.CauseCost || !strings.Contains(d.Reason, "cooldown") {
+		t.Fatalf("cooldown decision %+v", d)
 	}
 
 	// Switching back to weighted withdraws cost improvements.
@@ -291,5 +295,95 @@ func TestDecideEnforcesCostRules(t *testing.T) {
 	ok := &rogueCost{rogue{moves: []plugin.PlanMove{{Prefix: pA, Provider: "b", Cause: plugin.CauseCost}}}}
 	if st, _ := Decide(NewState(), input, costCfg(), ok, t0); st.Improvements[pA].Cause != plugin.CauseCost {
 		t.Fatalf("valid move refused: %+v", st.Improvements)
+	}
+}
+
+// TestCostSteerPastHoldTime covers an active cost steer once hold_time has
+// elapsed. It must not be read back as locked performance context, which
+// would withdraw it and re-announce it every other hold_time.
+func TestCostSteerPastHoldTime(t *testing.T) {
+	type step struct {
+		paths    []m
+		action   string
+		provider string
+	}
+	for _, tc := range []struct {
+		name  string
+		costs [3]float64 // a, b, c
+		first []m
+		want  string
+		steps []step
+	}{
+		{name: "cheapest inside floor stays",
+			costs: [3]float64{10, 5, 2},
+			first: []m{{"a", 0, 40}, {"b", 0, 45}, {"c", 0, 80}}, want: "b",
+			steps: []step{
+				{[]m{{"a", 0, 40}, {"b", 0, 45}, {"c", 0, 80}}, ActionKeep, "b"},
+				{[]m{{"a", 0, 40}, {"b", 0, 45}, {"c", 0, 80}}, ActionKeep, "b"},
+				{[]m{{"a", 0, 40}, {"b", 0, 45}, {"c", 0, 80}}, ActionKeep, "b"},
+			}},
+		{name: "equal price keeps the current provider",
+			costs: [3]float64{10, 2, 2},
+			first: []m{{"a", 0, 40}, {"b", 0, 80}, {"c", 0, 45}}, want: "c",
+			steps: []step{
+				{[]m{{"a", 0, 40}, {"b", 0, 42}, {"c", 0, 45}}, ActionKeep, "c"},
+				{[]m{{"a", 0, 40}, {"b", 0, 42}, {"c", 0, 45}}, ActionKeep, "c"},
+			}},
+		{name: "cheaper path inside floor switches",
+			costs: [3]float64{10, 5, 2},
+			first: []m{{"a", 0, 40}, {"b", 0, 45}, {"c", 0, 80}}, want: "b",
+			steps: []step{
+				{[]m{{"a", 0, 40}, {"b", 0, 45}, {"c", 0, 48}}, ActionSwitch, "c"},
+				{[]m{{"a", 0, 40}, {"b", 0, 45}, {"c", 0, 48}}, ActionKeep, "c"},
+			}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := costCfg()
+			c.HoldTime = 5 * time.Second
+			for i := range c.Providers {
+				c.Providers[i].Cost = tc.costs[i]
+			}
+			s := costScorer(t, "")
+			input := in(results(t0, pA, tc.first...), map[netip.Prefix]string{pA: "a"})
+			st, _ := Decide(NewState(), input, c, s, t0)
+			if imp := st.Improvements[pA]; imp.Provider != tc.want || imp.Cause != plugin.CauseCost {
+				t.Fatalf("setup %+v", st.Improvements)
+			}
+			now := t0
+			for i, sp := range tc.steps {
+				now = now.Add(2 * c.HoldTime)
+				input.Results = results(now, pA, sp.paths...)
+				var out Output
+				st, out = Decide(st, input, c, s, now)
+				d := decision(t, out, pA)
+				imp, ok := st.Improvements[pA]
+				if !ok || imp.Provider != sp.provider || imp.Cause != plugin.CauseCost || d.Action != sp.action {
+					t.Fatalf("step %d: imp %+v decision %+v changes %+v", i, imp, d, out.Changes)
+				}
+				if sp.action == ActionKeep && len(out.Changes) != 0 {
+					t.Fatalf("step %d: keep produced changes %+v", i, out.Changes)
+				}
+				if sp.action == ActionSwitch && (len(out.Changes) != 1 || out.Changes[0].Action != ActionSwitch) {
+					t.Fatalf("step %d: changes %+v", i, out.Changes)
+				}
+			}
+		})
+	}
+}
+
+// TestCostSteerScorerSwitch retires a cost steer with an accurate reason
+// when the scorer is replaced by a planner that has no cost policy.
+func TestCostSteerScorerSwitch(t *testing.T) {
+	input := in(results(t0, pA, m{"a", 0, 40}, m{"b", 0, 45}, m{"c", 0, 80}), map[netip.Prefix]string{pA: "a"})
+	st, _ := Decide(NewState(), input, costCfg(), costScorer(t, ""), t0)
+	if st.Improvements[pA].Cause != plugin.CauseCost {
+		t.Fatalf("setup %+v", st.Improvements)
+	}
+	st, out := Decide(st, input, costCfg(), &rogue{}, t0.Add(time.Minute))
+	if len(st.Improvements) != 0 || len(out.Changes) != 1 || out.Changes[0].Old.Reason != "cost mode disabled" {
+		t.Fatalf("scorer switch: %+v %+v", st.Improvements, out.Changes)
+	}
+	if _, cool := st.Cooldown[pA]; cool {
+		t.Fatal("scorer switch should not set a flip-back cooldown")
 	}
 }

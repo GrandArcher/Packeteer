@@ -83,7 +83,13 @@ func integrateCommit(
 		if cause == plugin.CauseCost {
 			// A cost steer lives only inside the floor. Leaving it is
 			// not noise: withdraw now and hold the prefix off.
-			if cp == nil || !inFloorOf(cands, cfg, cp, h.imp.Provider) {
+			if cp == nil {
+				// The planner is not a cost scorer any more.
+				retire(p, "cost mode disabled", false)
+				setDecision(d, ActionRetire, "cost mode disabled", h.imp.Native, "", cause)
+				continue
+			}
+			if !inFloorOf(cands, cfg, cp, h.imp.Provider) {
 				retire(p, "cost path outside performance floor", true)
 				setDecision(d, ActionRetire, "cost path outside performance floor", h.imp.Native, "", cause)
 				continue
@@ -193,7 +199,7 @@ func integrateCommit(
 		if until, cool := st.Cooldown[p]; cool {
 			d.Reason = "cooldown after flip-back until " + until.Format(time.RFC3339)
 			d.Recommended = mv.Provider
-			d.Cause = plugin.CauseCommit
+			d.Cause = mv.Cause
 			continue
 		}
 		_, hasPerf := perfWant[p]
@@ -331,7 +337,7 @@ func buildPlan(
 	// Native so it does not also commit-steer that traffic.
 	var perf []Improvement
 	for _, imp := range st.Improvements {
-		if imp.Cause == plugin.CauseCommit {
+		if planned(imp.Cause) {
 			continue
 		}
 		perf = append(perf, imp)

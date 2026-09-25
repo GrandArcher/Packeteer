@@ -486,12 +486,12 @@ func (c *Config) Validate() error {
 	if c.Scorer != nil && c.Scorer.Type == "cost" {
 		priced := 0
 		for _, p := range c.Providers {
-			if p.Cost != nil {
+			if p.Cost != nil && !p.Exclude {
 				priced++
 			}
 		}
 		if priced < 2 {
-			add("scorer: type cost needs a cost on at least two providers (providers[].cost)")
+			add("scorer: type cost needs a cost on at least two non-excluded providers (providers[].cost)")
 		}
 	}
 	if c.Scorer != nil && c.Scorer.Type == "" {

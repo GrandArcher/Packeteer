@@ -319,7 +319,23 @@ announcer:
 		{"duplicate instance", minimalYAML + "notifiers:\n  - type: webhook\n  - type: webhook\n", `notifiers[1]: duplicate instance name "webhook"`},
 		{"unknown spec field", minimalYAML + "sources:\n  - type: static\n    prefixes: []\n", "field prefixes not found"},
 		{"scorer missing type", minimalYAML + "scorer: {name: x}\n", "scorer: type is required"},
-		{"cost scorer without costs", minimalYAML + "scorer: {type: cost}\n", "needs a cost on at least two providers"},
+		{"cost scorer without costs", minimalYAML + "scorer: {type: cost}\n", "needs a cost on at least two non-excluded providers"},
+		{"cost scorer with an excluded priced provider", `
+mode: observe
+asn: 64512
+router_id: 192.0.2.10
+providers:
+  - name: transit-a
+    source_ip: 192.0.2.11
+    next_hop: 192.0.2.1
+    cost: 10
+  - name: transit-b
+    source_ip: 192.0.2.12
+    next_hop: 192.0.2.2
+    cost: 5
+    exclude: true
+scorer: {type: cost}
+`, "needs a cost on at least two non-excluded providers"},
 		{"announcer missing type", minimalYAML + "announcer: {name: x}\n", "announcer: type is required"},
 	}
 	for _, tt := range tests {
