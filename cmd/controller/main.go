@@ -13,16 +13,34 @@ import (
 	"github.com/GrandArcher/Packeteer/internal/config"
 )
 
+// DefaultConfigPath is where the container image expects the mounted config.
+const DefaultConfigPath = "/etc/packeteer/config.yaml"
+
+// ConfigEnv overrides the default config path when -config is not given.
+const ConfigEnv = "PACKETEER_CONFIG"
+
+// version is set at build time with -ldflags "-X main.version=...".
+var version = "dev"
+
 func main() {
-	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
+	os.Exit(run(os.Args[1:], os.Getenv, os.Stdout, os.Stderr))
 }
 
-func run(args []string, stdout, stderr io.Writer) int {
+func run(args []string, getenv func(string) string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("controller", flag.ContinueOnError)
 	fs.SetOutput(stderr)
-	path := fs.String("config", "config.example.yaml", "path to the YAML config file")
+	defaultPath := DefaultConfigPath
+	if p := getenv(ConfigEnv); p != "" {
+		defaultPath = p
+	}
+	path := fs.String("config", defaultPath, "path to the YAML config file (env "+ConfigEnv+")")
+	showVersion := fs.Bool("version", false, "print version and exit")
 	if err := fs.Parse(args); err != nil {
 		return 2
+	}
+	if *showVersion {
+		fmt.Fprintf(stdout, "packeteer %s\n", version)
+		return 0
 	}
 
 	cfg, err := config.Load(*path)
@@ -31,7 +49,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 
-	fmt.Fprintf(stdout, "packeteer: config %s loaded\n", *path)
+	fmt.Fprintf(stdout, "packeteer %s: config %s loaded\n", version, *path)
 	fmt.Fprintf(stdout, "mode: %s\n", cfg.Mode)
 	fmt.Fprintf(stdout, "max_improvements: %d\n", *cfg.MaxImprovements)
 	fmt.Fprintf(stdout, "providers (%d):\n", len(cfg.Providers))
