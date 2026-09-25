@@ -84,8 +84,12 @@ A learned prefix is eligible when it is equal to an entry or more specific and i
 | `workers` | 8 | 1–1024 concurrent probe runs. |
 | `rate_limit_pps` | 100 | 1–100000 packets per second, global. |
 | `per_target_concurrency` | 2 | 1–64 concurrent runs toward one destination host. |
+| `retry_loss_pct` | 0 | 0–100. `0` disables retry. Above zero, a sample whose loss is at least this percent is probed again before it is stored. |
+| `retry_packets` | 0 | 0–1000. Packet count of that second probe. When `retry_loss_pct` is set and this is `0`, it becomes three times `packets`, capped at 1000. |
 
-A measurement older than `3 * interval + packets * timeout` is stale. That same duration is the deadline for one probe round. The decision loop also wakes every `interval`, so a round that never finishes still withdraws once results are stale.
+A measurement older than `3 * interval + packets * timeout` is stale. When retry is enabled the window is `3 * interval + (packets + retry_packets) * timeout`. That same duration is the deadline for one probe round. The decision loop also wakes every `interval`, so a round that never finishes still withdraws once results are stale.
+
+The retry sample replaces the first one. Both waits go through `rate_limit_pps`. Targets from the `vip` source carry their own interval; the scheduler probes a prefix when that interval has elapsed and leaves the other results in place. `Run` is what the process uses. A prefix that disappears from every source is dropped on the next completed round.
 
 ### `log`
 
@@ -185,6 +189,15 @@ Built-in types are listed in [PLUGINS.md](PLUGINS.md). Their `config` keys:
 | `port` | 443 | 1–65535. A SYN-ACK or a RST counts as a reply. |
 | `packet_interval` | `100ms` | Not negative. |
 
+### Prober `udp`
+
+Not in the default chain. A UDP reply or an ICMP port-unreachable counts as a reply. No raw socket.
+
+| Key | Default | Values |
+|---|---|---|
+| `port` | 33434 | 1–65535. |
+| `packet_interval` | `100ms` | Not negative. |
+
 ### Prober `fixed`
 
 Labs and tests only. Sends no packets.
@@ -221,6 +234,35 @@ Each target:
 | `prefix` | Required CIDR, no host bits. Unique in the list. |
 | `host` | Optional address inside `prefix`. Default is the first address of the prefix. |
 | `weight` | Optional, not negative. |
+
+### Source `traceroute`
+
+Off unless this source is listed. UDP traceroute toward each target, cached for `interval`. The discovered host is only the address that gets probed. The prefix is unchanged, and nothing is announced from this source.
+
+| Key | Default | Bounds |
+|---|---|---|
+| `targets` | none | Required. Same shape as `static` (`prefix`, optional `host` inside it, optional `weight`). |
+| `max_hops` | 16 | 1–64. |
+| `probes` | 3 | 1–10 probes at each TTL. |
+| `min_replies` | 2 | 1–`probes`. A hop is stable when one address answers at least this many times and there is no tie. When `probes` is 1 the default is 1. |
+| `timeout` | `500ms` | Per probe, up to `5s`. |
+| `port` | 33434 | 1–65535. Destination UDP port. |
+| `source` | unset | Local address to bind. Empty uses the kernel's default route. Must match the targets' address family. |
+| `interval` | `5m` | `1s`–`24h`. How often discovery runs. |
+
+Three silent TTLs after a stable hop stop the trace. When the configured host answers, it stays the probe host. Otherwise the stable hop with the highest TTL is used.
+
+### Source `vip`
+
+Off unless this source is listed. Critical prefixes, and prefixes whose learned AS path contains a listed ASN, are probed on `interval`. The global `probe.rate_limit_pps` still applies.
+
+| Key | Default | Bounds |
+|---|---|---|
+| `interval` | none | Required, at least `1s`. Shorter than `probe.interval` keeps the samples inside the staleness window. |
+| `prefixes` | none | CIDRs, no host bits, no default route, no duplicates. Optional `host` must sit inside the prefix. |
+| `asns` | none | Non-zero ASNs, no duplicates. Matched against the learned AS path only while the RIB is ready. |
+
+At least one prefix or ASN is required. A prefix that is also returned by an earlier source keeps that source's host. The shorter positive interval wins.
 
 ### Source `flow`
 

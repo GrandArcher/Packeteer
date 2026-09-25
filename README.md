@@ -154,6 +154,8 @@ Leave graceful restart off on the session. Guides:
 
 A flow export (NetFlow, IPFIX, or sFlow) is optional. It only adds probe targets. It does not inject routes. With host networking the collector's UDP port is a host port; firewall it to the exporter.
 
+A `udp` prober is an optional fallback after ICMP and TCP. A `traceroute` source moves the probe onto the last stable hop when the configured host does not answer. A `vip` source probes a prefix list, and prefixes whose learned AS path contains a listed ASN, on a shorter interval. Set `probe.retry_loss_pct` to re-measure a lossy sample with more packets before it is stored; the default is off. None of these announce a route. The global packet rate limit still applies. Details are in [docs/PLUGINS.md](docs/PLUGINS.md).
+
 ## Start in observe
 
 1. Mount the minimum config, or `config.example.yaml`, with `mode: observe`.

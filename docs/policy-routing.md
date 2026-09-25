@@ -78,3 +78,4 @@ If the probe box's source IPs are not routable on the Internet, source-NAT them 
 
 - `--cap-add NET_RAW` is needed for ICMP echo on raw sockets. Without it, the `icmp` prober tries an unprivileged ICMP socket, which works if `net.ipv4.ping_group_range` allows it. If that also fails, the next prober (`tcp`) is used.
 - The `tcp` prober (connect to port 443 by default) needs no extra capabilities.
+- The `udp` prober and the `traceroute` source also need no raw socket. ICMP port-unreachable and time-exceeded are read from the UDP socket error queue. They still leave from `source_ip`, so the policy route has to cover UDP as well as ICMP and TCP.

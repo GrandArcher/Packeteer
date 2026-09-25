@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/GrandArcher/Packeteer/internal/pluginhost"
+	"github.com/GrandArcher/Packeteer/internal/plugins/source/vip"
 	"github.com/GrandArcher/Packeteer/internal/rib"
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
 )
@@ -284,6 +285,38 @@ func TestWirePrefixLookupSkipsUnreadyRIB(t *testing.T) {
 	}
 	if _, ok := src.fn(netip.MustParseAddr("198.51.100.1")); ok {
 		t.Fatal("a RIB that is not ready must not map destinations")
+	}
+}
+
+func TestVIPASNNotUsedUntilRIBReady(t *testing.T) {
+	c, err := plugin.ConfigFromYAML(`
+interval: 10s
+prefixes:
+  - {prefix: 203.0.113.0/24, host: 203.0.113.8}
+asns: [64496]
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	src, err := vip.New(c, plugin.Env{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	view, err := rib.New(rib.Options{
+		ASN: 64512, RouterID: netip.MustParseAddr("192.0.2.10"),
+		Neighbors: []rib.Neighbor{{Address: netip.MustParseAddr("192.0.2.1")}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	set := &pluginhost.Set{Sources: []pluginhost.Instance[plugin.TargetSource]{{Name: "vip", Plugin: src}}}
+	wireLearnedRoutes(set, view)
+	ts, err := src.Targets(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ts) != 1 || ts[0].Prefix.String() != "203.0.113.0/24" {
+		t.Fatalf("unready RIB must not expand ASNs: %+v", ts)
 	}
 }
 

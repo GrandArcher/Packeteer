@@ -467,6 +467,179 @@ func TestRunOnceHungTargetSourceKeepsResults(t *testing.T) {
 	}
 }
 
+func TestRetryReplacesHighLoss(t *testing.T) {
+	var mu sync.Mutex
+	var counts []int
+	p := &fakeProber{fn: func(_ context.Context, req plugin.ProbeRequest) (plugin.ProbeResult, error) {
+		mu.Lock()
+		counts = append(counts, req.Count)
+		n := len(counts)
+		mu.Unlock()
+		if n == 1 {
+			return plugin.ProbeResult{Sent: req.Count}, nil // 100% loss
+		}
+		return plugin.ProbeResult{Sent: req.Count, RTTs: ms(5, 5, 5, 5)}, nil
+	}}
+	lim := &countingLimiter{}
+	o := opts()
+	o.Packets = 2
+	o.RetryLossPct = 50
+	o.RetryPackets = 4
+	o.Limiter = lim
+	e, err := New([]Provider{provA}, []NamedProber{{"udp", p}}, src(plugin.Target{Prefix: pfx1}), o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.RunOnce(context.Background())
+	if len(counts) != 2 || counts[0] != 2 || counts[1] != 4 {
+		t.Fatalf("probe counts = %v", counts)
+	}
+	r := e.Results()[0]
+	if !r.OK() || r.Stats.Sent != 4 || r.Stats.LossPct != 0 || r.Prober != "udp" {
+		t.Fatalf("result = %+v", r)
+	}
+	if lim.total != 6 {
+		t.Fatalf("limiter tokens = %d, want 6", lim.total)
+	}
+	if !e.Providers()[0].Up {
+		t.Fatal("provider should stay up")
+	}
+}
+
+func TestRetrySkippedBelowThreshold(t *testing.T) {
+	p := &fakeProber{fn: func(_ context.Context, req plugin.ProbeRequest) (plugin.ProbeResult, error) {
+		// 1 reply of 4 is 75% loss, under an 80% threshold.
+		return plugin.ProbeResult{Sent: req.Count, RTTs: ms(5)}, nil
+	}}
+	o := opts()
+	o.Packets = 4
+	o.RetryLossPct = 80
+	o.RetryPackets = 8
+	e, _ := New([]Provider{provA}, []NamedProber{{"p", p}}, src(plugin.Target{Prefix: pfx1}), o)
+	e.RunOnce(context.Background())
+	if p.calls.Load() != 1 {
+		t.Fatalf("calls = %d, want 1", p.calls.Load())
+	}
+
+	off := &fakeProber{fn: func(_ context.Context, req plugin.ProbeRequest) (plugin.ProbeResult, error) {
+		return plugin.ProbeResult{Sent: req.Count}, nil
+	}}
+	o.RetryLossPct = 0
+	e, _ = New([]Provider{provA}, []NamedProber{{"p", off}}, src(plugin.Target{Prefix: pfx1}), o)
+	e.RunOnce(context.Background())
+	if off.calls.Load() != 1 {
+		t.Fatalf("disabled retry calls = %d", off.calls.Load())
+	}
+}
+
+func TestRetrySourceDownFailsClosed(t *testing.T) {
+	var n atomic.Int32
+	p := &fakeProber{fn: func(_ context.Context, req plugin.ProbeRequest) (plugin.ProbeResult, error) {
+		if n.Add(1) == 1 {
+			return plugin.ProbeResult{Sent: req.Count}, nil
+		}
+		return plugin.ProbeResult{}, fmt.Errorf("%w: gone", plugin.ErrSourceUnavailable)
+	}}
+	o := opts()
+	o.RetryLossPct = 1
+	o.RetryPackets = 3
+	e, _ := New([]Provider{provA}, []NamedProber{{"p", p}}, src(plugin.Target{Prefix: pfx1}), o)
+	e.RunOnce(context.Background())
+	r := e.Results()[0]
+	if r.OK() || !strings.Contains(r.Err, "probe source address unavailable") {
+		t.Fatalf("result = %+v", r)
+	}
+	if e.Providers()[0].Up {
+		t.Fatal("provider should be down")
+	}
+}
+
+func TestVIPIntervalAndRateLimit(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0)
+	o := opts()
+	o.Packets = 2
+	o.Interval = 100 * time.Millisecond
+	o.Now = func() time.Time { return now }
+	lim := &countingLimiter{}
+	o.Limiter = lim
+	var mu sync.Mutex
+	hits := map[string]int{}
+	p := &fakeProber{fn: func(_ context.Context, req plugin.ProbeRequest) (plugin.ProbeResult, error) {
+		mu.Lock()
+		hits[req.Target.String()]++
+		mu.Unlock()
+		rtt := 10.0
+		if req.Target.String() == "198.51.100.10" {
+			rtt = 1
+		}
+		return plugin.ProbeResult{Sent: req.Count, RTTs: ms(rtt, rtt)}, nil
+	}}
+	vipTarget := plugin.Target{Prefix: pfx1, Host: netip.MustParseAddr("198.51.100.10"), Interval: 20 * time.Millisecond}
+	normal := plugin.Target{Prefix: pfx2, Host: netip.MustParseAddr("203.0.113.10")}
+	e, err := New([]Provider{provA}, []NamedProber{{"p", p}}, src(vipTarget, normal), o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	last := map[netip.Prefix]time.Time{}
+	step := func() {
+		t.Helper()
+		probed, done := e.runRound(context.Background(), func(tg plugin.Target) bool {
+			return e.targetDue(tg, last)
+		}, true)
+		if !done {
+			t.Fatal("round did not complete")
+		}
+		for pref := range probed {
+			last[pref] = now
+		}
+	}
+	step()
+	if hits["198.51.100.10"] != 1 || hits["203.0.113.10"] != 1 {
+		t.Fatalf("first round %+v", hits)
+	}
+	now = now.Add(20 * time.Millisecond)
+	step()
+	if hits["198.51.100.10"] != 2 || hits["203.0.113.10"] != 1 {
+		t.Fatalf("vip-only round %+v", hits)
+	}
+	var sawNorm bool
+	for _, r := range e.Results() {
+		if r.Prefix == pfx2 && r.Stats.RTTAvg == 10*time.Millisecond {
+			sawNorm = true
+		}
+	}
+	if !sawNorm {
+		t.Fatalf("normal result dropped: %+v", e.Results())
+	}
+	if lim.total != 3*o.Packets {
+		t.Fatalf("limiter tokens = %d, want %d", lim.total, 3*o.Packets)
+	}
+	e.RunOnce(context.Background())
+	if hits["203.0.113.10"] != 2 || hits["198.51.100.10"] != 3 {
+		t.Fatalf("RunOnce hits = %+v", hits)
+	}
+	if lim.total != 5*o.Packets {
+		t.Fatalf("limiter after RunOnce = %d", lim.total)
+	}
+}
+
+func TestShorterIntervalWins(t *testing.T) {
+	e, _ := New([]Provider{provA}, []NamedProber{{"p", &fakeProber{fn: ok(1)}}}, []NamedSource{
+		{Name: "static", Source: &fakeSource{targets: []plugin.Target{{Prefix: pfx1, Host: netip.MustParseAddr("198.51.100.9")}}}},
+		{Name: "vip", Source: &fakeSource{targets: []plugin.Target{{Prefix: pfx1, Interval: 5 * time.Second}, {Prefix: pfx2, Interval: 5 * time.Second}}}},
+	}, opts())
+	ts := e.Targets(context.Background())
+	if len(ts) != 2 {
+		t.Fatalf("targets = %+v", ts)
+	}
+	if ts[0].Host.String() != "198.51.100.9" || ts[0].Interval != 5*time.Second {
+		t.Fatalf("merged = %+v", ts[0])
+	}
+	if ts[1].Prefix != pfx2 || ts[1].Interval != 5*time.Second {
+		t.Fatalf("vip-only = %+v", ts[1])
+	}
+}
+
 func TestOnRoundAfterCommit(t *testing.T) {
 	o := opts()
 	var e *Engine

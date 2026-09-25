@@ -26,6 +26,7 @@ import (
 	"github.com/GrandArcher/Packeteer/internal/httpapi"
 	"github.com/GrandArcher/Packeteer/internal/pluginhost"
 	_ "github.com/GrandArcher/Packeteer/internal/plugins/all"
+	"github.com/GrandArcher/Packeteer/internal/plugins/source/vip"
 	"github.com/GrandArcher/Packeteer/internal/policy"
 	"github.com/GrandArcher/Packeteer/internal/probe"
 	"github.com/GrandArcher/Packeteer/internal/rib"
@@ -261,6 +262,7 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 		return 1
 	}
 	wirePrefixLookup(plugins, view)
+	wireLearnedRoutes(plugins, view)
 	col.Attach(engine, decider, view)
 	if err := plugins.Start(ctx); err != nil {
 		log.Error("refusing to start", "err", err)
@@ -371,8 +373,12 @@ func newEngine(cfg *config.Config, plugins *pluginhost.Set, log *slog.Logger, on
 		sources = append(sources, probe.NamedSource{Name: s.Name, Source: s.Plugin})
 	}
 	burst := cfg.Probe.RateLimitPPS
-	if burst < cfg.Probe.Packets {
-		burst = cfg.Probe.Packets
+	need := cfg.Probe.Packets
+	if cfg.Probe.RetryPackets > need {
+		need = cfg.Probe.RetryPackets
+	}
+	if burst < need {
+		burst = need
 	}
 	return probe.New(providers, probers, sources, probe.Options{
 		Interval:             cfg.Probe.Interval,
@@ -381,6 +387,8 @@ func newEngine(cfg *config.Config, plugins *pluginhost.Set, log *slog.Logger, on
 		Workers:              cfg.Probe.Workers,
 		PerTargetConcurrency: cfg.Probe.PerTargetConcurrency,
 		RoundTimeout:         maxResultAge(cfg),
+		RetryLossPct:         cfg.Probe.RetryLossPct,
+		RetryPackets:         cfg.Probe.RetryPackets,
 		Limiter:              rate.NewLimiter(rate.Limit(cfg.Probe.RateLimitPPS), burst),
 		Logger:               log,
 		OnResult:             func(r probe.Result) { logResult(log, r) },
@@ -426,7 +434,11 @@ func runDecision(now time.Time, decider *policy.Engine, in policy.Input, ctl *an
 // stale. It is also the overall probe-round deadline, so a stuck round
 // cannot outlive the freshness window.
 func maxResultAge(cfg *config.Config) time.Duration {
-	return 3*cfg.Probe.Interval + time.Duration(cfg.Probe.Packets)*cfg.Probe.Timeout
+	pkts := cfg.Probe.Packets
+	if cfg.Probe.RetryLossPct > 0 && cfg.Probe.RetryPackets > 0 {
+		pkts += cfg.Probe.RetryPackets
+	}
+	return 3*cfg.Probe.Interval + time.Duration(pkts)*cfg.Probe.Timeout
 }
 
 func logResult(log *slog.Logger, r probe.Result) {
@@ -445,6 +457,40 @@ func logResult(log *slog.Logger, r probe.Result) {
 // and a view that is not ready must not contribute prefixes.
 type prefixLookup interface {
 	SetPrefixLookup(func(netip.Addr) (netip.Prefix, bool))
+}
+
+// learnedSetter is implemented by the vip source.
+type learnedSetter interface {
+	SetLearnedRoutes(func() []vip.LearnedRoute)
+}
+
+// wireLearnedRoutes gives the vip source the current RIB. The callback
+// returns nothing while the view is missing or not ready, and it drops
+// default routes, so an ASN list cannot invent targets from stale state.
+func wireLearnedRoutes(plugins *pluginhost.Set, view *rib.View) {
+	if plugins == nil {
+		return
+	}
+	fn := func() []vip.LearnedRoute {
+		if view == nil || !view.Ready() {
+			return nil
+		}
+		routes := view.Routes()
+		out := make([]vip.LearnedRoute, 0, len(routes))
+		for _, rt := range routes {
+			if !rt.Prefix.IsValid() || rt.Prefix.Bits() == 0 {
+				continue
+			}
+			path := append([]uint32(nil), rt.ASPath...)
+			out = append(out, vip.LearnedRoute{Prefix: rt.Prefix, ASPath: path})
+		}
+		return out
+	}
+	for _, src := range plugins.Sources {
+		if s, ok := src.Plugin.(learnedSetter); ok {
+			s.SetLearnedRoutes(fn)
+		}
+	}
 }
 
 func wirePrefixLookup(plugins *pluginhost.Set, view *rib.View) {
