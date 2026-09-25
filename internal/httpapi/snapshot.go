@@ -126,6 +126,7 @@ type Decision struct {
 	Action      string      `json:"action"`
 	Cause       string      `json:"cause,omitempty"`
 	Reason      string      `json:"reason,omitempty"`
+	Policy      string      `json:"policy,omitempty"`
 	Candidates  []Candidate `json:"candidates"`
 }
 
@@ -310,6 +311,7 @@ func assembleDecisions(in []policy.Decision) []Decision {
 			Action:      d.Action,
 			Cause:       d.Cause,
 			Reason:      d.Reason,
+			Policy:      d.Policy,
 			Candidates:  make([]Candidate, 0, len(d.Candidates)),
 		}
 		for _, c := range d.Candidates {

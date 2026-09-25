@@ -25,9 +25,9 @@ Milestones:
 
 | Status | Count |
 |---|---|
-| done | 35 |
+| done | 39 |
 | in progress | 0 |
-| planned | 44 |
+| planned | 40 |
 | won't do | 3 |
 
 ## Performance optimization
@@ -95,12 +95,14 @@ The `cost` scorer (#19) is off unless `scorer.type` is `cost`, and needs `provid
 | Capability | IRP doc ref | Status | Milestone | Plugin kind | Issue |
 |---|---|---|---|---|---|
 | Operating modes: non-intrusive / intrusive (observe / suggest / inject) | 1.2.4 Operating modes | done | v0.1 | core (config) | #1 |
-| Allow / deny / static provider / VIP policies by prefix | 1.2.9, 3.7 Routing Policies | planned | v0.2 | scorer (policy filter) | #20 |
-| Policies by ASN | 3.7 | planned | v0.2 | scorer (policy filter) | #20 |
-| Policies by country (GeoIP) | 3.7 | planned | v0.2 | scorer (policy filter) | #20 |
+| Allow / deny / static provider / VIP policies by prefix | 1.2.9, 3.7 Routing Policies | done | v0.2 | policy (`rules`) | #20 |
+| Policies by ASN | 3.7 | done | v0.2 | policy (`rules`) | #20 |
+| Policies by country (GeoIP) | 3.7 | done | v0.2 | policy (`rules`) | #20 |
 | Provider exclusions | 4.15 cc_disable, 3.7 | done | v0.1 | scorer | #7 |
-| Maintenance windows | 1.2.21, 3.19 | planned | v0.2 | scorer (policy filter) | #20 |
+| Maintenance windows | 1.2.21, 3.19 | done | v0.2 | policy (`maintenance`) | #20 |
 | Inject allowlist (Packeteer safety addition) | - | done | v0.1 | core + announcer | #7, #8 |
+
+Routing policies (#20) are `policy` plugins, a filter chain in front of the scorer. The `rules` policy matches a probed prefix by prefix (equal or more specific), by the origin ASN of the learned AS path, or by country from a MaxMind-format database the operator mounts (none is shipped). A prefix match beats an ASN match, which beats a country match; the longest rule prefix wins, then list order. `ignore` retires and blocks improvements, `allow` and `deny` restrict where a prefix may be steered (never the native provider), `static` pins a provider while its path is usable and inside the rule's required `max_loss_pct` (and optional `max_rtt`), and not lossier than native by `min_loss_delta_pct` (cause `static`, checked before announce and every round while held, withdrawn with a `hold_time` cooldown when the path fails or leaves the ceiling, an existing improvement is switched onto the pin only after `hold_time`, retired at `improvement_ttl` without a cooldown), and `vip` ranks performance moves ahead when the cap binds. The `maintenance` policy excludes providers during cron-scheduled, one-off, or on-demand (`POST /api/maintenance`, basic auth required, in memory) windows: improvements on them are retired and no performance, static, commit, or cost move may land on them. Native traffic through the provider is not moved. Every verdict goes through Decide, so the RIB, allowlist, cap, community, and withdraw rules still hold. Removing `policies` and restarting is the rollback. Observe stays the default.
 
 ## BGP
 

@@ -183,6 +183,36 @@ http:
 #           billing_day: 1
 #           percentile: greater_separate
 
+# Routing policies and maintenance windows. Off unless listed. The chain is
+# asked in order and the first policy that matches a prefix decides it.
+# Policies only restrict or pin what the decision engine may choose: the RIB,
+# allowlist, community, cap, and withdraw-on-failure rules still apply.
+# The GeoIP database is yours to mount; Packeteer does not ship one.
+# Docs: docs/CONFIG.md ("Policies").
+# policies:
+#   - type: maintenance
+#     config:
+#       timezone: UTC
+#       windows:
+#         - name: transit-b-weekly
+#           providers: [transit-b]
+#           schedule: "0 2 * * 6"   # minute hour day-of-month month day-of-week
+#           duration: 2h
+#   - type: rules
+#     config:
+#       geoip_db: /etc/packeteer/GeoLite2-Country.mmdb   # only needed for countries
+#       rules:
+#         - name: lab-static
+#           action: static          # ignore, allow, deny, static, or vip
+#           providers: [transit-a]
+#           prefixes: [203.0.113.0/24]
+#           max_loss_pct: 1         # required for static: pin only while loss <= 1%
+#           max_rtt: 150ms          # optional latency ceiling for static
+#         - name: no-b-for-64500
+#           action: deny
+#           providers: [transit-b]
+#           asns: [64500]           # origin ASN of the learned path
+
 # Plugins (docs/PLUGINS.md). Out-of-process plugins live in plugin_dir.
 plugin_dir: /etc/packeteer/plugins
 # notifiers:

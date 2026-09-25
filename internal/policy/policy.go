@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/netip"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/GrandArcher/Packeteer/internal/probe"
@@ -85,6 +86,12 @@ type Input struct {
 	// VolumeMbps is observed traffic per prefix, decimal megabits per second.
 	// A missing or zero entry is not moved for commit or balance.
 	VolumeMbps map[netip.Prefix]float64
+	// Policies is the routing-policy verdict per probed prefix, from the
+	// configured policy chain. A missing entry means no policy matched.
+	Policies map[netip.Prefix]plugin.PolicyVerdict
+	// Maintenance lists providers inside an open maintenance window. They
+	// are excluded for this evaluation.
+	Maintenance []string
 }
 
 // Improvement is an active (or, outside inject mode, recommended) steer.
@@ -157,7 +164,9 @@ type Decision struct {
 	Action      string       `json:"action"`
 	Cause       string       `json:"cause,omitempty"`
 	Reason      string       `json:"reason"`
-	Candidates  []Candidate  `json:"candidates"`
+	// Policy describes the routing policy that matched, if any.
+	Policy     string      `json:"policy,omitempty"`
+	Candidates []Candidate `json:"candidates"`
 }
 
 // Change is an improvement transition for the announcer and notifiers.
@@ -168,13 +177,23 @@ type Change struct {
 }
 
 // pending is a new improvement waiting on the max_improvements cap.
-// Performance entries are admitted before commit entries.
+// Entries are admitted by rank: static policy pins, then VIP performance
+// moves, then other performance moves, then commit and cost moves.
 type pending struct {
 	d      *Decision
 	imp    Improvement
 	gain   float64
 	commit bool
+	rank   int
 }
+
+// Admission ranks for pending moves. Lower is admitted first.
+const (
+	rankStatic = iota
+	rankVIP
+	rankPerformance
+	rankPlanned
+)
 
 // Output of one evaluation.
 type Output struct {
@@ -186,6 +205,19 @@ type Output struct {
 func Decide(prev State, in Input, cfg Config, scorer plugin.Scorer, now time.Time) (State, Output) {
 	st := prev.clone()
 	var out Output
+	maint := map[string]bool{}
+	if len(in.Maintenance) > 0 {
+		// A provider in maintenance is excluded for this evaluation only.
+		excl := make(map[string]bool, len(cfg.Excluded)+len(in.Maintenance))
+		for k, v := range cfg.Excluded {
+			excl[k] = v
+		}
+		for _, name := range in.Maintenance {
+			maint[name] = true
+			excl[name] = true
+		}
+		cfg.Excluded = excl
+	}
 	for p, until := range st.Cooldown {
 		if !now.Before(until) {
 			delete(st.Cooldown, p)
@@ -254,6 +286,21 @@ func Decide(prev State, in Input, cfg Config, scorer plugin.Scorer, now time.Tim
 		d := &decisions[i]
 		*d = Decision{Prefix: p, Candidates: cands, Action: ActionNone}
 		decIdx[p] = d
+		imp, active := st.Improvements[p]
+		verdict, hasPolicy := in.Policies[p]
+		if hasPolicy {
+			d.Policy = policyText(verdict)
+			native := in.Native[p]
+			if active {
+				native = imp.Native
+			}
+			applyPolicy(cands, verdict, native)
+		}
+		static := ""
+		if hasPolicy && verdict.Action == plugin.PolicyStatic && len(verdict.Providers) == 1 {
+			static = verdict.Providers[0]
+		}
+		ignore := hasPolicy && verdict.Action == plugin.PolicyIgnore
 		get := func(name string) (Candidate, bool) {
 			for _, c := range cands {
 				if c.Provider == name && c.Usable {
@@ -267,9 +314,14 @@ func Decide(prev State, in Input, cfg Config, scorer plugin.Scorer, now time.Tim
 			d.Recommended = best.Provider
 		}
 
-		imp, active := st.Improvements[p]
 		if active {
 			d.Native, d.Current = imp.Native, imp.Provider
+			if ignore {
+				reason := "policy ignore (" + verdict.Rule + ")"
+				retire(p, reason, false)
+				setDecision(d, ActionRetire, reason, imp.Native, "", imp.Cause)
+				continue
+			}
 			if in.RIBEnabled {
 				_, inRIB := in.Native[p]
 				switch {
@@ -299,8 +351,14 @@ func Decide(prev State, in Input, cfg Config, scorer plugin.Scorer, now time.Tim
 			cur, ok := get(imp.Provider)
 			switch {
 			case !ok:
-				retire(p, "improvement provider unusable ("+whyUnusable(cands, imp.Provider)+")", false)
+				// A static pin has no performance threshold to stop it from
+				// returning on the next good sample, so it waits out hold_time.
+				retire(p, "improvement provider unusable ("+whyUnusable(cands, imp.Provider)+")", imp.Cause == plugin.CauseStatic)
 				d.Action, d.Reason, d.Current = ActionRetire, "improvement provider unusable", imp.Native
+				continue
+			case maint[imp.Provider]:
+				retire(p, "provider in maintenance", false)
+				d.Action, d.Reason, d.Current = ActionRetire, "provider in maintenance", imp.Native
 				continue
 			case cfg.Excluded[imp.Provider]:
 				retire(p, "provider excluded", false)
@@ -311,8 +369,59 @@ func Decide(prev State, in Input, cfg Config, scorer plugin.Scorer, now time.Tim
 				d.Action, d.Reason, d.Current = ActionRetire, "not allowlisted", imp.Native
 				continue
 			case cfg.ImprovementTTL > 0 && now.Sub(imp.Since) >= cfg.ImprovementTTL:
+				// Static pins expire too: while a pin is active the router
+				// may hide the native path, so the TTL is what notices an
+				// upstream withdraw. No cooldown, so a pin whose prefix is
+				// still in the RIB returns on the next round.
 				retire(p, "ttl expired; re-evaluating native path", false)
 				d.Action, d.Reason, d.Current = ActionRetire, "ttl expired", imp.Native
+				continue
+			}
+			if static != "" {
+				if static == imp.Native {
+					reason := "policy static: native is the pinned provider"
+					retire(p, reason, false)
+					setDecision(d, ActionRetire, reason, imp.Native, imp.Native, plugin.CauseStatic)
+					continue
+				}
+				pin, ok := get(static)
+				if !ok || cfg.Excluded[static] {
+					reason := "policy static: " + static + " not usable (" + staticWhy(cands, cfg, static) + ")"
+					retire(p, reason, true)
+					setDecision(d, ActionRetire, reason, imp.Native, "", plugin.CauseStatic)
+					continue
+				}
+				if fault := pinFault(pin, cands, imp.Native, verdict, cfg); fault != "" {
+					// The pinned path is lossy or slow: withdraw now and wait
+					// out hold_time so a flapping path does not re-pin.
+					reason := "policy static: " + static + " " + fault
+					retire(p, reason, true)
+					setDecision(d, ActionRetire, reason, imp.Native, "", plugin.CauseStatic)
+					continue
+				}
+				if imp.Provider == static {
+					// Already on the pinned provider: relabel, do not re-announce.
+					imp.Cause, imp.Reason = plugin.CauseStatic, "policy static ("+verdict.Rule+")"
+					st.Improvements[p] = imp
+					setDecision(d, ActionKeep, imp.Reason, imp.Provider, imp.Provider, plugin.CauseStatic)
+					continue
+				}
+				if now.Sub(imp.Since) < cfg.HoldTime {
+					d.Recommended, d.Cause = static, plugin.CauseStatic
+					d.Action, d.Reason = ActionKeep, "policy static: hold_time not elapsed before switching to "+static
+					continue
+				}
+				n := Improvement{Prefix: p, Provider: static, Native: imp.Native, Since: now,
+					Reason: "policy static (" + verdict.Rule + ")", Cause: plugin.CauseStatic,
+					nativeSeen: imp.nativeSeen, nativeHeld: imp.nativeHeld}
+				st.Improvements[p] = n
+				out.Changes = append(out.Changes, Change{Action: ActionSwitch, Old: imp, New: n})
+				setDecision(d, ActionSwitch, n.Reason, n.Provider, n.Provider, plugin.CauseStatic)
+				continue
+			}
+			if imp.Cause == plugin.CauseStatic {
+				retire(p, "static policy removed", false)
+				setDecision(d, ActionRetire, "static policy removed", imp.Native, "", plugin.CauseStatic)
 				continue
 			}
 			if planned(imp.Cause) {
@@ -364,6 +473,38 @@ func Decide(prev State, in Input, cfg Config, scorer plugin.Scorer, now time.Tim
 			d.Reason = "no RIB configured: ranking only"
 			continue
 		}
+		if ignore {
+			d.Reason = "policy ignore (" + verdict.Rule + ")"
+			continue
+		}
+		if static != "" {
+			d.Cause = plugin.CauseStatic
+			pin, usable := get(static)
+			switch {
+			case static == d.Native:
+				d.Recommended, d.Reason = static, "policy static: native is the pinned provider"
+				continue
+			case !usable || cfg.Excluded[static]:
+				d.Reason = "policy static: " + static + " not usable (" + staticWhy(cands, cfg, static) + ")"
+				continue
+			}
+			if fault := pinFault(pin, cands, d.Native, verdict, cfg); fault != "" {
+				d.Reason = "policy static: " + static + " " + fault
+				continue
+			}
+			d.Recommended = static
+			if until, cool := st.Cooldown[p]; cool {
+				d.Reason = "cooldown until " + until.Format(time.RFC3339)
+				continue
+			}
+			if cfg.Mode == "inject" && !allowed(cfg.Allowlist, p) {
+				d.Reason = "policy static but prefix not allowlisted"
+				continue
+			}
+			wants = append(wants, pending{d: d, rank: rankStatic,
+				imp: Improvement{Prefix: p, Provider: static, Native: d.Native, Since: now, Reason: "policy static (" + verdict.Rule + ")", Cause: plugin.CauseStatic}})
+			continue
+		}
 		natC, ok := get(d.Native)
 		if !ok {
 			d.Reason = "no usable measurement for native provider (" + whyUnusable(cands, d.Native) + ")"
@@ -393,19 +534,24 @@ func Decide(prev State, in Input, cfg Config, scorer plugin.Scorer, now time.Tim
 				continue
 			}
 		}
-		wants = append(wants, pending{d: d, gain: natC.Score - alt.Score,
+		rank := rankPerformance
+		if hasPolicy && verdict.Action == plugin.PolicyVIP {
+			rank = rankVIP
+		}
+		wants = append(wants, pending{d: d, gain: natC.Score - alt.Score, rank: rank,
 			imp: Improvement{Prefix: p, Provider: alt.Provider, Native: d.Native, Since: now, Reason: reasonText(alt, natC), Cause: plugin.CausePerformance}})
 	}
 
 	integrateCommit(st, &out, decIdx, holds, commitOK, byPrefix, &wants, cfg, scorer, in, now, retire)
 
-	// Performance moves take the cap first. A commit steer already in the
+	// Static pins take the cap first, then VIP and other performance
+	// moves. A commit steer already in the
 	// table gives up its slot to a new performance move. Commit moves then
 	// take what is left, largest relief first. Equal relief breaks by
 	// prefix so the same inputs always pick the same prefix.
 	sort.Slice(wants, func(a, b int) bool {
-		if wants[a].commit != wants[b].commit {
-			return !wants[a].commit
+		if wants[a].rank != wants[b].rank {
+			return wants[a].rank < wants[b].rank
 		}
 		if wants[a].gain != wants[b].gain {
 			return wants[a].gain > wants[b].gain
@@ -585,4 +731,65 @@ func sortedKeys(m map[netip.Prefix]Improvement) []netip.Prefix {
 	}
 	sortPrefixes(out)
 	return out
+}
+
+// applyPolicy marks candidates an allow or deny verdict forbids as not
+// usable, so no move of any cause can land on them. The native provider is
+// left alone: it is where traffic already goes, and flip-back needs its
+// measurement.
+func applyPolicy(cands []Candidate, v plugin.PolicyVerdict, native string) {
+	if v.Action != plugin.PolicyAllow && v.Action != plugin.PolicyDeny {
+		return
+	}
+	listed := map[string]bool{}
+	for _, name := range v.Providers {
+		listed[name] = true
+	}
+	for i := range cands {
+		c := &cands[i]
+		if c.Provider == native || !c.Usable {
+			continue
+		}
+		if (v.Action == plugin.PolicyDeny) == listed[c.Provider] {
+			c.Usable, c.Why, c.Score = false, "policy "+v.Action+" ("+v.Rule+")", 0
+		}
+	}
+}
+
+func policyText(v plugin.PolicyVerdict) string {
+	s := v.Action
+	if len(v.Providers) > 0 {
+		s += " " + strings.Join(v.Providers, ",")
+	}
+	if v.Rule != "" || v.Match != "" {
+		s += " (" + strings.TrimSpace(v.Rule+": "+v.Match) + ")"
+	}
+	return s
+}
+
+// pinFault says why a usable static path may not carry the prefix, or ""
+// when it may. The path must be inside the rule's loss ceiling (and latency
+// ceiling, when set), and its loss must not exceed a usable native path's
+// by min_loss_delta_pct or more. It is checked before a pin is announced
+// and on every round while the pin is held.
+func pinFault(pin Candidate, cands []Candidate, native string, v plugin.PolicyVerdict, cfg Config) string {
+	if pin.LossPct > v.MaxLossPct {
+		return fmt.Sprintf("loss %.1f%% over max_loss_pct %.1f%%", pin.LossPct, v.MaxLossPct)
+	}
+	if v.MaxRTT > 0 && pin.RTTAvg > v.MaxRTT {
+		return fmt.Sprintf("rtt %s over max_rtt %s", pin.RTTAvg.Round(time.Millisecond), v.MaxRTT)
+	}
+	for _, c := range cands {
+		if c.Provider == native && c.Usable && cfg.MinLossDeltaPct > 0 && pin.LossPct-c.LossPct >= cfg.MinLossDeltaPct {
+			return fmt.Sprintf("loss %.1f%% worse than native %.1f%% by min_loss_delta_pct or more", pin.LossPct, c.LossPct)
+		}
+	}
+	return ""
+}
+
+func staticWhy(cands []Candidate, cfg Config, name string) string {
+	if cfg.Excluded[name] {
+		return "excluded"
+	}
+	return whyUnusable(cands, name)
 }

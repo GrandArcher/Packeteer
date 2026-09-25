@@ -15,6 +15,7 @@ import (
 	"net/netip"
 	"os"
 	"os/signal"
+	"slices"
 	"strings"
 	"sync"
 	"syscall"
@@ -201,10 +202,25 @@ func run(ctx context.Context, args []string, getenv func(string) string, stdout,
 }
 
 func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, log *slog.Logger, httpUser, httpPass string) int {
+	kick := make(chan struct{}, 1)
+	poke := func() {
+		select {
+		case kick <- struct{}{}:
+		default:
+		}
+	}
 	col := httpapi.NewCollector(version, cfg.Mode, cfg.Providers)
+	maint := newMaintenanceControl(plugins, log, poke)
+	if mc, ok := maint.(*maintenanceControl); ok {
+		if mc.CanOpen() {
+			log.Info("on-demand maintenance windows are kept in memory only; windows opened through the API before a restart are gone")
+		}
+		go watchMaintenance(ctx, mc.Active, maintenanceWatchInterval, log, poke)
+	}
 	if addr := cfg.HTTPListen(); addr != "" {
 		srv, err := httpapi.New(httpapi.Options{
 			Addr: addr, User: httpUser, Password: httpPass, Snapshot: col.Snapshot, Logger: log,
+			Maintenance: maint,
 		})
 		if err != nil {
 			log.Error("refusing to start", "err", err)
@@ -259,13 +275,6 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 		}
 	}
 
-	kick := make(chan struct{}, 1)
-	poke := func() {
-		select {
-		case kick <- struct{}{}:
-		default:
-		}
-	}
 	if view != nil {
 		view.OnChange(poke)
 	}
@@ -304,7 +313,7 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 		// cancellation) must still withdraw once measurements exceed
 		// MaxResultAge.
 		decideLoop(loopCtx, cfg.Probe.Interval, kick, func(now time.Time) {
-			runDecision(now, decider, decisionInput(loopCtx, engine, view, plugins), ctl, log, cfg.Mode)
+			runDecision(now, decider, decisionInput(loopCtx, now, engine, view, plugins), ctl, log, cfg.Mode)
 		})
 	}()
 
@@ -869,7 +878,7 @@ func newDecider(cfg *config.Config, plugins *pluginhost.Set) (*policy.Engine, er
 // decisionInput snapshots probe results, provider health, the RIB view,
 // and, when the scorer plans commit moves, telemetry and flow volumes.
 // A weighted scorer does not implement planning, so those reads are skipped.
-func decisionInput(ctx context.Context, engine *probe.Engine, view *rib.View, plugins *pluginhost.Set) policy.Input {
+func decisionInput(ctx context.Context, now time.Time, engine *probe.Engine, view *rib.View, plugins *pluginhost.Set) policy.Input {
 	in := policy.Input{Results: engine.Results(), ProviderUp: map[string]bool{}, Native: map[netip.Prefix]string{}}
 	for _, p := range engine.Providers() {
 		in.ProviderUp[p.Name] = p.Up
@@ -882,8 +891,175 @@ func decisionInput(ctx context.Context, engine *probe.Engine, view *rib.View, pl
 			}
 		}
 	}
+	var routes routeLookup
+	if view != nil {
+		routes = view
+	}
+	applyPolicies(&in, now, routes, plugins)
 	fillPlannerInputs(ctx, &in, plugins)
 	return in
+}
+
+// routeLookup is the RIB surface policies read. *rib.View implements it.
+type routeLookup interface {
+	Ready() bool
+	Exact(netip.Prefix) (rib.Route, bool)
+}
+
+// applyPolicies asks the policy chain about every probed prefix and
+// collects the providers in open maintenance windows. The first policy that
+// matches a prefix decides it. ASN rules see the learned AS path only while
+// the RIB view is ready. Policies do not announce; Decide applies them.
+func applyPolicies(in *policy.Input, now time.Time, routes routeLookup, plugins *pluginhost.Set) {
+	if in == nil || plugins == nil || len(plugins.Policies) == 0 {
+		return
+	}
+	seen := map[string]bool{}
+	for _, pol := range plugins.Policies {
+		m, ok := pol.Plugin.(plugin.Maintenance)
+		if !ok {
+			continue
+		}
+		for _, w := range m.Active(now) {
+			for _, name := range w.Providers {
+				if !seen[name] {
+					seen[name] = true
+					in.Maintenance = append(in.Maintenance, name)
+				}
+			}
+		}
+	}
+	ready := routes != nil && routes.Ready()
+	for _, r := range in.Results {
+		if _, done := in.Policies[r.Prefix]; done || !r.Prefix.IsValid() {
+			continue
+		}
+		subj := plugin.PolicySubject{Prefix: r.Prefix}
+		if ready {
+			if rt, ok := routes.Exact(r.Prefix); ok {
+				subj.ASPath = rt.ASPath
+			}
+		}
+		for _, pol := range plugins.Policies {
+			if v, ok := pol.Plugin.Match(subj); ok {
+				if in.Policies == nil {
+					in.Policies = map[netip.Prefix]plugin.PolicyVerdict{}
+				}
+				in.Policies[r.Prefix] = v
+				break
+			}
+		}
+	}
+}
+
+// maintenanceOpener is implemented by the maintenance policy.
+type maintenanceOpener interface {
+	plugin.Maintenance
+	Open(providers []string, d time.Duration, reason string, now time.Time) (plugin.MaintenanceWindow, error)
+	Close(id string) bool
+}
+
+// maintenanceControl lists windows from every maintenance policy and opens
+// on-demand windows on the first one. A change wakes the decision loop so
+// improvements move off the provider without waiting for a probe round.
+type maintenanceControl struct {
+	all    []plugin.Maintenance
+	opener maintenanceOpener
+	log    *slog.Logger
+	poke   func()
+}
+
+func newMaintenanceControl(plugins *pluginhost.Set, log *slog.Logger, poke func()) httpapi.MaintenanceControl {
+	if plugins == nil {
+		return nil
+	}
+	mc := &maintenanceControl{log: log, poke: poke}
+	for _, pol := range plugins.Policies {
+		if m, ok := pol.Plugin.(plugin.Maintenance); ok {
+			mc.all = append(mc.all, m)
+		}
+		if o, ok := pol.Plugin.(maintenanceOpener); ok && mc.opener == nil {
+			mc.opener = o
+		}
+	}
+	if len(mc.all) == 0 {
+		return nil
+	}
+	return mc
+}
+
+func (mc *maintenanceControl) Active(now time.Time) []plugin.MaintenanceWindow {
+	var out []plugin.MaintenanceWindow
+	for _, m := range mc.all {
+		out = append(out, m.Active(now)...)
+	}
+	return out
+}
+
+func (mc *maintenanceControl) CanOpen() bool { return mc.opener != nil }
+
+func (mc *maintenanceControl) Open(providers []string, d time.Duration, reason string, now time.Time) (plugin.MaintenanceWindow, error) {
+	if mc.opener == nil {
+		return plugin.MaintenanceWindow{}, errors.New("no maintenance policy configured")
+	}
+	w, err := mc.opener.Open(providers, d, reason, now)
+	if err != nil {
+		return w, err
+	}
+	if mc.log != nil {
+		mc.log.Info("maintenance window opened", "id", w.ID, "providers", strings.Join(w.Providers, ","), "end", w.End, "reason", w.Reason)
+	}
+	if mc.poke != nil {
+		mc.poke()
+	}
+	return w, nil
+}
+
+func (mc *maintenanceControl) Close(id string) bool {
+	if mc.opener == nil || !mc.opener.Close(id) {
+		return false
+	}
+	if mc.log != nil {
+		mc.log.Info("maintenance window closed", "id", id)
+	}
+	if mc.poke != nil {
+		mc.poke()
+	}
+	return true
+}
+
+// maintenanceWatchInterval is how often scheduled windows are checked.
+const maintenanceWatchInterval = 15 * time.Second
+
+// watchMaintenance wakes the decision loop when the set of providers in
+// maintenance changes, so a scheduled window that opens or closes takes
+// effect without waiting for the next probe round.
+func watchMaintenance(ctx context.Context, active func(time.Time) []plugin.MaintenanceWindow, every time.Duration, log *slog.Logger, poke func()) {
+	key := func(now time.Time) string {
+		var names []string
+		for _, w := range active(now) {
+			names = append(names, w.Providers...)
+		}
+		slices.Sort(names)
+		return strings.Join(slices.Compact(names), ",")
+	}
+	last := key(time.Now())
+	t := time.NewTicker(every)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case now := <-t.C:
+			if k := key(now); k != last {
+				if log != nil {
+					log.Info("providers in maintenance changed", "providers", k)
+				}
+				last = k
+				poke()
+			}
+		}
+	}
 }
 
 // scorerPlans reports whether commit control is on for this process.
