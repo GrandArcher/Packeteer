@@ -27,6 +27,11 @@ COPY config.example.yaml /etc/packeteer/config.example.yaml
 # pass with --cap-add (plus its defaults); see README "Security notes".
 ENV PACKETEER_CONFIG=/etc/packeteer/config.yaml
 
+# Ops surface (dashboard, /metrics, /api). The process binds http.listen
+# from the mounted config, which defaults to 127.0.0.1:8080. With
+# --network host that is the host loopback; this EXPOSE documents the port.
+EXPOSE 8080
+
 LABEL org.opencontainers.image.source="https://github.com/GrandArcher/Packeteer" \
       org.opencontainers.image.description="Packeteer: BGP path performance controller (observe-first)" \
       org.opencontainers.image.licenses="Apache-2.0"

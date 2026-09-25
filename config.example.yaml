@@ -86,6 +86,20 @@ scorer:
 # announcer:
 #   type: gobgp
 
+# Process log. level: debug, info, warn, or error.
+# format: text or json. PACKETEER_LOG_LEVEL and PACKETEER_LOG_FORMAT override these.
+log:
+  level: info
+  format: text
+
+# Read-only dashboard, JSON API, and Prometheus metrics. GET and HEAD only.
+# Empty listen disables the server. PACKETEER_HTTP_LISTEN overrides this
+# ("off" disables). With --network host, 127.0.0.1:8080 is the host loopback.
+# The image exposes port 8080. Optional basic auth (set both, or neither):
+# PACKETEER_HTTP_USER and PACKETEER_HTTP_PASSWORD.
+http:
+  listen: "127.0.0.1:8080"
+
 # Plugins (docs/PLUGINS.md). Out-of-process plugins live in plugin_dir.
 plugin_dir: /etc/packeteer/plugins
 # notifiers:

@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/netip"
 	"os"
 	"strconv"
@@ -42,6 +43,10 @@ const (
 	MaxProbeRateLimitPPS             = 100000
 	DefaultProbePerTargetConcurrency = 2
 	MaxProbePerTargetConcurrency     = 64
+
+	// DefaultHTTPListen is the read-only ops server. Loopback keeps the
+	// dashboard off the network unless the operator opts in.
+	DefaultHTTPListen = "127.0.0.1:8080"
 )
 
 // Config is the top-level controller configuration.
@@ -66,6 +71,13 @@ type Config struct {
 	Allowlist      Allowlist     `yaml:"allowlist"`
 	Probe          Probe         `yaml:"probe"`
 
+	// Log is the process logger. Environment variables override it.
+	Log Log `yaml:"log"`
+	// HTTP is the read-only ops server. A nil Listen means the default
+	// until defaults are applied. After Parse, Listen is non-nil and an
+	// empty string disables the server.
+	HTTP HTTP `yaml:"http"`
+
 	// BGP holds the iBGP sessions to the edge routers (RIB view, #6).
 	BGP BGP `yaml:"bgp"`
 
@@ -78,6 +90,29 @@ type Config struct {
 	Scorer    *PluginSpec  `yaml:"scorer"`
 	Announcer *PluginSpec  `yaml:"announcer"`
 	Notifiers []PluginSpec `yaml:"notifiers"`
+}
+
+// Log configures slog output.
+type Log struct {
+	// Level is debug, info, warn, or error.
+	Level string `yaml:"level"`
+	// Format is text or json.
+	Format string `yaml:"format"`
+}
+
+// HTTP is the read-only health, metrics, API, and dashboard server.
+type HTTP struct {
+	// Listen is host:port. Nil means "apply the default". A pointer to
+	// an empty string disables the server (http.listen: "").
+	Listen *string `yaml:"listen"`
+}
+
+// HTTPListen is the address to bind, or "" when the server is disabled.
+func (c *Config) HTTPListen() string {
+	if c == nil || c.HTTP.Listen == nil {
+		return DefaultHTTPListen
+	}
+	return *c.HTTP.Listen
 }
 
 // BGP configures the embedded BGP speaker.
@@ -225,10 +260,21 @@ func (c *Config) applyDefaults() {
 	if c.ImprovementTTL == 0 {
 		c.ImprovementTTL = DefaultImprovementTTL
 	}
+	if strings.TrimSpace(c.Log.Level) == "" {
+		c.Log.Level = "info"
+	}
+	if strings.TrimSpace(c.Log.Format) == "" {
+		c.Log.Format = "text"
+	}
+	if c.HTTP.Listen == nil {
+		s := DefaultHTTPListen
+		c.HTTP.Listen = &s
+	}
 }
 
 // Validate checks the config and returns all problems found, joined.
 func (c *Config) Validate() error {
+	c.normalize()
 	var errs []error
 	add := func(format string, a ...any) { errs = append(errs, fmt.Errorf(format, a...)) }
 
@@ -403,6 +449,22 @@ func (c *Config) Validate() error {
 		add("probe.per_target_concurrency %d must be between 1 and %d", c.Probe.PerTargetConcurrency, MaxProbePerTargetConcurrency)
 	}
 
+	switch c.Log.Level {
+	case "debug", "info", "warn", "warning", "error":
+	default:
+		add("log.level %q is invalid (want debug, info, warn, or error)", c.Log.Level)
+	}
+	switch c.Log.Format {
+	case "text", "json":
+	default:
+		add("log.format %q is invalid (want text or json)", c.Log.Format)
+	}
+	if c.HTTP.Listen != nil {
+		if err := validateListen(*c.HTTP.Listen); err != nil {
+			add("http.listen: %v", err)
+		}
+	}
+
 	// Inject mode has extra safety requirements (see AGENTS.md).
 	if c.MoreSpecificBits != nil {
 		add("more_specific_bits is removed: Packeteer announces only the exact prefix learned from the RIB")
@@ -433,6 +495,32 @@ func (c *Config) Validate() error {
 	}
 
 	return errors.Join(errs...)
+}
+
+func (c *Config) normalize() {
+	c.Log.Level = strings.ToLower(strings.TrimSpace(c.Log.Level))
+	c.Log.Format = strings.ToLower(strings.TrimSpace(c.Log.Format))
+	if c.HTTP.Listen != nil {
+		s := strings.TrimSpace(*c.HTTP.Listen)
+		c.HTTP.Listen = &s
+	}
+}
+
+// validateListen accepts "" (disabled) or host:port. IPv6 addresses must
+// be in brackets. The host is not resolved.
+func validateListen(addr string) error {
+	if addr == "" {
+		return nil
+	}
+	_, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return fmt.Errorf("%q must be host:port (wrap IPv6 in brackets, for example \"[2001:db8::1]:8080\")", addr)
+	}
+	n, err := strconv.Atoi(port)
+	if err != nil || n < 0 || n > 65535 {
+		return fmt.Errorf("%q port must be between 0 and 65535", addr)
+	}
+	return nil
 }
 
 // validateCommunity checks a standard RFC 1997 community in "asn:value" form.

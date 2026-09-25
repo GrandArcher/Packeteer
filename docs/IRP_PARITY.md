@@ -25,9 +25,9 @@ Milestones:
 
 | Status | Count |
 |---|---|
-| done | 19 |
+| done | 23 |
 | in progress | 0 |
-| planned | 59 |
+| planned | 55 |
 | won't do | 3 |
 
 ## Performance optimization
@@ -130,10 +130,10 @@ Milestones:
 
 | Capability | IRP doc ref | Status | Milestone | Plugin kind | Issue |
 |---|---|---|---|---|---|
-| Web UI dashboard (providers, per-prefix metrics, current vs recommended, improvements) | 3.3 Dashboards | planned | v0.1 | core (`internal/httpapi`) | #9 |
+| Web UI dashboard (providers, per-prefix metrics, current vs recommended, improvements) | 3.3 Dashboards | done | v0.1 | core (`internal/httpapi`) | #9 |
 | Custom dashboards / widgets | 3.3.1-3.3.3 | planned | v0.4 | UI | #34 |
-| REST API | 1.2.15, 4.3 | planned | v0.1 | core | #9 |
-| Prometheus metrics | - | planned | v0.1 | core (exporter later) | #9 |
+| REST API | 1.2.15, 4.3 | done | v0.1 | core | #9 |
+| Prometheus metrics | - | done | v0.1 | core (`internal/httpapi`) | #9 |
 | Reports: improvements, before/after latency/loss, provider efficiency, top prefixes/ASNs, country stats, cost savings | 3.4, 3.5 | planned | v0.2 | storage/exporter | #23 |
 | Historical records / storage | 3.4.7 | planned | v0.2 | storage/exporter | #23 |
 | Looking glass, traceroute, whois, manual prefix probe | 3.9 | planned | v0.2 | core + prober | #24 |
@@ -148,7 +148,7 @@ Milestones:
 | Config backup / restore | 2.14 | planned | v0.4 | core | #31 |
 | Configuration editor and setup wizards | 3.13, 3.2 | planned | v0.4 | UI | #34 |
 | Improvement weights | 1.2.13 | planned | v0.4 | scorer | #34 |
-| Structured logging | - | planned | v0.1 | core | #9 |
+| Structured logging | - | done | v0.1 | core | #9 |
 
 ## Deployment
 

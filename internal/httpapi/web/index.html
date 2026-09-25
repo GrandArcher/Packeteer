@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<meta name="robots" content="noindex">
+<title>Packeteer</title>
+<link rel="stylesheet" href="/app.css">
+</head>
+<body>
+<header class="top">
+  <div>
+    <h1>Packeteer</h1>
+    <p class="tag">Read-only. Refreshes every 5 seconds.</p>
+  </div>
+  <div id="status" class="status">Loading</div>
+  <button type="button" id="refresh">Refresh</button>
+</header>
+<main>
+  <section>
+    <h2>Providers</h2>
+    <div id="providers"></div>
+  </section>
+  <section>
+    <h2>Prefixes</h2>
+    <p class="tag">Latency, loss, and jitter per provider. Current exit and recommended exit come from the latest decision.</p>
+    <div id="prefixes"></div>
+  </section>
+  <section>
+    <h2>Active improvements</h2>
+    <div id="improvements"></div>
+  </section>
+</main>
+<footer>
+  <a href="/metrics">metrics</a>
+  <a href="/api/providers">providers</a>
+  <a href="/api/probes">probes</a>
+  <a href="/api/prefixes">prefixes</a>
+  <a href="/api/decisions">decisions</a>
+  <a href="/api/improvements">improvements</a>
+</footer>
+<script src="/app.js"></script>
+</body>
+</html>
