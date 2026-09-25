@@ -1,0 +1,28 @@
+# Example only. Keep mode: observe in this repository.
+mode: observe
+
+asn: 64512
+router_id: 192.0.2.10
+packeteer_community: "64512:666"
+max_improvements: 50
+hold_time: 15m
+
+thresholds:
+  min_loss_delta_pct: 1.0
+  min_rtt_delta_ms: 15
+
+providers:
+  - name: transit-a
+    source_ip: 192.0.2.11
+    next_hop: 192.0.2.1
+  - name: transit-b
+    source_ip: 192.0.2.12
+    next_hop: 192.0.2.2
+
+allowlist:
+  prefixes: []
+
+probe:
+  interval: 30s
+  timeout: 2s
+  packets: 10
