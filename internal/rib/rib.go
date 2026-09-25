@@ -91,6 +91,7 @@ type View struct {
 	peers     map[netip.Addr]PeerState
 	neighbors map[netip.Addr]bool
 	onChange  []func()
+	gen       uint64 // increments on each notify; 0 before the first change
 }
 
 // New validates options and creates a stopped view.
@@ -231,12 +232,22 @@ func (v *View) Stop(context.Context) error {
 }
 
 func (v *View) notify() {
-	v.mu.RLock()
+	v.mu.Lock()
+	v.gen++
 	fns := append([]func(){}, v.onChange...)
-	v.mu.RUnlock()
+	v.mu.Unlock()
 	for _, fn := range fns {
 		fn()
 	}
+}
+
+// Generation changes whenever routes or session state change. Consumers
+// cache work against it and skip a rebuild while it stays the same.
+// Callbacks registered with OnChange run after the increment.
+func (v *View) Generation() uint64 {
+	v.mu.RLock()
+	defer v.mu.RUnlock()
+	return v.gen
 }
 
 func (v *View) handleEvent(r *api.WatchEventResponse) {

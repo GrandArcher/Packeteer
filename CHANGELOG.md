@@ -2,6 +2,15 @@
 
 All notable changes to Packeteer are documented here. Versions are Git tags on `main`. The image tags `ghcr.io/grandarcher/packeteer:0.1.0` and `:latest` are published from the `v0.1.0` tag. `:edge` tracks `main`.
 
+## [Unreleased]
+
+### Added
+
+- `udp` prober. A datagram reply counts. An ICMP destination-unreachable counts only when the sender is the target, so a firewall `REJECT` is loss. It is not in the default chain. A TCP RST from a middlebox is still indistinguishable from the target.
+- `traceroute` target source. When the configured host does not answer, probes move to the last stable hop. The prefix is unchanged and the hop is not announced. Discovery runs in the background, returns the last cache immediately, and is capped by `budget` (default 10s).
+- `vip` target source. Prefixes, and prefixes whose learned AS path contains a listed ASN, are probed on their own interval. `max_targets` (default 100) caps the list. The expansion is rebuilt only when the RIB changes. The interval must be shorter than the staleness window, and it cannot slow a prefix another source already listed. The global packet rate limit still applies. ASN matches wait until the RIB is ready.
+- Retry probing. `probe.retry_loss_pct` (default off) re-measures a lossy sample with `probe.retry_packets` before it is stored.
+
 ## [0.1.0] - 2026-09-25
 
 First release. An observe-first BGP path performance controller in one container. Injection is opt-in and is tested in CI against FRR with documentation prefixes (RFC 5737) and the private ASN 64512.

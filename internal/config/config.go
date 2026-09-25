@@ -185,6 +185,13 @@ type Probe struct {
 	RateLimitPPS int `yaml:"rate_limit_pps"`
 	// PerTargetConcurrency caps concurrent probe runs toward one host.
 	PerTargetConcurrency int `yaml:"per_target_concurrency"`
+	// RetryLossPct, when greater than zero, re-probes a path with
+	// RetryPackets before the result is stored if its loss is at least
+	// this percent. Zero disables retry.
+	RetryLossPct float64 `yaml:"retry_loss_pct"`
+	// RetryPackets is the packet count of that second probe. Zero means
+	// three times packets when retry is enabled, and is otherwise unused.
+	RetryPackets int `yaml:"retry_packets"`
 }
 
 // Load reads, parses, defaults, and validates the config file at path.
@@ -246,6 +253,16 @@ func (c *Config) applyDefaults() {
 	}
 	if c.Probe.PerTargetConcurrency == 0 {
 		c.Probe.PerTargetConcurrency = DefaultProbePerTargetConcurrency
+	}
+	if c.Probe.RetryLossPct > 0 && c.Probe.RetryPackets == 0 {
+		n := c.Probe.Packets * 3
+		if n < 1 {
+			n = DefaultProbePackets * 3
+		}
+		if n > MaxProbePackets {
+			n = MaxProbePackets
+		}
+		c.Probe.RetryPackets = n
 	}
 	if len(c.Probers) == 0 {
 		// ICMP echo with TCP-SYN (port 443) fallback.
@@ -380,6 +397,12 @@ func (c *Config) Validate() error {
 	}
 	if c.Probe.Packets < 1 || c.Probe.Packets > MaxProbePackets {
 		add("probe.packets %d must be between 1 and %d", c.Probe.Packets, MaxProbePackets)
+	}
+	if c.Probe.RetryLossPct < 0 || c.Probe.RetryLossPct > 100 {
+		add("probe.retry_loss_pct %v must be between 0 and 100", c.Probe.RetryLossPct)
+	}
+	if c.Probe.RetryPackets < 0 || c.Probe.RetryPackets > MaxProbePackets {
+		add("probe.retry_packets %d must be between 0 and %d", c.Probe.RetryPackets, MaxProbePackets)
 	}
 
 	if c.BGP.ListenPort < 0 || c.BGP.ListenPort > 65535 {

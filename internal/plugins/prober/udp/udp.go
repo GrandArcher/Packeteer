@@ -1,47 +1,43 @@
-// Package tcp implements the "tcp" prober: it times TCP handshakes to a
-// port (default 443) from the provider's source address. A SYN-ACK or a RST
-// both count as a reply; the handshake is aborted with RST right away.
-//
-// A middlebox RST is indistinguishable from the target's RST: the kernel
-// reports both as ECONNREFUSED and the RST is often sourced from the
-// destination address. A firewall that rejects with tcp-reset can therefore
-// look like a healthy low-latency path. The UDP prober does not have this
-// gap for ICMP, because the unreachable names the host that sent it.
-package tcp
+// Package udp implements the "udp" prober: it sends one datagram per
+// packet to a port (default 33434) from the provider's source address.
+// A UDP reply counts. On Linux, an ICMP destination-unreachable counts
+// only when the host that sent it is the target. A firewall REJECT
+// (icmp-port-unreachable from some other address) is loss, not a reply.
+// The kernel delivers the unreachable on the socket error queue, so this
+// prober does not need a raw socket.
+package udp
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"net"
-	"net/netip"
-	"syscall"
 	"time"
 
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
 )
 
 // TypeName is the plugin type used in config.
-const TypeName = "tcp"
+const TypeName = "udp"
 
 // Defaults.
 const (
-	DefaultPort           = 443
+	DefaultPort           = 33434
 	DefaultPacketInterval = 100 * time.Millisecond
 )
 
 func init() { plugin.Probers.Register(TypeName, New) }
 
-// Config is the tcp prober's config block.
+// Config is the udp prober's config block.
 type Config struct {
 	Port           int           `yaml:"port"`
 	PacketInterval time.Duration `yaml:"packet_interval"`
 }
 
-// Prober measures TCP connect time.
+// Prober measures UDP reachability and the time until a reply or an
+// ICMP port-unreachable.
 type Prober struct {
 	plugin.Base
-	port     uint16
+	port     int
 	interval time.Duration
 }
 
@@ -63,7 +59,7 @@ func New(c plugin.Config, _ plugin.Env) (plugin.Prober, error) {
 	if cfg.PacketInterval == 0 {
 		cfg.PacketInterval = DefaultPacketInterval
 	}
-	return &Prober{port: uint16(cfg.Port), interval: cfg.PacketInterval}, nil
+	return &Prober{port: cfg.Port, interval: cfg.PacketInterval}, nil
 }
 
 // Probe implements plugin.Prober.
@@ -71,8 +67,12 @@ func (p *Prober) Probe(ctx context.Context, req plugin.ProbeRequest) (plugin.Pro
 	if req.Source.Is4() != req.Target.Is4() {
 		return plugin.ProbeResult{}, fmt.Errorf("source %s and target %s differ in address family", req.Source, req.Target)
 	}
-	d := net.Dialer{LocalAddr: &net.TCPAddr{IP: req.Source.AsSlice()}, Timeout: req.Timeout}
-	addr := netip.AddrPortFrom(req.Target, p.port).String()
+	network := "udp4"
+	if !req.Source.Is4() {
+		network = "udp6"
+	}
+	laddr := &net.UDPAddr{IP: req.Source.AsSlice()}
+	raddr := &net.UDPAddr{IP: req.Target.AsSlice(), Port: p.port}
 	res := plugin.ProbeResult{}
 	for i := 0; i < req.Count; i++ {
 		if err := ctx.Err(); err != nil {
@@ -80,19 +80,10 @@ func (p *Prober) Probe(ctx context.Context, req plugin.ProbeRequest) (plugin.Pro
 		}
 		start := time.Now()
 		res.Sent++
-		c, err := d.DialContext(ctx, "tcp", addr)
-		rtt := time.Since(start)
-		switch {
-		case err == nil:
-			if tc, ok := c.(*net.TCPConn); ok {
-				_ = tc.SetLinger(0) // RST instead of FIN: no TIME_WAIT buildup
-			}
-			_ = c.Close()
+		if rtt, ok, err := onePacket(ctx, network, laddr, raddr, req.Timeout, start); err != nil {
+			return res, err
+		} else if ok {
 			res.RTTs = append(res.RTTs, rtt)
-		case errors.Is(err, syscall.ECONNREFUSED):
-			res.RTTs = append(res.RTTs, rtt) // host answered with RST
-		case errors.Is(err, syscall.EADDRNOTAVAIL):
-			return res, fmt.Errorf("%w: %s: %v", plugin.ErrSourceUnavailable, req.Source, err)
 		}
 		if i < req.Count-1 {
 			if wait := p.interval - time.Since(start); wait > 0 {

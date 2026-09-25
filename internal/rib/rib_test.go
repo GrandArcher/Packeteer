@@ -134,6 +134,23 @@ func newView(t *testing.T, r *fakeRouter) *View {
 	return v
 }
 
+func TestGenerationIncrementsOnNotify(t *testing.T) {
+	v, err := New(Options{
+		ASN: asn, RouterID: netip.MustParseAddr("192.0.2.10"),
+		Neighbors: []Neighbor{{Address: netip.MustParseAddr("192.0.2.1")}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v.Generation() != 0 {
+		t.Fatalf("generation = %d", v.Generation())
+	}
+	v.notify()
+	if v.Generation() != 1 {
+		t.Fatalf("generation = %d, want 1", v.Generation())
+	}
+}
+
 func TestPeerHoldTimerIsBounded(t *testing.T) {
 	r := newRouter(t)
 	v := newView(t, r)

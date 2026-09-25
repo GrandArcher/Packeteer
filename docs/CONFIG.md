@@ -84,8 +84,12 @@ A learned prefix is eligible when it is equal to an entry or more specific and i
 | `workers` | 8 | 1–1024 concurrent probe runs. |
 | `rate_limit_pps` | 100 | 1–100000 packets per second, global. |
 | `per_target_concurrency` | 2 | 1–64 concurrent runs toward one destination host. |
+| `retry_loss_pct` | 0 | 0–100. `0` disables retry. Above zero, a sample whose loss is at least this percent is probed again before it is stored. |
+| `retry_packets` | 0 | 0–1000. Packet count of that second probe. When `retry_loss_pct` is set and this is `0`, it becomes three times `packets`, capped at 1000. |
 
-A measurement older than `3 * interval + packets * timeout` is stale. That same duration is the deadline for one probe round. The decision loop also wakes every `interval`, so a round that never finishes still withdraws once results are stale.
+A measurement older than `3 * interval + packets * timeout` is stale. When retry is enabled the window is `3 * interval + (packets + retry_packets) * timeout`. That same duration is the deadline for one probe round. The decision loop also wakes every `interval`, so a round that never finishes still withdraws once results are stale.
+
+The retry sample replaces the first one. Both waits go through `rate_limit_pps`. Targets from the `vip` source carry their own interval; the scheduler probes a prefix when that interval has elapsed and leaves the other results in place. A VIP interval can only shorten the cadence. An unset target interval means `probe.interval`, so a longer VIP interval does not slow a prefix that static or flow already listed. Sources that do not carry a shorter interval are re-read on `probe.interval`, not on every VIP wake. A completed round, including one that only probed VIP prefixes, still runs the decision engine. `Run` is what the process uses. A prefix that disappears from every source is dropped on the next completed round, including a round that probes nothing because nothing is due.
 
 ### `log`
 
@@ -182,7 +186,16 @@ Built-in types are listed in [PLUGINS.md](PLUGINS.md). Their `config` keys:
 
 | Key | Default | Values |
 |---|---|---|
-| `port` | 443 | 1–65535. A SYN-ACK or a RST counts as a reply. |
+| `port` | 443 | 1–65535. A SYN-ACK or a RST counts as a reply. A middlebox RST is not distinguishable from the target's RST. |
+| `packet_interval` | `100ms` | Not negative. |
+
+### Prober `udp`
+
+Not in the default chain. A UDP reply counts. An ICMP destination-unreachable counts only when the host that sent it is the target; a firewall `REJECT` (icmp-port-unreachable from another address) is loss. No raw socket. The check reads the offender from the socket error queue and is Linux-only; the container image is Linux.
+
+| Key | Default | Values |
+|---|---|---|
+| `port` | 33434 | 1–65535. |
 | `packet_interval` | `100ms` | Not negative. |
 
 ### Prober `fixed`
@@ -221,6 +234,37 @@ Each target:
 | `prefix` | Required CIDR, no host bits. Unique in the list. |
 | `host` | Optional address inside `prefix`. Default is the first address of the prefix. |
 | `weight` | Optional, not negative. |
+
+### Source `traceroute`
+
+Off unless this source is listed. UDP traceroute toward each target. Discovery runs in the background after `Start`. `Targets` returns the last cache immediately and does not trace, so a slow hop cannot use up the probe round. One pass is capped by `budget`. The discovered host is only the address that gets probed. The prefix is unchanged, and nothing is announced from this source.
+
+| Key | Default | Bounds |
+|---|---|---|
+| `targets` | none | Required. Same shape as `static` (`prefix`, optional `host` inside it, optional `weight`). |
+| `max_hops` | 16 | 1–64. |
+| `probes` | 3 | 1–10 probes at each TTL. |
+| `min_replies` | 2 | 1–`probes`. A hop is stable when one address answers at least this many times and there is no tie. When `probes` is 1 the default is 1. |
+| `timeout` | `500ms` | Per probe, `1ns`–`5s`. Zero uses the default. |
+| `port` | 33434 | 1–65535. Destination UDP port. |
+| `source` | unset | Local address to bind. Empty uses the kernel's default route. Must match the targets' address family. |
+| `interval` | `5m` | `1s`–`24h`. How often discovery runs. |
+| `budget` | `10s` | At least `timeout`, at most `30s`. Wall clock for one pass across every target. Each target gets an equal share. This is under the default round deadline (about 110s). |
+
+Three silent TTLs after a stable hop stop the trace. When the configured host answers, it stays the probe host. Otherwise the stable hop with the highest TTL is used. A pass that finishes no target leaves the previous cache in place. Until the first pass finishes, the source contributes no prefixes. The socket calls are Linux-only; the container image is Linux, and other systems still compile.
+
+### Source `vip`
+
+Off unless this source is listed. Critical prefixes, and prefixes whose learned AS path contains a listed ASN, are probed on `interval`. The global `probe.rate_limit_pps` still applies.
+
+| Key | Default | Bounds |
+|---|---|---|
+| `interval` | none | Required, at least `1s`. Must be shorter than the staleness window (`3 * probe.interval + packets * timeout`, plus retry packets when retry is on). The controller refuses to start otherwise. Shorter than `probe.interval` is the usual setting. |
+| `prefixes` | none | CIDRs, no host bits, no default route, no duplicates. Optional `host` must sit inside the prefix. Count toward `max_targets`. |
+| `asns` | none | Non-zero ASNs, no duplicates. Matched against the learned AS path only while the RIB is ready. |
+| `max_targets` | 100 | 1–10000. Cap on configured prefixes plus ASN matches. The list is truncated and a warning is logged. The expansion is rebuilt only when the RIB changes. |
+
+At least one prefix or ASN is required. The prefix list cannot be longer than `max_targets`. A prefix that is also returned by an earlier source keeps that source's host. A later interval wins only when it is shorter than the interval already chosen, and an unset interval means `probe.interval`. Listing a transit ASN does not turn the whole table into targets.
 
 ### Source `flow`
 

@@ -448,7 +448,9 @@ func TestRunOnceHungProberKeepsResults(t *testing.T) {
 func TestRunOnceHungTargetSourceKeepsResults(t *testing.T) {
 	release := make(chan struct{})
 	defer close(release)
+	now := time.Unix(1_700_000_000, 0)
 	o := opts()
+	o.Now = func() time.Time { return now }
 	o.RoundTimeout = 80 * time.Millisecond
 	var rounds atomic.Int32
 	o.OnRound = func() { rounds.Add(1) }
@@ -461,9 +463,353 @@ func TestRunOnceHungTargetSourceKeepsResults(t *testing.T) {
 	if rounds.Load() != 1 || len(e.Results()) != 1 {
 		t.Fatalf("first round rounds=%d results=%d", rounds.Load(), len(e.Results()))
 	}
+	now = now.Add(o.Interval) // the first success is cached for one interval
 	waitRound(t, e)
 	if rounds.Load() != 1 || len(e.Results()) != 1 || !e.Results()[0].OK() {
 		t.Fatalf("hung target source replaced results: rounds=%d %+v", rounds.Load(), e.Results())
+	}
+}
+
+func TestRetryReplacesHighLoss(t *testing.T) {
+	var mu sync.Mutex
+	var counts []int
+	p := &fakeProber{fn: func(_ context.Context, req plugin.ProbeRequest) (plugin.ProbeResult, error) {
+		mu.Lock()
+		counts = append(counts, req.Count)
+		n := len(counts)
+		mu.Unlock()
+		if n == 1 {
+			return plugin.ProbeResult{Sent: req.Count}, nil // 100% loss
+		}
+		return plugin.ProbeResult{Sent: req.Count, RTTs: ms(5, 5, 5, 5)}, nil
+	}}
+	lim := &countingLimiter{}
+	o := opts()
+	o.Packets = 2
+	o.RetryLossPct = 50
+	o.RetryPackets = 4
+	o.Limiter = lim
+	e, err := New([]Provider{provA}, []NamedProber{{"udp", p}}, src(plugin.Target{Prefix: pfx1}), o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.RunOnce(context.Background())
+	if len(counts) != 2 || counts[0] != 2 || counts[1] != 4 {
+		t.Fatalf("probe counts = %v", counts)
+	}
+	r := e.Results()[0]
+	if !r.OK() || r.Stats.Sent != 4 || r.Stats.LossPct != 0 || r.Prober != "udp" {
+		t.Fatalf("result = %+v", r)
+	}
+	if lim.total != 6 {
+		t.Fatalf("limiter tokens = %d, want 6", lim.total)
+	}
+	if !e.Providers()[0].Up {
+		t.Fatal("provider should stay up")
+	}
+}
+
+func TestRetrySkippedBelowThreshold(t *testing.T) {
+	p := &fakeProber{fn: func(_ context.Context, req plugin.ProbeRequest) (plugin.ProbeResult, error) {
+		// 1 reply of 4 is 75% loss, under an 80% threshold.
+		return plugin.ProbeResult{Sent: req.Count, RTTs: ms(5)}, nil
+	}}
+	o := opts()
+	o.Packets = 4
+	o.RetryLossPct = 80
+	o.RetryPackets = 8
+	e, _ := New([]Provider{provA}, []NamedProber{{"p", p}}, src(plugin.Target{Prefix: pfx1}), o)
+	e.RunOnce(context.Background())
+	if p.calls.Load() != 1 {
+		t.Fatalf("calls = %d, want 1", p.calls.Load())
+	}
+
+	off := &fakeProber{fn: func(_ context.Context, req plugin.ProbeRequest) (plugin.ProbeResult, error) {
+		return plugin.ProbeResult{Sent: req.Count}, nil
+	}}
+	o.RetryLossPct = 0
+	e, _ = New([]Provider{provA}, []NamedProber{{"p", off}}, src(plugin.Target{Prefix: pfx1}), o)
+	e.RunOnce(context.Background())
+	if off.calls.Load() != 1 {
+		t.Fatalf("disabled retry calls = %d", off.calls.Load())
+	}
+}
+
+func TestRetrySourceDownFailsClosed(t *testing.T) {
+	var n atomic.Int32
+	p := &fakeProber{fn: func(_ context.Context, req plugin.ProbeRequest) (plugin.ProbeResult, error) {
+		if n.Add(1) == 1 {
+			return plugin.ProbeResult{Sent: req.Count}, nil
+		}
+		return plugin.ProbeResult{}, fmt.Errorf("%w: gone", plugin.ErrSourceUnavailable)
+	}}
+	o := opts()
+	o.RetryLossPct = 1
+	o.RetryPackets = 3
+	e, _ := New([]Provider{provA}, []NamedProber{{"p", p}}, src(plugin.Target{Prefix: pfx1}), o)
+	e.RunOnce(context.Background())
+	r := e.Results()[0]
+	if r.OK() || !strings.Contains(r.Err, "probe source address unavailable") {
+		t.Fatalf("result = %+v", r)
+	}
+	if e.Providers()[0].Up {
+		t.Fatal("provider should be down")
+	}
+}
+
+func TestVIPIntervalAndRateLimit(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0)
+	o := opts()
+	o.Packets = 2
+	o.Interval = 100 * time.Millisecond
+	o.Now = func() time.Time { return now }
+	lim := &countingLimiter{}
+	o.Limiter = lim
+	var mu sync.Mutex
+	hits := map[string]int{}
+	p := &fakeProber{fn: func(_ context.Context, req plugin.ProbeRequest) (plugin.ProbeResult, error) {
+		mu.Lock()
+		hits[req.Target.String()]++
+		mu.Unlock()
+		rtt := 10.0
+		if req.Target.String() == "198.51.100.10" {
+			rtt = 1
+		}
+		return plugin.ProbeResult{Sent: req.Count, RTTs: ms(rtt, rtt)}, nil
+	}}
+	vipTarget := plugin.Target{Prefix: pfx1, Host: netip.MustParseAddr("198.51.100.10"), Interval: 20 * time.Millisecond}
+	normal := plugin.Target{Prefix: pfx2, Host: netip.MustParseAddr("203.0.113.10")}
+	e, err := New([]Provider{provA}, []NamedProber{{"p", p}}, src(vipTarget, normal), o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	last := map[netip.Prefix]time.Time{}
+	step := func() {
+		t.Helper()
+		probed, done := e.runRound(context.Background(), func(tg plugin.Target) bool {
+			return e.targetDue(tg, last)
+		}, true)
+		if !done {
+			t.Fatal("round did not complete")
+		}
+		for pref := range probed {
+			last[pref] = now
+		}
+	}
+	step()
+	if hits["198.51.100.10"] != 1 || hits["203.0.113.10"] != 1 {
+		t.Fatalf("first round %+v", hits)
+	}
+	now = now.Add(20 * time.Millisecond)
+	step()
+	if hits["198.51.100.10"] != 2 || hits["203.0.113.10"] != 1 {
+		t.Fatalf("vip-only round %+v", hits)
+	}
+	var sawNorm bool
+	for _, r := range e.Results() {
+		if r.Prefix == pfx2 && r.Stats.RTTAvg == 10*time.Millisecond {
+			sawNorm = true
+		}
+	}
+	if !sawNorm {
+		t.Fatalf("normal result dropped: %+v", e.Results())
+	}
+	if lim.total != 3*o.Packets {
+		t.Fatalf("limiter tokens = %d, want %d", lim.total, 3*o.Packets)
+	}
+	e.RunOnce(context.Background())
+	if hits["203.0.113.10"] != 2 || hits["198.51.100.10"] != 3 {
+		t.Fatalf("RunOnce hits = %+v", hits)
+	}
+	if lim.total != 5*o.Packets {
+		t.Fatalf("limiter after RunOnce = %d", lim.total)
+	}
+}
+
+func TestShorterIntervalWins(t *testing.T) {
+	o := opts()
+	o.Interval = 30 * time.Second
+	e, _ := New([]Provider{provA}, []NamedProber{{"p", &fakeProber{fn: ok(1)}}}, []NamedSource{
+		{Name: "static", Source: &fakeSource{targets: []plugin.Target{{Prefix: pfx1, Host: netip.MustParseAddr("198.51.100.9")}}}},
+		{Name: "vip", Source: &fakeSource{targets: []plugin.Target{{Prefix: pfx1, Interval: 5 * time.Second}, {Prefix: pfx2, Interval: 5 * time.Second}}}},
+	}, o)
+	ts := e.Targets(context.Background())
+	if len(ts) != 2 {
+		t.Fatalf("targets = %+v", ts)
+	}
+	if ts[0].Host.String() != "198.51.100.9" || ts[0].Interval != 5*time.Second {
+		t.Fatalf("merged = %+v", ts[0])
+	}
+	if ts[1].Prefix != pfx2 || ts[1].Interval != 5*time.Second {
+		t.Fatalf("vip-only = %+v", ts[1])
+	}
+}
+
+func TestLongerVIPIntervalDoesNotSlowPrefix(t *testing.T) {
+	o := opts()
+	o.Interval = 30 * time.Second
+	e, _ := New([]Provider{provA}, []NamedProber{{"p", &fakeProber{fn: ok(1)}}}, []NamedSource{
+		{Name: "static", Source: &fakeSource{targets: []plugin.Target{{Prefix: pfx1, Host: netip.MustParseAddr("198.51.100.9")}}}},
+		{Name: "vip", Source: &fakeSource{targets: []plugin.Target{{Prefix: pfx1, Interval: 5 * time.Minute}, {Prefix: pfx2, Interval: 5 * time.Minute}}}},
+	}, o)
+	ts := e.Targets(context.Background())
+	if len(ts) != 2 {
+		t.Fatalf("targets = %+v", ts)
+	}
+	if ts[0].Host.String() != "198.51.100.9" || ts[0].Interval != 0 {
+		t.Fatalf("longer vip interval slowed the prefix: %+v", ts[0])
+	}
+	if ts[1].Prefix != pfx2 || ts[1].Interval != 5*time.Minute {
+		t.Fatalf("vip-only = %+v", ts[1])
+	}
+
+	// VIP listed first still cannot keep a cadence slower than the engine
+	// once a later source names the same prefix.
+	e, _ = New([]Provider{provA}, []NamedProber{{"p", &fakeProber{fn: ok(1)}}}, []NamedSource{
+		{Name: "vip", Source: &fakeSource{targets: []plugin.Target{{Prefix: pfx1, Host: netip.MustParseAddr("198.51.100.8"), Interval: 5 * time.Minute}}}},
+		{Name: "static", Source: &fakeSource{targets: []plugin.Target{{Prefix: pfx1, Host: netip.MustParseAddr("198.51.100.9")}}}},
+	}, o)
+	ts = e.Targets(context.Background())
+	if len(ts) != 1 || ts[0].Host.String() != "198.51.100.8" || ts[0].Interval != 0 {
+		t.Fatalf("first host kept, interval not shortened to the engine: %+v", ts)
+	}
+}
+
+type countingSource struct {
+	plugin.Base
+	mu      sync.Mutex
+	n       int
+	targets []plugin.Target
+	err     error
+}
+
+func (s *countingSource) Calls() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.n
+}
+
+func (s *countingSource) Targets(context.Context) ([]plugin.Target, error) {
+	s.mu.Lock()
+	s.n++
+	s.mu.Unlock()
+	return s.targets, s.err
+}
+
+func TestNonVIPSourceCachedAcrossShortWake(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0)
+	o := opts()
+	o.Now = func() time.Time { return now }
+	o.Interval = 30 * time.Second
+	static := &countingSource{targets: []plugin.Target{{Prefix: pfx2, Host: netip.MustParseAddr("203.0.113.10")}}}
+	vip := &countingSource{targets: []plugin.Target{{Prefix: pfx1, Host: netip.MustParseAddr("198.51.100.10"), Interval: time.Second}}}
+	e, err := New([]Provider{provA}, []NamedProber{{"p", &fakeProber{fn: ok(1)}}}, []NamedSource{
+		{Name: "static", Source: static},
+		{Name: "vip", Source: vip},
+	}, o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 3; i++ {
+		if _, done := e.runRound(context.Background(), func(plugin.Target) bool { return true }, true); !done {
+			t.Fatal("round did not complete")
+		}
+		now = now.Add(time.Second)
+	}
+	if static.Calls() != 1 {
+		t.Fatalf("static source calls = %d, want 1 across VIP wakes", static.Calls())
+	}
+	if vip.Calls() != 3 {
+		t.Fatalf("vip source calls = %d, want 3", vip.Calls())
+	}
+	now = now.Add(o.Interval)
+	if _, done := e.runRound(context.Background(), func(plugin.Target) bool { return true }, true); !done {
+		t.Fatal("round did not complete")
+	}
+	if static.Calls() != 2 {
+		t.Fatalf("static source calls = %d after the engine interval, want 2", static.Calls())
+	}
+}
+
+func TestRemovedPrefixDroppedWhenNothingDue(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0)
+	o := opts()
+	o.Now = func() time.Time { return now }
+	o.Interval = time.Minute
+	var rounds atomic.Int32
+	o.OnRound = func() { rounds.Add(1) }
+	src := &fakeSource{targets: []plugin.Target{
+		{Prefix: pfx1, Host: netip.MustParseAddr("198.51.100.1")},
+		{Prefix: pfx2, Host: netip.MustParseAddr("203.0.113.1")},
+	}}
+	e, err := New([]Provider{provA}, []NamedProber{{"p", &fakeProber{fn: ok(1)}}},
+		[]NamedSource{{Name: "static", Source: src}}, o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.RunOnce(context.Background())
+	if len(e.Results()) != 2 || rounds.Load() != 1 {
+		t.Fatalf("first round results=%d rounds=%d", len(e.Results()), rounds.Load())
+	}
+	src.targets = []plugin.Target{{Prefix: pfx1, Host: netip.MustParseAddr("198.51.100.1")}}
+	now = now.Add(o.Interval) // expire the cached target list
+	probed, done := e.runRound(context.Background(), func(plugin.Target) bool { return false }, true)
+	if !done || len(probed) != 0 {
+		t.Fatalf("idle round probed=%v done=%v", probed, done)
+	}
+	rs := e.Results()
+	if len(rs) != 1 || rs[0].Prefix != pfx1 {
+		t.Fatalf("removed prefix kept: %+v", rs)
+	}
+	if rounds.Load() != 2 {
+		t.Fatalf("drop did not commit a round: %d", rounds.Load())
+	}
+}
+
+func TestRunSchedulesVIPAheadOfEngineInterval(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0)
+	o := opts()
+	o.Now = func() time.Time { return now }
+	o.Interval = 100 * time.Millisecond
+	o.Packets = 1
+	var mu sync.Mutex
+	hits := map[string]int{}
+	p := &fakeProber{fn: func(_ context.Context, req plugin.ProbeRequest) (plugin.ProbeResult, error) {
+		mu.Lock()
+		hits[req.Target.String()]++
+		mu.Unlock()
+		return plugin.ProbeResult{Sent: req.Count, RTTs: ms(1)}, nil
+	}}
+	e, err := New([]Provider{provA}, []NamedProber{{"p", p}}, []NamedSource{{Name: "s", Source: &fakeSource{targets: []plugin.Target{
+		{Prefix: pfx1, Host: netip.MustParseAddr("198.51.100.10"), Interval: 20 * time.Millisecond},
+		{Prefix: pfx2, Host: netip.MustParseAddr("203.0.113.10")},
+	}}}}, o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	steps := 0
+	o.Sleep = func(ctx context.Context, d time.Duration) error {
+		now = now.Add(d)
+		steps++
+		if steps >= 4 {
+			cancel()
+			return ctx.Err()
+		}
+		return nil
+	}
+	// Sleep is read from e.opt, which was copied at New. Set it on the engine.
+	e.opt.Sleep = o.Sleep
+	if err := e.Run(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Run = %v", err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if hits["198.51.100.10"] < 3 {
+		t.Fatalf("vip probes = %d, want at least 3", hits["198.51.100.10"])
+	}
+	if hits["203.0.113.10"] != 1 {
+		t.Fatalf("normal probes = %d, want 1 in a 100ms interval", hits["203.0.113.10"])
 	}
 }
 

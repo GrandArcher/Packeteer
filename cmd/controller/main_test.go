@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/GrandArcher/Packeteer/internal/pluginhost"
+	"github.com/GrandArcher/Packeteer/internal/plugins/source/vip"
 	"github.com/GrandArcher/Packeteer/internal/rib"
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
 )
@@ -284,6 +285,110 @@ func TestWirePrefixLookupSkipsUnreadyRIB(t *testing.T) {
 	}
 	if _, ok := src.fn(netip.MustParseAddr("198.51.100.1")); ok {
 		t.Fatal("a RIB that is not ready must not map destinations")
+	}
+}
+
+type fakeLearned struct {
+	ready  bool
+	gen    uint64
+	routes []rib.Route
+	calls  int
+}
+
+func (f *fakeLearned) Ready() bool        { return f.ready }
+func (f *fakeLearned) Generation() uint64 { return f.gen }
+func (f *fakeLearned) Routes() []rib.Route {
+	f.calls++
+	return f.routes
+}
+
+func TestLearnedSnapSkipsCopyWhenGenerationIsStable(t *testing.T) {
+	f := &fakeLearned{ready: true, gen: 3, routes: []rib.Route{
+		{Prefix: netip.MustParsePrefix("198.51.100.0/24"), ASPath: []uint32{64496}},
+		{Prefix: netip.MustParsePrefix("0.0.0.0/0"), ASPath: []uint32{64496}},
+	}}
+	var snap learnedSnap
+	g, routes := snap.get(f)
+	if g != 3 || len(routes) != 1 || routes[0].Prefix.String() != "198.51.100.0/24" || f.calls != 1 {
+		t.Fatalf("g=%d routes=%v calls=%d", g, routes, f.calls)
+	}
+	if _, routes = snap.get(f); len(routes) != 1 || f.calls != 1 {
+		t.Fatalf("copied the RIB again: calls=%d routes=%d", f.calls, len(routes))
+	}
+	f.gen = 4
+	f.routes = nil
+	if _, routes = snap.get(f); len(routes) != 0 || f.calls != 2 {
+		t.Fatalf("new generation calls=%d routes=%d", f.calls, len(routes))
+	}
+	f.ready = false
+	if g, routes = snap.get(f); g != 0 || routes != nil {
+		t.Fatalf("unready view returned g=%d routes=%v", g, routes)
+	}
+}
+
+func TestVIPIntervalMustFitStalenessWindow(t *testing.T) {
+	dir := t.TempDir()
+	write := func(interval string) string {
+		t.Helper()
+		path := filepath.Join(dir, interval+".yaml")
+		body := fmt.Sprintf(`mode: observe
+asn: 64512
+router_id: 192.0.2.10
+http: {listen: ""}
+providers:
+  - {name: a, source_ip: 192.0.2.11, next_hop: 192.0.2.1}
+sources:
+  - type: vip
+    config:
+      interval: %s
+      prefixes:
+        - {prefix: 198.51.100.0/24}
+`, interval)
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+	var out, errOut bytes.Buffer
+	if code := run(context.Background(), []string{"-check", "-config", write("5m")}, noEnv, &out, &errOut); code != 1 || !strings.Contains(errOut.String(), "staleness window") {
+		t.Fatalf("code %d stderr %q", code, errOut.String())
+	}
+	out.Reset()
+	errOut.Reset()
+	if code := run(context.Background(), []string{"-check", "-config", write("10s")}, noEnv, &out, &errOut); code != 0 {
+		t.Fatalf("code %d stderr %q", code, errOut.String())
+	}
+}
+
+func TestVIPASNNotUsedUntilRIBReady(t *testing.T) {
+	c, err := plugin.ConfigFromYAML(`
+interval: 10s
+prefixes:
+  - {prefix: 203.0.113.0/24, host: 203.0.113.8}
+asns: [64496]
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	src, err := vip.New(c, plugin.Env{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	view, err := rib.New(rib.Options{
+		ASN: 64512, RouterID: netip.MustParseAddr("192.0.2.10"),
+		Neighbors: []rib.Neighbor{{Address: netip.MustParseAddr("192.0.2.1")}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	set := &pluginhost.Set{Sources: []pluginhost.Instance[plugin.TargetSource]{{Name: "vip", Plugin: src}}}
+	wireLearnedRoutes(set, view)
+	ts, err := src.Targets(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ts) != 1 || ts[0].Prefix.String() != "203.0.113.0/24" {
+		t.Fatalf("unready RIB must not expand ASNs: %+v", ts)
 	}
 }
 

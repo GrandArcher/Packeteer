@@ -13,9 +13,12 @@ import (
 	"github.com/GrandArcher/Packeteer/internal/plugins/prober/fixed"
 	"github.com/GrandArcher/Packeteer/internal/plugins/prober/icmp"
 	"github.com/GrandArcher/Packeteer/internal/plugins/prober/tcp"
+	"github.com/GrandArcher/Packeteer/internal/plugins/prober/udp"
 	"github.com/GrandArcher/Packeteer/internal/plugins/scorer/weighted"
 	"github.com/GrandArcher/Packeteer/internal/plugins/source/flow"
 	"github.com/GrandArcher/Packeteer/internal/plugins/source/static"
+	"github.com/GrandArcher/Packeteer/internal/plugins/source/traceroute"
+	"github.com/GrandArcher/Packeteer/internal/plugins/source/vip"
 )
 
 // TestConfigDocCoversStructs fails when a yaml tag on a config struct, or an
@@ -32,10 +35,13 @@ func TestConfigDocCoversStructs(t *testing.T) {
 		config.Config{},
 		icmp.Config{},
 		tcp.Config{},
+		udp.Config{},
 		fixed.Config{},
 		fixed.PathSpec{},
 		static.Config{},
 		flow.Config{},
+		traceroute.Config{},
+		vip.Config{},
 		weighted.Config{},
 		webhook.Config{},
 		exec.Config{},

@@ -328,6 +328,36 @@ announcer:
 	}
 }
 
+func TestRetryProbeConfig(t *testing.T) {
+	cfg, err := Parse([]byte(minimalYAML + "probe:\n  retry_loss_pct: 10\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Probe.RetryLossPct != 10 || cfg.Probe.RetryPackets != 30 {
+		t.Fatalf("retry = %+v", cfg.Probe)
+	}
+	cfg, err = Parse([]byte(minimalYAML + "probe:\n  packets: 400\n  retry_loss_pct: 5\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Probe.RetryPackets != MaxProbePackets {
+		t.Fatalf("capped retry packets = %d", cfg.Probe.RetryPackets)
+	}
+	if _, err := Parse([]byte(minimalYAML + "probe:\n  retry_loss_pct: 101\n")); err == nil || !strings.Contains(err.Error(), "retry_loss_pct") {
+		t.Fatalf("err = %v", err)
+	}
+	if _, err := Parse([]byte(minimalYAML + "probe:\n  retry_packets: -1\n")); err == nil || !strings.Contains(err.Error(), "retry_packets") {
+		t.Fatalf("err = %v", err)
+	}
+	cfg, err = Parse([]byte(minimalYAML))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Probe.RetryLossPct != 0 || cfg.Probe.RetryPackets != 0 {
+		t.Fatalf("retry should default off: %+v", cfg.Probe)
+	}
+}
+
 func TestHTTPAndLog(t *testing.T) {
 	cfg, err := Parse([]byte(minimalYAML + "http:\n  listen: \"\"\nlog:\n  level: INFO\n  format: JSON\n"))
 	if err != nil {

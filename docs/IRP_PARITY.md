@@ -25,9 +25,9 @@ Milestones:
 
 | Status | Count |
 |---|---|
-| done | 24 |
+| done | 28 |
 | in progress | 0 |
-| planned | 55 |
+| planned | 51 |
 | won't do | 3 |
 
 ## Performance optimization
@@ -36,8 +36,8 @@ Milestones:
 |---|---|---|---|---|---|
 | Active probing per provider: ICMP | 1.3.1, Explorer | done | v0.1 | prober (`icmp`) | #2 |
 | Active probing per provider: TCP | 1.3.1, Explorer | done | v0.1 | prober (`tcp`) | #2 |
-| Active probing per provider: UDP | Explorer | planned | v0.2 | prober (`udp`) | #15 |
-| Traceroute-based probe target discovery | Explorer | planned | v0.2 | source (`traceroute`) | #15 |
+| Active probing per provider: UDP | Explorer | done | v0.2 | prober (`udp`) | #15 |
+| Traceroute-based probe target discovery | Explorer | done | v0.2 | source (`traceroute`) | #15 |
 | Loss / latency / jitter measurement and scoring | 1.3.1 | done | v0.1 | prober + scorer (`weighted`) | #2, #7 |
 | Throughput-aware scoring (prefix volume weighting) | 1.2.13 Improvements weight | planned | v0.2 | scorer | #23, #18 |
 | Probe sources per provider (IRP uses PBR; we use source-IP policy routing) | 2.8 Explorer, 2.8.1 PBR | done | v0.1 | core + docs | #2 |
@@ -47,11 +47,13 @@ Milestones:
 | SPAN / mirrored-traffic collector | 2.7.2 Irpspand | planned | v0.2 | source (`span`) | #21 |
 | AS-pattern outage/congestion detection (re-probe prefixes crossing a sick ASN) | 1.2.6 Outage Detection | planned | v0.2 | source (detector) | #16 |
 | Circuit issues detection | 1.2.23 | planned | v0.2 | source (detector) | #16 |
-| VIP (critical) prefixes/ASNs with more frequent probing | 1.2.7 VIP Improvements | planned | v0.2 | source / policy | #15 |
-| Retry / aggressive probing | 1.2.8 Retry Probing | planned | v0.2 | core (probe engine) | #15 |
+| VIP (critical) prefixes/ASNs with more frequent probing | 1.2.7 VIP Improvements | done | v0.2 | source (`vip`) | #15 |
+| Retry / aggressive probing | 1.2.8 Retry Probing | done | v0.2 | core (probe engine) | #15 |
 | Hysteresis, thresholds, hold time before flip | 1.3.1 | done | v0.1 | scorer | #7 |
 | Max improvements cap | 4.8 Core settings | done | v0.1 | core | #7 |
 | Improvement retirement / periodic re-probe of improvements (including a staleness timer when a probe round never finishes) | 4.8 Core settings | done | v0.1 | core | #7, #46 |
+
+UDP unreachable replies count only when the ICMP source is the probed target (#15). Traceroute discovery runs in the background under `budget` and does not block a probe round. VIP ASN expansion is capped by `max_targets` and rebuilt only when the RIB changes; the VIP interval must be shorter than the staleness window.
 
 ## Cost / commit
 

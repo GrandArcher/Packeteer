@@ -32,6 +32,8 @@ probe:
   workers: 8                  # concurrent probe runs
   rate_limit_pps: 100         # global cap on probe packets per second
   per_target_concurrency: 2   # concurrent runs toward one destination host
+  # retry_loss_pct: 20        # 0 (default) disables. Re-probe before storing a lossy sample.
+  # retry_packets: 30         # default is 3x packets when retry_loss_pct is set
 
 # Probers are tried in order: ICMP echo, then TCP connect to port 443 when
 # ICMP errors or gets no replies. This is also the default when omitted.
@@ -40,6 +42,9 @@ probers:
   - type: tcp
     config:
       port: 443
+  # - type: udp               # optional fallback. A reply or ICMP port-unreachable counts.
+  #   config:
+  #     port: 33434
 
 # Path scoring (lower is better): loss dominates, then latency, then jitter.
 scorer:
@@ -68,6 +73,22 @@ scorer:
 #       aggregate_v6: 48
 #       exclude:
 #         - 192.0.2.0/24              # destinations inside these prefixes are ignored
+#   - type: traceroute          # last stable hop when the host does not answer.
+#     config:                   # Discovery is background. Targets returns the cache.
+#       interval: 5m
+#       budget: 10s             # one pass; under the default round deadline
+#       targets:
+#         - prefix: 198.51.100.0/24
+#           host: 198.51.100.1
+#   - type: vip                 # own interval. ASNs match the learned path only.
+#     config:                   # interval must be inside the staleness window.
+#       interval: 10s
+#       max_targets: 100        # cap on prefixes plus ASN matches
+#       prefixes:
+#         - prefix: 203.0.113.0/24
+#           host: 203.0.113.1
+#       asns:
+#         - 64496
 
 # iBGP to the edge router(s). Same ASN as `asn`. The session learns best
 # paths and, only in mode: inject, carries improvements back. Graceful
