@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net/netip"
 	"os"
 	"os/signal"
 	"strings"
@@ -23,6 +24,7 @@ import (
 	"github.com/GrandArcher/Packeteer/internal/pluginhost"
 	_ "github.com/GrandArcher/Packeteer/internal/plugins/all"
 	"github.com/GrandArcher/Packeteer/internal/probe"
+	"github.com/GrandArcher/Packeteer/internal/rib"
 )
 
 // DefaultConfigPath is where the container image expects the mounted config.
@@ -96,6 +98,14 @@ func run(ctx context.Context, args []string, getenv func(string) string, stdout,
 	for _, p := range cfg.Providers {
 		fmt.Fprintf(stdout, "  - %s source_ip=%s next_hop=%s\n", p.Name, p.SourceIP, p.NextHop)
 	}
+	if len(cfg.BGP.Neighbors) == 0 {
+		fmt.Fprintln(stdout, "bgp: disabled (no bgp.neighbors)")
+	} else {
+		fmt.Fprintf(stdout, "bgp neighbors (%d, learn-only):\n", len(cfg.BGP.Neighbors))
+		for _, n := range cfg.BGP.Neighbors {
+			fmt.Fprintf(stdout, "  - %s %s\n", n.Address, n.Description)
+		}
+	}
 	fmt.Fprintf(stdout, "plugins (%d):\n", len(plugins.Summary()))
 	for _, line := range plugins.Summary() {
 		fmt.Fprintf(stdout, "  - %s\n", line)
@@ -116,6 +126,19 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 		log.Error("refusing to start", "err", err)
 		return 1
 	}
+	view, err := newRIB(cfg, log)
+	if err != nil {
+		log.Error("refusing to start", "err", err)
+		return 1
+	}
+	if view != nil {
+		if err := view.Start(ctx); err != nil {
+			log.Error("refusing to start", "err", err)
+			return 1
+		}
+		defer func() { _ = view.Stop(context.Background()) }()
+		go logRIB(ctx, view, log)
+	}
 	if err := plugins.Start(ctx); err != nil {
 		log.Error("refusing to start", "err", err)
 		return 1
@@ -123,7 +146,7 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 	if len(plugins.Sources) == 0 {
 		log.Warn("no target sources configured; nothing to probe (add a `sources:` entry)")
 	}
-	log.Info("packeteer running", "version", version, "mode", cfg.Mode, "bgp", "disabled")
+	log.Info("packeteer running", "version", version, "mode", cfg.Mode, "bgp_neighbors", len(cfg.BGP.Neighbors), "announce", "disabled")
 	_ = engine.Run(ctx)
 
 	log.Info("shutting down")
@@ -178,4 +201,57 @@ func logResult(log *slog.Logger, r probe.Result) {
 	log.Info("probe", "provider", r.Provider, "prefix", r.Prefix, "target", r.Target, "prober", r.Prober,
 		"loss_pct", s.LossPct, "rtt_avg", s.RTTAvg, "rtt_min", s.RTTMin, "rtt_max", s.RTTMax, "jitter", s.Jitter,
 		"sent", s.Sent, "received", s.Received)
+}
+
+// newRIB builds the learn-only RIB view, or returns nil when no BGP
+// neighbors are configured.
+func newRIB(cfg *config.Config, log *slog.Logger) (*rib.View, error) {
+	if len(cfg.BGP.Neighbors) == 0 {
+		return nil, nil
+	}
+	rid, err := parseAddr(cfg.RouterID)
+	if err != nil {
+		return nil, err
+	}
+	providers := map[netip.Addr]string{}
+	for _, p := range cfg.Providers {
+		nh, err := parseAddr(p.NextHop)
+		if err != nil {
+			return nil, err
+		}
+		providers[nh] = p.Name
+	}
+	var nbrs []rib.Neighbor
+	for _, n := range cfg.BGP.Neighbors {
+		a, err := parseAddr(n.Address)
+		if err != nil {
+			return nil, err
+		}
+		nb := rib.Neighbor{Address: a, Port: uint16(n.Port), Passive: n.Passive, Description: n.Description}
+		if n.LocalAddress != "" {
+			if nb.LocalAddress, err = parseAddr(n.LocalAddress); err != nil {
+				return nil, err
+			}
+		}
+		nbrs = append(nbrs, nb)
+	}
+	listen := int32(cfg.BGP.ListenPort)
+	if listen == 0 {
+		listen = -1
+	}
+	return rib.New(rib.Options{ASN: cfg.ASN, RouterID: rid, ListenPort: listen,
+		ListenAddresses: cfg.BGP.ListenAddresses, Neighbors: nbrs, Providers: providers, Logger: log})
+}
+
+func logRIB(ctx context.Context, v *rib.View, log *slog.Logger) {
+	t := time.NewTicker(time.Minute)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			log.Info("rib", "ready", v.Ready(), "prefixes", v.Len())
+		}
+	}
 }

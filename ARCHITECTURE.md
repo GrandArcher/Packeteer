@@ -19,7 +19,7 @@ flow/SNMP/static prefix list
 ## Components
 
 - **Probe worker** sources packets out each configured provider (dedicated probe address or policy-routed source). Compares the same destination across providers.
-- **RIB view** learns which prefixes and next-hops already exist. Injection may only steer prefixes already in this view.
+- **RIB view** (`internal/rib`) is an embedded GoBGP speaker with iBGP sessions to the edge routers. It learns their best paths and maps each prefix to its next-hop and provider (via `providers[].next_hop`). It offers exact, longest-prefix-match, and covering lookups. It is learn-only: the global export policy rejects everything and graceful restart is never enabled. When all sessions are down it reports not-ready and drops the learned routes, so consumers stop acting on stale data. Injection may only steer prefixes already in this view. Add-path and BMP come later (#26).
 - **Policy engine** scores providers per prefix. Flips only after thresholds and hold time. Enforces max improvements and allow/deny lists.
 - **Announcer** speaks BGP to the edge as an iBGP peer. Injected routes use a higher local-pref (or community the edge maps to local-pref) and a Packeteer community. Edges must not re-advertise those more-specifics to eBGP peers.
 
