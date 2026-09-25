@@ -32,6 +32,8 @@ This repository controls BGP in real networks when injection is enabled. Treat e
 - New capabilities are added as plugins behind a small interface (prober, target source, scorer, announcer, notifier, exporter), selected by `type` in config. Do not hard-wire them into the core.
 - Plugin config is validated at load time; unknown plugin types are errors.
 - Plugins must work with the stock image (built-in or out-of-process `exec` / `webhook`); see docs/PLUGINS.md.
+- Public plugin interfaces live in `pkg/plugin`; built-ins in `internal/plugins/<kind>/<name>`, registered via `init()` and linked in `internal/plugins/all`.
+- Announcers are in-process only; never let an out-of-process plugin inject routes.
 
 ## Testing BGP
 

@@ -49,7 +49,35 @@ type Config struct {
 	Providers          []Provider    `yaml:"providers"`
 	Allowlist          Allowlist     `yaml:"allowlist"`
 	Probe              Probe         `yaml:"probe"`
+
+	// Plugins. Each entry selects an implementation by type; see
+	// docs/PLUGINS.md. Plugin-specific settings live under `config` and are
+	// validated by the plugin itself when the plugin set is built.
+	PluginDir string       `yaml:"plugin_dir"`
+	Probers   []PluginSpec `yaml:"probers"`
+	Sources   []PluginSpec `yaml:"sources"`
+	Scorer    *PluginSpec  `yaml:"scorer"`
+	Announcer *PluginSpec  `yaml:"announcer"`
+	Notifiers []PluginSpec `yaml:"notifiers"`
 }
+
+// PluginSpec selects one plugin instance.
+type PluginSpec struct {
+	Type   string    `yaml:"type"`
+	Name   string    `yaml:"name"`
+	Config yaml.Node `yaml:"config"`
+}
+
+// InstanceName is Name, or Type when no name is set.
+func (p PluginSpec) InstanceName() string {
+	if p.Name != "" {
+		return p.Name
+	}
+	return p.Type
+}
+
+// DefaultPluginDir is where out-of-process plugins are looked up.
+const DefaultPluginDir = "/etc/packeteer/plugins"
 
 // Thresholds are the minimum improvements required before a path flip.
 type Thresholds struct {
@@ -126,6 +154,9 @@ func (c *Config) applyDefaults() {
 	}
 	if c.Probe.Packets == 0 {
 		c.Probe.Packets = DefaultProbePackets
+	}
+	if c.PluginDir == "" {
+		c.PluginDir = DefaultPluginDir
 	}
 }
 
@@ -236,6 +267,30 @@ func (c *Config) Validate() error {
 	}
 	if c.Probe.Packets < 1 || c.Probe.Packets > MaxProbePackets {
 		add("probe.packets %d must be between 1 and %d", c.Probe.Packets, MaxProbePackets)
+	}
+
+	validateSpecs := func(field string, specs []PluginSpec) {
+		seen := map[string]bool{}
+		for i, sp := range specs {
+			if sp.Type == "" {
+				add("%s[%d]: type is required", field, i)
+				continue
+			}
+			n := sp.InstanceName()
+			if seen[n] {
+				add("%s[%d]: duplicate instance name %q (set a unique name)", field, i, n)
+			}
+			seen[n] = true
+		}
+	}
+	validateSpecs("probers", c.Probers)
+	validateSpecs("sources", c.Sources)
+	validateSpecs("notifiers", c.Notifiers)
+	if c.Scorer != nil && c.Scorer.Type == "" {
+		add("scorer: type is required")
+	}
+	if c.Announcer != nil && c.Announcer.Type == "" {
+		add("announcer: type is required")
 	}
 
 	// Inject mode has extra safety requirements (see AGENTS.md).

@@ -230,3 +230,47 @@ func TestValidateReportsAllErrors(t *testing.T) {
 		}
 	}
 }
+
+func TestPluginSpecs(t *testing.T) {
+	good := minimalYAML + `
+probers:
+  - type: icmp
+  - type: exec
+    name: custom
+    config:
+      command: my-prober
+sources:
+  - type: static
+announcer:
+  type: gobgp
+`
+	cfg, err := Parse([]byte(good))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if len(cfg.Probers) != 2 || cfg.Probers[1].InstanceName() != "custom" || cfg.Probers[0].InstanceName() != "icmp" {
+		t.Errorf("Probers = %+v", cfg.Probers)
+	}
+	if cfg.Probers[1].Config.Kind == 0 {
+		t.Error("plugin config node not captured")
+	}
+	if cfg.PluginDir != DefaultPluginDir {
+		t.Errorf("PluginDir = %q", cfg.PluginDir)
+	}
+
+	tests := []struct{ name, yaml, wantErr string }{
+		{"missing type", minimalYAML + "probers:\n  - name: x\n", "probers[0]: type is required"},
+		{"duplicate instance", minimalYAML + "notifiers:\n  - type: webhook\n  - type: webhook\n", `notifiers[1]: duplicate instance name "webhook"`},
+		{"unknown spec field", minimalYAML + "sources:\n  - type: static\n    prefixes: []\n", "field prefixes not found"},
+		{"scorer missing type", minimalYAML + "scorer: {name: x}\n", "scorer: type is required"},
+		{"announcer missing type", minimalYAML + "announcer: {name: x}\n", "announcer: type is required"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := Parse([]byte(tt.yaml))
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("err = %v, want %q", err, tt.wantErr)
+			}
+		})
+	}
+}

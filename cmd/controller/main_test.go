@@ -94,3 +94,22 @@ func TestRunVersion(t *testing.T) {
 		t.Fatalf("code %d out %q", code, out.String())
 	}
 }
+
+func TestRunUnknownPluginType(t *testing.T) {
+	example, err := os.ReadFile(filepath.Join("..", "..", "config.example.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "c.yaml")
+	cfg := string(example) + "\nnotifiers:\n  - type: carrier-pigeon\n"
+	if err := os.WriteFile(path, []byte(cfg), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out, errOut bytes.Buffer
+	if code := run([]string{"-config", path}, noEnv, &out, &errOut); code != 1 {
+		t.Fatalf("exit code %d, want 1", code)
+	}
+	if !strings.Contains(errOut.String(), `unknown notifier type "carrier-pigeon"`) {
+		t.Errorf("stderr = %q", errOut.String())
+	}
+}
