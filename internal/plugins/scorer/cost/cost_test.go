@@ -122,6 +122,7 @@ func TestConfig(t *testing.T) {
 		"precedence: cheapest":                            "precedence",
 		"floor: {max_loss_pct: -1}":                       "max_loss_pct",
 		"floor: {max_loss_pct: 101}":                      "max_loss_pct",
+		"floor: {max_loss_pct: .nan}":                     "max_loss_pct",
 		"floor: {max_rtt: -1ms}":                          "max_rtt",
 		"floor: {max_rtt: 1h}":                            "max_rtt",
 		"loss_weight: -1":                                 "negative",

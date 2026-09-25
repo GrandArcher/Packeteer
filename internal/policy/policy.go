@@ -427,7 +427,7 @@ func Decide(prev State, in Input, cfg Config, scorer plugin.Scorer, now time.Tim
 		out.Changes = append(out.Changes, Change{Action: ActionImprove, New: w.imp})
 		w.d.Action, w.d.Reason, w.d.Current, w.d.Recommended = ActionImprove, w.imp.Reason, w.imp.Provider, w.imp.Provider
 	}
-	annotateCost(st, cfg, in.VolumeMbps)
+	annotateCost(st, &out, cfg, in.VolumeMbps)
 	out.Decisions = decisions
 	return st, out
 }
@@ -450,21 +450,35 @@ func costFirst(scorer plugin.Scorer) (plugin.CostPolicy, bool) {
 	return cp, true
 }
 
-// annotateCost sets the cost estimate on every improvement whose native
-// and steered providers both have a cost. It does not change a decision.
-func annotateCost(st State, cfg Config, volume map[netip.Prefix]float64) {
+// annotateCost sets the cost estimate on every improvement and change whose
+// native and steered providers both have a cost. It does not change a
+// decision.
+func annotateCost(st State, out *Output, cfg Config, volume map[netip.Prefix]float64) {
 	for p, imp := range st.Improvements {
-		imp.CostDelta, imp.EstSavings = 0, 0
-		nat, ok1 := providerCost(cfg, imp.Native)
-		cur, ok2 := providerCost(cfg, imp.Provider)
-		if ok1 && ok2 {
-			imp.CostDelta = nat - cur
-			if volume != nil && volume[p] > 0 {
-				imp.EstSavings = imp.CostDelta * volume[p]
-			}
-		}
-		st.Improvements[p] = imp
+		st.Improvements[p] = withCost(imp, cfg, volume)
 	}
+	for i, ch := range out.Changes {
+		if ch.Old.Provider != "" {
+			out.Changes[i].Old = withCost(ch.Old, cfg, volume)
+		}
+		if ch.New.Provider != "" {
+			out.Changes[i].New = withCost(ch.New, cfg, volume)
+		}
+	}
+}
+
+// withCost returns imp with CostDelta and EstSavings recomputed.
+func withCost(imp Improvement, cfg Config, volume map[netip.Prefix]float64) Improvement {
+	imp.CostDelta, imp.EstSavings = 0, 0
+	nat, ok1 := providerCost(cfg, imp.Native)
+	cur, ok2 := providerCost(cfg, imp.Provider)
+	if ok1 && ok2 {
+		imp.CostDelta = nat - cur
+		if volume[imp.Prefix] > 0 {
+			imp.EstSavings = imp.CostDelta * volume[imp.Prefix]
+		}
+	}
+	return imp
 }
 
 // better reports whether a is better than b by the configured thresholds:

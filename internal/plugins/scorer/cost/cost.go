@@ -111,7 +111,7 @@ func New(c plugin.Config, _ plugin.Env) (plugin.Scorer, error) {
 		return nil, fmt.Errorf("precedence %q is invalid (want performance or cost)", cfg.Precedence)
 	}
 	if v := cfg.Floor.MaxLossPct; v != nil {
-		if *v < 0 || *v > 100 {
+		if !(*v >= 0 && *v <= 100) { // also rejects NaN
 			return nil, fmt.Errorf("floor.max_loss_pct %v must be between 0 and 100", *v)
 		}
 		s.floorLoss = *v

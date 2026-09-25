@@ -174,16 +174,19 @@ func TestCostSteerLifecycle(t *testing.T) {
 	native := map[netip.Prefix]string{pA: "a"}
 	input := in(results(t0, pA, m{"a", 0, 40}, m{"b", 0, 45}, m{"c", 0, 80}), native)
 	input.VolumeMbps = map[netip.Prefix]float64{pA: 50}
-	st, _ := Decide(NewState(), input, c, s, t0)
+	st, out := Decide(NewState(), input, c, s, t0)
 	imp := st.Improvements[pA]
 	if imp.Provider != "b" || imp.CostDelta != 5 || imp.EstSavings != 250 {
 		t.Fatalf("improvement %+v", imp)
+	}
+	if len(out.Changes) != 1 || out.Changes[0].New.CostDelta != 5 || out.Changes[0].New.EstSavings != 250 {
+		t.Fatalf("change cost %+v", out.Changes)
 	}
 
 	// Still cheapest inside the floor: kept.
 	t1 := t0.Add(time.Minute)
 	input.Results = results(t1, pA, m{"a", 0, 40}, m{"b", 0, 45}, m{"c", 0, 80})
-	st, out := Decide(st, input, c, s, t1)
+	st, out = Decide(st, input, c, s, t1)
 	if d := decision(t, out, pA); d.Action != ActionKeep || st.Improvements[pA].Provider != "b" || len(out.Changes) != 0 {
 		t.Fatalf("keep: %+v %+v", d, out.Changes)
 	}
