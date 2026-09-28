@@ -22,6 +22,12 @@ The `snmp` plugin reads interface counters from an agent you configure. The comm
 
 The flow source accepts unauthenticated UDP. Anyone who can reach a listen port can add probe targets and spend probe budget, and can report prefix volume that the `commit` scorer may use. That does not inject routes by itself: inject mode still requires the prefix in the learned RIB, the allowlist, thresholds, hold time, and the improvement cap, and a commit move also needs a fresh telemetry reading and a destination that is not a loss regression unless `loss_override` is set. Run with host networking and firewall the port to the exporter. Counters live in memory for one window. Raw flow records are not written to disk.
 
+With `problems` set, the same unauthenticated records can also mark prefixes as problems (forged SYN-only or RST records). The effect is the same: extra probe targets, capped by `problems.max_targets`, and no route without the normal inject checks.
+
+## Mirror (span) input
+
+The `span` source reads a mirror port with an AF_PACKET socket and needs `NET_RAW`. That port carries copies of customer traffic. Packeteer parses TCP/IP headers and discards each packet; payloads, packets, and pcaps are not written anywhere. It keeps per-connection sequence state (capped by `max_flows`, forgotten after `flow_idle`) and per-prefix counters for one window, in memory. Promiscuous mode is a socket membership that the kernel drops when the process exits. Anyone who can put traffic on the mirror, or who controls a remote host, can make a prefix look broken (resets, withheld ACKs). That adds probe targets, capped by `max_targets`; it does not inject routes without a measured improvement, the learned RIB, the allowlist, the thresholds, hold time, and the cap. A mounted `pcap_file` is replayed once and is not modified.
+
 ## Ops surface
 
 The HTTP server accepts GET and HEAD only. It defaults to `127.0.0.1:8080`. Set `http.listen` to `""` (or `PACKETEER_HTTP_LISTEN=off`) to disable it. A non-loopback listen address exposes probe results, decisions, active improvements, and learned exits for probed prefixes to anyone who can open the port. Set `PACKETEER_HTTP_USER` and `PACKETEER_HTTP_PASSWORD` together before doing that; setting only one refuses to start. The dashboard loads no remote assets. The API does not announce routes. It does not list RIB prefixes that Packeteer is not probing.

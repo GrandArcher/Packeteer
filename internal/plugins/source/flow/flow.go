@@ -6,6 +6,11 @@
 // prefix; otherwise it is aggregated to aggregate_v4 or aggregate_v6. Raw flow
 // records are not stored: only per-bucket counters and the templates needed to
 // decode NetFlow v9 and IPFIX.
+//
+// With a problems block it also scores remote prefixes by TCP flags on
+// unsampled NetFlow v5, v9, and IPFIX records (internal/passive): outbound
+// connection attempts that never got past SYN, and resets from the remote
+// side. Problem prefixes are listed ahead of the busiest ones.
 package flow
 
 import (
@@ -19,6 +24,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/GrandArcher/Packeteer/internal/passive"
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
 	"gopkg.in/yaml.v3"
 )
@@ -39,6 +45,14 @@ const (
 	udpReadBuffer   = 4 << 20
 	udpReadTimeout  = time.Second
 	udpPayloadBytes = 65535
+
+	defaultProblemFailurePct = 20
+	defaultProblemMinFlows   = 10
+	defaultProblemMaxTargets = 100
+
+	tcpSYN = 0x02
+	tcpRST = 0x04
+	tcpACK = 0x10
 )
 
 func init() { plugin.Sources.Register(TypeName, New) }
@@ -55,6 +69,26 @@ type Config struct {
 	AggregateV4 int           `yaml:"aggregate_v4"`
 	AggregateV6 int           `yaml:"aggregate_v6"`
 	Exclude     []string      `yaml:"exclude"`
+	// Problems turns on passive problem detection from TCP flags. Off
+	// when omitted.
+	Problems *ProblemsConfig `yaml:"problems"`
+}
+
+// ProblemsConfig is the flow source's passive problem detection block.
+type ProblemsConfig struct {
+	// Local lists your own networks, so a record's remote side is known.
+	Local      []string `yaml:"local"`
+	FailurePct float64  `yaml:"failure_pct"`
+	MinFlows   uint64   `yaml:"min_flows"`
+	MaxTargets int      `yaml:"max_targets"`
+}
+
+// problems is the validated ProblemsConfig plus its window.
+type problems struct {
+	local      []netip.Prefix
+	th         passive.Thresholds
+	maxTargets int
+	win        *passive.Window
 }
 
 // listenList accepts either a single "host:port" or a list of them.
@@ -98,8 +132,9 @@ type Source struct {
 	mu     sync.RWMutex
 	lookup func(netip.Addr) (netip.Prefix, bool)
 
-	dec *decoder
-	win *slide
+	dec  *decoder
+	win  *slide
+	prob *problems
 
 	conns     []*net.UDPConn
 	closeOnce sync.Once
@@ -156,10 +191,15 @@ func New(c plugin.Config, env plugin.Env) (plugin.TargetSource, error) {
 	if err != nil {
 		return nil, err
 	}
+	prob, err := newProblems(cfg.Problems, cfg.Window)
+	if err != nil {
+		return nil, err
+	}
 	if env.Logger == nil {
 		env.Logger = slog.Default()
 	}
 	return &Source{
+		prob:     prob,
 		log:      env.Logger,
 		listen:   listen,
 		window:   cfg.Window,
@@ -172,6 +212,41 @@ func New(c plugin.Config, env plugin.Env) (plugin.TargetSource, error) {
 		dec:      &decoder{},
 		win:      newSlide(cfg.Window, maxPrefixes),
 	}, nil
+}
+
+func newProblems(c *ProblemsConfig, window time.Duration) (*problems, error) {
+	if c == nil {
+		return nil, nil
+	}
+	local, err := passive.ParseNets("problems.local", c.Local)
+	if err != nil {
+		return nil, err
+	}
+	if len(local) == 0 {
+		return nil, fmt.Errorf("problems.local is required: the prefixes of your own networks")
+	}
+	for i, p := range local {
+		if p.Bits() == 0 {
+			return nil, fmt.Errorf("problems.local[%d]: a default route cannot be local", i)
+		}
+	}
+	if c.FailurePct == 0 {
+		c.FailurePct = defaultProblemFailurePct
+	}
+	if c.MinFlows == 0 {
+		c.MinFlows = defaultProblemMinFlows
+	}
+	if c.MaxTargets == 0 {
+		c.MaxTargets = defaultProblemMaxTargets
+	}
+	if c.MaxTargets < 1 || c.MaxTargets > maxTopN {
+		return nil, fmt.Errorf("problems.max_targets %d must be between 1 and %d", c.MaxTargets, maxTopN)
+	}
+	th := passive.Thresholds{FailurePct: c.FailurePct, MinFlows: c.MinFlows}
+	if err := th.Validate(); err != nil {
+		return nil, fmt.Errorf("problems: %w", err)
+	}
+	return &problems{local: local, th: th, maxTargets: c.MaxTargets, win: passive.NewWindow(window, maxPrefixes)}, nil
 }
 
 func normalizeListen(s string) (string, error) {
@@ -340,12 +415,30 @@ func (s *Source) Volumes(ctx context.Context) ([]plugin.PrefixVolume, error) {
 	return out, nil
 }
 
-// Targets returns the current top prefixes. An idle collector returns an
-// empty slice, not an error, so other sources keep working.
+// Targets returns the current top prefixes. With a problems block, problem
+// prefixes come first (weight is the problem score, capped at
+// problems.max_targets), then the busiest prefixes not already listed. An
+// idle collector returns an empty slice, not an error, so other sources
+// keep working.
 func (s *Source) Targets(context.Context) ([]plugin.Target, error) {
-	ranked := s.win.top(s.now(), s.topN, s.minBytes)
-	out := make([]plugin.Target, 0, len(ranked))
+	now := s.now()
+	out := []plugin.Target{}
+	listed := map[netip.Prefix]bool{}
+	if s.prob != nil {
+		for _, p := range s.prob.win.Problems(now, s.prob.th, s.prob.maxTargets) {
+			t := plugin.Target{Prefix: p.Prefix, Weight: p.Score}
+			if p.Host.IsValid() && p.Prefix.Contains(p.Host) {
+				t.Host = p.Host
+			}
+			out = append(out, t)
+			listed[p.Prefix] = true
+		}
+	}
+	ranked := s.win.top(now, s.topN, s.minBytes)
 	for _, r := range ranked {
+		if listed[r.prefix] {
+			continue
+		}
 		t := plugin.Target{Prefix: r.prefix, Weight: float64(r.bytes)}
 		if r.host.IsValid() && r.prefix.Contains(r.host) {
 			t.Host = r.host
@@ -361,6 +454,9 @@ func (s *Source) ingest(at time.Time, exporter netip.Addr, payload []byte) {
 		s.log.Debug("flow decode", "exporter", exporter.String(), "err", err)
 	}
 	for _, o := range obs {
+		if s.prob != nil && o.haveFlags && !o.sampled && o.proto == 6 {
+			s.noteProblem(at, o)
+		}
 		dst := o.dst.Unmap()
 		if !s.keep(dst) {
 			continue
@@ -371,6 +467,41 @@ func (s *Source) ingest(at time.Time, exporter netip.Addr, payload []byte) {
 		}
 		s.win.add(at, p, dst, o.bytes)
 	}
+}
+
+// noteProblem scores one unsampled TCP record. An outbound record whose
+// flags hold SYN without ACK never completed its handshake. An inbound
+// record with RST is a reset from the remote side. Records between two
+// local or two remote addresses are ignored.
+func (s *Source) noteProblem(at time.Time, o observation) {
+	src, dst := o.src.Unmap(), o.dst.Unmap()
+	srcLocal, dstLocal := passive.Contains(s.prob.local, src), passive.Contains(s.prob.local, dst)
+	var remote netip.Addr
+	var d passive.Counts
+	switch {
+	case srcLocal && !dstLocal:
+		remote = dst
+		d.Flows = 1
+		if o.tcpFlags&tcpSYN != 0 && o.tcpFlags&tcpACK == 0 {
+			d.Timeouts = 1
+		}
+	case dstLocal && !srcLocal:
+		remote = src
+		if o.tcpFlags&tcpRST == 0 {
+			return
+		}
+		d.Resets = 1
+	default:
+		return
+	}
+	if !s.keep(remote) {
+		return
+	}
+	p := s.prefixFor(remote)
+	if !p.IsValid() || !p.Contains(remote) {
+		return
+	}
+	s.prob.win.Add(at, p, remote, d)
 }
 
 // keep drops addresses that are not useful probe targets: non-unicast,
