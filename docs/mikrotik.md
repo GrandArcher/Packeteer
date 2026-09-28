@@ -5,8 +5,9 @@ This guide grows with each milestone. It currently covers:
 1. **Probe sourcing**: see [policy-routing.md](policy-routing.md#mikrotik-routeros-7-probe-box-behind-the-router).
 2. **iBGP session** so Packeteer can see the paths the router advertises: below.
 3. **Injected routes**: accept only the Packeteer community from that session, and never export it to eBGP. FRR, Junos, and IOS snippets are in [routers.md](routers.md).
-4. **Traffic Flow** (NetFlow / IPFIX) so Packeteer can pick probe targets from real traffic: below.
-5. **SNMP** so Packeteer can read interface counters for 95th-percentile tracking: below. The community stays in the container environment.
+4. **Traffic Flow** (NetFlow / IPFIX) so Packeteer can pick probe targets from real traffic, and optionally score failing destinations: below.
+5. **Port mirroring** for the `span` source (passive problem detection): below.
+6. **SNMP** so Packeteer can read interface counters for 95th-percentile tracking: below. The community stays in the container environment.
 
 ## iBGP session to Packeteer
 
@@ -97,6 +98,40 @@ sources:
 ```
 
 Allow UDP/2055 on the host firewall from the router only. The socket is not authenticated. Flow targets are probe targets: they are not announced unless they are also in the learned RIB and pass the inject checks.
+
+To also score failing destinations from the same export, add a `problems` block. It needs unsampled v5, v9, or IPFIX records that carry the source address, protocol, and TCP flags; leave `packet-sampling` off. An outbound record with SYN and no ACK is a handshake that was never answered, and an inbound RST is a remote reset.
+
+```yaml
+  - type: flow
+    config:
+      listen: ["0.0.0.0:2055"]
+      problems:
+        local: ["192.0.2.0/24"]   # your own networks
+        failure_pct: 20
+        min_flows: 10
+```
+
+## Port mirroring (span source)
+
+The `span` source reads a mirror of the uplink on a spare port of the Packeteer host. It sees retransmissions and handshake RTT, which flow records do not carry. On RouterOS devices with a switch chip, mirror the uplink to the port the Packeteer host is plugged into:
+
+```routeros
+# ether1 is the uplink, ether5 goes to the Packeteer host's mirror NIC.
+/interface ethernet switch set switch1 mirror-source=ether1 mirror-target=ether5
+```
+
+The mirror target carries only copies. Give the host's mirror NIC no address, then point the source at it. The container needs `--network host` and `--cap-add NET_RAW`.
+
+```yaml
+sources:
+  - type: span
+    config:
+      interface: eth1              # the mirror NIC inside the container
+      local: ["192.0.2.0/24", "2001:db8:1::/48"]
+      window: 5m
+```
+
+Switch-chip mirroring syntax differs between models and RouterOS releases (some use `/interface ethernet switch rule` with `mirror=yes`); check yours. `/tool sniffer` streaming (TZSP) is not a mirror port and is not read by this source. Span targets are probe targets only; nothing is announced unless the normal inject checks pass.
 
 ## SNMP interface counters
 

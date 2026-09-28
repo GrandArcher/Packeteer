@@ -311,6 +311,50 @@ Off unless this source is listed. NetFlow v5, NetFlow v9, IPFIX, and sFlow v5. R
 
 With `--network host`, `listen` binds host UDP ports. Do not publish them. Each time bucket keeps at most 20000 prefixes. The commit scorer reads every prefix in the window as a rate (bytes × 8 / window, decimal megabits per second), including prefixes `top_n` or `min_bytes` did not offer as probe targets.
 
+`problems` (optional, off when omitted) turns on passive problem detection from TCP flags. It reads unsampled NetFlow v5, NetFlow v9, and IPFIX records that carry the source address, protocol, and TCP flags (information elements 8 or 27, 4, and 6). An outbound record (local source, remote destination) is one flow; if its flags hold SYN without ACK, the handshake never completed and it counts as a timeout. An inbound record from a remote source with RST counts as a reset. A prefix is a problem when (timeouts + resets) / flows is at least `failure_pct` and it has at least `min_flows` flows inside `window`. Problem prefixes are listed first, worst first (weight is the ratio to the threshold), then the busiest prefixes that are not already listed. Sampled exports (a sampling rate above 1) and sFlow are skipped, because a sampled record may hold only the SYN. Retransmissions and RTT are not visible in flow records; use the `span` source for those.
+
+| Key | Default | Bounds |
+|---|---|---|
+| `problems.local` | none | Required when `problems` is set. Your own networks, CIDRs, no host bits, no default route, no duplicates. |
+| `problems.failure_pct` | 20 | 0–100. Zero uses the default. |
+| `problems.min_flows` | 10 | Zero uses the default. |
+| `problems.max_targets` | 100 | 1–10000. |
+
+### Source `span`
+
+Off unless this source is listed. It reads a SPAN or mirror port with an AF_PACKET socket (needs `--cap-add NET_RAW` and host networking) or replays a classic pcap file, follows TCP connections between `local` and remote addresses, and returns remote prefixes that look broken so they are probed first. Packets are parsed and dropped. Only per-connection sequence state (capped by `max_flows`) and per-prefix counters over `window` are kept; each time bucket holds at most 20000 prefixes. The source does not announce, and a problem prefix still needs the RIB, the allowlist, the thresholds, the cap, and hold time before anything is injected.
+
+Per connection, it counts:
+
+- **Retransmissions**: outbound data segments that repeat bytes already sent (a one-byte keepalive is not counted).
+- **Timeouts**: a local SYN with no remote SYN-ACK, or a local SYN-ACK with no remote ACK, within `syn_timeout`.
+- **Resets**: a RST from the remote side. A local RST is not a path problem and is ignored.
+- **Handshake RTT**: local SYN to remote SYN-ACK, or local SYN-ACK to remote ACK, measured at the mirror. A retransmitted handshake gives no sample.
+
+A remote prefix is a problem when retransmissions / data segments ≥ `retrans_pct` (with at least `min_segments`), (timeouts + resets) / connections ≥ `failure_pct` (with at least `min_flows`), or, when `rtt_ms` is set, average handshake RTT ≥ `rtt_ms` (with at least `min_flows` samples). The score is the largest ratio of an observed value to its threshold. The list is worst first, capped at `max_targets`, and a prefix is marked urgent on the first round it appears. The source is read on every probe round. Remote addresses are mapped to the covering learned RIB prefix when the view is ready, otherwise aggregated to `aggregate_v4` or `aggregate_v6`. Private, ULA, loopback, link-local, multicast, and `exclude` addresses are dropped, as is traffic between two local or two remote addresses. Ethernet with up to two VLAN tags, raw IP, and Linux cooked captures are decoded.
+
+| Key | Default | Bounds |
+|---|---|---|
+| `interface` | none | The mirror interface inside the container (host networking). Exactly one of `interface` or `pcap_file`. |
+| `pcap_file` | none | Absolute path to a classic pcap (not pcapng) mounted into the container. Replayed once at startup with its timestamps shifted to now. For labs and incident review. |
+| `promiscuous` | true | Interface capture only. Promiscuous mode is a socket membership: the kernel drops it when the socket closes or the process dies. |
+| `local` | none | Required. Your own networks, CIDRs, no host bits, no default route, no duplicates. |
+| `exclude` | none | Remote CIDRs to ignore, no host bits, no duplicates. |
+| `window` | `5m` | `10s`–`24h`. |
+| `retrans_pct` | 5 | 0–100. Zero uses the default. |
+| `failure_pct` | 20 | 0–100. Zero uses the default. |
+| `rtt_ms` | 0 | 0–60000. Zero disables the RTT check. |
+| `min_segments` | 100 | Zero uses the default. |
+| `min_flows` | 10 | Zero uses the default. Also the minimum RTT samples. |
+| `syn_timeout` | `3s` | `100ms`–`1m`. |
+| `flow_idle` | `2m` | Longer than `syn_timeout`, at most `1h`. Idle connections are forgotten. |
+| `max_flows` | 100000 | 1–10000000. A new connection beyond the cap is not tracked. |
+| `max_targets` | 100 | 1–10000. |
+| `aggregate_v4` | 24 | 1–32. |
+| `aggregate_v6` | 48 | 1–128. |
+
+Interface capture fails startup when the interface is missing or `NET_RAW` is not granted. A capture error after startup is logged and the source returns what it has already counted. On loopback, outgoing copies are skipped so each frame is counted once. Rollback: remove the source and restart.
+
 ### Scorer `weighted`
 
 `score = loss_pct * loss_weight + rtt_ms * rtt_weight + jitter_ms * jitter_weight`.

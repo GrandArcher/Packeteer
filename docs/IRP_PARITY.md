@@ -25,9 +25,9 @@ Milestones:
 
 | Status | Count |
 |---|---|
-| done | 39 |
+| done | 43 |
 | in progress | 0 |
-| planned | 40 |
+| planned | 36 |
 | won't do | 3 |
 
 ## Performance optimization
@@ -43,8 +43,8 @@ Milestones:
 | Probe sources per provider (IRP uses PBR; we use source-IP policy routing) | 2.8 Explorer, 2.8.1 PBR | done | v0.1 | core + docs | #2 |
 | Static probe target lists | - | done | v0.1 | source (`static`) | #2 |
 | Flow-based target discovery (NetFlow v5/v9, IPFIX, sFlow) | 2.7.1 Irpflowd | done | v0.1 | source (`flow`) | #5 |
-| Passive problem detection from flows | 2.7 Collector | planned | v0.2 | source | #21 |
-| SPAN / mirrored-traffic collector | 2.7.2 Irpspand | planned | v0.2 | source (`span`) | #21 |
+| Passive problem detection from flows | 2.7 Collector | done | v0.2 | source (`flow` `problems`) | #21 |
+| SPAN / mirrored-traffic collector | 2.7.2 Irpspand | done | v0.2 | source (`span`) | #21 |
 | AS-pattern outage/congestion detection (re-probe prefixes crossing a sick ASN) | 1.2.6 Outage Detection | done | v0.2 | source (`outage`) | #16 |
 | Circuit issues detection | 1.2.23 | done | v0.2 | source (`outage`) | #16 |
 | VIP (critical) prefixes/ASNs with more frequent probing | 1.2.7 VIP Improvements | done | v0.2 | source (`vip`) | #15 |
@@ -56,6 +56,8 @@ Milestones:
 UDP unreachable replies count only when the ICMP source is the probed target (#15). Traceroute discovery runs in the background under `budget` and does not block a probe round. VIP ASN expansion is capped by `max_targets` and rebuilt only when the RIB changes; the VIP interval must be shorter than the staleness window.
 
 The `outage` source (#16) correlates probe results inside `window` (default 2m). An ASN incident needs `min_prefixes` (default 3, minimum 2) degraded prefixes whose learned path contains that ASN and that are degraded on every measured provider. A provider incident is the same count of prefixes degraded on that provider and healthy on another, and not already explained by a sick ASN. One noisy prefix does not fire. The probe loop wakes and re-queues the affected prefixes, including other learned prefixes that cross the sick ASN, capped by `max_targets`. Events go to the configured notifiers. The source does not announce.
+
+Passive problem detection (#21) feeds probing; it never announces. The `span` source reads a mirror port with AF_PACKET (`NET_RAW`, host networking) or replays a classic pcap, follows TCP connections between the configured `local` networks and remote addresses, and scores each remote prefix by outbound retransmissions, handshake timeouts, remote resets, and optionally handshake RTT. The `flow` source's optional `problems` block does the same from TCP flags on unsampled NetFlow v5/v9 and IPFIX records (SYN without ACK outbound, RST inbound); retransmissions and RTT are not visible in flow records, and sampled exports and sFlow are skipped. Problem prefixes are probed first; injection still needs the learned RIB, allowlist, thresholds, cap, community, and hold time. Tests use a synthetic pcap fixture with documentation prefixes and, in CI, a root-only AF_PACKET capture on loopback. Removing the source (or the `problems` block) and restarting is the rollback.
 
 ## Cost / commit
 

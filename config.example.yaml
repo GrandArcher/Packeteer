@@ -99,6 +99,20 @@ scorer:
 #       aggregate_v6: 48
 #       exclude:
 #         - 192.0.2.0/24              # destinations inside these prefixes are ignored
+#       # problems:                 # optional: score TCP failures from unsampled v5/v9/IPFIX
+#       #   local: [192.0.2.0/24]     # your own networks
+#       #   failure_pct: 20           # SYN-without-ACK plus remote RST, % of flows
+#       #   min_flows: 10
+#   - type: span                # passive problem detection from a mirror port. Needs NET_RAW.
+#     config:                   # Does not announce; problem prefixes are probed first.
+#       interface: eth1         # mirror NIC; or pcap_file: /etc/packeteer/span.pcap (lab replay)
+#       local:
+#         - 192.0.2.0/24        # your own networks (required)
+#       window: 5m
+#       retrans_pct: 5          # outbound retransmissions, % of data segments
+#       failure_pct: 20         # handshake timeouts plus remote resets, % of connections
+#       # rtt_ms: 0             # handshake RTT threshold; 0 disables
+#       max_targets: 100
 #   - type: traceroute          # last stable hop when the host does not answer.
 #     config:                   # Discovery is background. Targets returns the cache.
 #       interval: 5m

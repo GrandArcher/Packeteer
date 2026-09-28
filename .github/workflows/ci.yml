@@ -29,6 +29,10 @@ jobs:
         run: |
           go test -c -o icmp.test ./internal/plugins/prober/icmp/
           sudo ./icmp.test -test.v
+      - name: span AF_PACKET capture on loopback (root)
+        run: |
+          go test -c -o span.test ./internal/plugins/source/span/
+          sudo ./span.test -test.run AFPacket -test.v
 
   docker:
     runs-on: ubuntu-latest
@@ -103,6 +107,48 @@ jobs:
           grep -q "prober=icmp" /tmp/pk.log
           grep -q "loss_pct=0" /tmp/pk.log
           grep -q "shutting down" /tmp/pk.log
+      - name: span source smoke test (mounted pcap fixture, observe)
+        run: |
+          cat > /tmp/span.yaml <<'YAML'
+          mode: observe
+          asn: 64512
+          router_id: 192.0.2.10
+          http:
+            listen: "127.0.0.1:18082"
+          providers:
+            - name: lab-a
+              source_ip: 127.0.0.1
+              next_hop: 127.0.0.1
+          probe: {interval: 2s, timeout: 500ms, packets: 3}
+          probers:
+            - type: fixed
+              config:
+                paths: [{provider: lab-a, rtt_ms: 10}]
+          sources:
+            - type: span
+              config:
+                pcap_file: /etc/packeteer/span.pcap
+                local: [192.0.2.0/24, "2001:db8:1::/48"]
+          YAML
+          docker run --rm --network host --cap-add NET_RAW \
+            -v /tmp/span.yaml:/etc/packeteer/config.yaml:ro packeteer:ci -check | grep -q "source span"
+          docker run -d --name pkspan --network host --cap-add NET_RAW --cap-add NET_ADMIN \
+            -v /tmp/span.yaml:/etc/packeteer/config.yaml:ro \
+            -v "$PWD/internal/plugins/source/span/testdata/problems.pcap:/etc/packeteer/span.pcap:ro" packeteer:ci
+          ok=0
+          for _ in $(seq 1 15); do
+            if docker logs pkspan 2>&1 | grep -q 'span problem prefix.*prefix=2001:db8:eeee::/48'; then ok=1; break; fi
+            sleep 2
+          done
+          docker stop -t 15 pkspan
+          docker logs pkspan 2>&1 | tee /tmp/pkspan.log
+          test "$ok" = 1
+          test "$(docker inspect -f '{{.State.ExitCode}}' pkspan)" = "0"
+          grep -q 'span pcap replay done.*packets=552' /tmp/pkspan.log
+          grep -q 'span problem prefix.*prefix=198.51.100.0/24.*reasons=retrans' /tmp/pkspan.log
+          grep -q 'span problem prefix.*prefix=203.0.113.0/24' /tmp/pkspan.log
+          grep -q 'msg=probe .*prefix=198.51.100.0/24.*prober=fixed' /tmp/pkspan.log
+          grep -q "shutting down" /tmp/pkspan.log
 
   e2e:
     runs-on: ubuntu-latest

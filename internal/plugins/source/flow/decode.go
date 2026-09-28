@@ -11,7 +11,8 @@ import (
 // Decoding lives here rather than in github.com/netsampler/goflow2. That
 // module's go.mod requires a newer protobuf than the BGP speaker, plus
 // collector dependencies the decoders themselves do not use. This reader
-// keeps only the destination and octet fields target discovery needs.
+// keeps only the destination and octet fields target discovery needs, plus
+// the source, protocol, and TCP flags that passive problem detection reads.
 
 const (
 	maxTemplates   = 4096
@@ -19,8 +20,12 @@ const (
 	maxFlowRecords = 64
 
 	ieInBytes            = 1
+	ieProtocol           = 4
+	ieTCPFlags           = 6
+	ieSrcV4              = 8
 	ieDstV4              = 12
 	ieOutBytes           = 23
+	ieSrcV6              = 27
 	ieDstV6              = 28
 	ieSamplingInterval   = 34
 	ieSamplerRandom      = 50
@@ -43,6 +48,15 @@ var errNeedMore = errors.New("short record")
 type observation struct {
 	dst   netip.Addr
 	bytes uint64
+
+	// Set only by NetFlow v5, v9, and IPFIX records that carry them.
+	src       netip.Addr
+	proto     uint8
+	tcpFlags  uint8
+	haveFlags bool
+	// sampled is true when the exporter samples packets (rate above 1).
+	// A sampled record may hold only a SYN, so problem detection skips it.
+	sampled bool
 }
 
 type fieldSpec struct {
@@ -125,9 +139,18 @@ func decodeV5(p []byte) ([]observation, error) {
 		if octets == 0 {
 			continue
 		}
-		var dst4 [4]byte
+		var src4, dst4 [4]byte
+		copy(src4[:], rec[0:4])
 		copy(dst4[:], rec[4:8])
-		out = append(out, observation{dst: netip.AddrFrom4(dst4), bytes: scale(uint64(octets), rate)})
+		out = append(out, observation{
+			dst:       netip.AddrFrom4(dst4),
+			bytes:     scale(uint64(octets), rate),
+			src:       netip.AddrFrom4(src4),
+			proto:     rec[38],
+			tcpFlags:  rec[37],
+			haveFlags: true,
+			sampled:   rate > 1,
+		})
 	}
 	return out, nil
 }
@@ -346,12 +369,17 @@ func (d *decoder) withdraw(exp netip.Addr, version uint16, domain uint32, id uin
 }
 
 type gotRec struct {
-	dst     netip.Addr
-	inB     uint64
-	outB    uint64
-	haveIn  bool
-	haveOut bool
-	rate    uint64
+	dst       netip.Addr
+	src       netip.Addr
+	proto     uint8
+	tcpFlags  uint8
+	haveProto bool
+	haveFlags bool
+	inB       uint64
+	outB      uint64
+	haveIn    bool
+	haveOut   bool
+	rate      uint64
 }
 
 func (d *decoder) takeData(exp netip.Addr, version uint16, domain uint32, id uint16, body []byte) ([]observation, error) {
@@ -384,7 +412,15 @@ func (d *decoder) takeData(exp netip.Addr, version uint16, domain uint32, id uin
 		if rate == 0 {
 			rate = d.rates[rk]
 		}
-		obs = append(obs, observation{dst: rec.dst, bytes: scale(octets, rate)})
+		obs = append(obs, observation{
+			dst:       rec.dst,
+			bytes:     scale(octets, rate),
+			src:       rec.src,
+			proto:     rec.proto,
+			tcpFlags:  rec.tcpFlags,
+			haveFlags: rec.haveProto && rec.haveFlags && rec.src.IsValid(),
+			sampled:   rate > 1,
+		})
 	}
 	return obs, nil
 }
@@ -433,6 +469,28 @@ func nextRecord(body []byte, fields []fieldSpec) (gotRec, []byte, error) {
 				var a [16]byte
 				copy(a[:], val)
 				rec.dst = netip.AddrFrom16(a)
+			}
+		case ieSrcV4:
+			if len(val) == 4 {
+				var a [4]byte
+				copy(a[:], val)
+				rec.src = netip.AddrFrom4(a)
+			}
+		case ieSrcV6:
+			if len(val) == 16 {
+				var a [16]byte
+				copy(a[:], val)
+				rec.src = netip.AddrFrom16(a)
+			}
+		case ieProtocol:
+			if n, ok := u64be(val); ok {
+				rec.proto, rec.haveProto = uint8(n), true
+			}
+		case ieTCPFlags:
+			// v9 sends one byte; IPFIX sends two (the low byte holds the
+			// classic flags).
+			if n, ok := u64be(val); ok {
+				rec.tcpFlags, rec.haveFlags = uint8(n), true
 			}
 		case ieInBytes, iePermanentBytes:
 			if n, ok := u64be(val); ok {

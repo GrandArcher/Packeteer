@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/GrandArcher/Packeteer/internal/pluginhost"
+	"github.com/GrandArcher/Packeteer/internal/plugins/source/span"
 	"github.com/GrandArcher/Packeteer/internal/plugins/source/vip"
 	"github.com/GrandArcher/Packeteer/internal/rib"
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
@@ -810,5 +811,41 @@ sources:
 	}
 	if !strings.Contains(errOut.String(), `"msg":"http listening"`) && !strings.Contains(errOut.String(), `"msg":"packeteer running"`) {
 		t.Fatalf("expected json logs:\n%s", errOut.String())
+	}
+}
+
+// span implements prefixLookup, so wirePrefixLookup maps remote addresses
+// onto the learned RIB.
+var _ prefixLookup = (*span.Source)(nil)
+
+func TestRunSpanCheck(t *testing.T) {
+	example, err := os.ReadFile(filepath.Join("..", "..", "config.example.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "c.yaml")
+	// -check builds the plugin without opening an AF_PACKET socket.
+	good := string(example) + "\nsources:\n  - type: span\n    config: {interface: pk-mirror0, local: [192.0.2.0/24]}\n"
+	if err := os.WriteFile(path, []byte(good), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out, errOut bytes.Buffer
+	if code := run(context.Background(), []string{"-check", "-config", path}, noEnv, &out, &errOut); code != 0 {
+		t.Fatalf("exit %d stderr %s", code, errOut.String())
+	}
+	if !strings.Contains(out.String(), "source span") || !strings.Contains(out.String(), "mode: observe") {
+		t.Fatalf("stdout:\n%s", out.String())
+	}
+	bad := string(example) + "\nsources:\n  - type: span\n    config: {interface: pk-mirror0}\n"
+	if err := os.WriteFile(path, []byte(bad), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	errOut.Reset()
+	if code := run(context.Background(), []string{"-check", "-config", path}, noEnv, &out, &errOut); code != 1 {
+		t.Fatalf("exit %d, want 1", code)
+	}
+	if !strings.Contains(errOut.String(), "local is required") {
+		t.Fatalf("stderr = %q", errOut.String())
 	}
 }
