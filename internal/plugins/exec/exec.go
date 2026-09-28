@@ -75,6 +75,10 @@ type Config struct {
 	Env map[string]string `yaml:"env"`
 	// Config is forwarded verbatim to the plugin in every request.
 	Config any `yaml:"config"`
+
+	// EventFilter (events, min_severity, rate_limit, rate_window) is
+	// accepted only for notifiers.
+	plugin.EventFilter `yaml:",inline"`
 }
 
 type request struct {
@@ -99,6 +103,7 @@ type runner struct {
 	env     []string
 	timeout time.Duration
 	config  any
+	gate    *plugin.EventGate
 	log     *slog.Logger
 }
 
@@ -143,6 +148,15 @@ func newRunner(kind plugin.Kind, c plugin.Config, e plugin.Env) (*runner, error)
 	if cfg.Timeout == 0 {
 		cfg.Timeout = DefaultTimeout
 	}
+	var gate *plugin.EventGate
+	f := cfg.EventFilter
+	if kind == plugin.KindNotifier {
+		if gate, err = plugin.NewEventGate(f); err != nil {
+			return nil, err
+		}
+	} else if len(f.Events) > 0 || f.MinSeverity != "" || f.RateLimit != 0 || f.RateWindow != 0 {
+		return nil, fmt.Errorf("events, min_severity, rate_limit, and rate_window are only for notifiers")
+	}
 	getenv := e.Getenv
 	if getenv == nil {
 		getenv = func(string) string { return "" }
@@ -159,7 +173,7 @@ func newRunner(kind plugin.Kind, c plugin.Config, e plugin.Env) (*runner, error)
 		logger = slog.Default()
 	}
 	r := &runner{kind: kind, name: e.Name, path: path, args: cfg.Args, env: env,
-		timeout: cfg.Timeout, config: cfg.Config, log: logger}
+		timeout: cfg.Timeout, config: cfg.Config, gate: gate, log: logger}
 
 	// Init handshake: lets the plugin validate its own config at load time.
 	ctx, cancel := context.WithTimeout(context.Background(), r.timeout)
@@ -342,7 +356,13 @@ type Notifier struct {
 	r *runner
 }
 
+// EventGate implements plugin.Gated.
+func (n *Notifier) EventGate() *plugin.EventGate { return n.r.gate }
+
 // Notify implements plugin.Notifier.
 func (n *Notifier) Notify(ctx context.Context, e plugin.Event) error {
+	if !n.r.gate.Match(e) {
+		return nil
+	}
 	return n.r.call(ctx, "notify", e, nil)
 }

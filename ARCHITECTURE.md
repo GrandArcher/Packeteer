@@ -41,7 +41,7 @@ flow/SPAN/SNMP/static prefix list
 
 ## Plugins
 
-Every component above sits behind a small interface in `pkg/plugin`, selected by `type` in config: probers, target sources, scorer, routing policies, announcer (router driver), notifiers, and telemetry. Built-ins register through `init()` under `internal/plugins/<kind>/<name>`. `internal/pluginhost` builds and validates the configured set at startup and runs its Start/Stop lifecycle. Out-of-process `exec` plugins (JSON over stdin/stdout) and the `webhook` notifier extend the stock container without recompiling. Announcers are in-process only. Telemetry does not announce. See [docs/PLUGINS.md](docs/PLUGINS.md).
+Every component above sits behind a small interface in `pkg/plugin`, selected by `type` in config: probers, target sources, scorer, routing policies, announcer (router driver), notifiers, and telemetry. Built-ins register through `init()` under `internal/plugins/<kind>/<name>`. `internal/pluginhost` builds and validates the configured set at startup and runs its Start/Stop lifecycle. Out-of-process `exec` plugins (JSON over stdin/stdout) and the `webhook` notifier extend the stock container without recompiling. Events from the catalog ([docs/EVENTS.md](docs/EVENTS.md)) go through `internal/notify`, which gives each notifier its own bounded queue, filter, and rate limit, so a slow notifier never delays probing, decisions, or withdrawals. Announcers are in-process only. Telemetry does not announce. See [docs/PLUGINS.md](docs/PLUGINS.md).
 
 ```
 config ──> pluginhost.Build ──> sources ─┐

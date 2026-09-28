@@ -21,6 +21,7 @@ notifiers:
       headers:
         Authorization: "Bearer ${HOOK_TOKEN}"   # read from the container env
       min_severity: warning
+      rate_limit: 30        # per minute
 announcer:
   type: gobgp
 telemetry:                           # optional; does not announce
@@ -40,7 +41,7 @@ telemetry:                           # optional; does not announce
           percentile: greater_separate
 ```
 
-Each entry has `type` (required), an optional `name` (defaults to the type and must be unique within its list), and an optional `config` block. The plugin decodes `config` itself, strictly: unknown fields are errors. **All plugins are built and validated at startup.** If a type is unknown or a config is invalid, Packeteer refuses to start and prints an error naming the entry, e.g. `notifiers[0] (nope): unknown notifier type "nope" (available: exec, webhook)`.
+Each entry has `type` (required), an optional `name` (defaults to the type and must be unique within its list), and an optional `config` block. The plugin decodes `config` itself, strictly: unknown fields are errors. **All plugins are built and validated at startup.** If a type is unknown or a config is invalid, Packeteer refuses to start and prints an error naming the entry, e.g. `notifiers[0] (nope): unknown notifier type "nope" (available: exec, smtp, snmptrap, webhook)`.
 
 ## Extension points (`pkg/plugin`)
 
@@ -50,7 +51,7 @@ Each entry has `type` (required), an optional `name` (defaults to the type and m
 | `source` | `Targets(ctx) ([]Target, error)` | `static`, `flow`, `traceroute`, `vip`, `outage`, `span` | `exec` |
 | `scorer` | `Score(PathStats) float64` (lower is better). `commit` also plans commit and group moves; `cost` plans moves to the cheapest provider inside a performance floor | `weighted`, `commit`, `cost` | none |
 | `announcer` | `Announce`, `Withdraw`, `WithdrawAll` | `gobgp` | **never** |
-| `notifier` | `Notify(ctx, Event) error` | `webhook` | `exec` |
+| `notifier` | `Notify(ctx, Event) error`, optional `EventGate()` (filters and rate limit) | `webhook` (generic, `slack`, `teams`, `pagerduty`, templates), `smtp`, `snmptrap` | `exec` |
 | `telemetry` | `Snapshot(ctx) ([]Usage, error)` | `snmp` | none |
 | `policy` | `Match(PolicySubject) (PolicyVerdict, bool)`, optional `Maintenance.Active(now)`. The filter chain in front of the scorer | `rules`, `maintenance` | none |
 
@@ -86,7 +87,10 @@ Embed `plugin.Base` for no-op `Start`/`Stop`.
 - `rules` (policy): routing policies by prefix, origin ASN, or country (GeoIP, from a MaxMind-format database you mount; none ships with Packeteer). Actions `ignore`, `allow`, `deny`, `static`, and `vip`. A prefix match beats an ASN match, which beats a country match; the longest rule prefix wins; ties go to the rule listed first. The first policy in `policies` that matches a prefix decides it. Decide applies the verdict and still enforces the RIB, allowlist, cap, and withdraw rules. It does not announce. See [CONFIG.md](CONFIG.md#policies).
 - `maintenance` (policy): windows during which providers carry no improvements. Recurring (five-field cron `schedule` plus `duration`, in `timezone`), one-off (`start`/`end`), or opened on demand through `POST /api/maintenance` (basic auth required, in memory only). Matches no prefixes. It does not announce.
 - `exec`: see below.
-- `webhook`: `url`, `timeout`, `headers`, `min_severity`.
+- `webhook`: `url`, `timeout`, `headers`, `preset` (`generic`, `slack`, `teams`, `pagerduty` with `routing_key_env`), or `template` and `content_type` for SMS and other gateways. See [CONFIG.md](CONFIG.md#notifier-webhook).
+- `smtp`: one plain-text email per event. `host`, `port`, `tls` (`starttls` by default and required; `tls`; or `none` for a trusted local relay without credentials), `ca_file`, `username_env` and `password_env`, `from`, `to`, `subject_prefix`, `helo`, `timeout`. See [CONFIG.md](CONFIG.md#notifier-smtp).
+- `snmptrap`: one SNMPv2c or SNMPv3 trap per event. `address`, `port` (162), `version`, `community_env` or the v3 USM keys and `engine_id`, `enterprise_oid`, `timeout`. See [CONFIG.md](CONFIG.md#notifier-snmptrap).
+- Every notifier, `exec` included, takes `events`, `min_severity`, `rate_limit`, and `rate_window`. The controller applies them in `internal/notify`, which gives each notifier its own bounded queue so a slow one never blocks probing, decisions, withdrawals, or other notifiers. Event kinds, severities, trap IDs, and dedup keys are in [EVENTS.md](EVENTS.md). Notifiers never announce.
 - `gobgp`: no plugin config block. It publishes on the iBGP speaker the RIB view already opened. `local_pref` and `packeteer_community` are top-level controller settings. Each route is the exact prefix learned from the RIB; a config that sets `more_specific_bits` is rejected. Every route gets the community plus NO_EXPORT. The export policy accepts only Packeteer's own routes that carry the community. `Stop` withdraws them. Graceful restart is never turned on. Required, along with `local_pref`, when `mode: inject`.
 - `snmp`: polls `ifHCInOctets` and `ifHCOutOctets` (or the 32-bit octet counters when the 64-bit ones are absent) and tracks 95th-percentile usage for the open UTC billing period. `percentile` is `separate` (inbound and outbound 95ths kept apart), `greater` (95th of max(in, out) per sample), or `greater_separate` (the greater of the two 95ths). The community and v3 passphrases are environment variables named by `community_env`, `auth_env`, and `priv_env`. They are not config values. A failed poll keeps the samples already stored. The plugin does not announce. The `commit` scorer is what spends the snapshot. See [CONFIG.md](CONFIG.md).
 - `fixed`: reports `usage_mbps` and `commit_mbps` from config or from a file re-read on every snapshot. Labs and tests only. It does not poll and it does not announce. A deployment uses `snmp`.
@@ -170,4 +174,3 @@ docker run ... -v "$PWD/plugins:/etc/packeteer/plugins:ro" ghcr.io/grandarcher/p
 
 - Long-running out-of-process plugins over gRPC ([hashicorp/go-plugin](https://github.com/hashicorp/go-plugin)), for probers that keep state or run at high rates.
 - Exporter plugins (InfluxDB, OTLP).
-- More notifiers: email, Slack, PagerDuty (a webhook already covers most of these).
