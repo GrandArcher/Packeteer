@@ -28,6 +28,7 @@ type Set struct {
 	Announcer *Instance[plugin.Announcer]
 	Notifiers []Instance[plugin.Notifier]
 	Telemetry []Instance[plugin.Telemetry]
+	Policies  []Instance[plugin.Policy]
 
 	started []namedLifecycle
 }
@@ -81,6 +82,7 @@ func Build(cfg *config.Config, opts Options) (*Set, error) {
 		Sources:   build(plugin.Sources, "sources", cfg.Sources, base, &errs),
 		Notifiers: build(plugin.Notifiers, "notifiers", cfg.Notifiers, base, &errs),
 		Telemetry: build(plugin.Telemetries, "telemetry", cfg.Telemetry, base, &errs),
+		Policies:  build(plugin.Policies, "policies", cfg.Policies, base, &errs),
 	}
 	if cfg.Scorer != nil {
 		if b := build(plugin.Scorers, "scorer", []config.PluginSpec{*cfg.Scorer}, base, &errs); len(b) == 1 {
@@ -111,6 +113,9 @@ func (s *Set) all() []namedLifecycle {
 	}
 	if s.Scorer != nil {
 		add(plugin.KindScorer, s.Scorer.Name, s.Scorer.Plugin)
+	}
+	for _, p := range s.Policies {
+		add(plugin.KindPolicy, p.Name, p.Plugin)
 	}
 	for _, p := range s.Telemetry {
 		add(plugin.KindTelemetry, p.Name, p.Plugin)

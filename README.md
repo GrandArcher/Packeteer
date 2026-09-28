@@ -241,7 +241,7 @@ When Packeteer's route is best, a normal iBGP session stops sending the native p
 
 `http.listen` defaults to `127.0.0.1:8080`. Set it to `""`, or set `PACKETEER_HTTP_LISTEN=off`, to disable it. Any other value of `PACKETEER_HTTP_LISTEN` replaces `http.listen`. The image exposes port 8080 as documentation; with host networking you do not publish it.
 
-The server is read-only (GET and HEAD). The dashboard loads no remote assets and refreshes every 5 seconds.
+The server is read-only (GET and HEAD), except on-demand maintenance windows (`POST` and `DELETE` on `/api/maintenance`), which need basic auth and can only exclude providers. The dashboard loads no remote assets and refreshes every 5 seconds.
 
 | Path | Body |
 |---|---|
@@ -255,6 +255,7 @@ The server is read-only (GET and HEAD). The dashboard loads no remote assets and
 | `/api/decisions` | Latest per-prefix decision. |
 | `/api/improvements` | Active improvements. In observe and suggest these are recommendations. In inject they are the routes being announced. |
 | `/api/telemetry` | Interface rates and 95th-percentile usage when a telemetry plugin is configured. Empty when it is not. This does not announce. |
+| `/api/maintenance` | Open maintenance windows. `POST` opens an on-demand window and `DELETE /api/maintenance/<id>` closes one, when a `maintenance` policy is configured and basic auth is on ([CONFIG.md](docs/CONFIG.md#policy-maintenance)). |
 
 Basic auth is off unless both `PACKETEER_HTTP_USER` and `PACKETEER_HTTP_PASSWORD` are set. Setting only one refuses to start. Set both when `http.listen` is not loopback. The password is not read from the config file and is not written to the log.
 
@@ -264,7 +265,7 @@ Prometheus metrics are `packeteer_up`, `packeteer_ready`, `packeteer_build_info`
 
 ## Plugins
 
-Probers, target sources, the scorer, the announcer, notifiers, and telemetry are plugins selected by `type` in the config. Unknown types and unknown keys inside a plugin `config` block refuse startup. Built-ins: probers `icmp`, `tcp`, `udp`, and `fixed` (labs only); sources `static`, `flow`, `traceroute`, `vip`, and `outage`; scorers `weighted` (default), `commit` (optional commit control and provider groups; does not announce), and `cost` (optional: cheapest provider inside a performance floor; does not announce); announcer `gobgp`; notifier `webhook`; telemetry `snmp` (interface counters and 95th percentile; credentials from the environment; does not announce) and `fixed` (labs only; a configured usage figure; does not announce). An `exec` plugin is any executable you mount at `/etc/packeteer/plugins` and works in the stock image. Announcers are in-process only. Telemetry is built in.
+Probers, target sources, the scorer, routing policies, the announcer, notifiers, and telemetry are plugins selected by `type` in the config. Unknown types and unknown keys inside a plugin `config` block refuse startup. Built-ins: probers `icmp`, `tcp`, `udp`, and `fixed` (labs only); sources `static`, `flow`, `traceroute`, `vip`, and `outage`; scorers `weighted` (default), `commit` (optional commit control and provider groups; does not announce), and `cost` (optional: cheapest provider inside a performance floor; does not announce); announcer `gobgp`; notifier `webhook`; policies `rules` (ignore, allow, deny, static, or VIP by prefix, origin ASN, or GeoIP country) and `maintenance` (scheduled or on-demand provider maintenance windows); telemetry `snmp` (interface counters and 95th percentile; credentials from the environment; does not announce) and `fixed` (labs only; a configured usage figure; does not announce). An `exec` plugin is any executable you mount at `/etc/packeteer/plugins` and works in the stock image. Announcers are in-process only. Telemetry is built in.
 
 Details, the exec protocol, and a shell example: [docs/PLUGINS.md](docs/PLUGINS.md). Keys: [docs/CONFIG.md](docs/CONFIG.md).
 

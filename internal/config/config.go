@@ -93,6 +93,9 @@ type Config struct {
 	Notifiers []PluginSpec `yaml:"notifiers"`
 	// Telemetry collects per-provider interface usage. It does not announce.
 	Telemetry []PluginSpec `yaml:"telemetry"`
+	// Policies is the routing-policy chain (rules, maintenance windows),
+	// asked in order before each decision. It does not announce.
+	Policies []PluginSpec `yaml:"policies"`
 }
 
 // Log configures slog output.
@@ -483,6 +486,7 @@ func (c *Config) Validate() error {
 	validateSpecs("sources", c.Sources)
 	validateSpecs("notifiers", c.Notifiers)
 	validateSpecs("telemetry", c.Telemetry)
+	validateSpecs("policies", c.Policies)
 	if c.Scorer != nil && c.Scorer.Type == "cost" {
 		priced := 0
 		for _, p := range c.Providers {
