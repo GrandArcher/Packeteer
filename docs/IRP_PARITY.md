@@ -39,7 +39,7 @@ Milestones:
 | Active probing per provider: UDP | Explorer | done | v0.2 | prober (`udp`) | #15 |
 | Traceroute-based probe target discovery | Explorer | done | v0.2 | source (`traceroute`) | #15 |
 | Loss / latency / jitter measurement and scoring | 1.3.1 | done | v0.1 | prober + scorer (`weighted`) | #2, #7 |
-| Throughput-aware scoring (prefix volume weighting) | 1.2.13 Improvements weight | planned | v0.2 | scorer | #23, #18 |
+| Throughput-aware scoring (prefix volume weighting) | 1.2.13 Improvements weight | partial | v0.4 | scorer (`commit` uses flow volume, #18; volume-weighted performance ranking is #34) | #18, #34 |
 | Probe sources per provider (IRP uses PBR; we use source-IP policy routing) | 2.8 Explorer, 2.8.1 PBR | done | v0.1 | core + docs | #2 |
 | Static probe target lists | - | done | v0.1 | source (`static`) | #2 |
 | Flow-based target discovery (NetFlow v5/v9, IPFIX, sFlow) | 2.7.1 Irpflowd | done | v0.1 | source (`flow`) | #5 |
