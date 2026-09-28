@@ -29,6 +29,7 @@ type Set struct {
 	Notifiers []Instance[plugin.Notifier]
 	Telemetry []Instance[plugin.Telemetry]
 	Policies  []Instance[plugin.Policy]
+	Storage   *Instance[plugin.Storage]
 
 	started []namedLifecycle
 }
@@ -94,6 +95,11 @@ func Build(cfg *config.Config, opts Options) (*Set, error) {
 			s.Announcer = &b[0]
 		}
 	}
+	if cfg.Storage != nil {
+		if b := build(plugin.Storages, "storage", []config.PluginSpec{*cfg.Storage}, base, &errs); len(b) == 1 {
+			s.Storage = &b[0]
+		}
+	}
 	if err := errors.Join(errs...); err != nil {
 		return nil, err
 	}
@@ -104,6 +110,11 @@ func (s *Set) all() []namedLifecycle {
 	var out []namedLifecycle
 	add := func(kind plugin.Kind, name string, lc plugin.Lifecycle) {
 		out = append(out, namedLifecycle{fmt.Sprintf("%s %s", kind, name), lc})
+	}
+	// Storage starts first and stops last, so history can be flushed
+	// after the announcer has withdrawn.
+	if s.Storage != nil {
+		add(plugin.KindStorage, s.Storage.Name, s.Storage.Plugin)
 	}
 	for _, p := range s.Sources {
 		add(plugin.KindSource, p.Name, p.Plugin)

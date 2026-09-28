@@ -41,6 +41,7 @@ const (
 	KindNotifier  Kind = "notifier"
 	KindTelemetry Kind = "telemetry"
 	KindPolicy    Kind = "policy"
+	KindStorage   Kind = "storage"
 )
 
 // Lifecycle is implemented by every plugin.

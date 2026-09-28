@@ -1,0 +1,107 @@
+package plugin
+
+import (
+	"context"
+	"net/netip"
+	"time"
+)
+
+// ---- Storage ----
+
+// ProbeBucket is the daily rollup of one provider's measurements toward one
+// prefix. Day is midnight UTC. Sums are over the Measured probes (the ones
+// that returned statistics); Failed counts probes with no measurement. A
+// store merges buckets that share Day, Prefix, and Provider by adding them.
+type ProbeBucket struct {
+	Day       time.Time
+	Prefix    netip.Prefix
+	Provider  string
+	Probes    int
+	Failed    int
+	Measured  int
+	LossSum   float64
+	RTTSumMs  float64
+	JitterSum float64 // milliseconds
+}
+
+// ImprovementRecord is one improvement from start to end. A switch to
+// another provider ends one record and starts another. End is zero while
+// the improvement is active. Before is the native provider's measurement
+// and After the chosen provider's, both at the decision that started it.
+type ImprovementRecord struct {
+	ID         string
+	Prefix     netip.Prefix
+	Provider   string
+	Native     string
+	Cause      string
+	Reason     string
+	Mode       string
+	Start      time.Time
+	End        time.Time
+	EndReason  string
+	HasBefore  bool
+	BeforeLoss float64
+	BeforeRTT  float64 // milliseconds
+	HasAfter   bool
+	AfterLoss  float64
+	AfterRTT   float64 // milliseconds
+	CostDelta  float64
+	EstSavings float64
+	VolumeMbps float64
+	OriginASN  uint32
+	Country    string
+}
+
+// PrefixInfo is what reports know about a prefix: the origin ASN from the
+// learned AS path, an ISO country code when a GeoIP database is configured,
+// and the latest observed volume. A store keeps the newest row per prefix.
+type PrefixInfo struct {
+	Prefix     netip.Prefix
+	OriginASN  uint32
+	Country    string
+	VolumeMbps float64
+	Updated    time.Time
+}
+
+// HistoryBatch is one write. Improvements replace earlier rows with the same
+// ID; buckets are added; prefixes replace.
+type HistoryBatch struct {
+	Buckets      []ProbeBucket
+	Improvements []ImprovementRecord
+	Prefixes     []PrefixInfo
+}
+
+// HistoryQuery selects rows. Buckets are those whose Day is in [From, To)
+// after From is truncated to its UTC day, so a range that starts mid-day
+// includes that whole day (rollups are daily).
+// Improvements are those that overlap [From, To): started before To and
+// still open or ended at or after From. OpenOnly returns only improvements
+// with no End and no buckets. Prefixes are always all rows.
+type HistoryQuery struct {
+	From     time.Time
+	To       time.Time
+	OpenOnly bool
+}
+
+// History is a query result.
+type History struct {
+	Buckets      []ProbeBucket
+	Improvements []ImprovementRecord
+	Prefixes     []PrefixInfo
+}
+
+// Storage persists history for reports. It records what the controller
+// measured and decided; it must not announce routes or change decisions.
+// A write error is logged by the core and never withdraws or blocks an
+// improvement.
+type Storage interface {
+	Lifecycle
+	Write(ctx context.Context, b HistoryBatch) error
+	Read(ctx context.Context, q HistoryQuery) (History, error)
+}
+
+// CountryLookup is optional on a policy plugin that has a GeoIP database.
+// Reports use it for country statistics. It returns "" when unknown.
+type CountryLookup interface {
+	Country(addr netip.Addr) string
+}

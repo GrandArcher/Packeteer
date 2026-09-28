@@ -18,7 +18,7 @@ RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
 # stock image. The image ships only the documentation-prefix example config.
 FROM alpine:3.20
 RUN apk add --no-cache ca-certificates \
- && mkdir -p /etc/packeteer/plugins
+ && mkdir -p /etc/packeteer/plugins /var/lib/packeteer
 COPY --from=build /out/packeteer /usr/local/bin/packeteer
 COPY config.example.yaml /etc/packeteer/config.example.yaml
 
@@ -26,6 +26,9 @@ COPY config.example.yaml /etc/packeteer/config.example.yaml
 # CAP_NET_RAW / CAP_NET_BIND_SERVICE. Docker grants only the capabilities you
 # pass with --cap-add (plus its defaults); see README "Security notes".
 ENV PACKETEER_CONFIG=/etc/packeteer/config.yaml
+
+# Report history (storage: sqlite) lives here. Mount a volume on it
+# (-v packeteer-data:/var/lib/packeteer) so it survives a restart.
 
 # Ops surface (dashboard, /metrics, /api). The process binds http.listen
 # from the mounted config, which defaults to 127.0.0.1:8080. With

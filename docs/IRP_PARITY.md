@@ -148,8 +148,8 @@ Routing policies (#20) are `policy` plugins, a filter chain in front of the scor
 | Custom dashboards / widgets | 3.3.1-3.3.3 | planned | v0.4 | UI | #34 |
 | REST API | 1.2.15, 4.3 | done | v0.1 | core | #9 |
 | Prometheus metrics | - | done | v0.1 | core (`internal/httpapi`) | #9 |
-| Reports: improvements, before/after latency/loss, provider efficiency, top prefixes/ASNs, country stats, cost savings | 3.4, 3.5 | planned | v0.2 | storage/exporter | #23 |
-| Historical records / storage | 3.4.7 | planned | v0.2 | storage/exporter | #23 |
+| Reports: improvements, before/after latency/loss, provider efficiency, top prefixes/ASNs, country stats, cost savings | 3.4, 3.5 | done | v0.2 | core (`internal/history`, `/api/reports`, CSV, dashboard) + storage | #23 |
+| Historical records / storage | 3.4.7 | done | v0.2 | storage (`sqlite`) | #23 |
 | Looking glass, traceroute, whois, manual prefix probe | 3.9 | planned | v0.2 | core + prober | #24 |
 | Alerts: email | 3.14.5 Senders, 3.17 | done | v0.2 | notifier (`smtp`) | #22 |
 | Alerts: webhook (Slack/Teams/SMS gateways) | 3.17.3 | done | v0.1 | notifier (`webhook`; `slack`, `teams`, `pagerduty` presets and body templates in v0.2) | #13, #22 |
@@ -163,6 +163,8 @@ Routing policies (#20) are `policy` plugins, a filter chain in front of the scor
 | Configuration editor and setup wizards | 3.13, 3.2 | planned | v0.4 | UI | #34 |
 | Improvement weights | 1.2.13 | planned | v0.4 | scorer | #34 |
 | Structured logging | - | done | v0.1 | core | #9 |
+
+Reports (#23) come from the `sqlite` storage plugin, which is off unless `storage` is set (the example config sets it). It keeps daily probe rollups per prefix and provider, one row per improvement with the native and chosen provider's loss and RTT at the decision, and per-prefix origin ASN, country (from a `rules` policy with `geoip_db`), and volume. `/api/reports/<name>` serves `summary`, `improvements`, `causes`, `performance`, `providers`, `prefixes`, `asns`, `countries`, `probes`, and `savings` as JSON or CSV, and the dashboard shows them. Mount `/var/lib/packeteer` so history survives a restart. The recorder writes once a minute and never blocks a decision or a withdraw; it does not announce. Push exporters (Prometheus remote-write, OTLP) are not built: scrape `/metrics`.
 
 ## Deployment
 

@@ -131,3 +131,36 @@ announcer:
 		}
 	}
 }
+
+func TestStorageStartsFirstStopsLast(t *testing.T) {
+	events = nil
+	dir := t.TempDir()
+	cfg := load(t, "sources:\n  - type: test-source\n    name: s1\nstorage:\n  type: sqlite\n  config: {path: "+dir+"/p.db}\n")
+	s, err := Build(cfg, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(s.Summary(), ";"); !strings.HasPrefix(got, "storage sqlite;source s1") {
+		t.Errorf("Summary = %s", got)
+	}
+	if err := s.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Storage.Plugin.Write(context.Background(), plugin.HistoryBatch{}); err != nil {
+		t.Fatalf("storage not started: %v", err)
+	}
+	if err := s.Stop(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Storage.Plugin.Write(context.Background(), plugin.HistoryBatch{}); err == nil {
+		t.Fatal("storage still open after Stop")
+	}
+	bad := load(t, "storage:\n  type: nope\n")
+	if _, err := Build(bad, Options{}); err == nil || !strings.Contains(err.Error(), `storage[0] (nope): unknown storage type "nope"`) {
+		t.Fatalf("unknown storage: %v", err)
+	}
+	badCfg := load(t, "storage:\n  type: sqlite\n  config: {path: relative.db}\n")
+	if _, err := Build(badCfg, Options{}); err == nil || !strings.Contains(err.Error(), "must be absolute") {
+		t.Fatalf("bad storage config: %v", err)
+	}
+}

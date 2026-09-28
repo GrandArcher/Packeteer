@@ -191,3 +191,26 @@ func TestBadGeoIPFile(t *testing.T) {
 		t.Fatalf("err = %v", err)
 	}
 }
+
+func TestCountryLookup(t *testing.T) {
+	db := writeCountryDB(t, map[string]string{"192.0.2.0/24": "NL"})
+	p := mustBuild(t, `
+geoip_db: `+db+`
+rules:
+  - {name: any, action: ignore, prefixes: [203.0.113.0/24]}
+`)
+	var lookup plugin.CountryLookup = p
+	if got := lookup.Country(netip.MustParseAddr("192.0.2.1")); got != "NL" {
+		t.Fatalf("Country = %q, want NL", got)
+	}
+	if got := lookup.Country(netip.MustParseAddr("198.51.100.1")); got != "" {
+		t.Fatalf("Country outside the database = %q, want empty", got)
+	}
+	noDB := mustBuild(t, `
+rules:
+  - {name: any, action: ignore, prefixes: [203.0.113.0/24]}
+`)
+	if got := noDB.Country(netip.MustParseAddr("192.0.2.1")); got != "" {
+		t.Fatalf("Country without geoip_db = %q, want empty", got)
+	}
+}

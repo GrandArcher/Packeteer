@@ -1,5 +1,5 @@
 // Package httpapi is Packeteer's ops surface: health, Prometheus metrics, a
-// JSON API, and an embedded dashboard. It does not announce routes. The
+// JSON API, history reports (JSON and CSV), and an embedded dashboard. It does not announce routes. The
 // only write is opening or closing an on-demand maintenance window, which
 // can only exclude providers, and it requires basic auth.
 package httpapi
@@ -28,6 +28,8 @@ type Options struct {
 	Logger   *slog.Logger
 	// Maintenance is nil when no maintenance policy is configured.
 	Maintenance MaintenanceControl
+	// Reports is nil when no storage plugin is configured.
+	Reports ReportSource
 }
 
 // Server is an HTTP server. Handler serves the routes without listening,
@@ -38,6 +40,7 @@ type Server struct {
 	password string
 	snap     func() Snapshot
 	maint    MaintenanceControl
+	reports  ReportSource
 	log      *slog.Logger
 	handler  http.Handler
 	http     *http.Server
@@ -52,7 +55,7 @@ func New(opt Options) (*Server, error) {
 	if opt.Logger == nil {
 		opt.Logger = slog.Default()
 	}
-	s := &Server{addr: opt.Addr, user: opt.User, password: opt.Password, snap: opt.Snapshot, maint: opt.Maintenance, log: opt.Logger}
+	s := &Server{addr: opt.Addr, user: opt.User, password: opt.Password, snap: opt.Snapshot, maint: opt.Maintenance, reports: opt.Reports, log: opt.Logger}
 	s.handler = s.routes()
 	return s, nil
 }
@@ -121,6 +124,8 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("GET /api/decisions", s.handleDecisions)
 	mux.HandleFunc("GET /api/improvements", s.handleImprovements)
 	mux.HandleFunc("GET /api/telemetry", s.handleTelemetry)
+	mux.HandleFunc("GET /api/reports", s.handleReportList)
+	mux.HandleFunc("GET /api/reports/{name}", s.handleReport)
 	mux.HandleFunc("GET /api/maintenance", s.handleMaintenance)
 	mux.HandleFunc("POST /api/maintenance", s.handleMaintenanceOpen)
 	mux.HandleFunc("DELETE /api/maintenance/{id}", s.handleMaintenanceClose)

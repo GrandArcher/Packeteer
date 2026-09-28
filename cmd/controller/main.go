@@ -25,6 +25,7 @@ import (
 
 	"github.com/GrandArcher/Packeteer/internal/announce"
 	"github.com/GrandArcher/Packeteer/internal/config"
+	"github.com/GrandArcher/Packeteer/internal/history"
 	"github.com/GrandArcher/Packeteer/internal/httpapi"
 	"github.com/GrandArcher/Packeteer/internal/notify"
 	"github.com/GrandArcher/Packeteer/internal/pluginhost"
@@ -222,10 +223,18 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 		}
 		go watchMaintenance(ctx, mc.Active, maintenanceWatchInterval, log, poke)
 	}
+	// The recorder is built before the RIB view exists; describe reads it
+	// through this variable once it is set.
+	var view *rib.View
+	rec := newRecorder(cfg, plugins, log, func() *rib.View { return view })
+	var reports httpapi.ReportSource
+	if rec != nil {
+		reports = rec
+	}
 	if addr := cfg.HTTPListen(); addr != "" {
 		srv, err := httpapi.New(httpapi.Options{
 			Addr: addr, User: httpUser, Password: httpPass, Snapshot: col.Snapshot, Logger: log,
-			Maintenance: maint,
+			Maintenance: maint, Reports: reports,
 		})
 		if err != nil {
 			log.Error("refusing to start", "err", err)
@@ -288,7 +297,14 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 		poke()
 		noteOutages(plugins, engine)
 	}
-	engine, err = newEngine(cfg, plugins, log, onRound)
+	// rec is read here, not captured by value: a recorder that fails to
+	// start below is dropped before the first probe.
+	onProbe := func(r probe.Result) {
+		if rec != nil {
+			rec.Probe(r)
+		}
+	}
+	engine, err = newEngine(cfg, plugins, log, onRound, onProbe)
 	if err != nil {
 		log.Error("refusing to start", "err", err)
 		return 1
@@ -309,6 +325,14 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 		log.Error("refusing to start", "err", err)
 		return 1
 	}
+	if rec != nil {
+		// History is optional: a store that cannot be read leaves the core
+		// loop running without reports.
+		if err := rec.Start(ctx); err != nil {
+			log.Error("history disabled", "err", err)
+			rec = nil
+		}
+	}
 	col.SetStarted(true)
 	defer col.SetStarted(false)
 	watch.emit(time.Now(), plugin.EventControllerStarted, "packeteer "+version+" started in "+cfg.Mode+" mode",
@@ -327,7 +351,11 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 		// cancellation) must still withdraw once measurements exceed
 		// MaxResultAge.
 		decideLoop(loopCtx, cfg.Probe.Interval, kick, func(now time.Time) {
-			changes, err := runDecision(now, decider, decisionInput(loopCtx, now, engine, view, plugins), ctl, log, cfg.Mode)
+			in := decisionInput(loopCtx, now, engine, view, plugins)
+			changes, err := runDecision(now, decider, in, ctl, log, cfg.Mode)
+			if rec != nil {
+				rec.Decision(now, changes, in.Results)
+			}
 			if !dispatch.Enabled() {
 				return
 			}
@@ -370,6 +398,15 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 		stopFields["error"] = withdrawErr.Error()
 	}
 	watch.emit(time.Now(), plugin.EventControllerStopping, "packeteer is shutting down; Packeteer routes withdrawn", stopFields)
+	if rec != nil {
+		// After the withdraw: open improvement records end here. The store
+		// is stopped with the other plugins below.
+		histCtx, histCancel := context.WithTimeout(stopCtx, 5*time.Second)
+		if err := rec.Close(histCtx); err != nil {
+			log.Warn("history flush on shutdown", "err", err)
+		}
+		histCancel()
+	}
 	notifyCtx, notifyCancel := context.WithTimeout(stopCtx, 5*time.Second)
 	_ = dispatch.Close(notifyCtx)
 	notifyCancel()
@@ -422,7 +459,7 @@ func newController(cfg *config.Config, plugins *pluginhost.Set, view *rib.View, 
 	return announce.New(ac, ann, ribGate{view}, log)
 }
 
-func newEngine(cfg *config.Config, plugins *pluginhost.Set, log *slog.Logger, onRound func()) (*probe.Engine, error) {
+func newEngine(cfg *config.Config, plugins *pluginhost.Set, log *slog.Logger, onRound func(), onProbe func(probe.Result)) (*probe.Engine, error) {
 	var providers []probe.Provider
 	for _, p := range cfg.Providers {
 		src, err := parseAddr(p.SourceIP)
@@ -447,6 +484,12 @@ func newEngine(cfg *config.Config, plugins *pluginhost.Set, log *slog.Logger, on
 	if burst < need {
 		burst = need
 	}
+	onResult := func(r probe.Result) {
+		logResult(log, r)
+		if onProbe != nil {
+			onProbe(r)
+		}
+	}
 	return probe.New(providers, probers, sources, probe.Options{
 		Interval:             cfg.Probe.Interval,
 		Timeout:              cfg.Probe.Timeout,
@@ -458,7 +501,7 @@ func newEngine(cfg *config.Config, plugins *pluginhost.Set, log *slog.Logger, on
 		RetryPackets:         cfg.Probe.RetryPackets,
 		Limiter:              rate.NewLimiter(rate.Limit(cfg.Probe.RateLimitPPS), burst),
 		Logger:               log,
-		OnResult:             func(r probe.Result) { logResult(log, r) },
+		OnResult:             onResult,
 		OnRound:              onRound,
 	})
 }
@@ -1163,4 +1206,40 @@ func logChanges(log *slog.Logger, mode string, changes []policy.Change) {
 			log.Info("improvement "+c.Action, "mode", mode, "prefix", c.New.Prefix, "provider", c.New.Provider, "native", c.New.Native, "cause", c.New.Cause, "reason", c.New.Reason)
 		}
 	}
+}
+
+// newRecorder returns nil when no storage plugin is configured. It reads
+// the RIB view for origin ASNs and asks policy plugins that have a GeoIP
+// database for countries. History never announces or changes a decision.
+func newRecorder(cfg *config.Config, plugins *pluginhost.Set, log *slog.Logger, view func() *rib.View) *history.Recorder {
+	if plugins == nil || plugins.Storage == nil {
+		return nil
+	}
+	var geo []plugin.CountryLookup
+	for _, pol := range plugins.Policies {
+		if g, ok := pol.Plugin.(plugin.CountryLookup); ok {
+			geo = append(geo, g)
+		}
+	}
+	describe := func(p netip.Prefix) (uint32, string) {
+		var asn uint32
+		if v := view(); v != nil && v.Ready() {
+			if rt, ok := v.Exact(p); ok && len(rt.ASPath) > 0 {
+				asn = rt.ASPath[len(rt.ASPath)-1]
+			}
+		}
+		for _, g := range geo {
+			if c := g.Country(p.Addr()); c != "" {
+				return asn, c
+			}
+		}
+		return asn, ""
+	}
+	return history.New(history.Options{
+		Store:    plugins.Storage.Plugin,
+		Mode:     cfg.Mode,
+		Logger:   log.With("component", "history"),
+		Describe: describe,
+		Volumes:  func(ctx context.Context) map[netip.Prefix]float64 { return collectVolumes(ctx, plugins) },
+	})
 }

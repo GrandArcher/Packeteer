@@ -256,6 +256,85 @@ function refresh() {
   });
 }
 
+function reportURL(format) {
+  var name = document.getElementById("report-name").value || "summary";
+  var days = document.getElementById("report-days").value || "7";
+  var url = "/api/reports/" + encodeURIComponent(name) + "?days=" + encodeURIComponent(days);
+  if (format) url += "&format=" + format;
+  return url;
+}
+
+function fmtCell(v) {
+  if (v == null) return "—";
+  if (typeof v === "number") return String(Math.round(v * 1000) / 1000);
+  return String(v);
+}
+
+function renderReport(data) {
+  var root = document.getElementById("report");
+  clear(root);
+  var rows = (data && data.rows) || [];
+  if (!rows.length) {
+    root.appendChild(el("p", "empty", "No history in this range."));
+    return;
+  }
+  var cols = [];
+  rows.forEach(function (r) {
+    Object.keys(r).forEach(function (k) {
+      if (cols.indexOf(k) < 0) cols.push(k);
+    });
+  });
+  var table = el("table");
+  var hr = el("tr");
+  cols.forEach(function (c) { hr.appendChild(el("th", "", c.replace(/_/g, " "))); });
+  var thead = el("thead");
+  thead.appendChild(hr);
+  table.appendChild(thead);
+  var tb = el("tbody");
+  rows.forEach(function (r) {
+    var tr = el("tr");
+    cols.forEach(function (c) {
+      tr.appendChild(el("td", c === "prefix" ? "mono" : "", fmtCell(r[c])));
+    });
+    tb.appendChild(tr);
+  });
+  table.appendChild(tb);
+  root.appendChild(table);
+}
+
+function loadReport() {
+  document.getElementById("report-csv").setAttribute("href", reportURL("csv"));
+  var root = document.getElementById("report");
+  getJSON(reportURL("")).then(renderReport, function (err) {
+    clear(root);
+    root.appendChild(el("p", "empty", err.message));
+  });
+}
+
+function initReports() {
+  getJSON("/api/reports").then(function (data) {
+    var sel = document.getElementById("report-name");
+    clear(sel);
+    ((data && data.reports) || []).forEach(function (r) {
+      var o = el("option", "", r.name);
+      o.value = r.name;
+      o.title = r.summary || "";
+      sel.appendChild(o);
+    });
+    if (!data || !data.enabled) {
+      var root = document.getElementById("report");
+      clear(root);
+      root.appendChild(el("p", "empty", "History is off. Add storage: {type: sqlite} to the config and mount /var/lib/packeteer."));
+      return;
+    }
+    loadReport();
+  }, function () {});
+  document.getElementById("report-load").addEventListener("click", loadReport);
+  document.getElementById("report-name").addEventListener("change", loadReport);
+  document.getElementById("report-days").addEventListener("change", loadReport);
+}
+
+initReports();
 document.getElementById("refresh").addEventListener("click", refresh);
 refresh();
 setInterval(refresh, REFRESH_MS);
