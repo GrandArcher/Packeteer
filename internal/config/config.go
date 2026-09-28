@@ -99,6 +99,32 @@ type Config struct {
 	// Storage keeps report history (sqlite). Nil disables history and
 	// reports. It does not announce.
 	Storage *PluginSpec `yaml:"storage"`
+	// Troubleshoot configures the read-only operator tools on the ops
+	// HTTP server. They never announce.
+	Troubleshoot Troubleshoot `yaml:"troubleshoot"`
+}
+
+// Troubleshooting defaults and bounds.
+const (
+	DefaultTroubleshootRequestsPerMinute = 6
+	MaxTroubleshootRequestsPerMinute     = 600
+	DefaultTroubleshootMaxHops           = 30
+	MaxTroubleshootMaxHops               = 64
+)
+
+// Troubleshoot configures the looking glass, on-demand probe, traceroute,
+// and whois tools. The looking glass only reads the RIB and is always on.
+type Troubleshoot struct {
+	// Enabled turns on the tools that send traffic or query a registry
+	// (probe, traceroute, whois). Default false.
+	Enabled bool `yaml:"enabled"`
+	// RequestsPerMinute caps probe, traceroute, and whois requests
+	// together (default 6).
+	RequestsPerMinute int `yaml:"requests_per_minute"`
+	// MaxHops bounds one traceroute (default 30).
+	MaxHops int `yaml:"max_hops"`
+	// Whois selects the registry lookup plugin (rdap). Nil disables whois.
+	Whois *PluginSpec `yaml:"whois"`
 }
 
 // Log configures slog output.
@@ -271,6 +297,12 @@ func (c *Config) applyDefaults() {
 	}
 	if c.Probe.Workers == 0 {
 		c.Probe.Workers = DefaultProbeWorkers
+	}
+	if c.Troubleshoot.RequestsPerMinute == 0 {
+		c.Troubleshoot.RequestsPerMinute = DefaultTroubleshootRequestsPerMinute
+	}
+	if c.Troubleshoot.MaxHops == 0 {
+		c.Troubleshoot.MaxHops = DefaultTroubleshootMaxHops
 	}
 	if c.Probe.RateLimitPPS == 0 {
 		c.Probe.RateLimitPPS = DefaultProbeRateLimitPPS
@@ -509,6 +541,15 @@ func (c *Config) Validate() error {
 	}
 	if c.Storage != nil && c.Storage.Type == "" {
 		add("storage: type is required")
+	}
+	if n := c.Troubleshoot.RequestsPerMinute; n < 1 || n > MaxTroubleshootRequestsPerMinute {
+		add("troubleshoot.requests_per_minute %d must be between 1 and %d", n, MaxTroubleshootRequestsPerMinute)
+	}
+	if n := c.Troubleshoot.MaxHops; n < 1 || n > MaxTroubleshootMaxHops {
+		add("troubleshoot.max_hops %d must be between 1 and %d", n, MaxTroubleshootMaxHops)
+	}
+	if c.Troubleshoot.Whois != nil && c.Troubleshoot.Whois.Type == "" {
+		add("troubleshoot.whois: type is required")
 	}
 
 	if c.Probe.Workers < 1 || c.Probe.Workers > MaxProbeWorkers {

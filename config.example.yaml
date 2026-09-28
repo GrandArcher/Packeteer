@@ -187,6 +187,19 @@ storage:
     path: /var/lib/packeteer/packeteer.db
     retention: 9600h            # 400 days
 
+# Troubleshooting tools on the ops server (/api/troubleshoot, dashboard).
+# The looking glass (learned RIB) is always on. enabled: true adds an
+# on-demand probe and traceroute from every provider source and a whois
+# (RDAP) lookup, rate limited. Read-only: nothing here announces.
+# troubleshoot:
+#   enabled: true
+#   requests_per_minute: 6
+#   max_hops: 30
+#   whois:
+#     type: rdap
+#     config:
+#       base_url: https://rdap.org
+
 # Interface counters and 95th-percentile usage. Off unless listed.
 # The community and v3 passphrases are environment variables named here,
 # never values in this file. The collector does not announce.

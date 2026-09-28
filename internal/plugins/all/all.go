@@ -26,4 +26,5 @@ import (
 	_ "github.com/GrandArcher/Packeteer/internal/plugins/storage/sqlite"     // sqlite history storage
 	_ "github.com/GrandArcher/Packeteer/internal/plugins/telemetry/fixed"    // fixed (lab) telemetry
 	_ "github.com/GrandArcher/Packeteer/internal/plugins/telemetry/snmp"     // SNMP interface telemetry
+	_ "github.com/GrandArcher/Packeteer/internal/plugins/whois/rdap"         // RDAP whois (troubleshooting)
 )

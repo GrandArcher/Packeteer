@@ -86,4 +86,5 @@ var (
 	Telemetries = NewRegistry[Telemetry](KindTelemetry)
 	Policies    = NewRegistry[Policy](KindPolicy)
 	Storages    = NewRegistry[Storage](KindStorage)
+	Whoises     = NewRegistry[Whois](KindWhois)
 )

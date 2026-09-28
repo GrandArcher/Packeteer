@@ -48,6 +48,7 @@ The image entrypoint is the same binary. Flags go after the image name.
 | `telemetry` | none | no | Interface counters and 95th-percentile usage. Off unless listed. Does not announce. |
 | `policies` | none | no | Routing policies and maintenance windows, asked in order before each decision. Off unless listed. Does not announce. See [Policies](#policies). |
 | `storage` | none | no | One storage plugin for report history (`type: sqlite`). Off unless set. Does not announce. See [Storage `sqlite`](#storage-sqlite). |
+| `troubleshoot` | looking glass only | no | Read-only operator tools: looking glass, on-demand probe, traceroute, whois. Does not announce. See [`troubleshoot`](#troubleshoot). |
 
 `mode: observe` and `mode: suggest` use the same decision path and announce nothing. `suggest` is the checkpoint: read the log, the dashboard, and `/api/decisions` before you change `mode`. The allowlist is enforced only in `inject`.
 
@@ -134,6 +135,19 @@ Each neighbor:
 Packeteer proposes a hold time of 90 seconds and a keepalive of 30 seconds. The router's shorter hold time wins. A hold time of zero is never proposed. Graceful restart is not a config key and is never enabled. With no neighbors, the RIB view is off and decisions say ranking only: nothing is injected.
 
 One established session is enough for the view to be ready. All sessions down drops the learned routes and withdraws injected routes.
+
+### `troubleshoot`
+
+Operator tools on the ops HTTP server (`/api/troubleshoot/...` and the dashboard's Troubleshooting section). None of them announces, withdraws, or changes a decision. On-demand probe results go back to the caller only; they are not stored as probe results and never reach the decision loop.
+
+| Key | Default | Meaning |
+|---|---|---|
+| `enabled` | `false` | Turns on the tools that send traffic or query a registry: the on-demand probe (the configured prober chain from every provider's `source_ip`), traceroute (UDP from each provider's `source_ip`, `NET_RAW` not needed), and whois. The looking glass only reads the learned RIB and is always on. |
+| `requests_per_minute` | `6` | Probe, traceroute, and whois requests together, 1–600. Excess requests get `429`. |
+| `max_hops` | `30` | TTL limit for one traceroute, 1–64. One probe per hop, `probe.timeout` per hop. A trace stops early after six silent hops in a row. |
+| `whois` | none | One whois plugin entry (`type: rdap`). Without it, whois answers `404`. |
+
+The tools refuse loopback, link-local, multicast, broadcast, and unspecified targets. Whois accepts only an address, a prefix, or an ASN (`AS64496` or `64496`). The active tools are `POST` with a JSON body, so a cross-site page cannot trigger them. When basic auth is on, every tool needs it.
 
 ### Plugin entries
 
@@ -668,6 +682,16 @@ The recorder buffers in memory and writes once a minute and on shutdown, after t
 Country comes from the first `rules` policy that has a `geoip_db`. With none, the `countries` report is empty. Volume is the flow window or a static target's `mbps`.
 
 Reports (`/api/reports/<name>`, JSON or `?format=csv`, and the dashboard): `summary`, `improvements`, `causes` (started per UTC day by cause), `performance` (average loss and RTT before and after, by cause), `providers` (probes, failure rate, average loss, RTT, jitter, improvements onto and off each provider, hours steered onto it), `prefixes`, `asns`, `countries` (`sort=problems`, the default, then `volume` or `loss`), `probes` (per UTC day), and `savings`. `est_savings` is `cost_delta` times volume, treated as a monthly rate; `accrued` is that rate times the hours active inside the range divided by 730. Probe figures are daily rollups, so a range that starts mid-day includes that whole UTC day; improvement figures use the exact range. Query: `days` (default 7, at most 3660), or `from` and `to` (RFC 3339 or `YYYY-MM-DD`, UTC), and `limit` (1–10000; default 20, or 100 for `improvements` and `savings`).
+
+### Whois `rdap`
+
+Used under `troubleshoot.whois`. Asks an RDAP server (RFC 9082/9083) about an address, prefix, or ASN. No credentials. The request leaves from the container's default route, not a provider source.
+
+| Key | Default | Meaning |
+|---|---|---|
+| `base_url` | `https://rdap.org` | RDAP service. `http` or `https`, no credentials, query, or fragment. rdap.org redirects to the right registry; at most 3 redirects, and an `https` base never follows a redirect to `http`. |
+| `timeout` | `5s` | Whole request, up to `1m`. |
+| `max_bytes` | `262144` | Largest response accepted, 1024–4194304. |
 
 ### Announcer `gobgp`
 

@@ -48,6 +48,23 @@
     </div>
     <div id="report"></div>
   </section>
+  <section>
+    <h2>Troubleshooting</h2>
+    <p class="tag">Read-only. The looking glass reads the learned RIB. Probe, traceroute, and whois need <code>troubleshoot.enabled</code> and are rate limited. Nothing here announces.</p>
+    <div class="controls">
+      <label>Tool <select id="tool-name">
+        <option value="lookingglass">Looking glass</option>
+        <option value="probe">Probe</option>
+        <option value="traceroute">Traceroute</option>
+        <option value="whois">Whois</option>
+      </select></label>
+      <label>Target <input id="tool-target" type="text" size="24" placeholder="198.51.100.0/24"></label>
+      <label>Provider <select id="tool-provider"><option value="">all</option></select></label>
+      <button type="button" id="tool-run">Run</button>
+    </div>
+    <div id="tool-status" class="tag"></div>
+    <pre id="tool-out"></pre>
+  </section>
 </main>
 <footer>
   <a href="/metrics">metrics</a>
@@ -57,6 +74,7 @@
   <a href="/api/decisions">decisions</a>
   <a href="/api/improvements">improvements</a>
   <a href="/api/reports">reports</a>
+  <a href="/api/troubleshoot">troubleshoot</a>
 </footer>
 <script src="/app.js"></script>
 </body>
