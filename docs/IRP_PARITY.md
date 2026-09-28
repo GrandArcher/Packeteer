@@ -25,9 +25,9 @@ Milestones:
 
 | Status | Count |
 |---|---|
-| done | 43 |
+| done | 46 |
 | in progress | 0 |
-| planned | 36 |
+| planned | 33 |
 | won't do | 3 |
 
 ## Performance optimization
@@ -151,10 +151,10 @@ Routing policies (#20) are `policy` plugins, a filter chain in front of the scor
 | Reports: improvements, before/after latency/loss, provider efficiency, top prefixes/ASNs, country stats, cost savings | 3.4, 3.5 | planned | v0.2 | storage/exporter | #23 |
 | Historical records / storage | 3.4.7 | planned | v0.2 | storage/exporter | #23 |
 | Looking glass, traceroute, whois, manual prefix probe | 3.9 | planned | v0.2 | core + prober | #24 |
-| Alerts: email | 3.14.5 Senders, 3.17 | planned | v0.2 | notifier (`smtp`) | #22 |
-| Alerts: webhook (Slack/Teams/SMS gateways) | 3.17.3 | done | v0.1 | notifier (`webhook`) | #13 |
-| Alerts: SNMP traps | 3.17.2 | planned | v0.2 | notifier (`snmptrap`) | #22 |
-| Event catalog and notification rules | 1.2.14, 3.16, 3.17.1 | planned | v0.2 | notifier | #22 |
+| Alerts: email | 3.14.5 Senders, 3.17 | done | v0.2 | notifier (`smtp`) | #22 |
+| Alerts: webhook (Slack/Teams/SMS gateways) | 3.17.3 | done | v0.1 | notifier (`webhook`; `slack`, `teams`, `pagerduty` presets and body templates in v0.2) | #13, #22 |
+| Alerts: SNMP traps | 3.17.2 | done | v0.2 | notifier (`snmptrap`) | #22 |
+| Event catalog and notification rules | 1.2.14, 3.16, 3.17.1 | done | v0.2 | notifier (per-notifier `events`, `min_severity`, `rate_limit`; [EVENTS.md](EVENTS.md)) | #22 |
 | Email report subscriptions | 3.15 | planned | v0.4 | notifier + storage | #34 |
 | User accounts, RBAC, access restriction | 3.14.2, 3.14.3 | planned | v0.4 | core (HTTP auth) | #32 |
 | Audit log | - | planned | v0.4 | core + notifier | #32 |

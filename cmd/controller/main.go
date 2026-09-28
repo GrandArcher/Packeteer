@@ -26,6 +26,7 @@ import (
 	"github.com/GrandArcher/Packeteer/internal/announce"
 	"github.com/GrandArcher/Packeteer/internal/config"
 	"github.com/GrandArcher/Packeteer/internal/httpapi"
+	"github.com/GrandArcher/Packeteer/internal/notify"
 	"github.com/GrandArcher/Packeteer/internal/pluginhost"
 	_ "github.com/GrandArcher/Packeteer/internal/plugins/all"
 	"github.com/GrandArcher/Packeteer/internal/plugins/source/outage"
@@ -115,6 +116,7 @@ func run(ctx context.Context, args []string, getenv func(string) string, stdout,
 	path := fs.String("config", defaultPath, "path to the YAML config file (env "+ConfigEnv+")")
 	check := fs.Bool("check", false, "validate config and plugins, print a summary, and exit")
 	showVersion := fs.Bool("version", false, "print version and exit")
+	notifyTest := fs.Bool("notify-test", false, "send a notifier.test event to every configured notifier and exit (no probes, no BGP)")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -193,6 +195,9 @@ func run(ctx context.Context, args []string, getenv func(string) string, stdout,
 		} else {
 			fmt.Fprintln(stdout, "http auth: off")
 		}
+	}
+	if *notifyTest {
+		return sendTestEvent(ctx, plugins, stdout)
 	}
 	if *check {
 		fmt.Fprintln(stdout, "check: ok (no probes sent, no BGP sessions opened)")
@@ -288,9 +293,16 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 		log.Error("refusing to start", "err", err)
 		return 1
 	}
+	dispatch := newDispatcher(plugins, notify.Options{Logger: log})
+	defer func() {
+		closeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = dispatch.Close(closeCtx)
+	}()
+	watch := newEventWatch(dispatch, cfg.Mode)
 	wirePrefixLookup(plugins, view)
 	wireLearnedRoutes(plugins, view)
-	wireOutage(plugins, engine, view, log)
+	wireOutage(plugins, engine, view, dispatch)
 	col.SetTelemetry(func() []plugin.Usage { return collectTelemetry(context.Background(), plugins) })
 	col.Attach(engine, decider, view)
 	if err := plugins.Start(ctx); err != nil {
@@ -299,6 +311,8 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 	}
 	col.SetStarted(true)
 	defer col.SetStarted(false)
+	watch.emit(time.Now(), plugin.EventControllerStarted, "packeteer "+version+" started in "+cfg.Mode+" mode",
+		map[string]string{"mode": cfg.Mode, "version": version})
 	if len(plugins.Sources) == 0 {
 		log.Warn("no target sources configured; nothing to probe (add a `sources:` entry)")
 	}
@@ -313,7 +327,19 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 		// cancellation) must still withdraw once measurements exceed
 		// MaxResultAge.
 		decideLoop(loopCtx, cfg.Probe.Interval, kick, func(now time.Time) {
-			runDecision(now, decider, decisionInput(loopCtx, now, engine, view, plugins), ctl, log, cfg.Mode)
+			changes, err := runDecision(now, decider, decisionInput(loopCtx, now, engine, view, plugins), ctl, log, cfg.Mode)
+			if !dispatch.Enabled() {
+				return
+			}
+			watch.improvements(now, changes)
+			watch.announce(now, err)
+			watch.providerStatus(now, engine.Providers())
+			if view != nil {
+				watch.peerStatus(now, view.Peers())
+			}
+			if len(plugins.Telemetry) > 0 && watch.commitDue(now) {
+				watch.commit(now, collectTelemetry(loopCtx, plugins))
+			}
 		})
 	}()
 
@@ -332,9 +358,21 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 	// Withdraw while the session is still up, then stop plugins (the announcer
 	// withdraws again) and finally drop the session. Graceful restart is never
 	// enabled, so a missed withdraw still disappears with the session.
-	if err := ctl.WithdrawAll(stopCtx); err != nil {
-		log.Error("withdraw on shutdown", "err", err)
+	withdrawErr := ctl.WithdrawAll(stopCtx)
+	if withdrawErr != nil {
+		log.Error("withdraw on shutdown", "err", withdrawErr)
 	}
+	// Tell notifiers after the withdraw, and give them a bounded moment
+	// before they stop. Notification never delays the withdraw.
+	stopFields := map[string]string{"mode": cfg.Mode, "withdrawn": "true"}
+	if withdrawErr != nil {
+		stopFields["withdrawn"] = "false"
+		stopFields["error"] = withdrawErr.Error()
+	}
+	watch.emit(time.Now(), plugin.EventControllerStopping, "packeteer is shutting down; Packeteer routes withdrawn", stopFields)
+	notifyCtx, notifyCancel := context.WithTimeout(stopCtx, 5*time.Second)
+	_ = dispatch.Close(notifyCtx)
+	notifyCancel()
 	if err := plugins.Stop(stopCtx); err != nil {
 		log.Error("plugin shutdown", "err", err)
 		return 1
@@ -448,15 +486,18 @@ func decideLoop(ctx context.Context, interval time.Duration, kick <-chan struct{
 	}
 }
 
-// runDecision applies one evaluation to the announcer.
-func runDecision(now time.Time, decider *policy.Engine, in policy.Input, ctl *announce.Controller, log *slog.Logger, mode string) {
+// runDecision applies one evaluation to the announcer and returns the
+// decision changes and the sync error for the event watcher.
+func runDecision(now time.Time, decider *policy.Engine, in policy.Input, ctl *announce.Controller, log *slog.Logger, mode string) ([]policy.Change, error) {
 	changes := decider.Evaluate(in, now)
 	logChanges(log, mode, changes)
 	actx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	if err := ctl.Sync(actx, decider.Improvements()); err != nil {
+	err := ctl.Sync(actx, decider.Improvements())
+	if err != nil {
 		log.Error("announce", "err", err)
 	}
+	return changes, err
 }
 
 // maxResultAge is how old a measurement may be before Decide treats it as
@@ -607,10 +648,10 @@ func (s *outageSnap) get(view learnedView) []outage.Route {
 }
 
 // wireOutage gives the outage source the probe results and the learned
-// RIB, and fans its events out to the configured notifiers. A missing or
-// unready RIB yields no routes, so AS correlation stays quiet. Notifier
-// delivery is asynchronous so a slow webhook cannot hold the probe loop.
-func wireOutage(plugins *pluginhost.Set, engine *probe.Engine, view *rib.View, log *slog.Logger) {
+// RIB, and sends its events to the notifiers. A missing or unready RIB
+// yields no routes, so AS correlation stays quiet. The dispatcher queues
+// events, so a slow notifier cannot hold the probe loop.
+func wireOutage(plugins *pluginhost.Set, engine *probe.Engine, view *rib.View, out emitter) {
 	if plugins == nil {
 		return
 	}
@@ -622,11 +663,10 @@ func wireOutage(plugins *pluginhost.Set, engine *probe.Engine, view *rib.View, l
 		return outageSamples(engine.Results())
 	}
 	routes := func() []outage.Route { return snap.get(view) }
-	notify := func(ev plugin.Event) {
-		if len(plugins.Notifiers) == 0 {
-			return
+	send := func(ev plugin.Event) {
+		if out != nil {
+			out.Emit(ev)
 		}
-		go deliverOutage(plugins, log, ev)
 	}
 	for _, src := range plugins.Sources {
 		s, ok := src.Plugin.(*outage.Source)
@@ -634,17 +674,7 @@ func wireOutage(plugins *pluginhost.Set, engine *probe.Engine, view *rib.View, l
 			continue
 		}
 		s.SetSnapshots(samples, routes)
-		s.SetNotify(notify)
-	}
-}
-
-func deliverOutage(plugins *pluginhost.Set, log *slog.Logger, ev plugin.Event) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	for _, n := range plugins.Notifiers {
-		if err := n.Plugin.Notify(ctx, ev); err != nil && log != nil {
-			log.Warn("notify", "notifier", n.Name, "kind", ev.Kind, "err", err)
-		}
+		s.SetNotify(send)
 	}
 }
 

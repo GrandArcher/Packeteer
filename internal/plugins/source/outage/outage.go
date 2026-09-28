@@ -32,9 +32,9 @@ const (
 
 // Notifier event kinds.
 const (
-	EventAS      = "outage.as"
-	EventCircuit = "outage.circuit"
-	EventCleared = "outage.cleared"
+	EventAS      = plugin.EventOutageAS
+	EventCircuit = plugin.EventOutageCircuit
+	EventCleared = plugin.EventOutageCleared
 )
 
 // Defaults and bounds. A bare zero on min_prefixes, window, loss_pct,

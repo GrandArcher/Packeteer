@@ -9,6 +9,8 @@ import (
 	"github.com/GrandArcher/Packeteer/internal/config"
 	"github.com/GrandArcher/Packeteer/internal/plugins/announcer/gobgp"
 	"github.com/GrandArcher/Packeteer/internal/plugins/exec"
+	"github.com/GrandArcher/Packeteer/internal/plugins/notifier/smtp"
+	"github.com/GrandArcher/Packeteer/internal/plugins/notifier/snmptrap"
 	"github.com/GrandArcher/Packeteer/internal/plugins/notifier/webhook"
 	"github.com/GrandArcher/Packeteer/internal/plugins/policy/maintenance"
 	"github.com/GrandArcher/Packeteer/internal/plugins/policy/rules"
@@ -62,6 +64,8 @@ func TestConfigDocCoversStructs(t *testing.T) {
 		cost.Config{},
 		cost.Floor{},
 		webhook.Config{},
+		smtp.Config{},
+		snmptrap.Config{},
 		exec.Config{},
 		gobgp.Config{},
 		rules.Config{},

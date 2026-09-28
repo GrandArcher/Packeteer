@@ -15,7 +15,7 @@ packeteer -check -config config.yaml
 packeteer -version
 ```
 
-`-check` builds and validates plugins, prints a summary, and exits. It sends no probes and opens no BGP session. `-version` prints `packeteer <version>` and does not read the config.
+`-check` builds and validates plugins, prints a summary, and exits. It sends no probes and opens no BGP session. `-notify-test` builds the plugins, sends one `notifier.test` event to each notifier, prints `sent`, `filtered`, or `FAILED` per notifier, and exits 1 on a failure. It sends no probes and opens no BGP session. `-version` prints `packeteer <version>` and does not read the config.
 
 The image entrypoint is the same binary. Flags go after the image name.
 
@@ -490,14 +490,72 @@ curl -u "$USER:$PASS" -X DELETE http://127.0.0.1:8080/api/maintenance/api-1
 
 `GET /api/maintenance` lists open windows from every maintenance policy. `POST` opens a window on the first `maintenance` entry (JSON only; at most 100 open at a time). `DELETE /api/maintenance/<id>` closes an on-demand window; configured windows cannot be closed from the API.
 
+### Notifier filters (every notifier)
+
+Every notifier, including `exec`, accepts these keys next to its own. The controller applies them before `Notify`, and each notifier has its own queue, so a slow relay does not delay the others or the probe and decision loops. See [EVENTS.md](EVENTS.md) for the event kinds.
+
+| Key | Default | Meaning |
+|---|---|---|
+| `events` | all | Kinds to deliver: an exact kind (`provider.down`), a group wildcard (`improvement.*`), or `*`. A pattern that matches no kind in the catalog is a startup error. |
+| `min_severity` | `info` | `info`, `warning`, or `critical`. A resolving event (`provider.up`, `bgp.session_up`, `commit.cleared`, `outage.cleared`, ...) passes when the problem it clears would, so a `critical` pager still hears the recovery. |
+| `rate_limit` | `0` | Deliveries per `rate_window` for this notifier. `0` is unlimited. At most 100000. Dropped events are counted, and the next delivered event carries `fields.suppressed`. |
+| `rate_window` | `1m` | 1s to 24h. |
+
 ### Notifier `webhook`
 
 | Key | Default | Meaning |
 |---|---|---|
-| `url` | none | Required absolute `http` or `https` URL. `${VAR}` expands from the environment. |
+| `url` | none | Required absolute `http` or `https` URL, except for `preset: pagerduty`. `${VAR}` expands from the environment, so a Slack or Teams URL that is itself a secret stays out of the file. |
 | `timeout` | `5s` | Not negative. |
 | `headers` | none | Extra request headers. Values expand `${VAR}`. |
-| `min_severity` | `info` | `info`, `warning`, or `critical`. |
+| `preset` | `generic` | `generic` (the event as JSON), `slack` (`{"text": ...}` for an incoming webhook), `teams` (a MessageCard for an incoming webhook), or `pagerduty` (Events API v2). |
+| `routing_key_env` | none | `pagerduty` only, and required there: the name of the environment variable holding the integration key. `url` defaults to `https://events.pagerduty.com/v2/enqueue`. Problems `trigger`; resolving kinds `resolve` the same `dedup_key`. |
+| `template` | none | A Go `text/template` for the body instead of a preset, for SMS and other gateways. The data is the event (`.Kind`, `.Severity`, `.Message`, `.Time`, `.Fields`); functions `json` (quote a string) and `upper`. At most 16 KiB. Only with `preset: generic`. |
+| `content_type` | `application/json` | Only with `template`, e.g. `application/x-www-form-urlencoded`. |
+
+Plus the [filter keys](#notifier-filters-every-notifier).
+
+### Notifier `smtp`
+
+One plain-text email per event. The relay credentials are environment variables; the file names them.
+
+| Key | Default | Meaning |
+|---|---|---|
+| `host` | none | Required. Relay hostname or IP address. It is also the TLS server name. |
+| `port` | `587`, `465`, or `25` | By `tls` mode. |
+| `tls` | `starttls` | `starttls` (required: a relay that does not offer STARTTLS is an error, never a plaintext fallback), `tls` (implicit TLS), or `none` (a trusted local relay; credentials are rejected). |
+| `ca_file` | system roots | Absolute path to a PEM bundle for a private relay CA, mounted into the container. |
+| `username_env` | none | Environment variable holding the AUTH PLAIN user. Set with `password_env`, or neither. |
+| `password_env` | none | Environment variable holding the password. |
+| `from` | none | Required sender address. |
+| `to` | none | Required, 1–50 recipient addresses. |
+| `subject_prefix` | `[packeteer]` | Put before `[SEVERITY] kind: message`. An empty string removes it. |
+| `helo` | `localhost` | EHLO name. |
+| `timeout` | `10s` | Per message, at most 2m. |
+
+Plus the [filter keys](#notifier-filters-every-notifier). Messages carry `X-Packeteer-Event` and `X-Packeteer-Severity` headers for mail rules. CR and LF are stripped from header values.
+
+### Notifier `snmptrap`
+
+One SNMPv2c or SNMPv3 trap per event to one receiver. Add another entry for a second receiver.
+
+| Key | Default | Meaning |
+|---|---|---|
+| `address` | none | Required receiver hostname or IP address. |
+| `port` | `162` | UDP. |
+| `version` | `2c` | `2c` or `3`. |
+| `community_env` | none | Required for `2c`: the environment variable holding the community. |
+| `username_env` | none | Required for `3`: the environment variable holding the USM user. |
+| `security_level` | `authPriv` | `3` only: `noAuthNoPriv`, `authNoPriv`, or `authPriv`. |
+| `auth_protocol` | `SHA` | `SHA`, `SHA224`, `SHA256`, `SHA384`, `SHA512`, or `MD5`. |
+| `auth_env` | none | Environment variable holding the auth passphrase (at least 8 characters). |
+| `priv_protocol` | `AES` | `AES`, `AES192`, `AES256`, `AES192C`, `AES256C`, or `DES`. |
+| `priv_env` | none | Environment variable holding the privacy passphrase (at least 8 characters). |
+| `engine_id` | none | Required for `3`: Packeteer's authoritative engine ID, 5–32 bytes of hex. Configure the same ID for the user on the receiver. |
+| `enterprise_oid` | `1.3.6.1.4.1.8072.9999.9999.7717` | Base OID. The default sits under NET-SNMP's experimental `netSnmpPlaypen` arc; use your own enterprise arc in production. |
+| `timeout` | `5s` | At most 1m. |
+
+Plus the [filter keys](#notifier-filters-every-notifier). The trap OID is `<enterprise_oid>.0.<trap_id>` (trap IDs are in [EVENTS.md](EVENTS.md)). Varbinds are `sysUpTime.0`, `snmpTrapOID.0`, then strings under `<enterprise_oid>.1`: `.1.0` kind, `.2.0` severity, `.3.0` message, `.4.0` time (RFC 3339), `.5.0` fields (`k=v; k=v`, sorted), `.6.0` dedup key.
 
 ### Notifier, prober, or source `exec`
 
@@ -508,6 +566,8 @@ curl -u "$USER:$PASS" -X DELETE http://127.0.0.1:8080/api/maintenance/api-1
 | `timeout` | `30s` | Per call. Not negative. |
 | `env` | none | Passed to the process, plus `PATH` and `PACKETEER_PLUGIN_KIND`. Values expand `${VAR}`. Names cannot contain `=` or NUL. |
 | `config` | none | Forwarded verbatim in every JSON request. |
+
+As a notifier, `exec` also takes the [filter keys](#notifier-filters-every-notifier). A prober or source rejects them.
 
 ### Telemetry `fixed`
 

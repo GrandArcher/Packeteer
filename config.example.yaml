@@ -229,9 +229,36 @@ http:
 
 # Plugins (docs/PLUGINS.md). Out-of-process plugins live in plugin_dir.
 plugin_dir: /etc/packeteer/plugins
+# Notifiers (docs/EVENTS.md). Each has its own events filter, min_severity,
+# and rate_limit. Secrets come from the container environment.
 # notifiers:
 #   - type: webhook
 #     config:
 #       url: https://hooks.example.invalid/packeteer
 #       headers:
 #         Authorization: "Bearer ${HOOK_TOKEN}"
+#   - type: webhook
+#     name: chat
+#     config:
+#       preset: slack                   # slack, teams, pagerduty, or generic
+#       url: ${SLACK_WEBHOOK_URL}
+#       events: ["provider.*", "bgp.*", "commit.*", "outage.*"]
+#   - type: webhook
+#     name: pager
+#     config:
+#       preset: pagerduty
+#       routing_key_env: PAGERDUTY_ROUTING_KEY
+#       min_severity: critical          # recoveries still resolve the incident
+#   - type: smtp
+#     config:
+#       host: smtp.example.invalid      # STARTTLS on 587 by default
+#       username_env: PACKETEER_SMTP_USER
+#       password_env: PACKETEER_SMTP_PASSWORD
+#       from: packeteer@example.invalid
+#       to: [noc@example.invalid]
+#       min_severity: warning
+#       rate_limit: 20                  # per rate_window (default 1m)
+#   - type: snmptrap
+#     config:
+#       address: 192.0.2.162
+#       community_env: PACKETEER_TRAP_COMMUNITY

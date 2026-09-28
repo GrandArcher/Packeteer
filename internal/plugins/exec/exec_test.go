@@ -271,3 +271,29 @@ func TestExampleScript(t *testing.T) {
 		t.Fatalf("targets = %+v", tg)
 	}
 }
+
+func TestNotifierFilter(t *testing.T) {
+	n, err := plugin.Notifiers.New(TypeName, helperConfig(t, "notifier", "config:\n  channel: ops\nevents: [\"provider.*\"]\nrate_limit: 3\n"), env())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n.(plugin.Gated).EventGate() == nil {
+		t.Fatal("exec notifier must expose its gate")
+	}
+	// The helper rejects any kind but test.event, so a call would fail.
+	if err := n.Notify(context.Background(), plugin.NewEvent(plugin.EventBGPSessionDown, time.Now(), "", nil)); err != nil {
+		t.Fatalf("filtered event reached the process: %v", err)
+	}
+	for _, kind := range []plugin.Kind{plugin.KindProber, plugin.KindSource} {
+		c := helperConfig(t, "source", "min_severity: warning\n")
+		var err error
+		if kind == plugin.KindProber {
+			_, err = plugin.Probers.New(TypeName, c, env())
+		} else {
+			_, err = plugin.Sources.New(TypeName, c, env())
+		}
+		if err == nil || !strings.Contains(err.Error(), "only for notifiers") {
+			t.Fatalf("%s: err = %v", kind, err)
+		}
+	}
+}
