@@ -4,6 +4,10 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-09-28
+
+Second release: the v0.2 IRP-parity milestone (#15–#24). More probing (UDP, traceroute discovery, retry, outage detection), SNMP telemetry and 95th-percentile commit control, cost-aware routing, routing policies and maintenance windows, passive problem detection, alerts, reports and history, and read-only troubleshooting tools. The default stays `mode: observe`; every new capability is off unless configured, and injection still requires the learned RIB, the allowlist, the community, the cap, and hold time. CI still proves announce, withdraw, and crash-withdraw against FRR with documentation prefixes.
+
 ### Added
 
 - Troubleshooting tools (#24). `/api/troubleshoot/lookingglass` shows the learned route for a prefix, the longest covering route, and learned more-specifics. With `troubleshoot.enabled: true`, `POST /api/troubleshoot/probe` probes one address from every provider with the prober chain, `POST /api/troubleshoot/traceroute` runs a UDP traceroute from each provider's source, and `POST /api/troubleshoot/whois` looks up an address, prefix, or ASN through the new `whois` plugin kind (built-in `rdap`). The dashboard has a Troubleshooting section. Requests are rate limited (`requests_per_minute`, default 6), need basic auth when it is on, and refuse loopback, link-local, multicast, and unspecified targets. The tools are read-only: on-demand results never reach the decision loop and nothing announces. The looking glass is always on; the rest are off by default.
@@ -58,4 +62,5 @@ First release. An observe-first BGP path performance controller in one container
 - Communities are RFC 1997 (two 16-bit integers). `router_id` is IPv4.
 - RouterOS, Junos, and IOS snippets are documentation. The automated BGP test is the FRR lab.
 
+[0.2.0]: https://github.com/GrandArcher/Packeteer/releases/tag/v0.2.0
 [0.1.0]: https://github.com/GrandArcher/Packeteer/releases/tag/v0.1.0
