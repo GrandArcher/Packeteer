@@ -96,6 +96,9 @@ type Config struct {
 	// Policies is the routing-policy chain (rules, maintenance windows),
 	// asked in order before each decision. It does not announce.
 	Policies []PluginSpec `yaml:"policies"`
+	// Storage keeps report history (sqlite). Nil disables history and
+	// reports. It does not announce.
+	Storage *PluginSpec `yaml:"storage"`
 }
 
 // Log configures slog output.
@@ -503,6 +506,9 @@ func (c *Config) Validate() error {
 	}
 	if c.Announcer != nil && c.Announcer.Type == "" {
 		add("announcer: type is required")
+	}
+	if c.Storage != nil && c.Storage.Type == "" {
+		add("storage: type is required")
 	}
 
 	if c.Probe.Workers < 1 || c.Probe.Workers > MaxProbeWorkers {

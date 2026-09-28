@@ -277,6 +277,10 @@ func (p *Policy) verdict(i int, match string) plugin.PolicyVerdict {
 	return v
 }
 
+// Country implements plugin.CountryLookup for reports. It is "" when no
+// geoip_db is configured.
+func (p *Policy) Country(addr netip.Addr) string { return p.country(addr) }
+
 // country returns the ISO code for addr, or "" when there is no database
 // or no record. A lookup error is treated as no match.
 func (p *Policy) country(addr netip.Addr) string {

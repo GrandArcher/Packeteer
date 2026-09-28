@@ -47,6 +47,7 @@ The image entrypoint is the same binary. Flags go after the image name.
 | `notifiers` | none | no | Events. A failure here does not withdraw routes by itself. |
 | `telemetry` | none | no | Interface counters and 95th-percentile usage. Off unless listed. Does not announce. |
 | `policies` | none | no | Routing policies and maintenance windows, asked in order before each decision. Off unless listed. Does not announce. See [Policies](#policies). |
+| `storage` | none | no | One storage plugin for report history (`type: sqlite`). Off unless set. Does not announce. See [Storage `sqlite`](#storage-sqlite). |
 
 `mode: observe` and `mode: suggest` use the same decision path and announce nothing. `suggest` is the checkpoint: read the log, the dashboard, and `/api/decisions` before you change `mode`. The allowlist is enforced only in `inject`.
 
@@ -646,6 +647,27 @@ Each provider:
 | `commit_mbps` | Required. Greater than 0, at most 100000000. The `commit` scorer compares the billable 95th with this. The collector does not enforce it. |
 | `billing_day` | Required. 1–28. UTC. |
 | `percentile` | Required. `separate`, `greater`, or `greater_separate`. |
+
+### Storage `sqlite`
+
+Off unless `storage.type` is `sqlite`. Keeps report history in an embedded SQLite file (pure Go, no cgo, works in the stock image). It records history only: it does not announce and does not change a decision. A write error is logged and retried on the next flush; it never delays or withdraws an improvement. The rollback is to delete the `storage` block and restart.
+
+| Key | Default | Meaning |
+|---|---|---|
+| `path` | `/var/lib/packeteer/packeteer.db` | Database file. Must be absolute. The directory is created on start. Mount a volume on it (`-v packeteer-data:/var/lib/packeteer`) so history survives a container restart. |
+| `retention` | `9600h` (400 days) | Rows older than this are deleted on start and once a day. `24h`–`87600h`. An improvement that is still active is kept. |
+
+What is stored:
+
+- Daily probe rollups per prefix and provider (UTC day): probes, failed probes, and sums of loss, RTT, and jitter. Raw probe results are not stored.
+- One row per improvement, from start to end. A switch to another provider ends the row and starts a new one. Each row has the cause, reason, mode, the native provider's loss and RTT and the chosen provider's loss and RTT at the decision that started it, `cost_delta`, `est_savings`, the prefix volume when known, the origin ASN (last AS in the learned path), and the country. In observe and suggest these are recommendations; in inject they were announced.
+- Per prefix: origin ASN, country, and latest volume.
+
+The recorder buffers in memory and writes once a minute and on shutdown, after the routes are withdrawn. Rows a previous process left open are closed on start with `controller restarted (routes withdrawn)`.
+
+Country comes from the first `rules` policy that has a `geoip_db`. With none, the `countries` report is empty. Volume is the flow window or a static target's `mbps`.
+
+Reports (`/api/reports/<name>`, JSON or `?format=csv`, and the dashboard): `summary`, `improvements`, `causes` (started per UTC day by cause), `performance` (average loss and RTT before and after, by cause), `providers` (probes, failure rate, average loss, RTT, jitter, improvements onto and off each provider, hours steered onto it), `prefixes`, `asns`, `countries` (`sort=problems`, the default, then `volume` or `loss`), `probes` (per UTC day), and `savings`. `est_savings` is `cost_delta` times volume, treated as a monthly rate; `accrued` is that rate times the hours active inside the range divided by 730. Probe figures are daily rollups, so a range that starts mid-day includes that whole UTC day; improvement figures use the exact range. Query: `days` (default 7, at most 3660), or `from` and `to` (RFC 3339 or `YYYY-MM-DD`, UTC), and `limit` (1–10000; default 20, or 100 for `improvements` and `savings`).
 
 ### Announcer `gobgp`
 

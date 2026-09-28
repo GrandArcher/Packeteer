@@ -50,6 +50,7 @@ docker run -d --name packeteer --network host \
   --restart unless-stopped \
   -v "$PWD/config.yaml:/etc/packeteer/config.yaml:ro" \
   -v "$PWD/plugins:/etc/packeteer/plugins:ro" \
+  -v packeteer-data:/var/lib/packeteer \
   "$IMAGE"
 ```
 
@@ -61,6 +62,8 @@ docker run --rm -e PACKETEER_CONFIG=/etc/packeteer/config.example.yaml \
 ```
 
 The default config path inside the container is `/etc/packeteer/config.yaml` (`PACKETEER_CONFIG`, or `-config`).
+
+The `packeteer-data` volume keeps report history (`storage: {type: sqlite}`, file `/var/lib/packeteer/packeteer.db`) across container restarts and upgrades. Without the volume, reports still work but start empty after the container is recreated. Leave out `storage` to turn history off; the probe and decision loop does not depend on it.
 
 ### Docker Compose
 
@@ -245,7 +248,7 @@ The server is read-only (GET and HEAD), except on-demand maintenance windows (`P
 
 | Path | Body |
 |---|---|
-| `/` | Provider health, per-prefix loss / RTT / jitter, current vs recommended exit, active improvements. |
+| `/` | Provider health, per-prefix loss / RTT / jitter, current vs recommended exit, active improvements, and reports (loaded on demand, with CSV links). |
 | `/healthz` | Liveness. JSON `status` is `ok`. |
 | `/readyz` | Readiness. 503 until startup finishes, and until an iBGP session is up when neighbors are configured. |
 | `/metrics` | Prometheus text. |
@@ -255,6 +258,8 @@ The server is read-only (GET and HEAD), except on-demand maintenance windows (`P
 | `/api/decisions` | Latest per-prefix decision. |
 | `/api/improvements` | Active improvements. In observe and suggest these are recommendations. In inject they are the routes being announced. |
 | `/api/telemetry` | Interface rates and 95th-percentile usage when a telemetry plugin is configured. Empty when it is not. This does not announce. |
+| `/api/reports` | The report list, and whether history storage is on. |
+| `/api/reports/<name>` | One report as JSON, or CSV with `?format=csv`. Range: `?days=7` (default), or `from` and `to` as RFC 3339 or `YYYY-MM-DD` (UTC). `limit` and, for `prefixes`, `asns`, and `countries`, `sort=problems\|volume\|loss`. Reports: `summary`, `improvements`, `causes`, `performance` (loss and latency before and after), `providers` (efficiency), `prefixes`, `asns`, `countries`, `probes` (per day), `savings`. Needs `storage`. |
 | `/api/maintenance` | Open maintenance windows. `POST` opens an on-demand window and `DELETE /api/maintenance/<id>` closes one, when a `maintenance` policy is configured and basic auth is on ([CONFIG.md](docs/CONFIG.md#policy-maintenance)). |
 
 Basic auth is off unless both `PACKETEER_HTTP_USER` and `PACKETEER_HTTP_PASSWORD` are set. Setting only one refuses to start. Set both when `http.listen` is not loopback. The password is not read from the config file and is not written to the log.
@@ -265,7 +270,7 @@ Prometheus metrics are `packeteer_up`, `packeteer_ready`, `packeteer_build_info`
 
 ## Plugins
 
-Probers, target sources, the scorer, routing policies, the announcer, notifiers, and telemetry are plugins selected by `type` in the config. Unknown types and unknown keys inside a plugin `config` block refuse startup. Built-ins: probers `icmp`, `tcp`, `udp`, and `fixed` (labs only); sources `static`, `flow` (optionally scoring TCP failures from flow records), `traceroute`, `vip`, `outage`, and `span` (passive problem detection from a mirror port or pcap; needs `NET_RAW`; does not announce); scorers `weighted` (default), `commit` (optional commit control and provider groups; does not announce), and `cost` (optional: cheapest provider inside a performance floor; does not announce); announcer `gobgp`; notifiers `webhook` (generic JSON, Slack, Teams, PagerDuty, or a template for SMS gateways), `smtp`, and `snmptrap`, each with its own event filter and rate limit ([docs/EVENTS.md](docs/EVENTS.md)); policies `rules` (ignore, allow, deny, static, or VIP by prefix, origin ASN, or GeoIP country) and `maintenance` (scheduled or on-demand provider maintenance windows); telemetry `snmp` (interface counters and 95th percentile; credentials from the environment; does not announce) and `fixed` (labs only; a configured usage figure; does not announce). An `exec` plugin is any executable you mount at `/etc/packeteer/plugins` and works in the stock image. Announcers are in-process only. Telemetry is built in.
+Probers, target sources, the scorer, routing policies, the announcer, notifiers, and telemetry are plugins selected by `type` in the config. Unknown types and unknown keys inside a plugin `config` block refuse startup. Built-ins: probers `icmp`, `tcp`, `udp`, and `fixed` (labs only); sources `static`, `flow` (optionally scoring TCP failures from flow records), `traceroute`, `vip`, `outage`, and `span` (passive problem detection from a mirror port or pcap; needs `NET_RAW`; does not announce); scorers `weighted` (default), `commit` (optional commit control and provider groups; does not announce), and `cost` (optional: cheapest provider inside a performance floor; does not announce); announcer `gobgp`; notifiers `webhook` (generic JSON, Slack, Teams, PagerDuty, or a template for SMS gateways), `smtp`, and `snmptrap`, each with its own event filter and rate limit ([docs/EVENTS.md](docs/EVENTS.md)); policies `rules` (ignore, allow, deny, static, or VIP by prefix, origin ASN, or GeoIP country) and `maintenance` (scheduled or on-demand provider maintenance windows); telemetry `snmp` (interface counters and 95th percentile; credentials from the environment; does not announce) and `fixed` (labs only; a configured usage figure; does not announce); storage `sqlite` (report history on a mounted volume; does not announce). An `exec` plugin is any executable you mount at `/etc/packeteer/plugins` and works in the stock image. Announcers are in-process only. Telemetry is built in.
 
 Details, the exec protocol, and a shell example: [docs/PLUGINS.md](docs/PLUGINS.md). Keys: [docs/CONFIG.md](docs/CONFIG.md).
 

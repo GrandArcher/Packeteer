@@ -85,4 +85,5 @@ var (
 	Notifiers   = NewRegistry[Notifier](KindNotifier)
 	Telemetries = NewRegistry[Telemetry](KindTelemetry)
 	Policies    = NewRegistry[Policy](KindPolicy)
+	Storages    = NewRegistry[Storage](KindStorage)
 )

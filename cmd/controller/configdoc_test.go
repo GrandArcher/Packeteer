@@ -27,6 +27,7 @@ import (
 	"github.com/GrandArcher/Packeteer/internal/plugins/source/static"
 	"github.com/GrandArcher/Packeteer/internal/plugins/source/traceroute"
 	"github.com/GrandArcher/Packeteer/internal/plugins/source/vip"
+	"github.com/GrandArcher/Packeteer/internal/plugins/storage/sqlite"
 	telemetryfixed "github.com/GrandArcher/Packeteer/internal/plugins/telemetry/fixed"
 	"github.com/GrandArcher/Packeteer/internal/plugins/telemetry/snmp"
 )
@@ -72,6 +73,7 @@ func TestConfigDocCoversStructs(t *testing.T) {
 		rules.Rule{},
 		maintenance.Config{},
 		maintenance.Window{},
+		sqlite.Config{},
 	) {
 		if !strings.Contains(text, "`"+key+"`") {
 			missing = append(missing, key)

@@ -107,6 +107,66 @@ jobs:
           grep -q "prober=icmp" /tmp/pk.log
           grep -q "loss_pct=0" /tmp/pk.log
           grep -q "shutting down" /tmp/pk.log
+      - name: history survives a container restart (mounted volume, observe)
+        run: |
+          cat > /tmp/hist.yaml <<'YAML'
+          mode: observe
+          asn: 64512
+          router_id: 192.0.2.10
+          http:
+            listen: "127.0.0.1:18083"
+          providers:
+            - name: lab-a
+              source_ip: 127.0.0.1
+              next_hop: 127.0.0.1
+          probe: {interval: 1s, timeout: 200ms, packets: 2}
+          probers:
+            - type: fixed
+              config:
+                paths: [{provider: lab-a, rtt_ms: 10}]
+          sources:
+            - type: static
+              config:
+                targets: [{prefix: 198.51.100.0/24}]
+          storage:
+            type: sqlite
+          YAML
+          # Second run: same volume, no sources, so no new probes. The
+          # count it reports can only come from the first run's file.
+          sed '/^sources:/,/^storage:/{/^storage:/!d}' /tmp/hist.yaml > /tmp/hist2.yaml
+          grep -q '^storage:' /tmp/hist2.yaml
+          if grep -q '^sources:' /tmp/hist2.yaml; then exit 1; fi
+          count() { curl -fsS "http://127.0.0.1:18083/api/reports/probes?days=2&format=csv" | awk -F, 'NR>1 {n+=$2} END {print n+0}'; }
+          docker volume create pkdata
+          docker run -d --name pkhist --network host --cap-add NET_RAW --cap-add NET_ADMIN \
+            -v /tmp/hist.yaml:/etc/packeteer/config.yaml:ro -v pkdata:/var/lib/packeteer packeteer:ci
+          n1=0
+          for _ in $(seq 1 15); do
+            n1="$(count 2>/dev/null || echo 0)"
+            if [ "$n1" -ge 3 ]; then break; fi
+            sleep 1
+          done
+          docker stop -t 15 pkhist
+          test "$(docker inspect -f '{{.State.ExitCode}}' pkhist)" = "0"
+          docker logs pkhist 2>&1 | tail -n 20
+          docker rm pkhist
+          test "$n1" -ge 3
+          docker run -d --name pkhist2 --network host --cap-add NET_RAW --cap-add NET_ADMIN \
+            -v /tmp/hist2.yaml:/etc/packeteer/config.yaml:ro -v pkdata:/var/lib/packeteer packeteer:ci
+          n2=0
+          for _ in $(seq 1 15); do
+            n2="$(count 2>/dev/null || echo 0)"
+            if [ "$n2" -gt 0 ]; then break; fi
+            sleep 1
+          done
+          curl -fsS "http://127.0.0.1:18083/api/reports/providers?days=2" | grep -q '"provider":"lab-a"'
+          docker stop -t 15 pkhist2
+          docker logs pkhist2 2>&1 | tail -n 20
+          docker rm pkhist2
+          docker volume rm pkdata
+          echo "probes before restart: $n1, after restart: $n2"
+          # The first run may probe once more between the read and the stop.
+          test "$n2" -ge "$n1"
       - name: span source smoke test (mounted pcap fixture, observe)
         run: |
           cat > /tmp/span.yaml <<'YAML'

@@ -176,6 +176,17 @@ log:
 http:
   listen: "127.0.0.1:8080"
 
+# Report history (improvements, before/after loss and latency, provider
+# efficiency, top prefixes/ASNs/countries, probes per day, cost savings) on
+# the dashboard and /api/reports. An embedded SQLite file. Mount a volume on
+# /var/lib/packeteer so it survives a restart. Delete this block to turn
+# history off; probing and decisions do not depend on it. Does not announce.
+storage:
+  type: sqlite
+  config:
+    path: /var/lib/packeteer/packeteer.db
+    retention: 9600h            # 400 days
+
 # Interface counters and 95th-percentile usage. Off unless listed.
 # The community and v3 passphrases are environment variables named here,
 # never values in this file. The collector does not announce.
