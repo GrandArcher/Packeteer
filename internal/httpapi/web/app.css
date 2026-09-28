@@ -140,3 +140,5 @@ footer a { color: var(--head); }
 .controls { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; margin: 0 0 12px; }
 
 .controls select { margin-left: 4px; }
+#tool-out { max-height: 32rem; overflow: auto; font-size: 0.85rem; }
+#tool-out:empty { display: none; }

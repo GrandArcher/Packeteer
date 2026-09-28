@@ -409,3 +409,29 @@ func TestHTTPAndLog(t *testing.T) {
 		t.Fatalf("listen = %q", cfg.HTTPListen())
 	}
 }
+
+func TestTroubleshootDefaultsAndBounds(t *testing.T) {
+	cfg, err := Parse([]byte(validYAML))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ts := cfg.Troubleshoot
+	if ts.Enabled || ts.RequestsPerMinute != DefaultTroubleshootRequestsPerMinute || ts.MaxHops != DefaultTroubleshootMaxHops || ts.Whois != nil {
+		t.Fatalf("defaults = %+v", ts)
+	}
+	for _, block := range []string{
+		"troubleshoot:\n  requests_per_minute: 601\n",
+		"troubleshoot:\n  requests_per_minute: -1\n",
+		"troubleshoot:\n  max_hops: 65\n",
+		"troubleshoot:\n  whois: {}\n",
+		"troubleshoot:\n  bogus: true\n",
+	} {
+		if _, err := Parse([]byte(validYAML + block)); err == nil {
+			t.Errorf("%q accepted", block)
+		}
+	}
+	cfg, err = Parse([]byte(validYAML + "troubleshoot:\n  enabled: true\n  whois: {type: rdap}\n"))
+	if err != nil || !cfg.Troubleshoot.Enabled || cfg.Troubleshoot.Whois.Type != "rdap" {
+		t.Fatalf("enabled: %+v %v", cfg.Troubleshoot, err)
+	}
+}

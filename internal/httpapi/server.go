@@ -1,7 +1,9 @@
 // Package httpapi is Packeteer's ops surface: health, Prometheus metrics, a
-// JSON API, history reports (JSON and CSV), and an embedded dashboard. It does not announce routes. The
-// only write is opening or closing an on-demand maintenance window, which
-// can only exclude providers, and it requires basic auth.
+// JSON API, history reports (JSON and CSV), read-only troubleshooting tools
+// (looking glass, on-demand probe, traceroute, whois), and an embedded
+// dashboard. It does not announce routes. The only write is opening or
+// closing an on-demand maintenance window, which can only exclude
+// providers, and it requires basic auth.
 package httpapi
 
 import (
@@ -16,6 +18,8 @@ import (
 	"net"
 	"net/http"
 	"time"
+
+	"github.com/GrandArcher/Packeteer/internal/troubleshoot"
 )
 
 // Options configure the server. User and Password must both be set or both
@@ -30,6 +34,8 @@ type Options struct {
 	Maintenance MaintenanceControl
 	// Reports is nil when no storage plugin is configured.
 	Reports ReportSource
+	// Tools are the read-only troubleshooting tools. Nil disables them.
+	Tools *troubleshoot.Tools
 }
 
 // Server is an HTTP server. Handler serves the routes without listening,
@@ -41,6 +47,7 @@ type Server struct {
 	snap     func() Snapshot
 	maint    MaintenanceControl
 	reports  ReportSource
+	tools    *troubleshoot.Tools
 	log      *slog.Logger
 	handler  http.Handler
 	http     *http.Server
@@ -55,7 +62,7 @@ func New(opt Options) (*Server, error) {
 	if opt.Logger == nil {
 		opt.Logger = slog.Default()
 	}
-	s := &Server{addr: opt.Addr, user: opt.User, password: opt.Password, snap: opt.Snapshot, maint: opt.Maintenance, reports: opt.Reports, log: opt.Logger}
+	s := &Server{addr: opt.Addr, user: opt.User, password: opt.Password, snap: opt.Snapshot, maint: opt.Maintenance, reports: opt.Reports, tools: opt.Tools, log: opt.Logger}
 	s.handler = s.routes()
 	return s, nil
 }
@@ -129,6 +136,11 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("GET /api/maintenance", s.handleMaintenance)
 	mux.HandleFunc("POST /api/maintenance", s.handleMaintenanceOpen)
 	mux.HandleFunc("DELETE /api/maintenance/{id}", s.handleMaintenanceClose)
+	mux.HandleFunc("GET /api/troubleshoot", s.handleToolStatus)
+	mux.HandleFunc("GET /api/troubleshoot/lookingglass", s.handleLookingGlass)
+	mux.HandleFunc("POST /api/troubleshoot/probe", s.handleToolProbe)
+	mux.HandleFunc("POST /api/troubleshoot/traceroute", s.handleToolTrace)
+	mux.HandleFunc("POST /api/troubleshoot/whois", s.handleToolWhois)
 	mux.Handle("GET /", http.FileServer(http.FS(webRoot)))
 
 	var h http.Handler = mux

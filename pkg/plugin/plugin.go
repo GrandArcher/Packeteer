@@ -42,6 +42,7 @@ const (
 	KindTelemetry Kind = "telemetry"
 	KindPolicy    Kind = "policy"
 	KindStorage   Kind = "storage"
+	KindWhois     Kind = "whois"
 )
 
 // Lifecycle is implemented by every plugin.
@@ -330,3 +331,28 @@ type Telemetry interface {
 // source address cannot be used, e.g. it is not configured on the host. The
 // core treats it as "provider down" and fails closed instead of guessing.
 var ErrSourceUnavailable = errors.New("probe source address unavailable")
+
+// ---- Whois ----
+
+// WhoisResult is a registry lookup for an IP prefix or an ASN. Raw is the
+// registry's response body, size-capped by the plugin.
+type WhoisResult struct {
+	Query   string   `json:"query"`
+	Kind    string   `json:"kind"` // "ip" or "asn"
+	Handle  string   `json:"handle,omitempty"`
+	Name    string   `json:"name,omitempty"`
+	Country string   `json:"country,omitempty"`
+	Range   string   `json:"range,omitempty"` // "start - end" for IP networks, "start - end" ASNs
+	Remarks []string `json:"remarks,omitempty"`
+	Source  string   `json:"source,omitempty"` // URL that answered
+	Raw     []byte   `json:"-"`
+}
+
+// Whois looks up registry data for a troubleshooting request. It is
+// read-only: it must not announce routes or change controller state.
+// Query is either a prefix or address ("192.0.2.0/24") or an ASN
+// ("AS64496" or "64496"); the core validates it before calling.
+type Whois interface {
+	Lifecycle
+	Lookup(ctx context.Context, query string) (WhoisResult, error)
+}

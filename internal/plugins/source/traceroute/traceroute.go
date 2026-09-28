@@ -475,3 +475,10 @@ func (s *Source) finish(hops [][]sample, dest netip.Addr, err error) (netip.Addr
 	host, ok := selectHost(hops, dest, s.minReplies)
 	return host, ok, nil
 }
+
+// Hop sends one TTL-limited UDP probe from src to dst with the built-in
+// Linux traceroute. The troubleshooting API uses it for on-demand
+// traces. It returns plugin.ErrSourceUnavailable when src cannot be bound.
+func Hop(ctx context.Context, src, dst netip.Addr, ttl, port int, timeout time.Duration) (netip.Addr, bool, error) {
+	return udpHopper{}.Probe(ctx, src, dst, ttl, port, timeout)
+}

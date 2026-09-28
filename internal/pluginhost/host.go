@@ -30,6 +30,8 @@ type Set struct {
 	Telemetry []Instance[plugin.Telemetry]
 	Policies  []Instance[plugin.Policy]
 	Storage   *Instance[plugin.Storage]
+	// Whois serves the troubleshooting API only. It never announces.
+	Whois *Instance[plugin.Whois]
 
 	started []namedLifecycle
 }
@@ -100,6 +102,11 @@ func Build(cfg *config.Config, opts Options) (*Set, error) {
 			s.Storage = &b[0]
 		}
 	}
+	if cfg.Troubleshoot.Whois != nil {
+		if b := build(plugin.Whoises, "troubleshoot.whois", []config.PluginSpec{*cfg.Troubleshoot.Whois}, base, &errs); len(b) == 1 {
+			s.Whois = &b[0]
+		}
+	}
 	if err := errors.Join(errs...); err != nil {
 		return nil, err
 	}
@@ -133,6 +140,9 @@ func (s *Set) all() []namedLifecycle {
 	}
 	for _, p := range s.Notifiers {
 		add(plugin.KindNotifier, p.Name, p.Plugin)
+	}
+	if s.Whois != nil {
+		add(plugin.KindWhois, s.Whois.Name, s.Whois.Plugin)
 	}
 	if s.Announcer != nil {
 		add(plugin.KindAnnouncer, s.Announcer.Name, s.Announcer.Plugin)

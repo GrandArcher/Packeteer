@@ -334,7 +334,71 @@ function initReports() {
   document.getElementById("report-days").addEventListener("change", loadReport);
 }
 
+function postJSON(path, body) {
+  return fetch(path, {
+    method: "POST",
+    cache: "no-store",
+    headers: {Accept: "application/json", "Content-Type": "application/json"},
+    body: JSON.stringify(body)
+  }).then(function (res) {
+    return res.text().then(function (text) {
+      var data = null;
+      try { data = text ? JSON.parse(text) : null; } catch (e) { data = null; }
+      if (!res.ok) {
+        throw new Error((data && data.error) || res.statusText);
+      }
+      return data;
+    });
+  });
+}
+
+function runTool() {
+  var tool = document.getElementById("tool-name").value;
+  var target = document.getElementById("tool-target").value.trim();
+  var provider = document.getElementById("tool-provider").value;
+  var status = document.getElementById("tool-status");
+  var out = document.getElementById("tool-out");
+  if (!target) {
+    status.textContent = "Enter a prefix, address, or ASN.";
+    return;
+  }
+  status.textContent = "Running " + tool + "…";
+  out.textContent = "";
+  var req;
+  if (tool === "lookingglass") {
+    req = getJSON("/api/troubleshoot/lookingglass?prefix=" + encodeURIComponent(target));
+  } else if (tool === "whois") {
+    req = postJSON("/api/troubleshoot/whois", {query: target});
+  } else if (tool === "traceroute") {
+    req = postJSON("/api/troubleshoot/traceroute", {target: target, provider: provider});
+  } else {
+    req = postJSON("/api/troubleshoot/probe", {target: target});
+  }
+  req.then(function (data) {
+    status.textContent = "Done.";
+    out.textContent = JSON.stringify(data, null, 2);
+  }, function (err) {
+    status.textContent = err.message;
+  });
+}
+
+function initTools() {
+  getJSON("/api/troubleshoot").then(function (data) {
+    var sel = document.getElementById("tool-provider");
+    ((data && data.providers) || []).forEach(function (name) {
+      var o = el("option", "", name);
+      o.value = name;
+      sel.appendChild(o);
+    });
+    if (data && !data.enabled) {
+      document.getElementById("tool-status").textContent = "Probe, traceroute, and whois are off (troubleshoot.enabled: false).";
+    }
+  }, function () {});
+  document.getElementById("tool-run").addEventListener("click", runTool);
+}
+
 initReports();
+initTools();
 document.getElementById("refresh").addEventListener("click", refresh);
 refresh();
 setInterval(refresh, REFRESH_MS);

@@ -31,10 +31,12 @@ import (
 	"github.com/GrandArcher/Packeteer/internal/pluginhost"
 	_ "github.com/GrandArcher/Packeteer/internal/plugins/all"
 	"github.com/GrandArcher/Packeteer/internal/plugins/source/outage"
+	"github.com/GrandArcher/Packeteer/internal/plugins/source/traceroute"
 	"github.com/GrandArcher/Packeteer/internal/plugins/source/vip"
 	"github.com/GrandArcher/Packeteer/internal/policy"
 	"github.com/GrandArcher/Packeteer/internal/probe"
 	"github.com/GrandArcher/Packeteer/internal/rib"
+	"github.com/GrandArcher/Packeteer/internal/troubleshoot"
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
 )
 
@@ -231,10 +233,15 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 	if rec != nil {
 		reports = rec
 	}
+	tools, terr := newTools(cfg, plugins)
+	if terr != nil {
+		log.Error("refusing to start", "err", terr)
+		return 1
+	}
 	if addr := cfg.HTTPListen(); addr != "" {
 		srv, err := httpapi.New(httpapi.Options{
 			Addr: addr, User: httpUser, Password: httpPass, Snapshot: col.Snapshot, Logger: log,
-			Maintenance: maint, Reports: reports,
+			Maintenance: maint, Reports: reports, Tools: tools,
 		})
 		if err != nil {
 			log.Error("refusing to start", "err", err)
@@ -291,6 +298,7 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 
 	if view != nil {
 		view.OnChange(poke)
+		tools.SetRIB(view)
 	}
 	var engine *probe.Engine
 	onRound := func() {
@@ -457,6 +465,39 @@ func newController(cfg *config.Config, plugins *pluginhost.Set, view *rib.View, 
 		ac.Allowlist = append(ac.Allowlist, p)
 	}
 	return announce.New(ac, ann, ribGate{view}, log)
+}
+
+// newTools builds the read-only troubleshooting tools. They share the
+// provider sources and prober chain with the engine but never feed it:
+// on-demand results go back to the HTTP caller only.
+func newTools(cfg *config.Config, plugins *pluginhost.Set) (*troubleshoot.Tools, error) {
+	var providers []probe.Provider
+	for _, p := range cfg.Providers {
+		src, err := parseAddr(p.SourceIP)
+		if err != nil {
+			return nil, err
+		}
+		providers = append(providers, probe.Provider{Name: p.Name, Source: src})
+	}
+	var probers []probe.NamedProber
+	for _, p := range plugins.Probers {
+		probers = append(probers, probe.NamedProber{Name: p.Name, Prober: p.Plugin})
+	}
+	rpm := cfg.Troubleshoot.RequestsPerMinute
+	opt := troubleshoot.Options{
+		Enabled:   cfg.Troubleshoot.Enabled,
+		Providers: providers,
+		Probers:   probers,
+		Packets:   cfg.Probe.Packets,
+		Timeout:   cfg.Probe.Timeout,
+		MaxHops:   cfg.Troubleshoot.MaxHops,
+		Hop:       traceroute.Hop,
+		Limiter:   rate.NewLimiter(rate.Every(time.Minute/time.Duration(rpm)), min(rpm, 3)),
+	}
+	if plugins.Whois != nil {
+		opt.Whois = plugins.Whois.Plugin
+	}
+	return troubleshoot.New(opt), nil
 }
 
 func newEngine(cfg *config.Config, plugins *pluginhost.Set, log *slog.Logger, onRound func(), onProbe func(probe.Result)) (*probe.Engine, error) {

@@ -30,6 +30,7 @@ import (
 	"github.com/GrandArcher/Packeteer/internal/plugins/storage/sqlite"
 	telemetryfixed "github.com/GrandArcher/Packeteer/internal/plugins/telemetry/fixed"
 	"github.com/GrandArcher/Packeteer/internal/plugins/telemetry/snmp"
+	"github.com/GrandArcher/Packeteer/internal/plugins/whois/rdap"
 )
 
 // TestConfigDocCoversStructs fails when a yaml tag on a config struct, or an
@@ -74,6 +75,7 @@ func TestConfigDocCoversStructs(t *testing.T) {
 		maintenance.Config{},
 		maintenance.Window{},
 		sqlite.Config{},
+		rdap.Config{},
 	) {
 		if !strings.Contains(text, "`"+key+"`") {
 			missing = append(missing, key)
