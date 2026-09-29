@@ -1,0 +1,53 @@
+package main
+
+import (
+	"strings"
+	"testing"
+)
+
+// Shape of FRR 10.2 `show bgp ipv4 unicast 203.0.113.0/24 json` on a transit.
+const steered = `{
+  "prefix":"203.0.113.0/24",
+  "paths":[
+    {
+      "aspath":{"string":"64512 64512 64512","segments":[{"type":"as-sequence","list":[64512,64512,64512]}],"length":3},
+      "origin":"IGP",
+      "valid":true,
+      "bestpath":{"overall":true,"selectionReason":"First path received"},
+      "community":{"string":"64496:3","list":["64496:3"]},
+      "nexthops":[{"ip":"192.0.2.254","afi":"ipv4","used":true}]
+    }
+  ]
+}`
+
+const plain = `{"prefix":"203.0.113.0/24","paths":[{"aspath":{"string":"64512","length":1},"valid":true,"bestpath":{"overall":true}}]}`
+
+func TestCheck(t *testing.T) {
+	steer := Want{ASPath: "64512 64512 64512", Has: []string{"64496:3"}, Lacks: []string{"64512:", "no-export"}}
+	if err := Check("vtysh noise\n"+steered, steer); err != nil {
+		t.Fatalf("steered: %v", err)
+	}
+	clean := Want{ASPath: "64512", Lacks: []string{"64512:", "64496:", "64497:"}}
+	if err := Check(plain, clean); err != nil {
+		t.Fatalf("plain: %v", err)
+	}
+	cases := map[string]struct {
+		raw  string
+		want Want
+		msg  string
+	}{
+		"prepend missing":  {plain, steer, "as path"},
+		"still prepended":  {steered, clean, "as path"},
+		"te leaked":        {steered, Want{ASPath: "64512 64512 64512", Lacks: []string{"64496:"}}, "must not reach"},
+		"community absent": {plain, Want{ASPath: "64512", Has: []string{"64496:3"}}, "missing"},
+		"no json":          {"% Network not in table", clean, "no JSON"},
+		"no paths":         {`{"prefix":"203.0.113.0/24","paths":[]}`, clean, "no paths"},
+		"no best":          {`{"paths":[{"aspath":{"string":"64512"}},{"aspath":{"string":"64512"}}]}`, clean, "no best"},
+	}
+	for name, tc := range cases {
+		err := Check(tc.raw, tc.want)
+		if err == nil || !strings.Contains(err.Error(), tc.msg) {
+			t.Errorf("%s: err = %v, want %q", name, err, tc.msg)
+		}
+	}
+}

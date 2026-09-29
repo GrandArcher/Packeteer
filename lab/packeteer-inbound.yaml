@@ -1,0 +1,67 @@
+# Lab only (#25). Documentation prefixes, private and documentation ASNs.
+# Inbound commit control is what announces: transit-a's inbound 95th is over
+# its commit, so 203.0.113.0/24 is re-announced to the edge with transit-a's
+# catalog action. lab/e2e-inbound.sh rewrites the usage file to release it.
+mode: inject
+asn: 64512
+router_id: 192.0.2.10
+packeteer_community: "64512:666"
+local_pref: 250
+max_improvements: 50
+hold_time: 5s
+improvement_ttl: 1h
+thresholds:
+  min_loss_delta_pct: 1
+  min_rtt_delta_ms: 15
+providers:
+  - name: transit-a
+    source_ip: 192.0.2.11
+    next_hop: 192.0.2.1
+  - name: transit-b
+    source_ip: 192.0.2.12
+    next_hop: 192.0.2.2
+allowlist:
+  prefixes:
+    - 203.0.113.0/24
+probe:
+  interval: 2s
+  timeout: 500ms
+  packets: 4
+bgp:
+  neighbors:
+    - address: 192.0.2.254
+      description: edge
+# No sources: nothing is probed and no outbound improvement is made.
+probers:
+  - type: fixed
+    config:
+      paths:
+        - {provider: transit-a, rtt_ms: 10}
+        - {provider: transit-b, rtt_ms: 10}
+telemetry:
+  - type: fixed
+    config:
+      file: /etc/packeteer/probes/usage.yaml
+announcer:
+  type: gobgp
+inbound:
+  mode: inject
+  prefixes:
+    - 203.0.113.0/24
+  local_pref: 1
+  release_pct: 90
+  announcer:
+    type: gobgp
+    config:
+      marker: "64512:667"
+      providers:
+        # The edge prepends 64512 twice toward transit-a on 64512:1102 and
+        # passes transit-a's TE community 64496:3 to transit-a only.
+        - provider: transit-a
+          name: prepend-2
+          prepend: 2
+          communities: ["64512:1102", "64496:3"]
+        - provider: transit-b
+          name: prepend-1
+          prepend: 1
+          communities: ["64512:1201", "64497:70"]

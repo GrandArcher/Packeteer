@@ -27,7 +27,7 @@ func TestSnapshot(t *testing.T) {
 	s := build(t, `
 providers:
   - {name: transit-a, commit_mbps: 100, usage_mbps: 150}
-  - {name: transit-b, commit_mbps: 100, usage_mbps: 20}
+  - {name: transit-b, commit_mbps: 100, usage_mbps: 20, in_mbps: 130}
 `, []string{"transit-a", "transit-b"})
 	rows, err := s.Snapshot(context.Background())
 	if err != nil || len(rows) != 2 {
@@ -36,6 +36,12 @@ providers:
 	mbps, ok := rows[0].BillableMbps()
 	if !ok || mbps != 150 || rows[0].Provider != "transit-a" || rows[0].Updated.IsZero() {
 		t.Fatalf("row %+v mbps %v ok %v", rows[0], mbps, ok)
+	}
+	if in, ok := rows[0].InboundMbps(); !ok || in != 0 {
+		t.Fatalf("unset in_mbps = %v %v", in, ok)
+	}
+	if in, ok := rows[1].InboundMbps(); !ok || in != 130 || rows[1].InMbps != 130 {
+		t.Fatalf("in_mbps = %v %v", in, ok)
 	}
 	if names := s.(interface{ ProviderNames() []string }).ProviderNames(); len(names) != 2 || names[0] != "transit-a" {
 		t.Fatalf("names %v", names)
@@ -69,6 +75,7 @@ func TestRejects(t *testing.T) {
 		{"", "set providers or file"},
 		{"providers:\n  - {name: transit-a, commit_mbps: 0, usage_mbps: 1}", "commit_mbps"},
 		{"providers:\n  - {name: transit-a, commit_mbps: 10, usage_mbps: -1}", "usage_mbps"},
+		{"providers:\n  - {name: transit-a, commit_mbps: 10, usage_mbps: 1, in_mbps: -1}", "in_mbps"},
 		{"providers:\n  - {name: no-such, commit_mbps: 10, usage_mbps: 1}", "not configured"},
 		{"providers:\n  - {name: transit-a, commit_mbps: 10, usage_mbps: 1}\n  - {name: transit-a, commit_mbps: 10, usage_mbps: 1}", "duplicate"},
 		{"nope: 1", "not found"},

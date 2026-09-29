@@ -1,0 +1,11 @@
+# transit-a's inbound 95th (150) is over its 100 Mbps commit; transit-b
+# has room. Outbound usage is low on both.
+providers:
+  - name: transit-a
+    commit_mbps: 100
+    usage_mbps: 20
+    in_mbps: 150
+  - name: transit-b
+    commit_mbps: 100
+    usage_mbps: 20
+    in_mbps: 30

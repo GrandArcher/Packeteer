@@ -44,6 +44,9 @@ type Provider struct {
 	Name       string  `yaml:"name"`
 	CommitMbps float64 `yaml:"commit_mbps"`
 	UsageMbps  float64 `yaml:"usage_mbps"`
+	// InMbps is the inbound 95th percentile, read by inbound commit
+	// control. Zero (unset) never exceeds a commit.
+	InMbps float64 `yaml:"in_mbps"`
 }
 
 // Collector returns the configured rows.
@@ -128,6 +131,7 @@ func (c *Collector) Snapshot(ctx context.Context) ([]plugin.Usage, error) {
 		out = append(out, plugin.Usage{
 			Provider: p.Name, CommitMbps: p.CommitMbps, Samples: 1, Single: true,
 			UsageMbps: p.UsageMbps, Mode: plugin.PercentileGreaterSeparate,
+			InMbps: p.InMbps, InMbps95: p.InMbps,
 			Updated: now, Polled: now,
 		})
 	}
@@ -152,6 +156,9 @@ func validate(rows []Provider, known []string) error {
 		}
 		if math.IsNaN(p.UsageMbps) || math.IsInf(p.UsageMbps, 0) || p.UsageMbps < 0 || p.UsageMbps > maxMbps {
 			return fmt.Errorf("providers[%d]: usage_mbps must be between 0 and 100000000", i)
+		}
+		if math.IsNaN(p.InMbps) || math.IsInf(p.InMbps, 0) || p.InMbps < 0 || p.InMbps > maxMbps {
+			return fmt.Errorf("providers[%d]: in_mbps must be between 0 and 100000000", i)
 		}
 	}
 	return nil

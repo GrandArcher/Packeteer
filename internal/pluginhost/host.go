@@ -26,6 +26,9 @@ type Set struct {
 	Sources   []Instance[plugin.TargetSource]
 	Scorer    *Instance[plugin.Scorer]
 	Announcer *Instance[plugin.Announcer]
+	// Inbound is the inbound announcer (inbound.announcer). Nil when
+	// inbound is off or has no announcer.
+	Inbound   *Instance[plugin.InboundAnnouncer]
 	Notifiers []Instance[plugin.Notifier]
 	Telemetry []Instance[plugin.Telemetry]
 	Policies  []Instance[plugin.Policy]
@@ -97,6 +100,11 @@ func Build(cfg *config.Config, opts Options) (*Set, error) {
 			s.Announcer = &b[0]
 		}
 	}
+	if cfg.Inbound != nil && cfg.Inbound.Announcer != nil {
+		if b := build(plugin.InboundAnnouncers, "inbound.announcer", []config.PluginSpec{*cfg.Inbound.Announcer}, base, &errs); len(b) == 1 {
+			s.Inbound = &b[0]
+		}
+	}
 	if cfg.Storage != nil {
 		if b := build(plugin.Storages, "storage", []config.PluginSpec{*cfg.Storage}, base, &errs); len(b) == 1 {
 			s.Storage = &b[0]
@@ -146,6 +154,10 @@ func (s *Set) all() []namedLifecycle {
 	}
 	if s.Announcer != nil {
 		add(plugin.KindAnnouncer, s.Announcer.Name, s.Announcer.Plugin)
+	}
+	// Started after, and so stopped before, the outbound announcer.
+	if s.Inbound != nil {
+		add(plugin.KindAnnouncer, "inbound "+s.Inbound.Name, s.Inbound.Plugin)
 	}
 	return out
 }

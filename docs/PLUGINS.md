@@ -51,6 +51,7 @@ Each entry has `type` (required), an optional `name` (defaults to the type and m
 | `source` | `Targets(ctx) ([]Target, error)` | `static`, `flow`, `traceroute`, `vip`, `outage`, `span` | `exec` |
 | `scorer` | `Score(PathStats) float64` (lower is better). `commit` also plans commit and group moves; `cost` plans moves to the cheapest provider inside a performance floor | `weighted`, `commit`, `cost` | none |
 | `announcer` | `Announce`, `Withdraw`, `WithdrawAll` | `gobgp` | **never** |
+| `announcer` (inbound) | `Action(provider)`, `Announce(InboundRoute)`, `Withdraw`, `WithdrawAll`. One instance under `inbound.announcer:`; registry `plugin.InboundAnnouncers` | `gobgp` (marker + per-provider prepend/TE community catalog) | **never** |
 | `notifier` | `Notify(ctx, Event) error`, optional `EventGate()` (filters and rate limit) | `webhook` (generic, `slack`, `teams`, `pagerduty`, templates), `smtp`, `snmptrap` | `exec` |
 | `telemetry` | `Snapshot(ctx) ([]Usage, error)` | `snmp` | none |
 | `policy` | `Match(PolicySubject) (PolicyVerdict, bool)`, optional `Maintenance.Active(now)`. The filter chain in front of the scorer | `rules`, `maintenance` | none |
@@ -61,12 +62,12 @@ Push exporters (Prometheus remote-write, OTLP) are not built; Prometheus metrics
 
 Probers return raw results (packets sent plus one RTT per reply). The core computes loss, RTT min/avg/max, and jitter the same way for every prober. A prober that cannot use its source address must return an error, not "100% loss", so the core can fail closed.
 
-Announcers run **in-process only**, so an external process can never inject routes. They must withdraw everything on `Stop` and must not use BGP graceful restart.
+Announcers, inbound ones included, run **in-process only**, so an external process can never inject routes. They must withdraw everything on `Stop` and must not use BGP graceful restart.
 
 ## Lifecycle
 
 1. **Factory (Init).** `func(cfg plugin.Config, env plugin.Env) (T, error)`. It decodes and validates config with `cfg.Decode(&myStruct)`. It must do no network I/O. `env` provides the instance name, a scoped `slog` logger, the plugin dir, and `Getenv`.
-2. **`Start(ctx)`.** Begins background work in goroutines and must not block. Plugins start in this order: storage, sources, probers, scorer, policies, telemetry, notifiers, whois, announcer. If one fails, the ones already started are stopped.
+2. **`Start(ctx)`.** Begins background work in goroutines and must not block. Plugins start in this order: storage, sources, probers, scorer, policies, telemetry, notifiers, whois, announcer, inbound announcer. If one fails, the ones already started are stopped.
 3. **`Stop(ctx)`.** Releases everything before `ctx` expires. Plugins stop in reverse order, so the announcer stops first and routes are withdrawn early.
 
 Embed `plugin.Base` for no-op `Start`/`Stop`.

@@ -48,6 +48,8 @@ const (
 	EventOutageAS           = "outage.as"
 	EventOutageCircuit      = "outage.circuit"
 	EventOutageCleared      = "outage.cleared"
+	EventInboundSteered     = "inbound.steered"
+	EventInboundReleased    = "inbound.released"
 	// EventTest is sent by hand to check a notifier's delivery path.
 	EventTest = "notifier.test"
 )
@@ -87,6 +89,10 @@ var eventCatalog = []EventSpec{
 		Summary: "An AS or circuit incident recovered."},
 	{Kind: EventTest, Severity: SeverityInfo, Group: "notifier", TrapID: 17,
 		Summary: "A test event, sent only by -notify-test."},
+	{Kind: EventInboundSteered, Severity: SeverityWarning, Group: "inbound", Keys: []string{"provider"}, TrapID: 18,
+		Summary: "Inbound commit control is steering inbound traffic away from a provider (announced in inject, suggested only in observe and suggest)."},
+	{Kind: EventInboundReleased, Severity: SeverityInfo, Group: "inbound", Keys: []string{"provider"}, TrapID: 19, Resolves: true,
+		Summary: "An inbound steer was released: back under commit, stale telemetry, or TTL."},
 }
 
 // EventCatalog returns a copy of every event kind the controller emits.
