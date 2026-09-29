@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/netip"
+	"slices"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -40,6 +41,13 @@ type RIB interface {
 	Contains(netip.Prefix) bool
 }
 
+// PathRIB is the RIB surface bgp.as_path reads (#27): the AS path of the
+// learned (native) route for exactly p, and of a provider's learned path.
+type PathRIB interface {
+	NativePath(netip.Prefix) ([]uint32, bool)
+	ProviderPath(p netip.Prefix, provider string) ([]uint32, bool)
+}
+
 // Config is the injection policy. It is ignored unless Mode is inject.
 type Config struct {
 	Mode            string
@@ -58,6 +66,10 @@ type Config struct {
 	// route to every neighbor. Set, the announcer must implement
 	// plugin.RouterAnnouncer or Bind fails.
 	Routers []plugin.RouterExport
+	// ASPath is the AS path on injected routes (config.ASPath*): empty
+	// (default), native, or provider. native and provider need the RIB to
+	// implement PathRIB.
+	ASPath string
 }
 
 // Controller applies decision changes to an announcer.
@@ -84,6 +96,7 @@ func (c *Controller) Active() int {
 // slot is the route published for one learned prefix.
 type slot struct {
 	provider string
+	asPath   []uint32
 }
 
 // New validates inject settings and returns a controller. ann and rib may be
@@ -104,6 +117,15 @@ func New(cfg Config, ann plugin.Announcer, rib RIB, log *slog.Logger) (*Controll
 		}
 		if cfg.MaxImprovements < 1 {
 			return nil, errors.New("announce: max_improvements must be positive")
+		}
+		switch cfg.ASPath {
+		case "", config.ASPathEmpty:
+		case config.ASPathNative, config.ASPathProvider:
+			if _, ok := rib.(PathRIB); !ok {
+				return nil, fmt.Errorf("announce: as_path %s needs the learned AS paths", cfg.ASPath)
+			}
+		default:
+			return nil, fmt.Errorf("announce: as_path %q is invalid", cfg.ASPath)
 		}
 	}
 	if log == nil {
@@ -189,7 +211,7 @@ func (c *Controller) Sync(ctx context.Context, imps []policy.Improvement) error 
 			errs = append(errs, fmt.Errorf("announce: %s is not in the RIB", p))
 			continue
 		}
-		if s, on := c.active[p]; on && s.provider == im.Provider {
+		if s, on := c.active[p]; on && s.provider == im.Provider && slices.Equal(s.asPath, c.asPath(p, im.Provider)) {
 			continue
 		}
 		if !allowed(c.cfg.Allowlist, p) {
@@ -264,13 +286,83 @@ func (c *Controller) announceLocked(ctx context.Context, imp policy.Improvement)
 		Provider:    imp.Provider,
 		LocalPref:   c.cfg.LocalPref,
 		Communities: []string{c.cfg.Community},
+		ASPath:      c.asPath(p, imp.Provider),
 	}
 	if err := c.ann.Announce(ctx, rt); err != nil {
 		return err
 	}
-	c.active[p] = slot{provider: imp.Provider}
-	c.log.Info("injected", "prefix", p, "provider", imp.Provider, "next_hop", nh, "local_pref", c.cfg.LocalPref)
+	c.active[p] = slot{provider: imp.Provider, asPath: rt.ASPath}
+	c.log.Info("injected", "prefix", p, "provider", imp.Provider, "next_hop", nh, "local_pref", c.cfg.LocalPref, "as_path", fmt.Sprint(rt.ASPath))
 	return nil
+}
+
+// asPath is the AS path for p toward provider under bgp.as_path. native
+// is the learned route's path; provider is the provider's own learned
+// path, else the native one. When the view no longer shows the path (the
+// router stopped sending the native route once Packeteer's won), the path
+// already on the wire for the same provider is kept, so that does not
+// re-announce. Caller holds mu.
+func (c *Controller) asPath(p netip.Prefix, provider string) []uint32 {
+	mode := c.cfg.ASPath
+	if mode == "" || mode == config.ASPathEmpty {
+		return nil
+	}
+	r, ok := c.rib.(PathRIB)
+	if !ok {
+		return nil
+	}
+	if mode == config.ASPathProvider {
+		if as, ok := r.ProviderPath(p, provider); ok {
+			return as
+		}
+	}
+	if as, ok := r.NativePath(p); ok {
+		return as
+	}
+	if s, on := c.active[p]; on && s.provider == provider {
+		return s.asPath
+	}
+	return nil
+}
+
+// SetRouters replaces the per-router table while the controller runs
+// (online reconfiguration, #27). The announcer withdraws every outbound
+// route first; the next Sync announces them again under the new table.
+// Outside inject only the config is kept.
+func (c *Controller) SetRouters(ctx context.Context, routers []plugin.RouterExport) error {
+	if c == nil {
+		return nil
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	defer func() { c.onWire.Store(int64(len(c.active))) }()
+	if c.cfg.Mode != config.ModeInject {
+		c.cfg.Routers = routers
+		return nil
+	}
+	r, ok := c.ann.(plugin.RouterReloader)
+	if !ok {
+		return fmt.Errorf("announce: announcer %T cannot replace its per-router table while running; restart instead", c.ann)
+	}
+	err := r.SetRouters(ctx, routers)
+	// Whatever the outcome, nothing is known to be on the wire any more;
+	// the caller stops the controller on an error, which withdraws again.
+	c.active = map[netip.Prefix]slot{}
+	if err != nil {
+		return err
+	}
+	c.cfg.Routers = routers
+	return nil
+}
+
+// Routers is the per-router table in use.
+func (c *Controller) Routers() []plugin.RouterExport {
+	if c == nil {
+		return nil
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.cfg.Routers
 }
 
 func sortPrefixes(ps []netip.Prefix) {

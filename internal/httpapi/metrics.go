@@ -154,6 +154,19 @@ func Metrics(s Snapshot) []byte {
 		writeGauge(&b, "packeteer_bgp_session", "1 if the iBGP session is currently in this FSM state.", sessionState...)
 	}
 
+	var ixPrefixes, ixImps, ixDiscovered []sample
+	for _, ex := range s.Exchanges {
+		for _, p := range ex.Peers {
+			l := []lbl{{"exchange", ex.Name}, {"peer", p.Name}}
+			ixPrefixes = append(ixPrefixes, sample{labels: l, value: float64(p.Prefixes)})
+			ixImps = append(ixImps, sample{labels: l, value: float64(p.Improvements)})
+		}
+		ixDiscovered = append(ixDiscovered, sample{labels: []lbl{{"exchange", ex.Name}}, value: float64(len(ex.Discovered))})
+	}
+	writeGauge(&b, "packeteer_exchange_peer_prefixes", "Prefixes the router shows through the exchange peer's next hop.", ixPrefixes...)
+	writeGauge(&b, "packeteer_exchange_peer_improvements", "Active improvements onto the exchange peer.", ixImps...)
+	writeGauge(&b, "packeteer_exchange_discovered_peers", "Next hops on the peering LAN that are not configured peers.", ixDiscovered...)
+
 	return []byte(b.String())
 }
 

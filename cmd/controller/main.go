@@ -20,6 +20,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -27,6 +28,7 @@ import (
 
 	"github.com/GrandArcher/Packeteer/internal/announce"
 	"github.com/GrandArcher/Packeteer/internal/config"
+	"github.com/GrandArcher/Packeteer/internal/exchange"
 	"github.com/GrandArcher/Packeteer/internal/history"
 	"github.com/GrandArcher/Packeteer/internal/httpapi"
 	"github.com/GrandArcher/Packeteer/internal/inbound"
@@ -173,7 +175,14 @@ func run(ctx context.Context, args []string, getenv func(string) string, stdout,
 		if p.BMP != "" && p.BMP != config.BMPOff {
 			bmp = " bmp=" + p.BMP
 		}
-		fmt.Fprintf(stdout, "  - %s source_ip=%s next_hop=%s%s\n", p.Name, p.SourceIP, p.NextHop, bmp)
+		ix := ""
+		if p.Exchange != "" {
+			ix = fmt.Sprintf(" exchange=%s asn=%d", p.Exchange, p.PeerASN)
+		}
+		fmt.Fprintf(stdout, "  - %s source_ip=%s next_hop=%s%s%s\n", p.Name, p.SourceIP, p.NextHop, bmp, ix)
+	}
+	for _, ex := range cfg.Exchanges {
+		fmt.Fprintf(stdout, "exchange %s: lans=%s peers=%d (route-checked)\n", ex.Name, strings.Join(ex.LANs, ","), len(ex.Peers))
 	}
 	if len(cfg.BGP.Neighbors) == 0 {
 		fmt.Fprintln(stdout, "bgp: disabled (no bgp.neighbors)")
@@ -182,6 +191,7 @@ func run(ctx context.Context, args []string, getenv func(string) string, stdout,
 		for _, n := range cfg.BGP.Neighbors {
 			fmt.Fprintf(stdout, "  - %s %s%s\n", n.Address, n.Description, routerSummary(n))
 		}
+		fmt.Fprintf(stdout, "bgp as_path: %s (neighbors reload online on SIGHUP)\n", cfg.BGP.ASPath)
 	}
 	fmt.Fprintf(stdout, "plugins (%d):\n", len(plugins.Summary()))
 	for _, line := range plugins.Summary() {
@@ -227,10 +237,17 @@ func run(ctx context.Context, args []string, getenv func(string) string, stdout,
 		fmt.Fprintln(stdout, "check: ok (no probes sent, no BGP sessions opened)")
 		return 0
 	}
-	return daemon(ctx, cfg, plugins, log, httpUser, httpPass)
+	return daemon(ctx, cfg, plugins, log, httpUser, httpPass, *path, getenv)
 }
 
-func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, log *slog.Logger, httpUser, httpPass string) int {
+func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, log *slog.Logger, httpUser, httpPass, path string, getenv func(string) string) int {
+	// SIGHUP reloads bgp.neighbors online (#27). Registered first: Go's
+	// default for SIGHUP ends the process.
+	hup := make(chan os.Signal, 1)
+	signal.Notify(hup, syscall.SIGHUP)
+	defer signal.Stop(hup)
+	ctx, stopDaemon := context.WithCancel(ctx)
+	defer stopDaemon()
 	kick := make(chan struct{}, 1)
 	poke := func() {
 		select {
@@ -373,6 +390,7 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 	wireOutage(plugins, engine, view, dispatch)
 	col.SetTelemetry(func() []plugin.Usage { return collectTelemetry(context.Background(), plugins) })
 	col.Attach(engine, decider, view)
+	wireExchanges(cfg, col, view)
 	if err := plugins.Start(ctx); err != nil {
 		log.Error("refusing to start", "err", err)
 		return 1
@@ -425,6 +443,31 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 		})
 	}()
 
+	rl := &reloader{path: path, getenv: getenv, log: log, cur: cfg, ctl: ctl, poke: poke}
+	if view != nil {
+		rl.view = view
+	}
+	var reloadFailed atomic.Bool
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-hup:
+			}
+			refused, fatal := rl.reload(ctx)
+			switch {
+			case fatal != nil:
+				log.Error("config reload failed after changing the BGP speaker; stopping (Packeteer routes are withdrawn)", "err", fatal)
+				reloadFailed.Store(true)
+				stopDaemon()
+				return
+			case refused != nil:
+				log.Error("config reload refused; the running config stays", "err", refused)
+			}
+		}
+	}()
+
 	announcing := "disabled"
 	if cfg.Mode == config.ModeInject {
 		announcing = plugins.Announcer.Type
@@ -468,7 +511,45 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 		log.Error("plugin shutdown", "err", err)
 		return 1
 	}
+	if reloadFailed.Load() {
+		return 1
+	}
 	return 0
+}
+
+// wireExchanges gives the ops API the exchange statistics (#27). The next
+// hop counts walk every learned path, so they are rebuilt only when the
+// RIB generation changes.
+func wireExchanges(cfg *config.Config, col *httpapi.Collector, view *rib.View) {
+	if len(cfg.Exchanges) == 0 || view == nil {
+		return
+	}
+	var exs []exchange.Exchange
+	for _, ex := range cfg.Exchanges {
+		e := exchange.Exchange{Name: ex.Name, LANs: ex.ExchangeLANs()}
+		for _, p := range ex.Peers {
+			nh, err := netip.ParseAddr(p.NextHop)
+			if err != nil {
+				continue
+			}
+			e.Peers = append(e.Peers, exchange.Peer{Name: p.Name, ASN: p.ASN, NextHop: nh})
+		}
+		exs = append(exs, e)
+	}
+	lans := exchange.LANs(exs)
+	var mu sync.Mutex
+	var gen uint64
+	var cached []rib.NextHopCount
+	built := false
+	col.SetExchanges(exs, func() []rib.NextHopCount {
+		g := view.Generation()
+		mu.Lock()
+		defer mu.Unlock()
+		if !built || g != gen {
+			cached, gen, built = view.NextHops(lans), g, true
+		}
+		return cached
+	})
 }
 
 // ribGate is the RIB surface the announcer controller consults.
@@ -491,6 +572,23 @@ func (g ribGate) NextHop(p netip.Prefix) (netip.Addr, bool) {
 	}
 	rt, ok := g.v.Exact(p)
 	return rt.NextHop, ok && rt.NextHop.IsValid()
+}
+
+// NativePath is the learned route's AS path, for bgp.as_path native.
+func (g ribGate) NativePath(p netip.Prefix) ([]uint32, bool) {
+	if g.v == nil {
+		return nil, false
+	}
+	rt, ok := g.v.Exact(p)
+	return rt.ASPath, ok
+}
+
+// ProviderPath is a provider's learned AS path, for bgp.as_path provider.
+func (g ribGate) ProviderPath(p netip.Prefix, provider string) ([]uint32, bool) {
+	if g.v == nil {
+		return nil, false
+	}
+	return g.v.ProviderPath(p, provider)
 }
 
 // inboundInput is telemetry plus the probe results that hold a measurement
@@ -628,6 +726,7 @@ func newController(cfg *config.Config, plugins *pluginhost.Set, view *rib.View, 
 		Community:       cfg.PacketeerCommunity,
 		MaxImprovements: *cfg.MaxImprovements,
 		NextHops:        map[string]netip.Addr{},
+		ASPath:          cfg.BGP.ASPath,
 	}
 	if inb != nil {
 		ac.Reserved = inb.Reserved
@@ -1153,12 +1252,19 @@ func newRIB(cfg *config.Config, log *slog.Logger) (*rib.View, error) {
 	providers := map[netip.Addr]string{}
 	usage := map[string]string{}
 	addPath := map[string]bool{}
+	var peerASN map[string]uint32
 	for _, p := range cfg.Providers {
 		nh, err := parseAddr(p.NextHop)
 		if err != nil {
 			return nil, err
 		}
 		providers[nh] = p.Name
+		if p.Exchange != "" {
+			if peerASN == nil {
+				peerASN = map[string]uint32{}
+			}
+			peerASN[p.Name] = p.PeerASN
+		}
 		if p.BMP != "" {
 			usage[p.Name] = p.BMP
 		}
@@ -1166,23 +1272,9 @@ func newRIB(cfg *config.Config, log *slog.Logger) (*rib.View, error) {
 			addPath[p.Name] = true
 		}
 	}
-	var nbrs []rib.Neighbor
-	egress := map[string][]netip.Addr{}
-	for _, n := range cfg.BGP.Neighbors {
-		a, err := parseAddr(n.Address)
-		if err != nil {
-			return nil, err
-		}
-		for _, name := range n.Providers {
-			egress[name] = append(egress[name], a)
-		}
-		nb := rib.Neighbor{Address: a, Port: uint16(n.Port), Passive: n.Passive, Description: n.Description, AddPath: n.AddPath}
-		if n.LocalAddress != "" {
-			if nb.LocalAddress, err = parseAddr(n.LocalAddress); err != nil {
-				return nil, err
-			}
-		}
-		nbrs = append(nbrs, nb)
+	nbrs, egress, err := ribNeighbors(cfg)
+	if err != nil {
+		return nil, err
 	}
 	listen := int32(cfg.BGP.ListenPort)
 	if listen == 0 {
@@ -1195,7 +1287,31 @@ func newRIB(cfg *config.Config, log *slog.Logger) (*rib.View, error) {
 	warnBMPSelfFilter(log, usage, own)
 	return rib.New(rib.Options{ASN: cfg.ASN, RouterID: rid, ListenPort: listen,
 		ListenAddresses: cfg.BGP.ListenAddresses, Neighbors: nbrs, Providers: providers, BMP: usage,
-		AddPath: addPath, OwnCommunity: own, Egress: egress, Logger: log})
+		AddPath: addPath, OwnCommunity: own, Egress: egress, PeerASN: peerASN, Logger: log})
+}
+
+// ribNeighbors is the iBGP sessions and, from each neighbor's providers,
+// every provider's egress routers.
+func ribNeighbors(cfg *config.Config) ([]rib.Neighbor, map[string][]netip.Addr, error) {
+	var nbrs []rib.Neighbor
+	egress := map[string][]netip.Addr{}
+	for _, n := range cfg.BGP.Neighbors {
+		a, err := parseAddr(n.Address)
+		if err != nil {
+			return nil, nil, err
+		}
+		for _, name := range n.Providers {
+			egress[name] = append(egress[name], a)
+		}
+		nb := rib.Neighbor{Address: a, Port: uint16(n.Port), Passive: n.Passive, Description: n.Description, AddPath: n.AddPath}
+		if n.LocalAddress != "" {
+			if nb.LocalAddress, err = parseAddr(n.LocalAddress); err != nil {
+				return nil, nil, err
+			}
+		}
+		nbrs = append(nbrs, nb)
+	}
+	return nbrs, egress, nil
 }
 
 // warnBMPSelfFilter warns at startup that, with BMP in use, Packeteer's own

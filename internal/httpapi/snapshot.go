@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/GrandArcher/Packeteer/internal/config"
+	"github.com/GrandArcher/Packeteer/internal/exchange"
 	"github.com/GrandArcher/Packeteer/internal/policy"
 	"github.com/GrandArcher/Packeteer/internal/probe"
 	"github.com/GrandArcher/Packeteer/internal/rib"
@@ -37,6 +38,9 @@ type Input struct {
 
 	// Telemetry is interface usage. It is not a routing decision.
 	Telemetry []plugin.Usage
+
+	// Exchanges are Internet exchange statistics (#27), already built.
+	Exchanges []exchange.Stats
 }
 
 // Snapshot is the read-only document the HTTP handlers serve.
@@ -56,6 +60,7 @@ type Snapshot struct {
 	Improvements []Improvement
 	Peers        []Peer
 	Telemetry    []Telemetry
+	Exchanges    []exchange.Stats
 }
 
 // Provider is one configured transit plus its probe-source health.
@@ -215,6 +220,7 @@ func Assemble(in Input) Snapshot {
 		Improvements:  assembleImprovements(in.Improvements),
 		Peers:         assemblePeers(in.Peers),
 		Telemetry:     assembleTelemetry(in.Telemetry),
+		Exchanges:     in.Exchanges,
 	}
 	snap.zeroNil()
 	return snap
@@ -228,6 +234,7 @@ func (s *Snapshot) zeroNil() {
 	s.Improvements = nz(s.Improvements)
 	s.Peers = nz(s.Peers)
 	s.Telemetry = nz(s.Telemetry)
+	s.Exchanges = nz(s.Exchanges)
 	for i := range s.Decisions {
 		s.Decisions[i].Candidates = nz(s.Decisions[i].Candidates)
 	}

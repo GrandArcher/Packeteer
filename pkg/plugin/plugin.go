@@ -198,6 +198,9 @@ type Route struct {
 	Provider    string
 	LocalPref   uint32
 	Communities []string // standard communities, "asn:value"
+	// ASPath is the AS path to carry (bgp.as_path, #27). Empty sends an
+	// empty AS path, as a locally originated route.
+	ASPath []uint32
 }
 
 // Announcer is the router driver. Announcers run in-process only: an
@@ -234,6 +237,15 @@ type RouterExport struct {
 type RouterAnnouncer interface {
 	Announcer
 	BindRouters(srv any, community string, routers []RouterExport) error
+}
+
+// RouterReloader is a bound announcer whose per-router table can be
+// replaced while it runs (online reconfiguration, #27). SetRouters first
+// withdraws every route it announced, so no router keeps a route the new
+// table would not send it; the controller then announces them again.
+// Empty routers sends every route to every neighbor.
+type RouterReloader interface {
+	SetRouters(ctx context.Context, routers []RouterExport) error
 }
 
 // ---- Notifier ----

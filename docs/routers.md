@@ -29,6 +29,10 @@ If the native path is already hidden and the provider then withdraws it, a singl
 
 Several edges, or a route reflector in front of them: see [route-reflector.md](route-reflector.md).
 
+## Internet exchange peers
+
+With `exchanges` (#27) each IX member you list is a provider whose `next_hop` is its address on the peering LAN. Packeteer steers a prefix to a member only when it sees that member's own path for the exact prefix, so the router must show Packeteer every path: FRR `neighbor <packeteer> addpath-tx-all-paths` in the address family (with `add_path: true` on the neighbor), or BMP post-policy monitoring (`rib_sources`, `bmp: prefer`). A route server is transparent, so the member's AS is the first AS on its paths. The injected route's next hop is the member's LAN address; the edge resolves it on its IX interface. The eBGP export filter for Packeteer's community applies to IX sessions like any other. Each member needs its own probe source, routed to that member ([policy-routing.md](policy-routing.md)).
+
 The examples use documentation addresses (RFC 5737 / RFC 3849) and the private ASN 64512. Replace them. MikroTik is covered in full in [mikrotik.md](mikrotik.md); the snippet below matches that recipe.
 
 ## MikroTik RouterOS 7

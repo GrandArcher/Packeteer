@@ -101,6 +101,14 @@ On every edge, keep the eBGP filter that rejects `packeteer_community` toward tr
 - **Redundant reflectors.** List both. Packeteer announces on both sessions; one dropping leaves the other. Both dropping withdraws everything.
 - **Losing an edge.** Its paths leave the reflector, and the reflector's best changes. Packeteer does not know which edge owns which provider in this model; set `providers` on a reflector session only if that reflector serves one edge.
 
+## Internet exchange peers
+
+An IX is an `exchanges` entry (#27): each member you list is a provider with its own `next_hop` on the peering LAN and its own probe source, always route-checked ([CONFIG.md](CONFIG.md#exchanges)). With several edges, name the exchange in the lists of the router that has the IX port (`providers: [ix-example]`) and, on the others, in `next_hops` with the next hop that reaches that router; the name stands for every peer. That router is then the peers' egress: when its session drops, no improvement uses them. `/api/exchanges` shows per-peer prefixes and improvements and the LAN members you have not listed. Lab: `lab/e2e-ix.sh`.
+
+## Changing routers without a restart
+
+Edit `bgp.neighbors` and send SIGHUP (`docker kill -s HUP <container>`). New routers get a session, removed ones are closed, and the other sessions are not touched. When the per-router lists change, Packeteer withdraws its outbound routes, installs the new table, and announces them again on the next evaluation. Any other change is refused and logged with the keys that need a restart ([CONFIG.md](CONFIG.md#online-reconfiguration)).
+
 ## Rollback
 
 Remove `providers` and `next_hops` from every neighbor and restart: every route goes to every neighbor with the provider's `next_hop`, as before #27. To leave a route reflector, point `bgp.neighbors` back at a single edge and restart. Stopping Packeteer (SIGTERM) withdraws every route on every session; a crash drops them with the sessions.

@@ -27,6 +27,7 @@ type fakeAnn struct {
 	routes    map[netip.Prefix]plugin.Route
 	all       int
 	withdraws int
+	announces int
 }
 
 func (f *fakeAnn) Announce(_ context.Context, r plugin.Route) error {
@@ -36,6 +37,7 @@ func (f *fakeAnn) Announce(_ context.Context, r plugin.Route) error {
 		f.routes = map[netip.Prefix]plugin.Route{}
 	}
 	f.routes[r.Prefix] = r
+	f.announces++
 	return nil
 }
 

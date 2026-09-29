@@ -162,6 +162,21 @@ scorer:
 #       # providers: [transit-a]          # this router's own transits (its egress)
 #       # next_hops:
 #       #   transit-b: 192.0.2.253        # reached through another router at this next hop
+#   # as_path: empty            # AS path on injected routes: empty (default), native, or provider
+# bgp.neighbors reloads online on SIGHUP (docker kill -s HUP); other keys need a restart.
+
+# Internet exchanges (#27). Each peer is a provider with its own next hop on
+# the peering LAN and its own probe source, and is always route-checked: it
+# must advertise the exact prefix (seen through add-path or BMP). Next hops
+# on the LAN that are not listed show up on /api/exchanges as discovered.
+# exchanges:
+#   - name: ix-example
+#     lans: [203.0.113.0/24]
+#     peers:
+#       - name: ix-peer-a
+#         asn: 64501
+#         next_hop: 203.0.113.11
+#         source_ip: 192.0.2.31
 
 # Injection (used only when mode: inject). local_pref is set on every
 # injected route and should beat the edge's native local preference.

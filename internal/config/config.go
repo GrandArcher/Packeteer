@@ -71,8 +71,12 @@ type Config struct {
 	ImprovementTTL time.Duration `yaml:"improvement_ttl"`
 	Thresholds     Thresholds    `yaml:"thresholds"`
 	Providers      []Provider    `yaml:"providers"`
-	Allowlist      Allowlist     `yaml:"allowlist"`
-	Probe          Probe         `yaml:"probe"`
+	// Exchanges are Internet exchanges whose peers are providers (#27).
+	// Parse expands every peer into Providers, so the rest of the
+	// controller sees each peer as a provider with its own next hop.
+	Exchanges []Exchange `yaml:"exchanges"`
+	Allowlist Allowlist  `yaml:"allowlist"`
+	Probe     Probe      `yaml:"probe"`
 
 	// Log is the process logger. Environment variables override it.
 	Log Log `yaml:"log"`
@@ -264,7 +268,18 @@ type BGP struct {
 	ListenPort      int           `yaml:"listen_port"`
 	ListenAddresses []string      `yaml:"listen_addresses"`
 	Neighbors       []BGPNeighbor `yaml:"neighbors"`
+	// ASPath is the AS path on injected routes (#27): empty (default),
+	// native (the learned path of the prefix), or provider (the chosen
+	// provider's learned path, else the native one).
+	ASPath string `yaml:"as_path"`
 }
+
+// AS path behavior on injected routes (bgp.as_path).
+const (
+	ASPathEmpty    = "empty"
+	ASPathNative   = "native"
+	ASPathProvider = "provider"
+)
 
 // BGPNeighbor is an edge router peered over iBGP (same ASN as asn).
 type BGPNeighbor struct {
@@ -359,6 +374,43 @@ type Provider struct {
 	// has add-path negotiated, the provider must be advertising the exact
 	// prefix before Packeteer steers to it.
 	AddPath bool `yaml:"add_path"`
+
+	// Exchange and PeerASN are set on providers expanded from exchanges
+	// (#27); they are not config keys. A peer always gets the route check:
+	// it must advertise the exact prefix, on a path whose first AS is
+	// PeerASN, before Packeteer steers to it.
+	Exchange string `yaml:"-"`
+	PeerASN  uint32 `yaml:"-"`
+}
+
+// Exchange is one Internet exchange (#27). Each peer is a provider with
+// its own next hop on the peering LAN and its own probe source. A peer
+// carries only its own routes, so it is always route-checked: the router
+// must show Packeteer the peer's path (add-path on the iBGP session, or
+// BMP) before a prefix is steered to it.
+type Exchange struct {
+	Name string `yaml:"name"`
+	// LANs are the peering LAN prefixes. Every peer next_hop is inside
+	// one. Learned next hops inside them that are not configured peers
+	// are reported on /api/exchanges, never used.
+	LANs []string `yaml:"lans"`
+	// BMP is the peers' bmp usage (off, prefer, only), as on providers.
+	BMP string `yaml:"bmp"`
+	// Group is the peers' load-balancing group, as on providers.
+	Group string         `yaml:"group"`
+	Peers []ExchangePeer `yaml:"peers"`
+}
+
+// ExchangePeer is one peer on an exchange.
+type ExchangePeer struct {
+	Name string `yaml:"name"`
+	// ASN is the peer's AS: the first AS on the paths it advertises.
+	ASN        uint32   `yaml:"asn"`
+	NextHop    string   `yaml:"next_hop"`
+	SourceIP   string   `yaml:"source_ip"`
+	Exclude    bool     `yaml:"exclude"`
+	Precedence int      `yaml:"precedence"`
+	Cost       *float64 `yaml:"cost"`
 }
 
 // Allowlist restricts which prefixes may ever be injected.
@@ -417,6 +469,7 @@ func Parse(data []byte) (*Config, error) {
 	}
 
 	cfg.applyDefaults()
+	cfg.expandExchanges()
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
@@ -468,6 +521,9 @@ func (c *Config) applyDefaults() {
 	}
 	if c.PluginDir == "" {
 		c.PluginDir = DefaultPluginDir
+	}
+	if strings.TrimSpace(c.BGP.ASPath) == "" {
+		c.BGP.ASPath = ASPathEmpty
 	}
 	if c.Scorer == nil {
 		c.Scorer = &PluginSpec{Type: "weighted"}
@@ -700,6 +756,12 @@ func (c *Config) Validate() error {
 			add("%s: passive requires bgp.listen_port", label)
 		}
 	}
+	switch c.BGP.ASPath {
+	case ASPathEmpty, ASPathNative, ASPathProvider:
+	default:
+		add("bgp.as_path %q is invalid (want %s, %s, or %s)", c.BGP.ASPath, ASPathEmpty, ASPathNative, ASPathProvider)
+	}
+	c.validateExchanges(add)
 	c.validateRouters(add)
 
 	validateSpecs := func(field string, specs []PluginSpec) {
@@ -998,6 +1060,7 @@ func coveredBy(list []netip.Prefix, p netip.Prefix) bool {
 }
 
 func (c *Config) normalize() {
+	c.BGP.ASPath = strings.ToLower(strings.TrimSpace(c.BGP.ASPath))
 	c.Log.Level = strings.ToLower(strings.TrimSpace(c.Log.Level))
 	c.Log.Format = strings.ToLower(strings.TrimSpace(c.Log.Format))
 	for i := range c.Providers {

@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/GrandArcher/Packeteer/internal/config"
+	"github.com/GrandArcher/Packeteer/internal/exchange"
 	"github.com/GrandArcher/Packeteer/internal/policy"
 	"github.com/GrandArcher/Packeteer/internal/probe"
 	"github.com/GrandArcher/Packeteer/internal/rib"
@@ -25,6 +26,8 @@ type Collector struct {
 	decider   *policy.Engine
 	view      *rib.View
 	telemetry func() []plugin.Usage
+	exchanges []exchange.Exchange
+	hops      func() []rib.NextHopCount
 }
 
 // NewCollector copies providers. The caller may reuse the slice afterward.
@@ -51,6 +54,15 @@ func (c *Collector) SetTelemetry(fn func() []plugin.Usage) {
 	c.mu.Unlock()
 }
 
+// SetExchanges installs the configured exchanges and the read of learned
+// next hops on their peering LANs (#27). hops may be slow on a full table;
+// the caller caches it.
+func (c *Collector) SetExchanges(exs []exchange.Exchange, hops func() []rib.NextHopCount) {
+	c.mu.Lock()
+	c.exchanges, c.hops = exs, hops
+	c.mu.Unlock()
+}
+
 // SetStarted marks process startup finished (or shutting down).
 func (c *Collector) SetStarted(v bool) {
 	c.mu.Lock()
@@ -59,10 +71,12 @@ func (c *Collector) SetStarted(v bool) {
 }
 
 // Snapshot copies the current state. It looks up only prefixes that are
-// already probed, decided, or improved, never the whole RIB.
+// already probed, decided, or improved, never the whole RIB. Exchange
+// statistics read the next hop counts, which the caller caches.
 func (c *Collector) Snapshot() Snapshot {
 	c.mu.RLock()
 	started, engine, decider, view, telemetry := c.started, c.engine, c.decider, c.view, c.telemetry
+	exs, hops := c.exchanges, c.hops
 	c.mu.RUnlock()
 
 	in := Input{
@@ -110,6 +124,21 @@ func (c *Collector) Snapshot() Snapshot {
 		for _, im := range in.Improvements {
 			consider(im.Prefix)
 		}
+	}
+	if len(exs) > 0 {
+		var nh []rib.NextHopCount
+		if hops != nil {
+			nh = hops()
+		}
+		up := map[string]bool{}
+		for _, st := range in.Status {
+			up[st.Name] = st.Up
+		}
+		imps := map[string]int{}
+		for _, im := range in.Improvements {
+			imps[im.Provider]++
+		}
+		in.Exchanges = exchange.Build(exs, nh, up, imps)
 	}
 	return Assemble(in)
 }

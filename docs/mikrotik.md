@@ -64,6 +64,10 @@ Check the session with `/routing bgp session print`. Packeteer logs `bgp session
 
 FRR, Junos, and IOS equivalents: [routers.md](routers.md).
 
+## Exchange peers
+
+Exchange peers (`exchanges`, #27) are used only when Packeteer sees each peer's own path for the prefix, which needs the router to send every path (BGP add-path) or a BMP feed. Check that your RouterOS version offers one of them toward Packeteer. Without it, the route check keeps every exchange peer unusable (fail closed); transits still work. Per-peer probe sources are in [policy-routing.md](policy-routing.md#internet-exchange-peers).
+
 ## Traffic Flow (NetFlow / IPFIX)
 
 RouterOS exports NetFlow v5, NetFlow v9, and IPFIX. It does not export sFlow. Point the target at Packeteer's address and at a `listen` port on the `flow` source. Packeteer runs with `--network host`, so that port is a port on the host: do not publish it with Docker `-p`.

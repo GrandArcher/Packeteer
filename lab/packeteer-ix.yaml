@@ -1,0 +1,64 @@
+# Lab only (#27). Documentation prefixes, private and documentation ASNs.
+# One edge with a transit and an Internet exchange. Each exchange member
+# listed under peers is a provider with its own next hop on the peering
+# LAN and its own probe source. The edge sends every path (add-path), so
+# Packeteer sees each member's own path and route-checks it: ix-peer-b is
+# the fastest probed path but does not advertise 198.51.100.0/24, so the
+# steer goes to ix-peer-a, carrying ix-peer-a's AS path (as_path:
+# provider). ix-peer-c is on the LAN but not configured: it is reported on
+# /api/exchanges and never used. lab/e2e-ix.sh copies this file to the lab
+# directory and rewrites it before each SIGHUP.
+mode: inject
+asn: 64512
+router_id: 192.0.2.10
+packeteer_community: "64512:666"
+local_pref: 250
+max_improvements: 50
+hold_time: 5m
+improvement_ttl: 1h
+thresholds:
+  min_loss_delta_pct: 1
+  min_rtt_delta_ms: 15
+providers:
+  - name: transit-a
+    source_ip: 192.0.2.11
+    next_hop: 192.0.2.21
+exchanges:
+  - name: ix-lab
+    lans: [203.0.113.0/24]
+    peers:
+      - name: ix-peer-a
+        asn: 64501
+        next_hop: 203.0.113.11
+        source_ip: 192.0.2.31
+      - name: ix-peer-b
+        asn: 64502
+        next_hop: 203.0.113.12
+        source_ip: 192.0.2.32
+allowlist:
+  prefixes:
+    - 198.51.100.0/24
+probe:
+  interval: 2s
+  timeout: 500ms
+  packets: 4
+bgp:
+  as_path: provider
+  neighbors:
+    - address: 192.0.2.254
+      description: edge
+      add_path: true
+http:
+  listen: 127.0.0.1:8080
+sources:
+  - type: static
+    config:
+      targets:
+        - prefix: 198.51.100.0/24
+          host: 198.51.100.1
+probers:
+  - type: fixed
+    config:
+      file: /etc/packeteer/lab/state.yaml
+announcer:
+  type: gobgp
