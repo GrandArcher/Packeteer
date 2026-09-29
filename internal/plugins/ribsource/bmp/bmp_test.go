@@ -110,15 +110,18 @@ func TestDecodeRecordedStream(t *testing.T) {
 	wants := []want{
 		{plugin.RIBPeerUp, a, ""},
 		{plugin.RIBPeerUp, b, ""},
-		{plugin.RIBPeerDown, ix, ""}, // add-path: ignored
+		{plugin.RIBPeerUp, ix, ""}, // add-path negotiated: decoded with path IDs
 		{plugin.RIBPaths, a, "+198.51.100.0/24 192.0.2.21 [64496 64500]"},
 		{plugin.RIBPaths, b, "+198.51.100.0/24 192.0.2.22 [64497 64497 64500];+203.0.113.0/24 192.0.2.22 [64497 64497 64500]"},
 		{plugin.RIBPaths, b, "+2001:db8:100::/48 2001:db8::22 [64497 64500]"},
-		// pre-policy, Adj-RIB-Out, and the add-path peer produce nothing.
+		// pre-policy and Adj-RIB-Out produce nothing.
+		{plugin.RIBPaths, ix, "+198.51.100.0/24#1 192.0.2.23 [64498 64500]"},
+		{plugin.RIBPaths, ix, "+198.51.100.0/24#2 192.0.2.24 [64498 64500]"},
 		{plugin.RIBPaths, loc, "+198.51.100.0/24 192.0.2.21 [64496 64500]"},
 		{plugin.RIBPaths, b, "-203.0.113.0/24;-2001:db8:100::/48"},
 		{plugin.RIBPeerDown, b, ""}, // undecodable UPDATE
 		// transit-b's next update is ignored until a new peer up.
+		{plugin.RIBPaths, ix, "-198.51.100.0/24#1"}, // one add-path path only
 		{plugin.RIBPeerDown, a, ""},
 	}
 	if len(evs) != len(wants) {
@@ -173,15 +176,19 @@ func TestStationIdleTimeoutDropsRouter(t *testing.T) {
 func fmtPaths(ps []plugin.RIBPath) string {
 	var s []string
 	for _, p := range ps {
+		id := ""
+		if p.PathID != 0 {
+			id = "#" + itoa(p.PathID)
+		}
 		if p.Withdraw {
-			s = append(s, "-"+p.Prefix.String())
+			s = append(s, "-"+p.Prefix.String()+id)
 			continue
 		}
 		as := make([]string, len(p.ASPath))
 		for i, a := range p.ASPath {
 			as[i] = itoa(a)
 		}
-		s = append(s, "+"+p.Prefix.String()+" "+p.NextHop.String()+" ["+strings.Join(as, " ")+"]")
+		s = append(s, "+"+p.Prefix.String()+id+" "+p.NextHop.String()+" ["+strings.Join(as, " ")+"]")
 	}
 	return strings.Join(s, ";")
 }
@@ -384,8 +391,10 @@ func TestRecordedStreamIntoRIB(t *testing.T) {
 			netip.MustParseAddr("192.0.2.22"):   "transit-b",
 			netip.MustParseAddr("2001:db8::22"): "transit-b6",
 			netip.MustParseAddr("192.0.2.23"):   "ix",
+			netip.MustParseAddr("192.0.2.24"):   "ix-b",
 		},
-		BMP:    map[string]string{"transit-a": rib.BMPOnly, "transit-b": rib.BMPPrefer, "transit-b6": rib.BMPPrefer},
+		BMP: map[string]string{"transit-a": rib.BMPOnly, "transit-b": rib.BMPPrefer, "transit-b6": rib.BMPPrefer,
+			"ix": rib.BMPPrefer, "ix-b": rib.BMPPrefer},
 		Logger: quietLog,
 	})
 	if err != nil {
@@ -419,8 +428,8 @@ func TestRecordedStreamIntoRIB(t *testing.T) {
 	if !ok || rt.Provider != "transit-a" || !rt.LocRIB || rt.Source != rib.SourceBMP {
 		t.Fatalf("native for %s: %+v %v (want the Loc-RIB path via transit-a)", p1, rt, ok)
 	}
-	if paths := v.Paths(p1); len(paths) != 3 {
-		t.Fatalf("paths for %s: %+v (want transit-a, transit-b, loc-rib; the add-path peer ignored)", p1, paths)
+	if paths := v.Paths(p1); len(paths) != 5 {
+		t.Fatalf("paths for %s: %+v (want transit-a, transit-b, both route server paths, loc-rib)", p1, paths)
 	}
 	if rt, ok := v.Exact(p2); !ok || rt.Provider != "transit-b" {
 		t.Fatalf("%s: %+v %v (inactive path via transit-b only)", p2, rt, ok)
@@ -435,7 +444,7 @@ func TestRecordedStreamIntoRIB(t *testing.T) {
 	check("full", p1, "transit-a", true, true)
 	check("full", p2, "transit-a", true, false) // only: no path, refused
 	check("full", p2, "transit-b", true, true)
-	check("full", p1, "ix", false, false) // bmp off: no check
+	check("full", p1, "ix", true, true) // add-path path 1 from the route server
 
 	replay(fullRIB, withdrawn)
 	if _, ok := v.Exact(p2); ok {
@@ -446,6 +455,12 @@ func TestRecordedStreamIntoRIB(t *testing.T) {
 	}
 	// transit-b's session was dropped: prefer falls back to no check.
 	check("transit-b dropped", p1, "transit-b", false, false)
+	// The route server withdrew path 1 only: ix fails its check and the
+	// second member's path (ID 2) stays.
+	check("path 1 withdrawn", p1, "ix", true, false)
+	if !slices.ContainsFunc(v.Paths(p1), func(r rib.Route) bool { return r.Provider == "ix-b" && r.PathID == 2 }) {
+		t.Fatalf("path ID 2 lost with path 1: %+v", v.Paths(p1))
+	}
 
 	replay(withdrawn, len(msgs))
 	// Loc-RIB still has it, but no router reports transit-a's session up,
@@ -510,7 +525,7 @@ func TestAddPathNegotiation(t *testing.T) {
 	ph := peerHeader(t, gobmp.BMP_PEER_TYPE_GLOBAL, 0, "192.0.2.21", 64496, "192.0.2.21")
 	for _, c := range cases {
 		up := gobmp.NewBMPPeerUpNotification(*ph, "192.0.2.254", 179, 40001, openWith(c.local), openWith(c.remote))
-		got := addPath(up.Body.(*gobmp.BMPPeerUpNotification)) != ""
+		got := len(addPath(up.Body.(*gobmp.BMPPeerUpNotification))) > 0
 		if got != c.want {
 			t.Errorf("%s: add-path = %v, want %v", c.name, got, c.want)
 		}

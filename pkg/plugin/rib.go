@@ -49,7 +49,12 @@ type RIBPath struct {
 	// A path tagged with packeteer_community is Packeteer's own route and
 	// is ignored by the RIB view.
 	Communities []uint32
-	Withdraw    bool
+	// PathID is the add-path identifier (RFC 7911) when the router
+	// negotiated add-path with this peer; 0 otherwise. A peer can hold
+	// several paths for one prefix, and a withdraw removes only the path
+	// with the same identifier.
+	PathID   uint32
+	Withdraw bool
 }
 
 // RIBEvent is one change reported by a RIB source.

@@ -14,6 +14,12 @@
 // (inactive IX paths), and their Loc-RIB. Each provider's `bmp` usage
 // decides whether those paths count for it. Pre-policy paths never count:
 // only routes the router accepted can make a prefix learned.
+//
+// A neighbor with AddPath asks the router for additional paths (RFC 7911,
+// receive only) on the same iBGP session: with the router sending every
+// path, the view holds the inactive and IX paths too, each keyed by its
+// path identifier. Providers listed in Options.AddPath get the route check
+// from those paths while a session that negotiated add-path is up.
 package rib
 
 import (
@@ -49,6 +55,9 @@ type Neighbor struct {
 	LocalAddress netip.Addr // optional source address for the session
 	Passive      bool       // wait for the router to connect
 	Description  string
+	// AddPath offers add-path receive (RFC 7911) for IPv4 and IPv6
+	// unicast. Packeteer never sends additional paths.
+	AddPath bool
 }
 
 // Options configure the view.
@@ -64,6 +73,10 @@ type Options struct {
 	// BMP is each provider's BMP usage (BMPOff, BMPPrefer, BMPOnly). A
 	// provider that is not listed is off.
 	BMP map[string]string
+	// AddPath lists providers whose route check reads the iBGP add-path
+	// paths: while a neighbor that negotiated add-path is up, a provider
+	// here must have a path for the exact prefix.
+	AddPath map[string]bool
 	// OwnCommunity is packeteer_community as asn<<16|value (0: none). A BMP
 	// path that carries it is Packeteer's own route reflected back by the
 	// router (Loc-RIB, or the Adj-RIB-In of Packeteer's session) and is
@@ -104,6 +117,9 @@ type Route struct {
 	Source   string     `json:"source"`            // SourceIBGP or SourceBMP
 	Router   netip.Addr `json:"router,omitzero"`   // BMP: the monitored router
 	LocRIB   bool       `json:"loc_rib,omitempty"` // BMP: the router's selected route
+	// PathID is the add-path identifier (RFC 7911) the router gave this
+	// path; 0 without add-path.
+	PathID uint32 `json:"path_id,omitempty"`
 
 	localPref uint32 // selection only; 100 when the attribute is absent
 }
@@ -115,6 +131,17 @@ type PeerState struct {
 	State       string     `json:"state"`
 	Established bool       `json:"established"`
 	Since       time.Time  `json:"since"`
+	// AddPath is true while the session is up and the router agreed to
+	// send additional paths (it offered add-path send for IPv4 or IPv6
+	// unicast, and this neighbor asked to receive them).
+	AddPath bool `json:"add_path,omitempty"`
+}
+
+// adjKey is one path from one neighbor: the neighbor and the add-path
+// identifier (0 without add-path).
+type adjKey struct {
+	neighbor netip.Addr
+	id       uint32
 }
 
 // View is the learned RIB.
@@ -123,17 +150,21 @@ type View struct {
 	log    *slog.Logger
 	srv    *server.BgpServer
 	cancel context.CancelFunc
-	wg     sync.WaitGroup
+	// watchCtx ends with Stop; add-path capability reads use it.
+	watchCtx context.Context
+	wg       sync.WaitGroup
+	stopping bool // under mu; set by Stop before it waits on wg
 
 	mu        sync.RWMutex
 	routes    map[netip.Prefix]Route                // selected learned path per prefix
-	adj       map[netip.Prefix]map[netip.Addr]Route // prefix -> neighbor -> advertised path
-	bmp       map[netip.Prefix]map[bmpKey]Route     // prefix -> router peer -> BMP path
+	adj       map[netip.Prefix]map[adjKey]Route     // prefix -> neighbor path -> advertised path
+	bmp       map[netip.Prefix]map[bmpPathKey]Route // prefix -> router peer path -> BMP path
 	bmpPeers  map[bmpKey]bool                       // peers a BMP session reports up
 	provNH    map[string]netip.Addr                 // provider -> next hop
 	anyBMP    bool                                  // some provider uses BMP (prefer or only)
 	peers     map[netip.Addr]PeerState
 	neighbors map[netip.Addr]bool
+	addPath   map[netip.Addr]bool // neighbors configured to receive add-path
 	onChange  []func()
 	gen       uint64 // increments on each notify; 0 before the first change
 }
@@ -150,9 +181,9 @@ func New(opt Options) (*View, error) {
 		opt.Logger = slog.Default()
 	}
 	v := &View{opt: opt, log: opt.Logger, routes: map[netip.Prefix]Route{},
-		adj: map[netip.Prefix]map[netip.Addr]Route{}, bmp: map[netip.Prefix]map[bmpKey]Route{},
+		adj: map[netip.Prefix]map[adjKey]Route{}, bmp: map[netip.Prefix]map[bmpPathKey]Route{},
 		bmpPeers: map[bmpKey]bool{}, provNH: map[string]netip.Addr{},
-		peers: map[netip.Addr]PeerState{}, neighbors: map[netip.Addr]bool{}}
+		peers: map[netip.Addr]PeerState{}, neighbors: map[netip.Addr]bool{}, addPath: map[netip.Addr]bool{}}
 	for nh, name := range opt.Providers {
 		v.provNH[name] = nh.Unmap()
 	}
@@ -165,11 +196,19 @@ func New(opt Options) (*View, error) {
 			return nil, fmt.Errorf("rib: provider %s: bmp %q is invalid (want off, prefer, or only)", name, u)
 		}
 	}
+	for name, on := range opt.AddPath {
+		if on && opt.BMP[name] == BMPOnly {
+			return nil, fmt.Errorf("rib: provider %s: add_path route check does not apply with bmp only (iBGP paths are ignored)", name)
+		}
+	}
 	for _, n := range opt.Neighbors {
 		if !n.Address.IsValid() {
 			return nil, errors.New("rib: neighbor address is required")
 		}
 		v.neighbors[n.Address.Unmap()] = true
+		if n.AddPath {
+			v.addPath[n.Address.Unmap()] = true
+		}
 		v.peers[n.Address.Unmap()] = PeerState{Address: n.Address, Description: n.Description, State: "idle"}
 	}
 	return v, nil
@@ -212,6 +251,7 @@ func (v *View) Start(ctx context.Context) error {
 
 	wctx, cancel := context.WithCancel(context.Background())
 	v.cancel = cancel
+	v.watchCtx = wctx
 	// Adj-RIB-In, before import policy: a path a later import policy rejected
 	// would still show up here. This is not the local best path. A Packeteer
 	// route can win best-path selection on this speaker; that event must not
@@ -235,13 +275,21 @@ func (v *View) Start(ctx context.Context) error {
 		if port == 0 {
 			port = 179
 		}
+		afiSafis := []*api.AfiSafi{
+			{Config: &api.AfiSafiConfig{Family: &api.Family{Afi: api.Family_AFI_IP, Safi: api.Family_SAFI_UNICAST}, Enabled: true}},
+			{Config: &api.AfiSafiConfig{Family: &api.Family{Afi: api.Family_AFI_IP6, Safi: api.Family_SAFI_UNICAST}, Enabled: true}},
+		}
+		if n.AddPath {
+			// Receive only. SendMax stays 0: the announcer publishes one
+			// path per prefix and the router never learns add-path from us.
+			for _, af := range afiSafis {
+				af.AddPaths = &api.AddPaths{Config: &api.AddPathsConfig{Receive: true}}
+			}
+		}
 		p := &api.Peer{
 			Conf:      &api.PeerConf{NeighborAddress: n.Address.String(), PeerAsn: v.opt.ASN, Description: n.Description},
 			Transport: &api.Transport{RemotePort: port, PassiveMode: n.Passive},
-			AfiSafis: []*api.AfiSafi{
-				{Config: &api.AfiSafiConfig{Family: &api.Family{Afi: api.Family_AFI_IP, Safi: api.Family_SAFI_UNICAST}, Enabled: true}},
-				{Config: &api.AfiSafiConfig{Family: &api.Family{Afi: api.Family_AFI_IP6, Safi: api.Family_SAFI_UNICAST}, Enabled: true}},
-			},
+			AfiSafis:  afiSafis,
 			// A hold time of zero negotiates the hold timer off (RFC 4271), so a
 			// session that stops sending without closing TCP would keep routes.
 			// 90/30 is the usual BGP default. The router's shorter hold time
@@ -275,14 +323,20 @@ func (v *View) Stop(context.Context) error {
 	if v.cancel != nil {
 		v.cancel()
 	}
+	// Capability reads finish while the speaker still serves them; after
+	// this no new one starts.
+	v.mu.Lock()
+	v.stopping = true
+	v.mu.Unlock()
+	v.wg.Wait()
 	v.stopServer()
 	v.mu.Lock()
 	v.routes = map[netip.Prefix]Route{}
-	v.adj = map[netip.Prefix]map[netip.Addr]Route{}
-	v.bmp = map[netip.Prefix]map[bmpKey]Route{}
+	v.adj = map[netip.Prefix]map[adjKey]Route{}
+	v.bmp = map[netip.Prefix]map[bmpPathKey]Route{}
 	v.bmpPeers = map[bmpKey]bool{}
 	for a, p := range v.peers {
-		p.State, p.Established = "idle", false
+		p.State, p.Established, p.AddPath = "idle", false, false
 		v.peers[a] = p
 	}
 	v.mu.Unlock()
@@ -319,9 +373,12 @@ func (v *View) handleEvent(r *api.WatchEventResponse) {
 			ps := v.peers[addr.Unmap()]
 			est := st == api.PeerState_ESTABLISHED
 			if ps.State != st.String() {
-				ps.State, ps.Established, ps.Since = st.String(), est, time.Now()
+				ps.State, ps.Established, ps.Since, ps.AddPath = st.String(), est, time.Now(), false
 				v.peers[addr.Unmap()] = ps
 				changed = true
+				if est && v.addPath[addr.Unmap()] {
+					v.readAddPathLocked(addr.Unmap(), ps.Since)
+				}
 				if !est {
 					// Session lost: drop that neighbor's adj-RIB-in now.
 					// Another session staying up does not keep these paths.
@@ -363,36 +420,115 @@ func (v *View) applyPath(p *api.Path) bool {
 		return false
 	}
 	neighbor = neighbor.Unmap()
-	if p.IsWithdraw {
+	// Without add-path the identifier is 0, so a neighbor has one path.
+	key := adjKey{neighbor: neighbor, id: p.Identifier}
+	var nh netip.Addr
+	var asPath []uint32
+	var lp uint32
+	own := false
+	if !p.IsWithdraw {
+		var comms []uint32
+		nh, asPath, lp, comms = decodeAttrs(p.Pattrs)
+		// Packeteer's own route sent back (a route reflector, or add-path
+		// on a router that reflects): it must never keep its prefix
+		// learned, so it counts as a withdraw of that path.
+		own = v.opt.OwnCommunity != 0 && slices.Contains(comms, v.opt.OwnCommunity)
+	}
+	if p.IsWithdraw || own {
 		nbrs := v.adj[prefix]
-		if _, exists := nbrs[neighbor]; !exists {
+		if _, exists := nbrs[key]; !exists {
 			return false
 		}
-		delete(nbrs, neighbor)
+		delete(nbrs, key)
 		if len(nbrs) == 0 {
 			delete(v.adj, prefix)
 		}
 		return v.republishLocked(prefix)
 	}
-	nh, asPath, lp := decodeAttrs(p.Pattrs)
 	if v.adj[prefix] == nil {
-		v.adj[prefix] = map[netip.Addr]Route{}
+		v.adj[prefix] = map[adjKey]Route{}
 	}
-	v.adj[prefix][neighbor] = Route{
+	v.adj[prefix][key] = Route{
 		Prefix: prefix, NextHop: nh, Provider: v.opt.Providers[nh.Unmap()], ASPath: asPath,
-		Neighbor: neighbor, Age: time.Now(), Source: SourceIBGP, localPref: lp,
+		Neighbor: neighbor, Age: time.Now(), Source: SourceIBGP, PathID: key.id, localPref: lp,
 	}
 	return v.republishLocked(prefix)
+}
+
+// readAddPathLocked starts a read of the router's capabilities for an
+// established add-path neighbor. The session state event does not carry
+// them. PeerState.AddPath is set only if the session is still the one
+// that came up at since. Caller holds mu.
+func (v *View) readAddPathLocked(addr netip.Addr, since time.Time) {
+	if v.srv == nil || v.watchCtx == nil || v.stopping {
+		return
+	}
+	ctx := v.watchCtx
+	v.wg.Add(1)
+	go func() {
+		defer v.wg.Done()
+		sends := false
+		err := v.srv.ListPeer(ctx, &api.ListPeerRequest{Address: addr.String()}, func(p *api.Peer) {
+			if p.State != nil && routerSendsAddPath(p.State.RemoteCap) {
+				sends = true
+			}
+		})
+		if err != nil {
+			if ctx.Err() == nil {
+				v.log.Warn("rib: reading add-path capability", "neighbor", addr, "err", err)
+			}
+			return
+		}
+		v.mu.Lock()
+		ps, ok := v.peers[addr]
+		set := ok && ps.Established && ps.Since.Equal(since) && ps.AddPath != sends
+		if set {
+			ps.AddPath = sends
+			v.peers[addr] = ps
+		}
+		v.mu.Unlock()
+		if !sends {
+			v.log.Warn("rib: add_path is set but the router does not send additional paths; the add-path route check stays off for this session (FRR: neighbor addpath-tx-all-paths)", "neighbor", addr)
+			return
+		}
+		if set {
+			v.log.Info("bgp add-path negotiated", "neighbor", addr)
+			v.notify()
+		}
+	}()
+}
+
+// routerSendsAddPath reports whether the router's OPEN offered add-path
+// send for IPv4 or IPv6 unicast. Packeteer always offers receive on an
+// add_path neighbor, so that is a negotiated add-path session.
+func routerSendsAddPath(caps []*anypb.Any) bool {
+	for _, c := range caps {
+		var ap api.AddPathCapability
+		if !c.MessageIs(&ap) || c.UnmarshalTo(&ap) != nil {
+			continue
+		}
+		for _, t := range ap.Tuples {
+			if t.Family == nil || t.Family.Safi != api.Family_SAFI_UNICAST ||
+				(t.Family.Afi != api.Family_AFI_IP && t.Family.Afi != api.Family_AFI_IP6) {
+				continue
+			}
+			if t.Mode == api.AddPathCapabilityTuple_SEND || t.Mode == api.AddPathCapabilityTuple_BOTH {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // forgetNeighborLocked drops every path learned from addr. Caller holds mu.
 func (v *View) forgetNeighborLocked(addr netip.Addr) bool {
 	changed := false
 	for p, nbrs := range v.adj {
-		if _, ok := nbrs[addr]; !ok {
+		n := len(nbrs)
+		maps.DeleteFunc(nbrs, func(k adjKey, _ Route) bool { return k.neighbor == addr })
+		if len(nbrs) == n {
 			continue
 		}
-		delete(nbrs, addr)
 		if len(nbrs) == 0 {
 			delete(v.adj, p)
 		}
@@ -430,7 +566,7 @@ func (v *View) selectLocked(p netip.Prefix) (Route, bool) {
 	for _, rt := range nbrs {
 		if !v.usableLocked(rt) {
 			nbrs = maps.Clone(nbrs)
-			maps.DeleteFunc(nbrs, func(_ netip.Addr, rt Route) bool { return !v.usableLocked(rt) })
+			maps.DeleteFunc(nbrs, func(_ adjKey, rt Route) bool { return !v.usableLocked(rt) })
 			break
 		}
 	}
@@ -447,22 +583,38 @@ func (v *View) usableLocked(rt Route) bool {
 }
 
 // selectRoute picks one advertised path. Higher local preference wins; equal
-// preference breaks toward the lower neighbor address.
-func selectRoute(paths map[netip.Addr]Route) (Route, bool) {
+// preference breaks toward the lower neighbor address. Several add-path
+// paths from one neighbor then break toward the shorter AS path and the
+// lower path identifier: an estimate of the router's best, which add-path
+// does not mark.
+func selectRoute(paths map[adjKey]Route) (Route, bool) {
 	var best Route
 	ok := false
 	for _, rt := range paths {
-		if !ok || rt.localPref > best.localPref || (rt.localPref == best.localPref && rt.Neighbor.Less(best.Neighbor)) {
+		if !ok || adjLess(rt, best) {
 			best, ok = rt, true
 		}
 	}
 	return best, ok
 }
 
+func adjLess(a, b Route) bool {
+	if a.localPref != b.localPref {
+		return a.localPref > b.localPref
+	}
+	if a.Neighbor != b.Neighbor {
+		return a.Neighbor.Less(b.Neighbor)
+	}
+	if len(a.ASPath) != len(b.ASPath) {
+		return len(a.ASPath) < len(b.ASPath)
+	}
+	return a.PathID < b.PathID
+}
+
 // selectBMP prefers a Loc-RIB path (the router's own choice). Without one it
 // takes the shortest AS path, then the lower router and peer address. That
 // is an estimate of the router's best, not its decision process.
-func selectBMP(paths map[bmpKey]Route) (Route, bool) {
+func selectBMP(paths map[bmpPathKey]Route) (Route, bool) {
 	var best Route
 	ok := false
 	for _, rt := range paths {
@@ -483,13 +635,16 @@ func bmpLess(a, b Route) bool {
 	if a.Router != b.Router {
 		return a.Router.Less(b.Router)
 	}
-	return a.Neighbor.Less(b.Neighbor)
+	if a.Neighbor != b.Neighbor {
+		return a.Neighbor.Less(b.Neighbor)
+	}
+	return a.PathID < b.PathID
 }
 
 func sameRoute(a, b Route) bool {
 	return a.Prefix == b.Prefix && a.NextHop == b.NextHop && a.Provider == b.Provider &&
 		a.Neighbor == b.Neighbor && a.localPref == b.localPref && slices.Equal(a.ASPath, b.ASPath) &&
-		a.Source == b.Source && a.Router == b.Router && a.LocRIB == b.LocRIB
+		a.Source == b.Source && a.Router == b.Router && a.LocRIB == b.LocRIB && a.PathID == b.PathID
 }
 
 // ---- BMP ----
@@ -499,6 +654,13 @@ type bmpKey struct {
 	router netip.Addr
 	peer   netip.Addr
 	locRIB bool
+}
+
+// bmpPathKey is one path from a BMP peer: add-path peers (RFC 7911) can
+// send several per prefix, told apart by id (0 without add-path).
+type bmpPathKey struct {
+	bmpKey
+	id uint32
 }
 
 // ApplyRIB takes one event from a RIB source plugin. It is safe to call
@@ -579,12 +741,13 @@ func (v *View) applyBMPLocked(key bmpKey, peer plugin.RIBPeer, p plugin.RIBPath)
 		return false
 	}
 	prefix := p.Prefix.Masked()
+	pk := bmpPathKey{bmpKey: key, id: p.PathID}
 	if p.Withdraw {
 		paths := v.bmp[prefix]
-		if _, ok := paths[key]; !ok {
+		if _, ok := paths[pk]; !ok {
 			return false
 		}
-		delete(paths, key)
+		delete(paths, pk)
 		if len(paths) == 0 {
 			delete(v.bmp, prefix)
 		}
@@ -606,8 +769,8 @@ func (v *View) applyBMPLocked(key bmpKey, peer plugin.RIBPeer, p plugin.RIBPath)
 	if !keep {
 		// Not ours to use; an update can still replace a path stored
 		// before, so drop that one.
-		if _, ok := v.bmp[prefix][key]; ok {
-			delete(v.bmp[prefix], key)
+		if _, ok := v.bmp[prefix][pk]; ok {
+			delete(v.bmp[prefix], pk)
 			if len(v.bmp[prefix]) == 0 {
 				delete(v.bmp, prefix)
 			}
@@ -616,10 +779,10 @@ func (v *View) applyBMPLocked(key bmpKey, peer plugin.RIBPeer, p plugin.RIBPath)
 		return false
 	}
 	if v.bmp[prefix] == nil {
-		v.bmp[prefix] = map[bmpKey]Route{}
+		v.bmp[prefix] = map[bmpPathKey]Route{}
 	}
-	v.bmp[prefix][key] = Route{Prefix: prefix, NextHop: nh, Provider: provider, ASPath: slices.Clone(p.ASPath),
-		Neighbor: key.peer, Age: time.Now(), Source: SourceBMP, Router: key.router, LocRIB: key.locRIB}
+	v.bmp[prefix][pk] = Route{Prefix: prefix, NextHop: nh, Provider: provider, ASPath: slices.Clone(p.ASPath),
+		Neighbor: key.peer, Age: time.Now(), Source: SourceBMP, Router: key.router, LocRIB: key.locRIB, PathID: p.PathID}
 	return v.republishLocked(prefix)
 }
 
@@ -628,7 +791,7 @@ func (v *View) forgetBMPLocked(match func(bmpKey) bool) bool {
 	changed := false
 	for p, paths := range v.bmp {
 		n := len(paths)
-		maps.DeleteFunc(paths, func(k bmpKey, _ Route) bool { return match(k) })
+		maps.DeleteFunc(paths, func(k bmpPathKey, _ Route) bool { return match(k.bmpKey) })
 		if len(paths) == n {
 			continue
 		}
@@ -672,22 +835,30 @@ func (v *View) pathsLocked(p netip.Prefix) []Route {
 		if a.LocRIB != b.LocRIB {
 			return a.LocRIB
 		}
-		return a.Neighbor.Less(b.Neighbor)
+		if a.Neighbor != b.Neighbor {
+			return a.Neighbor.Less(b.Neighbor)
+		}
+		return a.PathID < b.PathID
 	})
 	return out
 }
 
 // RouteCheck reports whether provider has a path for exactly p. checked is
-// false when no check applies: bmp usage off, or prefer while no BMP
-// session reports the provider's BGP peer (its next_hop) up. With only, the
-// check always applies, so a lost BMP feed leaves the provider without
-// routes.
+// false when no check applies: bmp usage off (or prefer while no BMP
+// session reports the provider's BGP peer, its next_hop, up) and no
+// add-path check for the provider. With bmp only, the check always
+// applies, so a lost BMP feed leaves the provider without routes.
 //
 // A BMP path counts only on a router that reports the provider's BGP peer
 // up: that is the router the provider's session is on, so with several
 // edges a path through the provider that another router merely relays
 // (or still holds after its own session to the provider dropped) does not
 // pass. With prefer, the iBGP path through the provider counts too.
+//
+// A provider in Options.AddPath is checked while an iBGP session that
+// negotiated add-path is up: the router then sends every path it has, so
+// a provider without one is not advertising the prefix. Any iBGP path
+// through the provider passes.
 func (v *View) RouteCheck(p netip.Prefix, provider string) (checked, ok bool) {
 	p = p.Masked()
 	v.mu.RLock()
@@ -695,11 +866,14 @@ func (v *View) RouteCheck(p netip.Prefix, provider string) (checked, ok bool) {
 	on := v.coveringRoutersLocked(provider)
 	switch v.opt.BMP[provider] {
 	case BMPOnly:
+		checked = true
 	case BMPPrefer:
-		if len(on) == 0 {
-			return false, false
-		}
-	default:
+		checked = len(on) > 0
+	}
+	if v.opt.AddPath[provider] && v.addPathUpLocked() {
+		checked = true
+	}
+	if !checked {
 		return false, false
 	}
 	for _, rt := range v.pathsLocked(p) {
@@ -708,6 +882,17 @@ func (v *View) RouteCheck(p netip.Prefix, provider string) (checked, ok bool) {
 		}
 	}
 	return true, false
+}
+
+// addPathUpLocked reports whether some established session negotiated
+// add-path. Caller holds mu.
+func (v *View) addPathUpLocked() bool {
+	for _, ps := range v.peers {
+		if ps.Established && ps.AddPath {
+			return true
+		}
+	}
+	return false
 }
 
 // coveringRoutersLocked lists the routers whose BMP session reports the
@@ -771,16 +956,21 @@ func decodePrefix(a *anypb.Any) (netip.Prefix, bool) {
 	return p.Masked(), true
 }
 
-func decodeAttrs(attrs []*anypb.Any) (netip.Addr, []uint32, uint32) {
+func decodeAttrs(attrs []*anypb.Any) (netip.Addr, []uint32, uint32, []uint32) {
 	var nh netip.Addr
-	var path []uint32
+	var path, comms []uint32
 	lp := uint32(100) // iBGP default when the attribute is absent
 	for _, a := range attrs {
 		var nhA api.NextHopAttribute
 		var mp api.MpReachNLRIAttribute
 		var asp api.AsPathAttribute
 		var lpA api.LocalPrefAttribute
+		var cm api.CommunitiesAttribute
 		switch {
+		case a.MessageIs(&cm):
+			if a.UnmarshalTo(&cm) == nil {
+				comms = append(comms, cm.Communities...)
+			}
 		case a.MessageIs(&nhA):
 			if a.UnmarshalTo(&nhA) == nil {
 				if x, err := netip.ParseAddr(nhA.NextHop); err == nil {
@@ -805,7 +995,7 @@ func decodeAttrs(attrs []*anypb.Any) (netip.Addr, []uint32, uint32) {
 			}
 		}
 	}
-	return nh, path, lp
+	return nh, path, lp, comms
 }
 
 // ---- queries ----

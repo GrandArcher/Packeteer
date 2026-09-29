@@ -19,7 +19,7 @@ func pfx(s string) netip.Prefix { return netip.MustParsePrefix(s) }
 func addr(s string) netip.Addr  { return netip.MustParseAddr(s) }
 
 // fakeRIB is a simulated learned RIB with documentation prefixes.
-type fakeRIB struct{ routes []rib.Route }
+type fakeRIB struct{ routes, inactive []rib.Route }
 
 func (f fakeRIB) Ready() bool { return true }
 func (f fakeRIB) Exact(p netip.Prefix) (rib.Route, bool) {
@@ -43,6 +43,20 @@ func (f fakeRIB) Covering(p netip.Prefix) (rib.Route, bool) {
 	return f.routes[best], true
 }
 func (f fakeRIB) Routes() []rib.Route { return f.routes }
+func (f fakeRIB) Paths(p netip.Prefix) []rib.Route {
+	var out []rib.Route
+	for _, r := range f.routes {
+		if r.Prefix == p.Masked() {
+			out = append(out, r)
+		}
+	}
+	for _, r := range f.inactive {
+		if r.Prefix == p.Masked() {
+			out = append(out, r)
+		}
+	}
+	return out
+}
 
 func testRIB() fakeRIB {
 	return fakeRIB{routes: []rib.Route{
@@ -99,6 +113,14 @@ func TestLookingGlass(t *testing.T) {
 	}
 	if g.Query != pfx("198.51.100.0/24") || g.Exact == nil || g.Exact.Provider != "transit-a" || len(g.MoreSpecifics) != 1 || g.MoreSpecifics[0].Prefix != pfx("198.51.100.128/25") {
 		t.Fatalf("glass: %+v", g)
+	}
+	// An inactive add-path path is listed with the best one.
+	r := testRIB()
+	r.inactive = []rib.Route{{Prefix: pfx("198.51.100.0/24"), NextHop: addr("192.0.2.2"), Provider: "transit-b", Source: rib.SourceIBGP, PathID: 2}}
+	tl.SetRIB(r)
+	g, _ = tl.LookingGlass(pfx("198.51.100.0/24"))
+	if len(g.Paths) != 2 || g.Paths[1].Provider != "transit-b" || g.Paths[1].PathID != 2 || g.Exact.Provider != "transit-a" {
+		t.Fatalf("paths: %+v", g.Paths)
 	}
 	g, _ = tl.LookingGlass(pfx("198.51.100.200/32"))
 	if g.Exact != nil || g.Covering == nil || g.Covering.Prefix != pfx("198.51.100.128/25") {

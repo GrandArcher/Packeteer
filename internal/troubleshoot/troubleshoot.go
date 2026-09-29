@@ -50,6 +50,9 @@ type RIB interface {
 	Exact(p netip.Prefix) (rib.Route, bool)
 	Covering(p netip.Prefix) (rib.Route, bool)
 	Routes() []rib.Route
+	// Paths lists every path held for exactly p (iBGP add-path and BMP
+	// paths included), not only the published best.
+	Paths(p netip.Prefix) []rib.Route
 }
 
 // HopFunc sends one TTL-limited probe. The traceroute source's Hop is the
@@ -142,12 +145,15 @@ func (t *Tools) Status() Status {
 
 // Glass is a looking-glass answer for one prefix.
 type Glass struct {
-	Query         netip.Prefix `json:"query"`
-	RIBReady      bool         `json:"rib_ready"`
-	Exact         *rib.Route   `json:"exact,omitempty"`
-	Covering      *rib.Route   `json:"covering,omitempty"`
-	MoreSpecifics []rib.Route  `json:"more_specifics"`
-	Truncated     bool         `json:"truncated,omitempty"`
+	Query    netip.Prefix `json:"query"`
+	RIBReady bool         `json:"rib_ready"`
+	Exact    *rib.Route   `json:"exact,omitempty"`
+	// Paths are every learned path for exactly the query: with add-path
+	// or BMP that includes the router's inactive and IX paths.
+	Paths         []rib.Route `json:"paths,omitempty"`
+	Covering      *rib.Route  `json:"covering,omitempty"`
+	MoreSpecifics []rib.Route `json:"more_specifics"`
+	Truncated     bool        `json:"truncated,omitempty"`
 }
 
 // ErrNoRIB is returned by the looking glass when BGP is not configured.
@@ -165,6 +171,7 @@ func (t *Tools) LookingGlass(p netip.Prefix) (Glass, error) {
 	if r, ok := v.Exact(p); ok {
 		g.Exact = &r
 	}
+	g.Paths = v.Paths(p)
 	if r, ok := v.Covering(p); ok {
 		g.Covering = &r
 	}

@@ -26,6 +26,7 @@ providers:
     # cc_disable: false       # true: leave this provider out of commit control
     # cost: 5                 # price per Mbps; the cost scorer only moves between priced providers
     # bmp: prefer             # off (default), prefer, or only: use this provider's BMP paths (rib_sources)
+    # add_path: true          # route check from iBGP add-path paths (needs a neighbor with add_path)
 
 allowlist:
   prefixes: []
@@ -153,6 +154,7 @@ scorer:
 #       # port: 179             # remote port; 0/omitted = 179
 #       # local_address: 192.0.2.10
 #       # passive: false        # true waits for the router and needs listen_port
+#       # add_path: true        # receive the router's other paths too (FRR: addpath-tx-all-paths)
 #       description: edge1
 
 # Injection (used only when mode: inject). local_pref is set on every

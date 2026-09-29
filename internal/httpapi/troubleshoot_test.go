@@ -25,6 +25,12 @@ func (f tsRIB) Covering(p netip.Prefix) (rib.Route, bool) {
 	return f.r, f.r.Prefix.Bits() <= p.Bits() && f.r.Prefix.Contains(p.Addr())
 }
 func (f tsRIB) Routes() []rib.Route { return []rib.Route{f.r} }
+func (f tsRIB) Paths(p netip.Prefix) []rib.Route {
+	if p.Masked() == f.r.Prefix {
+		return []rib.Route{f.r}
+	}
+	return nil
+}
 
 type tsProber struct {
 	plugin.Base
