@@ -10,9 +10,13 @@
 // ends (TCP close, termination, a read error, or Stop) every path from that
 // router is dropped; so is a session that stays silent past idle_timeout,
 // and TCP keepalive notices a dead router within about keepAliveBound. A
-// peer whose messages cannot be decoded, or that
-// negotiated add-path (#26 follow-up), is treated as down and its paths are
-// dropped until the router sends a new peer up.
+// peer whose messages cannot be decoded is treated as down and its paths
+// are dropped until the router sends a new peer up.
+//
+// A peer that negotiated add-path (RFC 7911) with the router, such as an
+// IX route server sending every member's path, is decoded with path
+// identifiers: each of its paths for a prefix is kept, and a withdraw
+// removes only the path with the same identifier.
 package bmp
 
 import (
@@ -343,15 +347,37 @@ type decoder struct {
 	log    *slog.Logger
 	// skip holds peers whose routes are ignored until the next peer up.
 	skip map[plugin.RIBPeer]string
+	// addPath holds, per peer, the families whose NLRI carry add-path
+	// identifiers in the routes the router receives. Set at peer up.
+	addPath map[plugin.RIBPeer]map[bgp.RouteFamily]bgp.BGPAddPathMode
 }
 
 func newDecoder(router netip.Addr, locRIB bool, log *slog.Logger) *decoder {
-	return &decoder{router: router, locRIB: locRIB, log: log, skip: map[plugin.RIBPeer]string{}}
+	return &decoder{router: router, locRIB: locRIB, log: log, skip: map[plugin.RIBPeer]string{},
+		addPath: map[plugin.RIBPeer]map[bgp.RouteFamily]bgp.BGPAddPathMode{}}
+}
+
+// options gives the parser the add-path families negotiated for the peer
+// in a per-peer header. Only Adj-RIB-In routes use them: those are routes
+// the router received. The Loc-RIB and Adj-RIB-Out are never add-path
+// decoded here (Adj-RIB-Out is not read at all).
+func (d *decoder) options(h gobmp.BMPPeerHeader) []*bgp.MarshallingOption {
+	if h.PeerType != gobmp.BMP_PEER_TYPE_GLOBAL || h.IsAdjRIBOut() {
+		return nil
+	}
+	peer, ok := d.peer(h, false)
+	if !ok {
+		return nil
+	}
+	if m := d.addPath[peer]; len(m) > 0 {
+		return []*bgp.MarshallingOption{{AddPath: m}}
+	}
+	return nil
 }
 
 // message decodes one BMP message. stop is true on a termination message.
 func (d *decoder) message(raw []byte) (evs []plugin.RIBEvent, stop bool) {
-	msg, err := gobmp.ParseBMPMessage(raw)
+	msg, err := gobmp.ParseBMPMessageWithOptions(raw, d.options)
 	if msg == nil {
 		return d.undecodable(raw, err), false
 	}
@@ -371,18 +397,19 @@ func (d *decoder) message(raw []byte) (evs []plugin.RIBEvent, stop bool) {
 	ev := plugin.RIBEvent{Router: d.router, Peer: peer}
 	switch body := msg.Body.(type) {
 	case *gobmp.BMPPeerUpNotification:
-		if why := addPath(body); why != "" {
-			d.skip[peer] = why
-			d.log.Warn("bmp: ignoring peer (negotiated add-path is not decoded yet)", "router", d.router, "peer", peer.Address, "detail", why)
-			ev.Kind = plugin.RIBPeerDown
-			return []plugin.RIBEvent{ev}, false
-		}
 		delete(d.skip, peer)
-		d.log.Info("bmp peer up", "router", d.router, "peer", peer.Address, "asn", peer.ASN, "loc_rib", peer.LocRIB)
+		ap := addPath(body)
+		if len(ap) > 0 {
+			d.addPath[peer] = ap
+		} else {
+			delete(d.addPath, peer)
+		}
+		d.log.Info("bmp peer up", "router", d.router, "peer", peer.Address, "asn", peer.ASN, "loc_rib", peer.LocRIB, "add_path", len(ap) > 0)
 		ev.Kind = plugin.RIBPeerUp
 		return []plugin.RIBEvent{ev}, false
 	case *gobmp.BMPPeerDownNotification:
 		delete(d.skip, peer)
+		delete(d.addPath, peer)
 		d.log.Info("bmp peer down", "router", d.router, "peer", peer.Address, "loc_rib", peer.LocRIB)
 		ev.Kind = plugin.RIBPeerDown
 		return []plugin.RIBEvent{ev}, false
@@ -469,19 +496,23 @@ func (d *decoder) peer(h gobmp.BMPPeerHeader, routes bool) (plugin.RIBPeer, bool
 	return plugin.RIBPeer{}, false
 }
 
-// addPath reports whether add-path was negotiated for routes the router
-// receives from the peer (IPv4 or IPv6 unicast): the router's OPEN offers
-// Receive and the peer's OPEN offers Send for the same family. Those NLRI
-// carry path IDs and would be misread. A Receive-only offer on both sides
-// (FRR's default) changes nothing.
-func addPath(b *gobmp.BMPPeerUpNotification) string {
+// addPath lists the families (IPv4 and IPv6 unicast) where add-path was
+// negotiated for routes the router receives from the peer: the router's
+// OPEN offers Receive and the peer's OPEN offers Send. Those NLRI carry
+// path identifiers. A Receive-only offer on both sides (FRR's default)
+// changes nothing.
+func addPath(b *gobmp.BMPPeerUpNotification) map[bgp.RouteFamily]bgp.BGPAddPathMode {
 	local, remote := addPathModes(b.SentOpenMsg), addPathModes(b.ReceivedOpenMsg)
+	var out map[bgp.RouteFamily]bgp.BGPAddPathMode
 	for _, rf := range []bgp.RouteFamily{bgp.RF_IPv4_UC, bgp.RF_IPv6_UC} {
 		if local[rf]&bgp.BGP_ADD_PATH_RECEIVE != 0 && remote[rf]&bgp.BGP_ADD_PATH_SEND != 0 {
-			return "add-path negotiated for " + rf.String()
+			if out == nil {
+				out = map[bgp.RouteFamily]bgp.BGPAddPathMode{}
+			}
+			out[rf] = bgp.BGP_ADD_PATH_RECEIVE
 		}
 	}
-	return ""
+	return out
 }
 
 // addPathModes collects the add-path mode per family from an OPEN.
@@ -518,7 +549,7 @@ func paths(u *bgp.BGPUpdate) []plugin.RIBPath {
 	var out []plugin.RIBPath
 	for _, w := range u.WithdrawnRoutes {
 		if p, ok := prefixOf(w); ok {
-			out = append(out, plugin.RIBPath{Prefix: p, Withdraw: true})
+			out = append(out, plugin.RIBPath{Prefix: p, PathID: w.PathIdentifier(), Withdraw: true})
 		}
 	}
 	var nh netip.Addr
@@ -551,19 +582,19 @@ func paths(u *bgp.BGPUpdate) []plugin.RIBPath {
 			}
 			for _, w := range attr.Value {
 				if p, ok := prefixOf(w); ok {
-					out = append(out, plugin.RIBPath{Prefix: p, Withdraw: true})
+					out = append(out, plugin.RIBPath{Prefix: p, PathID: w.PathIdentifier(), Withdraw: true})
 				}
 			}
 		}
 	}
 	for _, n := range u.NLRI {
 		if p, ok := prefixOf(n); ok && nh.IsValid() {
-			out = append(out, plugin.RIBPath{Prefix: p, NextHop: nh, ASPath: asPath, Communities: comms})
+			out = append(out, plugin.RIBPath{Prefix: p, NextHop: nh, ASPath: asPath, Communities: comms, PathID: n.PathIdentifier()})
 		}
 	}
 	for _, n := range mpNLRI {
 		if p, ok := prefixOf(n); ok && mpNH.IsValid() {
-			out = append(out, plugin.RIBPath{Prefix: p, NextHop: mpNH, ASPath: asPath, Communities: comms})
+			out = append(out, plugin.RIBPath{Prefix: p, NextHop: mpNH, ASPath: asPath, Communities: comms, PathID: n.PathIdentifier()})
 		}
 	}
 	return out

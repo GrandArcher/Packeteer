@@ -25,7 +25,7 @@ Packeteer withdraws immediately when the router withdraws a prefix it was **stil
 - the native path stays best (FRR gives a `network` statement weight 32768, which beats local preference; the lab uses this for one of its checks), or
 - the router is told to keep sending the native path anyway. On FRR: `neighbor 192.0.2.10 advertise-best-external` in the address-family. On Cisco IOS: `neighbor 192.0.2.10 advertise best-external`. That is the configuration to use on a real edge if a provider withdraw should clear the improvement at once.
 
-If the native path is already hidden and the provider then withdraws it, a single-path session shows Packeteer nothing new. The improvement stays until flip-back or `improvement_ttl`. BGP additional-paths and BMP, which would show that withdraw too, are #26.
+If the native path is already hidden and the provider then withdraws it, a single-path session shows Packeteer nothing new. The improvement stays until flip-back or `improvement_ttl`. BGP add-path (`bgp.neighbors[].add_path` with the router sending every path, e.g. FRR `neighbor <packeteer> addpath-tx-all-paths`) or BMP (`rib_sources`) keeps the native path visible, so that withdraw is seen; see [CONFIG.md](CONFIG.md#add-path).
 
 The examples use documentation addresses (RFC 5737 / RFC 3849) and the private ASN 64512. Replace them. MikroTik is covered in full in [mikrotik.md](mikrotik.md); the snippet below matches that recipe.
 

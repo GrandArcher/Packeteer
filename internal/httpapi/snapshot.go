@@ -177,6 +177,8 @@ type Peer struct {
 	State       string    `json:"state"`
 	Established bool      `json:"established"`
 	Since       time.Time `json:"since,omitempty"`
+	// AddPath: the router agreed to send additional paths (#26).
+	AddPath bool `json:"add_path,omitempty"`
 }
 
 // Ready reports whether the process should receive traffic-steering work.
@@ -401,7 +403,7 @@ func assembleTelemetry(in []plugin.Usage) []Telemetry {
 func assemblePeers(in []rib.PeerState) []Peer {
 	out := make([]Peer, 0, len(in))
 	for _, p := range in {
-		row := Peer{Description: p.Description, State: p.State, Established: p.Established, Since: p.Since}
+		row := Peer{Description: p.Description, State: p.State, Established: p.Established, Since: p.Since, AddPath: p.AddPath}
 		if p.Address.IsValid() {
 			row.Address = p.Address.String()
 		}

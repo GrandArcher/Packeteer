@@ -126,7 +126,7 @@ edge_bmp() {
 retired_by_route_check() {
 	local want=$1
 	local n
-	n=$(log_count 'no route via provider (bmp)')
+	n=$(log_count 'no route via provider (route check)')
 	[ "$n" -ge "$want" ]
 }
 

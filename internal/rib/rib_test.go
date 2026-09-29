@@ -367,7 +367,7 @@ func TestLocalPrefChangeUpdatesRoute(t *testing.T) {
 		opt:       Options{Providers: map[netip.Addr]string{nh: "transit-a"}},
 		neighbors: map[netip.Addr]bool{nbr: true},
 		routes:    map[netip.Prefix]Route{},
-		adj:       map[netip.Prefix]map[netip.Addr]Route{},
+		adj:       map[netip.Prefix]map[adjKey]Route{},
 	}
 	if !v.applyPath(learned(t, "198.51.100.0/24", "192.0.2.1", nbr.String(), 100, false)) {
 		t.Fatal("first path did not publish")
@@ -406,11 +406,11 @@ func TestSelectRoute(t *testing.T) {
 	low := Route{Prefix: p, NextHop: netip.MustParseAddr("192.0.2.1"), Neighbor: netip.MustParseAddr("192.0.2.11"), localPref: 100}
 	high := Route{Prefix: p, NextHop: netip.MustParseAddr("192.0.2.2"), Neighbor: netip.MustParseAddr("192.0.2.12"), localPref: 200}
 	tie := Route{Prefix: p, NextHop: netip.MustParseAddr("192.0.2.3"), Neighbor: netip.MustParseAddr("192.0.2.10"), localPref: 100}
-	got, ok := selectRoute(map[netip.Addr]Route{low.Neighbor: low, high.Neighbor: high})
+	got, ok := selectRoute(map[adjKey]Route{{neighbor: low.Neighbor}: low, {neighbor: high.Neighbor}: high})
 	if !ok || got.NextHop != high.NextHop {
 		t.Fatalf("higher local-pref = %+v ok=%v", got, ok)
 	}
-	got, ok = selectRoute(map[netip.Addr]Route{low.Neighbor: low, tie.Neighbor: tie})
+	got, ok = selectRoute(map[adjKey]Route{{neighbor: low.Neighbor}: low, {neighbor: tie.Neighbor}: tie})
 	if !ok || got.Neighbor != tie.Neighbor {
 		t.Fatalf("tie-break = %+v ok=%v", got, ok)
 	}

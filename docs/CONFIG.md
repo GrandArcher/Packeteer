@@ -76,6 +76,7 @@ A candidate wins when its score is lower and either loss improves by at least `m
 | `cc_disable` | no | `true`: leave this provider out of commit control in both directions. Performance improvements can still select it. |
 | `cost` | no | Price per Mbps, 0–1000000000, in one currency across all providers. Omitted means no cost: the `cost` scorer never moves a prefix onto this provider or off it for price. Improvements between two priced providers carry `cost_delta` and `est_savings` on `/api/improvements`. |
 | `bmp` | no | How this provider uses paths from `rib_sources` (BMP): `off` (default), `prefer`, or `only`. `prefer` and `only` need a `rib_sources` entry. See [RIB source `bmp`](#rib-source-bmp). |
+| `add_path` | no | `true`: apply the route check to this provider from the iBGP add-path paths. Needs a `bgp.neighbors` entry with `add_path: true`. Not allowed with `bmp: only`. See [Add-path](#add-path). |
 
 ### `allowlist`
 
@@ -134,10 +135,24 @@ Each neighbor:
 | `local_address` | unset | Optional source address of the TCP session. |
 | `passive` | false | Wait for the router to connect. Requires `listen_port`. |
 | `description` | empty | Log label. |
+| `add_path` | false | Ask the router for additional paths (BGP add-path, RFC 7911) on this session. Receive only; Packeteer never sends them. See [Add-path](#add-path). |
 
 Packeteer proposes a hold time of 90 seconds and a keepalive of 30 seconds. The router's shorter hold time wins. A hold time of zero is never proposed. Graceful restart is not a config key and is never enabled. With no neighbors, the RIB view is off and decisions say ranking only: nothing is injected.
 
 One established session is enough for the view to be ready. All sessions down drops the learned routes and withdraws injected routes.
+
+#### Add-path
+
+Without add-path the router sends Packeteer one path per prefix: its best. With `add_path: true` on a neighbor, Packeteer offers add-path receive for IPv4 and IPv6 unicast, and a router set to send every path (FRR: `neighbor <packeteer> addpath-tx-all-paths` under the address family) sends its inactive transit and IX paths too, on the same iBGP session. Each path is kept by its path identifier; a withdraw removes only that path. Lab-proven only (`lab/e2e-addpath.sh`).
+
+- **Negotiation.** After the session is established Packeteer reads the router's OPEN. `/api/providers` (`bgp.peers`) shows `add_path: true` only when the router offered add-path send. If it did not, Packeteer logs a warning and the session works as a single-path session.
+- **The published route (native).** Higher local preference wins, then the lower neighbor address. Among one neighbor's paths the shorter AS path wins, then the lower path identifier. Add-path does not mark the router's best, so this is an estimate. A BMP Loc-RIB feed, where you run one, is not used to correct it: the iBGP path still comes first.
+- **Route check.** A provider with `add_path: true` is checked while at least one session that negotiated add-path is up: the router sends every path it has, so a provider without a path for the exact prefix is not advertising it. No new improvement goes there, and an active one is retired at once (reason `no route via provider (route check)`), ignoring hold time. Any iBGP path through the provider passes. Set it only for providers whose sessions are on routers that send you every path: a provider on an edge without add-path would be refused. With `bmp: prefer` the BMP and add-path checks both count (either passes); `bmp: only` ignores iBGP paths and cannot be combined.
+- **Native path stays visible.** The router keeps sending the native path while Packeteer's route is its best, so a native withdraw during an improvement is seen and the improvement is retired, instead of waiting for `improvement_ttl`.
+- **Packeteer's own route.** An iBGP path tagged with `packeteer_community` (a reflector or router sending Packeteer's route back) is ignored, with or without add-path, so an injected route never keeps its prefix learned or passes its own route check.
+- **Failure.** Session loss drops every path from that neighbor, as before; with every session down the view is not ready and injected routes are withdrawn. Graceful restart stays off.
+
+**Rollback:** remove `add_path` from the neighbor and the providers and restart. The session comes up single-path and the route check falls back to BMP (if configured) or none.
 
 ### `troubleshoot`
 
@@ -768,7 +783,7 @@ A BMP path is attributed to a provider by its next hop (`providers[].next_hop`),
 With several monitored edges, a BMP path counts for a provider's route check only on a router that reports that provider's BGP peer up: the router its session is on. A copy of the path on another router (relayed there over iBGP, for example) does not pass the check. With `prefer`, the iBGP path through the provider counts too.
 - `only`: only BMP paths count; iBGP paths through this provider are ignored. The route check always applies, so when BMP is down the provider has no routes and gets no improvements.
 
-**Route check.** Before a prefix is steered to a provider with `prefer` (while its peer is up) or `only`, that provider must be advertising that exact prefix. A provider without it is not usable for the prefix: no new improvement goes there, and an active improvement onto it is retired at once (reason `no route via provider (bmp)`), ignoring hold time. The native provider is never refused. This check is how Packeteer notices a withdraw on the steered provider while the router hides the native path.
+**Route check.** Before a prefix is steered to a provider with `prefer` (while its peer is up) or `only`, that provider must be advertising that exact prefix. A provider without it is not usable for the prefix: no new improvement goes there, and an active improvement onto it is retired at once (reason `no route via provider (route check)`), ignoring hold time. The native provider is never refused. This check is how Packeteer notices a withdraw on the steered provider while the router hides the native path.
 
 **Which paths count.** Only routes the router accepted: post-policy Adj-RIB-In and Loc-RIB. A route a peer sent but the router's import policy rejected never makes a prefix learned, never appears in `Routes()` (probe targets, the native provider), and never passes the route check or the announcer's RIB gate.
 
@@ -776,9 +791,9 @@ With several monitored edges, a BMP path counts for a provider's route check onl
 
 **Packeteer's own routes.** A router reports Packeteer's injected route back over BMP: in the Adj-RIB-In of Packeteer's iBGP session and, once it wins, in Loc-RIB. Its next hop is the steered provider. Packeteer ignores every path on a peer whose BGP ID is its `router_id`, and every path tagged with `packeteer_community`, so an injected route never keeps its prefix in the view or passes its own route check. Keep `packeteer_community` on the route through the router's import policy (the lab edge does) so Loc-RIB still carries it. The own-session filter covers only the router Packeteer peers with. If Packeteer's route is reflected to another monitored router (a route reflector, whose Adj-RIB-In shows the reflector's BGP ID, not `router_id`), only the community identifies it. An import policy or reflector that strips the community would let the injected route keep its prefix learned. The controller logs a warning at startup whenever a provider uses `prefer` or `only`, as a reminder.
 
-**Failure.** The view is ready only while an iBGP session is up (the announcer needs it); BMP never makes it ready. When a router's BMP session ends (TCP close, termination, read error, TCP keepalive timeout, `idle_timeout`, shutdown), every path from that router is dropped. A router that dies without closing TCP keeps its paths until TCP keepalive gives up (about 30s) or `idle_timeout` fires, whichever is first; during that time an `only` or `prefer` route check can still pass on those paths. A peer down drops that peer's paths. A peer whose messages cannot be decoded, or whose OPENs negotiated add-path (not decoded yet, #26 follow-up), is treated as down until its next peer up. Improvements that lose their provider's path then retire through the route check; a prefix that leaves the view is retired as before.
+**Failure.** The view is ready only while an iBGP session is up (the announcer needs it); BMP never makes it ready. When a router's BMP session ends (TCP close, termination, read error, TCP keepalive timeout, `idle_timeout`, shutdown), every path from that router is dropped. A router that dies without closing TCP keeps its paths until TCP keepalive gives up (about 30s) or `idle_timeout` fires, whichever is first; during that time an `only` or `prefer` route check can still pass on those paths. A peer down drops that peer's paths. A peer whose messages cannot be decoded is treated as down until its next peer up. A peer that negotiated add-path with the router (the router's OPEN offers receive and the peer's offers send, for example an IX route server) is decoded with path identifiers: each of its paths is kept, and a withdraw removes only the path with the same identifier. Improvements that lose their provider's path then retire through the route check; a prefix that leaves the view is retired as before.
 
-FRR sends BMP with `-M bmp` on bgpd and a `bmp targets` block (`bmp connect <station> port 11019`, `bmp monitor ipv4 unicast post-policy`, optionally `bmp monitor ipv4 unicast loc-rib`, and `bmp stats interval` if you set `idle_timeout`); see `lab/frr-bmp/frr.conf`. FRR sends peer up and peer down with the policy flag clear; the station applies them to the peer whichever table is monitored. FRR offers add-path Receive on every session by default; that is not negotiated add-path and is decoded normally.
+FRR sends BMP with `-M bmp` on bgpd and a `bmp targets` block (`bmp connect <station> port 11019`, `bmp monitor ipv4 unicast post-policy`, optionally `bmp monitor ipv4 unicast loc-rib`, and `bmp stats interval` if you set `idle_timeout`); see `lab/frr-bmp/frr.conf`. FRR sends peer up and peer down with the policy flag clear; the station applies them to the peer whichever table is monitored. FRR offers add-path Receive on every session by default; with a peer that does not offer send, that is not negotiated add-path and is decoded normally.
 
 **Rollback:** set every provider's `bmp` to `off` (or remove it) and restart; the view falls back to the iBGP RIB. Remove `rib_sources` too to stop the station listening.
 

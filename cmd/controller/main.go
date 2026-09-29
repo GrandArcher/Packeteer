@@ -1090,6 +1090,7 @@ func newRIB(cfg *config.Config, log *slog.Logger) (*rib.View, error) {
 	}
 	providers := map[netip.Addr]string{}
 	usage := map[string]string{}
+	addPath := map[string]bool{}
 	for _, p := range cfg.Providers {
 		nh, err := parseAddr(p.NextHop)
 		if err != nil {
@@ -1099,6 +1100,9 @@ func newRIB(cfg *config.Config, log *slog.Logger) (*rib.View, error) {
 		if p.BMP != "" {
 			usage[p.Name] = p.BMP
 		}
+		if p.AddPath {
+			addPath[p.Name] = true
+		}
 	}
 	var nbrs []rib.Neighbor
 	for _, n := range cfg.BGP.Neighbors {
@@ -1106,7 +1110,7 @@ func newRIB(cfg *config.Config, log *slog.Logger) (*rib.View, error) {
 		if err != nil {
 			return nil, err
 		}
-		nb := rib.Neighbor{Address: a, Port: uint16(n.Port), Passive: n.Passive, Description: n.Description}
+		nb := rib.Neighbor{Address: a, Port: uint16(n.Port), Passive: n.Passive, Description: n.Description, AddPath: n.AddPath}
 		if n.LocalAddress != "" {
 			if nb.LocalAddress, err = parseAddr(n.LocalAddress); err != nil {
 				return nil, err
@@ -1125,7 +1129,7 @@ func newRIB(cfg *config.Config, log *slog.Logger) (*rib.View, error) {
 	warnBMPSelfFilter(log, usage, own)
 	return rib.New(rib.Options{ASN: cfg.ASN, RouterID: rid, ListenPort: listen,
 		ListenAddresses: cfg.BGP.ListenAddresses, Neighbors: nbrs, Providers: providers, BMP: usage,
-		OwnCommunity: own, Logger: log})
+		AddPath: addPath, OwnCommunity: own, Logger: log})
 }
 
 // warnBMPSelfFilter warns at startup that, with BMP in use, Packeteer's own
@@ -1261,14 +1265,14 @@ func decisionInput(ctx context.Context, now time.Time, engine *probe.Engine, vie
 	return in
 }
 
-// routeChecker is the RIB surface the BMP route check reads. *rib.View
+// routeChecker is the RIB surface the route check (BMP or add-path) reads. *rib.View
 // implements it.
 type routeChecker interface {
 	RouteCheck(netip.Prefix, string) (checked, ok bool)
 }
 
 // fillRouteChecks marks, per probed prefix, the providers the route check
-// (bmp prefer or only) found without a path for that exact prefix. Decide
+// (bmp prefer or only, or add_path) found without a path for that exact prefix. Decide
 // does not use them for that prefix.
 func fillRouteChecks(in *policy.Input, view routeChecker) {
 	for _, r := range in.Results {

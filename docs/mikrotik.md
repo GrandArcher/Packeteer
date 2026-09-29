@@ -35,8 +35,8 @@ Packeteer learns the **paths this router advertises** (its best path per prefix)
 /routing bgp connection set [find where remote.as!=64512] output.filter=ebgp-out
 ```
 
-- `output.redistribute=bgp` sends the eBGP-learned best paths (the full table if you take one) to Packeteer. It is best-path-only. Once an injected route wins, RouterOS stops advertising that prefix back to Packeteer. Packeteer keeps the improvement; it does not withdraw and re-announce. A provider withdraw after that point is caught at `improvement_ttl`, not immediately. Immediate withdraw needs the router to keep sending the native path (FRR and Cisco: `advertise-best-external`; additional-paths and BMP are #26). Details: [routers.md](routers.md#when-the-native-path-disappears).
-- Route reflection is not needed for a single edge. For iBGP-learned routes, make the router a route reflector for this session (`/routing bgp template set packeteer route-reflect=yes`) or use BMP later (#26).
+- `output.redistribute=bgp` sends the eBGP-learned best paths (the full table if you take one) to Packeteer. It is best-path-only. Once an injected route wins, RouterOS stops advertising that prefix back to Packeteer. Packeteer keeps the improvement; it does not withdraw and re-announce. A provider withdraw after that point is caught at `improvement_ttl`, not immediately. Immediate withdraw needs the router to keep sending the native path (FRR and Cisco: `advertise-best-external`, or add-path to Packeteer, or BMP; Packeteer receives both, see [CONFIG.md](CONFIG.md#add-path). The lab proves them on FRR only; check what your RouterOS version can send). Details: [routers.md](routers.md#when-the-native-path-disappears).
+- Route reflection is not needed for a single edge. For iBGP-learned routes, make the router a route reflector for this session (`/routing bgp template set packeteer route-reflect=yes`) or feed the other paths with BMP (`rib_sources`) where the router can send it.
 - Keep graceful restart **off** on this session. Packeteer never enables it, so its routes can never linger after it dies.
 
 Packeteer side (`config.yaml`):

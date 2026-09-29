@@ -14,6 +14,7 @@ import (
 	"net"
 	"net/netip"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -271,6 +272,11 @@ type BGPNeighbor struct {
 	LocalAddress string `yaml:"local_address"` // optional session source
 	Passive      bool   `yaml:"passive"`       // wait for the router to connect
 	Description  string `yaml:"description"`
+	// AddPath asks the router for additional paths (BGP add-path, RFC
+	// 7911, receive only) on this session, so the RIB view holds its
+	// inactive and IX paths too. The router must be set to send them
+	// (FRR: neighbor X addpath-tx-all-paths).
+	AddPath bool `yaml:"add_path"`
 }
 
 // PluginSpec selects one plugin instance.
@@ -332,6 +338,11 @@ type Provider struct {
 	// BMP is how this provider uses paths from rib_sources (BMP, #26):
 	// off (default), prefer, or only.
 	BMP string `yaml:"bmp"`
+	// AddPath applies the route check to this provider from the iBGP
+	// add-path paths (#26): while a bgp.neighbors session with add_path
+	// has add-path negotiated, the provider must be advertising the exact
+	// prefix before Packeteer steers to it.
+	AddPath bool `yaml:"add_path"`
 }
 
 // Allowlist restricts which prefixes may ever be injected.
@@ -594,6 +605,14 @@ func (c *Config) Validate() error {
 			}
 		default:
 			add("%s: bmp %q is invalid (want off, prefer, or only)", label, p.BMP)
+		}
+		if p.AddPath {
+			if !slices.ContainsFunc(c.BGP.Neighbors, func(n BGPNeighbor) bool { return n.AddPath }) {
+				add("%s: add_path requires a bgp.neighbors entry with add_path: true", label)
+			}
+			if p.BMP == BMPOnly {
+				add("%s: add_path does not apply with bmp only (iBGP paths are ignored for it)", label)
+			}
 		}
 	}
 

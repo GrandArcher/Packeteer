@@ -1,0 +1,73 @@
+# Add-path lab (#26). Simulated edge that sends Packeteer every path over
+# iBGP add-path, plus the BMP lab's two simulated eBGP transits.
+# Documentation addresses (RFC 5737) and documentation/private ASNs only.
+# Brought up by lab/e2e-addpath.sh, which sets PACKETEER_LAB_DIR to a
+# directory containing state.yaml (the fixed prober re-reads it).
+name: packeteer-e2e-addpath
+x-frr: &frr
+  image: quay.io/frrouting/frr:10.2.4
+  privileged: true
+  entrypoint: ["/bin/sh", "/lab/frr-start.sh"]
+services:
+  edge:
+    <<: *frr
+    hostname: edge
+    environment:
+      FRR_EXPECT: "addpath-tx-all-paths;route-map from-packeteer in"
+    volumes:
+      - ./frr-addpath:/etc/frr
+      - ./frr-start.sh:/lab/frr-start.sh:ro
+    networks:
+      lab:
+        ipv4_address: 192.0.2.254
+  transit-a:
+    <<: *frr
+    hostname: transit-a
+    environment:
+      FRR_EXPECT: "router bgp 64496;network 198.51.100.0/24"
+    volumes:
+      - ./frr-bmp-transit-a:/etc/frr
+      - ./frr-start.sh:/lab/frr-start.sh:ro
+    networks:
+      lab:
+        ipv4_address: 192.0.2.21
+  transit-b:
+    <<: *frr
+    hostname: transit-b
+    environment:
+      FRR_EXPECT: "router bgp 64497;network 198.51.100.0/24;route-map to-edge out"
+    volumes:
+      - ./frr-bmp-transit-b:/etc/frr
+      - ./frr-start.sh:/lab/frr-start.sh:ro
+    networks:
+      lab:
+        ipv4_address: 192.0.2.22
+  packeteer:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+      args:
+        VERSION: e2e
+    image: packeteer:e2e
+    depends_on:
+      - edge
+    cap_add:
+      - NET_RAW
+      - NET_ADMIN
+      - NET_BIND_SERVICE
+    environment:
+      PACKETEER_CONFIG: /etc/packeteer/config.yaml
+      PACKETEER_LOG_LEVEL: debug
+    volumes:
+      - ./packeteer-addpath.yaml:/etc/packeteer/config.yaml:ro
+      - ${PACKETEER_LAB_DIR}:/etc/packeteer/probes:ro
+    networks:
+      lab:
+        ipv4_address: 192.0.2.10
+networks:
+  lab:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 192.0.2.0/24
+          gateway: 192.0.2.3

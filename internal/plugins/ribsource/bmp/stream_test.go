@@ -20,7 +20,9 @@ import (
 // message must be ignored:
 //
 //	transit-a 192.0.2.21 AS 64496, transit-b 192.0.2.22 AS 64497,
-//	ix-peer   192.0.2.23 AS 64498 (negotiated add-path; must be ignored)
+//	ix-rs     192.0.2.23 AS 64498, an IX route server that negotiated
+//	          add-path: two paths for 198.51.100.0/24 (members 192.0.2.23
+//	          and 192.0.2.24, path IDs 1 and 2), then path 1 withdrawn
 //
 // Regenerate with: go test ./internal/plugins/ribsource/bmp -run TestRecordedStream -update
 var update = flag.Bool("update", false, "rewrite testdata/synthetic.bmp")
@@ -31,8 +33,8 @@ const fixture = "testdata/synthetic.bmp"
 // path is known; after withdrawn transit-b's extra prefixes are gone and
 // its session is undecodable; the stream ends with a termination.
 const (
-	fullRIB   = 12
-	withdrawn = 15
+	fullRIB   = 13
+	withdrawn = 17
 )
 
 const stamp = 1790000000 // fixed timestamp so the fixture is reproducible
@@ -81,13 +83,23 @@ func splitPrefix(s string) (string, uint8) {
 	return s[:i], bits
 }
 
-func ser(t *testing.T, m *gobmp.BMPMessage) []byte {
+func ser(t *testing.T, m *gobmp.BMPMessage, opts ...*bgp.MarshallingOption) []byte {
 	t.Helper()
-	b, err := m.Serialize()
+	b, err := m.Serialize(opts...)
 	if err != nil {
 		t.Fatal(err)
 	}
 	return b
+}
+
+// addPathOpt encodes IPv4 unicast NLRI with path identifiers.
+var addPathOpt = &bgp.MarshallingOption{AddPath: map[bgp.RouteFamily]bgp.BGPAddPathMode{bgp.RF_IPv4_UC: bgp.BGP_ADD_PATH_BOTH}}
+
+// idPrefix4 is an IPv4 NLRI with an add-path identifier.
+func idPrefix4(s string, id uint32) *bgp.IPAddrPrefix {
+	p := prefix4(s)
+	p.SetPathLocalIdentifier(id) // the ID the encoder writes
+	return p
 }
 
 // corruptMonitoring is a route monitoring message whose BGP UPDATE claims
@@ -134,6 +146,16 @@ func syntheticStream(t *testing.T) [][]byte {
 		bgp.NewPathAttributeMpUnreachNLRI([]bgp.AddrPrefixInterface{bgp.NewIPv6AddrPrefix(48, "2001:db8:100::")}),
 	}, nil)
 
+	// ixUpdate is one route server UPDATE: its path via member nh with the
+	// given path ID.
+	ixUpdate := func(nh string, id uint32) *bgp.BGPMessage {
+		return bgp.NewBGPUpdateMessage(nil, []bgp.PathAttributeInterface{
+			bgp.NewPathAttributeOrigin(0),
+			bgp.NewPathAttributeAsPath([]bgp.AsPathParamInterface{bgp.NewAs4PathParam(bgp.BGP_ASPATH_ATTR_TYPE_SEQ, []uint32{64498, 64500})}),
+			bgp.NewPathAttributeNextHop(nh),
+		}, []*bgp.IPAddrPrefix{idPrefix4("198.51.100.0/24", id)})
+	}
+
 	return [][]byte{
 		/* 0 */ ser(t, gobmp.NewBMPInitiation([]gobmp.BMPInfoTLVInterface{gobmp.NewBMPInfoTLVString(gobmp.BMP_INIT_TLV_TYPE_SYS_NAME, "edge")})),
 		/* 1 */ ser(t, gobmp.NewBMPPeerUpNotification(*aUp, "192.0.2.254", 179, 40001, local, open(64496, "192.0.2.21", false))),
@@ -145,14 +167,17 @@ func syntheticStream(t *testing.T) [][]byte {
 		/* 6 */ ser(t, gobmp.NewBMPRouteMonitoring(*b, v6)),
 		/* 7 */ ser(t, gobmp.NewBMPRouteMonitoring(*aPre, v4Update("192.0.2.21", []uint32{64496}, "192.0.2.0/25"))),
 		/* 8 */ ser(t, gobmp.NewBMPRouteMonitoring(*aOut, v4Update("192.0.2.254", []uint32{64512}, "192.0.2.128/25"))),
-		/* 9 */ ser(t, gobmp.NewBMPRouteMonitoring(*ix, v4Update("192.0.2.23", []uint32{64498}, "198.51.100.0/24"))),
-		/* 10 */ ser(t, gobmp.NewBMPRouteMonitoring(*loc, v4Update("192.0.2.21", []uint32{64496, 64500}, "198.51.100.0/24"))),
-		/* 11 */ ser(t, gobmp.NewBMPStatisticsReport(*aUp, []gobmp.BMPStatsTLVInterface{gobmp.NewBMPStatsTLV32(0, 1)})),
-		/* 12 */ ser(t, gobmp.NewBMPRouteMonitoring(*b, unreach)),
-		/* 13 */ corruptMonitoring(t, b),
-		/* 14 */ ser(t, gobmp.NewBMPRouteMonitoring(*b, v4Update("192.0.2.22", []uint32{64497}, "198.51.100.0/24"))),
-		/* 15 */ ser(t, gobmp.NewBMPPeerDownNotification(*aUp, gobmp.BMP_PEER_DOWN_REASON_REMOTE_NO_NOTIFICATION, nil, nil)),
-		/* 16 */ ser(t, gobmp.NewBMPTermination([]gobmp.BMPTermTLVInterface{gobmp.NewBMPTermTLV16(gobmp.BMP_TERM_TLV_TYPE_REASON, gobmp.BMP_TERM_REASON_ADMIN)})),
+		// The route server's two paths share the prefix; path IDs tell them apart.
+		/* 9 */ ser(t, gobmp.NewBMPRouteMonitoring(*ix, ixUpdate("192.0.2.23", 1)), addPathOpt),
+		/* 10 */ ser(t, gobmp.NewBMPRouteMonitoring(*ix, ixUpdate("192.0.2.24", 2)), addPathOpt),
+		/* 11 */ ser(t, gobmp.NewBMPRouteMonitoring(*loc, v4Update("192.0.2.21", []uint32{64496, 64500}, "198.51.100.0/24"))),
+		/* 12 */ ser(t, gobmp.NewBMPStatisticsReport(*aUp, []gobmp.BMPStatsTLVInterface{gobmp.NewBMPStatsTLV32(0, 1)})),
+		/* 13 */ ser(t, gobmp.NewBMPRouteMonitoring(*b, unreach)),
+		/* 14 */ corruptMonitoring(t, b),
+		/* 15 */ ser(t, gobmp.NewBMPRouteMonitoring(*b, v4Update("192.0.2.22", []uint32{64497}, "198.51.100.0/24"))),
+		/* 16 */ ser(t, gobmp.NewBMPRouteMonitoring(*ix, bgp.NewBGPUpdateMessage([]*bgp.IPAddrPrefix{idPrefix4("198.51.100.0/24", 1)}, nil, nil)), addPathOpt),
+		/* 17 */ ser(t, gobmp.NewBMPPeerDownNotification(*aUp, gobmp.BMP_PEER_DOWN_REASON_REMOTE_NO_NOTIFICATION, nil, nil)),
+		/* 18 */ ser(t, gobmp.NewBMPTermination([]gobmp.BMPTermTLVInterface{gobmp.NewBMPTermTLV16(gobmp.BMP_TERM_TLV_TYPE_REASON, gobmp.BMP_TERM_REASON_ADMIN)})),
 	}
 }
 

@@ -22,7 +22,9 @@ The fixed prober (`type: fixed`) returns configured RTTs and sends no packets. I
 
 `lab/e2e-bmp.sh` is the BMP monitoring station (#26) on its own topology (`lab/docker-compose-bmp.yml`). The FRR edge (`lab/frr-bmp`, bgpd with `-M bmp`) peers with Packeteer over iBGP and with two simulated eBGP transits (`lab/frr-bmp-transit-a`, `lab/frr-bmp-transit-b`). It streams post-policy Adj-RIB-In and Loc-RIB to Packeteer's station on `192.0.2.10:11019` (`lab/packeteer-bmp.yaml`). Both transits send `198.51.100.0/24`. transit-b prepends, so its path is inactive on the edge and never reaches Packeteer over iBGP. Only BMP shows it. transit-b (`bmp: only`) is the faster probed path. The script checks: (1) Packeteer steers onto transit-b's inactive path. (2) transit-b withdraws the prefix: the route check retires the improvement within seconds, inside the 5m `hold_time`, even though the edge still has Packeteer's own route as best and reports it back over BMP. Packeteer does not re-inject while transit-b has no path. (3) transit-b re-announces and the steer comes back. (4) The edge removes its BMP target: the improvement retires, and nothing is injected onto the `only` provider without a feed. (5) BMP returns and the steer comes back; SIGTERM withdraws it.
 
-GitHub Actions runs all five scripts as the `e2e` job. Docker and Go are required (the scripts build `lab/checkroute` and `lab/checkpath`); they do not run in the unit-test job. `go test ./lab/checkroute ./lab/checkpath` covers the checks themselves.
+`lab/e2e-addpath.sh` is BGP add-path on the iBGP session (#26) on its own topology (`lab/docker-compose-addpath.yml`), with no BMP. The FRR edge (`lab/frr-addpath`) sends Packeteer every path (`neighbor 192.0.2.10 addpath-tx-all-paths`); Packeteer asks for them with `bgp.neighbors[].add_path` and checks both providers with `providers[].add_path` (`lab/packeteer-addpath.yaml`). The transits are the BMP lab's. transit-b's prepended path is inactive on the edge and reaches Packeteer only as an additional path. The script checks: (1) add-path is negotiated, Packeteer steers onto transit-b, and its looking glass holds transit-b's path and, while Packeteer's route is the edge's best, transit-a's native path, each with a path ID. (2) transit-b withdraws: the add-path route check retires the improvement within seconds, inside the 5m `hold_time`, and nothing re-injects. (3) transit-b re-announces and the steer comes back. (4) SIGTERM withdraws. (5) After a restart and a new steer, SIGKILL: the route drops with the session within the 9s hold timer.
+
+GitHub Actions runs all six scripts as the `e2e` job. Docker and Go are required (the scripts build `lab/checkroute` and `lab/checkpath`); they do not run in the unit-test job. `go test ./lab/checkroute ./lab/checkpath` covers the checks themselves.
 
 ```sh
 bash lab/e2e.sh
@@ -30,4 +32,5 @@ bash lab/e2e-commit.sh
 bash lab/e2e-cost.sh
 bash lab/e2e-inbound.sh
 bash lab/e2e-bmp.sh
+bash lab/e2e-addpath.sh
 ```
