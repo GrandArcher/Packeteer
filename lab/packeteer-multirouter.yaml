@@ -1,0 +1,54 @@
+# Lab only (#27). Documentation prefixes, private and documentation ASNs.
+# Two edges, peered directly. edge-a forwards to transit-a and reaches
+# transit-b through edge-b; edge-b forwards to transit-b only. A route via
+# transit-b goes to edge-b unchanged and to edge-a with next hop edge-b.
+# edge-b is transit-b's only egress: when its session drops, no improvement
+# may use transit-b. lab/e2e-multirouter.sh checks both edges.
+mode: inject
+asn: 64512
+router_id: 192.0.2.10
+packeteer_community: "64512:666"
+local_pref: 250
+max_improvements: 50
+hold_time: 5m
+improvement_ttl: 1h
+thresholds:
+  min_loss_delta_pct: 1
+  min_rtt_delta_ms: 15
+providers:
+  - name: transit-a
+    source_ip: 192.0.2.11
+    next_hop: 192.0.2.21
+  - name: transit-b
+    source_ip: 192.0.2.12
+    next_hop: 192.0.2.22
+allowlist:
+  prefixes:
+    - 198.51.100.0/24
+probe:
+  interval: 2s
+  timeout: 500ms
+  packets: 4
+bgp:
+  neighbors:
+    - address: 192.0.2.251
+      description: edge-a
+      providers: [transit-a]
+      next_hops:
+        transit-b: 192.0.2.252
+    - address: 192.0.2.252
+      description: edge-b
+      providers: [transit-b]
+sources:
+  - type: static
+    config:
+      targets:
+        - prefix: 198.51.100.0/24
+          host: 198.51.100.1
+# transit-b is always the faster path.
+probers:
+  - type: fixed
+    config:
+      file: /etc/packeteer/probes/state.yaml
+announcer:
+  type: gobgp

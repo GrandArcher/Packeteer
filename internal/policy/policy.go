@@ -97,6 +97,11 @@ type Input struct {
 	// They are not usable for it: no new improvement goes there, and an
 	// active one is retired. The native provider is never marked.
 	NoRoute map[netip.Prefix]map[string]bool
+	// EgressDown lists providers whose every egress router (bgp.neighbors
+	// providers, #27) has lost its iBGP session. They are not usable: no
+	// new improvement goes there, and an active one is retired. The native
+	// provider is never marked.
+	EgressDown map[string]bool
 }
 
 // Improvement is an active (or, outside inject mode, recommended) steer.
@@ -271,6 +276,8 @@ func Decide(prev State, in Input, cfg Config, scorer plugin.Scorer, now time.Tim
 			c.Usable, c.Why = false, "no packets sent"
 		case in.NoRoute[r.Prefix][r.Provider] && r.Provider != nativeOf(st, in, r.Prefix):
 			c.Usable, c.Why = false, "no route via provider (route check)"
+		case in.EgressDown[r.Provider] && r.Provider != nativeOf(st, in, r.Prefix):
+			c.Usable, c.Why = false, "egress router down"
 		}
 		if c.Usable {
 			c.Score = scorer.Score(plugin.PathStats{Provider: r.Provider, LossPct: c.LossPct, RTTAvg: c.RTTAvg, Jitter: c.Jitter})

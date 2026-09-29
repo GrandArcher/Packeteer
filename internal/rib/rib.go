@@ -83,7 +83,11 @@ type Options struct {
 	// ignored, so an injected route never keeps its own prefix in the view
 	// or passes its own route check.
 	OwnCommunity uint32
-	Logger       *slog.Logger
+	// Egress maps a provider to the neighbors that forward to it directly
+	// (#27). While none of them has an established session the provider is
+	// reported by EgressDown. A provider not listed has no egress check.
+	Egress map[string][]netip.Addr
+	Logger *slog.Logger
 }
 
 // BMP usage per provider.
@@ -210,6 +214,13 @@ func New(opt Options) (*View, error) {
 			v.addPath[n.Address.Unmap()] = true
 		}
 		v.peers[n.Address.Unmap()] = PeerState{Address: n.Address, Description: n.Description, State: "idle"}
+	}
+	for name, nbrs := range opt.Egress {
+		for _, a := range nbrs {
+			if !v.neighbors[a.Unmap()] {
+				return nil, fmt.Errorf("rib: provider %s: egress router %s is not a neighbor", name, a)
+			}
+		}
 	}
 	return v, nil
 }
@@ -1013,6 +1024,32 @@ func (v *View) Ready() bool {
 		}
 	}
 	return false
+}
+
+// EgressDown lists the providers with configured egress routers (Options.
+// Egress) none of which has an established iBGP session. Packeteer cannot
+// see or reach such a provider's router, so the decision engine must not
+// steer to it.
+func (v *View) EgressDown() map[string]bool {
+	v.mu.RLock()
+	defer v.mu.RUnlock()
+	var down map[string]bool
+	for name, nbrs := range v.opt.Egress {
+		up := false
+		for _, a := range nbrs {
+			if v.peers[a.Unmap()].Established {
+				up = true
+				break
+			}
+		}
+		if !up && len(nbrs) > 0 {
+			if down == nil {
+				down = map[string]bool{}
+			}
+			down[name] = true
+		}
+	}
+	return down
 }
 
 // Exact returns the best route for exactly this prefix, if learned. The

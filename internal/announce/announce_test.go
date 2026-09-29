@@ -385,3 +385,49 @@ func TestInboundPrefixesAreReservedAndShareTheCap(t *testing.T) {
 		t.Fatal("announced past the shared cap")
 	}
 }
+
+type routerAnn struct {
+	fakeAnn
+	routers []plugin.RouterExport
+}
+
+func (r *routerAnn) BindRouters(_ any, community string, routers []plugin.RouterExport) error {
+	if community != "64512:666" {
+		return nil
+	}
+	r.routers = routers
+	return nil
+}
+
+// Per-router reachability (#27) needs an announcer that can apply it; one
+// that cannot is refused instead of sending every router every route.
+func TestBindRouters(t *testing.T) {
+	cfg := testCfg()
+	cfg.Routers = []plugin.RouterExport{{Neighbor: netip.MustParseAddr("192.0.2.251"), Blocked: []netip.Addr{netip.MustParseAddr("192.0.2.2")}}}
+	rib := memRIB{ready: true}
+	c, err := New(cfg, &fakeAnn{}, rib, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Bind(struct{}{}); err == nil || !strings.Contains(err.Error(), "per-router") {
+		t.Fatalf("announcer without BindRouters: %v", err)
+	}
+	ra := &routerAnn{}
+	if c, err = New(cfg, ra, rib, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Bind(struct{}{}); err != nil {
+		t.Fatal(err)
+	}
+	if len(ra.routers) != 1 || ra.routers[0].Neighbor != cfg.Routers[0].Neighbor {
+		t.Fatalf("routers = %+v", ra.routers)
+	}
+	// Observe never binds.
+	cfg.Mode = "observe"
+	if c, err = New(cfg, &fakeAnn{}, rib, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Bind(struct{}{}); err != nil {
+		t.Fatal(err)
+	}
+}

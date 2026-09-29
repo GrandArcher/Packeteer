@@ -156,6 +156,12 @@ scorer:
 #       # passive: false        # true waits for the router and needs listen_port
 #       # add_path: true        # receive the router's other paths too (FRR: addpath-tx-all-paths)
 #       description: edge1
+#       # Several edges (#27): what each router can forward. Omit both on
+#       # every neighbor to send every router every route (one edge, or a
+#       # route reflector). Docs: docs/route-reflector.md.
+#       # providers: [transit-a]          # this router's own transits (its egress)
+#       # next_hops:
+#       #   transit-b: 192.0.2.253        # reached through another router at this next hop
 
 # Injection (used only when mode: inject). local_pref is set on every
 # injected route and should beat the edge's native local preference.
