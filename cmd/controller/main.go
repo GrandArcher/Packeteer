@@ -27,6 +27,7 @@ import (
 	"github.com/GrandArcher/Packeteer/internal/config"
 	"github.com/GrandArcher/Packeteer/internal/history"
 	"github.com/GrandArcher/Packeteer/internal/httpapi"
+	"github.com/GrandArcher/Packeteer/internal/inbound"
 	"github.com/GrandArcher/Packeteer/internal/notify"
 	"github.com/GrandArcher/Packeteer/internal/pluginhost"
 	_ "github.com/GrandArcher/Packeteer/internal/plugins/all"
@@ -188,6 +189,9 @@ func run(ctx context.Context, args []string, getenv func(string) string, stdout,
 	default:
 		fmt.Fprintln(stdout, "announce: disabled")
 	}
+	if in := cfg.Inbound; in != nil {
+		fmt.Fprintf(stdout, "inbound: %s prefixes=%d local_pref=%d release_pct=%g\n", in.Mode, len(in.Prefixes), in.LocalPref, in.ReleasePct)
+	}
 	fmt.Fprintf(stdout, "log: %s %s\n", cfg.Log.Level, cfg.Log.Format)
 	if cfg.HTTPListen() == "" {
 		fmt.Fprintln(stdout, "http: disabled")
@@ -233,6 +237,13 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 	if rec != nil {
 		reports = rec
 	}
+	// inb is built with the RIB view below; the API reads it through this
+	// variable.
+	var inb *inbound.Controller
+	var inboundStatus func() inbound.Status
+	if cfg.Inbound != nil {
+		inboundStatus = func() inbound.Status { return inb.Status() }
+	}
 	tools, terr := newTools(cfg, plugins)
 	if terr != nil {
 		log.Error("refusing to start", "err", terr)
@@ -241,7 +252,7 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 	if addr := cfg.HTTPListen(); addr != "" {
 		srv, err := httpapi.New(httpapi.Options{
 			Addr: addr, User: httpUser, Password: httpPass, Snapshot: col.Snapshot, Logger: log,
-			Maintenance: maint, Reports: reports, Tools: tools,
+			Maintenance: maint, Reports: reports, Tools: tools, Inbound: inboundStatus,
 		})
 		if err != nil {
 			log.Error("refusing to start", "err", err)
@@ -272,7 +283,15 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 		log.Error("refusing to start", "err", err)
 		return 1
 	}
-	ctl, err := newController(cfg, plugins, view, log)
+	// The two controllers share max_improvements, so each reads the other's
+	// count. ctl is assigned right below; Active is nil-safe until then.
+	var ctl *announce.Controller
+	inb, err = newInbound(cfg, plugins, view, func() int { return ctl.Active() }, log)
+	if err != nil {
+		log.Error("refusing to start", "err", err)
+		return 1
+	}
+	ctl, err = newController(cfg, plugins, view, inb, log)
 	if err != nil {
 		log.Error("refusing to start", "err", err)
 		return 1
@@ -291,6 +310,10 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 			return 1
 		}
 		if err := ctl.Bind(view.Server()); err != nil {
+			log.Error("refusing to start", "err", err)
+			return 1
+		}
+		if err := bindInbound(cfg, plugins, view.Server()); err != nil {
 			log.Error("refusing to start", "err", err)
 			return 1
 		}
@@ -364,11 +387,13 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 			if rec != nil {
 				rec.Decision(now, changes, in.Results)
 			}
+			inChanges, inErr := runInbound(loopCtx, now, inb, plugins, log, cfg.InboundMode())
 			if !dispatch.Enabled() {
 				return
 			}
 			watch.improvements(now, changes)
-			watch.announce(now, err)
+			watch.inbound(now, cfg.InboundMode(), inChanges)
+			watch.announce(now, errors.Join(err, inErr))
 			watch.providerStatus(now, engine.Providers())
 			if view != nil {
 				watch.peerStatus(now, view.Peers())
@@ -394,7 +419,7 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 	// Withdraw while the session is still up, then stop plugins (the announcer
 	// withdraws again) and finally drop the session. Graceful restart is never
 	// enabled, so a missed withdraw still disappears with the session.
-	withdrawErr := ctl.WithdrawAll(stopCtx)
+	withdrawErr := errors.Join(inb.WithdrawAll(stopCtx), ctl.WithdrawAll(stopCtx))
 	if withdrawErr != nil {
 		log.Error("withdraw on shutdown", "err", withdrawErr)
 	}
@@ -438,7 +463,114 @@ func (g ribGate) Contains(p netip.Prefix) bool {
 	return ok
 }
 
-func newController(cfg *config.Config, plugins *pluginhost.Set, view *rib.View, log *slog.Logger) (*announce.Controller, error) {
+// NextHop is the learned next hop of an exact prefix, for inbound steers.
+func (g ribGate) NextHop(p netip.Prefix) (netip.Addr, bool) {
+	if g.v == nil {
+		return netip.Addr{}, false
+	}
+	rt, ok := g.v.Exact(p)
+	return rt.NextHop, ok && rt.NextHop.IsValid()
+}
+
+// newInbound returns nil when inbound is not configured. others counts
+// outbound improvements on the wire for the shared cap.
+func newInbound(cfg *config.Config, plugins *pluginhost.Set, view *rib.View, others func() int, log *slog.Logger) (*inbound.Controller, error) {
+	in := cfg.Inbound
+	if in == nil {
+		return nil, nil
+	}
+	var ann plugin.InboundAnnouncer
+	if plugins.Inbound != nil {
+		ann = plugins.Inbound.Plugin
+	}
+	ic := inbound.Config{
+		Mode:            in.Mode,
+		Community:       cfg.PacketeerCommunity,
+		LocalPref:       in.LocalPref,
+		MaxImprovements: in.MaxImprovements,
+		SharedCap:       *cfg.MaxImprovements,
+		Others:          others,
+		HoldTime:        cfg.HoldTime,
+		TTL:             cfg.ImprovementTTL,
+		ReleasePct:      in.ReleasePct,
+		MaxAge:          inbound.DefaultMaxAge,
+	}
+	for _, p := range cfg.Providers {
+		if !p.Exclude {
+			ic.Providers = append(ic.Providers, p.Name)
+		}
+	}
+	for _, s := range in.Prefixes {
+		p, err := netip.ParsePrefix(s)
+		if err != nil {
+			return nil, err
+		}
+		ic.Prefixes = append(ic.Prefixes, p)
+	}
+	for _, s := range cfg.Allowlist.Prefixes {
+		p, err := netip.ParsePrefix(s)
+		if err != nil {
+			return nil, err
+		}
+		ic.Allowlist = append(ic.Allowlist, p)
+	}
+	var gate inbound.RIB
+	if view != nil {
+		gate = ribGate{view}
+	}
+	return inbound.New(ic, ann, gate, log.With("component", "inbound"))
+}
+
+// bindInbound attaches the inbound announcer to the speaker when inbound
+// injects. It runs after the gobgp announcer has installed its export
+// policy.
+func bindInbound(cfg *config.Config, plugins *pluginhost.Set, srv any) error {
+	if cfg.InboundMode() != config.ModeInject {
+		return nil
+	}
+	if plugins.Inbound == nil {
+		return errors.New("inbound: inject requires inbound.announcer")
+	}
+	b, ok := plugins.Inbound.Plugin.(interface {
+		Bind(any, string, []netip.Prefix) error
+	})
+	if !ok {
+		return fmt.Errorf("inbound: announcer %T cannot publish on the embedded iBGP speaker", plugins.Inbound.Plugin)
+	}
+	var prefixes []netip.Prefix
+	for _, s := range cfg.Inbound.Prefixes {
+		p, err := netip.ParsePrefix(s)
+		if err != nil {
+			return err
+		}
+		prefixes = append(prefixes, p)
+	}
+	return b.Bind(srv, cfg.PacketeerCommunity, prefixes)
+}
+
+// runInbound evaluates inbound commit control and syncs it. Sync is a
+// no-op outside inject.
+func runInbound(ctx context.Context, now time.Time, inb *inbound.Controller, plugins *pluginhost.Set, log *slog.Logger, mode string) ([]inbound.Change, error) {
+	if inb == nil {
+		return nil, nil
+	}
+	changes := inb.Evaluate(now, collectTelemetry(ctx, plugins))
+	for _, c := range changes {
+		act := c.Steer.Action
+		log.Info("inbound "+c.Action, "mode", mode, "provider", c.Steer.Provider, "in_mbps_95", c.Steer.InMbps95,
+			"commit_mbps", c.Steer.CommitMbps, "action", act.Name, "prepend", act.Prepend,
+			"communities", strings.Join(act.Communities, " "), "reason", c.Reason)
+	}
+	actx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	err := inb.Sync(actx)
+	if err != nil {
+		log.Error("inbound announce", "err", err)
+	}
+	return changes, err
+}
+
+func newController(cfg *config.Config, plugins *pluginhost.Set, view *rib.View, inb *inbound.Controller, log *slog.Logger) (*announce.Controller, error) {
 	var ann plugin.Announcer
 	if plugins.Announcer != nil {
 		ann = plugins.Announcer.Plugin
@@ -449,6 +581,10 @@ func newController(cfg *config.Config, plugins *pluginhost.Set, view *rib.View, 
 		Community:       cfg.PacketeerCommunity,
 		MaxImprovements: *cfg.MaxImprovements,
 		NextHops:        map[string]netip.Addr{},
+	}
+	if inb != nil {
+		ac.Reserved = inb.Reserved
+		ac.Others = inb.Active
 	}
 	for _, p := range cfg.Providers {
 		nh, err := parseAddr(p.NextHop)

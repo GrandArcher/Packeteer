@@ -4,6 +4,10 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 
 ## [Unreleased]
 
+### Added
+
+- Inbound commit control (#25, first half; lab-proven only). New optional `inbound` block with its own `mode` (default `observe`) and a new in-process inbound announcer (`inbound.announcer`, type `gobgp`) with a marker community and a per-provider catalog of prepend signals and provider TE communities. When a provider's inbound 95th percentile is over commit, the operator's own prefixes are re-announced to the edge with that provider's catalog communities, `packeteer_community`, and `no-export`; the edge's policy applies the prepend on that session only ([docs/inbound.md](docs/inbound.md)). `suggest` is the moderated path (`GET /api/inbound`, `inbound.steered` / `inbound.released` events), and nothing is announced outside `inject`. Hold time, `release_pct`, a cooldown, `improvement_ttl`, a shared `max_improvements`, the allowlist, and the learned RIB all apply; stale telemetry releases at once, RIB loss and shutdown withdraw, and it never steers away from every provider. Outbound improvements refuse inbound prefixes. The `fixed` telemetry plugin gains `in_mbps`. New FRR lab job with two simulated transits proves the prepend and TE community on the right session and a plain path after release, SIGTERM, and SIGKILL. Rollback: `inbound.mode: observe` and restart.
+
 ## [0.2.0] - 2026-09-28
 
 Second release: the v0.2 IRP-parity milestone (#15–#24). More probing (UDP, traceroute discovery, retry, outage detection), SNMP telemetry and 95th-percentile commit control, cost-aware routing, routing policies and maintenance windows, passive problem detection, alerts, reports and history, and read-only troubleshooting tools. The default stays `mode: observe`; every new capability is off unless configured, and injection still requires the learned RIB, the allowlist, the community, the cap, and hold time. CI still proves announce, withdraw, and crash-withdraw against FRR with documentation prefixes.

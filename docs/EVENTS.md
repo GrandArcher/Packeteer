@@ -35,10 +35,12 @@ The same object is the `generic` webhook body and the `exec` `notify` params.
 | `outage.circuit` | critical | 15 | `provider` | The `outage` source found several prefixes degraded on one provider only. |
 | `outage.cleared` | warning | 16 | `asn` or `provider` | The AS or circuit incident recovered. |
 | `notifier.test` | info | 17 | | Sent only by `packeteer -notify-test`, to check delivery. |
+| `inbound.steered` | warning | 18 | `provider` | Inbound commit control ([inbound.md](inbound.md)) steers inbound traffic away from a provider whose inbound 95th is over commit. Fields: `in_mbps_95`, `commit_mbps`, `action`, `prepend`, `communities`, `mode`, `reason`. In `observe` and `suggest` it is a suggestion; nothing is announced. |
+| `inbound.released` | info | 19 | `provider` | The steer was released (under `release_pct` of commit after `hold_time`, stale telemetry, or `improvement_ttl`); `reason` says which. |
 
 Problems and the events that resolve them share a **dedup key**: `packeteer/<group>/<key>=<value>`, for example `packeteer/provider/provider=transit-a` for both `provider.down` and `provider.up`. The `pagerduty` preset uses it as `dedup_key`, and `snmptrap` sends it as a varbind.
 
-State events (`provider.*`, `bgp.*`, `commit.*`, `announce.*`) fire on transitions only. They are checked on every decision (each probe round, each RIB change, and at least every `probe.interval`); commit is checked at most once a minute. They are not repeated while the state holds.
+State events (`provider.*`, `bgp.*`, `commit.*`, `announce.*`, `inbound.*`) fire on transitions only. They are checked on every decision (each probe round, each RIB change, and at least every `probe.interval`); commit is checked at most once a minute. They are not repeated while the state holds.
 
 ## Testing delivery
 

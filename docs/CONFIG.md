@@ -48,6 +48,7 @@ The image entrypoint is the same binary. Flags go after the image name.
 | `telemetry` | none | no | Interface counters and 95th-percentile usage. Off unless listed. Does not announce. |
 | `policies` | none | no | Routing policies and maintenance windows, asked in order before each decision. Off unless listed. Does not announce. See [Policies](#policies). |
 | `storage` | none | no | One storage plugin for report history (`type: sqlite`). Off unless set. Does not announce. See [Storage `sqlite`](#storage-sqlite). |
+| `inbound` | none | no | Inbound commit control: steer inbound traffic for your own prefixes away from a provider over commit with prepends and TE communities. Off unless set; its own `mode` defaults to `observe`. See [`inbound`](#inbound). Lab-proven only. |
 | `troubleshoot` | looking glass only | no | Read-only operator tools: looking glass, on-demand probe, traceroute, whois. Does not announce. See [`troubleshoot`](#troubleshoot). |
 
 `mode: observe` and `mode: suggest` use the same decision path and announce nothing. `suggest` is the checkpoint: read the log, the dashboard, and `/api/decisions` before you change `mode`. The allowlist is enforced only in `inject`.
@@ -148,6 +149,21 @@ Operator tools on the ops HTTP server (`/api/troubleshoot/...` and the dashboard
 | `whois` | none | One whois plugin entry (`type: rdap`). Without it, whois answers `404`. |
 
 The tools refuse loopback, link-local, multicast, broadcast, and unspecified targets. Whois accepts only an address, a prefix, or an ASN (`AS64496` or `64496`). The active tools are `POST` with a JSON body, so a cross-site page cannot trigger them. When basic auth is on, every tool needs it.
+
+### `inbound`
+
+Inbound commit control (#25, lab-proven only, not on a public edge). Router setup and the full contract are in [inbound.md](inbound.md). Needs at least one `telemetry` plugin: a provider is steered when its inbound 95th percentile is above `commit_mbps`.
+
+| Key | Default | Meaning |
+|---|---|---|
+| `mode` | `observe` | `observe` logs, `suggest` also publishes the suggestion on `/api/inbound` and as `inbound.*` events, `inject` announces steer routes. `inject` also needs top-level `mode: inject`. Setting `observe` and restarting withdraws every steer route (rollback). |
+| `prefixes` | none | Required. Your own prefixes to steer. In `inject` each must be inside `allowlist.prefixes`, and a steer route is announced only while the exact prefix is in the learned RIB. Outbound improvements never use these prefixes. |
+| `local_pref` | `1` | Local preference on steer routes. Keep it low so the edge prefers a steer route only when its import policy says so. |
+| `release_pct` | `90` | Release a steer once the inbound 95th is at or below this percent of the commit, after `hold_time`. Greater than 0, at most 100. |
+| `max_improvements` | top-level `max_improvements` | Cap on steer routes, 1 to the top-level cap. Steer routes and outbound improvements also share the top-level cap. |
+| `announcer` | none | `inject`: required. In-process only: `type: gobgp` (see [Inbound announcer `gobgp`](#inbound-announcer-gobgp)). In `observe` and `suggest` it is optional and only supplies the catalog. |
+
+`hold_time` is the minimum life of a steer and the cooldown after a release. `improvement_ttl` retires a steer; the route is withdrawn for at least one round and returns only once the edge advertises the prefix again. Telemetry older than 15 minutes, a poll error, or no row releases at once. Packeteer never steers away from every non-excluded provider.
 
 ### Plugin entries
 
@@ -600,6 +616,7 @@ Each provider:
 | `name` | Required. Must match a top-level provider `name`. Unique in the list. |
 | `commit_mbps` | Required. Greater than 0, at most 100000000. |
 | `usage_mbps` | Required. 0–100000000. Reported as the single billable figure (`greater_separate`). |
+| `in_mbps` | Optional. 0–100000000. Reported as the inbound rate and inbound 95th, which `inbound` compares with `commit_mbps`. Unset is 0. |
 
 The row's timestamp is the time of the read, so `max_age` on the commit scorer does not age it out. A file that fails to parse yields no rows for that decision.
 
@@ -696,6 +713,24 @@ Used under `troubleshoot.whois`. Asks an RDAP server (RFC 9082/9083) about an ad
 ### Announcer `gobgp`
 
 No keys. Do not set `config`.
+
+### Inbound announcer `gobgp`
+
+`inbound.announcer`. Publishes steer routes on the same embedded iBGP speaker, after the `gobgp` announcer has installed its export policy (startup fails otherwise). Each steer route carries the learned next hop, `inbound.local_pref`, `packeteer_community`, `marker`, the action communities of every provider being steered away from, and `no-export`. Stop withdraws only its own routes.
+
+| Key | Meaning |
+|---|---|
+| `marker` | Required. Community that tags steer routes, so the edge's import policy can tell them from outbound improvements. Must differ from `packeteer_community`. |
+| `providers` | Required. The action catalog, one entry per provider. A provider without an entry is never steered away from. |
+
+Each provider:
+
+| Key | Meaning |
+|---|---|
+| `provider` | Required. A top-level provider `name`. Unique in the list. |
+| `name` | Optional label, up to 64 characters. |
+| `prepend` | 0–10. How many times the edge's export policy toward this provider prepends when it sees `communities`. Informational: an iBGP route cannot carry the edge's own ASN, so the edge does the prepend. |
+| `communities` | 1–16 `asn:value` communities: signal communities the edge maps to the prepend, and the provider's own TE communities the edge passes to that provider only. `0:x` and `65535:x` (well-known values such as `no-export`) are rejected. |
 
 ## Example
 

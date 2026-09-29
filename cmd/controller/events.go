@@ -7,9 +7,11 @@ import (
 	"math"
 	"net/netip"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
+	"github.com/GrandArcher/Packeteer/internal/inbound"
 	"github.com/GrandArcher/Packeteer/internal/notify"
 	"github.com/GrandArcher/Packeteer/internal/pluginhost"
 	"github.com/GrandArcher/Packeteer/internal/policy"
@@ -204,6 +206,36 @@ func (w *eventWatch) commit(now time.Time, usage []plugin.Usage) {
 		} else {
 			w.emit(now, plugin.EventCommitCleared, fmt.Sprintf("%s 95th percentile %.1f Mbps is within its %.1f Mbps commit", u.Provider, v, u.CommitMbps), fields)
 		}
+	}
+}
+
+// inbound reports inbound steers and releases. In observe and suggest the
+// message says nothing was announced.
+func (w *eventWatch) inbound(now time.Time, mode string, changes []inbound.Change) {
+	if w == nil {
+		return
+	}
+	suffix := ""
+	if mode != "inject" {
+		suffix = " (" + mode + ": not announced)"
+	}
+	for _, c := range changes {
+		s := c.Steer
+		fields := map[string]string{
+			"provider": s.Provider, "mode": mode, "reason": c.Reason,
+			"in_mbps_95":  strconv.FormatFloat(s.InMbps95, 'f', 1, 64),
+			"commit_mbps": strconv.FormatFloat(s.CommitMbps, 'f', 1, 64),
+		}
+		if c.Action == inbound.ActionRelease {
+			w.emit(now, plugin.EventInboundReleased, "inbound steer away from "+s.Provider+" released ("+c.Reason+")"+suffix, fields)
+			continue
+		}
+		if s.Action.Name != "" {
+			fields["action"] = s.Action.Name
+		}
+		fields["prepend"] = strconv.Itoa(s.Action.Prepend)
+		fields["communities"] = strings.Join(s.Action.Communities, " ")
+		w.emit(now, plugin.EventInboundSteered, "steering inbound traffic away from "+s.Provider+" ("+c.Reason+")"+suffix, fields)
 	}
 }
 

@@ -19,6 +19,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/GrandArcher/Packeteer/internal/inbound"
 	"github.com/GrandArcher/Packeteer/internal/troubleshoot"
 )
 
@@ -36,6 +37,8 @@ type Options struct {
 	Reports ReportSource
 	// Tools are the read-only troubleshooting tools. Nil disables them.
 	Tools *troubleshoot.Tools
+	// Inbound reads inbound commit control. Nil means it is not configured.
+	Inbound func() inbound.Status
 }
 
 // Server is an HTTP server. Handler serves the routes without listening,
@@ -48,6 +51,7 @@ type Server struct {
 	maint    MaintenanceControl
 	reports  ReportSource
 	tools    *troubleshoot.Tools
+	inbound  func() inbound.Status
 	log      *slog.Logger
 	handler  http.Handler
 	http     *http.Server
@@ -62,7 +66,7 @@ func New(opt Options) (*Server, error) {
 	if opt.Logger == nil {
 		opt.Logger = slog.Default()
 	}
-	s := &Server{addr: opt.Addr, user: opt.User, password: opt.Password, snap: opt.Snapshot, maint: opt.Maintenance, reports: opt.Reports, tools: opt.Tools, log: opt.Logger}
+	s := &Server{addr: opt.Addr, user: opt.User, password: opt.Password, snap: opt.Snapshot, maint: opt.Maintenance, reports: opt.Reports, tools: opt.Tools, inbound: opt.Inbound, log: opt.Logger}
 	s.handler = s.routes()
 	return s, nil
 }
@@ -131,6 +135,7 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("GET /api/decisions", s.handleDecisions)
 	mux.HandleFunc("GET /api/improvements", s.handleImprovements)
 	mux.HandleFunc("GET /api/telemetry", s.handleTelemetry)
+	mux.HandleFunc("GET /api/inbound", s.handleInbound)
 	mux.HandleFunc("GET /api/reports", s.handleReportList)
 	mux.HandleFunc("GET /api/reports/{name}", s.handleReport)
 	mux.HandleFunc("GET /api/maintenance", s.handleMaintenance)
@@ -243,6 +248,37 @@ func (s *Server) handleTelemetry(w http.ResponseWriter, _ *http.Request) {
 		meta
 		Telemetry []Telemetry `json:"telemetry"`
 	}{meta: snap.meta(), Telemetry: nz(snap.Telemetry)})
+}
+
+// handleInbound serves inbound commit control: the steers (announced in
+// inject, suggested in observe and suggest), the routes on the wire, and
+// providers over commit that were not steered.
+func (s *Server) handleInbound(w http.ResponseWriter, _ *http.Request) {
+	snap := s.snapshot()
+	st := inbound.Status{Prefixes: []string{}, Steers: []inbound.Steer{}, Announced: []inbound.Route{}, Blocked: []inbound.Blocked{}}
+	if s.inbound != nil {
+		st = s.inbound()
+	}
+	// meta.mode is the top-level mode; inbound has its own.
+	writeJSON(w, http.StatusOK, struct {
+		meta
+		Enabled     bool              `json:"enabled"`
+		InboundMode string            `json:"inbound_mode,omitempty"`
+		Prefixes    []string          `json:"prefixes"`
+		Steers      []inbound.Steer   `json:"steers"`
+		Announced   []inbound.Route   `json:"announced"`
+		Blocked     []inbound.Blocked `json:"blocked"`
+		Evaluated   *time.Time        `json:"evaluated,omitempty"`
+	}{meta: snap.meta(), Enabled: s.inbound != nil, InboundMode: st.Mode, Prefixes: nz(st.Prefixes),
+		Steers: nz(st.Steers), Announced: nz(st.Announced), Blocked: nz(st.Blocked), Evaluated: evaluatedAt(st.Evaluated)})
+}
+
+func evaluatedAt(t time.Time) *time.Time {
+	if t.IsZero() {
+		return nil
+	}
+	u := t.UTC()
+	return &u
 }
 
 type meta struct {

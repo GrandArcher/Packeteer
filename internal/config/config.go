@@ -102,6 +102,47 @@ type Config struct {
 	// Troubleshoot configures the read-only operator tools on the ops
 	// HTTP server. They never announce.
 	Troubleshoot Troubleshoot `yaml:"troubleshoot"`
+	// Inbound is inbound commit control (#25). Nil disables it.
+	Inbound *Inbound `yaml:"inbound"`
+}
+
+// Inbound defaults and bounds.
+const (
+	DefaultInboundLocalPref  = 1
+	DefaultInboundReleasePct = 90
+)
+
+// Inbound steers inbound traffic for the operator's own prefixes away
+// from providers whose inbound 95th percentile is over commit, with the
+// prepends and TE communities in the inbound announcer's catalog.
+type Inbound struct {
+	// Mode is observe (default), suggest, or inject. inject also needs the
+	// top-level mode to be inject. observe and suggest never announce.
+	Mode string `yaml:"mode"`
+	// Prefixes are the operator's own prefixes to steer. In inject each
+	// must be covered by allowlist.prefixes, and a steer route is only
+	// announced for a prefix that is in the learned RIB.
+	Prefixes []string `yaml:"prefixes"`
+	// LocalPref is set on steer routes (default 1). Keep it low: the edge
+	// must choose the steer route on purpose (see docs/inbound.md).
+	LocalPref uint32 `yaml:"local_pref"`
+	// ReleasePct releases a steer once the provider's inbound 95th is at or
+	// below this percent of its commit (default 90, 1-100).
+	ReleasePct float64 `yaml:"release_pct"`
+	// MaxImprovements caps inbound steer routes. Default and upper bound
+	// are the top-level max_improvements; outbound improvements and
+	// inbound steers also share that cap.
+	MaxImprovements int `yaml:"max_improvements"`
+	// Announcer is the in-process inbound announcer. Required in inject.
+	Announcer *PluginSpec `yaml:"announcer"`
+}
+
+// InboundMode is the inbound mode, or "" when inbound is not configured.
+func (c *Config) InboundMode() string {
+	if c == nil || c.Inbound == nil {
+		return ""
+	}
+	return c.Inbound.Mode
 }
 
 // Troubleshooting defaults and bounds.
@@ -342,6 +383,20 @@ func (c *Config) applyDefaults() {
 	if c.HTTP.Listen == nil {
 		s := DefaultHTTPListen
 		c.HTTP.Listen = &s
+	}
+	if in := c.Inbound; in != nil {
+		if strings.TrimSpace(in.Mode) == "" {
+			in.Mode = ModeObserve
+		}
+		if in.LocalPref == 0 {
+			in.LocalPref = DefaultInboundLocalPref
+		}
+		if in.ReleasePct == 0 {
+			in.ReleasePct = DefaultInboundReleasePct
+		}
+		if in.MaxImprovements == 0 && c.MaxImprovements != nil {
+			in.MaxImprovements = *c.MaxImprovements
+		}
 	}
 }
 
@@ -607,12 +662,86 @@ func (c *Config) Validate() error {
 		}
 	}
 
+	c.validateInbound(add)
+
 	return errors.Join(errs...)
+}
+
+func (c *Config) validateInbound(add func(string, ...any)) {
+	in := c.Inbound
+	if in == nil {
+		return
+	}
+	switch in.Mode {
+	case ModeObserve, ModeSuggest:
+	case ModeInject:
+		if c.Mode != ModeInject {
+			add("inbound.mode inject requires mode inject")
+		}
+		if in.Announcer == nil {
+			add("inbound.mode inject requires inbound.announcer")
+		}
+	default:
+		add("inbound.mode %q is invalid (want one of %s, %s, %s)", in.Mode, ModeObserve, ModeSuggest, ModeInject)
+	}
+	if in.Announcer != nil && in.Announcer.Type == "" {
+		add("inbound.announcer: type is required")
+	}
+	if len(c.Telemetry) == 0 {
+		add("inbound requires a telemetry plugin (inbound commit control reads the inbound 95th percentile)")
+	}
+	if len(in.Prefixes) == 0 {
+		add("inbound.prefixes: at least one prefix is required")
+	}
+	var allow []netip.Prefix
+	for _, s := range c.Allowlist.Prefixes {
+		if p, err := netip.ParsePrefix(s); err == nil {
+			allow = append(allow, p.Masked())
+		}
+	}
+	seen := map[netip.Prefix]bool{}
+	for i, s := range in.Prefixes {
+		p, err := netip.ParsePrefix(s)
+		if err != nil {
+			add("inbound.prefixes[%d]: %q is not a valid CIDR", i, s)
+			continue
+		}
+		if p != p.Masked() {
+			add("inbound.prefixes[%d]: %q has host bits set (did you mean %s?)", i, s, p.Masked())
+			continue
+		}
+		if seen[p] {
+			add("inbound.prefixes[%d]: duplicate prefix %s", i, p)
+		}
+		seen[p] = true
+		if in.Mode == ModeInject && !coveredBy(allow, p) {
+			add("inbound.prefixes[%d]: %s is not covered by allowlist.prefixes", i, p)
+		}
+	}
+	if in.ReleasePct <= 0 || in.ReleasePct > 100 || math.IsNaN(in.ReleasePct) {
+		add("inbound.release_pct %v must be greater than 0 and at most 100", in.ReleasePct)
+	}
+	if c.MaxImprovements != nil && (in.MaxImprovements < 1 || in.MaxImprovements > *c.MaxImprovements) {
+		add("inbound.max_improvements %d must be between 1 and max_improvements (%d)", in.MaxImprovements, *c.MaxImprovements)
+	}
+}
+
+// coveredBy reports whether p is an entry of list or inside one.
+func coveredBy(list []netip.Prefix, p netip.Prefix) bool {
+	for _, a := range list {
+		if a.Bits() <= p.Bits() && a.Contains(p.Addr()) {
+			return true
+		}
+	}
+	return false
 }
 
 func (c *Config) normalize() {
 	c.Log.Level = strings.ToLower(strings.TrimSpace(c.Log.Level))
 	c.Log.Format = strings.ToLower(strings.TrimSpace(c.Log.Format))
+	if c.Inbound != nil {
+		c.Inbound.Mode = strings.ToLower(strings.TrimSpace(c.Inbound.Mode))
+	}
 	for i := range c.Providers {
 		c.Providers[i].Group = strings.TrimSpace(c.Providers[i].Group)
 	}

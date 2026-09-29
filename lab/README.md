@@ -18,10 +18,13 @@ The fixed prober (`type: fixed`) returns configured RTTs and sends no packets. I
 
 `lab/e2e-cost.sh` is the cost-cause path on the same FRR edge (`lab/packeteer-cost.yaml`). transit-a costs 10 per Mbps and transit-b costs 5. transit-b is 10 ms slower, inside the 20 ms cost floor and the 15 ms performance threshold, so the injected route is a cost steer (`cause=cost` in the log). Rewriting the probe file so transit-b is 40 ms slower moves it outside the floor and withdraws the route. The script then restores the in-floor file, stops Packeteer with SIGTERM, and SIGKILLs it, with the same checks as the commit job.
 
-GitHub Actions runs all three scripts as the `e2e` job. Docker and Go are required (the script builds `lab/checkroute`); it does not run in the unit-test job. `go test ./lab/checkroute` covers the route check itself.
+`lab/e2e-inbound.sh` is inbound commit control (#25) on its own topology (`lab/docker-compose-inbound.yml`): the FRR edge (`lab/frr-inbound`) peers with Packeteer and with two simulated eBGP transits, transit-a (AS 64496, `192.0.2.21`) and transit-b (AS 64497, `192.0.2.22`). The edge originates `203.0.113.0/24`. The `fixed` telemetry file puts transit-a's inbound 95th over commit, so Packeteer re-announces the prefix with its marker and transit-a's catalog communities. The script checks the transits' own tables with `lab/checkpath`: transit-a must see `64512 64512 64512` and `64496:3`, transit-b the plain `64512`, and no Packeteer community may leave the edge. It then releases the steer by rewriting the usage file, steers again, stops Packeteer with SIGTERM, and SIGKILLs it; each time both transits must return to the plain path, the SIGKILL case within the 9s hold timer.
+
+GitHub Actions runs all four scripts as the `e2e` job. Docker and Go are required (the scripts build `lab/checkroute` and `lab/checkpath`); they do not run in the unit-test job. `go test ./lab/checkroute ./lab/checkpath` covers the checks themselves.
 
 ```sh
 bash lab/e2e.sh
 bash lab/e2e-commit.sh
 bash lab/e2e-cost.sh
+bash lab/e2e-inbound.sh
 ```

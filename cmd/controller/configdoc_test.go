@@ -70,6 +70,8 @@ func TestConfigDocCoversStructs(t *testing.T) {
 		snmptrap.Config{},
 		exec.Config{},
 		gobgp.Config{},
+		gobgp.InboundConfig{},
+		gobgp.InboundProvider{},
 		rules.Config{},
 		rules.Rule{},
 		maintenance.Config{},

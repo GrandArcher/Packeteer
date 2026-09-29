@@ -25,9 +25,9 @@ Milestones:
 
 | Status | Count |
 |---|---|
-| done | 46 |
+| done | 47 |
 | in progress | 0 |
-| planned | 33 |
+| planned | 32 |
 | won't do | 3 |
 
 ## Performance optimization
@@ -82,9 +82,11 @@ The `cost` scorer (#19) is off unless `scorer.type` is `cost`, and needs `provid
 
 | Capability | IRP doc ref | Status | Milestone | Plugin kind | Issue |
 |---|---|---|---|---|---|
-| Inbound commit control (bandwidth) | 1.2.17, 3.6.1 | planned | v0.3 | announcer (inbound) | #25 |
+| Inbound commit control (bandwidth) | 1.2.17, 3.6.1 | done (lab-proven only) | v0.3 | announcer (inbound `gobgp`) + core (`internal/inbound`) | #25 |
 | Inbound performance optimization (prepends, provider TE communities, selective announcements) | 1.2.18, 3.6.2 | planned | v0.3 | announcer (inbound) | #25 |
 | Inertia damping, automated vs moderated inbound improvements | 1.2.18 | planned | v0.3 | announcer (inbound) + suggest mode | #25 |
+
+Inbound commit control (#25, first half) steers inbound traffic for the operator's own `inbound.prefixes` away from a provider whose inbound 95th percentile (telemetry) is above its commit. In `inject` the in-process inbound `gobgp` announcer re-announces the exact learned prefix and next hop to the edge with `packeteer_community`, a marker community, the provider's catalog communities (a prepend signal the edge maps to `set as-path prepend` on that session, and the provider's own TE communities), and NO_EXPORT; the edge's import policy opts in ([inbound.md](inbound.md)). `observe` (default) logs, and `suggest` is the moderated path: `/api/inbound` and `inbound.steered` events carry the suggestion and nothing is announced. Steers are held for `hold_time`, released at `release_pct` of commit, cooled down for `hold_time`, retired at `improvement_ttl`, released at once on stale telemetry, withdrawn on RIB loss and shutdown, share `max_improvements` with outbound, never cover every provider, and never use a prefix outside the allowlist or the learned RIB. The FRR lab (`lab/e2e-inbound.sh`) checks the prepend and TE community on transit-a's session only, and a plain path after release, SIGTERM, and SIGKILL. Lab-proven only, not on a public edge. Inbound performance optimization, selective announcements, and inertia damping are the second half of #25.
 
 ## Transit
 

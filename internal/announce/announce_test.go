@@ -349,3 +349,39 @@ func TestAnnounceExactLearnedPrefixOnly(t *testing.T) {
 		}
 	}
 }
+
+func TestInboundPrefixesAreReservedAndShareTheCap(t *testing.T) {
+	ctx := context.Background()
+	rib := memRIB{ready: true, has: map[netip.Prefix]bool{
+		pfx("198.51.100.0/24"): true,
+		pfx("203.0.113.0/24"):  true,
+	}}
+	ann := &fakeAnn{}
+	cfg := testCfg()
+	cfg.MaxImprovements = 2
+	cfg.Reserved = func(p netip.Prefix) bool { return p == pfx("203.0.113.0/24") }
+	inbound := 1
+	cfg.Others = func() int { return inbound }
+	c, err := New(cfg, ann, rib, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = c.Sync(ctx, []policy.Improvement{imp("198.51.100.0/24", "b"), imp("203.0.113.0/24", "b")})
+	if err == nil || !strings.Contains(err.Error(), "203.0.113.0/24 is an inbound prefix") {
+		t.Fatalf("err = %v", err)
+	}
+	if _, ok := ann.routes[pfx("203.0.113.0/24")]; ok || ann.count() != 1 || c.Active() != 1 {
+		t.Fatalf("routes = %v active = %d", ann.routes, c.Active())
+	}
+	// One outbound plus one inbound fills a cap of 2.
+	if err := c.WithdrawAll(ctx); err != nil || c.Active() != 0 {
+		t.Fatal(err)
+	}
+	inbound = 2
+	if err := c.Sync(ctx, []policy.Improvement{imp("198.51.100.0/24", "b")}); err == nil || !strings.Contains(err.Error(), "max_improvements") {
+		t.Fatalf("shared cap err = %v", err)
+	}
+	if ann.count() != 0 {
+		t.Fatal("announced past the shared cap")
+	}
+}

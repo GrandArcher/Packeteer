@@ -22,6 +22,7 @@ import (
 	"net/netip"
 	"sort"
 	"sync"
+	"sync/atomic"
 
 	"github.com/GrandArcher/Packeteer/internal/config"
 	"github.com/GrandArcher/Packeteer/internal/policy"
@@ -47,6 +48,12 @@ type Config struct {
 	MaxImprovements int
 	Allowlist       []netip.Prefix
 	NextHops        map[string]netip.Addr // provider name -> next hop
+	// Reserved reports prefixes that inbound steering owns. They are never
+	// announced as outbound improvements, so the two never share a prefix.
+	Reserved func(netip.Prefix) bool
+	// Others counts routes inbound steering has on the wire. They count
+	// toward MaxImprovements too.
+	Others func() int
 }
 
 // Controller applies decision changes to an announcer.
@@ -58,6 +65,16 @@ type Controller struct {
 
 	mu     sync.Mutex
 	active map[netip.Prefix]slot // exact learned prefix -> what is on the wire
+	onWire atomic.Int64
+}
+
+// Active is the number of improvements on the wire. It does not lock, so
+// the inbound controller can read it while syncing.
+func (c *Controller) Active() int {
+	if c == nil {
+		return 0
+	}
+	return int(c.onWire.Load())
 }
 
 // slot is the route published for one learned prefix.
@@ -124,6 +141,7 @@ func (c *Controller) Sync(ctx context.Context, imps []policy.Improvement) error 
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	defer func() { c.onWire.Store(int64(len(c.active))) }()
 	if !c.rib.Ready() {
 		c.log.Warn("rib not ready; withdrawing announced routes")
 		return c.withdrawAllLocked(ctx)
@@ -147,6 +165,15 @@ func (c *Controller) Sync(ctx context.Context, imps []policy.Improvement) error 
 	sortPrefixes(order)
 	for _, p := range order {
 		im := want[p]
+		if c.cfg.Reserved != nil && c.cfg.Reserved(p) {
+			if _, on := c.active[p]; on {
+				if err := c.withdrawLocked(ctx, p); err != nil {
+					errs = append(errs, err)
+				}
+			}
+			errs = append(errs, fmt.Errorf("announce: %s is an inbound prefix", p))
+			continue
+		}
 		if _, on := c.active[p]; !on && !c.rib.Contains(p) {
 			errs = append(errs, fmt.Errorf("announce: %s is not in the RIB", p))
 			continue
@@ -177,6 +204,7 @@ func (c *Controller) WithdrawAll(ctx context.Context) error {
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	defer func() { c.onWire.Store(int64(len(c.active))) }()
 	return c.withdrawAllLocked(ctx)
 }
 
@@ -212,7 +240,11 @@ func (c *Controller) announceLocked(ctx context.Context, imp policy.Improvement)
 	if !ok || !nh.IsValid() {
 		return fmt.Errorf("announce: provider %q has no next hop", imp.Provider)
 	}
-	if _, exists := c.active[p]; !exists && len(c.active) >= c.cfg.MaxImprovements {
+	others := 0
+	if c.cfg.Others != nil {
+		others = c.cfg.Others()
+	}
+	if _, exists := c.active[p]; !exists && len(c.active)+others >= c.cfg.MaxImprovements {
 		return fmt.Errorf("announce: max_improvements (%d) reached", c.cfg.MaxImprovements)
 	}
 	rt := plugin.Route{

@@ -286,3 +286,21 @@ plugin_dir: /etc/packeteer/plugins
 #     config:
 #       address: 192.0.2.162
 #       community_env: PACKETEER_TRAP_COMMUNITY
+
+# Inbound commit control (#25, lab-proven only; see docs/inbound.md). Off
+# unless set. Its own mode defaults to observe; suggest publishes the steer on
+# /api/inbound and as inbound.* events; inject also needs top-level mode:
+# inject and an edge policy that opts in. Needs a telemetry plugin.
+# inbound:
+#   mode: observe
+#   prefixes: [203.0.113.0/24]        # your own prefixes, inside the allowlist
+#   release_pct: 90
+#   announcer:
+#     type: gobgp
+#     config:
+#       marker: "64512:667"
+#       providers:
+#         - provider: transit-a
+#           name: prepend-2
+#           prepend: 2                  # what the edge does on 64512:1102
+#           communities: ["64512:1102", "64496:3"]
