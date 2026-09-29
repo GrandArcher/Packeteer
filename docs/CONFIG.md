@@ -51,7 +51,7 @@ The image entrypoint is the same binary. Flags go after the image name.
 | `policies` | none | no | Routing policies and maintenance windows, asked in order before each decision. Off unless listed. Does not announce. See [Policies](#policies). |
 | `storage` | none | no | One storage plugin for report history (`type: sqlite`). Off unless set. Does not announce. See [Storage `sqlite`](#storage-sqlite). |
 | `inbound` | none | no | Inbound commit control: steer inbound traffic for your own prefixes away from a provider over commit with prepends and TE communities. Off unless set; its own `mode` defaults to `observe`. See [`inbound`](#inbound). Lab-proven only. |
-| `mitigation` | none | no | Threat mitigation: RTBH (blackhole) and BGP redirect routes for exact learned prefixes, added through `/api/mitigations`. Off unless set; its own `mode` defaults to `observe`. See [`mitigation`](#mitigation). Lab-proven only. |
+| `mitigation` | none | no | Threat mitigation: RTBH (blackhole), BGP redirect, and FlowSpec (drop, rate-limit, redirect, by source country too) for exact learned prefixes, added through `/api/mitigations`. Off unless set; its own `mode` defaults to `observe`. See [`mitigation`](#mitigation). Lab-proven only. |
 | `troubleshoot` | looking glass only | no | Read-only operator tools: looking glass, on-demand probe, traceroute, whois. Does not announce. See [`troubleshoot`](#troubleshoot). |
 
 `mode: observe` and `mode: suggest` use the same decision path and announce nothing. `suggest` is the checkpoint: read the log, the dashboard, and `/api/decisions` before you change `mode`. The allowlist is enforced only in `inject`.
@@ -275,19 +275,22 @@ A commit steer that flaps also learns inertia: how much inbound traffic returned
 
 ### `mitigation`
 
-Threat mitigation (#28, lab-proven only, not on a public edge): RTBH and BGP redirect. Router setup, the API, and the full contract are in [mitigation.md](mitigation.md). Rules are added and removed through `POST /api/mitigations` and `DELETE /api/mitigations/{id}` (basic auth required), live in memory only, and always expire.
+Threat mitigation (#28, lab-proven only, not on a public edge): RTBH, BGP redirect, and FlowSpec drop, rate-limit, and redirect, optionally by source country. Router setup, the API, and the full contract are in [mitigation.md](mitigation.md). Rules are added and removed through `POST /api/mitigations` and `DELETE /api/mitigations/{id}` (basic auth required), live in memory only, and always expire.
 
 | Key | Default | Meaning |
 |---|---|---|
 | `mode` | `observe` | `observe` accepts and lists rules as a dry run and announces nothing. `inject` announces them; it also needs top-level `mode: inject`. Setting `observe` and restarting withdraws every mitigation route (rollback). |
 | `allowlist` | none | Required. The mitigation allowlist, separate from `allowlist.prefixes`: a rule's prefix must be inside one of these. A default route is rejected. A rule is announced only while the exact prefix is in the learned RIB. |
-| `max_rules` | `10` | Cap on rules held at once, announced or waiting. 1–1000. The announcer enforces the same cap on its routes. Mitigation routes do not count toward `max_improvements`. |
+| `max_rules` | `10` | Cap on mitigation routes held at once, announced or waiting. 1–1000. An RTBH, redirect, or FlowSpec rule counts once; a FlowSpec rule with `source_countries` counts once per source network. The announcer enforces the same cap on its routes (RTBH, redirect, and FlowSpec together). Mitigation routes do not count toward `max_improvements`. |
 | `default_ttl` | `1h` (or `max_ttl` when shorter) | Lifetime of a rule whose request names no `ttl`. At least 1s, at most `max_ttl`. |
 | `max_ttl` | `24h` | Longest `ttl` a request may ask for. 1s–168h. Every rule expires. |
 | `local_pref` | top-level `local_pref` | Local preference on mitigation routes. Keep it above the edge's native routes. |
+| `geoip_db` | none | Absolute path to a MaxMind-format country database you mount (for example `GeoLite2-Country.mmdb`). FlowSpec rules with `source_countries` need it; each country is expanded to its networks (merged where adjacent) when the rule is added. None is shipped or downloaded. Unreadable at startup: Packeteer refuses to start. |
 | `announcer` | none | `inject`: required. In-process only: `type: gobgp` (see [Mitigation announcer `gobgp`](#mitigation-announcer-gobgp)). In `observe` it is optional and only supplies the catalog (redirect targets). |
 
-While a rule holds a prefix in `inject`, or its route is still on the wire, outbound improvements and inbound steers leave that prefix alone. When the RIB is not ready every mitigation route is withdrawn. A catalog next hop that equals a provider's `next_hop` is refused at startup.
+With FlowSpec configured on the announcer and `mode: inject`, every iBGP session also offers the IPv4 and IPv6 FlowSpec address families (RFC 8955). In `observe` the sessions are unchanged.
+
+While an RTBH or redirect rule holds a prefix in `inject`, or its route is still on the wire, outbound improvements and inbound steers leave that prefix alone. When the RIB is not ready every mitigation route is withdrawn. A catalog next hop that equals a provider's `next_hop` is refused at startup.
 
 ### Plugin entries
 
@@ -906,13 +909,14 @@ Each provider:
 
 ### Mitigation announcer `gobgp`
 
-`mitigation.announcer`. Publishes RTBH and redirect routes on the same embedded iBGP speaker, after the `gobgp` announcer has installed its export policy (startup fails otherwise). Each route carries the exact learned prefix, the action's next hop, `mitigation.local_pref`, `packeteer_community`, `marker`, the action's communities, and `no-export`. It checks the mitigation allowlist and `max_rules` itself on every announce. Stop withdraws only its own routes.
+`mitigation.announcer`. Publishes RTBH, redirect, and FlowSpec routes on the same embedded iBGP speaker, after the `gobgp` announcer has installed its export policy (startup fails otherwise). Each route carries the exact learned prefix, the action's next hop, `mitigation.local_pref`, `packeteer_community`, `marker`, the action's communities, and `no-export`. A FlowSpec rule's destination is the exact learned prefix; it carries `mitigation.local_pref`, `packeteer_community`, `marker`, `no-export`, and one extended community for the action: traffic-rate 0 (drop), traffic-rate in bytes per second (rate-limit), or redirect to a route target. It checks the mitigation allowlist and `max_rules` itself on every announce. Stop withdraws only its own routes.
 
 | Key | Meaning |
 |---|---|
 | `marker` | Required. Community that tags mitigation routes, so the edge's import policy can tell them from outbound improvements. Must differ from `packeteer_community`. `0:x` and `65535:x` are rejected. |
-| `blackhole` | RTBH. Keys below. At least one of `blackhole` and `redirect` is required. |
+| `blackhole` | RTBH. Keys below. At least one of `blackhole`, `redirect`, and `flowspec` is required. |
 | `redirect` | Up to 32 redirect targets. Keys below. |
+| `flowspec` | FlowSpec. `flowspec: {}` enables drop and rate-limit; its `redirect` list adds FlowSpec redirect targets. Keys below. |
 
 `blackhole` keys:
 
@@ -931,6 +935,13 @@ Each `redirect` target:
 | `communities` | Optional, up to 16 `asn:value`. `0:x` and `65535:x` are rejected. |
 
 Every next hop in the catalog must be unique, unicast, and not loopback.
+
+`flowspec` keys:
+
+| Key | Meaning |
+|---|---|
+| `redirect` | Up to 32 FlowSpec redirect targets, each `name` (as for `redirect` above) and `route_target`. |
+| `route_target` | Required on each target. Two-octet-AS route target `asn:value` (AS 1–65535) that the edge imports into a VRF (a scrubbing VRF). Unique. A `flowspec_redirect` rule names the target. |
 
 ## Example
 

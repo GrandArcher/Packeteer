@@ -1,8 +1,9 @@
 // Package sqlite is the default storage plugin: an embedded SQLite file
 // (pure Go, no cgo) that keeps report history on a mounted volume.
 //
-// It stores daily probe rollups, one row per improvement, and per-prefix
-// facts (origin ASN, country, volume). Raw probe results are not stored.
+// It stores daily probe rollups, one row per improvement, one row per
+// threat mitigation rule, and per-prefix facts (origin ASN, country,
+// volume). Raw probe results are not stored.
 // Rows older than retention are deleted on start and once a day. The plugin
 // records history only; it never announces routes or changes decisions.
 package sqlite
@@ -125,6 +126,25 @@ CREATE TABLE IF NOT EXISTS improvements (
 );
 CREATE INDEX IF NOT EXISTS improvements_start ON improvements (start_ms);
 CREATE INDEX IF NOT EXISTS improvements_end ON improvements (end_ms);
+CREATE TABLE IF NOT EXISTS mitigations (
+	id TEXT PRIMARY KEY,
+	prefix TEXT NOT NULL,
+	action TEXT NOT NULL,
+	target TEXT NOT NULL,
+	match TEXT NOT NULL,
+	countries TEXT NOT NULL,
+	rate_mbps REAL NOT NULL,
+	routes INTEGER NOT NULL,
+	reason TEXT NOT NULL,
+	mode TEXT NOT NULL,
+	created_ms INTEGER NOT NULL,
+	expires_ms INTEGER NOT NULL,
+	announced_ms INTEGER NOT NULL,
+	end_ms INTEGER NOT NULL,
+	end_reason TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS mitigations_created ON mitigations (created_ms);
+CREATE INDEX IF NOT EXISTS mitigations_end ON mitigations (end_ms);
 CREATE TABLE IF NOT EXISTS prefixes (
 	prefix TEXT PRIMARY KEY,
 	origin_asn INTEGER NOT NULL,
@@ -215,6 +235,9 @@ func (s *Store) prune(ctx context.Context) error {
 	if _, err := db.ExecContext(ctx, `DELETE FROM improvements WHERE end_ms != 0 AND end_ms < ?`, cutoff.UnixMilli()); err != nil {
 		return err
 	}
+	if _, err := db.ExecContext(ctx, `DELETE FROM mitigations WHERE end_ms != 0 AND end_ms < ?`, cutoff.UnixMilli()); err != nil {
+		return err
+	}
 	_, err = db.ExecContext(ctx, `DELETE FROM prefixes WHERE updated_ms < ?`, cutoff.UnixMilli())
 	return err
 }
@@ -283,6 +306,19 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			return err
 		}
 	}
+	for _, m := range b.Mitigations {
+		if m.ID == "" || !m.Prefix.IsValid() {
+			continue
+		}
+		_, err := tx.ExecContext(ctx, `INSERT OR REPLACE INTO mitigations (id, prefix, action, target, match, countries, rate_mbps, routes, reason, mode,
+	created_ms, expires_ms, announced_ms, end_ms, end_reason)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			m.ID, m.Prefix.String(), m.Action, m.Target, m.Match, m.Countries, m.RateMbps, m.Routes, m.Reason, m.Mode,
+			ms(m.Created), ms(m.Expires), ms(m.Announced), ms(m.End), m.EndReason)
+		if err != nil {
+			return err
+		}
+	}
 	for _, p := range b.Prefixes {
 		if !p.Prefix.IsValid() {
 			continue
@@ -339,6 +375,9 @@ FROM improvements WHERE start_ms < ? AND (end_ms = 0 OR end_ms >= ?) ORDER BY st
 		return out, err
 	}
 	imps.Close()
+	if out.Mitigations, err = readMitigations(ctx, db, q); err != nil {
+		return out, err
+	}
 	if q.OpenOnly {
 		return out, nil
 	}
@@ -389,4 +428,38 @@ FROM probe_daily WHERE day >= ? AND day < ? ORDER BY day, prefix, provider`, q.F
 		out.Prefixes = append(out.Prefixes, info)
 	}
 	return out, pr.Err()
+}
+
+func readMitigations(ctx context.Context, db *sql.DB, q plugin.HistoryQuery) ([]plugin.MitigationRecord, error) {
+	const cols = `SELECT id, prefix, action, target, match, countries, rate_mbps, routes, reason, mode,
+	created_ms, expires_ms, announced_ms, end_ms, end_reason FROM mitigations`
+	var rows *sql.Rows
+	var err error
+	if q.OpenOnly {
+		rows, err = db.QueryContext(ctx, cols+` WHERE end_ms = 0 ORDER BY created_ms, id`)
+	} else {
+		rows, err = db.QueryContext(ctx, cols+` WHERE created_ms < ? AND (end_ms = 0 OR end_ms >= ?) ORDER BY created_ms, id`,
+			q.To.UnixMilli(), q.From.UnixMilli())
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []plugin.MitigationRecord
+	for rows.Next() {
+		var m plugin.MitigationRecord
+		var prefix string
+		var created, expires, announced, end int64
+		if err := rows.Scan(&m.ID, &prefix, &m.Action, &m.Target, &m.Match, &m.Countries, &m.RateMbps, &m.Routes, &m.Reason, &m.Mode,
+			&created, &expires, &announced, &end, &m.EndReason); err != nil {
+			return nil, err
+		}
+		p, err := netip.ParsePrefix(prefix)
+		if err != nil {
+			continue
+		}
+		m.Prefix, m.Created, m.Expires, m.Announced, m.End = p, fromMS(created), fromMS(expires), fromMS(announced), fromMS(end)
+		out = append(out, m)
+	}
+	return out, rows.Err()
 }

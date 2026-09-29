@@ -92,7 +92,11 @@ type Options struct {
 	// first AS is its own, from iBGP (add-path) or from BMP on a router
 	// that reports the peer up. No visible path means no route.
 	PeerASN map[string]uint32
-	Logger  *slog.Logger
+	// FlowSpec adds the IPv4 and IPv6 FlowSpec families (RFC 8955) to
+	// every session, so the mitigation announcer can send FlowSpec rules
+	// (#28). The view never reads FlowSpec paths.
+	FlowSpec bool
+	Logger   *slog.Logger
 }
 
 // BMP usage per provider.
@@ -238,6 +242,10 @@ func (v *View) OnChange(fn func()) {
 	v.onChange = append(v.onChange, fn)
 }
 
+// EnableFlowSpec adds the FlowSpec families to every session (see
+// Options.FlowSpec). Call it before Start.
+func (v *View) EnableFlowSpec() { v.opt.FlowSpec = true }
+
 // Server exposes the embedded speaker (used by the announcer, #8).
 func (v *View) Server() *server.BgpServer { return v.srv }
 
@@ -310,6 +318,13 @@ func (v *View) addPeer(ctx context.Context, n Neighbor) error {
 		// path per prefix and the router never learns add-path from us.
 		for _, af := range afiSafis {
 			af.AddPaths = &api.AddPaths{Config: &api.AddPathsConfig{Receive: true}}
+		}
+	}
+	// FlowSpec never uses add-path.
+	if v.opt.FlowSpec {
+		for _, afi := range []api.Family_Afi{api.Family_AFI_IP, api.Family_AFI_IP6} {
+			afiSafis = append(afiSafis, &api.AfiSafi{Config: &api.AfiSafiConfig{
+				Family: &api.Family{Afi: afi, Safi: api.Family_SAFI_FLOW_SPEC_UNICAST}, Enabled: true}})
 		}
 	}
 	p := &api.Peer{

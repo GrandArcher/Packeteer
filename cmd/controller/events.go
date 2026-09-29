@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/GrandArcher/Packeteer/internal/inbound"
+	"github.com/GrandArcher/Packeteer/internal/mitigation"
 	"github.com/GrandArcher/Packeteer/internal/notify"
 	"github.com/GrandArcher/Packeteer/internal/pluginhost"
 	"github.com/GrandArcher/Packeteer/internal/policy"
@@ -294,4 +295,53 @@ func sendTestEvent(ctx context.Context, plugins *pluginhost.Set, stdout io.Write
 		fmt.Fprintf(stdout, "notify-test: %s: sent\n", n.Name)
 	}
 	return code
+}
+
+// mitigation reports threat mitigation changes (#28): the feed as
+// notifier events.
+func (w *eventWatch) mitigation(changes []mitigation.Change) {
+	if w == nil {
+		return
+	}
+	for _, c := range changes {
+		r := c.Rule
+		fields := map[string]string{
+			"rule": r.ID, "prefix": r.Prefix.String(), "action": r.Action, "mode": c.Mode,
+			"routes": strconv.Itoa(r.Routes), "expires": r.Expires.UTC().Format(time.RFC3339),
+		}
+		for k, v := range map[string]string{"target": r.Target, "match": r.MatchText(), "source_countries": strings.Join(r.Countries, ","),
+			"reason": r.Reason, "detail": c.Detail} {
+			if v != "" {
+				fields[k] = v
+			}
+		}
+		if r.RateMbps != 0 {
+			fields["rate_mbps"] = strconv.FormatFloat(r.RateMbps, 'f', -1, 64)
+		}
+		what := r.Action + " for " + r.Prefix.String()
+		if m := r.MatchText(); m != "" {
+			what += " (" + m + ")"
+		}
+		if len(r.Countries) > 0 {
+			what += " from " + strings.Join(r.Countries, ",")
+		}
+		var kind, msg string
+		switch c.Kind {
+		case mitigation.ChangeAdded:
+			kind, msg = plugin.EventMitigationAdded, "mitigation rule added: "+what
+			if c.Mode != "inject" {
+				msg += " (" + c.Mode + ": dry run, not announced)"
+			}
+		case mitigation.ChangeAnnounced:
+			kind, msg = plugin.EventMitigationOn, "mitigation announced: "+what
+		case mitigation.ChangeWithdrawn:
+			kind, msg = plugin.EventMitigationOff, "mitigation withdrawn while the rule is held: "+what
+		case mitigation.ChangeExpired, mitigation.ChangeRemoved, mitigation.ChangeReplaced:
+			fields["end"] = c.Kind
+			kind, msg = plugin.EventMitigationEnded, "mitigation rule "+c.Kind+": "+what
+		default:
+			continue
+		}
+		w.emit(c.Time, kind, msg, fields)
+	}
 }

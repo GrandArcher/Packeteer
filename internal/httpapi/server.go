@@ -200,6 +200,9 @@ func (s *Server) handleMetrics(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	_, _ = w.Write(Metrics(s.snapshot()))
+	if s.mitigation != nil {
+		_, _ = w.Write(MitigationMetrics(s.mitigation.Status()))
+	}
 }
 
 func (s *Server) handleProviders(w http.ResponseWriter, _ *http.Request) {

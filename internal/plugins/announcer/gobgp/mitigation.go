@@ -37,6 +37,8 @@ type MitigationConfig struct {
 	Marker    string                  `yaml:"marker"`
 	Blackhole *MitigationBlackholeCfg `yaml:"blackhole"`
 	Redirect  []MitigationRedirectCfg `yaml:"redirect"`
+	// FlowSpec enables FlowSpec drop, rate-limit, and redirect (#28).
+	FlowSpec *MitigationFlowSpecCfg `yaml:"flowspec"`
 }
 
 // MitigationBlackholeCfg is the RTBH action. NextHop is the discard
@@ -55,8 +57,8 @@ type MitigationRedirectCfg struct {
 	Communities []string `yaml:"communities"`
 }
 
-// MitigationAnnouncer announces RTBH and redirect routes on the embedded
-// speaker. It shares the speaker and the export policy of the gobgp
+// MitigationAnnouncer announces RTBH, redirect, and FlowSpec routes on
+// the embedded speaker. It shares the speaker and the export policy of the gobgp
 // announcer, never opens a session, and tracks only its own paths. It
 // checks its allowlist and route cap on every announce, independently of
 // the core.
@@ -68,6 +70,8 @@ type MitigationAnnouncer struct {
 	bhComms   []string
 	blackhole bool
 	targets   map[string]plugin.MitigationTarget
+	flowspec  bool
+	fsTargets map[string]fsTarget
 
 	mu        sync.Mutex
 	srv       *server.BgpServer
@@ -75,6 +79,9 @@ type MitigationAnnouncer struct {
 	allow     []netip.Prefix
 	max       int
 	paths     map[netip.Prefix]*api.Path
+	// fsPaths are the FlowSpec rules by plugin.FlowSpecRoute.Key. They
+	// count toward max with paths.
+	fsPaths map[string]*api.Path
 }
 
 // NewMitigation is the plugin factory. It validates the catalog and does
@@ -90,14 +97,15 @@ func NewMitigation(c plugin.Config, env plugin.Env) (plugin.MitigationAnnouncer,
 	if err := checkSteerCommunity(cfg.Marker); err != nil {
 		return nil, fmt.Errorf("marker %q: %w", cfg.Marker, err)
 	}
-	if cfg.Blackhole == nil && len(cfg.Redirect) == 0 {
-		return nil, errors.New("configure blackhole, redirect, or both")
+	if cfg.Blackhole == nil && len(cfg.Redirect) == 0 && cfg.FlowSpec == nil {
+		return nil, errors.New("configure blackhole, redirect, flowspec, or several")
 	}
 	log := env.Logger
 	if log == nil {
 		log = slog.Default()
 	}
-	a := &MitigationAnnouncer{log: log, marker: cfg.Marker, targets: map[string]plugin.MitigationTarget{}, paths: map[netip.Prefix]*api.Path{}}
+	a := &MitigationAnnouncer{log: log, marker: cfg.Marker, targets: map[string]plugin.MitigationTarget{},
+		paths: map[netip.Prefix]*api.Path{}, fsTargets: map[string]fsTarget{}, fsPaths: map[string]*api.Path{}}
 	seenNH := map[netip.Addr]string{}
 	useNH := func(label, s string, want4 bool) (netip.Addr, error) {
 		nh, err := netip.ParseAddr(s)
@@ -162,6 +170,9 @@ func NewMitigation(c plugin.Config, env plugin.Env) (plugin.MitigationAnnouncer,
 		}
 		a.targets[r.Name] = plugin.MitigationTarget{Name: r.Name, NextHop: nh, Communities: slices.Clone(r.Communities)}
 	}
+	if err := a.configureFlowSpec(cfg.FlowSpec); err != nil {
+		return nil, err
+	}
 	return a, nil
 }
 
@@ -203,6 +214,10 @@ func (a *MitigationAnnouncer) Catalog() plugin.MitigationCatalog {
 	}
 	slices.SortFunc(c.Targets, func(x, y plugin.MitigationTarget) int { return strings.Compare(x.Name, y.Name) })
 	return c
+}
+
+func sortTargets(ts []plugin.FlowSpecTarget) {
+	slices.SortFunc(ts, func(x, y plugin.FlowSpecTarget) int { return strings.Compare(x.Name, y.Name) })
 }
 
 // Bind attaches the announcer to the RIB view's speaker. The gobgp
@@ -248,7 +263,7 @@ func (a *MitigationAnnouncer) Bind(srv any, community string, allow []netip.Pref
 		a.allow = append(a.allow, p.Masked())
 	}
 	a.log.Info("mitigation announcer bound", "community", community, "marker", a.marker, "max_rules", maxRules,
-		"blackhole", a.blackhole, "redirect_targets", len(a.targets))
+		"blackhole", a.blackhole, "redirect_targets", len(a.targets), "flowspec", a.flowspec, "flowspec_redirect_targets", len(a.fsTargets))
 	return nil
 }
 
@@ -264,7 +279,7 @@ func (a *MitigationAnnouncer) Announce(ctx context.Context, r plugin.MitigationR
 	if err != nil {
 		return err
 	}
-	if _, on := a.paths[rt.Prefix]; !on && len(a.paths) >= a.max {
+	if _, on := a.paths[rt.Prefix]; !on && len(a.paths)+len(a.fsPaths) >= a.max {
 		return fmt.Errorf("mitigation announcer: %s refused: max rules (%d) reached", rt.Prefix, a.max)
 	}
 	path, err := buildPath(rt)
@@ -365,8 +380,9 @@ func (a *MitigationAnnouncer) withdrawLocked(ctx context.Context, p netip.Prefix
 	return nil
 }
 
-// WithdrawAll removes every mitigation route. Outbound improvements and
-// inbound steer routes on the same speaker are left alone.
+// WithdrawAll removes every mitigation route, FlowSpec rules included.
+// Outbound improvements and inbound steer routes on the same speaker are
+// left alone.
 func (a *MitigationAnnouncer) WithdrawAll(ctx context.Context) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -376,10 +392,15 @@ func (a *MitigationAnnouncer) WithdrawAll(ctx context.Context) error {
 			errs = append(errs, err)
 		}
 	}
+	for k := range a.fsPaths {
+		if err := a.withdrawFlowSpecLocked(ctx, k); err != nil {
+			errs = append(errs, err)
+		}
+	}
 	return errors.Join(errs...)
 }
 
-// Stop withdraws every mitigation route. Graceful restart is never
+// Stop withdraws every mitigation route and FlowSpec rule. Graceful restart is never
 // enabled, so a process that dies without Stop loses them with the
 // session.
 func (a *MitigationAnnouncer) Stop(ctx context.Context) error { return a.WithdrawAll(ctx) }

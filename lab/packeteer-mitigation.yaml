@@ -1,6 +1,6 @@
 # Lab only (#28). Documentation prefixes, private and documentation ASNs.
-# Threat mitigation is what announces: lab/e2e-mitigation.sh adds RTBH and
-# redirect rules for 198.51.100.0/24 (learned from transit-a through the
+# Threat mitigation is what announces: lab/e2e-mitigation.sh adds RTBH,
+# redirect, and FlowSpec rules for 198.51.100.0/24 (learned from transit-a through the
 # edge) through the ops API. Outbound thresholds are out of reach, so no
 # outbound improvement is made.
 mode: inject
@@ -59,6 +59,8 @@ mitigation:
   max_rules: 2
   default_ttl: 10m
   max_ttl: 1h
+  # Test countries from lab/mkgeoip (documentation prefixes only).
+  geoip_db: /etc/packeteer/country.mmdb
   announcer:
     type: gobgp
     config:
@@ -69,3 +71,7 @@ mitigation:
         - name: scrubber
           next_hop: 192.0.2.77
           communities: ["64512:777"]
+      flowspec:
+        redirect:
+          - name: scrub-vrf
+            route_target: "64512:779"

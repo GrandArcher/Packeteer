@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/GrandArcher/Packeteer/internal/config"
+	"github.com/GrandArcher/Packeteer/internal/geoip"
 	"github.com/GrandArcher/Packeteer/internal/mitigation"
 	"github.com/GrandArcher/Packeteer/internal/pluginhost"
 	"github.com/GrandArcher/Packeteer/internal/rib"
@@ -39,7 +40,16 @@ func newMitigation(cfg *config.Config, plugins *pluginhost.Set, log *slog.Logger
 			}
 		}
 	}
+	var geo mitigation.GeoIP
+	if m.GeoIPDB != "" {
+		db, err := geoip.Open(m.GeoIPDB)
+		if err != nil {
+			return nil, fmt.Errorf("mitigation.geoip_db: %w", err)
+		}
+		geo = db
+	}
 	return mitigation.New(mitigation.Config{
+		Geo:        geo,
 		Mode:       m.Mode,
 		Allowlist:  m.MitigationAllowlist(),
 		MaxRules:   m.MaxRules,
@@ -48,6 +58,17 @@ func newMitigation(cfg *config.Config, plugins *pluginhost.Set, log *slog.Logger
 		LocalPref:  m.LocalPref,
 		Community:  cfg.PacketeerCommunity,
 	}, ann, log.With("component", "mitigation"))
+}
+
+// mitigationFlowSpec reports whether the iBGP sessions must carry the
+// FlowSpec families: mitigation injects and its announcer has FlowSpec.
+// observe never changes what the sessions negotiate.
+func mitigationFlowSpec(cfg *config.Config, plugins *pluginhost.Set) bool {
+	if cfg.MitigationMode() != config.ModeInject || plugins == nil || plugins.Mitigation == nil {
+		return false
+	}
+	fs, ok := plugins.Mitigation.Plugin.(plugin.FlowSpecAnnouncer)
+	return ok && fs.FlowSpecCatalog().Enabled
 }
 
 // setMitigationRIB gives the controller the RIB view once it exists.
@@ -82,10 +103,11 @@ func bindMitigation(cfg *config.Config, plugins *pluginhost.Set, srv any) error 
 
 // runMitigation expires rules and syncs mitigation routes. It runs after
 // the outbound and inbound syncs in the same round, so a prefix a new rule
-// holds has already been released by them.
-func runMitigation(now time.Time, mit *mitigation.Controller, log *slog.Logger) error {
+// holds has already been released by them. It returns the rule changes
+// since the last round, for events and history.
+func runMitigation(now time.Time, mit *mitigation.Controller, log *slog.Logger) ([]mitigation.Change, error) {
 	if mit == nil {
-		return nil
+		return nil, nil
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -93,7 +115,19 @@ func runMitigation(now time.Time, mit *mitigation.Controller, log *slog.Logger) 
 	if err != nil {
 		log.Error("mitigation announce", "err", err)
 	}
-	return err
+	return mit.Changes(), err
+}
+
+// mitigationRecorder is where mitigation history goes (*history.Recorder).
+type mitigationRecorder interface {
+	Mitigation(plugin.MitigationRecord)
+}
+
+// recordMitigations writes each change's rule state to history.
+func recordMitigations(rec mitigationRecorder, changes []mitigation.Change) {
+	for _, c := range changes {
+		rec.Mitigation(mitigation.Record(c))
+	}
 }
 
 // mitigationControl is the ops API's view of the controller. poke runs a

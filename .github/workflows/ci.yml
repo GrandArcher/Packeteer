@@ -234,5 +234,5 @@ jobs:
         run: bash lab/e2e-multirouter.sh
       - name: FRR IX lab (exchange peers as providers, route check, AS path, SIGHUP reload, SIGTERM, SIGKILL)
         run: bash lab/e2e-ix.sh
-      - name: FRR mitigation lab (RTBH, redirect, allowlist, cap, TTL, SIGTERM, restart, SIGKILL)
+      - name: FRR mitigation lab (RTBH, redirect, FlowSpec drop/rate-limit/redirect by country, allowlist, cap, TTL, SIGTERM, restart, SIGKILL)
         run: bash lab/e2e-mitigation.sh

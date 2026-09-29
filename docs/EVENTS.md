@@ -37,10 +37,14 @@ The same object is the `generic` webhook body and the `exec` `notify` params.
 | `notifier.test` | info | 17 | | Sent only by `packeteer -notify-test`, to check delivery. |
 | `inbound.steered` | warning | 18 | `provider` | Inbound optimization ([inbound.md](inbound.md)) steers inbound traffic away from a provider whose inbound 95th is over commit (`trigger` `commit`) or that is the worst-performing provider (`trigger` `performance`). Fields: `trigger`, `in_mbps_95`, `commit_mbps`, `action`, `prepend`, `withhold` (selective announcement), `communities`, `hold`, `flaps`, `moderated`, `mode`, `reason`. In `observe` and `suggest`, and when `moderated` is `true`, it is a suggestion; nothing is announced. |
 | `inbound.released` | info | 19 | `provider` | The steer was released (under `release_pct` after its hold time, stale telemetry or probe results, or `improvement_ttl`); `reason` says which. |
+| `mitigation.added` | warning | 20 | `rule` | A threat mitigation rule ([mitigation.md](mitigation.md)) was added through the API, or replaced one with the same key. Fields: `prefix`, `action`, `target`, `match`, `source_countries`, `rate_mbps`, `routes`, `expires`, `reason`, `mode`. In `observe` it is a dry run and nothing is announced. |
+| `mitigation.announced` | warning | 21 | `rule` | Every route of the rule (one, or one per source network of a country rule) is on the wire. Same fields. |
+| `mitigation.withdrawn` | warning | 22 | `rule` | The rule's routes were withdrawn while the rule is still held: RIB session loss, shutdown, or an announce that failed. `detail` says why when known. It goes back on the wire (and `mitigation.announced` fires again) once the cause clears, before the rule expires. |
+| `mitigation.ended` | info | 23 | `rule` | The rule ended: `end` is `expired`, `removed` (DELETE), or `replaced` (a new rule with the same key). Its routes are withdrawn within a decision round. Resolves the rule. |
 
 Problems and the events that resolve them share a **dedup key**: `packeteer/<group>/<key>=<value>`, for example `packeteer/provider/provider=transit-a` for both `provider.down` and `provider.up`. The `pagerduty` preset uses it as `dedup_key`, and `snmptrap` sends it as a varbind.
 
-State events (`provider.*`, `bgp.*`, `commit.*`, `announce.*`, `inbound.*`) fire on transitions only. They are checked on every decision (each probe round, each RIB change, and at least every `probe.interval`); commit is checked at most once a minute. They are not repeated while the state holds.
+State events (`provider.*`, `bgp.*`, `commit.*`, `announce.*`, `inbound.*`, `mitigation.*`) fire on transitions only. They are checked on every decision (each probe round, each RIB change, and at least every `probe.interval`); commit is checked at most once a minute. They are not repeated while the state holds.
 
 ## Testing delivery
 
