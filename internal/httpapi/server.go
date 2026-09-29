@@ -250,7 +250,7 @@ func (s *Server) handleTelemetry(w http.ResponseWriter, _ *http.Request) {
 	}{meta: snap.meta(), Telemetry: nz(snap.Telemetry)})
 }
 
-// handleInbound serves inbound commit control: the steers (announced in
+// handleInbound serves inbound optimization: the steers (announced in
 // inject, suggested in observe and suggest), the routes on the wire, and
 // providers over commit that were not steered.
 func (s *Server) handleInbound(w http.ResponseWriter, _ *http.Request) {

@@ -51,7 +51,7 @@ Each entry has `type` (required), an optional `name` (defaults to the type and m
 | `source` | `Targets(ctx) ([]Target, error)` | `static`, `flow`, `traceroute`, `vip`, `outage`, `span` | `exec` |
 | `scorer` | `Score(PathStats) float64` (lower is better). `commit` also plans commit and group moves; `cost` plans moves to the cheapest provider inside a performance floor | `weighted`, `commit`, `cost` | none |
 | `announcer` | `Announce`, `Withdraw`, `WithdrawAll` | `gobgp` | **never** |
-| `announcer` (inbound) | `Action(provider)`, `Announce(InboundRoute)`, `Withdraw`, `WithdrawAll`. One instance under `inbound.announcer:`; registry `plugin.InboundAnnouncers` | `gobgp` (marker + per-provider prepend/TE community catalog) | **never** |
+| `announcer` (inbound) | `Action(provider)`, `Announce(InboundRoute)`, `Withdraw`, `WithdrawAll`. One instance under `inbound.announcer:`; registry `plugin.InboundAnnouncers` | `gobgp` (marker + per-provider prepend/withhold/TE community catalog) | **never** |
 | `notifier` | `Notify(ctx, Event) error`, optional `EventGate()` (filters and rate limit) | `webhook` (generic, `slack`, `teams`, `pagerduty`, templates), `smtp`, `snmptrap` | `exec` |
 | `telemetry` | `Snapshot(ctx) ([]Usage, error)` | `snmp` | none |
 | `policy` | `Match(PolicySubject) (PolicyVerdict, bool)`, optional `Maintenance.Active(now)`. The filter chain in front of the scorer | `rules`, `maintenance` | none |

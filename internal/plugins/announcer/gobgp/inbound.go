@@ -39,6 +39,7 @@ type InboundProvider struct {
 	Provider    string   `yaml:"provider"`
 	Name        string   `yaml:"name"`
 	Prepend     int      `yaml:"prepend"`
+	Withhold    bool     `yaml:"withhold"`
 	Communities []string `yaml:"communities"`
 }
 
@@ -92,6 +93,9 @@ func NewInbound(c plugin.Config, env plugin.Env) (plugin.InboundAnnouncer, error
 		if p.Prepend < 0 || p.Prepend > maxInboundPrepend {
 			return nil, fmt.Errorf("%s: prepend %d must be between 0 and %d", label, p.Prepend, maxInboundPrepend)
 		}
+		if p.Withhold && p.Prepend != 0 {
+			return nil, fmt.Errorf("%s: withhold and prepend are exclusive (a withheld prefix is not sent to the provider at all)", label)
+		}
 		if len(p.Communities) == 0 || len(p.Communities) > maxInboundCommunities {
 			return nil, fmt.Errorf("%s: communities must list 1 to %d communities", label, maxInboundCommunities)
 		}
@@ -109,7 +113,7 @@ func NewInbound(c plugin.Config, env plugin.Env) (plugin.InboundAnnouncer, error
 			seen[c] = true
 		}
 		actions[p.Provider] = plugin.InboundAction{
-			Provider: p.Provider, Name: p.Name, Prepend: p.Prepend,
+			Provider: p.Provider, Name: p.Name, Prepend: p.Prepend, Withhold: p.Withhold,
 			Communities: append([]string(nil), p.Communities...),
 		}
 	}

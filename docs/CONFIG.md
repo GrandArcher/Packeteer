@@ -152,7 +152,7 @@ The tools refuse loopback, link-local, multicast, broadcast, and unspecified tar
 
 ### `inbound`
 
-Inbound commit control (#25, lab-proven only, not on a public edge). Router setup and the full contract are in [inbound.md](inbound.md). Needs at least one `telemetry` plugin: a provider is steered when its inbound 95th percentile is above `commit_mbps`.
+Inbound optimization (#25, lab-proven only, not on a public edge). Router setup and the full contract are in [inbound.md](inbound.md). Two triggers steer inbound traffic away from a provider: `commit` (a `telemetry` plugin reports its inbound 95th percentile above `commit_mbps`) and `performance` (the probes rank it the worst-performing provider). Needs a `telemetry` plugin, `performance`, or both.
 
 | Key | Default | Meaning |
 |---|---|---|
@@ -162,8 +162,31 @@ Inbound commit control (#25, lab-proven only, not on a public edge). Router setu
 | `release_pct` | `90` | Release a steer once the inbound 95th is at or below this percent of the commit, after `hold_time`. Greater than 0, at most 100. |
 | `max_improvements` | top-level `max_improvements` | Cap on steer routes, 1 to the top-level cap. Steer routes and outbound improvements also share the top-level cap. |
 | `announcer` | none | `inject`: required. In-process only: `type: gobgp` (see [Inbound announcer `gobgp`](#inbound-announcer-gobgp)). In `observe` and `suggest` it is optional and only supplies the catalog. |
+| `performance` | off | Turns on the performance trigger. Keys below. `performance: {}` uses the defaults. |
+| `damping` | on | Inertia against oscillation. Keys below. |
+| `moderated` | `[]` | Triggers (`commit`, `performance`) whose steers are only suggested, even in `inject`: they are on `/api/inbound` and in `inbound.steered` events with `moderated: true`, and are never announced. The other trigger stays automated. |
 
-`hold_time` is the minimum life of a steer and the cooldown after a release. `improvement_ttl` retires a steer; the route is withdrawn for at least one round and returns only once the edge advertises the prefix again. Telemetry older than 15 minutes, a poll error, or no row releases at once. Packeteer never steers away from every non-excluded provider.
+`performance` keys. The comparison uses the prefixes every provider with a fresh probe result measured (fresh: newer than about three probe rounds; a provider whose probe source is down has none and is left out). Loss is the mean loss; RTT is the mean over paths that answered. Only the single worst provider is steered for performance.
+
+| Key | Default | Meaning |
+|---|---|---|
+| `loss_pct` | `5` | A provider is degraded when its mean loss is this many points above the best other provider. At most 100. Negative disables the loss check. |
+| `latency_ms` | `50` | A provider is degraded when its mean RTT is this many ms above the best other provider. Negative disables the RTT check (not both). |
+| `min_prefixes` | `3` | Commonly measured prefixes needed before providers are compared. At least 1. |
+| `release_pct` | `50` | Release a performance steer once both gaps are at or below this percent of their thresholds, after the steer's hold time. Greater than 0, at most 100. |
+
+`damping` keys:
+
+| Key | Default | Meaning |
+|---|---|---|
+| `disabled` | `false` | `true` turns damping off: a trigger steers on the first round and every hold is `hold_time`. |
+| `confirm` | `1m` | A trigger must hold this long before the provider is steered. Not negative. |
+| `backoff` | `2` | A provider steered again within `max_hold` of its release is flapping: its hold time, and so the cooldown after it, is multiplied by this per flap. 1 to 16. |
+| `max_hold` | 8 × `hold_time` | Cap on the grown hold time, and the flap window. A provider released for longer than this starts over. Not shorter than `hold_time`. |
+
+A commit steer that flaps also learns inertia: how much inbound traffic returned to the provider when it was released (`inertia_mbps` on `/api/inbound`). It is then released only when the inbound 95th plus that amount is at or below `release_pct`, so an unchanged demand no longer flips the edge back and forth.
+
+`hold_time` is the minimum life of a steer and the cooldown after a release (damping grows both for a flapping provider). `improvement_ttl` retires a steer; the route is withdrawn for at least one round and returns only once the edge advertises the prefix again. Telemetry older than 15 minutes, a poll error, or no row releases a commit steer at once; no fresh probe results release a performance steer at once. Packeteer never steers away from every non-excluded provider.
 
 ### Plugin entries
 
@@ -730,6 +753,7 @@ Each provider:
 | `provider` | Required. A top-level provider `name`. Unique in the list. |
 | `name` | Optional label, up to 64 characters. |
 | `prepend` | 0–10. How many times the edge's export policy toward this provider prepends when it sees `communities`. Informational: an iBGP route cannot carry the edge's own ASN, so the edge does the prepend. |
+| `withhold` | `true` makes the action a selective announcement: the edge's export policy does not send the prefix to this provider at all when it sees `communities`. Informational, like `prepend`, and exclusive with it. Packeteer never steers away from every provider, so the prefix stays announced through at least one other. |
 | `communities` | 1–16 `asn:value` communities: signal communities the edge maps to the prepend, and the provider's own TE communities the edge passes to that provider only. `0:x` and `65535:x` (well-known values such as `no-export`) are rejected. |
 
 ## Example

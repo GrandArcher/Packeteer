@@ -191,6 +191,17 @@ func run(ctx context.Context, args []string, getenv func(string) string, stdout,
 	}
 	if in := cfg.Inbound; in != nil {
 		fmt.Fprintf(stdout, "inbound: %s prefixes=%d local_pref=%d release_pct=%g\n", in.Mode, len(in.Prefixes), in.LocalPref, in.ReleasePct)
+		if pf := in.Performance; pf != nil {
+			fmt.Fprintf(stdout, "inbound performance: loss_pct=%g latency_ms=%g min_prefixes=%d release_pct=%g\n", pf.LossPct, pf.LatencyMs, pf.MinPrefixes, pf.ReleasePct)
+		}
+		if d := in.Damping; d.Disabled {
+			fmt.Fprintln(stdout, "inbound damping: off")
+		} else {
+			fmt.Fprintf(stdout, "inbound damping: confirm=%s backoff=%g max_hold=%s\n", d.Confirm, d.Backoff, d.MaxHold)
+		}
+		if len(in.Moderated) > 0 {
+			fmt.Fprintf(stdout, "inbound moderated: %s\n", strings.Join(in.Moderated, ","))
+		}
 	}
 	fmt.Fprintf(stdout, "log: %s %s\n", cfg.Log.Level, cfg.Log.Format)
 	if cfg.HTTPListen() == "" {
@@ -387,7 +398,7 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 			if rec != nil {
 				rec.Decision(now, changes, in.Results)
 			}
-			inChanges, inErr := runInbound(loopCtx, now, inb, plugins, log, cfg.InboundMode())
+			inChanges, inErr := runInbound(loopCtx, now, inb, plugins, log, cfg.InboundMode(), in)
 			if !dispatch.Enabled() {
 				return
 			}
@@ -472,6 +483,19 @@ func (g ribGate) NextHop(p netip.Prefix) (netip.Addr, bool) {
 	return rt.NextHop, ok && rt.NextHop.IsValid()
 }
 
+// inboundInput is telemetry plus the probe results that hold a measurement
+// from providers whose probe source is up.
+func inboundInput(ctx context.Context, plugins *pluginhost.Set, in policy.Input) inbound.Input {
+	out := inbound.Input{Usage: collectTelemetry(ctx, plugins)}
+	for _, r := range in.Results {
+		if !r.OK() || !in.ProviderUp[r.Provider] || r.Stats.Sent == 0 {
+			continue
+		}
+		out.Paths = append(out.Paths, inbound.Path{Provider: r.Provider, Prefix: r.Prefix, LossPct: r.Stats.LossPct, RTT: r.Stats.RTTAvg, Time: r.Time})
+	}
+	return out
+}
+
 // newInbound returns nil when inbound is not configured. others counts
 // outbound improvements on the wire for the shared cap.
 func newInbound(cfg *config.Config, plugins *pluginhost.Set, view *rib.View, others func() int, log *slog.Logger) (*inbound.Controller, error) {
@@ -494,6 +518,18 @@ func newInbound(cfg *config.Config, plugins *pluginhost.Set, view *rib.View, oth
 		TTL:             cfg.ImprovementTTL,
 		ReleasePct:      in.ReleasePct,
 		MaxAge:          inbound.DefaultMaxAge,
+		PerfMaxAge:      maxResultAge(cfg),
+		Damping: inbound.Damping{
+			Disabled: in.Damping.Disabled, Confirm: in.Damping.Confirm,
+			Backoff: in.Damping.Backoff, MaxHold: in.Damping.MaxHold,
+		},
+		Moderated: map[string]bool{},
+	}
+	if pf := in.Performance; pf != nil {
+		ic.Performance = &inbound.PerfConfig{LossPct: pf.LossPct, LatencyMs: pf.LatencyMs, MinPrefixes: pf.MinPrefixes, ReleasePct: pf.ReleasePct}
+	}
+	for _, t := range in.Moderated {
+		ic.Moderated[t] = true
 	}
 	for _, p := range cfg.Providers {
 		if !p.Exclude {
@@ -548,18 +584,19 @@ func bindInbound(cfg *config.Config, plugins *pluginhost.Set, srv any) error {
 	return b.Bind(srv, cfg.PacketeerCommunity, prefixes)
 }
 
-// runInbound evaluates inbound commit control and syncs it. Sync is a
-// no-op outside inject.
-func runInbound(ctx context.Context, now time.Time, inb *inbound.Controller, plugins *pluginhost.Set, log *slog.Logger, mode string) ([]inbound.Change, error) {
+// runInbound plans inbound steers and syncs them. Sync is a no-op outside
+// inject. results are the probe results the decision round used.
+func runInbound(ctx context.Context, now time.Time, inb *inbound.Controller, plugins *pluginhost.Set, log *slog.Logger, mode string, in policy.Input) ([]inbound.Change, error) {
 	if inb == nil {
 		return nil, nil
 	}
-	changes := inb.Evaluate(now, collectTelemetry(ctx, plugins))
+	changes := inb.Plan(now, inboundInput(ctx, plugins, in))
 	for _, c := range changes {
 		act := c.Steer.Action
-		log.Info("inbound "+c.Action, "mode", mode, "provider", c.Steer.Provider, "in_mbps_95", c.Steer.InMbps95,
-			"commit_mbps", c.Steer.CommitMbps, "action", act.Name, "prepend", act.Prepend,
-			"communities", strings.Join(act.Communities, " "), "reason", c.Reason)
+		log.Info("inbound "+c.Action, "mode", mode, "trigger", c.Steer.Trigger, "moderated", c.Steer.Moderated,
+			"provider", c.Steer.Provider, "in_mbps_95", c.Steer.InMbps95, "commit_mbps", c.Steer.CommitMbps,
+			"hold", c.Steer.Hold, "flaps", c.Steer.Flaps, "inertia_mbps", c.Steer.Shift,
+			"action", act.Name, "prepend", act.Prepend, "withhold", act.Withhold, "communities", strings.Join(act.Communities, " "), "reason", c.Reason)
 	}
 	actx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()

@@ -26,6 +26,10 @@ func TestInboundDefaults(t *testing.T) {
 	if in.LocalPref != DefaultInboundLocalPref || in.ReleasePct != DefaultInboundReleasePct || in.MaxImprovements != 50 {
 		t.Fatalf("defaults = %+v", in)
 	}
+	d := in.Damping
+	if d.Disabled || d.Confirm != DefaultInboundConfirm || d.Backoff != DefaultInboundBackoff || d.MaxHold != 8*cfg.HoldTime || in.Performance != nil || len(in.Moderated) != 0 {
+		t.Fatalf("damping defaults = %+v, performance %+v", d, in.Performance)
+	}
 	cfg, err = Parse([]byte(validYAML))
 	if err != nil {
 		t.Fatal(err)
@@ -61,11 +65,41 @@ func TestInboundErrors(t *testing.T) {
 		"cap above global":              {inject + "  max_improvements: 51\n", "inbound.max_improvements 51"},
 		"announcer type":                {validYAML + "telemetry: [{type: fixed}]\ninbound: {prefixes: [198.51.100.0/24], announcer: {name: x}}\n", "inbound.announcer: type is required"},
 		"unknown key":                   {inject + "  prepend: 3\n", "field prepend not found"},
+		"perf release_pct":              {inject + "  performance: {release_pct: 101}\n", "inbound.performance.release_pct"},
+		"perf both off":                 {inject + "  performance: {loss_pct: -1, latency_ms: -1}\n", "cannot both be disabled"},
+		"perf min_prefixes":             {inject + "  performance: {min_prefixes: -2}\n", "min_prefixes -2"},
+		"backoff":                       {inject + "  damping: {backoff: 0.5}\n", "inbound.damping.backoff"},
+		"max_hold":                      {inject + "  damping: {max_hold: 1m}\n", "inbound.damping.max_hold"},
+		"confirm":                       {inject + "  damping: {confirm: -1s}\n", "inbound.damping.confirm"},
+		"moderated":                     {inject + "  moderated: [bandwidth]\n", `inbound.moderated[0]: "bandwidth" is invalid`},
+		"moderated perf":                {inject + "  moderated: [performance]\n", "performance needs inbound.performance"},
+		"moderated dup":                 {inject + "  moderated: [commit, Commit]\n", "duplicate trigger"},
 	}
 	for name, tc := range cases {
 		_, err := Parse([]byte(tc.yaml))
 		if err == nil || !strings.Contains(err.Error(), tc.want) {
 			t.Errorf("%s: err = %v, want %q", name, err, tc.want)
 		}
+	}
+}
+
+func TestInboundPerformanceAndModerated(t *testing.T) {
+	// Performance alone needs no telemetry.
+	y := validYAML + "inbound:\n  prefixes: [198.51.100.0/24]\n  performance: {}\n  moderated: [Performance]\n  damping: {disabled: true}\n"
+	cfg, err := Parse([]byte(y))
+	if err != nil {
+		t.Fatal(err)
+	}
+	pf := cfg.Inbound.Performance
+	if pf.LossPct != DefaultInboundPerfLossPct || pf.LatencyMs != DefaultInboundPerfLatencyMs ||
+		pf.MinPrefixes != DefaultInboundPerfMinPrefixes || pf.ReleasePct != DefaultInboundPerfReleasePct {
+		t.Fatalf("performance defaults = %+v", pf)
+	}
+	if cfg.Inbound.Moderated[0] != InboundTriggerPerformance || cfg.Inbound.Damping.Confirm != 0 {
+		t.Fatalf("inbound = %+v", cfg.Inbound)
+	}
+	if _, err := Parse([]byte(validYAML + "inbound:\n  prefixes: [198.51.100.0/24]\n  moderated: [commit]\n")); err == nil ||
+		!strings.Contains(err.Error(), "commit needs a telemetry plugin") {
+		t.Fatalf("err = %v", err)
 	}
 }

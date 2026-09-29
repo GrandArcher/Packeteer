@@ -1,12 +1,20 @@
 #!/bin/bash
-# Inbound commit control (#25) against a simulated edge with two simulated
+# Inbound optimization (#25) against a simulated edge with two simulated
 # eBGP transits. Documentation prefixes and documentation/private ASNs only.
 #
-# transit-a's inbound 95th is over commit, so Packeteer re-announces
-# 203.0.113.0/24 to the edge with transit-a's catalog action. The edge must
-# then send transit-a the prefix prepended twice with transit-a's TE
-# community, and send transit-b the plain prefix. Release, SIGTERM, and
-# SIGKILL must each leave both transits with the plain prefix.
+# Commit trigger: transit-a's inbound 95th is over commit, so Packeteer
+# re-announces 203.0.113.0/24 to the edge with transit-a's catalog action.
+# The edge must then send transit-a the prefix prepended twice with
+# transit-a's TE community, and send transit-b the plain prefix. Release
+# leaves both plain. A second steer inside the flap window is damped: its
+# hold doubles and it learns inertia, so flipping usage under again must
+# NOT release it. SIGTERM withdraws it.
+#
+# Performance trigger: after a restart with usage under commit, transit-a's
+# probes are 240 ms slower, so it is steered as the worst performer;
+# equal probes release it. transit-b slowest withholds the prefix from
+# transit-b (selective announcement) and equal probes give it back.
+# transit-a slow again steers it; SIGKILL drops it with the session. Every step is checked on the transits themselves.
 set -euo pipefail
 
 root=$(cd "$(dirname "$0")/.." && pwd)
@@ -21,7 +29,8 @@ echo "building path check"
 go build -o "$check_bin" ./lab/checkpath
 
 cp lab/probes/inbound-over.yaml "$lab_dir/usage.yaml"
-chmod 0644 "$lab_dir/usage.yaml"
+cp lab/probes/inbound-paths-equal.yaml "$lab_dir/paths.yaml"
+chmod 0644 "$lab_dir/usage.yaml" "$lab_dir/paths.yaml"
 export PACKETEER_LAB_DIR="$lab_dir"
 
 echo "building lab"
@@ -39,6 +48,11 @@ path_json() {
 a_steered() {
 	path_json transit-a | "$check_bin" -aspath "64512 64512 64512" -has 64496:3 \
 		-lacks 64512: -lacks 64497: -lacks no-export
+}
+
+# withheld: the selective announcement keeps the prefix off transit-b.
+b_withheld() {
+	path_json transit-b | "$check_bin" -absent
 }
 
 plain_on() {
@@ -71,31 +85,48 @@ wait_for() {
 }
 
 both_plain() { plain_on transit-a && plain_on transit-b; }
+withheld_only_b() { b_withheld && plain_on transit-a; }
 steered_only_a() { a_steered && plain_on transit-b; }
 
-flip_usage() {
+flip_file() {
 	local tmp
-	tmp=$(mktemp "$lab_dir/.usage.XXXXXX")
+	tmp=$(mktemp "$lab_dir/.flip.XXXXXX")
 	cp "$1" "$tmp"
 	chmod 0644 "$tmp"
-	mv "$tmp" "$lab_dir/usage.yaml"
+	mv "$tmp" "$lab_dir/$2"
+}
+flip_usage() { flip_file "$1" usage.yaml; }
+flip_paths() { flip_file "$1" paths.yaml; }
+
+packeteer_logs() { "${compose[@]}" logs --no-color packeteer; }
+
+# The logs are read into a variable first: with pipefail, grep -q exiting
+# on the first match would SIGPIPE docker compose logs and fail the check.
+need_log() {
+	local logs
+	logs=$(packeteer_logs)
+	if ! grep -qE "$1" <<<"$logs"; then
+		echo "packeteer log is missing: $1 ($2)" >&2
+		dump_bgp
+		exit 1
+	fi
 }
 
 session_text() {
 	"${compose[@]}" exec -T edge vtysh -c 'show bgp neighbors 192.0.2.10' 2>/dev/null || true
 }
 
-echo "waiting for the steer: prepend and TE community on transit-a only"
+echo "commit trigger: waiting for the steer (prepend and TE community on transit-a only)"
 wait_for "transit-a steered, transit-b plain" steered_only_a
-logs=$("${compose[@]}" logs --no-color packeteer)
-for want in 'msg="inbound steer"' 'inbound announced' 'communities="64512:666 64512:667 64512:1102 64496:3"'; do
-	if ! printf '%s\n' "$logs" | grep -qF "$want"; then
+logs=$(packeteer_logs)
+for want in 'msg="inbound steer"' 'trigger=commit' 'inbound announced' 'communities="64512:666 64512:667 64512:1102 64496:3"'; do
+	if ! grep -qF "$want" <<<"$logs"; then
 		echo "packeteer log is missing: $want" >&2
 		dump_bgp
 		exit 1
 	fi
 done
-if printf '%s\n' "$logs" | grep -q 'cause=performance\|cause=commit'; then
+if grep -q 'cause=performance\|cause=commit\|msg=injected' <<<"$logs"; then
 	echo "inbound lab produced an outbound improvement" >&2
 	dump_bgp
 	exit 1
@@ -104,28 +135,56 @@ fi
 echo "inbound back under release_pct; the steer must be released"
 flip_usage lab/probes/inbound-under.yaml
 wait_for "both transits plain after release" both_plain
-if ! "${compose[@]}" logs --no-color packeteer | grep -q 'msg="inbound release"'; then
-	echo "withdraw was not an inbound release" >&2
+need_log 'msg="inbound release"' "withdraw was not an inbound release"
+
+echo "over commit again inside the flap window: damped re-steer"
+flip_usage lab/probes/inbound-over.yaml
+wait_for "steer again" steered_only_a
+need_log 'msg="inbound steer".*flaps=1 inertia_mbps=100' "second steer was not damped (flaps=1, inertia 100 Mbps)"
+
+echo "under commit again: inertia must hold the steer past its 10s hold"
+flip_usage lab/probes/inbound-under.yaml
+for _ in $(seq 1 25); do
+	if ! steered_only_a 2>/dev/null; then
+		echo "damped steer was released: the steer/release loop was not damped" >&2
+		dump_bgp
+		exit 1
+	fi
+	sleep 1
+done
+if [ "$(packeteer_logs | grep -c 'msg="inbound release"')" -ne 1 ]; then
+	echo "expected exactly one inbound release before SIGTERM" >&2
 	dump_bgp
 	exit 1
 fi
-
-echo "over commit again (after the hold_time cooldown)"
-flip_usage lab/probes/inbound-over.yaml
-wait_for "steer again" steered_only_a
 
 echo "stopping packeteer (SIGTERM, WithdrawAll)"
 "${compose[@]}" stop -t 20 packeteer
 wait_for "both transits plain after SIGTERM" both_plain
-if ! "${compose[@]}" logs --no-color packeteer | grep -q 'inbound steer routes withdrawn'; then
-	echo "SIGTERM did not withdraw the steer route" >&2
-	dump_bgp
-	exit 1
-fi
+need_log 'inbound steer routes withdrawn' "SIGTERM did not withdraw the steer route"
 
-echo "starting packeteer again for the crash path"
+echo "performance trigger: usage under commit, transit-a probes 240 ms slower"
+flip_paths lab/probes/inbound-paths-slow-a.yaml
 "${compose[@]}" start packeteer
-wait_for "steer after restart" steered_only_a
+wait_for "performance steer after restart" steered_only_a
+need_log 'msg="inbound steer".*trigger=performance' "steer after restart was not a performance steer"
+
+echo "probes equal again: the performance steer must be released"
+flip_paths lab/probes/inbound-paths-equal.yaml
+wait_for "both transits plain after performance release" both_plain
+
+echo "transit-b slowest: selective announcement withholds the prefix from transit-b"
+flip_paths lab/probes/inbound-paths-slow-b.yaml
+wait_for "transit-b withheld, transit-a plain" withheld_only_b
+need_log 'msg="inbound steer".*provider=transit-b.*withhold=true' "transit-b steer was not a withhold"
+
+echo "probes equal again: transit-b gets the prefix back"
+flip_paths lab/probes/inbound-paths-equal.yaml
+wait_for "both transits plain after the withhold is released" both_plain
+
+echo "transit-a slow again: performance steer for the crash path"
+flip_paths lab/probes/inbound-paths-slow-a.yaml
+wait_for "performance steer again" steered_only_a
 
 hold=$(awk '$1 == "neighbor" && $2 == "192.0.2.10" && $3 == "timers" { print $5 }' lab/frr-inbound/frr.conf)
 case "$hold" in

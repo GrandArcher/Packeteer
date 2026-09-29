@@ -110,6 +110,26 @@ type Config struct {
 const (
 	DefaultInboundLocalPref  = 1
 	DefaultInboundReleasePct = 90
+	// Performance trigger defaults: a provider is the worst performer when
+	// its mean loss is DefaultInboundPerfLossPct points or its mean RTT is
+	// DefaultInboundPerfLatencyMs above the best other provider, over at
+	// least DefaultInboundPerfMinPrefixes prefixes measured through every
+	// provider. It is released below DefaultInboundPerfReleasePct of that.
+	DefaultInboundPerfLossPct     = 5
+	DefaultInboundPerfLatencyMs   = 50
+	DefaultInboundPerfMinPrefixes = 3
+	DefaultInboundPerfReleasePct  = 50
+	// Damping defaults. max_hold defaults to DefaultInboundMaxHoldFactor
+	// times hold_time.
+	DefaultInboundConfirm       = time.Minute
+	DefaultInboundBackoff       = 2
+	DefaultInboundMaxHoldFactor = 8
+)
+
+// Inbound triggers, as named in inbound.moderated.
+const (
+	InboundTriggerCommit      = "commit"
+	InboundTriggerPerformance = "performance"
 )
 
 // Inbound steers inbound traffic for the operator's own prefixes away
@@ -135,6 +155,47 @@ type Inbound struct {
 	MaxImprovements int `yaml:"max_improvements"`
 	// Announcer is the in-process inbound announcer. Required in inject.
 	Announcer *PluginSpec `yaml:"announcer"`
+	// Performance steers inbound traffic away from the worst-performing
+	// provider, measured by the probes. Nil disables it.
+	Performance *InboundPerformance `yaml:"performance"`
+	// Damping is inertia against oscillation. Defaults apply when omitted.
+	Damping InboundDamping `yaml:"damping"`
+	// Moderated lists triggers (commit, performance) whose steers are
+	// only suggested, even in inject. The rest are automated.
+	Moderated []string `yaml:"moderated"`
+}
+
+// InboundPerformance is the performance trigger. Loss and RTT are the
+// means over prefixes probed through every provider with a fresh result.
+type InboundPerformance struct {
+	// LossPct is how many loss points above the best other provider make a
+	// provider degraded (default 5). Negative disables the loss check.
+	LossPct float64 `yaml:"loss_pct"`
+	// LatencyMs is how many ms of mean RTT above the best other provider
+	// make a provider degraded (default 50). Negative disables it.
+	LatencyMs float64 `yaml:"latency_ms"`
+	// MinPrefixes is how many commonly probed prefixes are needed before
+	// providers are compared (default 3).
+	MinPrefixes int `yaml:"min_prefixes"`
+	// ReleasePct releases a performance steer once both gaps are at or
+	// below this percent of their thresholds (default 50, 1-100).
+	ReleasePct float64 `yaml:"release_pct"`
+}
+
+// InboundDamping is inertia against steer/release oscillation.
+type InboundDamping struct {
+	// Disabled turns damping off: steers use hold_time as is.
+	Disabled bool `yaml:"disabled"`
+	// Confirm is how long a trigger must hold before a provider is steered
+	// (default 1m).
+	Confirm time.Duration `yaml:"confirm"`
+	// Backoff multiplies the hold time and the cooldown each time a
+	// provider is steered again within max_hold of its release (default 2,
+	// at least 1).
+	Backoff float64 `yaml:"backoff"`
+	// MaxHold caps the grown hold time and is the flap window (default 8x
+	// hold_time).
+	MaxHold time.Duration `yaml:"max_hold"`
 }
 
 // InboundMode is the inbound mode, or "" when inbound is not configured.
@@ -396,6 +457,31 @@ func (c *Config) applyDefaults() {
 		}
 		if in.MaxImprovements == 0 && c.MaxImprovements != nil {
 			in.MaxImprovements = *c.MaxImprovements
+		}
+		if pf := in.Performance; pf != nil {
+			if pf.LossPct == 0 {
+				pf.LossPct = DefaultInboundPerfLossPct
+			}
+			if pf.LatencyMs == 0 {
+				pf.LatencyMs = DefaultInboundPerfLatencyMs
+			}
+			if pf.MinPrefixes == 0 {
+				pf.MinPrefixes = DefaultInboundPerfMinPrefixes
+			}
+			if pf.ReleasePct == 0 {
+				pf.ReleasePct = DefaultInboundPerfReleasePct
+			}
+		}
+		if d := &in.Damping; !d.Disabled {
+			if d.Confirm == 0 {
+				d.Confirm = DefaultInboundConfirm
+			}
+			if d.Backoff == 0 {
+				d.Backoff = DefaultInboundBackoff
+			}
+			if d.MaxHold == 0 {
+				d.MaxHold = DefaultInboundMaxHoldFactor * c.HoldTime
+			}
 		}
 	}
 }
@@ -687,8 +773,8 @@ func (c *Config) validateInbound(add func(string, ...any)) {
 	if in.Announcer != nil && in.Announcer.Type == "" {
 		add("inbound.announcer: type is required")
 	}
-	if len(c.Telemetry) == 0 {
-		add("inbound requires a telemetry plugin (inbound commit control reads the inbound 95th percentile)")
+	if len(c.Telemetry) == 0 && in.Performance == nil {
+		add("inbound requires a telemetry plugin (inbound commit control reads the inbound 95th percentile) or inbound.performance")
 	}
 	if len(in.Prefixes) == 0 {
 		add("inbound.prefixes: at least one prefix is required")
@@ -724,6 +810,50 @@ func (c *Config) validateInbound(add func(string, ...any)) {
 	if c.MaxImprovements != nil && (in.MaxImprovements < 1 || in.MaxImprovements > *c.MaxImprovements) {
 		add("inbound.max_improvements %d must be between 1 and max_improvements (%d)", in.MaxImprovements, *c.MaxImprovements)
 	}
+	if pf := in.Performance; pf != nil {
+		if math.IsNaN(pf.LossPct) || math.IsNaN(pf.LatencyMs) || pf.LossPct > 100 {
+			add("inbound.performance.loss_pct %v must be at most 100 and latency_ms %v a number", pf.LossPct, pf.LatencyMs)
+		}
+		if pf.LossPct < 0 && pf.LatencyMs < 0 {
+			add("inbound.performance: loss_pct and latency_ms cannot both be disabled")
+		}
+		if pf.MinPrefixes < 1 {
+			add("inbound.performance.min_prefixes %d must be at least 1", pf.MinPrefixes)
+		}
+		if pf.ReleasePct <= 0 || pf.ReleasePct > 100 || math.IsNaN(pf.ReleasePct) {
+			add("inbound.performance.release_pct %v must be greater than 0 and at most 100", pf.ReleasePct)
+		}
+	}
+	if d := in.Damping; !d.Disabled {
+		if d.Confirm < 0 {
+			add("inbound.damping.confirm %s must not be negative", d.Confirm)
+		}
+		if d.Backoff < 1 || math.IsNaN(d.Backoff) || d.Backoff > 16 {
+			add("inbound.damping.backoff %v must be between 1 and 16", d.Backoff)
+		}
+		if d.MaxHold < c.HoldTime {
+			add("inbound.damping.max_hold %s must not be shorter than hold_time %s", d.MaxHold, c.HoldTime)
+		}
+	}
+	seenTrigger := map[string]bool{}
+	for i, t := range in.Moderated {
+		switch t {
+		case InboundTriggerCommit:
+			if len(c.Telemetry) == 0 {
+				add("inbound.moderated[%d]: commit needs a telemetry plugin", i)
+			}
+		case InboundTriggerPerformance:
+			if in.Performance == nil {
+				add("inbound.moderated[%d]: performance needs inbound.performance", i)
+			}
+		default:
+			add("inbound.moderated[%d]: %q is invalid (want %s or %s)", i, t, InboundTriggerCommit, InboundTriggerPerformance)
+		}
+		if seenTrigger[t] {
+			add("inbound.moderated[%d]: duplicate trigger %q", i, t)
+		}
+		seenTrigger[t] = true
+	}
 }
 
 // coveredBy reports whether p is an entry of list or inside one.
@@ -741,6 +871,9 @@ func (c *Config) normalize() {
 	c.Log.Format = strings.ToLower(strings.TrimSpace(c.Log.Format))
 	if c.Inbound != nil {
 		c.Inbound.Mode = strings.ToLower(strings.TrimSpace(c.Inbound.Mode))
+		for i, t := range c.Inbound.Moderated {
+			c.Inbound.Moderated[i] = strings.ToLower(strings.TrimSpace(t))
+		}
 	}
 	for i := range c.Providers {
 		c.Providers[i].Group = strings.TrimSpace(c.Providers[i].Group)

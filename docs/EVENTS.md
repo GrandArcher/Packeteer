@@ -35,8 +35,8 @@ The same object is the `generic` webhook body and the `exec` `notify` params.
 | `outage.circuit` | critical | 15 | `provider` | The `outage` source found several prefixes degraded on one provider only. |
 | `outage.cleared` | warning | 16 | `asn` or `provider` | The AS or circuit incident recovered. |
 | `notifier.test` | info | 17 | | Sent only by `packeteer -notify-test`, to check delivery. |
-| `inbound.steered` | warning | 18 | `provider` | Inbound commit control ([inbound.md](inbound.md)) steers inbound traffic away from a provider whose inbound 95th is over commit. Fields: `in_mbps_95`, `commit_mbps`, `action`, `prepend`, `communities`, `mode`, `reason`. In `observe` and `suggest` it is a suggestion; nothing is announced. |
-| `inbound.released` | info | 19 | `provider` | The steer was released (under `release_pct` of commit after `hold_time`, stale telemetry, or `improvement_ttl`); `reason` says which. |
+| `inbound.steered` | warning | 18 | `provider` | Inbound optimization ([inbound.md](inbound.md)) steers inbound traffic away from a provider whose inbound 95th is over commit (`trigger` `commit`) or that is the worst-performing provider (`trigger` `performance`). Fields: `trigger`, `in_mbps_95`, `commit_mbps`, `action`, `prepend`, `withhold` (selective announcement), `communities`, `hold`, `flaps`, `moderated`, `mode`, `reason`. In `observe` and `suggest`, and when `moderated` is `true`, it is a suggestion; nothing is announced. |
+| `inbound.released` | info | 19 | `provider` | The steer was released (under `release_pct` after its hold time, stale telemetry or probe results, or `improvement_ttl`); `reason` says which. |
 
 Problems and the events that resolve them share a **dedup key**: `packeteer/<group>/<key>=<value>`, for example `packeteer/provider/provider=transit-a` for both `provider.down` and `provider.up`. The `pagerduty` preset uses it as `dedup_key`, and `snmptrap` sends it as a varbind.
 

@@ -21,6 +21,11 @@ type InboundAction struct {
 	// own ASN in an iBGP AS path, so the edge does the prepend, not
 	// Packeteer. Zero means the action is a TE community only.
 	Prepend int `json:"prepend,omitempty"`
+	// Withhold is a selective announcement: the edge's export policy does
+	// not send the prefix to Provider at all when it sees Communities.
+	// Prepend is zero then. The core never steers away from every
+	// provider, so the prefix always stays announced somewhere.
+	Withhold bool `json:"withhold,omitempty"`
 	// Communities are standard communities ("asn:value") attached to the
 	// steer route: signal communities the edge maps to a prepend, and the
 	// provider's own traffic-engineering communities the edge passes on to

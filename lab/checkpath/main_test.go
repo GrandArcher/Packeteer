@@ -31,6 +31,12 @@ func TestCheck(t *testing.T) {
 	if err := Check(plain, clean); err != nil {
 		t.Fatalf("plain: %v", err)
 	}
+	gone := Want{Absent: true}
+	for _, raw := range []string{"{}", `{"prefix":"203.0.113.0/24","paths":[]}`, "% Network not in table"} {
+		if err := Check(raw, gone); err != nil {
+			t.Fatalf("absent %q: %v", raw, err)
+		}
+	}
 	cases := map[string]struct {
 		raw  string
 		want Want
@@ -42,6 +48,8 @@ func TestCheck(t *testing.T) {
 		"community absent": {plain, Want{ASPath: "64512", Has: []string{"64496:3"}}, "missing"},
 		"no json":          {"% Network not in table", clean, "no JSON"},
 		"no paths":         {`{"prefix":"203.0.113.0/24","paths":[]}`, clean, "no paths"},
+		"still announced":  {plain, gone, "want none"},
+		"empty output":     {"", gone, "vtysh failed"},
 		"no best":          {`{"paths":[{"aspath":{"string":"64512"}},{"aspath":{"string":"64512"}}]}`, clean, "no best"},
 	}
 	for name, tc := range cases {

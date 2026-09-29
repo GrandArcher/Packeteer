@@ -37,7 +37,8 @@ func TestInboundEndpoint(t *testing.T) {
 	}
 	st := inbound.Status{
 		Mode: "suggest", Prefixes: []string{"203.0.113.0/24"}, Evaluated: time.Unix(1, 0),
-		Steers: []inbound.Steer{{Provider: "transit-a", InMbps95: 150, CommitMbps: 100,
+		Steers: []inbound.Steer{{Provider: "transit-a", Trigger: inbound.TriggerPerformance, Moderated: true, Flaps: 1, Shift: 80,
+			Perf:   &inbound.PerfGap{RTTGapMs: 120, Prefixes: 3},
 			Action: plugin.InboundAction{Provider: "transit-a", Prepend: 2, Communities: []string{"64512:1102"}}}},
 		Announced: []inbound.Route{}, Blocked: []inbound.Blocked{{Provider: "transit-b", Reason: "would steer away from every provider"}},
 	}
@@ -46,7 +47,9 @@ func TestInboundEndpoint(t *testing.T) {
 		t.Fatalf("body = %v", on)
 	}
 	steer := on["steers"].([]any)[0].(map[string]any)
-	if steer["provider"] != "transit-a" || steer["action"].(map[string]any)["prepend"] != float64(2) {
+	if steer["provider"] != "transit-a" || steer["action"].(map[string]any)["prepend"] != float64(2) ||
+		steer["trigger"] != "performance" || steer["moderated"] != true || steer["flaps"] != float64(1) ||
+		steer["inertia_mbps"] != float64(80) || steer["performance"].(map[string]any)["rtt_gap_ms"] != float64(120) {
 		t.Fatalf("steer = %v", steer)
 	}
 	if len(on["blocked"].([]any)) != 1 || on["evaluated"] == nil {

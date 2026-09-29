@@ -47,6 +47,7 @@ func TestInboundConfigValidation(t *testing.T) {
 		"prepend too large": "marker: \"64512:667\"\nproviders: [{provider: transit-a, prepend: 11, communities: [\"64512:1\"]}]",
 		"bad community":     "marker: \"64512:667\"\nproviders: [{provider: transit-a, communities: [\"64512\"]}]",
 		"unknown field":     "marker: \"64512:667\"\nlocal_pref: 5\nproviders: [{provider: transit-a, communities: [\"64512:1\"]}]",
+		"withhold+prepend":  "marker: \"64512:667\"\nproviders: [{provider: transit-a, prepend: 1, withhold: true, communities: [\"64512:1\"]}]",
 	}
 	for name, y := range bad {
 		c, err := plugin.ConfigFromYAML(y)
@@ -68,6 +69,10 @@ func TestInboundConfigValidation(t *testing.T) {
 	}
 	if _, ok := a.Action("transit-c"); ok {
 		t.Fatal("unknown provider has an action")
+	}
+	w := mustInbound(t, "marker: \"64512:667\"\nproviders: [{provider: transit-b, name: withhold, withhold: true, communities: [\"64512:1209\"]}]")
+	if act, ok := w.Action("transit-b"); !ok || !act.Withhold || act.Prepend != 0 {
+		t.Fatalf("withhold action = %+v %v", act, ok)
 	}
 }
 
