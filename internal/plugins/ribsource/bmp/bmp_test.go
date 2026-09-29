@@ -48,6 +48,9 @@ func TestConfigValidation(t *testing.T) {
 		"bad router":    "routers: [edge]",
 		"dup router":    "routers: [192.0.2.254, 192.0.2.254]",
 		"bad policy":    "routers: [192.0.2.254]\npolicy: both",
+		"pre-policy":    "routers: [192.0.2.254]\npolicy: pre",
+		"idle too low":  "routers: [192.0.2.254]\nidle_timeout: 1s",
+		"idle negative": "routers: [192.0.2.254]\nidle_timeout: -1m",
 		"bad listen":    "routers: [192.0.2.254]\nlisten: nope",
 		"hostname":      "routers: [192.0.2.254]\nlisten: edge:11019",
 		"port range":    "routers: [192.0.2.254]\nlisten: \":70000\"",
@@ -59,11 +62,11 @@ func TestConfigValidation(t *testing.T) {
 		}
 	}
 	s := newStation(t, "routers: [192.0.2.254]")
-	if s.listen != ":11019" || s.post || !s.locRIB {
+	if s.listen != ":11019" || !s.locRIB || s.idle != 0 {
 		t.Fatalf("defaults: %+v", s)
 	}
-	s = newStation(t, "routers: [192.0.2.254]\npolicy: post\nloc_rib: false\nlisten: \"[::]:1790\"")
-	if !s.post || s.locRIB || s.listen != "[::]:1790" {
+	s = newStation(t, "routers: [192.0.2.254]\npolicy: post\nloc_rib: false\nlisten: \"[::]:1790\"\nidle_timeout: 90s")
+	if s.locRIB || s.listen != "[::]:1790" || s.idle != 90*time.Second {
 		t.Fatalf("explicit: %+v", s)
 	}
 }
@@ -77,7 +80,7 @@ func peer(a string, as uint32) plugin.RIBPeer {
 
 func decodeAll(t *testing.T, msgs [][]byte) ([]plugin.RIBEvent, bool) {
 	t.Helper()
-	d := newDecoder(router, false, true, quietLog)
+	d := newDecoder(router, true, quietLog)
 	var out []plugin.RIBEvent
 	for i, m := range msgs {
 		evs, stop := d.message(m)
@@ -111,7 +114,7 @@ func TestDecodeRecordedStream(t *testing.T) {
 		{plugin.RIBPaths, a, "+198.51.100.0/24 192.0.2.21 [64496 64500]"},
 		{plugin.RIBPaths, b, "+198.51.100.0/24 192.0.2.22 [64497 64497 64500];+203.0.113.0/24 192.0.2.22 [64497 64497 64500]"},
 		{plugin.RIBPaths, b, "+2001:db8:100::/48 2001:db8::22 [64497 64500]"},
-		// post-policy, Adj-RIB-Out, and the add-path peer produce nothing.
+		// pre-policy, Adj-RIB-Out, and the add-path peer produce nothing.
 		{plugin.RIBPaths, loc, "+198.51.100.0/24 192.0.2.21 [64496 64500]"},
 		{plugin.RIBPaths, b, "-203.0.113.0/24;-2001:db8:100::/48"},
 		{plugin.RIBPeerDown, b, ""}, // undecodable UPDATE
@@ -126,27 +129,45 @@ func TestDecodeRecordedStream(t *testing.T) {
 	}
 	for i, w := range wants {
 		e := evs[i]
+		if e.Kind == plugin.RIBPaths && e.PostPolicy == e.Peer.LocRIB {
+			t.Errorf("event %d: PostPolicy = %v for loc_rib=%v", i, e.PostPolicy, e.Peer.LocRIB)
+		}
 		if e.Kind != w.kind || e.Peer != w.peer || e.Router != router || fmtPaths(e.Paths) != w.paths {
 			t.Errorf("event %d: got %v %+v %q, want %v %+v %q", i, e.Kind, e.Peer, fmtPaths(e.Paths), w.kind, w.peer, w.paths)
 		}
 	}
 }
 
-func TestDecodePostPolicy(t *testing.T) {
-	d := newDecoder(router, true, false, quietLog)
-	var got []string
+func TestDecodeWithoutLocRIB(t *testing.T) {
+	d := newDecoder(router, false, quietLog)
 	for _, m := range recorded(t) {
 		evs, _ := d.message(m)
 		for _, e := range evs {
-			if e.Kind == plugin.RIBPaths {
-				got = append(got, fmtPaths(e.Paths))
+			if e.Peer.LocRIB {
+				t.Fatalf("loc_rib false still reported Loc-RIB: %+v", e)
+			}
+			if e.Kind == plugin.RIBPaths && slices.ContainsFunc(e.Paths, func(p plugin.RIBPath) bool {
+				return p.Prefix == netip.MustParsePrefix("192.0.2.0/25")
+			}) {
+				t.Fatalf("pre-policy route reported: %+v", e)
 			}
 		}
 	}
-	// Only the post-policy message; Loc-RIB is off.
-	if !slices.Equal(got, []string{"+192.0.2.0/25 192.0.2.21 [64496]"}) {
-		t.Fatalf("post-policy paths: %q", got)
+}
+
+// A silent router is dropped after idle_timeout, and its paths with it.
+func TestStationIdleTimeoutDropsRouter(t *testing.T) {
+	st, sk := startStation(t, "127.0.0.1")
+	st.idle = 200 * time.Millisecond
+	c := dial(t, st)
+	defer c.Close()
+	if _, err := c.Write(recorded(t)[1]); err != nil {
+		t.Fatal(err)
 	}
+	waitFor(t, "router down after idle", func() bool {
+		evs := sk.snapshot()
+		return len(evs) == 2 && evs[0].Kind == plugin.RIBPeerUp && evs[1].Kind == plugin.RIBRouterDown
+	})
 }
 
 func fmtPaths(ps []plugin.RIBPath) string {
@@ -370,7 +391,7 @@ func TestRecordedStreamIntoRIB(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	d := newDecoder(router, false, true, quietLog)
+	d := newDecoder(router, true, quietLog)
 	msgs := recorded(t)
 	replay := func(from, to int) {
 		for _, m := range msgs[from:to] {
@@ -383,7 +404,7 @@ func TestRecordedStreamIntoRIB(t *testing.T) {
 	p1 := netip.MustParsePrefix("198.51.100.0/24")
 	p2 := netip.MustParsePrefix("203.0.113.0/24")
 	p6 := netip.MustParsePrefix("2001:db8:100::/48")
-	never := netip.MustParsePrefix("192.0.2.0/25") // post-policy only
+	never := netip.MustParsePrefix("192.0.2.0/25") // pre-policy only
 
 	check := func(step string, p netip.Prefix, provider string, wantChecked, wantOK bool) {
 		t.Helper()
@@ -408,7 +429,7 @@ func TestRecordedStreamIntoRIB(t *testing.T) {
 		t.Fatalf("%s missing", p6)
 	}
 	if _, ok := v.Exact(never); ok {
-		t.Fatalf("%s came from post-policy and must be ignored", never)
+		t.Fatalf("%s came from pre-policy and must be ignored", never)
 	}
 	check("full", p1, "transit-b", true, true)
 	check("full", p1, "transit-a", true, true)
@@ -427,7 +448,9 @@ func TestRecordedStreamIntoRIB(t *testing.T) {
 	check("transit-b dropped", p1, "transit-b", false, false)
 
 	replay(withdrawn, len(msgs))
-	check("transit-a down", p1, "transit-a", true, true) // Loc-RIB still has it
+	// Loc-RIB still has it, but no router reports transit-a's session up,
+	// so the only provider fails its route check.
+	check("transit-a down", p1, "transit-a", true, false)
 	if rt, ok := v.Exact(p1); !ok || !rt.LocRIB {
 		t.Fatalf("after peer down %s: %+v %v", p1, rt, ok)
 	}
@@ -444,8 +467,8 @@ func TestRecordedStreamIntoRIB(t *testing.T) {
 // The decoder passes the peer's BGP ID and the path communities through,
 // so the RIB view can drop Packeteer's own session and tagged routes.
 func TestDecodeBGPIDAndCommunities(t *testing.T) {
-	d := newDecoder(router, false, true, quietLog)
-	self := peerHeader(t, gobmp.BMP_PEER_TYPE_GLOBAL, 0, "192.0.2.10", 64512, "192.0.2.10")
+	d := newDecoder(router, true, quietLog)
+	self := peerHeader(t, gobmp.BMP_PEER_TYPE_GLOBAL, gobmp.BMP_PEER_FLAG_POST_POLICY, "192.0.2.10", 64512, "192.0.2.10")
 	upd := v4Update("192.0.2.22", []uint32{64497}, "198.51.100.0/24")
 	body := upd.Body.(*bgp.BGPUpdate)
 	body.PathAttributes = append(body.PathAttributes, bgp.NewPathAttributeCommunities([]uint32{64512<<16 | 666, uint32(bgp.COMMUNITY_NO_EXPORT)}))

@@ -1122,9 +1122,31 @@ func newRIB(cfg *config.Config, log *slog.Logger) (*rib.View, error) {
 	if err != nil {
 		return nil, err
 	}
+	warnBMPSelfFilter(log, usage, own)
 	return rib.New(rib.Options{ASN: cfg.ASN, RouterID: rid, ListenPort: listen,
 		ListenAddresses: cfg.BGP.ListenAddresses, Neighbors: nbrs, Providers: providers, BMP: usage,
 		OwnCommunity: own, Logger: log})
+}
+
+// warnBMPSelfFilter warns at startup that, with BMP in use, Packeteer's own
+// routes are recognised in Loc-RIB (and in Adj-RIB-In reflected by another
+// router) only by packeteer_community. A router or route reflector that
+// strips it would let an injected route keep its prefix learned.
+func warnBMPSelfFilter(log *slog.Logger, usage map[string]string, own uint32) {
+	if log == nil {
+		return
+	}
+	for _, u := range usage {
+		if u != config.BMPPrefer && u != config.BMPOnly {
+			continue
+		}
+		if own == 0 {
+			log.Warn("bmp: packeteer_community is unset, so Packeteer's own routes reported over BMP Loc-RIB cannot be recognised; set it before mode: inject")
+			return
+		}
+		log.Warn("bmp: Packeteer's own routes are recognised over BMP by packeteer_community (and on its own session by BGP ID); make sure no import policy or route reflector on the monitored routers strips that community")
+		return
+	}
 }
 
 // ownCommunity turns packeteer_community ("asn:value") into asn<<16|value,

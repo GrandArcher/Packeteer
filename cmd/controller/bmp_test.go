@@ -1,7 +1,10 @@
 package main
 
 import (
+	"bytes"
+	"log/slog"
 	"net/netip"
+	"strings"
 	"testing"
 
 	"github.com/GrandArcher/Packeteer/internal/config"
@@ -67,7 +70,7 @@ func TestBMPWiringAndRouteCheck(t *testing.T) {
 	p := netip.MustParsePrefix("198.51.100.0/24")
 	sink(plugin.RIBEvent{Kind: plugin.RIBPeerUp, Router: edge, Peer: plugin.RIBPeer{Address: netip.MustParseAddr("192.0.2.22")}})
 	sink(plugin.RIBEvent{Kind: plugin.RIBPaths, Router: edge, Peer: plugin.RIBPeer{Address: netip.MustParseAddr("192.0.2.21")},
-		Paths: []plugin.RIBPath{{Prefix: p, NextHop: netip.MustParseAddr("192.0.2.21"), ASPath: []uint32{64496}}}})
+		Paths: []plugin.RIBPath{{Prefix: p, NextHop: netip.MustParseAddr("192.0.2.21"), ASPath: []uint32{64496}}}, PostPolicy: true})
 	if rt, ok := view.Exact(p); !ok || rt.Provider != "transit-a" {
 		t.Fatalf("BMP path not in the view: %+v %v", rt, ok)
 	}
@@ -79,6 +82,38 @@ func TestBMPWiringAndRouteCheck(t *testing.T) {
 	// is bmp off, so it is not checked.
 	if got := in.NoRoute[p]; len(got) != 1 || !got["transit-b"] {
 		t.Fatalf("NoRoute = %+v", in.NoRoute)
+	}
+}
+
+// A prefix a peer sent but the router's import policy rejected (seen only
+// pre-policy) must not pass the announcer's RIB gate, even while the iBGP
+// view is ready.
+func TestPrePolicyPrefixFailsAnnouncerGate(t *testing.T) {
+	cfg, err := config.Parse([]byte(bmpConfig))
+	if err != nil {
+		t.Fatal(err)
+	}
+	view, err := newRIB(cfg, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gate := ribGate{v: view}
+	edge := netip.MustParseAddr("192.0.2.254")
+	hijack := netip.MustParsePrefix("203.0.113.0/25")
+	for _, nh := range []string{"192.0.2.21", "192.0.2.22"} {
+		view.ApplyRIB(plugin.RIBEvent{Kind: plugin.RIBPaths, Router: edge, Peer: plugin.RIBPeer{Address: netip.MustParseAddr(nh)},
+			Paths: []plugin.RIBPath{{Prefix: hijack, NextHop: netip.MustParseAddr(nh), ASPath: []uint32{64499}}}})
+	}
+	if gate.Contains(hijack) {
+		t.Fatal("a pre-policy-only prefix passed ribGate.Contains")
+	}
+	if _, ok := gate.NextHop(hijack); ok {
+		t.Fatal("a pre-policy-only prefix has a next hop for inbound steers")
+	}
+	view.ApplyRIB(plugin.RIBEvent{Kind: plugin.RIBPaths, Router: edge, Peer: plugin.RIBPeer{Address: netip.MustParseAddr("192.0.2.21")},
+		Paths: []plugin.RIBPath{{Prefix: hijack, NextHop: netip.MustParseAddr("192.0.2.21"), ASPath: []uint32{64499}}}, PostPolicy: true})
+	if !gate.Contains(hijack) {
+		t.Fatal("a post-policy (router-accepted) path did not pass the gate")
 	}
 }
 
@@ -98,5 +133,23 @@ func TestOwnCommunity(t *testing.T) {
 	}
 	if _, err := ownCommunity("70000:1"); err == nil {
 		t.Fatal("out-of-range community accepted")
+	}
+}
+
+func TestWarnBMPSelfFilter(t *testing.T) {
+	var buf bytes.Buffer
+	log := slog.New(slog.NewTextHandler(&buf, nil))
+	warnBMPSelfFilter(log, map[string]string{"transit-a": config.BMPOff}, 0)
+	if buf.Len() != 0 {
+		t.Fatalf("warned with no provider on BMP: %s", buf.String())
+	}
+	warnBMPSelfFilter(log, map[string]string{"transit-a": config.BMPOnly}, 0)
+	if !strings.Contains(buf.String(), "packeteer_community is unset") {
+		t.Fatalf("no warning without packeteer_community: %s", buf.String())
+	}
+	buf.Reset()
+	warnBMPSelfFilter(log, map[string]string{"transit-a": config.BMPPrefer}, 64512<<16|666)
+	if !strings.Contains(buf.String(), "strips that community") {
+		t.Fatalf("no community-stripping warning: %s", buf.String())
 	}
 }

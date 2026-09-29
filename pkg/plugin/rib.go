@@ -19,8 +19,8 @@ const (
 	// RIBPeerDown: Router reports the session to Peer is down (or its data
 	// can no longer be trusted). Every path from that peer is dropped.
 	RIBPeerDown
-	// RIBPaths: announcements and withdrawals from Peer's Adj-RIB-In (or
-	// the router's Loc-RIB when Peer.LocRIB is set).
+	// RIBPaths: announcements and withdrawals from Peer's post-policy
+	// Adj-RIB-In (PostPolicy set) or the router's Loc-RIB (Peer.LocRIB).
 	RIBPaths
 )
 
@@ -58,6 +58,13 @@ type RIBEvent struct {
 	Router netip.Addr // the monitored edge router
 	Peer   RIBPeer    // unset for RIBRouterDown
 	Paths  []RIBPath  // RIBPaths only
+	// PostPolicy marks RIBPaths from a peer's Adj-RIB-In after the
+	// router's import policy: routes the router accepted. The RIB view
+	// ignores Adj-RIB-In paths without it. Pre-policy paths include routes
+	// the router rejects (bogons, RPKI invalid, a hijacked more-specific),
+	// and one of those must never make a prefix learned or pass a route
+	// check. Loc-RIB paths are the router's own selection and need no flag.
+	PostPolicy bool
 }
 
 // RIBSource feeds routes the edge routers learned into the RIB view. It is

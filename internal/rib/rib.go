@@ -9,10 +9,11 @@
 // its global export policy rejects everything, and graceful restart is never
 // enabled. It proposes a 90s hold time so a silent session still drops.
 //
-// A RIB source plugin (BMP, #26) can add the routers' pre-policy
-// Adj-RIB-In, including paths the router did not select (inactive IX
-// paths), and their Loc-RIB. Each provider's `bmp` usage decides whether
-// those paths count for it.
+// A RIB source plugin (BMP, #26) can add the routers' post-policy
+// Adj-RIB-In, including paths the router accepted but did not select
+// (inactive IX paths), and their Loc-RIB. Each provider's `bmp` usage
+// decides whether those paths count for it. Pre-policy paths never count:
+// only routes the router accepted can make a prefix learned.
 package rib
 
 import (
@@ -130,6 +131,7 @@ type View struct {
 	bmp       map[netip.Prefix]map[bmpKey]Route     // prefix -> router peer -> BMP path
 	bmpPeers  map[bmpKey]bool                       // peers a BMP session reports up
 	provNH    map[string]netip.Addr                 // provider -> next hop
+	anyBMP    bool                                  // some provider uses BMP (prefer or only)
 	peers     map[netip.Addr]PeerState
 	neighbors map[netip.Addr]bool
 	onChange  []func()
@@ -156,7 +158,9 @@ func New(opt Options) (*View, error) {
 	}
 	for name, u := range opt.BMP {
 		switch u {
-		case "", BMPOff, BMPPrefer, BMPOnly:
+		case "", BMPOff:
+		case BMPPrefer, BMPOnly:
+			v.anyBMP = true
 		default:
 			return nil, fmt.Errorf("rib: provider %s: bmp %q is invalid (want off, prefer, or only)", name, u)
 		}
@@ -498,11 +502,15 @@ type bmpKey struct {
 }
 
 // ApplyRIB takes one event from a RIB source plugin. It is safe to call
-// from any goroutine. A path is stored only when its provider's bmp usage
-// is prefer or only; a Loc-RIB path whose next hop matches no provider is
-// kept too, so the published native provider can be "none" rather than a
-// guess. A path is never announced by this; it only makes the prefix
-// part of the learned view.
+// from any goroutine. Only routes the router accepted are used: Loc-RIB
+// paths, and Adj-RIB-In paths marked PostPolicy. Pre-policy paths are
+// dropped here, so a route the router's import policy rejected can never
+// make a prefix learned (Exact, Routes, the announcer's gate) or pass a
+// route check. A path is stored only when its provider's bmp usage is
+// prefer or only. While some provider uses BMP, a Loc-RIB path whose next
+// hop matches no provider is kept too, so the published native provider
+// can be "none" rather than a guess. A path is never announced by this; it
+// only makes the prefix part of the learned view.
 func (v *View) ApplyRIB(ev plugin.RIBEvent) {
 	router := ev.Router.Unmap()
 	if !router.IsValid() {
@@ -543,6 +551,11 @@ func (v *View) ApplyRIB(ev plugin.RIBEvent) {
 			changed = true
 		}
 	case plugin.RIBPaths:
+		if !key.locRIB && !ev.PostPolicy {
+			v.mu.Unlock()
+			v.log.Debug("rib: ignoring pre-policy bmp paths", "router", router, "peer", key.peer)
+			return
+		}
 		if !v.bmpPeers[key] {
 			// Route monitoring implies the peer is up (RFC 7854 sends
 			// peer up first; a Loc-RIB may not).
@@ -584,7 +597,7 @@ func (v *View) applyBMPLocked(key bmpKey, peer plugin.RIBPeer, p plugin.RIBPath)
 	case BMPPrefer, BMPOnly:
 		keep = provider != ""
 	}
-	if provider == "" && key.locRIB {
+	if provider == "" && key.locRIB && v.anyBMP {
 		keep = true
 	}
 	if v.opt.OwnCommunity != 0 && slices.Contains(p.Communities, v.opt.OwnCommunity) {
@@ -669,40 +682,51 @@ func (v *View) pathsLocked(p netip.Prefix) []Route {
 // session reports the provider's BGP peer (its next_hop) up. With only, the
 // check always applies, so a lost BMP feed leaves the provider without
 // routes.
+//
+// A BMP path counts only on a router that reports the provider's BGP peer
+// up: that is the router the provider's session is on, so with several
+// edges a path through the provider that another router merely relays
+// (or still holds after its own session to the provider dropped) does not
+// pass. With prefer, the iBGP path through the provider counts too.
 func (v *View) RouteCheck(p netip.Prefix, provider string) (checked, ok bool) {
 	p = p.Masked()
 	v.mu.RLock()
 	defer v.mu.RUnlock()
+	on := v.coveringRoutersLocked(provider)
 	switch v.opt.BMP[provider] {
 	case BMPOnly:
 	case BMPPrefer:
-		if !v.coveredLocked(provider) {
+		if len(on) == 0 {
 			return false, false
 		}
 	default:
 		return false, false
 	}
 	for _, rt := range v.pathsLocked(p) {
-		if rt.Provider == provider {
+		if rt.Provider == provider && (rt.Source == SourceIBGP || on[rt.Router]) {
 			return true, true
 		}
 	}
 	return true, false
 }
 
-// coveredLocked reports whether a BMP session reports the provider's BGP
-// peer up. Caller holds mu.
-func (v *View) coveredLocked(provider string) bool {
+// coveringRoutersLocked lists the routers whose BMP session reports the
+// provider's BGP peer (its next_hop) up. Caller holds mu.
+func (v *View) coveringRoutersLocked(provider string) map[netip.Addr]bool {
 	nh, ok := v.provNH[provider]
 	if !ok {
-		return false
+		return nil
 	}
+	var out map[netip.Addr]bool
 	for k := range v.bmpPeers {
 		if !k.locRIB && k.peer == nh {
-			return true
+			if out == nil {
+				out = map[netip.Addr]bool{}
+			}
+			out[k.router] = true
 		}
 	}
-	return false
+	return out
 }
 
 // BMPPeer is one BGP peer a BMP session reports up.

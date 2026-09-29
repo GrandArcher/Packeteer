@@ -1,12 +1,16 @@
 // Package bmp is a BMP monitoring station (RFC 7854, Loc-RIB per RFC 9069).
-// Edge routers connect to it and stream their Adj-RIB-In, so Packeteer sees
-// every provider's paths, including ones the router did not select, without
-// a full iBGP feed. It is learn-only: it never sends BGP, never announces,
+// Edge routers connect to it and stream their post-policy Adj-RIB-In, so
+// Packeteer sees every provider's accepted paths, including ones the router
+// did not select, without a full iBGP feed. Pre-policy Adj-RIB-In is never
+// read: it holds routes the router's import policy rejects, and those must
+// not make a prefix learned. It is learn-only: it never sends BGP, never announces,
 // and only feeds the RIB view through the plugin.RIBSource sink.
 //
 // Only configured router addresses may connect. When a router's session
 // ends (TCP close, termination, a read error, or Stop) every path from that
-// router is dropped. A peer whose messages cannot be decoded, or that
+// router is dropped; so is a session that stays silent past idle_timeout,
+// and TCP keepalive notices a dead router within about keepAliveBound. A
+// peer whose messages cannot be decoded, or that
 // negotiated add-path (#26 follow-up), is treated as down and its paths are
 // dropped until the router sends a new peer up.
 package bmp
@@ -36,8 +40,15 @@ const (
 	// maxMessage bounds one BMP message: a 42-byte peer header plus a BGP
 	// extended message (RFC 8654) with room for peer up's two OPENs.
 	maxMessage = 1 << 18
-	// keepAlive probes a silent router so a dead one is noticed.
-	keepAlive = 30 * time.Second
+	// TCP keepalive: probe after keepAliveIdle of silence, every
+	// keepAliveInterval, and drop the session after keepAliveCount
+	// unanswered probes. A dead router is noticed within keepAliveBound.
+	keepAliveIdle     = 15 * time.Second
+	keepAliveInterval = 5 * time.Second
+	keepAliveCount    = 3
+	keepAliveBound    = keepAliveIdle + keepAliveCount*keepAliveInterval
+	// minIdleTimeout keeps idle_timeout above a sane statistics interval.
+	minIdleTimeout = 10 * time.Second
 )
 
 // Config is the plugin config.
@@ -46,19 +57,24 @@ type Config struct {
 	Listen string `yaml:"listen"`
 	// Routers lists the router addresses allowed to connect. Required.
 	Routers []string `yaml:"routers"`
-	// Policy is which Adj-RIB-In to read: pre (default) or post.
+	// Policy is which Adj-RIB-In to read. Only post (the default) is
+	// accepted: pre-policy paths include routes the router rejects.
 	Policy string `yaml:"policy"`
 	// LocRIB reads Loc-RIB (RFC 9069) messages as the router's selected
 	// path (default true).
 	LocRIB *bool `yaml:"loc_rib"`
+	// IdleTimeout drops a router's session (and its paths) when no BMP
+	// message arrives for this long. 0 (default) leaves it to TCP
+	// keepalive. Set it above the router's statistics interval.
+	IdleTimeout time.Duration `yaml:"idle_timeout"`
 }
 
 // Station is the plugin.
 type Station struct {
 	listen  string
 	routers map[netip.Addr]bool
-	post    bool
 	locRIB  bool
+	idle    time.Duration
 	log     *slog.Logger
 
 	mu    sync.Mutex
@@ -118,15 +134,19 @@ func New(c plugin.Config, env plugin.Env) (plugin.RIBSource, error) {
 		s.routers[a.Unmap()] = true
 	}
 	switch cfg.Policy {
-	case "", "pre":
-	case "post":
-		s.post = true
+	case "", "post":
+	case "pre":
+		return nil, errors.New("bmp: policy pre is not supported: pre-policy Adj-RIB-In includes routes the router's import policy rejects; use post (the default) and have the router send post-policy")
 	default:
-		return nil, fmt.Errorf("bmp: policy %q is invalid (want pre or post)", cfg.Policy)
+		return nil, fmt.Errorf("bmp: policy %q is invalid (want post)", cfg.Policy)
 	}
 	if cfg.LocRIB != nil {
 		s.locRIB = *cfg.LocRIB
 	}
+	if cfg.IdleTimeout < 0 || (cfg.IdleTimeout > 0 && cfg.IdleTimeout < minIdleTimeout) {
+		return nil, fmt.Errorf("bmp: idle_timeout %s: want 0 (off) or at least %s", cfg.IdleTimeout, minIdleTimeout)
+	}
+	s.idle = cfg.IdleTimeout
 	return s, nil
 }
 
@@ -203,8 +223,8 @@ func (s *Station) accept(ln net.Listener) {
 			continue
 		}
 		if tc, ok := conn.(*net.TCPConn); ok {
-			_ = tc.SetKeepAlive(true)
-			_ = tc.SetKeepAlivePeriod(keepAlive)
+			_ = tc.SetKeepAliveConfig(net.KeepAliveConfig{Enable: true, Idle: keepAliveIdle,
+				Interval: keepAliveInterval, Count: keepAliveCount})
 		}
 		s.mu.Lock()
 		if s.done {
@@ -251,8 +271,12 @@ func (s *Station) serve(router netip.Addr, sess *session) {
 	defer s.emit(plugin.RIBEvent{Kind: plugin.RIBRouterDown, Router: router})
 	defer sess.conn.Close()
 	s.log.Info("bmp session up", "router", router)
-	d := newDecoder(router, s.post, s.locRIB, s.log)
-	err := readMessages(sess.conn, func(msg []byte) error {
+	d := newDecoder(router, s.locRIB, s.log)
+	var r io.Reader = sess.conn
+	if s.idle > 0 {
+		r = &idleReader{conn: sess.conn, idle: s.idle}
+	}
+	err := readMessages(r, func(msg []byte) error {
 		evs, stop := d.message(msg)
 		for _, ev := range evs {
 			s.emit(ev)
@@ -267,6 +291,20 @@ func (s *Station) serve(router netip.Addr, sess *session) {
 		return
 	}
 	s.log.Info("bmp session down", "router", router)
+}
+
+// idleReader sets a read deadline before every read, so a session with no
+// traffic for idle ends with a timeout error.
+type idleReader struct {
+	conn net.Conn
+	idle time.Duration
+}
+
+func (r *idleReader) Read(b []byte) (int, error) {
+	if err := r.conn.SetReadDeadline(time.Now().Add(r.idle)); err != nil {
+		return 0, err
+	}
+	return r.conn.Read(b)
 }
 
 // readMessages reads whole BMP messages from r and hands each to fn. A bad
@@ -301,15 +339,14 @@ func readMessages(r io.Reader, fn func([]byte) error) error {
 // decoder turns one router's BMP messages into RIB events.
 type decoder struct {
 	router netip.Addr
-	post   bool
 	locRIB bool
 	log    *slog.Logger
 	// skip holds peers whose routes are ignored until the next peer up.
 	skip map[plugin.RIBPeer]string
 }
 
-func newDecoder(router netip.Addr, post, locRIB bool, log *slog.Logger) *decoder {
-	return &decoder{router: router, post: post, locRIB: locRIB, log: log, skip: map[plugin.RIBPeer]string{}}
+func newDecoder(router netip.Addr, locRIB bool, log *slog.Logger) *decoder {
+	return &decoder{router: router, locRIB: locRIB, log: log, skip: map[plugin.RIBPeer]string{}}
 }
 
 // message decodes one BMP message. stop is true on a termination message.
@@ -326,7 +363,7 @@ func (d *decoder) message(raw []byte) (evs []plugin.RIBEvent, stop bool) {
 	case gobmp.BMP_MSG_STATISTICS_REPORT, gobmp.BMP_MSG_ROUTE_MIRRORING:
 		return nil, false
 	}
-	peer, ok := d.peer(msg.PeerHeader)
+	peer, ok := d.peer(msg.PeerHeader, msg.Header.Type == gobmp.BMP_MSG_ROUTE_MONITORING)
 	if !ok {
 		d.log.Debug("bmp: skipping table", "router", d.router, "type", msg.Header.Type, "peer_type", msg.PeerHeader.PeerType, "flags", msg.PeerHeader.Flags)
 		return nil, false
@@ -366,6 +403,7 @@ func (d *decoder) message(raw []byte) (evs []plugin.RIBEvent, stop bool) {
 			return nil, false
 		}
 		ev.Kind = plugin.RIBPaths
+		ev.PostPolicy = !peer.LocRIB
 		ev.Paths = paths(upd)
 		d.log.Debug("bmp route monitoring", "router", d.router, "peer", peer.Address, "loc_rib", peer.LocRIB, "paths", len(ev.Paths))
 		if len(ev.Paths) == 0 {
@@ -395,7 +433,7 @@ func (d *decoder) undecodable(raw []byte, err error) []plugin.RIBEvent {
 	if h.DecodeFromBytes(raw[gobmp.BMP_HEADER_SIZE:]) != nil {
 		return nil
 	}
-	peer, ok := d.peer(h)
+	peer, ok := d.peer(h, raw[5] == gobmp.BMP_MSG_ROUTE_MONITORING)
 	if !ok {
 		return nil
 	}
@@ -405,11 +443,15 @@ func (d *decoder) undecodable(raw []byte, err error) []plugin.RIBEvent {
 }
 
 // peer maps a per-peer header to a RIBPeer, or false when this station
-// does not read that table (Adj-RIB-Out, the other policy side, L3VPN).
-func (d *decoder) peer(h gobmp.BMPPeerHeader) (plugin.RIBPeer, bool) {
+// does not read that table (pre-policy or Adj-RIB-Out routes, L3VPN).
+// Only route monitoring is filtered by the L and O flags: peer up and
+// peer down describe the session, and routers (FRR) send them with the
+// flags clear whichever table is monitored. A peer down must never be
+// missed, or that peer's paths would go stale.
+func (d *decoder) peer(h gobmp.BMPPeerHeader, routes bool) (plugin.RIBPeer, bool) {
 	switch h.PeerType {
 	case gobmp.BMP_PEER_TYPE_GLOBAL:
-		if h.IsAdjRIBOut() || h.IsPostPolicy() != d.post {
+		if routes && (h.IsAdjRIBOut() || !h.IsPostPolicy()) {
 			return plugin.RIBPeer{}, false
 		}
 		a, ok := netip.AddrFromSlice(h.PeerAddress)

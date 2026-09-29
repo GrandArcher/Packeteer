@@ -1,6 +1,6 @@
 #!/bin/bash
 # BMP monitoring station (#26) against a simulated FRR edge that streams BMP
-# (pre-policy Adj-RIB-In and Loc-RIB) to Packeteer, plus two simulated eBGP
+# (post-policy Adj-RIB-In and Loc-RIB) to Packeteer, plus two simulated eBGP
 # transits. Documentation prefixes and documentation/private ASNs only.
 #
 # Both transits send 198.51.100.0/24; transit-b prepends, so the edge keeps
@@ -181,7 +181,7 @@ for _ in $(seq 1 3); do
 done
 
 echo "5. BMP back: steer again, then SIGTERM withdraws"
-edge_bmp -c 'bmp targets packeteer' -c 'bmp monitor ipv4 unicast pre-policy' \
+edge_bmp -c 'bmp targets packeteer' -c 'bmp monitor ipv4 unicast post-policy' \
 	-c 'bmp monitor ipv4 unicast loc-rib' -c 'bmp connect 192.0.2.10 port 11019 min-retry 1000 max-retry 2000'
 wait_for "steer after BMP returns" 30 injected
 "${compose[@]}" kill -s SIGTERM packeteer

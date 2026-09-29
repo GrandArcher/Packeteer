@@ -15,7 +15,9 @@ import (
 )
 
 // The recorded stream is a synthetic edge (router 127.0.0.1 in the
-// station tests) with documentation prefixes and ASNs only:
+// station tests) with documentation prefixes and ASNs only. Routes are
+// post-policy Adj-RIB-In and Loc-RIB; one pre-policy and one Adj-RIB-Out
+// message must be ignored:
 //
 //	transit-a 192.0.2.21 AS 64496, transit-b 192.0.2.22 AS 64497,
 //	ix-peer   192.0.2.23 AS 64498 (negotiated add-path; must be ignored)
@@ -108,12 +110,18 @@ func corruptMonitoring(t *testing.T, ph *gobmp.BMPPeerHeader) []byte {
 // syntheticStream builds the recorded stream message by message.
 func syntheticStream(t *testing.T) [][]byte {
 	t.Helper()
-	pre := uint8(0)
-	a := peerHeader(t, gobmp.BMP_PEER_TYPE_GLOBAL, pre, "192.0.2.21", 64496, "192.0.2.21")
-	b := peerHeader(t, gobmp.BMP_PEER_TYPE_GLOBAL, pre, "192.0.2.22", 64497, "192.0.2.22")
-	ix := peerHeader(t, gobmp.BMP_PEER_TYPE_GLOBAL, pre, "192.0.2.23", 64498, "192.0.2.23")
-	aPost := peerHeader(t, gobmp.BMP_PEER_TYPE_GLOBAL, gobmp.BMP_PEER_FLAG_POST_POLICY, "192.0.2.21", 64496, "192.0.2.21")
-	aOut := peerHeader(t, gobmp.BMP_PEER_TYPE_GLOBAL, gobmp.BMP_PEER_FLAG_ADJ_RIB_TYP, "192.0.2.21", 64496, "192.0.2.21")
+	// Peer up and peer down carry clear flags, as FRR sends them; route
+	// monitoring is post-policy. aPre (pre-policy) and aOut (Adj-RIB-Out)
+	// routes must be ignored.
+	post := uint8(gobmp.BMP_PEER_FLAG_POST_POLICY)
+	aUp := peerHeader(t, gobmp.BMP_PEER_TYPE_GLOBAL, 0, "192.0.2.21", 64496, "192.0.2.21")
+	bUp := peerHeader(t, gobmp.BMP_PEER_TYPE_GLOBAL, 0, "192.0.2.22", 64497, "192.0.2.22")
+	ixUp := peerHeader(t, gobmp.BMP_PEER_TYPE_GLOBAL, 0, "192.0.2.23", 64498, "192.0.2.23")
+	a := peerHeader(t, gobmp.BMP_PEER_TYPE_GLOBAL, post, "192.0.2.21", 64496, "192.0.2.21")
+	b := peerHeader(t, gobmp.BMP_PEER_TYPE_GLOBAL, post, "192.0.2.22", 64497, "192.0.2.22")
+	ix := peerHeader(t, gobmp.BMP_PEER_TYPE_GLOBAL, post, "192.0.2.23", 64498, "192.0.2.23")
+	aPre := peerHeader(t, gobmp.BMP_PEER_TYPE_GLOBAL, 0, "192.0.2.21", 64496, "192.0.2.21")
+	aOut := peerHeader(t, gobmp.BMP_PEER_TYPE_GLOBAL, gobmp.BMP_PEER_FLAG_ADJ_RIB_TYP|post, "192.0.2.21", 64496, "192.0.2.21")
 	loc := peerHeader(t, gobmp.BMP_PEER_TYPE_LOCAL_RIB, 0, "0.0.0.0", 64512, "192.0.2.254")
 	local := open(64512, "192.0.2.254", false)
 
@@ -128,22 +136,22 @@ func syntheticStream(t *testing.T) [][]byte {
 
 	return [][]byte{
 		/* 0 */ ser(t, gobmp.NewBMPInitiation([]gobmp.BMPInfoTLVInterface{gobmp.NewBMPInfoTLVString(gobmp.BMP_INIT_TLV_TYPE_SYS_NAME, "edge")})),
-		/* 1 */ ser(t, gobmp.NewBMPPeerUpNotification(*a, "192.0.2.254", 179, 40001, local, open(64496, "192.0.2.21", false))),
-		/* 2 */ ser(t, gobmp.NewBMPPeerUpNotification(*b, "192.0.2.254", 179, 40002, local, open(64497, "192.0.2.22", false))),
-		/* 3 */ ser(t, gobmp.NewBMPPeerUpNotification(*ix, "192.0.2.254", 179, 40003, open(64512, "192.0.2.254", true), open(64498, "192.0.2.23", true))),
+		/* 1 */ ser(t, gobmp.NewBMPPeerUpNotification(*aUp, "192.0.2.254", 179, 40001, local, open(64496, "192.0.2.21", false))),
+		/* 2 */ ser(t, gobmp.NewBMPPeerUpNotification(*bUp, "192.0.2.254", 179, 40002, local, open(64497, "192.0.2.22", false))),
+		/* 3 */ ser(t, gobmp.NewBMPPeerUpNotification(*ixUp, "192.0.2.254", 179, 40003, open(64512, "192.0.2.254", true), open(64498, "192.0.2.23", true))),
 		/* 4 */ ser(t, gobmp.NewBMPRouteMonitoring(*a, v4Update("192.0.2.21", []uint32{64496, 64500}, "198.51.100.0/24"))),
 		// transit-b's path is inactive on the router (longer AS path).
 		/* 5 */ ser(t, gobmp.NewBMPRouteMonitoring(*b, v4Update("192.0.2.22", []uint32{64497, 64497, 64500}, "198.51.100.0/24", "203.0.113.0/24"))),
 		/* 6 */ ser(t, gobmp.NewBMPRouteMonitoring(*b, v6)),
-		/* 7 */ ser(t, gobmp.NewBMPRouteMonitoring(*aPost, v4Update("192.0.2.21", []uint32{64496}, "192.0.2.0/25"))),
+		/* 7 */ ser(t, gobmp.NewBMPRouteMonitoring(*aPre, v4Update("192.0.2.21", []uint32{64496}, "192.0.2.0/25"))),
 		/* 8 */ ser(t, gobmp.NewBMPRouteMonitoring(*aOut, v4Update("192.0.2.254", []uint32{64512}, "192.0.2.128/25"))),
 		/* 9 */ ser(t, gobmp.NewBMPRouteMonitoring(*ix, v4Update("192.0.2.23", []uint32{64498}, "198.51.100.0/24"))),
 		/* 10 */ ser(t, gobmp.NewBMPRouteMonitoring(*loc, v4Update("192.0.2.21", []uint32{64496, 64500}, "198.51.100.0/24"))),
-		/* 11 */ ser(t, gobmp.NewBMPStatisticsReport(*a, []gobmp.BMPStatsTLVInterface{gobmp.NewBMPStatsTLV32(0, 1)})),
+		/* 11 */ ser(t, gobmp.NewBMPStatisticsReport(*aUp, []gobmp.BMPStatsTLVInterface{gobmp.NewBMPStatsTLV32(0, 1)})),
 		/* 12 */ ser(t, gobmp.NewBMPRouteMonitoring(*b, unreach)),
 		/* 13 */ corruptMonitoring(t, b),
 		/* 14 */ ser(t, gobmp.NewBMPRouteMonitoring(*b, v4Update("192.0.2.22", []uint32{64497}, "198.51.100.0/24"))),
-		/* 15 */ ser(t, gobmp.NewBMPPeerDownNotification(*a, gobmp.BMP_PEER_DOWN_REASON_REMOTE_NO_NOTIFICATION, nil, nil)),
+		/* 15 */ ser(t, gobmp.NewBMPPeerDownNotification(*aUp, gobmp.BMP_PEER_DOWN_REASON_REMOTE_NO_NOTIFICATION, nil, nil)),
 		/* 16 */ ser(t, gobmp.NewBMPTermination([]gobmp.BMPTermTLVInterface{gobmp.NewBMPTermTLV16(gobmp.BMP_TERM_TLV_TYPE_REASON, gobmp.BMP_TERM_REASON_ADMIN)})),
 	}
 }

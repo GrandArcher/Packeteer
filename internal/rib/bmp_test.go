@@ -30,8 +30,9 @@ func bmpView(t *testing.T, usage map[string]string) *View {
 	return v
 }
 
+// paths is a post-policy route monitoring event: routes the router accepted.
 func paths(router, peer netip.Addr, ps ...plugin.RIBPath) plugin.RIBEvent {
-	return plugin.RIBEvent{Kind: plugin.RIBPaths, Router: router, Peer: plugin.RIBPeer{Address: peer}, Paths: ps}
+	return plugin.RIBEvent{Kind: plugin.RIBPaths, Router: router, Peer: plugin.RIBPeer{Address: peer}, Paths: ps, PostPolicy: true}
 }
 
 func announce(p netip.Prefix, nh netip.Addr, as ...uint32) plugin.RIBPath {
@@ -191,7 +192,7 @@ func TestBMPIgnoresPacketeerOwnRoutes(t *testing.T) {
 	self := plugin.RIBPeer{Address: netip.MustParseAddr("192.0.2.10"), BGPID: netip.MustParseAddr("192.0.2.10")}
 	v.ApplyRIB(plugin.RIBEvent{Kind: plugin.RIBPeerUp, Router: edge, Peer: self})
 	v.ApplyRIB(plugin.RIBEvent{Kind: plugin.RIBPaths, Router: edge, Peer: self,
-		Paths: []plugin.RIBPath{announce(lab, transitB, 64497)}})
+		Paths: []plugin.RIBPath{announce(lab, transitB, 64497)}, PostPolicy: true})
 	if _, ok := v.Exact(lab); ok {
 		t.Fatal("a path on Packeteer's own session (BGP ID = router_id) made the prefix learned")
 	}
@@ -222,5 +223,77 @@ func TestBMPIgnoresPacketeerOwnRoutes(t *testing.T) {
 	v.ApplyRIB(paths(edge, transitB, plugin.RIBPath{Prefix: lab, Withdraw: true}))
 	if _, ok := v.Exact(lab); ok {
 		t.Fatal("prefix still learned after the only real path was withdrawn")
+	}
+}
+
+// Pre-policy Adj-RIB-In holds routes the router's import policy rejects
+// (bogons, RPKI invalid, a hijacked more-specific). One of those must never
+// make a prefix learned, appear in Routes, or pass a route check.
+func TestBMPPrePolicyPathsNeverCount(t *testing.T) {
+	v := bmpView(t, map[string]string{"transit-a": BMPOnly, "transit-b": BMPPrefer})
+	v.ApplyRIB(plugin.RIBEvent{Kind: plugin.RIBPeerUp, Router: edge, Peer: plugin.RIBPeer{Address: transitB}})
+	g := v.Generation()
+	pre := paths(edge, transitA, announce(lab, transitA, 64496))
+	pre.PostPolicy = false
+	v.ApplyRIB(pre)
+	pre = paths(edge, transitB, announce(lab, transitB, 64497))
+	pre.PostPolicy = false
+	v.ApplyRIB(pre)
+	if _, ok := v.Exact(lab); ok {
+		t.Fatal("a pre-policy path made the prefix learned")
+	}
+	if rs := v.Routes(); len(rs) != 0 {
+		t.Fatalf("pre-policy paths in Routes: %+v", rs)
+	}
+	if ps := v.Paths(lab); len(ps) != 0 {
+		t.Fatalf("pre-policy paths stored: %+v", ps)
+	}
+	for _, prov := range []string{"transit-a", "transit-b"} {
+		if c, ok := v.RouteCheck(lab, prov); !c || ok {
+			t.Fatalf("%s: pre-policy path passed the route check: checked=%v ok=%v", prov, c, ok)
+		}
+	}
+	if v.Generation() != g {
+		t.Fatal("pre-policy paths changed the view")
+	}
+	// The same route after the router accepts it counts.
+	v.ApplyRIB(paths(edge, transitA, announce(lab, transitA, 64496)))
+	if _, ok := v.Exact(lab); !ok {
+		t.Fatal("post-policy path not learned")
+	}
+}
+
+// Setting rib_sources with every provider off leaves the view as it was:
+// even a Loc-RIB path with no provider is ignored.
+func TestBMPAllOffIgnoresLocRIB(t *testing.T) {
+	v := bmpView(t, map[string]string{"transit-a": BMPOff})
+	v.ApplyRIB(plugin.RIBEvent{Kind: plugin.RIBPaths, Router: edge, Peer: plugin.RIBPeer{LocRIB: true},
+		Paths: []plugin.RIBPath{announce(lab, netip.MustParseAddr("192.0.2.99"), 64499)}})
+	if rt, ok := v.Exact(lab); ok {
+		t.Fatalf("Loc-RIB path counted with every provider off: %+v", rt)
+	}
+}
+
+// With several edges, a provider's path counts for its route check only on
+// a router that reports the provider's BGP peer up. A path through the
+// provider on another router (relayed over iBGP there, or left behind) does
+// not pass.
+func TestBMPRouteCheckPerRouter(t *testing.T) {
+	v := bmpView(t, map[string]string{"transit-b": BMPPrefer})
+	v.ApplyRIB(plugin.RIBEvent{Kind: plugin.RIBPeerUp, Router: edge, Peer: plugin.RIBPeer{Address: transitB}})
+	// edge2 has transit-b's path from its iBGP peer edge.
+	v.ApplyRIB(paths(edge2, edge, announce(lab, transitB, 64497)))
+	if c, ok := v.RouteCheck(lab, "transit-b"); !c || ok {
+		t.Fatalf("path on another router passed: checked=%v ok=%v", c, ok)
+	}
+	v.ApplyRIB(paths(edge, transitB, announce(lab, transitB, 64497)))
+	if c, ok := v.RouteCheck(lab, "transit-b"); !c || !ok {
+		t.Fatalf("path on the provider's router: checked=%v ok=%v", c, ok)
+	}
+	// edge loses the transit-b session: edge2's copy does not keep the
+	// check passing, and prefer falls back to no check.
+	v.ApplyRIB(plugin.RIBEvent{Kind: plugin.RIBPeerDown, Router: edge, Peer: plugin.RIBPeer{Address: transitB}})
+	if c, _ := v.RouteCheck(lab, "transit-b"); c {
+		t.Fatal("prefer still checked with no router reporting transit-b up")
 	}
 }

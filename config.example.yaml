@@ -163,8 +163,8 @@ scorer:
 # announcer:
 #   type: gobgp
 
-# BMP monitoring station (RIB source). Edge routers stream their pre-policy
-# Adj-RIB-In here, so Packeteer sees inactive IX and backup paths without a
+# BMP monitoring station (RIB source). Edge routers stream their post-policy
+# Adj-RIB-In (routes they accepted) here, so Packeteer sees inactive IX and backup paths without a
 # full iBGP feed. Needs bgp.neighbors (the announcer uses that session).
 # Providers opt in with `bmp: prefer` or `bmp: only`; those get a route
 # check: no improvement onto a provider that is not advertising the exact
@@ -176,8 +176,9 @@ scorer:
 #     config:
 #       listen: ":11019"
 #       routers: [192.0.2.254]
-#       policy: pre             # or post
+#       policy: post            # the only accepted value; pre-policy routes are refused
 #       loc_rib: true
+#       idle_timeout: 0         # e.g. 90s, above the router's BMP stats interval; 0 = TCP keepalive only
 
 # Process log. level: debug, info, warn, or error.
 # format: text or json. PACKETEER_LOG_LEVEL and PACKETEER_LOG_FORMAT override these.
