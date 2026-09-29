@@ -18,6 +18,7 @@ import (
 	"github.com/GrandArcher/Packeteer/internal/plugins/prober/icmp"
 	"github.com/GrandArcher/Packeteer/internal/plugins/prober/tcp"
 	"github.com/GrandArcher/Packeteer/internal/plugins/prober/udp"
+	"github.com/GrandArcher/Packeteer/internal/plugins/ribsource/bmp"
 	"github.com/GrandArcher/Packeteer/internal/plugins/scorer/commit"
 	"github.com/GrandArcher/Packeteer/internal/plugins/scorer/cost"
 	"github.com/GrandArcher/Packeteer/internal/plugins/scorer/weighted"
@@ -78,6 +79,7 @@ func TestConfigDocCoversStructs(t *testing.T) {
 		maintenance.Window{},
 		sqlite.Config{},
 		rdap.Config{},
+		bmp.Config{},
 	) {
 		if !strings.Contains(text, "`"+key+"`") {
 			missing = append(missing, key)

@@ -81,6 +81,9 @@ type Config struct {
 
 	// BGP holds the iBGP sessions to the edge routers (RIB view, #6).
 	BGP BGP `yaml:"bgp"`
+	// RIBSources feed the RIB view from outside the iBGP session (a BMP
+	// station, #26). Learn-only: they never announce.
+	RIBSources []PluginSpec `yaml:"rib_sources"`
 
 	// Plugins. Each entry selects an implementation by type; see
 	// docs/PLUGINS.md. Plugin-specific settings live under `config` and are
@@ -288,6 +291,13 @@ func (p PluginSpec) InstanceName() string {
 // DefaultImprovementTTL is how long an improvement lives before re-evaluation.
 const DefaultImprovementTTL = time.Hour
 
+// Provider bmp usage (rib_sources, #26).
+const (
+	BMPOff    = "off"
+	BMPPrefer = "prefer"
+	BMPOnly   = "only"
+)
+
 // DefaultPluginDir is where out-of-process plugins are looked up.
 const DefaultPluginDir = "/etc/packeteer/plugins"
 
@@ -319,6 +329,9 @@ type Provider struct {
 	// every provider uses the same one. Nil means no cost: the cost scorer
 	// never moves traffic onto this provider or off it for price.
 	Cost *float64 `yaml:"cost"`
+	// BMP is how this provider uses paths from rib_sources (BMP, #26):
+	// off (default), prefer, or only.
+	BMP string `yaml:"bmp"`
 }
 
 // Allowlist restricts which prefixes may ever be injected.
@@ -573,6 +586,15 @@ func (c *Config) Validate() error {
 		if p.Cost != nil && (math.IsNaN(*p.Cost) || *p.Cost < 0 || *p.Cost > 1e9) {
 			add("%s: cost %v must be between 0 and 1000000000", label, *p.Cost)
 		}
+		switch p.BMP {
+		case "", BMPOff:
+		case BMPPrefer, BMPOnly:
+			if len(c.RIBSources) == 0 {
+				add("%s: bmp %s requires a rib_sources entry", label, p.BMP)
+			}
+		default:
+			add("%s: bmp %q is invalid (want off, prefer, or only)", label, p.BMP)
+		}
 	}
 
 	seen := map[netip.Prefix]bool{}
@@ -663,6 +685,10 @@ func (c *Config) Validate() error {
 	validateSpecs("notifiers", c.Notifiers)
 	validateSpecs("telemetry", c.Telemetry)
 	validateSpecs("policies", c.Policies)
+	validateSpecs("rib_sources", c.RIBSources)
+	if len(c.RIBSources) > 0 && len(c.BGP.Neighbors) == 0 {
+		add("rib_sources requires at least one bgp.neighbors entry (the RIB view and the announcer use the iBGP session)")
+	}
 	if c.Scorer != nil && c.Scorer.Type == "cost" {
 		priced := 0
 		for _, p := range c.Providers {
@@ -869,6 +895,9 @@ func coveredBy(list []netip.Prefix, p netip.Prefix) bool {
 func (c *Config) normalize() {
 	c.Log.Level = strings.ToLower(strings.TrimSpace(c.Log.Level))
 	c.Log.Format = strings.ToLower(strings.TrimSpace(c.Log.Format))
+	for i := range c.Providers {
+		c.Providers[i].BMP = strings.ToLower(strings.TrimSpace(c.Providers[i].BMP))
+	}
 	if c.Inbound != nil {
 		c.Inbound.Mode = strings.ToLower(strings.TrimSpace(c.Inbound.Mode))
 		for i, t := range c.Inbound.Moderated {

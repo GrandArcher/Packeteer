@@ -117,8 +117,8 @@ Routing policies (#20) are `policy` plugins, a filter chain in front of the scor
 | RIB view from iBGP (learn current best exits) | 2.9 Bgpd | done | v0.1 | core (`internal/rib`) | #6 |
 | BGP session health and withdraw when a still-advertised prefix leaves the RIB (a best-path hide is kept, not flapped) | 2.9 | done | v0.1 | announcer | #8, #43 |
 | AS-path behavior options | 2.9.1 | planned | v0.3 | announcer | #27 |
-| BGP additional paths (add-path) | 2.9.3 | planned | v0.3 | RIB source | #26 |
-| BMP monitoring (incl. inactive IX paths) | 1.2.5, 2.10 | planned | v0.3 | RIB source (`bmp`) | #26 |
+| BGP additional paths (add-path) on the iBGP session and in BMP | 2.9.3 | planned | v0.3 | RIB source | #26 |
+| BMP monitoring (post-policy Adj-RIB-In and Loc-RIB, incl. inactive IX paths), per-provider `bmp` usage (off/prefer/only), route check before injecting | 1.2.5, 2.10 | done (lab-proven) | v0.3 | RIB source (`bmp`) | #26 |
 | Multiple edge routers | 1.2.2 | planned | v0.3 | announcer | #27 |
 | Centralized route reflector support | 1.2.10 | planned | v0.3 | announcer | #27 |
 | Internet exchanges / many peers with per-peer next-hop | 1.2.11, 3.4.6 | planned | v0.3 | announcer + RIB | #27 |

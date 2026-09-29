@@ -25,6 +25,7 @@ providers:
     # precedence: 100         # lower is preferred; 0 or omitted means 100
     # cc_disable: false       # true: leave this provider out of commit control
     # cost: 5                 # price per Mbps; the cost scorer only moves between priced providers
+    # bmp: prefer             # off (default), prefer, or only: use this provider's BMP paths (rib_sources)
 
 allowlist:
   prefixes: []
@@ -161,6 +162,23 @@ scorer:
 # local_pref: 250
 # announcer:
 #   type: gobgp
+
+# BMP monitoring station (RIB source). Edge routers stream their post-policy
+# Adj-RIB-In (routes they accepted) here, so Packeteer sees inactive IX and backup paths without a
+# full iBGP feed. Needs bgp.neighbors (the announcer uses that session).
+# Providers opt in with `bmp: prefer` or `bmp: only`; those get a route
+# check: no improvement onto a provider that is not advertising the exact
+# prefix, and an active one is retired when it withdraws. Learn-only; never
+# announces. With --network host the port is a host port: firewall it to
+# the routers. Docs: docs/CONFIG.md ("RIB source bmp").
+# rib_sources:
+#   - type: bmp
+#     config:
+#       listen: ":11019"
+#       routers: [192.0.2.254]
+#       policy: post            # the only accepted value; pre-policy routes are refused
+#       loc_rib: true
+#       idle_timeout: 0         # e.g. 90s, above the router's BMP stats interval; 0 = TCP keepalive only
 
 # Process log. level: debug, info, warn, or error.
 # format: text or json. PACKETEER_LOG_LEVEL and PACKETEER_LOG_FORMAT override these.

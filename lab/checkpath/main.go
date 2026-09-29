@@ -5,6 +5,8 @@
 //
 //	checkpath -aspath "64512 64512 64512" -has 64496:3 -lacks 64512: -lacks no-export
 //
+// -aspath may be left out when -has is given (a locally originated path,
+// such as Packeteer's injected route on the edge, has an empty AS path).
 // -has needs an exact community. -lacks rejects any community that starts
 // with the value. -absent instead passes only when the prefix has no path
 // (a selective announcement withheld it from this session). The exit status is 0 when the best path matches, 1 when it
@@ -42,8 +44,8 @@ func main() {
 	fs.StringVar(&w.ASPath, "aspath", "", "exact AS path string of the best path")
 	fs.Var(&has, "has", "community the best path must carry (repeatable)")
 	fs.Var(&lacks, "lacks", "community prefix the best path must not carry (repeatable)")
-	if err := fs.Parse(os.Args[1:]); err != nil || (w.ASPath == "") == !w.Absent {
-		fmt.Fprintln(os.Stderr, "usage: checkpath -aspath PATH [-has C]... [-lacks PREFIX]... | checkpath -absent")
+	if err := fs.Parse(os.Args[1:]); err != nil || (w.ASPath == "" && len(has) == 0) == !w.Absent {
+		fmt.Fprintln(os.Stderr, "usage: checkpath [-aspath PATH] [-has C]... [-lacks PREFIX]... | checkpath -absent")
 		os.Exit(2)
 	}
 	w.Has, w.Lacks = has, lacks
@@ -120,7 +122,7 @@ func Check(raw string, w Want) error {
 		best = 0
 	}
 	p := doc.Paths[best]
-	if got := strings.TrimSpace(p.ASPath.String); got != w.ASPath {
+	if got := strings.TrimSpace(p.ASPath.String); w.ASPath != "" && got != w.ASPath {
 		return fmt.Errorf("as path %q, want %q", got, w.ASPath)
 	}
 	var comms []string

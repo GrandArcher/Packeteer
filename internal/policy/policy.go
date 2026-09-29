@@ -92,6 +92,11 @@ type Input struct {
 	// Maintenance lists providers inside an open maintenance window. They
 	// are excluded for this evaluation.
 	Maintenance []string
+	// NoRoute lists, per prefix, providers the route check (bmp prefer or
+	// only, #26) found without a path for that exact prefix. They are not
+	// usable for it: no new improvement goes there, and an active one is
+	// retired. The native provider is never marked.
+	NoRoute map[netip.Prefix]map[string]bool
 }
 
 // Improvement is an active (or, outside inject mode, recommended) steer.
@@ -201,6 +206,15 @@ type Output struct {
 	Changes   []Change
 }
 
+// nativeOf is the native provider of p: the one recorded on an active
+// improvement, else the RIB's.
+func nativeOf(st State, in Input, p netip.Prefix) string {
+	if imp, ok := st.Improvements[p]; ok {
+		return imp.Native
+	}
+	return in.Native[p]
+}
+
 // Decide runs one evaluation.
 func Decide(prev State, in Input, cfg Config, scorer plugin.Scorer, now time.Time) (State, Output) {
 	st := prev.clone()
@@ -255,6 +269,8 @@ func Decide(prev State, in Input, cfg Config, scorer plugin.Scorer, now time.Tim
 			c.Usable, c.Why = false, "stale"
 		case r.Stats.Sent == 0:
 			c.Usable, c.Why = false, "no packets sent"
+		case in.NoRoute[r.Prefix][r.Provider] && r.Provider != nativeOf(st, in, r.Prefix):
+			c.Usable, c.Why = false, "no route via provider (bmp)"
 		}
 		if c.Usable {
 			c.Score = scorer.Score(plugin.PathStats{Provider: r.Provider, LossPct: c.LossPct, RTTAvg: c.RTTAvg, Jitter: c.Jitter})
