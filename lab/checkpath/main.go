@@ -180,9 +180,18 @@ var wellKnown = map[string]string{
 	"65535:666":   "blackhole",
 }
 
+// aliases are other spellings FRR uses in JSON (noExport).
+var aliases = map[string]string{
+	"noexport":    "no-export",
+	"noadvertise": "no-advertise",
+}
+
 func canonical(c string) string {
 	c = strings.ToLower(c)
 	if name, ok := wellKnown[c]; ok {
+		return name
+	}
+	if name, ok := aliases[c]; ok {
 		return name
 	}
 	return c
