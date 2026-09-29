@@ -105,6 +105,7 @@ func TestExchangeErrors(t *testing.T) {
 		"no peers":     {exchangeYAML[:strings.Index(exchangeYAML, "    peers:")] + "bgp:\n  neighbors:\n    - address: 192.0.2.254\n      add_path: true\n", "peers: at least one"},
 		"no name":      {edit(t, exchangeYAML, "  - name: ix-lab\n    lans:", "  - lans:"), "exchanges[0]: name is required"},
 		"name clash":   {edit(t, exchangeYAML, "name: ix-lab", "name: transit-a"), "name is also a provider name"},
+		"own peer":     {edit(t, exchangeYAML, "name: ix-peer-b", "name: ix-lab"), "name is also a provider name"},
 		"peer clash":   {edit(t, exchangeYAML, "name: ix-peer-b", "name: transit-a"), "duplicate provider name"},
 		"source clash": {edit(t, exchangeYAML, "source_ip: 192.0.2.32", "source_ip: 192.0.2.11"), "duplicate source_ip"},
 		"no paths":     {edit(t, exchangeYAML, "      add_path: true\n", ""), "peers need their paths visible"},

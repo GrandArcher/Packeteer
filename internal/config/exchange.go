@@ -70,11 +70,10 @@ func (c *Config) validateExchanges(add func(string, ...any)) {
 		add("exchanges require bgp.neighbors (a peer is used only while the router shows its path for the prefix)")
 	}
 	addPath := slices.ContainsFunc(c.BGP.Neighbors, func(n BGPNeighbor) bool { return n.AddPath })
+	// Peers included: a neighbor list naming both would be ambiguous.
 	own := map[string]bool{}
 	for _, p := range c.Providers {
-		if p.Exchange == "" {
-			own[p.Name] = true
-		}
+		own[p.Name] = true
 	}
 	names := map[string]bool{}
 	for i, ex := range c.Exchanges {
