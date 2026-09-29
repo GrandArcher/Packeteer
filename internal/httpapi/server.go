@@ -1,9 +1,11 @@
 // Package httpapi is Packeteer's ops surface: health, Prometheus metrics, a
 // JSON API, history reports (JSON and CSV), read-only troubleshooting tools
 // (looking glass, on-demand probe, traceroute, whois), and an embedded
-// dashboard. It does not announce routes. The only write is opening or
-// closing an on-demand maintenance window, which can only exclude
-// providers, and it requires basic auth.
+// dashboard. It does not announce routes itself. The writes are opening
+// or closing an on-demand maintenance window, which can only exclude
+// providers, and adding or removing a threat mitigation rule (#28), which
+// the mitigation controller checks and announces only in inject. Both
+// require basic auth.
 package httpapi
 
 import (
@@ -40,23 +42,27 @@ type Options struct {
 	Tools *troubleshoot.Tools
 	// Inbound reads inbound commit control. Nil means it is not configured.
 	Inbound func() inbound.Status
+	// Mitigation is threat mitigation (#28). Nil means it is not
+	// configured.
+	Mitigation MitigationControl
 }
 
 // Server is an HTTP server. Handler serves the routes without listening,
 // which is what tests use. Start binds Addr.
 type Server struct {
-	addr     string
-	user     string
-	password string
-	snap     func() Snapshot
-	maint    MaintenanceControl
-	reports  ReportSource
-	tools    *troubleshoot.Tools
-	inbound  func() inbound.Status
-	log      *slog.Logger
-	handler  http.Handler
-	http     *http.Server
-	ln       net.Listener
+	addr       string
+	user       string
+	password   string
+	snap       func() Snapshot
+	maint      MaintenanceControl
+	reports    ReportSource
+	tools      *troubleshoot.Tools
+	inbound    func() inbound.Status
+	mitigation MitigationControl
+	log        *slog.Logger
+	handler    http.Handler
+	http       *http.Server
+	ln         net.Listener
 }
 
 // New validates auth and builds the handler. It does not listen.
@@ -67,7 +73,7 @@ func New(opt Options) (*Server, error) {
 	if opt.Logger == nil {
 		opt.Logger = slog.Default()
 	}
-	s := &Server{addr: opt.Addr, user: opt.User, password: opt.Password, snap: opt.Snapshot, maint: opt.Maintenance, reports: opt.Reports, tools: opt.Tools, inbound: opt.Inbound, log: opt.Logger}
+	s := &Server{addr: opt.Addr, user: opt.User, password: opt.Password, snap: opt.Snapshot, maint: opt.Maintenance, reports: opt.Reports, tools: opt.Tools, inbound: opt.Inbound, mitigation: opt.Mitigation, log: opt.Logger}
 	s.handler = s.routes()
 	return s, nil
 }
@@ -143,6 +149,9 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("GET /api/maintenance", s.handleMaintenance)
 	mux.HandleFunc("POST /api/maintenance", s.handleMaintenanceOpen)
 	mux.HandleFunc("DELETE /api/maintenance/{id}", s.handleMaintenanceClose)
+	mux.HandleFunc("GET /api/mitigations", s.handleMitigations)
+	mux.HandleFunc("POST /api/mitigations", s.handleMitigationAdd)
+	mux.HandleFunc("DELETE /api/mitigations/{id}", s.handleMitigationRemove)
 	mux.HandleFunc("GET /api/troubleshoot", s.handleToolStatus)
 	mux.HandleFunc("GET /api/troubleshoot/lookingglass", s.handleLookingGlass)
 	mux.HandleFunc("POST /api/troubleshoot/probe", s.handleToolProbe)

@@ -56,8 +56,9 @@ type Config struct {
 	MaxImprovements int
 	Allowlist       []netip.Prefix
 	NextHops        map[string]netip.Addr // provider name -> next hop
-	// Reserved reports prefixes that inbound steering owns. They are never
-	// announced as outbound improvements, so the two never share a prefix.
+	// Reserved reports prefixes that inbound steering owns or threat
+	// mitigation holds (#28). They are never announced as outbound
+	// improvements, so no two of them share a prefix.
 	Reserved func(netip.Prefix) bool
 	// Others counts routes inbound steering has on the wire. They count
 	// toward MaxImprovements too.
@@ -204,7 +205,7 @@ func (c *Controller) Sync(ctx context.Context, imps []policy.Improvement) error 
 					errs = append(errs, err)
 				}
 			}
-			errs = append(errs, fmt.Errorf("announce: %s is an inbound prefix", p))
+			errs = append(errs, fmt.Errorf("announce: %s is reserved for inbound steering or threat mitigation", p))
 			continue
 		}
 		if _, on := c.active[p]; !on && !c.rib.Contains(p) {

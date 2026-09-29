@@ -88,6 +88,10 @@ type Config struct {
 	Damping    Damping
 	// Moderated triggers only suggest, even in inject.
 	Moderated map[string]bool
+	// Excluded reports prefixes threat mitigation holds (#28). Their
+	// steer route is withdrawn and not announced again until it lets go,
+	// so the speaker never has two Packeteer paths for one prefix.
+	Excluded func(netip.Prefix) bool
 }
 
 // PerfConfig is the performance trigger (see config.InboundPerformance).
@@ -675,6 +679,12 @@ func (c *Controller) Sync(ctx context.Context) error {
 	var errs []error
 	for _, p := range c.cfg.Prefixes {
 		cur, on := c.active[p]
+		if c.cfg.Excluded != nil && c.cfg.Excluded(p) {
+			if on {
+				errs = append(errs, c.withdrawLocked(ctx, p))
+			}
+			continue
+		}
 		if on && strings.Join(cur.Away, ",") == key {
 			continue
 		}

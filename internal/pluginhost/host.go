@@ -28,11 +28,14 @@ type Set struct {
 	Announcer *Instance[plugin.Announcer]
 	// Inbound is the inbound announcer (inbound.announcer). Nil when
 	// inbound is off or has no announcer.
-	Inbound   *Instance[plugin.InboundAnnouncer]
-	Notifiers []Instance[plugin.Notifier]
-	Telemetry []Instance[plugin.Telemetry]
-	Policies  []Instance[plugin.Policy]
-	Storage   *Instance[plugin.Storage]
+	Inbound *Instance[plugin.InboundAnnouncer]
+	// Mitigation is the mitigation announcer (mitigation.announcer, #28).
+	// Nil when mitigation is off or has no announcer.
+	Mitigation *Instance[plugin.MitigationAnnouncer]
+	Notifiers  []Instance[plugin.Notifier]
+	Telemetry  []Instance[plugin.Telemetry]
+	Policies   []Instance[plugin.Policy]
+	Storage    *Instance[plugin.Storage]
 	// Whois serves the troubleshooting API only. It never announces.
 	Whois *Instance[plugin.Whois]
 	// RIBSources feed the RIB view (BMP). They never announce.
@@ -109,6 +112,11 @@ func Build(cfg *config.Config, opts Options) (*Set, error) {
 			s.Inbound = &b[0]
 		}
 	}
+	if cfg.Mitigation != nil && cfg.Mitigation.Announcer != nil {
+		if b := build(plugin.MitigationAnnouncers, "mitigation.announcer", []config.PluginSpec{*cfg.Mitigation.Announcer}, base, &errs); len(b) == 1 {
+			s.Mitigation = &b[0]
+		}
+	}
 	if cfg.Storage != nil {
 		if b := build(plugin.Storages, "storage", []config.PluginSpec{*cfg.Storage}, base, &errs); len(b) == 1 {
 			s.Storage = &b[0]
@@ -165,6 +173,10 @@ func (s *Set) all() []namedLifecycle {
 	// Started after, and so stopped before, the outbound announcer.
 	if s.Inbound != nil {
 		add(plugin.KindAnnouncer, "inbound "+s.Inbound.Name, s.Inbound.Plugin)
+	}
+	// Last to start, first to stop: mitigation routes are withdrawn first.
+	if s.Mitigation != nil {
+		add(plugin.KindAnnouncer, "mitigation "+s.Mitigation.Name, s.Mitigation.Plugin)
 	}
 	return out
 }

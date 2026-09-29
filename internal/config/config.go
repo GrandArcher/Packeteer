@@ -113,6 +113,9 @@ type Config struct {
 	Troubleshoot Troubleshoot `yaml:"troubleshoot"`
 	// Inbound is inbound commit control (#25). Nil disables it.
 	Inbound *Inbound `yaml:"inbound"`
+	// Mitigation is threat mitigation: RTBH and BGP redirect (#28). Nil
+	// disables it.
+	Mitigation *Mitigation `yaml:"mitigation"`
 }
 
 // Inbound defaults and bounds.
@@ -580,6 +583,7 @@ func (c *Config) applyDefaults() {
 			}
 		}
 	}
+	c.normalizeMitigation()
 }
 
 // Validate checks the config and returns all problems found, joined.
@@ -873,6 +877,7 @@ func (c *Config) Validate() error {
 	}
 
 	c.validateInbound(add)
+	c.validateMitigation(add)
 
 	return errors.Join(errs...)
 }
@@ -1074,6 +1079,9 @@ func (c *Config) normalize() {
 	}
 	for i := range c.Providers {
 		c.Providers[i].Group = strings.TrimSpace(c.Providers[i].Group)
+	}
+	if c.Mitigation != nil {
+		c.Mitigation.Mode = strings.ToLower(strings.TrimSpace(c.Mitigation.Mode))
 	}
 	if c.HTTP.Listen != nil {
 		s := strings.TrimSpace(*c.HTTP.Listen)

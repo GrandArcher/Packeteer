@@ -369,7 +369,7 @@ func TestInboundPrefixesAreReservedAndShareTheCap(t *testing.T) {
 		t.Fatal(err)
 	}
 	err = c.Sync(ctx, []policy.Improvement{imp("198.51.100.0/24", "b"), imp("203.0.113.0/24", "b")})
-	if err == nil || !strings.Contains(err.Error(), "203.0.113.0/24 is an inbound prefix") {
+	if err == nil || !strings.Contains(err.Error(), "203.0.113.0/24 is reserved") {
 		t.Fatalf("err = %v", err)
 	}
 	if _, ok := ann.routes[pfx("203.0.113.0/24")]; ok || ann.count() != 1 || c.Active() != 1 {
@@ -431,5 +431,32 @@ func TestBindRouters(t *testing.T) {
 	}
 	if err := c.Bind(struct{}{}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// A mitigation rule (#28) that takes a prefix with an improvement on the
+// wire withdraws the improvement first; it returns once the rule lets go.
+func TestReservedWithdrawsAnImprovementOnTheWire(t *testing.T) {
+	ctx := context.Background()
+	rib := memRIB{ready: true, has: map[netip.Prefix]bool{pfx("198.51.100.0/24"): true}}
+	ann := &fakeAnn{}
+	cfg := testCfg()
+	held := false
+	cfg.Reserved = func(netip.Prefix) bool { return held }
+	c, err := New(cfg, ann, rib, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	imps := []policy.Improvement{imp("198.51.100.0/24", "b")}
+	if err := c.Sync(ctx, imps); err != nil || ann.count() != 1 {
+		t.Fatalf("announce: %v", err)
+	}
+	held = true
+	if err := c.Sync(ctx, imps); err == nil || ann.count() != 0 || c.Active() != 0 {
+		t.Fatalf("reserved prefix kept its improvement: %v", err)
+	}
+	held = false
+	if err := c.Sync(ctx, imps); err != nil || ann.count() != 1 {
+		t.Fatalf("improvement after the rule let go: %v", err)
 	}
 }

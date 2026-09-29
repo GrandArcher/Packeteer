@@ -25,9 +25,9 @@ Milestones:
 
 | Status | Count |
 |---|---|
-| done | 50 |
+| done | 52 |
 | in progress | 0 |
-| planned | 29 |
+| planned | 27 |
 | won't do | 3 |
 
 ## Performance optimization
@@ -139,12 +139,14 @@ Internet exchanges (#27, second half) are an `exchanges` list. Each peer is a pr
 
 | Capability | IRP doc ref | Status | Milestone | Plugin kind | Issue |
 |---|---|---|---|---|---|
-| RTBH (BGP blackholing) | 2.11.1 | planned | v0.3 | announcer (mitigation) | #28 |
-| BGP redirect | 2.11.2 | planned | v0.3 | announcer (mitigation) | #28 |
+| RTBH (BGP blackholing): discard next hop + BLACKHOLE community on the exact learned prefix, own allowlist, `max_rules`, TTL, API rules | 2.11.1 | done (lab-proven) | v0.3 | announcer (mitigation `gobgp`) + core (`internal/mitigation`, `/api/mitigations`) | #28 |
+| BGP redirect (to a named scrubber/sinkhole next hop from the catalog) | 2.11.2 | done (lab-proven) | v0.3 | announcer (mitigation `gobgp`) + core | #28 |
 | FlowSpec drop / rate-limit (throttle) / redirect | 1.2.19, 1.2.20, 2.11.3-4 | planned | v0.3 | announcer (flowspec) | #28 |
 | FlowSpec policies by country | 3.8.1 | planned | v0.3 | announcer (flowspec) + GeoIP | #28 |
 | Threat mitigation monitor, rules, feed, history | 1.2.24, 3.10 | planned | v0.3 | announcer (mitigation) + UI | #28 |
 | Automatic traffic anomaly (DDoS) detection | 1.2.25, 2.12, 3.11 | planned | v0.4 | source (detector) | #33 |
+
+Threat mitigation, first half (#28): RTBH and BGP redirect. A new `mitigation` block with its own `mode` (default `observe`, a dry run), its own `allowlist`, `max_rules` (default 10), and `default_ttl`/`max_ttl` (1h/24h, at most 168h), and a new in-process mitigation announcer (`mitigation.announcer`, type `gobgp`) with a marker community, a blackhole discard next hop and communities (RFC 7999 `65535:666` by default), and named redirect targets. Operators add and remove rules through `POST`/`DELETE /api/mitigations` (basic auth). In `inject` each rule's exact prefix is announced to the edge on the existing iBGP session with the action's next hop and communities, `packeteer_community`, the marker, and NO_EXPORT, only while the prefix is in the learned RIB; the announcer re-checks the allowlist and the cap itself. Rules are in memory only (a restart drops them: no stale intent) and always expire; removal, expiry, RIB loss, and shutdown withdraw, and a crash drops the routes with the session (no graceful restart). A prefix a rule holds is withdrawn from outbound improvements and inbound steers first. The edge opts in by matching the marker and routing the discard address to null ([mitigation.md](mitigation.md)). The FRR lab (`lab/e2e-mitigation.sh`) checks on the routers: refusals outside the allowlist and past the cap, an allowlisted more-specific not in the RIB never announced, RTBH in the edge's BGP table and FIB with nothing leaked to the other transit, redirect in place, DELETE, TTL expiry, SIGTERM, no rule after a restart, and SIGKILL. Lab-proven only, not on a public edge. FlowSpec, country policies, and the monitor/feed/history row are the second half of #28.
 
 ## Ops
 
