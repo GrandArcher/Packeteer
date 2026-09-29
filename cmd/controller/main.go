@@ -32,6 +32,7 @@ import (
 	"github.com/GrandArcher/Packeteer/internal/history"
 	"github.com/GrandArcher/Packeteer/internal/httpapi"
 	"github.com/GrandArcher/Packeteer/internal/inbound"
+	"github.com/GrandArcher/Packeteer/internal/mitigation"
 	"github.com/GrandArcher/Packeteer/internal/notify"
 	"github.com/GrandArcher/Packeteer/internal/pluginhost"
 	_ "github.com/GrandArcher/Packeteer/internal/plugins/all"
@@ -219,6 +220,10 @@ func run(ctx context.Context, args []string, getenv func(string) string, stdout,
 			fmt.Fprintf(stdout, "inbound moderated: %s\n", strings.Join(in.Moderated, ","))
 		}
 	}
+	if m := cfg.Mitigation; m != nil {
+		fmt.Fprintf(stdout, "mitigation: %s allowlist=%d max_rules=%d default_ttl=%s max_ttl=%s local_pref=%d\n",
+			m.Mode, len(m.Allowlist), m.MaxRules, m.DefaultTTL, m.MaxTTL, m.LocalPref)
+	}
 	fmt.Fprintf(stdout, "log: %s %s\n", cfg.Log.Level, cfg.Log.Format)
 	if cfg.HTTPListen() == "" {
 		fmt.Fprintln(stdout, "http: disabled")
@@ -278,6 +283,17 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 	if cfg.Inbound != nil {
 		inboundStatus = func() inbound.Status { return inb.Status() }
 	}
+	// Threat mitigation (#28) is built before the HTTP server, which adds
+	// and removes its rules. It needs the RIB view only to sync.
+	mit, merr := newMitigation(cfg, plugins, log)
+	if merr != nil {
+		log.Error("refusing to start", "err", merr)
+		return 1
+	}
+	var mitAPI httpapi.MitigationControl
+	if mit != nil {
+		mitAPI = mitigationControl{mit: mit, poke: poke}
+	}
 	tools, terr := newTools(cfg, plugins)
 	if terr != nil {
 		log.Error("refusing to start", "err", terr)
@@ -286,7 +302,7 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 	if addr := cfg.HTTPListen(); addr != "" {
 		srv, err := httpapi.New(httpapi.Options{
 			Addr: addr, User: httpUser, Password: httpPass, Snapshot: col.Snapshot, Logger: log,
-			Maintenance: maint, Reports: reports, Tools: tools, Inbound: inboundStatus,
+			Maintenance: maint, Reports: reports, Tools: tools, Inbound: inboundStatus, Mitigation: mitAPI,
 		})
 		if err != nil {
 			log.Error("refusing to start", "err", err)
@@ -320,12 +336,16 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 	// The two controllers share max_improvements, so each reads the other's
 	// count. ctl is assigned right below; Active is nil-safe until then.
 	var ctl *announce.Controller
-	inb, err = newInbound(cfg, plugins, view, func() int { return ctl.Active() }, log)
+	if err := setMitigationRIB(mit, view); err != nil {
+		log.Error("refusing to start", "err", err)
+		return 1
+	}
+	inb, err = newInbound(cfg, plugins, view, func() int { return ctl.Active() }, mit, log)
 	if err != nil {
 		log.Error("refusing to start", "err", err)
 		return 1
 	}
-	ctl, err = newController(cfg, plugins, view, inb, log)
+	ctl, err = newController(cfg, plugins, view, inb, mit, log)
 	if err != nil {
 		log.Error("refusing to start", "err", err)
 		return 1
@@ -348,6 +368,10 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 			return 1
 		}
 		if err := bindInbound(cfg, plugins, view.Server()); err != nil {
+			log.Error("refusing to start", "err", err)
+			return 1
+		}
+		if err := bindMitigation(cfg, plugins, view.Server()); err != nil {
 			log.Error("refusing to start", "err", err)
 			return 1
 		}
@@ -427,12 +451,13 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 				rec.Decision(now, changes, in.Results)
 			}
 			inChanges, inErr := runInbound(loopCtx, now, inb, plugins, log, cfg.InboundMode(), in)
+			mitErr := runMitigation(now, mit, log)
 			if !dispatch.Enabled() {
 				return
 			}
 			watch.improvements(now, changes)
 			watch.inbound(now, cfg.InboundMode(), inChanges)
-			watch.announce(now, errors.Join(err, inErr))
+			watch.announce(now, errors.Join(err, inErr, mitErr))
 			watch.providerStatus(now, engine.Providers())
 			if view != nil {
 				watch.peerStatus(now, view.Peers())
@@ -483,7 +508,7 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 	// Withdraw while the session is still up, then stop plugins (the announcer
 	// withdraws again) and finally drop the session. Graceful restart is never
 	// enabled, so a missed withdraw still disappears with the session.
-	withdrawErr := errors.Join(inb.WithdrawAll(stopCtx), ctl.WithdrawAll(stopCtx))
+	withdrawErr := errors.Join(mit.WithdrawAll(stopCtx), inb.WithdrawAll(stopCtx), ctl.WithdrawAll(stopCtx))
 	if withdrawErr != nil {
 		log.Error("withdraw on shutdown", "err", withdrawErr)
 	}
@@ -606,7 +631,7 @@ func inboundInput(ctx context.Context, plugins *pluginhost.Set, in policy.Input)
 
 // newInbound returns nil when inbound is not configured. others counts
 // outbound improvements on the wire for the shared cap.
-func newInbound(cfg *config.Config, plugins *pluginhost.Set, view *rib.View, others func() int, log *slog.Logger) (*inbound.Controller, error) {
+func newInbound(cfg *config.Config, plugins *pluginhost.Set, view *rib.View, others func() int, mit *mitigation.Controller, log *slog.Logger) (*inbound.Controller, error) {
 	in := cfg.Inbound
 	if in == nil {
 		return nil, nil
@@ -632,6 +657,7 @@ func newInbound(cfg *config.Config, plugins *pluginhost.Set, view *rib.View, oth
 			Backoff: in.Damping.Backoff, MaxHold: in.Damping.MaxHold,
 		},
 		Moderated: map[string]bool{},
+		Excluded:  mit.Holds,
 	}
 	if pf := in.Performance; pf != nil {
 		ic.Performance = &inbound.PerfConfig{LossPct: pf.LossPct, LatencyMs: pf.LatencyMs, MinPrefixes: pf.MinPrefixes, ReleasePct: pf.ReleasePct}
@@ -715,7 +741,7 @@ func runInbound(ctx context.Context, now time.Time, inb *inbound.Controller, plu
 	return changes, err
 }
 
-func newController(cfg *config.Config, plugins *pluginhost.Set, view *rib.View, inb *inbound.Controller, log *slog.Logger) (*announce.Controller, error) {
+func newController(cfg *config.Config, plugins *pluginhost.Set, view *rib.View, inb *inbound.Controller, mit *mitigation.Controller, log *slog.Logger) (*announce.Controller, error) {
 	var ann plugin.Announcer
 	if plugins.Announcer != nil {
 		ann = plugins.Announcer.Plugin
@@ -729,9 +755,11 @@ func newController(cfg *config.Config, plugins *pluginhost.Set, view *rib.View, 
 		ASPath:          cfg.BGP.ASPath,
 	}
 	if inb != nil {
-		ac.Reserved = inb.Reserved
 		ac.Others = inb.Active
 	}
+	// A prefix is reserved while inbound steering owns it or a mitigation
+	// rule holds it (#28). Both are nil-safe.
+	ac.Reserved = func(p netip.Prefix) bool { return inb.Reserved(p) || mit.Holds(p) }
 	for _, p := range cfg.Providers {
 		nh, err := parseAddr(p.NextHop)
 		if err != nil {

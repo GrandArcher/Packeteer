@@ -392,3 +392,30 @@ func TestAnnounceErrorIsReportedAndNotActive(t *testing.T) {
 		t.Fatal("Reserved")
 	}
 }
+
+// A prefix threat mitigation holds (#28) loses its steer route and gets
+// none until mitigation lets go.
+func TestMitigatedPrefixIsExcluded(t *testing.T) {
+	ctx := context.Background()
+	ann := newFakeAnn("transit-a", "transit-b")
+	held := false
+	cfg := baseConfig(config.ModeInject)
+	cfg.Excluded = func(p netip.Prefix) bool { return held && p == own }
+	c := mustNew(t, cfg, ann, readyRIB())
+	c.Evaluate(start, usage(start, map[string]float64{"transit-a": 150}))
+	if err := c.Sync(ctx); err != nil || len(ann.routes) != 1 {
+		t.Fatalf("steer: %v %v", err, ann.routes)
+	}
+	held = true
+	if err := c.Sync(ctx); err != nil || len(ann.routes) != 0 || c.Active() != 0 {
+		t.Fatalf("mitigated prefix kept its steer route: %v %v", err, ann.routes)
+	}
+	calls := ann.calls
+	if err := c.Sync(ctx); err != nil || ann.calls != calls {
+		t.Fatalf("mitigated prefix touched again: %v", err)
+	}
+	held = false
+	if err := c.Sync(ctx); err != nil || len(ann.routes) != 1 {
+		t.Fatalf("steer after mitigation let go: %v %v", err, ann.routes)
+	}
+}

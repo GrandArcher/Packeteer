@@ -51,6 +51,7 @@ The image entrypoint is the same binary. Flags go after the image name.
 | `policies` | none | no | Routing policies and maintenance windows, asked in order before each decision. Off unless listed. Does not announce. See [Policies](#policies). |
 | `storage` | none | no | One storage plugin for report history (`type: sqlite`). Off unless set. Does not announce. See [Storage `sqlite`](#storage-sqlite). |
 | `inbound` | none | no | Inbound commit control: steer inbound traffic for your own prefixes away from a provider over commit with prepends and TE communities. Off unless set; its own `mode` defaults to `observe`. See [`inbound`](#inbound). Lab-proven only. |
+| `mitigation` | none | no | Threat mitigation: RTBH (blackhole) and BGP redirect routes for exact learned prefixes, added through `/api/mitigations`. Off unless set; its own `mode` defaults to `observe`. See [`mitigation`](#mitigation). Lab-proven only. |
 | `troubleshoot` | looking glass only | no | Read-only operator tools: looking glass, on-demand probe, traceroute, whois. Does not announce. See [`troubleshoot`](#troubleshoot). |
 
 `mode: observe` and `mode: suggest` use the same decision path and announce nothing. `suggest` is the checkpoint: read the log, the dashboard, and `/api/decisions` before you change `mode`. The allowlist is enforced only in `inject`.
@@ -271,6 +272,22 @@ Inbound optimization (#25, lab-proven only, not on a public edge). Router setup 
 A commit steer that flaps also learns inertia: how much inbound traffic returned to the provider when it was released (`inertia_mbps` on `/api/inbound`). It is then released only when the inbound 95th plus that amount is at or below `release_pct`, so an unchanged demand no longer flips the edge back and forth.
 
 `hold_time` is the minimum life of a steer and the cooldown after a release (damping grows both for a flapping provider). `improvement_ttl` retires a steer; the route is withdrawn for at least one round and returns only once the edge advertises the prefix again. Telemetry older than 15 minutes, a poll error, or no row releases a commit steer at once; no fresh probe results release a performance steer at once. Packeteer never steers away from every non-excluded provider.
+
+### `mitigation`
+
+Threat mitigation (#28, lab-proven only, not on a public edge): RTBH and BGP redirect. Router setup, the API, and the full contract are in [mitigation.md](mitigation.md). Rules are added and removed through `POST /api/mitigations` and `DELETE /api/mitigations/{id}` (basic auth required), live in memory only, and always expire.
+
+| Key | Default | Meaning |
+|---|---|---|
+| `mode` | `observe` | `observe` accepts and lists rules as a dry run and announces nothing. `inject` announces them; it also needs top-level `mode: inject`. Setting `observe` and restarting withdraws every mitigation route (rollback). |
+| `allowlist` | none | Required. The mitigation allowlist, separate from `allowlist.prefixes`: a rule's prefix must be inside one of these. A default route is rejected. A rule is announced only while the exact prefix is in the learned RIB. |
+| `max_rules` | `10` | Cap on rules held at once, announced or waiting. 1–1000. The announcer enforces the same cap on its routes. Mitigation routes do not count toward `max_improvements`. |
+| `default_ttl` | `1h` (or `max_ttl` when shorter) | Lifetime of a rule whose request names no `ttl`. At least 1s, at most `max_ttl`. |
+| `max_ttl` | `24h` | Longest `ttl` a request may ask for. 1s–168h. Every rule expires. |
+| `local_pref` | top-level `local_pref` | Local preference on mitigation routes. Keep it above the edge's native routes. |
+| `announcer` | none | `inject`: required. In-process only: `type: gobgp` (see [Mitigation announcer `gobgp`](#mitigation-announcer-gobgp)). In `observe` it is optional and only supplies the catalog (redirect targets). |
+
+While a rule holds a prefix in `inject`, or its route is still on the wire, outbound improvements and inbound steers leave that prefix alone. When the RIB is not ready every mitigation route is withdrawn. A catalog next hop that equals a provider's `next_hop` is refused at startup.
 
 ### Plugin entries
 
@@ -886,6 +903,34 @@ Each provider:
 | `prepend` | 0–10. How many times the edge's export policy toward this provider prepends when it sees `communities`. Informational: an iBGP route cannot carry the edge's own ASN, so the edge does the prepend. |
 | `withhold` | `true` makes the action a selective announcement: the edge's export policy does not send the prefix to this provider at all when it sees `communities`. Informational, like `prepend`, and exclusive with it. Packeteer never steers away from every provider, so the prefix stays announced through at least one other. |
 | `communities` | 1–16 `asn:value` communities: signal communities the edge maps to the prepend, and the provider's own TE communities the edge passes to that provider only. `0:x` and `65535:x` (well-known values such as `no-export`) are rejected. |
+
+### Mitigation announcer `gobgp`
+
+`mitigation.announcer`. Publishes RTBH and redirect routes on the same embedded iBGP speaker, after the `gobgp` announcer has installed its export policy (startup fails otherwise). Each route carries the exact learned prefix, the action's next hop, `mitigation.local_pref`, `packeteer_community`, `marker`, the action's communities, and `no-export`. It checks the mitigation allowlist and `max_rules` itself on every announce. Stop withdraws only its own routes.
+
+| Key | Meaning |
+|---|---|
+| `marker` | Required. Community that tags mitigation routes, so the edge's import policy can tell them from outbound improvements. Must differ from `packeteer_community`. `0:x` and `65535:x` are rejected. |
+| `blackhole` | RTBH. Keys below. At least one of `blackhole` and `redirect` is required. |
+| `redirect` | Up to 32 redirect targets. Keys below. |
+
+`blackhole` keys:
+
+| Key | Meaning |
+|---|---|
+| `next_hop` | Required. IPv4 discard address; the edge routes it to null (for example a static `blackhole` route). |
+| `next_hop_v6` | Optional IPv6 discard address. Without it IPv6 prefixes cannot be blackholed. |
+| `communities` | Default `["65535:666"]` (RFC 7999 BLACKHOLE). Up to 16. `65535:666` is the only well-known value accepted. |
+
+Each `redirect` target:
+
+| Key | Meaning |
+|---|---|
+| `name` | Required. Up to 64 characters, no spaces or slashes, unique. Rules name it as `target`. |
+| `next_hop` | Required. The scrubbing center or sinkhole next hop (IPv4 or IPv6; a rule's prefix must be the same family). |
+| `communities` | Optional, up to 16 `asn:value`. `0:x` and `65535:x` are rejected. |
+
+Every next hop in the catalog must be unique, unicast, and not loopback.
 
 ## Example
 

@@ -87,3 +87,29 @@ func TestCheckNextHop(t *testing.T) {
 		t.Fatalf("wrong next hop passed: %v", err)
 	}
 }
+
+// FRR prints well-known communities by name; either spelling matches.
+func TestCheckWellKnownCommunities(t *testing.T) {
+	const rtbh = `{"prefix":"198.51.100.0/24","paths":[{"aspath":{"string":"","length":0},"valid":true,"bestpath":{"overall":true},
+"community":{"string":"64512:666 64512:668 blackhole noExport","list":["64512:666","64512:668","blackhole","no-export"]},
+"nexthops":[{"ip":"192.0.2.66","afi":"ipv4","used":true}]}]}`
+	for _, w := range []Want{
+		{NextHop: "192.0.2.66", Has: []string{"65535:666", "64512:668", "65535:65281"}},
+		{NextHop: "192.0.2.66", Has: []string{"blackhole", "no-export"}},
+	} {
+		if err := Check(rtbh, w); err != nil {
+			t.Fatalf("%+v: %v", w, err)
+		}
+	}
+	// FRR 10.2 JSON as seen in the lab: "noExport" in the list.
+	frr := strings.Replace(rtbh, `"no-export"]`, `"noExport"]`, 1)
+	if err := Check(frr, Want{Has: []string{"no-export", "65535:65281"}}); err != nil {
+		t.Fatalf("noExport: %v", err)
+	}
+	if err := Check(frr, Want{Has: []string{"64512:666"}, Lacks: []string{"no-export"}}); err == nil {
+		t.Fatal("lacks no-export matched a noExport path")
+	}
+	if err := Check(rtbh, Want{Has: []string{"64512:668"}, Lacks: []string{"65535:666"}}); err == nil {
+		t.Fatal("lacks 65535:666 matched a blackhole path")
+	}
+}

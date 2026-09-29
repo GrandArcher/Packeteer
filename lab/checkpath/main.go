@@ -7,7 +7,8 @@
 //
 // -aspath may be left out when -has is given (a locally originated path,
 // such as Packeteer's injected route on the edge, has an empty AS path).
-// -has needs an exact community. -lacks rejects any community that starts
+// -has needs an exact community; well-known ones match by number or by the
+// name FRR prints (65535:666 is blackhole). -lacks rejects any community that starts
 // with the value. -nexthop requires that next hop on the best path. -absent instead passes only when the prefix has no path
 // (a selective announcement withheld it from this session). The exit status is 0 when the best path matches, 1 when it
 // does not (the reason goes to stderr), and 2 on bad usage.
@@ -148,12 +149,12 @@ func Check(raw string, w Want) error {
 		}
 	}
 	for i := range comms {
-		comms[i] = strings.ToLower(comms[i])
+		comms[i] = canonical(comms[i])
 	}
 	for _, h := range w.Has {
 		found := false
 		for _, c := range comms {
-			if c == strings.ToLower(h) {
+			if c == canonical(h) {
 				found = true
 			}
 		}
@@ -163,10 +164,35 @@ func Check(raw string, w Want) error {
 	}
 	for _, l := range w.Lacks {
 		for _, c := range comms {
-			if strings.HasPrefix(c, strings.ToLower(l)) {
+			if strings.HasPrefix(c, canonical(l)) {
 				return fmt.Errorf("community %s must not reach this session (have %v)", c, comms)
 			}
 		}
 	}
 	return nil
+}
+
+// wellKnown maps the numeric form of well-known communities to the names
+// FRR prints (RFC 1997, RFC 7999), so either spelling matches.
+var wellKnown = map[string]string{
+	"65535:65281": "no-export",
+	"65535:65282": "no-advertise",
+	"65535:666":   "blackhole",
+}
+
+// aliases are other spellings FRR uses in JSON (noExport).
+var aliases = map[string]string{
+	"noexport":    "no-export",
+	"noadvertise": "no-advertise",
+}
+
+func canonical(c string) string {
+	c = strings.ToLower(c)
+	if name, ok := wellKnown[c]; ok {
+		return name
+	}
+	if name, ok := aliases[c]; ok {
+		return name
+	}
+	return c
 }

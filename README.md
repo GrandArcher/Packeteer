@@ -245,7 +245,7 @@ When Packeteer's route is best, a normal iBGP session stops sending the native p
 
 `http.listen` defaults to `127.0.0.1:8080`. Set it to `""`, or set `PACKETEER_HTTP_LISTEN=off`, to disable it. Any other value of `PACKETEER_HTTP_LISTEN` replaces `http.listen`. The image exposes port 8080 as documentation; with host networking you do not publish it.
 
-The server is read-only (GET and HEAD), except on-demand maintenance windows (`POST` and `DELETE` on `/api/maintenance`), which need basic auth and can only exclude providers, and the troubleshooting tools (`POST` on `/api/troubleshoot/probe`, `traceroute`, and `whois`), which measure or look up and change nothing. The dashboard loads no remote assets and refreshes every 5 seconds.
+The server is read-only (GET and HEAD), except on-demand maintenance windows (`POST` and `DELETE` on `/api/maintenance`), which need basic auth and can only exclude providers, threat mitigation rules (`POST` and `DELETE` on `/api/mitigations`), which need basic auth and announce only when `mitigation.mode` is `inject`, and the troubleshooting tools (`POST` on `/api/troubleshoot/probe`, `traceroute`, and `whois`), which measure or look up and change nothing. The dashboard loads no remote assets and refreshes every 5 seconds.
 
 | Path | Body |
 |---|---|
@@ -266,6 +266,7 @@ The server is read-only (GET and HEAD), except on-demand maintenance windows (`P
 | `/api/troubleshoot/probe` | `POST {"target":"<address>"}`. Probes the address once from every provider with the prober chain. The result is returned only; it does not feed decisions. Needs `troubleshoot.enabled`. |
 | `/api/troubleshoot/traceroute` | `POST {"target":"<address>","provider":"<optional name>"}`. UDP traceroute from each provider's source. Needs `troubleshoot.enabled`. |
 | `/api/troubleshoot/whois` | `POST {"query":"<address, prefix, or ASN>"}`. RDAP lookup through `troubleshoot.whois`. Needs `troubleshoot.enabled`. |
+| `/api/mitigations` | Threat mitigation rules (RTBH and BGP redirect), the catalog, and the mitigation allowlist. `POST {"prefix","action":"blackhole"\|"redirect","target","ttl","reason"}` adds a rule and `DELETE /api/mitigations/<id>` removes one, when `mitigation` is configured and basic auth is on ([docs/mitigation.md](docs/mitigation.md)). Lab-proven only. |
 | `/api/maintenance` | Open maintenance windows. `POST` opens an on-demand window and `DELETE /api/maintenance/<id>` closes one, when a `maintenance` policy is configured and basic auth is on ([CONFIG.md](docs/CONFIG.md#policy-maintenance)). |
 
 Basic auth is off unless both `PACKETEER_HTTP_USER` and `PACKETEER_HTTP_PASSWORD` are set. Setting only one refuses to start. Set both when `http.listen` is not loopback. The password is not read from the config file and is not written to the log.

@@ -1,0 +1,123 @@
+package main
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"log/slog"
+	"net/netip"
+	"time"
+
+	"github.com/GrandArcher/Packeteer/internal/config"
+	"github.com/GrandArcher/Packeteer/internal/mitigation"
+	"github.com/GrandArcher/Packeteer/internal/pluginhost"
+	"github.com/GrandArcher/Packeteer/internal/rib"
+	"github.com/GrandArcher/Packeteer/pkg/plugin"
+)
+
+// newMitigation returns nil when threat mitigation (#28) is not
+// configured. It refuses a catalog whose next hop is a provider's next
+// hop: a mitigation route must never look like an outbound improvement to
+// the per-router export rules or to the edge.
+func newMitigation(cfg *config.Config, plugins *pluginhost.Set, log *slog.Logger) (*mitigation.Controller, error) {
+	m := cfg.Mitigation
+	if m == nil {
+		return nil, nil
+	}
+	var ann plugin.MitigationAnnouncer
+	if plugins.Mitigation != nil {
+		ann = plugins.Mitigation.Plugin
+		provNH := map[netip.Addr]string{}
+		for _, p := range cfg.Providers {
+			if nh, err := parseAddr(p.NextHop); err == nil {
+				provNH[nh.Unmap()] = p.Name
+			}
+		}
+		for _, nh := range ann.Catalog().NextHops() {
+			if name, dup := provNH[nh.Unmap()]; dup {
+				return nil, fmt.Errorf("mitigation.announcer: next hop %s is provider %s's next hop", nh, name)
+			}
+		}
+	}
+	return mitigation.New(mitigation.Config{
+		Mode:       m.Mode,
+		Allowlist:  m.MitigationAllowlist(),
+		MaxRules:   m.MaxRules,
+		DefaultTTL: m.DefaultTTL,
+		MaxTTL:     m.MaxTTL,
+		LocalPref:  m.LocalPref,
+		Community:  cfg.PacketeerCommunity,
+	}, ann, log.With("component", "mitigation"))
+}
+
+// setMitigationRIB gives the controller the RIB view once it exists.
+func setMitigationRIB(mit *mitigation.Controller, view *rib.View) error {
+	if mit == nil {
+		return nil
+	}
+	if view == nil {
+		return mit.SetRIB(nil)
+	}
+	return mit.SetRIB(ribGate{view})
+}
+
+// bindMitigation attaches the mitigation announcer to the speaker when
+// mitigation injects, with its own allowlist and rule cap. It runs after
+// the gobgp announcer has installed its export policy.
+func bindMitigation(cfg *config.Config, plugins *pluginhost.Set, srv any) error {
+	if cfg.MitigationMode() != config.ModeInject {
+		return nil
+	}
+	if plugins.Mitigation == nil {
+		return errors.New("mitigation: inject requires mitigation.announcer")
+	}
+	b, ok := plugins.Mitigation.Plugin.(interface {
+		Bind(any, string, []netip.Prefix, int) error
+	})
+	if !ok {
+		return fmt.Errorf("mitigation: announcer %T cannot publish on the embedded iBGP speaker", plugins.Mitigation.Plugin)
+	}
+	return b.Bind(srv, cfg.PacketeerCommunity, cfg.Mitigation.MitigationAllowlist(), cfg.Mitigation.MaxRules)
+}
+
+// runMitigation expires rules and syncs mitigation routes. It runs after
+// the outbound and inbound syncs in the same round, so a prefix a new rule
+// holds has already been released by them.
+func runMitigation(now time.Time, mit *mitigation.Controller, log *slog.Logger) error {
+	if mit == nil {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	err := mit.Sync(ctx, now)
+	if err != nil {
+		log.Error("mitigation announce", "err", err)
+	}
+	return err
+}
+
+// mitigationControl is the ops API's view of the controller. poke runs a
+// round at once, so a new or removed rule reaches the edge without waiting
+// for the probe interval.
+type mitigationControl struct {
+	mit  *mitigation.Controller
+	poke func()
+}
+
+func (m mitigationControl) Status() mitigation.Status { return m.mit.Status() }
+
+func (m mitigationControl) Add(r mitigation.Request) (mitigation.Rule, error) {
+	rule, err := m.mit.Add(r, time.Now())
+	if err == nil {
+		m.poke()
+	}
+	return rule, err
+}
+
+func (m mitigationControl) Remove(id string) bool {
+	ok := m.mit.Remove(id)
+	if ok {
+		m.poke()
+	}
+	return ok
+}

@@ -328,6 +328,28 @@ plugin_dir: /etc/packeteer/plugins
 #       address: 192.0.2.162
 #       community_env: PACKETEER_TRAP_COMMUNITY
 
+# Threat mitigation (#28, lab-proven only; see docs/mitigation.md): RTBH and
+# BGP redirect for exact learned prefixes, added through POST
+# /api/mitigations (basic auth). Off unless set. Its own mode defaults to
+# observe (a dry run); inject also needs top-level mode: inject and an edge
+# policy that opts in. Rules are in memory only and always expire.
+# mitigation:
+#   mode: observe
+#   allowlist: [203.0.113.0/24]       # separate from allowlist.prefixes
+#   max_rules: 10
+#   default_ttl: 1h
+#   max_ttl: 24h
+#   announcer:
+#     type: gobgp
+#     config:
+#       marker: "64512:668"
+#       blackhole:
+#         next_hop: 192.0.2.66        # the edge routes this to null
+#       redirect:
+#         - name: scrubber
+#           next_hop: 192.0.2.77
+#           communities: ["64512:777"]
+
 # Inbound optimization (#25, lab-proven only; see docs/inbound.md). Off
 # unless set. Its own mode defaults to observe; suggest publishes the steer on
 # /api/inbound and as inbound.* events; inject also needs top-level mode:
