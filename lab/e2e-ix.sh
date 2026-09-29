@@ -40,7 +40,7 @@ trap 'rc=$?; if [ "$rc" -ne 0 ]; then echo "---- lab logs ----"; "${compose[@]}"
 echo "building path check"
 go build -o "$check_bin" ./lab/checkpath
 
-cp lab/probes/ix.yaml "$lab_dir/state.yaml"
+cp lab/probes/ix-equal.yaml "$lab_dir/state.yaml"
 cp lab/packeteer-ix.yaml "$lab_dir/config.yaml"
 chmod 0755 "$lab_dir"
 chmod 0644 "$lab_dir/state.yaml" "$lab_dir/config.yaml"
@@ -169,6 +169,15 @@ exchange_stats() {
 	' >/dev/null
 }
 
+# flip_probes <file>: atomically replace the fixed prober's state.
+flip_probes() {
+	local tmp
+	tmp=$(mktemp "$lab_dir/.state.XXXXXX")
+	cp "$1" "$tmp"
+	chmod 0644 "$tmp"
+	mv "$tmp" "$lab_dir/state.yaml"
+}
+
 ix_peer_a() {
 	"${compose[@]}" exec -T ix-peer-a vtysh -c 'configure terminal' -c 'router bgp 64501' \
 		-c 'address-family ipv4 unicast' -c "$1"
@@ -192,7 +201,9 @@ still_steered() {
 
 echo "1. exchange peers: the steer goes to ix-peer-a with its AS path"
 wait_for "add-path negotiated" 45 log_has 'bgp add-path negotiated'
+# The probes start equal so the native check cannot race the steer.
 wait_for "edge on transit-a before the steer" 30 native
+flip_probes lab/probes/ix.yaml
 wait_for "edge best is Packeteer's route via ix-peer-a" 90 steered edge
 never_injected ix-peer-b
 wait_for "exchange statistics" 15 exchange_stats
