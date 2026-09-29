@@ -39,12 +39,30 @@ path_json() {
 	"${compose[@]}" exec -T "$1" vtysh -c "show bgp ipv4 unicast $2 json" 2>/dev/null || true
 }
 
-# fib is zebra's view of the prefix on the edge. A recursive route prints
-# "via <next hop> (recursive)" and then the resolved next hop, flagged "*"
-# when it is in the FIB; the discard address resolves to
-# "unreachable (blackhole)".
+# fib is zebra's detail view of the prefix on the edge plus the kernel
+# table. A FIB check passes on either: zebra prints "* 192.0.2.21, via
+# eth0" for an installed next hop, and a route resolved through the
+# discard address as "192.0.2.66 (recursive)" plus "* unreachable
+# (blackhole)"; the kernel prints "198.51.100.0/24 ... via 192.0.2.21" or
+# "blackhole 198.51.100.0/24".
 fib() {
 	"${compose[@]}" exec -T edge vtysh -c "show ip route $prefix" 2>/dev/null || true
+	echo "---- kernel ----"
+	"${compose[@]}" exec -T edge ip route show 2>/dev/null || true
+}
+
+# fib_via F NH: the prefix is installed toward next hop NH. Zebra's part
+# is before the kernel marker, the kernel's after it.
+fib_via() {
+	local z=${1%%---- kernel ----*} k=${1#*---- kernel ----} nh=${2//./\\.}
+	grep -Eq "^ *\* +${nh}[, ]" <<<"$z" || grep -Eq "^198\.51\.100\.0/24 .*via ${nh} " <<<"$k"
+}
+
+# fib_drop F: the prefix resolves to the discard address and is dropped.
+fib_drop() {
+	local z=${1%%---- kernel ----*} k=${1#*---- kernel ----}
+	{ grep -q '192\.0\.2\.66' <<<"$z" && grep -Eq '^ *\*.*blackhole' <<<"$z"; } ||
+		grep -Eq '^blackhole 198\.51\.100\.0/24' <<<"$k"
 }
 
 # native: the edge uses transit-a with no Packeteer community, forwards
@@ -55,7 +73,7 @@ native() {
 	local f
 	f=$(fib)
 	path_json edge "$prefix" | "$check_bin" -aspath "64496" -nexthop 192.0.2.21 -lacks 64512: -lacks blackhole &&
-		grep -Eq '\*.*via 192\.0\.2\.21' <<<"$f" &&
+		fib_via "$f" 192.0.2.21 &&
 		path_json transit-b "$prefix" | "$check_bin" -aspath "64512 64496" -lacks 64512: -lacks blackhole -lacks no-export
 }
 
@@ -65,7 +83,7 @@ blackholed() {
 	local f
 	f=$(fib)
 	path_json edge "$prefix" | "$check_bin" -nexthop 192.0.2.66 -has 64512:666 -has 64512:668 -has blackhole -has no-export -lacks 64512:777 &&
-		grep -q 'via 192.0.2.66' <<<"$f" && grep -Eq '\*.*blackhole' <<<"$f" &&
+		fib_drop "$f" &&
 		path_json transit-b "$prefix" | "$check_bin" -absent
 }
 
@@ -73,7 +91,7 @@ redirected() {
 	local f
 	f=$(fib)
 	path_json edge "$prefix" | "$check_bin" -nexthop 192.0.2.77 -has 64512:666 -has 64512:668 -has 64512:777 -has no-export -lacks blackhole &&
-		grep -Eq '\*.*via 192\.0\.2\.77' <<<"$f" &&
+		fib_via "$f" 192.0.2.77 &&
 		path_json transit-b "$prefix" | "$check_bin" -absent
 }
 
@@ -85,7 +103,6 @@ dump_bgp() {
 	done
 	echo "---- edge fib ----" >&2
 	fib >&2
-	"${compose[@]}" exec -T edge ip route show >&2 || true
 	curl -sS -u lab:lab-only "$api" >&2 || true
 	"${compose[@]}" logs --no-color packeteer >&2 || true
 }
