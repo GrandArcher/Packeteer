@@ -773,7 +773,7 @@ A BMP path is attributed to a provider by its next hop (`providers[].next_hop`),
 
 **Failure.** The view is ready only while an iBGP session is up (the announcer needs it); BMP never makes it ready. When a router's BMP session ends (TCP close, termination, read error, TCP keepalive timeout, shutdown), every path from that router is dropped. A peer down drops that peer's paths. A peer whose messages cannot be decoded, or whose OPENs negotiated add-path (not decoded yet, #26 follow-up), is treated as down until its next peer up. Improvements that lose their provider's path then retire through the route check; a prefix that leaves the view is retired as before.
 
-FRR sends BMP with `-M bmp` on bgpd and a `bmp targets` block (`bmp connect <station> port 11019`, `bmp monitor ipv4 unicast pre-policy`, optionally `bmp monitor ipv4 unicast loc-rib`); see `lab/frr-bmp/frr.conf`.
+FRR sends BMP with `-M bmp` on bgpd and a `bmp targets` block (`bmp connect <station> port 11019`, `bmp monitor ipv4 unicast pre-policy`, optionally `bmp monitor ipv4 unicast loc-rib`); see `lab/frr-bmp/frr.conf`. In the lab, FRR 10.2 sent no pre-policy routes until each monitored eBGP neighbor had `soft-reconfiguration inbound`, which keeps the Adj-RIB-In it reports and replays to a new BMP session. FRR offers add-path Receive on every session by default; that is not negotiated add-path and is decoded normally.
 
 **Rollback:** set every provider's `bmp` to `off` (or remove it) and remove `rib_sources`; the view falls back to the iBGP RIB.
 
