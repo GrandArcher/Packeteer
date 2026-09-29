@@ -44,11 +44,11 @@ FRR, as used in the lab ([lab/frr-inbound/frr.conf](../lab/frr-inbound/frr.conf)
 bgp community-list standard packeteer-inbound permit 64512:667
 bgp community-list standard no-export permit no-export
 bgp community-list standard steer-a-prepend2 permit 64512:1102
-bgp community-list standard packeteer-signals permit 64512:666
-bgp community-list standard packeteer-signals permit 64512:667
-bgp community-list standard packeteer-signals permit 64512:1102
-bgp community-list standard packeteer-signals permit 64512:1201
-bgp community-list standard transit-b-te permit 64497:70
+bgp community-list standard strip-to-transit-a permit 64512:666
+bgp community-list standard strip-to-transit-a permit 64512:667
+bgp community-list standard strip-to-transit-a permit 64512:1102
+bgp community-list standard strip-to-transit-a permit 64512:1201
+bgp community-list standard strip-to-transit-a permit 64497:70
 !
 route-map from-packeteer permit 5
  match community packeteer-inbound
@@ -61,14 +61,12 @@ route-map from-packeteer deny 100
 route-map to-transit-a permit 10
  match community steer-a-prepend2
  set as-path prepend 64512 64512
- set comm-list packeteer-signals delete
- set comm-list transit-b-te delete
+ set comm-list strip-to-transit-a delete
 route-map to-transit-a permit 20
- set comm-list packeteer-signals delete
- set comm-list transit-b-te delete
+ set comm-list strip-to-transit-a delete
 ```
 
-Strip communities with **standard** lists that name every value Packeteer and the other transits' catalogs can send. FRR's `set comm-list … delete` with an expanded (regex) list matches against the whole community string, not each value, and leaves values such as `64512:666` in place, so Packeteer's communities would leak to the transits.
+Strip communities with **one standard list per transit** that names every value Packeteer and the other transits' catalogs can send. FRR keeps only the last `set comm-list … delete` in a route-map entry, so two separate delete lines strip only the second list and Packeteer's communities leak to the transit.
 
 The edge must also advertise the prefix to Packeteer with a next hop that is not one of its own addresses (the lab rewrites it), or rewrite the next hop on import, because Packeteer re-announces the learned next hop.
 
