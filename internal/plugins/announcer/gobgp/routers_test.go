@@ -299,11 +299,32 @@ func TestSetRoutersReplacesTable(t *testing.T) {
 		t.Fatal("edge-b got a route its table blocks")
 	}
 
+	// An inbound steer route shares the speaker; the swap must leave it.
+	in := mustInbound(t, inboundYAML)
+	own := netip.MustParsePrefix("192.0.2.128/25")
+	if err := in.Bind(v.Server(), "64512:666", []netip.Prefix{own}); err != nil {
+		t.Fatal(err)
+	}
+	if err := in.Announce(ctx, plugin.InboundRoute{
+		Prefix: own, NextHop: nhA, LocalPref: 1, Community: "64512:666", Away: []string{"transit-a"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	steer := func(r *fakeRouter) func() bool {
+		return func() bool { _, ok := fromUs(collect(t, r.srv, v4Family), own.String()); return ok }
+	}
+	eventually(t, "edge-a: inbound steer", steer(edgeA))
+	eventually(t, "edge-b: inbound steer", steer(edgeB))
+
 	// The new table sends transit-a to edge-b only.
 	if err := a.SetRouters(ctx, []plugin.RouterExport{{Neighbor: a1, Blocked: []netip.Addr{nhA}}, {Neighbor: a3}}); err != nil {
 		t.Fatal(err)
 	}
 	eventually(t, "edge-a withdrawn by the swap", lacks(edgeA))
+	time.Sleep(300 * time.Millisecond)
+	if !steer(edgeA)() || !steer(edgeB)() {
+		t.Fatal("the table swap withdrew an inbound steer route")
+	}
 	if err := a.Announce(ctx, route); err != nil {
 		t.Fatal(err)
 	}

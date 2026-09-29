@@ -170,8 +170,13 @@ func (a *Announcer) SetRouters(ctx context.Context, routers []plugin.RouterExpor
 	if a.srv == nil {
 		return errors.New("gobgp announcer: not bound to the iBGP speaker")
 	}
-	if err := a.withdrawAllLocked(ctx); err != nil {
-		return err
+	// Only this announcer's paths: the inbound announcer's steer routes
+	// share the speaker and are not affected by the table.
+	for p, uuid := range a.paths {
+		if err := a.srv.DeletePath(ctx, &api.DeletePathRequest{Uuid: uuid, Family: familyOf(p)}); err != nil {
+			return fmt.Errorf("gobgp announcer: withdraw %s before the table swap: %w", p, err)
+		}
+		delete(a.paths, p)
 	}
 	old := a.routers
 	next := routerPolicy{gen: old.gen + 1}
