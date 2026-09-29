@@ -65,6 +65,11 @@ dump_bgp() {
 		"${compose[@]}" exec -T "$r" vtysh -c "show bgp ipv4 unicast $prefix" >&2 || true
 	done
 	"${compose[@]}" exec -T edge vtysh -c 'show bmp' >&2 || true
+	echo "---- packeteer looking glass / decisions ----" >&2
+	"${compose[@]}" exec -T packeteer wget -qO- "http://127.0.0.1:8080/api/troubleshoot/lookingglass?prefix=$prefix" >&2 || true
+	echo >&2
+	"${compose[@]}" exec -T packeteer wget -qO- http://127.0.0.1:8080/api/decisions >&2 || true
+	echo >&2
 	"${compose[@]}" logs --no-color packeteer >&2 || true
 }
 

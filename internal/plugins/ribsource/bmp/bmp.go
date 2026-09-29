@@ -328,6 +328,7 @@ func (d *decoder) message(raw []byte) (evs []plugin.RIBEvent, stop bool) {
 	}
 	peer, ok := d.peer(msg.PeerHeader)
 	if !ok {
+		d.log.Debug("bmp: skipping table", "router", d.router, "type", msg.Header.Type, "peer_type", msg.PeerHeader.PeerType, "flags", msg.PeerHeader.Flags)
 		return nil, false
 	}
 	ev := plugin.RIBEvent{Router: d.router, Peer: peer}
@@ -340,10 +341,12 @@ func (d *decoder) message(raw []byte) (evs []plugin.RIBEvent, stop bool) {
 			return []plugin.RIBEvent{ev}, false
 		}
 		delete(d.skip, peer)
+		d.log.Info("bmp peer up", "router", d.router, "peer", peer.Address, "asn", peer.ASN, "loc_rib", peer.LocRIB)
 		ev.Kind = plugin.RIBPeerUp
 		return []plugin.RIBEvent{ev}, false
 	case *gobmp.BMPPeerDownNotification:
 		delete(d.skip, peer)
+		d.log.Info("bmp peer down", "router", d.router, "peer", peer.Address, "loc_rib", peer.LocRIB)
 		ev.Kind = plugin.RIBPeerDown
 		return []plugin.RIBEvent{ev}, false
 	case *gobmp.BMPRouteMonitoring:
@@ -364,6 +367,7 @@ func (d *decoder) message(raw []byte) (evs []plugin.RIBEvent, stop bool) {
 		}
 		ev.Kind = plugin.RIBPaths
 		ev.Paths = paths(upd)
+		d.log.Debug("bmp route monitoring", "router", d.router, "peer", peer.Address, "loc_rib", peer.LocRIB, "paths", len(ev.Paths))
 		if len(ev.Paths) == 0 {
 			return nil, false
 		}
