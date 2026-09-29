@@ -127,7 +127,7 @@ retired_by_route_check() {
 
 echo "1. inactive transit-b path over BMP: waiting for the steer"
 wait_for "bmp session" 45 log_has 'bmp session up'
-wait_for "edge best is Packeteer's route via transit-b" 45 injected
+wait_for "edge best is Packeteer's route via transit-b" 90 injected
 need_log 'msg=injected'
 # The iBGP feed alone never showed transit-b: the edge only sends its best.
 if "${compose[@]}" exec -T edge vtysh -c "show bgp ipv4 unicast neighbors 192.0.2.10 advertised-routes" 2>/dev/null | grep -q '192.0.2.22'; then

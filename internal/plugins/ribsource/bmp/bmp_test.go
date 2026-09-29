@@ -460,3 +460,36 @@ func TestDecodeBGPIDAndCommunities(t *testing.T) {
 		t.Fatalf("communities = %v", got)
 	}
 }
+
+// Add-path changes the NLRI of routes the router receives only when the
+// router offers Receive and the peer offers Send. FRR offers Receive by
+// default on every session; that alone must not drop the peer.
+func TestAddPathNegotiation(t *testing.T) {
+	openWith := func(mode bgp.BGPAddPathMode) *bgp.BGPMessage {
+		caps := []bgp.ParameterCapabilityInterface{bgp.NewCapMultiProtocol(bgp.RF_IPv4_UC)}
+		if mode != 0 {
+			caps = append(caps, bgp.NewCapAddPath([]*bgp.CapAddPathTuple{bgp.NewCapAddPathTuple(bgp.RF_IPv4_UC, mode)}))
+		}
+		return bgp.NewBGPOpenMessage(64512, 90, "192.0.2.254", []bgp.OptionParameterInterface{bgp.NewOptionParameterCapability(caps)})
+	}
+	cases := []struct {
+		name          string
+		local, remote bgp.BGPAddPathMode
+		want          bool
+	}{
+		{"none", 0, 0, false},
+		{"frr default (receive both sides)", bgp.BGP_ADD_PATH_RECEIVE, bgp.BGP_ADD_PATH_RECEIVE, false},
+		{"router sends only", bgp.BGP_ADD_PATH_SEND, bgp.BGP_ADD_PATH_RECEIVE, false},
+		{"router receives, peer sends", bgp.BGP_ADD_PATH_RECEIVE, bgp.BGP_ADD_PATH_SEND, true},
+		{"both", bgp.BGP_ADD_PATH_BOTH, bgp.BGP_ADD_PATH_BOTH, true},
+		{"peer silent", bgp.BGP_ADD_PATH_BOTH, 0, false},
+	}
+	ph := peerHeader(t, gobmp.BMP_PEER_TYPE_GLOBAL, 0, "192.0.2.21", 64496, "192.0.2.21")
+	for _, c := range cases {
+		up := gobmp.NewBMPPeerUpNotification(*ph, "192.0.2.254", 179, 40001, openWith(c.local), openWith(c.remote))
+		got := addPath(up.Body.(*gobmp.BMPPeerUpNotification)) != ""
+		if got != c.want {
+			t.Errorf("%s: add-path = %v, want %v", c.name, got, c.want)
+		}
+	}
+}

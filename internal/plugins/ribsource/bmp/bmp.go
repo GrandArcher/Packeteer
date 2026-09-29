@@ -335,7 +335,7 @@ func (d *decoder) message(raw []byte) (evs []plugin.RIBEvent, stop bool) {
 	case *gobmp.BMPPeerUpNotification:
 		if why := addPath(body); why != "" {
 			d.skip[peer] = why
-			d.log.Warn("bmp: ignoring peer (add-path is not decoded yet)", "router", d.router, "peer", peer.Address, "detail", why)
+			d.log.Warn("bmp: ignoring peer (negotiated add-path is not decoded yet)", "router", d.router, "peer", peer.Address, "detail", why)
 			ev.Kind = plugin.RIBPeerDown
 			return []plugin.RIBEvent{ev}, false
 		}
@@ -423,30 +423,47 @@ func (d *decoder) peer(h gobmp.BMPPeerHeader) (plugin.RIBPeer, bool) {
 	return plugin.RIBPeer{}, false
 }
 
-// addPath reports an add-path capability in either OPEN of a peer up.
-// Without it the NLRI would be misread.
+// addPath reports whether add-path was negotiated for routes the router
+// receives from the peer (IPv4 or IPv6 unicast): the router's OPEN offers
+// Receive and the peer's OPEN offers Send for the same family. Those NLRI
+// carry path IDs and would be misread. A Receive-only offer on both sides
+// (FRR's default) changes nothing.
 func addPath(b *gobmp.BMPPeerUpNotification) string {
-	for _, m := range []*bgp.BGPMessage{b.SentOpenMsg, b.ReceivedOpenMsg} {
-		if m == nil {
-			continue
-		}
-		open, ok := m.Body.(*bgp.BGPOpen)
-		if !ok {
-			continue
-		}
-		for _, p := range open.OptParams {
-			cp, ok := p.(*bgp.OptionParameterCapability)
-			if !ok {
-				continue
-			}
-			for _, c := range cp.Capability {
-				if c.Code() == bgp.BGP_CAP_ADD_PATH {
-					return "add-path capability in OPEN"
-				}
-			}
+	local, remote := addPathModes(b.SentOpenMsg), addPathModes(b.ReceivedOpenMsg)
+	for _, rf := range []bgp.RouteFamily{bgp.RF_IPv4_UC, bgp.RF_IPv6_UC} {
+		if local[rf]&bgp.BGP_ADD_PATH_RECEIVE != 0 && remote[rf]&bgp.BGP_ADD_PATH_SEND != 0 {
+			return "add-path negotiated for " + rf.String()
 		}
 	}
 	return ""
+}
+
+// addPathModes collects the add-path mode per family from an OPEN.
+func addPathModes(m *bgp.BGPMessage) map[bgp.RouteFamily]bgp.BGPAddPathMode {
+	out := map[bgp.RouteFamily]bgp.BGPAddPathMode{}
+	if m == nil {
+		return out
+	}
+	open, ok := m.Body.(*bgp.BGPOpen)
+	if !ok {
+		return out
+	}
+	for _, p := range open.OptParams {
+		cp, ok := p.(*bgp.OptionParameterCapability)
+		if !ok {
+			continue
+		}
+		for _, c := range cp.Capability {
+			ap, ok := c.(*bgp.CapAddPath)
+			if !ok {
+				continue
+			}
+			for _, t := range ap.Tuples {
+				out[t.RouteFamily] |= t.Mode
+			}
+		}
+	}
+	return out
 }
 
 // paths flattens an UPDATE into announcements and withdrawals for IPv4 and
