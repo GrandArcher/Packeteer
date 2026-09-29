@@ -224,5 +224,5 @@ jobs:
         run: bash lab/e2e-commit.sh
       - name: FRR cost-mode lab
         run: bash lab/e2e-cost.sh
-      - name: FRR inbound commit-control lab
+      - name: FRR inbound lab (commit, performance, damping, withhold)
         run: bash lab/e2e-inbound.sh

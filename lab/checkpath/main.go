@@ -6,7 +6,8 @@
 //	checkpath -aspath "64512 64512 64512" -has 64496:3 -lacks 64512: -lacks no-export
 //
 // -has needs an exact community. -lacks rejects any community that starts
-// with the value. The exit status is 0 when the best path matches, 1 when it
+// with the value. -absent instead passes only when the prefix has no path
+// (a selective announcement withheld it from this session). The exit status is 0 when the best path matches, 1 when it
 // does not (the reason goes to stderr), and 2 on bad usage.
 package main
 
@@ -27,6 +28,7 @@ func (l *list) Set(v string) error { *l = append(*l, v); return nil }
 
 // Want is what the best path must look like.
 type Want struct {
+	Absent bool
 	ASPath string
 	Has    []string
 	Lacks  []string
@@ -36,11 +38,12 @@ func main() {
 	var w Want
 	var has, lacks list
 	fs := flag.NewFlagSet("checkpath", flag.ContinueOnError)
+	fs.BoolVar(&w.Absent, "absent", false, "the prefix must have no path")
 	fs.StringVar(&w.ASPath, "aspath", "", "exact AS path string of the best path")
 	fs.Var(&has, "has", "community the best path must carry (repeatable)")
 	fs.Var(&lacks, "lacks", "community prefix the best path must not carry (repeatable)")
-	if err := fs.Parse(os.Args[1:]); err != nil || w.ASPath == "" {
-		fmt.Fprintln(os.Stderr, "usage: checkpath -aspath PATH [-has C]... [-lacks PREFIX]...")
+	if err := fs.Parse(os.Args[1:]); err != nil || (w.ASPath == "") == !w.Absent {
+		fmt.Fprintln(os.Stderr, "usage: checkpath -aspath PATH [-has C]... [-lacks PREFIX]... | checkpath -absent")
 		os.Exit(2)
 	}
 	w.Has, w.Lacks = has, lacks
@@ -71,6 +74,26 @@ type path struct {
 // Check reports why the best path in raw does not match w, or nil.
 func Check(raw string, w Want) error {
 	start, end := strings.Index(raw, "{"), strings.LastIndex(raw, "}")
+	if w.Absent {
+		// FRR prints {} (or "Network not in table") for a prefix it does
+		// not have. Empty output is a failed vtysh, not an absent prefix.
+		if start < 0 || end < start {
+			if strings.Contains(raw, "not in table") {
+				return nil
+			}
+			return errors.New("no JSON in input (vtysh failed?)")
+		}
+		var doc struct {
+			Paths []json.RawMessage `json:"paths"`
+		}
+		if err := json.Unmarshal([]byte(raw[start:end+1]), &doc); err != nil {
+			return fmt.Errorf("parse: %w", err)
+		}
+		if len(doc.Paths) != 0 {
+			return fmt.Errorf("prefix has %d paths, want none", len(doc.Paths))
+		}
+		return nil
+	}
 	if start < 0 || end < start {
 		return errors.New("no JSON in input (prefix not in the table?)")
 	}

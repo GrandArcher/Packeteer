@@ -1,7 +1,9 @@
 # Lab only (#25). Documentation prefixes, private and documentation ASNs.
-# Inbound commit control is what announces: transit-a's inbound 95th is over
-# its commit, so 203.0.113.0/24 is re-announced to the edge with transit-a's
-# catalog action. lab/e2e-inbound.sh rewrites the usage file to release it.
+# Inbound optimization is what announces: when transit-a's inbound 95th is
+# over its commit (commit trigger) or its probes are the slowest
+# (performance trigger), 203.0.113.0/24 is re-announced to the edge with
+# transit-a's catalog action. lab/e2e-inbound.sh rewrites the usage and
+# probe files to steer, release, and exercise damping.
 mode: inject
 asn: 64512
 router_id: 192.0.2.10
@@ -10,9 +12,11 @@ local_pref: 250
 max_improvements: 50
 hold_time: 5s
 improvement_ttl: 1h
+# Outbound thresholds out of reach: the probes only feed the inbound
+# performance trigger, and no outbound improvement is made.
 thresholds:
-  min_loss_delta_pct: 1
-  min_rtt_delta_ms: 15
+  min_loss_delta_pct: 90
+  min_rtt_delta_ms: 5000
 providers:
   - name: transit-a
     source_ip: 192.0.2.11
@@ -31,13 +35,18 @@ bgp:
   neighbors:
     - address: 192.0.2.254
       description: edge
-# No sources: nothing is probed and no outbound improvement is made.
+# Probe targets for the performance trigger. The fixed prober sends no
+# packets; it re-reads paths.yaml.
+sources:
+  - type: static
+    config:
+      targets:
+        - prefix: 198.51.100.0/24
+        - prefix: 192.0.2.128/25
 probers:
   - type: fixed
     config:
-      paths:
-        - {provider: transit-a, rtt_ms: 10}
-        - {provider: transit-b, rtt_ms: 10}
+      file: /etc/packeteer/probes/paths.yaml
 telemetry:
   - type: fixed
     config:
@@ -50,6 +59,15 @@ inbound:
     - 203.0.113.0/24
   local_pref: 1
   release_pct: 90
+  # transit-a steered when its mean RTT is 100 ms over transit-b's.
+  performance:
+    latency_ms: 100
+    min_prefixes: 2
+  # Lab-scale damping: confirm 4s, hold doubles per flap up to 60s.
+  damping:
+    confirm: 4s
+    backoff: 2
+    max_hold: 60s
   announcer:
     type: gobgp
     config:
@@ -61,7 +79,9 @@ inbound:
           name: prepend-2
           prepend: 2
           communities: ["64512:1102", "64496:3"]
+        # Selective announcement: on 64512:1209 the edge does not send the
+        # prefix to transit-b at all.
         - provider: transit-b
-          name: prepend-1
-          prepend: 1
-          communities: ["64512:1201", "64497:70"]
+          name: withhold
+          withhold: true
+          communities: ["64512:1209"]

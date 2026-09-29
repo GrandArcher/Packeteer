@@ -209,22 +209,29 @@ func (w *eventWatch) commit(now time.Time, usage []plugin.Usage) {
 	}
 }
 
-// inbound reports inbound steers and releases. In observe and suggest the
-// message says nothing was announced.
+// inbound reports inbound steers and releases. In observe and suggest, and
+// for moderated triggers, the message says nothing was announced.
 func (w *eventWatch) inbound(now time.Time, mode string, changes []inbound.Change) {
 	if w == nil {
 		return
 	}
-	suffix := ""
-	if mode != "inject" {
-		suffix = " (" + mode + ": not announced)"
-	}
 	for _, c := range changes {
 		s := c.Steer
+		suffix := ""
+		switch {
+		case mode != "inject":
+			suffix = " (" + mode + ": not announced)"
+		case s.Moderated:
+			suffix = " (moderated: not announced)"
+		}
 		fields := map[string]string{
-			"provider": s.Provider, "mode": mode, "reason": c.Reason,
+			"provider": s.Provider, "mode": mode, "reason": c.Reason, "trigger": s.Trigger,
+			"moderated": strconv.FormatBool(s.Moderated), "flaps": strconv.Itoa(s.Flaps),
 			"in_mbps_95":  strconv.FormatFloat(s.InMbps95, 'f', 1, 64),
 			"commit_mbps": strconv.FormatFloat(s.CommitMbps, 'f', 1, 64),
+		}
+		if c.Action == inbound.ActionSteer {
+			fields["hold"] = s.Hold.String()
 		}
 		if c.Action == inbound.ActionRelease {
 			w.emit(now, plugin.EventInboundReleased, "inbound steer away from "+s.Provider+" released ("+c.Reason+")"+suffix, fields)
@@ -234,6 +241,9 @@ func (w *eventWatch) inbound(now time.Time, mode string, changes []inbound.Chang
 			fields["action"] = s.Action.Name
 		}
 		fields["prepend"] = strconv.Itoa(s.Action.Prepend)
+		if s.Action.Withhold {
+			fields["withhold"] = "true"
+		}
 		fields["communities"] = strings.Join(s.Action.Communities, " ")
 		w.emit(now, plugin.EventInboundSteered, "steering inbound traffic away from "+s.Provider+" ("+c.Reason+")"+suffix, fields)
 	}

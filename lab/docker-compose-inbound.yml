@@ -1,7 +1,8 @@
 # Inbound lab (#25). Simulated edge plus two simulated eBGP transits.
 # Documentation addresses (RFC 5737) and documentation/private ASNs only.
 # Brought up by lab/e2e-inbound.sh, which sets PACKETEER_LAB_DIR to a
-# directory containing usage.yaml (the fixed telemetry re-reads that file).
+# directory containing usage.yaml and paths.yaml (the fixed telemetry and
+# the fixed prober re-read them).
 name: packeteer-e2e-inbound
 x-frr: &frr
   image: quay.io/frrouting/frr:10.2.4
