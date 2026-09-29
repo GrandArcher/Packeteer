@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"net/netip"
 	"os"
 	"os/signal"
@@ -179,7 +180,7 @@ func run(ctx context.Context, args []string, getenv func(string) string, stdout,
 	} else {
 		fmt.Fprintf(stdout, "bgp neighbors (%d, learn-only):\n", len(cfg.BGP.Neighbors))
 		for _, n := range cfg.BGP.Neighbors {
-			fmt.Fprintf(stdout, "  - %s %s\n", n.Address, n.Description)
+			fmt.Fprintf(stdout, "  - %s %s%s\n", n.Address, n.Description, routerSummary(n))
 		}
 	}
 	fmt.Fprintf(stdout, "plugins (%d):\n", len(plugins.Summary()))
@@ -646,7 +647,68 @@ func newController(cfg *config.Config, plugins *pluginhost.Set, view *rib.View, 
 		}
 		ac.Allowlist = append(ac.Allowlist, p)
 	}
+	routers, err := routerExports(cfg)
+	if err != nil {
+		return nil, err
+	}
+	ac.Routers = routers
 	return announce.New(ac, ann, ribGate{view}, log)
+}
+
+// routerSummary is a neighbor's provider reachability for -check, or ""
+// when it reaches every provider.
+func routerSummary(n config.BGPNeighbor) string {
+	if !n.Routed() {
+		return ""
+	}
+	out := " providers=" + strings.Join(n.Providers, ",")
+	for _, name := range slices.Sorted(maps.Keys(n.NextHops)) {
+		out += " " + name + "_via=" + n.NextHops[name]
+	}
+	return out
+}
+
+// routerExports is per-router provider reachability for the announcer
+// (#27), or nil when no neighbor restricts providers. A router with no
+// providers or next_hops of its own still reaches every provider directly.
+func routerExports(cfg *config.Config) ([]plugin.RouterExport, error) {
+	if !slices.ContainsFunc(cfg.BGP.Neighbors, config.BGPNeighbor.Routed) {
+		return nil, nil
+	}
+	provNH := map[string]netip.Addr{}
+	for _, p := range cfg.Providers {
+		nh, err := parseAddr(p.NextHop)
+		if err != nil {
+			return nil, err
+		}
+		provNH[p.Name] = nh
+	}
+	var out []plugin.RouterExport
+	for _, n := range cfg.BGP.Neighbors {
+		a, err := parseAddr(n.Address)
+		if err != nil {
+			return nil, err
+		}
+		re := plugin.RouterExport{Neighbor: a}
+		if n.Routed() {
+			re.Via = map[netip.Addr]netip.Addr{}
+			for name, s := range n.NextHops {
+				nh, err := parseAddr(s)
+				if err != nil {
+					return nil, err
+				}
+				re.Via[provNH[name]] = nh
+			}
+			for _, p := range cfg.Providers {
+				_, via := n.NextHops[p.Name]
+				if !via && !slices.Contains(n.Providers, p.Name) {
+					re.Blocked = append(re.Blocked, provNH[p.Name])
+				}
+			}
+		}
+		out = append(out, re)
+	}
+	return out, nil
 }
 
 // newTools builds the read-only troubleshooting tools. They share the
@@ -1105,10 +1167,14 @@ func newRIB(cfg *config.Config, log *slog.Logger) (*rib.View, error) {
 		}
 	}
 	var nbrs []rib.Neighbor
+	egress := map[string][]netip.Addr{}
 	for _, n := range cfg.BGP.Neighbors {
 		a, err := parseAddr(n.Address)
 		if err != nil {
 			return nil, err
+		}
+		for _, name := range n.Providers {
+			egress[name] = append(egress[name], a)
 		}
 		nb := rib.Neighbor{Address: a, Port: uint16(n.Port), Passive: n.Passive, Description: n.Description, AddPath: n.AddPath}
 		if n.LocalAddress != "" {
@@ -1129,7 +1195,7 @@ func newRIB(cfg *config.Config, log *slog.Logger) (*rib.View, error) {
 	warnBMPSelfFilter(log, usage, own)
 	return rib.New(rib.Options{ASN: cfg.ASN, RouterID: rid, ListenPort: listen,
 		ListenAddresses: cfg.BGP.ListenAddresses, Neighbors: nbrs, Providers: providers, BMP: usage,
-		AddPath: addPath, OwnCommunity: own, Logger: log})
+		AddPath: addPath, OwnCommunity: own, Egress: egress, Logger: log})
 }
 
 // warnBMPSelfFilter warns at startup that, with BMP in use, Packeteer's own
@@ -1255,6 +1321,7 @@ func decisionInput(ctx context.Context, now time.Time, engine *probe.Engine, vie
 			}
 		}
 		fillRouteChecks(&in, view)
+		in.EgressDown = view.EgressDown()
 	}
 	var routes routeLookup
 	if view != nil {

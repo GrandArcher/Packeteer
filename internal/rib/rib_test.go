@@ -4,6 +4,7 @@ import (
 	"context"
 	"net"
 	"net/netip"
+	"strings"
 	"testing"
 	"time"
 
@@ -431,5 +432,30 @@ func TestNewValidation(t *testing.T) {
 		if _, err := New(o); err == nil {
 			t.Errorf("%s: want error", name)
 		}
+	}
+}
+
+// An egress router must be a configured neighbor (#27); before any session
+// comes up, every provider with egress routers is reported down.
+func TestEgressOptions(t *testing.T) {
+	n := netip.MustParseAddr("192.0.2.251")
+	base := Options{ASN: 64512, RouterID: netip.MustParseAddr("192.0.2.10"), Neighbors: []Neighbor{{Address: n}}}
+	bad := base
+	bad.Egress = map[string][]netip.Addr{"transit-a": {netip.MustParseAddr("192.0.2.99")}}
+	if _, err := New(bad); err == nil || !strings.Contains(err.Error(), "not a neighbor") {
+		t.Fatalf("egress on an unknown router: %v", err)
+	}
+	ok := base
+	ok.Egress = map[string][]netip.Addr{"transit-a": {n}}
+	v, err := New(ok)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d := v.EgressDown(); !d["transit-a"] || len(d) != 1 {
+		t.Fatalf("EgressDown before the session = %v", d)
+	}
+	v.peers[n] = PeerState{Address: n, Established: true}
+	if d := v.EgressDown(); len(d) != 0 {
+		t.Fatalf("EgressDown with the session up = %v", d)
 	}
 }

@@ -211,6 +211,31 @@ type Announcer interface {
 	WithdrawAll(ctx context.Context) error
 }
 
+// RouterExport is how announced routes reach one edge router when several
+// are configured (#27). A route is matched to its provider by the
+// provider's next hop.
+type RouterExport struct {
+	// Neighbor is the router's iBGP session address. Routes toward a
+	// provider it forwards to itself are sent unchanged.
+	Neighbor netip.Addr
+	// Via maps a provider's next hop to the next hop this router uses to
+	// reach that provider through another router. Routes toward it are
+	// sent with the next hop rewritten.
+	Via map[netip.Addr]netip.Addr
+	// Blocked lists provider next hops this router cannot reach. Routes
+	// toward them are never sent to it.
+	Blocked []netip.Addr
+}
+
+// RouterAnnouncer is an announcer that can send each router only the
+// routes it can forward. The controller binds it with the per-router
+// table when bgp.neighbors restrict providers, and refuses inject mode
+// when the configured announcer does not implement it.
+type RouterAnnouncer interface {
+	Announcer
+	BindRouters(srv any, community string, routers []RouterExport) error
+}
+
 // ---- Notifier ----
 
 // Severity of an Event.

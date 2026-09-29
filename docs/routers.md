@@ -27,6 +27,8 @@ Packeteer withdraws immediately when the router withdraws a prefix it was **stil
 
 If the native path is already hidden and the provider then withdraws it, a single-path session shows Packeteer nothing new. The improvement stays until flip-back or `improvement_ttl`. BGP add-path (`bgp.neighbors[].add_path` with the router sending every path, e.g. FRR `neighbor <packeteer> addpath-tx-all-paths`) or BMP (`rib_sources`) keeps the native path visible, so that withdraw is seen; see [CONFIG.md](CONFIG.md#add-path).
 
+Several edges, or a route reflector in front of them: see [route-reflector.md](route-reflector.md).
+
 The examples use documentation addresses (RFC 5737 / RFC 3849) and the private ASN 64512. Replace them. MikroTik is covered in full in [mikrotik.md](mikrotik.md); the snippet below matches that recipe.
 
 ## MikroTik RouterOS 7

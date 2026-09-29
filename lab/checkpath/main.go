@@ -8,7 +8,7 @@
 // -aspath may be left out when -has is given (a locally originated path,
 // such as Packeteer's injected route on the edge, has an empty AS path).
 // -has needs an exact community. -lacks rejects any community that starts
-// with the value. -absent instead passes only when the prefix has no path
+// with the value. -nexthop requires that next hop on the best path. -absent instead passes only when the prefix has no path
 // (a selective announcement withheld it from this session). The exit status is 0 when the best path matches, 1 when it
 // does not (the reason goes to stderr), and 2 on bad usage.
 package main
@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"slices"
 	"strings"
 )
 
@@ -30,10 +31,11 @@ func (l *list) Set(v string) error { *l = append(*l, v); return nil }
 
 // Want is what the best path must look like.
 type Want struct {
-	Absent bool
-	ASPath string
-	Has    []string
-	Lacks  []string
+	Absent  bool
+	ASPath  string
+	NextHop string
+	Has     []string
+	Lacks   []string
 }
 
 func main() {
@@ -42,10 +44,11 @@ func main() {
 	fs := flag.NewFlagSet("checkpath", flag.ContinueOnError)
 	fs.BoolVar(&w.Absent, "absent", false, "the prefix must have no path")
 	fs.StringVar(&w.ASPath, "aspath", "", "exact AS path string of the best path")
+	fs.StringVar(&w.NextHop, "nexthop", "", "next hop the best path must use")
 	fs.Var(&has, "has", "community the best path must carry (repeatable)")
 	fs.Var(&lacks, "lacks", "community prefix the best path must not carry (repeatable)")
 	if err := fs.Parse(os.Args[1:]); err != nil || (w.ASPath == "" && len(has) == 0) == !w.Absent {
-		fmt.Fprintln(os.Stderr, "usage: checkpath [-aspath PATH] [-has C]... [-lacks PREFIX]... | checkpath -absent")
+		fmt.Fprintln(os.Stderr, "usage: checkpath [-aspath PATH] [-has C]... [-lacks PREFIX]... [-nexthop IP] | checkpath -absent")
 		os.Exit(2)
 	}
 	w.Has, w.Lacks = has, lacks
@@ -71,6 +74,9 @@ type path struct {
 	Bestpath *struct {
 		Overall bool `json:"overall"`
 	} `json:"bestpath"`
+	Nexthops []struct {
+		IP string `json:"ip"`
+	} `json:"nexthops"`
 }
 
 // Check reports why the best path in raw does not match w, or nil.
@@ -124,6 +130,15 @@ func Check(raw string, w Want) error {
 	p := doc.Paths[best]
 	if got := strings.TrimSpace(p.ASPath.String); w.ASPath != "" && got != w.ASPath {
 		return fmt.Errorf("as path %q, want %q", got, w.ASPath)
+	}
+	if w.NextHop != "" {
+		var got []string
+		for _, nh := range p.Nexthops {
+			got = append(got, nh.IP)
+		}
+		if !slices.Contains(got, w.NextHop) {
+			return fmt.Errorf("next hop %v, want %s", got, w.NextHop)
+		}
 	}
 	var comms []string
 	if p.Community != nil {

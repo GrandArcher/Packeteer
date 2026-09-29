@@ -197,6 +197,15 @@ func (a *InboundAnnouncer) Bind(srv any, community string, prefixes []netip.Pref
 	if err := installInboundImport(context.Background(), s, prefixes); err != nil {
 		return err
 	}
+	if hasPolicy(context.Background(), s, routersName) {
+		// Steer routes keep their learned next hop and go to every router;
+		// the per-router provider rules (#27) must not rewrite or drop them.
+		if err := s.AddDefinedSet(context.Background(), &api.AddDefinedSetRequest{DefinedSet: &api.DefinedSet{
+			DefinedType: api.DefinedType_COMMUNITY, Name: passSetName, List: []string{a.marker},
+		}}); err != nil {
+			return fmt.Errorf("inbound announcer: router pass set: %w", err)
+		}
+	}
 	a.srv, a.community = s, community
 	a.log.Info("inbound announcer bound", "community", community, "marker", a.marker, "providers", len(a.actions))
 	return nil

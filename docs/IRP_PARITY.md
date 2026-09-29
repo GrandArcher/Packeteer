@@ -119,10 +119,12 @@ Routing policies (#20) are `policy` plugins, a filter chain in front of the scor
 | AS-path behavior options | 2.9.1 | planned | v0.3 | announcer | #27 |
 | BGP additional paths (add-path) on the iBGP session (receive, incl. inactive/IX paths, per-provider `add_path` route check) and in BMP (path-ID decoding) | 2.9.3 | done (lab-proven) | v0.3 | core (`internal/rib`) + RIB source (`bmp`) | #26 |
 | BMP monitoring (post-policy Adj-RIB-In and Loc-RIB, incl. inactive IX paths), per-provider `bmp` usage (off/prefer/only), route check before injecting | 1.2.5, 2.10 | done (lab-proven) | v0.3 | RIB source (`bmp`) | #26 |
-| Multiple edge routers | 1.2.2 | planned | v0.3 | announcer | #27 |
-| Centralized route reflector support | 1.2.10 | planned | v0.3 | announcer | #27 |
+| Multiple edge routers (N iBGP sessions, per-router provider reachability and next hop, egress-router loss retires) | 1.2.2 | done (lab-proven) | v0.3 | announcer (`gobgp`) + core | #27 |
+| Centralized route reflector support (Packeteer as a reflector client, deployment guide) | 1.2.10 | done (lab-proven) | v0.3 | announcer (`gobgp`) | #27 |
 | Internet exchanges / many peers with per-peer next-hop | 1.2.11, 3.4.6 | planned | v0.3 | announcer + RIB | #27 |
 | Bgpd online reconfiguration | 2.9.2 | planned | v0.3 | announcer | #27 |
+
+Multiple routers (#27, first half) are `bgp.neighbors` entries with optional `providers` (the transits a router forwards to itself; it is their egress) and `next_hops` (providers it reaches through another router, and the next hop it uses). The `gobgp` announcer installs a per-router export policy on the single speaker: a route toward a provider the router cannot reach is not sent to it, and one it reaches through another router is sent with that next hop. A neighbor with neither list gets every route, so single-router and route-reflector configs are unchanged. When every egress session of a provider is down, the provider is unusable (`egress router down`): no new improvement, and an active one is retired at once and withdrawn from every router. One session dropping removes only that router's routes; all sessions down withdraws everything. The learned-RIB, allowlist, community, NO_EXPORT, cap, and hold-time rules are unchanged; inbound steer routes are not affected. Route reflectors are a neighbor with no lists, Packeteer is a reflector client, and every edge resolves the provider next hop ([route-reflector.md](route-reflector.md)). The FRR lab (`lab/e2e-multirouter.sh`: two edges, a reflector, two transits) proves per-router next hops, one edge's session loss leaving the other steered, egress-router loss withdrawing everywhere, the reflected steer on both edges, SIGTERM, and SIGKILL. IX peers with per-peer next hops are the second half of #27. Lab-proven only, not on a public edge. Rollback: remove `providers`/`next_hops` and restart, or point `bgp.neighbors` at a single router.
 
 ## Multi-POP
 

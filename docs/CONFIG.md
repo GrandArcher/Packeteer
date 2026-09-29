@@ -136,6 +136,8 @@ Each neighbor:
 | `passive` | false | Wait for the router to connect. Requires `listen_port`. |
 | `description` | empty | Log label. |
 | `add_path` | false | Ask the router for additional paths (BGP add-path, RFC 7911) on this session. Receive only; Packeteer never sends them. See [Add-path](#add-path). |
+| `providers` | empty | Providers this router forwards to itself (#27). Routes toward them go to this router with the provider's `next_hop`, and the router is their egress. See [Multiple routers](#multiple-routers). |
+| `next_hops` | empty | Map of provider name to the next hop this router uses to reach that provider through another router. Routes toward it go to this router with that next hop. See [Multiple routers](#multiple-routers). |
 
 Packeteer proposes a hold time of 90 seconds and a keepalive of 30 seconds. The router's shorter hold time wins. A hold time of zero is never proposed. Graceful restart is not a config key and is never enabled. With no neighbors, the RIB view is off and decisions say ranking only: nothing is injected.
 
@@ -153,6 +155,20 @@ Without add-path the router sends Packeteer one path per prefix: its best. With 
 - **Failure.** Session loss drops every path from that neighbor, as before; with every session down the view is not ready and injected routes are withdrawn. Graceful restart stays off.
 
 **Rollback:** remove `add_path` from the neighbor and the providers and restart. The session comes up single-path and the route check falls back to BMP (if configured) or none.
+
+#### Multiple routers
+
+With several `neighbors` and neither `providers` nor `next_hops` set, every neighbor gets every injected route with the provider's `next_hop` (one edge, or route reflectors). Set them to send each router only what it can forward (#27):
+
+- A route toward a provider in the neighbor's `providers` is sent unchanged. A route toward a provider in its `next_hops` is sent with that next hop. A route toward any other provider is not sent to that neighbor.
+- The neighbors that list a provider in `providers` are its egress routers. While none of them has an established session, the provider is unusable (reason `egress router down`): no new improvement goes there, an active one is retired at once and withdrawn from every router.
+- One session dropping removes only that router's routes. All sessions down withdraws everything, as before.
+- Once any neighbor sets either list: every name must be a provider, a provider cannot be in both lists of one neighbor, a `next_hops` value must be an IP of the provider's `next_hop` family, provider `next_hop`s must be distinct (routes are matched to a provider by next hop), and every non-excluded provider must be reached by some neighbor. A neighbor with neither list reaches every provider.
+- Inbound steer routes are not affected: they keep their learned next hop and go to every neighbor.
+
+`-check` prints each neighbor's lists. The deployment guide, including route reflectors, is [route-reflector.md](route-reflector.md). Lab-proven only (`lab/e2e-multirouter.sh`).
+
+**Rollback:** remove `providers` and `next_hops` from every neighbor and restart.
 
 ### `troubleshoot`
 

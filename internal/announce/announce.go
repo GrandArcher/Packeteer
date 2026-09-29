@@ -54,6 +54,10 @@ type Config struct {
 	// Others counts routes inbound steering has on the wire. They count
 	// toward MaxImprovements too.
 	Others func() int
+	// Routers is per-router provider reachability (#27). Empty sends every
+	// route to every neighbor. Set, the announcer must implement
+	// plugin.RouterAnnouncer or Bind fails.
+	Routers []plugin.RouterExport
 }
 
 // Controller applies decision changes to an announcer.
@@ -117,6 +121,13 @@ func New(cfg Config, ann plugin.Announcer, rib RIB, log *slog.Logger) (*Controll
 func (c *Controller) Bind(srv any) error {
 	if c == nil || c.cfg.Mode != config.ModeInject {
 		return nil
+	}
+	if len(c.cfg.Routers) > 0 {
+		r, ok := c.ann.(plugin.RouterAnnouncer)
+		if !ok {
+			return fmt.Errorf("announce: announcer %T cannot send per-router routes (bgp.neighbors providers/next_hops)", c.ann)
+		}
+		return r.BindRouters(srv, c.cfg.Community, c.cfg.Routers)
 	}
 	b, ok := c.ann.(interface {
 		Bind(any, string) error

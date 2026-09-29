@@ -74,3 +74,16 @@ func TestCheckCommunityOnly(t *testing.T) {
 		t.Fatal("native best path passed a community check")
 	}
 }
+
+// The multi-router lab (#27) checks which next hop each edge got.
+func TestCheckNextHop(t *testing.T) {
+	injected := `{"prefix":"198.51.100.0/24","paths":[
+	  {"aspath":{"string":"","length":0},"valid":true,"bestpath":{"overall":true},"community":{"string":"64512:666 noExport","list":["64512:666","noExport"]},"nexthops":[{"ip":"192.0.2.252","afi":"ipv4","used":true}]},
+	  {"aspath":{"string":"64496","length":1},"valid":true,"nexthops":[{"ip":"192.0.2.21","afi":"ipv4","used":true}]}]}`
+	if err := Check(injected, Want{Has: []string{"64512:666"}, NextHop: "192.0.2.252"}); err != nil {
+		t.Fatalf("via edge-b: %v", err)
+	}
+	if err := Check(injected, Want{Has: []string{"64512:666"}, NextHop: "192.0.2.22"}); err == nil || !strings.Contains(err.Error(), "next hop") {
+		t.Fatalf("wrong next hop passed: %v", err)
+	}
+}

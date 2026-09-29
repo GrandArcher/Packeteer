@@ -230,3 +230,5 @@ jobs:
         run: bash lab/e2e-bmp.sh
       - name: FRR add-path lab (inactive path over iBGP add-path, route check, SIGTERM, SIGKILL)
         run: bash lab/e2e-addpath.sh
+      - name: FRR multi-router lab (two edges, route reflector, per-router next hop, session loss, SIGTERM, SIGKILL)
+        run: bash lab/e2e-multirouter.sh

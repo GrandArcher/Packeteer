@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"math"
 	"net"
 	"net/netip"
@@ -277,7 +278,22 @@ type BGPNeighbor struct {
 	// inactive and IX paths too. The router must be set to send them
 	// (FRR: neighbor X addpath-tx-all-paths).
 	AddPath bool `yaml:"add_path"`
+	// Providers lists the providers this router forwards to directly (its
+	// own transits). Routes toward them go to this router with the
+	// provider's next_hop, and the router is that provider's egress: when
+	// every egress session of a provider is down, no improvement uses it
+	// (#27). Empty, with NextHops also empty, means the router reaches
+	// every provider with its next_hop (one edge, or a route reflector).
+	Providers []string `yaml:"providers"`
+	// NextHops lists providers this router reaches through another router,
+	// keyed by provider name, with the next hop this router uses for them
+	// (usually that router's loopback or link address). A provider in
+	// neither list is never announced to this router.
+	NextHops map[string]string `yaml:"next_hops"`
 }
+
+// Routed reports whether the neighbor restricts which providers it reaches.
+func (n BGPNeighbor) Routed() bool { return len(n.Providers) > 0 || len(n.NextHops) > 0 }
 
 // PluginSpec selects one plugin instance.
 type PluginSpec struct {
@@ -684,6 +700,7 @@ func (c *Config) Validate() error {
 			add("%s: passive requires bgp.listen_port", label)
 		}
 	}
+	c.validateRouters(add)
 
 	validateSpecs := func(field string, specs []PluginSpec) {
 		seen := map[string]bool{}
@@ -796,6 +813,75 @@ func (c *Config) Validate() error {
 	c.validateInbound(add)
 
 	return errors.Join(errs...)
+}
+
+// validateRouters checks per-router provider reachability (#27). With no
+// neighbor restricted, every router gets every route and nothing is checked.
+func (c *Config) validateRouters(add func(string, ...any)) {
+	routed := slices.ContainsFunc(c.BGP.Neighbors, BGPNeighbor.Routed)
+	if !routed {
+		return
+	}
+	provNH := map[string]netip.Addr{}
+	byNH := map[netip.Addr]string{}
+	for _, p := range c.Providers {
+		nh, err := netip.ParseAddr(p.NextHop)
+		if err != nil || p.Name == "" {
+			continue
+		}
+		provNH[p.Name] = nh
+		// Routes are matched to a provider by next hop at export time.
+		if other, dup := byNH[nh]; dup {
+			add("providers (%s, %s): next_hop %s is shared; per-router routing (bgp.neighbors[].providers/next_hops) needs a unique next_hop per provider", other, p.Name, nh)
+		}
+		byNH[nh] = p.Name
+	}
+	reached := map[string]bool{}
+	for i, n := range c.BGP.Neighbors {
+		label := fmt.Sprintf("bgp.neighbors[%d]", i)
+		if !n.Routed() {
+			for name := range provNH {
+				reached[name] = true
+			}
+			continue
+		}
+		seen := map[string]bool{}
+		for _, name := range n.Providers {
+			if _, ok := provNH[name]; !ok {
+				add("%s: providers: %q is not a configured provider", label, name)
+				continue
+			}
+			if seen[name] {
+				add("%s: providers: duplicate %q", label, name)
+			}
+			seen[name] = true
+			reached[name] = true
+		}
+		for _, name := range slices.Sorted(maps.Keys(n.NextHops)) {
+			pnh, ok := provNH[name]
+			if !ok {
+				add("%s: next_hops: %q is not a configured provider", label, name)
+				continue
+			}
+			if seen[name] {
+				add("%s: next_hops: %q is also in providers (a router reaches a provider directly or through a next hop, not both)", label, name)
+			}
+			nh, err := netip.ParseAddr(n.NextHops[name])
+			if err != nil {
+				add("%s: next_hops: %s: %q is not a valid IP address", label, name, n.NextHops[name])
+				continue
+			}
+			if nh.Is4() != pnh.Is4() {
+				add("%s: next_hops: %s: %s must be the same address family as the provider's next_hop %s", label, name, nh, pnh)
+			}
+			reached[name] = true
+		}
+	}
+	for _, p := range c.Providers {
+		if _, ok := provNH[p.Name]; ok && !p.Exclude && !reached[p.Name] {
+			add("providers[%s]: no bgp.neighbors entry reaches it (list it in a neighbor's providers or next_hops, or exclude it)", p.Name)
+		}
+	}
 }
 
 func (c *Config) validateInbound(add func(string, ...any)) {

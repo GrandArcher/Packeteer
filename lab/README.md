@@ -24,7 +24,9 @@ The fixed prober (`type: fixed`) returns configured RTTs and sends no packets. I
 
 `lab/e2e-addpath.sh` is BGP add-path on the iBGP session (#26) on its own topology (`lab/docker-compose-addpath.yml`), with no BMP. The FRR edge (`lab/frr-addpath`) sends Packeteer every path (`neighbor 192.0.2.10 addpath-tx-all-paths`); Packeteer asks for them with `bgp.neighbors[].add_path` and checks both providers with `providers[].add_path` (`lab/packeteer-addpath.yaml`). The transits are the BMP lab's. transit-b's prepended path is inactive on the edge and reaches Packeteer only as an additional path. The script checks: (1) add-path is negotiated, Packeteer steers onto transit-b, and its looking glass holds transit-b's path and, while Packeteer's route is the edge's best, transit-a's native path, each with a path ID. (2) transit-b withdraws: the add-path route check retires the improvement within seconds, inside the 5m `hold_time`, and nothing re-injects. (3) transit-b re-announces and the steer comes back. (4) SIGTERM withdraws. (5) After a restart and a new steer, SIGKILL: the route drops with the session within the 9s hold timer.
 
-GitHub Actions runs all six scripts as the `e2e` job. Docker and Go are required (the scripts build `lab/checkroute` and `lab/checkpath`); they do not run in the unit-test job. `go test ./lab/checkroute ./lab/checkpath` covers the checks themselves.
+`lab/e2e-multirouter.sh` is multiple edge routers and a route reflector (#27) on its own topology (`lab/docker-compose-multirouter.yml`): edge-a (`lab/frr-mr-edge-a`, transit-a only), edge-b (`lab/frr-mr-edge-b`, transit-b only), a route reflector (`lab/frr-mr-rr`) with both edges as clients, and two simulated transits. Both transits send `198.51.100.0/24`; transit-b prepends, so transit-a is native on both edges, and transit-b is the faster probed path. Part one (`lab/packeteer-multirouter.yaml`) peers Packeteer with both edges; edge-a lists `providers: [transit-a]` and reaches transit-b through edge-b (`next_hops`). The script checks with `lab/checkpath -nexthop`: (1) the steer reaches edge-b with next hop `192.0.2.22` and edge-a with next hop `192.0.2.252`. (2) edge-a's session to Packeteer is shut: edge-a returns to transit-a while edge-b stays steered, and edge-a gets the route back when the session returns. (3) edge-b's session is shut: edge-b is transit-b's only egress, so the improvement retires (`egress router down`) and edge-a is withdrawn too; nothing re-injects until the session returns and the steer comes back on both. (4) SIGTERM withdraws on both edges. (5) After a restart and a new steer, SIGKILL: both edges drop the route within the 9s hold timer. Part two (`lab/packeteer-rr.yaml`) peers Packeteer with the reflector only: (6) the steer is reflected to both edges with next hop `192.0.2.22`, (7) SIGTERM withdraws on both, (8) SIGKILL drops it on both within the hold timer.
+
+GitHub Actions runs all seven scripts as the `e2e` job. Docker and Go are required (the scripts build `lab/checkroute` and `lab/checkpath`); they do not run in the unit-test job. `go test ./lab/checkroute ./lab/checkpath` covers the checks themselves.
 
 ```sh
 bash lab/e2e.sh
@@ -33,4 +35,5 @@ bash lab/e2e-cost.sh
 bash lab/e2e-inbound.sh
 bash lab/e2e-bmp.sh
 bash lab/e2e-addpath.sh
+bash lab/e2e-multirouter.sh
 ```

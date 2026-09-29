@@ -15,6 +15,8 @@ import (
 	"fmt"
 	"log/slog"
 	"net/netip"
+	"slices"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -35,6 +37,12 @@ const noExport uint32 = 0xFFFFFF01
 const (
 	setName    = "packeteer-community"
 	policyName = "packeteer-export"
+	// routersName is the per-router export policy (#27). It runs before
+	// policyName and only rewrites or rejects; policyName still accepts.
+	routersName = "packeteer-routers"
+	// passSetName holds the inbound announcer's marker. Inbound steer
+	// routes carry it and are not matched to a provider by next hop.
+	passSetName = "packeteer-routers-pass"
 )
 
 func init() { plugin.Announcers.Register(TypeName, New) }
@@ -94,6 +102,39 @@ func (a *Announcer) Bind(srv any, community string) error {
 	a.srv = s
 	a.community = community
 	a.log.Info("announcer bound", "community", community)
+	return nil
+}
+
+// BindRouters is Bind for several edge routers (#27). Before the accept
+// statement it installs, per router, a reject for routes toward providers
+// the router cannot reach and a next-hop rewrite for providers it reaches
+// through another router. Routes are matched to a provider by next hop.
+// Inbound steer routes (they carry the inbound marker) skip these rules.
+func (a *Announcer) BindRouters(srv any, community string, routers []plugin.RouterExport) error {
+	s, ok := srv.(*server.BgpServer)
+	if !ok || s == nil {
+		return errors.New("gobgp announcer: embedded speaker is required")
+	}
+	a.mu.Lock()
+	bound := a.srv != nil
+	a.mu.Unlock()
+	if bound {
+		return errors.New("gobgp announcer: already bound")
+	}
+	if err := installRouterPolicy(context.Background(), s, routers); err != nil {
+		return err
+	}
+	if err := a.Bind(srv, community); err != nil {
+		return err
+	}
+	for _, r := range routers {
+		via := make([]string, 0, len(r.Via))
+		for pnh, nh := range r.Via {
+			via = append(via, pnh.String()+"->"+nh.String())
+		}
+		sort.Strings(via)
+		a.log.Info("announcer router", "neighbor", r.Neighbor, "blocked", r.Blocked, "via", strings.Join(via, " "))
+	}
 	return nil
 }
 
@@ -301,14 +342,110 @@ func installExportPolicy(ctx context.Context, srv *server.BgpServer, community s
 		return fmt.Errorf("gobgp announcer: policy: %w", err)
 	}
 	// Replaces the learn-only assignment (default reject, no policies) with
-	// the same default plus the one accept statement above.
+	// the same default plus the one accept statement above, after the
+	// per-router rules when BindRouters installed them.
+	pols := []*api.Policy{{Name: policyName}}
+	if hasPolicy(ctx, srv, routersName) {
+		pols = []*api.Policy{{Name: routersName}, {Name: policyName}}
+	}
 	if err := srv.SetPolicyAssignment(ctx, &api.SetPolicyAssignmentRequest{Assignment: &api.PolicyAssignment{
 		Name:          "global",
 		Direction:     api.PolicyDirection_EXPORT,
-		Policies:      []*api.Policy{{Name: policyName}},
+		Policies:      pols,
 		DefaultAction: api.RouteAction_REJECT,
 	}}); err != nil {
 		return fmt.Errorf("gobgp announcer: export policy: %w", err)
+	}
+	return nil
+}
+
+func hasPolicy(ctx context.Context, srv *server.BgpServer, name string) bool {
+	found := false
+	err := srv.ListPolicy(ctx, &api.ListPolicyRequest{Name: name}, func(p *api.Policy) {
+		if p.GetName() == name {
+			found = true
+		}
+	})
+	return err == nil && found
+}
+
+// installRouterPolicy adds the per-router export rules. Rejects come first,
+// so a rewritten next hop is never matched again. Neither kind accepts:
+// a rewritten route still needs the accept statement of policyName.
+func installRouterPolicy(ctx context.Context, srv *server.BgpServer, routers []plugin.RouterExport) error {
+	if len(routers) == 0 {
+		return errors.New("gobgp announcer: no routers")
+	}
+	// Starts empty; the inbound announcer adds its marker on Bind.
+	if err := srv.AddDefinedSet(ctx, &api.AddDefinedSetRequest{DefinedSet: &api.DefinedSet{
+		DefinedType: api.DefinedType_COMMUNITY, Name: passSetName,
+	}}); err != nil {
+		return fmt.Errorf("gobgp announcer: inbound pass set: %w", err)
+	}
+	outbound := &api.MatchSet{Type: api.MatchSet_INVERT, Name: passSetName}
+	var rejects, rewrites []*api.Statement
+	seen := map[netip.Addr]bool{}
+	for i, r := range routers {
+		n := r.Neighbor.Unmap()
+		if !n.IsValid() || seen[n] {
+			return fmt.Errorf("gobgp announcer: router %d: invalid or duplicate neighbor %s", i, r.Neighbor)
+		}
+		seen[n] = true
+		nset := fmt.Sprintf("packeteer-router-%d", i)
+		if err := srv.AddDefinedSet(ctx, &api.AddDefinedSetRequest{DefinedSet: &api.DefinedSet{
+			DefinedType: api.DefinedType_NEIGHBOR, Name: nset, List: []string{netip.PrefixFrom(n, n.BitLen()).String()},
+		}}); err != nil {
+			return fmt.Errorf("gobgp announcer: neighbor set %s: %w", n, err)
+		}
+		cond := func(nhs ...netip.Addr) *api.Conditions {
+			list := make([]string, 0, len(nhs))
+			for _, nh := range nhs {
+				list = append(list, nh.Unmap().String())
+			}
+			return &api.Conditions{
+				NeighborSet:   &api.MatchSet{Type: api.MatchSet_ANY, Name: nset},
+				CommunitySet:  outbound,
+				NextHopInList: list,
+				RouteType:     api.Conditions_ROUTE_TYPE_LOCAL,
+			}
+		}
+		if len(r.Blocked) > 0 {
+			for _, nh := range r.Blocked {
+				if !nh.IsValid() {
+					return fmt.Errorf("gobgp announcer: router %s: invalid blocked next hop", n)
+				}
+			}
+			rejects = append(rejects, &api.Statement{
+				Name:       fmt.Sprintf("packeteer-router-%d-blocked", i),
+				Conditions: cond(r.Blocked...),
+				Actions:    &api.Actions{RouteAction: api.RouteAction_REJECT},
+			})
+		}
+		pnhs := make([]netip.Addr, 0, len(r.Via))
+		for pnh := range r.Via {
+			pnhs = append(pnhs, pnh)
+		}
+		slices.SortFunc(pnhs, netip.Addr.Compare)
+		for j, pnh := range pnhs {
+			nh := r.Via[pnh]
+			if !pnh.IsValid() || !nh.IsValid() || pnh.Is4() != nh.Is4() {
+				return fmt.Errorf("gobgp announcer: router %s: invalid next hop rewrite %s -> %s", n, pnh, nh)
+			}
+			// No route action: the rewritten path goes on to policyName.
+			rewrites = append(rewrites, &api.Statement{
+				Name:       fmt.Sprintf("packeteer-router-%d-via-%d", i, j),
+				Conditions: cond(pnh),
+				Actions:    &api.Actions{Nexthop: &api.NexthopAction{Address: nh.Unmap().String()}},
+			})
+		}
+	}
+	if len(rejects)+len(rewrites) == 0 {
+		return nil
+	}
+	if err := srv.AddPolicy(ctx, &api.AddPolicyRequest{Policy: &api.Policy{
+		Name: routersName, Statements: append(rejects, rewrites...),
+	}}); err != nil {
+		return fmt.Errorf("gobgp announcer: router policy: %w", err)
 	}
 	return nil
 }
