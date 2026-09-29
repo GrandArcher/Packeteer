@@ -38,14 +38,17 @@ The edge has to opt in. Without the import rule below a steer route has `local_p
 
 **Do not** accept marker routes with a policy that keeps `no-export`: the edge would then prefer a route it cannot export, and withdraw your prefix from every provider.
 
-FRR, as used in the lab ([lab/frr-inbound/frr.conf](../lab/frr-inbound/frr.conf)), with marker `64512:667`, a prepend signal `64512:1102` for transit-a, and transit-a's TE communities `64496:*`:
+FRR, as used in the lab ([lab/frr-inbound/frr.conf](../lab/frr-inbound/frr.conf)), with marker `64512:667`, a prepend signal `64512:1102` for transit-a, and transit-a's TE community `64496:3`:
 
 ```
 bgp community-list standard packeteer-inbound permit 64512:667
 bgp community-list standard no-export permit no-export
 bgp community-list standard steer-a-prepend2 permit 64512:1102
-bgp community-list expanded packeteer-signals permit ^64512:
-bgp community-list expanded transit-b-te permit ^64497:
+bgp community-list standard packeteer-signals permit 64512:666
+bgp community-list standard packeteer-signals permit 64512:667
+bgp community-list standard packeteer-signals permit 64512:1102
+bgp community-list standard packeteer-signals permit 64512:1201
+bgp community-list standard transit-b-te permit 64497:70
 !
 route-map from-packeteer permit 5
  match community packeteer-inbound
@@ -64,6 +67,8 @@ route-map to-transit-a permit 20
  set comm-list packeteer-signals delete
  set comm-list transit-b-te delete
 ```
+
+Strip communities with **standard** lists that name every value Packeteer and the other transits' catalogs can send. FRR's `set comm-list … delete` with an expanded (regex) list matches against the whole community string, not each value, and leaves values such as `64512:666` in place, so Packeteer's communities would leak to the transits.
 
 The edge must also advertise the prefix to Packeteer with a next hop that is not one of its own addresses (the lab rewrites it), or rewrite the next hop on import, because Packeteer re-announces the learned next hop.
 
