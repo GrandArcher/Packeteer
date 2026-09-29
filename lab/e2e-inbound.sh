@@ -100,8 +100,12 @@ flip_paths() { flip_file "$1" paths.yaml; }
 
 packeteer_logs() { "${compose[@]}" logs --no-color packeteer; }
 
+# The logs are read into a variable first: with pipefail, grep -q exiting
+# on the first match would SIGPIPE docker compose logs and fail the check.
 need_log() {
-	if ! packeteer_logs | grep -qE "$1"; then
+	local logs
+	logs=$(packeteer_logs)
+	if ! grep -qE "$1" <<<"$logs"; then
 		echo "packeteer log is missing: $1 ($2)" >&2
 		dump_bgp
 		exit 1
@@ -116,13 +120,13 @@ echo "commit trigger: waiting for the steer (prepend and TE community on transit
 wait_for "transit-a steered, transit-b plain" steered_only_a
 logs=$(packeteer_logs)
 for want in 'msg="inbound steer"' 'trigger=commit' 'inbound announced' 'communities="64512:666 64512:667 64512:1102 64496:3"'; do
-	if ! printf '%s\n' "$logs" | grep -qF "$want"; then
+	if ! grep -qF "$want" <<<"$logs"; then
 		echo "packeteer log is missing: $want" >&2
 		dump_bgp
 		exit 1
 	fi
 done
-if printf '%s\n' "$logs" | grep -q 'cause=performance\|cause=commit\|msg=injected'; then
+if grep -q 'cause=performance\|cause=commit\|msg=injected' <<<"$logs"; then
 	echo "inbound lab produced an outbound improvement" >&2
 	dump_bgp
 	exit 1
