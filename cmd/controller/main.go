@@ -16,6 +16,7 @@ import (
 	"os"
 	"os/signal"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -167,7 +168,11 @@ func run(ctx context.Context, args []string, getenv func(string) string, stdout,
 	fmt.Fprintf(stdout, "max_improvements: %d\n", *cfg.MaxImprovements)
 	fmt.Fprintf(stdout, "providers (%d):\n", len(cfg.Providers))
 	for _, p := range cfg.Providers {
-		fmt.Fprintf(stdout, "  - %s source_ip=%s next_hop=%s\n", p.Name, p.SourceIP, p.NextHop)
+		bmp := ""
+		if p.BMP != "" && p.BMP != config.BMPOff {
+			bmp = " bmp=" + p.BMP
+		}
+		fmt.Fprintf(stdout, "  - %s source_ip=%s next_hop=%s%s\n", p.Name, p.SourceIP, p.NextHop, bmp)
 	}
 	if len(cfg.BGP.Neighbors) == 0 {
 		fmt.Fprintln(stdout, "bgp: disabled (no bgp.neighbors)")
@@ -358,6 +363,10 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 		_ = dispatch.Close(closeCtx)
 	}()
 	watch := newEventWatch(dispatch, cfg.Mode)
+	if err := wireRIBSources(plugins, view); err != nil {
+		log.Error("refusing to start", "err", err)
+		return 1
+	}
 	wirePrefixLookup(plugins, view)
 	wireLearnedRoutes(plugins, view)
 	wireOutage(plugins, engine, view, dispatch)
@@ -1080,12 +1089,16 @@ func newRIB(cfg *config.Config, log *slog.Logger) (*rib.View, error) {
 		return nil, err
 	}
 	providers := map[netip.Addr]string{}
+	usage := map[string]string{}
 	for _, p := range cfg.Providers {
 		nh, err := parseAddr(p.NextHop)
 		if err != nil {
 			return nil, err
 		}
 		providers[nh] = p.Name
+		if p.BMP != "" {
+			usage[p.Name] = p.BMP
+		}
 	}
 	var nbrs []rib.Neighbor
 	for _, n := range cfg.BGP.Neighbors {
@@ -1105,8 +1118,46 @@ func newRIB(cfg *config.Config, log *slog.Logger) (*rib.View, error) {
 	if listen == 0 {
 		listen = -1
 	}
+	own, err := ownCommunity(cfg.PacketeerCommunity)
+	if err != nil {
+		return nil, err
+	}
 	return rib.New(rib.Options{ASN: cfg.ASN, RouterID: rid, ListenPort: listen,
-		ListenAddresses: cfg.BGP.ListenAddresses, Neighbors: nbrs, Providers: providers, Logger: log})
+		ListenAddresses: cfg.BGP.ListenAddresses, Neighbors: nbrs, Providers: providers, BMP: usage,
+		OwnCommunity: own, Logger: log})
+}
+
+// ownCommunity turns packeteer_community ("asn:value") into asn<<16|value,
+// or 0 when it is unset.
+func ownCommunity(s string) (uint32, error) {
+	if s == "" {
+		return 0, nil
+	}
+	hi, lo, _ := strings.Cut(s, ":")
+	a, err := strconv.ParseUint(hi, 10, 16)
+	if err != nil {
+		return 0, fmt.Errorf("packeteer_community %q: %w", s, err)
+	}
+	b, err := strconv.ParseUint(lo, 10, 16)
+	if err != nil {
+		return 0, fmt.Errorf("packeteer_community %q: %w", s, err)
+	}
+	return uint32(a)<<16 | uint32(b), nil
+}
+
+// wireRIBSources points every RIB source (BMP) at the view. It runs before
+// the plugins start, so no event is lost.
+func wireRIBSources(plugins *pluginhost.Set, view *rib.View) error {
+	if len(plugins.RIBSources) == 0 {
+		return nil
+	}
+	if view == nil {
+		return errors.New("rib_sources require bgp.neighbors")
+	}
+	for _, s := range plugins.RIBSources {
+		s.Plugin.SetRIBSink(view.ApplyRIB)
+	}
+	return nil
 }
 
 func logRIB(ctx context.Context, v *rib.View, log *slog.Logger) {
@@ -1177,6 +1228,7 @@ func decisionInput(ctx context.Context, now time.Time, engine *probe.Engine, vie
 				in.Native[r.Prefix] = rt.Provider
 			}
 		}
+		fillRouteChecks(&in, view)
 	}
 	var routes routeLookup
 	if view != nil {
@@ -1185,6 +1237,31 @@ func decisionInput(ctx context.Context, now time.Time, engine *probe.Engine, vie
 	applyPolicies(&in, now, routes, plugins)
 	fillPlannerInputs(ctx, &in, plugins)
 	return in
+}
+
+// routeChecker is the RIB surface the BMP route check reads. *rib.View
+// implements it.
+type routeChecker interface {
+	RouteCheck(netip.Prefix, string) (checked, ok bool)
+}
+
+// fillRouteChecks marks, per probed prefix, the providers the route check
+// (bmp prefer or only) found without a path for that exact prefix. Decide
+// does not use them for that prefix.
+func fillRouteChecks(in *policy.Input, view routeChecker) {
+	for _, r := range in.Results {
+		checked, ok := view.RouteCheck(r.Prefix, r.Provider)
+		if !checked || ok {
+			continue
+		}
+		if in.NoRoute == nil {
+			in.NoRoute = map[netip.Prefix]map[string]bool{}
+		}
+		if in.NoRoute[r.Prefix] == nil {
+			in.NoRoute[r.Prefix] = map[string]bool{}
+		}
+		in.NoRoute[r.Prefix][r.Provider] = true
+	}
 }
 
 // routeLookup is the RIB surface policies read. *rib.View implements it.

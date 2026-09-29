@@ -39,6 +39,7 @@ The image entrypoint is the same binary. Flags go after the image name.
 | `log` | `info` / `text` | no | Process log. |
 | `http` | `127.0.0.1:8080` | no | Read-only dashboard, API, and metrics. |
 | `bgp` | no neighbors | inject: at least one neighbor | iBGP sessions. |
+| `rib_sources` | none | no | Route feeds into the RIB view from outside the iBGP session: `type: bmp` is a BMP monitoring station. Needs `bgp.neighbors`. Learn-only, in-process only; does not announce. See [RIB source `bmp`](#rib-source-bmp). |
 | `plugin_dir` | `/etc/packeteer/plugins` | no | Directory for out-of-process plugins. |
 | `probers` | `icmp`, then `tcp` | no | Ordered. Later entries run only when an earlier one errors. |
 | `sources` | none | no | Probe targets. With none, the process starts and probes nothing. |
@@ -74,6 +75,7 @@ A candidate wins when its score is lower and either loss improves by at least `m
 | `precedence` | no | Commit-control preference. Lower is preferred. `0` or omitted means 100. 0–10000. The highest precedence among providers that can take commit traffic is the last resort. |
 | `cc_disable` | no | `true`: leave this provider out of commit control in both directions. Performance improvements can still select it. |
 | `cost` | no | Price per Mbps, 0–1000000000, in one currency across all providers. Omitted means no cost: the `cost` scorer never moves a prefix onto this provider or off it for price. Improvements between two priced providers carry `cost_delta` and `est_savings` on `/api/improvements`. |
+| `bmp` | no | How this provider uses paths from `rib_sources` (BMP): `off` (default), `prefer`, or `only`. `prefer` and `only` need a `rib_sources` entry. See [RIB source `bmp`](#rib-source-bmp). |
 
 ### `allowlist`
 
@@ -190,7 +192,7 @@ A commit steer that flaps also learns inertia: how much inbound traffic returned
 
 ### Plugin entries
 
-`probers`, `sources`, `notifiers`, `telemetry`, and `policies` are lists. `scorer` and `announcer` are single objects.
+`probers`, `sources`, `notifiers`, `telemetry`, `policies`, and `rib_sources` are lists. `scorer` and `announcer` are single objects.
 
 | Key | Meaning |
 |---|---|
@@ -732,6 +734,48 @@ Used under `troubleshoot.whois`. Asks an RDAP server (RFC 9082/9083) about an ad
 | `base_url` | `https://rdap.org` | RDAP service. `http` or `https`, no credentials, query, or fragment. rdap.org redirects to the right registry; at most 3 redirects, and an `https` base never follows a redirect to `http`. |
 | `timeout` | `5s` | Whole request, up to `1m`. |
 | `max_bytes` | `262144` | Largest response accepted, 1024–4194304. |
+
+### RIB source `bmp`
+
+A BMP monitoring station (RFC 7854; Loc-RIB per RFC 9069). Edge routers connect to it and stream the routes they receive from each BGP peer, so Packeteer sees every provider's path for a prefix, including paths the router did not select (an inactive IX or backup transit path), without a full iBGP feed. It never sends BGP and never announces. Lab-proven only (`lab/e2e-bmp.sh`).
+
+```yaml
+providers:
+  - name: transit-a
+    source_ip: 192.0.2.11
+    next_hop: 192.0.2.21   # the router's eBGP peer address for this provider
+    bmp: only
+rib_sources:
+  - type: bmp
+    config:
+      listen: ":11019"
+      routers: [192.0.2.254]
+```
+
+| Key | Default | Meaning |
+|---|---|---|
+| `listen` | `:11019` | `host:port` of the station. The host must be an IP address. With `--network host` this is a host port; firewall it to the routers. |
+| `routers` | required | Router addresses allowed to connect. A session from any other address is closed at once. A router that reconnects replaces its old session; the old session's paths are dropped first. |
+| `policy` | `pre` | Which Adj-RIB-In to read: `pre` (before the router's import policy) or `post`. Messages for the other side, and Adj-RIB-Out, are ignored. |
+| `loc_rib` | `true` | Read Loc-RIB messages (the router's selected route) when the router sends them. |
+
+A BMP path is attributed to a provider by its next hop (`providers[].next_hop`), like an iBGP path. The provider's `bmp` key decides how it is used:
+
+- `off` (default): BMP paths through this provider are ignored. Only iBGP counts, as before.
+- `prefer`: BMP paths through this provider count. The route check applies while a BMP session reports this provider's BGP peer (the address equal to its `next_hop`) up; without that it falls back to no check.
+- `only`: only BMP paths count; iBGP paths through this provider are ignored. The route check always applies, so when BMP is down the provider has no routes and gets no improvements.
+
+**Route check.** Before a prefix is steered to a provider with `prefer` (while its peer is up) or `only`, that provider must be advertising that exact prefix. A provider without it is not usable for the prefix: no new improvement goes there, and an active improvement onto it is retired at once (reason `no route via provider (bmp)`), ignoring hold time. The native provider is never refused. This check is how Packeteer notices a withdraw on the steered provider while the router hides the native path.
+
+**The published route.** A prefix is in the learned RIB when an iBGP path or a usable BMP path has it, so a prefix learned only over BMP can be announced (still exact, allowlisted, tagged, capped). The native provider comes from the iBGP path first (the router's best as it sent it), then a Loc-RIB path, then the Adj-RIB-In path with the shortest AS path (lower router and peer address on a tie). That last one is an estimate, not the router's decision process; send Loc-RIB or keep the iBGP feed where the estimate would be wrong. An Adj-RIB-In path whose next hop matches no provider is ignored; a Loc-RIB path whose next hop matches no provider is kept, so the native is "none" and nothing is improved.
+
+**Packeteer's own routes.** A router reports Packeteer's injected route back over BMP: in the Adj-RIB-In of Packeteer's iBGP session and, once it wins, in Loc-RIB. Its next hop is the steered provider. Packeteer ignores every path on a peer whose BGP ID is its `router_id`, and every path tagged with `packeteer_community`, so an injected route never keeps its prefix in the view or passes its own route check. Keep `packeteer_community` on the route through the router's import policy (the lab edge does) so Loc-RIB still carries it.
+
+**Failure.** The view is ready only while an iBGP session is up (the announcer needs it); BMP never makes it ready. When a router's BMP session ends (TCP close, termination, read error, TCP keepalive timeout, shutdown), every path from that router is dropped. A peer down drops that peer's paths. A peer whose messages cannot be decoded, or whose OPENs negotiated add-path (not decoded yet, #26 follow-up), is treated as down until its next peer up. Improvements that lose their provider's path then retire through the route check; a prefix that leaves the view is retired as before.
+
+FRR sends BMP with `-M bmp` on bgpd and a `bmp targets` block (`bmp connect <station> port 11019`, `bmp monitor ipv4 unicast pre-policy`, optionally `bmp monitor ipv4 unicast loc-rib`); see `lab/frr-bmp/frr.conf`.
+
+**Rollback:** set every provider's `bmp` to `off` (or remove it) and remove `rib_sources`; the view falls back to the iBGP RIB.
 
 ### Announcer `gobgp`
 

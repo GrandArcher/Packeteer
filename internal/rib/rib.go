@@ -8,6 +8,11 @@
 // through providers[].next_hop, to the provider. The speaker is learn-only:
 // its global export policy rejects everything, and graceful restart is never
 // enabled. It proposes a 90s hold time so a silent session still drops.
+//
+// A RIB source plugin (BMP, #26) can add the routers' pre-policy
+// Adj-RIB-In, including paths the router did not select (inactive IX
+// paths), and their Loc-RIB. Each provider's `bmp` usage decides whether
+// those paths count for it.
 package rib
 
 import (
@@ -15,6 +20,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"net/netip"
 	"slices"
 	"sort"
@@ -22,6 +28,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/GrandArcher/Packeteer/pkg/plugin"
 	api "github.com/osrg/gobgp/v3/api"
 	gobgplog "github.com/osrg/gobgp/v3/pkg/log"
 	"github.com/osrg/gobgp/v3/pkg/server"
@@ -53,8 +60,35 @@ type Options struct {
 	Neighbors       []Neighbor
 	// Providers maps a next-hop address to a provider name.
 	Providers map[netip.Addr]string
-	Logger    *slog.Logger
+	// BMP is each provider's BMP usage (BMPOff, BMPPrefer, BMPOnly). A
+	// provider that is not listed is off.
+	BMP map[string]string
+	// OwnCommunity is packeteer_community as asn<<16|value (0: none). A BMP
+	// path that carries it is Packeteer's own route reflected back by the
+	// router (Loc-RIB, or the Adj-RIB-In of Packeteer's session) and is
+	// ignored, so an injected route never keeps its own prefix in the view
+	// or passes its own route check.
+	OwnCommunity uint32
+	Logger       *slog.Logger
 }
+
+// BMP usage per provider.
+const (
+	// BMPOff ignores BMP paths for the provider; only iBGP counts.
+	BMPOff = "off"
+	// BMPPrefer uses BMP paths and the iBGP view. The route check applies
+	// while a BMP session reports the provider's BGP peer up.
+	BMPPrefer = "prefer"
+	// BMPOnly uses only BMP paths for the provider and always applies the
+	// route check. iBGP paths through it are ignored.
+	BMPOnly = "only"
+)
+
+// Route sources.
+const (
+	SourceIBGP = "ibgp"
+	SourceBMP  = "bmp"
+)
 
 // Route is a path a configured neighbor is advertising for a prefix.
 type Route struct {
@@ -62,8 +96,13 @@ type Route struct {
 	NextHop  netip.Addr   `json:"next_hop"`
 	Provider string       `json:"provider,omitempty"` // "" if the next-hop matches no provider
 	ASPath   []uint32     `json:"as_path,omitempty"`
-	Neighbor netip.Addr   `json:"neighbor"`
-	Age      time.Time    `json:"since"`
+	// Neighbor is the iBGP neighbor, or for BMP the router's BGP peer
+	// (unset for a Loc-RIB path).
+	Neighbor netip.Addr `json:"neighbor"`
+	Age      time.Time  `json:"since"`
+	Source   string     `json:"source"`            // SourceIBGP or SourceBMP
+	Router   netip.Addr `json:"router,omitzero"`   // BMP: the monitored router
+	LocRIB   bool       `json:"loc_rib,omitempty"` // BMP: the router's selected route
 
 	localPref uint32 // selection only; 100 when the attribute is absent
 }
@@ -88,6 +127,9 @@ type View struct {
 	mu        sync.RWMutex
 	routes    map[netip.Prefix]Route                // selected learned path per prefix
 	adj       map[netip.Prefix]map[netip.Addr]Route // prefix -> neighbor -> advertised path
+	bmp       map[netip.Prefix]map[bmpKey]Route     // prefix -> router peer -> BMP path
+	bmpPeers  map[bmpKey]bool                       // peers a BMP session reports up
+	provNH    map[string]netip.Addr                 // provider -> next hop
 	peers     map[netip.Addr]PeerState
 	neighbors map[netip.Addr]bool
 	onChange  []func()
@@ -106,8 +148,19 @@ func New(opt Options) (*View, error) {
 		opt.Logger = slog.Default()
 	}
 	v := &View{opt: opt, log: opt.Logger, routes: map[netip.Prefix]Route{},
-		adj:   map[netip.Prefix]map[netip.Addr]Route{},
+		adj: map[netip.Prefix]map[netip.Addr]Route{}, bmp: map[netip.Prefix]map[bmpKey]Route{},
+		bmpPeers: map[bmpKey]bool{}, provNH: map[string]netip.Addr{},
 		peers: map[netip.Addr]PeerState{}, neighbors: map[netip.Addr]bool{}}
+	for nh, name := range opt.Providers {
+		v.provNH[name] = nh.Unmap()
+	}
+	for name, u := range opt.BMP {
+		switch u {
+		case "", BMPOff, BMPPrefer, BMPOnly:
+		default:
+			return nil, fmt.Errorf("rib: provider %s: bmp %q is invalid (want off, prefer, or only)", name, u)
+		}
+	}
 	for _, n := range opt.Neighbors {
 		if !n.Address.IsValid() {
 			return nil, errors.New("rib: neighbor address is required")
@@ -222,6 +275,8 @@ func (v *View) Stop(context.Context) error {
 	v.mu.Lock()
 	v.routes = map[netip.Prefix]Route{}
 	v.adj = map[netip.Prefix]map[netip.Addr]Route{}
+	v.bmp = map[netip.Prefix]map[bmpKey]Route{}
+	v.bmpPeers = map[bmpKey]bool{}
 	for a, p := range v.peers {
 		p.State, p.Established = "idle", false
 		v.peers[a] = p
@@ -321,7 +376,7 @@ func (v *View) applyPath(p *api.Path) bool {
 	}
 	v.adj[prefix][neighbor] = Route{
 		Prefix: prefix, NextHop: nh, Provider: v.opt.Providers[nh.Unmap()], ASPath: asPath,
-		Neighbor: neighbor, Age: time.Now(), localPref: lp,
+		Neighbor: neighbor, Age: time.Now(), Source: SourceIBGP, localPref: lp,
 	}
 	return v.republishLocked(prefix)
 }
@@ -344,10 +399,10 @@ func (v *View) forgetNeighborLocked(addr netip.Addr) bool {
 	return changed
 }
 
-// republishLocked sets the published route for p from the remaining adj-RIB-in
-// paths. Caller holds mu.
+// republishLocked sets the published route for p from the remaining
+// iBGP and BMP paths. Caller holds mu.
 func (v *View) republishLocked(p netip.Prefix) bool {
-	best, ok := selectRoute(v.adj[p])
+	best, ok := v.selectLocked(p)
 	if !ok {
 		if _, exists := v.routes[p]; !exists {
 			return false
@@ -360,6 +415,31 @@ func (v *View) republishLocked(p netip.Prefix) bool {
 	}
 	v.routes[p] = best
 	return true
+}
+
+// selectLocked picks the published route: the iBGP path (the router's own
+// best as sent to Packeteer), then a BMP Loc-RIB path, then a BMP
+// Adj-RIB-In path. Paths a provider's bmp usage excludes are skipped.
+// Caller holds mu.
+func (v *View) selectLocked(p netip.Prefix) (Route, bool) {
+	nbrs := v.adj[p]
+	for _, rt := range nbrs {
+		if !v.usableLocked(rt) {
+			nbrs = maps.Clone(nbrs)
+			maps.DeleteFunc(nbrs, func(_ netip.Addr, rt Route) bool { return !v.usableLocked(rt) })
+			break
+		}
+	}
+	if rt, ok := selectRoute(nbrs); ok {
+		return rt, true
+	}
+	return selectBMP(v.bmp[p])
+}
+
+// usableLocked applies bmp usage: an iBGP path through a provider set to
+// only is ignored. BMP paths are filtered when they are stored.
+func (v *View) usableLocked(rt Route) bool {
+	return rt.Source == SourceBMP || rt.Provider == "" || v.opt.BMP[rt.Provider] != BMPOnly
 }
 
 // selectRoute picks one advertised path. Higher local preference wins; equal
@@ -375,9 +455,281 @@ func selectRoute(paths map[netip.Addr]Route) (Route, bool) {
 	return best, ok
 }
 
+// selectBMP prefers a Loc-RIB path (the router's own choice). Without one it
+// takes the shortest AS path, then the lower router and peer address. That
+// is an estimate of the router's best, not its decision process.
+func selectBMP(paths map[bmpKey]Route) (Route, bool) {
+	var best Route
+	ok := false
+	for _, rt := range paths {
+		if !ok || bmpLess(rt, best) {
+			best, ok = rt, true
+		}
+	}
+	return best, ok
+}
+
+func bmpLess(a, b Route) bool {
+	if a.LocRIB != b.LocRIB {
+		return a.LocRIB
+	}
+	if len(a.ASPath) != len(b.ASPath) {
+		return len(a.ASPath) < len(b.ASPath)
+	}
+	if a.Router != b.Router {
+		return a.Router.Less(b.Router)
+	}
+	return a.Neighbor.Less(b.Neighbor)
+}
+
 func sameRoute(a, b Route) bool {
 	return a.Prefix == b.Prefix && a.NextHop == b.NextHop && a.Provider == b.Provider &&
-		a.Neighbor == b.Neighbor && a.localPref == b.localPref && slices.Equal(a.ASPath, b.ASPath)
+		a.Neighbor == b.Neighbor && a.localPref == b.localPref && slices.Equal(a.ASPath, b.ASPath) &&
+		a.Source == b.Source && a.Router == b.Router && a.LocRIB == b.LocRIB
+}
+
+// ---- BMP ----
+
+// bmpKey is one peer (or the Loc-RIB) on one monitored router.
+type bmpKey struct {
+	router netip.Addr
+	peer   netip.Addr
+	locRIB bool
+}
+
+// ApplyRIB takes one event from a RIB source plugin. It is safe to call
+// from any goroutine. A path is stored only when its provider's bmp usage
+// is prefer or only; a Loc-RIB path whose next hop matches no provider is
+// kept too, so the published native provider can be "none" rather than a
+// guess. A path is never announced by this; it only makes the prefix
+// part of the learned view.
+func (v *View) ApplyRIB(ev plugin.RIBEvent) {
+	router := ev.Router.Unmap()
+	if !router.IsValid() {
+		return
+	}
+	key := bmpKey{router: router, peer: ev.Peer.Address.Unmap(), locRIB: ev.Peer.LocRIB}
+	if key.locRIB {
+		key.peer = netip.Addr{}
+	} else if ev.Kind != plugin.RIBRouterDown && ev.Peer.BGPID.IsValid() && ev.Peer.BGPID.Unmap() == v.opt.RouterID.Unmap() {
+		// Packeteer's own iBGP session as the router sees it: every path
+		// on it is a route Packeteer injected.
+		return
+	}
+	v.mu.Lock()
+	changed := false
+	switch ev.Kind {
+	case plugin.RIBRouterDown:
+		for k := range v.bmpPeers {
+			if k.router == router {
+				delete(v.bmpPeers, k)
+				changed = true
+			}
+		}
+		if v.forgetBMPLocked(func(k bmpKey) bool { return k.router == router }) {
+			changed = true
+		}
+	case plugin.RIBPeerUp:
+		if !v.bmpPeers[key] {
+			v.bmpPeers[key] = true
+			changed = true
+		}
+	case plugin.RIBPeerDown:
+		if v.bmpPeers[key] {
+			delete(v.bmpPeers, key)
+			changed = true
+		}
+		if v.forgetBMPLocked(func(k bmpKey) bool { return k == key }) {
+			changed = true
+		}
+	case plugin.RIBPaths:
+		if !v.bmpPeers[key] {
+			// Route monitoring implies the peer is up (RFC 7854 sends
+			// peer up first; a Loc-RIB may not).
+			v.bmpPeers[key] = true
+			changed = true
+		}
+		for _, p := range ev.Paths {
+			if v.applyBMPLocked(key, ev.Peer, p) {
+				changed = true
+			}
+		}
+	}
+	v.mu.Unlock()
+	if changed {
+		v.notify()
+	}
+}
+
+func (v *View) applyBMPLocked(key bmpKey, peer plugin.RIBPeer, p plugin.RIBPath) bool {
+	if !p.Prefix.IsValid() {
+		return false
+	}
+	prefix := p.Prefix.Masked()
+	if p.Withdraw {
+		paths := v.bmp[prefix]
+		if _, ok := paths[key]; !ok {
+			return false
+		}
+		delete(paths, key)
+		if len(paths) == 0 {
+			delete(v.bmp, prefix)
+		}
+		return v.republishLocked(prefix)
+	}
+	nh := p.NextHop.Unmap()
+	provider := v.opt.Providers[nh]
+	keep := false
+	switch v.opt.BMP[provider] {
+	case BMPPrefer, BMPOnly:
+		keep = provider != ""
+	}
+	if provider == "" && key.locRIB {
+		keep = true
+	}
+	if v.opt.OwnCommunity != 0 && slices.Contains(p.Communities, v.opt.OwnCommunity) {
+		keep = false
+	}
+	if !keep {
+		// Not ours to use; an update can still replace a path stored
+		// before, so drop that one.
+		if _, ok := v.bmp[prefix][key]; ok {
+			delete(v.bmp[prefix], key)
+			if len(v.bmp[prefix]) == 0 {
+				delete(v.bmp, prefix)
+			}
+			return v.republishLocked(prefix)
+		}
+		return false
+	}
+	if v.bmp[prefix] == nil {
+		v.bmp[prefix] = map[bmpKey]Route{}
+	}
+	v.bmp[prefix][key] = Route{Prefix: prefix, NextHop: nh, Provider: provider, ASPath: slices.Clone(p.ASPath),
+		Neighbor: key.peer, Age: time.Now(), Source: SourceBMP, Router: key.router, LocRIB: key.locRIB}
+	return v.republishLocked(prefix)
+}
+
+// forgetBMPLocked drops every BMP path whose key matches. Caller holds mu.
+func (v *View) forgetBMPLocked(match func(bmpKey) bool) bool {
+	changed := false
+	for p, paths := range v.bmp {
+		n := len(paths)
+		maps.DeleteFunc(paths, func(k bmpKey, _ Route) bool { return match(k) })
+		if len(paths) == n {
+			continue
+		}
+		if len(paths) == 0 {
+			delete(v.bmp, p)
+		}
+		if v.republishLocked(p) {
+			changed = true
+		}
+	}
+	return changed
+}
+
+// Paths returns every path the view holds for exactly p, after bmp usage
+// filtering: iBGP paths first, then BMP paths, each by router and neighbor.
+func (v *View) Paths(p netip.Prefix) []Route {
+	p = p.Masked()
+	v.mu.RLock()
+	defer v.mu.RUnlock()
+	return v.pathsLocked(p)
+}
+
+func (v *View) pathsLocked(p netip.Prefix) []Route {
+	var out []Route
+	for _, rt := range v.adj[p] {
+		if v.usableLocked(rt) {
+			out = append(out, rt)
+		}
+	}
+	for _, rt := range v.bmp[p] {
+		out = append(out, rt)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		a, b := out[i], out[j]
+		if a.Source != b.Source {
+			return a.Source == SourceIBGP
+		}
+		if a.Router != b.Router {
+			return a.Router.Less(b.Router)
+		}
+		if a.LocRIB != b.LocRIB {
+			return a.LocRIB
+		}
+		return a.Neighbor.Less(b.Neighbor)
+	})
+	return out
+}
+
+// RouteCheck reports whether provider has a path for exactly p. checked is
+// false when no check applies: bmp usage off, or prefer while no BMP
+// session reports the provider's BGP peer (its next_hop) up. With only, the
+// check always applies, so a lost BMP feed leaves the provider without
+// routes.
+func (v *View) RouteCheck(p netip.Prefix, provider string) (checked, ok bool) {
+	p = p.Masked()
+	v.mu.RLock()
+	defer v.mu.RUnlock()
+	switch v.opt.BMP[provider] {
+	case BMPOnly:
+	case BMPPrefer:
+		if !v.coveredLocked(provider) {
+			return false, false
+		}
+	default:
+		return false, false
+	}
+	for _, rt := range v.pathsLocked(p) {
+		if rt.Provider == provider {
+			return true, true
+		}
+	}
+	return true, false
+}
+
+// coveredLocked reports whether a BMP session reports the provider's BGP
+// peer up. Caller holds mu.
+func (v *View) coveredLocked(provider string) bool {
+	nh, ok := v.provNH[provider]
+	if !ok {
+		return false
+	}
+	for k := range v.bmpPeers {
+		if !k.locRIB && k.peer == nh {
+			return true
+		}
+	}
+	return false
+}
+
+// BMPPeer is one BGP peer a BMP session reports up.
+type BMPPeer struct {
+	Router netip.Addr `json:"router"`
+	Peer   netip.Addr `json:"peer,omitzero"`
+	LocRIB bool       `json:"loc_rib,omitempty"`
+}
+
+// BMPPeers lists the peers BMP sessions report up, sorted.
+func (v *View) BMPPeers() []BMPPeer {
+	v.mu.RLock()
+	defer v.mu.RUnlock()
+	out := make([]BMPPeer, 0, len(v.bmpPeers))
+	for k := range v.bmpPeers {
+		out = append(out, BMPPeer{Router: k.router, Peer: k.peer, LocRIB: k.locRIB})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Router != out[j].Router {
+			return out[i].Router.Less(out[j].Router)
+		}
+		if out[i].LocRIB != out[j].LocRIB {
+			return out[i].LocRIB
+		}
+		return out[i].Peer.Less(out[j].Peer)
+	})
+	return out
 }
 
 func decodePrefix(a *anypb.Any) (netip.Prefix, bool) {

@@ -1,0 +1,55 @@
+# Lab only (#26). Documentation prefix, private and documentation ASNs.
+# The edge's iBGP session carries only transit-a's path for
+# 198.51.100.0/24; transit-b's inactive path is visible only over BMP.
+# lab/e2e-bmp.sh withdraws it on transit-b and drops the edge's BMP
+# session; each must retire the improvement inside hold_time.
+mode: inject
+asn: 64512
+router_id: 192.0.2.10
+packeteer_community: "64512:666"
+local_pref: 250
+max_improvements: 50
+hold_time: 5m
+improvement_ttl: 1h
+thresholds:
+  min_loss_delta_pct: 1
+  min_rtt_delta_ms: 15
+providers:
+  - name: transit-a
+    source_ip: 192.0.2.11
+    next_hop: 192.0.2.21
+    bmp: prefer
+  - name: transit-b
+    source_ip: 192.0.2.12
+    next_hop: 192.0.2.22
+    bmp: only
+allowlist:
+  prefixes:
+    - 198.51.100.0/24
+probe:
+  interval: 2s
+  timeout: 500ms
+  packets: 4
+bgp:
+  neighbors:
+    - address: 192.0.2.254
+      description: edge
+rib_sources:
+  - type: bmp
+    config:
+      listen: "192.0.2.10:11019"
+      routers: [192.0.2.254]
+sources:
+  - type: static
+    config:
+      targets:
+        - prefix: 198.51.100.0/24
+          host: 198.51.100.1
+# transit-b is always the faster path; only the route check keeps
+# Packeteer off it.
+probers:
+  - type: fixed
+    config:
+      file: /etc/packeteer/probes/state.yaml
+announcer:
+  type: gobgp

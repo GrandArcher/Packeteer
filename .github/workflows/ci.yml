@@ -226,3 +226,5 @@ jobs:
         run: bash lab/e2e-cost.sh
       - name: FRR inbound lab (commit, performance, damping, withhold)
         run: bash lab/e2e-inbound.sh
+      - name: FRR BMP lab (inactive path, route check, BMP loss)
+        run: bash lab/e2e-bmp.sh

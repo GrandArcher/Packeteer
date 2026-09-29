@@ -59,3 +59,18 @@ func TestCheck(t *testing.T) {
 		}
 	}
 }
+
+// Packeteer's route on the edge is locally originated (empty AS path); the
+// BMP lab checks it by community alone.
+func TestCheckCommunityOnly(t *testing.T) {
+	injected := `{"prefix":"198.51.100.0/24","paths":[
+	  {"aspath":{"string":"","length":0},"valid":true,"bestpath":{"overall":true},"community":{"string":"64512:666 noExport","list":["64512:666","noExport"]}},
+	  {"aspath":{"string":"64496","length":1},"valid":true}]}`
+	if err := Check(injected, Want{Has: []string{"64512:666"}}); err != nil {
+		t.Fatalf("injected: %v", err)
+	}
+	native := `{"prefix":"198.51.100.0/24","paths":[{"aspath":{"string":"64496","length":1},"valid":true,"bestpath":{"overall":true}}]}`
+	if err := Check(native, Want{Has: []string{"64512:666"}}); err == nil {
+		t.Fatal("native best path passed a community check")
+	}
+}

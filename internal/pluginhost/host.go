@@ -35,6 +35,8 @@ type Set struct {
 	Storage   *Instance[plugin.Storage]
 	// Whois serves the troubleshooting API only. It never announces.
 	Whois *Instance[plugin.Whois]
+	// RIBSources feed the RIB view (BMP). They never announce.
+	RIBSources []Instance[plugin.RIBSource]
 
 	started []namedLifecycle
 }
@@ -89,6 +91,8 @@ func Build(cfg *config.Config, opts Options) (*Set, error) {
 		Notifiers: build(plugin.Notifiers, "notifiers", cfg.Notifiers, base, &errs),
 		Telemetry: build(plugin.Telemetries, "telemetry", cfg.Telemetry, base, &errs),
 		Policies:  build(plugin.Policies, "policies", cfg.Policies, base, &errs),
+
+		RIBSources: build(plugin.RIBSources, "rib_sources", cfg.RIBSources, base, &errs),
 	}
 	if cfg.Scorer != nil {
 		if b := build(plugin.Scorers, "scorer", []config.PluginSpec{*cfg.Scorer}, base, &errs); len(b) == 1 {
@@ -130,6 +134,9 @@ func (s *Set) all() []namedLifecycle {
 	// after the announcer has withdrawn.
 	if s.Storage != nil {
 		add(plugin.KindStorage, s.Storage.Name, s.Storage.Plugin)
+	}
+	for _, p := range s.RIBSources {
+		add(plugin.KindRIBSource, p.Name, p.Plugin)
 	}
 	for _, p := range s.Sources {
 		add(plugin.KindSource, p.Name, p.Plugin)
