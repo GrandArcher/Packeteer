@@ -108,6 +108,7 @@ type seen struct {
 	lp      uint32
 	comms   map[uint32]bool
 	fromUs  bool
+	asPath  []uint32
 }
 
 func collect(t *testing.T, srv *server.BgpServer, fam *api.Family) []seen {
@@ -120,6 +121,7 @@ func collect(t *testing.T, srv *server.BgpServer, fam *api.Family) []seen {
 				s.prefix = pref.String()
 			}
 			s.nextHop, s.lp, s.comms = decodeAttrs(p.Pattrs)
+			s.asPath = decodeASPath(p.Pattrs)
 			out = append(out, s)
 		}
 	})
@@ -198,6 +200,19 @@ func decodeAttrs(attrs []*anypb.Any) (string, uint32, map[uint32]bool) {
 		}
 	}
 	return nh, lp, comms
+}
+
+func decodeASPath(attrs []*anypb.Any) []uint32 {
+	var out []uint32
+	for _, a := range attrs {
+		var asp api.AsPathAttribute
+		if a.MessageIs(&asp) && a.UnmarshalTo(&asp) == nil {
+			for _, seg := range asp.Segments {
+				out = append(out, seg.Numbers...)
+			}
+		}
+	}
+	return out
 }
 
 func mustAnnouncer(t *testing.T) *Announcer {

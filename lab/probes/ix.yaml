@@ -1,0 +1,10 @@
+# IX lab (#27): ix-peer-b is the fastest, then ix-peer-a; transit-a (the
+# native path) is the slowest. ix-peer-b has no route for the /24.
+sent: 4
+paths:
+  - provider: transit-a
+    rtt_ms: 100
+  - provider: ix-peer-a
+    rtt_ms: 20
+  - provider: ix-peer-b
+    rtt_ms: 5

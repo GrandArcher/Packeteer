@@ -19,6 +19,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/GrandArcher/Packeteer/internal/exchange"
 	"github.com/GrandArcher/Packeteer/internal/inbound"
 	"github.com/GrandArcher/Packeteer/internal/troubleshoot"
 )
@@ -136,6 +137,7 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("GET /api/improvements", s.handleImprovements)
 	mux.HandleFunc("GET /api/telemetry", s.handleTelemetry)
 	mux.HandleFunc("GET /api/inbound", s.handleInbound)
+	mux.HandleFunc("GET /api/exchanges", s.handleExchanges)
 	mux.HandleFunc("GET /api/reports", s.handleReportList)
 	mux.HandleFunc("GET /api/reports/{name}", s.handleReport)
 	mux.HandleFunc("GET /api/maintenance", s.handleMaintenance)
@@ -248,6 +250,17 @@ func (s *Server) handleTelemetry(w http.ResponseWriter, _ *http.Request) {
 		meta
 		Telemetry []Telemetry `json:"telemetry"`
 	}{meta: snap.meta(), Telemetry: nz(snap.Telemetry)})
+}
+
+// handleExchanges serves Internet exchange statistics (#27): per peer,
+// the prefixes seen through its next hop, probe health, and improvements,
+// and next hops on the peering LAN that are not configured peers.
+func (s *Server) handleExchanges(w http.ResponseWriter, _ *http.Request) {
+	snap := s.snapshot()
+	writeJSON(w, http.StatusOK, struct {
+		meta
+		Exchanges []exchange.Stats `json:"exchanges"`
+	}{meta: snap.meta(), Exchanges: nz(snap.Exchanges)})
 }
 
 // handleInbound serves inbound optimization: the steers (announced in

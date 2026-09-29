@@ -74,6 +74,18 @@ Check with `/tool traceroute 203.0.113.1 src-address=192.0.2.11` on the router, 
 
 If the probe box's source IPs are not routable on the Internet, source-NAT them to each transit's address on the router (`/ip firewall nat add chain=srcnat src-address=192.0.2.11 out-interface=ether-transit-a action=masquerade`).
 
+## Internet exchange peers
+
+Each exchange peer (`exchanges[].peers[]`, #27) is measured from its own `source_ip`, so it needs its own table: a route via the peer's LAN address, and a rule from the source to that table. On Linux, with the probe box on the peering LAN or behind the IX router:
+
+```sh
+echo "131 ix-peer-a" >> /etc/iproute2/rt_tables
+ip route add default via 203.0.113.11 table ix-peer-a    # the peer's next_hop
+ip rule add from 192.0.2.31 lookup ix-peer-a priority 1031
+```
+
+On RouterOS it is the same `/routing table` + `/routing rule` pair per peer as above, with the peer's LAN address as the gateway. A peer only carries its own routes, so probes to prefixes it does not advertise are dropped or bounced; Packeteer steers to a peer only when the router shows the peer's path for the prefix, whatever the probes say.
+
 ## Container capabilities
 
 - `--cap-add NET_RAW` is needed for ICMP echo on raw sockets. Without it, the `icmp` prober tries an unprivileged ICMP socket, which works if `net.ipv4.ping_group_range` allows it. If that also fails, the next prober (`tcp`) is used.

@@ -232,3 +232,5 @@ jobs:
         run: bash lab/e2e-addpath.sh
       - name: FRR multi-router lab (two edges, route reflector, per-router next hop, session loss, SIGTERM, SIGKILL)
         run: bash lab/e2e-multirouter.sh
+      - name: FRR IX lab (exchange peers as providers, route check, AS path, SIGHUP reload, SIGTERM, SIGKILL)
+        run: bash lab/e2e-ix.sh

@@ -153,7 +153,7 @@ Leave graceful restart off on the session. Guides:
 
 - [docs/mikrotik.md](docs/mikrotik.md) — RouterOS 7 iBGP, filters, and Traffic Flow
 - [docs/routers.md](docs/routers.md) — FRR, Junos, IOS, and what happens when the native path disappears
-- [docs/route-reflector.md](docs/route-reflector.md) — several edge routers, per-router provider reachability, and route reflectors
+- [docs/route-reflector.md](docs/route-reflector.md) — several edge routers, per-router provider reachability, route reflectors, Internet exchange peers, and SIGHUP reload of `bgp.neighbors`
 - [docs/policy-routing.md](docs/policy-routing.md) — probe sources behind the router
 
 A flow export (NetFlow, IPFIX, or sFlow) is optional. It only adds probe targets. It does not inject routes. With host networking the collector's UDP port is a host port; firewall it to the exporter.

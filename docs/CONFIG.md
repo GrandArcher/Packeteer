@@ -34,6 +34,7 @@ The image entrypoint is the same binary. Flags go after the image name.
 | `improvement_ttl` | `1h` | no | Retire an improvement after this long so the native path is measured again. A negative duration disables the TTL. `0` selects the default `1h`. |
 | `thresholds` | zeros | inject: both positive | See below. With both deltas at `0`, the decision engine records no improvement in any mode. |
 | `providers` | none | at least one | Probe sources and injection next hops. |
+| `exchanges` | none | no | Internet exchanges: each listed peer is a provider with its own next hop on the peering LAN, always route-checked. See [`exchanges`](#exchanges). Lab-proven only. |
 | `allowlist` | empty | inject: non-empty | Prefixes that may be injected. |
 | `probe` | see below | no | Timing and concurrency. |
 | `log` | `info` / `text` | no | Process log. |
@@ -124,7 +125,8 @@ The server accepts GET and HEAD. It does not announce routes. With `--network ho
 |---|---|---|
 | `listen_port` | 0 | `0`: do not listen; Packeteer connects out. 1–65535: accept sessions. |
 | `listen_addresses` | none | Local addresses to bind when listening. Each must be an IP address. |
-| `neighbors` | none | Edge routers, iBGP, same ASN as `asn`. |
+| `neighbors` | none | Edge routers, iBGP, same ASN as `asn`. Reloaded online on SIGHUP; see [Online reconfiguration](#online-reconfiguration). |
+| `as_path` | `empty` | AS path on injected routes: `empty`, `native`, or `provider`. See [AS path](#as-path). |
 
 Each neighbor:
 
@@ -136,8 +138,8 @@ Each neighbor:
 | `passive` | false | Wait for the router to connect. Requires `listen_port`. |
 | `description` | empty | Log label. |
 | `add_path` | false | Ask the router for additional paths (BGP add-path, RFC 7911) on this session. Receive only; Packeteer never sends them. See [Add-path](#add-path). |
-| `providers` | empty | Providers this router forwards to itself (#27). Routes toward them go to this router with the provider's `next_hop`, and the router is their egress. See [Multiple routers](#multiple-routers). |
-| `next_hops` | empty | Map of provider name to the next hop this router uses to reach that provider through another router. Routes toward it go to this router with that next hop. See [Multiple routers](#multiple-routers). |
+| `providers` | empty | Providers this router forwards to itself (#27). Routes toward them go to this router with the provider's `next_hop`, and the router is their egress. An exchange name stands for all of its peers. See [Multiple routers](#multiple-routers). |
+| `next_hops` | empty | Map of provider name to the next hop this router uses to reach that provider through another router. Routes toward it go to this router with that next hop. An exchange name stands for all of its peers. See [Multiple routers](#multiple-routers). |
 
 Packeteer proposes a hold time of 90 seconds and a keepalive of 30 seconds. The router's shorter hold time wins. A hold time of zero is never proposed. Graceful restart is not a config key and is never enabled. With no neighbors, the RIB view is off and decisions say ranking only: nothing is injected.
 
@@ -168,7 +170,56 @@ With several `neighbors` and neither `providers` nor `next_hops` set, every neig
 
 `-check` prints each neighbor's lists. The deployment guide, including route reflectors, is [route-reflector.md](route-reflector.md). Lab-proven only (`lab/e2e-multirouter.sh`).
 
-**Rollback:** remove `providers` and `next_hops` from every neighbor and restart.
+**Rollback:** remove `providers` and `next_hops` from every neighbor and restart (or send SIGHUP).
+
+#### AS path
+
+`bgp.as_path` sets the AS path Packeteer puts on injected routes (#27, IRP "AS-path behavior"). The edge's own policies (AS-path filters, origin checks, route maps) then see the same path as on the route they would otherwise use.
+
+- `empty` (default): no AS numbers, as a locally originated route. This was the only behavior before.
+- `native`: the AS path of the learned route for the prefix (the router's current best as Packeteer sees it).
+- `provider`: the chosen provider's own learned path for the exact prefix (from iBGP, add-path, or BMP on the router that has the provider up). Without one, the native path.
+
+Paths are read when the route is announced. If the router stops sending the native route once Packeteer's route wins, the path on the wire is kept rather than re-announced. When the provider's learned path changes, the route is replaced with the new one. Packeteer still adds only `packeteer_community` and NO_EXPORT, sets `local_pref`, and never prepends its own AS: the session is iBGP. Lab-proven only (`lab/e2e-ix.sh` checks `provider`).
+
+#### Online reconfiguration
+
+`kill -HUP` the process (`docker kill -s HUP <container>`) to reload the config file (#27, IRP "Bgpd online reconfiguration"). Only `bgp.neighbors` is applied while running:
+
+- A new neighbor gets a session; a removed one is closed (its paths leave the view at once, as on a session loss). A neighbor whose session settings changed (`port`, `local_address`, `passive`, `add_path`) is closed and opened again. Other sessions are not touched.
+- A changed per-router table (`providers`, `next_hops`) replaces the announcer's export policy on the running speaker. Every outbound route is withdrawn first (GoBGP sends a withdraw only where the current policy would send the route, so a route withdrawn after the swap could stay on a router the new table blocks) and announced again under the new table on the next evaluation, once the prefix is back in the learned RIB. Inbound steer routes are not affected. A change that leaves the table as it was (adding a neighbor with no lists to a config with no lists) withdraws nothing.
+- Egress routers are recomputed, so `egress router down` follows the new lists.
+
+Anything else that changed is refused: the log says `config reload refused` with the keys (`restart required: changed local_pref, providers`), and the running config stays. A file that does not parse or validate is refused the same way. `bgp.neighbors` cannot become empty on a reload. Comments and YAML style do not count as changes. If a reload fails after it has changed the speaker, Packeteer stops (exit status 1), which withdraws every Packeteer route; the container's restart policy brings it back with the new file. Environment overlays (`PACKETEER_LOG_LEVEL`, ...) are applied to the reloaded file as at startup. Lab-proven only (`lab/e2e-ix.sh`).
+
+### `exchanges`
+
+Internet exchanges (#27, IRP 1.2.11). Each peer listed on an exchange is a provider: it is probed from its own `source_ip`, and an improvement toward it uses its own `next_hop` on the peering LAN. Everything that applies to providers applies to peers (thresholds, hold time, cap, allowlist, policies, commit and cost scorers, per-router lists). What differs:
+
+- **Every peer is route-checked.** A peer carries only its own routes, so no improvement goes to a peer unless the router shows Packeteer the peer's path for the exact prefix, and that path's first AS is the peer's `asn`. An active one is retired at once (reason `no route via provider (route check)`) when the path goes. No visible path means no route: the check fails closed. The paths come from iBGP add-path (a `bgp.neighbors` entry with `add_path: true`, the router sending every path) or BMP (`bmp: prefer` or `only`, with `rib_sources`); one of the two is required.
+- **Statistics** are on `/api/exchanges` and `packeteer_exchange_*` metrics: per peer, the prefixes the router shows through its next hop, the most common first AS when it differs from `asn` (`observed_asn`, a misconfigured peer), probe-source health, and active improvements; and the next hops on the peering LAN that are not configured peers (`discovered`, with AS and prefix count). A discovered next hop is never probed or used. To use it, add it as a peer (with a probe source) and restart.
+
+| Key | Required | Meaning |
+|---|---|---|
+| `name` | yes | Unique, not a provider name. Letters, digits, `_`, `.`, `-`. May be used in `bgp.neighbors[].providers` and `next_hops` for all its peers. |
+| `lans` | yes | Peering LAN prefixes. Every peer `next_hop` is inside one; `discovered` lists other next hops inside them. |
+| `bmp` | no | The peers' BMP usage: `off` (default), `prefer`, or `only`, as on providers. |
+| `group` | no | The peers' load-balancing group, as on providers. |
+| `peers` | yes | At least one. |
+
+Each peer:
+
+| Key | Required | Meaning |
+|---|---|---|
+| `name` | yes | Provider name, unique across providers and peers. |
+| `asn` | yes | The peer's AS: the first AS on the paths it advertises (a route server is transparent). |
+| `next_hop` | yes | The peer's address on the peering LAN. Unique across providers. |
+| `source_ip` | yes | Probe source for this peer, unique like any provider's. The host (or router) must route traffic from it to this peer's `next_hop` ([policy-routing.md](policy-routing.md)). |
+| `exclude`, `precedence`, `cost` | no | As on providers. |
+
+Peers get `add_path: true` automatically when a neighbor has `add_path` (and `bmp` is not `only`). `-check` prints each peer with its exchange and AS.
+
+**Rollback:** remove the `exchanges` block and restart; improvements toward peers are withdrawn at shutdown.
 
 ### `troubleshoot`
 

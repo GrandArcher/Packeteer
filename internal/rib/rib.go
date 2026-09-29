@@ -87,7 +87,12 @@ type Options struct {
 	// (#27). While none of them has an established session the provider is
 	// reported by EgressDown. A provider not listed has no egress check.
 	Egress map[string][]netip.Addr
-	Logger *slog.Logger
+	// PeerASN lists exchange peers (#27) with their AS. A peer is always
+	// route-checked: it passes only with a path for the exact prefix whose
+	// first AS is its own, from iBGP (add-path) or from BMP on a router
+	// that reports the peer up. No visible path means no route.
+	PeerASN map[string]uint32
+	Logger  *slog.Logger
 }
 
 // BMP usage per provider.
@@ -282,42 +287,134 @@ func (v *View) Start(ctx context.Context) error {
 	}
 
 	for _, n := range v.opt.Neighbors {
-		port := uint32(n.Port)
-		if port == 0 {
-			port = 179
-		}
-		afiSafis := []*api.AfiSafi{
-			{Config: &api.AfiSafiConfig{Family: &api.Family{Afi: api.Family_AFI_IP, Safi: api.Family_SAFI_UNICAST}, Enabled: true}},
-			{Config: &api.AfiSafiConfig{Family: &api.Family{Afi: api.Family_AFI_IP6, Safi: api.Family_SAFI_UNICAST}, Enabled: true}},
-		}
-		if n.AddPath {
-			// Receive only. SendMax stays 0: the announcer publishes one
-			// path per prefix and the router never learns add-path from us.
-			for _, af := range afiSafis {
-				af.AddPaths = &api.AddPaths{Config: &api.AddPathsConfig{Receive: true}}
-			}
-		}
-		p := &api.Peer{
-			Conf:      &api.PeerConf{NeighborAddress: n.Address.String(), PeerAsn: v.opt.ASN, Description: n.Description},
-			Transport: &api.Transport{RemotePort: port, PassiveMode: n.Passive},
-			AfiSafis:  afiSafis,
-			// A hold time of zero negotiates the hold timer off (RFC 4271), so a
-			// session that stops sending without closing TCP would keep routes.
-			// 90/30 is the usual BGP default. The router's shorter hold time
-			// wins; the lab sets 9s and the crash test bounds on that.
-			Timers: &api.Timers{Config: &api.TimersConfig{
-				ConnectRetry: 5, HoldTime: bgpHoldTime, KeepaliveInterval: bgpKeepalive,
-			}},
-			// GracefulRestart deliberately left unset: no stale routes.
-		}
-		if n.LocalAddress.IsValid() {
-			p.Transport.LocalAddress = n.LocalAddress.String()
-		}
-		if err := v.srv.AddPeer(ctx, &api.AddPeerRequest{Peer: p}); err != nil {
+		if err := v.addPeer(ctx, n); err != nil {
 			v.Stop(context.Background())
-			return fmt.Errorf("rib: add neighbor %s: %w", n.Address, err)
+			return err
 		}
 	}
+	return nil
+}
+
+// addPeer adds one neighbor's session to the speaker.
+func (v *View) addPeer(ctx context.Context, n Neighbor) error {
+	port := uint32(n.Port)
+	if port == 0 {
+		port = 179
+	}
+	afiSafis := []*api.AfiSafi{
+		{Config: &api.AfiSafiConfig{Family: &api.Family{Afi: api.Family_AFI_IP, Safi: api.Family_SAFI_UNICAST}, Enabled: true}},
+		{Config: &api.AfiSafiConfig{Family: &api.Family{Afi: api.Family_AFI_IP6, Safi: api.Family_SAFI_UNICAST}, Enabled: true}},
+	}
+	if n.AddPath {
+		// Receive only. SendMax stays 0: the announcer publishes one
+		// path per prefix and the router never learns add-path from us.
+		for _, af := range afiSafis {
+			af.AddPaths = &api.AddPaths{Config: &api.AddPathsConfig{Receive: true}}
+		}
+	}
+	p := &api.Peer{
+		Conf:      &api.PeerConf{NeighborAddress: n.Address.String(), PeerAsn: v.opt.ASN, Description: n.Description},
+		Transport: &api.Transport{RemotePort: port, PassiveMode: n.Passive},
+		AfiSafis:  afiSafis,
+		// A hold time of zero negotiates the hold timer off (RFC 4271), so a
+		// session that stops sending without closing TCP would keep routes.
+		// 90/30 is the usual BGP default. The router's shorter hold time
+		// wins; the lab sets 9s and the crash test bounds on that.
+		Timers: &api.Timers{Config: &api.TimersConfig{
+			ConnectRetry: 5, HoldTime: bgpHoldTime, KeepaliveInterval: bgpKeepalive,
+		}},
+		// GracefulRestart deliberately left unset: no stale routes.
+	}
+	if n.LocalAddress.IsValid() {
+		p.Transport.LocalAddress = n.LocalAddress.String()
+	}
+	if err := v.srv.AddPeer(ctx, &api.AddPeerRequest{Peer: p}); err != nil {
+		return fmt.Errorf("rib: add neighbor %s: %w", n.Address, err)
+	}
+	return nil
+}
+
+// RemoveNeighbors closes the sessions to addrs on the running speaker
+// (online reconfiguration, #27). Their paths leave the view at once, as on
+// a session loss; the other sessions are not touched. When no neighbor is
+// left the view is not ready and consumers withdraw.
+func (v *View) RemoveNeighbors(ctx context.Context, addrs []netip.Addr) error {
+	if len(addrs) == 0 {
+		return nil
+	}
+	v.mu.Lock()
+	for _, a := range addrs {
+		a = a.Unmap()
+		delete(v.neighbors, a)
+		delete(v.addPath, a)
+		delete(v.peers, a)
+		v.forgetNeighborLocked(a)
+		v.opt.Neighbors = slices.DeleteFunc(v.opt.Neighbors, func(n Neighbor) bool { return n.Address.Unmap() == a })
+	}
+	v.mu.Unlock()
+	var errs []error
+	if v.srv != nil {
+		for _, a := range addrs {
+			if err := v.srv.DeletePeer(ctx, &api.DeletePeerRequest{Address: a.String()}); err != nil {
+				errs = append(errs, fmt.Errorf("rib: remove neighbor %s: %w", a, err))
+			}
+		}
+	}
+	v.notify()
+	return errors.Join(errs...)
+}
+
+// AddNeighbors opens sessions to new neighbors on the running speaker
+// (online reconfiguration, #27). Existing sessions are not touched.
+func (v *View) AddNeighbors(ctx context.Context, nbrs []Neighbor) error {
+	if len(nbrs) == 0 {
+		return nil
+	}
+	v.mu.Lock()
+	for _, n := range nbrs {
+		a := n.Address.Unmap()
+		if !a.IsValid() || v.neighbors[a] {
+			v.mu.Unlock()
+			return fmt.Errorf("rib: add neighbor %s: invalid or already configured", n.Address)
+		}
+	}
+	for _, n := range nbrs {
+		a := n.Address.Unmap()
+		v.neighbors[a] = true
+		if n.AddPath {
+			v.addPath[a] = true
+		}
+		v.peers[a] = PeerState{Address: n.Address, Description: n.Description, State: "idle"}
+		v.opt.Neighbors = append(v.opt.Neighbors, n)
+	}
+	v.mu.Unlock()
+	var errs []error
+	if v.srv != nil {
+		for _, n := range nbrs {
+			if err := v.addPeer(ctx, n); err != nil {
+				errs = append(errs, err)
+			}
+		}
+	}
+	v.notify()
+	return errors.Join(errs...)
+}
+
+// SetEgress replaces the provider egress routers (Options.Egress). Every
+// router must be a configured neighbor.
+func (v *View) SetEgress(egress map[string][]netip.Addr) error {
+	v.mu.Lock()
+	for name, nbrs := range egress {
+		for _, a := range nbrs {
+			if !v.neighbors[a.Unmap()] {
+				v.mu.Unlock()
+				return fmt.Errorf("rib: provider %s: egress router %s is not a neighbor", name, a)
+			}
+		}
+	}
+	v.opt.Egress = egress
+	v.mu.Unlock()
+	v.notify()
 	return nil
 }
 
@@ -870,6 +967,10 @@ func (v *View) pathsLocked(p netip.Prefix) []Route {
 // negotiated add-path is up: the router then sends every path it has, so
 // a provider without one is not advertising the prefix. Any iBGP path
 // through the provider passes.
+//
+// An exchange peer (Options.PeerASN) is always checked, and only a path
+// whose first AS is the peer's own passes: a peer carries only its own
+// routes, so no visible path means no route.
 func (v *View) RouteCheck(p netip.Prefix, provider string) (checked, ok bool) {
 	p = p.Masked()
 	v.mu.RLock()
@@ -884,15 +985,114 @@ func (v *View) RouteCheck(p netip.Prefix, provider string) (checked, ok bool) {
 	if v.opt.AddPath[provider] && v.addPathUpLocked() {
 		checked = true
 	}
+	asn, peer := v.opt.PeerASN[provider]
+	if peer {
+		checked = true
+	}
 	if !checked {
 		return false, false
 	}
 	for _, rt := range v.pathsLocked(p) {
-		if rt.Provider == provider && (rt.Source == SourceIBGP || on[rt.Router]) {
+		if rt.Provider == provider && (rt.Source == SourceIBGP || on[rt.Router]) &&
+			(!peer || (len(rt.ASPath) > 0 && rt.ASPath[0] == asn)) {
 			return true, true
 		}
 	}
 	return true, false
+}
+
+// ProviderPath returns the AS path of provider's learned path for exactly
+// p: an iBGP path first (add-path shows inactive ones), then a BMP path on
+// a router that reports the provider up. An exchange peer's path must
+// start with its AS, as in RouteCheck.
+func (v *View) ProviderPath(p netip.Prefix, provider string) ([]uint32, bool) {
+	p = p.Masked()
+	v.mu.RLock()
+	defer v.mu.RUnlock()
+	on := v.coveringRoutersLocked(provider)
+	asn, peer := v.opt.PeerASN[provider]
+	for _, rt := range v.pathsLocked(p) {
+		if rt.Provider != provider || (rt.Source == SourceBMP && !on[rt.Router]) {
+			continue
+		}
+		if peer && (len(rt.ASPath) == 0 || rt.ASPath[0] != asn) {
+			continue
+		}
+		return slices.Clone(rt.ASPath), true
+	}
+	return nil, false
+}
+
+// NextHopCount is how many learned prefixes use one next hop.
+type NextHopCount struct {
+	NextHop  netip.Addr `json:"next_hop"`
+	Prefixes int        `json:"prefixes"`
+	// ASN is the most common first AS on those paths (0 if none).
+	ASN uint32 `json:"asn,omitempty"`
+}
+
+// NextHops counts, for every next hop inside lans, the distinct prefixes
+// with a usable path through it (iBGP, including add-path, and BMP). It
+// walks every path, so callers cache it against Generation.
+func (v *View) NextHops(lans []netip.Prefix) []NextHopCount {
+	if len(lans) == 0 {
+		return nil
+	}
+	in := func(a netip.Addr) bool {
+		for _, l := range lans {
+			if l.Contains(a) {
+				return true
+			}
+		}
+		return false
+	}
+	type acc struct {
+		prefixes map[netip.Prefix]bool
+		asns     map[uint32]int
+	}
+	hops := map[netip.Addr]*acc{}
+	add := func(rt Route) {
+		nh := rt.NextHop.Unmap()
+		if !nh.IsValid() || !in(nh) {
+			return
+		}
+		a := hops[nh]
+		if a == nil {
+			a = &acc{prefixes: map[netip.Prefix]bool{}, asns: map[uint32]int{}}
+			hops[nh] = a
+		}
+		a.prefixes[rt.Prefix] = true
+		if len(rt.ASPath) > 0 {
+			a.asns[rt.ASPath[0]]++
+		}
+	}
+	v.mu.RLock()
+	for _, paths := range v.adj {
+		for _, rt := range paths {
+			if v.usableLocked(rt) {
+				add(rt)
+			}
+		}
+	}
+	for _, paths := range v.bmp {
+		for _, rt := range paths {
+			add(rt)
+		}
+	}
+	v.mu.RUnlock()
+	out := make([]NextHopCount, 0, len(hops))
+	for nh, a := range hops {
+		c := NextHopCount{NextHop: nh, Prefixes: len(a.prefixes)}
+		best := 0
+		for asn, n := range a.asns {
+			if n > best || (n == best && asn < c.ASN) {
+				c.ASN, best = asn, n
+			}
+		}
+		out = append(out, c)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].NextHop.Less(out[j].NextHop) })
+	return out
 }
 
 // addPathUpLocked reports whether some established session negotiated

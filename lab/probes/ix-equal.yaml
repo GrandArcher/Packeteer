@@ -1,0 +1,10 @@
+# IX lab (#27) start state: every path probes the same, so nothing steers
+# until lab/e2e-ix.sh has seen the edge on transit-a and flips to ix.yaml.
+sent: 4
+paths:
+  - provider: transit-a
+    rtt_ms: 40
+  - provider: ix-peer-a
+    rtt_ms: 40
+  - provider: ix-peer-b
+    rtt_ms: 40
