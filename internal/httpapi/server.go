@@ -4,8 +4,10 @@
 // dashboard. It does not announce routes itself. The writes are opening
 // or closing an on-demand maintenance window, which can only exclude
 // providers, and adding or removing a threat mitigation rule (#28), which
-// the mitigation controller checks and announces only in inject. Both
-// require basic auth.
+// the mitigation controller checks and announces only in inject, plus
+// users and API tokens when auth is on (#32). Every change needs a
+// signed-in operator (or the basic-auth account) and is audited; see
+// access.go.
 package httpapi
 
 import (
@@ -19,8 +21,10 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/netip"
 	"time"
 
+	"github.com/GrandArcher/Packeteer/internal/auth"
 	"github.com/GrandArcher/Packeteer/internal/exchange"
 	"github.com/GrandArcher/Packeteer/internal/federation"
 	"github.com/GrandArcher/Packeteer/internal/inbound"
@@ -29,13 +33,21 @@ import (
 )
 
 // Options configure the server. User and Password must both be set or both
-// be empty. When both are set, every route requires HTTP basic auth.
+// be empty. When both are set, every route requires HTTP basic auth. Auth
+// replaces them with users, roles, and tokens (#32); the two are exclusive.
 type Options struct {
 	Addr     string
 	User     string
 	Password string
-	Snapshot func() Snapshot
-	Logger   *slog.Logger
+	// Auth is role-based access (#32). Nil keeps the basic-auth account.
+	Auth *auth.Service
+	// Audit records changes. Nil records nothing.
+	Audit *auth.Auditor
+	// AllowFrom restricts client addresses (http.allow_from). Empty
+	// allows any.
+	AllowFrom []netip.Prefix
+	Snapshot  func() Snapshot
+	Logger    *slog.Logger
 	// Maintenance is nil when no maintenance policy is configured.
 	Maintenance MaintenanceControl
 	// Reports is nil when no storage plugin is configured.
@@ -61,6 +73,9 @@ type Server struct {
 	addr       string
 	user       string
 	password   string
+	auth       *auth.Service
+	audit      *auth.Auditor
+	allowFrom  []netip.Prefix
 	snap       func() Snapshot
 	maint      MaintenanceControl
 	reports    ReportSource
@@ -80,10 +95,13 @@ func New(opt Options) (*Server, error) {
 	if (opt.User == "") != (opt.Password == "") {
 		return nil, errors.New("http: basic auth requires both user and password")
 	}
+	if opt.Auth != nil && opt.User != "" {
+		return nil, errors.New("http: auth replaces PACKETEER_HTTP_USER and PACKETEER_HTTP_PASSWORD; unset them")
+	}
 	if opt.Logger == nil {
 		opt.Logger = slog.Default()
 	}
-	s := &Server{addr: opt.Addr, user: opt.User, password: opt.Password, snap: opt.Snapshot, maint: opt.Maintenance, reports: opt.Reports, tools: opt.Tools, inbound: opt.Inbound, mitigation: opt.Mitigation, federation: opt.Federation, ha: opt.HA, log: opt.Logger}
+	s := &Server{addr: opt.Addr, user: opt.User, password: opt.Password, auth: opt.Auth, audit: opt.Audit, allowFrom: opt.AllowFrom, snap: opt.Snapshot, maint: opt.Maintenance, reports: opt.Reports, tools: opt.Tools, inbound: opt.Inbound, mitigation: opt.Mitigation, federation: opt.Federation, ha: opt.HA, log: opt.Logger}
 	s.handler = s.routes()
 	return s, nil
 }
@@ -134,48 +152,19 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	return s.http.Shutdown(ctx)
 }
 
-func (s *Server) authMode() string {
-	if s.user == "" {
-		return "off"
-	}
-	return "basic"
-}
-
 func (s *Server) routes() http.Handler {
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /healthz", s.handleHealth)
-	mux.HandleFunc("GET /readyz", s.handleReady)
-	mux.HandleFunc("GET /metrics", s.handleMetrics)
-	mux.HandleFunc("GET /api/providers", s.handleProviders)
-	mux.HandleFunc("GET /api/probes", s.handleProbes)
-	mux.HandleFunc("GET /api/prefixes", s.handlePrefixes)
-	mux.HandleFunc("GET /api/decisions", s.handleDecisions)
-	mux.HandleFunc("GET /api/improvements", s.handleImprovements)
-	mux.HandleFunc("GET /api/telemetry", s.handleTelemetry)
-	mux.HandleFunc("GET /api/inbound", s.handleInbound)
-	mux.HandleFunc("GET /api/exchanges", s.handleExchanges)
-	mux.HandleFunc("GET /api/federation", s.handleFederation)
-	mux.HandleFunc("GET /api/ha", s.handleHA)
-	mux.HandleFunc("GET /api/reports", s.handleReportList)
-	mux.HandleFunc("GET /api/reports/{name}", s.handleReport)
-	mux.HandleFunc("GET /api/maintenance", s.handleMaintenance)
-	mux.HandleFunc("POST /api/maintenance", s.handleMaintenanceOpen)
-	mux.HandleFunc("DELETE /api/maintenance/{id}", s.handleMaintenanceClose)
-	mux.HandleFunc("GET /api/mitigations", s.handleMitigations)
-	mux.HandleFunc("POST /api/mitigations", s.handleMitigationAdd)
-	mux.HandleFunc("DELETE /api/mitigations/{id}", s.handleMitigationRemove)
-	mux.HandleFunc("GET /api/troubleshoot", s.handleToolStatus)
-	mux.HandleFunc("GET /api/troubleshoot/lookingglass", s.handleLookingGlass)
-	mux.HandleFunc("POST /api/troubleshoot/probe", s.handleToolProbe)
-	mux.HandleFunc("POST /api/troubleshoot/traceroute", s.handleToolTrace)
-	mux.HandleFunc("POST /api/troubleshoot/whois", s.handleToolWhois)
-	mux.Handle("GET /", http.FileServer(http.FS(webRoot)))
-
+	for _, rt := range s.routeTable() {
+		mux.Handle(rt.pattern, s.guard(rt))
+	}
 	var h http.Handler = mux
 	if s.user != "" {
 		h = s.withAuth(h)
 	}
-	return withSecurityHeaders(h)
+	// Browsers may not send a cross-origin change (Sec-Fetch-Site or
+	// Origin), whatever the credentials.
+	h = http.NewCrossOriginProtection().Handler(h)
+	return withSecurityHeaders(withAllowFrom(s.allowFrom, h))
 }
 
 func (s *Server) snapshot() Snapshot {

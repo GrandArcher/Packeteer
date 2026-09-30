@@ -136,6 +136,9 @@ type Config struct {
 	// HA is the active/standby elector (#31). Nil runs a single instance
 	// that is always active. Only the active instance announces.
 	HA *PluginSpec `yaml:"ha"`
+	// Auth is users, roles, API tokens, and single sign-on for the ops
+	// HTTP server (#32). Nil or disabled keeps the basic-auth account.
+	Auth *Auth `yaml:"auth"`
 }
 
 // GlobalCommit is one commit shared by several providers, usually links
@@ -303,6 +306,10 @@ type HTTP struct {
 	// Listen is host:port. Nil means "apply the default". A pointer to
 	// an empty string disables the server (http.listen: "").
 	Listen *string `yaml:"listen"`
+	// AllowFrom restricts client addresses to these prefixes (#32). Empty
+	// allows any. It applies with and without auth, health checks
+	// included.
+	AllowFrom []string `yaml:"allow_from"`
 }
 
 // HTTPListen is the address to bind, or "" when the server is disabled.
@@ -761,6 +768,7 @@ func (c *Config) Validate() error {
 	}
 
 	c.validateFederation(add)
+	c.validateAuth(add)
 
 	seen := map[netip.Prefix]bool{}
 	for i, s := range c.Allowlist.Prefixes {

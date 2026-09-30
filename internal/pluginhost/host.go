@@ -45,6 +45,9 @@ type Set struct {
 	// Elector is the active/standby elector (#31). Nil runs a single
 	// instance. It never announces; it gates the announcers.
 	Elector *Instance[plugin.Elector]
+	// SSO is single sign-on for the ops API (auth.sso, #32). It never
+	// announces.
+	SSO *Instance[plugin.SSO]
 
 	started []namedLifecycle
 }
@@ -137,6 +140,11 @@ func Build(cfg *config.Config, opts Options) (*Set, error) {
 			s.Elector = &b[0]
 		}
 	}
+	if cfg.AuthEnabled() && cfg.Auth.SSO != nil {
+		if b := build(plugin.SSOs, "auth.sso", []config.PluginSpec{*cfg.Auth.SSO}, base, &errs); len(b) == 1 {
+			s.SSO = &b[0]
+		}
+	}
 	if cfg.Troubleshoot.Whois != nil {
 		if b := build(plugin.Whoises, "troubleshoot.whois", []config.PluginSpec{*cfg.Troubleshoot.Whois}, base, &errs); len(b) == 1 {
 			s.Whois = &b[0]
@@ -157,6 +165,9 @@ func (s *Set) all() []namedLifecycle {
 	// after the announcer has withdrawn.
 	if s.Storage != nil {
 		add(plugin.KindStorage, s.Storage.Name, s.Storage.Plugin)
+	}
+	if s.SSO != nil {
+		add(plugin.KindSSO, s.SSO.Name, s.SSO.Plugin)
 	}
 	for _, p := range s.RIBSources {
 		add(plugin.KindRIBSource, p.Name, p.Plugin)

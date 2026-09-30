@@ -3,8 +3,9 @@
 //
 // It stores daily probe rollups, one row per improvement, one row per
 // threat mitigation rule, and per-prefix facts (origin ASN, country,
-// volume). Raw probe results are not stored.
-// Rows older than retention are deleted on start and once a day. The plugin
+// volume). Raw probe results are not stored. It also keeps HTTP users,
+// API token hashes, and the audit log (#32).
+// Rows older than retention (audit records included) are deleted on start and once a day. The plugin
 // records history only; it never announces routes or changes decisions.
 package sqlite
 
@@ -152,6 +153,40 @@ CREATE TABLE IF NOT EXISTS prefixes (
 	volume_mbps REAL NOT NULL,
 	updated_ms INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS users (
+	name TEXT PRIMARY KEY,
+	role TEXT NOT NULL,
+	source TEXT NOT NULL,
+	password_hash TEXT NOT NULL,
+	disabled INTEGER NOT NULL,
+	created_ms INTEGER NOT NULL,
+	updated_ms INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS api_tokens (
+	id TEXT PRIMARY KEY,
+	user_name TEXT NOT NULL,
+	name TEXT NOT NULL,
+	role TEXT NOT NULL,
+	hash TEXT NOT NULL,
+	created_ms INTEGER NOT NULL,
+	expires_ms INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS api_tokens_user ON api_tokens (user_name);
+CREATE TABLE IF NOT EXISTS audit (
+	seq INTEGER PRIMARY KEY AUTOINCREMENT,
+	id TEXT NOT NULL,
+	time_ms INTEGER NOT NULL,
+	actor TEXT NOT NULL,
+	role TEXT NOT NULL,
+	method TEXT NOT NULL,
+	remote TEXT NOT NULL,
+	action TEXT NOT NULL,
+	target TEXT NOT NULL,
+	result TEXT NOT NULL,
+	status INTEGER NOT NULL,
+	detail TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS audit_time ON audit (time_ms);
 `
 
 // Start opens (or creates) the database and starts the daily prune.
@@ -236,6 +271,9 @@ func (s *Store) prune(ctx context.Context) error {
 		return err
 	}
 	if _, err := db.ExecContext(ctx, `DELETE FROM mitigations WHERE end_ms != 0 AND end_ms < ?`, cutoff.UnixMilli()); err != nil {
+		return err
+	}
+	if _, err := db.ExecContext(ctx, `DELETE FROM audit WHERE time_ms < ?`, cutoff.UnixMilli()); err != nil {
 		return err
 	}
 	_, err = db.ExecContext(ctx, `DELETE FROM prefixes WHERE updated_ms < ?`, cutoff.UnixMilli())

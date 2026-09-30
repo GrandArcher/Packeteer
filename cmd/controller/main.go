@@ -58,6 +58,10 @@ const (
 	HTTPListenEnv = "PACKETEER_HTTP_LISTEN" // overrides http.listen; "off" disables
 	HTTPUserEnv   = "PACKETEER_HTTP_USER"
 	HTTPPassEnv   = "PACKETEER_HTTP_PASSWORD"
+	// The first admin when auth is on (#32). Created only when no user
+	// has that name; the user defaults to "admin".
+	AdminUserEnv = "PACKETEER_ADMIN_USER"
+	AdminPassEnv = "PACKETEER_ADMIN_PASSWORD"
 )
 
 // version is set at build time with -ldflags "-X main.version=...".
@@ -184,6 +188,10 @@ func run(ctx context.Context, args []string, getenv func(string) string, stdout,
 		fmt.Fprintf(stderr, "packeteer: refusing to start: %v\n", err)
 		return 1
 	}
+	if err := checkAuth(cfg, plugins, httpUser, getenv); err != nil {
+		fmt.Fprintf(stderr, "packeteer: refusing to start: %v\n", err)
+		return 1
+	}
 
 	fmt.Fprintf(stdout, "packeteer %s: config %s loaded\n", version, *path)
 	fmt.Fprintf(stdout, "mode: %s\n", cfg.Mode)
@@ -260,10 +268,20 @@ func run(ctx context.Context, args []string, getenv func(string) string, stdout,
 		fmt.Fprintln(stdout, "http: disabled")
 	} else {
 		fmt.Fprintf(stdout, "http: %s\n", cfg.HTTPListen())
-		if httpUser != "" {
+		switch {
+		case cfg.AuthEnabled():
+			sso := "off"
+			if plugins.SSO != nil {
+				sso = plugins.SSO.Type
+			}
+			fmt.Fprintf(stdout, "http auth: rbac (users, tokens, and audit in storage %s; sso %s)\n", plugins.Storage.Type, sso)
+		case httpUser != "":
 			fmt.Fprintf(stdout, "http auth: basic (user %s)\n", httpUser)
-		} else {
+		default:
 			fmt.Fprintln(stdout, "http auth: off")
+		}
+		if len(cfg.HTTP.AllowFrom) > 0 {
+			fmt.Fprintf(stdout, "http allow_from: %s\n", strings.Join(cfg.HTTP.AllowFrom, ","))
 		}
 	}
 	if *notifyTest {
@@ -339,9 +357,23 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 			return st
 		}
 	}
+	// Built before the HTTP server: the audit log goes to the notifiers.
+	dispatch := newDispatcher(plugins, notify.Options{Logger: log})
+	defer func() {
+		closeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = dispatch.Close(closeCtx)
+	}()
+	audit := newAuditor(plugins, dispatch, log)
+	authSvc, aerr := newAuthService(cfg, plugins, log)
+	if aerr != nil {
+		log.Error("refusing to start", "err", aerr)
+		return 1
+	}
 	if addr := cfg.HTTPListen(); addr != "" {
 		srv, err := httpapi.New(httpapi.Options{
 			Addr: addr, User: httpUser, Password: httpPass, Snapshot: col.Snapshot, Logger: log,
+			Auth: authSvc, Audit: audit, AllowFrom: cfg.HTTPAllowFrom(),
 			Maintenance: maint, Reports: reports, Tools: tools, Inbound: inboundStatus, Mitigation: mitAPI,
 			Federation: fed.status, HA: haStatus,
 		})
@@ -443,12 +475,6 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 		log.Error("refusing to start", "err", err)
 		return 1
 	}
-	dispatch := newDispatcher(plugins, notify.Options{Logger: log})
-	defer func() {
-		closeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		_ = dispatch.Close(closeCtx)
-	}()
 	watch := newEventWatch(dispatch, cfg.Mode)
 	if err := wireRIBSources(plugins, view); err != nil {
 		log.Error("refusing to start", "err", err)
@@ -474,6 +500,7 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 		log.Error("refusing to start", "err", err)
 		return 1
 	}
+	bootstrapAdmin(ctx, authSvc, audit, getenv, log)
 	if rec != nil {
 		// History is optional: a store that cannot be read leaves the core
 		// loop running without reports.
@@ -560,6 +587,7 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 			case <-hup:
 			}
 			refused, fatal := rl.reload(ctx)
+			auditReload(ctx, audit, path, refused, fatal)
 			switch {
 			case fatal != nil:
 				log.Error("config reload failed after changing the BGP speaker; stopping (Packeteer routes are withdrawn)", "err", fatal)

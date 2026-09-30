@@ -192,3 +192,32 @@ func TestElectorBuildAndOrder(t *testing.T) {
 		t.Fatalf("ha without neighbors: %v", err)
 	}
 }
+
+func TestSSOBuild(t *testing.T) {
+	dir := t.TempDir()
+	st := "storage:\n  type: sqlite\n  config: {path: " + dir + "/p.db}\n"
+	sso := "  sso:\n    type: oidc\n    config: {issuer: 'https://idp.example.net', client_id: packeteer, client_secret_env: OIDC_SECRET, redirect_url: 'https://packeteer.example.net/auth/callback', default_role: viewer}\n"
+	env := func(k string) string {
+		if k == "OIDC_SECRET" {
+			return "s"
+		}
+		return ""
+	}
+	s, err := Build(load(t, st+"auth:\n  enabled: true\n"+sso), Options{Getenv: env})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.SSO == nil || s.SSO.Type != "oidc" {
+		t.Fatalf("sso = %+v", s.SSO)
+	}
+	if got := strings.Join(s.Summary(), ";"); !strings.HasPrefix(got, "storage sqlite;sso oidc") {
+		t.Errorf("Summary = %s", got)
+	}
+	if _, err := Build(load(t, st+"auth:\n  enabled: true\n"+sso), Options{}); err == nil || !strings.Contains(err.Error(), "OIDC_SECRET") {
+		t.Fatalf("missing secret: %v", err)
+	}
+	bad := load(t, st+"auth:\n  enabled: true\n  sso:\n    type: saml\n")
+	if _, err := Build(bad, Options{}); err == nil || !strings.Contains(err.Error(), `auth.sso[0] (saml): unknown sso type "saml" (available: oidc)`) {
+		t.Fatalf("unknown sso: %v", err)
+	}
+}
