@@ -1,0 +1,8 @@
+# POP A's own carriers are slow toward the lab prefixes. With x-b at
+# 10ms in POP B plus 10ms inter-DC, x-b wins by 60ms.
+sent: 4
+paths:
+  - provider: x-a
+    rtt_ms: 80
+  - provider: y-a
+    rtt_ms: 80

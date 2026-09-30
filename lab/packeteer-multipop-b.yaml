@@ -1,0 +1,76 @@
+# Lab only (#30). POP B of two federated instances. Documentation
+# prefixes, private ASN. x-b exits here; x-a is carrier X in POP A,
+# measured by packeteer-a. See lab/packeteer-multipop-a.yaml.
+mode: inject
+asn: 64512
+router_id: 192.0.2.20
+packeteer_community: "64512:666"
+local_pref: 250
+max_improvements: 50
+hold_time: 5s
+improvement_ttl: 1h
+thresholds:
+  min_loss_delta_pct: 1
+  min_rtt_delta_ms: 15
+instance: pop-b
+domain: pop-b
+inter_dc_rtt:
+  pop-a: 10ms
+providers:
+  - name: x-b
+    source_ip: 192.0.2.21
+    next_hop: 192.0.2.5
+  - name: x-a
+    domain: pop-a
+    next_hop: 192.0.2.254
+    cc_disable: true
+global_commit:
+  - name: carrier-x
+    commit_mbps: 100
+    providers: [x-a, x-b]
+federation:
+  type: mtls
+  config:
+    listen: 0.0.0.0:9443
+    cert_file: /etc/packeteer/certs/pop-b.crt
+    key_file: /etc/packeteer/certs/pop-b.key
+    ca_file: /etc/packeteer/certs/ca.crt
+    poll_interval: 1s
+    max_age: 3s
+    peers:
+      - name: pop-a
+        url: https://192.0.2.10:9443
+allowlist:
+  prefixes:
+    - 198.51.100.0/24
+    - 203.0.113.0/24
+probe:
+  interval: 2s
+  timeout: 500ms
+  packets: 4
+bgp:
+  neighbors:
+    - address: 192.0.2.253
+      description: edge-b
+sources:
+  - type: static
+    config:
+      targets:
+        - prefix: 198.51.100.0/24
+          host: 198.51.100.1
+          mbps: 30
+        - prefix: 203.0.113.0/24
+          host: 203.0.113.1
+          mbps: 30
+probers:
+  - type: fixed
+    config:
+      file: /etc/packeteer/lab/state.yaml
+scorer:
+  type: commit
+telemetry:
+  - type: fixed
+    config:
+      file: /etc/packeteer/lab/usage.yaml
+announcer:
+  type: gobgp

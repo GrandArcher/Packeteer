@@ -120,6 +120,34 @@ type Config struct {
 	// inside its prefix that a neighbor advertises in the learned RIB
 	// (#56, docs/design/more-specific.md). Nil or disabled is off.
 	MoreSpecific *MoreSpecific `yaml:"more_specific"`
+
+	// Instance and Domain name this instance and its routing domain (POP)
+	// for multi-POP federation (#30). Instance defaults to Domain.
+	Instance string `yaml:"instance"`
+	Domain   string `yaml:"domain"`
+	// InterDCRTT is the round-trip time from this domain to each other
+	// domain. It is added to a path measured by a peer in that domain.
+	InterDCRTT map[string]time.Duration `yaml:"inter_dc_rtt"`
+	// GlobalCommits are commits shared by providers in several domains.
+	GlobalCommits []GlobalCommit `yaml:"global_commit"`
+	// Federation is the instance-to-instance transport (#30). Nil runs
+	// the instance standalone.
+	Federation *PluginSpec `yaml:"federation"`
+}
+
+// GlobalCommit is one commit shared by several providers, usually links
+// to one carrier in several POPs (#30). Commit control on each instance
+// compares the sum of every member's usage with CommitMbps.
+type GlobalCommit struct {
+	Name       string   `yaml:"name"`
+	CommitMbps float64  `yaml:"commit_mbps"`
+	Providers  []string `yaml:"providers"`
+}
+
+// Remote reports whether provider p is in another routing domain: its
+// paths are measured by the peer in that domain, not probed here.
+func (c *Config) Remote(p Provider) bool {
+	return p.Domain != "" && p.Domain != c.Domain
 }
 
 // More-specific injection defaults and bounds (#56).
@@ -395,6 +423,11 @@ type Provider struct {
 	// has add-path negotiated, the provider must be advertising the exact
 	// prefix before Packeteer steers to it.
 	AddPath bool `yaml:"add_path"`
+	// Domain is the routing domain (POP) the provider exits in (#30).
+	// Empty is this instance's domain. A provider in another domain has no
+	// source_ip: the peer in that domain measures it, and next_hop is how
+	// this POP's routers reach it across the backbone.
+	Domain string `yaml:"domain"`
 
 	// Exchange and PeerASN are set on providers expanded from exchanges
 	// (#27); they are not config keys. A peer always gets the route check:
@@ -605,6 +638,9 @@ func (c *Config) applyDefaults() {
 		}
 	}
 	c.normalizeMitigation()
+	if c.Instance == "" {
+		c.Instance = c.Domain
+	}
 }
 
 // Validate checks the config and returns all problems found, joined.
@@ -670,8 +706,16 @@ func (c *Config) Validate() error {
 			}
 			names[p.Name] = true
 		}
-		src, err := netip.ParseAddr(p.SourceIP)
-		if err != nil {
+		if p.Domain != "" && !validProviderGroup(p.Domain) {
+			add("%s: domain %q must be 1-64 characters of letters, digits, '_', '.' or '-', starting with a letter or digit", label, p.Domain)
+		}
+		var src netip.Addr
+		var err error
+		if c.Remote(p) {
+			if p.SourceIP != "" {
+				add("%s: source_ip must be empty for a provider in domain %s (the peer there measures it)", label, p.Domain)
+			}
+		} else if src, err = netip.ParseAddr(p.SourceIP); err != nil {
 			add("%s: source_ip %q is not a valid IP address", label, p.SourceIP)
 		} else {
 			if sources[src] {
@@ -712,6 +756,8 @@ func (c *Config) Validate() error {
 			}
 		}
 	}
+
+	c.validateFederation(add)
 
 	seen := map[netip.Prefix]bool{}
 	for i, s := range c.Allowlist.Prefixes {

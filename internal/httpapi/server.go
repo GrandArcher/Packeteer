@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/GrandArcher/Packeteer/internal/exchange"
+	"github.com/GrandArcher/Packeteer/internal/federation"
 	"github.com/GrandArcher/Packeteer/internal/inbound"
 	"github.com/GrandArcher/Packeteer/internal/troubleshoot"
 )
@@ -45,6 +46,9 @@ type Options struct {
 	// Mitigation is threat mitigation (#28). Nil means it is not
 	// configured.
 	Mitigation MitigationControl
+	// Federation is the central view of every instance (#30). Nil means
+	// the instance runs standalone.
+	Federation func() federation.Status
 }
 
 // Server is an HTTP server. Handler serves the routes without listening,
@@ -59,6 +63,7 @@ type Server struct {
 	tools      *troubleshoot.Tools
 	inbound    func() inbound.Status
 	mitigation MitigationControl
+	federation func() federation.Status
 	log        *slog.Logger
 	handler    http.Handler
 	http       *http.Server
@@ -73,7 +78,7 @@ func New(opt Options) (*Server, error) {
 	if opt.Logger == nil {
 		opt.Logger = slog.Default()
 	}
-	s := &Server{addr: opt.Addr, user: opt.User, password: opt.Password, snap: opt.Snapshot, maint: opt.Maintenance, reports: opt.Reports, tools: opt.Tools, inbound: opt.Inbound, mitigation: opt.Mitigation, log: opt.Logger}
+	s := &Server{addr: opt.Addr, user: opt.User, password: opt.Password, snap: opt.Snapshot, maint: opt.Maintenance, reports: opt.Reports, tools: opt.Tools, inbound: opt.Inbound, mitigation: opt.Mitigation, federation: opt.Federation, log: opt.Logger}
 	s.handler = s.routes()
 	return s, nil
 }
@@ -144,6 +149,7 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("GET /api/telemetry", s.handleTelemetry)
 	mux.HandleFunc("GET /api/inbound", s.handleInbound)
 	mux.HandleFunc("GET /api/exchanges", s.handleExchanges)
+	mux.HandleFunc("GET /api/federation", s.handleFederation)
 	mux.HandleFunc("GET /api/reports", s.handleReportList)
 	mux.HandleFunc("GET /api/reports/{name}", s.handleReport)
 	mux.HandleFunc("GET /api/maintenance", s.handleMaintenance)
@@ -273,6 +279,21 @@ func (s *Server) handleExchanges(w http.ResponseWriter, _ *http.Request) {
 		meta
 		Exchanges []exchange.Stats `json:"exchanges"`
 	}{meta: snap.meta(), Exchanges: nz(snap.Exchanges)})
+}
+
+// handleFederation serves the central view (#30): this instance's
+// published snapshot, every peer's latest snapshot and freshness, and the
+// global commits. It is read-only.
+func (s *Server) handleFederation(w http.ResponseWriter, _ *http.Request) {
+	snap := s.snapshot()
+	st := federation.Status{Peers: []federation.PeerView{}, GlobalCommit: []federation.CommitStatus{}}
+	if s.federation != nil {
+		st = s.federation()
+	}
+	writeJSON(w, http.StatusOK, struct {
+		meta
+		federation.Status
+	}{meta: snap.meta(), Status: st})
 }
 
 // handleInbound serves inbound optimization: the steers (announced in

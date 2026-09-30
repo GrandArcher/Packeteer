@@ -65,16 +65,18 @@ type Snapshot struct {
 
 // Provider is one configured transit plus its probe-source health.
 type Provider struct {
-	Name       string    `json:"name"`
-	Source     string    `json:"source,omitempty"`
-	NextHop    string    `json:"next_hop,omitempty"`
-	Exclude    bool      `json:"exclude"`
-	Group      string    `json:"group,omitempty"`
-	Precedence int       `json:"precedence,omitempty"`
-	CCDisable  bool      `json:"cc_disable,omitempty"`
-	Up         bool      `json:"up"`
-	Reason     string    `json:"reason,omitempty"`
-	Since      time.Time `json:"since,omitempty"`
+	Name       string `json:"name"`
+	Source     string `json:"source,omitempty"`
+	NextHop    string `json:"next_hop,omitempty"`
+	Exclude    bool   `json:"exclude"`
+	Group      string `json:"group,omitempty"`
+	Precedence int    `json:"precedence,omitempty"`
+	CCDisable  bool   `json:"cc_disable,omitempty"`
+	// Domain is the provider's routing domain (#30), when configured.
+	Domain string    `json:"domain,omitempty"`
+	Up     bool      `json:"up"`
+	Reason string    `json:"reason,omitempty"`
+	Since  time.Time `json:"since,omitempty"`
 }
 
 // Probe is the latest measurement of one provider toward one prefix.
@@ -260,10 +262,13 @@ func assembleProviders(in Input) []Provider {
 	for _, p := range in.Providers {
 		row := Provider{
 			Name: p.Name, Source: p.SourceIP, NextHop: p.NextHop, Exclude: p.Exclude,
-			Group: p.Group, Precedence: p.Precedence, CCDisable: p.CCDisable,
+			Group: p.Group, Precedence: p.Precedence, CCDisable: p.CCDisable, Domain: p.Domain,
 		}
 		if st, ok := status[p.Name]; ok {
 			row.Up, row.Reason, row.Since = st.Up, st.Reason, st.Since
+		} else if p.Domain != "" {
+			// Not probed here: the peer in that domain measures it (#30).
+			row.Reason = "measured by the peer in domain " + p.Domain + " (see /api/federation)"
 		} else if !in.Started {
 			row.Reason = "starting"
 		} else {

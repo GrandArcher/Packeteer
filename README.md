@@ -154,6 +154,7 @@ Leave graceful restart off on the session. Guides:
 - [docs/mikrotik.md](docs/mikrotik.md) — RouterOS 7 iBGP, filters, and Traffic Flow
 - [docs/routers.md](docs/routers.md) — FRR, Junos, IOS, and what happens when the native path disappears
 - [docs/route-reflector.md](docs/route-reflector.md) — several edge routers, per-router provider reachability, route reflectors, Internet exchange peers, and SIGHUP reload of `bgp.neighbors`
+- [docs/multi-pop.md](docs/multi-pop.md) — several POPs (routing domains) federated over mutual TLS: inter-DC RTT in the path cost, global commit across POPs, and the central view. Lab-proven only
 - [docs/policy-routing.md](docs/policy-routing.md) — probe sources behind the router
 
 A flow export (NetFlow, IPFIX, or sFlow) is optional. It only adds probe targets. It does not inject routes. With host networking the collector's UDP port is a host port; firewall it to the exporter.
@@ -267,6 +268,7 @@ The server is read-only (GET and HEAD), except on-demand maintenance windows (`P
 | `/api/troubleshoot/traceroute` | `POST {"target":"<address>","provider":"<optional name>"}`. UDP traceroute from each provider's source. Needs `troubleshoot.enabled`. |
 | `/api/troubleshoot/whois` | `POST {"query":"<address, prefix, or ASN>"}`. RDAP lookup through `troubleshoot.whois`. Needs `troubleshoot.enabled`. |
 | `/api/mitigations` | Threat mitigation rules (RTBH, BGP redirect, FlowSpec drop/rate-limit/redirect), the catalog, the mitigation allowlist, and the feed of recent changes. `POST {"prefix","action","target","ttl","reason"}` (FlowSpec adds `match`, `source_countries`, `rate_mbps`) adds a rule and `DELETE /api/mitigations/<id>` removes one, when `mitigation` is configured and basic auth is on ([docs/mitigation.md](docs/mitigation.md)). Lab-proven only. |
+| `/api/federation` | Central view of every federated instance (#30): this instance's published snapshot, each peer's freshness, last error, snapshot, and inter-DC RTT, and the global commits with each member's usage. Read-only. `enabled: false` when `federation` is not configured ([docs/multi-pop.md](docs/multi-pop.md)). |
 | `/api/maintenance` | Open maintenance windows. `POST` opens an on-demand window and `DELETE /api/maintenance/<id>` closes one, when a `maintenance` policy is configured and basic auth is on ([CONFIG.md](docs/CONFIG.md#policy-maintenance)). |
 
 Basic auth is off unless both `PACKETEER_HTTP_USER` and `PACKETEER_HTTP_PASSWORD` are set. Setting only one refuses to start. Set both when `http.listen` is not loopback. The password is not read from the config file and is not written to the log.

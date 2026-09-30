@@ -304,6 +304,57 @@ function renderMitigation(data) {
   root.appendChild(f.table);
 }
 
+function renderFederation(data) {
+  var root = document.getElementById("federation");
+  clear(root);
+  if (!data || !data.enabled) {
+    root.appendChild(el("p", "empty", "Not configured (federation in the config). This instance runs standalone."));
+    return;
+  }
+  var t = table(["Instance", "Domain", "Mode", "State", "Inter-DC RTT", "Providers up", "Improvements", "Last seen", "Error"]);
+  function row(name, snap, fresh, rtt, seen, error) {
+    var tr = el("tr");
+    tr.appendChild(el("td", "", name));
+    tr.appendChild(el("td", "", (snap && snap.domain) || "—"));
+    tr.appendChild(el("td", "", (snap && snap.mode) || "—"));
+    var st = el("td");
+    st.appendChild(el("span", fresh ? "dot up" : "dot down", fresh ? "fresh" : "stale"));
+    tr.appendChild(st);
+    tr.appendChild(el("td", "", rtt === null ? "local" : fmtMs(rtt)));
+    var provs = (snap && snap.providers) || [];
+    var up = provs.filter(function (p) { return p.up; }).map(function (p) { return p.name; });
+    tr.appendChild(el("td", "", snap ? up.length + " of " + provs.length + (up.length ? " (" + up.join(", ") + ")" : "") : "—"));
+    tr.appendChild(el("td", "", snap ? ((snap.improvements || []).length + " of " + snap.max_improvements) : "—"));
+    tr.appendChild(el("td", "", seen ? fmtTime(seen) : "—"));
+    tr.appendChild(el("td", "", error || ""));
+    t.body.appendChild(tr);
+  }
+  row(data.instance + " (this)", data.local, true, null, data.local && data.local.time, "");
+  (data.peers || []).forEach(function (p) {
+    row(p.name, p.snapshot, p.fresh, p.snapshot ? p.inter_dc_rtt_ms : undefined, p.last_seen, p.error);
+  });
+  root.appendChild(t.table);
+  var gc = data.global_commit || [];
+  if (!gc.length) return;
+  root.appendChild(el("h3", "", "Global commits"));
+  var g = table(["Commit", "Usage", "Commit (Mbit/s)", "State", "Members"]);
+  gc.forEach(function (c) {
+    var tr = el("tr");
+    tr.appendChild(el("td", "", c.name));
+    tr.appendChild(el("td", "", c.complete ? c.total_mbps.toFixed(1) : "—"));
+    tr.appendChild(el("td", "", String(c.commit_mbps)));
+    var st = el("td");
+    var label = !c.complete ? "incomplete (standalone commits)" : (c.over ? "over" : "under");
+    st.appendChild(el("span", c.complete && !c.over ? "dot up" : "dot down", label));
+    tr.appendChild(st);
+    tr.appendChild(el("td", "", (c.members || []).map(function (m) {
+      return m.provider + "@" + m.domain + " " + (m.have ? m.usage_mbps.toFixed(1) : "?");
+    }).join(", ")));
+    g.body.appendChild(tr);
+  });
+  root.appendChild(g.table);
+}
+
 function refresh() {
   if (refreshing) return;
   refreshing = true;
@@ -315,7 +366,8 @@ function refresh() {
     getJSON("/api/prefixes"),
     getJSON("/api/improvements"),
     readyReq,
-    getJSON("/api/mitigations")
+    getJSON("/api/mitigations"),
+    getJSON("/api/federation")
   ]).then(function (results) {
     var err = null;
     if (results[0].status === "fulfilled") lastProviders = results[0].value;
@@ -332,6 +384,8 @@ function refresh() {
     // Mitigation is optional; its failure does not mark the page stale.
     if (results[4].status === "fulfilled") lastMitigation = results[4].value;
     if (lastMitigation) renderMitigation(lastMitigation);
+    // The central view is optional too.
+    if (results[5].status === "fulfilled") renderFederation(results[5].value);
     renderStatus(err);
   }).then(function () {
     refreshing = false;

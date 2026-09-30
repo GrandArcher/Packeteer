@@ -180,6 +180,10 @@ func run(ctx context.Context, args []string, getenv func(string) string, stdout,
 		if p.Exchange != "" {
 			ix = fmt.Sprintf(" exchange=%s asn=%d", p.Exchange, p.PeerASN)
 		}
+		if cfg.Remote(p) {
+			fmt.Fprintf(stdout, "  - %s domain=%s next_hop=%s (measured by the peer there)\n", p.Name, p.Domain, p.NextHop)
+			continue
+		}
 		fmt.Fprintf(stdout, "  - %s source_ip=%s next_hop=%s%s%s\n", p.Name, p.SourceIP, p.NextHop, bmp, ix)
 	}
 	for _, ex := range cfg.Exchanges {
@@ -305,10 +309,12 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 		log.Error("refusing to start", "err", terr)
 		return 1
 	}
+	fed := newFedState(cfg, plugins)
 	if addr := cfg.HTTPListen(); addr != "" {
 		srv, err := httpapi.New(httpapi.Options{
 			Addr: addr, User: httpUser, Password: httpPass, Snapshot: col.Snapshot, Logger: log,
 			Maintenance: maint, Reports: reports, Tools: tools, Inbound: inboundStatus, Mitigation: mitAPI,
+			Federation: fed.status,
 		})
 		if err != nil {
 			log.Error("refusing to start", "err", err)
@@ -455,8 +461,9 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 		// cancellation) must still withdraw once measurements exceed
 		// MaxResultAge.
 		decideLoop(loopCtx, cfg.Probe.Interval, kick, func(now time.Time) {
-			in := decisionInput(loopCtx, now, engine, view, plugins)
+			in := decisionInput(loopCtx, now, engine, view, plugins, fed)
 			changes, err := runDecision(now, decider, in, ctl, log, cfg.Mode)
+			fed.publish(now, in, decider.Improvements())
 			if rec != nil {
 				rec.Decision(now, changes, in.Results)
 			}
@@ -517,6 +524,8 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 	log.Info("shutting down")
 	loopCancel()
 	loopWG.Wait()
+	// Peers stop using this POP's providers at their next poll (#30).
+	fed.publishDown(time.Now())
 	stopCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	// Withdraw while the session is still up, then stop plugins (the announcer
@@ -878,6 +887,10 @@ func routerExports(cfg *config.Config) ([]plugin.RouterExport, error) {
 func newTools(cfg *config.Config, plugins *pluginhost.Set) (*troubleshoot.Tools, error) {
 	var providers []probe.Provider
 	for _, p := range cfg.Providers {
+		if cfg.Remote(p) {
+			// Measured by the peer in its domain (#30), never probed here.
+			continue
+		}
 		src, err := parseAddr(p.SourceIP)
 		if err != nil {
 			return nil, err
@@ -908,6 +921,10 @@ func newTools(cfg *config.Config, plugins *pluginhost.Set) (*troubleshoot.Tools,
 func newEngine(cfg *config.Config, plugins *pluginhost.Set, log *slog.Logger, onRound func(), onProbe func(probe.Result)) (*probe.Engine, error) {
 	var providers []probe.Provider
 	for _, p := range cfg.Providers {
+		if cfg.Remote(p) {
+			// Measured by the peer in its domain (#30), never probed here.
+			continue
+		}
 		src, err := parseAddr(p.SourceIP)
 		if err != nil {
 			return nil, err
@@ -1486,7 +1503,9 @@ func newDecider(cfg *config.Config, plugins *pluginhost.Set) (*policy.Engine, er
 // decisionInput snapshots probe results, provider health, the RIB view,
 // and, when the scorer plans commit moves, telemetry and flow volumes.
 // A weighted scorer does not implement planning, so those reads are skipped.
-func decisionInput(ctx context.Context, now time.Time, engine *probe.Engine, view *rib.View, plugins *pluginhost.Set) policy.Input {
+// With federation (#30), fresh peers' paths through providers in other
+// domains are merged in and global commits are applied to the usage.
+func decisionInput(ctx context.Context, now time.Time, engine *probe.Engine, view *rib.View, plugins *pluginhost.Set, fed *fedState) policy.Input {
 	in := policy.Input{Results: engine.Results(), ProviderUp: map[string]bool{}, Native: map[netip.Prefix]string{}}
 	for _, p := range engine.Providers() {
 		in.ProviderUp[p.Name] = p.Up
@@ -1501,12 +1520,14 @@ func decisionInput(ctx context.Context, now time.Time, engine *probe.Engine, vie
 		fillRouteChecks(&in, view)
 		in.EgressDown = view.EgressDown()
 	}
+	fed.merge(&in, now)
 	var routes routeLookup
 	if view != nil {
 		routes = view
 	}
 	applyPolicies(&in, now, routes, plugins, collectTraffic(ctx, plugins))
 	fillPlannerInputs(ctx, &in, plugins)
+	fed.commit(ctx, &in, plugins)
 	return in
 }
 

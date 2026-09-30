@@ -1,0 +1,8 @@
+# Inside the 15ms threshold of each other: not a performance move. x-b
+# (see b-slow.yaml) is clearly worse. Commit control is what steers.
+sent: 4
+paths:
+  - provider: x-a
+    rtt_ms: 40
+  - provider: y-a
+    rtt_ms: 45
