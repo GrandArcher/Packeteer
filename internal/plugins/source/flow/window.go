@@ -29,12 +29,36 @@ type cell struct {
 	bytes     uint64
 	host      netip.Addr
 	hostBytes uint64
+	// local and transit are the bytes whose source was classified; both
+	// stay zero without a transit block.
+	local   uint64
+	transit uint64
 }
 
 type rank struct {
-	prefix netip.Prefix
-	host   netip.Addr
-	bytes  uint64
+	prefix  netip.Prefix
+	host    netip.Addr
+	bytes   uint64
+	local   uint64
+	transit uint64
+}
+
+// traffic is the class of one observation's source.
+type traffic uint8
+
+const (
+	trafficUnknown traffic = iota
+	trafficLocal
+	trafficTransit
+)
+
+func (c *cell) note(n uint64, t traffic) {
+	switch t {
+	case trafficLocal:
+		c.local += n
+	case trafficTransit:
+		c.transit += n
+	}
 }
 
 func newSlide(window time.Duration, max int) *slide {
@@ -48,7 +72,7 @@ func newSlide(window time.Duration, max int) *slide {
 	return &slide{window: window, bucket: b, max: max, slots: map[int64]*bucket{}}
 }
 
-func (s *slide) add(at time.Time, p netip.Prefix, host netip.Addr, n uint64) {
+func (s *slide) add(at time.Time, p netip.Prefix, host netip.Addr, n uint64, t traffic) {
 	if n == 0 || !p.IsValid() {
 		return
 	}
@@ -61,13 +85,14 @@ func (s *slide) add(at time.Time, p netip.Prefix, host netip.Addr, n uint64) {
 		b = &bucket{cells: map[netip.Prefix]*cell{}}
 		s.slots[slot] = b
 	}
-	b.add(p, host, n, s.max)
+	b.add(p, host, n, t, s.max)
 	s.prune(at)
 }
 
-func (b *bucket) add(p netip.Prefix, host netip.Addr, n uint64, max int) {
+func (b *bucket) add(p netip.Prefix, host netip.Addr, n uint64, t traffic, max int) {
 	if c, ok := b.cells[p]; ok {
 		c.bytes += n
+		c.note(n, t)
 		if host.IsValid() && host == c.host {
 			c.hostBytes += n
 		} else if host.IsValid() && n >= c.hostBytes {
@@ -92,6 +117,7 @@ func (b *bucket) add(p netip.Prefix, host netip.Addr, n uint64, max int) {
 		}
 	}
 	c := &cell{bytes: n}
+	c.note(n, t)
 	if host.IsValid() {
 		c.host = host
 		c.hostBytes = n
@@ -160,6 +186,8 @@ func (s *slide) aggregate(now time.Time) []rank {
 				acc[p] = a
 			}
 			a.bytes += c.bytes
+			a.local += c.local
+			a.transit += c.transit
 			if c.host.IsValid() && c.hostBytes >= a.hostBytes {
 				a.host = c.host
 				a.hostBytes = c.hostBytes
@@ -171,7 +199,7 @@ func (s *slide) aggregate(now time.Time) []rank {
 		if a.bytes == 0 {
 			continue
 		}
-		out = append(out, rank{prefix: p, host: a.host, bytes: a.bytes})
+		out = append(out, rank{prefix: p, host: a.host, bytes: a.bytes, local: a.local, transit: a.transit})
 	}
 	sort.Slice(out, func(i, j int) bool {
 		if out[i].bytes != out[j].bytes {

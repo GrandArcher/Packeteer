@@ -25,9 +25,10 @@ Milestones:
 
 | Status | Count |
 |---|---|
-| done | 55 |
+| done | 65 |
+| partial | 1 |
 | in progress | 0 |
-| planned | 24 |
+| planned | 13 |
 | won't do | 3 |
 
 ## Performance optimization
@@ -92,7 +93,9 @@ Inbound optimization (#25) steers inbound traffic for the operator's own `inboun
 
 | Capability | IRP doc ref | Status | Milestone | Plugin kind | Issue |
 |---|---|---|---|---|---|
-| Optimization of transiting traffic | 1.2.22 | planned | v0.3 | source + scorer | #29 |
+| Optimization of transiting traffic | 1.2.22 | done (simulated-flow tested) | v0.3 | source (`flow` `transit` block, `plugin.TrafficClassifier`) + policy (`rules` `traffic`) | #29 |
+
+Transit traffic optimization (#29) optimizes egress for traffic that crosses the network from customers, not only traffic the operator sources. The `flow` source's `transit` block lists the customer source networks (`customers`); each flow record (NetFlow v5/v9, IPFIX, sFlow) is transit when its source is inside them and local otherwise, and a prefix whose transit byte share over the window reaches `share_pct` (default 50) is a transit prefix. The controller passes the class to the policy chain before each decision (`PolicySubject.Traffic`), and `rules` with `traffic: transit` or `traffic: local` give the two classes separate policies (allow/deny providers, ignore, static, vip), alone or combined with prefixes, ASNs, or countries. Classification does not add targets and never announces; the allowlist, learned-RIB check, community and NO_EXPORT, `max_improvements`, hold time, and withdraw on probe-source loss, stale data, RIB loss, and shutdown are unchanged, and an unclassified prefix matches no traffic rule. Unit tests replay simulated NetFlow v5, IPFIX, and sFlow exports (documentation prefixes) through classification, and a controller test runs the classes through the policy chain into `Decide` in inject mode (transit restricted to its allowed provider, local on the fastest, nothing outside the allowlist or the learned RIB, both withdrawn on RIB loss). No new announce path, so no new lab script. Rollback: remove `transit` and the `traffic` rules.
 
 ## Policies
 

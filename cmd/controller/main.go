@@ -1490,7 +1490,7 @@ func decisionInput(ctx context.Context, now time.Time, engine *probe.Engine, vie
 	if view != nil {
 		routes = view
 	}
-	applyPolicies(&in, now, routes, plugins)
+	applyPolicies(&in, now, routes, plugins, collectTraffic(ctx, plugins))
 	fillPlannerInputs(ctx, &in, plugins)
 	return in
 }
@@ -1529,8 +1529,10 @@ type routeLookup interface {
 // applyPolicies asks the policy chain about every probed prefix and
 // collects the providers in open maintenance windows. The first policy that
 // matches a prefix decides it. ASN rules see the learned AS path only while
-// the RIB view is ready. Policies do not announce; Decide applies them.
-func applyPolicies(in *policy.Input, now time.Time, routes routeLookup, plugins *pluginhost.Set) {
+// the RIB view is ready, and traffic rules see the prefix's class from
+// traffic (nil when no source classifies). Policies do not announce; Decide
+// applies them.
+func applyPolicies(in *policy.Input, now time.Time, routes routeLookup, plugins *pluginhost.Set, traffic map[netip.Prefix]string) {
 	if in == nil || plugins == nil || len(plugins.Policies) == 0 {
 		return
 	}
@@ -1554,7 +1556,7 @@ func applyPolicies(in *policy.Input, now time.Time, routes routeLookup, plugins 
 		if _, done := in.Policies[r.Prefix]; done || !r.Prefix.IsValid() {
 			continue
 		}
-		subj := plugin.PolicySubject{Prefix: r.Prefix}
+		subj := plugin.PolicySubject{Prefix: r.Prefix, Traffic: traffic[r.Prefix]}
 		if ready {
 			if rt, ok := routes.Exact(r.Prefix); ok {
 				subj.ASPath = rt.ASPath
@@ -1701,6 +1703,47 @@ func fillPlannerInputs(ctx context.Context, in *policy.Input, plugins *pluginhos
 	}
 	in.Usage = collectTelemetry(ctx, plugins)
 	in.VolumeMbps = collectVolumes(ctx, plugins)
+}
+
+// collectTraffic reads the traffic class of each prefix from target sources
+// that classify flow data (#29). The first source listed that classifies a
+// prefix wins. It is nil when no policy is configured or no source
+// classifies. This does not announce.
+func collectTraffic(ctx context.Context, plugins *pluginhost.Set) map[netip.Prefix]string {
+	if plugins == nil || len(plugins.Policies) == 0 {
+		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	var out map[netip.Prefix]string
+	for _, src := range plugins.Sources {
+		if ctx.Err() != nil {
+			return out
+		}
+		tc, ok := src.Plugin.(plugin.TrafficClassifier)
+		if !ok {
+			continue
+		}
+		rows, err := tc.TrafficMix(ctx)
+		if err != nil {
+			continue
+		}
+		for _, row := range rows {
+			if !row.Prefix.IsValid() || row.Class == "" {
+				continue
+			}
+			if out == nil {
+				out = map[netip.Prefix]string{}
+			}
+			if _, done := out[row.Prefix]; !done {
+				out[row.Prefix] = row.Class
+			}
+		}
+	}
+	return out
 }
 
 // collectVolumes reads optional volume reports from target sources. The

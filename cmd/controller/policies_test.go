@@ -58,7 +58,7 @@ func TestApplyPolicies(t *testing.T) {
 	res := []probe.Result{{Provider: "transit-a", Prefix: pA}, {Provider: "transit-b", Prefix: pA}, {Provider: "transit-a", Prefix: pB}, {Provider: "transit-a", Prefix: pC}}
 
 	in := policy.Input{Results: res}
-	applyPolicies(&in, time.Date(2026, 9, 25, 12, 0, 0, 0, time.UTC), routes, set)
+	applyPolicies(&in, time.Date(2026, 9, 25, 12, 0, 0, 0, time.UTC), routes, set, nil)
 	if len(in.Maintenance) != 1 || in.Maintenance[0] != "transit-b" {
 		t.Fatalf("maintenance = %v", in.Maintenance)
 	}
@@ -75,7 +75,7 @@ func TestApplyPolicies(t *testing.T) {
 
 	// Outside the window, and with the RIB not ready, ASN rules cannot match.
 	in = policy.Input{Results: res}
-	applyPolicies(&in, time.Date(2026, 9, 27, 0, 0, 0, 0, time.UTC), fakeRoutes{routes: routes.routes}, set)
+	applyPolicies(&in, time.Date(2026, 9, 27, 0, 0, 0, 0, time.UTC), fakeRoutes{routes: routes.routes}, set, nil)
 	if len(in.Maintenance) != 0 {
 		t.Fatalf("maintenance = %v", in.Maintenance)
 	}
@@ -84,13 +84,13 @@ func TestApplyPolicies(t *testing.T) {
 	}
 	// No RIB at all.
 	in = policy.Input{Results: res}
-	applyPolicies(&in, time.Now(), nil, set)
+	applyPolicies(&in, time.Now(), nil, set, nil)
 	if v := in.Policies[pA]; v.Rule != "second" {
 		t.Fatalf("pA with nil RIB = %+v", v)
 	}
 	// No policies: nothing set.
 	in = policy.Input{Results: res}
-	applyPolicies(&in, time.Now(), routes, &pluginhost.Set{})
+	applyPolicies(&in, time.Now(), routes, &pluginhost.Set{}, nil)
 	if in.Policies != nil || in.Maintenance != nil {
 		t.Fatalf("empty chain set %+v %+v", in.Policies, in.Maintenance)
 	}
@@ -112,7 +112,7 @@ func TestMaintenanceControlWakesDecisions(t *testing.T) {
 		t.Fatalf("open: %v woke=%d", err, woke)
 	}
 	in := policy.Input{}
-	applyPolicies(&in, now.Add(time.Minute), nil, set)
+	applyPolicies(&in, now.Add(time.Minute), nil, set, nil)
 	if len(in.Maintenance) != 1 || in.Maintenance[0] != "transit-a" {
 		t.Fatalf("maintenance = %v", in.Maintenance)
 	}

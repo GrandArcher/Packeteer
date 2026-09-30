@@ -151,7 +151,7 @@ func TestValidation(t *testing.T) {
 		{"unknown field", `rules: [{action: vip, prefixes: [192.0.2.0/24], bogus: 1}]`, "field bogus not found"},
 		{"no action", `rules: [{prefixes: [192.0.2.0/24]}]`, "action is required"},
 		{"bad action", `rules: [{action: prefer, prefixes: [192.0.2.0/24]}]`, `action "prefer" is invalid`},
-		{"no match", `rules: [{action: vip}]`, "at least one of prefixes, asns, or countries"},
+		{"no match", `rules: [{action: vip}]`, "at least one of prefixes, asns, countries, or traffic"},
 		{"deny without providers", `rules: [{action: deny, prefixes: [192.0.2.0/24]}]`, "needs at least one provider"},
 		{"allow without providers", `rules: [{action: allow, prefixes: [192.0.2.0/24]}]`, "needs at least one provider"},
 		{"static two providers", `rules: [{action: static, providers: [transit-a, transit-b], prefixes: [192.0.2.0/24], max_loss_pct: 1}]`, "exactly one provider"},
@@ -212,5 +212,53 @@ rules:
 `)
 	if got := noDB.Country(netip.MustParseAddr("192.0.2.1")); got != "" {
 		t.Fatalf("Country without geoip_db = %q, want empty", got)
+	}
+}
+
+// Transit (customer-originated) and local prefixes get separate policies.
+func TestTrafficRules(t *testing.T) {
+	p := mustBuild(t, `
+rules:
+  - {name: transit-pinned, action: allow, providers: [transit-a], prefixes: [198.51.100.0/24], traffic: transit}
+  - {name: exact, action: vip, prefixes: [198.51.100.0/25]}
+  - {name: transit-asn, action: deny, providers: [transit-c], asns: [64500], traffic: transit}
+  - {name: transit, action: deny, providers: [transit-b], traffic: Transit}
+  - {name: local, action: vip, traffic: local}
+`)
+	pT := netip.MustParsePrefix("198.51.100.128/25")
+	pOther := netip.MustParsePrefix("203.0.113.0/24")
+	tests := []struct {
+		name    string
+		subj    plugin.PolicySubject
+		rule    string
+		match   string
+		matched bool
+	}{
+		{"prefix+traffic", plugin.PolicySubject{Prefix: pT, Traffic: plugin.TrafficTransit}, "transit-pinned", "prefix 198.51.100.0/24, traffic transit", true},
+		// The traffic-limited prefix rule does not match local traffic;
+		// the local-only rule does.
+		{"prefix, other class", plugin.PolicySubject{Prefix: pT, Traffic: plugin.TrafficLocal}, "local", "traffic local", true},
+		// A longer plain prefix rule still wins over a traffic-limited one.
+		{"longer plain prefix", plugin.PolicySubject{Prefix: netip.MustParsePrefix("198.51.100.0/25"), Traffic: plugin.TrafficTransit}, "exact", "prefix 198.51.100.0/25", true},
+		{"asn+traffic", plugin.PolicySubject{Prefix: pOther, ASPath: []uint32{64510, 64500}, Traffic: plugin.TrafficTransit}, "transit-asn", "asn 64500, traffic transit", true},
+		{"traffic only", plugin.PolicySubject{Prefix: pOther, Traffic: plugin.TrafficTransit}, "transit", "traffic transit", true},
+		{"asn, local", plugin.PolicySubject{Prefix: pOther, ASPath: []uint32{64500}, Traffic: plugin.TrafficLocal}, "local", "traffic local", true},
+		// No classification: no traffic rule matches.
+		{"unclassified", plugin.PolicySubject{Prefix: pT, ASPath: []uint32{64500}}, "", "", false},
+	}
+	for _, tc := range tests {
+		v, ok := p.Match(tc.subj)
+		if ok != tc.matched || v.Rule != tc.rule || v.Match != tc.match {
+			t.Errorf("%s: got %+v %v, want rule %q match %q", tc.name, v, ok, tc.rule, tc.match)
+		}
+	}
+}
+
+func TestTrafficValidation(t *testing.T) {
+	if _, err := build(t, "rules: [{action: ignore, traffic: customer}]"); err == nil || !strings.Contains(err.Error(), "want transit or local") {
+		t.Fatalf("bad traffic: %v", err)
+	}
+	if _, err := build(t, "rules: [{action: ignore}]"); err == nil || !strings.Contains(err.Error(), "prefixes, asns, countries, or traffic") {
+		t.Fatalf("empty rule: %v", err)
 	}
 }

@@ -1,10 +1,16 @@
 // Package rules implements the "rules" policy: routing policies matched by
-// prefix, origin ASN, or country, with the actions ignore, allow, deny,
-// static, and vip.
+// prefix, origin ASN, country, or traffic class, with the actions ignore,
+// allow, deny, static, and vip.
 //
 // Precedence between overlapping rules is fixed. A prefix match beats an
-// ASN match, which beats a country match. Among prefix matches the longest
-// rule prefix wins. Remaining ties go to the rule listed first.
+// ASN match, which beats a country match, which beats a rule that lists only
+// a traffic class. Among prefix matches the longest rule prefix wins.
+// Remaining ties go to the rule listed first.
+//
+// A rule with traffic (transit or local) matches only prefixes of that
+// class, as classified from flow data (the flow source's transit block). A
+// prefix no source classifies matches no traffic rule. This is how transit
+// (customer-originated) and local traffic get separate policies.
 //
 // Country lookups read a MaxMind-format database (for example
 // GeoLite2-Country.mmdb) from a path the operator mounts into the container.
@@ -59,6 +65,9 @@ type Rule struct {
 	// Countries are ISO 3166-1 alpha-2 codes, looked up for the first
 	// address of the prefix.
 	Countries []string `yaml:"countries"`
+	// Traffic, when set, limits the rule to prefixes of that traffic
+	// class: "transit" or "local". Alone it matches every such prefix.
+	Traffic string `yaml:"traffic"`
 	// MaxLossPct is required for static: the pinned path must stay at or
 	// under this loss, or the pin is not made (or is withdrawn).
 	MaxLossPct *float64 `yaml:"max_loss_pct"`
@@ -72,6 +81,7 @@ type rule struct {
 	prefixes  []netip.Prefix
 	asns      map[uint32]bool
 	countries map[string]bool
+	traffic   string
 }
 
 // Policy is the rules policy.
@@ -224,8 +234,14 @@ func compile(in []Rule, providers []string) ([]rule, bool, error) {
 			cr.countries[code] = true
 			needGeo = true
 		}
-		if len(r.Prefixes) == 0 && len(r.ASNs) == 0 && len(r.Countries) == 0 {
-			add("%s: at least one of prefixes, asns, or countries is required", label)
+		switch t := strings.ToLower(strings.TrimSpace(r.Traffic)); t {
+		case "", plugin.TrafficTransit, plugin.TrafficLocal:
+			cr.traffic = t
+		default:
+			add("%s: traffic %q is invalid (want transit or local)", label, r.Traffic)
+		}
+		if len(r.Prefixes) == 0 && len(r.ASNs) == 0 && len(r.Countries) == 0 && strings.TrimSpace(r.Traffic) == "" {
+			add("%s: at least one of prefixes, asns, countries, or traffic is required", label)
 		}
 		out = append(out, cr)
 	}
@@ -244,6 +260,9 @@ func (p *Policy) Match(s plugin.PolicySubject) (plugin.PolicyVerdict, bool) {
 	best, bestBits := -1, -1
 	var bestPrefix netip.Prefix
 	for i, r := range p.rules {
+		if !r.trafficOK(s) {
+			continue
+		}
 		for _, rp := range r.prefixes {
 			if rp.Bits() <= s.Prefix.Bits() && rp.Contains(s.Prefix.Addr()) && rp.Bits() > bestBits {
 				best, bestBits, bestPrefix = i, rp.Bits(), rp
@@ -255,24 +274,40 @@ func (p *Policy) Match(s plugin.PolicySubject) (plugin.PolicyVerdict, bool) {
 	}
 	if origin := s.OriginASN(); origin != 0 {
 		for i, r := range p.rules {
-			if r.asns[origin] {
+			if r.asns[origin] && r.trafficOK(s) {
 				return p.verdict(i, fmt.Sprintf("asn %d", origin)), true
 			}
 		}
 	}
 	if code := p.country(s.Prefix.Addr()); code != "" {
 		for i, r := range p.rules {
-			if r.countries[code] {
+			if r.countries[code] && r.trafficOK(s) {
 				return p.verdict(i, "country "+code), true
+			}
+		}
+	}
+	if s.Traffic != "" {
+		for i, r := range p.rules {
+			if r.traffic == s.Traffic && len(r.prefixes) == 0 && len(r.asns) == 0 && len(r.countries) == 0 {
+				return p.verdict(i, "traffic "+s.Traffic), true
 			}
 		}
 	}
 	return plugin.PolicyVerdict{}, false
 }
 
+// trafficOK reports whether the rule's traffic class, if any, is the
+// subject's.
+func (r rule) trafficOK(s plugin.PolicySubject) bool {
+	return r.traffic == "" || r.traffic == s.Traffic
+}
+
 func (p *Policy) verdict(i int, match string) plugin.PolicyVerdict {
 	v := p.rules[i].verdict
 	v.Providers = slices.Clone(v.Providers)
+	if t := p.rules[i].traffic; t != "" && !strings.HasPrefix(match, "traffic ") {
+		match += ", traffic " + t
+	}
 	v.Match = match
 	return v
 }
