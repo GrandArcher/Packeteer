@@ -1,8 +1,10 @@
 package mitigation
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
 	"net/netip"
 	"slices"
 	"strings"
@@ -363,4 +365,120 @@ func findID(c *Controller, p netip.Prefix) string {
 		}
 	}
 	return ""
+}
+
+// Different rules can expand to the same FlowSpec route. Add refuses the
+// second, and should two ever share a route, the lowest rule key owns it
+// every round, so the edge never sees it flap.
+func TestFlowSpecOverlapRefused(t *testing.T) {
+	ctx := context.Background()
+	c, _, _ := newFSTest(t, config.ModeInject, 10)
+	xa, err := c.Add(Request{Prefix: victim, Action: plugin.MitigationFlowSpecDrop, Countries: []string{"XA"}, TTL: 10 * time.Minute}, t0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// XA is 192.0.2.0/25: a rule on that source is the same route.
+	for name, req := range map[string]Request{
+		"source is a country network": {Prefix: victim, Action: plugin.MitigationFlowSpecRateLimit, RateMbps: 8,
+			Match: plugin.FlowSpecMatch{Source: netip.MustParsePrefix("192.0.2.0/25")}},
+		"country superset": {Prefix: victim, Action: plugin.MitigationFlowSpecDrop, Countries: []string{"XA", "XB"}},
+	} {
+		req.TTL = 10 * time.Minute
+		_, err := c.Add(req, t0)
+		if !errors.Is(err, ErrConflict) || !strings.Contains(err.Error(), xa.ID) {
+			t.Fatalf("%s: err = %v, want ErrConflict naming %s", name, err, xa.ID)
+		}
+	}
+	// Same key replaces; a different source or match does not collide.
+	if _, err := c.Add(Request{Prefix: victim, Action: plugin.MitigationFlowSpecRateLimit, RateMbps: 8, Countries: []string{"XA"}, TTL: 10 * time.Minute}, t0); err != nil {
+		t.Fatalf("replace: %v", err)
+	}
+	if _, err := c.Add(Request{Prefix: victim, Action: plugin.MitigationFlowSpecDrop, TTL: 10 * time.Minute,
+		Match: plugin.FlowSpecMatch{Source: netip.MustParsePrefix("192.0.2.0/26")}}, t0); err != nil {
+		t.Fatalf("narrower source: %v", err)
+	}
+	if _, err := c.Add(Request{Prefix: victim, Action: plugin.MitigationFlowSpecDrop, Countries: []string{"XB"}, Match: udp53(), TTL: 10 * time.Minute}, t0); err != nil {
+		t.Fatalf("other country: %v", err)
+	}
+	if st := c.Status(); st.Routes != 3 {
+		t.Fatalf("routes held = %d, want 3", st.Routes)
+	}
+
+	// Force a shared route past Add: the owner must never change.
+	c2, ann2, _ := newFSTest(t, config.ModeInject, 10)
+	a, err := c2.Add(Request{Prefix: victim, Action: plugin.MitigationFlowSpecDrop, Countries: []string{"XA"}, TTL: 10 * time.Minute}, t0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b := &Rule{ID: "b", Prefix: victim, Action: plugin.MitigationFlowSpecRateLimit, RateMbps: 8, Routes: 1, Created: t0, Expires: t0.Add(time.Hour),
+		Match: &plugin.FlowSpecMatch{Source: netip.MustParsePrefix("192.0.2.0/25")}}
+	b.key = "flowspec dst=" + victim.String() + " " + b.MatchText() + " countries="
+	c2.mu.Lock()
+	c2.rules[b.key] = b
+	winner, loser := a.ID, "b"
+	for k, r := range c2.rules {
+		if r.ID == a.ID && b.key < k {
+			winner, loser = "b", a.ID
+		}
+	}
+	c2.mu.Unlock()
+	for i := range 50 {
+		if err := c2.Sync(ctx, t0.Add(time.Duration(i)*time.Second)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	withdrawn := 0
+	st := c2.Status()
+	for _, ch := range st.Feed {
+		if ch.Kind == ChangeWithdrawn {
+			withdrawn++
+		}
+	}
+	if withdrawn != 0 {
+		t.Fatalf("%d withdrawals over 50 syncs", withdrawn)
+	}
+	for _, r := range st.Rules {
+		switch r.ID {
+		case winner:
+			if !r.Announced {
+				t.Fatalf("winner %+v not announced", r)
+			}
+		case loser:
+			if r.Announced || !strings.Contains(r.Pending, "sent by rule "+winner) {
+				t.Fatalf("loser %+v", r)
+			}
+		}
+	}
+	if fl := ann2.flows(); len(fl) != 1 {
+		t.Fatalf("wire = %+v", fl)
+	}
+}
+
+// A rule waiting for its prefix logs the warning once, not every round.
+func TestFlowSpecWaitLogsOnce(t *testing.T) {
+	var buf bytes.Buffer
+	ann := newFakeFSAnn()
+	cfg := testConfig(config.ModeInject)
+	c, err := New(cfg, ann, slog.New(slog.NewTextHandler(&buf, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	rib := &fakeRIB{ready: true, learned: map[netip.Prefix]bool{}}
+	if err := c.SetRIB(rib); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.Add(Request{Prefix: victim, Action: plugin.MitigationFlowSpecDrop, TTL: 10 * time.Minute}, t0); err != nil {
+		t.Fatal(err)
+	}
+	for i := range 5 {
+		if err := c.Sync(context.Background(), t0.Add(time.Duration(i)*time.Second)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if n := strings.Count(buf.String(), "mitigation flowspec rule waits"); n != 1 {
+		t.Fatalf("waits logged %d times, want 1", n)
+	}
+	if st := c.Status(); st.Rules[0].Pending != pendingRIB {
+		t.Fatalf("pending = %q", st.Rules[0].Pending)
+	}
 }

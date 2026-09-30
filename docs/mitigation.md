@@ -104,9 +104,9 @@ curl -u ops:secret -H 'Content-Type: application/json' \
 curl -u ops:secret -X DELETE http://127.0.0.1:8080/api/mitigations/<id>
 ```
 
-`match` keys, all optional (a rule with no `match` covers all traffic toward the prefix): `source` (a prefix of the same family; not with `source_countries`), `protocols` (up to 8, names `tcp` `udp` `icmp` `icmpv6` `gre` `esp` `ah` `sctp` or numbers), `destination_ports` and `source_ports` (up to 8 each, `53` or `"1000-2000"`). Every given key must match; within a list any entry matches. Rule keys: an RTBH or redirect rule replaces the rule for the same prefix; a FlowSpec rule replaces the one with the same prefix, match, and `source_countries` (so a rate limit can replace a drop in place). An RTBH rule and FlowSpec rules may share a prefix.
+`match` keys, all optional (a rule with no `match` covers all traffic toward the prefix): `source` (a prefix of the same family; not with `source_countries`), `protocols` (up to 8, names `tcp` `udp` `icmp` `icmpv6` `gre` `esp` `ah` `sctp` or numbers), `destination_ports` and `source_ports` (up to 8 each, `53` or `"1000-2000"`). Every given key must match; within a list any entry matches. Rule keys: an RTBH or redirect rule replaces the rule for the same prefix; a FlowSpec rule replaces the one with the same prefix, match, and `source_countries` (so a rate limit can replace a drop in place). An RTBH rule and FlowSpec rules may share a prefix. Two different FlowSpec rules may not send the same route: a `source_countries` rule and a rule whose `match.source` is one of those countries' networks with the same other match keys, or `[XA]` and `[XA, XB]` with the same match, are refused with `409` naming the rule already held. Remove that rule first, or send the same match and `source_countries` to replace it.
 
-`POST` returns `201` with the rule, `400` for an invalid rule (outside the allowlist, host bits set, unknown action or target, bad match, unknown country, TTL out of bounds), and `409` when `max_rules` is reached. A replaced rule does not count twice. `GET` lists each rule with `routes`, `announced` and, when it is not on the wire, `pending` (the reason).
+`POST` returns `201` with the rule, `400` for an invalid rule (outside the allowlist, host bits set, unknown action or target, bad match, unknown country, TTL out of bounds), and `409` when `max_rules` is reached or a FlowSpec rule would send a route another rule already sends. A replaced rule does not count twice. `GET` lists each rule with `routes`, `announced` and, when it is not on the wire, `pending` (the reason).
 
 ## Monitor, feed, and history
 
@@ -136,6 +136,8 @@ router bgp 64512
   neighbor 192.0.2.10 activate
  exit-address-family
 ```
+
+**FlowSpec validation.** RFC 8955 §6 has the edge accept a FlowSpec route only when the best unicast route for its destination came from the same peer. Here the unicast route comes from a transit and the FlowSpec rule from Packeteer over iBGP, so strict validation rejects every rule. Relax it on the Packeteer session: RFC 9117 validation if the router supports it, or turn validation off for that neighbor only (Junos: `family inet flow no-validate <policy>` on the Packeteer group; other vendors have a per-neighbor FlowSpec validation option). Keep the marker-matching import policy above, so only Packeteer's rules are accepted without validation. Check that a rule shows as installed (not invalid) in the router's FlowSpec table before relying on it.
 
 `no-export` stays on the route, so it is not sent to an eBGP neighbor. A redirect target's next hop must be reachable from the edge (connected or through your IGP). On other routers the rule is the same: match the marker, raise the preference, leave the next hop, keep `no-export`, and point the discard address at a null route.
 

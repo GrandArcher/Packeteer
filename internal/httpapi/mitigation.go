@@ -105,7 +105,7 @@ func (s *Server) handleMitigationAdd(w http.ResponseWriter, r *http.Request) {
 	}
 	rule, err := s.mitigation.Add(mreq)
 	switch {
-	case errors.Is(err, mitigation.ErrFull):
+	case errors.Is(err, mitigation.ErrFull), errors.Is(err, mitigation.ErrConflict):
 		writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
 		return
 	case err != nil:

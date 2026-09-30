@@ -16,9 +16,10 @@ import (
 	"github.com/oschwald/maxminddb-golang/v2"
 )
 
-// DB is an open country database.
+// DB is a country database, indexed once when it is opened: the networks
+// of each country, per address family, aggregated.
 type DB struct {
-	db *maxminddb.Reader
+	v4, v6 map[string][]netip.Prefix
 }
 
 type record struct {
@@ -35,7 +36,8 @@ var countryCode = regexp.MustCompile(`^[A-Z]{2}$`)
 // ValidCountry reports whether c is two upper-case letters.
 func ValidCountry(c string) bool { return countryCode.MatchString(c) }
 
-// Open reads the database at path into memory.
+// Open reads the database at path and indexes it by country, so a rule
+// with source countries does not walk the whole database.
 func Open(path string) (*DB, error) {
 	if path == "" {
 		return nil, errors.New("geoip: no database path")
@@ -48,42 +50,57 @@ func Open(path string) (*DB, error) {
 	if err != nil {
 		return nil, fmt.Errorf("geoip %s: %w", path, err)
 	}
-	return &DB{db: db}, nil
-}
-
-// Networks lists the networks of country (ISO code) in one address family,
-// sorted, with adjacent siblings merged so the list is as short as the
-// data allows. The country is the network's country, else its registered
-// country, as in the rules policy.
-func (d *DB) Networks(country string, v4 bool) ([]netip.Prefix, error) {
-	if d == nil || d.db == nil {
-		return nil, errors.New("geoip: no database")
-	}
-	var out []netip.Prefix
-	for res := range d.db.Networks() {
+	defer db.Close()
+	d := &DB{v4: map[string][]netip.Prefix{}, v6: map[string][]netip.Prefix{}}
+	for res := range db.Networks() {
 		if err := res.Err(); err != nil {
-			return nil, fmt.Errorf("geoip: %w", err)
+			return nil, fmt.Errorf("geoip %s: %w", path, err)
 		}
 		p := res.Prefix()
 		if p.Addr().Is4In6() {
 			p = netip.PrefixFrom(p.Addr().Unmap(), p.Bits()-96)
 		}
-		if !p.IsValid() || p.Addr().Is4() != v4 {
+		if !p.IsValid() {
 			continue
 		}
 		var r record
 		if err := res.Decode(&r); err != nil {
 			continue
 		}
+		// The network's country, else its registered country, as in the
+		// rules policy.
 		c := r.Country.ISOCode
 		if c == "" {
 			c = r.Registered.ISOCode
 		}
-		if c == country {
-			out = append(out, p.Masked())
+		if c == "" {
+			continue
+		}
+		if p.Addr().Is4() {
+			d.v4[c] = append(d.v4[c], p.Masked())
+		} else {
+			d.v6[c] = append(d.v6[c], p.Masked())
 		}
 	}
-	return Aggregate(out), nil
+	for _, m := range []map[string][]netip.Prefix{d.v4, d.v6} {
+		for c, ps := range m {
+			m[c] = Aggregate(ps)
+		}
+	}
+	return d, nil
+}
+
+// Networks lists the networks of country (ISO code) in one address family,
+// sorted, with adjacent siblings merged so the list is as short as the
+// data allows.
+func (d *DB) Networks(country string, v4 bool) ([]netip.Prefix, error) {
+	if d == nil || d.v4 == nil {
+		return nil, errors.New("geoip: no database")
+	}
+	if v4 {
+		return slices.Clone(d.v4[country]), nil
+	}
+	return slices.Clone(d.v6[country]), nil
 }
 
 // Aggregate sorts ps, drops prefixes covered by another, and merges

@@ -177,10 +177,13 @@ type Status struct {
 	Feed []Change `json:"feed"`
 }
 
-// Errors from Add. ErrInvalid is a bad request; ErrFull is the cap.
+// Errors from Add. ErrInvalid is a bad request; ErrFull is the cap;
+// ErrConflict is a FlowSpec rule that would send a route another rule
+// already sends.
 var (
-	ErrInvalid = errors.New("invalid mitigation rule")
-	ErrFull    = errors.New("mitigation max_rules reached")
+	ErrInvalid  = errors.New("invalid mitigation rule")
+	ErrFull     = errors.New("mitigation max_rules reached")
+	ErrConflict = errors.New("mitigation rule conflicts with a held rule")
 )
 
 // fsWire is one FlowSpec route on the wire.
@@ -276,6 +279,9 @@ func (c *Controller) Active() int {
 	return int(c.onWire.Load())
 }
 
+// pendingRIB is Rule.Pending while a rule waits for its prefix in the RIB.
+const pendingRIB = "not in the learned RIB"
+
 func unicastKey(p netip.Prefix) string { return "route " + p.String() }
 
 // Holds reports whether an RTBH or redirect rule holds p or its route is
@@ -343,6 +349,12 @@ func (c *Controller) Add(req Request, now time.Time) (Rule, error) {
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if r.FlowSpec() {
+		if other, route := c.flowConflictLocked(r); other != nil {
+			return Rule{}, fmt.Errorf("%w: rule %s (%s) already sends the flowspec route %s; remove it first or use the same match and source_countries to replace it",
+				ErrConflict, other.ID, other.Action, route)
+		}
+	}
 	old, replace := c.rules[r.key]
 	held := 0
 	for k, x := range c.rules {
@@ -504,6 +516,32 @@ func (c *Controller) flowRoutes(r *Rule) []plugin.FlowSpecRoute {
 	return out
 }
 
+// flowConflictLocked returns the held FlowSpec rule with another key that
+// shares a route with r (the one with the lowest key), and that route.
+// Different rules can expand to one route: a country rule and a rule whose
+// match.source is one of the country's networks, or [XA] and [XA, XB] with
+// the same match. The caller holds mu.
+func (c *Controller) flowConflictLocked(r *Rule) (*Rule, string) {
+	mine := map[string]bool{}
+	for _, rt := range c.flowRoutes(r) {
+		mine[rt.Key()] = true
+	}
+	var best *Rule
+	var route string
+	for k, x := range c.rules {
+		if k == r.key || !x.FlowSpec() || (best != nil && k > best.key) {
+			continue
+		}
+		for _, rt := range c.flowRoutes(x) {
+			if mine[rt.Key()] {
+				best, route = x, rt.Key()
+				break
+			}
+		}
+	}
+	return best, route
+}
+
 // Remove drops the rule with id. Its routes are withdrawn on the next Sync.
 func (c *Controller) Remove(id string) bool {
 	c.mu.Lock()
@@ -586,7 +624,7 @@ func (c *Controller) syncUnicastLocked(ctx context.Context) error {
 			if r.Pending == "" {
 				c.log.Warn("mitigation rule waits: prefix is not in the learned RIB", "id", r.ID, "prefix", p)
 			}
-			r.Pending = "not in the learned RIB"
+			r.Pending = pendingRIB
 			continue
 		}
 		mr := plugin.MitigationRoute{Prefix: p, Action: r.Action, Target: r.Target, LocalPref: c.cfg.LocalPref, Community: c.cfg.Community}
@@ -607,18 +645,31 @@ func (c *Controller) syncFlowSpecLocked(ctx context.Context) error {
 		rule  *Rule
 		route plugin.FlowSpecRoute
 	}
+	// Add refuses a rule that shares a route with another. Should two
+	// ever share one, the rule with the lowest key owns it every round,
+	// so the route never flaps between them.
+	var rules []*Rule
+	for _, r := range c.rules {
+		if r.FlowSpec() {
+			rules = append(rules, r)
+		}
+	}
+	sort.Slice(rules, func(i, j int) bool { return rules[i].key < rules[j].key })
 	desired := map[string]want{}
 	var keys []string
-	for _, r := range c.rules {
-		if !r.FlowSpec() {
-			continue
-		}
+	// waited is the rules that already waited for the RIB, so the warning
+	// is logged once per wait and not every round.
+	waited := map[*Rule]bool{}
+	for _, r := range rules {
+		waited[r] = r.Pending == pendingRIB
 		r.Pending = ""
 		for _, rt := range c.flowRoutes(r) {
 			k := rt.Key()
-			if _, dup := desired[k]; !dup {
-				keys = append(keys, k)
+			if d, dup := desired[k]; dup {
+				r.Pending = "route " + k + " is sent by rule " + d.rule.ID
+				continue
 			}
+			keys = append(keys, k)
 			desired[k] = want{rule: r, route: rt}
 		}
 	}
@@ -651,10 +702,11 @@ func (c *Controller) syncFlowSpecLocked(ctx context.Context) error {
 		// already on the wire keeps its place when only the action
 		// changes, as for RTBH.
 		if !on && !c.rib.Contains(r.Prefix) {
-			if r.Pending == "" {
+			if !waited[r] {
 				c.log.Warn("mitigation flowspec rule waits: prefix is not in the learned RIB", "id", r.ID, "prefix", r.Prefix)
+				waited[r] = true
 			}
-			r.Pending = "not in the learned RIB"
+			r.Pending = pendingRIB
 			continue
 		}
 		if err := c.fs.AnnounceFlowSpec(ctx, rt); err != nil {
