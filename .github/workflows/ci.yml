@@ -236,3 +236,5 @@ jobs:
         run: bash lab/e2e-ix.sh
       - name: FRR mitigation lab (RTBH, redirect, FlowSpec drop/rate-limit/redirect by country, allowlist, cap, TTL, SIGTERM, restart, SIGKILL)
         run: bash lab/e2e-mitigation.sh
+      - name: FRR more-specific lab (learned more-specifics only, route cap, RIB leave, SIGTERM, SIGKILL)
+        run: bash lab/e2e-more-specific.sh

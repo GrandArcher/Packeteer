@@ -201,6 +201,9 @@ func run(ctx context.Context, args []string, getenv func(string) string, stdout,
 	switch {
 	case cfg.Mode == config.ModeInject:
 		fmt.Fprintf(stdout, "announce: %s local_pref=%d\n", plugins.Announcer.Type, cfg.LocalPref)
+		if ms := cfg.MoreSpecific; ms != nil && ms.Enabled {
+			fmt.Fprintf(stdout, "announce more_specific: learned more-specifics only, max_routes=%d\n", ms.MaxRoutes)
+		}
 	case plugins.Announcer != nil:
 		fmt.Fprintln(stdout, "announce: configured but inactive (mode is not inject)")
 	default:
@@ -609,6 +612,15 @@ func (g ribGate) Contains(p netip.Prefix) bool {
 	return ok
 }
 
+// MoreSpecifics lists learned prefixes inside improvements, for
+// more_specific (#56).
+func (g ribGate) MoreSpecifics(parents []netip.Prefix) []netip.Prefix {
+	if g.v == nil {
+		return nil
+	}
+	return g.v.MoreSpecifics(parents)
+}
+
 // NextHop is the learned next hop of an exact prefix, for inbound steers.
 func (g ribGate) NextHop(p netip.Prefix) (netip.Addr, bool) {
 	if g.v == nil {
@@ -772,6 +784,9 @@ func newController(cfg *config.Config, plugins *pluginhost.Set, view *rib.View, 
 		MaxImprovements: *cfg.MaxImprovements,
 		NextHops:        map[string]netip.Addr{},
 		ASPath:          cfg.BGP.ASPath,
+	}
+	if ms := cfg.MoreSpecific; ms != nil && ms.Enabled {
+		ac.MoreSpecific, ac.MaxRoutes = true, ms.MaxRoutes
 	}
 	if inb != nil {
 		ac.Others = inb.Active

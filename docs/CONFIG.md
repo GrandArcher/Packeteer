@@ -29,6 +29,7 @@ The image entrypoint is the same binary. Flags go after the image name.
 | `packeteer_community` | empty | inject | RFC 1997 community `asn:value`. Each half is an integer 0–65535. Quote it in YAML (`"64512:666"`). |
 | `local_pref` | 0 | inject | Local preference on every injected route. `0` is rejected in inject mode. Set it above the edge's native local preference. |
 | `more_specific_bits` | unset | must be absent | Any value, including `0`, is an error. Packeteer announces the exact prefix it learned from the RIB. |
+| `more_specific` | off | no | More-specific injection: with each improvement, also announce the more-specifics inside its prefix that a neighbor advertises in the learned RIB, under a route cap. Never a prefix that is not learned. See [`more_specific`](#more_specific). Lab-proven only. |
 | `max_improvements` | 50 | no | Cap on active improvements. Integer from 1 to 10000. Biggest gains win when the cap binds. |
 | `hold_time` | 0 | inject: positive | Minimum life of an improvement, and the cooldown after a flip-back or a confirmed RIB leave. `0` is legal in observe and suggest (a flip can happen on the next evaluation). Negative is an error. |
 | `improvement_ttl` | `1h` | no | Retire an improvement after this long so the native path is measured again. A negative duration disables the TTL. `0` selects the default `1h`. |
@@ -292,6 +293,17 @@ With FlowSpec configured on the announcer and `mode: inject`, every iBGP session
 
 While an RTBH or redirect rule holds a prefix in `inject`, or its route is still on the wire, outbound improvements and inbound steers leave that prefix alone. When the RIB is not ready every mitigation route is withdrawn. A catalog next hop that equals a provider's `next_hop` is refused at startup.
 
+### `more_specific`
+
+More-specific injection (#56, lab-proven only, not on a public edge). Design and full rules: [design/more-specific.md](design/more-specific.md). Used only in `mode: inject`.
+
+| Key | Default | Meaning |
+|---|---|---|
+| `enabled` | `false` | `true`: an improvement on P also announces every prefix strictly inside P that a neighbor advertises exactly in the learned RIB, is inside the allowlist, and is not held by inbound steering or mitigation. Nothing is split or computed: if no neighbor advertises a more-specific inside P, only P is announced. Each route carries the improvement's provider next hop, `local_pref`, `packeteer_community`, and `no-export`. |
+| `max_routes` | `100` | Cap on routes on a router: improvements, their more-specifics, and inbound steer routes. 1–1000. A new improvement is announced whole (P and all its learned more-specifics) or not at all; a more-specific learned later is added only while there is room. Nothing on the wire is withdrawn to make room. `max_improvements` still caps improvements. |
+
+A more-specific is withdrawn with its improvement (flip-back, TTL, policy, P leaving the RIB), when the RIB is not ready, on shutdown, and when it really leaves the RIB: the neighbor advertised it for at least 5s while Packeteer's route was on the wire and then stopped. A shorter gap is the router hiding its own path because Packeteer's route won, and the route stays. A change needs a restart (SIGHUP refuses it). Rollback: remove the block or set `enabled: false` and restart; only improvements' own prefixes are announced again.
+
 ### Plugin entries
 
 `probers`, `sources`, `notifiers`, `telemetry`, `policies`, and `rib_sources` are lists. `scorer` and `announcer` are single objects.
@@ -329,7 +341,7 @@ Set these in the container. They are not keys in the YAML file. `PACKETEER_HTTP_
 - `announcer` is set (`type: gobgp`)
 - `hold_time` is positive
 - both threshold deltas are positive
-- `more_specific_bits` is absent
+- `more_specific_bits` is absent (`more_specific` is the replacement; it is off by default)
 
 The `gobgp` announcer has no `config` keys. A config block with any key is an error. Each announced route carries the provider `next_hop`, `local_pref`, `packeteer_community`, and `no-export`. The export policy accepts only routes Packeteer originated that carry the community.
 

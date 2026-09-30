@@ -116,6 +116,24 @@ type Config struct {
 	// Mitigation is threat mitigation: RTBH and BGP redirect (#28). Nil
 	// disables it.
 	Mitigation *Mitigation `yaml:"mitigation"`
+	// MoreSpecific announces, with each improvement, the more-specifics
+	// inside its prefix that a neighbor advertises in the learned RIB
+	// (#56, docs/design/more-specific.md). Nil or disabled is off.
+	MoreSpecific *MoreSpecific `yaml:"more_specific"`
+}
+
+// More-specific injection defaults and bounds (#56).
+const (
+	DefaultMoreSpecificMaxRoutes = 100
+	MoreSpecificMaxRoutesLimit   = 1000
+)
+
+// MoreSpecific is more-specific injection. Only exact learned prefixes are
+// announced. MaxRoutes caps the outbound and inbound routes on a router;
+// zero means DefaultMoreSpecificMaxRoutes when enabled.
+type MoreSpecific struct {
+	Enabled   bool `yaml:"enabled"`
+	MaxRoutes int  `yaml:"max_routes"`
 }
 
 // Inbound defaults and bounds.
@@ -484,6 +502,9 @@ func (c *Config) applyDefaults() {
 		n := DefaultMaxImprovements
 		c.MaxImprovements = &n
 	}
+	if c.MoreSpecific != nil && c.MoreSpecific.MaxRoutes == 0 {
+		c.MoreSpecific.MaxRoutes = DefaultMoreSpecificMaxRoutes
+	}
 	if c.Probe.Interval == 0 {
 		c.Probe.Interval = DefaultProbeInterval
 	}
@@ -849,7 +870,10 @@ func (c *Config) Validate() error {
 
 	// Inject mode has extra safety requirements (see AGENTS.md).
 	if c.MoreSpecificBits != nil {
-		add("more_specific_bits is removed: Packeteer announces only the exact prefix learned from the RIB")
+		add("more_specific_bits is removed: Packeteer announces only the exact prefix learned from the RIB (see more_specific)")
+	}
+	if ms := c.MoreSpecific; ms != nil && (ms.MaxRoutes < 1 || ms.MaxRoutes > MoreSpecificMaxRoutesLimit) {
+		add("more_specific.max_routes %d must be between 1 and %d", ms.MaxRoutes, MoreSpecificMaxRoutesLimit)
 	}
 
 	if c.Mode == ModeInject {

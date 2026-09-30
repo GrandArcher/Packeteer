@@ -25,10 +25,10 @@ Milestones:
 
 | Status | Count |
 |---|---|
-| done | 65 |
+| done | 66 |
 | partial | 1 |
 | in progress | 0 |
-| planned | 13 |
+| planned | 12 |
 | won't do | 3 |
 
 ## Performance optimization
@@ -116,7 +116,7 @@ Routing policies (#20) are `policy` plugins, a filter chain in front of the scor
 | Capability | IRP doc ref | Status | Milestone | Plugin kind | Issue |
 |---|---|---|---|---|---|
 | iBGP injection with local-pref, communities, next-hop | 1.2.2 Bgpd | done | v0.1 | announcer (`gobgp`) | #8 |
-| More-specific injection | 2.9 Bgpd | planned | v0.3 | announcer (`gobgp`) | #56 |
+| More-specific injection (learned more-specifics only, `more_specific.max_routes` route cap) | 2.9 Bgpd | done (lab-proven) | v0.3 | announcer (`gobgp`) + core (`internal/announce`) | #56 |
 | RIB view from iBGP (learn current best exits) | 2.9 Bgpd | done | v0.1 | core (`internal/rib`) | #6 |
 | BGP session health and withdraw when a still-advertised prefix leaves the RIB (a best-path hide is kept, not flapped) | 2.9 | done | v0.1 | announcer | #8, #43 |
 | AS-path behavior options (`bgp.as_path`: empty, native, or the chosen provider's learned path) | 2.9.1 | done (lab-proven) | v0.3 | announcer (`gobgp`) + core | #27 |
@@ -126,6 +126,8 @@ Routing policies (#20) are `policy` plugins, a filter chain in front of the scor
 | Centralized route reflector support (Packeteer as a reflector client, deployment guide) | 1.2.10 | done (lab-proven) | v0.3 | announcer (`gobgp`) | #27 |
 | Internet exchanges / many peers with per-peer next-hop (peers as route-checked providers, exchange statistics, discovered members) | 1.2.11, 3.4.6 | done (lab-proven) | v0.3 | core (`exchanges`, `internal/rib`, `internal/exchange`, `/api/exchanges`) + announcer | #27 |
 | Bgpd online reconfiguration (SIGHUP: add/remove/change iBGP sessions and the per-router table without touching other sessions) | 2.9.2 | done (lab-proven) | v0.3 | core + announcer (`gobgp`) + RIB | #27 |
+
+More-specific injection (#56, [design](design/more-specific.md)) is off unless `more_specific.enabled: true`. An improvement on P then also announces each prefix strictly inside P that a neighbor advertises exactly in the learned RIB (inside the allowlist, not held by inbound or mitigation), toward the same provider, with the same `local_pref`, community, and NO_EXPORT. Nothing is split or computed; `more_specific_bits` is still rejected. `more_specific.max_routes` (default 100, at most 1000) caps routes on a router, not decisions: improvements, their more-specifics, and inbound steer routes. A new improvement is announced whole or not at all, a later more-specific only while there is room, and nothing on the wire is withdrawn to make room. A more-specific is withdrawn with its improvement, on a confirmed RIB leave (advertised 5s, then gone; a best-path hide is kept), on RIB loss, SIGTERM, and with the session on SIGKILL. The FRR lab (`lab/e2e-more-specific.sh`) asserts on the edge the exact route set and count at every step, that no unlearned more-specific appears, the cap holding a second improvement back, a real `no network` withdrawing a more-specific and freeing room, SIGTERM, and SIGKILL. Lab-proven only, not on a public edge. Rollback: remove `more_specific` and restart.
 
 Multiple routers (#27, first half) are `bgp.neighbors` entries with optional `providers` (the transits a router forwards to itself; it is their egress) and `next_hops` (providers it reaches through another router, and the next hop it uses). The `gobgp` announcer installs a per-router export policy on the single speaker: a route toward a provider the router cannot reach is not sent to it, and one it reaches through another router is sent with that next hop. A neighbor with neither list gets every route, so single-router and route-reflector configs are unchanged. When every egress session of a provider is down, the provider is unusable (`egress router down`): no new improvement, and an active one is retired at once and withdrawn from every router. One session dropping removes only that router's routes; all sessions down withdraws everything. The learned-RIB, allowlist, community, NO_EXPORT, cap, and hold-time rules are unchanged; inbound steer routes are not affected. Route reflectors are a neighbor with no lists, Packeteer is a reflector client, and every edge resolves the provider next hop ([route-reflector.md](route-reflector.md)). The FRR lab (`lab/e2e-multirouter.sh`: two edges, a reflector, two transits) proves per-router next hops, one edge's session loss leaving the other steered, egress-router loss withdrawing everywhere, the reflected steer on both edges, SIGTERM, and SIGKILL. Lab-proven only, not on a public edge. Rollback: remove `providers`/`next_hops` and restart, or point `bgp.neighbors` at a single router.
 

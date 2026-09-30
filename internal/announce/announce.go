@@ -12,6 +12,12 @@
 // improvement leaving the wanted set, and Sync withdraws it. Every route
 // carries the configured local preference and community; the announcer adds
 // NO_EXPORT.
+//
+// With more-specific injection on (#56, docs/design/more-specific.md), an
+// improvement also announces the more-specifics inside its prefix that a
+// neighbor advertises in the learned RIB: each an exact learned prefix,
+// never one Packeteer computed. MaxRoutes caps every route on the wire, and
+// a new improvement is announced whole or not at all.
 package announce
 
 import (
@@ -24,6 +30,7 @@ import (
 	"sort"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/GrandArcher/Packeteer/internal/config"
 	"github.com/GrandArcher/Packeteer/internal/policy"
@@ -46,6 +53,13 @@ type RIB interface {
 type PathRIB interface {
 	NativePath(netip.Prefix) ([]uint32, bool)
 	ProviderPath(p netip.Prefix, provider string) ([]uint32, bool)
+}
+
+// MoreSpecificRIB is the RIB surface more-specific injection reads (#56):
+// the learned prefixes strictly inside any of parents. Each one is checked
+// again with Contains before it is announced.
+type MoreSpecificRIB interface {
+	MoreSpecifics(parents []netip.Prefix) []netip.Prefix
 }
 
 // Config is the injection policy. It is ignored unless Mode is inject.
@@ -71,6 +85,15 @@ type Config struct {
 	// (default), native, or provider. native and provider need the RIB to
 	// implement PathRIB.
 	ASPath string
+	// MoreSpecific also announces, with each improvement, the learned
+	// more-specifics inside its prefix (#56). The RIB must implement
+	// MoreSpecificRIB. MaxRoutes caps the routes on the wire: improvements,
+	// their more-specifics, and Others. Both are ignored when MoreSpecific
+	// is false.
+	MoreSpecific bool
+	MaxRoutes    int
+	// Now is the clock for the more-specific leave check. Nil is time.Now.
+	Now func() time.Time
 }
 
 // Controller applies decision changes to an announcer.
@@ -82,11 +105,13 @@ type Controller struct {
 
 	mu     sync.Mutex
 	active map[netip.Prefix]slot // exact learned prefix -> what is on the wire
-	onWire atomic.Int64
+	onWire atomic.Int64          // improvements on the wire
+	routes atomic.Int64          // routes on the wire, more-specifics included
 }
 
 // Active is the number of improvements on the wire. It does not lock, so
-// the inbound controller can read it while syncing.
+// the inbound controller can read it while syncing. More-specifics
+// announced with an improvement are not counted; Routes counts them.
 func (c *Controller) Active() int {
 	if c == nil {
 		return 0
@@ -94,10 +119,46 @@ func (c *Controller) Active() int {
 	return int(c.onWire.Load())
 }
 
+// Routes is the number of outbound routes on the wire: improvements and
+// the learned more-specifics announced with them.
+func (c *Controller) Routes() int {
+	if c == nil {
+		return 0
+	}
+	return int(c.routes.Load())
+}
+
 // slot is the route published for one learned prefix.
 type slot struct {
 	provider string
 	asPath   []uint32
+	// parent is the improvement that owns a learned more-specific (#56).
+	// It is the zero prefix on an improvement's own route.
+	parent netip.Prefix
+	// seen and held track a more-specific in the RIB the way the decision
+	// engine tracks an improvement's prefix (policy.NativePathConfirm).
+	seen time.Time
+	held bool
+}
+
+func (s slot) moreSpecific() bool { return s.parent.IsValid() }
+
+// store publishes the on-wire counts. Caller holds mu.
+func (c *Controller) store() {
+	c.onWire.Store(int64(c.improvementsLocked()))
+	c.routes.Store(int64(len(c.active)))
+}
+
+// improvementsLocked counts improvements on the wire, not their
+// more-specifics.
+func (c *Controller) improvementsLocked() int {
+	n := 0
+	for _, s := range c.active {
+		if !s.moreSpecific() {
+			n++
+		}
+	}
+	return n
 }
 
 // New validates inject settings and returns a controller. ann and rib may be
@@ -128,6 +189,17 @@ func New(cfg Config, ann plugin.Announcer, rib RIB, log *slog.Logger) (*Controll
 		default:
 			return nil, fmt.Errorf("announce: as_path %q is invalid", cfg.ASPath)
 		}
+		if cfg.MoreSpecific {
+			if cfg.MaxRoutes < 1 {
+				return nil, errors.New("announce: more_specific.max_routes must be positive")
+			}
+			if _, ok := rib.(MoreSpecificRIB); !ok {
+				return nil, errors.New("announce: more_specific needs the learned more-specifics from the RIB")
+			}
+		}
+	}
+	if cfg.Now == nil {
+		cfg.Now = time.Now
 	}
 	if log == nil {
 		log = slog.Default()
@@ -168,14 +240,15 @@ func (c *Controller) Bind(srv any) error {
 // improvements does not re-advertise. A prefix that is not in the RIB is not
 // announced. One that is already announced is kept or moved while the
 // improvement is still requested; a real RIB leave comes in as the
-// improvement disappearing from imps.
+// improvement disappearing from imps. With MoreSpecific, each improvement's
+// learned more-specifics follow it (syncMoreSpecificsLocked).
 func (c *Controller) Sync(ctx context.Context, imps []policy.Improvement) error {
 	if c == nil || c.cfg.Mode != config.ModeInject {
 		return nil
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	defer func() { c.onWire.Store(int64(len(c.active))) }()
+	defer c.store()
 	if !c.rib.Ready() {
 		c.log.Warn("rib not ready; withdrawing announced routes")
 		return c.withdrawAllLocked(ctx)
@@ -185,12 +258,25 @@ func (c *Controller) Sync(ctx context.Context, imps []policy.Improvement) error 
 		want[im.Prefix.Masked()] = im
 	}
 	var errs []error
-	for p := range c.active {
-		if _, ok := want[p]; !ok {
-			if err := c.withdrawLocked(ctx, p); err != nil {
-				errs = append(errs, err)
+	for p, s := range c.active {
+		if _, ok := want[p]; ok {
+			continue
+		}
+		if s.moreSpecific() {
+			// Kept or withdrawn with its improvement below.
+			if _, ok := want[s.parent]; ok {
+				continue
 			}
 		}
+		if err := c.withdrawLocked(ctx, p); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	var kids map[netip.Prefix][]netip.Prefix
+	var owner map[netip.Prefix]netip.Prefix
+	visited := map[netip.Prefix]bool{}
+	if c.cfg.MoreSpecific {
+		kids, owner = c.learnedMoreSpecifics(want)
 	}
 	order := make([]netip.Prefix, 0, len(want))
 	for p := range want {
@@ -198,37 +284,250 @@ func (c *Controller) Sync(ctx context.Context, imps []policy.Improvement) error 
 	}
 	sortPrefixes(order)
 	for _, p := range order {
-		im := want[p]
-		if c.cfg.Reserved != nil && c.cfg.Reserved(p) {
-			if _, on := c.active[p]; on {
-				if err := c.withdrawLocked(ctx, p); err != nil {
-					errs = append(errs, err)
-				}
-			}
-			errs = append(errs, fmt.Errorf("announce: %s is reserved for inbound steering or threat mitigation", p))
-			continue
-		}
-		if _, on := c.active[p]; !on && !c.rib.Contains(p) {
-			errs = append(errs, fmt.Errorf("announce: %s is not in the RIB", p))
-			continue
-		}
-		if s, on := c.active[p]; on && s.provider == im.Provider && slices.Equal(s.asPath, c.asPath(p, im.Provider)) {
-			continue
-		}
-		if !allowed(c.cfg.Allowlist, p) {
-			if _, on := c.active[p]; on {
-				if err := c.withdrawLocked(ctx, p); err != nil {
-					errs = append(errs, err)
-				}
-			}
-			errs = append(errs, fmt.Errorf("announce: %s is not allowlisted", p))
-			continue
-		}
-		if err := c.announceLocked(ctx, im); err != nil {
+		if err := c.syncImprovementLocked(ctx, want[p], kids[p]); err != nil {
 			errs = append(errs, err)
+		}
+		if s, on := c.active[p]; c.cfg.MoreSpecific && on && !s.moreSpecific() {
+			errs = append(errs, c.syncMoreSpecificsLocked(ctx, p, kids[p], owner, visited)...)
+		}
+	}
+	// A more-specific no improvement on the wire claimed this round (its
+	// improvement did not make it, or a new improvement that owns it did
+	// not) is withdrawn rather than left without its leave check.
+	for p, s := range c.active {
+		if s.moreSpecific() && !visited[p] {
+			if err := c.withdrawLocked(ctx, p); err != nil {
+				errs = append(errs, err)
+			}
 		}
 	}
 	return errors.Join(errs...)
+}
+
+// syncImprovementLocked announces, moves, keeps, or refuses the route for
+// one improvement. learned is its more-specifics in the RIB when
+// MoreSpecific is on; a new improvement is announced only when it and all
+// of them fit under MaxRoutes.
+func (c *Controller) syncImprovementLocked(ctx context.Context, im policy.Improvement, learned []netip.Prefix) error {
+	p := im.Prefix.Masked()
+	s, on := c.active[p]
+	if c.cfg.Reserved != nil && c.cfg.Reserved(p) {
+		var err error
+		if on {
+			err = c.withdrawLocked(ctx, p)
+		}
+		return errors.Join(err, fmt.Errorf("announce: %s is reserved for inbound steering or threat mitigation", p))
+	}
+	if !on && !c.rib.Contains(p) {
+		return fmt.Errorf("announce: %s is not in the RIB", p)
+	}
+	if on && !s.moreSpecific() && s.provider == im.Provider && slices.Equal(s.asPath, c.asPath(p, im.Provider)) {
+		return nil
+	}
+	if !allowed(c.cfg.Allowlist, p) {
+		var err error
+		if on {
+			err = c.withdrawLocked(ctx, p)
+		}
+		return errors.Join(err, fmt.Errorf("announce: %s is not allowlisted", p))
+	}
+	if c.cfg.MoreSpecific && !on {
+		need := 1
+		for _, m := range learned {
+			if _, ok := c.active[m]; !ok {
+				need++
+			}
+		}
+		if used := c.usedRoutesLocked(); used+need > c.cfg.MaxRoutes {
+			return fmt.Errorf("announce: more_specific.max_routes (%d) reached: %s needs %d routes, %d in use", c.cfg.MaxRoutes, p, need, used)
+		}
+	}
+	return c.announceLocked(ctx, im)
+}
+
+// usedRoutesLocked is the routes that count toward MaxRoutes: every route
+// this controller has on the wire plus Others.
+func (c *Controller) usedRoutesLocked() int {
+	n := len(c.active)
+	if c.cfg.Others != nil {
+		n += c.cfg.Others()
+	}
+	return n
+}
+
+// learnedMoreSpecifics assigns every learned more-specific inside a wanted
+// improvement to the longest improvement that contains it. A prefix that is
+// itself wanted, outside the allowlist, or reserved is not assigned. kids
+// maps an improvement to its more-specifics in prefix order; owner maps a
+// more-specific to its improvement.
+func (c *Controller) learnedMoreSpecifics(want map[netip.Prefix]policy.Improvement) (kids map[netip.Prefix][]netip.Prefix, owner map[netip.Prefix]netip.Prefix) {
+	kids, owner = map[netip.Prefix][]netip.Prefix{}, map[netip.Prefix]netip.Prefix{}
+	if len(want) == 0 {
+		return kids, owner
+	}
+	parents := make([]netip.Prefix, 0, len(want))
+	for p := range want {
+		parents = append(parents, p)
+	}
+	sortPrefixes(parents)
+	seen := map[netip.Prefix]bool{}
+	for _, m := range c.rib.(MoreSpecificRIB).MoreSpecifics(parents) {
+		m = m.Masked()
+		if seen[m] {
+			continue
+		}
+		seen[m] = true
+		if _, ok := want[m]; ok || !allowed(c.cfg.Allowlist, m) || (c.cfg.Reserved != nil && c.cfg.Reserved(m)) {
+			continue
+		}
+		var best netip.Prefix
+		for _, p := range parents {
+			if p.Bits() < m.Bits() && p.Contains(m.Addr()) && (!best.IsValid() || p.Bits() > best.Bits()) {
+				best = p
+			}
+		}
+		if !best.IsValid() {
+			continue
+		}
+		kids[best] = append(kids[best], m)
+		owner[m] = best
+	}
+	for _, ms := range kids {
+		sortPrefixes(ms)
+	}
+	return kids, owner
+}
+
+// syncMoreSpecificsLocked keeps the learned more-specifics of the
+// improvement on p (already on the wire) in step with it and the RIB.
+// learned is what the RIB has inside p now. A more-specific on the wire is
+// withdrawn when it becomes reserved or leaves the allowlist, or on a real
+// RIB leave: it was seen for policy.NativePathConfirm while announced and
+// then stopped. A shorter gap is the router hiding the native path because
+// Packeteer's route won, and it stays. New ones are announced while
+// MaxRoutes has room.
+func (c *Controller) syncMoreSpecificsLocked(ctx context.Context, p netip.Prefix, learned []netip.Prefix, owner map[netip.Prefix]netip.Prefix, visited map[netip.Prefix]bool) []error {
+	var errs []error
+	now := c.cfg.Now()
+	par := c.active[p]
+	inRIB := map[netip.Prefix]bool{}
+	for _, m := range learned {
+		inRIB[m] = true
+	}
+	var mine []netip.Prefix
+	for m, s := range c.active {
+		if s.moreSpecific() && s.parent == p {
+			mine = append(mine, m)
+		}
+	}
+	sortPrefixes(mine)
+	for _, m := range mine {
+		if o, ok := owner[m]; ok && o != p {
+			continue // a longer improvement owns it now
+		}
+		s := c.active[m]
+		if !allowed(c.cfg.Allowlist, m) || (c.cfg.Reserved != nil && c.cfg.Reserved(m)) {
+			if err := c.withdrawLocked(ctx, m); err != nil {
+				errs = append(errs, err)
+				visited[m] = true
+			}
+			continue
+		}
+		switch {
+		case inRIB[m]:
+			if s.seen.IsZero() {
+				s.seen = now
+			}
+			s.held = true
+		case s.held && !s.seen.IsZero() && now.Sub(s.seen) >= policy.NativePathConfirm:
+			if err := c.withdrawLocked(ctx, m); err != nil {
+				errs = append(errs, err)
+				visited[m] = true
+				continue
+			}
+			c.log.Info("more-specific left the RIB; withdrawn", "prefix", m, "improvement", p)
+			continue
+		default:
+			s.seen, s.held = time.Time{}, false
+		}
+		c.active[m] = s
+		visited[m] = true
+		if s.provider != par.provider || !slices.Equal(s.asPath, c.asPath(m, par.provider)) {
+			if err := c.announceMoreSpecificLocked(ctx, m, p, par.provider); err != nil {
+				errs = append(errs, err)
+			}
+		}
+	}
+	capped := 0
+	for _, m := range learned {
+		if s, on := c.active[m]; on {
+			if s.moreSpecific() && s.parent == p {
+				continue
+			}
+			if s.moreSpecific() {
+				// It moves from a shorter improvement to this one.
+				visited[m] = true
+				s.parent, s.seen, s.held = p, time.Time{}, false
+				c.active[m] = s
+				if s.provider != par.provider || !slices.Equal(s.asPath, c.asPath(m, par.provider)) {
+					if err := c.announceMoreSpecificLocked(ctx, m, p, par.provider); err != nil {
+						errs = append(errs, err)
+					}
+				}
+				continue
+			}
+			continue // an improvement's own route
+		}
+		if c.usedRoutesLocked()+1 > c.cfg.MaxRoutes {
+			capped++
+			continue
+		}
+		if err := c.announceMoreSpecificLocked(ctx, m, p, par.provider); err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		visited[m] = true
+	}
+	if capped > 0 {
+		errs = append(errs, fmt.Errorf("announce: more_specific.max_routes (%d) reached: %d learned more-specifics of %s not announced", c.cfg.MaxRoutes, capped, p))
+	}
+	return errs
+}
+
+// announceMoreSpecificLocked publishes the learned prefix m for the
+// improvement on parent, toward provider. m must be inside the allowlist
+// and, when it is not already on the wire, exactly in the RIB.
+func (c *Controller) announceMoreSpecificLocked(ctx context.Context, m, parent netip.Prefix, provider string) error {
+	m = m.Masked()
+	if !allowed(c.cfg.Allowlist, m) {
+		return fmt.Errorf("announce: %s is not allowlisted", m)
+	}
+	old, on := c.active[m]
+	if !on && !c.rib.Contains(m) {
+		return fmt.Errorf("announce: %s is not in the RIB", m)
+	}
+	nh, ok := c.cfg.NextHops[provider]
+	if !ok || !nh.IsValid() {
+		return fmt.Errorf("announce: provider %q has no next hop", provider)
+	}
+	rt := plugin.Route{
+		Prefix:      m,
+		NextHop:     nh,
+		Provider:    provider,
+		LocalPref:   c.cfg.LocalPref,
+		Communities: []string{c.cfg.Community},
+		ASPath:      c.asPath(m, provider),
+	}
+	if err := c.ann.Announce(ctx, rt); err != nil {
+		return err
+	}
+	s := slot{provider: provider, asPath: rt.ASPath, parent: parent}
+	if on && old.moreSpecific() && old.parent == parent {
+		s.seen, s.held = old.seen, old.held
+	}
+	c.active[m] = s
+	c.log.Info("injected more-specific", "prefix", m, "improvement", parent, "provider", provider, "next_hop", nh, "local_pref", c.cfg.LocalPref, "as_path", fmt.Sprint(rt.ASPath))
+	return nil
 }
 
 // WithdrawAll removes every announced route. It is safe to call more than once.
@@ -238,7 +537,7 @@ func (c *Controller) WithdrawAll(ctx context.Context) error {
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	defer func() { c.onWire.Store(int64(len(c.active))) }()
+	defer c.store()
 	return c.withdrawAllLocked(ctx)
 }
 
@@ -278,7 +577,10 @@ func (c *Controller) announceLocked(ctx context.Context, imp policy.Improvement)
 	if c.cfg.Others != nil {
 		others = c.cfg.Others()
 	}
-	if _, exists := c.active[p]; !exists && len(c.active)+others >= c.cfg.MaxImprovements {
+	// A learned more-specific becoming an improvement of its own is a new
+	// improvement for this cap. More-specifics do not count here; MaxRoutes
+	// bounds them.
+	if s, exists := c.active[p]; (!exists || s.moreSpecific()) && c.improvementsLocked()+others >= c.cfg.MaxImprovements {
 		return fmt.Errorf("announce: max_improvements (%d) reached", c.cfg.MaxImprovements)
 	}
 	rt := plugin.Route{
@@ -336,7 +638,7 @@ func (c *Controller) SetRouters(ctx context.Context, routers []plugin.RouterExpo
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	defer func() { c.onWire.Store(int64(len(c.active))) }()
+	defer c.store()
 	if c.cfg.Mode != config.ModeInject {
 		c.cfg.Routers = routers
 		return nil

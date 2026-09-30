@@ -1311,6 +1311,47 @@ func (v *View) Covering(p netip.Prefix) (Route, bool) {
 	return Route{}, false
 }
 
+// MoreSpecifics returns the learned prefixes strictly inside any of
+// parents, sorted, each once. More-specific injection (#56) announces only
+// prefixes from this list, and only while Exact still has them. It walks
+// the table once and, per learned prefix, looks up only the parent lengths
+// in use.
+func (v *View) MoreSpecifics(parents []netip.Prefix) []netip.Prefix {
+	if len(parents) == 0 {
+		return nil
+	}
+	set := map[netip.Prefix]bool{}
+	var lens []int
+	for _, p := range parents {
+		p = p.Masked()
+		set[p] = true
+		if !slices.Contains(lens, p.Bits()) {
+			lens = append(lens, p.Bits())
+		}
+	}
+	v.mu.RLock()
+	var out []netip.Prefix
+	for q := range v.routes {
+		for _, n := range lens {
+			if n >= q.Bits() {
+				continue
+			}
+			if p, err := q.Addr().Prefix(n); err == nil && set[p] {
+				out = append(out, q)
+				break
+			}
+		}
+	}
+	v.mu.RUnlock()
+	sort.Slice(out, func(i, j int) bool {
+		if c := out[i].Addr().Compare(out[j].Addr()); c != 0 {
+			return c < 0
+		}
+		return out[i].Bits() < out[j].Bits()
+	})
+	return out
+}
+
 // Routes returns all learned routes sorted by prefix.
 func (v *View) Routes() []Route {
 	v.mu.RLock()
