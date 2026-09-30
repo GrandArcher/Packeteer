@@ -433,6 +433,31 @@ plugin_dir: /etc/packeteer/plugins
 #           - name: scrub-vrf
 #             route_target: "64512:779"
 
+# Traffic anomaly (DDoS) detection (#33, lab-proven only; see
+# docs/anomaly.md). Off unless set. Needs a flow source. Every anomaly is
+# logged, listed on /api/anomalies, and sent as anomaly.* events. A
+# mitigation rule is added only when an explicit rule below matches, only
+# through the mitigation block above (its mode, allowlist, cap, and TTL
+# apply; observe is a dry run), and only for an exact learned prefix.
+# anomaly:
+#   interval: 10s
+#   max_actions_per_hour: 6
+#   max_active: 4
+#   detector:
+#     type: baseline
+#     config:
+#       sensitivity: 3                # standard deviations; lower fires sooner
+#       min_ratio: 3
+#       min_mbps: 50
+#       warmup: 30                    # rounds before a key can fire
+#   rules:                            # none: detection and alerts only
+#     - name: udp-flood
+#       prefixes: [203.0.113.0/24]    # inside mitigation.allowlist
+#       protocols: [udp]
+#       min_mbps: 100
+#       action: flowspec_drop
+#       ttl: 30m
+
 # Inbound optimization (#25, lab-proven only; see docs/inbound.md). Off
 # unless set. Its own mode defaults to observe; suggest publishes the steer on
 # /api/inbound and as inbound.* events; inject also needs top-level mode:

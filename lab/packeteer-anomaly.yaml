@@ -1,0 +1,91 @@
+# Lab only (#33). Documentation prefixes, private and documentation ASNs.
+# Traffic anomaly detection is fed synthetic NetFlow v5 from the host
+# (lab/sendflow, run by lab/e2e-anomaly.sh). It acts only through threat
+# mitigation and only for the explicit udp rule below: a udp flood toward
+# 198.51.100.0/24 (learned from transit-a through the edge) becomes a
+# FlowSpec drop. A tcp flood has no rule; 203.0.113.0/24 has a rule but is
+# never learned. Outbound thresholds are out of reach, so no outbound
+# improvement is made.
+mode: inject
+asn: 64512
+router_id: 192.0.2.10
+packeteer_community: "64512:666"
+local_pref: 250
+max_improvements: 50
+hold_time: 5s
+thresholds:
+  min_loss_delta_pct: 90
+  min_rtt_delta_ms: 5000
+providers:
+  - name: transit-a
+    source_ip: 192.0.2.11
+    next_hop: 192.0.2.21
+  - name: transit-b
+    source_ip: 192.0.2.12
+    next_hop: 192.0.2.22
+allowlist:
+  prefixes:
+    - 198.51.100.0/24
+probe:
+  interval: 2s
+  timeout: 500ms
+  packets: 4
+bgp:
+  neighbors:
+    - address: 192.0.2.254
+      description: edge
+# The lab network is private to the job; the script reaches the API and
+# sends flows from the host.
+http:
+  listen: 0.0.0.0:8080
+sources:
+  - type: flow
+    config:
+      listen: 0.0.0.0:2055
+      window: 30s
+probers:
+  - type: fixed
+    config:
+      paths:
+        - provider: transit-a
+          rtt_ms: 10
+        - provider: transit-b
+          rtt_ms: 10
+announcer:
+  type: gobgp
+mitigation:
+  mode: inject
+  allowlist:
+    - 198.51.100.0/24
+    - 203.0.113.0/24
+  max_rules: 4
+  default_ttl: 10m
+  max_ttl: 1h
+  announcer:
+    type: gobgp
+    config:
+      marker: "64512:668"
+      flowspec: {}
+anomaly:
+  interval: 2s
+  max_actions_per_hour: 10
+  max_active: 2
+  detector:
+    type: baseline
+    config:
+      sensitivity: 3
+      min_ratio: 3
+      min_mbps: 5
+      # A flood already in progress at startup is learned as the
+      # baseline; this ceiling still catches a bigger one.
+      max_mbps: 100
+      warmup: 5
+      trigger_rounds: 2
+      clear_rounds: 2
+  rules:
+    - name: udp-flood
+      prefixes: [198.51.100.0/24, 203.0.113.0/24]
+      protocols: [udp]
+      min_mbps: 10
+      action: flowspec_drop
+      ttl: 30m

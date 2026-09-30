@@ -17,7 +17,7 @@ flow/SPAN/SNMP/static prefix list
                                    |
                     observe: log only
                     inject:  gobgp announcer on the same iBGP session
-                             (+ inbound steers, + mitigation rules from the API)
+                             (+ inbound steers, + mitigation rules from the API or anomaly rules)
 ```
 
 ## Components
@@ -45,6 +45,7 @@ flow/SPAN/SNMP/static prefix list
 
 - **Multi-POP federation** (`internal/federation` + the `mtls` federation plugin, #30) is optional (`federation:`). Each instance is one POP (`domain`). After each decision it publishes a snapshot (its own providers' health and telemetry, fresh measurements through them, its exit per learned probed prefix, and its improvements); the plugin serves it to peers over mutual TLS and polls theirs. Before each decision, fresh peer measurements through providers in their domain are merged into the input with the configured `inter_dc_rtt` added; such a provider is usable for a prefix only while its peer is fresh, RIB-ready, reports it up, and exits that exact prefix through it. `global_commit` lowers each local member's commit by the other members' fresh usage for the `commit` scorer. Nothing else changes: the allowlist, learned-RIB check, community, NO_EXPORT, cap, hold time, and withdraw rules apply, and a stale peer makes its providers unusable, so steers onto them are withdrawn. `/api/federation` is the central view. The plugin never announces ([docs/multi-pop.md](docs/multi-pop.md)).
 
+- **Traffic anomaly detection** (`internal/anomaly` + a `detector` plugin, #33) is optional (`anomaly:`). On its own interval it reads per-prefix, per-protocol byte counters from the `flow` source, turns the deltas into rates, and feeds the detector (built-in `baseline`: EWMA mean and variance per key, tunable sensitivity, hysteresis). Every anomaly goes to a feed on `/api/anomalies`, to `anomaly.*` events, and to stored history. It never announces: an anomaly becomes a mitigation rule only when an explicit `anomaly.rules` entry matches, only for an exact prefix in the learned RIB, under `max_active` and `max_actions_per_hour`, never on an HA standby, and only through the threat mitigation controller above, with all of its checks. The rule is removed when the anomaly clears or flow data fails; state is in memory only ([docs/anomaly.md](docs/anomaly.md)).
 - **High availability** (`ha:` + the `lease` elector plugin, #31) is optional. Two instances with the same config share a lease on a volume both mount. Only the active one runs decisions and announces; the outbound, inbound, and mitigation controllers check the elector under their locks before every sync, so a standby withdraws anything left and announces nothing, while it keeps its iBGP sessions, RIB view, and probes warm. An instance may lead only while its RIB view is ready. On becoming standby it withdraws at once, drops its decision state, and resigns, so the other takes over at its next renewal. A crashed instance cannot resign: the standby waits until the lease has not changed for `ttl`/2 plus the holder's recorded negotiated BGP hold time, so the routers have dropped the old routes (no graceful restart) before it announces. `packeteer -backup` and `-restore` copy the config and the storage plugin's history ([docs/ha.md](docs/ha.md)).
 
 ## Plugins
