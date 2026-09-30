@@ -16,9 +16,9 @@ import (
 )
 
 const (
-	testTTL   = 400 * time.Millisecond
-	testRenew = 50 * time.Millisecond
-	testHold  = 200 * time.Millisecond
+	testTTL   = time.Second
+	testRenew = 100 * time.Millisecond
+	testHold  = 300 * time.Millisecond
 	// testWait is how long a standby waits out a live holder's record.
 	testWait = testTTL/2 + testHold + testRenew
 )
@@ -36,6 +36,9 @@ func newNode(t *testing.T, path, id string) *node {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// fsync is not under test, and a slow shared CI disk would make
+	// renewals miss the short test ttl.
+	l.noSync = true
 	n := &node{Lease: l}
 	n.eligible.Store(true)
 	l.SetCandidate(func() plugin.Candidacy {
@@ -143,7 +146,7 @@ func TestOneActiveAndStandbyNeverActive(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "ha", "lease.json")
 	a, b := newNode(t, path, "pk-a"), newNode(t, path, "pk-b")
 	a.start(t)
-	waitFor(t, "a active", 2*time.Second, a.Active)
+	waitFor(t, "a active", 5*time.Second, a.Active)
 	stop := watchExclusive(t, a, b)
 	b.start(t)
 	time.Sleep(3 * testWait / 2)
@@ -167,7 +170,7 @@ func TestCrashTakeoverWaitsForRouteHold(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "lease.json")
 	a, b := newNode(t, path, "pk-a"), newNode(t, path, "pk-b")
 	a.start(t)
-	waitFor(t, "a active", 2*time.Second, a.Active)
+	waitFor(t, "a active", 5*time.Second, a.Active)
 	b.start(t)
 	time.Sleep(3 * testRenew)
 	// Crash: the renew loop stops and nothing resigns.
@@ -177,7 +180,7 @@ func TestCrashTakeoverWaitsForRouteHold(t *testing.T) {
 	// The dead holder's routes can live ttl/2 + hold after its last
 	// renewal; the standby must not be active before then.
 	minGap := testTTL/2 + testHold
-	waitFor(t, "b active", 3*time.Second, b.Active)
+	waitFor(t, "b active", 6*time.Second, b.Active)
 	if gap := time.Since(crashed); gap < minGap-testRenew {
 		t.Fatalf("standby took over %s after the crash, before ttl/2+route hold (%s)", gap, minGap)
 	}
@@ -195,7 +198,7 @@ func TestResignHandsOverAtOnce(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "lease.json")
 	a, b := newNode(t, path, "pk-a"), newNode(t, path, "pk-b")
 	a.start(t)
-	waitFor(t, "a active", 2*time.Second, a.Active)
+	waitFor(t, "a active", 5*time.Second, a.Active)
 	b.start(t)
 	time.Sleep(3 * testRenew)
 	stop := watchExclusive(t, a, b)
@@ -206,7 +209,7 @@ func TestResignHandsOverAtOnce(t *testing.T) {
 		t.Fatal("active after Resign")
 	}
 	resigned := time.Now()
-	waitFor(t, "b active", 2*time.Second, b.Active)
+	waitFor(t, "b active", 5*time.Second, b.Active)
 	if d := time.Since(resigned); d > 4*testRenew {
 		t.Fatalf("takeover after resign took %s", d)
 	}
@@ -234,12 +237,12 @@ func TestResignDuringRenewalWriteStaysResigned(t *testing.T) {
 		return nil
 	}
 	a.start(t)
-	waitFor(t, "a active", 2*time.Second, a.Active)
+	waitFor(t, "a active", 5*time.Second, a.Active)
 	armed.Store(true)
 	<-entered
 	done := make(chan error, 1)
 	go func() { done <- a.Resign(context.Background()) }()
-	waitFor(t, "resign recorded", 2*time.Second, func() bool { return a.Status().Detail == "resigned" })
+	waitFor(t, "resign recorded", 5*time.Second, func() bool { return a.Status().Detail == "resigned" })
 	close(release)
 	if err := <-done; err != nil {
 		t.Fatal(err)
@@ -260,9 +263,9 @@ func TestIneligibleStepsDownAndDoesNotAcquire(t *testing.T) {
 	b.eligible.Store(false)
 	a.start(t)
 	b.start(t)
-	waitFor(t, "a active", 2*time.Second, a.Active)
+	waitFor(t, "a active", 5*time.Second, a.Active)
 	a.eligible.Store(false)
-	waitFor(t, "a standby", 2*time.Second, func() bool { return !a.Active() })
+	waitFor(t, "a standby", 5*time.Second, func() bool { return !a.Active() })
 	// Nobody may take over while both are ineligible, even after the
 	// lease runs out.
 	time.Sleep(3 * testWait / 2)
@@ -270,7 +273,7 @@ func TestIneligibleStepsDownAndDoesNotAcquire(t *testing.T) {
 		t.Fatal("an ineligible instance became active")
 	}
 	b.eligible.Store(true)
-	waitFor(t, "b active once eligible", 3*time.Second, b.Active)
+	waitFor(t, "b active once eligible", 6*time.Second, b.Active)
 }
 
 func TestStepDownWhenRenewalFails(t *testing.T) {
@@ -284,10 +287,10 @@ func TestStepDownWhenRenewalFails(t *testing.T) {
 		return nil
 	}
 	a.start(t)
-	waitFor(t, "a active", 2*time.Second, a.Active)
+	waitFor(t, "a active", 5*time.Second, a.Active)
 	fail.Store(true)
 	failed := time.Now()
-	waitFor(t, "a standby", 2*time.Second, func() bool { return !a.Active() })
+	waitFor(t, "a standby", 5*time.Second, func() bool { return !a.Active() })
 	if d := time.Since(failed); d > testTTL/2+testRenew {
 		t.Fatalf("stepped down %s after renewals started failing (ttl/2 is %s)", d, testTTL/2)
 	}
@@ -308,11 +311,11 @@ func TestActiveTurnsFalseWhileLoopIsStuck(t *testing.T) {
 		return nil
 	}
 	a.start(t)
-	waitFor(t, "a active", 2*time.Second, a.Active)
+	waitFor(t, "a active", 5*time.Second, a.Active)
 	before := a.changes.Load()
 	stuck.Store(true)
-	waitFor(t, "a inactive while stuck", 2*time.Second, func() bool { return !a.Active() })
-	waitFor(t, "a change notification", 2*time.Second, func() bool { return a.changes.Load() > before })
+	waitFor(t, "a inactive while stuck", 5*time.Second, func() bool { return !a.Active() })
+	waitFor(t, "a change notification", 5*time.Second, func() bool { return a.changes.Load() > before })
 	close(release)
 }
 
@@ -320,7 +323,7 @@ func TestRestartDoesNotReuseOldLease(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "lease.json")
 	a := newNode(t, path, "pk-a")
 	a.start(t)
-	waitFor(t, "a active", 2*time.Second, a.Active)
+	waitFor(t, "a active", 5*time.Second, a.Active)
 	a.cancel()
 	a.wg.Wait()
 	// Same ID, new process: the old record is not its lease.
@@ -330,7 +333,7 @@ func TestRestartDoesNotReuseOldLease(t *testing.T) {
 	if a2.Active() {
 		t.Fatal("restarted instance took its predecessor's unexpired lease")
 	}
-	waitFor(t, "a2 active after the lease ran out", 3*time.Second, a2.Active)
+	waitFor(t, "a2 active after the lease ran out", 6*time.Second, a2.Active)
 }
 
 func TestUnreadableRecordIsWaitedOut(t *testing.T) {

@@ -124,6 +124,8 @@ type Lease struct {
 
 	// failWrite makes writes fail (tests).
 	failWrite func() error
+	// noSync skips fsync in writes (tests).
+	noSync bool
 }
 
 // New builds a lease elector from config. It does no I/O.
@@ -508,7 +510,7 @@ func (l *Lease) write(prev *record, cand plugin.Candidacy, released bool) ([]byt
 	if err != nil {
 		return nil, err
 	}
-	if err := writeAtomic(l.path, raw); err != nil {
+	if err := writeAtomic(l.path, raw, !l.noSync); err != nil {
 		return nil, err
 	}
 	return raw, nil
@@ -558,7 +560,7 @@ func (l *Lease) Status() plugin.ElectorStatus {
 
 // writeAtomic replaces path with data: a temporary file in the same
 // directory, fsync, rename, and fsync of the directory.
-func writeAtomic(path string, data []byte) error {
+func writeAtomic(path string, data []byte, durable bool) error {
 	dir := filepath.Dir(path)
 	f, err := os.CreateTemp(dir, ".lease-*")
 	if err != nil {
@@ -575,9 +577,11 @@ func writeAtomic(path string, data []byte) error {
 		_ = f.Close()
 		return err
 	}
-	if err := f.Sync(); err != nil {
-		_ = f.Close()
-		return err
+	if durable {
+		if err := f.Sync(); err != nil {
+			_ = f.Close()
+			return err
+		}
 	}
 	if err := f.Close(); err != nil {
 		return err
@@ -586,6 +590,9 @@ func writeAtomic(path string, data []byte) error {
 		return err
 	}
 	ok = true
+	if !durable {
+		return nil
+	}
 	if d, err := os.Open(dir); err == nil {
 		_ = d.Sync()
 		_ = d.Close()
