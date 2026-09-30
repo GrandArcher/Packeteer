@@ -2,6 +2,7 @@ package plugin
 
 import (
 	"context"
+	"io"
 	"net/netip"
 	"time"
 )
@@ -127,6 +128,19 @@ type Storage interface {
 	Lifecycle
 	Write(ctx context.Context, b HistoryBatch) error
 	Read(ctx context.Context, q HistoryQuery) (History, error)
+}
+
+// StorageBackup is optional on a storage plugin: `packeteer -backup` and
+// `-restore` (#31) use it to copy report history in and out. Both run in
+// a separate process, on a plugin that was built but not started.
+type StorageBackup interface {
+	// Backup writes a consistent copy of the stored history to w. It may
+	// run while a controller writes to the same store.
+	Backup(ctx context.Context, w io.Writer) error
+	// Restore replaces the stored history with a copy Backup wrote, after
+	// checking it. It refuses to replace existing history unless
+	// overwrite is set. The controller using the store must be stopped.
+	Restore(ctx context.Context, r io.Reader, overwrite bool) error
 }
 
 // CountryLookup is optional on a policy plugin that has a GeoIP database.

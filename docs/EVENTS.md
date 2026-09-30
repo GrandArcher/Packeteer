@@ -41,10 +41,12 @@ The same object is the `generic` webhook body and the `exec` `notify` params.
 | `mitigation.announced` | warning | 21 | `rule` | Every route of the rule (one, or one per source network of a country rule) is on the wire. Same fields. |
 | `mitigation.withdrawn` | warning | 22 | `rule` | The rule's routes were withdrawn while the rule is still held: RIB session loss, shutdown, or an announce that failed. `detail` says why when known. It goes back on the wire (and `mitigation.announced` fires again) once the cause clears, before the rule expires. |
 | `mitigation.ended` | info | 23 | `rule` | The rule ended: `end` is `expired`, `removed` (DELETE), or `replaced` (a new rule with the same key). Its routes are withdrawn within a decision round. Resolves the rule. |
+| `ha.standby` | warning | 24 | | This instance stopped being the active one of its HA pair ([ha.md](ha.md)) and withdrew its routes. Fields: `id`, `holder` (the instance that holds the lease, when known), `detail` (lease held by another instance, renewal failed, RIB not ready, resigned), `withdrawn`. Sent by the instance that stepped down. |
+| `ha.active` | warning | 25 | | This instance became the active one of its HA pair and may announce. Fields: `id`, `detail`, `takeovers`. Resolves `ha.standby` (one dedup key for the pair). |
 
 Problems and the events that resolve them share a **dedup key**: `packeteer/<group>/<key>=<value>`, for example `packeteer/provider/provider=transit-a` for both `provider.down` and `provider.up`. The `pagerduty` preset uses it as `dedup_key`, and `snmptrap` sends it as a varbind.
 
-State events (`provider.*`, `bgp.*`, `commit.*`, `announce.*`, `inbound.*`, `mitigation.*`) fire on transitions only. They are checked on every decision (each probe round, each RIB change, and at least every `probe.interval`); commit is checked at most once a minute. They are not repeated while the state holds.
+State events (`provider.*`, `bgp.*`, `commit.*`, `announce.*`, `inbound.*`, `mitigation.*`, `ha.*`) fire on transitions only. They are checked on every decision (each probe round, each RIB change, and at least every `probe.interval`); commit is checked at most once a minute. They are not repeated while the state holds.
 
 ## Testing delivery
 

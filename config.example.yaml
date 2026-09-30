@@ -225,6 +225,20 @@ scorer:
 #       - name: pop-b
 #         url: https://192.0.2.20:9443
 
+# Active/standby HA (off by default; docs/ha.md). Two instances with the
+# same config (own router_id, session address, and id) share a lease file
+# on a volume both mount. Only the active one decides and announces; the
+# standby keeps its sessions and probes but has nothing on the wire. A
+# crashed active instance's routes leave with its sessions before the
+# standby announces. Backup and restore: packeteer -backup / -restore.
+# ha:
+#   type: lease
+#   config:
+#     path: /var/lib/packeteer/ha/lease.json
+#     id: pk-a            # or env PACKETEER_HA_ID
+#     ttl: 10s
+#     renew: 2s
+
 # BMP monitoring station (RIB source). Edge routers stream their post-policy
 # Adj-RIB-In (routes they accepted) here, so Packeteer sees inactive IX and backup paths without a
 # full iBGP feed. Needs bgp.neighbors (the announcer uses that session).

@@ -231,6 +231,8 @@ Confirm the routes are gone with the same show commands as above. The community 
 
 `docker kill` does not withdraw. The routes remain until the router's BGP hold timer expires. The Compose restart policy also starts the container again after a kill. Use `docker stop` when you want the routes gone and the process left stopped.
 
+With an active/standby pair (`ha`, [docs/ha.md](docs/ha.md)), stopping the active instance withdraws its routes and hands over to the standby, which then announces. Stop both, or remove `ha` and run one instance, to roll back. `packeteer -backup` and `-restore` copy the config and report history.
+
 Switching the file back to `mode: observe` and restarting withdraws as well: the old process withdraws on the way down, and the new process does not announce.
 
 Other withdraws, while the container is still running:
@@ -268,6 +270,7 @@ The server is read-only (GET and HEAD), except on-demand maintenance windows (`P
 | `/api/troubleshoot/traceroute` | `POST {"target":"<address>","provider":"<optional name>"}`. UDP traceroute from each provider's source. Needs `troubleshoot.enabled`. |
 | `/api/troubleshoot/whois` | `POST {"query":"<address, prefix, or ASN>"}`. RDAP lookup through `troubleshoot.whois`. Needs `troubleshoot.enabled`. |
 | `/api/mitigations` | Threat mitigation rules (RTBH, BGP redirect, FlowSpec drop/rate-limit/redirect), the catalog, the mitigation allowlist, and the feed of recent changes. `POST {"prefix","action","target","ttl","reason"}` (FlowSpec adds `match`, `source_countries`, `rate_mbps`) adds a rule and `DELETE /api/mitigations/<id>` removes one, when `mitigation` is configured and basic auth is on ([docs/mitigation.md](docs/mitigation.md)). Lab-proven only. |
+| `/api/ha` | Active/standby role (#31): `role` (`active` or `standby`), `holder`, `eligible`, `detail`, `takeovers`. `ha_enabled: false` and `role: active` when `ha` is not configured ([docs/ha.md](docs/ha.md)). |
 | `/api/federation` | Central view of every federated instance (#30): this instance's published snapshot, each peer's freshness, last error, snapshot, and inter-DC RTT, and the global commits with each member's usage. Read-only. `enabled: false` when `federation` is not configured ([docs/multi-pop.md](docs/multi-pop.md)). |
 | `/api/maintenance` | Open maintenance windows. `POST` opens an on-demand window and `DELETE /api/maintenance/<id>` closes one, when a `maintenance` policy is configured and basic auth is on ([CONFIG.md](docs/CONFIG.md#policy-maintenance)). |
 

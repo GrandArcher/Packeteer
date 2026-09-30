@@ -80,6 +80,11 @@ type Config struct {
 	// Geo turns FlowSpec source countries into networks. Nil refuses
 	// rules with countries.
 	Geo GeoIP
+	// Leader reports whether this instance is the active one of an HA
+	// pair (#31). Nil is a single instance, always active. While it is
+	// false, Sync withdraws everything and announces nothing; it is
+	// checked under the controller's lock on every Sync.
+	Leader func() bool
 }
 
 // Request asks for one rule. A zero TTL means the default. Match,
@@ -575,6 +580,12 @@ func (c *Controller) Sync(ctx context.Context, now time.Time) error {
 	}
 	if c.cfg.Mode != config.ModeInject {
 		return nil
+	}
+	if c.cfg.Leader != nil && !c.cfg.Leader() {
+		if len(c.wire)+len(c.fwire) > 0 {
+			c.log.Warn("ha standby; withdrawing mitigation routes")
+		}
+		return c.withdrawAllLocked(ctx)
 	}
 	if c.rib == nil || !c.rib.Ready() {
 		if len(c.wire)+len(c.fwire) > 0 {

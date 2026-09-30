@@ -126,12 +126,27 @@ func run(ctx context.Context, args []string, getenv func(string) string, stdout,
 	check := fs.Bool("check", false, "validate config and plugins, print a summary, and exit")
 	showVersion := fs.Bool("version", false, "print version and exit")
 	notifyTest := fs.Bool("notify-test", false, "send a notifier.test event to every configured notifier and exit (no probes, no BGP)")
+	backup := fs.String("backup", "", "write the config and stored history to this archive and exit (no probes, no BGP; never overwrites)")
+	restoreFrom := fs.String("restore", "", "restore stored history from this archive into its config's storage and exit (stop the controller first)")
+	restoreConfig := fs.String("restore-config", "", "with -restore, also write the archived config to this path")
+	force := fs.Bool("force", false, "with -restore, replace existing history and config files")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
 	if *showVersion {
 		fmt.Fprintf(stdout, "packeteer %s\n", version)
 		return 0
+	}
+	if *restoreFrom != "" {
+		if *backup != "" {
+			fmt.Fprintln(stderr, "packeteer: -backup and -restore are exclusive")
+			return 2
+		}
+		return runRestore(ctx, *restoreFrom, *restoreConfig, *force, getenv, stdout, stderr)
+	}
+	if *restoreConfig != "" || *force {
+		fmt.Fprintln(stderr, "packeteer: -restore-config and -force need -restore")
+		return 2
 	}
 
 	cfg, err := config.Load(*path)
@@ -142,6 +157,9 @@ func run(ctx context.Context, args []string, getenv func(string) string, stdout,
 	if err := applyRuntimeEnv(cfg, getenv); err != nil {
 		fmt.Fprintf(stderr, "packeteer: refusing to start: %v\n", err)
 		return 1
+	}
+	if *backup != "" {
+		return runBackup(ctx, *path, cfg, *backup, getenv, stdout, stderr)
 	}
 	httpUser, httpPass := getenv(HTTPUserEnv), getenv(HTTPPassEnv)
 	if (httpUser == "") != (httpPass == "") {
@@ -234,6 +252,9 @@ func run(ctx context.Context, args []string, getenv func(string) string, stdout,
 			fmt.Fprintf(stdout, "mitigation geoip_db: %s\n", m.GeoIPDB)
 		}
 	}
+	if el := plugins.Elector; el != nil {
+		fmt.Fprintf(stdout, "ha: %s id=%s (standby until elected; only the active instance announces)\n", el.Type, el.Plugin.Status().ID)
+	}
 	fmt.Fprintf(stdout, "log: %s %s\n", cfg.Log.Level, cfg.Log.Format)
 	if cfg.HTTPListen() == "" {
 		fmt.Fprintln(stdout, "http: disabled")
@@ -310,11 +331,19 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 		return 1
 	}
 	fed := newFedState(cfg, plugins)
+	var haStatus func() plugin.ElectorStatus
+	if el := plugins.Elector; el != nil {
+		haStatus = func() plugin.ElectorStatus {
+			st := el.Plugin.Status()
+			st.Type = el.Type
+			return st
+		}
+	}
 	if addr := cfg.HTTPListen(); addr != "" {
 		srv, err := httpapi.New(httpapi.Options{
 			Addr: addr, User: httpUser, Password: httpPass, Snapshot: col.Snapshot, Logger: log,
 			Maintenance: maint, Reports: reports, Tools: tools, Inbound: inboundStatus, Mitigation: mitAPI,
-			Federation: fed.status,
+			Federation: fed.status, HA: haStatus,
 		})
 		if err != nil {
 			log.Error("refusing to start", "err", err)
@@ -431,6 +460,16 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 	col.SetTelemetry(func() []plugin.Usage { return collectTelemetry(context.Background(), plugins) })
 	col.Attach(engine, decider, view)
 	wireExchanges(cfg, col, view)
+	// Active/standby (#31): registered before the elector starts. A
+	// standby withdraws everything, runs no decisions, and announces
+	// nothing; the announce controllers check the same gate.
+	var haView haRIB
+	if view != nil {
+		haView = view
+	}
+	ha := newHAControl(plugins, log, haView, func(ctx context.Context) error {
+		return errors.Join(mit.WithdrawAll(ctx), inb.WithdrawAll(ctx), ctl.WithdrawAll(ctx))
+	}, poke, watch.emit)
 	if err := plugins.Start(ctx); err != nil {
 		log.Error("refusing to start", "err", err)
 		return 1
@@ -460,7 +499,26 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 		// that never completes (a prober or target source that ignores
 		// cancellation) must still withdraw once measurements exceed
 		// MaxResultAge.
+		leading := false
 		decideLoop(loopCtx, cfg.Probe.Interval, kick, func(now time.Time) {
+			if !ha.active() {
+				if leading {
+					// Stepped down: no intent survives into a later
+					// takeover.
+					decider.Reset()
+					leading = false
+				}
+				mitChanges, err := standbyRound(now, ctl, inb, mit, log)
+				if rec != nil {
+					recordMitigations(rec, mitChanges)
+				}
+				if dispatch.Enabled() {
+					watch.mitigation(mitChanges)
+					watch.announce(now, err)
+				}
+				return
+			}
+			leading = true
 			in := decisionInput(loopCtx, now, engine, view, plugins, fed)
 			changes, err := runDecision(now, decider, in, ctl, log, cfg.Mode)
 			fed.publish(now, in, decider.Improvements())
@@ -535,6 +593,9 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 	if withdrawErr != nil {
 		log.Error("withdraw on shutdown", "err", withdrawErr)
 	}
+	// Only after the withdraw: the standby may announce once this lease
+	// is released (#31).
+	ha.shutdown(stopCtx, withdrawErr)
 	// Mitigation routes withdrawn above are in the feed as withdrawn;
 	// the recorder ends their rules as stopped on Close.
 	if mitChanges := mit.Changes(); len(mitChanges) > 0 {
@@ -698,6 +759,7 @@ func newInbound(cfg *config.Config, plugins *pluginhost.Set, view *rib.View, oth
 		},
 		Moderated: map[string]bool{},
 		Excluded:  mit.Holds,
+		Leader:    haLeader(plugins),
 	}
 	if pf := in.Performance; pf != nil {
 		ic.Performance = &inbound.PerfConfig{LossPct: pf.LossPct, LatencyMs: pf.LatencyMs, MinPrefixes: pf.MinPrefixes, ReleasePct: pf.ReleasePct}
@@ -793,6 +855,7 @@ func newController(cfg *config.Config, plugins *pluginhost.Set, view *rib.View, 
 		MaxImprovements: *cfg.MaxImprovements,
 		NextHops:        map[string]netip.Addr{},
 		ASPath:          cfg.BGP.ASPath,
+		Leader:          haLeader(plugins),
 	}
 	if ms := cfg.MoreSpecific; ms != nil && ms.Enabled {
 		ac.MoreSpecific, ac.MaxRoutes = true, ms.MaxRoutes
@@ -1004,6 +1067,20 @@ func runDecision(now time.Time, decider *policy.Engine, in policy.Input, ctl *an
 		log.Error("announce", "err", err)
 	}
 	return changes, err
+}
+
+// standbyRound is a decision round on an HA standby (#31): no decision,
+// and the gated syncs withdraw anything still on the wire. Mitigation
+// rules still expire.
+func standbyRound(now time.Time, ctl *announce.Controller, inb *inbound.Controller, mit *mitigation.Controller, log *slog.Logger) ([]mitigation.Change, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	err := errors.Join(ctl.Sync(ctx, nil), inb.Sync(ctx))
+	if err != nil {
+		log.Error("ha standby withdraw", "err", err)
+	}
+	mitChanges, mitErr := runMitigation(now, mit, log)
+	return mitChanges, errors.Join(err, mitErr)
 }
 
 // maxResultAge is how old a measurement may be before Decide treats it as

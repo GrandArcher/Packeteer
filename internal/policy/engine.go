@@ -50,5 +50,14 @@ func (e *Engine) Improvements() []Improvement {
 	return out
 }
 
+// Reset drops every improvement, cooldown, and decision, as a new engine
+// would have. An HA instance (#31) resets when it becomes standby, so it
+// does not carry its old intent into a later takeover.
+func (e *Engine) Reset() {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.state, e.last, e.at = NewState(), Output{}, time.Time{}
+}
+
 // Mode returns the configured mode.
 func (e *Engine) Mode() string { return e.cfg.Mode }

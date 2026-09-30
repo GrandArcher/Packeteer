@@ -35,6 +35,7 @@ The image entrypoint is the same binary. Flags go after the image name.
 | `inter_dc_rtt` | empty | per remote domain | Map of domain to round-trip time from this POP (for example `pop-b: 12ms`), 0–10s. Added to every path a peer in that domain measured. |
 | `global_commit` | empty | no | Commits shared by providers in several domains. Needs `federation`. See [Multi-POP](#multi-pop-federation). |
 | `federation` | none | no | The instance-to-instance transport plugin, one object: `type: mtls`. See [Federation `mtls`](#federation-mtls). Omitted runs the instance standalone. |
+| `ha` | none | no | Active/standby elector (#31), one object: `type: lease`. Only the active instance of the pair announces. Needs `bgp.neighbors`. See [High availability](#high-availability-ha) and [Elector `lease`](#elector-lease). Omitted runs a single instance, always active. Lab-proven only. |
 | `max_improvements` | 50 | no | Cap on active improvements. Integer from 1 to 10000. Biggest gains win when the cap binds. |
 | `hold_time` | 0 | inject: positive | Minimum life of an improvement, and the cooldown after a flip-back or a confirmed RIB leave. `0` is legal in observe and suggest (a flip can happen on the next evaluation). Negative is an error. |
 | `improvement_ttl` | `1h` | no | Retire an improvement after this long so the native path is measured again. A negative duration disables the TTL. `0` selects the default `1h`. |
@@ -343,6 +344,36 @@ federation:
 A provider in another domain is usable for a prefix only while its peer is fresh, its RIB is ready, it reports the provider up, and its own traffic for that exact prefix leaves through that provider. Its path is the peer's measurement plus `inter_dc_rtt`. When the peer goes stale the path disappears and an improvement onto it is retired and withdrawn. The prefix must still be in this POP's learned RIB and allowlist; the improvement counts toward `max_improvements` and carries `packeteer_community` and `no-export` like any other.
 
 With a commit scorer, each local member's commit becomes the global commit less every other member's usage (never more than its own commit). When any member's usage is missing or its peer is stale, each provider's own commit applies, as standalone. Changes need a restart (SIGHUP refuses them). Rollback: remove `federation`, `global_commit`, and remote providers, and restart.
+
+### High availability (`ha`)
+
+Two instances with the same providers, allowlist, and edge sessions (each with its own `router_id` and session address) share a lease file on storage both mount (#31, lab-proven only). Guide: [ha.md](ha.md).
+
+```yaml
+ha:
+  type: lease
+  config:
+    path: /var/lib/packeteer/ha/lease.json   # on a volume both instances mount
+    id: pk-a                                  # or env PACKETEER_HA_ID
+```
+
+Only the active instance runs decisions and announces. A standby probes and keeps its iBGP sessions and RIB view, but has no route on the wire: the outbound, inbound, and mitigation announcers check the elector under their locks before every sync, and a standby withdraws anything left. An instance may lead only while its RIB view is ready; an active instance whose sessions all drop steps down and hands over. On becoming standby an instance withdraws at once, drops its decision state (improvements and cooldowns), and resigns, so the other instance takes over at its next renewal. A crashed active instance cannot resign: the standby waits until the old instance's routes are gone from the routers (its lease, plus the negotiated BGP hold time it recorded) before it announces. Allowlist, learned-RIB check, community, NO_EXPORT, `max_improvements`, hold time, and withdraw rules are unchanged on the active instance. `ha` changes need a restart (SIGHUP refuses them). Rollback: remove `ha` and run one instance.
+
+`/api/ha` and `packeteer_ha_active`, `packeteer_ha_eligible`, and `packeteer_ha_takeovers` show the role; `ha.active` and `ha.standby` events report changes ([EVENTS.md](EVENTS.md)).
+
+### Backup and restore
+
+`packeteer -backup FILE` writes a gzip'd tar with the loaded config file and, with a `storage` plugin, a consistent copy of its history (`sqlite`: `VACUUM INTO`, safe while the controller runs). It never overwrites `FILE`, opens no BGP session, and sends no probe. Secrets are environment variables, so none are in the archive.
+
+`packeteer -restore FILE` validates the archived config, then restores the history into that config's storage path. `-restore-config PATH` also writes the archived config to `PATH`. Existing history or config files are replaced only with `-force`. Stop the controller that uses the storage first.
+
+```sh
+# Running container: back up into the data volume.
+docker exec packeteer packeteer -backup /var/lib/packeteer/backup-$(date +%F).tgz
+# New host: restore into an empty volume, then start as usual.
+docker run --rm -v packeteer-data:/var/lib/packeteer -v "$PWD:/backup" \
+  ghcr.io/grandarcher/packeteer -restore /backup/backup.tgz -restore-config /backup/config.yaml
+```
 
 ### Plugin entries
 
@@ -967,6 +998,23 @@ The built-in instance-to-instance transport (#30). Each instance serves its snap
 | `max_bytes` | 16 MiB | Cap on a fetched snapshot, 1024–1073741824. |
 
 Times in a snapshot are converted to local time by their age at the peer, so clock skew between POPs cannot make stale data look fresh. On shutdown an instance publishes its providers down before it withdraws, so peers retire steers onto them at their next poll.
+
+### Elector `lease`
+
+The built-in active/standby elector (#31): a lease file on storage both instances mount (one Docker volume on one host, or a shared filesystem with working `flock`). It never announces. Every read-modify-write happens under an exclusive lock on `path` + `.lock` and replaces the record with an atomic rename.
+
+| Key | Default | Meaning |
+|---|---|---|
+| `path` | required | Lease file, absolute. The directory is created on start. Both instances must see the same file. |
+| `id` | `PACKETEER_HA_ID`, then the hostname | This instance's name in the pair. Letters, digits, `_`, `.`, `-`, at most 64 characters. The two instances must differ. |
+| `ttl` | `10s` | Lease time, `2s`–`5m`. The active instance stops announcing `ttl`/2 after its last successful renewal, even when its renew loop is stuck. |
+| `renew` | `ttl`/5 | Renewal and standby poll interval, at least `100ms` and at most `ttl`/4. |
+
+A standby takes a lease that is free or released at its next renewal. It takes a lease held by another instance only after the record has not changed, on its own monotonic clock, for the longer of `ttl` and `ttl`/2 + the holder's recorded BGP hold time + `renew`, so clocks need not agree. The hold time is the longest negotiated hold time of the holder's established sessions (90s when unknown), refreshed at every renewal; set a short hold timer on the edge (for example 9s) for a fast takeover after a crash. A restarted instance does not reuse its predecessor's lease. An unreadable lease file counts as held by an unknown instance.
+
+| Variable | Effect |
+|---|---|
+| `PACKETEER_HA_ID` | `id` when the config does not set it. |
 
 ### Announcer `gobgp`
 

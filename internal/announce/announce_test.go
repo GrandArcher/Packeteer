@@ -3,8 +3,10 @@ package announce
 import (
 	"context"
 	"net/netip"
+	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/GrandArcher/Packeteer/internal/policy"
@@ -476,5 +478,42 @@ func TestReservedWithdrawsAnImprovementOnTheWire(t *testing.T) {
 	held = false
 	if err := c.Sync(ctx, imps); err != nil || ann.count() != 1 {
 		t.Fatalf("improvement after the rule let go: %v", err)
+	}
+}
+
+// TestStandbyAnnouncesNothing: an HA standby (#31) withdraws what it has
+// and announces nothing, even with improvements, a ready RIB, and an
+// allowlisted prefix. It announces again once it is active.
+func TestStandbyAnnouncesNothing(t *testing.T) {
+	ctx := context.Background()
+	ann := &fakeAnn{}
+	rib := memRIB{ready: true, has: map[netip.Prefix]bool{pfx("198.51.100.0/24"): true}}
+	var leader atomic.Bool
+	cfg := testCfg()
+	cfg.Leader = leader.Load
+	c, err := New(cfg, ann, rib, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	imps := []policy.Improvement{imp("198.51.100.0/24", "b")}
+	if err := c.Sync(ctx, imps); err != nil || ann.count() != 0 || ann.announces != 0 || c.Active() != 0 {
+		t.Fatalf("standby announced: err=%v routes=%d", err, ann.count())
+	}
+	leader.Store(true)
+	if err := c.Sync(ctx, imps); err != nil || ann.count() != 1 || c.Active() != 1 {
+		t.Fatalf("active did not announce: err=%v routes=%d", err, ann.count())
+	}
+	r := ann.routes[pfx("198.51.100.0/24")]
+	if !slices.Contains(r.Communities, "64512:666") || r.NextHop != netip.MustParseAddr("192.0.2.2") {
+		t.Fatalf("route = %+v", r)
+	}
+	// Demoted: everything is withdrawn on the next Sync.
+	leader.Store(false)
+	if err := c.Sync(ctx, imps); err != nil || ann.count() != 0 || c.Active() != 0 || ann.all != 1 {
+		t.Fatalf("demoted instance kept routes: err=%v routes=%d all=%d", err, ann.count(), ann.all)
+	}
+	// And stays empty without calling the announcer again.
+	if err := c.Sync(ctx, imps); err != nil || ann.all != 1 || ann.announces != 1 {
+		t.Fatalf("standby touched the announcer: all=%d announces=%d", ann.all, ann.announces)
 	}
 }

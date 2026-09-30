@@ -25,6 +25,7 @@ import (
 	"github.com/GrandArcher/Packeteer/internal/federation"
 	"github.com/GrandArcher/Packeteer/internal/inbound"
 	"github.com/GrandArcher/Packeteer/internal/troubleshoot"
+	"github.com/GrandArcher/Packeteer/pkg/plugin"
 )
 
 // Options configure the server. User and Password must both be set or both
@@ -49,6 +50,9 @@ type Options struct {
 	// Federation is the central view of every instance (#30). Nil means
 	// the instance runs standalone.
 	Federation func() federation.Status
+	// HA is the active/standby elector's view (#31). Nil means a single
+	// instance, always active.
+	HA func() plugin.ElectorStatus
 }
 
 // Server is an HTTP server. Handler serves the routes without listening,
@@ -64,6 +68,7 @@ type Server struct {
 	inbound    func() inbound.Status
 	mitigation MitigationControl
 	federation func() federation.Status
+	ha         func() plugin.ElectorStatus
 	log        *slog.Logger
 	handler    http.Handler
 	http       *http.Server
@@ -78,7 +83,7 @@ func New(opt Options) (*Server, error) {
 	if opt.Logger == nil {
 		opt.Logger = slog.Default()
 	}
-	s := &Server{addr: opt.Addr, user: opt.User, password: opt.Password, snap: opt.Snapshot, maint: opt.Maintenance, reports: opt.Reports, tools: opt.Tools, inbound: opt.Inbound, mitigation: opt.Mitigation, federation: opt.Federation, log: opt.Logger}
+	s := &Server{addr: opt.Addr, user: opt.User, password: opt.Password, snap: opt.Snapshot, maint: opt.Maintenance, reports: opt.Reports, tools: opt.Tools, inbound: opt.Inbound, mitigation: opt.Mitigation, federation: opt.Federation, ha: opt.HA, log: opt.Logger}
 	s.handler = s.routes()
 	return s, nil
 }
@@ -150,6 +155,7 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("GET /api/inbound", s.handleInbound)
 	mux.HandleFunc("GET /api/exchanges", s.handleExchanges)
 	mux.HandleFunc("GET /api/federation", s.handleFederation)
+	mux.HandleFunc("GET /api/ha", s.handleHA)
 	mux.HandleFunc("GET /api/reports", s.handleReportList)
 	mux.HandleFunc("GET /api/reports/{name}", s.handleReport)
 	mux.HandleFunc("GET /api/maintenance", s.handleMaintenance)
@@ -208,6 +214,9 @@ func (s *Server) handleMetrics(w http.ResponseWriter, _ *http.Request) {
 	_, _ = w.Write(Metrics(s.snapshot()))
 	if s.mitigation != nil {
 		_, _ = w.Write(MitigationMetrics(s.mitigation.Status()))
+	}
+	if s.ha != nil {
+		_, _ = w.Write(HAMetrics(s.ha()))
 	}
 }
 
@@ -279,6 +288,22 @@ func (s *Server) handleExchanges(w http.ResponseWriter, _ *http.Request) {
 		meta
 		Exchanges []exchange.Stats `json:"exchanges"`
 	}{meta: snap.meta(), Exchanges: nz(snap.Exchanges)})
+}
+
+// handleHA serves the active/standby view (#31). Without an elector the
+// instance is standalone and always active. It is read-only.
+func (s *Server) handleHA(w http.ResponseWriter, _ *http.Request) {
+	snap := s.snapshot()
+	st := plugin.ElectorStatus{Role: plugin.RoleActive, Eligible: true, Detail: "single instance (no ha configured)"}
+	enabled := s.ha != nil
+	if enabled {
+		st = s.ha()
+	}
+	writeJSON(w, http.StatusOK, struct {
+		meta
+		HAEnabled bool `json:"ha_enabled"`
+		plugin.ElectorStatus
+	}{meta: snap.meta(), HAEnabled: enabled, ElectorStatus: st})
 }
 
 // handleFederation serves the central view (#30): this instance's

@@ -94,6 +94,11 @@ type Config struct {
 	MaxRoutes    int
 	// Now is the clock for the more-specific leave check. Nil is time.Now.
 	Now func() time.Time
+	// Leader reports whether this instance is the active one of an HA
+	// pair (#31). Nil is a single instance, always active. While it is
+	// false, Sync withdraws everything and announces nothing; it is
+	// checked under the controller's lock on every Sync.
+	Leader func() bool
 }
 
 // Controller applies decision changes to an announcer.
@@ -249,6 +254,14 @@ func (c *Controller) Sync(ctx context.Context, imps []policy.Improvement) error 
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	defer c.store()
+	if c.cfg.Leader != nil && !c.cfg.Leader() {
+		// HA standby (#31): nothing on the wire.
+		if len(c.active) == 0 {
+			return nil
+		}
+		c.log.Warn("ha standby; withdrawing announced routes", "routes", len(c.active))
+		return c.withdrawAllLocked(ctx)
+	}
 	if !c.rib.Ready() {
 		c.log.Warn("rib not ready; withdrawing announced routes")
 		return c.withdrawAllLocked(ctx)

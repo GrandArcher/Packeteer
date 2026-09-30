@@ -25,10 +25,10 @@ Milestones:
 
 | Status | Count |
 |---|---|
-| done | 69 |
+| done | 71 |
 | partial | 1 |
 | in progress | 0 |
-| planned | 9 |
+| planned | 7 |
 | won't do | 3 |
 
 ## Performance optimization
@@ -175,8 +175,8 @@ Threat mitigation, second half (#28): FlowSpec, country policies, monitor, feed,
 | Email report subscriptions | 3.15 | planned | v0.4 | notifier + storage | #34 |
 | User accounts, RBAC, access restriction | 3.14.2, 3.14.3 | planned | v0.4 | core (HTTP auth) | #32 |
 | Audit log | - | planned | v0.4 | core + notifier | #32 |
-| Failover / HA (active-standby) | 1.2.16, 2.14 | planned | v0.4 | core | #31 |
-| Config backup / restore | 2.14 | planned | v0.4 | core | #31 |
+| Failover / HA (active-standby) | 1.2.16, 2.14 | done | v0.4 | elector (`lease`); lab-proven only ([ha.md](ha.md)) | #31 |
+| Config backup / restore | 2.14 | done | v0.4 | core (`-backup`, `-restore`) + storage (`sqlite`) | #31 |
 | Configuration editor and setup wizards | 3.13, 3.2 | planned | v0.4 | UI | #34 |
 | Improvement weights | 1.2.13 | planned | v0.4 | scorer | #34 |
 | Structured logging | - | done | v0.1 | core | #9 |

@@ -17,6 +17,18 @@ var bgpFSM = []string{"UNKNOWN", "IDLE", "CONNECT", "ACTIVE", "OPENSENT", "OPENC
 // when a snapshot contains one.
 var decisionActions = []string{"none", "improve", "keep", "switch", "retire", "capped"}
 
+// HAMetrics renders the active/standby role (#31).
+func HAMetrics(st plugin.ElectorStatus) []byte {
+	var b strings.Builder
+	writeGauge(&b, "packeteer_ha_active", "1 while this instance is the active one of its HA pair and may announce.",
+		sample{labels: []lbl{{"id", st.ID}}, value: boolFloat(st.Role == plugin.RoleActive)})
+	writeGauge(&b, "packeteer_ha_eligible", "1 while this instance may lead (its RIB view is ready).",
+		sample{labels: []lbl{{"id", st.ID}}, value: boolFloat(st.Eligible)})
+	writeGauge(&b, "packeteer_ha_takeovers", "Times this instance became active since it started.",
+		sample{labels: []lbl{{"id", st.ID}}, value: float64(st.Takeovers)})
+	return []byte(b.String())
+}
+
 // Metrics renders s in Prometheus text exposition format.
 func Metrics(s Snapshot) []byte {
 	var b strings.Builder

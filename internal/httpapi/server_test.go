@@ -558,3 +558,47 @@ func TestFederationStandalone(t *testing.T) {
 		t.Fatalf("standalone view = %s", rec.Body.String())
 	}
 }
+
+func TestHAView(t *testing.T) {
+	get := func(srv *Server, path string) *httptest.ResponseRecorder {
+		rec := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s: status %d", path, rec.Code)
+		}
+		return rec
+	}
+	snap := func() Snapshot { return Snapshot{Version: "t", Mode: "inject"} }
+	single, err := New(Options{Snapshot: snap})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(get(single, "/api/ha").Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got["ha_enabled"] != false || got["role"] != "active" {
+		t.Fatalf("single instance view = %v", got)
+	}
+	if strings.Contains(get(single, "/metrics").Body.String(), "packeteer_ha_") {
+		t.Fatal("ha metrics without ha")
+	}
+	st := plugin.ElectorStatus{Type: "lease", ID: "pk-b", Role: plugin.RoleStandby, Holder: "pk-a", Eligible: true, Takeovers: 2}
+	pair, err := New(Options{Snapshot: snap, HA: func() plugin.ElectorStatus { return st }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got = nil
+	if err := json.Unmarshal(get(pair, "/api/ha").Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got["ha_enabled"] != true || got["role"] != "standby" || got["holder"] != "pk-a" || got["id"] != "pk-b" || got["mode"] != "inject" {
+		t.Fatalf("standby view = %v", got)
+	}
+	m := get(pair, "/metrics").Body.String()
+	for _, want := range []string{`packeteer_ha_active{id="pk-b"} 0`, `packeteer_ha_eligible{id="pk-b"} 1`, `packeteer_ha_takeovers{id="pk-b"} 2`} {
+		if !strings.Contains(m, want) {
+			t.Errorf("metrics missing %s", want)
+		}
+	}
+}
