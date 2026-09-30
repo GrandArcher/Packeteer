@@ -25,10 +25,10 @@ Milestones:
 
 | Status | Count |
 |---|---|
-| done | 71 |
+| done | 73 |
 | partial | 1 |
 | in progress | 0 |
-| planned | 7 |
+| planned | 5 |
 | won't do | 3 |
 
 ## Performance optimization
@@ -173,8 +173,8 @@ Threat mitigation, second half (#28): FlowSpec, country policies, monitor, feed,
 | Alerts: SNMP traps | 3.17.2 | done | v0.2 | notifier (`snmptrap`) | #22 |
 | Event catalog and notification rules | 1.2.14, 3.16, 3.17.1 | done | v0.2 | notifier (per-notifier `events`, `min_severity`, `rate_limit`; [EVENTS.md](EVENTS.md)) | #22 |
 | Email report subscriptions | 3.15 | planned | v0.4 | notifier + storage | #34 |
-| User accounts, RBAC, access restriction | 3.14.2, 3.14.3 | planned | v0.4 | core (HTTP auth) | #32 |
-| Audit log | - | planned | v0.4 | core + notifier | #32 |
+| User accounts, RBAC, access restriction | 3.14.2, 3.14.3 | done | v0.4 | core (HTTP auth, `internal/auth`) + storage (`sqlite` users and token hashes) + sso (`oidc`) ([auth.md](auth.md)) | #32 |
+| Audit log | - | done | v0.4 | core + storage (`sqlite`) + notifier (`audit.recorded`) | #32 |
 | Failover / HA (active-standby) | 1.2.16, 2.14 | done | v0.4 | elector (`lease`); lab-proven only ([ha.md](ha.md)) | #31 |
 | Config backup / restore | 2.14 | done | v0.4 | core (`-backup`, `-restore`) + storage (`sqlite`) | #31 |
 | Configuration editor and setup wizards | 3.13, 3.2 | planned | v0.4 | UI | #34 |
@@ -182,6 +182,8 @@ Threat mitigation, second half (#28): FlowSpec, country policies, monitor, feed,
 | Structured logging | - | done | v0.1 | core | #9 |
 
 Reports (#23) come from the `sqlite` storage plugin, which is off unless `storage` is set (the example config sets it). It keeps daily probe rollups per prefix and provider, one row per improvement with the native and chosen provider's loss and RTT at the decision, and per-prefix origin ASN, country (from a `rules` policy with `geoip_db`), and volume. `/api/reports/<name>` serves `summary`, `improvements`, `causes`, `performance`, `providers`, `prefixes`, `asns`, `countries`, `probes`, and `savings` as JSON or CSV, and the dashboard shows them. Mount `/var/lib/packeteer` so history survives a restart. The recorder writes once a minute and never blocks a decision or a withdraw; it does not announce. Push exporters (Prometheus remote-write, OTLP) are not built: scrape `/metrics`.
+
+Users, RBAC, access restriction, and the audit log (#32, [auth.md](auth.md)) gate the ops HTTP server when `auth.enabled` is set. Roles are `viewer` (read, own API tokens), `operator` (maintenance windows, mitigation rules, troubleshooting tools), and `admin` (users, audit log); every route has a minimum role, checked by one middleware, and a test walks every route with every role. Users and API token hashes live in the storage plugin (`plugin.UserStore`, implemented by `sqlite`); the first admin comes from `PACKETEER_ADMIN_PASSWORD`. Optional single sign-on is the `sso` plugin kind with the built-in `oidc` (code flow + PKCE, verified ID token, groups mapped to roles). `http.allow_from` restricts client addresses; failed sign-ins are throttled; cross-site browser changes are refused. Every change, denied change, SSO sign-in and sign-out, and config reload is written to the log, the store (`plugin.AuditStore`, `/api/audit`), and the notifiers (`audit.recorded`). Auth only gates the API; allowlist, learned RIB, community, NO_EXPORT, the cap, and withdraw rules are unchanged. Rollback: `auth.enabled: false` (the basic-auth account, or a read-only server bound to localhost).
 
 Troubleshooting tools (#24) live on the ops HTTP server. The looking glass reads the learned RIB view (exact route, longest covering route, more-specifics) and is always on. With `troubleshoot.enabled`, an on-demand probe runs the prober chain from every provider source, a UDP traceroute runs from each provider source, and whois goes through the `rdap` whois plugin. Requests are `POST` with JSON, rate limited, and behind basic auth when it is on. On-demand results are returned to the caller only and never reach the probe engine or the decision loop; nothing announces. Tests use a fake RIB, fake probers, a fake hop network, and an `httptest` RDAP server. Removing the `troubleshoot` block and restarting is the rollback.
 

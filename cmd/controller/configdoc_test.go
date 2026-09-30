@@ -30,6 +30,7 @@ import (
 	"github.com/GrandArcher/Packeteer/internal/plugins/source/static"
 	"github.com/GrandArcher/Packeteer/internal/plugins/source/traceroute"
 	"github.com/GrandArcher/Packeteer/internal/plugins/source/vip"
+	"github.com/GrandArcher/Packeteer/internal/plugins/sso/oidc"
 	"github.com/GrandArcher/Packeteer/internal/plugins/storage/sqlite"
 	telemetryfixed "github.com/GrandArcher/Packeteer/internal/plugins/telemetry/fixed"
 	"github.com/GrandArcher/Packeteer/internal/plugins/telemetry/snmp"
@@ -89,13 +90,14 @@ func TestConfigDocCoversStructs(t *testing.T) {
 		mtls.Config{},
 		mtls.Peer{},
 		lease.Config{},
+		oidc.Config{},
 	) {
 		if !strings.Contains(text, "`"+key+"`") {
 			missing = append(missing, key)
 		}
 	}
 	for _, env := range []string{
-		ConfigEnv, PluginDirEnv, LogLevelEnv, LogFormatEnv, HTTPListenEnv, HTTPUserEnv, HTTPPassEnv, lease.IDEnv,
+		ConfigEnv, PluginDirEnv, LogLevelEnv, LogFormatEnv, HTTPListenEnv, HTTPUserEnv, HTTPPassEnv, lease.IDEnv, AdminUserEnv, AdminPassEnv,
 	} {
 		if !strings.Contains(text, "`"+env+"`") {
 			missing = append(missing, env)

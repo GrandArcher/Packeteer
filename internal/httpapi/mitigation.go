@@ -46,7 +46,7 @@ func (s *Server) handleMitigations(w http.ResponseWriter, _ *http.Request) {
 	}{meta: snap.meta(), Status: (*mitigation.Controller)(nil).Status()}
 	if s.mitigation != nil {
 		body.Enabled = true
-		body.Writable = s.user != ""
+		body.Writable = s.writesEnabled()
 		body.Status = s.mitigation.Status()
 	}
 	writeJSON(w, http.StatusOK, body)
@@ -57,8 +57,8 @@ func (s *Server) handleMitigations(w http.ResponseWriter, _ *http.Request) {
 // send application/json without a CORS preflight, which this server never
 // grants.
 func (s *Server) mitigationWritable(w http.ResponseWriter, r *http.Request, needJSON bool) bool {
-	if s.user == "" {
-		writeJSON(w, http.StatusForbidden, map[string]string{"error": "mitigation rules require PACKETEER_HTTP_USER and PACKETEER_HTTP_PASSWORD"})
+	if !s.writesEnabled() {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "mitigation rules require auth (auth.enabled) or PACKETEER_HTTP_USER and PACKETEER_HTTP_PASSWORD"})
 		return false
 	}
 	if s.mitigation == nil {
@@ -103,6 +103,7 @@ func (s *Server) handleMitigationAdd(w http.ResponseWriter, r *http.Request) {
 	if req.Match != nil {
 		mreq.Match = *req.Match
 	}
+	noteAudit(r, p.String(), "action="+req.Action+" target="+req.Target+" ttl="+req.TTL)
 	rule, err := s.mitigation.Add(mreq)
 	switch {
 	case errors.Is(err, mitigation.ErrFull), errors.Is(err, mitigation.ErrConflict):
@@ -114,6 +115,7 @@ func (s *Server) handleMitigationAdd(w http.ResponseWriter, r *http.Request) {
 	}
 	s.log.Info("mitigation rule added through the API", "id", rule.ID, "prefix", rule.Prefix, "action", rule.Action, "target", rule.Target,
 		"match", rule.MatchText(), "remote", r.RemoteAddr)
+	noteAudit(r, rule.ID, "prefix="+rule.Prefix.String()+" action="+rule.Action+" target="+rule.Target+" ttl="+req.TTL)
 	writeJSON(w, http.StatusCreated, rule)
 }
 

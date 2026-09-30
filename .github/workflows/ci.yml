@@ -167,6 +167,82 @@ jobs:
           echo "probes before restart: $n1, after restart: $n2"
           # The first run may probe once more between the read and the stop.
           test "$n2" -ge "$n1"
+      - name: auth in the stock image (users, roles, tokens, audit, rollback; observe)
+        run: |
+          cat > /tmp/auth.yaml <<'YAML'
+          mode: observe
+          asn: 64512
+          router_id: 192.0.2.10
+          http:
+            listen: "127.0.0.1:18084"
+            allow_from: [127.0.0.0/8]
+          providers:
+            - name: lab-a
+              source_ip: 127.0.0.1
+              next_hop: 127.0.0.1
+          probe: {interval: 2s, timeout: 200ms, packets: 2}
+          probers:
+            - type: fixed
+              config:
+                paths: [{provider: lab-a, rtt_ms: 10}]
+          storage:
+            type: sqlite
+          auth:
+            enabled: true
+          YAML
+          sed '/^auth:/,$d' /tmp/auth.yaml > /tmp/noauth.yaml
+          base=http://127.0.0.1:18084
+          json='Content-Type: application/json'
+          code() { curl -s -o /dev/null -w '%{http_code}' "$@"; }
+          up() {
+            for _ in $(seq 1 20); do curl -fsS "$base/healthz" >/dev/null 2>&1 && return 0; sleep 1; done
+            docker logs pkauth >&2; return 1
+          }
+          start() {
+            docker run -d --name pkauth --network host --cap-add NET_RAW --cap-add NET_ADMIN "$@" \
+              -v pkauth:/var/lib/packeteer packeteer:ci
+            up
+          }
+          stop() {
+            docker stop -t 15 pkauth
+            docker logs pkauth 2>&1 | tail -n 30
+            test "$(docker inspect -f '{{.State.ExitCode}}' pkauth)" = "0"
+            docker rm pkauth
+          }
+          docker volume create pkauth
+          start -e PACKETEER_ADMIN_PASSWORD=ci-admin-password-1 -v /tmp/auth.yaml:/etc/packeteer/config.yaml:ro
+          test "$(code $base/healthz)" = 200
+          test "$(code $base/api/providers)" = 401
+          test "$(code -u admin:wrong-password-x $base/api/providers)" = 401
+          test "$(code -u admin:ci-admin-password-1 $base/api/providers)" = 200
+          test "$(code -u admin:ci-admin-password-1 -H "$json" -d '{"name":"viewer1","role":"viewer","password":"ci-viewer-password"}' $base/api/users)" = 201
+          test "$(code -u viewer1:ci-viewer-password $base/api/providers)" = 200
+          test "$(code -u viewer1:ci-viewer-password -H "$json" -d '{"name":"x","role":"admin","password":"ci-viewer-password"}' $base/api/users)" = 403
+          test "$(code -u viewer1:ci-viewer-password $base/api/audit)" = 403
+          tok="$(curl -fsS -u viewer1:ci-viewer-password -H "$json" -d '{"name":"ci"}' $base/api/tokens | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')"
+          test -n "$tok"
+          test "$(code -H "Authorization: Bearer $tok" $base/metrics)" = 200
+          curl -fsS -u admin:ci-admin-password-1 "$base/api/audit" | tee /tmp/audit.json
+          grep -q '"action":"auth.bootstrap"' /tmp/audit.json
+          grep -q '"actor":"admin","role":"admin","method":"password","remote":"127.0.0.1","action":"POST /api/users","target":"viewer1","result":"ok"' /tmp/audit.json
+          grep -q '"actor":"viewer1","role":"viewer","method":"password","remote":"127.0.0.1","action":"POST /api/users","result":"denied"' /tmp/audit.json
+          grep -q '"action":"POST /api/tokens"' /tmp/audit.json
+          if grep -q "$tok" /tmp/audit.json; then echo "token secret in the audit log"; exit 1; fi
+          stop
+          # Restart on the same volume: users and tokens persist, and the
+          # bootstrap variable never resets an existing admin.
+          start -e PACKETEER_ADMIN_PASSWORD=a-different-password -v /tmp/auth.yaml:/etc/packeteer/config.yaml:ro
+          test "$(code -u admin:ci-admin-password-1 $base/api/providers)" = 200
+          test "$(code -u admin:a-different-password $base/api/providers)" = 401
+          test "$(code -H "Authorization: Bearer $tok" $base/api/providers)" = 200
+          stop
+          # Rollback: no auth block. Reads work, every change is refused.
+          start -v /tmp/noauth.yaml:/etc/packeteer/config.yaml:ro
+          test "$(code $base/api/providers)" = 200
+          test "$(code -H "$json" -d '{"name":"x","role":"admin","password":"ci-viewer-password"}' $base/api/users)" = 404
+          test "$(code -H "$json" -d '{"prefix":"198.51.100.0/24","action":"blackhole"}' $base/api/mitigations)" = 403
+          stop
+          docker volume rm pkauth
       - name: span source smoke test (mounted pcap fixture, observe)
         run: |
           cat > /tmp/span.yaml <<'YAML'

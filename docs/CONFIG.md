@@ -125,8 +125,39 @@ The retry sample replaces the first one. Both waits go through `rate_limit_pps`.
 | Key | Default | Meaning |
 |---|---|---|
 | `listen` | `127.0.0.1:8080` | `host:port`. Wrap IPv6 in brackets: `"[2001:db8::1]:8080"`. `""` disables the server. |
+| `allow_from` | any | Client prefixes allowed to connect (#32), e.g. `[127.0.0.0/8, 192.0.2.0/24, "2001:db8::/32"]`. Others get `403` on every path, health checks included. Works with and without `auth`. Behind a reverse proxy, the proxy's address is matched (`X-Forwarded-For` is ignored). |
 
-The server accepts GET and HEAD. It does not announce routes. With `--network host`, this address is on the host. Basic auth is not a key in the file; see the environment variables.
+The server does not announce routes. With `--network host`, this address is on the host. Basic auth is not a key in the file; see the environment variables. Users, roles, API tokens, and SSO are the `auth` block.
+
+### `auth`
+
+Users, roles, API tokens, the audit log, and optional OIDC single sign-on for the ops HTTP server (#32). Off by default. Guide: [auth.md](auth.md).
+
+```yaml
+storage:
+  type: sqlite            # users, token hashes, and the audit log live here
+auth:
+  enabled: true
+  session_ttl: 12h        # SSO sign-ins
+  token_ttl: 2160h        # API tokens when the request names no ttl
+  sso:                    # optional
+    type: oidc
+    config:
+      issuer: https://idp.example.net/realms/noc
+      client_id: packeteer
+      client_secret_env: PACKETEER_OIDC_CLIENT_SECRET
+      redirect_url: https://packeteer.example.net/auth/callback
+      role_map: {noc-admins: admin, noc: operator, staff: viewer}
+```
+
+| Key | Default | Meaning |
+|---|---|---|
+| `enabled` | `false` | Turns auth on. Requires `storage` (a plugin that keeps users, e.g. `sqlite`) and refuses to start with `PACKETEER_HTTP_USER` set. `false`, or no `auth` block, keeps the single basic-auth account: the rollback. |
+| `session_ttl` | `12h` | Lifetime of an SSO session, `5m`–`168h`. Sessions are in memory; a restart signs everyone out. |
+| `token_ttl` | `2160h` | API token lifetime when the request names none, `1h`–`8760h`. A request may ask for up to `8760h`. |
+| `sso` | none | Single sign-on plugin entry (`type: oidc`). Needs `enabled: true`. |
+
+Roles: `viewer` reads everything a dashboard or API client reads (and manages its own API tokens), `operator` also opens and closes maintenance windows, adds and removes mitigation rules, and runs the troubleshooting tools, `admin` also manages users and reads the audit log. `/healthz`, `/readyz`, and the SSO sign-in endpoints are public. The first admin comes from `PACKETEER_ADMIN_USER` and `PACKETEER_ADMIN_PASSWORD`. Auth never changes what is announced: allowlist, learned-RIB check, community, NO_EXPORT, `max_improvements`, hold time, and withdraw-on-failure are the same for every role.
 
 ### `bgp`
 
@@ -363,7 +394,7 @@ Only the active instance runs decisions and announces. A standby probes and keep
 
 ### Backup and restore
 
-`packeteer -backup FILE` writes a gzip'd tar with the loaded config file and, with a `storage` plugin, a consistent copy of its history (`sqlite`: `VACUUM INTO`, safe while the controller runs). It never overwrites `FILE`, opens no BGP session, and sends no probe. Secrets are environment variables, so none are in the archive.
+`packeteer -backup FILE` writes a gzip'd tar with the loaded config file and, with a `storage` plugin, a consistent copy of its history (`sqlite`: `VACUUM INTO`, safe while the controller runs). It never overwrites `FILE`, opens no BGP session, and sends no probe. Secrets are environment variables, so none are in the archive. With `auth`, the history includes users with their password hashes (PBKDF2), API token hashes (SHA-256), and the audit log: keep the archive private.
 
 `packeteer -restore FILE` validates the archived config, then restores the history into that config's storage path. `-restore-config PATH` also writes the archived config to `PATH`. Existing history or config files are replaced only with `-force`. Stop the controller that uses the storage first.
 
@@ -398,6 +429,8 @@ Set these in the container. They are not keys in the YAML file. `PACKETEER_HTTP_
 | `PACKETEER_HTTP_LISTEN` | When non-empty, replaces `http.listen`. The value `off` disables HTTP. An empty value does not change the file. |
 | `PACKETEER_HTTP_USER` | Basic auth user. Set together with the password, or set neither. |
 | `PACKETEER_HTTP_PASSWORD` | Basic auth password. |
+| `PACKETEER_ADMIN_USER` | With `auth`: the first admin's name (default `admin`). |
+| `PACKETEER_ADMIN_PASSWORD` | With `auth`: creates that admin at start when no user has the name (12–256 characters). An existing user is not changed, so a password set through the API survives a restart. Not written to the log. |
 
 `${VAR}` expansion applies inside a webhook `url`, webhook `headers` values, and an `exec` plugin's `env` values. It is not applied to the rest of the file.
 
@@ -998,6 +1031,24 @@ The built-in instance-to-instance transport (#30). Each instance serves its snap
 | `max_bytes` | 16 MiB | Cap on a fetched snapshot, 1024–1073741824. |
 
 Times in a snapshot are converted to local time by their age at the peer, so clock skew between POPs cannot make stale data look fresh. On shutdown an instance publishes its providers down before it withdraws, so peers retire steers onto them at their next poll.
+
+### SSO `oidc`
+
+Used under `auth.sso` (#32). OpenID Connect authorization code flow with PKCE. The ID token's signature, issuer, audience, expiry, and nonce are checked. The discovery document is read at start; if the provider is down the controller still starts and retries at the next sign-in. It only says who a user is and which role the provider grants; it never announces.
+
+| Key | Default | Meaning |
+|---|---|---|
+| `issuer` | required | Issuer URL. `https`, or `http` on a loopback host (a lab). |
+| `client_id` | required | This application's client id at the provider. |
+| `client_secret_env` | required | Environment variable with the client secret. The secret is never a key in the file. |
+| `redirect_url` | required | `https://<packeteer>/auth/callback`, registered at the provider. `https`, or `http` on loopback. The session cookie is `Secure`, so browsers keep it only over https or on localhost. |
+| `scopes` | `[email, profile]` | Scopes besides `openid`. Add `groups` if your provider needs it for the roles claim. |
+| `username_claim` | `email` | Claim used as the account name (`email`, `preferred_username`, `sub`, ...). With `email`, `email_verified: false` is refused. |
+| `roles_claim` | `groups` | Claim listing the user's groups (a string or a list). |
+| `role_map` | none | Group → `viewer`, `operator`, or `admin`. The highest mapped role wins. |
+| `default_role` | none | Role when no group maps. Empty refuses the sign-in. `role_map` or `default_role` is required. |
+
+The role is set at every sign-in. An SSO user is stored with no password; an admin can disable it (`PATCH /api/users/<name>` `{"disabled":true}`), which ends its session and refuses later sign-ins. A local user's name cannot be taken over by SSO.
 
 ### Elector `lease`
 

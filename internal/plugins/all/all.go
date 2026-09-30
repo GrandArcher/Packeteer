@@ -26,6 +26,7 @@ import (
 	_ "github.com/GrandArcher/Packeteer/internal/plugins/source/static"      // static target source
 	_ "github.com/GrandArcher/Packeteer/internal/plugins/source/traceroute"  // traceroute target discovery
 	_ "github.com/GrandArcher/Packeteer/internal/plugins/source/vip"         // VIP prefix/ASN target source
+	_ "github.com/GrandArcher/Packeteer/internal/plugins/sso/oidc"           // OIDC single sign-on
 	_ "github.com/GrandArcher/Packeteer/internal/plugins/storage/sqlite"     // sqlite history storage
 	_ "github.com/GrandArcher/Packeteer/internal/plugins/telemetry/fixed"    // fixed (lab) telemetry
 	_ "github.com/GrandArcher/Packeteer/internal/plugins/telemetry/snmp"     // SNMP interface telemetry

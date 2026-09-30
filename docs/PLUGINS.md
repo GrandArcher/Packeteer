@@ -56,8 +56,9 @@ Each entry has `type` (required), an optional `name` (defaults to the type and m
 | `notifier` | `Notify(ctx, Event) error`, optional `EventGate()` (filters and rate limit) | `webhook` (generic, `slack`, `teams`, `pagerduty`, templates), `smtp`, `snmptrap` | `exec` |
 | `telemetry` | `Snapshot(ctx) ([]Usage, error)` | `snmp` | none |
 | `policy` | `Match(PolicySubject) (PolicyVerdict, bool)`, optional `Maintenance.Active(now)`. The filter chain in front of the scorer | `rules`, `maintenance` | none |
-| `storage` | `Write(ctx, HistoryBatch)`, `Read(ctx, HistoryQuery)`, optional `Backup`/`Restore` (`plugin.StorageBackup`, used by `-backup`/`-restore`). Report history; one instance under `storage:` | `sqlite` | none |
+| `storage` | `Write(ctx, HistoryBatch)`, `Read(ctx, HistoryQuery)`, optional `Backup`/`Restore` (`plugin.StorageBackup`, used by `-backup`/`-restore`). Report history; one instance under `storage:`. Optional `plugin.UserStore` and `plugin.AuditStore` keep HTTP users, API token hashes, and the audit log (#32); `auth` requires them | `sqlite` | none |
 | `rib_source` | `SetRIBSink(func(RIBEvent))`. Feeds the RIB view (peer up/down, router down, paths) from outside the iBGP session. Learn-only; list under `rib_sources:` | `bmp` (BMP monitoring station) | **never** |
+| `sso` | `AuthURL(ctx, state, nonce, verifier) (string, error)`, `Exchange(ctx, code, nonce, verifier) (SSOIdentity, error)`. Single sign-on for the ops API (#32); one instance under `auth.sso:`. Says who a user is and which role the provider grants; it never announces | `oidc` (OpenID Connect, code flow + PKCE) | none |
 | `whois` | `Lookup(ctx, query) (WhoisResult, error)`. Troubleshooting registry lookups; one instance under `troubleshoot.whois:` | `rdap` | none |
 | `elector` | `SetCandidate(func() Candidacy)`, `OnChange(func())`, `Active() bool`, `Resign(ctx)`, `Status()`. Active/standby leader election (#31); one instance under `ha:`. The core gates every announcer on `Active` and withdraws when it turns false | `lease` (lease file on a shared volume) | **never** |
 | `federation` | `Publish(InstanceSnapshot)`, `Peers(now) []PeerState`. Instance-to-instance transport for multi-POP (#30); one instance under `federation:`. Transport only: the core merges fresh peer data into decisions | `mtls` (mutual TLS) | **never** |
@@ -75,7 +76,7 @@ Announcers, inbound ones included, run **in-process only**, so an external proce
 ## Lifecycle
 
 1. **Factory (Init).** `func(cfg plugin.Config, env plugin.Env) (T, error)`. It decodes and validates config with `cfg.Decode(&myStruct)`. It must do no network I/O. `env` provides the instance name, a scoped `slog` logger, the plugin dir, and `Getenv`.
-2. **`Start(ctx)`.** Begins background work in goroutines and must not block. Plugins start in this order: storage, RIB sources, sources, probers, scorer, policies, telemetry, notifiers, federation, whois, elector, announcer, inbound announcer, mitigation announcer. If one fails, the ones already started are stopped.
+2. **`Start(ctx)`.** Begins background work in goroutines and must not block. Plugins start in this order: storage, SSO, RIB sources, sources, probers, scorer, policies, telemetry, notifiers, federation, whois, elector, announcer, inbound announcer, mitigation announcer. If one fails, the ones already started are stopped.
 3. **`Stop(ctx)`.** Releases everything before `ctx` expires. Plugins stop in reverse order, so the announcer stops first and routes are withdrawn early.
 
 Embed `plugin.Base` for no-op `Start`/`Stop`.

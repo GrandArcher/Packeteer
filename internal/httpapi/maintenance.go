@@ -5,6 +5,7 @@ import (
 	"io"
 	"mime"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
@@ -37,7 +38,7 @@ func (s *Server) handleMaintenance(w http.ResponseWriter, _ *http.Request) {
 	}{meta: snap.meta(), Windows: []plugin.MaintenanceWindow{}}
 	if s.maint != nil {
 		body.Configured = true
-		body.OnDemand = s.maint.CanOpen() && s.user != ""
+		body.OnDemand = s.maint.CanOpen() && s.writesEnabled()
 		body.Windows = nz(s.maint.Active(time.Now()))
 	}
 	writeJSON(w, http.StatusOK, body)
@@ -48,8 +49,8 @@ func (s *Server) handleMaintenance(w http.ResponseWriter, _ *http.Request) {
 // form cannot send application/json without a CORS preflight, which this
 // server never grants.
 func (s *Server) writable(w http.ResponseWriter, r *http.Request, needJSON bool) bool {
-	if s.user == "" {
-		writeJSON(w, http.StatusForbidden, map[string]string{"error": "on-demand maintenance requires PACKETEER_HTTP_USER and PACKETEER_HTTP_PASSWORD"})
+	if !s.writesEnabled() {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "on-demand maintenance requires auth (auth.enabled) or PACKETEER_HTTP_USER and PACKETEER_HTTP_PASSWORD"})
 		return false
 	}
 	if s.maint == nil || !s.maint.CanOpen() {
@@ -82,11 +83,14 @@ func (s *Server) handleMaintenanceOpen(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "duration: " + err.Error()})
 		return
 	}
+	detail := "providers=" + strings.Join(req.Providers, ",") + " duration=" + req.Duration
+	noteAudit(r, "", detail)
 	win, err := s.maint.Open(req.Providers, d, req.Reason, time.Now())
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
+	noteAudit(r, win.ID, detail)
 	writeJSON(w, http.StatusCreated, win)
 }
 

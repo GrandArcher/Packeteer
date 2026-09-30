@@ -262,13 +262,33 @@ log:
   level: info
   format: text
 
-# Read-only dashboard, JSON API, and Prometheus metrics. GET and HEAD only.
+# Dashboard, JSON API, and Prometheus metrics. Read-only except the API
+# writes (maintenance, mitigation, tools; users and tokens with auth).
 # Empty listen disables the server. PACKETEER_HTTP_LISTEN overrides this
 # ("off" disables). With --network host, 127.0.0.1:8080 is the host loopback.
 # The image exposes port 8080. Optional basic auth (set both, or neither):
 # PACKETEER_HTTP_USER and PACKETEER_HTTP_PASSWORD.
 http:
   listen: "127.0.0.1:8080"
+  # allow_from: [127.0.0.0/8, 192.0.2.0/24]   # client prefixes allowed (default any)
+
+# Users, roles (viewer, operator, admin), API tokens, an audit log of every
+# change (also sent to notifiers as audit.recorded), and optional OIDC SSO.
+# Needs storage. The first admin comes from PACKETEER_ADMIN_PASSWORD
+# (PACKETEER_ADMIN_USER, default admin). Replaces PACKETEER_HTTP_USER.
+# Rollback: enabled: false. Docs: docs/auth.md. Never announces.
+# auth:
+#   enabled: true
+#   session_ttl: 12h
+#   token_ttl: 2160h
+#   sso:
+#     type: oidc
+#     config:
+#       issuer: https://idp.example.net/realms/noc
+#       client_id: packeteer
+#       client_secret_env: PACKETEER_OIDC_CLIENT_SECRET
+#       redirect_url: https://packeteer.example.net/auth/callback
+#       role_map: {noc-admins: admin, noc: operator, staff: viewer}
 
 # Report history (improvements, before/after loss and latency, provider
 # efficiency, top prefixes/ASNs/countries, probes per day, cost savings) on

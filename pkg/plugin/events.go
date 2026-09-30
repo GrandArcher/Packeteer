@@ -56,6 +56,9 @@ const (
 	EventMitigationEnded    = "mitigation.ended"
 	EventHAStandby          = "ha.standby"
 	EventHAActive           = "ha.active"
+	// EventAudit is one audit log record (#32): a change or sign-in on
+	// the ops API, or a config reload.
+	EventAudit = "audit.recorded"
 	// EventTest is sent by hand to check a notifier's delivery path.
 	EventTest = "notifier.test"
 )
@@ -111,6 +114,8 @@ var eventCatalog = []EventSpec{
 		Summary: "This instance stopped being the active one of its HA pair and withdrew its routes (lease lost or not renewed, RIB not ready, or shutdown)."},
 	{Kind: EventHAActive, Severity: SeverityWarning, Group: "ha", TrapID: 25, Resolves: true,
 		Summary: "This instance became the active one of its HA pair and may announce."},
+	{Kind: EventAudit, Severity: SeverityInfo, Group: "audit", TrapID: 26,
+		Summary: "An audit log record: a change, denied change, or sign-in on the ops API, or a config reload."},
 }
 
 // EventCatalog returns a copy of every event kind the controller emits.
