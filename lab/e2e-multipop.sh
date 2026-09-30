@@ -16,9 +16,11 @@
 #     edge-a with next hop 192.0.2.253, local-pref 250, 64512:666, no-export;
 #  3. peer loss: SIGTERM packeteer-b and the steer through POP B is
 #     withdrawn; start it and the steer returns;
-#  4. global commit: paths equal, x-a at 60 of its own 100 but x-b at 60
-#     in POP B puts carrier X at 120 of 100. Commit control in POP A moves
-#     the prefix to y-a (next hop 192.0.2.2), cause commit;
+#  4. global commit: x-a and y-a within the threshold and x-b (60ms + 10ms)
+#     clearly worse, so the steer through POP B flips back to native; x-a
+#     at 60 of its own 100 but x-b at 60 in POP B puts carrier X at 120 of
+#     100. Commit control in POP A moves the prefix to y-a (next hop
+#     192.0.2.2), cause commit;
 #  5. POP B's usage drops to 5: the shared commit has room and the commit
 #     steer is withdrawn;
 #  6. SIGTERM packeteer-a withdraws; SIGKILL drops the route with the session.
@@ -210,7 +212,7 @@ tagged "$pfx" 192.0.2.253
 
 echo "4. global commit: carrier X over its shared commit across POPs"
 flip a state.yaml a-equal.yaml
-flip b state.yaml b-equal.yaml
+flip b state.yaml b-slow.yaml
 flip b usage.yaml b-usage-high.yaml
 need_api packeteer-a /api/federation '.global_commit[0] | .name == "carrier-x" and .complete and .over and .total_mbps == 120' "global commit not over at 120"
 want "$pfx 192.0.2.2"
