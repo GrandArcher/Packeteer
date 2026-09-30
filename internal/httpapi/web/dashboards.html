@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<meta name="robots" content="noindex">
+<title>Packeteer dashboards</title>
+<link rel="stylesheet" href="/app.css">
+</head>
+<body>
+<header class="top">
+  <div>
+    <h1>Custom dashboards</h1>
+    <p class="tag">Your own layouts of read-only widgets, kept per user in storage. Refreshes every 15 seconds.</p>
+  </div>
+  <nav class="nav"><a href="/">Dashboard</a> <a href="/settings.html">Settings</a></nav>
+</header>
+<main>
+  <section>
+    <div class="controls">
+      <label>Dashboard <select id="db-name"></select></label>
+      <button type="button" id="db-delete">Delete</button>
+    </div>
+    <div id="db-status" class="tag"></div>
+  </section>
+  <section>
+    <h2>Edit</h2>
+    <div class="controls">
+      <label>Name <input id="db-new-name" type="text" size="20" placeholder="transit"></label>
+      <label>Title <input id="db-title" type="text" size="24"></label>
+      <label>Widget <select id="db-widget"></select></label>
+      <label>Report <select id="db-report"></select></label>
+      <label>Days <input id="db-days" type="number" min="1" max="3660" value="7" size="4"></label>
+      <label><input id="db-wide" type="checkbox"> Wide</label>
+      <button type="button" id="db-add">Add widget</button>
+      <button type="button" id="db-save">Save</button>
+    </div>
+    <ol id="db-widgets" class="widgets-list"></ol>
+  </section>
+  <section>
+    <h2 id="db-heading">Widgets</h2>
+    <div id="db-grid" class="grid"></div>
+  </section>
+</main>
+<script src="/ui.js"></script>
+<script src="/dashboards.js"></script>
+</body>
+</html>

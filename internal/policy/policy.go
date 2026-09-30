@@ -7,6 +7,7 @@ package policy
 
 import (
 	"fmt"
+	"math"
 	"net/netip"
 	"sort"
 	"strings"
@@ -178,7 +179,10 @@ type Decision struct {
 	Cause       string       `json:"cause,omitempty"`
 	Reason      string       `json:"reason"`
 	// Policy describes the routing policy that matched, if any.
-	Policy     string      `json:"policy,omitempty"`
+	Policy string `json:"policy,omitempty"`
+	// Weight is the move's improvement weight when the scorer's
+	// improvement_weights are on (#34). It orders new moves for the cap.
+	Weight     float64     `json:"weight,omitempty"`
 	Candidates []Candidate `json:"candidates"`
 }
 
@@ -198,6 +202,9 @@ type pending struct {
 	gain   float64
 	commit bool
 	rank   int
+	// weight is set when the scorer's improvement weights are on (#34).
+	weight  float64
+	weighed bool
 }
 
 // Admission ranks for pending moves. Lower is admitted first.
@@ -570,14 +577,20 @@ func Decide(prev State, in Input, cfg Config, scorer plugin.Scorer, now time.Tim
 
 	integrateCommit(st, &out, decIdx, holds, commitOK, byPrefix, &wants, cfg, scorer, in, now, retire)
 
+	weighWants(wants, scorer, in.VolumeMbps)
+
 	// Static pins take the cap first, then VIP and other performance
 	// moves. A commit steer already in the
 	// table gives up its slot to a new performance move. Commit moves then
-	// take what is left, largest relief first. Equal relief breaks by
+	// take what is left, largest relief first. Inside a lane, improvement
+	// weights (#34), when on, go first. Equal relief breaks by
 	// prefix so the same inputs always pick the same prefix.
 	sort.Slice(wants, func(a, b int) bool {
 		if wants[a].rank != wants[b].rank {
 			return wants[a].rank < wants[b].rank
+		}
+		if wants[a].weighed && wants[b].weighed && wants[a].weight != wants[b].weight {
+			return wants[a].weight > wants[b].weight
 		}
 		if wants[a].gain != wants[b].gain {
 			return wants[a].gain > wants[b].gain
@@ -602,6 +615,34 @@ func Decide(prev State, in Input, cfg Config, scorer plugin.Scorer, now time.Tim
 	annotateCost(st, &out, cfg, in.VolumeMbps)
 	out.Decisions = decisions
 	return st, out
+}
+
+// weighWants sets the improvement weight (#34) of every new static, VIP,
+// and performance move when the scorer's weights are on. Commit and cost
+// moves keep their relief and savings order. Weights only order moves
+// that already passed every check; the cap loop admits them.
+func weighWants(wants []pending, scorer plugin.Scorer, volume map[netip.Prefix]float64) {
+	wg, ok := scorer.(plugin.ImprovementWeigher)
+	if !ok {
+		return
+	}
+	if on, _ := wg.ImprovementWeights(); !on {
+		return
+	}
+	for i := range wants {
+		w := &wants[i]
+		if w.rank >= rankPlanned {
+			continue
+		}
+		w.weight = wg.ImprovementWeight(plugin.WeightInput{
+			Prefix: w.imp.Prefix, Provider: w.imp.Provider, Gain: w.gain, VolumeMbps: volume[w.imp.Prefix],
+		})
+		if math.IsNaN(w.weight) {
+			w.weight = 0
+		}
+		w.weighed = true
+		w.d.Weight = w.weight
+	}
 }
 
 // planned reports whether an improvement belongs to the planner lane.

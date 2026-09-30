@@ -142,6 +142,8 @@ type Config struct {
 	// Auth is users, roles, API tokens, and single sign-on for the ops
 	// HTTP server (#32). Nil or disabled keeps the basic-auth account.
 	Auth *Auth `yaml:"auth"`
+	// ReportSubscriptions email stored reports on a schedule (#34).
+	ReportSubscriptions []ReportSubscription `yaml:"report_subscriptions"`
 }
 
 // GlobalCommit is one commit shared by several providers, usually links
@@ -313,6 +315,11 @@ type HTTP struct {
 	// allows any. It applies with and without auth, health checks
 	// included.
 	AllowFrom []string `yaml:"allow_from"`
+	// ConfigEditor lets an admin read, validate, and write this config
+	// file through the API and the UI (#34). Default false. Writes need
+	// auth or the basic-auth account, and take effect on restart (or
+	// SIGHUP for bgp.neighbors).
+	ConfigEditor bool `yaml:"config_editor"`
 }
 
 // HTTPListen is the address to bind, or "" when the server is disabled.
@@ -544,6 +551,7 @@ func Parse(data []byte) (*Config, error) {
 }
 
 func (c *Config) applyDefaults() {
+	c.defaultSubscriptions()
 	if c.MaxImprovements == nil {
 		n := DefaultMaxImprovements
 		c.MaxImprovements = &n
@@ -972,6 +980,7 @@ func (c *Config) Validate() error {
 	c.validateInbound(add)
 	c.validateMitigation(add)
 	c.validateAnomaly(add)
+	c.validateSubscriptions(add)
 
 	return errors.Join(errs...)
 }

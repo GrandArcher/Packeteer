@@ -293,6 +293,68 @@ jobs:
           grep -q 'span problem prefix.*prefix=203.0.113.0/24' /tmp/pkspan.log
           grep -q 'msg=probe .*prefix=198.51.100.0/24.*prober=fixed' /tmp/pkspan.log
           grep -q "shutting down" /tmp/pkspan.log
+      - name: config editor and wizard smoke test (#34; mounted single-file config, basic auth, observe)
+        run: |
+          mkdir -p /tmp/edit
+          cat > /tmp/edit/config.yaml <<'YAML'
+          mode: observe
+          asn: 64512
+          router_id: 192.0.2.10
+          http:
+            listen: "127.0.0.1:18084"
+            config_editor: true
+          providers:
+            - name: lab-a
+              source_ip: 127.0.0.1
+              next_hop: 127.0.0.1
+          probe: {interval: 2s, timeout: 500ms, packets: 3}
+          probers:
+            - type: fixed
+              config:
+                paths: [{provider: lab-a, rtt_ms: 10}]
+          sources:
+            - type: static
+              config:
+                targets: [{prefix: 198.51.100.0/24, host: 198.51.100.1}]
+          YAML
+          cp /tmp/edit/config.yaml /tmp/edit/original.yaml
+          docker run -d --name pkedit --network host --cap-add NET_RAW --cap-add NET_ADMIN \
+            -e PACKETEER_HTTP_USER=ops -e PACKETEER_HTTP_PASSWORD=lab-only-secret \
+            -v /tmp/edit/config.yaml:/etc/packeteer/config.yaml packeteer:ci
+          api() { curl -sS -u ops:lab-only-secret -H 'Content-Type: application/json' "$@"; }
+          ok=0
+          for _ in $(seq 1 15); do
+            if api http://127.0.0.1:18084/api/config -o /tmp/edit/get.json; then ok=1; break; fi
+            sleep 1
+          done
+          test "$ok" = 1
+          base=$(jq -r .sha256 /tmp/edit/get.json)
+          test "$base" = "$(sha256sum /tmp/edit/original.yaml | cut -d' ' -f1)"
+          # Invalid: refused, file untouched.
+          code=$(jq -n --arg b "$base" '{yaml: "mode: observe\n", base: $b}' | api -o /tmp/edit/bad.json -w '%{http_code}' -X PUT --data-binary @- http://127.0.0.1:18084/api/config)
+          test "$code" = 422
+          cmp /tmp/edit/config.yaml /tmp/edit/original.yaml
+          # No credentials: refused.
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:18084/api/config)" = 401
+          # A valid edit is written into the bind-mounted file in place.
+          sed 's/^asn: 64512$/asn: 64513\nhold_time: 20m/' /tmp/edit/original.yaml > /tmp/edit/next.yaml
+          code=$(jq -Rs --arg b "$base" '{yaml: ., base: $b}' /tmp/edit/next.yaml | api -o /tmp/edit/put.json -w '%{http_code}' -X PUT --data-binary @- http://127.0.0.1:18084/api/config)
+          cat /tmp/edit/put.json
+          test "$code" = 200
+          jq -e '.result.restart_required == true and (.result.changed | index("asn")) != null' /tmp/edit/put.json
+          cmp /tmp/edit/config.yaml /tmp/edit/next.yaml
+          # Round trip: the stock image loads what the editor wrote.
+          docker run --rm -v /tmp/edit/config.yaml:/etc/packeteer/config.yaml:ro packeteer:ci -check | tee /tmp/edit/check.txt
+          grep -q "http config_editor: on" /tmp/edit/check.txt
+          # The wizard renders an observe config that the editor validates.
+          jq -n '{asn: 64512, router_id: "192.0.2.10", providers: [{name: "transit-a", source_ip: "192.0.2.11", next_hop: "192.0.2.1"}], neighbors: ["192.0.2.254"], targets: [{prefix: "198.51.100.0/24", host: "198.51.100.1"}]}' \
+            | api -X POST --data-binary @- http://127.0.0.1:18084/api/config/wizard -o /tmp/edit/wizard.json
+          jq -e '.mode == "observe"' /tmp/edit/wizard.json
+          jq '{yaml: .yaml}' /tmp/edit/wizard.json | api -X POST --data-binary @- http://127.0.0.1:18084/api/config/validate | jq -e '.valid == true and .mode == "observe"'
+          docker stop -t 15 pkedit
+          docker logs pkedit 2>&1 | tee /tmp/pkedit.log
+          test "$(docker inspect -f '{{.State.ExitCode}}' pkedit)" = "0"
+          grep -q "config file written through the editor" /tmp/pkedit.log
       - name: anomaly detection smoke test (mounted config, observe, no rules)
         run: |
           cat > /tmp/anom.yaml <<'YAML'
@@ -372,6 +434,8 @@ jobs:
         run: bash lab/e2e-anomaly.sh
       - name: FRR more-specific lab (learned more-specifics only, route cap, RIB leave, SIGTERM, SIGKILL)
         run: bash lab/e2e-more-specific.sh
+      - name: FRR improvement-weights lab (heavier prefix wins the cap, unlearned prefix never announced, RIB leave, no displacement, SIGTERM, restart, SIGKILL)
+        run: bash lab/e2e-weights.sh
       - name: FRR multi-POP lab (two federated instances over mTLS, inter-DC RTT, peer loss, global commit, SIGTERM, SIGKILL)
         run: bash lab/e2e-multipop.sh
       - name: FRR HA lab (active/standby lease, standby never announces, SIGKILL takeover after the hold time, session loss, SIGTERM handover, backup/restore)

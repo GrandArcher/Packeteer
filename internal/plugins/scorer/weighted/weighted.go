@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/GrandArcher/Packeteer/internal/plugins/scorer/weights"
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
 )
 
@@ -30,11 +31,15 @@ type Config struct {
 	LossWeight   *float64 `yaml:"loss_weight"`
 	RTTWeight    *float64 `yaml:"rtt_weight"`
 	JitterWeight *float64 `yaml:"jitter_weight"`
+	// ImprovementWeights orders new improvements for the
+	// max_improvements cap (#34). Nil ranks by score gain.
+	ImprovementWeights *weights.Config `yaml:"improvement_weights"`
 }
 
 // Scorer is a linear weighted scorer.
 type Scorer struct {
 	plugin.Base
+	weights.Weights
 	loss, rtt, jitter float64
 }
 
@@ -60,6 +65,11 @@ func New(c plugin.Config, _ plugin.Env) (plugin.Scorer, error) {
 	if s.loss == 0 && s.rtt == 0 && s.jitter == 0 {
 		return nil, fmt.Errorf("at least one weight must be positive")
 	}
+	w, err := weights.New(cfg.ImprovementWeights)
+	if err != nil {
+		return nil, err
+	}
+	s.Weights = w
 	return s, nil
 }
 

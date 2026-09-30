@@ -6,8 +6,10 @@ package smtp
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"mime"
@@ -214,13 +216,13 @@ func (n *Notifier) Notify(ctx context.Context, e plugin.Event) error {
 	if !n.gate.Match(e) {
 		return nil
 	}
-	if err := n.send(ctx, n.message(e)); err != nil {
+	if err := n.send(ctx, n.to, n.message(e)); err != nil {
 		return fmt.Errorf("smtp: %w", err)
 	}
 	return nil
 }
 
-func (n *Notifier) send(ctx context.Context, msg []byte) error {
+func (n *Notifier) send(ctx context.Context, to []string, msg []byte) error {
 	ctx, cancel := context.WithTimeout(ctx, n.timeout)
 	defer cancel()
 	d := net.Dialer{}
@@ -268,7 +270,7 @@ func (n *Notifier) send(ctx context.Context, msg []byte) error {
 	if err := c.Mail(n.from); err != nil {
 		return err
 	}
-	for _, t := range n.to {
+	for _, t := range to {
 		if err := c.Rcpt(t); err != nil {
 			return err
 		}
@@ -326,6 +328,84 @@ func (n *Notifier) message(e plugin.Event) []byte {
 	qp := quotedprintable.NewWriter(&b)
 	_, _ = qp.Write([]byte(body.String()))
 	_ = qp.Close()
+	return b.Bytes()
+}
+
+var _ plugin.ReportSender = (*Notifier)(nil)
+
+// SendReport implements plugin.ReportSender (report subscriptions, #34):
+// one multipart email with a text body and the report attached. m.To,
+// from the config file, replaces the notifier's recipients when set.
+func (n *Notifier) SendReport(ctx context.Context, m plugin.ReportMail) error {
+	to := n.to
+	if len(m.To) > 0 {
+		if len(m.To) > MaxRecipients {
+			return fmt.Errorf("smtp: report to needs at most %d addresses", MaxRecipients)
+		}
+		to = nil
+		for i, t := range m.To {
+			a, err := mail.ParseAddress(t)
+			if err != nil {
+				return fmt.Errorf("smtp: report to[%d]: %w", i, err)
+			}
+			to = append(to, a.Address)
+		}
+	}
+	if err := n.send(ctx, to, n.reportMessage(m, to)); err != nil {
+		return fmt.Errorf("smtp: %w", err)
+	}
+	return nil
+}
+
+// reportMessage renders a multipart/mixed message: a quoted-printable
+// text part and one base64 part per attachment.
+func (n *Notifier) reportMessage(m plugin.ReportMail, to []string) []byte {
+	var b bytes.Buffer
+	subject := headerSafe(m.Subject)
+	if n.subject != "" {
+		subject = n.subject + " " + subject
+	}
+	boundary := fmt.Sprintf("packeteer-%x", sha256.Sum256([]byte(m.Subscription+"\x00"+m.Subject+"\x00"+m.Text)))[:40]
+	hdr := [][2]string{
+		{"From", n.from},
+		{"To", strings.Join(to, ", ")},
+		{"Subject", mime.QEncoding.Encode("utf-8", subject)},
+		{"Date", n.now().Format(time.RFC1123Z)},
+		{"MIME-Version", "1.0"},
+		{"Content-Type", `multipart/mixed; boundary="` + boundary + `"`},
+		{"X-Packeteer-Report", headerSafe(m.Report)},
+		{"X-Packeteer-Subscription", headerSafe(m.Subscription)},
+	}
+	for _, h := range hdr {
+		fmt.Fprintf(&b, "%s: %s\r\n", h[0], h[1])
+	}
+	b.WriteString("\r\n")
+	fmt.Fprintf(&b, "--%s\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Transfer-Encoding: quoted-printable\r\n\r\n", boundary)
+	qp := quotedprintable.NewWriter(&b)
+	_, _ = qp.Write([]byte(strings.ReplaceAll(m.Text, "\n", "\r\n")))
+	_ = qp.Close()
+	b.WriteString("\r\n")
+	for _, a := range m.Attachments {
+		ct := a.ContentType
+		if ct == "" {
+			ct = "application/octet-stream"
+		}
+		name := strings.Map(func(r rune) rune {
+			if r == '"' || r == '\\' || r < 0x20 || r == 0x7f {
+				return '_'
+			}
+			return r
+		}, a.Name)
+		fmt.Fprintf(&b, "--%s\r\nContent-Type: %s\r\nContent-Transfer-Encoding: base64\r\nContent-Disposition: attachment; filename=\"%s\"\r\n\r\n",
+			boundary, headerSafe(ct), name)
+		enc := base64.StdEncoding.EncodeToString(a.Data)
+		for len(enc) > 76 {
+			b.WriteString(enc[:76] + "\r\n")
+			enc = enc[76:]
+		}
+		b.WriteString(enc + "\r\n")
+	}
+	fmt.Fprintf(&b, "--%s--\r\n", boundary)
 	return b.Bytes()
 }
 
