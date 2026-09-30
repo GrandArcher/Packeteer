@@ -29,12 +29,10 @@ compose=(docker compose -f lab/docker-compose-ha.yml)
 
 lab_dir=$(mktemp -d)
 pop_bin=$(mktemp)
-route_bin=$(mktemp)
-trap 'rc=$?; if [ "$rc" -ne 0 ]; then echo "---- lab logs ----"; "${compose[@]}" logs --no-color || true; "${compose[@]}" ps || true; fi; "${compose[@]}" down -v --remove-orphans || true; rm -f "$pop_bin" "$route_bin"; rm -rf "$lab_dir"; exit "$rc"' EXIT
+trap 'rc=$?; if [ "$rc" -ne 0 ]; then echo "---- lab logs ----"; "${compose[@]}" logs --no-color || true; "${compose[@]}" ps || true; fi; "${compose[@]}" down -v --remove-orphans || true; rm -f "$pop_bin"; rm -rf "$lab_dir"; exit "$rc"' EXIT
 
 echo "building route checks"
 go build -o "$pop_bin" ./lab/checkpop
-go build -o "$route_bin" ./lab/checkroute
 cp lab/probes/prefer-b.yaml "$lab_dir/state.yaml"
 chmod 755 "$lab_dir"
 chmod 644 "$lab_dir/state.yaml"
@@ -145,11 +143,15 @@ role() {
 	return 1
 }
 
+# attributes peer: the path from that instance carries next hop 192.0.2.2,
+# local-pref 250, 64512:666, and no-export (FRR's detail text, one path
+# block from "192.0.2.2 from <peer>" to its "Last update").
 attributes() {
-	local text
-	text=$(vty -c 'show bgp ipv4 unicast json' -c 'show bgp ipv4 unicast 198.51.100.0/24' 2>/dev/null || true)
-	if ! printf '%s\n' "$text" | "$route_bin" present; then
-		echo "FAIL: the injected route lacks next hop 192.0.2.2, local-pref 250, 64512:666, or no-export" >&2
+	local peer=$1 block
+	block=$(vty -c 'show bgp ipv4 unicast 198.51.100.0/24' 2>/dev/null |
+		awk -v p="192.0.2.2 from $peer " 'index($0, p) { on = 1 } on { print } on && /Last update/ { exit }' || true)
+	if [[ "$block" != *"localpref 250"* ]] || [[ "$block" != *"Community: 64512:666 no-export"* ]]; then
+		echo "FAIL: the route from $peer lacks next hop 192.0.2.2, local-pref 250, 64512:666, or no-export: [$block]" >&2
 		dump
 		exit 1
 	fi
@@ -179,7 +181,7 @@ kill9() {
 
 echo "1. pk-a alone takes the lease and announces"
 only a
-attributes
+attributes 192.0.2.10
 role packeteer-a active pk-a
 
 echo "2. pk-b starts and stays standby"
@@ -205,7 +207,7 @@ kill9 packeteer-a
 only b 120
 took=$(($(date +%s) - start))
 echo "pk-b announces ${took}s after SIGKILL"
-attributes
+attributes 192.0.2.20
 role packeteer-b active pk-b
 if ! "${compose[@]}" logs --no-color packeteer-b | grep -q 'lease expired (held by pk-a)'; then
 	echo "FAIL: pk-b did not take over an expired lease" >&2
@@ -245,7 +247,7 @@ if ! "${compose[@]}" logs --no-color packeteer-a | grep -q 'ha: lease released';
 	dump
 	exit 1
 fi
-attributes
+attributes 192.0.2.20
 
 echo "8. SIGTERM pk-b: nothing left on the edge"
 "${compose[@]}" stop -t 20 packeteer-b
