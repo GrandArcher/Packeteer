@@ -185,6 +185,16 @@ type reloader struct {
 	view   neighborView
 	ctl    routerTable
 	poke   func()
+	// applied, when set, is told each config the reload now runs with
+	// (the config editor diffs against it).
+	applied func(*config.Config)
+}
+
+func (r *reloader) setCur(next *config.Config) {
+	r.cur = next
+	if r.applied != nil {
+		r.applied(next)
+	}
 }
 
 // reload reads the file and applies what can change online. refused is a
@@ -214,7 +224,7 @@ func (r *reloader) reload(ctx context.Context) (refused, fatal error) {
 	}
 	if plan.empty() {
 		r.log.Info("config reloaded: no change")
-		r.cur = next
+		r.setCur(next)
 		return nil, nil
 	}
 	// Close removed sessions first, so a router leaving the table never
@@ -235,7 +245,7 @@ func (r *reloader) reload(ctx context.Context) (refused, fatal error) {
 	if err := r.view.SetEgress(plan.egress); err != nil {
 		return nil, err
 	}
-	r.cur = next
+	r.setCur(next)
 	added := make([]string, 0, len(plan.add))
 	for _, n := range plan.add {
 		added = append(added, n.Address.String())

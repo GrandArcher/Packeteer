@@ -255,7 +255,9 @@ func TestReloadNeighborsOnline(t *testing.T) {
 	waitFor(t, "edge-a steered", func() bool { nh, ok := steered(t, edgeA); return ok && nh == "192.0.2.22" })
 	sinceA := view.Peers()[0].Since
 
-	rl := &reloader{path: path, getenv: noEnv, log: log, cur: cfg, view: view, ctl: ctl}
+	var applied []*config.Config
+	rl := &reloader{path: path, getenv: noEnv, log: log, cur: cfg, view: view, ctl: ctl,
+		applied: func(c *config.Config) { applied = append(applied, c) }}
 	reload := func() {
 		t.Helper()
 		refused, fatal := rl.reload(ctx)
@@ -280,6 +282,9 @@ func TestReloadNeighborsOnline(t *testing.T) {
 		t.Fatal("edge-a lost the steer when edge-b was added")
 	}
 	edgeAUntouched()
+	if len(applied) != 1 || len(applied[0].BGP.Neighbors) != 2 {
+		t.Fatalf("applied after adding edge-b = %d configs", len(applied))
+	}
 
 	// 2. Per-router lists: transit-b is edge-b's; edge-a reaches it via
 	// edge-b. The swap withdraws, the next sync re-announces per router.
@@ -304,6 +309,9 @@ func TestReloadNeighborsOnline(t *testing.T) {
 	}
 	if nh, ok := steered(t, edgeA); !ok || nh != "127.0.0.3" {
 		t.Fatalf("edge-a after refused reloads: %q %v", nh, ok)
+	}
+	if len(applied) != 2 {
+		t.Fatalf("a refused reload was reported applied: %d", len(applied))
 	}
 
 	// 4. Remove edge-b: its session closes, edge-a goes back to one table.

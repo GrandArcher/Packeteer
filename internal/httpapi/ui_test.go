@@ -291,6 +291,16 @@ func TestConfigEditorOffAndNoAuth(t *testing.T) {
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("editor off: %d", rec.Code)
 	}
+	// The wizard is part of the editor: off with it, even with auth.
+	off, _ := New(Options{User: "ops", Password: "secret", Snapshot: func() Snapshot { return Assemble(sampleInput()) }})
+	rec = httptest.NewRecorder()
+	req := httptest.NewRequest("POST", "/api/config/wizard", strings.NewReader(`{"asn":64512}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.SetBasicAuth("ops", "secret")
+	off.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("wizard with the editor off: %d %s", rec.Code, rec.Body)
+	}
 	// On, but no auth at all: refused, so nobody anonymous edits the file.
 	ed, _ := newEditor(t)
 	srv, _ = New(Options{ConfigEditor: ed, Snapshot: func() Snapshot { return Assemble(sampleInput()) }})
@@ -306,7 +316,7 @@ func TestConfigEditorOffAndNoAuth(t *testing.T) {
 	// With basic auth the one account is admin.
 	srv, _ = New(Options{User: "ops", Password: "secret", ConfigEditor: ed, Snapshot: func() Snapshot { return Assemble(sampleInput()) }})
 	rec = httptest.NewRecorder()
-	req := httptest.NewRequest("GET", "/api/config", nil)
+	req = httptest.NewRequest("GET", "/api/config", nil)
 	req.SetBasicAuth("ops", "secret")
 	srv.Handler().ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {

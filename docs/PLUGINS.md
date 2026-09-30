@@ -80,7 +80,7 @@ Announcers, inbound ones included, run **in-process only**, so an external proce
 
 ## Lifecycle
 
-1. **Factory (Init).** `func(cfg plugin.Config, env plugin.Env) (T, error)`. It decodes and validates config with `cfg.Decode(&myStruct)`. It must do no network I/O. `env` provides the instance name, a scoped `slog` logger, the plugin dir, and `Getenv`.
+1. **Factory (Init).** `func(cfg plugin.Config, env plugin.Env) (T, error)`. It decodes and validates config with `cfg.Decode(&myStruct)`. It must do no network I/O. `env` provides the instance name, a scoped `slog` logger, the plugin dir, and `Getenv`. When `env.CheckOnly` is set (the config editor checking a candidate file, #34), the instance is thrown away: validate the config, but start no process, open no connection, and write no file.
 2. **`Start(ctx)`.** Begins background work in goroutines and must not block. Plugins start in this order: storage, SSO, RIB sources, sources, detector, probers, scorer, policies, telemetry, notifiers, federation, whois, elector, announcer, inbound announcer, mitigation announcer. If one fails, the ones already started are stopped.
 3. **`Stop(ctx)`.** Releases everything before `ctx` expires. Plugins stop in reverse order, so the announcer stops first and routes are withdrawn early.
 
@@ -174,7 +174,7 @@ Response: `{"result": ...}` or `{"error": "message"}`.
 
 | kind | method | params | result |
 |---|---|---|---|
-| any | `init` | none | `{}`, or an error if the config is unacceptable. Called once at startup. |
+| any | `init` | none | `{}`, or an error if the config is unacceptable. Called once at startup. Never called by the config editor, which does not run exec plugins ([ui.md](ui.md)). |
 | `prober` | `probe` | `{"provider","source","target","count","timeout_ms"}` | `{"sent": 10, "rtts_ms": [12.1, 11.8]}`, one RTT per reply, in send order |
 | `source` | `targets` | none | `{"targets":[{"prefix":"198.51.100.0/24","host":"198.51.100.1","weight":1}]}` (`host` must be inside `prefix`; `host` and `weight` are optional) |
 | `notifier` | `notify` | an event: `{"time","kind","severity","message","fields"}` | `{}` |

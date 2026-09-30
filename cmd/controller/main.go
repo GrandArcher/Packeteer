@@ -658,6 +658,9 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 	}
 
 	rl := &reloader{path: path, getenv: getenv, log: log, cur: cfg, ctl: ctl, poke: poke}
+	if editor != nil {
+		rl.applied = editor.SetRunning
+	}
 	if view != nil {
 		rl.view = view
 	}
@@ -1932,9 +1935,10 @@ func fillPlannerInputs(ctx context.Context, in *policy.Input, plugins *pluginhos
 		return
 	}
 	if !scorerPlans(plugins) {
-		// Improvement weights with a volume term (#34) need volumes too.
+		// Improvement weights with a volume term (#34) need volumes too,
+		// for the weights only: cost annotations stay as they were.
 		if scorerWeighsVolume(plugins) {
-			in.VolumeMbps = collectVolumes(ctx, plugins)
+			in.WeightVolumeMbps = collectVolumes(ctx, plugins)
 		}
 		return
 	}

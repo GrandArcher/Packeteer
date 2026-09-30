@@ -251,3 +251,55 @@ func TestWizardErrors(t *testing.T) {
 		}
 	}
 }
+
+// overwrite writes over the old content and cuts the tail: a shorter
+// file leaves nothing of the longer one behind.
+func TestOverwriteInPlace(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte(observeYAML+"# a long trailing comment\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := overwrite(path, []byte("mode: observe\n")); err != nil {
+		t.Fatal(err)
+	}
+	if disk, _ := os.ReadFile(path); string(disk) != "mode: observe\n" {
+		t.Fatalf("disk = %q", disk)
+	}
+}
+
+// When the in-place write and the restore both fail, the previous file
+// is kept in a temporary file named in the error.
+func TestWriteFileKeepsOldWhenRestoreFails(t *testing.T) {
+	// No directory: the rename path fails, so writeFile falls back to
+	// rewriting in place.
+	path := filepath.Join(t.TempDir(), "missing", "config.yaml")
+	old := []byte(observeYAML)
+	real := overwrite
+	t.Cleanup(func() { overwrite = real })
+
+	calls := 0
+	overwrite = func(string, []byte) error {
+		calls++
+		if calls == 1 {
+			return errors.New("disk full")
+		}
+		return nil
+	}
+	if err := writeFile(path, []byte("mode: inject\n"), old); err == nil || err.Error() != "disk full" || calls != 2 {
+		t.Fatalf("restored: err %v, calls %d", err, calls)
+	}
+
+	overwrite = func(string, []byte) error { return errors.New("disk full") }
+	err := writeFile(path, []byte("mode: inject\n"), old)
+	if err == nil || !strings.Contains(err.Error(), "restoring the previous file failed too") {
+		t.Fatalf("err = %v", err)
+	}
+	_, saved, ok := strings.Cut(err.Error(), "the previous file is saved at ")
+	if !ok {
+		t.Fatalf("no copy named: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Remove(saved) })
+	if got, _ := os.ReadFile(saved); string(got) != string(old) {
+		t.Fatalf("saved copy = %q", got)
+	}
+}

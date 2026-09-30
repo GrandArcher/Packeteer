@@ -90,6 +90,11 @@ type Input struct {
 	// VolumeMbps is observed traffic per prefix, decimal megabits per second.
 	// A missing or zero entry is not moved for commit or balance.
 	VolumeMbps map[netip.Prefix]float64
+	// WeightVolumeMbps is per-prefix volume read only for improvement
+	// weights (#34) when the scorer is not a planner. It feeds nothing
+	// else: not commit control, not cost annotations. Nil means use
+	// VolumeMbps.
+	WeightVolumeMbps map[netip.Prefix]float64
 	// Policies is the routing-policy verdict per probed prefix, from the
 	// configured policy chain. A missing entry means no policy matched.
 	Policies map[netip.Prefix]plugin.PolicyVerdict
@@ -577,7 +582,11 @@ func Decide(prev State, in Input, cfg Config, scorer plugin.Scorer, now time.Tim
 
 	integrateCommit(st, &out, decIdx, holds, commitOK, byPrefix, &wants, cfg, scorer, in, now, retire)
 
-	weighWants(wants, scorer, in.VolumeMbps)
+	weightVolume := in.VolumeMbps
+	if in.WeightVolumeMbps != nil {
+		weightVolume = in.WeightVolumeMbps
+	}
+	weighWants(wants, scorer, weightVolume)
 
 	// Static pins take the cap first, then VIP and other performance
 	// moves. A commit steer already in the

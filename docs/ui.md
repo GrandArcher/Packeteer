@@ -5,7 +5,7 @@ The remaining IRP GUI conveniences (#34). All of them work in the stock image wi
 | Feature | Where | Who | Config |
 |---|---|---|---|
 | Config editor | `/settings.html`, `/api/config` | admin | `http.config_editor: true` + auth or basic auth |
-| First-run wizard | `/settings.html`, `POST /api/config/wizard` | admin | auth or basic auth |
+| First-run wizard | `/settings.html`, `POST /api/config/wizard` | admin | `http.config_editor: true` + auth or basic auth |
 | Custom dashboards | `/dashboards.html`, `/api/dashboards` | every signed-in user, own dashboards | `storage: {type: sqlite}` + auth or basic auth |
 | Report subscriptions | `report_subscriptions`, `/api/subscriptions` | viewers see them, operators send now | `storage` + an `smtp` notifier |
 | Improvement weights | `scorer.config.improvement_weights`, `/api/decisions` | - | `weighted`, `commit`, or `cost` scorer |
@@ -37,14 +37,19 @@ docker run --network host --cap-add NET_RAW --cap-add NET_ADMIN \
 A write is accepted only when:
 
 - `base` is the `sha256` of the file on disk now (otherwise `409`: someone else changed it; reload and edit again);
+- it adds or changes no `exec` plugin and keeps `plugin_dir` (see below);
 - the new text passes the same checks the controller runs when it starts: `config.Load`'s strict parser and validator (unknown keys are errors), the environment overrides, every plugin's own config, and the cross-checks (auth, telemetry, VIP and outage intervals, anomaly source, report subscriptions). Otherwise `422` with the errors, and the file is not touched;
 - a file that turns `mode: inject` on (and was not inject before) carries `confirm_inject: true` (otherwise `428`). The inject rules still apply: allowlist, `local_pref`, community, announcer, thresholds, hold time, and at least one neighbor are required by the validator.
 
-The file is written next to itself and renamed into place when the directory allows it. A single-file bind mount cannot be renamed over, so the file is then rewritten in place (restored if that write fails). It is then read back and loaded with `config.Load`; the response is sent only after that. The file mode is kept. Comments and formatting are what you typed: the editor writes your text, not a re-rendered config. Files larger than 1 MiB are refused.
+The file is written next to itself and renamed into place when the directory allows it. A single-file bind mount cannot be renamed over, so the file is then rewritten in place (restored if that write fails; if the restore fails too, the old content is kept in a temporary file whose path is in the error). It is then read back and loaded with `config.Load`; the response is sent only after that. The file mode is kept. Comments and formatting are what you typed: the editor writes your text, not a re-rendered config. Files larger than 1 MiB are refused.
 
 The running controller does **not** change. Restart the container to apply the new file, or send SIGHUP when only `bgp.neighbors` changed ([route-reflector.md](route-reflector.md)). A restart withdraws every Packeteer route first, as always.
 
-Every write, accepted or refused, is in the audit log with the old and new hashes (never the content) and is logged as a warning. The response to `GET` contains the file, so keep the editor admin-only; secrets belong in environment variables, which the file only names (`password_env`, `community_env`, ...).
+Every write, accepted or refused, is in the audit log with the old and new hashes (never the content) and is logged as a warning.
+
+**Secrets.** `GET /api/config` returns the file exactly as it is on disk, to every admin API client; nothing is redacted (a redacted file could not be saved back). With the editor on, keep every secret out of the file: built-in plugins only take secrets by environment variable name (`password_env`, `community_env`, `auth_env`, `client_secret_env`, `routing_key_env`), and webhook `url`/`headers` and exec `env` values should reference `${VAR}` instead of holding a token.
+
+**Exec plugins.** Checking or saving a candidate never runs a program. `exec` plugins in the candidate are validated without running their command (no `init` handshake), and a candidate that adds or changes an `exec` plugin (command, args, env, anything in its block) or changes `plugin_dir` is refused with `422`. Which programs the controller runs is set only by editing the mounted file; removing an `exec` plugin through the editor is allowed.
 
 The file is read-only in many deployments (`:ro`). Then saving fails with a clear error and nothing changes. Leave `config_editor` off if you manage the file with Git or configuration management.
 
@@ -57,7 +62,7 @@ The file is read-only in many deployments (`:ro`). Then saving fails with a clea
 - the `weighted` scorer, a `static` source, `max_improvements: 50`, `hold_time: 15m`, the default thresholds, and `http.listen: 127.0.0.1:8080`;
 - `packeteer_community` `<asn>:666` when the ASN fits in 16 bits.
 
-It is checked with `config.Parse` before it is returned. The wizard writes nothing: the result opens in the editor for review, and you save it like any edit (or copy it into your file when the editor is off). Turning inject on afterwards is a separate edit; follow the [inject checklist](CONFIG.md#inject-checklist).
+It is checked with `config.Parse` before it is returned. The wizard is part of the editor: it is off (`404`) unless `http.config_editor` is on. It writes nothing: the result opens in the editor for review, and you save it like any edit. Turning inject on afterwards is a separate edit; follow the [inject checklist](CONFIG.md#inject-checklist).
 
 ## Custom dashboards
 

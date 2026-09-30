@@ -127,8 +127,9 @@ func TestPlannerInputsReadVolumesForWeights(t *testing.T) {
 		if src.calls != tc.calls || in.Usage != nil {
 			t.Fatalf("%s: calls %d usage %v", tc.y, src.calls, in.Usage)
 		}
-		if tc.calls == 1 && in.VolumeMbps[p] != 80 {
-			t.Fatalf("%s: volume %v", tc.y, in.VolumeMbps)
+		// Weights only: cost annotations and commit control see no volume.
+		if in.VolumeMbps != nil || (tc.calls == 1 && in.WeightVolumeMbps[p] != 80) {
+			t.Fatalf("%s: volume %v weight volume %v", tc.y, in.VolumeMbps, in.WeightVolumeMbps)
 		}
 	}
 }

@@ -69,6 +69,14 @@ func New(path string, running *config.Config, check Checker, diff Differ) (*Edit
 	return &Editor{path: path, check: check, diff: diff, running: running}, nil
 }
 
+// SetRunning replaces the config diffs are against. The controller calls
+// it after a SIGHUP reload applies a new file.
+func (e *Editor) SetRunning(running *config.Config) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.running = running
+}
+
 // File is the config file as it is on disk.
 type File struct {
 	Path   string `json:"path"`
@@ -192,7 +200,9 @@ func (e *Editor) Save(data []byte, base string, confirmInject bool) (File, Resul
 // writeFile replaces path with data. It first writes a temporary file
 // next to it and renames it into place (atomic). A single-file bind
 // mount cannot be renamed over, and its directory may be read-only; then
-// the file is rewritten in place, and restored to old if that fails.
+// the file is rewritten in place, and restored to old if that fails. If
+// the restore fails too, old is saved to a temporary file named in the
+// error, so the last good config is never lost.
 func writeFile(path string, data, old []byte) error {
 	mode := os.FileMode(0o644)
 	if st, err := os.Stat(path); err == nil {
@@ -201,23 +211,42 @@ func writeFile(path string, data, old []byte) error {
 	if err := renameInto(path, data, mode); err == nil {
 		return nil
 	}
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_TRUNC, 0)
+	werr := overwrite(path, data)
+	if werr == nil {
+		return nil
+	}
+	if rerr := overwrite(path, old); rerr != nil {
+		kept := "could not keep a copy"
+		if f, err := os.CreateTemp("", "packeteer-config-*.yaml"); err == nil {
+			_, err = f.Write(old)
+			if cerr := f.Close(); err == nil && cerr == nil {
+				kept = "the previous file is saved at " + f.Name()
+			}
+		}
+		return fmt.Errorf("%w; restoring the previous file failed too (%v); %s", werr, rerr, kept)
+	}
+	return werr
+}
+
+// overwrite rewrites path in place with data: it writes over the old
+// content first and only then cuts the tail, so the file is never empty
+// while it is written.
+var overwrite = func(path string, data []byte) error {
+	f, err := os.OpenFile(path, os.O_WRONLY, 0)
 	if err != nil {
 		return err
 	}
-	_, werr := f.Write(data)
+	_, werr := f.WriteAt(data, 0)
+	if werr == nil {
+		werr = f.Truncate(int64(len(data)))
+	}
 	if werr == nil {
 		werr = f.Sync()
 	}
-	cerr := f.Close()
-	if werr == nil {
+	if cerr := f.Close(); werr == nil {
 		werr = cerr
 	}
-	if werr != nil {
-		_ = os.WriteFile(path, old, mode)
-		return werr
-	}
-	return nil
+	return werr
 }
 
 func renameInto(path string, data []byte, mode os.FileMode) error {

@@ -137,3 +137,22 @@ func TestImprovementWeightsStayInLane(t *testing.T) {
 		t.Fatalf("static pin lost its slot to a heavier performance move: %v", st.Improvements)
 	}
 }
+
+// WeightVolumeMbps orders moves like VolumeMbps does, and feeds nothing
+// else: no cost annotation gets a volume from it.
+func TestImprovementWeightsOwnVolume(t *testing.T) {
+	input, c := weightsInput()
+	input.WeightVolumeMbps, input.VolumeMbps = input.VolumeMbps, nil
+	c.Providers = []ProviderPolicy{{Name: "a", Cost: 10, HasCost: true}, {Name: "b", Cost: 2, HasCost: true}}
+	st, out := Decide(NewState(), input, c, weightedScorer(t, "improvement_weights: {volume: 1}"), t0)
+	imp, ok := st.Improvements[pB]
+	if !ok || len(st.Improvements) != 1 {
+		t.Fatalf("improvements = %v, want %s", st.Improvements, pB)
+	}
+	if w := decision(t, out, pB).Weight; w != 830 {
+		t.Fatalf("pB weight = %v", w)
+	}
+	if imp.CostDelta != 8 || imp.EstSavings != 0 {
+		t.Fatalf("cost annotation read the weights' volume: %+v", imp)
+	}
+}

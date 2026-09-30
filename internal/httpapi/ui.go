@@ -156,10 +156,10 @@ func short(h string) string {
 }
 
 // handleWizard renders a first-run observe config. It writes nothing; the
-// UI shows the result in the editor for review.
+// UI shows the result in the editor for review. It is part of the editor:
+// off unless http.config_editor is on.
 func (s *Server) handleWizard(w http.ResponseWriter, r *http.Request) {
-	if !s.writesEnabled() {
-		writeJSON(w, http.StatusForbidden, map[string]string{"error": "the wizard needs auth or basic auth"})
+	if !s.editorOn(w) {
 		return
 	}
 	var in configedit.WizardInput
@@ -171,7 +171,7 @@ func (s *Server) handleWizard(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusUnprocessableEntity, map[string]any{"error": "wizard input is invalid", "errors": strings.Split(err.Error(), "\n")})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"yaml": string(out), "mode": "observe", "editor": s.editor != nil})
+	writeJSON(w, http.StatusOK, map[string]any{"yaml": string(out), "mode": "observe", "editor": true})
 }
 
 // ---- Custom dashboards (each user's own) ----

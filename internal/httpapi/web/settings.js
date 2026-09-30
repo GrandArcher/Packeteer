@@ -69,8 +69,7 @@ function runWizard() {
   var status = document.getElementById("wz-status");
   api("POST", "/api/config/wizard", body).then(function (out) {
     document.getElementById("ed-yaml").value = out.yaml;
-    status.textContent = out.editor ? "Generated (observe). Review it in the editor, then Save." :
-      "Generated (observe). The editor is off: copy it into your mounted config file.";
+    status.textContent = "Generated (observe). Review it in the editor, then Save.";
     if (!base) api("GET", "/api/config").then(function (f) { base = f.sha256; }, function () {});
   }, function (err) {
     status.textContent = err.message + ((err.data && err.data.errors) ? ": " + err.data.errors.join("; ") : "");

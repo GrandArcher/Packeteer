@@ -167,3 +167,24 @@ func TestConfigEditorNeverRunsExec(t *testing.T) {
 		t.Fatal("the editor ran the configured exec plugin")
 	}
 }
+
+// After a SIGHUP reload applies new bgp.neighbors, the editor diffs
+// against them, not against the config from start.
+func TestConfigEditorFollowsReload(t *testing.T) {
+	ed, path := editorFor(t, uiBase)
+	reloaded := uiBase + "bgp:\n  neighbors:\n    - address: 192.0.2.254\n"
+	if res := ed.Check([]byte(reloaded)); !res.ReloadOnline {
+		t.Fatalf("before reload: %+v", res)
+	}
+	if err := os.WriteFile(path, []byte(reloaded), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ed.SetRunning(cfg)
+	if res := ed.Check([]byte(reloaded)); !res.Valid || res.ReloadOnline || res.RestartRequired || len(res.Changed) != 0 {
+		t.Fatalf("after reload: %+v", res)
+	}
+}
