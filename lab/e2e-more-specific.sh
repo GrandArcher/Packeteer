@@ -18,6 +18,8 @@
 #  5. SIGTERM withdraws every route; a restart announces the same 4;
 #  6. SIGKILL: every route drops with the session within the hold timer.
 set -euo pipefail
+# checkms sorts bytewise; sort here must agree.
+export LC_ALL=C
 
 root=$(cd "$(dirname "$0")/.." && pwd)
 cd "$root"
