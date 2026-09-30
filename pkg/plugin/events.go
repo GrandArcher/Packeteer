@@ -54,6 +54,8 @@ const (
 	EventMitigationOn       = "mitigation.announced"
 	EventMitigationOff      = "mitigation.withdrawn"
 	EventMitigationEnded    = "mitigation.ended"
+	EventHAStandby          = "ha.standby"
+	EventHAActive           = "ha.active"
 	// EventTest is sent by hand to check a notifier's delivery path.
 	EventTest = "notifier.test"
 )
@@ -105,6 +107,10 @@ var eventCatalog = []EventSpec{
 		Summary: "A threat mitigation rule's routes were withdrawn while the rule is still held (RIB loss, shutdown, announce failure)."},
 	{Kind: EventMitigationEnded, Severity: SeverityInfo, Group: "mitigation", Keys: []string{"rule"}, TrapID: 23, Resolves: true,
 		Summary: "A threat mitigation rule ended: expired, removed, or replaced. Its routes are withdrawn."},
+	{Kind: EventHAStandby, Severity: SeverityWarning, Group: "ha", TrapID: 24,
+		Summary: "This instance stopped being the active one of its HA pair and withdrew its routes (lease lost or not renewed, RIB not ready, or shutdown)."},
+	{Kind: EventHAActive, Severity: SeverityWarning, Group: "ha", TrapID: 25, Resolves: true,
+		Summary: "This instance became the active one of its HA pair and may announce."},
 }
 
 // EventCatalog returns a copy of every event kind the controller emits.

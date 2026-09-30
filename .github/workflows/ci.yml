@@ -240,3 +240,5 @@ jobs:
         run: bash lab/e2e-more-specific.sh
       - name: FRR multi-POP lab (two federated instances over mTLS, inter-DC RTT, peer loss, global commit, SIGTERM, SIGKILL)
         run: bash lab/e2e-multipop.sh
+      - name: FRR HA lab (active/standby lease, standby never announces, SIGKILL takeover after the hold time, session loss, SIGTERM handover, backup/restore)
+        run: bash lab/e2e-ha.sh

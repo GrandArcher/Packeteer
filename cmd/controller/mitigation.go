@@ -57,6 +57,7 @@ func newMitigation(cfg *config.Config, plugins *pluginhost.Set, log *slog.Logger
 		MaxTTL:     m.MaxTTL,
 		LocalPref:  m.LocalPref,
 		Community:  cfg.PacketeerCommunity,
+		Leader:     haLeader(plugins),
 	}, ann, log.With("component", "mitigation"))
 }
 

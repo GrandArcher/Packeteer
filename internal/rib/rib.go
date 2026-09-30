@@ -1376,6 +1376,34 @@ func (v *View) Len() int {
 	return len(v.routes)
 }
 
+// RouteHold bounds how long routes Packeteer announced can stay on the
+// routers after it dies without withdrawing them (#31): the longest
+// negotiated hold time of the established sessions. Graceful restart is
+// never enabled, so a router drops them when its hold timer runs out. It
+// is the proposed hold time (90s) when no session is established, a
+// session did not report its timer, or the speaker cannot be read.
+func (v *View) RouteHold(ctx context.Context) time.Duration {
+	def := bgpHoldTime * time.Second
+	if v == nil || v.srv == nil {
+		return def
+	}
+	var hold time.Duration
+	err := v.srv.ListPeer(ctx, &api.ListPeerRequest{}, func(p *api.Peer) {
+		if p.GetState().GetSessionState() != api.PeerState_ESTABLISHED {
+			return
+		}
+		h := time.Duration(p.GetTimers().GetState().GetNegotiatedHoldTime()) * time.Second
+		if h <= 0 {
+			h = def
+		}
+		hold = max(hold, h)
+	})
+	if err != nil || hold == 0 {
+		return def
+	}
+	return hold
+}
+
 // Peers returns session states sorted by address.
 func (v *View) Peers() []PeerState {
 	v.mu.RLock()

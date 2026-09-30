@@ -8,6 +8,7 @@ import (
 
 	"github.com/GrandArcher/Packeteer/internal/config"
 	"github.com/GrandArcher/Packeteer/internal/plugins/announcer/gobgp"
+	"github.com/GrandArcher/Packeteer/internal/plugins/elector/lease"
 	"github.com/GrandArcher/Packeteer/internal/plugins/exec"
 	"github.com/GrandArcher/Packeteer/internal/plugins/federation/mtls"
 	"github.com/GrandArcher/Packeteer/internal/plugins/notifier/smtp"
@@ -87,13 +88,14 @@ func TestConfigDocCoversStructs(t *testing.T) {
 		bmp.Config{},
 		mtls.Config{},
 		mtls.Peer{},
+		lease.Config{},
 	) {
 		if !strings.Contains(text, "`"+key+"`") {
 			missing = append(missing, key)
 		}
 	}
 	for _, env := range []string{
-		ConfigEnv, PluginDirEnv, LogLevelEnv, LogFormatEnv, HTTPListenEnv, HTTPUserEnv, HTTPPassEnv,
+		ConfigEnv, PluginDirEnv, LogLevelEnv, LogFormatEnv, HTTPListenEnv, HTTPUserEnv, HTTPPassEnv, lease.IDEnv,
 	} {
 		if !strings.Contains(text, "`"+env+"`") {
 			missing = append(missing, env)

@@ -92,6 +92,11 @@ type Config struct {
 	// steer route is withdrawn and not announced again until it lets go,
 	// so the speaker never has two Packeteer paths for one prefix.
 	Excluded func(netip.Prefix) bool
+	// Leader reports whether this instance is the active one of an HA
+	// pair (#31). Nil is a single instance, always active. While it is
+	// false, Sync withdraws everything and announces nothing; it is
+	// checked under the controller's lock on every Sync.
+	Leader func() bool
 }
 
 // PerfConfig is the performance trigger (see config.InboundPerformance).
@@ -660,6 +665,12 @@ func (c *Controller) Sync(ctx context.Context) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	defer c.storeActive()
+	if c.cfg.Leader != nil && !c.cfg.Leader() {
+		if len(c.active) > 0 {
+			c.log.Warn("ha standby; withdrawing inbound steer routes")
+		}
+		return c.withdrawAllLocked(ctx)
+	}
 	if !c.rib.Ready() {
 		if len(c.active) > 0 {
 			c.log.Warn("rib not ready; withdrawing inbound steer routes")

@@ -488,3 +488,33 @@ func TestMoreSpecificsListsOnlyLearnedPrefixesInside(t *testing.T) {
 		t.Fatalf("after withdraw = %v", got)
 	}
 }
+
+func TestRouteHoldIsNegotiatedHoldTime(t *testing.T) {
+	var none *View
+	if got := none.RouteHold(context.Background()); got != bgpHoldTime*time.Second {
+		t.Fatalf("nil view route hold = %s", got)
+	}
+	r := &fakeRouter{srv: server.NewBgpServer(quiet()), port: freePort(t)}
+	go r.srv.Serve()
+	ctx := context.Background()
+	if err := r.srv.StartBgp(ctx, &api.StartBgpRequest{Global: &api.Global{
+		Asn: asn, RouterId: "192.0.2.254", ListenPort: int32(r.port), ListenAddresses: []string{"127.0.0.1"},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	// The router's 9s hold time wins against Packeteer's 90s proposal.
+	if err := r.srv.AddPeer(ctx, &api.AddPeerRequest{Peer: &api.Peer{
+		Conf:      &api.PeerConf{NeighborAddress: "127.0.0.2", PeerAsn: asn},
+		Transport: &api.Transport{PassiveMode: true},
+		Timers:    &api.Timers{Config: &api.TimersConfig{HoldTime: 9, KeepaliveInterval: 3}},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(r.stop)
+	v := newView(t, r)
+	if got := v.RouteHold(ctx); got != bgpHoldTime*time.Second {
+		t.Fatalf("route hold before the session is up = %s, want %ds", got, bgpHoldTime)
+	}
+	eventually(t, "session up", v.Ready)
+	eventually(t, "negotiated 9s", func() bool { return v.RouteHold(ctx) == 9*time.Second })
+}

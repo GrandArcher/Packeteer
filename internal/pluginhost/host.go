@@ -42,6 +42,9 @@ type Set struct {
 	RIBSources []Instance[plugin.RIBSource]
 	// Federation is the multi-POP transport (#30). It never announces.
 	Federation *Instance[plugin.Federation]
+	// Elector is the active/standby elector (#31). Nil runs a single
+	// instance. It never announces; it gates the announcers.
+	Elector *Instance[plugin.Elector]
 
 	started []namedLifecycle
 }
@@ -129,6 +132,11 @@ func Build(cfg *config.Config, opts Options) (*Set, error) {
 			s.Federation = &b[0]
 		}
 	}
+	if cfg.HA != nil {
+		if b := build(plugin.Electors, "ha", []config.PluginSpec{*cfg.HA}, base, &errs); len(b) == 1 {
+			s.Elector = &b[0]
+		}
+	}
 	if cfg.Troubleshoot.Whois != nil {
 		if b := build(plugin.Whoises, "troubleshoot.whois", []config.PluginSpec{*cfg.Troubleshoot.Whois}, base, &errs); len(b) == 1 {
 			s.Whois = &b[0]
@@ -176,6 +184,11 @@ func (s *Set) all() []namedLifecycle {
 	}
 	if s.Whois != nil {
 		add(plugin.KindWhois, s.Whois.Name, s.Whois.Plugin)
+	}
+	// Before the announcers, so it stops after them. The core withdraws
+	// and resigns before any plugin stops.
+	if s.Elector != nil {
+		add(plugin.KindElector, s.Elector.Name, s.Elector.Plugin)
 	}
 	if s.Announcer != nil {
 		add(plugin.KindAnnouncer, s.Announcer.Name, s.Announcer.Plugin)

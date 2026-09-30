@@ -133,6 +133,9 @@ type Config struct {
 	// Federation is the instance-to-instance transport (#30). Nil runs
 	// the instance standalone.
 	Federation *PluginSpec `yaml:"federation"`
+	// HA is the active/standby elector (#31). Nil runs a single instance
+	// that is always active. Only the active instance announces.
+	HA *PluginSpec `yaml:"ha"`
 }
 
 // GlobalCommit is one commit shared by several providers, usually links
@@ -877,6 +880,14 @@ func (c *Config) Validate() error {
 	}
 	if c.Storage != nil && c.Storage.Type == "" {
 		add("storage: type is required")
+	}
+	if c.HA != nil {
+		if c.HA.Type == "" {
+			add("ha: type is required")
+		}
+		if len(c.BGP.Neighbors) == 0 {
+			add("ha requires bgp.neighbors (an instance may lead only while its RIB view is ready)")
+		}
 	}
 	if n := c.Troubleshoot.RequestsPerMinute; n < 1 || n > MaxTroubleshootRequestsPerMinute {
 		add("troubleshoot.requests_per_minute %d must be between 1 and %d", n, MaxTroubleshootRequestsPerMinute)

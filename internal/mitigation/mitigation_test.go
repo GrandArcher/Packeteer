@@ -6,6 +6,7 @@ import (
 	"net/netip"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -381,5 +382,46 @@ func TestNilController(t *testing.T) {
 	}
 	if st := c.Status(); st.Rules == nil || st.Allowlist == nil || st.Catalog.Targets == nil {
 		t.Fatalf("nil status = %+v", st)
+	}
+}
+
+// TestStandbyWithdrawsRules: an HA standby (#31) keeps its rules (they
+// still expire) but has no mitigation route on the wire.
+func TestStandbyWithdrawsRules(t *testing.T) {
+	ctx := context.Background()
+	ann := newFakeAnn()
+	rib := &fakeRIB{ready: true, learned: map[netip.Prefix]bool{victim: true}}
+	var leader atomic.Bool
+	cfg := testConfig(config.ModeInject)
+	cfg.Leader = leader.Load
+	c, err := New(cfg, ann, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.SetRIB(rib); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.Add(Request{Prefix: victim, Action: plugin.MitigationBlackhole}, t0); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Sync(ctx, t0); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := ann.on(victim); ok || c.Active() != 0 {
+		t.Fatal("standby announced a mitigation route")
+	}
+	leader.Store(true)
+	if err := c.Sync(ctx, t0.Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := ann.on(victim); !ok {
+		t.Fatal("active did not announce")
+	}
+	leader.Store(false)
+	if err := c.Sync(ctx, t0.Add(2*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := ann.on(victim); ok || c.Active() != 0 {
+		t.Fatal("demoted instance kept a mitigation route")
 	}
 }

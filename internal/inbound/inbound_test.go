@@ -6,6 +6,7 @@ import (
 	"net/netip"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -417,5 +418,29 @@ func TestMitigatedPrefixIsExcluded(t *testing.T) {
 	held = false
 	if err := c.Sync(ctx); err != nil || len(ann.routes) != 1 {
 		t.Fatalf("steer after mitigation let go: %v %v", err, ann.routes)
+	}
+}
+
+// TestStandbyWithdrawsSteers: an HA standby (#31) has no steer routes on
+// the wire; the plan is kept, and it is announced once active.
+func TestStandbyWithdrawsSteers(t *testing.T) {
+	ctx := context.Background()
+	ann := newFakeAnn("transit-a", "transit-b")
+	rib := readyRIB()
+	var leader atomic.Bool
+	cfg := baseConfig(config.ModeInject)
+	cfg.Leader = leader.Load
+	c := mustNew(t, cfg, ann, rib)
+	c.Evaluate(start, usage(start, map[string]float64{"transit-a": 150}))
+	if err := c.Sync(ctx); err != nil || len(ann.routes) != 0 || c.Active() != 0 {
+		t.Fatalf("standby steered: %v %v", err, ann.routes)
+	}
+	leader.Store(true)
+	if err := c.Sync(ctx); err != nil || len(ann.routes) != 1 {
+		t.Fatalf("active did not steer: %v %v", err, ann.routes)
+	}
+	leader.Store(false)
+	if err := c.Sync(ctx); err != nil || len(ann.routes) != 0 || c.Active() != 0 {
+		t.Fatalf("demoted instance kept steers: %v %v", err, ann.routes)
 	}
 }

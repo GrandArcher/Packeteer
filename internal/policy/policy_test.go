@@ -380,3 +380,17 @@ func TestDeterministicOrdering(t *testing.T) {
 		t.Fatalf("ordering: %+v", out.Decisions)
 	}
 }
+
+// TestEngineResetDropsIntent: an HA instance that steps down (#31) starts
+// its next term with no improvement, cooldown, or decision.
+func TestEngineResetDropsIntent(t *testing.T) {
+	e := NewEngine(cfg(), scorer(t))
+	e.Evaluate(in(results(t0, pA, m{"a", 0, 90}, m{"b", 0, 30}), map[netip.Prefix]string{pA: "a"}), t0)
+	if len(e.Improvements()) != 1 {
+		t.Fatalf("improvements = %+v", e.Improvements())
+	}
+	e.Reset()
+	if d, at := e.Decisions(); len(e.Improvements()) != 0 || len(d) != 0 || !at.IsZero() {
+		t.Fatalf("after Reset: improvements %+v decisions %+v at %s", e.Improvements(), d, at)
+	}
+}

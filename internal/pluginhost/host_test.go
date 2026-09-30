@@ -164,3 +164,31 @@ func TestStorageStartsFirstStopsLast(t *testing.T) {
 		t.Fatalf("bad storage config: %v", err)
 	}
 }
+
+func TestElectorBuildAndOrder(t *testing.T) {
+	dir := t.TempDir()
+	nb := "bgp:\n  neighbors:\n    - address: 192.0.2.254\n"
+	cfg := load(t, nb+"announcer:\n  type: gobgp\nha:\n  type: lease\n  config: {path: "+dir+"/lease.json, id: pk-a}\n")
+	s, err := Build(cfg, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.Elector == nil || s.Elector.Type != "lease" || s.Elector.Plugin.Active() {
+		t.Fatalf("elector = %+v", s.Elector)
+	}
+	// The elector starts before, and so stops after, the announcer.
+	if got := strings.Join(s.Summary(), ";"); !strings.Contains(got, "elector lease;announcer gobgp") {
+		t.Errorf("Summary = %s", got)
+	}
+	bad := load(t, nb+"ha:\n  type: vrrp\n")
+	if _, err := Build(bad, Options{}); err == nil || !strings.Contains(err.Error(), `ha[0] (vrrp): unknown elector type "vrrp" (available: lease)`) {
+		t.Fatalf("unknown elector: %v", err)
+	}
+	badCfg := load(t, nb+"ha:\n  type: lease\n  config: {id: pk-a}\n")
+	if _, err := Build(badCfg, Options{}); err == nil || !strings.Contains(err.Error(), "path is required") {
+		t.Fatalf("bad elector config: %v", err)
+	}
+	if _, err := config.Parse([]byte("mode: observe\nasn: 64512\nrouter_id: 192.0.2.10\nproviders:\n  - name: a\n    source_ip: 192.0.2.11\n    next_hop: 192.0.2.1\nha:\n  type: lease\n")); err == nil || !strings.Contains(err.Error(), "ha requires bgp.neighbors") {
+		t.Fatalf("ha without neighbors: %v", err)
+	}
+}
