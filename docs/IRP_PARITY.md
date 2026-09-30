@@ -17,9 +17,9 @@ Milestones:
 | Milestone | Capabilities |
 |---|---|
 | v0.1 | 24 |
-| v0.2 | 26 |
+| v0.2 | 25 |
 | v0.3 | 17 |
-| v0.4 | 12 |
+| v0.4 | 13 |
 | won't do | 3 |
 | **total** | 82 |
 

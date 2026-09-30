@@ -27,11 +27,11 @@ The image is `ghcr.io/grandarcher/packeteer`, linux/amd64 and linux/arm64. It ru
 
 | Tag | What it is |
 |---|---|
-| `0.1.0` | This release. Pin this. |
+| `0.3.0` | This release. Pin this. |
 | `latest` | The same release, updated when a release tag is published. |
 | `edge` | The build from `main`. The Compose file in this repo uses it. |
 
-The commands below use `:edge`, which is published on every push to `main`. For a pinned install, set `IMAGE=ghcr.io/grandarcher/packeteer:0.1.0`.
+The commands below use `:edge`, which is published on every push to `main`. For a pinned install, set `IMAGE=ghcr.io/grandarcher/packeteer:0.3.0`.
 
 ### docker run
 
@@ -78,7 +78,7 @@ docker compose up -d
 docker compose logs -f
 ```
 
-The Compose file uses `ghcr.io/grandarcher/packeteer:edge`, host networking, and the two capabilities. To pin the release, change the `image` line to `ghcr.io/grandarcher/packeteer:0.1.0`. There is no `ports:` map: with host networking, `http.listen` is already an address on the host.
+The Compose file uses `ghcr.io/grandarcher/packeteer:edge`, host networking, and the two capabilities. To pin the release, change the `image` line to `ghcr.io/grandarcher/packeteer:0.3.0`. There is no `ports:` map: with host networking, `http.listen` is already an address on the host.
 
 Stop with `docker compose stop -t 30` (see [Rollback](#rollback)).
 
@@ -299,17 +299,17 @@ Details, the exec protocol, and a shell example: [docs/PLUGINS.md](docs/PLUGINS.
 
 ## IRP parity
 
-Feature parity with Noction IRP is the roadmap. Status as of v0.1.0, from [docs/IRP_PARITY.md](docs/IRP_PARITY.md):
+Feature parity with Noction IRP is the roadmap. Status as of v0.3.0, from [docs/IRP_PARITY.md](docs/IRP_PARITY.md):
 
 | | Count |
 |---|---|
-| Done, v0.1 (this release) | 24 |
-| Planned, v0.2 | 26 |
-| Planned, v0.3 | 17 |
-| Planned, v0.4 | 12 |
+| Done, v0.1 | 24 |
+| Done, v0.2 | 25 |
+| Done, v0.3 (this release) | 17 |
+| Planned or partial, v0.4 | 13 |
 | Won't do | 3 |
 
-v0.1 is the outbound loop: probes, static and flow targets, an iBGP RIB, scoring with hysteresis, optional injection, the read-only UI and API, the container, and the FRR lab. v0.2 through v0.4 are the remaining matrix rows (cost and commit, inbound, BMP, FlowSpec, multi-POP, HA, RBAC). v0.5 (issues #49–#54) is hardening and field feedback. It does not relax the safety rules above.
+v0.1 is the outbound loop: probes, static and flow targets, an iBGP RIB, scoring with hysteresis, optional injection, the read-only UI and API, the container, and the FRR lab. v0.2 adds cost and commit control, SNMP, policies, alerts, and reports. v0.3 adds inbound optimization, BMP and add-path, multiple routers and IX, RTBH/FlowSpec mitigation, transit classification, and capped more-specific injection, all lab-proven. v0.4 is the remaining matrix rows (multi-POP, HA, RBAC, anomaly detection, UI). v0.5 (issues #49–#54) is hardening and field feedback. It does not relax the safety rules above.
 
 ## Build from source
 
