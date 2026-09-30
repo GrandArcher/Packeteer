@@ -156,6 +156,7 @@ Leave graceful restart off on the session. Guides:
 - [docs/route-reflector.md](docs/route-reflector.md) — several edge routers, per-router provider reachability, route reflectors, Internet exchange peers, and SIGHUP reload of `bgp.neighbors`
 - [docs/multi-pop.md](docs/multi-pop.md) — several POPs (routing domains) federated over mutual TLS: inter-DC RTT in the path cost, global commit across POPs, and the central view. Lab-proven only
 - [docs/policy-routing.md](docs/policy-routing.md) — probe sources behind the router
+- [docs/ui.md](docs/ui.md) — config editor and first-run wizard, custom dashboards, email report subscriptions, and improvement weights
 
 A flow export (NetFlow, IPFIX, or sFlow) is optional. It only adds probe targets. It does not inject routes. With host networking the collector's UDP port is a host port; firewall it to the exporter.
 
@@ -277,6 +278,9 @@ The server is read-only (GET and HEAD), except on-demand maintenance windows (`P
 | `/api/users` | Admin only. Users and roles. `POST {"name","role","password"}`, `PATCH /api/users/<name>` (`role`, `password`, `disabled`), `DELETE /api/users/<name>`. Needs `auth`. |
 | `/api/audit` | Admin only. The audit log, newest first: `?limit=` (1–1000, default 100), `from`, `to` (RFC 3339). Needs a `storage` plugin. |
 | `/auth/login`, `/auth/callback`, `/auth/logout` | OIDC single sign-on when `auth.sso` is set. |
+| `/api/config` | Admin only, with `http.config_editor: true` and auth or basic auth (#34). `GET` returns the mounted config file and its `sha256`; `POST /api/config/validate {"yaml"}` runs the start checks; `PUT {"yaml","base","confirm_inject"}` writes it (needs the `sha256` it edits, and `confirm_inject` to turn inject on). Applies on restart. `POST /api/config/wizard` renders a first-run observe config. UI: `/settings.html` ([docs/ui.md](docs/ui.md)). |
+| `/api/dashboards` | Your custom dashboards and the widget catalog (#34). `PUT /api/dashboards/<name>` saves one, `DELETE` removes it. Needs a storage plugin and auth or basic auth. UI: `/dashboards.html`. |
+| `/api/subscriptions` | Report subscriptions (#34): schedule, next and last send, errors. `POST /api/subscriptions/<name>/send` (operator) sends one now. |
 | `/api/maintenance` | Open maintenance windows. `POST` opens an on-demand window and `DELETE /api/maintenance/<id>` closes one, when a `maintenance` policy is configured and basic auth is on ([CONFIG.md](docs/CONFIG.md#policy-maintenance)). |
 
 Basic auth is off unless both `PACKETEER_HTTP_USER` and `PACKETEER_HTTP_PASSWORD` are set. Setting only one refuses to start. Set both when `http.listen` is not loopback. The password is not read from the config file and is not written to the log.
