@@ -1,6 +1,7 @@
 package plugin
 
 import (
+	"context"
 	"net/netip"
 	"time"
 )
@@ -41,6 +42,47 @@ type PolicySubject struct {
 	// ASPath is the learned AS path of the prefix, origin last. It is
 	// empty when the prefix is not in the RIB or no RIB is configured.
 	ASPath []uint32
+	// Traffic is the prefix's traffic class from flow data: TrafficTransit
+	// when most of its bytes come from customer (transiting) sources,
+	// TrafficLocal otherwise. It is empty when no source classifies the
+	// prefix.
+	Traffic string
+}
+
+// Traffic classes of a probed prefix.
+const (
+	// TrafficLocal is traffic sourced by the operator's own network.
+	TrafficLocal = "local"
+	// TrafficTransit is traffic that transits the network: its source is
+	// a customer network, not the operator's own.
+	TrafficTransit = "transit"
+)
+
+// TrafficMix is the classified traffic toward one prefix over a source's
+// window. Bytes whose source address is unknown are in neither count.
+// Class is TrafficTransit or TrafficLocal, decided by the source.
+type TrafficMix struct {
+	Prefix       netip.Prefix
+	LocalBytes   uint64
+	TransitBytes uint64
+	Class        string
+}
+
+// TransitPct is the transit share of the classified bytes, 0-100.
+func (m TrafficMix) TransitPct() float64 {
+	total := m.LocalBytes + m.TransitBytes
+	if total == 0 {
+		return 0
+	}
+	return 100 * float64(m.TransitBytes) / float64(total)
+}
+
+// TrafficClassifier is optional on a TargetSource. It reports how the
+// traffic toward each prefix splits between local and transit sources and
+// the resulting class. The controller passes the class to the policy chain
+// in PolicySubject.Traffic. It does not announce.
+type TrafficClassifier interface {
+	TrafficMix(ctx context.Context) ([]TrafficMix, error)
 }
 
 // OriginASN is the last ASN on the path, or 0 when the path is empty.

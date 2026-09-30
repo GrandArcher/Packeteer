@@ -478,6 +478,13 @@ With `--network host`, `listen` binds host UDP ports. Do not publish them. Each 
 | `problems.min_flows` | 10 | Zero uses the default. |
 | `problems.max_targets` | 100 | 1–10000. |
 
+`transit` (optional, off when omitted) classifies traffic as transiting or local (#29, IRP "optimization of transiting traffic"). A flow record whose source address is inside `customers` (the customer or downstream networks behind this edge, whose traffic crosses your network to the Internet) is transit; a record with any other source is local. Records without a source address (an sFlow raw header that is not IP, or a NetFlow v9/IPFIX template without IE 8 or 27) are not classified. NetFlow v5, v9, IPFIX, and sFlow (sampled IPv4/IPv6 records and raw headers) all carry the source. Per prefix, over the same `window`, the source keeps the transit and local byte counts; a prefix whose transit share is at least `share_pct` is a `transit` prefix, otherwise `local`. The class does not change the targets or their weights. Before each decision the controller passes it to the policy chain, where `rules` with `traffic: transit` or `traffic: local` give customer-originated and local traffic separate policies (see [Policy `rules`](#policy-rules)). A prefix with no classified bytes in the window has no class, and traffic rules do not match it. Classification never announces: the allowlist, learned-RIB check, community and NO_EXPORT, `max_improvements`, hold time, and withdraw rules are unchanged. Rollback: remove `transit` (and the `traffic` rules).
+
+| Key | Default | Bounds |
+|---|---|---|
+| `transit.customers` | none | Required when `transit` is set. Source CIDRs of the customer networks whose traffic transits. No host bits, no default route, no duplicates, at most 10000. |
+| `transit.share_pct` | 50 | Above 0, at most 100. The transit share of a prefix's classified bytes at or above which it is a transit prefix. Zero uses the default. |
+
 ### Source `span`
 
 Off unless this source is listed. It reads a SPAN or mirror port with an AF_PACKET socket (needs `--cap-add NET_RAW` and host networking) or replays a classic pcap file, follows TCP connections between `local` and remote addresses, and returns remote prefixes that look broken so they are probed first. Packets are parsed and dropped. Only per-connection sequence state (capped by `max_flows`) and per-prefix counters over `window` are kept; each time bucket holds at most 20000 prefixes. The source does not announce, and a problem prefix still needs the RIB, the allowlist, the thresholds, the cap, and hold time before anything is injected.
@@ -612,8 +619,11 @@ Each rule:
 | `countries` | ISO 3166-1 alpha-2 codes. Looked up for the first address of the probed prefix, `country` first, then `registered_country`. |
 | `max_loss_pct` | Required for `static`, 0–100: the highest loss the pinned path may show. Not allowed on other actions. |
 | `max_rtt` | Optional for `static`: the highest average RTT the pinned path may show (for example `150ms`). 0 or unset means no latency ceiling. |
+| `traffic` | Optional: `transit` or `local`. The rule then matches only prefixes of that traffic class, from a `flow` source with a `transit` block. Alone (no `prefixes`, `asns`, or `countries`) it matches every prefix of the class. A prefix no source classifies matches no traffic rule. |
 
-A rule needs at least one of `prefixes`, `asns`, or `countries`, and matches when any of them match. When several rules match one prefix, a prefix match beats an ASN match, which beats a country match. Among prefix matches the longest rule prefix wins. Remaining ties go to the rule listed first.
+A rule needs at least one of `prefixes`, `asns`, `countries`, or `traffic`, and matches when any of its prefixes, ASNs, or countries match and, when `traffic` is set, the prefix's class is that class. When several rules match one prefix, a prefix match beats an ASN match, which beats a country match, which beats a traffic-only rule. Among prefix matches the longest rule prefix wins. Remaining ties go to the rule listed first.
+
+Transit traffic optimization (#29): with the `flow` source's `transit` block, customer-originated (transit) and local prefixes get separate policies. For example, keep customer traffic on the transits you resell (`{traffic: transit, action: allow, providers: [transit-a]}`), leave it on native routing (`{traffic: transit, action: ignore}`), or rank your own traffic first at the cap (`{traffic: local, action: vip}`). Decisions name the match (`traffic transit`, or `prefix 198.51.100.0/24, traffic transit`).
 
 #### Policy `maintenance`
 

@@ -105,6 +105,9 @@ scorer:
 #       #   local: [192.0.2.0/24]     # your own networks
 #       #   failure_pct: 20           # SYN-without-ACK plus remote RST, % of flows
 #       #   min_flows: 10
+#       # transit:                  # optional: classify transit (customer-originated) vs local traffic
+#       #   customers: [198.51.100.0/24]  # source networks of your customers; any other source is local
+#       #   share_pct: 50             # transit share at or above which a prefix is a transit prefix
 #   - type: span                # passive problem detection from a mirror port. Needs NET_RAW.
 #     config:                   # Does not announce; problem prefixes are probed first.
 #       interface: eth1         # mirror NIC; or pcap_file: /etc/packeteer/span.pcap (lab replay)
@@ -291,6 +294,10 @@ storage:
 #           action: deny
 #           providers: [transit-b]
 #           asns: [64500]           # origin ASN of the learned path
+#         - name: customers-via-a   # transit (customer-originated) traffic: its own policy
+#           action: allow
+#           providers: [transit-a]
+#           traffic: transit        # transit or local; needs the flow source's transit block
 
 # Plugins (docs/PLUGINS.md). Out-of-process plugins live in plugin_dir.
 plugin_dir: /etc/packeteer/plugins

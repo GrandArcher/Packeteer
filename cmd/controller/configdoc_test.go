@@ -55,6 +55,7 @@ func TestConfigDocCoversStructs(t *testing.T) {
 		static.Target{},
 		flow.Config{},
 		flow.ProblemsConfig{},
+		flow.TransitConfig{},
 		span.Config{},
 		traceroute.Config{},
 		outage.Config{},

@@ -11,6 +11,13 @@
 // unsampled NetFlow v5, v9, and IPFIX records (internal/passive): outbound
 // connection attempts that never got past SYN, and resets from the remote
 // side. Problem prefixes are listed ahead of the busiest ones.
+//
+// With a transit block it also classifies traffic (#29): bytes whose source
+// is in transit.customers transit the network (customer-originated), the
+// rest are local. A prefix whose transit share reaches transit.share_pct is
+// a transit prefix. The class reaches the policy chain so transit and local
+// prefixes can have separate policies (rules with traffic: transit|local).
+// Classification never announces and never adds a target.
 package flow
 
 import (
@@ -50,6 +57,9 @@ const (
 	defaultProblemMinFlows   = 10
 	defaultProblemMaxTargets = 100
 
+	defaultTransitSharePct = 50
+	maxTransitCustomers    = 10000
+
 	tcpSYN = 0x02
 	tcpRST = 0x04
 	tcpACK = 0x10
@@ -57,8 +67,12 @@ const (
 
 func init() { plugin.Sources.Register(TypeName, New) }
 
-// Source implements VolumeSource so commit control can read per-prefix rates.
-var _ plugin.VolumeSource = (*Source)(nil)
+// Source implements VolumeSource so commit control can read per-prefix rates,
+// and TrafficClassifier so policies can match transit traffic.
+var (
+	_ plugin.VolumeSource      = (*Source)(nil)
+	_ plugin.TrafficClassifier = (*Source)(nil)
+)
 
 // Config is the flow source's config block.
 type Config struct {
@@ -72,6 +86,25 @@ type Config struct {
 	// Problems turns on passive problem detection from TCP flags. Off
 	// when omitted.
 	Problems *ProblemsConfig `yaml:"problems"`
+	// Transit turns on transit traffic classification. Off when omitted.
+	Transit *TransitConfig `yaml:"transit"`
+}
+
+// TransitConfig is the flow source's transit classification block.
+type TransitConfig struct {
+	// Customers lists the source networks whose traffic transits: the
+	// customer (downstream) prefixes behind this edge. Traffic from any
+	// other source is local.
+	Customers []string `yaml:"customers"`
+	// SharePct is the transit share of a prefix's classified bytes at or
+	// above which the prefix is a transit prefix. Default 50.
+	SharePct float64 `yaml:"share_pct"`
+}
+
+// transit is the validated TransitConfig.
+type transit struct {
+	customers []netip.Prefix
+	sharePct  float64
 }
 
 // ProblemsConfig is the flow source's passive problem detection block.
@@ -135,6 +168,7 @@ type Source struct {
 	dec  *decoder
 	win  *slide
 	prob *problems
+	tr   *transit
 
 	conns     []*net.UDPConn
 	closeOnce sync.Once
@@ -195,11 +229,16 @@ func New(c plugin.Config, env plugin.Env) (plugin.TargetSource, error) {
 	if err != nil {
 		return nil, err
 	}
+	tr, err := newTransit(cfg.Transit)
+	if err != nil {
+		return nil, err
+	}
 	if env.Logger == nil {
 		env.Logger = slog.Default()
 	}
 	return &Source{
 		prob:     prob,
+		tr:       tr,
 		log:      env.Logger,
 		listen:   listen,
 		window:   cfg.Window,
@@ -247,6 +286,60 @@ func newProblems(c *ProblemsConfig, window time.Duration) (*problems, error) {
 		return nil, fmt.Errorf("problems: %w", err)
 	}
 	return &problems{local: local, th: th, maxTargets: c.MaxTargets, win: passive.NewWindow(window, maxPrefixes)}, nil
+}
+
+func newTransit(c *TransitConfig) (*transit, error) {
+	if c == nil {
+		return nil, nil
+	}
+	if len(c.Customers) == 0 {
+		return nil, fmt.Errorf("transit.customers is required: the source prefixes of the customer networks whose traffic transits (omit transit to disable classification)")
+	}
+	if len(c.Customers) > maxTransitCustomers {
+		return nil, fmt.Errorf("transit.customers: at most %d prefixes", maxTransitCustomers)
+	}
+	customers, err := passive.ParseNets("transit.customers", c.Customers)
+	if err != nil {
+		return nil, err
+	}
+	for i, p := range customers {
+		if p.Bits() == 0 {
+			return nil, fmt.Errorf("transit.customers[%d]: a default route cannot be a customer network", i)
+		}
+	}
+	if c.SharePct == 0 {
+		c.SharePct = defaultTransitSharePct
+	}
+	if c.SharePct != c.SharePct || c.SharePct <= 0 || c.SharePct > 100 {
+		return nil, fmt.Errorf("transit.share_pct %v must be above 0 and at most 100", c.SharePct)
+	}
+	return &transit{customers: customers, sharePct: c.SharePct}, nil
+}
+
+// classify returns the traffic class of a record's source. Without a
+// transit block, or without a source address, it is unknown.
+func (t *transit) classify(src netip.Addr) traffic {
+	if t == nil || !src.IsValid() || src.IsUnspecified() {
+		return trafficUnknown
+	}
+	if passive.Contains(t.customers, src.Unmap()) {
+		return trafficTransit
+	}
+	return trafficLocal
+}
+
+// class is the prefix's class from its classified bytes, or "" when none
+// were classified.
+func (t *transit) class(local, tr uint64) string {
+	m := plugin.TrafficMix{LocalBytes: local, TransitBytes: tr}
+	switch {
+	case local+tr == 0:
+		return ""
+	case m.TransitPct() >= t.sharePct:
+		return plugin.TrafficTransit
+	default:
+		return plugin.TrafficLocal
+	}
 }
 
 func normalizeListen(s string) (string, error) {
@@ -415,6 +508,28 @@ func (s *Source) Volumes(ctx context.Context) ([]plugin.PrefixVolume, error) {
 	return out, nil
 }
 
+// TrafficMix implements plugin.TrafficClassifier. It lists every prefix in
+// the window with classified bytes, largest first. Without a transit block
+// it returns nothing. It does not announce.
+func (s *Source) TrafficMix(ctx context.Context) ([]plugin.TrafficMix, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if s.tr == nil {
+		return nil, nil
+	}
+	rows := s.win.totals(s.now(), maxPrefixes)
+	out := make([]plugin.TrafficMix, 0, len(rows))
+	for _, r := range rows {
+		c := s.tr.class(r.local, r.transit)
+		if c == "" {
+			continue
+		}
+		out = append(out, plugin.TrafficMix{Prefix: r.prefix, LocalBytes: r.local, TransitBytes: r.transit, Class: c})
+	}
+	return out, nil
+}
+
 // Targets returns the current top prefixes. With a problems block, problem
 // prefixes come first (weight is the problem score, capped at
 // problems.max_targets), then the busiest prefixes not already listed. An
@@ -465,7 +580,7 @@ func (s *Source) ingest(at time.Time, exporter netip.Addr, payload []byte) {
 		if !p.IsValid() || !p.Contains(dst) {
 			continue
 		}
-		s.win.add(at, p, dst, o.bytes)
+		s.win.add(at, p, dst, o.bytes, s.tr.classify(o.src))
 	}
 }
 

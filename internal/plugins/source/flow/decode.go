@@ -12,7 +12,8 @@ import (
 // module's go.mod requires a newer protobuf than the BGP speaker, plus
 // collector dependencies the decoders themselves do not use. This reader
 // keeps only the destination and octet fields target discovery needs, plus
-// the source, protocol, and TCP flags that passive problem detection reads.
+// the source, protocol, and TCP flags that passive problem detection and
+// transit classification read. sFlow gives the source but no TCP flags.
 
 const (
 	maxTemplates   = 4096
@@ -49,7 +50,8 @@ type observation struct {
 	dst   netip.Addr
 	bytes uint64
 
-	// Set only by NetFlow v5, v9, and IPFIX records that carry them.
+	// src is set when the record carries it (sFlow too). The rest are set
+	// only by NetFlow v5, v9, and IPFIX records that carry them.
 	src       netip.Addr
 	proto     uint8
 	tcpFlags  uint8
@@ -694,12 +696,13 @@ func sampledIPv4(rec []byte) (observation, bool) {
 		return observation{}, false
 	}
 	n := binary.BigEndian.Uint32(rec[0:4])
-	var dst [4]byte
+	var src, dst [4]byte
+	copy(src[:], rec[8:12])
 	copy(dst[:], rec[12:16])
 	if n == 0 {
 		return observation{}, false
 	}
-	return observation{dst: netip.AddrFrom4(dst), bytes: uint64(n)}, true
+	return observation{src: netip.AddrFrom4(src), dst: netip.AddrFrom4(dst), bytes: uint64(n)}, true
 }
 
 func sampledIPv6(rec []byte) (observation, bool) {
@@ -708,12 +711,13 @@ func sampledIPv6(rec []byte) (observation, bool) {
 		return observation{}, false
 	}
 	n := binary.BigEndian.Uint32(rec[0:4])
-	var dst [16]byte
+	var src, dst [16]byte
+	copy(src[:], rec[8:24])
 	copy(dst[:], rec[24:40])
 	if n == 0 {
 		return observation{}, false
 	}
-	return observation{dst: netip.AddrFrom16(dst), bytes: uint64(n)}, true
+	return observation{src: netip.AddrFrom16(src), dst: netip.AddrFrom16(dst), bytes: uint64(n)}, true
 }
 
 func sampledHeader(rec []byte) (observation, bool) {
@@ -727,35 +731,34 @@ func sampledHeader(rec []byte) (observation, bool) {
 		return observation{}, false
 	}
 	hdr := rec[16 : 16+hdrLen]
-	var dst netip.Addr
-	var n uint32
+	var o observation
 	var ok bool
 	switch proto {
 	case sflowHeaderEthernet:
-		dst, n, ok = parseEthernet(hdr, frameLen)
+		o, ok = parseEthernet(hdr, frameLen)
 	case sflowHeaderIPv4:
-		dst, n, ok = parseIPv4(hdr, frameLen)
+		o, ok = parseIPv4(hdr, frameLen)
 	case sflowHeaderIPv6:
-		dst, n, ok = parseIPv6(hdr, frameLen)
+		o, ok = parseIPv6(hdr, frameLen)
 	default:
 		return observation{}, false
 	}
-	if !ok || n == 0 {
+	if !ok || o.bytes == 0 {
 		return observation{}, false
 	}
-	return observation{dst: dst, bytes: uint64(n)}, true
+	return o, true
 }
 
-func parseEthernet(hdr []byte, frameLen uint32) (netip.Addr, uint32, bool) {
+func parseEthernet(hdr []byte, frameLen uint32) (observation, bool) {
 	if len(hdr) < 14 {
-		return netip.Addr{}, 0, false
+		return observation{}, false
 	}
 	off := 12
 	et := binary.BigEndian.Uint16(hdr[off : off+2])
 	off += 2
 	for et == 0x8100 || et == 0x88a8 || et == 0x9100 {
 		if len(hdr) < off+4 {
-			return netip.Addr{}, 0, false
+			return observation{}, false
 		}
 		et = binary.BigEndian.Uint16(hdr[off+2 : off+4])
 		off += 4
@@ -766,31 +769,33 @@ func parseEthernet(hdr []byte, frameLen uint32) (netip.Addr, uint32, bool) {
 	case 0x86dd:
 		return parseIPv6(hdr[off:], frameLen)
 	default:
-		return netip.Addr{}, 0, false
+		return observation{}, false
 	}
 }
 
-func parseIPv4(b []byte, frameLen uint32) (netip.Addr, uint32, bool) {
+func parseIPv4(b []byte, frameLen uint32) (observation, bool) {
 	if len(b) < 20 || b[0]>>4 != 4 {
-		return netip.Addr{}, 0, false
+		return observation{}, false
 	}
-	var dst [4]byte
+	var src, dst [4]byte
+	copy(src[:], b[12:16])
 	copy(dst[:], b[16:20])
 	n := uint32(binary.BigEndian.Uint16(b[2:4]))
 	if n < 20 {
 		n = frameLen
 	}
 	if n == 0 {
-		return netip.Addr{}, 0, false
+		return observation{}, false
 	}
-	return netip.AddrFrom4(dst), n, true
+	return observation{src: netip.AddrFrom4(src), dst: netip.AddrFrom4(dst), bytes: uint64(n)}, true
 }
 
-func parseIPv6(b []byte, frameLen uint32) (netip.Addr, uint32, bool) {
+func parseIPv6(b []byte, frameLen uint32) (observation, bool) {
 	if len(b) < 40 || b[0]>>4 != 6 {
-		return netip.Addr{}, 0, false
+		return observation{}, false
 	}
-	var dst [16]byte
+	var src, dst [16]byte
+	copy(src[:], b[8:24])
 	copy(dst[:], b[24:40])
 	payload := uint32(binary.BigEndian.Uint16(b[4:6]))
 	n := payload + 40
@@ -798,7 +803,7 @@ func parseIPv6(b []byte, frameLen uint32) (netip.Addr, uint32, bool) {
 		n = frameLen
 	}
 	if n == 0 {
-		return netip.Addr{}, 0, false
+		return observation{}, false
 	}
-	return netip.AddrFrom16(dst), n, true
+	return observation{src: netip.AddrFrom16(src), dst: netip.AddrFrom16(dst), bytes: uint64(n)}, true
 }
