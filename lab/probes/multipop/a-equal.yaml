@@ -1,0 +1,8 @@
+# Inside the 15ms threshold of each other and of x-b (40ms + 10ms): not a
+# performance move. Commit control is what steers.
+sent: 4
+paths:
+  - provider: x-a
+    rtt_ms: 40
+  - provider: y-a
+    rtt_ms: 45

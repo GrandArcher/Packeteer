@@ -5,6 +5,7 @@ package all
 import (
 	_ "github.com/GrandArcher/Packeteer/internal/plugins/announcer/gobgp"    // gobgp announcer
 	_ "github.com/GrandArcher/Packeteer/internal/plugins/exec"               // exec prober/source/notifier
+	_ "github.com/GrandArcher/Packeteer/internal/plugins/federation/mtls"    // mTLS multi-POP federation
 	_ "github.com/GrandArcher/Packeteer/internal/plugins/notifier/smtp"      // smtp notifier
 	_ "github.com/GrandArcher/Packeteer/internal/plugins/notifier/snmptrap"  // snmptrap notifier
 	_ "github.com/GrandArcher/Packeteer/internal/plugins/notifier/webhook"   // webhook notifier

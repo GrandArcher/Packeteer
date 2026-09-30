@@ -1,0 +1,4 @@
+sent: 4
+paths:
+  - provider: x-b
+    rtt_ms: 10

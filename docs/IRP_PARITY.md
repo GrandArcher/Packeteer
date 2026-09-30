@@ -25,10 +25,10 @@ Milestones:
 
 | Status | Count |
 |---|---|
-| done | 66 |
+| done | 69 |
 | partial | 1 |
 | in progress | 0 |
-| planned | 12 |
+| planned | 9 |
 | won't do | 3 |
 
 ## Performance optimization
@@ -71,7 +71,7 @@ Passive problem detection (#21) feeds probing; it never announces. The `span` so
 | Provider precedence / last-resort provider | 4.15 precedence | done | v0.2 | scorer (`commit`) | #18 |
 | Cost optimization mode (cheapest provider meeting a performance floor) | 1.3.2 Cost optimization | done | v0.2 | scorer (`cost`) | #19 |
 | Precedence rules performance vs cost | 1.3.2 | done | v0.2 | scorer (`cost`) | #19 |
-| Global commit across POPs | 3.12 Global Commit | planned | v0.4 | core (multi-instance) | #30 |
+| Global commit across POPs | 3.12 Global Commit | done (lab-proven) | v0.4 | federation (`mtls`) + core (`internal/federation`) | #30 |
 
 The `snmp` telemetry plugin (#17) polls `ifHCInOctets` and `ifHCOutOctets` (32-bit octet counters when the 64-bit ones are absent). The community and v3 passphrases are environment variables named in the config, not values in the file. Samples stay in memory for the open UTC billing period (`billing_day` 1–28). A restart clears them. The 95th percentile is nearest rank, ceil(0.95 × N). `separate` keeps the inbound and outbound 95ths apart. `greater` is the 95th of max(in, out) on each sample. `greater_separate` is the greater of those two 95ths. The numbers are on `/api/telemetry` and `packeteer_telemetry_*`. The plugin does not announce.
 
@@ -137,8 +137,10 @@ Internet exchanges (#27, second half) are an `exchanges` list. Each peer is a pr
 
 | Capability | IRP doc ref | Status | Milestone | Plugin kind | Issue |
 |---|---|---|---|---|---|
-| Multiple routing domains with inter-DC RTT | 1.2.12, 4.21 | planned | v0.4 | core | #30 |
-| Central management of many instances (GMI) | 1.4 | planned | v0.4 | core + UI | #30 |
+| Multiple routing domains with inter-DC RTT | 1.2.12, 4.21 | done (lab-proven) | v0.4 | federation (`mtls`) + core (`internal/federation`) | #30 |
+| Central management of many instances (GMI) | 1.4 | done (lab-proven) | v0.4 | federation (`mtls`) + API/UI (`/api/federation`) | #30 |
+
+Multi-POP (#30, [multi-pop.md](multi-pop.md)): one Packeteer instance per POP (routing domain), joined by a `federation` plugin. The built-in `mtls` plugin serves each instance's snapshot over HTTPS with mutual TLS 1.3 (certificates from a mounted CA; unknown client certificates get 403) and polls its peers; it never announces or decides. A snapshot carries the instance's own providers (health and telemetry), its fresh measurements through them, how its traffic for each learned probed prefix leaves, and its improvements. A provider with `domain` set to another POP is not probed locally: its path is the peer's measurement plus the configured `inter_dc_rtt`, and it is usable only while the peer is fresh, its RIB is ready, it reports the provider up, and its own traffic for that exact prefix leaves through that provider (so traffic cannot loop between POPs; two simultaneous steers at each other are broken by domain name). The steer is announced to this POP's edge with the provider's backbone `next_hop`, only for a prefix in this POP's learned RIB and allowlist, with the community and NO_EXPORT, under `max_improvements` and `hold_time`. Peer staleness (`max_age`), a peer's RIB or provider going down, or a peer shutting down (it publishes its providers down first) retires the steer and withdraws the route. `global_commit` shares one commit across providers in several POPs (IRP Globalcc): with the `commit` scorer, each local member's commit is the global commit less every other member's fresh usage; a missing member falls back to each provider's own commit. `/api/federation` and the dashboard's POPs section are the central view (every instance's mode, freshness, providers, improvements, inter-DC RTT, and global commit totals). The FRR lab (`lab/e2e-multipop.sh`: two POPs, each an FRR edge and a Packeteer instance, certificates generated per run) proves the central view, a steer through the other POP's carrier because of the inter-DC RTT (next hop, local-pref, community, NO_EXPORT), withdraw on peer loss and re-steer, a commit move driven by the other POP's usage and its release, that a prefix only the other POP learned is never announced, that the other instance never steers back, SIGTERM, and SIGKILL. Lab-proven only, not on a public edge. Rollback: remove `federation`, `global_commit`, and remote-domain providers and restart; each instance runs standalone.
 
 ## Security
 

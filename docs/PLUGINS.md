@@ -59,6 +59,9 @@ Each entry has `type` (required), an optional `name` (defaults to the type and m
 | `storage` | `Write(ctx, HistoryBatch)`, `Read(ctx, HistoryQuery)`. Report history; one instance under `storage:` | `sqlite` | none |
 | `rib_source` | `SetRIBSink(func(RIBEvent))`. Feeds the RIB view (peer up/down, router down, paths) from outside the iBGP session. Learn-only; list under `rib_sources:` | `bmp` (BMP monitoring station) | **never** |
 | `whois` | `Lookup(ctx, query) (WhoisResult, error)`. Troubleshooting registry lookups; one instance under `troubleshoot.whois:` | `rdap` | none |
+| `federation` | `Publish(InstanceSnapshot)`, `Peers(now) []PeerState`. Instance-to-instance transport for multi-POP (#30); one instance under `federation:`. Transport only: the core merges fresh peer data into decisions | `mtls` (mutual TLS) | **never** |
+
+A federation plugin never announces and never decides. What it hands the core (peer snapshots) can only make a provider in another POP usable for a prefix the local RIB and allowlist already accept; the core still applies the community, NO_EXPORT, cap, hold time, and withdraw rules. It is in-process only, because peer data feeds decisions. Built-in `mtls`: see [CONFIG.md](CONFIG.md#federation-mtls) and [multi-pop.md](multi-pop.md).
 
 Push exporters (Prometheus remote-write, OTLP) are not built; Prometheus metrics are built into the ops surface (#9) for scraping, and report history is the `storage` plugin (#23). Interface usage from the `snmp` telemetry plugin is on `/api/telemetry` and in `packeteer_telemetry_*` gauges. The `commit` scorer reads that snapshot and per-prefix flow volume. The telemetry plugin does not announce.
 
@@ -69,7 +72,7 @@ Announcers, inbound ones included, run **in-process only**, so an external proce
 ## Lifecycle
 
 1. **Factory (Init).** `func(cfg plugin.Config, env plugin.Env) (T, error)`. It decodes and validates config with `cfg.Decode(&myStruct)`. It must do no network I/O. `env` provides the instance name, a scoped `slog` logger, the plugin dir, and `Getenv`.
-2. **`Start(ctx)`.** Begins background work in goroutines and must not block. Plugins start in this order: storage, RIB sources, sources, probers, scorer, policies, telemetry, notifiers, whois, announcer, inbound announcer, mitigation announcer. If one fails, the ones already started are stopped.
+2. **`Start(ctx)`.** Begins background work in goroutines and must not block. Plugins start in this order: storage, RIB sources, sources, probers, scorer, policies, telemetry, notifiers, federation, whois, announcer, inbound announcer, mitigation announcer. If one fails, the ones already started are stopped.
 3. **`Stop(ctx)`.** Releases everything before `ctx` expires. Plugins stop in reverse order, so the announcer stops first and routes are withdrawn early.
 
 Embed `plugin.Base` for no-op `Start`/`Stop`.

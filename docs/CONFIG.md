@@ -30,6 +30,11 @@ The image entrypoint is the same binary. Flags go after the image name.
 | `local_pref` | 0 | inject | Local preference on every injected route. `0` is rejected in inject mode. Set it above the edge's native local preference. |
 | `more_specific_bits` | unset | must be absent | Any value, including `0`, is an error. Packeteer announces the exact prefix it learned from the RIB. |
 | `more_specific` | off | no | More-specific injection: with each improvement, also announce the more-specifics inside its prefix that a neighbor advertises in the learned RIB, under a route cap. Never a prefix that is not learned. See [`more_specific`](#more_specific). Lab-proven only. |
+| `instance` | `domain` | no | This instance's name in a federation (#30). Peers expect it in its snapshot. Letters, digits, `_`, `.`, `-`, at most 64 characters. See [Multi-POP](#multi-pop-federation). |
+| `domain` | empty | with `federation` | This instance's routing domain (POP). Empty is a standalone instance. |
+| `inter_dc_rtt` | empty | per remote domain | Map of domain to round-trip time from this POP (for example `pop-b: 12ms`), 0–10s. Added to every path a peer in that domain measured. |
+| `global_commit` | empty | no | Commits shared by providers in several domains. Needs `federation`. See [Multi-POP](#multi-pop-federation). |
+| `federation` | none | no | The instance-to-instance transport plugin, one object: `type: mtls`. See [Federation `mtls`](#federation-mtls). Omitted runs the instance standalone. |
 | `max_improvements` | 50 | no | Cap on active improvements. Integer from 1 to 10000. Biggest gains win when the cap binds. |
 | `hold_time` | 0 | inject: positive | Minimum life of an improvement, and the cooldown after a flip-back or a confirmed RIB leave. `0` is legal in observe and suggest (a flip can happen on the next evaluation). Negative is an error. |
 | `improvement_ttl` | `1h` | no | Retire an improvement after this long so the native path is measured again. A negative duration disables the TTL. `0` selects the default `1h`. |
@@ -71,8 +76,9 @@ A candidate wins when its score is lower and either loss improves by at least `m
 | Key | Required | Meaning |
 |---|---|---|
 | `name` | yes | Unique. |
-| `source_ip` | yes | Source address of probes. Unique across providers. Must be configured on the host. Same address family as `next_hop`. |
-| `next_hop` | yes | BGP next hop used if this provider is selected. Also how a learned route is matched to a provider. |
+| `source_ip` | yes, except in another domain | Source address of probes. Unique across providers. Must be configured on the host. Same address family as `next_hop`. Must be empty for a provider in another `domain`. |
+| `next_hop` | yes | BGP next hop used if this provider is selected. Also how a learned route is matched to a provider. For a provider in another domain, the address this POP's routers reach that POP's exit at across the backbone. |
+| `domain` | no | Routing domain (POP) the provider exits in (#30). Empty or equal to the top-level `domain` is local. A provider in another domain is not probed here: the peer there measures it. Needs `federation` and an `inter_dc_rtt` entry for the domain; `bmp` and `add_path` do not apply. |
 | `exclude` | no | `true`: still probe, never select for an improvement. |
 | `group` | no | Load-balancing group. Empty means the provider is not in a group. Letters, digits, `_`, `.`, `-`, at most 64 characters, starting with a letter or digit. |
 | `precedence` | no | Commit-control preference. Lower is preferred. `0` or omitted means 100. 0–10000. The highest precedence among providers that can take commit traffic is the last resort. |
@@ -303,6 +309,40 @@ More-specific injection (#56, lab-proven only, not on a public edge). Design and
 | `max_routes` | `100` | Cap on routes on a router: improvements, their more-specifics, and inbound steer routes. 1–1000. A new improvement is announced whole (P and all its learned more-specifics) or not at all; a more-specific learned later is added only while there is room. Nothing on the wire is withdrawn to make room. `max_improvements` still caps improvements. |
 
 A more-specific is withdrawn with its improvement (flip-back, TTL, policy, P leaving the RIB), when the RIB is not ready, on shutdown, and when it really leaves the RIB: the neighbor advertised it for at least 5s while Packeteer's route was on the wire and then stopped. A shorter gap is the router hiding its own path because Packeteer's route won, and the route stays. A change needs a restart (SIGHUP refuses it). Rollback: remove the block or set `enabled: false` and restart; only improvements' own prefixes are announced again.
+
+### Multi-POP (federation)
+
+Several Packeteer instances, one per POP (routing domain), share what they measure over mutual TLS (#30, lab-proven only). Design: [multi-pop.md](multi-pop.md).
+
+```yaml
+domain: pop-a
+inter_dc_rtt:
+  pop-b: 12ms
+providers:
+  - name: x-a
+    source_ip: 192.0.2.11
+    next_hop: 192.0.2.1
+  - name: x-b            # carrier X in POP B
+    domain: pop-b
+    next_hop: 192.0.2.253  # POP B's exit across the backbone
+global_commit:
+  - name: carrier-x
+    commit_mbps: 1000
+    providers: [x-a, x-b]
+federation:
+  type: mtls
+  config: {...}
+```
+
+| `global_commit` key | Meaning |
+|---|---|
+| `name` | Unique. Letters, digits, `_`, `.`, `-`. |
+| `commit_mbps` | The shared commit, decimal megabits per second, above 0 and at most 100000000. |
+| `providers` | At least two configured providers, at least one in this domain. A provider is in at most one global commit. |
+
+A provider in another domain is usable for a prefix only while its peer is fresh, its RIB is ready, it reports the provider up, and its own traffic for that exact prefix leaves through that provider. Its path is the peer's measurement plus `inter_dc_rtt`. When the peer goes stale the path disappears and an improvement onto it is retired and withdrawn. The prefix must still be in this POP's learned RIB and allowlist; the improvement counts toward `max_improvements` and carries `packeteer_community` and `no-export` like any other.
+
+With a commit scorer, each local member's commit becomes the global commit less every other member's usage (never more than its own commit). When any member's usage is missing or its peer is stale, each provider's own commit applies, as standalone. Changes need a restart (SIGHUP refuses them). Rollback: remove `federation`, `global_commit`, and remote providers, and restart.
 
 ### Plugin entries
 
@@ -905,6 +945,28 @@ With several monitored edges, a BMP path counts for a provider's route check onl
 FRR sends BMP with `-M bmp` on bgpd and a `bmp targets` block (`bmp connect <station> port 11019`, `bmp monitor ipv4 unicast post-policy`, optionally `bmp monitor ipv4 unicast loc-rib`, and `bmp stats interval` if you set `idle_timeout`); see `lab/frr-bmp/frr.conf`. FRR sends peer up and peer down with the policy flag clear; the station applies them to the peer whichever table is monitored. FRR offers add-path Receive on every session by default; with a peer that does not offer send, that is not negotiated add-path and is decoded normally.
 
 **Rollback:** set every provider's `bmp` to `off` (or remove it) and restart; the view falls back to the iBGP RIB. Remove `rib_sources` too to stop the station listening.
+
+### Federation `mtls`
+
+The built-in instance-to-instance transport (#30). Each instance serves its snapshot over HTTPS with mutual TLS (TLS 1.3) at `/v1/snapshot` and polls its peers the same way. It never announces and never decides. Certificates are mounted files; the plugin generates and stores nothing.
+
+| Key | Default | Meaning |
+|---|---|---|
+| `listen` | empty | Address to serve this instance's snapshot on, for example `0.0.0.0:9443`. Empty serves nothing (a central-view instance that only polls). |
+| `cert_file` | required | PEM certificate this instance presents, as server and as client. |
+| `key_file` | required | Its PEM private key. |
+| `ca_file` | required | PEM CA that signs every instance's certificate. A certificate from another CA is refused. |
+| `peers` | empty | Other instances: `name`, `url`, optional `server_name`. At most 64. |
+| `name` | required | The peer's `instance`. A snapshot that names another instance is refused. |
+| `url` | required | `https://host:port`, no path. |
+| `server_name` | peer `name` | Name checked on the peer's server certificate. |
+| `allow_clients` | peer names | Certificate names (CN or DNS SAN) allowed to read this snapshot. Others get 403. |
+| `poll_interval` | `2s` | How often each peer is fetched, 100ms–1m. |
+| `timeout` | `poll_interval` | Bound on one fetch. At most `poll_interval`. |
+| `max_age` | 3 × `poll_interval` | How long a peer's last good snapshot stays usable, `poll_interval`–10m. After that the peer is stale and this instance acts standalone. |
+| `max_bytes` | 16 MiB | Cap on a fetched snapshot, 1024–1073741824. |
+
+Times in a snapshot are converted to local time by their age at the peer, so clock skew between POPs cannot make stale data look fresh. On shutdown an instance publishes its providers down before it withdraws, so peers retire steers onto them at their next poll.
 
 ### Announcer `gobgp`
 

@@ -431,7 +431,7 @@ func TestDashboardIsLocal(t *testing.T) {
 		t.Fatal(err)
 	}
 	page := string(html)
-	for _, want := range []string{`href="/app.css"`, `src="/app.js"`, "Providers", "Prefixes", "Active improvements", "Threat mitigation", `id="mitigation"`, "Reports", `id="report-csv"`} {
+	for _, want := range []string{`href="/app.css"`, `src="/app.js"`, "Providers", "Prefixes", "Active improvements", "Threat mitigation", `id="mitigation"`, "POPs", `id="federation"`, "Reports", `id="report-csv"`} {
 		if !strings.Contains(page, want) {
 			t.Errorf("index missing %q", want)
 		}
@@ -444,7 +444,7 @@ func TestDashboardIsLocal(t *testing.T) {
 		t.Fatal(err)
 	}
 	script := string(js)
-	for _, want := range []string{"textContent", "REFRESH_MS", "/api/prefixes", "/api/improvements", "/api/providers", "setInterval", "/api/reports", "format=", "/api/mitigations", "renderMitigation"} {
+	for _, want := range []string{"textContent", "REFRESH_MS", "/api/prefixes", "/api/improvements", "/api/providers", "setInterval", "/api/reports", "format=", "/api/mitigations", "renderMitigation", "/api/federation", "renderFederation"} {
 		if !strings.Contains(script, want) {
 			t.Errorf("app.js missing %q", want)
 		}
@@ -538,4 +538,23 @@ func assertJSON(t *testing.T, url string, check func(*testing.T, map[string]any)
 		t.Fatalf("%s: %v (%s)", url, err, body)
 	}
 	check(t, m)
+}
+
+func TestFederationStandalone(t *testing.T) {
+	srv, err := New(Options{Snapshot: func() Snapshot { return Snapshot{Version: "t", Mode: "observe"} }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/federation", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d", rec.Code)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got["enabled"] != false || got["mode"] != "observe" || got["peers"] == nil || got["global_commit"] == nil {
+		t.Fatalf("standalone view = %s", rec.Body.String())
+	}
 }

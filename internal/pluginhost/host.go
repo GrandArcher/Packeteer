@@ -40,6 +40,8 @@ type Set struct {
 	Whois *Instance[plugin.Whois]
 	// RIBSources feed the RIB view (BMP). They never announce.
 	RIBSources []Instance[plugin.RIBSource]
+	// Federation is the multi-POP transport (#30). It never announces.
+	Federation *Instance[plugin.Federation]
 
 	started []namedLifecycle
 }
@@ -122,6 +124,11 @@ func Build(cfg *config.Config, opts Options) (*Set, error) {
 			s.Storage = &b[0]
 		}
 	}
+	if cfg.Federation != nil {
+		if b := build(plugin.Federations, "federation", []config.PluginSpec{*cfg.Federation}, base, &errs); len(b) == 1 {
+			s.Federation = &b[0]
+		}
+	}
 	if cfg.Troubleshoot.Whois != nil {
 		if b := build(plugin.Whoises, "troubleshoot.whois", []config.PluginSpec{*cfg.Troubleshoot.Whois}, base, &errs); len(b) == 1 {
 			s.Whois = &b[0]
@@ -163,6 +170,9 @@ func (s *Set) all() []namedLifecycle {
 	}
 	for _, p := range s.Notifiers {
 		add(plugin.KindNotifier, p.Name, p.Plugin)
+	}
+	if s.Federation != nil {
+		add(plugin.KindFederation, s.Federation.Name, s.Federation.Plugin)
 	}
 	if s.Whois != nil {
 		add(plugin.KindWhois, s.Whois.Name, s.Whois.Plugin)

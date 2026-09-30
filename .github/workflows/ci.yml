@@ -238,3 +238,5 @@ jobs:
         run: bash lab/e2e-mitigation.sh
       - name: FRR more-specific lab (learned more-specifics only, route cap, RIB leave, SIGTERM, SIGKILL)
         run: bash lab/e2e-more-specific.sh
+      - name: FRR multi-POP lab (two federated instances over mTLS, inter-DC RTT, peer loss, global commit, SIGTERM, SIGKILL)
+        run: bash lab/e2e-multipop.sh

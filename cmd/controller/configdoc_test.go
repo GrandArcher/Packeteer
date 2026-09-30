@@ -9,6 +9,7 @@ import (
 	"github.com/GrandArcher/Packeteer/internal/config"
 	"github.com/GrandArcher/Packeteer/internal/plugins/announcer/gobgp"
 	"github.com/GrandArcher/Packeteer/internal/plugins/exec"
+	"github.com/GrandArcher/Packeteer/internal/plugins/federation/mtls"
 	"github.com/GrandArcher/Packeteer/internal/plugins/notifier/smtp"
 	"github.com/GrandArcher/Packeteer/internal/plugins/notifier/snmptrap"
 	"github.com/GrandArcher/Packeteer/internal/plugins/notifier/webhook"
@@ -84,6 +85,8 @@ func TestConfigDocCoversStructs(t *testing.T) {
 		sqlite.Config{},
 		rdap.Config{},
 		bmp.Config{},
+		mtls.Config{},
+		mtls.Peer{},
 	) {
 		if !strings.Contains(text, "`"+key+"`") {
 			missing = append(missing, key)

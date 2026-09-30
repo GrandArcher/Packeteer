@@ -197,6 +197,34 @@ scorer:
 #   enabled: false
 #   max_routes: 100
 
+# Multi-POP (off by default; docs/multi-pop.md). One instance per POP,
+# joined over mutual TLS. A provider in another domain is measured by the
+# peer there; its path is that measurement plus inter_dc_rtt. It is used
+# only for a prefix this POP learned, while the peer is fresh and exits the
+# prefix through it. global_commit shares one commit across POPs (commit
+# scorer). /api/federation is the central view. Certificates are mounted.
+# domain: pop-a
+# inter_dc_rtt:
+#   pop-b: 12ms
+# providers:            (add to the list above)
+#   - name: x-b
+#     domain: pop-b
+#     next_hop: 192.0.2.253
+# global_commit:
+#   - name: carrier-x
+#     commit_mbps: 1000
+#     providers: [transit-a, x-b]
+# federation:
+#   type: mtls
+#   config:
+#     listen: 0.0.0.0:9443
+#     cert_file: /etc/packeteer/certs/pop-a.crt
+#     key_file: /etc/packeteer/certs/pop-a.key
+#     ca_file: /etc/packeteer/certs/ca.crt
+#     peers:
+#       - name: pop-b
+#         url: https://192.0.2.20:9443
+
 # BMP monitoring station (RIB source). Edge routers stream their post-policy
 # Adj-RIB-In (routes they accepted) here, so Packeteer sees inactive IX and backup paths without a
 # full iBGP feed. Needs bgp.neighbors (the announcer uses that session).
