@@ -1,8 +1,12 @@
 # Changelog
 
-All notable changes to Packeteer are documented here. Versions are Git tags on `main`. The image tags `ghcr.io/grandarcher/packeteer:0.1.0` and `:latest` are published from the `v0.1.0` tag. `:edge` tracks `main`.
+All notable changes to Packeteer are documented here. Versions are Git tags on `main`. The image tags `ghcr.io/grandarcher/packeteer:<version>` (for example `:0.3.0`) and `:latest` are published from each `v<version>` tag. `:edge` tracks `main`.
 
 ## [Unreleased]
+
+## [0.3.0] - 2026-09-29
+
+Third release: the v0.3 IRP-parity milestone (#25–#29, #56). Inbound commit control and performance steering (prepends, provider TE communities, selective announcements), a BMP monitoring station and BGP add-path receive, multiple edge routers, route reflectors, and IX peers with per-peer next hop, threat mitigation (RTBH, BGP redirect, FlowSpec drop/rate-limit/redirect, country policies), transit traffic classification, and more-specific injection with a route cap. Everything here is lab-proven against FRR/GoBGP in CI with documentation prefixes and private ASNs, not on a public edge. The default stays `mode: observe`; inbound and mitigation have their own `mode` (default `observe`), and `more_specific` is off by default and only announces more-specifics learned exactly in the RIB. CI still proves announce, withdraw, and crash-withdraw.
 
 ### Added
 
