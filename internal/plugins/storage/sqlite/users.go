@@ -94,6 +94,9 @@ func (s *Store) DeleteUser(ctx context.Context, name string) (bool, error) {
 	if _, err := tx.ExecContext(ctx, `DELETE FROM api_tokens WHERE user_name = ?`, name); err != nil {
 		return false, err
 	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM dashboards WHERE owner = ?`, name); err != nil {
+		return false, err
+	}
 	n, _ := res.RowsAffected()
 	return n > 0, tx.Commit()
 }

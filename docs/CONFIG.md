@@ -36,7 +36,7 @@ The image entrypoint is the same binary. Flags go after the image name.
 | `global_commit` | empty | no | Commits shared by providers in several domains. Needs `federation`. See [Multi-POP](#multi-pop-federation). |
 | `federation` | none | no | The instance-to-instance transport plugin, one object: `type: mtls`. See [Federation `mtls`](#federation-mtls). Omitted runs the instance standalone. |
 | `ha` | none | no | Active/standby elector (#31), one object: `type: lease`. Only the active instance of the pair announces. Needs `bgp.neighbors`. See [High availability](#high-availability-ha) and [Elector `lease`](#elector-lease). Omitted runs a single instance, always active. Lab-proven only. |
-| `max_improvements` | 50 | no | Cap on active improvements. Integer from 1 to 10000. Biggest gains win when the cap binds. |
+| `max_improvements` | 50 | no | Cap on active improvements. Integer from 1 to 10000. Biggest gains win when the cap binds, or the scorer's [`improvement_weights`](#improvement-weights) when set. |
 | `hold_time` | 0 | inject: positive | Minimum life of an improvement, and the cooldown after a flip-back or a confirmed RIB leave. `0` is legal in observe and suggest (a flip can happen on the next evaluation). Negative is an error. |
 | `improvement_ttl` | `1h` | no | Retire an improvement after this long so the native path is measured again. A negative duration disables the TTL. `0` selects the default `1h`. |
 | `thresholds` | zeros | inject: both positive | See below. With both deltas at `0`, the decision engine records no improvement in any mode. |
@@ -60,6 +60,7 @@ The image entrypoint is the same binary. Flags go after the image name.
 | `inbound` | none | no | Inbound commit control: steer inbound traffic for your own prefixes away from a provider over commit with prepends and TE communities. Off unless set; its own `mode` defaults to `observe`. See [`inbound`](#inbound). Lab-proven only. |
 | `mitigation` | none | no | Threat mitigation: RTBH (blackhole), BGP redirect, and FlowSpec (drop, rate-limit, redirect, by source country too) for exact learned prefixes, added through `/api/mitigations`. Off unless set; its own `mode` defaults to `observe`. See [`mitigation`](#mitigation). Lab-proven only. |
 | `anomaly` | none | no | Automatic traffic anomaly (DDoS) detection: a detector plugin baselines flow volumes per destination prefix and IP protocol from a `flow` source and reports anomalies; an explicit rule can turn one into a mitigation rule, rate-limited and capped. Needs `mitigation` for rules. Off unless set. See [`anomaly`](#anomaly). Lab-proven only. |
+| `report_subscriptions` | none | no | Stored reports emailed as CSV on a daily, weekly, or monthly UTC schedule through an `smtp` notifier (#34). Needs `storage`. See [`report_subscriptions`](#report_subscriptions). Does not announce. |
 | `troubleshoot` | looking glass only | no | Read-only operator tools: looking glass, on-demand probe, traceroute, whois. Does not announce. See [`troubleshoot`](#troubleshoot). |
 
 `mode: observe` and `mode: suggest` use the same decision path and announce nothing. `suggest` is the checkpoint: read the log, the dashboard, and `/api/decisions` before you change `mode`. The allowlist is enforced only in `inject`.
@@ -127,6 +128,7 @@ The retry sample replaces the first one. Both waits go through `rate_limit_pps`.
 |---|---|---|
 | `listen` | `127.0.0.1:8080` | `host:port`. Wrap IPv6 in brackets: `"[2001:db8::1]:8080"`. `""` disables the server. |
 | `allow_from` | any | Client prefixes allowed to connect (#32), e.g. `[127.0.0.0/8, 192.0.2.0/24, "2001:db8::/32"]`. Others get `403` on every path, health checks included. Works with and without `auth`. Behind a reverse proxy, the proxy's address is matched (`X-Forwarded-For` is ignored). |
+| `config_editor` | `false` | `true` lets an admin read, validate, and write this config file through `/api/config` and `/settings.html` (#34). Needs `auth` or basic auth; with neither it stays off. A write passes the same checks as a start and is read back through the loader; it applies on restart (or SIGHUP for `bgp.neighbors`). Turning `mode: inject` on through it needs an explicit confirmation. It never runs an `exec` plugin, and refuses a file that adds or changes one or changes `plugin_dir`. `GET /api/config` returns the file unredacted, so keep secrets in environment variables. The file must be mounted writable. See [ui.md](ui.md). |
 
 The server does not announce routes. With `--network host`, this address is on the host. Basic auth is not a key in the file; see the environment variables. Users, roles, API tokens, and SSO are the `auth` block.
 
@@ -370,6 +372,33 @@ More-specific injection (#56, lab-proven only, not on a public edge). Design and
 | `max_routes` | `100` | Cap on routes on a router: improvements, their more-specifics, and inbound steer routes. 1–1000. A new improvement is announced whole (P and all its learned more-specifics) or not at all; a more-specific learned later is added only while there is room. Nothing on the wire is withdrawn to make room. `max_improvements` still caps improvements. |
 
 A more-specific is withdrawn with its improvement (flip-back, TTL, policy, P leaving the RIB), when the RIB is not ready, on shutdown, and when it really leaves the RIB: the neighbor advertised it for at least 5s while Packeteer's route was on the wire and then stopped. A shorter gap is the router hiding its own path because Packeteer's route won, and the route stays. A change needs a restart (SIGHUP refuses it). Rollback: remove the block or set `enabled: false` and restart; only improvements' own prefixes are announced again.
+
+### `report_subscriptions`
+
+Scheduled email report subscriptions (#34). Each entry emails one stored report (the same one `/api/reports/<report>` serves) as a CSV attachment. Needs `storage` (reports come from stored history) and a notifier of type `smtp`. Times are UTC. A failed send is logged, shown on `/api/subscriptions`, and tried again at the next scheduled time; sends missed while the controller was down are not replayed. Operators can send one at once with `POST /api/subscriptions/<name>/send`. Recipients come only from this file. Does not announce. See [ui.md](ui.md).
+
+| Key | Default | Meaning |
+|---|---|---|
+| `name` | none | Required, unique. 1–63 of `a-z`, `0-9`, `_`, `-`. |
+| `report` | none | Required. A report name from `/api/reports` (`summary`, `improvements`, `causes`, `performance`, `providers`, `prefixes`, `asns`, `countries`, `probes`, `savings`, `mitigations`, `anomalies`). |
+| `schedule` | none | Required. `daily`, `weekly`, or `monthly` (the 1st of the month). |
+| `at` | `06:00` | UTC time of day, `HH:MM`. |
+| `weekday` | `monday` | For `weekly` only: `monday` … `sunday`. |
+| `days` | 1, 7, or 30 | The report range, ending at the send time. 1–366. |
+| `notifier` | none | Required. The `name` (or `type` when unnamed) of a `notifiers` entry of type `smtp`. |
+| `to` | the notifier's `to` | Up to 50 addresses that replace the notifier's recipients for this report. |
+
+At most 50 subscriptions.
+
+```yaml
+notifiers:
+  - type: smtp
+    name: mail
+    config: {host: smtp.example.net, from: packeteer@example.net, to: [noc@example.net]}
+report_subscriptions:
+  - {name: weekly-summary, report: summary, schedule: weekly, weekday: monday, at: "06:00", notifier: mail}
+  - {name: monthly-savings, report: savings, schedule: monthly, notifier: mail, to: [finance@example.net]}
+```
 
 ### Multi-POP (federation)
 
@@ -675,7 +704,24 @@ Interface capture fails startup when the interface is missing or `NET_RAW` is no
 | `rtt_weight` | 1 | Not negative. |
 | `jitter_weight` | 0.5 | Not negative. |
 
+| `improvement_weights` | none | Optional block; see [Improvement weights](#improvement-weights). Also on `commit` and `cost`. |
+
 At least one weight must be positive. Omit the block to keep the defaults.
+
+#### Improvement weights
+
+`improvement_weights` (on `weighted`, `commit`, and `cost`, #34) decides which new improvements take the last `max_improvements` slots:
+
+`weight = performance * gain + volume * volume_mbps`
+
+`gain` is the native path's score minus the chosen path's; `volume_mbps` is the prefix's traffic from a source that reports volume (the `flow` window, or `mbps` on a `static` target; `0` when none does). Without the block, moves rank by gain alone, as before.
+
+| Key | Default | Bounds |
+|---|---|---|
+| `performance` | 1 | 0 to 1000000. |
+| `volume` | 0 | 0 to 1000000. With a positive value the controller reads target volumes on every decision. |
+
+At least one must be positive. Weights order moves inside their lane: static policy pins first, then VIP moves, then other performance moves; commit and cost moves keep their relief and savings order. They never admit a prefix that is not in the learned RIB or not allowlisted, never exceed `max_improvements`, and never displace an active improvement (hold time and hysteresis stay as they are). The weight of each move is on `/api/decisions`. Lab-proven only (`lab/e2e-weights.sh`).
 
 ### Scorer `commit`
 
@@ -699,6 +745,7 @@ A prefix already on a performance steer, and a performance move waiting on the c
 | `balance_slack` | `0.10` | 0–1. Fractional imbalance that does not move traffic. `0` is explicit. |
 | `max_age` | `15m` | Not negative. `0` uses the default. Telemetry older than this is ignored. |
 | `min_mbps` | 0 | Not negative. Prefixes below this volume are not moved for commit. |
+| `improvement_weights` | none | See [Improvement weights](#improvement-weights). |
 
 At least one weight must be positive.
 
@@ -728,6 +775,7 @@ Every improvement whose native and steered providers both have a `cost` reports 
 | `floor` | | Block with `max_loss_pct` and `max_rtt`. |
 | `max_loss_pct` | 0 | 0–100. Loss percentage points a cost path may carry above the lowest loss. |
 | `max_rtt` | `10ms` | 0–10s. Latency a cost path may add over the lowest RTT. |
+| `improvement_weights` | none | See [Improvement weights](#improvement-weights). |
 
 At least one weight must be positive.
 
@@ -847,6 +895,8 @@ One plain-text email per event. The relay credentials are environment variables;
 | `timeout` | `10s` | Per message, at most 2m. |
 
 Plus the [filter keys](#notifier-filters-every-notifier). Messages carry `X-Packeteer-Event` and `X-Packeteer-Severity` headers for mail rules. CR and LF are stripped from header values.
+
+An `smtp` notifier also sends [`report_subscriptions`](#report_subscriptions): one multipart email per report with a text summary and the CSV attached, headers `X-Packeteer-Report` and `X-Packeteer-Subscription`. The filter keys do not apply to reports; a subscription's `to` replaces the notifier's `to`.
 
 ### Notifier `snmptrap`
 
@@ -977,6 +1027,8 @@ What is stored:
 - Per prefix: origin ASN, country, and latest volume.
 
 The recorder buffers in memory and writes once a minute and on shutdown, after the routes are withdrawn. Rows a previous process left open are closed on start with `controller restarted (routes withdrawn)`.
+
+It also keeps each user's custom dashboards (#34, `/api/dashboards`) with the users and tokens; retention does not prune them, and deleting a user deletes that user's dashboards.
 
 Country comes from the first `rules` policy that has a `geoip_db`. With none, the `countries` report is empty. Volume is the flow window or a static target's `mbps`.
 

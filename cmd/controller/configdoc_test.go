@@ -25,6 +25,7 @@ import (
 	"github.com/GrandArcher/Packeteer/internal/plugins/scorer/commit"
 	"github.com/GrandArcher/Packeteer/internal/plugins/scorer/cost"
 	"github.com/GrandArcher/Packeteer/internal/plugins/scorer/weighted"
+	"github.com/GrandArcher/Packeteer/internal/plugins/scorer/weights"
 	"github.com/GrandArcher/Packeteer/internal/plugins/source/flow"
 	"github.com/GrandArcher/Packeteer/internal/plugins/source/outage"
 	"github.com/GrandArcher/Packeteer/internal/plugins/source/span"
@@ -68,6 +69,7 @@ func TestConfigDocCoversStructs(t *testing.T) {
 		telemetryfixed.Config{},
 		telemetryfixed.Provider{},
 		weighted.Config{},
+		weights.Config{},
 		commit.Config{},
 		cost.Config{},
 		cost.Floor{},

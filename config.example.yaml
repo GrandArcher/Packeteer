@@ -59,6 +59,13 @@ probers:
 scorer:
   type: weighted
   config: {loss_weight: 100, rtt_weight: 1, jitter_weight: 0.5}
+  # Improvement weights (#34; also on commit and cost): which new
+  # improvements take the last max_improvements slots. weight =
+  # performance * score gain + volume * Mbps (flow window or static mbps).
+  # Omitted: biggest gain first. Never admits a prefix outside the RIB or
+  # allowlist, never displaces an active improvement. docs/ui.md
+  # config:
+  #   improvement_weights: {performance: 1, volume: 0}
 # scorer:
 #   type: commit
 #   config:
@@ -271,6 +278,7 @@ log:
 http:
   listen: "127.0.0.1:8080"
   # allow_from: [127.0.0.0/8, 192.0.2.0/24]   # client prefixes allowed (default any)
+  # config_editor: true   # admin edits this file in /settings.html (#34); needs auth or basic auth and a writable mount; applies on restart
 
 # Users, roles (viewer, operator, admin), API tokens, an audit log of every
 # change (also sent to notifiers as audit.recorded), and optional OIDC SSO.
@@ -404,6 +412,22 @@ plugin_dir: /etc/packeteer/plugins
 #     config:
 #       address: 192.0.2.162
 #       community_env: PACKETEER_TRAP_COMMUNITY
+
+# Email report subscriptions (#34): a stored report as CSV on a UTC
+# schedule, sent by an smtp notifier (name it, or use its type). Needs
+# storage. See docs/ui.md.
+# report_subscriptions:
+#   - name: weekly-summary
+#     report: summary           # any name from /api/reports
+#     schedule: weekly          # daily, weekly, or monthly (the 1st)
+#     weekday: monday
+#     at: "06:00"               # UTC
+#     notifier: smtp
+#   - name: monthly-savings
+#     report: savings
+#     schedule: monthly
+#     notifier: smtp
+#     to: [finance@example.invalid]   # replaces the notifier's to
 
 # Threat mitigation (#28, lab-proven only; see docs/mitigation.md): RTBH,
 # BGP redirect, and FlowSpec drop / rate-limit / redirect (optionally by

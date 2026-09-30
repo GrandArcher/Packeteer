@@ -297,3 +297,27 @@ func TestNotifierFilter(t *testing.T) {
 		}
 	}
 }
+
+// A config check (the config editor, #34) builds the plugin without
+// running the command: not the init handshake, not any later call.
+func TestCheckOnlyNeverRuns(t *testing.T) {
+	e := env()
+	e.CheckOnly = true
+	// init-fail would refuse the build if init ran.
+	p, err := plugin.Probers.New(TypeName, helperConfig(t, "init-fail", ""), e)
+	if err != nil {
+		t.Fatalf("check-only build ran init: %v", err)
+	}
+	req := plugin.ProbeRequest{Source: netip.MustParseAddr("192.0.2.11"), Target: netip.MustParseAddr("198.51.100.1"), Count: 3, Timeout: time.Second}
+	if _, err := p.Probe(context.Background(), req); err == nil || !strings.Contains(err.Error(), "config check") {
+		t.Fatalf("check-only probe = %v, want refusal", err)
+	}
+	// Config errors are still found without running anything.
+	c, err := plugin.ConfigFromYAML("command: ../bin/sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := plugin.Probers.New(TypeName, c, e); err == nil {
+		t.Fatal("check-only build accepted a command outside the plugin dir")
+	}
+}

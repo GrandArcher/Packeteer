@@ -203,6 +203,13 @@ CREATE TABLE IF NOT EXISTS audit (
 	detail TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS audit_time ON audit (time_ms);
+CREATE TABLE IF NOT EXISTS dashboards (
+	owner TEXT NOT NULL,
+	name TEXT NOT NULL,
+	spec TEXT NOT NULL,
+	updated_ms INTEGER NOT NULL,
+	PRIMARY KEY (owner, name)
+);
 `
 
 // Start opens (or creates) the database and starts the daily prune.

@@ -69,6 +69,15 @@ type Options struct {
 	// HA is the active/standby elector's view (#31). Nil means a single
 	// instance, always active.
 	HA func() plugin.ElectorStatus
+	// ConfigEditor is the validated config editor (#34). Nil when
+	// http.config_editor is off.
+	ConfigEditor ConfigEditor
+	// Dashboards keeps custom dashboards (#34). Nil when the storage
+	// plugin does not keep them.
+	Dashboards plugin.DashboardStore
+	// Subscriptions is the report subscription scheduler (#34). Nil when
+	// none are configured.
+	Subscriptions Subscriptions
 }
 
 // Server is an HTTP server. Handler serves the routes without listening,
@@ -89,6 +98,9 @@ type Server struct {
 	anomaly    func() anomaly.Status
 	federation func() federation.Status
 	ha         func() plugin.ElectorStatus
+	editor     ConfigEditor
+	dashboards plugin.DashboardStore
+	subs       Subscriptions
 	log        *slog.Logger
 	handler    http.Handler
 	http       *http.Server
@@ -106,7 +118,8 @@ func New(opt Options) (*Server, error) {
 	if opt.Logger == nil {
 		opt.Logger = slog.Default()
 	}
-	s := &Server{addr: opt.Addr, user: opt.User, password: opt.Password, auth: opt.Auth, audit: opt.Audit, allowFrom: opt.AllowFrom, snap: opt.Snapshot, maint: opt.Maintenance, reports: opt.Reports, tools: opt.Tools, inbound: opt.Inbound, mitigation: opt.Mitigation, anomaly: opt.Anomaly, federation: opt.Federation, ha: opt.HA, log: opt.Logger}
+	s := &Server{addr: opt.Addr, user: opt.User, password: opt.Password, auth: opt.Auth, audit: opt.Audit, allowFrom: opt.AllowFrom, snap: opt.Snapshot, maint: opt.Maintenance, reports: opt.Reports, tools: opt.Tools, inbound: opt.Inbound, mitigation: opt.Mitigation, anomaly: opt.Anomaly, federation: opt.Federation, ha: opt.HA,
+		editor: opt.ConfigEditor, dashboards: opt.Dashboards, subs: opt.Subscriptions, log: opt.Logger}
 	s.handler = s.routes()
 	return s, nil
 }

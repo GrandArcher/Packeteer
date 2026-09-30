@@ -142,3 +142,17 @@ footer a { color: var(--head); }
 .controls select { margin-left: 4px; }
 #tool-out { max-height: 32rem; overflow: auto; font-size: 0.85rem; }
 #tool-out:empty { display: none; }
+
+/* Settings and custom dashboards (#34). */
+.nav a { color: #fff; margin-right: 12px; }
+.form { display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: flex-end; }
+.form label { display: flex; flex-direction: column; gap: 4px; }
+.form label.wide { flex-basis: 100%; }
+.form textarea, .form input[type=text] { font: inherit; padding: 6px; border: 1px solid var(--line); border-radius: 4px; }
+textarea.editor { width: 100%; font-size: 0.85rem; padding: 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--card); }
+.errors { color: var(--down); margin: 6px 0; }
+button.small { margin-left: 6px; padding: 3px 8px; border: 1px solid var(--line); }
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(420px, 1fr)); gap: 14px; }
+.widget.wide { grid-column: 1 / -1; }
+.widget { overflow-x: auto; }
+.widgets-list li { margin: 4px 0; }

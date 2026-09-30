@@ -43,6 +43,7 @@ import (
 	"github.com/GrandArcher/Packeteer/internal/policy"
 	"github.com/GrandArcher/Packeteer/internal/probe"
 	"github.com/GrandArcher/Packeteer/internal/rib"
+	"github.com/GrandArcher/Packeteer/internal/subscribe"
 	"github.com/GrandArcher/Packeteer/internal/troubleshoot"
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
 )
@@ -172,30 +173,8 @@ func run(ctx context.Context, args []string, getenv func(string) string, stdout,
 		return 1
 	}
 	log := newLogger(stderr, cfg.Log.Level, cfg.Log.Format)
-	plugins, err := pluginhost.Build(cfg, pluginhost.Options{Logger: log, Getenv: getenv, PluginDir: getenv(PluginDirEnv)})
+	plugins, err := preflight(cfg, log, getenv, httpUser, false)
 	if err != nil {
-		fmt.Fprintf(stderr, "packeteer: refusing to start: plugins: %v\n", err)
-		return 1
-	}
-	if err := checkVIPIntervals(cfg, plugins); err != nil {
-		fmt.Fprintf(stderr, "packeteer: refusing to start: %v\n", err)
-		return 1
-	}
-	if err := checkOutageIntervals(cfg, plugins); err != nil {
-		fmt.Fprintf(stderr, "packeteer: refusing to start: %v\n", err)
-		return 1
-	}
-	if a := cfg.Anomaly; a != nil {
-		if _, _, err := anomalySource(a, plugins); err != nil {
-			fmt.Fprintf(stderr, "packeteer: refusing to start: %v\n", err)
-			return 1
-		}
-	}
-	if err := checkTelemetryProviders(plugins); err != nil {
-		fmt.Fprintf(stderr, "packeteer: refusing to start: %v\n", err)
-		return 1
-	}
-	if err := checkAuth(cfg, plugins, httpUser, getenv); err != nil {
 		fmt.Fprintf(stderr, "packeteer: refusing to start: %v\n", err)
 		return 1
 	}
@@ -294,6 +273,12 @@ func run(ctx context.Context, args []string, getenv func(string) string, stdout,
 		if len(cfg.HTTP.AllowFrom) > 0 {
 			fmt.Fprintf(stdout, "http allow_from: %s\n", strings.Join(cfg.HTTP.AllowFrom, ","))
 		}
+		if cfg.HTTP.ConfigEditor {
+			fmt.Fprintln(stdout, "http config_editor: on (admin only; writes this file after the start checks; applies on restart, or SIGHUP for bgp.neighbors)")
+		}
+	}
+	for _, sub := range cfg.ReportSubscriptions {
+		fmt.Fprintf(stdout, "report subscription %s: %s %s at %s UTC, %d days, notifier %s\n", sub.Name, sub.Report, sub.Schedule, sub.At, sub.Days, sub.Notifier)
 	}
 	if *notifyTest {
 		return sendTestEvent(ctx, plugins, stdout)
@@ -303,6 +288,37 @@ func run(ctx context.Context, args []string, getenv func(string) string, stdout,
 		return 0
 	}
 	return daemon(ctx, cfg, plugins, log, httpUser, httpPass, *path, getenv)
+}
+
+// preflight builds the plugin set and runs every check the controller runs
+// before it starts. It starts nothing. The config editor (#34) runs it on
+// a candidate file too, with checkOnly set: no exec plugin command runs.
+func preflight(cfg *config.Config, log *slog.Logger, getenv func(string) string, httpUser string, checkOnly bool) (*pluginhost.Set, error) {
+	plugins, err := pluginhost.Build(cfg, pluginhost.Options{Logger: log, Getenv: getenv, PluginDir: getenv(PluginDirEnv), CheckOnly: checkOnly})
+	if err != nil {
+		return nil, fmt.Errorf("plugins: %w", err)
+	}
+	if err := checkVIPIntervals(cfg, plugins); err != nil {
+		return nil, err
+	}
+	if err := checkOutageIntervals(cfg, plugins); err != nil {
+		return nil, err
+	}
+	if a := cfg.Anomaly; a != nil {
+		if _, _, err := anomalySource(a, plugins); err != nil {
+			return nil, err
+		}
+	}
+	if err := checkTelemetryProviders(plugins); err != nil {
+		return nil, err
+	}
+	if err := checkAuth(cfg, plugins, httpUser, getenv); err != nil {
+		return nil, err
+	}
+	if err := checkSubscriptions(cfg, plugins); err != nil {
+		return nil, err
+	}
+	return plugins, nil
 }
 
 func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, log *slog.Logger, httpUser, httpPass, path string, getenv func(string) string) int {
@@ -391,12 +407,38 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 		log.Error("refusing to start", "err", aerr)
 		return 1
 	}
+	// Remaining UI parity (#34). None of these announces.
+	var subs *subscribe.Scheduler
+	if rec != nil {
+		var serr error
+		if subs, serr = newSubscriptions(cfg, plugins, rec, log); serr != nil {
+			log.Error("refusing to start", "err", serr)
+			return 1
+		}
+	}
+	var subsAPI httpapi.Subscriptions
+	if subs != nil {
+		subsAPI = subs
+	}
+	editor, eerr := newConfigEditor(cfg, path, getenv, httpUser)
+	if eerr != nil {
+		log.Error("refusing to start", "err", eerr)
+		return 1
+	}
+	var editorAPI httpapi.ConfigEditor
+	if editor != nil {
+		editorAPI = editor
+		if httpUser == "" && authSvc == nil {
+			log.Warn("http.config_editor is on but neither auth nor basic auth is: the editor stays off")
+		}
+	}
 	if addr := cfg.HTTPListen(); addr != "" {
 		srv, err := httpapi.New(httpapi.Options{
 			Addr: addr, User: httpUser, Password: httpPass, Snapshot: col.Snapshot, Logger: log,
 			Auth: authSvc, Audit: audit, AllowFrom: cfg.HTTPAllowFrom(),
 			Maintenance: maint, Reports: reports, Tools: tools, Inbound: inboundStatus, Mitigation: mitAPI, Anomaly: anomAPI,
 			Federation: fed.status, HA: haStatus,
+			ConfigEditor: editorAPI, Dashboards: dashboardStore(plugins), Subscriptions: subsAPI,
 		})
 		if err != nil {
 			log.Error("refusing to start", "err", err)
@@ -531,6 +573,9 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 			rec = nil
 		}
 	}
+	if subs != nil && rec != nil {
+		go subs.Run(ctx)
+	}
 	col.SetStarted(true)
 	defer col.SetStarted(false)
 	watch.emit(time.Now(), plugin.EventControllerStarted, "packeteer "+version+" started in "+cfg.Mode+" mode",
@@ -613,6 +658,9 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 	}
 
 	rl := &reloader{path: path, getenv: getenv, log: log, cur: cfg, ctl: ctl, poke: poke}
+	if editor != nil {
+		rl.applied = editor.SetRunning
+	}
 	if view != nil {
 		rl.view = view
 	}
@@ -1883,11 +1931,33 @@ func scorerPlans(plugins *pluginhost.Set) bool {
 // the flow window on every decision is wasted work. ctx is the decision
 // loop's context, so shutdown cancels the read.
 func fillPlannerInputs(ctx context.Context, in *policy.Input, plugins *pluginhost.Set) {
-	if in == nil || !scorerPlans(plugins) {
+	if in == nil {
+		return
+	}
+	if !scorerPlans(plugins) {
+		// Improvement weights with a volume term (#34) need volumes too,
+		// for the weights only: cost annotations stay as they were.
+		if scorerWeighsVolume(plugins) {
+			in.WeightVolumeMbps = collectVolumes(ctx, plugins)
+		}
 		return
 	}
 	in.Usage = collectTelemetry(ctx, plugins)
 	in.VolumeMbps = collectVolumes(ctx, plugins)
+}
+
+// scorerWeighsVolume reports whether the scorer's improvement weights
+// (#34) read per-prefix volume.
+func scorerWeighsVolume(plugins *pluginhost.Set) bool {
+	if plugins == nil || plugins.Scorer == nil || plugins.Scorer.Plugin == nil {
+		return false
+	}
+	wg, ok := plugins.Scorer.Plugin.(plugin.ImprovementWeigher)
+	if !ok {
+		return false
+	}
+	_, vol := wg.ImprovementWeights()
+	return vol
 }
 
 // collectTraffic reads the traffic class of each prefix from target sources

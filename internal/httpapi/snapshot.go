@@ -126,15 +126,18 @@ type Candidate struct {
 
 // Decision is the latest evaluation of one prefix.
 type Decision struct {
-	Prefix      string      `json:"prefix"`
-	Native      string      `json:"native,omitempty"`
-	Current     string      `json:"current,omitempty"`
-	Recommended string      `json:"recommended,omitempty"`
-	Action      string      `json:"action"`
-	Cause       string      `json:"cause,omitempty"`
-	Reason      string      `json:"reason,omitempty"`
-	Policy      string      `json:"policy,omitempty"`
-	Candidates  []Candidate `json:"candidates"`
+	Prefix      string `json:"prefix"`
+	Native      string `json:"native,omitempty"`
+	Current     string `json:"current,omitempty"`
+	Recommended string `json:"recommended,omitempty"`
+	Action      string `json:"action"`
+	Cause       string `json:"cause,omitempty"`
+	Reason      string `json:"reason,omitempty"`
+	Policy      string `json:"policy,omitempty"`
+	// Weight is the improvement weight that ordered this move for the
+	// max_improvements cap (#34); zero when weights are off.
+	Weight     float64     `json:"weight,omitempty"`
+	Candidates []Candidate `json:"candidates"`
 }
 
 // Improvement is an active steer (recommended in observe and suggest,
@@ -326,6 +329,7 @@ func assembleDecisions(in []policy.Decision) []Decision {
 			Cause:       d.Cause,
 			Reason:      d.Reason,
 			Policy:      d.Policy,
+			Weight:      d.Weight,
 			Candidates:  make([]Candidate, 0, len(d.Candidates)),
 		}
 		for _, c := range d.Candidates {

@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<meta name="robots" content="noindex">
+<title>Packeteer settings</title>
+<link rel="stylesheet" href="/app.css">
+</head>
+<body>
+<header class="top">
+  <div>
+    <h1>Packeteer settings</h1>
+    <p class="tag">Config editor and first-run wizard (admin), report subscriptions. Nothing here announces.</p>
+  </div>
+  <nav class="nav"><a href="/">Dashboard</a> <a href="/dashboards.html">Custom dashboards</a></nav>
+</header>
+<main>
+  <section>
+    <h2>First-run wizard</h2>
+    <p class="tag">Builds an observe-mode config: it measures and recommends and never announces. The allowlist stays empty. The result opens in the editor below for review; nothing is written until you save.</p>
+    <div class="form">
+      <label>ASN <input id="wz-asn" type="number" min="1" placeholder="64512"></label>
+      <label>Router ID <input id="wz-router" type="text" placeholder="192.0.2.10"></label>
+      <label class="wide">Providers, one per line: <code>name source_ip next_hop</code>
+        <textarea id="wz-providers" rows="3" placeholder="transit-a 192.0.2.11 192.0.2.1&#10;transit-b 192.0.2.12 192.0.2.2"></textarea></label>
+      <label class="wide">Edge routers (learn-only iBGP), space separated
+        <input id="wz-neighbors" type="text" placeholder="192.0.2.254"></label>
+      <label class="wide">Prefixes to probe, one per line: <code>prefix host</code>
+        <textarea id="wz-targets" rows="3" placeholder="198.51.100.0/24 198.51.100.1"></textarea></label>
+      <label><input id="wz-storage" type="checkbox" checked> Report history (sqlite)</label>
+      <button type="button" id="wz-run">Generate</button>
+    </div>
+    <div id="wz-status" class="tag"></div>
+  </section>
+  <section>
+    <h2>Config editor</h2>
+    <p class="tag">Edits the mounted config file. Saving runs the same checks as a start (loader, environment, every plugin) and reads the file back through the loader. The controller applies it on restart, or on SIGHUP when only <code>bgp.neighbors</code> changed. Needs <code>http.config_editor: true</code> and the admin role.</p>
+    <div class="controls">
+      <button type="button" id="ed-load">Load</button>
+      <button type="button" id="ed-check">Validate</button>
+      <label><input id="ed-inject" type="checkbox"> I confirm this turns inject on</label>
+      <button type="button" id="ed-save">Save</button>
+    </div>
+    <div id="ed-status" class="tag"></div>
+    <ul id="ed-errors" class="errors"></ul>
+    <textarea id="ed-yaml" class="editor mono" rows="30" spellcheck="false"></textarea>
+    <p class="tag">File: <span id="ed-path" class="mono">—</span> sha256 <span id="ed-sha" class="mono">—</span></p>
+  </section>
+  <section>
+    <h2>Report subscriptions</h2>
+    <p class="tag">Stored reports emailed on a UTC schedule through an smtp notifier. Subscriptions and recipients live in <code>report_subscriptions</code> in the config file. Operators may send one now.</p>
+    <div id="subs"></div>
+    <div id="subs-status" class="tag"></div>
+  </section>
+</main>
+<script src="/ui.js"></script>
+<script src="/settings.js"></script>
+</body>
+</html>

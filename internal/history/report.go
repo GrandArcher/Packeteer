@@ -860,3 +860,6 @@ func (a *agg) savings(rep *Report) {
 			f(r.EstSavings), f(r.Hours), f(r.Accrued)})
 	}
 }
+
+// Len is the number of rows.
+func (r Report) Len() int { return len(r.lines) }

@@ -25,10 +25,10 @@ Milestones:
 
 | Status | Count |
 |---|---|
-| done | 73 |
-| partial | 1 |
+| done | 79 |
+| partial | 0 |
 | in progress | 0 |
-| planned | 5 |
+| planned | 0 |
 | won't do | 3 |
 
 ## Performance optimization
@@ -40,7 +40,7 @@ Milestones:
 | Active probing per provider: UDP | Explorer | done | v0.2 | prober (`udp`) | #15 |
 | Traceroute-based probe target discovery | Explorer | done | v0.2 | source (`traceroute`) | #15 |
 | Loss / latency / jitter measurement and scoring | 1.3.1 | done | v0.1 | prober + scorer (`weighted`) | #2, #7 |
-| Throughput-aware scoring (prefix volume weighting) | 1.2.13 Improvements weight | partial | v0.4 | scorer (`commit` uses flow volume, #18; volume-weighted performance ranking is #34) | #18, #34 |
+| Throughput-aware scoring (prefix volume weighting) | 1.2.13 Improvements weight | done (lab-proven) | v0.4 | scorer (`commit` uses flow volume, #18; `improvement_weights` rank performance moves for the cap by gain and volume, #34) | #18, #34 |
 | Probe sources per provider (IRP uses PBR; we use source-IP policy routing) | 2.8 Explorer, 2.8.1 PBR | done | v0.1 | core + docs | #2 |
 | Static probe target lists | - | done | v0.1 | source (`static`) | #2 |
 | Flow-based target discovery (NetFlow v5/v9, IPFIX, sFlow) | 2.7.1 Irpflowd | done | v0.1 | source (`flow`) | #5 |
@@ -164,7 +164,7 @@ Automatic traffic anomaly detection (#33, [anomaly.md](anomaly.md)): the `flow` 
 | Capability | IRP doc ref | Status | Milestone | Plugin kind | Issue |
 |---|---|---|---|---|---|
 | Web UI dashboard (providers, per-prefix metrics, current vs recommended, improvements) | 3.3 Dashboards | done | v0.1 | core (`internal/httpapi`) | #9 |
-| Custom dashboards / widgets | 3.3.1-3.3.3 | planned | v0.4 | UI | #34 |
+| Custom dashboards / widgets | 3.3.1-3.3.3 | done | v0.4 | core (`/api/dashboards`, `/dashboards.html`) + storage (`sqlite`, `plugin.DashboardStore`) ([ui.md](ui.md)) | #34 |
 | REST API | 1.2.15, 4.3 | done | v0.1 | core | #9 |
 | Prometheus metrics | - | done | v0.1 | core (`internal/httpapi`) | #9 |
 | Reports: improvements, before/after latency/loss, provider efficiency, top prefixes/ASNs, country stats, cost savings | 3.4, 3.5 | done | v0.2 | core (`internal/history`, `/api/reports`, CSV, dashboard) + storage | #23 |
@@ -174,14 +174,16 @@ Automatic traffic anomaly detection (#33, [anomaly.md](anomaly.md)): the `flow` 
 | Alerts: webhook (Slack/Teams/SMS gateways) | 3.17.3 | done | v0.1 | notifier (`webhook`; `slack`, `teams`, `pagerduty` presets and body templates in v0.2) | #13, #22 |
 | Alerts: SNMP traps | 3.17.2 | done | v0.2 | notifier (`snmptrap`) | #22 |
 | Event catalog and notification rules | 1.2.14, 3.16, 3.17.1 | done | v0.2 | notifier (per-notifier `events`, `min_severity`, `rate_limit`; [EVENTS.md](EVENTS.md)) | #22 |
-| Email report subscriptions | 3.15 | planned | v0.4 | notifier + storage | #34 |
+| Email report subscriptions | 3.15 | done | v0.4 | notifier (`smtp`, `plugin.ReportSender`) + storage (`sqlite`) + core (`report_subscriptions`, `internal/subscribe`, `/api/subscriptions`) ([ui.md](ui.md)) | #34 |
 | User accounts, RBAC, access restriction | 3.14.2, 3.14.3 | done | v0.4 | core (HTTP auth, `internal/auth`) + storage (`sqlite` users and token hashes) + sso (`oidc`) ([auth.md](auth.md)) | #32 |
 | Audit log | - | done | v0.4 | core + storage (`sqlite`) + notifier (`audit.recorded`) | #32 |
 | Failover / HA (active-standby) | 1.2.16, 2.14 | done | v0.4 | elector (`lease`); lab-proven only ([ha.md](ha.md)) | #31 |
 | Config backup / restore | 2.14 | done | v0.4 | core (`-backup`, `-restore`) + storage (`sqlite`) | #31 |
-| Configuration editor and setup wizards | 3.13, 3.2 | planned | v0.4 | UI | #34 |
-| Improvement weights | 1.2.13 | planned | v0.4 | scorer | #34 |
+| Configuration editor and setup wizards | 3.13, 3.2 | done | v0.4 | core (`internal/configedit`, `/api/config`, `/api/config/wizard`, `/settings.html`; admin role) ([ui.md](ui.md)) | #34 |
+| Improvement weights | 1.2.13 | done (lab-proven) | v0.4 | scorer (`weighted`, `commit`, `cost`: `improvement_weights`, `plugin.ImprovementWeigher`) ([ui.md](ui.md)) | #34 |
 | Structured logging | - | done | v0.1 | core | #9 |
+
+Remaining UI parity (#34, [ui.md](ui.md)). **Improvement weights**: the `weighted`, `commit`, and `cost` scorers take an optional `improvement_weights` block (`performance`, default 1; `volume`, default 0). When it is set, new static, VIP, and performance moves competing for the last `max_improvements` slots are admitted by `performance × score gain + volume × Mbps` instead of by gain alone, inside their lane (static pins still first; commit and cost moves keep relief and savings order). Weights only order moves Decide already accepted: a prefix not in the learned RIB or not allowlisted is never admitted, the cap still binds, an active improvement is never displaced, and every route still carries the community and NO_EXPORT. The weight is on `/api/decisions`. The FRR lab (`lab/e2e-weights.sh`) proves the heavier learned prefix wins the one slot, a heavier prefix the edge never advertises is never announced, a RIB leave withdraws and hands the slot over, a returning heavier prefix does not displace, SIGTERM, restart, and SIGKILL. **Config editor and first-run wizard**: with `http.config_editor: true` and auth or basic auth, an admin reads, validates, and writes the mounted config file (`/api/config`, `/settings.html`). A write needs the hash of the file it edits, passes the same checks as a start (loader, environment, every plugin's config, cross-checks), never runs an `exec` plugin and refuses one that is added or changed (or a changed `plugin_dir`), needs `confirm_inject` to turn inject on, is read back through `config.Load`, and is audited by hash. It is not applied to the running controller: restart (or SIGHUP for `bgp.neighbors`). The wizard (`POST /api/config/wizard`) renders an observe-mode config with an empty allowlist for review in the editor. **Custom dashboards**: per-user layouts of read-only widgets in the `sqlite` store (`/api/dashboards`, `/dashboards.html`). **Report subscriptions**: `report_subscriptions` email a stored report as CSV on a daily, weekly, or monthly UTC schedule through an `smtp` notifier; `/api/subscriptions` shows their state and operators may send one now. Rollback: remove `improvement_weights`, `http.config_editor`, and `report_subscriptions` and restart; the file config works as before.
 
 Reports (#23) come from the `sqlite` storage plugin, which is off unless `storage` is set (the example config sets it). It keeps daily probe rollups per prefix and provider, one row per improvement with the native and chosen provider's loss and RTT at the decision, and per-prefix origin ASN, country (from a `rules` policy with `geoip_db`), and volume. `/api/reports/<name>` serves `summary`, `improvements`, `causes`, `performance`, `providers`, `prefixes`, `asns`, `countries`, `probes`, and `savings` as JSON or CSV, and the dashboard shows them. Mount `/var/lib/packeteer` so history survives a restart. The recorder writes once a minute and never blocks a decision or a withdraw; it does not announce. Push exporters (Prometheus remote-write, OTLP) are not built: scrape `/metrics`.
 

@@ -101,3 +101,35 @@ func TestCollectVolumesHonorsCallerContext(t *testing.T) {
 		t.Fatalf("got %v calls %d", got, src.calls)
 	}
 }
+
+func TestPlannerInputsReadVolumesForWeights(t *testing.T) {
+	p := netip.MustParsePrefix("198.51.100.0/24")
+	for _, tc := range []struct {
+		y     string
+		calls int
+	}{
+		{"improvement_weights: {performance: 1}", 0},
+		{"improvement_weights: {volume: 1}", 1},
+	} {
+		c, err := plugin.ConfigFromYAML(tc.y)
+		if err != nil {
+			t.Fatal(err)
+		}
+		s, err := weighted.New(c, plugin.Env{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		src := &volSrc{mbps: 80, pfx: p}
+		set := &pluginhost.Set{Scorer: &pluginhost.Instance[plugin.Scorer]{Name: "weighted", Type: "weighted", Plugin: s},
+			Sources: []pluginhost.Instance[plugin.TargetSource]{{Name: "vol", Type: "static", Plugin: src}}}
+		var in policy.Input
+		fillPlannerInputs(context.Background(), &in, set)
+		if src.calls != tc.calls || in.Usage != nil {
+			t.Fatalf("%s: calls %d usage %v", tc.y, src.calls, in.Usage)
+		}
+		// Weights only: cost annotations and commit control see no volume.
+		if in.VolumeMbps != nil || (tc.calls == 1 && in.WeightVolumeMbps[p] != 80) {
+			t.Fatalf("%s: volume %v weight volume %v", tc.y, in.VolumeMbps, in.WeightVolumeMbps)
+		}
+	}
+}
