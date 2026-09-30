@@ -355,3 +355,76 @@ func TestRecorderMitigations(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// Anomalies (#33) are stored from detection to clearing, with the rule and
+// mitigation, and an anomaly left open is closed on Close and survives a
+// restart as history.
+func TestRecorderAnomalies(t *testing.T) {
+	ctx := context.Background()
+	cfg, err := plugin.ConfigFromYAML("path: " + filepath.Join(t.TempDir(), "packeteer.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	open := func() *sqlite.Store {
+		s, err := sqlite.New(cfg, plugin.Env{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := s.Start(ctx); err != nil {
+			t.Fatal(err)
+		}
+		return s
+	}
+	clock := t0
+	store := open()
+	rec := newRecorder(store, &clock)
+	if err := rec.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	udp := plugin.AnomalyRecord{ID: "a1", Prefix: pfxB, Protocol: "udp", PeakMbps: 120, BaselineMbps: 4, Reason: "flood", Start: t0}
+	rec.Anomaly(udp)
+	udp.Rule, udp.Mitigation, udp.Action = "udp-flood", "m1", plugin.MitigationFlowSpecDrop
+	rec.Anomaly(udp)
+	tcp := plugin.AnomalyRecord{ID: "a2", Prefix: pfxC, Protocol: "tcp", PeakMbps: 50, Reason: "burst", Start: t0.Add(time.Minute),
+		End: t0.Add(11 * time.Minute), EndReason: "traffic is back within its baseline"}
+	rec.Anomaly(tcp)
+	rec.Anomaly(plugin.AnomalyRecord{ID: "bad"})
+	clock = t0.Add(time.Hour)
+	q := Query{Name: ReportAnomalies, From: t0.Truncate(24 * time.Hour), To: t0.Add(24 * time.Hour)}
+	rep, err := rec.Report(ctx, q)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows := rep.Rows.([]AnomalyRow)
+	if len(rows) != 2 || rows[0].ID != "a2" || rows[0].Minutes != 10 || rows[1].ID != "a1" || rows[1].Rule != "udp-flood" ||
+		rows[1].Mitigation != "m1" || rows[1].Minutes != 60 || !rows[1].End.IsZero() {
+		t.Fatalf("anomalies before close = %+v", rows)
+	}
+	if err := rec.Close(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Stop(ctx); err != nil {
+		t.Fatal(err)
+	}
+	store = open()
+	defer store.Stop(ctx)
+	rec = newRecorder(store, &clock)
+	if err := rec.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	rep, err = rec.Report(ctx, q)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows = rep.Rows.([]AnomalyRow)
+	if len(rows) != 2 || rows[1].EndReason != EndAnomalyShutdown || !rows[1].End.Equal(clock) || rows[1].Action != plugin.MitigationFlowSpecDrop {
+		t.Fatalf("anomalies after restart = %+v", rows)
+	}
+	var csv strings.Builder
+	if err := rep.CSV(&csv); err != nil || !strings.HasPrefix(csv.String(), "id,prefix,protocol,") || strings.Count(csv.String(), "\n") != 3 {
+		t.Fatalf("csv = %q %v", csv.String(), err)
+	}
+	if err := rec.Close(ctx); err != nil {
+		t.Fatal(err)
+	}
+}

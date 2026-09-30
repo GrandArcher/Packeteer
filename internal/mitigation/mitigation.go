@@ -98,6 +98,10 @@ type Request struct {
 	Match     plugin.FlowSpecMatch
 	Countries []string
 	RateMbps  float64
+	// NoReplace refuses (ErrConflict) instead of replacing a held rule
+	// with the same key. The anomaly detector (#33) sets it, so it never
+	// replaces a rule an operator added.
+	NoReplace bool
 }
 
 // Rule is one mitigation rule.
@@ -361,6 +365,9 @@ func (c *Controller) Add(req Request, now time.Time) (Rule, error) {
 		}
 	}
 	old, replace := c.rules[r.key]
+	if replace && req.NoReplace {
+		return Rule{}, fmt.Errorf("%w: rule %s (%s) is already held for this key", ErrConflict, old.ID, old.Action)
+	}
 	held := 0
 	for k, x := range c.rules {
 		if k != r.key {
@@ -545,6 +552,21 @@ func (c *Controller) flowConflictLocked(r *Rule) (*Rule, string) {
 		}
 	}
 	return best, route
+}
+
+// Has reports whether the rule with id is still held.
+func (c *Controller) Has(id string) bool {
+	if c == nil {
+		return false
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for _, r := range c.rules {
+		if r.ID == id {
+			return true
+		}
+	}
+	return false
 }
 
 // Remove drops the rule with id. Its routes are withdrawn on the next Sync.

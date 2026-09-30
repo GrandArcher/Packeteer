@@ -24,6 +24,7 @@ import (
 	"net/netip"
 	"time"
 
+	"github.com/GrandArcher/Packeteer/internal/anomaly"
 	"github.com/GrandArcher/Packeteer/internal/auth"
 	"github.com/GrandArcher/Packeteer/internal/exchange"
 	"github.com/GrandArcher/Packeteer/internal/federation"
@@ -59,6 +60,9 @@ type Options struct {
 	// Mitigation is threat mitigation (#28). Nil means it is not
 	// configured.
 	Mitigation MitigationControl
+	// Anomaly is traffic anomaly detection (#33). Nil means it is not
+	// configured.
+	Anomaly func() anomaly.Status
 	// Federation is the central view of every instance (#30). Nil means
 	// the instance runs standalone.
 	Federation func() federation.Status
@@ -82,6 +86,7 @@ type Server struct {
 	tools      *troubleshoot.Tools
 	inbound    func() inbound.Status
 	mitigation MitigationControl
+	anomaly    func() anomaly.Status
 	federation func() federation.Status
 	ha         func() plugin.ElectorStatus
 	log        *slog.Logger
@@ -101,7 +106,7 @@ func New(opt Options) (*Server, error) {
 	if opt.Logger == nil {
 		opt.Logger = slog.Default()
 	}
-	s := &Server{addr: opt.Addr, user: opt.User, password: opt.Password, auth: opt.Auth, audit: opt.Audit, allowFrom: opt.AllowFrom, snap: opt.Snapshot, maint: opt.Maintenance, reports: opt.Reports, tools: opt.Tools, inbound: opt.Inbound, mitigation: opt.Mitigation, federation: opt.Federation, ha: opt.HA, log: opt.Logger}
+	s := &Server{addr: opt.Addr, user: opt.User, password: opt.Password, auth: opt.Auth, audit: opt.Audit, allowFrom: opt.AllowFrom, snap: opt.Snapshot, maint: opt.Maintenance, reports: opt.Reports, tools: opt.Tools, inbound: opt.Inbound, mitigation: opt.Mitigation, anomaly: opt.Anomaly, federation: opt.Federation, ha: opt.HA, log: opt.Logger}
 	s.handler = s.routes()
 	return s, nil
 }
@@ -203,6 +208,9 @@ func (s *Server) handleMetrics(w http.ResponseWriter, _ *http.Request) {
 	_, _ = w.Write(Metrics(s.snapshot()))
 	if s.mitigation != nil {
 		_, _ = w.Write(MitigationMetrics(s.mitigation.Status()))
+	}
+	if s.anomaly != nil {
+		_, _ = w.Write(AnomalyMetrics(s.anomaly()))
 	}
 	if s.ha != nil {
 		_, _ = w.Write(HAMetrics(s.ha()))

@@ -221,3 +221,26 @@ func TestSSOBuild(t *testing.T) {
 		t.Fatalf("unknown sso: %v", err)
 	}
 }
+
+func TestDetectorBuild(t *testing.T) {
+	src := "sources:\n  - type: flow\n    config: {listen: '127.0.0.1:0'}\n"
+	cfg := load(t, src+"anomaly:\n  detector:\n    type: baseline\n    config: {sensitivity: 4}\n")
+	s, err := Build(cfg, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.Detector == nil || s.Detector.Type != "baseline" {
+		t.Fatalf("detector = %+v", s.Detector)
+	}
+	if got := strings.Join(s.Summary(), ";"); !strings.Contains(got, "source flow;detector baseline") {
+		t.Errorf("Summary = %s", got)
+	}
+	bad := load(t, src+"anomaly:\n  detector:\n    type: nope\n")
+	if _, err := Build(bad, Options{}); err == nil || !strings.Contains(err.Error(), `anomaly.detector[0] (nope): unknown detector type "nope" (available: baseline)`) {
+		t.Fatalf("unknown detector: %v", err)
+	}
+	badCfg := load(t, src+"anomaly:\n  detector:\n    type: baseline\n    config: {sensitivity: -1}\n")
+	if _, err := Build(badCfg, Options{}); err == nil || !strings.Contains(err.Error(), "sensitivity") {
+		t.Fatalf("bad detector config: %v", err)
+	}
+}

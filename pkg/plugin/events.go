@@ -54,6 +54,10 @@ const (
 	EventMitigationOn       = "mitigation.announced"
 	EventMitigationOff      = "mitigation.withdrawn"
 	EventMitigationEnded    = "mitigation.ended"
+	EventAnomalyDetected    = "anomaly.detected"
+	EventAnomalyMitigated   = "anomaly.mitigated"
+	EventAnomalyHeld        = "anomaly.held"
+	EventAnomalyCleared     = "anomaly.cleared"
 	EventHAStandby          = "ha.standby"
 	EventHAActive           = "ha.active"
 	// EventAudit is one audit log record (#32): a change or sign-in on
@@ -116,6 +120,14 @@ var eventCatalog = []EventSpec{
 		Summary: "This instance became the active one of its HA pair and may announce."},
 	{Kind: EventAudit, Severity: SeverityInfo, Group: "audit", TrapID: 26,
 		Summary: "An audit log record: a change, denied change, or sign-in on the ops API, or a config reload."},
+	{Kind: EventAnomalyDetected, Severity: SeverityCritical, Group: "anomaly", Keys: []string{"anomaly"}, TrapID: 27,
+		Summary: "Traffic toward a prefix and protocol is far above its learned baseline (a possible DDoS)."},
+	{Kind: EventAnomalyMitigated, Severity: SeverityWarning, Group: "anomaly", Keys: []string{"anomaly"}, TrapID: 28,
+		Summary: "An anomaly rule matched and the detector added a mitigation rule (a dry run when mitigation.mode is observe)."},
+	{Kind: EventAnomalyHeld, Severity: SeverityWarning, Group: "anomaly", Keys: []string{"anomaly"}, TrapID: 29,
+		Summary: "An anomaly rule matched but no mitigation rule was added, or it ended early: not an exact learned prefix, HA standby, max_active, max_actions_per_hour, max_rules, or refused."},
+	{Kind: EventAnomalyCleared, Severity: SeverityInfo, Group: "anomaly", Keys: []string{"anomaly"}, TrapID: 30, Resolves: true,
+		Summary: "An anomaly ended (traffic back within its baseline, or flow data unavailable); the mitigation rule it added is removed."},
 }
 
 // EventCatalog returns a copy of every event kind the controller emits.
