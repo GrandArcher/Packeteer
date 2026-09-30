@@ -5,7 +5,8 @@
 # The edge originates 198.51.100.0/24 with three more-specifics inside it.
 # Packeteer runs with more_specific on and max_routes 4. Checked on the
 # router, from `show bgp ipv4 unicast json` (lab/checkms), on every sample:
-# the route count never exceeds 4 and no prefix the edge never advertised
+# the route count never stays above 4 (a withdraw in flight gets 3s) and
+# no prefix the edge never advertised
 # (an unlearned more-specific) ever appears. Then:
 #  1. the /24 and exactly its three learned more-specifics arrive, each with
 #     next hop 192.0.2.2, local-pref 250, 64512:666, and no-export;
@@ -55,10 +56,17 @@ dump_bgp() {
 # sorted. It runs in the script's shell (never in $(...)), so an unlearned
 # prefix or more than max_routes routes ends the run. A failed read leaves
 # got unset-equivalent ("?") and returns 1.
+#
+# The cap is checked with a grace for a withdraw in flight: Packeteer
+# withdraws a route before it announces into the room that frees, but the
+# edge can show the withdrawn path and the new ones in one read before it
+# has processed the withdraw. Over the cap fails only if it is still over
+# on every re-read for over_cap_grace seconds. An unlearned prefix fails on
+# the first sight.
+over_cap_grace=3
 got=
-sample() {
-	local out p n
-	got="?"
+read_edge() {
+	local p
 	out=$(edge -c 'show bgp ipv4 unicast json' 2>/dev/null) || return 1
 	out=$(printf '%s\n' "$out" | "$check_bin") || return 1
 	for p in $out; do
@@ -69,6 +77,17 @@ sample() {
 		fi
 	done
 	n=$(printf '%s\n' "$out" | grep -c . || true)
+}
+sample() {
+	local out n i
+	got="?"
+	read_edge || return 1
+	for i in $(seq 1 "$over_cap_grace"); do
+		[ "$n" -gt "$max_routes" ] || break
+		echo "edge shows $n routes (cap $max_routes): $(echo $out); re-reading for a withdraw in flight" >&2
+		sleep 1
+		read_edge || return 1
+	done
 	if [ "$n" -gt "$max_routes" ]; then
 		echo "FAIL: $n Packeteer routes on the edge, cap is $max_routes: $(echo $out)" >&2
 		dump_bgp
