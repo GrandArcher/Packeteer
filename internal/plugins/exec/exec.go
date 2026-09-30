@@ -105,6 +105,9 @@ type runner struct {
 	config  any
 	gate    *plugin.EventGate
 	log     *slog.Logger
+	// checkOnly runners were built by a config check; they never run
+	// the command.
+	checkOnly bool
 }
 
 // ResolveCommand maps a configured command to an executable path. Relative
@@ -173,7 +176,12 @@ func newRunner(kind plugin.Kind, c plugin.Config, e plugin.Env) (*runner, error)
 		logger = slog.Default()
 	}
 	r := &runner{kind: kind, name: e.Name, path: path, args: cfg.Args, env: env,
-		timeout: cfg.Timeout, config: cfg.Config, gate: gate, log: logger}
+		timeout: cfg.Timeout, config: cfg.Config, gate: gate, log: logger, checkOnly: e.CheckOnly}
+	if e.CheckOnly {
+		// A config check (the config editor) never runs the command:
+		// the candidate file is untrusted until it is the mounted file.
+		return r, nil
+	}
 
 	// Init handshake: lets the plugin validate its own config at load time.
 	ctx, cancel := context.WithTimeout(context.Background(), r.timeout)
@@ -209,6 +217,9 @@ func (b *limitedBuffer) Write(p []byte) (int, error) {
 
 // call runs one request/response exchange and decodes the result into out.
 func (r *runner) call(ctx context.Context, method string, params, out any) error {
+	if r.checkOnly {
+		return fmt.Errorf("%s: plugin was built for a config check and does not run", method)
+	}
 	ctx, cancel := context.WithTimeout(ctx, r.timeout)
 	defer cancel()
 	in, err := json.Marshal(request{Protocol: Protocol, Kind: string(r.kind), Method: method,

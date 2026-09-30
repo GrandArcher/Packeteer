@@ -100,3 +100,70 @@ func TestConfigEditorOffByDefault(t *testing.T) {
 		t.Fatalf("editor built while off: %v %v", ed, err)
 	}
 }
+
+// execMarkerScript writes an exec plugin script that leaves a marker file
+// whenever it runs, and answers init.
+func execMarkerScript(t *testing.T) (script, marker string) {
+	t.Helper()
+	dir := t.TempDir()
+	marker = filepath.Join(dir, "ran")
+	script = filepath.Join(dir, "probe.sh")
+	body := "#!/bin/sh\necho x >> " + marker + "\necho '{\"result\":{}}'\n"
+	if err := os.WriteFile(script, []byte(body), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return script, marker
+}
+
+// Checking or saving a candidate never runs a program (#34 review): the
+// editor refuses exec plugins it did not start with, and builds the ones
+// it did start with check-only.
+func TestConfigEditorNeverRunsExec(t *testing.T) {
+	script, marker := execMarkerScript(t)
+	running := uiBase + "probers:\n  - type: exec\n    name: ext\n    config: {command: " + script + "}\n"
+	ed, path := editorFor(t, running)
+	ran := func() bool {
+		_, err := os.Stat(marker)
+		return err == nil
+	}
+	shell := uiBase + `probers:
+  - type: exec
+    config: {command: /bin/sh, args: [-c, "echo x >> ` + marker + `; echo '{\"result\":{}}'"], env: {P: "${PACKETEER_HTTP_PASSWORD}"}}
+`
+	for name, tc := range map[string]struct{ yaml, want string }{
+		"new exec prober": {shell, "exec plugins cannot be added or changed"},
+		"changed args":    {strings.Replace(running, "{command: "+script+"}", "{command: "+script+", args: [x]}", 1), "exec plugins cannot be added or changed"},
+		"new exec notifier": {running + "notifiers:\n  - type: exec\n    config: {command: " + script + "}\n",
+			"notifiers (exec)"},
+		"plugin_dir": {running + "plugin_dir: /tmp\n", "plugin_dir: cannot be changed"},
+	} {
+		res := ed.Check([]byte(tc.yaml))
+		if res.Valid || !strings.Contains(strings.Join(res.Errors, "\n"), tc.want) {
+			t.Errorf("%s: %+v, want %q", name, res, tc.want)
+		}
+		if _, _, err := ed.Save([]byte(tc.yaml), configedit.Hash([]byte(running)), false); err == nil {
+			t.Errorf("%s: saved", name)
+		}
+		if ran() {
+			t.Fatalf("%s: the editor ran a program", name)
+		}
+	}
+	if b, _ := os.ReadFile(path); string(b) != running {
+		t.Fatal("a refused candidate changed the file")
+	}
+	// The exec plugin the controller runs with is kept, and still not run.
+	same := running + "hold_time: 20m\n"
+	if res := ed.Check([]byte(same)); !res.Valid {
+		t.Fatalf("unchanged exec plugin refused: %+v", res)
+	}
+	if _, _, err := ed.Save([]byte(same), configedit.Hash([]byte(running)), false); err != nil {
+		t.Fatal(err)
+	}
+	// Removing it is allowed.
+	if res := ed.Check([]byte(uiBase)); !res.Valid {
+		t.Fatalf("removing an exec plugin refused: %+v", res)
+	}
+	if ran() {
+		t.Fatal("the editor ran the configured exec plugin")
+	}
+}

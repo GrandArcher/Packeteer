@@ -66,6 +66,9 @@ type Options struct {
 	Logger    *slog.Logger
 	Getenv    func(string) string
 	PluginDir string // overrides cfg.PluginDir when set
+	// CheckOnly builds instances only to validate them (plugin.Env
+	// CheckOnly): no plugin starts a process. The set must not be started.
+	CheckOnly bool
 }
 
 func build[T plugin.Lifecycle](reg *plugin.Registry[T], field string, specs []config.PluginSpec, base plugin.Env, errs *[]error) []Instance[T] {
@@ -97,7 +100,7 @@ func Build(cfg *config.Config, opts Options) (*Set, error) {
 	if opts.PluginDir != "" {
 		dir = opts.PluginDir
 	}
-	base := plugin.Env{Logger: opts.Logger, PluginDir: dir, Getenv: opts.Getenv, Providers: providerNames(cfg)}
+	base := plugin.Env{Logger: opts.Logger, PluginDir: dir, Getenv: opts.Getenv, Providers: providerNames(cfg), CheckOnly: opts.CheckOnly}
 
 	var errs []error
 	s := &Set{

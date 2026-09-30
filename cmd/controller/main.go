@@ -173,7 +173,7 @@ func run(ctx context.Context, args []string, getenv func(string) string, stdout,
 		return 1
 	}
 	log := newLogger(stderr, cfg.Log.Level, cfg.Log.Format)
-	plugins, err := preflight(cfg, log, getenv, httpUser)
+	plugins, err := preflight(cfg, log, getenv, httpUser, false)
 	if err != nil {
 		fmt.Fprintf(stderr, "packeteer: refusing to start: %v\n", err)
 		return 1
@@ -292,9 +292,9 @@ func run(ctx context.Context, args []string, getenv func(string) string, stdout,
 
 // preflight builds the plugin set and runs every check the controller runs
 // before it starts. It starts nothing. The config editor (#34) runs it on
-// a candidate file too.
-func preflight(cfg *config.Config, log *slog.Logger, getenv func(string) string, httpUser string) (*pluginhost.Set, error) {
-	plugins, err := pluginhost.Build(cfg, pluginhost.Options{Logger: log, Getenv: getenv, PluginDir: getenv(PluginDirEnv)})
+// a candidate file too, with checkOnly set: no exec plugin command runs.
+func preflight(cfg *config.Config, log *slog.Logger, getenv func(string) string, httpUser string, checkOnly bool) (*pluginhost.Set, error) {
+	plugins, err := pluginhost.Build(cfg, pluginhost.Options{Logger: log, Getenv: getenv, PluginDir: getenv(PluginDirEnv), CheckOnly: checkOnly})
 	if err != nil {
 		return nil, fmt.Errorf("plugins: %w", err)
 	}
