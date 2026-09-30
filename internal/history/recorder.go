@@ -60,10 +60,14 @@ type Recorder struct {
 	opt Options
 	log *slog.Logger
 
-	mu       sync.Mutex
-	buckets  map[bucketKey]*plugin.ProbeBucket
-	dirty    map[string]plugin.ImprovementRecord
-	open     map[netip.Prefix]plugin.ImprovementRecord
+	mu      sync.Mutex
+	buckets map[bucketKey]*plugin.ProbeBucket
+	dirty   map[string]plugin.ImprovementRecord
+	open    map[netip.Prefix]plugin.ImprovementRecord
+	// mits are mitigation records not yet flushed; openMits the rules
+	// still held, closed on Close.
+	mits     map[string]plugin.MitigationRecord
+	openMits map[string]plugin.MitigationRecord
 	prefixes map[netip.Prefix]bool
 	seq      uint64
 	dropped  int
@@ -90,12 +94,15 @@ func New(opt Options) *Recorder {
 		dirty:    map[string]plugin.ImprovementRecord{},
 		open:     map[netip.Prefix]plugin.ImprovementRecord{},
 		prefixes: map[netip.Prefix]bool{},
+		mits:     map[string]plugin.MitigationRecord{},
+		openMits: map[string]plugin.MitigationRecord{},
 	}
 }
 
-// Start ends improvement records a previous process left open (that
-// process withdrew its routes, or lost its session, when it stopped) and
-// starts the flush loop. The store must already be started.
+// Start ends improvement and mitigation records a previous process left
+// open (that process withdrew its routes, or lost its session, when it
+// stopped; mitigation rules live in memory only) and starts the flush
+// loop. The store must already be started.
 func (r *Recorder) Start(ctx context.Context) error {
 	h, err := r.opt.Store.Read(ctx, plugin.HistoryQuery{OpenOnly: true})
 	if err != nil {
@@ -111,6 +118,17 @@ func (r *Recorder) Start(ctx context.Context) error {
 			return fmt.Errorf("history: close open improvements: %w", err)
 		}
 		r.log.Info("history: closed improvements left open by the previous run", "count", len(h.Improvements))
+	}
+	if len(h.Mitigations) > 0 {
+		now := r.opt.Now().UTC()
+		for i := range h.Mitigations {
+			h.Mitigations[i].End = now
+			h.Mitigations[i].EndReason = EndRestart
+		}
+		if err := r.opt.Store.Write(ctx, plugin.HistoryBatch{Mitigations: h.Mitigations}); err != nil {
+			return fmt.Errorf("history: close open mitigations: %w", err)
+		}
+		r.log.Info("history: closed mitigation rules left open by the previous run", "count", len(h.Mitigations))
 	}
 	loopCtx, cancel := context.WithCancel(context.Background())
 	r.cancel, r.done = cancel, make(chan struct{})
@@ -136,8 +154,8 @@ func (r *Recorder) loop(ctx context.Context) {
 	}
 }
 
-// Close ends the open improvement records (the caller has withdrawn the
-// routes), flushes, and stops the loop. The store is stopped by the host.
+// Close ends the open improvement and mitigation records (the caller has
+// withdrawn the routes), flushes, and stops the loop. The store is stopped by the host.
 func (r *Recorder) Close(ctx context.Context) error {
 	if r.cancel != nil {
 		r.cancel()
@@ -151,8 +169,30 @@ func (r *Recorder) Close(ctx context.Context) error {
 		r.dirty[rec.ID] = rec
 		delete(r.open, p)
 	}
+	for id, m := range r.openMits {
+		m.End, m.EndReason = now, EndShutdown
+		r.mits[id] = m
+		delete(r.openMits, id)
+	}
 	r.mu.Unlock()
 	return r.Flush(ctx)
+}
+
+// Mitigation records the latest state of a threat mitigation rule. A
+// record with an End closes the rule; one without is held until Close.
+// Safe for concurrent use.
+func (r *Recorder) Mitigation(m plugin.MitigationRecord) {
+	if m.ID == "" || !m.Prefix.IsValid() {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if m.End.IsZero() {
+		r.openMits[m.ID] = m
+	} else {
+		delete(r.openMits, m.ID)
+	}
+	r.mits[m.ID] = m
 }
 
 // Probe adds one result to today's rollup. Safe for concurrent use.
@@ -271,12 +311,16 @@ func (r *Recorder) take() (plugin.HistoryBatch, []netip.Prefix) {
 	for _, rec := range r.dirty {
 		b.Improvements = append(b.Improvements, rec)
 	}
+	for _, m := range r.mits {
+		b.Mitigations = append(b.Mitigations, m)
+	}
 	var ps []netip.Prefix
 	for p := range r.prefixes {
 		ps = append(ps, p)
 	}
 	r.buckets = map[bucketKey]*plugin.ProbeBucket{}
 	r.dirty = map[string]plugin.ImprovementRecord{}
+	r.mits = map[string]plugin.MitigationRecord{}
 	r.prefixes = map[netip.Prefix]bool{}
 	if r.dropped > 0 {
 		r.log.Warn("history: dropped probe rollups while the store was failing", "count", r.dropped)
@@ -314,6 +358,11 @@ func (r *Recorder) requeue(b plugin.HistoryBatch, ps []netip.Prefix) {
 			r.dirty[rec.ID] = rec
 		}
 	}
+	for _, m := range b.Mitigations {
+		if _, newer := r.mits[m.ID]; !newer {
+			r.mits[m.ID] = m
+		}
+	}
 	for _, p := range ps {
 		r.prefixes[p] = true
 	}
@@ -338,7 +387,7 @@ func (r *Recorder) Flush(ctx context.Context) error {
 			b.Prefixes = append(b.Prefixes, info)
 		}
 	}
-	if len(b.Buckets) == 0 && len(b.Improvements) == 0 && len(b.Prefixes) == 0 {
+	if len(b.Buckets) == 0 && len(b.Improvements) == 0 && len(b.Prefixes) == 0 && len(b.Mitigations) == 0 {
 		return nil
 	}
 	if err := r.opt.Store.Write(ctx, b); err != nil {
@@ -390,6 +439,22 @@ func (r *Recorder) History(ctx context.Context, from, to time.Time) (plugin.Hist
 			h.Improvements[i] = rec
 		} else {
 			h.Improvements = append(h.Improvements, rec)
+		}
+	}
+	mitByID := map[string]int{}
+	for i, m := range h.Mitigations {
+		mitByID[m.ID] = i
+	}
+	for id, m := range r.mits {
+		if !m.Created.Before(to) || (!m.End.IsZero() && m.End.Before(from)) {
+			if _, ok := mitByID[id]; !ok {
+				continue
+			}
+		}
+		if i, ok := mitByID[id]; ok {
+			h.Mitigations[i] = m
+		} else {
+			h.Mitigations = append(h.Mitigations, m)
 		}
 	}
 	return h, nil

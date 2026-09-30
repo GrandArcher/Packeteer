@@ -6,6 +6,7 @@ import (
 	"net/netip"
 	"path/filepath"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -276,6 +277,79 @@ func TestRecorderSurvivesRestart(t *testing.T) {
 	prov := rep.Rows.([]ProviderRow)
 	if len(prov) != 2 || prov[0].Probes != 1 || prov[0].AvgLossPct != 10 || prov[1].ImprovementsTo != 1 {
 		t.Fatalf("providers after restart = %+v", prov)
+	}
+	if err := rec.Close(ctx); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRecorderMitigations(t *testing.T) {
+	ctx := context.Background()
+	cfg, err := plugin.ConfigFromYAML("path: " + filepath.Join(t.TempDir(), "packeteer.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	open := func() *sqlite.Store {
+		s, err := sqlite.New(cfg, plugin.Env{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := s.Start(ctx); err != nil {
+			t.Fatal(err)
+		}
+		return s
+	}
+	clock := t0
+	store := open()
+	rec := newRecorder(store, &clock)
+	if err := rec.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	fs := plugin.MitigationRecord{ID: "fs", Prefix: pfxB, Action: plugin.MitigationFlowSpecDrop, Match: "proto=17", Routes: 1,
+		Mode: "inject", Created: t0, Expires: t0.Add(2 * time.Hour)}
+	rec.Mitigation(fs)
+	fs.Announced = t0.Add(time.Minute)
+	rec.Mitigation(fs)
+	bh := plugin.MitigationRecord{ID: "bh", Prefix: pfxC, Action: plugin.MitigationBlackhole, Routes: 1, Mode: "inject",
+		Created: t0, Expires: t0.Add(time.Hour), Announced: t0, End: t0.Add(30 * time.Minute), EndReason: "removed"}
+	rec.Mitigation(bh)
+	rec.Mitigation(plugin.MitigationRecord{ID: "bad"})
+
+	// Unflushed rows are in the report already.
+	clock = t0.Add(time.Hour + time.Minute)
+	q := Query{Name: ReportMitigations, From: t0.Truncate(24 * time.Hour), To: t0.Add(24 * time.Hour)}
+	rep, err := rec.Report(ctx, q)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows := rep.Rows.([]MitigationRow)
+	if len(rows) != 2 || rows[0].ID != "bh" || rows[0].Hours != 0.5 || rows[1].ID != "fs" || rows[1].Hours != 1 || !rows[1].End.IsZero() {
+		t.Fatalf("mitigations before close = %+v", rows)
+	}
+	if err := rec.Close(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Stop(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	store = open()
+	defer store.Stop(ctx)
+	rec = newRecorder(store, &clock)
+	if err := rec.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	rep, err = rec.Report(ctx, q)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows = rep.Rows.([]MitigationRow)
+	if len(rows) != 2 || rows[1].ID != "fs" || rows[1].EndReason != EndShutdown || !rows[1].End.Equal(clock) || rows[1].Match != "proto=17" {
+		t.Fatalf("mitigations after restart = %+v", rows)
+	}
+	var csv strings.Builder
+	if err := rep.CSV(&csv); err != nil || !strings.HasPrefix(csv.String(), "id,prefix,action,") || strings.Count(csv.String(), "\n") != 3 {
+		t.Fatalf("csv = %q %v", csv.String(), err)
 	}
 	if err := rec.Close(ctx); err != nil {
 		t.Fatal(err)

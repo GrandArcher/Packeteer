@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/netip"
+	"strings"
 	"testing"
 	"time"
 
@@ -119,5 +120,74 @@ func TestMitigationEndpoints(t *testing.T) {
 	}
 	if len(ctl.Status().Rules) != 0 {
 		t.Fatal("rule not removed")
+	}
+}
+
+func TestMitigationFlowSpecRequest(t *testing.T) {
+	c, err := mitigation.New(mitigation.Config{
+		Mode: config.ModeObserve, Allowlist: []netip.Prefix{netip.MustParsePrefix("203.0.113.0/24")},
+		MaxRules: 4, DefaultTTL: time.Hour, MaxTTL: 2 * time.Hour,
+	}, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := mitServer(t, mitControl{c}, "ops")
+	bad := map[string]string{
+		"bad protocol":     `{"prefix":"203.0.113.0/24","action":"flowspec_drop","match":{"protocols":["quic"]}}`,
+		"bad port":         `{"prefix":"203.0.113.0/24","action":"flowspec_drop","match":{"destination_ports":["80-10"]}}`,
+		"unknown match":    `{"prefix":"203.0.113.0/24","action":"flowspec_drop","match":{"tcp_flags":"syn"}}`,
+		"countries no geo": `{"prefix":"203.0.113.0/24","action":"flowspec_drop","source_countries":["XA"]}`,
+		"rate on drop":     `{"prefix":"203.0.113.0/24","action":"flowspec_drop","rate_mbps":5}`,
+	}
+	for name, body := range bad {
+		if rec := mdo(h, http.MethodPost, "/api/mitigations", "application/json", body, true); rec.Code != http.StatusBadRequest {
+			t.Errorf("%s: %d %s", name, rec.Code, rec.Body.String())
+		}
+	}
+	rec := mdo(h, http.MethodPost, "/api/mitigations", "application/json",
+		`{"prefix":"203.0.113.0/24","action":"flowspec_rate_limit","rate_mbps":20,"match":{"source":"198.51.100.0/24","protocols":["udp",6],"destination_ports":[53,"1000-2000"]},"ttl":"10m"}`, true)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create: %d %s", rec.Code, rec.Body.String())
+	}
+	var rule map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &rule); err != nil {
+		t.Fatal(err)
+	}
+	m := rule["match"].(map[string]any)
+	if rule["rate_mbps"] != float64(20) || m["source"] != "198.51.100.0/24" || len(m["protocols"].([]any)) != 2 ||
+		m["protocols"].([]any)[0] != "tcp" || m["destination_ports"].([]any)[1] != "1000-2000" || rule["routes"] != float64(1) {
+		t.Fatalf("rule = %v", rule)
+	}
+	rec = mdo(h, http.MethodGet, "/api/mitigations", "", "", true)
+	var body map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	feed := body["feed"].([]any)
+	if len(feed) != 1 || feed[0].(map[string]any)["kind"] != "added" || body["routes_held"] != float64(1) || body["geoip"] != false {
+		t.Fatalf("status = %v", body)
+	}
+}
+
+func TestMitigationMetrics(t *testing.T) {
+	ctl := newMitControl(t)
+	if _, err := ctl.Add(mitigation.Request{Prefix: netip.MustParsePrefix("203.0.113.0/24"), Action: "flowspec_drop"}); err != nil {
+		t.Fatal(err)
+	}
+	h := mitServer(t, ctl, "ops")
+	text := mdo(h, http.MethodGet, "/metrics", "", "", true).Body.String()
+	for _, want := range []string{
+		`packeteer_mitigation_rules{action="flowspec_drop",state="pending"} 1`,
+		`packeteer_mitigation_rules{action="blackhole",state="announced"} 0`,
+		"packeteer_mitigation_routes_held 1",
+		"packeteer_mitigation_routes_announced 0",
+		`packeteer_mitigation_max_rules{mode="observe"} 1`,
+	} {
+		if !strings.Contains(text, want) {
+			t.Errorf("metrics missing %q", want)
+		}
+	}
+	if off := mdo(mitServer(t, nil, "ops"), http.MethodGet, "/metrics", "", "", true).Body.String(); strings.Contains(off, "packeteer_mitigation_") {
+		t.Fatal("mitigation metrics without mitigation")
 	}
 }

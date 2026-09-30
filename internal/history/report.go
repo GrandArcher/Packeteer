@@ -26,6 +26,7 @@ const (
 	ReportCountries    = "countries"
 	ReportProbes       = "probes"
 	ReportSavings      = "savings"
+	ReportMitigations  = "mitigations"
 )
 
 // Reports lists every report name with a one-line description.
@@ -43,6 +44,7 @@ var Reports = []struct {
 	{ReportCountries, "Top countries by problems, volume, or loss (needs a rules policy with geoip_db)."},
 	{ReportProbes, "Probes per UTC day."},
 	{ReportSavings, "Estimated cost savings per improvement between priced providers."},
+	{ReportMitigations, "Threat mitigation history: every RTBH, redirect, and FlowSpec rule that overlaps the range, newest first."},
 }
 
 // Known reports whether name is a report.
@@ -115,7 +117,7 @@ func Build(h plugin.History, q Query) (Report, error) {
 	}
 	if q.Limit <= 0 {
 		q.Limit = DefaultLimit
-		if q.Name == ReportImprovements || q.Name == ReportSavings {
+		if q.Name == ReportImprovements || q.Name == ReportSavings || q.Name == ReportMitigations {
 			q.Limit = 100
 		}
 	}
@@ -153,6 +155,8 @@ func Build(h plugin.History, q Query) (Report, error) {
 		a.probes(&rep)
 	case ReportSavings:
 		a.savings(&rep)
+	case ReportMitigations:
+		mitigations(h.Mitigations, q, &rep)
 	default:
 		return Report{}, fmt.Errorf("unknown report %q", q.Name)
 	}

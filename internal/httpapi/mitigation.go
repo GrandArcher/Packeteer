@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/GrandArcher/Packeteer/internal/mitigation"
+	"github.com/GrandArcher/Packeteer/pkg/plugin"
 )
 
 // MitigationControl lists, adds, and removes threat mitigation rules
@@ -28,6 +29,10 @@ type mitigationRequest struct {
 	Target string `json:"target"`
 	TTL    string `json:"ttl"`
 	Reason string `json:"reason"`
+	// FlowSpec only.
+	Match     *plugin.FlowSpecMatch `json:"match"`
+	Countries []string              `json:"source_countries"`
+	RateMbps  float64               `json:"rate_mbps"`
 }
 
 func (s *Server) handleMitigations(w http.ResponseWriter, _ *http.Request) {
@@ -75,7 +80,7 @@ func (s *Server) handleMitigationAdd(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req mitigationRequest
-	dec := json.NewDecoder(io.LimitReader(r.Body, 4096))
+	dec := json.NewDecoder(io.LimitReader(r.Body, 8192))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid body: " + err.Error()})
@@ -93,16 +98,22 @@ func (s *Server) handleMitigationAdd(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	rule, err := s.mitigation.Add(mitigation.Request{Prefix: p, Action: req.Action, Target: req.Target, TTL: ttl, Reason: req.Reason})
+	mreq := mitigation.Request{Prefix: p, Action: req.Action, Target: req.Target, TTL: ttl, Reason: req.Reason,
+		Countries: req.Countries, RateMbps: req.RateMbps}
+	if req.Match != nil {
+		mreq.Match = *req.Match
+	}
+	rule, err := s.mitigation.Add(mreq)
 	switch {
-	case errors.Is(err, mitigation.ErrFull):
+	case errors.Is(err, mitigation.ErrFull), errors.Is(err, mitigation.ErrConflict):
 		writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
 		return
 	case err != nil:
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
-	s.log.Info("mitigation rule added through the API", "id", rule.ID, "prefix", rule.Prefix, "action", rule.Action, "target", rule.Target, "remote", r.RemoteAddr)
+	s.log.Info("mitigation rule added through the API", "id", rule.ID, "prefix", rule.Prefix, "action", rule.Action, "target", rule.Target,
+		"match", rule.MatchText(), "remote", r.RemoteAddr)
 	writeJSON(w, http.StatusCreated, rule)
 }
 

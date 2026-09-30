@@ -1,7 +1,7 @@
 # Threat mitigation lab (#28). Simulated edge plus two simulated eBGP
 # transits. Documentation addresses (RFC 5737) and documentation/private
 # ASNs only. Brought up by lab/e2e-mitigation.sh, which adds and removes
-# rules through Packeteer's ops API at 192.0.2.10:8080 (lab-only basic
+# RTBH, redirect, and FlowSpec rules through Packeteer's ops API at 192.0.2.10:8080 (lab-only basic
 # auth below).
 name: packeteer-e2e-mitigation
 x-frr: &frr
@@ -13,7 +13,7 @@ services:
     <<: *frr
     hostname: edge
     environment:
-      FRR_EXPECT: "ip route 192.0.2.66/32 blackhole;route-map from-packeteer in;route-map to-transit-b out"
+      FRR_EXPECT: "ip route 192.0.2.66/32 blackhole;route-map from-packeteer in;route-map to-transit-b out;address-family ipv4 flowspec"
     volumes:
       - ./frr-mit-edge:/etc/frr
       - ./frr-start.sh:/lab/frr-start.sh:ro
@@ -35,7 +35,7 @@ services:
     <<: *frr
     hostname: transit-b
     environment:
-      FRR_EXPECT: "router bgp 64497;neighbor 192.0.2.254 remote-as 64512"
+      FRR_EXPECT: "router bgp 64497;neighbor 192.0.2.254 remote-as 64512;address-family ipv4 flowspec"
     volumes:
       - ./frr-mit-transit-b:/etc/frr
       - ./frr-start.sh:/lab/frr-start.sh:ro
@@ -64,6 +64,9 @@ services:
       PACKETEER_HTTP_PASSWORD: lab-only
     volumes:
       - ./packeteer-mitigation.yaml:/etc/packeteer/config.yaml:ro
+      # Written by lab/e2e-mitigation.sh (lab/mkgeoip): documentation
+      # prefixes mapped to the test countries XA and XB.
+      - ./mitigation-country.mmdb:/etc/packeteer/country.mmdb:ro
     networks:
       lab:
         ipv4_address: 192.0.2.10

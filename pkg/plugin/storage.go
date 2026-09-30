@@ -63,20 +63,48 @@ type PrefixInfo struct {
 	Updated    time.Time
 }
 
-// HistoryBatch is one write. Improvements replace earlier rows with the same
-// ID; buckets are added; prefixes replace.
+// MitigationRecord is one threat mitigation rule (#28) from creation to
+// its end: expiry, removal, replacement, or the controller stopping. End
+// is zero while the rule is held. Announced is when its routes first went
+// on the wire (zero if they never did: observe, or never in the RIB).
+type MitigationRecord struct {
+	ID     string
+	Prefix netip.Prefix
+	Action string
+	Target string
+	// Match is the FlowSpec match in text form, Countries the source
+	// countries, RateMbps the rate limit. Empty for RTBH and redirect.
+	Match     string
+	Countries string
+	RateMbps  float64
+	// Routes is how many routes the rule stands for (one, or one per
+	// source network of a country rule).
+	Routes    int
+	Reason    string
+	Mode      string
+	Created   time.Time
+	Expires   time.Time
+	Announced time.Time
+	End       time.Time
+	EndReason string
+}
+
+// HistoryBatch is one write. Improvements and mitigations replace earlier
+// rows with the same ID; buckets are added; prefixes replace.
 type HistoryBatch struct {
 	Buckets      []ProbeBucket
 	Improvements []ImprovementRecord
 	Prefixes     []PrefixInfo
+	Mitigations  []MitigationRecord
 }
 
 // HistoryQuery selects rows. Buckets are those whose Day is in [From, To)
 // after From is truncated to its UTC day, so a range that starts mid-day
 // includes that whole day (rollups are daily).
-// Improvements are those that overlap [From, To): started before To and
-// still open or ended at or after From. OpenOnly returns only improvements
-// with no End and no buckets. Prefixes are always all rows.
+// Improvements and mitigations are those that overlap [From, To): started
+// (created) before To and still open or ended at or after From. OpenOnly
+// returns only improvements and mitigations with no End, and no buckets.
+// Prefixes are always all rows.
 type HistoryQuery struct {
 	From     time.Time
 	To       time.Time
@@ -88,6 +116,7 @@ type History struct {
 	Buckets      []ProbeBucket
 	Improvements []ImprovementRecord
 	Prefixes     []PrefixInfo
+	Mitigations  []MitigationRecord
 }
 
 // Storage persists history for reports. It records what the controller

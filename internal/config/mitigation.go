@@ -18,9 +18,9 @@ const (
 	MinMitigationTTL    = time.Second
 )
 
-// Mitigation is threat mitigation (#28): RTBH (blackhole) and BGP redirect
-// routes for exact learned prefixes, added through the ops API. Nil
-// disables it.
+// Mitigation is threat mitigation (#28): RTBH (blackhole), BGP redirect,
+// and FlowSpec (drop, rate-limit, redirect) for exact learned prefixes,
+// added through the ops API. Nil disables it.
 type Mitigation struct {
 	// Mode is observe (default) or inject. inject also needs the top-level
 	// mode to be inject. observe accepts and lists rules and never
@@ -29,7 +29,9 @@ type Mitigation struct {
 	// Allowlist is the mitigation allowlist. It is separate from
 	// allowlist.prefixes: a rule's prefix must be covered by it. Required.
 	Allowlist []string `yaml:"allowlist"`
-	// MaxRules caps rules held at once, announced or not (default 10).
+	// MaxRules caps mitigation routes held at once, announced or not
+	// (default 10). A FlowSpec rule with source countries counts once per
+	// source network.
 	MaxRules int `yaml:"max_rules"`
 	// DefaultTTL is a rule's lifetime when the request names none
 	// (default 1h). MaxTTL is the longest a request may ask for
@@ -39,6 +41,10 @@ type Mitigation struct {
 	// LocalPref is set on mitigation routes (default: the top-level
 	// local_pref). It must win on the edge over the native route.
 	LocalPref uint32 `yaml:"local_pref"`
+	// GeoIPDB is a MaxMind-format country database the operator mounts
+	// (for example GeoLite2-Country.mmdb). FlowSpec rules with
+	// source_countries need it. None is shipped.
+	GeoIPDB string `yaml:"geoip_db"`
 	// Announcer is the in-process mitigation announcer. Required in
 	// inject.
 	Announcer *PluginSpec `yaml:"announcer"`
@@ -133,6 +139,9 @@ func (c *Config) validateMitigation(add func(string, ...any)) {
 	}
 	if m.MaxTTL < MinMitigationTTL || m.MaxTTL > MaxMitigationMaxTTL {
 		add("mitigation.max_ttl %s must be between %s and %s", m.MaxTTL, MinMitigationTTL, MaxMitigationMaxTTL)
+	}
+	if m.GeoIPDB != "" && !strings.HasPrefix(m.GeoIPDB, "/") {
+		add("mitigation.geoip_db %q must be an absolute path (mount the file into the container)", m.GeoIPDB)
 	}
 	if m.DefaultTTL < MinMitigationTTL || m.DefaultTTL > m.MaxTTL {
 		add("mitigation.default_ttl %s must be between %s and max_ttl (%s)", m.DefaultTTL, MinMitigationTTL, m.MaxTTL)

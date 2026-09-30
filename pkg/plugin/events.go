@@ -50,6 +50,10 @@ const (
 	EventOutageCleared      = "outage.cleared"
 	EventInboundSteered     = "inbound.steered"
 	EventInboundReleased    = "inbound.released"
+	EventMitigationAdded    = "mitigation.added"
+	EventMitigationOn       = "mitigation.announced"
+	EventMitigationOff      = "mitigation.withdrawn"
+	EventMitigationEnded    = "mitigation.ended"
 	// EventTest is sent by hand to check a notifier's delivery path.
 	EventTest = "notifier.test"
 )
@@ -93,6 +97,14 @@ var eventCatalog = []EventSpec{
 		Summary: "Inbound commit control is steering inbound traffic away from a provider (announced in inject, suggested only in observe and suggest)."},
 	{Kind: EventInboundReleased, Severity: SeverityInfo, Group: "inbound", Keys: []string{"provider"}, TrapID: 19, Resolves: true,
 		Summary: "An inbound steer was released: back under commit, stale telemetry, or TTL."},
+	{Kind: EventMitigationAdded, Severity: SeverityWarning, Group: "mitigation", Keys: []string{"rule"}, TrapID: 20,
+		Summary: "A threat mitigation rule (RTBH, redirect, or FlowSpec) was added or replaced (a dry run in observe)."},
+	{Kind: EventMitigationOn, Severity: SeverityWarning, Group: "mitigation", Keys: []string{"rule"}, TrapID: 21,
+		Summary: "Every route of a threat mitigation rule is on the wire."},
+	{Kind: EventMitigationOff, Severity: SeverityWarning, Group: "mitigation", Keys: []string{"rule"}, TrapID: 22,
+		Summary: "A threat mitigation rule's routes were withdrawn while the rule is still held (RIB loss, shutdown, announce failure)."},
+	{Kind: EventMitigationEnded, Severity: SeverityInfo, Group: "mitigation", Keys: []string{"rule"}, TrapID: 23, Resolves: true,
+		Summary: "A threat mitigation rule ended: expired, removed, or replaced. Its routes are withdrawn."},
 }
 
 // EventCatalog returns a copy of every event kind the controller emits.

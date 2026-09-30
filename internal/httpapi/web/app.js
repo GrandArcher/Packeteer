@@ -6,6 +6,7 @@ var lastProviders = null;
 var lastPrefixes = null;
 var lastImprovements = null;
 var lastReady = null;
+var lastMitigation = null;
 
 function el(tag, className, text) {
   var n = document.createElement(tag);
@@ -224,6 +225,85 @@ function renderStatus(err) {
   if (err) node.appendChild(el("span", "bad", err.message));
 }
 
+function table(headers) {
+  var t = el("table");
+  var hr = el("tr");
+  headers.forEach(function (h) { hr.appendChild(el("th", "", h)); });
+  var thead = el("thead");
+  thead.appendChild(hr);
+  t.appendChild(thead);
+  var tb = el("tbody");
+  t.appendChild(tb);
+  return {table: t, body: tb};
+}
+
+function mitigationWhat(r) {
+  var parts = [];
+  if (r.target) parts.push("target " + r.target + (r.route_target ? " (" + r.route_target + ")" : ""));
+  if (r.next_hop) parts.push("next hop " + r.next_hop);
+  if (r.rate_mbps) parts.push(r.rate_mbps + " Mbit/s");
+  var m = r.match || {};
+  if (m.source) parts.push("from " + m.source);
+  if (r.source_countries && r.source_countries.length) parts.push("from " + r.source_countries.join(",") + " (" + r.routes + " networks)");
+  if (m.protocols && m.protocols.length) parts.push("proto " + m.protocols.join(","));
+  if (m.destination_ports && m.destination_ports.length) parts.push("dport " + m.destination_ports.join(","));
+  if (m.source_ports && m.source_ports.length) parts.push("sport " + m.source_ports.join(","));
+  return parts.join("; ");
+}
+
+function renderMitigation(data) {
+  var root = document.getElementById("mitigation");
+  clear(root);
+  if (!data || !data.enabled) {
+    root.appendChild(el("p", "empty", "Not configured (mitigation in the config)."));
+    return;
+  }
+  var summary = el("p", "exits");
+  [["Mode", data.mitigation_mode], ["Routes held", data.routes_held + " of " + data.max_rules],
+   ["Announced", data.routes_announced], ["FlowSpec", data.flowspec && data.flowspec.enabled ? "on" : "off"],
+   ["GeoIP", data.geoip ? "on" : "off"]].forEach(function (kv) {
+    summary.appendChild(el("span", "k", kv[0]));
+    summary.appendChild(el("span", "v", kv[1]));
+  });
+  root.appendChild(summary);
+  var rules = data.rules || [];
+  if (!rules.length) {
+    root.appendChild(el("p", "empty", "No rules."));
+  } else {
+    var t = table(["Prefix", "Action", "Detail", "State", "Expires", "Reason"]);
+    rules.forEach(function (r) {
+      var tr = el("tr");
+      tr.appendChild(el("td", "mono", r.prefix));
+      tr.appendChild(el("td", "", r.action));
+      tr.appendChild(el("td", "", mitigationWhat(r)));
+      var st = el("td");
+      st.appendChild(el("span", r.announced ? "dot up" : "dot down", r.announced ? "announced" : (r.pending || "pending")));
+      tr.appendChild(st);
+      tr.appendChild(el("td", "", fmtTime(r.expires)));
+      tr.appendChild(el("td", "", r.reason || ""));
+      t.body.appendChild(tr);
+    });
+    root.appendChild(t.table);
+  }
+  var feed = (data.feed || []).slice(0, 20);
+  root.appendChild(el("h3", "", "Feed"));
+  if (!feed.length) {
+    root.appendChild(el("p", "empty", "No changes since the controller started."));
+    return;
+  }
+  var f = table(["Time", "Change", "Prefix", "Action", "Detail"]);
+  feed.forEach(function (c) {
+    var tr = el("tr");
+    tr.appendChild(el("td", "", fmtTime(c.time)));
+    tr.appendChild(el("td", "", c.kind + (c.mode !== "inject" ? " (" + c.mode + ")" : "")));
+    tr.appendChild(el("td", "mono", c.rule && c.rule.prefix));
+    tr.appendChild(el("td", "", c.rule && c.rule.action));
+    tr.appendChild(el("td", "", c.detail || mitigationWhat(c.rule || {})));
+    f.body.appendChild(tr);
+  });
+  root.appendChild(f.table);
+}
+
 function refresh() {
   if (refreshing) return;
   refreshing = true;
@@ -234,7 +314,8 @@ function refresh() {
     getJSON("/api/providers"),
     getJSON("/api/prefixes"),
     getJSON("/api/improvements"),
-    readyReq
+    readyReq,
+    getJSON("/api/mitigations")
   ]).then(function (results) {
     var err = null;
     if (results[0].status === "fulfilled") lastProviders = results[0].value;
@@ -248,6 +329,9 @@ function refresh() {
     if (lastProviders) renderProviders(lastProviders);
     if (lastPrefixes) renderPrefixes(lastPrefixes);
     if (lastImprovements) renderImprovements(lastImprovements);
+    // Mitigation is optional; its failure does not mark the page stale.
+    if (results[4].status === "fulfilled") lastMitigation = results[4].value;
+    if (lastMitigation) renderMitigation(lastMitigation);
     renderStatus(err);
   }).then(function () {
     refreshing = false;

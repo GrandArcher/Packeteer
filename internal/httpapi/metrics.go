@@ -1,8 +1,12 @@
 package httpapi
 
 import (
+	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/GrandArcher/Packeteer/internal/mitigation"
+	"github.com/GrandArcher/Packeteer/pkg/plugin"
 )
 
 // Canonical BGP FSM states from the GoBGP session enum. A state outside
@@ -167,6 +171,48 @@ func Metrics(s Snapshot) []byte {
 	writeGauge(&b, "packeteer_exchange_peer_improvements", "Active improvements onto the exchange peer.", ixImps...)
 	writeGauge(&b, "packeteer_exchange_discovered_peers", "Next hops on the peering LAN that are not configured peers.", ixDiscovered...)
 
+	return []byte(b.String())
+}
+
+// MitigationMetrics renders threat mitigation (#28) gauges: rules by
+// action and state, routes held and announced, and the cap.
+func MitigationMetrics(st mitigation.Status) []byte {
+	var b strings.Builder
+	type key struct{ action, state string }
+	counts := map[key]float64{}
+	for _, a := range []string{plugin.MitigationBlackhole, plugin.MitigationRedirect, plugin.MitigationFlowSpecDrop,
+		plugin.MitigationFlowSpecRateLimit, plugin.MitigationFlowSpecRedirect} {
+		counts[key{a, "announced"}] = 0
+		counts[key{a, "pending"}] = 0
+	}
+	for _, r := range st.Rules {
+		state := "pending"
+		if r.Announced {
+			state = "announced"
+		}
+		counts[key{r.Action, state}]++
+	}
+	keys := make([]key, 0, len(counts))
+	for k := range counts {
+		keys = append(keys, k)
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		if keys[i].action != keys[j].action {
+			return keys[i].action < keys[j].action
+		}
+		return keys[i].state < keys[j].state
+	})
+	var rules []sample
+	for _, k := range keys {
+		rules = append(rules, sample{labels: []lbl{{"action", k.action}, {"state", k.state}}, value: counts[k]})
+	}
+	writeGauge(&b, "packeteer_mitigation_rules", "Threat mitigation rules held, by action and state (announced, or pending: waiting, or a dry run in observe).", rules...)
+	writeGauge(&b, "packeteer_mitigation_routes_held", "Routes the held mitigation rules stand for (a FlowSpec country rule counts once per source network).",
+		sample{value: float64(st.Routes)})
+	writeGauge(&b, "packeteer_mitigation_routes_announced", "Mitigation routes on the wire (RTBH, redirect, and FlowSpec).",
+		sample{value: float64(st.OnWire)})
+	writeGauge(&b, "packeteer_mitigation_max_rules", "The mitigation.max_rules cap, in routes.",
+		sample{labels: []lbl{{"mode", st.Mode}}, value: float64(st.MaxRules)})
 	return []byte(b.String())
 }
 

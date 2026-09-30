@@ -223,6 +223,9 @@ func run(ctx context.Context, args []string, getenv func(string) string, stdout,
 	if m := cfg.Mitigation; m != nil {
 		fmt.Fprintf(stdout, "mitigation: %s allowlist=%d max_rules=%d default_ttl=%s max_ttl=%s local_pref=%d\n",
 			m.Mode, len(m.Allowlist), m.MaxRules, m.DefaultTTL, m.MaxTTL, m.LocalPref)
+		if m.GeoIPDB != "" {
+			fmt.Fprintf(stdout, "mitigation geoip_db: %s\n", m.GeoIPDB)
+		}
 	}
 	fmt.Fprintf(stdout, "log: %s %s\n", cfg.Log.Level, cfg.Log.Format)
 	if cfg.HTTPListen() == "" {
@@ -327,6 +330,10 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 	if err != nil {
 		log.Error("refusing to start", "err", err)
 		return 1
+	}
+	if view != nil && mitigationFlowSpec(cfg, plugins) {
+		// Before Start: the sessions offer the FlowSpec families (#28).
+		view.EnableFlowSpec()
 	}
 	decider, err := newDecider(cfg, plugins)
 	if err != nil {
@@ -451,10 +458,14 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 				rec.Decision(now, changes, in.Results)
 			}
 			inChanges, inErr := runInbound(loopCtx, now, inb, plugins, log, cfg.InboundMode(), in)
-			mitErr := runMitigation(now, mit, log)
+			mitChanges, mitErr := runMitigation(now, mit, log)
+			if rec != nil {
+				recordMitigations(rec, mitChanges)
+			}
 			if !dispatch.Enabled() {
 				return
 			}
+			watch.mitigation(mitChanges)
 			watch.improvements(now, changes)
 			watch.inbound(now, cfg.InboundMode(), inChanges)
 			watch.announce(now, errors.Join(err, inErr, mitErr))
@@ -511,6 +522,14 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 	withdrawErr := errors.Join(mit.WithdrawAll(stopCtx), inb.WithdrawAll(stopCtx), ctl.WithdrawAll(stopCtx))
 	if withdrawErr != nil {
 		log.Error("withdraw on shutdown", "err", withdrawErr)
+	}
+	// Mitigation routes withdrawn above are in the feed as withdrawn;
+	// the recorder ends their rules as stopped on Close.
+	if mitChanges := mit.Changes(); len(mitChanges) > 0 {
+		if rec != nil {
+			recordMitigations(rec, mitChanges)
+		}
+		watch.mitigation(mitChanges)
 	}
 	// Tell notifiers after the withdraw, and give them a bounded moment
 	// before they stop. Notification never delays the withdraw.

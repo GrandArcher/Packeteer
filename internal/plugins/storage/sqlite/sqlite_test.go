@@ -203,3 +203,49 @@ func TestReadIncludesWholeFirstDay(t *testing.T) {
 		t.Fatalf("mid-day range dropped the day's rollup: %+v", h.Buckets)
 	}
 }
+
+func TestMitigationRecords(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "m.db")
+	s := newStore(t, "path: "+path+"\nretention: 48h")
+	now := day.Add(10 * 24 * time.Hour)
+	s.now = func() time.Time { return now }
+	if err := s.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	fs := plugin.MitigationRecord{ID: "fs", Prefix: pfxA, Action: plugin.MitigationFlowSpecRateLimit, Match: "proto=17 dport=53",
+		Countries: "XA", RateMbps: 10, Routes: 2, Reason: "lab", Mode: "inject", Created: now.Add(-time.Hour),
+		Expires: now.Add(time.Hour), Announced: now.Add(-time.Hour + time.Second)}
+	err := s.Write(ctx, plugin.HistoryBatch{Mitigations: []plugin.MitigationRecord{
+		fs,
+		{ID: "old", Prefix: pfxB, Action: plugin.MitigationBlackhole, Routes: 1, Created: day, Expires: day.Add(time.Hour), End: day.Add(time.Hour), EndReason: "expired"},
+		{ID: "empty"},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	open, err := s.Read(ctx, plugin.HistoryQuery{OpenOnly: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(open.Mitigations) != 1 || open.Mitigations[0].ID != "fs" {
+		t.Fatalf("open mitigations: %+v", open.Mitigations)
+	}
+	if got := open.Mitigations[0]; got != fs {
+		t.Fatalf("round trip:\n got %+v\nwant %+v", got, fs)
+	}
+	all, err := s.Read(ctx, plugin.HistoryQuery{From: time.Unix(0, 0), To: now.Add(time.Hour)})
+	if err != nil || len(all.Mitigations) != 2 {
+		t.Fatalf("all: %+v %v", all.Mitigations, err)
+	}
+	if err := s.prune(ctx); err != nil {
+		t.Fatal(err)
+	}
+	all, err = s.Read(ctx, plugin.HistoryQuery{From: time.Unix(0, 0), To: now.Add(time.Hour)})
+	if err != nil || len(all.Mitigations) != 1 || all.Mitigations[0].ID != "fs" {
+		t.Fatalf("after prune: %+v %v", all.Mitigations, err)
+	}
+	if err := s.Stop(ctx); err != nil {
+		t.Fatal(err)
+	}
+}

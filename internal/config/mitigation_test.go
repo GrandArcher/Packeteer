@@ -50,7 +50,7 @@ func TestMitigationInjectValid(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if m := cfg.Mitigation; m.Mode != ModeInject || m.MaxRules != 5 || m.LocalPref != 300 {
+	if m := cfg.Mitigation; m.Mode != ModeInject || m.MaxRules != 5 || m.LocalPref != 300 || m.GeoIPDB != "" {
 		t.Fatalf("mitigation = %+v", m)
 	}
 	cfg, err = Parse([]byte(injectYAML + mitigationBlock + "  mode: inject\n"))
@@ -78,11 +78,22 @@ func TestMitigationValidation(t *testing.T) {
 		"default over max":              {validYAML, mitigationBlock + "  default_ttl: 2h\n  max_ttl: 1h\n", "default_ttl"},
 		"announcer without type":        {validYAML, "\nmitigation:\n  allowlist: [203.0.113.0/24]\n  announcer: {config: {}}\n", "type is required"},
 		"unknown key":                   {validYAML, mitigationBlock + "  rules: []\n", "rules"},
+		"relative geoip_db":             {validYAML, mitigationBlock + "  geoip_db: country.mmdb\n", "absolute path"},
 	}
 	for name, c := range cases {
 		_, err := Parse([]byte(c.base + c.block))
 		if err == nil || !strings.Contains(err.Error(), c.want) {
 			t.Errorf("%s: err = %v, want %q", name, err, c.want)
 		}
+	}
+}
+
+func TestMitigationGeoIPDB(t *testing.T) {
+	cfg, err := Parse([]byte(validYAML + mitigationBlock + "  geoip_db: /etc/packeteer/GeoLite2-Country.mmdb\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Mitigation.GeoIPDB != "/etc/packeteer/GeoLite2-Country.mmdb" {
+		t.Fatalf("geoip_db = %q", cfg.Mitigation.GeoIPDB)
 	}
 }

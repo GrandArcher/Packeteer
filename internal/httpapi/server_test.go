@@ -431,7 +431,7 @@ func TestDashboardIsLocal(t *testing.T) {
 		t.Fatal(err)
 	}
 	page := string(html)
-	for _, want := range []string{`href="/app.css"`, `src="/app.js"`, "Providers", "Prefixes", "Active improvements", "Reports", `id="report-csv"`} {
+	for _, want := range []string{`href="/app.css"`, `src="/app.js"`, "Providers", "Prefixes", "Active improvements", "Threat mitigation", `id="mitigation"`, "Reports", `id="report-csv"`} {
 		if !strings.Contains(page, want) {
 			t.Errorf("index missing %q", want)
 		}
@@ -444,7 +444,7 @@ func TestDashboardIsLocal(t *testing.T) {
 		t.Fatal(err)
 	}
 	script := string(js)
-	for _, want := range []string{"textContent", "REFRESH_MS", "/api/prefixes", "/api/improvements", "/api/providers", "setInterval", "/api/reports", "format="} {
+	for _, want := range []string{"textContent", "REFRESH_MS", "/api/prefixes", "/api/improvements", "/api/providers", "setInterval", "/api/reports", "format=", "/api/mitigations", "renderMitigation"} {
 		if !strings.Contains(script, want) {
 			t.Errorf("app.js missing %q", want)
 		}
