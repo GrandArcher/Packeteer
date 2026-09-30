@@ -33,6 +33,9 @@ const maxPending = 200000
 const (
 	EndRestart  = "controller restarted (routes withdrawn)"
 	EndShutdown = "controller stopped (routes withdrawn)"
+	// Anomalies are not routes: they end because detection stopped.
+	EndAnomalyRestart  = "controller restarted (detection state is in memory only)"
+	EndAnomalyShutdown = "controller stopped"
 )
 
 // Options configure a Recorder.
@@ -68,9 +71,13 @@ type Recorder struct {
 	// still held, closed on Close.
 	mits     map[string]plugin.MitigationRecord
 	openMits map[string]plugin.MitigationRecord
-	prefixes map[netip.Prefix]bool
-	seq      uint64
-	dropped  int
+	// anoms are anomaly records not yet flushed; openAnoms the anomalies
+	// still open, closed on Close (#33).
+	anoms     map[string]plugin.AnomalyRecord
+	openAnoms map[string]plugin.AnomalyRecord
+	prefixes  map[netip.Prefix]bool
+	seq       uint64
+	dropped   int
 
 	flushMu sync.Mutex
 	cancel  context.CancelFunc
@@ -96,6 +103,9 @@ func New(opt Options) *Recorder {
 		prefixes: map[netip.Prefix]bool{},
 		mits:     map[string]plugin.MitigationRecord{},
 		openMits: map[string]plugin.MitigationRecord{},
+
+		anoms:     map[string]plugin.AnomalyRecord{},
+		openAnoms: map[string]plugin.AnomalyRecord{},
 	}
 }
 
@@ -129,6 +139,17 @@ func (r *Recorder) Start(ctx context.Context) error {
 			return fmt.Errorf("history: close open mitigations: %w", err)
 		}
 		r.log.Info("history: closed mitigation rules left open by the previous run", "count", len(h.Mitigations))
+	}
+	if len(h.Anomalies) > 0 {
+		now := r.opt.Now().UTC()
+		for i := range h.Anomalies {
+			h.Anomalies[i].End = now
+			h.Anomalies[i].EndReason = EndAnomalyRestart
+		}
+		if err := r.opt.Store.Write(ctx, plugin.HistoryBatch{Anomalies: h.Anomalies}); err != nil {
+			return fmt.Errorf("history: close open anomalies: %w", err)
+		}
+		r.log.Info("history: closed anomalies left open by the previous run", "count", len(h.Anomalies))
 	}
 	loopCtx, cancel := context.WithCancel(context.Background())
 	r.cancel, r.done = cancel, make(chan struct{})
@@ -174,6 +195,11 @@ func (r *Recorder) Close(ctx context.Context) error {
 		r.mits[id] = m
 		delete(r.openMits, id)
 	}
+	for id, a := range r.openAnoms {
+		a.End, a.EndReason = now, EndAnomalyShutdown
+		r.anoms[id] = a
+		delete(r.openAnoms, id)
+	}
 	r.mu.Unlock()
 	return r.Flush(ctx)
 }
@@ -193,6 +219,23 @@ func (r *Recorder) Mitigation(m plugin.MitigationRecord) {
 		delete(r.openMits, m.ID)
 	}
 	r.mits[m.ID] = m
+}
+
+// Anomaly records the latest state of a traffic anomaly (#33). A record
+// with an End closes it; one without is held until Close. Safe for
+// concurrent use.
+func (r *Recorder) Anomaly(a plugin.AnomalyRecord) {
+	if a.ID == "" || !a.Prefix.IsValid() {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if a.End.IsZero() {
+		r.openAnoms[a.ID] = a
+	} else {
+		delete(r.openAnoms, a.ID)
+	}
+	r.anoms[a.ID] = a
 }
 
 // Probe adds one result to today's rollup. Safe for concurrent use.
@@ -314,6 +357,9 @@ func (r *Recorder) take() (plugin.HistoryBatch, []netip.Prefix) {
 	for _, m := range r.mits {
 		b.Mitigations = append(b.Mitigations, m)
 	}
+	for _, a := range r.anoms {
+		b.Anomalies = append(b.Anomalies, a)
+	}
 	var ps []netip.Prefix
 	for p := range r.prefixes {
 		ps = append(ps, p)
@@ -321,6 +367,7 @@ func (r *Recorder) take() (plugin.HistoryBatch, []netip.Prefix) {
 	r.buckets = map[bucketKey]*plugin.ProbeBucket{}
 	r.dirty = map[string]plugin.ImprovementRecord{}
 	r.mits = map[string]plugin.MitigationRecord{}
+	r.anoms = map[string]plugin.AnomalyRecord{}
 	r.prefixes = map[netip.Prefix]bool{}
 	if r.dropped > 0 {
 		r.log.Warn("history: dropped probe rollups while the store was failing", "count", r.dropped)
@@ -363,6 +410,11 @@ func (r *Recorder) requeue(b plugin.HistoryBatch, ps []netip.Prefix) {
 			r.mits[m.ID] = m
 		}
 	}
+	for _, a := range b.Anomalies {
+		if _, newer := r.anoms[a.ID]; !newer {
+			r.anoms[a.ID] = a
+		}
+	}
 	for _, p := range ps {
 		r.prefixes[p] = true
 	}
@@ -387,7 +439,7 @@ func (r *Recorder) Flush(ctx context.Context) error {
 			b.Prefixes = append(b.Prefixes, info)
 		}
 	}
-	if len(b.Buckets) == 0 && len(b.Improvements) == 0 && len(b.Prefixes) == 0 && len(b.Mitigations) == 0 {
+	if len(b.Buckets) == 0 && len(b.Improvements) == 0 && len(b.Prefixes) == 0 && len(b.Mitigations) == 0 && len(b.Anomalies) == 0 {
 		return nil
 	}
 	if err := r.opt.Store.Write(ctx, b); err != nil {
@@ -455,6 +507,21 @@ func (r *Recorder) History(ctx context.Context, from, to time.Time) (plugin.Hist
 			h.Mitigations[i] = m
 		} else {
 			h.Mitigations = append(h.Mitigations, m)
+		}
+	}
+	anomByID := map[string]int{}
+	for i, a := range h.Anomalies {
+		anomByID[a.ID] = i
+	}
+	for id, a := range r.anoms {
+		i, stored := anomByID[id]
+		if !stored && (!a.Start.Before(to) || (!a.End.IsZero() && a.End.Before(from))) {
+			continue
+		}
+		if stored {
+			h.Anomalies[i] = a
+		} else {
+			h.Anomalies = append(h.Anomalies, a)
 		}
 	}
 	return h, nil

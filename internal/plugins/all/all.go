@@ -4,6 +4,7 @@ package all
 
 import (
 	_ "github.com/GrandArcher/Packeteer/internal/plugins/announcer/gobgp"    // gobgp announcer
+	_ "github.com/GrandArcher/Packeteer/internal/plugins/detector/baseline"  // baseline anomaly detector
 	_ "github.com/GrandArcher/Packeteer/internal/plugins/elector/lease"      // lease-file HA elector
 	_ "github.com/GrandArcher/Packeteer/internal/plugins/exec"               // exec prober/source/notifier
 	_ "github.com/GrandArcher/Packeteer/internal/plugins/federation/mtls"    // mTLS multi-POP federation

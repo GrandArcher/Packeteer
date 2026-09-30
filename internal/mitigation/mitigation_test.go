@@ -425,3 +425,33 @@ func TestStandbyWithdrawsRules(t *testing.T) {
 		t.Fatal("demoted instance kept a mitigation route")
 	}
 }
+
+// NoReplace (the anomaly detector, #33) never replaces a held rule, and
+// Has follows the rule's life.
+func TestNoReplaceAndHas(t *testing.T) {
+	c, _, _ := newTest(t, config.ModeInject)
+	op, err := c.Add(Request{Prefix: victim, Action: plugin.MitigationRedirect, Target: "scrubber"}, t0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !c.Has(op.ID) {
+		t.Fatal("Has is false for a held rule")
+	}
+	if _, err := c.Add(Request{Prefix: victim, Action: plugin.MitigationBlackhole, NoReplace: true}, t0); !errors.Is(err, ErrConflict) {
+		t.Fatalf("NoReplace over an operator rule: %v, want ErrConflict", err)
+	}
+	if st := c.Status(); len(st.Rules) != 1 || st.Rules[0].ID != op.ID {
+		t.Fatalf("operator rule replaced: %+v", st.Rules)
+	}
+	auto, err := c.Add(Request{Prefix: other, Action: plugin.MitigationBlackhole, NoReplace: true}, t0)
+	if err != nil {
+		t.Fatalf("NoReplace on a free key: %v", err)
+	}
+	if !c.Remove(auto.ID) || c.Has(auto.ID) {
+		t.Fatal("Has is true after Remove")
+	}
+	var nilc *Controller
+	if nilc.Has("x") {
+		t.Fatal("nil controller has a rule")
+	}
+}

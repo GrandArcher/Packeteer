@@ -702,7 +702,17 @@ func sampledIPv4(rec []byte) (observation, bool) {
 	if n == 0 {
 		return observation{}, false
 	}
-	return observation{src: netip.AddrFrom4(src), dst: netip.AddrFrom4(dst), bytes: uint64(n)}, true
+	return observation{src: netip.AddrFrom4(src), dst: netip.AddrFrom4(dst), bytes: uint64(n), proto: protoByte(rec[4:8])}, true
+}
+
+// protoByte is an sFlow 32-bit protocol field, or 0 when it is out of
+// range.
+func protoByte(b []byte) uint8 {
+	v := binary.BigEndian.Uint32(b)
+	if v > 255 {
+		return 0
+	}
+	return uint8(v)
 }
 
 func sampledIPv6(rec []byte) (observation, bool) {
@@ -717,7 +727,7 @@ func sampledIPv6(rec []byte) (observation, bool) {
 	if n == 0 {
 		return observation{}, false
 	}
-	return observation{src: netip.AddrFrom16(src), dst: netip.AddrFrom16(dst), bytes: uint64(n)}, true
+	return observation{src: netip.AddrFrom16(src), dst: netip.AddrFrom16(dst), bytes: uint64(n), proto: protoByte(rec[4:8])}, true
 }
 
 func sampledHeader(rec []byte) (observation, bool) {
@@ -787,7 +797,7 @@ func parseIPv4(b []byte, frameLen uint32) (observation, bool) {
 	if n == 0 {
 		return observation{}, false
 	}
-	return observation{src: netip.AddrFrom4(src), dst: netip.AddrFrom4(dst), bytes: uint64(n)}, true
+	return observation{src: netip.AddrFrom4(src), dst: netip.AddrFrom4(dst), bytes: uint64(n), proto: b[9]}, true
 }
 
 func parseIPv6(b []byte, frameLen uint32) (observation, bool) {
@@ -805,5 +815,6 @@ func parseIPv6(b []byte, frameLen uint32) (observation, bool) {
 	if n == 0 {
 		return observation{}, false
 	}
-	return observation{src: netip.AddrFrom16(src), dst: netip.AddrFrom16(dst), bytes: uint64(n)}, true
+	// The next header; extension headers are not followed.
+	return observation{src: netip.AddrFrom16(src), dst: netip.AddrFrom16(dst), bytes: uint64(n), proto: b[6]}, true
 }

@@ -68,10 +68,13 @@ const (
 func init() { plugin.Sources.Register(TypeName, New) }
 
 // Source implements VolumeSource so commit control can read per-prefix rates,
-// and TrafficClassifier so policies can match transit traffic.
+// TrafficClassifier so policies can match transit traffic, and
+// FlowCounterSource so the anomaly detector (#33) can baseline traffic per
+// prefix and protocol.
 var (
 	_ plugin.VolumeSource      = (*Source)(nil)
 	_ plugin.TrafficClassifier = (*Source)(nil)
+	_ plugin.FlowCounterSource = (*Source)(nil)
 )
 
 // Config is the flow source's config block.
@@ -169,6 +172,7 @@ type Source struct {
 	win  *slide
 	prob *problems
 	tr   *transit
+	ctr  *counters
 
 	conns     []*net.UDPConn
 	closeOnce sync.Once
@@ -250,6 +254,7 @@ func New(c plugin.Config, env plugin.Env) (plugin.TargetSource, error) {
 		now:      time.Now,
 		dec:      &decoder{},
 		win:      newSlide(cfg.Window, maxPrefixes),
+		ctr:      newCounters(maxPrefixes),
 	}, nil
 }
 
@@ -508,6 +513,16 @@ func (s *Source) Volumes(ctx context.Context) ([]plugin.PrefixVolume, error) {
 	return out, nil
 }
 
+// FlowCounters implements plugin.FlowCounterSource: bytes per destination
+// prefix and IP protocol since the source started, mapped the same way as
+// Targets and Volumes. It does not announce.
+func (s *Source) FlowCounters(ctx context.Context) ([]plugin.FlowCounter, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return s.ctr.snapshot(s.now()), nil
+}
+
 // TrafficMix implements plugin.TrafficClassifier. It lists every prefix in
 // the window with classified bytes, largest first. Without a transit block
 // it returns nothing. It does not announce.
@@ -581,6 +596,7 @@ func (s *Source) ingest(at time.Time, exporter netip.Addr, payload []byte) {
 			continue
 		}
 		s.win.add(at, p, dst, o.bytes, s.tr.classify(o.src))
+		s.ctr.add(at, p, o.proto, o.bytes)
 	}
 }
 

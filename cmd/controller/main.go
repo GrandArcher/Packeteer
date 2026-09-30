@@ -27,6 +27,7 @@ import (
 	"golang.org/x/time/rate"
 
 	"github.com/GrandArcher/Packeteer/internal/announce"
+	"github.com/GrandArcher/Packeteer/internal/anomaly"
 	"github.com/GrandArcher/Packeteer/internal/config"
 	"github.com/GrandArcher/Packeteer/internal/exchange"
 	"github.com/GrandArcher/Packeteer/internal/history"
@@ -184,6 +185,12 @@ func run(ctx context.Context, args []string, getenv func(string) string, stdout,
 		fmt.Fprintf(stderr, "packeteer: refusing to start: %v\n", err)
 		return 1
 	}
+	if a := cfg.Anomaly; a != nil {
+		if _, _, err := anomalySource(a, plugins); err != nil {
+			fmt.Fprintf(stderr, "packeteer: refusing to start: %v\n", err)
+			return 1
+		}
+	}
 	if err := checkTelemetryProviders(plugins); err != nil {
 		fmt.Fprintf(stderr, "packeteer: refusing to start: %v\n", err)
 		return 1
@@ -259,6 +266,10 @@ func run(ctx context.Context, args []string, getenv func(string) string, stdout,
 		if m.GeoIPDB != "" {
 			fmt.Fprintf(stdout, "mitigation geoip_db: %s\n", m.GeoIPDB)
 		}
+	}
+	if a := cfg.Anomaly; a != nil {
+		fmt.Fprintf(stdout, "anomaly: detector=%s interval=%s rules=%d max_active=%d max_actions_per_hour=%d (acts only through mitigation, for an explicit rule)\n",
+			a.Detector.Type, a.Interval, len(a.Rules), a.MaxActive, a.MaxActionsPerHour)
 	}
 	if el := plugins.Elector; el != nil {
 		fmt.Fprintf(stdout, "ha: %s id=%s (standby until elected; only the active instance announces)\n", el.Type, el.Plugin.Status().ID)
@@ -343,6 +354,16 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 	if mit != nil {
 		mitAPI = mitigationControl{mit: mit, poke: poke}
 	}
+	// Anomaly detection (#33) acts only through mit, for explicit rules.
+	anom, aerr := newAnomaly(cfg, plugins, mit, poke, log)
+	if aerr != nil {
+		log.Error("refusing to start", "err", aerr)
+		return 1
+	}
+	var anomAPI func() anomaly.Status
+	if anom != nil {
+		anomAPI = anom.Status
+	}
 	tools, terr := newTools(cfg, plugins)
 	if terr != nil {
 		log.Error("refusing to start", "err", terr)
@@ -374,7 +395,7 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 		srv, err := httpapi.New(httpapi.Options{
 			Addr: addr, User: httpUser, Password: httpPass, Snapshot: col.Snapshot, Logger: log,
 			Auth: authSvc, Audit: audit, AllowFrom: cfg.HTTPAllowFrom(),
-			Maintenance: maint, Reports: reports, Tools: tools, Inbound: inboundStatus, Mitigation: mitAPI,
+			Maintenance: maint, Reports: reports, Tools: tools, Inbound: inboundStatus, Mitigation: mitAPI, Anomaly: anomAPI,
 			Federation: fed.status, HA: haStatus,
 		})
 		if err != nil {
@@ -417,6 +438,7 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 		log.Error("refusing to start", "err", err)
 		return 1
 	}
+	setAnomalyRIB(anom, view)
 	inb, err = newInbound(cfg, plugins, view, func() int { return ctl.Active() }, mit, log)
 	if err != nil {
 		log.Error("refusing to start", "err", err)
@@ -536,10 +558,13 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 					leading = false
 				}
 				mitChanges, err := standbyRound(now, ctl, inb, mit, log)
+				anomChanges := anom.Changes()
 				if rec != nil {
 					recordMitigations(rec, mitChanges)
+					recordAnomalies(rec, anomChanges)
 				}
 				if dispatch.Enabled() {
+					watch.anomaly(anomChanges)
 					watch.mitigation(mitChanges)
 					watch.announce(now, err)
 				}
@@ -554,12 +579,15 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 			}
 			inChanges, inErr := runInbound(loopCtx, now, inb, plugins, log, cfg.InboundMode(), in)
 			mitChanges, mitErr := runMitigation(now, mit, log)
+			anomChanges := anom.Changes()
 			if rec != nil {
 				recordMitigations(rec, mitChanges)
+				recordAnomalies(rec, anomChanges)
 			}
 			if !dispatch.Enabled() {
 				return
 			}
+			watch.anomaly(anomChanges)
 			watch.mitigation(mitChanges)
 			watch.improvements(now, changes)
 			watch.inbound(now, cfg.InboundMode(), inChanges)
@@ -573,6 +601,16 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 			}
 		})
 	}()
+	if anom != nil {
+		// Its own interval, independent of probe rounds. Stopped with the
+		// decision loop, before the shutdown withdraw, so it cannot add a
+		// rule after it.
+		loopWG.Add(1)
+		go func() {
+			defer loopWG.Done()
+			anom.Run(loopCtx)
+		}()
+	}
 
 	rl := &reloader{path: path, getenv: getenv, log: log, cur: cfg, ctl: ctl, poke: poke}
 	if view != nil {
@@ -631,6 +669,12 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 			recordMitigations(rec, mitChanges)
 		}
 		watch.mitigation(mitChanges)
+	}
+	if anomChanges := anom.Changes(); len(anomChanges) > 0 {
+		if rec != nil {
+			recordAnomalies(rec, anomChanges)
+		}
+		watch.anomaly(anomChanges)
 	}
 	// Tell notifiers after the withdraw, and give them a bounded moment
 	// before they stop. Notification never delays the withdraw.

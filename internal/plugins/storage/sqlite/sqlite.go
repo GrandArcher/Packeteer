@@ -146,6 +146,22 @@ CREATE TABLE IF NOT EXISTS mitigations (
 );
 CREATE INDEX IF NOT EXISTS mitigations_created ON mitigations (created_ms);
 CREATE INDEX IF NOT EXISTS mitigations_end ON mitigations (end_ms);
+CREATE TABLE IF NOT EXISTS anomalies (
+	id TEXT PRIMARY KEY,
+	prefix TEXT NOT NULL,
+	protocol TEXT NOT NULL,
+	peak_mbps REAL NOT NULL,
+	baseline_mbps REAL NOT NULL,
+	reason TEXT NOT NULL,
+	rule TEXT NOT NULL,
+	mitigation TEXT NOT NULL,
+	action TEXT NOT NULL,
+	start_ms INTEGER NOT NULL,
+	end_ms INTEGER NOT NULL,
+	end_reason TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS anomalies_start ON anomalies (start_ms);
+CREATE INDEX IF NOT EXISTS anomalies_end ON anomalies (end_ms);
 CREATE TABLE IF NOT EXISTS prefixes (
 	prefix TEXT PRIMARY KEY,
 	origin_asn INTEGER NOT NULL,
@@ -273,6 +289,9 @@ func (s *Store) prune(ctx context.Context) error {
 	if _, err := db.ExecContext(ctx, `DELETE FROM mitigations WHERE end_ms != 0 AND end_ms < ?`, cutoff.UnixMilli()); err != nil {
 		return err
 	}
+	if _, err := db.ExecContext(ctx, `DELETE FROM anomalies WHERE end_ms != 0 AND end_ms < ?`, cutoff.UnixMilli()); err != nil {
+		return err
+	}
 	if _, err := db.ExecContext(ctx, `DELETE FROM audit WHERE time_ms < ?`, cutoff.UnixMilli()); err != nil {
 		return err
 	}
@@ -357,6 +376,19 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			return err
 		}
 	}
+	for _, a := range b.Anomalies {
+		if a.ID == "" || !a.Prefix.IsValid() {
+			continue
+		}
+		_, err := tx.ExecContext(ctx, `INSERT OR REPLACE INTO anomalies (id, prefix, protocol, peak_mbps, baseline_mbps, reason, rule, mitigation, action,
+	start_ms, end_ms, end_reason)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			a.ID, a.Prefix.String(), a.Protocol, a.PeakMbps, a.BaselineMbps, a.Reason, a.Rule, a.Mitigation, a.Action,
+			ms(a.Start), ms(a.End), a.EndReason)
+		if err != nil {
+			return err
+		}
+	}
 	for _, p := range b.Prefixes {
 		if !p.Prefix.IsValid() {
 			continue
@@ -414,6 +446,9 @@ FROM improvements WHERE start_ms < ? AND (end_ms = 0 OR end_ms >= ?) ORDER BY st
 	}
 	imps.Close()
 	if out.Mitigations, err = readMitigations(ctx, db, q); err != nil {
+		return out, err
+	}
+	if out.Anomalies, err = readAnomalies(ctx, db, q); err != nil {
 		return out, err
 	}
 	if q.OpenOnly {
@@ -498,6 +533,40 @@ func readMitigations(ctx context.Context, db *sql.DB, q plugin.HistoryQuery) ([]
 		}
 		m.Prefix, m.Created, m.Expires, m.Announced, m.End = p, fromMS(created), fromMS(expires), fromMS(announced), fromMS(end)
 		out = append(out, m)
+	}
+	return out, rows.Err()
+}
+
+func readAnomalies(ctx context.Context, db *sql.DB, q plugin.HistoryQuery) ([]plugin.AnomalyRecord, error) {
+	const cols = `SELECT id, prefix, protocol, peak_mbps, baseline_mbps, reason, rule, mitigation, action,
+	start_ms, end_ms, end_reason FROM anomalies`
+	var rows *sql.Rows
+	var err error
+	if q.OpenOnly {
+		rows, err = db.QueryContext(ctx, cols+` WHERE end_ms = 0 ORDER BY start_ms, id`)
+	} else {
+		rows, err = db.QueryContext(ctx, cols+` WHERE start_ms < ? AND (end_ms = 0 OR end_ms >= ?) ORDER BY start_ms, id`,
+			q.To.UnixMilli(), q.From.UnixMilli())
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []plugin.AnomalyRecord
+	for rows.Next() {
+		var a plugin.AnomalyRecord
+		var prefix string
+		var start, end int64
+		if err := rows.Scan(&a.ID, &prefix, &a.Protocol, &a.PeakMbps, &a.BaselineMbps, &a.Reason, &a.Rule, &a.Mitigation, &a.Action,
+			&start, &end, &a.EndReason); err != nil {
+			return nil, err
+		}
+		p, err := netip.ParsePrefix(prefix)
+		if err != nil {
+			continue
+		}
+		a.Prefix, a.Start, a.End = p, fromMS(start), fromMS(end)
+		out = append(out, a)
 	}
 	return out, rows.Err()
 }

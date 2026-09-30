@@ -116,6 +116,9 @@ type Config struct {
 	// Mitigation is threat mitigation: RTBH and BGP redirect (#28). Nil
 	// disables it.
 	Mitigation *Mitigation `yaml:"mitigation"`
+	// Anomaly is automatic traffic anomaly detection (#33). It acts only
+	// through Mitigation, and only for an explicit rule. Nil disables it.
+	Anomaly *Anomaly `yaml:"anomaly"`
 	// MoreSpecific announces, with each improvement, the more-specifics
 	// inside its prefix that a neighbor advertises in the learned RIB
 	// (#56, docs/design/more-specific.md). Nil or disabled is off.
@@ -648,6 +651,7 @@ func (c *Config) applyDefaults() {
 		}
 	}
 	c.normalizeMitigation()
+	c.normalizeAnomaly()
 	if c.Instance == "" {
 		c.Instance = c.Domain
 	}
@@ -967,6 +971,7 @@ func (c *Config) Validate() error {
 
 	c.validateInbound(add)
 	c.validateMitigation(add)
+	c.validateAnomaly(add)
 
 	return errors.Join(errs...)
 }

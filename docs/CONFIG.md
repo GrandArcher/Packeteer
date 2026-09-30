@@ -59,6 +59,7 @@ The image entrypoint is the same binary. Flags go after the image name.
 | `storage` | none | no | One storage plugin for report history (`type: sqlite`). Off unless set. Does not announce. See [Storage `sqlite`](#storage-sqlite). |
 | `inbound` | none | no | Inbound commit control: steer inbound traffic for your own prefixes away from a provider over commit with prepends and TE communities. Off unless set; its own `mode` defaults to `observe`. See [`inbound`](#inbound). Lab-proven only. |
 | `mitigation` | none | no | Threat mitigation: RTBH (blackhole), BGP redirect, and FlowSpec (drop, rate-limit, redirect, by source country too) for exact learned prefixes, added through `/api/mitigations`. Off unless set; its own `mode` defaults to `observe`. See [`mitigation`](#mitigation). Lab-proven only. |
+| `anomaly` | none | no | Automatic traffic anomaly (DDoS) detection: a detector plugin baselines flow volumes per destination prefix and IP protocol from a `flow` source and reports anomalies; an explicit rule can turn one into a mitigation rule, rate-limited and capped. Needs `mitigation` for rules. Off unless set. See [`anomaly`](#anomaly). Lab-proven only. |
 | `troubleshoot` | looking glass only | no | Read-only operator tools: looking glass, on-demand probe, traceroute, whois. Does not announce. See [`troubleshoot`](#troubleshoot). |
 
 `mode: observe` and `mode: suggest` use the same decision path and announce nothing. `suggest` is the checkpoint: read the log, the dashboard, and `/api/decisions` before you change `mode`. The allowlist is enforced only in `inject`.
@@ -331,6 +332,34 @@ With FlowSpec configured on the announcer and `mode: inject`, every iBGP session
 
 While an RTBH or redirect rule holds a prefix in `inject`, or its route is still on the wire, outbound improvements and inbound steers leave that prefix alone. When the RIB is not ready every mitigation route is withdrawn. A catalog next hop that equals a provider's `next_hop` is refused at startup.
 
+### `anomaly`
+
+Automatic traffic anomaly (DDoS) detection (#33, lab-proven only, not on a public edge). The full contract is in [anomaly.md](anomaly.md). Every anomaly is reported (log, `/api/anomalies`, events, history). A mitigation rule is added only when a rule below matches, only through [`mitigation`](#mitigation) (its `mode`, allowlist, `max_rules`, TTL, community, and NO_EXPORT apply; `observe` is a dry run), and only for an exact prefix in the learned RIB.
+
+| Key | Default | Meaning |
+|---|---|---|
+| `detector` | none | Required. The detector plugin, one object: `type: baseline` (see [Detector `baseline`](#detector-baseline)). In-process only. |
+| `source` | the only `flow` source | Name of the source that supplies flow counters. Required when several `flow` sources are listed. |
+| `interval` | `10s` | Detection round, `1s`–`5m`. Each round turns the flow counter deltas into rates per destination prefix and protocol. |
+| `max_actions_per_hour` | `6` | Mitigation rules the detector may add in any rolling hour, 1–1000. Past it an anomaly waits (`anomaly.held`). |
+| `max_active` | `4` (at most `mitigation.max_rules`) | Mitigation rules the detector holds at once, 1 to `mitigation.max_rules`. |
+| `rules` | none | Ordered; the first rule that matches an anomaly is used. No rules: detection and alerts only. At most 100. |
+
+Each rule:
+
+| Key | Default | Meaning |
+|---|---|---|
+| `name` | none | Required, unique, at most 64 characters. |
+| `prefixes` | none | Required. The anomaly's destination prefix must be one of these or inside one. Each must be inside `mitigation.allowlist`; no default route, no host bits. |
+| `protocols` | any | Up to 8 IP protocols (`tcp`, `udp`, `icmp`, ... or numbers) the anomaly's protocol must be one of. |
+| `min_mbps` | `0` | The anomaly's rate (or its peak) must be at least this. |
+| `action` | none | Required. `blackhole`, `redirect`, `flowspec_drop`, `flowspec_rate_limit`, or `flowspec_redirect`, as on `POST /api/mitigations`. A FlowSpec action matches the anomaly's protocol; RTBH and redirect cover the whole prefix. Checked against the mitigation announcer's catalog at startup. |
+| `target` | none | `redirect` and `flowspec_redirect`: a catalog target name. |
+| `rate_mbps` | none | `flowspec_rate_limit`: above 0, at most 100000. |
+| `ttl` | `mitigation.default_ttl` | The rule's lifetime, 1s to `mitigation.max_ttl`. The rule is removed earlier when the anomaly clears. |
+
+A rule the detector added is removed when its anomaly clears. The detector never replaces a rule someone else holds for the same key, adds nothing on an HA standby, and does not add a rule again for an anomaly whose rule expired or was deleted. When the flow source fails three rounds in a row, every anomaly clears, its rule is removed, and the baselines are learned again. Rollback: remove `rules` (alerts only) or the whole block and restart; a restart holds no rule.
+
 ### `more_specific`
 
 More-specific injection (#56, lab-proven only, not on a public edge). Design and full rules: [design/more-specific.md](design/more-specific.md). Used only in `mode: inject`.
@@ -583,7 +612,7 @@ Off unless this source is listed. NetFlow v5, NetFlow v9, IPFIX, and sFlow v5. R
 | `aggregate_v6` | 48 | 1–128. |
 | `exclude` | none | CIDRs to ignore, no host bits, no duplicates. |
 
-With `--network host`, `listen` binds host UDP ports. Do not publish them. Each time bucket keeps at most 20000 prefixes. The commit scorer reads every prefix in the window as a rate (bytes × 8 / window, decimal megabits per second), including prefixes `top_n` or `min_bytes` did not offer as probe targets.
+With `--network host`, `listen` binds host UDP ports. Do not publish them. Each time bucket keeps at most 20000 prefixes. It also counts bytes per destination prefix and IP protocol since it started (at most 20000 keys; a key idle for an hour is forgotten), which [`anomaly`](#anomaly) reads for its baselines. The protocol comes from NetFlow v5, v9/IPFIX (information element 4), and sFlow (sampled IPv4/IPv6 records and the IP header; IPv6 extension headers are not followed); records without it count as protocol `any`. The commit scorer reads every prefix in the window as a rate (bytes × 8 / window, decimal megabits per second), including prefixes `top_n` or `min_bytes` did not offer as probe targets.
 
 `problems` (optional, off when omitted) turns on passive problem detection from TCP flags. It reads unsampled NetFlow v5, NetFlow v9, and IPFIX records that carry the source address, protocol, and TCP flags (information elements 8 or 27, 4, and 6). An outbound record (local source, remote destination) is one flow; if its flags hold SYN without ACK, the handshake never completed and it counts as a timeout. An inbound record from a remote source with RST counts as a reset. A prefix is a problem when (timeouts + resets) / flows is at least `failure_pct` and it has at least `min_flows` flows inside `window`. Problem prefixes are listed first, worst first (weight is the ratio to the threshold), then the busiest prefixes that are not already listed. Sampled exports (a sampling rate above 1) and sFlow are skipped, because a sampled record may hold only the SYN. Retransmissions and RTT are not visible in flow records; use the `span` source for those.
 
@@ -1066,6 +1095,22 @@ A standby takes a lease that is free or released at its next renewal. It takes a
 | Variable | Effect |
 |---|---|
 | `PACKETEER_HA_ID` | `id` when the config does not set it. |
+
+### Detector `baseline`
+
+The built-in anomaly detector (#33). For each destination prefix and IP protocol it keeps an exponentially weighted mean and variance of the rate seen each round. A round is anomalous when the rate is at least `min_mbps`, at least `min_ratio` × the mean, and more than `sensitivity` standard deviations above the mean, after `warmup` rounds of learning; or, with `max_mbps` set, when the rate reaches that ceiling whatever the baseline (this also covers a key that has no baseline yet). Anomalous rounds, and every round of an open anomaly, are not learned, so an attack does not become the baseline. Baselines live in memory only. It never announces.
+
+| Key | Default | Meaning |
+|---|---|---|
+| `sensitivity` | `3` | Standard deviations above the mean. Lower is more sensitive. Above 0, at most 100. |
+| `min_ratio` | `3` | Times the mean the rate must reach. 1–1000. |
+| `min_mbps` | `10` | Smallest rate that can be anomalous, Mbit/s. Above 0. |
+| `max_mbps` | off | Static ceiling, Mbit/s; `0` is off. At least `min_mbps`. |
+| `alpha` | `0.05` | Weight of each new round in the mean and variance, above 0 and at most 1. |
+| `warmup` | `30` | Rounds a key learns before the baseline test applies. 1–100000. |
+| `trigger_rounds` | `2` | Anomalous rounds in a row before an anomaly opens. 1–1000. |
+| `clear_rounds` | `3` | Normal rounds in a row before it clears. 1–1000. |
+| `max_keys` | `10000` | Keys tracked; new keys past it are not tracked. 1–100000. An idle key is forgotten once its mean decays to nothing. |
 
 ### Announcer `gobgp`
 

@@ -293,6 +293,54 @@ jobs:
           grep -q 'span problem prefix.*prefix=203.0.113.0/24' /tmp/pkspan.log
           grep -q 'msg=probe .*prefix=198.51.100.0/24.*prober=fixed' /tmp/pkspan.log
           grep -q "shutting down" /tmp/pkspan.log
+      - name: anomaly detection smoke test (mounted config, observe, no rules)
+        run: |
+          cat > /tmp/anom.yaml <<'YAML'
+          mode: observe
+          asn: 64512
+          router_id: 192.0.2.10
+          http:
+            listen: "127.0.0.1:18083"
+          providers:
+            - name: lab-a
+              source_ip: 127.0.0.1
+              next_hop: 127.0.0.1
+          probe: {interval: 2s, timeout: 500ms, packets: 3}
+          probers:
+            - type: fixed
+              config:
+                paths: [{provider: lab-a, rtt_ms: 10}]
+          sources:
+            - type: flow
+              config:
+                listen: "127.0.0.1:12055"
+          anomaly:
+            interval: 2s
+            detector:
+              type: baseline
+              config: {sensitivity: 4, warmup: 5}
+          YAML
+          docker run --rm -v /tmp/anom.yaml:/etc/packeteer/config.yaml:ro packeteer:ci -check | tee /tmp/anomcheck.txt
+          grep -q "detector baseline" /tmp/anomcheck.txt
+          grep -q "anomaly: detector=baseline interval=2s rules=0" /tmp/anomcheck.txt
+          # Rules without threat mitigation are refused at startup.
+          sed 's/^    config: {sensitivity: 4, warmup: 5}$/&\n  rules: [{name: x, prefixes: [198.51.100.0\/24], action: flowspec_drop}]/' /tmp/anom.yaml > /tmp/anom-bad.yaml
+          grep -q "rules:" /tmp/anom-bad.yaml
+          if docker run --rm -v /tmp/anom-bad.yaml:/etc/packeteer/config.yaml:ro packeteer:ci -check; then echo "expected refusal"; exit 1; fi
+          docker run -d --name pkanom --network host --cap-add NET_RAW --cap-add NET_ADMIN \
+            -e PACKETEER_CONFIG=/etc/packeteer/anom.yaml -v /tmp/anom.yaml:/etc/packeteer/anom.yaml:ro packeteer:ci
+          ok=0
+          for _ in $(seq 1 15); do
+            if curl -fsS http://127.0.0.1:18083/api/anomalies -o /tmp/anom.json && grep -q '"enabled":true' /tmp/anom.json \
+              && grep -q '"detector":"baseline"' /tmp/anom.json && grep -q '"last_round":"2' /tmp/anom.json \
+              && curl -fsS http://127.0.0.1:18083/metrics | grep -q '^packeteer_anomaly_baselines 0'; then ok=1; break; fi
+            sleep 2
+          done
+          docker stop -t 15 pkanom
+          docker logs pkanom 2>&1 | tee /tmp/pkanom.log
+          test "$ok" = 1
+          test "$(docker inspect -f '{{.State.ExitCode}}' pkanom)" = "0"
+          grep -q "shutting down" /tmp/pkanom.log
 
   e2e:
     runs-on: ubuntu-latest
@@ -320,6 +368,8 @@ jobs:
         run: bash lab/e2e-ix.sh
       - name: FRR mitigation lab (RTBH, redirect, FlowSpec drop/rate-limit/redirect by country, allowlist, cap, TTL, SIGTERM, restart, SIGKILL)
         run: bash lab/e2e-mitigation.sh
+      - name: FRR anomaly lab (synthetic-flow sensitivity, no rule no announce, unlearned prefix never announced, FlowSpec drop, clear, session loss, SIGTERM, restart, SIGKILL)
+        run: bash lab/e2e-anomaly.sh
       - name: FRR more-specific lab (learned more-specifics only, route cap, RIB leave, SIGTERM, SIGKILL)
         run: bash lab/e2e-more-specific.sh
       - name: FRR multi-POP lab (two federated instances over mTLS, inter-DC RTT, peer loss, global commit, SIGTERM, SIGKILL)

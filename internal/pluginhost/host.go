@@ -48,6 +48,10 @@ type Set struct {
 	// SSO is single sign-on for the ops API (auth.sso, #32). It never
 	// announces.
 	SSO *Instance[plugin.SSO]
+	// Detector is the traffic anomaly detector (anomaly.detector, #33).
+	// It never announces; the core acts on its anomalies only through
+	// threat mitigation and only for an explicit rule.
+	Detector *Instance[plugin.Detector]
 
 	started []namedLifecycle
 }
@@ -145,6 +149,11 @@ func Build(cfg *config.Config, opts Options) (*Set, error) {
 			s.SSO = &b[0]
 		}
 	}
+	if cfg.Anomaly != nil && cfg.Anomaly.Detector != nil {
+		if b := build(plugin.Detectors, "anomaly.detector", []config.PluginSpec{*cfg.Anomaly.Detector}, base, &errs); len(b) == 1 {
+			s.Detector = &b[0]
+		}
+	}
 	if cfg.Troubleshoot.Whois != nil {
 		if b := build(plugin.Whoises, "troubleshoot.whois", []config.PluginSpec{*cfg.Troubleshoot.Whois}, base, &errs); len(b) == 1 {
 			s.Whois = &b[0]
@@ -174,6 +183,9 @@ func (s *Set) all() []namedLifecycle {
 	}
 	for _, p := range s.Sources {
 		add(plugin.KindSource, p.Name, p.Plugin)
+	}
+	if s.Detector != nil {
+		add(plugin.KindDetector, s.Detector.Name, s.Detector.Plugin)
 	}
 	for _, p := range s.Probers {
 		add(plugin.KindProber, p.Name, p.Plugin)

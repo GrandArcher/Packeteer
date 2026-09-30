@@ -8,6 +8,7 @@ import (
 
 	"github.com/GrandArcher/Packeteer/internal/config"
 	"github.com/GrandArcher/Packeteer/internal/plugins/announcer/gobgp"
+	"github.com/GrandArcher/Packeteer/internal/plugins/detector/baseline"
 	"github.com/GrandArcher/Packeteer/internal/plugins/elector/lease"
 	"github.com/GrandArcher/Packeteer/internal/plugins/exec"
 	"github.com/GrandArcher/Packeteer/internal/plugins/federation/mtls"
@@ -91,6 +92,7 @@ func TestConfigDocCoversStructs(t *testing.T) {
 		mtls.Peer{},
 		lease.Config{},
 		oidc.Config{},
+		baseline.Config{},
 	) {
 		if !strings.Contains(text, "`"+key+"`") {
 			missing = append(missing, key)

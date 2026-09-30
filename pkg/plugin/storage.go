@@ -90,6 +90,25 @@ type MitigationRecord struct {
 	EndReason string
 }
 
+// AnomalyRecord is one traffic anomaly (#33) from detection to clearing.
+// End is zero while it is open. Rule is the anomaly rule that matched ("" when
+// none did: alert only); Mitigation and Action the mitigation rule the
+// detector added for it, if any.
+type AnomalyRecord struct {
+	ID           string
+	Prefix       netip.Prefix
+	Protocol     string
+	PeakMbps     float64
+	BaselineMbps float64
+	Reason       string
+	Rule         string
+	Mitigation   string
+	Action       string
+	Start        time.Time
+	End          time.Time
+	EndReason    string
+}
+
 // HistoryBatch is one write. Improvements and mitigations replace earlier
 // rows with the same ID; buckets are added; prefixes replace.
 type HistoryBatch struct {
@@ -97,14 +116,15 @@ type HistoryBatch struct {
 	Improvements []ImprovementRecord
 	Prefixes     []PrefixInfo
 	Mitigations  []MitigationRecord
+	Anomalies    []AnomalyRecord
 }
 
 // HistoryQuery selects rows. Buckets are those whose Day is in [From, To)
 // after From is truncated to its UTC day, so a range that starts mid-day
 // includes that whole day (rollups are daily).
-// Improvements and mitigations are those that overlap [From, To): started
-// (created) before To and still open or ended at or after From. OpenOnly
-// returns only improvements and mitigations with no End, and no buckets.
+// Improvements, mitigations, and anomalies are those that overlap
+// [From, To): started (created) before To and still open or ended at or
+// after From. OpenOnly returns only those with no End, and no buckets.
 // Prefixes are always all rows.
 type HistoryQuery struct {
 	From     time.Time
@@ -118,6 +138,7 @@ type History struct {
 	Improvements []ImprovementRecord
 	Prefixes     []PrefixInfo
 	Mitigations  []MitigationRecord
+	Anomalies    []AnomalyRecord
 }
 
 // Storage persists history for reports. It records what the controller
