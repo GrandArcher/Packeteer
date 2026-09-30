@@ -203,6 +203,12 @@ jobs:
               -v pkauth:/var/lib/packeteer packeteer:ci
             up
           }
+          # HTTP listens before the store opens and the admin is bootstrapped;
+          # wait for the credentials to work before asserting on them.
+          authup() {
+            for _ in $(seq 1 20); do test "$(code -u "$1" $base/api/me)" = 200 && return 0; sleep 1; done
+            docker logs pkauth >&2; return 1
+          }
           stop() {
             docker stop -t 15 pkauth
             docker logs pkauth 2>&1 | tail -n 30
@@ -211,6 +217,7 @@ jobs:
           }
           docker volume create pkauth
           start -e PACKETEER_ADMIN_PASSWORD=ci-admin-password-1 -v /tmp/auth.yaml:/etc/packeteer/config.yaml:ro
+          authup admin:ci-admin-password-1
           test "$(code $base/healthz)" = 200
           test "$(code $base/api/providers)" = 401
           test "$(code -u admin:wrong-password-x $base/api/providers)" = 401
@@ -232,6 +239,7 @@ jobs:
           # Restart on the same volume: users and tokens persist, and the
           # bootstrap variable never resets an existing admin.
           start -e PACKETEER_ADMIN_PASSWORD=a-different-password -v /tmp/auth.yaml:/etc/packeteer/config.yaml:ro
+          authup admin:ci-admin-password-1
           test "$(code -u admin:ci-admin-password-1 $base/api/providers)" = 200
           test "$(code -u admin:a-different-password $base/api/providers)" = 401
           test "$(code -H "Authorization: Bearer $tok" $base/api/providers)" = 200

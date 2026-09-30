@@ -189,8 +189,12 @@ func TestTokens(t *testing.T) {
 	if _, _, err := s.CreateToken(ctx, p, "again", "", 0); !errors.Is(err, ErrForbidden) {
 		t.Fatalf("token minted a token: %v", err)
 	}
-	// Tampered secret.
-	if _, err := s.Authenticate(req("192.0.2.5:1", bearer(secret[:len(secret)-1]+"A"))); !errors.Is(err, ErrBadCredentials) {
+	// Tampered secret: change the last character, whatever it is.
+	last := "A"
+	if strings.HasSuffix(secret, last) {
+		last = "B"
+	}
+	if _, err := s.Authenticate(req("192.0.2.5:1", bearer(secret[:len(secret)-1]+last))); !errors.Is(err, ErrBadCredentials) {
 		t.Fatalf("tampered: %v", err)
 	}
 	// The token's role follows a demoted user.
