@@ -381,7 +381,14 @@ func (l *Lease) tick(ctx context.Context) {
 		}
 		l.mu.Lock()
 		defer l.mu.Unlock()
-		l.lastRaw, l.lastOK, l.holder = out, start, l.id
+		l.lastRaw, l.holder = out, l.id
+		if time.Now().Before(l.noAcquire) || ctx.Err() != nil {
+			// Resign or Stop ran while this write was in flight: do not
+			// undo it. Resign releases the record once it gets opMu;
+			// otherwise the lease runs out.
+			return nil
+		}
+		l.lastOK = start
 		l.setActiveLocked(true, why)
 		return nil
 	})

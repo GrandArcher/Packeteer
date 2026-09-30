@@ -218,6 +218,42 @@ func TestResignHandsOverAtOnce(t *testing.T) {
 	}
 }
 
+// A renewal already writing when Resign runs must not make the resigner
+// active again.
+func TestResignDuringRenewalWriteStaysResigned(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "lease.json")
+	a := newNode(t, path, "pk-a")
+	release := make(chan struct{})
+	entered := make(chan struct{})
+	var armed atomic.Bool
+	a.failWrite = func() error {
+		if armed.CompareAndSwap(true, false) {
+			close(entered)
+			<-release
+		}
+		return nil
+	}
+	a.start(t)
+	waitFor(t, "a active", 2*time.Second, a.Active)
+	armed.Store(true)
+	<-entered
+	done := make(chan error, 1)
+	go func() { done <- a.Resign(context.Background()) }()
+	waitFor(t, "resign recorded", 2*time.Second, func() bool { return a.Status().Detail == "resigned" })
+	close(release)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if a.Active() {
+		t.Fatal("active after Resign raced a renewal")
+	}
+	var rec record
+	raw, _ := os.ReadFile(path)
+	if err := json.Unmarshal(raw, &rec); err != nil || !rec.Released {
+		t.Fatalf("record after resign: %s (%v)", raw, err)
+	}
+}
+
 func TestIneligibleStepsDownAndDoesNotAcquire(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "lease.json")
 	a, b := newNode(t, path, "pk-a"), newNode(t, path, "pk-b")
