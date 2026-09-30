@@ -119,6 +119,32 @@ func TestParseInjectValid(t *testing.T) {
 	}
 }
 
+func TestMoreSpecificOffByDefault(t *testing.T) {
+	for _, y := range []string{minimalYAML, injectYAML} {
+		cfg, err := Parse([]byte(y))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cfg.MoreSpecific != nil {
+			t.Fatalf("more_specific = %+v, want absent (off)", cfg.MoreSpecific)
+		}
+	}
+	cfg, err := Parse([]byte(injectYAML + "more_specific: {enabled: true}\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ms := cfg.MoreSpecific; ms == nil || !ms.Enabled || ms.MaxRoutes != 100 {
+		t.Fatalf("more_specific = %+v, want enabled with max_routes 100", ms)
+	}
+	cfg, err = Parse([]byte(injectYAML + "more_specific: {max_routes: 20}\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ms := cfg.MoreSpecific; ms.Enabled || ms.MaxRoutes != 20 {
+		t.Fatalf("more_specific = %+v, want off with max_routes 20", ms)
+	}
+}
+
 func TestDefaults(t *testing.T) {
 	cfg, err := Parse([]byte(minimalYAML))
 	if err != nil {
@@ -254,6 +280,10 @@ func TestParseErrors(t *testing.T) {
 		{"more_specific_bits zero", minimalYAML + "more_specific_bits: 0\n", "more_specific_bits is removed"},
 		{"more_specific_bits set", minimalYAML + "more_specific_bits: 1\n", "more_specific_bits is removed"},
 		{"more_specific_bits too high", minimalYAML + "more_specific_bits: 9\n", "more_specific_bits is removed"},
+		{"more_specific_bits with more_specific", injectYAML + "more_specific: {enabled: true}\nmore_specific_bits: 1\n", "more_specific_bits is removed"},
+		{"more_specific negative max_routes", minimalYAML + "more_specific: {enabled: true, max_routes: -1}\n", "more_specific.max_routes -1 must be between 1 and 1000"},
+		{"more_specific max_routes too high", minimalYAML + "more_specific: {enabled: true, max_routes: 1001}\n", "more_specific.max_routes 1001"},
+		{"more_specific unknown key", minimalYAML + "more_specific: {enabled: true, bits: 8}\n", "field bits not found"},
 		{"inject without hold_time", edit(t, injectYAML, "hold_time: 15m\n", ""), "mode inject requires a positive hold_time"},
 		{"inject without thresholds", edit(t, injectYAML, "min_rtt_delta_ms: 15", "min_rtt_delta_ms: 0"), "mode inject requires positive thresholds"},
 	}

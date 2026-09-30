@@ -26,14 +26,17 @@ const (
 	ActionCapped  = "capped"  // would improve, but max_improvements reached
 )
 
-// nativePathConfirm is how long a neighbor must keep advertising a prefix
+// NativePathConfirm is how long a neighbor must keep advertising a prefix
 // after an improvement is already active before a later withdraw is treated
 // as the prefix leaving. A shorter gap is the router suppressing the native
 // path because Packeteer's route became best: iBGP does not send that route
 // back to Packeteer, and it does not send a non-best path either. Retiring
 // on that gap withdraws the improvement, the native path returns, and the
-// next round injects it again.
-const nativePathConfirm = 5 * time.Second
+// next round injects it again. The announcer applies the same rule to the
+// learned more-specifics it announces with an improvement (#56).
+const NativePathConfirm = 5 * time.Second
+
+const nativePathConfirm = NativePathConfirm
 
 // Config tunes decisions.
 type Config struct {

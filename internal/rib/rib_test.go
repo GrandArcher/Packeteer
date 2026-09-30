@@ -4,6 +4,7 @@ import (
 	"context"
 	"net"
 	"net/netip"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -457,5 +458,33 @@ func TestEgressOptions(t *testing.T) {
 	v.peers[n] = PeerState{Address: n, Established: true}
 	if d := v.EgressDown(); len(d) != 0 {
 		t.Fatalf("EgressDown with the session up = %v", d)
+	}
+}
+
+func TestMoreSpecificsListsOnlyLearnedPrefixesInside(t *testing.T) {
+	nbr := netip.MustParseAddr("192.0.2.254")
+	v := &View{
+		neighbors: map[netip.Addr]bool{nbr: true},
+		routes:    map[netip.Prefix]Route{},
+		adj:       map[netip.Prefix]map[adjKey]Route{},
+	}
+	for _, s := range []string{"198.51.100.0/24", "198.51.100.0/25", "198.51.100.192/26", "198.51.101.0/24", "203.0.113.0/24", "203.0.113.128/25"} {
+		if !v.applyPath(learned(t, s, "192.0.2.1", nbr.String(), 100, false)) {
+			t.Fatalf("%s did not publish", s)
+		}
+	}
+	got := v.MoreSpecifics([]netip.Prefix{netip.MustParsePrefix("198.51.100.0/24"), netip.MustParsePrefix("198.51.100.0/25"), netip.MustParsePrefix("2001:db8::/32")})
+	want := []netip.Prefix{netip.MustParsePrefix("198.51.100.0/25"), netip.MustParsePrefix("198.51.100.192/26")}
+	if !slices.Equal(got, want) {
+		t.Fatalf("MoreSpecifics = %v, want %v (strictly inside, learned, each once)", got, want)
+	}
+	if got := v.MoreSpecifics(nil); len(got) != 0 {
+		t.Fatalf("no parents = %v", got)
+	}
+	if !v.applyPath(learned(t, "198.51.100.192/26", "192.0.2.1", nbr.String(), 100, true)) {
+		t.Fatal("withdraw did not publish")
+	}
+	if got := v.MoreSpecifics([]netip.Prefix{netip.MustParsePrefix("198.51.100.0/24")}); !slices.Equal(got, want[:1]) {
+		t.Fatalf("after withdraw = %v", got)
 	}
 }

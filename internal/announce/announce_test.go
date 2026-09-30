@@ -21,6 +21,24 @@ func (m memRIB) Contains(p netip.Prefix) bool {
 	return m.has[p.Masked()]
 }
 
+// MoreSpecifics lists learned prefixes strictly inside any parent.
+func (m memRIB) MoreSpecifics(parents []netip.Prefix) []netip.Prefix {
+	var out []netip.Prefix
+	for q, ok := range m.has {
+		if !ok {
+			continue
+		}
+		for _, p := range parents {
+			if p.Bits() < q.Bits() && p.Contains(q.Addr()) {
+				out = append(out, q)
+				break
+			}
+		}
+	}
+	sortPrefixes(out)
+	return out
+}
+
 type fakeAnn struct {
 	plugin.Base
 	mu        sync.Mutex

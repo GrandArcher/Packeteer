@@ -30,7 +30,9 @@ The fixed prober (`type: fixed`) returns configured RTTs and sends no packets. I
 
 `lab/e2e-mitigation.sh` is threat mitigation (#28, first half: RTBH and BGP redirect) on its own topology (`lab/docker-compose-mitigation.yml`): the FRR edge (`lab/frr-mit-edge`) routes the discard address `192.0.2.66` to null, peers with Packeteer, learns `198.51.100.0/24` from transit-a (`lab/frr-mit-transit-a`, AS 64496), and exports to transit-b (`lab/frr-mit-transit-b`, AS 64497). Rules go through Packeteer's ops API from the host (`192.0.2.10:8080`, lab-only basic auth in the compose file; `lab/packeteer-mitigation.yaml`, `max_rules: 2`). The script checks: (1) a rule outside the mitigation allowlist and a request without credentials are refused. (2) An allowlisted `198.51.100.128/25`, which nobody advertises, is held and never announced, and a third prefix is refused by the cap. (3) RTBH: the edge's best path is Packeteer's with next hop `192.0.2.66`, BLACKHOLE, the marker, and `no-export`; zebra resolves it to the blackhole; transit-b loses the prefix instead of receiving it. (4) Redirect replaces it in place with next hop `192.0.2.77` and `64512:777`. (5) DELETE restores transit-a. (6) An 8s TTL expires on its own. (7) SIGTERM withdraws. (8) After a restart no rule exists and nothing returns. (9) SIGKILL drops a new RTBH route within the 9s hold timer.
 
-GitHub Actions runs all nine scripts as the `e2e` job. Docker and Go are required (the scripts build `lab/checkroute` and `lab/checkpath`); they do not run in the unit-test job. `go test ./lab/checkroute ./lab/checkpath` covers the checks themselves.
+`lab/e2e-more-specific.sh` is more-specific injection (#56) on its own topology (`lab/docker-compose-more-specific.yml`): one FRR edge (`lab/frr-ms-edge`) originates `198.51.100.0/24` with three more-specifics (`/25`, `/26`, `/27`) and nothing else inside it; `lab/packeteer-more-specific.yaml` turns `more_specific` on with `max_routes: 4`. On every sample the script reads the edge's table with `lab/checkms` and fails on a Packeteer route for any prefix the edge never advertised or on more than 4 routes that persist for 3s (the edge can briefly show a withdrawn route next to the ones announced into the room it freed, before it processes the withdraw). It checks: (1) the /24 and exactly its three learned more-specifics arrive with next hop `192.0.2.2`, local-pref 250, `64512:666`, and `no-export`. (2) The edge adds `203.0.113.0/24` with one more-specific: it needs 2 routes with 4 in use, so neither is announced. (3) `no network 198.51.100.192/27` (a real RIB leave) withdraws that more-specific. (4) A second leave makes room and the second /24 arrives whole. (5) SIGTERM withdraws every route and a restart brings back the same four. (6) SIGKILL drops them with the session within the 9s hold timer.
+
+GitHub Actions runs all ten scripts as the `e2e` job. Docker and Go are required (the scripts build `lab/checkroute`, `lab/checkpath`, and `lab/checkms`); they do not run in the unit-test job. `go test ./lab/checkroute ./lab/checkpath ./lab/checkms` covers the checks themselves.
 
 ```sh
 bash lab/e2e.sh
@@ -42,4 +44,5 @@ bash lab/e2e-bmp.sh
 bash lab/e2e-addpath.sh
 bash lab/e2e-multirouter.sh
 bash lab/e2e-ix.sh
+bash lab/e2e-more-specific.sh
 ```

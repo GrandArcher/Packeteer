@@ -12,7 +12,7 @@ Read this before you change `mode`.
 
 - The default mode is `observe`. The file in this repository stays `observe`. `suggest` probes and recommends, and announces nothing.
 - `inject` is a separate config: `mode: inject`, a non-empty allowlist, `packeteer_community`, `local_pref`, a positive `hold_time`, positive loss and latency thresholds, an iBGP neighbor, and `announcer.type: gobgp`.
-- Packeteer announces a prefix only when that exact prefix is in the RIB it learned from the router. It does not invent a more-specific. A config that sets `more_specific_bits` is rejected.
+- Packeteer announces a prefix only when that exact prefix is in the RIB it learned from the router. It does not invent a more-specific. A config that sets `more_specific_bits` is rejected. The optional `more_specific` block (off by default) also announces the more-specifics a neighbor already advertises inside an improvement's prefix, under a route cap ([design](docs/design/more-specific.md)).
 - Active improvements are capped (`max_improvements`, default 50).
 - A new improvement waits for a real gain (the thresholds) and then stays up for at least `hold_time`.
 - Every injected route carries your community and the well-known `no-export` community. The edge must accept only that community from Packeteer, and must reject it on every eBGP session. `no-export` is the second layer.

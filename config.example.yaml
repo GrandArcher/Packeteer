@@ -188,6 +188,14 @@ scorer:
 # local_pref: 250
 # announcer:
 #   type: gobgp
+#
+# More-specific injection (off by default; docs/design/more-specific.md).
+# With it, an improvement also announces the more-specifics inside its
+# prefix that a neighbor advertises in the learned RIB (never a prefix
+# Packeteer computed). max_routes caps routes on the router, not decisions.
+# more_specific:
+#   enabled: false
+#   max_routes: 100
 
 # BMP monitoring station (RIB source). Edge routers stream their post-policy
 # Adj-RIB-In (routes they accepted) here, so Packeteer sees inactive IX and backup paths without a
