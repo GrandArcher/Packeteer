@@ -34,6 +34,11 @@ profiles:
     flow_top_n: 2000
     static_targets: 1000
     churn: 6000 # prefixes withdrawn and re-announced per minute
+    # rss_growth_mb is the median RSS over the second half after warmup
+    # minus the median during warmup (see docs/performance.md). Replaying
+    # the nine ubuntu-latest pr runs through 2026-10-01, including Actions
+    # run 36902639588, that figure was at most 146 MiB. The old
+    # tenth-of-a-window median read a scavenger valley on that run as 342.
     budgets:
       learn_seconds: 90
       rss_peak_mb: 6144

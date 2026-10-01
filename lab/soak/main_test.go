@@ -227,12 +227,68 @@ func TestReportFailsOverBudget(t *testing.T) {
 }
 
 func TestGrowthUsesMedians(t *testing.T) {
-	rss := []float64{100, 140, 100, 101, 102, 103, 104, 105, 110, 110, 111, 160, 110}
-	base, end := growth(rss)
-	if base != 100 || end != 111 {
+	// One spike in warmup and one at the end do not set either level.
+	warm := []float64{100, 500, 100, 101, 100}
+	post := []float64{102, 103, 104, 105, 110, 110, 111, 900}
+	base, end := growth(warm, post)
+	if base != 100 || end != 110 {
 		t.Fatalf("base %v end %v", base, end)
 	}
 	if percentile([]float64{1, 2, 3, 4, 100}, 99) != 100 || percentile(nil, 99) != 0 {
 		t.Fatal("percentile")
+	}
+	b, e := growth(nil, nil)
+	if b != 0 || e != 0 {
+		t.Fatalf("empty: %v %v", b, e)
+	}
+	// No warmup samples: the first half is the baseline.
+	b, e = growth(nil, []float64{10, 12, 11, 40})
+	if b != 10 || e != 11 {
+		t.Fatalf("no warmup: base %v end %v", b, e)
+	}
+}
+
+// repeatN is n copies of v, for RSS series in the growth tests.
+func repeatN(v float64, n int) []float64 {
+	s := make([]float64, n)
+	for i := range s {
+		s[i] = v
+	}
+	return s
+}
+
+// TestGrowthIgnoresScavengerValley is the shape of Actions run
+// 36902639588. Warmup sits near 4620 (one early spike). After warmup,
+// RSS dips to 4480 for the first half and refills to 4820. The old
+// tenth-of-the-window medians read the dip against the refill (340 MiB).
+// The warmup median against the second half is 200, inside the pr budget.
+// A second half that stays 400 above warmup is still over that budget.
+func TestGrowthIgnoresScavengerValley(t *testing.T) {
+	p, err := loadProfile("budgets.yaml", "pr")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Budgets.RSSPeakMB != 6144 || p.Budgets.RSSGrowthMB != 256 {
+		t.Fatalf("pr peak or growth budget changed: peak %v growth %v", p.Budgets.RSSPeakMB, p.Budgets.RSSGrowthMB)
+	}
+	soak, err := loadProfile("budgets.yaml", "soak")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if soak.Budgets.RSSPeakMB != 6656 {
+		t.Fatalf("soak peak budget changed: %v", soak.Budgets.RSSPeakMB)
+	}
+	warm := append([]float64{5000}, repeatN(4620, 29)...)
+	valley := append(repeatN(4480, 40), repeatN(4820, 40)...)
+	base, end := growth(warm, valley)
+	got := end - base
+	if base != 4620 || end != 4820 || got > p.Budgets.RSSGrowthMB {
+		t.Fatalf("valley refill: base %v end %v growth %v budget %v", base, end, got, p.Budgets.RSSGrowthMB)
+	}
+	// Same valley, but the second half never comes back down.
+	leak := append(repeatN(4480, 40), repeatN(5020, 40)...)
+	base, end = growth(warm, leak)
+	if end-base <= p.Budgets.RSSGrowthMB {
+		t.Fatalf("leak of %v MiB passed a %v budget", end-base, p.Budgets.RSSGrowthMB)
 	}
 }

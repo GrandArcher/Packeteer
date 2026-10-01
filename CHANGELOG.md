@@ -14,6 +14,7 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 
 ### Fixed
 
+- Load-test RSS growth check (#97). The `pr` profile compared medians of the first and last tenth after warmup, about 35 seconds each. On a ~4.5 GiB heap that window is shorter than Go's return-and-refill cycle (`MADV_DONTNEED`), so a valley read as growth: Actions run 36902639588 failed at 342 MiB (baseline 4476, end 4818) while the end sat in the 4609–4818 band of the runs that passed and peak RSS stayed under 6144. Growth is now the median of the second half after warmup minus the median during warmup. Across those nine `ubuntu-latest` runs that figure was at most 146 MiB, so the 256 MiB budget stays. Peak RSS is unchanged and the `load` job still enforces it. No announce-path change. Rollback: none needed.
 - Flow ingest under a full-table flow mix (#51). Once a `flow` window bucket held its 20,000 prefixes, every new prefix rescanned all of them, so at 20,000 records a second with a full table 78.8 % of flow datagrams were dropped. A full bucket now frees its smallest sixteenth in one pass (never a prefix larger than the newcomer), and the anomaly counters prune idle keys at most once a minute while at their cap. Drops fell to 1.8 % and CPU from 1.2 to 0.72 cores in the same test. The busiest prefixes are still the ones kept.
 
 ## [0.4.0] - 2026-09-30
