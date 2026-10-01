@@ -20,15 +20,24 @@ import (
 	"google.golang.org/protobuf/types/known/anypb"
 )
 
+// haEdgeHold is the edge's negotiated hold time. It is shorter than
+// Packeteer's 90s proposal, so the edge's timer wins, and long enough that
+// a loaded runner does not drop the session that is supposed to stay up.
+// Session loss in this test is DeletePeer, which does not wait for the
+// hold timer.
+const haEdgeHold = 30
+
+const haLearned = "198.51.100.0/24"
+
 // haEdge is a simulated edge (GoBGP) with two Packeteer instances as iBGP
-// neighbors: pk-a from 127.0.0.2 and pk-b from 127.0.0.3. Its 3s hold time
-// wins against Packeteer's 90s proposal. Packeteer's routes get local
-// preference 50, so the edge's own path stays best and it keeps advertising
-// the prefix to both instances.
+// neighbors: pk-a from 127.0.0.2 and pk-b from 127.0.0.3. Packeteer's
+// routes get local preference 50, so the edge's own path stays best and it
+// keeps advertising the prefix to both instances.
 type haEdge struct {
 	t    *testing.T
 	srv  *server.BgpServer
 	port int
+	mu   sync.Mutex // ListPath from the sampler and the test
 }
 
 var haPeers = []string{"127.0.0.2", "127.0.0.3"}
@@ -84,7 +93,7 @@ func (e *haEdge) addPeer(addr string) {
 	if err := e.srv.AddPeer(context.Background(), &api.AddPeerRequest{Peer: &api.Peer{
 		Conf:      &api.PeerConf{NeighborAddress: addr, PeerAsn: 64512},
 		Transport: &api.Transport{PassiveMode: true},
-		Timers:    &api.Timers{Config: &api.TimersConfig{HoldTime: 3, KeepaliveInterval: 1}},
+		Timers:    &api.Timers{Config: &api.TimersConfig{HoldTime: haEdgeHold, KeepaliveInterval: haEdgeHold / 3}},
 		AfiSafis:  []*api.AfiSafi{{Config: &api.AfiSafiConfig{Family: v4, Enabled: true}}},
 	}}); err != nil {
 		e.t.Fatal(err)
@@ -101,40 +110,88 @@ func (e *haEdge) dropPeer(addr string) {
 
 // routes lists, per instance address, the Packeteer routes the edge holds
 // from it. Every route must be the learned prefix toward transit-b with
-// the packeteer community and NO_EXPORT.
+// the packeteer community and NO_EXPORT. A peer that is gone is omitted.
+// ListPath's "doesn't exist" is retried: adding the other peer can make
+// one read miss a neighbor that is still up.
 func (e *haEdge) routes() map[string][]string {
+	e.mu.Lock()
+	defer e.mu.Unlock()
 	out := map[string][]string{}
 	for _, peer := range haPeers {
-		err := e.srv.ListPath(context.Background(), &api.ListPathRequest{TableType: api.TableType_ADJ_IN, Name: peer, Family: v4}, func(d *api.Destination) {
-			for _, p := range d.Paths {
-				if p.IsWithdraw {
-					continue
-				}
-				var nh string
-				comms := map[uint32]bool{}
-				for _, a := range p.Pattrs {
-					var ca api.CommunitiesAttribute
-					var na api.NextHopAttribute
-					switch {
-					case a.MessageIs(&ca) && a.UnmarshalTo(&ca) == nil:
-						for _, c := range ca.Communities {
-							comms[c] = true
-						}
-					case a.MessageIs(&na) && a.UnmarshalTo(&na) == nil:
-						nh = na.NextHop
-					}
-				}
-				if d.Prefix != "198.51.100.0/24" || !comms[64512<<16|666] || !comms[0xFFFFFF01] || nh != "192.0.2.2" {
-					e.t.Errorf("%s from %s: next hop %s, communities %v", d.Prefix, peer, nh, comms)
-				}
-				out[peer] = append(out[peer], d.Prefix)
-			}
-		})
-		if err != nil && !strings.Contains(err.Error(), "doesn't exist") {
+		pfx, err := e.peerRoutes(peer)
+		if err != nil {
 			e.t.Fatal(err)
+		}
+		if len(pfx) > 0 {
+			out[peer] = pfx
 		}
 	}
 	return out
+}
+
+func (e *haEdge) peerRoutes(peer string) ([]string, error) {
+	var last error
+	for attempt := 0; attempt < 3; attempt++ {
+		pfx, err := e.peerRoutesOnce(peer)
+		if err == nil {
+			return pfx, nil
+		}
+		last = err
+		if !strings.Contains(err.Error(), "doesn't exist") {
+			return nil, err
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	// Peer was deleted, or never came back within the retries.
+	if last != nil && strings.Contains(last.Error(), "doesn't exist") {
+		return nil, nil
+	}
+	return nil, last
+}
+
+func (e *haEdge) peerRoutesOnce(peer string) ([]string, error) {
+	var out []string
+	err := e.srv.ListPath(context.Background(), &api.ListPathRequest{TableType: api.TableType_ADJ_IN, Name: peer, Family: v4}, func(d *api.Destination) {
+		for _, p := range d.Paths {
+			if p.IsWithdraw {
+				continue
+			}
+			var nh string
+			comms := map[uint32]bool{}
+			for _, a := range p.Pattrs {
+				var ca api.CommunitiesAttribute
+				var na api.NextHopAttribute
+				switch {
+				case a.MessageIs(&ca) && a.UnmarshalTo(&ca) == nil:
+					for _, c := range ca.Communities {
+						comms[c] = true
+					}
+				case a.MessageIs(&na) && a.UnmarshalTo(&na) == nil:
+					nh = na.NextHop
+				}
+			}
+			if d.Prefix != haLearned || !comms[64512<<16|666] || !comms[0xFFFFFF01] || nh != "192.0.2.2" {
+				e.t.Errorf("%s from %s: next hop %s, communities %v", d.Prefix, peer, nh, comms)
+			}
+			out = append(out, d.Prefix)
+		}
+	})
+	return out, err
+}
+
+// onlyFrom reports whether r is exactly one learned route from addr.
+func onlyFrom(r map[string][]string, addr string) bool {
+	return addr != "" && len(r) == 1 && slices.Equal(r[addr], []string{haLearned})
+}
+
+// foreignRoute reports whether any instance other than addr has a route.
+func foreignRoute(r map[string][]string, addr string) bool {
+	for peer, pfxs := range r {
+		if peer != addr && len(pfxs) > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // haInstance is one controller of the pair.
@@ -241,7 +298,7 @@ func TestDaemonHAActiveStandby(t *testing.T) {
 		deadline := time.Now().Add(40 * time.Second)
 		for {
 			r := edge.routes()
-			ok := len(r) == 1 && slices.Equal(r[addr], []string{"198.51.100.0/24"})
+			ok := onlyFrom(r, addr)
 			if addr == "" {
 				ok = len(r) == 0
 			}
@@ -258,13 +315,33 @@ func TestDaemonHAActiveStandby(t *testing.T) {
 			time.Sleep(100 * time.Millisecond)
 		}
 	}
-	stayOnly := func(what, addr string, d time.Duration) {
+	// stayOnly requires addr to be the only announcer for d. A route from
+	// anyone else fails immediately. An empty adj-in does not: ListPath can
+	// miss the live route for a moment while the other peer's session is
+	// established (Actions run 36822180157 saw map[] here). The route has
+	// to be back within absentGrace.
+	stayOnly := func(what, addr string, d time.Duration, logs ...*syncBuf) {
 		t.Helper()
-		for end := time.Now().Add(d); time.Now().Before(end); time.Sleep(200 * time.Millisecond) {
+		const absentGrace = 2 * time.Second
+		end := time.Now().Add(d)
+		var absent time.Time
+		for time.Now().Before(end) || (!absent.IsZero() && time.Since(absent) <= absentGrace) {
 			r := edge.routes()
-			if len(r) != 1 || len(r[addr]) != 1 {
+			if foreignRoute(r, addr) {
 				t.Fatalf("%s: edge has %v, want only %s", what, r, addr)
 			}
+			if onlyFrom(r, addr) {
+				absent = time.Time{}
+			} else if absent.IsZero() {
+				absent = time.Now()
+			} else if time.Since(absent) > absentGrace {
+				var l strings.Builder
+				for _, b := range logs {
+					l.WriteString(b.String())
+				}
+				t.Fatalf("%s: edge has %v for %s, want only %s\n%s", what, r, time.Since(absent).Round(time.Millisecond), addr, l.String())
+			}
+			time.Sleep(100 * time.Millisecond)
 		}
 	}
 	waitRole := func(in *haInstance, want, holder string) {
@@ -319,7 +396,7 @@ func TestDaemonHAActiveStandby(t *testing.T) {
 
 	// The standby measures and has the prefix in its RIB, but announces
 	// nothing, for longer than a lease takeover would take.
-	stayOnly("standby must not announce", "127.0.0.2", 8*time.Second)
+	stayOnly("standby must not announce", "127.0.0.2", 8*time.Second, a.logs, b.logs)
 	if !strings.Contains(b.logs.String(), "ha lease elector started") {
 		t.Fatalf("pk-b logs:\n%s", b.logs.String())
 	}
@@ -334,10 +411,16 @@ func TestDaemonHAActiveStandby(t *testing.T) {
 		t.Fatalf("pk-a did not step down:\n%s", a.logs.String())
 	}
 
-	// pk-a's session is back: it is eligible but stays standby.
+	// pk-a's session is back: it is eligible but stays standby. Do not
+	// read the adj-in until pk-b is still the leader and its route is
+	// the only one. The dwell then proves the recovered session does
+	// not announce. An empty read before that (run 36822180157) is the
+	// session settling, not pk-a announcing.
 	edge.addPeer("127.0.0.2")
+	waitRole(b, "active", "pk-b")
 	waitRole(a, "standby", "pk-b")
-	stayOnly("recovered standby must not announce", "127.0.0.3", 8*time.Second)
+	waitOnly("pk-b still announcing after pk-a recovered", "127.0.0.3", a.logs, b.logs)
+	stayOnly("recovered standby must not announce", "127.0.0.3", 8*time.Second, a.logs, b.logs)
 
 	// Clean shutdown of the active instance: withdraw, resign, and pk-a
 	// takes over without waiting for the lease to run out.
