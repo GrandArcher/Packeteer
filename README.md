@@ -31,9 +31,9 @@ The image is `ghcr.io/grandarcher/packeteer`, linux/amd64 and linux/arm64. It ru
 | `latest` | The same release, updated when a release tag is published. |
 | `edge` | The build from `main`. The Compose file in this repo uses it. |
 
-The commands below use `:edge`, which is published on every push to `main`. For a pinned install, set `IMAGE=ghcr.io/grandarcher/packeteer:0.4.0`.
+**Step by step: [docs/quickstart.md](docs/quickstart.md).** It goes from an empty directory to a running instance in observe, with a first run on loopback, `docker run` and Compose, and the stop. CI runs every command on that page against the image built from the same commit.
 
-### docker run
+The short version, with `:edge` (published on every push to `main`; for a pinned install, set `IMAGE=ghcr.io/grandarcher/packeteer:0.4.0`):
 
 ```sh
 curl -fsSLo config.yaml https://raw.githubusercontent.com/GrandArcher/Packeteer/main/config.example.yaml
@@ -65,22 +65,7 @@ The default config path inside the container is `/etc/packeteer/config.yaml` (`P
 
 The `packeteer-data` volume keeps report history (`storage: {type: sqlite}`, file `/var/lib/packeteer/packeteer.db`) across container restarts and upgrades. Without the volume, reports still work but start empty after the container is recreated. Leave out `storage` to turn history off; the probe and decision loop does not depend on it.
 
-### Docker Compose
-
-From a checkout of this repository (or after you save [docker-compose.yml](docker-compose.yml) next to `config.yaml`):
-
-```sh
-curl -fsSLo config.yaml https://raw.githubusercontent.com/GrandArcher/Packeteer/main/config.example.yaml
-curl -fsSLo docker-compose.yml https://raw.githubusercontent.com/GrandArcher/Packeteer/main/docker-compose.yml
-mkdir -p plugins
-# Edit config.yaml. Leave mode: observe.
-docker compose up -d
-docker compose logs -f
-```
-
-The Compose file uses `ghcr.io/grandarcher/packeteer:edge`, host networking, and the two capabilities. To pin the release, change the `image` line to `ghcr.io/grandarcher/packeteer:0.4.0`. There is no `ports:` map: with host networking, `http.listen` is already an address on the host.
-
-Stop with `docker compose stop -t 30` (see [Rollback](#rollback)).
+[docker-compose.yml](docker-compose.yml) runs the same container with Compose: host networking, the two capabilities, the mounts, and `restart: unless-stopped` ([quickstart, step 5](docs/quickstart.md#5-or-run-it-with-compose)). Its `image` line uses `:edge`; change it to `ghcr.io/grandarcher/packeteer:0.4.0` to pin. There is no `ports:` map: with host networking, `http.listen` is already an address on the host. Stop with `docker compose stop -t 30` (see [Rollback](#rollback)).
 
 ## Minimum config
 
@@ -151,8 +136,12 @@ To learn current exits, peer iBGP, same ASN, between the router and Packeteer. I
 
 Leave graceful restart off on the session. Guides:
 
-- [docs/mikrotik.md](docs/mikrotik.md) — RouterOS 7 iBGP, filters, and Traffic Flow
-- [docs/routers.md](docs/routers.md) — FRR, Junos, IOS, and what happens when the native path disappears
+- [docs/walkthrough.md](docs/walkthrough.md) — observe, suggest, inject, and roll back on a simulated FRR edge, then the same steps on a real one. CI runs every command
+- [docs/mikrotik.md](docs/mikrotik.md) — RouterOS 7 iBGP, filters, Traffic Flow, port mirroring, and SNMP
+- [docs/frr.md](docs/frr.md) — FRR; the walkthrough lab runs this configuration in CI
+- [docs/junos.md](docs/junos.md) — Juniper Junos
+- [docs/cisco.md](docs/cisco.md) — Cisco IOS and IOS-XE
+- [docs/routers.md](docs/routers.md) — what every router guide shares, what happens when the native path disappears, and exchange peers
 - [docs/route-reflector.md](docs/route-reflector.md) — several edge routers, per-router provider reachability, route reflectors, Internet exchange peers, and SIGHUP reload of `bgp.neighbors`
 - [docs/multi-pop.md](docs/multi-pop.md) — several POPs (routing domains) federated over mutual TLS: inter-DC RTT in the path cost, global commit across POPs, and the central view. Lab-proven only
 - [docs/policy-routing.md](docs/policy-routing.md) — probe sources behind the router
@@ -181,6 +170,8 @@ curl -fsS http://127.0.0.1:8080/metrics
 Stay here until the numbers match what you expect from each transit. A `probe failed` line whose error contains `probe source address unavailable` means that `source_ip` is missing on the host or the policy route is wrong. A successful probe with high `loss_pct` is a measurement of that transit.
 
 ## Suggest, then inject
+
+The whole sequence on a simulated FRR edge, with the output to expect at each step, is [docs/walkthrough.md](docs/walkthrough.md).
 
 `mode: suggest` is the same process as observe. It writes recommendations to the log, the dashboard, and `/api/decisions`, and it still announces nothing. Set the thresholds from the example config first. With both deltas at `0`, no improvement is recorded.
 
@@ -299,6 +290,8 @@ Probers, target sources, the scorer, routing policies, the announcer, notifiers,
 Details, the exec protocol, and a shell example: [docs/PLUGINS.md](docs/PLUGINS.md). Keys: [docs/CONFIG.md](docs/CONFIG.md).
 
 ## FAQ
+
+Symptoms, log lines, and fixes: [docs/troubleshooting.md](docs/troubleshooting.md).
 
 **The container exits immediately.** The log line `refusing to start` is a config or plugin error. Run `-check`. Unknown YAML keys, a missing provider, and an inject file that omits the allowlist or the community all fail closed.
 

@@ -39,6 +39,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
       - name: build image
         uses: docker/build-push-action@v6
         with:
@@ -463,6 +466,11 @@ jobs:
           test "$(docker inspect -f '{{.State.ExitCode}}' pkanom)" = "0"
           grep -q "shutting down" /tmp/pkanom.log
 
+      - name: quickstart guide, every command (#50; docs/quickstart.md against this image, observe)
+        run: bash lab/e2e-docs.sh docs/quickstart.md packeteer:ci
+      - name: troubleshooting guide examples (#50; docs/troubleshooting.md against this image)
+        run: bash lab/e2e-docs.sh docs/troubleshooting.md packeteer:ci
+
   e2e:
     runs-on: ubuntu-latest
     timeout-minutes: 40
@@ -499,3 +507,9 @@ jobs:
         run: bash lab/e2e-multipop.sh
       - name: FRR HA lab (active/standby lease, standby never announces, SIGKILL takeover after the hold time, session loss, SIGTERM handover, backup/restore)
         run: bash lab/e2e-ha.sh
+      - name: FRR walkthrough lab (#50; docs/walkthrough.md on the docs/frr.md edge, observe, suggest, inject, export check, SIGTERM withdraw, back to observe)
+        env:
+          PACKETEER_DOCS_DIR: .
+          PACKETEER_DOCS_ON_FAIL: docker compose -f lab/docker-compose-walkthrough.yml logs --no-color; docker exec pkw-edge vtysh -c 'show running-config' -c 'show bgp summary' -c 'show bgp ipv4 unicast'
+          PACKETEER_DOCS_CLEANUP: docker compose -f lab/docker-compose-walkthrough.yml down -v --remove-orphans; rm -rf lab/walkthrough
+        run: bash lab/e2e-docs.sh docs/walkthrough.md

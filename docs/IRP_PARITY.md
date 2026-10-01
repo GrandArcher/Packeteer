@@ -196,7 +196,7 @@ Troubleshooting tools (#24) live on the ops HTTP server. The looking glass reads
 | Capability | IRP doc ref | Status | Milestone | Plugin kind | Issue |
 |---|---|---|---|---|---|
 | Single-container install (Docker, multi-arch GHCR image) | 1.2.3 Technical requirements | done | v0.1 | - | #4 |
-| Operator quick start, config reference, and changelog | - | done | v0.1 | - | #11 |
+| Operator quick start, config reference, and changelog; CI-tested single-container quickstart, MikroTik/FRR/Junos/Cisco router guides, observe → suggest → inject walkthrough (lab), and troubleshooting | - | done | v0.1, v0.5 | - | #11, #50 |
 | Plugin system (in-process + exec + webhook) | - | done | v0.1 | all kinds | #13 |
 | Simulated-router e2e lab (announce, clean withdraw, SIGKILL session-loss within the BGP hold timer) | - | done | v0.1 | - | #10, #45 |
 | Software management / upgrades via package manager | 2.1 | won't do (Replaced by container images and tags; upgrade = pull a new tag.) | - | - | - |

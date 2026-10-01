@@ -4,7 +4,7 @@ This guide grows with each milestone. It currently covers:
 
 1. **Probe sourcing**: see [policy-routing.md](policy-routing.md#mikrotik-routeros-7-probe-box-behind-the-router).
 2. **iBGP session** so Packeteer can see the paths the router advertises: below.
-3. **Injected routes**: accept only the Packeteer community from that session, and never export it to eBGP. FRR, Junos, and IOS snippets are in [routers.md](routers.md).
+3. **Injected routes**: accept only the Packeteer community from that session, and never export it to eBGP. The same for [FRR](frr.md), [Junos](junos.md), and [Cisco IOS](cisco.md).
 4. **Traffic Flow** (NetFlow / IPFIX) so Packeteer can pick probe targets from real traffic, and optionally score failing destinations: below.
 5. **Port mirroring** for the `span` source (passive problem detection): below.
 6. **SNMP** so Packeteer can read interface counters for 95th-percentile tracking: below. The community stays in the container environment.
@@ -62,7 +62,7 @@ RouterOS 7 syntax changes between minor releases, so check these commands agains
 
 Check the session with `/routing bgp session print`. Packeteer logs `bgp session ... state=ESTABLISHED`, then a periodic `rib ready=true prefixes=N`. In inject mode an accepted route shows up in `/routing route print where bgp-communities~"64512:666"`. Clearing it is `mode: observe` (Packeteer withdraws) or stopping the container (the session drops; graceful restart is off, so the route does not stick).
 
-FRR, Junos, and IOS equivalents: [routers.md](routers.md).
+FRR, Junos, and IOS equivalents: [frr.md](frr.md), [junos.md](junos.md), [cisco.md](cisco.md). The whole observe → suggest → inject sequence, with the checks at each step: [walkthrough.md](walkthrough.md).
 
 ## Exchange peers
 

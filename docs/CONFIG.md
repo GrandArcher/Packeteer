@@ -1225,4 +1225,4 @@ Every next hop in the catalog must be unique, unicast, and not loopback.
 
 ## Example
 
-[config.example.yaml](../config.example.yaml) is a valid `observe` file. Annotated install steps are in the [README](../README.md). Router filters: [mikrotik.md](mikrotik.md), [routers.md](routers.md). Probe sourcing: [policy-routing.md](policy-routing.md).
+[config.example.yaml](../config.example.yaml) is a valid `observe` file. Install steps: [quickstart.md](quickstart.md). Router filters: [mikrotik.md](mikrotik.md), [frr.md](frr.md), [junos.md](junos.md), [cisco.md](cisco.md), [routers.md](routers.md). Problems: [troubleshooting.md](troubleshooting.md). Probe sourcing: [policy-routing.md](policy-routing.md).
