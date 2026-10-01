@@ -226,15 +226,38 @@ func percentile(xs []float64, p float64) float64 {
 	return s[max(0, min(i, len(s)-1))]
 }
 
-// growth compares the median RSS at the start of the window with the
-// median at its end, each over a tenth of the samples (at least three).
-// The Go heap breathes between collections; medians keep one high
-// sample from reading as a leak.
-func growth(rss []float64) (base, end float64) {
-	if len(rss) == 0 {
+// growth is the RSS level during warmup and the level over the second
+// half of the samples after warmup. Both are medians.
+//
+// Go returns unused pages with MADV_DONTNEED, so RSS falls after a
+// collection and climbs back as the heap refills. On a ~4.5 GiB heap
+// that cycle is minutes wide. A tenth of the post-warmup samples (about
+// 35s on the pr profile) can sit entirely in the valley or entirely on
+// the refilled heap. Actions run 36902639588 measured that as 342 MiB
+// of growth (4476 then 4818) while the end was inside the band of runs
+// that passed and the warmup median was already 4619. The baseline is
+// that warmup median. The end median covers the whole second half, so
+// one spike does not set it. A leak is a second half above the warmup
+// level. With no warmup samples the first half of post is the baseline.
+func growth(warm, post []float64) (base, end float64) {
+	if len(warm) == 0 && len(post) == 0 {
 		return 0, 0
 	}
-	k := max(3, len(rss)/10)
-	k = min(k, len(rss))
-	return percentile(rss[:k], 50), percentile(rss[len(rss)-k:], 50)
+	if len(post) == 0 {
+		m := percentile(warm, 50)
+		return m, m
+	}
+	if len(warm) == 0 {
+		if len(post) < 2 {
+			m := percentile(post, 50)
+			return m, m
+		}
+		mid := len(post) / 2
+		return percentile(post[:mid], 50), percentile(post[mid:], 50)
+	}
+	endPart := post
+	if len(post) >= 2 {
+		endPart = post[len(post)/2:]
+	}
+	return percentile(warm, 50), percentile(endPart, 50)
 }

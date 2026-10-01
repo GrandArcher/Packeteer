@@ -240,7 +240,7 @@ func run(ctx context.Context, o runOpts) (Result, error) {
 	go func() { churnDone <- churn(soakCtx, rt, tbl, p.Churn, &r.ChurnUpdates, fail) }()
 
 	soakStart := time.Now()
-	var rss, lat []float64
+	var warmRSS, postRSS, lat []float64
 	notReady, sessionDown, sampleErrs := 0, 0, 0
 	tick := time.NewTicker(p.Sample)
 loop:
@@ -257,8 +257,12 @@ loop:
 			break loop
 		}
 		r.Threads = max(r.Threads, pr.Threads)
-		if el >= p.Warmup {
-			rss = append(rss, float64(pr.RSS)/(1<<20))
+		sample := float64(pr.RSS) / (1 << 20)
+		// Warmup is the baseline. Samples after it are the growth window.
+		if el < p.Warmup {
+			warmRSS = append(warmRSS, sample)
+		} else {
+			postRSS = append(postRSS, sample)
 		}
 		m, d1, err1 := papi.metrics(ctx)
 		_, d2, err2 := papi.overview(ctx)
@@ -298,7 +302,7 @@ loop:
 	}
 	r.CPUAvgCores = (cpu1.CPU - cpu0.CPU) / r.DurationSeconds
 	r.RSSPeakMB = float64(cpu1.HWM) / (1 << 20)
-	r.RSSBaselineMB, r.RSSEndMB = growth(rss)
+	r.RSSBaselineMB, r.RSSEndMB = growth(warmRSS, postRSS)
 	r.RSSGrowthMB = max(0, r.RSSEndMB-r.RSSBaselineMB)
 	r.APIP99Ms = percentile(lat, 99)
 	if udp1, err := readUDP(o.snmp); err == nil && udpErr == nil && p.FlowRate > 0 {

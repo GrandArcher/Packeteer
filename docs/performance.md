@@ -23,7 +23,7 @@ The budgets live in [lab/soak/budgets.yaml](../lab/soak/budgets.yaml) and are se
 |---|---|---|---|
 | Full table learned | Session open to `packeteer_rib_prefixes` = 1,250,000 | ≤ 90 s | ≤ 90 s |
 | Peak RSS | `VmHWM` of the process, learning included | ≤ 6144 MiB | ≤ 6656 MiB |
-| RSS growth | Median RSS over the last tenth of the soak minus the first tenth after warmup (3 min / 15 min) | ≤ 256 MiB | ≤ 512 MiB |
+| RSS growth | Median RSS over the second half of the post-warmup soak, minus the median RSS during warmup (3 min / 15 min). Warmup is the baseline, so a later dip and refill toward that level is not growth | ≤ 256 MiB | ≤ 512 MiB |
 | Average CPU | CPU seconds over wall time in the soak phase | ≤ 2.0 cores | ≤ 2.0 cores |
 | OS threads | Most seen | ≤ 64 | ≤ 64 |
 | Flow datagrams dropped | Host UDP `RcvbufErrors` over datagrams received, soak phase | ≤ 5 % | ≤ 5 % |
@@ -35,6 +35,8 @@ The budgets live in [lab/soak/budgets.yaml](../lab/soak/budgets.yaml) and are se
 A run prints the table with the measured values, adds it to the GitHub job summary, and uploads the JSON result as an artifact (`load-result`, `soak-result`).
 
 Measured on an 8-core development machine with the `pr` workload and a 4-minute soak: full table learned in 18 s (4.5 cores while learning), peak RSS 4530 MiB, RSS growth 0.3 MiB, 0.72 cores average, 14 threads, 1.8 % flow datagrams dropped, API p99 240 ms, reconverge 0.07 s, SIGTERM to exit 7.8 s, 3000 prefixes measured. Most of the memory is the learned table: about 1.7 KB of live heap per prefix (GoBGP's Adj-RIB-In plus the view), and the Go collector lets the heap grow to about twice that between collections.
+
+On the nine `pr` runs on GitHub-hosted `ubuntu-latest` through 2026-10-01, end RSS stayed in a 4609–4818 MiB band and peak RSS stayed between 4869 and 5353 (all under 6144). Go returns unused pages with `MADV_DONTNEED`, so RSS falls after a collection and climbs back over the next minutes. The previous growth check compared medians of the first and last tenth after warmup, about 35 seconds each, which is shorter than that cycle. Actions run 36902639588 (the push of #96 to `main`) sat in a valley for that first tenth (baseline 4476 MiB) and on the refilled heap for the last (4818), and failed at 342 MiB. Replaying each run's per-sample RSS log (printed to the nearest MiB) with the rule above gives 97 MiB on that run (warmup median 4619, second-half median 4716) and at most 146 MiB across the nine. The 256 MiB budget is that measurement plus headroom. Peak RSS is unchanged, and the `load` job still runs this check.
 
 ## Findings fixed with this test
 
