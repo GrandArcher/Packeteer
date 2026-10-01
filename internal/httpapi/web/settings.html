@@ -16,6 +16,7 @@
   </div>
   <nav class="nav"><a href="/">Dashboard</a> <a href="/dashboards.html">Custom dashboards</a></nav>
 </header>
+<div id="ed-off" class="conn" role="alert" hidden></div>
 <main>
   <section>
     <h2>First-run wizard</h2>
@@ -33,8 +34,9 @@
       <button type="button" id="wz-run">Generate</button>
     </div>
     <div id="wz-status" class="tag"></div>
+    <ul id="wz-errors" class="errors"></ul>
   </section>
-  <section>
+  <section id="editor-section">
     <h2>Config editor</h2>
     <p class="tag">Edits the mounted config file. Saving runs the same checks as a start (loader, environment, every plugin) and reads the file back through the loader. The controller applies it on restart, or on SIGHUP when only <code>bgp.neighbors</code> changed. Needs <code>http.config_editor: true</code> and the admin role.</p>
     <div class="controls">

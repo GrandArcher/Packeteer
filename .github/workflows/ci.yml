@@ -107,6 +107,65 @@ jobs:
           grep -q "prober=icmp" /tmp/pk.log
           grep -q "loss_pct=0" /tmp/pk.log
           grep -q "shutting down" /tmp/pk.log
+      - name: UI e2e smoke (#49; first run from the stock image, headless Chrome, observe)
+        run: |
+          base=http://127.0.0.1:8080
+          up() {
+            for _ in $(seq 1 20); do curl -fsS "$base/healthz" >/dev/null 2>&1 && return 0; sleep 1; done
+            docker logs pkui >&2; return 1
+          }
+          stop() {
+            docker stop -t 15 pkui
+            docker logs pkui 2>&1 | tail -n 20
+            test "$(docker inspect -f '{{.State.ExitCode}}' pkui)" = "0"
+            docker rm pkui
+          }
+          # 1. The shipped example, mounted unchanged: observe, nothing to
+          # probe yet, and the dashboard says what to add.
+          docker run -d --name pkui --network host --cap-add NET_RAW --cap-add NET_ADMIN \
+            -v "$PWD/config.example.yaml:/etc/packeteer/config.yaml:ro" packeteer:ci
+          up
+          curl -fsS "$base/api/overview" | tee /tmp/ov1.json | jq -e '.mode == "observe" and .setup[0].id == "sources" and .counts.providers == 2'
+          bash lab/ui-smoke.sh "$base/" 'Observe mode: Packeteer measures and recommends. Nothing is announced.' \
+            'data-hint="sources"' 'Nothing to probe yet' 'no data yet' 'Recommended improvements' \
+            --absent 'Cannot reach' 'Inject mode'
+          bash lab/ui-smoke.sh "$base/settings.html" 'The config editor is off'
+          bash lab/ui-smoke.sh "$base/dashboards.html" 'Custom dashboards'
+          stop
+          # 2. A first-run file with only the essentials (no mode key, no
+          # http block): defaults observe on 127.0.0.1:8080, ICMP in the
+          # container, and the dashboard shows the measurement.
+          cat > /tmp/first.yaml <<'YAML'
+          asn: 64512
+          router_id: 192.0.2.10
+          providers:
+            - name: lab-a
+              source_ip: 127.0.0.1
+              next_hop: 127.0.0.1
+          probe: {interval: 2s, timeout: 500ms, packets: 3}
+          sources:
+            - type: static
+              config:
+                targets: [{prefix: 127.0.0.1/32}]
+          YAML
+          docker run --rm -v /tmp/first.yaml:/etc/packeteer/config.yaml:ro packeteer:ci -check | tee /tmp/first-check.txt
+          grep -q "mode: observe" /tmp/first-check.txt
+          grep -q "announce: disabled" /tmp/first-check.txt
+          docker run -d --name pkui --network host --cap-add NET_RAW --cap-add NET_ADMIN \
+            -v /tmp/first.yaml:/etc/packeteer/config.yaml:ro packeteer:ci
+          up
+          ok=0
+          for _ in $(seq 1 15); do
+            if curl -fsS "$base/api/overview" -o /tmp/ov2.json && jq -e '.counts.measured == 1' /tmp/ov2.json >/dev/null; then ok=1; break; fi
+            sleep 1
+          done
+          cat /tmp/ov2.json
+          test "$ok" = 1
+          jq -e '.mode == "observe" and (.setup | map(.id) | index("sources")) == null and (.setup | map(.id) | index("bgp")) != null' /tmp/ov2.json
+          bash lab/ui-smoke.sh "$base/" 'Observe mode' '127.0.0.1/32' '1 of 1' ' ms' 'data-hint="bgp"' 'data-hint="history"' \
+            --absent 'data-hint="sources"' 'Cannot reach' 'no data yet'
+          test "$(curl -fsS "$base/api/improvements" | jq '.improvements | length')" = 0
+          stop
       - name: history survives a container restart (mounted volume, observe)
         run: |
           cat > /tmp/hist.yaml <<'YAML'

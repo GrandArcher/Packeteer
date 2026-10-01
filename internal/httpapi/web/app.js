@@ -7,6 +7,8 @@ var lastPrefixes = null;
 var lastImprovements = null;
 var lastReady = null;
 var lastMitigation = null;
+var lastOverview = null;
+var lastOK = null;
 
 function el(tag, className, text) {
   var n = document.createElement(tag);
@@ -59,12 +61,14 @@ function renderProviders(data) {
   clear(root);
   var rows = (data && data.providers) || [];
   if (!rows.length) {
-    root.appendChild(el("p", "empty", "No providers."));
+    root.appendChild(el("p", "empty", "No providers in the config."));
     return;
   }
   var table = el("table");
   var head = el("tr");
-  ["Provider", "Source", "Next hop", "Health", "Since", "Detail"].forEach(function (h) {
+  var health = {};
+  ((lastOverview && lastOverview.providers) || []).forEach(function (h) { health[h.name] = h; });
+  ["Provider", "Source", "Next hop", "Health", "Probes", "Since", "Detail"].forEach(function (h) {
     head.appendChild(el("th", "", h));
   });
   var thead = el("thead");
@@ -81,9 +85,13 @@ function renderProviders(data) {
     tr.appendChild(name);
     tr.appendChild(el("td", "mono", p.source || "—"));
     tr.appendChild(el("td", "mono", p.next_hop || "—"));
-    var health = el("td");
-    health.appendChild(el("span", p.up ? "dot up" : "dot down", p.up ? "up" : "down"));
-    tr.appendChild(health);
+    var h = health[p.name];
+    var cell = el("td");
+    if (p.up && h && !h.ok && !h.failed) cell.appendChild(el("span", "badge muted", "no data yet"));
+    else if (p.up && h && !h.ok) cell.appendChild(el("span", "dot down", "no answer"));
+    else cell.appendChild(el("span", p.up ? "dot up" : "dot down", p.up ? "up" : "down"));
+    tr.appendChild(cell);
+    tr.appendChild(el("td", "", h ? probeCount(h) : "—"));
     tr.appendChild(el("td", "", fmtTime(p.since)));
     tr.appendChild(el("td", "", p.reason || ""));
     tb.appendChild(tr);
@@ -127,10 +135,28 @@ function renderPrefixes(data) {
   clear(root);
   var rows = (data && data.prefixes) || [];
   if (!rows.length) {
-    root.appendChild(el("p", "empty", "No probed prefixes yet."));
+    var o = lastOverview;
+    var msg = "No probed prefixes yet.";
+    if (o && !(o.sources || []).length) msg = "Nothing to probe: the config has no sources. See the setup checklist above.";
+    else if (o) msg = "No probed prefixes yet. The first probe round fills this in.";
+    root.appendChild(el("p", "empty", msg));
     return;
   }
-  rows.forEach(function (row) {
+  var q = document.getElementById("prefix-filter").value.trim().toLowerCase();
+  var changes = document.getElementById("prefix-changes").checked;
+  var shown = rows.filter(function (row) {
+    if (changes && !(row.current && row.recommended && row.recommended !== row.current)) return false;
+    if (!q) return true;
+    if (String(row.prefix).toLowerCase().indexOf(q) >= 0) return true;
+    return (row.probes || []).some(function (pr) { return String(pr.provider).toLowerCase().indexOf(q) >= 0; }) ||
+      [row.current, row.recommended].some(function (v) { return v && String(v).toLowerCase().indexOf(q) >= 0; });
+  });
+  if (shown.length !== rows.length) root.appendChild(el("p", "tag", "Showing " + shown.length + " of " + rows.length + " prefixes."));
+  if (!shown.length) {
+    root.appendChild(el("p", "empty", "No prefix matches the filter."));
+    return;
+  }
+  shown.forEach(function (row) {
     var card = el("article", "card");
     var head = el("div", "card-head");
     head.appendChild(el("h3", "mono", row.prefix));
@@ -184,13 +210,22 @@ function renderImprovements(data) {
   var root = document.getElementById("improvements");
   clear(root);
   var rows = (data && data.improvements) || [];
+  var mode = data && data.mode;
+  var inject = mode === "inject";
+  document.getElementById("improvements-title").textContent = inject ? "Active improvements" : "Recommended improvements";
+  var cap = lastOverview && lastOverview.counts && lastOverview.counts.max_improvements;
+  document.getElementById("improvements-tag").textContent = (inject ?
+    "Announced to the edge with the Packeteer community and NO_EXPORT. " :
+    "Mode " + (mode || "observe") + ": these are what inject would announce. Nothing is announced. ") +
+    (cap ? "At most " + cap + " at a time (max_improvements)." : "");
   if (!rows.length) {
-    root.appendChild(el("p", "empty", "No active improvements."));
+    root.appendChild(el("p", "empty", inject ? "No active improvements." :
+      "None. A move is recommended only when another provider beats the current exit by the configured thresholds."));
     return;
   }
   var table = el("table");
   var hr = el("tr");
-  ["Prefix", "Native exit", "Steered to", "Cause", "Since", "Reason"].forEach(function (h) {
+  ["Prefix", "Native exit", inject ? "Steered to" : "Recommended", "Cause", "Since", "Reason"].forEach(function (h) {
     hr.appendChild(el("th", "", h));
   });
   var thead = el("thead");
@@ -222,7 +257,117 @@ function renderStatus(err) {
   if (lastProviders && lastProviders.generated_at) {
     node.appendChild(el("span", "muted", "updated " + fmtTime(lastProviders.generated_at)));
   }
-  if (err) node.appendChild(el("span", "bad", err.message));
+  if (err) node.appendChild(el("span", "bad", "stale"));
+}
+
+function probeCount(h) {
+  if (!h.ok && !h.failed) return "—";
+  return h.ok + " ok" + (h.failed ? ", " + h.failed + " failed" : "");
+}
+
+var MODE_TEXT = {
+  observe: "Observe mode: Packeteer measures and recommends. Nothing is announced.",
+  suggest: "Suggest mode: Packeteer measures and publishes recommendations. Nothing is announced.",
+  inject: "Inject mode: improvements for allowlisted prefixes are announced to the edge routers."
+};
+
+function renderBanner(mode) {
+  var node = document.getElementById("banner");
+  if (!mode || !MODE_TEXT[mode]) { node.hidden = true; return; }
+  node.textContent = MODE_TEXT[mode];
+  node.className = "banner " + (mode === "inject" ? "banner-inject" : "banner-observe");
+  node.hidden = false;
+}
+
+function tile(label, value, note, cls) {
+  var t = el("div", "tile" + (cls ? " " + cls : ""));
+  t.appendChild(el("span", "k", label));
+  t.appendChild(el("span", "tile-v", value));
+  if (note) t.appendChild(el("span", "muted tile-note", note));
+  return t;
+}
+
+function renderTiles(o) {
+  var root = document.getElementById("tiles");
+  clear(root);
+  var c = o.counts || {};
+  var inject = o.mode === "inject";
+  root.appendChild(tile("Mode", o.mode || "—", inject ? "announces" : "announces nothing", inject ? "warn" : ""));
+  root.appendChild(tile("Status", o.ready ? "ready" : (o.started ? "not ready" : "starting"),
+    o.bgp && o.bgp.configured && !o.bgp.ready ? "no iBGP session" : "", o.ready ? "good" : "bad"));
+  root.appendChild(tile("Providers up", c.providers_up + " of " + c.providers, "", c.providers && !c.providers_up ? "bad" : ""));
+  root.appendChild(tile("Prefixes measured", c.measured + " of " + c.prefixes,
+    (o.sources || []).length ? "sources: " + o.sources.join(", ") : "no sources", c.prefixes ? "" : "muted"));
+  root.appendChild(tile(inject ? "Improvements" : "Recommended", c.improvements + (c.max_improvements ? " of " + c.max_improvements : ""),
+    c.recommended ? c.recommended + " prefixes differ" : ""));
+  var b = o.bgp || {};
+  root.appendChild(tile("BGP sessions", b.configured ? b.established + " of " + b.peers : "off",
+    b.configured ? (c.in_rib + " probed prefixes in RIB") : "no edge router", b.configured && !b.established ? "bad" : ""));
+}
+
+function renderSetup(o) {
+  var root = document.getElementById("setup");
+  clear(root);
+  var hints = o.setup || [];
+  if (!hints.length) return;
+  var box = el("div", "setup");
+  box.appendChild(el("h3", "", "Setup checklist"));
+  box.appendChild(el("p", "tag", "Edit the mounted config file, then restart the container. Observe mode stays safe while you do."));
+  var ul = el("ul", "hints");
+  hints.forEach(function (h) {
+    var li = el("li", "hint hint-" + h.level);
+    li.setAttribute("data-hint", h.id);
+    li.appendChild(el("span", "badge hint-level", h.level === "todo" ? "to do" : h.level));
+    li.appendChild(el("strong", "", h.title));
+    li.appendChild(el("span", "", " " + h.detail));
+    if (h.doc) {
+      li.appendChild(document.createTextNode(" "));
+      li.appendChild(el("code", "muted", h.doc));
+    }
+    ul.appendChild(li);
+  });
+  box.appendChild(ul);
+  root.appendChild(box);
+}
+
+var FEATURE_NAMES = {
+  history: "report history", troubleshoot: "probe/traceroute/whois tools", config_editor: "config editor",
+  dashboards: "custom dashboards", inbound: "inbound optimization", mitigation: "threat mitigation",
+  anomaly: "anomaly detection", federation: "multi-POP", ha: "high availability"
+};
+
+function renderFeatures(o) {
+  var on = [], off = [];
+  (o.features || []).forEach(function (f) {
+    (f.on ? on : off).push(FEATURE_NAMES[f.name] || f.name);
+    if (f.name === "federation") document.getElementById("federation-section").hidden = !f.on;
+    if (f.name === "mitigation") document.getElementById("mitigation-section").hidden = !f.on;
+  });
+  var node = document.getElementById("features");
+  node.textContent = (on.length ? "On: " + on.join(", ") + ". " : "") + (off.length ? "Off: " + off.join(", ") + "." : "");
+}
+
+function renderOverview(o) {
+  renderBanner(o.mode);
+  renderTiles(o);
+  renderSetup(o);
+  renderFeatures(o);
+}
+
+function renderConn(err) {
+  var node = document.getElementById("conn");
+  document.body.classList.toggle("stale", !!err);
+  if (!err) { node.hidden = true; clear(node); return; }
+  clear(node);
+  var msg;
+  if (err.status === 401) msg = "Sign in required. Reload the page to sign in.";
+  else if (err.status === 403) msg = "Your account may not read this page.";
+  else if (err.status) msg = "The controller answered with an error: " + err.message;
+  else msg = "Cannot reach the controller. Is the container running?";
+  node.appendChild(el("strong", "", msg));
+  node.appendChild(el("span", "", lastOK ? " Showing data from " + fmtTime(lastOK) + "." : " No data loaded yet."));
+  node.appendChild(el("span", "muted", " Retrying every " + (REFRESH_MS / 1000) + " seconds."));
+  node.hidden = false;
 }
 
 function table(headers) {
@@ -367,17 +512,23 @@ function refresh() {
     getJSON("/api/improvements"),
     readyReq,
     getJSON("/api/mitigations"),
-    getJSON("/api/federation")
+    getJSON("/api/federation"),
+    getJSON("/api/overview")
   ]).then(function (results) {
     var err = null;
+    if (results[6].status === "fulfilled") {
+      lastOverview = results[6].value;
+      renderOverview(lastOverview);
+    } else err = results[6].reason;
     if (results[0].status === "fulfilled") lastProviders = results[0].value;
-    else err = results[0].reason;
+    else if (!err) err = results[0].reason;
     if (results[1].status === "fulfilled") lastPrefixes = results[1].value;
     else if (!err) err = results[1].reason;
     if (results[2].status === "fulfilled") lastImprovements = results[2].value;
     else if (!err) err = results[2].reason;
     if (results[3].status === "fulfilled") lastReady = results[3].value;
     else if (!err) err = results[3].reason;
+    if (!err) lastOK = new Date().toISOString();
     if (lastProviders) renderProviders(lastProviders);
     if (lastPrefixes) renderPrefixes(lastPrefixes);
     if (lastImprovements) renderImprovements(lastImprovements);
@@ -387,6 +538,7 @@ function refresh() {
     // The central view is optional too.
     if (results[5].status === "fulfilled") renderFederation(results[5].value);
     renderStatus(err);
+    renderConn(err);
   }).then(function () {
     refreshing = false;
   }, function () {
@@ -538,5 +690,8 @@ function initTools() {
 initReports();
 initTools();
 document.getElementById("refresh").addEventListener("click", refresh);
+function rerenderPrefixes() { if (lastPrefixes) renderPrefixes(lastPrefixes); }
+document.getElementById("prefix-filter").addEventListener("input", rerenderPrefixes);
+document.getElementById("prefix-changes").addEventListener("change", rerenderPrefixes);
 refresh();
 setInterval(refresh, REFRESH_MS);

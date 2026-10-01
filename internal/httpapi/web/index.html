@@ -12,32 +12,45 @@
 <header class="top">
   <div>
     <h1>Packeteer</h1>
-    <p class="tag">Read-only. Refreshes every 5 seconds.</p>
+    <p class="tag">Path performance per provider. Refreshes every 5 seconds.</p>
   </div>
   <nav class="nav"><a href="/dashboards.html">Custom dashboards</a> <a href="/settings.html">Settings</a></nav>
   <div id="status" class="status">Loading</div>
   <button type="button" id="refresh">Refresh</button>
 </header>
+<div id="conn" class="conn" role="alert" hidden></div>
+<div id="banner" class="banner" hidden></div>
 <main>
+  <section id="overview-section">
+    <h2>Overview</h2>
+    <div id="tiles" class="tiles"><p class="empty">Loading…</p></div>
+    <div id="setup"></div>
+    <p id="features" class="tag"></p>
+  </section>
   <section>
     <h2>Providers</h2>
-    <div id="providers"></div>
+    <div id="providers"><p class="empty">Loading…</p></div>
   </section>
   <section>
     <h2>Prefixes</h2>
     <p class="tag">Latency, loss, and jitter per provider. Current exit and recommended exit come from the latest decision.</p>
-    <div id="prefixes"></div>
+    <div class="controls">
+      <label>Filter <input id="prefix-filter" type="search" size="24" placeholder="prefix or provider"></label>
+      <label><input id="prefix-changes" type="checkbox"> Only where the recommended exit differs</label>
+    </div>
+    <div id="prefixes"><p class="empty">Loading…</p></div>
   </section>
   <section>
-    <h2>Active improvements</h2>
-    <div id="improvements"></div>
+    <h2 id="improvements-title">Active improvements</h2>
+    <p id="improvements-tag" class="tag"></p>
+    <div id="improvements"><p class="empty">Loading…</p></div>
   </section>
-  <section>
+  <section id="federation-section" hidden>
     <h2>POPs</h2>
     <p class="tag">Central view of every federated instance (multi-POP). Peer data is used for decisions only while fresh. Nothing here announces.</p>
     <div id="federation"></div>
   </section>
-  <section>
+  <section id="mitigation-section" hidden>
     <h2>Threat mitigation</h2>
     <p class="tag">Read-only monitor of RTBH, redirect, and FlowSpec rules and their recent changes. Rules are added and removed through <code>/api/mitigations</code> with basic auth. The mitigations report has the stored history.</p>
     <div id="mitigation"></div>
@@ -78,6 +91,7 @@
   </section>
 </main>
 <footer>
+  <a href="/api/overview">overview</a>
   <a href="/metrics">metrics</a>
   <a href="/api/providers">providers</a>
   <a href="/api/probes">probes</a>

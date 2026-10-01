@@ -552,6 +552,11 @@ func Parse(data []byte) (*Config, error) {
 
 func (c *Config) applyDefaults() {
 	c.defaultSubscriptions()
+	// A file without mode observes (#49): the safe default. Inject is
+	// never a default; it needs an explicit mode: inject and its checks.
+	if strings.TrimSpace(c.Mode) == "" {
+		c.Mode = ModeObserve
+	}
 	if c.MaxImprovements == nil {
 		n := DefaultMaxImprovements
 		c.MaxImprovements = &n

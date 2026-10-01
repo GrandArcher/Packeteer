@@ -167,7 +167,7 @@ A `udp` prober is an optional fallback after ICMP and TCP. It counts a reply fro
 1. Mount the minimum config, or `config.example.yaml`, with `mode: observe`.
 2. `docker run ... -check` (or `go run ./cmd/controller -check -config config.yaml` from a checkout).
 3. Start the container.
-4. Open the dashboard at `http://127.0.0.1:8080/` when `http.listen` is the default. Logs show one line per probe (`loss_pct`, `rtt_avg`, `jitter`) and, once a session is up, `bgp session` state and a periodic `rib ready=true`.
+4. Open the dashboard at `http://127.0.0.1:8080/` when `http.listen` is the default. Until the instance is fully set up it shows a setup checklist: what to add to the mounted file next (sources, `bgp.neighbors`, storage) and what looks broken (a provider whose probes all fail, no iBGP session). Logs show one line per probe (`loss_pct`, `rtt_avg`, `jitter`) and, once a session is up, `bgp session` state and a periodic `rib ready=true`.
 
 ```sh
 curl -fsS http://127.0.0.1:8080/healthz
@@ -253,7 +253,8 @@ The server is read-only (GET and HEAD), except on-demand maintenance windows (`P
 
 | Path | Body |
 |---|---|
-| `/` | Provider health, per-prefix loss / RTT / jitter, current vs recommended exit, active improvements, and reports (loaded on demand, with CSV links). |
+| `/` | A mode banner and overview tiles, a setup checklist until the instance is fully set up, provider health, per-prefix loss / RTT / jitter (with a filter), current vs recommended exit, improvements, and reports (loaded on demand, with CSV links). When the controller cannot be reached, the page says so and keeps the last data, marked stale. |
+| `/api/overview` | The dashboard's summary: mode, readiness, counts, per-provider probe results, optional features on or off, and the setup checklist (`setup`: `id`, `level` `todo`/`warn`/`info`, `title`, `detail`, `doc`). |
 | `/healthz` | Liveness. JSON `status` is `ok`. |
 | `/readyz` | Readiness. 503 until startup finishes, and until an iBGP session is up when neighbors are configured. |
 | `/metrics` | Prometheus text. |

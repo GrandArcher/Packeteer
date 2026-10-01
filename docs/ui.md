@@ -1,9 +1,10 @@
-# Config editor, wizard, dashboards, report subscriptions, and improvement weights
+# Dashboard, config editor, wizard, dashboards, report subscriptions, and improvement weights
 
 The remaining IRP GUI conveniences (#34). All of them work in the stock image with a mounted config file. None of them announces a route, and the default mode stays `observe`. Every key is in [CONFIG.md](CONFIG.md).
 
 | Feature | Where | Who | Config |
 |---|---|---|---|
+| Dashboard overview and setup checklist (#49) | `/`, `/api/overview` | viewer | none |
 | Config editor | `/settings.html`, `/api/config` | admin | `http.config_editor: true` + auth or basic auth |
 | First-run wizard | `/settings.html`, `POST /api/config/wizard` | admin | `http.config_editor: true` + auth or basic auth |
 | Custom dashboards | `/dashboards.html`, `/api/dashboards` | every signed-in user, own dashboards | `storage: {type: sqlite}` + auth or basic auth |
@@ -11,6 +12,27 @@ The remaining IRP GUI conveniences (#34). All of them work in the stock image wi
 | Improvement weights | `scorer.config.improvement_weights`, `/api/decisions` | - | `weighted`, `commit`, or `cost` scorer |
 
 With `auth` on, roles are checked per route like every other endpoint ([auth.md](auth.md)); with basic auth, the one account may do everything; with neither, the editor, the wizard, dashboards, and send-now are refused.
+
+## Dashboard and first run
+
+The dashboard (`/`) is built for a first run from the stock image with nothing but a mounted config file (#49):
+
+```sh
+docker run --network host --cap-add NET_RAW --cap-add NET_ADMIN \
+  -v "$PWD/config.yaml:/etc/packeteer/config.yaml" ghcr.io/grandarcher/packeteer
+```
+
+- **Mode banner.** `observe` and `suggest` say that nothing is announced; `inject` says improvements for allowlisted prefixes are announced. A file without `mode` observes.
+- **Overview tiles.** Mode, status (ready, not ready, starting), providers up, prefixes measured (and which sources list them), recommended improvements (outside inject) or active improvements (inject) against `max_improvements`, and BGP sessions with the number of probed prefixes in the learned RIB.
+- **Setup checklist.** Shown until there is nothing left to do, most urgent first. `todo`: no `sources` (nothing to probe). `warn`: every probe through a provider fails (with the last error), every provider is down, `bgp.neighbors` is set but no session is up, or no probed prefix is in the learned RIB. `info`: still starting, waiting for the first round, no `bgp.neighbors` (the current exit is unknown), report history off. Each line names the doc to read. The checklist only reads state; fix the mounted file and restart.
+- **Providers** show `no data yet` until something is measured through them, `no answer` when every probe through them fails, and per-provider probe counts.
+- **Prefixes** have a filter (prefix or provider) and a switch for prefixes whose recommended exit differs from the learned one.
+- **Optional sections** (POPs, threat mitigation) are hidden when not configured; the overview lists which optional features are on and off.
+- **Errors.** Every section shows `Loading…` until its first answer and a plain empty state after it. When the controller cannot be reached or answers with an error, a banner says so (sign-in required, not allowed, or unreachable), the last data stays on screen marked stale, and the page keeps retrying every 5 seconds.
+
+`GET /api/overview` (viewer) is the same summary as JSON: `mode`, `ready`, `started`, `sources`, `providers` (`name`, `up`, `ok`, `failed`, `last_error`), `counts`, `bgp`, `features` (`name`, `on`), and `setup` (`id`, `level`, `title`, `detail`, `doc`). It is read-only and announces nothing.
+
+CI runs a UI smoke test in the docker job (`lab/ui-smoke.sh`): headless Chrome loads `/`, `/settings.html`, and `/dashboards.html` from the stock image, first with `config.example.yaml` mounted unchanged (the banner says observe, the checklist asks for sources, providers show `no data yet`), then with a minimal file that has no `mode` key and one static target (observe, the prefix measured with an RTT, no improvement).
 
 ## Config editor
 
@@ -62,7 +84,7 @@ The file is read-only in many deployments (`:ro`). Then saving fails with a clea
 - the `weighted` scorer, a `static` source, `max_improvements: 50`, `hold_time: 15m`, the default thresholds, and `http.listen: 127.0.0.1:8080`;
 - `packeteer_community` `<asn>:666` when the ASN fits in 16 bits.
 
-It is checked with `config.Parse` before it is returned. The wizard is part of the editor: it is off (`404`) unless `http.config_editor` is on. It writes nothing: the result opens in the editor for review, and you save it like any edit. Turning inject on afterwards is a separate edit; follow the [inject checklist](CONFIG.md#inject-checklist).
+The page checks the form before sending it (ASN, an IPv4 router ID, three fields per provider line, a prefix and a host per target line) and lists each problem; the server checks it again. It is checked with `config.Parse` before it is returned, and the page validates the result in the editor at once. The wizard is part of the editor: it is off (`404`) unless `http.config_editor` is on. It writes nothing: the result opens in the editor for review, and you save it like any edit. Turning inject on afterwards is a separate edit; follow the [inject checklist](CONFIG.md#inject-checklist).
 
 ## Custom dashboards
 
@@ -125,4 +147,4 @@ Lab proof (`lab/e2e-weights.sh`, CI job `e2e`): an FRR edge advertises 198.51.10
 
 ## Rollback
 
-Remove `improvement_weights`, `http.config_editor`, and `report_subscriptions` and restart. The file config works exactly as before; the editor only ever wrote a plain YAML file. Stored dashboards stay in the database and are ignored by an older build.
+Remove `improvement_weights`, `http.config_editor`, and `report_subscriptions` and restart. The dashboard polish (#49) needs no rollback: it reads the same state, and `/api/overview` is read-only. The file config works exactly as before; the editor only ever wrote a plain YAML file. Stored dashboards stay in the database and are ignored by an older build.

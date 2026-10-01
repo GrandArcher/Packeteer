@@ -1,6 +1,6 @@
 # Example only. Keep mode: observe in this repository.
 # Every key, default, and bound: docs/CONFIG.md
-mode: observe
+mode: observe               # also the default when mode is left out; inject is never a default
 
 asn: 64512
 router_id: 192.0.2.10

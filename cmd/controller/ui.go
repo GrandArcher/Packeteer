@@ -12,6 +12,7 @@ import (
 
 	"github.com/GrandArcher/Packeteer/internal/config"
 	"github.com/GrandArcher/Packeteer/internal/configedit"
+	"github.com/GrandArcher/Packeteer/internal/httpapi"
 	"github.com/GrandArcher/Packeteer/internal/pluginhost"
 	execplugin "github.com/GrandArcher/Packeteer/internal/plugins/exec"
 	"github.com/GrandArcher/Packeteer/internal/subscribe"
@@ -168,4 +169,17 @@ func execSpecs(cfg *config.Config) []execSpec {
 	}
 	walk(reflect.ValueOf(cfg), "")
 	return out
+}
+
+// setupInfo is what the dashboard's first-run checklist reads from the
+// loaded config (#49): the target source types and the cap.
+func setupInfo(cfg *config.Config, plugins *pluginhost.Set) httpapi.Setup {
+	st := httpapi.Setup{}
+	if cfg.MaxImprovements != nil {
+		st.MaxImprovements = *cfg.MaxImprovements
+	}
+	for _, s := range plugins.Sources {
+		st.Sources = append(st.Sources, s.Type)
+	}
+	return st
 }
