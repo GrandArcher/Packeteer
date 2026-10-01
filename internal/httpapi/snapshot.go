@@ -33,6 +33,7 @@ type Input struct {
 
 	BGPConfigured bool
 	RIBReady      bool
+	RIBPrefixes   int // prefixes in the learned view
 	Peers         []rib.PeerState
 	Routes        map[netip.Prefix]rib.Route
 
@@ -52,6 +53,7 @@ type Snapshot struct {
 	DecidedAt     time.Time
 	BGPConfigured bool
 	RIBReady      bool
+	RIBPrefixes   int
 
 	Providers    []Provider
 	Probes       []Probe
@@ -218,6 +220,7 @@ func Assemble(in Input) Snapshot {
 		DecidedAt:     in.DecidedAt,
 		BGPConfigured: in.BGPConfigured,
 		RIBReady:      in.RIBReady,
+		RIBPrefixes:   in.RIBPrefixes,
 		Providers:     assembleProviders(in),
 		Probes:        assembleProbes(in.Results),
 		Prefixes:      assemblePrefixes(in),
