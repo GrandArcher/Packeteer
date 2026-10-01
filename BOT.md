@@ -65,7 +65,7 @@ Gate: stock image observe; lab inject of allowlisted documentation prefix; kill 
 
 **v0.4** after `v0.3.0`. #30–#34 (multi-POP, HA, RBAC, anomaly, remaining UI).
 
-**v0.5** after `v0.4.0`. Hardening and polish: #49–#54 (UI/UX, docs and install guides, load/soak, MikroTik CHR in QEMU CI, router interop matrix, field-feedback fixes from operators' observe-mode runs). Tag `v0.5.0` when those are done and CI still proves announce/withdraw/crash-withdraw. Polish never relaxes safety: default stays observe, lab only.
+**v0.5** after `v0.4.0`. Hardening and polish: #49–#53 (UI/UX, docs and install guides, load/soak, MikroTik CHR in QEMU CI, router interop matrix). Tag `v0.5.0` when those are done and CI still proves announce/withdraw/crash-withdraw. #54 stays an open tracker for later operator reports and does not gate the tag. Polish never relaxes safety: default stays observe, lab only.
 
 **After v0.5 / leftover IRP rows:** keep shipping from GitHub: bugs first, then planned parity rows, then accepted community designs that fit plugins + AGENTS.md.
 
