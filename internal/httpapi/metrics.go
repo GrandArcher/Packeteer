@@ -147,6 +147,8 @@ func Metrics(s Snapshot) []byte {
 	writeGauge(&b, "packeteer_telemetry_commit_bps", "Configured commit rate, bits per second.", telCommit...)
 	writeGauge(&b, "packeteer_telemetry_samples", "Rate samples stored in the open billing period.", telSamples...)
 	if s.BGPConfigured {
+		writeGauge(&b, "packeteer_rib_prefixes", "Prefixes in the learned RIB view.",
+			sample{value: float64(s.RIBPrefixes)})
 		var sessionUp, sessionState []sample
 		for _, p := range s.Peers {
 			sessionUp = append(sessionUp, sample{labels: []lbl{{"peer", p.Address}}, value: boolFloat(p.Established)})

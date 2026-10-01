@@ -100,3 +100,25 @@ func TestFlowCountersCap(t *testing.T) {
 		t.Fatalf("after idle = %+v", s)
 	}
 }
+
+// At the cap, idle keys are pruned at most once a minute, not on every new
+// key (#51).
+func TestFlowCountersPruneRateLimited(t *testing.T) {
+	c := newCounters(1)
+	t0 := time.Unix(1_700_000_000, 0)
+	a, b := netip.MustParsePrefix("198.51.100.0/24"), netip.MustParsePrefix("203.0.113.0/24")
+	has := func(p netip.Prefix) bool { return c.keys[counterKey{p, 17}] != nil }
+	c.add(t0, a, 17, 10)
+	c.add(t0.Add(59*time.Minute+30*time.Second), b, 17, 10) // prunes; a is not idle yet
+	if has(b) {
+		t.Fatal("counted past the cap")
+	}
+	c.add(t0.Add(60*time.Minute+10*time.Second), b, 17, 10) // a is idle, but pruned 40s ago
+	if has(b) || !has(a) {
+		t.Fatal("pruned again within a minute")
+	}
+	c.add(t0.Add(60*time.Minute+40*time.Second), b, 17, 10)
+	if !has(b) || has(a) {
+		t.Fatal("not pruned after a minute")
+	}
+}

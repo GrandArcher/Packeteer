@@ -279,7 +279,7 @@ Basic auth is off unless both `PACKETEER_HTTP_USER` and `PACKETEER_HTTP_PASSWORD
 
 For more than one person, turn on `auth` (#32): users with roles (`viewer`, `operator`, `admin`) kept in the storage plugin, API tokens for scripts and Prometheus, an audit log of every change (stored, on `/api/audit`, and sent to the notifiers as `audit.recorded`), optional OIDC single sign-on, and `http.allow_from` to restrict client addresses. The first admin comes from `PACKETEER_ADMIN_PASSWORD`. Guide: [docs/auth.md](docs/auth.md). Rollback: `auth.enabled: false` and restart.
 
-Prometheus metrics are `packeteer_up`, `packeteer_ready`, `packeteer_build_info`, `packeteer_provider_up`, `packeteer_probe_success`, `packeteer_probe_rtt_seconds`, `packeteer_probe_rtt_min_seconds`, `packeteer_probe_rtt_max_seconds`, `packeteer_probe_loss_ratio`, `packeteer_probe_jitter_seconds`, `packeteer_decisions`, `packeteer_decision`, `packeteer_improvements_active`, `packeteer_improvement`, `packeteer_estimated_savings`, `packeteer_bgp_configured`, `packeteer_bgp_ready`, `packeteer_bgp_session_up`, `packeteer_bgp_session`, and, when telemetry is configured, `packeteer_telemetry_up`, `packeteer_telemetry_in_bps`, `packeteer_telemetry_out_bps`, `packeteer_telemetry_in_95th_bps`, `packeteer_telemetry_out_95th_bps`, `packeteer_telemetry_usage_bps`, `packeteer_telemetry_commit_bps`, and `packeteer_telemetry_samples`. Scrape `http://127.0.0.1:8080/metrics` on the host.
+Prometheus metrics are `packeteer_up`, `packeteer_ready`, `packeteer_build_info`, `packeteer_provider_up`, `packeteer_probe_success`, `packeteer_probe_rtt_seconds`, `packeteer_probe_rtt_min_seconds`, `packeteer_probe_rtt_max_seconds`, `packeteer_probe_loss_ratio`, `packeteer_probe_jitter_seconds`, `packeteer_decisions`, `packeteer_decision`, `packeteer_improvements_active`, `packeteer_improvement`, `packeteer_estimated_savings`, `packeteer_bgp_configured`, `packeteer_bgp_ready`, `packeteer_rib_prefixes`, `packeteer_bgp_session_up`, `packeteer_bgp_session`, and, when telemetry is configured, `packeteer_telemetry_up`, `packeteer_telemetry_in_bps`, `packeteer_telemetry_out_bps`, `packeteer_telemetry_in_95th_bps`, `packeteer_telemetry_out_95th_bps`, `packeteer_telemetry_usage_bps`, `packeteer_telemetry_commit_bps`, and `packeteer_telemetry_samples`. Scrape `http://127.0.0.1:8080/metrics` on the host.
 
 `PACKETEER_LOG_LEVEL=debug` adds detail. `log.format: json` or `PACKETEER_LOG_FORMAT=json` switches the log to JSON.
 
@@ -332,7 +332,7 @@ go build -o packeteer ./cmd/controller
 docker build -t packeteer .
 ```
 
-`go test ./...`, `go vet ./...`, and an empty `gofmt -l .` are the local bar. BGP behavior is tested against the FRR lab in CI (`bash lab/e2e.sh`), not against a live edge. See [lab/README.md](lab/README.md).
+`go test ./...`, `go vet ./...`, and an empty `gofmt -l .` are the local bar. BGP behavior is tested against the FRR lab in CI (`bash lab/e2e.sh`), not against a live edge. See [lab/README.md](lab/README.md). Memory, CPU, and flow-ingest budgets under a full-table-sized synthetic RIB are in [docs/performance.md](docs/performance.md); CI fails when one regresses.
 
 ## Layout
 
@@ -345,7 +345,7 @@ internal/announce/  # inject-mode gate in front of the announcer plugin
 internal/rib/       # learn-only iBGP view (embedded GoBGP)
 internal/plugins/   # probers, target sources, scorer, announcer, notifier, telemetry
 docs/CONFIG.md      # config reference
-lab/                # FRR e2e lab (CI job e2e)
+lab/                # FRR e2e lab (CI job e2e); lab/soak load and soak harness (CI job load)
 ```
 
 ## Support the project

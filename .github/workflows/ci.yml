@@ -513,3 +513,30 @@ jobs:
           PACKETEER_DOCS_ON_FAIL: docker compose -f lab/docker-compose-walkthrough.yml logs --no-color; docker exec pkw-edge vtysh -c 'show running-config' -c 'show bgp summary' -c 'show bgp ipv4 unicast'
           PACKETEER_DOCS_CLEANUP: docker compose -f lab/docker-compose-walkthrough.yml down -v --remove-orphans; rm -rf lab/walkthrough
         run: bash lab/e2e-docs.sh docs/walkthrough.md
+
+  load:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: build image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          tags: packeteer:ci
+          build-args: VERSION=ci-${{ github.sha }}
+      - name: load test (#51; stock image, mounted config, observe, full-table synthetic RIB, sustained IPFIX, churn, budgets in lab/soak/budgets.yaml)
+        env:
+          SOAK_OUT: load-result.json
+        run: bash lab/soak.sh packeteer:ci pr
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: load-result
+          path: load-result.json
+          if-no-files-found: ignore

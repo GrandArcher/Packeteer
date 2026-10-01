@@ -30,6 +30,9 @@ type counters struct {
 	mu   sync.Mutex
 	max  int
 	keys map[counterKey]*counter
+	// pruned is the last prune for a new key at the cap. At most one a
+	// minute, so a full map is not rescanned on every new key (#51).
+	pruned time.Time
 }
 
 func newCounters(max int) *counters {
@@ -46,7 +49,10 @@ func (c *counters) add(at time.Time, p netip.Prefix, proto uint8, n uint64) {
 	e := c.keys[k]
 	if e == nil {
 		if len(c.keys) >= c.max {
-			c.pruneLocked(at)
+			if d := at.Sub(c.pruned); d >= time.Minute || d < 0 {
+				c.pruneLocked(at)
+				c.pruned = at
+			}
 			if len(c.keys) >= c.max {
 				return
 			}

@@ -602,3 +602,13 @@ func TestHAView(t *testing.T) {
 		}
 	}
 }
+
+func TestMetricsRIBPrefixes(t *testing.T) {
+	text := string(Metrics(Assemble(Input{Mode: "observe", BGPConfigured: true, RIBReady: true, RIBPrefixes: 1000000})))
+	if !strings.Contains(text, "packeteer_rib_prefixes 1e+06") && !strings.Contains(text, "packeteer_rib_prefixes 1000000") {
+		t.Fatalf("metrics:\n%s", text)
+	}
+	if strings.Contains(string(Metrics(Snapshot{Mode: "observe"})), "packeteer_rib_prefixes") {
+		t.Fatal("rib series without bgp")
+	}
+}

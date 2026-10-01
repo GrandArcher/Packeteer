@@ -1,0 +1,49 @@
+name: soak
+
+# Long-running memory/CPU soak (#51). Lab only: the stock image with a
+# mounted observe config against lab/soak's simulated edge router and
+# synthetic IPFIX. GitHub-hosted jobs stop at 6 hours, so the scheduled
+# soak phase is 5h30m; a longer run (24h) needs a self-hosted runner and
+# the duration input.
+on:
+  schedule:
+    - cron: "17 3 * * 0" # weekly, Sunday 03:17 UTC
+  workflow_dispatch:
+    inputs:
+      duration:
+        description: Soak phase (Go duration). Hosted runners allow about 5h30m.
+        default: 5h30m
+      runner:
+        description: Runner label (self-hosted for runs past 5h30m)
+        default: ubuntu-latest
+
+permissions:
+  contents: read
+
+jobs:
+  soak:
+    runs-on: ${{ inputs.runner || 'ubuntu-latest' }}
+    timeout-minutes: 1500
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: build image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          tags: packeteer:soak
+          build-args: VERSION=soak-${{ github.sha }}
+      - name: soak (budgets in lab/soak/budgets.yaml, profile soak)
+        env:
+          SOAK_OUT: soak-result.json
+        run: bash lab/soak.sh packeteer:soak soak "${{ inputs.duration || '5h30m' }}"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: soak-result
+          path: soak-result.json
+          if-no-files-found: ignore

@@ -708,3 +708,48 @@ func TestListenErrorIsNotClosed(t *testing.T) {
 		t.Fatal("unrelated error looked closed")
 	}
 }
+
+// A full bucket frees a batch of its smallest prefixes at once, keeps the
+// heavy ones, never holds more than the cap, and does not rescan every
+// cell for each new prefix (#51): a full-table flow mix makes nearly every
+// record a new prefix.
+func TestPrefixCapBatchEviction(t *testing.T) {
+	s := newSlide(time.Minute, 64)
+	now := time.Unix(1_700_000_000, 0)
+	heavy := netip.MustParsePrefix("198.51.100.0/24")
+	s.add(now, heavy, netip.Addr{}, 1<<40, trafficUnknown)
+	for i := range 200 {
+		p := netip.PrefixFrom(netip.AddrFrom4([4]byte{203, 0, 113, byte(i)}), 32)
+		s.add(now, p, netip.Addr{}, uint64(100+i), trafficUnknown)
+		if n := len(s.slots[now.UnixNano()/int64(s.bucket)].cells); n > 64 {
+			t.Fatalf("bucket holds %d cells, cap 64", n)
+		}
+	}
+	top := s.top(now, 1, 0)
+	if len(top) != 1 || top[0].prefix != heavy {
+		t.Fatalf("heavy prefix evicted: %+v", top)
+	}
+	// Fill the room the last batch made; then a prefix smaller than
+	// everything held is refused.
+	slot := s.slots[now.UnixNano()/int64(s.bucket)]
+	for i := 0; len(slot.cells) < 64; i++ {
+		s.add(now, netip.PrefixFrom(netip.AddrFrom4([4]byte{198, 51, 100, byte(i)}), 32), netip.Addr{}, 1000, trafficUnknown)
+	}
+	small := netip.MustParsePrefix("192.0.2.0/24")
+	s.add(now, small, netip.Addr{}, 1, trafficUnknown)
+	for _, r := range s.top(now, 100, 0) {
+		if r.prefix == small {
+			t.Fatal("smaller prefix displaced a larger one")
+		}
+	}
+
+	big := newSlide(time.Minute, 20000)
+	start := time.Now()
+	for i := range 200000 {
+		a := netip.AddrFrom16([16]byte{0x20, 0x01, 0x0d, 0xb8, byte(i >> 16), byte(i >> 8), byte(i)})
+		big.add(now, netip.PrefixFrom(a, 64), netip.Addr{}, uint64(1000+i%5000), trafficUnknown)
+	}
+	if d := time.Since(start); d > 10*time.Second {
+		t.Fatalf("200000 new prefixes into a full bucket took %s", d)
+	}
+}

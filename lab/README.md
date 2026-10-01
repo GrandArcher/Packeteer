@@ -55,3 +55,5 @@ bash lab/e2e-multipop.sh
 bash lab/e2e-ha.sh
 PACKETEER_DOCS_DIR=. bash lab/e2e-docs.sh docs/walkthrough.md
 ```
+
+`lab/soak.sh` is the load and soak test (#51), with no FRR: `lab/soak` plays the edge with a minimal BGP speaker that sends a full-table-sized synthetic RIB (1,250,000 documentation prefixes), exports IPFIX at 20,000 records a second, churns 6,000 prefixes a minute, and reads the stock image's process and ops API while Packeteer runs in observe with a mounted config. It fails when a figure in `lab/soak/budgets.yaml` is over budget, when the session or readiness drops, when observe sends the router a route, or when SIGTERM does not stop Packeteer cleanly. The `load` CI job runs the 10-minute `pr` profile; `.github/workflows/soak.yml` runs the 5h30m `soak` profile weekly. Budgets and measured values: [docs/performance.md](../docs/performance.md).

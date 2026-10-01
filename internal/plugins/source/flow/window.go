@@ -2,6 +2,7 @@ package flow
 
 import (
 	"net/netip"
+	"slices"
 	"sort"
 	"sync"
 	"time"
@@ -104,17 +105,8 @@ func (b *bucket) add(p netip.Prefix, host netip.Addr, n uint64, t traffic, max i
 		}
 		return
 	}
-	if len(b.cells) >= max {
-		if !b.minOK {
-			b.recomputeMin()
-		}
-		if b.minOK && n <= b.minB {
-			return
-		}
-		if b.minOK {
-			delete(b.cells, b.minP)
-			b.minOK = false
-		}
+	if len(b.cells) >= max && !b.evict(max/16+1, n) {
+		return
 	}
 	c := &cell{bytes: n}
 	c.note(n, t)
@@ -125,16 +117,46 @@ func (b *bucket) add(p netip.Prefix, host netip.Addr, n uint64, t traffic, max i
 	b.cells[p] = c
 }
 
-func (b *bucket) recomputeMin() {
-	first := true
+// evict makes room in a full bucket for a prefix with n bytes. It drops up
+// to k of the smallest cells, but only cells smaller than n, and reports
+// whether any room was made. Freeing a batch at once keeps a full bucket
+// from rescanning every cell on each new prefix: with a full-table flow
+// mix nearly every record is a new prefix (#51).
+func (b *bucket) evict(k int, n uint64) bool {
+	if b.minOK && n <= b.minB {
+		return false
+	}
+	vals := make([]uint64, 0, len(b.cells))
+	for _, c := range b.cells {
+		vals = append(vals, c.bytes)
+	}
+	slices.Sort(vals)
+	// Only cells smaller than n may go, at most k of them.
+	k = min(k, sort.Search(len(vals), func(i int) bool { return vals[i] >= n }))
+	if k == 0 {
+		// Nothing smaller than n: remember the minimum so the next
+		// small prefix is refused without a scan.
+		for p, c := range b.cells {
+			if c.bytes == vals[0] {
+				b.minP, b.minB, b.minOK = p, c.bytes, true
+				break
+			}
+		}
+		return false
+	}
+	thr := vals[k-1]
+	ties := k - sort.Search(k, func(i int) bool { return vals[i] >= thr })
 	for p, c := range b.cells {
-		if first || c.bytes < b.minB || (c.bytes == b.minB && p.String() < b.minP.String()) {
-			b.minP = p
-			b.minB = c.bytes
-			first = false
+		switch {
+		case c.bytes < thr:
+			delete(b.cells, p)
+		case c.bytes == thr && ties > 0:
+			delete(b.cells, p)
+			ties--
 		}
 	}
-	b.minOK = !first
+	b.minOK = false
+	return true
 }
 
 func (s *slide) prune(now time.Time) {

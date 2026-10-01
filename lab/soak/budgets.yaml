@@ -1,0 +1,71 @@
+# Load and soak budgets (#51). lab/soak reads a profile, generates the
+# workload, and fails when a measured figure is over its budget. A budget of
+# 0 (or left out) is reported but not checked. docs/performance.md explains
+# each figure and lists the last measured values.
+#
+# Lab only: documentation prefixes (192.0.2.0/24, 198.51.100.0/24,
+# 203.0.113.0/24, 2001:db8::/32) and documentation ASNs, observe mode.
+#
+# Budgets are set for a GitHub-hosted ubuntu-latest runner (4 vCPU, 16 GB)
+# with headroom over what that runner measures. Raise one only with the
+# reason in the PR; a regression that needs a higher budget is a finding.
+profiles:
+  # Quick local try (a minute, a small table). Report only.
+  smoke:
+    prefixes: 20000
+    duration: 1m
+    warmup: 20s
+    sample: 2s
+    flow_rate: 5000
+    flow_hot: 2000
+    flow_top_n: 500
+    static_targets: 200
+    churn: 600
+    budgets: {}
+
+  # Every pull request and push to main (CI job `load`).
+  pr:
+    prefixes: 1250000 # about a 2026 IPv4 + IPv6 full table
+    duration: 10m
+    warmup: 3m
+    sample: 5s
+    flow_rate: 20000 # IPFIX records per second
+    flow_hot: 5000
+    flow_top_n: 2000
+    static_targets: 1000
+    churn: 6000 # prefixes withdrawn and re-announced per minute
+    budgets:
+      learn_seconds: 90
+      rss_peak_mb: 6144
+      rss_growth_mb: 256
+      cpu_avg_cores: 2.0
+      threads: 64
+      udp_drop_pct: 5
+      api_p99_ms: 1500
+      reconverge_seconds: 30
+      shutdown_seconds: 20
+      min_measured: 2500
+
+  # Weekly scheduled workflow (.github/workflows/soak.yml): the same load
+  # for 5h30m, the most a hosted job allows. Growth is what a leak shows.
+  soak:
+    prefixes: 1250000
+    duration: 5h30m
+    warmup: 15m
+    sample: 30s
+    flow_rate: 20000
+    flow_hot: 5000
+    flow_top_n: 2000
+    static_targets: 1000
+    churn: 6000
+    budgets:
+      learn_seconds: 90
+      rss_peak_mb: 6656
+      rss_growth_mb: 512
+      cpu_avg_cores: 2.0
+      threads: 64
+      udp_drop_pct: 5
+      api_p99_ms: 2000
+      reconverge_seconds: 30
+      shutdown_seconds: 20
+      min_measured: 2500
