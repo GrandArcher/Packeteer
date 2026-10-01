@@ -24,7 +24,7 @@ docker run --rm -v "$PWD/config.yaml:/etc/packeteer/config.yaml:ro" "$IMAGE" -ch
 <!-- ci-expect: announce: disabled -->
 <!-- ci-expect: check: ok -->
 
-`-check` loads the file, validates every plugin block, prints a summary, and exits. It ends with `check: ok (no probes sent, no BGP sessions opened)`. `:edge` is the build from `main`; to pin a release use `IMAGE=ghcr.io/grandarcher/packeteer:0.4.0` (see the tags in the [README](../README.md#install)).
+`-check` loads the file, validates every plugin block, prints a summary, and exits. It ends with `check: ok (no probes sent, no BGP sessions opened)`. `:edge` is the build from `main`; to pin a release use `IMAGE=ghcr.io/grandarcher/packeteer:0.5.0` (see the tags in the [README](../README.md#install)).
 
 ## 2. A first run on loopback
 
