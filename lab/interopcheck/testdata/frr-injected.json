@@ -1,0 +1,25 @@
+{
+  "prefix":"198.51.100.0/24",
+  "advertisedTo":{"192.0.2.10":{"hostname":"packeteer"}},
+  "paths":[
+    {
+      "aspath":{"string":"Local","segments":[],"length":0},
+      "origin":"IGP",
+      "locPrf":250,
+      "valid":true,
+      "version":4,
+      "bestpath":{"overall":true,"selectionReason":"Local Pref"},
+      "community":{"string":"64512:666 no-export","list":["64512:666","noExport"]},
+      "nexthops":[{"ip":"192.0.2.22","hostname":"transit-b","afi":"ipv4","metric":0,"accessible":true,"used":true}],
+      "peer":{"peerId":"192.0.2.10","routerId":"192.0.2.10","type":"internal"}
+    },
+    {
+      "aspath":{"string":"64496","segments":[{"type":"as-sequence","list":[64496]}],"length":1},
+      "origin":"IGP",
+      "valid":true,
+      "version":2,
+      "nexthops":[{"ip":"192.0.2.21","hostname":"transit-a","afi":"ipv4","metric":0,"accessible":true,"used":true}],
+      "peer":{"peerId":"192.0.2.21","routerId":"192.0.2.21","hostname":"transit-a","type":"external"}
+    }
+  ]
+}
