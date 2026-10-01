@@ -78,6 +78,9 @@ type Options struct {
 	// Subscriptions is the report subscription scheduler (#34). Nil when
 	// none are configured.
 	Subscriptions Subscriptions
+	// Setup describes the loaded config for the dashboard's first-run
+	// checklist (#49).
+	Setup Setup
 }
 
 // Server is an HTTP server. Handler serves the routes without listening,
@@ -101,6 +104,7 @@ type Server struct {
 	editor     ConfigEditor
 	dashboards plugin.DashboardStore
 	subs       Subscriptions
+	setup      Setup
 	log        *slog.Logger
 	handler    http.Handler
 	http       *http.Server
@@ -119,7 +123,7 @@ func New(opt Options) (*Server, error) {
 		opt.Logger = slog.Default()
 	}
 	s := &Server{addr: opt.Addr, user: opt.User, password: opt.Password, auth: opt.Auth, audit: opt.Audit, allowFrom: opt.AllowFrom, snap: opt.Snapshot, maint: opt.Maintenance, reports: opt.Reports, tools: opt.Tools, inbound: opt.Inbound, mitigation: opt.Mitigation, anomaly: opt.Anomaly, federation: opt.Federation, ha: opt.HA,
-		editor: opt.ConfigEditor, dashboards: opt.Dashboards, subs: opt.Subscriptions, log: opt.Logger}
+		editor: opt.ConfigEditor, dashboards: opt.Dashboards, subs: opt.Subscriptions, setup: opt.Setup, log: opt.Logger}
 	s.handler = s.routes()
 	return s, nil
 }

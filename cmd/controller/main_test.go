@@ -37,18 +37,19 @@ func TestRunExampleConfig(t *testing.T) {
 	}
 }
 
-func TestRunRefusesMissingMode(t *testing.T) {
+// A first-run file may leave mode out; it observes (#49).
+func TestRunMissingModeObserves(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "c.yaml")
 	cfg := "asn: 64512\nrouter_id: 192.0.2.10\nproviders:\n  - name: a\n    source_ip: 192.0.2.11\n    next_hop: 192.0.2.1\n"
 	if err := os.WriteFile(path, []byte(cfg), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	var out, errOut bytes.Buffer
-	if code := run(context.Background(), []string{"-config", path}, noEnv, &out, &errOut); code != 1 {
-		t.Fatalf("exit code %d, want 1", code)
+	if code := run(context.Background(), []string{"-config", path, "-check"}, noEnv, &out, &errOut); code != 0 {
+		t.Fatalf("exit code %d, stderr: %s", code, errOut.String())
 	}
-	if !strings.Contains(errOut.String(), "mode is required") {
-		t.Errorf("stderr = %q", errOut.String())
+	if !strings.Contains(out.String(), "mode: observe") || !strings.Contains(out.String(), "announce: disabled") {
+		t.Errorf("stdout = %q", out.String())
 	}
 }
 

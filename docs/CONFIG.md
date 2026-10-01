@@ -23,7 +23,7 @@ The image entrypoint is the same binary. Flags go after the image name.
 
 | Key | Default | Required | Meaning |
 |---|---|---|---|
-| `mode` | none | yes | `observe`, `suggest`, or `inject`. |
+| `mode` | `observe` | no | `observe`, `suggest`, or `inject`. A file without `mode` (or with an empty one) observes. `inject` is never a default: it needs `mode: inject` and the [inject checklist](#inject-checklist). |
 | `asn` | none | yes, non-zero | BGP ASN of this speaker. Neighbors are iBGP in this ASN. |
 | `router_id` | none | yes | IPv4 address. IPv6 is rejected. |
 | `packeteer_community` | empty | inject | RFC 1997 community `asn:value`. Each half is an integer 0–65535. Quote it in YAML (`"64512:666"`). |

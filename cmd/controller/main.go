@@ -439,6 +439,7 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 			Maintenance: maint, Reports: reports, Tools: tools, Inbound: inboundStatus, Mitigation: mitAPI, Anomaly: anomAPI,
 			Federation: fed.status, HA: haStatus,
 			ConfigEditor: editorAPI, Dashboards: dashboardStore(plugins), Subscriptions: subsAPI,
+			Setup: setupInfo(cfg, plugins),
 		})
 		if err != nil {
 			log.Error("refusing to start", "err", err)

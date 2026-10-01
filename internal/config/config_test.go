@@ -103,6 +103,27 @@ func TestParseValid(t *testing.T) {
 	}
 }
 
+// A file without mode, or with an empty one, observes (#49). Inject is
+// never implied: an inject-only block without mode: inject stays observe.
+func TestParseModeDefaultsToObserve(t *testing.T) {
+	for name, y := range map[string]string{
+		"missing":       edit(t, minimalYAML, "mode: observe\n", ""),
+		"empty":         edit(t, minimalYAML, "mode: observe", `mode: ""`),
+		"blank":         edit(t, minimalYAML, "mode: observe", `mode: "  "`),
+		"inject blocks": edit(t, minimalYAML, "mode: observe\n", "") + "local_pref: 250\nallowlist:\n  prefixes: [198.51.100.0/24]\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			cfg, err := Parse([]byte(y))
+			if err != nil {
+				t.Fatalf("Parse: %v", err)
+			}
+			if cfg.Mode != ModeObserve {
+				t.Errorf("Mode = %q, want %q", cfg.Mode, ModeObserve)
+			}
+		})
+	}
+}
+
 func TestParseInjectValid(t *testing.T) {
 	cfg, err := Parse([]byte(injectYAML))
 	if err != nil {
@@ -226,8 +247,6 @@ func TestParseErrors(t *testing.T) {
 		{"unknown field", minimalYAML + "bogus: true\n", "field bogus not found"},
 		{"unknown nested field", edit(t, validYAML, "packets: 10", "packets: 10\n  jitter: 1"), "field jitter not found"},
 		{"multiple documents", minimalYAML + "---\nmode: observe\n", "single YAML document"},
-		{"missing mode", edit(t, minimalYAML, "mode: observe\n", ""), "mode is required"},
-		{"empty mode", edit(t, minimalYAML, "mode: observe", `mode: ""`), "mode is required"},
 		{"invalid mode", edit(t, minimalYAML, "mode: observe", "mode: yolo"), `mode "yolo" is invalid`},
 		{"missing asn", edit(t, minimalYAML, "asn: 64512\n", ""), "asn is required"},
 		{"missing router_id", edit(t, minimalYAML, "router_id: 192.0.2.10\n", ""), "router_id is required"},
