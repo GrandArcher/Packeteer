@@ -1,0 +1,8 @@
+# Appended to gobgpd.toml for the BMP column of the interop matrix (#53):
+# post-policy Adj-RIB-In to Packeteer's station. Packeteer never reads
+# pre-policy. Lab only.
+[[bmp-servers]]
+  [bmp-servers.config]
+    address = "192.0.2.10"
+    port = 11019
+    route-monitoring-policy = "post-policy"

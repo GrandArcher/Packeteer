@@ -1,0 +1,81 @@
+name: interop
+
+# Router interop matrix (#53). Lab only: simulated edges in Docker (FRR,
+# BIRD 2, BIRD 3, GoBGP) and a MikroTik CHR in QEMU, documentation prefixes
+# and documentation/private ASNs, Packeteer from the repo Dockerfile with a
+# mounted config. Each cell is lab/e2e-interop.sh <router> <feature>; the
+# CHR cell is lab/e2e-chr.sh. Runs weekly, on demand, and on pull requests
+# that touch the lab, the announcer, or the BMP station.
+on:
+  schedule:
+    - cron: "41 4 * * 1" # weekly, Monday 04:41 UTC
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - .github/workflows/interop.yml
+      - lab/e2e-interop.sh
+      - lab/interop/**
+      - lab/interopcheck/**
+      - lab/frr-start.sh
+      - lab/probes/prefer-*.yaml
+      - lab/e2e-chr.sh
+      - lab/chr/**
+      - lab/chrpeer/**
+      - internal/plugins/announcer/**
+      - internal/plugins/ribsource/bmp/**
+      - internal/rib/**
+
+permissions:
+  contents: read
+
+jobs:
+  router:
+    name: ${{ matrix.router }} / ${{ matrix.feature }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        router: [frr, bird2, bird3, gobgp]
+        feature: [ibgp, addpath, bmp]
+        exclude:
+          # Debian's BIRD 2 is built without the BMP protocol.
+          - router: bird2
+            feature: bmp
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: interop cell
+        run: bash lab/e2e-interop.sh "${{ matrix.router }}" "${{ matrix.feature }}"
+      - name: summary
+        if: always()
+        run: echo "| ${{ matrix.router }} | ${{ matrix.feature }} | ${{ job.status }} |" >> "$GITHUB_STEP_SUMMARY"
+
+  chr:
+    # MikroTik RouterOS CHR in QEMU (#52), the iBGP column for RouterOS. The
+    # free CHR image is fetched from MikroTik at run time (checksum pinned in
+    # lab/e2e-chr.sh); no license material, not cached.
+    name: chr / ibgp
+    # On pull requests the ci workflow's chr job runs the same script.
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+          ls -l /dev/kvm || true
+      - name: install QEMU
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends qemu-system-x86 qemu-utils
+      - name: interop cell (RouterOS)
+        run: bash lab/e2e-chr.sh

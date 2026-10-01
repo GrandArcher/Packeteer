@@ -112,7 +112,7 @@ mkdir -p "$cache"
 zip="$cache/chr-${chr_version}.img.zip"
 if [ ! -f "$zip" ]; then
 	log "downloading free CHR ${chr_version}"
-	curl -fsSL --retry 3 -o "$zip.part" "$chr_url"
+	curl -fsSL --retry 5 --retry-delay 5 --retry-all-errors -o "$zip.part" "$chr_url"
 	mv "$zip.part" "$zip"
 fi
 echo "${chr_sha256}  ${zip}" | sha256sum -c -
