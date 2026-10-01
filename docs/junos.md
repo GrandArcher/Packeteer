@@ -2,7 +2,7 @@
 
 This guide sets up a Junos edge router (MX, SRX, vMX) for Packeteer: the iBGP session, the two filters inject needs, and the checks for each step. Shared rules for every router are in [routers.md](routers.md).
 
-**Not lab-tested.** CI has no Junos image. The configuration follows the same design as the [FRR guide](frr.md), which the [walkthrough](walkthrough.md) runs in CI, and uses standard Junos statements. Check it against your release and commit it with `commit check` and `commit confirmed` first. The router interop matrix is tracked in #53.
+**Not lab-tested.** CI has no Junos image. The configuration follows the same design as the [FRR guide](frr.md), which the [walkthrough](walkthrough.md) runs in CI, and uses standard Junos statements. Check it against your release and commit it with `commit check` and `commit confirmed` first. Junos is not in the [interop matrix](routers.md#interop-matrix) (#53), which covers FRR, BIRD, GoBGP, and RouterOS.
 
 The addresses are documentation ranges (RFC 5737) and the ASNs documentation or private-use values. Replace them. The edge is AS 64512 at `192.0.2.254`. Packeteer is `192.0.2.10`. transit-a (AS 64496) is `192.0.2.21` and transit-b (AS 64497) is `192.0.2.22`. Your own prefix is `203.0.113.0/24`. `64512:666` is `packeteer_community` in Packeteer's config. IPv4 unicast only.
 

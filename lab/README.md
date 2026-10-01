@@ -79,3 +79,23 @@ The script reads `/routing/route` and `/routing/bgp/session` over REST and check
 8. SIGKILL: exit 137, the session closes and the route is gone within the hold time.
 
 Locally without Docker: `CHR_ACCEL=tcg PACKETEER_BIN=/path/to/packeteer bash lab/e2e-chr.sh` (needs sudo for the tap, `qemu-system-x86_64`, `qemu-img`, `jq`, `unzip`, and Go). `CHR_CACHE=dir` keeps the downloaded zip between runs.
+
+## Router interop matrix (#53)
+
+`lab/e2e-interop.sh <router> <feature>` runs one cell of the matrix on its own topology (`lab/interop/docker-compose.yml`, one compose profile per router). One simulated edge at 192.0.2.254 (AS 64512) sits between Packeteer (the image built from the repo Dockerfile, inject mode, mounted config) and two simulated FRR eBGP transits: transit-a (`lab/interop/frr-transit-a`, AS 64496) and transit-b (`lab/interop/frr-transit-b`, AS 64497, prepended, so inactive on the edge). Both transits keep what the edge sends them (soft-reconfiguration inbound) for the export check. The edges:
+
+- `frr`: FRR 10.2.4, `lab/interop/frr/frr.conf`.
+- `bird2` and `bird3`: Debian's `bird2` and `bird3` packages (`lab/interop/bird/Dockerfile`), `lab/interop/bird/bird.conf`, plus `bird-bmp.conf` for BMP (BIRD 3 only).
+- `gobgp`: `gobgpd` built at run time from the GoBGP version in `go.mod`, `lab/interop/gobgp/gobgpd.toml`, plus `bmp.toml` for BMP.
+
+Every edge accepts only routes with `64512:666` from Packeteer, exports nothing to eBGP, holds the Packeteer session at 9s, leaves graceful restart off, and offers add-path send. The features are Packeteer configs: `ibgp` (`lab/interop/packeteer.yaml`, best path only), `addpath` (`packeteer-addpath.yaml`), and `bmp` (`packeteer-bmp.yaml`). `lab/interopcheck` reads FRR JSON, `birdc show route all` (BIRD 2 and 3), and `gobgp global rib -j` into one path list and applies the same check to each. The steps for each column, and the BIRD 3 BMP refeed gap, are in [docs/routers.md](../docs/routers.md#interop-matrix). On every sample of every wait, the script also fails if the edge holds a Packeteer route for `203.0.113.0/24` or `198.51.100.128/25`. Both are allowlisted and probed, but no router advertises them.
+
+`.github/workflows/interop.yml` runs every cell, plus the CHR (`lab/e2e-chr.sh`), weekly, on demand, and on pull requests that touch the lab, the announcer, or the BMP station. `go test ./lab/interopcheck` covers the parser with real BIRD 2.17, BIRD 3.1, and GoBGP output.
+
+```sh
+for r in frr bird2 bird3 gobgp; do
+	for f in ibgp addpath bmp; do
+		[ "$r$f" = bird2bmp ] || bash lab/e2e-interop.sh "$r" "$f"
+	done
+done
+```

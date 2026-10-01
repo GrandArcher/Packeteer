@@ -127,6 +127,11 @@ transits_clean() {
 	local t out
 	for t in transit-a transit-b; do
 		out=$("${compose[@]}" exec -T "$t" vtysh -c 'show bgp ipv4 unicast neighbors 192.0.2.254 received-routes json' 2>&1) || return 1
+		# JSON or nothing was read: an error message is not "clean".
+		if ! grep -q '{' <<<"$out" || grep -q '%' <<<"$out"; then
+			echo "$t: no received-routes table: $out" >&2
+			return 1
+		fi
 		if grep -qE '198\.51\.100\.|203\.0\.113\.' <<<"$out"; then
 			echo "$t received a route from the edge: $out" >&2
 			return 1
