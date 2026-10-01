@@ -198,7 +198,7 @@ Troubleshooting tools (#24) live on the ops HTTP server. The looking glass reads
 | Single-container install (Docker, multi-arch GHCR image) | 1.2.3 Technical requirements | done | v0.1 | - | #4 |
 | Operator quick start, config reference, and changelog; CI-tested single-container quickstart, MikroTik/FRR/Junos/Cisco router guides, observe → suggest → inject walkthrough (lab), and troubleshooting | - | done | v0.1, v0.5 | - | #11, #50 |
 | Plugin system (in-process + exec + webhook) | - | done | v0.1 | all kinds | #13 |
-| Simulated-router e2e lab (announce, clean withdraw, SIGKILL session-loss within the BGP hold timer) | - | done | v0.1 | - | #10, #45 |
+| Simulated-router e2e lab (announce, clean withdraw, SIGKILL session-loss within the BGP hold timer); MikroTik RouterOS CHR in QEMU on CI runners (free image, iBGP accept and filters, community + NO_EXPORT, no eBGP export, withdraw on SIGTERM, frozen process, and SIGKILL) | - | done (lab-proven) | v0.1, v0.5 | - | #10, #45, #52 |
 | Software management / upgrades via package manager | 2.1 | won't do (Replaced by container images and tags; upgrade = pull a new tag.) | - | - | - |
 | IRP Lite (feature-restricted free edition) | - | won't do (Packeteer is fully open source; there are no editions.) | - | - | - |
 | NOC-as-a-service, Tier 1 reports, training | - | won't do (Commercial services, not software features.) | - | - | - |

@@ -193,6 +193,33 @@ func TestFRRGuideIsTheLabConfig(t *testing.T) {
 	}
 }
 
+// The MikroTik guide's iBGP block is what the CHR lab (#52) applies.
+func TestMikroTikGuideIsTheCHRLabConfig(t *testing.T) {
+	doc := repoFile(t, "docs/mikrotik.md")
+	const marker = "<!-- lab-file: lab/chr/edge.rsc (the block between its docs/mikrotik.md markers) -->\n```routeros\n"
+	i := strings.Index(doc, marker)
+	if i < 0 {
+		t.Fatal("docs/mikrotik.md has no lab-file block")
+	}
+	rest := doc[i+len(marker):]
+	j := strings.Index(rest, "```\n")
+	if j < 0 {
+		t.Fatal("unterminated lab-file block")
+	}
+	rsc := repoFile(t, "lab/chr/edge.rsc")
+	const begin, end = "# ---- begin docs/mikrotik.md (kept identical by lab/doccmds tests) ----\n", "# ---- end docs/mikrotik.md ----\n"
+	b, e := strings.Index(rsc, begin), strings.Index(rsc, end)
+	if b < 0 || e < b {
+		t.Fatal("lab/chr/edge.rsc has no docs/mikrotik.md markers")
+	}
+	if got, want := rest[:j], rsc[b+len(begin):e]; got != want {
+		t.Fatalf("docs/mikrotik.md differs from lab/chr/edge.rsc:\n--- guide\n%s\n--- lab\n%s", got, want)
+	}
+	if !strings.Contains(repoFile(t, "lab/e2e-chr.sh"), "lab/chr/edge.rsc") {
+		t.Fatal("lab/e2e-chr.sh does not apply lab/chr/edge.rsc")
+	}
+}
+
 // Shipped example configs stay observe.
 func TestWalkthroughStartsInObserve(t *testing.T) {
 	cfg := repoFile(t, "lab/packeteer-walkthrough.yaml")
@@ -230,6 +257,7 @@ func TestGuidesUseDocumentationNumbers(t *testing.T) {
 		"docs/quickstart.md", "docs/walkthrough.md", "docs/troubleshooting.md",
 		"docs/frr.md", "docs/junos.md", "docs/cisco.md", "docs/routers.md", "docs/mikrotik.md",
 		"lab/frr-walkthrough/frr.conf", "lab/packeteer-walkthrough.yaml", "lab/docker-compose-walkthrough.yml",
+		"lab/chr/edge.rsc", "lab/chr/packeteer.yaml", "lab/e2e-chr.sh",
 	}
 	for _, f := range files {
 		sc := bufio.NewScanner(strings.NewReader(repoFile(t, f)))

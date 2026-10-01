@@ -200,7 +200,7 @@ Then confirm one route on the router before you widen the allowlist.
 
 On the router, an injected route shows your community and `no-export`:
 
-- MikroTik: `/routing route print where bgp-communities~"64512:666"`
+- MikroTik: `/routing route print where bgp.communities~"64512:666"`
 - FRR: `vtysh -c 'show bgp ipv4 unicast <prefix> json'` (communities `64512:666` and `no-export`, next hop of the chosen provider)
 - Junos: `show route community 64512:666`
 - IOS: `show ip bgp community 64512:666`

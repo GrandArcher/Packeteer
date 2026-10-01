@@ -57,3 +57,25 @@ PACKETEER_DOCS_DIR=. bash lab/e2e-docs.sh docs/walkthrough.md
 ```
 
 `lab/soak.sh` is the load and soak test (#51), with no FRR: `lab/soak` plays the edge with a minimal BGP speaker that sends a full-table-sized synthetic RIB (1,250,000 documentation prefixes), exports IPFIX at 20,000 records a second, churns 6,000 prefixes a minute, and reads the stock image's process and ops API while Packeteer runs in observe with a mounted config. It fails when a figure in `lab/soak/budgets.yaml` is over budget, when the session or readiness drops, when observe sends the router a route, or when SIGTERM does not stop Packeteer cleanly. The `load` CI job runs the 10-minute `pr` profile; `.github/workflows/soak.yml` runs the 5h30m `soak` profile weekly. Budgets and measured values: [docs/performance.md](../docs/performance.md).
+
+## MikroTik CHR lab (#52)
+
+`lab/e2e-chr.sh` (CI job `chr`) runs Packeteer against RouterOS instead of FRR, with no GNS3 and no Docker topology for the router. It downloads the free CHR image (pinned to 7.23.7 long-term, SHA-256 checked) from `download.mikrotik.com` at run time and boots a throwaway qcow2 overlay of it in QEMU (KVM when `/dev/kvm` is usable, otherwise TCG). The router stays on the free license level, which is enough for BGP; the script fails if it is not. Nothing from the image is committed or cached.
+
+The CHR has two NICs: ether1 on QEMU user networking, used only to reach its REST API from a host loopback port, and ether2 on a tap device (`pkchr0`, 192.0.2.0/24) shared with the host. [lab/chr/edge.rsc](chr/edge.rsc) is applied through `/rest/execute`; its middle block is the iBGP configuration in [docs/mikrotik.md](../docs/mikrotik.md) (a `lab/doccmds` test keeps them identical). On the host side of the tap:
+
+- Packeteer (192.0.2.10), the image built from the repo Dockerfile, `--network host`, `lab/chr/packeteer.yaml` mounted, inject mode with the fixed prober.
+- `lab/chrpeer` speakers (GoBGP): transit-a (192.0.2.1, AS 64496) and transit-b (192.0.2.2, AS 64497) both originate `198.51.100.0/24`; a collector (192.0.2.20, AS 64498) records everything the CHR exports over eBGP; an untagged iBGP speaker (192.0.2.30) sends `203.0.113.0/24` without the Packeteer community through the same `packeteer-in` filter.
+
+The script reads `/routing/route` and `/routing/bgp/session` over REST and checks:
+
+1. The free license level, every session up, the untagged route filtered by `packeteer-in`, and the collector holding the native `198.51.100.0/24`.
+2. Packeteer's route: exactly one, from 192.0.2.10, next hop 192.0.2.2, local preference 250, communities `64512:666` and `no-export`, active (it beats the eBGP paths on local preference). It stays for 10s after the router stops advertising the native path to Packeteer.
+3. The collector loses the prefix while Packeteer's route is best and never sees `64512:666`. `203.0.113.0/24` is allowlisted and probed but never in the learned RIB, so it must never arrive from Packeteer. Both are checked on every read for the whole run.
+4. The session uses the router's 9s hold time and Packeteer does not offer graceful restart.
+5. Flip-back withdraws the route and the collector gets the native path back; restoring the probes announces it again.
+6. SIGTERM withdraws it and Packeteer exits 0 after `withdrew all ... prefixes=1`.
+7. SIGSTOP (a frozen process that keeps TCP open): the route stays while the session is established and is gone when the 9s hold timer expires.
+8. SIGKILL: exit 137, the session closes and the route is gone within the hold time.
+
+Locally without Docker: `CHR_ACCEL=tcg PACKETEER_BIN=/path/to/packeteer bash lab/e2e-chr.sh` (needs sudo for the tap, `qemu-system-x86_64`, `qemu-img`, `jq`, `unzip`, and Go). `CHR_CACHE=dir` keeps the downloaded zip between runs.

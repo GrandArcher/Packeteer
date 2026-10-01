@@ -39,7 +39,7 @@ Each guide has the session, both filters, the Packeteer side of the config, the 
 
 | Router | Guide | Tested |
 |---|---|---|
-| MikroTik RouterOS 7 | [mikrotik.md](mikrotik.md): iBGP, filters, Traffic Flow, port mirroring, SNMP | Not in CI. A RouterOS CHR lab is tracked in #52. |
+| MikroTik RouterOS 7 | [mikrotik.md](mikrotik.md): iBGP, filters, Traffic Flow, port mirroring, SNMP | iBGP and filters in CI on a free CHR (RouterOS 7.23.7) in QEMU: accept with community + `no-export`, untagged route rejected, no eBGP export, withdraw on flip-back, SIGTERM, frozen process, and SIGKILL ([details](mikrotik.md#tested-in-ci-chr-in-qemu)). Traffic Flow, mirroring, and SNMP are not in CI. |
 | FRR | [frr.md](frr.md) | The [walkthrough](walkthrough.md) runs the guide's configuration in CI: observe, suggest, inject, export check, and withdraw on stop. The other FRR labs are in [lab/](../lab/README.md). |
 | Juniper Junos | [junos.md](junos.md) | Not in CI. |
 | Cisco IOS / IOS-XE | [cisco.md](cisco.md) | Not in CI. |
