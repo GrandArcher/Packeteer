@@ -23,7 +23,7 @@ Packeteer keeps that improvement. Treating the missing advertisement as "the pre
 Packeteer withdraws immediately when the router withdraws a prefix it was **still advertising** after the improvement had been up for a few seconds, and then holds the prefix for `hold_time` so a bad reading cannot re-inject on the next round. The router is still advertising when:
 
 - the native path stays best (FRR gives a `network` statement weight 32768, which beats local preference; the lab uses this for one of its checks), or
-- the router is told to keep sending the native path anyway. On FRR: `neighbor 192.0.2.10 advertise-best-external` in the address-family. On Cisco IOS: `neighbor 192.0.2.10 advertise best-external`. That is the configuration to use on a real edge if a provider withdraw should clear the improvement at once.
+- the router is told to keep sending the native path anyway. On FRR: `neighbor 192.0.2.10 advertise-best-external` in the address-family. On Cisco IOS and IOS-XE: `bgp advertise-best-external` in the address family. That is the configuration to use on a real edge if a provider withdraw should clear the improvement at once.
 
 If the native path is already hidden and the provider then withdraws it, a single-path session shows Packeteer nothing new. The improvement stays until flip-back or `improvement_ttl`. BGP add-path (`bgp.neighbors[].add_path` with the router sending every path, e.g. FRR `neighbor <packeteer> addpath-tx-all-paths`) or BMP (`rib_sources`) keeps the native path visible, so that withdraw is seen; see [CONFIG.md](CONFIG.md#add-path).
 
@@ -33,120 +33,18 @@ Several edges, or a route reflector in front of them: see [route-reflector.md](r
 
 With `exchanges` (#27) each IX member you list is a provider whose `next_hop` is its address on the peering LAN. Packeteer steers a prefix to a member only when it sees that member's own path for the exact prefix, so the router must show Packeteer every path: FRR `neighbor <packeteer> addpath-tx-all-paths` in the address family (with `add_path: true` on the neighbor), or BMP post-policy monitoring (`rib_sources`, `bmp: prefer`). A route server is transparent, so the member's AS is the first AS on its paths. The injected route's next hop is the member's LAN address; the edge resolves it on its IX interface. The eBGP export filter for Packeteer's community applies to IX sessions like any other. Each member needs its own probe source, routed to that member ([policy-routing.md](policy-routing.md)).
 
-The examples use documentation addresses (RFC 5737 / RFC 3849) and the private ASN 64512. Replace them. MikroTik is covered in full in [mikrotik.md](mikrotik.md); the snippet below matches that recipe.
+## Router guides
 
-## MikroTik RouterOS 7
+Each guide has the session, both filters, the Packeteer side of the config, the show commands that prove each step, and the rollback. The examples use documentation addresses (RFC 5737 / RFC 3849) and documentation or private-use ASNs. Replace them.
 
-```routeros
-/routing filter rule
-add chain=packeteer-in rule="if (bgp-communities includes 64512:666) { accept }"
-add chain=packeteer-in rule="reject"
-add chain=ebgp-out rule="if (bgp-communities includes 64512:666) { reject }"
-add chain=ebgp-out rule="accept"
+| Router | Guide | Tested |
+|---|---|---|
+| MikroTik RouterOS 7 | [mikrotik.md](mikrotik.md): iBGP, filters, Traffic Flow, port mirroring, SNMP | Not in CI. A RouterOS CHR lab is tracked in #52. |
+| FRR | [frr.md](frr.md) | The [walkthrough](walkthrough.md) runs the guide's configuration in CI: observe, suggest, inject, export check, and withdraw on stop. The other FRR labs are in [lab/](../lab/README.md). |
+| Juniper Junos | [junos.md](junos.md) | Not in CI. |
+| Cisco IOS / IOS-XE | [cisco.md](cisco.md) | Not in CI. |
 
-/routing bgp connection
-set [find where name=packeteer] input.filter=packeteer-in
-# On every eBGP connection (transits, peers, IX):
-set [find where remote.as!=64512] output.filter=ebgp-out
-```
-
-`output.redistribute=bgp` on the Packeteer connection stays as documented in [mikrotik.md](mikrotik.md) so Packeteer receives the router's best paths. That feed is best-path-only; see [When the native path disappears](#when-the-native-path-disappears). It is the opposite direction from `input.filter`.
-
-## FRR
-
-The CI lab in [lab/](../lab/) is this config with a passive iBGP neighbor and a static advertisement of `198.51.100.0/24`. For a real edge, redistribute or reflect the BGP table toward Packeteer instead of a single `network` statement, and keep the same two route-maps.
-
-```
-bgp community-list standard packeteer permit 64512:666
-!
-route-map packeteer-in permit 10
- match community packeteer
-route-map packeteer-in deny 100
-!
-route-map ebgp-out deny 10
- match community packeteer
-route-map ebgp-out permit 100
-!
-router bgp 64512
- bgp router-id 192.0.2.254
- no bgp graceful-restart
- neighbor 192.0.2.10 remote-as 64512
- neighbor 192.0.2.10 description packeteer
- neighbor 192.0.2.10 timers 3 9
- neighbor 192.0.2.1 remote-as 64496
- neighbor 192.0.2.1 description transit-a
- !
- address-family ipv4 unicast
-  neighbor 192.0.2.10 activate
-  neighbor 192.0.2.10 route-map packeteer-in in
-  neighbor 192.0.2.1 activate
-  neighbor 192.0.2.1 route-map ebgp-out out
- exit-address-family
-```
-
-Leave the provider next hop unchanged on the session toward Packeteer. Packeteer names the current exit by that next hop. The lab advertises one static prefix and sets its next hop with a route-map (`lab/frr/frr.conf`); a router that already has the eBGP next hops can send those unchanged.
-
-Check with `vtysh -c 'show bgp summary'` and `vtysh -c 'show bgp ipv4 unicast <prefix> json'`. An injected route shows the provider next hop, `locPrf`, and communities `64512:666` and `no-export`.
-
-## Junos
-
-```
-policy-options {
-    community packeteer members 64512:666;
-    policy-statement packeteer-in {
-        term tagged { from community packeteer; then accept; }
-        term rest { then reject; }
-    }
-    policy-statement ebgp-out {
-        term no-packeteer { from community packeteer; then reject; }
-        term rest { then accept; }
-    }
-}
-protocols {
-    bgp {
-        group packeteer {
-            type internal;
-            local-address 192.0.2.254;
-            import packeteer-in;
-            graceful-restart { disable; }
-            neighbor 192.0.2.10 { description packeteer; }
-        }
-        group transit {
-            type external;
-            export ebgp-out;
-            /* neighbors omitted */
-        }
-    }
-}
-```
-
-## Cisco IOS / IOS-XE
-
-```
-ip community-list standard PACKETEER permit 64512:666
-!
-route-map PACKETEER-IN permit 10
- match community PACKETEER
-route-map PACKETEER-IN deny 100
-!
-route-map EBGP-OUT deny 10
- match community PACKETEER
-route-map EBGP-OUT permit 100
-!
-router bgp 64512
- bgp router-id 192.0.2.254
- neighbor 192.0.2.10 remote-as 64512
- neighbor 192.0.2.10 description packeteer
- neighbor 192.0.2.10 route-map PACKETEER-IN in
- no neighbor 192.0.2.10 graceful-restart
- !
- address-family ipv4
-  neighbor 192.0.2.10 activate
-  neighbor <transit> route-map EBGP-OUT out
- exit-address-family
-```
-
-Apply `EBGP-OUT` on every external neighbor. IOS honors `no-export` as well; the community-list is still required so a missing well-known community cannot leak a more-specific.
+The router interop matrix is tracked in #53. Whatever the router, check the two filters with its show commands before you set `mode: inject`, and check them again after the first injected route appears.
 
 ## Flow export
 
