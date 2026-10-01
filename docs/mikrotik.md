@@ -13,12 +13,14 @@ This guide grows with each milestone. It currently covers:
 
 Packeteer learns the **paths this router advertises** (its best path per prefix) to know which provider each prefix uses today. It peers over iBGP with the router's own ASN. In `observe` and `suggest` it announces nothing. In `inject` it announces only allowlisted improvements, each tagged with `packeteer_community` and `no-export`.
 
+<!-- lab-file: lab/chr/edge.rsc (the block between its docs/mikrotik.md markers) -->
 ```routeros
-# Router ASN 64512, router loopback 192.0.2.254, Packeteer at 192.0.2.10.
+# Router ASN 64512, router address 192.0.2.254, Packeteer at 192.0.2.10.
 # Community 64512:666 must match packeteer_community in config.yaml.
-/routing bgp template add name=packeteer as=64512 router-id=192.0.2.254
-/routing bgp connection add name=packeteer templates=packeteer \
-    remote.address=192.0.2.10 remote.as=64512 local.role=ibgp \
+/routing bgp instance add name=edge as=64512 router-id=192.0.2.254
+/routing bgp connection add name=packeteer instance=edge \
+    local.address=192.0.2.254 local.role=ibgp \
+    remote.address=192.0.2.10 remote.as=64512 \
     output.redistribute=bgp output.default-originate=never \
     input.filter=packeteer-in
 
@@ -32,11 +34,13 @@ Packeteer learns the **paths this router advertises** (its best path per prefix)
 /routing filter rule add chain=ebgp-out \
     rule="if (bgp-communities includes 64512:666) { reject }"
 /routing filter rule add chain=ebgp-out rule="accept"
-/routing bgp connection set [find where remote.as!=64512] output.filter=ebgp-out
+/routing bgp connection set [find where local.role=ebgp] output.filter-chain=ebgp-out
 ```
 
 - `output.redistribute=bgp` sends the eBGP-learned best paths (the full table if you take one) to Packeteer. It is best-path-only. Once an injected route wins, RouterOS stops advertising that prefix back to Packeteer. Packeteer keeps the improvement; it does not withdraw and re-announce. A provider withdraw after that point is caught at `improvement_ttl`, not immediately. Immediate withdraw needs the router to keep sending the native path (FRR and Cisco: `advertise-best-external`, or add-path to Packeteer, or BMP; Packeteer receives both, see [CONFIG.md](CONFIG.md#add-path). The lab proves them on FRR only; check what your RouterOS version can send). Details: [routers.md](routers.md#when-the-native-path-disappears).
-- Route reflection is not needed for a single edge. For iBGP-learned routes, make the router a route reflector for this session (`/routing bgp template set packeteer route-reflect=yes`) or feed the other paths with BMP (`rib_sources`) where the router can send it.
+- This is the current RouterOS 7 syntax (tested on 7.23.7): the AS and router ID live on `/routing bgp instance` and each connection names its `instance`. Older 7.x releases without `/routing bgp instance` put them on `/routing bgp template` (`as=`, `router-id=`) and connections used `templates=`; the filter rules and `output.filter-chain` are the same.
+- Select the eBGP connections with `local.role=ebgp`. `[find where remote.as!=64512]` (an unquoted number) matches every connection on 7.23, including the Packeteer session.
+- Route reflection is not needed for a single edge. For iBGP-learned routes, make the router a route reflector for this session or feed the other paths with BMP (`rib_sources`) where the router can send it.
 - Keep graceful restart **off** on this session. Packeteer never enables it, so its routes can never linger after it dies.
 
 Packeteer side (`config.yaml`):
@@ -58,9 +62,23 @@ announcer:
 
 `local_pref` and `announcer` are used only when `mode: inject`. An injected route is the exact prefix learned from this session. `more_specific_bits` is not a setting; a config that includes it is rejected. Inject also requires a non-empty allowlist, at least one BGP neighbor, a positive hold time, and positive loss and latency thresholds.
 
-RouterOS 7 syntax changes between minor releases, so check these commands against your version.
+RouterOS 7 syntax changes between minor releases, so check these commands against your version. CI runs them on a free MikroTik CHR (RouterOS 7.23.7 long-term) in QEMU: see [Tested in CI](#tested-in-ci-chr-in-qemu).
 
-Check the session with `/routing bgp session print`. Packeteer logs `bgp session ... state=ESTABLISHED`, then a periodic `rib ready=true prefixes=N`. In inject mode an accepted route shows up in `/routing route print where bgp-communities~"64512:666"`. Clearing it is `mode: observe` (Packeteer withdraws) or stopping the container (the session drops; graceful restart is off, so the route does not stick).
+Check the session with `/routing bgp session print`. Packeteer logs `bgp session ... state=ESTABLISHED`, then a periodic `rib ready=true prefixes=N`. In inject mode an accepted route shows up in `/routing route print where bgp.communities~"64512:666"` (`bgp.communities` with a dot; `bgp-communities` is the name inside filter rules and matches nothing in `print`). `/routing route print detail where dst-address=198.51.100.0/24` shows `.communities=no-export,64512:666 .local-pref=250` and `belongs-to="bgp-IP-192.0.2.10"`. Clearing it is `mode: observe` (Packeteer withdraws) or stopping the container (the session drops; graceful restart is off, so the route does not stick).
+
+RouterOS offers the graceful-restart capability (`gr` under `local.capabilities` in the session print); Packeteer never does, so it is never negotiated. Do not add Packeteer to any graceful-restart setup.
+
+### Tested in CI (CHR in QEMU)
+
+`lab/e2e-chr.sh` (CI job `chr`) boots the free CHR image (downloaded from MikroTik at run time, checksum pinned, free license level, no key) in QEMU, applies [lab/chr/edge.rsc](../lab/chr/edge.rsc), which is this section's configuration plus lab transits, and runs the Packeteer image in inject mode against it. Documentation prefixes and private ASNs only; lab only. It proves that RouterOS:
+
+- accepts Packeteer's route for the exact learned prefix, with `64512:666` and `no-export`, local preference 250, next hop of the chosen transit, and makes it the active route over the eBGP paths (RouterOS compares BGP paths by local preference first; the iBGP distance of 200 against eBGP 20 does not decide it)
+- rejects an iBGP route without the community on the same `packeteer-in` chain (it shows as filtered)
+- never sends Packeteer's route to an eBGP peer. While it is best, the router stops advertising that prefix to eBGP peers at all (BGP sends only the best path), and the native path returns when Packeteer withdraws. Plan for this if the edge gives a full table to customers.
+- never receives an allowlisted prefix that is not in Packeteer's learned RIB
+- drops the route on flip-back, on SIGTERM (Packeteer withdraws first), on a frozen process (the router's 9s hold timer expires), and on SIGKILL (the session closes)
+
+Once Packeteer's route is best, the router stops advertising the prefix to Packeteer (best path only), as described above; the improvement stays.
 
 FRR, Junos, and IOS equivalents: [frr.md](frr.md), [junos.md](junos.md), [cisco.md](cisco.md). The whole observe → suggest → inject sequence, with the checks at each step: [walkthrough.md](walkthrough.md).
 
