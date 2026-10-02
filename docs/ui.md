@@ -6,7 +6,7 @@ The remaining IRP GUI conveniences (#34). All of them work in the stock image wi
 |---|---|---|---|
 | Dashboard overview and setup checklist (#49) | `/`, `/api/overview` | viewer | none |
 | Config editor and settings form (#102) | `/settings.html`, `/api/config`, `POST /api/config/form` | admin | `http.config_editor: true` + auth or basic auth |
-| First-run wizard | `/settings.html`, `POST /api/config/wizard` | admin | `http.config_editor: true` + auth or basic auth |
+| Setup wizard (#106) | `/settings.html`, `POST /api/config/wizard` | admin | `http.config_editor: true` + auth or basic auth |
 | Custom dashboards | `/dashboards.html`, `/api/dashboards` | every signed-in user, own dashboards | `storage: {type: sqlite}` + auth or basic auth |
 | Report subscriptions | `report_subscriptions`, `/api/subscriptions` | viewers see them, operators send now | `storage` + an `smtp` notifier |
 | Improvement weights | `scorer.config.improvement_weights`, `/api/decisions` | - | `weighted`, `commit`, or `cost` scorer |
@@ -85,16 +85,24 @@ Fields the form does not show stay in the YAML, including plugin blocks. An unch
 
 The file is read-only in many deployments (`:ro`). Then saving fails with a clear error and nothing changes. Leave `config_editor` off if you manage the file with Git or configuration management.
 
-## First-run wizard
+## Setup wizard
 
-`/settings.html` has a short form: ASN, router ID, providers (`name source_ip next_hop` per line), edge router addresses, prefixes to probe (`prefix host` per line), and report history on or off. `POST /api/config/wizard` renders a config from it:
+`/settings.html` walks three steps (#106). `POST /api/config/wizard` renders a config from them and writes nothing. The result opens in the editor for review, and you save it like any other edit.
 
-- always `mode: observe` (it measures and recommends; it never announces);
+1. Edge session: ASN, an IPv4 router ID, and the edge address. The session is learn-only iBGP.
+2. Providers: one row each (name, probe source, next hop), with plus and minus. A next hop from `GET /api/config/suggestions` can be added as a row; you still name it and set the probe source. Adding a row does not probe or announce.
+3. What to probe: an optional prefix and an optional pinned host inside it. Leave both empty to add targets later in the form. A prefix without a host is probed at the first address of the prefix. Report history (sqlite) is a checkbox on this step, not a secret.
+
+The rendered file is always:
+
+- `mode: observe` (it measures and recommends; it never announces). Any other mode, including inject, is refused. Inject is not a step;
 - an empty allowlist and no announcer;
-- the `weighted` scorer, a `static` source, `max_improvements: 50`, `hold_time: 15m`, the default thresholds, and `http.listen: 127.0.0.1:8080`;
+- one `bgp.neighbors` entry, the edge address;
+- the `weighted` scorer, `max_improvements: 50`, `hold_time: 15m`, the default thresholds, and `http.listen: 127.0.0.1:8080`;
+- a `static` source only when a prefix was given;
 - `packeteer_community` `<asn>:666` when the ASN fits in 16 bits.
 
-The page checks the form before sending it (ASN, an IPv4 router ID, three fields per provider line, a prefix and a host per target line) and lists each problem; the server checks it again. It is checked with `config.Parse` before it is returned, and the page validates the result in the editor at once. The wizard is part of the editor: it is off (`404`) unless `http.config_editor` is on. It writes nothing: the result opens in the editor for review, and you save it like any edit. Turning inject on afterwards is a separate edit; follow the [inject checklist](CONFIG.md#inject-checklist).
+There is no field for a password, a community string, or any other secret. Those stay in environment variables. The page checks each step before continuing, and the server checks the whole body again with `config.Parse`. The wizard is part of the editor: it is off (`404`) unless `http.config_editor` is on. Turning inject on afterwards is a separate edit; follow the [inject checklist](CONFIG.md#inject-checklist).
 
 ## Custom dashboards
 

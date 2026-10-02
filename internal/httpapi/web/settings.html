@@ -12,26 +12,53 @@
 <header class="top">
   <div>
     <h1>Packeteer settings</h1>
-    <p class="tag">Settings form and YAML (admin), first-run wizard, report subscriptions. Nothing here announces.</p>
+    <p class="tag">Settings form and YAML (admin), setup wizard, report subscriptions. Nothing here announces.</p>
   </div>
   <nav class="nav"><a href="/">Dashboard</a> <a href="/dashboards.html">Custom dashboards</a></nav>
 </header>
 <div id="ed-off" class="conn" role="alert" hidden></div>
 <main>
-  <section>
-    <h2>First-run wizard</h2>
-    <p class="tag">Builds an observe-mode config: it measures and recommends and never announces. The allowlist stays empty. The result opens in the editor below for review; nothing is written until you save.</p>
-    <div class="form">
-      <label>ASN <input id="wz-asn" type="number" min="1" placeholder="64512"></label>
-      <label>Router ID <input id="wz-router" type="text" placeholder="192.0.2.10"></label>
-      <label class="wide">Providers, one per line: <code>name source_ip next_hop</code>
-        <textarea id="wz-providers" rows="3" placeholder="transit-a 192.0.2.11 192.0.2.1&#10;transit-b 192.0.2.12 192.0.2.2"></textarea></label>
-      <label class="wide">Edge routers (learn-only iBGP), space separated
-        <input id="wz-neighbors" type="text" placeholder="192.0.2.254"></label>
-      <label class="wide">Prefixes to probe, one per line: <code>prefix host</code>
-        <textarea id="wz-targets" rows="3" placeholder="198.51.100.0/24 198.51.100.1"></textarea></label>
-      <label><input id="wz-storage" type="checkbox" checked> Report history (sqlite)</label>
-      <button type="button" id="wz-run">Generate</button>
+  <section id="wizard">
+    <h2>Setup wizard</h2>
+    <p class="tag">Three steps. It always starts in observe: the edge session is learn-only, the allowlist stays empty, and there is no announcer. Inject is not a step. Secrets stay in environment variables; this wizard has no secret fields. Nothing is written until you save the YAML below.</p>
+    <ol class="steps" id="wz-steps">
+      <li id="wz-tab-1" class="on">1. Edge</li>
+      <li id="wz-tab-2">2. Providers</li>
+      <li id="wz-tab-3">3. Probe</li>
+    </ol>
+    <div id="wz-1">
+      <p class="tag">The iBGP session Packeteer learns from. It does not announce.</p>
+      <div class="form">
+        <label>ASN <input id="wz-asn" type="number" min="1" placeholder="64512"></label>
+        <label>Router ID <input id="wz-router" type="text" placeholder="192.0.2.10" spellcheck="false"></label>
+        <label>Edge address <input id="wz-edge" type="text" placeholder="192.0.2.254" spellcheck="false"></label>
+      </div>
+      <div class="controls"><button type="button" id="wz-next">Next</button></div>
+    </div>
+    <div id="wz-2" hidden>
+      <p class="tag">Add each provider yourself. Plus adds a row and minus removes one. A suggestion only fills the next hop; you still name it and set the probe source. Nothing is probed or announced until you save and restart.</p>
+      <div id="wz-providers"></div>
+      <div class="controls">
+        <button type="button" id="wz-add-provider">+ Provider</button>
+        <button type="button" id="wz-sug">Refresh suggestions</button>
+      </div>
+      <div id="wz-suggestions"></div>
+      <div class="controls">
+        <button type="button" id="wz-back">Back</button>
+        <button type="button" id="wz-next-2">Next</button>
+      </div>
+    </div>
+    <div id="wz-3" hidden>
+      <p class="tag">Optional. Leave both empty to add probe targets later. A prefix without a host is probed at its first address. A host pins that prefix to one address.</p>
+      <div class="form">
+        <label>Prefix <input id="wz-prefix" type="text" placeholder="198.51.100.0/24" spellcheck="false"></label>
+        <label>Pinned host <input id="wz-host" type="text" placeholder="198.51.100.10" spellcheck="false"></label>
+        <label><input id="wz-storage" type="checkbox" checked> Report history (sqlite)</label>
+      </div>
+      <div class="controls">
+        <button type="button" id="wz-back-3">Back</button>
+        <button type="button" id="wz-run">Generate observe config</button>
+      </div>
     </div>
     <div id="wz-status" class="tag"></div>
     <ul id="wz-errors" class="errors"></ul>

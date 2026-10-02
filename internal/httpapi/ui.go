@@ -155,9 +155,10 @@ func short(h string) string {
 	return h
 }
 
-// handleWizard renders a first-run observe config. It writes nothing; the
-// UI shows the result in the editor for review. It is part of the editor:
-// off unless http.config_editor is on.
+// handleWizard renders a setup-wizard observe config (#106). It writes
+// nothing; the UI shows the result in the editor for review. Inject is
+// not accepted. It is part of the editor: off unless http.config_editor
+// is on.
 func (s *Server) handleWizard(w http.ResponseWriter, r *http.Request) {
 	if !s.editorOn(w) {
 		return

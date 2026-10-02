@@ -41,7 +41,7 @@ function editorOff(err) {
   var node = document.getElementById("ed-off");
   node.textContent = explain(err);
   node.hidden = !off;
-  ["ed-load", "ed-check", "ed-save", "wz-run", "form-apply", "form-reload", "form-add-provider", "form-add-target", "form-add-allow", "sug-refresh"].forEach(function (id) {
+  ["ed-load", "ed-check", "ed-save", "wz-run", "wz-next", "wz-next-2", "wz-back", "wz-back-3", "wz-add-provider", "wz-sug", "form-apply", "form-reload", "form-add-provider", "form-add-target", "form-add-allow", "sug-refresh"].forEach(function (id) {
     var b = document.getElementById(id);
     if (b) b.disabled = off;
   });
@@ -295,24 +295,97 @@ function loadSuggestions() {
   }, function () { renderSuggestions([]); });
 }
 
-function lines(id) {
-  return document.getElementById(id).value.split("\n").map(function (l) { return l.trim(); }).filter(Boolean);
+// The setup wizard (#106) is three steps. It always posts mode observe.
+// Inject is not a step, and there is no field for a secret.
+var wzProviders = [{name: "", source_ip: "", next_hop: ""}];
+var wzSuggestions = [];
+
+function showWizardStep(n) {
+  ["wz-1", "wz-2", "wz-3"].forEach(function (id, i) {
+    document.getElementById(id).hidden = i + 1 !== n;
+    var tab = document.getElementById("wz-tab-" + (i + 1));
+    if (tab) tab.className = i + 1 === n ? "on" : "";
+  });
 }
 
-// wizardProblems checks the form before it is sent, so a typo is shown
-// next to the field instead of as a server error.
-function wizardProblems(body) {
+function renderWzProviders() {
+  var root = document.getElementById("wz-providers");
+  clear(root);
+  wzProviders.forEach(function (p, i) {
+    var row = el("div", "row");
+    var name = rowInput(p.name, "name");
+    var src = rowInput(p.source_ip, "probe source");
+    var hop = rowInput(p.next_hop, "next hop");
+    name.addEventListener("input", function () { wzProviders[i].name = name.value.trim(); });
+    src.addEventListener("input", function () { wzProviders[i].source_ip = src.value.trim(); });
+    hop.addEventListener("input", function () { wzProviders[i].next_hop = hop.value.trim(); });
+    [name, src, hop].forEach(function (n) { row.appendChild(n); });
+    var minus = el("button", "small", "−");
+    minus.type = "button";
+    minus.title = "Remove provider";
+    minus.addEventListener("click", function () {
+      wzProviders.splice(i, 1);
+      renderWzProviders();
+      renderWzSuggestions();
+    });
+    row.appendChild(minus);
+    root.appendChild(row);
+  });
+  if (!wzProviders.length) root.appendChild(el("p", "empty", "No providers. Add one before continuing."));
+}
+
+function renderWzSuggestions() {
+  var root = document.getElementById("wz-suggestions");
+  clear(root);
+  var hops = {};
+  wzProviders.forEach(function (p) { if (p.next_hop) hops[p.next_hop] = true; });
+  var shown = wzSuggestions.filter(function (s) { return s.next_hop && !hops[s.next_hop]; });
+  if (!shown.length) {
+    root.appendChild(el("p", "empty", wzSuggestions.length ? "Every suggested next hop is already a row." : "No suggestions yet. Refresh after the edge session has routes, or skip and type the rows."));
+    return;
+  }
+  shown.forEach(function (s) {
+    var row = el("div", "row");
+    row.appendChild(el("span", "mono", s.next_hop));
+    row.appendChild(el("span", "tag", s.asn ? "AS " + s.asn : "AS unknown"));
+    var b = el("button", "small", "Add row");
+    b.type = "button";
+    b.addEventListener("click", function () {
+      wzProviders.push({name: "", source_ip: "", next_hop: s.next_hop || ""});
+      renderWzProviders();
+      renderWzSuggestions();
+      document.getElementById("wz-status").textContent = "Row added from the session. Name it and set the probe source. Nothing is saved.";
+    });
+    row.appendChild(b);
+    root.appendChild(row);
+  });
+}
+
+function edgeProblems() {
   var p = [];
-  if (!(body.asn > 0)) p.push("ASN: enter your AS number (the iBGP session uses it).");
-  if (!/^\d{1,3}(\.\d{1,3}){3}$/.test(body.router_id)) p.push("Router ID: enter an IPv4 address, for example 192.0.2.10.");
-  if (!body.providers.length) p.push("Providers: add at least one line: name source_ip next_hop.");
-  body.providers.forEach(function (pr, i) {
-    if (!pr.name || !pr.source_ip || !pr.next_hop) p.push("Providers line " + (i + 1) + ": needs three fields: name source_ip next_hop.");
+  var asn = Number(document.getElementById("wz-asn").value) || 0;
+  var router = document.getElementById("wz-router").value.trim();
+  var edge = document.getElementById("wz-edge").value.trim();
+  if (!(asn > 0)) p.push("ASN: enter your AS number (the learn-only iBGP session uses it).");
+  if (!/^\d{1,3}(\.\d{1,3}){3}$/.test(router)) p.push("Router ID: enter an IPv4 address, for example 192.0.2.10.");
+  if (!edge) p.push("Edge address: enter the router's address. This session only learns.");
+  return p;
+}
+
+function providerProblems() {
+  var p = [];
+  if (!wzProviders.length) p.push("Providers: add at least one row.");
+  wzProviders.forEach(function (pr, i) {
+    if (!pr.name || !pr.source_ip || !pr.next_hop) p.push("Provider " + (i + 1) + ": needs a name, a probe source, and a next hop.");
   });
-  if (!body.targets.length) p.push("Prefixes to probe: add at least one line: prefix host.");
-  body.targets.forEach(function (t, i) {
-    if (!t.prefix || t.prefix.indexOf("/") < 0 || !t.host) p.push("Prefixes line " + (i + 1) + ": needs a prefix with a length and a host inside it.");
-  });
+  return p;
+}
+
+// wizardProblems checks the three steps before generate. Inject is not a step.
+function wizardProblems(body) {
+  var p = edgeProblems().concat(providerProblems());
+  if (!body.prefix && body.host) p.push("Pinned host: enter the prefix it belongs to, or clear the host.");
+  if (body.prefix && body.prefix.indexOf("/") < 0) p.push("Prefix: include a length, for example 198.51.100.0/24.");
   return p;
 }
 
@@ -323,17 +396,17 @@ function wzErrors(list) {
 }
 
 function runWizard() {
-  var providers = lines("wz-providers").map(function (l) {
-    var f = l.split(/\s+/);
-    return {name: f[0] || "", source_ip: f[1] || "", next_hop: f[2] || ""};
-  });
-  var targets = lines("wz-targets").map(function (l) {
-    var f = l.split(/\s+/);
-    return {prefix: f[0] || "", host: f[1] || ""};
-  });
-  var neighbors = document.getElementById("wz-neighbors").value.split(/[\s,]+/).filter(Boolean);
+  var prefix = document.getElementById("wz-prefix").value.trim();
+  var host = document.getElementById("wz-host").value.trim();
   var body = {asn: Number(document.getElementById("wz-asn").value) || 0, router_id: document.getElementById("wz-router").value.trim(),
-    providers: providers, neighbors: neighbors, targets: targets, storage: document.getElementById("wz-storage").checked};
+    edge: document.getElementById("wz-edge").value.trim(), providers: wzProviders.map(function (p) {
+      return {name: p.name, source_ip: p.source_ip, next_hop: p.next_hop};
+    }), storage: document.getElementById("wz-storage").checked};
+  if (prefix) body.prefix = prefix;
+  if (host) body.host = host;
+  // inject is not a step: the body never carries a mode other than observe,
+  // and the server refuses one if it is sent.
+  body.mode = "observe";
   var status = document.getElementById("wz-status");
   var problems = wizardProblems(body);
   wzErrors(problems);
@@ -398,6 +471,32 @@ document.getElementById("ed-load").addEventListener("click", loadConfig);
 document.getElementById("ed-check").addEventListener("click", checkConfig);
 document.getElementById("ed-save").addEventListener("click", saveConfig);
 document.getElementById("wz-run").addEventListener("click", runWizard);
+document.getElementById("wz-next").addEventListener("click", function () {
+  var problems = edgeProblems();
+  wzErrors(problems);
+  document.getElementById("wz-status").textContent = problems.length ? "Fix the edge session first. Inject is not a step." : "";
+  if (!problems.length) showWizardStep(2);
+});
+document.getElementById("wz-next-2").addEventListener("click", function () {
+  var problems = providerProblems();
+  wzErrors(problems);
+  document.getElementById("wz-status").textContent = problems.length ? "Fix the provider rows first." : "";
+  if (!problems.length) showWizardStep(3);
+});
+document.getElementById("wz-back").addEventListener("click", function () { showWizardStep(1); });
+document.getElementById("wz-back-3").addEventListener("click", function () { showWizardStep(2); });
+document.getElementById("wz-add-provider").addEventListener("click", function () {
+  wzProviders.push({name: "", source_ip: "", next_hop: ""});
+  renderWzProviders();
+});
+document.getElementById("wz-sug").addEventListener("click", function () {
+  api("GET", "/api/config/suggestions").then(function (out) {
+    wzSuggestions = (out && out.suggestions) || [];
+    renderWzSuggestions();
+  }, function () { wzSuggestions = []; renderWzSuggestions(); });
+});
+renderWzProviders();
+showWizardStep(1);
 document.getElementById("form-apply").addEventListener("click", applyForm);
 document.getElementById("form-reload").addEventListener("click", function () {
   readKnobs();
