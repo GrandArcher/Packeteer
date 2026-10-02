@@ -33,8 +33,9 @@ type WizardInput struct {
 	// source is left out; flow or another source can be added later in
 	// the file.
 	Prefix string `json:"prefix,omitempty"`
-	// Host is an optional pin inside Prefix. Empty probes the first
-	// address of the prefix. A host without a prefix is refused.
+	// Host is an optional pin inside Prefix. Empty lets the probe engine
+	// pick a few addresses, including the provider next hop when it can.
+	// A host without a prefix is refused.
 	Host string `json:"host,omitempty"`
 	// Storage turns on report history (sqlite in /var/lib/packeteer).
 	Storage bool `json:"storage"`

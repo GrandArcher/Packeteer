@@ -225,7 +225,7 @@ func TestWizard(t *testing.T) {
 		t.Fatal("header missing")
 	}
 	// A prefix without a pin is still observe, and the host line is absent
-	// so probes use the first address of the prefix.
+	// so the probe engine picks the targets.
 	bare, err := Wizard(WizardInput{ASN: 64512, RouterID: "192.0.2.10", Edge: "192.0.2.254",
 		Providers: []WizardProvider{{"transit-a", "192.0.2.11", "192.0.2.1"}}, Prefix: "198.51.100.0/24"})
 	if err != nil {

@@ -17,6 +17,10 @@ import (
 type Provider struct {
 	Name   string
 	Source netip.Addr
+	// NextHop is the provider's far-side gateway, the hop just past the
+	// edge toward this provider. Zero means it is not known. It is a probe
+	// target only: it is not a new provider and nothing is announced to it.
+	NextHop netip.Addr
 }
 
 // NamedProber is one entry of the ordered prober chain.
@@ -68,10 +72,13 @@ type Result struct {
 	Provider string       `json:"provider"`
 	Prefix   netip.Prefix `json:"prefix"`
 	Target   netip.Addr   `json:"target"`
-	Prober   string       `json:"prober,omitempty"` // prober that produced Stats
-	Stats    Stats        `json:"stats"`
-	Err      string       `json:"error,omitempty"` // set when no measurement was possible
-	Time     time.Time    `json:"time"`
+	// Targets is every address probed for this provider and prefix, in
+	// the order they were tried. Target is the one that defined the score.
+	Targets []netip.Addr `json:"targets,omitempty"`
+	Prober  string       `json:"prober,omitempty"` // prober that produced Stats
+	Stats   Stats        `json:"stats"`
+	Err     string       `json:"error,omitempty"` // set when no measurement was possible
+	Time    time.Time    `json:"time"`
 }
 
 // OK reports whether the result holds a measurement.
@@ -94,6 +101,7 @@ type key struct {
 type job struct {
 	provider Provider
 	target   plugin.Target
+	hosts    []netip.Addr
 }
 
 // Engine runs probe rounds and stores the latest results.
@@ -384,17 +392,26 @@ func (e *Engine) gatherTargets(ctx context.Context) ([]plugin.Target, bool) {
 			if !t.Prefix.IsValid() {
 				continue
 			}
-			if !t.Host.IsValid() {
+			// A named host is a pin. An empty host stays the representative
+			// address for scheduling, and the probe round spreads it.
+			explicit := t.Host.IsValid()
+			if !explicit {
 				t.Host = DefaultHost(t.Prefix)
 			}
-			// The first source keeps the host. A later source can only
-			// shorten the interval. A stored interval of zero means the
-			// engine interval, so a longer VIP interval does not slow a
-			// prefix that static or flow already listed.
+			t.Pinned = explicit
+			// The first explicit host stays. A later source can replace
+			// only a default host, and can shorten the interval. A stored
+			// interval of zero means the engine interval, so a longer VIP
+			// interval does not slow a prefix that static or flow already
+			// listed.
 			if i, ok := seen[t.Prefix]; ok {
 				e.shortenInterval(&out[i], t.Interval)
 				if t.Urgent {
 					out[i].Urgent = true
+				}
+				if t.Pinned && !out[i].Pinned {
+					out[i].Host = t.Host
+					out[i].Pinned = true
 				}
 				continue
 			}
@@ -593,7 +610,15 @@ func (e *Engine) runRound(ctx context.Context, allow func(plugin.Target) bool, m
 			if p.Source.Is4() != t.Host.Is4() {
 				continue // provider cannot reach this address family
 			}
-			jobs = append(jobs, job{provider: p, target: t})
+			var pin netip.Addr
+			if t.Pinned {
+				pin = t.Host
+			}
+			hosts := ProbeHosts(t.Prefix, pin, p.NextHop, p.Source)
+			if len(hosts) == 0 {
+				continue
+			}
+			jobs = append(jobs, job{provider: p, target: t, hosts: hosts})
 		}
 	}
 	// Targets exist but none are due. Keep stored results and let the
@@ -779,12 +804,86 @@ func (e *Engine) sem(a netip.Addr) chan struct{} {
 	return s
 }
 
-// probe runs the prober chain for one job. Chain semantics: try probers in
-// order; move on when a prober errors or gets no replies; stop immediately
-// (fail closed) if the source address is unusable.
+// probe measures every host for one provider and prefix and stores one
+// result. A named host is probed alone. Otherwise a silent in-prefix host
+// is left out of the score when another in-prefix host answered, and the
+// far-side gateway counts only when every in-prefix host was silent.
+// Traceroute hop times are not used. A dead probe source fails closed.
 func (e *Engine) probe(ctx context.Context, j job) (Result, bool) {
-	res := Result{Provider: j.provider.Name, Prefix: j.target.Prefix, Target: j.target.Host}
-	sem := e.sem(j.target.Host)
+	hosts := j.hosts
+	if len(hosts) == 0 && j.target.Host.IsValid() {
+		hosts = []netip.Addr{j.target.Host}
+	}
+	gw := netip.Addr{}
+	if !j.target.Pinned {
+		gw = j.provider.NextHop
+	}
+	copied := append([]netip.Addr(nil), hosts...)
+	var samples []hostSample
+	var errs []error
+	for _, h := range hosts {
+		one, down := e.probeOne(ctx, j.provider, j.target.Prefix, h, e.opt.Packets)
+		one.Targets = copied
+		if down || ctx.Err() != nil {
+			return one, down
+		}
+		if one.Err != "" {
+			errs = append(errs, errors.New(one.Err))
+			continue
+		}
+		samples = append(samples, hostSample{addr: h, res: one, gateway: gw.IsValid() && h == gw})
+	}
+	if len(samples) == 0 {
+		res := Result{Provider: j.provider.Name, Prefix: j.target.Prefix, Targets: copied, Time: e.opt.Now()}
+		if len(hosts) > 0 {
+			res.Target = hosts[0]
+		}
+		if len(errs) == 0 {
+			res.Err = "no probe target"
+		} else {
+			res.Err = errors.Join(errs...).Error()
+		}
+		return res, false
+	}
+	res := combineHosts(j.provider.Name, j.target.Prefix, copied, samples)
+	if e.opt.RetryLossPct <= 0 || res.Stats.LossPct < e.opt.RetryLossPct {
+		return res, false
+	}
+	used := scoreSamples(samples)
+	var again []hostSample
+	for _, s := range used {
+		one, down := e.probeOne(ctx, j.provider, j.target.Prefix, s.addr, e.opt.RetryPackets)
+		one.Targets = copied
+		if down || ctx.Err() != nil {
+			return one, down
+		}
+		if one.Err != "" {
+			e.log.Debug("retry failed; keeping first sample", "provider", res.Provider, "prefix", res.Prefix, "err", one.Err)
+			return res, false
+		}
+		again = append(again, hostSample{addr: s.addr, res: one, gateway: s.gateway})
+	}
+	e.log.Debug("retry probe", "provider", res.Provider, "prefix", res.Prefix, "loss_pct", res.Stats.LossPct, "packets", e.opt.RetryPackets)
+	return combineHosts(j.provider.Name, j.target.Prefix, copied, again), false
+}
+
+// hostSample is one address's measurement inside a prefix.
+type hostSample struct {
+	addr    netip.Addr
+	res     Result
+	gateway bool
+}
+
+// probeOne runs the prober chain for one address. Chain semantics: try
+// probers in order; move on when a prober errors or gets no replies; stop
+// immediately (fail closed) if the source address is unusable.
+func (e *Engine) probeOne(ctx context.Context, p Provider, prefix netip.Prefix, host netip.Addr, count int) (Result, bool) {
+	res := Result{Provider: p.Name, Prefix: prefix, Target: host}
+	if count < 1 {
+		res.Err, res.Time = "no packets", e.opt.Now()
+		return res, false
+	}
+	sem := e.sem(host)
 	select {
 	case sem <- struct{}{}:
 	case <-ctx.Done():
@@ -793,80 +892,142 @@ func (e *Engine) probe(ctx context.Context, j job) (Result, bool) {
 	}
 	defer func() { <-sem }()
 
-	req := plugin.ProbeRequest{Provider: j.provider.Name, Source: j.provider.Source,
-		Target: j.target.Host, Count: e.opt.Packets, Timeout: e.opt.Timeout}
+	req := plugin.ProbeRequest{Provider: p.Name, Source: p.Source,
+		Target: host, Count: count, Timeout: e.opt.Timeout}
 	var errs []error
 	var fallback *Result
-	var fallbackProber plugin.Prober
-	for _, p := range e.probers {
+	for _, pr := range e.probers {
 		if e.opt.Limiter != nil {
-			if err := e.opt.Limiter.WaitN(ctx, e.opt.Packets); err != nil {
+			if err := e.opt.Limiter.WaitN(ctx, count); err != nil {
 				errs = append(errs, fmt.Errorf("rate limit: %w", err))
 				break
 			}
 		}
-		pctx, cancel := context.WithTimeout(ctx, time.Duration(e.opt.Packets)*e.opt.Timeout+time.Second)
-		raw, err := p.Prober.Probe(pctx, req)
+		pctx, cancel := context.WithTimeout(ctx, time.Duration(count)*e.opt.Timeout+time.Second)
+		raw, err := pr.Prober.Probe(pctx, req)
 		cancel()
 		if err != nil {
 			if errors.Is(err, plugin.ErrSourceUnavailable) {
-				res.Err, res.Time = fmt.Sprintf("%s: %v", p.Name, err), e.opt.Now()
+				res.Err, res.Time = fmt.Sprintf("%s: %v", pr.Name, err), e.opt.Now()
 				return res, true
 			}
-			errs = append(errs, fmt.Errorf("%s: %w", p.Name, err))
+			errs = append(errs, fmt.Errorf("%s: %w", pr.Name, err))
 			continue
 		}
 		r := res
-		r.Prober, r.Stats, r.Time = p.Name, Compute(raw), e.opt.Now()
+		r.Prober, r.Stats, r.Time = pr.Name, Compute(raw), e.opt.Now()
 		if r.Stats.Received > 0 {
-			return e.retryLoss(ctx, r, p.Prober, j.provider.Source)
+			return r, false
 		}
 		if fallback == nil {
 			cp := r
 			fallback = &cp // full loss: remember, but try the next prober
-			fallbackProber = p.Prober
 		}
 	}
 	if fallback != nil {
-		return e.retryLoss(ctx, *fallback, fallbackProber, j.provider.Source)
+		return *fallback, false
 	}
 	res.Err, res.Time = errors.Join(errs...).Error(), e.opt.Now()
 	return res, false
 }
 
-// retryLoss re-measures a high-loss result with more packets before it
-// is stored. The retry sample replaces the first. A rate-limit or probe
-// error keeps the first sample; a dead source still fails closed.
-func (e *Engine) retryLoss(ctx context.Context, res Result, prober plugin.Prober, source netip.Addr) (Result, bool) {
-	if e.opt.RetryLossPct <= 0 || !res.OK() || res.Stats.LossPct < e.opt.RetryLossPct || prober == nil {
-		return res, false
-	}
-	count := e.opt.RetryPackets
-	if e.opt.Limiter != nil {
-		if err := e.opt.Limiter.WaitN(ctx, count); err != nil {
-			e.log.Debug("retry skipped", "provider", res.Provider, "prefix", res.Prefix, "err", err)
-			return res, false
+// scoreSamples picks the hosts that define the prefix. Answering addresses
+// inside the prefix win, so one silent host does not. The far-side gateway
+// is the sample only when none of those answered. When nothing answered,
+// every measured host counts so the loss is 100%.
+func scoreSamples(samples []hostSample) []hostSample {
+	var inPrefix, answered, measured []hostSample
+	for _, s := range samples {
+		if !s.res.OK() {
+			continue
+		}
+		measured = append(measured, s)
+		if s.res.Stats.Received == 0 {
+			continue
+		}
+		answered = append(answered, s)
+		if !s.gateway {
+			inPrefix = append(inPrefix, s)
 		}
 	}
-	pctx, cancel := context.WithTimeout(ctx, time.Duration(count)*e.opt.Timeout+time.Second)
-	defer cancel()
-	raw, err := prober.Probe(pctx, plugin.ProbeRequest{
-		Provider: res.Provider, Source: source, Target: res.Target, Count: count, Timeout: e.opt.Timeout,
-	})
-	if err != nil {
-		if errors.Is(err, plugin.ErrSourceUnavailable) {
-			res.Err = fmt.Sprintf("%s: %v", res.Prober, err)
-			res.Time = e.opt.Now()
-			res.Stats = Stats{}
-			return res, true
-		}
-		e.log.Debug("retry failed; keeping first sample", "provider", res.Provider, "prefix", res.Prefix, "err", err)
-		return res, false
+	if len(inPrefix) > 0 {
+		return inPrefix
 	}
-	e.log.Debug("retry probe", "provider", res.Provider, "prefix", res.Prefix, "loss_pct", res.Stats.LossPct, "packets", count)
-	res.Stats = Compute(raw)
-	res.Time = e.opt.Now()
-	return res, false
+	if len(answered) > 0 {
+		return answered
+	}
+	return measured
+}
+
+// combineHosts builds one result from the hosts that define the score.
+// Loss and RTT come from those hosts only. Target is the first of them
+// that answered, otherwise the first probed address.
+func combineHosts(provider string, prefix netip.Prefix, hosts []netip.Addr, samples []hostSample) Result {
+	used := scoreSamples(samples)
+	res := Result{Provider: provider, Prefix: prefix, Targets: hosts, Time: samples[0].res.Time}
+	if len(hosts) > 0 {
+		res.Target = hosts[0]
+	}
+	if len(used) == 0 {
+		res.Err = "no probe target"
+		return res
+	}
+	res.Prober = used[0].res.Prober
+	res.Time = used[len(used)-1].res.Time
+	parts := make([]Stats, len(used))
+	answered := false
+	for i, s := range used {
+		parts[i] = s.res.Stats
+		if !answered && s.res.Stats.Received > 0 {
+			res.Target = s.addr
+			answered = true
+		}
+	}
+	res.Stats = combineStats(parts)
+	return res
+}
+
+// combineStats pools per-host statistics. RTT is the reply-weighted mean.
+// Jitter is the reply-gap-weighted mean of the per-host jitters.
+func combineStats(parts []Stats) Stats {
+	var s Stats
+	var rttSum time.Duration
+	var jitSum time.Duration
+	jitWeight := 0
+	seenRTT := false
+	for _, p := range parts {
+		s.Sent += p.Sent
+		s.Received += p.Received
+		if p.Received == 0 {
+			continue
+		}
+		rttSum += p.RTTAvg * time.Duration(p.Received)
+		if !seenRTT || p.RTTMin < s.RTTMin {
+			s.RTTMin = p.RTTMin
+		}
+		if p.RTTMax > s.RTTMax {
+			s.RTTMax = p.RTTMax
+		}
+		seenRTT = true
+		if p.Received > 1 {
+			jitSum += p.Jitter * time.Duration(p.Received-1)
+			jitWeight += p.Received - 1
+		}
+	}
+	if s.Sent > 0 {
+		lost := s.Sent - s.Received
+		if lost < 0 {
+			lost = 0
+		}
+		s.LossPct = 100 * float64(lost) / float64(s.Sent)
+	}
+	if s.Received > 0 {
+		s.RTTAvg = rttSum / time.Duration(s.Received)
+	}
+	if jitWeight > 0 {
+		s.Jitter = jitSum / time.Duration(jitWeight)
+	}
+	return s
 }
 
 // Results returns the latest results sorted by prefix, then provider.
