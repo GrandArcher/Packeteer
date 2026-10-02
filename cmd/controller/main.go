@@ -432,8 +432,10 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 			log.Warn("http.config_editor is on but neither auth nor basic auth is: the editor stays off")
 		}
 	}
+	var httpSrv *httpapi.Server
 	if addr := cfg.HTTPListen(); addr != "" {
-		srv, err := httpapi.New(httpapi.Options{
+		var err error
+		httpSrv, err = httpapi.New(httpapi.Options{
 			Addr: addr, User: httpUser, Password: httpPass, Snapshot: col.Snapshot, Logger: log,
 			Auth: authSvc, Audit: audit, AllowFrom: cfg.HTTPAllowFrom(),
 			Maintenance: maint, Reports: reports, Tools: tools, Inbound: inboundStatus, Mitigation: mitAPI, Anomaly: anomAPI,
@@ -445,14 +447,14 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 			log.Error("refusing to start", "err", err)
 			return 1
 		}
-		if err := srv.Start(); err != nil {
+		if err := httpSrv.Start(); err != nil {
 			log.Error("refusing to start", "err", err)
 			return 1
 		}
 		defer func() {
 			stopCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
-			if err := srv.Shutdown(stopCtx); err != nil {
+			if err := httpSrv.Shutdown(stopCtx); err != nil {
 				log.Error("http shutdown", "err", err)
 			}
 		}()
@@ -551,6 +553,7 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 	col.SetTelemetry(func() []plugin.Usage { return collectTelemetry(context.Background(), plugins) })
 	col.Attach(engine, decider, view)
 	wireExchanges(cfg, col, view)
+	wireSuggestions(cfg, httpSrv, view)
 	// Active/standby (#31): registered before the elector starts. A
 	// standby withdraws everything, runs no decisions, and announces
 	// nothing; the announce controllers check the same gate.
@@ -788,6 +791,66 @@ func wireExchanges(cfg *config.Config, col *httpapi.Collector, view *rib.View) {
 		}
 		return cached
 	})
+}
+
+// wireSuggestions gives the settings form next hops seen on iBGP or BMP
+// that are not configured providers (#102). Counts walk every learned
+// path, so they are rebuilt only when the RIB generation changes. The
+// callback only reads. Accepting a suggestion is a draft row in the
+// form; nothing here writes a provider, probes, or announces. Exchange
+// LAN hops stay on /api/exchanges until the operator adds them as peers.
+func wireSuggestions(cfg *config.Config, srv *httpapi.Server, view *rib.View) {
+	if srv == nil {
+		return
+	}
+	if view == nil {
+		srv.SetSuggestions(func() []httpapi.Suggestion { return nil })
+		return
+	}
+	var mu sync.Mutex
+	var gen uint64
+	var cached []httpapi.Suggestion
+	built := false
+	srv.SetSuggestions(func() []httpapi.Suggestion {
+		g := view.Generation()
+		mu.Lock()
+		defer mu.Unlock()
+		if !built || g != gen {
+			cached = providerSuggestions(cfg, view)
+			gen = g
+			built = true
+		}
+		out := make([]httpapi.Suggestion, len(cached))
+		copy(out, cached)
+		return out
+	})
+}
+
+const maxProviderSuggestions = 64
+
+func providerSuggestions(cfg *config.Config, view *rib.View) []httpapi.Suggestion {
+	if cfg == nil || view == nil {
+		return nil
+	}
+	var configured []netip.Addr
+	for _, p := range cfg.Providers {
+		if a, err := netip.ParseAddr(p.NextHop); err == nil {
+			configured = append(configured, a.Unmap())
+		}
+	}
+	var lans []netip.Prefix
+	for _, ex := range cfg.Exchanges {
+		lans = append(lans, ex.ExchangeLANs()...)
+	}
+	hops := view.SuggestNextHops(configured, lans)
+	if len(hops) > maxProviderSuggestions {
+		hops = hops[:maxProviderSuggestions]
+	}
+	out := make([]httpapi.Suggestion, 0, len(hops))
+	for _, h := range hops {
+		out = append(out, httpapi.Suggestion{NextHop: h.NextHop.String(), ASN: h.ASN, Prefixes: h.Prefixes})
+	}
+	return out
 }
 
 // ribGate is the RIB surface the announcer controller consults.

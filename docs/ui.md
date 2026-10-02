@@ -5,7 +5,7 @@ The remaining IRP GUI conveniences (#34). All of them work in the stock image wi
 | Feature | Where | Who | Config |
 |---|---|---|---|
 | Dashboard overview and setup checklist (#49) | `/`, `/api/overview` | viewer | none |
-| Config editor | `/settings.html`, `/api/config` | admin | `http.config_editor: true` + auth or basic auth |
+| Config editor and settings form (#102) | `/settings.html`, `/api/config`, `POST /api/config/form` | admin | `http.config_editor: true` + auth or basic auth |
 | First-run wizard | `/settings.html`, `POST /api/config/wizard` | admin | `http.config_editor: true` + auth or basic auth |
 | Custom dashboards | `/dashboards.html`, `/api/dashboards` | every signed-in user, own dashboards | `storage: {type: sqlite}` + auth or basic auth |
 | Report subscriptions | `report_subscriptions`, `/api/subscriptions` | viewers see them, operators send now | `storage` + an `smtp` notifier |
@@ -68,6 +68,16 @@ The file is written next to itself and renamed into place when the directory all
 The running controller does **not** change. Restart the container to apply the new file, or send SIGHUP when only `bgp.neighbors` changed ([route-reflector.md](route-reflector.md)). A restart withdraws every Packeteer route first, as always.
 
 Every write, accepted or refused, is in the audit log with the old and new hashes (never the content) and is logged as a warning.
+
+## Settings form
+
+`/settings.html` puts a form beside the YAML (#102). The form has a row per provider (name, probe source, next hop, cost, commit), a row per static probe prefix, a row per allowlist prefix, and separate fields for hold time, the improvement cap, the loss and latency thresholds, and, when the scorer is `cost`, whether cost or performance wins plus the floor (extra loss, extra delay). Plus adds a row and minus removes one. Apply copies the form into the YAML in the editor and does not write the file. Save is still `PUT /api/config`: the same checks as a start, the same `confirm_inject` when the text turns inject on, and the running controller still applies the file on restart (or SIGHUP when only `bgp.neighbors` changed).
+
+Fields the form does not show stay in the YAML, including plugin blocks. An unchanged form is not reformatted. Commit is the SNMP telemetry binding's `commit_mbps` for that provider; there is no field for a community or a passphrase. A commit with no binding is refused until the binding is in the YAML. Choosing cost-or-performance, or setting the floor, on a `weighted` scorer (or none) switches `scorer.type` to `cost` and keeps the weights. It does not replace a `commit` scorer.
+
+`POST /api/config/form {"yaml"}` returns `form`. `POST /api/config/form {"yaml","apply":true,"form":{...}}` returns the merged `yaml` and the form read back. Neither writes.
+
+`GET /api/config/suggestions` lists next hops seen on iBGP (including add-path) or BMP that are not a configured provider and not on an exchange LAN: `next_hop`, `asn` (the most common first AS), and `prefixes`. The busiest 64 are returned. Accepting one in the page adds a draft provider row with the next hop and the AS shown. The probe source, cost, and commit stay empty. Accepting does not call the API, so it does not write a provider, start probing, or announce. Exchange LAN hops stay on `GET /api/exchanges` until the operator adds them as peers. The list is cached against the RIB generation and only reads.
 
 **Secrets.** `GET /api/config` returns the file exactly as it is on disk, to every admin API client; nothing is redacted (a redacted file could not be saved back). With the editor on, keep every secret out of the file: built-in plugins only take secrets by environment variable name (`password_env`, `community_env`, `auth_env`, `client_secret_env`, `routing_key_env`), and webhook `url`/`headers` and exec `env` values should reference `${VAR}` instead of holding a token.
 

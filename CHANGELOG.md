@@ -4,6 +4,10 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 
 ## [Unreleased]
 
+### Added
+
+- Settings form beside the YAML editor (#102). `/settings.html` edits providers (name, probe source, next hop, cost, commit), static probe prefixes, the allowlist, and the decision knobs (hold time, improvement cap, loss and latency thresholds, and on the cost scorer whether cost or performance wins plus the extra-loss and extra-delay floor) with plus and minus rows. `POST /api/config/form` merges that into the YAML without writing; save is still `PUT /api/config` with the start checks, `confirm_inject`, and apply-on-restart. Secrets stay in environment variables. `GET /api/config/suggestions` lists iBGP or BMP next hops that are not configured providers and not on an exchange LAN; accepting one adds a draft row (next hop and AS only) and does not write, probe, or announce. No announce-path change. Rollback: none needed; leave the form unused and keep editing the file.
+
 ## [0.5.0] - 2026-10-01
 
 Fifth release: hardening and polish (#49–#53). UI/UX polish so a first run is readable (mode banner, overview tiles, setup checklist, empty and error states); install and walkthrough docs that CI runs (single-container quickstart, observe → suggest → inject on a simulated edge, troubleshooting, MikroTik/FRR/Junos/Cisco router guides); load and soak budgets under a full-table synthetic RIB, a fix for flow ingest when that window is full, and an RSS growth check that does not treat a Go heap refill as a leak; a MikroTik CHR lab in QEMU on CI runners; and a scheduled router interop matrix (FRR, BIRD 2/3, and GoBGP edges against iBGP, add-path, and BMP, plus CHR). Lab-proven only, against simulated routers in CI with documentation prefixes and private ASNs, not on a public edge. Safety rules are unchanged: the default stays `mode: observe`, an announcement still needs the exact prefix in the learned RIB, the allowlist, the configured community and NO_EXPORT, the improvement cap, and hold time, and CI still proves announce, withdraw, and crash-withdraw. Field feedback from real observe-mode deployments (#54) is still open.

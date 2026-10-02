@@ -1,6 +1,13 @@
 "use strict";
 
 var base = "";
+var form = emptyForm();
+
+function emptyForm() {
+  return {mode: "", hold_time: "", max_improvements: "", min_loss_delta_pct: "", min_rtt_delta_ms: "",
+    precedence: "", scorer_type: "", floor_max_loss_pct: "", floor_max_rtt: "",
+    providers: [], targets: [], allowlist: []};
+}
 
 function edStatus(text, errors) {
   document.getElementById("ed-status").textContent = text || "";
@@ -34,7 +41,12 @@ function editorOff(err) {
   var node = document.getElementById("ed-off");
   node.textContent = explain(err);
   node.hidden = !off;
-  ["ed-load", "ed-check", "ed-save", "wz-run"].forEach(function (id) { document.getElementById(id).disabled = off; });
+  ["ed-load", "ed-check", "ed-save", "wz-run", "form-apply", "form-reload", "form-add-provider", "form-add-target", "form-add-allow", "sug-refresh"].forEach(function (id) {
+    var b = document.getElementById(id);
+    if (b) b.disabled = off;
+  });
+  var fields = document.getElementById("form-fields");
+  if (fields) fields.disabled = off;
 }
 
 function loadConfig() {
@@ -45,6 +57,8 @@ function loadConfig() {
     document.getElementById("ed-sha").textContent = f.sha256.slice(0, 12);
     document.getElementById("ed-off").hidden = true;
     edStatus("Loaded.");
+    loadForm(f.yaml);
+    loadSuggestions();
   }, function (err) { editorOff(err); edStatus(explain(err)); });
 }
 
@@ -66,6 +80,219 @@ function saveConfig() {
     var res = err.data && err.data.result;
     edStatus(err.message + (res ? " — " + describe(res) : ""), res && res.errors);
   });
+}
+
+function formStatus(text) {
+  document.getElementById("form-status").textContent = text || "";
+}
+
+function readKnobs() {
+  form.mode = document.getElementById("fm-mode").value;
+  form.hold_time = document.getElementById("fm-hold").value.trim();
+  form.max_improvements = document.getElementById("fm-cap").value.trim();
+  form.min_loss_delta_pct = document.getElementById("fm-loss").value.trim();
+  form.min_rtt_delta_ms = document.getElementById("fm-rtt").value.trim();
+  form.precedence = document.getElementById("fm-precedence").value;
+  form.floor_max_loss_pct = document.getElementById("fm-floor-loss").value.trim();
+  form.floor_max_rtt = document.getElementById("fm-floor-rtt").value.trim();
+}
+
+function fillKnobs() {
+  document.getElementById("fm-mode").value = form.mode || "";
+  document.getElementById("fm-hold").value = form.hold_time || "";
+  document.getElementById("fm-cap").value = form.max_improvements || "";
+  document.getElementById("fm-loss").value = form.min_loss_delta_pct || "";
+  document.getElementById("fm-rtt").value = form.min_rtt_delta_ms || "";
+  document.getElementById("fm-floor-loss").value = form.floor_max_loss_pct || "";
+  document.getElementById("fm-floor-rtt").value = form.floor_max_rtt || "";
+  var sel = document.getElementById("fm-precedence");
+  clear(sel);
+  var scorer = form.scorer_type || "";
+  var note = document.getElementById("fm-scorer");
+  if (scorer === "cost") {
+    [["performance", "performance wins"], ["cost", "cost wins"]].forEach(function (o) {
+      var opt = el("option", "", o[1]);
+      opt.value = o[0];
+      sel.appendChild(opt);
+    });
+    sel.value = form.precedence || "performance";
+    sel.disabled = false;
+    note.textContent = "Scorer is cost. Extra loss and extra delay are the floor a cheaper path must stay inside.";
+  } else if (scorer && scorer !== "weighted") {
+    var opt = el("option", "", "not used (scorer is " + scorer + ")");
+    opt.value = "";
+    sel.appendChild(opt);
+    sel.value = "";
+    sel.disabled = true;
+    note.textContent = "These knobs belong to the cost scorer. This file uses " + scorer + ". Change the scorer in the YAML if you mean to replace it.";
+  } else {
+    [["", "not used (scorer is " + (scorer || "weighted") + ")"], ["performance", "performance wins"], ["cost", "cost wins"]].forEach(function (o) {
+      var opt = el("option", "", o[1]);
+      opt.value = o[0];
+      sel.appendChild(opt);
+    });
+    sel.value = form.precedence || "";
+    sel.disabled = false;
+    note.textContent = "Choosing cost or performance, or setting the floor, switches the scorer to cost and keeps its other settings. Leave it unused to keep the current scorer.";
+  }
+}
+
+function rowInput(value, placeholder, wide) {
+  var input = el("input");
+  input.type = "text";
+  input.value = value || "";
+  input.placeholder = placeholder;
+  input.spellcheck = false;
+  if (wide) input.className = "wide-input";
+  return input;
+}
+
+function renderProviders() {
+  var root = document.getElementById("form-providers");
+  clear(root);
+  form.providers.forEach(function (p, i) {
+    var row = el("div", "row");
+    var name = rowInput(p.name, "name");
+    var src = rowInput(p.source_ip, "probe source");
+    var hop = rowInput(p.next_hop, "next hop");
+    var cost = rowInput(p.cost, "cost");
+    var commit = rowInput(p.commit_mbps, p.commit_bound ? "commit Mbps" : "commit (no binding)");
+    name.addEventListener("input", function () { form.providers[i].name = name.value.trim(); });
+    src.addEventListener("input", function () { form.providers[i].source_ip = src.value.trim(); });
+    hop.addEventListener("input", function () { form.providers[i].next_hop = hop.value.trim(); });
+    cost.addEventListener("input", function () { form.providers[i].cost = cost.value.trim(); });
+    commit.addEventListener("input", function () { form.providers[i].commit_mbps = commit.value.trim(); });
+    [name, src, hop, cost, commit].forEach(function (n) { row.appendChild(n); });
+    if (p.asn) row.appendChild(el("span", "tag", "AS " + p.asn + " from the session, not saved"));
+    else if (p.draft) row.appendChild(el("span", "tag", "draft"));
+    var minus = el("button", "small", "−");
+    minus.type = "button";
+    minus.title = "Remove provider";
+    minus.addEventListener("click", function () {
+      form.providers.splice(i, 1);
+      renderProviders();
+      renderSuggestions(lastSuggestions);
+    });
+    row.appendChild(minus);
+    root.appendChild(row);
+  });
+  if (!form.providers.length) root.appendChild(el("p", "empty", "No providers. Add one before applying."));
+}
+
+function renderTargets() {
+  var root = document.getElementById("form-targets");
+  clear(root);
+  form.targets.forEach(function (t, i) {
+    var row = el("div", "row");
+    var prefix = rowInput(t.prefix, "prefix", true);
+    var host = rowInput(t.host, "host");
+    prefix.addEventListener("input", function () { form.targets[i].prefix = prefix.value.trim(); });
+    host.addEventListener("input", function () { form.targets[i].host = host.value.trim(); });
+    row.appendChild(prefix);
+    row.appendChild(host);
+    var minus = el("button", "small", "−");
+    minus.type = "button";
+    minus.title = "Remove prefix";
+    minus.addEventListener("click", function () { form.targets.splice(i, 1); renderTargets(); });
+    row.appendChild(minus);
+    root.appendChild(row);
+  });
+  if (!form.targets.length) root.appendChild(el("p", "empty", "No static probe prefixes. Other sources in the YAML are unchanged."));
+}
+
+function renderAllow() {
+  var root = document.getElementById("form-allow");
+  clear(root);
+  form.allowlist.forEach(function (prefix, i) {
+    var row = el("div", "row");
+    var input = rowInput(prefix, "prefix", true);
+    input.addEventListener("input", function () { form.allowlist[i] = input.value.trim(); });
+    row.appendChild(input);
+    var minus = el("button", "small", "−");
+    minus.type = "button";
+    minus.title = "Remove allowlist prefix";
+    minus.addEventListener("click", function () { form.allowlist.splice(i, 1); renderAllow(); });
+    row.appendChild(minus);
+    root.appendChild(row);
+  });
+  if (!form.allowlist.length) root.appendChild(el("p", "empty", "Allowlist is empty. Inject cannot announce until a prefix is listed and the file is saved."));
+}
+
+function renderForm() {
+  fillKnobs();
+  renderProviders();
+  renderTargets();
+  renderAllow();
+  renderSuggestions(lastSuggestions);
+}
+
+function loadForm(yaml) {
+  formStatus("Reading the form…");
+  api("POST", "/api/config/form", {yaml: yaml, apply: false}).then(function (out) {
+    form = out.form || emptyForm();
+    if (!form.providers) form.providers = [];
+    if (!form.targets) form.targets = [];
+    if (!form.allowlist) form.allowlist = [];
+    renderForm();
+    formStatus("");
+  }, function (err) {
+    formStatus(explain(err) + " The YAML is unchanged. Fix it, then reload the form.");
+  });
+}
+
+function applyForm() {
+  readKnobs();
+  formStatus("Applying to the YAML…");
+  api("POST", "/api/config/form", {yaml: document.getElementById("ed-yaml").value, apply: true, form: form}).then(function (out) {
+    document.getElementById("ed-yaml").value = out.yaml;
+    form = out.form || form;
+    renderForm();
+    formStatus("Applied to the YAML. Not saved. Validate, then Save. A restart applies it (SIGHUP only when just bgp.neighbors changed).");
+  }, function (err) { formStatus(explain(err)); });
+}
+
+var lastSuggestions = [];
+
+function renderSuggestions(list) {
+  lastSuggestions = list || [];
+  var root = document.getElementById("form-suggestions");
+  clear(root);
+  var hops = {};
+  form.providers.forEach(function (p) { if (p.next_hop) hops[p.next_hop] = true; });
+  var shown = lastSuggestions.filter(function (s) { return s.next_hop && !hops[s.next_hop]; });
+  if (!shown.length) {
+    root.appendChild(el("p", "empty", lastSuggestions.length ? "Every suggested next hop is already a row." : "No suggestions. Refresh after the iBGP or BMP session has routes."));
+    return;
+  }
+  shown.forEach(function (s) {
+    var row = el("div", "row");
+    row.appendChild(el("span", "mono", s.next_hop));
+    row.appendChild(el("span", "tag", s.asn ? "AS " + s.asn : "AS unknown"));
+    row.appendChild(el("span", "tag", s.prefixes + " prefixes"));
+    var b = el("button", "small", "Accept");
+    b.type = "button";
+    b.addEventListener("click", function () { acceptSuggestion(s); });
+    row.appendChild(b);
+    root.appendChild(row);
+  });
+}
+
+// acceptSuggestion adds a draft provider row. It does not call the API,
+// so it cannot write a provider, start probing, or announce.
+function acceptSuggestion(s) {
+  form.providers.push({
+    key: "", name: "", source_ip: "", next_hop: s.next_hop || "", cost: "", commit_mbps: "",
+    commit_bound: false, asn: s.asn ? String(s.asn) : "", draft: true
+  });
+  renderProviders();
+  renderSuggestions(lastSuggestions);
+  formStatus("Draft row added. Name it and fill in the probe source. Cost and commit stay empty until you set them. Nothing is saved.");
+}
+
+function loadSuggestions() {
+  api("GET", "/api/config/suggestions").then(function (out) {
+    renderSuggestions((out && out.suggestions) || []);
+  }, function () { renderSuggestions([]); });
 }
 
 function lines(id) {
@@ -117,8 +344,9 @@ function runWizard() {
   status.textContent = "Generating…";
   api("POST", "/api/config/wizard", body).then(function (out) {
     document.getElementById("ed-yaml").value = out.yaml;
-    status.textContent = "Generated (observe). Review it in the editor below, then Save and restart the container.";
+    status.textContent = "Generated (observe). Review it below, then Save and restart the container. Nothing is written until you save.";
     if (!base) api("GET", "/api/config").then(function (f) { base = f.sha256; }, function () {});
+    loadForm(out.yaml);
     checkConfig();
     document.getElementById("editor-section").scrollIntoView();
   }, function (err) {
@@ -170,5 +398,27 @@ document.getElementById("ed-load").addEventListener("click", loadConfig);
 document.getElementById("ed-check").addEventListener("click", checkConfig);
 document.getElementById("ed-save").addEventListener("click", saveConfig);
 document.getElementById("wz-run").addEventListener("click", runWizard);
+document.getElementById("form-apply").addEventListener("click", applyForm);
+document.getElementById("form-reload").addEventListener("click", function () {
+  readKnobs();
+  loadForm(document.getElementById("ed-yaml").value);
+});
+document.getElementById("form-add-provider").addEventListener("click", function () {
+  form.providers.push({key: "", name: "", source_ip: "", next_hop: "", cost: "", commit_mbps: "", commit_bound: false, draft: true});
+  renderProviders();
+});
+document.getElementById("form-add-target").addEventListener("click", function () {
+  form.targets.push({key: "", prefix: "", host: ""});
+  renderTargets();
+});
+document.getElementById("form-add-allow").addEventListener("click", function () {
+  form.allowlist.push("");
+  renderAllow();
+});
+document.getElementById("sug-refresh").addEventListener("click", loadSuggestions);
+["fm-mode", "fm-hold", "fm-cap", "fm-loss", "fm-rtt", "fm-precedence", "fm-floor-loss", "fm-floor-rtt"].forEach(function (id) {
+  document.getElementById(id).addEventListener("change", readKnobs);
+  document.getElementById(id).addEventListener("input", readKnobs);
+});
 loadConfig();
 renderSubs();

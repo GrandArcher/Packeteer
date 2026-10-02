@@ -141,6 +141,7 @@ func (f *fakeSubs) SendNow(_ context.Context, name string) error {
 // file, an in-memory dashboard store, and fake subscriptions.
 type uiEnv struct {
 	h      http.Handler
+	srv    *Server
 	path   string
 	store  *authtest.Store
 	dash   *memDashboards
@@ -162,7 +163,7 @@ func newUI(t *testing.T) *uiEnv {
 	if err != nil {
 		t.Fatal(err)
 	}
-	e.h = srv.Handler()
+	e.srv, e.h = srv, srv.Handler()
 	for _, r := range []plugin.Role{plugin.RoleViewer, plugin.RoleOperator, plugin.RoleAdmin} {
 		name := string(r) + "-user"
 		if _, err := svc.CreateUser(context.Background(), name, r, name+"-password"); err != nil {
@@ -430,9 +431,9 @@ func TestSubscriptionsAPI(t *testing.T) {
 func TestUIPages(t *testing.T) {
 	e := newUI(t)
 	for page, wants := range map[string][]string{
-		"/settings.html":   {`src="/ui.js"`, `src="/settings.js"`, `id="ed-yaml"`, `id="wz-run"`, `id="subs"`},
+		"/settings.html":   {`src="/ui.js"`, `src="/settings.js"`, `id="ed-yaml"`, `id="wz-run"`, `id="subs"`, `id="form-apply"`, `id="form-providers"`, `id="sug-refresh"`},
 		"/dashboards.html": {`src="/ui.js"`, `src="/dashboards.js"`, `id="db-grid"`},
-		"/settings.js":     {"/api/config/validate", "/api/config/wizard", "confirm_inject", "/api/subscriptions/"},
+		"/settings.js":     {"/api/config/validate", "/api/config/wizard", "/api/config/form", "/api/config/suggestions", "confirm_inject", "/api/subscriptions/", "function acceptSuggestion"},
 		"/dashboards.js":   {"/api/dashboards", "widget_types"},
 		"/":                {`href="/settings.html"`, `href="/dashboards.html"`},
 	} {
@@ -460,5 +461,96 @@ func TestDecisionWeightInSnapshot(t *testing.T) {
 	raw, _ := json.Marshal(out[0])
 	if !strings.Contains(string(raw), `"weight":530`) {
 		t.Fatalf("json = %s", raw)
+	}
+}
+
+func TestConfigFormAndSuggestions(t *testing.T) {
+	e := newUI(t)
+	admin := plugin.RoleAdmin
+	e.srv.SetSuggestions(func() []Suggestion {
+		return []Suggestion{{NextHop: "192.0.2.9", ASN: 64496, Prefixes: 4}}
+	})
+	before, err := os.ReadFile(e.path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rec, got := e.do(t, "GET", "/api/config/suggestions", admin, nil)
+	if rec.Code != http.StatusOK || len(got["suggestions"].([]any)) != 1 {
+		t.Fatalf("suggestions: %d %s", rec.Code, rec.Body)
+	}
+	after, err := os.ReadFile(e.path)
+	if err != nil || string(after) != string(before) {
+		t.Fatal("suggestions wrote the config file")
+	}
+	if rec, _ := e.do(t, "GET", "/api/config/suggestions", plugin.RoleOperator, nil); rec.Code != http.StatusForbidden {
+		t.Fatalf("operator suggestions: %d", rec.Code)
+	}
+
+	rec, got = e.do(t, "POST", "/api/config/form", admin, map[string]any{"yaml": editorYAML, "apply": false})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("parse: %d %s", rec.Code, rec.Body)
+	}
+	fm := got["form"].(map[string]any)
+	provs := fm["providers"].([]any)
+	if len(provs) != 2 {
+		t.Fatalf("providers: %s", rec.Body)
+	}
+	// Accepting a suggestion is a draft row: next hop and AS only.
+	// Cost, commit, and probe source stay empty. Apply must not write
+	// the AS, must not add an announcer, and must not save.
+	provs = append(provs, map[string]any{
+		"key": "", "name": "transit-c", "source_ip": "192.0.2.13", "next_hop": "192.0.2.9",
+		"cost": "", "commit_mbps": "", "asn": "64496", "draft": true,
+	})
+	fm["providers"] = provs
+	rec, got = e.do(t, "POST", "/api/config/form", admin, map[string]any{"yaml": editorYAML, "apply": true, "form": fm})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("apply: %d %s", rec.Code, rec.Body)
+	}
+	yml := got["yaml"].(string)
+	if strings.Contains(yml, "64496") || strings.Contains(yml, "announcer:") || strings.Contains(yml, "graceful") {
+		t.Fatalf("apply wrote a suggestion AS or an announcer:\n%s", yml)
+	}
+	if !strings.Contains(yml, "next_hop: 192.0.2.9") || !strings.Contains(yml, "mode: observe") {
+		t.Fatalf("apply:\n%s", yml)
+	}
+	disk, err := os.ReadFile(e.path)
+	if err != nil || string(disk) != editorYAML {
+		t.Fatal("apply wrote the file")
+	}
+
+	// The form can put mode inject into the YAML text. Save still refuses
+	// it: an incomplete inject file fails the start checks, and a valid
+	// one still needs confirm_inject. Neither write touches the file.
+	fm["mode"] = "inject"
+	rec, got = e.do(t, "POST", "/api/config/form", admin, map[string]any{"yaml": yml, "apply": true, "form": fm})
+	if rec.Code != http.StatusOK || !strings.Contains(got["yaml"].(string), "mode: inject") {
+		t.Fatalf("inject text: %d %s", rec.Code, rec.Body)
+	}
+	rec, _ = e.do(t, "PUT", "/api/config", admin, map[string]any{"yaml": got["yaml"], "base": configedit.Hash([]byte(editorYAML))})
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("incomplete inject: %d %s", rec.Code, rec.Body)
+	}
+	rec, _ = e.do(t, "PUT", "/api/config", admin, map[string]any{"yaml": editorInjectYAML, "base": configedit.Hash([]byte(editorYAML))})
+	if rec.Code != http.StatusPreconditionRequired {
+		t.Fatalf("inject without confirm: %d %s", rec.Code, rec.Body)
+	}
+	disk, _ = os.ReadFile(e.path)
+	if string(disk) != editorYAML {
+		t.Fatal("refused inject still wrote the file")
+	}
+
+	// The page's accept function must not call the API.
+	rec, _ = e.do(t, "GET", "/settings.js", plugin.RoleViewer, nil)
+	js := rec.Body.String()
+	i := strings.Index(js, "function acceptSuggestion")
+	j := strings.Index(js[i:], "\nfunction ")
+	if i < 0 || j < 0 {
+		t.Fatal("acceptSuggestion missing")
+	}
+	body := js[i : i+j]
+	if strings.Contains(body, "api(") || strings.Contains(body, "PUT") || strings.Contains(body, "/api/") {
+		t.Fatalf("accepting a suggestion calls the API:\n%s", body)
 	}
 }

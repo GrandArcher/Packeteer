@@ -184,3 +184,16 @@ body.stale main { opacity: 0.6; }
   .banner, .conn { padding-left: 12px; padding-right: 12px; }
 }
 button:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* Settings form beside the YAML (#102). */
+.settings-split { display: grid; grid-template-columns: minmax(280px, 1fr) minmax(320px, 1.1fr); gap: 18px; align-items: start; }
+.settings-split h3 { margin: 14px 0 6px; font-size: 1rem; }
+fieldset.form { border: 0; margin: 0; padding: 0; }
+.row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 6px 0; }
+.row input, .form select, .row select { font: inherit; padding: 4px 6px; border: 1px solid var(--line); border-radius: 4px; }
+.row input { width: 8.5rem; }
+.row input.wide-input { width: 14rem; }
+.row .tag { margin: 0; }
+@media (max-width: 900px) {
+  .settings-split { grid-template-columns: 1fr; }
+}
