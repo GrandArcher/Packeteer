@@ -174,6 +174,72 @@ func (s *Server) handleWizard(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"yaml": string(out), "mode": "observe", "editor": true})
 }
 
+// Suggestion is a next hop seen on iBGP or BMP that is not a configured
+// provider and not on an exchange LAN (#102). Accepting it is a draft row
+// in the settings form. This list is not a write: it does not add a
+// provider, start a probe, or announce.
+type Suggestion struct {
+	NextHop  string `json:"next_hop"`
+	ASN      uint32 `json:"asn,omitempty"`
+	Prefixes int    `json:"prefixes"`
+}
+
+type formRequest struct {
+	YAML  string          `json:"yaml"`
+	Apply bool            `json:"apply"`
+	Form  configedit.Form `json:"form"`
+}
+
+// handleConfigForm reads the settings form from YAML, or merges a form
+// back into YAML. Neither path writes the file. Save is still PUT
+// /api/config, with the same checks as a start and confirm_inject when
+// the text turns inject on.
+func (s *Server) handleConfigForm(w http.ResponseWriter, r *http.Request) {
+	if !s.editorOn(w) {
+		return
+	}
+	var req formRequest
+	if !decodeLarge(w, r, &req, configBodyLimit) {
+		return
+	}
+	if !req.Apply {
+		f, err := configedit.ParseForm([]byte(req.YAML))
+		if err != nil {
+			writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"form": f})
+		return
+	}
+	out, err := configedit.ApplyForm([]byte(req.YAML), req.Form)
+	if err != nil {
+		writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"error": err.Error()})
+		return
+	}
+	f, err := configedit.ParseForm(out)
+	if err != nil {
+		writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"yaml": string(out), "form": f})
+}
+
+// handleSuggestions returns next hops the operator may drop into a draft
+// provider row. It does not write the config file.
+func (s *Server) handleSuggestions(w http.ResponseWriter, _ *http.Request) {
+	if !s.editorOn(w) {
+		return
+	}
+	var list []Suggestion
+	if fn, ok := s.suggest.Load().(func() []Suggestion); ok && fn != nil {
+		list = fn()
+	}
+	if list == nil {
+		list = []Suggestion{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"suggestions": list})
+}
+
 // ---- Custom dashboards (each user's own) ----
 
 // Dashboard limits.

@@ -12,7 +12,7 @@
 <header class="top">
   <div>
     <h1>Packeteer settings</h1>
-    <p class="tag">Config editor and first-run wizard (admin), report subscriptions. Nothing here announces.</p>
+    <p class="tag">Settings form and YAML (admin), first-run wizard, report subscriptions. Nothing here announces.</p>
   </div>
   <nav class="nav"><a href="/">Dashboard</a> <a href="/dashboards.html">Custom dashboards</a></nav>
 </header>
@@ -37,18 +37,69 @@
     <ul id="wz-errors" class="errors"></ul>
   </section>
   <section id="editor-section">
-    <h2>Config editor</h2>
-    <p class="tag">Edits the mounted config file. Saving runs the same checks as a start (loader, environment, every plugin) and reads the file back through the loader. The controller applies it on restart, or on SIGHUP when only <code>bgp.neighbors</code> changed. Needs <code>http.config_editor: true</code> and the admin role.</p>
-    <div class="controls">
-      <button type="button" id="ed-load">Load</button>
-      <button type="button" id="ed-check">Validate</button>
-      <label><input id="ed-inject" type="checkbox"> I confirm this turns inject on</label>
-      <button type="button" id="ed-save">Save</button>
+    <h2>Settings</h2>
+    <p class="tag">The form edits providers, probe prefixes, the allowlist, and the knobs that change a decision. The YAML stays beside it: anything the form does not show is kept. Apply copies the form into the YAML and does not write the file. Save runs the same checks as a start and the controller applies the file on restart, or on SIGHUP when only <code>bgp.neighbors</code> changed. Turning inject on still needs the confirmation. Secrets stay in environment variables, not in the form. Needs <code>http.config_editor: true</code> and the admin role.</p>
+    <div class="settings-split">
+      <div>
+        <h3>Decision</h3>
+        <fieldset id="form-fields" class="form">
+          <label>Mode
+            <select id="fm-mode">
+              <option value="">(default observe)</option>
+              <option value="observe">observe</option>
+              <option value="suggest">suggest</option>
+              <option value="inject">inject</option>
+            </select>
+          </label>
+          <label>Hold time <input id="fm-hold" type="text" placeholder="15m" spellcheck="false"></label>
+          <label>Improvement cap <input id="fm-cap" type="text" inputmode="numeric" placeholder="50" spellcheck="false"></label>
+          <label>Loss threshold (points) <input id="fm-loss" type="text" inputmode="decimal" placeholder="min loss delta" spellcheck="false"></label>
+          <label>Latency threshold (ms) <input id="fm-rtt" type="text" inputmode="decimal" placeholder="min RTT delta" spellcheck="false"></label>
+          <label>Cost or performance
+            <select id="fm-precedence"></select>
+          </label>
+          <label>Extra loss <input id="fm-floor-loss" type="text" inputmode="decimal" placeholder="0" spellcheck="false"></label>
+          <label>Extra delay <input id="fm-floor-rtt" type="text" placeholder="10ms" spellcheck="false"></label>
+        </fieldset>
+        <p id="fm-scorer" class="tag"></p>
+        <h3>Providers</h3>
+        <p class="tag">Plus adds an empty row. Minus removes one. Cost is the price per Mbps. Commit is the telemetry binding's commit; the form does not ask for an SNMP community or any other secret.</p>
+        <div id="form-providers"></div>
+        <button type="button" id="form-add-provider">+ Provider</button>
+        <h3>Suggestions from BGP</h3>
+        <p class="tag">Next hops on iBGP or BMP that are not configured providers. Accept adds a draft row with the next hop and the AS filled in. Probe source, cost, and commit stay empty. Accepting does not save, does not probe, and does not announce. Exchange LAN hops stay on the exchange view until you add them as peers.</p>
+        <div class="controls">
+          <button type="button" id="sug-refresh">Refresh suggestions</button>
+        </div>
+        <div id="form-suggestions"></div>
+        <h3>Prefixes to probe</h3>
+        <p class="tag">The first <code>static</code> source. Other sources stay in the YAML.</p>
+        <div id="form-targets"></div>
+        <button type="button" id="form-add-target">+ Prefix</button>
+        <h3>Allowlist</h3>
+        <p class="tag">Prefixes that may be injected. Empty means nothing may be announced.</p>
+        <div id="form-allow"></div>
+        <button type="button" id="form-add-allow">+ Allowlist prefix</button>
+        <div class="controls">
+          <button type="button" id="form-apply">Apply form to YAML</button>
+          <button type="button" id="form-reload">Reload form from YAML</button>
+        </div>
+        <div id="form-status" class="tag"></div>
+      </div>
+      <div>
+        <h3>YAML</h3>
+        <div class="controls">
+          <button type="button" id="ed-load">Load</button>
+          <button type="button" id="ed-check">Validate</button>
+          <label><input id="ed-inject" type="checkbox"> I confirm this turns inject on</label>
+          <button type="button" id="ed-save">Save</button>
+        </div>
+        <div id="ed-status" class="tag"></div>
+        <ul id="ed-errors" class="errors"></ul>
+        <textarea id="ed-yaml" class="editor mono" rows="30" spellcheck="false"></textarea>
+        <p class="tag">File: <span id="ed-path" class="mono">—</span> sha256 <span id="ed-sha" class="mono">—</span></p>
+      </div>
     </div>
-    <div id="ed-status" class="tag"></div>
-    <ul id="ed-errors" class="errors"></ul>
-    <textarea id="ed-yaml" class="editor mono" rows="30" spellcheck="false"></textarea>
-    <p class="tag">File: <span id="ed-path" class="mono">—</span> sha256 <span id="ed-sha" class="mono">—</span></p>
   </section>
   <section>
     <h2>Report subscriptions</h2>

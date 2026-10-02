@@ -83,6 +83,8 @@ func (s *Server) routeTable() []route {
 		{"POST /api/config/validate", admin, s.handleConfigValidate},
 		{"PUT /api/config", admin, s.handleConfigSave},
 		{"POST /api/config/wizard", admin, s.handleWizard},
+		{"POST /api/config/form", admin, s.handleConfigForm},
+		{"GET /api/config/suggestions", admin, s.handleSuggestions},
 		{"GET /api/dashboards", viewer, s.handleDashboards},
 		{"PUT /api/dashboards/{name}", viewer, s.handleDashboardPut},
 		{"DELETE /api/dashboards/{name}", viewer, s.handleDashboardDelete},

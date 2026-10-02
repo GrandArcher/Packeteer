@@ -1046,6 +1046,10 @@ type NextHopCount struct {
 	ASN uint32 `json:"asn,omitempty"`
 }
 
+// maxSuggestNextHops caps how many undiscovered next hops one read
+// returns. The busiest hops are kept.
+const maxSuggestNextHops = 64
+
 // NextHops counts, for every next hop inside lans, the distinct prefixes
 // with a usable path through it (iBGP, including add-path, and BMP). It
 // walks every path, so callers cache it against Generation.
@@ -1053,14 +1057,54 @@ func (v *View) NextHops(lans []netip.Prefix) []NextHopCount {
 	if len(lans) == 0 {
 		return nil
 	}
-	in := func(a netip.Addr) bool {
+	out := v.countNextHops(func(a netip.Addr) bool {
 		for _, l := range lans {
 			if l.Contains(a) {
 				return true
 			}
 		}
 		return false
+	})
+	sort.Slice(out, func(i, j int) bool { return out[i].NextHop.Less(out[j].NextHop) })
+	return out
+}
+
+// SuggestNextHops lists next hops seen on iBGP (including add-path) or BMP
+// that are not a configured provider next hop and not inside an exchange
+// LAN. Exchange members stay on the exchange view until the operator adds
+// them as peers. This only reads the view: it does not add a provider,
+// probe, or announce. Results are the busiest hops first, then by address.
+func (v *View) SuggestNextHops(configured []netip.Addr, lans []netip.Prefix) []NextHopCount {
+	skip := map[netip.Addr]bool{}
+	for _, a := range configured {
+		if a.IsValid() {
+			skip[a.Unmap()] = true
+		}
 	}
+	out := v.countNextHops(func(a netip.Addr) bool {
+		if skip[a] {
+			return false
+		}
+		for _, l := range lans {
+			if l.Contains(a) {
+				return false
+			}
+		}
+		return true
+	})
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Prefixes != out[j].Prefixes {
+			return out[i].Prefixes > out[j].Prefixes
+		}
+		return out[i].NextHop.Less(out[j].NextHop)
+	})
+	if len(out) > maxSuggestNextHops {
+		out = out[:maxSuggestNextHops]
+	}
+	return out
+}
+
+func (v *View) countNextHops(keep func(netip.Addr) bool) []NextHopCount {
 	type acc struct {
 		prefixes map[netip.Prefix]bool
 		asns     map[uint32]int
@@ -1068,7 +1112,7 @@ func (v *View) NextHops(lans []netip.Prefix) []NextHopCount {
 	hops := map[netip.Addr]*acc{}
 	add := func(rt Route) {
 		nh := rt.NextHop.Unmap()
-		if !nh.IsValid() || !in(nh) {
+		if !nh.IsValid() || !keep(nh) {
 			return
 		}
 		a := hops[nh]
@@ -1106,7 +1150,6 @@ func (v *View) NextHops(lans []netip.Prefix) []NextHopCount {
 		}
 		out = append(out, c)
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].NextHop.Less(out[j].NextHop) })
 	return out
 }
 

@@ -22,6 +22,7 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
+	"sync/atomic"
 	"time"
 
 	"github.com/GrandArcher/Packeteer/internal/anomaly"
@@ -105,10 +106,14 @@ type Server struct {
 	dashboards plugin.DashboardStore
 	subs       Subscriptions
 	setup      Setup
-	log        *slog.Logger
-	handler    http.Handler
-	http       *http.Server
-	ln         net.Listener
+	// suggest lists next hops the operator may accept as a draft provider
+	// row (#102). Nil means there is nothing to suggest. It must not write
+	// config or announce.
+	suggest atomic.Value
+	log     *slog.Logger
+	handler http.Handler
+	http    *http.Server
+	ln      net.Listener
 }
 
 // New validates auth and builds the handler. It does not listen.
@@ -126,6 +131,16 @@ func New(opt Options) (*Server, error) {
 		editor: opt.ConfigEditor, dashboards: opt.Dashboards, subs: opt.Subscriptions, setup: opt.Setup, log: opt.Logger}
 	s.handler = s.routes()
 	return s, nil
+}
+
+// SetSuggestions installs the read-only next-hop suggestions (#102).
+// The function must not write config, probe, or announce. It may be
+// called after New, once the RIB view exists.
+func (s *Server) SetSuggestions(fn func() []Suggestion) {
+	if s == nil {
+		return
+	}
+	s.suggest.Store(fn)
 }
 
 // Handler is the read-only API and dashboard.
