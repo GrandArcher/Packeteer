@@ -4,6 +4,10 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 
 ## [Unreleased]
 
+### Added
+
+- Opt-in 3 million prefix lab profile (#103; lab only). `routes3m` in `lab/soak/budgets.yaml` is the `pr` observe workload with a 3,000,000-prefix synthetic table (documentation prefixes, IPv6 half at /54). A human passes the name to `lab/soak.sh`. The `load` job still runs `pr` (1,250,000 prefixes and its existing budgets) and `soak.yml` still runs `soak`. `routes3m` budgets are empty until a run on a large host records learn time, RSS, and API latency; they are reported and not checked. No announce-path change. Rollback: none needed.
+
 ## [0.5.0] - 2026-10-01
 
 Fifth release: hardening and polish (#49–#53). UI/UX polish so a first run is readable (mode banner, overview tiles, setup checklist, empty and error states); install and walkthrough docs that CI runs (single-container quickstart, observe → suggest → inject on a simulated edge, troubleshooting, MikroTik/FRR/Junos/Cisco router guides); load and soak budgets under a full-table synthetic RIB, a fix for flow ingest when that window is full, and an RSS growth check that does not treat a Go heap refill as a leak; a MikroTik CHR lab in QEMU on CI runners; and a scheduled router interop matrix (FRR, BIRD 2/3, and GoBGP edges against iBGP, add-path, and BMP, plus CHR). Lab-proven only, against simulated routers in CI with documentation prefixes and private ASNs, not on a public edge. Safety rules are unchanged: the default stays `mode: observe`, an announcement still needs the exact prefix in the learned RIB, the allowlist, the configured community and NO_EXPORT, the improvement cap, and hold time, and CI still proves announce, withdraw, and crash-withdraw. Field feedback from real observe-mode deployments (#54) is still open.

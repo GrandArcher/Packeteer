@@ -6,7 +6,7 @@ Packeteer's resource budgets, how CI measures them, and how to run the same test
 
 `lab/soak.sh IMAGE [PROFILE] [DURATION]` starts the stock image with a mounted config, the same `docker run --network host --cap-add NET_RAW --cap-add NET_ADMIN -v config.yaml:/etc/packeteer/config.yaml` an operator uses. The harness (`lab/soak`, Go) then:
 
-1. **Plays the edge router.** A minimal BGP speaker on `127.0.0.1:11179` (iBGP, AS 64512, hold time 9s). Packeteer connects from `127.0.0.2` and gets a full-table dump: 1,250,000 prefixes, about a 2026 IPv4 plus IPv6 table. The first 1,533 are every prefix from /24 to /32 inside the three RFC 5737 blocks; the rest split `2001:db8::/32` into /53s. Runs of 64 prefixes share a next hop (two IPv4 and two IPv6 providers) and a documentation-ASN AS path of one to four hops, so UPDATEs pack the way a real table does. The speaker encodes UPDATEs from the generator and keeps no table, so the memory measured is Packeteer's.
+1. **Plays the edge router.** A minimal BGP speaker on `127.0.0.1:11179` (iBGP, AS 64512, hold time 9s). Packeteer connects from `127.0.0.2` and gets a full-table dump: 1,250,000 prefixes on the `pr` and `soak` profiles, about a 2026 IPv4 plus IPv6 table. The first 1,533 are every prefix from /24 to /32 inside the three RFC 5737 blocks; the rest split `2001:db8::/32` into /53s (a 3,000,000-prefix table uses /54). Runs of 64 prefixes share a next hop (two IPv4 and two IPv6 providers) and a documentation-ASN AS path of one to four hops, so UPDATEs pack the way a real table does. The speaker encodes UPDATEs from the generator and keeps no table, so the memory measured is Packeteer's.
 2. **Exports flows.** IPFIX at 20,000 records per second to Packeteer's `flow` source. Half the records go to 5,000 hot prefixes and half are spread over the whole table, so the busiest prefixes stay stable while nearly every other record is a prefix the window has not seen.
 3. **Churns the table.** 6,000 prefixes a minute are withdrawn and announced again (100 a second).
 4. **Probes many targets.** 1,000 static targets plus the flow source's top 2,000, through four providers, with the `fixed` prober (no packets leave the host). transit-b is faster, so about half the measured prefixes get a recommendation that observe never announces.
@@ -49,13 +49,16 @@ Docker and Go on a Linux host; the full profile needs about 6 GB free.
 ```sh
 docker build -t packeteer:local .
 bash lab/soak.sh packeteer:local smoke           # 20k prefixes, 1 minute, report only
-bash lab/soak.sh packeteer:local pr              # what CI runs
+bash lab/soak.sh packeteer:local pr              # what CI runs (1,250,000 prefixes)
 bash lab/soak.sh packeteer:local soak 24h        # a 24-hour soak
+bash lab/soak.sh packeteer:local routes3m        # opt-in 3,000,000 prefixes; not CI
 ```
+
+`routes3m` (#103) is the same observe workload as `pr` with a 3 million prefix table. Nothing selects it unless a human passes that name. Its budgets are empty, so the run records learn time, RSS, and API latency and does not fail a number. The 1.25 million table measured about 4.5 GiB RSS (about 1.7 KB of live heap per prefix, and the collector lets the heap grow to about twice that). Three million prefixes is 2.4 times that table, on the order of 11 GiB before that headroom, so do not start `routes3m` on a host with only a few gigabytes free. Those figures are a scale from the measured `pr` run, not a 3 million measurement. With no `learn_seconds` budget the harness waits up to 30 minutes for the table.
 
 The ports are on the host loopback (`11179` BGP, `12055` IPFIX, `18081` ops API); change them with the harness flags (`go run ./lab/soak run -h`) if they are taken. `go run ./lab/soak config -profile pr` prints the Packeteer config the test mounts.
 
 ## CI
 
-- The `load` job in `ci.yml` runs the `pr` profile on every pull request and push to `main`.
-- `soak.yml` runs the `soak` profile weekly (Sunday 03:17 UTC) and on demand. A GitHub-hosted job stops at 6 hours, so the scheduled soak phase is 5h30m. For 24 hours, start it by hand with `duration: 24h` and `runner:` set to a self-hosted runner label.
+- The `load` job in `ci.yml` runs the `pr` profile (1,250,000 prefixes, the budgets above) on every pull request and push to `main`. It does not run `routes3m`.
+- `soak.yml` runs the `soak` profile weekly (Sunday 03:17 UTC) and on demand. A GitHub-hosted job stops at 6 hours, so the scheduled soak phase is 5h30m. For 24 hours, start it by hand with `duration: 24h` and `runner:` set to a self-hosted runner label. That workflow does not run `routes3m` either.

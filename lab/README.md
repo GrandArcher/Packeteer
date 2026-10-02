@@ -56,7 +56,7 @@ bash lab/e2e-ha.sh
 PACKETEER_DOCS_DIR=. bash lab/e2e-docs.sh docs/walkthrough.md
 ```
 
-`lab/soak.sh` is the load and soak test (#51), with no FRR: `lab/soak` plays the edge with a minimal BGP speaker that sends a full-table-sized synthetic RIB (1,250,000 documentation prefixes), exports IPFIX at 20,000 records a second, churns 6,000 prefixes a minute, and reads the stock image's process and ops API while Packeteer runs in observe with a mounted config. It fails when a figure in `lab/soak/budgets.yaml` is over budget, when the session or readiness drops, when observe sends the router a route, or when SIGTERM does not stop Packeteer cleanly. The `load` CI job runs the 10-minute `pr` profile; `.github/workflows/soak.yml` runs the 5h30m `soak` profile weekly. Budgets and measured values: [docs/performance.md](../docs/performance.md).
+`lab/soak.sh` is the load and soak test (#51), with no FRR: `lab/soak` plays the edge with a minimal BGP speaker that sends a full-table-sized synthetic RIB (1,250,000 documentation prefixes on the `pr` and `soak` profiles), exports IPFIX at 20,000 records a second, churns 6,000 prefixes a minute, and reads the stock image's process and ops API while Packeteer runs in observe with a mounted config. It fails when a figure in `lab/soak/budgets.yaml` is over budget, when the session or readiness drops, when observe sends the router a route, or when SIGTERM does not stop Packeteer cleanly. The `load` CI job runs the 10-minute `pr` profile; `.github/workflows/soak.yml` runs the 5h30m `soak` profile weekly. `routes3m` is a separate opt-in profile (3,000,000 prefixes, no budgets, not what CI runs): `bash lab/soak.sh IMAGE routes3m`. The 1.25M table measured about 4.5 GiB RSS, so 3M is on the order of 11 GiB before collector headroom; do not run it on a small host. Budgets and measured values: [docs/performance.md](../docs/performance.md).
 
 ## MikroTik CHR lab (#52)
 
@@ -99,3 +99,7 @@ for r in frr bird2 bird3 gobgp; do
 	done
 done
 ```
+
+## Running demo
+
+The running demo is a separate checkout, not a compose file in this repo. It has two transit providers, one customer, and one IX peer. Telling those sessions apart (peer vs customer vs transit) and suggesting the role is still open (#103). A suggestion must not write itself into the running config.

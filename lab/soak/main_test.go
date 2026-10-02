@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"net"
 	"net/netip"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -180,17 +181,43 @@ func TestParseProc(t *testing.T) {
 }
 
 func TestBudgetFileProfilesAndGeneratedConfig(t *testing.T) {
-	for _, name := range []string{"smoke", "pr", "soak"} {
+	for _, name := range []string{"smoke", "pr", "soak", "routes3m"} {
 		p, err := loadProfile("budgets.yaml", name)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if name != "smoke" && p.Prefixes < 1000000 {
-			t.Fatalf("%s: %d prefixes is not full-table sized", name, p.Prefixes)
-		}
-		if name != "smoke" && (p.Budgets.RSSPeakMB == 0 || p.Budgets.LearnSeconds == 0 || p.Budgets.RSSGrowthMB == 0 ||
-			p.Budgets.CPUAvgCores == 0 || p.Budgets.UDPDropPct == 0 || p.Budgets.ShutdownSeconds == 0) {
-			t.Fatalf("%s: a core budget is unset: %+v", name, p.Budgets)
+		switch name {
+		case "smoke":
+		case "routes3m":
+			// Opt-in 3M table (#103). Report only: no measured budgets yet,
+			// and this name must not become what CI's load job runs.
+			if p.Prefixes != 3000000 {
+				t.Fatalf("routes3m prefixes %d, want 3000000", p.Prefixes)
+			}
+			if p.Budgets != (Budgets{}) {
+				t.Fatalf("routes3m budgets must stay unset until a measured run: %+v", p.Budgets)
+			}
+			tbl := newTable(p.Prefixes)
+			if !tbl.valid() || tbl.v6Bits != 54 {
+				t.Fatalf("routes3m table %+v, want a valid /54 IPv6 half", tbl)
+			}
+			last := tbl.prefix(p.Prefixes - 1)
+			if !docV6.Contains(last.Addr()) || last.Bits() != 54 {
+				t.Fatalf("routes3m last prefix %v", last)
+			}
+		case "pr":
+			if p.Prefixes != 1250000 {
+				t.Fatalf("pr prefixes changed: %d", p.Prefixes)
+			}
+			fallthrough
+		default:
+			if p.Prefixes < 1000000 {
+				t.Fatalf("%s: %d prefixes is not full-table sized", name, p.Prefixes)
+			}
+			if p.Budgets.RSSPeakMB == 0 || p.Budgets.LearnSeconds == 0 || p.Budgets.RSSGrowthMB == 0 ||
+				p.Budgets.CPUAvgCores == 0 || p.Budgets.UDPDropPct == 0 || p.Budgets.ShutdownSeconds == 0 {
+				t.Fatalf("%s: a core budget is unset: %+v", name, p.Budgets)
+			}
 		}
 		cfg, err := config.Parse([]byte(packeteerConfig(p, ports{BGP: 11179, Flow: 12055, HTTP: 18081}, "/var/lib/packeteer")))
 		if err != nil {
@@ -202,6 +229,23 @@ func TestBudgetFileProfilesAndGeneratedConfig(t *testing.T) {
 	}
 	if _, err := loadProfile("budgets.yaml", "nope"); err == nil {
 		t.Fatal("unknown profile accepted")
+	}
+	// The load job and the weekly soak must keep their own profiles.
+	for _, path := range []string{"../../.github/workflows/ci.yml", "../../.github/workflows/soak.yml"} {
+		b, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(b), "routes3m") {
+			t.Fatalf("%s names the opt-in 3M profile", path)
+		}
+	}
+	ci, err := os.ReadFile("../../.github/workflows/ci.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(ci), "bash lab/soak.sh packeteer:ci pr\n") {
+		t.Fatal("load job must keep running the pr profile")
 	}
 }
 

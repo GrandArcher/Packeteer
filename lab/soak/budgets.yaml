@@ -51,6 +51,27 @@ profiles:
       shutdown_seconds: 20
       min_measured: 2500
 
+  # Opt-in (#103). Not the `load` job and not soak.yml. A human passes
+  # the name: `bash lab/soak.sh IMAGE routes3m`. Same workload as `pr`
+  # except the table is 3 million prefixes. Budgets stay empty until a
+  # run on a large host records learn time, RSS, and API latency; a zero
+  # budget is reported and not checked. Do not copy the `pr` limits up
+  # to hide a miss, and do not point CI at this name. The 1.25M table
+  # measured about 4.5 GiB RSS, so 3M is on the order of 11 GiB before
+  # collector headroom. With no learn_seconds budget the harness waits
+  # up to 30 minutes.
+  routes3m:
+    prefixes: 3000000
+    duration: 10m
+    warmup: 3m
+    sample: 5s
+    flow_rate: 20000
+    flow_hot: 5000
+    flow_top_n: 2000
+    static_targets: 1000
+    churn: 6000
+    budgets: {}
+
   # Weekly scheduled workflow (.github/workflows/soak.yml): the same load
   # for 5h30m, the most a hosted job allows. Growth is what a leak shows.
   soak:
