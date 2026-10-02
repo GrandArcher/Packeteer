@@ -327,9 +327,9 @@ func TestConfigEditorOffAndNoAuth(t *testing.T) {
 
 func TestWizardAPIRoundTrip(t *testing.T) {
 	e := newUI(t)
-	in := configedit.WizardInput{ASN: 64512, RouterID: "192.0.2.10",
+	in := configedit.WizardInput{ASN: 64512, RouterID: "192.0.2.10", Edge: "192.0.2.254",
 		Providers: []configedit.WizardProvider{{Name: "transit-a", SourceIP: "192.0.2.11", NextHop: "192.0.2.1"}, {Name: "transit-b", SourceIP: "192.0.2.12", NextHop: "192.0.2.2"}},
-		Neighbors: []string{"192.0.2.254"}, Targets: []configedit.WizardTarget{{Prefix: "198.51.100.0/24", Host: "198.51.100.1"}}}
+		Prefix:    "198.51.100.0/24", Host: "198.51.100.1"}
 	rec, got := e.do(t, "POST", "/api/config/wizard", plugin.RoleAdmin, in)
 	if rec.Code != http.StatusOK || got["mode"] != "observe" {
 		t.Fatalf("wizard: %d %s", rec.Code, rec.Body)
@@ -346,6 +346,14 @@ func TestWizardAPIRoundTrip(t *testing.T) {
 	}
 	if rec, _ := e.do(t, "POST", "/api/config/wizard", plugin.RoleAdmin, map[string]any{"asn": 64512}); rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("bad wizard input: %d", rec.Code)
+	}
+	if rec, got := e.do(t, "POST", "/api/config/wizard", plugin.RoleAdmin, map[string]any{"asn": 64512, "router_id": "192.0.2.10", "edge": "192.0.2.254", "providers": []map[string]string{{"name": "transit-a", "source_ip": "192.0.2.11", "next_hop": "192.0.2.1"}}, "mode": "inject"}); rec.Code != http.StatusUnprocessableEntity || !strings.Contains(rec.Body.String(), "inject is not a step") {
+		t.Fatalf("inject step: %d %s", rec.Code, rec.Body)
+	} else if y, _ := got["yaml"].(string); strings.Contains(y, "inject") {
+		t.Fatalf("inject yaml returned: %s", y)
+	}
+	if rec, _ := e.do(t, "POST", "/api/config/wizard", plugin.RoleAdmin, map[string]any{"asn": 64512, "router_id": "192.0.2.10", "edge": "192.0.2.254", "providers": []map[string]string{{"name": "transit-a", "source_ip": "192.0.2.11", "next_hop": "192.0.2.1"}}, "password": "secret"}); rec.Code != http.StatusBadRequest {
+		t.Fatalf("secret field: %d %s", rec.Code, rec.Body)
 	}
 	if rec, _ := e.do(t, "POST", "/api/config/wizard", plugin.RoleOperator, in); rec.Code != http.StatusForbidden {
 		t.Fatalf("operator wizard: %d", rec.Code)
@@ -431,9 +439,9 @@ func TestSubscriptionsAPI(t *testing.T) {
 func TestUIPages(t *testing.T) {
 	e := newUI(t)
 	for page, wants := range map[string][]string{
-		"/settings.html":   {`src="/ui.js"`, `src="/settings.js"`, `id="ed-yaml"`, `id="wz-run"`, `id="subs"`, `id="form-apply"`, `id="form-providers"`, `id="sug-refresh"`},
+		"/settings.html":   {`src="/ui.js"`, `src="/settings.js"`, `id="ed-yaml"`, `id="wz-run"`, `id="wz-edge"`, `id="wz-add-provider"`, `id="wz-host"`, `id="subs"`, `id="form-apply"`, `id="form-providers"`, `id="sug-refresh"`},
 		"/dashboards.html": {`src="/ui.js"`, `src="/dashboards.js"`, `id="db-grid"`},
-		"/settings.js":     {"/api/config/validate", "/api/config/wizard", "/api/config/form", "/api/config/suggestions", "confirm_inject", "/api/subscriptions/", "function acceptSuggestion"},
+		"/settings.js":     {"/api/config/validate", "/api/config/wizard", "/api/config/form", "/api/config/suggestions", "confirm_inject", "/api/subscriptions/", "function acceptSuggestion", "inject is not a step", "function renderWzProviders"},
 		"/dashboards.js":   {"/api/dashboards", "widget_types"},
 		"/":                {`href="/settings.html"`, `href="/dashboards.html"`},
 	} {

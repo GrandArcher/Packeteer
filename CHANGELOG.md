@@ -6,6 +6,8 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 
 ### Added
 
+- Setup wizard (#106). `/settings.html` walks three steps: the learn-only edge session (ASN, router ID, address), provider rows the operator adds (plus and minus; a BGP suggestion only fills the next hop), then an optional prefix with an optional pinned probe host. `POST /api/config/wizard` still writes nothing and always returns `mode: observe`, with an empty allowlist, no announcer, and one iBGP neighbor. Inject is not a step; any other mode is refused. A prefix without a host is probed at its first address. Secrets stay in environment variables; the wizard has no secret fields. No announce-path change. Rollback: none needed; keep editing the YAML.
+
 - Settings form beside the YAML editor (#102). `/settings.html` edits providers (name, probe source, next hop, cost, commit), static probe prefixes, the allowlist, and the decision knobs (hold time, improvement cap, loss and latency thresholds, and on the cost scorer whether cost or performance wins plus the extra-loss and extra-delay floor) with plus and minus rows. `POST /api/config/form` merges that into the YAML without writing; save is still `PUT /api/config` with the start checks, `confirm_inject`, and apply-on-restart. Secrets stay in environment variables. `GET /api/config/suggestions` lists iBGP or BMP next hops that are not configured providers and not on an exchange LAN; accepting one adds a draft row (next hop and AS only) and does not write, probe, or announce. No announce-path change. Rollback: none needed; leave the form unused and keep editing the file.
 
 ## [0.5.0] - 2026-10-01

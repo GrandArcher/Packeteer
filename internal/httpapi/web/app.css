@@ -197,3 +197,8 @@ fieldset.form { border: 0; margin: 0; padding: 0; }
 @media (max-width: 900px) {
   .settings-split { grid-template-columns: 1fr; }
 }
+
+/* Setup wizard steps (#106). */
+.steps { display: flex; flex-wrap: wrap; gap: 8px; list-style: none; margin: 0 0 12px; padding: 0; }
+.steps li { padding: 4px 10px; border-radius: 999px; background: #e7eef5; color: var(--muted); }
+.steps li.on { background: var(--head); color: #fff; }
