@@ -409,8 +409,10 @@ jobs:
           docker run --rm -v /tmp/edit/config.yaml:/etc/packeteer/config.yaml:ro packeteer:ci -check | tee /tmp/edit/check.txt
           grep -q "http config_editor: on" /tmp/edit/check.txt
           # The wizard renders an observe config that the editor validates.
-          jq -n '{asn: 64512, router_id: "192.0.2.10", providers: [{name: "transit-a", source_ip: "192.0.2.11", next_hop: "192.0.2.1"}], neighbors: ["192.0.2.254"], targets: [{prefix: "198.51.100.0/24", host: "198.51.100.1"}]}' \
-            | api -X POST --data-binary @- http://127.0.0.1:18084/api/config/wizard -o /tmp/edit/wizard.json
+          # edge, prefix, and host are the wizard steps. neighbors and targets are not fields; unknown JSON is refused and the body has no mode.
+          code=$(jq -n '{asn: 64512, router_id: "192.0.2.10", edge: "192.0.2.254", providers: [{name: "transit-a", source_ip: "192.0.2.11", next_hop: "192.0.2.1"}], prefix: "198.51.100.0/24", host: "198.51.100.1"}' \
+            | api -o /tmp/edit/wizard.json -w '%{http_code}' -X POST --data-binary @- http://127.0.0.1:18084/api/config/wizard)
+          test "$code" = 200
           jq -e '.mode == "observe"' /tmp/edit/wizard.json
           jq '{yaml: .yaml}' /tmp/edit/wizard.json | api -X POST --data-binary @- http://127.0.0.1:18084/api/config/validate | jq -e '.valid == true and .mode == "observe"'
           docker stop -t 15 pkedit
