@@ -55,6 +55,9 @@ type RIBPath struct {
 	// with the same identifier.
 	PathID   uint32
 	Withdraw bool
+	// MED is MULTI_EXIT_DISC when the path carried one. Nil means absent.
+	// The RIB view stores it for display and does not use it to pick a path.
+	MED *uint32
 }
 
 // RIBEvent is one change reported by a RIB source.

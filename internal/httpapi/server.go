@@ -274,8 +274,9 @@ func (s *Server) handlePrefixes(w http.ResponseWriter, _ *http.Request) {
 	snap := s.snapshot()
 	writeJSON(w, http.StatusOK, struct {
 		meta
-		Prefixes []Prefix `json:"prefixes"`
-	}{meta: snap.meta(), Prefixes: nz(snap.Prefixes)})
+		Prefixes []Prefix  `json:"prefixes"`
+		ASNMap   []ASNNode `json:"asn_map"`
+	}{meta: snap.meta(), Prefixes: nz(snap.Prefixes), ASNMap: nz(snap.ASNMap)})
 }
 
 func (s *Server) handleDecisions(w http.ResponseWriter, _ *http.Request) {

@@ -36,6 +36,9 @@ type Input struct {
 	RIBPrefixes   int // prefixes in the learned view
 	Peers         []rib.PeerState
 	Routes        map[netip.Prefix]rib.Route
+	// Paths are every learned path for those same prefixes, including
+	// inactive add-path and BMP paths. Assemble does not walk the RIB.
+	Paths map[netip.Prefix][]rib.Route
 
 	// Telemetry is interface usage. It is not a routing decision.
 	Telemetry []plugin.Usage
@@ -63,6 +66,9 @@ type Snapshot struct {
 	Peers        []Peer
 	Telemetry    []Telemetry
 	Exchanges    []exchange.Stats
+	// ASNMap groups measured prefixes by origin ASN and provider site.
+	// It is display only and is not a routing decision.
+	ASNMap []ASNNode
 }
 
 // Provider is one configured transit plus its probe-source health.
@@ -117,6 +123,43 @@ type Prefix struct {
 	RIBProvider string  `json:"rib_provider,omitempty"`
 	Neighbor    string  `json:"neighbor,omitempty"`
 	Probes      []Probe `json:"probes"`
+	// Paths are the learned paths for this prefix, including inactive
+	// add-path and BMP paths. MED on a path is display only.
+	Paths []LearnedPath `json:"paths,omitempty"`
+}
+
+// LearnedPath is one path the edge advertised for a measured prefix.
+// Selected is the path the RIB view published. The others are inactive
+// (add-path or BMP). MED is not an input to the exit.
+type LearnedPath struct {
+	Provider string   `json:"provider,omitempty"`
+	NextHop  string   `json:"next_hop,omitempty"`
+	ASPath   []uint32 `json:"as_path,omitempty"`
+	Neighbor string   `json:"neighbor,omitempty"`
+	Source   string   `json:"source,omitempty"`
+	Router   string   `json:"router,omitempty"`
+	LocRIB   bool     `json:"loc_rib,omitempty"`
+	PathID   uint32   `json:"path_id,omitempty"`
+	Selected bool     `json:"selected,omitempty"`
+	MED      *uint32  `json:"med,omitempty"`
+	MEDFrom  string   `json:"med_from,omitempty"`
+}
+
+// ASNNode is one origin ASN on the map of measured prefixes.
+type ASNNode struct {
+	ASN   uint32    `json:"asn"`
+	Sites []ASNSite `json:"sites"`
+}
+
+// ASNSite is one provider site (name and next hop) a measured prefix
+// was learned through. Partial is set when another site of the same
+// provider carries a measured prefix this site does not: a full table
+// next to a partial route-server table.
+type ASNSite struct {
+	Provider string   `json:"provider,omitempty"`
+	NextHop  string   `json:"next_hop,omitempty"`
+	Prefixes []string `json:"prefixes"`
+	Partial  bool     `json:"partial,omitempty"`
 }
 
 // Candidate is one provider's score toward a prefix.
@@ -234,6 +277,7 @@ func Assemble(in Input) Snapshot {
 		Telemetry:     assembleTelemetry(in.Telemetry),
 		Exchanges:     in.Exchanges,
 	}
+	snap.ASNMap = assembleASNMap(snap.Prefixes)
 	snap.zeroNil()
 	return snap
 }
@@ -252,6 +296,14 @@ func (s *Snapshot) zeroNil() {
 	}
 	for i := range s.Prefixes {
 		s.Prefixes[i].Probes = nz(s.Prefixes[i].Probes)
+		s.Prefixes[i].Paths = nz(s.Prefixes[i].Paths)
+	}
+	s.ASNMap = nz(s.ASNMap)
+	for i := range s.ASNMap {
+		s.ASNMap[i].Sites = nz(s.ASNMap[i].Sites)
+		for j := range s.ASNMap[i].Sites {
+			s.ASNMap[i].Sites[j].Prefixes = nz(s.ASNMap[i].Sites[j].Prefixes)
+		}
 	}
 }
 
@@ -512,6 +564,25 @@ func assemblePrefixes(in Input) []Prefix {
 			row.Native = rt.Provider
 		}
 	}
+	for k, row := range rows {
+		p, err := netip.ParsePrefix(k)
+		if err != nil {
+			continue
+		}
+		paths := in.Paths[p]
+		if paths == nil {
+			paths = in.Paths[p.Masked()]
+		}
+		best, have := rib.Route{}, false
+		if in.Routes != nil {
+			if rt, ok := in.Routes[p]; ok {
+				best, have = rt, true
+			} else if rt, ok := in.Routes[p.Masked()]; ok {
+				best, have = rt, true
+			}
+		}
+		row.Paths = learnedPaths(best, have, paths)
+	}
 	sort.Slice(order, func(i, j int) bool { return lessPrefix(order[i], order[j]) < 0 })
 	out := make([]Prefix, 0, len(order))
 	for _, k := range order {
@@ -586,4 +657,148 @@ func lessPrefix(a, b string) int {
 		return c
 	}
 	return pa.Bits() - pb.Bits()
+}
+
+func learnedPaths(best rib.Route, have bool, paths []rib.Route) []LearnedPath {
+	if len(paths) == 0 {
+		return nil
+	}
+	out := make([]LearnedPath, 0, len(paths))
+	for _, rt := range paths {
+		lp := LearnedPath{
+			Provider: rt.Provider,
+			ASPath:   append([]uint32(nil), rt.ASPath...),
+			Source:   rt.Source,
+			LocRIB:   rt.LocRIB,
+			PathID:   rt.PathID,
+			MED:      rt.MED,
+			MEDFrom:  rt.MEDFrom,
+		}
+		if rt.NextHop.IsValid() {
+			lp.NextHop = rt.NextHop.String()
+		}
+		if rt.Neighbor.IsValid() {
+			lp.Neighbor = rt.Neighbor.String()
+		}
+		if rt.Router.IsValid() {
+			lp.Router = rt.Router.String()
+		}
+		if have && rt.Source == best.Source && rt.Neighbor == best.Neighbor && rt.PathID == best.PathID &&
+			rt.Router == best.Router && rt.LocRIB == best.LocRIB && rt.NextHop == best.NextHop {
+			lp.Selected = true
+		}
+		out = append(out, lp)
+	}
+	return out
+}
+
+// assembleASNMap groups measured prefixes by the last AS on each learned
+// path, then by provider site (name and next hop). A site is partial when
+// another site of the same provider carries a measured prefix this site
+// does not. MED is not read.
+func assembleASNMap(prefixes []Prefix) []ASNNode {
+	type siteKey struct {
+		provider string
+		hop      string
+	}
+	type place struct {
+		asn    uint32
+		site   siteKey
+		prefix string
+	}
+	var places []place
+	siteSets := map[siteKey]map[string]struct{}{}
+	for _, row := range prefixes {
+		for _, path := range row.Paths {
+			var asn uint32
+			if n := len(path.ASPath); n > 0 {
+				asn = path.ASPath[n-1]
+			}
+			k := siteKey{provider: path.Provider, hop: path.NextHop}
+			places = append(places, place{asn: asn, site: k, prefix: row.Prefix})
+			if siteSets[k] == nil {
+				siteSets[k] = map[string]struct{}{}
+			}
+			siteSets[k][row.Prefix] = struct{}{}
+		}
+	}
+	if len(places) == 0 {
+		return nil
+	}
+	union := map[string]map[string]struct{}{}
+	for k, set := range siteSets {
+		if k.provider == "" {
+			continue
+		}
+		if union[k.provider] == nil {
+			union[k.provider] = map[string]struct{}{}
+		}
+		for p := range set {
+			union[k.provider][p] = struct{}{}
+		}
+	}
+	partial := map[siteKey]bool{}
+	for k, set := range siteSets {
+		u := union[k.provider]
+		if k.provider == "" || u == nil {
+			continue
+		}
+		for p := range u {
+			if _, ok := set[p]; !ok {
+				partial[k] = true
+				break
+			}
+		}
+	}
+	type bucketKey struct {
+		asn  uint32
+		site siteKey
+	}
+	buckets := map[bucketKey]map[string]struct{}{}
+	for _, pl := range places {
+		bk := bucketKey{asn: pl.asn, site: pl.site}
+		if buckets[bk] == nil {
+			buckets[bk] = map[string]struct{}{}
+		}
+		buckets[bk][pl.prefix] = struct{}{}
+	}
+	byASN := map[uint32][]ASNSite{}
+	var asns []uint32
+	for bk, set := range buckets {
+		prefs := make([]string, 0, len(set))
+		for pfx := range set {
+			prefs = append(prefs, pfx)
+		}
+		sort.Slice(prefs, func(i, j int) bool { return lessPrefix(prefs[i], prefs[j]) < 0 })
+		if _, ok := byASN[bk.asn]; !ok {
+			asns = append(asns, bk.asn)
+		}
+		byASN[bk.asn] = append(byASN[bk.asn], ASNSite{
+			Provider: bk.site.provider,
+			NextHop:  bk.site.hop,
+			Prefixes: prefs,
+			Partial:  partial[bk.site],
+		})
+	}
+	sort.Slice(asns, func(i, j int) bool {
+		if asns[i] == 0 {
+			return false
+		}
+		if asns[j] == 0 {
+			return true
+		}
+		return asns[i] < asns[j]
+	})
+	out := make([]ASNNode, 0, len(asns))
+	for _, asn := range asns {
+		sites := byASN[asn]
+		sort.Slice(sites, func(i, j int) bool {
+			if sites[i].Provider != sites[j].Provider {
+				return sites[i].Provider < sites[j].Provider
+			}
+			return sites[i].NextHop < sites[j].NextHop
+		})
+		out = append(out, ASNNode{ASN: asn, Sites: sites})
+	}
+	return out
 }

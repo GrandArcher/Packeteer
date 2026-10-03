@@ -103,6 +103,7 @@ func (c *Collector) Snapshot() Snapshot {
 		in.RIBPrefixes = view.Len()
 		in.Peers = view.Peers()
 		in.Routes = map[netip.Prefix]rib.Route{}
+		in.Paths = map[netip.Prefix][]rib.Route{}
 		seen := map[netip.Prefix]struct{}{}
 		consider := func(p netip.Prefix) {
 			if !p.IsValid() {
@@ -114,6 +115,9 @@ func (c *Collector) Snapshot() Snapshot {
 			seen[p] = struct{}{}
 			if rt, ok := view.Exact(p); ok {
 				in.Routes[p] = rt
+			}
+			if paths := view.Paths(p); len(paths) > 0 {
+				in.Paths[p] = paths
 			}
 		}
 		for _, r := range in.Results {

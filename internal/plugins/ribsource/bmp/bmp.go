@@ -554,6 +554,7 @@ func paths(u *bgp.BGPUpdate) []plugin.RIBPath {
 	}
 	var nh netip.Addr
 	var asPath, comms []uint32
+	var med *uint32
 	var mpNLRI []bgp.AddrPrefixInterface
 	var mpNH netip.Addr
 	for _, a := range u.PathAttributes {
@@ -568,6 +569,9 @@ func paths(u *bgp.BGPUpdate) []plugin.RIBPath {
 			}
 		case *bgp.PathAttributeCommunities:
 			comms = append(comms, attr.Value...)
+		case *bgp.PathAttributeMultiExitDisc:
+			m := attr.Value
+			med = &m
 		case *bgp.PathAttributeMpReachNLRI:
 			if !unicast(attr.AFI, attr.SAFI) {
 				continue
@@ -589,12 +593,12 @@ func paths(u *bgp.BGPUpdate) []plugin.RIBPath {
 	}
 	for _, n := range u.NLRI {
 		if p, ok := prefixOf(n); ok && nh.IsValid() {
-			out = append(out, plugin.RIBPath{Prefix: p, NextHop: nh, ASPath: asPath, Communities: comms, PathID: n.PathIdentifier()})
+			out = append(out, plugin.RIBPath{Prefix: p, NextHop: nh, ASPath: asPath, Communities: comms, PathID: n.PathIdentifier(), MED: med})
 		}
 	}
 	for _, n := range mpNLRI {
 		if p, ok := prefixOf(n); ok && mpNH.IsValid() {
-			out = append(out, plugin.RIBPath{Prefix: p, NextHop: mpNH, ASPath: asPath, Communities: comms, PathID: n.PathIdentifier()})
+			out = append(out, plugin.RIBPath{Prefix: p, NextHop: mpNH, ASPath: asPath, Communities: comms, PathID: n.PathIdentifier(), MED: med})
 		}
 	}
 	return out

@@ -202,6 +202,68 @@ function renderPrefixes(data) {
     });
     table.appendChild(tb);
     card.appendChild(table);
+    var paths = row.paths || [];
+    if (paths.length) {
+      card.appendChild(el("p", "reason", "Learned paths. MED is display only and does not choose the exit."));
+      var pt = el("table");
+      var phr = el("tr");
+      ["State", "Provider", "Next hop", "AS path", "MED", "Whose MED"].forEach(function (h) {
+        phr.appendChild(el("th", "", h));
+      });
+      var phead = el("thead");
+      phead.appendChild(phr);
+      pt.appendChild(phead);
+      var pb = el("tbody");
+      paths.forEach(function (path) {
+        var tr = el("tr");
+        if (path.selected) tr.className = "is-current";
+        tr.appendChild(el("td", "", path.selected ? "selected" : "inactive"));
+        tr.appendChild(el("td", "", path.provider || "—"));
+        tr.appendChild(el("td", "mono", path.next_hop || "—"));
+        tr.appendChild(el("td", "mono", fmtAS(path.as_path)));
+        tr.appendChild(el("td", "num", path.med === undefined || path.med === null ? "—" : String(path.med)));
+        tr.appendChild(el("td", "", path.med_from || "—"));
+        pb.appendChild(tr);
+      });
+      pt.appendChild(pb);
+      card.appendChild(pt);
+    }
+    root.appendChild(card);
+  });
+}
+
+function fmtAS(path) {
+  if (!path || !path.length) return "—";
+  return path.join(" ");
+}
+
+function renderASNMap(data) {
+  var root = document.getElementById("asn-map");
+  if (!root) return;
+  clear(root);
+  var nodes = (data && data.asn_map) || [];
+  if (!nodes.length) {
+    root.appendChild(el("p", "empty", "No measured prefix has a learned path yet."));
+    return;
+  }
+  nodes.forEach(function (node) {
+    var card = el("article", "card");
+    var head = el("div", "card-head");
+    head.appendChild(el("h3", "mono", node.asn ? "AS" + node.asn : "No origin AS"));
+    card.appendChild(head);
+    var t = table(["Provider", "Site", "Prefixes", "Table"]);
+    (node.sites || []).forEach(function (site) {
+      var prefs = site.prefixes || [];
+      var shown = prefs.slice(0, 8).join(", ");
+      if (prefs.length > 8) shown += " +" + (prefs.length - 8);
+      var tr = el("tr");
+      tr.appendChild(el("td", "", site.provider || "—"));
+      tr.appendChild(el("td", "mono", site.next_hop || "—"));
+      tr.appendChild(el("td", "", prefs.length + (shown ? " (" + shown + ")" : "")));
+      tr.appendChild(el("td", "", site.partial ? "partial" : "full"));
+      t.body.appendChild(tr);
+    });
+    card.appendChild(t.table);
     root.appendChild(card);
   });
 }
@@ -530,7 +592,10 @@ function refresh() {
     else if (!err) err = results[3].reason;
     if (!err) lastOK = new Date().toISOString();
     if (lastProviders) renderProviders(lastProviders);
-    if (lastPrefixes) renderPrefixes(lastPrefixes);
+    if (lastPrefixes) {
+      renderPrefixes(lastPrefixes);
+      renderASNMap(lastPrefixes);
+    }
     if (lastImprovements) renderImprovements(lastImprovements);
     // Mitigation is optional; its failure does not mark the page stale.
     if (results[4].status === "fulfilled") lastMitigation = results[4].value;
