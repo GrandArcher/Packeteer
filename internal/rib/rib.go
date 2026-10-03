@@ -133,6 +133,14 @@ type Route struct {
 	// PathID is the add-path identifier (RFC 7911) the router gave this
 	// path; 0 without add-path.
 	PathID uint32 `json:"path_id,omitempty"`
+	// MED is MULTI_EXIT_DISC when the path carried one. Nil means the
+	// attribute was absent; a pointer to zero is a real MED of zero.
+	// Display only: path selection and the decision engine never read it.
+	// Exit choice stays probes plus cost and commit.
+	MED *uint32 `json:"med,omitempty"`
+	// MEDFrom names who advertised this MED. A route server's MED is that
+	// server's value, so the label names the server, not the origin AS.
+	MEDFrom string `json:"med_from,omitempty"`
 
 	localPref uint32 // selection only; 100 when the attribute is absent
 }
@@ -548,10 +556,11 @@ func (v *View) applyPath(p *api.Path) bool {
 	var nh netip.Addr
 	var asPath []uint32
 	var lp uint32
+	var med *uint32
 	own := false
 	if !p.IsWithdraw {
 		var comms []uint32
-		nh, asPath, lp, comms = decodeAttrs(p.Pattrs)
+		nh, asPath, lp, comms, med = decodeAttrs(p.Pattrs)
 		// Packeteer's own route sent back (a route reflector, or add-path
 		// on a router that reflects): it must never keep its prefix
 		// learned, so it counts as a withdraw of that path.
@@ -571,10 +580,16 @@ func (v *View) applyPath(p *api.Path) bool {
 	if v.adj[prefix] == nil {
 		v.adj[prefix] = map[adjKey]Route{}
 	}
-	v.adj[prefix][key] = Route{
-		Prefix: prefix, NextHop: nh, Provider: v.opt.Providers[nh.Unmap()], ASPath: asPath,
+	provider := v.opt.Providers[nh.Unmap()]
+	rt := Route{
+		Prefix: prefix, NextHop: nh, Provider: provider, ASPath: asPath,
 		Neighbor: neighbor, Age: time.Now(), Source: SourceIBGP, PathID: key.id, localPref: lp,
+		MED: med,
 	}
+	if med != nil {
+		rt.MEDFrom = v.medFrom(SourceIBGP, neighbor, netip.Addr{}, provider, false)
+	}
+	v.adj[prefix][key] = rt
 	return v.republishLocked(prefix)
 }
 
@@ -709,7 +724,8 @@ func (v *View) usableLocked(rt Route) bool {
 // preference breaks toward the lower neighbor address. Several add-path
 // paths from one neighbor then break toward the shorter AS path and the
 // lower path identifier: an estimate of the router's best, which add-path
-// does not mark.
+// does not mark. MED is not a step. It is shown, and it does not choose
+// the exit.
 func selectRoute(paths map[adjKey]Route) (Route, bool) {
 	var best Route
 	ok := false
@@ -767,7 +783,51 @@ func bmpLess(a, b Route) bool {
 func sameRoute(a, b Route) bool {
 	return a.Prefix == b.Prefix && a.NextHop == b.NextHop && a.Provider == b.Provider &&
 		a.Neighbor == b.Neighbor && a.localPref == b.localPref && slices.Equal(a.ASPath, b.ASPath) &&
-		a.Source == b.Source && a.Router == b.Router && a.LocRIB == b.LocRIB && a.PathID == b.PathID
+		a.Source == b.Source && a.Router == b.Router && a.LocRIB == b.LocRIB && a.PathID == b.PathID &&
+		medEqual(a.MED, b.MED) && a.MEDFrom == b.MEDFrom
+}
+
+func medEqual(a, b *uint32) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return *a == *b
+}
+
+func medPtr(v uint32) *uint32 {
+	m := v
+	return &m
+}
+
+// medFrom names the speaker that advertised this MED, and the provider or
+// route server the path belongs to. A route server's MED is that server's
+// value, so PeerASN providers are labeled as the route server.
+func (v *View) medFrom(source string, neighbor, router netip.Addr, provider string, locRIB bool) string {
+	var who string
+	switch {
+	case source == SourceBMP && locRIB:
+		who = "loc-rib"
+		if router.IsValid() {
+			who += " " + router.String()
+		}
+	case source == SourceBMP:
+		who = "peer"
+		if neighbor.IsValid() {
+			who += " " + neighbor.String()
+		}
+	default:
+		who = "iBGP"
+		if neighbor.IsValid() {
+			who += " " + neighbor.String()
+		}
+	}
+	if asn, ok := v.opt.PeerASN[provider]; ok && provider != "" {
+		return fmt.Sprintf("%s, route server %s AS%d", who, provider, asn)
+	}
+	if provider != "" {
+		return who + ", " + provider
+	}
+	return who
 }
 
 // ---- BMP ----
@@ -904,8 +964,13 @@ func (v *View) applyBMPLocked(key bmpKey, peer plugin.RIBPeer, p plugin.RIBPath)
 	if v.bmp[prefix] == nil {
 		v.bmp[prefix] = map[bmpPathKey]Route{}
 	}
-	v.bmp[prefix][pk] = Route{Prefix: prefix, NextHop: nh, Provider: provider, ASPath: slices.Clone(p.ASPath),
-		Neighbor: key.peer, Age: time.Now(), Source: SourceBMP, Router: key.router, LocRIB: key.locRIB, PathID: p.PathID}
+	rt := Route{Prefix: prefix, NextHop: nh, Provider: provider, ASPath: slices.Clone(p.ASPath),
+		Neighbor: key.peer, Age: time.Now(), Source: SourceBMP, Router: key.router, LocRIB: key.locRIB, PathID: p.PathID,
+		MED: p.MED}
+	if p.MED != nil {
+		rt.MEDFrom = v.medFrom(SourceBMP, key.peer, key.router, provider, key.locRIB)
+	}
+	v.bmp[prefix][pk] = rt
 	return v.republishLocked(prefix)
 }
 
@@ -1225,9 +1290,10 @@ func decodePrefix(a *anypb.Any) (netip.Prefix, bool) {
 	return p.Masked(), true
 }
 
-func decodeAttrs(attrs []*anypb.Any) (netip.Addr, []uint32, uint32, []uint32) {
+func decodeAttrs(attrs []*anypb.Any) (netip.Addr, []uint32, uint32, []uint32, *uint32) {
 	var nh netip.Addr
 	var path, comms []uint32
+	var med *uint32
 	lp := uint32(100) // iBGP default when the attribute is absent
 	for _, a := range attrs {
 		var nhA api.NextHopAttribute
@@ -1235,7 +1301,12 @@ func decodeAttrs(attrs []*anypb.Any) (netip.Addr, []uint32, uint32, []uint32) {
 		var asp api.AsPathAttribute
 		var lpA api.LocalPrefAttribute
 		var cm api.CommunitiesAttribute
+		var medA api.MultiExitDiscAttribute
 		switch {
+		case a.MessageIs(&medA):
+			if a.UnmarshalTo(&medA) == nil {
+				med = medPtr(medA.Med)
+			}
 		case a.MessageIs(&cm):
 			if a.UnmarshalTo(&cm) == nil {
 				comms = append(comms, cm.Communities...)
@@ -1264,7 +1335,7 @@ func decodeAttrs(attrs []*anypb.Any) (netip.Addr, []uint32, uint32, []uint32) {
 			}
 		}
 	}
-	return nh, path, lp, comms
+	return nh, path, lp, comms, med
 }
 
 // ---- queries ----
