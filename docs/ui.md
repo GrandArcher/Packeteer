@@ -91,7 +91,7 @@ The file is read-only in many deployments (`:ro`). Then saving fails with a clea
 
 1. Edge session: ASN, an IPv4 router ID, and the edge address. The session is learn-only iBGP.
 2. Providers: one row each (name, probe source, next hop), with plus and minus. A next hop from `GET /api/config/suggestions` can be added as a row; you still name it and set the probe source. Adding a row does not probe or announce.
-3. What to probe: an optional prefix and an optional pinned host inside it. Leave both empty to add targets later in the form. A prefix without a host is probed at the first address of the prefix. Report history (sqlite) is a checkbox on this step, not a secret.
+3. What to probe: an optional prefix and an optional pinned host inside it. Leave both empty to add targets later in the form. A prefix without a host is probed at a few addresses inside it, including the provider next hop when that address can be used. A host pins that prefix to one address. Report history (sqlite) is a checkbox on this step, not a secret.
 
 The rendered file is always:
 

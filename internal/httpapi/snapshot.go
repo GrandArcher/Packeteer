@@ -83,9 +83,13 @@ type Provider struct {
 
 // Probe is the latest measurement of one provider toward one prefix.
 type Probe struct {
-	Provider string    `json:"provider"`
-	Prefix   string    `json:"prefix"`
-	Target   string    `json:"target,omitempty"`
+	Provider string `json:"provider"`
+	Prefix   string `json:"prefix"`
+	Target   string `json:"target,omitempty"`
+	// Targets is every address probed for this row. Target is the one
+	// that defined the score. Empty when a single unnamed measurement
+	// did not record the set.
+	Targets  []string  `json:"targets,omitempty"`
 	Prober   string    `json:"prober,omitempty"`
 	OK       bool      `json:"ok"`
 	LossPct  float64   `json:"loss_pct"`
@@ -538,6 +542,12 @@ func probeFrom(r probe.Result) Probe {
 	}
 	if r.Target.IsValid() {
 		p.Target = r.Target.String()
+	}
+	if len(r.Targets) > 0 {
+		p.Targets = make([]string, len(r.Targets))
+		for i, a := range r.Targets {
+			p.Targets[i] = a.String()
+		}
 	}
 	return p
 }

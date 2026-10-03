@@ -50,7 +50,12 @@ func (p *hungProber) Probe(_ context.Context, req plugin.ProbeRequest) (plugin.P
 type staticSource struct{ plugin.Base }
 
 func (staticSource) Targets(context.Context) ([]plugin.Target, error) {
-	return []plugin.Target{{Prefix: netip.MustParsePrefix("198.51.100.0/24")}}, nil
+	// Pinned so this test is one address times two providers. An unpinned
+	// prefix is several addresses, which would blow the allow count.
+	return []plugin.Target{{
+		Prefix: netip.MustParsePrefix("198.51.100.0/24"),
+		Host:   netip.MustParseAddr("198.51.100.1"),
+	}}, nil
 }
 
 type readyRIB struct{ p netip.Prefix }

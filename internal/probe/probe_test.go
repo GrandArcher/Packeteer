@@ -153,7 +153,9 @@ func TestTargetsDedupAndSourceFailure(t *testing.T) {
 		{Name: "b", Source: &fakeSource{targets: []plugin.Target{{Prefix: pfx1, Host: netip.MustParseAddr("198.51.100.50")}, {Prefix: pfx2}}}},
 	}, opts())
 	ts := e.Targets(context.Background())
-	if len(ts) != 2 || ts[0].Host.String() != "198.51.100.1" {
+	// The first source named no host. The later source did, so that host
+	// is the pin and replaces the default address.
+	if len(ts) != 2 || ts[0].Host.String() != "198.51.100.50" || !ts[0].Pinned {
 		t.Fatalf("targets = %+v", ts)
 	}
 }
@@ -187,7 +189,7 @@ func TestFallbackChain(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			p1, p2 := &fakeProber{fn: tt.first}, &fakeProber{fn: tt.second}
-			e, _ := New([]Provider{provA}, []NamedProber{{"icmp", p1}, {"tcp", p2}}, src(plugin.Target{Prefix: pfx1}), opts())
+			e, _ := New([]Provider{provA}, []NamedProber{{"icmp", p1}, {"tcp", p2}}, src(plugin.Target{Prefix: pfx1, Host: netip.MustParseAddr("198.51.100.1")}), opts())
 			e.RunOnce(context.Background())
 			rs := e.Results()
 			if len(rs) != 1 {
@@ -221,7 +223,7 @@ func TestProviderRecovers(t *testing.T) {
 		}
 		return plugin.ProbeResult{Sent: req.Count, RTTs: ms(1, 1, 1)}, nil
 	}}
-	e, _ := New([]Provider{provA, provB}, []NamedProber{{"p", p}}, src(plugin.Target{Prefix: pfx1}), opts())
+	e, _ := New([]Provider{provA, provB}, []NamedProber{{"p", p}}, src(plugin.Target{Prefix: pfx1, Host: netip.MustParseAddr("198.51.100.1")}), opts())
 	e.RunOnce(context.Background())
 	if e.Providers()[0].Up || e.Providers()[1].Up {
 		t.Fatal("providers should be down")
@@ -251,7 +253,7 @@ func TestRateLimiter(t *testing.T) {
 	o := opts()
 	o.Limiter = lim
 	e, _ := New([]Provider{provA, provB}, []NamedProber{{"p", &fakeProber{fn: ok(1, 1, 1)}}},
-		src(plugin.Target{Prefix: pfx1}, plugin.Target{Prefix: pfx2}), o)
+		src(plugin.Target{Prefix: pfx1, Host: netip.MustParseAddr("198.51.100.1")}, plugin.Target{Prefix: pfx2, Host: netip.MustParseAddr("203.0.113.1")}), o)
 	e.RunOnce(context.Background())
 	if lim.total != 4*o.Packets {
 		t.Errorf("limiter tokens = %d, want %d", lim.total, 4*o.Packets)
@@ -260,7 +262,7 @@ func TestRateLimiter(t *testing.T) {
 	lim2 := &countingLimiter{err: errors.New("would exceed")}
 	o.Limiter = lim2
 	p := &fakeProber{fn: ok(1)}
-	e, _ = New([]Provider{provA}, []NamedProber{{"p", p}}, src(plugin.Target{Prefix: pfx1}), o)
+	e, _ = New([]Provider{provA}, []NamedProber{{"p", p}}, src(plugin.Target{Prefix: pfx1, Host: netip.MustParseAddr("198.51.100.1")}), o)
 	e.RunOnce(context.Background())
 	if p.calls.Load() != 0 || e.Results()[0].OK() {
 		t.Errorf("prober must not run when the limiter refuses: calls=%d res=%+v", p.calls.Load(), e.Results())
@@ -273,7 +275,7 @@ func TestRealLimiterTiming(t *testing.T) {
 	o := opts()
 	o.Limiter = newTokenLimiterForTest(20, 3)
 	e, _ := New([]Provider{provA, provB}, []NamedProber{{"p", &fakeProber{fn: ok(1, 1, 1)}}},
-		src(plugin.Target{Prefix: pfx1}, plugin.Target{Prefix: pfx2}), o)
+		src(plugin.Target{Prefix: pfx1, Host: netip.MustParseAddr("198.51.100.1")}, plugin.Target{Prefix: pfx2, Host: netip.MustParseAddr("203.0.113.1")}), o)
 	start := time.Now()
 	e.RunOnce(context.Background())
 	if el := time.Since(start); el < 400*time.Millisecond {
@@ -301,7 +303,7 @@ func TestPerTargetConcurrency(t *testing.T) {
 	}
 	o := opts()
 	o.Workers, o.PerTargetConcurrency = 6, 2
-	e, _ := New(provs, []NamedProber{{"p", p}}, src(plugin.Target{Prefix: pfx1}), o)
+	e, _ := New(provs, []NamedProber{{"p", p}}, src(plugin.Target{Prefix: pfx1, Host: netip.MustParseAddr("198.51.100.1")}), o)
 	e.RunOnce(context.Background())
 	if peak.Load() != 2 {
 		t.Errorf("peak concurrency toward one target = %d, want 2", peak.Load())
@@ -318,7 +320,7 @@ func TestProbeTimeout(t *testing.T) {
 	}}
 	o := opts()
 	o.Packets, o.Timeout = 1, 10*time.Millisecond // job deadline = 1*10ms + 1s
-	e, _ := New([]Provider{provA}, []NamedProber{{"stuck", p}}, src(plugin.Target{Prefix: pfx1}), o)
+	e, _ := New([]Provider{provA}, []NamedProber{{"stuck", p}}, src(plugin.Target{Prefix: pfx1, Host: netip.MustParseAddr("198.51.100.1")}), o)
 	start := time.Now()
 	e.RunOnce(context.Background())
 	if el := time.Since(start); el > 3*time.Second {
@@ -333,7 +335,7 @@ func TestRunStopsOnCancel(t *testing.T) {
 	p := &fakeProber{fn: ok(1)}
 	o := opts()
 	o.Interval = 20 * time.Millisecond
-	e, _ := New([]Provider{provA}, []NamedProber{{"p", p}}, src(plugin.Target{Prefix: pfx1}), o)
+	e, _ := New([]Provider{provA}, []NamedProber{{"p", p}}, src(plugin.Target{Prefix: pfx1, Host: netip.MustParseAddr("198.51.100.1")}), o)
 	ctx, cancel := context.WithTimeout(context.Background(), 110*time.Millisecond)
 	defer cancel()
 	if err := e.Run(ctx); !errors.Is(err, context.DeadlineExceeded) {
@@ -423,7 +425,7 @@ func TestRunOnceHungProberKeepsResults(t *testing.T) {
 	o.Workers = 1
 	var rounds atomic.Int32
 	o.OnRound = func() { rounds.Add(1) }
-	e, err := New([]Provider{provA}, []NamedProber{{"hung", p}}, src(plugin.Target{Prefix: pfx1}), o)
+	e, err := New([]Provider{provA}, []NamedProber{{"hung", p}}, src(plugin.Target{Prefix: pfx1, Host: netip.MustParseAddr("198.51.100.1")}), o)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -489,7 +491,7 @@ func TestRetryReplacesHighLoss(t *testing.T) {
 	o.RetryLossPct = 50
 	o.RetryPackets = 4
 	o.Limiter = lim
-	e, err := New([]Provider{provA}, []NamedProber{{"udp", p}}, src(plugin.Target{Prefix: pfx1}), o)
+	e, err := New([]Provider{provA}, []NamedProber{{"udp", p}}, src(plugin.Target{Prefix: pfx1, Host: netip.MustParseAddr("198.51.100.1")}), o)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -518,7 +520,7 @@ func TestRetrySkippedBelowThreshold(t *testing.T) {
 	o.Packets = 4
 	o.RetryLossPct = 80
 	o.RetryPackets = 8
-	e, _ := New([]Provider{provA}, []NamedProber{{"p", p}}, src(plugin.Target{Prefix: pfx1}), o)
+	e, _ := New([]Provider{provA}, []NamedProber{{"p", p}}, src(plugin.Target{Prefix: pfx1, Host: netip.MustParseAddr("198.51.100.1")}), o)
 	e.RunOnce(context.Background())
 	if p.calls.Load() != 1 {
 		t.Fatalf("calls = %d, want 1", p.calls.Load())
@@ -528,7 +530,7 @@ func TestRetrySkippedBelowThreshold(t *testing.T) {
 		return plugin.ProbeResult{Sent: req.Count}, nil
 	}}
 	o.RetryLossPct = 0
-	e, _ = New([]Provider{provA}, []NamedProber{{"p", off}}, src(plugin.Target{Prefix: pfx1}), o)
+	e, _ = New([]Provider{provA}, []NamedProber{{"p", off}}, src(plugin.Target{Prefix: pfx1, Host: netip.MustParseAddr("198.51.100.1")}), o)
 	e.RunOnce(context.Background())
 	if off.calls.Load() != 1 {
 		t.Fatalf("disabled retry calls = %d", off.calls.Load())
@@ -546,7 +548,7 @@ func TestRetrySourceDownFailsClosed(t *testing.T) {
 	o := opts()
 	o.RetryLossPct = 1
 	o.RetryPackets = 3
-	e, _ := New([]Provider{provA}, []NamedProber{{"p", p}}, src(plugin.Target{Prefix: pfx1}), o)
+	e, _ := New([]Provider{provA}, []NamedProber{{"p", p}}, src(plugin.Target{Prefix: pfx1, Host: netip.MustParseAddr("198.51.100.1")}), o)
 	e.RunOnce(context.Background())
 	r := e.Results()[0]
 	if r.OK() || !strings.Contains(r.Err, "probe source address unavailable") {
@@ -947,9 +949,100 @@ func TestOnRoundAfterCommit(t *testing.T) {
 	var e *Engine
 	got := -1
 	o.OnRound = func() { got = len(e.Results()) } // must not deadlock and must see fresh results
-	e, _ = New([]Provider{provA}, []NamedProber{{"p", &fakeProber{fn: ok(1)}}}, src(plugin.Target{Prefix: pfx1}), o)
+	e, _ = New([]Provider{provA}, []NamedProber{{"p", &fakeProber{fn: ok(1)}}}, src(plugin.Target{Prefix: pfx1, Host: netip.MustParseAddr("198.51.100.1")}), o)
 	e.RunOnce(context.Background())
 	if got != 1 {
 		t.Fatalf("OnRound saw %d results", got)
+	}
+}
+
+func TestAutomaticTargets(t *testing.T) {
+	var mu sync.Mutex
+	var got []string
+	p := &fakeProber{fn: func(_ context.Context, req plugin.ProbeRequest) (plugin.ProbeResult, error) {
+		mu.Lock()
+		got = append(got, req.Target.String())
+		mu.Unlock()
+		switch req.Target.String() {
+		case "198.51.100.1":
+			return plugin.ProbeResult{Sent: req.Count}, nil // silent first address
+		case "198.51.100.64":
+			return plugin.ProbeResult{Sent: req.Count, RTTs: ms(20, 20, 20)}, nil
+		case "198.51.100.128":
+			return plugin.ProbeResult{Sent: req.Count}, nil
+		case "192.0.2.21":
+			return plugin.ProbeResult{Sent: req.Count, RTTs: ms(1, 1, 1)}, nil
+		default:
+			t.Errorf("unexpected target %s", req.Target)
+			return plugin.ProbeResult{Sent: req.Count}, nil
+		}
+	}}
+	gw := netip.MustParseAddr("192.0.2.21")
+	e, err := New([]Provider{{Name: "transit-a", Source: provA.Source, NextHop: gw}},
+		[]NamedProber{{"fake", p}}, src(plugin.Target{Prefix: pfx1}), opts())
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.RunOnce(context.Background())
+	rs := e.Results()
+	if len(rs) != 1 {
+		t.Fatalf("results = %+v", rs)
+	}
+	r := rs[0]
+	// The silent .1 does not define the prefix. The gateway's 1ms answer
+	// does not either, because an address inside the prefix answered.
+	if r.Target.String() != "198.51.100.64" || r.Stats.LossPct != 0 || r.Stats.RTTAvg != 20*time.Millisecond || r.Stats.Sent != 3 {
+		t.Fatalf("score = %+v", r)
+	}
+	want := []string{"198.51.100.1", "198.51.100.64", "198.51.100.128", "192.0.2.21"}
+	if len(r.Targets) != len(want) {
+		t.Fatalf("targets = %v", r.Targets)
+	}
+	for i, s := range want {
+		if r.Targets[i].String() != s {
+			t.Fatalf("targets = %v", r.Targets)
+		}
+	}
+
+	// Nothing inside the prefix answers: the far-side gateway is the sample.
+	p.fn = func(_ context.Context, req plugin.ProbeRequest) (plugin.ProbeResult, error) {
+		if req.Target == gw {
+			return plugin.ProbeResult{Sent: req.Count, RTTs: ms(4, 4, 4)}, nil
+		}
+		return plugin.ProbeResult{Sent: req.Count}, nil
+	}
+	e.RunOnce(context.Background())
+	r = e.Results()[0]
+	if r.Target != gw || r.Stats.RTTAvg != 4*time.Millisecond || r.Stats.LossPct != 0 {
+		t.Fatalf("gateway fallback = %+v", r)
+	}
+
+	// A pin is the only target, even when a gateway is configured.
+	pin := netip.MustParseAddr("198.51.100.9")
+	var pinned []string
+	p.fn = func(_ context.Context, req plugin.ProbeRequest) (plugin.ProbeResult, error) {
+		pinned = append(pinned, req.Target.String())
+		return plugin.ProbeResult{Sent: req.Count, RTTs: ms(8, 8, 8)}, nil
+	}
+	e, err = New([]Provider{{Name: "transit-a", Source: provA.Source, NextHop: gw}},
+		[]NamedProber{{"fake", p}}, src(plugin.Target{Prefix: pfx1, Host: pin}), opts())
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.RunOnce(context.Background())
+	r = e.Results()[0]
+	if len(pinned) != 1 || pinned[0] != pin.String() || r.Target != pin || len(r.Targets) != 1 {
+		t.Fatalf("pin targets %v result %+v", pinned, r)
+	}
+}
+
+func TestLaterPinReplacesDefaultHost(t *testing.T) {
+	e, _ := New([]Provider{provA}, []NamedProber{{"p", &fakeProber{fn: ok(1)}}}, []NamedSource{
+		{Name: "static", Source: &fakeSource{targets: []plugin.Target{{Prefix: pfx1}}}},
+		{Name: "vip", Source: &fakeSource{targets: []plugin.Target{{Prefix: pfx1, Host: netip.MustParseAddr("198.51.100.9")}}}},
+	}, opts())
+	ts := e.Targets(context.Background())
+	if len(ts) != 1 || ts[0].Host.String() != "198.51.100.9" || !ts[0].Pinned {
+		t.Fatalf("pin did not win: %+v", ts)
 	}
 }

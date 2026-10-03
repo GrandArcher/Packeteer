@@ -111,6 +111,8 @@ A learned prefix is eligible when it is equal to an entry or more specific and i
 | `retry_loss_pct` | 0 | 0–100. `0` disables retry. Above zero, a sample whose loss is at least this percent is probed again before it is stored. |
 | `retry_packets` | 0 | 0–1000. Packet count of that second probe. When `retry_loss_pct` is set and this is `0`, it becomes three times `packets`, capped at 1000. |
 
+When a target names no host, each provider is measured at a few addresses inside the prefix (at most three: the first host, and on a larger prefix a quarter point and a halfway point) and at that provider's `next_hop` when it is a usable far-side address (unicast, same family, not the probe source). At most four addresses. A named host is a pin and is the only target. A host that sends no reply is left out of the loss and latency when another address inside the prefix answered, so one silent address does not define the prefix. The next hop is part of that score only when every in-prefix address was silent. It is not a provider, and picking it announces nothing. Traceroute hop times are not the score.
+
 A measurement older than `3 * interval + packets * timeout` is stale. When retry is enabled the window is `3 * interval + (packets + retry_packets) * timeout`. That same duration is the deadline for one probe round. The decision loop also wakes every `interval`, so a round that never finishes still withdraws once results are stale.
 
 The retry sample replaces the first one. Both waits go through `rate_limit_pps`. Targets from the `vip` source carry their own interval; the scheduler probes a prefix when that interval has elapsed and leaves the other results in place. A VIP interval can only shorten the cadence. An unset target interval means `probe.interval`, so a longer VIP interval does not slow a prefix that static or flow already listed. Sources that do not carry a shorter interval are re-read on `probe.interval`, not on every VIP wake. The `outage` source is the exception: it is read on every round, including a short VIP wake, so a pattern detected at the end of a round is a target on the next one. A new incident also wakes the probe loop immediately, and those prefixes are marked urgent for that one pass. A completed round, including one that only probed VIP prefixes, still runs the decision engine. `Run` is what the process uses. A prefix that disappears from every source is dropped on the next completed round, including a round that probes nothing because nothing is due.
@@ -570,7 +572,7 @@ Each target:
 | Key | Meaning |
 |---|---|
 | `prefix` | Required CIDR, no host bits. Unique in the list. |
-| `host` | Optional address inside `prefix`. Default is the first address of the prefix. |
+| `host` | Optional address inside `prefix`. When set, it is the only probe target. When empty, the engine picks a few addresses in the prefix and, when it can, the provider next hop. |
 | `weight` | Optional, not negative. |
 | `mbps` | Optional, 0–100000000. Declared traffic in decimal megabits per second. The `commit` scorer reads it when this source is configured. Zero omits the prefix. |
 

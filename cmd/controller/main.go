@@ -1142,7 +1142,14 @@ func newTools(cfg *config.Config, plugins *pluginhost.Set) (*troubleshoot.Tools,
 		if err != nil {
 			return nil, err
 		}
-		providers = append(providers, probe.Provider{Name: p.Name, Source: src})
+		var hop netip.Addr
+		if p.NextHop != "" {
+			hop, err = parseAddr(p.NextHop)
+			if err != nil {
+				return nil, err
+			}
+		}
+		providers = append(providers, probe.Provider{Name: p.Name, Source: src, NextHop: hop})
 	}
 	var probers []probe.NamedProber
 	for _, p := range plugins.Probers {
@@ -1284,7 +1291,7 @@ func logResult(log *slog.Logger, r probe.Result) {
 		return
 	}
 	s := r.Stats
-	log.Info("probe", "provider", r.Provider, "prefix", r.Prefix, "target", r.Target, "prober", r.Prober,
+	log.Info("probe", "provider", r.Provider, "prefix", r.Prefix, "target", r.Target, "targets", r.Targets, "prober", r.Prober,
 		"loss_pct", s.LossPct, "rtt_avg", s.RTTAvg, "rtt_min", s.RTTMin, "rtt_max", s.RTTMax, "jitter", s.Jitter,
 		"sent", s.Sent, "received", s.Received)
 }
