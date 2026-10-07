@@ -21,7 +21,7 @@ Strangers who clone the repo run observe against their own edge if they want. Yo
 
 ## Fire-me
 
-You failed if you: put production prefixes or next-hops in the repo; announced a prefix not in the learned RIB even in lab; enabled graceful restart for Packeteer routes; merged red CI; pushed to `main` directly; shipped example `mode: inject` as the default; started a later milestone while the current milestone’s gate is still red.
+You failed if you: put production prefixes or next-hops in the repo; announced a prefix not in the learned RIB even in lab (the only exception is a sub-range under the opt-in `synthesize` rails in docs/design/more-specific.md, never on by default); enabled graceful restart for Packeteer routes; merged red CI; pushed to `main` directly; shipped example `mode: inject` as the default; started a later milestone while the current milestone’s gate is still red.
 
 ## Autonomy (yes, ongoing)
 
@@ -42,7 +42,7 @@ Comment on the issue and pick other work. Do not guess.
 
 - Production edge, customer prefixes, real transit next-hops, live SNMP/IRR credentials.
 - Default `mode: inject` in examples or `:latest` docs for strangers.
-- Announce a prefix not in the RIB view.
+- Announce a prefix not in the RIB view, except a sub-range of a learned covering prefix under the opt-in `synthesize` rails (docs/design/more-specific.md). It is never on by default or in a shipped example, and you never enable it on a production edge (see Lab vs production).
 - Graceful restart for Packeteer-originated routes.
 - Out-of-process plugins that inject routes.
 - Secrets in git.

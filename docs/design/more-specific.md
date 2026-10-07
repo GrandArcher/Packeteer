@@ -7,6 +7,11 @@ so 50 improvements at 8 bits could install 12,800 routes. This design
 announces no prefix that is missing from the learned RIB, and its cap
 counts routes on the router.
 
+Synthesized sub-ranges, which IRP also announces, are a separate opt-in
+block, `synthesize` (#114 charter, #122 feature), described at the end of
+this file. `more_specific` itself never synthesizes, and
+`more_specific_bits` stays removed.
+
 ## Problem it solves
 
 An improvement steers a prefix P (for example 198.51.100.0/24) with a higher
@@ -56,8 +61,9 @@ provider next hop (per-router rewrites from `bgp.neighbors` still apply),
 `local_pref`, `packeteer_community`, NO_EXPORT, and the `bgp.as_path` mode
 applied to that exact prefix.
 
-Announcing an unlearned child would need a reviewed change to AGENTS.md.
-This design does not need one and does not make one.
+Announcing an unlearned child is the separate opt-in `synthesize` block
+below, which AGENTS.md now allows under its rails. `more_specific` does not
+use it.
 
 ## Route cap
 
@@ -125,3 +131,57 @@ to make room.
   leave zero Packeteer routes.
 
 Lab-proven only, not on a public edge.
+
+## Synthesized sub-ranges (`synthesize`, opt-in)
+
+Status: charter only (#114). The feature is #122 and is not implemented.
+Until it merges, nothing outside the learned RIB is announced.
+
+IRP disaggregates a large prefix and can announce the more-specific it
+measured, so a bad part of a /16 can be steered as a /24. No attribute on
+the covering route (local preference, next hop, communities, AS path, MED)
+can steer part of it, because the router forwards by longest match. Only a
+longer route does. `synthesize` is that longer route, under these rails:
+
+1. **Off by default.** Nothing happens unless `synthesize.enabled: true`.
+   It takes effect only in `mode: inject`. Observe and suggest list the
+   would-be routes on `/api/decisions` and announce nothing. No shipped
+   example turns it on.
+2. **Covering-prefix allowlist.** `synthesize.covering_prefixes` lists the
+   prefixes that may be split. Each entry must be inside
+   `allowlist.prefixes`.
+3. **Only sub-ranges of a prefix a neighbor already advertises.** A
+   sub-range S is eligible only while a configured neighbor advertises a
+   covering prefix C exactly in the learned RIB view (the same `Exact`
+   lookup improvements use), with S strictly inside C and C inside
+   `covering_prefixes`.
+4. **Bounded size.** `max_bits` (how far past C's length S may go; small
+   default, hard maximum 8) and `max_prefix_len` (no longer than a floor
+   such as /24 for IPv4 and /48 for IPv6). Synthesized routes count toward
+   the same per-router route cap as `more_specific` (`max_routes`), so
+   `max_improvements` counting decisions can never install thousands of
+   routes again.
+5. **No overlap.** S is never announced where a neighbor advertises a
+   more-specific that overlaps it (that one goes through `more_specific`),
+   and never for a prefix held by inbound steering or a mitigation rule.
+6. **Tagged.** Every synthesized route carries `packeteer_community`,
+   NO_EXPORT, and a separate marker community, so an edge can accept
+   Packeteer's exact-prefix routes and refuse synthesized ones.
+7. **Measured on its own.** S is announced only from its own sub-range
+   measurement (#121), under the same thresholds, confirmation, hold time,
+   cooldown, and `max_improvements` as a performance move.
+8. **Withdrawn.** With its improvement; when C really leaves the RIB (the
+   `policy.NativePathConfirm` rule above); when S becomes reserved or leaves
+   the allowlists; when the RIB is not ready, probe sources fail, or data
+   goes stale; on SIGTERM (`WithdrawAll`); on SIGKILL or a crash (the
+   session drops, graceful restart stays off); and on an HA standby, which
+   announces nothing.
+9. **Proof before merge.** Unit tests for every rail above, and an FRR lab
+   that announces a synthesized route inside a learned prefix, holds a
+   second one at the cap, withdraws on the covering prefix's `no network`,
+   SIGTERM, and SIGKILL, and shows nothing reaching the other transit. With
+   the feature off, the existing labs keep proving that no unlearned prefix
+   is announced.
+
+`more_specific_bits` stays a config error with any value. Rollback:
+`synthesize.enabled: false` and restart.

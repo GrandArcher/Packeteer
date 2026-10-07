@@ -13,7 +13,7 @@ This repository controls BGP in real networks when injection is enabled. Treat e
 
 - Default operating mode is `observe`.
 - Injection requires explicit `mode: inject` and an allowlist.
-- Never announce a prefix that was not present in the local RIB view.
+- Never announce a prefix that was not present in the local RIB view. One exception, off by default: the opt-in `synthesize` block may announce a sub-range of a covering prefix that a neighbor currently advertises exactly in the RIB view, and only under the rails in docs/design/more-specific.md (inject only, its own covering-prefix allowlist inside the allowlist, `max_bits` and a route cap counted on the router, community plus NO_EXPORT plus a marker community, withdrawn when the covering prefix leaves the RIB or the session drops, no graceful restart). `more_specific_bits` stays rejected.
 - Cap active improvements. Start at 50 unless an issue says otherwise.
 - Require hold time and loss/latency thresholds before flipping a path.
 - Tag every injected route with the configured community.
