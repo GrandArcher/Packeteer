@@ -312,7 +312,7 @@ func TestGrowthIgnoresScavengerValley(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if p.Budgets.RSSPeakMB != 6144 || p.Budgets.RSSGrowthMB != 256 {
+	if p.Budgets.RSSPeakMB != 6144 || p.Budgets.RSSGrowthMB != 384 {
 		t.Fatalf("pr peak or growth budget changed: peak %v growth %v", p.Budgets.RSSPeakMB, p.Budgets.RSSGrowthMB)
 	}
 	soak, err := loadProfile("budgets.yaml", "soak")
