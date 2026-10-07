@@ -290,3 +290,67 @@ func TestApplySuggestModeStaysSuggest(t *testing.T) {
 		t.Fatalf("mode = %s", cfg.Mode)
 	}
 }
+
+func TestApplyRTTPercentAndConfirmRounds(t *testing.T) {
+	f, err := ParseForm([]byte(formYAML))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if f.MinRTTDeltaPct != "" || f.ConfirmRounds != "" {
+		t.Fatalf("absent keys parsed as %+v", f)
+	}
+	f.MinRTTDeltaPct = "25"
+	f.ConfirmRounds = "4"
+	out, err := ApplyForm([]byte(formYAML), f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(out)
+	if !strings.Contains(text, "min_rtt_delta_pct") || !strings.Contains(text, "confirm_rounds") {
+		t.Fatalf("keys not written:\n%s", text)
+	}
+	g, err := ParseForm(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if g.MinRTTDeltaPct != "25" || g.ConfirmRounds != "4" || g.MinLossDeltaPct != "1" || g.MinRTTDeltaMs != "15" {
+		t.Fatalf("round trip %+v", g)
+	}
+	cfg, err := config.Parse(out)
+	if err != nil {
+		t.Fatalf("parse: %v\n%s", err, text)
+	}
+	if cfg.Thresholds.MinRTTDeltaPct != 25 || cfg.Thresholds.ConfirmRounds != 4 {
+		t.Fatalf("config %+v", cfg.Thresholds)
+	}
+
+	f.MinRTTDeltaPct = "0"
+	f.ConfirmRounds = ""
+	out, err = ApplyForm(out, f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	g, err = ParseForm(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if g.MinRTTDeltaPct != "0" || g.ConfirmRounds != "" {
+		t.Fatalf("explicit off and omitted rounds = pct %q rounds %q\n%s", g.MinRTTDeltaPct, g.ConfirmRounds, out)
+	}
+
+	bad := f
+	bad.MinRTTDeltaPct = "101"
+	if _, err := ApplyForm([]byte(formYAML), bad); err == nil || !strings.Contains(err.Error(), "min_rtt_delta_pct") {
+		t.Fatalf("pct 101 err = %v", err)
+	}
+	bad = f
+	bad.MinRTTDeltaPct = "25"
+	bad.ConfirmRounds = "0"
+	if _, err := ApplyForm([]byte(formYAML), bad); err == nil || !strings.Contains(err.Error(), "confirm_rounds") {
+		t.Fatalf("rounds 0 err = %v", err)
+	}
+	bad.ConfirmRounds = "101"
+	if _, err := ApplyForm([]byte(formYAML), bad); err == nil || !strings.Contains(err.Error(), "confirm_rounds") {
+		t.Fatalf("rounds 101 err = %v", err)
+	}
+}

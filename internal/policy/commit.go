@@ -1,6 +1,7 @@
 package policy
 
 import (
+	"fmt"
 	"net/netip"
 	"sort"
 	"time"
@@ -109,6 +110,14 @@ func integrateCommit(
 					setDecision(d, ActionKeep, "performance gain but hold_time not elapsed", h.imp.Provider, "", cause)
 					continue
 				}
+				// A performance switch off a commit or cost steer waits
+				// on the same confirm_rounds as any other performance move.
+				ready, got := notePerformance(&st, in, cfg, p, alt.Provider, now)
+				if !ready {
+					setDecision(d, ActionKeep, fmt.Sprintf("confirming switch to %s (%d/%d)", alt.Provider, got, cfg.confirmRounds()), h.imp.Provider, alt.Provider, cause)
+					continue
+				}
+				delete(st.confirm, p)
 				n := Improvement{
 					Prefix: p, Provider: alt.Provider, Native: h.imp.Native, Since: now,
 					Reason: reasonText(alt, nat), Cause: plugin.CausePerformance,

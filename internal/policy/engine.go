@@ -1,6 +1,7 @@
 package policy
 
 import (
+	"net/netip"
 	"sync"
 	"time"
 
@@ -37,6 +38,15 @@ func (e *Engine) Decisions() ([]Decision, time.Time) {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 	return append([]Decision(nil), e.last.Decisions...), e.at
+}
+
+// Urgent returns prefixes whose performance move is waiting on another
+// fresh round. The probe engine marks them urgent. Empty when
+// confirm_rounds is 1.
+func (e *Engine) Urgent() []netip.Prefix {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	return append([]netip.Prefix(nil), e.last.Urgent...)
 }
 
 // Improvements returns the active improvements sorted by prefix.

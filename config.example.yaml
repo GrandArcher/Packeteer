@@ -12,6 +12,8 @@ improvement_ttl: 1h         # re-measure the native path after this long. Fallin
 thresholds:
   min_loss_delta_pct: 1.0
   min_rtt_delta_ms: 15
+  # min_rtt_delta_pct: 0   # 0 (default) is off. When set, an RTT win also needs this percent of the current path's RTT.
+  # confirm_rounds: 1      # consecutive fresh rounds before a new performance move or switch. 1 is today. Flip-back does not wait.
 
 providers:
   - name: transit-a

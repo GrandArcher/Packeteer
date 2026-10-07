@@ -124,6 +124,11 @@ type Engine struct {
 	// source drops them. Both are guarded by mu.
 	memory   map[netip.Prefix]plugin.Target
 	retained map[netip.Prefix]struct{}
+	// urgent is the decision state's half-confirmed prefixes (#117).
+	// They are probed on the next round even when the interval has not
+	// elapsed. The global rate limit still applies. An empty set clears
+	// the mark. Guarded by mu.
+	urgent map[netip.Prefix]struct{}
 	// srcCache holds the last target list for sources that are not on a
 	// shorter cadence than Options.Interval. A VIP wake does not start
 	// those sources again.
@@ -433,8 +438,50 @@ func (e *Engine) gatherTargets(ctx context.Context) ([]plugin.Target, bool) {
 	// prefixes that still exist, and do not drop a remembered host.
 	if !incomplete {
 		e.keepImproved(&out)
+		e.applyUrgent(&out)
 	}
 	return out, incomplete
+}
+
+// SetUrgent replaces the prefixes a half-confirmed performance move wants
+// measured before the probe interval elapses (#117). An empty list clears
+// the set. A non-empty list also wakes Run so the round does not wait out
+// the interval. Safe for concurrent use with probing. Every probe, urgent
+// or not, still waits on Options.Limiter (probe.rate_limit_pps).
+func (e *Engine) SetUrgent(prefixes []netip.Prefix) {
+	if e == nil {
+		return
+	}
+	next := make(map[netip.Prefix]struct{}, len(prefixes))
+	for _, p := range prefixes {
+		p = p.Masked()
+		if !p.IsValid() {
+			continue
+		}
+		next[p] = struct{}{}
+	}
+	e.mu.Lock()
+	e.urgent = next
+	e.mu.Unlock()
+	if len(next) > 0 {
+		e.Wake()
+	}
+}
+
+// applyUrgent sets Urgent on targets the decision state is confirming.
+// It does not add a prefix a source did not list: confirmation only
+// re-measures a prefix already being probed.
+func (e *Engine) applyUrgent(out *[]plugin.Target) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if len(e.urgent) == 0 || out == nil {
+		return
+	}
+	for i := range *out {
+		if _, ok := e.urgent[(*out)[i].Prefix]; ok {
+			(*out)[i].Urgent = true
+		}
+	}
 }
 
 // shortenInterval sets dst.Interval when next is a strictly shorter

@@ -439,9 +439,9 @@ func TestSubscriptionsAPI(t *testing.T) {
 func TestUIPages(t *testing.T) {
 	e := newUI(t)
 	for page, wants := range map[string][]string{
-		"/settings.html":   {`src="/ui.js"`, `src="/settings.js"`, `id="ed-yaml"`, `id="wz-run"`, `id="wz-edge"`, `id="wz-add-provider"`, `id="wz-host"`, `id="subs"`, `id="form-apply"`, `id="form-providers"`, `id="sug-refresh"`},
+		"/settings.html":   {`src="/ui.js"`, `src="/settings.js"`, `id="ed-yaml"`, `id="wz-run"`, `id="wz-edge"`, `id="wz-add-provider"`, `id="wz-host"`, `id="subs"`, `id="form-apply"`, `id="form-providers"`, `id="sug-refresh"`, `id="fm-rtt-pct"`, `id="fm-rounds"`},
 		"/dashboards.html": {`src="/ui.js"`, `src="/dashboards.js"`, `id="db-grid"`},
-		"/settings.js":     {"/api/config/validate", "/api/config/wizard", "/api/config/form", "/api/config/suggestions", "confirm_inject", "/api/subscriptions/", "function acceptSuggestion", "inject is not a step", "function renderWzProviders"},
+		"/settings.js":     {"/api/config/validate", "/api/config/wizard", "/api/config/form", "/api/config/suggestions", "confirm_inject", "/api/subscriptions/", "function acceptSuggestion", "inject is not a step", "function renderWzProviders", "min_rtt_delta_pct", "confirm_rounds"},
 		"/dashboards.js":   {"/api/dashboards", "widget_types"},
 		"/":                {`href="/settings.html"`, `href="/dashboards.html"`},
 	} {

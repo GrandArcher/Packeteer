@@ -878,6 +878,50 @@ func TestUrgentProbesBeforeInterval(t *testing.T) {
 	}
 }
 
+func TestSetUrgentProbesBeforeInterval(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0)
+	o := opts()
+	o.Now = func() time.Time { return now }
+	o.Interval = time.Minute
+	o.Packets = 1
+	lim := &countingLimiter{}
+	o.Limiter = lim
+	var hits atomic.Int32
+	p := &fakeProber{fn: func(context.Context, plugin.ProbeRequest) (plugin.ProbeResult, error) {
+		hits.Add(1)
+		return plugin.ProbeResult{Sent: 1, RTTs: ms(1)}, nil
+	}}
+	src := &fakeSource{targets: []plugin.Target{{Prefix: pfx1, Host: netip.MustParseAddr("198.51.100.10"), Interval: time.Minute}}}
+	e, err := New([]Provider{provA}, []NamedProber{{"p", p}}, []NamedSource{{Name: "static", Source: src}}, o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	last := map[netip.Prefix]time.Time{pfx1: now}
+	due := func(tg plugin.Target) bool { return e.targetDue(tg, last) }
+
+	e.SetUrgent([]netip.Prefix{pfx2})
+	if ts := e.Targets(context.Background()); len(ts) != 1 || ts[0].Prefix != pfx1 || ts[0].Urgent {
+		t.Fatalf("urgent must not add a prefix the source did not list: %+v", ts)
+	}
+	e.SetUrgent([]netip.Prefix{pfx1})
+	if ts := e.Targets(context.Background()); len(ts) != 1 || !ts[0].Urgent {
+		t.Fatalf("targets = %+v", ts)
+	}
+	probed, done := e.runRound(context.Background(), due, true)
+	if !done || len(probed) != 1 || hits.Load() != 1 || lim.total != 1 {
+		t.Fatalf("urgent probed=%v done=%v hits=%d tokens=%d", probed, done, hits.Load(), lim.total)
+	}
+
+	e.SetUrgent(nil)
+	if ts := e.Targets(context.Background()); len(ts) != 1 || ts[0].Urgent {
+		t.Fatalf("cleared targets = %+v", ts)
+	}
+	probed, done = e.runRound(context.Background(), due, true)
+	if !done || len(probed) != 0 || hits.Load() != 1 || lim.total != 1 {
+		t.Fatalf("second pass probed=%v done=%v hits=%d tokens=%d", probed, done, hits.Load(), lim.total)
+	}
+}
+
 func TestUrgentFromLaterSource(t *testing.T) {
 	o := opts()
 	o.Interval = 30 * time.Second

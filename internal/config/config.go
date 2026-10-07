@@ -40,10 +40,14 @@ const (
 	DefaultProbePackets  = 10
 	MaxProbePackets      = 1000
 
-	DefaultProbeWorkers              = 8
-	MaxProbeWorkers                  = 1024
-	DefaultProbeRateLimitPPS         = 100
-	MaxProbeRateLimitPPS             = 100000
+	DefaultProbeWorkers      = 8
+	MaxProbeWorkers          = 1024
+	DefaultProbeRateLimitPPS = 100
+	MaxProbeRateLimitPPS     = 100000
+
+	// MaxConfirmRounds is the upper bound of thresholds.confirm_rounds.
+	// Omitted or 0 means 1 (announce on the first fresh win).
+	MaxConfirmRounds                 = 100
 	DefaultProbePerTargetConcurrency = 2
 	MaxProbePerTargetConcurrency     = 64
 
@@ -411,6 +415,12 @@ const DefaultPluginDir = "/etc/packeteer/plugins"
 type Thresholds struct {
 	MinLossDeltaPct float64 `yaml:"min_loss_delta_pct"`
 	MinRTTDeltaMs   float64 `yaml:"min_rtt_delta_ms"`
+	// MinRTTDeltaPct, when greater than 0, requires an RTT win to also be
+	// this percent of the current path's RTT. 0 (the default) is off.
+	MinRTTDeltaPct float64 `yaml:"min_rtt_delta_pct"`
+	// ConfirmRounds is how many consecutive fresh probe rounds a new
+	// performance move or a performance switch must win. 0 means 1.
+	ConfirmRounds int `yaml:"confirm_rounds"`
 }
 
 // Provider is one upstream transit that probes are sourced through.
@@ -614,6 +624,9 @@ func (c *Config) applyDefaults() {
 	if c.ImprovementTTL == 0 {
 		c.ImprovementTTL = DefaultImprovementTTL
 	}
+	if c.Thresholds.ConfirmRounds == 0 {
+		c.Thresholds.ConfirmRounds = 1
+	}
 	if strings.TrimSpace(c.Log.Level) == "" {
 		c.Log.Level = "info"
 	}
@@ -715,6 +728,12 @@ func (c *Config) Validate() error {
 	}
 	if c.Thresholds.MinRTTDeltaMs < 0 {
 		add("thresholds.min_rtt_delta_ms %v must not be negative", c.Thresholds.MinRTTDeltaMs)
+	}
+	if c.Thresholds.MinRTTDeltaPct < 0 || c.Thresholds.MinRTTDeltaPct > 100 {
+		add("thresholds.min_rtt_delta_pct %v must be between 0 and 100", c.Thresholds.MinRTTDeltaPct)
+	}
+	if c.Thresholds.ConfirmRounds < 1 || c.Thresholds.ConfirmRounds > MaxConfirmRounds {
+		add("thresholds.confirm_rounds %d must be between 1 and %d", c.Thresholds.ConfirmRounds, MaxConfirmRounds)
 	}
 
 	if len(c.Providers) == 0 {
