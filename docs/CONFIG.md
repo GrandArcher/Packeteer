@@ -49,7 +49,7 @@ The image entrypoint is the same binary. Flags go after the image name.
 | `bgp` | no neighbors | inject: at least one neighbor | iBGP sessions. |
 | `rib_sources` | none | no | Route feeds into the RIB view from outside the iBGP session: `type: bmp` is a BMP monitoring station. Needs `bgp.neighbors`. Learn-only, in-process only; does not announce. See [RIB source `bmp`](#rib-source-bmp). |
 | `plugin_dir` | `/etc/packeteer/plugins` | no | Directory for out-of-process plugins. |
-| `probers` | `icmp`, then `tcp` | no | Ordered. Later entries run only when an earlier one errors. |
+| `probers` | `icmp`, then `tcp` | no | Ordered. For each address, the next prober runs when an earlier one errors or gets no reply at all. Every probe run starts again at the first prober. |
 | `sources` | none | no | Probe targets. With none, the process starts and probes nothing. |
 | `scorer` | `weighted` | no | One scorer. Lower score is better. |
 | `announcer` | none | inject | In-process only. `type: gobgp` publishes on the RIB session. |
