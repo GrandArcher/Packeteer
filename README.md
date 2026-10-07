@@ -175,7 +175,7 @@ The whole sequence on a simulated FRR edge, with the output to expect at each st
 
 `mode: suggest` is the same process as observe. It writes recommendations to the log, the dashboard, and `/api/decisions`, and it still announces nothing. Set the thresholds from the example config first. With both deltas at `0`, no improvement is recorded.
 
-Read `/api/improvements` and the dashboard's current exit against the recommended exit. An improvement appears only when the prefix is in the learned RIB, both the native provider and the candidate have fresh measurements, the gain clears the thresholds, the candidate's score is lower, the provider is not excluded, and the cap has room.
+Read `/api/improvements` and the dashboard's current exit against the recommended exit. An improvement appears only when the prefix is in the learned RIB, both the native provider and the candidate have fresh measurements, the gain clears the thresholds, the candidate's score is lower, the provider is not excluded, and the cap has room. When `thresholds.min_rtt_delta_pct` is set, an RTT win also has to be that percent of the current path's RTT. `thresholds.confirm_rounds` (default 1) is how many consecutive fresh rounds a new performance move or switch must win; while that streak is short, `/api/decisions` says `confirming` and nothing is announced. Early probes wait a quarter of the probe interval, and a round that cannot compare does not keep asking. Flip-back does not wait.
 
 Inject only after the router filters in the guides are in place, and only for prefixes you mean to steer. Change the mounted config (do not change the example in this repository):
 
@@ -299,7 +299,7 @@ Symptoms, log lines, and fixes: [docs/troubleshooting.md](docs/troubleshooting.m
 
 **`/readyz` stays 503.** Neighbors are configured and no session is established. Check ASN, reachability, and whether Packeteer should connect out (`listen_port` 0) or wait (`passive` plus `listen_port`). Filters do not stop the session from coming up; they stop routes.
 
-**Nothing is recommended.** Thresholds are still `0`, the prefix is not in the RIB, the RIB next hop matches no provider, the gain is inside the thresholds, or the provider is excluded.
+**Nothing is recommended.** Thresholds are still `0`, the prefix is not in the RIB, the RIB next hop matches no provider, the gain is inside the thresholds (including `min_rtt_delta_pct` when it is set), `confirm_rounds` has not been met (`confirming` in `/api/decisions`; the default 1 does not wait), or the provider is excluded.
 
 **Inject is on and the router shows no route.** The prefix is not in the learned RIB, it is outside the allowlist, the cap is full, or the router rejected the community. Packeteer will not announce a prefix it has not learned.
 

@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/GrandArcher/Packeteer/internal/config"
 )
 
 // The settings form (#102) edits the common decision fields as rows and
@@ -36,6 +38,11 @@ type Form struct {
 	MaxImprovements string `json:"max_improvements"`
 	MinLossDeltaPct string `json:"min_loss_delta_pct"`
 	MinRTTDeltaMs   string `json:"min_rtt_delta_ms"`
+	// MinRTTDeltaPct is thresholds.min_rtt_delta_pct. Empty omits the key
+	// (0, off). ConfirmRounds is thresholds.confirm_rounds. Empty omits
+	// the key (the default, 1).
+	MinRTTDeltaPct string `json:"min_rtt_delta_pct"`
+	ConfirmRounds  string `json:"confirm_rounds"`
 	// Precedence is performance or cost when the scorer is cost (omitted
 	// on a cost scorer means performance). Empty means the file's scorer
 	// is not cost and the knob is unused.
@@ -91,6 +98,8 @@ func ParseForm(data []byte) (Form, error) {
 	if th, ok := mappingChild(root, "thresholds"); ok {
 		f.MinLossDeltaPct = scalar(th, "min_loss_delta_pct")
 		f.MinRTTDeltaMs = scalar(th, "min_rtt_delta_ms")
+		f.MinRTTDeltaPct = scalar(th, "min_rtt_delta_pct")
+		f.ConfirmRounds = scalar(th, "confirm_rounds")
 	}
 	f.ScorerType = scorerType(root)
 	if f.ScorerType == "cost" {
@@ -175,6 +184,8 @@ func (f *Form) normalize() {
 	f.MaxImprovements = strings.TrimSpace(f.MaxImprovements)
 	f.MinLossDeltaPct = strings.TrimSpace(f.MinLossDeltaPct)
 	f.MinRTTDeltaMs = strings.TrimSpace(f.MinRTTDeltaMs)
+	f.MinRTTDeltaPct = strings.TrimSpace(f.MinRTTDeltaPct)
+	f.ConfirmRounds = strings.TrimSpace(f.ConfirmRounds)
 	f.Precedence = strings.TrimSpace(f.Precedence)
 	f.FloorLossPct = strings.TrimSpace(f.FloorLossPct)
 	f.FloorRTT = strings.TrimSpace(f.FloorRTT)
@@ -225,6 +236,7 @@ func (f Form) editable() Form {
 func (f Form) equal(g Form) bool {
 	if f.Mode != g.Mode || f.HoldTime != g.HoldTime || f.MaxImprovements != g.MaxImprovements ||
 		f.MinLossDeltaPct != g.MinLossDeltaPct || f.MinRTTDeltaMs != g.MinRTTDeltaMs ||
+		f.MinRTTDeltaPct != g.MinRTTDeltaPct || f.ConfirmRounds != g.ConfirmRounds ||
 		f.Precedence != g.Precedence || f.FloorLossPct != g.FloorLossPct || f.FloorRTT != g.FloorRTT {
 		return false
 	}
@@ -275,6 +287,15 @@ func (f Form) validate() error {
 		v, err := strconv.ParseFloat(f.MinRTTDeltaMs, 64)
 		if err != nil || v < 0 {
 			return fmt.Errorf("%w: thresholds.min_rtt_delta_ms %q must be zero or positive", ErrForm, f.MinRTTDeltaMs)
+		}
+	}
+	if err := numberField("thresholds.min_rtt_delta_pct", f.MinRTTDeltaPct, 0, 100); err != nil {
+		return err
+	}
+	if f.ConfirmRounds != "" {
+		n, err := strconv.Atoi(f.ConfirmRounds)
+		if err != nil || n < 1 || n > config.MaxConfirmRounds {
+			return fmt.Errorf("%w: thresholds.confirm_rounds %q must be a whole number between 1 and %d", ErrForm, f.ConfirmRounds, config.MaxConfirmRounds)
 		}
 	}
 	switch f.Precedence {
@@ -427,10 +448,12 @@ func applyScalars(root *yaml.Node, f Form) error {
 	setOrDelete(root, "hold_time", f.HoldTime, "!!str")
 	setOrDelete(root, "max_improvements", f.MaxImprovements, "!!int")
 	th, ok := mappingChild(root, "thresholds")
-	if f.MinLossDeltaPct == "" && f.MinRTTDeltaMs == "" {
+	if f.MinLossDeltaPct == "" && f.MinRTTDeltaMs == "" && f.MinRTTDeltaPct == "" && f.ConfirmRounds == "" {
 		if ok {
 			deleteKey(th, "min_loss_delta_pct")
 			deleteKey(th, "min_rtt_delta_ms")
+			deleteKey(th, "min_rtt_delta_pct")
+			deleteKey(th, "confirm_rounds")
 			if len(th.Content) == 0 {
 				deleteKey(root, "thresholds")
 			}
@@ -442,6 +465,8 @@ func applyScalars(root *yaml.Node, f Form) error {
 	}
 	setOrDelete(th, "min_loss_delta_pct", f.MinLossDeltaPct, "!!float")
 	setOrDelete(th, "min_rtt_delta_ms", f.MinRTTDeltaMs, "!!float")
+	setOrDelete(th, "min_rtt_delta_pct", f.MinRTTDeltaPct, "!!float")
+	setOrDelete(th, "confirm_rounds", f.ConfirmRounds, "!!int")
 	return nil
 }
 

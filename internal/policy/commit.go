@@ -1,6 +1,7 @@
 package policy
 
 import (
+	"fmt"
 	"net/netip"
 	"sort"
 	"time"
@@ -104,11 +105,21 @@ func integrateCommit(
 			continue
 		}
 		if nat, ok := usableCand(cands, h.imp.Native); ok && !(cause == plugin.CauseCost && cheapFirst) {
-			if alt, ok2 := bestCandidate(cands, cfg.Excluded, h.imp.Native); ok2 && alt.Provider != h.imp.Provider && better(alt, nat, cfg) {
-				if h.held {
-					setDecision(d, ActionKeep, "performance gain but hold_time not elapsed", h.imp.Provider, "", cause)
+			// Same rule as a performance improvement: wins count during
+			// hold_time, a fresh miss resets the streak, and the switch
+			// is created only after hold_time.
+			alt, altOK := bestCandidate(cands, cfg.Excluded, h.imp.Native)
+			if altOK && alt.Provider != h.imp.Provider && better(alt, nat, cfg) {
+				ready, got := notePerformance(&st, in, cfg, p, alt.Provider, now)
+				if !ready {
+					setDecision(d, ActionKeep, fmt.Sprintf("confirming switch to %s (%d/%d)", alt.Provider, got, cfg.confirmRounds()), h.imp.Provider, alt.Provider, cause)
 					continue
 				}
+				if h.held {
+					setDecision(d, ActionKeep, "performance gain but hold_time not elapsed", h.imp.Provider, alt.Provider, cause)
+					continue
+				}
+				delete(st.confirm, p)
 				n := Improvement{
 					Prefix: p, Provider: alt.Provider, Native: h.imp.Native, Since: now,
 					Reason: reasonText(alt, nat), Cause: plugin.CausePerformance,
@@ -118,6 +129,8 @@ func integrateCommit(
 				out.Changes = append(out.Changes, Change{Action: ActionSwitch, Old: h.imp, New: n})
 				setDecision(d, ActionSwitch, n.Reason, n.Provider, n.Provider, plugin.CausePerformance)
 				continue
+			} else if lost, _ := freshLoss(st.confirm[p], in, cfg, p, now); lost {
+				delete(st.confirm, p)
 			}
 		}
 		mv, wanted := want[p]

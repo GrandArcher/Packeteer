@@ -44,6 +44,17 @@ type Config struct {
 	Mode            string        // observe, suggest, inject
 	MinLossDeltaPct float64       // loss improvement that justifies a move
 	MinRTTDelta     time.Duration // latency improvement that justifies a move
+	// MinRTTDeltaPct, when greater than 0, is the other half of an RTT
+	// win: the improvement must also be at least this percent of the
+	// current path's RTT. 0 leaves the absolute MinRTTDelta as the only
+	// latency check. A loss win does not use it.
+	MinRTTDeltaPct float64
+	// ConfirmRounds is how many consecutive fresh probe rounds a new
+	// performance move, or a switch onto a better provider, must win
+	// before it is created. 0 and 1 are today's behavior (the first fresh
+	// win). A stale round does not count. A fresh miss resets the streak.
+	// Flip-back does not wait.
+	ConfirmRounds   int
 	HoldTime        time.Duration // minimum life of an improvement, and cooldown after flip-back
 	MaxImprovements int
 	ImprovementTTL  time.Duration // retire (and re-evaluate) after this long; 0 = never
@@ -139,17 +150,38 @@ type Improvement struct {
 	nativeHeld bool
 }
 
+// confirm is a performance move that has won on fresh rounds but has not
+// yet reached ConfirmRounds. It is not an announcement.
+type confirm struct {
+	Provider string
+	Streak   int
+	// Round is the newest measurement time that counted. The same
+	// measurements seen again (a RIB change, or the staleness ticker)
+	// do not count twice.
+	Round time.Time
+	// Probe is set only for the evaluation that compared the paths and
+	// left the streak short. The next evaluation clears it first, so a
+	// round that cannot compare does not keep the prober awake.
+	Probe bool
+}
+
 // State is carried between Decide calls.
 type State struct {
 	Improvements map[netip.Prefix]Improvement
 	// Cooldown blocks re-improving a prefix until the given time after a
 	// performance flip-back (flap prevention).
 	Cooldown map[netip.Prefix]time.Time
+	// confirm is the in-progress performance confirmation, per prefix.
+	confirm map[netip.Prefix]confirm
 }
 
 // NewState returns an empty state.
 func NewState() State {
-	return State{Improvements: map[netip.Prefix]Improvement{}, Cooldown: map[netip.Prefix]time.Time{}}
+	return State{
+		Improvements: map[netip.Prefix]Improvement{},
+		Cooldown:     map[netip.Prefix]time.Time{},
+		confirm:      map[netip.Prefix]confirm{},
+	}
 }
 
 func (s State) clone() State {
@@ -159,6 +191,9 @@ func (s State) clone() State {
 	}
 	for k, v := range s.Cooldown {
 		n.Cooldown[k] = v
+	}
+	for k, v := range s.confirm {
+		n.confirm[k] = v
 	}
 	return n
 }
@@ -224,6 +259,11 @@ const (
 type Output struct {
 	Decisions []Decision
 	Changes   []Change
+	// Urgent are prefixes whose performance move compared this evaluation
+	// and is still short of confirm_rounds. The probe engine measures
+	// them after a quarter of their interval. A round that cannot
+	// compare leaves this empty. The global rate limit still applies.
+	Urgent []netip.Prefix
 }
 
 // nativeOf is the native provider of p: the one recorded on an active
@@ -261,6 +301,7 @@ func Decide(prev State, in Input, cfg Config, scorer plugin.Scorer, now time.Tim
 	retire := func(p netip.Prefix, reason string, cooldown bool) {
 		old := st.Improvements[p]
 		delete(st.Improvements, p)
+		delete(st.confirm, p)
 		if cooldown && cfg.HoldTime > 0 {
 			st.Cooldown[p] = now.Add(cfg.HoldTime)
 		}
@@ -268,8 +309,10 @@ func Decide(prev State, in Input, cfg Config, scorer plugin.Scorer, now time.Tim
 		out.Changes = append(out.Changes, Change{Action: ActionRetire, Old: old})
 	}
 
-	// Stale RIB: withdraw everything, decide nothing.
+	// Stale RIB: withdraw everything, decide nothing. A half-confirmed
+	// move does not survive the session loss either.
 	if in.RIBEnabled && !in.RIBReady {
+		st.confirm = map[netip.Prefix]confirm{}
 		for _, p := range sortedKeys(st.Improvements) {
 			retire(p, "rib not ready (bgp session down)", false)
 		}
@@ -323,6 +366,11 @@ func Decide(prev State, in Input, cfg Config, scorer plugin.Scorer, now time.Tim
 	decisions := make([]Decision, len(prefixes))
 
 	for i, p := range prefixes {
+		// A streak only asks for an early probe when this evaluation
+		// compares the paths. Anything else (provider down, no RIB
+		// provider, a static pin, a cooldown, the cost floor) leaves
+		// the streak and does not wake the prober.
+		clearConfirmProbe(&st, p)
 		cands := byPrefix[p]
 		sort.Slice(cands, func(a, b int) bool { return cands[a].Provider < cands[b].Provider })
 		d := &decisions[i]
@@ -477,7 +525,9 @@ func Decide(prev State, in Input, cfg Config, scorer plugin.Scorer, now time.Tim
 			}
 			held := now.Sub(imp.Since) < cfg.HoldTime
 			// Flip back when the native path is now clearly better.
+			// Confirmation does not apply: flip-back keeps today's rule.
 			if nat, ok := get(imp.Native); ok && better(nat, cur, cfg) {
+				delete(st.confirm, p)
 				if held {
 					d.Action, d.Reason = ActionKeep, "native better but hold_time not elapsed"
 					continue
@@ -486,14 +536,27 @@ func Decide(prev State, in Input, cfg Config, scorer plugin.Scorer, now time.Tim
 				d.Action, d.Reason, d.Current = ActionRetire, "native path better again", imp.Native
 				continue
 			}
-			// Move to a clearly better alternative.
-			if alt, ok := bestCandidate(cands, cfg.Excluded, imp.Native); ok && alt.Provider != imp.Provider && better(alt, cur, cfg) && !held {
-				n := Improvement{Prefix: p, Provider: alt.Provider, Native: imp.Native, Since: now,
-					Reason: reasonText(alt, cur), Cause: plugin.CausePerformance, nativeSeen: imp.nativeSeen, nativeHeld: imp.nativeHeld}
-				st.Improvements[p] = n
-				out.Changes = append(out.Changes, Change{Action: ActionSwitch, Old: imp, New: n})
-				d.Action, d.Reason, d.Current, d.Cause = ActionSwitch, n.Reason, n.Provider, plugin.CausePerformance
-				continue
+			// Move to a clearly better alternative. A performance switch
+			// waits for confirm_rounds consecutive fresh wins. Hold time
+			// still has to elapse before the switch is created.
+			if alt, ok := bestCandidate(cands, cfg.Excluded, imp.Native); ok && alt.Provider != imp.Provider && better(alt, cur, cfg) {
+				ready, n := notePerformance(&st, in, cfg, p, alt.Provider, now)
+				if !ready {
+					d.Recommended = alt.Provider
+					d.Action, d.Reason = ActionKeep, fmt.Sprintf("confirming switch to %s (%d/%d)", alt.Provider, n, cfg.confirmRounds())
+					continue
+				}
+				if !held {
+					delete(st.confirm, p)
+					sw := Improvement{Prefix: p, Provider: alt.Provider, Native: imp.Native, Since: now,
+						Reason: reasonText(alt, cur), Cause: plugin.CausePerformance, nativeSeen: imp.nativeSeen, nativeHeld: imp.nativeHeld}
+					st.Improvements[p] = sw
+					out.Changes = append(out.Changes, Change{Action: ActionSwitch, Old: imp, New: sw})
+					d.Action, d.Reason, d.Current, d.Cause = ActionSwitch, sw.Reason, sw.Provider, plugin.CausePerformance
+					continue
+				}
+			} else if lost, _ := freshLoss(st.confirm[p], in, cfg, p, now); lost {
+				delete(st.confirm, p)
 			}
 			d.Action, d.Reason = ActionKeep, "improvement still valid"
 			continue
@@ -503,6 +566,7 @@ func Decide(prev State, in Input, cfg Config, scorer plugin.Scorer, now time.Tim
 		if in.RIBEnabled {
 			nat, inRIB := in.Native[p]
 			if !inRIB {
+				delete(st.confirm, p)
 				d.Reason = "prefix not in RIB"
 				continue
 			}
@@ -516,6 +580,7 @@ func Decide(prev State, in Input, cfg Config, scorer plugin.Scorer, now time.Tim
 			continue
 		}
 		if ignore {
+			delete(st.confirm, p)
 			d.Reason = "policy ignore (" + verdict.Rule + ")"
 			continue
 		}
@@ -554,6 +619,9 @@ func Decide(prev State, in Input, cfg Config, scorer plugin.Scorer, now time.Tim
 		}
 		alt, ok := bestCandidate(cands, cfg.Excluded, d.Native)
 		if !ok || !better(alt, natC, cfg) {
+			if lost, _ := freshLoss(st.confirm[p], in, cfg, p, now); lost {
+				delete(st.confirm, p)
+			}
 			d.Reason = "native path is best (within thresholds)"
 			commitOK[p] = true
 			continue
@@ -575,6 +643,12 @@ func Decide(prev State, in Input, cfg Config, scorer plugin.Scorer, now time.Tim
 				d.Recommended, d.Reason, d.Cause = d.Native, "native path inside performance floor (cost precedence)", plugin.CauseCost
 				continue
 			}
+		}
+		ready, n := notePerformance(&st, in, cfg, p, alt.Provider, now)
+		if !ready {
+			d.Recommended = alt.Provider
+			d.Reason = fmt.Sprintf("confirming %s (%d/%d)", alt.Provider, n, cfg.confirmRounds())
+			continue
 		}
 		rank := rankPerformance
 		if hasPolicy && verdict.Action == plugin.PolicyVIP {
@@ -621,10 +695,17 @@ func Decide(prev State, in Input, cfg Config, scorer plugin.Scorer, now time.Tim
 		if w.d.Action == ActionCapped {
 			continue
 		}
+		delete(st.confirm, w.imp.Prefix)
 		st.Improvements[w.imp.Prefix] = w.imp
 		out.Changes = append(out.Changes, Change{Action: ActionImprove, New: w.imp})
 		w.d.Action, w.d.Reason, w.d.Current, w.d.Recommended = ActionImprove, w.imp.Reason, w.imp.Provider, w.imp.Provider
 	}
+	for p := range st.confirm {
+		if _, ok := byPrefix[p]; !ok {
+			delete(st.confirm, p)
+		}
+	}
+	markPendingUrgent(st, &out, cfg.confirmRounds())
 	annotateCost(st, &out, cfg, in.VolumeMbps)
 	out.Decisions = decisions
 	return st, out
@@ -709,8 +790,9 @@ func withCost(imp Improvement, cfg Config, volume map[netip.Prefix]float64) Impr
 
 // better reports whether a is better than b by the configured thresholds:
 // loss improves by at least MinLossDeltaPct, or loss is no worse and latency
-// improves by at least MinRTTDelta. A lower score is also required so the
-// scorer has the final word on ties and trade-offs.
+// improves by at least MinRTTDelta. When MinRTTDeltaPct is set, that latency
+// improvement must also be at least that percent of b's RTT. A lower score
+// is also required so the scorer has the final word on ties and trade-offs.
 func better(a, b Candidate, cfg Config) bool {
 	if a.Score >= b.Score {
 		return false
@@ -718,7 +800,149 @@ func better(a, b Candidate, cfg Config) bool {
 	if cfg.MinLossDeltaPct > 0 && b.LossPct-a.LossPct >= cfg.MinLossDeltaPct {
 		return true
 	}
-	return a.LossPct <= b.LossPct && cfg.MinRTTDelta > 0 && b.RTTAvg-a.RTTAvg >= cfg.MinRTTDelta
+	return rttWins(a, b, cfg)
+}
+
+// rttWins reports an RTT-only win: loss is no worse, the absolute delta
+// clears MinRTTDelta, and, when MinRTTDeltaPct is set, the delta is also
+// at least that percent of the current path's RTT.
+func rttWins(a, b Candidate, cfg Config) bool {
+	if a.LossPct > b.LossPct || cfg.MinRTTDelta <= 0 {
+		return false
+	}
+	delta := b.RTTAvg - a.RTTAvg
+	if delta < cfg.MinRTTDelta {
+		return false
+	}
+	if cfg.MinRTTDeltaPct > 0 && float64(delta)*100 < float64(b.RTTAvg)*cfg.MinRTTDeltaPct {
+		return false
+	}
+	return true
+}
+
+// confirmRounds is the number of consecutive fresh wins a performance
+// move needs. 0 and 1 announce on the first fresh win.
+func (cfg Config) confirmRounds() int {
+	if cfg.ConfirmRounds <= 1 {
+		return 1
+	}
+	return cfg.ConfirmRounds
+}
+
+// notePerformance records one fresh round of a performance move onto
+// provider. ready is true when the move has won enough consecutive fresh
+// rounds to be created. A stale round, and a repeat of measurements
+// already counted, leave the streak untouched. A fresh round for a
+// different provider starts that provider at 1. A short streak whose
+// paths were compared this call asks for another probe; a stale round
+// does not.
+func notePerformance(st *State, in Input, cfg Config, p netip.Prefix, provider string, now time.Time) (ready bool, streak int) {
+	rounds := cfg.confirmRounds()
+	if rounds <= 1 {
+		return provider != "", 1
+	}
+	if st.confirm == nil {
+		st.confirm = map[netip.Prefix]confirm{}
+	}
+	cur := st.confirm[p]
+	at, count, stale := prefixRound(in, cfg, cur, p, now)
+	if stale || !count {
+		if !stale && provider != "" && cur.Provider == provider && cur.Streak >= rounds {
+			return true, cur.Streak
+		}
+		// The same fresh measurements of a short streak are still a
+		// comparison. Keep the early-probe request. A stale round does not.
+		if !stale && provider != "" && cur.Provider == provider && cur.Streak > 0 && cur.Streak < rounds {
+			cur.Probe = true
+			st.confirm[p] = cur
+		}
+		return false, cur.Streak
+	}
+	if provider == "" {
+		delete(st.confirm, p)
+		return false, 0
+	}
+	if cur.Provider != provider {
+		cur = confirm{Provider: provider, Streak: 1, Round: at}
+	} else {
+		cur.Streak++
+		cur.Round = at
+	}
+	cur.Probe = cur.Streak < rounds
+	st.confirm[p] = cur
+	return cur.Streak >= rounds, cur.Streak
+}
+
+// clearConfirmProbe drops the early-probe request for p. The streak stays
+// so a later comparison can continue it.
+func clearConfirmProbe(st *State, p netip.Prefix) {
+	cur, ok := st.confirm[p]
+	if !ok || !cur.Probe {
+		return
+	}
+	cur.Probe = false
+	st.confirm[p] = cur
+}
+
+// freshLoss reports whether this evaluation is a new fresh round that
+// should reset a confirmation streak. A stale round, and the same
+// measurements seen again, do not.
+func freshLoss(prev confirm, in Input, cfg Config, p netip.Prefix, now time.Time) (bool, bool) {
+	if cfg.confirmRounds() <= 1 || prev.Streak <= 0 {
+		return false, false
+	}
+	_, count, stale := prefixRound(in, cfg, prev, p, now)
+	return count && !stale, stale
+}
+
+// prefixRound identifies the probe generation for p. count is true when
+// the measurements are fresh and newer than the last counted round.
+// stale is true when every result for the prefix is older than
+// MaxResultAge: that round does not count and does not reset.
+func prefixRound(in Input, cfg Config, prev confirm, p netip.Prefix, now time.Time) (at time.Time, count, stale bool) {
+	var newest time.Time
+	var n, fresh int
+	for _, r := range in.Results {
+		if r.Prefix != p {
+			continue
+		}
+		n++
+		if r.Time.After(newest) {
+			newest = r.Time
+		}
+		// The same bound as the candidate "stale" mark: age equal to
+		// MaxResultAge is still fresh.
+		if cfg.MaxResultAge <= 0 || now.Sub(r.Time) <= cfg.MaxResultAge {
+			fresh++
+		}
+	}
+	if n == 0 {
+		return time.Time{}, false, false
+	}
+	if fresh == 0 && cfg.MaxResultAge > 0 {
+		return newest, false, true
+	}
+	if prev.Streak > 0 && !newest.After(prev.Round) {
+		return newest, false, false
+	}
+	return newest, true, false
+}
+
+// markPendingUrgent lists prefixes whose streak is short and whose paths
+// were compared this evaluation. A stuck streak (nothing to compare) is
+// left out, so the prober is not woken on every round.
+func markPendingUrgent(st State, out *Output, rounds int) {
+	if rounds <= 1 || len(st.confirm) == 0 {
+		return
+	}
+	ps := make([]netip.Prefix, 0, len(st.confirm))
+	for p, c := range st.confirm {
+		if c.Probe && c.Streak > 0 && c.Streak < rounds {
+			ps = append(ps, p)
+		}
+	}
+	sortPrefixes(ps)
+	out.Urgent = append(out.Urgent, ps...)
 }
 
 // bestCandidate returns the lowest-score usable, non-excluded provider other

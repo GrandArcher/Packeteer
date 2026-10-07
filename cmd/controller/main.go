@@ -605,6 +605,9 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 					// takeover. Drop the retained probe targets with it.
 					decider.Reset()
 					retainImprovedPrefixes(engine, nil)
+					if engine != nil {
+						engine.SetUrgent(nil)
+					}
 					leading = false
 				}
 				mitChanges, err := standbyRound(now, ctl, inb, mit, log)
@@ -1269,6 +1272,13 @@ func decideLoop(ctx context.Context, interval time.Duration, kick <-chan struct{
 func runDecision(now time.Time, decider *policy.Engine, in policy.Input, ctl *announce.Controller, log *slog.Logger, mode string, engine *probe.Engine) ([]policy.Change, error) {
 	changes := decider.Evaluate(in, now)
 	retainImprovedPrefixes(engine, decider.Improvements())
+	// A prefix whose confirm streak compared this round is probed again
+	// after a quarter of its interval. SetUrgent does not wake when the
+	// list is empty or that gap has not elapsed. Every probe still waits
+	// on probe.rate_limit_pps.
+	if engine != nil {
+		engine.SetUrgent(decider.Urgent())
+	}
 	logChanges(log, mode, changes)
 	actx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -1755,6 +1765,8 @@ func newDecider(cfg *config.Config, plugins *pluginhost.Set) (*policy.Engine, er
 		Mode:            cfg.Mode,
 		MinLossDeltaPct: cfg.Thresholds.MinLossDeltaPct,
 		MinRTTDelta:     time.Duration(cfg.Thresholds.MinRTTDeltaMs * float64(time.Millisecond)),
+		MinRTTDeltaPct:  cfg.Thresholds.MinRTTDeltaPct,
+		ConfirmRounds:   cfg.Thresholds.ConfirmRounds,
 		HoldTime:        cfg.HoldTime,
 		MaxImprovements: *cfg.MaxImprovements,
 		// A result older than ~3 rounds is stale. The decision loop

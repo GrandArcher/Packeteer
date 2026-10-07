@@ -101,6 +101,33 @@ func TestParseValid(t *testing.T) {
 	if cfg.Thresholds.MinRTTDeltaMs != 15 {
 		t.Errorf("MinRTTDeltaMs = %v, want 15", cfg.Thresholds.MinRTTDeltaMs)
 	}
+	if cfg.Thresholds.MinRTTDeltaPct != 0 || cfg.Thresholds.ConfirmRounds != 1 {
+		t.Errorf("threshold defaults = pct %v rounds %d", cfg.Thresholds.MinRTTDeltaPct, cfg.Thresholds.ConfirmRounds)
+	}
+}
+
+func TestRTTPercentAndConfirmRounds(t *testing.T) {
+	cfg, err := Parse([]byte(edit(t, validYAML, "min_rtt_delta_ms: 15", "min_rtt_delta_ms: 15\n  min_rtt_delta_pct: 20\n  confirm_rounds: 3")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Thresholds.MinRTTDeltaPct != 20 || cfg.Thresholds.ConfirmRounds != 3 || cfg.Thresholds.MinRTTDeltaMs != 15 {
+		t.Fatalf("parsed %+v", cfg.Thresholds)
+	}
+	cfg, err = Parse([]byte(edit(t, validYAML, "min_rtt_delta_ms: 15", "min_rtt_delta_ms: 15\n  min_rtt_delta_pct: 0\n  confirm_rounds: 0")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Thresholds.MinRTTDeltaPct != 0 || cfg.Thresholds.ConfirmRounds != 1 {
+		t.Fatalf("zero rounds must default to 1, got %+v", cfg.Thresholds)
+	}
+	cfg, err = Parse([]byte(edit(t, validYAML, "min_rtt_delta_ms: 15", "min_rtt_delta_ms: 15\n  min_rtt_delta_pct: 100\n  confirm_rounds: 100")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Thresholds.MinRTTDeltaPct != 100 || cfg.Thresholds.ConfirmRounds != 100 {
+		t.Fatalf("bounds %+v", cfg.Thresholds)
+	}
 }
 
 // A file without mode, or with an empty one, observes (#49). Inject is
@@ -259,6 +286,10 @@ func TestParseErrors(t *testing.T) {
 		{"negative hold_time", edit(t, validYAML, "hold_time: 15m", "hold_time: -1m"), "hold_time -1m0s must not be negative"},
 		{"loss threshold too high", edit(t, validYAML, "min_loss_delta_pct: 1.0", "min_loss_delta_pct: 101"), "min_loss_delta_pct 101 must be between 0 and 100"},
 		{"negative rtt threshold", edit(t, validYAML, "min_rtt_delta_ms: 15", "min_rtt_delta_ms: -5"), "min_rtt_delta_ms -5 must not be negative"},
+		{"rtt percent too high", edit(t, validYAML, "min_rtt_delta_ms: 15", "min_rtt_delta_ms: 15\n  min_rtt_delta_pct: 101"), "min_rtt_delta_pct 101 must be between 0 and 100"},
+		{"rtt percent negative", edit(t, validYAML, "min_rtt_delta_ms: 15", "min_rtt_delta_ms: 15\n  min_rtt_delta_pct: -1"), "min_rtt_delta_pct -1 must be between 0 and 100"},
+		{"confirm rounds negative", edit(t, validYAML, "min_rtt_delta_ms: 15", "min_rtt_delta_ms: 15\n  confirm_rounds: -1"), "confirm_rounds -1 must be between 1 and 100"},
+		{"confirm rounds too high", edit(t, validYAML, "min_rtt_delta_ms: 15", "min_rtt_delta_ms: 15\n  confirm_rounds: 101"), "confirm_rounds 101 must be between 1 and 100"},
 		{"no providers", edit(t, minimalYAML, "providers:\n  - name: transit-a\n    source_ip: 192.0.2.11\n    next_hop: 192.0.2.1\n", "providers: []\n"), "at least one provider"},
 		{"provider missing name", edit(t, minimalYAML, "name: transit-a", `name: ""`), "providers[0]: name is required"},
 		{"duplicate provider name", edit(t, validYAML, "name: transit-b", "name: transit-a"), "duplicate provider name"},

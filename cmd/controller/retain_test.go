@@ -67,6 +67,11 @@ type retainRig struct {
 
 func newRetainRig(t *testing.T, hold, ttl time.Duration) *retainRig {
 	t.Helper()
+	return newRetainRigRounds(t, hold, ttl, 0)
+}
+
+func newRetainRigRounds(t *testing.T, hold, ttl time.Duration, rounds int) *retainRig {
+	t.Helper()
 	pfx := netip.MustParsePrefix("198.51.100.0/24")
 	host := netip.MustParseAddr("198.51.100.50")
 	every := 5 * time.Second
@@ -111,6 +116,7 @@ func newRetainRig(t *testing.T, hold, ttl time.Duration) *retainRig {
 		Mode:            "inject",
 		MinLossDeltaPct: 1,
 		MinRTTDelta:     15 * time.Millisecond,
+		ConfirmRounds:   rounds,
 		HoldTime:        hold,
 		MaxImprovements: 50,
 		ImprovementTTL:  ttl,
@@ -307,4 +313,56 @@ func TestImprovedPrefixStaysAfterFlowDrops(t *testing.T) {
 		r.requireWithdrawn(r.decide(""), "prefix no longer in RIB")
 		r.requireTargetDropped()
 	})
+}
+
+// TestConfirmRoundsDelaysAnnounce is the inject-mode check for #117.
+// Two fresh rounds are required. The same measurements seen again do not
+// count. The announced route is the exact learned prefix with the community.
+// Flip-back still withdraws on the first fresh round after hold time.
+func TestConfirmRoundsDelaysAnnounce(t *testing.T) {
+	r := newRetainRigRounds(t, time.Minute, time.Hour, 2)
+	urgent := func() bool {
+		t.Helper()
+		for _, tg := range r.engine.Targets(context.Background()) {
+			if tg.Prefix == r.pfx && tg.Urgent {
+				return true
+			}
+		}
+		return false
+	}
+
+	r.probe()
+	if changes := r.decide("transit-a"); len(changes) != 0 || r.ann.count() != 0 {
+		t.Fatalf("announced on the first round: %+v count=%d", changes, r.ann.count())
+	}
+	if !urgent() {
+		t.Fatal("a half-confirmed prefix was not marked urgent")
+	}
+
+	// Same clock: a new probe round with the same measurement times is
+	// not a new confirmation round.
+	r.probe()
+	if changes := r.decide("transit-a"); len(changes) != 0 || r.ann.count() != 0 {
+		t.Fatalf("same measurements counted as a second round: %+v", changes)
+	}
+	if !urgent() {
+		t.Fatal("streak still short, but the prefix is no longer urgent")
+	}
+
+	r.now = r.now.Add(time.Second)
+	r.probe()
+	changes := r.decide("transit-a")
+	if len(changes) != 1 || changes[0].Action != policy.ActionImprove || changes[0].New.Provider != "transit-b" || changes[0].New.Prefix != r.pfx {
+		t.Fatalf("second fresh round = %+v", changes)
+	}
+	r.requireRoute()
+	if urgent() {
+		t.Fatal("announced prefix is still urgent")
+	}
+
+	r.prober.rtt["transit-a"] = 10 * time.Millisecond
+	r.prober.rtt["transit-b"] = 80 * time.Millisecond
+	r.now = r.now.Add(2 * time.Minute)
+	r.probe()
+	r.requireWithdrawn(r.decide("transit-a"), "native path better")
 }

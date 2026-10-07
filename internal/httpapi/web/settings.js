@@ -5,6 +5,7 @@ var form = emptyForm();
 
 function emptyForm() {
   return {mode: "", hold_time: "", max_improvements: "", min_loss_delta_pct: "", min_rtt_delta_ms: "",
+    min_rtt_delta_pct: "", confirm_rounds: "",
     precedence: "", scorer_type: "", floor_max_loss_pct: "", floor_max_rtt: "",
     providers: [], targets: [], allowlist: []};
 }
@@ -92,6 +93,8 @@ function readKnobs() {
   form.max_improvements = document.getElementById("fm-cap").value.trim();
   form.min_loss_delta_pct = document.getElementById("fm-loss").value.trim();
   form.min_rtt_delta_ms = document.getElementById("fm-rtt").value.trim();
+  form.min_rtt_delta_pct = document.getElementById("fm-rtt-pct").value.trim();
+  form.confirm_rounds = document.getElementById("fm-rounds").value.trim();
   form.precedence = document.getElementById("fm-precedence").value;
   form.floor_max_loss_pct = document.getElementById("fm-floor-loss").value.trim();
   form.floor_max_rtt = document.getElementById("fm-floor-rtt").value.trim();
@@ -103,6 +106,8 @@ function fillKnobs() {
   document.getElementById("fm-cap").value = form.max_improvements || "";
   document.getElementById("fm-loss").value = form.min_loss_delta_pct || "";
   document.getElementById("fm-rtt").value = form.min_rtt_delta_ms || "";
+  document.getElementById("fm-rtt-pct").value = form.min_rtt_delta_pct || "";
+  document.getElementById("fm-rounds").value = form.confirm_rounds || "";
   document.getElementById("fm-floor-loss").value = form.floor_max_loss_pct || "";
   document.getElementById("fm-floor-rtt").value = form.floor_max_rtt || "";
   var sel = document.getElementById("fm-precedence");
@@ -515,7 +520,7 @@ document.getElementById("form-add-allow").addEventListener("click", function () 
   renderAllow();
 });
 document.getElementById("sug-refresh").addEventListener("click", loadSuggestions);
-["fm-mode", "fm-hold", "fm-cap", "fm-loss", "fm-rtt", "fm-precedence", "fm-floor-loss", "fm-floor-rtt"].forEach(function (id) {
+["fm-mode", "fm-hold", "fm-cap", "fm-loss", "fm-rtt", "fm-rtt-pct", "fm-rounds", "fm-precedence", "fm-floor-loss", "fm-floor-rtt"].forEach(function (id) {
   document.getElementById(id).addEventListener("change", readKnobs);
   document.getElementById(id).addEventListener("input", readKnobs);
 });
