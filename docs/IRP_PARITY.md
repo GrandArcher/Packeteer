@@ -14,7 +14,7 @@ Milestones:
 - **v0.3**: inbound optimization, BMP, multiple routers and IX, FlowSpec/RTBH, transit optimization.
 - **v0.4**: multi-POP, HA, RBAC, anomaly detection, remaining parity.
 - **v0.5**: hardening and polish on the rows above. Dashboard clarity and the first-run checklist (#49), CI-tested quickstart, walkthrough, troubleshooting, and router guides (#50), load and soak budgets and the flow-ingest fix (#51), MikroTik CHR in QEMU on CI (#52), and the router interop matrix (#53) are done. They are not new IRP capability rows, so the counts below are unchanged. Field feedback from observe-mode deployments (#54) is still open. Lab-proven only; the safety rules above are unchanged.
-- **v0.6**: IRP parity gaps found in the 2026-10-07 review of prefix selection, measurement, and the UI. The partial rows say what is missing and link their issue; keeping an improved prefix probed after its source drops it is done (#116), and an RTT win can also require a percent of the current path while a new performance move waits for consecutive fresh rounds (#117). 5 new rows are planned and 1 is won't do. The recount does not change any behavior.
+- **v0.6**: IRP parity gaps found in the 2026-10-07 review of prefix selection, measurement, and the UI. The partial rows say what is missing and link their issue; keeping an improved prefix probed after its source drops it is done (#116), an RTT win can also require a percent of the current path while a new performance move waits for consecutive fresh rounds (#117), and the probe engine remembers which prober a host answers (#120). 4 new rows are planned and 1 is won't do. The recount does not change any behavior.
 
 ## Summary
 
@@ -30,10 +30,10 @@ Milestones:
 
 | Status | Count |
 |---|---|
-| done | 68 |
+| done | 69 |
 | partial | 11 |
 | in progress | 0 |
-| planned | 5 |
+| planned | 4 |
 | won't do | 4 |
 
 Recount (2026-10-07): the earlier 79 of 82 counted 13 rows as done that cover only part of the IRP behavior, and missed 6 IRP behaviors. Those rows are now partial and the 6 are listed. Scale is tracked as a budget, not a row: the load test learns a 1,250,000-prefix table and measures 3,000 prefixes with a prober that sends no packets ([performance.md](performance.md)); Noction's published figures, as cited in the review, are about 100,000 actively probed and 10 million passively tracked prefixes. The scheduler work is #125.
@@ -61,7 +61,7 @@ Recount (2026-10-07): the earlier 79 of 82 counted 13 rows as done that cover on
 | Max improvements cap | 4.8 Core settings | done | v0.1 | core | #7 | no |
 | Improvement retirement / periodic re-probe of improvements (including a staleness timer when a probe round never finishes) | 4.8 Core settings | done (#116): an active improvement keeps its prefix on the last host and interval after its source drops it (for example flow `top_n`), until flip-back, `improvement_ttl`, the provider is unusable, a RIB leave, policy, or the allowlist | v0.1 | core | #7, #46, #116 | no |
 | Host qualification and probe consistency (enough consistent replies, RTT dispersion limit; fast probe escalating to a full probe) | Explorer | planned | v0.6 | core (probe engine) + prober | #119 | — |
-| Self-learning probe type (stick with the ICMP/UDP/TCP prober a host answers) | Explorer | planned | v0.6 | core (probe engine) | #120 | — |
+| Self-learning probe type (stick with the ICMP/UDP/TCP prober a host answers) | Explorer | done (#120): per host, the engine starts later rounds at the prober that got a reply and moves forward from there; every `probe.prober_recheck_rounds` measurement (default 10) starts at the first prober again; `probe.prober_memory` (default 100000) caps the set and hosts that leave the probe set are dropped | v0.6 | core (probe engine) | #120 | no |
 | Current exit learned from flow agents (exporter address + interface index per provider) | 2.7 Collector | won't do (the exit comes from the iBGP/BMP RIB, which is authoritative; without a BGP session Packeteer ranks paths and does not recommend) | - | - | - | — |
 
 UDP unreachable replies count only when the ICMP source is the probed target (#15). Traceroute discovery runs in the background under `budget` and does not block a probe round. VIP ASN expansion is capped by `max_targets` and rebuilt only when the RIB changes; the VIP interval must be shorter than the staleness window.

@@ -1,6 +1,8 @@
 // Package probe runs the probe engine: for every target and provider it
 // asks the configured prober chain to measure the path from that
-// provider's source address, and keeps the latest statistics.
+// provider's source address, and keeps the latest statistics. It
+// remembers which prober got a reply from each host and starts later
+// rounds there.
 package probe
 
 import (

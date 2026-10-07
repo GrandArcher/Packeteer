@@ -40,11 +40,15 @@ probe:
   workers: 8                  # concurrent probe runs
   rate_limit_pps: 100         # global cap on probe packets per second
   per_target_concurrency: 2   # concurrent runs toward one destination host
+  prober_recheck_rounds: 10   # every Nth probe of a host starts at the first prober again
+  prober_memory: 100000       # hosts that remember which prober answered; oldest are dropped past this
   # retry_loss_pct: 20        # 0 (default) disables. Re-probe before storing a lossy sample.
   # retry_packets: 30         # default is 3x packets when retry_loss_pct is set
 
 # Probers are tried in order: ICMP echo, then TCP connect to port 443 when
 # ICMP errors or gets no replies. This is also the default when omitted.
+# After a host answers, later rounds start at that prober. prober_recheck_rounds
+# tries the first prober again so a host that starts answering ICMP is noticed.
 probers:
   - type: icmp
   - type: tcp

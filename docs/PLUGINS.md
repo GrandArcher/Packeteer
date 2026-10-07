@@ -74,6 +74,8 @@ A federation plugin never announces and never decides. What it hands the core (p
 
 Push exporters (Prometheus remote-write, OTLP) are not built; Prometheus metrics are built into the ops surface (#9) for scraping, and report history is the `storage` plugin (#23). Interface usage from the `snmp` telemetry plugin is on `/api/telemetry` and in `packeteer_telemetry_*` gauges. The `commit` scorer reads that snapshot and per-prefix flow volume. The telemetry plugin does not announce.
 
+The probe engine remembers which prober got a reply from each host and starts the next round there. Every `probe.prober_recheck_rounds` (default 10) that host is measured from the first prober again. See [CONFIG.md](CONFIG.md#probe).
+
 Probers return raw results (packets sent plus one RTT per reply). The core computes loss, RTT min/avg/max, and jitter the same way for every prober. A prober that cannot use its source address must return an error, not "100% loss", so the core can fail closed.
 
 Announcers, inbound ones included, run **in-process only**, so an external process can never inject routes. RIB sources are in-process only too: what they feed decides which prefixes may be announced. They must withdraw everything on `Stop` and must not use BGP graceful restart.

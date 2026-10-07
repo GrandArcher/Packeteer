@@ -1220,6 +1220,8 @@ func newEngine(cfg *config.Config, plugins *pluginhost.Set, log *slog.Logger, on
 		RoundTimeout:         maxResultAge(cfg),
 		RetryLossPct:         cfg.Probe.RetryLossPct,
 		RetryPackets:         cfg.Probe.RetryPackets,
+		ProberRecheckRounds:  cfg.Probe.ProberRecheckRounds,
+		ProberMemory:         cfg.Probe.ProberMemory,
 		Limiter:              rate.NewLimiter(rate.Limit(cfg.Probe.RateLimitPPS), burst),
 		Logger:               log,
 		OnResult:             onResult,
