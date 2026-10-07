@@ -4,7 +4,9 @@ Feature parity with [Noction IRP](https://www.noction.com/docs/irp-features) is 
 
 Every parity feature ships as a plugin behind the interfaces in `pkg/plugin` wherever one fits (see [PLUGINS.md](PLUGINS.md)), and it must work in the stock Docker image. Packeteer's safety rules (observe by default, allowlist, community tagging, improvement cap, withdraw on failure, no graceful restart) apply to every feature, even where IRP behaves differently.
 
-Statuses: **done** (merged to `main`), **in progress** (open PR or active branch), **planned** (issue exists), **won't do** (reason given).
+Statuses: **done** (merged to `main`), **partial** (merged, but part of the IRP behavior is missing; the row says what and links the issue), **in progress** (open PR or active branch), **planned** (issue exists), **won't do** (reason given).
+
+Field-proven: whether an operator has reported the row working on a production edge. None has yet; reports are collected in #54. `no (lab-proven)` means a lab with real BGP daemons (FRR, GoBGP, BIRD, MikroTik CHR) proves it on simulated routers; `no` means unit and integration tests only.
 
 Milestones:
 - **v0.1**: installable core outbound performance loop: probing, targets from static lists and flows, RIB via iBGP, scoring with hysteresis, injection via GoBGP, web UI + API + metrics, Docker, e2e lab, operator quick start and config reference.
@@ -12,6 +14,7 @@ Milestones:
 - **v0.3**: inbound optimization, BMP, multiple routers and IX, FlowSpec/RTBH, transit optimization.
 - **v0.4**: multi-POP, HA, RBAC, anomaly detection, remaining parity.
 - **v0.5**: hardening and polish on the rows above. Dashboard clarity and the first-run checklist (#49), CI-tested quickstart, walkthrough, troubleshooting, and router guides (#50), load and soak budgets and the flow-ingest fix (#51), MikroTik CHR in QEMU on CI (#52), and the router interop matrix (#53) are done. They are not new IRP capability rows, so the counts below are unchanged. Field feedback from observe-mode deployments (#54) is still open. Lab-proven only; the safety rules above are unchanged.
+- **v0.6**: IRP parity gaps found in the 2026-10-07 review of prefix selection, measurement, and the UI. The 13 partial rows say what is missing and link their issue; 5 new rows are planned and 1 is won't do. The recount does not change any behavior.
 
 ## Summary
 
@@ -21,39 +24,45 @@ Milestones:
 | v0.2 | 25 |
 | v0.3 | 17 |
 | v0.4 | 13 |
-| won't do | 3 |
-| **total** | 82 |
+| v0.6 | 5 |
+| won't do | 4 |
+| **total** | 88 |
 
 | Status | Count |
 |---|---|
-| done | 79 |
-| partial | 0 |
+| done | 66 |
+| partial | 13 |
 | in progress | 0 |
-| planned | 0 |
-| won't do | 3 |
+| planned | 5 |
+| won't do | 4 |
+
+Recount (2026-10-07): the earlier 79 of 82 counted 13 rows as done that cover only part of the IRP behavior, and missed 6 IRP behaviors. Those rows are now partial and the 6 are listed. Scale is tracked as a budget, not a row: the load test learns a 1,250,000-prefix table and measures 3,000 prefixes with a prober that sends no packets ([performance.md](performance.md)); Noction's published figures, as cited in the review, are about 100,000 actively probed and 10 million passively tracked prefixes. The scheduler work is #125.
 
 ## Performance optimization
 
-| Capability | IRP doc ref | Status | Milestone | Plugin kind | Issue |
-|---|---|---|---|---|---|
-| Active probing per provider: ICMP | 1.3.1, Explorer | done | v0.1 | prober (`icmp`) | #2 |
-| Active probing per provider: TCP | 1.3.1, Explorer | done | v0.1 | prober (`tcp`) | #2 |
-| Active probing per provider: UDP | Explorer | done | v0.2 | prober (`udp`) | #15 |
-| Traceroute-based probe target discovery | Explorer | done | v0.2 | source (`traceroute`) | #15 |
-| Loss / latency / jitter measurement and scoring | 1.3.1 | done | v0.1 | prober + scorer (`weighted`) | #2, #7 |
-| Throughput-aware scoring (prefix volume weighting) | 1.2.13 Improvements weight | done (lab-proven) | v0.4 | scorer (`commit` uses flow volume, #18; `improvement_weights` rank performance moves for the cap by gain and volume, #34) | #18, #34 |
-| Probe sources per provider (IRP uses PBR; we use source-IP policy routing) | 2.8 Explorer, 2.8.1 PBR | done | v0.1 | core + docs | #2 |
-| Static probe target lists | - | done | v0.1 | source (`static`) | #2 |
-| Flow-based target discovery (NetFlow v5/v9, IPFIX, sFlow) | 2.7.1 Irpflowd | done | v0.1 | source (`flow`) | #5 |
-| Passive problem detection from flows | 2.7 Collector | done | v0.2 | source (`flow` `problems`) | #21 |
-| SPAN / mirrored-traffic collector | 2.7.2 Irpspand | done | v0.2 | source (`span`) | #21 |
-| AS-pattern outage/congestion detection (re-probe prefixes crossing a sick ASN) | 1.2.6 Outage Detection | done | v0.2 | source (`outage`) | #16 |
-| Circuit issues detection | 1.2.23 | done | v0.2 | source (`outage`) | #16 |
-| VIP (critical) prefixes/ASNs with more frequent probing | 1.2.7 VIP Improvements | done | v0.2 | source (`vip`) | #15 |
-| Retry / aggressive probing | 1.2.8 Retry Probing | done | v0.2 | core (probe engine) | #15 |
-| Hysteresis, thresholds, hold time before flip | 1.3.1 | done | v0.1 | scorer | #7 |
-| Max improvements cap | 4.8 Core settings | done | v0.1 | core | #7 |
-| Improvement retirement / periodic re-probe of improvements (including a staleness timer when a probe round never finishes) | 4.8 Core settings | done | v0.1 | core | #7, #46 |
+| Capability | IRP doc ref | Status | Milestone | Plugin kind | Issue | Field-proven |
+|---|---|---|---|---|---|---|
+| Active probing per provider: ICMP | 1.3.1, Explorer | done | v0.1 | prober (`icmp`) | #2 | no |
+| Active probing per provider: TCP | 1.3.1, Explorer | done | v0.1 | prober (`tcp`) | #2 | no |
+| Active probing per provider: UDP | Explorer | done | v0.2 | prober (`udp`) | #15 | no |
+| Traceroute-based probe target discovery | Explorer | partial: only the source's own configured targets, traced from one source address, not per provider; not applied to flow, VIP, or outage targets (#123) | v0.2 | source (`traceroute`) | #15 | no |
+| Loss / latency / jitter measurement and scoring | 1.3.1 | done | v0.1 | prober + scorer (`weighted`) | #2, #7 | no |
+| Throughput-aware scoring (prefix volume weighting) | 1.2.13 Improvements weight | done (lab-proven) | v0.4 | scorer (`commit` uses flow volume, #18; `improvement_weights` rank performance moves for the cap by gain and volume, #34) | #18, #34 | no (lab-proven) |
+| Probe sources per provider (IRP uses PBR; we use source-IP policy routing) | 2.8 Explorer, 2.8.1 PBR | done | v0.1 | core + docs | #2 | no |
+| Static probe target lists | - | done | v0.1 | source (`static`) | #2 | no |
+| Flow-based target discovery (NetFlow v5/v9, IPFIX, sFlow) | 2.7.1 Irpflowd | partial: the busiest destination is pinned, so automatic targets and the next-hop fallback never apply (#113); no percent-of-traffic floor and `top_n` is a hard cap, not a priority mark (#118); no sub-range measurement inside large prefixes (#121) | v0.1 | source (`flow`) | #5 | no |
+| Passive problem detection from flows | 2.7 Collector | partial: sampled NetFlow/IPFIX and sFlow are skipped (#133) | v0.2 | source (`flow` `problems`) | #21 | no |
+| SPAN / mirrored-traffic collector | 2.7.2 Irpspand | done | v0.2 | source (`span`) | #21 | no |
+| AS-pattern outage/congestion detection (re-probe prefixes crossing a sick ASN) | 1.2.6 Outage Detection | partial: correlates on the native route's BGP AS path, not traceroute hops mapped to ASNs or alternate providers' paths (#124) | v0.2 | source (`outage`) | #16 | no |
+| Circuit issues detection | 1.2.23 | done | v0.2 | source (`outage`) | #16 | no |
+| VIP (critical) prefixes/ASNs with more frequent probing | 1.2.7 VIP Improvements | done | v0.2 | source (`vip`) | #15 | no |
+| Retry / aggressive probing | 1.2.8 Retry Probing | partial: retry is triggered by loss only and is off by default; an inconsistent RTT sample is not escalated to a full probe (#119) | v0.2 | core (probe engine) | #15 | no |
+| Hysteresis, thresholds, hold time before flip | 1.3.1 | partial: RTT threshold is absolute ms only (no percent), and a new improvement is not confirmed on later rounds before it is announced (#117) | v0.1 | scorer | #7 | no |
+| Max improvements cap | 4.8 Core settings | done | v0.1 | core | #7 | no |
+| Improvement retirement / periodic re-probe of improvements (including a staleness timer when a probe round never finishes) | 4.8 Core settings | partial: an improvement is retired as soon as its prefix leaves every source (for example falls out of flow `top_n`) instead of staying on re-probe (#116) | v0.1 | core | #7, #46 | no |
+| Host qualification and probe consistency (enough consistent replies, RTT dispersion limit; fast probe escalating to a full probe) | Explorer | planned | v0.6 | core (probe engine) + prober | #119 | — |
+| Self-learning probe type (stick with the ICMP/UDP/TCP prober a host answers) | Explorer | planned | v0.6 | core (probe engine) | #120 | — |
+| Current exit learned from flow agents (exporter address + interface index per provider) | 2.7 Collector | won't do (the exit comes from the iBGP/BMP RIB, which is authoritative; without a BGP session Packeteer ranks paths and does not recommend) | - | - | - | — |
 
 UDP unreachable replies count only when the ICMP source is the probed target (#15). Traceroute discovery runs in the background under `budget` and does not block a probe round. VIP ASN expansion is capped by `max_targets` and rebuilt only when the RIB changes; the VIP interval must be shorter than the staleness window.
 
@@ -63,16 +72,16 @@ Passive problem detection (#21) feeds probing; it never announces. The `span` so
 
 ## Cost / commit
 
-| Capability | IRP doc ref | Status | Milestone | Plugin kind | Issue |
-|---|---|---|---|---|---|
-| SNMP interface bandwidth collection | 3.13.9 SNMP hosts | done | v0.2 | telemetry (`snmp`) | #17 |
-| 95th percentile tracking (separate / greater-of modes, billing day) | 1.3.3, 4.15 | done | v0.2 | telemetry (`snmp`) | #17 |
-| Outbound commit control (keep providers under commit) | 1.3.3 Commit Control | done | v0.2 | scorer (`commit`) | #18 |
-| Provider groups and load balancing in group | 4.15 group_loadbalance | done | v0.2 | scorer (`commit`) | #18 |
-| Provider precedence / last-resort provider | 4.15 precedence | done | v0.2 | scorer (`commit`) | #18 |
-| Cost optimization mode (cheapest provider meeting a performance floor) | 1.3.2 Cost optimization | done | v0.2 | scorer (`cost`) | #19 |
-| Precedence rules performance vs cost | 1.3.2 | done | v0.2 | scorer (`cost`) | #19 |
-| Global commit across POPs | 3.12 Global Commit | done (lab-proven) | v0.4 | federation (`mtls`) + core (`internal/federation`) | #30 |
+| Capability | IRP doc ref | Status | Milestone | Plugin kind | Issue | Field-proven |
+|---|---|---|---|---|---|---|
+| SNMP interface bandwidth collection | 3.13.9 SNMP hosts | done | v0.2 | telemetry (`snmp`) | #17 | no |
+| 95th percentile tracking (separate / greater-of modes, billing day) | 1.3.3, 4.15 | partial: samples are in memory and a restart clears the billing window (#127) | v0.2 | telemetry (`snmp`) | #17 | no |
+| Outbound commit control (keep providers under commit) | 1.3.3 Commit Control | done | v0.2 | scorer (`commit`) | #18 | no |
+| Provider groups and load balancing in group | 4.15 group_loadbalance | done | v0.2 | scorer (`commit`) | #18 | no |
+| Provider precedence / last-resort provider | 4.15 precedence | done | v0.2 | scorer (`commit`) | #18 | no |
+| Cost optimization mode (cheapest provider meeting a performance floor) | 1.3.2 Cost optimization | done | v0.2 | scorer (`cost`) | #19 | no |
+| Precedence rules performance vs cost | 1.3.2 | done | v0.2 | scorer (`cost`) | #19 | no |
+| Global commit across POPs | 3.12 Global Commit | done (lab-proven) | v0.4 | federation (`mtls`) + core (`internal/federation`) | #30 | no (lab-proven) |
 
 The `snmp` telemetry plugin (#17) polls `ifHCInOctets` and `ifHCOutOctets` (32-bit octet counters when the 64-bit ones are absent). The community and v3 passphrases are environment variables named in the config, not values in the file. Samples stay in memory for the open UTC billing period (`billing_day` 1–28). A restart clears them. The 95th percentile is nearest rank, ceil(0.95 × N). `separate` keeps the inbound and outbound 95ths apart. `greater` is the 95th of max(in, out) on each sample. `greater_separate` is the greater of those two 95ths. The numbers are on `/api/telemetry` and `packeteer_telemetry_*`. The plugin does not announce.
 
@@ -82,51 +91,53 @@ The `cost` scorer (#19) is off unless `scorer.type` is `cost`, and needs `provid
 
 ## Inbound
 
-| Capability | IRP doc ref | Status | Milestone | Plugin kind | Issue |
-|---|---|---|---|---|---|
-| Inbound commit control (bandwidth) | 1.2.17, 3.6.1 | done (lab-proven only) | v0.3 | announcer (inbound `gobgp`) + core (`internal/inbound`) | #25 |
-| Inbound performance optimization (prepends, provider TE communities, selective announcements) | 1.2.18, 3.6.2 | done (lab-proven only) | v0.3 | announcer (inbound `gobgp`, `withhold` action) + core (`internal/inbound` performance trigger) | #25 |
-| Inertia damping, automated vs moderated inbound improvements | 1.2.18 | done (lab-proven only) | v0.3 | core (`inbound.damping`) + `suggest` / `inbound.moderated` | #25 |
+| Capability | IRP doc ref | Status | Milestone | Plugin kind | Issue | Field-proven |
+|---|---|---|---|---|---|---|
+| Inbound commit control (bandwidth) | 1.2.17, 3.6.1 | done (lab-proven only) | v0.3 | announcer (inbound `gobgp`) + core (`internal/inbound`) | #25 | no (lab-proven) |
+| Inbound performance optimization (prepends, provider TE communities, selective announcements) | 1.2.18, 3.6.2 | done (lab-proven only) | v0.3 | announcer (inbound `gobgp`, `withhold` action) + core (`internal/inbound` performance trigger) | #25 | no (lab-proven) |
+| Inertia damping, automated vs moderated inbound improvements | 1.2.18 | done (lab-proven only) | v0.3 | core (`inbound.damping`) + `suggest` / `inbound.moderated` | #25 | no (lab-proven) |
 
 Inbound optimization (#25) steers inbound traffic for the operator's own `inbound.prefixes` away from a provider. Two triggers: **commit**, when the provider's inbound 95th percentile (telemetry) is above its commit, and **performance** (`inbound.performance`), when the probes rank it the single worst provider by mean loss or RTT over the prefixes every provider measured. In `inject` the in-process inbound `gobgp` announcer re-announces the exact learned prefix and next hop to the edge with `packeteer_community`, a marker community, the provider's catalog communities (a prepend signal the edge maps to `set as-path prepend` on that session, a `withhold` signal the edge maps to not exporting to that provider at all, i.e. a selective announcement, and the provider's own TE communities), and NO_EXPORT; the edge's import policy opts in ([inbound.md](inbound.md)). `observe` (default) logs. Moderated vs automated: `suggest`, and any trigger listed in `inbound.moderated` while in `inject`, publish on `/api/inbound` and as `inbound.steered` events and announce nothing; the rest are automated. Damping (`inbound.damping`, on by default) confirms a trigger before steering, grows the hold time and cooldown of a flapping provider by `backoff` up to `max_hold`, and learns inertia (the inbound traffic that returned on the last release) so a commit steer is released only when demand really drops; a unit simulation shows about 140 undamped changes a day falling to four. Steers are held, released at `release_pct` (commit) or `performance.release_pct`, retired at `improvement_ttl`, released at once on stale telemetry or missing probe results (probe-source loss), withdrawn on RIB loss and shutdown, share `max_improvements` with outbound, never cover every provider, and never use a prefix outside the allowlist or the learned RIB. The FRR lab (`lab/e2e-inbound.sh`) checks on the transits: the commit prepend and TE community on transit-a only, release, a damped re-steer that inertia keeps past its hold, SIGTERM withdraw, a performance steer and release, a selective announcement that removes the prefix from transit-b only, and SIGKILL. Lab-proven only, not on a public edge.
 
 ## Transit
 
-| Capability | IRP doc ref | Status | Milestone | Plugin kind | Issue |
-|---|---|---|---|---|---|
-| Optimization of transiting traffic | 1.2.22 | done (simulated-flow tested) | v0.3 | source (`flow` `transit` block, `plugin.TrafficClassifier`) + policy (`rules` `traffic`) | #29 |
+| Capability | IRP doc ref | Status | Milestone | Plugin kind | Issue | Field-proven |
+|---|---|---|---|---|---|---|
+| Optimization of transiting traffic | 1.2.22 | done (simulated-flow tested) | v0.3 | source (`flow` `transit` block, `plugin.TrafficClassifier`) + policy (`rules` `traffic`) | #29 | no (lab-proven) |
 
 Transit traffic optimization (#29) optimizes egress for traffic that crosses the network from customers, not only traffic the operator sources. The `flow` source's `transit` block lists the customer source networks (`customers`); each flow record (NetFlow v5/v9, IPFIX, sFlow) is transit when its source is inside them and local otherwise, and a prefix whose transit byte share over the window reaches `share_pct` (default 50) is a transit prefix. The controller passes the class to the policy chain before each decision (`PolicySubject.Traffic`), and `rules` with `traffic: transit` or `traffic: local` give the two classes separate policies (allow/deny providers, ignore, static, vip), alone or combined with prefixes, ASNs, or countries. Classification does not add targets and never announces; the allowlist, learned-RIB check, community and NO_EXPORT, `max_improvements`, hold time, and withdraw on probe-source loss, stale data, RIB loss, and shutdown are unchanged, and an unclassified prefix matches no traffic rule. Unit tests replay simulated NetFlow v5, IPFIX, and sFlow exports (documentation prefixes) through classification, and a controller test runs the classes through the policy chain into `Decide` in inject mode (transit restricted to its allowed provider, local on the fastest, nothing outside the allowlist or the learned RIB, both withdrawn on RIB loss). No new announce path, so no new lab script. Rollback: remove `transit` and the `traffic` rules.
 
 ## Policies
 
-| Capability | IRP doc ref | Status | Milestone | Plugin kind | Issue |
-|---|---|---|---|---|---|
-| Operating modes: non-intrusive / intrusive (observe / suggest / inject) | 1.2.4 Operating modes | done | v0.1 | core (config) | #1 |
-| Allow / deny / static provider / VIP policies by prefix | 1.2.9, 3.7 Routing Policies | done | v0.2 | policy (`rules`) | #20 |
-| Policies by ASN | 3.7 | done | v0.2 | policy (`rules`) | #20 |
-| Policies by country (GeoIP) | 3.7 | done | v0.2 | policy (`rules`) | #20 |
-| Provider exclusions | 4.15 cc_disable, 3.7 | done | v0.1 | scorer | #7 |
-| Maintenance windows | 1.2.21, 3.19 | done | v0.2 | policy (`maintenance`) | #20 |
-| Inject allowlist (Packeteer safety addition) | - | done | v0.1 | core + announcer | #7, #8 |
+| Capability | IRP doc ref | Status | Milestone | Plugin kind | Issue | Field-proven |
+|---|---|---|---|---|---|---|
+| Operating modes: non-intrusive / intrusive (observe / suggest / inject) | 1.2.4 Operating modes | done | v0.1 | core (config) | #1 | no |
+| Allow / deny / static provider / VIP policies by prefix | 1.2.9, 3.7 Routing Policies | done | v0.2 | policy (`rules`) | #20 | no |
+| Policies by ASN | 3.7 | done | v0.2 | policy (`rules`) | #20 | no |
+| Policies by country (GeoIP) | 3.7 | done | v0.2 | policy (`rules`) | #20 | no |
+| Provider exclusions | 4.15 cc_disable, 3.7 | done | v0.1 | scorer | #7 | no |
+| Maintenance windows | 1.2.21, 3.19 | done | v0.2 | policy (`maintenance`) | #20 | no |
+| Inject allowlist (Packeteer safety addition) | - | done | v0.1 | core + announcer | #7, #8 | no |
 
 Routing policies (#20) are `policy` plugins, a filter chain in front of the scorer. The `rules` policy matches a probed prefix by prefix (equal or more specific), by the origin ASN of the learned AS path, or by country from a MaxMind-format database the operator mounts (none is shipped). A prefix match beats an ASN match, which beats a country match; the longest rule prefix wins, then list order. `ignore` retires and blocks improvements, `allow` and `deny` restrict where a prefix may be steered (never the native provider), `static` pins a provider while its path is usable and inside the rule's required `max_loss_pct` (and optional `max_rtt`), and not lossier than native by `min_loss_delta_pct` (cause `static`, checked before announce and every round while held, withdrawn with a `hold_time` cooldown when the path fails or leaves the ceiling, an existing improvement is switched onto the pin only after `hold_time`, retired at `improvement_ttl` without a cooldown), and `vip` ranks performance moves ahead when the cap binds. The `maintenance` policy excludes providers during cron-scheduled, one-off, or on-demand (`POST /api/maintenance`, basic auth required, in memory) windows: improvements on them are retired and no performance, static, commit, or cost move may land on them. Native traffic through the provider is not moved. Every verdict goes through Decide, so the RIB, allowlist, cap, community, and withdraw rules still hold. Removing `policies` and restarting is the rollback. Observe stays the default.
 
 ## BGP
 
-| Capability | IRP doc ref | Status | Milestone | Plugin kind | Issue |
-|---|---|---|---|---|---|
-| iBGP injection with local-pref, communities, next-hop | 1.2.2 Bgpd | done | v0.1 | announcer (`gobgp`) | #8 |
-| More-specific injection (learned more-specifics only, `more_specific.max_routes` route cap) | 2.9 Bgpd | done (lab-proven) | v0.3 | announcer (`gobgp`) + core (`internal/announce`) | #56 |
-| RIB view from iBGP (learn current best exits) | 2.9 Bgpd | done | v0.1 | core (`internal/rib`) | #6 |
-| BGP session health and withdraw when a still-advertised prefix leaves the RIB (a best-path hide is kept, not flapped) | 2.9 | done | v0.1 | announcer | #8, #43 |
-| AS-path behavior options (`bgp.as_path`: empty, native, or the chosen provider's learned path) | 2.9.1 | done (lab-proven) | v0.3 | announcer (`gobgp`) + core | #27 |
-| BGP additional paths (add-path) on the iBGP session (receive, incl. inactive/IX paths, per-provider `add_path` route check) and in BMP (path-ID decoding) | 2.9.3 | done (lab-proven) | v0.3 | core (`internal/rib`) + RIB source (`bmp`) | #26 |
-| BMP monitoring (post-policy Adj-RIB-In and Loc-RIB, incl. inactive IX paths), per-provider `bmp` usage (off/prefer/only), route check before injecting | 1.2.5, 2.10 | done (lab-proven) | v0.3 | RIB source (`bmp`) | #26 |
-| Multiple edge routers (N iBGP sessions, per-router provider reachability and next hop, egress-router loss retires) | 1.2.2 | done (lab-proven) | v0.3 | announcer (`gobgp`) + core | #27 |
-| Centralized route reflector support (Packeteer as a reflector client, deployment guide) | 1.2.10 | done (lab-proven) | v0.3 | announcer (`gobgp`) | #27 |
-| Internet exchanges / many peers with per-peer next-hop (peers as route-checked providers, exchange statistics, discovered members) | 1.2.11, 3.4.6 | done (lab-proven) | v0.3 | core (`exchanges`, `internal/rib`, `internal/exchange`, `/api/exchanges`) + announcer | #27 |
-| Bgpd online reconfiguration (SIGHUP: add/remove/change iBGP sessions and the per-router table without touching other sessions) | 2.9.2 | done (lab-proven) | v0.3 | core + announcer (`gobgp`) + RIB | #27 |
+| Capability | IRP doc ref | Status | Milestone | Plugin kind | Issue | Field-proven |
+|---|---|---|---|---|---|---|
+| iBGP injection with local-pref, communities, next-hop | 1.2.2 Bgpd | done | v0.1 | announcer (`gobgp`) | #8 | no |
+| More-specific injection (learned more-specifics only, `more_specific.max_routes` route cap) | 2.9 Bgpd | done (lab-proven) | v0.3 | announcer (`gobgp`) + core (`internal/announce`) | #56 | no (lab-proven) |
+| Synthesized more-specific injection (opt-in `synthesize`: sub-ranges of a prefix a neighbor already advertises, covering-prefix allowlist, `max_bits`, route cap, community + NO_EXPORT + marker) | 2.9 Bgpd | planned | v0.6 | announcer (`gobgp`) + core (`internal/announce`) | #122 (charter #114) | — |
+| RIB view from iBGP (learn current best exits) | 2.9 Bgpd | done | v0.1 | core (`internal/rib`) | #6 | no |
+| BGP session health and withdraw when a still-advertised prefix leaves the RIB (a best-path hide is kept, not flapped) | 2.9 | done | v0.1 | announcer | #8, #43 | no |
+| AS-path behavior options (`bgp.as_path`: empty, native, or the chosen provider's learned path) | 2.9.1 | done (lab-proven) | v0.3 | announcer (`gobgp`) + core | #27 | no (lab-proven) |
+| BGP additional paths (add-path) on the iBGP session (receive, incl. inactive/IX paths, per-provider `add_path` route check) and in BMP (path-ID decoding) | 2.9.3 | done (lab-proven) | v0.3 | core (`internal/rib`) + RIB source (`bmp`) | #26 | no (lab-proven) |
+| BMP monitoring (post-policy Adj-RIB-In and Loc-RIB, incl. inactive IX paths), per-provider `bmp` usage (off/prefer/only), route check before injecting | 1.2.5, 2.10 | done (lab-proven) | v0.3 | RIB source (`bmp`) | #26 | no (lab-proven) |
+| Multiple edge routers (N iBGP sessions, per-router provider reachability and next hop, egress-router loss retires) | 1.2.2 | done (lab-proven) | v0.3 | announcer (`gobgp`) + core | #27 | no (lab-proven) |
+| Centralized route reflector support (Packeteer as a reflector client, deployment guide) | 1.2.10 | done (lab-proven) | v0.3 | announcer (`gobgp`) | #27 | no (lab-proven) |
+| Internet exchanges / many peers with per-peer next-hop (peers as route-checked providers, exchange statistics, discovered members) | 1.2.11, 3.4.6 | done (lab-proven) | v0.3 | core (`exchanges`, `internal/rib`, `internal/exchange`, `/api/exchanges`) + announcer | #27 | no (lab-proven) |
+| Bgpd online reconfiguration (SIGHUP: add/remove/change iBGP sessions and the per-router table without touching other sessions) | 2.9.2 | done (lab-proven) | v0.3 | core + announcer (`gobgp`) + RIB | #27 | no (lab-proven) |
+| Online reconfiguration of core settings (thresholds, hold time, cap, policies, sources) without a restart or a withdraw | 2.9.2 (Bgpd only today) | planned | v0.6 | core (`cmd/controller` reload, `internal/configedit`) | #128 | — |
 
 More-specific injection (#56, [design](design/more-specific.md)) is off unless `more_specific.enabled: true`. An improvement on P then also announces each prefix strictly inside P that a neighbor advertises exactly in the learned RIB (inside the allowlist, not held by inbound or mitigation), toward the same provider, with the same `local_pref`, community, and NO_EXPORT. Nothing is split or computed; `more_specific_bits` is still rejected. `more_specific.max_routes` (default 100, at most 1000) caps routes on a router, not decisions: improvements, their more-specifics, and inbound steer routes. A new improvement is announced whole or not at all, a later more-specific only while there is room, and nothing on the wire is withdrawn to make room. A more-specific is withdrawn with its improvement, on a confirmed RIB leave (advertised 5s, then gone; a best-path hide is kept), on RIB loss, SIGTERM, and with the session on SIGKILL. The FRR lab (`lab/e2e-more-specific.sh`) asserts on the edge the exact route set and count at every step, that no unlearned more-specific appears, the cap holding a second improvement back, a real `no network` withdrawing a more-specific and freeing room, SIGTERM, and SIGKILL. Lab-proven only, not on a public edge. Rollback: remove `more_specific` and restart.
 
@@ -136,23 +147,24 @@ Internet exchanges (#27, second half) are an `exchanges` list. Each peer is a pr
 
 ## Multi-POP
 
-| Capability | IRP doc ref | Status | Milestone | Plugin kind | Issue |
-|---|---|---|---|---|---|
-| Multiple routing domains with inter-DC RTT | 1.2.12, 4.21 | done (lab-proven) | v0.4 | federation (`mtls`) + core (`internal/federation`) | #30 |
-| Central management of many instances (GMI) | 1.4 | done (lab-proven) | v0.4 | federation (`mtls`) + API/UI (`/api/federation`) | #30 |
+| Capability | IRP doc ref | Status | Milestone | Plugin kind | Issue | Field-proven |
+|---|---|---|---|---|---|---|
+| Multiple routing domains with inter-DC RTT | 1.2.12, 4.21 | done (lab-proven) | v0.4 | federation (`mtls`) + core (`internal/federation`) | #30 | no (lab-proven) |
+| Central management of many instances (GMI) | 1.4 | partial (lab-proven): read-only central view; settings cannot be pushed to every instance (#137) | v0.4 | federation (`mtls`) + API/UI (`/api/federation`) | #30 | no (lab-proven) |
 
 Multi-POP (#30, [multi-pop.md](multi-pop.md)): one Packeteer instance per POP (routing domain), joined by a `federation` plugin. The built-in `mtls` plugin serves each instance's snapshot over HTTPS with mutual TLS 1.3 (certificates from a mounted CA; unknown client certificates get 403) and polls its peers; it never announces or decides. A snapshot carries the instance's own providers (health and telemetry), its fresh measurements through them, how its traffic for each learned probed prefix leaves, and its improvements. A provider with `domain` set to another POP is not probed locally: its path is the peer's measurement plus the configured `inter_dc_rtt`, and it is usable only while the peer is fresh, its RIB is ready, it reports the provider up, and its own traffic for that exact prefix leaves through that provider (so traffic cannot loop between POPs; two simultaneous steers at each other are broken by domain name). The steer is announced to this POP's edge with the provider's backbone `next_hop`, only for a prefix in this POP's learned RIB and allowlist, with the community and NO_EXPORT, under `max_improvements` and `hold_time`. Peer staleness (`max_age`), a peer's RIB or provider going down, or a peer shutting down (it publishes its providers down first) retires the steer and withdraws the route. `global_commit` shares one commit across providers in several POPs (IRP Globalcc): with the `commit` scorer, each local member's commit is the global commit less every other member's fresh usage; a missing member falls back to each provider's own commit. `/api/federation` and the dashboard's POPs section are the central view (every instance's mode, freshness, providers, improvements, inter-DC RTT, and global commit totals). The FRR lab (`lab/e2e-multipop.sh`: two POPs, each an FRR edge and a Packeteer instance, certificates generated per run) proves the central view, a steer through the other POP's carrier because of the inter-DC RTT (next hop, local-pref, community, NO_EXPORT), withdraw on peer loss and re-steer, a commit move driven by the other POP's usage and its release, that a prefix only the other POP learned is never announced, that the other instance never steers back, SIGTERM, and SIGKILL. Lab-proven only, not on a public edge. Rollback: remove `federation`, `global_commit`, and remote-domain providers and restart; each instance runs standalone.
 
 ## Security
 
-| Capability | IRP doc ref | Status | Milestone | Plugin kind | Issue |
-|---|---|---|---|---|---|
-| RTBH (BGP blackholing): discard next hop + BLACKHOLE community on the exact learned prefix, own allowlist, `max_rules`, TTL, API rules | 2.11.1 | done (lab-proven) | v0.3 | announcer (mitigation `gobgp`) + core (`internal/mitigation`, `/api/mitigations`) | #28 |
-| BGP redirect (to a named scrubber/sinkhole next hop from the catalog) | 2.11.2 | done (lab-proven) | v0.3 | announcer (mitigation `gobgp`) + core | #28 |
-| FlowSpec drop / rate-limit (throttle) / redirect (RFC 8955 on the iBGP session; destination is the exact learned prefix; match by source, protocol, ports; redirect to a VRF route target) | 1.2.19, 1.2.20, 2.11.3-4 | done (lab-proven) | v0.3 | announcer (mitigation `gobgp` `flowspec`) + core (`internal/mitigation`) | #28 |
-| FlowSpec policies by country (source countries expanded from a mounted GeoIP database, counted against `max_rules`) | 3.8.1 | done (lab-proven) | v0.3 | announcer (mitigation `gobgp` `flowspec`) + core (`internal/geoip`) | #28 |
-| Threat mitigation monitor, rules, feed, history (dashboard section and `packeteer_mitigation_*` metrics, rules API, change feed and `mitigation.*` events, stored `mitigations` report) | 1.2.24, 3.10 | done (lab-proven) | v0.3 | core (`/api/mitigations`, UI) + storage (`sqlite`) + notifiers | #28 |
-| Automatic traffic anomaly (DDoS) detection (per-prefix, per-protocol flow baselines, tunable sensitivity, explicit rules to mitigation, rate-limited and capped, feed and history) | 1.2.25, 2.12, 3.11 | done (lab-proven) | v0.4 | detector (`baseline`) + source (`flow` counters) + core (`internal/anomaly`, `/api/anomalies`) | #33 |
+| Capability | IRP doc ref | Status | Milestone | Plugin kind | Issue | Field-proven |
+|---|---|---|---|---|---|---|
+| RTBH (BGP blackholing): discard next hop + BLACKHOLE community on the exact learned prefix, own allowlist, `max_rules`, TTL, API rules | 2.11.1 | done (lab-proven) | v0.3 | announcer (mitigation `gobgp`) + core (`internal/mitigation`, `/api/mitigations`) | #28 | no (lab-proven) |
+| BGP redirect (to a named scrubber/sinkhole next hop from the catalog) | 2.11.2 | done (lab-proven) | v0.3 | announcer (mitigation `gobgp`) + core | #28 | no (lab-proven) |
+| FlowSpec drop / rate-limit (throttle) / redirect (RFC 8955 on the iBGP session; destination is the exact learned prefix; match by source, protocol, ports; redirect to a VRF route target) | 1.2.19, 1.2.20, 2.11.3-4 | done (lab-proven) | v0.3 | announcer (mitigation `gobgp` `flowspec`) + core (`internal/mitigation`) | #28 | no (lab-proven) |
+| FlowSpec policies by country (source countries expanded from a mounted GeoIP database, counted against `max_rules`) | 3.8.1 | done (lab-proven) | v0.3 | announcer (mitigation `gobgp` `flowspec`) + core (`internal/geoip`) | #28 | no (lab-proven) |
+| Threat mitigation monitor, rules, feed, history (dashboard section and `packeteer_mitigation_*` metrics, rules API, change feed and `mitigation.*` events, stored `mitigations` report) | 1.2.24, 3.10 | done (lab-proven) | v0.3 | core (`/api/mitigations`, UI) + storage (`sqlite`) + notifiers | #28 | no (lab-proven) |
+| Automatic traffic anomaly (DDoS) detection (per-prefix, per-protocol flow baselines, tunable sensitivity, explicit rules to mitigation, rate-limited and capped, feed and history) | 1.2.25, 2.12, 3.11 | done (lab-proven) | v0.4 | detector (`baseline`) + source (`flow` counters) + core (`internal/anomaly`, `/api/anomalies`) | #33 | no (lab-proven) |
+| External threat-intelligence feed ingest into mitigation rules | 3.10 | planned | v0.6 | feed plugin + core (`internal/mitigation`) | #134 | — |
 
 Threat mitigation, first half (#28): RTBH and BGP redirect. A new `mitigation` block with its own `mode` (default `observe`, a dry run), its own `allowlist`, `max_rules` (default 10), and `default_ttl`/`max_ttl` (1h/24h, at most 168h), and a new in-process mitigation announcer (`mitigation.announcer`, type `gobgp`) with a marker community, a blackhole discard next hop and communities (RFC 7999 `65535:666` by default), and named redirect targets. Operators add and remove rules through `POST`/`DELETE /api/mitigations` (basic auth). In `inject` each rule's exact prefix is announced to the edge on the existing iBGP session with the action's next hop and communities, `packeteer_community`, the marker, and NO_EXPORT, only while the prefix is in the learned RIB; the announcer re-checks the allowlist and the cap itself. Rules are in memory only (a restart drops them: no stale intent) and always expire; removal, expiry, RIB loss, and shutdown withdraw, and a crash drops the routes with the session (no graceful restart). A prefix a rule holds is withdrawn from outbound improvements and inbound steers first. The edge opts in by matching the marker and routing the discard address to null ([mitigation.md](mitigation.md)). The FRR lab (`lab/e2e-mitigation.sh`) checks on the routers: refusals outside the allowlist and past the cap, an allowlisted more-specific not in the RIB never announced, RTBH in the edge's BGP table and FIB with nothing leaked to the other transit, redirect in place, DELETE, TTL expiry, SIGTERM, no rule after a restart, and SIGKILL. Lab-proven only, not on a public edge.
 
@@ -162,27 +174,27 @@ Automatic traffic anomaly detection (#33, [anomaly.md](anomaly.md)): the `flow` 
 
 ## Ops
 
-| Capability | IRP doc ref | Status | Milestone | Plugin kind | Issue |
-|---|---|---|---|---|---|
-| Web UI dashboard (providers, per-prefix metrics, current vs recommended, improvements; first-run overview, setup checklist, empty and error states) | 3.3 Dashboards | done | v0.1, v0.5 | core (`internal/httpapi`, `/api/overview`) | #9, #49 |
-| Custom dashboards / widgets | 3.3.1-3.3.3 | done | v0.4 | core (`/api/dashboards`, `/dashboards.html`) + storage (`sqlite`, `plugin.DashboardStore`) ([ui.md](ui.md)) | #34 |
-| REST API | 1.2.15, 4.3 | done | v0.1 | core | #9 |
-| Prometheus metrics | - | done | v0.1 | core (`internal/httpapi`) | #9 |
-| Reports: improvements, before/after latency/loss, provider efficiency, top prefixes/ASNs, country stats, cost savings | 3.4, 3.5 | done | v0.2 | core (`internal/history`, `/api/reports`, CSV, dashboard) + storage | #23 |
-| Historical records / storage | 3.4.7 | done | v0.2 | storage (`sqlite`) | #23 |
-| Looking glass, traceroute, whois, manual prefix probe | 3.9 | done | v0.2 | core (`internal/troubleshoot`, `/api/troubleshoot`, dashboard) + prober + whois (`rdap`) | #24 |
-| Alerts: email | 3.14.5 Senders, 3.17 | done | v0.2 | notifier (`smtp`) | #22 |
-| Alerts: webhook (Slack/Teams/SMS gateways) | 3.17.3 | done | v0.1 | notifier (`webhook`; `slack`, `teams`, `pagerduty` presets and body templates in v0.2) | #13, #22 |
-| Alerts: SNMP traps | 3.17.2 | done | v0.2 | notifier (`snmptrap`) | #22 |
-| Event catalog and notification rules | 1.2.14, 3.16, 3.17.1 | done | v0.2 | notifier (per-notifier `events`, `min_severity`, `rate_limit`; [EVENTS.md](EVENTS.md)) | #22 |
-| Email report subscriptions | 3.15 | done | v0.4 | notifier (`smtp`, `plugin.ReportSender`) + storage (`sqlite`) + core (`report_subscriptions`, `internal/subscribe`, `/api/subscriptions`) ([ui.md](ui.md)) | #34 |
-| User accounts, RBAC, access restriction | 3.14.2, 3.14.3 | done | v0.4 | core (HTTP auth, `internal/auth`) + storage (`sqlite` users and token hashes) + sso (`oidc`) ([auth.md](auth.md)) | #32 |
-| Audit log | - | done | v0.4 | core + storage (`sqlite`) + notifier (`audit.recorded`) | #32 |
-| Failover / HA (active-standby) | 1.2.16, 2.14 | done | v0.4 | elector (`lease`); lab-proven only ([ha.md](ha.md)) | #31 |
-| Config backup / restore | 2.14 | done | v0.4 | core (`-backup`, `-restore`) + storage (`sqlite`) | #31 |
-| Configuration editor and setup wizards | 3.13, 3.2 | done | v0.4 | core (`internal/configedit`, `/api/config`, `/api/config/wizard`, `/settings.html`; admin role) ([ui.md](ui.md)) | #34 |
-| Improvement weights | 1.2.13 | done (lab-proven) | v0.4 | scorer (`weighted`, `commit`, `cost`: `improvement_weights`, `plugin.ImprovementWeigher`) ([ui.md](ui.md)) | #34 |
-| Structured logging | - | done | v0.1 | core | #9 |
+| Capability | IRP doc ref | Status | Milestone | Plugin kind | Issue | Field-proven |
+|---|---|---|---|---|---|---|
+| Web UI dashboard (providers, per-prefix metrics, current vs recommended, improvements; first-run overview, setup checklist, empty and error states) | 3.3 Dashboards | done | v0.1, v0.5 | core (`internal/httpapi`, `/api/overview`) | #9, #49 | no |
+| Custom dashboards / widgets | 3.3.1-3.3.3 | done | v0.4 | core (`/api/dashboards`, `/dashboards.html`) + storage (`sqlite`, `plugin.DashboardStore`) ([ui.md](ui.md)) | #34 | no |
+| REST API | 1.2.15, 4.3 | done | v0.1 | core | #9 | no |
+| Prometheus metrics | - | done | v0.1 | core (`internal/httpapi`) | #9 | no |
+| Reports: improvements, before/after latency/loss, provider efficiency, top prefixes/ASNs, country stats, cost savings | 3.4, 3.5 | partial: tables and CSV only; no time-series before/after graphs or all/problem/20%/50%-better views (#129) | v0.2 | core (`internal/history`, `/api/reports`, CSV, dashboard) + storage | #23 | no |
+| Historical records / storage | 3.4.7 | done | v0.2 | storage (`sqlite`) | #23 | no |
+| Looking glass, traceroute, whois, manual prefix probe | 3.9 | partial: the manual probe takes an IP only (no hostname), shows raw JSON with no current-vs-best view, and never feeds optimization (#126) | v0.2 | core (`internal/troubleshoot`, `/api/troubleshoot`, dashboard) + prober + whois (`rdap`) | #24 | no |
+| Alerts: email | 3.14.5 Senders, 3.17 | done | v0.2 | notifier (`smtp`) | #22 | no |
+| Alerts: webhook (Slack/Teams/SMS gateways) | 3.17.3 | done | v0.1 | notifier (`webhook`; `slack`, `teams`, `pagerduty` presets and body templates in v0.2) | #13, #22 | no |
+| Alerts: SNMP traps | 3.17.2 | done | v0.2 | notifier (`snmptrap`) | #22 | no |
+| Event catalog and notification rules | 1.2.14, 3.16, 3.17.1 | done | v0.2 | notifier (per-notifier `events`, `min_severity`, `rate_limit`; [EVENTS.md](EVENTS.md)) | #22 | no |
+| Email report subscriptions | 3.15 | partial: CSV attachment, no charts (#136) | v0.4 | notifier (`smtp`, `plugin.ReportSender`) + storage (`sqlite`) + core (`report_subscriptions`, `internal/subscribe`, `/api/subscriptions`) ([ui.md](ui.md)) | #34 | no |
+| User accounts, RBAC, access restriction | 3.14.2, 3.14.3 | done | v0.4 | core (HTTP auth, `internal/auth`) + storage (`sqlite` users and token hashes) + sso (`oidc`) ([auth.md](auth.md)) | #32 | no |
+| Audit log | - | done | v0.4 | core + storage (`sqlite`) + notifier (`audit.recorded`) | #32 | no |
+| Failover / HA (active-standby) | 1.2.16, 2.14 | done | v0.4 | elector (`lease`); lab-proven only ([ha.md](ha.md)) | #31 | no (lab-proven) |
+| Config backup / restore | 2.14 | done | v0.4 | core (`-backup`, `-restore`) + storage (`sqlite`) | #31 | no |
+| Configuration editor and setup wizards | 3.13, 3.2 | partial: the YAML editor covers every key, but the forms cover only providers, static targets, allowlist, and decision knobs, and the wizard has no flow step (#130, #131) | v0.4 | core (`internal/configedit`, `/api/config`, `/api/config/wizard`, `/settings.html`; admin role) ([ui.md](ui.md)) | #34 | no |
+| Improvement weights | 1.2.13 | done (lab-proven) | v0.4 | scorer (`weighted`, `commit`, `cost`: `improvement_weights`, `plugin.ImprovementWeigher`) ([ui.md](ui.md)) | #34 | no (lab-proven) |
+| Structured logging | - | done | v0.1 | core | #9 | no |
 
 Remaining UI parity (#34, [ui.md](ui.md)). **Improvement weights**: the `weighted`, `commit`, and `cost` scorers take an optional `improvement_weights` block (`performance`, default 1; `volume`, default 0). When it is set, new static, VIP, and performance moves competing for the last `max_improvements` slots are admitted by `performance × score gain + volume × Mbps` instead of by gain alone, inside their lane (static pins still first; commit and cost moves keep relief and savings order). Weights only order moves Decide already accepted: a prefix not in the learned RIB or not allowlisted is never admitted, the cap still binds, an active improvement is never displaced, and every route still carries the community and NO_EXPORT. The weight is on `/api/decisions`. The FRR lab (`lab/e2e-weights.sh`) proves the heavier learned prefix wins the one slot, a heavier prefix the edge never advertises is never announced, a RIB leave withdraws and hands the slot over, a returning heavier prefix does not displace, SIGTERM, restart, and SIGKILL. **Config editor and first-run wizard**: with `http.config_editor: true` and auth or basic auth, an admin reads, validates, and writes the mounted config file (`/api/config`, `/settings.html`). A write needs the hash of the file it edits, passes the same checks as a start (loader, environment, every plugin's config, cross-checks), never runs an `exec` plugin and refuses one that is added or changed (or a changed `plugin_dir`), needs `confirm_inject` to turn inject on, is read back through `config.Load`, and is audited by hash. It is not applied to the running controller: restart (or SIGHUP for `bgp.neighbors`). The wizard (`POST /api/config/wizard`) renders an observe-mode config with an empty allowlist for review in the editor. **Custom dashboards**: per-user layouts of read-only widgets in the `sqlite` store (`/api/dashboards`, `/dashboards.html`). **Report subscriptions**: `report_subscriptions` email a stored report as CSV on a daily, weekly, or monthly UTC schedule through an `smtp` notifier; `/api/subscriptions` shows their state and operators may send one now. Rollback: remove `improvement_weights`, `http.config_editor`, and `report_subscriptions` and restart; the file config works as before.
 
@@ -194,15 +206,15 @@ Troubleshooting tools (#24) live on the ops HTTP server. The looking glass reads
 
 ## Deployment
 
-| Capability | IRP doc ref | Status | Milestone | Plugin kind | Issue |
-|---|---|---|---|---|---|
-| Single-container install (Docker, multi-arch GHCR image) | 1.2.3 Technical requirements | done | v0.1 | - | #4 |
-| Operator quick start, config reference, and changelog; CI-tested single-container quickstart, MikroTik/FRR/Junos/Cisco router guides, observe → suggest → inject walkthrough (lab), and troubleshooting | - | done | v0.1, v0.5 | - | #11, #50 |
-| Plugin system (in-process + exec + webhook) | - | done | v0.1 | all kinds | #13 |
-| Simulated-router e2e lab (announce, clean withdraw, SIGKILL session-loss within the BGP hold timer); MikroTik RouterOS CHR in QEMU on CI runners (free image, iBGP accept and filters, community + NO_EXPORT, no eBGP export, withdraw on SIGTERM, frozen process, and SIGKILL); scheduled router interop matrix (FRR, BIRD 2/3, GoBGP edges × iBGP, add-path, BMP where supported, plus CHR; [routers.md](routers.md#interop-matrix)) | - | done (lab-proven) | v0.1, v0.5 | - | #10, #45, #52, #53 |
-| Software management / upgrades via package manager | 2.1 | won't do (Replaced by container images and tags; upgrade = pull a new tag.) | - | - | - |
-| IRP Lite (feature-restricted free edition) | - | won't do (Packeteer is fully open source; there are no editions.) | - | - | - |
-| NOC-as-a-service, Tier 1 reports, training | - | won't do (Commercial services, not software features.) | - | - | - |
+| Capability | IRP doc ref | Status | Milestone | Plugin kind | Issue | Field-proven |
+|---|---|---|---|---|---|---|
+| Single-container install (Docker, multi-arch GHCR image) | 1.2.3 Technical requirements | done | v0.1 | - | #4 | no |
+| Operator quick start, config reference, and changelog; CI-tested single-container quickstart, MikroTik/FRR/Junos/Cisco router guides, observe → suggest → inject walkthrough (lab), and troubleshooting | - | done | v0.1, v0.5 | - | #11, #50 | no |
+| Plugin system (in-process + exec + webhook) | - | done | v0.1 | all kinds | #13 | no |
+| Simulated-router e2e lab (announce, clean withdraw, SIGKILL session-loss within the BGP hold timer); MikroTik RouterOS CHR in QEMU on CI runners (free image, iBGP accept and filters, community + NO_EXPORT, no eBGP export, withdraw on SIGTERM, frozen process, and SIGKILL); scheduled router interop matrix (FRR, BIRD 2/3, GoBGP edges × iBGP, add-path, BMP where supported, plus CHR; [routers.md](routers.md#interop-matrix)) | - | done (lab-proven) | v0.1, v0.5 | - | #10, #45, #52, #53 | no (lab-proven) |
+| Software management / upgrades via package manager | 2.1 | won't do (Replaced by container images and tags; upgrade = pull a new tag.) | - | - | - | — |
+| IRP Lite (feature-restricted free edition) | - | won't do (Packeteer is fully open source; there are no editions.) | - | - | - | — |
+| NOC-as-a-service, Tier 1 reports, training | - | won't do (Commercial services, not software features.) | - | - | - | — |
 
 ## Maintaining this file
 
