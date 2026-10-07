@@ -159,6 +159,10 @@ type confirm struct {
 	// measurements seen again (a RIB change, or the staleness ticker)
 	// do not count twice.
 	Round time.Time
+	// Probe is set only for the evaluation that compared the paths and
+	// left the streak short. The next evaluation clears it first, so a
+	// round that cannot compare does not keep the prober awake.
+	Probe bool
 }
 
 // State is carried between Decide calls.
@@ -255,10 +259,10 @@ const (
 type Output struct {
 	Decisions []Decision
 	Changes   []Change
-	// Urgent are prefixes whose performance move is waiting on another
-	// fresh round. The probe engine marks them urgent so confirmation
-	// does not wait out the probe interval. The global rate limit still
-	// applies to those packets.
+	// Urgent are prefixes whose performance move compared this evaluation
+	// and is still short of confirm_rounds. The probe engine measures
+	// them after a quarter of their interval. A round that cannot
+	// compare leaves this empty. The global rate limit still applies.
 	Urgent []netip.Prefix
 }
 
@@ -362,6 +366,11 @@ func Decide(prev State, in Input, cfg Config, scorer plugin.Scorer, now time.Tim
 	decisions := make([]Decision, len(prefixes))
 
 	for i, p := range prefixes {
+		// A streak only asks for an early probe when this evaluation
+		// compares the paths. Anything else (provider down, no RIB
+		// provider, a static pin, a cooldown, the cost floor) leaves
+		// the streak and does not wake the prober.
+		clearConfirmProbe(&st, p)
 		cands := byPrefix[p]
 		sort.Slice(cands, func(a, b int) bool { return cands[a].Provider < cands[b].Provider })
 		d := &decisions[i]
@@ -824,7 +833,9 @@ func (cfg Config) confirmRounds() int {
 // provider. ready is true when the move has won enough consecutive fresh
 // rounds to be created. A stale round, and a repeat of measurements
 // already counted, leave the streak untouched. A fresh round for a
-// different provider starts that provider at 1.
+// different provider starts that provider at 1. A short streak whose
+// paths were compared this call asks for another probe; a stale round
+// does not.
 func notePerformance(st *State, in Input, cfg Config, p netip.Prefix, provider string, now time.Time) (ready bool, streak int) {
 	rounds := cfg.confirmRounds()
 	if rounds <= 1 {
@@ -839,6 +850,12 @@ func notePerformance(st *State, in Input, cfg Config, p netip.Prefix, provider s
 		if !stale && provider != "" && cur.Provider == provider && cur.Streak >= rounds {
 			return true, cur.Streak
 		}
+		// The same fresh measurements of a short streak are still a
+		// comparison. Keep the early-probe request. A stale round does not.
+		if !stale && provider != "" && cur.Provider == provider && cur.Streak > 0 && cur.Streak < rounds {
+			cur.Probe = true
+			st.confirm[p] = cur
+		}
 		return false, cur.Streak
 	}
 	if provider == "" {
@@ -851,8 +868,20 @@ func notePerformance(st *State, in Input, cfg Config, p netip.Prefix, provider s
 		cur.Streak++
 		cur.Round = at
 	}
+	cur.Probe = cur.Streak < rounds
 	st.confirm[p] = cur
 	return cur.Streak >= rounds, cur.Streak
+}
+
+// clearConfirmProbe drops the early-probe request for p. The streak stays
+// so a later comparison can continue it.
+func clearConfirmProbe(st *State, p netip.Prefix) {
+	cur, ok := st.confirm[p]
+	if !ok || !cur.Probe {
+		return
+	}
+	cur.Probe = false
+	st.confirm[p] = cur
 }
 
 // freshLoss reports whether this evaluation is a new fresh round that
@@ -899,16 +928,16 @@ func prefixRound(in Input, cfg Config, prev confirm, p netip.Prefix, now time.Ti
 	return newest, true, false
 }
 
-// markPendingUrgent lists prefixes that still need another fresh round.
-// The probe loop marks those targets urgent. Packets still wait on the
-// global rate limit.
+// markPendingUrgent lists prefixes whose streak is short and whose paths
+// were compared this evaluation. A stuck streak (nothing to compare) is
+// left out, so the prober is not woken on every round.
 func markPendingUrgent(st State, out *Output, rounds int) {
 	if rounds <= 1 || len(st.confirm) == 0 {
 		return
 	}
 	ps := make([]netip.Prefix, 0, len(st.confirm))
 	for p, c := range st.confirm {
-		if c.Streak > 0 && c.Streak < rounds {
+		if c.Probe && c.Streak > 0 && c.Streak < rounds {
 			ps = append(ps, p)
 		}
 	}

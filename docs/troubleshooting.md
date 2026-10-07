@@ -164,7 +164,7 @@ Router-side show commands are in each guide: [mikrotik.md](mikrotik.md), [frr.md
 
 - Both `thresholds.min_loss_delta_pct` and `thresholds.min_rtt_delta_ms` are 0 (the minimum config omits them). Set them; the example config uses 1% and 15 ms.
 - The gain is inside the thresholds. When `thresholds.min_rtt_delta_pct` is set, an RTT win also has to be that percent of the current path's RTT. A loss win does not use the percent.
-- `thresholds.confirm_rounds` is greater than 1 and the streak is still short. `/api/decisions` says `confirming` with the count. The default is 1, which announces on the first fresh win. A stale round does not count.
+- `thresholds.confirm_rounds` is greater than 1 and the streak is still short. `/api/decisions` says `confirming` with the count. The default is 1, which announces on the first fresh win. A stale round does not count. A round that cannot compare keeps the streak and does not ask for an early probe. Early probes wait a quarter of the probe interval.
 - The prefix is not in the learned RIB, or its current exit is unknown (previous section).
 - The native provider or the candidate has no fresh measurement, or the candidate's source is down.
 - A policy excludes the provider (`rules`, `maintenance`, commit control), or `max_improvements` is full (`capped` in `/api/decisions`).

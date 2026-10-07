@@ -105,10 +105,11 @@ func TestConfirmRounds(t *testing.T) {
 	}
 
 	// Same measurements, later clock: a RIB re-eval is not a new round.
+	// It is still a comparison, so the early probe stays requested.
 	st, out = Decide(st, in(results(t0, pA, win...), map[netip.Prefix]string{pA: "a"}), c, scorer(t), t0.Add(30*time.Second))
 	d = decision(t, out, pA)
-	if st.confirm[pA].Streak != 1 || !strings.Contains(d.Reason, "confirming b (1/3)") || len(st.Improvements) != 0 {
-		t.Fatalf("repeat counted: streak=%d decision=%+v", st.confirm[pA].Streak, d)
+	if st.confirm[pA].Streak != 1 || !strings.Contains(d.Reason, "confirming b (1/3)") || len(st.Improvements) != 0 || len(out.Urgent) != 1 {
+		t.Fatalf("repeat counted: streak=%d decision=%+v urgent=%v", st.confirm[pA].Streak, d, out.Urgent)
 	}
 
 	st, out = step(t, st, c, t0.Add(time.Minute), win)
@@ -182,16 +183,17 @@ func TestConfirmRoundsStaleDoesNotCount(t *testing.T) {
 	staleAt := t0.Add(10 * time.Minute)
 	st, out := Decide(st, in(results(t0, pA, win...), map[netip.Prefix]string{pA: "a"}), c, scorer(t), staleAt)
 	d := decision(t, out, pA)
-	if st.confirm[pA].Streak != 1 || !strings.Contains(d.Reason, "stale") || len(st.Improvements) != 0 {
-		t.Fatalf("stale round: streak=%+v decision=%+v", st.confirm[pA], d)
+	if st.confirm[pA].Streak != 1 || !strings.Contains(d.Reason, "stale") || len(st.Improvements) != 0 || len(out.Urgent) != 0 {
+		t.Fatalf("stale round: streak=%+v decision=%+v urgent=%v", st.confirm[pA], d, out.Urgent)
 	}
 
-	// A provider-down round is not a comparison, so it does not reset either.
+	// A provider-down round is not a comparison, so it does not reset either,
+	// and it does not ask for another probe.
 	down := in(results(t0.Add(11*time.Minute), pA, win...), map[netip.Prefix]string{pA: "a"})
 	down.ProviderUp = map[string]bool{"b": true}
 	st, out = Decide(st, down, c, scorer(t), t0.Add(11*time.Minute))
-	if st.confirm[pA].Streak != 1 || !strings.Contains(decision(t, out, pA).Reason, "provider down") {
-		t.Fatalf("provider down reset the streak: %+v %+v", st.confirm[pA], decision(t, out, pA))
+	if st.confirm[pA].Streak != 1 || !strings.Contains(decision(t, out, pA).Reason, "provider down") || len(out.Urgent) != 0 {
+		t.Fatalf("provider down reset the streak: %+v %+v urgent=%v", st.confirm[pA], decision(t, out, pA), out.Urgent)
 	}
 
 	st, out = step(t, st, c, t0.Add(12*time.Minute), win)
@@ -356,24 +358,108 @@ func TestConfirmRoundsOnCommitSwitch(t *testing.T) {
 	native := map[netip.Prefix]string{pA: "a"}
 	sc := commitScorer(t, "")
 
+	// Wins count during hold_time, the same as a performance improvement.
+	// The switch itself waits until hold_time has elapsed.
 	at := t0.Add(time.Minute)
 	st, out := Decide(s, in(results(at, pA, ms...), native), c, sc, at)
 	d := decision(t, out, pA)
-	if d.Action != ActionKeep || !strings.Contains(d.Reason, "hold_time") || st.confirm[pA].Streak != 0 || st.Improvements[pA].Provider != "b" {
-		t.Fatalf("held commit switch: %+v streak=%+v", d, st.confirm[pA])
+	if d.Action != ActionKeep || !strings.Contains(d.Reason, "confirming switch to c (1/2)") || st.confirm[pA].Streak != 1 || st.Improvements[pA].Provider != "b" || len(out.Urgent) != 1 {
+		t.Fatalf("held commit switch: %+v streak=%+v urgent=%v", d, st.confirm[pA], out.Urgent)
+	}
+
+	at = t0.Add(2 * time.Minute)
+	st, out = Decide(st, in(results(at, pA, ms...), native), c, sc, at)
+	d = decision(t, out, pA)
+	if d.Action != ActionKeep || !strings.Contains(d.Reason, "hold_time") || st.confirm[pA].Streak != 2 || st.Improvements[pA].Provider != "b" || len(out.Urgent) != 0 {
+		t.Fatalf("confirmed during hold: %+v streak=%+v urgent=%v", d, st.confirm[pA], out.Urgent)
 	}
 
 	at = t0.Add(20 * time.Minute)
 	st, out = Decide(st, in(results(at, pA, ms...), native), c, sc, at)
 	d = decision(t, out, pA)
-	if d.Action != ActionKeep || !strings.Contains(d.Reason, "confirming switch to c (1/2)") || st.Improvements[pA].Cause != plugin.CauseCommit || st.Improvements[pA].Provider != "b" {
-		t.Fatalf("first round off commit: %+v imp=%+v", d, st.Improvements[pA])
-	}
-
-	at = t0.Add(21 * time.Minute)
-	st, out = Decide(st, in(results(at, pA, ms...), native), c, sc, at)
-	d = decision(t, out, pA)
 	if d.Action != ActionSwitch || st.Improvements[pA].Provider != "c" || st.Improvements[pA].Cause != plugin.CausePerformance || out.Changes[0].Action != ActionSwitch {
 		t.Fatalf("commit switch: %+v imp=%+v changes=%+v", d, st.Improvements[pA], out.Changes)
+	}
+}
+
+func TestConfirmRoundsNativeDownDoesNotUrgentProbe(t *testing.T) {
+	c := cfg()
+	c.ConfirmRounds = 3
+	win := []m{{"a", 0, 90}, {"b", 0, 30}}
+	st, out := step(t, NewState(), c, t0, win)
+	if st.confirm[pA].Streak != 1 || len(out.Urgent) != 1 {
+		t.Fatalf("start %+v urgent=%v", st.confirm[pA], out.Urgent)
+	}
+	// The native provider stays down. The streak is kept, and the prefix
+	// is not probed early on every round.
+	for i := 1; i <= 4; i++ {
+		at := t0.Add(time.Duration(i) * time.Minute)
+		down := in(results(at, pA, win...), map[netip.Prefix]string{pA: "a"})
+		down.ProviderUp = map[string]bool{"b": true}
+		st, out = Decide(st, down, c, scorer(t), at)
+		d := decision(t, out, pA)
+		if st.confirm[pA].Streak != 1 || st.confirm[pA].Provider != "b" || len(out.Urgent) != 0 || !strings.Contains(d.Reason, "provider down") {
+			t.Fatalf("down round %d: streak=%+v urgent=%v reason=%s", i, st.confirm[pA], out.Urgent, d.Reason)
+		}
+	}
+	at := t0.Add(5 * time.Minute)
+	none := in(results(at, pA, win...), map[netip.Prefix]string{pA: ""})
+	st, out = Decide(st, none, c, scorer(t), at)
+	if st.confirm[pA].Streak != 1 || len(out.Urgent) != 0 || !strings.Contains(decision(t, out, pA).Reason, "matches no provider") {
+		t.Fatalf("no provider: %+v urgent=%v reason=%s", st.confirm[pA], out.Urgent, decision(t, out, pA).Reason)
+	}
+	// A cooldown is not a comparison either.
+	st.Cooldown[pA] = t0.Add(time.Hour)
+	at = t0.Add(6 * time.Minute)
+	st, out = Decide(st, in(results(at, pA, win...), map[netip.Prefix]string{pA: "a"}), c, scorer(t), at)
+	if st.confirm[pA].Streak != 1 || len(out.Urgent) != 0 || !strings.Contains(decision(t, out, pA).Reason, "cooldown") {
+		t.Fatalf("cooldown: %+v urgent=%v reason=%s", st.confirm[pA], out.Urgent, decision(t, out, pA).Reason)
+	}
+	delete(st.Cooldown, pA)
+	// A static pin that cannot be used does not wake the prober either.
+	at = t0.Add(7 * time.Minute)
+	pinned := withPolicy(in(results(at, pA, win...), map[netip.Prefix]string{pA: "a"}), pA, staticVerdict("c", 100, time.Hour))
+	pinned.ProviderUp = map[string]bool{"a": true, "b": true}
+	st, out = Decide(st, pinned, c, scorer(t), at)
+	if st.confirm[pA].Streak != 1 || len(out.Urgent) != 0 || len(st.Improvements) != 0 || !strings.Contains(decision(t, out, pA).Reason, "not usable") {
+		t.Fatalf("static: %+v urgent=%v improvements=%v reason=%s", st.confirm[pA], out.Urgent, st.Improvements, decision(t, out, pA).Reason)
+	}
+	st, out = step(t, st, c, t0.Add(8*time.Minute), win)
+	if st.confirm[pA].Streak != 2 || len(out.Urgent) != 1 || len(st.Improvements) != 0 {
+		t.Fatalf("recovered: %+v urgent=%v", st.confirm[pA], out.Urgent)
+	}
+}
+
+func TestConfirmRoundsCommitMissResets(t *testing.T) {
+	c := commitCfg()
+	c.ConfirmRounds = 3
+	s := NewState()
+	s.Improvements[pA] = Improvement{
+		Prefix: pA, Provider: "b", Native: "a", Since: t0, Cause: plugin.CauseCommit,
+		nativeSeen: t0, nativeHeld: true,
+	}
+	native := map[netip.Prefix]string{pA: "a"}
+	sc := commitScorer(t, "")
+	win := []m{{"a", 0, 90}, {"b", 0, 60}, {"c", 0, 20}}
+	// Inside hold_time the steer stays up, so a miss has to clear the
+	// streak itself. Past hold, a relieved commit steer retires and
+	// deletes the streak on the way out.
+	at := t0.Add(time.Minute)
+	st, out := Decide(s, in(results(at, pA, win...), native), c, sc, at)
+	if st.confirm[pA].Streak != 1 || len(out.Urgent) != 1 || st.Improvements[pA].Provider != "b" {
+		t.Fatalf("first win: %+v urgent=%v imp=%+v", st.confirm[pA], out.Urgent, st.Improvements[pA])
+	}
+	// 5ms is inside the 15ms floor: a fresh miss, not a stale round.
+	at = t0.Add(2 * time.Minute)
+	miss := []m{{"a", 0, 40}, {"b", 0, 50}, {"c", 0, 35}}
+	st, out = Decide(st, in(results(at, pA, miss...), native), c, sc, at)
+	d := decision(t, out, pA)
+	if _, ok := st.confirm[pA]; ok || len(out.Urgent) != 0 || d.Action == ActionSwitch || st.Improvements[pA].Provider != "b" {
+		t.Fatalf("miss kept %+v urgent=%v decision=%+v imp=%+v", st.confirm, out.Urgent, d, st.Improvements[pA])
+	}
+	at = t0.Add(3 * time.Minute)
+	st, out = Decide(st, in(results(at, pA, win...), native), c, sc, at)
+	if st.confirm[pA].Streak != 1 || !strings.Contains(decision(t, out, pA).Reason, "confirming switch to c (1/3)") || st.Improvements[pA].Provider != "b" {
+		t.Fatalf("next win = %+v %+v imp=%+v", st.confirm[pA], decision(t, out, pA), st.Improvements[pA])
 	}
 }

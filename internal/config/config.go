@@ -40,16 +40,16 @@ const (
 	DefaultProbePackets  = 10
 	MaxProbePackets      = 1000
 
-	DefaultProbeWorkers      = 8
-	MaxProbeWorkers          = 1024
-	DefaultProbeRateLimitPPS = 100
-	MaxProbeRateLimitPPS     = 100000
+	DefaultProbeWorkers              = 8
+	MaxProbeWorkers                  = 1024
+	DefaultProbeRateLimitPPS         = 100
+	MaxProbeRateLimitPPS             = 100000
+	DefaultProbePerTargetConcurrency = 2
+	MaxProbePerTargetConcurrency     = 64
 
 	// MaxConfirmRounds is the upper bound of thresholds.confirm_rounds.
 	// Omitted or 0 means 1 (announce on the first fresh win).
-	MaxConfirmRounds                 = 100
-	DefaultProbePerTargetConcurrency = 2
-	MaxProbePerTargetConcurrency     = 64
+	MaxConfirmRounds = 100
 
 	// DefaultHTTPListen is the read-only ops server. Loopback keeps the
 	// dashboard off the network unless the operator opts in.

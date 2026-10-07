@@ -907,9 +907,24 @@ func TestSetUrgentProbesBeforeInterval(t *testing.T) {
 	if ts := e.Targets(context.Background()); len(ts) != 1 || !ts[0].Urgent {
 		t.Fatalf("targets = %+v", ts)
 	}
+	// Just probed: a confirm-urgent prefix waits a quarter of its interval,
+	// so it is not measured again on the same sample.
 	probed, done := e.runRound(context.Background(), due, true)
+	if !done || len(probed) != 0 || hits.Load() != 0 || lim.total != 0 {
+		t.Fatalf("probed inside the gap: probed=%v done=%v hits=%d tokens=%d", probed, done, hits.Load(), lim.total)
+	}
+	now = now.Add(time.Minute/4 - time.Second)
+	probed, done = e.runRound(context.Background(), due, true)
+	if !done || len(probed) != 0 || hits.Load() != 0 {
+		t.Fatalf("probed before the quarter interval: probed=%v hits=%d", probed, hits.Load())
+	}
+	now = now.Add(time.Second)
+	probed, done = e.runRound(context.Background(), due, true)
 	if !done || len(probed) != 1 || hits.Load() != 1 || lim.total != 1 {
 		t.Fatalf("urgent probed=%v done=%v hits=%d tokens=%d", probed, done, hits.Load(), lim.total)
+	}
+	if !now.Before(last[pfx1].Add(time.Minute)) {
+		t.Fatalf("quarter interval was the full interval: now=%s last=%s", now, last[pfx1])
 	}
 
 	e.SetUrgent(nil)
@@ -919,6 +934,50 @@ func TestSetUrgentProbesBeforeInterval(t *testing.T) {
 	probed, done = e.runRound(context.Background(), due, true)
 	if !done || len(probed) != 0 || hits.Load() != 1 || lim.total != 1 {
 		t.Fatalf("second pass probed=%v done=%v hits=%d tokens=%d", probed, done, hits.Load(), lim.total)
+	}
+}
+
+func TestDecisionUrgentWaitsQuarterInterval(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0)
+	o := opts()
+	o.Now = func() time.Time { return now }
+	o.Interval = 40 * time.Second
+	o.Packets = 1
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	src := &countingSource{fresh: true, targets: []plugin.Target{{Prefix: pfx1, Host: netip.MustParseAddr("198.51.100.1")}}}
+	var probes atomic.Int32
+	eng, err := New([]Provider{provA}, []NamedProber{{"p", &fakeProber{fn: func(context.Context, plugin.ProbeRequest) (plugin.ProbeResult, error) {
+		probes.Add(1)
+		return plugin.ProbeResult{Sent: 1, RTTs: ms(1)}, nil
+	}}}}, []NamedSource{{Name: "s", Source: src}}, o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rounds := 0
+	eng.opt.OnRound = func() {
+		rounds++
+		if rounds == 1 {
+			eng.SetUrgent([]netip.Prefix{pfx1})
+		}
+	}
+	var slept []time.Duration
+	eng.opt.Sleep = func(_ context.Context, d time.Duration) error {
+		slept = append(slept, d)
+		if len(slept) == 1 {
+			now = now.Add(d)
+			return nil
+		}
+		cancel()
+		return context.Canceled
+	}
+	if err := eng.Run(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Run = %v", err)
+	}
+	// The first sleep is a quarter of the interval, not an immediate wake
+	// and not the full interval. The second round then probes.
+	if rounds < 2 || probes.Load() != 2 || len(slept) != 2 || slept[0] != 10*time.Second {
+		t.Fatalf("rounds=%d probes=%d slept=%v", rounds, probes.Load(), slept)
 	}
 }
 

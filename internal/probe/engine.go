@@ -125,10 +125,15 @@ type Engine struct {
 	memory   map[netip.Prefix]plugin.Target
 	retained map[netip.Prefix]struct{}
 	// urgent is the decision state's half-confirmed prefixes (#117).
-	// They are probed on the next round even when the interval has not
-	// elapsed. The global rate limit still applies. An empty set clears
-	// the mark. Guarded by mu.
+	// They are probed after a quarter of their interval instead of
+	// waiting out the whole interval. A source that sets Target.Urgent
+	// still probes on this round. The global rate limit still applies.
+	// An empty set clears the mark. Guarded by mu.
 	urgent map[netip.Prefix]struct{}
+	// probedAt is when Run last probed the prefix. SetUrgent uses it so
+	// a confirm streak does not wake the scheduler before the quarter-
+	// interval gap. Guarded by mu.
+	probedAt map[netip.Prefix]time.Time
 	// srcCache holds the last target list for sources that are not on a
 	// shorter cadence than Options.Interval. A VIP wake does not start
 	// those sources again.
@@ -231,11 +236,14 @@ func (e *Engine) Run(ctx context.Context) error {
 			for p := range probed {
 				last[p] = stamp
 			}
+			e.mu.Lock()
 			for p := range last {
 				if _, ok := cad[p]; !ok {
 					delete(last, p)
+					delete(e.probedAt, p)
 				}
 			}
+			e.mu.Unlock()
 		}
 		wait := e.opt.Interval
 		if done {
@@ -297,16 +305,21 @@ func (e *Engine) sleep(ctx context.Context, d time.Duration) error {
 	}
 }
 
-// targetDue reports whether prefix t should be probed now. Urgent is a
-// one-shot from a source that just re-queued the prefix; the interval
-// still applies on the following rounds.
+// targetDue reports whether prefix t should be probed now. Urgent from a
+// source is a one-shot and is due immediately; the interval still applies
+// on the following rounds. Urgent from SetUrgent (a confirm streak) waits
+// a quarter of the prefix interval so consecutive rounds are not the same
+// instant.
 func (e *Engine) targetDue(t plugin.Target, last map[netip.Prefix]time.Time) bool {
-	if t.Urgent {
-		return true
-	}
 	every := e.opt.Interval
 	if t.Interval > 0 {
 		every = t.Interval
+	}
+	if t.Urgent && !e.decisionUrgent(t.Prefix) {
+		return true
+	}
+	if t.Urgent && e.decisionUrgent(t.Prefix) {
+		every = confirmProbeGap(every)
 	}
 	prev, ok := last[t.Prefix]
 	if !ok {
@@ -315,10 +328,26 @@ func (e *Engine) targetDue(t plugin.Target, last map[netip.Prefix]time.Time) boo
 	return !e.opt.Now().Before(prev.Add(every))
 }
 
-// wakeAfter is how long to sleep before the next prefix is due.
+// confirmProbeGap is the minimum time between probes of a prefix a
+// half-confirmed performance move asked to measure early. It is a quarter
+// of that prefix's interval.
+func confirmProbeGap(every time.Duration) time.Duration {
+	if every <= 0 {
+		return 0
+	}
+	g := every / 4
+	if g <= 0 {
+		return every
+	}
+	return g
+}
+
+// wakeAfter is how long to sleep before the next prefix is due. A
+// confirm-urgent prefix is due after a quarter of its interval.
 func (e *Engine) wakeAfter(now time.Time, last map[netip.Prefix]time.Time) time.Duration {
 	e.mu.RLock()
 	cad := e.cadence
+	urgent := e.urgent
 	e.mu.RUnlock()
 	if len(cad) == 0 {
 		return e.opt.Interval
@@ -331,6 +360,15 @@ func (e *Engine) wakeAfter(now time.Time, last map[netip.Prefix]time.Time) time.
 		when := now
 		if prev, ok := last[p]; ok {
 			when = prev.Add(every)
+		}
+		if _, ok := urgent[p]; ok {
+			gapWhen := now
+			if prev, ok := last[p]; ok {
+				gapWhen = prev.Add(confirmProbeGap(every))
+			}
+			if gapWhen.Before(when) {
+				when = gapWhen
+			}
 		}
 		if next.IsZero() || when.Before(next) {
 			next = when
@@ -444,10 +482,12 @@ func (e *Engine) gatherTargets(ctx context.Context) ([]plugin.Target, bool) {
 }
 
 // SetUrgent replaces the prefixes a half-confirmed performance move wants
-// measured before the probe interval elapses (#117). An empty list clears
-// the set. A non-empty list also wakes Run so the round does not wait out
-// the interval. Safe for concurrent use with probing. Every probe, urgent
-// or not, still waits on Options.Limiter (probe.rate_limit_pps).
+// measured before the full probe interval elapses (#117). An empty list
+// clears the set. A non-empty list wakes Run only when one of those
+// prefixes is already due: a quarter of its interval since it was last
+// probed. Waking sooner would probe the same sample back to back. Safe
+// for concurrent use with probing. Every probe, urgent or not, still
+// waits on Options.Limiter (probe.rate_limit_pps).
 func (e *Engine) SetUrgent(prefixes []netip.Prefix) {
 	if e == nil {
 		return
@@ -462,9 +502,65 @@ func (e *Engine) SetUrgent(prefixes []netip.Prefix) {
 	}
 	e.mu.Lock()
 	e.urgent = next
+	due := e.urgentDueLocked(next)
 	e.mu.Unlock()
-	if len(next) > 0 {
+	if due {
 		e.Wake()
+	}
+}
+
+// urgentDueLocked reports whether any prefix in next may be probed now.
+// The caller holds e.mu.
+func (e *Engine) urgentDueLocked(next map[netip.Prefix]struct{}) bool {
+	if len(next) == 0 {
+		return false
+	}
+	now := e.opt.Now()
+	for p := range next {
+		prev, ok := e.probedAt[p]
+		if !ok || !now.Before(prev.Add(confirmProbeGap(e.prefixIntervalLocked(p)))) {
+			return true
+		}
+	}
+	return false
+}
+
+// prefixIntervalLocked is the prefix's probe interval. The caller holds e.mu.
+func (e *Engine) prefixIntervalLocked(p netip.Prefix) time.Duration {
+	if e.cadence != nil {
+		if every, ok := e.cadence[p]; ok && every > 0 {
+			return every
+		}
+	}
+	return e.opt.Interval
+}
+
+// decisionUrgent reports whether p was marked by SetUrgent.
+func (e *Engine) decisionUrgent(p netip.Prefix) bool {
+	if e == nil {
+		return false
+	}
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	_, ok := e.urgent[p]
+	return ok
+}
+
+// rememberProbes stamps prefixes this round actually probed, before
+// OnRound, so SetUrgent can see that the quarter-interval gap has not
+// elapsed yet.
+func (e *Engine) rememberProbes(probed map[netip.Prefix]struct{}) {
+	if e == nil || len(probed) == 0 {
+		return
+	}
+	now := e.opt.Now()
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.probedAt == nil {
+		e.probedAt = map[netip.Prefix]time.Time{}
+	}
+	for p := range probed {
+		e.probedAt[p] = now
 	}
 }
 
@@ -770,6 +866,7 @@ feed:
 	}
 
 	e.commit(fresh, ran, down, keep, merge)
+	e.rememberProbes(probed)
 	if e.opt.OnRound != nil {
 		e.opt.OnRound()
 	}

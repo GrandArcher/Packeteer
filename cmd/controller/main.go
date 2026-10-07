@@ -1272,9 +1272,10 @@ func decideLoop(ctx context.Context, interval time.Duration, kick <-chan struct{
 func runDecision(now time.Time, decider *policy.Engine, in policy.Input, ctl *announce.Controller, log *slog.Logger, mode string, engine *probe.Engine) ([]policy.Change, error) {
 	changes := decider.Evaluate(in, now)
 	retainImprovedPrefixes(engine, decider.Improvements())
-	// A prefix waiting on confirm_rounds is probed again without waiting
-	// out the interval. SetUrgent does not wake when the list is empty,
-	// and every probe still waits on probe.rate_limit_pps.
+	// A prefix whose confirm streak compared this round is probed again
+	// after a quarter of its interval. SetUrgent does not wake when the
+	// list is empty or that gap has not elapsed. Every probe still waits
+	// on probe.rate_limit_pps.
 	if engine != nil {
 		engine.SetUrgent(decider.Urgent())
 	}
