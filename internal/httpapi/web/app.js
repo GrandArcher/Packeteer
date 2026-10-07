@@ -204,10 +204,10 @@ function renderPrefixes(data) {
     card.appendChild(table);
     var paths = row.paths || [];
     if (paths.length) {
-      card.appendChild(el("p", "reason", "Learned paths. MED is display only and does not choose the exit."));
+      card.appendChild(el("p", "reason", "Learned paths. MED is display only and does not choose the exit. Via is route server, bilateral, or unknown."));
       var pt = el("table");
       var phr = el("tr");
-      ["State", "Provider", "Next hop", "AS path", "MED", "Whose MED"].forEach(function (h) {
+      ["State", "Provider", "Next hop", "AS path", "Via", "MED", "Whose MED"].forEach(function (h) {
         phr.appendChild(el("th", "", h));
       });
       var phead = el("thead");
@@ -221,6 +221,7 @@ function renderPrefixes(data) {
         tr.appendChild(el("td", "", path.provider || "—"));
         tr.appendChild(el("td", "mono", path.next_hop || "—"));
         tr.appendChild(el("td", "mono", fmtAS(path.as_path)));
+        tr.appendChild(el("td", "", fmtVia(path.via)));
         tr.appendChild(el("td", "num", path.med === undefined || path.med === null ? "—" : String(path.med)));
         tr.appendChild(el("td", "", path.med_from || "—"));
         pb.appendChild(tr);
@@ -235,6 +236,13 @@ function renderPrefixes(data) {
 function fmtAS(path) {
   if (!path || !path.length) return "—";
   return path.join(" ");
+}
+
+function fmtVia(v) {
+  if (v === "route_server") return "route server";
+  if (v === "bilateral") return "bilateral";
+  if (v === "unknown") return "unknown";
+  return "—";
 }
 
 function renderASNMap(data) {

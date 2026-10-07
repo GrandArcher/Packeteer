@@ -20,9 +20,9 @@ func TestBuild(t *testing.T) {
 	}}
 	hops := []rib.NextHopCount{
 		{NextHop: a("192.0.2.21"), Prefixes: 900, ASN: 64496}, // a transit, not on the LAN
-		{NextHop: a("203.0.113.11"), Prefixes: 12, ASN: 64501},
-		{NextHop: a("203.0.113.12"), Prefixes: 3, ASN: 64599},
-		{NextHop: a("203.0.113.13"), Prefixes: 5, ASN: 64503},
+		{NextHop: a("203.0.113.11"), Prefixes: 12, ASN: 64501, Via: rib.ViaBilateral},
+		{NextHop: a("203.0.113.12"), Prefixes: 3, ASN: 64599, Via: rib.ViaRouteServer},
+		{NextHop: a("203.0.113.13"), Prefixes: 5, ASN: 64503, Via: rib.ViaUnknown},
 		{NextHop: a("203.0.113.15"), Prefixes: 5, ASN: 64505},
 	}
 	got := Build(exs, hops, map[string]bool{"ix-peer-a": true}, map[string]int{"ix-peer-a": 2, "transit-a": 7})
@@ -34,13 +34,13 @@ func TestBuild(t *testing.T) {
 		t.Fatalf("totals = %+v", st)
 	}
 	pa, pb, pc := st.Peers[0], st.Peers[1], st.Peers[2]
-	if pa.Prefixes != 12 || !pa.Up || pa.Improvements != 2 || pa.ObservedASN != 0 {
+	if pa.Prefixes != 12 || !pa.Up || pa.Improvements != 2 || pa.ObservedASN != 0 || pa.Via != rib.ViaBilateral {
 		t.Fatalf("peer a = %+v", pa)
 	}
-	if pb.ObservedASN != 64599 || pb.Up {
+	if pb.ObservedASN != 64599 || pb.Up || pb.Via != rib.ViaRouteServer {
 		t.Fatalf("peer b (wrong AS) = %+v", pb)
 	}
-	if pc.Prefixes != 0 || pc.ObservedASN != 0 {
+	if pc.Prefixes != 0 || pc.ObservedASN != 0 || pc.Via != rib.ViaUnknown {
 		t.Fatalf("peer c (silent) = %+v", pc)
 	}
 	if len(st.Discovered) != 2 || st.Discovered[0].NextHop != "203.0.113.13" || st.Discovered[0].ASN != 64503 || st.Discovered[1].NextHop != "203.0.113.15" {

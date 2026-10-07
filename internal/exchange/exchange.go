@@ -54,6 +54,11 @@ type PeerStats struct {
 	Up       bool `json:"up"` // probe source up
 	// Improvements is the number of active improvements onto the peer.
 	Improvements int `json:"improvements"`
+	// Via is how the router shows this peer (#146): route_server,
+	// bilateral, or unknown when the paths disagree, only iBGP add-path
+	// has been seen, or the peer has no path. Display only. It is not a
+	// route check and it never changes an improvement.
+	Via string `json:"via"`
 }
 
 // Discovered is a next hop on the peering LAN that no peer uses.
@@ -85,7 +90,10 @@ func Build(exs []Exchange, hops []rib.NextHopCount, up map[string]bool, improvem
 			nh := p.NextHop.Unmap()
 			used[nh] = true
 			h := byHop[nh]
-			ps := PeerStats{Name: p.Name, ASN: p.ASN, NextHop: nh.String(), Prefixes: h.Prefixes, Up: up[p.Name], Improvements: improvements[p.Name]}
+			ps := PeerStats{Name: p.Name, ASN: p.ASN, NextHop: nh.String(), Prefixes: h.Prefixes, Up: up[p.Name], Improvements: improvements[p.Name], Via: h.Via}
+			if ps.Via == "" {
+				ps.Via = rib.ViaUnknown
+			}
 			if h.ASN != 0 && h.ASN != p.ASN {
 				ps.ObservedASN = h.ASN
 			}

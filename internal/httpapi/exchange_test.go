@@ -19,7 +19,7 @@ func TestExchangesEndpointAndMetrics(t *testing.T) {
 		LANs:  []netip.Prefix{netip.MustParsePrefix("203.0.113.0/24")},
 		Peers: []exchange.Peer{{Name: "ix-peer-a", ASN: 64501, NextHop: netip.MustParseAddr("203.0.113.11")}},
 	}}, []rib.NextHopCount{
-		{NextHop: netip.MustParseAddr("203.0.113.11"), Prefixes: 4, ASN: 64501},
+		{NextHop: netip.MustParseAddr("203.0.113.11"), Prefixes: 4, ASN: 64501, Via: rib.ViaBilateral},
 		{NextHop: netip.MustParseAddr("203.0.113.13"), Prefixes: 2, ASN: 64503},
 	}, map[string]bool{"ix-peer-a": true}, map[string]int{"ix-peer-a": 1})
 	ts := newTestServer(t, snap, "", "")
@@ -34,8 +34,11 @@ func TestExchangesEndpointAndMetrics(t *testing.T) {
 	if err := json.Unmarshal(body, &doc); err != nil {
 		t.Fatal(err)
 	}
-	if len(doc.Exchanges) != 1 || doc.Exchanges[0].Peers[0].Prefixes != 4 || doc.Exchanges[0].Discovered[0].ASN != 64503 {
+	if len(doc.Exchanges) != 1 || doc.Exchanges[0].Peers[0].Prefixes != 4 || doc.Exchanges[0].Peers[0].Via != rib.ViaBilateral || doc.Exchanges[0].Discovered[0].ASN != 64503 {
 		t.Fatalf("body %s", body)
+	}
+	if !strings.Contains(string(body), `"via":"bilateral"`) {
+		t.Fatalf("peer via missing: %s", body)
 	}
 
 	_, _, body = do(t, http.MethodGet, ts.URL+"/metrics", "", "")
