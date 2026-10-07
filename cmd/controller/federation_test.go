@@ -146,7 +146,7 @@ func TestFederatedSteerAnnounceAndWithdraw(t *testing.T) {
 		}
 		fed.merge(&in, now)
 		fed.commit(context.Background(), &in, set)
-		if _, err := runDecision(now, decider, in, ctl, log, cfg.Mode); err != nil {
+		if _, err := runDecision(now, decider, in, ctl, log, cfg.Mode, nil); err != nil {
 			t.Fatal(err)
 		}
 		fed.publish(now, in, decider.Improvements())

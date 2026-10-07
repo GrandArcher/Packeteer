@@ -118,6 +118,12 @@ type Engine struct {
 	// cadence is the probe interval per prefix from the last complete
 	// target list. Positive target intervals override Options.Interval.
 	cadence map[netip.Prefix]time.Duration
+	// memory is the last host and interval a configured source submitted
+	// for a prefix. retained is the decision state's active improvements
+	// (#116): those prefixes stay in the probe set after every configured
+	// source drops them. Both are guarded by mu.
+	memory   map[netip.Prefix]plugin.Target
+	retained map[netip.Prefix]struct{}
 	// srcCache holds the last target list for sources that are not on a
 	// shorter cadence than Options.Interval. A VIP wake does not start
 	// those sources again.
@@ -397,13 +403,7 @@ func (e *Engine) gatherTargets(ctx context.Context) ([]plugin.Target, bool) {
 			// stays the representative address for scheduling, and the
 			// probe round spreads it. A candidate is probed first and
 			// is not the only address.
-			candidate := t.Candidate && t.Host.IsValid()
-			explicit := t.Host.IsValid() && !candidate
-			if !t.Host.IsValid() {
-				t.Host = DefaultHost(t.Prefix)
-			}
-			t.Pinned = explicit
-			t.Candidate = candidate
+			t = normalizeTarget(t)
 			// The first explicit host stays. A later pin replaces a
 			// default or a candidate. A later candidate replaces only a
 			// default. A later source can shorten the interval. A stored
@@ -428,6 +428,11 @@ func (e *Engine) gatherTargets(ctx context.Context) ([]plugin.Target, bool) {
 			seen[t.Prefix] = len(out)
 			out = append(out, t)
 		}
+	}
+	// A timed-out source leaves a partial list. Do not treat that as the
+	// prefixes that still exist, and do not drop a remembered host.
+	if !incomplete {
+		e.keepImproved(&out)
 	}
 	return out, incomplete
 }

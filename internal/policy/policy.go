@@ -300,7 +300,11 @@ func Decide(prev State, in Input, cfg Config, scorer plugin.Scorer, now time.Tim
 		byPrefix[r.Prefix] = append(byPrefix[r.Prefix], c)
 	}
 
-	// Improvements whose prefix is no longer probed are retired.
+	// An improvement with no measurement in this evaluation is retired.
+	// A configured source dropping the prefix does not cause that: the
+	// probe engine keeps an active improvement's prefix in the target
+	// set, so its results stay until the improvement retires. This is
+	// the backstop when that prefix produced no result at all.
 	for _, p := range sortedKeys(st.Improvements) {
 		if _, ok := byPrefix[p]; !ok {
 			retire(p, "prefix no longer probed", false)

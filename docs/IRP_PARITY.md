@@ -14,7 +14,7 @@ Milestones:
 - **v0.3**: inbound optimization, BMP, multiple routers and IX, FlowSpec/RTBH, transit optimization.
 - **v0.4**: multi-POP, HA, RBAC, anomaly detection, remaining parity.
 - **v0.5**: hardening and polish on the rows above. Dashboard clarity and the first-run checklist (#49), CI-tested quickstart, walkthrough, troubleshooting, and router guides (#50), load and soak budgets and the flow-ingest fix (#51), MikroTik CHR in QEMU on CI (#52), and the router interop matrix (#53) are done. They are not new IRP capability rows, so the counts below are unchanged. Field feedback from observe-mode deployments (#54) is still open. Lab-proven only; the safety rules above are unchanged.
-- **v0.6**: IRP parity gaps found in the 2026-10-07 review of prefix selection, measurement, and the UI. The 13 partial rows say what is missing and link their issue; 5 new rows are planned and 1 is won't do. The recount does not change any behavior.
+- **v0.6**: IRP parity gaps found in the 2026-10-07 review of prefix selection, measurement, and the UI. The partial rows say what is missing and link their issue; keeping an improved prefix probed after its source drops it is done (#116). 5 new rows are planned and 1 is won't do. The recount does not change any behavior.
 
 ## Summary
 
@@ -30,8 +30,8 @@ Milestones:
 
 | Status | Count |
 |---|---|
-| done | 66 |
-| partial | 13 |
+| done | 67 |
+| partial | 12 |
 | in progress | 0 |
 | planned | 5 |
 | won't do | 4 |
@@ -59,7 +59,7 @@ Recount (2026-10-07): the earlier 79 of 82 counted 13 rows as done that cover on
 | Retry / aggressive probing | 1.2.8 Retry Probing | partial: retry is triggered by loss only and is off by default; an inconsistent RTT sample is not escalated to a full probe (#119) | v0.2 | core (probe engine) | #15 | no |
 | Hysteresis, thresholds, hold time before flip | 1.3.1 | partial: RTT threshold is absolute ms only (no percent), and a new improvement is not confirmed on later rounds before it is announced (#117) | v0.1 | scorer | #7 | no |
 | Max improvements cap | 4.8 Core settings | done | v0.1 | core | #7 | no |
-| Improvement retirement / periodic re-probe of improvements (including a staleness timer when a probe round never finishes) | 4.8 Core settings | partial: an improvement is retired as soon as its prefix leaves every source (for example falls out of flow `top_n`) instead of staying on re-probe (#116) | v0.1 | core | #7, #46 | no |
+| Improvement retirement / periodic re-probe of improvements (including a staleness timer when a probe round never finishes) | 4.8 Core settings | done (#116): an active improvement keeps its prefix on the last host and interval after its source drops it (for example flow `top_n`), until flip-back, `improvement_ttl`, the provider is unusable, a RIB leave, policy, or the allowlist | v0.1 | core | #7, #46, #116 | no |
 | Host qualification and probe consistency (enough consistent replies, RTT dispersion limit; fast probe escalating to a full probe) | Explorer | planned | v0.6 | core (probe engine) + prober | #119 | — |
 | Self-learning probe type (stick with the ICMP/UDP/TCP prober a host answers) | Explorer | planned | v0.6 | core (probe engine) | #120 | — |
 | Current exit learned from flow agents (exporter address + interface index per provider) | 2.7 Collector | won't do (the exit comes from the iBGP/BMP RIB, which is authoritative; without a BGP session Packeteer ranks paths and does not recommend) | - | - | - | — |

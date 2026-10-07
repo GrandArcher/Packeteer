@@ -602,8 +602,9 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 			if !ha.active() {
 				if leading {
 					// Stepped down: no intent survives into a later
-					// takeover.
+					// takeover. Drop the retained probe targets with it.
 					decider.Reset()
+					retainImprovedPrefixes(engine, nil)
 					leading = false
 				}
 				mitChanges, err := standbyRound(now, ctl, inb, mit, log)
@@ -621,7 +622,7 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 			}
 			leading = true
 			in := decisionInput(loopCtx, now, engine, view, plugins, fed)
-			changes, err := runDecision(now, decider, in, ctl, log, cfg.Mode)
+			changes, err := runDecision(now, decider, in, ctl, log, cfg.Mode, engine)
 			fed.publish(now, in, decider.Improvements())
 			if rec != nil {
 				rec.Decision(now, changes, in.Results)
@@ -1223,6 +1224,21 @@ func newEngine(cfg *config.Config, plugins *pluginhost.Set, log *slog.Logger, on
 	})
 }
 
+// retainImprovedPrefixes keeps every active improvement's prefix in the
+// probe set after its configured source drops it (#116). The probe engine
+// reuses the last host and interval. An empty list clears the set, so the
+// next completed round drops a prefix no source still lists.
+func retainImprovedPrefixes(engine *probe.Engine, imps []policy.Improvement) {
+	if engine == nil {
+		return
+	}
+	ps := make([]netip.Prefix, len(imps))
+	for i, imp := range imps {
+		ps[i] = imp.Prefix
+	}
+	engine.SetRetained(ps)
+}
+
 // decideLoop evaluates on kick (a finished probe round or a RIB change)
 // and on a staleness ticker. The ticker is what withdraws improvements
 // when no round ever completes.
@@ -1247,9 +1263,12 @@ func decideLoop(ctx context.Context, interval time.Duration, kick <-chan struct{
 }
 
 // runDecision applies one evaluation to the announcer and returns the
-// decision changes and the sync error for the event watcher.
-func runDecision(now time.Time, decider *policy.Engine, in policy.Input, ctl *announce.Controller, log *slog.Logger, mode string) ([]policy.Change, error) {
+// decision changes and the sync error for the event watcher. engine, when
+// set, is told which prefixes still have an improvement before the sync,
+// so the next probe round keeps them even if that sync is slow (#116).
+func runDecision(now time.Time, decider *policy.Engine, in policy.Input, ctl *announce.Controller, log *slog.Logger, mode string, engine *probe.Engine) ([]policy.Change, error) {
 	changes := decider.Evaluate(in, now)
+	retainImprovedPrefixes(engine, decider.Improvements())
 	logChanges(log, mode, changes)
 	actx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()

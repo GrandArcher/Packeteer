@@ -7,7 +7,7 @@ router_id: 192.0.2.10
 packeteer_community: "64512:666"
 max_improvements: 50
 hold_time: 15m              # min life of an improvement; also cooldown after a flip-back
-improvement_ttl: 1h         # re-measure the native path after this long. A path the router keeps advertising is withdrawn when it disappears; a path hidden because Packeteer's route won waits for this TTL
+improvement_ttl: 1h         # re-measure the native path after this long. Falling out of a source does not retire the improvement; it stays probed until this TTL, flip-back, or a RIB leave. A path the router keeps advertising is withdrawn when it disappears; a path hidden because Packeteer's route won waits for this TTL
 
 thresholds:
   min_loss_delta_pct: 1.0
@@ -104,7 +104,7 @@ scorer:
 #         - "0.0.0.0:2055"            # NetFlow v5/v9 and IPFIX
 #         - "0.0.0.0:6343"            # sFlow
 #       window: 5m
-#       top_n: 100
+#       top_n: 100                  # busiest prefixes. An active improvement stays probed after it falls out, until the improvement retires
 #       min_bytes: 1000000
 #       aggregate_v4: 24
 #       aggregate_v6: 48
