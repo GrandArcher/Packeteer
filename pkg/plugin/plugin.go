@@ -120,11 +120,18 @@ type Prober interface {
 type Target struct {
 	Prefix netip.Prefix
 	Host   netip.Addr // zero value: the engine picks a few addresses inside Prefix
-	// Pinned is set by the probe engine when Host was named by a source
-	// or the operator. A pinned host is the only address probed for the
-	// prefix. Sources leave this false; a zero Host is not a pin.
+	// Pinned is set by the probe engine when Host was named and the
+	// source did not mark it as a candidate. A pinned host is the only
+	// address probed. Sources leave this false. A zero Host is not a pin.
 	Pinned bool
-	Weight float64 // relative importance, e.g. bytes from flow data
+	// Candidate marks Host as a preferred probe address that is not a
+	// pin. The flow source sets it for the busiest destination, and for
+	// a problem address. The engine probes that address first, then the
+	// automatic in-prefix hosts and a usable provider next hop, at most
+	// four. Other sources leave this false. A valid Host with Candidate
+	// false is a pin.
+	Candidate bool
+	Weight    float64 // relative importance, e.g. bytes from flow data
 	// Interval, when positive, overrides the engine probe interval for
 	// this prefix. The vip source sets it so critical prefixes are
 	// measured more often. Zero means the engine interval. Run honors

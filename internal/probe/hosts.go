@@ -7,24 +7,34 @@ import "net/netip"
 const maxProbeHosts = 4
 
 // maxInPrefix is how many of those addresses sit inside the prefix. One
-// slot is left for the far-side gateway when it can be used.
+// slot is left for the far-side gateway when it can be used. A flow
+// candidate takes the first of these slots.
 const maxInPrefix = 3
 
 // ProbeHosts picks the addresses to measure for one prefix on one provider.
 //
-// pin, when valid, is the only target. An operator pin, or a host a source
-// already chose, wins over detection.
+// pin, when valid, is the only target. An operator host (static, vip,
+// traceroute) is a pin and wins over detection.
+//
+// candidate, when valid and inside the prefix, is probed first. It is not
+// a pin: the automatic in-prefix addresses and a usable gateway follow,
+// still under maxProbeHosts. A candidate that is not already one of the
+// automatic addresses takes an in-prefix slot, and the last automatic
+// address is the one left out so the gateway slot stays.
 //
 // Otherwise the list is a few addresses inside the prefix plus gateway when
 // that address looks like the far side of this provider: unicast, the same
 // family as the prefix, and not the probe source. gateway is the provider
 // next hop (the hop just past the edge toward that provider). It is not a
 // new provider, and choosing it does not announce anything.
-func ProbeHosts(prefix netip.Prefix, pin, gateway, source netip.Addr) []netip.Addr {
+func ProbeHosts(prefix netip.Prefix, pin, candidate, gateway, source netip.Addr) []netip.Addr {
 	prefix = prefix.Masked()
 	if !prefix.IsValid() {
 		if pin.IsValid() {
 			return []netip.Addr{pin}
+		}
+		if candidate.IsValid() {
+			return []netip.Addr{candidate}
 		}
 		return nil
 	}
@@ -32,6 +42,18 @@ func ProbeHosts(prefix netip.Prefix, pin, gateway, source netip.Addr) []netip.Ad
 		return []netip.Addr{pin}
 	}
 	hosts := autoHosts(prefix)
+	if candidate.IsValid() && prefix.Contains(candidate) {
+		hosts = placeFirst(hosts, candidate)
+	}
+	// A usable gateway keeps its slot. In-prefix addresses, candidate
+	// included, fill what remains.
+	limit := maxProbeHosts
+	if usableGateway(gateway, source, prefix) {
+		limit = maxInPrefix
+	}
+	if len(hosts) > limit {
+		hosts = hosts[:limit]
+	}
 	if len(hosts) >= maxProbeHosts || !usableGateway(gateway, source, prefix) {
 		return hosts
 	}
@@ -41,6 +63,18 @@ func ProbeHosts(prefix netip.Prefix, pin, gateway, source netip.Addr) []netip.Ad
 		}
 	}
 	return append(hosts, gateway)
+}
+
+// placeFirst puts a at the front and drops a later copy.
+func placeFirst(hosts []netip.Addr, a netip.Addr) []netip.Addr {
+	out := make([]netip.Addr, 0, len(hosts)+1)
+	out = append(out, a)
+	for _, h := range hosts {
+		if h != a {
+			out = append(out, h)
+		}
+	}
+	return out
 }
 
 // usableGateway reports whether gateway can be probed as the far side of

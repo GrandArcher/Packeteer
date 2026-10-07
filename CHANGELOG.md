@@ -4,6 +4,10 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 
 ## [Unreleased]
 
+### Fixed
+
+- Flow probe hosts are candidates, not pins (#113). The busiest destination in a flow prefix, and a problem address, is probed first, then the automatic in-prefix addresses and a usable provider next hop, at most four per provider. A silent address drops out of the score when another address inside the prefix answers, so one eyeball or NAT address that ignores ICMP and TCP/443 no longer makes every provider look like 100% loss. An operator `host` on `static`, `vip`, or `traceroute` is still the only address probed. Nothing is announced. Every packet still waits on `probe.rate_limit_pps`. Rollback: none needed; the previous behavior pinned the flow host and skipped the other addresses.
+
 ### Added
 
 - MED on each learned path, and an ASN map of measured prefixes (#105). Each path on a measured prefix, including an inactive add-path or BMP path, shows its next hop, AS path, and MED. The MED label names who advertised it (the iBGP neighbor or the BMP peer, and a route server by name and AS when that peer is one). MED is not a step in path selection and is not an input to the exit: the decision stays probes plus cost and commit. The ASN map groups those measured prefixes by origin ASN and by provider site (name and next hop). A site is marked partial when another site of the same provider carries a measured prefix it does not. Paths for prefixes that are not being measured are not exported. No announce-path change. Rollback: none needed.

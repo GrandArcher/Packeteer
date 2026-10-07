@@ -1046,3 +1046,158 @@ func TestLaterPinReplacesDefaultHost(t *testing.T) {
 		t.Fatalf("pin did not win: %+v", ts)
 	}
 }
+
+// A flow host is a candidate. The busiest destination can be silent
+// while the first host answers, and every provider still gets a usable
+// score. The silent address is left out of that score.
+func TestFlowCandidateWhenBusiestIsSilent(t *testing.T) {
+	busy := netip.MustParseAddr("198.51.100.50")
+	first := netip.MustParseAddr("198.51.100.1")
+	gwA := netip.MustParseAddr("192.0.2.21")
+	gwB := netip.MustParseAddr("192.0.2.22")
+	p := &fakeProber{fn: func(_ context.Context, req plugin.ProbeRequest) (plugin.ProbeResult, error) {
+		if req.Target == busy || req.Target == gwA || req.Target == gwB {
+			return plugin.ProbeResult{Sent: req.Count}, nil
+		}
+		return plugin.ProbeResult{Sent: req.Count, RTTs: ms(12, 12, 12)}, nil
+	}}
+	lim := &countingLimiter{}
+	o := opts()
+	o.Limiter = lim
+	e, err := New([]Provider{
+		{Name: "transit-a", Source: provA.Source, NextHop: gwA},
+		{Name: "transit-b", Source: provB.Source, NextHop: gwB},
+	}, []NamedProber{{"p", p}}, []NamedSource{{
+		Name: "flow",
+		Source: &fakeSource{targets: []plugin.Target{{
+			Prefix: pfx1, Host: busy, Candidate: true, Weight: 1000,
+		}}},
+	}}, o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ts := e.Targets(context.Background())
+	if len(ts) != 1 || ts[0].Host != busy || ts[0].Pinned || !ts[0].Candidate {
+		t.Fatalf("flow host pinned: %+v", ts)
+	}
+	e.RunOnce(context.Background())
+	rs := e.Results()
+	if len(rs) != 2 {
+		t.Fatalf("results = %+v", rs)
+	}
+	byProv := map[string]Result{}
+	for _, r := range rs {
+		byProv[r.Provider] = r
+	}
+	for _, name := range []string{"transit-a", "transit-b"} {
+		r, ok := byProv[name]
+		if !ok || !r.OK() || r.Stats.LossPct != 0 || r.Stats.Received == 0 || r.Target != first {
+			t.Fatalf("%s score = %+v", name, r)
+		}
+		gw := gwA
+		if name == "transit-b" {
+			gw = gwB
+		}
+		want := []netip.Addr{busy, first, netip.MustParseAddr("198.51.100.64"), gw}
+		if len(r.Targets) != len(want) {
+			t.Fatalf("%s targets = %v", name, r.Targets)
+		}
+		for i, a := range want {
+			if r.Targets[i] != a {
+				t.Fatalf("%s targets = %v", name, r.Targets)
+			}
+		}
+	}
+	// Two providers, four addresses, Packets each. Every packet waited.
+	if lim.total != 2*4*o.Packets {
+		t.Fatalf("limiter tokens = %d, want %d", lim.total, 2*4*o.Packets)
+	}
+}
+
+// Every in-prefix address silent: the provider next hop is the score,
+// the same fallback an unpinned prefix already had.
+func TestFlowCandidateGatewayFallback(t *testing.T) {
+	busy := netip.MustParseAddr("198.51.100.50")
+	gw := netip.MustParseAddr("192.0.2.21")
+	p := &fakeProber{fn: func(_ context.Context, req plugin.ProbeRequest) (plugin.ProbeResult, error) {
+		if req.Target == gw {
+			return plugin.ProbeResult{Sent: req.Count, RTTs: ms(4, 4, 4)}, nil
+		}
+		return plugin.ProbeResult{Sent: req.Count}, nil
+	}}
+	e, err := New([]Provider{{Name: "transit-a", Source: provA.Source, NextHop: gw}},
+		[]NamedProber{{"p", p}}, []NamedSource{{
+			Name: "flow",
+			Source: &fakeSource{targets: []plugin.Target{{
+				Prefix: pfx1, Host: busy, Candidate: true,
+			}}},
+		}}, opts())
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.RunOnce(context.Background())
+	r := e.Results()[0]
+	if r.Target != gw || r.Stats.LossPct != 0 || r.Stats.RTTAvg != 4*time.Millisecond || len(r.Targets) != 4 {
+		t.Fatalf("gateway fallback = %+v", r)
+	}
+}
+
+// An operator host on a static target stays the only address probed.
+func TestStaticHostStaysPin(t *testing.T) {
+	host := netip.MustParseAddr("198.51.100.9")
+	gw := netip.MustParseAddr("192.0.2.21")
+	var got []string
+	p := &fakeProber{fn: func(_ context.Context, req plugin.ProbeRequest) (plugin.ProbeResult, error) {
+		got = append(got, req.Target.String())
+		return plugin.ProbeResult{Sent: req.Count, RTTs: ms(8, 8, 8)}, nil
+	}}
+	e, err := New([]Provider{{Name: "transit-a", Source: provA.Source, NextHop: gw}},
+		[]NamedProber{{"p", p}}, src(plugin.Target{Prefix: pfx1, Host: host}), opts())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ts := e.Targets(context.Background())
+	if len(ts) != 1 || !ts[0].Pinned || ts[0].Candidate || ts[0].Host != host {
+		t.Fatalf("static host = %+v", ts)
+	}
+	e.RunOnce(context.Background())
+	r := e.Results()[0]
+	if len(got) != 1 || got[0] != host.String() || r.Target != host || len(r.Targets) != 1 || r.Targets[0] != host {
+		t.Fatalf("probed %v result %+v", got, r)
+	}
+}
+
+func TestPinBeatsFlowCandidate(t *testing.T) {
+	pin := netip.MustParseAddr("198.51.100.9")
+	busy := netip.MustParseAddr("198.51.100.50")
+	flow := plugin.Target{Prefix: pfx1, Host: busy, Candidate: true}
+	stat := plugin.Target{Prefix: pfx1, Host: pin}
+	orders := [][]NamedSource{
+		{{Name: "flow", Source: &fakeSource{targets: []plugin.Target{flow}}},
+			{Name: "static", Source: &fakeSource{targets: []plugin.Target{stat}}}},
+		{{Name: "static", Source: &fakeSource{targets: []plugin.Target{stat}}},
+			{Name: "flow", Source: &fakeSource{targets: []plugin.Target{flow}}}},
+	}
+	for _, sources := range orders {
+		e, err := New([]Provider{provA}, []NamedProber{{"p", &fakeProber{fn: ok(1)}}}, sources, opts())
+		if err != nil {
+			t.Fatal(err)
+		}
+		ts := e.Targets(context.Background())
+		if len(ts) != 1 || ts[0].Host != pin || !ts[0].Pinned || ts[0].Candidate {
+			t.Fatalf("pin lost to flow: %+v", ts)
+		}
+	}
+	// A candidate replaces a default host from an earlier source.
+	e, err := New([]Provider{provA}, []NamedProber{{"p", &fakeProber{fn: ok(1)}}}, []NamedSource{
+		{Name: "static", Source: &fakeSource{targets: []plugin.Target{{Prefix: pfx1}}}},
+		{Name: "flow", Source: &fakeSource{targets: []plugin.Target{flow}}},
+	}, opts())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ts := e.Targets(context.Background())
+	if len(ts) != 1 || ts[0].Host != busy || ts[0].Pinned || !ts[0].Candidate {
+		t.Fatalf("candidate did not replace default: %+v", ts)
+	}
+}
