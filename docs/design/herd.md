@@ -37,7 +37,7 @@ mechanics and nothing about trust.
 | Trust | Full: same config, same CA | Identity and provenance only; no member's numbers are taken as true |
 | Membership | Static `peers` list | Seeds, then peer exchange; one identity per ASN |
 | Auth | Mutual TLS, one shared CA | Mutual TLS with self-signed certs pinned to per-member keys, plus signed responses; identity bound to an ASN through RPKI |
-| Data | Snapshot of providers, paths, exits, improvements, usage | Measurement records per learned route, shown per vantage, nothing about decisions or traffic |
+| Data | Snapshot of providers, paths, exits, improvements, usage | Measurement records per origin ASN (default) or per learned route (opt-in), shown per vantage, nothing about decisions or traffic |
 | Load | A few trusted peers | Untrusted peers; every limit is enforced locally (see Resource protection) |
 | Effect | Feeds Decide: a remote provider can become usable | Never feeds Decide. Probe hints, annotations, and warnings only |
 | Storage | Latest snapshot in memory | Each member's own records, kept 1 month to 1 year |
@@ -57,8 +57,8 @@ from a verified identity instead of trusting an issuer.
 ## Goals
 
 - Let an operator who opts in share loss, RTT min/avg/max, jitter, and
-  the AS path seen, per learned route and provider ASN, with other
-  members.
+  the AS path seen, per provider ASN, with other members: per origin ASN
+  by default, or per exact learned route as a separate opt-in.
 - Let a member pull those records from every active member and show
   them per vantage (member ASN, location, provider ASN), with summaries
   that count agreement across independent vantages, never a single
@@ -94,42 +94,57 @@ from a verified identity instead of trusting an issuer.
 
 ### Granularity
 
-A record is keyed by the **exact learned route**: the prefix exactly as
-it is in the local RIB view when the probe ran (a /24, a /20, a /48,
-whatever a neighbor advertised). Not a fixed /24 or /48 aggregate and
-not only the origin ASN.
+Turning herd on is one switch. Granularity is a second, separate choice
+per instance:
+
+- **`origin_asn` (default when herd is on).** Records are keyed by the
+  origin ASN of the learned route, with no prefix. The routes probed
+  toward one origin ASN through one provider in one round are pooled
+  into one record, the same way the probe engine pools hosts
+  (`combineStats`). A route whose path ends in an AS_SET or has no
+  known origin is not shared at this level.
+- **`route` (separate opt-in).** Records are keyed by the **exact learned
+  route**: the prefix exactly as it is in the local RIB view when the
+  probe ran (a /24, a /20, a /48, whatever a neighbor advertised). Not a
+  fixed /24 or /48 aggregate.
+
+Rules for both:
 
 - Only prefixes present in the RIB view at measurement time are
   recorded. A flow target that fell back to `aggregate_v4` /
   `aggregate_v6` because the RIB was not ready, or that maps to a
   default route, is never recorded.
-- The prefix is routing data that is already public. What is sensitive
-  is the fact that this member probes it, which can show what its users
-  talk to. Privacy below deals with that.
+- The prefix and the origin ASN are routing data that is already
+  public. What is sensitive is the fact that this member probes them,
+  which can show what its users talk to. Origin-ASN level shows which
+  networks; route level shows which parts of them. Privacy below deals
+  with that.
 - Different members can learn different routes for the same addresses
-  (one sees 198.51.100.0/22, another the /24 inside it). Queries
+  (one sees 198.51.100.0/22, another the /24 inside it). Route queries
   therefore take a match mode (exact, covering, covered), and each
   record stays under its own prefix; see Showing many vantages.
 
 ### Record (schema `herd/v1`)
 
-One record is one probe round toward one learned route through one
-provider. Per-round records with raw samples are the evidence a reader
-can inspect behind each number (see Trust). Window rollups are an open
-question.
+One record is one probe round through one provider toward one origin
+ASN (default) or one learned route (opt-in). Per-round records with raw
+samples are the evidence a reader can inspect behind each number (see
+Trust). Window rollups are an open question.
 
 | Field | Type | Meaning |
 |---|---|---|
 | `schema` | string | `herd/v1`. A puller ignores records with a schema it does not know. |
 | `id` | string | Unique per member, stable across restarts, so a puller can deduplicate pages. |
-| `prefix` | prefix | The exact learned route, as above. |
-| `origin_asn` | uint32 | Last ASN of the AS path learned through that provider. Omitted when the path ends in an AS_SET or is unknown. |
+| `granularity` | string | `origin_asn` or `route`. |
+| `prefix` | prefix | Route level only: the exact learned route, as above. Absent at origin-ASN level. |
+| `routes` | int | Origin-ASN level only: how many learned routes were pooled into the record. |
+| `origin_asn` | uint32 | Last ASN of the AS path learned through that provider. Always present at origin-ASN level; at route level omitted when the path ends in an AS_SET or is unknown. |
 | `provider_asn` | uint32 | First ASN of the AS path learned through that provider (the provider's own ASN). Never the provider's configured name, cost, or commit. Omitted when unknown. |
-| `as_path` | []uint32 | The AS path learned through that provider for that prefix, as the RIB view holds it (add-path or BMP when the provider is not the best path), with private-use and reserved ASNs removed. Only in the `paths` data class. |
+| `as_path` | []uint32 | The AS path learned through that provider for that prefix, as the RIB view holds it (add-path or BMP when the provider is not the best path), with private-use and reserved ASNs removed. At origin-ASN level, `as_paths` instead: the distinct paths seen toward that origin in the round. Only in the `paths` data class. |
 | `vantage` | string | ISO 3166-1 alpha-2 country the member declares for this instance. Declared, not geolocated. Finer location is an open question. |
 | `method` | string | `icmp`, `tcp`, or `udp`: the prober that produced the replies, since results from different probers are not comparable. |
 | `time` | RFC 3339 UTC | Start of the round. |
-| `sent` | int | Probe packets sent in the round, over all probed hosts. |
+| `sent` | int | Probe packets sent in the round, over all probed hosts (and, at origin-ASN level, all pooled routes). |
 | `samples` | []object | Evidence: one entry per reply, `{"t_ms": offset from time, "rtt_ms": value}`, in send order. Host addresses are not included. |
 | `loss_pct` | float | `100 × (sent − replies) / sent`. |
 | `rtt_min_ms`, `rtt_avg_ms`, `rtt_max_ms` | float | From the samples, the way `internal/probe` computes them; `rtt_avg_ms` is reply-weighted across hosts. Omitted when there were no replies. |
@@ -155,6 +170,7 @@ Every response from the pull API is one signed document:
   "asn": 64500,
   "generated_at": "2026-10-07T21:00:00Z",
   "retention_days": 90,
+  "granularity": "route",
   "query": {"prefix": "198.51.100.0/24", "match": "exact", "from": "...", "to": "...", "cursor": ""},
   "records": [ ... ],
   "next_cursor": "...",
@@ -192,6 +208,7 @@ None of these leave the box, whatever the operator selects:
   unspecified space.
 - Results from the `fixed` prober (labs). A member with `fixed` in its
   prober chain serves nothing outside a lab build.
+- Anything on the operator's exclude list (below).
 
 ## Privacy
 
@@ -209,10 +226,10 @@ What any active member can learn about another:
   anonymous to each other. What is protected is what their users do,
   not who the operator is.
 - Its providers' ASNs, the country it declares, and its retention.
-- The learned routes it chose to share records for, and the
-  measurements in them.
+- The origin ASNs (default) or learned routes (opt-in) it chose to share
+  records for, and the measurements in them.
 
-The sensitive part is the list of routes, because a member probes what
+The sensitive part is the list of destinations, because a member probes what
 its users talk to. That leak also runs the other way: a puller that
 asks a member for specific prefixes tells that member what it cares
 about.
@@ -221,47 +238,60 @@ about.
 
 1. **Off by default.** Nothing is stored for herd, served, or pulled
    unless the operator turns herd on. No shipped example turns it on.
-2. **Opt in per data class.** Each class is separate and off until
+2. **Granularity.** Origin ASN by default; exact learned routes only
+   when the operator opts in separately (see Granularity).
+3. **Exclude list.** Prefixes and ASNs that are never shared. A prefix
+   entry excludes every route equal to, inside, or covering it (at
+   origin-ASN level, a pooled record leaves those routes out). An ASN
+   entry excludes every route whose origin is that ASN or whose AS path
+   contains it. Excluded routes are filtered before anything is written
+   to the herd store, and again when serving, so a config change takes
+   effect for data already stored.
+4. **Opt in per data class.** Each class is separate and off until
    chosen:
    - `measurements`: the record without `as_path`.
    - `paths`: adds `as_path`.
    - `visibility`: route-visibility data for phase 3 (not specified
      yet).
-3. **Opt in per target origin.** The operator chooses which target
+5. **Opt in per target origin.** The operator chooses which target
    sources may produce shared records. Proposed default when herd is on:
    operator-listed targets (`static`, `vip`) and RIB-derived ones
    (`outage`, `vip` ASN expansion) only; `flow` and `span` targets,
    which come from users' traffic, need a separate opt-in.
-4. **Crowd threshold for user-derived targets.** A route that only flow
-   or span put on the probe list is served only once at least k other
-   independent identities (distinct verified ASNs, see Identity) already
-   serve records for that exact route, as this member sees from its own
-   pulls or DHT lookups. Routes from operator-listed and RIB-derived
-   sources are not held back by k when their origin is opted in. This
-   cannot be enforced against a member that ignores it; it protects the
-   member that applies it. Many nodes under one operator would fake the
-   count, which is why only RPKI-verified identities count toward k, once
-   per ASN. The value of k is an open question.
-5. **Listing versus query-only.** Per data class, the operator chooses
-   how routes can be found:
+6. **Crowd threshold for user-derived targets.** At route level, a
+   route that only flow or span put on the probe list is served only
+   once at least k other independent identities (distinct verified
+   ASNs, see Identity) already serve records for that exact route, as
+   this member sees from its own pulls or DHT lookups. Routes from
+   operator-listed and RIB-derived sources are not held back by k when
+   their origin is opted in. This cannot be enforced against a member
+   that ignores it; it protects the member that applies it. Many nodes
+   under one operator would fake the count, which is why only
+   RPKI-verified identities count toward k, once per ASN. The value of
+   k, and whether a threshold is also wanted at origin-ASN level, are
+   open questions.
+7. **Listing versus query-only.** The operator chooses how shared
+   destinations can be found:
    - *listing*: a puller may page through everything by time range.
-     The puller reveals nothing; the server reveals its whole route
-     list to every active member.
-   - *query-only*: the server answers only for a prefix or origin ASN
+     The puller reveals nothing; the server reveals its whole list of
+     origin ASNs or routes to every active member.
+   - *query-only*: the server answers only for an origin ASN or prefix
      the puller names, rate-limited. Enumerating a full table becomes
      slow, not impossible. The puller reveals what it asks for.
    Queries by origin ASN are a middle ground for both sides. Which mode
    is the default is an open question.
-6. **Coarse location.** Country only, declared by the operator.
-7. **Preview.** The ops API (behind the existing auth) shows exactly
-   what a puller would receive for any query, produced by the same code
-   that serves real pulls, so the preview is the bytes that would be
-   sent. A `preview` mode stores and previews records but serves
-   nothing. Every served response is logged (puller identity, query,
-   record count) to the audit store.
-8. **Retention.** The member decides how long it keeps and serves
-   records (below). Deleting records stops serving them; copies other
-   members already pulled stay with them for their own retention.
+8. **Coarse location.** Country only, declared by the operator.
+9. **Preview.** The ops API (behind the existing auth) shows exactly
+   what peers would see: the status document and the signed response a
+   puller would receive for any query, produced by the same code that
+   serves real pulls, after granularity, exclude list, data classes,
+   target origins, and crowd threshold are applied. The preview is the
+   bytes that would be sent. `preview_only` stores and previews records
+   but serves nothing. Every served response is logged (puller
+   identity, query, record count) to the audit store.
+10. **Retention.** The member decides how long it keeps and serves
+    records (below). Deleting records stops serving them; copies other
+    members already pulled stay with them for their own retention.
 
 ## Identity and Sybil resistance
 
@@ -358,7 +388,8 @@ measurements of others.
    member that leaves stops serving, and may publish a signed entry
    marked `leaving` so others drop it at once.
 4. **Reciprocity.** Only an active member can pull: a node that serves
-   nothing (herd off, `preview`, or no data classes) cannot pull either.
+   nothing (herd off, `preview_only`, or no data classes) cannot pull
+   either.
 5. **Bounded and diverse.** The peer table has a hard cap and an
    eviction policy (see Resource protection). Seeds and static peers are
    anchors that are not evicted; entries accepted per relayer are
@@ -386,7 +417,7 @@ writes.
 |---|---|
 | `GET /herd/v1/status` | Signed: identity statement and RSC, endpoints, `retention_days`, data classes and modes, schema versions, `generated_at`. Liveness checks fetch this. |
 | `GET /herd/v1/peers` | Signed peer entries, as above. |
-| `GET /herd/v1/records` | Records, filtered by `prefix` with `match=exact|covering|covered`, or by `origin_asn`, plus `from`, `to` (inside the member's retention), `provider_asn`, `limit` (capped by the server), and an opaque `cursor`. Ordered by prefix, provider ASN, time, so pages are stable. In listing mode the prefix and ASN filters are optional. |
+| `GET /herd/v1/records` | Records, filtered by `origin_asn`, or (route level only) by `prefix` with `match=exact|covering|covered`, plus `from`, `to` (inside the member's retention), `provider_asn`, `limit` (capped by the server), and an opaque `cursor`. Ordered by prefix, provider ASN, time, so pages are stable. In listing mode the prefix and ASN filters are optional. A member sharing at origin-ASN level matches no prefix query; its status document says which granularity it serves. |
 
 Every endpoint is bounded by the limits in Resource protection: rate
 limits per identity and per source address (`429` with `Retry-After`),
@@ -412,6 +443,51 @@ does, and drops records dated after `generated_at`.
 
 Storage cost of per-round records with samples over a year is not
 known. It has to be measured before a default is chosen.
+
+## Config shape (proposal)
+
+Illustrative only. Nothing here is implemented, no key exists, and none
+of it goes into `config.example.yaml` or CONFIG.md until a phase is
+approved. Names and values are placeholders for review.
+
+```yaml
+herd:
+  enabled: false              # the one opt-in switch; absent is the same
+  preview_only: false         # store and preview, serve and pull nothing
+  share:
+    granularity: origin_asn   # default when enabled; "route" shares exact
+                              # learned routes and must be set explicitly
+    paths: false              # add AS paths (the `paths` data class)
+    sources: [static, vip, outage]   # target origins that may be shared;
+                                     # flow and span only if listed here
+    discovery: query_only     # or listing
+    crowd_k: 0                # route level, flow/span targets; value open
+    exclude:
+      prefixes: [203.0.113.0/24]     # equal, inside, or covering: never shared
+      asns: [64501]                  # as origin or anywhere in the path
+  retention: 90d              # 30d to 365d; advertised to peers
+  vantage:
+    country: US               # declared, ISO 3166-1 alpha-2
+  listen: 0.0.0.0:9444        # herd listener, separate from http
+  key_file: /var/lib/packeteer/herd/node.key   # generated on first enable
+  identity:                   # phase 2
+    statement_file: /etc/packeteer/herd/identity.json
+    rsc_file: /etc/packeteer/herd/identity.rsc
+  peers:                      # phase 1: static peers, pinned keys
+    - url: https://192.0.2.30:9444
+      key: ed25519:<public key>
+  seeds: [seed.herd.example.invalid]   # phase 2
+  block: {asns: [], keys: []}          # local view only
+  limits: {}                  # peer, rate, size, memory, disk caps;
+                              # defaults from a lab load test
+```
+
+Validation follows the plugin rules: unknown keys are errors, a
+retention outside 30 to 365 days is an error, `granularity` accepts only
+`origin_asn` or `route`, exclude entries must be valid prefixes and
+non-zero ASNs, and `enabled: true` with no data class chosen is an
+error. Rollback is `enabled: false` and a restart: the listener closes,
+pulling stops, and the herd store can be deleted.
 
 ## Showing many vantages
 
@@ -441,10 +517,12 @@ per vantage.
    splitting the summary by country or provider ASN shows the rest.
    Unverified members appear in rows, not in counts. No vantage
    outranks another, and the summary links to the per-vantage rows.
-4. **Prefixes stay apart.** A record for 198.51.100.0/22 and one for
-   198.51.100.0/24 are different routes; the view for a local route
-   shows exact matches first and covering or covered routes labeled as
-   such.
+4. **Prefixes and granularities stay apart.** A record for
+   198.51.100.0/22 and one for 198.51.100.0/24 are different routes;
+   the view for a local route shows exact matches first and covering or
+   covered routes labeled as such. Origin-ASN records from members that
+   share at that level appear under the route's origin ASN, labeled as
+   pooled, never mixed into route-level rows.
 5. **Provenance on every row.** Member identity (ASN, verified or not),
    node key, record age as of the fetch, and the signed envelope it came
    in, so an operator can see why a summary says what it says.
@@ -626,6 +704,14 @@ pulling ships in this phase, not later. No discovery, no RPKI identity
 Acceptance:
 
 - Off by default; with herd off, nothing is stored, served, or pulled.
+- With herd on and no granularity set, only origin-ASN records are
+  stored and served; no prefix appears in any response until
+  `granularity: route` is set.
+- Exclude list: no excluded prefix (equal, inside, or covering) or ASN
+  (origin or in path) reaches the store or a response, including data
+  stored before the entry was added.
+- Preview: for every query shape, the preview bytes equal what a real
+  pull receives.
 - Nothing on the never-shared list can reach a response (tests per
   field and per source class); preview equals the served bytes;
   retention deletes; a tampered, replayed, or wrongly signed response is
@@ -716,4 +802,7 @@ data flowing.
 13. **Charter.** Herd sends data off the box. Should AGENTS.md gain a
     safety line for it (off by default, never-shared list, advisory
     only) when phase 1 starts?
-14. **Placement.** After the v0.6 parity milestone, or interleaved?
+14. **Granularity default.** Is origin-ASN level the right default for
+    everyone, and should route level require anything beyond the
+    explicit setting (for example the crowd threshold always on)?
+15. **Placement.** After the v0.6 parity milestone, or interleaved?
