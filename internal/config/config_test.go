@@ -214,6 +214,9 @@ func TestDefaults(t *testing.T) {
 		cfg.Probe.PerTargetConcurrency != DefaultProbePerTargetConcurrency {
 		t.Errorf("probe defaults = %+v", cfg.Probe)
 	}
+	if cfg.Probe.ProberRecheckRounds != DefaultProbeProberRecheckRounds || cfg.Probe.ProberMemory != DefaultProbeProberMemory {
+		t.Errorf("prober memory defaults = %+v", cfg.Probe)
+	}
 	if cfg.Scorer == nil || cfg.Scorer.Type != "weighted" || cfg.ImprovementTTL != DefaultImprovementTTL {
 		t.Errorf("scorer/ttl defaults = %+v %s", cfg.Scorer, cfg.ImprovementTTL)
 	}
@@ -455,6 +458,39 @@ func TestRetryProbeConfig(t *testing.T) {
 	}
 	if cfg.Probe.RetryLossPct != 0 || cfg.Probe.RetryPackets != 0 {
 		t.Fatalf("retry should default off: %+v", cfg.Probe)
+	}
+}
+
+func TestProberMemoryConfig(t *testing.T) {
+	cfg, err := Parse([]byte(minimalYAML + "probe:\n  prober_recheck_rounds: 4\n  prober_memory: 25\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Probe.ProberRecheckRounds != 4 || cfg.Probe.ProberMemory != 25 {
+		t.Fatalf("probe = %+v", cfg.Probe)
+	}
+	cfg, err = Parse([]byte(minimalYAML + "probe:\n  prober_recheck_rounds: 0\n  prober_memory: 0\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Probe.ProberRecheckRounds != DefaultProbeProberRecheckRounds || cfg.Probe.ProberMemory != DefaultProbeProberMemory {
+		t.Fatalf("zero should default, got %+v", cfg.Probe)
+	}
+	cases := []struct {
+		yaml string
+		want string
+	}{
+		{"probe:\n  prober_recheck_rounds: 10001\n", "prober_recheck_rounds"},
+		{"probe:\n  prober_recheck_rounds: -1\n", "prober_recheck_rounds"},
+		{"probe:\n  prober_memory: -1\n", "prober_memory"},
+		{"probe:\n  prober_memory: 1000001\n", "prober_memory"},
+		{"probe:\n  prober_recheck: 4\n", "field prober_recheck not found"},
+	}
+	for _, tt := range cases {
+		_, err := Parse([]byte(minimalYAML + tt.yaml))
+		if err == nil || !strings.Contains(err.Error(), tt.want) {
+			t.Fatalf("yaml %q err = %v, want %q", tt.yaml, err, tt.want)
+		}
 	}
 }
 

@@ -131,7 +131,7 @@ docker rm pk-nosource
 |---|---|---|
 | `probe source address unavailable` | `source_ip` is not configured on the host | Add the address on the interface facing that provider ([policy-routing.md](policy-routing.md)), or correct `source_ip`. |
 | `probe source down; provider excluded (fail closed)` | Every probe from that source failed | The same. The provider comes back on its own (`probe source recovered`). |
-| Probe lines say `prober=tcp` where you expected ICMP | No `NET_RAW`: ICMP cannot open its socket and the chain falls back to TCP port 443 | Add `--cap-add NET_RAW`. |
+| Probe lines say `prober=tcp` where you expected ICMP | The host answered TCP, so later rounds start there until `probe.prober_recheck_rounds`, or ICMP cannot open its socket (no `NET_RAW`) and the chain fell back to TCP port 443 | Wait for the chain-head probe, or add `--cap-add NET_RAW` when ICMP cannot open a socket. |
 | `probe ... loss_pct=100` on one provider only | That transit drops the probes, or replies come back on another interface and are dropped | Check the policy route with `ip route get <target> from <source_ip>`; set `rp_filter` to 2 (loose) on the probe interfaces. |
 | Every provider has the same RTT to everything | Probes all leave by the default route | Policy routing is missing: [policy-routing.md](policy-routing.md). |
 | `probe round timed out; keeping previous results` | A round took longer than about three intervals | Fewer targets, a longer `probe.interval`, or more `probe.workers`. Measurements older than that are stale, and stale data withdraws Packeteer's routes in inject. |

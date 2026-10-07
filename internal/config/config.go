@@ -47,6 +47,16 @@ const (
 	DefaultProbePerTargetConcurrency = 2
 	MaxProbePerTargetConcurrency     = 64
 
+	// DefaultProbeProberRecheckRounds is how often a host is probed from
+	// the first prober again. Probe 1, 11, 21, ... start there when this
+	// is 10. Keep it equal to probe.DefaultProberRecheckRounds.
+	DefaultProbeProberRecheckRounds = 10
+	MaxProbeProberRecheckRounds     = 10000
+	// DefaultProbeProberMemory is how many hosts remember a prober.
+	// Keep it equal to probe.DefaultProberMemory.
+	DefaultProbeProberMemory = 100000
+	MaxProbeProberMemory     = 1000000
+
 	// MaxConfirmRounds is the upper bound of thresholds.confirm_rounds.
 	// Omitted or 0 means 1 (announce on the first fresh win).
 	MaxConfirmRounds = 100
@@ -520,6 +530,13 @@ type Probe struct {
 	// RetryPackets is the packet count of that second probe. Zero means
 	// three times packets when retry is enabled, and is otherwise unused.
 	RetryPackets int `yaml:"retry_packets"`
+	// ProberRecheckRounds is how often each host is probed from the first
+	// prober again. Omitted or 0 uses the default. The other rounds start
+	// at the prober that last got a reply from that host.
+	ProberRecheckRounds int `yaml:"prober_recheck_rounds"`
+	// ProberMemory caps the hosts that remember a prober. Omitted or 0
+	// uses the default. Hosts that leave the probe set are dropped first.
+	ProberMemory int `yaml:"prober_memory"`
 }
 
 // Load reads, parses, defaults, and validates the config file at path.
@@ -597,6 +614,12 @@ func (c *Config) applyDefaults() {
 	}
 	if c.Probe.PerTargetConcurrency == 0 {
 		c.Probe.PerTargetConcurrency = DefaultProbePerTargetConcurrency
+	}
+	if c.Probe.ProberRecheckRounds == 0 {
+		c.Probe.ProberRecheckRounds = DefaultProbeProberRecheckRounds
+	}
+	if c.Probe.ProberMemory == 0 {
+		c.Probe.ProberMemory = DefaultProbeProberMemory
 	}
 	if c.Probe.RetryLossPct > 0 && c.Probe.RetryPackets == 0 {
 		n := c.Probe.Packets * 3
@@ -840,6 +863,12 @@ func (c *Config) Validate() error {
 	}
 	if c.Probe.RetryPackets < 0 || c.Probe.RetryPackets > MaxProbePackets {
 		add("probe.retry_packets %d must be between 0 and %d", c.Probe.RetryPackets, MaxProbePackets)
+	}
+	if c.Probe.ProberRecheckRounds < 1 || c.Probe.ProberRecheckRounds > MaxProbeProberRecheckRounds {
+		add("probe.prober_recheck_rounds %d must be between 1 and %d", c.Probe.ProberRecheckRounds, MaxProbeProberRecheckRounds)
+	}
+	if c.Probe.ProberMemory < 1 || c.Probe.ProberMemory > MaxProbeProberMemory {
+		add("probe.prober_memory %d must be between 1 and %d", c.Probe.ProberMemory, MaxProbeProberMemory)
 	}
 
 	if c.BGP.ListenPort < 0 || c.BGP.ListenPort > 65535 {

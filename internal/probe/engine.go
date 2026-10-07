@@ -65,6 +65,16 @@ type Options struct {
 	// percent. Zero disables retry. The retry sample replaces the first.
 	RetryLossPct float64
 	RetryPackets int
+	// ProberRecheckRounds is how often a host is probed from the first
+	// prober again. Probe 1, N+1, 2N+1, ... start at the chain head. The
+	// others start at the prober that last got a reply from that host
+	// and move only forward. Zero uses DefaultProberRecheckRounds.
+	// One means every probe starts at the chain head.
+	ProberRecheckRounds int
+	// ProberMemory caps how many hosts keep a remembered prober. Zero
+	// uses DefaultProberMemory. Hosts that leave the target set are
+	// dropped. Past the cap, the least recently probed hosts are dropped.
+	ProberMemory int
 }
 
 // Result is the latest measurement of one provider toward one prefix.
@@ -153,6 +163,15 @@ type Engine struct {
 	// wake is a one-slot signal. OnRound calls Wake when a detector has
 	// new prefixes so sleep returns without waiting out the interval.
 	wake chan struct{}
+
+	// proberMem remembers which prober got a reply from a host. proberPlan
+	// is the chain start chosen for the current round (one per host, shared
+	// by providers and by a loss retry). proberNote is the latest chain
+	// index that got a reply this round. All three are guarded by mu.
+	proberMem  map[netip.Addr]proberSlot
+	proberPlan map[netip.Addr]int
+	proberNote map[netip.Addr]int
+	memTick    uint64
 }
 
 // errSourceBusy is returned when a target source's previous call has not
@@ -185,6 +204,18 @@ func New(providers []Provider, probers []NamedProber, sources []NamedSource, opt
 	}
 	if opt.RetryLossPct > 0 && opt.RetryPackets < 1 {
 		return nil, errors.New("probe: retry packets must be positive when retry is enabled")
+	}
+	if opt.ProberRecheckRounds == 0 {
+		opt.ProberRecheckRounds = DefaultProberRecheckRounds
+	}
+	if opt.ProberRecheckRounds < 1 || opt.ProberRecheckRounds > MaxProberRecheckRounds {
+		return nil, fmt.Errorf("probe: prober recheck rounds %d must be between 1 and %d", opt.ProberRecheckRounds, MaxProberRecheckRounds)
+	}
+	if opt.ProberMemory == 0 {
+		opt.ProberMemory = DefaultProberMemory
+	}
+	if opt.ProberMemory < 1 || opt.ProberMemory > MaxProberMemory {
+		return nil, fmt.Errorf("probe: prober memory %d must be between 1 and %d", opt.ProberMemory, MaxProberMemory)
 	}
 	if opt.Workers < 1 {
 		opt.Workers = 1
@@ -753,6 +784,7 @@ func (e *Engine) runRound(ctx context.Context, allow func(plugin.Target) bool, m
 		return nil, false
 	}
 	e.noteCadence(targets)
+	e.beginProberRound(targets)
 	keep := map[netip.Prefix]bool{}
 	var jobs []job
 	for _, t := range targets {
@@ -865,6 +897,7 @@ feed:
 		}
 	}
 
+	e.finishProberRound()
 	e.commit(fresh, ran, down, keep, merge)
 	e.rememberProbes(probed)
 	if e.opt.OnRound != nil {
@@ -1040,7 +1073,10 @@ type hostSample struct {
 
 // probeOne runs the prober chain for one address. Chain semantics: try
 // probers in order; move on when a prober errors or gets no replies; stop
-// immediately (fail closed) if the source address is unusable.
+// immediately (fail closed) if the source address is unusable. After a
+// host has answered, later rounds start at that prober and move only
+// forward. Every prober_recheck_rounds measurement starts at the first
+// prober again. Each prober that runs waits on the global rate limit.
 func (e *Engine) probeOne(ctx context.Context, p Provider, prefix netip.Prefix, host netip.Addr, count int) (Result, bool) {
 	res := Result{Provider: p.Name, Prefix: prefix, Target: host}
 	if count < 1 {
@@ -1060,7 +1096,9 @@ func (e *Engine) probeOne(ctx context.Context, p Provider, prefix netip.Prefix, 
 		Target: host, Count: count, Timeout: e.opt.Timeout}
 	var errs []error
 	var fallback *Result
-	for _, pr := range e.probers {
+	start := e.proberStart(host)
+	for i := start; i < len(e.probers); i++ {
+		pr := e.probers[i]
 		if e.opt.Limiter != nil {
 			if err := e.opt.Limiter.WaitN(ctx, count); err != nil {
 				errs = append(errs, fmt.Errorf("rate limit: %w", err))
@@ -1081,6 +1119,7 @@ func (e *Engine) probeOne(ctx context.Context, p Provider, prefix netip.Prefix, 
 		r := res
 		r.Prober, r.Stats, r.Time = pr.Name, Compute(raw), e.opt.Now()
 		if r.Stats.Received > 0 {
+			e.noteProber(host, i)
 			return r, false
 		}
 		if fallback == nil {
