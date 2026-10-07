@@ -10,7 +10,20 @@ jitter, the AS path they see) so each member gets a wider view of
 Internet paths than its own edge gives it, in the spirit of
 ThousandEyes. There is no central collector and no central dataset:
 every member stores its own measurements, decides what to share, and
-serves them to other members, which pull and merge.
+serves them to other members, which pull them.
+
+Herd data is a multi-vantage view for understanding events. Every
+vantage point legitimately sees something different, so nothing is
+merged into one "true" value and no member's data overrides another's.
+The operator reads the views side by side and interprets them. Trust is
+about who said it and when (identity and provenance), not about whose
+numbers win.
+
+Herd must never be able to hurt the instance that runs it. A member
+that is broken, overloaded, or hostile can make herd data missing or
+wrong for its peers; it must not be able to exhaust their memory, disk,
+CPU, connections, or probe budget, and herd failing or overloading must
+never affect routing, probing, or the announcer.
 
 ## Herd is not federation
 
@@ -21,10 +34,11 @@ mechanics and nothing about trust.
 | | Federation (`mtls`) | Herd |
 |---|---|---|
 | Members | One operator's POPs | Other operators' instances |
-| Trust | Full: same config, same CA | None by default: any member can be wrong or lie |
+| Trust | Full: same config, same CA | Identity and provenance only; no member's numbers are taken as true |
 | Membership | Static `peers` list | Seeds, then peer exchange; one identity per ASN |
 | Auth | Mutual TLS, one shared CA | Mutual TLS with self-signed certs pinned to per-member keys, plus signed responses; identity bound to an ASN through RPKI |
-| Data | Snapshot of providers, paths, exits, improvements, usage | Measurement records per learned route, nothing about decisions or traffic |
+| Data | Snapshot of providers, paths, exits, improvements, usage | Measurement records per learned route, shown per vantage, nothing about decisions or traffic |
+| Load | A few trusted peers | Untrusted peers; every limit is enforced locally (see Resource protection) |
 | Effect | Feeds Decide: a remote provider can become usable | Never feeds Decide. Probe hints, annotations, and warnings only |
 | Storage | Latest snapshot in memory | Each member's own records, kept 1 month to 1 year |
 
@@ -45,8 +59,10 @@ from a verified identity instead of trusting an issuer.
 - Let an operator who opts in share loss, RTT min/avg/max, jitter, and
   the AS path seen, per learned route and provider ASN, with other
   members.
-- Let a member pull those records from every active member and merge
-  them into a wider view of a destination.
+- Let a member pull those records from every active member and show
+  them per vantage (member ASN, location, provider ASN), with summaries
+  that count agreement across independent vantages, never a single
+  verdict.
 - Use that view locally in three advisory ways: raise probe priority for
   a prefix others see degrading; tell "my upstream" apart from "the
   destination"; give outage detection a second opinion.
@@ -54,6 +70,8 @@ from a verified identity instead of trusting an issuer.
   leak or hijack hints) seen across members.
 - Keep every member in control of what leaves its box, with a preview
   of the exact bytes before anything is served.
+- Keep each member safe from the others: hard, local limits on peers,
+  requests, response sizes, memory, and disk, isolated from the core.
 
 ## Non-goals
 
@@ -65,7 +83,9 @@ from a verified identity instead of trusting an issuer.
   the never-shared list.
 - No re-serving: a member serves only its own measurements, never data
   it pulled from others.
-- No reliance on remote attestation (TPM and similar). See Lying.
+- No merged "true" value, global reputation, or score that suppresses
+  a member's data for everyone.
+- No reliance on remote attestation (TPM and similar). See Trust.
 - Not a replacement for RouteViews, RIPE RIS, or RIPE Atlas, which stay
   separate public inputs with their own limits.
 - No default-on switch, and no shipped example that turns herd on.
@@ -88,14 +108,14 @@ not only the origin ASN.
   talk to. Privacy below deals with that.
 - Different members can learn different routes for the same addresses
   (one sees 198.51.100.0/22, another the /24 inside it). Queries
-  therefore take a match mode (exact, covering, covered) and the merge
-  keeps each record under its own prefix; see Merging.
+  therefore take a match mode (exact, covering, covered), and each
+  record stays under its own prefix; see Showing many vantages.
 
 ### Record (schema `herd/v1`)
 
 One record is one probe round toward one learned route through one
-provider. Per-round records with raw samples are the evidence other
-members use to check claims (see Lying). Window rollups are an open
+provider. Per-round records with raw samples are the evidence a reader
+can inspect behind each number (see Trust). Window rollups are an open
 question.
 
 | Field | Type | Meaning |
@@ -143,8 +163,9 @@ Every response from the pull API is one signed document:
 ```
 
 Echoing the query inside the signed body stops a reply to one query
-from being replayed as the answer to another. Signed responses can be
-kept as evidence when a member is caught lying.
+from being replayed as the answer to another. A signed response is
+provenance: a puller can show later exactly which member said what, and
+when.
 
 ## What is never shared
 
@@ -218,9 +239,9 @@ about.
    pulls or DHT lookups. Routes from operator-listed and RIB-derived
    sources are not held back by k when their origin is opted in. This
    cannot be enforced against a member that ignores it; it protects the
-   member that applies it. Sybil identities can lower the real count,
-   which is why only RPKI-verified identities count toward k. The value
-   of k is an open question.
+   member that applies it. Many nodes under one operator would fake the
+   count, which is why only RPKI-verified identities count toward k, once
+   per ASN. The value of k is an open question.
 5. **Listing versus query-only.** Per data class, the operator chooses
    how routes can be found:
    - *listing*: a puller may page through everything by time range.
@@ -247,8 +268,13 @@ about.
 ### One identity per ASN
 
 A herd identity is an ASN. An operator counts once however many nodes
-it runs, and only verified identities count for k, for agreement
-thresholds, and for reputation.
+it runs. The main reason is load: spinning up many nodes must not
+multiply an operator's peer-table slots, request budget, or storage on
+other members (see Resource protection). It also keeps vantage counts
+honest ("5 of 7 vantages"), where one operator with seven nodes is one
+vantage per location and provider, not seven independent ones. Only
+verified identities count toward k and toward independent-vantage
+counts.
 
 Proposed proof: an **RPKI Signed Checklist (RSC, RFC 9323)**.
 
@@ -281,8 +307,9 @@ Limits:
   mounted cache from rpki-client or similar) is an open question.
 - A compromised RPKI account can mint an identity for that ASN.
 - Operators without their own ASN (enterprise on provider space) cannot
-  prove an identity. They could join unverified: allowed to pull and
-  serve, but weight zero for k, thresholds, and reputation.
+  prove an identity. They could join unverified: shown, labeled
+  unverified, not counted toward k or independent-vantage counts, and
+  given the smallest slot and rate share.
 
 ### Alternatives considered
 
@@ -294,6 +321,7 @@ Limits:
 | DNS TXT in the reverse zone of the operator's space | Proves control of reverse DNS, which is often delegated or held by a provider; ties identity to prefixes, not ASNs. |
 | Announcing a beacon route | Packeteer never announces for herd, and it would cost a routing change to join. Out. |
 | Proof of work or stake | Proves spending, not that you are a separate operator. |
+| One identity per IP address or prefix | Cheap to multiply with a few addresses; does not map to operators. |
 
 ### Keys
 
@@ -331,10 +359,11 @@ measurements of others.
    marked `leaving` so others drop it at once.
 4. **Reciprocity.** Only an active member can pull: a node that serves
    nothing (herd off, `preview`, or no data classes) cannot pull either.
-5. **Eclipse resistance.** Bounded peer table; keep seeds and static
-   peers as anchors; cap entries accepted per relayer; prefer peers
-   heard from several relayers; spread pulls and peer slots across
-   distinct ASNs.
+5. **Bounded and diverse.** The peer table has a hard cap and an
+   eviction policy (see Resource protection). Seeds and static peers are
+   anchors that are not evicted; entries accepted per relayer are
+   capped; peers heard from several relayers are preferred; slots are
+   spread across distinct ASNs, at most one identity's worth per ASN.
 6. **Optional DHT (later).** With many members, pulling everyone for a
    route gets expensive. A Kademlia-style DHT, with node IDs derived
    from verified keys, can answer "which members hold records for this
@@ -359,13 +388,10 @@ writes.
 | `GET /herd/v1/peers` | Signed peer entries, as above. |
 | `GET /herd/v1/records` | Records, filtered by `prefix` with `match=exact|covering|covered`, or by `origin_asn`, plus `from`, `to` (inside the member's retention), `provider_asn`, `limit` (capped by the server), and an opaque `cursor`. Ordered by prefix, provider ASN, time, so pages are stable. In listing mode the prefix and ASN filters are optional. |
 
-Rate limits: per pulling identity and per source address, with `429`
-and `Retry-After`; caps on page size, query count, and response bytes;
-covering and covered queries cost more than exact ones. On the puller
-side: a bounded number of concurrent members, a per-interval request
-budget, and backoff on errors. Herd I/O runs on its own goroutines and
-bounded queues, so a slow member never delays probing, decisions, or
-withdrawals (the same rule `internal/notify` follows).
+Every endpoint is bounded by the limits in Resource protection: rate
+limits per identity and per source address (`429` with `Retry-After`),
+page size and response byte caps, and covering or covered queries
+costing more than exact ones.
 
 Freshness: a puller trusts record times only as ages relative to the
 envelope's `generated_at` and the time it fetched it, as `ShiftSnapshot`
@@ -387,42 +413,57 @@ does, and drops records dated after `generated_at`.
 Storage cost of per-round records with samples over a year is not
 known. It has to be measured before a default is chosen.
 
-## Merging
+## Showing many vantages
 
-A puller merges per destination as follows.
+A puller never merges records into one value. It keeps and shows them
+per vantage.
 
-1. Drop anything that fails checks: bad signature, unknown schema,
-   summary fields that do not match the samples, impossible values
-   (`loss_pct` outside 0 to 100, more replies than `sent`, `rtt_min`,
-   `rtt_avg`, `rtt_max` not in ascending order, jitter larger than the spread
-   between `rtt_min` and `rtt_max`, samples out of order or outside the
-   round), records outside the advertised retention, records from
-   blocklisted members.
-2. Deduplicate by member key and record `id`.
-3. Group by identity (verified ASN group), not by node or by sample:
-   each identity contributes one value per destination, provider ASN,
-   vantage, and time bucket (its median), so a member that probes more
-   often does not count more.
-4. Combine identities with robust statistics (median and spread) and
-   discard outliers (proposed: median absolute deviation), weighted by
-   reputation (see Lying). Unverified identities are shown but carry no
-   weight.
-5. Keep prefixes apart. A record for 198.51.100.0/22 and one for
-   198.51.100.0/24 are different routes; the merged view for a local
-   route shows exact matches first and covering or covered routes
-   labeled as such.
-6. Keep provenance: for every merged value, which identities and records
-   it came from, so an operator can see why a hint fired and blocklist a
-   source.
+1. **Validate, then keep.** Drop anything that fails checks: bad
+   signature, unknown schema, summary fields that do not match the
+   samples, impossible values (`loss_pct` outside 0 to 100, more replies
+   than `sent`, `rtt_min`, `rtt_avg`, `rtt_max` not in ascending order,
+   jitter larger than the spread between `rtt_min` and `rtt_max`,
+   samples out of order or outside the round), records outside the
+   advertised retention, records from members this operator blocked.
+   Deduplicate by member key and record `id`. These checks reject
+   malformed data; they do not judge whose numbers are right.
+2. **A vantage is (member ASN, country, provider ASN, method).** Every
+   view lists vantages separately with their own loss, RTT, and jitter
+   over time, next to the local measurements. Several nodes of one
+   identity in the same country through the same provider ASN are one
+   vantage.
+3. **Summaries count agreement, not truth.** A summary for a route over
+   a time range says how many independent vantages saw a condition, for
+   example "5 of 7 vantages see loss above 5% to 198.51.100.0/24 in the
+   last 15 minutes; 2 through provider AS64501 see none". Each vantage
+   contributes one count however many records it sent. A headline count
+   of independent vantages counts each verified identity at most once;
+   splitting the summary by country or provider ASN shows the rest.
+   Unverified members appear in rows, not in counts. No vantage
+   outranks another, and the summary links to the per-vantage rows.
+4. **Prefixes stay apart.** A record for 198.51.100.0/22 and one for
+   198.51.100.0/24 are different routes; the view for a local route
+   shows exact matches first and covering or covered routes labeled as
+   such.
+5. **Provenance on every row.** Member identity (ASN, verified or not),
+   node key, record age as of the fetch, and the signed envelope it came
+   in, so an operator can see why a summary says what it says.
+6. **Local weights only.** An operator may down-weight (hide from
+   summaries, keep visible in rows) or block (neither pulled nor shown)
+   a member. That changes only this operator's own view. There is no
+   global reputation and nothing that suppresses a member's data for
+   everyone.
 
 ## Local use
 
 Everything here is advisory.
 
-- **Probe-priority hints.** A herd target source adds prefixes that
-  several independent identities see degrading, only for prefixes that
-  are in the local RIB view, never a default route, capped like the
-  `outage` source's `max_targets`, under the global probe rate limit.
+- **Probe-priority hints.** A herd target source adds prefixes where at
+  least a minimum number of independent vantages see degradation (a
+  count, not a verdict; the minimum is an operator setting), only for
+  prefixes that are in the local RIB view, never a default route,
+  capped like the `outage` source's `max_targets`, under the global
+  probe rate limit.
   Like every source, it spends probe budget and nothing else.
 - **"My upstream or the destination."** For a local route that measures
   badly through provider A, compare with members reaching the same
@@ -431,9 +472,10 @@ Everything here is advisory.
   here points at this edge or circuit. Shown on the API and dashboard
   and added to events as a field. Not used by Decide.
 - **Outage second opinion.** When the `outage` source opens an AS or
-  circuit incident, annotate it with how many independent identities
-  see the same ASN degraded, or that none do. The annotation never
-  opens, closes, or changes an incident or its thresholds.
+  circuit incident, annotate it with how many independent vantages
+  see the same ASN degraded out of how many reported, or that none do.
+  The annotation never opens, closes, or changes an incident or its
+  thresholds.
 
 ## Hard rules
 
@@ -449,54 +491,111 @@ Everything here is advisory.
    a hard stop (the opt-in `synthesize` rails in
    [more-specific.md](more-specific.md) are unchanged and do not take
    herd input).
-5. Another member's word is never ground truth. A missing record, like
-   a missing route at RouteViews or RIS, is not proof of anything.
+5. Another member's word is never ground truth, and no member's data
+   overrides another's. A missing record, like a missing route at
+   RouteViews or RIS, is not proof of anything.
 6. Herd plugins run in-process only, like the federation plugin; they
    never announce.
 7. CI and labs never talk to a real herd: labs run their own members
    with documentation prefixes and ASNs, and no seed is configured.
+8. Herd failure or overload never affects routing, probing, or the
+   announcer. If herd is stuck, out of budget, or crashed, the instance
+   behaves exactly as if herd were off.
 
-## Lying and poisoning
+## Resource protection
 
-A member can be wrong (bad clock, broken prober, filtered ICMP) or can
-lie on purpose: fake degradation to make others spend probes or blame a
-provider, fake health to hide an outage, or invented AS paths. What the
-code can do about it:
+No member can harm another member's instance. Every limit below is
+enforced locally, by the instance being protected, and none depends on
+peers behaving. The numbers are not decided; the design fixes that each
+limit exists, is hard, and has a safe default.
 
-1. **Evidence in every record.** Raw samples with offsets, the round
-   time, and the AS path. Lying then takes a consistent fake, not a
-   single number, and mismatches are dropped at merge (above).
-2. **Spot checks from the puller's own edge.** A member re-probes a
-   small, random sample of routes that others report on, through its
-   own providers, with its normal prober chain, under a capped budget
-   inside the global probe rate limit. A different vantage sees
-   different numbers, so a spot check compares only what should agree:
-   - reachability: a route others report answering with low loss that
-     never answers here or from any other identity, or the reverse;
-   - same provider ASN and same country: members in one country
-     through one provider ASN should be close;
-   - a rough triangle check: the puller knows its RTT to the member's
-     endpoint, so `|RTT(me, P) − RTT(member, P)|` far above
-     `RTT(me, member)` is suspicious. Internet routing breaks the
-     triangle inequality often, so this is a weak signal, never a
-     verdict;
-   - AS paths: adjacencies in a claimed path that the local RIB and
-     public collectors have never shown.
-   A spot check never moves traffic; it only feeds reputation.
-3. **Reputation by agreement.** Each identity gets a weight from how
-   often its records agree with spot checks and with the consensus of
-   other identities over time. New identities start low and earn
-   weight; disagreement lowers it; it decays without fresh agreement.
-4. **Independent-ASN thresholds.** A hint, annotation, or warning needs
-   agreement from a minimum number of distinct verified identities,
-   preferably through more than one provider ASN. One identity alone
-   never triggers anything.
-5. **Outlier rejection.** Robust statistics per destination, provider
-   ASN, and vantage, as in Merging.
-6. **Blocklists.** The operator can block an identity (ASN group), a
-   key, or an endpoint locally; blocked members are neither pulled nor
-   counted. Whether the project publishes a shared blocklist is an open
-   question, since it would be a central point of trust.
+**Isolation from the core.**
+
+- Herd runs on its own goroutines with its own bounded queues, the way
+  `internal/notify` isolates notifiers. The probe loop, Decide, the RIB
+  view, and the announcers never wait on herd, never share a lock with
+  it, and never read herd state on their critical paths.
+- Writing local records is a non-blocking hand-off from the probe loop
+  into a bounded queue. When the queue is full, herd records are
+  dropped and counted; probing does not slow down.
+- Herd has its own memory budget (peer table, caches, in-flight
+  responses) and its own disk budget for local and pulled records,
+  separate from report history. When a budget is hit, herd drops the
+  oldest pulled data first, then refuses new pulled data, and never
+  touches report history or core state.
+- Herd sends no probes of its own. Hint targets go through the normal
+  source path and the global probe rate limit, with their own
+  `max_targets`-style cap, so herd can never take more than its share
+  of probe budget.
+- A panic or error inside herd stops herd, logs it, raises an event,
+  and leaves the controller running. Herd restarts with backoff.
+
+**Peers.**
+
+- Hard cap on known peers (table size) and a smaller hard cap on
+  connected or actively pulled peers.
+- Eviction when the table is full: never seeds or static peers; then
+  entries past expiry, then the longest silent, then entries from an ASN
+  already holding a slot. At most one identity's slots per ASN, so many
+  nodes under one ASN do not get more room.
+- Caps on peer entries accepted per gossip response and per relayer.
+
+**Requests (serving side).**
+
+- Global and per-identity rate limits for gossip and pull requests,
+  plus per source address before the identity is known; `429` with
+  `Retry-After` when exceeded.
+- Caps on concurrent connections (global and per identity), on
+  handshakes in progress, and on requests per connection.
+- Read, write, idle, and handshake timeouts on every connection.
+- Mutual TLS with pinned keys refuses unknown clients during the
+  handshake, before any request is parsed.
+- Requests have a byte cap and a strict parser: oversized, malformed,
+  or unknown-field requests are refused without further work.
+- Page size and response byte caps; a query that would exceed them
+  returns a partial page and a cursor. Covering and covered queries cost
+  more of the identity's budget than exact ones.
+
+**Pulling (client side).**
+
+- Hard cap on concurrent pulls, a per-interval request budget, and a
+  per-peer budget, so a large herd costs a bounded amount per interval
+  and peers are pulled in turn.
+- Response size cap enforced while reading (the read stops at the
+  cap); records per response capped; anything oversized or malformed is
+  discarded and counts as a failure for that peer.
+- Timeouts on connect and on the whole request, and exponential backoff
+  with jitter per peer after failures or `429`. A peer that keeps
+  failing is aged out (see Discovery).
+- Records pulled from one peer are capped per interval and in total, so
+  one peer cannot fill the pulled-data disk budget.
+
+**Visibility.** Every limit that trips is counted in metrics and the
+herd status API (which limit, which peer), so an operator can see who
+is costing what.
+
+## Trust
+
+Trust is about identity and provenance, not about whose numbers win.
+
+- **Identity.** One verified identity per ASN (above). Every node signs
+  its responses and peer entries; mutual TLS pins its key.
+- **Provenance.** Every record shown carries who sent it, from which
+  node, how old it was when fetched, and the signed envelope it came in.
+- **Evidence.** Records carry raw samples with offsets, the round time,
+  and the AS path, so a reader can see what a number is based on, and
+  malformed or inconsistent records are rejected (see Showing many
+  vantages).
+- **Per vantage, never merged.** Vantages legitimately differ, so a
+  member's numbers are shown as that member's, and summaries count
+  agreement across independent vantages.
+- **Local blocklist and weights.** An operator may down-weight or block
+  an identity, a key, or an endpoint. That affects only its own view.
+
+There is no global reputation. Possible later, if real use shows a
+need, and only as a local view setting: re-probing a sample of routes
+from the operator's own edge to compare with a member's reports, or a
+local agreement score per member.
 
 **Why not remote attestation.** TPM or enclave attestation can prove
 which binary started, not that its inputs are honest. Packeteer is open
@@ -505,8 +604,8 @@ fed a fake prober (the `fixed` prober exists for labs, and `exec`
 probers run anything), a modified kernel, or a network that delays or
 drops probes on purpose. Attestation would also need vendor trust roots
 and hardware most container deployments do not expose, against the
-one-container rule. Herd therefore treats every member as able to lie
-and relies on evidence, cross-checks, and independent agreement.
+one-container rule. Herd shows every member's data as that member's
+claim and leaves interpretation to the operator.
 
 ## Phased plan
 
@@ -518,30 +617,71 @@ No phase changes Decide.
 Per-round records in the storage plugin with retention (30 to 365
 days); data classes and target-origin opt-ins; preview mode and the
 served-response audit; the pull API with signed responses, mutual TLS
-pinned to per-node keys, pagination, and rate limits; pulling from a
-static list of peers with pinned keys; merged view on a read-only API
-endpoint. No discovery, no RPKI identity (static peers are trusted by
-pinned key), no hints. Proof: unit tests that nothing on the
-never-shared list can reach a response, that preview equals the served
-bytes, that retention deletes, that a tampered or replayed response is
-refused; a test that decisions are identical with herd on and off for
-the same local measurements; a lab with three members on documentation
-prefixes and ASNs.
+pinned to per-node keys, and pagination; pulling from a static list of
+peers with pinned keys; a per-vantage view on a read-only API endpoint.
+Every resource limit in Resource protection that applies to serving and
+pulling ships in this phase, not later. No discovery, no RPKI identity
+(static peers are trusted by pinned key), no hints.
+
+Acceptance:
+
+- Off by default; with herd off, nothing is stored, served, or pulled.
+- Nothing on the never-shared list can reach a response (tests per
+  field and per source class); preview equals the served bytes;
+  retention deletes; a tampered, replayed, or wrongly signed response is
+  refused.
+- Decisions are identical with herd on and off for the same local
+  measurements.
+- Isolation: with a peer that never answers, answers slowly, or floods,
+  probe rounds finish on time, decisions and withdrawals are not
+  delayed, and the announcer is unaffected (asserted in the lab, with
+  the existing SIGTERM and SIGKILL withdraw checks still passing).
+- A herd panic or blocked herd queue leaves probing and BGP running.
+- Serving limits: requests over the per-identity and global rate get
+  `429`; concurrent connections stop at the cap; oversized and
+  malformed requests are refused without allocation beyond the cap;
+  slow clients are cut off by timeouts; page and response byte caps
+  hold.
+- Pulling limits: an oversized or endless response is cut at the cap
+  and discarded; concurrent pulls and per-interval budget hold; backoff
+  grows after failures and `429`.
+- Memory and disk: under a flood of valid records, herd memory and disk
+  stay within their budgets, the oldest pulled data is dropped first,
+  and report history is untouched.
+- A lab with three members on documentation prefixes and ASNs.
 
 **Phase 2: discovery, identity, and hints.** Seeds and peer exchange,
-liveness and aging, RSC identity and per-ASN grouping, the crowd
-threshold for user-derived targets, reputation and spot checks, and the
-three local uses (hint source, attribution, outage annotation). Proof:
-lab with Sybil nodes under one ASN counting once, an eclipse attempt
-held off by anchors, a hinted prefix probed and never announced without
-local thresholds, and a lying member losing weight.
+liveness and aging, RSC identity with one identity per ASN, the crowd
+threshold for user-derived targets, the independent-vantage summaries,
+local blocklist and weights, and the three local uses (hint source,
+attribution, outage annotation).
+
+Acceptance:
+
+- Peer table: the known and connected caps hold under a gossip flood;
+  eviction follows the stated order; seeds and static peers are never
+  evicted; per-relayer and per-response entry caps hold.
+- Many nodes under one ASN get one identity's slots and budget, and
+  count as one vantage per location and provider.
+- Gossip rate limits hold per peer and globally; malformed or
+  oversized peer entries are refused.
+- Silent peers age out; expired and `leaving` entries are dropped.
+- A hinted prefix is probed within its cap and never announced without
+  local measurements passing the normal thresholds.
+- A local block or down-weight changes only the local view.
 
 **Phase 3: route-visibility warnings.** The `visibility` class and
 warnings from the issue: a route visible at some members and missing at
 others while the provider's own space is present; an origin or AS path
 that does not match the local RIB (leak or hijack hint); a more-specific
-seen elsewhere that no local neighbor advertises. Events only. Optional
-DHT if membership size calls for it.
+seen elsewhere that no local neighbor advertises. Events only, each
+stating how many independent vantages saw it. Optional DHT if
+membership size calls for it, with the same peer, request, and memory
+limits applied to DHT traffic.
+
+Acceptance: warnings are events only, carry vantage counts and
+provenance, and the phase 1 isolation tests still pass with visibility
+data flowing.
 
 ## Open questions for Andrew
 
@@ -549,7 +689,8 @@ DHT if membership size calls for it.
    a fallback list compiled into releases acceptable?
 2. **Identity.** Is RSC (RFC 9323) the required proof, with IRR or
    PeeringDB as weaker tiers, and may operators without an ASN join
-   unverified with zero weight? How should the container validate RPKI?
+   unverified (shown, not counted)? How should the container validate
+   RPKI objects?
 3. **k.** What value for the crowd threshold, and should it apply to
    every target origin or only flow and span?
 4. **Listing or query-only** as the default, given that one exposes the
@@ -567,9 +708,12 @@ DHT if membership size calls for it.
 10. **HA and multi-POP.** One node per HA pair serving from the active
     instance only? Each POP its own node under the operator's one
     identity?
-11. **Shared blocklist.** Should the project publish one, knowing it
-    becomes a central point of trust?
-12. **Charter.** Herd sends data off the box. Should AGENTS.md gain a
+11. **Limit defaults.** Starting values for the peer caps, rate limits,
+    response caps, and memory and disk budgets. They should come from a
+    lab load test, not from guesses.
+12. **Hint minimum.** Default minimum number of independent vantages
+    before a hint adds a probe target.
+13. **Charter.** Herd sends data off the box. Should AGENTS.md gain a
     safety line for it (off by default, never-shared list, advisory
     only) when phase 1 starts?
-13. **Placement.** After the v0.6 parity milestone, or interleaved?
+14. **Placement.** After the v0.6 parity milestone, or interleaved?
