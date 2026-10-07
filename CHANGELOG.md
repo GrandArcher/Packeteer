@@ -6,6 +6,8 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 
 ### Fixed
 
+- Improved prefixes stay probe targets (#116). While an improvement is active, its prefix stays in the probe set with the last host and interval after every configured source drops it (for example it falls out of flow `top_n`). It is not withdrawn for that. It still withdraws on flip-back, `improvement_ttl`, a provider that is down or unusable, a confirmed RIB leave, policy, the allowlist, stale measurements, probe-source loss, RIB session loss, and shutdown. When the improvement retires and no source lists the prefix, the next completed round drops the target. Observe stays the default. Rollback: revert this change; a prefix that leaves every source is then withdrawn on the next decision instead of staying probed.
+
 - Flow probe hosts are candidates, not pins (#113). The busiest destination in a flow prefix, and a problem address, is probed first, then the automatic in-prefix addresses and a usable provider next hop, at most four per provider. A silent address drops out of the score when another address inside the prefix answers, so one eyeball or NAT address that ignores ICMP and TCP/443 no longer makes every provider look like 100% loss. An operator `host` on `static`, `vip`, or `traceroute` is still the only address probed. Nothing is announced. Every packet still waits on `probe.rate_limit_pps`. Rollback: none needed; the previous behavior pinned the flow host and skipped the other addresses.
 
 ### Added

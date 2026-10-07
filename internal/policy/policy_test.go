@@ -202,7 +202,10 @@ func TestActiveImprovementSafetyRetirements(t *testing.T) {
 		{"provider excluded", func(_ *Input, c *Config) { c.Excluded = map[string]bool{"b": true} }, at, "excluded"},
 		{"allowlist no longer covers", func(_ *Input, c *Config) { c.Mode = "inject"; c.Allowlist = []netip.Prefix{pB} }, at, "not allowlisted"},
 		{"rib session lost", func(i *Input, _ *Config) { i.RIBReady = false }, at, "rib not ready"},
-		{"prefix no longer probed", func(i *Input, _ *Config) { i.Results = results(at, pB, ms...) }, at, "no longer probed"},
+		// The probe engine keeps an improved prefix in the target set when
+		// its source drops it. This case is the backstop: the prefix has
+		// no measurement at all, so the improvement cannot be re-checked.
+		{"no measurement for the improved prefix", func(i *Input, _ *Config) { i.Results = results(at, pB, ms...) }, at, "no longer probed"},
 		{"ttl expired", func(_ *Input, c *Config) { c.ImprovementTTL = 30 * time.Minute }, t0.Add(31 * time.Minute), "ttl"},
 	}
 	for _, tt := range tests {

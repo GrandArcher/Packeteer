@@ -191,7 +191,7 @@ func TestHungProberStalenessWithdraws(t *testing.T) {
 				in.Native[pfx] = "transit-a"
 			}
 		}
-		runDecision(now, decider, in, ctl, log, "inject")
+		runDecision(now, decider, in, ctl, log, "inject", nil)
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
