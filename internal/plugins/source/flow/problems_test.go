@@ -81,7 +81,7 @@ func TestFlowProblemsFromNetFlowV5(t *testing.T) {
 	if len(ts) != 3 {
 		t.Fatalf("targets = %+v", ts)
 	}
-	if ts[0].Prefix.String() != "203.0.113.0/24" || ts[0].Host != bad || ts[0].Weight != 3.5 {
+	if ts[0].Prefix.String() != "203.0.113.0/24" || ts[0].Host != bad || ts[0].Weight != 3.5 || !ts[0].Candidate || ts[0].Pinned {
 		t.Fatalf("problem target = %+v", ts[0])
 	}
 	if ts[1].Prefix.String() != "198.51.100.0/24" || ts[1].Weight <= 100 {

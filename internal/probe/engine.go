@@ -392,15 +392,21 @@ func (e *Engine) gatherTargets(ctx context.Context) ([]plugin.Target, bool) {
 			if !t.Prefix.IsValid() {
 				continue
 			}
-			// A named host is a pin. An empty host stays the representative
-			// address for scheduling, and the probe round spreads it.
-			explicit := t.Host.IsValid()
-			if !explicit {
+			// A named host is a pin, unless the source marked it as a
+			// candidate (the flow busiest destination). An empty host
+			// stays the representative address for scheduling, and the
+			// probe round spreads it. A candidate is probed first and
+			// is not the only address.
+			candidate := t.Candidate && t.Host.IsValid()
+			explicit := t.Host.IsValid() && !candidate
+			if !t.Host.IsValid() {
 				t.Host = DefaultHost(t.Prefix)
 			}
 			t.Pinned = explicit
-			// The first explicit host stays. A later source can replace
-			// only a default host, and can shorten the interval. A stored
+			t.Candidate = candidate
+			// The first explicit host stays. A later pin replaces a
+			// default or a candidate. A later candidate replaces only a
+			// default. A later source can shorten the interval. A stored
 			// interval of zero means the engine interval, so a longer VIP
 			// interval does not slow a prefix that static or flow already
 			// listed.
@@ -412,6 +418,10 @@ func (e *Engine) gatherTargets(ctx context.Context) ([]plugin.Target, bool) {
 				if t.Pinned && !out[i].Pinned {
 					out[i].Host = t.Host
 					out[i].Pinned = true
+					out[i].Candidate = false
+				} else if !out[i].Pinned && !out[i].Candidate && t.Candidate {
+					out[i].Host = t.Host
+					out[i].Candidate = true
 				}
 				continue
 			}
@@ -610,11 +620,13 @@ func (e *Engine) runRound(ctx context.Context, allow func(plugin.Target) bool, m
 			if p.Source.Is4() != t.Host.Is4() {
 				continue // provider cannot reach this address family
 			}
-			var pin netip.Addr
+			var pin, candidate netip.Addr
 			if t.Pinned {
 				pin = t.Host
+			} else if t.Candidate {
+				candidate = t.Host
 			}
-			hosts := ProbeHosts(t.Prefix, pin, p.NextHop, p.Source)
+			hosts := ProbeHosts(t.Prefix, pin, candidate, p.NextHop, p.Source)
 			if len(hosts) == 0 {
 				continue
 			}
@@ -805,10 +817,13 @@ func (e *Engine) sem(a netip.Addr) chan struct{} {
 }
 
 // probe measures every host for one provider and prefix and stores one
-// result. A named host is probed alone. Otherwise a silent in-prefix host
-// is left out of the score when another in-prefix host answered, and the
-// far-side gateway counts only when every in-prefix host was silent.
-// Traceroute hop times are not used. A dead probe source fails closed.
+// result. A pinned host is probed alone. A flow candidate is probed
+// first, then the automatic in-prefix hosts and a usable far-side
+// gateway, at most four. A silent in-prefix host is left out of the
+// score when another in-prefix host answered, and the far-side gateway
+// counts only when every in-prefix host was silent. Traceroute hop
+// times are not used. A dead probe source fails closed. Every packet
+// waits on the global rate limit inside probeOne.
 func (e *Engine) probe(ctx context.Context, j job) (Result, bool) {
 	hosts := j.hosts
 	if len(hosts) == 0 && j.target.Host.IsValid() {

@@ -75,6 +75,10 @@ func TestRecordedNetFlowV5(t *testing.T) {
 	if ts[0].Prefix.String() != "203.0.113.0/24" || ts[0].Host.String() != "203.0.113.10" || ts[0].Weight != 1024 {
 		t.Fatalf("target = %+v", ts[0])
 	}
+	// The busiest destination is a candidate. The source does not pin it.
+	if !ts[0].Candidate || ts[0].Pinned {
+		t.Fatalf("flow host treated as a pin: %+v", ts[0])
+	}
 }
 
 func TestNetFlowV5SamplingTopNExcludeAndWindow(t *testing.T) {
@@ -436,10 +440,10 @@ func TestMergedWithStatic(t *testing.T) {
 	if len(ts) != 2 {
 		t.Fatalf("merged = %+v", ts)
 	}
-	if ts[0].Prefix.String() != "198.51.100.0/24" || ts[0].Host.String() != "198.51.100.9" {
+	if ts[0].Prefix.String() != "198.51.100.0/24" || ts[0].Host.String() != "198.51.100.9" || !ts[0].Pinned || ts[0].Candidate {
 		t.Fatalf("static should win the duplicate: %+v", ts[0])
 	}
-	if ts[1].Prefix.String() != "203.0.113.0/24" || ts[1].Host.String() != "203.0.113.5" || ts[1].Weight != 80 {
+	if ts[1].Prefix.String() != "203.0.113.0/24" || ts[1].Host.String() != "203.0.113.5" || ts[1].Weight != 80 || ts[1].Pinned || !ts[1].Candidate {
 		t.Fatalf("flow-only = %+v", ts[1])
 	}
 }

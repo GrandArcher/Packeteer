@@ -98,6 +98,8 @@ scorer:
 #         - prefix: 203.0.113.0/24
 #   - type: flow
 #     config:
+#       # The busiest destination is a probe candidate, not a pin: it is
+#       # probed first, then a few addresses in the prefix and the next hop.
 #       listen:
 #         - "0.0.0.0:2055"            # NetFlow v5/v9 and IPFIX
 #         - "0.0.0.0:6343"            # sFlow

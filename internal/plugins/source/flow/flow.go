@@ -3,9 +3,10 @@
 // It listens for NetFlow v5, NetFlow v9, IPFIX, and sFlow v5, sums destination
 // bytes over a sliding window, and returns the busiest prefixes. Each
 // destination is mapped through SetPrefixLookup when that returns a covering
-// prefix; otherwise it is aggregated to aggregate_v4 or aggregate_v6. Raw flow
-// records are not stored: only per-bucket counters and the templates needed to
-// decode NetFlow v9 and IPFIX.
+// prefix; otherwise it is aggregated to aggregate_v4 or aggregate_v6. The
+// busiest destination is a probe candidate, not a pin. Raw flow records are
+// not stored: only per-bucket counters and the templates needed to decode
+// NetFlow v9 and IPFIX.
 //
 // With a problems block it also scores remote prefixes by TCP flags on
 // unsampled NetFlow v5, v9, and IPFIX records (internal/passive): outbound
@@ -557,9 +558,7 @@ func (s *Source) Targets(context.Context) ([]plugin.Target, error) {
 	if s.prob != nil {
 		for _, p := range s.prob.win.Problems(now, s.prob.th, s.prob.maxTargets) {
 			t := plugin.Target{Prefix: p.Prefix, Weight: p.Score}
-			if p.Host.IsValid() && p.Prefix.Contains(p.Host) {
-				t.Host = p.Host
-			}
+			setFlowHost(&t, p.Host)
 			out = append(out, t)
 			listed[p.Prefix] = true
 		}
@@ -570,12 +569,20 @@ func (s *Source) Targets(context.Context) ([]plugin.Target, error) {
 			continue
 		}
 		t := plugin.Target{Prefix: r.prefix, Weight: float64(r.bytes)}
-		if r.host.IsValid() && r.prefix.Contains(r.host) {
-			t.Host = r.host
-		}
+		setFlowHost(&t, r.host)
 		out = append(out, t)
 	}
 	return out, nil
+}
+
+// setFlowHost records the busiest destination, or a problem address, as
+// a probe candidate. It is not a pin: the engine probes it first, then
+// the automatic in-prefix hosts and a usable provider next hop.
+func setFlowHost(t *plugin.Target, host netip.Addr) {
+	if host.IsValid() && t.Prefix.Contains(host) {
+		t.Host = host
+		t.Candidate = true
+	}
 }
 
 func (s *Source) ingest(at time.Time, exporter netip.Addr, payload []byte) {
