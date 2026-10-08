@@ -75,9 +75,9 @@ func TestExchangePeerRouteCheck(t *testing.T) {
 
 	hops := v.NextHops([]netip.Prefix{netip.MustParsePrefix("203.0.113.0/24")})
 	want := []NextHopCount{
-		{NextHop: netip.MustParseAddr("203.0.113.11"), Prefixes: 1, ASN: 64501},
-		{NextHop: netip.MustParseAddr("203.0.113.12"), Prefixes: 1, ASN: 64502},
-		{NextHop: netip.MustParseAddr("203.0.113.13"), Prefixes: 1, ASN: 64503},
+		{NextHop: netip.MustParseAddr("203.0.113.11"), Prefixes: 1, ASN: 64501, Via: ViaUnknown},
+		{NextHop: netip.MustParseAddr("203.0.113.12"), Prefixes: 1, ASN: 64502, Via: ViaUnknown},
+		{NextHop: netip.MustParseAddr("203.0.113.13"), Prefixes: 1, ASN: 64503, Via: ViaUnknown},
 	}
 	if !slices.Equal(hops, want) {
 		t.Fatalf("next hops = %+v", hops)

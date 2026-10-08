@@ -143,6 +143,8 @@ type LearnedPath struct {
 	Selected bool     `json:"selected,omitempty"`
 	MED      *uint32  `json:"med,omitempty"`
 	MEDFrom  string   `json:"med_from,omitempty"`
+	// Via is route_server, bilateral, or unknown (#146). Display only.
+	Via string `json:"via,omitempty"`
 }
 
 // ASNNode is one origin ASN on the map of measured prefixes.
@@ -673,6 +675,7 @@ func learnedPaths(best rib.Route, have bool, paths []rib.Route) []LearnedPath {
 			PathID:   rt.PathID,
 			MED:      rt.MED,
 			MEDFrom:  rt.MEDFrom,
+			Via:      rt.Via,
 		}
 		if rt.NextHop.IsValid() {
 			lp.NextHop = rt.NextHop.String()

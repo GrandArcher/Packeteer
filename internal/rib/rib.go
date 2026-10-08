@@ -90,8 +90,14 @@ type Options struct {
 	// PeerASN lists exchange peers (#27) with their AS. A peer is always
 	// route-checked: it passes only with a path for the exact prefix whose
 	// first AS is its own, from iBGP (add-path) or from BMP on a router
-	// that reports the peer up. No visible path means no route.
+	// that reports the peer up. No visible path means no route. It does
+	// not mean the peer is a route server (#146).
 	PeerASN map[string]uint32
+	// LANs are the exchange peering LAN prefixes (#146). They are used
+	// only to tell a route-server path from a bilateral one. Empty means
+	// no exchange LAN is known, so a BMP neighbor that is not the next
+	// hop stays unknown.
+	LANs []netip.Prefix
 	// FlowSpec adds the IPv4 and IPv6 FlowSpec families (RFC 8955) to
 	// every session, so the mitigation announcer can send FlowSpec rules
 	// (#28). The view never reads FlowSpec paths.
@@ -117,6 +123,19 @@ const (
 	SourceBMP  = "bmp"
 )
 
+// Session types (#146). Display only: path selection, the route check,
+// and the decision never read them.
+const (
+	// ViaRouteServer is a BMP path whose neighbor sits on an exchange LAN
+	// and is not the path's next hop. The neighbor is the route server.
+	ViaRouteServer = "route_server"
+	// ViaBilateral is a BMP path whose neighbor address is the next hop.
+	ViaBilateral = "bilateral"
+	// ViaUnknown is an iBGP add-path path or a Loc-RIB path that BMP has
+	// not confirmed, or BMP paths for the same next hop that disagree.
+	ViaUnknown = "unknown"
+)
+
 // Route is a path a configured neighbor is advertising for a prefix.
 type Route struct {
 	Prefix   netip.Prefix `json:"prefix"`
@@ -139,8 +158,12 @@ type Route struct {
 	// Exit choice stays probes plus cost and commit.
 	MED *uint32 `json:"med,omitempty"`
 	// MEDFrom names who advertised this MED. A route server's MED is that
-	// server's value, so the label names the server, not the origin AS.
+	// server's value, so the label names the BMP neighbor on the exchange
+	// LAN, not the member the next hop belongs to. Display only.
 	MEDFrom string `json:"med_from,omitempty"`
+	// Via is how the edge learned this path: ViaRouteServer, ViaBilateral,
+	// or ViaUnknown. Display only.
+	Via string `json:"via,omitempty"`
 
 	localPref uint32 // selection only; 100 when the attribute is absent
 }
@@ -201,6 +224,13 @@ func New(opt Options) (*View, error) {
 	if opt.Logger == nil {
 		opt.Logger = slog.Default()
 	}
+	lans := make([]netip.Prefix, 0, len(opt.LANs))
+	for _, l := range opt.LANs {
+		if l.IsValid() {
+			lans = append(lans, l.Masked())
+		}
+	}
+	opt.LANs = lans
 	v := &View{opt: opt, log: opt.Logger, routes: map[netip.Prefix]Route{},
 		adj: map[netip.Prefix]map[adjKey]Route{}, bmp: map[netip.Prefix]map[bmpPathKey]Route{},
 		bmpPeers: map[bmpKey]bool{}, provNH: map[string]netip.Addr{},
@@ -586,9 +616,6 @@ func (v *View) applyPath(p *api.Path) bool {
 		Neighbor: neighbor, Age: time.Now(), Source: SourceIBGP, PathID: key.id, localPref: lp,
 		MED: med,
 	}
-	if med != nil {
-		rt.MEDFrom = v.medFrom(SourceIBGP, neighbor, netip.Addr{}, provider, false)
-	}
 	v.adj[prefix][key] = rt
 	return v.republishLocked(prefix)
 }
@@ -680,6 +707,7 @@ func (v *View) forgetNeighborLocked(addr netip.Addr) bool {
 // republishLocked sets the published route for p from the remaining
 // iBGP and BMP paths. Caller holds mu.
 func (v *View) republishLocked(p netip.Prefix) bool {
+	v.annotatePrefixLocked(p)
 	best, ok := v.selectLocked(p)
 	if !ok {
 		if _, exists := v.routes[p]; !exists {
@@ -784,7 +812,7 @@ func sameRoute(a, b Route) bool {
 	return a.Prefix == b.Prefix && a.NextHop == b.NextHop && a.Provider == b.Provider &&
 		a.Neighbor == b.Neighbor && a.localPref == b.localPref && slices.Equal(a.ASPath, b.ASPath) &&
 		a.Source == b.Source && a.Router == b.Router && a.LocRIB == b.LocRIB && a.PathID == b.PathID &&
-		medEqual(a.MED, b.MED) && a.MEDFrom == b.MEDFrom
+		medEqual(a.MED, b.MED) && a.MEDFrom == b.MEDFrom && a.Via == b.Via
 }
 
 func medEqual(a, b *uint32) bool {
@@ -799,35 +827,158 @@ func medPtr(v uint32) *uint32 {
 	return &m
 }
 
-// medFrom names the speaker that advertised this MED, and the provider or
-// route server the path belongs to. A route server's MED is that server's
-// value, so PeerASN providers are labeled as the route server.
-func (v *View) medFrom(source string, neighbor, router netip.Addr, provider string, locRIB bool) string {
-	var who string
+// annotatePrefixLocked sets Via and MEDFrom on every path for p.
+// A BMP neighbor on an exchange LAN that is not the next hop is the
+// route server and is labeled with that neighbor, not the member.
+// A neighbor equal to the next hop is bilateral. An iBGP add-path path
+// or a Loc-RIB path stays unknown unless the BMP paths for the same
+// next hop agree on one type. Caller holds mu.
+func (v *View) annotatePrefixLocked(p netip.Prefix) {
+	conf := map[netip.Addr]*viaConfirm{}
+	for k, rt := range v.bmp[p] {
+		if rt.LocRIB {
+			continue
+		}
+		via, rs := v.classifyBMP(rt)
+		rt.Via = via
+		rt.MEDFrom = medLabel(rt, via, rs)
+		v.bmp[p][k] = rt
+		c := conf[rt.NextHop.Unmap()]
+		if c == nil {
+			c = &viaConfirm{}
+			conf[rt.NextHop.Unmap()] = c
+		}
+		c.add(via, rs)
+	}
+	for k, rt := range v.adj[p] {
+		v.adj[p][k] = applyConfirmed(rt, conf[rt.NextHop.Unmap()])
+	}
+	for k, rt := range v.bmp[p] {
+		if rt.LocRIB {
+			v.bmp[p][k] = applyConfirmed(rt, conf[rt.NextHop.Unmap()])
+		}
+	}
+}
+
+// classifyBMP reports the session type of one Adj-RIB-In BMP path.
+// rs is the route server's address when via is ViaRouteServer.
+func (v *View) classifyBMP(rt Route) (via string, rs netip.Addr) {
+	nb, nh := rt.Neighbor.Unmap(), rt.NextHop.Unmap()
+	if nb.IsValid() && nb == nh {
+		return ViaBilateral, netip.Addr{}
+	}
+	if nb.IsValid() && v.onLAN(nb) {
+		return ViaRouteServer, nb
+	}
+	return ViaUnknown, netip.Addr{}
+}
+
+func (v *View) onLAN(a netip.Addr) bool {
+	if !a.IsValid() {
+		return false
+	}
+	a = a.Unmap()
+	for _, l := range v.opt.LANs {
+		if l.Contains(a) {
+			return true
+		}
+	}
+	return false
+}
+
+// viaConfirm is the BMP evidence for one next hop.
+type viaConfirm struct {
+	bilateral bool
+	rs        map[netip.Addr]struct{}
+}
+
+func (c *viaConfirm) add(via string, rs netip.Addr) {
+	switch via {
+	case ViaBilateral:
+		c.bilateral = true
+	case ViaRouteServer:
+		if c.rs == nil {
+			c.rs = map[netip.Addr]struct{}{}
+		}
+		if rs.IsValid() {
+			c.rs[rs] = struct{}{}
+		}
+	}
+}
+
+// result is the session type BMP agrees on. Several route servers still
+// confirm route_server; the address is set only when they are the same
+// neighbor, so the label does not pick a member.
+func (c *viaConfirm) result() (string, netip.Addr) {
+	if c == nil {
+		return ViaUnknown, netip.Addr{}
+	}
 	switch {
-	case source == SourceBMP && locRIB:
-		who = "loc-rib"
-		if router.IsValid() {
-			who += " " + router.String()
+	case len(c.rs) > 0 && c.bilateral:
+		return ViaUnknown, netip.Addr{}
+	case len(c.rs) == 1:
+		var rs netip.Addr
+		for a := range c.rs {
+			rs = a
 		}
-	case source == SourceBMP:
-		who = "peer"
-		if neighbor.IsValid() {
-			who += " " + neighbor.String()
-		}
+		return ViaRouteServer, rs
+	case len(c.rs) > 1:
+		return ViaRouteServer, netip.Addr{}
+	case c.bilateral:
+		return ViaBilateral, netip.Addr{}
 	default:
-		who = "iBGP"
-		if neighbor.IsValid() {
-			who += " " + neighbor.String()
+		return ViaUnknown, netip.Addr{}
+	}
+}
+
+func applyConfirmed(rt Route, c *viaConfirm) Route {
+	via, rs := c.result()
+	rt.Via = via
+	rt.MEDFrom = medLabel(rt, via, rs)
+	return rt
+}
+
+// medLabel names the speaker that advertised this MED. A route server is
+// labeled with its neighbor address. An exchange peer is not called a
+// route server unless the path came through one.
+func medLabel(rt Route, via string, rs netip.Addr) string {
+	if rt.MED == nil {
+		return ""
+	}
+	who := speaker(rt)
+	if via == ViaRouteServer {
+		if rs.IsValid() {
+			return fmt.Sprintf("%s, route server %s", who, rs)
 		}
+		return who + ", route server"
 	}
-	if asn, ok := v.opt.PeerASN[provider]; ok && provider != "" {
-		return fmt.Sprintf("%s, route server %s AS%d", who, provider, asn)
-	}
-	if provider != "" {
-		return who + ", " + provider
+	if rt.Provider != "" {
+		return who + ", " + rt.Provider
 	}
 	return who
+}
+
+func speaker(rt Route) string {
+	switch {
+	case rt.Source == SourceBMP && rt.LocRIB:
+		who := "loc-rib"
+		if rt.Router.IsValid() {
+			who += " " + rt.Router.String()
+		}
+		return who
+	case rt.Source == SourceBMP:
+		who := "peer"
+		if rt.Neighbor.IsValid() {
+			who += " " + rt.Neighbor.String()
+		}
+		return who
+	default:
+		who := "iBGP"
+		if rt.Neighbor.IsValid() {
+			who += " " + rt.Neighbor.String()
+		}
+		return who
+	}
 }
 
 // ---- BMP ----
@@ -967,9 +1118,6 @@ func (v *View) applyBMPLocked(key bmpKey, peer plugin.RIBPeer, p plugin.RIBPath)
 	rt := Route{Prefix: prefix, NextHop: nh, Provider: provider, ASPath: slices.Clone(p.ASPath),
 		Neighbor: key.peer, Age: time.Now(), Source: SourceBMP, Router: key.router, LocRIB: key.locRIB, PathID: p.PathID,
 		MED: p.MED}
-	if p.MED != nil {
-		rt.MEDFrom = v.medFrom(SourceBMP, key.peer, key.router, provider, key.locRIB)
-	}
 	v.bmp[prefix][pk] = rt
 	return v.republishLocked(prefix)
 }
@@ -1109,6 +1257,10 @@ type NextHopCount struct {
 	Prefixes int        `json:"prefixes"`
 	// ASN is the most common first AS on those paths (0 if none).
 	ASN uint32 `json:"asn,omitempty"`
+	// Via is the session type seen for this next hop (#146):
+	// route_server, bilateral, or unknown when the paths disagree or
+	// only iBGP add-path has been seen. Display only.
+	Via string `json:"via,omitempty"`
 }
 
 // maxSuggestNextHops caps how many undiscovered next hops one read
@@ -1171,8 +1323,10 @@ func (v *View) SuggestNextHops(configured []netip.Addr, lans []netip.Prefix) []N
 
 func (v *View) countNextHops(keep func(netip.Addr) bool) []NextHopCount {
 	type acc struct {
-		prefixes map[netip.Prefix]bool
-		asns     map[uint32]int
+		prefixes    map[netip.Prefix]bool
+		asns        map[uint32]int
+		routeServer bool
+		bilateral   bool
 	}
 	hops := map[netip.Addr]*acc{}
 	add := func(rt Route) {
@@ -1188,6 +1342,12 @@ func (v *View) countNextHops(keep func(netip.Addr) bool) []NextHopCount {
 		a.prefixes[rt.Prefix] = true
 		if len(rt.ASPath) > 0 {
 			a.asns[rt.ASPath[0]]++
+		}
+		switch rt.Via {
+		case ViaRouteServer:
+			a.routeServer = true
+		case ViaBilateral:
+			a.bilateral = true
 		}
 	}
 	v.mu.RLock()
@@ -1206,7 +1366,7 @@ func (v *View) countNextHops(keep func(netip.Addr) bool) []NextHopCount {
 	v.mu.RUnlock()
 	out := make([]NextHopCount, 0, len(hops))
 	for nh, a := range hops {
-		c := NextHopCount{NextHop: nh, Prefixes: len(a.prefixes)}
+		c := NextHopCount{NextHop: nh, Prefixes: len(a.prefixes), Via: hopVia(a.routeServer, a.bilateral)}
 		best := 0
 		for asn, n := range a.asns {
 			if n > best || (n == best && asn < c.ASN) {
@@ -1216,6 +1376,21 @@ func (v *View) countNextHops(keep func(netip.Addr) bool) []NextHopCount {
 		out = append(out, c)
 	}
 	return out
+}
+
+// hopVia collapses the session types seen for one next hop. Mixed
+// evidence stays unknown rather than calling the peer a route server.
+func hopVia(routeServer, bilateral bool) string {
+	switch {
+	case routeServer && bilateral:
+		return ViaUnknown
+	case routeServer:
+		return ViaRouteServer
+	case bilateral:
+		return ViaBilateral
+	default:
+		return ViaUnknown
+	}
 }
 
 // addPathUpLocked reports whether some established session negotiated

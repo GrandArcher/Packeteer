@@ -1663,9 +1663,13 @@ func newRIB(cfg *config.Config, log *slog.Logger) (*rib.View, error) {
 		return nil, err
 	}
 	warnBMPSelfFilter(log, usage, own)
+	var lans []netip.Prefix
+	for _, ex := range cfg.Exchanges {
+		lans = append(lans, ex.ExchangeLANs()...)
+	}
 	return rib.New(rib.Options{ASN: cfg.ASN, RouterID: rid, ListenPort: listen,
 		ListenAddresses: cfg.BGP.ListenAddresses, Neighbors: nbrs, Providers: providers, BMP: usage,
-		AddPath: addPath, OwnCommunity: own, Egress: egress, PeerASN: peerASN, Logger: log})
+		AddPath: addPath, OwnCommunity: own, Egress: egress, PeerASN: peerASN, LANs: lans, Logger: log})
 }
 
 // ribNeighbors is the iBGP sessions and, from each neighbor's providers,

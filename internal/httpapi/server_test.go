@@ -444,7 +444,7 @@ func TestDashboardIsLocal(t *testing.T) {
 		t.Fatal(err)
 	}
 	script := string(js)
-	for _, want := range []string{"textContent", "REFRESH_MS", "/api/prefixes", "/api/improvements", "/api/providers", "setInterval", "/api/reports", "format=", "/api/mitigations", "renderMitigation", "/api/federation", "renderFederation", "renderASNMap", "Whose MED"} {
+	for _, want := range []string{"textContent", "REFRESH_MS", "/api/prefixes", "/api/improvements", "/api/providers", "setInterval", "/api/reports", "format=", "/api/mitigations", "renderMitigation", "/api/federation", "renderFederation", "renderASNMap", "Whose MED", "fmtVia"} {
 		if !strings.Contains(script, want) {
 			t.Errorf("app.js missing %q", want)
 		}

@@ -34,8 +34,9 @@ func TestMEDDisplayAndASNMap(t *testing.T) {
 					Neighbor: netip.MustParseAddr("192.0.2.254"), Source: rib.SourceIBGP, PathID: 2,
 					ASPath: []uint32{64496, 64500}, MED: &medB, MEDFrom: "iBGP 192.0.2.254, transit-a"},
 				{Prefix: p198, NextHop: netip.MustParseAddr("203.0.113.11"), Provider: "transit-a",
-					Neighbor: netip.MustParseAddr("203.0.113.11"), Source: rib.SourceBMP, PathID: 7,
-					ASPath: []uint32{64501, 64500}, MED: &medRS, MEDFrom: "peer 203.0.113.11, route server transit-a AS64501"},
+					Neighbor: netip.MustParseAddr("203.0.113.1"), Source: rib.SourceBMP, PathID: 7,
+					ASPath: []uint32{64501, 64500}, MED: &medRS, MEDFrom: "peer 203.0.113.1, route server 203.0.113.1",
+					Via: rib.ViaRouteServer},
 			},
 			p203: {
 				{Prefix: p203, NextHop: netip.MustParseAddr("192.0.2.1"), Provider: "transit-a",
@@ -72,6 +73,9 @@ func TestMEDDisplayAndASNMap(t *testing.T) {
 		}
 		if path.NextHop == "192.0.2.5" && (path.MED == nil || *path.MED != 0) {
 			t.Fatalf("med 0 dropped: %+v", path)
+		}
+		if path.NextHop == "203.0.113.11" && path.Via != rib.ViaRouteServer {
+			t.Fatalf("via dropped: %+v", path)
 		}
 	}
 	if selected != 1 || inactive != 2 {

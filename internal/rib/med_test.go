@@ -42,6 +42,7 @@ func TestMEDIsDisplayOnly(t *testing.T) {
 		},
 		PeerASN: map[string]uint32{"ix-rs": 64501},
 		BMP:     map[string]string{"transit-a": BMPPrefer, "ix-rs": BMPPrefer},
+		LANs:    []netip.Prefix{netip.MustParsePrefix("203.0.113.0/24")},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -62,8 +63,8 @@ func TestMEDIsDisplayOnly(t *testing.T) {
 	if !ok || best.NextHop.String() != "192.0.2.1" || best.MED == nil || *best.MED != 500 {
 		t.Fatalf("selected = %+v %v", best, ok)
 	}
-	if best.MEDFrom != "iBGP 192.0.2.254, transit-a" {
-		t.Fatalf("med label = %q", best.MEDFrom)
+	if best.MEDFrom != "iBGP 192.0.2.254, transit-a" || best.Via != ViaUnknown {
+		t.Fatalf("med label = %q via = %q", best.MEDFrom, best.Via)
 	}
 	paths := v.Paths(p)
 	if len(paths) != 2 {
@@ -79,13 +80,15 @@ func TestMEDIsDisplayOnly(t *testing.T) {
 		t.Fatalf("inactive MED 0 path = %+v", inactive)
 	}
 
-	// A route-server MED stays on the inactive BMP path and is labeled
-	// as that server's value. It must not replace the iBGP exit.
+	// A route-server MED stays on the inactive BMP path. The neighbor
+	// (203.0.113.1) is on the exchange LAN and is not the member next
+	// hop, so the label names that neighbor, not the member (ix-rs).
+	// It must not replace the iBGP exit.
 	rsMED := uint32(40)
 	v.ApplyRIB(plugin.RIBEvent{
 		Kind:       plugin.RIBPaths,
 		Router:     netip.MustParseAddr(nbr),
-		Peer:       plugin.RIBPeer{Address: netip.MustParseAddr("203.0.113.11"), ASN: 64501},
+		Peer:       plugin.RIBPeer{Address: netip.MustParseAddr("203.0.113.1"), ASN: 64498},
 		PostPolicy: true,
 		Paths: []plugin.RIBPath{{
 			Prefix: p, NextHop: netip.MustParseAddr("203.0.113.11"),
@@ -102,7 +105,8 @@ func TestMEDIsDisplayOnly(t *testing.T) {
 			rs = rt
 		}
 	}
-	if rs.MED == nil || *rs.MED != 40 || rs.MEDFrom != "peer 203.0.113.11, route server ix-rs AS64501" {
+	if rs.MED == nil || *rs.MED != 40 || rs.Via != ViaRouteServer ||
+		rs.MEDFrom != "peer 203.0.113.1, route server 203.0.113.1" {
 		t.Fatalf("route server path = %+v", rs)
 	}
 	none := medPath(t, 3, nbr, "203.0.113.0/24", "192.0.2.1", []uint32{64496}, 100, nil)
@@ -110,7 +114,7 @@ func TestMEDIsDisplayOnly(t *testing.T) {
 	v.applyPath(none)
 	v.mu.Unlock()
 	got, ok := v.Exact(netip.MustParsePrefix("203.0.113.0/24"))
-	if !ok || got.MED != nil || got.MEDFrom != "" {
-		t.Fatalf("absent MED = %+v %v", got.MED, got.MEDFrom)
+	if !ok || got.MED != nil || got.MEDFrom != "" || got.Via != ViaUnknown {
+		t.Fatalf("absent MED = %+v %q via %q", got.MED, got.MEDFrom, got.Via)
 	}
 }
