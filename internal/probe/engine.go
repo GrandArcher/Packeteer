@@ -91,6 +91,10 @@ type Options struct {
 	// pinned host on one, is not probed. A provider next hop on a LAN
 	// stays the far-side gateway probe. Nil leaves every target alone.
 	ExchangeLANs []netip.Prefix
+	// Indirect, when set, traces a prefix whose in-prefix addresses are
+	// all silent from each provider's source and scores that provider at
+	// its own highest stable hop (#123). Nil disables it.
+	Indirect *Indirect
 }
 
 // Result is the latest measurement of one provider toward one prefix.
@@ -109,6 +113,10 @@ type Result struct {
 	// per-sub-range measurements. Stats is then their traffic-weighted
 	// aggregate. Measurement only.
 	Subranges []SubrangeResult `json:"subranges,omitempty"`
+	// Indirect is true when every address inside the prefix was silent
+	// and Target is this provider's highest stable traceroute hop toward
+	// it (#123). Measurement only.
+	Indirect bool `json:"indirect,omitempty"`
 }
 
 // OK reports whether the result holds a measurement.
@@ -193,6 +201,14 @@ type Engine struct {
 	proberPlan map[netip.Addr]int
 	proberNote map[netip.Addr]int
 	memTick    uint64
+
+	// indMu guards the indirect hop cache and trace queue (#123).
+	// indWake starts a background pass.
+	indMu     sync.Mutex
+	indCache  map[key]indirectHop
+	indQueued map[key]indirectReq
+	indOrder  []key
+	indWake   chan struct{}
 }
 
 // errSourceBusy is returned when a target source's previous call has not
@@ -247,6 +263,9 @@ func New(providers []Provider, probers []NamedProber, sources []NamedSource, opt
 	if opt.ProberMemory < 1 || opt.ProberMemory > MaxProberMemory {
 		return nil, fmt.Errorf("probe: prober memory %d must be between 1 and %d", opt.ProberMemory, MaxProberMemory)
 	}
+	if err := validIndirect(opt.Indirect); err != nil {
+		return nil, err
+	}
 	if opt.Workers < 1 {
 		opt.Workers = 1
 	}
@@ -264,7 +283,8 @@ func New(providers []Provider, probers []NamedProber, sources []NamedSource, opt
 	}
 	e := &Engine{providers: providers, probers: probers, sources: sources, opt: opt, log: opt.Logger,
 		results: map[key]Result{}, status: map[string]ProviderStatus{}, sems: map[netip.Addr]chan struct{}{},
-		wake: make(chan struct{}, 1)}
+		wake: make(chan struct{}, 1), indCache: map[key]indirectHop{}, indQueued: map[key]indirectReq{},
+		indWake: make(chan struct{}, 1)}
 	now := opt.Now()
 	for _, p := range providers {
 		e.status[p.Name] = ProviderStatus{Name: p.Name, Source: p.Source, Up: true, Since: now}
@@ -282,6 +302,11 @@ func New(providers []Provider, probers []NamedProber, sources []NamedSource, opt
 // cadence and any retry. It returns ctx.Err().
 func (e *Engine) Run(ctx context.Context) error {
 	last := map[netip.Prefix]time.Time{}
+	if e.indirectEnabled() {
+		ictx, cancel := context.WithCancel(ctx)
+		defer cancel()
+		go e.runIndirect(ictx)
+	}
 	for {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -1025,6 +1050,7 @@ func (e *Engine) leaveProbes(finished <-chan struct{}) {
 }
 
 func (e *Engine) commit(fresh map[key]Result, ran map[string]bool, down map[string]string, keep map[netip.Prefix]bool, merge bool) {
+	e.pruneIndirect(keep)
 	now := e.opt.Now()
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -1115,6 +1141,9 @@ func (e *Engine) probe(ctx context.Context, j job) (Result, bool) {
 			continue
 		}
 		samples = append(samples, hostSample{addr: h, res: one, gateway: gw.IsValid() && h == gw})
+	}
+	if res, down, ok := e.probeIndirect(ctx, j, hosts, samples); ok {
+		return res, down
 	}
 	if len(samples) == 0 {
 		res := Result{Provider: j.provider.Name, Prefix: j.target.Prefix, Targets: copied, Time: e.opt.Now()}

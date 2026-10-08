@@ -103,8 +103,11 @@ type Probe struct {
 	// Targets is every address probed for this row. Target is the one
 	// that defined the score. Empty when a single unnamed measurement
 	// did not record the set.
-	Targets  []string  `json:"targets,omitempty"`
-	Prober   string    `json:"prober,omitempty"`
+	Targets []string `json:"targets,omitempty"`
+	Prober  string   `json:"prober,omitempty"`
+	// Indirect is true when every in-prefix address was silent and
+	// Target is this provider's traceroute hop toward the prefix (#123).
+	Indirect bool      `json:"indirect,omitempty"`
 	OK       bool      `json:"ok"`
 	LossPct  float64   `json:"loss_pct"`
 	RTTMinMs float64   `json:"rtt_min_ms"`
@@ -645,6 +648,7 @@ func probeFrom(r probe.Result) Probe {
 	p := Probe{
 		Provider: r.Provider,
 		Prober:   r.Prober,
+		Indirect: r.Indirect,
 		OK:       r.OK(),
 		LossPct:  jsonFloat(r.Stats.LossPct),
 		RTTMinMs: millis(r.Stats.RTTMin),

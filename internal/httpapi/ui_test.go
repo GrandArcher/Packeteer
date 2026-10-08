@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
@@ -19,6 +20,7 @@ import (
 	"github.com/GrandArcher/Packeteer/internal/config"
 	"github.com/GrandArcher/Packeteer/internal/configedit"
 	"github.com/GrandArcher/Packeteer/internal/policy"
+	"github.com/GrandArcher/Packeteer/internal/probe"
 	"github.com/GrandArcher/Packeteer/internal/subscribe"
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
 )
@@ -589,5 +591,28 @@ func TestHeterogeneousInSnapshot(t *testing.T) {
 	ps := assemblePrefixes(Input{Decisions: []policy.Decision{d}})
 	if len(ps) != 1 || !ps[0].Heterogeneous || len(ps[0].Subranges) != 2 {
 		t.Fatalf("prefixes = %+v", ps)
+	}
+}
+
+// TestIndirectProbeInSnapshot checks the #123 indirect mark reaches the
+// prefix rows and the dashboard labels it.
+func TestIndirectProbeInSnapshot(t *testing.T) {
+	r := probe.Result{Provider: "a", Prefix: netip.MustParsePrefix("198.51.100.0/24"),
+		Target: netip.MustParseAddr("192.0.2.7"), Indirect: true, Stats: probe.Stats{Sent: 3, Received: 3}}
+	raw, _ := json.Marshal(probeFrom(r))
+	if !strings.Contains(string(raw), `"indirect":true`) || !strings.Contains(string(raw), `"target":"192.0.2.7"`) {
+		t.Fatalf("indirect probe json = %s", raw)
+	}
+	r.Indirect = false
+	raw, _ = json.Marshal(probeFrom(r))
+	if strings.Contains(string(raw), "indirect") {
+		t.Fatalf("direct probe json = %s", raw)
+	}
+	js, err := fs.ReadFile(webFS, "web/app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(js), "pr.indirect") || !strings.Contains(string(js), `"indirect"`) {
+		t.Fatal("app.js does not label indirect probes")
 	}
 }

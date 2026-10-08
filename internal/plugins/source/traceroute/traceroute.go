@@ -458,26 +458,65 @@ func cloneTargets(in []plugin.Target) []plugin.Target {
 // trace walks TTL until the destination answers, a gap follows a stable
 // hop, or max_hops is reached.
 func (s *Source) trace(ctx context.Context, hop hopper, dest netip.Addr) (netip.Addr, bool, error) {
+	t := Tracer{MaxHops: s.maxHops, Probes: s.probes, MinReplies: s.minReplies, Port: s.port,
+		Timeout: s.timeout, Hop: hop.Probe, Skip: s.lanSkip}
+	return t.Trace(ctx, s.src, dest, nil)
+}
+
+// HopFunc sends one TTL-limited probe. reached means the reply is
+// destination-unreachable or a payload from the destination.
+type HopFunc func(ctx context.Context, src, dst netip.Addr, ttl, port int, timeout time.Duration) (from netip.Addr, reached bool, err error)
+
+// Tracer walks TTL from one source address toward a destination and picks
+// the highest stable hop. The traceroute source and the probe engine's
+// per-provider indirect probing (#123) share it. It announces nothing.
+type Tracer struct {
+	MaxHops    int
+	Probes     int
+	MinReplies int
+	Port       int
+	Timeout    time.Duration
+	// Hop sends one probe. Nil uses the built-in Linux traceroute.
+	Hop HopFunc
+	// Skip, when non-nil, ignores a hop (an exchange peering LAN).
+	Skip func(netip.Addr) bool
+}
+
+// Trace walks TTL until the destination answers, a gap follows a stable
+// hop, or MaxHops is reached. wait, when non-nil, runs before every
+// packet; the probe engine passes its global rate limit there. A wait
+// error ends the trace like a deadline. ok is false when no hop was
+// stable. A source that cannot be bound returns plugin.ErrSourceUnavailable.
+func (t Tracer) Trace(ctx context.Context, src, dest netip.Addr, wait func(context.Context) error) (netip.Addr, bool, error) {
+	hop := t.Hop
+	if hop == nil {
+		hop = udpHopper{}.Probe
+	}
 	var hops [][]sample
 	silent := 0
 	saw := false
-	for ttl := 1; ttl <= s.maxHops; ttl++ {
+	for ttl := 1; ttl <= t.MaxHops; ttl++ {
 		if err := ctx.Err(); err != nil {
-			return s.finish(hops, dest, err)
+			return t.finish(hops, dest, err)
 		}
-		samples := make([]sample, 0, s.probes)
+		samples := make([]sample, 0, t.Probes)
 		reached := false
-		for n := 0; n < s.probes; n++ {
+		for n := 0; n < t.Probes; n++ {
 			if err := ctx.Err(); err != nil {
-				return s.finish(hops, dest, err)
+				return t.finish(hops, dest, err)
 			}
-			from, hit, err := hop.Probe(ctx, s.src, dest, ttl, s.port, s.timeout)
+			if wait != nil {
+				if err := wait(ctx); err != nil {
+					return t.finish(hops, dest, err)
+				}
+			}
+			from, hit, err := hop(ctx, src, dest, ttl, t.Port, t.Timeout)
 			if err != nil {
 				if errors.Is(err, plugin.ErrSourceUnavailable) {
 					return netip.Addr{}, false, err
 				}
 				if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-					return s.finish(hops, dest, err)
+					return t.finish(hops, dest, err)
 				}
 				samples = append(samples, sample{})
 				continue
@@ -488,7 +527,7 @@ func (s *Source) trace(ctx context.Context, hop hopper, dest netip.Addr) (netip.
 			}
 		}
 		hops = append(hops, samples)
-		if _, n := stableHop(samples, s.minReplies); n >= s.minReplies {
+		if _, n := stableHop(samples, t.MinReplies); n >= t.MinReplies {
 			saw = true
 			silent = 0
 		} else {
@@ -498,18 +537,18 @@ func (s *Source) trace(ctx context.Context, hop hopper, dest netip.Addr) (netip.
 			break
 		}
 	}
-	host, ok := selectHost(hops, dest, s.minReplies, s.lanSkip)
+	host, ok := selectHost(hops, dest, t.MinReplies, t.Skip)
 	return host, ok, nil
 }
 
 // finish keeps hops already collected when the budget expires. With
 // nothing collected yet, the caller sees the context error and does not
 // replace the cache.
-func (s *Source) finish(hops [][]sample, dest netip.Addr, err error) (netip.Addr, bool, error) {
+func (t Tracer) finish(hops [][]sample, dest netip.Addr, err error) (netip.Addr, bool, error) {
 	if len(hops) == 0 {
 		return netip.Addr{}, false, err
 	}
-	host, ok := selectHost(hops, dest, s.minReplies, s.lanSkip)
+	host, ok := selectHost(hops, dest, t.MinReplies, t.Skip)
 	return host, ok, nil
 }
 

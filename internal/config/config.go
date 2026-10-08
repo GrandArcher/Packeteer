@@ -557,6 +557,8 @@ type Probe struct {
 	// ProberMemory caps the hosts that remember a prober. Omitted or 0
 	// uses the default. Hosts that leave the probe set are dropped first.
 	ProberMemory int `yaml:"prober_memory"`
+	// Indirect traces silent prefixes per provider (#123). Nil is off.
+	Indirect *ProbeIndirect `yaml:"indirect"`
 }
 
 // Load reads, parses, defaults, and validates the config file at path.
@@ -641,6 +643,7 @@ func (c *Config) applyDefaults() {
 	if c.Probe.ProberMemory == 0 {
 		c.Probe.ProberMemory = DefaultProbeProberMemory
 	}
+	c.defaultIndirect()
 	if c.Probe.MinReplies == 0 {
 		c.Probe.MinReplies = DefaultProbeMinReplies
 	}
@@ -909,6 +912,8 @@ func (c *Config) Validate() error {
 	if c.Probe.ProberMemory < 1 || c.Probe.ProberMemory > MaxProbeProberMemory {
 		add("probe.prober_memory %d must be between 1 and %d", c.Probe.ProberMemory, MaxProbeProberMemory)
 	}
+
+	c.validateIndirect(add)
 
 	if c.BGP.ListenPort < 0 || c.BGP.ListenPort > 65535 {
 		add("bgp.listen_port %d must be between 0 and 65535", c.BGP.ListenPort)

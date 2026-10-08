@@ -75,6 +75,9 @@ func (e *Engine) liveHosts(targets []plugin.Target) map[netip.Addr]struct{} {
 			}
 		}
 	}
+	for _, h := range e.indirectHosts() {
+		live[h] = struct{}{}
+	}
 	return live
 }
 

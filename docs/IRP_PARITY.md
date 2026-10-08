@@ -45,7 +45,7 @@ Recount (2026-10-07): the earlier 79 of 82 counted 13 rows as done that cover on
 | Active probing per provider: ICMP | 1.3.1, Explorer | done | v0.1 | prober (`icmp`) | #2 | no |
 | Active probing per provider: TCP | 1.3.1, Explorer | done | v0.1 | prober (`tcp`) | #2 | no |
 | Active probing per provider: UDP | Explorer | done | v0.2 | prober (`udp`) | #15 | no |
-| Traceroute-based probe target discovery | Explorer | partial: only the source's own configured targets, traced from one source address, not per provider; not applied to flow, VIP, or outage targets (#123) | v0.2 | source (`traceroute`) | #15 | no |
+| Traceroute-based probe target discovery | Explorer | done: the `traceroute` source pins its own targets; `probe.indirect` (opt-in) traces any silent prefix from each provider's source and scores each provider at its own highest stable hop, marked indirect (#123) | v0.2 | source (`traceroute`) + probe engine (`probe.indirect`) | #15, #123 | no |
 | Loss / latency / jitter measurement and scoring | 1.3.1 | done | v0.1 | prober + scorer (`weighted`) | #2, #7 | no |
 | Throughput-aware scoring (prefix volume weighting) | 1.2.13 Improvements weight | done (lab-proven) | v0.4 | scorer (`commit` uses flow volume, #18; `improvement_weights` rank performance moves for the cap by gain and volume, #34) | #18, #34 | no (lab-proven) |
 | Probe sources per provider (IRP uses PBR; we use source-IP policy routing) | 2.8 Explorer, 2.8.1 PBR | done | v0.1 | core + docs | #2 | no |
