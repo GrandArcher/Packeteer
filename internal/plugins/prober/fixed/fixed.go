@@ -11,7 +11,9 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"net/netip"
 	"os"
+	"strconv"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -37,13 +39,17 @@ type Config struct {
 	Paths []PathSpec `yaml:"paths"`
 }
 
-// PathSpec is one provider's fixed result.
+// PathSpec is one fixed result. provider is required. target and count,
+// when set, narrow the match: the first most-specific path wins.
 type PathSpec struct {
-	Provider   string  `yaml:"provider"`
-	Sent       int     `yaml:"sent"`
-	RTTMs      float64 `yaml:"rtt_ms"`
-	LossPct    float64 `yaml:"loss_pct"`
-	SourceDown bool    `yaml:"source_down"`
+	Provider   string    `yaml:"provider"`
+	Target     string    `yaml:"target"`
+	Count      int       `yaml:"count"`
+	Sent       int       `yaml:"sent"`
+	RTTMs      float64   `yaml:"rtt_ms"`
+	RTTsMs     []float64 `yaml:"rtts_ms"`
+	LossPct    float64   `yaml:"loss_pct"`
+	SourceDown bool      `yaml:"source_down"`
 }
 
 // Prober returns configured probe results.
@@ -52,7 +58,7 @@ type Prober struct {
 	file  string
 	sent  int
 	rttMs float64
-	paths map[string]PathSpec
+	paths []PathSpec
 }
 
 // New is the plugin factory.
@@ -87,13 +93,21 @@ func New(c plugin.Config, _ plugin.Env) (plugin.Prober, error) {
 }
 
 func (p *Prober) setPaths(paths []PathSpec) error {
-	m := map[string]PathSpec{}
+	seen := map[string]bool{}
+	out := make([]PathSpec, len(paths))
 	for i, s := range paths {
 		if s.Provider == "" {
 			return fmt.Errorf("paths[%d]: provider is required", i)
 		}
-		if _, dup := m[s.Provider]; dup {
-			return fmt.Errorf("paths[%d]: duplicate provider %q", i, s.Provider)
+		if s.Target != "" {
+			a, err := netip.ParseAddr(s.Target)
+			if err != nil {
+				return fmt.Errorf("paths[%d]: target %q is not an IP address", i, s.Target)
+			}
+			s.Target = a.String()
+		}
+		if s.Count < 0 || s.Count > 1000 {
+			return fmt.Errorf("paths[%d]: count %d must be between 0 and 1000", i, s.Count)
 		}
 		if s.Sent < 0 {
 			return fmt.Errorf("paths[%d]: sent %d must not be negative", i, s.Sent)
@@ -104,10 +118,59 @@ func (p *Prober) setPaths(paths []PathSpec) error {
 		if s.LossPct < 0 || s.LossPct > 100 {
 			return fmt.Errorf("paths[%d]: loss_pct %v must be between 0 and 100", i, s.LossPct)
 		}
-		m[s.Provider] = s
+		if len(s.RTTsMs) > 1000 {
+			return fmt.Errorf("paths[%d]: rtts_ms has %d entries; the maximum is 1000", i, len(s.RTTsMs))
+		}
+		for j, ms := range s.RTTsMs {
+			if ms < 0 {
+				return fmt.Errorf("paths[%d]: rtts_ms[%d] %v must not be negative", i, j, ms)
+			}
+		}
+		if len(s.RTTsMs) > 0 && s.RTTMs != 0 {
+			return fmt.Errorf("paths[%d]: set rtts_ms or rtt_ms, not both", i)
+		}
+		if len(s.RTTsMs) > 0 && s.LossPct != 0 {
+			return fmt.Errorf("paths[%d]: rtts_ms cannot be combined with loss_pct", i)
+		}
+		key := s.Provider + "\x00" + s.Target + "\x00" + strconv.Itoa(s.Count)
+		if seen[key] {
+			return fmt.Errorf("paths[%d]: duplicate provider %q for this target and count", i, s.Provider)
+		}
+		seen[key] = true
+		out[i] = s
 	}
-	p.paths = m
+	p.paths = out
 	return nil
+}
+
+// matchPath returns the first most-specific path. A set target is more
+// specific than a set count, and either beats a provider-wide path.
+func matchPath(paths []PathSpec, provider, target string, count int) (PathSpec, bool) {
+	bestScore := -1
+	var best PathSpec
+	found := false
+	for _, s := range paths {
+		if s.Provider != provider {
+			continue
+		}
+		if s.Target != "" && s.Target != target {
+			continue
+		}
+		if s.Count > 0 && s.Count != count {
+			continue
+		}
+		score := 0
+		if s.Target != "" {
+			score += 2
+		}
+		if s.Count > 0 {
+			score++
+		}
+		if !found || score > bestScore {
+			best, bestScore, found = s, score, true
+		}
+	}
+	return best, found
 }
 
 func (p *Prober) readFile() (snapshot, error) {
@@ -160,7 +223,7 @@ func (p *Prober) Probe(_ context.Context, req plugin.ProbeRequest) (plugin.Probe
 		}
 		sent, rtt, paths = snap.Sent, snap.RTTMs, tmp.paths
 	}
-	spec, ok := paths[req.Provider]
+	spec, ok := matchPath(paths, req.Provider, req.Target.String(), req.Count)
 	if !ok {
 		if len(paths) > 0 {
 			return plugin.ProbeResult{}, fmt.Errorf("fixed prober: no result for provider %q", req.Provider)
@@ -170,19 +233,40 @@ func (p *Prober) Probe(_ context.Context, req plugin.ProbeRequest) (plugin.Probe
 	if spec.SourceDown {
 		return plugin.ProbeResult{}, fmt.Errorf("provider %s: %w", req.Provider, plugin.ErrSourceUnavailable)
 	}
+	return fixedResult(spec, sent, rtt, req.Count), nil
+}
+
+// fixedResult turns one path into the raw probe result. rtts_ms is the
+// reply list, one entry per reply, so a test can set an RTT spread.
+// Otherwise every reply uses one RTT and loss_pct drops some of them.
+func fixedResult(spec PathSpec, topSent int, topRTT float64, reqCount int) plugin.ProbeResult {
+	if len(spec.RTTsMs) > 0 {
+		rtts := make([]time.Duration, len(spec.RTTsMs))
+		for i, ms := range spec.RTTsMs {
+			rtts[i] = time.Duration(ms * float64(time.Millisecond))
+		}
+		n := spec.Sent
+		if n == 0 {
+			n = reqCount
+		}
+		if n < len(rtts) {
+			n = len(rtts)
+		}
+		return plugin.ProbeResult{Sent: n, RTTs: rtts}
+	}
 	n := spec.Sent
 	if n == 0 {
-		n = sent
+		n = topSent
 	}
 	if n == 0 {
-		n = req.Count
+		n = reqCount
 	}
 	if n < 1 {
 		n = 1
 	}
 	ms := spec.RTTMs
 	if ms == 0 {
-		ms = rtt
+		ms = topRTT
 	}
 	loss := spec.LossPct
 	received := n
@@ -200,5 +284,5 @@ func (p *Prober) Probe(_ context.Context, req plugin.ProbeRequest) (plugin.Probe
 	for i := range rtts {
 		rtts[i] = d
 	}
-	return plugin.ProbeResult{Sent: n, RTTs: rtts}, nil
+	return plugin.ProbeResult{Sent: n, RTTs: rtts}
 }

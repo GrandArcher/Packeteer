@@ -1221,6 +1221,8 @@ func newEngine(cfg *config.Config, plugins *pluginhost.Set, log *slog.Logger, on
 		RoundTimeout:         maxResultAge(cfg),
 		RetryLossPct:         cfg.Probe.RetryLossPct,
 		RetryPackets:         cfg.Probe.RetryPackets,
+		MinReplies:           cfg.Probe.MinReplies,
+		Dispersion:           time.Duration(cfg.Probe.DispersionMS) * time.Millisecond,
 		ProberRecheckRounds:  cfg.Probe.ProberRecheckRounds,
 		ProberMemory:         cfg.Probe.ProberMemory,
 		ExchangeLANs:         exchangeLANPrefixes(cfg),
@@ -1312,7 +1314,10 @@ func standbyRound(now time.Time, ctl *announce.Controller, inb *inbound.Controll
 // cannot outlive the freshness window.
 func maxResultAge(cfg *config.Config) time.Duration {
 	pkts := cfg.Probe.Packets
-	if cfg.Probe.RetryLossPct > 0 && cfg.Probe.RetryPackets > 0 {
+	// Same condition as the probe engine: a second probe can run when
+	// loss retry or dispersion escalation is on, and then the window is
+	// 3*interval + (packets + retry_packets)*timeout.
+	if cfg.Probe.RetryPackets > 0 && (cfg.Probe.RetryLossPct > 0 || cfg.Probe.DispersionMS > 0) {
 		pkts += cfg.Probe.RetryPackets
 	}
 	return 3*cfg.Probe.Interval + time.Duration(pkts)*cfg.Probe.Timeout

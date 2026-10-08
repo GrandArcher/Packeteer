@@ -84,6 +84,7 @@ func rememberedTarget(t plugin.Target) plugin.Target {
 	switch {
 	case t.Candidate && t.Host.IsValid():
 		r.Host = t.Host
+		r.Hosts = append([]netip.Addr(nil), t.Hosts...)
 		r.Candidate = true
 	case t.Pinned && t.Host.IsValid():
 		r.Host = t.Host
@@ -103,7 +104,57 @@ func normalizeTarget(t plugin.Target) plugin.Target {
 	}
 	t.Pinned = explicit
 	t.Candidate = candidate
+	if candidate {
+		t.Hosts = cleanExtraHosts(t.Prefix, t.Host, t.Hosts)
+	} else {
+		t.Hosts = nil
+	}
 	return t
+}
+
+// cleanExtraHosts keeps at most two further candidates inside the prefix.
+// Host is already the first, so three destinations is the cap.
+func cleanExtraHosts(prefix netip.Prefix, primary netip.Addr, extra []netip.Addr) []netip.Addr {
+	if len(extra) == 0 {
+		return nil
+	}
+	seen := map[netip.Addr]bool{}
+	if primary.IsValid() {
+		seen[primary] = true
+	}
+	var out []netip.Addr
+	for _, h := range extra {
+		if !h.IsValid() || seen[h] {
+			continue
+		}
+		if prefix.IsValid() && !prefix.Contains(h) {
+			continue
+		}
+		seen[h] = true
+		out = append(out, h)
+		if len(out) == maxInPrefix-1 {
+			break
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+// targetProbeAddrs is the pin, or the flow candidates, for one target.
+// A pin is the only address. Candidates are Host then Hosts.
+func targetProbeAddrs(t plugin.Target) (pin netip.Addr, candidates []netip.Addr) {
+	if t.Pinned {
+		return t.Host, nil
+	}
+	if !t.Candidate || !t.Host.IsValid() {
+		return netip.Addr{}, nil
+	}
+	out := make([]netip.Addr, 0, 1+len(t.Hosts))
+	out = append(out, t.Host)
+	out = append(out, t.Hosts...)
+	return netip.Addr{}, out
 }
 
 func lessTarget(a, b plugin.Target) bool {

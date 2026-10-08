@@ -1048,6 +1048,75 @@ func TestWakeSkipsRemainderOfInterval(t *testing.T) {
 	}
 }
 
+func TestRoundBudgetIncludesDispersionRetry(t *testing.T) {
+	o := opts()
+	o.Interval = 30 * time.Second
+	o.Timeout = 2 * time.Second
+	o.Packets = 10
+	e, err := New([]Provider{provA}, []NamedProber{{"p", &fakeProber{fn: ok(1)}}},
+		src(plugin.Target{Prefix: pfx1, Host: netip.MustParseAddr("198.51.100.1")}), o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := e.roundBudget()
+	o.Dispersion = 20 * time.Millisecond
+	o.RetryPackets = 30
+	e, err = New([]Provider{provA}, []NamedProber{{"p", &fakeProber{fn: ok(1)}}},
+		src(plugin.Target{Prefix: pfx1, Host: netip.MustParseAddr("198.51.100.1")}), o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 3*interval + (packets + retry_packets)*timeout, plus the engine's
+	// one-second pad. The pad is on both sides, so the difference is
+	// retry_packets * timeout.
+	if e.roundBudget()-base != 30*o.Timeout {
+		t.Fatalf("budget %s, base %s", e.roundBudget(), base)
+	}
+}
+
+func TestThreeFlowCandidatesSkipAutomatic(t *testing.T) {
+	var mu sync.Mutex
+	var got []string
+	p := &fakeProber{fn: func(_ context.Context, req plugin.ProbeRequest) (plugin.ProbeResult, error) {
+		mu.Lock()
+		got = append(got, req.Target.String())
+		mu.Unlock()
+		return plugin.ProbeResult{Sent: req.Count, RTTs: ms(8, 8, 8)}, nil
+	}}
+	gw := netip.MustParseAddr("192.0.2.21")
+	e, err := New([]Provider{{Name: "transit-a", Source: provA.Source, NextHop: gw}},
+		[]NamedProber{{"p", p}}, []NamedSource{{
+			Name: "flow",
+			Source: &fakeSource{targets: []plugin.Target{{
+				Prefix: pfx1,
+				Host:   netip.MustParseAddr("198.51.100.10"),
+				Hosts: []netip.Addr{
+					netip.MustParseAddr("198.51.100.20"),
+					netip.MustParseAddr("198.51.100.30"),
+					netip.MustParseAddr("198.51.100.40"),
+				},
+				Candidate: true,
+			}}},
+		}}, opts())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ts := e.Targets(context.Background())
+	if len(ts) != 1 || len(ts[0].Hosts) != 2 || ts[0].Hosts[0].String() != "198.51.100.20" {
+		t.Fatalf("candidates = %+v", ts)
+	}
+	e.RunOnce(context.Background())
+	want := []string{"198.51.100.10", "198.51.100.20", "198.51.100.30", gw.String()}
+	if len(got) != len(want) {
+		t.Fatalf("probed %v", got)
+	}
+	for i, s := range want {
+		if got[i] != s {
+			t.Fatalf("probed %v", got)
+		}
+	}
+}
+
 func TestOnRoundAfterCommit(t *testing.T) {
 	o := opts()
 	var e *Engine
@@ -1274,7 +1343,7 @@ func TestStaticHostStaysPin(t *testing.T) {
 func TestPinBeatsFlowCandidate(t *testing.T) {
 	pin := netip.MustParseAddr("198.51.100.9")
 	busy := netip.MustParseAddr("198.51.100.50")
-	flow := plugin.Target{Prefix: pfx1, Host: busy, Candidate: true}
+	flow := plugin.Target{Prefix: pfx1, Host: busy, Hosts: []netip.Addr{netip.MustParseAddr("198.51.100.60"), netip.MustParseAddr("198.51.100.70")}, Candidate: true}
 	stat := plugin.Target{Prefix: pfx1, Host: pin}
 	orders := [][]NamedSource{
 		{{Name: "flow", Source: &fakeSource{targets: []plugin.Target{flow}}},
@@ -1288,7 +1357,7 @@ func TestPinBeatsFlowCandidate(t *testing.T) {
 			t.Fatal(err)
 		}
 		ts := e.Targets(context.Background())
-		if len(ts) != 1 || ts[0].Host != pin || !ts[0].Pinned || ts[0].Candidate {
+		if len(ts) != 1 || ts[0].Host != pin || !ts[0].Pinned || ts[0].Candidate || len(ts[0].Hosts) != 0 {
 			t.Fatalf("pin lost to flow: %+v", ts)
 		}
 	}

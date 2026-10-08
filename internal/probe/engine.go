@@ -63,9 +63,20 @@ type Options struct {
 	RoundTimeout time.Duration
 	// RetryLossPct, when greater than zero, re-probes a path with
 	// RetryPackets before the result is stored if loss is at least this
-	// percent. Zero disables retry. The retry sample replaces the first.
+	// percent. Zero disables loss retry. The retry sample replaces the
+	// first. Dispersion over the limit escalates the same way when
+	// RetryPackets is positive.
 	RetryLossPct float64
 	RetryPackets int
+	// MinReplies is how many replies a host needs before it can define
+	// the score. Zero uses 1, so any reply counts. Fewer replies are
+	// left out the way a silent host is.
+	MinReplies int
+	// Dispersion is the maximum RTT spread (max reply minus min reply)
+	// for a host that defines the score. Zero disables the check. A
+	// wider spread is left out the way a silent host is, and the prefix
+	// is probed again with RetryPackets.
+	Dispersion time.Duration
 	// ProberRecheckRounds is how often a host is probed from the first
 	// prober again. Probe 1, N+1, 2N+1, ... start at the chain head. The
 	// others start at the prober that last got a reply from that host
@@ -209,6 +220,15 @@ func New(providers []Provider, probers []NamedProber, sources []NamedSource, opt
 	}
 	if opt.RetryLossPct > 0 && opt.RetryPackets < 1 {
 		return nil, errors.New("probe: retry packets must be positive when retry is enabled")
+	}
+	if opt.MinReplies == 0 {
+		opt.MinReplies = 1
+	}
+	if opt.MinReplies < 1 || opt.MinReplies > 1000 {
+		return nil, fmt.Errorf("probe: min replies %d must be between 1 and 1000", opt.MinReplies)
+	}
+	if opt.Dispersion < 0 {
+		return nil, errors.New("probe: dispersion must not be negative")
 	}
 	if opt.ProberRecheckRounds == 0 {
 		opt.ProberRecheckRounds = DefaultProberRecheckRounds
@@ -431,16 +451,27 @@ func (e *Engine) roundBudget() time.Duration {
 	if e.opt.RoundTimeout > 0 {
 		return e.opt.RoundTimeout
 	}
-	pkts := e.opt.Packets
-	if e.opt.RetryLossPct > 0 {
-		pkts += e.opt.RetryPackets
-	}
+	pkts := e.opt.Packets + e.retryExtra()
 	per := time.Duration(pkts)*e.opt.Timeout + time.Second
 	d := 3*e.opt.Interval + per
 	if d < per+time.Second {
 		d = per + time.Second
 	}
 	return d
+}
+
+// retryExtra is how many packets a second probe may add. Loss retry and
+// dispersion escalation both use RetryPackets, and both count toward the
+// same staleness window: 3*interval + (packets + retryPackets)*timeout.
+// The round deadline adds one more second on top of that product.
+func (e *Engine) retryExtra() int {
+	if e.opt.RetryPackets < 1 {
+		return 0
+	}
+	if e.opt.RetryLossPct > 0 || e.opt.Dispersion > 0 {
+		return e.opt.RetryPackets
+	}
+	return 0
 }
 
 // Targets collects and de-duplicates targets from every source. A failing
@@ -481,10 +512,10 @@ func (e *Engine) gatherTargets(ctx context.Context) ([]plugin.Target, bool) {
 				continue
 			}
 			// A named host is a pin, unless the source marked it as a
-			// candidate (the flow busiest destination). An empty host
-			// stays the representative address for scheduling, and the
-			// probe round spreads it. A candidate is probed first and
-			// is not the only address.
+			// candidate (a flow destination). An empty host stays the
+			// representative address for scheduling, and the probe round
+			// spreads it. Candidates are probed first and are not the
+			// only addresses.
 			t = normalizeTarget(t)
 			// The first explicit host stays. A later pin replaces a
 			// default or a candidate. A later candidate replaces only a
@@ -499,10 +530,12 @@ func (e *Engine) gatherTargets(ctx context.Context) ([]plugin.Target, bool) {
 				}
 				if t.Pinned && !out[i].Pinned {
 					out[i].Host = t.Host
+					out[i].Hosts = nil
 					out[i].Pinned = true
 					out[i].Candidate = false
 				} else if !out[i].Pinned && !out[i].Candidate && t.Candidate {
 					out[i].Host = t.Host
+					out[i].Hosts = append([]netip.Addr(nil), t.Hosts...)
 					out[i].Candidate = true
 				}
 				continue
@@ -836,13 +869,8 @@ func (e *Engine) runRound(ctx context.Context, allow func(plugin.Target) bool, m
 			if p.Source.Is4() != t.Host.Is4() {
 				continue // provider cannot reach this address family
 			}
-			var pin, candidate netip.Addr
-			if t.Pinned {
-				pin = t.Host
-			} else if t.Candidate {
-				candidate = t.Host
-			}
-			hosts := omitLANHosts(ProbeHosts(t.Prefix, pin, candidate, p.NextHop, p.Source), p.NextHop, e.opt.ExchangeLANs)
+			pin, candidates := targetProbeAddrs(t)
+			hosts := omitLANHosts(ProbeHosts(t.Prefix, pin, candidates, p.NextHop, p.Source), p.NextHop, e.opt.ExchangeLANs)
 			if len(hosts) == 0 {
 				continue
 			}
@@ -1035,13 +1063,15 @@ func (e *Engine) sem(a netip.Addr) chan struct{} {
 }
 
 // probe measures every host for one provider and prefix and stores one
-// result. A pinned host is probed alone. A flow candidate is probed
-// first, then the automatic in-prefix hosts and a usable far-side
-// gateway, at most four. A silent in-prefix host is left out of the
-// score when another in-prefix host answered, and the far-side gateway
-// counts only when every in-prefix host was silent. Traceroute hop
-// times are not used. A dead probe source fails closed. Every packet
-// waits on the global rate limit inside probeOne.
+// result. A pinned host is probed alone. Flow candidates are probed
+// first, then the automatic in-prefix hosts when fewer than three were
+// named, and a usable far-side gateway, at most four. A host that does
+// not qualify (too few replies, or an RTT spread over the limit) is
+// left out of the score when another in-prefix host does, the same way
+// a silent host is. The far-side gateway counts only when no in-prefix
+// host qualified. Traceroute hop times are not used. A dead probe
+// source fails closed. Every packet waits on the global rate limit
+// inside probeOne, including a dispersion or loss retry.
 func (e *Engine) probe(ctx context.Context, j job) (Result, bool) {
 	hosts := j.hosts
 	if len(hosts) == 0 && j.target.Host.IsValid() {
@@ -1078,13 +1108,31 @@ func (e *Engine) probe(ctx context.Context, j job) (Result, bool) {
 		}
 		return res, false
 	}
-	res := combineHosts(j.provider.Name, j.target.Prefix, copied, samples)
-	if e.opt.RetryLossPct <= 0 || res.Stats.LossPct < e.opt.RetryLossPct {
+	res := combineHosts(j.provider.Name, j.target.Prefix, copied, samples, e.hostQualifies)
+	lossRetry := e.opt.RetryLossPct > 0 && res.Stats.LossPct >= e.opt.RetryLossPct
+	dispRetry := e.spreadOver(samples)
+	if e.opt.RetryPackets < 1 || (!lossRetry && !dispRetry) {
 		return res, false
 	}
-	used := scoreSamples(samples)
+	// Re-probe the hosts that define the score, and any host whose
+	// spread is over the limit, so a small sample escalates to the
+	// full one. The retry sample replaces the first.
+	used := map[netip.Addr]bool{}
+	for _, s := range scoreSamples(samples, e.hostQualifies) {
+		used[s.addr] = true
+	}
+	if dispRetry {
+		for _, s := range samples {
+			if e.inconsistent(s.res.Stats) {
+				used[s.addr] = true
+			}
+		}
+	}
 	var again []hostSample
-	for _, s := range used {
+	for _, s := range samples {
+		if !used[s.addr] {
+			continue
+		}
 		one, down := e.probeOne(ctx, j.provider, j.target.Prefix, s.addr, e.opt.RetryPackets)
 		one.Targets = copied
 		if down || ctx.Err() != nil {
@@ -1096,8 +1144,56 @@ func (e *Engine) probe(ctx context.Context, j job) (Result, bool) {
 		}
 		again = append(again, hostSample{addr: s.addr, res: one, gateway: s.gateway})
 	}
-	e.log.Debug("retry probe", "provider", res.Provider, "prefix", res.Prefix, "loss_pct", res.Stats.LossPct, "packets", e.opt.RetryPackets)
-	return combineHosts(j.provider.Name, j.target.Prefix, copied, again), false
+	reason := "loss"
+	switch {
+	case lossRetry && dispRetry:
+		reason = "loss+dispersion"
+	case dispRetry:
+		reason = "dispersion"
+	}
+	e.log.Debug("retry probe", "provider", res.Provider, "prefix", res.Prefix, "loss_pct", res.Stats.LossPct, "packets", e.opt.RetryPackets, "reason", reason)
+	return combineHosts(j.provider.Name, j.target.Prefix, copied, again, e.hostQualifies), false
+}
+
+// hostQualifies reports whether one address may define the prefix score.
+// The default (one reply, dispersion off) is the historical "any reply
+// counts" rule. A single reply has a spread of zero.
+func (e *Engine) hostQualifies(st Stats) bool {
+	min := e.opt.MinReplies
+	if min < 1 {
+		min = 1
+	}
+	if st.Received < min {
+		return false
+	}
+	if e.opt.Dispersion <= 0 || st.Received < 2 {
+		return true
+	}
+	return st.RTTMax-st.RTTMin <= e.opt.Dispersion
+}
+
+// inconsistent reports whether the sample has enough replies to judge
+// an RTT spread and that spread is over the limit. Too few replies are
+// unqualified but do not escalate; dispersion does.
+func (e *Engine) inconsistent(st Stats) bool {
+	if e.opt.Dispersion <= 0 || st.Received < 2 {
+		return false
+	}
+	return st.RTTMax-st.RTTMin > e.opt.Dispersion
+}
+
+// spreadOver reports whether any measured host should escalate the
+// prefix to the full probe.
+func (e *Engine) spreadOver(samples []hostSample) bool {
+	if e.opt.Dispersion <= 0 {
+		return false
+	}
+	for _, s := range samples {
+		if e.inconsistent(s.res.Stats) {
+			return true
+		}
+	}
+	return false
 }
 
 // hostSample is one address's measurement inside a prefix.
@@ -1170,18 +1266,22 @@ func (e *Engine) probeOne(ctx context.Context, p Provider, prefix netip.Prefix, 
 	return res, false
 }
 
-// scoreSamples picks the hosts that define the prefix. Answering addresses
-// inside the prefix win, so one silent host does not. The far-side gateway
-// is the sample only when none of those answered. When nothing answered,
-// every measured host counts so the loss is 100%.
-func scoreSamples(samples []hostSample) []hostSample {
+// scoreSamples picks the hosts that define the prefix. Qualified
+// addresses inside the prefix win, so one silent or unqualified host
+// does not. qualify nil means any reply counts. The far-side gateway
+// is the sample only when none of those qualified. When nothing
+// qualified, every measured host counts so the loss is still reported.
+func scoreSamples(samples []hostSample, qualify func(Stats) bool) []hostSample {
+	if qualify == nil {
+		qualify = func(st Stats) bool { return st.Received > 0 }
+	}
 	var inPrefix, answered, measured []hostSample
 	for _, s := range samples {
 		if !s.res.OK() {
 			continue
 		}
 		measured = append(measured, s)
-		if s.res.Stats.Received == 0 {
+		if !qualify(s.res.Stats) {
 			continue
 		}
 		answered = append(answered, s)
@@ -1201,8 +1301,8 @@ func scoreSamples(samples []hostSample) []hostSample {
 // combineHosts builds one result from the hosts that define the score.
 // Loss and RTT come from those hosts only. Target is the first of them
 // that answered, otherwise the first probed address.
-func combineHosts(provider string, prefix netip.Prefix, hosts []netip.Addr, samples []hostSample) Result {
-	used := scoreSamples(samples)
+func combineHosts(provider string, prefix netip.Prefix, hosts []netip.Addr, samples []hostSample, qualify func(Stats) bool) Result {
+	used := scoreSamples(samples, qualify)
 	res := Result{Provider: provider, Prefix: prefix, Targets: hosts, Time: samples[0].res.Time}
 	if len(hosts) > 0 {
 		res.Target = hosts[0]

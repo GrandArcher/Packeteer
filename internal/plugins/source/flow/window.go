@@ -26,19 +26,32 @@ type bucket struct {
 	minOK bool
 }
 
+// maxFlowHosts is how many destinations one prefix keeps. The probe
+// engine takes three (#119). Each bucket stores only that many, so a
+// prefix full of unique addresses cannot grow the window.
+const maxFlowHosts = 3
+
 type cell struct {
-	bytes     uint64
-	host      netip.Addr
-	hostBytes uint64
+	bytes uint64
+	// hosts is the busiest destinations in this bucket, largest first
+	// is not required; aggregate sorts. nHosts is how many slots are used.
+	hosts  [maxFlowHosts]hostCount
+	nHosts int
 	// local and transit are the bytes whose source was classified; both
 	// stay zero without a transit block.
 	local   uint64
 	transit uint64
 }
 
+type hostCount struct {
+	addr  netip.Addr
+	bytes uint64
+}
+
 type rank struct {
 	prefix  netip.Prefix
 	host    netip.Addr
+	hosts   []netip.Addr // busiest first, at most maxFlowHosts
 	bytes   uint64
 	local   uint64
 	transit uint64
@@ -94,12 +107,7 @@ func (b *bucket) add(p netip.Prefix, host netip.Addr, n uint64, t traffic, max i
 	if c, ok := b.cells[p]; ok {
 		c.bytes += n
 		c.note(n, t)
-		if host.IsValid() && host == c.host {
-			c.hostBytes += n
-		} else if host.IsValid() && n >= c.hostBytes {
-			c.host = host
-			c.hostBytes = n
-		}
+		c.noteHost(host, n)
 		if b.minOK && p == b.minP {
 			b.minOK = false
 		}
@@ -110,11 +118,38 @@ func (b *bucket) add(p netip.Prefix, host netip.Addr, n uint64, t traffic, max i
 	}
 	c := &cell{bytes: n}
 	c.note(n, t)
-	if host.IsValid() {
-		c.host = host
-		c.hostBytes = n
-	}
+	c.noteHost(host, n)
 	b.cells[p] = c
+}
+
+// noteHost keeps the busiest destinations in this bucket. A host already
+// in the set accumulates. A new host takes a free slot, or replaces the
+// smallest slot when this observation is at least that large. Bytes from
+// a destination that never makes the set are not recovered later.
+func (c *cell) noteHost(host netip.Addr, n uint64) {
+	if !host.IsValid() || n == 0 {
+		return
+	}
+	for i := 0; i < c.nHosts; i++ {
+		if c.hosts[i].addr == host {
+			c.hosts[i].bytes += n
+			return
+		}
+	}
+	if c.nHosts < maxFlowHosts {
+		c.hosts[c.nHosts] = hostCount{addr: host, bytes: n}
+		c.nHosts++
+		return
+	}
+	small := 0
+	for i := 1; i < c.nHosts; i++ {
+		if c.hosts[i].bytes < c.hosts[small].bytes {
+			small = i
+		}
+	}
+	if n >= c.hosts[small].bytes {
+		c.hosts[small] = hostCount{addr: host, bytes: n}
+	}
 }
 
 // evict makes room in a full bucket for a prefix with n bytes. It drops up
@@ -199,29 +234,40 @@ func (s *slide) aggregate(now time.Time) []rank {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.prune(now)
-	acc := map[netip.Prefix]*cell{}
+	type acc struct {
+		bytes, local, transit uint64
+		hosts                 map[netip.Addr]uint64
+	}
+	sum := map[netip.Prefix]*acc{}
 	for _, b := range s.slots {
 		for p, c := range b.cells {
-			a := acc[p]
+			a := sum[p]
 			if a == nil {
-				a = &cell{}
-				acc[p] = a
+				a = &acc{hosts: map[netip.Addr]uint64{}}
+				sum[p] = a
 			}
 			a.bytes += c.bytes
 			a.local += c.local
 			a.transit += c.transit
-			if c.host.IsValid() && c.hostBytes >= a.hostBytes {
-				a.host = c.host
-				a.hostBytes = c.hostBytes
+			for i := 0; i < c.nHosts; i++ {
+				h := c.hosts[i]
+				if h.addr.IsValid() && h.bytes > 0 {
+					a.hosts[h.addr] += h.bytes
+				}
 			}
 		}
 	}
-	out := make([]rank, 0, len(acc))
-	for p, a := range acc {
+	out := make([]rank, 0, len(sum))
+	for p, a := range sum {
 		if a.bytes == 0 {
 			continue
 		}
-		out = append(out, rank{prefix: p, host: a.host, bytes: a.bytes, local: a.local, transit: a.transit})
+		hosts := topHosts(a.hosts)
+		var host netip.Addr
+		if len(hosts) > 0 {
+			host = hosts[0]
+		}
+		out = append(out, rank{prefix: p, host: host, hosts: hosts, bytes: a.bytes, local: a.local, transit: a.transit})
 	}
 	sort.Slice(out, func(i, j int) bool {
 		if out[i].bytes != out[j].bytes {
@@ -229,5 +275,33 @@ func (s *slide) aggregate(now time.Time) []rank {
 		}
 		return out[i].prefix.String() < out[j].prefix.String()
 	})
+	return out
+}
+
+// topHosts returns at most maxFlowHosts addresses, largest byte total
+// first. Equal totals break by address so the order is stable.
+func topHosts(sums map[netip.Addr]uint64) []netip.Addr {
+	if len(sums) == 0 {
+		return nil
+	}
+	list := make([]hostCount, 0, len(sums))
+	for a, b := range sums {
+		if a.IsValid() && b > 0 {
+			list = append(list, hostCount{addr: a, bytes: b})
+		}
+	}
+	sort.Slice(list, func(i, j int) bool {
+		if list[i].bytes != list[j].bytes {
+			return list[i].bytes > list[j].bytes
+		}
+		return list[i].addr.Compare(list[j].addr) < 0
+	})
+	if len(list) > maxFlowHosts {
+		list = list[:maxFlowHosts]
+	}
+	out := make([]netip.Addr, len(list))
+	for i, h := range list {
+		out[i] = h.addr
+	}
 	return out
 }

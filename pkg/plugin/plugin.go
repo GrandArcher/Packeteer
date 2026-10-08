@@ -125,13 +125,19 @@ type Target struct {
 	// address probed. Sources leave this false. A zero Host is not a pin.
 	Pinned bool
 	// Candidate marks Host as a preferred probe address that is not a
-	// pin. The flow source sets it for the busiest destination, and for
-	// a problem address. The engine probes that address first, then the
-	// automatic in-prefix hosts and a usable provider next hop, at most
-	// four. Other sources leave this false. A valid Host with Candidate
+	// pin. The flow source sets it for the busiest destinations, and
+	// for a problem address. The engine probes those addresses first.
+	// Other sources leave this false. A valid Host with Candidate
 	// false is a pin.
 	Candidate bool
-	Weight    float64 // relative importance, e.g. bytes from flow data
+	// Hosts are further candidate addresses after Host, busiest next.
+	// The flow source puts the second and third busiest destinations
+	// here. The engine probes Host and Hosts first, at most three, and
+	// fills with the automatic in-prefix addresses only when fewer than
+	// three were named. A usable provider next hop still takes the last
+	// of the four slots. A pin ignores Hosts.
+	Hosts  []netip.Addr
+	Weight float64 // relative importance, e.g. bytes from flow data
 	// Interval, when positive, overrides the engine probe interval for
 	// this prefix. The vip source sets it so critical prefixes are
 	// measured more often. Zero means the engine interval. Run honors

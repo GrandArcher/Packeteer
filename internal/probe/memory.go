@@ -69,13 +69,8 @@ func (e *Engine) liveHosts(targets []plugin.Target) map[netip.Addr]struct{} {
 			if t.Host.IsValid() && p.Source.Is4() != t.Host.Is4() {
 				continue
 			}
-			var pin, candidate netip.Addr
-			if t.Pinned {
-				pin = t.Host
-			} else if t.Candidate {
-				candidate = t.Host
-			}
-			for _, h := range omitLANHosts(ProbeHosts(t.Prefix, pin, candidate, p.NextHop, p.Source), p.NextHop, e.opt.ExchangeLANs) {
+			pin, candidates := targetProbeAddrs(t)
+			for _, h := range omitLANHosts(ProbeHosts(t.Prefix, pin, candidates, p.NextHop, p.Source), p.NextHop, e.opt.ExchangeLANs) {
 				live[h.Unmap()] = struct{}{}
 			}
 		}
@@ -84,9 +79,9 @@ func (e *Engine) liveHosts(targets []plugin.Target) map[netip.Addr]struct{} {
 }
 
 // proberStart is the chain index to try first for host. The first caller
-// in a round plans it; every provider, and a loss retry in the same
-// round, uses that index. The plan counts as one probe of the host, so a
-// retry does not move the chain-head schedule.
+// in a round plans it; every provider, and a loss or dispersion retry in
+// the same round, uses that index. The plan counts as one probe of the
+// host, so a retry does not move the chain-head schedule.
 func (e *Engine) proberStart(host netip.Addr) int {
 	host = host.Unmap()
 	e.mu.Lock()

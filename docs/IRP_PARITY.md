@@ -14,7 +14,7 @@ Milestones:
 - **v0.3**: inbound optimization, BMP, multiple routers and IX, FlowSpec/RTBH, transit optimization.
 - **v0.4**: multi-POP, HA, RBAC, anomaly detection, remaining parity.
 - **v0.5**: hardening and polish on the rows above. Dashboard clarity and the first-run checklist (#49), CI-tested quickstart, walkthrough, troubleshooting, and router guides (#50), load and soak budgets and the flow-ingest fix (#51), MikroTik CHR in QEMU on CI (#52), and the router interop matrix (#53) are done. They are not new IRP capability rows, so the counts below are unchanged. Field feedback from observe-mode deployments (#54) is still open. Lab-proven only; the safety rules above are unchanged.
-- **v0.6**: IRP parity gaps found in the 2026-10-07 review of prefix selection, measurement, and the UI. The partial rows say what is missing and link their issue; keeping an improved prefix probed after its source drops it is done (#116), an RTT win can also require a percent of the current path while a new performance move waits for consecutive fresh rounds (#117), and the probe engine remembers which prober a host answers (#120). 4 new rows are planned and 1 is won't do. The recount does not change any behavior.
+- **v0.6**: IRP parity gaps found in the 2026-10-07 review of prefix selection, measurement, and the UI. The partial rows say what is missing and link their issue; keeping an improved prefix probed after its source drops it is done (#116), an RTT win can also require a percent of the current path while a new performance move waits for consecutive fresh rounds (#117), the probe engine remembers which prober a host answers (#120), and a host qualifies by reply count and RTT spread, with a wide spread escalated to a full probe (#119). 3 new rows are planned and 1 is won't do. The recount does not change any behavior.
 
 ## Summary
 
@@ -30,10 +30,10 @@ Milestones:
 
 | Status | Count |
 |---|---|
-| done | 69 |
-| partial | 11 |
+| done | 71 |
+| partial | 10 |
 | in progress | 0 |
-| planned | 4 |
+| planned | 3 |
 | won't do | 4 |
 
 Recount (2026-10-07): the earlier 79 of 82 counted 13 rows as done that cover only part of the IRP behavior, and missed 6 IRP behaviors. Those rows are now partial and the 6 are listed. Scale is tracked as a budget, not a row: the load test learns a 1,250,000-prefix table and measures 3,000 prefixes with a prober that sends no packets ([performance.md](performance.md)); Noction's published figures, as cited in the review, are about 100,000 actively probed and 10 million passively tracked prefixes. The scheduler work is #125.
@@ -50,21 +50,23 @@ Recount (2026-10-07): the earlier 79 of 82 counted 13 rows as done that cover on
 | Throughput-aware scoring (prefix volume weighting) | 1.2.13 Improvements weight | done (lab-proven) | v0.4 | scorer (`commit` uses flow volume, #18; `improvement_weights` rank performance moves for the cap by gain and volume, #34) | #18, #34 | no (lab-proven) |
 | Probe sources per provider (IRP uses PBR; we use source-IP policy routing) | 2.8 Explorer, 2.8.1 PBR | done | v0.1 | core + docs | #2 | no |
 | Static probe target lists | - | done | v0.1 | source (`static`) | #2 | no |
-| Flow-based target discovery (NetFlow v5/v9, IPFIX, sFlow) | 2.7.1 Irpflowd | partial: the busiest destination is a probe candidate, probed first with the automatic in-prefix hosts and a usable next hop (#113); no percent-of-traffic floor and `top_n` is a hard cap, not a priority mark (#118); no sub-range measurement inside large prefixes (#121) | v0.1 | source (`flow`) | #5, #113 | no |
+| Flow-based target discovery (NetFlow v5/v9, IPFIX, sFlow) | 2.7.1 Irpflowd | partial: up to three of the busiest destinations are probe candidates, probed first, and automatic in-prefix hosts fill in only when fewer than three were named (#113, #119); no percent-of-traffic floor and `top_n` is a hard cap, not a priority mark (#118); no sub-range measurement inside large prefixes (#121) | v0.1 | source (`flow`) | #5, #113, #119 | no |
 | Passive problem detection from flows | 2.7 Collector | partial: sampled NetFlow/IPFIX and sFlow are skipped (#133) | v0.2 | source (`flow` `problems`) | #21 | no |
 | SPAN / mirrored-traffic collector | 2.7.2 Irpspand | done | v0.2 | source (`span`) | #21 | no |
 | AS-pattern outage/congestion detection (re-probe prefixes crossing a sick ASN) | 1.2.6 Outage Detection | partial: correlates on the native route's BGP AS path, not traceroute hops mapped to ASNs or alternate providers' paths (#124) | v0.2 | source (`outage`) | #16 | no |
 | Circuit issues detection | 1.2.23 | done | v0.2 | source (`outage`) | #16 | no |
 | VIP (critical) prefixes/ASNs with more frequent probing | 1.2.7 VIP Improvements | done | v0.2 | source (`vip`) | #15 | no |
-| Retry / aggressive probing | 1.2.8 Retry Probing | partial: retry is triggered by loss only and is off by default; an inconsistent RTT sample is not escalated to a full probe (#119) | v0.2 | core (probe engine) | #15 | no |
+| Retry / aggressive probing | 1.2.8 Retry Probing | done (#119): loss at `retry_loss_pct`, or an RTT spread over `dispersion_ms`, is probed again with `retry_packets` before it is stored (both off by default; the retry sample replaces the first; too few replies do not escalate) | v0.2 | core (probe engine) | #15, #119 | no |
 | Hysteresis, thresholds, hold time before flip | 1.3.1 | done (#117): an RTT win needs `min_rtt_delta_ms` and, when `min_rtt_delta_pct` is set, that percent of the current path's RTT; a new performance move or switch waits for `confirm_rounds` consecutive fresh wins (a stale round does not count, a miss resets, including a switch off a commit or cost steer, and those wins count during hold time). Early probes wait a quarter of the prefix interval; a round that cannot compare does not keep the prober awake. Flip-back does not wait. Defaults (percent 0, one round) are the previous rule | v0.1 | scorer | #7, #117 | no |
 | Max improvements cap | 4.8 Core settings | done | v0.1 | core | #7 | no |
 | Improvement retirement / periodic re-probe of improvements (including a staleness timer when a probe round never finishes) | 4.8 Core settings | done (#116): an active improvement keeps its prefix on the last host and interval after its source drops it (for example flow `top_n`), until flip-back, `improvement_ttl`, the provider is unusable, a RIB leave, policy, or the allowlist | v0.1 | core | #7, #46, #116 | no |
-| Host qualification and probe consistency (enough consistent replies, RTT dispersion limit; fast probe escalating to a full probe) | Explorer | planned | v0.6 | core (probe engine) + prober | #119 | — |
+| Host qualification and probe consistency (enough consistent replies, RTT dispersion limit; fast probe escalating to a full probe) | Explorer | done (#119): a host qualifies with at least `probe.min_replies` replies (default 1) and, when `probe.dispersion_ms` is set, an RTT spread (maximum minus minimum) no wider than that limit. An unqualified host drops out of the score the way a silent host does. A spread over the limit escalates to the retry probe. Defaults keep the previous rule. Flow prefixes offer up to three of the busiest destinations as candidates, probed first; automatic addresses fill in only when fewer than three were named. An operator pin stays the only target | v0.6 | core (probe engine) | #119 | no |
 | Self-learning probe type (stick with the ICMP/UDP/TCP prober a host answers) | Explorer | done (#120): per host, the engine starts later rounds at the prober that got a reply and moves forward from there; every `probe.prober_recheck_rounds` measurement (default 10) starts at the first prober again; `probe.prober_memory` (default 100000) caps the set and hosts that leave the probe set are dropped | v0.6 | core (probe engine) | #120 | no |
 | Current exit learned from flow agents (exporter address + interface index per provider) | 2.7 Collector | won't do (the exit comes from the iBGP/BMP RIB, which is authoritative; without a BGP session Packeteer ranks paths and does not recommend) | - | - | - | — |
 
 UDP unreachable replies count only when the ICMP source is the probed target (#15). Traceroute discovery runs in the background under `budget` and does not block a probe round. VIP ASN expansion is capped by `max_targets` and rebuilt only when the RIB changes; the VIP interval must be shorter than the staleness window.
+
+Host qualification (#119) is off at the defaults (`min_replies` 1, `dispersion_ms` 0): any reply counts, and an inconsistent sample is not probed again. With `dispersion_ms` set, a host whose slowest reply minus its fastest is wider than that limit is left out of the score and the prefix is probed again with `retry_packets`. Too few replies drop the host and do not escalate. The staleness window is `3 * interval + packets * timeout`, plus `retry_packets * timeout` only when that second probe can run. A flow prefix offers up to three of the busiest destinations in the window as candidates. This measures only. It does not announce.
 
 The `outage` source (#16) correlates probe results inside `window` (default 2m). An ASN incident needs `min_prefixes` (default 3, minimum 2) degraded prefixes whose learned path contains that ASN and that are degraded on every measured provider. A provider incident is the same count of prefixes degraded on that provider and healthy on another, and not already explained by a sick ASN. One noisy prefix does not fire. The probe loop wakes and re-queues the affected prefixes, including other learned prefixes that cross the sick ASN, capped by `max_targets`. Events go to the configured notifiers. The source does not announce.
 
