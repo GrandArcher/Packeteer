@@ -478,6 +478,17 @@ func TestConfigErrors(t *testing.T) {
 		"listen: 127.0.0.1:2055\nwindow: -1s":                                 "must be between",
 		"listen: 127.0.0.1:2055\ntop_n: -1":                                   "top_n",
 		"listen: 127.0.0.1:2055\ntop_n: 100000":                               "top_n",
+		"listen: 127.0.0.1:2055\nmin_pct: -1":                                 "min_pct",
+		"listen: 127.0.0.1:2055\nmin_pct: 101":                                "min_pct",
+		"listen: 127.0.0.1:2055\nmin_pct: .nan":                               "min_pct",
+		"listen: 127.0.0.1:2055\nmin_pct: 0.00001":                            "min_pct",
+		"listen: 127.0.0.1:2055\nmax_targets: -1":                             "max_targets",
+		"listen: 127.0.0.1:2055\nmax_targets: 10001":                          "max_targets",
+		"listen: 127.0.0.1:2055\ntop_n: 100\nmax_targets: 50":                 "below top_n",
+		"listen: 127.0.0.1:2055\nmax_targets: 200":                            "tail_interval is required",
+		"listen: 127.0.0.1:2055\nmax_targets: 200\ntail_interval: 500ms":      "tail_interval",
+		"listen: 127.0.0.1:2055\nmax_targets: 200\ntail_interval: 48h":        "tail_interval",
+		"listen: 127.0.0.1:2055\ntail_interval: -1s":                          "tail_interval",
 		"listen: 127.0.0.1:2055\naggregate_v4: 33":                            "aggregate_v4",
 		"listen: 127.0.0.1:2055\naggregate_v6: 129":                           "aggregate_v6",
 		"listen: 127.0.0.1:2055\nexclude: [198.51.100.1/24]":                  "host bits",
@@ -494,13 +505,237 @@ func TestConfigErrors(t *testing.T) {
 
 func TestDefaults(t *testing.T) {
 	s := mustSource(t, "listen: ':2055'\n")
-	if s.window != defaultWindow || s.topN != defaultTopN || s.agg4 != 24 || s.agg6 != 48 || s.listen[0] != ":2055" {
+	if s.window != defaultWindow || s.topN != defaultTopN || s.maxTargets != defaultTopN || s.minBytes != 0 || s.minPctPPM != 0 || s.tailInterval != 0 || s.TailInterval() != 0 || s.agg4 != 24 || s.agg6 != 48 || s.listen[0] != ":2055" {
 		t.Fatalf("defaults = %+v listen %v", s, s.listen)
 	}
 	// Idle source is not an error.
 	if ts := targetsOf(t, s); len(ts) != 0 {
 		t.Fatalf("idle = %+v", ts)
 	}
+}
+
+// TestFlowDefaultsMatchTopN is the previous list: no percent floor, no
+// tail, and the cut is still top_n. Every returned target uses the
+// engine interval.
+func TestFlowDefaultsMatchTopN(t *testing.T) {
+	s := mustSource(t, "listen: 127.0.0.1:2055\nwindow: 1m\ntop_n: 2\n")
+	now := time.Unix(1_700_000_000, 0)
+	pin(s, now)
+	ingestRanks(s, now, []rankBytes{
+		{"198.51.100.10", 300},
+		{"203.0.113.10", 200},
+		{"192.0.2.10", 100},
+	})
+	ts := targetsOf(t, s)
+	if len(ts) != 2 || ts[0].Prefix.String() != "198.51.100.0/24" || ts[1].Prefix.String() != "203.0.113.0/24" {
+		t.Fatalf("targets = %+v", ts)
+	}
+	for _, tg := range ts {
+		if tg.Interval != 0 {
+			t.Fatalf("default interval = %s on %+v", tg.Interval, tg)
+		}
+	}
+	again := targetsOf(t, s)
+	if len(again) != len(ts) || again[0].Prefix != ts[0].Prefix || again[1].Prefix != ts[1].Prefix {
+		t.Fatalf("order changed: %+v then %+v", ts, again)
+	}
+}
+
+// TestFlowVolumeFloorEitherBar keeps a prefix that clears min_bytes and
+// a different prefix that clears only min_pct. A prefix that clears
+// neither is left out. Bytes still decide the order, including a tie.
+func TestFlowVolumeFloorEitherBar(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0)
+
+	t.Run("percent keeps a prefix under min_bytes", func(t *testing.T) {
+		s := mustSource(t, "listen: 127.0.0.1:2055\nwindow: 1m\ntop_n: 10\nmin_bytes: 5000\nmin_pct: 10\n")
+		pin(s, now)
+		// 1000 is exactly 10% of 10000 and under the byte floor.
+		// 999 is just under 10%. 9001 clears the percent bar.
+		ingestRanks(s, now, []rankBytes{
+			{"198.51.100.10", 1000},
+			{"203.0.113.10", 999},
+			{"192.0.2.10", 8001},
+		})
+		got := prefixOrder(targetsOf(t, s))
+		want := []string{"192.0.2.0/24", "198.51.100.0/24"}
+		if strings.Join(got, ",") != strings.Join(want, ",") {
+			t.Fatalf("targets = %v, want %v", got, want)
+		}
+	})
+
+	t.Run("bytes keep a prefix under min_pct", func(t *testing.T) {
+		s := mustSource(t, "listen: 127.0.0.1:2055\nwindow: 1m\ntop_n: 10\nmin_bytes: 100\nmin_pct: 80\n")
+		pin(s, now)
+		// 100 bytes is the absolute floor and about 9% of the window.
+		ingestRanks(s, now, []rankBytes{
+			{"198.51.100.10", 100},
+			{"203.0.113.10", 1000},
+			{"192.0.2.10", 50},
+		})
+		got := prefixOrder(targetsOf(t, s))
+		want := []string{"203.0.113.0/24", "198.51.100.0/24"}
+		if strings.Join(got, ",") != strings.Join(want, ",") {
+			t.Fatalf("targets = %v, want %v", got, want)
+		}
+	})
+
+	t.Run("percent alone", func(t *testing.T) {
+		s := mustSource(t, "listen: 127.0.0.1:2055\nwindow: 1m\ntop_n: 10\nmin_pct: 50\n")
+		pin(s, now)
+		ingestRanks(s, now, []rankBytes{
+			{"198.51.100.10", 600},
+			{"203.0.113.10", 400},
+		})
+		got := prefixOrder(targetsOf(t, s))
+		if len(got) != 1 || got[0] != "198.51.100.0/24" {
+			t.Fatalf("targets = %v", got)
+		}
+	})
+
+	t.Run("equal bytes stay in prefix order", func(t *testing.T) {
+		s := mustSource(t, "listen: 127.0.0.1:2055\nwindow: 1m\ntop_n: 10\nmin_bytes: 1\nmin_pct: 90\n")
+		pin(s, now)
+		// Same byte total. "192.0.2.0/24" sorts before "203.0.113.0/24".
+		// Both fail the 90% bar and are kept by the byte bar.
+		ingestRanks(s, now, []rankBytes{
+			{"203.0.113.10", 100},
+			{"192.0.2.10", 100},
+		})
+		got := prefixOrder(targetsOf(t, s))
+		want := []string{"192.0.2.0/24", "203.0.113.0/24"}
+		if strings.Join(got, ",") != strings.Join(want, ",") {
+			t.Fatalf("targets = %v, want %v", got, want)
+		}
+		again := prefixOrder(targetsOf(t, s))
+		if strings.Join(again, ",") != strings.Join(want, ",") {
+			t.Fatalf("order changed: %v", again)
+		}
+	})
+}
+
+// TestFlowTailInterval puts the top_n prefixes on the engine interval
+// and the rest of the capped set on tail_interval, still largest first.
+func TestFlowTailInterval(t *testing.T) {
+	s := mustSource(t, "listen: 127.0.0.1:2055\nwindow: 1m\ntop_n: 1\nmax_targets: 2\ntail_interval: 2m\n")
+	if s.TailInterval() != 2*time.Minute {
+		t.Fatalf("TailInterval = %s", s.TailInterval())
+	}
+	now := time.Unix(1_700_000_000, 0)
+	pin(s, now)
+	ingestRanks(s, now, []rankBytes{
+		{"203.0.113.10", 10},
+		{"198.51.100.10", 40},
+		{"192.0.2.10", 30},
+	})
+	ts := targetsOf(t, s)
+	if len(ts) != 2 {
+		t.Fatalf("targets = %+v", ts)
+	}
+	want := []struct {
+		prefix   string
+		interval time.Duration
+	}{
+		{"198.51.100.0/24", 0},
+		{"192.0.2.0/24", 2 * time.Minute},
+	}
+	for i, w := range want {
+		if ts[i].Prefix.String() != w.prefix || ts[i].Interval != w.interval || ts[i].Weight == 0 {
+			t.Fatalf("target[%d] = %+v, want %s %s", i, ts[i], w.prefix, w.interval)
+		}
+	}
+	// The smallest prefix is past max_targets.
+	for _, tg := range ts {
+		if tg.Prefix.String() == "203.0.113.0/24" {
+			t.Fatalf("cap did not hold: %+v", ts)
+		}
+	}
+}
+
+// TestFlowProblemStaysOnEngineInterval lists a problem prefix first, on
+// the normal interval, even when its bytes miss the floor. The volume
+// tail still carries tail_interval.
+func TestFlowProblemStaysOnEngineInterval(t *testing.T) {
+	s := mustSource(t, `
+listen: 127.0.0.1:2055
+window: 1m
+top_n: 1
+max_targets: 2
+min_bytes: 2000
+tail_interval: 2m
+problems:
+  local: [192.0.2.0/24]
+  min_flows: 2
+  failure_pct: 50
+`)
+	now := time.Unix(1_700_000_000, 0)
+	pin(s, now)
+	exp := netip.MustParseAddr("192.0.2.8")
+	local := netip.MustParseAddr("192.0.2.10")
+	bad := netip.MustParseAddr("198.51.100.20")
+	s.ingest(now, exp, buildV5(0, []v5rec{
+		{dst: netip.MustParseAddr("198.51.100.10"), octets: 5000},
+		{dst: netip.MustParseAddr("203.0.113.10"), octets: 3000},
+	}))
+	s.ingest(now, exp, buildV5TCP(0, []v5tcp{
+		{src: local, dst: bad, flags: tcpSYN},
+		{src: local, dst: bad, flags: tcpSYN},
+	}))
+	ts := targetsOf(t, s)
+	if len(ts) != 2 {
+		t.Fatalf("targets = %+v", ts)
+	}
+	// The failure address stays first and the problem is not pushed
+	// onto the tail cadence, even though it also clears the byte floor
+	// and takes the one priority slot.
+	if ts[0].Prefix.String() != "198.51.100.0/24" || ts[0].Interval != 0 || ts[0].Host != bad {
+		t.Fatalf("problem = %+v", ts[0])
+	}
+	if ts[1].Prefix.String() != "203.0.113.0/24" || ts[1].Interval != 2*time.Minute {
+		t.Fatalf("tail = %+v", ts[1])
+	}
+}
+
+func TestShareAtLeast(t *testing.T) {
+	const onePct = uint64(10_000)
+	if !shareAtLeast(1000, 10000, 10*onePct) || shareAtLeast(999, 10000, 10*onePct) {
+		t.Fatal("10% boundary")
+	}
+	total := uint64(1) << 62
+	half := uint64(1) << 61
+	if !shareAtLeast(half, total, 50*onePct) || shareAtLeast(half-1, total, 50*onePct) {
+		t.Fatal("large half")
+	}
+	if shareAtLeast(1, 100, 0) || shareAtLeast(0, 100, onePct) || !shareAtLeast(100, 100, 100*onePct) {
+		t.Fatal("zeros or 100%")
+	}
+	if _, err := minPctMillionths(0); err != nil {
+		t.Fatal(err)
+	}
+	if ppm, err := minPctMillionths(1); err != nil || ppm != onePct {
+		t.Fatalf("ppm = %d err %v", ppm, err)
+	}
+}
+
+type rankBytes struct {
+	dst   string
+	bytes uint32
+}
+
+func ingestRanks(s *Source, at time.Time, rows []rankBytes) {
+	recs := make([]v5rec, len(rows))
+	for i, r := range rows {
+		recs[i] = v5rec{dst: netip.MustParseAddr(r.dst), octets: r.bytes}
+	}
+	s.ingest(at, netip.MustParseAddr("192.0.2.8"), buildV5(0, recs))
+}
+
+func prefixOrder(ts []plugin.Target) []string {
+	out := make([]string, len(ts))
+	for i, t := range ts {
+		out[i] = t.Prefix.String()
+	}
+	return out
 }
 
 type nopProber struct{ plugin.Base }

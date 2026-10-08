@@ -37,6 +37,7 @@ import (
 	"github.com/GrandArcher/Packeteer/internal/notify"
 	"github.com/GrandArcher/Packeteer/internal/pluginhost"
 	_ "github.com/GrandArcher/Packeteer/internal/plugins/all"
+	"github.com/GrandArcher/Packeteer/internal/plugins/source/flow"
 	"github.com/GrandArcher/Packeteer/internal/plugins/source/outage"
 	"github.com/GrandArcher/Packeteer/internal/plugins/source/traceroute"
 	"github.com/GrandArcher/Packeteer/internal/plugins/source/vip"
@@ -302,6 +303,9 @@ func preflight(cfg *config.Config, log *slog.Logger, getenv func(string) string,
 		return nil, err
 	}
 	if err := checkOutageIntervals(cfg, plugins); err != nil {
+		return nil, err
+	}
+	if err := checkFlowTailIntervals(cfg, plugins); err != nil {
 		return nil, err
 	}
 	if a := cfg.Anomaly; a != nil {
@@ -1574,6 +1578,39 @@ func checkOutageIntervals(cfg *config.Config, plugins *pluginhost.Set) error {
 		}
 		if iv >= window {
 			errs = append(errs, fmt.Errorf("source %s: interval %s must be shorter than the staleness window %s (3*probe.interval + packets*timeout, plus retry packets when retry is on)", src.Name, iv, window))
+		}
+	}
+	if len(errs) == 0 {
+		return nil
+	}
+	return errors.Join(errs...)
+}
+
+// checkFlowTailIntervals rejects a tail cadence that is not slower than
+// the normal probe interval, or that is outside the staleness window.
+// A shorter interval would probe the tail more often than the priority
+// tier. A longer one leaves those prefixes stale, and the controller
+// would withdraw any improvement on them. The default has no tail.
+func checkFlowTailIntervals(cfg *config.Config, plugins *pluginhost.Set) error {
+	if plugins == nil || cfg == nil {
+		return nil
+	}
+	window := maxResultAge(cfg)
+	var errs []error
+	for _, src := range plugins.Sources {
+		s, ok := src.Plugin.(*flow.Source)
+		if !ok {
+			continue
+		}
+		iv := s.TailInterval()
+		if iv == 0 {
+			continue
+		}
+		if iv <= cfg.Probe.Interval {
+			errs = append(errs, fmt.Errorf("source %s: tail_interval %s must be longer than probe.interval %s", src.Name, iv, cfg.Probe.Interval))
+		}
+		if iv >= window {
+			errs = append(errs, fmt.Errorf("source %s: tail_interval %s must be shorter than the staleness window %s (3*probe.interval + packets*timeout, plus retry packets when retry is on)", src.Name, iv, window))
 		}
 	}
 	if len(errs) == 0 {

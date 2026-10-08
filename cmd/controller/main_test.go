@@ -478,6 +478,46 @@ sources:
 	}
 }
 
+func TestFlowTailIntervalMustFitStalenessWindow(t *testing.T) {
+	dir := t.TempDir()
+	write := func(interval string) string {
+		t.Helper()
+		path := filepath.Join(dir, strings.ReplaceAll(interval, "/", "-")+".yaml")
+		body := fmt.Sprintf(`mode: observe
+asn: 64512
+router_id: 192.0.2.10
+http: {listen: ""}
+providers:
+  - {name: a, source_ip: 192.0.2.11, next_hop: 192.0.2.1}
+sources:
+  - type: flow
+    config:
+      listen: 127.0.0.1:2055
+      top_n: 10
+      max_targets: 20
+      tail_interval: %s
+`, interval)
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+	var out, errOut bytes.Buffer
+	if code := run(context.Background(), []string{"-check", "-config", write("5m")}, noEnv, &out, &errOut); code != 1 || !strings.Contains(errOut.String(), "staleness window") {
+		t.Fatalf("code %d stderr %q", code, errOut.String())
+	}
+	out.Reset()
+	errOut.Reset()
+	if code := run(context.Background(), []string{"-check", "-config", write("30s")}, noEnv, &out, &errOut); code != 1 || !strings.Contains(errOut.String(), "probe.interval") {
+		t.Fatalf("code %d stderr %q", code, errOut.String())
+	}
+	out.Reset()
+	errOut.Reset()
+	if code := run(context.Background(), []string{"-check", "-config", write("60s")}, noEnv, &out, &errOut); code != 0 {
+		t.Fatalf("code %d stderr %q", code, errOut.String())
+	}
+}
+
 func TestVIPASNNotUsedUntilRIBReady(t *testing.T) {
 	c, err := plugin.ConfigFromYAML(`
 interval: 10s

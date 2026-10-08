@@ -113,8 +113,11 @@ scorer:
 #         - "0.0.0.0:2055"            # NetFlow v5/v9 and IPFIX
 #         - "0.0.0.0:6343"            # sFlow
 #       window: 5m
-#       top_n: 100                  # busiest prefixes. An active improvement stays probed after it falls out, until the improvement retires
-#       min_bytes: 1000000
+#       top_n: 100                  # priority tier, probed every probe.interval. An active improvement stays probed after it falls off the list, until the improvement retires
+#       max_targets: 100            # cap. 0 or omitted matches top_n. Up to 10000. A larger value also returns the next prefixes
+#       min_bytes: 1000000          # absolute floor over the window. 0 disables this bar
+#       min_pct: 0                  # percent of window bytes. 0 disables this bar. Either enabled bar keeps a prefix
+#       # tail_interval: 60s        # required when max_targets is greater than top_n. Longer than probe.interval, shorter than the staleness window
 #       aggregate_v4: 24
 #       aggregate_v6: 48
 #       exclude:
