@@ -89,21 +89,15 @@ func jobSubranges(t plugin.Target, lans []netip.Prefix) []plugin.Subrange {
 // retry.
 func (e *Engine) probeSubranges(ctx context.Context, j job) (res Result, down, ok bool) {
 	subs := make([]SubrangeResult, 0, len(j.subs))
-	hosts := make([]netip.Addr, 0, len(j.subs))
-	for _, s := range j.subs {
-		hosts = append(hosts, s.Host)
-	}
 	for _, s := range j.subs {
 		one, dn := e.probeOne(ctx, j.provider, j.target.Prefix, s.Host, e.opt.Packets)
 		if dn || ctx.Err() != nil {
-			one.Targets = hosts
 			return one, dn, true
 		}
 		if one.OK() && e.opt.RetryPackets > 0 &&
 			((e.opt.RetryLossPct > 0 && one.Stats.LossPct >= e.opt.RetryLossPct) || e.inconsistent(one.Stats)) {
 			again, dn := e.probeOne(ctx, j.provider, j.target.Prefix, s.Host, e.opt.RetryPackets)
 			if dn || ctx.Err() != nil {
-				again.Targets = hosts
 				return again, dn, true
 			}
 			if again.OK() {
@@ -113,24 +107,30 @@ func (e *Engine) probeSubranges(ctx context.Context, j job) (res Result, down, o
 		subs = append(subs, SubrangeResult{Prefix: s.Prefix, Target: s.Host, Weight: s.Weight,
 			Prober: one.Prober, Stats: one.Stats, Err: one.Err, Time: one.Time})
 	}
-	res, ok = combineSubranges(j.provider.Name, j.target.Prefix, hosts, subs)
+	res, ok = combineSubranges(j.provider.Name, j.target.Prefix, subs)
 	return res, false, ok
 }
 
 // combineSubranges builds the prefix result from its sub-ranges. Loss,
-// RTT, and jitter are traffic-weighted means: loss over every measured
-// sub-range, RTT and jitter over those that answered. Sent and Received
-// are sums. Target is the busiest measured sub-range's host. ok is false
-// when no sub-range was measured.
-func combineSubranges(provider string, prefix netip.Prefix, hosts []netip.Addr, subs []SubrangeResult) (Result, bool) {
-	res := Result{Provider: provider, Prefix: prefix, Targets: hosts, Subranges: subs}
+// RTT, and jitter are traffic-weighted means. Loss is over every
+// sub-range: one whose probe errored counts as full loss, so every
+// provider is scored on the same sub-ranges and one that fails where the
+// traffic goes cannot look better by leaving that sub-range out. RTT and
+// jitter are over those that answered. Sent and Received are sums.
+// Targets are the measured sub-range hosts, and Target is the busiest of
+// them. ok is false when no sub-range was measured.
+func combineSubranges(provider string, prefix netip.Prefix, subs []SubrangeResult) (Result, bool) {
+	res := Result{Provider: provider, Prefix: prefix, Subranges: subs}
 	var lossW, rttW, loss, rtt, jit float64
 	busiest := -1
 	seenRTT := false
 	for i, s := range subs {
+		lossW += s.Weight
 		if !s.OK() || s.Stats.Sent == 0 {
+			loss += s.Weight * 100
 			continue
 		}
+		res.Targets = append(res.Targets, s.Target)
 		if busiest < 0 || s.Weight > subs[busiest].Weight {
 			busiest = i
 		}
@@ -139,7 +139,6 @@ func combineSubranges(provider string, prefix netip.Prefix, hosts []netip.Addr, 
 		}
 		res.Stats.Sent += s.Stats.Sent
 		res.Stats.Received += s.Stats.Received
-		lossW += s.Weight
 		loss += s.Weight * s.Stats.LossPct
 		if s.Stats.Received == 0 {
 			continue

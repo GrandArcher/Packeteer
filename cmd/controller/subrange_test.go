@@ -34,18 +34,18 @@ func (p *hostRTTProber) Probe(_ context.Context, req plugin.ProbeRequest) (plugi
 }
 
 // TestSubrangeMeasurementAnnouncesOnlyLearnedPrefix is the inject-mode
-// check for #121. A learned /16 carries two measured /24 sub-ranges with
+// check for #121. A learned /24 carries two measured /26 sub-ranges with
 // different best providers. The decision is the traffic-weighted
 // aggregate and flags the prefix heterogeneous. The only route announced
-// is the learned /16 itself, with the community; no sub-range is ever
+// is the learned /24 itself, with the community; no sub-range is ever
 // announced. When the weighted aggregate keeps the native exit, nothing
 // is announced at all. Crash cleanup withdraws everything.
 func TestSubrangeMeasurementAnnouncesOnlyLearnedPrefix(t *testing.T) {
-	learned := netip.MustParsePrefix("198.51.0.0/16")
-	subA := netip.MustParsePrefix("198.51.100.0/24")
-	subB := netip.MustParsePrefix("198.51.200.0/24")
+	learned := netip.MustParsePrefix("198.51.100.0/24")
+	subA := netip.MustParsePrefix("198.51.100.0/26")
+	subB := netip.MustParsePrefix("198.51.100.192/26")
 	hostA := netip.MustParseAddr("198.51.100.10")
-	hostB := netip.MustParseAddr("198.51.200.10")
+	hostB := netip.MustParseAddr("198.51.100.202")
 
 	run := func(t *testing.T, weightA, weightB float64) (*memAnn, policy.Decision, []policy.Change, *announce.Controller) {
 		t.Helper()
@@ -82,7 +82,7 @@ func TestSubrangeMeasurementAnnouncesOnlyLearnedPrefix(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		allow := []netip.Prefix{netip.MustParsePrefix("198.51.0.0/16")}
+		allow := []netip.Prefix{netip.MustParsePrefix("198.51.100.0/24")}
 		dec := policy.NewEngine(policy.Config{
 			Mode: "inject", MinLossDeltaPct: 1, MinRTTDelta: 15 * time.Millisecond,
 			HoldTime: time.Minute, MaxImprovements: 50, MaxResultAge: time.Hour, Allowlist: allow,

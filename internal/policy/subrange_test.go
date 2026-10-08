@@ -9,11 +9,11 @@ import (
 	"github.com/GrandArcher/Packeteer/internal/probe"
 )
 
-// withSubranges adds two measured /24s to each result: rtt1 and rtt2 ms
+// withSubranges adds two measured /26s to each result: rtt1 and rtt2 ms
 // per provider, weights 3 and 1.
 func withSubranges(res []probe.Result, rtt map[string][2]float64) []probe.Result {
-	s1 := netip.MustParsePrefix("198.51.100.0/24")
-	s2 := netip.MustParsePrefix("198.51.200.0/24")
+	s1 := netip.MustParsePrefix("198.51.100.0/26")
+	s2 := netip.MustParsePrefix("198.51.100.192/26")
 	out := make([]probe.Result, len(res))
 	for i, r := range res {
 		v := rtt[r.Provider]
@@ -28,7 +28,7 @@ func withSubranges(res []probe.Result, rtt map[string][2]float64) []probe.Result
 
 func TestSubrangeFlagAndUnchangedDecision(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0)
-	wide := netip.MustParsePrefix("198.51.0.0/16")
+	wide := netip.MustParsePrefix("198.51.100.0/24")
 	// The prefix rows are the weighted aggregate the engine would build.
 	base := results(now, wide, m{"a", 0, 25}, m{"b", 0, 70}, m{"c", 0, 90})
 	native := map[netip.Prefix]string{wide: "b"}

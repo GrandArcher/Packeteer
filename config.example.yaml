@@ -133,7 +133,7 @@ scorer:
 #       #   bits_v4: 24
 #       #   bits_v6: 48
 #       #   max_subranges: 4          # per prefix, 2-16
-#       #   max_total: 1000           # across all targets
+#       #   max_total: 1000           # across all targets; each is probed per provider, so keep rounds inside the staleness window
 #   - type: span                # passive problem detection from a mirror port. Needs NET_RAW.
 #     config:                   # Does not announce; problem prefixes are probed first.
 #       interface: eth1         # mirror NIC; or pcap_file: /etc/packeteer/span.pcap (lab replay)

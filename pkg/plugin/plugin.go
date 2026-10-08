@@ -152,7 +152,8 @@ type Target struct {
 	// and the prefix score is their traffic-weighted aggregate. The flow
 	// source sets them when its subranges block is on. They are never
 	// announced: Prefix is still the only route a decision can steer. A
-	// pin ignores them. The engine keeps at most MaxSubranges.
+	// pin ignores them. The engine keeps at most MaxSubranges. When two
+	// sources name the same prefix, the first one's sub-ranges are kept.
 	Subranges []Subrange
 }
 

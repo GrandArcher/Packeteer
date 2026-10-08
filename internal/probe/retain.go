@@ -78,7 +78,8 @@ func (e *Engine) retainedHas(p netip.Prefix) bool {
 }
 
 // rememberedTarget is the last host choice and interval, in the shape a
-// source would submit. Urgent is one-shot and is not kept.
+// source would submit. Urgent is one-shot and is not kept, and neither
+// are sub-ranges.
 func rememberedTarget(t plugin.Target) plugin.Target {
 	r := plugin.Target{Prefix: t.Prefix, Interval: t.Interval}
 	switch {
@@ -89,9 +90,9 @@ func rememberedTarget(t plugin.Target) plugin.Target {
 	case t.Pinned && t.Host.IsValid():
 		r.Host = t.Host
 	}
-	if !t.Pinned {
-		r.Subranges = append([]plugin.Subrange(nil), t.Subranges...)
-	}
+	// Sub-ranges and their byte weights are not kept: once no source
+	// lists the prefix they describe traffic that may be gone, so a
+	// retained prefix is measured on its hosts (#121).
 	return r
 }
 

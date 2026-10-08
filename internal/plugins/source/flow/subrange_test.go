@@ -14,11 +14,13 @@ import (
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
 )
 
-const subrangeYAML = "listen: 127.0.0.1:2055\nwindow: 1m\ntop_n: 10\nsubranges: {}\n"
+// subrangeYAML splits learned prefixes into /26s so the tests stay in
+// 198.51.100.0/24.
+const subrangeYAML = "listen: 127.0.0.1:2055\nwindow: 1m\ntop_n: 10\nsubranges: {bits_v4: 26}\n"
 
-// learnedSlash16 maps 198.51.0.0/16 the way the RIB view would.
-func learnedSlash16(s *Source) netip.Prefix {
-	cover := netip.MustParsePrefix("198.51.0.0/16")
+// learnedCover maps 198.51.100.0/24 the way the RIB view would.
+func learnedCover(s *Source) netip.Prefix {
+	cover := netip.MustParsePrefix("198.51.100.0/24")
 	s.SetPrefixLookup(func(a netip.Addr) (netip.Prefix, bool) {
 		if cover.Contains(a) {
 			return cover, true
@@ -29,7 +31,7 @@ func learnedSlash16(s *Source) netip.Prefix {
 }
 
 func TestSubrangesConfig(t *testing.T) {
-	s := mustSource(t, subrangeYAML)
+	s := mustSource(t, "listen: 127.0.0.1:2055\nsubranges: {}\n")
 	if s.sub == nil || s.sub.bits4 != 24 || s.sub.bits6 != 48 || s.sub.maxPer != 4 || s.sub.maxTotal != 1000 || s.win.subCap != 8 {
 		t.Fatalf("defaults = %+v subCap %d", s.sub, s.win.subCap)
 	}
@@ -56,17 +58,17 @@ func TestSubrangesConfig(t *testing.T) {
 }
 
 func TestSubrangesBusiestPerPrefix(t *testing.T) {
-	s := mustSource(t, "listen: 127.0.0.1:2055\nwindow: 1m\ntop_n: 10\nsubranges: {max_subranges: 2}\n")
+	s := mustSource(t, "listen: 127.0.0.1:2055\nwindow: 1m\ntop_n: 10\nsubranges: {bits_v4: 26, max_subranges: 2}\n")
 	now := time.Unix(1_700_000_000, 0)
 	pin(s, now)
-	cover := learnedSlash16(s)
+	cover := learnedCover(s)
 	ingestRanks(s, now, []rankBytes{
 		{"198.51.100.10", 500},
 		{"198.51.100.11", 100},
-		{"198.51.200.20", 400},
-		{"198.51.7.1", 50},
-		// Not inside the learned /16: aggregated to a /24, which is
-		// not wider than bits_v4, so it has no sub-ranges.
+		{"198.51.100.212", 400},
+		{"198.51.100.65", 50},
+		// Not inside the learned /24: aggregated to a /24 with a
+		// single busy /26, so it has no sub-ranges.
 		{"203.0.113.5", 30},
 	})
 	ts := targetsOf(t, s)
@@ -75,12 +77,12 @@ func TestSubrangesBusiestPerPrefix(t *testing.T) {
 	}
 	got := ts[0].Subranges
 	if len(got) != 2 ||
-		got[0].Prefix.String() != "198.51.100.0/24" || got[0].Host.String() != "198.51.100.10" || got[0].Weight != 600 ||
-		got[1].Prefix.String() != "198.51.200.0/24" || got[1].Host.String() != "198.51.200.20" || got[1].Weight != 400 {
+		got[0].Prefix.String() != "198.51.100.0/26" || got[0].Host.String() != "198.51.100.10" || got[0].Weight != 600 ||
+		got[1].Prefix.String() != "198.51.100.192/26" || got[1].Host.String() != "198.51.100.212" || got[1].Weight != 400 {
 		t.Fatalf("sub-ranges = %+v", got)
 	}
 	if len(ts[1].Subranges) != 0 {
-		t.Fatalf("a /24 was split: %+v", ts[1])
+		t.Fatalf("a single sub-range was attached: %+v", ts[1])
 	}
 }
 
@@ -147,7 +149,7 @@ func (l *countLimiter) WaitN(_ context.Context, n int) error {
 }
 
 // TestSubrangesSimulatedFlowDecision is the #121 acceptance check with
-// simulated flow: two sub-ranges of a learned /16 with different best
+// simulated flow: two sub-ranges of a learned /24 with different best
 // providers produce two scores, a traffic-weighted prefix decision, and
 // the heterogeneous flag. Every packet waited on the rate limit. The
 // decision runs in observe mode and changes nothing for a sub-range.
@@ -155,10 +157,10 @@ func TestSubrangesSimulatedFlowDecision(t *testing.T) {
 	s := mustSource(t, subrangeYAML)
 	now := time.Unix(1_700_000_000, 0)
 	pin(s, now)
-	cover := learnedSlash16(s)
+	cover := learnedCover(s)
 	hostA := netip.MustParseAddr("198.51.100.10")
-	hostB := netip.MustParseAddr("198.51.200.10")
-	// 60% of the bytes go to 198.51.100.0/24, 40% to 198.51.200.0/24.
+	hostB := netip.MustParseAddr("198.51.100.202")
+	// 60% of the bytes go to 198.51.100.0/26, 40% to 198.51.100.192/26.
 	ingestRanks(s, now, []rankBytes{{hostA.String(), 600}, {hostB.String(), 400}})
 
 	// transit-a: 10ms to A, 40ms to B. Weighted 0.6*10 + 0.4*40 = 22ms.
@@ -222,8 +224,8 @@ func TestSubrangesSimulatedFlowDecision(t *testing.T) {
 		t.Fatalf("sub-ranges = %+v", d.Subranges)
 	}
 	a, b := d.Subranges[0], d.Subranges[1]
-	if a.Prefix.String() != "198.51.100.0/24" || a.Weight != 600 || a.Best != "transit-a" || len(a.Candidates) != 2 ||
-		b.Prefix.String() != "198.51.200.0/24" || b.Weight != 400 || b.Best != "transit-b" || len(b.Candidates) != 2 {
+	if a.Prefix.String() != "198.51.100.0/26" || a.Weight != 600 || a.Best != "transit-a" || len(a.Candidates) != 2 ||
+		b.Prefix.String() != "198.51.100.192/26" || b.Weight != 400 || b.Best != "transit-b" || len(b.Candidates) != 2 {
 		t.Fatalf("sub-ranges = %+v", d.Subranges)
 	}
 	if a.Candidates[0].Score >= a.Candidates[1].Score || b.Candidates[1].Score >= b.Candidates[0].Score {
