@@ -46,10 +46,16 @@ func TestExchangesEndpointAndMetrics(t *testing.T) {
 		`packeteer_exchange_peer_prefixes{exchange="ix-lab",peer="ix-peer-a"} 4`,
 		`packeteer_exchange_peer_improvements{exchange="ix-lab",peer="ix-peer-a"} 1`,
 		`packeteer_exchange_discovered_peers{exchange="ix-lab"} 1`,
+		"packeteer_exchange_lan_targets_dropped 0",
 	} {
 		if !strings.Contains(string(body), want) {
 			t.Errorf("metrics missing %s", want)
 		}
+	}
+	snap.ExchangeLANDrops = 4
+	body = Metrics(snap)
+	if !strings.Contains(string(body), "packeteer_exchange_lan_targets_dropped 4") {
+		t.Fatalf("non-zero drops missing: %s", body)
 	}
 
 	// No exchanges: an empty list, not null.

@@ -180,7 +180,7 @@ Read `/api/improvements` and the dashboard's current exit against the recommende
 Inject only after the router filters in the guides are in place, and only for prefixes you mean to steer. Change the mounted config (do not change the example in this repository):
 
 - `mode: inject`
-- `allowlist.prefixes`: prefixes you operate. A learned prefix is eligible when it is equal to an entry or more specific and inside it. Packeteer announces that learned prefix.
+- `allowlist.prefixes`: prefixes you operate. A learned prefix is eligible when it is equal to an entry or more specific and inside it. Packeteer announces that learned prefix. An entry that overlaps an exchange peering LAN is a load error.
 - `packeteer_community`: `"<asn>:<value>"`, each half 0–65535. Quote it.
 - `local_pref`: higher than the native local preference on the edge.
 - `hold_time`: a positive duration (`15m` in the example).

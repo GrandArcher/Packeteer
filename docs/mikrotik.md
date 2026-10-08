@@ -84,7 +84,7 @@ FRR, Junos, and IOS equivalents: [frr.md](frr.md), [junos.md](junos.md), [cisco.
 
 ## Exchange peers
 
-Exchange peers (`exchanges`, #27) are used only when Packeteer sees each peer's own path for the prefix, which needs the router to send every path (BGP add-path) or a BMP feed. Check that your RouterOS version offers one of them toward Packeteer. Without it, the route check keeps every exchange peer unusable (fail closed); transits still work. Per-peer probe sources are in [policy-routing.md](policy-routing.md#internet-exchange-peers).
+Exchange peers (`exchanges`, #27) are used only when Packeteer sees each peer's own path for the prefix, which needs the router to send every path (BGP add-path) or a BMP feed. Check that your RouterOS version offers one of them toward Packeteer. Without it, the route check keeps every exchange peer unusable (fail closed); transits still work. The peering LAN itself is not a probe target (#145). Per-peer probe sources are in [policy-routing.md](policy-routing.md#internet-exchange-peers).
 
 ## Traffic Flow (NetFlow / IPFIX)
 

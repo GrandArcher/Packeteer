@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/GrandArcher/Packeteer/internal/exchange"
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
 )
 
@@ -75,6 +76,10 @@ type Options struct {
 	// uses DefaultProberMemory. Hosts that leave the target set are
 	// dropped. Past the cap, the least recently probed hosts are dropped.
 	ProberMemory int
+	// ExchangeLANs are peering LANs (#145). A prefix inside one, or a
+	// pinned host on one, is not probed. A provider next hop on a LAN
+	// stays the far-side gateway probe. Nil leaves every target alone.
+	ExchangeLANs []netip.Prefix
 }
 
 // Result is the latest measurement of one provider toward one prefix.
@@ -228,6 +233,9 @@ func New(providers []Provider, probers []NamedProber, sources []NamedSource, opt
 	}
 	if opt.Now == nil {
 		opt.Now = time.Now
+	}
+	if len(opt.ExchangeLANs) > 0 {
+		opt.ExchangeLANs = append([]netip.Prefix(nil), opt.ExchangeLANs...)
 	}
 	e := &Engine{providers: providers, probers: probers, sources: sources, opt: opt, log: opt.Logger,
 		results: map[key]Result{}, status: map[string]ProviderStatus{}, sems: map[netip.Addr]chan struct{}{},
@@ -508,8 +516,36 @@ func (e *Engine) gatherTargets(ctx context.Context) ([]plugin.Target, bool) {
 	if !incomplete {
 		e.keepImproved(&out)
 		e.applyUrgent(&out)
+		e.dropExchangeLANs(&out)
 	}
 	return out, incomplete
+}
+
+// dropExchangeLANs removes prefixes and pinned hosts that sit on a peering
+// LAN after keepImproved, so a retained improvement cannot bring one back.
+func (e *Engine) dropExchangeLANs(out *[]plugin.Target) {
+	if out == nil || len(e.opt.ExchangeLANs) == 0 || len(*out) == 0 {
+		return
+	}
+	before := *out
+	next := exchange.FilterNormalized(e.opt.ExchangeLANs, before)
+	if sameTargetSlice(before, next) {
+		return
+	}
+	if len(next) < len(before) {
+		e.log.Info("dropped probe targets inside an exchange LAN", "before", len(before), "after", len(next))
+	}
+	*out = next
+}
+
+func sameTargetSlice(a, b []plugin.Target) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	if len(a) == 0 {
+		return true
+	}
+	return &a[0] == &b[0]
 }
 
 // SetUrgent replaces the prefixes a half-confirmed performance move wants
@@ -806,7 +842,7 @@ func (e *Engine) runRound(ctx context.Context, allow func(plugin.Target) bool, m
 			} else if t.Candidate {
 				candidate = t.Host
 			}
-			hosts := ProbeHosts(t.Prefix, pin, candidate, p.NextHop, p.Source)
+			hosts := omitLANHosts(ProbeHosts(t.Prefix, pin, candidate, p.NextHop, p.Source), p.NextHop, e.opt.ExchangeLANs)
 			if len(hosts) == 0 {
 				continue
 			}

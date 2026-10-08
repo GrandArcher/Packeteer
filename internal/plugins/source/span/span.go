@@ -8,9 +8,10 @@
 // the first time they appear, so the probe engine measures them first.
 //
 // Packets are parsed and discarded. Only per-connection sequence state and
-// per-prefix counters are kept, both capped. The source does not announce:
-// injection still needs the prefix in the learned RIB, the allowlist, the
-// community, the improvement cap, and hold time.
+// per-prefix counters are kept, both capped. A remote address inside an
+// exchange peering LAN is not a probe target and is not aggregated (#145).
+// The source does not announce: injection still needs the prefix in the
+// learned RIB, the allowlist, the community, the improvement cap, and hold time.
 package span
 
 import (
@@ -26,6 +27,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/GrandArcher/Packeteer/internal/exchange"
 	"github.com/GrandArcher/Packeteer/internal/passive"
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
 )
@@ -112,6 +114,10 @@ type Source struct {
 
 	mu     sync.RWMutex
 	lookup func(netip.Addr) (netip.Prefix, bool)
+	lans   []netip.Prefix
+
+	dropMu  sync.Mutex
+	dropped map[netip.Prefix]struct{}
 
 	cap      capture
 	stop     chan struct{}
@@ -270,6 +276,40 @@ func (s *Source) SetPrefixLookup(fn func(netip.Addr) (netip.Prefix, bool)) {
 	s.mu.Unlock()
 }
 
+// SetExchangeLANs installs the peering LANs (#145). A remote address inside
+// one is not counted and cannot become a probe target, including when no
+// learned route covers it and it would otherwise fall back to the aggregate
+// length. The controller calls this before Start.
+func (s *Source) SetExchangeLANs(lans []netip.Prefix) {
+	cp := append([]netip.Prefix(nil), lans...)
+	s.mu.Lock()
+	s.lans = cp
+	s.mu.Unlock()
+}
+
+func (s *Source) lansSnapshot() []netip.Prefix {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.lans
+}
+
+func (s *Source) noteLAN(p netip.Prefix) {
+	s.dropMu.Lock()
+	defer s.dropMu.Unlock()
+	if s.dropped == nil {
+		s.dropped = map[netip.Prefix]struct{}{}
+	}
+	s.dropped[p] = struct{}{}
+}
+
+func (s *Source) takeLANDrops() int {
+	s.dropMu.Lock()
+	defer s.dropMu.Unlock()
+	n := len(s.dropped)
+	s.dropped = nil
+	return n
+}
+
 // Start opens the capture. Interface capture needs CAP_NET_RAW; a missing
 // capability or interface fails startup. A pcap file is replayed once in
 // the background, its timestamps shifted to start now.
@@ -392,12 +432,21 @@ func (s *Source) ingest(at time.Time, link int, frame []byte) {
 }
 
 // keep drops remote addresses that are not useful probe targets:
-// non-unicast, loopback, link-local, multicast, private/ULA, and excluded.
+// non-unicast, loopback, link-local, multicast, private/ULA, excluded,
+// and anything inside an exchange peering LAN. The LAN check runs before
+// aggregation so a /64 LAN cannot become a /48 probe prefix.
 func (s *Source) keep(a netip.Addr) bool {
 	if !a.IsValid() || !a.IsGlobalUnicast() || a.IsPrivate() {
 		return false
 	}
-	return !passive.Contains(s.exclude, a)
+	if passive.Contains(s.exclude, a) {
+		return false
+	}
+	if lan, ok := exchange.Covering(s.lansSnapshot(), a); ok {
+		s.noteLAN(lan)
+		return false
+	}
+	return true
 }
 
 func (s *Source) prefixFor(a netip.Addr) netip.Prefix {
@@ -450,5 +499,7 @@ func (s *Source) Targets(ctx context.Context) ([]plugin.Target, error) {
 		}
 		out = append(out, t)
 	}
+	out = exchange.FilterTargets(s.lansSnapshot(), out)
+	exchange.NoteDrops(s.takeLANDrops())
 	return out, nil
 }

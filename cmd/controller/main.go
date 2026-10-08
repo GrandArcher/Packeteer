@@ -548,6 +548,7 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 		return 1
 	}
 	wirePrefixLookup(plugins, view)
+	wireExchangeLANs(cfg, plugins)
 	wireLearnedRoutes(plugins, view)
 	wireOutage(plugins, engine, view, dispatch)
 	col.SetTelemetry(func() []plugin.Usage { return collectTelemetry(context.Background(), plugins) })
@@ -1222,6 +1223,7 @@ func newEngine(cfg *config.Config, plugins *pluginhost.Set, log *slog.Logger, on
 		RetryPackets:         cfg.Probe.RetryPackets,
 		ProberRecheckRounds:  cfg.Probe.ProberRecheckRounds,
 		ProberMemory:         cfg.Probe.ProberMemory,
+		ExchangeLANs:         exchangeLANPrefixes(cfg),
 		Limiter:              rate.NewLimiter(rate.Limit(cfg.Probe.RateLimitPPS), burst),
 		Logger:               log,
 		OnResult:             onResult,
@@ -1594,6 +1596,38 @@ func checkVIPIntervals(cfg *config.Config, plugins *pluginhost.Set) error {
 		return nil
 	}
 	return errors.Join(errs...)
+}
+
+// exchangeLANSetter is implemented by target sources that must not probe
+// an exchange peering LAN (#145).
+type exchangeLANSetter interface {
+	SetExchangeLANs([]netip.Prefix)
+}
+
+// wireExchangeLANs copies every exchange's peering LAN onto the sources
+// that implement it, before they start, so a destination on that LAN is
+// never aggregated into a probe prefix.
+func wireExchangeLANs(cfg *config.Config, plugins *pluginhost.Set) {
+	if cfg == nil || plugins == nil {
+		return
+	}
+	lans := exchangeLANPrefixes(cfg)
+	for _, src := range plugins.Sources {
+		if s, ok := src.Plugin.(exchangeLANSetter); ok {
+			s.SetExchangeLANs(lans)
+		}
+	}
+}
+
+func exchangeLANPrefixes(cfg *config.Config) []netip.Prefix {
+	if cfg == nil {
+		return nil
+	}
+	var out []netip.Prefix
+	for _, ex := range cfg.Exchanges {
+		out = append(out, ex.ExchangeLANs()...)
+	}
+	return out
 }
 
 func wirePrefixLookup(plugins *pluginhost.Set, view *rib.View) {

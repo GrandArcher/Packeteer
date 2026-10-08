@@ -8,6 +8,9 @@ import (
 	"testing"
 	"time"
 
+	"net/netip"
+
+	"github.com/GrandArcher/Packeteer/internal/exchange"
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
 )
 
@@ -17,6 +20,31 @@ func build(y string) (plugin.TargetSource, error) {
 		return nil, err
 	}
 	return plugin.Sources.New(TypeName, c, plugin.Env{})
+}
+
+func TestExchangeLANTargetsDropped(t *testing.T) {
+	src, err := build("min_prefixes: 2\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := src.(*Source)
+	s.targets = []plugin.Target{
+		{Prefix: netip.MustParsePrefix("203.0.113.0/24")},
+		{Prefix: netip.MustParsePrefix("203.0.113.128/25")},
+		{Prefix: netip.MustParsePrefix("198.51.100.0/24")},
+	}
+	s.SetExchangeLANs([]netip.Prefix{netip.MustParsePrefix("203.0.113.0/24")})
+	before := exchange.LANDrops()
+	ts, err := s.Targets(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ts) != 1 || ts[0].Prefix.String() != "198.51.100.0/24" {
+		t.Fatalf("targets = %+v", ts)
+	}
+	if got := exchange.LANDrops() - before; got != 2 {
+		t.Fatalf("drops = %d, want 2", got)
+	}
 }
 
 func TestConfigValidation(t *testing.T) {

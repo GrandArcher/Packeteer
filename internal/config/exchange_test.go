@@ -98,19 +98,23 @@ func TestExchangeBMPOnly(t *testing.T) {
 
 func TestExchangeErrors(t *testing.T) {
 	cases := map[string]struct{ yaml, want string }{
-		"no lans":      {edit(t, exchangeYAML, "    lans: [203.0.113.0/24]\n", ""), "lans: at least one"},
-		"bad lan":      {edit(t, exchangeYAML, "[203.0.113.0/24]", "[203.0.113.1/24]"), "not a CIDR without host bits"},
-		"outside lan":  {edit(t, exchangeYAML, "next_hop: 203.0.113.12", "next_hop: 198.51.100.12"), "next_hop 198.51.100.12 is not inside"},
-		"no asn":       {edit(t, exchangeYAML, "        asn: 64502\n", ""), "asn is required"},
-		"no peers":     {exchangeYAML[:strings.Index(exchangeYAML, "    peers:")] + "bgp:\n  neighbors:\n    - address: 192.0.2.254\n      add_path: true\n", "peers: at least one"},
-		"no name":      {edit(t, exchangeYAML, "  - name: ix-lab\n    lans:", "  - lans:"), "exchanges[0]: name is required"},
-		"name clash":   {edit(t, exchangeYAML, "name: ix-lab", "name: transit-a"), "name is also a provider name"},
-		"own peer":     {edit(t, exchangeYAML, "name: ix-peer-b", "name: ix-lab"), "name is also a provider name"},
-		"peer clash":   {edit(t, exchangeYAML, "name: ix-peer-b", "name: transit-a"), "duplicate provider name"},
-		"source clash": {edit(t, exchangeYAML, "source_ip: 192.0.2.32", "source_ip: 192.0.2.11"), "duplicate source_ip"},
-		"no paths":     {edit(t, exchangeYAML, "      add_path: true\n", ""), "peers need their paths visible"},
-		"no bgp":       {exchangeYAML[:strings.Index(exchangeYAML, "bgp:")], "exchanges require bgp.neighbors"},
-		"bad as_path":  {exchangeYAML + "  as_path: origin\n", `bgp.as_path "origin" is invalid`},
+		"no lans":                {edit(t, exchangeYAML, "    lans: [203.0.113.0/24]\n", ""), "lans: at least one"},
+		"bad lan":                {edit(t, exchangeYAML, "[203.0.113.0/24]", "[203.0.113.1/24]"), "not a CIDR without host bits"},
+		"outside lan":            {edit(t, exchangeYAML, "next_hop: 203.0.113.12", "next_hop: 198.51.100.12"), "next_hop 198.51.100.12 is not inside"},
+		"no asn":                 {edit(t, exchangeYAML, "        asn: 64502\n", ""), "asn is required"},
+		"no peers":               {exchangeYAML[:strings.Index(exchangeYAML, "    peers:")] + "bgp:\n  neighbors:\n    - address: 192.0.2.254\n      add_path: true\n", "peers: at least one"},
+		"no name":                {edit(t, exchangeYAML, "  - name: ix-lab\n    lans:", "  - lans:"), "exchanges[0]: name is required"},
+		"name clash":             {edit(t, exchangeYAML, "name: ix-lab", "name: transit-a"), "name is also a provider name"},
+		"own peer":               {edit(t, exchangeYAML, "name: ix-peer-b", "name: ix-lab"), "name is also a provider name"},
+		"peer clash":             {edit(t, exchangeYAML, "name: ix-peer-b", "name: transit-a"), "duplicate provider name"},
+		"source clash":           {edit(t, exchangeYAML, "source_ip: 192.0.2.32", "source_ip: 192.0.2.11"), "duplicate source_ip"},
+		"no paths":               {edit(t, exchangeYAML, "      add_path: true\n", ""), "peers need their paths visible"},
+		"no bgp":                 {exchangeYAML[:strings.Index(exchangeYAML, "bgp:")], "exchanges require bgp.neighbors"},
+		"bad as_path":            {exchangeYAML + "  as_path: origin\n", `bgp.as_path "origin" is invalid`},
+		"allowlist equals lan":   {exchangeYAML + "allowlist:\n  prefixes: [203.0.113.0/24]\n", "overlaps exchange LAN 203.0.113.0/24"},
+		"allowlist inside lan":   {exchangeYAML + "allowlist:\n  prefixes: [203.0.113.128/25]\n", "overlaps exchange LAN 203.0.113.0/24"},
+		"allowlist contains lan": {exchangeYAML + "allowlist:\n  prefixes: [203.0.0.0/16]\n", "overlaps exchange LAN 203.0.113.0/24"},
+		"allowlist v6 contains":  {edit(t, exchangeYAML, "lans: [203.0.113.0/24]", "lans: [203.0.113.0/24, 2001:db8:ffff::/64]") + "allowlist:\n  prefixes: [2001:db8::/32]\n", "overlaps exchange LAN 2001:db8:ffff::/64"},
 	}
 	for name, tc := range cases {
 		_, err := Parse([]byte(tc.yaml))
@@ -120,5 +124,20 @@ func TestExchangeErrors(t *testing.T) {
 	}
 	if _, err := Parse([]byte(exchangeYAML + "  as_path: Provider\n")); err != nil {
 		t.Fatalf("as_path provider: %v", err)
+	}
+}
+
+func TestAllowlistBesideExchangeLAN(t *testing.T) {
+	y := exchangeYAML + "allowlist:\n  prefixes: [198.51.100.0/24, \"2001:db8::/32\"]\n"
+	cfg, err := Parse([]byte(y))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.Allowlist.Prefixes) != 2 {
+		t.Fatalf("allowlist = %v", cfg.Allowlist.Prefixes)
+	}
+	// No exchanges: an allowlist may contain any documentation prefix.
+	if _, err := Parse([]byte(minimalYAML + "allowlist:\n  prefixes: [203.0.113.0/24]\n")); err != nil {
+		t.Fatal(err)
 	}
 }

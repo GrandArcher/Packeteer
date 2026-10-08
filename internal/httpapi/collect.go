@@ -145,5 +145,6 @@ func (c *Collector) Snapshot() Snapshot {
 		}
 		in.Exchanges = exchange.Build(exs, nh, up, imps)
 	}
+	in.ExchangeLANDrops = exchange.LANDrops()
 	return Assemble(in)
 }
