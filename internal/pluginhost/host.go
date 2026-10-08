@@ -165,7 +165,26 @@ func Build(cfg *config.Config, opts Options) (*Set, error) {
 	if err := errors.Join(errs...); err != nil {
 		return nil, err
 	}
+	s.attachSampleStore()
 	return s, nil
+}
+
+// attachSampleStore gives telemetry plugins that keep a 95th-percentile
+// window the storage plugin, when that store persists samples (#127).
+// Storage starts first, so the window can load its open period in Start.
+func (s *Set) attachSampleStore() {
+	if s.Storage == nil {
+		return
+	}
+	store, ok := s.Storage.Plugin.(plugin.SampleStore)
+	if !ok {
+		return
+	}
+	for _, t := range s.Telemetry {
+		if k, ok := t.Plugin.(plugin.SampleKeeper); ok {
+			k.UseSampleStore(store)
+		}
+	}
 }
 
 func (s *Set) all() []namedLifecycle {

@@ -386,6 +386,14 @@ type Telemetry interface {
 	Snapshot(ctx context.Context) ([]Usage, error)
 }
 
+// SampleKeeper is optional on a telemetry plugin that keeps a
+// 95th-percentile window (#127). The host calls UseSampleStore before
+// Start when a storage plugin implements SampleStore. Without a store,
+// samples stay in memory and a restart clears the open period.
+type SampleKeeper interface {
+	UseSampleStore(SampleStore)
+}
+
 // ErrSourceUnavailable is returned (wrapped) by probers when the requested
 // source address cannot be used, e.g. it is not configured on the host. The
 // core treats it as "provider down" and fails closed instead of guessing.

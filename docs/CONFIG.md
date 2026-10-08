@@ -984,7 +984,7 @@ The row's timestamp is the time of the read, so `max_age` on the commit scorer d
 
 ### Telemetry `snmp`
 
-Off unless a `telemetry` entry lists `type: snmp`. It polls IF-MIB counters and keeps 95th-percentile usage for the open billing period. It does not announce. The `commit` scorer reads the snapshot when that scorer is selected; the collector itself does not change a decision. A failed poll does not withdraw performance improvements. Samples live in memory. A restart clears the window.
+Off unless a `telemetry` entry lists `type: snmp`. It polls IF-MIB counters and keeps 95th-percentile usage for the open billing period. It does not announce. The `commit` scorer reads the snapshot when that scorer is selected; the collector itself does not change a decision. A failed poll does not withdraw performance improvements. Samples for the open period live in memory. When `storage` is configured, each accepted sample is also written to that database, per provider binding and billing period, and the open period is loaded on start so the 95th matches after a restart. Without `storage`, a restart clears the window. A closed period is left in the database until `retention` deletes it (the period has ended, and its end is older than retention). A failed write keeps the sample in memory and does not change a decision. `Updated` on reload is the time of the last stored sample, so commit control still ignores a reading older than `max_age`.
 
 The billing period is `[start, end)` in UTC, opening at 00:00 UTC on `billing_day`. `billing_day` is 1–28 so the day exists in every month.
 
@@ -1007,7 +1007,7 @@ Credentials are environment variables named in the config. The file must not con
 | `interval` | `5m` | `30s`–`1h`. Time between polls. |
 | `timeout` | `5s` | At least `100ms`, shorter than `interval`. Per SNMP request. |
 | `retries` | 1 | 0–5. Extra attempts after the first. `0` does not retry. |
-| `max_samples` | 100000 | 1–1000000. Oldest samples in the open period are dropped past this. `0` uses the default. |
+| `max_samples` | 100000 | 1–1000000. Oldest samples in the open period are dropped past this, in memory and in storage. `0` uses the default. |
 | `hosts` | none | Required. One SNMP agent. Several providers can share a host. |
 | `providers` | none | Required. Each entry names a configured provider. |
 
@@ -1055,6 +1055,7 @@ What is stored:
 - Daily probe rollups per prefix and provider (UTC day): probes, failed probes, and sums of loss, RTT, and jitter. Raw probe results are not stored.
 - One row per improvement, from start to end. A switch to another provider ends the row and starts a new one. Each row has the cause, reason, mode, the native provider's loss and RTT and the chosen provider's loss and RTT at the decision that started it, `cost_delta`, `est_savings`, the prefix volume when known, the origin ASN (last AS in the learned path), and the country. In observe and suggest these are recommendations; in inject they were announced.
 - Per prefix: origin ASN, country, and latest volume.
+- SNMP 95th-percentile samples (#127), when a `telemetry` plugin of type `snmp` is configured: one row per provider binding and sample time (inbound and outbound bits per second, and the billing period). The collector loads the open period on start. A closed period stays until `retention` (rows whose period has ended by the cutoff). This does not announce. Without `storage`, those samples stay in memory and a restart clears them.
 
 The recorder buffers in memory and writes once a minute and on shutdown, after the routes are withdrawn. Rows a previous process left open are closed on start with `controller restarted (routes withdrawn)`.
 
