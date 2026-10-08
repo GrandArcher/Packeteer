@@ -7,9 +7,11 @@
 // destination inside an exchange peering LAN is not a probe target and is
 // not aggregated (#145): BGP sessions and IXP services on that LAN must
 // not be probed when no learned route covers them. Up to three of the
-// busiest destinations are probe candidates, not pins. Raw flow records are
-// not stored: only per-bucket counters and the templates needed to decode
-// NetFlow v9 and IPFIX.
+// busiest destinations are probe candidates, not pins. A prefix stays on
+// the list when it clears min_bytes or min_pct (#118). top_n of that list
+// are probed every round; the rest, up to max_targets, carry tail_interval.
+// Raw flow records are not stored: only per-bucket counters and the
+// templates needed to decode NetFlow v9 and IPFIX.
 //
 // With a problems block it also scores remote prefixes by TCP flags on
 // unsampled NetFlow v5, v9, and IPFIX records (internal/passive): outbound
@@ -29,6 +31,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
+	"math/bits"
 	"net"
 	"net/netip"
 	"strconv"
@@ -53,7 +57,12 @@ const (
 	maxTopN         = 10000
 	maxWindow       = 24 * time.Hour
 	minWindow       = time.Second
+	minTailInterval = time.Second
 	maxPrefixes     = 20000
+	// minPctScale turns a percent (1 means 1%) into millionths of the
+	// window. 1% is 10_000, 100% is 1_000_000, and the step is 0.0001
+	// percentage points.
+	minPctScale     = 10_000
 	udpReadBuffer   = 4 << 20
 	udpReadTimeout  = time.Second
 	udpPayloadBytes = 65535
@@ -84,13 +93,16 @@ var (
 
 // Config is the flow source's config block.
 type Config struct {
-	Listen      listenList    `yaml:"listen"`
-	Window      time.Duration `yaml:"window"`
-	TopN        int           `yaml:"top_n"`
-	MinBytes    uint64        `yaml:"min_bytes"`
-	AggregateV4 int           `yaml:"aggregate_v4"`
-	AggregateV6 int           `yaml:"aggregate_v6"`
-	Exclude     []string      `yaml:"exclude"`
+	Listen       listenList    `yaml:"listen"`
+	Window       time.Duration `yaml:"window"`
+	TopN         int           `yaml:"top_n"`
+	MaxTargets   int           `yaml:"max_targets"`
+	MinBytes     uint64        `yaml:"min_bytes"`
+	MinPct       float64       `yaml:"min_pct"`
+	TailInterval time.Duration `yaml:"tail_interval"`
+	AggregateV4  int           `yaml:"aggregate_v4"`
+	AggregateV6  int           `yaml:"aggregate_v6"`
+	Exclude      []string      `yaml:"exclude"`
 	// Problems turns on passive problem detection from TCP flags. Off
 	// when omitted.
 	Problems *ProblemsConfig `yaml:"problems"`
@@ -160,15 +172,18 @@ func (l *listenList) UnmarshalYAML(n *yaml.Node) error {
 // Source collects flow exports and turns them into probe targets.
 type Source struct {
 	plugin.Base
-	log      *slog.Logger
-	listen   []string
-	window   time.Duration
-	topN     int
-	minBytes uint64
-	agg4     int
-	agg6     int
-	exclude  []netip.Prefix
-	now      func() time.Time
+	log          *slog.Logger
+	listen       []string
+	window       time.Duration
+	topN         int
+	maxTargets   int
+	minBytes     uint64
+	minPctPPM    uint64
+	tailInterval time.Duration
+	agg4         int
+	agg6         int
+	exclude      []netip.Prefix
+	now          func() time.Time
 
 	mu     sync.RWMutex
 	lookup func(netip.Addr) (netip.Prefix, bool)
@@ -222,6 +237,25 @@ func New(c plugin.Config, env plugin.Env) (plugin.TargetSource, error) {
 	if cfg.TopN < 1 || cfg.TopN > maxTopN {
 		return nil, fmt.Errorf("top_n %d must be between 1 and %d", cfg.TopN, maxTopN)
 	}
+	ppm, err := minPctMillionths(cfg.MinPct)
+	if err != nil {
+		return nil, err
+	}
+	if cfg.MaxTargets < 0 || cfg.MaxTargets > maxTopN {
+		return nil, fmt.Errorf("max_targets %d must be between 1 and %d, or 0 to match top_n", cfg.MaxTargets, maxTopN)
+	}
+	if cfg.MaxTargets == 0 {
+		cfg.MaxTargets = cfg.TopN
+	}
+	if cfg.MaxTargets < cfg.TopN {
+		return nil, fmt.Errorf("max_targets %d is below top_n %d", cfg.MaxTargets, cfg.TopN)
+	}
+	if cfg.MaxTargets > cfg.TopN && cfg.TailInterval <= 0 {
+		return nil, fmt.Errorf("tail_interval is required when max_targets (%d) is greater than top_n (%d)", cfg.MaxTargets, cfg.TopN)
+	}
+	if cfg.TailInterval < 0 || (cfg.TailInterval > 0 && (cfg.TailInterval < minTailInterval || cfg.TailInterval > maxWindow)) {
+		return nil, fmt.Errorf("tail_interval %s must be between %s and %s", cfg.TailInterval, minTailInterval, maxWindow)
+	}
 	if cfg.AggregateV4 == 0 {
 		cfg.AggregateV4 = defaultAgg4
 	}
@@ -250,20 +284,23 @@ func New(c plugin.Config, env plugin.Env) (plugin.TargetSource, error) {
 		env.Logger = slog.Default()
 	}
 	return &Source{
-		prob:     prob,
-		tr:       tr,
-		log:      env.Logger,
-		listen:   listen,
-		window:   cfg.Window,
-		topN:     cfg.TopN,
-		minBytes: cfg.MinBytes,
-		agg4:     cfg.AggregateV4,
-		agg6:     cfg.AggregateV6,
-		exclude:  excl,
-		now:      time.Now,
-		dec:      &decoder{},
-		win:      newSlide(cfg.Window, maxPrefixes),
-		ctr:      newCounters(maxPrefixes),
+		prob:         prob,
+		tr:           tr,
+		log:          env.Logger,
+		listen:       listen,
+		window:       cfg.Window,
+		topN:         cfg.TopN,
+		maxTargets:   cfg.MaxTargets,
+		minBytes:     cfg.MinBytes,
+		minPctPPM:    ppm,
+		tailInterval: cfg.TailInterval,
+		agg4:         cfg.AggregateV4,
+		agg6:         cfg.AggregateV6,
+		exclude:      excl,
+		now:          time.Now,
+		dec:          &decoder{},
+		win:          newSlide(cfg.Window, maxPrefixes),
+		ctr:          newCounters(maxPrefixes),
 	}, nil
 }
 
@@ -539,6 +576,74 @@ func udpAddr(a *net.UDPAddr) netip.Addr {
 	return ip.Unmap()
 }
 
+// TailInterval is the cadence for prefixes past top_n. It is zero when
+// the probed set is only the priority tier (max_targets equals top_n),
+// including the default. The controller rejects a non-zero value that is
+// not longer than probe.interval and shorter than the staleness window.
+func (s *Source) TailInterval() time.Duration {
+	if s == nil || s.maxTargets <= s.topN {
+		return 0
+	}
+	return s.tailInterval
+}
+
+// minPctMillionths converts a percent of window bytes to millionths.
+// Zero disables the percent floor. The step is 0.0001 percentage points.
+func minPctMillionths(pct float64) (uint64, error) {
+	if pct == 0 {
+		return 0, nil
+	}
+	if math.IsNaN(pct) || math.IsInf(pct, 0) || pct < 0 || pct > 100 {
+		return 0, fmt.Errorf("min_pct %v must be between 0 and 100", pct)
+	}
+	scaled := math.Round(pct * minPctScale)
+	if scaled < 1 || scaled > 1_000_000 {
+		return 0, fmt.Errorf("min_pct %v must be between 0.0001 and 100", pct)
+	}
+	return uint64(scaled), nil
+}
+
+// passesFloor reports whether a prefix with bytes in a window of total
+// stays eligible. A min_bytes of 0 leaves the absolute bar off. A
+// minPctPPM of 0 leaves the percent bar off. When both are off, every
+// prefix with bytes is eligible (the previous behavior). When both are
+// on, either bar is enough. overflow means the window sum did not fit in
+// a uint64; the percent bar then fails closed.
+func passesFloor(bytes, total uint64, overflow bool, minBytes, minPctPPM uint64) bool {
+	if bytes == 0 {
+		return false
+	}
+	byteOn := minBytes > 0
+	pctOn := minPctPPM > 0 && !overflow
+	if !byteOn && !pctOn {
+		return minPctPPM == 0
+	}
+	if byteOn && bytes >= minBytes {
+		return true
+	}
+	return pctOn && shareAtLeast(bytes, total, minPctPPM)
+}
+
+// shareAtLeast reports bytes/total >= ppm/1_000_000. ppm is millionths
+// of the window, so 10_000 is one percent.
+func shareAtLeast(bytes, total, ppm uint64) bool {
+	if bytes == 0 || total == 0 || ppm == 0 {
+		return false
+	}
+	if bytes >= total {
+		return true
+	}
+	if ppm >= 1_000_000 {
+		return false
+	}
+	hi, lo := bits.Mul64(bytes, 1_000_000)
+	phi, plo := bits.Mul64(ppm, total)
+	if hi != phi {
+		return hi > phi
+	}
+	return lo >= plo
+}
+
 // Volumes implements plugin.VolumeSource. Mbps is bytes over the configured
 // window. The list is not limited to top_n. It does not announce.
 func (s *Source) Volumes(ctx context.Context) ([]plugin.PrefixVolume, error) {
@@ -594,9 +699,16 @@ func (s *Source) TrafficMix(ctx context.Context) ([]plugin.TrafficMix, error) {
 // idle collector returns an empty slice, not an error, so other sources
 // keep working. Each target carries up to three destination addresses,
 // busiest first. A problem prefix puts the failure address first.
+//
+// Volume prefixes are the ones that clear an enabled floor, largest
+// first, prefix text breaking a tie (#118). The first top_n keep the
+// engine interval. The rest, up to max_targets, carry tail_interval.
+// Problem prefixes stay on the engine interval. A problem that also
+// clears the floor still uses one slot, as it did under top_n alone.
 func (s *Source) Targets(context.Context) ([]plugin.Target, error) {
 	now := s.now()
 	rows := s.win.aggregate(now)
+	total, overflow := windowBytes(rows)
 	hostOf := make(map[netip.Prefix][]netip.Addr, len(rows))
 	for _, r := range rows {
 		hostOf[r.prefix] = r.hosts
@@ -616,14 +728,12 @@ func (s *Source) Targets(context.Context) ([]plugin.Target, error) {
 			listed[p.Prefix] = true
 		}
 	}
-	// Same order and cap as slide.top: the busiest prefixes that clear
-	// min_bytes, then skip any a problem entry already listed.
 	added := 0
 	for _, r := range rows {
-		if r.bytes == 0 || r.bytes < s.minBytes {
+		if !passesFloor(r.bytes, total, overflow, s.minBytes, s.minPctPPM) {
 			continue
 		}
-		if added >= s.topN {
+		if added >= s.maxTargets {
 			break
 		}
 		added++
@@ -631,12 +741,28 @@ func (s *Source) Targets(context.Context) ([]plugin.Target, error) {
 			continue
 		}
 		t := plugin.Target{Prefix: r.prefix, Weight: float64(r.bytes)}
+		if added > s.topN {
+			t.Interval = s.tailInterval
+		}
 		setFlowHosts(&t, r.hosts)
 		out = append(out, t)
 	}
 	out = exchange.FilterTargets(s.lansSnapshot(), out)
 	exchange.NoteDrops(s.takeLANDrops())
 	return out, nil
+}
+
+// windowBytes is the sum of prefix bytes in one aggregated window.
+// overflow is set when the sum does not fit in a uint64; total is then
+// the maximum uint64 and the percent floor fails closed.
+func windowBytes(rows []rank) (total uint64, overflow bool) {
+	for _, r := range rows {
+		if r.bytes > ^uint64(0)-total {
+			return ^uint64(0), true
+		}
+		total += r.bytes
+	}
+	return total, false
 }
 
 // setFlowHosts records up to three destinations as probe candidates.

@@ -115,7 +115,8 @@ sources:
       listen: ["0.0.0.0:2055"]
       window: 5m
       top_n: 100
-      min_bytes: 1000000
+      max_targets: 100            # 0 matches top_n. Raise it, and set tail_interval, to probe past the priority tier
+      min_bytes: 1000000          # or min_pct: 1. Either enabled bar keeps a prefix. 0 disables that bar
       exclude: ["192.0.2.0/24"]
 ```
 
