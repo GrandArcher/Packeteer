@@ -89,6 +89,9 @@ func rememberedTarget(t plugin.Target) plugin.Target {
 	case t.Pinned && t.Host.IsValid():
 		r.Host = t.Host
 	}
+	if !t.Pinned {
+		r.Subranges = append([]plugin.Subrange(nil), t.Subranges...)
+	}
 	return r
 }
 
@@ -108,6 +111,11 @@ func normalizeTarget(t plugin.Target) plugin.Target {
 		t.Hosts = cleanExtraHosts(t.Prefix, t.Host, t.Hosts)
 	} else {
 		t.Hosts = nil
+	}
+	if explicit {
+		t.Subranges = nil
+	} else {
+		t.Subranges = cleanSubranges(t.Prefix, t.Subranges)
 	}
 	return t
 }

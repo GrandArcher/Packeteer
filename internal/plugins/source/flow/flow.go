@@ -24,6 +24,13 @@
 // a transit prefix. The class reaches the policy chain so transit and local
 // prefixes can have separate policies (rules with traffic: transit|local).
 // Classification never announces and never adds a target.
+//
+// With a subranges block it also counts bytes per sub-range (#121), for
+// example per /24 inside a learned /16, and each target wider than the
+// sub-range length carries its busiest sub-ranges, each with its own
+// busiest destination. The probe engine scores each one and the prefix
+// score is their traffic-weighted aggregate. Sub-ranges are measured,
+// never announced.
 package flow
 
 import (
@@ -74,6 +81,14 @@ const (
 	defaultTransitSharePct = 50
 	maxTransitCustomers    = 10000
 
+	defaultSubBitsV4     = 24
+	defaultSubBitsV6     = 48
+	defaultMaxSubranges  = 4
+	defaultSubMaxTotal   = 1000
+	minMaxSubranges      = 2
+	subTrackPerSubrange  = 2
+	maxSubTrackPerBucket = 2 * plugin.MaxSubranges
+
 	tcpSYN = 0x02
 	tcpRST = 0x04
 	tcpACK = 0x10
@@ -108,6 +123,30 @@ type Config struct {
 	Problems *ProblemsConfig `yaml:"problems"`
 	// Transit turns on transit traffic classification. Off when omitted.
 	Transit *TransitConfig `yaml:"transit"`
+	// Subranges turns on sub-range measurement inside wide prefixes
+	// (#121). Off when omitted.
+	Subranges *SubrangesConfig `yaml:"subranges"`
+}
+
+// SubrangesConfig is the flow source's sub-range measurement block (#121).
+type SubrangesConfig struct {
+	// BitsV4 and BitsV6 are the sub-range lengths. A prefix as long as
+	// that, or longer, is not split. Defaults 24 and 48.
+	BitsV4 int `yaml:"bits_v4"`
+	BitsV6 int `yaml:"bits_v6"`
+	// MaxSubranges is how many of a prefix's busiest sub-ranges are
+	// measured. Default 4, 2 to 16.
+	MaxSubranges int `yaml:"max_subranges"`
+	// MaxTotal caps sub-ranges across every target in one list, busiest
+	// prefixes first. Default 1000, at most 10000.
+	MaxTotal int `yaml:"max_total"`
+}
+
+// subranges is the validated SubrangesConfig.
+type subranges struct {
+	bits4, bits6 int
+	maxPer       int
+	maxTotal     int
 }
 
 // TransitConfig is the flow source's transit classification block.
@@ -196,6 +235,7 @@ type Source struct {
 	win  *slide
 	prob *problems
 	tr   *transit
+	sub  *subranges
 	ctr  *counters
 
 	conns     []*net.UDPConn
@@ -280,12 +320,21 @@ func New(c plugin.Config, env plugin.Env) (plugin.TargetSource, error) {
 	if err != nil {
 		return nil, err
 	}
+	sub, err := newSubranges(cfg.Subranges)
+	if err != nil {
+		return nil, err
+	}
 	if env.Logger == nil {
 		env.Logger = slog.Default()
+	}
+	win := newSlide(cfg.Window, maxPrefixes)
+	if sub != nil {
+		win.subCap = min(sub.maxPer*subTrackPerSubrange, maxSubTrackPerBucket)
 	}
 	return &Source{
 		prob:         prob,
 		tr:           tr,
+		sub:          sub,
 		log:          env.Logger,
 		listen:       listen,
 		window:       cfg.Window,
@@ -299,7 +348,7 @@ func New(c plugin.Config, env plugin.Env) (plugin.TargetSource, error) {
 		exclude:      excl,
 		now:          time.Now,
 		dec:          &decoder{},
-		win:          newSlide(cfg.Window, maxPrefixes),
+		win:          win,
 		ctr:          newCounters(maxPrefixes),
 	}, nil
 }
@@ -337,6 +386,57 @@ func newProblems(c *ProblemsConfig, window time.Duration) (*problems, error) {
 		return nil, fmt.Errorf("problems: %w", err)
 	}
 	return &problems{local: local, th: th, maxTargets: c.MaxTargets, win: passive.NewWindow(window, maxPrefixes)}, nil
+}
+
+func newSubranges(c *SubrangesConfig) (*subranges, error) {
+	if c == nil {
+		return nil, nil
+	}
+	if c.BitsV4 == 0 {
+		c.BitsV4 = defaultSubBitsV4
+	}
+	if c.BitsV4 < 1 || c.BitsV4 > 32 {
+		return nil, fmt.Errorf("subranges.bits_v4 %d must be between 1 and 32", c.BitsV4)
+	}
+	if c.BitsV6 == 0 {
+		c.BitsV6 = defaultSubBitsV6
+	}
+	if c.BitsV6 < 1 || c.BitsV6 > 128 {
+		return nil, fmt.Errorf("subranges.bits_v6 %d must be between 1 and 128", c.BitsV6)
+	}
+	if c.MaxSubranges == 0 {
+		c.MaxSubranges = defaultMaxSubranges
+	}
+	if c.MaxSubranges < minMaxSubranges || c.MaxSubranges > plugin.MaxSubranges {
+		return nil, fmt.Errorf("subranges.max_subranges %d must be between %d and %d", c.MaxSubranges, minMaxSubranges, plugin.MaxSubranges)
+	}
+	if c.MaxTotal == 0 {
+		c.MaxTotal = defaultSubMaxTotal
+	}
+	if c.MaxTotal < minMaxSubranges || c.MaxTotal > maxTopN {
+		return nil, fmt.Errorf("subranges.max_total %d must be between %d and %d", c.MaxTotal, minMaxSubranges, maxTopN)
+	}
+	return &subranges{bits4: c.BitsV4, bits6: c.BitsV6, maxPer: c.MaxSubranges, maxTotal: c.MaxTotal}, nil
+}
+
+// of returns dst's sub-range inside p, or an invalid prefix when
+// sub-ranges are off or p is not wider than the sub-range length.
+func (c *subranges) of(p netip.Prefix, dst netip.Addr) netip.Prefix {
+	if c == nil || !p.IsValid() {
+		return netip.Prefix{}
+	}
+	bits := c.bits4
+	if dst.Is6() {
+		bits = c.bits6
+	}
+	if p.Bits() >= bits {
+		return netip.Prefix{}
+	}
+	sp, err := dst.Prefix(bits)
+	if err != nil {
+		return netip.Prefix{}
+	}
+	return sp.Masked()
 }
 
 func newTransit(c *TransitConfig) (*transit, error) {
@@ -710,8 +810,14 @@ func (s *Source) Targets(context.Context) ([]plugin.Target, error) {
 	rows := s.win.aggregate(now)
 	total, overflow := windowBytes(rows)
 	hostOf := make(map[netip.Prefix][]netip.Addr, len(rows))
+	subsOf := make(map[netip.Prefix][]subRank, len(rows))
 	for _, r := range rows {
 		hostOf[r.prefix] = r.hosts
+		subsOf[r.prefix] = r.subs
+	}
+	subLeft := 0
+	if s.sub != nil {
+		subLeft = s.sub.maxTotal
 	}
 	out := []plugin.Target{}
 	listed := map[netip.Prefix]bool{}
@@ -724,6 +830,7 @@ func (s *Source) Targets(context.Context) ([]plugin.Target, error) {
 			}
 			hosts = append(hosts, hostOf[p.Prefix]...)
 			setFlowHosts(&t, hosts)
+			s.setSubranges(&t, subsOf[p.Prefix], &subLeft)
 			out = append(out, t)
 			listed[p.Prefix] = true
 		}
@@ -745,6 +852,7 @@ func (s *Source) Targets(context.Context) ([]plugin.Target, error) {
 			t.Interval = s.tailInterval
 		}
 		setFlowHosts(&t, r.hosts)
+		s.setSubranges(&t, r.subs, &subLeft)
 		out = append(out, t)
 	}
 	out = exchange.FilterTargets(s.lansSnapshot(), out)
@@ -792,6 +900,29 @@ func setFlowHosts(t *plugin.Target, hosts []netip.Addr) {
 	}
 }
 
+// setSubranges attaches the prefix's busiest sub-ranges (#121), at most
+// max_subranges and at most *left across the list, each weighted by its
+// bytes. Fewer than two is none: one sub-range is what the destination
+// candidates already measure. Measurement only.
+func (s *Source) setSubranges(t *plugin.Target, subs []subRank, left *int) {
+	if s.sub == nil || len(subs) < minMaxSubranges || *left < minMaxSubranges {
+		return
+	}
+	n := min(len(subs), s.sub.maxPer, *left)
+	out := make([]plugin.Subrange, 0, n)
+	for _, sr := range subs[:n] {
+		if !t.Prefix.Contains(sr.prefix.Addr()) || sr.prefix.Bits() <= t.Prefix.Bits() || !sr.prefix.Contains(sr.host) {
+			continue
+		}
+		out = append(out, plugin.Subrange{Prefix: sr.prefix, Host: sr.host, Weight: float64(sr.bytes)})
+	}
+	if len(out) < minMaxSubranges {
+		return
+	}
+	t.Subranges = out
+	*left -= len(out)
+}
+
 func (s *Source) ingest(at time.Time, exporter netip.Addr, payload []byte) {
 	obs, err := s.dec.decode(exporter, payload)
 	if err != nil {
@@ -809,7 +940,7 @@ func (s *Source) ingest(at time.Time, exporter netip.Addr, payload []byte) {
 		if !p.IsValid() || !p.Contains(dst) {
 			continue
 		}
-		s.win.add(at, p, dst, o.bytes, s.tr.classify(o.src))
+		s.win.addSub(at, p, s.sub.of(p, dst), dst, o.bytes, s.tr.classify(o.src))
 		s.ctr.add(at, p, o.proto, o.bytes)
 	}
 }

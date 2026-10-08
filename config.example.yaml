@@ -129,6 +129,11 @@ scorer:
 #       # transit:                  # optional: classify transit (customer-originated) vs local traffic
 #       #   customers: [198.51.100.0/24]  # source networks of your customers; any other source is local
 #       #   share_pct: 50             # transit share at or above which a prefix is a transit prefix
+#       # subranges:                # optional: measure the busiest /24s (/48s) inside a wider prefix. Measurement only, never announced
+#       #   bits_v4: 24
+#       #   bits_v6: 48
+#       #   max_subranges: 4          # per prefix, 2-16
+#       #   max_total: 1000           # across all targets
 #   - type: span                # passive problem detection from a mirror port. Needs NET_RAW.
 #     config:                   # Does not announce; problem prefixes are probed first.
 #       interface: eth1         # mirror NIC; or pcap_file: /etc/packeteer/span.pcap (lab replay)

@@ -562,3 +562,32 @@ func TestConfigFormAndSuggestions(t *testing.T) {
 		t.Fatalf("accepting a suggestion calls the API:\n%s", body)
 	}
 }
+
+// TestHeterogeneousInSnapshot checks the #121 sub-range view reaches
+// /api/decisions and the dashboard prefix card.
+func TestHeterogeneousInSnapshot(t *testing.T) {
+	wide := netip.MustParsePrefix("198.51.0.0/16")
+	d := policy.Decision{Prefix: wide, Action: policy.ActionNone, Recommended: "a", Heterogeneous: true,
+		Subranges: []policy.SubrangeDecision{
+			{Prefix: netip.MustParsePrefix("198.51.100.0/24"), Weight: 600, Best: "a", Candidates: []policy.Candidate{{Provider: "a", Score: 10, Usable: true}}},
+			{Prefix: netip.MustParsePrefix("198.51.200.0/24"), Weight: 400, Best: "b", Candidates: []policy.Candidate{{Provider: "b", Score: 12, Usable: true}}},
+		}}
+	out := assembleDecisions([]policy.Decision{d})
+	if len(out) != 1 || !out[0].Heterogeneous || len(out[0].Subranges) != 2 || out[0].Subranges[1].Best != "b" {
+		t.Fatalf("decisions = %+v", out)
+	}
+	raw, _ := json.Marshal(out[0])
+	for _, want := range []string{`"heterogeneous":true`, `"prefix":"198.51.200.0/24"`, `"weight":400`, `"best":"b"`} {
+		if !strings.Contains(string(raw), want) {
+			t.Fatalf("json missing %s: %s", want, raw)
+		}
+	}
+	plain, _ := json.Marshal(assembleDecisions([]policy.Decision{{Prefix: wide, Action: policy.ActionNone}})[0])
+	if strings.Contains(string(plain), "heterogeneous") || strings.Contains(string(plain), "subranges") {
+		t.Fatalf("plain decision json = %s", plain)
+	}
+	ps := assemblePrefixes(Input{Decisions: []policy.Decision{d}})
+	if len(ps) != 1 || !ps[0].Heterogeneous || len(ps[0].Subranges) != 2 {
+		t.Fatalf("prefixes = %+v", ps)
+	}
+}

@@ -120,17 +120,21 @@ type Probe struct {
 // Prefix joins probe rows with the latest decision and, when the prefix
 // was learned, the RIB exit.
 type Prefix struct {
-	Prefix      string  `json:"prefix"`
-	Native      string  `json:"native,omitempty"`
-	Current     string  `json:"current,omitempty"`
-	Recommended string  `json:"recommended,omitempty"`
-	Action      string  `json:"action,omitempty"`
-	Reason      string  `json:"reason,omitempty"`
-	InRIB       bool    `json:"in_rib"`
-	NextHop     string  `json:"next_hop,omitempty"`
-	RIBProvider string  `json:"rib_provider,omitempty"`
-	Neighbor    string  `json:"neighbor,omitempty"`
-	Probes      []Probe `json:"probes"`
+	Prefix      string `json:"prefix"`
+	Native      string `json:"native,omitempty"`
+	Current     string `json:"current,omitempty"`
+	Recommended string `json:"recommended,omitempty"`
+	Action      string `json:"action,omitempty"`
+	Reason      string `json:"reason,omitempty"`
+	InRIB       bool   `json:"in_rib"`
+	NextHop     string `json:"next_hop,omitempty"`
+	RIBProvider string `json:"rib_provider,omitempty"`
+	Neighbor    string `json:"neighbor,omitempty"`
+	// Heterogeneous and Subranges repeat the decision's sub-range view
+	// (#121) for the dashboard card.
+	Heterogeneous bool       `json:"heterogeneous,omitempty"`
+	Subranges     []Subrange `json:"subranges,omitempty"`
+	Probes        []Probe    `json:"probes"`
 	// Paths are the learned paths for this prefix, including inactive
 	// add-path and BMP paths. MED on a path is display only.
 	Paths []LearnedPath `json:"paths,omitempty"`
@@ -196,6 +200,20 @@ type Decision struct {
 	// Weight is the improvement weight that ordered this move for the
 	// max_improvements cap (#34); zero when weights are off.
 	Weight     float64     `json:"weight,omitempty"`
+	Candidates []Candidate `json:"candidates"`
+	// Heterogeneous is set when measured sub-ranges of the prefix
+	// disagree on the best provider (#121). Subranges are those
+	// sub-ranges, busiest first. Information only: nothing is announced
+	// for a sub-range.
+	Heterogeneous bool       `json:"heterogeneous,omitempty"`
+	Subranges     []Subrange `json:"subranges,omitempty"`
+}
+
+// Subrange is one measured sub-range of a decided prefix (#121).
+type Subrange struct {
+	Prefix     string      `json:"prefix"`
+	Weight     float64     `json:"weight"`
+	Best       string      `json:"best,omitempty"`
 	Candidates []Candidate `json:"candidates"`
 }
 
@@ -384,6 +402,33 @@ func assembleProbes(results []probe.Result) []Probe {
 	return out
 }
 
+func candidatesFrom(in []policy.Candidate) []Candidate {
+	out := make([]Candidate, 0, len(in))
+	for _, c := range in {
+		out = append(out, Candidate{
+			Provider: c.Provider,
+			Score:    jsonFloat(c.Score),
+			LossPct:  jsonFloat(c.LossPct),
+			RTTAvgMs: millis(c.RTTAvg),
+			JitterMs: millis(c.Jitter),
+			Usable:   c.Usable,
+			Why:      c.Why,
+		})
+	}
+	return out
+}
+
+func subrangesFrom(in []policy.SubrangeDecision) []Subrange {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]Subrange, 0, len(in))
+	for _, s := range in {
+		out = append(out, Subrange{Prefix: s.Prefix.String(), Weight: jsonFloat(s.Weight), Best: s.Best, Candidates: candidatesFrom(s.Candidates)})
+	}
+	return out
+}
+
 func assembleDecisions(in []policy.Decision) []Decision {
 	out := make([]Decision, 0, len(in))
 	for _, d := range in {
@@ -391,27 +436,18 @@ func assembleDecisions(in []policy.Decision) []Decision {
 			continue
 		}
 		row := Decision{
-			Prefix:      d.Prefix.String(),
-			Native:      d.Native,
-			Current:     d.Current,
-			Recommended: d.Recommended,
-			Action:      d.Action,
-			Cause:       d.Cause,
-			Reason:      d.Reason,
-			Policy:      d.Policy,
-			Weight:      d.Weight,
-			Candidates:  make([]Candidate, 0, len(d.Candidates)),
-		}
-		for _, c := range d.Candidates {
-			row.Candidates = append(row.Candidates, Candidate{
-				Provider: c.Provider,
-				Score:    jsonFloat(c.Score),
-				LossPct:  jsonFloat(c.LossPct),
-				RTTAvgMs: millis(c.RTTAvg),
-				JitterMs: millis(c.Jitter),
-				Usable:   c.Usable,
-				Why:      c.Why,
-			})
+			Prefix:        d.Prefix.String(),
+			Native:        d.Native,
+			Current:       d.Current,
+			Recommended:   d.Recommended,
+			Action:        d.Action,
+			Cause:         d.Cause,
+			Reason:        d.Reason,
+			Policy:        d.Policy,
+			Weight:        d.Weight,
+			Candidates:    candidatesFrom(d.Candidates),
+			Heterogeneous: d.Heterogeneous,
+			Subranges:     subrangesFrom(d.Subranges),
 		}
 		out = append(out, row)
 	}
@@ -529,6 +565,7 @@ func assemblePrefixes(in Input) []Prefix {
 		}
 		row.Native, row.Current, row.Recommended = d.Native, d.Current, d.Recommended
 		row.Action, row.Reason = d.Action, d.Reason
+		row.Heterogeneous, row.Subranges = d.Heterogeneous, subrangesFrom(d.Subranges)
 	}
 	for _, im := range in.Improvements {
 		row := add(im.Prefix)

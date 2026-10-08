@@ -105,6 +105,10 @@ type Result struct {
 	Stats   Stats        `json:"stats"`
 	Err     string       `json:"error,omitempty"` // set when no measurement was possible
 	Time    time.Time    `json:"time"`
+	// Subranges, when the target carried two or more (#121), are the
+	// per-sub-range measurements. Stats is then their traffic-weighted
+	// aggregate. Measurement only.
+	Subranges []SubrangeResult `json:"subranges,omitempty"`
 }
 
 // OK reports whether the result holds a measurement.
@@ -128,6 +132,7 @@ type job struct {
 	provider Provider
 	target   plugin.Target
 	hosts    []netip.Addr
+	subs     []plugin.Subrange
 }
 
 // Engine runs probe rounds and stores the latest results.
@@ -531,12 +536,18 @@ func (e *Engine) gatherTargets(ctx context.Context) ([]plugin.Target, bool) {
 				if t.Pinned && !out[i].Pinned {
 					out[i].Host = t.Host
 					out[i].Hosts = nil
+					out[i].Subranges = nil
 					out[i].Pinned = true
 					out[i].Candidate = false
 				} else if !out[i].Pinned && !out[i].Candidate && t.Candidate {
 					out[i].Host = t.Host
 					out[i].Hosts = append([]netip.Addr(nil), t.Hosts...)
 					out[i].Candidate = true
+				}
+				// Sub-ranges come from the first source that named
+				// them, unless a pin now owns the prefix.
+				if !out[i].Pinned && len(out[i].Subranges) == 0 && len(t.Subranges) > 0 {
+					out[i].Subranges = append([]plugin.Subrange(nil), t.Subranges...)
 				}
 				continue
 			}
@@ -874,7 +885,7 @@ func (e *Engine) runRound(ctx context.Context, allow func(plugin.Target) bool, m
 			if len(hosts) == 0 {
 				continue
 			}
-			jobs = append(jobs, job{provider: p, target: t, hosts: hosts})
+			jobs = append(jobs, job{provider: p, target: t, hosts: hosts, subs: jobSubranges(t, e.opt.ExchangeLANs)})
 		}
 	}
 	// Targets exist but none are due. Keep stored results and let the
@@ -1072,7 +1083,16 @@ func (e *Engine) sem(a netip.Addr) chan struct{} {
 // host qualified. Traceroute hop times are not used. A dead probe
 // source fails closed. Every packet waits on the global rate limit
 // inside probeOne, including a dispersion or loss retry.
+//
+// A target with sub-ranges (#121) is measured per sub-range instead, and
+// the prefix result is their traffic-weighted aggregate. When none of
+// them could be measured, the prefix hosts are probed as above.
 func (e *Engine) probe(ctx context.Context, j job) (Result, bool) {
+	if len(j.subs) > 0 {
+		if res, down, ok := e.probeSubranges(ctx, j); ok {
+			return res, down
+		}
+	}
 	hosts := j.hosts
 	if len(hosts) == 0 && j.target.Host.IsValid() {
 		hosts = []netip.Addr{j.target.Host}

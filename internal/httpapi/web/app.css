@@ -116,6 +116,8 @@ th { font-size: 0.8rem; color: var(--muted); font-weight: 600; }
 
 .badge.muted { color: var(--muted); }
 
+.badge.warn { color: var(--diff); background: #fbf1e4; }
+
 .bad { color: var(--down); }
 
 .empty { color: var(--muted); }

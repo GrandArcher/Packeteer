@@ -147,6 +147,27 @@ type Target struct {
 	// not elapsed. The outage source sets it for one pass after a new
 	// incident. Leaving it set on every call makes the scheduler spin.
 	Urgent bool
+	// Subranges, when two or more are set, are measured on their own
+	// inside Prefix (#121): each gets its own probe address and score,
+	// and the prefix score is their traffic-weighted aggregate. The flow
+	// source sets them when its subranges block is on. They are never
+	// announced: Prefix is still the only route a decision can steer. A
+	// pin ignores them. The engine keeps at most MaxSubranges.
+	Subranges []Subrange
+}
+
+// MaxSubranges is the most sub-ranges the probe engine measures for one
+// target. Extra entries are dropped.
+const MaxSubranges = 16
+
+// Subrange is one measured part of a target prefix (#121), for example a
+// busy /24 inside a learned /16. Prefix is strictly more specific than the
+// target prefix. Host is inside Prefix. Weight is its traffic (bytes in
+// the flow window); it weights the prefix aggregate. Measurement only.
+type Subrange struct {
+	Prefix netip.Prefix
+	Host   netip.Addr
+	Weight float64
 }
 
 // TargetSource supplies the set of prefixes to probe.

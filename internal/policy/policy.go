@@ -224,6 +224,23 @@ type Decision struct {
 	// improvement_weights are on (#34). It orders new moves for the cap.
 	Weight     float64     `json:"weight,omitempty"`
 	Candidates []Candidate `json:"candidates"`
+	// Subranges are the measured parts of the prefix (#121), busiest
+	// first. The candidates above are their traffic-weighted aggregate.
+	// Heterogeneous is set when two of them have a different best
+	// provider. Both are information only: nothing is announced for a
+	// sub-range, and the decision steers only Prefix.
+	Subranges     []SubrangeDecision `json:"subranges,omitempty"`
+	Heterogeneous bool               `json:"heterogeneous,omitempty"`
+}
+
+// SubrangeDecision is one measured sub-range of a decided prefix (#121):
+// its traffic weight, each provider's score toward it, and the best of
+// them. Best is empty when no provider was usable.
+type SubrangeDecision struct {
+	Prefix     netip.Prefix `json:"prefix"`
+	Weight     float64      `json:"weight"`
+	Best       string       `json:"best,omitempty"`
+	Candidates []Candidate  `json:"candidates"`
 }
 
 // Change is an improvement transition for the announcer and notifiers.
@@ -321,6 +338,7 @@ func Decide(prev State, in Input, cfg Config, scorer plugin.Scorer, now time.Tim
 
 	// Group usable measurements by prefix.
 	byPrefix := map[netip.Prefix][]Candidate{}
+	subs := map[netip.Prefix]map[netip.Prefix]*SubrangeDecision{}
 	for _, r := range in.Results {
 		c := Candidate{Provider: r.Provider, LossPct: r.Stats.LossPct, RTTAvg: r.Stats.RTTAvg, Jitter: r.Stats.Jitter, Usable: true}
 		switch {
@@ -341,6 +359,7 @@ func Decide(prev State, in Input, cfg Config, scorer plugin.Scorer, now time.Tim
 			c.Score = scorer.Score(plugin.PathStats{Provider: r.Provider, LossPct: c.LossPct, RTTAvg: c.RTTAvg, Jitter: c.Jitter})
 		}
 		byPrefix[r.Prefix] = append(byPrefix[r.Prefix], c)
+		noteSubranges(subs, r, c, scorer)
 	}
 
 	// An improvement with no measurement in this evaluation is retired.
@@ -707,8 +726,84 @@ func Decide(prev State, in Input, cfg Config, scorer plugin.Scorer, now time.Tim
 	}
 	markPendingUrgent(st, &out, cfg.confirmRounds())
 	annotateCost(st, &out, cfg, in.VolumeMbps)
+	for i := range decisions {
+		attachSubranges(&decisions[i], subs[decisions[i].Prefix], cfg.Excluded)
+	}
 	out.Decisions = decisions
 	return st, out
+}
+
+// noteSubranges adds one provider's sub-range measurements (#121) to the
+// prefix's sub-range table. A sub-range is usable for that provider only
+// when the provider's prefix candidate is usable and the sub-range itself
+// was measured.
+func noteSubranges(subs map[netip.Prefix]map[netip.Prefix]*SubrangeDecision, r probe.Result, pc Candidate, scorer plugin.Scorer) {
+	if len(r.Subranges) == 0 {
+		return
+	}
+	m := subs[r.Prefix]
+	if m == nil {
+		m = map[netip.Prefix]*SubrangeDecision{}
+		subs[r.Prefix] = m
+	}
+	for _, sr := range r.Subranges {
+		d := m[sr.Prefix]
+		if d == nil {
+			d = &SubrangeDecision{Prefix: sr.Prefix}
+			m[sr.Prefix] = d
+		}
+		if sr.Weight > d.Weight {
+			d.Weight = sr.Weight
+		}
+		c := Candidate{Provider: r.Provider, LossPct: sr.Stats.LossPct, RTTAvg: sr.Stats.RTTAvg, Jitter: sr.Stats.Jitter, Usable: pc.Usable, Why: pc.Why}
+		switch {
+		case !c.Usable:
+		case !sr.OK():
+			c.Usable, c.Why = false, "probe error"
+		case sr.Stats.Sent == 0:
+			c.Usable, c.Why = false, "no packets sent"
+		}
+		if c.Usable {
+			c.Score = scorer.Score(plugin.PathStats{Provider: r.Provider, LossPct: c.LossPct, RTTAvg: c.RTTAvg, Jitter: c.Jitter})
+		}
+		d.Candidates = append(d.Candidates, c)
+	}
+}
+
+// attachSubranges records the prefix's sub-ranges on its decision, busiest
+// first, with the best provider of each, and flags the prefix
+// heterogeneous when two sub-ranges have different best providers. It
+// changes no action, recommendation, or improvement.
+func attachSubranges(d *Decision, m map[netip.Prefix]*SubrangeDecision, excluded map[string]bool) {
+	if len(m) == 0 {
+		return
+	}
+	list := make([]SubrangeDecision, 0, len(m))
+	for _, s := range m {
+		sort.Slice(s.Candidates, func(a, b int) bool { return s.Candidates[a].Provider < s.Candidates[b].Provider })
+		if best, ok := bestCandidate(s.Candidates, excluded, ""); ok {
+			s.Best = best.Provider
+		}
+		list = append(list, *s)
+	}
+	sort.Slice(list, func(a, b int) bool {
+		if list[a].Weight != list[b].Weight {
+			return list[a].Weight > list[b].Weight
+		}
+		return lessPrefix(list[a].Prefix, list[b].Prefix)
+	})
+	best := ""
+	for _, s := range list {
+		if s.Best == "" {
+			continue
+		}
+		if best == "" {
+			best = s.Best
+		} else if s.Best != best {
+			d.Heterogeneous = true
+		}
+	}
+	d.Subranges = list
 }
 
 // weighWants sets the improvement weight (#34) of every new static, VIP,
