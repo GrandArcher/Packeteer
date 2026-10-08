@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/GrandArcher/Packeteer/internal/exchange"
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
 )
 
@@ -97,6 +98,50 @@ asns: [64496, 64500]
 	}
 	if len(got) != 3 {
 		t.Fatalf("targets = %+v", got)
+	}
+}
+
+func TestExchangeLANTargetsDropped(t *testing.T) {
+	raw, err := build(`
+interval: 5s
+prefixes:
+  - {prefix: 198.51.100.0/24, host: 198.51.100.9}
+  - {prefix: 203.0.113.0/24, host: 203.0.113.8}
+asns: [64496]
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := raw.(*Source)
+	s.SetExchangeLANs([]netip.Prefix{
+		netip.MustParsePrefix("203.0.113.0/24"),
+		netip.MustParsePrefix("2001:db8:ffff::/64"),
+	})
+	s.SetLearnedRoutes(func() []LearnedRoute {
+		return []LearnedRoute{
+			{Prefix: netip.MustParsePrefix("198.51.100.0/25"), ASPath: []uint32{64496}},
+			{Prefix: netip.MustParsePrefix("203.0.113.128/25"), ASPath: []uint32{64496}},
+			{Prefix: netip.MustParsePrefix("2001:db8:ffff::/64"), ASPath: []uint32{64496}},
+			{Prefix: netip.MustParsePrefix("2001:db8:1::/48"), ASPath: []uint32{64496}},
+		}
+	})
+	before := exchange.LANDrops()
+	ts, err := s.Targets(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if exchange.LANDrops()-before != 3 {
+		t.Fatalf("drops = %d, want 3", exchange.LANDrops()-before)
+	}
+	got := map[string]netip.Addr{}
+	for _, tg := range ts {
+		got[tg.Prefix.String()] = tg.Host
+	}
+	if len(got) != 3 || got["198.51.100.0/24"].String() != "198.51.100.9" || got["198.51.100.0/25"].IsValid() || got["2001:db8:1::/48"].IsValid() {
+		t.Fatalf("targets = %+v", got)
+	}
+	if _, ok := got["203.0.113.0/24"]; ok {
+		t.Fatal("configured peering LAN was kept")
 	}
 }
 

@@ -76,7 +76,7 @@ If the probe box's source IPs are not routable on the Internet, source-NAT them 
 
 ## Internet exchange peers
 
-Each exchange peer (`exchanges[].peers[]`, #27) is measured from its own `source_ip`, so it needs its own table: a route via the peer's LAN address, and a rule from the source to that table. On Linux, with the probe box on the peering LAN or behind the IX router:
+Each exchange peer (`exchanges[].peers[]`, #27) is measured from its own `source_ip`, so it needs its own table: a route via the peer's LAN address, and a rule from the source to that table. The peering LAN itself is not a probe target (#145): packets to customer prefixes still leave via that peer's `source_ip` and `next_hop`. On Linux, with the probe box on the peering LAN or behind the IX router:
 
 ```sh
 echo "131 ix-peer-a" >> /etc/iproute2/rt_tables

@@ -92,6 +92,31 @@ func TestProbeHostsCandidateFirst(t *testing.T) {
 	}
 }
 
+func TestOmitLANHostsKeepsGateway(t *testing.T) {
+	// 203.0.112.0/23 is wider than the peering LAN 203.0.112.0/24, so the
+	// prefix is still a target. Automatic hosts inside the LAN are not
+	// probed. The provider next hop on that LAN stays the far-side gateway.
+	p := netip.MustParsePrefix("203.0.112.0/23")
+	lan := netip.MustParsePrefix("203.0.112.0/24")
+	gw := netip.MustParseAddr("203.0.112.11")
+	src := netip.MustParseAddr("192.0.2.11")
+	hosts := ProbeHosts(p, netip.Addr{}, netip.Addr{}, gw, src)
+	got := omitLANHosts(hosts, gw, []netip.Prefix{lan})
+	want := []string{"203.0.113.0", "203.0.112.11"}
+	if len(got) != len(want) {
+		t.Fatalf("hosts %v -> %v", hosts, got)
+	}
+	for i, s := range want {
+		if got[i].String() != s {
+			t.Fatalf("hosts %v -> %v", hosts, got)
+		}
+	}
+	// No LANs: the list is unchanged.
+	if same := omitLANHosts(hosts, gw, nil); len(same) != len(hosts) {
+		t.Fatalf("nil lans = %v", same)
+	}
+}
+
 func TestAutoHostsBounds(t *testing.T) {
 	cases := []struct {
 		prefix string

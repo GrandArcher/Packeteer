@@ -62,13 +62,22 @@ func usableHop(addr, dest netip.Addr) bool {
 // selectHost picks the probe host from per-TTL samples (index 0 is TTL 1).
 // The configured destination wins when it is a stable hop. Otherwise the
 // stable hop with the highest TTL is the one closest to the destination.
-func selectHost(hops [][]sample, dest netip.Addr, minReplies int) (netip.Addr, bool) {
+// skip, when non-nil, ignores a hop (an exchange peering LAN). When every
+// stable hop was skipped and the destination itself was not, the destination
+// is the probe host so the prefix is still measured. A destination that
+// skip rejects is not returned.
+func selectHost(hops [][]sample, dest netip.Addr, minReplies int, skip func(netip.Addr) bool) (netip.Addr, bool) {
 	var best netip.Addr
 	bestTTL := -1
 	destOK := false
+	skipped := false
 	for ttl, samples := range hops {
 		addr, n := stableHop(samples, minReplies)
 		if n < minReplies || !usableHop(addr, dest) {
+			continue
+		}
+		if skip != nil && skip(addr) {
+			skipped = true
 			continue
 		}
 		if addr.Unmap() == dest.Unmap() {
@@ -84,6 +93,9 @@ func selectHost(hops [][]sample, dest netip.Addr, minReplies int) (netip.Addr, b
 	}
 	if bestTTL >= 0 {
 		return best, true
+	}
+	if skipped && (skip == nil || !skip(dest)) {
+		return dest, true
 	}
 	return netip.Addr{}, false
 }

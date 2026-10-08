@@ -9,6 +9,7 @@ import (
 	"net/netip"
 	"time"
 
+	"github.com/GrandArcher/Packeteer/internal/exchange"
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
 )
 
@@ -44,6 +45,7 @@ type Source struct {
 	plugin.Base
 	targets []plugin.Target
 	vols    []plugin.PrefixVolume
+	lans    []netip.Prefix
 }
 
 // New is the plugin factory.
@@ -93,6 +95,12 @@ func New(c plugin.Config, _ plugin.Env) (plugin.TargetSource, error) {
 	return s, nil
 }
 
+// SetExchangeLANs installs the peering LANs (#145). A target inside one
+// is omitted. The controller calls this before Start.
+func (s *Source) SetExchangeLANs(lans []netip.Prefix) {
+	s.lans = append([]netip.Prefix(nil), lans...)
+}
+
 // Volumes implements plugin.VolumeSource. Prefixes without mbps are omitted.
 // This does not announce.
 func (s *Source) Volumes(ctx context.Context) ([]plugin.PrefixVolume, error) {
@@ -104,9 +112,10 @@ func (s *Source) Volumes(ctx context.Context) ([]plugin.PrefixVolume, error) {
 	return out, nil
 }
 
-// Targets implements plugin.TargetSource.
+// Targets implements plugin.TargetSource. A prefix inside an exchange
+// peering LAN, or an explicit host on one, is omitted (#145).
 func (s *Source) Targets(context.Context) ([]plugin.Target, error) {
 	out := make([]plugin.Target, len(s.targets))
 	copy(out, s.targets)
-	return out, nil
+	return exchange.FilterTargets(s.lans, out), nil
 }

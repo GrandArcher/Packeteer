@@ -184,6 +184,8 @@ func Metrics(s Snapshot) []byte {
 	writeGauge(&b, "packeteer_exchange_peer_prefixes", "Prefixes the router shows through the exchange peer's next hop.", ixPrefixes...)
 	writeGauge(&b, "packeteer_exchange_peer_improvements", "Active improvements onto the exchange peer.", ixImps...)
 	writeGauge(&b, "packeteer_exchange_discovered_peers", "Next hops on the peering LAN that are not configured peers.", ixDiscovered...)
+	writeGauge(&b, "packeteer_exchange_lan_targets_dropped", "Probe targets omitted because the prefix or the pinned host is inside an exchange peering LAN. Cumulative omissions per collection, not per packet.",
+		sample{value: float64(s.ExchangeLANDrops)})
 
 	return []byte(b.String())
 }

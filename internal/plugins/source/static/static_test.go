@@ -2,9 +2,11 @@ package static
 
 import (
 	"context"
+	"net/netip"
 	"strings"
 	"testing"
 
+	"github.com/GrandArcher/Packeteer/internal/exchange"
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
 )
 
@@ -35,6 +37,41 @@ func TestTargets(t *testing.T) {
 	again, _ := s.Targets(context.Background())
 	if again[0].Weight != 2 {
 		t.Error("Targets returned shared slice")
+	}
+}
+
+func TestExchangeLANTargetsDropped(t *testing.T) {
+	s, err := build(`targets:
+  - {prefix: 198.51.100.0/24, host: 198.51.100.10}
+  - {prefix: 203.0.113.0/24, host: 203.0.113.10}
+  - {prefix: 203.0.113.128/25}
+  - {prefix: "2001:db8:ffff::/64"}
+  - {prefix: "2001:db8:1::/48"}
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	src := s.(*Source)
+	src.SetExchangeLANs([]netip.Prefix{
+		netip.MustParsePrefix("203.0.113.0/24"),
+		netip.MustParsePrefix("2001:db8:ffff::/64"),
+	})
+	before := exchange.LANDrops()
+	ts, err := src.Targets(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if exchange.LANDrops()-before != 3 {
+		t.Fatalf("drops = %d, want 3", exchange.LANDrops()-before)
+	}
+	if len(ts) != 2 || ts[0].Prefix.String() != "198.51.100.0/24" || ts[0].Host.String() != "198.51.100.10" || ts[1].Prefix.String() != "2001:db8:1::/48" {
+		t.Fatalf("targets = %+v", ts)
+	}
+	// Without LANs the same list is returned whole.
+	src.SetExchangeLANs(nil)
+	all, err := src.Targets(context.Background())
+	if err != nil || len(all) != 5 {
+		t.Fatalf("cleared lans = %+v %v", all, err)
 	}
 }
 

@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/GrandArcher/Packeteer/internal/exchange"
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
 )
 
@@ -1302,5 +1303,80 @@ func TestPinBeatsFlowCandidate(t *testing.T) {
 	ts := e.Targets(context.Background())
 	if len(ts) != 1 || ts[0].Host != busy || ts[0].Pinned || !ts[0].Candidate {
 		t.Fatalf("candidate did not replace default: %+v", ts)
+	}
+}
+
+func TestExchangeLANTargetsDropped(t *testing.T) {
+	lan := netip.MustParsePrefix("203.0.113.0/24")
+	keep := netip.MustParsePrefix("198.51.100.0/24")
+	wider := netip.MustParsePrefix("203.0.112.0/23")
+	o := opts()
+	o.ExchangeLANs = []netip.Prefix{lan}
+	src := &fakeSource{targets: []plugin.Target{
+		{Prefix: lan},
+		{Prefix: keep, Host: netip.MustParseAddr("198.51.100.9")},
+		{Prefix: wider, Host: netip.MustParseAddr("203.0.113.9")},
+		{Prefix: netip.MustParsePrefix("198.51.100.0/25"), Host: netip.MustParseAddr("203.0.113.8"), Candidate: true},
+	}}
+	before := exchange.LANDrops()
+	e, err := New([]Provider{provA}, []NamedProber{{"p", &fakeProber{fn: ok(1)}}}, []NamedSource{{Name: "static", Source: src}}, o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ts := e.Targets(context.Background())
+	got := map[string]plugin.Target{}
+	for _, tg := range ts {
+		got[tg.Prefix.String()] = tg
+	}
+	if _, ok := got[lan.String()]; ok {
+		t.Fatalf("LAN prefix kept: %+v", ts)
+	}
+	if _, ok := got[wider.String()]; ok {
+		t.Fatalf("pinned LAN host kept: %+v", ts)
+	}
+	pin, found := got[keep.String()]
+	if !found || pin.Host.String() != "198.51.100.9" || !pin.Pinned {
+		t.Fatalf("customer prefix: %+v", ts)
+	}
+	cand, found := got["198.51.100.0/25"]
+	if !found || cand.Candidate || cand.Pinned {
+		t.Fatalf("candidate on LAN: %+v", cand)
+	}
+	if !cand.Host.IsValid() {
+		t.Fatal("candidate host cleared; address family check would skip providers")
+	}
+	if d := exchange.LANDrops() - before; d != 3 {
+		t.Fatalf("drops = %d, want 3", d)
+	}
+
+	// A retained improvement cannot bring the LAN prefix back. The source
+	// no longer lists it; memory still has the last host, as keepImproved
+	// would after the source dropped it.
+	e2, err := New([]Provider{provA}, []NamedProber{{"p", &fakeProber{fn: ok(1)}}}, []NamedSource{{
+		Name: "static", Source: &fakeSource{targets: []plugin.Target{{Prefix: keep, Host: netip.MustParseAddr("198.51.100.9")}}},
+	}}, o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e2.SetRetained([]netip.Prefix{lan})
+	e2.mu.Lock()
+	e2.memory = map[netip.Prefix]plugin.Target{lan: {Prefix: lan}}
+	e2.mu.Unlock()
+	before = exchange.LANDrops()
+	ts = e2.Targets(context.Background())
+	keptCustomer := false
+	for _, tg := range ts {
+		if tg.Prefix == lan {
+			t.Fatalf("retained LAN prefix returned: %+v", ts)
+		}
+		if tg.Prefix == keep {
+			keptCustomer = true
+		}
+	}
+	if !keptCustomer {
+		t.Fatalf("customer prefix missing: %+v", ts)
+	}
+	if d := exchange.LANDrops() - before; d != 1 {
+		t.Fatalf("retain drops = %d, want 1", d)
 	}
 }

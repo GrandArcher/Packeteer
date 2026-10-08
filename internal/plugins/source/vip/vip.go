@@ -17,6 +17,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/GrandArcher/Packeteer/internal/exchange"
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
 )
 
@@ -68,6 +69,7 @@ type Source struct {
 	asns       map[uint32]struct{}
 
 	mu         sync.Mutex
+	lans       []netip.Prefix
 	snap       func() (uint64, []LearnedRoute)
 	cacheGen   uint64
 	cacheExtra []plugin.Target
@@ -166,8 +168,28 @@ func (s *Source) SetRouteSnapshot(fn func() (uint64, []LearnedRoute)) {
 	s.mu.Unlock()
 }
 
+// SetExchangeLANs installs the peering LANs (#145). Targets omits a
+// prefix inside one, including a prefix added by ASN expansion.
+func (s *Source) SetExchangeLANs(lans []netip.Prefix) {
+	cp := append([]netip.Prefix(nil), lans...)
+	s.mu.Lock()
+	s.lans = cp
+	s.mu.Unlock()
+}
+
 // Targets implements plugin.TargetSource.
-func (s *Source) Targets(context.Context) ([]plugin.Target, error) {
+func (s *Source) Targets(ctx context.Context) ([]plugin.Target, error) {
+	ts, err := s.collect(ctx)
+	if err != nil {
+		return nil, err
+	}
+	s.mu.Lock()
+	lans := s.lans
+	s.mu.Unlock()
+	return exchange.FilterTargets(lans, ts), nil
+}
+
+func (s *Source) collect(context.Context) ([]plugin.Target, error) {
 	base := make([]plugin.Target, len(s.prefixes))
 	copy(base, s.prefixes)
 	if len(s.asns) == 0 {

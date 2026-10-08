@@ -75,7 +75,7 @@ func (e *Engine) liveHosts(targets []plugin.Target) map[netip.Addr]struct{} {
 			} else if t.Candidate {
 				candidate = t.Host
 			}
-			for _, h := range ProbeHosts(t.Prefix, pin, candidate, p.NextHop, p.Source) {
+			for _, h := range omitLANHosts(ProbeHosts(t.Prefix, pin, candidate, p.NextHop, p.Source), p.NextHop, e.opt.ExchangeLANs) {
 				live[h.Unmap()] = struct{}{}
 			}
 		}

@@ -187,6 +187,8 @@ scorer:
 # the peering LAN and its own probe source, and is always route-checked: it
 # must advertise the exact prefix (seen through add-path or BMP). Next hops
 # on the LAN that are not listed show up on /api/exchanges as discovered.
+# Targets inside lans are not probed (#145), and allowlist.prefixes must
+# not overlap lans. The peer next_hop is still the far-side gateway probe.
 # exchanges:
 #   - name: ix-example
 #     lans: [203.0.113.0/24]

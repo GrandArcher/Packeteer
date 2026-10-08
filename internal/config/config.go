@@ -20,6 +20,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/GrandArcher/Packeteer/internal/exchange"
 	"gopkg.in/yaml.v3"
 )
 
@@ -829,6 +830,10 @@ func (c *Config) Validate() error {
 	c.validateFederation(add)
 	c.validateAuth(add)
 
+	var lans []netip.Prefix
+	for _, ex := range c.Exchanges {
+		lans = append(lans, ex.ExchangeLANs()...)
+	}
 	seen := map[netip.Prefix]bool{}
 	for i, s := range c.Allowlist.Prefixes {
 		p, err := netip.ParsePrefix(s)
@@ -844,6 +849,12 @@ func (c *Config) Validate() error {
 			add("allowlist.prefixes[%d]: duplicate prefix %s", i, p)
 		}
 		seen[p] = true
+		for _, lan := range lans {
+			if exchange.Overlaps(p, lan) {
+				add("allowlist.prefixes[%d]: %s overlaps exchange LAN %s", i, p, lan)
+				break
+			}
+		}
 	}
 
 	if c.Probe.Interval < 0 {

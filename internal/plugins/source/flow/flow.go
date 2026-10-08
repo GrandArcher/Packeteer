@@ -3,7 +3,10 @@
 // It listens for NetFlow v5, NetFlow v9, IPFIX, and sFlow v5, sums destination
 // bytes over a sliding window, and returns the busiest prefixes. Each
 // destination is mapped through SetPrefixLookup when that returns a covering
-// prefix; otherwise it is aggregated to aggregate_v4 or aggregate_v6. The
+// prefix; otherwise it is aggregated to aggregate_v4 or aggregate_v6. A
+// destination inside an exchange peering LAN is not a probe target and is
+// not aggregated (#145): BGP sessions and IXP services on that LAN must
+// not be probed when no learned route covers them. The
 // busiest destination is a probe candidate, not a pin. Raw flow records are
 // not stored: only per-bucket counters and the templates needed to decode
 // NetFlow v9 and IPFIX.
@@ -32,6 +35,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/GrandArcher/Packeteer/internal/exchange"
 	"github.com/GrandArcher/Packeteer/internal/passive"
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
 	"gopkg.in/yaml.v3"
@@ -168,6 +172,10 @@ type Source struct {
 
 	mu     sync.RWMutex
 	lookup func(netip.Addr) (netip.Prefix, bool)
+	lans   []netip.Prefix
+
+	dropMu  sync.Mutex
+	dropped map[netip.Prefix]struct{}
 
 	dec  *decoder
 	win  *slide
@@ -387,6 +395,40 @@ func parseExclude(in []string) ([]netip.Prefix, error) {
 	return out, nil
 }
 
+// SetExchangeLANs installs the peering LANs (#145). A destination inside
+// one is not counted and cannot become a probe target, including when no
+// learned route covers it and it would otherwise fall back to the
+// aggregate length. The controller calls this before Start.
+func (s *Source) SetExchangeLANs(lans []netip.Prefix) {
+	cp := append([]netip.Prefix(nil), lans...)
+	s.mu.Lock()
+	s.lans = cp
+	s.mu.Unlock()
+}
+
+func (s *Source) lansSnapshot() []netip.Prefix {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.lans
+}
+
+func (s *Source) noteLAN(p netip.Prefix) {
+	s.dropMu.Lock()
+	defer s.dropMu.Unlock()
+	if s.dropped == nil {
+		s.dropped = map[netip.Prefix]struct{}{}
+	}
+	s.dropped[p] = struct{}{}
+}
+
+func (s *Source) takeLANDrops() int {
+	s.dropMu.Lock()
+	defer s.dropMu.Unlock()
+	n := len(s.dropped)
+	s.dropped = nil
+	return n
+}
+
 // SetPrefixLookup attaches the RIB view. fn may be nil. When fn returns a
 // prefix, destinations it contains are counted under that prefix instead of
 // the aggregate length. The callback must return ok=false for a default route
@@ -572,6 +614,8 @@ func (s *Source) Targets(context.Context) ([]plugin.Target, error) {
 		setFlowHost(&t, r.host)
 		out = append(out, t)
 	}
+	out = exchange.FilterTargets(s.lansSnapshot(), out)
+	exchange.NoteDrops(s.takeLANDrops())
 	return out, nil
 }
 
@@ -653,6 +697,10 @@ func (s *Source) keep(dst netip.Addr) bool {
 		if p.Contains(dst) {
 			return false
 		}
+	}
+	if lan, ok := exchange.Covering(s.lansSnapshot(), dst); ok {
+		s.noteLAN(lan)
+		return false
 	}
 	return true
 }

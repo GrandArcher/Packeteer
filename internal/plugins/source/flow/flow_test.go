@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/GrandArcher/Packeteer/internal/exchange"
 	"github.com/GrandArcher/Packeteer/internal/plugins/source/static"
 	"github.com/GrandArcher/Packeteer/internal/probe"
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
@@ -156,6 +157,42 @@ func TestRIBMapping(t *testing.T) {
 	}
 	if ts[1].Prefix.String() != "203.0.113.0/24" || ts[1].Weight != 70 {
 		t.Fatalf("fallback = %+v", ts[1])
+	}
+}
+
+func TestExchangeLANDestinationsNotAggregated(t *testing.T) {
+	s := mustSource(t, "listen: 127.0.0.1:2055\naggregate_v6: 48\n")
+	pin(s, time.Unix(1_700_000_000, 0))
+	s.SetExchangeLANs([]netip.Prefix{
+		netip.MustParsePrefix("203.0.113.0/24"),
+		netip.MustParsePrefix("2001:db8:1:2::/64"),
+	})
+	now := time.Unix(1_700_000_000, 0)
+	before := exchange.LANDrops()
+	s.ingest(now, netip.MustParseAddr("192.0.2.8"), buildV5(0, []v5rec{
+		{dst: netip.MustParseAddr("203.0.113.10"), octets: 9000},
+		{dst: netip.MustParseAddr("198.51.100.10"), octets: 100},
+	}))
+	s.ingest(now, netip.MustParseAddr("192.0.2.8"), buildIPFIX(1,
+		tmplSetIPFIX(256, [][2]uint16{{ieDstV6, 16}, {ieInBytes, 8}}),
+		dataSet(256, ip6rec(netip.MustParseAddr("2001:db8:1:2::5"), 80)),
+	))
+	ts := targetsOf(t, s)
+	if len(ts) != 1 || ts[0].Prefix.String() != "198.51.100.0/24" || ts[0].Host.String() != "198.51.100.10" {
+		t.Fatalf("targets = %+v", ts)
+	}
+	for _, tg := range ts {
+		if tg.Prefix.String() == "203.0.113.0/24" || tg.Prefix.String() == "2001:db8:1::/48" {
+			t.Fatalf("LAN aggregate probed: %+v", tg)
+		}
+	}
+	// One count per distinct LAN seen since the last collection, not per packet.
+	if got := exchange.LANDrops() - before; got != 2 {
+		t.Fatalf("drops = %d, want 2", got)
+	}
+	_ = targetsOf(t, s)
+	if got := exchange.LANDrops() - before; got != 2 {
+		t.Fatalf("drops after drain = %d, want 2", got)
 	}
 }
 

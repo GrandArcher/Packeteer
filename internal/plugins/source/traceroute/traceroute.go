@@ -3,10 +3,12 @@
 // For each configured prefix it probes toward the host with increasing
 // TTL. When that host answers, the probe target stays the host. When it
 // does not, the source picks the highest-TTL hop that answered stably
-// (the same address on at least min_replies probes, with no tie). The
-// prefix on the target does not change: the discovered address is only
-// where measurements are sent. Packeteer still announces only a prefix
-// that is in the learned RIB.
+// (the same address on at least min_replies probes, with no tie). A hop
+// on an exchange peering LAN is not adopted (#145); the configured host
+// is used when it is not itself on that LAN. A prefix or host inside a
+// peering LAN is not traced and is not returned. The prefix on the target
+// does not change: the discovered address is only where measurements are
+// sent. Packeteer still announces only a prefix that is in the learned RIB.
 //
 // Discovery runs in the background. Targets returns the last cache
 // immediately and never traces, so a slow hop cannot consume the probe
@@ -23,6 +25,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/GrandArcher/Packeteer/internal/exchange"
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
 )
 
@@ -104,6 +107,7 @@ type Source struct {
 	now        func() time.Time
 
 	mu       sync.Mutex
+	lans     []netip.Prefix
 	cached   []plugin.Target
 	cachedAt time.Time
 	have     bool
@@ -281,17 +285,38 @@ func (s *Source) Stop(ctx context.Context) error {
 	}
 }
 
+// SetExchangeLANs installs the peering LANs (#145). Discovery does not
+// adopt a hop on one, and a prefix or configured host inside one is not
+// traced. The controller calls this before Start.
+func (s *Source) SetExchangeLANs(lans []netip.Prefix) {
+	cp := append([]netip.Prefix(nil), lans...)
+	s.mu.Lock()
+	s.lans = cp
+	s.mu.Unlock()
+}
+
+func (s *Source) lanSkip(a netip.Addr) bool {
+	if !a.IsValid() {
+		return false
+	}
+	s.mu.Lock()
+	lans := s.lans
+	s.mu.Unlock()
+	return exchange.ContainsAddr(lans, a)
+}
+
 // Targets implements plugin.TargetSource. It returns the last discovery
 // immediately. A pass that has not finished yet contributes nothing, so
 // the probe round is not spent tracing. A bind failure with no cache
 // fails the call so the engine logs it and keeps the other sources.
+// A cached prefix or pinned host inside a peering LAN is omitted.
 func (s *Source) Targets(context.Context) ([]plugin.Target, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if !s.have && errors.Is(s.lastErr, plugin.ErrSourceUnavailable) {
 		return nil, s.lastErr
 	}
-	return cloneTargets(s.cached), nil
+	return exchange.FilterTargets(s.lans, cloneTargets(s.cached)), nil
 }
 
 func (s *Source) loop(ctx context.Context) {
@@ -340,17 +365,28 @@ func (s *Source) discover(ctx context.Context) {
 	if share < s.timeout {
 		share = s.timeout
 	}
+	s.mu.Lock()
+	lans := append([]netip.Prefix(nil), s.lans...)
+	s.mu.Unlock()
 	var found []plugin.Target
 	var done []netip.Prefix
+	dropped := 0
 	for _, t := range s.targets {
 		if bctx.Err() != nil || ctx.Err() != nil {
 			break
+		}
+		if exchange.PrefixInside(lans, t.Prefix) || (t.Host.IsValid() && exchange.ContainsAddr(lans, t.Host)) {
+			done = append(done, t.Prefix)
+			dropped++
+			s.log.Info("traceroute target inside an exchange LAN", "prefix", t.Prefix, "host", t.Host)
+			continue
 		}
 		tctx, tcancel := context.WithTimeout(bctx, share)
 		host, ok, err := s.trace(tctx, hop, t.Host)
 		tcancel()
 		if err != nil {
 			if errors.Is(err, plugin.ErrSourceUnavailable) {
+				exchange.NoteDrops(dropped)
 				s.noteUnavailable(err)
 				return
 			}
@@ -365,6 +401,7 @@ func (s *Source) discover(ctx context.Context) {
 		tg.Host = host
 		found = append(found, tg)
 	}
+	exchange.NoteDrops(dropped)
 	if len(done) == 0 {
 		return
 	}
@@ -461,7 +498,7 @@ func (s *Source) trace(ctx context.Context, hop hopper, dest netip.Addr) (netip.
 			break
 		}
 	}
-	host, ok := selectHost(hops, dest, s.minReplies)
+	host, ok := selectHost(hops, dest, s.minReplies, s.lanSkip)
 	return host, ok, nil
 }
 
@@ -472,7 +509,7 @@ func (s *Source) finish(hops [][]sample, dest netip.Addr, err error) (netip.Addr
 	if len(hops) == 0 {
 		return netip.Addr{}, false, err
 	}
-	host, ok := selectHost(hops, dest, s.minReplies)
+	host, ok := selectHost(hops, dest, s.minReplies, s.lanSkip)
 	return host, ok, nil
 }
 

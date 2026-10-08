@@ -18,6 +18,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/GrandArcher/Packeteer/internal/exchange"
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
 )
 
@@ -97,6 +98,7 @@ type Source struct {
 	notify    func(plugin.Event)
 	active    map[string]Incident
 	targets   []plugin.Target
+	lans      []netip.Prefix
 	immediate bool
 }
 
@@ -189,12 +191,22 @@ func (s *Source) Evaluate(now time.Time) bool {
 	return wake
 }
 
+// SetExchangeLANs installs the peering LANs (#145). A prefix inside one
+// is not re-queued. The controller calls this before Start.
+func (s *Source) SetExchangeLANs(lans []netip.Prefix) {
+	cp := append([]netip.Prefix(nil), lans...)
+	s.mu.Lock()
+	s.lans = cp
+	s.mu.Unlock()
+}
+
 // Targets implements plugin.TargetSource. While an incident is active the
 // prefixes that cross the sick ASN, or that sit on the sick provider, are
 // returned with Interval set. The first call after the set changes marks
 // them Urgent so the probe engine measures them even if they were probed
 // moments ago. Later calls leave Urgent clear and the interval applies,
-// so the scheduler does not tight-loop.
+// so the scheduler does not tight-loop. A prefix inside an exchange
+// peering LAN is omitted.
 func (s *Source) Targets(context.Context) ([]plugin.Target, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -205,7 +217,7 @@ func (s *Source) Targets(context.Context) ([]plugin.Target, error) {
 		}
 		s.immediate = false
 	}
-	return out, nil
+	return exchange.FilterTargets(s.lans, out), nil
 }
 
 func (s *Source) apply(now time.Time, out Outcome) (events []plugin.Event, wake bool) {

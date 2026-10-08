@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/GrandArcher/Packeteer/internal/exchange"
 	"github.com/GrandArcher/Packeteer/internal/passive"
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
 )
@@ -66,6 +67,30 @@ func targets(t *testing.T, s *Source) []plugin.Target {
 		t.Fatal(err)
 	}
 	return ts
+}
+
+func TestExchangeLANRemoteNotKept(t *testing.T) {
+	s := mustSource(t, baseYAML)
+	s.SetExchangeLANs([]netip.Prefix{
+		netip.MustParsePrefix("203.0.113.0/24"),
+		netip.MustParsePrefix("2001:db8:1:2::/64"),
+	})
+	before := exchange.LANDrops()
+	if s.keep(netip.MustParseAddr("203.0.113.10")) {
+		t.Fatal("IPv4 LAN remote kept")
+	}
+	if s.keep(netip.MustParseAddr("2001:db8:1:2::5")) {
+		t.Fatal("IPv6 LAN remote kept")
+	}
+	if !s.keep(netip.MustParseAddr("198.51.100.10")) {
+		t.Fatal("customer remote dropped")
+	}
+	if ts := targets(t, s); len(ts) != 0 {
+		t.Fatalf("targets = %+v", ts)
+	}
+	if got := exchange.LANDrops() - before; got != 2 {
+		t.Fatalf("drops = %d, want 2", got)
+	}
 }
 
 func TestFixtureProblems(t *testing.T) {

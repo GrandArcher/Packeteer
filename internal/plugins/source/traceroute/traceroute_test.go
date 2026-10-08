@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/GrandArcher/Packeteer/internal/exchange"
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
 )
 
@@ -79,7 +80,7 @@ func TestSelectHost(t *testing.T) {
 		{{from: near}, {from: near}, {}},
 		{{}, {}, {}},
 	}
-	got, ok := selectHost(hops, dest, 2)
+	got, ok := selectHost(hops, dest, 2, nil)
 	if !ok || got != near {
 		t.Fatalf("last stable hop = %s ok=%v, want %s", got, ok, near)
 	}
@@ -89,7 +90,7 @@ func TestSelectHost(t *testing.T) {
 		{{from: gw}, {from: gw}, {from: gw}},
 		{{from: dest, reached: true}, {from: dest, reached: true}, {from: dest, reached: true}},
 	}
-	got, ok = selectHost(hops, dest, 2)
+	got, ok = selectHost(hops, dest, 2, nil)
 	if !ok || got != dest {
 		t.Fatalf("dest answered: got %s ok=%v", got, ok)
 	}
@@ -99,7 +100,7 @@ func TestSelectHost(t *testing.T) {
 		{{from: gw}, {from: gw}, {from: gw}},
 		{{from: a("203.0.113.2")}, {from: a("203.0.113.3")}, {from: a("203.0.113.4")}},
 	}
-	got, ok = selectHost(hops, dest, 2)
+	got, ok = selectHost(hops, dest, 2, nil)
 	if !ok || got != gw {
 		t.Fatalf("flap fell through to %s ok=%v", got, ok)
 	}
@@ -109,13 +110,75 @@ func TestSelectHost(t *testing.T) {
 		{{from: loop}, {from: loop}, {from: loop}},
 		{{from: near}, {from: near}, {from: near}},
 	}
-	got, ok = selectHost(hops, dest, 2)
+	got, ok = selectHost(hops, dest, 2, nil)
 	if !ok || got != near {
 		t.Fatalf("loopback hop = %s ok=%v", got, ok)
 	}
 
-	if _, ok := selectHost([][]sample{{{}}}, dest, 2); ok {
+	if _, ok := selectHost([][]sample{{{}}}, dest, 2, nil); ok {
 		t.Fatal("silence must not invent a host")
+	}
+
+	lan := netip.MustParsePrefix("203.0.113.0/24")
+	skip := func(addr netip.Addr) bool { return lan.Contains(addr) }
+	// The only stable hop is on the peering LAN. The configured host is not,
+	// so it is the probe address.
+	hops = [][]sample{
+		{{from: near}, {from: near}, {from: near}},
+	}
+	got, ok = selectHost(hops, dest, 2, skip)
+	if !ok || got != dest {
+		t.Fatalf("LAN hop fell back to %s ok=%v, want %s", got, ok, dest)
+	}
+	// An earlier hop that is not on the LAN stays. The LAN hop is ignored.
+	hops = [][]sample{
+		{{from: gw}, {from: gw}, {from: gw}},
+		{{from: near}, {from: near}, {from: near}},
+	}
+	got, ok = selectHost(hops, dest, 2, skip)
+	if !ok || got != gw {
+		t.Fatalf("non-LAN hop = %s ok=%v, want %s", got, ok, gw)
+	}
+	// The destination itself is the only stable hop, and it is on the LAN.
+	hops = [][]sample{
+		{{from: near}, {from: near}, {from: near}},
+	}
+	if _, ok := selectHost(hops, near, 2, skip); ok {
+		t.Fatal("destination on the LAN was returned")
+	}
+}
+
+func TestDiscoverSkipsExchangeLAN(t *testing.T) {
+	s := must(t, `
+timeout: 1ms
+probes: 3
+min_replies: 2
+max_hops: 8
+interval: 1s
+targets:
+  - {prefix: 198.51.100.0/24, host: 198.51.100.1}
+  - {prefix: 203.0.113.128/25, host: 203.0.113.130}
+`)
+	s.SetExchangeLANs([]netip.Prefix{netip.MustParsePrefix("203.0.113.0/24")})
+	s.now = func() time.Time { return time.Unix(1000, 0) }
+	near := replies("203.0.113.50", "203.0.113.50", "203.0.113.50")
+	fake := &perTTL{hops: map[int][]hopReply{2: near}}
+	s.hop = fake
+	before := exchange.LANDrops()
+	s.discover(context.Background())
+	ts, err := s.Targets(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ts) != 1 || ts[0].Prefix.String() != "198.51.100.0/24" || ts[0].Host.String() != "198.51.100.1" {
+		t.Fatalf("targets = %+v", ts)
+	}
+	// The LAN prefix is omitted before any probe. The customer trace still runs.
+	if fake.calls.Load() == 0 {
+		t.Fatal("customer prefix was not traced")
+	}
+	if got := exchange.LANDrops() - before; got != 1 {
+		t.Fatalf("drops = %d, want 1", got)
 	}
 }
 
