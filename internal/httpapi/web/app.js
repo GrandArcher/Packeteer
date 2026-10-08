@@ -169,6 +169,7 @@ function renderPrefixes(data) {
     head.appendChild(exits);
     if (row.action) head.appendChild(el("span", "badge", row.action));
     head.appendChild(el("span", row.in_rib ? "badge" : "badge muted", row.in_rib ? "in RIB" : "not in RIB"));
+    if (row.heterogeneous) head.appendChild(el("span", "badge warn", "heterogeneous"));
     card.appendChild(head);
     if (row.reason) card.appendChild(el("p", "reason", row.reason));
     var table = el("table");
@@ -202,6 +203,31 @@ function renderPrefixes(data) {
     });
     table.appendChild(tb);
     card.appendChild(table);
+    var subs = row.subranges || [];
+    if (subs.length) {
+      card.appendChild(el("p", "reason", row.heterogeneous ?
+        "Measured sub-ranges disagree on the best provider. The prefix decision uses their traffic-weighted score. Sub-ranges are measured only, never announced." :
+        "Measured sub-ranges. The prefix decision uses their traffic-weighted score. Sub-ranges are measured only, never announced."));
+      var st = el("table");
+      var shr = el("tr");
+      ["Sub-range", "Share", "Best"].forEach(function (h) {
+        shr.appendChild(el("th", "", h));
+      });
+      var shead = el("thead");
+      shead.appendChild(shr);
+      st.appendChild(shead);
+      var total = subs.reduce(function (a, s) { return a + (s.weight || 0); }, 0);
+      var sb = el("tbody");
+      subs.forEach(function (s) {
+        var tr = el("tr");
+        tr.appendChild(el("td", "mono", s.prefix));
+        tr.appendChild(el("td", "num", total > 0 ? fmtPct(100 * (s.weight || 0) / total) : "—"));
+        tr.appendChild(el("td", s.best && s.best !== row.recommended ? "diff" : "", s.best || "—"));
+        sb.appendChild(tr);
+      });
+      st.appendChild(sb);
+      card.appendChild(st);
+    }
     var paths = row.paths || [];
     if (paths.length) {
       card.appendChild(el("p", "reason", "Learned paths. MED is display only and does not choose the exit. Via is route server, bilateral, or unknown."));

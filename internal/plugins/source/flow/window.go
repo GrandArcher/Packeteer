@@ -17,6 +17,9 @@ type slide struct {
 	bucket time.Duration
 	max    int
 	slots  map[int64]*bucket
+	// subCap is how many sub-ranges one prefix tracks per bucket (#121).
+	// Zero turns sub-range counting off.
+	subCap int
 }
 
 type bucket struct {
@@ -41,6 +44,26 @@ type cell struct {
 	// stay zero without a transit block.
 	local   uint64
 	transit uint64
+	// subs are the busiest sub-ranges in this bucket (#121), at most the
+	// slide's subCap. Nil unless sub-ranges are on and the prefix is
+	// wider than the sub-range length.
+	subs []subCount
+}
+
+// subCount is one sub-range's bytes in a bucket and its busiest
+// destination in that bucket.
+type subCount struct {
+	prefix    netip.Prefix
+	bytes     uint64
+	host      netip.Addr
+	hostBytes uint64
+}
+
+// subRank is one sub-range's window total and busiest destination.
+type subRank struct {
+	prefix netip.Prefix
+	host   netip.Addr
+	bytes  uint64
 }
 
 type hostCount struct {
@@ -55,6 +78,7 @@ type rank struct {
 	bytes   uint64
 	local   uint64
 	transit uint64
+	subs    []subRank // busiest first; empty unless sub-ranges are on
 }
 
 // traffic is the class of one observation's source.
@@ -87,6 +111,12 @@ func newSlide(window time.Duration, max int) *slide {
 }
 
 func (s *slide) add(at time.Time, p netip.Prefix, host netip.Addr, n uint64, t traffic) {
+	s.addSub(at, p, netip.Prefix{}, host, n, t)
+}
+
+// addSub is add with the destination's sub-range (#121). An invalid sub,
+// or subCap zero, counts no sub-range.
+func (s *slide) addSub(at time.Time, p, sub netip.Prefix, host netip.Addr, n uint64, t traffic) {
 	if n == 0 || !p.IsValid() {
 		return
 	}
@@ -99,15 +129,16 @@ func (s *slide) add(at time.Time, p netip.Prefix, host netip.Addr, n uint64, t t
 		b = &bucket{cells: map[netip.Prefix]*cell{}}
 		s.slots[slot] = b
 	}
-	b.add(p, host, n, t, s.max)
+	b.add(p, sub, host, n, t, s.max, s.subCap)
 	s.prune(at)
 }
 
-func (b *bucket) add(p netip.Prefix, host netip.Addr, n uint64, t traffic, max int) {
+func (b *bucket) add(p, sub netip.Prefix, host netip.Addr, n uint64, t traffic, max, subCap int) {
 	if c, ok := b.cells[p]; ok {
 		c.bytes += n
 		c.note(n, t)
 		c.noteHost(host, n)
+		c.noteSub(sub, host, n, subCap)
 		if b.minOK && p == b.minP {
 			b.minOK = false
 		}
@@ -119,7 +150,47 @@ func (b *bucket) add(p netip.Prefix, host netip.Addr, n uint64, t traffic, max i
 	c := &cell{bytes: n}
 	c.note(n, t)
 	c.noteHost(host, n)
+	c.noteSub(sub, host, n, subCap)
 	b.cells[p] = c
+}
+
+// noteSub keeps the busiest sub-ranges in this bucket, the same way
+// noteHost keeps destinations: a known sub-range accumulates, a new one
+// takes a free slot or replaces the smallest when it is at least that
+// large. Each sub-range keeps the destination with the most bytes seen
+// in one step as its probe address.
+func (c *cell) noteSub(sub netip.Prefix, host netip.Addr, n uint64, subCap int) {
+	if subCap <= 0 || !sub.IsValid() || n == 0 {
+		return
+	}
+	for i := range c.subs {
+		sc := &c.subs[i]
+		if sc.prefix != sub {
+			continue
+		}
+		sc.bytes += n
+		switch {
+		case host == sc.host:
+			sc.hostBytes += n
+		case host.IsValid() && n > sc.hostBytes:
+			sc.host, sc.hostBytes = host, n
+		}
+		return
+	}
+	nc := subCount{prefix: sub, bytes: n, host: host, hostBytes: n}
+	if len(c.subs) < subCap {
+		c.subs = append(c.subs, nc)
+		return
+	}
+	small := 0
+	for i := 1; i < len(c.subs); i++ {
+		if c.subs[i].bytes < c.subs[small].bytes {
+			small = i
+		}
+	}
+	if n >= c.subs[small].bytes {
+		c.subs[small] = nc
+	}
 }
 
 // noteHost keeps the busiest destinations in this bucket. A host already
@@ -234,9 +305,14 @@ func (s *slide) aggregate(now time.Time) []rank {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.prune(now)
+	type subAcc struct {
+		bytes uint64
+		hosts map[netip.Addr]uint64
+	}
 	type acc struct {
 		bytes, local, transit uint64
 		hosts                 map[netip.Addr]uint64
+		subs                  map[netip.Prefix]*subAcc
 	}
 	sum := map[netip.Prefix]*acc{}
 	for _, b := range s.slots {
@@ -255,6 +331,20 @@ func (s *slide) aggregate(now time.Time) []rank {
 					a.hosts[h.addr] += h.bytes
 				}
 			}
+			for _, sc := range c.subs {
+				if a.subs == nil {
+					a.subs = map[netip.Prefix]*subAcc{}
+				}
+				sa := a.subs[sc.prefix]
+				if sa == nil {
+					sa = &subAcc{hosts: map[netip.Addr]uint64{}}
+					a.subs[sc.prefix] = sa
+				}
+				sa.bytes += sc.bytes
+				if sc.host.IsValid() && sc.hostBytes > 0 {
+					sa.hosts[sc.host] += sc.hostBytes
+				}
+			}
 		}
 	}
 	out := make([]rank, 0, len(sum))
@@ -267,7 +357,21 @@ func (s *slide) aggregate(now time.Time) []rank {
 		if len(hosts) > 0 {
 			host = hosts[0]
 		}
-		out = append(out, rank{prefix: p, host: host, hosts: hosts, bytes: a.bytes, local: a.local, transit: a.transit})
+		var subs []subRank
+		for sp, sa := range a.subs {
+			sh := topHosts(sa.hosts)
+			if sa.bytes == 0 || len(sh) == 0 {
+				continue
+			}
+			subs = append(subs, subRank{prefix: sp, host: sh[0], bytes: sa.bytes})
+		}
+		sort.Slice(subs, func(i, j int) bool {
+			if subs[i].bytes != subs[j].bytes {
+				return subs[i].bytes > subs[j].bytes
+			}
+			return subs[i].prefix.Addr().Compare(subs[j].prefix.Addr()) < 0
+		})
+		out = append(out, rank{prefix: p, host: host, hosts: hosts, bytes: a.bytes, local: a.local, transit: a.transit, subs: subs})
 	}
 	sort.Slice(out, func(i, j int) bool {
 		if out[i].bytes != out[j].bytes {

@@ -329,7 +329,7 @@ func TestWizardAPIRoundTrip(t *testing.T) {
 	e := newUI(t)
 	in := configedit.WizardInput{ASN: 64512, RouterID: "192.0.2.10", Edge: "192.0.2.254",
 		Providers: []configedit.WizardProvider{{Name: "transit-a", SourceIP: "192.0.2.11", NextHop: "192.0.2.1"}, {Name: "transit-b", SourceIP: "192.0.2.12", NextHop: "192.0.2.2"}},
-		Prefix:    "198.51.100.0/24", Host: "198.51.100.1"}
+		Prefix:    "198.51.100.0/26", Host: "198.51.100.1"}
 	rec, got := e.do(t, "POST", "/api/config/wizard", plugin.RoleAdmin, in)
 	if rec.Code != http.StatusOK || got["mode"] != "observe" {
 		t.Fatalf("wizard: %d %s", rec.Code, rec.Body)
@@ -560,5 +560,34 @@ func TestConfigFormAndSuggestions(t *testing.T) {
 	body := js[i : i+j]
 	if strings.Contains(body, "api(") || strings.Contains(body, "PUT") || strings.Contains(body, "/api/") {
 		t.Fatalf("accepting a suggestion calls the API:\n%s", body)
+	}
+}
+
+// TestHeterogeneousInSnapshot checks the #121 sub-range view reaches
+// /api/decisions and the dashboard prefix card.
+func TestHeterogeneousInSnapshot(t *testing.T) {
+	wide := netip.MustParsePrefix("198.51.100.0/24")
+	d := policy.Decision{Prefix: wide, Action: policy.ActionNone, Recommended: "a", Heterogeneous: true,
+		Subranges: []policy.SubrangeDecision{
+			{Prefix: netip.MustParsePrefix("198.51.100.0/26"), Weight: 600, Best: "a", Candidates: []policy.Candidate{{Provider: "a", Score: 10, Usable: true}}},
+			{Prefix: netip.MustParsePrefix("198.51.100.192/26"), Weight: 400, Best: "b", Candidates: []policy.Candidate{{Provider: "b", Score: 12, Usable: true}}},
+		}}
+	out := assembleDecisions([]policy.Decision{d})
+	if len(out) != 1 || !out[0].Heterogeneous || len(out[0].Subranges) != 2 || out[0].Subranges[1].Best != "b" {
+		t.Fatalf("decisions = %+v", out)
+	}
+	raw, _ := json.Marshal(out[0])
+	for _, want := range []string{`"heterogeneous":true`, `"prefix":"198.51.100.192/26"`, `"weight":400`, `"best":"b"`} {
+		if !strings.Contains(string(raw), want) {
+			t.Fatalf("json missing %s: %s", want, raw)
+		}
+	}
+	plain, _ := json.Marshal(assembleDecisions([]policy.Decision{{Prefix: wide, Action: policy.ActionNone}})[0])
+	if strings.Contains(string(plain), "heterogeneous") || strings.Contains(string(plain), "subranges") {
+		t.Fatalf("plain decision json = %s", plain)
+	}
+	ps := assemblePrefixes(Input{Decisions: []policy.Decision{d}})
+	if len(ps) != 1 || !ps[0].Heterogeneous || len(ps[0].Subranges) != 2 {
+		t.Fatalf("prefixes = %+v", ps)
 	}
 }
