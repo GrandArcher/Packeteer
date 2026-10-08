@@ -58,6 +58,13 @@ const (
 	DefaultProbeProberMemory = 100000
 	MaxProbeProberMemory     = 1000000
 
+	// DefaultProbeMinReplies is how many replies a host needs before it
+	// can define the score. 1 is any reply, which is the historical rule.
+	DefaultProbeMinReplies = 1
+	// MaxProbeDispersionMS is the largest RTT spread (max−min), in
+	// milliseconds, an operator may require of a qualified host.
+	MaxProbeDispersionMS = 600000
+
 	// MaxConfirmRounds is the upper bound of thresholds.confirm_rounds.
 	// Omitted or 0 means 1 (announce on the first fresh win).
 	MaxConfirmRounds = 100
@@ -526,11 +533,23 @@ type Probe struct {
 	PerTargetConcurrency int `yaml:"per_target_concurrency"`
 	// RetryLossPct, when greater than zero, re-probes a path with
 	// RetryPackets before the result is stored if its loss is at least
-	// this percent. Zero disables retry.
+	// this percent. Zero disables loss retry. DispersionMS escalates
+	// on its own when a host's RTT spread is over the limit.
 	RetryLossPct float64 `yaml:"retry_loss_pct"`
 	// RetryPackets is the packet count of that second probe. Zero means
-	// three times packets when retry is enabled, and is otherwise unused.
+	// three times packets when loss retry or dispersion is enabled, and
+	// is otherwise unused.
 	RetryPackets int `yaml:"retry_packets"`
+	// MinReplies is how many replies a host needs before it can define
+	// the score. Zero uses the default of 1 (any reply counts). A host
+	// with fewer replies is left out the way a silent host is.
+	MinReplies int `yaml:"min_replies"`
+	// DispersionMS is the maximum RTT spread (maximum reply minus
+	// minimum reply), in milliseconds, for a host that defines the
+	// score. Zero disables the check. A wider spread is left out the
+	// way a silent host is, and that prefix is probed again with
+	// RetryPackets.
+	DispersionMS int `yaml:"dispersion_ms"`
 	// ProberRecheckRounds is how often each host is probed from the first
 	// prober again. Omitted or 0 uses the default. The other rounds start
 	// at the prober that last got a reply from that host.
@@ -622,7 +641,10 @@ func (c *Config) applyDefaults() {
 	if c.Probe.ProberMemory == 0 {
 		c.Probe.ProberMemory = DefaultProbeProberMemory
 	}
-	if c.Probe.RetryLossPct > 0 && c.Probe.RetryPackets == 0 {
+	if c.Probe.MinReplies == 0 {
+		c.Probe.MinReplies = DefaultProbeMinReplies
+	}
+	if (c.Probe.RetryLossPct > 0 || c.Probe.DispersionMS > 0) && c.Probe.RetryPackets == 0 {
 		n := c.Probe.Packets * 3
 		if n < 1 {
 			n = DefaultProbePackets * 3
@@ -874,6 +896,12 @@ func (c *Config) Validate() error {
 	}
 	if c.Probe.RetryPackets < 0 || c.Probe.RetryPackets > MaxProbePackets {
 		add("probe.retry_packets %d must be between 0 and %d", c.Probe.RetryPackets, MaxProbePackets)
+	}
+	if c.Probe.MinReplies < 1 || c.Probe.MinReplies > MaxProbePackets {
+		add("probe.min_replies %d must be between 1 and %d", c.Probe.MinReplies, MaxProbePackets)
+	}
+	if c.Probe.DispersionMS < 0 || c.Probe.DispersionMS > MaxProbeDispersionMS {
+		add("probe.dispersion_ms %d must be between 0 and %d", c.Probe.DispersionMS, MaxProbeDispersionMS)
 	}
 	if c.Probe.ProberRecheckRounds < 1 || c.Probe.ProberRecheckRounds > MaxProbeProberRecheckRounds {
 		add("probe.prober_recheck_rounds %d must be between 1 and %d", c.Probe.ProberRecheckRounds, MaxProbeProberRecheckRounds)

@@ -6,8 +6,8 @@
 // prefix; otherwise it is aggregated to aggregate_v4 or aggregate_v6. A
 // destination inside an exchange peering LAN is not a probe target and is
 // not aggregated (#145): BGP sessions and IXP services on that LAN must
-// not be probed when no learned route covers them. The
-// busiest destination is a probe candidate, not a pin. Raw flow records are
+// not be probed when no learned route covers them. Up to three of the
+// busiest destinations are probe candidates, not pins. Raw flow records are
 // not stored: only per-bucket counters and the templates needed to decode
 // NetFlow v9 and IPFIX.
 //
@@ -592,26 +592,46 @@ func (s *Source) TrafficMix(ctx context.Context) ([]plugin.TrafficMix, error) {
 // prefixes come first (weight is the problem score, capped at
 // problems.max_targets), then the busiest prefixes not already listed. An
 // idle collector returns an empty slice, not an error, so other sources
-// keep working.
+// keep working. Each target carries up to three destination addresses,
+// busiest first. A problem prefix puts the failure address first.
 func (s *Source) Targets(context.Context) ([]plugin.Target, error) {
 	now := s.now()
+	rows := s.win.aggregate(now)
+	hostOf := make(map[netip.Prefix][]netip.Addr, len(rows))
+	for _, r := range rows {
+		hostOf[r.prefix] = r.hosts
+	}
 	out := []plugin.Target{}
 	listed := map[netip.Prefix]bool{}
 	if s.prob != nil {
 		for _, p := range s.prob.win.Problems(now, s.prob.th, s.prob.maxTargets) {
 			t := plugin.Target{Prefix: p.Prefix, Weight: p.Score}
-			setFlowHost(&t, p.Host)
+			hosts := make([]netip.Addr, 0, 1+len(hostOf[p.Prefix]))
+			if p.Host.IsValid() {
+				hosts = append(hosts, p.Host)
+			}
+			hosts = append(hosts, hostOf[p.Prefix]...)
+			setFlowHosts(&t, hosts)
 			out = append(out, t)
 			listed[p.Prefix] = true
 		}
 	}
-	ranked := s.win.top(now, s.topN, s.minBytes)
-	for _, r := range ranked {
+	// Same order and cap as slide.top: the busiest prefixes that clear
+	// min_bytes, then skip any a problem entry already listed.
+	added := 0
+	for _, r := range rows {
+		if r.bytes == 0 || r.bytes < s.minBytes {
+			continue
+		}
+		if added >= s.topN {
+			break
+		}
+		added++
 		if listed[r.prefix] {
 			continue
 		}
 		t := plugin.Target{Prefix: r.prefix, Weight: float64(r.bytes)}
-		setFlowHost(&t, r.host)
+		setFlowHosts(&t, r.hosts)
 		out = append(out, t)
 	}
 	out = exchange.FilterTargets(s.lansSnapshot(), out)
@@ -619,13 +639,30 @@ func (s *Source) Targets(context.Context) ([]plugin.Target, error) {
 	return out, nil
 }
 
-// setFlowHost records the busiest destination, or a problem address, as
-// a probe candidate. It is not a pin: the engine probes it first, then
-// the automatic in-prefix hosts and a usable provider next hop.
-func setFlowHost(t *plugin.Target, host netip.Addr) {
-	if host.IsValid() && t.Prefix.Contains(host) {
-		t.Host = host
-		t.Candidate = true
+// setFlowHosts records up to three destinations as probe candidates.
+// The first is Host. The rest are Hosts. They are not pins: the engine
+// probes them first, and uses the automatic in-prefix addresses only
+// when fewer than three were named.
+func setFlowHosts(t *plugin.Target, hosts []netip.Addr) {
+	var in []netip.Addr
+	seen := map[netip.Addr]bool{}
+	for _, h := range hosts {
+		if !h.IsValid() || seen[h] || !t.Prefix.Contains(h) {
+			continue
+		}
+		seen[h] = true
+		in = append(in, h)
+		if len(in) == maxFlowHosts {
+			break
+		}
+	}
+	if len(in) == 0 {
+		return
+	}
+	t.Host = in[0]
+	t.Candidate = true
+	if len(in) > 1 {
+		t.Hosts = append([]netip.Addr(nil), in[1:]...)
 	}
 }
 

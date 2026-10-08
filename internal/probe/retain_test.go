@@ -82,6 +82,32 @@ func TestRetainedPrefixKeepsHostAndInterval(t *testing.T) {
 	}
 }
 
+func TestRetainedFlowHostsStay(t *testing.T) {
+	second := netip.MustParseAddr("198.51.100.60")
+	third := netip.MustParseAddr("198.51.100.70")
+	src := &countingSource{fresh: true, targets: []plugin.Target{{
+		Prefix: pfx1, Host: netip.MustParseAddr("198.51.100.50"),
+		Hosts: []netip.Addr{second, third}, Candidate: true,
+	}}}
+	e, err := New([]Provider{provA}, []NamedProber{{"p", &fakeProber{fn: ok(1)}}},
+		[]NamedSource{{Name: "flow", Source: src}}, opts())
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.RunOnce(context.Background())
+	e.SetRetained([]netip.Prefix{pfx1})
+	src.targets = nil
+	e.RunOnce(context.Background())
+	got := targetsByPrefix(t, e)
+	if len(got) != 1 || !got[pfx1].Candidate || len(got[pfx1].Hosts) != 2 || got[pfx1].Hosts[0] != second || got[pfx1].Hosts[1] != third {
+		t.Fatalf("retained hosts = %+v", got[pfx1])
+	}
+	r := e.Results()
+	if len(r) != 1 || len(r[0].Targets) < 3 || r[0].Targets[0].String() != "198.51.100.50" || r[0].Targets[1] != second || r[0].Targets[2] != third {
+		t.Fatalf("probed %v", r)
+	}
+}
+
 func TestRetainedIntervalStaysDue(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0)
 	o := opts()

@@ -461,6 +461,53 @@ func TestRetryProbeConfig(t *testing.T) {
 	}
 }
 
+func TestHostQualificationConfig(t *testing.T) {
+	cfg, err := Parse([]byte(minimalYAML))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Probe.MinReplies != DefaultProbeMinReplies || cfg.Probe.DispersionMS != 0 {
+		t.Fatalf("defaults = %+v", cfg.Probe)
+	}
+	cfg, err = Parse([]byte(minimalYAML + "probe:\n  min_replies: 0\n  dispersion_ms: 0\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Probe.MinReplies != DefaultProbeMinReplies || cfg.Probe.DispersionMS != 0 || cfg.Probe.RetryPackets != 0 {
+		t.Fatalf("zero should default and not enable retry: %+v", cfg.Probe)
+	}
+	cfg, err = Parse([]byte(minimalYAML + "probe:\n  min_replies: 4\n  dispersion_ms: 20\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Probe.MinReplies != 4 || cfg.Probe.DispersionMS != 20 || cfg.Probe.RetryPackets != 30 {
+		t.Fatalf("qualification = %+v", cfg.Probe)
+	}
+	cfg, err = Parse([]byte(minimalYAML + "probe:\n  packets: 400\n  dispersion_ms: 5\n  retry_packets: 12\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Probe.RetryPackets != 12 {
+		t.Fatalf("explicit retry packets = %d", cfg.Probe.RetryPackets)
+	}
+	cases := []struct {
+		yaml string
+		want string
+	}{
+		{"probe:\n  min_replies: -1\n", "min_replies"},
+		{"probe:\n  min_replies: 1001\n", "min_replies"},
+		{"probe:\n  dispersion_ms: -1\n", "dispersion_ms"},
+		{"probe:\n  dispersion_ms: 600001\n", "dispersion_ms"},
+		{"probe:\n  spread_ms: 20\n", "field spread_ms not found"},
+	}
+	for _, tt := range cases {
+		_, err := Parse([]byte(minimalYAML + tt.yaml))
+		if err == nil || !strings.Contains(err.Error(), tt.want) {
+			t.Fatalf("yaml %q err = %v, want %q", tt.yaml, err, tt.want)
+		}
+	}
+}
+
 func TestProberMemoryConfig(t *testing.T) {
 	cfg, err := Parse([]byte(minimalYAML + "probe:\n  prober_recheck_rounds: 4\n  prober_memory: 25\n"))
 	if err != nil {

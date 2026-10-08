@@ -82,6 +82,62 @@ func TestRecordedNetFlowV5(t *testing.T) {
 	}
 }
 
+func TestFlowTopThreeDestinations(t *testing.T) {
+	s := mustSource(t, "listen: 127.0.0.1:2055\nwindow: 30s\ntop_n: 10\n")
+	t0 := time.Unix(1_700_000_000, 0)
+	s.now = func() time.Time { return t0.Add(5 * time.Second) }
+	exp := netip.MustParseAddr("192.0.2.8")
+	// Two buckets (1s each). .10 is busiest across the window, then
+	// .30, then .20. .40 never makes the three.
+	s.ingest(t0, exp, buildV5(0, []v5rec{
+		{dst: netip.MustParseAddr("198.51.100.10"), octets: 100},
+		{dst: netip.MustParseAddr("198.51.100.30"), octets: 80},
+		{dst: netip.MustParseAddr("198.51.100.20"), octets: 40},
+		{dst: netip.MustParseAddr("198.51.100.40"), octets: 10},
+	}))
+	s.ingest(t0.Add(2*time.Second), exp, buildV5(0, []v5rec{
+		{dst: netip.MustParseAddr("198.51.100.10"), octets: 50},
+		{dst: netip.MustParseAddr("198.51.100.20"), octets: 30},
+	}))
+	ts := targetsOf(t, s)
+	if len(ts) != 1 || !ts[0].Candidate || ts[0].Pinned {
+		t.Fatalf("target = %+v", ts)
+	}
+	if ts[0].Host.String() != "198.51.100.10" || ts[0].Weight != 310 {
+		t.Fatalf("busiest = %+v", ts[0])
+	}
+	if len(ts[0].Hosts) != 2 || ts[0].Hosts[0].String() != "198.51.100.30" || ts[0].Hosts[1].String() != "198.51.100.20" {
+		t.Fatalf("next hosts = %v", ts[0].Hosts)
+	}
+}
+
+func TestFlowProblemHostStaysFirst(t *testing.T) {
+	s := mustSource(t, problemsYAML+"  min_flows: 2\n  failure_pct: 50\n")
+	now := time.Unix(1_700_000_000, 0)
+	pin(s, now)
+	exp := netip.MustParseAddr("192.0.2.8")
+	local := netip.MustParseAddr("192.0.2.10")
+	bad := netip.MustParseAddr("198.51.100.20")
+	s.ingest(now, exp, buildV5(0, []v5rec{
+		{dst: netip.MustParseAddr("198.51.100.10"), octets: 5000},
+		{dst: netip.MustParseAddr("198.51.100.30"), octets: 4000},
+		{dst: netip.MustParseAddr("198.51.100.40"), octets: 3000},
+		{dst: netip.MustParseAddr("198.51.100.50"), octets: 2000},
+	}))
+	var recs []v5tcp
+	for i := 0; i < 4; i++ {
+		recs = append(recs, v5tcp{src: local, dst: bad, flags: tcpSYN})
+	}
+	s.ingest(now, exp, buildV5TCP(0, recs))
+	ts := targetsOf(t, s)
+	if len(ts) == 0 || ts[0].Host != bad || !ts[0].Candidate {
+		t.Fatalf("problem target = %+v", ts)
+	}
+	if len(ts[0].Hosts) != 2 || ts[0].Hosts[0].String() != "198.51.100.10" || ts[0].Hosts[1].String() != "198.51.100.30" {
+		t.Fatalf("problem filled hosts = %v", ts[0].Hosts)
+	}
+}
+
 func TestNetFlowV5SamplingTopNExcludeAndWindow(t *testing.T) {
 	s := mustSource(t, `
 listen: ["127.0.0.1:2055"]

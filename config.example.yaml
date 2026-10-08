@@ -43,7 +43,9 @@ probe:
   prober_recheck_rounds: 10   # every Nth probe of a host starts at the first prober again
   prober_memory: 100000       # hosts that remember which prober answered; oldest are dropped past this
   # retry_loss_pct: 20        # 0 (default) disables. Re-probe before storing a lossy sample.
-  # retry_packets: 30         # default is 3x packets when retry_loss_pct is set
+  # retry_packets: 30         # default is 3x packets when retry_loss_pct or dispersion_ms is set
+  # min_replies: 1            # replies a host needs before it defines the score. 1 is any reply.
+  # dispersion_ms: 0          # 0 disables. Otherwise max RTT minus min RTT, in ms, must be at most this.
 
 # Probers are tried in order: ICMP echo, then TCP connect to port 443 when
 # ICMP errors or gets no replies. This is also the default when omitted.
@@ -104,8 +106,9 @@ scorer:
 #         - prefix: 203.0.113.0/24
 #   - type: flow
 #     config:
-#       # The busiest destination is a probe candidate, not a pin: it is
-#       # probed first, then a few addresses in the prefix and the next hop.
+#       # Up to three of the busiest destinations are probe candidates, not
+#       # pins: they are probed first. Automatic addresses fill in only when
+#       # fewer than three were named, then the next hop.
 #       listen:
 #         - "0.0.0.0:2055"            # NetFlow v5/v9 and IPFIX
 #         - "0.0.0.0:6343"            # sFlow
