@@ -188,4 +188,4 @@ telemetry:
           percentile: greater_separate
 ```
 
-`percentile: greater_separate` is the greater of the inbound 95th and the outbound 95th. `separate` keeps the two directions apart. `greater` takes max(in, out) on each sample and then the 95th. The billing day is 00:00 UTC. The window is in memory and starts over on restart. `/api/telemetry` shows the latest rates. SNMPv3 uses `username_env`, `auth_env`, and `priv_env` the same way: names in the file, values in the environment.
+`percentile: greater_separate` is the greater of the inbound 95th and the outbound 95th. `separate` keeps the two directions apart. `greater` takes max(in, out) on each sample and then the 95th. The billing day is 00:00 UTC. The window is in memory. With `storage` configured it is written to that database and loaded again on start; without storage it starts over on restart. `/api/telemetry` shows the latest rates. SNMPv3 uses `username_env`, `auth_env`, and `priv_env` the same way: names in the file, values in the environment.

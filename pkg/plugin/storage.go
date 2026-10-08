@@ -164,6 +164,51 @@ type StorageBackup interface {
 	Restore(ctx context.Context, r io.Reader, overwrite bool) error
 }
 
+// UsageSample is one interface rate sample for a provider binding in a
+// billing period (#127). At is when the sample was taken. InBps and
+// OutBps are bits per second. PeriodStart and PeriodEnd are the UTC
+// bounds of the period the sample belongs to, [start, end).
+type UsageSample struct {
+	Provider    string
+	Host        string
+	Interface   string
+	PeriodStart time.Time
+	PeriodEnd   time.Time
+	At          time.Time
+	InBps       float64
+	OutBps      float64
+}
+
+// UsageSampleQuery selects samples for one binding whose At is in
+// [From, To). Limit above 0 returns only the newest Limit rows, still
+// oldest first. Zero returns every row in the range.
+type UsageSampleQuery struct {
+	Provider  string
+	Host      string
+	Interface string
+	From      time.Time
+	To        time.Time
+	Limit     int
+}
+
+// SampleStore is optional on a storage plugin (#127). A telemetry plugin
+// that keeps a 95th-percentile window writes samples here so a restart
+// reloads the open billing period. Closed periods stay until the store's
+// retention prune. It does not announce and does not change a decision.
+// Backup copies the whole database, so the samples ride along.
+type SampleStore interface {
+	// PutUsageSamples inserts samples. A row with the same binding and
+	// At replaces the earlier one.
+	PutUsageSamples(ctx context.Context, samples []UsageSample) error
+	// UsageSamples returns the rows selected by q, oldest first.
+	UsageSamples(ctx context.Context, q UsageSampleQuery) ([]UsageSample, error)
+	// TrimUsageSamples deletes samples for the binding inside
+	// [periodStart, periodEnd) that were taken before oldestKept. The
+	// open period on disk stays within the collector's memory cap.
+	// Samples outside that period are left for retention.
+	TrimUsageSamples(ctx context.Context, provider, host, iface string, periodStart, periodEnd, oldestKept time.Time) error
+}
+
 // CountryLookup is optional on a policy plugin that has a GeoIP database.
 // Reports use it for country statistics. It returns "" when unknown.
 type CountryLookup interface {

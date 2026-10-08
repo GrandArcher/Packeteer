@@ -4,7 +4,8 @@
 // It stores daily probe rollups, one row per improvement, one row per
 // threat mitigation rule, and per-prefix facts (origin ASN, country,
 // volume). Raw probe results are not stored. It also keeps HTTP users,
-// API token hashes, and the audit log (#32).
+// API token hashes, the audit log (#32), and SNMP 95th-percentile
+// samples for the open billing period (#127).
 // Rows older than retention (audit records included) are deleted on start and once a day. The plugin
 // records history only; it never announces routes or changes decisions.
 package sqlite
@@ -210,6 +211,18 @@ CREATE TABLE IF NOT EXISTS dashboards (
 	updated_ms INTEGER NOT NULL,
 	PRIMARY KEY (owner, name)
 );
+CREATE TABLE IF NOT EXISTS usage_samples (
+	provider TEXT NOT NULL,
+	host TEXT NOT NULL,
+	iface TEXT NOT NULL,
+	period_start_ms INTEGER NOT NULL,
+	period_end_ms INTEGER NOT NULL,
+	at_ms INTEGER NOT NULL,
+	in_bps REAL NOT NULL,
+	out_bps REAL NOT NULL,
+	PRIMARY KEY (provider, host, iface, at_ms)
+);
+CREATE INDEX IF NOT EXISTS usage_samples_period_end ON usage_samples (period_end_ms);
 `
 
 // Start opens (or creates) the database and starts the daily prune.
@@ -300,6 +313,11 @@ func (s *Store) prune(ctx context.Context) error {
 		return err
 	}
 	if _, err := db.ExecContext(ctx, `DELETE FROM audit WHERE time_ms < ?`, cutoff.UnixMilli()); err != nil {
+		return err
+	}
+	// Closed billing periods only. The open period's end is still ahead,
+	// so a short retention cannot punch a hole in the live 95th (#127).
+	if _, err := db.ExecContext(ctx, `DELETE FROM usage_samples WHERE period_end_ms != 0 AND period_end_ms <= ?`, cutoff.UnixMilli()); err != nil {
 		return err
 	}
 	_, err = db.ExecContext(ctx, `DELETE FROM prefixes WHERE updated_ms < ?`, cutoff.UnixMilli())

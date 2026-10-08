@@ -11,7 +11,10 @@ import (
 	"strings"
 )
 
-// tables are the ones a restored file must have.
+// tables are the ones a restored file must have. usage_samples (#127) is
+// not in this list: a backup taken before that table existed still
+// restores. VACUUM INTO copies the whole file, so a current backup
+// includes the samples.
 var tables = []string{"probe_daily", "improvements", "mitigations", "prefixes"}
 
 // Backup writes a consistent copy of the database to w (#31). It uses

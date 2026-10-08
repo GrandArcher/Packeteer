@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/GrandArcher/Packeteer/internal/config"
 	_ "github.com/GrandArcher/Packeteer/internal/plugins/all"
@@ -54,7 +55,47 @@ func init() {
 		}
 		return &recNotifier{rec{name: e.Name, failRun: fc.Fail}}, nil
 	})
+	plugin.Storages.Register("test-sample-storage", func(plugin.Config, plugin.Env) (plugin.Storage, error) {
+		return &memSamples{}, nil
+	})
+	plugin.Storages.Register("test-plain-storage", func(plugin.Config, plugin.Env) (plugin.Storage, error) {
+		return &plainStore{}, nil
+	})
+	plugin.Telemetries.Register("test-sample-telemetry", func(plugin.Config, plugin.Env) (plugin.Telemetry, error) {
+		return &telKeep{}, nil
+	})
 }
+
+// memSamples is a storage plugin that keeps 95th-percentile samples.
+type memSamples struct{ plugin.Base }
+
+func (*memSamples) Write(context.Context, plugin.HistoryBatch) error { return nil }
+func (*memSamples) Read(context.Context, plugin.HistoryQuery) (plugin.History, error) {
+	return plugin.History{}, nil
+}
+func (*memSamples) PutUsageSamples(context.Context, []plugin.UsageSample) error { return nil }
+func (*memSamples) UsageSamples(context.Context, plugin.UsageSampleQuery) ([]plugin.UsageSample, error) {
+	return nil, nil
+}
+func (*memSamples) TrimUsageSamples(context.Context, string, string, string, time.Time, time.Time, time.Time) error {
+	return nil
+}
+
+// plainStore keeps history and does not keep samples.
+type plainStore struct{ plugin.Base }
+
+func (*plainStore) Write(context.Context, plugin.HistoryBatch) error { return nil }
+func (*plainStore) Read(context.Context, plugin.HistoryQuery) (plugin.History, error) {
+	return plugin.History{}, nil
+}
+
+type telKeep struct {
+	plugin.Base
+	store plugin.SampleStore
+}
+
+func (*telKeep) Snapshot(context.Context) ([]plugin.Usage, error) { return nil, nil }
+func (t *telKeep) UseSampleStore(s plugin.SampleStore)            { t.store = s }
 
 func load(t *testing.T, extra string) *config.Config {
 	t.Helper()
@@ -242,5 +283,23 @@ func TestDetectorBuild(t *testing.T) {
 	badCfg := load(t, src+"anomaly:\n  detector:\n    type: baseline\n    config: {sensitivity: -1}\n")
 	if _, err := Build(badCfg, Options{}); err == nil || !strings.Contains(err.Error(), "sensitivity") {
 		t.Fatalf("bad detector config: %v", err)
+	}
+}
+
+func TestSampleStoreAttached(t *testing.T) {
+	s, err := Build(load(t, "storage:\n  type: test-sample-storage\ntelemetry:\n  - type: test-sample-telemetry\n"), Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	k := s.Telemetry[0].Plugin.(*telKeep)
+	if k.store == nil || k.store != s.Storage.Plugin.(plugin.SampleStore) {
+		t.Fatal("sample store was not attached")
+	}
+	plain, err := Build(load(t, "storage:\n  type: test-plain-storage\ntelemetry:\n  - type: test-sample-telemetry\n"), Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plain.Telemetry[0].Plugin.(*telKeep).store != nil {
+		t.Fatal("storage without a sample store was attached")
 	}
 }

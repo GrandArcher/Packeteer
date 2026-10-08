@@ -3,8 +3,11 @@
 //
 // It does not announce routes. The commit scorer reads the snapshot when
 // it is selected; this plugin does not itself change a decision. A failed
-// poll records an error and leaves the samples already stored. Credentials
-// come from the environment named in the config. They are not logged.
+// poll records an error and leaves the samples already stored. When the
+// host gives it a sample store (#127), accepted samples are written there
+// and the open billing period is loaded on start. Without a store, the
+// window stays in memory and a restart clears it. Credentials come from
+// the environment named in the config. They are not logged.
 package snmp
 
 import (
@@ -35,6 +38,10 @@ type Collector struct {
 	order    []string // provider names, config order
 	states   map[string]*provState
 	dial     func(context.Context, hostSpec) (session, error)
+	store    plugin.SampleStore
+	// now overrides the clock when tests set it before Start. Production
+	// leaves it nil.
+	now func() time.Time
 
 	mu     sync.Mutex
 	cancel context.CancelFunc
@@ -120,8 +127,17 @@ func (c *Collector) Start(ctx context.Context) error {
 	c.cancel = cancel
 	c.done = make(chan struct{})
 	c.mu.Unlock()
+	// The loop goroutine is running before the load returns, so Stop
+	// during a slow read still has something to wait on. It does not poll
+	// until the open period is in memory.
+	release := make(chan struct{})
+	go func() {
+		<-release
+		c.loop(ctx)
+	}()
+	c.loadSamples(ctx)
 	c.log.Info("snmp telemetry started", "interval", c.interval, "providers", len(c.order))
-	go c.loop(ctx)
+	close(release)
 	return nil
 }
 
@@ -146,7 +162,7 @@ func (c *Collector) Stop(ctx context.Context) error {
 
 func (c *Collector) loop(ctx context.Context) {
 	defer close(c.done)
-	c.poll(ctx, time.Now())
+	c.poll(ctx, c.clock())
 	timer := time.NewTimer(c.interval)
 	defer timer.Stop()
 	for {
@@ -154,7 +170,7 @@ func (c *Collector) loop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-timer.C:
-			c.poll(ctx, time.Now())
+			c.poll(ctx, c.clock())
 			timer.Reset(c.interval)
 		}
 	}
@@ -162,7 +178,7 @@ func (c *Collector) loop(ctx context.Context) {
 
 // Snapshot returns the latest usage. The order follows the config.
 func (c *Collector) Snapshot(context.Context) ([]plugin.Usage, error) {
-	now := time.Now().UTC()
+	now := c.clock().UTC()
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	out := make([]plugin.Usage, 0, len(c.order))
@@ -283,6 +299,14 @@ func (c *Collector) pollHost(ctx context.Context, h hostSpec, now time.Time) {
 }
 
 func (c *Collector) observe(st *provState, now time.Time, ob observation) {
+	rec, ok := c.observeLocked(st, now, ob)
+	if ok {
+		c.persist(rec)
+	}
+}
+
+func (c *Collector) observeLocked(st *provState, now time.Time, ob observation) (persistedSample, bool) {
+	now = now.UTC()
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	st.polled = now
@@ -292,27 +316,27 @@ func (c *Collector) observe(st *provState, now time.Time, ob observation) {
 	if !st.haveBase {
 		st.err = ""
 		st.setBase(ob, now)
-		return
+		return persistedSample{}, false
 	}
 	if ob.haveTicks && st.haveTicks && ob.ticks < st.baseTicks {
 		// sysUpTime wraps about every 497 days. A decrease inside the
 		// poll gap is a reload, not a wrap. The counters start over.
 		st.err = "sysUpTime went backwards; counters reset"
 		st.setBase(ob, now)
-		return
+		return persistedSample{}, false
 	}
 	dt := now.Sub(st.baseAt)
 	if dt <= 0 || dt > 2*c.interval {
 		st.err = "poll gap is too large; baseline reset"
 		st.setBase(ob, now)
-		return
+		return persistedSample{}, false
 	}
 	inBps := rateBps(counterDelta(st.baseIn, ob.in, ob.bits), dt)
 	outBps := rateBps(counterDelta(st.baseOut, ob.out, ob.bits), dt)
 	if !saneRate(inBps, ob.speedMbps) || !saneRate(outBps, ob.speedMbps) {
 		st.err = "counter delta is not a plausible rate; baseline reset"
 		st.setBase(ob, now)
-		return
+		return persistedSample{}, false
 	}
 	st.win.add(now, inBps, outBps)
 	st.lastIn = inBps / 1e6
@@ -321,6 +345,7 @@ func (c *Collector) observe(st *provState, now time.Time, ob observation) {
 	st.err = ""
 	st.setBase(ob, now)
 	c.log.Debug("snmp sample", "provider", st.spec.name, "ifindex", ob.idx, "in_mbps", st.lastIn, "out_mbps", st.lastOut)
+	return c.sampleRecord(st, now, inBps, outBps), true
 }
 
 func (st *provState) setBase(ob observation, now time.Time) {
