@@ -197,7 +197,14 @@ function renderPrefixes(data) {
         tr.appendChild(el("td", "num", fmtPct(pr.loss_pct)));
         tr.appendChild(el("td", "num", fmtMs(pr.rtt_avg_ms)));
         tr.appendChild(el("td", "num", fmtMs(pr.jitter_ms)));
-        tr.appendChild(el("td", "", pr.prober || "ok"));
+        var probeCell = el("td", "", pr.prober || "ok");
+        if (pr.indirect) {
+          var tag = el("span", "badge muted", "indirect");
+          tag.title = "Every address inside the prefix was silent. Measured at this provider's traceroute hop " + (pr.target || "") + ".";
+          probeCell.appendChild(document.createTextNode(" "));
+          probeCell.appendChild(tag);
+        }
+        tr.appendChild(probeCell);
       }
       tb.appendChild(tr);
     });

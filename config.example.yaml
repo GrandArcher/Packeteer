@@ -46,6 +46,10 @@ probe:
   # retry_packets: 30         # default is 3x packets when retry_loss_pct or dispersion_ms is set
   # min_replies: 1            # replies a host needs before it defines the score. 1 is any reply.
   # dispersion_ms: 0          # 0 disables. Otherwise max RTT minus min RTT, in ms, must be at most this.
+  # indirect:                 # off by default. Trace silent prefixes from each provider's source (#123)
+  #   enabled: true           # and score each provider at its own highest stable hop. Measurement only.
+  #   budget: 10s             # wall clock for one background pass; passes are at least interval apart
+  #   cache_ttl: 30m          # reuse a hop this long, or until an address inside the prefix answers
 
 # Probers are tried in order: ICMP echo, then TCP connect to port 443 when
 # ICMP errors or gets no replies. This is also the default when omitted.

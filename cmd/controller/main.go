@@ -1230,11 +1230,39 @@ func newEngine(cfg *config.Config, plugins *pluginhost.Set, log *slog.Logger, on
 		ProberRecheckRounds:  cfg.Probe.ProberRecheckRounds,
 		ProberMemory:         cfg.Probe.ProberMemory,
 		ExchangeLANs:         exchangeLANPrefixes(cfg),
+		Indirect:             indirectOptions(cfg),
 		Limiter:              rate.NewLimiter(rate.Limit(cfg.Probe.RateLimitPPS), burst),
 		Logger:               log,
 		OnResult:             onResult,
 		OnRound:              onRound,
 	})
+}
+
+// indirectOptions turns probe.indirect into engine options (#123). Nil
+// when it is omitted or disabled. Traces use the built-in Linux
+// traceroute from each provider's source; every packet waits on the
+// engine's rate limit. Hops on an exchange LAN are not adopted.
+func indirectOptions(cfg *config.Config) *probe.Indirect {
+	in := cfg.Probe.Indirect
+	if in == nil || !in.Enabled {
+		return nil
+	}
+	lans := exchangeLANPrefixes(cfg)
+	return &probe.Indirect{
+		Tracer: traceroute.Tracer{
+			MaxHops:    in.MaxHops,
+			Probes:     in.Probes,
+			MinReplies: in.MinReplies,
+			Port:       in.Port,
+			Timeout:    in.Timeout,
+			Hop:        traceroute.Hop,
+			Skip:       func(a netip.Addr) bool { return exchange.ContainsAddr(lans, a) },
+		},
+		Budget:   in.Budget,
+		MinShare: in.Timeout,
+		CacheTTL: in.CacheTTL,
+		MaxQueue: in.MaxQueue,
+	}
 }
 
 // retainImprovedPrefixes keeps every active improvement's prefix in the
