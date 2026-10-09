@@ -167,6 +167,76 @@ func TestParseInjectValid(t *testing.T) {
 	}
 }
 
+func TestLocalPrefPerCauseAndProvider(t *testing.T) {
+	y := injectYAML + `
+local_pref_cause:
+  performance: 300
+  static: 400
+  commit: 220
+  cost: 210
+`
+	y = edit(t, y, "next_hop: 192.0.2.1", "next_hop: 192.0.2.1\n    local_pref: 350")
+	cfg, err := Parse([]byte(y))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.LocalPref != 200 {
+		t.Fatalf("global local_pref = %d, want 200", cfg.LocalPref)
+	}
+	lp := cfg.LocalPrefCause
+	if lp.Performance == nil || *lp.Performance != 300 || lp.Static == nil || *lp.Static != 400 ||
+		lp.Commit == nil || *lp.Commit != 220 || lp.Cost == nil || *lp.Cost != 210 {
+		t.Fatalf("causes = %+v", lp)
+	}
+	if cfg.Providers[0].LocalPref == nil || *cfg.Providers[0].LocalPref != 350 {
+		t.Fatalf("provider local_pref = %v", cfg.Providers[0].LocalPref)
+	}
+
+	// Omitted overrides stay unset. The global value is the default.
+	cfg, err = Parse([]byte(injectYAML))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.LocalPrefCause != (LocalPrefCauses{}) || cfg.Providers[0].LocalPref != nil {
+		t.Fatalf("overrides leaked: cause %+v provider %v", cfg.LocalPrefCause, cfg.Providers[0].LocalPref)
+	}
+
+	// A cause table does not replace the required global value.
+	_, err = Parse([]byte(edit(t, injectYAML, "local_pref: 200\n", "") + "local_pref_cause: {performance: 300, static: 400, commit: 220, cost: 210}\n"))
+	if err == nil || !strings.Contains(err.Error(), "mode inject requires local_pref") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestLocalPrefOverrideRejected(t *testing.T) {
+	tests := []struct {
+		name, yaml, want string
+	}{
+		{"cause zero", injectYAML + "local_pref_cause: {performance: 0}\n", "local_pref_cause.performance: 0 is rejected"},
+		{"static zero in observe", minimalYAML + "local_pref_cause: {static: 0}\n", "local_pref_cause.static: 0 is rejected"},
+		{"commit zero", injectYAML + "local_pref_cause: {commit: 0}\n", "local_pref_cause.commit: 0 is rejected"},
+		{"cost zero", injectYAML + "local_pref_cause: {cost: 0}\n", "local_pref_cause.cost: 0 is rejected"},
+		{"unknown cause", injectYAML + "local_pref_cause: {vip: 10}\n", "field vip not found"},
+		{"provider zero", edit(t, injectYAML, "next_hop: 192.0.2.1", "next_hop: 192.0.2.1\n    local_pref: 0"), "providers[0] (transit-a).local_pref: 0 is rejected"},
+		{"provider zero in observe", edit(t, minimalYAML, "next_hop: 192.0.2.1", "next_hop: 192.0.2.1\n    local_pref: 0"), "local_pref: 0 is rejected"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := Parse([]byte(tt.yaml))
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("err = %v, want %q", err, tt.want)
+			}
+		})
+	}
+	cfg, err := Parse([]byte(edit(t, minimalYAML, "next_hop: 192.0.2.1", "next_hop: 192.0.2.1\n    local_pref: 100")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Providers[0].LocalPref == nil || *cfg.Providers[0].LocalPref != 100 || cfg.LocalPref != 0 {
+		t.Fatalf("observe provider local_pref = %v global %d", cfg.Providers[0].LocalPref, cfg.LocalPref)
+	}
+}
+
 func TestMoreSpecificOffByDefault(t *testing.T) {
 	for _, y := range []string{minimalYAML, injectYAML} {
 		cfg, err := Parse([]byte(y))

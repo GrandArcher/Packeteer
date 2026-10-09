@@ -217,7 +217,7 @@ func run(ctx context.Context, args []string, getenv func(string) string, stdout,
 	}
 	switch {
 	case cfg.Mode == config.ModeInject:
-		fmt.Fprintf(stdout, "announce: %s local_pref=%d\n", plugins.Announcer.Type, cfg.LocalPref)
+		fmt.Fprintf(stdout, "announce: %s local_pref=%d%s\n", plugins.Announcer.Type, cfg.LocalPref, formatLocalPrefOverrides(cfg))
 		if ms := cfg.MoreSpecific; ms != nil && ms.Enabled {
 			fmt.Fprintf(stdout, "announce more_specific: learned more-specifics only, max_routes=%d\n", ms.MaxRoutes)
 		}
@@ -1036,19 +1036,89 @@ func runInbound(ctx context.Context, now time.Time, inb *inbound.Controller, plu
 	return changes, err
 }
 
+// localPrefTables is the cause and provider local-preference overrides
+// (#132). Nil means every route uses the global local_pref. A provider
+// value wins over a cause value.
+func localPrefTables(cfg *config.Config) (cause, provider map[string]uint32) {
+	if cfg == nil {
+		return nil, nil
+	}
+	put := func(m map[string]uint32, k string, v *uint32) map[string]uint32 {
+		if v == nil {
+			return m
+		}
+		if m == nil {
+			m = map[string]uint32{}
+		}
+		m[k] = *v
+		return m
+	}
+	lp := cfg.LocalPrefCause
+	cause = put(cause, plugin.CausePerformance, lp.Performance)
+	cause = put(cause, plugin.CauseStatic, lp.Static)
+	cause = put(cause, plugin.CauseCommit, lp.Commit)
+	cause = put(cause, plugin.CauseCost, lp.Cost)
+	for _, p := range cfg.Providers {
+		provider = put(provider, p.Name, p.LocalPref)
+	}
+	return cause, provider
+}
+
+// formatLocalPrefOverrides is the -check suffix for set overrides. Causes
+// are printed in a fixed order; providers follow the config.
+func formatLocalPrefOverrides(cfg *config.Config) string {
+	if cfg == nil {
+		return ""
+	}
+	var b strings.Builder
+	type named struct {
+		name string
+		v    *uint32
+	}
+	var cs []string
+	for _, c := range []named{
+		{plugin.CausePerformance, cfg.LocalPrefCause.Performance},
+		{plugin.CauseStatic, cfg.LocalPrefCause.Static},
+		{plugin.CauseCommit, cfg.LocalPrefCause.Commit},
+		{plugin.CauseCost, cfg.LocalPrefCause.Cost},
+	} {
+		if c.v != nil {
+			cs = append(cs, fmt.Sprintf("%s:%d", c.name, *c.v))
+		}
+	}
+	if len(cs) > 0 {
+		b.WriteString(" cause=")
+		b.WriteString(strings.Join(cs, ","))
+	}
+	var ps []string
+	for _, p := range cfg.Providers {
+		if p.LocalPref != nil {
+			ps = append(ps, fmt.Sprintf("%s:%d", p.Name, *p.LocalPref))
+		}
+	}
+	if len(ps) > 0 {
+		b.WriteString(" provider=")
+		b.WriteString(strings.Join(ps, ","))
+	}
+	return b.String()
+}
+
 func newController(cfg *config.Config, plugins *pluginhost.Set, view *rib.View, inb *inbound.Controller, mit *mitigation.Controller, log *slog.Logger) (*announce.Controller, error) {
 	var ann plugin.Announcer
 	if plugins.Announcer != nil {
 		ann = plugins.Announcer.Plugin
 	}
+	causeLP, providerLP := localPrefTables(cfg)
 	ac := announce.Config{
-		Mode:            cfg.Mode,
-		LocalPref:       cfg.LocalPref,
-		Community:       cfg.PacketeerCommunity,
-		MaxImprovements: *cfg.MaxImprovements,
-		NextHops:        map[string]netip.Addr{},
-		ASPath:          cfg.BGP.ASPath,
-		Leader:          haLeader(plugins),
+		Mode:              cfg.Mode,
+		LocalPref:         cfg.LocalPref,
+		CauseLocalPref:    causeLP,
+		ProviderLocalPref: providerLP,
+		Community:         cfg.PacketeerCommunity,
+		MaxImprovements:   *cfg.MaxImprovements,
+		NextHops:          map[string]netip.Addr{},
+		ASPath:            cfg.BGP.ASPath,
+		Leader:            haLeader(plugins),
 	}
 	if ms := cfg.MoreSpecific; ms != nil && ms.Enabled {
 		ac.MoreSpecific, ac.MaxRoutes = true, ms.MaxRoutes

@@ -10,8 +10,11 @@
 // advertising the prefix: that is what the router does once Packeteer's
 // route is best, and withdrawing it would flap. A real leave arrives as the
 // improvement leaving the wanted set, and Sync withdraws it. Every route
-// carries the configured local preference and community; the announcer adds
-// NO_EXPORT.
+// carries a local preference and the configured community; the announcer adds
+// NO_EXPORT. The local preference is the provider's, when that provider sets
+// one, otherwise the improvement's cause, otherwise the global value. An
+// empty cause is performance. A learned more-specific uses its improvement's
+// resolved value.
 //
 // With more-specific injection on (#56, docs/design/more-specific.md), an
 // improvement also announces the more-specifics inside its prefix that a
@@ -64,12 +67,19 @@ type MoreSpecificRIB interface {
 
 // Config is the injection policy. It is ignored unless Mode is inject.
 type Config struct {
-	Mode            string
-	LocalPref       uint32
-	Community       string
-	MaxImprovements int
-	Allowlist       []netip.Prefix
-	NextHops        map[string]netip.Addr // provider name -> next hop
+	Mode      string
+	LocalPref uint32
+	// CauseLocalPref overrides LocalPref for an improvement cause
+	// (performance, static, commit, cost). A missing cause uses LocalPref.
+	// An empty cause is performance.
+	CauseLocalPref map[string]uint32
+	// ProviderLocalPref overrides the cause and the global value for routes
+	// steered to that provider.
+	ProviderLocalPref map[string]uint32
+	Community         string
+	MaxImprovements   int
+	Allowlist         []netip.Prefix
+	NextHops          map[string]netip.Addr // provider name -> next hop
 	// Reserved reports prefixes that inbound steering owns or threat
 	// mitigation holds (#28). They are never announced as outbound
 	// improvements, so no two of them share a prefix.
@@ -135,8 +145,9 @@ func (c *Controller) Routes() int {
 
 // slot is the route published for one learned prefix.
 type slot struct {
-	provider string
-	asPath   []uint32
+	provider  string
+	asPath    []uint32
+	localPref uint32
 	// parent is the improvement that owns a learned more-specific (#56).
 	// It is the zero prefix on an improvement's own route.
 	parent netip.Prefix
@@ -178,6 +189,24 @@ func New(cfg Config, ann plugin.Announcer, rib RIB, log *slog.Logger) (*Controll
 		}
 		if cfg.LocalPref == 0 {
 			return nil, errors.New("announce: inject mode requires local_pref")
+		}
+		for cause, v := range cfg.CauseLocalPref {
+			switch cause {
+			case plugin.CausePerformance, plugin.CauseStatic, plugin.CauseCommit, plugin.CauseCost:
+			default:
+				return nil, fmt.Errorf("announce: local_pref cause %q is invalid", cause)
+			}
+			if v == 0 {
+				return nil, fmt.Errorf("announce: local_pref for cause %s must be above the edge's native local preference (0 is rejected)", cause)
+			}
+		}
+		for name, v := range cfg.ProviderLocalPref {
+			if _, ok := cfg.NextHops[name]; !ok {
+				return nil, fmt.Errorf("announce: local_pref for unknown provider %q", name)
+			}
+			if v == 0 {
+				return nil, fmt.Errorf("announce: provider %s local_pref must be above the edge's native local preference (0 is rejected)", name)
+			}
 		}
 		if cfg.Community == "" {
 			return nil, errors.New("announce: inject mode requires a community")
@@ -334,7 +363,9 @@ func (c *Controller) syncImprovementLocked(ctx context.Context, im policy.Improv
 	if !on && !c.rib.Contains(p) {
 		return fmt.Errorf("announce: %s is not in the RIB", p)
 	}
-	if on && !s.moreSpecific() && s.provider == im.Provider && slices.Equal(s.asPath, c.asPath(p, im.Provider)) {
+	// A cause change can keep the provider and the AS path and still need a
+	// new local preference on the wire.
+	if on && !s.moreSpecific() && s.provider == im.Provider && s.localPref == c.localPref(im.Provider, im.Cause) && slices.Equal(s.asPath, c.asPath(p, im.Provider)) {
 		return nil
 	}
 	if !allowed(c.cfg.Allowlist, p) {
@@ -465,7 +496,7 @@ func (c *Controller) syncMoreSpecificsLocked(ctx context.Context, p netip.Prefix
 		}
 		c.active[m] = s
 		visited[m] = true
-		if s.provider != par.provider || !slices.Equal(s.asPath, c.asPath(m, par.provider)) {
+		if s.provider != par.provider || s.localPref != par.localPref || !slices.Equal(s.asPath, c.asPath(m, par.provider)) {
 			if err := c.announceMoreSpecificLocked(ctx, m, p, par.provider); err != nil {
 				errs = append(errs, err)
 			}
@@ -482,7 +513,7 @@ func (c *Controller) syncMoreSpecificsLocked(ctx context.Context, p netip.Prefix
 				visited[m] = true
 				s.parent, s.seen, s.held = p, time.Time{}, false
 				c.active[m] = s
-				if s.provider != par.provider || !slices.Equal(s.asPath, c.asPath(m, par.provider)) {
+				if s.provider != par.provider || s.localPref != par.localPref || !slices.Equal(s.asPath, c.asPath(m, par.provider)) {
 					if err := c.announceMoreSpecificLocked(ctx, m, p, par.provider); err != nil {
 						errs = append(errs, err)
 					}
@@ -523,23 +554,27 @@ func (c *Controller) announceMoreSpecificLocked(ctx context.Context, m, parent n
 	if !ok || !nh.IsValid() {
 		return fmt.Errorf("announce: provider %q has no next hop", provider)
 	}
+	lp := c.cfg.LocalPref
+	if par, ok := c.active[parent]; ok && par.localPref != 0 {
+		lp = par.localPref
+	}
 	rt := plugin.Route{
 		Prefix:      m,
 		NextHop:     nh,
 		Provider:    provider,
-		LocalPref:   c.cfg.LocalPref,
+		LocalPref:   lp,
 		Communities: []string{c.cfg.Community},
 		ASPath:      c.asPath(m, provider),
 	}
 	if err := c.ann.Announce(ctx, rt); err != nil {
 		return err
 	}
-	s := slot{provider: provider, asPath: rt.ASPath, parent: parent}
+	s := slot{provider: provider, asPath: rt.ASPath, localPref: lp, parent: parent}
 	if on && old.moreSpecific() && old.parent == parent {
 		s.seen, s.held = old.seen, old.held
 	}
 	c.active[m] = s
-	c.log.Info("injected more-specific", "prefix", m, "improvement", parent, "provider", provider, "next_hop", nh, "local_pref", c.cfg.LocalPref, "as_path", fmt.Sprint(rt.ASPath))
+	c.log.Info("injected more-specific", "prefix", m, "improvement", parent, "provider", provider, "next_hop", nh, "local_pref", lp, "as_path", fmt.Sprint(rt.ASPath))
 	return nil
 }
 
@@ -596,20 +631,39 @@ func (c *Controller) announceLocked(ctx context.Context, imp policy.Improvement)
 	if s, exists := c.active[p]; (!exists || s.moreSpecific()) && c.improvementsLocked()+others >= c.cfg.MaxImprovements {
 		return fmt.Errorf("announce: max_improvements (%d) reached", c.cfg.MaxImprovements)
 	}
+	lp := c.localPref(imp.Provider, imp.Cause)
 	rt := plugin.Route{
 		Prefix:      p,
 		NextHop:     nh,
 		Provider:    imp.Provider,
-		LocalPref:   c.cfg.LocalPref,
+		LocalPref:   lp,
 		Communities: []string{c.cfg.Community},
 		ASPath:      c.asPath(p, imp.Provider),
 	}
 	if err := c.ann.Announce(ctx, rt); err != nil {
 		return err
 	}
-	c.active[p] = slot{provider: imp.Provider, asPath: rt.ASPath}
-	c.log.Info("injected", "prefix", p, "provider", imp.Provider, "next_hop", nh, "local_pref", c.cfg.LocalPref, "as_path", fmt.Sprint(rt.ASPath))
+	c.active[p] = slot{provider: imp.Provider, asPath: rt.ASPath, localPref: lp}
+	// cause stays after local_pref so the walkthrough's fixed substring
+	// (provider, next_hop, local_pref) still matches.
+	c.log.Info("injected", "prefix", p, "provider", imp.Provider, "next_hop", nh, "local_pref", lp, "as_path", fmt.Sprint(rt.ASPath), "cause", imp.Cause)
 	return nil
+}
+
+// localPref is the local preference for a steer to provider for cause.
+// The provider value wins, then the cause, then the global LocalPref.
+// An empty cause is performance. Caller holds mu.
+func (c *Controller) localPref(provider, cause string) uint32 {
+	if v, ok := c.cfg.ProviderLocalPref[provider]; ok {
+		return v
+	}
+	if cause == "" {
+		cause = plugin.CausePerformance
+	}
+	if v, ok := c.cfg.CauseLocalPref[cause]; ok {
+		return v
+	}
+	return c.cfg.LocalPref
 }
 
 // asPath is the AS path for p toward provider under bgp.as_path. native

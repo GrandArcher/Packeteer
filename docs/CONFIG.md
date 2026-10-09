@@ -27,7 +27,7 @@ The image entrypoint is the same binary. Flags go after the image name.
 | `asn` | none | yes, non-zero | BGP ASN of this speaker. Neighbors are iBGP in this ASN. |
 | `router_id` | none | yes | IPv4 address. IPv6 is rejected. |
 | `packeteer_community` | empty | inject | RFC 1997 community `asn:value`. Each half is an integer 0–65535. Quote it in YAML (`"64512:666"`). |
-| `local_pref` | 0 | inject | Local preference on every injected route. `0` is rejected in inject mode. Set it above the edge's native local preference. |
+| `local_pref` | 0 | inject | Local preference on an injected route when no cause or provider override is set. `0` is rejected in inject mode. Set it above the edge's native local preference. See [`local_pref_cause`](#local_pref_cause). |
 | `more_specific_bits` | unset | must be absent | Any value, including `0`, is an error. Packeteer announces the exact prefix it learned from the RIB. |
 | `more_specific` | off | no | More-specific injection: with each improvement, also announce the more-specifics inside its prefix that a neighbor advertises in the learned RIB, under a route cap. Never a prefix that is not learned. See [`more_specific`](#more_specific). Lab-proven only. |
 | `instance` | `domain` | no | This instance's name in a federation (#30). Peers expect it in its snapshot. Letters, digits, `_`, `.`, `-`, at most 64 characters. See [Multi-POP](#multi-pop-federation). |
@@ -65,6 +65,26 @@ The image entrypoint is the same binary. Flags go after the image name.
 
 `mode: observe` and `mode: suggest` use the same decision path and announce nothing. `suggest` is the checkpoint: read the log, the dashboard, and `/api/decisions` before you change `mode`. The allowlist is enforced only in `inject`.
 
+### `local_pref_cause`
+
+Optional. A local preference per improvement cause (#132). The global `local_pref` is used when the cause is omitted here and the provider does not set its own. A provider `local_pref` wins over the cause, and the cause wins over the global value. An improvement with an empty cause is `performance`. Each value that is set must be a non-zero integer. `0` is rejected in every mode, the same rule as `local_pref` in inject: set it above the edge's native local preference. Unknown keys are rejected. These keys do not change which prefix Decide announces or withdraws. A cause change on a route already on the wire replaces that route with the new local preference. A learned more-specific uses its improvement's resolved value.
+
+| Key | Default |
+|---|---|
+| `performance` | global `local_pref` |
+| `static` | global `local_pref` |
+| `commit` | global `local_pref` |
+| `cost` | global `local_pref` |
+
+```yaml
+local_pref: 250
+local_pref_cause:
+  performance: 300
+  static: 400
+  commit: 220
+  cost: 210
+```
+
 ### `thresholds`
 
 | Key | Default | Bounds |
@@ -85,6 +105,7 @@ A candidate wins when its score is lower and either loss improves by at least `m
 | `name` | yes | Unique. |
 | `source_ip` | yes, except in another domain | Source address of probes. Unique across providers. Must be configured on the host. Same address family as `next_hop`. Must be empty for a provider in another `domain`. |
 | `next_hop` | yes | BGP next hop used if this provider is selected. Also how a learned route is matched to a provider. For a provider in another domain, the address this POP's routers reach that POP's exit at across the backbone. |
+| `local_pref` | no | Local preference on routes steered to this provider (#132). Wins over `local_pref_cause` and the global `local_pref`. Omit it to use those. `0` is rejected in every mode. Set it above the edge's native local preference. |
 | `domain` | no | Routing domain (POP) the provider exits in (#30). Empty or equal to the top-level `domain` is local. A provider in another domain is not probed here: the peer there measures it. Needs `federation` and an `inter_dc_rtt` entry for the domain; `bmp` and `add_path` do not apply. |
 | `exclude` | no | `true`: still probe, never select for an improvement. |
 | `group` | no | Load-balancing group. Empty means the provider is not in a group. Letters, digits, `_`, `.`, `-`, at most 64 characters, starting with a letter or digit. |
@@ -405,7 +426,7 @@ More-specific injection (#56, lab-proven only, not on a public edge). Design and
 
 | Key | Default | Meaning |
 |---|---|---|
-| `enabled` | `false` | `true`: an improvement on P also announces every prefix strictly inside P that a neighbor advertises exactly in the learned RIB, is inside the allowlist, and is not held by inbound steering or mitigation. Nothing is split or computed: if no neighbor advertises a more-specific inside P, only P is announced. Each route carries the improvement's provider next hop, `local_pref`, `packeteer_community`, and `no-export`. |
+| `enabled` | `false` | `true`: an improvement on P also announces every prefix strictly inside P that a neighbor advertises exactly in the learned RIB, is inside the allowlist, and is not held by inbound steering or mitigation. Nothing is split or computed: if no neighbor advertises a more-specific inside P, only P is announced. Each route carries the improvement's provider next hop, that improvement's resolved `local_pref`, `packeteer_community`, and `no-export`. |
 | `max_routes` | `100` | Cap on routes on a router: improvements, their more-specifics, and inbound steer routes. 1–1000. A new improvement is announced whole (P and all its learned more-specifics) or not at all; a more-specific learned later is added only while there is room. Nothing on the wire is withdrawn to make room. `max_improvements` still caps improvements. |
 
 A more-specific is withdrawn with its improvement (flip-back, TTL, policy, P leaving the RIB), when the RIB is not ready, on shutdown, and when it really leaves the RIB: the neighbor advertised it for at least 5s while Packeteer's route was on the wire and then stopped. A shorter gap is the router hiding its own path because Packeteer's route won, and the route stays. A change needs a restart (SIGHUP refuses it). Rollback: remove the block or set `enabled: false` and restart; only improvements' own prefixes are announced again.
@@ -536,13 +557,13 @@ Set these in the container. They are not keys in the YAML file. `PACKETEER_HTTP_
 - `allowlist.prefixes` is non-empty
 - at least one `bgp.neighbors` entry
 - `packeteer_community` is set and valid
-- `local_pref` is non-zero
+- `local_pref` is non-zero. Any `local_pref_cause` value and any `providers[].local_pref` that is set is non-zero too (`0` is rejected in every mode)
 - `announcer` is set (`type: gobgp`)
 - `hold_time` is positive
 - both threshold deltas are positive
 - `more_specific_bits` is absent (`more_specific` is the replacement; it is off by default)
 
-The `gobgp` announcer has no `config` keys. A config block with any key is an error. Each announced route carries the provider `next_hop`, `local_pref`, `packeteer_community`, and `no-export`. The export policy accepts only routes Packeteer originated that carry the community.
+The `gobgp` announcer has no `config` keys. A config block with any key is an error. Each announced route carries the provider `next_hop`, the resolved `local_pref` (the provider's, else the cause's, else the global value), `packeteer_community`, and `no-export`. The export policy accepts only routes Packeteer originated that carry the community.
 
 The shipped example stays `mode: observe`. Put an inject config only in the file you mount on a host you control.
 

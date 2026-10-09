@@ -4,7 +4,7 @@ Packeteer peers with the edge over **iBGP** (the router's own ASN). It learns th
 
 - the exact prefix learned from the router
 - next hop = the chosen provider's `next_hop`
-- `local_pref` from the config
+- `local_pref`: the provider's, if that provider sets one, otherwise the cause's (`performance`, `static`, `commit`, `cost`; an empty cause is `performance`), otherwise the global `local_pref`. Every one of those values is set above the native local preference below
 - `packeteer_community` **and** the well-known `no-export` community
 
 Two filters are required on the router:
@@ -13,6 +13,47 @@ Two filters are required on the router:
 2. **Toward eBGP (every transit and peer)**: reject routes that carry `packeteer_community`. `no-export` is a second layer; the filter is the one you control.
 
 Leave BGP graceful restart **off** on the Packeteer session. Packeteer never enables it, withdraws on shutdown, and the session drop is the backstop. If Packeteer disappears, the edge falls back to the paths it learned from its providers.
+
+## Local preference on import
+
+The edge compares local preference and keeps the higher one. Give every transit's import a native value, and do not rewrite local preference on the Packeteer import: Packeteer already set it. Every Packeteer value (`local_pref`, each `local_pref_cause` entry, and each `providers[].local_pref`) has to be above that native value. `0` is rejected. The addresses below are documentation ranges.
+
+FRR. Native paths from the transits get 100. Packeteer's import accepts the community and leaves local preference alone:
+
+```
+route-map transit-in permit 10
+ set local-preference 100
+route-map packeteer-in permit 10
+ match community packeteer
+route-map packeteer-in deny 100
+```
+
+Cisco IOS / IOS-XE, the same idea:
+
+```
+route-map TRANSIT-IN permit 10
+ set local-preference 100
+route-map PACKETEER-IN permit 10
+ match community PACKETEER
+route-map PACKETEER-IN deny 100
+```
+
+Packeteer, all of it above 100. A provider value wins over the cause, and the cause wins over `local_pref`:
+
+```yaml
+local_pref: 250
+local_pref_cause:
+  performance: 300
+  static: 400
+  commit: 220
+  cost: 210
+providers:
+  - name: transit-b
+    next_hop: 192.0.2.22
+    local_pref: 350
+```
+
+A route steered to transit-b is local preference 350. A commit move to any other provider is 220. A performance move to any other provider is 300. Omitting both overrides uses 250.
 
 ## When the native path disappears
 
