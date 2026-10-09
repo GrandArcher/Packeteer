@@ -644,7 +644,9 @@ func (c *Controller) announceLocked(ctx context.Context, imp policy.Improvement)
 		return err
 	}
 	c.active[p] = slot{provider: imp.Provider, asPath: rt.ASPath, localPref: lp}
-	c.log.Info("injected", "prefix", p, "provider", imp.Provider, "cause", imp.Cause, "next_hop", nh, "local_pref", lp, "as_path", fmt.Sprint(rt.ASPath))
+	// cause stays after local_pref so the walkthrough's fixed substring
+	// (provider, next_hop, local_pref) still matches.
+	c.log.Info("injected", "prefix", p, "provider", imp.Provider, "next_hop", nh, "local_pref", lp, "as_path", fmt.Sprint(rt.ASPath), "cause", imp.Cause)
 	return nil
 }
 
