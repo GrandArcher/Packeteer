@@ -217,7 +217,7 @@ func run(ctx context.Context, args []string, getenv func(string) string, stdout,
 	}
 	switch {
 	case cfg.Mode == config.ModeInject:
-		fmt.Fprintf(stdout, "announce: %s local_pref=%d%s\n", plugins.Announcer.Type, cfg.LocalPref, formatLocalPrefOverrides(cfg))
+		fmt.Fprintf(stdout, "announce: %s local_pref=%d%s%s\n", plugins.Announcer.Type, cfg.LocalPref, formatLocalPrefOverrides(cfg), formatCommunityOverrides(cfg))
 		if ms := cfg.MoreSpecific; ms != nil && ms.Enabled {
 			fmt.Fprintf(stdout, "announce more_specific: learned more-specifics only, max_routes=%d\n", ms.MaxRoutes)
 		}
@@ -1103,22 +1103,93 @@ func formatLocalPrefOverrides(cfg *config.Config) string {
 	return b.String()
 }
 
+// communityTables is the extra outbound communities per cause and per
+// provider (#132). They are added after packeteer_community. Nil means none.
+func communityTables(cfg *config.Config) (cause, provider map[string][]string) {
+	if cfg == nil {
+		return nil, nil
+	}
+	put := func(m map[string][]string, k string, v []string) map[string][]string {
+		if len(v) == 0 {
+			return m
+		}
+		if m == nil {
+			m = map[string][]string{}
+		}
+		m[k] = slices.Clone(v)
+		return m
+	}
+	cc := cfg.CommunitiesCause
+	cause = put(cause, plugin.CausePerformance, cc.Performance)
+	cause = put(cause, plugin.CauseStatic, cc.Static)
+	cause = put(cause, plugin.CauseCommit, cc.Commit)
+	cause = put(cause, plugin.CauseCost, cc.Cost)
+	for _, p := range cfg.Providers {
+		provider = put(provider, p.Name, p.Communities)
+	}
+	return cause, provider
+}
+
+// formatCommunityOverrides is the -check suffix for extra communities.
+// Lists use "+" so a large community's colons stay unambiguous. Causes are
+// printed in a fixed order; providers follow the config.
+func formatCommunityOverrides(cfg *config.Config) string {
+	if cfg == nil {
+		return ""
+	}
+	join := func(list []string) string { return strings.Join(list, "+") }
+	var b strings.Builder
+	cc := cfg.CommunitiesCause
+	var cs []string
+	for _, c := range []struct {
+		name string
+		list []string
+	}{
+		{plugin.CausePerformance, cc.Performance},
+		{plugin.CauseStatic, cc.Static},
+		{plugin.CauseCommit, cc.Commit},
+		{plugin.CauseCost, cc.Cost},
+	} {
+		if len(c.list) > 0 {
+			cs = append(cs, c.name+":"+join(c.list))
+		}
+	}
+	if len(cs) > 0 {
+		b.WriteString(" communities=")
+		b.WriteString(strings.Join(cs, ","))
+	}
+	var ps []string
+	for _, p := range cfg.Providers {
+		if len(p.Communities) > 0 {
+			ps = append(ps, p.Name+":"+join(p.Communities))
+		}
+	}
+	if len(ps) > 0 {
+		b.WriteString(" provider=")
+		b.WriteString(strings.Join(ps, ","))
+	}
+	return b.String()
+}
+
 func newController(cfg *config.Config, plugins *pluginhost.Set, view *rib.View, inb *inbound.Controller, mit *mitigation.Controller, log *slog.Logger) (*announce.Controller, error) {
 	var ann plugin.Announcer
 	if plugins.Announcer != nil {
 		ann = plugins.Announcer.Plugin
 	}
 	causeLP, providerLP := localPrefTables(cfg)
+	causeC, providerC := communityTables(cfg)
 	ac := announce.Config{
-		Mode:              cfg.Mode,
-		LocalPref:         cfg.LocalPref,
-		CauseLocalPref:    causeLP,
-		ProviderLocalPref: providerLP,
-		Community:         cfg.PacketeerCommunity,
-		MaxImprovements:   *cfg.MaxImprovements,
-		NextHops:          map[string]netip.Addr{},
-		ASPath:            cfg.BGP.ASPath,
-		Leader:            haLeader(plugins),
+		Mode:                cfg.Mode,
+		LocalPref:           cfg.LocalPref,
+		CauseLocalPref:      causeLP,
+		ProviderLocalPref:   providerLP,
+		Community:           cfg.PacketeerCommunity,
+		CauseCommunities:    causeC,
+		ProviderCommunities: providerC,
+		MaxImprovements:     *cfg.MaxImprovements,
+		NextHops:            map[string]netip.Addr{},
+		ASPath:              cfg.BGP.ASPath,
+		Leader:              haLeader(plugins),
 	}
 	if ms := cfg.MoreSpecific; ms != nil && ms.Enabled {
 		ac.MoreSpecific, ac.MaxRoutes = true, ms.MaxRoutes
@@ -1832,18 +1903,18 @@ func newRIB(cfg *config.Config, log *slog.Logger) (*rib.View, error) {
 	if listen == 0 {
 		listen = -1
 	}
-	own, err := ownCommunity(cfg.PacketeerCommunity)
+	own, large, err := ownCommunity(cfg.PacketeerCommunity)
 	if err != nil {
 		return nil, err
 	}
-	warnBMPSelfFilter(log, usage, own)
+	warnBMPSelfFilter(log, usage, own, large)
 	var lans []netip.Prefix
 	for _, ex := range cfg.Exchanges {
 		lans = append(lans, ex.ExchangeLANs()...)
 	}
 	return rib.New(rib.Options{ASN: cfg.ASN, RouterID: rid, ListenPort: listen,
 		ListenAddresses: cfg.BGP.ListenAddresses, Neighbors: nbrs, Providers: providers, BMP: usage,
-		AddPath: addPath, OwnCommunity: own, Egress: egress, PeerASN: peerASN, LANs: lans, Logger: log})
+		AddPath: addPath, OwnCommunity: own, OwnLarge: large, Egress: egress, PeerASN: peerASN, LANs: lans, Logger: log})
 }
 
 // ribNeighbors is the iBGP sessions and, from each neighbor's providers,
@@ -1874,7 +1945,7 @@ func ribNeighbors(cfg *config.Config) ([]rib.Neighbor, map[string][]netip.Addr, 
 // routes are recognised in Loc-RIB (and in Adj-RIB-In reflected by another
 // router) only by packeteer_community. A router or route reflector that
 // strips it would let an injected route keep its prefix learned.
-func warnBMPSelfFilter(log *slog.Logger, usage map[string]string, own uint32) {
+func warnBMPSelfFilter(log *slog.Logger, usage map[string]string, own uint32, large string) {
 	if log == nil {
 		return
 	}
@@ -1882,7 +1953,7 @@ func warnBMPSelfFilter(log *slog.Logger, usage map[string]string, own uint32) {
 		if u != config.BMPPrefer && u != config.BMPOnly {
 			continue
 		}
-		if own == 0 {
+		if own == 0 && large == "" {
 			log.Warn("bmp: packeteer_community is unset, so Packeteer's own routes reported over BMP Loc-RIB cannot be recognised; set it before mode: inject")
 			return
 		}
@@ -1891,22 +1962,30 @@ func warnBMPSelfFilter(log *slog.Logger, usage map[string]string, own uint32) {
 	}
 }
 
-// ownCommunity turns packeteer_community ("asn:value") into asn<<16|value,
-// or 0 when it is unset.
-func ownCommunity(s string) (uint32, error) {
+// ownCommunity turns packeteer_community into the standard form
+// asn<<16|value, or a large community string (RFC 8092). Both are zero
+// when it is unset. A two-part value above 16 bits is rejected.
+func ownCommunity(s string) (uint32, string, error) {
 	if s == "" {
-		return 0, nil
+		return 0, "", nil
 	}
-	hi, lo, _ := strings.Cut(s, ":")
+	text, err := config.CommunityText(s)
+	if err != nil {
+		return 0, "", fmt.Errorf("packeteer_community %q: %w", s, err)
+	}
+	if strings.Count(text, ":") == 2 {
+		return 0, text, nil
+	}
+	hi, lo, _ := strings.Cut(text, ":")
 	a, err := strconv.ParseUint(hi, 10, 16)
 	if err != nil {
-		return 0, fmt.Errorf("packeteer_community %q: %w", s, err)
+		return 0, "", fmt.Errorf("packeteer_community %q: %w", s, err)
 	}
 	b, err := strconv.ParseUint(lo, 10, 16)
 	if err != nil {
-		return 0, fmt.Errorf("packeteer_community %q: %w", s, err)
+		return 0, "", fmt.Errorf("packeteer_community %q: %w", s, err)
 	}
-	return uint32(a)<<16 | uint32(b), nil
+	return uint32(a)<<16 | uint32(b), "", nil
 }
 
 // wireRIBSources points every RIB source (BMP) at the view. It runs before

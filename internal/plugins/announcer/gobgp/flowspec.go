@@ -248,12 +248,17 @@ func (a *MitigationAnnouncer) flowSpecPath(r plugin.FlowSpecRoute) (*api.Path, e
 		nh = "::"
 	}
 	comms := []uint32{}
+	var large []*bgp.LargeCommunity
 	for _, c := range []string{a.community, a.marker} {
-		v, err := parseCommunity(c)
+		pc, err := parseAnyCommunity(c)
 		if err != nil {
 			return nil, err
 		}
-		comms = append(comms, v)
+		if pc.large {
+			large = append(large, bgp.NewLargeCommunity(pc.ga, pc.d1, pc.d2))
+			continue
+		}
+		comms = append(comms, pc.std)
 	}
 	comms = append(comms, noExport)
 	attrs := []bgp.PathAttributeInterface{
@@ -261,8 +266,11 @@ func (a *MitigationAnnouncer) flowSpecPath(r plugin.FlowSpecRoute) (*api.Path, e
 		bgp.NewPathAttributeMpReachNLRI(nh, []bgp.AddrPrefixInterface{nlri}),
 		bgp.NewPathAttributeLocalPref(r.LocalPref),
 		bgp.NewPathAttributeCommunities(comms),
-		bgp.NewPathAttributeExtendedCommunities([]bgp.ExtendedCommunityInterface{ext}),
 	}
+	if len(large) > 0 {
+		attrs = append(attrs, bgp.NewPathAttributeLargeCommunities(large))
+	}
+	attrs = append(attrs, bgp.NewPathAttributeExtendedCommunities([]bgp.ExtendedCommunityInterface{ext}))
 	path, err := apiutil.NewPath(nlri, false, attrs, time.Now())
 	if err != nil {
 		return nil, fmt.Errorf("mitigation announcer: flowspec for %s: %w", dst, err)

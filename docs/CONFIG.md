@@ -26,8 +26,9 @@ The image entrypoint is the same binary. Flags go after the image name.
 | `mode` | `observe` | no | `observe`, `suggest`, or `inject`. A file without `mode` (or with an empty one) observes. `inject` is never a default: it needs `mode: inject` and the [inject checklist](#inject-checklist). |
 | `asn` | none | yes, non-zero | BGP ASN of this speaker. Neighbors are iBGP in this ASN. |
 | `router_id` | none | yes | IPv4 address. IPv6 is rejected. |
-| `packeteer_community` | empty | inject | RFC 1997 community `asn:value`. Each half is an integer 0–65535. Quote it in YAML (`"64512:666"`). |
+| `packeteer_community` | empty | inject | Standard community `asn:value` (each half 0–65535) or a large community `global:data1:data2` (RFC 8092, each part 0–4294967295). Quote it in YAML (`"64512:666"`). The export policy matches only this community. A two-part value above 16 bits is rejected; write a 4-byte ASN as a large community (`"70000:1:0"`). |
 | `local_pref` | 0 | inject | Local preference on an injected route when no cause or provider override is set. `0` is rejected in inject mode. Set it above the edge's native local preference. See [`local_pref_cause`](#local_pref_cause). |
+| `communities_cause` | none | no | Extra outbound communities per improvement cause (#132). Added after `packeteer_community`. See [`communities_cause`](#communities_cause). |
 | `more_specific_bits` | unset | must be absent | Any value, including `0`, is an error. Packeteer announces the exact prefix it learned from the RIB. |
 | `more_specific` | off | no | More-specific injection: with each improvement, also announce the more-specifics inside its prefix that a neighbor advertises in the learned RIB, under a route cap. Never a prefix that is not learned. See [`more_specific`](#more_specific). Lab-proven only. |
 | `instance` | `domain` | no | This instance's name in a federation (#30). Peers expect it in its snapshot. Letters, digits, `_`, `.`, `-`, at most 64 characters. See [Multi-POP](#multi-pop-federation). |
@@ -85,6 +86,28 @@ local_pref_cause:
   cost: 210
 ```
 
+### `communities_cause`
+
+Optional. Extra outbound communities per improvement cause (#132). They are added to `packeteer_community`, then a provider's `communities` are added. They do not replace it, and the export policy matches only `packeteer_community`. An improvement with an empty cause uses `performance`. An omitted cause adds none. An unknown key is rejected.
+
+Each entry is a standard community (`asn:value`, each half 0–65535) or a large community (`global:data1:data2`, RFC 8092, each part 0–4294967295). A list holds at most 16. Empty strings, duplicates (after canonical form, so `64512:0100` is `64512:100`), a value equal to `packeteer_community`, and well-known standard communities (`0:x` and `65535:x`, including NO_EXPORT and BLACKHOLE) are rejected. `packeteer_community` itself may be one of those well-known values. A two-part value above 16 bits is rejected. Leading zeros are rewritten to canonical decimal text. These keys do not change which prefix Decide announces or withdraws. A cause change on a route already on the wire replaces that route. A learned more-specific uses its improvement's community list. Changing this block requires a restart.
+
+| Key | Default |
+|---|---|
+| `performance` | none |
+| `static` | none |
+| `commit` | none |
+| `cost` | none |
+
+```yaml
+packeteer_community: "64512:666"
+communities_cause:
+  performance: ["64512:100"]
+  static: ["64512:200"]
+  commit: ["64512:300"]
+  cost: ["64512:1:40"]
+```
+
 ### `thresholds`
 
 | Key | Default | Bounds |
@@ -106,6 +129,7 @@ A candidate wins when its score is lower and either loss improves by at least `m
 | `source_ip` | yes, except in another domain | Source address of probes. Unique across providers. Must be configured on the host. Same address family as `next_hop`. Must be empty for a provider in another `domain`. |
 | `next_hop` | yes | BGP next hop used if this provider is selected. Also how a learned route is matched to a provider. For a provider in another domain, the address this POP's routers reach that POP's exit at across the backbone. |
 | `local_pref` | no | Local preference on routes steered to this provider (#132). Wins over `local_pref_cause` and the global `local_pref`. Omit it to use those. `0` is rejected in every mode. Set it above the edge's native local preference. |
+| `communities` | no | Extra communities on routes steered to this provider (#132), added after the cause's. The export policy does not match them. The same rules as [`communities_cause`](#communities_cause): at most 16, standard or large, no duplicates, not `packeteer_community`, and no `0:x` or `65535:x`. Omit it for none. An unknown provider name is rejected. Changing it requires a restart. |
 | `domain` | no | Routing domain (POP) the provider exits in (#30). Empty or equal to the top-level `domain` is local. A provider in another domain is not probed here: the peer there measures it. Needs `federation` and an `inter_dc_rtt` entry for the domain; `bmp` and `add_path` do not apply. |
 | `exclude` | no | `true`: still probe, never select for an improvement. |
 | `group` | no | Load-balancing group. Empty means the provider is not in a group. Letters, digits, `_`, `.`, `-`, at most 64 characters, starting with a letter or digit. |
@@ -252,7 +276,7 @@ Without add-path the router sends Packeteer one path per prefix: its best. With 
 - **The published route (native).** Higher local preference wins, then the lower neighbor address. Among one neighbor's paths the shorter AS path wins, then the lower path identifier. Add-path does not mark the router's best, so this is an estimate. A BMP Loc-RIB feed, where you run one, is not used to correct it: the iBGP path still comes first.
 - **Route check.** A provider with `add_path: true` is checked while at least one session that negotiated add-path is up: the router sends every path it has, so a provider without a path for the exact prefix is not advertising it. No new improvement goes there, and an active one is retired at once (reason `no route via provider (route check)`), ignoring hold time. Any iBGP path through the provider passes. Set it only for providers whose sessions are on routers that send you every path: a provider on an edge without add-path would be refused. With `bmp: prefer` the BMP and add-path checks both count (either passes); `bmp: only` ignores iBGP paths and cannot be combined.
 - **Native path stays visible.** The router keeps sending the native path while Packeteer's route is its best, so a native withdraw during an improvement is seen and the improvement is retired, instead of waiting for `improvement_ttl`.
-- **Packeteer's own route.** An iBGP path tagged with `packeteer_community` (a reflector or router sending Packeteer's route back) is ignored, with or without add-path, so an injected route never keeps its prefix learned or passes its own route check.
+- **Packeteer's own route.** An iBGP path tagged with `packeteer_community`, standard or large (a reflector or router sending Packeteer's route back) is ignored, with or without add-path, so an injected route never keeps its prefix learned or passes its own route check. An extra community does not mark a path as Packeteer's.
 - **Failure.** Session loss drops every path from that neighbor, as before; with every session down the view is not ready and injected routes are withdrawn. Graceful restart stays off.
 
 **Rollback:** remove `add_path` from the neighbor and the providers and restart. The session comes up single-path and the route check falls back to BMP (if configured) or none.
@@ -279,7 +303,7 @@ With several `neighbors` and neither `providers` nor `next_hops` set, every neig
 - `native`: the AS path of the learned route for the prefix (the router's current best as Packeteer sees it).
 - `provider`: the chosen provider's own learned path for the exact prefix (from iBGP, add-path, or BMP on the router that has the provider up). Without one, the native path.
 
-Paths are read when the route is announced. If the router stops sending the native route once Packeteer's route wins, the path on the wire is kept rather than re-announced. When the provider's learned path changes, the route is replaced with the new one. Packeteer still adds only `packeteer_community` and NO_EXPORT, sets `local_pref`, and never prepends its own AS: the session is iBGP. Lab-proven only (`lab/e2e-ix.sh` checks `provider`).
+Paths are read when the route is announced. If the router stops sending the native route once Packeteer's route wins, the path on the wire is kept rather than re-announced. When the provider's learned path changes, the route is replaced with the new one. Packeteer still adds `packeteer_community`, any extra communities from `communities_cause` and the provider, and NO_EXPORT, sets `local_pref`, and never prepends its own AS: the session is iBGP. Lab-proven only (`lab/e2e-ix.sh` checks `provider`).
 
 #### Online reconfiguration
 
@@ -426,7 +450,7 @@ More-specific injection (#56, lab-proven only, not on a public edge). Design and
 
 | Key | Default | Meaning |
 |---|---|---|
-| `enabled` | `false` | `true`: an improvement on P also announces every prefix strictly inside P that a neighbor advertises exactly in the learned RIB, is inside the allowlist, and is not held by inbound steering or mitigation. Nothing is split or computed: if no neighbor advertises a more-specific inside P, only P is announced. Each route carries the improvement's provider next hop, that improvement's resolved `local_pref`, `packeteer_community`, and `no-export`. |
+| `enabled` | `false` | `true`: an improvement on P also announces every prefix strictly inside P that a neighbor advertises exactly in the learned RIB, is inside the allowlist, and is not held by inbound steering or mitigation. Nothing is split or computed: if no neighbor advertises a more-specific inside P, only P is announced. Each route carries the improvement's provider next hop, that improvement's resolved `local_pref`, and that improvement's communities (`packeteer_community`, the cause's, the provider's) and `no-export`. |
 | `max_routes` | `100` | Cap on routes on a router: improvements, their more-specifics, and inbound steer routes. 1–1000. A new improvement is announced whole (P and all its learned more-specifics) or not at all; a more-specific learned later is added only while there is room. Nothing on the wire is withdrawn to make room. `max_improvements` still caps improvements. |
 
 A more-specific is withdrawn with its improvement (flip-back, TTL, policy, P leaving the RIB), when the RIB is not ready, on shutdown, and when it really leaves the RIB: the neighbor advertised it for at least 5s while Packeteer's route was on the wire and then stopped. A shorter gap is the router hiding its own path because Packeteer's route won, and the route stays. A change needs a restart (SIGHUP refuses it). Rollback: remove the block or set `enabled: false` and restart; only improvements' own prefixes are announced again.
@@ -556,14 +580,15 @@ Set these in the container. They are not keys in the YAML file. `PACKETEER_HTTP_
 
 - `allowlist.prefixes` is non-empty
 - at least one `bgp.neighbors` entry
-- `packeteer_community` is set and valid
+- `packeteer_community` is set and valid (standard or large)
 - `local_pref` is non-zero. Any `local_pref_cause` value and any `providers[].local_pref` that is set is non-zero too (`0` is rejected in every mode)
+- any `communities_cause` list and any `providers[].communities` list follows the rules under [`communities_cause`](#communities_cause)
 - `announcer` is set (`type: gobgp`)
 - `hold_time` is positive
 - both threshold deltas are positive
 - `more_specific_bits` is absent (`more_specific` is the replacement; it is off by default)
 
-The `gobgp` announcer has no `config` keys. A config block with any key is an error. Each announced route carries the provider `next_hop`, the resolved `local_pref` (the provider's, else the cause's, else the global value), `packeteer_community`, and `no-export`. The export policy accepts only routes Packeteer originated that carry the community.
+The `gobgp` announcer has no `config` keys. A config block with any key is an error. Each announced route carries the provider `next_hop`, the resolved `local_pref` (the provider's, else the cause's, else the global value), `packeteer_community`, the cause's extra communities, the provider's extra communities, and `no-export`. The export policy accepts only routes Packeteer originated that carry `packeteer_community`. An extra community alone does not match.
 
 The shipped example stays `mode: observe`. Put an inject config only in the file you mount on a host you control.
 
@@ -1169,7 +1194,7 @@ With several monitored edges, a BMP path counts for a provider's route check onl
 
 **The published route.** A prefix is in the learned RIB when an iBGP path or a usable BMP path has it. This is deliberate: a prefix the router accepted from a `prefer` or `only` provider, but did not send over iBGP (for example its path is inactive, or the iBGP feed is partial), is part of the learned view. It can become a probe target (for example through the `vip` source's ASN expansion) and be announced, still exact, allowlisted, tagged, and capped. Providers with `bmp: off` add nothing. The native provider comes from the iBGP path first (the router's best as it sent it), then a Loc-RIB path, then the Adj-RIB-In path with the shortest AS path (lower router and peer address on a tie). That last one is an estimate, not the router's decision process; send Loc-RIB or keep the iBGP feed where the estimate would be wrong. An Adj-RIB-In path whose next hop matches no provider is ignored. While at least one provider uses `prefer` or `only`, a Loc-RIB path whose next hop matches no provider is kept, so the native is "none" and nothing is improved. With every provider `off`, BMP paths (Loc-RIB included) change nothing.
 
-**Packeteer's own routes.** A router reports Packeteer's injected route back over BMP: in the Adj-RIB-In of Packeteer's iBGP session and, once it wins, in Loc-RIB. Its next hop is the steered provider. Packeteer ignores every path on a peer whose BGP ID is its `router_id`, and every path tagged with `packeteer_community`, so an injected route never keeps its prefix in the view or passes its own route check. Keep `packeteer_community` on the route through the router's import policy (the lab edge does) so Loc-RIB still carries it. The own-session filter covers only the router Packeteer peers with. If Packeteer's route is reflected to another monitored router (a route reflector, whose Adj-RIB-In shows the reflector's BGP ID, not `router_id`), only the community identifies it. An import policy or reflector that strips the community would let the injected route keep its prefix learned. The controller logs a warning at startup whenever a provider uses `prefer` or `only`, as a reminder.
+**Packeteer's own routes.** A router reports Packeteer's injected route back over BMP: in the Adj-RIB-In of Packeteer's iBGP session and, once it wins, in Loc-RIB. Its next hop is the steered provider. Packeteer ignores every path on a peer whose BGP ID is its `router_id`, and every path tagged with `packeteer_community` (a standard community or a large community), so an injected route never keeps its prefix in the view or passes its own route check. Keep `packeteer_community` on the route through the router's import policy (the lab edge does) so Loc-RIB still carries it. The own-session filter covers only the router Packeteer peers with. If Packeteer's route is reflected to another monitored router (a route reflector, whose Adj-RIB-In shows the reflector's BGP ID, not `router_id`), only the community identifies it. An import policy or reflector that strips the community would let the injected route keep its prefix learned. The controller logs a warning at startup whenever a provider uses `prefer` or `only`, as a reminder.
 
 **Failure.** The view is ready only while an iBGP session is up (the announcer needs it); BMP never makes it ready. When a router's BMP session ends (TCP close, termination, read error, TCP keepalive timeout, `idle_timeout`, shutdown), every path from that router is dropped. A router that dies without closing TCP keeps its paths until TCP keepalive gives up (about 30s) or `idle_timeout` fires, whichever is first; during that time an `only` or `prefer` route check can still pass on those paths. A peer down drops that peer's paths. A peer whose messages cannot be decoded is treated as down until its next peer up. A peer that negotiated add-path with the router (the router's OPEN offers receive and the peer's offers send, for example an IX route server) is decoded with path identifiers: each of its paths is kept, and a withdraw removes only the path with the same identifier. Improvements that lose their provider's path then retire through the route check; a prefix that leaves the view is retired as before.
 

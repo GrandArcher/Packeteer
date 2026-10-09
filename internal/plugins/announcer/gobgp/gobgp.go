@@ -3,10 +3,13 @@
 // it never opens a second session.
 //
 // Every announced route carries the configured community and the well-known
-// NO_EXPORT community. The speaker's export policy accepts only local routes
-// that have the configured community and rejects everything else, so learned
-// routes are never reflected. Graceful restart is not enabled: Stop withdraws
-// every Packeteer route, and a dead process drops the session.
+// NO_EXPORT community. The community is a standard community or a large
+// community (RFC 8092). Extra communities on the route are sent as well.
+// The speaker's export policy accepts only local routes that have the
+// configured community and rejects everything else, so learned routes are
+// never reflected and an extra community alone never matches. Graceful
+// restart is not enabled: Stop withdraws every Packeteer route, and a dead
+// process drops the session.
 package gobgp
 
 import (
@@ -90,13 +93,17 @@ func New(c plugin.Config, env plugin.Env) (plugin.Announcer, error) {
 
 // Bind attaches the announcer to the RIB view's speaker and installs an
 // export policy that accepts only local routes tagged with community.
-// community is the configured packeteer community ("asn:value").
+// community is the configured packeteer community: "asn:value", or a large
+// community "global:data1:data2" (RFC 8092). The defined set lists only
+// that community.
 func (a *Announcer) Bind(srv any, community string) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if _, err := parseCommunity(community); err != nil {
+	pc, err := parseAnyCommunity(community)
+	if err != nil {
 		return fmt.Errorf("gobgp announcer: community: %w", err)
 	}
+	community = pc.text
 	s, ok := srv.(*server.BgpServer)
 	if !ok || s == nil {
 		return errors.New("gobgp announcer: embedded speaker is required")
@@ -107,7 +114,7 @@ func (a *Announcer) Bind(srv any, community string) error {
 		}
 		return nil
 	}
-	if err := installExportPolicy(context.Background(), s, community); err != nil {
+	if err := installExportPolicy(context.Background(), s, pc); err != nil {
 		return err
 	}
 	a.srv = s
@@ -316,10 +323,11 @@ func (a *Announcer) validate(r plugin.Route) error {
 	}
 	seen := false
 	for _, c := range r.Communities {
-		if _, err := parseCommunity(c); err != nil {
+		pc, err := parseAnyCommunity(c)
+		if err != nil {
 			return fmt.Errorf("gobgp announcer: community %q: %w", c, err)
 		}
-		if c == a.community {
+		if pc.text == a.community {
 			seen = true
 		}
 	}
@@ -355,15 +363,24 @@ func buildPath(r plugin.Route) (*api.Path, error) {
 		return nil, err
 	}
 	comms := []uint32{}
+	var large []*api.LargeCommunity
 	seen := map[uint32]bool{}
+	seenLarge := map[string]bool{}
 	for _, c := range r.Communities {
-		v, err := parseCommunity(c)
+		pc, err := parseAnyCommunity(c)
 		if err != nil {
 			return nil, err
 		}
-		if !seen[v] {
-			comms = append(comms, v)
-			seen[v] = true
+		if pc.large {
+			if !seenLarge[pc.text] {
+				large = append(large, &api.LargeCommunity{GlobalAdmin: pc.ga, LocalData1: pc.d1, LocalData2: pc.d2})
+				seenLarge[pc.text] = true
+			}
+			continue
+		}
+		if !seen[pc.std] {
+			comms = append(comms, pc.std)
+			seen[pc.std] = true
 		}
 	}
 	if !seen[noExport] {
@@ -372,6 +389,13 @@ func buildPath(r plugin.Route) (*api.Path, error) {
 	cattr, err := anypb.New(&api.CommunitiesAttribute{Communities: comms})
 	if err != nil {
 		return nil, err
+	}
+	var lattr *anypb.Any
+	if len(large) > 0 {
+		lattr, err = anypb.New(&api.LargeCommunitiesAttribute{Communities: large})
+		if err != nil {
+			return nil, err
+		}
 	}
 	fam := familyOf(r.Prefix)
 	var nh *anypb.Any
@@ -386,6 +410,9 @@ func buildPath(r plugin.Route) (*api.Path, error) {
 		return nil, err
 	}
 	attrs := []*anypb.Any{origin, nh, lp, cattr}
+	if lattr != nil {
+		attrs = append(attrs, lattr)
+	}
 	if len(r.ASPath) > 0 {
 		// AS_SEQUENCE segments hold at most 255 ASNs each.
 		var segs []*api.AsSegment
@@ -413,7 +440,7 @@ func asPathString(as []uint32) string {
 
 func parseCommunity(s string) (uint32, error) {
 	hi, lo, ok := strings.Cut(s, ":")
-	if !ok {
+	if !ok || strings.Contains(lo, ":") {
 		return 0, errors.New(`must be "asn:value"`)
 	}
 	a, err1 := strconv.ParseUint(hi, 10, 16)
@@ -424,25 +451,75 @@ func parseCommunity(s string) (uint32, error) {
 	return uint32(a)<<16 | uint32(b), nil
 }
 
+// parsedCommunity is one standard or large community in canonical text.
+type parsedCommunity struct {
+	text  string
+	large bool
+	std   uint32
+	ga    uint32
+	d1    uint32
+	d2    uint32
+}
+
+// parseAnyCommunity accepts a standard community or a large community
+// (RFC 8092). A two-part value above 16 bits stays rejected: a 4-byte ASN
+// is written as a large community ("70000:1:0").
+func parseAnyCommunity(s string) (parsedCommunity, error) {
+	parts := strings.Split(s, ":")
+	switch len(parts) {
+	case 2:
+		a, err1 := strconv.ParseUint(parts[0], 10, 16)
+		b, err2 := strconv.ParseUint(parts[1], 10, 16)
+		if err1 != nil || err2 != nil || parts[0] == "" || parts[1] == "" {
+			return parsedCommunity{}, errors.New("each half must be an integer 0-65535")
+		}
+		return parsedCommunity{text: fmt.Sprintf("%d:%d", a, b), std: uint32(a)<<16 | uint32(b)}, nil
+	case 3:
+		ga, err1 := strconv.ParseUint(parts[0], 10, 32)
+		d1, err2 := strconv.ParseUint(parts[1], 10, 32)
+		d2, err3 := strconv.ParseUint(parts[2], 10, 32)
+		if err1 != nil || err2 != nil || err3 != nil || parts[0] == "" || parts[1] == "" || parts[2] == "" {
+			return parsedCommunity{}, errors.New("each part must be an integer 0-4294967295")
+		}
+		return parsedCommunity{
+			text: fmt.Sprintf("%d:%d:%d", ga, d1, d2), large: true,
+			ga: uint32(ga), d1: uint32(d1), d2: uint32(d2),
+		}, nil
+	default:
+		return parsedCommunity{}, errors.New(`must be "asn:value" or a large community "global:data1:data2" (RFC 8092)`)
+	}
+}
+
 // installExportPolicy accepts only routes we originated that carry community,
-// and rejects everything else (including routes learned from the edge).
-func installExportPolicy(ctx context.Context, srv *server.BgpServer, community string) error {
+// and rejects everything else (including routes learned from the edge and
+// local routes that carry only an extra community). The defined set lists
+// only that one community.
+func installExportPolicy(ctx context.Context, srv *server.BgpServer, pc parsedCommunity) error {
+	defType := api.DefinedType_COMMUNITY
+	cond := &api.Conditions{
+		CommunitySet: &api.MatchSet{Type: api.MatchSet_ANY, Name: setName},
+		RouteType:    api.Conditions_ROUTE_TYPE_LOCAL,
+	}
+	if pc.large {
+		defType = api.DefinedType_LARGE_COMMUNITY
+		cond = &api.Conditions{
+			LargeCommunitySet: &api.MatchSet{Type: api.MatchSet_ANY, Name: setName},
+			RouteType:         api.Conditions_ROUTE_TYPE_LOCAL,
+		}
+	}
 	if err := srv.AddDefinedSet(ctx, &api.AddDefinedSetRequest{DefinedSet: &api.DefinedSet{
-		DefinedType: api.DefinedType_COMMUNITY,
+		DefinedType: defType,
 		Name:        setName,
-		List:        []string{community},
+		List:        []string{pc.text},
 	}}); err != nil {
 		return fmt.Errorf("gobgp announcer: community set: %w", err)
 	}
 	pol := &api.Policy{
 		Name: policyName,
 		Statements: []*api.Statement{{
-			Name: "packeteer-accept",
-			Conditions: &api.Conditions{
-				CommunitySet: &api.MatchSet{Type: api.MatchSet_ANY, Name: setName},
-				RouteType:    api.Conditions_ROUTE_TYPE_LOCAL,
-			},
-			Actions: &api.Actions{RouteAction: api.RouteAction_ACCEPT},
+			Name:       "packeteer-accept",
+			Conditions: cond,
+			Actions:    &api.Actions{RouteAction: api.RouteAction_ACCEPT},
 		}},
 	}
 	if err := srv.AddPolicy(ctx, &api.AddPolicyRequest{Policy: pol}); err != nil {

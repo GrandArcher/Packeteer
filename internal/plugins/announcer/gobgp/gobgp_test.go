@@ -2,6 +2,7 @@ package gobgp
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"net/netip"
 	"strings"
@@ -107,6 +108,7 @@ type seen struct {
 	nextHop string
 	lp      uint32
 	comms   map[uint32]bool
+	large   map[string]bool
 	fromUs  bool
 	asPath  []uint32
 }
@@ -116,11 +118,11 @@ func collect(t *testing.T, srv *server.BgpServer, fam *api.Family) []seen {
 	var out []seen
 	err := srv.ListPath(context.Background(), &api.ListPathRequest{TableType: api.TableType_GLOBAL, Family: fam}, func(d *api.Destination) {
 		for _, p := range d.Paths {
-			s := seen{comms: map[uint32]bool{}, fromUs: p.NeighborIp == "127.0.0.2"}
+			s := seen{comms: map[uint32]bool{}, large: map[string]bool{}, fromUs: p.NeighborIp == "127.0.0.2"}
 			if pref, ok := decodePrefix(p.Nlri); ok {
 				s.prefix = pref.String()
 			}
-			s.nextHop, s.lp, s.comms = decodeAttrs(p.Pattrs)
+			s.nextHop, s.lp, s.comms, s.large = decodeAttrs(p.Pattrs)
 			s.asPath = decodeASPath(p.Pattrs)
 			out = append(out, s)
 		}
@@ -169,15 +171,17 @@ func itoa(n int) string {
 	return string(b[i:])
 }
 
-func decodeAttrs(attrs []*anypb.Any) (string, uint32, map[uint32]bool) {
+func decodeAttrs(attrs []*anypb.Any) (string, uint32, map[uint32]bool, map[string]bool) {
 	var nh string
 	var lp uint32
 	comms := map[uint32]bool{}
+	large := map[string]bool{}
 	for _, a := range attrs {
 		var nhA api.NextHopAttribute
 		var mp api.MpReachNLRIAttribute
 		var lpa api.LocalPrefAttribute
 		var ca api.CommunitiesAttribute
+		var lc api.LargeCommunitiesAttribute
 		switch {
 		case a.MessageIs(&nhA):
 			if a.UnmarshalTo(&nhA) == nil {
@@ -197,9 +201,15 @@ func decodeAttrs(attrs []*anypb.Any) (string, uint32, map[uint32]bool) {
 					comms[c] = true
 				}
 			}
+		case a.MessageIs(&lc):
+			if a.UnmarshalTo(&lc) == nil {
+				for _, c := range lc.Communities {
+					large[fmt.Sprintf("%d:%d:%d", c.GlobalAdmin, c.LocalData1, c.LocalData2)] = true
+				}
+			}
 		}
 	}
-	return nh, lp, comms
+	return nh, lp, comms, large
 }
 
 func decodeASPath(attrs []*anypb.Any) []uint32 {

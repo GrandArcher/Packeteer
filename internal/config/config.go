@@ -72,14 +72,26 @@ const (
 	// DefaultHTTPListen is the read-only ops server. Loopback keeps the
 	// dashboard off the network unless the operator opts in.
 	DefaultHTTPListen = "127.0.0.1:8080"
+
+	// MaxExtraCommunities is the most extra outbound communities one
+	// cause or one provider may list (#132).
+	MaxExtraCommunities = 16
 )
 
 // Config is the top-level controller configuration.
 type Config struct {
-	Mode               string `yaml:"mode"`
-	ASN                uint32 `yaml:"asn"`
-	RouterID           string `yaml:"router_id"`
+	Mode     string `yaml:"mode"`
+	ASN      uint32 `yaml:"asn"`
+	RouterID string `yaml:"router_id"`
+	// PacketeerCommunity tags every injected route. It is a standard
+	// community ("asn:value", each half 0–65535) or a large community
+	// ("global:data1:data2", RFC 8092). The export policy matches only
+	// this community.
 	PacketeerCommunity string `yaml:"packeteer_community"`
+	// CommunitiesCause adds extra communities per improvement cause. They
+	// are added to PacketeerCommunity; a provider's Communities are added
+	// as well. An omitted cause adds none. An empty cause is performance.
+	CommunitiesCause CommunityCauses `yaml:"communities_cause,omitempty"`
 	// LocalPref is the local preference on an injected route when no cause
 	// or provider override is set. Required, and non-zero, when mode is inject.
 	LocalPref uint32 `yaml:"local_pref"`
@@ -445,6 +457,17 @@ type Thresholds struct {
 	ConfirmRounds int `yaml:"confirm_rounds"`
 }
 
+// CommunityCauses is an optional list of extra outbound communities per
+// improvement cause (#132). Each value is a standard community or a large
+// community (RFC 8092). Unknown keys are rejected. An empty list is the
+// same as omitting the cause.
+type CommunityCauses struct {
+	Performance []string `yaml:"performance,omitempty"`
+	Static      []string `yaml:"static,omitempty"`
+	Commit      []string `yaml:"commit,omitempty"`
+	Cost        []string `yaml:"cost,omitempty"`
+}
+
 // LocalPrefCauses is an optional local preference per improvement cause
 // (#132). A nil field uses the global LocalPref. A set value must be
 // non-zero: the same rule as LocalPref in inject, so the operator sets
@@ -465,6 +488,10 @@ type Provider struct {
 	// this provider. It wins over local_pref_cause and the global
 	// local_pref. Nil uses those. 0 is rejected.
 	LocalPref *uint32 `yaml:"local_pref,omitempty"`
+	// Communities are extra communities on routes steered to this
+	// provider, added after the cause's. The export policy does not
+	// match them. Large communities (RFC 8092) are accepted.
+	Communities []string `yaml:"communities,omitempty"`
 	// Exclude keeps the provider measured but never chosen for an improvement.
 	Exclude bool `yaml:"exclude"`
 	// Group is an optional load-balancing group. Empty means the provider
@@ -776,8 +803,11 @@ func (c *Config) Validate() error {
 	}
 
 	if c.PacketeerCommunity != "" {
-		if err := validateCommunity(c.PacketeerCommunity); err != nil {
+		text, err := CommunityText(c.PacketeerCommunity)
+		if err != nil {
 			add("packeteer_community %q: %v", c.PacketeerCommunity, err)
+		} else {
+			c.PacketeerCommunity = text
 		}
 	}
 
@@ -1097,6 +1127,7 @@ func (c *Config) Validate() error {
 	// rejected the same way inject rejects a global local_pref of 0, so a
 	// file prepared in observe fails before the mode changes.
 	c.validateLocalPref(add)
+	c.validateCommunities(add)
 	c.validateInbound(add)
 	c.validateMitigation(add)
 	c.validateAnomaly(add)
@@ -1125,6 +1156,51 @@ func (c *Config) validateLocalPref(add func(string, ...any)) {
 			label = fmt.Sprintf("providers[%d] (%s)", i, p.Name)
 		}
 		check(label+".local_pref", p.LocalPref)
+	}
+}
+
+// validateCommunities checks packeteer's extra outbound communities and
+// rewrites each accepted value to its canonical text. The export policy
+// matches only packeteer_community; these are attributes for the edge.
+func (c *Config) validateCommunities(add func(string, ...any)) {
+	pack := c.PacketeerCommunity
+	check := func(where string, list *[]string) {
+		if len(*list) == 0 {
+			return
+		}
+		if len(*list) > MaxExtraCommunities {
+			add("%s: at most %d communities", where, MaxExtraCommunities)
+		}
+		seen := map[string]bool{}
+		out := make([]string, 0, len(*list))
+		for i, s := range *list {
+			text, err := ExtraCommunityText(s, pack)
+			if err != nil {
+				add("%s[%d] %q: %v", where, i, s, err)
+				continue
+			}
+			if seen[text] {
+				add("%s: duplicate community %s", where, text)
+				continue
+			}
+			seen[text] = true
+			out = append(out, text)
+		}
+		if len(out) == len(*list) {
+			*list = out
+		}
+	}
+	check("communities_cause.performance", &c.CommunitiesCause.Performance)
+	check("communities_cause.static", &c.CommunitiesCause.Static)
+	check("communities_cause.commit", &c.CommunitiesCause.Commit)
+	check("communities_cause.cost", &c.CommunitiesCause.Cost)
+	for i := range c.Providers {
+		p := &c.Providers[i]
+		label := fmt.Sprintf("providers[%d]", i)
+		if p.Name != "" {
+			label = fmt.Sprintf("providers[%d] (%s)", i, p.Name)
+		}
+		check(label+".communities", &p.Communities)
 	}
 }
 
@@ -1372,16 +1448,50 @@ func validProviderGroup(s string) bool {
 	return true
 }
 
-// validateCommunity checks a standard RFC 1997 community in "asn:value" form.
-func validateCommunity(s string) error {
-	hi, lo, ok := strings.Cut(s, ":")
-	if !ok {
-		return errors.New(`must be in "asn:value" form`)
+// CommunityText parses s as a standard community ("asn:value", each half
+// 0–65535) or a large community ("global:data1:data2", each part
+// 0–4294967295, RFC 8092) and returns the canonical decimal text.
+func CommunityText(s string) (string, error) {
+	parts := strings.Split(s, ":")
+	nums := make([]uint64, len(parts))
+	bits := 16
+	switch len(parts) {
+	case 2:
+	case 3:
+		bits = 32
+	default:
+		return "", errors.New(`must be "asn:value" or a large community "global:data1:data2" (RFC 8092)`)
 	}
-	for _, part := range []string{hi, lo} {
-		if _, err := strconv.ParseUint(part, 10, 16); err != nil {
-			return errors.New("each half must be an integer 0-65535")
+	for i, part := range parts {
+		n, err := strconv.ParseUint(part, 10, bits)
+		if err != nil || part == "" {
+			if bits == 16 {
+				return "", errors.New("each half must be an integer 0-65535")
+			}
+			return "", errors.New("each part must be an integer 0-4294967295")
 		}
+		nums[i] = n
 	}
-	return nil
+	if len(nums) == 2 {
+		return fmt.Sprintf("%d:%d", nums[0], nums[1]), nil
+	}
+	return fmt.Sprintf("%d:%d:%d", nums[0], nums[1], nums[2]), nil
+}
+
+// ExtraCommunityText is CommunityText for an outbound extra. It rejects a
+// duplicate of packeteer and a well-known standard community (0:x and
+// 65535:x), which would change BGP propagation instead of being a signal
+// the edge maps to weight, VRF, interface, or QoS.
+func ExtraCommunityText(s, packeteer string) (string, error) {
+	text, err := CommunityText(s)
+	if err != nil {
+		return "", err
+	}
+	if packeteer != "" && text == packeteer {
+		return "", errors.New("duplicates packeteer_community")
+	}
+	if hi, rest, ok := strings.Cut(text, ":"); ok && !strings.Contains(rest, ":") && (hi == "0" || hi == "65535") {
+		return "", errors.New("0:x and 65535:x are reserved")
+	}
+	return text, nil
 }

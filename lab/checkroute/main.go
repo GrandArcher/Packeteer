@@ -56,7 +56,8 @@ func check(mode, raw string) bool {
 	if mode == "present" {
 		// textHasInjected covers FRR 10.2, whose summary JSON has the next
 		// hop and local preference but no community object. The detail text
-		// prints "Community: 64512:666 no-export".
+		// prints 64512:666 and no-export. Extra communities may sit between
+		// them, so those two tokens are matched apart.
 		return jsonFull || (jsonNH && textHasInjected(raw)) || textHasInjected(raw)
 	}
 	for _, p := range paths {
@@ -211,7 +212,8 @@ func nhAndPref(path map[string]any) bool {
 func textHasInjected(text string) bool {
 	return strings.Contains(text, "192.0.2.2 from 192.0.2.10") &&
 		strings.Contains(text, "localpref 250") &&
-		strings.Contains(text, "Community: 64512:666 no-export")
+		strings.Contains(text, "64512:666") &&
+		strings.Contains(text, "no-export")
 }
 
 func textHasCommunity(text string) bool {

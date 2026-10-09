@@ -42,9 +42,20 @@ dump_bgp() {
 }
 
 # route_is present|absent checks once. pause 0 in wait_route uses this.
+# The main lab's extras (cause 64512:100, provider 64512:200 and large
+# 64512:1:50) must be on the edge while the route is present and gone
+# after SIGTERM and SIGKILL withdraw it. checkroute stays shared with the
+# commit and cost labs, which do not set extras.
 route_is() {
 	local mode=$1
-	printf '%s\n' "$(bgp_text)" | "$check_bin" "$mode"
+	local raw
+	raw=$(bgp_text)
+	printf '%s\n' "$raw" | "$check_bin" "$mode" || return 1
+	if [ "$mode" = present ]; then
+		[[ "$raw" == *"64512:100"* && "$raw" == *"64512:200"* && "$raw" == *"64512:1:50"* ]]
+	else
+		[[ "$raw" != *"64512:100"* && "$raw" != *"64512:200"* && "$raw" != *"64512:1:50"* ]]
+	fi
 }
 
 neighbor_text() {
@@ -73,7 +84,7 @@ wait_route() {
 	local i
 	for i in $(seq 1 "$tries"); do
 		# Summary JSON (FRR 10.2 omits communities) plus the detail text
-		# form, which prints "Community: 64512:666 no-export".
+		# form, which prints the packeteer community and no-export.
 		if route_is "$mode"; then
 			return 0
 		fi

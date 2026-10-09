@@ -241,7 +241,7 @@ type Route struct {
 	NextHop     netip.Addr
 	Provider    string
 	LocalPref   uint32
-	Communities []string // standard communities, "asn:value"
+	Communities []string // "asn:value", or a large community "global:data1:data2"
 	// ASPath is the AS path to carry (bgp.as_path, #27). Empty sends an
 	// empty AS path, as a locally originated route.
 	ASPath []uint32

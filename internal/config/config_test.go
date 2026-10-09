@@ -237,6 +237,76 @@ func TestLocalPrefOverrideRejected(t *testing.T) {
 	}
 }
 
+func TestCommunitiesPerCauseAndProvider(t *testing.T) {
+	y := injectYAML + `
+communities_cause:
+  performance: ["64512:0100"]
+  static: ["64512:200"]
+  commit: ["64512:300"]
+  cost: ["64512:1:40"]
+`
+	y = edit(t, y, "next_hop: 192.0.2.1", "next_hop: 192.0.2.1\n    communities: [\"64512:200\", \"64512:1:050\"]")
+	y = edit(t, y, `packeteer_community: "64512:666"`, `packeteer_community: "4200000000:1:0666"`)
+	cfg, err := Parse([]byte(y))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.PacketeerCommunity != "4200000000:1:666" {
+		t.Fatalf("packeteer_community = %q", cfg.PacketeerCommunity)
+	}
+	cc := cfg.CommunitiesCause
+	if len(cc.Performance) != 1 || cc.Performance[0] != "64512:100" ||
+		len(cc.Static) != 1 || cc.Static[0] != "64512:200" ||
+		len(cc.Commit) != 1 || cc.Commit[0] != "64512:300" ||
+		len(cc.Cost) != 1 || cc.Cost[0] != "64512:1:40" {
+		t.Fatalf("causes = %+v", cc)
+	}
+	if got := cfg.Providers[0].Communities; len(got) != 2 || got[0] != "64512:200" || got[1] != "64512:1:50" {
+		t.Fatalf("provider communities = %v", got)
+	}
+
+	cfg, err = Parse([]byte(injectYAML))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.CommunitiesCause.Performance)+len(cfg.CommunitiesCause.Static)+len(cfg.CommunitiesCause.Commit)+len(cfg.CommunitiesCause.Cost) != 0 || cfg.Providers[0].Communities != nil {
+		t.Fatalf("extras leaked: %+v %v", cfg.CommunitiesCause, cfg.Providers[0].Communities)
+	}
+}
+
+func TestCommunitiesRejected(t *testing.T) {
+	tests := []struct {
+		name, yaml, want string
+	}{
+		{"bad packeteer", edit(t, injectYAML, `"64512:666"`, `"70000:1"`), "0-65535"},
+		{"large packeteer too many parts", edit(t, injectYAML, `"64512:666"`, `"1:2:3:4"`), "asn:value"},
+		{"extra equals packeteer", injectYAML + "communities_cause: {performance: [\"64512:666\"]}\n", "duplicates packeteer_community"},
+		{"well-known extra", injectYAML + "communities_cause: {static: [\"65535:65281\"]}\n", "reserved"},
+		{"blackhole extra", injectYAML + "communities_cause: {commit: [\"65535:666\"]}\n", "reserved"},
+		{"zero extra", injectYAML + "communities_cause: {cost: [\"0:1\"]}\n", "reserved"},
+		{"empty extra", injectYAML + "communities_cause: {performance: [\"\"]}\n", "asn:value"},
+		{"duplicate extra", injectYAML + "communities_cause: {performance: [\"64512:100\", \"64512:0100\"]}\n", "duplicate community 64512:100"},
+		{"too many", injectYAML + "communities_cause: {performance: [\"64512:1\", \"64512:2\", \"64512:3\", \"64512:4\", \"64512:5\", \"64512:6\", \"64512:7\", \"64512:8\", \"64512:9\", \"64512:10\", \"64512:11\", \"64512:12\", \"64512:13\", \"64512:14\", \"64512:15\", \"64512:16\", \"64512:17\"]}\n", "at most 16"},
+		{"unknown cause", injectYAML + "communities_cause: {vip: [\"64512:1\"]}\n", "field vip not found"},
+		{"four-byte two-part extra", injectYAML + "communities_cause: {performance: [\"70000:1\"]}\n", "0-65535"},
+		{"provider duplicate of packeteer", edit(t, injectYAML, "next_hop: 192.0.2.1", "next_hop: 192.0.2.1\n    communities: [\"64512:666\"]"), "duplicates packeteer_community"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := Parse([]byte(tt.yaml))
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("err = %v, want %q", err, tt.want)
+			}
+		})
+	}
+	// A large community is a valid packeteer_community, and 0:x stays valid there.
+	for _, c := range []string{`"4200000000:1:666"`, `"0:1"`, `"65535:65281"`} {
+		if _, err := Parse([]byte(edit(t, injectYAML, `"64512:666"`, c))); err != nil {
+			t.Fatalf("packeteer_community %s: %v", c, err)
+		}
+	}
+}
+
 func TestMoreSpecificOffByDefault(t *testing.T) {
 	for _, y := range []string{minimalYAML, injectYAML} {
 		cfg, err := Parse([]byte(y))

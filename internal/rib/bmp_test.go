@@ -174,6 +174,32 @@ func TestBMPRouterDownDropsOnlyThatRouter(t *testing.T) {
 	}
 }
 
+func TestBMPIgnoresLargePacketeerCommunity(t *testing.T) {
+	v, err := New(Options{
+		ASN: asn, RouterID: netip.MustParseAddr("192.0.2.10"),
+		Neighbors: []Neighbor{{Address: edge}},
+		Providers: map[netip.Addr]string{transitA: "transit-a", transitB: "transit-b"},
+		BMP:       map[string]string{"transit-b": BMPOnly},
+		OwnLarge:  "4200000000:1:666",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tagged := announce(lab, transitB, 64497)
+	tagged.LargeCommunities = []string{"64496:1:1", "4200000000:1:666"}
+	v.ApplyRIB(plugin.RIBEvent{Kind: plugin.RIBPaths, Router: edge, Peer: plugin.RIBPeer{LocRIB: true},
+		Paths: []plugin.RIBPath{tagged}})
+	if _, ok := v.Exact(lab); ok {
+		t.Fatal("a Loc-RIB path tagged with the large packeteer community made the prefix learned")
+	}
+	plain := announce(lab, transitB, 64497)
+	plain.LargeCommunities = []string{"4200000000:1:1"}
+	v.ApplyRIB(paths(edge, transitB, plain))
+	if rt, ok := v.Exact(lab); !ok || rt.Provider != "transit-b" {
+		t.Fatalf("a different large community was ignored: %+v ok=%v", rt, ok)
+	}
+}
+
 func TestBMPNeverMakesViewReady(t *testing.T) {
 	v := bmpView(t, map[string]string{"transit-a": BMPOnly})
 	v.ApplyRIB(paths(edge, transitA, announce(lab, transitA, 64496)))
