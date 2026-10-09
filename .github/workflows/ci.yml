@@ -507,7 +507,7 @@ jobs:
         run: bash lab/e2e-weights.sh
       - name: FRR multi-POP lab (two federated instances over mTLS, inter-DC RTT, peer loss, global commit, SIGTERM, SIGKILL)
         run: bash lab/e2e-multipop.sh
-      - name: FRR HA lab (active/standby lease, standby never announces, SIGKILL takeover after the hold time, session loss, SIGTERM handover, backup/restore)
+      - name: FRR HA lab (active/standby lease, standby never announces, SIGKILL takeover after the hold time, session loss, SIGTERM handover waits on the lease file, backup/restore)
         run: bash lab/e2e-ha.sh
       - name: FRR walkthrough lab (#50; docs/walkthrough.md on the docs/frr.md edge, observe, suggest, inject, export check, SIGTERM withdraw, back to observe)
         env:

@@ -198,7 +198,7 @@ Automatic traffic anomaly detection (#33, [anomaly.md](anomaly.md)): the `flow` 
 | Email report subscriptions | 3.15 | partial: CSV attachment, no charts (#136) | v0.4 | notifier (`smtp`, `plugin.ReportSender`) + storage (`sqlite`) + core (`report_subscriptions`, `internal/subscribe`, `/api/subscriptions`) ([ui.md](ui.md)) | #34 | no |
 | User accounts, RBAC, access restriction | 3.14.2, 3.14.3 | done | v0.4 | core (HTTP auth, `internal/auth`) + storage (`sqlite` users and token hashes) + sso (`oidc`) ([auth.md](auth.md)) | #32 | no |
 | Audit log | - | done | v0.4 | core + storage (`sqlite`) + notifier (`audit.recorded`) | #32 | no |
-| Failover / HA (active-standby) | 1.2.16, 2.14 | done | v0.4 | elector (`lease`); lab-proven only ([ha.md](ha.md)) | #31 | no (lab-proven) |
+| Failover / HA (active-standby) | 1.2.16, 2.14 | done (#190: the FRR HA lab waits on the lease file for the SIGTERM release; a release that never arrives still fails) | v0.4 | elector (`lease`); lab-proven only ([ha.md](ha.md)) | #31, #190 | no (lab-proven) |
 | Config backup / restore | 2.14 | done | v0.4 | core (`-backup`, `-restore`) + storage (`sqlite`) | #31 | no |
 | Configuration editor and setup wizards | 3.13, 3.2 | partial: the YAML editor covers every key, but the forms cover only providers, static targets, allowlist, and decision knobs, and the wizard has no flow step (#130, #131) | v0.4 | core (`internal/configedit`, `/api/config`, `/api/config/wizard`, `/settings.html`; admin role) ([ui.md](ui.md)) | #34 | no |
 | Improvement weights | 1.2.13 | done (lab-proven) | v0.4 | scorer (`weighted`, `commit`, `cost`: `improvement_weights`, `plugin.ImprovementWeigher`) ([ui.md](ui.md)) | #34 | no (lab-proven) |
