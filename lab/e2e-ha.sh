@@ -16,7 +16,9 @@
 #  6. session loss on the active pk-b (neighbor shutdown on the edge):
 #     pk-b steps down and resigns, and pk-a takes over; pk-b recovers and
 #     stays standby;
-#  7. SIGTERM pk-a: it withdraws and resigns, and pk-b takes over at once;
+#  7. SIGTERM pk-a: it withdraws and resigns, and pk-b takes over at once.
+#     The release is read from the lease file (lab/checklease), not from
+#     one pass over the container log;
 #  8. SIGTERM pk-b: nothing is left on the edge;
 #  9. restore the backup with the stock image into a stopped instance's
 #     volume, and the restored config passes -check.
@@ -29,10 +31,13 @@ compose=(docker compose -f lab/docker-compose-ha.yml)
 
 lab_dir=$(mktemp -d)
 pop_bin=$(mktemp)
-trap 'rc=$?; if [ "$rc" -ne 0 ]; then echo "---- lab logs ----"; "${compose[@]}" logs --no-color || true; "${compose[@]}" ps || true; fi; "${compose[@]}" down -v --remove-orphans || true; rm -f "$pop_bin"; rm -rf "$lab_dir"; exit "$rc"' EXIT
+lease_bin=$(mktemp)
+trap 'rc=$?; if [ "$rc" -ne 0 ]; then echo "---- lab logs ----"; "${compose[@]}" logs --no-color || true; "${compose[@]}" ps || true; fi; "${compose[@]}" down -v --remove-orphans || true; rm -f "$pop_bin" "$lease_bin"; rm -rf "$lab_dir"; exit "$rc"' EXIT
 
 echo "building route checks"
 go build -o "$pop_bin" ./lab/checkpop
+# Static: it is copied into the Alpine lab image and watches the lease file there.
+CGO_ENABLED=0 go build -o "$lease_bin" ./lab/checklease
 cp lab/probes/prefer-b.yaml "$lab_dir/state.yaml"
 chmod 755 "$lab_dir"
 chmod 644 "$lab_dir/state.yaml"
@@ -56,6 +61,8 @@ dump() {
 	api packeteer-a /api/ha >&2
 	api packeteer-b /api/ha >&2
 	"${compose[@]}" logs --no-color packeteer-a packeteer-b >&2 || true
+	"${compose[@]}" exec -T packeteer-b cat /var/lib/packeteer/ha/lease.json >&2 || true
+	echo >&2
 }
 
 # on peer: the "prefix next_hop" lines the edge holds from that instance.
@@ -230,6 +237,39 @@ role packeteer-b standby pk-a
 stay a 15
 
 echo "7. SIGTERM pk-a: withdraw, resign, and pk-b takes over at once"
+# pk-b replaces the released record on its next renewal (1s), and
+# `docker compose logs` can omit "ha: lease released" for about a second
+# after the process has written it (run 37789070267). Arm the watch on
+# the lease file before SIGTERM. -timeout is the bound: a release that
+# never arrives fails the run. The 10s takeover bound below is unchanged.
+lease_cid=$("${compose[@]}" ps -q packeteer-b)
+if [ -z "$lease_cid" ]; then
+	echo "packeteer-b is not running" >&2
+	dump
+	exit 1
+fi
+docker cp "$lease_bin" "$lease_cid:/usr/local/bin/checklease"
+"${compose[@]}" exec -T packeteer-b chmod 755 /usr/local/bin/checklease
+"${compose[@]}" exec -T packeteer-b rm -f /tmp/lease-watch.ready
+"${compose[@]}" exec -T packeteer-b /usr/local/bin/checklease \
+	-file /var/lib/packeteer/ha/lease.json -id pk-a -timeout 20s -every 2ms \
+	-ready /tmp/lease-watch.ready &
+lease_watch=$!
+armed=0
+for _ in $(seq 1 75); do
+	if "${compose[@]}" exec -T packeteer-b test -f /tmp/lease-watch.ready; then
+		armed=1
+		break
+	fi
+	sleep 0.2
+done
+if [ "$armed" != 1 ]; then
+	echo "FAIL: lease watcher did not arm before SIGTERM" >&2
+	kill "$lease_watch" 2>/dev/null || true
+	wait "$lease_watch" 2>/dev/null || true
+	dump
+	exit 1
+fi
 start=$(date +%s)
 "${compose[@]}" stop -t 20 packeteer-a &
 stopper=$!
@@ -242,7 +282,7 @@ if [ "$took" -gt 10 ]; then
 	dump
 	exit 1
 fi
-if ! "${compose[@]}" logs --no-color packeteer-a | grep -q 'ha: lease released'; then
+if ! wait "$lease_watch"; then
 	echo "FAIL: pk-a did not release the lease on SIGTERM" >&2
 	dump
 	exit 1

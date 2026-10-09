@@ -1,6 +1,6 @@
 # High availability (active/standby) and backup
 
-Issue #31. Lab-proven only (`lab/e2e-ha.sh`), not on a public edge. The default stays a single instance in `mode: observe`.
+Issue #31. Lab-proven only (`lab/e2e-ha.sh`), not on a public edge. The default stays a single instance in `mode: observe`. The lab's SIGTERM check reads the lease file (`lab/checklease`, #190): the watch is armed before the signal, the instance has to release the record during that watch, and a release that never arrives fails when the timeout elapses. One pass over the container log is not the check.
 
 ## Model
 
