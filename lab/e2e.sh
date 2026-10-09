@@ -43,18 +43,19 @@ dump_bgp() {
 
 # route_is present|absent checks once. pause 0 in wait_route uses this.
 # The main lab's extras (cause 64512:100, provider 64512:200 and large
-# 64512:1:50) must be on the edge while the route is present and gone
-# after SIGTERM and SIGKILL withdraw it. checkroute stays shared with the
-# commit and cost labs, which do not set extras.
+# 64512:1:50) and per-cause local_pref 260 must be on the edge while the
+# route is present and gone after SIGTERM and SIGKILL withdraw it.
+# checkroute stays shared with the commit and cost labs, which do not set
+# extras or a cause local_pref; they keep the default 250.
 route_is() {
 	local mode=$1
 	local raw
 	raw=$(bgp_text)
-	printf '%s\n' "$raw" | "$check_bin" "$mode" || return 1
+	printf '%s\n' "$raw" | "$check_bin" "$mode" 260 || return 1
 	if [ "$mode" = present ]; then
-		[[ "$raw" == *"64512:100"* && "$raw" == *"64512:200"* && "$raw" == *"64512:1:50"* ]]
+		[[ "$raw" == *"64512:100"* && "$raw" == *"64512:200"* && "$raw" == *"64512:1:50"* && "$raw" == *"localpref 260"* ]]
 	else
-		[[ "$raw" != *"64512:100"* && "$raw" != *"64512:200"* && "$raw" != *"64512:1:50"* ]]
+		[[ "$raw" != *"64512:100"* && "$raw" != *"64512:200"* && "$raw" != *"64512:1:50"* && "$raw" != *"localpref 260"* ]]
 	fi
 }
 
@@ -149,7 +150,7 @@ echo "waiting for Packeteer's route to disappear"
 wait_route absent 20 1
 
 echo "real edge: equal weight, so Packeteer's local-pref becomes best"
-# Weight 32768 matches the network statement. Local-pref 250 then wins,
+# Weight 32768 matches the network statement. Local-pref 260 then wins,
 # and FRR withdraws the native advertisement toward Packeteer. The
 # improvement must stay; withdrawing it would flap.
 "${compose[@]}" exec -T edge vtysh \
@@ -285,7 +286,7 @@ while [ "$(date +%s)" -le "$deadline" ]; do
 	fi
 	snap=$(bgp_text)
 	if [[ "$snap" == *"198.51.100.0/24"* ]] \
-		&& printf '%s\n' "$snap" | "$check_bin" absent \
+		&& printf '%s\n' "$snap" | "$check_bin" absent 260 \
 		&& session_down; then
 		dropped=1
 		break

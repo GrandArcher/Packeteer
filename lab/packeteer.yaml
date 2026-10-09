@@ -9,6 +9,11 @@ packeteer_community: "64512:666"
 communities_cause:
   performance: ["64512:100"]
 local_pref: 250
+# Distinct from the global 250 so lab/e2e.sh can require this LocPrf on
+# the edge. Empty cause is performance; the lab's steer is a performance
+# move onto transit-b.
+local_pref_cause:
+  performance: 260
 max_improvements: 50
 hold_time: 5s
 improvement_ttl: 1h

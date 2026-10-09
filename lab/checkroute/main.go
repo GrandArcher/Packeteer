@@ -3,7 +3,8 @@
 // into it. FRR 10.2's summary JSON omits communities, so the detail text
 // line is accepted as well.
 //
-// Constants match lab/packeteer.yaml and the lab prefix.
+// Constants match lab/packeteer.yaml and the lab prefix. localPref is the
+// global value; lab/e2e.sh overrides it with local_pref_cause.performance.
 package main
 
 import (
@@ -22,34 +23,51 @@ const (
 )
 
 func main() {
-	if len(os.Args) != 2 || (os.Args[1] != "present" && os.Args[1] != "absent") {
-		fmt.Fprintln(os.Stderr, "usage: checkroute present|absent")
+	if len(os.Args) < 2 || len(os.Args) > 3 || (os.Args[1] != "present" && os.Args[1] != "absent") {
+		fmt.Fprintln(os.Stderr, "usage: checkroute present|absent [local_pref]")
 		os.Exit(2)
+	}
+	wantPref := localPref
+	if len(os.Args) == 3 {
+		n, err := strconv.Atoi(os.Args[2])
+		if err != nil || n <= 0 {
+			fmt.Fprintf(os.Stderr, "invalid local_pref %q\n", os.Args[2])
+			os.Exit(2)
+		}
+		wantPref = n
 	}
 	raw, err := io.ReadAll(os.Stdin)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(2)
 	}
-	if check(os.Args[1], string(raw)) {
+	if checkAt(os.Args[1], string(raw), wantPref) {
 		os.Exit(0)
 	}
 	os.Exit(1)
 }
 
 // check reports whether mode ("present" or "absent") holds for raw vtysh
-// output. present requires next hop 192.0.2.2, local preference 250,
-// community 64512:666, and no-export. absent requires that community to be
-// gone; the router's own copy of the prefix may remain.
+// output at the default local preference 250. present requires next hop
+// 192.0.2.2, that local preference, community 64512:666, and no-export.
+// absent requires that community to be gone; the router's own copy of the
+// prefix may remain. The commit and cost labs call this with no override.
 func check(mode, raw string) bool {
+	return checkAt(mode, raw, localPref)
+}
+
+// checkAt is check with an explicit local preference. lab/e2e.sh passes
+// 260 (local_pref_cause.performance) so the main lab can require a value
+// distinct from the global 250 without changing the commit and cost labs.
+func checkAt(mode, raw string, wantPref int) bool {
 	paths := walk(load(raw))
 	jsonFull := false
 	jsonNH := false
 	for _, p := range paths {
-		if isInjected(p) {
+		if isInjected(p, wantPref) {
 			jsonFull = true
 		}
-		if nhAndPref(p) {
+		if nhAndPref(p, wantPref) {
 			jsonNH = true
 		}
 	}
@@ -58,7 +76,7 @@ func check(mode, raw string) bool {
 		// hop and local preference but no community object. The detail text
 		// prints 64512:666 and no-export. Extra communities may sit between
 		// them, so those two tokens are matched apart.
-		return jsonFull || (jsonNH && textHasInjected(raw)) || textHasInjected(raw)
+		return jsonFull || (jsonNH && textHasInjected(raw, wantPref)) || textHasInjected(raw, wantPref)
 	}
 	for _, p := range paths {
 		if hasPacketeer(p) {
@@ -198,20 +216,20 @@ func hasPacketeer(path map[string]any) bool {
 	return contains(communities(path), community)
 }
 
-func isInjected(path map[string]any) bool {
+func isInjected(path map[string]any, wantPref int) bool {
 	comms := communities(path)
 	lp, ok := localPrefOf(path)
-	return ok && contains(nexthops(path), nextHop) && lp == localPref && contains(comms, community) && (contains(comms, "no-export") || contains(comms, "no_export"))
+	return ok && contains(nexthops(path), nextHop) && lp == wantPref && contains(comms, community) && (contains(comms, "no-export") || contains(comms, "no_export"))
 }
 
-func nhAndPref(path map[string]any) bool {
+func nhAndPref(path map[string]any, wantPref int) bool {
 	lp, ok := localPrefOf(path)
-	return ok && contains(nexthops(path), nextHop) && lp == localPref
+	return ok && contains(nexthops(path), nextHop) && lp == wantPref
 }
 
-func textHasInjected(text string) bool {
+func textHasInjected(text string, wantPref int) bool {
 	return strings.Contains(text, "192.0.2.2 from 192.0.2.10") &&
-		strings.Contains(text, "localpref 250") &&
+		strings.Contains(text, "localpref "+strconv.Itoa(wantPref)) &&
 		strings.Contains(text, "64512:666") &&
 		strings.Contains(text, "no-export")
 }

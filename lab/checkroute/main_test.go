@@ -96,6 +96,29 @@ BGP routing table entry for 198.51.100.0/24
 	}
 }
 
+func TestCheckCustomLocalPref(t *testing.T) {
+	raw := mustJSON(map[string]any{
+		"locPrf":    float64(260),
+		"nexthops":  []any{map[string]any{"ip": nextHop}},
+		"community": map[string]any{"list": []any{community, "no-export"}},
+	}) + `
+BGP routing table entry for 198.51.100.0/24
+    192.0.2.2 from 192.0.2.10 (192.0.2.10)
+      Origin IGP, localpref 260, valid, internal
+      Community: 64512:666 64512:100 64512:200 no-export
+      Large Community: 64512:1:50
+`
+	if check("present", raw) {
+		t.Fatal("localpref 260 was accepted at the default 250")
+	}
+	if !checkAt("present", raw, 260) {
+		t.Fatal("localpref 260 was not accepted when that value is required")
+	}
+	if checkAt("absent", raw, 260) {
+		t.Fatal("injected route at localpref 260 looked absent")
+	}
+}
+
 func TestCommunitiesLowercased(t *testing.T) {
 	raw := mustJSON(map[string]any{
 		"locPrf":    float64(localPref),
