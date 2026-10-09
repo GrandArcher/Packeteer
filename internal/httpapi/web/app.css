@@ -118,6 +118,13 @@ th { font-size: 0.8rem; color: var(--muted); font-weight: 600; }
 
 .badge.warn { color: var(--diff); background: #fbf1e4; }
 
+/* Mode chip (#171). The header text is white, so the chip sets its own
+   color. White on the light pill was unreadable. Each pair meets WCAG AA. */
+.badge.mode-observe { color: #0b3a5b; background: #d4e4f4; }
+.badge.mode-suggest { color: #6a3b06; background: #f6e4c4; }
+.badge.mode-inject { color: #ffffff; background: #9d1c2a; }
+.badge.mode-unknown { color: #12263a; background: #e7eef5; }
+
 .bad { color: var(--down); }
 
 .empty { color: var(--muted); }
@@ -191,7 +198,9 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .settings-split { display: grid; grid-template-columns: minmax(280px, 1fr) minmax(320px, 1.1fr); gap: 18px; align-items: start; }
 .settings-split h3 { margin: 14px 0 6px; font-size: 1rem; }
 fieldset.form { border: 0; margin: 0; padding: 0; }
-.row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 6px 0; }
+.row { display: flex; flex-wrap: wrap; gap: 6px; align-items: flex-end; margin: 6px 0; }
+.field { display: flex; flex-direction: column; gap: 2px; }
+.field-label { font-size: 0.75rem; line-height: 1.2; color: var(--ink); }
 .row input, .form select, .row select { font: inherit; padding: 4px 6px; border: 1px solid var(--line); border-radius: 4px; }
 .row input { width: 8.5rem; }
 .row input.wide-input { width: 14rem; }

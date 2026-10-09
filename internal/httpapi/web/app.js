@@ -349,11 +349,18 @@ function renderImprovements(data) {
   root.appendChild(table);
 }
 
+// modeBadge is the header chip. The class carries the contrast colors;
+// the header's white text must not be inherited (#171).
+function modeBadge(mode) {
+  var name = mode === "observe" || mode === "suggest" || mode === "inject" ? mode : "unknown";
+  return el("span", "badge mode-" + name, mode || "—");
+}
+
 function renderStatus(err) {
   var node = document.getElementById("status");
   clear(node);
-  var mode = (lastProviders && lastProviders.mode) || "—";
-  node.appendChild(el("span", "badge", mode));
+  var mode = lastProviders && lastProviders.mode;
+  node.appendChild(modeBadge(mode));
   var ready = lastReady && lastReady.ready;
   node.appendChild(el("span", ready ? "dot up" : "dot down", ready ? "ready" : "not ready"));
   if (lastProviders && lastProviders.version) node.appendChild(el("span", "muted", lastProviders.version));
