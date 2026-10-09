@@ -146,10 +146,20 @@ function rowInput(value, placeholder, wide) {
   var input = el("input");
   input.type = "text";
   input.value = value || "";
+  if (value) input.setAttribute("value", value);
   input.placeholder = placeholder;
   input.spellcheck = false;
   if (wide) input.className = "wide-input";
   return input;
+}
+
+// labeled keeps the name visible after the field is filled. The label
+// text is the accessible name (#171).
+function labeled(text, input) {
+  var lab = el("label", "field");
+  lab.appendChild(el("span", "field-label", text));
+  lab.appendChild(input);
+  return lab;
 }
 
 function renderProviders() {
@@ -167,7 +177,11 @@ function renderProviders() {
     hop.addEventListener("input", function () { form.providers[i].next_hop = hop.value.trim(); });
     cost.addEventListener("input", function () { form.providers[i].cost = cost.value.trim(); });
     commit.addEventListener("input", function () { form.providers[i].commit_mbps = commit.value.trim(); });
-    [name, src, hop, cost, commit].forEach(function (n) { row.appendChild(n); });
+    row.appendChild(labeled("Name", name));
+    row.appendChild(labeled("Probe source", src));
+    row.appendChild(labeled("Next hop", hop));
+    row.appendChild(labeled("Cost", cost));
+    row.appendChild(labeled("Commit", commit));
     if (p.asn) row.appendChild(el("span", "tag", "AS " + p.asn + " from the session, not saved"));
     else if (p.draft) row.appendChild(el("span", "tag", "draft"));
     var minus = el("button", "small", "−");
@@ -324,7 +338,9 @@ function renderWzProviders() {
     name.addEventListener("input", function () { wzProviders[i].name = name.value.trim(); });
     src.addEventListener("input", function () { wzProviders[i].source_ip = src.value.trim(); });
     hop.addEventListener("input", function () { wzProviders[i].next_hop = hop.value.trim(); });
-    [name, src, hop].forEach(function (n) { row.appendChild(n); });
+    row.appendChild(labeled("Name", name));
+    row.appendChild(labeled("Probe source", src));
+    row.appendChild(labeled("Next hop", hop));
     var minus = el("button", "small", "−");
     minus.type = "button";
     minus.title = "Remove provider";

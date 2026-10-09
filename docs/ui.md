@@ -22,7 +22,8 @@ docker run --network host --cap-add NET_RAW --cap-add NET_ADMIN \
   -v "$PWD/config.yaml:/etc/packeteer/config.yaml" ghcr.io/grandarcher/packeteer
 ```
 
-- **Mode banner.** `observe` and `suggest` say that nothing is announced; `inject` says improvements for allowlisted prefixes are announced. A file without `mode` observes.
+- **Mode banner.** `observe` and `suggest` say that nothing is announced; `inject` says improvements for allowlisted prefixes are announced. A file without `mode` observes. The banner stays on this page in every mode.
+- **Mode chip (#171).** The header chip sets its own text and background. Observe is `#0b3a5b` on `#d4e4f4`, suggest is `#6a3b06` on `#f6e4c4`, inject is white on `#9d1c2a`, and any other mode is `#12263a` on `#e7eef5`. Each pair meets WCAG AA (4.5:1) for this text size. The chip no longer inherits the header's white text.
 - **Overview tiles.** Mode, status (ready, not ready, starting), providers up, prefixes measured (and which sources list them), recommended improvements (outside inject) or active improvements (inject) against `max_improvements`, and BGP sessions with the number of probed prefixes in the learned RIB.
 - **Setup checklist.** Shown until there is nothing left to do, most urgent first. `todo`: no `sources` (nothing to probe). `warn`: every probe through a provider fails (with the last error), every provider is down, `bgp.neighbors` is set but no session is up, or no probed prefix is in the learned RIB. `info`: still starting, waiting for the first round, no `bgp.neighbors` (the current exit is unknown), report history off. Each line names the doc to read. The checklist only reads state; fix the mounted file and restart.
 - **Providers** show `no data yet` until something is measured through them, `no answer` when every probe through them fails, and per-provider probe counts.
@@ -32,7 +33,7 @@ docker run --network host --cap-add NET_RAW --cap-add NET_ADMIN \
 
 `GET /api/overview` (viewer) is the same summary as JSON: `mode`, `ready`, `started`, `sources`, `providers` (`name`, `up`, `ok`, `failed`, `last_error`), `counts`, `bgp`, `features` (`name`, `on`), and `setup` (`id`, `level`, `title`, `detail`, `doc`). It is read-only and announces nothing.
 
-CI runs a UI smoke test in the docker job (`lab/ui-smoke.sh`): headless Chrome loads `/`, `/settings.html`, and `/dashboards.html` from the stock image, first with `config.example.yaml` mounted unchanged (the banner says observe, the checklist asks for sources, providers show `no data yet`), then with a minimal file that has no `mode` key and one static target (observe, the prefix measured with an RTT, no improvement).
+CI runs a UI smoke test in the docker job (`lab/ui-smoke.sh`): headless Chrome loads `/`, `/settings.html`, and `/dashboards.html` from the stock image, first with `config.example.yaml` mounted unchanged (the banner says observe, the header chip is `mode-observe`, the checklist asks for sources, providers show `no data yet`, and the improvements heading says Recommended), then with a minimal file that has no `mode` key and one static target (observe, the prefix measured with an RTT, no improvement). A third run turns the config editor on with basic auth and sqlite, saves a dashboard of providers and improvements, and loads the pages through `lab/uiproxy` (headless Chrome does not send URL credentials on later fetches). That run checks the filled provider fields keep their labels, the improvements widget says Recommended, and the provider `since` time is the local format.
 
 ## Config editor
 
@@ -71,7 +72,7 @@ Every write, accepted or refused, is in the audit log with the old and new hashe
 
 ## Settings form
 
-`/settings.html` puts a form beside the YAML (#102). The form has a row per provider (name, probe source, next hop, cost, commit), a row per static probe prefix, a row per allowlist prefix, and separate fields for hold time, the improvement cap, the loss and latency thresholds, the RTT percent (`min_rtt_delta_pct`, empty or 0 is off), confirm rounds (`confirm_rounds`, empty means 1), and, when the scorer is `cost`, whether cost or performance wins plus the floor (extra loss, extra delay). Plus adds a row and minus removes one. Apply copies the form into the YAML in the editor and does not write the file. Save is still `PUT /api/config`: the same checks as a start, the same `confirm_inject` when the text turns inject on, and the running controller still applies the file on restart (or SIGHUP when only `bgp.neighbors` changed).
+`/settings.html` puts a form beside the YAML (#102). The form has a row per provider (name, probe source, next hop, cost, commit), a row per static probe prefix, a row per allowlist prefix, and separate fields for hold time, the improvement cap, the loss and latency thresholds, the RTT percent (`min_rtt_delta_pct`, empty or 0 is off), confirm rounds (`confirm_rounds`, empty means 1), and, when the scorer is `cost`, whether cost or performance wins plus the floor (extra loss, extra delay). Plus adds a row and minus removes one. Each provider field has a visible label above the input, and that label is the field's accessible name, including after the placeholder disappears (#171). Apply copies the form into the YAML in the editor and does not write the file. Save is still `PUT /api/config`: the same checks as a start, the same `confirm_inject` when the text turns inject on, and the running controller still applies the file on restart (or SIGHUP when only `bgp.neighbors` changed).
 
 Fields the form does not show stay in the YAML, including plugin blocks. An unchanged form is not reformatted. Commit is the SNMP telemetry binding's `commit_mbps` for that provider; there is no field for a community or a passphrase. A commit with no binding is refused until the binding is in the YAML. Choosing cost-or-performance, or setting the floor, on a `weighted` scorer (or none) switches `scorer.type` to `cost` and keeps the weights. It does not replace a `commit` scorer.
 
@@ -90,7 +91,7 @@ The file is read-only in many deployments (`:ro`). Then saving fails with a clea
 `/settings.html` walks three steps (#106). `POST /api/config/wizard` renders a config from them and writes nothing. The result opens in the editor for review, and you save it like any other edit.
 
 1. Edge session: ASN, an IPv4 router ID, and the edge address. The session is learn-only iBGP.
-2. Providers: one row each (name, probe source, next hop), with plus and minus. A next hop from `GET /api/config/suggestions` can be added as a row; you still name it and set the probe source. Adding a row does not probe or announce.
+2. Providers: one row each (name, probe source, next hop), with plus and minus. Each of those three fields has a visible label, the same way as the settings form (#171). A next hop from `GET /api/config/suggestions` can be added as a row; you still name it and set the probe source. Adding a row does not probe or announce.
 3. What to probe: an optional prefix and an optional pinned host inside it. Leave both empty to add targets later in the form. A prefix without a host is probed at a few addresses inside it, including the provider next hop when that address can be used. A host pins that prefix to one address. Report history (sqlite) is a checkbox on this step, not a secret.
 
 The rendered file is always:
@@ -107,6 +108,8 @@ There is no field for a password, a community string, or any other secret. Those
 ## Custom dashboards
 
 `/dashboards.html` builds dashboards from read-only widgets. Each user has their own (at most 20, with at most 24 widgets each), kept by the storage plugin (`sqlite`, table `dashboards`). Widgets read endpoints the viewer role can already read: readiness, providers, prefixes, improvements, decisions, provider usage, inbound steers, threat mitigation, anomalies, POPs, HA, report subscriptions, and any stored report with a range in days. A widget can span the full row.
+
+The improvements widget is titled Recommended improvements in observe and suggest, and Active improvements in inject (#171). A title the operator set on that widget is kept. Timestamps in a widget use the same local format as the main dashboard (`toLocaleString`). An unparseable value stays as returned.
 
 API: `GET /api/dashboards` returns `widget_types`, the report list, and your dashboards; `PUT /api/dashboards/<name>` with `{"title": "...", "widgets": [{"type": "providers"}, {"type": "report", "report": "summary", "days": 7, "wide": true}]}` saves one (unknown widget types, unknown reports, and unknown fields are refused); `DELETE /api/dashboards/<name>` removes it. Deleting a user deletes that user's dashboards.
 
@@ -165,4 +168,4 @@ Lab proof (`lab/e2e-weights.sh`, CI job `e2e`): an FRR edge advertises 198.51.10
 
 ## Rollback
 
-Remove `improvement_weights`, `http.config_editor`, and `report_subscriptions` and restart. The dashboard polish (#49) needs no rollback: it reads the same state, and `/api/overview` is read-only. The file config works exactly as before; the editor only ever wrote a plain YAML file. Stored dashboards stay in the database and are ignored by an older build.
+Remove `improvement_weights`, `http.config_editor`, and `report_subscriptions` and restart. The dashboard polish (#49) needs no rollback: it reads the same state, and `/api/overview` is read-only. The file config works exactly as before; the editor only ever wrote a plain YAML file. Stored dashboards stay in the database and are ignored by an older build. The display fixes (#171) are presentation only: revert that change to restore the previous chip, titles, timestamps, and unlabeled provider fields. No config key changes.

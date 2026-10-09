@@ -3,6 +3,13 @@
 var catalog = [];
 var saved = [];
 var current = {title: "", widgets: []};
+var dashMode = "";
+
+// improvementsTitle matches the main dashboard: Recommended outside
+// inject, Active only while routes are announced (#171).
+function improvementsTitle(mode) {
+  return mode === "inject" ? "Active improvements" : "Recommended improvements";
+}
 
 function apiFor(w) {
   for (var i = 0; i < catalog.length; i++) {
@@ -16,6 +23,7 @@ function apiFor(w) {
 
 function titleFor(w) {
   if (w.title) return w.title;
+  if (w.type === "improvements") return improvementsTitle(dashMode);
   for (var i = 0; i < catalog.length; i++) {
     if (catalog[i].type === w.type) return catalog[i].title + (w.type === "report" ? ": " + w.report : "");
   }
@@ -43,13 +51,23 @@ function renderWidget(w, box) {
     if (w.type === "status") {
       var ready = r.data && r.data.ready;
       body.appendChild(el("span", ready ? "dot up" : "dot down", ready ? "ready" : "not ready"));
-      if (r.data && r.data.mode) body.appendChild(el("span", "badge", r.data.mode));
+      if (r.data && r.data.mode) {
+        var known = r.data.mode === "observe" || r.data.mode === "suggest" || r.data.mode === "inject";
+        body.appendChild(el("span", known ? "badge mode-" + r.data.mode : "badge mode-unknown", r.data.mode));
+      }
       return;
+    }
+    if (w.type === "improvements" && r.data && r.data.mode) {
+      dashMode = r.data.mode;
+      if (!w.title) {
+        var heading = box.querySelector("h3");
+        if (heading) heading.textContent = improvementsTitle(dashMode);
+      }
     }
     if (!r.ok) { body.appendChild(el("p", "empty", (r.data && r.data.error) || "unavailable")); return; }
     var rows = firstArray(r.data);
     if (rows) body.appendChild(dataTable(rows));
-    else body.appendChild(el("pre", "mono", JSON.stringify(r.data, null, 2)));
+    else body.appendChild(el("pre", "mono", formatJSON(r.data)));
   }, function (err) { clear(body); body.appendChild(el("p", "empty", err.message)); });
 }
 
@@ -102,12 +120,23 @@ function select(name) {
 function status(t) { document.getElementById("db-status").textContent = t; }
 
 function load(pick) {
-  api("GET", "/api/dashboards").then(function (data) {
+  api("GET", "/api/providers").then(function (p) {
+    dashMode = (p && p.mode) || "observe";
+  }, function () {
+    if (!dashMode) dashMode = "observe";
+  }).then(function () {
+    return api("GET", "/api/dashboards");
+  }).then(function (data) {
     catalog = data.widget_types || [];
     saved = data.dashboards || [];
     var ws = document.getElementById("db-widget");
     if (!ws.options.length) {
-      catalog.forEach(function (c) { var o = el("option", "", c.title); o.value = c.type; ws.appendChild(o); });
+      catalog.forEach(function (c) {
+        var label = c.type === "improvements" ? improvementsTitle(dashMode) : c.title;
+        var o = el("option", "", label);
+        o.value = c.type;
+        ws.appendChild(o);
+      });
       (data.reports || []).forEach(function (r) {
         var o = el("option", "", r.name); o.value = r.name; document.getElementById("db-report").appendChild(o);
       });

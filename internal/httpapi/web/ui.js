@@ -34,11 +34,36 @@ function api(method, path, body) {
   });
 }
 
+// fmtTime is the dashboard's local time. app.js keeps the same function
+// for the main page, which does not load this file.
+function fmtTime(s) {
+  if (!s) return "—";
+  var d = new Date(s);
+  if (Number.isNaN(d.getTime())) return "—";
+  return d.toLocaleString();
+}
+
+// Go's time.Time JSON is RFC3339Nano, including a 9-digit fraction.
+var isoTime = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$/;
+
+function formatJSON(data) {
+  var re = /\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})/g;
+  return JSON.stringify(data, null, 2).replace(re, function (s) {
+    var formatted = fmtTime(s);
+    return formatted === "—" ? s : formatted;
+  });
+}
+
 function cellText(v) {
   if (v == null) return "—";
   if (typeof v === "number") return Number.isInteger(v) ? String(v) : v.toFixed(2);
   if (typeof v === "object") return JSON.stringify(v);
-  return String(v);
+  var s = String(v);
+  if (isoTime.test(s)) {
+    var formatted = fmtTime(s);
+    if (formatted !== "—") return formatted;
+  }
+  return s;
 }
 
 // dataTable renders an array of objects: scalar columns first, at most 10.
