@@ -5,7 +5,7 @@ Packeteer peers with the edge over **iBGP** (the router's own ASN). It learns th
 - the exact prefix learned from the router
 - next hop = the chosen provider's `next_hop`
 - `local_pref`: the provider's, if that provider sets one, otherwise the cause's (`performance`, `static`, `commit`, `cost`; an empty cause is `performance`), otherwise the global `local_pref`. Every one of those values is set above the native local preference below
-- `packeteer_community` **and** the well-known `no-export` community
+- `packeteer_community` (standard or large), any extra communities for the cause and the provider, **and** the well-known `no-export` community. The import filter matches only `packeteer_community`
 
 Two filters are required on the router:
 
@@ -54,6 +54,39 @@ providers:
 ```
 
 A route steered to transit-b is local preference 350. A commit move to any other provider is 220. A performance move to any other provider is 300. Omitting both overrides uses 250.
+
+## Extra communities on import
+
+Extra communities (`communities_cause`, `providers[].communities`) are attributes the edge can map to weight, a VRF, an interface, or QoS. They are added to `packeteer_community`. The accept filter still matches only `packeteer_community`: an extra community alone is not a Packeteer route. Put the more specific match first. The addresses below are documentation ranges.
+
+FRR. Accept Packeteer on `64512:666`. A performance extra `64512:100` sets weight 100, and a large community `64512:1:50` sets weight 50. A large `packeteer_community` is matched with a large-community list, and the eBGP filter rejects that community.
+
+```
+bgp community-list standard packeteer permit 64512:666
+bgp community-list standard packeteer-perf permit 64512:100
+bgp large-community-list standard packeteer-vrf permit 64512:1:50
+route-map packeteer-in permit 10
+ match community packeteer
+ match community packeteer-perf
+ set weight 100
+route-map packeteer-in permit 20
+ match community packeteer
+ match large-community packeteer-vrf
+ set weight 50
+route-map packeteer-in permit 30
+ match community packeteer
+route-map packeteer-in deny 100
+
+! packeteer_community: "4200000000:1:666"
+bgp large-community-list standard packeteer-large permit 4200000000:1:666
+route-map packeteer-in permit 10
+ match large-community packeteer-large
+route-map packeteer-in deny 100
+route-map transit-out deny 10
+ match large-community packeteer-large
+```
+
+The eBGP filter for a standard `packeteer_community` stays `match community packeteer` on the deny toward every transit and peer. `no-export` is still the second layer.
 
 ## When the native path disappears
 

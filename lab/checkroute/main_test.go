@@ -62,6 +62,19 @@ BGP routing table entry for 198.51.100.0/24
 	}{
 		{"json with community", mustJSON(present), true, false},
 		{"summary json plus detail text", summaryText, true, false},
+		{"extras between the packeteer community and no-export", mustJSON(summary) + `
+BGP routing table entry for 198.51.100.0/24
+    192.0.2.2 from 192.0.2.10 (192.0.2.10)
+      Origin IGP, localpref 250, valid, internal
+      Community: 64512:666 64512:100 64512:200 no-export
+      Large Community: 64512:1:50
+`, true, false},
+		{"no-export without the packeteer community is not injected", mustJSON(summary) + `
+BGP routing table entry for 198.51.100.0/24
+    192.0.2.2 from 192.0.2.10 (192.0.2.10)
+      Origin IGP, localpref 250, valid, internal
+      Community: no-export
+`, false, false},
 		{"summary json alone is not injected", mustJSON(summary), false, true},
 		{"native route only", mustJSON(absent), false, true},
 		{"native route detail text", nativeText, false, true},

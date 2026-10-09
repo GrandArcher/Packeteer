@@ -10,11 +10,14 @@
 // advertising the prefix: that is what the router does once Packeteer's
 // route is best, and withdrawing it would flap. A real leave arrives as the
 // improvement leaving the wanted set, and Sync withdraws it. Every route
-// carries a local preference and the configured community; the announcer adds
-// NO_EXPORT. The local preference is the provider's, when that provider sets
-// one, otherwise the improvement's cause, otherwise the global value. An
-// empty cause is performance. A learned more-specific uses its improvement's
-// resolved value.
+// carries a local preference, the configured community, and any extra
+// communities for the cause and the provider; the announcer adds NO_EXPORT.
+// The local preference is the provider's, when that provider sets one,
+// otherwise the improvement's cause, otherwise the global value. An empty
+// cause is performance. Extra communities are added, not substituted: the
+// configured community, then the cause's, then the provider's. A learned
+// more-specific uses its improvement's resolved local preference and
+// communities.
 //
 // With more-specific injection on (#56, docs/design/more-specific.md), an
 // improvement also announces the more-specifics inside its prefix that a
@@ -31,6 +34,7 @@ import (
 	"net/netip"
 	"slices"
 	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -77,9 +81,15 @@ type Config struct {
 	// steered to that provider.
 	ProviderLocalPref map[string]uint32
 	Community         string
-	MaxImprovements   int
-	Allowlist         []netip.Prefix
-	NextHops          map[string]netip.Addr // provider name -> next hop
+	// CauseCommunities are extra communities for an improvement cause.
+	// An empty cause is performance. They are added after Community.
+	CauseCommunities map[string][]string
+	// ProviderCommunities are extra communities for routes steered to that
+	// provider, added after the cause's.
+	ProviderCommunities map[string][]string
+	MaxImprovements     int
+	Allowlist           []netip.Prefix
+	NextHops            map[string]netip.Addr // provider name -> next hop
 	// Reserved reports prefixes that inbound steering owns or threat
 	// mitigation holds (#28). They are never announced as outbound
 	// improvements, so no two of them share a prefix.
@@ -145,9 +155,10 @@ func (c *Controller) Routes() int {
 
 // slot is the route published for one learned prefix.
 type slot struct {
-	provider  string
-	asPath    []uint32
-	localPref uint32
+	provider    string
+	asPath      []uint32
+	localPref   uint32
+	communities []string
 	// parent is the improvement that owns a learned more-specific (#56).
 	// It is the zero prefix on an improvement's own route.
 	parent netip.Prefix
@@ -210,6 +221,33 @@ func New(cfg Config, ann plugin.Announcer, rib RIB, log *slog.Logger) (*Controll
 		}
 		if cfg.Community == "" {
 			return nil, errors.New("announce: inject mode requires a community")
+		}
+		text, err := config.CommunityText(cfg.Community)
+		if err != nil {
+			return nil, fmt.Errorf("announce: community: %w", err)
+		}
+		cfg.Community = text
+		for cause, list := range cfg.CauseCommunities {
+			switch cause {
+			case plugin.CausePerformance, plugin.CauseStatic, plugin.CauseCommit, plugin.CauseCost:
+			default:
+				return nil, fmt.Errorf("announce: communities cause %q is invalid", cause)
+			}
+			canon, err := checkExtraCommunities(cause, list, cfg.Community)
+			if err != nil {
+				return nil, err
+			}
+			cfg.CauseCommunities[cause] = canon
+		}
+		for name, list := range cfg.ProviderCommunities {
+			if _, ok := cfg.NextHops[name]; !ok {
+				return nil, fmt.Errorf("announce: communities for unknown provider %q", name)
+			}
+			canon, err := checkExtraCommunities(name, list, cfg.Community)
+			if err != nil {
+				return nil, err
+			}
+			cfg.ProviderCommunities[name] = canon
 		}
 		if cfg.MaxImprovements < 1 {
 			return nil, errors.New("announce: max_improvements must be positive")
@@ -364,8 +402,10 @@ func (c *Controller) syncImprovementLocked(ctx context.Context, im policy.Improv
 		return fmt.Errorf("announce: %s is not in the RIB", p)
 	}
 	// A cause change can keep the provider and the AS path and still need a
-	// new local preference on the wire.
-	if on && !s.moreSpecific() && s.provider == im.Provider && s.localPref == c.localPref(im.Provider, im.Cause) && slices.Equal(s.asPath, c.asPath(p, im.Provider)) {
+	// new local preference or a new community list on the wire.
+	lp := c.localPref(im.Provider, im.Cause)
+	comms := c.communities(im.Provider, im.Cause)
+	if on && !s.moreSpecific() && s.provider == im.Provider && s.localPref == lp && slices.Equal(s.communities, comms) && slices.Equal(s.asPath, c.asPath(p, im.Provider)) {
 		return nil
 	}
 	if !allowed(c.cfg.Allowlist, p) {
@@ -496,7 +536,7 @@ func (c *Controller) syncMoreSpecificsLocked(ctx context.Context, p netip.Prefix
 		}
 		c.active[m] = s
 		visited[m] = true
-		if s.provider != par.provider || s.localPref != par.localPref || !slices.Equal(s.asPath, c.asPath(m, par.provider)) {
+		if s.provider != par.provider || s.localPref != par.localPref || !slices.Equal(s.communities, par.communities) || !slices.Equal(s.asPath, c.asPath(m, par.provider)) {
 			if err := c.announceMoreSpecificLocked(ctx, m, p, par.provider); err != nil {
 				errs = append(errs, err)
 			}
@@ -513,7 +553,7 @@ func (c *Controller) syncMoreSpecificsLocked(ctx context.Context, p netip.Prefix
 				visited[m] = true
 				s.parent, s.seen, s.held = p, time.Time{}, false
 				c.active[m] = s
-				if s.provider != par.provider || s.localPref != par.localPref || !slices.Equal(s.asPath, c.asPath(m, par.provider)) {
+				if s.provider != par.provider || s.localPref != par.localPref || !slices.Equal(s.communities, par.communities) || !slices.Equal(s.asPath, c.asPath(m, par.provider)) {
 					if err := c.announceMoreSpecificLocked(ctx, m, p, par.provider); err != nil {
 						errs = append(errs, err)
 					}
@@ -555,26 +595,32 @@ func (c *Controller) announceMoreSpecificLocked(ctx context.Context, m, parent n
 		return fmt.Errorf("announce: provider %q has no next hop", provider)
 	}
 	lp := c.cfg.LocalPref
-	if par, ok := c.active[parent]; ok && par.localPref != 0 {
-		lp = par.localPref
+	comms := []string{c.cfg.Community}
+	if par, ok := c.active[parent]; ok {
+		if par.localPref != 0 {
+			lp = par.localPref
+		}
+		if len(par.communities) > 0 {
+			comms = slices.Clone(par.communities)
+		}
 	}
 	rt := plugin.Route{
 		Prefix:      m,
 		NextHop:     nh,
 		Provider:    provider,
 		LocalPref:   lp,
-		Communities: []string{c.cfg.Community},
+		Communities: comms,
 		ASPath:      c.asPath(m, provider),
 	}
 	if err := c.ann.Announce(ctx, rt); err != nil {
 		return err
 	}
-	s := slot{provider: provider, asPath: rt.ASPath, localPref: lp, parent: parent}
+	s := slot{provider: provider, asPath: rt.ASPath, localPref: lp, communities: comms, parent: parent}
 	if on && old.moreSpecific() && old.parent == parent {
 		s.seen, s.held = old.seen, old.held
 	}
 	c.active[m] = s
-	c.log.Info("injected more-specific", "prefix", m, "improvement", parent, "provider", provider, "next_hop", nh, "local_pref", lp, "as_path", fmt.Sprint(rt.ASPath))
+	c.log.Info("injected more-specific", "prefix", m, "improvement", parent, "provider", provider, "next_hop", nh, "local_pref", lp, "as_path", fmt.Sprint(rt.ASPath), "communities", strings.Join(comms, ","))
 	return nil
 }
 
@@ -632,21 +678,22 @@ func (c *Controller) announceLocked(ctx context.Context, imp policy.Improvement)
 		return fmt.Errorf("announce: max_improvements (%d) reached", c.cfg.MaxImprovements)
 	}
 	lp := c.localPref(imp.Provider, imp.Cause)
+	comms := c.communities(imp.Provider, imp.Cause)
 	rt := plugin.Route{
 		Prefix:      p,
 		NextHop:     nh,
 		Provider:    imp.Provider,
 		LocalPref:   lp,
-		Communities: []string{c.cfg.Community},
+		Communities: comms,
 		ASPath:      c.asPath(p, imp.Provider),
 	}
 	if err := c.ann.Announce(ctx, rt); err != nil {
 		return err
 	}
-	c.active[p] = slot{provider: imp.Provider, asPath: rt.ASPath, localPref: lp}
+	c.active[p] = slot{provider: imp.Provider, asPath: rt.ASPath, localPref: lp, communities: comms}
 	// cause stays after local_pref so the walkthrough's fixed substring
-	// (provider, next_hop, local_pref) still matches.
-	c.log.Info("injected", "prefix", p, "provider", imp.Provider, "next_hop", nh, "local_pref", lp, "as_path", fmt.Sprint(rt.ASPath), "cause", imp.Cause)
+	// (provider, next_hop, local_pref) still matches. Communities follow.
+	c.log.Info("injected", "prefix", p, "provider", imp.Provider, "next_hop", nh, "local_pref", lp, "as_path", fmt.Sprint(rt.ASPath), "cause", imp.Cause, "communities", strings.Join(comms, ","))
 	return nil
 }
 
@@ -664,6 +711,50 @@ func (c *Controller) localPref(provider, cause string) uint32 {
 		return v
 	}
 	return c.cfg.LocalPref
+}
+
+// communities is packeteer_community, then the cause's extras, then the
+// provider's. Duplicates are dropped. An empty cause is performance.
+// Caller holds mu.
+func (c *Controller) communities(provider, cause string) []string {
+	out := []string{c.cfg.Community}
+	seen := map[string]bool{c.cfg.Community: true}
+	add := func(list []string) {
+		for _, x := range list {
+			if x == "" || seen[x] {
+				continue
+			}
+			seen[x] = true
+			out = append(out, x)
+		}
+	}
+	if cause == "" {
+		cause = plugin.CausePerformance
+	}
+	add(c.cfg.CauseCommunities[cause])
+	add(c.cfg.ProviderCommunities[provider])
+	return out
+}
+
+// checkExtraCommunities rejects a list the config loader would reject.
+func checkExtraCommunities(where string, list []string, packeteer string) ([]string, error) {
+	if len(list) > config.MaxExtraCommunities {
+		return nil, fmt.Errorf("announce: %s: at most %d communities", where, config.MaxExtraCommunities)
+	}
+	seen := map[string]bool{}
+	out := make([]string, 0, len(list))
+	for _, s := range list {
+		text, err := config.ExtraCommunityText(s, packeteer)
+		if err != nil {
+			return nil, fmt.Errorf("announce: %s community %q: %w", where, s, err)
+		}
+		if seen[text] {
+			return nil, fmt.Errorf("announce: %s: duplicate community %s", where, text)
+		}
+		seen[text] = true
+		out = append(out, text)
+	}
+	return out, nil
 }
 
 // asPath is the AS path for p toward provider under bgp.as_path. native

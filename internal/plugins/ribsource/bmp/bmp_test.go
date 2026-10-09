@@ -499,6 +499,23 @@ func TestDecodeBGPIDAndCommunities(t *testing.T) {
 	}
 }
 
+func TestDecodeLargeCommunity(t *testing.T) {
+	d := newDecoder(router, true, quietLog)
+	self := peerHeader(t, gobmp.BMP_PEER_TYPE_GLOBAL, gobmp.BMP_PEER_FLAG_POST_POLICY, "192.0.2.10", 64512, "192.0.2.11")
+	upd := v4Update("192.0.2.22", []uint32{64497}, "198.51.100.0/24")
+	body := upd.Body.(*bgp.BGPUpdate)
+	body.PathAttributes = append(body.PathAttributes, bgp.NewPathAttributeLargeCommunities([]*bgp.LargeCommunity{
+		bgp.NewLargeCommunity(4200000000, 1, 666),
+	}))
+	evs, _ := d.message(ser(t, gobmp.NewBMPRouteMonitoring(*self, upd)))
+	if len(evs) != 1 || len(evs[0].Paths) != 1 {
+		t.Fatalf("events = %+v", evs)
+	}
+	if got := evs[0].Paths[0].LargeCommunities; len(got) != 1 || got[0] != "4200000000:1:666" {
+		t.Fatalf("large communities = %v", got)
+	}
+}
+
 // Add-path changes the NLRI of routes the router receives only when the
 // router offers Receive and the peer offers Send. FRR offers Receive by
 // default on every session; that alone must not drop the peer.

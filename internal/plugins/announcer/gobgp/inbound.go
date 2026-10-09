@@ -161,9 +161,11 @@ func (a *InboundAnnouncer) Action(provider string) (plugin.InboundAction, bool) 
 func (a *InboundAnnouncer) Bind(srv any, community string, prefixes []netip.Prefix) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if _, err := parseCommunity(community); err != nil {
+	pc, err := parseAnyCommunity(community)
+	if err != nil {
 		return fmt.Errorf("inbound announcer: community: %w", err)
 	}
+	community = pc.text
 	if community == a.marker {
 		return errors.New("inbound announcer: marker must differ from packeteer_community")
 	}
@@ -183,7 +185,7 @@ func (a *InboundAnnouncer) Bind(srv any, community string, prefixes []netip.Pref
 		return nil
 	}
 	found := false
-	err := s.ListPolicy(context.Background(), &api.ListPolicyRequest{Name: policyName}, func(p *api.Policy) {
+	err = s.ListPolicy(context.Background(), &api.ListPolicyRequest{Name: policyName}, func(p *api.Policy) {
 		if p.GetName() == policyName {
 			found = true
 		}

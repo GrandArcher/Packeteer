@@ -77,12 +77,16 @@ type Options struct {
 	// paths: while a neighbor that negotiated add-path is up, a provider
 	// here must have a path for the exact prefix.
 	AddPath map[string]bool
-	// OwnCommunity is packeteer_community as asn<<16|value (0: none). A BMP
-	// path that carries it is Packeteer's own route reflected back by the
-	// router (Loc-RIB, or the Adj-RIB-In of Packeteer's session) and is
-	// ignored, so an injected route never keeps its own prefix in the view
-	// or passes its own route check.
+	// OwnCommunity is a standard packeteer_community as asn<<16|value
+	// (0: none). A path that carries it is Packeteer's own route reflected
+	// back by the router (Loc-RIB, or the Adj-RIB-In of Packeteer's session)
+	// and is ignored, so an injected route never keeps its own prefix in
+	// the view or passes its own route check.
 	OwnCommunity uint32
+	// OwnLarge is packeteer_community when it is a large community
+	// ("global:data1:data2", RFC 8092). Empty when the community is
+	// standard or unset. A path that carries it is ignored the same way.
+	OwnLarge string
 	// Egress maps a provider to the neighbors that forward to it directly
 	// (#27). While none of them has an established session the provider is
 	// reported by EgressDown. A provider not listed has no egress check.
@@ -590,11 +594,12 @@ func (v *View) applyPath(p *api.Path) bool {
 	own := false
 	if !p.IsWithdraw {
 		var comms []uint32
-		nh, asPath, lp, comms, med = decodeAttrs(p.Pattrs)
+		var large []string
+		nh, asPath, lp, comms, large, med = decodeAttrs(p.Pattrs)
 		// Packeteer's own route sent back (a route reflector, or add-path
 		// on a router that reflects): it must never keep its prefix
 		// learned, so it counts as a withdraw of that path.
-		own = v.opt.OwnCommunity != 0 && slices.Contains(comms, v.opt.OwnCommunity)
+		own = v.ownTagged(comms, large)
 	}
 	if p.IsWithdraw || own {
 		nbrs := v.adj[prefix]
@@ -1097,7 +1102,7 @@ func (v *View) applyBMPLocked(key bmpKey, peer plugin.RIBPeer, p plugin.RIBPath)
 	if provider == "" && key.locRIB && v.anyBMP {
 		keep = true
 	}
-	if v.opt.OwnCommunity != 0 && slices.Contains(p.Communities, v.opt.OwnCommunity) {
+	if v.ownTagged(p.Communities, p.LargeCommunities) {
 		keep = false
 	}
 	if !keep {
@@ -1465,9 +1470,19 @@ func decodePrefix(a *anypb.Any) (netip.Prefix, bool) {
 	return p.Masked(), true
 }
 
-func decodeAttrs(attrs []*anypb.Any) (netip.Addr, []uint32, uint32, []uint32, *uint32) {
+// ownTagged reports whether a path carries packeteer_community, standard
+// or large. Either form is Packeteer's own route.
+func (v *View) ownTagged(comms []uint32, large []string) bool {
+	if v.opt.OwnCommunity != 0 && slices.Contains(comms, v.opt.OwnCommunity) {
+		return true
+	}
+	return v.opt.OwnLarge != "" && slices.Contains(large, v.opt.OwnLarge)
+}
+
+func decodeAttrs(attrs []*anypb.Any) (netip.Addr, []uint32, uint32, []uint32, []string, *uint32) {
 	var nh netip.Addr
 	var path, comms []uint32
+	var large []string
 	var med *uint32
 	lp := uint32(100) // iBGP default when the attribute is absent
 	for _, a := range attrs {
@@ -1476,6 +1491,7 @@ func decodeAttrs(attrs []*anypb.Any) (netip.Addr, []uint32, uint32, []uint32, *u
 		var asp api.AsPathAttribute
 		var lpA api.LocalPrefAttribute
 		var cm api.CommunitiesAttribute
+		var lc api.LargeCommunitiesAttribute
 		var medA api.MultiExitDiscAttribute
 		switch {
 		case a.MessageIs(&medA):
@@ -1485,6 +1501,12 @@ func decodeAttrs(attrs []*anypb.Any) (netip.Addr, []uint32, uint32, []uint32, *u
 		case a.MessageIs(&cm):
 			if a.UnmarshalTo(&cm) == nil {
 				comms = append(comms, cm.Communities...)
+			}
+		case a.MessageIs(&lc):
+			if a.UnmarshalTo(&lc) == nil {
+				for _, c := range lc.Communities {
+					large = append(large, fmt.Sprintf("%d:%d:%d", c.GlobalAdmin, c.LocalData1, c.LocalData2))
+				}
 			}
 		case a.MessageIs(&nhA):
 			if a.UnmarshalTo(&nhA) == nil {
@@ -1510,7 +1532,7 @@ func decodeAttrs(attrs []*anypb.Any) (netip.Addr, []uint32, uint32, []uint32, *u
 			}
 		}
 	}
-	return nh, path, lp, comms, med
+	return nh, path, lp, comms, large, med
 }
 
 // ---- queries ----

@@ -125,31 +125,42 @@ type sinkSpy struct {
 func (s *sinkSpy) SetRIBSink(fn func(plugin.RIBEvent)) { *s.got = fn; s.RIBSource.SetRIBSink(fn) }
 
 func TestOwnCommunity(t *testing.T) {
-	if got, err := ownCommunity("64512:666"); err != nil || got != 64512<<16|666 {
-		t.Fatalf("64512:666 = %d, %v", got, err)
+	if got, large, err := ownCommunity("64512:666"); err != nil || got != 64512<<16|666 || large != "" {
+		t.Fatalf("64512:666 = %d %q, %v", got, large, err)
 	}
-	if got, err := ownCommunity(""); err != nil || got != 0 {
-		t.Fatalf("empty = %d, %v", got, err)
+	if got, large, err := ownCommunity(""); err != nil || got != 0 || large != "" {
+		t.Fatalf("empty = %d %q, %v", got, large, err)
 	}
-	if _, err := ownCommunity("70000:1"); err == nil {
+	if _, _, err := ownCommunity("70000:1"); err == nil {
 		t.Fatal("out-of-range community accepted")
+	}
+	if got, large, err := ownCommunity("4200000000:1:666"); err != nil || got != 0 || large != "4200000000:1:666" {
+		t.Fatalf("large = %d %q, %v", got, large, err)
+	}
+	if _, large, err := ownCommunity("64512:0666"); err != nil || large != "" {
+		t.Fatalf("canonical standard = %q, %v", large, err)
 	}
 }
 
 func TestWarnBMPSelfFilter(t *testing.T) {
 	var buf bytes.Buffer
 	log := slog.New(slog.NewTextHandler(&buf, nil))
-	warnBMPSelfFilter(log, map[string]string{"transit-a": config.BMPOff}, 0)
+	warnBMPSelfFilter(log, map[string]string{"transit-a": config.BMPOff}, 0, "")
 	if buf.Len() != 0 {
 		t.Fatalf("warned with no provider on BMP: %s", buf.String())
 	}
-	warnBMPSelfFilter(log, map[string]string{"transit-a": config.BMPOnly}, 0)
+	warnBMPSelfFilter(log, map[string]string{"transit-a": config.BMPOnly}, 0, "")
 	if !strings.Contains(buf.String(), "packeteer_community is unset") {
 		t.Fatalf("no warning without packeteer_community: %s", buf.String())
 	}
 	buf.Reset()
-	warnBMPSelfFilter(log, map[string]string{"transit-a": config.BMPPrefer}, 64512<<16|666)
+	warnBMPSelfFilter(log, map[string]string{"transit-a": config.BMPPrefer}, 64512<<16|666, "")
 	if !strings.Contains(buf.String(), "strips that community") {
 		t.Fatalf("no community-stripping warning: %s", buf.String())
+	}
+	buf.Reset()
+	warnBMPSelfFilter(log, map[string]string{"transit-a": config.BMPPrefer}, 0, "4200000000:1:666")
+	if strings.Contains(buf.String(), "packeteer_community is unset") || !strings.Contains(buf.String(), "strips that community") {
+		t.Fatalf("large community treated as unset: %s", buf.String())
 	}
 }

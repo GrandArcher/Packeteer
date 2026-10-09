@@ -228,9 +228,11 @@ func sortTargets(ts []plugin.FlowSpecTarget) {
 func (a *MitigationAnnouncer) Bind(srv any, community string, allow []netip.Prefix, maxRules int) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if _, err := parseCommunity(community); err != nil {
+	pc, err := parseAnyCommunity(community)
+	if err != nil {
 		return fmt.Errorf("mitigation announcer: community: %w", err)
 	}
+	community = pc.text
 	if community == a.marker {
 		return errors.New("mitigation announcer: marker must differ from packeteer_community")
 	}

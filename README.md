@@ -181,8 +181,9 @@ Inject only after the router filters in the guides are in place, and only for pr
 
 - `mode: inject`
 - `allowlist.prefixes`: prefixes you operate. A learned prefix is eligible when it is equal to an entry or more specific and inside it. Packeteer announces that learned prefix. An entry that overlaps an exchange peering LAN is a load error.
-- `packeteer_community`: `"<asn>:<value>"`, each half 0–65535. Quote it.
+- `packeteer_community`: `"<asn>:<value>"`, each half 0–65535, or a large community `"<global>:<data1>:<data2>"` (RFC 8092). Quote it. The export policy matches only this community.
 - `local_pref`: higher than the native local preference on the edge. Optional `local_pref_cause` and `providers[].local_pref` override it (provider, then cause, then this value). A set `0` is rejected.
+- Optional extra communities: `communities_cause` and `providers[].communities`, added after `packeteer_community`. The export policy does not match them. At most 16. No `0:x` or `65535:x`.
 - `hold_time`: a positive duration (`15m` in the example).
 - `thresholds.min_loss_delta_pct` and `thresholds.min_rtt_delta_ms`: both greater than 0.
 - `bgp.neighbors`: at least one iBGP neighbor.

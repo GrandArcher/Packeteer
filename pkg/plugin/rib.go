@@ -49,6 +49,10 @@ type RIBPath struct {
 	// A path tagged with packeteer_community is Packeteer's own route and
 	// is ignored by the RIB view.
 	Communities []uint32
+	// LargeCommunities are RFC 8092 communities, canonical
+	// "global:data1:data2". A path tagged with a large packeteer_community
+	// is ignored the same way.
+	LargeCommunities []string
 	// PathID is the add-path identifier (RFC 7911) when the router
 	// negotiated add-path with this peer; 0 otherwise. A peer can hold
 	// several paths for one prefix, and a withdraw removes only the path
