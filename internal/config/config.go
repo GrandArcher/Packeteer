@@ -80,8 +80,12 @@ type Config struct {
 	ASN                uint32 `yaml:"asn"`
 	RouterID           string `yaml:"router_id"`
 	PacketeerCommunity string `yaml:"packeteer_community"`
-	// LocalPref is set on every injected route. Required when mode is inject.
+	// LocalPref is the local preference on an injected route when no cause
+	// or provider override is set. Required, and non-zero, when mode is inject.
 	LocalPref uint32 `yaml:"local_pref"`
+	// LocalPrefCause overrides LocalPref per improvement cause. An omitted
+	// cause uses LocalPref. A provider LocalPref wins over this.
+	LocalPrefCause LocalPrefCauses `yaml:"local_pref_cause,omitempty"`
 	// MoreSpecificBits is accepted only so a leftover more_specific_bits key
 	// fails closed. Any value, including 0, is an error. Packeteer announces
 	// the exact prefix learned from the RIB.
@@ -441,11 +445,26 @@ type Thresholds struct {
 	ConfirmRounds int `yaml:"confirm_rounds"`
 }
 
+// LocalPrefCauses is an optional local preference per improvement cause
+// (#132). A nil field uses the global LocalPref. A set value must be
+// non-zero: the same rule as LocalPref in inject, so the operator sets
+// it above the edge's native local preference. Unknown keys are rejected.
+type LocalPrefCauses struct {
+	Performance *uint32 `yaml:"performance,omitempty"`
+	Static      *uint32 `yaml:"static,omitempty"`
+	Commit      *uint32 `yaml:"commit,omitempty"`
+	Cost        *uint32 `yaml:"cost,omitempty"`
+}
+
 // Provider is one upstream transit that probes are sourced through.
 type Provider struct {
 	Name     string `yaml:"name"`
 	SourceIP string `yaml:"source_ip"`
 	NextHop  string `yaml:"next_hop"`
+	// LocalPref, when set, is the local preference on routes steered to
+	// this provider. It wins over local_pref_cause and the global
+	// local_pref. Nil uses those. 0 is rejected.
+	LocalPref *uint32 `yaml:"local_pref,omitempty"`
 	// Exclude keeps the provider measured but never chosen for an improvement.
 	Exclude bool `yaml:"exclude"`
 	// Group is an optional load-balancing group. Empty means the provider
@@ -1074,12 +1093,39 @@ func (c *Config) Validate() error {
 		}
 	}
 
+	// Cause and provider overrides are optional in every mode. A set 0 is
+	// rejected the same way inject rejects a global local_pref of 0, so a
+	// file prepared in observe fails before the mode changes.
+	c.validateLocalPref(add)
 	c.validateInbound(add)
 	c.validateMitigation(add)
 	c.validateAnomaly(add)
 	c.validateSubscriptions(add)
 
 	return errors.Join(errs...)
+}
+
+// validateLocalPref rejects a cause or provider local preference of 0.
+// Omitting the key is the global local_pref. A set value has to be above
+// the edge's native local preference, which is the same rule as the global
+// value: 0 is rejected and anything else is the operator's number.
+func (c *Config) validateLocalPref(add func(string, ...any)) {
+	check := func(where string, v *uint32) {
+		if v != nil && *v == 0 {
+			add("%s: 0 is rejected; set it above the edge's native local preference, or omit it", where)
+		}
+	}
+	check("local_pref_cause.performance", c.LocalPrefCause.Performance)
+	check("local_pref_cause.static", c.LocalPrefCause.Static)
+	check("local_pref_cause.commit", c.LocalPrefCause.Commit)
+	check("local_pref_cause.cost", c.LocalPrefCause.Cost)
+	for i, p := range c.Providers {
+		label := fmt.Sprintf("providers[%d]", i)
+		if p.Name != "" {
+			label = fmt.Sprintf("providers[%d] (%s)", i, p.Name)
+		}
+		check(label+".local_pref", p.LocalPref)
+	}
 }
 
 // validateRouters checks per-router provider reachability (#27). With no

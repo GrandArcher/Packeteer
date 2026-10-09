@@ -27,6 +27,7 @@ providers:
     # precedence: 100         # lower is preferred; 0 or omitted means 100
     # cc_disable: false       # true: leave this provider out of commit control
     # cost: 5                 # price per Mbps; the cost scorer only moves between priced providers
+    # local_pref: 350         # optional. Wins over local_pref_cause and the global local_pref. 0 is rejected. Set it above the edge's native local preference.
     # bmp: prefer             # off (default), prefer, or only: use this provider's BMP paths (rib_sources)
     # add_path: true          # route check from iBGP add-path paths (needs a neighbor with add_path)
 
@@ -213,11 +214,18 @@ scorer:
 #         next_hop: 203.0.113.11
 #         source_ip: 192.0.2.31
 
-# Injection (used only when mode: inject). local_pref is set on every
-# injected route and should beat the edge's native local preference.
-# The announcer publishes that exact learned prefix and adds NO_EXPORT.
+# Injection (used only when mode: inject). local_pref is the default on
+# every injected route and should beat the edge's native local preference.
+# local_pref_cause and providers[].local_pref override it (provider, then
+# cause, then this value). Each set value is non-zero, same rule as this
+# one. The announcer publishes that exact learned prefix and adds NO_EXPORT.
 # more_specific_bits is rejected.
 # local_pref: 250
+# local_pref_cause:
+#   performance: 300          # empty cause is performance
+#   static: 400
+#   commit: 220
+#   cost: 210
 # announcer:
 #   type: gobgp
 #
