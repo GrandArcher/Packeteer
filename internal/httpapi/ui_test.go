@@ -618,3 +618,22 @@ func TestIndirectProbeInSnapshot(t *testing.T) {
 		t.Fatal("app.js does not label indirect probes")
 	}
 }
+
+// The online apply after a PUT gets a context the request does not
+// cancel, so sources it starts survive the response.
+func TestConfigSaveOnlineApplyContextOutlivesRequest(t *testing.T) {
+	e := newUI(t)
+	var got context.Context
+	e.srv.SetOnlineApply(func(c context.Context) ([]string, error, error) {
+		got = c
+		return []string{"bgp.neighbors"}, nil, nil
+	})
+	next := editorYAML + "bgp:\n  neighbors:\n    - address: 192.0.2.254\n"
+	rec, _ := e.do(t, "PUT", "/api/config", plugin.RoleAdmin, map[string]any{"yaml": next, "base": configedit.Hash([]byte(editorYAML))})
+	if rec.Code != http.StatusOK || got == nil {
+		t.Fatalf("save: %d %s applied=%v", rec.Code, rec.Body, got != nil)
+	}
+	if got.Err() != nil || got.Done() != nil {
+		t.Fatal("online apply context is cancelled with the request")
+	}
+}

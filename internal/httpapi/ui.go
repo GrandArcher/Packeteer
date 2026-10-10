@@ -131,7 +131,9 @@ func (s *Server) handleConfigSave(w http.ResponseWriter, r *http.Request) {
 		msg := "config file written through the editor; it applies on restart"
 		if res.ReloadOnline {
 			if fn, ok := s.apply.Load().(OnlineApplier); ok && fn != nil {
-				applied, refused, fatal := fn(r.Context())
+				// The apply starts sources and policies that must outlive this
+				// request, so it never runs on a context the request cancels.
+				applied, refused, fatal := fn(context.WithoutCancel(r.Context()))
 				if len(applied) > 0 {
 					body["applied"] = applied
 					detail += " applied=" + strings.Join(applied, ",")

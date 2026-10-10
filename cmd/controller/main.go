@@ -705,16 +705,14 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 	}
 	var reloadFailed atomic.Bool
 	if httpSrv != nil {
-		httpSrv.SetOnlineApply(func(c context.Context) ([]string, error, error) {
-			applied, refused, fatal := rl.reload(c)
+		httpSrv.SetOnlineApply(onlineApplier(ctx, rl.reload, func(c context.Context, applied []string, refused, fatal error) {
 			auditReload(c, audit, path, "PUT /api/config", applied, refused, fatal)
 			if fatal != nil {
 				log.Error("config reload failed after changing the BGP speaker; stopping (Packeteer routes are withdrawn)", "err", fatal)
 				reloadFailed.Store(true)
 				stopDaemon()
 			}
-			return applied, refused, fatal
-		})
+		}))
 	}
 	go func() {
 		for {
@@ -2588,4 +2586,18 @@ func newRecorder(cfg *config.Config, plugins *pluginhost.Set, log *slog.Logger, 
 		Describe: describe,
 		Volumes:  func(ctx context.Context) map[netip.Prefix]float64 { return collectVolumes(ctx, plugins) },
 	})
+}
+
+// onlineApplier builds the PUT /api/config online apply. The reload runs
+// on the daemon context, the same one the SIGHUP reload uses: sources and
+// policies it starts must keep running after the HTTP request ends, and a
+// client disconnect must not cancel a withdraw on leaving inject. The
+// request context is used only for the audit record.
+func onlineApplier(daemon context.Context, reload func(context.Context) ([]string, error, error),
+	after func(req context.Context, applied []string, refused, fatal error)) httpapi.OnlineApplier {
+	return func(req context.Context) ([]string, error, error) {
+		applied, refused, fatal := reload(daemon)
+		after(req, applied, refused, fatal)
+		return applied, refused, fatal
+	}
 }
