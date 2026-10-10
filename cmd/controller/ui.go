@@ -92,8 +92,8 @@ func newConfigEditor(cfg *config.Config, path string, getenv func(string) string
 		}
 		return next, nil
 	}
-	diff := func(running, next *config.Config) ([]string, bool) {
-		return restartKeys(running, next), !sameYAML(running.BGP.Neighbors, next.BGP.Neighbors)
+	diff := func(running, next *config.Config) ([]string, []string) {
+		return classify(running, next)
 	}
 	return configedit.New(path, cfg, check, diff)
 }

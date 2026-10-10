@@ -8,6 +8,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
+	"sync"
 
 	"github.com/GrandArcher/Packeteer/internal/config"
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
@@ -53,6 +55,7 @@ type Set struct {
 	// threat mitigation and only for an explicit rule.
 	Detector *Instance[plugin.Detector]
 
+	mu      sync.RWMutex
 	started []namedLifecycle
 }
 
@@ -90,17 +93,7 @@ func build[T plugin.Lifecycle](reg *plugin.Registry[T], field string, specs []co
 
 // Build constructs all plugins named in cfg, returning every error found.
 func Build(cfg *config.Config, opts Options) (*Set, error) {
-	if opts.Logger == nil {
-		opts.Logger = slog.Default()
-	}
-	if opts.Getenv == nil {
-		opts.Getenv = func(string) string { return "" }
-	}
-	dir := cfg.PluginDir
-	if opts.PluginDir != "" {
-		dir = opts.PluginDir
-	}
-	base := plugin.Env{Logger: opts.Logger, PluginDir: dir, Getenv: opts.Getenv, Providers: providerNames(cfg), CheckOnly: opts.CheckOnly}
+	base := optionsEnv(cfg, opts)
 
 	var errs []error
 	s := &Set{
@@ -257,7 +250,7 @@ func (s *Set) Start(ctx context.Context) error {
 			stopErr := s.Stop(ctx)
 			return errors.Join(fmt.Errorf("start %s: %w", nl.label, err), stopErr)
 		}
-		s.started = append(s.started, nl)
+		s.track(nl)
 	}
 	return nil
 }
@@ -265,18 +258,129 @@ func (s *Set) Start(ctx context.Context) error {
 // Stop stops started plugins in reverse order (the announcer, which is
 // started last, is stopped first so routes are withdrawn early).
 func (s *Set) Stop(ctx context.Context) error {
+	s.mu.Lock()
+	started := s.started
+	s.started = nil
+	s.mu.Unlock()
 	var errs []error
-	for i := len(s.started) - 1; i >= 0; i-- {
-		nl := s.started[i]
+	for i := len(started) - 1; i >= 0; i-- {
+		nl := started[i]
 		if err := nl.lc.Stop(ctx); err != nil {
 			errs = append(errs, fmt.Errorf("stop %s: %w", nl.label, err))
 		}
 	}
-	s.started = nil
 	return errors.Join(errs...)
 }
 
+func (s *Set) track(nl namedLifecycle) {
+	s.mu.Lock()
+	s.started = append(s.started, nl)
+	s.mu.Unlock()
+}
+
+// TrackStart records a plugin started after the set's Start, so Stop
+// stops it too. Online reload uses it for a source or policy it added.
+func (s *Set) TrackStart(kind plugin.Kind, name string, lc plugin.Lifecycle) {
+	if s == nil || lc == nil {
+		return
+	}
+	s.track(namedLifecycle{fmt.Sprintf("%s %s", kind, name), lc})
+}
+
+// Untrack forgets a plugin that was stopped on its own, so Stop does not
+// stop it again. Pointer identity matches the instance Start recorded.
+func (s *Set) Untrack(lc plugin.Lifecycle) {
+	if s == nil || lc == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.started = slices.DeleteFunc(s.started, func(n namedLifecycle) bool { return n.lc == lc })
+}
+
+// SourcesSnapshot copies the source list. The plugins are shared.
+func (s *Set) SourcesSnapshot() []Instance[plugin.TargetSource] {
+	if s == nil {
+		return nil
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return slices.Clone(s.Sources)
+}
+
+// PoliciesSnapshot copies the policy list. The plugins are shared.
+func (s *Set) PoliciesSnapshot() []Instance[plugin.Policy] {
+	if s == nil {
+		return nil
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return slices.Clone(s.Policies)
+}
+
+// SetSources replaces the source list. The caller starts new plugins and
+// stops removed ones.
+func (s *Set) SetSources(v []Instance[plugin.TargetSource]) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	s.Sources = v
+	s.mu.Unlock()
+}
+
+// SetPolicies replaces the policy list.
+func (s *Set) SetPolicies(v []Instance[plugin.Policy]) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	s.Policies = v
+	s.mu.Unlock()
+}
+
+// optionsEnv is the plugin environment Build and a reload share.
+func optionsEnv(cfg *config.Config, opts Options) plugin.Env {
+	if opts.Logger == nil {
+		opts.Logger = slog.Default()
+	}
+	if opts.Getenv == nil {
+		opts.Getenv = func(string) string { return "" }
+	}
+	dir := ""
+	if cfg != nil {
+		dir = cfg.PluginDir
+	}
+	if opts.PluginDir != "" {
+		dir = opts.PluginDir
+	}
+	return plugin.Env{Logger: opts.Logger, PluginDir: dir, Getenv: opts.Getenv, Providers: providerNames(cfg), CheckOnly: opts.CheckOnly}
+}
+
+// BuildSources constructs the named target sources. They are not started.
+func BuildSources(cfg *config.Config, specs []config.PluginSpec, opts Options) ([]Instance[plugin.TargetSource], error) {
+	var errs []error
+	out := build(plugin.Sources, "sources", specs, optionsEnv(cfg, opts), &errs)
+	if err := errors.Join(errs...); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// BuildPolicies constructs the named policies. They are not started.
+func BuildPolicies(cfg *config.Config, specs []config.PluginSpec, opts Options) ([]Instance[plugin.Policy], error) {
+	var errs []error
+	out := build(plugin.Policies, "policies", specs, optionsEnv(cfg, opts), &errs)
+	if err := errors.Join(errs...); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func providerNames(cfg *config.Config) []string {
+	if cfg == nil {
+		return nil
+	}
 	out := make([]string, 0, len(cfg.Providers))
 	for _, p := range cfg.Providers {
 		if p.Name != "" {

@@ -423,9 +423,8 @@ func TestParseErrors(t *testing.T) {
 		{"bad router_id", edit(t, minimalYAML, "router_id: 192.0.2.10", "router_id: 2001:db8::10"), "must be an IPv4 address"},
 		{"bad community", edit(t, validYAML, `"64512:666"`, `"64512-666"`), "asn:value"},
 		{"community out of range", edit(t, validYAML, `"64512:666"`, `"64512:70000"`), "0-65535"},
-		{"max_improvements zero", edit(t, validYAML, "max_improvements: 50", "max_improvements: 0"), "max_improvements 0 must be between 1"},
-		{"max_improvements negative", edit(t, validYAML, "max_improvements: 50", "max_improvements: -1"), "max_improvements -1 must be between 1"},
-		{"max_improvements too large", edit(t, validYAML, "max_improvements: 50", "max_improvements: 10001"), "must be between 1 and 10000"},
+		{"max_improvements negative", edit(t, validYAML, "max_improvements: 50", "max_improvements: -1"), "max_improvements -1 must be between 0"},
+		{"max_improvements too large", edit(t, validYAML, "max_improvements: 50", "max_improvements: 10001"), "must be between 0 and 10000"},
 		{"negative hold_time", edit(t, validYAML, "hold_time: 15m", "hold_time: -1m"), "hold_time -1m0s must not be negative"},
 		{"loss threshold too high", edit(t, validYAML, "min_loss_delta_pct: 1.0", "min_loss_delta_pct: 101"), "min_loss_delta_pct 101 must be between 0 and 100"},
 		{"negative rtt threshold", edit(t, validYAML, "min_rtt_delta_ms: 15", "min_rtt_delta_ms: -5"), "min_rtt_delta_ms -5 must not be negative"},
@@ -490,6 +489,16 @@ func TestParseErrors(t *testing.T) {
 				t.Fatalf("error = %q, want it to contain %q", err, tt.wantErr)
 			}
 		})
+	}
+}
+
+func TestMaxImprovementsZero(t *testing.T) {
+	cfg, err := Parse([]byte(edit(t, validYAML, "max_improvements: 50", "max_improvements: 0")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.MaxImprovements == nil || *cfg.MaxImprovements != 0 {
+		t.Fatalf("max_improvements = %v", cfg.MaxImprovements)
 	}
 }
 

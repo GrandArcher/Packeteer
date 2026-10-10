@@ -4,9 +4,10 @@
 // controller runs at start (config.Load's parser and validator, the
 // runtime environment, and every plugin's own config), and the file on
 // disk is read back through config.Load before the write is reported
-// done. Nothing here announces, and nothing is applied to the running
-// controller: the new file takes effect on restart, or on SIGHUP when
-// only bgp.neighbors changed. Reverting to hand-edited files needs
+// done. Nothing here announces. A write that differs only in keys the
+// controller can apply online takes effect when the controller applies
+// it (SIGHUP, or PUT /api/config when every change is online). Any other
+// change waits for a restart. Reverting to hand-edited files needs
 // nothing: the file is a plain YAML file.
 package configedit
 
@@ -47,9 +48,9 @@ var (
 type Checker func(data []byte) (*config.Config, error)
 
 // Differ lists what differs between the running config and a candidate.
-// restart are the keys that need a restart; online reports whether
-// bgp.neighbors changed (applied by SIGHUP).
-type Differ func(running, next *config.Config) (restart []string, online bool)
+// restart are the keys that need a restart. online are the keys a reload
+// applies while running. A candidate with both is not applied online.
+type Differ func(running, next *config.Config) (restart, online []string)
 
 // Editor edits one config file. It is safe for concurrent use.
 type Editor struct {
@@ -91,11 +92,12 @@ type Result struct {
 	Mode   string   `json:"mode,omitempty"`
 	// Changed lists the keys that differ from the running config.
 	Changed []string `json:"changed,omitempty"`
-	// RestartRequired is true when a key other than bgp.neighbors
-	// changed: the new file applies on the next start.
+	// RestartRequired is true when a key that cannot apply online changed.
+	// The new file applies on the next start.
 	RestartRequired bool `json:"restart_required"`
-	// ReloadOnline is true when bgp.neighbors changed: SIGHUP applies it
-	// if nothing else changed.
+	// ReloadOnline is true when every change can apply while running
+	// (SIGHUP, or PUT /api/config). A mix of online and restart keys is
+	// not online.
 	ReloadOnline bool `json:"reload_online"`
 	// EnablesInject is true when the candidate is mode inject and the
 	// file on disk is not.
@@ -135,13 +137,10 @@ func (e *Editor) checkLocked(data []byte) Result {
 	res := Result{Valid: true, Mode: next.Mode}
 	if e.diff != nil && e.running != nil {
 		restart, online := e.diff(e.running, next)
-		res.Changed = slices.Clone(restart)
-		if online {
-			res.Changed = append(res.Changed, "bgp.neighbors")
-		}
+		res.Changed = append(append([]string{}, restart...), online...)
 		slices.Sort(res.Changed)
 		res.RestartRequired = len(restart) > 0
-		res.ReloadOnline = online
+		res.ReloadOnline = len(online) > 0 && len(restart) == 0
 	}
 	res.EnablesInject = next.Mode == config.ModeInject && e.diskMode() != config.ModeInject
 	return res

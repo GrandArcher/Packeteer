@@ -238,9 +238,12 @@ type Source struct {
 	sub  *subranges
 	ctr  *counters
 
-	conns     []*net.UDPConn
-	closeOnce sync.Once
-	wg        sync.WaitGroup
+	// connMu guards conns and gen. Start after Stop binds again: a reload
+	// can replace a flow source that keeps the same listen address.
+	connMu sync.Mutex
+	conns  []*net.UDPConn
+	gen    uint64
+	wg     sync.WaitGroup
 }
 
 // New is the plugin factory. It does not open sockets.
@@ -577,11 +580,18 @@ func (s *Source) SetPrefixLookup(fn func(netip.Addr) (netip.Prefix, bool)) {
 }
 
 // Start binds every listen address. The factory does not bind, so -check
-// validates the config without taking the ports.
+// validates the config without taking the ports. Stop then Start binds
+// again, so an online reload can replace the source on the same port.
 func (s *Source) Start(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	s.connMu.Lock()
+	if len(s.conns) > 0 {
+		s.connMu.Unlock()
+		return errors.New("flow source already started")
+	}
+	s.connMu.Unlock()
 	var conns []*net.UDPConn
 	for _, addr := range s.listen {
 		ua, err := net.ResolveUDPAddr("udp", addr)
@@ -597,7 +607,16 @@ func (s *Source) Start(ctx context.Context) error {
 		_ = c.SetReadBuffer(udpReadBuffer)
 		conns = append(conns, c)
 	}
+	s.connMu.Lock()
+	if len(s.conns) > 0 {
+		s.connMu.Unlock()
+		closeAll(conns)
+		return errors.New("flow source already started")
+	}
 	s.conns = conns
+	s.gen++
+	gen := s.gen
+	s.connMu.Unlock()
 	for _, c := range conns {
 		s.log.Info("flow listening", "addr", c.LocalAddr().String())
 		s.wg.Add(1)
@@ -605,14 +624,18 @@ func (s *Source) Start(ctx context.Context) error {
 	}
 	go func() {
 		<-ctx.Done()
-		s.closeConns()
+		s.closeGen(gen)
 	}()
 	return nil
 }
 
-// Stop closes the listeners and waits for the read loops.
+// Stop closes the listeners and waits for the read loops. A later Start
+// binds the same addresses again.
 func (s *Source) Stop(ctx context.Context) error {
-	s.closeConns()
+	s.connMu.Lock()
+	gen := s.gen
+	s.connMu.Unlock()
+	s.closeGen(gen)
 	done := make(chan struct{})
 	go func() {
 		s.wg.Wait()
@@ -626,8 +649,16 @@ func (s *Source) Stop(ctx context.Context) error {
 	}
 }
 
-func (s *Source) closeConns() {
-	s.closeOnce.Do(func() { closeAll(s.conns) })
+// closeGen closes the listeners from gen. A newer Start is left alone,
+// and a second close of the same generation is a no-op.
+func (s *Source) closeGen(gen uint64) {
+	s.connMu.Lock()
+	defer s.connMu.Unlock()
+	if gen == 0 || s.gen != gen || len(s.conns) == 0 {
+		return
+	}
+	closeAll(s.conns)
+	s.conns = nil
 }
 
 func closeAll(conns []*net.UDPConn) {

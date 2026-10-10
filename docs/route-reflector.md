@@ -107,7 +107,7 @@ An IX is an `exchanges` entry (#27): each member you list is a provider with its
 
 ## Changing routers without a restart
 
-Edit `bgp.neighbors` and send SIGHUP (`docker kill -s HUP <container>`). New routers get a session, removed ones are closed, and the other sessions are not touched. When the per-router lists change, Packeteer withdraws its outbound routes, installs the new table, and announces them again on the next evaluation. Any other change is refused and logged with the keys that need a restart ([CONFIG.md](CONFIG.md#online-reconfiguration)).
+Edit `bgp.neighbors` and send SIGHUP (`docker kill -s HUP <container>`). New routers get a session, removed ones are closed, and the other sessions are not touched. When the per-router lists change, Packeteer withdraws its outbound routes, installs the new table, and announces them again on the next evaluation. Thresholds, hold time, the cap, policies, sources, probe timing, mode, and the allowlist also apply on that SIGHUP (#128). A key that cannot apply online is refused and logged with the keys that need a restart ([CONFIG.md](CONFIG.md#online-reconfiguration)).
 
 ## Rollback
 

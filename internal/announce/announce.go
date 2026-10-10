@@ -132,6 +132,11 @@ type Controller struct {
 	active map[netip.Prefix]slot // exact learned prefix -> what is on the wire
 	onWire atomic.Int64          // improvements on the wire
 	routes atomic.Int64          // routes on the wire, more-specifics included
+	// srv is the RIB view's speaker. bound is true after a successful
+	// bind. RememberSpeaker stores srv before inject is on, so a later
+	// mode change can bind without a restart (#128).
+	srv   any
+	bound bool
 }
 
 // Active is the number of improvements on the wire. It does not lock, so
@@ -249,8 +254,8 @@ func New(cfg Config, ann plugin.Announcer, rib RIB, log *slog.Logger) (*Controll
 			}
 			cfg.ProviderCommunities[name] = canon
 		}
-		if cfg.MaxImprovements < 1 {
-			return nil, errors.New("announce: max_improvements must be positive")
+		if cfg.MaxImprovements < 0 {
+			return nil, errors.New("announce: max_improvements must not be negative")
 		}
 		switch cfg.ASPath {
 		case "", config.ASPathEmpty:
@@ -284,25 +289,96 @@ func New(cfg Config, ann plugin.Announcer, rib RIB, log *slog.Logger) (*Controll
 
 // Bind attaches an announcer that publishes on an existing speaker. srv is
 // the RIB view's GoBGP server. Inject mode refuses to start when the
-// announcer cannot bind.
+// announcer cannot bind. The speaker is remembered either way, so a later
+// change to inject can bind without a restart.
 func (c *Controller) Bind(srv any) error {
-	if c == nil || c.cfg.Mode != config.ModeInject {
+	if c == nil {
 		return nil
 	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if srv != nil {
+		c.srv = srv
+	}
+	if c.cfg.Mode != config.ModeInject {
+		return nil
+	}
+	return c.bindLocked()
+}
+
+// RememberSpeaker stores the RIB speaker without binding. Observe and
+// suggest call it at start so a later mode change to inject can bind.
+func (c *Controller) RememberSpeaker(srv any) {
+	if c == nil || srv == nil {
+		return
+	}
+	c.mu.Lock()
+	c.srv = srv
+	c.mu.Unlock()
+}
+
+// ApplyRuntime updates mode, the allowlist, and the improvement cap while
+// running (#128). Leaving inject withdraws every route before the mode
+// changes, under this lock, so a concurrent Sync cannot announce again.
+// Entering inject binds the remembered speaker and, if that fails, leaves
+// the previous mode in place. The caller has not changed BGP sessions yet.
+func (c *Controller) ApplyRuntime(ctx context.Context, mode string, allow []netip.Prefix, max int) error {
+	if c == nil {
+		return nil
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	prevMode, prevAllow, prevMax := c.cfg.Mode, c.cfg.Allowlist, c.cfg.MaxImprovements
+	if prevMode == config.ModeInject && mode != config.ModeInject {
+		if err := c.withdrawAllLocked(ctx); err != nil {
+			return err
+		}
+		c.store()
+	}
+	c.cfg.Mode = mode
+	c.cfg.Allowlist = append([]netip.Prefix(nil), allow...)
+	c.cfg.MaxImprovements = max
+	if prevMode != config.ModeInject && mode == config.ModeInject {
+		if err := c.bindLocked(); err != nil {
+			c.cfg.Mode, c.cfg.Allowlist, c.cfg.MaxImprovements = prevMode, prevAllow, prevMax
+			return err
+		}
+	}
+	return nil
+}
+
+// bindLocked publishes on the remembered speaker. Caller holds mu.
+func (c *Controller) bindLocked() error {
+	if c.bound {
+		return nil
+	}
+	if c.ann == nil {
+		return errors.New("announce: inject mode requires an announcer")
+	}
+	if c.srv == nil {
+		return errors.New("announce: inject needs an iBGP session")
+	}
+	var err error
 	if len(c.cfg.Routers) > 0 {
 		r, ok := c.ann.(plugin.RouterAnnouncer)
 		if !ok {
 			return fmt.Errorf("announce: announcer %T cannot send per-router routes (bgp.neighbors providers/next_hops)", c.ann)
 		}
-		return r.BindRouters(srv, c.cfg.Community, c.cfg.Routers)
+		err = r.BindRouters(c.srv, c.cfg.Community, c.cfg.Routers)
+	} else {
+		b, ok := c.ann.(interface {
+			Bind(any, string) error
+		})
+		if !ok {
+			return fmt.Errorf("announce: announcer %T cannot publish on the embedded iBGP speaker", c.ann)
+		}
+		err = b.Bind(c.srv, c.cfg.Community)
 	}
-	b, ok := c.ann.(interface {
-		Bind(any, string) error
-	})
-	if !ok {
-		return fmt.Errorf("announce: announcer %T cannot publish on the embedded iBGP speaker", c.ann)
+	if err != nil {
+		return err
 	}
-	return b.Bind(srv, c.cfg.Community)
+	c.bound = true
+	return nil
 }
 
 // Sync makes the announced set match imps, the decision engine's active
@@ -315,12 +391,17 @@ func (c *Controller) Bind(srv any) error {
 // improvement disappearing from imps. With MoreSpecific, each improvement's
 // learned more-specifics follow it (syncMoreSpecificsLocked).
 func (c *Controller) Sync(ctx context.Context, imps []policy.Improvement) error {
-	if c == nil || c.cfg.Mode != config.ModeInject {
+	if c == nil {
 		return nil
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	defer c.store()
+	// Mode is read under the lock so a reload that leaves inject can
+	// withdraw and clear the mode without a concurrent Sync announcing.
+	if c.cfg.Mode != config.ModeInject {
+		return nil
+	}
 	if c.cfg.Leader != nil && !c.cfg.Leader() {
 		// HA standby (#31): nothing on the wire.
 		if len(c.active) == 0 {

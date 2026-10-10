@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 
 	"github.com/GrandArcher/Packeteer/internal/auth"
 	"github.com/GrandArcher/Packeteer/internal/config"
@@ -97,14 +98,27 @@ func bootstrapAdmin(ctx context.Context, svc *auth.Service, audit *auth.Auditor,
 	}
 }
 
-// auditReload records a SIGHUP config reload.
-func auditReload(ctx context.Context, audit *auth.Auditor, path string, refused, fatal error) {
-	rec := plugin.AuditRecord{Actor: "system", Method: auth.MethodSystem, Action: "config.reload", Target: path, Detail: "SIGHUP"}
+// auditReload records one online apply. how is "SIGHUP" or "PUT /api/config".
+// applied are the keys now running. A refusal or a fatal error is a failed
+// record; a fatal one means the process is stopping and routes are withdrawn.
+func auditReload(ctx context.Context, audit *auth.Auditor, path, how string, applied []string, refused, fatal error) {
+	if how == "" {
+		how = "SIGHUP"
+	}
+	detail := how
+	if len(applied) > 0 {
+		detail = how + " applied " + strings.Join(applied, ",")
+	}
+	rec := plugin.AuditRecord{Actor: "system", Method: auth.MethodSystem, Action: "config.reload", Target: path, Detail: detail}
 	switch {
 	case fatal != nil:
-		rec.Result, rec.Detail = auth.ResultFailed, "SIGHUP: "+fatal.Error()
+		rec.Result = auth.ResultFailed
+		rec.Detail = how + ": " + fatal.Error()
+		if len(applied) > 0 {
+			rec.Detail += "; applied " + strings.Join(applied, ",")
+		}
 	case refused != nil:
-		rec.Result, rec.Detail = auth.ResultFailed, "SIGHUP refused: "+refused.Error()
+		rec.Result, rec.Detail = auth.ResultFailed, how+" refused: "+refused.Error()
 	}
 	audit.Record(ctx, rec)
 }

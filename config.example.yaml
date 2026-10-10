@@ -5,7 +5,7 @@ mode: observe               # also the default when mode is left out; inject is 
 asn: 64512
 router_id: 192.0.2.10
 packeteer_community: "64512:666"
-max_improvements: 50
+max_improvements: 50        # 0 retires every improvement; 1-10000 caps them. Default 50 when omitted.
 hold_time: 15m              # min life of an improvement; also cooldown after a flip-back
 improvement_ttl: 1h         # re-measure the native path after this long. Falling out of a source does not retire the improvement; it stays probed until this TTL, flip-back, or a RIB leave. A path the router keeps advertising is withdrawn when it disappears; a path hidden because Packeteer's route won waits for this TTL
 

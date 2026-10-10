@@ -58,15 +58,18 @@ func editor(t *testing.T, content string) (*Editor, string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	diff := func(a, b *config.Config) ([]string, bool) {
-		var keys []string
+	diff := func(a, b *config.Config) ([]string, []string) {
+		var restart, online []string
 		if a.Mode != b.Mode {
-			keys = append(keys, "mode")
+			restart = append(restart, "mode")
 		}
 		if a.ASN != b.ASN {
-			keys = append(keys, "asn")
+			restart = append(restart, "asn")
 		}
-		return keys, !reflect.DeepEqual(a.BGP.Neighbors, b.BGP.Neighbors)
+		if !reflect.DeepEqual(a.BGP.Neighbors, b.BGP.Neighbors) {
+			online = append(online, "bgp.neighbors")
+		}
+		return restart, online
 	}
 	e, err := New(path, running, parse, diff)
 	if err != nil {
@@ -161,7 +164,9 @@ func TestSaveInjectNeedsConfirmation(t *testing.T) {
 	if disk, _ := os.ReadFile(path); string(disk) != observeYAML {
 		t.Fatal("file changed")
 	}
-	if _, res, err := e.Save([]byte(injectYAML), base, true); err != nil || !res.ReloadOnline {
+	// This test's differ treats mode as a restart key and neighbors as
+	// online, so a confirmed inject save is not applied online.
+	if _, res, err := e.Save([]byte(injectYAML), base, true); err != nil || !res.Valid || !res.RestartRequired || res.ReloadOnline {
 		t.Fatalf("confirmed inject: %+v %v", res, err)
 	}
 	// Already inject on disk: an edit that keeps inject needs no confirmation.

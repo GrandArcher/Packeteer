@@ -1,13 +1,13 @@
 #!/bin/bash
-# Bring up the FRR lab and assert announce, flip-back withdraw, withdraw
-# when Packeteer stops cleanly (SIGTERM / WithdrawAll), and withdraw after
-# SIGKILL (session loss, bounded by the BGP hold timer). Documentation
-# prefix and private ASN only.
+# Bring up the FRR lab and assert announce, an online threshold change that
+# keeps the route, a cap of 0 that withdraws it (#128), flip-back withdraw,
+# withdraw when Packeteer stops cleanly (SIGTERM / WithdrawAll), and
+# withdraw after SIGKILL (session loss, bounded by the BGP hold timer).
+# Documentation prefix and private ASN only.
 set -euo pipefail
 
 root=$(cd "$(dirname "$0")/.." && pwd)
 cd "$root"
-export PACKETEER_LAB_CONFIG="$root/lab/packeteer.yaml"
 compose=(docker compose -f lab/docker-compose.yml)
 
 lab_dir=$(mktemp -d)
@@ -18,7 +18,12 @@ echo "building route check"
 go build -o "$check_bin" ./lab/checkroute
 
 cp lab/probes/prefer-b.yaml "$lab_dir/state.yaml"
+# A copy, not the repo file: later steps rewrite it in place. Replacing
+# the inode (mv, sed -i) would leave the read-only bind mount on the old file.
+cp lab/packeteer.yaml "$lab_dir/config.yaml"
+chmod 0644 "$lab_dir/config.yaml"
 export PACKETEER_LAB_DIR="$lab_dir"
+export PACKETEER_LAB_CONFIG="$lab_dir/config.yaml"
 
 echo "building lab"
 "${compose[@]}" build
@@ -125,8 +130,68 @@ flip() {
 	mv "$tmp" "$lab_dir/state.yaml"
 }
 
+# rewrite_config <sed-expr> edits the mounted config without replacing its
+# inode, so the container's bind mount sees the new bytes.
+rewrite_config() {
+	local tmp
+	tmp=$(mktemp "$lab_dir/.cfg.XXXXXX")
+	sed "$1" "$lab_dir/config.yaml" >"$tmp"
+	cat "$tmp" >"$lab_dir/config.yaml"
+	rm -f "$tmp"
+}
+
+hup() {
+	local cid
+	cid=$("${compose[@]}" ps -q packeteer)
+	[ -n "$cid" ]
+	docker kill -s HUP "$cid" >/dev/null
+}
+
+packeteer_logs() { "${compose[@]}" logs --no-color packeteer 2>&1 || true; }
+
+# wait_log <seconds> <fixed string>
+wait_log() {
+	local seconds=$1 needle=$2
+	local i logs
+	for i in $(seq 1 "$seconds"); do
+		logs=$(packeteer_logs)
+		if grep -qF -- "$needle" <<<"$logs"; then
+			return 0
+		fi
+		sleep 1
+	done
+	echo "timed out waiting for log: $needle" >&2
+	dump_bgp
+	return 1
+}
+
 echo "waiting for injected route"
 wait_route present
+
+echo "SIGHUP lowers the latency threshold: the route stays (#128)"
+rewrite_config 's/min_rtt_delta_ms: 15/min_rtt_delta_ms: 10/'
+hup
+wait_log 20 'applied=thresholds neighbors_added'
+stay_present 6 "lower latency threshold"
+
+echo "SIGHUP sets max_improvements to 0: the route withdraws (#128)"
+rewrite_config 's/max_improvements: 50/max_improvements: 0/'
+hup
+wait_log 20 'applied=max_improvements neighbors_added'
+wait_route absent
+
+echo "restoring the lab config announces the route again (#128)"
+cat "$root/lab/packeteer.yaml" >"$lab_dir/config.yaml"
+hup
+wait_log 20 'applied=max_improvements,thresholds'
+wait_route present
+logs=$(packeteer_logs)
+reloads=$(grep -cF 'action=config.reload' <<<"$logs" || true)
+if [ "${reloads:-0}" -lt 3 ]; then
+	echo "audit log recorded ${reloads:-0} config.reload events, want at least 3" >&2
+	dump_bgp
+	exit 1
+fi
 
 echo "forcing flip-back"
 flip lab/probes/prefer-a.yaml

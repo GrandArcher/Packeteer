@@ -69,5 +69,25 @@ func (e *Engine) Reset() {
 	e.state, e.last, e.at = NewState(), Output{}, time.Time{}
 }
 
+// SetConfig replaces the config the next Evaluate uses. The caller passes
+// a fresh config (its maps are not shared with a config Evaluate is
+// reading). It does not drop improvements; Decide retires whatever the
+// new values make ineligible.
+func (e *Engine) SetConfig(cfg Config) {
+	if e == nil {
+		return
+	}
+	e.mu.Lock()
+	e.cfg = cfg
+	e.mu.Unlock()
+}
+
 // Mode returns the configured mode.
-func (e *Engine) Mode() string { return e.cfg.Mode }
+func (e *Engine) Mode() string {
+	if e == nil {
+		return ""
+	}
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	return e.cfg.Mode
+}

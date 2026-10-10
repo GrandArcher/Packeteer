@@ -70,12 +70,14 @@ func newEditor(t *testing.T) (*configedit.Editor, string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	diff := func(a, b *config.Config) ([]string, bool) {
-		var keys []string
+	diff := func(a, b *config.Config) (restart, online []string) {
 		if a.Mode != b.Mode {
-			keys = append(keys, "mode")
+			restart = append(restart, "mode")
 		}
-		return keys, !reflect.DeepEqual(a.BGP.Neighbors, b.BGP.Neighbors)
+		if !reflect.DeepEqual(a.BGP.Neighbors, b.BGP.Neighbors) {
+			online = append(online, "bgp.neighbors")
+		}
+		return restart, online
 	}
 	e, err := configedit.New(path, running, config.Parse, diff)
 	if err != nil {

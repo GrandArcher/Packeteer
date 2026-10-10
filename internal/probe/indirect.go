@@ -128,7 +128,7 @@ func (e *Engine) probeIndirect(ctx context.Context, j job, hosts []netip.Addr, s
 	if !hop.IsValid() {
 		return Result{}, false, false // traced recently, no usable hop
 	}
-	one, dn := e.probeOne(ctx, j.provider, j.target.Prefix, hop, e.opt.Packets)
+	one, dn := e.probeOne(ctx, j.provider, j.target.Prefix, hop, e.packets())
 	if dn || ctx.Err() != nil {
 		one.Targets = append(append([]netip.Addr(nil), hosts...), hop)
 		return one, dn, true
@@ -307,7 +307,7 @@ func (e *Engine) runIndirect(ctx context.Context) {
 		case <-e.indWake:
 		}
 		e.IndirectPass(ctx)
-		t := time.NewTimer(e.opt.Interval)
+		t := time.NewTimer(e.interval())
 		select {
 		case <-ctx.Done():
 			t.Stop()
