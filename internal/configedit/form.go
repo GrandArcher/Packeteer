@@ -53,6 +53,12 @@ type Form struct {
 	Providers    []FormProvider `json:"providers"`
 	Targets      []FormTarget   `json:"targets"`
 	Allowlist    []string       `json:"allowlist"`
+	// Sections (#130). A nil section in a request leaves that part of the
+	// file alone; ParseForm always fills them.
+	Flow     *FormFlow     `json:"flow"`
+	Policies *FormPolicies `json:"policies"`
+	VIP      *FormVIP      `json:"vip"`
+	Outage   *FormOutage   `json:"outage"`
 }
 
 // FormProvider is one provider row. Key is the name in the file when the
@@ -125,6 +131,9 @@ func ParseForm(data []byte) (Form, error) {
 	if al, ok := mappingChild(root, "allowlist"); ok {
 		f.Allowlist = scalarList(al, "prefixes")
 	}
+	if err := readSections(root, &f); err != nil {
+		return Form{}, err
+	}
 	f.normalize()
 	return f, nil
 }
@@ -138,7 +147,8 @@ func ApplyForm(data []byte, form Form) ([]byte, error) {
 		return nil, err
 	}
 	form.normalize()
-	if err := form.validate(); err != nil {
+	form.fillSections(cur)
+	if err := form.withoutUnchangedSections(cur).validate(); err != nil {
 		return nil, err
 	}
 	if form.editable().equal(cur.editable()) {
@@ -164,6 +174,9 @@ func ApplyForm(data []byte, form Form) ([]byte, error) {
 		return nil, err
 	}
 	if err := applyAllowlist(root, form); err != nil {
+		return nil, err
+	}
+	if err := applySections(root, cur, form); err != nil {
 		return nil, err
 	}
 	var buf bytes.Buffer
@@ -198,6 +211,7 @@ func (f *Form) normalize() {
 	if f.Allowlist == nil {
 		f.Allowlist = []string{}
 	}
+	f.normalizeSections()
 	for i := range f.Providers {
 		p := &f.Providers[i]
 		p.Key = strings.TrimSpace(p.Key)
@@ -238,6 +252,9 @@ func (f Form) equal(g Form) bool {
 		f.MinLossDeltaPct != g.MinLossDeltaPct || f.MinRTTDeltaMs != g.MinRTTDeltaMs ||
 		f.MinRTTDeltaPct != g.MinRTTDeltaPct || f.ConfirmRounds != g.ConfirmRounds ||
 		f.Precedence != g.Precedence || f.FloorLossPct != g.FloorLossPct || f.FloorRTT != g.FloorRTT {
+		return false
+	}
+	if !sectionsEqual(f, g) {
 		return false
 	}
 	if len(f.Providers) != len(g.Providers) || len(f.Targets) != len(g.Targets) || len(f.Allowlist) != len(g.Allowlist) {
@@ -384,7 +401,7 @@ func (f Form) validate() error {
 			return fmt.Errorf("%w: allowlist[%d]: prefix %q must be a prefix without host bits", ErrForm, i, s)
 		}
 	}
-	return nil
+	return f.validateSections()
 }
 
 func numberField(name, value string, min, max float64) error {

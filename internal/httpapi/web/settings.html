@@ -49,11 +49,12 @@
 <main>
   <section id="wizard">
     <h2>Setup wizard</h2>
-    <p class="tag">Three steps. It always starts in observe: the edge session is learn-only, the allowlist stays empty, and there is no announcer. Inject is not a step. Secrets stay in environment variables; this wizard has no secret fields. Nothing is written until you save the YAML below.</p>
+    <p class="tag">Four steps, the last one optional. It always starts in observe: the edge session is learn-only, the allowlist stays empty, and there is no announcer. Inject is not a step. Secrets stay in environment variables; this wizard has no secret fields. Nothing is written until you save the YAML below.</p>
     <ol class="steps" id="wz-steps">
       <li id="wz-tab-1" class="on">1. Edge</li>
       <li id="wz-tab-2">2. Providers</li>
       <li id="wz-tab-3">3. Probe</li>
+      <li id="wz-tab-4">4. Flow (optional)</li>
     </ol>
     <div id="wz-1">
       <p class="tag">The iBGP session Packeteer learns from. It does not announce.</p>
@@ -86,6 +87,19 @@
       </div>
       <div class="controls">
         <button type="button" id="wz-back-3">Back</button>
+        <button type="button" id="wz-next-3">Next</button>
+      </div>
+    </div>
+    <div id="wz-4" hidden>
+      <p class="tag">Optional flow collector. Leave it off to add a flow source later. When on, Packeteer listens on this UDP address and port for NetFlow v5/v9, IPFIX, or sFlow records and probes the busiest destination prefixes. It measures only and never announces.</p>
+      <p class="tag">Exporter setup: on the router, send flow records to this host and port (for example NetFlow v9 or IPFIX to the address below). With <code>--network host</code> this is a host UDP port; do not publish it, and allow it only from the router. Packeteer does not configure the router.</p>
+      <div class="form">
+        <label><input id="wz-flow" type="checkbox"> Collect flow records</label>
+        <label>Listen address <input id="wz-flow-addr" type="text" placeholder="192.0.2.10 (empty: every address)" spellcheck="false"></label>
+        <label>UDP port <input id="wz-flow-port" type="text" inputmode="numeric" placeholder="2055" spellcheck="false"></label>
+      </div>
+      <div class="controls">
+        <button type="button" id="wz-back-4">Back</button>
         <button type="button" id="wz-run">Generate observe config</button>
       </div>
     </div>
@@ -94,7 +108,7 @@
   </section>
   <section id="editor-section">
     <h2>Settings</h2>
-    <p class="tag">The form edits providers, probe prefixes, the allowlist, and the knobs that change a decision. The YAML stays beside it: anything the form does not show is kept. Apply copies the form into the YAML and does not write the file. Save runs the same checks as a start. Thresholds, hold time, the improvement cap, policies, sources, probe timing, mode, the allowlist, and <code>bgp.neighbors</code> apply on Save. Any other change waits for a restart. Turning inject on still needs the confirmation. Secrets stay in environment variables, not in the form. Needs <code>http.config_editor: true</code> and the admin role.</p>
+    <p class="tag">The form edits providers, probe prefixes, the allowlist, the flow, VIP, and outage sources, the <code>rules</code> policies, and the knobs that change a decision. The YAML stays beside it: anything the form does not show is kept. Apply copies the form into the YAML and does not write the file. Save runs the same checks as a start. Thresholds, hold time, the improvement cap, policies, sources, probe timing, mode, the allowlist, and <code>bgp.neighbors</code> apply on Save. Any other change waits for a restart. Turning inject on still needs the confirmation. Secrets stay in environment variables, not in the form. Needs <code>http.config_editor: true</code> and the admin role.</p>
     <div class="settings-split">
       <div>
         <h3>Decision</h3>
@@ -138,6 +152,45 @@
         <p class="tag">Prefixes that may be injected. Empty means nothing may be announced.</p>
         <div id="form-allow"></div>
         <button type="button" id="form-add-allow">+ Allowlist prefix</button>
+        <h3>Flow collector</h3>
+        <p class="tag">The first <code>flow</code> source (NetFlow v5/v9, IPFIX, sFlow). It measures only. Unchecking removes the source from the YAML, including its <code>problems</code>, <code>transit</code>, and <code>subranges</code> blocks; those blocks and the aggregate lengths are otherwise kept. Separate several listen addresses and exclude prefixes with commas. Binds host UDP ports with <code>--network host</code>; do not publish them.</p>
+        <fieldset id="form-flow" class="form">
+          <label><input id="fl-enabled" type="checkbox"> Flow collector on</label>
+          <label>Listen (host:port) <input id="fl-listen" type="text" placeholder="192.0.2.10:2055, 192.0.2.10:6343" spellcheck="false"></label>
+          <label>Window <input id="fl-window" type="text" placeholder="5m" spellcheck="false"></label>
+          <label>Priority prefixes (top_n) <input id="fl-top-n" type="text" inputmode="numeric" placeholder="100" spellcheck="false"></label>
+          <label>Probed set (max_targets) <input id="fl-max-targets" type="text" inputmode="numeric" placeholder="same as top_n" spellcheck="false"></label>
+          <label>Tail interval <input id="fl-tail" type="text" placeholder="60s (needed when max_targets is above top_n)" spellcheck="false"></label>
+          <label>Minimum bytes (min_bytes) <input id="fl-min-bytes" type="text" inputmode="numeric" placeholder="0 (off)" spellcheck="false"></label>
+          <label>Minimum share (min_pct, %) <input id="fl-min-pct" type="text" inputmode="decimal" placeholder="0 (off)" spellcheck="false"></label>
+          <label>Exclude prefixes <input id="fl-exclude" type="text" placeholder="192.0.2.0/24" spellcheck="false"></label>
+        </fieldset>
+        <h3>Policies (rules)</h3>
+        <p class="tag">The first <code>rules</code> policy. A policy only restricts or pins what the decision engine may choose: the learned-RIB check, allowlist, cap, hold time, and withdraw rules still apply. Rules keep their order. Provider, prefix, ASN, and country lists are comma separated. Removing every rule removes the policy. <code>geoip_db</code>, maintenance windows, and other policies stay in the YAML.</p>
+        <div id="form-rules"></div>
+        <button type="button" id="form-add-rule">+ Rule</button>
+        <h3>VIP</h3>
+        <p class="tag">The first <code>vip</code> source: critical prefixes and ASNs probed on their own interval. Unchecking removes the source.</p>
+        <fieldset id="form-vip" class="form">
+          <label><input id="vip-enabled" type="checkbox"> VIP source on</label>
+          <label>Interval <input id="vip-interval" type="text" placeholder="10s" spellcheck="false"></label>
+          <label>Max targets <input id="vip-max" type="text" inputmode="numeric" placeholder="100" spellcheck="false"></label>
+          <label>VIP ASNs <input id="vip-asns" type="text" placeholder="64496, 64497" spellcheck="false"></label>
+        </fieldset>
+        <div id="form-vip-prefixes"></div>
+        <button type="button" id="form-add-vip">+ VIP prefix</button>
+        <h3>Outage detection</h3>
+        <p class="tag">The first <code>outage</code> source: when many prefixes fail together it re-probes them and raises an event. It never announces. Empty fields use the defaults. Unchecking removes the source.</p>
+        <fieldset id="form-outage" class="form">
+          <label><input id="out-enabled" type="checkbox"> Outage detection on</label>
+          <label>Minimum prefixes <input id="out-min" type="text" inputmode="numeric" placeholder="3" spellcheck="false"></label>
+          <label>Window <input id="out-window" type="text" placeholder="2m" spellcheck="false"></label>
+          <label>Loss (%) <input id="out-loss" type="text" inputmode="decimal" placeholder="20" spellcheck="false"></label>
+          <label>RTT (ms) <input id="out-rtt" type="text" inputmode="decimal" placeholder="0 (off)" spellcheck="false"></label>
+          <label>Re-probe interval <input id="out-interval" type="text" placeholder="5s" spellcheck="false"></label>
+          <label>Max targets <input id="out-max" type="text" inputmode="numeric" placeholder="100" spellcheck="false"></label>
+          <label>Ignore ASNs <input id="out-ignore" type="text" placeholder="64500" spellcheck="false"></label>
+        </fieldset>
         <div class="controls">
           <button type="button" id="form-apply">Apply form to YAML</button>
           <button type="button" id="form-reload">Reload form from YAML</button>

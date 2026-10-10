@@ -7,8 +7,26 @@ function emptyForm() {
   return {mode: "", hold_time: "", max_improvements: "", min_loss_delta_pct: "", min_rtt_delta_ms: "",
     min_rtt_delta_pct: "", confirm_rounds: "",
     precedence: "", scorer_type: "", floor_max_loss_pct: "", floor_max_rtt: "",
-    providers: [], targets: [], allowlist: []};
+    providers: [], targets: [], allowlist: [],
+    flow: emptyFlow(), policies: {rules: []}, vip: emptyVIP(), outage: emptyOutage()};
 }
+
+function emptyFlow() {
+  return {enabled: false, listen: [], window: "", top_n: "", max_targets: "", tail_interval: "", min_bytes: "", min_pct: "", exclude: []};
+}
+
+function emptyVIP() {
+  return {enabled: false, interval: "", max_targets: "", prefixes: [], asns: []};
+}
+
+function emptyOutage() {
+  return {enabled: false, min_prefixes: "", window: "", loss_pct: "", rtt_ms: "", interval: "", max_targets: "", ignore_asns: []};
+}
+
+// Lists in the form's text fields are comma or space separated.
+function listText(list) { return (list || []).join(", "); }
+function splitList(text) { return text.split(/[\s,]+/).filter(Boolean); }
+function byId(id) { return document.getElementById(id); }
 
 function edStatus(text, errors) {
   document.getElementById("ed-status").textContent = text || "";
@@ -42,12 +60,14 @@ function editorOff(err) {
   var node = document.getElementById("ed-off");
   node.textContent = explain(err);
   node.hidden = !off;
-  ["ed-load", "ed-check", "ed-save", "wz-run", "wz-next", "wz-next-2", "wz-back", "wz-back-3", "wz-add-provider", "wz-sug", "form-apply", "form-reload", "form-add-provider", "form-add-target", "form-add-allow", "sug-refresh"].forEach(function (id) {
+  ["ed-load", "ed-check", "ed-save", "wz-run", "wz-next", "wz-next-2", "wz-back", "wz-back-3", "wz-add-provider", "wz-sug", "form-apply", "form-reload", "form-add-provider", "form-add-target", "form-add-allow", "sug-refresh", "form-add-rule", "form-add-vip", "wz-next-3", "wz-back-4"].forEach(function (id) {
     var b = document.getElementById(id);
     if (b) b.disabled = off;
   });
-  var fields = document.getElementById("form-fields");
-  if (fields) fields.disabled = off;
+  ["form-fields", "form-flow", "form-vip", "form-outage"].forEach(function (id) {
+    var fields = document.getElementById(id);
+    if (fields) fields.disabled = off;
+  });
 }
 
 function loadConfig() {
@@ -101,9 +121,158 @@ function readKnobs() {
   form.precedence = document.getElementById("fm-precedence").value;
   form.floor_max_loss_pct = document.getElementById("fm-floor-loss").value.trim();
   form.floor_max_rtt = document.getElementById("fm-floor-rtt").value.trim();
+  readSections();
+}
+
+function readSections() {
+  var t = function (id) { return byId(id).value.trim(); };
+  form.flow.enabled = byId("fl-enabled").checked;
+  form.flow.listen = splitList(byId("fl-listen").value);
+  form.flow.window = t("fl-window");
+  form.flow.top_n = t("fl-top-n");
+  form.flow.max_targets = t("fl-max-targets");
+  form.flow.tail_interval = t("fl-tail");
+  form.flow.min_bytes = t("fl-min-bytes");
+  form.flow.min_pct = t("fl-min-pct");
+  form.flow.exclude = splitList(byId("fl-exclude").value);
+  form.vip.enabled = byId("vip-enabled").checked;
+  form.vip.interval = t("vip-interval");
+  form.vip.max_targets = t("vip-max");
+  form.vip.asns = splitList(byId("vip-asns").value);
+  form.outage.enabled = byId("out-enabled").checked;
+  form.outage.min_prefixes = t("out-min");
+  form.outage.window = t("out-window");
+  form.outage.loss_pct = t("out-loss");
+  form.outage.rtt_ms = t("out-rtt");
+  form.outage.interval = t("out-interval");
+  form.outage.max_targets = t("out-max");
+  form.outage.ignore_asns = splitList(byId("out-ignore").value);
+}
+
+// setVal and setChecked also write the attribute, so the saved value is
+// visible in the markup (the UI smoke test reads the rendered DOM).
+function setVal(id, value) {
+  var n = byId(id);
+  n.value = value || "";
+  if (value) n.setAttribute("value", value); else n.removeAttribute("value");
+}
+
+function setChecked(id, on) {
+  var n = byId(id);
+  n.checked = !!on;
+  if (on) n.setAttribute("checked", "checked"); else n.removeAttribute("checked");
+}
+
+function fillSections() {
+  var f = form.flow, v = form.vip, o = form.outage;
+  setChecked("fl-enabled", f.enabled);
+  setVal("fl-listen", listText(f.listen));
+  setVal("fl-window", f.window);
+  setVal("fl-top-n", f.top_n);
+  setVal("fl-max-targets", f.max_targets);
+  setVal("fl-tail", f.tail_interval);
+  setVal("fl-min-bytes", f.min_bytes);
+  setVal("fl-min-pct", f.min_pct);
+  setVal("fl-exclude", listText(f.exclude));
+  setChecked("vip-enabled", v.enabled);
+  setVal("vip-interval", v.interval);
+  setVal("vip-max", v.max_targets);
+  setVal("vip-asns", listText(v.asns));
+  setChecked("out-enabled", o.enabled);
+  setVal("out-min", o.min_prefixes);
+  setVal("out-window", o.window);
+  setVal("out-loss", o.loss_pct);
+  setVal("out-rtt", o.rtt_ms);
+  setVal("out-interval", o.interval);
+  setVal("out-max", o.max_targets);
+  setVal("out-ignore", listText(o.ignore_asns));
+}
+
+var ruleActions = [["ignore", "ignore (native routing)"], ["allow", "allow (only these providers)"], ["deny", "deny (never these providers)"],
+  ["static", "static (pin one provider)"], ["vip", "vip (admit first at the cap)"]];
+
+function selectInput(options, value) {
+  var sel = el("select");
+  options.forEach(function (o) {
+    var opt = el("option", "", o[1]);
+    opt.value = o[0];
+    sel.appendChild(opt);
+  });
+  sel.value = value || "";
+  Array.prototype.forEach.call(sel.options, function (o) { if (o.value === (value || "")) o.setAttribute("selected", "selected"); });
+  return sel;
+}
+
+function renderRules() {
+  var root = byId("form-rules");
+  clear(root);
+  form.policies.rules.forEach(function (r, i) {
+    var row = el("div", "row");
+    var name = rowInput(r.name, "name");
+    var action = selectInput(ruleActions, r.action);
+    var provs = rowInput(listText(r.providers), "transit-a");
+    var prefixes = rowInput(listText(r.prefixes), "203.0.113.0/24", true);
+    var asns = rowInput(listText(r.asns), "64500");
+    var countries = rowInput(listText(r.countries), "DE, FR");
+    var traffic = selectInput([["", "any traffic"], ["transit", "transit"], ["local", "local"]], r.traffic);
+    var loss = rowInput(r.max_loss_pct, "static only");
+    var rtt = rowInput(r.max_rtt, "150ms");
+    var set = function () {
+      var x = form.policies.rules[i];
+      x.name = name.value.trim();
+      x.action = action.value;
+      x.providers = splitList(provs.value);
+      x.prefixes = splitList(prefixes.value);
+      x.asns = splitList(asns.value);
+      x.countries = splitList(countries.value);
+      x.traffic = traffic.value;
+      x.max_loss_pct = loss.value.trim();
+      x.max_rtt = rtt.value.trim();
+    };
+    [name, provs, prefixes, asns, countries, loss, rtt].forEach(function (n) { n.addEventListener("input", set); });
+    [action, traffic].forEach(function (n) { n.addEventListener("change", set); });
+    row.appendChild(labeled("Rule name", name));
+    row.appendChild(labeled("Action", action));
+    row.appendChild(labeled("Providers", provs));
+    row.appendChild(labeled("Prefixes", prefixes));
+    row.appendChild(labeled("Origin ASNs", asns));
+    row.appendChild(labeled("Countries", countries));
+    row.appendChild(labeled("Traffic class", traffic));
+    row.appendChild(labeled("Max loss (%)", loss));
+    row.appendChild(labeled("Max RTT", rtt));
+    var minus = el("button", "small", "−");
+    minus.type = "button";
+    minus.title = "Remove rule";
+    minus.addEventListener("click", function () { form.policies.rules.splice(i, 1); renderRules(); });
+    row.appendChild(minus);
+    root.appendChild(row);
+  });
+  if (!form.policies.rules.length) root.appendChild(el("p", "empty", "No rules. Native routing and the normal thresholds apply."));
+}
+
+function renderVIPPrefixes() {
+  var root = byId("form-vip-prefixes");
+  clear(root);
+  form.vip.prefixes.forEach(function (t, i) {
+    var row = el("div", "row");
+    var prefix = rowInput(t.prefix, "203.0.113.0/24", true);
+    var host = rowInput(t.host, "203.0.113.1");
+    prefix.addEventListener("input", function () { form.vip.prefixes[i].prefix = prefix.value.trim(); });
+    host.addEventListener("input", function () { form.vip.prefixes[i].host = host.value.trim(); });
+    row.appendChild(labeled("VIP prefix", prefix));
+    row.appendChild(labeled("Pinned host", host));
+    var minus = el("button", "small", "−");
+    minus.type = "button";
+    minus.title = "Remove VIP prefix";
+    minus.addEventListener("click", function () { form.vip.prefixes.splice(i, 1); renderVIPPrefixes(); });
+    row.appendChild(minus);
+    root.appendChild(row);
+  });
+  if (!form.vip.prefixes.length) root.appendChild(el("p", "empty", "No VIP prefixes."));
 }
 
 function fillKnobs() {
+  fillSections();
   document.getElementById("fm-mode").value = form.mode || "";
   document.getElementById("fm-hold").value = form.hold_time || "";
   document.getElementById("fm-cap").value = form.max_improvements || "";
@@ -245,6 +414,8 @@ function renderForm() {
   renderProviders();
   renderTargets();
   renderAllow();
+  renderRules();
+  renderVIPPrefixes();
   renderSuggestions(lastSuggestions);
 }
 
@@ -255,6 +426,16 @@ function loadForm(yaml) {
     if (!form.providers) form.providers = [];
     if (!form.targets) form.targets = [];
     if (!form.allowlist) form.allowlist = [];
+    var blank = emptyForm();
+    form.flow = Object.assign(blank.flow, form.flow || {});
+    form.vip = Object.assign(blank.vip, form.vip || {});
+    form.outage = Object.assign(blank.outage, form.outage || {});
+    if (!form.policies) form.policies = blank.policies;
+    if (!form.policies.rules) form.policies.rules = [];
+    ["listen", "exclude"].forEach(function (k) { if (!form.flow[k]) form.flow[k] = []; });
+    if (!form.vip.prefixes) form.vip.prefixes = [];
+    if (!form.vip.asns) form.vip.asns = [];
+    if (!form.outage.ignore_asns) form.outage.ignore_asns = [];
     renderForm();
     formStatus("");
   }, function (err) {
@@ -262,12 +443,23 @@ function loadForm(yaml) {
   });
 }
 
+function loadFormDefaults() {
+  var blank = emptyForm();
+  form.flow = Object.assign(blank.flow, form.flow || {});
+  form.vip = Object.assign(blank.vip, form.vip || {});
+  form.outage = Object.assign(blank.outage, form.outage || {});
+  if (!form.policies) form.policies = blank.policies;
+}
+
 function applyForm() {
   readKnobs();
   formStatus("Applying to the YAML…");
   api("POST", "/api/config/form", {yaml: document.getElementById("ed-yaml").value, apply: true, form: form}).then(function (out) {
     document.getElementById("ed-yaml").value = out.yaml;
-    form = out.form || form;
+    if (out.form) {
+      form = out.form;
+      loadFormDefaults();
+    }
     renderForm();
     formStatus("Applied to the YAML. Not saved. Validate, then Save. Save applies thresholds, policies, sources, probe timing, mode, the allowlist, and bgp.neighbors online. Any other change waits for a restart.");
   }, function (err) { formStatus(explain(err)); });
@@ -323,7 +515,7 @@ var wzProviders = [{name: "", source_ip: "", next_hop: ""}];
 var wzSuggestions = [];
 
 function showWizardStep(n) {
-  ["wz-1", "wz-2", "wz-3"].forEach(function (id, i) {
+  ["wz-1", "wz-2", "wz-3", "wz-4"].forEach(function (id, i) {
     document.getElementById(id).hidden = i + 1 !== n;
     var tab = document.getElementById("wz-tab-" + (i + 1));
     if (tab) tab.className = i + 1 === n ? "on" : "";
@@ -410,6 +602,25 @@ function wizardProblems(body) {
   var p = edgeProblems().concat(providerProblems());
   if (!body.prefix && body.host) p.push("Pinned host: enter the prefix it belongs to, or clear the host.");
   if (body.prefix && body.prefix.indexOf("/") < 0) p.push("Prefix: include a length, for example 198.51.100.0/24.");
+  return p.concat(flowProblems());
+}
+
+// wizardFlowListen is host:port from the optional flow step, or "" when
+// the collector is off. An IPv6 address is bracketed.
+function wizardFlowListen() {
+  if (!byId("wz-flow").checked) return "";
+  var addr = byId("wz-flow-addr").value.trim();
+  var port = byId("wz-flow-port").value.trim() || "2055";
+  if (addr.indexOf(":") >= 0 && addr.charAt(0) !== "[") addr = "[" + addr + "]";
+  return addr + ":" + port;
+}
+
+function flowProblems() {
+  var p = [];
+  if (!byId("wz-flow").checked) return p;
+  var port = Number(byId("wz-flow-port").value.trim() || "2055");
+  if (!(port >= 1 && port <= 65535 && Math.floor(port) === port)) p.push("Flow port: enter a UDP port from 1 to 65535.");
+  if (/\s/.test(byId("wz-flow-addr").value.trim())) p.push("Flow address: enter one IP address, or leave it empty.");
   return p;
 }
 
@@ -428,6 +639,8 @@ function runWizard() {
     }), storage: document.getElementById("wz-storage").checked};
   if (prefix) body.prefix = prefix;
   if (host) body.host = host;
+  var flow = wizardFlowListen();
+  if (flow) body.flow = {listen: flow};
   // inject is not a step: the body never carries a mode other than observe,
   // and the server refuses one if it is sent.
   body.mode = "observe";
@@ -509,6 +722,12 @@ document.getElementById("wz-next-2").addEventListener("click", function () {
 });
 document.getElementById("wz-back").addEventListener("click", function () { showWizardStep(1); });
 document.getElementById("wz-back-3").addEventListener("click", function () { showWizardStep(2); });
+document.getElementById("wz-next-3").addEventListener("click", function () {
+  wzErrors([]);
+  document.getElementById("wz-status").textContent = "";
+  showWizardStep(4);
+});
+document.getElementById("wz-back-4").addEventListener("click", function () { showWizardStep(3); });
 document.getElementById("wz-add-provider").addEventListener("click", function () {
   wzProviders.push({name: "", source_ip: "", next_hop: ""});
   renderWzProviders();
@@ -539,6 +758,20 @@ document.getElementById("form-add-allow").addEventListener("click", function () 
   renderAllow();
 });
 document.getElementById("sug-refresh").addEventListener("click", loadSuggestions);
+byId("form-add-rule").addEventListener("click", function () {
+  form.policies.rules.push({key: "", name: "", action: "ignore", providers: [], prefixes: [], asns: [], countries: [], traffic: "", max_loss_pct: "", max_rtt: ""});
+  renderRules();
+});
+byId("form-add-vip").addEventListener("click", function () {
+  form.vip.prefixes.push({key: "", prefix: "", host: ""});
+  renderVIPPrefixes();
+});
+["fl-enabled", "fl-listen", "fl-window", "fl-top-n", "fl-max-targets", "fl-tail", "fl-min-bytes", "fl-min-pct", "fl-exclude",
+  "vip-enabled", "vip-interval", "vip-max", "vip-asns",
+  "out-enabled", "out-min", "out-window", "out-loss", "out-rtt", "out-interval", "out-max", "out-ignore"].forEach(function (id) {
+  byId(id).addEventListener("change", readSections);
+  byId(id).addEventListener("input", readSections);
+});
 ["fm-mode", "fm-hold", "fm-cap", "fm-loss", "fm-rtt", "fm-rtt-pct", "fm-rounds", "fm-precedence", "fm-floor-loss", "fm-floor-rtt"].forEach(function (id) {
   document.getElementById(id).addEventListener("change", readKnobs);
   document.getElementById(id).addEventListener("input", readKnobs);
