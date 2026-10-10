@@ -49,7 +49,7 @@ probe:
   timeout: 1s
   packets: 4
   workers: 8
-  rate_limit_pps: 100000
+  rate_limit_pps: %d
 probers:
   - type: fixed
     config:
@@ -74,7 +74,7 @@ sources:
       window: 5m
       top_n: %d
 `, labASN, nextHopsV4[0], nextHopsV4[1], nextHopsV6[0], nextHopsV6[1],
-		routerAddr, pt.BGP, peerAddr, pt.HTTP, strings.TrimRight(dataDir, "/"), pt.Flow, max(1, p.FlowTopN))
+		routerAddr, pt.BGP, peerAddr, rateLimit(p), pt.HTTP, strings.TrimRight(dataDir, "/"), pt.Flow, max(1, p.FlowTopN))
 	if p.StaticTargets > 0 {
 		b.WriteString("  - type: static\n    config:\n      targets:\n")
 		for k := range p.StaticTargets {
@@ -83,4 +83,14 @@ sources:
 		}
 	}
 	return b.String()
+}
+
+// rateLimit is the generated probe.rate_limit_pps. The pr and soak
+// profiles leave it unset and keep 100000 so the fixed prober is not
+// what bounds the run. The rate profile sets 100, the operator default.
+func rateLimit(p Profile) int {
+	if p.RateLimitPPS > 0 {
+		return p.RateLimitPPS
+	}
+	return 100000
 }

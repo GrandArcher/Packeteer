@@ -27,6 +27,9 @@ type bucket struct {
 	minP  netip.Prefix
 	minB  uint64
 	minOK bool
+	// seen counts every prefix offered to this bucket, including ones the
+	// exact map refused. It is a fixed-size sketch (#125).
+	seen hll
 }
 
 // maxFlowHosts is how many destinations one prefix keeps. The probe
@@ -134,6 +137,7 @@ func (s *slide) addSub(at time.Time, p, sub netip.Prefix, host netip.Addr, n uin
 }
 
 func (b *bucket) add(p, sub netip.Prefix, host netip.Addr, n uint64, t traffic, max, subCap int) {
+	b.seen.add(p)
 	if c, ok := b.cells[p]; ok {
 		c.bytes += n
 		c.note(n, t)
@@ -263,6 +267,19 @@ func (b *bucket) evict(k int, n uint64) bool {
 	}
 	b.minOK = false
 	return true
+}
+
+// tracked is the distinct prefixes observed in the current window,
+// including prefixes the exact cells did not keep.
+func (s *slide) tracked(now time.Time) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.prune(now)
+	var acc hll
+	for _, b := range s.slots {
+		acc.merge(b.seen)
+	}
+	return int(acc.estimate())
 }
 
 func (s *slide) prune(now time.Time) {

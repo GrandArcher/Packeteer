@@ -19,12 +19,17 @@ import (
 
 // hungProber answers allow calls, then blocks until release. It does not
 // watch ctx: the per-probe deadline must not be what unblocks it.
+// Calls after pauseAfter, while still inside allow, wait on pause so a
+// test can finish those probes late in the round. Their result time is
+// then much newer than a prefix that never finishes.
 type hungProber struct {
 	plugin.Base
-	mu      sync.Mutex
-	calls   int
-	allow   int
-	release chan struct{}
+	mu         sync.Mutex
+	calls      int
+	allow      int
+	release    chan struct{}
+	pauseAfter int
+	pause      <-chan struct{}
 }
 
 func (p *hungProber) Probe(_ context.Context, req plugin.ProbeRequest) (plugin.ProbeResult, error) {
@@ -32,6 +37,9 @@ func (p *hungProber) Probe(_ context.Context, req plugin.ProbeRequest) (plugin.P
 	p.calls++
 	n := p.calls
 	p.mu.Unlock()
+	if p.pause != nil && n > p.pauseAfter && n <= p.allow {
+		<-p.pause
+	}
 	if n > p.allow {
 		<-p.release
 		return plugin.ProbeResult{}, errors.New("released")
@@ -263,16 +271,19 @@ func TestPartialRoundStalenessIsPerResult(t *testing.T) {
 	release := make(chan struct{})
 	defer close(release)
 	// First round is four probes (two prefixes, two providers). The next
-	// round finishes pfxA (two more) and blocks on pfxB.
-	prober := &hungProber{allow: 6, release: release}
+	// round's two pfxA probes wait on pause, so their times are near the
+	// end of the round, then the workers block on pfxB. The gap between
+	// those times is what the staleness poll has to observe.
+	pause := make(chan struct{})
+	prober := &hungProber{allow: 6, release: release, pauseAfter: 4, pause: pause}
 	var logs bytes.Buffer
 	log := slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	o := probe.Options{
 		Interval:     time.Second,
 		Timeout:      20 * time.Millisecond,
 		Packets:      1,
-		Workers:      2,
-		RoundTimeout: 1500 * time.Millisecond,
+		Workers:      1, // one prefix's providers finish before the next prefix starts
+		RoundTimeout: 2 * time.Second,
 		Logger:       log,
 	}
 	kick := make(chan struct{}, 1)
@@ -304,7 +315,7 @@ func TestPartialRoundStalenessIsPerResult(t *testing.T) {
 		MinRTTDelta:     15 * time.Millisecond,
 		HoldTime:        time.Hour,
 		MaxImprovements: 50,
-		MaxResultAge:    2 * time.Second,
+		MaxResultAge:    3 * time.Second,
 		Allowlist:       []netip.Prefix{pfxA, pfxB},
 	}, scorer)
 	ann := &memAnn{}
@@ -361,6 +372,12 @@ func TestPartialRoundStalenessIsPerResult(t *testing.T) {
 	if ann.count() != 2 {
 		t.Fatalf("both prefixes not announced: %d\n%s", ann.count(), logs.String())
 	}
+	// Release pfxA's probes 1.2s into the 2s round so they finish, and
+	// so they are much newer than pfxB when the deadline returns.
+	go func() {
+		time.Sleep(1200 * time.Millisecond)
+		close(pause)
+	}()
 	engine.RunOnce(context.Background())
 	if ann.count() != 2 {
 		t.Fatalf("withdrew before the unfinished prefix was stale:\n%s", logs.String())

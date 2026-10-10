@@ -744,6 +744,20 @@ func shareAtLeast(bytes, total, ppm uint64) bool {
 	return lo >= plo
 }
 
+// Tracked is how many distinct prefixes the window has seen, including
+// ones the 20,000 exact cells did not keep. The figure is a HyperLogLog
+// estimate. It does not add probe targets and it is not a volume.
+func (s *Source) Tracked() int {
+	if s == nil || s.win == nil {
+		return 0
+	}
+	now := s.now
+	if now == nil {
+		now = time.Now
+	}
+	return s.win.tracked(now())
+}
+
 // Volumes implements plugin.VolumeSource. Mbps is bytes over the configured
 // window. The list is not limited to top_n. It does not announce.
 func (s *Source) Volumes(ctx context.Context) ([]plugin.PrefixVolume, error) {

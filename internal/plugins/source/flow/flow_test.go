@@ -1084,4 +1084,39 @@ func TestPrefixCapBatchEviction(t *testing.T) {
 	if d := time.Since(start); d > 10*time.Second {
 		t.Fatalf("200000 new prefixes into a full bucket took %s", d)
 	}
+	if n := big.tracked(now); n < 20000 {
+		t.Fatalf("tracked %d, want the sketch to count past the 20000 exact cells", n)
+	}
+}
+
+func TestPassiveSketchCountsPastCap(t *testing.T) {
+	s := newSlide(time.Minute, 32)
+	now := time.Unix(1_700_000_000, 0)
+	heavy := netip.MustParsePrefix("198.51.100.0/24")
+	s.add(now, heavy, netip.Addr{}, 1<<40, trafficUnknown)
+	for i := range 5000 {
+		var a [16]byte
+		a[0], a[1], a[2], a[3] = 0x20, 0x01, 0x0d, 0xb8
+		a[13], a[14], a[15] = byte(i>>16), byte(i>>8), byte(i)
+		s.add(now, netip.PrefixFrom(netip.AddrFrom16(a), 128), netip.Addr{}, 1, trafficUnknown)
+	}
+	slot := s.slots[now.UnixNano()/int64(s.bucket)]
+	if len(slot.cells) > 32 {
+		t.Fatalf("exact cells = %d, cap 32", len(slot.cells))
+	}
+	top := s.top(now, 1, 0)
+	if len(top) != 1 || top[0].prefix != heavy {
+		t.Fatalf("heavy prefix evicted: %+v", top)
+	}
+	n := s.tracked(now)
+	if n < 3500 || n > 7000 {
+		t.Fatalf("tracked %d, want about 5001", n)
+	}
+	one := newSlide(time.Minute, 8)
+	for range 100 {
+		one.add(now, heavy, netip.Addr{}, 10, trafficUnknown)
+	}
+	if n := one.tracked(now); n < 1 || n > 3 {
+		t.Fatalf("one prefix tracked as %d", n)
+	}
 }

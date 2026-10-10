@@ -54,6 +54,18 @@ profiles:
       reconverge_seconds: 30
       shutdown_seconds: 20
       min_measured: 2500
+      # Active prefixes per hour (#125): packeteer_probe_prefix_commits
+      # after warmup, scaled to one hour. A prefix counts once per round
+      # that stored it. Steady state on this profile is about 3,000
+      # targets every 30s, 360,000 an hour. 180,000 is half of that, and
+      # it is also under 2,500 targets at two rounds a minute.
+      min_active_per_hour: 180000
+      # Passive prefixes (#125): last packeteer_flow_prefixes_tracked.
+      # Half of 20,000 records/s over 1.25M prefixes for a 5-minute
+      # window is on the order of a million distinct prefixes. The exact
+      # cells still stop at 20,000. 50,000 is past that cap, with room
+      # for the sketch's error.
+      min_passive_tracked: 50000
 
   # Opt-in (#103). Not the `load` job and not soak.yml. A human passes
   # the name: `bash lab/soak.sh IMAGE routes3m`. Same workload as `pr`
@@ -74,6 +86,28 @@ profiles:
     flow_top_n: 2000
     static_targets: 1000
     churn: 6000
+    budgets: {}
+
+  # Opt-in (#125). Not the `load` job and not soak.yml. A human passes
+  # the name: `bash lab/soak.sh IMAGE rate`. A 20,000-prefix table at
+  # the operator packet rate (100 per second). 375 pinned static targets
+  # is one 30s round for two same-family providers and 4 packets:
+  # 100 * 30 / (2 * 4). Flow top_n shares that budget, so a round may
+  # store only the prefixes that finished; the next pass continues the
+  # rest. Budgets stay empty: the run reports active prefixes per hour
+  # and passive prefixes tracked and does not fail a number. Do not
+  # point CI at this name. The `pr` profile is what checks those floors.
+  rate:
+    prefixes: 20000
+    duration: 2m
+    warmup: 30s
+    sample: 2s
+    flow_rate: 2000
+    flow_hot: 500
+    flow_top_n: 200
+    static_targets: 375
+    churn: 60
+    rate_limit_pps: 100
     budgets: {}
 
   # Weekly scheduled workflow (.github/workflows/soak.yml): the same load
@@ -99,3 +133,7 @@ profiles:
       reconverge_seconds: 30
       shutdown_seconds: 20
       min_measured: 2500
+      # Same floors as `pr` (#125). The weekly run is the same workload
+      # held longer, so the per-hour rate and the window estimate match.
+      min_active_per_hour: 180000
+      min_passive_tracked: 50000

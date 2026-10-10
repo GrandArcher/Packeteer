@@ -611,4 +611,10 @@ func TestMetricsRIBPrefixes(t *testing.T) {
 	if strings.Contains(string(Metrics(Snapshot{Mode: "observe"})), "packeteer_rib_prefixes") {
 		t.Fatal("rib series without bgp")
 	}
+	bare := string(Metrics(Snapshot{Mode: "observe"}))
+	for _, name := range []string{"packeteer_probe_prefix_commits 0", "packeteer_flow_prefixes_tracked 0"} {
+		if !strings.Contains(bare, name) {
+			t.Fatalf("metrics missing %s\n%s", name, bare)
+		}
+	}
 }

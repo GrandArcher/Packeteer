@@ -69,6 +69,10 @@ func Metrics(s Snapshot) []byte {
 	writeGauge(&b, "packeteer_probe_rtt_max_seconds", "Maximum RTT of the latest successful probe.", rttMax...)
 	writeGauge(&b, "packeteer_probe_loss_ratio", "Packet loss ratio of the latest successful probe, from 0 to 1.", loss...)
 	writeGauge(&b, "packeteer_probe_jitter_seconds", "Mean absolute inter-packet RTT difference of the latest successful probe.", jitter...)
+	writeGauge(&b, "packeteer_probe_prefix_commits", "Prefixes stored by the probe engine since start, once per prefix per round. The load test scales the increase to an hour.",
+		sample{value: float64(s.ProbePrefixCommits)})
+	writeGauge(&b, "packeteer_flow_prefixes_tracked", "Distinct destination prefixes the flow window has seen, including ones past the exact cell cap. A HyperLogLog estimate. Zero when no flow source is configured.",
+		sample{value: float64(s.FlowTracked)})
 
 	counts := map[string]float64{}
 	actions := append([]string(nil), decisionActions...)

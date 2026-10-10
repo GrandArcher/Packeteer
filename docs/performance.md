@@ -10,7 +10,7 @@ Packeteer's resource budgets, how CI measures them, and how to run the same test
 2. **Exports flows.** IPFIX at 20,000 records per second to Packeteer's `flow` source. Half the records go to 5,000 hot prefixes and half are spread over the whole table, so the busiest prefixes stay stable while nearly every other record is a prefix the window has not seen.
 3. **Churns the table.** 6,000 prefixes a minute are withdrawn and announced again (100 a second).
 4. **Probes many targets.** 1,000 static targets plus the flow source's top 2,000, through four providers, with the `fixed` prober (no packets leave the host). transit-b is faster, so about half the measured prefixes get a recommendation that observe never announces.
-5. **Measures.** Every few seconds it reads the Packeteer process from the host (`/proc/<pid>/status` and `/stat`: RSS, peak RSS, threads, CPU time), `GET /metrics` and `GET /api/overview` (latency, `packeteer_ready`, `packeteer_bgp_session_up`, `packeteer_rib_prefixes`), and the host's UDP `RcvbufErrors` (the collector's socket is in the host network namespace, so a datagram Packeteer was too slow to read is counted there).
+5. **Measures.** Every few seconds it reads the Packeteer process from the host (`/proc/<pid>/status` and `/stat`: RSS, peak RSS, threads, CPU time), `GET /metrics` and `GET /api/overview` (latency, `packeteer_ready`, `packeteer_bgp_session_up`, `packeteer_rib_prefixes`, `packeteer_probe_prefix_commits`, `packeteer_flow_prefixes_tracked`), and the host's UDP `RcvbufErrors` (the collector's socket is in the host network namespace, so a datagram Packeteer was too slow to read is counted there). Active prefixes per hour are the increase in `packeteer_probe_prefix_commits` after warmup, scaled to one hour (a prefix counts once per round that stored it). Passive prefixes are the last `packeteer_flow_prefixes_tracked`, a HyperLogLog estimate of distinct destinations in the flow window, including ones past the 20,000 exact cells.
 6. **Stops Packeteer.** `docker stop -t 30` (SIGTERM). The process must exit 0 and the router must see the session close.
 
 It fails, and CI goes red, when a figure is over its budget or an invariant breaks: the session or readiness drops during the soak, the RIB view is not whole once churn stops, observe sends the router a route, the process dies, or the stop is not clean.
@@ -31,6 +31,10 @@ The budgets live in [lab/soak/budgets.yaml](../lab/soak/budgets.yaml) and are se
 | Reconverge | Last churned batch back to a whole RIB view | ≤ 30 s | ≤ 30 s |
 | SIGTERM to exit | `docker stop` to process gone | ≤ 20 s | ≤ 20 s |
 | Prefixes measured | `/api/overview` `counts.measured` at the end | ≥ 2500 | ≥ 2500 |
+| Active prefixes per hour | Increase in `packeteer_probe_prefix_commits` after warmup, scaled to one hour (#125). A prefix counts once per round that stored it | ≥ 180000 | ≥ 180000 |
+| Passive prefixes tracked | Last `packeteer_flow_prefixes_tracked` (#125). HyperLogLog of the flow window, including prefixes the 20,000 exact cells did not keep | ≥ 50000 | ≥ 50000 |
+
+`rss_growth_mb` stays 384 on `pr` and 512 on `soak`. #125 does not re-baseline it. The sketch is 4 KiB per flow bucket, about 120 KiB for the 5-minute window (30 buckets), which does not move that RSS figure. #112 stays open.
 
 A run prints the table with the measured values, adds it to the GitHub job summary, and uploads the JSON result as an artifact (`load-result`, `soak-result`).
 
@@ -52,13 +56,16 @@ bash lab/soak.sh packeteer:local smoke           # 20k prefixes, 1 minute, repor
 bash lab/soak.sh packeteer:local pr              # what CI runs (1,250,000 prefixes)
 bash lab/soak.sh packeteer:local soak 24h        # a 24-hour soak
 bash lab/soak.sh packeteer:local routes3m        # opt-in 3,000,000 prefixes; not CI
+bash lab/soak.sh packeteer:local rate            # opt-in 100 pps, 20k prefixes; not CI
 ```
 
 `routes3m` (#103) is the same observe workload as `pr` with a 3 million prefix table. Nothing selects it unless a human passes that name. Its budgets are empty, so the run records learn time, RSS, and API latency and does not fail a number. The 1.25 million table measured about 4.5 GiB RSS (about 1.7 KB of live heap per prefix, and the collector lets the heap grow to about twice that). Three million prefixes is 2.4 times that table, on the order of 11 GiB before that headroom, so do not start `routes3m` on a host with only a few gigabytes free. Those figures are a scale from the measured `pr` run, not a 3 million measurement. With no `learn_seconds` budget the harness waits up to 30 minutes for the table.
+
+`rate` (#125) is a 20,000-prefix table at `probe.rate_limit_pps` 100, the operator default. 375 pinned static targets is one 30-second round for two same-family providers and 4 packets (`100 * 30 / (2 * 4)`). Flow `top_n` shares that budget, so a round may store only the prefixes that finished. Its budgets are empty. CI does not run it. The `pr` and `soak` profiles are what check the active and passive floors, and they still generate `rate_limit_pps: 100000` so the fixed prober is not what bounds those runs.
 
 The ports are on the host loopback (`11179` BGP, `12055` IPFIX, `18081` ops API); change them with the harness flags (`go run ./lab/soak run -h`) if they are taken. `go run ./lab/soak config -profile pr` prints the Packeteer config the test mounts.
 
 ## CI
 
-- The `load` job in `ci.yml` runs the `pr` profile (1,250,000 prefixes, the budgets above) on every pull request and push to `main`. It does not run `routes3m`.
-- `soak.yml` runs the `soak` profile weekly (Sunday 03:17 UTC) and on demand. A GitHub-hosted job stops at 6 hours, so the scheduled soak phase is 5h30m. For 24 hours, start it by hand with `duration: 24h` and `runner:` set to a self-hosted runner label. That workflow does not run `routes3m` either.
+- The `load` job in `ci.yml` runs the `pr` profile (1,250,000 prefixes, the budgets above) on every pull request and push to `main`. It does not run `routes3m` or `rate`.
+- `soak.yml` runs the `soak` profile weekly (Sunday 03:17 UTC) and on demand. A GitHub-hosted job stops at 6 hours, so the scheduled soak phase is 5h30m. For 24 hours, start it by hand with `duration: 24h` and `runner:` set to a self-hosted runner label. That workflow does not run `routes3m` or `rate` either.

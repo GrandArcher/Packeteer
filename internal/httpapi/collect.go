@@ -20,14 +20,15 @@ type Collector struct {
 	mode      string
 	providers []config.Provider
 
-	mu        sync.RWMutex
-	started   bool
-	engine    *probe.Engine
-	decider   *policy.Engine
-	view      *rib.View
-	telemetry func() []plugin.Usage
-	exchanges []exchange.Exchange
-	hops      func() []rib.NextHopCount
+	mu          sync.RWMutex
+	started     bool
+	engine      *probe.Engine
+	decider     *policy.Engine
+	view        *rib.View
+	telemetry   func() []plugin.Usage
+	flowTracked func() int
+	exchanges   []exchange.Exchange
+	hops        func() []rib.NextHopCount
 }
 
 // NewCollector copies providers. The caller may reuse the slice afterward.
@@ -43,6 +44,14 @@ func NewCollector(version, mode string, providers []config.Provider) *Collector 
 func (c *Collector) Attach(engine *probe.Engine, decider *policy.Engine, view *rib.View) {
 	c.mu.Lock()
 	c.engine, c.decider, c.view = engine, decider, view
+	c.mu.Unlock()
+}
+
+// SetFlowTracked installs the read of passively tracked flow prefixes
+// (#125). Nil reports zero. The function may run while Snapshot is called.
+func (c *Collector) SetFlowTracked(fn func() int) {
+	c.mu.Lock()
+	c.flowTracked = fn
 	c.mu.Unlock()
 }
 
@@ -76,7 +85,7 @@ func (c *Collector) SetStarted(v bool) {
 func (c *Collector) Snapshot() Snapshot {
 	c.mu.RLock()
 	started, engine, decider, view, telemetry := c.started, c.engine, c.decider, c.view, c.telemetry
-	exs, hops := c.exchanges, c.hops
+	exs, hops, flowTracked := c.exchanges, c.hops, c.flowTracked
 	c.mu.RUnlock()
 
 	in := Input{
@@ -92,6 +101,10 @@ func (c *Collector) Snapshot() Snapshot {
 	if engine != nil {
 		in.Status = engine.Providers()
 		in.Results = engine.Results()
+		in.ProbePrefixCommits = engine.PrefixCommits()
+	}
+	if flowTracked != nil {
+		in.FlowTracked = flowTracked()
 	}
 	if decider != nil {
 		in.Decisions, in.DecidedAt = decider.Decisions()
