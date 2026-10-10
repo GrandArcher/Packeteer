@@ -35,6 +35,13 @@ func TestUIShell(t *testing.T) {
 				t.Errorf("%s missing %s", e.Name(), id)
 			}
 		}
+		// The search slot does not query (#172). The events slot opens Events.
+		if !strings.Contains(body, `id="top-search" type="search" placeholder="Search" readonly`) {
+			t.Errorf("%s search slot is not a read-only placeholder", e.Name())
+		}
+		if !strings.Contains(body, `href="/events.html">Events`) {
+			t.Errorf("%s events slot does not open the Events page", e.Name())
+		}
 		bi, ni := strings.Index(body, `id="banner"`), strings.Index(body, `<nav class="sidenav"`)
 		if bi < 0 || ni < 0 || bi > ni {
 			t.Errorf("%s mode banner is not before the navigation", e.Name())
@@ -81,7 +88,7 @@ func TestUIShell(t *testing.T) {
 	}
 	want := map[string][]string{
 		"index.html":           {`<body data-page="overview" data-live="app">`, `id="tiles"`, `id="setup"`, `id="federation-section" hidden`, "POPs"},
-		"improvements.html":    {`<body data-page="improvements" data-live="app">`, `id="improvements"`, `id="improvements-title"`},
+		"improvements.html":    {`<body data-page="improvements" data-live="app">`, `id="improvements"`, `id="improvements-title">Recommended improvements`},
 		"prefixes.html":        {`<body data-page="prefixes" data-live="app">`, `id="prefixes"`, `id="asn-map"`, "ASN map", "MED"},
 		"providers.html":       {`<body data-page="providers" data-live="app">`, `id="providers"`, "#148"},
 		"reports.html":         {`<body data-page="reports" data-live="app">`, `id="report-name"`, `id="report-csv"`},
