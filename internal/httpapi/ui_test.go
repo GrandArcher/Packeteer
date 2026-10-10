@@ -154,7 +154,10 @@ type uiEnv struct {
 	tokens map[plugin.Role]string
 }
 
-func newUI(t *testing.T) *uiEnv {
+func newUI(t *testing.T) *uiEnv { return newUIWith(t, nil) }
+
+// newUIWith is newUI with a chance to set more server options.
+func newUIWith(t *testing.T, extra func(*Options)) *uiEnv {
 	t.Helper()
 	e := &uiEnv{store: authtest.New(), dash: &memDashboards{}, subs: &fakeSubs{}, tokens: map[plugin.Role]string{}}
 	svc, err := auth.New(auth.Options{Users: e.store})
@@ -163,8 +166,12 @@ func newUI(t *testing.T) *uiEnv {
 	}
 	ed, path := newEditor(t)
 	e.path = path
-	srv, err := New(Options{Auth: svc, Audit: auth.NewAuditor(e.store, nil, nil), ConfigEditor: ed, Dashboards: e.dash, Subscriptions: e.subs,
-		Snapshot: func() Snapshot { return Assemble(sampleInput()) }})
+	opt := Options{Auth: svc, Audit: auth.NewAuditor(e.store, nil, nil), ConfigEditor: ed, Dashboards: e.dash, Subscriptions: e.subs,
+		Snapshot: func() Snapshot { return Assemble(sampleInput()) }}
+	if extra != nil {
+		extra(&opt)
+	}
+	srv, err := New(opt)
 	if err != nil {
 		t.Fatal(err)
 	}

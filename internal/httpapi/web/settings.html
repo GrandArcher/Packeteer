@@ -191,6 +191,37 @@
           <label>Max targets <input id="out-max" type="text" inputmode="numeric" placeholder="100" spellcheck="false"></label>
           <label>Ignore ASNs <input id="out-ignore" type="text" placeholder="64500" spellcheck="false"></label>
         </fieldset>
+        <h3>Inbound optimization <span id="in-badge" class="badge mode-unknown">…</span></h3>
+        <p class="tag">The <code>inbound</code> block (docs/inbound.md). <span id="in-badge-text">Observe logs steers and announces nothing.</span> The form never turns inject on: that is a YAML edit after the inject checklist, and Save asks you to confirm it. Unchecking removes the block, announcer included. Separate lists with commas. Each trigger you moderate is only suggested, even in inject. The announcer (<code>inbound.announcer</code>) stays in the YAML. <span id="in-announcer"></span></p>
+        <fieldset id="form-inbound" class="form">
+          <label class="check"><input id="in-enabled" type="checkbox"> Inbound optimization on</label>
+          <label>Mode
+            <select id="in-mode">
+              <option value="observe">observe</option>
+              <option value="suggest">suggest</option>
+            </select>
+          </label>
+          <label>Your prefixes to steer <input id="in-prefixes" type="text" placeholder="203.0.113.0/24" spellcheck="false"></label>
+          <label>Steer local pref <input id="in-local-pref" type="text" inputmode="numeric" placeholder="1" spellcheck="false"></label>
+          <label>Release (% of commit) <input id="in-release" type="text" inputmode="decimal" placeholder="90" spellcheck="false"></label>
+          <label>Steer cap <input id="in-cap" type="text" inputmode="numeric" placeholder="max_improvements" spellcheck="false"></label>
+          <label class="check"><input id="in-mod-commit" type="checkbox"> Commit steers are suggestions only</label>
+          <label class="check"><input id="in-mod-perf" type="checkbox"> Performance steers are suggestions only</label>
+          <label class="check"><input id="in-perf" type="checkbox"> Performance trigger on</label>
+          <label>Loss points over best <input id="in-perf-loss" type="text" inputmode="decimal" placeholder="5 (negative: off)" spellcheck="false"></label>
+          <label>Latency ms over best <input id="in-perf-latency" type="text" inputmode="decimal" placeholder="50 (negative: off)" spellcheck="false"></label>
+          <label>Minimum common prefixes <input id="in-perf-min" type="text" inputmode="numeric" placeholder="3" spellcheck="false"></label>
+          <label>Performance release (%) <input id="in-perf-release" type="text" inputmode="decimal" placeholder="50" spellcheck="false"></label>
+          <label class="check"><input id="in-damp-off" type="checkbox"> Damping off</label>
+          <label>Damping confirm <input id="in-damp-confirm" type="text" placeholder="1m" spellcheck="false"></label>
+          <label>Damping backoff <input id="in-damp-backoff" type="text" inputmode="decimal" placeholder="2" spellcheck="false"></label>
+          <label>Damping max hold <input id="in-damp-max" type="text" placeholder="8x hold time" spellcheck="false"></label>
+        </fieldset>
+        <h3>Anomaly rules <span id="an-badge" class="badge mode-unknown">…</span></h3>
+        <p class="tag">The <code>anomaly.rules</code> list (docs/anomaly.md). A rule turns a detected anomaly into a mitigation rule, and only the mitigation controller acts on it: its mode, allowlist, rule cap, and learned-RIB check apply. <span id="an-badge-text"></span> The first matching rule wins. The detector, source, and caps stay in the YAML, and the form cannot add a detector.</p>
+        <p id="an-state" class="tag"></p>
+        <div id="form-anomaly-rules"></div>
+        <button type="button" id="form-add-anomaly-rule">+ Anomaly rule</button>
         <div class="controls">
           <button type="button" id="form-apply">Apply form to YAML</button>
           <button type="button" id="form-reload">Reload form from YAML</button>

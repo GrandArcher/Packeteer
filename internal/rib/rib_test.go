@@ -489,6 +489,48 @@ func TestMoreSpecificsListsOnlyLearnedPrefixesInside(t *testing.T) {
 	}
 }
 
+func TestLearnedWithinListsLearnedPrefixesInsideOrEqual(t *testing.T) {
+	nbr := netip.MustParseAddr("192.0.2.254")
+	v := &View{
+		neighbors: map[netip.Addr]bool{nbr: true},
+		routes:    map[netip.Prefix]Route{},
+		adj:       map[netip.Prefix]pathSet{},
+	}
+	for _, s := range []string{"198.51.100.0/24", "198.51.100.0/25", "198.51.101.0/24", "203.0.113.0/24", "203.0.113.128/25", "0.0.0.0/0"} {
+		if !v.applyPath(learned(t, s, "192.0.2.1", nbr.String(), 100, false)) {
+			t.Fatalf("%s did not publish", s)
+		}
+	}
+	pf := netip.MustParsePrefix
+	got, trunc := v.LearnedWithin([]netip.Prefix{pf("203.0.113.0/24"), pf("198.51.100.0/24"), pf("2001:db8::/32")}, nil, 10)
+	want := []netip.Prefix{pf("198.51.100.0/24"), pf("198.51.100.0/25"), pf("203.0.113.0/24"), pf("203.0.113.128/25")}
+	if !slices.Equal(got, want) || trunc {
+		t.Fatalf("LearnedWithin = %v truncated=%v, want %v (equal or inside, learned only, no default)", got, trunc, want)
+	}
+	// An allowlist of everything still never returns the default route.
+	if got, _ := v.LearnedWithin([]netip.Prefix{pf("0.0.0.0/0")}, nil, 10); slices.Contains(got, pf("0.0.0.0/0")) || len(got) != 5 {
+		t.Fatalf("default route listed or missing: %v", got)
+	}
+	got, trunc = v.LearnedWithin([]netip.Prefix{pf("198.51.100.0/24"), pf("203.0.113.0/24")}, nil, 2)
+	if len(got) != 2 || !trunc {
+		t.Fatalf("limit 2 = %v truncated=%v", got, trunc)
+	}
+	got, _ = v.LearnedWithin([]netip.Prefix{pf("198.51.100.0/24"), pf("203.0.113.0/24")}, func(p netip.Prefix) bool { return p.Bits() == 25 }, 10)
+	if !slices.Equal(got, []netip.Prefix{pf("198.51.100.0/25"), pf("203.0.113.128/25")}) {
+		t.Fatalf("filtered = %v", got)
+	}
+	if got, _ := v.LearnedWithin(nil, nil, 10); len(got) != 0 {
+		t.Fatalf("no parents = %v", got)
+	}
+	// A withdrawn prefix is not offered.
+	if !v.applyPath(learned(t, "198.51.100.0/25", "192.0.2.1", nbr.String(), 100, true)) {
+		t.Fatal("withdraw did not publish")
+	}
+	if got, _ := v.LearnedWithin([]netip.Prefix{pf("198.51.100.0/24")}, nil, 10); !slices.Equal(got, []netip.Prefix{pf("198.51.100.0/24")}) {
+		t.Fatalf("after withdraw = %v", got)
+	}
+}
+
 func TestRouteHoldIsNegotiatedHoldTime(t *testing.T) {
 	var none *View
 	if got := none.RouteHold(context.Background()); got != bgpHoldTime*time.Second {

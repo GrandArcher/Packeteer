@@ -7,6 +7,7 @@ import (
 	"mime"
 	"net/http"
 	"net/netip"
+	"strings"
 	"time"
 
 	"github.com/GrandArcher/Packeteer/internal/mitigation"
@@ -22,6 +23,15 @@ type MitigationControl interface {
 	Add(mitigation.Request) (mitigation.Rule, error)
 	Remove(id string) bool
 }
+
+// MitigationCandidates is the prefix picker's read-only view (#131): the
+// prefixes in the learned RIB view that sit inside the mitigation
+// allowlist and contain q. Ready is false until the RIB view is ready (or
+// when there is none). The function only reads.
+type MitigationCandidates func(q string, limit int) (prefixes []string, truncated, ready bool)
+
+// MaxCandidates is how many picker prefixes one request returns.
+const MaxCandidates = 100
 
 type mitigationRequest struct {
 	Prefix string `json:"prefix"`
@@ -129,4 +139,43 @@ func (s *Server) handleMitigationRemove(w http.ResponseWriter, r *http.Request) 
 	}
 	s.log.Info("mitigation rule removed through the API", "id", r.PathValue("id"), "remote", r.RemoteAddr)
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// SetMitigationCandidates installs the prefix picker's source (#131). It
+// may be called after New, once the RIB view exists.
+func (s *Server) SetMitigationCandidates(fn MitigationCandidates) {
+	if s == nil {
+		return
+	}
+	s.candidates.Store(fn)
+}
+
+// handleMitigationCandidates lists learned prefixes a rule may name. It
+// is the picker behind the Protection form. It writes nothing; the add
+// call still checks the allowlist and the learned RIB, and only inject
+// announces.
+func (s *Server) handleMitigationCandidates(w http.ResponseWriter, r *http.Request) {
+	body := struct {
+		Enabled   bool     `json:"enabled"`
+		Ready     bool     `json:"ready"`
+		Allowlist []string `json:"allowlist"`
+		Prefixes  []string `json:"prefixes"`
+		Truncated bool     `json:"truncated"`
+	}{Allowlist: []string{}, Prefixes: []string{}}
+	if s.mitigation != nil {
+		body.Enabled = true
+		body.Allowlist = s.mitigation.Status().Allowlist
+		if fn, ok := s.candidates.Load().(MitigationCandidates); ok && fn != nil {
+			q := strings.TrimSpace(r.URL.Query().Get("q"))
+			if len(q) > 64 {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "q is too long"})
+				return
+			}
+			body.Prefixes, body.Truncated, body.Ready = fn(q, MaxCandidates)
+			if body.Prefixes == nil {
+				body.Prefixes = []string{}
+			}
+		}
+	}
+	writeJSON(w, http.StatusOK, body)
 }

@@ -540,11 +540,15 @@ function renderMitigation(data) {
     summary.appendChild(el("span", "v", kv[1]));
   });
   root.appendChild(summary);
+  // The Protection form (#131) decides whether this account may remove a
+  // rule; the server checks again on every call.
+  if (typeof protectionUpdate === "function") protectionUpdate(data);
+  var canRemove = typeof protRemoveCell === "function" && typeof protCanWrite !== "undefined" && protCanWrite;
   var rules = data.rules || [];
   if (!rules.length) {
     root.appendChild(el("p", "empty", "No rules."));
   } else {
-    var t = table(["Prefix", "Action", "Detail", "State", "Expires", "Reason"]);
+    var t = table(["Prefix", "Action", "Detail", "State", "Expires", "Reason"].concat(canRemove ? ["Remove"] : []));
     rules.forEach(function (r) {
       var tr = el("tr");
       tr.appendChild(el("td", "mono", r.prefix));
@@ -555,6 +559,7 @@ function renderMitigation(data) {
       tr.appendChild(st);
       tr.appendChild(el("td", "", fmtTime(r.expires)));
       tr.appendChild(el("td", "", r.reason || ""));
+      if (canRemove) tr.appendChild(protRemoveCell(r));
       t.body.appendChild(tr);
     });
     root.appendChild(t.table);

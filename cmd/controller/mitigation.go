@@ -6,10 +6,12 @@ import (
 	"fmt"
 	"log/slog"
 	"net/netip"
+	"strings"
 	"time"
 
 	"github.com/GrandArcher/Packeteer/internal/config"
 	"github.com/GrandArcher/Packeteer/internal/geoip"
+	"github.com/GrandArcher/Packeteer/internal/httpapi"
 	"github.com/GrandArcher/Packeteer/internal/mitigation"
 	"github.com/GrandArcher/Packeteer/internal/pluginhost"
 	"github.com/GrandArcher/Packeteer/internal/rib"
@@ -155,4 +157,35 @@ func (m mitigationControl) Remove(id string) bool {
 		m.poke()
 	}
 	return ok
+}
+
+// wireMitigationCandidates gives the Protection form's prefix picker the
+// learned prefixes inside the mitigation allowlist (#131). It only reads
+// the RIB view; the add call still checks the allowlist and the learned
+// RIB, and only inject announces.
+func wireMitigationCandidates(srv *httpapi.Server, mit *mitigation.Controller, view *rib.View) {
+	if srv == nil || mit == nil {
+		return
+	}
+	srv.SetMitigationCandidates(func(q string, limit int) ([]string, bool, bool) {
+		if view == nil || !view.Ready() {
+			return nil, false, false
+		}
+		var allow []netip.Prefix
+		for _, s := range mit.Status().Allowlist {
+			if p, err := netip.ParsePrefix(s); err == nil {
+				allow = append(allow, p)
+			}
+		}
+		var keep func(netip.Prefix) bool
+		if q != "" {
+			keep = func(p netip.Prefix) bool { return strings.Contains(p.String(), q) }
+		}
+		got, trunc := view.LearnedWithin(allow, keep, limit)
+		out := make([]string, len(got))
+		for i, p := range got {
+			out[i] = p.String()
+		}
+		return out, trunc, true
+	})
 }

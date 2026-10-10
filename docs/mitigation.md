@@ -108,6 +108,8 @@ curl -u ops:secret -X DELETE http://127.0.0.1:8080/api/mitigations/<id>
 
 `POST` returns `201` with the rule, `400` for an invalid rule (outside the allowlist, host bits set, unknown action or target, bad match, unknown country, TTL out of bounds), and `409` when `max_rules` is reached or a FlowSpec rule would send a route another rule already sends. A replaced rule does not count twice. `GET` lists each rule with `routes`, `announced` and, when it is not on the wire, `pending` (the reason).
 
+The Protection page has a form for the same two calls (#131, [ui.md](ui.md#mitigation-inbound-and-anomaly-rules-131)). Its prefix picker reads `GET /api/mitigations/candidates?q=` (viewer): the prefixes in the learned RIB view that equal or sit inside `mitigation.allowlist` and contain `q`, at most 100, with `ready`, `truncated`, and `allowlist`. It only reads; the checks above still run on every `POST`.
+
 ## Monitor, feed, and history
 
 - **Monitor.** The dashboard's Threat mitigation section shows the rules, their state, and routes held against `max_rules`. `/metrics` has `packeteer_mitigation_rules{action,state}`, `packeteer_mitigation_routes_held`, `packeteer_mitigation_routes_announced`, and `packeteer_mitigation_max_rules`.

@@ -110,6 +110,8 @@ type Server struct {
 	// row (#102). Nil means there is nothing to suggest. It must not write
 	// config or announce.
 	suggest atomic.Value
+	// candidates is the Protection form's prefix picker (#131).
+	candidates atomic.Value
 	// apply, when set, applies a file that was just written and whose
 	// every change can run online (#128). Nil leaves the file for a
 	// restart or SIGHUP. It may be stored after New, once the reloader
