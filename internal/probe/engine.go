@@ -855,7 +855,6 @@ func (e *Engine) targetsFrom(ctx context.Context, s NamedSource) (ts []plugin.Ta
 		}
 	}
 	ts, err = e.oneSource(ctx, s)
-	called = true
 	if err != nil && (errors.Is(err, errSourceBusy) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled)) {
 		return nil, err, true
 	}

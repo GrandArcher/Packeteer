@@ -1,0 +1,11 @@
+version: "2"
+run:
+  timeout: 5m
+# Conservative set. errcheck and staticcheck are deferred: they flag many
+# pre-existing findings (unchecked fmt.Fprintf to stderr, nil contexts in tests).
+linters:
+  default: none
+  enable:
+    - govet
+    - ineffassign
+    - unused

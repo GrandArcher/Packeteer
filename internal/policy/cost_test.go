@@ -255,8 +255,7 @@ func TestPerformanceDisplacesCostAtCap(t *testing.T) {
 // rogue is a planner that proposes whatever it is told.
 type rogue struct {
 	plugin.Base
-	moves  []plugin.PlanMove
-	policy bool
+	moves []plugin.PlanMove
 }
 
 func (r *rogue) Score(p plugin.PathStats) float64 {
