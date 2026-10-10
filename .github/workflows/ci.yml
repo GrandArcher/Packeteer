@@ -129,12 +129,31 @@ jobs:
             -v "$PWD/config.example.yaml:/etc/packeteer/config.yaml:ro" packeteer:ci
           up
           curl -fsS "$base/api/overview" | tee /tmp/ov1.json | jq -e '.mode == "observe" and .setup[0].id == "sources" and .counts.providers == 2'
-          bash lab/ui-smoke.sh "$base/" 'Observe mode: Packeteer measures and recommends. Nothing is announced.' \
-            'data-hint="sources"' 'Nothing to probe yet' 'no data yet' 'Recommended improvements' 'mode-observe' \
-            --absent 'Cannot reach' 'Inject mode' 'Active improvements'
-          bash lab/ui-smoke.sh "$base/settings.html" 'The config editor is off' \
+          # The shell (#170): the mode banner is first, each area has its own
+          # URL, and a reload of that URL is the page. Observe says it
+          # announces nothing. Empty areas name their issue.
+          bash lab/ui-smoke.sh "$base/" 'Observe mode: Packeteer measures and recommends. It announces nothing.' \
+            'data-hint="sources"' 'Nothing to probe yet' 'mode-observe' 'aria-current="page"' \
+            'href="/improvements.html"' 'href="/prefixes.html"' 'href="/settings.html"' 'id="search-slot"' 'id="events-slot"' 'id="account"' \
+            --absent 'Cannot reach' 'Inject mode' 'Active improvements' 'no data yet'
+          bash lab/ui-smoke.sh "$base/improvements.html" 'Recommended improvements' 'It announces nothing.' 'mode-observe' \
+            --absent 'Active improvements' 'Cannot reach'
+          bash lab/ui-smoke.sh "$base/providers.html" 'no data yet' 'It announces nothing.' '#148' \
+            --absent 'Cannot reach'
+          bash lab/ui-smoke.sh "$base/prefixes.html" 'ASN map' 'It announces nothing.' \
+            --absent 'Cannot reach'
+          bash lab/ui-smoke.sh "$base/graphs.html" '#129' 'It announces nothing.'
+          bash lab/ui-smoke.sh "$base/commit.html" '#174' 'It announces nothing.'
+          bash lab/ui-smoke.sh "$base/policies.html" '#130' 'It announces nothing.'
+          bash lab/ui-smoke.sh "$base/protection.html" '#131' 'Threat mitigation' 'It announces nothing.'
+          bash lab/ui-smoke.sh "$base/reports.html" 'CSV' 'It announces nothing.'
+          bash lab/ui-smoke.sh "$base/troubleshooting.html" 'Looking glass' 'It announces nothing.'
+          bash lab/ui-smoke.sh "$base/events.html" '#173' 'It announces nothing.'
+          bash lab/ui-smoke.sh "$base/admin.html" '#175' 'It announces nothing.' \
+            --absent 'Your account may not read this page.'
+          bash lab/ui-smoke.sh "$base/settings.html" 'The config editor is off' 'It announces nothing.' \
             '>Name</span>' '>Probe source</span>' '>Next hop</span>'
-          bash lab/ui-smoke.sh "$base/dashboards.html" 'Custom dashboards' 'Recommended improvements' \
+          bash lab/ui-smoke.sh "$base/dashboards.html" 'Custom dashboards' 'Recommended improvements' 'It announces nothing.' \
             --absent 'Active improvements'
           stop
           # 2. A first-run file with only the essentials (no mode key, no
@@ -167,8 +186,12 @@ jobs:
           cat /tmp/ov2.json
           test "$ok" = 1
           jq -e '.mode == "observe" and (.setup | map(.id) | index("sources")) == null and (.setup | map(.id) | index("bgp")) != null' /tmp/ov2.json
-          bash lab/ui-smoke.sh "$base/" 'Observe mode' '127.0.0.1/32' '1 of 1' ' ms' 'data-hint="bgp"' 'data-hint="history"' 'mode-observe' \
+          bash lab/ui-smoke.sh "$base/" 'Observe mode' '1 of 1' 'data-hint="bgp"' 'data-hint="history"' 'mode-observe' 'It announces nothing.' \
             --absent 'data-hint="sources"' 'Cannot reach' 'no data yet' 'Active improvements'
+          bash lab/ui-smoke.sh "$base/prefixes.html" '127.0.0.1/32' ' ms' 'It announces nothing.' \
+            --absent 'Cannot reach' 'Active improvements'
+          bash lab/ui-smoke.sh "$base/providers.html" 'It announces nothing.' \
+            --absent 'no data yet' 'Cannot reach'
           test "$(curl -fsS "$base/api/improvements" | jq '.improvements | length')" = 0
           stop
       - name: history survives a container restart (mounted volume, observe)
@@ -301,7 +324,7 @@ jobs:
           # widget says Recommended in observe. The provider since time
           # is the dashboard's local format, not the raw ISO string.
           bash lab/ui-smoke.sh http://127.0.0.1:18089/ 'mode-observe' \
-            'Observe mode: Packeteer measures and recommends. Nothing is announced.' \
+            'Observe mode: Packeteer measures and recommends. It announces nothing.' \
             --absent 'mode-inject'
           bash lab/ui-smoke.sh http://127.0.0.1:18089/settings.html \
             '>Name</span>' '>Probe source</span>' '>Next hop</span>' '>Cost</span>' '>Commit</span>' \

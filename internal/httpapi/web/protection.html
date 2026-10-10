@@ -5,10 +5,10 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="referrer" content="no-referrer">
 <meta name="robots" content="noindex">
-<title>Packeteer</title>
+<title>Packeteer protection</title>
 <link rel="stylesheet" href="/app.css">
 </head>
-<body data-page="overview" data-live="app">
+<body data-page="protection" data-live="app">
 <div id="banner" class="banner" role="status" hidden></div>
 <div id="conn" class="conn" role="alert" hidden></div>
 <div class="app">
@@ -46,34 +46,16 @@
   <button type="button" id="refresh">Refresh</button>
 </header>
 <main>
-  <section id="overview-section">
-    <h2>Overview</h2>
-    <div id="tiles" class="tiles"><p class="empty">Loading…</p></div>
-    <div id="setup"></div>
-    <p id="features" class="tag"></p>
+  <section id="protection-empty">
+    <h2>Protection</h2>
+    <p class="empty">Forms for mitigation, inbound, and anomaly rules are not on this page yet. They are tracked in #131.</p>
   </section>
-  <section id="federation-section" hidden>
-    <h2>POPs</h2>
-    <p class="tag">Central view of every federated instance (multi-POP). Peer data is used for decisions only while fresh. Nothing here announces.</p>
-    <div id="federation"></div>
+  <section id="mitigation-section" hidden>
+    <h2>Threat mitigation</h2>
+    <p class="tag">Read-only monitor of RTBH, redirect, and FlowSpec rules and their recent changes. Rules are added and removed through <code>/api/mitigations</code> with basic auth. The mitigations report has the stored history.</p>
+    <div id="mitigation"></div>
   </section>
 </main>
-
-<footer>
-  <a href="/api/overview">overview</a>
-  <a href="/metrics">metrics</a>
-  <a href="/api/providers">providers</a>
-  <a href="/api/probes">probes</a>
-  <a href="/api/prefixes">prefixes</a>
-  <a href="/api/decisions">decisions</a>
-  <a href="/api/improvements">improvements</a>
-  <a href="/api/mitigations">mitigations</a>
-  <a href="/api/federation">federation</a>
-  <a href="/api/reports">reports</a>
-  <a href="/api/troubleshoot">troubleshoot</a>
-  <a href="/api/dashboards">dashboards</a>
-  <a href="/api/subscriptions">subscriptions</a>
-</footer>
 </div>
 </div>
 <script src="/shell.js"></script>
