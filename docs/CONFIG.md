@@ -466,7 +466,7 @@ Scheduled email report subscriptions (#34). Each entry emails one stored report 
 | Key | Default | Meaning |
 |---|---|---|
 | `name` | none | Required, unique. 1–63 of `a-z`, `0-9`, `_`, `-`. |
-| `report` | none | Required. A report name from `/api/reports` (`summary`, `improvements`, `causes`, `performance`, `providers`, `prefixes`, `asns`, `countries`, `probes`, `savings`, `mitigations`, `anomalies`). |
+| `report` | none | Required. A report name from `/api/reports` (`summary`, `improvements`, `causes`, `performance`, `providers`, `prefixes`, `asns`, `countries`, `probes`, `savings`, `timeseries`, `mitigations`, `anomalies`). |
 | `schedule` | none | Required. `daily`, `weekly`, or `monthly` (the 1st of the month). |
 | `at` | `06:00` | UTC time of day, `HH:MM`. |
 | `weekday` | `monday` | For `weekly` only: `monday` … `sunday`. |
@@ -1149,7 +1149,7 @@ It also keeps each user's custom dashboards (#34, `/api/dashboards`) with the us
 
 Country comes from the first `rules` policy that has a `geoip_db`. With none, the `countries` report is empty. Volume is the flow window or a static target's `mbps`.
 
-Reports (`/api/reports/<name>`, JSON or `?format=csv`, and the dashboard): `summary`, `improvements`, `causes` (started per UTC day by cause), `performance` (average loss and RTT before and after, by cause), `providers` (probes, failure rate, average loss, RTT, jitter, improvements onto and off each provider, hours steered onto it), `prefixes`, `asns`, `countries` (`sort=problems`, the default, then `volume` or `loss`), `probes` (per UTC day), and `savings`. `est_savings` is `cost_delta` times volume, treated as a monthly rate; `accrued` is that rate times the hours active inside the range divided by 730. Probe figures are daily rollups, so a range that starts mid-day includes that whole UTC day; improvement figures use the exact range. Query: `days` (default 7, at most 3660), or `from` and `to` (RFC 3339 or `YYYY-MM-DD`, UTC), and `limit` (1–10000; default 20, or 100 for `improvements` and `savings`).
+Reports (`/api/reports/<name>`, JSON or `?format=csv`, and the dashboard): `summary`, `improvements`, `causes` (started per UTC day by cause), `performance` (average loss and RTT before and after, by cause), `providers` (probes, failure rate, average loss, RTT, jitter, improvements onto and off each provider, hours steered onto it), `prefixes`, `asns`, `countries` (`sort=problems`, the default, then `volume` or `loss`), `probes` (per UTC day), `timeseries` (#129: per UTC day and bucket, the native provider's average loss and RTT beside the chosen provider's, from the daily rollups; buckets `all`, `problem`, `better_20`, `better_50`; not cut by `limit`; see [ui.md](ui.md#graphs)), and `savings`. `est_savings` is `cost_delta` times volume, treated as a monthly rate; `accrued` is that rate times the hours active inside the range divided by 730. Probe figures are daily rollups, so a range that starts mid-day includes that whole UTC day; improvement figures use the exact range. Query: `days` (default 7, at most 3660), or `from` and `to` (RFC 3339 or `YYYY-MM-DD`, UTC), and `limit` (1–10000; default 20, or 100 for `improvements` and `savings`).
 
 ### Whois `rdap`
 

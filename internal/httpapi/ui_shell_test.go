@@ -94,7 +94,7 @@ func TestUIShell(t *testing.T) {
 		"reports.html":         {`<body data-page="reports" data-live="app">`, `id="report-name"`, `id="report-csv"`},
 		"troubleshooting.html": {`<body data-page="troubleshooting" data-live="app">`, `id="tool-run"`, "Looking glass"},
 		"protection.html":      {`<body data-page="protection" data-live="app">`, `id="mitigation-section" hidden`, `id="mitigation"`, `id="protection-empty"`, "#131"},
-		"graphs.html":          {`<body data-page="graphs" data-live="app">`, "#129"},
+		"graphs.html":          {`<body data-page="graphs" data-live="app">`, `id="graph"`, `id="graph-bucket"`, `id="graph-days"`, `id="graph-csv"`, `src="/charts.js"`, `src="/graphs.js"`, "nothing here announces a route"},
 		"commit.html":          {`<body data-page="commit" data-live="app">`, "#174"},
 		"policies.html":        {`<body data-page="policies" data-live="app">`, "#130"},
 		"events.html":          {`<body data-page="events" data-live="app">`, "#173"},

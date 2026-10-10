@@ -4,6 +4,7 @@ The remaining UI conveniences (#34). All of them work in the stock image with a 
 
 | Feature | Where | Who | Config |
 |---|---|---|---|
+| Before/after graphs (#129) | `/graphs.html`, `/api/reports/timeseries`, the `timeseries` dashboard widget | viewer | `storage: {type: sqlite}` |
 | Dashboard overview and setup checklist (#49) | `/`, `/api/overview` | viewer | none |
 | Config editor and settings form (#102) | `/settings.html`, `/api/config`, `POST /api/config/form` | admin | `http.config_editor: true` + auth or basic auth |
 | Setup wizard (#106) | `/settings.html`, `POST /api/config/wizard` | admin | `http.config_editor: true` + auth or basic auth |
@@ -23,7 +24,7 @@ Every page has the same chrome (#170). The mode banner is the first thing on the
 | Dashboards | `/dashboards.html` | Custom dashboards (the existing page) |
 | Improvements | `/improvements.html` | Recommended or active improvements |
 | Prefixes & ASNs | `/prefixes.html` | Prefix cards and the ASN map |
-| Graphs | `/graphs.html` | Empty. Time-series graphs are #129 |
+| Graphs | `/graphs.html` | Before/after loss and latency charts (#129; [below](#graphs)). Empty state without history |
 | Reports | `/reports.html` | History reports and CSV |
 | Providers & Exchanges | `/providers.html` | Provider health. The exchange view is empty (#148) |
 | Commit & Cost | `/commit.html` | Empty (#174) |
@@ -63,6 +64,27 @@ docker run --network host --cap-add NET_RAW --cap-add NET_ADMIN \
 `GET /api/overview` (viewer) is the same summary as JSON: `mode`, `ready`, `started`, `sources`, `providers` (`name`, `up`, `ok`, `failed`, `last_error`), `counts`, `bgp`, `features` (`name`, `on`), and `setup` (`id`, `level`, `title`, `detail`, `doc`). It is read-only and announces nothing.
 
 CI runs a UI smoke test in the docker job (`lab/ui-smoke.sh`): headless Chrome loads every shell page from the stock image. The first run mounts `config.example.yaml` unchanged. The banner says observe and that it announces nothing, the header chip is `mode-observe`, the checklist on `/` asks for sources, `/providers.html` shows `no data yet`, `/improvements.html` says Recommended, and the empty pages name their issues. The second run uses a minimal file with no `mode` key and one static target (observe, the prefix measured with an RTT on `/prefixes.html`, no improvement). A third run turns the config editor on with basic auth and sqlite, saves a dashboard of providers and improvements, and loads `/`, `/settings.html`, and `/dashboards.html` through `lab/uiproxy` (headless Chrome does not send URL credentials on later fetches). That run checks the filled provider fields keep their labels, the improvements widget says Recommended, and the provider `since` time is the local format.
+
+## Graphs
+
+`/graphs.html` charts the `timeseries` report (#129): two charts, loss (%) and latency (ms), one point per UTC day. A dashed line is **before**, the native provider's path, and a solid line is **after**, the chosen provider's path. Both come from the same daily probe rollups, so they are measurements of the two paths whether or not the improvement was announced; in observe the chosen path is the recommended one. The page needs `storage: {type: sqlite}` and says so when history is off. With history but nothing to compare it shows "No before/after data in this range" and draws no chart. Under the charts, a Data table lists the plotted values. A day with no point breaks the line. Days are the finest history the store keeps, so there is no intra-day resolution.
+
+The Destinations list picks one of four buckets, each a subset of the one before it where noted:
+
+| Bucket (`bucket`) | What is in it |
+|---|---|
+| All destinations (`all`) | Every prefix with an improvement active on that day, when both its native and its chosen provider were measured that day. |
+| Problem prefixes (`problem`) | The `all` prefixes whose improvement was made for performance (the native path broke the loss or latency thresholds), not for commit or cost. A record with no cause counts as performance. |
+| 20% or more better (`better_20`) | Prefix-days on which the chosen path's average loss or average RTT was at least 20% lower than the native path's. |
+| 50% or more better (`better_50`) | The same with 50%. A subset of `better_20`. |
+
+Each point averages the prefixes in the bucket that day, weighted by measured probes. A prefix is placed per day from that day's rollups, so a prefix can be in `better_20` on one day and not the next. The Days list sets the range (7, 30, 90, or 365) and CSV downloads the same rows.
+
+`GET /api/reports/timeseries` (viewer; `days`, or `from` and `to`, like every report) returns `rows`, one per day and bucket that has data, oldest first: `day`, `bucket`, `prefixes`, `before_loss_pct`, `after_loss_pct`, `before_rtt_ms`, `after_rtt_ms`. `limit` does not apply. A bucket and day with no data has no row.
+
+The **Before/after graphs** dashboard widget (`{"type": "timeseries", "days": 7, "bucket": "all"}`; `days` 0 to 3660 and `bucket` one of the four ids, both optional) draws the same charts for one bucket. The charts are inline SVG drawn by `/charts.js`: no external script, font, or style, and nothing inline, so the CSP (same-origin scripts and styles only) holds. The page and the widget only read; they announce nothing, and the mode banner is on top in every mode.
+
+CI (docker job) loads `/graphs.html` twice in headless Chrome: against the stock example config with empty history (the empty state, no chart), and against a history seeded by `lab/mkhistory` on documentation prefixes (the charts, the data table, and a `timeseries` dashboard widget). `internal/history` tests cover every bucket with synthetic history.
 
 ## Config editor
 
@@ -136,11 +158,11 @@ There is no field for a password, a community string, or any other secret. Those
 
 ## Custom dashboards
 
-`/dashboards.html` builds dashboards from read-only widgets. Each user has their own (at most 20, with at most 24 widgets each), kept by the storage plugin (`sqlite`, table `dashboards`). Widgets read endpoints the viewer role can already read: readiness, providers, prefixes, improvements, decisions, provider usage, inbound steers, threat mitigation, anomalies, POPs, HA, report subscriptions, and any stored report with a range in days. A widget can span the full row.
+`/dashboards.html` builds dashboards from read-only widgets. Each user has their own (at most 20, with at most 24 widgets each), kept by the storage plugin (`sqlite`, table `dashboards`). Widgets read endpoints the viewer role can already read: readiness, providers, prefixes, improvements, decisions, provider usage, inbound steers, threat mitigation, anomalies, POPs, HA, report subscriptions, and any stored report with a range in days, and the before/after graphs (type `timeseries`, below). A widget can span the full row.
 
 The improvements widget is titled Recommended improvements in observe and suggest, and Active improvements in inject (#171). A title the operator set on that widget is kept. Timestamps in a widget use the same local format as the main dashboard (`toLocaleString`). An unparseable value stays as returned.
 
-API: `GET /api/dashboards` returns `widget_types`, the report list, and your dashboards; `PUT /api/dashboards/<name>` with `{"title": "...", "widgets": [{"type": "providers"}, {"type": "report", "report": "summary", "days": 7, "wide": true}]}` saves one (unknown widget types, unknown reports, and unknown fields are refused); `DELETE /api/dashboards/<name>` removes it. Deleting a user deletes that user's dashboards.
+API: `GET /api/dashboards` returns `widget_types`, the report list, and your dashboards; `PUT /api/dashboards/<name>` with `{"title": "...", "widgets": [{"type": "providers"}, {"type": "report", "report": "summary", "days": 7, "wide": true}, {"type": "timeseries", "days": 30, "bucket": "better_50"}]}` saves one (unknown widget types, unknown reports, an unknown `bucket`, `report`, `days`, or `bucket` on a widget type that does not take them, and unknown fields are refused); `DELETE /api/dashboards/<name>` removes it. Deleting a user deletes that user's dashboards.
 
 ## Report subscriptions
 
@@ -196,5 +218,7 @@ Weights never relax a rule: a prefix must still be an exact prefix in the learne
 Lab proof (`lab/e2e-weights.sh`, CI job `e2e`): an FRR edge advertises 198.51.100.0/24 (5 Mbps) and 203.0.113.0/24 (500 Mbps) with the same gain, and `max_improvements: 1`. The heavier 203.0.113.0/24 takes the slot (without weights the other one would: equal gains break by prefix), with next hop, local-pref, community, and NO_EXPORT; 198.51.100.0/24 is capped with its weight on `/api/decisions`; 198.51.100.0/25, the heaviest and allowlisted but never advertised, is never announced; a real RIB leave withdraws the route and hands the slot over; the heavier prefix coming back does not displace it; SIGTERM withdraws; a restart gives the slot to the heavier prefix again; SIGKILL drops the route with the session within the hold timer. Lab-proven only, not on a public edge.
 
 ## Rollback
+
+The graphs (#129) are read-only and need no rollback. Delete a `timeseries` widget from a dashboard to hide it; a build from before #129 refuses to save a dashboard that still has one.
 
 Remove `improvement_weights`, `http.config_editor`, and `report_subscriptions` and restart. The dashboard polish (#49) needs no rollback: it reads the same state, and `/api/overview` is read-only. The file config works exactly as before; the editor only ever wrote a plain YAML file. Stored dashboards stay in the database and are ignored by an older build. The display fixes (#171) are presentation only: revert that change to restore the previous chip, titles, timestamps, and unlabeled provider fields. The shell (#170) is presentation only as well: revert it to put every section back on `/`. No config key changes.

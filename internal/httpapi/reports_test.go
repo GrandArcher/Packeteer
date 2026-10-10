@@ -135,3 +135,53 @@ func TestReportAuth(t *testing.T) {
 		t.Fatalf("auth: %d", code)
 	}
 }
+
+// tsReports serves the timeseries report from a fixed history (#129).
+type tsReports struct{}
+
+func (tsReports) Report(_ context.Context, q history.Query) (history.Report, error) {
+	day := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+	pfx := netip.MustParsePrefix("192.0.2.0/24")
+	h := plugin.History{
+		Buckets: []plugin.ProbeBucket{
+			{Day: day, Prefix: pfx, Provider: "transit-a", Probes: 10, Measured: 10, LossSum: 100, RTTSumMs: 1000},
+			{Day: day, Prefix: pfx, Provider: "transit-b", Probes: 10, Measured: 10, LossSum: 0, RTTSumMs: 400},
+		},
+		Improvements: []plugin.ImprovementRecord{{ID: "1", Prefix: pfx, Provider: "transit-b", Native: "transit-a",
+			Cause: plugin.CausePerformance, Start: day.Add(time.Hour), End: day.Add(5 * time.Hour)}},
+	}
+	return history.Build(h, q)
+}
+
+func TestReportTimeSeriesAPI(t *testing.T) {
+	ts := reportServer(t, tsReports{}, "", "")
+	code, _, body := do(t, http.MethodGet, ts.URL+"/api/reports/timeseries?from=2026-09-01&to=2026-09-03", "", "")
+	if code != http.StatusOK {
+		t.Fatalf("json %d %s", code, body)
+	}
+	var got struct {
+		Report string                  `json:"report"`
+		Rows   []history.TimeSeriesRow `json:"rows"`
+	}
+	if err := json.Unmarshal(body, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Report != "timeseries" || len(got.Rows) != 4 {
+		t.Fatalf("body = %s", body)
+	}
+	for _, r := range got.Rows {
+		if r.Day != "2026-09-01" || r.Prefixes != 1 || r.BeforeLossPct != 10 || r.AfterLossPct != 0 || r.BeforeRTTMs != 100 || r.AfterRTTMs != 40 {
+			t.Errorf("row = %+v", r)
+		}
+	}
+	code, hdr, body := do(t, http.MethodGet, ts.URL+"/api/reports/timeseries?from=2026-09-01&to=2026-09-03&format=csv", "", "")
+	if code != http.StatusOK || !strings.HasPrefix(hdr.Get("Content-Type"), "text/csv") ||
+		!strings.HasPrefix(string(body), "day,bucket,prefixes,before_loss_pct,after_loss_pct,before_rtt_ms,after_rtt_ms\n2026-09-01,all,1,10,0,100,40\n") {
+		t.Fatalf("csv %d %s", code, body)
+	}
+	// A range with no history is an empty list, not an error.
+	code, _, body = do(t, http.MethodGet, ts.URL+"/api/reports/timeseries?from=2026-01-01&to=2026-01-03", "", "")
+	if code != http.StatusOK || !strings.Contains(string(body), `"rows":[]`) {
+		t.Fatalf("empty range %d %s", code, body)
+	}
+}

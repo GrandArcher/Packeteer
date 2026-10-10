@@ -142,7 +142,9 @@ jobs:
             --absent 'Cannot reach'
           bash lab/ui-smoke.sh "$base/prefixes.html" 'ASN map' 'It announces nothing.' \
             --absent 'Cannot reach'
-          bash lab/ui-smoke.sh "$base/graphs.html" '#129' 'It announces nothing.'
+          # Graphs (#129) with history on but nothing recorded: an empty state, no chart.
+          bash lab/ui-smoke.sh "$base/graphs.html" 'No before/after data in this range' 'It announces nothing.' \
+            'id="graph-bucket"' --absent 'class="ts-chart"' 'Cannot reach'
           bash lab/ui-smoke.sh "$base/commit.html" '#174' 'It announces nothing.'
           bash lab/ui-smoke.sh "$base/policies.html" '#130' 'It announces nothing.'
           bash lab/ui-smoke.sh "$base/protection.html" '#131' 'Threat mitigation' 'It announces nothing.'
@@ -333,6 +335,75 @@ jobs:
           bash lab/ui-smoke.sh http://127.0.0.1:18089/dashboards.html \
             'Recommended improvements' 'NOC' '>lab-a<' \
             --absent 'Active improvements' "$since"
+      - name: UI graphs smoke (#129; before/after charts from seeded history, observe)
+        run: |
+          set -euo pipefail
+          base=http://127.0.0.1:18097
+          # Synthetic rollups on documentation prefixes, written by the same
+          # sqlite plugin the image uses. The controller only reads them.
+          mkdir -p /tmp/pkgraph
+          go run ./lab/mkhistory -o /tmp/pkgraph/packeteer.db
+          cat > /tmp/ui129.yaml <<'YAML'
+          mode: observe
+          asn: 64512
+          router_id: 192.0.2.10
+          http:
+            listen: "127.0.0.1:18097"
+          providers:
+            - name: lab-a
+              source_ip: 127.0.0.1
+              next_hop: 192.0.2.1
+            - name: lab-b
+              source_ip: 127.0.0.2
+              next_hop: 192.0.2.2
+          storage:
+            type: sqlite
+          YAML
+          docker run -d --name pkui129 --network host --cap-add NET_RAW --cap-add NET_ADMIN \
+            -e PACKETEER_HTTP_USER=lab -e PACKETEER_HTTP_PASSWORD=lab-only \
+            -v /tmp/ui129.yaml:/etc/packeteer/config.yaml:ro -v /tmp/pkgraph:/var/lib/packeteer packeteer:ci
+          proxy=""
+          cleanup() {
+            if [ -n "$proxy" ]; then kill "$proxy" 2>/dev/null || true; fi
+            docker stop -t 15 pkui129 >/dev/null || true
+            docker logs pkui129 2>&1 | tail -n 40
+            code="$(docker inspect -f '{{.State.ExitCode}}' pkui129)"
+            docker rm pkui129 >/dev/null || true
+            test "$code" = "0"
+          }
+          trap cleanup EXIT
+          auth=(-u lab:lab-only)
+          ok=0
+          for _ in $(seq 1 30); do
+            if curl -fsS "${auth[@]}" "$base/healthz" >/dev/null 2>&1; then ok=1; break; fi
+            sleep 1
+          done
+          test "$ok" = 1
+          # All four buckets have a point on each seeded day, and the
+          # chosen path is better than the native one.
+          curl -fsS "${auth[@]}" "$base/api/reports/timeseries?days=7" | tee /tmp/ts129.json
+          for b in all problem better_20 better_50; do
+            jq -e --arg b "$b" '[.rows[] | select(.bucket == $b)] | length == 5 and all(.after_loss_pct <= .before_loss_pct and .after_rtt_ms < .before_rtt_ms)' /tmp/ts129.json
+          done
+          curl -fsS "${auth[@]}" "$base/api/reports/timeseries?days=7&format=csv" | head -n 2
+          curl -fsS "${auth[@]}" -X PUT -H 'Content-Type: application/json' \
+            -d '{"title":"Graphs","widgets":[{"type":"timeseries","days":7,"bucket":"better_50","wide":true}]}' \
+            "$base/api/dashboards/graphs" >/dev/null
+          go build -o /tmp/uiproxy ./lab/uiproxy
+          /tmp/uiproxy -listen 127.0.0.1:18098 -upstream "$base" -user lab -password lab-only >/tmp/uiproxy129.log 2>&1 &
+          proxy=$!
+          for _ in $(seq 1 20); do
+            curl -fsS http://127.0.0.1:18098/healthz >/dev/null 2>&1 && break
+            sleep 0.2
+          done
+          curl -fsS http://127.0.0.1:18098/healthz >/dev/null
+          # The chart is drawn from the data, observe still says so, and
+          # the empty state is gone.
+          bash lab/ui-smoke.sh http://127.0.0.1:18098/graphs.html 'class="ts-chart"' 'ts-line ts-before' 'ts-line ts-after' \
+            'Data (5 days)' 'Dashed: before' 'mode-observe' 'It announces nothing.' \
+            --absent 'No before/after data' 'Cannot reach' 'mode-inject'
+          bash lab/ui-smoke.sh http://127.0.0.1:18098/dashboards.html 'class="ts-chart"' 'Before/after graphs: 50% or more better' \
+            'Data (5 days)' 'It announces nothing.' --absent 'No before/after data' 'Cannot reach'
       - name: auth in the stock image (users, roles, tokens, audit, rollback; observe)
         run: |
           cat > /tmp/auth.yaml <<'YAML'

@@ -11,10 +11,16 @@ function improvementsTitle(mode) {
   return mode === "inject" ? "Active improvements" : "Recommended improvements";
 }
 
+function bucketLabel(id) {
+  for (var i = 0; i < TS_BUCKETS.length; i++) if (TS_BUCKETS[i].id === id) return TS_BUCKETS[i].label;
+  return id;
+}
+
 function apiFor(w) {
   for (var i = 0; i < catalog.length; i++) {
     if (catalog[i].type === w.type) {
       if (w.type === "report") return "/api/reports/" + encodeURIComponent(w.report) + "?days=" + (w.days || 7);
+      if (w.type === "timeseries") return "/api/reports/timeseries?days=" + (w.days || 7);
       return catalog[i].api;
     }
   }
@@ -25,7 +31,11 @@ function titleFor(w) {
   if (w.title) return w.title;
   if (w.type === "improvements") return improvementsTitle(dashMode);
   for (var i = 0; i < catalog.length; i++) {
-    if (catalog[i].type === w.type) return catalog[i].title + (w.type === "report" ? ": " + w.report : "");
+    if (catalog[i].type === w.type) {
+      if (w.type === "report") return catalog[i].title + ": " + w.report;
+      if (w.type === "timeseries") return catalog[i].title + ": " + bucketLabel(w.bucket || "all");
+      return catalog[i].title;
+    }
   }
   return w.type;
 }
@@ -65,6 +75,7 @@ function renderWidget(w, box) {
       }
     }
     if (!r.ok) { body.appendChild(el("p", "empty", (r.data && r.data.error) || "unavailable")); return; }
+    if (w.type === "timeseries") { renderTimeSeries(body, r.data, w.bucket || "all"); return; }
     var rows = firstArray(r.data);
     if (rows) body.appendChild(dataTable(rows));
     else body.appendChild(el("pre", "mono", formatJSON(r.data)));
@@ -137,6 +148,9 @@ function load(pick) {
         o.value = c.type;
         ws.appendChild(o);
       });
+      TS_BUCKETS.forEach(function (b) {
+        var o = el("option", "", b.label); o.value = b.id; document.getElementById("db-bucket").appendChild(o);
+      });
       (data.reports || []).forEach(function (r) {
         var o = el("option", "", r.name); o.value = r.name; document.getElementById("db-report").appendChild(o);
       });
@@ -157,6 +171,10 @@ document.getElementById("db-add").addEventListener("click", function () {
   var w = {type: document.getElementById("db-widget").value, wide: document.getElementById("db-wide").checked};
   if (w.type === "report") {
     w.report = document.getElementById("db-report").value;
+    w.days = Number(document.getElementById("db-days").value) || 7;
+  }
+  if (w.type === "timeseries") {
+    w.bucket = document.getElementById("db-bucket").value;
     w.days = Number(document.getElementById("db-days").value) || 7;
   }
   current.widgets.push(w);

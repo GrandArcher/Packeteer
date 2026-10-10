@@ -20,6 +20,7 @@ const (
 	ReportImprovements = "improvements"
 	ReportCauses       = "causes"
 	ReportPerformance  = "performance"
+	ReportTimeSeries   = "timeseries"
 	ReportProviders    = "providers"
 	ReportPrefixes     = "prefixes"
 	ReportASNs         = "asns"
@@ -39,6 +40,7 @@ var Reports = []struct {
 	{ReportImprovements, "Every improvement that overlaps the range, newest first."},
 	{ReportCauses, "Improvements started per UTC day, by cause (performance, commit, cost)."},
 	{ReportPerformance, "Loss and latency before (native) and after (chosen provider), by cause."},
+	{ReportTimeSeries, "Loss and latency per UTC day, before (native) and after (chosen provider), for all, problem, 20%-better, and 50%-better destinations. Not cut by limit."},
 	{ReportProviders, "Provider efficiency: measured loss, latency, failures, and improvements onto and off each provider."},
 	{ReportPrefixes, "Top prefixes by problems, volume, or loss."},
 	{ReportASNs, "Top origin ASNs by problems, volume, or loss."},
@@ -145,6 +147,8 @@ func Build(h plugin.History, q Query) (Report, error) {
 		a.causes(&rep)
 	case ReportPerformance:
 		a.performance(&rep)
+	case ReportTimeSeries:
+		a.timeseries(&rep)
 	case ReportProviders:
 		a.providers(&rep)
 	case ReportPrefixes:

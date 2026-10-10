@@ -278,3 +278,22 @@ fieldset.form { border: 0; margin: 0; padding: 0; }
   .top-search { margin-left: 0; }
   .top-search input { width: 8rem; }
 }
+
+/* Before/after charts (#129) */
+.ts-charts { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 14px; }
+.ts-fig { margin: 0; background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; }
+.ts-fig figcaption { font-weight: 600; margin: 0 0 4px; }
+.ts-chart { width: 100%; height: auto; display: block; }
+.ts-grid { stroke: var(--line); stroke-width: 1; }
+.ts-tick { fill: var(--muted); font-size: 14px; }
+.ts-line { stroke-width: 2; }
+.ts-line.ts-before { stroke: var(--diff); stroke-dasharray: 6 4; }
+.ts-line.ts-after { stroke: var(--up); }
+.ts-dot.ts-before { fill: var(--diff); }
+.ts-dot.ts-after { fill: var(--up); }
+.ts-key.ts-before { color: var(--diff); }
+.ts-key.ts-after { color: var(--up); }
+.ts-legend { margin: 6px 0; }
+.ts-key { margin-right: 16px; }
+.ts-data { margin-top: 8px; }
+.ts-data summary { cursor: pointer; }
