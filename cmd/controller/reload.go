@@ -17,7 +17,7 @@ import (
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
 )
 
-// Online reconfiguration (#27, IRP "Bgpd online reconfiguration"). On
+// Online reconfiguration (#27). On
 // SIGHUP the controller reads the config file again. Only bgp.neighbors
 // is applied while running: sessions are added and removed without
 // touching the others, and the per-router table (providers, next_hops) is
