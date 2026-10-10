@@ -1449,3 +1449,109 @@ func TestExchangeLANTargetsDropped(t *testing.T) {
 		t.Fatalf("retain drops = %d, want 1", d)
 	}
 }
+
+// Due work is ordered urgent, then a shorter interval, then the engine
+// interval, then a longer tail. One worker makes the probe order the job order.
+func TestJobOrderIsUrgentThenShorterInterval(t *testing.T) {
+	urgent := netip.MustParsePrefix("203.0.113.0/24")
+	vip := netip.MustParsePrefix("198.51.100.0/24")
+	tail := netip.MustParsePrefix("192.0.2.128/25")
+	var mu sync.Mutex
+	var got []netip.Addr
+	p := &fakeProber{fn: func(_ context.Context, req plugin.ProbeRequest) (plugin.ProbeResult, error) {
+		mu.Lock()
+		got = append(got, req.Target)
+		mu.Unlock()
+		return plugin.ProbeResult{Sent: req.Count, RTTs: ms(1)}, nil
+	}}
+	o := opts()
+	o.Workers = 1
+	e, err := New([]Provider{provA}, []NamedProber{{"p", p}}, src(
+		plugin.Target{Prefix: tail, Host: netip.MustParseAddr("192.0.2.129"), Interval: 2 * time.Second},
+		plugin.Target{Prefix: vip, Host: netip.MustParseAddr("198.51.100.9"), Interval: 200 * time.Millisecond},
+		plugin.Target{Prefix: urgent, Host: netip.MustParseAddr("203.0.113.9"), Urgent: true},
+	), o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.RunOnce(context.Background())
+	want := []netip.Addr{
+		netip.MustParseAddr("203.0.113.9"),
+		netip.MustParseAddr("198.51.100.9"),
+		netip.MustParseAddr("192.0.2.129"),
+	}
+	if len(got) != len(want) {
+		t.Fatalf("probe order %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("probe order %v, want %v", got, want)
+		}
+	}
+}
+
+// A round that runs out of time keeps prefixes whose probes finished and
+// leaves the one still running on its previous result (#125).
+func TestPartialRoundKeepsFinishedPrefixes(t *testing.T) {
+	release := make(chan struct{})
+	defer close(release)
+	// First round: one call per prefix. Second round: the first prefix
+	// finishes (call 3) and the second blocks.
+	p := &blockAfterProber{allow: 3, release: release}
+	o := opts()
+	o.Workers = 1
+	o.RoundTimeout = 150 * time.Millisecond
+	var rounds atomic.Int32
+	o.OnRound = func() { rounds.Add(1) }
+	e, err := New([]Provider{provA}, []NamedProber{{"p", p}}, src(
+		plugin.Target{Prefix: pfx1, Host: netip.MustParseAddr("198.51.100.1")},
+		plugin.Target{Prefix: pfx2, Host: netip.MustParseAddr("203.0.113.1")},
+	), o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.RunOnce(context.Background())
+	if rounds.Load() != 1 || len(e.Results()) != 2 || e.PrefixCommits() != 2 {
+		t.Fatalf("first round rounds=%d results=%d commits=%d", rounds.Load(), len(e.Results()), e.PrefixCommits())
+	}
+	var old time.Time
+	for _, r := range e.Results() {
+		if r.Prefix == pfx2 {
+			old = r.Time
+		}
+		if !r.OK() {
+			t.Fatalf("first result not ok: %+v", r)
+		}
+	}
+	if old.IsZero() {
+		t.Fatal("missing first result for the slow prefix")
+	}
+	waitRound(t, e)
+	if rounds.Load() != 2 {
+		t.Fatalf("partial round did not commit: rounds=%d results=%+v", rounds.Load(), e.Results())
+	}
+	if e.PrefixCommits() != 3 {
+		t.Fatalf("commits = %d, want 3 (both prefixes, then the one that finished)", e.PrefixCommits())
+	}
+	var saw1, saw2 bool
+	for _, r := range e.Results() {
+		if !r.OK() {
+			t.Fatalf("result not ok: %+v", r)
+		}
+		switch r.Prefix {
+		case pfx1:
+			saw1 = true
+			if !r.Time.After(old) {
+				t.Fatalf("finished prefix was not stored: %+v old %s", r, old)
+			}
+		case pfx2:
+			saw2 = true
+			if !r.Time.Equal(old) {
+				t.Fatalf("unfinished prefix changed: %+v old %s", r, old)
+			}
+		}
+	}
+	if !saw1 || !saw2 {
+		t.Fatalf("results = %+v", e.Results())
+	}
+}
