@@ -1,5 +1,5 @@
 # Targets match what .github/workflows/ci.yml runs.
-GOLANGCI_LINT_VERSION ?= v2.5.0
+GOLANGCI_LINT_VERSION ?= v2.14.0
 
 .PHONY: setup build vet fmt-check test lint vuln check
 
