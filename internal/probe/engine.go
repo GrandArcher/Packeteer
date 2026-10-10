@@ -117,6 +117,10 @@ type Result struct {
 	// and Target is this provider's highest stable traceroute hop toward
 	// it (#123). Measurement only.
 	Indirect bool `json:"indirect,omitempty"`
+	// Hops is the stable traceroute hop addresses, in TTL order, from this
+	// provider's indirect trace (#124). Empty when no trace is cached.
+	// Outage detection maps them to origin ASNs. Measurement only.
+	Hops []netip.Addr `json:"hops,omitempty"`
 }
 
 // OK reports whether the result holds a measurement.
@@ -942,6 +946,11 @@ func (e *Engine) runRound(ctx context.Context, allow func(plugin.Target) bool, m
 					return
 				}
 				r, down := e.probe(roundCtx, j)
+				if e.indirectEnabled() {
+					if hops := e.traceHops(key{j.provider.Name, j.target.Prefix}); len(hops) > 0 {
+						r.Hops = hops
+					}
+				}
 				select {
 				case outs <- outcome{r, down}:
 				case <-roundCtx.Done():

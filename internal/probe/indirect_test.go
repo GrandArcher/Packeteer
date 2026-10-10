@@ -192,6 +192,12 @@ func TestIndirectPerProviderHops(t *testing.T) {
 	if !b.Indirect || b.Target != hopB || b.Stats.RTTAvg != 40*time.Millisecond {
 		t.Fatalf("transit-b not scored at its own hop: %+v", b)
 	}
+	if len(a.Hops) != 2 || a.Hops[0] != netip.MustParseAddr("192.0.2.101") || a.Hops[1] != hopA {
+		t.Fatalf("transit-a hop path = %v", a.Hops)
+	}
+	if len(b.Hops) != 3 || b.Hops[2] != hopB {
+		t.Fatalf("transit-b hop path = %v", b.Hops)
+	}
 	if a.Targets[len(a.Targets)-1] != hopA || a.Targets[0] != silentIn {
 		t.Fatalf("targets should list the silent in-prefix addresses then the hop: %v", a.Targets)
 	}

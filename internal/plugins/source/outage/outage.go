@@ -1,6 +1,7 @@
 // Package outage implements the "outage" target source.
 //
-// It correlates probe results by learned AS path and by provider. When
+// It correlates probe results by learned AS path, by traceroute hop
+// origin, by other providers' learned paths, and by provider. When
 // enough prefixes fail together it returns them as urgent probe targets
 // and emits notifier events. It does not announce. Injection still
 // requires the prefix in the learned RIB, the allowlist, the community,
@@ -154,7 +155,8 @@ func (s *Source) Fresh() bool { return true }
 
 // SetSnapshots installs the probe and RIB reads. Either function may be
 // nil. Routes must be empty unless the RIB view is ready; a default route
-// must not be included. The controller copies AS paths.
+// must not be included. The controller copies AS paths, alternate paths,
+// and traceroute hops.
 func (s *Source) SetSnapshots(samples func() []Sample, routes func() []Route) {
 	s.mu.Lock()
 	s.samples, s.routes = samples, routes

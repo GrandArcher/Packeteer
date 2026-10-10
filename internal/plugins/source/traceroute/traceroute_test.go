@@ -148,6 +148,31 @@ func TestSelectHost(t *testing.T) {
 	}
 }
 
+func TestTracePathStableHops(t *testing.T) {
+	dest := a("198.51.100.1")
+	fake := &perTTL{hops: map[int][]hopReply{
+		1: replies("192.0.2.1", "192.0.2.1"),
+		2: replies("203.0.113.50", "203.0.113.50"),
+	}}
+	tr := Tracer{MaxHops: 8, Probes: 2, MinReplies: 2, Timeout: time.Millisecond, Hop: fake.Probe}
+	hops, best, ok, err := tr.TracePath(context.Background(), netip.Addr{}, dest, nil)
+	if err != nil || !ok || best.String() != "203.0.113.50" {
+		t.Fatalf("best=%s ok=%v err=%v", best, ok, err)
+	}
+	if len(hops) != 2 || hops[0].String() != "192.0.2.1" || hops[1].String() != "203.0.113.50" {
+		t.Fatalf("hops=%v", hops)
+	}
+	tr.Skip = func(addr netip.Addr) bool { return addr.String() == "203.0.113.50" }
+	fake.seen = nil
+	hops, best, ok, err = tr.TracePath(context.Background(), netip.Addr{}, dest, nil)
+	if err != nil || !ok || best.String() != "192.0.2.1" {
+		t.Fatalf("skip best=%s ok=%v err=%v", best, ok, err)
+	}
+	if len(hops) != 1 || hops[0].String() != "192.0.2.1" {
+		t.Fatalf("hops after skip=%v", hops)
+	}
+}
+
 func TestDiscoverSkipsExchangeLAN(t *testing.T) {
 	s := must(t, `
 timeout: 1ms

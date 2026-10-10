@@ -1521,6 +1521,13 @@ type learnedView interface {
 	Routes() []rib.Route
 }
 
+// routeSnapshotter is implemented by *rib.View. Outage correlation reads
+// the other providers' AS paths from the same generation as the selected
+// routes (#124).
+type routeSnapshotter interface {
+	RouteSnapshot() (routes []rib.Route, paths []rib.AltPath)
+}
+
 // routeSnapshotSetter is implemented by the vip source.
 type routeSnapshotSetter interface {
 	SetRouteSnapshot(func() (uint64, []vip.LearnedRoute))
@@ -1616,7 +1623,20 @@ func (s *outageSnap) get(view learnedView) []outage.Route {
 	if s.ok && s.gen == g {
 		return s.out
 	}
-	routes := view.Routes()
+	var routes []rib.Route
+	var paths []rib.AltPath
+	if snap, ok := view.(routeSnapshotter); ok {
+		routes, paths = snap.RouteSnapshot()
+	} else {
+		routes = view.Routes()
+	}
+	alt := map[netip.Prefix][]outage.Alt{}
+	for _, pp := range paths {
+		alt[pp.Prefix] = append(alt[pp.Prefix], outage.Alt{
+			Provider: pp.Provider,
+			ASPath:   append([]uint32(nil), pp.ASPath...),
+		})
+	}
 	out := make([]outage.Route, 0, len(routes))
 	for _, rt := range routes {
 		if !rt.Prefix.IsValid() || rt.Prefix.Bits() == 0 {
@@ -1626,6 +1646,7 @@ func (s *outageSnap) get(view learnedView) []outage.Route {
 			Prefix:   rt.Prefix,
 			Provider: rt.Provider,
 			ASPath:   append([]uint32(nil), rt.ASPath...),
+			Alts:     alt[rt.Prefix],
 		})
 	}
 	s.gen, s.ok, s.out = g, true, out
@@ -1666,6 +1687,10 @@ func wireOutage(plugins *pluginhost.Set, engine *probe.Engine, view *rib.View, o
 func outageSamples(rs []probe.Result) []outage.Sample {
 	out := make([]outage.Sample, len(rs))
 	for i, r := range rs {
+		var hops []netip.Addr
+		if len(r.Hops) > 0 {
+			hops = append([]netip.Addr(nil), r.Hops...)
+		}
 		out[i] = outage.Sample{
 			Provider: r.Provider,
 			Prefix:   r.Prefix,
@@ -1673,6 +1698,7 @@ func outageSamples(rs []probe.Result) []outage.Sample {
 			RTT:      r.Stats.RTTAvg,
 			Failed:   !r.OK(),
 			Time:     r.Time,
+			Hops:     hops,
 		}
 	}
 	return out
