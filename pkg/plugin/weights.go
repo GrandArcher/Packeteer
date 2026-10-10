@@ -3,7 +3,7 @@ package plugin
 import "net/netip"
 
 // WeightInput is one new improvement competing for a max_improvements
-// slot (#34, IRP "Improvements weight").
+// slot (#34).
 type WeightInput struct {
 	Prefix   netip.Prefix
 	Provider string

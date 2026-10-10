@@ -18,7 +18,7 @@ import (
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
 )
 
-// Remaining UI parity (#34): the config editor and first-run wizard
+// Remaining UI features (#34): the config editor and first-run wizard
 // (admin), custom dashboards (each signed-in user's own), and report
 // subscriptions (status for viewers, send-now for operators). None of
 // them announces. The editor writes the mounted file only after the same

@@ -411,7 +411,7 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 		log.Error("refusing to start", "err", aerr)
 		return 1
 	}
-	// Remaining UI parity (#34). None of these announces.
+	// Remaining UI features (#34). None of these announces.
 	var subs *subscribe.Scheduler
 	if rec != nil {
 		var serr error

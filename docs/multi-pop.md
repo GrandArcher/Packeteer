@@ -6,9 +6,9 @@ Run one Packeteer instance per POP (routing domain). A `federation` plugin conne
 
 ## What it does
 
-- **Inter-DC RTT in the path cost (IRP routing domains).** A provider can belong to another POP (`providers[].domain`). This instance does not probe it: the peer in that POP measures it. Its path to a prefix is the peer's measurement plus `inter_dc_rtt` for that domain. When that total beats the local exits by the usual thresholds, this POP steers the prefix to its own edge with that provider's `next_hop`, the address this POP's routers use to reach the other POP's exit across the backbone.
-- **Global commit (IRP Globalcc).** `global_commit` shares one commit across providers in several POPs, usually one carrier in each POP. With the `commit` scorer, each local member's commit becomes the global commit minus every other member's fresh usage, and never more than its own commit. Commit control then moves traffic off that member as usual.
-- **Central view (IRP GMI).** `/api/federation` and the dashboard's POPs section list this instance and every peer. Each row shows mode, freshness, last error, providers up, improvements against the cap, inter-DC RTT, and the global commit totals with each member's usage. An instance with `listen` empty only polls, so it can serve the central view without anyone reading its data.
+- **Inter-DC RTT in the path cost .** A provider can belong to another POP (`providers[].domain`). This instance does not probe it: the peer in that POP measures it. Its path to a prefix is the peer's measurement plus `inter_dc_rtt` for that domain. When that total beats the local exits by the usual thresholds, this POP steers the prefix to its own edge with that provider's `next_hop`, the address this POP's routers use to reach the other POP's exit across the backbone.
+- **Global commit .** `global_commit` shares one commit across providers in several POPs, usually one carrier in each POP. With the `commit` scorer, each local member's commit becomes the global commit minus every other member's fresh usage, and never more than its own commit. Commit control then moves traffic off that member as usual.
+- **Central view .** `/api/federation` and the dashboard's POPs section list this instance and every peer. Each row shows mode, freshness, last error, providers up, improvements against the cap, inter-DC RTT, and the global commit totals with each member's usage. An instance with `listen` empty only polls, so it can serve the central view without anyone reading its data.
 
 ## Safety
 

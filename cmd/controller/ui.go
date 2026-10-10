@@ -19,7 +19,7 @@ import (
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
 )
 
-// Remaining UI parity (#34): the config editor, custom dashboards, and
+// Remaining UI features (#34): the config editor, custom dashboards, and
 // report subscriptions. None of them announces.
 
 // reportSenders maps notifier instance names to those that send reports,
