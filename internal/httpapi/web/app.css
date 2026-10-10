@@ -157,6 +157,7 @@ footer a { color: var(--head); }
 .form { display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: flex-end; }
 .form label { display: flex; flex-direction: column; gap: 4px; }
 .form label.wide { flex-basis: 100%; }
+.form label.check { flex-direction: row; align-items: center; gap: 6px; }
 .form textarea, .form input[type=text] { font: inherit; padding: 6px; border: 1px solid var(--line); border-radius: 4px; }
 textarea.editor { width: 100%; font-size: 0.85rem; padding: 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--card); }
 .errors { color: var(--down); margin: 6px 0; }

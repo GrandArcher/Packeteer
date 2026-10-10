@@ -94,7 +94,7 @@
       <p class="tag">Optional flow collector. Leave it off to add a flow source later. When on, Packeteer listens on this UDP address and port for NetFlow v5/v9, IPFIX, or sFlow records and probes the busiest destination prefixes. It measures only and never announces.</p>
       <p class="tag">Exporter setup: on the router, send flow records to this host and port (for example NetFlow v9 or IPFIX to the address below). With <code>--network host</code> this is a host UDP port; do not publish it, and allow it only from the router. Packeteer does not configure the router.</p>
       <div class="form">
-        <label><input id="wz-flow" type="checkbox"> Collect flow records</label>
+        <label class="check"><input id="wz-flow" type="checkbox"> Collect flow records</label>
         <label>Listen address <input id="wz-flow-addr" type="text" placeholder="192.0.2.10 (empty: every address)" spellcheck="false"></label>
         <label>UDP port <input id="wz-flow-port" type="text" inputmode="numeric" placeholder="2055" spellcheck="false"></label>
       </div>
@@ -155,7 +155,7 @@
         <h3>Flow collector</h3>
         <p class="tag">The first <code>flow</code> source (NetFlow v5/v9, IPFIX, sFlow). It measures only. Unchecking removes the source from the YAML, including its <code>problems</code>, <code>transit</code>, and <code>subranges</code> blocks; those blocks and the aggregate lengths are otherwise kept. Separate several listen addresses and exclude prefixes with commas. Binds host UDP ports with <code>--network host</code>; do not publish them.</p>
         <fieldset id="form-flow" class="form">
-          <label><input id="fl-enabled" type="checkbox"> Flow collector on</label>
+          <label class="check"><input id="fl-enabled" type="checkbox"> Flow collector on</label>
           <label>Listen (host:port) <input id="fl-listen" type="text" placeholder="192.0.2.10:2055, 192.0.2.10:6343" spellcheck="false"></label>
           <label>Window <input id="fl-window" type="text" placeholder="5m" spellcheck="false"></label>
           <label>Priority prefixes (top_n) <input id="fl-top-n" type="text" inputmode="numeric" placeholder="100" spellcheck="false"></label>
@@ -172,7 +172,7 @@
         <h3>VIP</h3>
         <p class="tag">The first <code>vip</code> source: critical prefixes and ASNs probed on their own interval. Unchecking removes the source.</p>
         <fieldset id="form-vip" class="form">
-          <label><input id="vip-enabled" type="checkbox"> VIP source on</label>
+          <label class="check"><input id="vip-enabled" type="checkbox"> VIP source on</label>
           <label>Interval <input id="vip-interval" type="text" placeholder="10s" spellcheck="false"></label>
           <label>Max targets <input id="vip-max" type="text" inputmode="numeric" placeholder="100" spellcheck="false"></label>
           <label>VIP ASNs <input id="vip-asns" type="text" placeholder="64496, 64497" spellcheck="false"></label>
@@ -182,7 +182,7 @@
         <h3>Outage detection</h3>
         <p class="tag">The first <code>outage</code> source: when many prefixes fail together it re-probes them and raises an event. It never announces. Empty fields use the defaults. Unchecking removes the source.</p>
         <fieldset id="form-outage" class="form">
-          <label><input id="out-enabled" type="checkbox"> Outage detection on</label>
+          <label class="check"><input id="out-enabled" type="checkbox"> Outage detection on</label>
           <label>Minimum prefixes <input id="out-min" type="text" inputmode="numeric" placeholder="3" spellcheck="false"></label>
           <label>Window <input id="out-window" type="text" placeholder="2m" spellcheck="false"></label>
           <label>Loss (%) <input id="out-loss" type="text" inputmode="decimal" placeholder="20" spellcheck="false"></label>
