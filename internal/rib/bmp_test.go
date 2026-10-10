@@ -39,6 +39,43 @@ func announce(p netip.Prefix, nh netip.Addr, as ...uint32) plugin.RIBPath {
 	return plugin.RIBPath{Prefix: p, NextHop: nh, ASPath: as}
 }
 
+func TestRouteSnapshotAltPaths(t *testing.T) {
+	v := bmpView(t, map[string]string{"transit-a": BMPPrefer, "transit-b": BMPPrefer})
+	v.ApplyRIB(plugin.RIBEvent{Kind: plugin.RIBPeerUp, Router: edge, Peer: plugin.RIBPeer{Address: transitA}})
+	v.ApplyRIB(plugin.RIBEvent{Kind: plugin.RIBPeerUp, Router: edge, Peer: plugin.RIBPeer{Address: transitB}})
+	v.ApplyRIB(paths(edge, transitB, announce(lab, transitB, 64497, 64497, 64500)))
+	v.ApplyRIB(paths(edge, transitA, announce(lab, transitA, 64496, 64500)))
+	def := netip.MustParsePrefix("0.0.0.0/0")
+	v.ApplyRIB(paths(edge, transitB, announce(def, transitB, 64501)))
+
+	routes, alts := v.RouteSnapshot()
+	if len(routes) != 2 {
+		t.Fatalf("routes = %+v", routes)
+	}
+	if len(alts) != 1 || alts[0].Prefix != lab || alts[0].Provider != "transit-b" {
+		t.Fatalf("alts = %+v", alts)
+	}
+	if len(alts[0].ASPath) != 3 || alts[0].ASPath[0] != 64497 || alts[0].ASPath[2] != 64500 {
+		t.Fatalf("as path = %v", alts[0].ASPath)
+	}
+	for _, a := range alts {
+		if a.Provider == "transit-a" || a.Prefix.Bits() == 0 {
+			t.Fatalf("native or default path leaked: %+v", a)
+		}
+	}
+	// The copy is independent of the view.
+	alts[0].ASPath[0] = 1
+	_, again := v.RouteSnapshot()
+	if len(again) != 1 || again[0].ASPath[0] != 64497 {
+		t.Fatalf("snapshot aliased the view: %+v", again)
+	}
+
+	v.ApplyRIB(paths(edge, transitB, plugin.RIBPath{Prefix: lab, Withdraw: true}))
+	if _, left := v.RouteSnapshot(); len(left) != 0 {
+		t.Fatalf("withdrawn alt still present: %+v", left)
+	}
+}
+
 func TestBMPUsageValidation(t *testing.T) {
 	_, err := New(Options{ASN: asn, RouterID: netip.MustParseAddr("192.0.2.10"),
 		Neighbors: []Neighbor{{Address: edge}}, BMP: map[string]string{"transit-a": "always"}})

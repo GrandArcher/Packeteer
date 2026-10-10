@@ -488,6 +488,33 @@ type Tracer struct {
 // error ends the trace like a deadline. ok is false when no hop was
 // stable. A source that cannot be bound returns plugin.ErrSourceUnavailable.
 func (t Tracer) Trace(ctx context.Context, src, dest netip.Addr, wait func(context.Context) error) (netip.Addr, bool, error) {
+	_, best, ok, err := t.TracePath(ctx, src, dest, wait)
+	return best, ok, err
+}
+
+// TracePath is Trace plus the stable hop addresses in TTL order. best is
+// the probe host Trace returns. hops is nil when the walk failed before
+// any reply or the source could not be bound. Outage detection maps these
+// addresses to origin ASNs (#124). This does not announce.
+func (t Tracer) TracePath(ctx context.Context, src, dest netip.Addr, wait func(context.Context) error) (hops []netip.Addr, best netip.Addr, ok bool, err error) {
+	raw, err := t.collect(ctx, src, dest, wait)
+	if err != nil {
+		// A bound failure is not a path. A deadline with nothing collected
+		// yet leaves the previous cache alone. Hops already in hand still
+		// count, the same way a finished walk does.
+		if len(raw) == 0 || errors.Is(err, plugin.ErrSourceUnavailable) {
+			return nil, netip.Addr{}, false, err
+		}
+	}
+	best, ok = selectHost(raw, dest, t.MinReplies, t.Skip)
+	return stableHops(raw, dest, t.MinReplies, t.Skip), best, ok, nil
+}
+
+// collect walks TTL. The returned samples keep a partial walk when the
+// context ends after at least one TTL, so the caller can still use those
+// hops. plugin.ErrSourceUnavailable is returned with whatever was collected
+// and the caller must not treat that as a path.
+func (t Tracer) collect(ctx context.Context, src, dest netip.Addr, wait func(context.Context) error) ([][]sample, error) {
 	hop := t.Hop
 	if hop == nil {
 		hop = udpHopper{}.Probe
@@ -497,26 +524,26 @@ func (t Tracer) Trace(ctx context.Context, src, dest netip.Addr, wait func(conte
 	saw := false
 	for ttl := 1; ttl <= t.MaxHops; ttl++ {
 		if err := ctx.Err(); err != nil {
-			return t.finish(hops, dest, err)
+			return hops, err
 		}
 		samples := make([]sample, 0, t.Probes)
 		reached := false
 		for n := 0; n < t.Probes; n++ {
 			if err := ctx.Err(); err != nil {
-				return t.finish(hops, dest, err)
+				return hops, err
 			}
 			if wait != nil {
 				if err := wait(ctx); err != nil {
-					return t.finish(hops, dest, err)
+					return hops, err
 				}
 			}
 			from, hit, err := hop(ctx, src, dest, ttl, t.Port, t.Timeout)
 			if err != nil {
 				if errors.Is(err, plugin.ErrSourceUnavailable) {
-					return netip.Addr{}, false, err
+					return hops, err
 				}
 				if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-					return t.finish(hops, dest, err)
+					return hops, err
 				}
 				samples = append(samples, sample{})
 				continue
@@ -537,19 +564,7 @@ func (t Tracer) Trace(ctx context.Context, src, dest netip.Addr, wait func(conte
 			break
 		}
 	}
-	host, ok := selectHost(hops, dest, t.MinReplies, t.Skip)
-	return host, ok, nil
-}
-
-// finish keeps hops already collected when the budget expires. With
-// nothing collected yet, the caller sees the context error and does not
-// replace the cache.
-func (t Tracer) finish(hops [][]sample, dest netip.Addr, err error) (netip.Addr, bool, error) {
-	if len(hops) == 0 {
-		return netip.Addr{}, false, err
-	}
-	host, ok := selectHost(hops, dest, t.MinReplies, t.Skip)
-	return host, ok, nil
+	return hops, nil
 }
 
 // Hop sends one TTL-limited UDP probe from src to dst with the built-in

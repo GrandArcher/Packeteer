@@ -18,6 +18,18 @@ type Sample struct {
 	RTT      time.Duration
 	Failed   bool
 	Time     time.Time
+	// Hops are stable traceroute hop addresses for this provider and
+	// prefix, in TTL order, from a per-provider indirect trace. Nil when
+	// no trace exists. Detect maps each hop to an origin ASN by longest
+	// match over the learned routes and does not send packets.
+	Hops []netip.Addr
+}
+
+// Alt is one provider's learned AS path for a prefix other than the
+// native route (add-path or BMP). An empty ASPath cannot implicate an ASN.
+type Alt struct {
+	Provider string
+	ASPath   []uint32
 }
 
 // Route is one learned prefix. Provider is the native exit when the RIB
@@ -26,6 +38,10 @@ type Route struct {
 	Prefix   netip.Prefix
 	ASPath   []uint32
 	Provider string
+	// Alts are other providers' learned paths, and a different path for
+	// the native provider when add-path or BMP showed one. Nil leaves
+	// correlation on ASPath alone.
+	Alts []Alt
 }
 
 // Incident is one detected AS or circuit problem.
@@ -54,9 +70,19 @@ type Outcome struct {
 //
 // An ASN is sick when at least MinPrefixes degraded prefixes contain it
 // and every provider measured for those prefixes is degraded. A prefix
-// that is still healthy on another provider does not count: that pattern
-// is a circuit. IgnoreASNs are skipped, so an ASN that sits on every path
-// is not the failure domain.
+// that is still healthy on another provider does not count toward that
+// rule: that pattern is a circuit, unless the ASN appears only on the
+// degraded provider's own path (an alternate learned path, or a hop
+// origin that is not on the native path). That incident is attributed
+// to the degraded provider. IgnoreASNs are skipped, so an ASN that sits
+// on every path is not the failure domain.
+//
+// ASNs come from the native AS path, from each measured provider's
+// alternate learned path, and from traceroute hops. A hop address maps
+// to the origin ASN (the last ASN) of the longest matching learned
+// prefix. A default route is not a match. No external data is used.
+// With no hops and no alternate paths the result is the native-path
+// correlation above.
 //
 // A provider is sick when at least MinPrefixes prefixes are degraded on
 // it and healthy on another provider, and those prefixes are not already
@@ -66,8 +92,9 @@ type Outcome struct {
 // transit ASN is not reported twice.
 //
 // Targets are probe prefixes only. AS incidents include every learned
-// prefix whose path contains the ASN, degraded ones first, up to
-// MaxTargets. Circuit incidents include the prefixes that counted, then
+// prefix whose native path, alternate path, or hop-ASN path contains the
+// ASN, degraded ones first, up to MaxTargets. Circuit incidents include
+// the prefixes that counted, then
 // other prefixes sampled on that provider, then learned prefixes whose
 // native provider is that circuit. A default route is never a target.
 // Detect does not announce.
@@ -105,6 +132,7 @@ func Detect(now time.Time, samples []Sample, routes []Route, cfg Config) Outcome
 
 	path := map[netip.Prefix][]uint32{}
 	native := map[netip.Prefix]string{}
+	alts := map[netip.Prefix]map[string][]uint32{}
 	var routeOrder []netip.Prefix
 	for _, rt := range routes {
 		p := rt.Prefix.Masked()
@@ -117,6 +145,22 @@ func Detect(now time.Time, samples []Sample, routes []Route, cfg Config) Outcome
 		path[p] = append([]uint32(nil), rt.ASPath...)
 		native[p] = rt.Provider
 		routeOrder = append(routeOrder, p)
+		if len(rt.Alts) == 0 {
+			continue
+		}
+		m := map[string][]uint32{}
+		for _, a := range rt.Alts {
+			if a.Provider == "" {
+				continue
+			}
+			if _, ok := m[a.Provider]; ok {
+				continue
+			}
+			m[a.Provider] = append([]uint32(nil), a.ASPath...)
+		}
+		if len(m) > 0 {
+			alts[p] = m
+		}
 	}
 
 	type prefView struct {
@@ -145,19 +189,143 @@ func Detect(now time.Time, samples []Sample, routes []Route, cfg Config) Outcome
 	asEligible := func(v *prefView) bool {
 		return len(v.bad) >= 1 && len(v.healthy) == 0
 	}
-	contains := func(p netip.Prefix, asn uint32) bool {
-		for _, a := range path[p] {
+	usable := func(asn uint32) bool {
+		if asn == 0 {
+			return false
+		}
+		_, skip := ignore[asn]
+		return !skip
+	}
+	// originASN is the last non-zero ASN on the longest learned prefix
+	// that covers addr. A default route is not a match. A learned prefix
+	// with no usable origin stops the search.
+	originASN := func(addr netip.Addr) (uint32, bool) {
+		if !addr.IsValid() {
+			return 0, false
+		}
+		addr = addr.Unmap()
+		for bits := addr.BitLen(); bits >= 1; bits-- {
+			p, err := addr.Prefix(bits)
+			if err != nil {
+				continue
+			}
+			as, ok := path[p]
+			if !ok {
+				continue
+			}
+			for i := len(as) - 1; i >= 0; i-- {
+				if as[i] == 0 {
+					continue
+				}
+				if !usable(as[i]) {
+					return 0, false
+				}
+				return as[i], true
+			}
+			return 0, false
+		}
+		return 0, false
+	}
+	hopASN := map[[2]string][]uint32{}
+	hopAll := map[netip.Prefix][]uint32{}
+	for _, sl := range latest {
+		s := sl.sample
+		if len(s.Hops) == 0 {
+			continue
+		}
+		var asns []uint32
+		seenHop := map[uint32]struct{}{}
+		for _, h := range s.Hops {
+			asn, ok := originASN(h)
+			if !ok {
+				continue
+			}
+			if _, dup := seenHop[asn]; dup {
+				continue
+			}
+			seenHop[asn] = struct{}{}
+			asns = append(asns, asn)
+		}
+		if len(asns) == 0 {
+			continue
+		}
+		hopASN[keyOf(s.Provider, s.Prefix)] = asns
+		all := hopAll[s.Prefix]
+		known := map[uint32]struct{}{}
+		for _, asn := range all {
+			known[asn] = struct{}{}
+		}
+		for _, asn := range asns {
+			if _, ok := known[asn]; ok {
+				continue
+			}
+			known[asn] = struct{}{}
+			all = append(all, asn)
+		}
+		hopAll[s.Prefix] = all
+	}
+	onPath := func(as []uint32, asn uint32) bool {
+		for _, a := range as {
 			if a == asn {
 				return true
 			}
 		}
 		return false
 	}
+	// crosses reports whether any learned path or hop path for p contains
+	// asn. Used to re-queue prefixes, including ones not yet degraded.
+	crosses := func(p netip.Prefix, asn uint32) bool {
+		if onPath(path[p], asn) {
+			return true
+		}
+		for _, as := range alts[p] {
+			if onPath(as, asn) {
+				return true
+			}
+		}
+		return onPath(hopAll[p], asn)
+	}
 
 	type asnHit struct {
 		prefixes map[netip.Prefix]struct{}
 		provs    map[string]struct{}
 	}
+	note := func(by map[uint32]*asnHit, asn uint32, p netip.Prefix, prov string) {
+		if !usable(asn) {
+			return
+		}
+		h := by[asn]
+		if h == nil {
+			h = &asnHit{prefixes: map[netip.Prefix]struct{}{}, provs: map[string]struct{}{}}
+			by[asn] = h
+		}
+		h.prefixes[p] = struct{}{}
+		if prov != "" {
+			h.provs[prov] = struct{}{}
+		}
+	}
+	// extraASNs is the alternate path plus the hop-ASN path for one
+	// measured provider. The two lists are not joined, so neither is mutated.
+	extraASNs := func(p netip.Prefix, prov string, fn func(uint32)) {
+		seen := map[uint32]struct{}{}
+		walk := func(as []uint32) {
+			for _, asn := range as {
+				if !usable(asn) {
+					continue
+				}
+				if _, dup := seen[asn]; dup {
+					continue
+				}
+				seen[asn] = struct{}{}
+				fn(asn)
+			}
+		}
+		if m := alts[p]; m != nil {
+			walk(m[prov])
+		}
+		walk(hopASN[keyOf(prov, p)])
+	}
+
 	byASN := map[uint32]*asnHit{}
 	for p, v := range views {
 		if !asEligible(v) {
@@ -165,35 +333,79 @@ func Detect(now time.Time, samples []Sample, routes []Route, cfg Config) Outcome
 		}
 		seen := map[uint32]struct{}{}
 		for _, asn := range path[p] {
-			if asn == 0 {
-				continue
-			}
-			if _, skip := ignore[asn]; skip {
+			if !usable(asn) {
 				continue
 			}
 			if _, dup := seen[asn]; dup {
 				continue
 			}
 			seen[asn] = struct{}{}
-			h := byASN[asn]
-			if h == nil {
-				h = &asnHit{prefixes: map[netip.Prefix]struct{}{}, provs: map[string]struct{}{}}
-				byASN[asn] = h
-			}
-			h.prefixes[p] = struct{}{}
 			for prov := range v.bad {
-				h.provs[prov] = struct{}{}
+				note(byASN, asn, p, prov)
 			}
+		}
+		for prov := range v.bad {
+			extraASNs(p, prov, func(asn uint32) {
+				if _, already := seen[asn]; already {
+					return
+				}
+				note(byASN, asn, p, prov)
+			})
+		}
+	}
+	// A prefix that is healthy on another provider can still implicate an
+	// ASN that exists only on the degraded provider's path.
+	byScoped := map[uint32]*asnHit{}
+	for p, v := range views {
+		if asEligible(v) || len(v.bad) == 0 || len(v.healthy) == 0 {
+			continue
+		}
+		nativeSeen := map[uint32]struct{}{}
+		for _, asn := range path[p] {
+			if usable(asn) {
+				nativeSeen[asn] = struct{}{}
+			}
+		}
+		for prov := range v.bad {
+			extraASNs(p, prov, func(asn uint32) {
+				if _, onNative := nativeSeen[asn]; onNative {
+					return
+				}
+				note(byScoped, asn, p, prov)
+			})
 		}
 	}
 
-	var asns []uint32
-	for asn, h := range byASN {
-		if len(h.prefixes) >= cfg.MinPrefixes {
-			asns = append(asns, asn)
+	qualify := func(by map[uint32]*asnHit) []uint32 {
+		var out []uint32
+		for asn, h := range by {
+			if len(h.prefixes) >= cfg.MinPrefixes {
+				out = append(out, asn)
+			}
+		}
+		sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
+		return out
+	}
+	globalASNs := qualify(byASN)
+	scopedASNs := qualify(byScoped)
+	asns := mergeASNs(globalASNs, scopedASNs)
+	hits := map[uint32]*asnHit{}
+	for _, asn := range globalASNs {
+		hits[asn] = byASN[asn]
+	}
+	for _, asn := range scopedASNs {
+		h := hits[asn]
+		if h == nil {
+			hits[asn] = byScoped[asn]
+			continue
+		}
+		for p := range byScoped[asn].prefixes {
+			h.prefixes[p] = struct{}{}
+		}
+		for prov := range byScoped[asn].provs {
+			h.provs[prov] = struct{}{}
 		}
 	}
-	sort.Slice(asns, func(i, j int) bool { return asns[i] < asns[j] })
 	sick := map[uint32]struct{}{}
 	for _, asn := range asns {
 		sick[asn] = struct{}{}
@@ -201,6 +413,21 @@ func Detect(now time.Time, samples []Sample, routes []Route, cfg Config) Outcome
 	explained := func(p netip.Prefix) bool {
 		for _, asn := range path[p] {
 			if _, ok := sick[asn]; ok {
+				return true
+			}
+		}
+		v := views[p]
+		if v == nil {
+			return false
+		}
+		for prov := range v.bad {
+			hit := false
+			extraASNs(p, prov, func(asn uint32) {
+				if _, ok := sick[asn]; ok {
+					hit = true
+				}
+			})
+			if hit {
 				return true
 			}
 		}
@@ -239,7 +466,7 @@ func Detect(now time.Time, samples []Sample, routes []Route, cfg Config) Outcome
 
 	var incidents []Incident
 	for _, asn := range asns {
-		h := byASN[asn]
+		h := hits[asn]
 		incidents = append(incidents, Incident{
 			Kind:      IncidentAS,
 			ASN:       asn,
@@ -318,7 +545,7 @@ func Detect(now time.Time, samples []Sample, routes []Route, cfg Config) Outcome
 			if _, ok := seen[p]; ok {
 				continue
 			}
-			if contains(p, asn) {
+			if crosses(p, asn) {
 				extra = append(extra, p)
 			}
 		}
@@ -344,9 +571,29 @@ func Detect(now time.Time, samples []Sample, routes []Route, cfg Config) Outcome
 	}
 
 	for i := range incidents {
-		incidents[i].Requeued = requeued(incidents[i], targets, path, sampledOn, native)
+		incidents[i].Requeued = requeued(incidents[i], targets, crosses, sampledOn, native)
 	}
 	return Outcome{Incidents: incidents, Targets: targets, Truncated: truncated}
+}
+
+func mergeASNs(a, b []uint32) []uint32 {
+	if len(b) == 0 {
+		return a
+	}
+	if len(a) == 0 {
+		return b
+	}
+	seen := map[uint32]struct{}{}
+	out := make([]uint32, 0, len(a)+len(b))
+	for _, asn := range append(append([]uint32{}, a...), b...) {
+		if _, ok := seen[asn]; ok {
+			continue
+		}
+		seen[asn] = struct{}{}
+		out = append(out, asn)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
+	return out
 }
 
 func sampleDegraded(s Sample, cfg Config) bool {
@@ -365,16 +612,13 @@ func sampleDegraded(s Sample, cfg Config) bool {
 	return false
 }
 
-func requeued(inc Incident, targets []plugin.Target, path map[netip.Prefix][]uint32, sampled map[string]map[netip.Prefix]struct{}, native map[netip.Prefix]string) int {
+func requeued(inc Incident, targets []plugin.Target, crosses func(netip.Prefix, uint32) bool, sampled map[string]map[netip.Prefix]struct{}, native map[netip.Prefix]string) int {
 	n := 0
 	for _, t := range targets {
 		switch inc.Kind {
 		case IncidentAS:
-			for _, asn := range path[t.Prefix] {
-				if asn == inc.ASN {
-					n++
-					break
-				}
+			if crosses(t.Prefix, inc.ASN) {
+				n++
 			}
 		case IncidentCircuit:
 			if _, ok := sampled[inc.Provider][t.Prefix]; ok || native[t.Prefix] == inc.Provider {

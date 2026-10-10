@@ -167,6 +167,7 @@ scorer:
 #       asns:
 #         - 64496
 #   - type: outage              # re-probe when many prefixes fail together. Does not announce.
+#                               # hop ASNs and other providers' paths count when they exist.
 #     config:
 #       min_prefixes: 3         # minimum is 2; one noisy prefix never fires
 #       window: 2m

@@ -31,7 +31,7 @@ The same object is the `generic` webhook body and the `exec` `notify` params.
 | `commit.cleared` | info | 11 | `provider` | The billable 95th percentile is back at or below the commit. |
 | `announce.failed` | critical | 12 | | Syncing improvements to the announcer failed. Sent once per failure streak. |
 | `announce.recovered` | info | 13 | | Sync succeeded after a failure. |
-| `outage.as` | critical | 14 | `asn` | The `outage` source found several prefixes behind one ASN degraded on every provider. |
+| `outage.as` | critical | 14 | `asn` | The `outage` source found several prefixes crossing one ASN degraded together. The ASN may be on the native path, on another provider's learned path, or the origin of a traceroute hop. `providers` lists who saw it. |
 | `outage.circuit` | critical | 15 | `provider` | The `outage` source found several prefixes degraded on one provider only. |
 | `outage.cleared` | warning | 16 | `asn` or `provider` | The AS or circuit incident recovered. |
 | `notifier.test` | info | 17 | | Sent only by `packeteer -notify-test`, to check delivery. |
