@@ -82,6 +82,9 @@ type Options struct {
 	// Setup describes the loaded config for the dashboard's first-run
 	// checklist (#49).
 	Setup Setup
+	// Upgrade is the version check, upgrade, and rollback (#196). Nil when
+	// upgrade.enabled is off.
+	Upgrade UpgradeControl
 }
 
 // Server is an HTTP server. Handler serves the routes without listening,
@@ -105,6 +108,7 @@ type Server struct {
 	editor     ConfigEditor
 	dashboards plugin.DashboardStore
 	subs       Subscriptions
+	upgrade    UpgradeControl
 	setup      atomic.Pointer[Setup]
 	// suggest lists next hops the operator may accept as a draft provider
 	// row (#102). Nil means there is nothing to suggest. It must not write
@@ -146,7 +150,7 @@ func New(opt Options) (*Server, error) {
 		opt.Logger = slog.Default()
 	}
 	s := &Server{addr: opt.Addr, user: opt.User, password: opt.Password, auth: opt.Auth, audit: opt.Audit, allowFrom: opt.AllowFrom, snap: opt.Snapshot, maint: opt.Maintenance, reports: opt.Reports, tools: opt.Tools, inbound: opt.Inbound, mitigation: opt.Mitigation, anomaly: opt.Anomaly, federation: opt.Federation, ha: opt.HA,
-		editor: opt.ConfigEditor, dashboards: opt.Dashboards, subs: opt.Subscriptions, log: opt.Logger}
+		editor: opt.ConfigEditor, dashboards: opt.Dashboards, subs: opt.Subscriptions, upgrade: opt.Upgrade, log: opt.Logger}
 	setup := opt.Setup
 	s.setup.Store(&setup)
 	s.handler = s.routes()

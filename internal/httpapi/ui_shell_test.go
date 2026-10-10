@@ -99,7 +99,7 @@ func TestUIShell(t *testing.T) {
 		"policies.html":        {`<body data-page="policies" data-live="app">`, "#130"},
 		"events.html":          {`<body data-page="events" data-live="app">`, "#173"},
 		"admin.html":           {`<body data-page="admin" data-live="app">`, `id="page-denied"`, `id="admin-body"`, "#175"},
-		"settings.html":        {`<body data-page="settings">`, `src="/settings.js"`, `id="ed-yaml"`},
+		"settings.html":        {`<body data-page="settings">`, `src="/settings.js"`, `id="ed-yaml"`, `src="/upgrade.js"`, `id="up-check"`, `id="up-confirm"`},
 		"dashboards.html":      {`<body data-page="dashboards">`, `src="/dashboards.js"`, `id="db-grid"`, "Custom dashboards"},
 	}
 	if len(pages) != len(want) {

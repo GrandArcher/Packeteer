@@ -249,11 +249,31 @@
     <div id="subs"></div>
     <div id="subs-status" class="tag"></div>
   </section>
+  <section id="upgrade-section">
+    <h2>Version and upgrade</h2>
+    <p class="tag">Shows the running version. With <code>upgrade.enabled: true</code> and <code>upgrade.public_key</code> it also reads GitHub releases, upgrades to the one you pick, and rolls back. Nothing upgrades by itself: Check only lists releases, and an upgrade needs your confirmation. The release's signed checksum file and the binary are verified before anything changes, and the new version must pass its start check against this config. Then Packeteer shuts down as it does on SIGTERM, which withdraws every Packeteer route, and the new version starts in the configured mode and learns the RIB again before it injects. The config file is not touched. Admin role.</p>
+    <div id="up-summary" class="tag">Loading</div>
+    <div class="controls">
+      <button type="button" id="up-check" disabled>Check for updates</button>
+      <button type="button" id="up-rollback" disabled hidden>Roll back</button>
+    </div>
+    <div id="up-releases"></div>
+    <div id="up-confirm" class="conn" role="alertdialog" aria-labelledby="up-confirm-title" hidden>
+      <p id="up-confirm-title"></p>
+      <p id="up-confirm-ha" hidden><label class="check"><input id="up-standby" type="checkbox"> The standby already runs this version</label></p>
+      <div class="controls">
+        <button type="button" id="up-confirm-go">Confirm</button>
+        <button type="button" id="up-confirm-cancel">Cancel</button>
+      </div>
+    </div>
+    <div id="up-status" class="tag" role="status"></div>
+  </section>
 </main>
 </div>
 </div>
 <script src="/ui.js"></script>
 <script src="/shell.js"></script>
 <script src="/settings.js"></script>
+<script src="/upgrade.js"></script>
 </body>
 </html>

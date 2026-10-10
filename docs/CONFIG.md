@@ -61,6 +61,7 @@ The image entrypoint is the same binary. Flags go after the image name.
 | `inbound` | none | no | Inbound commit control: steer inbound traffic for your own prefixes away from a provider over commit with prepends and TE communities. Off unless set; its own `mode` defaults to `observe`. See [`inbound`](#inbound). Lab-proven only. |
 | `mitigation` | none | no | Threat mitigation: RTBH (blackhole), BGP redirect, and FlowSpec (drop, rate-limit, redirect, by source country too) for exact learned prefixes, added through `/api/mitigations`. Off unless set; its own `mode` defaults to `observe`. See [`mitigation`](#mitigation). Lab-proven only. |
 | `anomaly` | none | no | Automatic traffic anomaly (DDoS) detection: a detector plugin baselines flow volumes per destination prefix and IP protocol from a `flow` source and reports anomalies; an explicit rule can turn one into a mitigation rule, rate-limited and capped. Needs `mitigation` for rules. Off unless set. See [`anomaly`](#anomaly). Lab-proven only. |
+| `upgrade` | off | no | Version check, one-click upgrade, and rollback in Settings (#196). Needs `public_key`. See [`upgrade`](#upgrade). Never upgrades without an admin's confirmation; does not announce. |
 | `report_subscriptions` | none | no | Stored reports emailed as CSV on a daily, weekly, or monthly UTC schedule through an `smtp` notifier (#34). Needs `storage`. See [`report_subscriptions`](#report_subscriptions). Does not announce. |
 | `troubleshoot` | looking glass only | no | Read-only operator tools: looking glass, on-demand probe, traceroute, whois. Does not announce. See [`troubleshoot`](#troubleshoot). |
 
@@ -486,6 +487,27 @@ notifiers:
 report_subscriptions:
   - {name: weekly-summary, report: summary, schedule: weekly, weekday: monday, at: "06:00", notifier: mail}
   - {name: monthly-savings, report: savings, schedule: monthly, notifier: mail, to: [finance@example.net]}
+```
+
+### `upgrade`
+
+Version check, one-click upgrade, and rollback on the Settings page (#196). Off unless `enabled: true`; the page then only shows the running version. Nothing upgrades by itself: a check only lists GitHub releases, and an upgrade or rollback needs an admin's explicit confirmation (`confirm`) over `POST /api/upgrade/apply` or `/rollback`, with auth or basic auth on. Every key is checked at load, and unknown keys are errors. Does not announce; the switch withdraws first. See [ui.md](ui.md#upgrade-from-the-ui).
+
+| Key | Default | Meaning |
+|---|---|---|
+| `enabled` | `false` | Turns the feature on. Requires `public_key`. |
+| `public_key` | none | Required when enabled. The Ed25519 public key (base64, 32 bytes) that signs each release's `SHA256SUMS`. A release whose signature or checksum does not verify is never switched to. |
+| `repo` | `GrandArcher/Packeteer` | `owner/name` whose GitHub releases are read. |
+| `api_url` | `https://api.github.com` | GitHub API base. Must be `https`, or `http` on a loopback address (a local mirror). Asset downloads follow the same rule. |
+| `dir` | `/var/lib/packeteer/upgrade` | Absolute path where staged versions and the switch state are kept. In the container it is on the image's data volume; mount a volume on `/var/lib/packeteer` to keep a staged version when the container is recreated. |
+| `check_interval` | `0` (off) | `0`, or 1h to 720h. A background check that only notifies: the Settings page shows the newer release and the log says so. It never upgrades. Needs `enabled`. |
+| `allow_prerelease` | `false` | List pre-releases too. |
+
+```yaml
+upgrade:
+  enabled: true
+  public_key: "<base64 key published with the release>"   # not a secret
+  # check_interval: 24h
 ```
 
 ### Multi-POP (federation)

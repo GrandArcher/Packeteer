@@ -40,3 +40,43 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           build-args: VERSION=${{ steps.meta.outputs.version }}
+
+  # Signed binaries for the Settings upgrade (#196). Runs for version tags
+  # only. The controller verifies SHA256SUMS against the Ed25519 public key
+  # an operator pins in upgrade.public_key; the private key is the
+  # RELEASE_SIGNING_KEY repository secret (base64, from `relsign keygen`).
+  # Without the secret this job fails and no unsigned asset is uploaded.
+  assets:
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: build, checksum, sign
+        env:
+          PACKETEER_RELEASE_KEY: ${{ secrets.RELEASE_SIGNING_KEY }}
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          mkdir -p dist
+          for arch in amd64 arm64; do
+            CGO_ENABLED=0 GOOS=linux GOARCH=$arch \
+              go build -trimpath -ldflags "-s -w -X main.version=${version}" \
+              -o "dist/packeteer-linux-${arch}" ./cmd/controller
+          done
+          go run ./cmd/relsign sign dist dist/packeteer-linux-amd64 dist/packeteer-linux-arm64
+      - name: upload to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # The release is published after the tag; wait for it.
+          for _ in $(seq 1 60); do
+            gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 && break
+            sleep 30
+          done
+          gh release upload "$GITHUB_REF_NAME" dist/packeteer-linux-amd64 dist/packeteer-linux-arm64 dist/SHA256SUMS dist/SHA256SUMS.sig --clobber

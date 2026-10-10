@@ -175,6 +175,13 @@ func run(ctx context.Context, args []string, getenv func(string) string, stdout,
 		return 1
 	}
 	log := newLogger(stderr, cfg.Log.Level, cfg.Log.Format)
+	// A staged version (#196) takes over before anything starts. -check
+	// and -notify-test run as the installed binary.
+	if !*check && !*notifyTest {
+		if code, switched := launchStaged(cfg, args, getenv, log); switched {
+			return code
+		}
+	}
 	plugins, err := preflight(cfg, log, getenv, httpUser, false)
 	if err != nil {
 		fmt.Fprintf(stderr, "packeteer: refusing to start: %v\n", err)
@@ -255,6 +262,9 @@ func run(ctx context.Context, args []string, getenv func(string) string, stdout,
 	if el := plugins.Elector; el != nil {
 		fmt.Fprintf(stdout, "ha: %s id=%s (standby until elected; only the active instance announces)\n", el.Type, el.Plugin.Status().ID)
 	}
+	if u := cfg.Upgrade; u != nil && u.Enabled {
+		fmt.Fprintf(stdout, "upgrade: on (repo %s, dir %s; only an admin's confirmation upgrades, verified against upgrade.public_key)\n", u.Repo, u.Dir)
+	}
 	fmt.Fprintf(stdout, "log: %s %s\n", cfg.Log.Level, cfg.Log.Format)
 	if cfg.HTTPListen() == "" {
 		fmt.Fprintln(stdout, "http: disabled")
@@ -289,7 +299,12 @@ func run(ctx context.Context, args []string, getenv func(string) string, stdout,
 		fmt.Fprintln(stdout, "check: ok (no probes sent, no BGP sessions opened)")
 		return 0
 	}
-	return daemon(ctx, cfg, plugins, log, httpUser, httpPass, *path, getenv)
+	up := &upgradeRun{}
+	code := daemon(ctx, cfg, plugins, log, httpUser, httpPass, *path, getenv, up)
+	// The daemon has withdrawn and stopped. A prepared upgrade or rollback
+	// starts its binary now; the new process learns the RIB before it injects.
+	code, _ = finishUpgrade(up, code, args, log)
+	return code
 }
 
 // preflight builds the plugin set and runs every check the controller runs
@@ -326,7 +341,7 @@ func preflight(cfg *config.Config, log *slog.Logger, getenv func(string) string,
 	return plugins, nil
 }
 
-func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, log *slog.Logger, httpUser, httpPass, path string, getenv func(string) string) int {
+func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, log *slog.Logger, httpUser, httpPass, path string, getenv func(string) string, up *upgradeRun) int {
 	// SIGHUP reloads online keys (#27, #128). Registered first: Go's
 	// default for SIGHUP ends the process.
 	hup := make(chan os.Signal, 1)
@@ -412,6 +427,23 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 		log.Error("refusing to start", "err", aerr)
 		return 1
 	}
+	// Upgrade from the UI (#196). The stop is the SIGTERM path: the
+	// shutdown below withdraws every route before the new version starts.
+	upMgr, uerr := newUpgrade(cfg, path, stopDaemon, haStatus, audit, getenv, log)
+	if uerr != nil {
+		log.Error("refusing to start", "err", uerr)
+		return 1
+	}
+	var upgradeAPI httpapi.UpgradeControl
+	if upMgr != nil {
+		upgradeAPI = upMgr
+		up.mgr = upMgr
+		if httpUser == "" && authSvc == nil {
+			log.Warn("upgrade.enabled is on but neither auth nor basic auth is: upgrade and rollback stay off")
+		}
+		go upMgr.Run(ctx)
+		confirmUpgrade(ctx, upMgr, getenv)
+	}
 	// Remaining UI features (#34). None of these announces.
 	var subs *subscribe.Scheduler
 	if rec != nil {
@@ -446,7 +478,7 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 			Maintenance: maint, Reports: reports, Tools: tools, Inbound: inboundStatus, Mitigation: mitAPI, Anomaly: anomAPI,
 			Federation: fed.status, HA: haStatus,
 			ConfigEditor: editorAPI, Dashboards: dashboardStore(plugins), Subscriptions: subsAPI,
-			Setup: setupInfo(cfg, plugins),
+			Setup: setupInfo(cfg, plugins), Upgrade: upgradeAPI,
 		})
 		if err != nil {
 			log.Error("refusing to start", "err", err)
