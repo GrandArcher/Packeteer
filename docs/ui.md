@@ -1,6 +1,6 @@
 # Dashboard, config editor, wizard, dashboards, report subscriptions, and improvement weights
 
-The remaining IRP GUI conveniences (#34). All of them work in the stock image with a mounted config file. None of them announces a route, and the default mode stays `observe`. Every key is in [CONFIG.md](CONFIG.md).
+The remaining UI conveniences (#34). All of them work in the stock image with a mounted config file. None of them announces a route, and the default mode stays `observe`. Every key is in [CONFIG.md](CONFIG.md).
 
 | Feature | Where | Who | Config |
 |---|---|---|---|

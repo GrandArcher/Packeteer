@@ -4,7 +4,7 @@ Open-source BGP path performance controller for multi-homed networks. One contai
 
 Packeteer sits off to the side of the edge. It probes each upstream from that upstream's source address, scores loss, latency, and jitter, and learns today's exit from iBGP. In the default mode it only reports. If you later turn injection on, it advertises a better exit back to the edge for prefixes you allowlisted. If Packeteer stops, those routes go away and the router's own BGP decision stands.
 
-The capability matrix against Noction IRP is [docs/IRP_PARITY.md](docs/IRP_PARITY.md).
+The feature matrix is [docs/FEATURES.md](docs/FEATURES.md).
 
 ## Safety model
 
@@ -308,9 +308,9 @@ Symptoms, log lines, and fixes: [docs/troubleshooting.md](docs/troubleshooting.m
 
 **Can I put my config in this git repo?** Keep it on the host you mount into the container. Do not commit real prefixes, ASNs, SNMP communities, or hook tokens.
 
-## IRP parity
+## Features
 
-Feature parity with Noction IRP is the roadmap. Status as of v0.5.0, from [docs/IRP_PARITY.md](docs/IRP_PARITY.md):
+Status as of v0.5.0, from [docs/FEATURES.md](docs/FEATURES.md):
 
 | | Count |
 |---|---|

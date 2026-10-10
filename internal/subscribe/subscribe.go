@@ -1,5 +1,4 @@
-// Package subscribe emails stored reports on a schedule (#34, IRP
-// "Email report subscriptions"). Each subscription names a report from
+// Package subscribe emails stored reports on a schedule (#34). Each subscription names a report from
 // /api/reports, a daily, weekly, or monthly UTC schedule, and a notifier
 // that implements plugin.ReportSender (smtp). It only reads history and
 // sends mail: it never announces, never changes a decision, and a failed
