@@ -60,6 +60,7 @@ type Set struct {
 }
 
 type namedLifecycle struct {
+	kind  plugin.Kind
 	label string
 	lc    plugin.Lifecycle
 }
@@ -183,7 +184,7 @@ func (s *Set) attachSampleStore() {
 func (s *Set) all() []namedLifecycle {
 	var out []namedLifecycle
 	add := func(kind plugin.Kind, name string, lc plugin.Lifecycle) {
-		out = append(out, namedLifecycle{fmt.Sprintf("%s %s", kind, name), lc})
+		out = append(out, namedLifecycle{kind, fmt.Sprintf("%s %s", kind, name), lc})
 	}
 	// Storage starts first and stops last, so history can be flushed
 	// after the announcer has withdrawn.
@@ -279,12 +280,24 @@ func (s *Set) track(nl namedLifecycle) {
 }
 
 // TrackStart records a plugin started after the set's Start, so Stop
-// stops it too. Online reload uses it for a source or policy it added.
+// stops it too. Online reload uses it for a source or policy it added. It
+// goes before the first elector or announcer, so Stop still stops the
+// announcers first.
 func (s *Set) TrackStart(kind plugin.Kind, name string, lc plugin.Lifecycle) {
 	if s == nil || lc == nil {
 		return
 	}
-	s.track(namedLifecycle{fmt.Sprintf("%s %s", kind, name), lc})
+	nl := namedLifecycle{kind, fmt.Sprintf("%s %s", kind, name), lc}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	at := slices.IndexFunc(s.started, func(n namedLifecycle) bool {
+		return n.kind == plugin.KindElector || n.kind == plugin.KindAnnouncer
+	})
+	if at < 0 {
+		s.started = append(s.started, nl)
+		return
+	}
+	s.started = slices.Insert(s.started, at, nl)
 }
 
 // Untrack forgets a plugin that was stopped on its own, so Stop does not

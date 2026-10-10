@@ -178,7 +178,7 @@ func setupInfo(cfg *config.Config, plugins *pluginhost.Set) httpapi.Setup {
 	if cfg.MaxImprovements != nil {
 		st.MaxImprovements = *cfg.MaxImprovements
 	}
-	for _, s := range plugins.Sources {
+	for _, s := range plugins.SourcesSnapshot() {
 		st.Sources = append(st.Sources, s.Type)
 	}
 	return st

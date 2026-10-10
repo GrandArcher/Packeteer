@@ -45,6 +45,7 @@ type neighborView interface {
 type announcerCtl interface {
 	SetRouters(context.Context, []plugin.RouterExport) error
 	Routers() []plugin.RouterExport
+	PrepareRuntime(mode string, max int) error
 	ApplyRuntime(context.Context, string, []netip.Prefix, int) error
 }
 
@@ -211,6 +212,14 @@ func classify(a, b *config.Config) (restart, online []string) {
 			}
 		}
 	}
+	// The inbound controller reads the cap once, at start, and its steers
+	// count against the same cap as outbound improvements. Until it can
+	// take a new cap, the cap changes only with a restart whenever
+	// inbound is configured.
+	if i := slices.Index(online, "max_improvements"); i >= 0 && (a.Inbound != nil || b.Inbound != nil) {
+		online = slices.Delete(online, i, i+1)
+		restart = append(restart, "max_improvements (shared with inbound)")
+	}
 	slices.Sort(online)
 	return restart, online
 }
@@ -306,6 +315,9 @@ type reloader struct {
 	// applied, when set, is told each config the reload now runs with
 	// (the config editor diffs against it).
 	applied func(*config.Config)
+	// setup, when set, is told the cap and source types the overview
+	// shows after a reload changes them.
+	setup func(httpapi.Setup)
 
 	plugins  *pluginhost.Set
 	engine   *probe.Engine
@@ -332,7 +344,8 @@ func (r *reloader) setCur(next *config.Config) {
 // reload reads the file and applies what can change online. applied are
 // the keys now running. refused is a config that was not applied (the
 // running one stays). fatal is a failure after the speaker was changed:
-// the caller must stop, which withdraws.
+// the caller must stop, which withdraws. On fatal, applied is nil: the
+// process is stopping, so no key counts as applied.
 func (r *reloader) reload(ctx context.Context) (applied []string, refused, fatal error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -390,18 +403,18 @@ func (r *reloader) reload(ctx context.Context) (applied []string, refused, fatal
 	// new router's first routes already follow the new table.
 	if plan.sessions() {
 		if err := r.view.RemoveNeighbors(ctx, plan.remove); err != nil {
-			return plan.online, nil, err
+			return nil, nil, err
 		}
 		if plan.newTable && r.ctl != nil {
 			if err := r.ctl.SetRouters(ctx, plan.routers); err != nil {
-				return plan.online, nil, err
+				return nil, nil, err
 			}
 		}
 		if err := r.view.AddNeighbors(ctx, plan.add); err != nil {
-			return plan.online, nil, err
+			return nil, nil, err
 		}
 		if err := r.view.SetEgress(plan.egress); err != nil {
-			return plan.online, nil, err
+			return nil, nil, err
 		}
 	}
 	r.setCur(next)
@@ -424,9 +437,11 @@ func (r *reloader) reload(ctx context.Context) (applied []string, refused, fatal
 
 // applyOnline installs every online key except BGP sessions. A failure
 // leaves the previous sources, policies, announcer mode, and probe timing
-// in place. The caller has not changed the speaker yet. New plugins are
-// started only after the announcer accepts the new mode, allowlist, and
-// cap, so a bind failure there does not stop a running source.
+// in place. The caller has not changed the speaker yet. The announcer
+// first checks it can take the new mode (and binds), so a refusal there
+// does not stop a running source. New plugins start next, and the
+// announcer's mode, allowlist, and cap change only after they are
+// running, so a refused reload never lets a decision round announce.
 func (r *reloader) applyOnline(ctx context.Context, next *config.Config, online []string) error {
 	if len(online) == 0 {
 		return nil
@@ -441,7 +456,10 @@ func (r *reloader) applyOnline(ctx context.Context, next *config.Config, online 
 	}
 	runtime := r.ctl != nil && (slices.Contains(online, "mode") || slices.Contains(online, "allowlist") || slices.Contains(online, "max_improvements"))
 	if runtime {
-		if err := r.ctl.ApplyRuntime(ctx, next.Mode, pc.Allowlist, pc.MaxImprovements); err != nil {
+		// Checks and binds only: the mode, allowlist, and cap change
+		// after the plugins swap, so a reload that is refused never
+		// lets a decision round announce.
+		if err := r.ctl.PrepareRuntime(next.Mode, pc.MaxImprovements); err != nil {
 			return err
 		}
 	}
@@ -451,9 +469,17 @@ func (r *reloader) applyOnline(ctx context.Context, next *config.Config, online 
 		var preempted []plugin.Lifecycle
 		started, preempted, err = r.swapPlugins(ctx, toStart, toStop)
 		if err != nil {
-			r.rollbackRuntime(ctx, runtime)
 			r.stopStarted(ctx, started)
 			if restartErr := r.restartStopped(ctx, preempted); restartErr != nil {
+				return fmt.Errorf("%w (restarting the previous plugin failed: %v)", err, restartErr)
+			}
+			return err
+		}
+	}
+	if runtime {
+		if err := r.ctl.ApplyRuntime(ctx, next.Mode, pc.Allowlist, pc.MaxImprovements); err != nil {
+			r.stopStarted(ctx, started)
+			if restartErr := r.restartStopped(ctx, toStop); restartErr != nil {
 				return fmt.Errorf("%w (restarting the previous plugin failed: %v)", err, restartErr)
 			}
 			return err
@@ -497,6 +523,9 @@ func (r *reloader) applyOnline(ctx context.Context, next *config.Config, online 
 	if r.decider != nil {
 		r.decider.SetConfig(pc)
 	}
+	if r.setup != nil && (slices.Contains(online, "max_improvements") || slices.Contains(online, "sources")) {
+		r.setup(setupInfo(next, r.plugins))
+	}
 	if r.fed != nil {
 		max := 0
 		if next.MaxImprovements != nil {
@@ -514,24 +543,6 @@ func (r *reloader) applyOnline(ctx context.Context, next *config.Config, online 
 		r.hist.SetMode(next.Mode)
 	}
 	return nil
-}
-
-// rollbackRuntime puts the announcer's mode, allowlist, and cap back when
-// a later step of the reload fails. The speaker has not changed.
-func (r *reloader) rollbackRuntime(ctx context.Context, applied bool) {
-	if !applied || r.ctl == nil || r.cur == nil {
-		return
-	}
-	old, err := policyConfig(r.cur)
-	if err != nil {
-		if r.log != nil {
-			r.log.Error("reload rollback could not rebuild the policy config", "err", err)
-		}
-		return
-	}
-	if err := r.ctl.ApplyRuntime(ctx, r.cur.Mode, old.Allowlist, old.MaxImprovements); err != nil && r.log != nil {
-		r.log.Error("reload rollback of mode, allowlist, and cap failed", "err", err)
-	}
 }
 
 func (r *reloader) stopStarted(ctx context.Context, started []startedPlugin) {

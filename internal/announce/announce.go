@@ -193,86 +193,98 @@ func (c *Controller) improvementsLocked() int {
 	return n
 }
 
+// validateInject checks the settings inject mode needs and returns cfg with
+// the community written in its canonical form. New runs it for a controller
+// that starts in inject; a reload that enters inject runs it too, so a
+// controller that started in observe gets the same checks.
+func validateInject(cfg Config, ann plugin.Announcer, rib RIB) (Config, error) {
+	if ann == nil {
+		return cfg, errors.New("announce: inject mode requires an announcer")
+	}
+	if rib == nil {
+		return cfg, errors.New("announce: inject mode requires a RIB view")
+	}
+	if cfg.LocalPref == 0 {
+		return cfg, errors.New("announce: inject mode requires local_pref")
+	}
+	for cause, v := range cfg.CauseLocalPref {
+		switch cause {
+		case plugin.CausePerformance, plugin.CauseStatic, plugin.CauseCommit, plugin.CauseCost:
+		default:
+			return cfg, fmt.Errorf("announce: local_pref cause %q is invalid", cause)
+		}
+		if v == 0 {
+			return cfg, fmt.Errorf("announce: local_pref for cause %s must be above the edge's native local preference (0 is rejected)", cause)
+		}
+	}
+	for name, v := range cfg.ProviderLocalPref {
+		if _, ok := cfg.NextHops[name]; !ok {
+			return cfg, fmt.Errorf("announce: local_pref for unknown provider %q", name)
+		}
+		if v == 0 {
+			return cfg, fmt.Errorf("announce: provider %s local_pref must be above the edge's native local preference (0 is rejected)", name)
+		}
+	}
+	if cfg.Community == "" {
+		return cfg, errors.New("announce: inject mode requires a community")
+	}
+	text, err := config.CommunityText(cfg.Community)
+	if err != nil {
+		return cfg, fmt.Errorf("announce: community: %w", err)
+	}
+	cfg.Community = text
+	for cause, list := range cfg.CauseCommunities {
+		switch cause {
+		case plugin.CausePerformance, plugin.CauseStatic, plugin.CauseCommit, plugin.CauseCost:
+		default:
+			return cfg, fmt.Errorf("announce: communities cause %q is invalid", cause)
+		}
+		canon, err := checkExtraCommunities(cause, list, cfg.Community)
+		if err != nil {
+			return cfg, err
+		}
+		cfg.CauseCommunities[cause] = canon
+	}
+	for name, list := range cfg.ProviderCommunities {
+		if _, ok := cfg.NextHops[name]; !ok {
+			return cfg, fmt.Errorf("announce: communities for unknown provider %q", name)
+		}
+		canon, err := checkExtraCommunities(name, list, cfg.Community)
+		if err != nil {
+			return cfg, err
+		}
+		cfg.ProviderCommunities[name] = canon
+	}
+	if cfg.MaxImprovements < 0 {
+		return cfg, errors.New("announce: max_improvements must not be negative")
+	}
+	switch cfg.ASPath {
+	case "", config.ASPathEmpty:
+	case config.ASPathNative, config.ASPathProvider:
+		if _, ok := rib.(PathRIB); !ok {
+			return cfg, fmt.Errorf("announce: as_path %s needs the learned AS paths", cfg.ASPath)
+		}
+	default:
+		return cfg, fmt.Errorf("announce: as_path %q is invalid", cfg.ASPath)
+	}
+	if cfg.MoreSpecific {
+		if cfg.MaxRoutes < 1 {
+			return cfg, errors.New("announce: more_specific.max_routes must be positive")
+		}
+		if _, ok := rib.(MoreSpecificRIB); !ok {
+			return cfg, errors.New("announce: more_specific needs the learned more-specifics from the RIB")
+		}
+	}
+	return cfg, nil
+}
+
 // New validates inject settings and returns a controller. ann and rib may be
 // nil when Mode is not inject; Apply is then a no-op.
 func New(cfg Config, ann plugin.Announcer, rib RIB, log *slog.Logger) (*Controller, error) {
 	if cfg.Mode == config.ModeInject {
-		if ann == nil {
-			return nil, errors.New("announce: inject mode requires an announcer")
-		}
-		if rib == nil {
-			return nil, errors.New("announce: inject mode requires a RIB view")
-		}
-		if cfg.LocalPref == 0 {
-			return nil, errors.New("announce: inject mode requires local_pref")
-		}
-		for cause, v := range cfg.CauseLocalPref {
-			switch cause {
-			case plugin.CausePerformance, plugin.CauseStatic, plugin.CauseCommit, plugin.CauseCost:
-			default:
-				return nil, fmt.Errorf("announce: local_pref cause %q is invalid", cause)
-			}
-			if v == 0 {
-				return nil, fmt.Errorf("announce: local_pref for cause %s must be above the edge's native local preference (0 is rejected)", cause)
-			}
-		}
-		for name, v := range cfg.ProviderLocalPref {
-			if _, ok := cfg.NextHops[name]; !ok {
-				return nil, fmt.Errorf("announce: local_pref for unknown provider %q", name)
-			}
-			if v == 0 {
-				return nil, fmt.Errorf("announce: provider %s local_pref must be above the edge's native local preference (0 is rejected)", name)
-			}
-		}
-		if cfg.Community == "" {
-			return nil, errors.New("announce: inject mode requires a community")
-		}
-		text, err := config.CommunityText(cfg.Community)
-		if err != nil {
-			return nil, fmt.Errorf("announce: community: %w", err)
-		}
-		cfg.Community = text
-		for cause, list := range cfg.CauseCommunities {
-			switch cause {
-			case plugin.CausePerformance, plugin.CauseStatic, plugin.CauseCommit, plugin.CauseCost:
-			default:
-				return nil, fmt.Errorf("announce: communities cause %q is invalid", cause)
-			}
-			canon, err := checkExtraCommunities(cause, list, cfg.Community)
-			if err != nil {
-				return nil, err
-			}
-			cfg.CauseCommunities[cause] = canon
-		}
-		for name, list := range cfg.ProviderCommunities {
-			if _, ok := cfg.NextHops[name]; !ok {
-				return nil, fmt.Errorf("announce: communities for unknown provider %q", name)
-			}
-			canon, err := checkExtraCommunities(name, list, cfg.Community)
-			if err != nil {
-				return nil, err
-			}
-			cfg.ProviderCommunities[name] = canon
-		}
-		if cfg.MaxImprovements < 0 {
-			return nil, errors.New("announce: max_improvements must not be negative")
-		}
-		switch cfg.ASPath {
-		case "", config.ASPathEmpty:
-		case config.ASPathNative, config.ASPathProvider:
-			if _, ok := rib.(PathRIB); !ok {
-				return nil, fmt.Errorf("announce: as_path %s needs the learned AS paths", cfg.ASPath)
-			}
-		default:
-			return nil, fmt.Errorf("announce: as_path %q is invalid", cfg.ASPath)
-		}
-		if cfg.MoreSpecific {
-			if cfg.MaxRoutes < 1 {
-				return nil, errors.New("announce: more_specific.max_routes must be positive")
-			}
-			if _, ok := rib.(MoreSpecificRIB); !ok {
-				return nil, errors.New("announce: more_specific needs the learned more-specifics from the RIB")
-			}
+		var err error
+		if cfg, err = validateInject(cfg, ann, rib); err != nil {
+			return nil, err
 		}
 	}
 	if cfg.Now == nil {
@@ -317,33 +329,65 @@ func (c *Controller) RememberSpeaker(srv any) {
 	c.mu.Unlock()
 }
 
+// PrepareRuntime checks that the controller can enter mode with the cap max
+// and binds the remembered speaker when it can. It changes no mode,
+// allowlist, or cap, and announces nothing. A reload calls it before it
+// swaps plugins, so a refusal leaves everything as it was, and then calls
+// ApplyRuntime once the rest of the reload has applied. A mode other than
+// inject needs no check.
+func (c *Controller) PrepareRuntime(mode string, max int) error {
+	if c == nil || mode != config.ModeInject {
+		return nil
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.enterInjectLocked(max)
+}
+
+// enterInjectLocked runs the inject checks New runs at start (a controller
+// that started in observe skipped them), then binds the remembered
+// speaker. It leaves mode, allowlist, and cap alone. Caller holds mu.
+func (c *Controller) enterInjectLocked(max int) error {
+	if c.cfg.Mode == config.ModeInject && c.bound {
+		return nil
+	}
+	next := c.cfg
+	next.Mode, next.MaxImprovements = config.ModeInject, max
+	checked, err := validateInject(next, c.ann, c.rib)
+	if err != nil {
+		return err
+	}
+	c.cfg.Community = checked.Community
+	return c.bindLocked()
+}
+
 // ApplyRuntime updates mode, the allowlist, and the improvement cap while
 // running (#128). Leaving inject withdraws every route before the mode
 // changes, under this lock, so a concurrent Sync cannot announce again.
-// Entering inject binds the remembered speaker and, if that fails, leaves
-// the previous mode in place. The caller has not changed BGP sessions yet.
+// Entering inject checks the inject settings, binds the remembered speaker
+// and, if that fails, leaves the previous mode in place. The caller has not
+// changed BGP sessions yet.
 func (c *Controller) ApplyRuntime(ctx context.Context, mode string, allow []netip.Prefix, max int) error {
 	if c == nil {
 		return nil
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	prevMode, prevAllow, prevMax := c.cfg.Mode, c.cfg.Allowlist, c.cfg.MaxImprovements
+	prevMode := c.cfg.Mode
 	if prevMode == config.ModeInject && mode != config.ModeInject {
 		if err := c.withdrawAllLocked(ctx); err != nil {
 			return err
 		}
 		c.store()
 	}
-	c.cfg.Mode = mode
-	c.cfg.Allowlist = append([]netip.Prefix(nil), allow...)
-	c.cfg.MaxImprovements = max
 	if prevMode != config.ModeInject && mode == config.ModeInject {
-		if err := c.bindLocked(); err != nil {
-			c.cfg.Mode, c.cfg.Allowlist, c.cfg.MaxImprovements = prevMode, prevAllow, prevMax
+		if err := c.enterInjectLocked(max); err != nil {
 			return err
 		}
 	}
+	c.cfg.Mode = mode
+	c.cfg.Allowlist = append([]netip.Prefix(nil), allow...)
+	c.cfg.MaxImprovements = max
 	return nil
 }
 

@@ -105,7 +105,7 @@ type Server struct {
 	editor     ConfigEditor
 	dashboards plugin.DashboardStore
 	subs       Subscriptions
-	setup      Setup
+	setup      atomic.Pointer[Setup]
 	// suggest lists next hops the operator may accept as a draft provider
 	// row (#102). Nil means there is nothing to suggest. It must not write
 	// config or announce.
@@ -123,6 +123,15 @@ type Server struct {
 	ln      net.Listener
 }
 
+// SetSetup replaces the facts the overview's setup checklist reads. An
+// online reload calls it when the cap or the sources change.
+func (s *Server) SetSetup(st Setup) {
+	if s == nil {
+		return
+	}
+	s.setup.Store(&st)
+}
+
 // New validates auth and builds the handler. It does not listen.
 func New(opt Options) (*Server, error) {
 	if (opt.User == "") != (opt.Password == "") {
@@ -135,7 +144,9 @@ func New(opt Options) (*Server, error) {
 		opt.Logger = slog.Default()
 	}
 	s := &Server{addr: opt.Addr, user: opt.User, password: opt.Password, auth: opt.Auth, audit: opt.Audit, allowFrom: opt.AllowFrom, snap: opt.Snapshot, maint: opt.Maintenance, reports: opt.Reports, tools: opt.Tools, inbound: opt.Inbound, mitigation: opt.Mitigation, anomaly: opt.Anomaly, federation: opt.Federation, ha: opt.HA,
-		editor: opt.ConfigEditor, dashboards: opt.Dashboards, subs: opt.Subscriptions, setup: opt.Setup, log: opt.Logger}
+		editor: opt.ConfigEditor, dashboards: opt.Dashboards, subs: opt.Subscriptions, log: opt.Logger}
+	setup := opt.Setup
+	s.setup.Store(&setup)
 	s.handler = s.routes()
 	return s, nil
 }

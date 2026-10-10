@@ -524,10 +524,10 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 			return 1
 		}
 	} else if view != nil && view.Server() != nil {
-		// A later change to inject binds this speaker. Community, local
-		// preference, the announcer, and the allowlist are restart-only
-		// when they change, so a mode-only flip can bind only when they
-		// were already set and stored by announce.New.
+		// A later change to inject binds this speaker, after the
+		// controller runs the inject checks New skipped. Community, local
+		// preference, and the announcer are restart-only when they
+		// change; the allowlist and the cap reload online.
 		ctl.RememberSpeaker(view.Server())
 	}
 
@@ -695,6 +695,9 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 	}
 	if editor != nil {
 		rl.applied = editor.SetRunning
+	}
+	if httpSrv != nil {
+		rl.setup = httpSrv.SetSetup
 	}
 	if view != nil {
 		rl.view = view
@@ -2561,12 +2564,6 @@ func newRecorder(cfg *config.Config, plugins *pluginhost.Set, log *slog.Logger, 
 	if plugins == nil || plugins.Storage == nil {
 		return nil
 	}
-	var geo []plugin.CountryLookup
-	for _, pol := range plugins.Policies {
-		if g, ok := pol.Plugin.(plugin.CountryLookup); ok {
-			geo = append(geo, g)
-		}
-	}
 	describe := func(p netip.Prefix) (uint32, string) {
 		var asn uint32
 		if v := view(); v != nil && v.Ready() {
@@ -2574,9 +2571,12 @@ func newRecorder(cfg *config.Config, plugins *pluginhost.Set, log *slog.Logger, 
 				asn = rt.ASPath[len(rt.ASPath)-1]
 			}
 		}
-		for _, g := range geo {
-			if c := g.Country(p.Addr()); c != "" {
-				return asn, c
+		// Read per call: a reload can add or remove a policy.
+		for _, pol := range plugins.PoliciesSnapshot() {
+			if g, ok := pol.Plugin.(plugin.CountryLookup); ok {
+				if c := g.Country(p.Addr()); c != "" {
+					return asn, c
+				}
 			}
 		}
 		return asn, ""
