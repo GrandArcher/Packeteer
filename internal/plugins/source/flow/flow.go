@@ -686,9 +686,9 @@ func (s *Source) readLoop(ctx context.Context, c *net.UDPConn) {
 		if n == 0 || addr == nil {
 			continue
 		}
-		payload := make([]byte, n)
-		copy(payload, buf[:n])
-		s.ingest(s.now(), udpAddr(addr), payload)
+		// Decode before the next read. ingest does not keep the
+		// payload, so the read buffer is reused instead of copied.
+		s.ingest(s.now(), udpAddr(addr), buf[:n])
 	}
 }
 
@@ -956,6 +956,7 @@ func (s *Source) setSubranges(t *plugin.Target, subs []subRank, left *int) {
 
 func (s *Source) ingest(at time.Time, exporter netip.Addr, payload []byte) {
 	obs, err := s.dec.decode(exporter, payload)
+	defer putObs(obs)
 	if err != nil {
 		s.log.Debug("flow decode", "exporter", exporter.String(), "err", err)
 	}

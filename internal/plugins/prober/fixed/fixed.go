@@ -55,10 +55,11 @@ type PathSpec struct {
 // Prober returns configured probe results.
 type Prober struct {
 	plugin.Base
-	file  string
-	sent  int
-	rttMs float64
-	paths []PathSpec
+	file      string
+	sent      int
+	rttMs     float64
+	paths     []PathSpec
+	anyTarget bool // a path matches on target; Probe must format the address
 }
 
 // New is the plugin factory.
@@ -95,6 +96,7 @@ func New(c plugin.Config, _ plugin.Env) (plugin.Prober, error) {
 func (p *Prober) setPaths(paths []PathSpec) error {
 	seen := map[string]bool{}
 	out := make([]PathSpec, len(paths))
+	anyTarget := false
 	for i, s := range paths {
 		if s.Provider == "" {
 			return fmt.Errorf("paths[%d]: provider is required", i)
@@ -105,6 +107,7 @@ func (p *Prober) setPaths(paths []PathSpec) error {
 				return fmt.Errorf("paths[%d]: target %q is not an IP address", i, s.Target)
 			}
 			s.Target = a.String()
+			anyTarget = true
 		}
 		if s.Count < 0 || s.Count > 1000 {
 			return fmt.Errorf("paths[%d]: count %d must be between 0 and 1000", i, s.Count)
@@ -140,6 +143,7 @@ func (p *Prober) setPaths(paths []PathSpec) error {
 		out[i] = s
 	}
 	p.paths = out
+	p.anyTarget = anyTarget
 	return nil
 }
 
@@ -223,7 +227,15 @@ func (p *Prober) Probe(_ context.Context, req plugin.ProbeRequest) (plugin.Probe
 		}
 		sent, rtt, paths = snap.Sent, snap.RTTMs, tmp.paths
 	}
-	spec, ok := matchPath(paths, req.Provider, req.Target.String(), req.Count)
+	// The load test's fixed prober has no per-target paths. Formatting
+	// the address on every probe is pure garbage at four addresses times
+	// the measured set. A file can gain a target between reads, so a
+	// file always formats.
+	target := ""
+	if p.file != "" || p.anyTarget {
+		target = req.Target.String()
+	}
+	spec, ok := matchPath(paths, req.Provider, target, req.Count)
 	if !ok {
 		if len(paths) > 0 {
 			return plugin.ProbeResult{}, fmt.Errorf("fixed prober: no result for provider %q", req.Provider)

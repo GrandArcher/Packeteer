@@ -27,6 +27,9 @@ type bucket struct {
 	minP  netip.Prefix
 	minB  uint64
 	minOK bool
+	// scratch is reused by evict so a full bucket does not allocate a
+	// fresh slice of every byte-count on each new prefix.
+	scratch []uint64
 }
 
 // maxFlowHosts is how many destinations one prefix keeps. The probe
@@ -232,10 +235,14 @@ func (b *bucket) evict(k int, n uint64) bool {
 	if b.minOK && n <= b.minB {
 		return false
 	}
-	vals := make([]uint64, 0, len(b.cells))
+	vals := b.scratch[:0]
+	if cap(vals) < len(b.cells) {
+		vals = make([]uint64, 0, len(b.cells))
+	}
 	for _, c := range b.cells {
 		vals = append(vals, c.bytes)
 	}
+	b.scratch = vals
 	slices.Sort(vals)
 	// Only cells smaller than n may go, at most k of them.
 	k = min(k, sort.Search(len(vals), func(i int) bool { return vals[i] >= n }))
