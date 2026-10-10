@@ -83,7 +83,7 @@ report_subscriptions:
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !res.RestartRequired || !res.ReloadOnline || strings.Join(res.Changed, ",") != "bgp.neighbors,hold_time" {
+	if res.RestartRequired || !res.ReloadOnline || strings.Join(res.Changed, ",") != "bgp.neighbors,hold_time" {
 		t.Fatalf("result = %+v", res)
 	}
 	if _, err := config.Load(path); err != nil {

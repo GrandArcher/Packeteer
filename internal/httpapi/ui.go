@@ -22,8 +22,9 @@ import (
 // (admin), custom dashboards (each signed-in user's own), and report
 // subscriptions (status for viewers, send-now for operators). None of
 // them announces. The editor writes the mounted file only after the same
-// checks the controller runs at start, and the running controller does
-// not change until it restarts (or SIGHUPs, for bgp.neighbors).
+// checks the controller runs at start. When every change can apply
+// online, the controller applies it on the write (#128). Anything else
+// waits for a restart.
 
 // ConfigEditor is the validated config editor. *configedit.Editor
 // implements it. Nil when http.config_editor is off.
@@ -126,9 +127,35 @@ func (s *Server) handleConfigSave(w http.ResponseWriter, r *http.Request) {
 	body := map[string]any{"result": res}
 	switch {
 	case err == nil:
-		noteAudit(r, "config", "base="+short(req.Base)+" new="+short(next)+" mode="+res.Mode+" changed="+strings.Join(res.Changed, ","))
-		s.log.Warn("config file written through the editor; it applies on restart (or SIGHUP for bgp.neighbors)",
-			"user", principalFrom(r.Context()).User, "path", f.Path, "sha256", f.SHA256, "changed", strings.Join(res.Changed, ","))
+		detail := "base=" + short(req.Base) + " new=" + short(next) + " mode=" + res.Mode + " changed=" + strings.Join(res.Changed, ",")
+		msg := "config file written through the editor; it applies on restart"
+		if res.ReloadOnline {
+			if fn, ok := s.apply.Load().(OnlineApplier); ok && fn != nil {
+				// The apply starts sources and policies that must outlive this
+				// request, so it never runs on a context the request cancels.
+				applied, refused, fatal := fn(context.WithoutCancel(r.Context()))
+				if len(applied) > 0 {
+					body["applied"] = applied
+					detail += " applied=" + strings.Join(applied, ",")
+				}
+				switch {
+				case fatal != nil:
+					body["apply_error"] = fatal.Error()
+					detail += " apply_error=" + fatal.Error()
+					msg = "config file written and the online apply failed after changing the BGP speaker"
+				case refused != nil:
+					body["apply_error"] = refused.Error()
+					detail += " apply_error=" + refused.Error()
+					msg = "config file written; the online apply was refused and the running config stays"
+				default:
+					msg = "config file written and applied online"
+				}
+			} else {
+				msg = "config file written through the editor; SIGHUP applies it"
+			}
+		}
+		noteAudit(r, "config", detail)
+		s.log.Warn(msg, "user", principalFrom(r.Context()).User, "path", f.Path, "sha256", f.SHA256, "changed", strings.Join(res.Changed, ","))
 		body["file"] = f
 		writeJSON(w, http.StatusOK, body)
 		return

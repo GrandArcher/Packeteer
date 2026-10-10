@@ -209,7 +209,7 @@ func run(ctx context.Context, args []string, getenv func(string) string, stdout,
 		for _, n := range cfg.BGP.Neighbors {
 			fmt.Fprintf(stdout, "  - %s %s%s\n", n.Address, n.Description, routerSummary(n))
 		}
-		fmt.Fprintf(stdout, "bgp as_path: %s (neighbors reload online on SIGHUP)\n", cfg.BGP.ASPath)
+		fmt.Fprintf(stdout, "bgp as_path: %s (neighbors reload online on SIGHUP; as_path needs a restart)\n", cfg.BGP.ASPath)
 	}
 	fmt.Fprintf(stdout, "plugins (%d):\n", len(plugins.Summary()))
 	for _, line := range plugins.Summary() {
@@ -275,7 +275,7 @@ func run(ctx context.Context, args []string, getenv func(string) string, stdout,
 			fmt.Fprintf(stdout, "http allow_from: %s\n", strings.Join(cfg.HTTP.AllowFrom, ","))
 		}
 		if cfg.HTTP.ConfigEditor {
-			fmt.Fprintln(stdout, "http config_editor: on (admin only; writes this file after the start checks; applies on restart, or SIGHUP for bgp.neighbors)")
+			fmt.Fprintln(stdout, "http config_editor: on (admin only; writes this file after the start checks; online keys apply on save, the rest on restart)")
 		}
 	}
 	for _, sub := range cfg.ReportSubscriptions {
@@ -326,7 +326,7 @@ func preflight(cfg *config.Config, log *slog.Logger, getenv func(string) string,
 }
 
 func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, log *slog.Logger, httpUser, httpPass, path string, getenv func(string) string) int {
-	// SIGHUP reloads bgp.neighbors online (#27). Registered first: Go's
+	// SIGHUP reloads online keys (#27, #128). Registered first: Go's
 	// default for SIGHUP ends the process.
 	hup := make(chan os.Signal, 1)
 	signal.Notify(hup, syscall.SIGHUP)
@@ -523,6 +523,12 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 			log.Error("refusing to start", "err", err)
 			return 1
 		}
+	} else if view != nil && view.Server() != nil {
+		// A later change to inject binds this speaker, after the
+		// controller runs the inject checks New skipped. Community, local
+		// preference, and the announcer are restart-only when they
+		// change; the allowlist and the cap reload online.
+		ctl.RememberSpeaker(view.Server())
 	}
 
 	if view != nil {
@@ -595,15 +601,26 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 
 	loopCtx, loopCancel := context.WithCancel(ctx)
 	var loopWG sync.WaitGroup
+	live := &liveConfig{cfg: cfg}
 	loopWG.Add(1)
 	go func() {
 		defer loopWG.Done()
 		// The ticker is independent of probe rounds and RIB updates. A round
 		// that never completes (a prober or target source that ignores
 		// cancellation) must still withdraw once measurements exceed
-		// MaxResultAge.
+		// MaxResultAge. A reload replaces the interval.
 		leading := false
-		decideLoop(loopCtx, cfg.Probe.Interval, kick, func(now time.Time) {
+		decideLoop(loopCtx, func() time.Duration {
+			c := live.snapshot()
+			if c == nil || c.Probe.Interval <= 0 {
+				return time.Second
+			}
+			return c.Probe.Interval
+		}, kick, func(now time.Time) {
+			snap := live.snapshot()
+			if snap == nil {
+				snap = cfg
+			}
 			if !ha.active() {
 				if leading {
 					// Stepped down: no intent survives into a later
@@ -630,12 +647,12 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 			}
 			leading = true
 			in := decisionInput(loopCtx, now, engine, view, plugins, fed)
-			changes, err := runDecision(now, decider, in, ctl, log, cfg.Mode, engine)
+			changes, err := runDecision(now, decider, in, ctl, log, snap.Mode, engine)
 			fed.publish(now, in, decider.Improvements())
 			if rec != nil {
 				rec.Decision(now, changes, in.Results)
 			}
-			inChanges, inErr := runInbound(loopCtx, now, inb, plugins, log, cfg.InboundMode(), in)
+			inChanges, inErr := runInbound(loopCtx, now, inb, plugins, log, snap.InboundMode(), in)
 			mitChanges, mitErr := runMitigation(now, mit, log)
 			anomChanges := anom.Changes()
 			if rec != nil {
@@ -648,7 +665,7 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 			watch.anomaly(anomChanges)
 			watch.mitigation(mitChanges)
 			watch.improvements(now, changes)
-			watch.inbound(now, cfg.InboundMode(), inChanges)
+			watch.inbound(now, snap.InboundMode(), inChanges)
 			watch.announce(now, errors.Join(err, inErr, mitErr))
 			watch.providerStatus(now, engine.Providers())
 			if view != nil {
@@ -670,14 +687,33 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 		}()
 	}
 
-	rl := &reloader{path: path, getenv: getenv, log: log, cur: cfg, ctl: ctl, poke: poke}
+	rl := &reloader{
+		path: path, getenv: getenv, log: log, cur: cfg, ctl: ctl, poke: poke,
+		plugins: plugins, engine: engine, decider: decider, fed: fed, col: col,
+		watch: watch, live: live, dispatch: dispatch, hist: rec,
+		opts: pluginhost.Options{Logger: log, Getenv: getenv, PluginDir: getenv(PluginDirEnv)},
+	}
 	if editor != nil {
 		rl.applied = editor.SetRunning
 	}
+	if httpSrv != nil {
+		rl.setup = httpSrv.SetSetup
+	}
 	if view != nil {
 		rl.view = view
+		rl.rib = view
 	}
 	var reloadFailed atomic.Bool
+	if httpSrv != nil {
+		httpSrv.SetOnlineApply(onlineApplier(ctx, rl.reload, func(c context.Context, applied []string, refused, fatal error) {
+			auditReload(c, audit, path, "PUT /api/config", applied, refused, fatal)
+			if fatal != nil {
+				log.Error("config reload failed after changing the BGP speaker; stopping (Packeteer routes are withdrawn)", "err", fatal)
+				reloadFailed.Store(true)
+				stopDaemon()
+			}
+		}))
+	}
 	go func() {
 		for {
 			select {
@@ -685,8 +721,8 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 				return
 			case <-hup:
 			}
-			refused, fatal := rl.reload(ctx)
-			auditReload(ctx, audit, path, refused, fatal)
+			applied, refused, fatal := rl.reload(ctx)
+			auditReload(ctx, audit, path, "SIGHUP", applied, refused, fatal)
 			switch {
 			case fatal != nil:
 				log.Error("config reload failed after changing the BGP speaker; stopping (Packeteer routes are withdrawn)", "err", fatal)
@@ -739,7 +775,11 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 	}
 	// Tell notifiers after the withdraw, and give them a bounded moment
 	// before they stop. Notification never delays the withdraw.
-	stopFields := map[string]string{"mode": cfg.Mode, "withdrawn": "true"}
+	stopMode := cfg.Mode
+	if snap := live.snapshot(); snap != nil {
+		stopMode = snap.Mode
+	}
+	stopFields := map[string]string{"mode": stopMode, "withdrawn": "true"}
 	if withdrawErr != nil {
 		stopFields["withdrawn"] = "false"
 		stopFields["error"] = withdrawErr.Error()
@@ -1424,11 +1464,14 @@ func retainImprovedPrefixes(engine *probe.Engine, imps []policy.Improvement) {
 // decideLoop evaluates on kick (a finished probe round or a RIB change)
 // and on a staleness ticker. The ticker is what withdraws improvements
 // when no round ever completes.
-func decideLoop(ctx context.Context, interval time.Duration, kick <-chan struct{}, eval func(now time.Time)) {
-	if interval <= 0 {
-		interval = time.Second
+func decideLoop(ctx context.Context, interval func() time.Duration, kick <-chan struct{}, eval func(now time.Time)) {
+	every := time.Second
+	if interval != nil {
+		if d := interval(); d > 0 {
+			every = d
+		}
 	}
-	staleness := time.NewTicker(interval)
+	staleness := time.NewTicker(every)
 	defer staleness.Stop()
 	for {
 		select {
@@ -1441,6 +1484,13 @@ func decideLoop(ctx context.Context, interval time.Duration, kick <-chan struct{
 			return
 		}
 		eval(time.Now())
+		if interval == nil {
+			continue
+		}
+		if d := interval(); d > 0 && d != every {
+			every = d
+			staleness.Reset(every)
+		}
 	}
 }
 
@@ -1574,7 +1624,7 @@ func wireLearnedRoutes(plugins *pluginhost.Set, view *rib.View) {
 	}
 	var snap learnedSnap
 	fn := func() (uint64, []vip.LearnedRoute) { return snap.get(view) }
-	for _, src := range plugins.Sources {
+	for _, src := range plugins.SourcesSnapshot() {
 		if s, ok := src.Plugin.(routeSnapshotSetter); ok {
 			s.SetRouteSnapshot(fn)
 		}
@@ -1593,7 +1643,7 @@ func noteOutages(plugins *pluginhost.Set, engine *probe.Engine) {
 		return
 	}
 	now := time.Now()
-	for _, src := range plugins.Sources {
+	for _, src := range plugins.SourcesSnapshot() {
 		s, ok := src.Plugin.(*outage.Source)
 		if !ok {
 			continue
@@ -1674,7 +1724,7 @@ func wireOutage(plugins *pluginhost.Set, engine *probe.Engine, view *rib.View, o
 			out.Emit(ev)
 		}
 	}
-	for _, src := range plugins.Sources {
+	for _, src := range plugins.SourcesSnapshot() {
 		s, ok := src.Plugin.(*outage.Source)
 		if !ok {
 			continue
@@ -1760,9 +1810,16 @@ func checkOutageIntervals(cfg *config.Config, plugins *pluginhost.Set) error {
 	if plugins == nil {
 		return nil
 	}
+	return checkOutageSourceIntervals(cfg, plugins.Sources)
+}
+
+func checkOutageSourceIntervals(cfg *config.Config, sources []pluginhost.Instance[plugin.TargetSource]) error {
+	if cfg == nil {
+		return nil
+	}
 	window := maxResultAge(cfg)
 	var errs []error
-	for _, src := range plugins.Sources {
+	for _, src := range sources {
 		s, ok := src.Plugin.(*outage.Source)
 		if !ok {
 			continue
@@ -1787,12 +1844,19 @@ func checkOutageIntervals(cfg *config.Config, plugins *pluginhost.Set) error {
 // tier. A longer one leaves those prefixes stale, and the controller
 // would withdraw any improvement on them. The default has no tail.
 func checkFlowTailIntervals(cfg *config.Config, plugins *pluginhost.Set) error {
-	if plugins == nil || cfg == nil {
+	if plugins == nil {
+		return nil
+	}
+	return checkFlowTailSourceIntervals(cfg, plugins.Sources)
+}
+
+func checkFlowTailSourceIntervals(cfg *config.Config, sources []pluginhost.Instance[plugin.TargetSource]) error {
+	if cfg == nil {
 		return nil
 	}
 	window := maxResultAge(cfg)
 	var errs []error
-	for _, src := range plugins.Sources {
+	for _, src := range sources {
 		s, ok := src.Plugin.(*flow.Source)
 		if !ok {
 			continue
@@ -1818,9 +1882,16 @@ func checkVIPIntervals(cfg *config.Config, plugins *pluginhost.Set) error {
 	if plugins == nil {
 		return nil
 	}
+	return checkVIPSourceIntervals(cfg, plugins.Sources)
+}
+
+func checkVIPSourceIntervals(cfg *config.Config, sources []pluginhost.Instance[plugin.TargetSource]) error {
+	if cfg == nil {
+		return nil
+	}
 	window := maxResultAge(cfg)
 	var errs []error
-	for _, src := range plugins.Sources {
+	for _, src := range sources {
 		v, ok := src.Plugin.(*vip.Source)
 		if !ok {
 			continue
@@ -1849,7 +1920,7 @@ func wireExchangeLANs(cfg *config.Config, plugins *pluginhost.Set) {
 		return
 	}
 	lans := exchangeLANPrefixes(cfg)
-	for _, src := range plugins.Sources {
+	for _, src := range plugins.SourcesSnapshot() {
 		if s, ok := src.Plugin.(exchangeLANSetter); ok {
 			s.SetExchangeLANs(lans)
 		}
@@ -1881,7 +1952,7 @@ func wirePrefixLookup(plugins *pluginhost.Set, view *rib.View) {
 		}
 		return rt.Prefix, true
 	}
-	for _, src := range plugins.Sources {
+	for _, src := range plugins.SourcesSnapshot() {
 		if s, ok := src.Plugin.(prefixLookup); ok {
 			s.SetPrefixLookup(fn)
 		}
@@ -2042,9 +2113,16 @@ func logRIB(ctx context.Context, v *rib.View, log *slog.Logger) {
 	}
 }
 
-func newDecider(cfg *config.Config, plugins *pluginhost.Set) (*policy.Engine, error) {
-	if plugins.Scorer == nil {
-		return nil, fmt.Errorf("no scorer configured")
+// policyConfig is the decision config for cfg. A reload builds a fresh one
+// and installs it with SetConfig; the next Decide uses it. Prefixes here
+// were already validated by config.Load.
+func policyConfig(cfg *config.Config) (policy.Config, error) {
+	if cfg == nil {
+		return policy.Config{}, errors.New("no config")
+	}
+	max := 0
+	if cfg.MaxImprovements != nil {
+		max = *cfg.MaxImprovements
 	}
 	pc := policy.Config{
 		Mode:            cfg.Mode,
@@ -2053,7 +2131,7 @@ func newDecider(cfg *config.Config, plugins *pluginhost.Set) (*policy.Engine, er
 		MinRTTDeltaPct:  cfg.Thresholds.MinRTTDeltaPct,
 		ConfirmRounds:   cfg.Thresholds.ConfirmRounds,
 		HoldTime:        cfg.HoldTime,
-		MaxImprovements: *cfg.MaxImprovements,
+		MaxImprovements: max,
 		// A result older than ~3 rounds is stale. The decision loop
 		// re-checks this on a ticker even when no round completes.
 		MaxResultAge: maxResultAge(cfg),
@@ -2077,9 +2155,20 @@ func newDecider(cfg *config.Config, plugins *pluginhost.Set) (*policy.Engine, er
 	for _, s := range cfg.Allowlist.Prefixes {
 		p, err := netip.ParsePrefix(s)
 		if err != nil {
-			return nil, err
+			return policy.Config{}, err
 		}
 		pc.Allowlist = append(pc.Allowlist, p)
+	}
+	return pc, nil
+}
+
+func newDecider(cfg *config.Config, plugins *pluginhost.Set) (*policy.Engine, error) {
+	if plugins.Scorer == nil {
+		return nil, fmt.Errorf("no scorer configured")
+	}
+	pc, err := policyConfig(cfg)
+	if err != nil {
+		return nil, err
 	}
 	return policy.NewEngine(pc, plugins.Scorer.Plugin), nil
 }
@@ -2153,11 +2242,15 @@ type routeLookup interface {
 // traffic (nil when no source classifies). Policies do not announce; Decide
 // applies them.
 func applyPolicies(in *policy.Input, now time.Time, routes routeLookup, plugins *pluginhost.Set, traffic map[netip.Prefix]string) {
-	if in == nil || plugins == nil || len(plugins.Policies) == 0 {
+	if in == nil || plugins == nil {
+		return
+	}
+	pols := plugins.PoliciesSnapshot()
+	if len(pols) == 0 {
 		return
 	}
 	seen := map[string]bool{}
-	for _, pol := range plugins.Policies {
+	for _, pol := range pols {
 		m, ok := pol.Plugin.(plugin.Maintenance)
 		if !ok {
 			continue
@@ -2182,7 +2275,7 @@ func applyPolicies(in *policy.Input, now time.Time, routes routeLookup, plugins 
 				subj.ASPath = rt.ASPath
 			}
 		}
-		for _, pol := range plugins.Policies {
+		for _, pol := range pols {
 			if v, ok := pol.Plugin.Match(subj); ok {
 				if in.Policies == nil {
 					in.Policies = map[netip.Prefix]plugin.PolicyVerdict{}
@@ -2204,47 +2297,68 @@ type maintenanceOpener interface {
 // maintenanceControl lists windows from every maintenance policy and opens
 // on-demand windows on the first one. A change wakes the decision loop so
 // improvements move off the provider without waiting for a probe round.
+// Each call reads the current policy list, so a policy replaced online is
+// the one the API uses. The control stays nil when none existed at start:
+// adding the first maintenance policy still needs a restart for this API.
+// Decide sees a new chain on the next round either way.
 type maintenanceControl struct {
-	all    []plugin.Maintenance
-	opener maintenanceOpener
-	log    *slog.Logger
-	poke   func()
+	plugins *pluginhost.Set
+	log     *slog.Logger
+	poke    func()
 }
 
 func newMaintenanceControl(plugins *pluginhost.Set, log *slog.Logger, poke func()) httpapi.MaintenanceControl {
 	if plugins == nil {
 		return nil
 	}
-	mc := &maintenanceControl{log: log, poke: poke}
-	for _, pol := range plugins.Policies {
-		if m, ok := pol.Plugin.(plugin.Maintenance); ok {
-			mc.all = append(mc.all, m)
-		}
-		if o, ok := pol.Plugin.(maintenanceOpener); ok && mc.opener == nil {
-			mc.opener = o
+	found := false
+	for _, pol := range plugins.PoliciesSnapshot() {
+		if _, ok := pol.Plugin.(plugin.Maintenance); ok {
+			found = true
+			break
 		}
 	}
-	if len(mc.all) == 0 {
+	if !found {
 		return nil
 	}
-	return mc
+	return &maintenanceControl{plugins: plugins, log: log, poke: poke}
+}
+
+func (mc *maintenanceControl) policies() (all []plugin.Maintenance, opener maintenanceOpener) {
+	if mc == nil || mc.plugins == nil {
+		return nil, nil
+	}
+	for _, pol := range mc.plugins.PoliciesSnapshot() {
+		if m, ok := pol.Plugin.(plugin.Maintenance); ok {
+			all = append(all, m)
+		}
+		if o, ok := pol.Plugin.(maintenanceOpener); ok && opener == nil {
+			opener = o
+		}
+	}
+	return all, opener
 }
 
 func (mc *maintenanceControl) Active(now time.Time) []plugin.MaintenanceWindow {
+	all, _ := mc.policies()
 	var out []plugin.MaintenanceWindow
-	for _, m := range mc.all {
+	for _, m := range all {
 		out = append(out, m.Active(now)...)
 	}
 	return out
 }
 
-func (mc *maintenanceControl) CanOpen() bool { return mc.opener != nil }
+func (mc *maintenanceControl) CanOpen() bool {
+	_, opener := mc.policies()
+	return opener != nil
+}
 
 func (mc *maintenanceControl) Open(providers []string, d time.Duration, reason string, now time.Time) (plugin.MaintenanceWindow, error) {
-	if mc.opener == nil {
+	_, opener := mc.policies()
+	if opener == nil {
 		return plugin.MaintenanceWindow{}, errors.New("no maintenance policy configured")
 	}
-	w, err := mc.opener.Open(providers, d, reason, now)
+	w, err := opener.Open(providers, d, reason, now)
 	if err != nil {
 		return w, err
 	}
@@ -2258,7 +2372,8 @@ func (mc *maintenanceControl) Open(providers []string, d time.Duration, reason s
 }
 
 func (mc *maintenanceControl) Close(id string) bool {
-	if mc.opener == nil || !mc.opener.Close(id) {
+	_, opener := mc.policies()
+	if opener == nil || !opener.Close(id) {
 		return false
 	}
 	if mc.log != nil {
@@ -2352,7 +2467,7 @@ func scorerWeighsVolume(plugins *pluginhost.Set) bool {
 // prefix wins. It is nil when no policy is configured or no source
 // classifies. This does not announce.
 func collectTraffic(ctx context.Context, plugins *pluginhost.Set) map[netip.Prefix]string {
-	if plugins == nil || len(plugins.Policies) == 0 {
+	if plugins == nil || len(plugins.PoliciesSnapshot()) == 0 {
 		return nil
 	}
 	if ctx == nil {
@@ -2361,7 +2476,7 @@ func collectTraffic(ctx context.Context, plugins *pluginhost.Set) map[netip.Pref
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
 	var out map[netip.Prefix]string
-	for _, src := range plugins.Sources {
+	for _, src := range plugins.SourcesSnapshot() {
 		if ctx.Err() != nil {
 			return out
 		}
@@ -2401,7 +2516,7 @@ func collectVolumes(ctx context.Context, plugins *pluginhost.Set) map[netip.Pref
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
 	var out map[netip.Prefix]float64
-	for _, src := range plugins.Sources {
+	for _, src := range plugins.SourcesSnapshot() {
 		if ctx.Err() != nil {
 			return out
 		}
@@ -2447,12 +2562,6 @@ func newRecorder(cfg *config.Config, plugins *pluginhost.Set, log *slog.Logger, 
 	if plugins == nil || plugins.Storage == nil {
 		return nil
 	}
-	var geo []plugin.CountryLookup
-	for _, pol := range plugins.Policies {
-		if g, ok := pol.Plugin.(plugin.CountryLookup); ok {
-			geo = append(geo, g)
-		}
-	}
 	describe := func(p netip.Prefix) (uint32, string) {
 		var asn uint32
 		if v := view(); v != nil && v.Ready() {
@@ -2460,9 +2569,12 @@ func newRecorder(cfg *config.Config, plugins *pluginhost.Set, log *slog.Logger, 
 				asn = rt.ASPath[len(rt.ASPath)-1]
 			}
 		}
-		for _, g := range geo {
-			if c := g.Country(p.Addr()); c != "" {
-				return asn, c
+		// Read per call: a reload can add or remove a policy.
+		for _, pol := range plugins.PoliciesSnapshot() {
+			if g, ok := pol.Plugin.(plugin.CountryLookup); ok {
+				if c := g.Country(p.Addr()); c != "" {
+					return asn, c
+				}
 			}
 		}
 		return asn, ""
@@ -2474,4 +2586,18 @@ func newRecorder(cfg *config.Config, plugins *pluginhost.Set, log *slog.Logger, 
 		Describe: describe,
 		Volumes:  func(ctx context.Context) map[netip.Prefix]float64 { return collectVolumes(ctx, plugins) },
 	})
+}
+
+// onlineApplier builds the PUT /api/config online apply. The reload runs
+// on the daemon context, the same one the SIGHUP reload uses: sources and
+// policies it starts must keep running after the HTTP request ends, and a
+// client disconnect must not cancel a withdraw on leaving inject. The
+// request context is used only for the audit record.
+func onlineApplier(daemon context.Context, reload func(context.Context) ([]string, error, error),
+	after func(req context.Context, applied []string, refused, fatal error)) httpapi.OnlineApplier {
+	return func(req context.Context) ([]string, error, error) {
+		applied, refused, fatal := reload(daemon)
+		after(req, applied, refused, fatal)
+		return applied, refused, fatal
+	}
 }

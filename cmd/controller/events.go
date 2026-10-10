@@ -75,6 +75,26 @@ func newEventWatch(out emitter, mode string) *eventWatch {
 	return &eventWatch{out: out, mode: mode, providers: map[string]bool{}, peers: map[netip.Addr]bool{}, overCommit: map[string]bool{}}
 }
 
+// SetMode records the mode a reload applied. Improvement events say
+// whether the route was announced.
+func (w *eventWatch) SetMode(mode string) {
+	if w == nil {
+		return
+	}
+	w.mu.Lock()
+	w.mode = mode
+	w.mu.Unlock()
+}
+
+func (w *eventWatch) currentMode() string {
+	if w == nil {
+		return ""
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.mode
+}
+
 func (w *eventWatch) emit(now time.Time, kind, msg string, fields map[string]string) {
 	if w == nil || w.out == nil {
 		return
@@ -87,9 +107,10 @@ func (w *eventWatch) improvements(now time.Time, changes []policy.Change) {
 	if w == nil {
 		return
 	}
+	mode := w.currentMode()
 	suffix := ""
-	if w.mode != "inject" {
-		suffix = " (" + w.mode + ": not announced)"
+	if mode != "inject" {
+		suffix = " (" + mode + ": not announced)"
 	}
 	for _, c := range changes {
 		imp, kind, verb := c.New, "", ""
@@ -105,7 +126,7 @@ func (w *eventWatch) improvements(now time.Time, changes []policy.Change) {
 		}
 		fields := map[string]string{
 			"prefix": imp.Prefix.String(), "provider": imp.Provider, "native": imp.Native,
-			"mode": w.mode, "reason": imp.Reason,
+			"mode": mode, "reason": imp.Reason,
 		}
 		if imp.Cause != "" {
 			fields["cause"] = imp.Cause

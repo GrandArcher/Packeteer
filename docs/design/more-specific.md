@@ -33,7 +33,7 @@ The feature is off unless `more_specific.enabled: true`. Off, Packeteer
 announces exactly what it did before: one route per improvement, the
 improvement's own learned prefix. `more_specific_bits` is still a config
 error with any value, including `0`. `more_specific` changes need a restart
-(SIGHUP refuses them like every key outside `bgp.neighbors`).
+(SIGHUP refuses them; they are restart-only, like the announcer).
 
 ## Which prefixes may be announced
 

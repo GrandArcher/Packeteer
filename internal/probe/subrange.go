@@ -90,13 +90,13 @@ func jobSubranges(t plugin.Target, lans []netip.Prefix) []plugin.Subrange {
 func (e *Engine) probeSubranges(ctx context.Context, j job) (res Result, down, ok bool) {
 	subs := make([]SubrangeResult, 0, len(j.subs))
 	for _, s := range j.subs {
-		one, dn := e.probeOne(ctx, j.provider, j.target.Prefix, s.Host, e.opt.Packets)
+		one, dn := e.probeOne(ctx, j.provider, j.target.Prefix, s.Host, e.packets())
 		if dn || ctx.Err() != nil {
 			return one, dn, true
 		}
-		if one.OK() && e.opt.RetryPackets > 0 &&
-			((e.opt.RetryLossPct > 0 && one.Stats.LossPct >= e.opt.RetryLossPct) || e.inconsistent(one.Stats)) {
-			again, dn := e.probeOne(ctx, j.provider, j.target.Prefix, s.Host, e.opt.RetryPackets)
+		if one.OK() && e.retryPackets() > 0 &&
+			((e.retryLoss() > 0 && one.Stats.LossPct >= e.retryLoss()) || e.inconsistent(one.Stats)) {
+			again, dn := e.probeOne(ctx, j.provider, j.target.Prefix, s.Host, e.retryPackets())
 			if dn || ctx.Err() != nil {
 				return again, dn, true
 			}

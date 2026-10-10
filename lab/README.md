@@ -4,7 +4,7 @@ A simulated edge router (FRR) peered over iBGP with Packeteer. Addresses are doc
 
 `lab/e2e.sh` builds the Packeteer image from the repo Dockerfile, starts FRR, and checks `vtysh -c 'show bgp ipv4 unicast json'`:
 
-1. `198.51.100.0/24` appears with next hop `192.0.2.2` (transit-b), local preference 260 (`local_pref_cause.performance`; the global value stays 250), community `64512:666`, the performance extra `64512:100`, the provider extras `64512:200` and large `64512:1:50`, and `no-export`. That local preference and those extras are gone after the SIGTERM withdraw and after the SIGKILL withdraw.
+1. `198.51.100.0/24` appears with next hop `192.0.2.2` (transit-b), local preference 260 (`local_pref_cause.performance`; the global value stays 250), community `64512:666`, the performance extra `64512:100`, the provider extras `64512:200` and large `64512:1:50`, and `no-export`. That local preference and those extras are gone after the SIGTERM withdraw and after the SIGKILL withdraw. Before the flip-back, a SIGHUP that lowers `min_rtt_delta_ms` keeps the route, a SIGHUP that sets `max_improvements` to 0 withdraws it, and restoring the file announces it again (#128).
 2. Rewriting the fixed-prober file so transit-a is faster withdraws that route (flip-back, after `hold_time`).
 3. Restoring the original results announces it again. The route then has to stay up while FRR is still advertising the native path (the network statement's weight keeps it best).
 4. Removing FRR's `network 198.51.100.0/24` withdraws Packeteer's route within seconds, while Packeteer is still running. That is a real leave: FRR had kept sending the prefix.

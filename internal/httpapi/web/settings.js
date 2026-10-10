@@ -23,7 +23,7 @@ function describe(res) {
   if (res.mode) parts.push("mode " + res.mode);
   if (res.changed && res.changed.length) parts.push("changed: " + res.changed.join(", "));
   if (res.restart_required) parts.push("restart required");
-  else if (res.reload_online) parts.push("SIGHUP applies it");
+  else if (res.reload_online) parts.push("applies online");
   if (res.enables_inject) parts.push("turns inject on");
   return parts.join(" · ");
 }
@@ -76,7 +76,10 @@ function saveConfig() {
     base = out.file.sha256;
     document.getElementById("ed-sha").textContent = base.slice(0, 12);
     document.getElementById("ed-inject").checked = false;
-    edStatus("Saved. " + describe(out.result));
+    var extra = "";
+    if (out.applied && out.applied.length) extra = " Applied online: " + out.applied.join(", ") + ".";
+    if (out.apply_error) extra = " Not applied: " + out.apply_error;
+    edStatus("Saved. " + describe(out.result) + extra);
   }, function (err) {
     var res = err.data && err.data.result;
     edStatus(err.message + (res ? " — " + describe(res) : ""), res && res.errors);
@@ -266,7 +269,7 @@ function applyForm() {
     document.getElementById("ed-yaml").value = out.yaml;
     form = out.form || form;
     renderForm();
-    formStatus("Applied to the YAML. Not saved. Validate, then Save. A restart applies it (SIGHUP only when just bgp.neighbors changed).");
+    formStatus("Applied to the YAML. Not saved. Validate, then Save. Save applies thresholds, policies, sources, probe timing, mode, the allowlist, and bgp.neighbors online. Any other change waits for a restart.");
   }, function (err) { formStatus(explain(err)); });
 }
 

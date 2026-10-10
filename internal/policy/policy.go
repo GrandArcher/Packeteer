@@ -679,6 +679,11 @@ func Decide(prev State, in Input, cfg Config, scorer plugin.Scorer, now time.Tim
 
 	integrateCommit(st, &out, decIdx, holds, commitOK, byPrefix, &wants, cfg, scorer, in, now, retire)
 
+	// A lower max_improvements (including 0) retires the lowest-ranked
+	// active improvements now, inside hold_time and with no cooldown.
+	// Survivors keep their slots; new wants below only fill what is left.
+	trimToCap(st, decIdx, byPrefix, in.Policies, cfg, retire)
+
 	weightVolume := in.VolumeMbps
 	if in.WeightVolumeMbps != nil {
 		weightVolume = in.WeightVolumeMbps
@@ -731,6 +736,85 @@ func Decide(prev State, in Input, cfg Config, scorer plugin.Scorer, now time.Tim
 	}
 	out.Decisions = decisions
 	return st, out
+}
+
+// trimToCap drops active improvements until the set fits cfg.MaxImprovements.
+// Planned moves go first, then performance, then VIP, then static pins.
+// Inside a rank the smallest gain goes first (a missing score is no gain),
+// and a larger prefix goes before a smaller one so the smaller prefix is
+// kept. The retire ignores hold_time and does not start a cooldown: the
+// cap fell, and raising it may admit the prefix again on the next round.
+func trimToCap(st State, decIdx map[netip.Prefix]*Decision, byPrefix map[netip.Prefix][]Candidate, policies map[netip.Prefix]plugin.PolicyVerdict, cfg Config, retire func(netip.Prefix, string, bool)) {
+	if cfg.MaxImprovements < 0 || len(st.Improvements) <= cfg.MaxImprovements {
+		return
+	}
+	type item struct {
+		p    netip.Prefix
+		rank int
+		gain float64
+	}
+	items := make([]item, 0, len(st.Improvements))
+	for p, imp := range st.Improvements {
+		items = append(items, item{p: p, rank: rankOf(imp, policies), gain: improvementGain(byPrefix[p], imp)})
+	}
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].rank != items[j].rank {
+			return items[i].rank > items[j].rank
+		}
+		if items[i].gain != items[j].gain {
+			return items[i].gain < items[j].gain
+		}
+		return lessPrefix(items[j].p, items[i].p)
+	})
+	reason := fmt.Sprintf("max_improvements (%d) reached", cfg.MaxImprovements)
+	for _, it := range items {
+		if len(st.Improvements) <= cfg.MaxImprovements {
+			break
+		}
+		imp := st.Improvements[it.p]
+		retire(it.p, reason, false)
+		if d := decIdx[it.p]; d != nil {
+			d.Action, d.Reason, d.Current = ActionRetire, reason, imp.Native
+		}
+	}
+}
+
+// rankOf is the admission lane of an improvement already in the table.
+// VIP is a performance move whose current policy says vip.
+func rankOf(imp Improvement, policies map[netip.Prefix]plugin.PolicyVerdict) int {
+	switch {
+	case planned(imp.Cause):
+		return rankPlanned
+	case imp.Cause == plugin.CauseStatic:
+		return rankStatic
+	}
+	if v, ok := policies[imp.Prefix]; ok && v.Action == plugin.PolicyVIP {
+		return rankVIP
+	}
+	return rankPerformance
+}
+
+// improvementGain is the native score minus the current provider's score.
+// A missing measurement is no gain, so that improvement is retired ahead
+// of one that is still clearly better.
+func improvementGain(cands []Candidate, imp Improvement) float64 {
+	var nat, cur float64
+	var haveNat, haveCur bool
+	for _, c := range cands {
+		if !c.Usable {
+			continue
+		}
+		if c.Provider == imp.Native {
+			nat, haveNat = c.Score, true
+		}
+		if c.Provider == imp.Provider {
+			cur, haveCur = c.Score, true
+		}
+	}
+	if !haveNat || !haveCur {
+		return 0
+	}
+	return nat - cur
 }
 
 // noteSubranges adds one provider's sub-range measurements (#121) to the

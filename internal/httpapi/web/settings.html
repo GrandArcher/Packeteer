@@ -94,7 +94,7 @@
   </section>
   <section id="editor-section">
     <h2>Settings</h2>
-    <p class="tag">The form edits providers, probe prefixes, the allowlist, and the knobs that change a decision. The YAML stays beside it: anything the form does not show is kept. Apply copies the form into the YAML and does not write the file. Save runs the same checks as a start and the controller applies the file on restart, or on SIGHUP when only <code>bgp.neighbors</code> changed. Turning inject on still needs the confirmation. Secrets stay in environment variables, not in the form. Needs <code>http.config_editor: true</code> and the admin role.</p>
+    <p class="tag">The form edits providers, probe prefixes, the allowlist, and the knobs that change a decision. The YAML stays beside it: anything the form does not show is kept. Apply copies the form into the YAML and does not write the file. Save runs the same checks as a start. Thresholds, hold time, the improvement cap, policies, sources, probe timing, mode, the allowlist, and <code>bgp.neighbors</code> apply on Save. Any other change waits for a restart. Turning inject on still needs the confirmation. Secrets stay in environment variables, not in the form. Needs <code>http.config_editor: true</code> and the admin role.</p>
     <div class="settings-split">
       <div>
         <h3>Decision</h3>

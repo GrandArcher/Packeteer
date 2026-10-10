@@ -105,15 +105,31 @@ type Server struct {
 	editor     ConfigEditor
 	dashboards plugin.DashboardStore
 	subs       Subscriptions
-	setup      Setup
+	setup      atomic.Pointer[Setup]
 	// suggest lists next hops the operator may accept as a draft provider
 	// row (#102). Nil means there is nothing to suggest. It must not write
 	// config or announce.
 	suggest atomic.Value
+	// apply, when set, applies a file that was just written and whose
+	// every change can run online (#128). Nil leaves the file for a
+	// restart or SIGHUP. It may be stored after New, once the reloader
+	// exists. The function returns the keys it applied, a refusal that
+	// left the running config in place, or a fatal error after the BGP
+	// speaker changed.
+	apply   atomic.Value
 	log     *slog.Logger
 	handler http.Handler
 	http    *http.Server
 	ln      net.Listener
+}
+
+// SetSetup replaces the facts the overview's setup checklist reads. An
+// online reload calls it when the cap or the sources change.
+func (s *Server) SetSetup(st Setup) {
+	if s == nil {
+		return
+	}
+	s.setup.Store(&st)
 }
 
 // New validates auth and builds the handler. It does not listen.
@@ -128,9 +144,30 @@ func New(opt Options) (*Server, error) {
 		opt.Logger = slog.Default()
 	}
 	s := &Server{addr: opt.Addr, user: opt.User, password: opt.Password, auth: opt.Auth, audit: opt.Audit, allowFrom: opt.AllowFrom, snap: opt.Snapshot, maint: opt.Maintenance, reports: opt.Reports, tools: opt.Tools, inbound: opt.Inbound, mitigation: opt.Mitigation, anomaly: opt.Anomaly, federation: opt.Federation, ha: opt.HA,
-		editor: opt.ConfigEditor, dashboards: opt.Dashboards, subs: opt.Subscriptions, setup: opt.Setup, log: opt.Logger}
+		editor: opt.ConfigEditor, dashboards: opt.Dashboards, subs: opt.Subscriptions, log: opt.Logger}
+	setup := opt.Setup
+	s.setup.Store(&setup)
 	s.handler = s.routes()
 	return s, nil
+}
+
+// OnlineApplier applies the config file just written when every change
+// can run online. applied are the keys now running. refused means the
+// running config was left as it was. fatal means the BGP speaker changed
+// and the process must stop, which withdraws.
+type OnlineApplier func(ctx context.Context) (applied []string, refused, fatal error)
+
+// SetOnlineApply installs the reload used after a fully online PUT
+// /api/config (#128). It may be called after New.
+func (s *Server) SetOnlineApply(fn OnlineApplier) {
+	if s == nil {
+		return
+	}
+	if fn == nil {
+		s.apply.Store(OnlineApplier(nil))
+		return
+	}
+	s.apply.Store(fn)
 }
 
 // SetSuggestions installs the read-only next-hop suggestions (#102).

@@ -92,8 +92,8 @@ func newConfigEditor(cfg *config.Config, path string, getenv func(string) string
 		}
 		return next, nil
 	}
-	diff := func(running, next *config.Config) ([]string, bool) {
-		return restartKeys(running, next), !sameYAML(running.BGP.Neighbors, next.BGP.Neighbors)
+	diff := func(running, next *config.Config) ([]string, []string) {
+		return classify(running, next)
 	}
 	return configedit.New(path, cfg, check, diff)
 }
@@ -178,7 +178,7 @@ func setupInfo(cfg *config.Config, plugins *pluginhost.Set) httpapi.Setup {
 	if cfg.MaxImprovements != nil {
 		st.MaxImprovements = *cfg.MaxImprovements
 	}
-	for _, s := range plugins.Sources {
+	for _, s := range plugins.SourcesSnapshot() {
 		st.Sources = append(st.Sources, s.Type)
 	}
 	return st

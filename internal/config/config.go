@@ -355,8 +355,8 @@ type HTTP struct {
 	AllowFrom []string `yaml:"allow_from"`
 	// ConfigEditor lets an admin read, validate, and write this config
 	// file through the API and the UI (#34). Default false. Writes need
-	// auth or the basic-auth account, and take effect on restart (or
-	// SIGHUP for bgp.neighbors).
+	// auth or the basic-auth account. Online keys apply on the write
+	// (#128); the rest take effect on restart.
 	ConfigEditor bool `yaml:"config_editor"`
 }
 
@@ -812,8 +812,8 @@ func (c *Config) Validate() error {
 	}
 
 	if c.MaxImprovements != nil {
-		if n := *c.MaxImprovements; n < 1 || n > MaxImprovementsLimit {
-			add("max_improvements %d must be between 1 and %d", n, MaxImprovementsLimit)
+		if n := *c.MaxImprovements; n < 0 || n > MaxImprovementsLimit {
+			add("max_improvements %d must be between 0 and %d", n, MaxImprovementsLimit)
 		}
 	}
 
