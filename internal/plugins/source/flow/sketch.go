@@ -39,7 +39,10 @@ func (h *hll) add(p netip.Prefix) {
 	}
 }
 
-func (h *hll) merge(o hll) {
+func (h *hll) merge(o *hll) {
+	if h == nil || o == nil {
+		return
+	}
 	for i := range h.reg {
 		if o.reg[i] > h.reg[i] {
 			h.reg[i] = o.reg[i]
@@ -48,7 +51,11 @@ func (h *hll) merge(o hll) {
 }
 
 // estimate is the distinct-prefix count. An empty sketch is zero.
-func (h hll) estimate() uint64 {
+// The receiver is a pointer so a 4 KiB register file is not copied.
+func (h *hll) estimate() uint64 {
+	if h == nil {
+		return 0
+	}
 	var sum float64
 	zeros := 0
 	for _, r := range h.reg {

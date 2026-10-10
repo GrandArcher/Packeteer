@@ -821,8 +821,20 @@ func (s *Source) TrafficMix(ctx context.Context) ([]plugin.TrafficMix, error) {
 // clears the floor still uses one slot, as it did under top_n alone.
 func (s *Source) Targets(context.Context) ([]plugin.Target, error) {
 	now := s.now()
-	rows := s.win.aggregate(now)
-	total, overflow := windowBytes(rows)
+	// Problem prefixes outside the busiest set still need their flow hosts.
+	// One read: the same list is the front of the target slice below.
+	var probs []passive.Problem
+	var must []netip.Prefix
+	if s.prob != nil {
+		probs = s.prob.win.Problems(now, s.prob.th, s.prob.maxTargets)
+		if len(probs) > 0 {
+			must = make([]netip.Prefix, len(probs))
+			for i := range probs {
+				must[i] = probs[i].Prefix
+			}
+		}
+	}
+	rows, total, overflow := s.win.aggregate(now, maxPrefixes, must)
 	hostOf := make(map[netip.Prefix][]netip.Addr, len(rows))
 	subsOf := make(map[netip.Prefix][]subRank, len(rows))
 	for _, r := range rows {
@@ -835,19 +847,17 @@ func (s *Source) Targets(context.Context) ([]plugin.Target, error) {
 	}
 	out := []plugin.Target{}
 	listed := map[netip.Prefix]bool{}
-	if s.prob != nil {
-		for _, p := range s.prob.win.Problems(now, s.prob.th, s.prob.maxTargets) {
-			t := plugin.Target{Prefix: p.Prefix, Weight: p.Score}
-			hosts := make([]netip.Addr, 0, 1+len(hostOf[p.Prefix]))
-			if p.Host.IsValid() {
-				hosts = append(hosts, p.Host)
-			}
-			hosts = append(hosts, hostOf[p.Prefix]...)
-			setFlowHosts(&t, hosts)
-			s.setSubranges(&t, subsOf[p.Prefix], &subLeft)
-			out = append(out, t)
-			listed[p.Prefix] = true
+	for _, p := range probs {
+		t := plugin.Target{Prefix: p.Prefix, Weight: p.Score}
+		hosts := make([]netip.Addr, 0, 1+len(hostOf[p.Prefix]))
+		if p.Host.IsValid() {
+			hosts = append(hosts, p.Host)
 		}
+		hosts = append(hosts, hostOf[p.Prefix]...)
+		setFlowHosts(&t, hosts)
+		s.setSubranges(&t, subsOf[p.Prefix], &subLeft)
+		out = append(out, t)
+		listed[p.Prefix] = true
 	}
 	added := 0
 	for _, r := range rows {
@@ -872,19 +882,6 @@ func (s *Source) Targets(context.Context) ([]plugin.Target, error) {
 	out = exchange.FilterTargets(s.lansSnapshot(), out)
 	exchange.NoteDrops(s.takeLANDrops())
 	return out, nil
-}
-
-// windowBytes is the sum of prefix bytes in one aggregated window.
-// overflow is set when the sum does not fit in a uint64; total is then
-// the maximum uint64 and the percent floor fails closed.
-func windowBytes(rows []rank) (total uint64, overflow bool) {
-	for _, r := range rows {
-		if r.bytes > ^uint64(0)-total {
-			return ^uint64(0), true
-		}
-		total += r.bytes
-	}
-	return total, false
 }
 
 // setFlowHosts records up to three destinations as probe candidates.

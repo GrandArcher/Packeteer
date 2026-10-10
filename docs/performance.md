@@ -44,7 +44,7 @@ On the nine `pr` runs on GitHub-hosted `ubuntu-latest` through 2026-10-01, end R
 
 ## Findings fixed with this test
 
-The first full-table run dropped 78.8 % of flow datagrams at 20,000 records a second, where a 20,000-prefix table dropped none. Each window bucket of the `flow` source holds at most 20,000 prefixes. Once full, every new prefix rescanned all of them for the smallest, and with a full table nearly every record is a new prefix. A full bucket now frees a sixteenth of its smallest prefixes in one pass (never one larger than the newcomer), and the anomaly counters prune idle keys at most once a minute while at their cap. Drops fell to 1.8 % and soak CPU from 1.2 to 0.72 cores. Which prefixes are kept is unchanged: the busiest stay, and a smaller prefix never displaces a larger one.
+The first full-table run dropped 78.8 % of flow datagrams at 20,000 records a second, where a 20,000-prefix table dropped none. Each window bucket of the `flow` source holds at most 20,000 prefixes. Once full, every new prefix rescanned all of them for the smallest, and with a full table nearly every record is a new prefix. A full bucket now frees a sixteenth of its smallest prefixes in one pass (never one larger than the newcomer), and the anomaly counters prune idle keys at most once a minute while at their cap. Drops fell to 1.8 % and soak CPU from 1.2 to 0.72 cores. Which prefixes are kept is unchanged: the busiest stay, and a smaller prefix never displaces a larger one. Merging those buckets for probe targets and commit volume keeps a destination list only for the busiest 20,000 prefixes, plus a problem prefix outside that set. The percent floor still uses every byte in the window. `rss_growth_mb` is unchanged.
 
 ## Run it yourself
 

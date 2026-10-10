@@ -1,6 +1,7 @@
 package flow
 
 import (
+	"bytes"
 	"net/netip"
 	"slices"
 	"sort"
@@ -20,6 +21,9 @@ type slide struct {
 	// subCap is how many sub-ranges one prefix tracks per bucket (#121).
 	// Zero turns sub-range counting off.
 	subCap int
+	// scratch is the eviction sort buffer. add holds mu, so one slice
+	// serves every bucket and a full table does not allocate it per record.
+	scratch []uint64
 }
 
 type bucket struct {
@@ -132,11 +136,11 @@ func (s *slide) addSub(at time.Time, p, sub netip.Prefix, host netip.Addr, n uin
 		b = &bucket{cells: map[netip.Prefix]*cell{}}
 		s.slots[slot] = b
 	}
-	b.add(p, sub, host, n, t, s.max, s.subCap)
+	b.add(p, sub, host, n, t, s.max, s.subCap, &s.scratch)
 	s.prune(at)
 }
 
-func (b *bucket) add(p, sub netip.Prefix, host netip.Addr, n uint64, t traffic, max, subCap int) {
+func (b *bucket) add(p, sub netip.Prefix, host netip.Addr, n uint64, t traffic, max, subCap int, scratch *[]uint64) {
 	b.seen.add(p)
 	if c, ok := b.cells[p]; ok {
 		c.bytes += n
@@ -148,7 +152,7 @@ func (b *bucket) add(p, sub netip.Prefix, host netip.Addr, n uint64, t traffic, 
 		}
 		return
 	}
-	if len(b.cells) >= max && !b.evict(max/16+1, n) {
+	if len(b.cells) >= max && !b.evict(max/16+1, n, scratch) {
 		return
 	}
 	c := &cell{bytes: n}
@@ -232,15 +236,19 @@ func (c *cell) noteHost(host netip.Addr, n uint64) {
 // whether any room was made. Freeing a batch at once keeps a full bucket
 // from rescanning every cell on each new prefix: with a full-table flow
 // mix nearly every record is a new prefix (#51).
-func (b *bucket) evict(k int, n uint64) bool {
+func (b *bucket) evict(k int, n uint64, scratch *[]uint64) bool {
 	if b.minOK && n <= b.minB {
 		return false
 	}
-	vals := make([]uint64, 0, len(b.cells))
+	vals := (*scratch)[:0]
+	if cap(vals) < len(b.cells) {
+		vals = make([]uint64, 0, len(b.cells))
+	}
 	for _, c := range b.cells {
 		vals = append(vals, c.bytes)
 	}
 	slices.Sort(vals)
+	*scratch = vals
 	// Only cells smaller than n may go, at most k of them.
 	k = min(k, sort.Search(len(vals), func(i int) bool { return vals[i] >= n }))
 	if k == 0 {
@@ -277,7 +285,7 @@ func (s *slide) tracked(now time.Time) int {
 	s.prune(now)
 	var acc hll
 	for _, b := range s.slots {
-		acc.merge(b.seen)
+		acc.merge(&b.seen)
 	}
 	return int(acc.estimate())
 }
@@ -293,7 +301,7 @@ func (s *slide) prune(now time.Time) {
 }
 
 func (s *slide) top(now time.Time, n int, minBytes uint64) []rank {
-	rows := s.aggregate(now)
+	rows, _, _ := s.aggregate(now, n, nil)
 	out := make([]rank, 0, len(rows))
 	for _, r := range rows {
 		if r.bytes == 0 || r.bytes < minBytes {
@@ -307,46 +315,82 @@ func (s *slide) top(now time.Time, n int, minBytes uint64) []rank {
 	return out
 }
 
-// totals returns every prefix in the window, largest first, capped at max.
-// Unlike top, it does not apply min_bytes: commit control needs the volume
-// of a prefix another source is already probing.
+// totals returns the busiest prefixes in the window, largest first, capped
+// at max. Unlike top, it does not apply min_bytes: commit control needs the
+// volume of a prefix another source is already probing. max <= 0 returns
+// every prefix.
 func (s *slide) totals(now time.Time, max int) []rank {
-	rows := s.aggregate(now)
-	if max > 0 && len(rows) > max {
-		rows = rows[:max]
-	}
+	rows, _, _ := s.aggregate(now, max, nil)
 	return rows
 }
 
-func (s *slide) aggregate(now time.Time) []rank {
+// tot is one prefix's bytes across the window, before any host list exists.
+type tot struct {
+	bytes, local, transit uint64
+}
+
+// aggregate merges the live buckets. limit is how many of the busiest
+// prefixes receive a host list and a sub-range list. Zero keeps every
+// prefix. must prefixes are kept as well when they have bytes, so a
+// problem prefix outside the busiest set still has its flow hosts.
+// total is every byte in the window, including prefixes left out of rows,
+// so a percent floor is a share of the whole window. Host lists are not
+// built for the prefixes left out: a full table would otherwise allocate
+// one map per destination.
+func (s *slide) aggregate(now time.Time, limit int, must []netip.Prefix) (rows []rank, total uint64, overflow bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.prune(now)
+
+	sum := make(map[netip.Prefix]tot)
+	for _, b := range s.slots {
+		for p, c := range b.cells {
+			t := sum[p]
+			t.bytes += c.bytes
+			t.local += c.local
+			t.transit += c.transit
+			sum[p] = t
+			if overflow || c.bytes > ^uint64(0)-total {
+				total, overflow = ^uint64(0), true
+				continue
+			}
+			total += c.bytes
+		}
+	}
+	keep := pickTotals(sum, limit, must)
+
 	type subAcc struct {
 		bytes uint64
 		hosts map[netip.Addr]uint64
 	}
 	type acc struct {
-		bytes, local, transit uint64
-		hosts                 map[netip.Addr]uint64
-		subs                  map[netip.Prefix]*subAcc
+		tot
+		hosts map[netip.Addr]uint64
+		subs  map[netip.Prefix]*subAcc
 	}
-	sum := map[netip.Prefix]*acc{}
+	full := make(map[netip.Prefix]*acc, len(keep))
+	for p := range keep {
+		t := sum[p]
+		if t.bytes == 0 {
+			continue
+		}
+		full[p] = &acc{tot: t}
+	}
 	for _, b := range s.slots {
 		for p, c := range b.cells {
-			a := sum[p]
+			a := full[p]
 			if a == nil {
-				a = &acc{hosts: map[netip.Addr]uint64{}}
-				sum[p] = a
+				continue
 			}
-			a.bytes += c.bytes
-			a.local += c.local
-			a.transit += c.transit
 			for i := 0; i < c.nHosts; i++ {
 				h := c.hosts[i]
-				if h.addr.IsValid() && h.bytes > 0 {
-					a.hosts[h.addr] += h.bytes
+				if !h.addr.IsValid() || h.bytes == 0 {
+					continue
 				}
+				if a.hosts == nil {
+					a.hosts = map[netip.Addr]uint64{}
+				}
+				a.hosts[h.addr] += h.bytes
 			}
 			for _, sc := range c.subs {
 				if a.subs == nil {
@@ -364,11 +408,8 @@ func (s *slide) aggregate(now time.Time) []rank {
 			}
 		}
 	}
-	out := make([]rank, 0, len(sum))
-	for p, a := range sum {
-		if a.bytes == 0 {
-			continue
-		}
+	out := make([]rank, 0, len(full))
+	for p, a := range full {
 		hosts := topHosts(a.hosts)
 		var host netip.Addr
 		if len(hosts) > 0 {
@@ -394,9 +435,111 @@ func (s *slide) aggregate(now time.Time) []rank {
 		if out[i].bytes != out[j].bytes {
 			return out[i].bytes > out[j].bytes
 		}
-		return out[i].prefix.String() < out[j].prefix.String()
+		return prefixTextLess(out[i].prefix, out[j].prefix)
 	})
-	return out
+	return out, total, overflow
+}
+
+// prefixTextLess is prefix text order without allocating the strings.
+// Equal byte totals break by that order (#118).
+func prefixTextLess(a, b netip.Prefix) bool {
+	var ab, bb [64]byte
+	as := a.AppendTo(ab[:0])
+	bs := b.AppendTo(bb[:0])
+	return bytes.Compare(as, bs) < 0
+}
+
+// totKey is a prefix and its window bytes, used to choose the busiest set.
+type totKey struct {
+	prefix netip.Prefix
+	bytes  uint64
+}
+
+// worse is the eviction order for that set: fewer bytes, then a greater
+// prefix text. The same order as the sorted ranks, reversed.
+func worse(a, b totKey) bool {
+	if a.bytes != b.bytes {
+		return a.bytes < b.bytes
+	}
+	return prefixTextLess(b.prefix, a.prefix)
+}
+
+func siftUp(h []totKey, i int) {
+	for i > 0 {
+		p := (i - 1) / 2
+		if !worse(h[i], h[p]) {
+			break
+		}
+		h[i], h[p] = h[p], h[i]
+		i = p
+	}
+}
+
+func siftDown(h []totKey, i int) {
+	n := len(h)
+	for {
+		l := 2*i + 1
+		if l >= n {
+			return
+		}
+		c := l
+		if r := l + 1; r < n && worse(h[r], h[l]) {
+			c = r
+		}
+		if !worse(h[c], h[i]) {
+			return
+		}
+		h[i], h[c] = h[c], h[i]
+		i = c
+	}
+}
+
+func consider(h []totKey, limit int, x totKey) []totKey {
+	if len(h) < limit {
+		h = append(h, x)
+		siftUp(h, len(h)-1)
+		return h
+	}
+	if len(h) == 0 || !worse(h[0], x) {
+		return h
+	}
+	h[0] = x
+	siftDown(h, 0)
+	return h
+}
+
+// pickTotals chooses the prefixes that receive a host list. limit <= 0
+// keeps every prefix that has bytes. Otherwise it keeps limit of the
+// busiest, plus any must prefix that has bytes.
+func pickTotals(sum map[netip.Prefix]tot, limit int, must []netip.Prefix) map[netip.Prefix]struct{} {
+	keep := make(map[netip.Prefix]struct{})
+	if limit <= 0 {
+		for p, t := range sum {
+			if t.bytes > 0 {
+				keep[p] = struct{}{}
+			}
+		}
+		return keep
+	}
+	for _, p := range must {
+		if t, ok := sum[p]; ok && t.bytes > 0 {
+			keep[p] = struct{}{}
+		}
+	}
+	h := make([]totKey, 0, min(limit, len(sum)))
+	for p, t := range sum {
+		if t.bytes == 0 {
+			continue
+		}
+		if _, ok := keep[p]; ok {
+			continue
+		}
+		h = consider(h, limit, totKey{prefix: p, bytes: t.bytes})
+	}
+	for _, k := range h {
+		keep[k.prefix] = struct{}{}
+	}
+	return keep
 }
 
 // topHosts returns at most maxFlowHosts addresses, largest byte total
