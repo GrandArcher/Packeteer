@@ -98,7 +98,7 @@ func (s *Server) overview() Overview {
 		{"federation", s.federation != nil && s.federation().Enabled},
 		{"ha", s.ha != nil},
 	}
-	return BuildOverview(snap, s.setup, features)
+	return BuildOverview(snap, *s.setup.Load(), features)
 }
 
 // BuildOverview is pure: it reads a snapshot, the setup facts, and the

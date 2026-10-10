@@ -208,7 +208,7 @@ func TestHungProberStalenessWithdraws(t *testing.T) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		decideLoop(ctx, 40*time.Millisecond, kick, eval)
+		decideLoop(ctx, func() time.Duration { return 40 * time.Millisecond }, kick, eval)
 	}()
 	defer func() {
 		cancel()
@@ -357,7 +357,7 @@ func TestPartialRoundStalenessIsPerResult(t *testing.T) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		decideLoop(ctx, 40*time.Millisecond, kick, eval)
+		decideLoop(ctx, func() time.Duration { return 40 * time.Millisecond }, kick, eval)
 	}()
 	defer func() {
 		cancel()

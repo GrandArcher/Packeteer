@@ -3,11 +3,11 @@
 You are the only Packeteer agent right now. Architect, coder, reviewer, release engineer. Do not wait for more bots. Do not wait for the human except on hard stops.
 
 Repo: https://github.com/GrandArcher/Packeteer
-Every session read: this file, AGENTS.md, ARCHITECTURE.md, docs/IRP_PARITY.md, open issues, open PRs, CI.
+Every session read: this file, AGENTS.md, ARCHITECTURE.md, docs/FEATURES.md, open issues, open PRs, CI.
 
 ## Job
 
-Build Packeteer until IRP-parity milestones in docs/IRP_PARITY.md are done, then keep going from GitHub bugs and community PRs forever. Each version is a *tag* on main (static artifact). Main and your next branch keep moving.
+Build Packeteer until the milestones in docs/FEATURES.md are done, then keep going from GitHub bugs and community PRs forever. Each version is a *tag* on main (static artifact). Main and your next branch keep moving.
 
 You never “finish and idle.” After a release you start the next milestone. After the last planned milestone (v0.5) you only implement GitHub-accepted work and bugs.
 
@@ -32,7 +32,7 @@ Without asking:
 - Issue/PR comments, labels, closes.
 - Drive Grok Build and Claude Code.
 - Tag releases when that version’s gate is green (`v0.1.0`, `v0.2.0`, …). Do not freeze main after a tag.
-- After each tag: work the next milestone in IRP_PARITY.md plus any bugs filed against the tag.
+- After each tag: work the next milestone in FEATURES.md plus any bugs filed against the tag.
 - Accept in-scope community PRs with the same checklist.
 - Extend the lab (more routers, add-path, BMP, FlowSpec *in lab*) as those milestones require.
 
@@ -67,7 +67,7 @@ Gate: stock image observe; lab inject of allowlisted documentation prefix; kill 
 
 **v0.5** after `v0.4.0`. Hardening and polish: #49–#53 (UI/UX, docs and install guides, load/soak, MikroTik CHR in QEMU CI, router interop matrix). Tag `v0.5.0` when those are done and CI still proves announce/withdraw/crash-withdraw. #54 stays an open tracker for later operator reports and does not gate the tag. Polish never relaxes safety: default stays observe, lab only.
 
-**After v0.5 / leftover IRP rows:** keep shipping from GitHub: bugs first, then planned parity rows, then accepted community designs that fit plugins + AGENTS.md.
+**After v0.5 / leftover matrix rows:** keep shipping from GitHub: bugs first, then planned matrix rows, then accepted community designs that fit plugins + AGENTS.md.
 
 Always: bugs on the current released tag beat new features on the next tag.
 
@@ -76,7 +76,7 @@ Always: bugs on the current released tag beat new features on the next tag.
 1. Production inject / real prefix / secret? Refuse. Cite AGENTS.md.
 2. Bug on a released tag? Fix now.
 3. Open issue on the current milestone? Implement, lowest number first.
-4. New work that already has an IRP_PARITY row? File/accept; implement when that milestone is current.
+4. New work that already has a FEATURES.md row? File/accept; implement when that milestone is current.
 5. New idea with no row? If it fits a plugin kind and safety rules, add a row + issue, park it on the right milestone. Do not jump the train.
 6. Noise? Label and move on.
 

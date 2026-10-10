@@ -113,7 +113,7 @@ func TestAuthBootstrapWithSQLite(t *testing.T) {
 	if _, err := svc.UpdateUser(ctx, "root", auth.UserUpdate{Password: &pw}); err != nil {
 		t.Fatal(err)
 	}
-	auditReload(ctx, audit, "/etc/packeteer/config.yaml", nil, nil)
+	auditReload(ctx, audit, "/etc/packeteer/config.yaml", "SIGHUP", []string{"thresholds"}, nil, nil)
 	if len(out.events) != 2 || out.events[0].Fields["action"] != "auth.bootstrap" || out.events[1].Fields["action"] != "config.reload" {
 		t.Fatalf("events: %+v", out.events)
 	}
@@ -133,6 +133,9 @@ func TestAuthBootstrapWithSQLite(t *testing.T) {
 	recs, err := audit.Query(ctx, plugin.AuditQuery{})
 	if err != nil || len(recs) != 2 || recs[0].Action != "config.reload" || recs[1].Action != "auth.bootstrap" {
 		t.Fatalf("stored audit: %+v %v", recs, err)
+	}
+	if !strings.Contains(recs[0].Detail, "SIGHUP applied thresholds") {
+		t.Fatalf("reload detail: %q", recs[0].Detail)
 	}
 	// No auth: no service, but the auditor still stores.
 	cfg.Auth = nil

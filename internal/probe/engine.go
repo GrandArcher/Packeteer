@@ -156,7 +156,10 @@ type Engine struct {
 	probers   []NamedProber
 	sources   []NamedSource
 	opt       Options
-	log       *slog.Logger
+	// sched overrides interval, timeout, packets, and loss-retry timing
+	// after a reload (#128). Nil keeps Options, which tests mutate directly.
+	sched atomic.Pointer[Timing]
+	log   *slog.Logger
 
 	mu      sync.RWMutex
 	results map[key]Result
@@ -304,6 +307,85 @@ func New(providers []Provider, probers []NamedProber, sources []NamedSource, opt
 	return e, nil
 }
 
+// Timing is the probe timing a reload can change while the engine runs.
+// Workers, the rate limit, dispersion, and indirect tracing stay on Options
+// and still need a restart.
+type Timing struct {
+	Interval     time.Duration
+	Timeout      time.Duration
+	Packets      int
+	RetryLossPct float64
+	RetryPackets int
+	RoundTimeout time.Duration
+}
+
+// SetTiming replaces the timing the next round uses and wakes Run.
+func (e *Engine) SetTiming(t Timing) {
+	if e == nil {
+		return
+	}
+	e.sched.Store(&t)
+	e.Wake()
+}
+
+// TimingNow is the timing the engine probes with.
+func (e *Engine) TimingNow() Timing {
+	if e == nil {
+		return Timing{}
+	}
+	return e.live()
+}
+
+func (e *Engine) live() Timing {
+	if p := e.sched.Load(); p != nil {
+		return *p
+	}
+	return Timing{
+		Interval: e.opt.Interval, Timeout: e.opt.Timeout, Packets: e.opt.Packets,
+		RetryLossPct: e.opt.RetryLossPct, RetryPackets: e.opt.RetryPackets,
+		RoundTimeout: e.opt.RoundTimeout,
+	}
+}
+
+func (e *Engine) interval() time.Duration     { return e.live().Interval }
+func (e *Engine) timeout() time.Duration      { return e.live().Timeout }
+func (e *Engine) packets() int                { return e.live().Packets }
+func (e *Engine) retryLoss() float64          { return e.live().RetryLossPct }
+func (e *Engine) retryPackets() int           { return e.live().RetryPackets }
+func (e *Engine) roundTimeout() time.Duration { return e.live().RoundTimeout }
+
+// SetSources replaces the target sources. Removed names drop their target
+// cache. Unchanged sources keep the engine's last list until the cache
+// expires. Caller starts and stops the plugins.
+func (e *Engine) SetSources(sources []NamedSource) {
+	if e == nil {
+		return
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.sources = append([]NamedSource(nil), sources...)
+	if len(e.srcCache) == 0 {
+		return
+	}
+	keep := map[string]bool{}
+	for _, s := range sources {
+		keep[s.Name] = true
+	}
+	for name := range e.srcCache {
+		if !keep[name] {
+			delete(e.srcCache, name)
+		}
+	}
+}
+
+func (e *Engine) sourceList() []NamedSource {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	out := make([]NamedSource, len(e.sources))
+	copy(out, e.sources)
+	return out
+}
+
 // Run probes immediately and then whenever a prefix is due. A target
 // with a positive Interval (the vip source) is measured on that cadence.
 // Other targets use Options.Interval. Results for prefixes that are not
@@ -346,7 +428,7 @@ func (e *Engine) Run(ctx context.Context) error {
 			}
 			e.mu.Unlock()
 		}
-		wait := e.opt.Interval
+		wait := e.interval()
 		if done {
 			wait = e.wakeAfter(e.opt.Now(), last)
 		}
@@ -412,7 +494,7 @@ func (e *Engine) sleep(ctx context.Context, d time.Duration) error {
 // a quarter of the prefix interval so consecutive rounds are not the same
 // instant.
 func (e *Engine) targetDue(t plugin.Target, last map[netip.Prefix]time.Time) bool {
-	every := e.opt.Interval
+	every := e.interval()
 	if t.Interval > 0 {
 		every = t.Interval
 	}
@@ -451,12 +533,12 @@ func (e *Engine) wakeAfter(now time.Time, last map[netip.Prefix]time.Time) time.
 	urgent := e.urgent
 	e.mu.RUnlock()
 	if len(cad) == 0 {
-		return e.opt.Interval
+		return e.interval()
 	}
 	var next time.Time
 	for p, every := range cad {
 		if every <= 0 {
-			every = e.opt.Interval
+			every = e.interval()
 		}
 		when := now
 		if prev, ok := last[p]; ok {
@@ -476,7 +558,7 @@ func (e *Engine) wakeAfter(now time.Time, last map[netip.Prefix]time.Time) time.
 		}
 	}
 	if next.IsZero() {
-		return e.opt.Interval
+		return e.interval()
 	}
 	wait := next.Sub(now)
 	if wait < 0 {
@@ -490,12 +572,12 @@ func (e *Engine) wakeAfter(now time.Time, last map[netip.Prefix]time.Time) time.
 // use its own deadline and for about three intervals of target collection,
 // which matches how old a measurement may be before it is stale.
 func (e *Engine) roundBudget() time.Duration {
-	if e.opt.RoundTimeout > 0 {
-		return e.opt.RoundTimeout
+	if e.roundTimeout() > 0 {
+		return e.roundTimeout()
 	}
-	pkts := e.opt.Packets + e.retryExtra()
-	per := time.Duration(pkts)*e.opt.Timeout + time.Second
-	d := 3*e.opt.Interval + per
+	pkts := e.packets() + e.retryExtra()
+	per := time.Duration(pkts)*e.timeout() + time.Second
+	d := 3*e.interval() + per
 	if d < per+time.Second {
 		d = per + time.Second
 	}
@@ -507,11 +589,11 @@ func (e *Engine) roundBudget() time.Duration {
 // same staleness window: 3*interval + (packets + retryPackets)*timeout.
 // The round deadline adds one more second on top of that product.
 func (e *Engine) retryExtra() int {
-	if e.opt.RetryPackets < 1 {
+	if e.retryPackets() < 1 {
 		return 0
 	}
-	if e.opt.RetryLossPct > 0 || e.opt.Dispersion > 0 {
-		return e.opt.RetryPackets
+	if e.retryLoss() > 0 || e.opt.Dispersion > 0 {
+		return e.retryPackets()
 	}
 	return 0
 }
@@ -532,7 +614,7 @@ func (e *Engine) gatherTargets(ctx context.Context) ([]plugin.Target, bool) {
 	seen := map[netip.Prefix]int{}
 	var out []plugin.Target
 	incomplete := false
-	for _, s := range e.sources {
+	for _, s := range e.sourceList() {
 		if ctx.Err() != nil {
 			incomplete = true
 			break
@@ -680,7 +762,7 @@ func (e *Engine) prefixIntervalLocked(p netip.Prefix) time.Duration {
 			return every
 		}
 	}
-	return e.opt.Interval
+	return e.interval()
 }
 
 // decisionUrgent reports whether p was marked by SetUrgent.
@@ -733,11 +815,11 @@ func (e *Engine) applyUrgent(out *[]plugin.Target) {
 func (e *Engine) shortenInterval(dst *plugin.Target, next time.Duration) {
 	want := next
 	if want <= 0 {
-		want = e.opt.Interval
+		want = e.interval()
 	}
 	cur := dst.Interval
 	if cur <= 0 {
-		cur = e.opt.Interval
+		cur = e.interval()
 	}
 	if want >= cur {
 		return
@@ -788,7 +870,7 @@ func (e *Engine) loadSource(name string) (sourceSnap, bool) {
 	if !ok || c.fast {
 		return sourceSnap{}, false
 	}
-	if !e.opt.Now().Before(c.at.Add(e.opt.Interval)) {
+	if !e.opt.Now().Before(c.at.Add(e.interval())) {
 		return sourceSnap{}, false
 	}
 	c.targets = cloneTargets(c.targets)
@@ -798,7 +880,7 @@ func (e *Engine) loadSource(name string) (sourceSnap, bool) {
 func (e *Engine) storeSource(name string, ts []plugin.Target, err error) {
 	fast := false
 	for _, t := range ts {
-		if t.Interval > 0 && t.Interval < e.opt.Interval {
+		if t.Interval > 0 && t.Interval < e.interval() {
 			fast = true
 			break
 		}
@@ -1163,7 +1245,7 @@ func (e *Engine) droppedAny(keep map[netip.Prefix]bool) bool {
 func (e *Engine) noteCadence(targets []plugin.Target) {
 	m := make(map[netip.Prefix]time.Duration, len(targets))
 	for _, t := range targets {
-		every := e.opt.Interval
+		every := e.interval()
 		if t.Interval > 0 {
 			every = t.Interval
 		}
@@ -1287,7 +1369,7 @@ func (e *Engine) probe(ctx context.Context, j job) (Result, bool) {
 	var samples []hostSample
 	var errs []error
 	for _, h := range hosts {
-		one, down := e.probeOne(ctx, j.provider, j.target.Prefix, h, e.opt.Packets)
+		one, down := e.probeOne(ctx, j.provider, j.target.Prefix, h, e.packets())
 		one.Targets = copied
 		if down || ctx.Err() != nil {
 			return one, down
@@ -1314,9 +1396,9 @@ func (e *Engine) probe(ctx context.Context, j job) (Result, bool) {
 		return res, false
 	}
 	res := combineHosts(j.provider.Name, j.target.Prefix, copied, samples, e.hostQualifies)
-	lossRetry := e.opt.RetryLossPct > 0 && res.Stats.LossPct >= e.opt.RetryLossPct
+	lossRetry := e.retryLoss() > 0 && res.Stats.LossPct >= e.retryLoss()
 	dispRetry := e.spreadOver(samples)
-	if e.opt.RetryPackets < 1 || (!lossRetry && !dispRetry) {
+	if e.retryPackets() < 1 || (!lossRetry && !dispRetry) {
 		return res, false
 	}
 	// Re-probe the hosts that define the score, and any host whose
@@ -1338,7 +1420,7 @@ func (e *Engine) probe(ctx context.Context, j job) (Result, bool) {
 		if !used[s.addr] {
 			continue
 		}
-		one, down := e.probeOne(ctx, j.provider, j.target.Prefix, s.addr, e.opt.RetryPackets)
+		one, down := e.probeOne(ctx, j.provider, j.target.Prefix, s.addr, e.retryPackets())
 		one.Targets = copied
 		if down || ctx.Err() != nil {
 			return one, down
@@ -1356,7 +1438,7 @@ func (e *Engine) probe(ctx context.Context, j job) (Result, bool) {
 	case dispRetry:
 		reason = "dispersion"
 	}
-	e.log.Debug("retry probe", "provider", res.Provider, "prefix", res.Prefix, "loss_pct", res.Stats.LossPct, "packets", e.opt.RetryPackets, "reason", reason)
+	e.log.Debug("retry probe", "provider", res.Provider, "prefix", res.Prefix, "loss_pct", res.Stats.LossPct, "packets", e.retryPackets(), "reason", reason)
 	return combineHosts(j.provider.Name, j.target.Prefix, copied, again, e.hostQualifies), false
 }
 
@@ -1430,7 +1512,7 @@ func (e *Engine) probeOne(ctx context.Context, p Provider, prefix netip.Prefix, 
 	defer func() { <-sem }()
 
 	req := plugin.ProbeRequest{Provider: p.Name, Source: p.Source,
-		Target: host, Count: count, Timeout: e.opt.Timeout}
+		Target: host, Count: count, Timeout: e.timeout()}
 	var errs []error
 	var fallback *Result
 	start := e.proberStart(host)
@@ -1442,7 +1524,7 @@ func (e *Engine) probeOne(ctx context.Context, p Provider, prefix netip.Prefix, 
 				break
 			}
 		}
-		pctx, cancel := context.WithTimeout(ctx, time.Duration(count)*e.opt.Timeout+time.Second)
+		pctx, cancel := context.WithTimeout(ctx, time.Duration(count)*e.timeout()+time.Second)
 		raw, err := pr.Prober.Probe(pctx, req)
 		cancel()
 		if err != nil {

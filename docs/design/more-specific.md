@@ -1,13 +1,13 @@
 # More-specific injection with a route cap (#56)
 
-IRP 2.9 more-specific injection, redesigned after `more_specific_bits` was
+More-specific injection, redesigned after `more_specific_bits` was
 removed (#44). That knob split one learned prefix into 2^n longer prefixes
 that no neighbor had advertised, and `max_improvements` counted decisions,
 so 50 improvements at 8 bits could install 12,800 routes. This design
 announces no prefix that is missing from the learned RIB, and its cap
 counts routes on the router.
 
-Synthesized sub-ranges, which IRP also announces, are a separate opt-in
+Synthesized sub-ranges are a separate opt-in
 block, `synthesize` (#114 charter, #122 feature), described at the end of
 this file. `more_specific` itself never synthesizes, and
 `more_specific_bits` stays removed.
@@ -33,7 +33,7 @@ The feature is off unless `more_specific.enabled: true`. Off, Packeteer
 announces exactly what it did before: one route per improvement, the
 improvement's own learned prefix. `more_specific_bits` is still a config
 error with any value, including `0`. `more_specific` changes need a restart
-(SIGHUP refuses them like every key outside `bgp.neighbors`).
+(SIGHUP refuses them; they are restart-only, like the announcer).
 
 ## Which prefixes may be announced
 
@@ -137,8 +137,8 @@ Lab-proven only, not on a public edge.
 Status: charter only (#114). The feature is #122 and is not implemented.
 Until it merges, nothing outside the learned RIB is announced.
 
-IRP disaggregates a large prefix and can announce the more-specific it
-measured, so a bad part of a /16 can be steered as a /24. No attribute on
+Synthesizing lets Packeteer disaggregate a large prefix and announce the
+more-specific it measured, so a bad part of a /16 can be steered as a /24. No attribute on
 the covering route (local preference, next hop, communities, AS path, MED)
 can steer part of it, because the router forwards by longest match. Only a
 longer route does. `synthesize` is that longer route, under these rails:

@@ -70,12 +70,14 @@ func newEditor(t *testing.T) (*configedit.Editor, string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	diff := func(a, b *config.Config) ([]string, bool) {
-		var keys []string
+	diff := func(a, b *config.Config) (restart, online []string) {
 		if a.Mode != b.Mode {
-			keys = append(keys, "mode")
+			restart = append(restart, "mode")
 		}
-		return keys, !reflect.DeepEqual(a.BGP.Neighbors, b.BGP.Neighbors)
+		if !reflect.DeepEqual(a.BGP.Neighbors, b.BGP.Neighbors) {
+			online = append(online, "bgp.neighbors")
+		}
+		return restart, online
 	}
 	e, err := configedit.New(path, running, config.Parse, diff)
 	if err != nil {
@@ -614,5 +616,24 @@ func TestIndirectProbeInSnapshot(t *testing.T) {
 	}
 	if !strings.Contains(string(js), "pr.indirect") || !strings.Contains(string(js), `"indirect"`) {
 		t.Fatal("app.js does not label indirect probes")
+	}
+}
+
+// The online apply after a PUT gets a context the request does not
+// cancel, so sources it starts survive the response.
+func TestConfigSaveOnlineApplyContextOutlivesRequest(t *testing.T) {
+	e := newUI(t)
+	var got context.Context
+	e.srv.SetOnlineApply(func(c context.Context) ([]string, error, error) {
+		got = c
+		return []string{"bgp.neighbors"}, nil, nil
+	})
+	next := editorYAML + "bgp:\n  neighbors:\n    - address: 192.0.2.254\n"
+	rec, _ := e.do(t, "PUT", "/api/config", plugin.RoleAdmin, map[string]any{"yaml": next, "base": configedit.Hash([]byte(editorYAML))})
+	if rec.Code != http.StatusOK || got == nil {
+		t.Fatalf("save: %d %s applied=%v", rec.Code, rec.Body, got != nil)
+	}
+	if got.Err() != nil || got.Done() != nil {
+		t.Fatal("online apply context is cancelled with the request")
 	}
 }

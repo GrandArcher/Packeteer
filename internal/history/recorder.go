@@ -277,6 +277,17 @@ func ms(d time.Duration) float64 { return float64(d) / float64(time.Millisecond)
 // Decision records the improvement changes of one evaluation. results are
 // the measurements the evaluation used; they give the before (native) and
 // after (chosen provider) numbers.
+// SetMode records the mode new improvement rows use. A reload that
+// changes mode calls it. Open rows keep the mode they started with.
+func (r *Recorder) SetMode(mode string) {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	r.opt.Mode = mode
+	r.mu.Unlock()
+}
+
 func (r *Recorder) Decision(now time.Time, changes []policy.Change, results []probe.Result) {
 	if len(changes) == 0 {
 		return

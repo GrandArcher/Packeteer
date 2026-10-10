@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-// Web UI parity (#34): the config editor switch and scheduled email
+// Web UI features (#34): the config editor switch and scheduled email
 // report subscriptions. Neither announces routes.
 
 // Report subscription schedules.

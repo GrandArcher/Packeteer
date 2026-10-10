@@ -276,8 +276,8 @@ func (f Form) validate() error {
 	}
 	if f.MaxImprovements != "" {
 		n, err := strconv.Atoi(f.MaxImprovements)
-		if err != nil || n < 1 {
-			return fmt.Errorf("%w: max_improvements %q must be a positive integer", ErrForm, f.MaxImprovements)
+		if err != nil || n < 0 || n > config.MaxImprovementsLimit {
+			return fmt.Errorf("%w: max_improvements %q must be a whole number from 0 to %d (0 retires every improvement)", ErrForm, f.MaxImprovements, config.MaxImprovementsLimit)
 		}
 	}
 	if err := numberField("thresholds.min_loss_delta_pct", f.MinLossDeltaPct, 0, 100); err != nil {

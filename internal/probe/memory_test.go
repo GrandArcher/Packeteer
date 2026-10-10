@@ -171,6 +171,46 @@ func TestProberMemoryBounded(t *testing.T) {
 	}
 }
 
+func TestSemaphorePrune(t *testing.T) {
+	h1 := netip.MustParseAddr("198.51.100.1")
+	h2 := netip.MustParseAddr("203.0.113.9")
+	src := &countingSource{fresh: true, targets: []plugin.Target{
+		{Prefix: pfx1, Host: h1},
+		{Prefix: pfx2, Host: h2},
+	}}
+	e, err := New([]Provider{provA}, []NamedProber{{"icmp", &fakeProber{fn: allReplies}}},
+		[]NamedSource{{Name: "static", Source: src}}, opts())
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.RunOnce(context.Background())
+	if _, ok := e.sems[h2]; !ok {
+		t.Fatalf("sems after first round = %v", semKeys(e))
+	}
+	n := len(e.sems)
+	src.targets = []plugin.Target{{Prefix: pfx1, Host: h1}}
+	e.RunOnce(context.Background())
+	if _, ok := e.sems[h2]; ok {
+		t.Fatalf("semaphore kept for a host that left: %v", semKeys(e))
+	}
+	if len(e.sems) >= n {
+		t.Fatalf("sems len %d, was %d", len(e.sems), n)
+	}
+	if _, ok := e.sems[h1]; !ok {
+		t.Fatal("semaphore for the host still probed was dropped")
+	}
+}
+
+func semKeys(e *Engine) []netip.Addr {
+	e.semMu.Lock()
+	defer e.semMu.Unlock()
+	out := make([]netip.Addr, 0, len(e.sems))
+	for a := range e.sems {
+		out = append(out, a)
+	}
+	return out
+}
+
 func TestProberMemoryDropsHostNoLongerProbed(t *testing.T) {
 	h1 := netip.MustParseAddr("198.51.100.1")
 	h2 := netip.MustParseAddr("203.0.113.1")

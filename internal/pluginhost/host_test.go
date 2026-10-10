@@ -3,6 +3,7 @@ package pluginhost
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -301,5 +302,37 @@ func TestSampleStoreAttached(t *testing.T) {
 	}
 	if plain.Telemetry[0].Plugin.(*telKeep).store != nil {
 		t.Fatal("storage without a sample store was attached")
+	}
+}
+
+type orderLC struct {
+	plugin.Base
+	name string
+	log  *[]string
+}
+
+func (o orderLC) Stop(context.Context) error {
+	*o.log = append(*o.log, o.name)
+	return nil
+}
+
+// A plugin an online reload starts is stopped before the elector and the
+// announcers, so the announcers still stop first.
+func TestTrackStartKeepsAnnouncersStoppingFirst(t *testing.T) {
+	var stopped []string
+	lc := func(n string) plugin.Lifecycle { return orderLC{name: n, log: &stopped} }
+	s := &Set{}
+	s.track(namedLifecycle{plugin.KindStorage, "storage", lc("storage")})
+	s.track(namedLifecycle{plugin.KindSource, "source old", lc("source old")})
+	s.track(namedLifecycle{plugin.KindElector, "elector", lc("elector")})
+	s.track(namedLifecycle{plugin.KindAnnouncer, "announcer", lc("announcer")})
+	s.TrackStart(plugin.KindSource, "new", lc("source new"))
+	s.TrackStart(plugin.KindPolicy, "new", lc("policy new"))
+	if err := s.Stop(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"announcer", "elector", "policy new", "source new", "source old", "storage"}
+	if !slices.Equal(stopped, want) {
+		t.Fatalf("stop order = %v, want %v", stopped, want)
 	}
 }

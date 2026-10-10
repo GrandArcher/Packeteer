@@ -369,7 +369,7 @@ func TestLocalPrefChangeUpdatesRoute(t *testing.T) {
 		opt:       Options{Providers: map[netip.Addr]string{nh: "transit-a"}},
 		neighbors: map[netip.Addr]bool{nbr: true},
 		routes:    map[netip.Prefix]Route{},
-		adj:       map[netip.Prefix]map[adjKey]Route{},
+		adj:       map[netip.Prefix]pathSet{},
 	}
 	if !v.applyPath(learned(t, "198.51.100.0/24", "192.0.2.1", nbr.String(), 100, false)) {
 		t.Fatal("first path did not publish")
@@ -466,7 +466,7 @@ func TestMoreSpecificsListsOnlyLearnedPrefixesInside(t *testing.T) {
 	v := &View{
 		neighbors: map[netip.Addr]bool{nbr: true},
 		routes:    map[netip.Prefix]Route{},
-		adj:       map[netip.Prefix]map[adjKey]Route{},
+		adj:       map[netip.Prefix]pathSet{},
 	}
 	for _, s := range []string{"198.51.100.0/24", "198.51.100.0/25", "198.51.100.192/26", "198.51.101.0/24", "203.0.113.0/24", "203.0.113.128/25"} {
 		if !v.applyPath(learned(t, s, "192.0.2.1", nbr.String(), 100, false)) {

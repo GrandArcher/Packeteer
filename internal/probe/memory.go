@@ -40,6 +40,7 @@ type proberSlot struct {
 // are still probed and keep their prober.
 func (e *Engine) beginProberRound(targets []plugin.Target) {
 	live := e.liveHosts(targets)
+	e.pruneSems(live)
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.proberPlan = map[netip.Addr]int{}
@@ -57,6 +58,22 @@ func (e *Engine) beginProberRound(targets []plugin.Target) {
 		}
 	}
 	e.evictProberMemLocked()
+}
+
+// pruneSems drops per-address semaphores for hosts that left the probe
+// set. The map is otherwise only inserted, so a prefix that rotates out
+// of the flow window would keep a channel for every address it ever
+// probed. A probe already holding a deleted channel still releases it
+// (it keeps its own reference); only a probe of the same host that
+// overlaps a round boundary could briefly run beside it.
+func (e *Engine) pruneSems(live map[netip.Addr]struct{}) {
+	e.semMu.Lock()
+	defer e.semMu.Unlock()
+	for a := range e.sems {
+		if _, ok := live[a.Unmap()]; !ok {
+			delete(e.sems, a)
+		}
+	}
 }
 
 // liveHosts is every address the target list can probe, including

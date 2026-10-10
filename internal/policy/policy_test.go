@@ -363,6 +363,53 @@ func TestMaxImprovementsBiggestGainsFirst(t *testing.T) {
 	}
 }
 
+// A lower cap, including 0, retires the smallest gain inside hold_time
+// and does not start a cooldown, so raising the cap can admit it again.
+func TestLowerCapRetiresLowestGainInsideHold(t *testing.T) {
+	var res []probe.Result
+	res = append(res, results(t0, pA, m{"a", 0, 100}, m{"b", 0, 80})...) // gain 20
+	res = append(res, results(t0, pB, m{"a", 0, 200}, m{"b", 0, 50})...) // gain 150
+	c := cfg()
+	c.MaxImprovements = 2
+	native := map[netip.Prefix]string{pA: "a", pB: "a"}
+	st, _ := Decide(NewState(), in(res, native), c, scorer(t), t0)
+	if len(st.Improvements) != 2 {
+		t.Fatalf("improvements = %d", len(st.Improvements))
+	}
+	later := t0.Add(time.Minute)
+	var fresh []probe.Result
+	fresh = append(fresh, results(later, pA, m{"a", 0, 100}, m{"b", 0, 80})...)
+	fresh = append(fresh, results(later, pB, m{"a", 0, 200}, m{"b", 0, 50})...)
+	c.MaxImprovements = 1
+	st, out := Decide(st, in(fresh, native), c, scorer(t), later)
+	if _, ok := st.Improvements[pA]; ok {
+		t.Fatal("smaller gain stayed inside the new cap")
+	}
+	if _, ok := st.Improvements[pB]; !ok {
+		t.Fatal("larger gain was retired")
+	}
+	if _, cool := st.Cooldown[pA]; cool {
+		t.Fatal("cap retire started a cooldown")
+	}
+	retired := false
+	for _, ch := range out.Changes {
+		if ch.Action == ActionRetire && ch.Old.Prefix == pA {
+			retired = true
+			if !strings.Contains(ch.Old.Reason, "max_improvements (1)") {
+				t.Fatalf("reason = %q", ch.Old.Reason)
+			}
+		}
+	}
+	if !retired {
+		t.Fatalf("changes = %+v", out.Changes)
+	}
+	c.MaxImprovements = 0
+	st, _ = Decide(st, in(fresh, native), c, scorer(t), later.Add(time.Second))
+	if len(st.Improvements) != 0 || len(st.Cooldown) != 0 {
+		t.Fatalf("cap 0: improvements %d cooldown %d", len(st.Improvements), len(st.Cooldown))
+	}
+}
+
 func TestDecideDoesNotMutatePrev(t *testing.T) {
 	prev := NewState()
 	prev.Improvements[pA] = Improvement{Prefix: pA, Provider: "b", Native: "a", Since: t0}

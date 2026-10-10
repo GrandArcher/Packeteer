@@ -43,10 +43,20 @@ profiles:
     # 4590, second-half median 4849) while end RSS and peak sat with those
     # runs and RSS fell from 4966 to 4827. 384 is that sample plus
     # headroom. A second half 400 MiB above warmup still fails.
+    #
+    # rss_slope_mb (#112) is how far RSS is still climbing at the end of
+    # the run: the smaller of the Theil-Sen slope over the last third
+    # times that third, and the last-sixth median minus the middle-third
+    # median (lab/soak/budget.go riseLastThird). A heap still growing when
+    # the run ends fails even when growth is under budget. Three green
+    # runs on 2026-10-10 (Actions 38060328414, 38059199721, 38058626210)
+    # read 0, 0, and 103 MiB: the collector's sawtooth, not a leak. 192 is
+    # about twice the worst of those and half the growth budget.
     budgets:
       learn_seconds: 90
       rss_peak_mb: 6144
       rss_growth_mb: 384
+      rss_slope_mb: 192
       cpu_avg_cores: 2.0
       threads: 64
       udp_drop_pct: 5
@@ -126,6 +136,10 @@ profiles:
       learn_seconds: 90
       rss_peak_mb: 6656
       rss_growth_mb: 512
+      # The last third is 110 minutes, so the collector's sawtooth is
+      # small beside it. No soak run has measured this figure yet; a miss
+      # is read against the logged RSS series before anything changes.
+      rss_slope_mb: 192
       cpu_avg_cores: 2.0
       threads: 64
       udp_drop_pct: 5

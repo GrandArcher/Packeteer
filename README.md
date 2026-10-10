@@ -4,7 +4,7 @@ Open-source BGP path performance controller for multi-homed networks. One contai
 
 Packeteer sits off to the side of the edge. It probes each upstream from that upstream's source address, scores loss, latency, and jitter, and learns today's exit from iBGP. In the default mode it only reports. If you later turn injection on, it advertises a better exit back to the edge for prefixes you allowlisted. If Packeteer stops, those routes go away and the router's own BGP decision stands.
 
-The capability matrix against Noction IRP is [docs/IRP_PARITY.md](docs/IRP_PARITY.md).
+The feature matrix is [docs/FEATURES.md](docs/FEATURES.md).
 
 ## Safety model
 
@@ -142,7 +142,7 @@ Leave graceful restart off on the session. Guides:
 - [docs/junos.md](docs/junos.md) — Juniper Junos
 - [docs/cisco.md](docs/cisco.md) — Cisco IOS and IOS-XE
 - [docs/routers.md](docs/routers.md) — what every router guide shares, what happens when the native path disappears, and exchange peers
-- [docs/route-reflector.md](docs/route-reflector.md) — several edge routers, per-router provider reachability, route reflectors, Internet exchange peers, and SIGHUP reload of `bgp.neighbors`
+- [docs/route-reflector.md](docs/route-reflector.md) — several edge routers, per-router provider reachability, route reflectors, Internet exchange peers, and SIGHUP reload of neighbors, thresholds, policies, and sources
 - [docs/multi-pop.md](docs/multi-pop.md) — several POPs (routing domains) federated over mutual TLS: inter-DC RTT in the path cost, global commit across POPs, and the central view. Lab-proven only
 - [docs/policy-routing.md](docs/policy-routing.md) — probe sources behind the router
 - [docs/ui.md](docs/ui.md) — config editor and first-run wizard, custom dashboards, email report subscriptions, and improvement weights
@@ -308,9 +308,9 @@ Symptoms, log lines, and fixes: [docs/troubleshooting.md](docs/troubleshooting.m
 
 **Can I put my config in this git repo?** Keep it on the host you mount into the container. Do not commit real prefixes, ASNs, SNMP communities, or hook tokens.
 
-## IRP parity
+## Features
 
-Feature parity with Noction IRP is the roadmap. Status as of v0.5.0, from [docs/IRP_PARITY.md](docs/IRP_PARITY.md):
+Status as of v0.5.0, from [docs/FEATURES.md](docs/FEATURES.md):
 
 | | Count |
 |---|---|

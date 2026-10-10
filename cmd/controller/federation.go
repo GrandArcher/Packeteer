@@ -101,15 +101,33 @@ func (f *fedState) commit(ctx context.Context, in *policy.Input, plugins *plugin
 	f.mu.Unlock()
 }
 
+// setRuntime updates the mode, cap, and measurement age a reload applied.
+// The federation config (peers, domains) stays as it was at start.
+func (f *fedState) setRuntime(mode string, maxImps int, maxAge time.Duration) {
+	if f == nil {
+		return
+	}
+	f.mu.Lock()
+	f.mode, f.maxImps, f.maxAge = mode, maxImps, maxAge
+	f.mu.Unlock()
+}
+
+func (f *fedState) runtime() (mode string, maxImps int, maxAge time.Duration) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.mode, f.maxImps, f.maxAge
+}
+
 // publish builds this instance's snapshot from the evaluation just run
 // and hands it to the plugin.
 func (f *fedState) publish(now time.Time, in policy.Input, imps []policy.Improvement) {
 	if f == nil {
 		return
 	}
+	mode, maxImps, maxAge := f.runtime()
 	s := federation.Snapshot(f.cfg, federation.SnapshotInput{
-		Version: f.version, Mode: f.mode, Now: now, RIBReady: in.RIBReady,
-		MaxImprovements: f.maxImps, MaxResultAge: f.maxAge,
+		Version: f.version, Mode: mode, Now: now, RIBReady: in.RIBReady,
+		MaxImprovements: maxImps, MaxResultAge: maxAge,
 		Input: in, Improvements: imps, Usage: f.usage,
 	})
 	f.fed.Publish(s)
@@ -125,8 +143,9 @@ func (f *fedState) publishDown(now time.Time) {
 	if f == nil {
 		return
 	}
+	mode, maxImps, _ := f.runtime()
 	s := federation.Snapshot(f.cfg, federation.SnapshotInput{
-		Version: f.version, Mode: f.mode, Now: now, MaxImprovements: f.maxImps,
+		Version: f.version, Mode: mode, Now: now, MaxImprovements: maxImps,
 	})
 	f.fed.Publish(s)
 	f.mu.Lock()

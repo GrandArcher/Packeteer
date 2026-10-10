@@ -72,6 +72,17 @@ func (c *Collector) SetExchanges(exs []exchange.Exchange, hops func() []rib.Next
 	c.mu.Unlock()
 }
 
+// SetMode updates the mode Snapshot reports. A reload that changes mode
+// calls it so the dashboard matches the running config.
+func (c *Collector) SetMode(mode string) {
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	c.mode = mode
+	c.mu.Unlock()
+}
+
 // SetStarted marks process startup finished (or shutting down).
 func (c *Collector) SetStarted(v bool) {
 	c.mu.Lock()
@@ -84,13 +95,14 @@ func (c *Collector) SetStarted(v bool) {
 // statistics read the next hop counts, which the caller caches.
 func (c *Collector) Snapshot() Snapshot {
 	c.mu.RLock()
+	mode := c.mode
 	started, engine, decider, view, telemetry := c.started, c.engine, c.decider, c.view, c.telemetry
 	exs, hops, flowTracked := c.exchanges, c.hops, c.flowTracked
 	c.mu.RUnlock()
 
 	in := Input{
 		Version:   c.version,
-		Mode:      c.mode,
+		Mode:      mode,
 		Started:   started,
 		At:        time.Now().UTC(),
 		Providers: c.providers,

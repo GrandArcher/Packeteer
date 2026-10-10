@@ -1,6 +1,6 @@
 # Dashboard, config editor, wizard, dashboards, report subscriptions, and improvement weights
 
-The remaining IRP GUI conveniences (#34). All of them work in the stock image with a mounted config file. None of them announces a route, and the default mode stays `observe`. Every key is in [CONFIG.md](CONFIG.md).
+The remaining UI conveniences (#34). All of them work in the stock image with a mounted config file. None of them announces a route, and the default mode stays `observe`. Every key is in [CONFIG.md](CONFIG.md).
 
 | Feature | Where | Who | Config |
 |---|---|---|---|
@@ -83,7 +83,7 @@ docker run --network host --cap-add NET_RAW --cap-add NET_ADMIN \
 `/settings.html` loads the file, validates it, and saves it. The API:
 
 - `GET /api/config`: `path`, `yaml`, and `sha256` of the file on disk.
-- `POST /api/config/validate {"yaml": "..."}`: runs the checks without writing. Returns `valid`, `errors` (one line each), `mode`, `changed` (keys that differ from the running config), `restart_required`, `reload_online` (only `bgp.neighbors` changed), and `enables_inject`.
+- `POST /api/config/validate {"yaml": "..."}`: runs the checks without writing. Returns `valid`, `errors` (one line each), `mode`, `changed` (keys that differ from the running config), `restart_required`, `reload_online` (every change can apply while running: thresholds, hold time, the cap, policies, sources, probe timing, mode, the allowlist, and `bgp.neighbors`), and `enables_inject`.
 - `PUT /api/config {"yaml": "...", "base": "<sha256>", "confirm_inject": false}`: writes the file.
 
 A write is accepted only when:
@@ -95,13 +95,13 @@ A write is accepted only when:
 
 The file is written next to itself and renamed into place when the directory allows it. A single-file bind mount cannot be renamed over, so the file is then rewritten in place (restored if that write fails; if the restore fails too, the old content is kept in a temporary file whose path is in the error). It is then read back and loaded with `config.Load`; the response is sent only after that. The file mode is kept. Comments and formatting are what you typed: the editor writes your text, not a re-rendered config. Files larger than 1 MiB are refused.
 
-The running controller does **not** change. Restart the container to apply the new file, or send SIGHUP when only `bgp.neighbors` changed ([route-reflector.md](route-reflector.md)). A restart withdraws every Packeteer route first, as always.
+When `reload_online` is true, the running controller applies the file on this write (#128). The response adds `applied` (the keys now running) or `apply_error` (the running config was left as it was, or the process is stopping because the BGP speaker changed). A mix of online and restart-only keys is not applied: restart the container. SIGHUP applies the same online keys ([CONFIG.md](CONFIG.md#online-reconfiguration)). A restart withdraws every Packeteer route first, as always. The observe banner stays on the dashboard in every mode.
 
 Every write, accepted or refused, is in the audit log with the old and new hashes (never the content) and is logged as a warning.
 
 ## Settings form
 
-`/settings.html` puts a form beside the YAML (#102). The form has a row per provider (name, probe source, next hop, cost, commit), a row per static probe prefix, a row per allowlist prefix, and separate fields for hold time, the improvement cap, the loss and latency thresholds, the RTT percent (`min_rtt_delta_pct`, empty or 0 is off), confirm rounds (`confirm_rounds`, empty means 1), and, when the scorer is `cost`, whether cost or performance wins plus the floor (extra loss, extra delay). Plus adds a row and minus removes one. Each provider field has a visible label above the input, and that label is the field's accessible name, including after the placeholder disappears (#171). Apply copies the form into the YAML in the editor and does not write the file. Save is still `PUT /api/config`: the same checks as a start, the same `confirm_inject` when the text turns inject on, and the running controller still applies the file on restart (or SIGHUP when only `bgp.neighbors` changed).
+`/settings.html` puts a form beside the YAML (#102). The form has a row per provider (name, probe source, next hop, cost, commit), a row per static probe prefix, a row per allowlist prefix, and separate fields for hold time, the improvement cap, the loss and latency thresholds, the RTT percent (`min_rtt_delta_pct`, empty or 0 is off), confirm rounds (`confirm_rounds`, empty means 1), and, when the scorer is `cost`, whether cost or performance wins plus the floor (extra loss, extra delay). Plus adds a row and minus removes one. Each provider field has a visible label above the input, and that label is the field's accessible name, including after the placeholder disappears (#171). Apply copies the form into the YAML in the editor and does not write the file. Save is still `PUT /api/config`: the same checks as a start, the same `confirm_inject` when the text turns inject on, and the same online apply as a SIGHUP when every change can run while the process is up (#128). A cap of 0 is a whole number and retires every improvement on the next decision. MED stays display-only. A next hop seen on the wire is a draft suggestion, not a provider, until it is saved as one.
 
 Fields the form does not show stay in the YAML, including plugin blocks. An unchanged form is not reformatted. Commit is the SNMP telemetry binding's `commit_mbps` for that provider; there is no field for a community or a passphrase. A commit with no binding is refused until the binding is in the YAML. Choosing cost-or-performance, or setting the floor, on a `weighted` scorer (or none) switches `scorer.type` to `cost` and keeps the weights. It does not replace a `commit` scorer.
 

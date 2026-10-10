@@ -1,5 +1,5 @@
 // Package weights is the improvement_weights block the built-in scorers
-// (weighted, commit, cost) share (#34, IRP "Improvements weight"). It
+// (weighted, commit, cost) share (#34). It
 // decides which new improvements take the last max_improvements slots:
 //
 //	weight = performance * gain + volume * volume_mbps

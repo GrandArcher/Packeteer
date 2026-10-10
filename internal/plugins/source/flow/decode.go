@@ -93,6 +93,27 @@ type decoder struct {
 	rates map[rateKey]uint64
 }
 
+// obsPool reuses the observation slice for one datagram. Observations
+// hold no pointers into the packet, and ingest finishes with the slice
+// before the next datagram. A slice bigger than a jumbo packet is dropped
+// so a pathological exporter cannot pin it.
+var obsPool = sync.Pool{New: func() any {
+	s := make([]observation, 0, 64)
+	return s
+}}
+
+func getObs() []observation {
+	s := obsPool.Get().([]observation)
+	return s[:0]
+}
+
+func putObs(s []observation) {
+	if cap(s) == 0 || cap(s) > 4096 {
+		return
+	}
+	obsPool.Put(s[:0])
+}
+
 func (d *decoder) decode(exporter netip.Addr, payload []byte) ([]observation, error) {
 	if len(payload) < 2 {
 		return nil, errors.New("short packet")
@@ -130,7 +151,7 @@ func decodeV5(p []byte) ([]observation, error) {
 	// field. Zero means the octet counts are already absolute.
 	rate := uint64(binary.BigEndian.Uint16(p[22:24]) & 0x3fff)
 	rest := p[24:]
-	var out []observation
+	out := getObs()
 	for i := 0; i < count; i++ {
 		if len(rest) < 48 {
 			return out, errors.New("netflow v5: short record")
@@ -184,7 +205,7 @@ func (d *decoder) decodeIPFIX(exporter netip.Addr, p []byte) ([]observation, err
 }
 
 func (d *decoder) walkSets(exp netip.Addr, version uint16, domain uint32, body []byte) ([]observation, error) {
-	var obs []observation
+	obs := getObs()
 	var errs []error
 	for len(body) >= 4 {
 		id := binary.BigEndian.Uint16(body[0:2])
@@ -206,9 +227,7 @@ func (d *decoder) walkSets(exp netip.Addr, version uint16, domain uint32, body [
 		case version == 10 && id == 3:
 			err = d.takeIPFIXOptions(exp, domain, set)
 		case id >= 256:
-			var got []observation
-			got, err = d.takeData(exp, version, domain, id, set)
-			obs = append(obs, got...)
+			obs, err = d.takeData(exp, version, domain, id, set, obs)
 		}
 		if err != nil {
 			errs = append(errs, err)
@@ -384,13 +403,12 @@ type gotRec struct {
 	rate      uint64
 }
 
-func (d *decoder) takeData(exp netip.Addr, version uint16, domain uint32, id uint16, body []byte) ([]observation, error) {
+func (d *decoder) takeData(exp netip.Addr, version uint16, domain uint32, id uint16, body []byte, obs []observation) ([]observation, error) {
 	t, ok := d.tmpl[tmplKey{exp, version, domain, id}]
 	if !ok {
-		return nil, fmt.Errorf("template %d not found", id)
+		return obs, fmt.Errorf("template %d not found", id)
 	}
 	rk := rateKey{exp, version, domain}
-	var obs []observation
 	for len(body) > 0 {
 		rec, rest, err := nextRecord(body, t.fields)
 		if errors.Is(err, errNeedMore) {
@@ -582,7 +600,7 @@ func decodeSFlow(p []byte) ([]observation, error) {
 	if n > maxFlowSamples {
 		return nil, errors.New("sflow: too many samples")
 	}
-	var out []observation
+	out := getObs()
 	for i := uint32(0); i < n; i++ {
 		if len(p)-off < 8 {
 			return out, errors.New("sflow: short sample")
