@@ -1,0 +1,1599 @@
+diff --git a/ARCHITECTURE.md b/ARCHITECTURE.md
+index 7fcb782..cadb895 100644
+--- a/ARCHITECTURE.md
++++ b/ARCHITECTURE.md
+@@ -22,7 +22,7 @@ flow/SPAN/SNMP/static prefix list
+ 
+ ## Components
+ 
+-- **Probe worker** sources packets out each configured provider (dedicated probe address or policy-routed source). Compares the same destination across providers. Each round has an overall deadline (the same window as stale measurements, about three intervals, plus retry packets when loss retry or dispersion escalation is on). A prober or target source that ignores cancellation is abandoned; the previous results stay, and the next round waits until that call returns. Built-in probers are ICMP, TCP, and UDP. The engine remembers the prober that got a reply from each host and starts later rounds there, moving forward from that prober; every `probe.prober_recheck_rounds` measurement (default 10) starts at the first prober again. `probe.prober_memory` caps that set, and hosts that leave the probe set are dropped. An on-demand troubleshoot probe still walks the whole chain. UDP counts a datagram reply, or an ICMP destination-unreachable whose source is the target; an unreachable from another address is loss. TCP counts a SYN-ACK or a RST, and a middlebox RST is not distinguishable from the target. The traceroute source discovers in the background and returns its last cache immediately, under a budget (default 10s, max 30s) that sits under the default round deadline. It keeps the configured host if it answers and otherwise sets the probe host to the last stable hop; the prefix does not change and that hop is not announced. With `probe.indirect` on (#123), a prefix whose in-prefix addresses were all silent for a provider is traced in the background from that provider's source under its own budget; the highest stable hop is cached per prefix and provider and probed in later rounds as that provider's indirect host, marked `indirect` on the result. The vip source marks configured prefixes, and at most `max_targets` prefixes whose learned AS path contains a listed ASN, with its own interval. That interval must be shorter than the staleness window, and it never lengthens the interval of a prefix another source already listed. The ASN expansion is rebuilt only when the RIB generation changes. The scheduler probes a prefix when its interval has elapsed and keeps the other results. Sources that do not carry a shorter interval are re-read on the engine interval, not on every VIP wake. A completed round, including one that only probed VIP prefixes, still runs the decision engine. A prefix that has left every configured source is dropped on the next completed round, including a round that probes nothing, unless an improvement is still active for it. While an improvement is active the engine keeps that prefix in the probe set from the decision state, with the host and interval from the last time a source listed it. That set is applied on every round, including a short VIP wake, and is not cached for the engine interval. After the improvement retires, the next completed round drops the prefix if no source lists it. A host qualifies when it has at least `probe.min_replies` replies (default 1) and, when `probe.dispersion_ms` is set, an RTT spread (slowest reply minus fastest) no wider than that limit. An unqualified host is left out of the score the way a silent host is. A measurement whose loss is at least `probe.retry_loss_pct` (default off), or whose spread is over `probe.dispersion_ms`, is taken again with `probe.retry_packets` before it is stored; the retry sample replaces the first. Too few replies do not escalate. Both checks are off at the defaults. Every probe, including retries and the VIP cadence, waits on the global packet rate limit. The outage source reads each completed round, the learned AS path, other providers' learned paths, and traceroute hops from per-provider indirect traces. A hop maps to the origin ASN of the longest matching learned prefix. When enough prefixes that share an ASN degrade on every measured provider, or an ASN that is only on one provider's path is sick there, or enough prefixes degrade on one provider and stay healthy on another, it re-queues those prefixes (and, for an ASN, the other learned prefixes that cross it) up to `max_targets` and emits `outage.as` or `outage.circuit`. One prefix does not. The probe loop wakes immediately for the first pass. The source does not announce.
++- **Probe worker** sources packets out each configured provider (dedicated probe address or policy-routed source). Compares the same destination across providers. Each round has an overall deadline (the same window as stale measurements, about three intervals, plus retry packets when loss retry or dispersion escalation is on). A prober or target source that ignores cancellation is abandoned at the round deadline. Prefixes whose probes finished are kept; prefixes that did not finish keep their previous results. The next round waits until that call returns, then continues with prefixes that are still due. Due work is ordered urgent, then a shorter interval, then the engine interval, then a longer tail (#125). Built-in probers are ICMP, TCP, and UDP. The engine remembers the prober that got a reply from each host and starts later rounds there, moving forward from that prober; every `probe.prober_recheck_rounds` measurement (default 10) starts at the first prober again. `probe.prober_memory` caps that set, and hosts that leave the probe set are dropped. An on-demand troubleshoot probe still walks the whole chain. UDP counts a datagram reply, or an ICMP destination-unreachable whose source is the target; an unreachable from another address is loss. TCP counts a SYN-ACK or a RST, and a middlebox RST is not distinguishable from the target. The traceroute source discovers in the background and returns its last cache immediately, under a budget (default 10s, max 30s) that sits under the default round deadline. It keeps the configured host if it answers and otherwise sets the probe host to the last stable hop; the prefix does not change and that hop is not announced. With `probe.indirect` on (#123), a prefix whose in-prefix addresses were all silent for a provider is traced in the background from that provider's source under its own budget; the highest stable hop is cached per prefix and provider and probed in later rounds as that provider's indirect host, marked `indirect` on the result. The vip source marks configured prefixes, and at most `max_targets` prefixes whose learned AS path contains a listed ASN, with its own interval. That interval must be shorter than the staleness window, and it never lengthens the interval of a prefix another source already listed. The ASN expansion is rebuilt only when the RIB generation changes. The scheduler probes a prefix when its interval has elapsed and keeps the other results. Sources that do not carry a shorter interval are re-read on the engine interval, not on every VIP wake. A completed round, including one that only probed VIP prefixes, still runs the decision engine. A prefix that has left every configured source is dropped on the next completed round, including a round that probes nothing, unless an improvement is still active for it. While an improvement is active the engine keeps that prefix in the probe set from the decision state, with the host and interval from the last time a source listed it. That set is applied on every round, including a short VIP wake, and is not cached for the engine interval. After the improvement retires, the next completed round drops the prefix if no source lists it. A host qualifies when it has at least `probe.min_replies` replies (default 1) and, when `probe.dispersion_ms` is set, an RTT spread (slowest reply minus fastest) no wider than that limit. An unqualified host is left out of the score the way a silent host is. A measurement whose loss is at least `probe.retry_loss_pct` (default off), or whose spread is over `probe.dispersion_ms`, is taken again with `probe.retry_packets` before it is stored; the retry sample replaces the first. Too few replies do not escalate. Both checks are off at the defaults. Every probe, including retries and the VIP cadence, waits on the global packet rate limit. The outage source reads each completed round, the learned AS path, other providers' learned paths, and traceroute hops from per-provider indirect traces. A hop maps to the origin ASN of the longest matching learned prefix. When enough prefixes that share an ASN degrade on every measured provider, or an ASN that is only on one provider's path is sick there, or enough prefixes degrade on one provider and stay healthy on another, it re-queues those prefixes (and, for an ASN, the other learned prefixes that cross it) up to `max_targets` and emits `outage.as` or `outage.circuit`. One prefix does not. The probe loop wakes immediately for the first pass. The source does not announce.
+ - **Flow source** (`internal/plugins/source/flow`) is an optional target source. It listens for NetFlow v5/v9, IPFIX, and sFlow, keeps per-prefix byte counters for a sliding window (not the raw records), and offers the top prefixes to the probe engine. Up to three of the busiest destinations in each prefix are probe candidates (#119); automatic in-prefix addresses fill in only when fewer than three were named. A destination is counted under its covering RIB prefix when the view is ready and that prefix is not a default route; otherwise it is aggregated to the configured length. The probe engine merges this set with the other sources and de-duplicates by prefix. With a `transit` block it also classifies each prefix's bytes by source address as transit (from a listed customer network) or local, and the controller passes the class to the routing policies (#29).
+ - **Passive problem detection** (`internal/passive`, used by the `span` source and the `flow` source's optional `problems` block) scores remote prefixes from observed TCP behavior: outbound retransmissions, handshake timeouts, remote resets, and handshake RTT from a SPAN/mirror port (AF_PACKET) or a replayed pcap, or SYN-without-ACK and RST flags from unsampled NetFlow/IPFIX. Counters are per prefix over a sliding window; packets and flow records are not stored. Problem prefixes are offered to the probe engine first (`span` marks a new one urgent for one round). They are probe targets only: nothing is announced unless the normal decision path, RIB check, and allowlist accept a measured improvement.
+ - **RIB view** (`internal/rib`) is an embedded GoBGP speaker with iBGP sessions to the edge routers. It records each neighbor's adj-RIB-in (the paths that neighbor advertised) and maps each prefix to its next-hop and provider (via `providers[].next_hop`). A route Packeteer injects can become this speaker's best path; that does not remove the prefix while a neighbor is still advertising it. When several neighbors advertise one prefix, the higher local preference wins. It offers exact, longest-prefix-match, and covering lookups. It is learn-only: the global export policy rejects everything and graceful restart is never enabled. The session proposes a 90s hold time so a dead peer cannot negotiate the timer off; a shorter timer from the router wins. When all sessions are down it reports not-ready and drops the learned routes, so consumers stop acting on stale data. One session going down drops only that neighbor's paths and leaves the view ready. Injection may only steer prefixes still present in this view. An optional RIB source plugin (`bmp`, #26) adds the routers' post-policy Adj-RIB-In and Loc-RIB over BMP: every provider's accepted path for a prefix, including paths the router did not select, without a full iBGP feed. Pre-policy routes (which include routes the router rejects) never make a prefix learned or pass a route check. Each provider's `bmp` usage (`off`, `prefer`, `only`) decides whether its BMP paths count. The published route prefers the iBGP path, then Loc-RIB, then the shortest BMP AS path. A route check refuses an improvement onto a provider that is not advertising the exact prefix and retires an active one. BMP paths on Packeteer's own session (BGP ID = `router_id`) or tagged with `packeteer_community` are ignored, so an injected route cannot keep itself alive. BMP never makes the view ready; a router's paths drop when its BMP session ends. BMP peers that negotiated add-path with the router are decoded with path identifiers. A neighbor with `add_path` also asks for additional paths (RFC 7911, receive only) on the iBGP session itself: the router's inactive and IX paths are held per path identifier, the native path stays visible while Packeteer's route is best, a path tagged with `packeteer_community` is ignored, and providers with `add_path` get the same route check while a session that negotiated add-path is up.
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+index 2e9c3d3..c37067d 100644
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -22,6 +22,8 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
+ 
+ ### Added
+ 
++- Probe scheduler and passive prefix counts (#125). Due prefixes are probed in priority order (urgent, then a shorter interval, then the engine interval, then a longer tail). Each prefix is stored when its probes finish, so a round that hits its deadline keeps those results and leaves an unfinished prefix on its previous result. Staleness stays per result. The flow window's exact 20,000 cells are unchanged (probe targets, commit volume, anomaly counters). Each bucket adds a fixed HyperLogLog (4096 registers, 4 KiB; about 120 KiB for a 5-minute window) of every prefix offered to it, including ones the exact map refused. `packeteer_probe_prefix_commits` and `packeteer_flow_prefixes_tracked` are on `/metrics`. The `pr` and weekly `soak` load profiles require at least 180,000 active prefixes per hour and 50,000 passively tracked prefixes. `rss_growth_mb` stays 384. An opt-in `rate` profile (20,000 prefixes, 100 packets per second, 375 pinned targets) reports the same figures and is not what CI runs. Every packet still waits on `probe.rate_limit_pps`. Nothing is announced. Observe stays the default. The learned-RIB check, allowlist, cap, community and NO_EXPORT, hold time, and withdraw rules are unchanged. Rollback: revert this change.
++
+ - Outage detection from traceroute hop ASNs and alternate provider paths (#124). The `outage` source maps each stable hop from a per-provider indirect trace to the origin ASN of the longest matching learned prefix (the last ASN; a default route is not a match; no external data). Add-path and BMP paths that are not the selected route's own path are correlated beside the native AS path. An ASN that appears only in hop data opens an `outage.as` incident. An ASN that appears only on a non-native provider's path, when that provider is the degraded one, is attributed to that provider instead of a circuit. Thresholds, events, and `max_targets` are unchanged. With no traces and no alternate paths the correlation is the native AS path alone. Nothing is announced. Observe stays the default. Every new packet still waits on `probe.rate_limit_pps`. Rollback: revert this change. Removing the `outage` source, or `probe.indirect`, leaves announcements untouched.
+ 
+ - FRR lab checks per-cause `local_pref` on the edge (#132 follow-up). `lab/packeteer.yaml` sets `local_pref_cause.performance: 260`. `lab/e2e.sh` requires LocPrf 260 while the route is present and requires it gone after SIGTERM and SIGKILL. `lab/checkroute` still defaults to 250 for the commit and cost labs.
+diff --git a/README.md b/README.md
+index 1f38e90..bfa6aba 100644
+--- a/README.md
++++ b/README.md
+@@ -280,7 +280,7 @@ Basic auth is off unless both `PACKETEER_HTTP_USER` and `PACKETEER_HTTP_PASSWORD
+ 
+ For more than one person, turn on `auth` (#32): users with roles (`viewer`, `operator`, `admin`) kept in the storage plugin, API tokens for scripts and Prometheus, an audit log of every change (stored, on `/api/audit`, and sent to the notifiers as `audit.recorded`), optional OIDC single sign-on, and `http.allow_from` to restrict client addresses. The first admin comes from `PACKETEER_ADMIN_PASSWORD`. Guide: [docs/auth.md](docs/auth.md). Rollback: `auth.enabled: false` and restart.
+ 
+-Prometheus metrics are `packeteer_up`, `packeteer_ready`, `packeteer_build_info`, `packeteer_provider_up`, `packeteer_probe_success`, `packeteer_probe_rtt_seconds`, `packeteer_probe_rtt_min_seconds`, `packeteer_probe_rtt_max_seconds`, `packeteer_probe_loss_ratio`, `packeteer_probe_jitter_seconds`, `packeteer_decisions`, `packeteer_decision`, `packeteer_improvements_active`, `packeteer_improvement`, `packeteer_estimated_savings`, `packeteer_bgp_configured`, `packeteer_bgp_ready`, `packeteer_rib_prefixes`, `packeteer_bgp_session_up`, `packeteer_bgp_session`, and, when telemetry is configured, `packeteer_telemetry_up`, `packeteer_telemetry_in_bps`, `packeteer_telemetry_out_bps`, `packeteer_telemetry_in_95th_bps`, `packeteer_telemetry_out_95th_bps`, `packeteer_telemetry_usage_bps`, `packeteer_telemetry_commit_bps`, and `packeteer_telemetry_samples`. Scrape `http://127.0.0.1:8080/metrics` on the host.
++Prometheus metrics are `packeteer_up`, `packeteer_ready`, `packeteer_build_info`, `packeteer_provider_up`, `packeteer_probe_success`, `packeteer_probe_rtt_seconds`, `packeteer_probe_rtt_min_seconds`, `packeteer_probe_rtt_max_seconds`, `packeteer_probe_loss_ratio`, `packeteer_probe_jitter_seconds`, `packeteer_probe_prefix_commits`, `packeteer_flow_prefixes_tracked`, `packeteer_decisions`, `packeteer_decision`, `packeteer_improvements_active`, `packeteer_improvement`, `packeteer_estimated_savings`, `packeteer_bgp_configured`, `packeteer_bgp_ready`, `packeteer_rib_prefixes`, `packeteer_bgp_session_up`, `packeteer_bgp_session`, and, when telemetry is configured, `packeteer_telemetry_up`, `packeteer_telemetry_in_bps`, `packeteer_telemetry_out_bps`, `packeteer_telemetry_in_95th_bps`, `packeteer_telemetry_out_95th_bps`, `packeteer_telemetry_usage_bps`, `packeteer_telemetry_commit_bps`, and `packeteer_telemetry_samples`. Scrape `http://127.0.0.1:8080/metrics` on the host.
+ 
+ `PACKETEER_LOG_LEVEL=debug` adds detail. `log.format: json` or `PACKETEER_LOG_FORMAT=json` switches the log to JSON.
+ 
+diff --git a/cmd/controller/main.go b/cmd/controller/main.go
+index c813766..afe6374 100644
+--- a/cmd/controller/main.go
++++ b/cmd/controller/main.go
+@@ -556,6 +556,7 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
+ 	wireLearnedRoutes(plugins, view)
+ 	wireOutage(plugins, engine, view, dispatch)
+ 	col.SetTelemetry(func() []plugin.Usage { return collectTelemetry(context.Background(), plugins) })
++	col.SetFlowTracked(func() int { return flowTracked(plugins) })
+ 	col.Attach(engine, decider, view)
+ 	wireExchanges(cfg, col, view)
+ 	wireSuggestions(cfg, httpSrv, view)
+@@ -1735,6 +1736,23 @@ func checkTelemetryProviders(plugins *pluginhost.Set) error {
+ 	return nil
+ }
+ 
++// flowTracked sums the flow sources' passive prefix estimates (#125).
++// Other sources do not implement it. The figure is not a probe target.
++func flowTracked(plugins *pluginhost.Set) int {
++	if plugins == nil {
++		return 0
++	}
++	n := 0
++	for _, src := range plugins.Sources {
++		t, ok := src.Plugin.(interface{ Tracked() int })
++		if !ok {
++			continue
++		}
++		n += t.Tracked()
++	}
++	return n
++}
++
+ func collectTelemetry(ctx context.Context, plugins *pluginhost.Set) []plugin.Usage {
+ 	if plugins == nil {
+ 		return nil
+diff --git a/cmd/controller/staleness_test.go b/cmd/controller/staleness_test.go
+index 8265b2b..2de507b 100644
+--- a/cmd/controller/staleness_test.go
++++ b/cmd/controller/staleness_test.go
+@@ -19,12 +19,17 @@ import (
+ 
+ // hungProber answers allow calls, then blocks until release. It does not
+ // watch ctx: the per-probe deadline must not be what unblocks it.
++// Calls after pauseAfter, while still inside allow, wait on pause so a
++// test can finish those probes late in the round. Their result time is
++// then much newer than a prefix that never finishes.
+ type hungProber struct {
+ 	plugin.Base
+-	mu      sync.Mutex
+-	calls   int
+-	allow   int
+-	release chan struct{}
++	mu         sync.Mutex
++	calls      int
++	allow      int
++	release    chan struct{}
++	pauseAfter int
++	pause      <-chan struct{}
+ }
+ 
+ func (p *hungProber) Probe(_ context.Context, req plugin.ProbeRequest) (plugin.ProbeResult, error) {
+@@ -32,6 +37,9 @@ func (p *hungProber) Probe(_ context.Context, req plugin.ProbeRequest) (plugin.P
+ 	p.calls++
+ 	n := p.calls
+ 	p.mu.Unlock()
++	if p.pause != nil && n > p.pauseAfter && n <= p.allow {
++		<-p.pause
++	}
+ 	if n > p.allow {
+ 		<-p.release
+ 		return plugin.ProbeResult{}, errors.New("released")
+@@ -253,3 +261,186 @@ func TestHungProberStalenessWithdraws(t *testing.T) {
+ 		t.Fatalf("results changed after withdraw: %+v", engine.Results())
+ 	}
+ }
++
++// TestPartialRoundStalenessIsPerResult is #125: a round that finishes one
++// prefix and then hits its deadline stores that prefix and leaves the other
++// on its previous time. Only the unfinished prefix goes stale.
++func TestPartialRoundStalenessIsPerResult(t *testing.T) {
++	pfxA := netip.MustParsePrefix("198.51.100.0/24")
++	pfxB := netip.MustParsePrefix("203.0.113.0/24")
++	release := make(chan struct{})
++	defer close(release)
++	// First round is four probes (two prefixes, two providers). The next
++	// round's two pfxA probes wait on pause, so their times are near the
++	// end of the round, then the workers block on pfxB. The gap between
++	// those times is what the staleness poll has to observe.
++	pause := make(chan struct{})
++	prober := &hungProber{allow: 6, release: release, pauseAfter: 4, pause: pause}
++	var logs bytes.Buffer
++	log := slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
++	o := probe.Options{
++		Interval:     time.Second,
++		Timeout:      20 * time.Millisecond,
++		Packets:      1,
++		Workers:      1, // one prefix's providers finish before the next prefix starts
++		RoundTimeout: 2 * time.Second,
++		Logger:       log,
++	}
++	kick := make(chan struct{}, 1)
++	o.OnRound = func() {
++		select {
++		case kick <- struct{}{}:
++		default:
++		}
++	}
++	engine, err := probe.New(
++		[]probe.Provider{
++			{Name: "transit-a", Source: netip.MustParseAddr("192.0.2.11")},
++			{Name: "transit-b", Source: netip.MustParseAddr("192.0.2.12")},
++		},
++		[]probe.NamedProber{{Name: "hung", Prober: prober}},
++		[]probe.NamedSource{{Name: "static", Source: twoPrefixSource{}}},
++		o,
++	)
++	if err != nil {
++		t.Fatal(err)
++	}
++	scorer, err := weighted.New(plugin.Config{}, plugin.Env{})
++	if err != nil {
++		t.Fatal(err)
++	}
++	decider := policy.NewEngine(policy.Config{
++		Mode:            "inject",
++		MinLossDeltaPct: 1,
++		MinRTTDelta:     15 * time.Millisecond,
++		HoldTime:        time.Hour,
++		MaxImprovements: 50,
++		MaxResultAge:    3 * time.Second,
++		Allowlist:       []netip.Prefix{pfxA, pfxB},
++	}, scorer)
++	ann := &memAnn{}
++	ctl, err := announce.New(announce.Config{
++		Mode:            "inject",
++		LocalPref:       250,
++		Community:       "64512:666",
++		MaxImprovements: 50,
++		Allowlist:       []netip.Prefix{pfxA, pfxB},
++		NextHops: map[string]netip.Addr{
++			"transit-a": netip.MustParseAddr("192.0.2.1"),
++			"transit-b": netip.MustParseAddr("192.0.2.2"),
++		},
++	}, ann, readyRIBMany{pfxA, pfxB}, log)
++	if err != nil {
++		t.Fatal(err)
++	}
++	eval := func(now time.Time) {
++		in := policy.Input{
++			Results:    engine.Results(),
++			ProviderUp: map[string]bool{},
++			RIBEnabled: true,
++			RIBReady:   true,
++			Native:     map[netip.Prefix]string{},
++		}
++		for _, p := range engine.Providers() {
++			in.ProviderUp[p.Name] = p.Up
++		}
++		for _, r := range in.Results {
++			if r.Prefix == pfxA || r.Prefix == pfxB {
++				in.Native[r.Prefix] = "transit-a"
++			}
++		}
++		runDecision(now, decider, in, ctl, log, "inject", nil)
++	}
++	ctx, cancel := context.WithCancel(context.Background())
++	defer cancel()
++	var wg sync.WaitGroup
++	wg.Add(1)
++	go func() {
++		defer wg.Done()
++		decideLoop(ctx, 40*time.Millisecond, kick, eval)
++	}()
++	defer func() {
++		cancel()
++		wg.Wait()
++	}()
++
++	engine.RunOnce(context.Background())
++	deadline := time.Now().Add(2 * time.Second)
++	for time.Now().Before(deadline) && ann.count() != 2 {
++		time.Sleep(10 * time.Millisecond)
++	}
++	if ann.count() != 2 {
++		t.Fatalf("both prefixes not announced: %d\n%s", ann.count(), logs.String())
++	}
++	// Release pfxA's probes 1.2s into the 2s round so they finish, and
++	// so they are much newer than pfxB when the deadline returns.
++	go func() {
++		time.Sleep(1200 * time.Millisecond)
++		close(pause)
++	}()
++	engine.RunOnce(context.Background())
++	if ann.count() != 2 {
++		t.Fatalf("withdrew before the unfinished prefix was stale:\n%s", logs.String())
++	}
++	var aTime, bTime time.Time
++	var aN, bN int
++	for _, r := range engine.Results() {
++		switch r.Prefix {
++		case pfxA:
++			aN++
++			if r.Time.After(aTime) {
++				aTime = r.Time
++			}
++		case pfxB:
++			bN++
++			if bTime.IsZero() || r.Time.Before(bTime) {
++				bTime = r.Time
++			}
++		}
++	}
++	if aN != 2 || bN != 2 || bTime.IsZero() || !aTime.After(bTime) {
++		t.Fatalf("partial results a=%d %s b=%d %s %+v", aN, aTime, bN, bTime, engine.Results())
++	}
++
++	deadline = time.Now().Add(3 * time.Second)
++	for time.Now().Before(deadline) && ann.count() != 1 {
++		time.Sleep(20 * time.Millisecond)
++	}
++	if ann.count() != 1 {
++		t.Fatalf("want only the fresh prefix still announced, count=%d\n%s", ann.count(), logs.String())
++	}
++	if _, ok := ann.route(pfxB); ok {
++		t.Fatal("unfinished prefix still announced")
++	}
++	rt, ok := ann.route(pfxA)
++	if !ok || rt.Provider != "transit-b" || len(rt.Communities) != 1 || rt.Communities[0] != "64512:666" {
++		t.Fatalf("fresh prefix = %+v ok=%v", rt, ok)
++	}
++	if !bytes.Contains(logs.Bytes(), []byte("stale")) {
++		t.Fatalf("withdraw was not caused by staleness:\n%s", logs.String())
++	}
++}
++
++type twoPrefixSource struct{ plugin.Base }
++
++func (twoPrefixSource) Targets(context.Context) ([]plugin.Target, error) {
++	return []plugin.Target{
++		{Prefix: netip.MustParsePrefix("198.51.100.0/24"), Host: netip.MustParseAddr("198.51.100.1")},
++		{Prefix: netip.MustParsePrefix("203.0.113.0/24"), Host: netip.MustParseAddr("203.0.113.1")},
++	}, nil
++}
++
++// readyRIBMany reports every listed prefix as learned.
++type readyRIBMany []netip.Prefix
++
++func (r readyRIBMany) Ready() bool { return true }
++
++func (r readyRIBMany) Contains(p netip.Prefix) bool {
++	p = p.Masked()
++	for _, q := range r {
++		if p == q.Masked() {
++			return true
++		}
++	}
++	return false
++}
+diff --git a/docs/CONFIG.md b/docs/CONFIG.md
+index 8935bc9..a613804 100644
+--- a/docs/CONFIG.md
++++ b/docs/CONFIG.md
+@@ -169,6 +169,8 @@ When a target names no host, each provider is measured at a few addresses inside
+ 
+ A measurement older than `3 * interval + packets * timeout` is stale. When a second probe can run (`retry_loss_pct` or `dispersion_ms` is set, so `retry_packets` is in use) the window is `3 * interval + (packets + retry_packets) * timeout`. `min_replies` alone does not extend it. That same duration is the deadline for one probe round. The decision loop also wakes every `interval`, so a round that never finishes still withdraws once results are stale.
+ 
++The engine stores each prefix as its probes finish (#125). A round that hits the deadline keeps those finished results and leaves an unfinished prefix on its previous result, so staleness stays per result. The next pass continues with prefixes that are still due and does not wait out the interval of one that already finished. Due prefixes are ordered urgent first (a confirm streak, or a source that marked the target), then a shorter interval than `probe.interval` (VIP), then the engine interval (flow `top_n` and ordinary targets), then a longer interval (the flow tail). Prefixes in one tier keep the order the sources returned. The decision engine runs when the round stored at least one prefix, including a round the deadline cut short. It does not run when the deadline hits before any prefix finishes; those previous results stay, and the staleness check still withdraws them once they age out. Every packet still waits on `rate_limit_pps`.
++
+ The retry sample replaces the first one. It runs when loss is at least `retry_loss_pct`, or when any host's RTT spread is over `dispersion_ms`. Too few replies do not start it. It runs once. Both waits go through `rate_limit_pps`.
+ 
+ The engine remembers, per destination host, the prober that got a reply and starts the next round there (#120). The chain then moves forward: a later prober runs when the remembered one errors or gets no replies. Earlier probers run when the probe number of that host modulo `prober_recheck_rounds` is 1 (the 1st, 11th, 21st, … measurement at the default of 10), so a host that begins answering ICMP is noticed. Every provider shares that memory, and the rounds compare them with one probe type. When providers in one round first get replies from different probers, the later prober in the chain is remembered. A retry (loss or dispersion) uses the same start as the sample it rechecks and does not count as another probe toward the schedule. Every prober that runs still waits on `rate_limit_pps`; a prober that is skipped sends nothing. Hosts that are no longer in the target list are dropped on the next completed round, including a round that probes nothing because nothing is due. A prefix an improvement still keeps probed keeps its host's prober. Past `prober_memory`, the least recently probed hosts are dropped and their next measurement starts at the first prober. On-demand troubleshooting walks the full chain and does not read or update this memory. Nothing is announced.
+@@ -734,7 +736,7 @@ Off unless this source is listed. NetFlow v5, NetFlow v9, IPFIX, and sFlow v5. R
+ 
+ A destination inside an `exchanges[].lans` prefix is ignored the same way as `exclude` (#145): it is not aggregated, and it is not the candidate host. That includes an address no learned route covers, which would otherwise become `aggregate_v4` or `aggregate_v6`. Those bytes are not in the window, the volume, or the anomaly counters.
+ 
+-With `--network host`, `listen` binds host UDP ports. Do not publish them. Each time bucket keeps at most 20000 prefixes. It also counts bytes per destination prefix and IP protocol since it started (at most 20000 keys; a key idle for an hour is forgotten), which [`anomaly`](#anomaly) reads for its baselines. The protocol comes from NetFlow v5, v9/IPFIX (information element 4), and sFlow (sampled IPv4/IPv6 records and the IP header; IPv6 extension headers are not followed); records without it count as protocol `any`. The commit scorer reads every prefix in the window as a rate (bytes × 8 / window, decimal megabits per second), including prefixes the floor or the cap did not offer as probe targets.
++With `--network host`, `listen` binds host UDP ports. Do not publish them. Each time bucket keeps at most 20000 prefixes. Those exact cells are what become probe targets and what the commit scorer reads as volume. It also counts bytes per destination prefix and IP protocol since it started (at most 20000 keys; a key idle for an hour is forgotten), which [`anomaly`](#anomaly) reads for its baselines. Each bucket also keeps a fixed HyperLogLog (4096 registers, 4 KiB) of every prefix offered to it, including ones the exact map refused (#125). A 5-minute window is about 30 buckets, about 120 KiB. The window merges the live buckets into `packeteer_flow_prefixes_tracked`. The sketch does not add probe targets and is not the commit scorer's volume. The protocol comes from NetFlow v5, v9/IPFIX (information element 4), and sFlow (sampled IPv4/IPv6 records and the IP header; IPv6 extension headers are not followed); records without it count as protocol `any`. The commit scorer reads every prefix in the window as a rate (bytes × 8 / window, decimal megabits per second), including prefixes the floor or the cap did not offer as probe targets.
+ 
+ A prefix is eligible when it clears at least one enabled floor (#118). `min_bytes` above 0 is an absolute total. `min_pct` above 0 is that percent of every byte the window counted. When both are above 0, either one is enough: a busy prefix under the percent still qualifies, and a smaller prefix that is a large share of the window still qualifies. When both are 0, every prefix with bytes is eligible and `top_n` still cuts the list, which is the previous behavior. Eligible prefixes are largest first. An equal total breaks by prefix text, and that order does not change between reads.
+ 
+diff --git a/docs/IRP_PARITY.md b/docs/IRP_PARITY.md
+index fe47950..aae296f 100644
+--- a/docs/IRP_PARITY.md
++++ b/docs/IRP_PARITY.md
+@@ -14,7 +14,7 @@ Milestones:
+ - **v0.3**: inbound optimization, BMP, multiple routers and IX, FlowSpec/RTBH, transit optimization.
+ - **v0.4**: multi-POP, HA, RBAC, anomaly detection, remaining parity.
+ - **v0.5**: hardening and polish on the rows above. Dashboard clarity and the first-run checklist (#49), CI-tested quickstart, walkthrough, troubleshooting, and router guides (#50), load and soak budgets and the flow-ingest fix (#51), MikroTik CHR in QEMU on CI (#52), and the router interop matrix (#53) are done. They are not new IRP capability rows, so the counts below are unchanged. Field feedback from observe-mode deployments (#54) is still open. Lab-proven only; the safety rules above are unchanged.
+-- **v0.6**: IRP parity gaps found in the 2026-10-07 review of prefix selection, measurement, and the UI. The partial rows say what is missing and link their issue; keeping an improved prefix probed after its source drops it is done (#116), an RTT win can also require a percent of the current path while a new performance move waits for consecutive fresh rounds (#117), the probe engine remembers which prober a host answers (#120), a host qualifies by reply count and RTT spread, with a wide spread escalated to a full probe (#119), and a flow prefix stays eligible on a byte floor or a percent of the window, with `top_n` the priority tier inside a larger capped set (#118). 3 new rows are planned and 1 is won't do. The recount does not change any behavior.
++- **v0.6**: IRP parity gaps found in the 2026-10-07 review of prefix selection, measurement, and the UI. The partial rows say what is missing and link their issue; keeping an improved prefix probed after its source drops it is done (#116), an RTT win can also require a percent of the current path while a new performance move waits for consecutive fresh rounds (#117), the probe engine remembers which prober a host answers (#120), a host qualifies by reply count and RTT spread, with a wide spread escalated to a full probe (#119), a flow prefix stays eligible on a byte floor or a percent of the window, with `top_n` the priority tier inside a larger capped set (#118), and the probe scheduler stores each finished prefix while a flow sketch counts prefixes past the exact cell cap (#125). 3 new rows are planned and 1 is won't do. The recount does not change any behavior.
+ 
+ ## Summary
+ 
+@@ -36,7 +36,7 @@ Milestones:
+ | planned | 3 |
+ | won't do | 4 |
+ 
+-Recount (2026-10-07): the earlier 79 of 82 counted 13 rows as done that cover only part of the IRP behavior, and missed 6 IRP behaviors. Those rows are now partial and the 6 are listed. Scale is tracked as a budget, not a row: the load test learns a 1,250,000-prefix table and measures 3,000 prefixes with a prober that sends no packets ([performance.md](performance.md)); Noction's published figures, as cited in the review, are about 100,000 actively probed and 10 million passively tracked prefixes. The scheduler work is #125.
++Recount (2026-10-07): the earlier 79 of 82 counted 13 rows as done that cover only part of the IRP behavior, and missed 6 IRP behaviors. Those rows are now partial and the 6 are listed. Scale is tracked as a budget, not a row: the load test learns a 1,250,000-prefix table and measures 3,000 prefixes with a prober that sends no packets ([performance.md](performance.md)); Noction's published figures, as cited in the review, are about 100,000 actively probed and 10 million passively tracked prefixes. #125 is that scheduler and the passive count: due prefixes are probed in priority order and each finished prefix is stored when its probes return, so one slow round no longer discards the round. The flow window's exact 20,000 cells are unchanged, and a fixed HyperLogLog per bucket counts prefixes past that cap. The load job records active prefixes measured per hour and passive prefixes tracked against the budgets in performance.md. That is still a budget, not a claim of the published IRP figures. The `pr` profile measures with a prober that sends no packets; the opt-in `rate` profile uses the operator default of 100 packets per second and is not what CI runs.
+ 
+ ## Performance optimization
+ 
+@@ -50,7 +50,7 @@ Recount (2026-10-07): the earlier 79 of 82 counted 13 rows as done that cover on
+ | Throughput-aware scoring (prefix volume weighting) | 1.2.13 Improvements weight | done (lab-proven) | v0.4 | scorer (`commit` uses flow volume, #18; `improvement_weights` rank performance moves for the cap by gain and volume, #34) | #18, #34 | no (lab-proven) |
+ | Probe sources per provider (IRP uses PBR; we use source-IP policy routing) | 2.8 Explorer, 2.8.1 PBR | done | v0.1 | core + docs | #2 | no |
+ | Static probe target lists | - | done | v0.1 | source (`static`) | #2 | no |
+-| Flow-based target discovery (NetFlow v5/v9, IPFIX, sFlow) | 2.7.1 Irpflowd | partial: up to three of the busiest destinations are probe candidates, probed first, and automatic in-prefix hosts fill in only when fewer than three were named (#113, #119); a prefix is kept when its bytes clear `min_bytes` or its share of the window clears `min_pct` (either bar; zero disables that bar), and `top_n` is the priority tier inside `max_targets`, with the rest on `tail_interval` (#118); optional `subranges` measures the busiest sub-ranges inside a wide prefix, each with its own address and score, the prefix decision uses their traffic-weighted aggregate, and `/api/decisions` and the dashboard flag a heterogeneous prefix; measurement only (#121) | v0.1 | source (`flow`) | #5, #113, #118, #119, #121 | no |
++| Flow-based target discovery (NetFlow v5/v9, IPFIX, sFlow) | 2.7.1 Irpflowd | partial: up to three of the busiest destinations are probe candidates, probed first, and automatic in-prefix hosts fill in only when fewer than three were named (#113, #119); a prefix is kept when its bytes clear `min_bytes` or its share of the window clears `min_pct` (either bar; zero disables that bar), and `top_n` is the priority tier inside `max_targets`, with the rest on `tail_interval` (#118); optional `subranges` measures the busiest sub-ranges inside a wide prefix, each with its own address and score, the prefix decision uses their traffic-weighted aggregate, and `/api/decisions` and the dashboard flag a heterogeneous prefix; measurement only (#121); a fixed HyperLogLog per bucket counts prefixes past the 20,000 exact cells, and that estimate is not a probe target or a volume (#125) | v0.1 | source (`flow`) | #5, #113, #118, #119, #121, #125 | no |
+ | Passive problem detection from flows | 2.7 Collector | partial: sampled NetFlow/IPFIX and sFlow are skipped (#133) | v0.2 | source (`flow` `problems`) | #21 | no |
+ | SPAN / mirrored-traffic collector | 2.7.2 Irpspand | done | v0.2 | source (`span`) | #21 | no |
+ | AS-pattern outage/congestion detection (re-probe prefixes crossing a sick ASN) | 1.2.6 Outage Detection | done: per-provider indirect-trace hops map to an origin ASN by longest match in the learned RIB, and add-path/BMP paths are correlated with the native path. An ASN that appears only in hop data opens an incident, and a sick ASN on a non-native provider's path is attributed to that provider (#124). Same thresholds, events, and `max_targets`. No traces and no alternate paths leave the native-path correlation | v0.2 | source (`outage`) | #16, #124 | no |
+diff --git a/docs/performance.md b/docs/performance.md
+index 8145c20..5572f4e 100644
+--- a/docs/performance.md
++++ b/docs/performance.md
+@@ -10,7 +10,7 @@ Packeteer's resource budgets, how CI measures them, and how to run the same test
+ 2. **Exports flows.** IPFIX at 20,000 records per second to Packeteer's `flow` source. Half the records go to 5,000 hot prefixes and half are spread over the whole table, so the busiest prefixes stay stable while nearly every other record is a prefix the window has not seen.
+ 3. **Churns the table.** 6,000 prefixes a minute are withdrawn and announced again (100 a second).
+ 4. **Probes many targets.** 1,000 static targets plus the flow source's top 2,000, through four providers, with the `fixed` prober (no packets leave the host). transit-b is faster, so about half the measured prefixes get a recommendation that observe never announces.
+-5. **Measures.** Every few seconds it reads the Packeteer process from the host (`/proc/<pid>/status` and `/stat`: RSS, peak RSS, threads, CPU time), `GET /metrics` and `GET /api/overview` (latency, `packeteer_ready`, `packeteer_bgp_session_up`, `packeteer_rib_prefixes`), and the host's UDP `RcvbufErrors` (the collector's socket is in the host network namespace, so a datagram Packeteer was too slow to read is counted there).
++5. **Measures.** Every few seconds it reads the Packeteer process from the host (`/proc/<pid>/status` and `/stat`: RSS, peak RSS, threads, CPU time), `GET /metrics` and `GET /api/overview` (latency, `packeteer_ready`, `packeteer_bgp_session_up`, `packeteer_rib_prefixes`, `packeteer_probe_prefix_commits`, `packeteer_flow_prefixes_tracked`), and the host's UDP `RcvbufErrors` (the collector's socket is in the host network namespace, so a datagram Packeteer was too slow to read is counted there). Active prefixes per hour are the increase in `packeteer_probe_prefix_commits` after warmup, scaled to one hour (a prefix counts once per round that stored it). Passive prefixes are the last `packeteer_flow_prefixes_tracked`, a HyperLogLog estimate of distinct destinations in the flow window, including ones past the 20,000 exact cells.
+ 6. **Stops Packeteer.** `docker stop -t 30` (SIGTERM). The process must exit 0 and the router must see the session close.
+ 
+ It fails, and CI goes red, when a figure is over its budget or an invariant breaks: the session or readiness drops during the soak, the RIB view is not whole once churn stops, observe sends the router a route, the process dies, or the stop is not clean.
+@@ -31,6 +31,10 @@ The budgets live in [lab/soak/budgets.yaml](../lab/soak/budgets.yaml) and are se
+ | Reconverge | Last churned batch back to a whole RIB view | ≤ 30 s | ≤ 30 s |
+ | SIGTERM to exit | `docker stop` to process gone | ≤ 20 s | ≤ 20 s |
+ | Prefixes measured | `/api/overview` `counts.measured` at the end | ≥ 2500 | ≥ 2500 |
++| Active prefixes per hour | Increase in `packeteer_probe_prefix_commits` after warmup, scaled to one hour (#125). A prefix counts once per round that stored it | ≥ 180000 | ≥ 180000 |
++| Passive prefixes tracked | Last `packeteer_flow_prefixes_tracked` (#125). HyperLogLog of the flow window, including prefixes the 20,000 exact cells did not keep | ≥ 50000 | ≥ 50000 |
++
++`rss_growth_mb` stays 384 on `pr` and 512 on `soak`. #125 does not re-baseline it. The sketch is 4 KiB per flow bucket, about 120 KiB for the 5-minute window (30 buckets), which does not move that RSS figure. #112 stays open.
+ 
+ A run prints the table with the measured values, adds it to the GitHub job summary, and uploads the JSON result as an artifact (`load-result`, `soak-result`).
+ 
+@@ -52,13 +56,16 @@ bash lab/soak.sh packeteer:local smoke           # 20k prefixes, 1 minute, repor
+ bash lab/soak.sh packeteer:local pr              # what CI runs (1,250,000 prefixes)
+ bash lab/soak.sh packeteer:local soak 24h        # a 24-hour soak
+ bash lab/soak.sh packeteer:local routes3m        # opt-in 3,000,000 prefixes; not CI
++bash lab/soak.sh packeteer:local rate            # opt-in 100 pps, 20k prefixes; not CI
+ ```
+ 
+ `routes3m` (#103) is the same observe workload as `pr` with a 3 million prefix table. Nothing selects it unless a human passes that name. Its budgets are empty, so the run records learn time, RSS, and API latency and does not fail a number. The 1.25 million table measured about 4.5 GiB RSS (about 1.7 KB of live heap per prefix, and the collector lets the heap grow to about twice that). Three million prefixes is 2.4 times that table, on the order of 11 GiB before that headroom, so do not start `routes3m` on a host with only a few gigabytes free. Those figures are a scale from the measured `pr` run, not a 3 million measurement. With no `learn_seconds` budget the harness waits up to 30 minutes for the table.
+ 
++`rate` (#125) is a 20,000-prefix table at `probe.rate_limit_pps` 100, the operator default. 375 pinned static targets is one 30-second round for two same-family providers and 4 packets (`100 * 30 / (2 * 4)`). Flow `top_n` shares that budget, so a round may store only the prefixes that finished. Its budgets are empty. CI does not run it. The `pr` and `soak` profiles are what check the active and passive floors, and they still generate `rate_limit_pps: 100000` so the fixed prober is not what bounds those runs.
++
+ The ports are on the host loopback (`11179` BGP, `12055` IPFIX, `18081` ops API); change them with the harness flags (`go run ./lab/soak run -h`) if they are taken. `go run ./lab/soak config -profile pr` prints the Packeteer config the test mounts.
+ 
+ ## CI
+ 
+-- The `load` job in `ci.yml` runs the `pr` profile (1,250,000 prefixes, the budgets above) on every pull request and push to `main`. It does not run `routes3m`.
+-- `soak.yml` runs the `soak` profile weekly (Sunday 03:17 UTC) and on demand. A GitHub-hosted job stops at 6 hours, so the scheduled soak phase is 5h30m. For 24 hours, start it by hand with `duration: 24h` and `runner:` set to a self-hosted runner label. That workflow does not run `routes3m` either.
++- The `load` job in `ci.yml` runs the `pr` profile (1,250,000 prefixes, the budgets above) on every pull request and push to `main`. It does not run `routes3m` or `rate`.
++- `soak.yml` runs the `soak` profile weekly (Sunday 03:17 UTC) and on demand. A GitHub-hosted job stops at 6 hours, so the scheduled soak phase is 5h30m. For 24 hours, start it by hand with `duration: 24h` and `runner:` set to a self-hosted runner label. That workflow does not run `routes3m` or `rate` either.
+diff --git a/internal/httpapi/collect.go b/internal/httpapi/collect.go
+index 814b74a..993bc34 100644
+--- a/internal/httpapi/collect.go
++++ b/internal/httpapi/collect.go
+@@ -20,14 +20,15 @@ type Collector struct {
+ 	mode      string
+ 	providers []config.Provider
+ 
+-	mu        sync.RWMutex
+-	started   bool
+-	engine    *probe.Engine
+-	decider   *policy.Engine
+-	view      *rib.View
+-	telemetry func() []plugin.Usage
+-	exchanges []exchange.Exchange
+-	hops      func() []rib.NextHopCount
++	mu          sync.RWMutex
++	started     bool
++	engine      *probe.Engine
++	decider     *policy.Engine
++	view        *rib.View
++	telemetry   func() []plugin.Usage
++	flowTracked func() int
++	exchanges   []exchange.Exchange
++	hops        func() []rib.NextHopCount
+ }
+ 
+ // NewCollector copies providers. The caller may reuse the slice afterward.
+@@ -46,6 +47,14 @@ func (c *Collector) Attach(engine *probe.Engine, decider *policy.Engine, view *r
+ 	c.mu.Unlock()
+ }
+ 
++// SetFlowTracked installs the read of passively tracked flow prefixes
++// (#125). Nil reports zero. The function may run while Snapshot is called.
++func (c *Collector) SetFlowTracked(fn func() int) {
++	c.mu.Lock()
++	c.flowTracked = fn
++	c.mu.Unlock()
++}
++
+ // SetTelemetry installs the read of interface usage. Nil leaves the
+ // telemetry list empty. The function may run while Snapshot is called.
+ func (c *Collector) SetTelemetry(fn func() []plugin.Usage) {
+@@ -76,7 +85,7 @@ func (c *Collector) SetStarted(v bool) {
+ func (c *Collector) Snapshot() Snapshot {
+ 	c.mu.RLock()
+ 	started, engine, decider, view, telemetry := c.started, c.engine, c.decider, c.view, c.telemetry
+-	exs, hops := c.exchanges, c.hops
++	exs, hops, flowTracked := c.exchanges, c.hops, c.flowTracked
+ 	c.mu.RUnlock()
+ 
+ 	in := Input{
+@@ -92,6 +101,10 @@ func (c *Collector) Snapshot() Snapshot {
+ 	if engine != nil {
+ 		in.Status = engine.Providers()
+ 		in.Results = engine.Results()
++		in.ProbePrefixCommits = engine.PrefixCommits()
++	}
++	if flowTracked != nil {
++		in.FlowTracked = flowTracked()
+ 	}
+ 	if decider != nil {
+ 		in.Decisions, in.DecidedAt = decider.Decisions()
+diff --git a/internal/httpapi/metrics.go b/internal/httpapi/metrics.go
+index 9b8e27f..12b119f 100644
+--- a/internal/httpapi/metrics.go
++++ b/internal/httpapi/metrics.go
+@@ -69,6 +69,10 @@ func Metrics(s Snapshot) []byte {
+ 	writeGauge(&b, "packeteer_probe_rtt_max_seconds", "Maximum RTT of the latest successful probe.", rttMax...)
+ 	writeGauge(&b, "packeteer_probe_loss_ratio", "Packet loss ratio of the latest successful probe, from 0 to 1.", loss...)
+ 	writeGauge(&b, "packeteer_probe_jitter_seconds", "Mean absolute inter-packet RTT difference of the latest successful probe.", jitter...)
++	writeGauge(&b, "packeteer_probe_prefix_commits", "Prefixes stored by the probe engine since start, once per prefix per round. The load test scales the increase to an hour.",
++		sample{value: float64(s.ProbePrefixCommits)})
++	writeGauge(&b, "packeteer_flow_prefixes_tracked", "Distinct destination prefixes the flow window has seen, including ones past the exact cell cap. A HyperLogLog estimate. Zero when no flow source is configured.",
++		sample{value: float64(s.FlowTracked)})
+ 
+ 	counts := map[string]float64{}
+ 	actions := append([]string(nil), decisionActions...)
+diff --git a/internal/httpapi/server_test.go b/internal/httpapi/server_test.go
+index 3020b83..7fc37ea 100644
+--- a/internal/httpapi/server_test.go
++++ b/internal/httpapi/server_test.go
+@@ -611,4 +611,10 @@ func TestMetricsRIBPrefixes(t *testing.T) {
+ 	if strings.Contains(string(Metrics(Snapshot{Mode: "observe"})), "packeteer_rib_prefixes") {
+ 		t.Fatal("rib series without bgp")
+ 	}
++	bare := string(Metrics(Snapshot{Mode: "observe"}))
++	for _, name := range []string{"packeteer_probe_prefix_commits 0", "packeteer_flow_prefixes_tracked 0"} {
++		if !strings.Contains(bare, name) {
++			t.Fatalf("metrics missing %s\n%s", name, bare)
++		}
++	}
+ }
+diff --git a/internal/httpapi/snapshot.go b/internal/httpapi/snapshot.go
+index 6be374d..b5b9f12 100644
+--- a/internal/httpapi/snapshot.go
++++ b/internal/httpapi/snapshot.go
+@@ -50,6 +50,13 @@ type Input struct {
+ 	// because they sit on an exchange peering LAN (#145). It is not part
+ 	// of the JSON API.
+ 	ExchangeLANDrops uint64 `json:"-"`
++
++	// ProbePrefixCommits is prefixes the probe engine has stored a result
++	// for, once per prefix per round (#125). FlowTracked is the flow
++	// window's distinct-prefix estimate, past the exact cell cap. Neither
++	// is a routing input.
++	ProbePrefixCommits uint64 `json:"-"`
++	FlowTracked        int    `json:"-"`
+ }
+ 
+ // Snapshot is the read-only document the HTTP handlers serve.
+@@ -74,6 +81,10 @@ type Snapshot struct {
+ 	// ExchangeLANDrops is packeteer_exchange_lan_targets_dropped. It is
+ 	// not part of the JSON API.
+ 	ExchangeLANDrops uint64 `json:"-"`
++	// ProbePrefixCommits and FlowTracked are the #125 load gauges. They
++	// are not part of the JSON API.
++	ProbePrefixCommits uint64 `json:"-"`
++	FlowTracked        int    `json:"-"`
+ 	// ASNMap groups measured prefixes by origin ASN and provider site.
+ 	// It is display only and is not a routing decision.
+ 	ASNMap []ASNNode
+@@ -291,23 +302,25 @@ func Assemble(in Input) Snapshot {
+ 		in.At = time.Now().UTC()
+ 	}
+ 	snap := Snapshot{
+-		Version:          in.Version,
+-		Mode:             in.Mode,
+-		Started:          in.Started,
+-		At:               in.At.UTC(),
+-		DecidedAt:        in.DecidedAt,
+-		BGPConfigured:    in.BGPConfigured,
+-		RIBReady:         in.RIBReady,
+-		RIBPrefixes:      in.RIBPrefixes,
+-		Providers:        assembleProviders(in),
+-		Probes:           assembleProbes(in.Results),
+-		Prefixes:         assemblePrefixes(in),
+-		Decisions:        assembleDecisions(in.Decisions),
+-		Improvements:     assembleImprovements(in.Improvements),
+-		Peers:            assemblePeers(in.Peers),
+-		Telemetry:        assembleTelemetry(in.Telemetry),
+-		Exchanges:        in.Exchanges,
+-		ExchangeLANDrops: in.ExchangeLANDrops,
++		Version:            in.Version,
++		Mode:               in.Mode,
++		Started:            in.Started,
++		At:                 in.At.UTC(),
++		DecidedAt:          in.DecidedAt,
++		BGPConfigured:      in.BGPConfigured,
++		RIBReady:           in.RIBReady,
++		RIBPrefixes:        in.RIBPrefixes,
++		Providers:          assembleProviders(in),
++		Probes:             assembleProbes(in.Results),
++		Prefixes:           assemblePrefixes(in),
++		Decisions:          assembleDecisions(in.Decisions),
++		Improvements:       assembleImprovements(in.Improvements),
++		Peers:              assemblePeers(in.Peers),
++		Telemetry:          assembleTelemetry(in.Telemetry),
++		Exchanges:          in.Exchanges,
++		ExchangeLANDrops:   in.ExchangeLANDrops,
++		ProbePrefixCommits: in.ProbePrefixCommits,
++		FlowTracked:        in.FlowTracked,
+ 	}
+ 	snap.ASNMap = assembleASNMap(snap.Prefixes)
+ 	snap.zeroNil()
+diff --git a/internal/plugins/source/flow/flow.go b/internal/plugins/source/flow/flow.go
+index 52e2096..22aae5a 100644
+--- a/internal/plugins/source/flow/flow.go
++++ b/internal/plugins/source/flow/flow.go
+@@ -744,6 +744,20 @@ func shareAtLeast(bytes, total, ppm uint64) bool {
+ 	return lo >= plo
+ }
+ 
++// Tracked is how many distinct prefixes the window has seen, including
++// ones the 20,000 exact cells did not keep. The figure is a HyperLogLog
++// estimate. It does not add probe targets and it is not a volume.
++func (s *Source) Tracked() int {
++	if s == nil || s.win == nil {
++		return 0
++	}
++	now := s.now
++	if now == nil {
++		now = time.Now
++	}
++	return s.win.tracked(now())
++}
++
+ // Volumes implements plugin.VolumeSource. Mbps is bytes over the configured
+ // window. The list is not limited to top_n. It does not announce.
+ func (s *Source) Volumes(ctx context.Context) ([]plugin.PrefixVolume, error) {
+diff --git a/internal/plugins/source/flow/flow_test.go b/internal/plugins/source/flow/flow_test.go
+index 42f1a3d..bc02f53 100644
+--- a/internal/plugins/source/flow/flow_test.go
++++ b/internal/plugins/source/flow/flow_test.go
+@@ -1084,4 +1084,39 @@ func TestPrefixCapBatchEviction(t *testing.T) {
+ 	if d := time.Since(start); d > 10*time.Second {
+ 		t.Fatalf("200000 new prefixes into a full bucket took %s", d)
+ 	}
++	if n := big.tracked(now); n < 20000 {
++		t.Fatalf("tracked %d, want the sketch to count past the 20000 exact cells", n)
++	}
++}
++
++func TestPassiveSketchCountsPastCap(t *testing.T) {
++	s := newSlide(time.Minute, 32)
++	now := time.Unix(1_700_000_000, 0)
++	heavy := netip.MustParsePrefix("198.51.100.0/24")
++	s.add(now, heavy, netip.Addr{}, 1<<40, trafficUnknown)
++	for i := range 5000 {
++		var a [16]byte
++		a[0], a[1], a[2], a[3] = 0x20, 0x01, 0x0d, 0xb8
++		a[13], a[14], a[15] = byte(i>>16), byte(i>>8), byte(i)
++		s.add(now, netip.PrefixFrom(netip.AddrFrom16(a), 128), netip.Addr{}, 1, trafficUnknown)
++	}
++	slot := s.slots[now.UnixNano()/int64(s.bucket)]
++	if len(slot.cells) > 32 {
++		t.Fatalf("exact cells = %d, cap 32", len(slot.cells))
++	}
++	top := s.top(now, 1, 0)
++	if len(top) != 1 || top[0].prefix != heavy {
++		t.Fatalf("heavy prefix evicted: %+v", top)
++	}
++	n := s.tracked(now)
++	if n < 3500 || n > 7000 {
++		t.Fatalf("tracked %d, want about 5001", n)
++	}
++	one := newSlide(time.Minute, 8)
++	for range 100 {
++		one.add(now, heavy, netip.Addr{}, 10, trafficUnknown)
++	}
++	if n := one.tracked(now); n < 1 || n > 3 {
++		t.Fatalf("one prefix tracked as %d", n)
++	}
+ }
+diff --git a/internal/plugins/source/flow/sketch.go b/internal/plugins/source/flow/sketch.go
+new file mode 100644
+index 0000000..e132989
+--- /dev/null
++++ b/internal/plugins/source/flow/sketch.go
+@@ -0,0 +1,99 @@
++package flow
++
++import (
++	"math"
++	"math/bits"
++	"net/netip"
++)
++
++// hll is a HyperLogLog with 4096 registers. Each flow bucket keeps one.
++// It counts distinct prefixes the exact map did not have room for, in a
++// fixed 4 KiB, so a full table does not grow the window (#125). It is not
++// a volume: probe targets and the commit scorer still read the exact cells.
++const (
++	hllP = 12
++	hllM = 1 << hllP
++)
++
++type hll struct {
++	reg [hllM]uint8
++}
++
++func (h *hll) add(p netip.Prefix) {
++	// FNV-1a of nearby prefixes shares low bits. SplitMix64 spreads the
++	// register index; the estimate is otherwise high by about half.
++	x := mix64(hashPrefix(p))
++	idx := x & (hllM - 1)
++	// The low hllP bits are the register. Rho is one plus the leading
++	// zeros of the remaining bits, not of the zeros the shift introduced.
++	w := x >> hllP
++	rho := bits.LeadingZeros64(w) - hllP + 1
++	if rho < 1 {
++		rho = 1
++	}
++	if rho > 64-hllP+1 {
++		rho = 64 - hllP + 1
++	}
++	if uint8(rho) > h.reg[idx] {
++		h.reg[idx] = uint8(rho)
++	}
++}
++
++func (h *hll) merge(o hll) {
++	for i := range h.reg {
++		if o.reg[i] > h.reg[i] {
++			h.reg[i] = o.reg[i]
++		}
++	}
++}
++
++// estimate is the distinct-prefix count. An empty sketch is zero.
++func (h hll) estimate() uint64 {
++	var sum float64
++	zeros := 0
++	for _, r := range h.reg {
++		sum += math.Ldexp(1, -int(r))
++		if r == 0 {
++			zeros++
++		}
++	}
++	if sum == 0 {
++		return 0
++	}
++	// alpha for m >= 128.
++	alpha := 0.7213 / (1 + 1.079/hllM)
++	est := alpha * hllM * hllM / sum
++	if est <= 2.5*hllM && zeros > 0 {
++		est = hllM * math.Log(float64(hllM)/float64(zeros))
++	}
++	if est < 0 {
++		return 0
++	}
++	return uint64(est + 0.5)
++}
++
++// mix64 is SplitMix64. It is deterministic, unlike maphash.
++func mix64(x uint64) uint64 {
++	x ^= x >> 30
++	x *= 0xbf58476d1ce4e5b9
++	x ^= x >> 27
++	x *= 0x94d049bb133111eb
++	x ^= x >> 31
++	return x
++}
++
++func hashPrefix(p netip.Prefix) uint64 {
++	const (
++		offset = 14695981039346656037
++		prime  = 1099511628211
++	)
++	h := uint64(offset)
++	b := p.Addr().As16()
++	for _, c := range b {
++		h ^= uint64(c)
++		h *= prime
++	}
++	h ^= uint64(p.Bits())
++	h *= prime
++	return h
++}
+diff --git a/internal/plugins/source/flow/window.go b/internal/plugins/source/flow/window.go
+index a67a01e..d49f437 100644
+--- a/internal/plugins/source/flow/window.go
++++ b/internal/plugins/source/flow/window.go
+@@ -27,6 +27,9 @@ type bucket struct {
+ 	minP  netip.Prefix
+ 	minB  uint64
+ 	minOK bool
++	// seen counts every prefix offered to this bucket, including ones the
++	// exact map refused. It is a fixed-size sketch (#125).
++	seen hll
+ }
+ 
+ // maxFlowHosts is how many destinations one prefix keeps. The probe
+@@ -134,6 +137,7 @@ func (s *slide) addSub(at time.Time, p, sub netip.Prefix, host netip.Addr, n uin
+ }
+ 
+ func (b *bucket) add(p, sub netip.Prefix, host netip.Addr, n uint64, t traffic, max, subCap int) {
++	b.seen.add(p)
+ 	if c, ok := b.cells[p]; ok {
+ 		c.bytes += n
+ 		c.note(n, t)
+@@ -265,6 +269,19 @@ func (b *bucket) evict(k int, n uint64) bool {
+ 	return true
+ }
+ 
++// tracked is the distinct prefixes observed in the current window,
++// including prefixes the exact cells did not keep.
++func (s *slide) tracked(now time.Time) int {
++	s.mu.Lock()
++	defer s.mu.Unlock()
++	s.prune(now)
++	var acc hll
++	for _, b := range s.slots {
++		acc.merge(b.seen)
++	}
++	return int(acc.estimate())
++}
++
+ func (s *slide) prune(now time.Time) {
+ 	cutoff := now.Add(-s.window)
+ 	for slot := range s.slots {
+diff --git a/internal/probe/engine.go b/internal/probe/engine.go
+index 82fb7ec..c36acd4 100644
+--- a/internal/probe/engine.go
++++ b/internal/probe/engine.go
+@@ -8,6 +8,7 @@ import (
+ 	"net/netip"
+ 	"sort"
+ 	"sync"
++	"sync/atomic"
+ 	"time"
+ 
+ 	"github.com/GrandArcher/Packeteer/internal/exchange"
+@@ -58,8 +59,10 @@ type Options struct {
+ 	OnRound  func()       // called after each completed round (optional)
+ 	// RoundTimeout bounds one round, including target collection. Zero
+ 	// derives a bound from the interval and the per-probe deadline. A round
+-	// that exceeds it keeps the previous results: a prober or target source
+-	// that ignores cancellation must not pin stale improvements forever.
++	// that exceeds it keeps results that already finished and leaves the
++	// rest as they were: a prober or target source that ignores
++	// cancellation must not refresh a prefix it did not finish, and must
++	// not discard prefixes that did finish.
+ 	RoundTimeout time.Duration
+ 	// RetryLossPct, when greater than zero, re-probes a path with
+ 	// RetryPackets before the result is stored if loss is at least this
+@@ -197,6 +200,11 @@ type Engine struct {
+ 	// new prefixes so sleep returns without waiting out the interval.
+ 	wake chan struct{}
+ 
++	// prefixCommits counts prefixes whose results were stored, once per
++	// prefix per round that stored at least one of that prefix's results.
++	// The load test turns this into active prefixes measured per hour (#125).
++	prefixCommits atomic.Uint64
++
+ 	// proberMem remembers which prober got a reply from a host. proberPlan
+ 	// is the chain start chosen for the current round (one per host, shared
+ 	// by providers and by a loss retry). proberNote is the latest chain
+@@ -865,8 +873,10 @@ func (e *Engine) probesBusy() bool {
+ }
+ 
+ // RunOnce performs one probe round over all providers and targets.
+-// The round has an overall deadline. If it expires, or a target source
+-// does not return, previous results are kept and OnRound is not called.
++// The round has an overall deadline. A prefix whose probes finish is
++// stored then. If the deadline expires before the rest finish, or a
++// target source does not return, unfinished prefixes keep their previous
++// results and OnRound is not called unless at least one prefix was stored.
+ // RunOnce ignores per-target intervals and measures every target.
+ func (e *Engine) RunOnce(ctx context.Context) {
+ 	_, _ = e.runRound(ctx, nil, false)
+@@ -930,11 +940,18 @@ func (e *Engine) runRound(ctx context.Context, allow func(plugin.Target) bool, m
+ 		return probed, true
+ 	}
+ 
++	// Urgent and shorter intervals first, so a round that runs out of time
++	// still measures the priority tier, VIP prefixes, and confirm-urgent
++	// prefixes before a longer tail (#118, #125).
++	sortJobs(jobs, e.opt.Interval)
++
+ 	ch := make(chan job)
+ 	type outcome struct {
+ 		res        Result
+ 		sourceDown bool
+ 	}
++	// Buffered so a worker that finished before the deadline never blocks
++	// on the send, including after the collector has stopped reading.
+ 	outs := make(chan outcome, len(jobs))
+ 	var wg sync.WaitGroup
+ 	for i := 0; i < e.opt.Workers; i++ {
+@@ -945,17 +962,18 @@ func (e *Engine) runRound(ctx context.Context, allow func(plugin.Target) bool, m
+ 				if roundCtx.Err() != nil {
+ 					return
+ 				}
+-				r, down := e.probe(roundCtx, j)
++				r, srcDown := e.probe(roundCtx, j)
+ 				if e.indirectEnabled() {
+ 					if hops := e.traceHops(key{j.provider.Name, j.target.Prefix}); len(hops) > 0 {
+ 						r.Hops = hops
+ 					}
+ 				}
+-				select {
+-				case outs <- outcome{r, down}:
+-				case <-roundCtx.Done():
++				// A probe that the deadline cancelled must not refresh the
++				// stored result. Staleness stays on the previous time.
++				if roundCtx.Err() != nil {
+ 					return
+ 				}
++				outs <- outcome{r, srcDown}
+ 			}
+ 		}()
+ 	}
+@@ -973,48 +991,162 @@ feed:
+ 	go func() {
+ 		wg.Wait()
+ 		close(finished)
++		close(outs)
+ 	}()
+-	select {
+-	case <-finished:
+-	case <-roundCtx.Done():
+-		e.leaveProbes(finished)
+-		if ctx.Err() == nil {
+-			e.log.Warn("probe round timed out; keeping previous results")
+-		}
+-		return nil, false
+-	}
+-	if roundCtx.Err() != nil {
+-		// Workers exited because the deadline fired. Do not commit a partial round.
+-		if ctx.Err() == nil {
+-			e.log.Warn("probe round timed out; keeping previous results")
+-		}
+-		return nil, false
+-	}
+-	close(outs)
+ 
+ 	down := map[string]string{}
+ 	ran := map[string]bool{}
+ 	fresh := map[key]Result{}
+-	for o := range outs {
++	committed := map[netip.Prefix]struct{}{}
++	record := func(o outcome) {
+ 		ran[o.res.Provider] = true
+ 		if o.sourceDown {
+ 			down[o.res.Provider] = o.res.Err
+ 		}
+ 		fresh[key{o.res.Provider, o.res.Prefix}] = o.res
++		committed[o.res.Prefix] = struct{}{}
++		e.storeResult(o.res)
+ 		if e.opt.OnResult != nil {
+ 			e.opt.OnResult(o.res)
+ 		}
+ 	}
++	timedOut := false
++	collecting := true
++	for collecting {
++		select {
++		case o, ok := <-outs:
++			if !ok {
++				collecting = false
++				break
++			}
++			record(o)
++		case <-roundCtx.Done():
++			if ctx.Err() != nil {
++				e.leaveProbes(finished, nil)
++				return nil, false
++			}
++			timedOut = true
++			collecting = false
++		}
++	}
++	if timedOut {
++		for {
++			select {
++			case o, ok := <-outs:
++				if !ok {
++					goto drained
++				}
++				record(o)
++			default:
++				goto drained
++			}
++		}
++	}
++drained:
++	if timedOut && len(committed) == 0 {
++		// Nothing finished. Leave every stored result, and do not tell
++		// the scheduler these prefixes were probed.
++		e.leaveProbes(finished, nil)
++		if ctx.Err() == nil {
++			e.log.Warn("probe round timed out; keeping previous results")
++		}
++		return nil, false
++	}
++	if timedOut {
++		e.log.Warn("probe round timed out; kept finished prefix results", "prefixes", len(committed))
++		e.noteSources(ran, down)
++		e.rememberProbes(committed)
++		e.addPrefixCommits(len(committed))
++		if e.opt.OnRound != nil {
++			e.opt.OnRound()
++		}
++		// Probes still inside a prober that ignores cancellation must
++		// finish before the next round plans prober memory.
++		e.leaveProbes(finished, e.finishProberRound)
++		return committed, true
++	}
+ 
+ 	e.finishProberRound()
+ 	e.commit(fresh, ran, down, keep, merge)
+ 	e.rememberProbes(probed)
++	e.addPrefixCommits(len(committed))
+ 	if e.opt.OnRound != nil {
+ 		e.opt.OnRound()
+ 	}
+ 	return probed, true
+ }
+ 
++// sortJobs orders work so a round that cannot finish everything still
++// probes the prefixes that are due soonest and the priority tier first.
++// Urgent (a confirm streak, or a source that marked the target) is first,
++// then a shorter interval than the engine (VIP), then the engine interval
++// (flow top_n and ordinary targets), then a longer interval (flow tail).
++func sortJobs(jobs []job, base time.Duration) {
++	// Stable so prefixes in the same tier keep the order the sources
++	// returned. Prober memory evicts the least recently probed host, and
++	// that order is the target list when every interval is the same.
++	sort.SliceStable(jobs, func(i, j int) bool {
++		ti, ei := jobRank(jobs[i].target, base)
++		tj, ej := jobRank(jobs[j].target, base)
++		if ti != tj {
++			return ti < tj
++		}
++		return ei < ej
++	})
++}
++
++// jobRank is the probe order of one target. Lower is sooner.
++func jobRank(t plugin.Target, base time.Duration) (tier int, every time.Duration) {
++	every = base
++	if t.Interval > 0 {
++		every = t.Interval
++	}
++	switch {
++	case t.Urgent:
++		return 0, every
++	case every < base:
++		return 1, every
++	case every > base:
++		return 3, every
++	default:
++		return 2, every
++	}
++}
++
++// storeResult merges one finished measurement. It does not drop other
++// prefixes: a round that later runs out of time must leave those alone.
++func (e *Engine) storeResult(r Result) {
++	e.mu.Lock()
++	defer e.mu.Unlock()
++	if e.results == nil {
++		e.results = map[key]Result{}
++	}
++	e.results[key{r.Provider, r.Prefix}] = r
++}
++
++// noteSources applies probe-source health from the results stored so far.
++func (e *Engine) noteSources(ran map[string]bool, down map[string]string) {
++	now := e.opt.Now()
++	e.mu.Lock()
++	defer e.mu.Unlock()
++	e.applyStatusLocked(ran, down, now)
++}
++
++func (e *Engine) addPrefixCommits(n int) {
++	if n > 0 {
++		e.prefixCommits.Add(uint64(n))
++	}
++}
++
++// PrefixCommits is how many prefixes have had a result stored since the
++// engine was created, counted once per prefix per round.
++func (e *Engine) PrefixCommits() uint64 {
++	if e == nil {
++		return 0
++	}
++	return e.prefixCommits.Load()
++}
++
+ // droppedAny reports whether a stored result belongs to a prefix that is
+ // no longer in the target list.
+ func (e *Engine) droppedAny(keep map[netip.Prefix]bool) bool {
+@@ -1044,16 +1176,24 @@ func (e *Engine) noteCadence(targets []plugin.Target) {
+ 
+ // leaveProbes records that workers from a timed-out round may still be
+ // inside a prober that ignores cancellation. The next round waits until
+-// they return instead of starting another.
+-func (e *Engine) leaveProbes(finished <-chan struct{}) {
++// they return instead of starting another. after runs once they have
++// returned, before the next round is allowed to start. Nil after is fine.
++func (e *Engine) leaveProbes(finished <-chan struct{}, after func()) {
++	done := func() {
++		if after != nil {
++			after()
++		}
++	}
+ 	select {
+ 	case <-finished:
++		done()
+ 		return
+ 	default:
+ 	}
+ 	e.setProbeBusy(true)
+ 	go func() {
+ 		<-finished
++		done()
+ 		e.setProbeBusy(false)
+ 	}()
+ }
+@@ -1078,6 +1218,13 @@ func (e *Engine) commit(fresh map[key]Result, ran map[string]bool, down map[stri
+ 			}
+ 		}
+ 	}
++	e.applyStatusLocked(ran, down, now)
++}
++
++// applyStatusLocked updates probe-source health from a round's results.
++// The caller holds e.mu. A provider that did not finish a probe is left
++// as it was. One source-unavailable result fails that provider closed.
++func (e *Engine) applyStatusLocked(ran map[string]bool, down map[string]string, now time.Time) {
+ 	for _, p := range e.providers {
+ 		if !ran[p.Name] {
+ 			continue
+diff --git a/internal/probe/probe_test.go b/internal/probe/probe_test.go
+index 8073833..208a2bc 100644
+--- a/internal/probe/probe_test.go
++++ b/internal/probe/probe_test.go
+@@ -1449,3 +1449,109 @@ func TestExchangeLANTargetsDropped(t *testing.T) {
+ 		t.Fatalf("retain drops = %d, want 1", d)
+ 	}
+ }
++
++// Due work is ordered urgent, then a shorter interval, then the engine
++// interval, then a longer tail. One worker makes the probe order the job order.
++func TestJobOrderIsUrgentThenShorterInterval(t *testing.T) {
++	urgent := netip.MustParsePrefix("203.0.113.0/24")
++	vip := netip.MustParsePrefix("198.51.100.0/24")
++	tail := netip.MustParsePrefix("192.0.2.128/25")
++	var mu sync.Mutex
++	var got []netip.Addr
++	p := &fakeProber{fn: func(_ context.Context, req plugin.ProbeRequest) (plugin.ProbeResult, error) {
++		mu.Lock()
++		got = append(got, req.Target)
++		mu.Unlock()
++		return plugin.ProbeResult{Sent: req.Count, RTTs: ms(1)}, nil
++	}}
++	o := opts()
++	o.Workers = 1
++	e, err := New([]Provider{provA}, []NamedProber{{"p", p}}, src(
++		plugin.Target{Prefix: tail, Host: netip.MustParseAddr("192.0.2.129"), Interval: 2 * time.Second},
++		plugin.Target{Prefix: vip, Host: netip.MustParseAddr("198.51.100.9"), Interval: 200 * time.Millisecond},
++		plugin.Target{Prefix: urgent, Host: netip.MustParseAddr("203.0.113.9"), Urgent: true},
++	), o)
++	if err != nil {
++		t.Fatal(err)
++	}
++	e.RunOnce(context.Background())
++	want := []netip.Addr{
++		netip.MustParseAddr("203.0.113.9"),
++		netip.MustParseAddr("198.51.100.9"),
++		netip.MustParseAddr("192.0.2.129"),
++	}
++	if len(got) != len(want) {
++		t.Fatalf("probe order %v, want %v", got, want)
++	}
++	for i := range want {
++		if got[i] != want[i] {
++			t.Fatalf("probe order %v, want %v", got, want)
++		}
++	}
++}
++
++// A round that runs out of time keeps prefixes whose probes finished and
++// leaves the one still running on its previous result (#125).
++func TestPartialRoundKeepsFinishedPrefixes(t *testing.T) {
++	release := make(chan struct{})
++	defer close(release)
++	// First round: one call per prefix. Second round: the first prefix
++	// finishes (call 3) and the second blocks.
++	p := &blockAfterProber{allow: 3, release: release}
++	o := opts()
++	o.Workers = 1
++	o.RoundTimeout = 150 * time.Millisecond
++	var rounds atomic.Int32
++	o.OnRound = func() { rounds.Add(1) }
++	e, err := New([]Provider{provA}, []NamedProber{{"p", p}}, src(
++		plugin.Target{Prefix: pfx1, Host: netip.MustParseAddr("198.51.100.1")},
++		plugin.Target{Prefix: pfx2, Host: netip.MustParseAddr("203.0.113.1")},
++	), o)
++	if err != nil {
++		t.Fatal(err)
++	}
++	e.RunOnce(context.Background())
++	if rounds.Load() != 1 || len(e.Results()) != 2 || e.PrefixCommits() != 2 {
++		t.Fatalf("first round rounds=%d results=%d commits=%d", rounds.Load(), len(e.Results()), e.PrefixCommits())
++	}
++	var old time.Time
++	for _, r := range e.Results() {
++		if r.Prefix == pfx2 {
++			old = r.Time
++		}
++		if !r.OK() {
++			t.Fatalf("first result not ok: %+v", r)
++		}
++	}
++	if old.IsZero() {
++		t.Fatal("missing first result for the slow prefix")
++	}
++	waitRound(t, e)
++	if rounds.Load() != 2 {
++		t.Fatalf("partial round did not commit: rounds=%d results=%+v", rounds.Load(), e.Results())
++	}
++	if e.PrefixCommits() != 3 {
++		t.Fatalf("commits = %d, want 3 (both prefixes, then the one that finished)", e.PrefixCommits())
++	}
++	var saw1, saw2 bool
++	for _, r := range e.Results() {
++		if !r.OK() {
++			t.Fatalf("result not ok: %+v", r)
++		}
++		switch r.Prefix {
++		case pfx1:
++			saw1 = true
++			if !r.Time.After(old) {
++				t.Fatalf("finished prefix was not stored: %+v old %s", r, old)
++			}
++		case pfx2:
++			saw2 = true
++			if !r.Time.Equal(old) {
++				t.Fatalf("unfinished prefix changed: %+v old %s", r, old)
++			}
++		}
++	}
++	if !saw1 || !saw2 {
++		t.Fatalf("results = %+v", e.Results())
++	}
++}
+diff --git a/lab/soak/budget.go b/lab/soak/budget.go
+index a298b50..d332fbf 100644
+--- a/lab/soak/budget.go
++++ b/lab/soak/budget.go
+@@ -32,22 +32,29 @@ type Profile struct {
+ 	// StaticTargets is the number of static probe targets.
+ 	StaticTargets int `yaml:"static_targets"`
+ 	// Churn is prefixes withdrawn and announced again per minute.
+-	Churn   int     `yaml:"churn"`
+-	Budgets Budgets `yaml:"budgets"`
++	Churn int `yaml:"churn"`
++	// RateLimitPPS is probe.rate_limit_pps in the generated config.
++	// Zero uses the load-test default of 100000, which lets the fixed
++	// prober finish the pr profile's targets. The opt-in rate profile
++	// sets the operator default of 100 (#125).
++	RateLimitPPS int     `yaml:"rate_limit_pps"`
++	Budgets      Budgets `yaml:"budgets"`
+ }
+ 
+ // Budgets are the limits. Zero leaves a figure reported but unchecked.
+ type Budgets struct {
+-	LearnSeconds    float64 `yaml:"learn_seconds"`
+-	RSSPeakMB       float64 `yaml:"rss_peak_mb"`
+-	RSSGrowthMB     float64 `yaml:"rss_growth_mb"`
+-	CPUAvgCores     float64 `yaml:"cpu_avg_cores"`
+-	Threads         int     `yaml:"threads"`
+-	UDPDropPct      float64 `yaml:"udp_drop_pct"`
+-	APIP99Ms        float64 `yaml:"api_p99_ms"`
+-	ReconvergeSecs  float64 `yaml:"reconverge_seconds"`
+-	ShutdownSeconds float64 `yaml:"shutdown_seconds"`
+-	MinMeasured     int     `yaml:"min_measured"`
++	LearnSeconds      float64 `yaml:"learn_seconds"`
++	RSSPeakMB         float64 `yaml:"rss_peak_mb"`
++	RSSGrowthMB       float64 `yaml:"rss_growth_mb"`
++	CPUAvgCores       float64 `yaml:"cpu_avg_cores"`
++	Threads           int     `yaml:"threads"`
++	UDPDropPct        float64 `yaml:"udp_drop_pct"`
++	APIP99Ms          float64 `yaml:"api_p99_ms"`
++	ReconvergeSecs    float64 `yaml:"reconverge_seconds"`
++	ShutdownSeconds   float64 `yaml:"shutdown_seconds"`
++	MinMeasured       int     `yaml:"min_measured"`
++	MinActivePerHour  int     `yaml:"min_active_per_hour"`
++	MinPassiveTracked int     `yaml:"min_passive_tracked"`
+ }
+ 
+ type budgetFile struct {
+@@ -118,6 +125,8 @@ type Result struct {
+ 	ReconvergeSecs  float64  `json:"reconverge_seconds"`
+ 	ShutdownSeconds float64  `json:"shutdown_seconds"`
+ 	Measured        int      `json:"measured"`
++	ActivePerHour   float64  `json:"active_per_hour"`
++	PassiveTracked  int      `json:"passive_tracked"`
+ 	PacketeerRoutes int      `json:"packeteer_routes"`
+ 	Failures        []string `json:"failures"`
+ }
+@@ -156,6 +165,8 @@ func checks(r Result, b Budgets) []Check {
+ 		{Name: "reconverge after churn", Value: r.ReconvergeSecs, Limit: b.ReconvergeSecs, Unit: "s"},
+ 		{Name: "SIGTERM to exit", Value: r.ShutdownSeconds, Limit: b.ShutdownSeconds, Unit: "s"},
+ 		{Name: "prefixes measured", Value: float64(r.Measured), Limit: float64(b.MinMeasured), Min: true},
++		{Name: "active prefixes measured per hour", Value: r.ActivePerHour, Limit: float64(b.MinActivePerHour), Min: true},
++		{Name: "passive prefixes tracked", Value: float64(r.PassiveTracked), Limit: float64(b.MinPassiveTracked), Min: true},
+ 	}
+ }
+ 
+@@ -226,6 +237,49 @@ func percentile(xs []float64, p float64) float64 {
+ 	return s[max(0, min(i, len(s)-1))]
+ }
+ 
++// probePace is the prefix-commit counter and the passive-prefix estimate
++// read from /metrics during a soak (#125).
++type probePace struct {
++	warm, end float64
++	warmSet   bool
++	passive   float64
++}
++
++// sample records one successful /metrics read. The first sample at or
++// after warmup freezes the commit counter; later samples move the end.
++func (p *probePace) sample(elapsed, warmup time.Duration, commits, tracked float64) {
++	if !p.warmSet && elapsed >= warmup {
++		p.warm = commits
++		p.warmSet = true
++	}
++	p.end = commits
++	p.passive = tracked
++}
++
++// perHour scales commits after the warmup boundary to one hour. A
++// missing boundary counts from zero. A counter that went backwards
++// counts as no progress. post is the soak after warmup; under a second
++// it falls back to the whole soak, and under a second there too the
++// rate is zero.
++func (p probePace) perHour(durationSec, warmupSec float64) float64 {
++	warm := 0.0
++	if p.warmSet {
++		warm = p.warm
++	}
++	delta := p.end - warm
++	if delta < 0 {
++		delta = 0
++	}
++	post := durationSec - warmupSec
++	if post < 1 {
++		post = durationSec
++	}
++	if post < 1 {
++		return 0
++	}
++	return delta / post * 3600
++}
++
+ // growth is the RSS level during warmup and the level over the second
+ // half of the samples after warmup. Both are medians.
+ //
+diff --git a/lab/soak/budgets.yaml b/lab/soak/budgets.yaml
+index bb6e1e9..c071f8f 100644
+--- a/lab/soak/budgets.yaml
++++ b/lab/soak/budgets.yaml
+@@ -54,6 +54,18 @@ profiles:
+       reconverge_seconds: 30
+       shutdown_seconds: 20
+       min_measured: 2500
++      # Active prefixes per hour (#125): packeteer_probe_prefix_commits
++      # after warmup, scaled to one hour. A prefix counts once per round
++      # that stored it. Steady state on this profile is about 3,000
++      # targets every 30s, 360,000 an hour. 180,000 is half of that, and
++      # it is also under 2,500 targets at two rounds a minute.
++      min_active_per_hour: 180000
++      # Passive prefixes (#125): last packeteer_flow_prefixes_tracked.
++      # Half of 20,000 records/s over 1.25M prefixes for a 5-minute
++      # window is on the order of a million distinct prefixes. The exact
++      # cells still stop at 20,000. 50,000 is past that cap, with room
++      # for the sketch's error.
++      min_passive_tracked: 50000
+ 
+   # Opt-in (#103). Not the `load` job and not soak.yml. A human passes
+   # the name: `bash lab/soak.sh IMAGE routes3m`. Same workload as `pr`
+@@ -76,6 +88,28 @@ profiles:
+     churn: 6000
+     budgets: {}
+ 
++  # Opt-in (#125). Not the `load` job and not soak.yml. A human passes
++  # the name: `bash lab/soak.sh IMAGE rate`. A 20,000-prefix table at
++  # the operator packet rate (100 per second). 375 pinned static targets
++  # is one 30s round for two same-family providers and 4 packets:
++  # 100 * 30 / (2 * 4). Flow top_n shares that budget, so a round may
++  # store only the prefixes that finished; the next pass continues the
++  # rest. Budgets stay empty: the run reports active prefixes per hour
++  # and passive prefixes tracked and does not fail a number. Do not
++  # point CI at this name. The `pr` profile is what checks those floors.
++  rate:
++    prefixes: 20000
++    duration: 2m
++    warmup: 30s
++    sample: 2s
++    flow_rate: 2000
++    flow_hot: 500
++    flow_top_n: 200
++    static_targets: 375
++    churn: 60
++    rate_limit_pps: 100
++    budgets: {}
++
+   # Weekly scheduled workflow (.github/workflows/soak.yml): the same load
+   # for 5h30m, the most a hosted job allows. Growth is what a leak shows.
+   soak:
+@@ -99,3 +133,7 @@ profiles:
+       reconverge_seconds: 30
+       shutdown_seconds: 20
+       min_measured: 2500
++      # Same floors as `pr` (#125). The weekly run is the same workload
++      # held longer, so the per-hour rate and the window estimate match.
++      min_active_per_hour: 180000
++      min_passive_tracked: 50000
+diff --git a/lab/soak/config.go b/lab/soak/config.go
+index eba6308..a384ab9 100644
+--- a/lab/soak/config.go
++++ b/lab/soak/config.go
+@@ -49,7 +49,7 @@ probe:
+   timeout: 1s
+   packets: 4
+   workers: 8
+-  rate_limit_pps: 100000
++  rate_limit_pps: %d
+ probers:
+   - type: fixed
+     config:
+@@ -74,7 +74,7 @@ sources:
+       window: 5m
+       top_n: %d
+ `, labASN, nextHopsV4[0], nextHopsV4[1], nextHopsV6[0], nextHopsV6[1],
+-		routerAddr, pt.BGP, peerAddr, pt.HTTP, strings.TrimRight(dataDir, "/"), pt.Flow, max(1, p.FlowTopN))
++		routerAddr, pt.BGP, peerAddr, rateLimit(p), pt.HTTP, strings.TrimRight(dataDir, "/"), pt.Flow, max(1, p.FlowTopN))
+ 	if p.StaticTargets > 0 {
+ 		b.WriteString("  - type: static\n    config:\n      targets:\n")
+ 		for k := range p.StaticTargets {
+@@ -84,3 +84,13 @@ sources:
+ 	}
+ 	return b.String()
+ }
++
++// rateLimit is the generated probe.rate_limit_pps. The pr and soak
++// profiles leave it unset and keep 100000 so the fixed prober is not
++// what bounds the run. The rate profile sets 100, the operator default.
++func rateLimit(p Profile) int {
++	if p.RateLimitPPS > 0 {
++		return p.RateLimitPPS
++	}
++	return 100000
++}
+diff --git a/lab/soak/main.go b/lab/soak/main.go
+index c1fc1ee..c42226e 100644
+--- a/lab/soak/main.go
++++ b/lab/soak/main.go
+@@ -241,6 +241,7 @@ func run(ctx context.Context, o runOpts) (Result, error) {
+ 
+ 	soakStart := time.Now()
+ 	var warmRSS, postRSS, lat []float64
++	var pace probePace
+ 	notReady, sessionDown, sampleErrs := 0, 0, 0
+ 	tick := time.NewTicker(p.Sample)
+ loop:
+@@ -277,9 +278,11 @@ loop:
+ 			if !m.SessionUp {
+ 				sessionDown++
+ 			}
++			pace.sample(el, p.Warmup, m.ProbePrefixCommits, m.FlowPrefixesTracked)
+ 		}
+-		log.Printf("t=%s rss=%.0fMiB cpu=%.1fs threads=%d rib=%d flows=%d",
+-			el.Round(time.Second), float64(pr.RSS)/(1<<20), pr.CPU, pr.Threads, m.RIBPrefixes, exp.sent.Load())
++		log.Printf("t=%s rss=%.0fMiB cpu=%.1fs threads=%d rib=%d flows=%d commits=%.0f tracked=%.0f",
++			el.Round(time.Second), float64(pr.RSS)/(1<<20), pr.CPU, pr.Threads, m.RIBPrefixes, exp.sent.Load(),
++			m.ProbePrefixCommits, m.FlowPrefixesTracked)
+ 		if el >= p.Duration {
+ 			break
+ 		}
+@@ -296,6 +299,15 @@ loop:
+ 	if ctx.Err() != nil {
+ 		return r, ctx.Err()
+ 	}
++	// One more read so the last seconds after the ticker count. Active
++	// prefixes per hour are commits after warmup, scaled to an hour.
++	// Passive tracked is the last flow-window estimate.
++	if m, _, err := papi.metrics(ctx); err == nil {
++		pace.sample(time.Since(soakStart), p.Warmup, m.ProbePrefixCommits, m.FlowPrefixesTracked)
++	}
++	r.ActivePerHour = pace.perHour(r.DurationSeconds, p.Warmup.Seconds())
++	r.PassiveTracked = int(pace.passive)
++	log.Printf("active prefixes per hour %.0f; passive tracked %d", r.ActivePerHour, r.PassiveTracked)
+ 	cpu1, err := readP()
+ 	if err != nil {
+ 		return r, fmt.Errorf("Packeteer process gone after soak: %w", err)
+diff --git a/lab/soak/main_test.go b/lab/soak/main_test.go
+index 839a858..e4456b4 100644
+--- a/lab/soak/main_test.go
++++ b/lab/soak/main_test.go
+@@ -175,19 +175,68 @@ func TestParseProc(t *testing.T) {
+ 	if err != nil || !m.Ready || !m.SessionUp || m.RIBPrefixes != 1250000 {
+ 		t.Fatalf("%+v %v", m, err)
+ 	}
++	if m.ProbePrefixCommits != 0 || m.FlowPrefixesTracked != 0 {
++		t.Fatalf("missing optional gauges must stay zero: %+v", m)
++	}
++	m, err = parseMetrics(strings.NewReader("packeteer_ready 1\npacketeer_rib_prefixes 10\npacketeer_probe_prefix_commits 12\npacketeer_flow_prefixes_tracked 50000\n"))
++	if err != nil || m.ProbePrefixCommits != 12 || m.FlowPrefixesTracked != 50000 {
++		t.Fatalf("%+v %v", m, err)
++	}
+ 	if _, err := parseMetrics(strings.NewReader("packeteer_ready 1\n")); err == nil {
+ 		t.Fatal("metrics without rib size accepted")
+ 	}
+ }
+ 
++func TestActivePerHourScalesAfterWarmup(t *testing.T) {
++	var p probePace
++	p.sample(10*time.Second, time.Minute, 100, 1)
++	p.sample(time.Minute, time.Minute, 400, 1000)
++	p.sample(2*time.Minute, time.Minute, 1000, 50000)
++	if got := p.perHour(120, 60); got != 36000 {
++		t.Fatalf("per hour %v, want 36000", got)
++	}
++	if p.passive != 50000 {
++		t.Fatalf("passive %v", p.passive)
++	}
++	back := probePace{warm: 100, end: 10, warmSet: true}
++	if got := back.perHour(120, 60); got != 0 {
++		t.Fatalf("backwards counter %v", got)
++	}
++	unset := probePace{end: 100}
++	if got := unset.perHour(120, 60); got != 6000 {
++		t.Fatalf("unset warmup %v, want 6000", got)
++	}
++	if got := (probePace{end: 10}).perHour(0.5, 0); got != 0 {
++		t.Fatalf("short soak %v", got)
++	}
++}
++
+ func TestBudgetFileProfilesAndGeneratedConfig(t *testing.T) {
+-	for _, name := range []string{"smoke", "pr", "soak", "routes3m"} {
++	for _, name := range []string{"smoke", "pr", "soak", "routes3m", "rate"} {
+ 		p, err := loadProfile("budgets.yaml", name)
+ 		if err != nil {
+ 			t.Fatal(err)
+ 		}
++		cfgText := packeteerConfig(p, ports{BGP: 11179, Flow: 12055, HTTP: 18081}, "/var/lib/packeteer")
+ 		switch name {
+ 		case "smoke":
++			if p.Budgets != (Budgets{}) {
++				t.Fatalf("smoke budgets must stay unset: %+v", p.Budgets)
++			}
++			if !strings.Contains(cfgText, "rate_limit_pps: 100000\n") {
++				t.Fatal("smoke keeps the load-test packet rate")
++			}
++		case "rate":
++			// Opt-in real packet rate (#125). Not a CI profile.
++			if p.Prefixes != 20000 || p.StaticTargets != 375 || p.RateLimitPPS != 100 {
++				t.Fatalf("rate profile %+v", p)
++			}
++			if p.Budgets != (Budgets{}) {
++				t.Fatalf("rate budgets must stay unset: %+v", p.Budgets)
++			}
++			if !strings.Contains(cfgText, "rate_limit_pps: 100\n") {
++				t.Fatal("rate profile must generate 100 pps")
++			}
+ 		case "routes3m":
+ 			// Opt-in 3M table (#103). Report only: no measured budgets yet,
+ 			// and this name must not become what CI's load job runs.
+@@ -209,17 +258,27 @@ func TestBudgetFileProfilesAndGeneratedConfig(t *testing.T) {
+ 			if p.Prefixes != 1250000 {
+ 				t.Fatalf("pr prefixes changed: %d", p.Prefixes)
+ 			}
++			if p.Budgets.RSSGrowthMB != 384 {
++				t.Fatalf("pr rss_growth_mb = %v, want 384", p.Budgets.RSSGrowthMB)
++			}
++			if p.Budgets.MinActivePerHour != 180000 || p.Budgets.MinPassiveTracked != 50000 {
++				t.Fatalf("pr probe budgets %+v", p.Budgets)
++			}
++			if p.RateLimitPPS != 0 || !strings.Contains(cfgText, "rate_limit_pps: 100000\n") {
++				t.Fatal("pr must keep rate_limit_pps 100000")
++			}
+ 			fallthrough
+ 		default:
+ 			if p.Prefixes < 1000000 {
+ 				t.Fatalf("%s: %d prefixes is not full-table sized", name, p.Prefixes)
+ 			}
+ 			if p.Budgets.RSSPeakMB == 0 || p.Budgets.LearnSeconds == 0 || p.Budgets.RSSGrowthMB == 0 ||
+-				p.Budgets.CPUAvgCores == 0 || p.Budgets.UDPDropPct == 0 || p.Budgets.ShutdownSeconds == 0 {
++				p.Budgets.CPUAvgCores == 0 || p.Budgets.UDPDropPct == 0 || p.Budgets.ShutdownSeconds == 0 ||
++				p.Budgets.MinActivePerHour != 180000 || p.Budgets.MinPassiveTracked != 50000 {
+ 				t.Fatalf("%s: a core budget is unset: %+v", name, p.Budgets)
+ 			}
+ 		}
+-		cfg, err := config.Parse([]byte(packeteerConfig(p, ports{BGP: 11179, Flow: 12055, HTTP: 18081}, "/var/lib/packeteer")))
++		cfg, err := config.Parse([]byte(cfgText))
+ 		if err != nil {
+ 			t.Fatalf("%s: generated config: %v", name, err)
+ 		}
+@@ -239,6 +298,9 @@ func TestBudgetFileProfilesAndGeneratedConfig(t *testing.T) {
+ 		if strings.Contains(string(b), "routes3m") {
+ 			t.Fatalf("%s names the opt-in 3M profile", path)
+ 		}
++		if strings.Contains(string(b), "packeteer:ci rate") || strings.Contains(string(b), "packeteer:soak rate") {
++			t.Fatalf("%s names the opt-in rate profile", path)
++		}
+ 	}
+ 	ci, err := os.ReadFile("../../.github/workflows/ci.yml")
+ 	if err != nil {
+diff --git a/lab/soak/sample.go b/lab/soak/sample.go
+index 8231290..76afd9b 100644
+--- a/lab/soak/sample.go
++++ b/lab/soak/sample.go
+@@ -149,9 +149,11 @@ func parseSNMP(s string) (udpStats, error) {
+ 
+ // metrics is what the harness reads from Packeteer's /metrics.
+ type metrics struct {
+-	Ready       bool
+-	SessionUp   bool
+-	RIBPrefixes int
++	Ready               bool
++	SessionUp           bool
++	RIBPrefixes         int
++	ProbePrefixCommits  float64
++	FlowPrefixesTracked float64
+ }
+ 
+ func parseMetrics(r io.Reader) (metrics, error) {
+@@ -177,6 +179,10 @@ func parseMetrics(r io.Reader) (metrics, error) {
+ 			m.Ready, seen = v == 1, seen|1
+ 		case name == "packeteer_rib_prefixes":
+ 			m.RIBPrefixes, seen = int(v), seen|2
++		case name == "packeteer_probe_prefix_commits":
++			m.ProbePrefixCommits = v
++		case name == "packeteer_flow_prefixes_tracked":
++			m.FlowPrefixesTracked = v
+ 		case strings.HasPrefix(name, "packeteer_bgp_session_up{"):
+ 			m.SessionUp = m.SessionUp || v == 1
+ 		}
