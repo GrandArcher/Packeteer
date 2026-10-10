@@ -7,7 +7,7 @@ The remaining UI conveniences (#34). All of them work in the stock image with a 
 | Before/after graphs (#129) | `/graphs.html`, `/api/reports/timeseries`, the `timeseries` dashboard widget | viewer | `storage: {type: sqlite}` |
 | Dashboard overview and setup checklist (#49) | `/`, `/api/overview` | viewer | none |
 | Config editor and settings form (#102) | `/settings.html`, `/api/config`, `POST /api/config/form` | admin | `http.config_editor: true` + auth or basic auth |
-| Setup wizard (#106) | `/settings.html`, `POST /api/config/wizard` | admin | `http.config_editor: true` + auth or basic auth |
+| Setup wizard (#106, flow step #130) | `/settings.html`, `POST /api/config/wizard` | admin | `http.config_editor: true` + auth or basic auth |
 | Custom dashboards | `/dashboards.html`, `/api/dashboards` | every signed-in user, own dashboards | `storage: {type: sqlite}` + auth or basic auth |
 | Report subscriptions | `report_subscriptions`, `/api/subscriptions` | viewers see them, operators send now | `storage` + an `smtp` notifier |
 | Improvement weights | `scorer.config.improvement_weights`, `/api/decisions` | - | `weighted`, `commit`, or `cost` scorer |
@@ -28,7 +28,7 @@ Every page has the same chrome (#170). The mode banner is the first thing on the
 | Reports | `/reports.html` | History reports and CSV |
 | Providers & Exchanges | `/providers.html` | Provider health. The exchange view is empty (#148) |
 | Commit & Cost | `/commit.html` | Empty (#174) |
-| Policies | `/policies.html` | Empty (#130) |
+| Policies | `/policies.html` | Points to Settings, where the `rules` policy is edited (#130). It does not list rules yet |
 | Protection | `/protection.html` | The threat-mitigation monitor when that feature is on. Otherwise an empty state (#131) |
 | Troubleshooting | `/troubleshooting.html` | Looking glass, probe, traceroute, whois |
 | Events | `/events.html` | Empty (#173) |
@@ -64,6 +64,8 @@ docker run --network host --cap-add NET_RAW --cap-add NET_ADMIN \
 `GET /api/overview` (viewer) is the same summary as JSON: `mode`, `ready`, `started`, `sources`, `providers` (`name`, `up`, `ok`, `failed`, `last_error`), `counts`, `bgp`, `features` (`name`, `on`), and `setup` (`id`, `level`, `title`, `detail`, `doc`). It is read-only and announces nothing.
 
 CI runs a UI smoke test in the docker job (`lab/ui-smoke.sh`): headless Chrome loads every shell page from the stock image. The first run mounts `config.example.yaml` unchanged. The banner says observe and that it announces nothing, the header chip is `mode-observe`, the checklist on `/` asks for sources, `/providers.html` shows `no data yet`, `/improvements.html` says Recommended, and the empty pages name their issues. The second run uses a minimal file with no `mode` key and one static target (observe, the prefix measured with an RTT on `/prefixes.html`, no improvement). A third run turns the config editor on with basic auth and sqlite, saves a dashboard of providers and improvements, and loads `/`, `/settings.html`, and `/dashboards.html` through `lab/uiproxy` (headless Chrome does not send URL credentials on later fetches). That run checks the filled provider fields keep their labels, the improvements widget says Recommended, and the provider `since` time is the local format.
+
+The settings forms (#130) have their own smoke step in the same job. The stock image mounts an observe file that has a `flow`, `vip`, and `outage` source and a `rules` policy. The step reads the form through the API, merges an edit, and requires the editor's start checks to accept the result as observe with inject not enabled. It renders a wizard config with the flow step and requires the same. Headless Chrome then loads `/settings.html` through `lab/uiproxy` and checks that each section is filled from the file, that the observe banner is on top, and that the wizard has its optional flow step. `internal/configedit`, `internal/httpapi`, and `cmd/controller` tests round-trip every section through `config.Load` and the start checks.
 
 ## Graphs
 
@@ -127,6 +129,23 @@ Every write, accepted or refused, is in the audit log with the old and new hashe
 
 Fields the form does not show stay in the YAML, including plugin blocks. An unchanged form is not reformatted. Commit is the SNMP telemetry binding's `commit_mbps` for that provider; there is no field for a community or a passphrase. A commit with no binding is refused until the binding is in the YAML. Choosing cost-or-performance, or setting the floor, on a `weighted` scorer (or none) switches `scorer.type` to `cost` and keeps the weights. It does not replace a `commit` scorer.
 
+### Flow, policies, VIP, and outage (#130)
+
+Four more sections sit under the allowlist. Each edits the **first** source or policy of its type; further ones, and every key the form does not show, stay in the YAML.
+
+| Section | Edits | Notes |
+|---|---|---|
+| Flow collector | the first `flow` source: `listen` (comma separated `host:port`), `window`, `top_n` (the priority tier, probed every round), `max_targets`, `tail_interval`, `min_bytes`, `min_pct`, `exclude` | `problems`, `transit`, `subranges`, `aggregate_v4`, and `aggregate_v6` are kept as they are. Unchecking the box removes the source and those blocks from the YAML. Measurement only |
+| Policies (rules) | the first `rules` policy: one row per rule (`name`, `action`, `providers`, `prefixes`, `asns`, `countries`, `traffic`, `max_loss_pct`, `max_rtt`) | Rules keep their order. Removing every rule removes that policy. `geoip_db`, `maintenance`, and any other policy stay in the YAML. A country rule still needs `geoip_db` in the file; the start checks say so on Validate or Save |
+| VIP | the first `vip` source: `interval`, `max_targets`, prefixes with an optional pinned host, `asns` | Unchecking removes the source |
+| Outage detection | the first `outage` source: `min_prefixes`, `window`, `loss_pct`, `rtt_ms`, `interval`, `max_targets`, `ignore_asns` | Empty fields use the defaults. Unchecking removes the source |
+
+A policy or source only restricts, orders, or measures. The learned-RIB check, the allowlist, `max_improvements`, the community and NO_EXPORT, hold time, and the withdraw rules are unchanged, and nothing here can announce. The form checks each field the way the plugin does (types, bounds, duplicates, a rule's action against its providers and `max_loss_pct`, and that a rule names configured providers) and refuses with the field named. The start checks that need the whole file still run on Validate and Save, for example a flow `tail_interval` that must be longer than `probe.interval`. A section the operator did not change is not checked or rewritten, so a file the form does not fully model still lets the other fields apply.
+
+`vip` ASNs and the `outage` source read the learned RIB: set `bgp.neighbors` before enabling them. A controller with no BGP session currently stops with a nil-pointer panic once either one runs. This change does not alter that.
+
+`POST /api/config/form {"yaml"}` returns `form`, now with `flow`, `policies` (`rules`), `vip`, and `outage` objects (`enabled` on each source). A request that leaves a section out of `form` leaves that part of the file alone, so a client written before #130 cannot remove one. Saving is the same `PUT /api/config` as every other edit: admin role, the same checks as a start, `confirm_inject` when the text turns inject on, and a line in the audit log with the old and new hashes.
+
 `POST /api/config/form {"yaml"}` returns `form`. `POST /api/config/form {"yaml","apply":true,"form":{...}}` returns the merged `yaml` and the form read back. Neither writes.
 
 `GET /api/config/suggestions` lists next hops seen on iBGP (including add-path) or BMP that are not a configured provider and not on an exchange LAN: `next_hop`, `asn` (the most common first AS), and `prefixes`. The busiest 64 are returned. Accepting one in the page adds a draft provider row with the next hop and the AS shown. The probe source, cost, and commit stay empty. Accepting does not call the API, so it does not write a provider, start probing, or announce. Exchange LAN hops stay on `GET /api/exchanges` until the operator adds them as peers. The list is cached against the RIB generation and only reads.
@@ -139,11 +158,12 @@ The file is read-only in many deployments (`:ro`). Then saving fails with a clea
 
 ## Setup wizard
 
-`/settings.html` walks three steps (#106). `POST /api/config/wizard` renders a config from them and writes nothing. The result opens in the editor for review, and you save it like any other edit.
+`/settings.html` walks four steps, the last optional (#106, #130). `POST /api/config/wizard` renders a config from them and writes nothing. The result opens in the editor for review, and you save it like any other edit.
 
 1. Edge session: ASN, an IPv4 router ID, and the edge address. The session is learn-only iBGP.
 2. Providers: one row each (name, probe source, next hop), with plus and minus. Each of those three fields has a visible label, the same way as the settings form (#171). A next hop from `GET /api/config/suggestions` can be added as a row; you still name it and set the probe source. Adding a row does not probe or announce.
 3. What to probe: an optional prefix and an optional pinned host inside it. Leave both empty to add targets later in the form. A prefix without a host is probed at a few addresses inside it, including the provider next hop when that address can be used. A host pins that prefix to one address. Report history (sqlite) is a checkbox on this step, not a secret.
+4. Flow collector (optional): a checkbox, a listen address (empty means every address), and a UDP port (default 2055). When on, the file gets a `flow` source listening there, with the source's defaults; tune it afterwards in the settings form. The step explains exporter setup: point the router's NetFlow v5/v9, IPFIX, or sFlow export at that host and port. Packeteer does not configure the router. With `--network host` the port is a host UDP port: do not publish it, and allow it only from the router. The generated file carries the same note. `POST /api/config/wizard` takes it as `"flow": {"listen": "192.0.2.10:2055"}`; a bad address or port is refused with the other wizard errors. Leaving the step off renders exactly what the wizard rendered before.
 
 The rendered file is always:
 
@@ -151,7 +171,7 @@ The rendered file is always:
 - an empty allowlist and no announcer;
 - one `bgp.neighbors` entry, the edge address;
 - the `weighted` scorer, `max_improvements: 50`, `hold_time: 15m`, the default thresholds, and `http.listen: 127.0.0.1:8080`;
-- a `static` source only when a prefix was given;
+- a `static` source only when a prefix was given, and a `flow` source only when the flow step was used;
 - `packeteer_community` `<asn>:666` when the ASN fits in 16 bits.
 
 There is no field for a password, a community string, or any other secret. Those stay in environment variables. The page checks each step before continuing, and the server checks the whole body again with `config.Parse`. The wizard is part of the editor: it is off (`404`) unless `http.config_editor` is on. Turning inject on afterwards is a separate edit; follow the [inject checklist](CONFIG.md#inject-checklist).
@@ -221,4 +241,4 @@ Lab proof (`lab/e2e-weights.sh`, CI job `e2e`): an FRR edge advertises 198.51.10
 
 The graphs (#129) are read-only and need no rollback. Delete a `timeseries` widget from a dashboard to hide it; a build from before #129 refuses to save a dashboard that still has one.
 
-Remove `improvement_weights`, `http.config_editor`, and `report_subscriptions` and restart. The dashboard polish (#49) needs no rollback: it reads the same state, and `/api/overview` is read-only. The file config works exactly as before; the editor only ever wrote a plain YAML file. Stored dashboards stay in the database and are ignored by an older build. The display fixes (#171) are presentation only: revert that change to restore the previous chip, titles, timestamps, and unlabeled provider fields. The shell (#170) is presentation only as well: revert it to put every section back on `/`. No config key changes.
+The form sections and the wizard's flow step (#130) are UI and API only and add no config key: revert the change to drop them, or delete the `flow`, `vip`, and `outage` sources and the `rules` policy from the YAML (a restart withdraws every Packeteer route first). A file the form wrote is an ordinary config file that an older build loads unchanged. Remove `improvement_weights`, `http.config_editor`, and `report_subscriptions` and restart. The dashboard polish (#49) needs no rollback: it reads the same state, and `/api/overview` is read-only. The file config works exactly as before; the editor only ever wrote a plain YAML file. Stored dashboards stay in the database and are ignored by an older build. The display fixes (#171) are presentation only: revert that change to restore the previous chip, titles, timestamps, and unlabeled provider fields. The shell (#170) is presentation only as well: revert it to put every section back on `/`. No config key changes.

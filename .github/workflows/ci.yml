@@ -404,6 +404,132 @@ jobs:
             --absent 'No before/after data' 'Cannot reach' 'mode-inject'
           bash lab/ui-smoke.sh http://127.0.0.1:18098/dashboards.html 'class="ts-chart"' 'Before/after graphs: 50% or more better' \
             'Data (5 days)' 'It announces nothing.' --absent 'No before/after data' 'Cannot reach'
+      - name: UI settings forms smoke (#130; flow, rules, VIP, outage, wizard flow step, observe)
+        run: |
+          set -euo pipefail
+          base=http://127.0.0.1:18132
+          cat > /tmp/ui130.yaml <<'YAML'
+          mode: observe
+          asn: 64512
+          router_id: 192.0.2.10
+          http:
+            listen: "127.0.0.1:18132"
+            config_editor: true
+          providers:
+            - name: lab-a
+              source_ip: 127.0.0.1
+              next_hop: 192.0.2.1
+            - name: lab-b
+              source_ip: 127.0.0.2
+              next_hop: 192.0.2.2
+          probe: {interval: 30s, timeout: 200ms, packets: 1}
+          bgp:
+            neighbors:
+              - address: 192.0.2.254
+          sources:
+            - type: static
+              config:
+                targets: [{prefix: 198.51.100.0/24}]
+            - type: flow
+              config:
+                listen: 127.0.0.1:12055
+                window: 10m
+                top_n: 20
+                min_pct: 0.5
+                exclude: [192.0.2.0/25]
+            - type: vip
+              config:
+                interval: 10s
+                prefixes: [{prefix: 203.0.113.0/24, host: 203.0.113.1}]
+            - type: outage
+              config:
+                min_prefixes: 4
+                loss_pct: 30
+          policies:
+            - type: rules
+              config:
+                rules:
+                  - name: pin-a
+                    action: static
+                    providers: [lab-a]
+                    prefixes: [203.0.113.0/24]
+                    max_loss_pct: 1
+                  - name: no-b-64500
+                    action: deny
+                    providers: [lab-b]
+                    asns: [64500]
+          probers:
+            - type: fixed
+              config:
+                paths: [{provider: lab-a, rtt_ms: 12}, {provider: lab-b, rtt_ms: 20}]
+          YAML
+          docker run -d --name pkui130 --network host --cap-add NET_RAW --cap-add NET_ADMIN \
+            -e PACKETEER_HTTP_USER=lab -e PACKETEER_HTTP_PASSWORD=lab-only \
+            -v /tmp/ui130.yaml:/etc/packeteer/config.yaml:ro packeteer:ci
+          proxy=""
+          cleanup() {
+            if [ -n "$proxy" ]; then kill "$proxy" 2>/dev/null || true; fi
+            docker stop -t 15 pkui130 >/dev/null || true
+            docker logs pkui130 2>&1 | tail -n 40
+            code="$(docker inspect -f '{{.State.ExitCode}}' pkui130)"
+            docker rm pkui130 >/dev/null || true
+            test "$code" = "0"
+          }
+          trap cleanup EXIT
+          auth=(-u lab:lab-only)
+          ok=0
+          for _ in $(seq 1 30); do
+            if curl -fsS "${auth[@]}" "$base/healthz" >/dev/null 2>&1; then ok=1; break; fi
+            sleep 1
+          done
+          test "$ok" = 1
+          # The form reads each section from the file, an edit merges back
+          # without touching the safety fields, and the editor's start
+          # checks accept the result. Nothing is written (read-only mount).
+          yaml="$(curl -fsS "${auth[@]}" "$base/api/config" | jq -r .yaml)"
+          jq -n --arg y "$yaml" '{yaml:$y}' | curl -fsS "${auth[@]}" -H 'Content-Type: application/json' -d @- "$base/api/config/form" >/tmp/form130.json
+          jq -e '.form.flow.enabled and .form.flow.listen[0] == "127.0.0.1:12055" and .form.vip.enabled and .form.outage.min_prefixes == "4" and (.form.policies.rules | length) == 2' /tmp/form130.json
+          jq '.form | .flow.top_n = "30" | .outage.min_prefixes = "6"
+            | .policies.rules += [{key:"",name:"vips",action:"vip",providers:[],prefixes:["198.51.100.0/24"],asns:[],countries:[],traffic:"",max_loss_pct:"",max_rtt:""}]' /tmp/form130.json >/tmp/form130-edit.json
+          jq -n --arg y "$yaml" --slurpfile f /tmp/form130-edit.json '{yaml:$y,apply:true,form:$f[0]}' \
+            | curl -fsS "${auth[@]}" -H 'Content-Type: application/json' -d @- "$base/api/config/form" | jq -r .yaml >/tmp/merged130.yaml
+          grep -q 'top_n: 30' /tmp/merged130.yaml
+          grep -q 'name: vips' /tmp/merged130.yaml
+          grep -q 'mode: observe' /tmp/merged130.yaml
+          ! grep -q 'announcer' /tmp/merged130.yaml
+          jq -n --rawfile y /tmp/merged130.yaml '{yaml:$y}' | curl -fsS "${auth[@]}" -H 'Content-Type: application/json' -d @- "$base/api/config/validate" | tee /tmp/validate130.json
+          jq -e '.valid == true and .mode == "observe" and .enables_inject == false' /tmp/validate130.json
+          # The wizard's flow step renders an observe config with an empty
+          # allowlist, no announcer, and a flow source, and it passes the
+          # same checks.
+          curl -fsS "${auth[@]}" -H 'Content-Type: application/json' \
+            -d '{"asn":64512,"router_id":"192.0.2.10","edge":"192.0.2.254","providers":[{"name":"lab-a","source_ip":"127.0.0.1","next_hop":"192.0.2.1"}],"flow":{"listen":"192.0.2.10:2055"}}' \
+            "$base/api/config/wizard" >/tmp/wiz130.json
+          jq -e '.mode == "observe"' /tmp/wiz130.json
+          jq -r .yaml /tmp/wiz130.json >/tmp/wiz130.yaml
+          grep -q 'type: flow' /tmp/wiz130.yaml
+          grep -q 'listen: 192.0.2.10:2055' /tmp/wiz130.yaml
+          grep -q 'prefixes: \[\]' /tmp/wiz130.yaml
+          ! grep -q 'announcer' /tmp/wiz130.yaml
+          jq -n --rawfile y /tmp/wiz130.yaml '{yaml:$y}' | curl -fsS "${auth[@]}" -H 'Content-Type: application/json' -d @- "$base/api/config/validate" | jq -e '.valid == true and .mode == "observe"'
+          go build -o /tmp/uiproxy ./lab/uiproxy
+          /tmp/uiproxy -listen 127.0.0.1:18133 -upstream "$base" -user lab -password lab-only >/tmp/uiproxy130.log 2>&1 &
+          proxy=$!
+          for _ in $(seq 1 20); do
+            curl -fsS http://127.0.0.1:18133/healthz >/dev/null 2>&1 && break
+            sleep 0.2
+          done
+          curl -fsS http://127.0.0.1:18133/healthz >/dev/null
+          # The page fills each section from the file, the observe banner
+          # is on top, and the wizard has its optional flow step.
+          bash lab/ui-smoke.sh http://127.0.0.1:18133/settings.html \
+            'mode-observe' 'It announces nothing.' \
+            'Flow collector' 'value="127.0.0.1:12055"' 'value="10m"' 'value="0.5"' 'value="192.0.2.0/25"' \
+            'Policies (rules)' 'value="pin-a"' 'value="no-b-64500"' '>Action</span>' '>Max loss (%)</span>' \
+            'VIP' 'value="10s"' 'value="203.0.113.1"' \
+            'Outage detection' 'value="4"' 'value="30"' \
+            '4. Flow (optional)' 'Collect flow records' 'Exporter setup' \
+            --absent 'The config editor is off' 'mode-inject'
       - name: auth in the stock image (users, roles, tokens, audit, rollback; observe)
         run: |
           cat > /tmp/auth.yaml <<'YAML'
