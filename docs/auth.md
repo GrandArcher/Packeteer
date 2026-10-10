@@ -33,7 +33,7 @@ Passwords are 12 to 256 characters and stored as PBKDF2-HMAC-SHA256 hashes (600,
 |---|---|
 | `viewer` | Read the dashboard, every `GET /api/*`, `/metrics`, reports, and the looking glass. Create, list, and revoke its own API tokens. |
 | `operator` | Everything a viewer may, plus open and close maintenance windows, add and remove mitigation rules, and run the on-demand probe, traceroute, and whois. |
-| `admin` | Everything, plus manage users (`/api/users`) and read the audit log (`/api/audit`). |
+| `admin` | Everything, plus manage users (`/api/users`), read the audit log (`/api/audit`), and, with `upgrade.enabled`, check, upgrade, and roll back the Packeteer version (`/api/upgrade*`, #196). |
 
 `/healthz`, `/readyz`, `/auth/login`, `/auth/callback`, and `/auth/logout` are public. Anything else without credentials is `401`; with a role that is too low it is `403` (`forbidden: needs role operator`). The full route-to-role table is `routeTable` in `internal/httpapi/access.go`, and a test walks every route with every role.
 

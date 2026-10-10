@@ -25,6 +25,8 @@ jobs:
           fi
       - name: test
         run: go test ./...
+      - name: upgrade e2e (#196; binary install, bad signature and checksum, upgrade in place, rollback, observe)
+        run: MODE=bin bash lab/e2e-upgrade.sh
       - name: icmp prober with raw sockets (root)
         run: |
           go test -c -o icmp.test ./internal/plugins/prober/icmp/
@@ -155,7 +157,8 @@ jobs:
           bash lab/ui-smoke.sh "$base/admin.html" '#175' 'It announces nothing.' \
             --absent 'Your account may not read this page.'
           bash lab/ui-smoke.sh "$base/settings.html" 'The config editor is off' 'It announces nothing.' \
-            '>Name</span>' '>Probe source</span>' '>Next hop</span>'
+            '>Name</span>' '>Probe source</span>' '>Next hop</span>' \
+            'Version and upgrade' 'Upgrade is off.' 'id="up-check"'
           bash lab/ui-smoke.sh "$base/dashboards.html" 'Custom dashboards' 'Recommended improvements' 'It announces nothing.' \
             --absent 'Active improvements'
           stop
@@ -886,6 +889,8 @@ jobs:
         run: bash lab/e2e-docs.sh docs/quickstart.md packeteer:ci
       - name: troubleshooting guide examples (#50; docs/troubleshooting.md against this image)
         run: bash lab/e2e-docs.sh docs/troubleshooting.md packeteer:ci
+      - name: upgrade e2e (#196; stock image, mounted config, bad signature and checksum, upgrade in the same container, rollback, observe)
+        run: MODE=docker IMAGE=packeteer:ci bash lab/e2e-upgrade.sh
 
   e2e:
     runs-on: ubuntu-latest

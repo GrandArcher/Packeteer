@@ -182,6 +182,10 @@ type Config struct {
 	Auth *Auth `yaml:"auth"`
 	// ReportSubscriptions email stored reports on a schedule (#34).
 	ReportSubscriptions []ReportSubscription `yaml:"report_subscriptions"`
+	// Upgrade is the version check, one-click upgrade, and rollback in
+	// the Settings page (#196). Nil or disabled: the page only shows the
+	// running version.
+	Upgrade *Upgrade `yaml:"upgrade"`
 }
 
 // GlobalCommit is one commit shared by several providers, usually links
@@ -647,6 +651,7 @@ func Parse(data []byte) (*Config, error) {
 
 func (c *Config) applyDefaults() {
 	c.defaultSubscriptions()
+	c.defaultUpgrade()
 	// A file without mode observes (#49): the safe default. Inject is
 	// never a default; it needs an explicit mode: inject and its checks.
 	if strings.TrimSpace(c.Mode) == "" {
@@ -1132,6 +1137,7 @@ func (c *Config) Validate() error {
 	c.validateMitigation(add)
 	c.validateAnomaly(add)
 	c.validateSubscriptions(add)
+	c.validateUpgrade(add)
 
 	return errors.Join(errs...)
 }

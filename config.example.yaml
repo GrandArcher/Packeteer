@@ -477,6 +477,20 @@ plugin_dir: /etc/packeteer/plugins
 #     notifier: smtp
 #     to: [finance@example.invalid]   # replaces the notifier's to
 
+# Upgrade from the UI (#196): the Settings page shows the running version,
+# lists GitHub releases, upgrades to the one an admin picks (after a
+# confirmation), and rolls back. Off unless enabled. A release is checked
+# against public_key (the Ed25519 key that signs its SHA256SUMS) and the new
+# binary must pass its start check against this file before anything changes.
+# The switch shuts down as on SIGTERM (every Packeteer route withdrawn), then
+# starts the new version in the configured mode; it learns the RIB again
+# before it injects. Needs auth or basic auth. Rollback: enabled: false.
+# Docs: docs/ui.md. Never announces.
+# upgrade:
+#   enabled: true
+#   public_key: "<base64 Ed25519 public key>"
+#   # check_interval: 24h      # background check, notify only (default off)
+
 # Threat mitigation (#28, lab-proven only; see docs/mitigation.md): RTBH,
 # BGP redirect, and FlowSpec drop / rate-limit / redirect (optionally by
 # source country) for exact learned prefixes, added through POST
