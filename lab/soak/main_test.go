@@ -6,6 +6,8 @@ import (
 	"net"
 	"net/netip"
 	"os"
+	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -214,6 +216,9 @@ func TestBudgetFileProfilesAndGeneratedConfig(t *testing.T) {
 			if p.Prefixes < 1000000 {
 				t.Fatalf("%s: %d prefixes is not full-table sized", name, p.Prefixes)
 			}
+			if p.Budgets.RSSSlopeMB == 0 {
+				t.Fatalf("%s: the leak-slope budget is unset", name)
+			}
 			if p.Budgets.RSSPeakMB == 0 || p.Budgets.LearnSeconds == 0 || p.Budgets.RSSGrowthMB == 0 ||
 				p.Budgets.CPUAvgCores == 0 || p.Budgets.UDPDropPct == 0 || p.Budgets.ShutdownSeconds == 0 {
 				t.Fatalf("%s: a core budget is unset: %+v", name, p.Budgets)
@@ -334,5 +339,112 @@ func TestGrowthIgnoresScavengerValley(t *testing.T) {
 	base, end = growth(warm, leak)
 	if end-base <= p.Budgets.RSSGrowthMB {
 		t.Fatalf("leak of %v MiB passed a %v budget", end-base, p.Budgets.RSSGrowthMB)
+	}
+}
+
+// readRSS loads a logged RSS series (MiB, one sample per line).
+func readRSS(t *testing.T, name string) []float64 {
+	t.Helper()
+	b, err := os.ReadFile("testdata/" + name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out []float64
+	for _, f := range strings.Fields(string(b)) {
+		v, err := strconv.ParseFloat(f, 64)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		out = append(out, v)
+	}
+	return out
+}
+
+// TestRiseLastThird replays the RSS logged by green load runs on
+// 2026-10-10 against the pr slope budget, then adds a steady climb to
+// the same runs and expects it to fail. A pr run is 120 samples at 5s;
+// the last third is 40.
+func TestRiseLastThird(t *testing.T) {
+	p, err := loadProfile("budgets.yaml", "pr")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Budgets.RSSGrowthMB != 384 {
+		t.Fatalf("pr growth budget changed: %v", p.Budgets.RSSGrowthMB)
+	}
+	for _, name := range []string{"rss-main-a.txt", "rss-pr-a.txt", "rss-pr-b.txt"} {
+		rss := readRSS(t, name)
+		if len(rss) != 120 {
+			t.Fatalf("%s: %d samples", name, len(rss))
+		}
+		if got := riseLastThird(rss); got > p.Budgets.RSSSlopeMB {
+			t.Errorf("%s: healthy run reads a %.0f MiB rise, budget %v", name, got, p.Budgets.RSSSlopeMB)
+		}
+		// The same run with 12 MiB per sample added through its last
+		// third: about 470 MiB across the third on top of what it did.
+		leaky := slices.Clone(rss)
+		for i := 80; i < len(leaky); i++ {
+			leaky[i] += float64(i-80) * 12
+		}
+		if got := riseLastThird(leaky); got <= p.Budgets.RSSSlopeMB {
+			t.Errorf("%s: a steady climb reads only %.0f MiB, budget %v", name, got, p.Budgets.RSSSlopeMB)
+		}
+	}
+}
+
+func TestRiseLastThirdShapes(t *testing.T) {
+	const n = 120
+	ramp := func(from, step float64, at int) []float64 {
+		s := repeatN(from, n)
+		for i := at; i < n; i++ {
+			s[i] = from + float64(i-at)*step
+		}
+		return s
+	}
+	// 10 MiB per sample over the last third: the slope reads 390 MiB across
+	// 39 gaps and the last sixth sits 290 above the middle third.
+	if got := riseLastThird(ramp(4000, 10, 80)); got < 280 || got > 300 {
+		t.Fatalf("steady climb: %v", got)
+	}
+	if got := riseLastThird(repeatN(4800, n)); got != 0 {
+		t.Fatalf("flat: %v", got)
+	}
+	// Falling is not a leak.
+	if got := riseLastThird(ramp(5000, -10, 80)); got != 0 {
+		t.Fatalf("falling: %v", got)
+	}
+	// One step at the last sample, as run 38058626210 ended, is not a trend.
+	step := repeatN(4800, n)
+	step[n-1] = 5100
+	if got := riseLastThird(step); got != 0 {
+		t.Fatalf("single step: %v", got)
+	}
+	// A plateau that dips and refills inside the third is no net climb:
+	// the slope alone would read 325 here.
+	saw := repeatN(4900, n)
+	for i := 80; i < 100; i++ {
+		saw[i] = 4600
+	}
+	if got := riseLastThird(saw); got != 0 {
+		t.Fatalf("dip then refill: %v", got)
+	}
+	// Too few samples to say.
+	if got := riseLastThird([]float64{1, 2, 3, 4, 5, 6, 7, 8, 9, 100}); got != 0 {
+		t.Fatalf("short run: %v", got)
+	}
+	if got := riseLastThird(nil); got != 0 {
+		t.Fatalf("no samples: %v", got)
+	}
+}
+
+func TestReportFailsWhenStillRising(t *testing.T) {
+	b := Budgets{RSSSlopeMB: 320}
+	r := Result{Profile: "x", RSSSlopeMB: 100, Failures: []string{}}
+	if text, ok := report(r, b); !ok || !strings.Contains(text, "| RSS still rising, last third | 100 MiB | ≤ 320 MiB | ok |") {
+		t.Fatalf("ok=%v\n%s", ok, text)
+	}
+	r.RSSSlopeMB = 400
+	if text, ok := report(r, b); ok || !strings.Contains(text, "**OVER**") {
+		t.Fatalf("a climbing run passed:\n%s", text)
 	}
 }

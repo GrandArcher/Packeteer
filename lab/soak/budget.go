@@ -41,6 +41,7 @@ type Budgets struct {
 	LearnSeconds    float64 `yaml:"learn_seconds"`
 	RSSPeakMB       float64 `yaml:"rss_peak_mb"`
 	RSSGrowthMB     float64 `yaml:"rss_growth_mb"`
+	RSSSlopeMB      float64 `yaml:"rss_slope_mb"`
 	CPUAvgCores     float64 `yaml:"cpu_avg_cores"`
 	Threads         int     `yaml:"threads"`
 	UDPDropPct      float64 `yaml:"udp_drop_pct"`
@@ -111,6 +112,7 @@ type Result struct {
 	RSSBaselineMB   float64  `json:"rss_baseline_mb"`
 	RSSEndMB        float64  `json:"rss_end_mb"`
 	RSSGrowthMB     float64  `json:"rss_growth_mb"`
+	RSSSlopeMB      float64  `json:"rss_slope_mb"`
 	CPUAvgCores     float64  `json:"cpu_avg_cores"`
 	Threads         int      `json:"threads"`
 	UDPDropPct      float64  `json:"udp_drop_pct"`
@@ -149,6 +151,7 @@ func checks(r Result, b Budgets) []Check {
 		{Name: "full table learned", Value: r.LearnSeconds, Limit: b.LearnSeconds, Unit: "s"},
 		{Name: "peak RSS", Value: r.RSSPeakMB, Limit: b.RSSPeakMB, Unit: "MiB"},
 		{Name: "RSS growth after warmup", Value: r.RSSGrowthMB, Limit: b.RSSGrowthMB, Unit: "MiB"},
+		{Name: "RSS still rising, last third", Value: r.RSSSlopeMB, Limit: b.RSSSlopeMB, Unit: "MiB"},
 		{Name: "average CPU during soak", Value: r.CPUAvgCores, Limit: b.CPUAvgCores, Unit: "cores"},
 		{Name: "OS threads", Value: float64(r.Threads), Limit: float64(b.Threads)},
 		{Name: "flow datagrams dropped", Value: r.UDPDropPct, Limit: b.UDPDropPct, Unit: "%"},
@@ -260,4 +263,43 @@ func growth(warm, post []float64) (base, end float64) {
 		endPart = post[len(post)/2:]
 	}
 	return percentile(warm, 50), percentile(endPart, 50)
+}
+
+// minSlopeSamples is the fewest samples in the last third that give a
+// slope. Below it the figure is 0 (reported, not a failure).
+const minSlopeSamples = 8
+
+// riseLastThird is how far RSS is still climbing at the end of the run,
+// in MiB. It is the smaller of two figures, so both must show a climb:
+//
+//   - the Theil-Sen slope (the median of the slopes between every pair of
+//     samples) over the last third, times the width of that third; and
+//   - the median of the last sixth minus the median of the middle third.
+//
+// It is 0 when RSS is flat or falling.
+//
+// growth compares a baseline with the end, so it cannot say whether RSS
+// has levelled off. A leak that arrives late, or a table that keeps
+// refilling, can sit under the growth budget and still be climbing when
+// the run stops. RSS also moves in steps: the collector hands pages back
+// and the heap refills a block at a time. The median of pairwise slopes
+// ignores one step at the very end (a single sample 300 MiB up). The
+// second figure ignores a dip and refill inside the last third, which the
+// slope alone reads as a climb: a heap that is back where the middle of
+// the run already had it is not rising. A steady climb passes both.
+func riseLastThird(rss []float64) float64 {
+	n := len(rss)
+	tail := rss[n*2/3:]
+	if len(tail) < minSlopeSamples {
+		return 0
+	}
+	slopes := make([]float64, 0, len(tail)*(len(tail)-1)/2)
+	for i := range tail {
+		for j := i + 1; j < len(tail); j++ {
+			slopes = append(slopes, (tail[j]-tail[i])/float64(j-i))
+		}
+	}
+	trend := percentile(slopes, 50) * float64(len(tail)-1)
+	net := percentile(rss[n*5/6:], 50) - percentile(rss[n/3:n*2/3], 50)
+	return max(0, min(trend, net))
 }

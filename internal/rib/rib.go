@@ -205,7 +205,8 @@ type View struct {
 
 	mu        sync.RWMutex
 	routes    map[netip.Prefix]Route                // selected learned path per prefix
-	adj       map[netip.Prefix]map[adjKey]Route     // prefix -> neighbor path -> advertised path
+	routeLens [129]uint32                           // selected routes at each prefix length; Lookup skips the rest
+	adj       map[netip.Prefix]pathSet              // prefix -> iBGP paths (inline when there is one)
 	bmp       map[netip.Prefix]map[bmpPathKey]Route // prefix -> router peer path -> BMP path
 	bmpPeers  map[bmpKey]bool                       // peers a BMP session reports up
 	provNH    map[string]netip.Addr                 // provider -> next hop
@@ -236,7 +237,7 @@ func New(opt Options) (*View, error) {
 	}
 	opt.LANs = lans
 	v := &View{opt: opt, log: opt.Logger, routes: map[netip.Prefix]Route{},
-		adj: map[netip.Prefix]map[adjKey]Route{}, bmp: map[netip.Prefix]map[bmpPathKey]Route{},
+		adj: map[netip.Prefix]pathSet{}, bmp: map[netip.Prefix]map[bmpPathKey]Route{},
 		bmpPeers: map[bmpKey]bool{}, provNH: map[string]netip.Addr{},
 		peers: map[netip.Addr]PeerState{}, neighbors: map[netip.Addr]bool{}, addPath: map[netip.Addr]bool{}}
 	for nh, name := range opt.Providers {
@@ -497,7 +498,8 @@ func (v *View) Stop(context.Context) error {
 	v.stopServer()
 	v.mu.Lock()
 	v.routes = map[netip.Prefix]Route{}
-	v.adj = map[netip.Prefix]map[adjKey]Route{}
+	v.routeLens = [129]uint32{}
+	v.adj = map[netip.Prefix]pathSet{}
 	v.bmp = map[netip.Prefix]map[bmpPathKey]Route{}
 	v.bmpPeers = map[bmpKey]bool{}
 	for a, p := range v.peers {
@@ -602,18 +604,16 @@ func (v *View) applyPath(p *api.Path) bool {
 		own = v.ownTagged(comms, large)
 	}
 	if p.IsWithdraw || own {
-		nbrs := v.adj[prefix]
-		if _, exists := nbrs[key]; !exists {
+		s := v.adj[prefix]
+		if !s.has(key) {
 			return false
 		}
-		delete(nbrs, key)
-		if len(nbrs) == 0 {
+		if s.del(key) {
 			delete(v.adj, prefix)
+		} else {
+			v.adj[prefix] = s
 		}
 		return v.republishLocked(prefix)
-	}
-	if v.adj[prefix] == nil {
-		v.adj[prefix] = map[adjKey]Route{}
 	}
 	provider := v.opt.Providers[nh.Unmap()]
 	rt := Route{
@@ -621,7 +621,9 @@ func (v *View) applyPath(p *api.Path) bool {
 		Neighbor: neighbor, Age: time.Now(), Source: SourceIBGP, PathID: key.id, localPref: lp,
 		MED: med,
 	}
-	v.adj[prefix][key] = rt
+	s := v.adj[prefix]
+	s.set(key, rt)
+	v.adj[prefix] = s
 	return v.republishLocked(prefix)
 }
 
@@ -693,14 +695,27 @@ func routerSendsAddPath(caps []*anypb.Any) bool {
 // forgetNeighborLocked drops every path learned from addr. Caller holds mu.
 func (v *View) forgetNeighborLocked(addr netip.Addr) bool {
 	changed := false
-	for p, nbrs := range v.adj {
-		n := len(nbrs)
-		maps.DeleteFunc(nbrs, func(k adjKey, _ Route) bool { return k.neighbor == addr })
-		if len(nbrs) == n {
+	for p, s := range v.adj {
+		var drop []adjKey
+		s.each(func(k adjKey, _ Route) {
+			if k.neighbor == addr {
+				drop = append(drop, k)
+			}
+		})
+		if len(drop) == 0 {
 			continue
 		}
-		if len(nbrs) == 0 {
+		empty := false
+		for _, k := range drop {
+			if s.del(k) {
+				empty = true
+				break
+			}
+		}
+		if empty {
 			delete(v.adj, p)
+		} else {
+			v.adj[p] = s
 		}
 		if v.republishLocked(p) {
 			changed = true
@@ -719,13 +734,32 @@ func (v *View) republishLocked(p netip.Prefix) bool {
 			return false
 		}
 		delete(v.routes, p)
+		v.dropRouteLen(p)
 		return true
 	}
-	if old, exists := v.routes[p]; exists && sameRoute(old, best) {
+	_, exists := v.routes[p]
+	if exists && sameRoute(v.routes[p], best) {
 		return false
+	}
+	if !exists {
+		v.addRouteLen(p)
 	}
 	v.routes[p] = best
 	return true
+}
+
+func (v *View) addRouteLen(p netip.Prefix) {
+	b := p.Bits()
+	if b >= 0 && b < len(v.routeLens) {
+		v.routeLens[b]++
+	}
+}
+
+func (v *View) dropRouteLen(p netip.Prefix) {
+	b := p.Bits()
+	if b >= 0 && b < len(v.routeLens) && v.routeLens[b] > 0 {
+		v.routeLens[b]--
+	}
 }
 
 // selectLocked picks the published route: the iBGP path (the router's own
@@ -733,16 +767,19 @@ func (v *View) republishLocked(p netip.Prefix) bool {
 // Adj-RIB-In path. Paths a provider's bmp usage excludes are skipped.
 // Caller holds mu.
 func (v *View) selectLocked(p netip.Prefix) (Route, bool) {
-	nbrs := v.adj[p]
-	for _, rt := range nbrs {
+	s := v.adj[p]
+	var best Route
+	ok := false
+	s.each(func(_ adjKey, rt Route) {
 		if !v.usableLocked(rt) {
-			nbrs = maps.Clone(nbrs)
-			maps.DeleteFunc(nbrs, func(_ adjKey, rt Route) bool { return !v.usableLocked(rt) })
-			break
+			return
 		}
-	}
-	if rt, ok := selectRoute(nbrs); ok {
-		return rt, true
+		if !ok || adjLess(rt, best) {
+			best, ok = rt, true
+		}
+	})
+	if ok {
+		return best, true
 	}
 	return selectBMP(v.bmp[p])
 }
@@ -855,8 +892,12 @@ func (v *View) annotatePrefixLocked(p netip.Prefix) {
 		}
 		c.add(via, rs)
 	}
-	for k, rt := range v.adj[p] {
-		v.adj[p][k] = applyConfirmed(rt, conf[rt.NextHop.Unmap()])
+	s := v.adj[p]
+	s.each(func(k adjKey, rt Route) {
+		s.update(k, applyConfirmed(rt, conf[rt.NextHop.Unmap()]))
+	})
+	if s.n > 0 {
+		v.adj[p] = s
 	}
 	for k, rt := range v.bmp[p] {
 		if rt.LocRIB {
@@ -1157,11 +1198,12 @@ func (v *View) Paths(p netip.Prefix) []Route {
 
 func (v *View) pathsLocked(p netip.Prefix) []Route {
 	var out []Route
-	for _, rt := range v.adj[p] {
+	s := v.adj[p]
+	s.each(func(_ adjKey, rt Route) {
 		if v.usableLocked(rt) {
 			out = append(out, rt)
 		}
-	}
+	})
 	for _, rt := range v.bmp[p] {
 		out = append(out, rt)
 	}
@@ -1356,12 +1398,12 @@ func (v *View) countNextHops(keep func(netip.Addr) bool) []NextHopCount {
 		}
 	}
 	v.mu.RLock()
-	for _, paths := range v.adj {
-		for _, rt := range paths {
+	for _, s := range v.adj {
+		s.each(func(_ adjKey, rt Route) {
 			if v.usableLocked(rt) {
 				add(rt)
 			}
-		}
+		})
 	}
 	for _, paths := range v.bmp {
 		for _, rt := range paths {
@@ -1588,20 +1630,13 @@ func (v *View) Exact(p netip.Prefix) (Route, bool) {
 }
 
 // Lookup returns the longest-prefix-match route covering addr.
+// Lengths with no selected route are not probed: a full IPv6 table
+// would otherwise hash the address at every length on every flow.
 func (v *View) Lookup(addr netip.Addr) (Route, bool) {
 	addr = addr.Unmap()
 	v.mu.RLock()
 	defer v.mu.RUnlock()
-	for bits := addr.BitLen(); bits >= 0; bits-- {
-		p, err := addr.Prefix(bits)
-		if err != nil {
-			continue
-		}
-		if r, ok := v.routes[p]; ok {
-			return r, true
-		}
-	}
-	return Route{}, false
+	return v.lookupLocked(addr, addr.BitLen())
 }
 
 // Covering returns the longest learned prefix that contains p (p itself
@@ -1610,12 +1645,24 @@ func (v *View) Covering(p netip.Prefix) (Route, bool) {
 	p = p.Masked()
 	v.mu.RLock()
 	defer v.mu.RUnlock()
-	for bits := p.Bits(); bits >= 0; bits-- {
-		q, err := p.Addr().Prefix(bits)
+	return v.lookupLocked(p.Addr(), p.Bits())
+}
+
+// lookupLocked is the longest selected prefix of addr at length <= maxBits.
+// Caller holds mu.
+func (v *View) lookupLocked(addr netip.Addr, maxBits int) (Route, bool) {
+	if maxBits > addr.BitLen() {
+		maxBits = addr.BitLen()
+	}
+	for bits := maxBits; bits >= 0; bits-- {
+		if bits >= len(v.routeLens) || v.routeLens[bits] == 0 {
+			continue
+		}
+		p, err := addr.Prefix(bits)
 		if err != nil {
 			continue
 		}
-		if r, ok := v.routes[q]; ok {
+		if r, ok := v.routes[p]; ok && r.Prefix.Contains(addr) {
 			return r, true
 		}
 	}

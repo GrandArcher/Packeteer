@@ -20,13 +20,13 @@ func TestSuggestNextHopsReadsOnly(t *testing.T) {
 	pfx := netip.MustParsePrefix("198.51.100.0/24")
 	other := netip.MustParsePrefix("203.0.113.0/24")
 	nbr := netip.MustParseAddr("192.0.2.254")
-	v.adj[pfx] = map[adjKey]Route{
+	v.putAdj(pfx, map[adjKey]Route{
 		{neighbor: nbr}:        {Prefix: pfx, NextHop: configured, ASPath: []uint32{64496}},
 		{neighbor: nbr, id: 1}: {Prefix: pfx, NextHop: discovered, ASPath: []uint32{64500}},
 		{neighbor: nbr, id: 2}: {Prefix: other, NextHop: discovered, ASPath: []uint32{64496}},
 		{neighbor: nbr, id: 3}: {Prefix: other, NextHop: discovered, ASPath: []uint32{64496}},
 		{neighbor: nbr, id: 4}: {Prefix: pfx, NextHop: onLAN, ASPath: []uint32{64501}},
-	}
+	})
 	bmpPfx := netip.MustParsePrefix("192.0.2.0/24")
 	bmpHop := netip.MustParseAddr("198.51.100.9")
 	v.bmp[bmpPfx] = map[bmpPathKey]Route{
@@ -65,9 +65,9 @@ func TestSuggestNextHopsCaps(t *testing.T) {
 	for i := 1; i <= maxSuggestNextHops+1; i++ {
 		hop := netip.AddrFrom4([4]byte{192, 0, 2, byte(i)})
 		pfx := netip.PrefixFrom(netip.AddrFrom4([4]byte{198, 51, 100, byte(i)}), 32)
-		v.adj[pfx] = map[adjKey]Route{
+		v.putAdj(pfx, map[adjKey]Route{
 			{neighbor: nbr, id: uint32(i)}: {Prefix: pfx, NextHop: hop, ASPath: []uint32{64496}},
-		}
+		})
 	}
 	got := v.SuggestNextHops(nil, nil)
 	if len(got) != maxSuggestNextHops {

@@ -71,6 +71,7 @@ const (
 var version = "dev"
 
 func main() {
+	tuneGC(os.Getenv)
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 	os.Exit(run(ctx, os.Args[1:], os.Getenv, os.Stdout, os.Stderr))
