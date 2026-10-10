@@ -8,13 +8,42 @@
 <title>Packeteer settings</title>
 <link rel="stylesheet" href="/app.css">
 </head>
-<body>
-<header class="top">
-  <div>
-    <h1>Packeteer settings</h1>
-    <p class="tag">Settings form and YAML (admin), setup wizard, report subscriptions. Nothing here announces.</p>
+<body data-page="settings">
+<div id="banner" class="banner" role="status" hidden></div>
+<div id="conn" class="conn" role="alert" hidden></div>
+<div class="app">
+<nav class="sidenav" aria-label="Sections">
+  <a class="brand" href="/">Packeteer</a>
+  <a href="/" data-page="overview">Overview</a>
+  <a href="/dashboards.html" data-page="dashboards">Dashboards</a>
+  <a href="/improvements.html" data-page="improvements">Improvements</a>
+  <a href="/prefixes.html" data-page="prefixes">Prefixes &amp; ASNs</a>
+  <a href="/graphs.html" data-page="graphs">Graphs</a>
+  <a href="/reports.html" data-page="reports">Reports</a>
+  <a href="/providers.html" data-page="providers">Providers &amp; Exchanges</a>
+  <a href="/commit.html" data-page="commit">Commit &amp; Cost</a>
+  <a href="/policies.html" data-page="policies">Policies</a>
+  <a href="/protection.html" data-page="protection">Protection</a>
+  <a href="/troubleshooting.html" data-page="troubleshooting">Troubleshooting</a>
+  <a href="/events.html" data-page="events">Events</a>
+  <a href="/settings.html" data-page="settings" data-min-role="admin">Settings</a>
+  <a href="/admin.html" data-page="admin" data-min-role="admin">Admin</a>
+</nav>
+<div class="app-main">
+<header class="topbar">
+  <div id="status" class="status">Loading</div>
+  <div class="top-slot top-search" id="search-slot">
+    <label>Search <input id="top-search" type="search" placeholder="Search" readonly></label>
   </div>
-  <nav class="nav"><a href="/">Dashboard</a> <a href="/dashboards.html">Custom dashboards</a></nav>
+  <div class="top-slot" id="events-slot"><a class="top-link" href="/events.html">Events</a></div>
+  <div class="account" id="account">
+    <button type="button" id="account-btn" aria-haspopup="menu" aria-expanded="false" aria-controls="account-menu">Account</button>
+    <div id="account-menu" class="account-menu" role="menu" hidden>
+      <p id="account-who" class="tag">…</p>
+      <button type="button" id="account-out" hidden>Sign out</button>
+    </div>
+  </div>
+  <button type="button" id="refresh">Refresh</button>
 </header>
 <div id="ed-off" class="conn" role="alert" hidden></div>
 <main>
@@ -137,7 +166,10 @@
     <div id="subs-status" class="tag"></div>
   </section>
 </main>
+</div>
+</div>
 <script src="/ui.js"></script>
+<script src="/shell.js"></script>
 <script src="/settings.js"></script>
 </body>
 </html>

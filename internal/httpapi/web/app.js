@@ -58,6 +58,7 @@ function getJSON(path) {
 
 function renderProviders(data) {
   var root = document.getElementById("providers");
+  if (!root) return;
   clear(root);
   var rows = (data && data.providers) || [];
   if (!rows.length) {
@@ -132,12 +133,13 @@ function renderProviders(data) {
 
 function renderPrefixes(data) {
   var root = document.getElementById("prefixes");
+  if (!root) return;
   clear(root);
   var rows = (data && data.prefixes) || [];
   if (!rows.length) {
     var o = lastOverview;
     var msg = "No probed prefixes yet.";
-    if (o && !(o.sources || []).length) msg = "Nothing to probe: the config has no sources. See the setup checklist above.";
+    if (o && !(o.sources || []).length) msg = "Nothing to probe: the config has no sources. See the setup checklist on Overview.";
     else if (o) msg = "No probed prefixes yet. The first probe round fills this in.";
     root.appendChild(el("p", "empty", msg));
     return;
@@ -311,13 +313,16 @@ function renderASNMap(data) {
 
 function renderImprovements(data) {
   var root = document.getElementById("improvements");
+  if (!root) return;
   clear(root);
   var rows = (data && data.improvements) || [];
   var mode = data && data.mode;
   var inject = mode === "inject";
-  document.getElementById("improvements-title").textContent = inject ? "Active improvements" : "Recommended improvements";
+  var title = document.getElementById("improvements-title");
+  if (title) title.textContent = inject ? "Active improvements" : "Recommended improvements";
   var cap = lastOverview && lastOverview.counts && lastOverview.counts.max_improvements;
-  document.getElementById("improvements-tag").textContent = (inject ?
+  var tag = document.getElementById("improvements-tag");
+  if (tag) tag.textContent = (inject ?
     "Announced to the edge with the Packeteer community and NO_EXPORT. " :
     "Mode " + (mode || "observe") + ": these are what inject would announce. Nothing is announced. ") +
     (cap ? "At most " + cap + " at a time (max_improvements)." : "");
@@ -358,6 +363,7 @@ function modeBadge(mode) {
 
 function renderStatus(err) {
   var node = document.getElementById("status");
+  if (!node) return;
   clear(node);
   var mode = lastProviders && lastProviders.mode;
   node.appendChild(modeBadge(mode));
@@ -376,13 +382,14 @@ function probeCount(h) {
 }
 
 var MODE_TEXT = {
-  observe: "Observe mode: Packeteer measures and recommends. Nothing is announced.",
-  suggest: "Suggest mode: Packeteer measures and publishes recommendations. Nothing is announced.",
+  observe: "Observe mode: Packeteer measures and recommends. It announces nothing.",
+  suggest: "Suggest mode: Packeteer measures and publishes recommendations. It announces nothing.",
   inject: "Inject mode: improvements for allowlisted prefixes are announced to the edge routers."
 };
 
 function renderBanner(mode) {
   var node = document.getElementById("banner");
+  if (!node) return;
   if (!mode || !MODE_TEXT[mode]) { node.hidden = true; return; }
   node.textContent = MODE_TEXT[mode];
   node.className = "banner " + (mode === "inject" ? "banner-inject" : "banner-observe");
@@ -399,6 +406,7 @@ function tile(label, value, note, cls) {
 
 function renderTiles(o) {
   var root = document.getElementById("tiles");
+  if (!root) return;
   clear(root);
   var c = o.counts || {};
   var inject = o.mode === "inject";
@@ -417,6 +425,7 @@ function renderTiles(o) {
 
 function renderSetup(o) {
   var root = document.getElementById("setup");
+  if (!root) return;
   clear(root);
   var hints = o.setup || [];
   if (!hints.length) return;
@@ -450,11 +459,19 @@ function renderFeatures(o) {
   var on = [], off = [];
   (o.features || []).forEach(function (f) {
     (f.on ? on : off).push(FEATURE_NAMES[f.name] || f.name);
-    if (f.name === "federation") document.getElementById("federation-section").hidden = !f.on;
-    if (f.name === "mitigation") document.getElementById("mitigation-section").hidden = !f.on;
+    if (f.name === "federation") {
+      var fed = document.getElementById("federation-section");
+      if (fed) fed.hidden = !f.on;
+    }
+    if (f.name === "mitigation") {
+      var mit = document.getElementById("mitigation-section");
+      if (mit) mit.hidden = !f.on;
+      var empty = document.getElementById("protection-empty");
+      if (empty) empty.hidden = !!f.on;
+    }
   });
   var node = document.getElementById("features");
-  node.textContent = (on.length ? "On: " + on.join(", ") + ". " : "") + (off.length ? "Off: " + off.join(", ") + "." : "");
+  if (node) node.textContent = (on.length ? "On: " + on.join(", ") + ". " : "") + (off.length ? "Off: " + off.join(", ") + "." : "");
 }
 
 function renderOverview(o) {
@@ -466,6 +483,7 @@ function renderOverview(o) {
 
 function renderConn(err) {
   var node = document.getElementById("conn");
+  if (!node) return;
   document.body.classList.toggle("stale", !!err);
   if (!err) { node.hidden = true; clear(node); return; }
   clear(node);
@@ -508,6 +526,7 @@ function mitigationWhat(r) {
 
 function renderMitigation(data) {
   var root = document.getElementById("mitigation");
+  if (!root) return;
   clear(root);
   if (!data || !data.enabled) {
     root.appendChild(el("p", "empty", "Not configured (mitigation in the config)."));
@@ -561,6 +580,7 @@ function renderMitigation(data) {
 
 function renderFederation(data) {
   var root = document.getElementById("federation");
+  if (!root) return;
   clear(root);
   if (!data || !data.enabled) {
     root.appendChild(el("p", "empty", "Not configured (federation in the config). This instance runs standalone."));
@@ -660,8 +680,10 @@ function refresh() {
 }
 
 function reportURL(format) {
-  var name = document.getElementById("report-name").value || "summary";
-  var days = document.getElementById("report-days").value || "7";
+  var nameEl = document.getElementById("report-name");
+  var daysEl = document.getElementById("report-days");
+  var name = nameEl && nameEl.value || "summary";
+  var days = daysEl && daysEl.value || "7";
   var url = "/api/reports/" + encodeURIComponent(name) + "?days=" + encodeURIComponent(days);
   if (format) url += "&format=" + format;
   return url;
@@ -675,6 +697,7 @@ function fmtCell(v) {
 
 function renderReport(data) {
   var root = document.getElementById("report");
+  if (!root) return;
   clear(root);
   var rows = (data && data.rows) || [];
   if (!rows.length) {
@@ -706,8 +729,10 @@ function renderReport(data) {
 }
 
 function loadReport() {
-  document.getElementById("report-csv").setAttribute("href", reportURL("csv"));
+  var csv = document.getElementById("report-csv");
+  if (csv) csv.setAttribute("href", reportURL("csv"));
   var root = document.getElementById("report");
+  if (!root) return;
   getJSON(reportURL("")).then(renderReport, function (err) {
     clear(root);
     root.appendChild(el("p", "empty", err.message));
@@ -715,8 +740,9 @@ function loadReport() {
 }
 
 function initReports() {
+  var sel = document.getElementById("report-name");
+  if (!sel) return;
   getJSON("/api/reports").then(function (data) {
-    var sel = document.getElementById("report-name");
     clear(sel);
     ((data && data.reports) || []).forEach(function (r) {
       var o = el("option", "", r.name);
@@ -726,15 +752,19 @@ function initReports() {
     });
     if (!data || !data.enabled) {
       var root = document.getElementById("report");
-      clear(root);
-      root.appendChild(el("p", "empty", "History is off. Add storage: {type: sqlite} to the config and mount /var/lib/packeteer."));
+      if (root) {
+        clear(root);
+        root.appendChild(el("p", "empty", "History is off. Add storage: {type: sqlite} to the config and mount /var/lib/packeteer."));
+      }
       return;
     }
     loadReport();
   }, function () {});
-  document.getElementById("report-load").addEventListener("click", loadReport);
-  document.getElementById("report-name").addEventListener("change", loadReport);
-  document.getElementById("report-days").addEventListener("change", loadReport);
+  var loadBtn = document.getElementById("report-load");
+  if (loadBtn) loadBtn.addEventListener("click", loadReport);
+  sel.addEventListener("change", loadReport);
+  var days = document.getElementById("report-days");
+  if (days) days.addEventListener("change", loadReport);
 }
 
 function postJSON(path, body) {
@@ -786,25 +816,34 @@ function runTool() {
 }
 
 function initTools() {
+  var run = document.getElementById("tool-run");
+  if (!run) return;
   getJSON("/api/troubleshoot").then(function (data) {
     var sel = document.getElementById("tool-provider");
+    if (!sel) return;
     ((data && data.providers) || []).forEach(function (name) {
       var o = el("option", "", name);
       o.value = name;
       sel.appendChild(o);
     });
     if (data && !data.enabled) {
-      document.getElementById("tool-status").textContent = "Probe, traceroute, and whois are off (troubleshoot.enabled: false).";
+      var status = document.getElementById("tool-status");
+      if (status) status.textContent = "Probe, traceroute, and whois are off (troubleshoot.enabled: false).";
     }
   }, function () {});
-  document.getElementById("tool-run").addEventListener("click", runTool);
+  run.addEventListener("click", runTool);
+}
+
+function bind(id, ev, fn) {
+  var n = document.getElementById(id);
+  if (n) n.addEventListener(ev, fn);
 }
 
 initReports();
 initTools();
-document.getElementById("refresh").addEventListener("click", refresh);
+bind("refresh", "click", refresh);
 function rerenderPrefixes() { if (lastPrefixes) renderPrefixes(lastPrefixes); }
-document.getElementById("prefix-filter").addEventListener("input", rerenderPrefixes);
-document.getElementById("prefix-changes").addEventListener("change", rerenderPrefixes);
+bind("prefix-filter", "input", rerenderPrefixes);
+bind("prefix-changes", "change", rerenderPrefixes);
 refresh();
 setInterval(refresh, REFRESH_MS);

@@ -184,7 +184,7 @@ Automatic traffic anomaly detection (#33, [anomaly.md](anomaly.md)): the `flow` 
 
 | Capability | IRP doc ref | Status | Milestone | Plugin kind | Issue | Field-proven |
 |---|---|---|---|---|---|---|
-| Web UI dashboard (providers, per-prefix metrics, current vs recommended, improvements; first-run overview, setup checklist, empty and error states) | 3.3 Dashboards | done (#171: the header mode chip sets its own colors and meets WCAG AA in observe, suggest, and inject) | v0.1, v0.5 | core (`internal/httpapi`, `/api/overview`) | #9, #49, #171 | no |
+| Web UI dashboard (providers, per-prefix metrics, current vs recommended, improvements; first-run overview, setup checklist, empty and error states) | 3.3 Dashboards | done (#170: left navigation, top bar, and one URL per area; the mode banner is first on every page and observe says it announces nothing. #171: the header mode chip sets its own colors and meets WCAG AA in observe, suggest, and inject) | v0.1, v0.5 | core (`internal/httpapi`, `/api/overview`, [ui.md](ui.md)) | #9, #49, #170, #171 | no |
 | Custom dashboards / widgets | 3.3.1-3.3.3 | done (#171: the improvements widget is titled Recommended improvements outside inject and Active improvements in inject; widget times use the dashboard local format) | v0.4 | core (`/api/dashboards`, `/dashboards.html`) + storage (`sqlite`, `plugin.DashboardStore`) ([ui.md](ui.md)) | #34, #171 | no |
 | REST API | 1.2.15, 4.3 | done | v0.1 | core | #9 | no |
 | Prometheus metrics | - | done | v0.1 | core (`internal/httpapi`) | #9 | no |

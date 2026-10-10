@@ -213,3 +213,68 @@ fieldset.form { border: 0; margin: 0; padding: 0; }
 .steps { display: flex; flex-wrap: wrap; gap: 8px; list-style: none; margin: 0 0 12px; padding: 0; }
 .steps li { padding: 4px 10px; border-radius: 999px; background: #e7eef5; color: var(--muted); }
 .steps li.on { background: var(--head); color: #fff; }
+
+/* Left navigation and top bar (#170). The mode banner stays above both. */
+.app { display: flex; align-items: stretch; min-height: calc(100vh - 44px); }
+.sidenav {
+  flex: 0 0 220px;
+  width: 220px;
+  background: var(--head);
+  color: #fff;
+  padding: 8px 0 24px;
+}
+.sidenav a {
+  display: block;
+  color: #fff;
+  text-decoration: none;
+  padding: 7px 16px;
+}
+.sidenav a.brand { font-weight: 700; font-size: 1.15rem; padding-top: 12px; padding-bottom: 12px; }
+.sidenav a[aria-current="page"] { background: rgba(255, 255, 255, 0.14); font-weight: 600; }
+.app-main { flex: 1; min-width: 0; }
+.topbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 14px;
+  padding: 10px 16px;
+  background: var(--head);
+  color: #fff;
+}
+.topbar button { margin-left: 0; }
+.topbar .status .muted { color: #c5d0db; }
+.top-search { margin-left: auto; }
+.top-search label { display: flex; align-items: center; gap: 6px; color: #fff; }
+.top-search input {
+  font: inherit;
+  width: 11rem;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 6px;
+  background: #fff;
+  color: var(--ink);
+}
+.top-link { color: #fff; }
+.account { position: relative; }
+.account-menu {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 6px);
+  z-index: 5;
+  min-width: 12rem;
+  background: var(--card);
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px 12px;
+}
+.account-menu .tag { margin: 0 0 8px; }
+.account-menu button { margin: 0; }
+@media (max-width: 800px) {
+  .app { flex-direction: column; }
+  .sidenav { width: 100%; flex-basis: auto; display: flex; flex-wrap: wrap; padding-bottom: 8px; }
+  .sidenav a.brand { flex-basis: 100%; }
+  .sidenav a { padding: 8px 10px; }
+  .top-search { margin-left: 0; }
+  .top-search input { width: 8rem; }
+}

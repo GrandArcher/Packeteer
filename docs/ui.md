@@ -13,6 +13,33 @@ The remaining IRP GUI conveniences (#34). All of them work in the stock image wi
 
 With `auth` on, roles are checked per route like every other endpoint ([auth.md](auth.md)); with basic auth, the one account may do everything; with neither, the editor, the wizard, dashboards, and send-now are refused.
 
+## Shell
+
+Every page has the same chrome (#170). The mode banner is the first thing on the page, above a left navigation and a top bar. A reload of a page URL opens that page. The navigation links are:
+
+| Page | URL | What is on it |
+|---|---|---|
+| Overview | `/` | Tiles, setup checklist, optional features, and POPs when federation is on |
+| Dashboards | `/dashboards.html` | Custom dashboards (the existing page) |
+| Improvements | `/improvements.html` | Recommended or active improvements |
+| Prefixes & ASNs | `/prefixes.html` | Prefix cards and the ASN map |
+| Graphs | `/graphs.html` | Empty. Time-series graphs are #129 |
+| Reports | `/reports.html` | History reports and CSV |
+| Providers & Exchanges | `/providers.html` | Provider health. The exchange view is empty (#148) |
+| Commit & Cost | `/commit.html` | Empty (#174) |
+| Policies | `/policies.html` | Empty (#130) |
+| Protection | `/protection.html` | The threat-mitigation monitor when that feature is on. Otherwise an empty state (#131) |
+| Troubleshooting | `/troubleshooting.html` | Looking glass, probe, traceroute, whois |
+| Events | `/events.html` | Empty (#173) |
+| Settings | `/settings.html` | Wizard, settings form, YAML, report subscriptions. Admin |
+| Admin | `/admin.html` | Empty (#175). Admin |
+
+POPs stay on Overview and the threat-mitigation monitor stays on Protection. Both stay hidden when the feature is off, as they did on the single dashboard.
+
+The top bar holds the mode chip, a search slot, an events slot, and the account menu. The search slot does not query (#172). The events slot opens the Events page. The account menu shows who is signed in (`GET /api/me`). With single sign-on it can sign out (`POST /auth/logout`). A local account has no sign-out here (#176).
+
+Settings and Admin are marked admin-only. With role-based auth, a viewer or an operator does not see those two links. Opening Admin directly says "Your account may not read this page." Opening Settings directly keeps the editor's existing not-allowed message; report subscriptions on that page are unchanged. With auth off, or with the one basic-auth account, both links are shown. Nothing in the shell announces, and it does not write config.
+
 ## Dashboard and first run
 
 The dashboard (`/`) is built for a first run from the stock image with nothing but a mounted config file (#49):
@@ -22,18 +49,20 @@ docker run --network host --cap-add NET_RAW --cap-add NET_ADMIN \
   -v "$PWD/config.yaml:/etc/packeteer/config.yaml" ghcr.io/grandarcher/packeteer
 ```
 
-- **Mode banner.** `observe` and `suggest` say that nothing is announced; `inject` says improvements for allowlisted prefixes are announced. A file without `mode` observes. The banner stays on this page in every mode.
+- **Mode banner.** `observe` reads "Observe mode: Packeteer measures and recommends. It announces nothing." `suggest` also says it announces nothing. `inject` says improvements for allowlisted prefixes are announced. A file without `mode` observes. The banner is the first thing on every page, in every mode.
 - **Mode chip (#171).** The header chip sets its own text and background. Observe is `#0b3a5b` on `#d4e4f4`, suggest is `#6a3b06` on `#f6e4c4`, inject is white on `#9d1c2a`, and any other mode is `#12263a` on `#e7eef5`. Each pair meets WCAG AA (4.5:1) for this text size. The chip no longer inherits the header's white text.
 - **Overview tiles.** Mode, status (ready, not ready, starting), providers up, prefixes measured (and which sources list them), recommended improvements (outside inject) or active improvements (inject) against `max_improvements`, and BGP sessions with the number of probed prefixes in the learned RIB.
 - **Setup checklist.** Shown until there is nothing left to do, most urgent first. `todo`: no `sources` (nothing to probe). `warn`: every probe through a provider fails (with the last error), every provider is down, `bgp.neighbors` is set but no session is up, or no probed prefix is in the learned RIB. `info`: still starting, waiting for the first round, no `bgp.neighbors` (the current exit is unknown), report history off. Each line names the doc to read. The checklist only reads state; fix the mounted file and restart.
-- **Providers** show `no data yet` until something is measured through them, `no answer` when every probe through them fails, and per-provider probe counts.
-- **Prefixes** have a filter (prefix or provider) and a switch for prefixes whose recommended exit differs from the learned one. A prefix card lists each learned path, including inactive add-path and BMP paths, with its MED (display only) and `via` (route server, bilateral, or unknown; #146).
-- **Optional sections** (POPs, threat mitigation) are hidden when not configured; the overview lists which optional features are on and off.
+- **Providers** (`/providers.html`) show `no data yet` until something is measured through them, `no answer` when every probe through them fails, and per-provider probe counts. The exchange view on that page is an empty state (#148).
+- **Prefixes** (`/prefixes.html`) have a filter (prefix or provider) and a switch for prefixes whose recommended exit differs from the learned one. A prefix card lists each learned path, including inactive add-path and BMP paths, with its MED (display only) and `via` (route server, bilateral, or unknown; #146). The ASN map is on the same page.
+- **Improvements** (`/improvements.html`) are labeled recommended outside inject and active in inject.
+- **Reports** (`/reports.html`) and **troubleshooting** (`/troubleshooting.html`) are the same sections as before, on their own URLs.
+- **Optional sections** (POPs on Overview, threat mitigation on Protection) are hidden when not configured; the overview lists which optional features are on and off. Protection shows the #131 empty state while the monitor is hidden.
 - **Errors.** Every section shows `Loading…` until its first answer and a plain empty state after it. When the controller cannot be reached or answers with an error, a banner says so (sign-in required, not allowed, or unreachable), the last data stays on screen marked stale, and the page keeps retrying every 5 seconds.
 
 `GET /api/overview` (viewer) is the same summary as JSON: `mode`, `ready`, `started`, `sources`, `providers` (`name`, `up`, `ok`, `failed`, `last_error`), `counts`, `bgp`, `features` (`name`, `on`), and `setup` (`id`, `level`, `title`, `detail`, `doc`). It is read-only and announces nothing.
 
-CI runs a UI smoke test in the docker job (`lab/ui-smoke.sh`): headless Chrome loads `/`, `/settings.html`, and `/dashboards.html` from the stock image, first with `config.example.yaml` mounted unchanged (the banner says observe, the header chip is `mode-observe`, the checklist asks for sources, providers show `no data yet`, and the improvements heading says Recommended), then with a minimal file that has no `mode` key and one static target (observe, the prefix measured with an RTT, no improvement). A third run turns the config editor on with basic auth and sqlite, saves a dashboard of providers and improvements, and loads the pages through `lab/uiproxy` (headless Chrome does not send URL credentials on later fetches). That run checks the filled provider fields keep their labels, the improvements widget says Recommended, and the provider `since` time is the local format.
+CI runs a UI smoke test in the docker job (`lab/ui-smoke.sh`): headless Chrome loads every shell page from the stock image. The first run mounts `config.example.yaml` unchanged. The banner says observe and that it announces nothing, the header chip is `mode-observe`, the checklist on `/` asks for sources, `/providers.html` shows `no data yet`, `/improvements.html` says Recommended, and the empty pages name their issues. The second run uses a minimal file with no `mode` key and one static target (observe, the prefix measured with an RTT on `/prefixes.html`, no improvement). A third run turns the config editor on with basic auth and sqlite, saves a dashboard of providers and improvements, and loads `/`, `/settings.html`, and `/dashboards.html` through `lab/uiproxy` (headless Chrome does not send URL credentials on later fetches). That run checks the filled provider fields keep their labels, the improvements widget says Recommended, and the provider `since` time is the local format.
 
 ## Config editor
 
@@ -168,4 +197,4 @@ Lab proof (`lab/e2e-weights.sh`, CI job `e2e`): an FRR edge advertises 198.51.10
 
 ## Rollback
 
-Remove `improvement_weights`, `http.config_editor`, and `report_subscriptions` and restart. The dashboard polish (#49) needs no rollback: it reads the same state, and `/api/overview` is read-only. The file config works exactly as before; the editor only ever wrote a plain YAML file. Stored dashboards stay in the database and are ignored by an older build. The display fixes (#171) are presentation only: revert that change to restore the previous chip, titles, timestamps, and unlabeled provider fields. No config key changes.
+Remove `improvement_weights`, `http.config_editor`, and `report_subscriptions` and restart. The dashboard polish (#49) needs no rollback: it reads the same state, and `/api/overview` is read-only. The file config works exactly as before; the editor only ever wrote a plain YAML file. Stored dashboards stay in the database and are ignored by an older build. The display fixes (#171) are presentation only: revert that change to restore the previous chip, titles, timestamps, and unlabeled provider fields. The shell (#170) is presentation only as well: revert it to put every section back on `/`. No config key changes.

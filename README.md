@@ -245,7 +245,7 @@ The server is read-only (GET and HEAD), except on-demand maintenance windows (`P
 
 | Path | Body |
 |---|---|
-| `/` | A mode banner and overview tiles, a setup checklist until the instance is fully set up, provider health, per-prefix loss / RTT / jitter (with a filter), current vs recommended exit, improvements, and reports (loaded on demand, with CSV links). When the controller cannot be reached, the page says so and keeps the last data, marked stale. |
+| `/` | Overview (#170): the mode banner (first on every page; observe says it announces nothing), tiles, and the setup checklist. Each area has its own URL under the left navigation: improvements, prefixes and ASNs, reports, providers, troubleshooting, settings, and the pages that are still empty states. See [docs/ui.md](docs/ui.md). When the controller cannot be reached, the page says so and keeps the last data, marked stale. |
 | `/api/overview` | The dashboard's summary: mode, readiness, counts, per-provider probe results, optional features on or off, and the setup checklist (`setup`: `id`, `level` `todo`/`warn`/`info`, `title`, `detail`, `doc`). |
 | `/healthz` | Liveness. JSON `status` is `ok`. |
 | `/readyz` | Readiness. 503 until startup finishes, and until an iBGP session is up when neighbors are configured. |
