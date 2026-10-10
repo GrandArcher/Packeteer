@@ -9,6 +9,7 @@ import (
 	"mime"
 	"net/http"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -297,6 +298,7 @@ var WidgetTypes = []struct {
 	{"ha", "High availability", "/api/ha"},
 	{"subscriptions", "Report subscriptions", "/api/subscriptions"},
 	{"report", "Report", "/api/reports/{report}"},
+	{"timeseries", "Before/after graphs", "/api/reports/timeseries"},
 }
 
 func knownWidget(t string) bool {
@@ -314,12 +316,14 @@ type DashboardSpec struct {
 	Widgets []Widget `json:"widgets"`
 }
 
-// Widget is one panel. Report and Days are for type report.
+// Widget is one panel. Report and Days are for type report. Days and Bucket
+// (one of history.Buckets, default all) are for type timeseries.
 type Widget struct {
 	Type   string `json:"type"`
 	Title  string `json:"title,omitempty"`
 	Report string `json:"report,omitempty"`
 	Days   int    `json:"days,omitempty"`
+	Bucket string `json:"bucket,omitempty"`
 	// Wide spans the full row.
 	Wide bool `json:"wide,omitempty"`
 }
@@ -345,15 +349,31 @@ func (d DashboardSpec) Validate() error {
 		if !validText(w.Title, 100) {
 			return fmt.Errorf("widgets[%d]: title must be one line of at most 100 bytes", i)
 		}
-		if w.Type == "report" {
+		switch w.Type {
+		case "report":
 			if !history.Known(w.Report) {
 				return fmt.Errorf("widgets[%d]: report %q is unknown", i, w.Report)
 			}
 			if w.Days < 0 || w.Days > MaxReportDays {
 				return fmt.Errorf("widgets[%d]: days must be 0-%d", i, MaxReportDays)
 			}
-		} else if w.Report != "" || w.Days != 0 {
-			return fmt.Errorf("widgets[%d]: report and days are only for type report", i)
+			if w.Bucket != "" {
+				return fmt.Errorf("widgets[%d]: bucket is only for type timeseries", i)
+			}
+		case "timeseries":
+			if w.Report != "" {
+				return fmt.Errorf("widgets[%d]: report is only for type report", i)
+			}
+			if w.Days < 0 || w.Days > MaxReportDays {
+				return fmt.Errorf("widgets[%d]: days must be 0-%d", i, MaxReportDays)
+			}
+			if w.Bucket != "" && !slices.Contains(history.Buckets, w.Bucket) {
+				return fmt.Errorf("widgets[%d]: bucket %q is unknown (want %s)", i, w.Bucket, strings.Join(history.Buckets, ", "))
+			}
+		default:
+			if w.Report != "" || w.Days != 0 || w.Bucket != "" {
+				return fmt.Errorf("widgets[%d]: report, days, and bucket are only for type report or timeseries", i)
+			}
 		}
 	}
 	return nil

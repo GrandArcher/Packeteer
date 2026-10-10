@@ -19,6 +19,7 @@ import (
 	"github.com/GrandArcher/Packeteer/internal/auth/authtest"
 	"github.com/GrandArcher/Packeteer/internal/config"
 	"github.com/GrandArcher/Packeteer/internal/configedit"
+	"github.com/GrandArcher/Packeteer/internal/history"
 	"github.com/GrandArcher/Packeteer/internal/policy"
 	"github.com/GrandArcher/Packeteer/internal/probe"
 	"github.com/GrandArcher/Packeteer/internal/subscribe"
@@ -387,6 +388,11 @@ func TestDashboardsAPI(t *testing.T) {
 		"unknown widget":       DashboardSpec{Widgets: []Widget{{Type: "shell"}}},
 		"unknown report":       DashboardSpec{Widgets: []Widget{{Type: "report", Report: "nope"}}},
 		"report on non-report": DashboardSpec{Widgets: []Widget{{Type: "providers", Report: "summary"}}},
+		"bucket on report":     DashboardSpec{Widgets: []Widget{{Type: "report", Report: "summary", Bucket: "all"}}},
+		"bucket on providers":  DashboardSpec{Widgets: []Widget{{Type: "providers", Bucket: "all"}}},
+		"unknown bucket":       DashboardSpec{Widgets: []Widget{{Type: "timeseries", Bucket: "better_99"}}},
+		"report on timeseries": DashboardSpec{Widgets: []Widget{{Type: "timeseries", Report: "summary"}}},
+		"days too long":        DashboardSpec{Widgets: []Widget{{Type: "timeseries", Days: MaxReportDays + 1}}},
 		"newline title":        DashboardSpec{Title: "a\nb"},
 		"too many":             DashboardSpec{Widgets: make([]Widget, MaxDashboardWidgets+1)},
 		"unknown field":        `{"widgets":[],"script":"x"}`,
@@ -444,9 +450,12 @@ func TestUIPages(t *testing.T) {
 	e := newUI(t)
 	for page, wants := range map[string][]string{
 		"/settings.html":   {`src="/ui.js"`, `src="/settings.js"`, `id="ed-yaml"`, `id="wz-run"`, `id="wz-edge"`, `id="wz-add-provider"`, `id="wz-host"`, `id="subs"`, `id="form-apply"`, `id="form-providers"`, `id="sug-refresh"`, `id="fm-rtt-pct"`, `id="fm-rounds"`},
-		"/dashboards.html": {`src="/ui.js"`, `src="/dashboards.js"`, `id="db-grid"`},
+		"/dashboards.html": {`src="/ui.js"`, `src="/charts.js"`, `src="/dashboards.js"`, `id="db-grid"`, `id="db-bucket"`},
 		"/settings.js":     {"/api/config/validate", "/api/config/wizard", "/api/config/form", "/api/config/suggestions", "confirm_inject", "/api/subscriptions/", "function acceptSuggestion", "inject is not a step", "function renderWzProviders", "min_rtt_delta_pct", "confirm_rounds"},
-		"/dashboards.js":   {"/api/dashboards", "widget_types"},
+		"/dashboards.js":   {"/api/dashboards", "widget_types", "renderTimeSeries"},
+		"/graphs.html":     {`src="/charts.js"`, `src="/graphs.js"`, `id="graph"`},
+		"/graphs.js":       {"/api/reports/timeseries", "renderTimeSeries"},
+		"/charts.js":       {"createElementNS", "function renderTimeSeries", "No before/after data in this range"},
 		"/":                {`href="/settings.html"`, `href="/dashboards.html"`},
 	} {
 		rec, _ := e.do(t, "GET", page, plugin.RoleViewer, nil)
@@ -635,5 +644,39 @@ func TestConfigSaveOnlineApplyContextOutlivesRequest(t *testing.T) {
 	}
 	if got.Err() != nil || got.Done() != nil {
 		t.Fatal("online apply context is cancelled with the request")
+	}
+}
+
+// The before/after graph widget (#129) is saved with its days and bucket,
+// goes through the same dashboard validation and audit as every widget, and
+// reads only the report endpoint.
+func TestDashboardTimeSeriesWidget(t *testing.T) {
+	e := newUI(t)
+	spec := DashboardSpec{Widgets: []Widget{
+		{Type: "timeseries"},
+		{Type: "timeseries", Days: 30, Bucket: "better_50", Wide: true},
+	}}
+	if rec, _ := e.do(t, "PUT", "/api/dashboards/graphs", plugin.RoleViewer, spec); rec.Code != http.StatusOK {
+		t.Fatalf("put: %d %s", rec.Code, rec.Body)
+	}
+	rec, got := e.do(t, "GET", "/api/dashboards", plugin.RoleViewer, nil)
+	ws := got["dashboards"].([]any)[0].(map[string]any)["spec"].(map[string]any)["widgets"].([]any)
+	if len(ws) != 2 || ws[1].(map[string]any)["bucket"] != "better_50" || ws[1].(map[string]any)["days"] != float64(30) {
+		t.Fatalf("round trip: %s", rec.Body)
+	}
+	var found bool
+	for _, w := range got["widget_types"].([]any) {
+		m := w.(map[string]any)
+		if m["type"] == "timeseries" {
+			found = m["api"] == "/api/reports/timeseries"
+		}
+	}
+	if !found {
+		t.Fatalf("widget_types has no timeseries: %s", rec.Body)
+	}
+	for _, b := range history.Buckets {
+		if err := (DashboardSpec{Widgets: []Widget{{Type: "timeseries", Bucket: b}}}).Validate(); err != nil {
+			t.Errorf("bucket %s: %v", b, err)
+		}
 	}
 }

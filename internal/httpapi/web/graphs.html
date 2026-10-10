@@ -48,12 +48,27 @@
 <main>
   <section>
     <h2>Graphs</h2>
-    <p class="empty">Time-series graphs are not on this page yet. They are tracked in #129.</p>
+    <p class="tag">Loss and latency per UTC day, before (the native provider) and after (the chosen provider), from the daily probe history. Read-only: nothing here announces a route. Days are the finest history the store keeps.</p>
+    <div class="controls">
+      <label>Destinations <select id="graph-bucket"></select></label>
+      <label>Days <select id="graph-days">
+        <option value="7" selected>7</option>
+        <option value="30">30</option>
+        <option value="90">90</option>
+        <option value="365">365</option>
+      </select></label>
+      <button type="button" id="graph-load">Load</button>
+      <a id="graph-csv" href="/api/reports/timeseries?days=7&amp;format=csv">CSV</a>
+    </div>
+    <p id="graph-note" class="tag"></p>
+    <div id="graph" class="graph"><p class="empty">Loading…</p></div>
   </section>
 </main>
 </div>
 </div>
+<script src="/charts.js"></script>
 <script src="/shell.js"></script>
 <script src="/app.js"></script>
+<script src="/graphs.js"></script>
 </body>
 </html>
