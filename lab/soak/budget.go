@@ -32,23 +32,30 @@ type Profile struct {
 	// StaticTargets is the number of static probe targets.
 	StaticTargets int `yaml:"static_targets"`
 	// Churn is prefixes withdrawn and announced again per minute.
-	Churn   int     `yaml:"churn"`
-	Budgets Budgets `yaml:"budgets"`
+	Churn int `yaml:"churn"`
+	// RateLimitPPS is probe.rate_limit_pps in the generated config.
+	// Zero uses the load-test default of 100000, which lets the fixed
+	// prober finish the pr profile's targets. The opt-in rate profile
+	// sets the operator default of 100 (#125).
+	RateLimitPPS int     `yaml:"rate_limit_pps"`
+	Budgets      Budgets `yaml:"budgets"`
 }
 
 // Budgets are the limits. Zero leaves a figure reported but unchecked.
 type Budgets struct {
-	LearnSeconds    float64 `yaml:"learn_seconds"`
-	RSSPeakMB       float64 `yaml:"rss_peak_mb"`
-	RSSGrowthMB     float64 `yaml:"rss_growth_mb"`
-	RSSSlopeMB      float64 `yaml:"rss_slope_mb"`
-	CPUAvgCores     float64 `yaml:"cpu_avg_cores"`
-	Threads         int     `yaml:"threads"`
-	UDPDropPct      float64 `yaml:"udp_drop_pct"`
-	APIP99Ms        float64 `yaml:"api_p99_ms"`
-	ReconvergeSecs  float64 `yaml:"reconverge_seconds"`
-	ShutdownSeconds float64 `yaml:"shutdown_seconds"`
-	MinMeasured     int     `yaml:"min_measured"`
+	LearnSeconds      float64 `yaml:"learn_seconds"`
+	RSSPeakMB         float64 `yaml:"rss_peak_mb"`
+	RSSGrowthMB       float64 `yaml:"rss_growth_mb"`
+	RSSSlopeMB        float64 `yaml:"rss_slope_mb"`
+	CPUAvgCores       float64 `yaml:"cpu_avg_cores"`
+	Threads           int     `yaml:"threads"`
+	UDPDropPct        float64 `yaml:"udp_drop_pct"`
+	APIP99Ms          float64 `yaml:"api_p99_ms"`
+	ReconvergeSecs    float64 `yaml:"reconverge_seconds"`
+	ShutdownSeconds   float64 `yaml:"shutdown_seconds"`
+	MinMeasured       int     `yaml:"min_measured"`
+	MinActivePerHour  int     `yaml:"min_active_per_hour"`
+	MinPassiveTracked int     `yaml:"min_passive_tracked"`
 }
 
 type budgetFile struct {
@@ -120,6 +127,8 @@ type Result struct {
 	ReconvergeSecs  float64  `json:"reconverge_seconds"`
 	ShutdownSeconds float64  `json:"shutdown_seconds"`
 	Measured        int      `json:"measured"`
+	ActivePerHour   float64  `json:"active_per_hour"`
+	PassiveTracked  int      `json:"passive_tracked"`
 	PacketeerRoutes int      `json:"packeteer_routes"`
 	Failures        []string `json:"failures"`
 }
@@ -159,6 +168,8 @@ func checks(r Result, b Budgets) []Check {
 		{Name: "reconverge after churn", Value: r.ReconvergeSecs, Limit: b.ReconvergeSecs, Unit: "s"},
 		{Name: "SIGTERM to exit", Value: r.ShutdownSeconds, Limit: b.ShutdownSeconds, Unit: "s"},
 		{Name: "prefixes measured", Value: float64(r.Measured), Limit: float64(b.MinMeasured), Min: true},
+		{Name: "active prefixes measured per hour", Value: r.ActivePerHour, Limit: float64(b.MinActivePerHour), Min: true},
+		{Name: "passive prefixes tracked", Value: float64(r.PassiveTracked), Limit: float64(b.MinPassiveTracked), Min: true},
 	}
 }
 
@@ -227,6 +238,49 @@ func percentile(xs []float64, p float64) float64 {
 	slices.Sort(s)
 	i := int(math.Ceil(p/100*float64(len(s)))) - 1
 	return s[max(0, min(i, len(s)-1))]
+}
+
+// probePace is the prefix-commit counter and the passive-prefix estimate
+// read from /metrics during a soak (#125).
+type probePace struct {
+	warm, end float64
+	warmSet   bool
+	passive   float64
+}
+
+// sample records one successful /metrics read. The first sample at or
+// after warmup freezes the commit counter; later samples move the end.
+func (p *probePace) sample(elapsed, warmup time.Duration, commits, tracked float64) {
+	if !p.warmSet && elapsed >= warmup {
+		p.warm = commits
+		p.warmSet = true
+	}
+	p.end = commits
+	p.passive = tracked
+}
+
+// perHour scales commits after the warmup boundary to one hour. A
+// missing boundary counts from zero. A counter that went backwards
+// counts as no progress. post is the soak after warmup; under a second
+// it falls back to the whole soak, and under a second there too the
+// rate is zero.
+func (p probePace) perHour(durationSec, warmupSec float64) float64 {
+	warm := 0.0
+	if p.warmSet {
+		warm = p.warm
+	}
+	delta := p.end - warm
+	if delta < 0 {
+		delta = 0
+	}
+	post := durationSec - warmupSec
+	if post < 1 {
+		post = durationSec
+	}
+	if post < 1 {
+		return 0
+	}
+	return delta / post * 3600
 }
 
 // growth is the RSS level during warmup and the level over the second

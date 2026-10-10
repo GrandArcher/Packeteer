@@ -563,6 +563,7 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 	wireLearnedRoutes(plugins, view)
 	wireOutage(plugins, engine, view, dispatch)
 	col.SetTelemetry(func() []plugin.Usage { return collectTelemetry(context.Background(), plugins) })
+	col.SetFlowTracked(func() int { return flowTracked(plugins) })
 	col.Attach(engine, decider, view)
 	wireExchanges(cfg, col, view)
 	wireSuggestions(cfg, httpSrv, view)
@@ -1784,6 +1785,23 @@ func checkTelemetryProviders(plugins *pluginhost.Set) error {
 		}
 	}
 	return nil
+}
+
+// flowTracked sums the flow sources' passive prefix estimates (#125).
+// Other sources do not implement it. The figure is not a probe target.
+func flowTracked(plugins *pluginhost.Set) int {
+	if plugins == nil {
+		return 0
+	}
+	n := 0
+	for _, src := range plugins.Sources {
+		t, ok := src.Plugin.(interface{ Tracked() int })
+		if !ok {
+			continue
+		}
+		n += t.Tracked()
+	}
+	return n
 }
 
 func collectTelemetry(ctx context.Context, plugins *pluginhost.Set) []plugin.Usage {

@@ -149,9 +149,11 @@ func parseSNMP(s string) (udpStats, error) {
 
 // metrics is what the harness reads from Packeteer's /metrics.
 type metrics struct {
-	Ready       bool
-	SessionUp   bool
-	RIBPrefixes int
+	Ready               bool
+	SessionUp           bool
+	RIBPrefixes         int
+	ProbePrefixCommits  float64
+	FlowPrefixesTracked float64
 }
 
 func parseMetrics(r io.Reader) (metrics, error) {
@@ -177,6 +179,10 @@ func parseMetrics(r io.Reader) (metrics, error) {
 			m.Ready, seen = v == 1, seen|1
 		case name == "packeteer_rib_prefixes":
 			m.RIBPrefixes, seen = int(v), seen|2
+		case name == "packeteer_probe_prefix_commits":
+			m.ProbePrefixCommits = v
+		case name == "packeteer_flow_prefixes_tracked":
+			m.FlowPrefixesTracked = v
 		case strings.HasPrefix(name, "packeteer_bgp_session_up{"):
 			m.SessionUp = m.SessionUp || v == 1
 		}

@@ -177,19 +177,68 @@ func TestParseProc(t *testing.T) {
 	if err != nil || !m.Ready || !m.SessionUp || m.RIBPrefixes != 1250000 {
 		t.Fatalf("%+v %v", m, err)
 	}
+	if m.ProbePrefixCommits != 0 || m.FlowPrefixesTracked != 0 {
+		t.Fatalf("missing optional gauges must stay zero: %+v", m)
+	}
+	m, err = parseMetrics(strings.NewReader("packeteer_ready 1\npacketeer_rib_prefixes 10\npacketeer_probe_prefix_commits 12\npacketeer_flow_prefixes_tracked 50000\n"))
+	if err != nil || m.ProbePrefixCommits != 12 || m.FlowPrefixesTracked != 50000 {
+		t.Fatalf("%+v %v", m, err)
+	}
 	if _, err := parseMetrics(strings.NewReader("packeteer_ready 1\n")); err == nil {
 		t.Fatal("metrics without rib size accepted")
 	}
 }
 
+func TestActivePerHourScalesAfterWarmup(t *testing.T) {
+	var p probePace
+	p.sample(10*time.Second, time.Minute, 100, 1)
+	p.sample(time.Minute, time.Minute, 400, 1000)
+	p.sample(2*time.Minute, time.Minute, 1000, 50000)
+	if got := p.perHour(120, 60); got != 36000 {
+		t.Fatalf("per hour %v, want 36000", got)
+	}
+	if p.passive != 50000 {
+		t.Fatalf("passive %v", p.passive)
+	}
+	back := probePace{warm: 100, end: 10, warmSet: true}
+	if got := back.perHour(120, 60); got != 0 {
+		t.Fatalf("backwards counter %v", got)
+	}
+	unset := probePace{end: 100}
+	if got := unset.perHour(120, 60); got != 6000 {
+		t.Fatalf("unset warmup %v, want 6000", got)
+	}
+	if got := (probePace{end: 10}).perHour(0.5, 0); got != 0 {
+		t.Fatalf("short soak %v", got)
+	}
+}
+
 func TestBudgetFileProfilesAndGeneratedConfig(t *testing.T) {
-	for _, name := range []string{"smoke", "pr", "soak", "routes3m"} {
+	for _, name := range []string{"smoke", "pr", "soak", "routes3m", "rate"} {
 		p, err := loadProfile("budgets.yaml", name)
 		if err != nil {
 			t.Fatal(err)
 		}
+		cfgText := packeteerConfig(p, ports{BGP: 11179, Flow: 12055, HTTP: 18081}, "/var/lib/packeteer")
 		switch name {
 		case "smoke":
+			if p.Budgets != (Budgets{}) {
+				t.Fatalf("smoke budgets must stay unset: %+v", p.Budgets)
+			}
+			if !strings.Contains(cfgText, "rate_limit_pps: 100000\n") {
+				t.Fatal("smoke keeps the load-test packet rate")
+			}
+		case "rate":
+			// Opt-in real packet rate (#125). Not a CI profile.
+			if p.Prefixes != 20000 || p.StaticTargets != 375 || p.RateLimitPPS != 100 {
+				t.Fatalf("rate profile %+v", p)
+			}
+			if p.Budgets != (Budgets{}) {
+				t.Fatalf("rate budgets must stay unset: %+v", p.Budgets)
+			}
+			if !strings.Contains(cfgText, "rate_limit_pps: 100\n") {
+				t.Fatal("rate profile must generate 100 pps")
+			}
 		case "routes3m":
 			// Opt-in 3M table (#103). Report only: no measured budgets yet,
 			// and this name must not become what CI's load job runs.
@@ -211,6 +260,15 @@ func TestBudgetFileProfilesAndGeneratedConfig(t *testing.T) {
 			if p.Prefixes != 1250000 {
 				t.Fatalf("pr prefixes changed: %d", p.Prefixes)
 			}
+			if p.Budgets.RSSGrowthMB != 384 {
+				t.Fatalf("pr rss_growth_mb = %v, want 384", p.Budgets.RSSGrowthMB)
+			}
+			if p.Budgets.MinActivePerHour != 180000 || p.Budgets.MinPassiveTracked != 50000 {
+				t.Fatalf("pr probe budgets %+v", p.Budgets)
+			}
+			if p.RateLimitPPS != 0 || !strings.Contains(cfgText, "rate_limit_pps: 100000\n") {
+				t.Fatal("pr must keep rate_limit_pps 100000")
+			}
 			fallthrough
 		default:
 			if p.Prefixes < 1000000 {
@@ -220,11 +278,12 @@ func TestBudgetFileProfilesAndGeneratedConfig(t *testing.T) {
 				t.Fatalf("%s: the leak-slope budget is unset", name)
 			}
 			if p.Budgets.RSSPeakMB == 0 || p.Budgets.LearnSeconds == 0 || p.Budgets.RSSGrowthMB == 0 ||
-				p.Budgets.CPUAvgCores == 0 || p.Budgets.UDPDropPct == 0 || p.Budgets.ShutdownSeconds == 0 {
+				p.Budgets.CPUAvgCores == 0 || p.Budgets.UDPDropPct == 0 || p.Budgets.ShutdownSeconds == 0 ||
+				p.Budgets.MinActivePerHour != 180000 || p.Budgets.MinPassiveTracked != 50000 {
 				t.Fatalf("%s: a core budget is unset: %+v", name, p.Budgets)
 			}
 		}
-		cfg, err := config.Parse([]byte(packeteerConfig(p, ports{BGP: 11179, Flow: 12055, HTTP: 18081}, "/var/lib/packeteer")))
+		cfg, err := config.Parse([]byte(cfgText))
 		if err != nil {
 			t.Fatalf("%s: generated config: %v", name, err)
 		}
@@ -243,6 +302,9 @@ func TestBudgetFileProfilesAndGeneratedConfig(t *testing.T) {
 		}
 		if strings.Contains(string(b), "routes3m") {
 			t.Fatalf("%s names the opt-in 3M profile", path)
+		}
+		if strings.Contains(string(b), "packeteer:ci rate") || strings.Contains(string(b), "packeteer:soak rate") {
+			t.Fatalf("%s names the opt-in rate profile", path)
 		}
 	}
 	ci, err := os.ReadFile("../../.github/workflows/ci.yml")

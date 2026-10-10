@@ -19,12 +19,17 @@ import (
 
 // hungProber answers allow calls, then blocks until release. It does not
 // watch ctx: the per-probe deadline must not be what unblocks it.
+// Calls after pauseAfter, while still inside allow, wait on pause so a
+// test can finish those probes late in the round. Their result time is
+// then much newer than a prefix that never finishes.
 type hungProber struct {
 	plugin.Base
-	mu      sync.Mutex
-	calls   int
-	allow   int
-	release chan struct{}
+	mu         sync.Mutex
+	calls      int
+	allow      int
+	release    chan struct{}
+	pauseAfter int
+	pause      <-chan struct{}
 }
 
 func (p *hungProber) Probe(_ context.Context, req plugin.ProbeRequest) (plugin.ProbeResult, error) {
@@ -32,6 +37,9 @@ func (p *hungProber) Probe(_ context.Context, req plugin.ProbeRequest) (plugin.P
 	p.calls++
 	n := p.calls
 	p.mu.Unlock()
+	if p.pause != nil && n > p.pauseAfter && n <= p.allow {
+		<-p.pause
+	}
 	if n > p.allow {
 		<-p.release
 		return plugin.ProbeResult{}, errors.New("released")
@@ -252,4 +260,187 @@ func TestHungProberStalenessWithdraws(t *testing.T) {
 	if len(engine.Results()) != 2 {
 		t.Fatalf("results changed after withdraw: %+v", engine.Results())
 	}
+}
+
+// TestPartialRoundStalenessIsPerResult is #125: a round that finishes one
+// prefix and then hits its deadline stores that prefix and leaves the other
+// on its previous time. Only the unfinished prefix goes stale.
+func TestPartialRoundStalenessIsPerResult(t *testing.T) {
+	pfxA := netip.MustParsePrefix("198.51.100.0/24")
+	pfxB := netip.MustParsePrefix("203.0.113.0/24")
+	release := make(chan struct{})
+	defer close(release)
+	// First round is four probes (two prefixes, two providers). The next
+	// round's two pfxA probes wait on pause, so their times are near the
+	// end of the round, then the workers block on pfxB. The gap between
+	// those times is what the staleness poll has to observe.
+	pause := make(chan struct{})
+	prober := &hungProber{allow: 6, release: release, pauseAfter: 4, pause: pause}
+	var logs bytes.Buffer
+	log := slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	o := probe.Options{
+		Interval:     time.Second,
+		Timeout:      20 * time.Millisecond,
+		Packets:      1,
+		Workers:      1, // one prefix's providers finish before the next prefix starts
+		RoundTimeout: 2 * time.Second,
+		Logger:       log,
+	}
+	kick := make(chan struct{}, 1)
+	o.OnRound = func() {
+		select {
+		case kick <- struct{}{}:
+		default:
+		}
+	}
+	engine, err := probe.New(
+		[]probe.Provider{
+			{Name: "transit-a", Source: netip.MustParseAddr("192.0.2.11")},
+			{Name: "transit-b", Source: netip.MustParseAddr("192.0.2.12")},
+		},
+		[]probe.NamedProber{{Name: "hung", Prober: prober}},
+		[]probe.NamedSource{{Name: "static", Source: twoPrefixSource{}}},
+		o,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	scorer, err := weighted.New(plugin.Config{}, plugin.Env{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	decider := policy.NewEngine(policy.Config{
+		Mode:            "inject",
+		MinLossDeltaPct: 1,
+		MinRTTDelta:     15 * time.Millisecond,
+		HoldTime:        time.Hour,
+		MaxImprovements: 50,
+		MaxResultAge:    3 * time.Second,
+		Allowlist:       []netip.Prefix{pfxA, pfxB},
+	}, scorer)
+	ann := &memAnn{}
+	ctl, err := announce.New(announce.Config{
+		Mode:            "inject",
+		LocalPref:       250,
+		Community:       "64512:666",
+		MaxImprovements: 50,
+		Allowlist:       []netip.Prefix{pfxA, pfxB},
+		NextHops: map[string]netip.Addr{
+			"transit-a": netip.MustParseAddr("192.0.2.1"),
+			"transit-b": netip.MustParseAddr("192.0.2.2"),
+		},
+	}, ann, readyRIBMany{pfxA, pfxB}, log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	eval := func(now time.Time) {
+		in := policy.Input{
+			Results:    engine.Results(),
+			ProviderUp: map[string]bool{},
+			RIBEnabled: true,
+			RIBReady:   true,
+			Native:     map[netip.Prefix]string{},
+		}
+		for _, p := range engine.Providers() {
+			in.ProviderUp[p.Name] = p.Up
+		}
+		for _, r := range in.Results {
+			if r.Prefix == pfxA || r.Prefix == pfxB {
+				in.Native[r.Prefix] = "transit-a"
+			}
+		}
+		runDecision(now, decider, in, ctl, log, "inject", nil)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		decideLoop(ctx, func() time.Duration { return 40 * time.Millisecond }, kick, eval)
+	}()
+	defer func() {
+		cancel()
+		wg.Wait()
+	}()
+
+	engine.RunOnce(context.Background())
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) && ann.count() != 2 {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if ann.count() != 2 {
+		t.Fatalf("both prefixes not announced: %d\n%s", ann.count(), logs.String())
+	}
+	// Release pfxA's probes 1.2s into the 2s round so they finish, and
+	// so they are much newer than pfxB when the deadline returns.
+	go func() {
+		time.Sleep(1200 * time.Millisecond)
+		close(pause)
+	}()
+	engine.RunOnce(context.Background())
+	if ann.count() != 2 {
+		t.Fatalf("withdrew before the unfinished prefix was stale:\n%s", logs.String())
+	}
+	var aTime, bTime time.Time
+	var aN, bN int
+	for _, r := range engine.Results() {
+		switch r.Prefix {
+		case pfxA:
+			aN++
+			if r.Time.After(aTime) {
+				aTime = r.Time
+			}
+		case pfxB:
+			bN++
+			if bTime.IsZero() || r.Time.Before(bTime) {
+				bTime = r.Time
+			}
+		}
+	}
+	if aN != 2 || bN != 2 || bTime.IsZero() || !aTime.After(bTime) {
+		t.Fatalf("partial results a=%d %s b=%d %s %+v", aN, aTime, bN, bTime, engine.Results())
+	}
+
+	deadline = time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) && ann.count() != 1 {
+		time.Sleep(20 * time.Millisecond)
+	}
+	if ann.count() != 1 {
+		t.Fatalf("want only the fresh prefix still announced, count=%d\n%s", ann.count(), logs.String())
+	}
+	if _, ok := ann.route(pfxB); ok {
+		t.Fatal("unfinished prefix still announced")
+	}
+	rt, ok := ann.route(pfxA)
+	if !ok || rt.Provider != "transit-b" || len(rt.Communities) != 1 || rt.Communities[0] != "64512:666" {
+		t.Fatalf("fresh prefix = %+v ok=%v", rt, ok)
+	}
+	if !bytes.Contains(logs.Bytes(), []byte("stale")) {
+		t.Fatalf("withdraw was not caused by staleness:\n%s", logs.String())
+	}
+}
+
+type twoPrefixSource struct{ plugin.Base }
+
+func (twoPrefixSource) Targets(context.Context) ([]plugin.Target, error) {
+	return []plugin.Target{
+		{Prefix: netip.MustParsePrefix("198.51.100.0/24"), Host: netip.MustParseAddr("198.51.100.1")},
+		{Prefix: netip.MustParsePrefix("203.0.113.0/24"), Host: netip.MustParseAddr("203.0.113.1")},
+	}, nil
+}
+
+// readyRIBMany reports every listed prefix as learned.
+type readyRIBMany []netip.Prefix
+
+func (r readyRIBMany) Ready() bool { return true }
+
+func (r readyRIBMany) Contains(p netip.Prefix) bool {
+	p = p.Masked()
+	for _, q := range r {
+		if p == q.Masked() {
+			return true
+		}
+	}
+	return false
 }

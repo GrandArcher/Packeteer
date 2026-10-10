@@ -241,6 +241,7 @@ func run(ctx context.Context, o runOpts) (Result, error) {
 
 	soakStart := time.Now()
 	var warmRSS, postRSS, allRSS, lat []float64
+	var pace probePace
 	notReady, sessionDown, sampleErrs := 0, 0, 0
 	tick := time.NewTicker(p.Sample)
 loop:
@@ -278,9 +279,11 @@ loop:
 			if !m.SessionUp {
 				sessionDown++
 			}
+			pace.sample(el, p.Warmup, m.ProbePrefixCommits, m.FlowPrefixesTracked)
 		}
-		log.Printf("t=%s rss=%.0fMiB cpu=%.1fs threads=%d rib=%d flows=%d",
-			el.Round(time.Second), float64(pr.RSS)/(1<<20), pr.CPU, pr.Threads, m.RIBPrefixes, exp.sent.Load())
+		log.Printf("t=%s rss=%.0fMiB cpu=%.1fs threads=%d rib=%d flows=%d commits=%.0f tracked=%.0f",
+			el.Round(time.Second), float64(pr.RSS)/(1<<20), pr.CPU, pr.Threads, m.RIBPrefixes, exp.sent.Load(),
+			m.ProbePrefixCommits, m.FlowPrefixesTracked)
 		if el >= p.Duration {
 			break
 		}
@@ -297,6 +300,15 @@ loop:
 	if ctx.Err() != nil {
 		return r, ctx.Err()
 	}
+	// One more read so the last seconds after the ticker count. Active
+	// prefixes per hour are commits after warmup, scaled to an hour.
+	// Passive tracked is the last flow-window estimate.
+	if m, _, err := papi.metrics(ctx); err == nil {
+		pace.sample(time.Since(soakStart), p.Warmup, m.ProbePrefixCommits, m.FlowPrefixesTracked)
+	}
+	r.ActivePerHour = pace.perHour(r.DurationSeconds, p.Warmup.Seconds())
+	r.PassiveTracked = int(pace.passive)
+	log.Printf("active prefixes per hour %.0f; passive tracked %d", r.ActivePerHour, r.PassiveTracked)
 	cpu1, err := readP()
 	if err != nil {
 		return r, fmt.Errorf("Packeteer process gone after soak: %w", err)

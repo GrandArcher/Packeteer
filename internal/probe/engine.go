@@ -59,8 +59,10 @@ type Options struct {
 	OnRound  func()       // called after each completed round (optional)
 	// RoundTimeout bounds one round, including target collection. Zero
 	// derives a bound from the interval and the per-probe deadline. A round
-	// that exceeds it keeps the previous results: a prober or target source
-	// that ignores cancellation must not pin stale improvements forever.
+	// that exceeds it stores prefixes whose probes all finished and leaves
+	// the rest as they were: a prober or target source that ignores
+	// cancellation must not refresh a prefix it did not finish, and must
+	// not discard prefixes that did finish.
 	RoundTimeout time.Duration
 	// RetryLossPct, when greater than zero, re-probes a path with
 	// RetryPackets before the result is stored if loss is at least this
@@ -200,6 +202,11 @@ type Engine struct {
 	// wake is a one-slot signal. OnRound calls Wake when a detector has
 	// new prefixes so sleep returns without waiting out the interval.
 	wake chan struct{}
+
+	// prefixCommits counts prefixes whose results were stored, once per
+	// prefix per round that stored at least one of that prefix's results.
+	// The load test turns this into active prefixes measured per hour (#125).
+	prefixCommits atomic.Uint64
 
 	// proberMem remembers which prober got a reply from a host. proberPlan
 	// is the chain start chosen for the current round (one per host, shared
@@ -948,8 +955,11 @@ func (e *Engine) probesBusy() bool {
 }
 
 // RunOnce performs one probe round over all providers and targets.
-// The round has an overall deadline. If it expires, or a target source
-// does not return, previous results are kept and OnRound is not called.
+// The round has an overall deadline. A complete round stores every result
+// together. If the deadline expires first, only prefixes whose provider
+// probes all finished are stored, each prefix whole, and unfinished
+// prefixes keep their previous results. If a target source does not
+// return, nothing changes. OnRound is not called unless a prefix was stored.
 // RunOnce ignores per-target intervals and measures every target.
 func (e *Engine) RunOnce(ctx context.Context) {
 	_, _ = e.runRound(ctx, nil, false)
@@ -957,9 +967,10 @@ func (e *Engine) RunOnce(ctx context.Context) {
 
 // runRound probes targets. allow, when non-nil, selects which gathered
 // targets are probed; the others keep their stored results (merge).
-// probed is the set of prefixes this call attempted. done is false when
-// the round was skipped or abandoned, in which case stored results and
-// the caller's schedule must stay as they were.
+// probed is the set of prefixes this call stored (all attempted when the
+// round completed). done is false when the round was skipped, shut down,
+// or finished nothing, in which case stored results and the caller's
+// schedule stay as they were.
 func (e *Engine) runRound(ctx context.Context, allow func(plugin.Target) bool, merge bool) (probed map[netip.Prefix]struct{}, done bool) {
 	if e.probesBusy() {
 		e.log.Debug("previous probe round still running; skipping")
@@ -1013,11 +1024,18 @@ func (e *Engine) runRound(ctx context.Context, allow func(plugin.Target) bool, m
 		return probed, true
 	}
 
+	// Urgent and shorter intervals first, so a round that runs out of time
+	// still measures the priority tier, VIP prefixes, and confirm-urgent
+	// prefixes before a longer tail (#118, #125).
+	sortJobs(jobs, e.opt.Interval)
+
 	ch := make(chan job)
 	type outcome struct {
 		res        Result
 		sourceDown bool
 	}
+	// Buffered so a worker that finished before the deadline never blocks
+	// on the send, including after the collector has stopped reading.
 	outs := make(chan outcome, len(jobs))
 	var wg sync.WaitGroup
 	for i := 0; i < e.opt.Workers; i++ {
@@ -1028,17 +1046,18 @@ func (e *Engine) runRound(ctx context.Context, allow func(plugin.Target) bool, m
 				if roundCtx.Err() != nil {
 					return
 				}
-				r, down := e.probe(roundCtx, j)
+				r, srcDown := e.probe(roundCtx, j)
 				if e.indirectEnabled() {
 					if hops := e.traceHops(key{j.provider.Name, j.target.Prefix}); len(hops) > 0 {
 						r.Hops = hops
 					}
 				}
-				select {
-				case outs <- outcome{r, down}:
-				case <-roundCtx.Done():
+				// A probe that the deadline cancelled must not refresh the
+				// stored result. Staleness stays on the previous time.
+				if roundCtx.Err() != nil {
 					return
 				}
+				outs <- outcome{r, srcDown}
 			}
 		}()
 	}
@@ -1056,46 +1075,208 @@ feed:
 	go func() {
 		wg.Wait()
 		close(finished)
+		close(outs)
 	}()
-	select {
-	case <-finished:
-	case <-roundCtx.Done():
-		e.leaveProbes(finished)
-		if ctx.Err() == nil {
-			e.log.Warn("probe round timed out; keeping previous results")
-		}
-		return nil, false
-	}
-	if roundCtx.Err() != nil {
-		// Workers exited because the deadline fired. Do not commit a partial round.
-		if ctx.Err() == nil {
-			e.log.Warn("probe round timed out; keeping previous results")
-		}
-		return nil, false
-	}
-	close(outs)
 
-	down := map[string]string{}
-	ran := map[string]bool{}
+	// Results are buffered until the round ends. A prefix is stored only
+	// when every provider job for it finished, and all of its results go
+	// in under one lock. The policy dates a round by the newest result for
+	// a prefix, so a half-stored prefix would count one measurement round
+	// twice toward confirm_rounds.
+	want := map[netip.Prefix]int{}
+	for _, j := range jobs {
+		want[j.target.Prefix]++
+	}
 	fresh := map[key]Result{}
-	for o := range outs {
-		ran[o.res.Provider] = true
-		if o.sourceDown {
-			down[o.res.Provider] = o.res.Err
-		}
-		fresh[key{o.res.Provider, o.res.Prefix}] = o.res
-		if e.opt.OnResult != nil {
-			e.opt.OnResult(o.res)
+	got := map[netip.Prefix]int{}
+	downBy := map[key]string{}
+	received := 0
+	collecting := true
+	for collecting {
+		select {
+		case o, ok := <-outs:
+			if !ok {
+				collecting = false
+				break
+			}
+			received++
+			got[o.res.Prefix]++
+			fresh[key{o.res.Provider, o.res.Prefix}] = o.res
+			if o.sourceDown {
+				downBy[key{o.res.Provider, o.res.Prefix}] = o.res.Err
+			}
+		case <-roundCtx.Done():
+			collecting = false
 		}
 	}
+	// Workers that finished before the deadline have already sent. A
+	// round whose every job reported is complete even if the deadline
+	// fired while the collector was choosing between the two channels.
+	for drain := true; drain; {
+		select {
+		case o, ok := <-outs:
+			if !ok {
+				drain = false
+				break
+			}
+			received++
+			got[o.res.Prefix]++
+			fresh[key{o.res.Provider, o.res.Prefix}] = o.res
+			if o.sourceDown {
+				downBy[key{o.res.Provider, o.res.Prefix}] = o.res.Err
+			}
+		default:
+			drain = false
+		}
+	}
+	if ctx.Err() != nil {
+		// Shutdown: nothing was stored, so results stay as they were.
+		e.leaveProbes(finished, nil)
+		return nil, false
+	}
 
-	e.finishProberRound()
-	e.commit(fresh, ran, down, keep, merge)
-	e.rememberProbes(probed)
+	if received == len(jobs) {
+		down := map[string]string{}
+		ran := map[string]bool{}
+		for k, r := range fresh {
+			ran[r.Provider] = true
+			if reason, isDown := downBy[k]; isDown {
+				down[r.Provider] = reason
+			}
+		}
+		e.finishProberRound()
+		e.commit(fresh, ran, down, keep, merge)
+		e.emitResults(fresh)
+		e.rememberProbes(probed)
+		e.addPrefixCommits(len(got))
+		if e.opt.OnRound != nil {
+			e.opt.OnRound()
+		}
+		return probed, true
+	}
+
+	// The deadline passed with jobs outstanding. Store prefixes whose
+	// jobs all finished; leave the others, and their schedule, alone.
+	committed := map[netip.Prefix]struct{}{}
+	for pfx, n := range got {
+		if n == want[pfx] {
+			committed[pfx] = struct{}{}
+		}
+	}
+	if len(committed) == 0 {
+		e.leaveProbes(finished, nil)
+		e.log.Warn("probe round timed out; keeping previous results")
+		return nil, false
+	}
+	e.log.Warn("probe round timed out; kept finished prefix results", "finished", len(committed), "prefixes", len(want))
+	stored := make(map[key]Result, len(fresh))
+	ran := map[string]bool{}
+	down := map[string]string{}
+	for k, r := range fresh {
+		if _, ok := committed[r.Prefix]; !ok {
+			continue
+		}
+		stored[k] = r
+		ran[r.Provider] = true
+		if reason, isDown := downBy[k]; isDown {
+			down[r.Provider] = reason
+		}
+	}
+	e.pruneIndirect(keep)
+	e.storeResults(stored, keep, ran, down)
+	e.emitResults(stored)
+	e.rememberProbes(committed)
+	e.addPrefixCommits(len(committed))
 	if e.opt.OnRound != nil {
 		e.opt.OnRound()
 	}
-	return probed, true
+	// Probes still inside a prober that ignores cancellation must
+	// finish before the next round plans prober memory.
+	e.leaveProbes(finished, e.finishProberRound)
+	return committed, true
+}
+
+// emitResults hands stored results to OnResult.
+func (e *Engine) emitResults(rs map[key]Result) {
+	if e.opt.OnResult == nil {
+		return
+	}
+	for _, r := range rs {
+		e.opt.OnResult(r)
+	}
+}
+
+// sortJobs orders work so a round that cannot finish everything still
+// probes the prefixes that are due soonest and the priority tier first.
+// Urgent (a confirm streak, or a source that marked the target) is first,
+// then a shorter interval than the engine (VIP), then the engine interval
+// (flow top_n and ordinary targets), then a longer interval (flow tail).
+func sortJobs(jobs []job, base time.Duration) {
+	// Stable so prefixes in the same tier keep the order the sources
+	// returned. Prober memory evicts the least recently probed host, and
+	// that order is the target list when every interval is the same.
+	sort.SliceStable(jobs, func(i, j int) bool {
+		ti, ei := jobRank(jobs[i].target, base)
+		tj, ej := jobRank(jobs[j].target, base)
+		if ti != tj {
+			return ti < tj
+		}
+		return ei < ej
+	})
+}
+
+// jobRank is the probe order of one target. Lower is sooner.
+func jobRank(t plugin.Target, base time.Duration) (tier int, every time.Duration) {
+	every = base
+	if t.Interval > 0 {
+		every = t.Interval
+	}
+	switch {
+	case t.Urgent:
+		return 0, every
+	case every < base:
+		return 1, every
+	case every > base:
+		return 3, every
+	default:
+		return 2, every
+	}
+}
+
+// storeResults merges the results of prefixes whose probes all finished,
+// under one lock, and drops prefixes that left every source. It never
+// drops a prefix the round did not finish: that one stays as it was.
+func (e *Engine) storeResults(rs map[key]Result, keep map[netip.Prefix]bool, ran map[string]bool, down map[string]string) {
+	now := e.opt.Now()
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.results == nil {
+		e.results = map[key]Result{}
+	}
+	for k, r := range rs {
+		e.results[k] = r
+	}
+	for k := range e.results {
+		if !keep[k.prefix] {
+			delete(e.results, k)
+		}
+	}
+	e.applyStatusLocked(ran, down, now)
+}
+
+func (e *Engine) addPrefixCommits(n int) {
+	if n > 0 {
+		e.prefixCommits.Add(uint64(n))
+	}
+}
+
+// PrefixCommits is how many prefixes have had a result stored since the
+// engine was created, counted once per prefix per round.
+func (e *Engine) PrefixCommits() uint64 {
+	if e == nil {
+		return 0
+	}
+	return e.prefixCommits.Load()
 }
 
 // droppedAny reports whether a stored result belongs to a prefix that is
@@ -1127,16 +1308,24 @@ func (e *Engine) noteCadence(targets []plugin.Target) {
 
 // leaveProbes records that workers from a timed-out round may still be
 // inside a prober that ignores cancellation. The next round waits until
-// they return instead of starting another.
-func (e *Engine) leaveProbes(finished <-chan struct{}) {
+// they return instead of starting another. after runs once they have
+// returned, before the next round is allowed to start. Nil after is fine.
+func (e *Engine) leaveProbes(finished <-chan struct{}, after func()) {
+	done := func() {
+		if after != nil {
+			after()
+		}
+	}
 	select {
 	case <-finished:
+		done()
 		return
 	default:
 	}
 	e.setProbeBusy(true)
 	go func() {
 		<-finished
+		done()
 		e.setProbeBusy(false)
 	}()
 }
@@ -1161,6 +1350,13 @@ func (e *Engine) commit(fresh map[key]Result, ran map[string]bool, down map[stri
 			}
 		}
 	}
+	e.applyStatusLocked(ran, down, now)
+}
+
+// applyStatusLocked updates probe-source health from a round's results.
+// The caller holds e.mu. A provider that did not finish a probe is left
+// as it was. One source-unavailable result fails that provider closed.
+func (e *Engine) applyStatusLocked(ran map[string]bool, down map[string]string, now time.Time) {
 	for _, p := range e.providers {
 		if !ran[p.Name] {
 			continue

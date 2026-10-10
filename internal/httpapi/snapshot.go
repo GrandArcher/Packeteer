@@ -50,6 +50,13 @@ type Input struct {
 	// because they sit on an exchange peering LAN (#145). It is not part
 	// of the JSON API.
 	ExchangeLANDrops uint64 `json:"-"`
+
+	// ProbePrefixCommits is prefixes the probe engine has stored a result
+	// for, once per prefix per round (#125). FlowTracked is the flow
+	// window's distinct-prefix estimate, past the exact cell cap. Neither
+	// is a routing input.
+	ProbePrefixCommits uint64 `json:"-"`
+	FlowTracked        int    `json:"-"`
 }
 
 // Snapshot is the read-only document the HTTP handlers serve.
@@ -74,6 +81,10 @@ type Snapshot struct {
 	// ExchangeLANDrops is packeteer_exchange_lan_targets_dropped. It is
 	// not part of the JSON API.
 	ExchangeLANDrops uint64 `json:"-"`
+	// ProbePrefixCommits and FlowTracked are the #125 load gauges. They
+	// are not part of the JSON API.
+	ProbePrefixCommits uint64 `json:"-"`
+	FlowTracked        int    `json:"-"`
 	// ASNMap groups measured prefixes by origin ASN and provider site.
 	// It is display only and is not a routing decision.
 	ASNMap []ASNNode
@@ -291,23 +302,25 @@ func Assemble(in Input) Snapshot {
 		in.At = time.Now().UTC()
 	}
 	snap := Snapshot{
-		Version:          in.Version,
-		Mode:             in.Mode,
-		Started:          in.Started,
-		At:               in.At.UTC(),
-		DecidedAt:        in.DecidedAt,
-		BGPConfigured:    in.BGPConfigured,
-		RIBReady:         in.RIBReady,
-		RIBPrefixes:      in.RIBPrefixes,
-		Providers:        assembleProviders(in),
-		Probes:           assembleProbes(in.Results),
-		Prefixes:         assemblePrefixes(in),
-		Decisions:        assembleDecisions(in.Decisions),
-		Improvements:     assembleImprovements(in.Improvements),
-		Peers:            assemblePeers(in.Peers),
-		Telemetry:        assembleTelemetry(in.Telemetry),
-		Exchanges:        in.Exchanges,
-		ExchangeLANDrops: in.ExchangeLANDrops,
+		Version:            in.Version,
+		Mode:               in.Mode,
+		Started:            in.Started,
+		At:                 in.At.UTC(),
+		DecidedAt:          in.DecidedAt,
+		BGPConfigured:      in.BGPConfigured,
+		RIBReady:           in.RIBReady,
+		RIBPrefixes:        in.RIBPrefixes,
+		Providers:          assembleProviders(in),
+		Probes:             assembleProbes(in.Results),
+		Prefixes:           assemblePrefixes(in),
+		Decisions:          assembleDecisions(in.Decisions),
+		Improvements:       assembleImprovements(in.Improvements),
+		Peers:              assemblePeers(in.Peers),
+		Telemetry:          assembleTelemetry(in.Telemetry),
+		Exchanges:          in.Exchanges,
+		ExchangeLANDrops:   in.ExchangeLANDrops,
+		ProbePrefixCommits: in.ProbePrefixCommits,
+		FlowTracked:        in.FlowTracked,
 	}
 	snap.ASNMap = assembleASNMap(snap.Prefixes)
 	snap.zeroNil()
