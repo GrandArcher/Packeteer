@@ -16,7 +16,7 @@ A mitigation rule deliberately drops or diverts traffic toward a prefix, so a wr
 
 ## Outage re-queue
 
-The `outage` source can add up to `max_targets` probe targets from the learned RIB when a pattern matches. That spends probe budget. It does not announce: inject mode still requires the prefix in the learned RIB, the allowlist, thresholds, hold time, and the improvement cap. `min_prefixes` cannot be set below 2. Remove the source to turn it off. Events go to the configured notifiers and are not routes.
+The `outage` source can add up to `max_targets` probe targets from the learned RIB when a pattern matches. Traceroute hop addresses, when a per-provider indirect trace is cached, are mapped to an origin ASN in that same RIB and nowhere else. That spends probe budget. It does not announce: inject mode still requires the prefix in the learned RIB, the allowlist, thresholds, hold time, and the improvement cap. `min_prefixes` cannot be set below 2. Remove the source to turn it off. Events go to the configured notifiers and are not routes.
 
 ## SNMP telemetry
 

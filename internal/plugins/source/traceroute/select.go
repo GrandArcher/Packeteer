@@ -59,6 +59,24 @@ func usableHop(addr, dest netip.Addr) bool {
 	return true
 }
 
+// stableHops returns each TTL's stable address in order. Gaps, ties,
+// unusable answers, and addresses skip rejects are left out. The
+// destination is included when it answered stably and skip allows it.
+func stableHops(hops [][]sample, dest netip.Addr, minReplies int, skip func(netip.Addr) bool) []netip.Addr {
+	var out []netip.Addr
+	for _, samples := range hops {
+		addr, n := stableHop(samples, minReplies)
+		if n < minReplies || !usableHop(addr, dest) {
+			continue
+		}
+		if skip != nil && skip(addr) {
+			continue
+		}
+		out = append(out, addr)
+	}
+	return out
+}
+
 // selectHost picks the probe host from per-TTL samples (index 0 is TTL 1).
 // The configured destination wins when it is a stable hop. Otherwise the
 // stable hop with the highest TTL is the one closest to the destination.

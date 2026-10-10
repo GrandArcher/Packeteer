@@ -389,6 +389,44 @@ func (f *fakeLearned) Routes() []rib.Route {
 	return f.routes
 }
 
+type snapView struct {
+	fakeLearned
+	paths []rib.AltPath
+}
+
+func (s *snapView) RouteSnapshot() ([]rib.Route, []rib.AltPath) {
+	return s.routes, s.paths
+}
+
+func TestOutageSnapCopiesAltPaths(t *testing.T) {
+	p := netip.MustParsePrefix("198.51.100.0/24")
+	f := &snapView{
+		fakeLearned: fakeLearned{ready: true, gen: 2, routes: []rib.Route{
+			{Prefix: p, Provider: "transit-a", ASPath: []uint32{64496}},
+			{Prefix: netip.MustParsePrefix("0.0.0.0/0"), ASPath: []uint32{64500}},
+		}},
+		paths: []rib.AltPath{{Prefix: p, Provider: "transit-b", ASPath: []uint32{64501, 64496}}},
+	}
+	var snap outageSnap
+	got := snap.get(f)
+	if len(got) != 1 || got[0].Provider != "transit-a" || len(got[0].Alts) != 1 || got[0].Alts[0].Provider != "transit-b" {
+		t.Fatalf("routes = %+v", got)
+	}
+	if len(got[0].Alts[0].ASPath) != 2 || got[0].Alts[0].ASPath[0] != 64501 {
+		t.Fatalf("alt = %+v", got[0].Alts)
+	}
+	f.paths[0].ASPath[0] = 1
+	again := snap.get(f)
+	if again[0].Alts[0].ASPath[0] != 64501 {
+		t.Fatalf("cached alt aliased the caller: %v", again[0].Alts[0].ASPath)
+	}
+	f.gen = 3
+	f.paths = nil
+	if cleared := snap.get(f); len(cleared) != 1 || len(cleared[0].Alts) != 0 {
+		t.Fatalf("new generation kept alts: %+v", cleared)
+	}
+}
+
 func TestLearnedSnapSkipsCopyWhenGenerationIsStable(t *testing.T) {
 	f := &fakeLearned{ready: true, gen: 3, routes: []rib.Route{
 		{Prefix: netip.MustParsePrefix("198.51.100.0/24"), ASPath: []uint32{64496}},

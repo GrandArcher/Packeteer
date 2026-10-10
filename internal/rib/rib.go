@@ -1667,6 +1667,73 @@ func (v *View) MoreSpecifics(parents []netip.Prefix) []netip.Prefix {
 func (v *View) Routes() []Route {
 	v.mu.RLock()
 	defer v.mu.RUnlock()
+	return v.routesLocked()
+}
+
+// AltPath is one provider's learned AS path for a prefix other than the
+// selected route's own path (#124). Outage correlation reads it next to
+// the native AS path. ASPath is a copy.
+type AltPath struct {
+	Prefix   netip.Prefix
+	Provider string
+	ASPath   []uint32
+}
+
+// RouteSnapshot returns the selected routes (the same set and order as
+// Routes) and every other learned provider path, under one lock. A
+// provider is omitted when it is the selected route's provider and the
+// AS path is equal. Default routes contribute no provider paths. An iBGP
+// path is preferred over BMP. A BMP path counts only on a router that
+// reports the provider's peer up, and an exchange peer's path must start
+// with its AS, as in ProviderPath. The route AS paths alias the view the
+// same way Routes does; AltPath.ASPath is a copy.
+func (v *View) RouteSnapshot() (routes []Route, paths []AltPath) {
+	v.mu.RLock()
+	defer v.mu.RUnlock()
+	routes = v.routesLocked()
+	cover := map[string]map[netip.Addr]bool{}
+	up := func(provider string, router netip.Addr) bool {
+		on, ok := cover[provider]
+		if !ok {
+			on = v.coveringRoutersLocked(provider)
+			cover[provider] = on
+		}
+		return on[router]
+	}
+	for _, rt := range routes {
+		if !rt.Prefix.IsValid() || rt.Prefix.Bits() == 0 {
+			continue
+		}
+		seen := map[string]struct{}{}
+		for _, pth := range v.pathsLocked(rt.Prefix) {
+			if pth.Provider == "" {
+				continue
+			}
+			if _, ok := seen[pth.Provider]; ok {
+				continue
+			}
+			if pth.Source == SourceBMP && !up(pth.Provider, pth.Router) {
+				continue
+			}
+			asn, peer := v.opt.PeerASN[pth.Provider]
+			if peer && (len(pth.ASPath) == 0 || pth.ASPath[0] != asn) {
+				continue
+			}
+			seen[pth.Provider] = struct{}{}
+			if pth.Provider == rt.Provider && slices.Equal(pth.ASPath, rt.ASPath) {
+				continue
+			}
+			paths = append(paths, AltPath{
+				Prefix:   rt.Prefix,
+				Provider: pth.Provider,
+				ASPath:   slices.Clone(pth.ASPath),
+			})
+		}
+	}
+	return routes, paths
+}
+
+func (v *View) routesLocked() []Route {
 	out := make([]Route, 0, len(v.routes))
 	for _, r := range v.routes {
 		out = append(out, r)

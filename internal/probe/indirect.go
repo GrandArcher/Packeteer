@@ -17,6 +17,13 @@ type Tracer interface {
 	Trace(ctx context.Context, src, dst netip.Addr, wait func(context.Context) error) (hop netip.Addr, ok bool, err error)
 }
 
+// pathTracer is a Tracer that also returns the stable hop addresses in
+// TTL order. Indirect probing keeps them so outage detection can map hops
+// to ASNs (#124). A tracer that does not implement it contributes no hop path.
+type pathTracer interface {
+	TracePath(ctx context.Context, src, dst netip.Addr, wait func(context.Context) error) (hops []netip.Addr, best netip.Addr, ok bool, err error)
+}
+
 // Indirect enables per-provider indirect probing (#123). When every
 // address probed inside a prefix is silent for a provider, the prefix is
 // traced in the background from that provider's source, and the highest
@@ -39,11 +46,13 @@ const defaultIndirectQueue = 1024
 
 // indirectHop is the cached outcome of one trace. ok is false when the
 // trace found no usable hop; the prefix is not traced again until the
-// entry ages out.
+// entry ages out. hops is the stable hop addresses in TTL order, kept
+// even when the best hop is not usable, so outage detection can map them.
 type indirectHop struct {
-	hop netip.Addr
-	ok  bool
-	at  time.Time
+	hop  netip.Addr
+	hops []netip.Addr
+	ok   bool
+	at   time.Time
 }
 
 // indirectReq is one queued trace.
@@ -138,25 +147,46 @@ func (e *Engine) probeIndirect(ctx context.Context, j job, hosts []netip.Addr, s
 	return one, false, true
 }
 
-// cachedIndirect returns the cached hop for k. found is false when there
-// is no entry or it aged out. A found entry with an invalid hop means the
-// last trace found none.
-func (e *Engine) cachedIndirect(k key) (netip.Addr, bool) {
+// loadIndirect returns the cached trace for k. found is false when there
+// is no entry or it aged out. The hops slice aliases the cache; callers
+// that keep it must copy.
+func (e *Engine) loadIndirect(k key) (indirectHop, bool) {
 	now := e.opt.Now()
 	e.indMu.Lock()
 	defer e.indMu.Unlock()
 	h, ok := e.indCache[k]
 	if !ok {
-		return netip.Addr{}, false
+		return indirectHop{}, false
 	}
-	if !now.Before(h.at.Add(e.opt.Indirect.CacheTTL)) {
+	if e.opt.Indirect == nil || !now.Before(h.at.Add(e.opt.Indirect.CacheTTL)) {
 		delete(e.indCache, k)
+		return indirectHop{}, false
+	}
+	return h, true
+}
+
+// cachedIndirect returns the cached hop for k. found is false when there
+// is no entry or it aged out. A found entry with an invalid hop means the
+// last trace found none.
+func (e *Engine) cachedIndirect(k key) (netip.Addr, bool) {
+	h, ok := e.loadIndirect(k)
+	if !ok {
 		return netip.Addr{}, false
 	}
 	if !h.ok {
 		return netip.Addr{}, true
 	}
 	return h.hop, true
+}
+
+// traceHops returns a copy of the cached stable hop addresses for k.
+// Nil when no trace is cached or it listed no hop.
+func (e *Engine) traceHops(k key) []netip.Addr {
+	h, ok := e.loadIndirect(k)
+	if !ok || len(h.hops) == 0 {
+		return nil
+	}
+	return append([]netip.Addr(nil), h.hops...)
 }
 
 func (e *Engine) forgetIndirect(k key) {
@@ -317,7 +347,15 @@ func (e *Engine) IndirectPass(ctx context.Context) int {
 			break
 		}
 		tctx, tcancel := context.WithTimeout(bctx, share)
-		hop, ok, err := in.Tracer.Trace(tctx, r.provider.Source, r.dst, wait)
+		var hops []netip.Addr
+		var hop netip.Addr
+		var ok bool
+		var err error
+		if pt, is := in.Tracer.(pathTracer); is {
+			hops, hop, ok, err = pt.TracePath(tctx, r.provider.Source, r.dst, wait)
+		} else {
+			hop, ok, err = in.Tracer.Trace(tctx, r.provider.Source, r.dst, wait)
+		}
 		tcancel()
 		if err != nil {
 			if errors.Is(err, plugin.ErrSourceUnavailable) {
@@ -336,6 +374,9 @@ func (e *Engine) IndirectPass(ctx context.Context) int {
 		entry := indirectHop{ok: ok, at: e.opt.Now()}
 		if ok {
 			entry.hop = hop.Unmap()
+		}
+		if len(hops) > 0 {
+			entry.hops = append([]netip.Addr(nil), hops...)
 		}
 		e.indMu.Lock()
 		if _, still := e.indQueued[r.key]; still {
