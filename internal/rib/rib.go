@@ -1710,6 +1710,64 @@ func (v *View) MoreSpecifics(parents []netip.Prefix) []netip.Prefix {
 	return out
 }
 
+// maxWithinScan bounds how many matches LearnedWithin collects before it
+// sorts. A request this large names an allowlist that covers most of the
+// table; the caller sees truncated.
+const maxWithinScan = 50000
+
+// LearnedWithin returns the learned prefixes that equal or sit inside any
+// of parents (a default route is never returned), for which keep is true
+// (nil keeps all), sorted, at most limit of them. truncated reports that
+// more matched. It only reads, and it holds the read lock for one walk of
+// the table.
+func (v *View) LearnedWithin(parents []netip.Prefix, keep func(netip.Prefix) bool, limit int) (out []netip.Prefix, truncated bool) {
+	if len(parents) == 0 || limit <= 0 {
+		return nil, false
+	}
+	set := map[netip.Prefix]bool{}
+	var lens []int
+	for _, p := range parents {
+		p = p.Masked()
+		set[p] = true
+		if !slices.Contains(lens, p.Bits()) {
+			lens = append(lens, p.Bits())
+		}
+	}
+	v.mu.RLock()
+	for q := range v.routes {
+		if q.Bits() == 0 {
+			continue
+		}
+		for _, n := range lens {
+			if n > q.Bits() {
+				continue
+			}
+			if p, err := q.Addr().Prefix(n); err != nil || !set[p] {
+				continue
+			}
+			if keep == nil || keep(q) {
+				if len(out) >= maxWithinScan {
+					truncated = true
+				} else {
+					out = append(out, q)
+				}
+			}
+			break
+		}
+	}
+	v.mu.RUnlock()
+	sort.Slice(out, func(i, j int) bool {
+		if c := out[i].Addr().Compare(out[j].Addr()); c != 0 {
+			return c < 0
+		}
+		return out[i].Bits() < out[j].Bits()
+	})
+	if len(out) > limit {
+		out, truncated = out[:limit], true
+	}
+	return out, truncated
+}
+
 // Routes returns all learned routes sorted by prefix.
 func (v *View) Routes() []Route {
 	v.mu.RLock()

@@ -159,7 +159,7 @@ func readSections(root *yaml.Node, f *Form) error {
 		}
 	}
 	f.Outage = &out
-	return nil
+	return readProtection(root, f)
 }
 
 // firstSource is the first source of the given type.
@@ -209,6 +209,7 @@ func trimAll(in []string) []string {
 }
 
 func (f *Form) normalizeSections() {
+	f.normalizeProtection()
 	if fl := f.Flow; fl != nil {
 		fl.Listen = trimAll(fl.Listen)
 		fl.Exclude = trimAll(fl.Exclude)
@@ -259,6 +260,7 @@ func (f *Form) normalizeSections() {
 // fillSections gives a nil section the file's current value, so a request
 // that omits it changes nothing. Every list becomes non-nil.
 func (f *Form) fillSections(cur Form) {
+	f.fillProtection(cur)
 	if f.Flow == nil {
 		f.Flow = cur.Flow
 	}
@@ -313,12 +315,18 @@ func (f Form) withoutUnchangedSections(cur Form) Form {
 	if reflect.DeepEqual(f.Outage, cur.Outage) {
 		f.Outage = nil
 	}
+	if reflect.DeepEqual(f.Inbound, cur.Inbound) {
+		f.Inbound = nil
+	}
+	if reflect.DeepEqual(f.Anomaly, cur.Anomaly) {
+		f.Anomaly = nil
+	}
 	return f
 }
 
 func sectionsEqual(f, g Form) bool {
 	return reflect.DeepEqual(f.Flow, g.Flow) && reflect.DeepEqual(f.Policies, g.Policies) &&
-		reflect.DeepEqual(f.VIP, g.VIP) && reflect.DeepEqual(f.Outage, g.Outage)
+		reflect.DeepEqual(f.VIP, g.VIP) && reflect.DeepEqual(f.Outage, g.Outage) && protectionEqual(f, g)
 }
 
 func validateListLen(name string, n int) error {
@@ -396,7 +404,10 @@ func (f Form) validateSections() error {
 	if err := f.validateVIP(); err != nil {
 		return err
 	}
-	return f.validateOutage()
+	if err := f.validateOutage(); err != nil {
+		return err
+	}
+	return f.validateProtection()
 }
 
 func (f Form) validateFlow() error {
@@ -635,6 +646,9 @@ func applySections(root *yaml.Node, cur, next Form) error {
 	}
 	if !reflect.DeepEqual(cur.Outage, next.Outage) {
 		applyOutage(root, next.Outage)
+	}
+	if err := applyProtection(root, cur, next); err != nil {
+		return err
 	}
 	if !reflect.DeepEqual(cur.Policies, next.Policies) {
 		return applyRules(root, next.Policies)

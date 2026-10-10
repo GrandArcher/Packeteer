@@ -48,17 +48,55 @@
 <main>
   <section id="protection-empty">
     <h2>Protection</h2>
-    <p class="empty">Forms for mitigation, inbound, and anomaly rules are not on this page yet. They are tracked in #131.</p>
+    <p class="empty">Threat mitigation is not configured. Add a <code>mitigation</code> block with an allowlist to the mounted file and restart (docs/mitigation.md). Inbound and anomaly rules are edited in Settings.</p>
   </section>
   <section id="mitigation-section" hidden>
-    <h2>Threat mitigation</h2>
-    <p class="tag">Read-only monitor of RTBH, redirect, and FlowSpec rules and their recent changes. Rules are added and removed through <code>/api/mitigations</code> with basic auth. The mitigations report has the stored history.</p>
+    <h2>Threat mitigation <span id="mit-badge" class="badge mode-unknown">…</span></h2>
+    <p id="mit-badge-text" class="tag"></p>
+    <p class="tag">RTBH, redirect, and FlowSpec rules and their recent changes. A rule is added or removed through <code>/api/mitigations</code> (operator role, audited). The controller still checks the mitigation allowlist, the rule cap, the TTL, the learned RIB, and the mode: only <code>inject</code> announces, and only a prefix in the learned RIB. The mitigations report has the stored history.</p>
+    <form id="mit-form" class="mit-form" hidden autocomplete="off" aria-labelledby="mit-form-title">
+      <h3 id="mit-form-title">Add a rule</h3>
+      <p id="mit-form-note" class="tag"></p>
+      <div class="form">
+        <label>Prefix (learned, inside the allowlist)
+          <input id="mf-prefix" type="text" list="mf-prefix-list" placeholder="203.0.113.0/24" spellcheck="false" autocomplete="off">
+        </label>
+        <datalist id="mf-prefix-list"></datalist>
+        <label>Action
+          <select id="mf-action"></select>
+        </label>
+        <label id="mf-target-wrap">Target
+          <select id="mf-target"></select>
+        </label>
+        <label>TTL <input id="mf-ttl" type="text" placeholder="1h" spellcheck="false"></label>
+        <label>Reason <input id="mf-reason" type="text" maxlength="256" spellcheck="false"></label>
+      </div>
+      <fieldset id="mf-flowspec" class="form" hidden>
+        <legend>FlowSpec match</legend>
+        <label>Source network <input id="mf-source" type="text" placeholder="192.0.2.0/25" spellcheck="false"></label>
+        <label>Protocols <input id="mf-protocols" type="text" placeholder="udp, tcp" spellcheck="false"></label>
+        <label>Destination ports <input id="mf-dports" type="text" placeholder="53, 1000-2000" spellcheck="false"></label>
+        <label>Source ports <input id="mf-sports" type="text" placeholder="123" spellcheck="false"></label>
+        <label id="mf-rate-wrap">Rate (Mbit/s) <input id="mf-rate" type="text" inputmode="decimal" placeholder="100" spellcheck="false"></label>
+        <label id="mf-countries-wrap">Source countries <input id="mf-countries" type="text" placeholder="XX, YY" spellcheck="false"></label>
+      </fieldset>
+      <div class="controls">
+        <button type="submit" id="mf-add">Add rule</button>
+        <span id="mf-status" class="tag" role="status"></span>
+      </div>
+    </form>
     <div id="mitigation"></div>
+  </section>
+  <section id="protection-links" hidden>
+    <h2>Inbound and anomaly rules</h2>
+    <p class="tag">These are config blocks, so they are edited in <a href="/settings.html">Settings</a> (admin role, same checks as a start, audited). Each block shows its own mode there.</p>
+    <p id="protection-modes" class="exits"></p>
   </section>
 </main>
 </div>
 </div>
 <script src="/shell.js"></script>
 <script src="/app.js"></script>
+<script src="/protection.js"></script>
 </body>
 </html>

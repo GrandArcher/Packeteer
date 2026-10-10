@@ -6,7 +6,7 @@ The remaining UI conveniences (#34). All of them work in the stock image with a 
 |---|---|---|---|
 | Before/after graphs (#129) | `/graphs.html`, `/api/reports/timeseries`, the `timeseries` dashboard widget | viewer | `storage: {type: sqlite}` |
 | Dashboard overview and setup checklist (#49) | `/`, `/api/overview` | viewer | none |
-| Config editor and settings form (#102) | `/settings.html`, `/api/config`, `POST /api/config/form` | admin | `http.config_editor: true` + auth or basic auth |
+| Config editor and settings form (#102, inbound and anomaly rules #131) | `/settings.html`, `/api/config`, `POST /api/config/form` | admin | `http.config_editor: true` + auth or basic auth |
 | Setup wizard (#106, flow step #130) | `/settings.html`, `POST /api/config/wizard` | admin | `http.config_editor: true` + auth or basic auth |
 | Custom dashboards | `/dashboards.html`, `/api/dashboards` | every signed-in user, own dashboards | `storage: {type: sqlite}` + auth or basic auth |
 | Report subscriptions | `report_subscriptions`, `/api/subscriptions` | viewers see them, operators send now | `storage` + an `smtp` notifier |
@@ -29,7 +29,7 @@ Every page has the same chrome (#170). The mode banner is the first thing on the
 | Providers & Exchanges | `/providers.html` | Provider health. The exchange view is empty (#148) |
 | Commit & Cost | `/commit.html` | Empty (#174) |
 | Policies | `/policies.html` | Points to Settings, where the `rules` policy is edited (#130). It does not list rules yet |
-| Protection | `/protection.html` | The threat-mitigation monitor when that feature is on. Otherwise an empty state (#131) |
+| Protection | `/protection.html` | The threat-mitigation monitor with an add and remove rule form (#131) when that feature is on. Otherwise an empty state that says how to configure it |
 | Troubleshooting | `/troubleshooting.html` | Looking glass, probe, traceroute, whois |
 | Events | `/events.html` | Empty (#173) |
 | Settings | `/settings.html` | Wizard, settings form, YAML, report subscriptions. Admin |
@@ -58,7 +58,7 @@ docker run --network host --cap-add NET_RAW --cap-add NET_ADMIN \
 - **Prefixes** (`/prefixes.html`) have a filter (prefix or provider) and a switch for prefixes whose recommended exit differs from the learned one. A prefix card lists each learned path, including inactive add-path and BMP paths, with its MED (display only) and `via` (route server, bilateral, or unknown; #146). The ASN map is on the same page.
 - **Improvements** (`/improvements.html`) are labeled recommended outside inject and active in inject.
 - **Reports** (`/reports.html`) and **troubleshooting** (`/troubleshooting.html`) are the same sections as before, on their own URLs.
-- **Optional sections** (POPs on Overview, threat mitigation on Protection) are hidden when not configured; the overview lists which optional features are on and off. Protection shows the #131 empty state while the monitor is hidden.
+- **Optional sections** (POPs on Overview, threat mitigation on Protection) are hidden when not configured; the overview lists which optional features are on and off. Protection shows its empty state while the monitor is hidden.
 - **Errors.** Every section shows `Loading…` until its first answer and a plain empty state after it. When the controller cannot be reached or answers with an error, a banner says so (sign-in required, not allowed, or unreachable), the last data stays on screen marked stale, and the page keeps retrying every 5 seconds.
 
 `GET /api/overview` (viewer) is the same summary as JSON: `mode`, `ready`, `started`, `sources`, `providers` (`name`, `up`, `ok`, `failed`, `last_error`), `counts`, `bgp`, `features` (`name`, `on`), and `setup` (`id`, `level`, `title`, `detail`, `doc`). It is read-only and announces nothing.
@@ -156,6 +156,27 @@ A policy or source only restricts, orders, or measures. The learned-RIB check, t
 
 The file is read-only in many deployments (`:ro`). Then saving fails with a clear error and nothing changes. Leave `config_editor` off if you manage the file with Git or configuration management.
 
+### Mitigation, inbound, and anomaly rules (#131)
+
+Three forms put the features most likely to be misconfigured on screen. Each block shows a badge with its own mode: `observe` (nothing is announced), `suggest` (inbound only; nothing is announced), or `inject`. The page banner stays on top in every mode.
+
+**Mitigation rules** (`/protection.html`, operator role). The form sits above the rule table and uses the existing API: `POST /api/mitigations` to add, `DELETE /api/mitigations/{id}` to remove. It needs the same things the API does: `mitigation` configured, and auth or basic auth on (otherwise the page says so and shows no form). With role-based auth the form is hidden below operator, and the server refuses the call anyway. Fields: the prefix, the action, a target for a redirect, the TTL, a reason, and for FlowSpec actions the match (source network, protocols, destination ports, source ports), a rate for a rate limit, and source countries when `mitigation.geoip_db` is set. Only the actions the announcer's catalog offers are listed (RTBH always; redirect when targets exist; FlowSpec when it is enabled).
+
+The prefix picker reads `GET /api/mitigations/candidates?q=` (viewer): the prefixes in the **learned RIB view** that equal or sit inside the mitigation allowlist and contain `q`, at most 100, with `ready` (false until the RIB view is ready), `truncated`, and the allowlist. A default route is never listed. The form asks the same endpoint before it sends and refuses a prefix that is not in the answer, so it never submits a prefix outside the learned RIB view or the allowlist. That is a convenience on top of the controller, not the rail: the controller checks the allowlist, `max_rules`, the TTL bounds, the catalog, the FlowSpec conflict rule, and the mode on every call, and announces only in `inject`, only a prefix that is in the learned RIB, with the community and NO_EXPORT, and withdraws when the rule ends, the controller stops, or the RIB session drops. Removing a rule takes two clicks (Remove, then Confirm remove). Every add and remove is in the audit log with the actor and the rule id. In `observe` a rule is listed with the pending reason `mitigation.mode is observe (dry run, never announced)` and nothing reaches the announcer.
+
+**Inbound and anomaly rules** (`/settings.html`, admin role). Two more sections of the settings form, through the same `POST /api/config/form` merge and `PUT /api/config` save as the sections above.
+
+| Section | Edits | Notes |
+|---|---|---|
+| Inbound optimization | the `inbound` block: `mode`, `prefixes`, `local_pref`, `release_pct`, `max_improvements`, `moderated`, `performance` (`loss_pct`, `latency_ms`, `min_prefixes`, `release_pct`), `damping` (`disabled`, `confirm`, `backoff`, `max_hold`) | Mode offers `observe` and `suggest`. The form never turns inject on: a block that is already `inject` keeps it until changed, and turning it on is a YAML edit. The announcer stays in the YAML (shown as present or missing). Unchecking removes the whole block, announcer included. Empty fields use the defaults. A new block needs `telemetry` or the performance trigger, which the start checks say on Validate or Save |
+| Anomaly rules | `anomaly.rules`: one row per rule (`name`, `prefixes`, `protocols`, `min_mbps`, `action`, `target`, `rate_mbps`, `ttl`) | The first matching rule wins and rules keep their order. The detector, `source`, `interval`, and the caps stay in the YAML, and rules need an `anomaly` block that already has a detector. Rule prefixes must be inside `mitigation.allowlist`, which is shown beside the rows. The badge shows the mitigation mode, because a rule acts only through the mitigation controller |
+
+A section the operator did not change is not checked or rewritten, and a request that leaves a section out leaves that part of the file alone. A save that turns `inbound.mode` or `mitigation.mode` to `inject` needs `confirm_inject`, the same as turning on the top-level mode (a file that already had the block in inject does not ask again for an unrelated edit). Inbound and anomaly rules decide nothing about announcing: inbound steers still need top-level inject, an allowlisted prefix in the learned RIB, the community, NO_EXPORT, the cap, and hold time, and an anomaly rule only asks the mitigation controller.
+
+`POST /api/config/form` returns `form` with `inbound` (`enabled`, `has_announcer` display only) and `anomaly` (`enabled`, `mitigation_mode`, and `mitigation_allowlist` display only; `rules`) objects. Display-only fields sent back by a client are ignored.
+
+UI e2e: `internal/httpapi` tests drive the real mitigation controller in observe behind the API with an announcer that fails the test on any call: the page ships the form, the picker offers only learned prefixes inside the allowlist, a rule is added and removed through the calls the form makes, both are in the audit log, and the announcer is never reached. `internal/configedit` tests round-trip inbound and anomaly rules through `config.Load`. The docker job adds a smoke step (`#131`) that adds and removes a rule against the stock image in observe and loads both pages.
+
 ## Setup wizard
 
 `/settings.html` walks four steps, the last optional (#106, #130). `POST /api/config/wizard` renders a config from them and writes nothing. The result opens in the editor for review, and you save it like any other edit.
@@ -241,4 +262,4 @@ Lab proof (`lab/e2e-weights.sh`, CI job `e2e`): an FRR edge advertises 198.51.10
 
 The graphs (#129) are read-only and need no rollback. Delete a `timeseries` widget from a dashboard to hide it; a build from before #129 refuses to save a dashboard that still has one.
 
-The form sections and the wizard's flow step (#130) are UI and API only and add no config key: revert the change to drop them, or delete the `flow`, `vip`, and `outage` sources and the `rules` policy from the YAML (a restart withdraws every Packeteer route first). A file the form wrote is an ordinary config file that an older build loads unchanged. Remove `improvement_weights`, `http.config_editor`, and `report_subscriptions` and restart. The dashboard polish (#49) needs no rollback: it reads the same state, and `/api/overview` is read-only. The file config works exactly as before; the editor only ever wrote a plain YAML file. Stored dashboards stay in the database and are ignored by an older build. The display fixes (#171) are presentation only: revert that change to restore the previous chip, titles, timestamps, and unlabeled provider fields. The shell (#170) is presentation only as well: revert it to put every section back on `/`. No config key changes.
+The mitigation form and the inbound and anomaly sections (#131) are UI and API only and add no config key: revert the change to drop them, or remove the rules in the YAML (a restart withdraws every Packeteer route first, and mitigation rules are in memory, so they also go with a restart). The form sections and the wizard's flow step (#130) are UI and API only and add no config key: revert the change to drop them, or delete the `flow`, `vip`, and `outage` sources and the `rules` policy from the YAML (a restart withdraws every Packeteer route first). A file the form wrote is an ordinary config file that an older build loads unchanged. Remove `improvement_weights`, `http.config_editor`, and `report_subscriptions` and restart. The dashboard polish (#49) needs no rollback: it reads the same state, and `/api/overview` is read-only. The file config works exactly as before; the editor only ever wrote a plain YAML file. Stored dashboards stay in the database and are ignored by an older build. The display fixes (#171) are presentation only: revert that change to restore the previous chip, titles, timestamps, and unlabeled provider fields. The shell (#170) is presentation only as well: revert it to put every section back on `/`. No config key changes.

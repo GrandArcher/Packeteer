@@ -142,20 +142,35 @@ func (e *Editor) checkLocked(data []byte) Result {
 		res.RestartRequired = len(restart) > 0
 		res.ReloadOnline = len(online) > 0 && len(restart) == 0
 	}
-	res.EnablesInject = next.Mode == config.ModeInject && e.diskMode() != config.ModeInject
+	res.EnablesInject = injectOn(next, e.diskConfig())
 	return res
 }
 
-// diskMode is the mode of the file on disk, or "" when it does not load.
-func (e *Editor) diskMode() string {
+// diskConfig is the config on disk, the running config when the file does
+// not load, or nil.
+func (e *Editor) diskConfig() *config.Config {
 	cur, err := config.Load(e.path)
 	if err != nil {
-		if e.running != nil {
-			return e.running.Mode
-		}
-		return ""
+		return e.running
 	}
-	return cur.Mode
+	return cur
+}
+
+// injectOn is true when next turns inject on for something that was not
+// injecting in cur: the top-level mode, the inbound block (#131), or the
+// mitigation block (#131). A block already in inject stays quiet, so
+// saving an unrelated edit does not ask again.
+func injectOn(next, cur *config.Config) bool {
+	was := func(mode func(*config.Config) string) bool { return cur != nil && mode(cur) == config.ModeInject }
+	switch {
+	case next.Mode == config.ModeInject && !was(func(c *config.Config) string { return c.Mode }):
+		return true
+	case next.InboundMode() == config.ModeInject && !was((*config.Config).InboundMode):
+		return true
+	case next.MitigationMode() == config.ModeInject && !was((*config.Config).MitigationMode):
+		return true
+	}
+	return false
 }
 
 // Save writes data when base is the hash of the file on disk and data

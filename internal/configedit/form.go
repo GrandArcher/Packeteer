@@ -59,6 +59,9 @@ type Form struct {
 	Policies *FormPolicies `json:"policies"`
 	VIP      *FormVIP      `json:"vip"`
 	Outage   *FormOutage   `json:"outage"`
+	// #131: the inbound block and anomaly.rules, same rules.
+	Inbound *FormInbound `json:"inbound"`
+	Anomaly *FormAnomaly `json:"anomaly"`
 }
 
 // FormProvider is one provider row. Key is the name in the file when the
@@ -148,6 +151,9 @@ func ApplyForm(data []byte, form Form) ([]byte, error) {
 	}
 	form.normalize()
 	form.fillSections(cur)
+	if err := form.checkProtectionChange(cur); err != nil {
+		return nil, err
+	}
 	if err := form.withoutUnchangedSections(cur).validate(); err != nil {
 		return nil, err
 	}

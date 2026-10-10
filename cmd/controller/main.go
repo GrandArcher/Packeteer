@@ -567,6 +567,7 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 	col.Attach(engine, decider, view)
 	wireExchanges(cfg, col, view)
 	wireSuggestions(cfg, httpSrv, view)
+	wireMitigationCandidates(httpSrv, mit, view)
 	// Active/standby (#31): registered before the elector starts. A
 	// standby withdraws everything, runs no decisions, and announces
 	// nothing; the announce controllers check the same gate.

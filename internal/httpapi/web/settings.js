@@ -8,7 +8,19 @@ function emptyForm() {
     min_rtt_delta_pct: "", confirm_rounds: "",
     precedence: "", scorer_type: "", floor_max_loss_pct: "", floor_max_rtt: "",
     providers: [], targets: [], allowlist: [],
-    flow: emptyFlow(), policies: {rules: []}, vip: emptyVIP(), outage: emptyOutage()};
+    flow: emptyFlow(), policies: {rules: []}, vip: emptyVIP(), outage: emptyOutage(),
+    inbound: emptyInbound(), anomaly: emptyAnomaly()};
+}
+
+function emptyInbound() {
+  return {enabled: false, mode: "observe", prefixes: [], local_pref: "", release_pct: "", max_improvements: "", moderated: [],
+    has_announcer: false,
+    performance: {enabled: false, loss_pct: "", latency_ms: "", min_prefixes: "", release_pct: ""},
+    damping: {disabled: false, confirm: "", backoff: "", max_hold: ""}};
+}
+
+function emptyAnomaly() {
+  return {enabled: false, mitigation_mode: "", mitigation_allowlist: [], rules: []};
 }
 
 function emptyFlow() {
@@ -60,11 +72,11 @@ function editorOff(err) {
   var node = document.getElementById("ed-off");
   node.textContent = explain(err);
   node.hidden = !off;
-  ["ed-load", "ed-check", "ed-save", "wz-run", "wz-next", "wz-next-2", "wz-back", "wz-back-3", "wz-add-provider", "wz-sug", "form-apply", "form-reload", "form-add-provider", "form-add-target", "form-add-allow", "sug-refresh", "form-add-rule", "form-add-vip", "wz-next-3", "wz-back-4"].forEach(function (id) {
+  ["ed-load", "ed-check", "ed-save", "wz-run", "wz-next", "wz-next-2", "wz-back", "wz-back-3", "wz-add-provider", "wz-sug", "form-apply", "form-reload", "form-add-provider", "form-add-target", "form-add-allow", "sug-refresh", "form-add-rule", "form-add-vip", "form-add-anomaly-rule", "wz-next-3", "wz-back-4"].forEach(function (id) {
     var b = document.getElementById(id);
     if (b) b.disabled = off;
   });
-  ["form-fields", "form-flow", "form-vip", "form-outage"].forEach(function (id) {
+  ["form-fields", "form-flow", "form-vip", "form-outage", "form-inbound"].forEach(function (id) {
     var fields = document.getElementById(id);
     if (fields) fields.disabled = off;
   });
@@ -147,6 +159,19 @@ function readSections() {
   form.outage.interval = t("out-interval");
   form.outage.max_targets = t("out-max");
   form.outage.ignore_asns = splitList(byId("out-ignore").value);
+  var inb = form.inbound;
+  inb.enabled = byId("in-enabled").checked;
+  inb.mode = byId("in-mode").value;
+  inb.prefixes = splitList(byId("in-prefixes").value);
+  inb.local_pref = t("in-local-pref");
+  inb.release_pct = t("in-release");
+  inb.max_improvements = t("in-cap");
+  inb.moderated = [];
+  if (byId("in-mod-commit").checked) inb.moderated.push("commit");
+  if (byId("in-mod-perf").checked) inb.moderated.push("performance");
+  inb.performance = {enabled: byId("in-perf").checked, loss_pct: t("in-perf-loss"), latency_ms: t("in-perf-latency"),
+    min_prefixes: t("in-perf-min"), release_pct: t("in-perf-release")};
+  inb.damping = {disabled: byId("in-damp-off").checked, confirm: t("in-damp-confirm"), backoff: t("in-damp-backoff"), max_hold: t("in-damp-max")};
 }
 
 // setVal and setChecked also write the attribute, so the saved value is
@@ -186,6 +211,62 @@ function fillSections() {
   setVal("out-interval", o.interval);
   setVal("out-max", o.max_targets);
   setVal("out-ignore", listText(o.ignore_asns));
+  fillInbound();
+  fillAnomalyState();
+}
+
+// modeBadge sets a per-block observe or inject badge (#131).
+function modeBadge(id, mode) {
+  var b = byId(id);
+  var m = mode === "inject" || mode === "suggest" || mode === "observe" ? mode : "unknown";
+  b.className = "badge mode-" + m;
+  b.textContent = mode || "not configured";
+}
+
+function fillInbound() {
+  var i = form.inbound;
+  setChecked("in-enabled", i.enabled);
+  // Inject is offered only while the file already has it.
+  var sel = byId("in-mode");
+  Array.prototype.slice.call(sel.options).forEach(function (o) { if (o.value === "inject") sel.removeChild(o); });
+  if (i.mode === "inject") {
+    var o = el("option", "", "inject (set in the YAML)");
+    o.value = "inject";
+    sel.appendChild(o);
+  }
+  sel.value = i.mode || "observe";
+  setVal("in-prefixes", listText(i.prefixes));
+  setVal("in-local-pref", i.local_pref);
+  setVal("in-release", i.release_pct);
+  setVal("in-cap", i.max_improvements);
+  setChecked("in-mod-commit", (i.moderated || []).indexOf("commit") >= 0);
+  setChecked("in-mod-perf", (i.moderated || []).indexOf("performance") >= 0);
+  setChecked("in-perf", i.performance.enabled);
+  setVal("in-perf-loss", i.performance.loss_pct);
+  setVal("in-perf-latency", i.performance.latency_ms);
+  setVal("in-perf-min", i.performance.min_prefixes);
+  setVal("in-perf-release", i.performance.release_pct);
+  setChecked("in-damp-off", i.damping.disabled);
+  setVal("in-damp-confirm", i.damping.confirm);
+  setVal("in-damp-backoff", i.damping.backoff);
+  setVal("in-damp-max", i.damping.max_hold);
+  modeBadge("in-badge", i.enabled ? i.mode : "");
+  byId("in-badge-text").textContent = i.mode === "inject"
+    ? "Inject announces steer routes for allowlisted prefixes in the learned RIB."
+    : "Observe and suggest announce nothing.";
+  byId("in-announcer").textContent = i.enabled ? (i.has_announcer ? "An announcer is configured." : "No announcer is configured, so inject could not start.") : "";
+}
+
+function fillAnomalyState() {
+  var a = form.anomaly;
+  modeBadge("an-badge", a.enabled ? (a.mitigation_mode || "observe") : "");
+  byId("an-badge-text").textContent = a.mitigation_mode === "inject"
+    ? "Mitigation is in inject: a matching rule can announce a rule for a learned prefix."
+    : "Mitigation is not in inject: a matching rule is recorded and nothing is announced.";
+  byId("an-state").textContent = a.enabled
+    ? "Rule prefixes must be inside the mitigation allowlist" + ((a.mitigation_allowlist || []).length ? ": " + a.mitigation_allowlist.join(", ") + "." : ".")
+    : "Anomaly detection is not configured. Add an anomaly block with a detector to the YAML first (docs/anomaly.md).";
+  byId("form-add-anomaly-rule").disabled = !a.enabled;
 }
 
 var ruleActions = [["ignore", "ignore (native routing)"], ["allow", "allow (only these providers)"], ["deny", "deny (never these providers)"],
@@ -248,6 +329,53 @@ function renderRules() {
     root.appendChild(row);
   });
   if (!form.policies.rules.length) root.appendChild(el("p", "empty", "No rules. Native routing and the normal thresholds apply."));
+}
+
+var anomalyActions = [["blackhole", "blackhole"], ["redirect", "redirect"], ["flowspec_drop", "flowspec drop"],
+  ["flowspec_rate_limit", "flowspec rate limit"], ["flowspec_redirect", "flowspec redirect"]];
+
+function renderAnomalyRules() {
+  var root = byId("form-anomaly-rules");
+  clear(root);
+  form.anomaly.rules.forEach(function (r, i) {
+    var row = el("div", "row");
+    var name = rowInput(r.name, "udp-flood");
+    var prefixes = rowInput(listText(r.prefixes), "203.0.113.0/24", true);
+    var protos = rowInput(listText(r.protocols), "udp, tcp");
+    var min = rowInput(r.min_mbps, "0");
+    var action = selectInput(anomalyActions, r.action);
+    var target = rowInput(r.target, "scrubber");
+    var rate = rowInput(r.rate_mbps, "rate limit only");
+    var ttl = rowInput(r.ttl, "mitigation default");
+    var set = function () {
+      var x = form.anomaly.rules[i];
+      x.name = name.value.trim();
+      x.prefixes = splitList(prefixes.value);
+      x.protocols = splitList(protos.value);
+      x.min_mbps = min.value.trim();
+      x.action = action.value;
+      x.target = target.value.trim();
+      x.rate_mbps = rate.value.trim();
+      x.ttl = ttl.value.trim();
+    };
+    [name, prefixes, protos, min, target, rate, ttl].forEach(function (n) { n.addEventListener("input", set); });
+    action.addEventListener("change", set);
+    row.appendChild(labeled("Anomaly rule name", name));
+    row.appendChild(labeled("Anomaly rule prefixes", prefixes));
+    row.appendChild(labeled("Anomaly rule protocols", protos));
+    row.appendChild(labeled("Anomaly rule min Mbit/s", min));
+    row.appendChild(labeled("Anomaly rule action", action));
+    row.appendChild(labeled("Anomaly rule target", target));
+    row.appendChild(labeled("Anomaly rule rate Mbit/s", rate));
+    row.appendChild(labeled("Anomaly rule TTL", ttl));
+    var minus = el("button", "small", "−");
+    minus.type = "button";
+    minus.title = "Remove anomaly rule";
+    minus.addEventListener("click", function () { form.anomaly.rules.splice(i, 1); renderAnomalyRules(); });
+    row.appendChild(minus);
+    root.appendChild(row);
+  });
+  if (!form.anomaly.rules.length) root.appendChild(el("p", "empty", "No anomaly rules. Anomalies are detected and reported, and no mitigation rule is added."));
 }
 
 function renderVIPPrefixes() {
@@ -416,6 +544,7 @@ function renderForm() {
   renderAllow();
   renderRules();
   renderVIPPrefixes();
+  renderAnomalyRules();
   renderSuggestions(lastSuggestions);
 }
 
@@ -430,6 +559,7 @@ function loadForm(yaml) {
     form.flow = Object.assign(blank.flow, form.flow || {});
     form.vip = Object.assign(blank.vip, form.vip || {});
     form.outage = Object.assign(blank.outage, form.outage || {});
+    loadProtectionDefaults();
     if (!form.policies) form.policies = blank.policies;
     if (!form.policies.rules) form.policies.rules = [];
     ["listen", "exclude"].forEach(function (k) { if (!form.flow[k]) form.flow[k] = []; });
@@ -443,11 +573,27 @@ function loadForm(yaml) {
   });
 }
 
+// loadProtectionDefaults fills the #131 sections a reply may leave out.
+function loadProtectionDefaults() {
+  var blank = emptyForm();
+  form.inbound = Object.assign(blank.inbound, form.inbound || {});
+  form.inbound.performance = Object.assign(emptyInbound().performance, form.inbound.performance || {});
+  form.inbound.damping = Object.assign(emptyInbound().damping, form.inbound.damping || {});
+  ["prefixes", "moderated"].forEach(function (k) { if (!form.inbound[k]) form.inbound[k] = []; });
+  form.anomaly = Object.assign(blank.anomaly, form.anomaly || {});
+  if (!form.anomaly.rules) form.anomaly.rules = [];
+  if (!form.anomaly.mitigation_allowlist) form.anomaly.mitigation_allowlist = [];
+  form.anomaly.rules.forEach(function (r) {
+    ["prefixes", "protocols"].forEach(function (k) { if (!r[k]) r[k] = []; });
+  });
+}
+
 function loadFormDefaults() {
   var blank = emptyForm();
   form.flow = Object.assign(blank.flow, form.flow || {});
   form.vip = Object.assign(blank.vip, form.vip || {});
   form.outage = Object.assign(blank.outage, form.outage || {});
+  loadProtectionDefaults();
   if (!form.policies) form.policies = blank.policies;
 }
 
@@ -762,13 +908,19 @@ byId("form-add-rule").addEventListener("click", function () {
   form.policies.rules.push({key: "", name: "", action: "ignore", providers: [], prefixes: [], asns: [], countries: [], traffic: "", max_loss_pct: "", max_rtt: ""});
   renderRules();
 });
+byId("form-add-anomaly-rule").addEventListener("click", function () {
+  form.anomaly.rules.push({key: "", name: "", prefixes: [], protocols: [], min_mbps: "", action: "blackhole", target: "", rate_mbps: "", ttl: ""});
+  renderAnomalyRules();
+});
 byId("form-add-vip").addEventListener("click", function () {
   form.vip.prefixes.push({key: "", prefix: "", host: ""});
   renderVIPPrefixes();
 });
 ["fl-enabled", "fl-listen", "fl-window", "fl-top-n", "fl-max-targets", "fl-tail", "fl-min-bytes", "fl-min-pct", "fl-exclude",
   "vip-enabled", "vip-interval", "vip-max", "vip-asns",
-  "out-enabled", "out-min", "out-window", "out-loss", "out-rtt", "out-interval", "out-max", "out-ignore"].forEach(function (id) {
+  "out-enabled", "out-min", "out-window", "out-loss", "out-rtt", "out-interval", "out-max", "out-ignore",
+  "in-enabled", "in-mode", "in-prefixes", "in-local-pref", "in-release", "in-cap", "in-mod-commit", "in-mod-perf", "in-perf",
+  "in-perf-loss", "in-perf-latency", "in-perf-min", "in-perf-release", "in-damp-off", "in-damp-confirm", "in-damp-backoff", "in-damp-max"].forEach(function (id) {
   byId(id).addEventListener("change", readSections);
   byId(id).addEventListener("input", readSections);
 });
