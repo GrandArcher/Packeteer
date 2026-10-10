@@ -1,11 +1,10 @@
 package flow
 
 import (
+	"net/netip"
 	"runtime"
 	"testing"
 	"time"
-
-	"net/netip"
 )
 
 func TestAggregateKeepsBusiestAndMust(t *testing.T) {
@@ -124,11 +123,13 @@ func TestAggregateHostListsStayBounded(t *testing.T) {
 	if total != buckets*per {
 		t.Fatalf("total %d, want %d", total, buckets*per)
 	}
-	// One host map per prefix is about 50 MiB before the sort. The sum
-	// of bytes is a fraction of that. A regression that materializes
-	// every host list fails this ceiling.
+	// TotalAlloc counts allocations, not live heap, so it does not move
+	// with GC timing. Measured: about 34 MiB, nearly all the per-prefix
+	// totals map for 150,000 prefixes. Materializing a host map for every
+	// prefix adds roughly another 50 MiB (about 85 MiB in all). The
+	// ceiling sits between the two with room on both sides.
 	delta := after.TotalAlloc - before.TotalAlloc
-	if delta > 48<<20 {
+	if delta > 60<<20 {
 		t.Fatalf("aggregate allocated %d bytes", delta)
 	}
 }

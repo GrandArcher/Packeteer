@@ -1,0 +1,1558 @@
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+index 8724fab..0ab34ba 100644
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -6,6 +6,8 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
+ 
+ ### Fixed
+ 
++- Load-test RSS plateau and leak check (#112). The `pr` check read 379 MiB of growth after #110 (Actions run 37080504822) while peak RSS stayed under 6144; #120 set the budget at 384 and it stays there. The extra was the collector's return-and-refill on a taller heap, not an unbounded per-prefix map, and the heap is trimmed where that was cheap: one iBGP path per prefix is stored in the route entry instead of a map (710 to 358 bytes per prefix on a 50k synthetic table), `Lookup` and `Covering` skip prefix lengths with no selected route, per-address probe semaphores are dropped when the host leaves the probe set, the flow reader decodes in its socket buffer and reuses its observation slice and eviction scratch, and the fixed prober formats the target address only when a path matches on it. The load job also fails when RSS is still climbing at the end: new budget `rss_slope_mb` (192 for `pr`, 192 for the weekly soak) is the smaller of the Theil-Sen slope over the last third of the run times that third, and the last-sixth median minus the middle-third median. A soft `GOMEMLIMIT` was tried and dropped: on Actions run 38058605143 it pushed CPU to 2.6 cores and flow drops to 13.5 %. No budget is raised. Observe stays the default. Nothing is announced that is not in the learned RIB. Rollback: revert this change.
++
+ - UI display bugs (#171). The header mode chip sets its own colors, so observe, suggest, and inject each meet WCAG AA (the observe chip had inherited the header's white text onto the light pill). On a custom dashboard the improvements widget is titled Recommended improvements outside inject and Active improvements in inject; a title the operator set on that widget is kept. Widget timestamps use the dashboard local format (`toLocaleString`), the same formatter as the main page. Each settings-form provider field (name, probe source, next hop, cost, commit) and the wizard's three provider fields have a visible label, and that label is the accessible name. The docker job's UI smoke covers the chip, the title, the labels, and the formatted time. No new config key. No announce-path change. Observe stays the default. The mode banner stays on the dashboard. Rollback: revert this change.
+ 
+ - FRR HA lab lease-release check (#190). Step 7 grepped `docker compose logs` once for `ha: lease released`. The logging driver can deliver that line about a second after the process has written it (Actions run 37789070267), so a release that did happen failed the job. `lab/checklease` watches the lease file from inside the standby, armed before SIGTERM, and fails if pk-a does not release the record within 20s. The released flag is overwritten when the standby takes the lease, so the watch has to see that transition; a record that was already released does not count, and a release that never arrives still fails. The 10s takeover bound is unchanged. No config key. No announce-path change. Rollback: revert this change; the lab goes back to the one-shot log grep.
+diff --git a/docs/performance.md b/docs/performance.md
+index 8145c20..d5e9779 100644
+--- a/docs/performance.md
++++ b/docs/performance.md
+@@ -24,6 +24,7 @@ The budgets live in [lab/soak/budgets.yaml](../lab/soak/budgets.yaml) and are se
+ | Full table learned | Session open to `packeteer_rib_prefixes` = 1,250,000 | ≤ 90 s | ≤ 90 s |
+ | Peak RSS | `VmHWM` of the process, learning included | ≤ 6144 MiB | ≤ 6656 MiB |
+ | RSS growth | Median RSS over the second half of the post-warmup soak, minus the median RSS during warmup (3 min / 15 min). Warmup is the baseline, so a later dip and refill toward that level is not growth | ≤ 384 MiB | ≤ 512 MiB |
++| RSS still rising | RSS climb at the end of the run (#112): the smaller of the Theil-Sen slope over the last third times that third, and the median of the last sixth minus the median of the middle third. Both must show a climb, so a step or a dip and refill is not read as a leak | ≤ 192 MiB | ≤ 192 MiB |
+ | Average CPU | CPU seconds over wall time in the soak phase | ≤ 2.0 cores | ≤ 2.0 cores |
+ | OS threads | Most seen | ≤ 64 | ≤ 64 |
+ | Flow datagrams dropped | Host UDP `RcvbufErrors` over datagrams received, soak phase | ≤ 5 % | ≤ 5 % |
+@@ -38,6 +39,10 @@ Measured on an 8-core development machine with the `pr` workload and a 4-minute
+ 
+ On the nine `pr` runs on GitHub-hosted `ubuntu-latest` through 2026-10-01, end RSS stayed in a 4609–4818 MiB band and peak RSS stayed between 4869 and 5353 (all under 6144). Go returns unused pages with `MADV_DONTNEED`, so RSS falls after a collection and climbs back over the next minutes. The previous growth check compared medians of the first and last tenth after warmup, about 35 seconds each, which is shorter than that cycle. Actions run 36902639588 (the push of #96 to `main`) sat in a valley for that first tenth (baseline 4476 MiB) and on the refilled heap for the last (4818), and failed at 342 MiB. Replaying each run's per-sample RSS log (printed to the nearest MiB) with the rule above gives 97 MiB on that run (warmup median 4619, second-half median 4716) and at most 146 MiB across the nine. On 2026-10-07 the same figure on green `main` runs was 0, 176, and 191 MiB (ends 4806–4863 MiB, peaks 4954–5100). Actions run 37698413398 measured 258 MiB (warmup median 4590, second-half median 4849, peak 4967). RSS on that run fell from 4966 to 4827 over the last three minutes and stayed there, and the absolute end matched the green runs, so the extra was where the scavenger cycle sat relative to warmup. The `pr` budget is 384 MiB: above that sample, and still under the 400 MiB sustained rise the growth test rejects. Peak RSS is unchanged, the weekly soak budget stays 512, and the `load` job still runs this check.
+ 
++#112 trims the heap where that was cheap and adds a leak check; it raises no budget. A single iBGP path is stored in the route entry, so a full table does not pay a map header per prefix (710 to 358 bytes per prefix on a 50k synthetic table, measured with `TestSinglePathAdjIsCompact`). `Lookup` skips prefix lengths that hold no selected route (0 allocs per call). Per-address probe semaphores are dropped when the host leaves the probe set, so they stay bounded by the current target list. The flow reader decodes in its socket buffer and reuses the observation slice and the window eviction scratch, and the fixed prober formats the target address only when a path matches on it. A soft memory limit (`GOMEMLIMIT` once the live heap stopped growing) was tried and dropped: on Actions run 38058605143 it traded the plateau for collector work, and CPU read 2.6 cores and flow datagrams dropped 13.5 %, both over budget. The growth budget stays 384 MiB.
++
++The growth figure compares the warmup with the second half of the run, so it cannot say whether RSS has levelled off. The "RSS still rising" row reads the end of the run itself and fails when the heap is still climbing. It uses a pairwise-slope median, not a least-squares fit, because RSS moves in steps and one step at the last sample is not a trend, and it requires the end to sit above the middle third so a dip and refill to a level the run already had is not a climb. Replayed on the RSS logged by three green runs on 2026-10-10 (Actions 38060328414, 38059199721, 38058626210; kept in `lab/soak/testdata`) it reads 0, 0, and 103 MiB; the same runs with 12 MiB per sample added across the last third fail. The weekly soak value has not been measured on a soak run yet.
++
+ ## Findings fixed with this test
+ 
+ The first full-table run dropped 78.8 % of flow datagrams at 20,000 records a second, where a 20,000-prefix table dropped none. Each window bucket of the `flow` source holds at most 20,000 prefixes. Once full, every new prefix rescanned all of them for the smallest, and with a full table nearly every record is a new prefix. A full bucket now frees a sixteenth of its smallest prefixes in one pass (never one larger than the newcomer), and the anomaly counters prune idle keys at most once a minute while at their cap. Drops fell to 1.8 % and soak CPU from 1.2 to 0.72 cores. Which prefixes are kept is unchanged: the busiest stay, and a smaller prefix never displaces a larger one.
+diff --git a/internal/plugins/prober/fixed/fixed.go b/internal/plugins/prober/fixed/fixed.go
+index 072e946..afd61e4 100644
+--- a/internal/plugins/prober/fixed/fixed.go
++++ b/internal/plugins/prober/fixed/fixed.go
+@@ -55,10 +55,11 @@ type PathSpec struct {
+ // Prober returns configured probe results.
+ type Prober struct {
+ 	plugin.Base
+-	file  string
+-	sent  int
+-	rttMs float64
+-	paths []PathSpec
++	file      string
++	sent      int
++	rttMs     float64
++	paths     []PathSpec
++	anyTarget bool // a path matches on target; Probe must format the address
+ }
+ 
+ // New is the plugin factory.
+@@ -95,6 +96,7 @@ func New(c plugin.Config, _ plugin.Env) (plugin.Prober, error) {
+ func (p *Prober) setPaths(paths []PathSpec) error {
+ 	seen := map[string]bool{}
+ 	out := make([]PathSpec, len(paths))
++	anyTarget := false
+ 	for i, s := range paths {
+ 		if s.Provider == "" {
+ 			return fmt.Errorf("paths[%d]: provider is required", i)
+@@ -105,6 +107,7 @@ func (p *Prober) setPaths(paths []PathSpec) error {
+ 				return fmt.Errorf("paths[%d]: target %q is not an IP address", i, s.Target)
+ 			}
+ 			s.Target = a.String()
++			anyTarget = true
+ 		}
+ 		if s.Count < 0 || s.Count > 1000 {
+ 			return fmt.Errorf("paths[%d]: count %d must be between 0 and 1000", i, s.Count)
+@@ -140,6 +143,7 @@ func (p *Prober) setPaths(paths []PathSpec) error {
+ 		out[i] = s
+ 	}
+ 	p.paths = out
++	p.anyTarget = anyTarget
+ 	return nil
+ }
+ 
+@@ -223,7 +227,15 @@ func (p *Prober) Probe(_ context.Context, req plugin.ProbeRequest) (plugin.Probe
+ 		}
+ 		sent, rtt, paths = snap.Sent, snap.RTTMs, tmp.paths
+ 	}
+-	spec, ok := matchPath(paths, req.Provider, req.Target.String(), req.Count)
++	// The load test's fixed prober has no per-target paths. Formatting
++	// the address on every probe is pure garbage at four addresses times
++	// the measured set. A file can gain a target between reads, so a
++	// file always formats.
++	target := ""
++	if p.file != "" || p.anyTarget {
++		target = req.Target.String()
++	}
++	spec, ok := matchPath(paths, req.Provider, target, req.Count)
+ 	if !ok {
+ 		if len(paths) > 0 {
+ 			return plugin.ProbeResult{}, fmt.Errorf("fixed prober: no result for provider %q", req.Provider)
+diff --git a/internal/plugins/source/flow/decode.go b/internal/plugins/source/flow/decode.go
+index 8348a9f..6741632 100644
+--- a/internal/plugins/source/flow/decode.go
++++ b/internal/plugins/source/flow/decode.go
+@@ -93,6 +93,27 @@ type decoder struct {
+ 	rates map[rateKey]uint64
+ }
+ 
++// obsPool reuses the observation slice for one datagram. Observations
++// hold no pointers into the packet, and ingest finishes with the slice
++// before the next datagram. A slice bigger than a jumbo packet is dropped
++// so a pathological exporter cannot pin it.
++var obsPool = sync.Pool{New: func() any {
++	s := make([]observation, 0, 64)
++	return s
++}}
++
++func getObs() []observation {
++	s := obsPool.Get().([]observation)
++	return s[:0]
++}
++
++func putObs(s []observation) {
++	if cap(s) == 0 || cap(s) > 4096 {
++		return
++	}
++	obsPool.Put(s[:0])
++}
++
+ func (d *decoder) decode(exporter netip.Addr, payload []byte) ([]observation, error) {
+ 	if len(payload) < 2 {
+ 		return nil, errors.New("short packet")
+@@ -130,7 +151,7 @@ func decodeV5(p []byte) ([]observation, error) {
+ 	// field. Zero means the octet counts are already absolute.
+ 	rate := uint64(binary.BigEndian.Uint16(p[22:24]) & 0x3fff)
+ 	rest := p[24:]
+-	var out []observation
++	out := getObs()
+ 	for i := 0; i < count; i++ {
+ 		if len(rest) < 48 {
+ 			return out, errors.New("netflow v5: short record")
+@@ -184,7 +205,7 @@ func (d *decoder) decodeIPFIX(exporter netip.Addr, p []byte) ([]observation, err
+ }
+ 
+ func (d *decoder) walkSets(exp netip.Addr, version uint16, domain uint32, body []byte) ([]observation, error) {
+-	var obs []observation
++	obs := getObs()
+ 	var errs []error
+ 	for len(body) >= 4 {
+ 		id := binary.BigEndian.Uint16(body[0:2])
+@@ -206,9 +227,7 @@ func (d *decoder) walkSets(exp netip.Addr, version uint16, domain uint32, body [
+ 		case version == 10 && id == 3:
+ 			err = d.takeIPFIXOptions(exp, domain, set)
+ 		case id >= 256:
+-			var got []observation
+-			got, err = d.takeData(exp, version, domain, id, set)
+-			obs = append(obs, got...)
++			obs, err = d.takeData(exp, version, domain, id, set, obs)
+ 		}
+ 		if err != nil {
+ 			errs = append(errs, err)
+@@ -384,13 +403,12 @@ type gotRec struct {
+ 	rate      uint64
+ }
+ 
+-func (d *decoder) takeData(exp netip.Addr, version uint16, domain uint32, id uint16, body []byte) ([]observation, error) {
++func (d *decoder) takeData(exp netip.Addr, version uint16, domain uint32, id uint16, body []byte, obs []observation) ([]observation, error) {
+ 	t, ok := d.tmpl[tmplKey{exp, version, domain, id}]
+ 	if !ok {
+-		return nil, fmt.Errorf("template %d not found", id)
++		return obs, fmt.Errorf("template %d not found", id)
+ 	}
+ 	rk := rateKey{exp, version, domain}
+-	var obs []observation
+ 	for len(body) > 0 {
+ 		rec, rest, err := nextRecord(body, t.fields)
+ 		if errors.Is(err, errNeedMore) {
+@@ -582,7 +600,7 @@ func decodeSFlow(p []byte) ([]observation, error) {
+ 	if n > maxFlowSamples {
+ 		return nil, errors.New("sflow: too many samples")
+ 	}
+-	var out []observation
++	out := getObs()
+ 	for i := uint32(0); i < n; i++ {
+ 		if len(p)-off < 8 {
+ 			return out, errors.New("sflow: short sample")
+diff --git a/internal/plugins/source/flow/decode_bench_test.go b/internal/plugins/source/flow/decode_bench_test.go
+new file mode 100644
+index 0000000..5e5a23a
+--- /dev/null
++++ b/internal/plugins/source/flow/decode_bench_test.go
+@@ -0,0 +1,30 @@
++package flow
++
++import (
++	"encoding/binary"
++	"testing"
++)
++
++func BenchmarkDecodeV5(b *testing.B) {
++	p := make([]byte, 24+48)
++	binary.BigEndian.PutUint16(p[0:2], 5)
++	binary.BigEndian.PutUint16(p[2:4], 1)
++	rec := p[24:]
++	copy(rec[0:4], []byte{192, 0, 2, 1})
++	copy(rec[4:8], []byte{198, 51, 100, 9})
++	binary.BigEndian.PutUint32(rec[20:24], 1000)
++	rec[37] = 0x02
++	rec[38] = 6
++	b.ReportAllocs()
++	b.ResetTimer()
++	for i := 0; i < b.N; i++ {
++		obs, err := decodeV5(p)
++		if err != nil {
++			b.Fatal(err)
++		}
++		if len(obs) != 1 {
++			b.Fatalf("obs = %d", len(obs))
++		}
++		putObs(obs)
++	}
++}
+diff --git a/internal/plugins/source/flow/flow.go b/internal/plugins/source/flow/flow.go
+index 52e2096..c5c6343 100644
+--- a/internal/plugins/source/flow/flow.go
++++ b/internal/plugins/source/flow/flow.go
+@@ -655,9 +655,9 @@ func (s *Source) readLoop(ctx context.Context, c *net.UDPConn) {
+ 		if n == 0 || addr == nil {
+ 			continue
+ 		}
+-		payload := make([]byte, n)
+-		copy(payload, buf[:n])
+-		s.ingest(s.now(), udpAddr(addr), payload)
++		// Decode before the next read. ingest does not keep the
++		// payload, so the read buffer is reused instead of copied.
++		s.ingest(s.now(), udpAddr(addr), buf[:n])
+ 	}
+ }
+ 
+@@ -925,6 +925,7 @@ func (s *Source) setSubranges(t *plugin.Target, subs []subRank, left *int) {
+ 
+ func (s *Source) ingest(at time.Time, exporter netip.Addr, payload []byte) {
+ 	obs, err := s.dec.decode(exporter, payload)
++	defer putObs(obs)
+ 	if err != nil {
+ 		s.log.Debug("flow decode", "exporter", exporter.String(), "err", err)
+ 	}
+diff --git a/internal/plugins/source/flow/window.go b/internal/plugins/source/flow/window.go
+index a67a01e..4f65cc0 100644
+--- a/internal/plugins/source/flow/window.go
++++ b/internal/plugins/source/flow/window.go
+@@ -27,6 +27,9 @@ type bucket struct {
+ 	minP  netip.Prefix
+ 	minB  uint64
+ 	minOK bool
++	// scratch is reused by evict so a full bucket does not allocate a
++	// fresh slice of every byte-count on each new prefix.
++	scratch []uint64
+ }
+ 
+ // maxFlowHosts is how many destinations one prefix keeps. The probe
+@@ -232,10 +235,14 @@ func (b *bucket) evict(k int, n uint64) bool {
+ 	if b.minOK && n <= b.minB {
+ 		return false
+ 	}
+-	vals := make([]uint64, 0, len(b.cells))
++	vals := b.scratch[:0]
++	if cap(vals) < len(b.cells) {
++		vals = make([]uint64, 0, len(b.cells))
++	}
+ 	for _, c := range b.cells {
+ 		vals = append(vals, c.bytes)
+ 	}
++	b.scratch = vals
+ 	slices.Sort(vals)
+ 	// Only cells smaller than n may go, at most k of them.
+ 	k = min(k, sort.Search(len(vals), func(i int) bool { return vals[i] >= n }))
+diff --git a/internal/probe/memory.go b/internal/probe/memory.go
+index 4158b99..17d727e 100644
+--- a/internal/probe/memory.go
++++ b/internal/probe/memory.go
+@@ -40,6 +40,7 @@ type proberSlot struct {
+ // are still probed and keep their prober.
+ func (e *Engine) beginProberRound(targets []plugin.Target) {
+ 	live := e.liveHosts(targets)
++	e.pruneSems(live)
+ 	e.mu.Lock()
+ 	defer e.mu.Unlock()
+ 	e.proberPlan = map[netip.Addr]int{}
+@@ -59,6 +60,22 @@ func (e *Engine) beginProberRound(targets []plugin.Target) {
+ 	e.evictProberMemLocked()
+ }
+ 
++// pruneSems drops per-address semaphores for hosts that left the probe
++// set. The map is otherwise only inserted, so a prefix that rotates out
++// of the flow window would keep a channel for every address it ever
++// probed. A probe already holding a deleted channel still releases it
++// (it keeps its own reference); only a probe of the same host that
++// overlaps a round boundary could briefly run beside it.
++func (e *Engine) pruneSems(live map[netip.Addr]struct{}) {
++	e.semMu.Lock()
++	defer e.semMu.Unlock()
++	for a := range e.sems {
++		if _, ok := live[a.Unmap()]; !ok {
++			delete(e.sems, a)
++		}
++	}
++}
++
+ // liveHosts is every address the target list can probe, including
+ // prefixes that are not due yet. A provider whose source is the other
+ // address family is skipped, matching job construction.
+diff --git a/internal/probe/memory_test.go b/internal/probe/memory_test.go
+index c8949d1..20eecb8 100644
+--- a/internal/probe/memory_test.go
++++ b/internal/probe/memory_test.go
+@@ -171,6 +171,46 @@ func TestProberMemoryBounded(t *testing.T) {
+ 	}
+ }
+ 
++func TestSemaphorePrune(t *testing.T) {
++	h1 := netip.MustParseAddr("198.51.100.1")
++	h2 := netip.MustParseAddr("203.0.113.9")
++	src := &countingSource{fresh: true, targets: []plugin.Target{
++		{Prefix: pfx1, Host: h1},
++		{Prefix: pfx2, Host: h2},
++	}}
++	e, err := New([]Provider{provA}, []NamedProber{{"icmp", &fakeProber{fn: allReplies}}},
++		[]NamedSource{{Name: "static", Source: src}}, opts())
++	if err != nil {
++		t.Fatal(err)
++	}
++	e.RunOnce(context.Background())
++	if _, ok := e.sems[h2]; !ok {
++		t.Fatalf("sems after first round = %v", semKeys(e))
++	}
++	n := len(e.sems)
++	src.targets = []plugin.Target{{Prefix: pfx1, Host: h1}}
++	e.RunOnce(context.Background())
++	if _, ok := e.sems[h2]; ok {
++		t.Fatalf("semaphore kept for a host that left: %v", semKeys(e))
++	}
++	if len(e.sems) >= n {
++		t.Fatalf("sems len %d, was %d", len(e.sems), n)
++	}
++	if _, ok := e.sems[h1]; !ok {
++		t.Fatal("semaphore for the host still probed was dropped")
++	}
++}
++
++func semKeys(e *Engine) []netip.Addr {
++	e.semMu.Lock()
++	defer e.semMu.Unlock()
++	out := make([]netip.Addr, 0, len(e.sems))
++	for a := range e.sems {
++		out = append(out, a)
++	}
++	return out
++}
++
+ func TestProberMemoryDropsHostNoLongerProbed(t *testing.T) {
+ 	h1 := netip.MustParseAddr("198.51.100.1")
+ 	h2 := netip.MustParseAddr("203.0.113.1")
+diff --git a/internal/rib/adj.go b/internal/rib/adj.go
+new file mode 100644
+index 0000000..111f920
+--- /dev/null
++++ b/internal/rib/adj.go
+@@ -0,0 +1,118 @@
++package rib
++
++import "net/netip"
++
++// pathSet is the iBGP paths for one prefix.
++//
++// A full table is almost all single-path prefixes (no add-path). Those
++// are stored inline. A map per prefix is a few hundred bytes of header
++// on top of the route, and at a million prefixes that header is a large
++// part of the heap the load test measures. A second path promotes the
++// set to a map; dropping back to one path releases it.
++type pathSet struct {
++	n    int
++	key  adjKey
++	one  Route
++	many map[adjKey]Route
++}
++
++func (s *pathSet) set(k adjKey, rt Route) {
++	if s.n == 0 {
++		s.key, s.one, s.n = k, rt, 1
++		return
++	}
++	if s.many == nil {
++		if s.key == k {
++			s.one = rt
++			return
++		}
++		s.many = make(map[adjKey]Route, 2)
++		s.many[s.key] = s.one
++		s.one = Route{}
++	}
++	s.many[k] = rt
++	s.n = len(s.many)
++}
++
++// del removes k. It reports whether the set is now empty.
++func (s *pathSet) del(k adjKey) bool {
++	if s.n == 0 {
++		return true
++	}
++	if s.many == nil {
++		if s.key != k {
++			return false
++		}
++		*s = pathSet{}
++		return true
++	}
++	if _, ok := s.many[k]; !ok {
++		return false
++	}
++	delete(s.many, k)
++	switch len(s.many) {
++	case 0:
++		*s = pathSet{}
++		return true
++	case 1:
++		for kk, rt := range s.many {
++			s.key, s.one = kk, rt
++		}
++		s.many = nil
++		s.n = 1
++		return false
++	default:
++		s.n = len(s.many)
++		return false
++	}
++}
++
++func (s *pathSet) has(k adjKey) bool {
++	if s.n == 0 {
++		return false
++	}
++	if s.many == nil {
++		return s.key == k
++	}
++	_, ok := s.many[k]
++	return ok
++}
++
++func (s *pathSet) update(k adjKey, rt Route) {
++	if s.many == nil {
++		if s.n == 1 && s.key == k {
++			s.one = rt
++		}
++		return
++	}
++	if _, ok := s.many[k]; ok {
++		s.many[k] = rt
++	}
++}
++
++func (s *pathSet) each(fn func(adjKey, Route)) {
++	if s == nil || s.n == 0 {
++		return
++	}
++	if s.many == nil {
++		fn(s.key, s.one)
++		return
++	}
++	for k, rt := range s.many {
++		fn(k, rt)
++	}
++}
++
++// putAdj replaces the iBGP paths for p. Tests build a view without a
++// session. An empty paths map removes p.
++func (v *View) putAdj(p netip.Prefix, paths map[adjKey]Route) {
++	var s pathSet
++	for k, rt := range paths {
++		s.set(k, rt)
++	}
++	if s.n == 0 {
++		delete(v.adj, p)
++		return
++	}
++	v.adj[p] = s
++}
+diff --git a/internal/rib/adj_test.go b/internal/rib/adj_test.go
+new file mode 100644
+index 0000000..08d7928
+--- /dev/null
++++ b/internal/rib/adj_test.go
+@@ -0,0 +1,105 @@
++package rib
++
++import (
++	"net/netip"
++	"runtime"
++	"testing"
++)
++
++func TestLookupSkipsEmptyLengths(t *testing.T) {
++	v, err := New(Options{
++		ASN: 64512, RouterID: netip.MustParseAddr("192.0.2.10"),
++		Neighbors: []Neighbor{{Address: netip.MustParseAddr("192.0.2.1")}},
++	})
++	if err != nil {
++		t.Fatal(err)
++	}
++	pfx := netip.MustParsePrefix("198.51.100.0/24")
++	v.routes[pfx] = Route{Prefix: pfx, Provider: "transit-a"}
++	v.routeLens[24] = 1
++	if rt, ok := v.Lookup(netip.MustParseAddr("198.51.100.9")); !ok || rt.Prefix != pfx {
++		t.Fatalf("lookup = %+v %v", rt, ok)
++	}
++	// Nothing longer is learned, so the /24 still covers .200.
++	if rt, ok := v.Lookup(netip.MustParseAddr("198.51.100.200")); !ok || rt.Prefix != pfx {
++		t.Fatalf("cover = %+v %v", rt, ok)
++	}
++	if c, ok := v.Covering(netip.MustParsePrefix("198.51.100.128/25")); !ok || c.Prefix != pfx {
++		t.Fatalf("covering = %+v %v", c, ok)
++	}
++	v.routeLens[24] = 0
++	if _, ok := v.Lookup(netip.MustParseAddr("198.51.100.9")); ok {
++		t.Fatal("length index said the /24 was absent and lookup still hit it")
++	}
++}
++
++func TestPathSetPromoteAndDemote(t *testing.T) {
++	var s pathSet
++	k1 := adjKey{id: 1}
++	k2 := adjKey{id: 2}
++	s.set(k1, Route{PathID: 1})
++	if s.many != nil || !s.has(k1) || s.n != 1 {
++		t.Fatalf("single = %+v", s)
++	}
++	s.set(k2, Route{PathID: 2})
++	if s.many == nil || s.n != 2 {
++		t.Fatalf("promoted = %+v", s.n)
++	}
++	if s.del(k2) || s.many != nil || s.n != 1 || !s.has(k1) {
++		t.Fatalf("demoted many=%v n=%d", s.many != nil, s.n)
++	}
++	if !s.del(k1) || s.n != 0 {
++		t.Fatal("not empty")
++	}
++}
++
++// TestSinglePathAdjIsCompact locks the full-table layout: one path per
++// prefix stays inline. The old map-per-prefix was about 700 bytes.
++func TestSinglePathAdjIsCompact(t *testing.T) {
++	const n = 50000
++	v := &View{adj: map[netip.Prefix]pathSet{}}
++	nh := netip.MustParseAddr("192.0.2.1")
++	nbr := netip.MustParseAddr("192.0.2.254")
++	runtime.GC()
++	var before runtime.MemStats
++	runtime.ReadMemStats(&before)
++	for i := 0; i < n; i++ {
++		p := netip.PrefixFrom(netip.AddrFrom4([4]byte{byte(i >> 16), byte(i >> 8), byte(i), 0}), 24)
++		v.putAdj(p, map[adjKey]Route{
++			{neighbor: nbr}: {Prefix: p, NextHop: nh, ASPath: []uint32{64496, 64500}},
++		})
++	}
++	runtime.GC()
++	var after runtime.MemStats
++	runtime.ReadMemStats(&after)
++	per := float64(after.HeapAlloc-before.HeapAlloc) / n
++	t.Logf("single-path adj %.0f bytes/prefix", per)
++	if per > 520 {
++		t.Fatalf("single-path adj is %.0f bytes/prefix; want <= 520", per)
++	}
++	if len(v.adj) != n {
++		t.Fatalf("len = %d", len(v.adj))
++	}
++}
++
++func BenchmarkLookup(b *testing.B) {
++	const n = 20000
++	v := &View{routes: map[netip.Prefix]Route{}, adj: map[netip.Prefix]pathSet{}}
++	addrs := make([]netip.Addr, n)
++	for i := 0; i < n; i++ {
++		a := netip.AddrFrom4([4]byte{byte(i >> 16), byte(i >> 8), byte(i), 1})
++		p := netip.PrefixFrom(netip.AddrFrom4([4]byte{byte(i >> 16), byte(i >> 8), byte(i), 0}), 24)
++		v.routes[p] = Route{Prefix: p, Provider: "transit-a"}
++		v.routeLens[24]++
++		addrs[i] = a
++	}
++	b.ReportAllocs()
++	b.ResetTimer()
++	var sink Route
++	for i := 0; i < b.N; i++ {
++		sink, _ = v.lookupLocked(addrs[i%n], 32)
++	}
++	if sink.Prefix.Bits() == 0 && b.N > 0 {
++		b.Fatal("lookup missed")
++	}
++}
+diff --git a/internal/rib/rib.go b/internal/rib/rib.go
+index 82f4f7c..66ca5e1 100644
+--- a/internal/rib/rib.go
++++ b/internal/rib/rib.go
+@@ -205,7 +205,8 @@ type View struct {
+ 
+ 	mu        sync.RWMutex
+ 	routes    map[netip.Prefix]Route                // selected learned path per prefix
+-	adj       map[netip.Prefix]map[adjKey]Route     // prefix -> neighbor path -> advertised path
++	routeLens [129]uint32                           // selected routes at each prefix length; Lookup skips the rest
++	adj       map[netip.Prefix]pathSet              // prefix -> iBGP paths (inline when there is one)
+ 	bmp       map[netip.Prefix]map[bmpPathKey]Route // prefix -> router peer path -> BMP path
+ 	bmpPeers  map[bmpKey]bool                       // peers a BMP session reports up
+ 	provNH    map[string]netip.Addr                 // provider -> next hop
+@@ -236,7 +237,7 @@ func New(opt Options) (*View, error) {
+ 	}
+ 	opt.LANs = lans
+ 	v := &View{opt: opt, log: opt.Logger, routes: map[netip.Prefix]Route{},
+-		adj: map[netip.Prefix]map[adjKey]Route{}, bmp: map[netip.Prefix]map[bmpPathKey]Route{},
++		adj: map[netip.Prefix]pathSet{}, bmp: map[netip.Prefix]map[bmpPathKey]Route{},
+ 		bmpPeers: map[bmpKey]bool{}, provNH: map[string]netip.Addr{},
+ 		peers: map[netip.Addr]PeerState{}, neighbors: map[netip.Addr]bool{}, addPath: map[netip.Addr]bool{}}
+ 	for nh, name := range opt.Providers {
+@@ -497,7 +498,8 @@ func (v *View) Stop(context.Context) error {
+ 	v.stopServer()
+ 	v.mu.Lock()
+ 	v.routes = map[netip.Prefix]Route{}
+-	v.adj = map[netip.Prefix]map[adjKey]Route{}
++	v.routeLens = [129]uint32{}
++	v.adj = map[netip.Prefix]pathSet{}
+ 	v.bmp = map[netip.Prefix]map[bmpPathKey]Route{}
+ 	v.bmpPeers = map[bmpKey]bool{}
+ 	for a, p := range v.peers {
+@@ -602,26 +604,26 @@ func (v *View) applyPath(p *api.Path) bool {
+ 		own = v.ownTagged(comms, large)
+ 	}
+ 	if p.IsWithdraw || own {
+-		nbrs := v.adj[prefix]
+-		if _, exists := nbrs[key]; !exists {
++		s := v.adj[prefix]
++		if !s.has(key) {
+ 			return false
+ 		}
+-		delete(nbrs, key)
+-		if len(nbrs) == 0 {
++		if s.del(key) {
+ 			delete(v.adj, prefix)
++		} else {
++			v.adj[prefix] = s
+ 		}
+ 		return v.republishLocked(prefix)
+ 	}
+-	if v.adj[prefix] == nil {
+-		v.adj[prefix] = map[adjKey]Route{}
+-	}
+ 	provider := v.opt.Providers[nh.Unmap()]
+ 	rt := Route{
+ 		Prefix: prefix, NextHop: nh, Provider: provider, ASPath: asPath,
+ 		Neighbor: neighbor, Age: time.Now(), Source: SourceIBGP, PathID: key.id, localPref: lp,
+ 		MED: med,
+ 	}
+-	v.adj[prefix][key] = rt
++	s := v.adj[prefix]
++	s.set(key, rt)
++	v.adj[prefix] = s
+ 	return v.republishLocked(prefix)
+ }
+ 
+@@ -693,14 +695,27 @@ func routerSendsAddPath(caps []*anypb.Any) bool {
+ // forgetNeighborLocked drops every path learned from addr. Caller holds mu.
+ func (v *View) forgetNeighborLocked(addr netip.Addr) bool {
+ 	changed := false
+-	for p, nbrs := range v.adj {
+-		n := len(nbrs)
+-		maps.DeleteFunc(nbrs, func(k adjKey, _ Route) bool { return k.neighbor == addr })
+-		if len(nbrs) == n {
++	for p, s := range v.adj {
++		var drop []adjKey
++		s.each(func(k adjKey, _ Route) {
++			if k.neighbor == addr {
++				drop = append(drop, k)
++			}
++		})
++		if len(drop) == 0 {
+ 			continue
+ 		}
+-		if len(nbrs) == 0 {
++		empty := false
++		for _, k := range drop {
++			if s.del(k) {
++				empty = true
++				break
++			}
++		}
++		if empty {
+ 			delete(v.adj, p)
++		} else {
++			v.adj[p] = s
+ 		}
+ 		if v.republishLocked(p) {
+ 			changed = true
+@@ -719,30 +734,52 @@ func (v *View) republishLocked(p netip.Prefix) bool {
+ 			return false
+ 		}
+ 		delete(v.routes, p)
++		v.dropRouteLen(p)
+ 		return true
+ 	}
+-	if old, exists := v.routes[p]; exists && sameRoute(old, best) {
++	_, exists := v.routes[p]
++	if exists && sameRoute(v.routes[p], best) {
+ 		return false
+ 	}
++	if !exists {
++		v.addRouteLen(p)
++	}
+ 	v.routes[p] = best
+ 	return true
+ }
+ 
++func (v *View) addRouteLen(p netip.Prefix) {
++	b := p.Bits()
++	if b >= 0 && b < len(v.routeLens) {
++		v.routeLens[b]++
++	}
++}
++
++func (v *View) dropRouteLen(p netip.Prefix) {
++	b := p.Bits()
++	if b >= 0 && b < len(v.routeLens) && v.routeLens[b] > 0 {
++		v.routeLens[b]--
++	}
++}
++
+ // selectLocked picks the published route: the iBGP path (the router's own
+ // best as sent to Packeteer), then a BMP Loc-RIB path, then a BMP
+ // Adj-RIB-In path. Paths a provider's bmp usage excludes are skipped.
+ // Caller holds mu.
+ func (v *View) selectLocked(p netip.Prefix) (Route, bool) {
+-	nbrs := v.adj[p]
+-	for _, rt := range nbrs {
++	s := v.adj[p]
++	var best Route
++	ok := false
++	s.each(func(_ adjKey, rt Route) {
+ 		if !v.usableLocked(rt) {
+-			nbrs = maps.Clone(nbrs)
+-			maps.DeleteFunc(nbrs, func(_ adjKey, rt Route) bool { return !v.usableLocked(rt) })
+-			break
++			return
+ 		}
+-	}
+-	if rt, ok := selectRoute(nbrs); ok {
+-		return rt, true
++		if !ok || adjLess(rt, best) {
++			best, ok = rt, true
++		}
++	})
++	if ok {
++		return best, true
+ 	}
+ 	return selectBMP(v.bmp[p])
+ }
+@@ -855,8 +892,12 @@ func (v *View) annotatePrefixLocked(p netip.Prefix) {
+ 		}
+ 		c.add(via, rs)
+ 	}
+-	for k, rt := range v.adj[p] {
+-		v.adj[p][k] = applyConfirmed(rt, conf[rt.NextHop.Unmap()])
++	s := v.adj[p]
++	s.each(func(k adjKey, rt Route) {
++		s.update(k, applyConfirmed(rt, conf[rt.NextHop.Unmap()]))
++	})
++	if s.n > 0 {
++		v.adj[p] = s
+ 	}
+ 	for k, rt := range v.bmp[p] {
+ 		if rt.LocRIB {
+@@ -1157,11 +1198,12 @@ func (v *View) Paths(p netip.Prefix) []Route {
+ 
+ func (v *View) pathsLocked(p netip.Prefix) []Route {
+ 	var out []Route
+-	for _, rt := range v.adj[p] {
++	s := v.adj[p]
++	s.each(func(_ adjKey, rt Route) {
+ 		if v.usableLocked(rt) {
+ 			out = append(out, rt)
+ 		}
+-	}
++	})
+ 	for _, rt := range v.bmp[p] {
+ 		out = append(out, rt)
+ 	}
+@@ -1356,12 +1398,12 @@ func (v *View) countNextHops(keep func(netip.Addr) bool) []NextHopCount {
+ 		}
+ 	}
+ 	v.mu.RLock()
+-	for _, paths := range v.adj {
+-		for _, rt := range paths {
++	for _, s := range v.adj {
++		s.each(func(_ adjKey, rt Route) {
+ 			if v.usableLocked(rt) {
+ 				add(rt)
+ 			}
+-		}
++		})
+ 	}
+ 	for _, paths := range v.bmp {
+ 		for _, rt := range paths {
+@@ -1588,20 +1630,13 @@ func (v *View) Exact(p netip.Prefix) (Route, bool) {
+ }
+ 
+ // Lookup returns the longest-prefix-match route covering addr.
++// Lengths with no selected route are not probed: a full IPv6 table
++// would otherwise hash the address at every length on every flow.
+ func (v *View) Lookup(addr netip.Addr) (Route, bool) {
+ 	addr = addr.Unmap()
+ 	v.mu.RLock()
+ 	defer v.mu.RUnlock()
+-	for bits := addr.BitLen(); bits >= 0; bits-- {
+-		p, err := addr.Prefix(bits)
+-		if err != nil {
+-			continue
+-		}
+-		if r, ok := v.routes[p]; ok {
+-			return r, true
+-		}
+-	}
+-	return Route{}, false
++	return v.lookupLocked(addr, addr.BitLen())
+ }
+ 
+ // Covering returns the longest learned prefix that contains p (p itself
+@@ -1610,12 +1645,24 @@ func (v *View) Covering(p netip.Prefix) (Route, bool) {
+ 	p = p.Masked()
+ 	v.mu.RLock()
+ 	defer v.mu.RUnlock()
+-	for bits := p.Bits(); bits >= 0; bits-- {
+-		q, err := p.Addr().Prefix(bits)
++	return v.lookupLocked(p.Addr(), p.Bits())
++}
++
++// lookupLocked is the longest selected prefix of addr at length <= maxBits.
++// Caller holds mu.
++func (v *View) lookupLocked(addr netip.Addr, maxBits int) (Route, bool) {
++	if maxBits > addr.BitLen() {
++		maxBits = addr.BitLen()
++	}
++	for bits := maxBits; bits >= 0; bits-- {
++		if bits >= len(v.routeLens) || v.routeLens[bits] == 0 {
++			continue
++		}
++		p, err := addr.Prefix(bits)
+ 		if err != nil {
+ 			continue
+ 		}
+-		if r, ok := v.routes[q]; ok {
++		if r, ok := v.routes[p]; ok && r.Prefix.Contains(addr) {
+ 			return r, true
+ 		}
+ 	}
+diff --git a/internal/rib/rib_test.go b/internal/rib/rib_test.go
+index c6aa957..b988e4a 100644
+--- a/internal/rib/rib_test.go
++++ b/internal/rib/rib_test.go
+@@ -369,7 +369,7 @@ func TestLocalPrefChangeUpdatesRoute(t *testing.T) {
+ 		opt:       Options{Providers: map[netip.Addr]string{nh: "transit-a"}},
+ 		neighbors: map[netip.Addr]bool{nbr: true},
+ 		routes:    map[netip.Prefix]Route{},
+-		adj:       map[netip.Prefix]map[adjKey]Route{},
++		adj:       map[netip.Prefix]pathSet{},
+ 	}
+ 	if !v.applyPath(learned(t, "198.51.100.0/24", "192.0.2.1", nbr.String(), 100, false)) {
+ 		t.Fatal("first path did not publish")
+@@ -466,7 +466,7 @@ func TestMoreSpecificsListsOnlyLearnedPrefixesInside(t *testing.T) {
+ 	v := &View{
+ 		neighbors: map[netip.Addr]bool{nbr: true},
+ 		routes:    map[netip.Prefix]Route{},
+-		adj:       map[netip.Prefix]map[adjKey]Route{},
++		adj:       map[netip.Prefix]pathSet{},
+ 	}
+ 	for _, s := range []string{"198.51.100.0/24", "198.51.100.0/25", "198.51.100.192/26", "198.51.101.0/24", "203.0.113.0/24", "203.0.113.128/25"} {
+ 		if !v.applyPath(learned(t, s, "192.0.2.1", nbr.String(), 100, false)) {
+diff --git a/internal/rib/suggest_test.go b/internal/rib/suggest_test.go
+index aae85e3..e4bfbd4 100644
+--- a/internal/rib/suggest_test.go
++++ b/internal/rib/suggest_test.go
+@@ -20,13 +20,13 @@ func TestSuggestNextHopsReadsOnly(t *testing.T) {
+ 	pfx := netip.MustParsePrefix("198.51.100.0/24")
+ 	other := netip.MustParsePrefix("203.0.113.0/24")
+ 	nbr := netip.MustParseAddr("192.0.2.254")
+-	v.adj[pfx] = map[adjKey]Route{
++	v.putAdj(pfx, map[adjKey]Route{
+ 		{neighbor: nbr}:        {Prefix: pfx, NextHop: configured, ASPath: []uint32{64496}},
+ 		{neighbor: nbr, id: 1}: {Prefix: pfx, NextHop: discovered, ASPath: []uint32{64500}},
+ 		{neighbor: nbr, id: 2}: {Prefix: other, NextHop: discovered, ASPath: []uint32{64496}},
+ 		{neighbor: nbr, id: 3}: {Prefix: other, NextHop: discovered, ASPath: []uint32{64496}},
+ 		{neighbor: nbr, id: 4}: {Prefix: pfx, NextHop: onLAN, ASPath: []uint32{64501}},
+-	}
++	})
+ 	bmpPfx := netip.MustParsePrefix("192.0.2.0/24")
+ 	bmpHop := netip.MustParseAddr("198.51.100.9")
+ 	v.bmp[bmpPfx] = map[bmpPathKey]Route{
+@@ -65,9 +65,9 @@ func TestSuggestNextHopsCaps(t *testing.T) {
+ 	for i := 1; i <= maxSuggestNextHops+1; i++ {
+ 		hop := netip.AddrFrom4([4]byte{192, 0, 2, byte(i)})
+ 		pfx := netip.PrefixFrom(netip.AddrFrom4([4]byte{198, 51, 100, byte(i)}), 32)
+-		v.adj[pfx] = map[adjKey]Route{
++		v.putAdj(pfx, map[adjKey]Route{
+ 			{neighbor: nbr, id: uint32(i)}: {Prefix: pfx, NextHop: hop, ASPath: []uint32{64496}},
+-		}
++		})
+ 	}
+ 	got := v.SuggestNextHops(nil, nil)
+ 	if len(got) != maxSuggestNextHops {
+diff --git a/lab/soak/budget.go b/lab/soak/budget.go
+index a298b50..cf90ddd 100644
+--- a/lab/soak/budget.go
++++ b/lab/soak/budget.go
+@@ -41,6 +41,7 @@ type Budgets struct {
+ 	LearnSeconds    float64 `yaml:"learn_seconds"`
+ 	RSSPeakMB       float64 `yaml:"rss_peak_mb"`
+ 	RSSGrowthMB     float64 `yaml:"rss_growth_mb"`
++	RSSSlopeMB      float64 `yaml:"rss_slope_mb"`
+ 	CPUAvgCores     float64 `yaml:"cpu_avg_cores"`
+ 	Threads         int     `yaml:"threads"`
+ 	UDPDropPct      float64 `yaml:"udp_drop_pct"`
+@@ -111,6 +112,7 @@ type Result struct {
+ 	RSSBaselineMB   float64  `json:"rss_baseline_mb"`
+ 	RSSEndMB        float64  `json:"rss_end_mb"`
+ 	RSSGrowthMB     float64  `json:"rss_growth_mb"`
++	RSSSlopeMB      float64  `json:"rss_slope_mb"`
+ 	CPUAvgCores     float64  `json:"cpu_avg_cores"`
+ 	Threads         int      `json:"threads"`
+ 	UDPDropPct      float64  `json:"udp_drop_pct"`
+@@ -149,6 +151,7 @@ func checks(r Result, b Budgets) []Check {
+ 		{Name: "full table learned", Value: r.LearnSeconds, Limit: b.LearnSeconds, Unit: "s"},
+ 		{Name: "peak RSS", Value: r.RSSPeakMB, Limit: b.RSSPeakMB, Unit: "MiB"},
+ 		{Name: "RSS growth after warmup", Value: r.RSSGrowthMB, Limit: b.RSSGrowthMB, Unit: "MiB"},
++		{Name: "RSS still rising, last third", Value: r.RSSSlopeMB, Limit: b.RSSSlopeMB, Unit: "MiB"},
+ 		{Name: "average CPU during soak", Value: r.CPUAvgCores, Limit: b.CPUAvgCores, Unit: "cores"},
+ 		{Name: "OS threads", Value: float64(r.Threads), Limit: float64(b.Threads)},
+ 		{Name: "flow datagrams dropped", Value: r.UDPDropPct, Limit: b.UDPDropPct, Unit: "%"},
+@@ -261,3 +264,42 @@ func growth(warm, post []float64) (base, end float64) {
+ 	}
+ 	return percentile(warm, 50), percentile(endPart, 50)
+ }
++
++// minSlopeSamples is the fewest samples in the last third that give a
++// slope. Below it the figure is 0 (reported, not a failure).
++const minSlopeSamples = 8
++
++// riseLastThird is how far RSS is still climbing at the end of the run,
++// in MiB. It is the smaller of two figures, so both must show a climb:
++//
++//   - the Theil-Sen slope (the median of the slopes between every pair of
++//     samples) over the last third, times the width of that third; and
++//   - the median of the last sixth minus the median of the middle third.
++//
++// It is 0 when RSS is flat or falling.
++//
++// growth compares a baseline with the end, so it cannot say whether RSS
++// has levelled off. A leak that arrives late, or a table that keeps
++// refilling, can sit under the growth budget and still be climbing when
++// the run stops. RSS also moves in steps: the collector hands pages back
++// and the heap refills a block at a time. The median of pairwise slopes
++// ignores one step at the very end (a single sample 300 MiB up). The
++// second figure ignores a dip and refill inside the last third, which the
++// slope alone reads as a climb: a heap that is back where the middle of
++// the run already had it is not rising. A steady climb passes both.
++func riseLastThird(rss []float64) float64 {
++	n := len(rss)
++	tail := rss[n*2/3:]
++	if len(tail) < minSlopeSamples {
++		return 0
++	}
++	slopes := make([]float64, 0, len(tail)*(len(tail)-1)/2)
++	for i := range tail {
++		for j := i + 1; j < len(tail); j++ {
++			slopes = append(slopes, (tail[j]-tail[i])/float64(j-i))
++		}
++	}
++	trend := percentile(slopes, 50) * float64(len(tail)-1)
++	net := percentile(rss[n*5/6:], 50) - percentile(rss[n/3:n*2/3], 50)
++	return max(0, min(trend, net))
++}
+diff --git a/lab/soak/budgets.yaml b/lab/soak/budgets.yaml
+index bb6e1e9..e5369c2 100644
+--- a/lab/soak/budgets.yaml
++++ b/lab/soak/budgets.yaml
+@@ -43,10 +43,20 @@ profiles:
+     # 4590, second-half median 4849) while end RSS and peak sat with those
+     # runs and RSS fell from 4966 to 4827. 384 is that sample plus
+     # headroom. A second half 400 MiB above warmup still fails.
++    #
++    # rss_slope_mb (#112) is how far RSS is still climbing at the end of
++    # the run: the smaller of the Theil-Sen slope over the last third
++    # times that third, and the last-sixth median minus the middle-third
++    # median (lab/soak/budget.go riseLastThird). A heap still growing when
++    # the run ends fails even when growth is under budget. Three green
++    # runs on 2026-10-10 (Actions 38060328414, 38059199721, 38058626210)
++    # read 0, 0, and 103 MiB: the collector's sawtooth, not a leak. 192 is
++    # about twice the worst of those and half the growth budget.
+     budgets:
+       learn_seconds: 90
+       rss_peak_mb: 6144
+       rss_growth_mb: 384
++      rss_slope_mb: 192
+       cpu_avg_cores: 2.0
+       threads: 64
+       udp_drop_pct: 5
+@@ -92,6 +102,10 @@ profiles:
+       learn_seconds: 90
+       rss_peak_mb: 6656
+       rss_growth_mb: 512
++      # The last third is 110 minutes, so the collector's sawtooth is
++      # small beside it. No soak run has measured this figure yet; a miss
++      # is read against the logged RSS series before anything changes.
++      rss_slope_mb: 192
+       cpu_avg_cores: 2.0
+       threads: 64
+       udp_drop_pct: 5
+diff --git a/lab/soak/main.go b/lab/soak/main.go
+index c1fc1ee..d6b947a 100644
+--- a/lab/soak/main.go
++++ b/lab/soak/main.go
+@@ -240,7 +240,7 @@ func run(ctx context.Context, o runOpts) (Result, error) {
+ 	go func() { churnDone <- churn(soakCtx, rt, tbl, p.Churn, &r.ChurnUpdates, fail) }()
+ 
+ 	soakStart := time.Now()
+-	var warmRSS, postRSS, lat []float64
++	var warmRSS, postRSS, allRSS, lat []float64
+ 	notReady, sessionDown, sampleErrs := 0, 0, 0
+ 	tick := time.NewTicker(p.Sample)
+ loop:
+@@ -258,6 +258,7 @@ loop:
+ 		}
+ 		r.Threads = max(r.Threads, pr.Threads)
+ 		sample := float64(pr.RSS) / (1 << 20)
++		allRSS = append(allRSS, sample)
+ 		// Warmup is the baseline. Samples after it are the growth window.
+ 		if el < p.Warmup {
+ 			warmRSS = append(warmRSS, sample)
+@@ -304,6 +305,7 @@ loop:
+ 	r.RSSPeakMB = float64(cpu1.HWM) / (1 << 20)
+ 	r.RSSBaselineMB, r.RSSEndMB = growth(warmRSS, postRSS)
+ 	r.RSSGrowthMB = max(0, r.RSSEndMB-r.RSSBaselineMB)
++	r.RSSSlopeMB = riseLastThird(allRSS)
+ 	r.APIP99Ms = percentile(lat, 99)
+ 	if udp1, err := readUDP(o.snmp); err == nil && udpErr == nil && p.FlowRate > 0 {
+ 		in, drop := udp1.In-udp0.In, udp1.RcvbufErrors-udp0.RcvbufErrors
+diff --git a/lab/soak/main_test.go b/lab/soak/main_test.go
+index 839a858..c6d46ce 100644
+--- a/lab/soak/main_test.go
++++ b/lab/soak/main_test.go
+@@ -6,6 +6,8 @@ import (
+ 	"net"
+ 	"net/netip"
+ 	"os"
++	"slices"
++	"strconv"
+ 	"strings"
+ 	"testing"
+ 	"time"
+@@ -214,6 +216,9 @@ func TestBudgetFileProfilesAndGeneratedConfig(t *testing.T) {
+ 			if p.Prefixes < 1000000 {
+ 				t.Fatalf("%s: %d prefixes is not full-table sized", name, p.Prefixes)
+ 			}
++			if p.Budgets.RSSSlopeMB == 0 {
++				t.Fatalf("%s: the leak-slope budget is unset", name)
++			}
+ 			if p.Budgets.RSSPeakMB == 0 || p.Budgets.LearnSeconds == 0 || p.Budgets.RSSGrowthMB == 0 ||
+ 				p.Budgets.CPUAvgCores == 0 || p.Budgets.UDPDropPct == 0 || p.Budgets.ShutdownSeconds == 0 {
+ 				t.Fatalf("%s: a core budget is unset: %+v", name, p.Budgets)
+@@ -336,3 +341,110 @@ func TestGrowthIgnoresScavengerValley(t *testing.T) {
+ 		t.Fatalf("leak of %v MiB passed a %v budget", end-base, p.Budgets.RSSGrowthMB)
+ 	}
+ }
++
++// readRSS loads a logged RSS series (MiB, one sample per line).
++func readRSS(t *testing.T, name string) []float64 {
++	t.Helper()
++	b, err := os.ReadFile("testdata/" + name)
++	if err != nil {
++		t.Fatal(err)
++	}
++	var out []float64
++	for _, f := range strings.Fields(string(b)) {
++		v, err := strconv.ParseFloat(f, 64)
++		if err != nil {
++			t.Fatalf("%s: %v", name, err)
++		}
++		out = append(out, v)
++	}
++	return out
++}
++
++// TestRiseLastThird replays the RSS logged by green load runs on
++// 2026-10-10 against the pr slope budget, then adds a steady climb to
++// the same runs and expects it to fail. A pr run is 120 samples at 5s;
++// the last third is 40.
++func TestRiseLastThird(t *testing.T) {
++	p, err := loadProfile("budgets.yaml", "pr")
++	if err != nil {
++		t.Fatal(err)
++	}
++	if p.Budgets.RSSGrowthMB != 384 {
++		t.Fatalf("pr growth budget changed: %v", p.Budgets.RSSGrowthMB)
++	}
++	for _, name := range []string{"rss-main-a.txt", "rss-pr-a.txt", "rss-pr-b.txt"} {
++		rss := readRSS(t, name)
++		if len(rss) != 120 {
++			t.Fatalf("%s: %d samples", name, len(rss))
++		}
++		if got := riseLastThird(rss); got > p.Budgets.RSSSlopeMB {
++			t.Errorf("%s: healthy run reads a %.0f MiB rise, budget %v", name, got, p.Budgets.RSSSlopeMB)
++		}
++		// The same run with 12 MiB per sample added through its last
++		// third: about 470 MiB across the third on top of what it did.
++		leaky := slices.Clone(rss)
++		for i := 80; i < len(leaky); i++ {
++			leaky[i] += float64(i-80) * 12
++		}
++		if got := riseLastThird(leaky); got <= p.Budgets.RSSSlopeMB {
++			t.Errorf("%s: a steady climb reads only %.0f MiB, budget %v", name, got, p.Budgets.RSSSlopeMB)
++		}
++	}
++}
++
++func TestRiseLastThirdShapes(t *testing.T) {
++	const n = 120
++	ramp := func(from, step float64, at int) []float64 {
++		s := repeatN(from, n)
++		for i := at; i < n; i++ {
++			s[i] = from + float64(i-at)*step
++		}
++		return s
++	}
++	// 10 MiB per sample over the last third: the slope reads 390 MiB across
++	// 39 gaps and the last sixth sits 290 above the middle third.
++	if got := riseLastThird(ramp(4000, 10, 80)); got < 280 || got > 300 {
++		t.Fatalf("steady climb: %v", got)
++	}
++	if got := riseLastThird(repeatN(4800, n)); got != 0 {
++		t.Fatalf("flat: %v", got)
++	}
++	// Falling is not a leak.
++	if got := riseLastThird(ramp(5000, -10, 80)); got != 0 {
++		t.Fatalf("falling: %v", got)
++	}
++	// One step at the last sample, as run 38058626210 ended, is not a trend.
++	step := repeatN(4800, n)
++	step[n-1] = 5100
++	if got := riseLastThird(step); got != 0 {
++		t.Fatalf("single step: %v", got)
++	}
++	// A plateau that dips and refills inside the third is no net climb:
++	// the slope alone would read 325 here.
++	saw := repeatN(4900, n)
++	for i := 80; i < 100; i++ {
++		saw[i] = 4600
++	}
++	if got := riseLastThird(saw); got != 0 {
++		t.Fatalf("dip then refill: %v", got)
++	}
++	// Too few samples to say.
++	if got := riseLastThird([]float64{1, 2, 3, 4, 5, 6, 7, 8, 9, 100}); got != 0 {
++		t.Fatalf("short run: %v", got)
++	}
++	if got := riseLastThird(nil); got != 0 {
++		t.Fatalf("no samples: %v", got)
++	}
++}
++
++func TestReportFailsWhenStillRising(t *testing.T) {
++	b := Budgets{RSSSlopeMB: 320}
++	r := Result{Profile: "x", RSSSlopeMB: 100, Failures: []string{}}
++	if text, ok := report(r, b); !ok || !strings.Contains(text, "| RSS still rising, last third | 100 MiB | ≤ 320 MiB | ok |") {
++		t.Fatalf("ok=%v\n%s", ok, text)
++	}
++	r.RSSSlopeMB = 400
++	if text, ok := report(r, b); ok || !strings.Contains(text, "**OVER**") {
++		t.Fatalf("a climbing run passed:\n%s", text)
++	}
++}
+diff --git a/lab/soak/testdata/rss-main-a.txt b/lab/soak/testdata/rss-main-a.txt
+new file mode 100644
+index 0000000..b4fc79f
+--- /dev/null
++++ b/lab/soak/testdata/rss-main-a.txt
+@@ -0,0 +1,120 @@
++4975
++4975
++4975
++4975
++4981
++5033
++5107
++5173
++5104
++5106
++5106
++5106
++5106
++5106
++5107
++5078
++5078
++5078
++5081
++5081
++5081
++5082
++4781
++4781
++4781
++4785
++4786
++4800
++4800
++4784
++4784
++4784
++4784
++4784
++4790
++4804
++4804
++4804
++4804
++4804
++4804
++4808
++4859
++4931
++4931
++4931
++4931
++4931
++4932
++4932
++4933
++4933
++4933
++4933
++4933
++4933
++4933
++5062
++5062
++5062
++5062
++5062
++5062
++5062
++5286
++5286
++5286
++5286
++5286
++5287
++5295
++5295
++5295
++5295
++5295
++5295
++5295
++5295
++5113
++5113
++5113
++5117
++5116
++5129
++5129
++5129
++5129
++5129
++5129
++5139
++5025
++4920
++4920
++4923
++4926
++4956
++4956
++4956
++4956
++4956
++4956
++4990
++5013
++5026
++5026
++5026
++5026
++5027
++5028
++5028
++5028
++5028
++5028
++5028
++5029
++5029
++5029
++5029
++5029
++5029
+diff --git a/lab/soak/testdata/rss-pr-a.txt b/lab/soak/testdata/rss-pr-a.txt
+new file mode 100644
+index 0000000..66f761a
+--- /dev/null
++++ b/lab/soak/testdata/rss-pr-a.txt
+@@ -0,0 +1,120 @@
++4750
++4750
++4764
++4812
++4729
++4729
++4729
++4731
++4735
++4776
++4814
++4874
++4789
++4789
++4789
++4791
++4793
++4795
++4806
++4791
++4804
++4804
++4804
++4804
++4804
++4804
++4805
++4815
++4922
++5038
++5039
++5039
++5041
++5041
++5044
++5016
++5016
++5016
++5016
++5016
++5016
++5019
++4912
++4912
++4912
++4912
++4912
++4912
++4912
++4912
++4912
++4912
++4912
++4913
++4915
++4915
++4915
++4915
++4915
++4916
++4976
++4976
++4976
++4976
++4976
++4976
++4976
++5002
++5056
++5056
++5056
++5056
++5056
++5056
++5056
++5094
++5094
++5094
++5094
++5094
++5105
++5105
++5105
++5105
++5105
++5106
++5110
++5111
++4917
++4917
++4917
++4917
++4926
++4926
++4926
++4926
++4926
++4950
++4952
++4899
++4901
++4901
++4901
++4901
++4902
++4902
++4902
++4902
++4902
++4928
++4933
++4933
++4969
++4969
++4969
++4969
++4969
++4970
++4970
++4970
+diff --git a/lab/soak/testdata/rss-pr-b.txt b/lab/soak/testdata/rss-pr-b.txt
+new file mode 100644
+index 0000000..3d36058
+--- /dev/null
++++ b/lab/soak/testdata/rss-pr-b.txt
+@@ -0,0 +1,120 @@
++4547
++4547
++4547
++4547
++4581
++4617
++4653
++4722
++4799
++4799
++4799
++4799
++4799
++4799
++4799
++4799
++4711
++4711
++4711
++4724
++4725
++4733
++4737
++4720
++4720
++4720
++4720
++4720
++4720
++4720
++4730
++4776
++4777
++4777
++4777
++4777
++4777
++4777
++4777
++4777
++4777
++4777
++4777
++4777
++4792
++4792
++4792
++4792
++4792
++4792
++4792
++4941
++4941
++4941
++4941
++4941
++4941
++5078
++5078
++5078
++5078
++5078
++5078
++5127
++5127
++5033
++5033
++5033
++5044
++5044
++5050
++5050
++5050
++5050
++5050
++5050
++5056
++4877
++4877
++4877
++4882
++4883
++4886
++4901
++4901
++4901
++4901
++4901
++4901
++4909
++4980
++5058
++5058
++5058
++5058
++5046
++5046
++5046
++5046
++5046
++5046
++5046
++5044
++5044
++5044
++5044
++5044
++5042
++5043
++5043
++5043
++5043
++5043
++5043
++5043
++5135
++5391
++5391
++5391
++5391

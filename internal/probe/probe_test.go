@@ -1555,3 +1555,165 @@ func TestPartialRoundKeepsFinishedPrefixes(t *testing.T) {
 		t.Fatalf("results = %+v", e.Results())
 	}
 }
+
+// phaseProber answers every probe in the first phase. In the second,
+// transit-b blocks, ignoring cancellation, until release closes, and
+// aDone closes when transit-a has answered.
+type phaseProber struct {
+	plugin.Base
+	phase2   atomic.Bool
+	release  chan struct{}
+	aDone    chan struct{}
+	aDoneOne sync.Once
+}
+
+func (p *phaseProber) Probe(_ context.Context, req plugin.ProbeRequest) (plugin.ProbeResult, error) {
+	if p.phase2.Load() {
+		if req.Provider == provB.Name {
+			<-p.release
+			return plugin.ProbeResult{}, errors.New("released")
+		}
+		defer p.aDoneOne.Do(func() { close(p.aDone) })
+	}
+	return plugin.ProbeResult{Sent: req.Count, RTTs: ms(1)}, nil
+}
+
+// One measurement round must not count twice toward confirm_rounds. The
+// policy dates a round by the newest result for a prefix, so a prefix may
+// never be seen half stored: not while its second provider is still being
+// measured, and not after a round that timed out before that provider
+// finished (#125).
+func TestPartialRoundNeverHalfStoresAPrefix(t *testing.T) {
+	p := &phaseProber{release: make(chan struct{}), aDone: make(chan struct{})}
+	defer close(p.release)
+	o := opts()
+	o.Workers = 2
+	o.RoundTimeout = 200 * time.Millisecond
+	var rounds atomic.Int32
+	o.OnRound = func() { rounds.Add(1) }
+	e, err := New([]Provider{provA, provB}, []NamedProber{{"p", p}},
+		src(plugin.Target{Prefix: pfx1, Host: netip.MustParseAddr("198.51.100.1")}), o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.RunOnce(context.Background())
+	old := e.Results()
+	if len(old) != 2 || rounds.Load() != 1 {
+		t.Fatalf("first round results=%+v rounds=%d", old, rounds.Load())
+	}
+	same := func(when string) {
+		t.Helper()
+		got := e.Results()
+		if len(got) != len(old) {
+			t.Fatalf("%s: results = %+v", when, got)
+		}
+		for i := range got {
+			if got[i].Provider != old[i].Provider || !got[i].Time.Equal(old[i].Time) {
+				t.Fatalf("%s: %s result was refreshed: %+v, was %+v", when, got[i].Provider, got[i], old[i])
+			}
+		}
+	}
+	time.Sleep(5 * time.Millisecond) // a new result must carry a later time
+	p.phase2.Store(true)
+	done := make(chan struct{})
+	go func() {
+		e.RunOnce(context.Background())
+		close(done)
+	}()
+	select {
+	case <-p.aDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("transit-a was not probed")
+	}
+	time.Sleep(20 * time.Millisecond)
+	same("while the round is running")
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("round was not bounded by the overall timeout")
+	}
+	same("after the round timed out")
+	if rounds.Load() != 1 || e.PrefixCommits() != 1 {
+		t.Fatalf("a round with no finished prefix was reported: rounds=%d commits=%d", rounds.Load(), e.PrefixCommits())
+	}
+}
+
+// A round that times out still drops a prefix that left every source.
+func TestPartialRoundDropsPrefixesThatLeftEverySource(t *testing.T) {
+	release := make(chan struct{})
+	defer close(release)
+	// Round one: three calls. Round two: pfx1 finishes (call 4) and pfx2
+	// blocks. Round three: everything blocks.
+	p := &blockAfterProber{allow: 4, release: release}
+	fs := &fakeSource{targets: []plugin.Target{
+		{Prefix: pfx1, Host: netip.MustParseAddr("198.51.100.1")},
+		{Prefix: pfx2, Host: netip.MustParseAddr("203.0.113.1")},
+		{Prefix: netip.MustParsePrefix("192.0.2.0/24"), Host: netip.MustParseAddr("192.0.2.1")},
+	}}
+	o := opts()
+	o.Workers = 1
+	o.Interval = 20 * time.Millisecond // the target list is cached for one interval
+	o.RoundTimeout = 150 * time.Millisecond
+	e, err := New([]Provider{provA}, []NamedProber{{"p", p}}, []NamedSource{{Name: "static", Source: fs}}, o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.RunOnce(context.Background())
+	if len(e.Results()) != 3 {
+		t.Fatalf("first round results = %+v", e.Results())
+	}
+	fs.targets = fs.targets[:2]
+	time.Sleep(30 * time.Millisecond)
+	waitRound(t, e)
+	var gone bool
+	for _, r := range e.Results() {
+		if r.Prefix.String() == "192.0.2.0/24" {
+			gone = true
+		}
+	}
+	if gone || len(e.Results()) != 2 {
+		t.Fatalf("timed-out round kept a prefix that left every source: %+v", e.Results())
+	}
+}
+
+// A shutdown mid-round stores nothing, including probes that finished.
+func TestShutdownMidRoundStoresNothing(t *testing.T) {
+	var phase2 atomic.Bool
+	p := &fakeProber{fn: func(ctx context.Context, req plugin.ProbeRequest) (plugin.ProbeResult, error) {
+		if phase2.Load() && req.Target == netip.MustParseAddr("203.0.113.1") {
+			<-ctx.Done()
+			return plugin.ProbeResult{}, ctx.Err()
+		}
+		return plugin.ProbeResult{Sent: req.Count, RTTs: ms(1)}, nil
+	}}
+	o := opts()
+	o.Workers = 2
+	var rounds atomic.Int32
+	o.OnRound = func() { rounds.Add(1) }
+	e, err := New([]Provider{provA}, []NamedProber{{"p", p}}, src(
+		plugin.Target{Prefix: pfx1, Host: netip.MustParseAddr("198.51.100.1")},
+		plugin.Target{Prefix: pfx2, Host: netip.MustParseAddr("203.0.113.1")},
+	), o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.RunOnce(context.Background())
+	old := e.Results()
+	time.Sleep(5 * time.Millisecond)
+	phase2.Store(true)
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		cancel()
+	}()
+	e.RunOnce(ctx)
+	got := e.Results()
+	if len(got) != len(old) || rounds.Load() != 1 || e.PrefixCommits() != 2 {
+		t.Fatalf("shutdown stored results: %+v rounds=%d commits=%d", got, rounds.Load(), e.PrefixCommits())
+	}
+	for i := range got {
+		if !got[i].Time.Equal(old[i].Time) {
+			t.Fatalf("shutdown refreshed %+v, was %+v", got[i], old[i])
+		}
+	}
+}
