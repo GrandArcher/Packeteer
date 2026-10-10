@@ -289,7 +289,7 @@ func TestConfirmRoundsClearedWhenThePrefixLeaves(t *testing.T) {
 	if _, ok := st.confirm[pA]; ok || !strings.Contains(decision(t, out, pA).Reason, "not in RIB") {
 		t.Fatalf("RIB leave: %+v %+v", st.confirm, decision(t, out, pA))
 	}
-	st, out = step(t, st, c, t0.Add(2*time.Minute), win)
+	st, _ = step(t, st, c, t0.Add(2*time.Minute), win)
 	if st.confirm[pA].Streak != 1 || len(st.Improvements) != 0 {
 		t.Fatalf("return did not start over: %+v", st.confirm[pA])
 	}
@@ -300,7 +300,7 @@ func TestConfirmRoundsClearedWhenThePrefixLeaves(t *testing.T) {
 	if len(st.confirm) != 0 {
 		t.Fatalf("RIB not ready kept %+v", st.confirm)
 	}
-	st, out = step(t, st, c, t0.Add(4*time.Minute), win)
+	st, _ = step(t, st, c, t0.Add(4*time.Minute), win)
 	if st.confirm[pA].Streak != 1 {
 		t.Fatalf("after session loss streak = %+v", st.confirm[pA])
 	}

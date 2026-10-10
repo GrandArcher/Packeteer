@@ -70,7 +70,7 @@ func TestConfigFormSections(t *testing.T) {
 	}
 
 	// Save goes through the editor's checks and the audit log.
-	rec, got = e.do(t, "PUT", "/api/config", admin, map[string]any{"yaml": yml, "base": configedit.Hash([]byte(editorYAML))})
+	rec, _ = e.do(t, "PUT", "/api/config", admin, map[string]any{"yaml": yml, "base": configedit.Hash([]byte(editorYAML))})
 	if rec.Code != http.StatusOK {
 		t.Fatalf("save: %d %s", rec.Code, rec.Body)
 	}

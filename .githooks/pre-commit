@@ -1,0 +1,5 @@
+#!/bin/sh
+# Optional: enabled by `make setup`. Same gofmt and vet checks as CI.
+unformatted="$(gofmt -l .)"
+if [ -n "$unformatted" ]; then echo "gofmt needed on:"; echo "$unformatted"; exit 1; fi
+go vet ./...
