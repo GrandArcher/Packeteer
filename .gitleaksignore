@@ -1,3 +1,4 @@
 # Throwaway credentials for the CI auth smoke test (ci.yml), not secrets.
 7e9a275c6fcaca6afcd11c02eef8b8b3bdd42e90:.github/workflows/ci.yml:curl-auth-user:724
 7e9a275c6fcaca6afcd11c02eef8b8b3bdd42e90:.github/workflows/ci.yml:curl-auth-user:730
+9a23811e72bd6e8468b62906f19f9afa9c694f30:.github/workflows/ci.yml:curl-auth-user:823

@@ -347,6 +347,7 @@ http:
 # the dashboard and /api/reports. An embedded SQLite file. Mount a volume on
 # /var/lib/packeteer so it survives a restart. The same file keeps SNMP
 # 95th-percentile samples for the open billing period when telemetry is on.
+# It also keeps recent events and the audit log for the Events page.
 # Delete this block to turn history off; probing and decisions do not depend
 # on it, and the 95th window then stays in memory only. Does not announce.
 storage:
