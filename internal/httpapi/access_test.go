@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -81,6 +82,10 @@ func (e *rbacEnv) do(method, path, token, body string, mod ...func(*http.Request
 	return rec
 }
 
+// overTLS marks a request as one a browser made over https, the only
+// kind that is redirected to the sign-in page (cookieUsable).
+func overTLS(r *http.Request) { r.TLS = &tls.ConnectionState{} }
+
 func routePath(pattern string) (method, path string) {
 	method, path, _ = strings.Cut(pattern, " ")
 	path = strings.NewReplacer("{id}", "x", "{name}", "nobody").Replace(path)
@@ -115,7 +120,7 @@ func TestAuthzEveryEndpoint(t *testing.T) {
 			body = "{}"
 		}
 		t.Run(r.pattern, func(t *testing.T) {
-			anon := e.do(method, path, "", body)
+			anon := e.do(method, path, "", body, overTLS)
 			bad := e.do(method, path, "pkt_0123456789abcdef_"+strings.Repeat("A", 43), body, badFrom)
 			if r.role == "" {
 				// The sign-in POST answers a wrong password with 401 and no
@@ -395,7 +400,7 @@ func TestAuthSSOFlow(t *testing.T) {
 	e := newRBAC(t, sso)
 	// A browser without a session is sent to the sign-in page, which
 	// offers single sign-on; the API is not redirected.
-	if rec := e.do("GET", "/", "", ""); rec.Code != http.StatusFound || rec.Header().Get("Location") != "/signin.html" {
+	if rec := e.do("GET", "/", "", "", overTLS); rec.Code != http.StatusFound || rec.Header().Get("Location") != "/signin.html" {
 		t.Fatalf("dashboard: %d %s", rec.Code, rec.Header().Get("Location"))
 	}
 	if rec := e.do("GET", "/api/providers", "", ""); rec.Code != http.StatusUnauthorized {

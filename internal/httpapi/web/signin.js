@@ -23,8 +23,16 @@ function signinSubmit(ev) {
   }).then(function (res) {
     return res.json().catch(function () { return {}; }).then(function (body) {
       if (res.ok) {
-        window.location.href = "/";
-        return;
+        // A Secure cookie is dropped over plain http away from localhost.
+        return fetch("/api/me", {cache: "no-store", headers: {Accept: "application/json"}}).then(function (me) {
+          if (me.ok) {
+            window.location.href = "/";
+            return;
+          }
+          pass.value = "";
+          signinError("Signed in, but the browser did not keep the session cookie. Open this page over https or on localhost.");
+          btn.disabled = false;
+        });
       }
       pass.value = "";
       if (res.status === 429) signinError("Too many failed sign-ins from this address. Try again in a few minutes.");

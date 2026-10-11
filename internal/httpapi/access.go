@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"mime"
+	"net"
 	"net/http"
 	"net/netip"
 	"strconv"
@@ -25,7 +26,7 @@ import (
 
 // route is one endpoint and the lowest role that may call it. An empty
 // role is public: health checks, the sign-in endpoints, and the sign-in
-// page with the two files it loads.
+// page with the three files it loads (signin.js, shell.js, app.css).
 type route struct {
 	pattern string
 	role    plugin.Role
@@ -237,7 +238,7 @@ func (s *Server) authorize(w http.ResponseWriter, r *http.Request, rt route) (au
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "user store unavailable"})
 		return p, false
 	default:
-		if errors.Is(err, auth.ErrNoCredentials) && r.Method == http.MethodGet &&
+		if errors.Is(err, auth.ErrNoCredentials) && r.Method == http.MethodGet && cookieUsable(r) &&
 			!strings.HasPrefix(r.URL.Path, "/api/") && r.URL.Path != "/metrics" {
 			http.Redirect(w, r, "/signin.html", http.StatusFound)
 			return p, false
@@ -255,6 +256,25 @@ func (s *Server) authorize(w http.ResponseWriter, r *http.Request, rt route) (au
 		return p, false
 	}
 	return p, true
+}
+
+// cookieUsable reports whether the browser will keep the Secure session
+// cookie: the request came over TLS (directly or through a proxy that
+// says so) or the page is on localhost. Elsewhere a redirect to the
+// sign-in page would loop, so the basic-auth prompt stays.
+func cookieUsable(r *http.Request) bool {
+	if r.TLS != nil || strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https") {
+		return true
+	}
+	host := r.Host
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		host = h
+	}
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip, err := netip.ParseAddr(strings.Trim(host, "[]"))
+	return err == nil && ip.IsLoopback()
 }
 
 // withAllowFrom refuses clients outside http.allow_from.

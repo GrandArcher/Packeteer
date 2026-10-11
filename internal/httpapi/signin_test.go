@@ -35,7 +35,7 @@ func withCookie(c *http.Cookie) func(*http.Request) { return func(r *http.Reques
 
 func TestSigninPage(t *testing.T) {
 	e := newRBAC(t, nil)
-	// The page and the two files it loads need no sign-in.
+	// The page and the three files it loads need no sign-in.
 	for path, want := range map[string]string{
 		"/signin.html": `id="signin-form"`,
 		"/signin.js":   "/auth/signin",
@@ -60,10 +60,10 @@ func TestSigninPage(t *testing.T) {
 		t.Error("signin.html loads something that is not same-origin")
 	}
 	// Everything else still needs a user, and a script gets 401, not a page.
-	if rec := e.do("GET", "/", "", ""); rec.Code != http.StatusFound || rec.Header().Get("Location") != "/signin.html" {
+	if rec := e.do("GET", "/", "", "", overTLS); rec.Code != http.StatusFound || rec.Header().Get("Location") != "/signin.html" {
 		t.Fatalf("page without session: %d %s", rec.Code, rec.Header().Get("Location"))
 	}
-	if rec := e.do("GET", "/settings.html", "", ""); rec.Code != http.StatusFound {
+	if rec := e.do("GET", "/settings.html", "", "", overTLS); rec.Code != http.StatusFound {
 		t.Fatalf("settings without session: %d", rec.Code)
 	}
 	for _, p := range []string{"/api/overview", "/metrics"} {
@@ -163,7 +163,7 @@ func TestSigninFlow(t *testing.T) {
 	if rec := e.do("GET", "/api/me", "", "", in); rec.Code != http.StatusUnauthorized {
 		t.Fatalf("api after sign-out: %d", rec.Code)
 	}
-	if rec := e.do("GET", "/", "", "", in); rec.Code != http.StatusFound || rec.Header().Get("Location") != "/signin.html" {
+	if rec := e.do("GET", "/", "", "", in, overTLS); rec.Code != http.StatusFound || rec.Header().Get("Location") != "/signin.html" {
 		t.Fatalf("page after sign-out: %d %s", rec.Code, rec.Header().Get("Location"))
 	}
 	if rec := e.do("POST", "/api/maintenance", "", `{"providers":["transit-a"],"duration":"30m"}`, in); rec.Code != http.StatusUnauthorized {
@@ -258,5 +258,36 @@ func TestSigninNeedsAuth(t *testing.T) {
 	}
 	if rec := mdo(h, "POST", "/auth/signin", "application/json", `{"name":"ops","password":"secret"}`, true); rec.Code != http.StatusNotFound {
 		t.Fatalf("post: %d", rec.Code)
+	}
+}
+
+// A browser on plain http to a LAN address drops the Secure cookie, so a
+// redirect to the sign-in page would loop: it keeps the basic-auth prompt.
+func TestPageRedirectNeedsUsableCookie(t *testing.T) {
+	e := newRBAC(t, nil)
+	host := func(h string) func(*http.Request) { return func(r *http.Request) { r.Host = h } }
+	proxied := func(r *http.Request) { r.Header.Set("X-Forwarded-Proto", "https") }
+	for name, tc := range map[string]struct {
+		mod      func(*http.Request)
+		redirect bool
+	}{
+		"plain http, LAN address": {host("192.0.2.10:8080"), false},
+		"plain http, name":        {host("packeteer.example.net"), false},
+		"tls":                     {overTLS, true},
+		"proxy says https":        {proxied, true},
+		"localhost":               {host("localhost:8080"), true},
+		"loopback v4":             {host("127.0.0.1:8080"), true},
+		"loopback v6":             {host("[::1]:8080"), true},
+	} {
+		rec := e.do("GET", "/", "", "", tc.mod)
+		if tc.redirect {
+			if rec.Code != http.StatusFound || rec.Header().Get("Location") != "/signin.html" {
+				t.Errorf("%s: %d %s, want redirect", name, rec.Code, rec.Header().Get("Location"))
+			}
+			continue
+		}
+		if rec.Code != http.StatusUnauthorized || !strings.Contains(rec.Header().Get("WWW-Authenticate"), "Basic") {
+			t.Errorf("%s: %d %q, want 401 with a basic-auth challenge", name, rec.Code, rec.Header().Get("WWW-Authenticate"))
+		}
 	}
 }

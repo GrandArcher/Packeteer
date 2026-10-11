@@ -53,14 +53,17 @@ const (
 	// StateCookie ties an SSO callback to the browser that started it.
 	StateCookie = "packeteer_sso"
 
-	loginTTL       = 10 * time.Minute
-	maxPending     = 1000
-	maxSessions    = 10000
-	cacheTTL       = 5 * time.Minute
-	failWindow     = 5 * time.Minute
-	failLimit      = 10
-	maxThrottleIPs = 10000
-	tokenPrefix    = "pkt_"
+	loginTTL    = 10 * time.Minute
+	maxPending  = 1000
+	maxSessions = 10000
+	// maxUserSessions bounds one user's sessions; the oldest is replaced so
+	// a scripted sign-in loop cannot fill the shared pool.
+	maxUserSessions = 10
+	cacheTTL        = 5 * time.Minute
+	failWindow      = 5 * time.Minute
+	failLimit       = 10
+	maxThrottleIPs  = 10000
+	tokenPrefix     = "pkt_"
 )
 
 // Errors.
@@ -432,6 +435,7 @@ func (s *Service) SignIn(w http.ResponseWriter, r *http.Request, name, pw string
 func (s *Service) startSession(w http.ResponseWriter, user, method string, now time.Time) error {
 	sid := randomToken()
 	s.smu.Lock()
+	s.evictOldest(user)
 	if len(s.sessions) >= maxSessions {
 		for k, ss := range s.sessions {
 			if !now.Before(ss.expires) {
@@ -447,6 +451,24 @@ func (s *Service) startSession(w http.ResponseWriter, user, method string, now t
 	s.smu.Unlock()
 	http.SetCookie(w, s.sessionCookie(sid, int(s.sessionTTL/time.Second)))
 	return nil
+}
+
+// evictOldest drops user's earliest-expiring session when the user is at
+// maxUserSessions. smu must be held.
+func (s *Service) evictOldest(user string) {
+	count, oldest := 0, ""
+	for k, ss := range s.sessions {
+		if ss.user != user {
+			continue
+		}
+		count++
+		if oldest == "" || ss.expires.Before(s.sessions[oldest].expires) {
+			oldest = k
+		}
+	}
+	if count >= maxUserSessions {
+		delete(s.sessions, oldest)
+	}
 }
 
 func (s *Service) sessionCookie(value string, maxAge int) *http.Cookie {

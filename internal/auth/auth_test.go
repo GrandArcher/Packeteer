@@ -437,6 +437,44 @@ func TestLocalSession(t *testing.T) {
 	}
 }
 
+// TestSignInSessionCap: a user who signs in without ever signing out
+// keeps the newest maxUserSessions sessions and cannot push out another
+// user's.
+func TestSignInSessionCap(t *testing.T) {
+	s, _, c := newSvc(t, nil)
+	ctx := context.Background()
+	for _, n := range []string{"noc", "other"} {
+		if _, err := s.CreateUser(ctx, n, plugin.RoleViewer, "viewer-password-"+n); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_, keep, err := signIn(s, "192.0.2.5:1", "other", "viewer-password-other", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cookies []*http.Cookie
+	for i := 0; i < maxUserSessions+3; i++ {
+		c.add(time.Second)
+		_, ck, err := signIn(s, "192.0.2.5:1", "noc", "viewer-password-noc", nil)
+		if err != nil {
+			t.Fatalf("sign in %d: %v", i, err)
+		}
+		cookies = append(cookies, ck)
+	}
+	alive := func(ck *http.Cookie) bool {
+		_, err := s.Authenticate(req("192.0.2.5:1", func(r *http.Request) { r.AddCookie(ck) }))
+		return err == nil
+	}
+	for i, ck := range cookies {
+		if want := i >= 3; alive(ck) != want {
+			t.Errorf("session %d alive = %v, want %v", i, !want, want)
+		}
+	}
+	if !alive(keep) {
+		t.Error("another user's session was evicted")
+	}
+}
+
 // TestSignInLockout: the form and basic auth share one failure count per
 // address, and a locked address cannot sign in even with the right password.
 func TestSignInLockout(t *testing.T) {

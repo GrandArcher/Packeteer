@@ -172,15 +172,15 @@ if (document.body.getAttribute("data-page") !== "signin") {
   shellMarkCurrent();
   shellAccount();
   shellJSON("/api/me").then(shellApplyMe, function () {});
-}
-if (document.body.getAttribute("data-live") !== "app" && document.body.getAttribute("data-page") !== "signin") {
-  var refreshBtn = document.getElementById("refresh");
-  if (refreshBtn) {
-    refreshBtn.addEventListener("click", function () {
-      shellRefresh();
-      if (typeof renderGrid === "function") renderGrid();
-    });
+  if (document.body.getAttribute("data-live") !== "app") {
+    var refreshBtn = document.getElementById("refresh");
+    if (refreshBtn) {
+      refreshBtn.addEventListener("click", function () {
+        shellRefresh();
+        if (typeof renderGrid === "function") renderGrid();
+      });
+    }
+    shellRefresh();
+    setInterval(shellRefresh, SHELL_REFRESH_MS);
   }
-  shellRefresh();
-  setInterval(shellRefresh, SHELL_REFRESH_MS);
 }
