@@ -4,6 +4,10 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 
 ## [Unreleased]
 
+### Changed
+
+- Settings forms list and edit every `flow`, `vip`, `outage` source and `rules` policy with add, remove, reorder, names, flow aggregate lengths and a policy `geoip_db` path (#226).
+
 ### Fixed
 
 - Load-test RSS plateau and leak check (#112). The `pr` check read 379 MiB of growth after #110 (Actions run 37080504822) while peak RSS stayed under 6144; #120 set the budget at 384 and it stays there. The extra was the collector's return-and-refill on a taller heap, not an unbounded per-prefix map, and the heap is trimmed where that was cheap: one iBGP path per prefix is stored in the route entry instead of a map (710 to 358 bytes per prefix on a 50k synthetic table), `Lookup` and `Covering` skip prefix lengths with no selected route, per-address probe semaphores are dropped when the host leaves the probe set, the flow reader decodes in its socket buffer and reuses its observation slice and eviction scratch, and the fixed prober formats the target address only when a path matches on it. The load job also fails when RSS is still climbing at the end: new budget `rss_slope_mb` (192 for `pr`, 192 for the weekly soak) is the smaller of the Theil-Sen slope over the last third of the run times that third, and the last-sixth median minus the middle-third median. A soft `GOMEMLIMIT` was tried and dropped: on Actions run 38058605143 it pushed CPU to 2.6 cores and flow drops to 13.5 %. The controller also runs the collector at `GOGC=50` when `GOGC` is unset, because Actions run 38064717462 showed the swing between a trough baseline and a refilled heap (554 MiB over a 384 budget). A set `GOGC` is left alone. No budget is raised. Observe stays the default. Nothing is announced that is not in the learned RIB. Rollback: revert this change.
