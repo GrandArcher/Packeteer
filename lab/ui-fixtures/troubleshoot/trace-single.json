@@ -1,0 +1,12 @@
+{
+  "target": "198.51.100.9",
+  "traces": [
+    {
+      "provider": "transit-a", "source": "192.0.2.10", "reached": true,
+      "hops": [
+        {"ttl": 1, "address": "192.0.2.1", "rtt_ms": 0.4},
+        {"ttl": 2, "address": "198.51.100.9", "rtt_ms": 6.1, "reached": true, "origin_as": 64500}
+      ]
+    }
+  ]
+}

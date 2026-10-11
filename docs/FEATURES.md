@@ -192,7 +192,7 @@ Automatic traffic anomaly detection (#33, [anomaly.md](anomaly.md)): the `flow` 
 | Prometheus metrics | done | v0.1 | core (`internal/httpapi`) | #9 | no |
 | Reports: improvements, before/after latency/loss, provider efficiency, top prefixes/ASNs, country stats, cost savings | done (#129: `timeseries` report and `/graphs.html` charts of loss and latency before and after per UTC day for all, problem, 20%-better, and 50%-better destinations, plus a dashboard widget; read-only, daily resolution) | v0.2 | core (`internal/history`, `/api/reports`, CSV, dashboard) + storage | #23 | no |
 | Historical records / storage | done | v0.2 | storage (`sqlite`) | #23 | no |
-| Looking glass, traceroute, whois, manual prefix probe | partial: the manual probe takes an IP only (no hostname), shows raw JSON with no current-vs-best view, and never feeds optimization (#126) | v0.2 | core (`internal/troubleshoot`, `/api/troubleshoot`, dashboard) + prober + whois (`rdap`) | #24 | no |
+| Looking glass, traceroute, whois, manual prefix probe | partial: the looking glass and traceroute are drawn as tables with a hop diagram, hop origin AS from the learned RIB, and a stack of results with rerun and remove (#180); the manual probe takes an IP only (no hostname), shows raw JSON with no current-vs-best view, and never feeds optimization (#126) | v0.2 | core (`internal/troubleshoot`, `/api/troubleshoot`, dashboard) + prober + whois (`rdap`) | #24, #180 | no |
 | Alerts: email | done | v0.2 | notifier (`smtp`) | #22 | no |
 | Alerts: webhook (Slack/Teams/SMS gateways) | done | v0.1 | notifier (`webhook`; `slack`, `teams`, `pagerduty` presets and body templates in v0.2) | #13, #22 | no |
 | Alerts: SNMP traps | done | v0.2 | notifier (`snmptrap`) | #22 | no |

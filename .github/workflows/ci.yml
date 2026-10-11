@@ -458,6 +458,61 @@ jobs:
             'probe rollup' 'MED is display only' 'href="/troubleshooting.html?tool=probe&amp;target=198.51.100.0%2F24"' 'mode-observe' 'It announces nothing.' \
             --absent 'Announced' 'Cannot reach' 'mode-inject'
           bash lab/ui-smoke.sh 'http://127.0.0.1:18098/troubleshooting.html?tool=probe&target=198.51.100.0/24' 'value="198.51.100.0/24"' 'It announces nothing.'
+      - name: UI troubleshooting smoke (#180; looking glass and traceroute tables from canned answers, observe)
+        run: |
+          set -euo pipefail
+          base=http://127.0.0.1:18180
+          cat > /tmp/ui180.yaml <<'YAML'
+          mode: observe
+          asn: 64512
+          router_id: 192.0.2.10
+          http:
+            listen: "127.0.0.1:18180"
+          providers:
+            - name: lab-a
+              source_ip: 127.0.0.1
+              next_hop: 192.0.2.1
+          YAML
+          docker run -d --name pkui180 --network host --cap-add NET_RAW --cap-add NET_ADMIN \
+            -v /tmp/ui180.yaml:/etc/packeteer/config.yaml:ro packeteer:ci
+          proxy=""
+          cleanup() {
+            if [ -n "$proxy" ]; then kill "$proxy" 2>/dev/null || true; fi
+            docker stop -t 15 pkui180 >/dev/null || true
+            docker logs pkui180 2>&1 | tail -n 40
+            code="$(docker inspect -f '{{.State.ExitCode}}' pkui180)"
+            docker rm pkui180 >/dev/null || true
+            test "$code" = "0"
+          }
+          trap cleanup EXIT
+          ok=0
+          for _ in $(seq 1 30); do
+            if curl -fsS "$base/healthz" >/dev/null 2>&1; then ok=1; break; fi
+            sleep 1
+          done
+          test "$ok" = 1
+          # Headless Chrome cannot click, so uiproxy answers the looking
+          # glass and traceroute calls from lab/ui-fixtures/troubleshoot
+          # (documentation prefixes and ASNs) and adds a driver script that
+          # presses Run, Remove, and Rerun. The page itself is the image's.
+          go build -o /tmp/uiproxy ./lab/uiproxy
+          /tmp/uiproxy -listen 127.0.0.1:18181 -upstream "$base" -user lab -password lab-only \
+            -fixtures lab/ui-fixtures/troubleshoot >/tmp/uiproxy180.log 2>&1 &
+          proxy=$!
+          for _ in $(seq 1 20); do
+            curl -fsS http://127.0.0.1:18181/healthz >/dev/null 2>&1 && break
+            sleep 0.2
+          done
+          curl -fsS http://127.0.0.1:18181/healthz >/dev/null
+          bash lab/ui-smoke.sh http://127.0.0.1:18181/troubleshooting.html 'mode-observe' 'It announces nothing.' \
+            'Learned paths for 198.51.100.0/24' '>selected<' '>inactive<' 'route server' 'bilateral' 'Display only. MED does not choose the exit.' \
+            'More-specific routes (1)' 'Covering route' 'No route is learned for exactly 198.51.100.64/26.' \
+            'class="hop-diagram"' 'gw.transit-a.example.net' '>AS64496<' '>AS64500<' 'target reached' 'target not reached' \
+            'send: network is unreachable' 'error: bind: source address unavailable' '>100%<' 'Raw JSON' \
+            'no BGP RIB view configured' \
+            'order: Traceroute 203.0.113.99 | Traceroute 198.51.100.9 | Traceroute 203.0.113.7 | Looking glass 192.0.2.0/24 | Looking glass 198.51.100.64/26 | Looking glass 198.51.100.0/24' \
+            'after: Traceroute 198.51.100.9 | Traceroute 198.51.100.9 | Traceroute 203.0.113.7 | Looking glass 192.0.2.0/24 | Looking glass 198.51.100.64/26 | Looking glass 198.51.100.0/24' \
+            --absent 'rate limited; try again shortly' 'Cannot reach' 'mode-inject'
       - name: UI settings forms smoke (#130; flow, rules, VIP, outage, wizard flow step, observe)
         run: |
           set -euo pipefail

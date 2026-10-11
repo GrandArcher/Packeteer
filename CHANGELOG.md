@@ -24,6 +24,7 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 
 ### Added
 
+- Troubleshooting page draws looking glass paths and per-provider traceroute hops (origin AS from the learned RIB, reverse name, hop diagram) as tables, with raw JSON, rerun, and remove (#180). Read-only; roles unchanged.
 - Prefix detail page `/prefix/<prefix>` (#179): every improvement row, live and in the improvements and prefixes reports, links to the prefix card and a stored timeline, with a Probe now link. New read-only `GET /api/prefixes/history`.
 - Events and audit log page (#173): filterable recent events kept in `sqlite` storage or memory, an admin Audit tab, and a top bar count of new warnings.
 - Admin Users page and Tokens page over the existing /api/users and /api/tokens, with the same roles and audit (#175). Rollback: revert.

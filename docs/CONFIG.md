@@ -360,7 +360,7 @@ Operator tools on the ops HTTP server (`/api/troubleshoot/...` and the dashboard
 |---|---|---|
 | `enabled` | `false` | Turns on the tools that send traffic or query a registry: the on-demand probe (the configured prober chain from every provider's `source_ip`), traceroute (UDP from each provider's `source_ip`, `NET_RAW` not needed), and whois. The looking glass only reads the learned RIB and is always on. |
 | `requests_per_minute` | `6` | Probe, traceroute, and whois requests together, 1–600. Excess requests get `429`. |
-| `max_hops` | `30` | TTL limit for one traceroute, 1–64. One probe per hop, `probe.timeout` per hop. A trace stops early after six silent hops in a row. |
+| `max_hops` | `30` | TTL limit for one traceroute, 1–64. One probe per hop, `probe.timeout` per hop. A trace stops early after six silent hops in a row. Each hop answer carries its `origin_as` (from the learned RIB) and, when the container's resolver has a PTR record, its `name`; the PTR lookups share a three-second limit. |
 | `whois` | none | One whois plugin entry (`type: rdap`). Without it, whois answers `404`. |
 
 The tools refuse loopback, link-local, multicast, broadcast, and unspecified targets. Whois accepts only an address, a prefix, or an ASN (`AS64496` or `64496`). The active tools are `POST` with a JSON body, so a cross-site page cannot trigger them. When basic auth is on, every tool needs it.
