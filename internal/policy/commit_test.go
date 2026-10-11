@@ -302,14 +302,14 @@ func TestDecideRefusesHigherLossAndNativeCommitMoves(t *testing.T) {
 		t.Fatalf("bare planner higher loss: %+v %+v", decision(t, out, pA), st.Improvements)
 	}
 
-	st, out = Decide(NewState(), input, c, planStub{moves: []plugin.PlanMove{mv}, override: true, allow: true}, t0)
+	st, _ = Decide(NewState(), input, c, planStub{moves: []plugin.PlanMove{mv}, override: true, allow: true}, t0)
 	if st.Improvements[pA].Provider != "b" || st.Improvements[pA].Cause != plugin.CauseCommit {
 		t.Fatalf("loss override: %+v", st.Improvements)
 	}
 
 	input = commitInput()
 	native := plugin.PlanMove{Prefix: pA, Provider: "a", Reason: "stub", ReliefMbps: 60}
-	st, out = Decide(NewState(), input, c, planStub{moves: []plugin.PlanMove{native}, override: true, allow: true}, t0)
+	st, _ = Decide(NewState(), input, c, planStub{moves: []plugin.PlanMove{native}, override: true, allow: true}, t0)
 	if len(st.Improvements) != 0 {
 		t.Fatalf("steered onto native: %+v", st.Improvements)
 	}
