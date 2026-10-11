@@ -168,7 +168,7 @@ func TestHealthAndReady(t *testing.T) {
 	notReady.BGPConfigured = true
 	notReady.RIBReady = false
 	ts2 := newTestServer(t, notReady, "", "")
-	code, _, body = do(t, http.MethodGet, ts2.URL+"/healthz", "", "")
+	code, _, _ = do(t, http.MethodGet, ts2.URL+"/healthz", "", "")
 	if code != http.StatusOK {
 		t.Fatalf("healthz while not ready = %d", code)
 	}

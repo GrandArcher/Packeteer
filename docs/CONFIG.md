@@ -62,6 +62,7 @@ The image entrypoint is the same binary. Flags go after the image name.
 | `mitigation` | none | no | Threat mitigation: RTBH (blackhole), BGP redirect, and FlowSpec (drop, rate-limit, redirect, by source country too) for exact learned prefixes, added through `/api/mitigations`. Off unless set; its own `mode` defaults to `observe`. See [`mitigation`](#mitigation). Lab-proven only. |
 | `anomaly` | none | no | Automatic traffic anomaly (DDoS) detection: a detector plugin baselines flow volumes per destination prefix and IP protocol from a `flow` source and reports anomalies; an explicit rule can turn one into a mitigation rule, rate-limited and capped. Needs `mitigation` for rules. Off unless set. See [`anomaly`](#anomaly). Lab-proven only. |
 | `upgrade` | off | no | Version check, one-click upgrade, and rollback in Settings (#196). Needs `public_key`. See [`upgrade`](#upgrade). Never upgrades without an admin's confirmation; does not announce. |
+| `leak_watch` | none | no | Watches for Packeteer's routes outside the AS and withdraws a leaked route (one prefix, never in bulk), holding it out until an operator clears it. Off unless `enabled: true`. See [`leak_watch`](#leak_watch) and [leak-watch.md](leak-watch.md). Lab-proven only. |
 | `report_subscriptions` | none | no | Stored reports emailed as CSV on a daily, weekly, or monthly UTC schedule through an `smtp` notifier (#34). Needs `storage`. See [`report_subscriptions`](#report_subscriptions). Does not announce. |
 | `troubleshoot` | looking glass only | no | Read-only operator tools: looking glass, on-demand probe, traceroute, whois. Does not announce. See [`troubleshoot`](#troubleshoot). |
 
@@ -224,7 +225,7 @@ storage:
   type: sqlite            # users, token hashes, and the audit log live here
 auth:
   enabled: true
-  session_ttl: 12h        # SSO sign-ins
+  session_ttl: 12h        # sign-in page and SSO sessions
   token_ttl: 2160h        # API tokens when the request names no ttl
   sso:                    # optional
     type: oidc
@@ -239,11 +240,11 @@ auth:
 | Key | Default | Meaning |
 |---|---|---|
 | `enabled` | `false` | Turns auth on. Requires `storage` (a plugin that keeps users, e.g. `sqlite`) and refuses to start with `PACKETEER_HTTP_USER` set. `false`, or no `auth` block, keeps the single basic-auth account: the rollback. |
-| `session_ttl` | `12h` | Lifetime of an SSO session, `5m`–`168h`. Sessions are in memory; a restart signs everyone out. |
+| `session_ttl` | `12h` | Lifetime of a session from the sign-in page or SSO, `5m`–`168h`. Sessions are in memory; a restart signs everyone out. |
 | `token_ttl` | `2160h` | API token lifetime when the request names none, `1h`–`8760h`. A request may ask for up to `8760h`. |
 | `sso` | none | Single sign-on plugin entry (`type: oidc`). Needs `enabled: true`. |
 
-Roles: `viewer` reads everything a dashboard or API client reads (and manages its own API tokens), `operator` also opens and closes maintenance windows, adds and removes mitigation rules, and runs the troubleshooting tools, `admin` also manages users and reads the audit log. `/healthz`, `/readyz`, and the SSO sign-in endpoints are public. The first admin comes from `PACKETEER_ADMIN_USER` and `PACKETEER_ADMIN_PASSWORD`. Auth never changes what is announced: allowlist, learned-RIB check, community, NO_EXPORT, `max_improvements`, hold time, and withdraw-on-failure are the same for every role.
+Roles: `viewer` reads everything a dashboard or API client reads (and manages its own API tokens), `operator` also opens and closes maintenance windows, adds and removes mitigation rules, and runs the troubleshooting tools, `admin` also manages users and reads the audit log. `/healthz`, `/readyz`, the sign-in page and endpoints, and the SSO endpoints are public. The first admin comes from `PACKETEER_ADMIN_USER` and `PACKETEER_ADMIN_PASSWORD`. Auth never changes what is announced: allowlist, learned-RIB check, community, NO_EXPORT, `max_improvements`, hold time, and withdraw-on-failure are the same for every role.
 
 ### `bgp`
 
@@ -361,7 +362,7 @@ Operator tools on the ops HTTP server (`/api/troubleshoot/...` and the dashboard
 |---|---|---|
 | `enabled` | `false` | Turns on the tools that send traffic or query a registry: the on-demand probe (the configured prober chain from every provider's `source_ip`), traceroute (UDP from each provider's `source_ip`, `NET_RAW` not needed), and whois. The looking glass only reads the learned RIB and is always on. |
 | `requests_per_minute` | `6` | Probe, traceroute, and whois requests together, 1–600. Excess requests get `429`. |
-| `max_hops` | `30` | TTL limit for one traceroute, 1–64. One probe per hop, `probe.timeout` per hop. A trace stops early after six silent hops in a row. |
+| `max_hops` | `30` | TTL limit for one traceroute, 1–64. One probe per hop, `probe.timeout` per hop. A trace stops early after six silent hops in a row. Each hop answer carries its `origin_as` (from the learned RIB) and, when the container's resolver has a PTR record, its `name`; the PTR lookups share a three-second limit. |
 | `whois` | none | One whois plugin entry (`type: rdap`). Without it, whois answers `404`. |
 
 The tools refuse loopback, link-local, multicast, broadcast, and unspecified targets. Whois accepts only an address, a prefix, or an ASN (`AS64496` or `64496`). The active tools are `POST` with a JSON body, so a cross-site page cannot trigger them. When basic auth is on, every tool needs it.
@@ -450,6 +451,18 @@ Each rule:
 | `ttl` | `mitigation.default_ttl` | The rule's lifetime, 1s to `mitigation.max_ttl`. The rule is removed earlier when the anomaly clears. |
 
 A rule the detector added is removed when its anomaly clears. The detector never replaces a rule someone else holds for the same key, adds nothing on an HA standby, and does not add a rule again for an anomaly whose rule expired or was deleted. When the flow source fails three rounds in a row, every anomaly clears, its rule is removed, and the baselines are learned again. Rollback: remove `rules` (alerts only) or the whole block and restart; a restart holds no rule.
+
+### `leak_watch`
+
+Leak watch (#199, not on a public edge). Contract: [leak-watch.md](leak-watch.md). Leak sources report routes seen outside the iBGP sessions. A route that carries `packeteer_community` (or, with `as_path_rule`, an injected prefix with `asn` in its path) is held out of outbound improvements and inbound steers and reported (`leak.detected`, `/api/leaks`) until `POST /api/leaks/clear` releases it.
+
+| Key | Default | Meaning |
+|---|---|---|
+| `enabled` | `false` | `true` turns the watch on. A block that is not enabled is ignored, sources included. Needs `packeteer_community` and at least one source. |
+| `as_path_rule` | `false` | Also flag an injected prefix seen outside with `asn` in its AS path. Leave off if you export transit routes to customers or list a customer router as a source: every injected prefix would match. |
+| `sources` | none | Leak source plugins, each `type` (and optional `name`, `config`): `bmp` ([Leak source `bmp`](#leak-source-bmp)) or `rislive` ([Leak source `rislive`](#leak-source-rislive)). In-process only. A source that is down is reported unknown and never blocks a withdraw. |
+
+An outbound route is withdrawn at once. An inbound steer is held and removed at the next inbound sync, and the leak shows `action: held`. Holds are in memory. Rollback: `enabled: false` and restart. The block is restart-only.
 
 ### `more_specific`
 
@@ -1158,13 +1171,14 @@ Off unless `storage.type` is `sqlite`. Keeps report history in an embedded SQLit
 | Key | Default | Meaning |
 |---|---|---|
 | `path` | `/var/lib/packeteer/packeteer.db` | Database file. Must be absolute. The directory is created on start. Mount a volume on it (`-v packeteer-data:/var/lib/packeteer`) so history survives a container restart. |
-| `retention` | `9600h` (400 days) | Rows older than this are deleted on start and once a day. `24h`–`87600h`. An improvement that is still active is kept. |
+| `retention` | `9600h` (400 days) | Rows older than this (audit records and events included) are deleted on start and once a day. `24h`–`87600h`. An improvement that is still active is kept. |
 
 What is stored:
 
 - Daily probe rollups per prefix and provider (UTC day): probes, failed probes, and sums of loss, RTT, and jitter. Raw probe results are not stored.
 - One row per improvement, from start to end. A switch to another provider ends the row and starts a new one. Each row has the cause, reason, mode, the native provider's loss and RTT and the chosen provider's loss and RTT at the decision that started it, `cost_delta`, `est_savings`, the prefix volume when known, the origin ASN (last AS in the learned path), and the country. In observe and suggest these are recommendations; in inject they were announced.
 - Per prefix: origin ASN, country, and latest volume.
+- Recent events (#173) for the Events page: time, kind, severity, message, and fields. Pruned by `retention`. Without `storage` the page keeps the newest 1000 in memory.
 - SNMP 95th-percentile samples (#127), when a `telemetry` plugin of type `snmp` is configured: one row per provider binding and sample time (inbound and outbound bits per second, and the billing period). The collector loads the open period on start. A closed period stays until `retention` (rows whose period has ended by the cutoff). This does not announce. Without `storage`, those samples stay in memory and a restart clears them.
 
 The recorder buffers in memory and writes once a minute and on shutdown, after the routes are withdrawn. Rows a previous process left open are closed on start with `controller restarted (routes withdrawn)`.
@@ -1288,6 +1302,26 @@ A standby takes a lease that is free or released at its next renewal. It takes a
 | Variable | Effect |
 |---|---|
 | `PACKETEER_HA_ID` | `id` when the config does not set it. |
+
+### Leak source `bmp`
+
+A BMP station for the leak watch (#199). It listens on its own port, separate from the [RIB source `bmp`](#rib-source-bmp), and nothing it receives enters the RIB view. It reads only post-policy tables: the Adj-RIB-In of `external_routers` (routers outside your AS) and the Adj-RIB-Out (RFC 8671) of `own_routers` toward eBGP peers. Pre-policy tables, Adj-RIB-Out of external routers, Adj-RIB-In of your own routers, and, in the Adj-RIB-Out of `own_routers`, sessions to a peer in your own AS are ignored. Healthy while at least one router has a session.
+
+| Key | Default | Meaning |
+|---|---|---|
+| `listen` | `:11020` | `host:port` for the station. |
+| `external_routers` | none | Addresses of routers outside the AS allowed to connect. |
+| `own_routers` | none | Addresses of your edge routers allowed to connect. An address cannot be in both lists, and at least one list is required. |
+| `idle_timeout` | off | Drop a router's session after this long without a BMP message (at least 10s). |
+
+### Leak source `rislive`
+
+Reads the public [RIPE RIS Live](https://ris-live.ripe.net) HTTP stream (#199). The subscription asks for UPDATE announcements whose AS path contains `asn`. The only request is the GET that opens the stream. A lost stream is retried after 5s, doubling to 5m; it is unhealthy meanwhile. A stream silent for 15 minutes is treated as lost and reopened, since the endpoint sends no keepalive. It needs the local `asn`. A route is seen only after it left the AS and propagated, so it complements a router-side source.
+
+| Key | Default | Meaning |
+|---|---|---|
+| `url` | `https://ris-live.ripe.net/v1/stream/` | Stream endpoint, `http` or `https`, without a query (`format=json` and `client` are added). |
+| `client` | `packeteer-leak-watch` | Client name sent to the service. |
 
 ### Detector `baseline`
 

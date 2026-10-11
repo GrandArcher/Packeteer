@@ -20,7 +20,9 @@ func TestUIShell(t *testing.T) {
 	pages := map[string]string{}
 	var nav string
 	for _, e := range entries {
-		if !strings.HasSuffix(e.Name(), ".html") {
+		// The sign-in page has no navigation or account menu; TestSigninPage
+		// covers it.
+		if !strings.HasSuffix(e.Name(), ".html") || e.Name() == "signin.html" {
 			continue
 		}
 		body := mustWeb(t, "web/"+e.Name())
@@ -79,6 +81,7 @@ func TestUIShell(t *testing.T) {
 		`href="/protection.html" data-page="protection"`,
 		`href="/troubleshooting.html" data-page="troubleshooting"`,
 		`href="/events.html" data-page="events"`,
+		`href="/tokens.html" data-page="tokens"`,
 		`href="/settings.html" data-page="settings" data-min-role="admin"`,
 		`href="/admin.html" data-page="admin" data-min-role="admin"`,
 	} {
@@ -92,13 +95,15 @@ func TestUIShell(t *testing.T) {
 		"prefixes.html":        {`<body data-page="prefixes" data-live="app">`, `id="prefixes"`, `id="asn-map"`, "ASN map", "MED"},
 		"providers.html":       {`<body data-page="providers" data-live="app">`, `id="providers"`, "#148"},
 		"reports.html":         {`<body data-page="reports" data-live="app">`, `id="report-name"`, `id="report-csv"`},
-		"troubleshooting.html": {`<body data-page="troubleshooting" data-live="app">`, `id="tool-run"`, "Looking glass"},
+		"troubleshooting.html": {`<body data-page="troubleshooting" data-live="app">`, `id="tool-run"`, `id="tool-results"`, `id="tool-empty"`, `src="/tools.js"`, "Looking glass"},
 		"protection.html":      {`<body data-page="protection" data-live="app">`, `id="mitigation-section" hidden`, `id="mitigation"`, `id="protection-empty"`, `id="mit-form"`, `id="mf-prefix"`, `src="/protection.js"`, `id="mit-badge"`},
 		"graphs.html":          {`<body data-page="graphs" data-live="app">`, `id="graph"`, `id="graph-bucket"`, `id="graph-days"`, `id="graph-csv"`, `src="/charts.js"`, `src="/graphs.js"`, "nothing here announces a route"},
+		"prefix.html":          {`<body data-page="prefixes" data-live="app">`, `id="prefix-title"`, `id="prefix-live"`, `id="prefix-probe"`, `id="prefix-timeline"`, `id="prefix-days"`, `src="/prefix.js"`, "MED is display only"},
 		"commit.html":          {`<body data-page="commit" data-live="app">`, "#174"},
 		"policies.html":        {`<body data-page="policies" data-live="app">`, "#130"},
-		"events.html":          {`<body data-page="events" data-live="app">`, "#173"},
-		"admin.html":           {`<body data-page="admin" data-live="app">`, `id="page-denied"`, `id="admin-body"`, "#175"},
+		"events.html":          {`<body data-page="events">`, `id="events"`, `id="audit"`, `id="tab-audit"`, `data-min-role="admin">Audit`, `id="ev-severity"`, `id="ev-q"`, `id="ev-range"`, `src="/events.js"`},
+		"admin.html":           {`<body data-page="admin">`, `id="page-denied"`, `id="admin-body"`, `id="user-form"`, `id="uf-name"`, `id="uf-role"`, `id="uf-password" type="password"`, `id="users-off" class="empty" hidden`, `id="users-on" hidden`, `src="/admin.js"`},
+		"tokens.html":          {`<body data-page="tokens">`, `id="tokens-off" class="empty" hidden`, `id="tokens-on" hidden`, `id="token-secret" class="secret" role="alert" hidden`, `id="token-form"`, `id="tf-name"`, `id="tf-role"`, `id="tf-ttl"`, `src="/tokens.js"`},
 		"settings.html":        {`<body data-page="settings">`, `src="/settings.js"`, `id="ed-yaml"`, `src="/upgrade.js"`, `id="up-check"`, `id="up-confirm"`},
 		"dashboards.html":      {`<body data-page="dashboards">`, `src="/dashboards.js"`, `id="db-grid"`, "Custom dashboards"},
 	}
@@ -119,9 +124,9 @@ func TestUIShell(t *testing.T) {
 
 	e := newUI(t)
 	for _, path := range []string{
-		"/", "/improvements.html", "/prefixes.html", "/graphs.html", "/reports.html",
+		"/", "/improvements.html", "/prefixes.html", "/prefix/192.0.2.0/24", "/graphs.html", "/reports.html",
 		"/providers.html", "/commit.html", "/policies.html", "/protection.html",
-		"/troubleshooting.html", "/events.html", "/settings.html", "/admin.html", "/dashboards.html",
+		"/troubleshooting.html", "/events.html", "/tokens.html", "/settings.html", "/admin.html", "/dashboards.html",
 	} {
 		rec, _ := e.do(t, "GET", path, plugin.RoleViewer, nil)
 		if rec.Code != 200 {
@@ -171,13 +176,14 @@ func TestModeBannerCopy(t *testing.T) {
 		"Your account may not read this page.",
 		`data-min-role`,
 		`/auth/logout`,
+		`out.hidden = !(me && me.session)`,
 	} {
 		if !strings.Contains(shell, s) {
 			t.Errorf("shell.js missing %s", s)
 		}
 	}
 	// A missing section must not throw when the page does not have it.
-	for _, fn := range []string{"renderProviders", "renderPrefixes", "renderImprovements", "renderMitigation", "renderFederation", "renderTiles", "renderSetup"} {
+	for _, fn := range []string{"renderProviders", "renderImprovements", "renderMitigation", "renderFederation", "renderTiles", "renderSetup"} {
 		if !strings.Contains(app, "function "+fn) || !strings.Contains(app, "if (!root) return;") {
 			t.Errorf("%s is not guarded", fn)
 		}

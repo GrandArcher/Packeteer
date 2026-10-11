@@ -5,6 +5,11 @@ The remaining UI conveniences (#34). All of them work in the stock image with a 
 | Feature | Where | Who | Config |
 |---|---|---|---|
 | Before/after graphs (#129) | `/graphs.html`, `/api/reports/timeseries`, the `timeseries` dashboard widget | viewer | `storage: {type: sqlite}` |
+| Troubleshooting results (#180) | `/troubleshooting.html`, `/api/troubleshoot/...` | viewer for the looking glass, operator for probe, traceroute, and whois | `troubleshoot.enabled` for the active tools |
+| Prefix list (#183) | `/prefixes.html`, `/api/prefixes` | viewer | none |
+| Prefix detail and history (#179) | `/prefix/<prefix>`, `/api/prefixes/history` | viewer | `storage: {type: sqlite}` for the timeline |
+| Events and audit log (#173) | `/events.html`, `/api/events`, `/api/audit` | viewer for events, admin for the audit tab | `storage: {type: sqlite}` keeps events across a restart |
+| Users and API tokens (#175) | `/admin.html`, `/tokens.html`, `/api/users`, `/api/tokens` | admin for users, every signed-in user for tokens | `storage` + `auth.enabled` |
 | Dashboard overview and setup checklist (#49) | `/`, `/api/overview` | viewer | none |
 | Config editor and settings form (#102, inbound and anomaly rules #131) | `/settings.html`, `/api/config`, `POST /api/config/form` | admin | `http.config_editor: true` + auth or basic auth |
 | Setup wizard (#106, flow step #130) | `/settings.html`, `POST /api/config/wizard` | admin | `http.config_editor: true` + auth or basic auth |
@@ -24,23 +29,100 @@ Every page has the same chrome (#170). The mode banner is the first thing on the
 | Overview | `/` | Tiles, setup checklist, optional features, and POPs when federation is on |
 | Dashboards | `/dashboards.html` | Custom dashboards (the existing page) |
 | Improvements | `/improvements.html` | Recommended or active improvements |
-| Prefixes & ASNs | `/prefixes.html` | Prefix cards and the ASN map |
+| Prefixes & ASNs | `/prefixes.html` | The measured-prefix table, one page at a time, and the ASN map ([below](#prefix-list)) |
 | Graphs | `/graphs.html` | Before/after loss and latency charts (#129; [below](#graphs)). Empty state without history |
 | Reports | `/reports.html` | History reports and CSV |
 | Providers & Exchanges | `/providers.html` | Provider health. The exchange view is empty (#148) |
 | Commit & Cost | `/commit.html` | Empty (#174) |
 | Policies | `/policies.html` | Points to Settings, where the `rules` policy is edited (#130). It does not list rules yet |
 | Protection | `/protection.html` | The threat-mitigation monitor with an add and remove rule form (#131) when that feature is on. Otherwise an empty state that says how to configure it |
-| Troubleshooting | `/troubleshooting.html` | Looking glass, probe, traceroute, whois |
-| Events | `/events.html` | Empty (#173) |
+| Troubleshooting | `/troubleshooting.html` | Looking glass, probe, traceroute, whois ([below](#troubleshooting-results)) |
+| Events | `/events.html` | Recent events and, for admins, the audit log ([below](#events-and-audit-log)) |
+| Tokens | `/tokens.html` | The signed-in user's API tokens ([below](#users-and-api-tokens)) |
 | Settings | `/settings.html` | Wizard, settings form, YAML, report subscriptions. Admin |
-| Admin | `/admin.html` | Empty (#175). Admin |
+| Admin | `/admin.html` | Users ([below](#users-and-api-tokens)). Admin |
 
 POPs stay on Overview and the threat-mitigation monitor stays on Protection. Both stay hidden when the feature is off, as they did on the single dashboard.
 
-The top bar holds the mode chip, a search slot, an events slot, and the account menu. The search slot does not query (#172). The events slot opens the Events page. The account menu shows who is signed in (`GET /api/me`). With single sign-on it can sign out (`POST /auth/logout`). A local account has no sign-out here (#176).
+The top bar holds the mode chip, a search slot, an events slot, and the account menu. The search slot does not query (#172). The events slot opens the Events page and shows how many warnings (or worse) arrived since this browser last opened it. The account menu shows who is signed in (`GET /api/me`). Sign out appears when the request carries a session cookie, from the sign-in page or single sign-on, and calls `POST /auth/logout`. A request signed with basic auth or an API token has no session, so no sign-out item.
+
+**Sign-in page (#176).** With `auth.enabled`, a browser without a session that asks for a page over https (or through a proxy that sends `X-Forwarded-Proto: https`) or on localhost is sent to `/signin.html`. Over plain http to any other address it gets the basic-auth prompt, because the browser would drop the `Secure` cookie. API paths and `/metrics` answer `401`. The page asks for a user name and password, posts them as JSON to `POST /auth/signin`, and on success loads the dashboard. The server keeps the session in memory and sets a `packeteer_session` cookie (`HttpOnly`, `Secure`, `SameSite=Strict`, lifetime `auth.session_ttl`). The page shows the mode banner and a single sign-on link when an `sso` plugin is configured. A wrong user name or password gets one answer (`401`); ten failures from one address in five minutes lock that address out (`429`), counted together with basic auth. Basic auth and API tokens work as before for scripts. The mode banner on the page comes from `GET /auth/signin`, which needs no sign-in. Without `auth.enabled` the sign-in POST answers `404` and the browser keeps its basic-auth prompt.
 
 Settings and Admin are marked admin-only. With role-based auth, a viewer or an operator does not see those two links. Opening Admin directly says "Your account may not read this page." Opening Settings directly keeps the editor's existing not-allowed message; report subscriptions on that page are unchanged. With auth off, or with the one basic-auth account, both links are shown. Nothing in the shell announces, and it does not write config.
+
+## Users and API tokens
+
+Two pages put `/api/users` and `/api/tokens` on screen (#175). They need `auth.enabled` and a `storage` plugin ([auth.md](auth.md)); without them each page says so and has no form. They call the existing endpoints, so the role checks, the last-admin lockout, the password rules, and the audit record are the API's. Neither page can announce anything.
+
+**Users** (`/admin.html`, admin role). A table of every user with role, source (local or SSO), status, and last change. Actions per row:
+
+- change the role (`PATCH /api/users/{name}` with `role`);
+- reset the password (`password`; the user's sessions end);
+- disable or enable (`disabled`);
+- delete (two clicks; the user's tokens go with it).
+
+A form adds a local user (`POST /api/users`). An SSO user's role comes from the identity provider, so only disable, enable, and delete are offered for it. A refused change, such as demoting or deleting the last enabled admin, shows the API's message. A viewer or an operator does not get the Admin link, and opening the page says the account may not read it; `/api/users` answers `403` either way.
+
+**Tokens** (`/tokens.html`, every signed-in user). A table of the user's tokens (an admin sees everyone's) with role, created, expires, and status, and a revoke button (two clicks). The create form takes a name, a role up to the user's own (default `viewer`), and a lifetime in hours (empty is `auth.token_ttl`). The secret appears once, in a box that stays until it is closed or the page is left; it is not in the table or the audit log, is never written to a cookie or browser storage, and closing the box removes it from the page. A request signed with an API token can list and revoke but not create, and the page says so.
+
+A password typed into the Admin page is sent and the field is cleared. Every change is written to the audit log with its actor, as for a script.
+
+## Troubleshooting results
+
+The Troubleshooting page (#180) draws looking glass and traceroute answers as tables. It sends the same requests as before, so the roles, the `troubleshoot.requests_per_minute` limit, and the `troubleshoot.enabled` switch are unchanged ([CONFIG.md](CONFIG.md#troubleshoot)). Nothing on it announces anything, and the mode banner is on top in every mode.
+
+- **Looking glass.** Learned paths for the query: state (`selected` for the path the RIB view publishes, `inactive` for add-path and BMP paths), provider, next hop, AS path, via, and MED. MED is display only and does not choose the exit. Below it, the longest covering route when it is not the query itself, and the learned more-specifics (cut off at 100).
+- **Traceroute.** One block per provider: its source address, whether the target was reached or the trace's error, a diagram of the hops (silent hops are dashed, `*`), and a table of hop, address, reverse name, origin AS, RTT, loss, and error. The origin AS is the last AS on the longest learned route that covers the hop address; a default route is not a match, and a hop outside the learned RIB shows none. No external data is used. The reverse name is a PTR lookup through the container's resolver, bounded to three seconds for the whole trace, and is empty when there is none. One probe is sent per hop, so loss reads 0% (it answered) or 100% (it did not).
+- **Raw JSON.** Every result keeps a collapsible raw view. Probe and whois results show only the raw JSON, open.
+- **Stack.** Results stack newest first, up to 20, in the page and are gone when it is closed or reloaded. Rerun sends the same request again and adds a new result on top. Remove drops one result. A refused or failed request, such as the rate limit, is a result with its message.
+
+The smoke step "UI troubleshooting smoke" in the docker job (`lab/ui-smoke.sh`) loads the page through `lab/uiproxy -fixtures lab/ui-fixtures/troubleshoot`. The proxy answers the looking glass and traceroute calls from canned files on documentation prefixes and ASNs (a learned best and an inactive path, a covering route, a three-provider trace with a silent hop, an error, and a provider whose source is unavailable, a single-provider trace, and a rate-limited call) and adds a script that presses Run, Remove, and Rerun, because headless Chrome cannot click. The step checks the tables, the diagram, the raw view, the error text, a real unstubbed looking glass call against the image, and the newest-first order after a remove and a rerun. `lab/uiproxy` tests decode the canned files with the API's own types. `internal/troubleshoot` tests cover the origin AS and reverse name on each hop.
+
+## Prefix list
+
+`/prefixes.html` (#183) shows the measured prefixes as a table, one page at a time, so a table of 100k prefixes costs one page per request. It is read-only and announces nothing; the mode banner is on top in every mode.
+
+- **Table.** Prefix (links to its [detail page](#prefix-detail-and-history)), current exit, recommended exit, score gain, loss, RTT, and whether it is in the RIB. Loss and RTT are those of the current exit, or of the recommended exit when the current one has no successful probe. Score gain is the scorer's gain of the recommended exit over the current one (current score minus recommended score), and is blank unless the exits differ and both were usable. Details opens the same card as the prefix page, with the measured sub-ranges and the learned paths. MED in it is labelled display only and does not choose the exit. The card is built when a row opens, and open rows stay open through the 5-second refresh while they remain on the page.
+- **Filters.** Prefix (a CIDR matches that prefix; other text matches as a substring), origin AS (the last AS of a learned path, as on the ASN map; `64500` or `AS64500`), provider (a probed, current, or recommended exit), and only where the recommended exit differs. Sort is prefix order, largest score gain, highest loss, or highest RTT; for loss and RTT, rows without a measurement sort last, and for score gain a row with none counts as zero; equal values keep prefix order so pages do not overlap. Rows per page is 25, 50 (default), 100, or 200.
+- **URL.** The filters, sort, `page`, and `size` are in the query string (`/prefixes.html?asn=64500&sort=gain&page=2`), so a link opens the same view. Defaults are left out. A page past the end opens the last page.
+- **Refresh.** Every 5 seconds the page asks for its own page again, not the table. Other pages do not read the list at all.
+- **ASN map.** Bounded in the same response: the first 100 origin ASNs, each site listing at most 8 prefixes next to its full count. The heading of an ASN filters the table to it. Filtering by origin AS shows only that ASN. An origin AS that is not a number is marked on the page and not applied.
+
+`GET /api/prefixes` (viewer) takes:
+
+| Query | Meaning |
+|---|---|
+| `limit` | Rows per page, 1 to 500. Default 100. |
+| `offset` | Rows to skip, 0 or more. Default 0. |
+| `prefix`, `asn`, `provider`, `differs` | The filters above. `differs` is `true` or `false`. |
+| `sort` | `prefix` (default), `gain`, `loss`, or `rtt`. The last three are highest first. |
+
+A bad value is a `400`. The body keeps `prefixes` (each row also has `gain`, `exit_loss_pct`, and `exit_rtt_ms` when known) and `asn_map`, and adds `total` (rows that matched), `measured` (before filtering), `offset`, `limit`, and `asn_total` (origin ASNs after the origin AS filter, before the cut). A client that sends no parameters gets the first 100 rows in prefix order and can read `total` to see there are more; `/api/probes` is not paged. The `prefixes` dashboard widget shows that first page. In `asn_map`, a site's `prefixes` is cut to 8 and `count` is the full number.
+
+The smoke step "UI prefix list smoke" in the docker job (`lab/ui-smoke.sh`) loads the page through `lab/uiproxy -fixtures lab/ui-fixtures/prefixes`. The proxy answers `/api/prefixes` with canned pages of 25 rows that claim 100000 measured prefixes (documentation prefixes and ASNs) and adds a script that opens a row, presses Next, and types an origin AS, because headless Chrome cannot click. The step checks the open card and its MED label, the bounded ASN map, the page 2 URL and rows, and the filtered result. The stock-image steps check the real API (default page, `offset` past the end, filters, and the `400` cases) and the page against it. `lab/uiproxy` tests decode the canned pages with the API's own type. `internal/httpapi` tests cover the filters, orders, and the response size and ASN map bound with 100k prefixes.
+
+## Prefix detail and history
+
+Every improvement row opens `/prefix/<prefix>` (#179), for example `/prefix/192.0.2.0/24` or `/prefix/2001:db8::/32`. The URL is shareable and a reload opens the same page. The links are on the Improvements page, the Improvements and Prefixes reports on Reports, and the improvements widget of a custom dashboard. The page is read-only and announces nothing; the mode banner is on top in every mode.
+
+- **Card.** The same card as the Prefixes page: per-provider loss, RTT, and jitter, the current and recommended exit, measured sub-ranges, and learned paths with AS path, via, and MED. MED is labelled display only and does not choose the exit. It refreshes every five seconds. For a prefix Packeteer is not measuring now, the page says so and still shows the stored timeline.
+- **Timeline.** Newest first, for 7, 30, 90, or 365 days: the daily probe rollup of each provider toward the prefix (UTC day, probes, failures, average loss, RTT, and jitter) and each improvement's start and end with provider, native provider, cause, reason, and the loss and RTT of both paths when it started (before and after) and why it ended. A record made in `observe` or `suggest` reads "Recommended"; only a record made in `inject` reads "Announced". Days are the finest history the store keeps. Without `storage: {type: sqlite}` the page says history is off.
+- **Probe now.** A link to `/troubleshooting.html?tool=probe&target=<prefix>`, which opens the Probe tool with the tool and target filled in. Nothing runs until Run is pressed, and Probe keeps its operator role and rate limit ([troubleshooting](troubleshooting.md)).
+
+`GET /api/prefixes/history?prefix=<prefix>&days=7` (viewer; `days`, or `from` and `to`, like the reports) returns `enabled`, `prefix`, `from`, `to`, `days` (`day`, `provider`, `probes`, `failed`, and the averages `loss_pct`, `rtt_ms`, `jitter_ms` when any probe returned statistics), and `improvements` (the rows of the improvements report, including `mode`). The prefix must be a network in CIDR form; anything else is a `400`. The match is exact: a covering or covered prefix is a different prefix. With no storage plugin it returns `enabled: false`.
+
+CI loads the page twice in the graphs step of the docker job (`lab/ui-smoke.sh`), against history seeded by `lab/mkhistory`: the timeline, the "Recommended" wording with no "Announced", the MED label, and the Probe now link; then the Probe tool with the prefix filled in. `internal/history` and `internal/httpapi` tests cover the filtering, the API, and the page wiring.
+
+## Events and audit log
+
+The Events page (#173) lists what the controller reports to notifiers ([EVENTS.md](EVENTS.md)), newest first: time (local), source, severity, event, and detail (the message and its fields). Source is the event's catalog group (`provider`, `bgp`, `commit`, and so on). It is read-only and works in every mode.
+
+- **Filters.** Severity (all, warning and critical, critical only), a text search over the event kind, message, and field names and values, and a range (last hour, 24 hours, 7 days, 30 days, all kept, or custom from and to). The page reloads every five seconds and on Refresh.
+- **Where events are kept.** With a `storage` plugin of type `sqlite` they are written to the database and pruned with `retention`, so they survive a restart. Without storage the page shows the newest 1000 events since start, from memory, and says so. Events are recorded whether or not a notifier is configured, and a notifier's filter or rate limit does not hide an event from the page. With storage, a full write queue (256 events) drops new events and logs it. `audit.recorded` events are not listed: the Audit tab shows those records.
+- **Top bar indicator.** The Events link in the top bar shows a count of warning and critical events newer than the last time this browser opened the page (100 or more shows `100+`). The time is the controller's clock, kept in the browser's local storage; nothing is stored on the controller. It refreshes every 15 seconds.
+- **Audit tab (admin).** Time, actor, role, method, action, target, result, and status of the newest 200 records of `GET /api/audit` ([auth.md](auth.md#audit-log)). `/events.html#audit` opens it. A viewer or operator does not see the tab, and the API refuses them. It needs a storage plugin that keeps the audit log (`sqlite`); without one the tab says so. Passwords and token secrets are never in an audit record.
+
+`GET /api/events` (viewer) takes `severity` (`info`, `warning`, `critical`; a floor), `q`, `from` and `to` (RFC 3339), and `limit` (1 to 1000, default 200). It returns `events` (`time`, `source`, `severity`, `kind`, `message`, `fields`), `stored`, `now`, and `since` when storage is off.
 
 ## Dashboard and first run
 
@@ -56,7 +138,7 @@ docker run --network host --cap-add NET_RAW --cap-add NET_ADMIN \
 - **Overview tiles.** Mode, status (ready, not ready, starting), providers up, prefixes measured (and which sources list them), recommended improvements (outside inject) or active improvements (inject) against `max_improvements`, and BGP sessions with the number of probed prefixes in the learned RIB.
 - **Setup checklist.** Shown until there is nothing left to do, most urgent first. `todo`: no `sources` (nothing to probe). `warn`: every probe through a provider fails (with the last error), every provider is down, `bgp.neighbors` is set but no session is up, or no probed prefix is in the learned RIB. `info`: still starting, waiting for the first round, no `bgp.neighbors` (the current exit is unknown), report history off. Each line names the doc to read. The checklist only reads state; fix the mounted file and restart.
 - **Providers** (`/providers.html`) show `no data yet` until something is measured through them, `no answer` when every probe through them fails, and per-provider probe counts. The exchange view on that page is an empty state (#148).
-- **Prefixes** (`/prefixes.html`) have a filter (prefix or provider) and a switch for prefixes whose recommended exit differs from the learned one. A prefix card lists each learned path, including inactive add-path and BMP paths, with its MED (display only) and `via` (route server, bilateral, or unknown; #146). The ASN map is on the same page.
+- **Prefixes** (`/prefixes.html`) are a filtered, paged table; a row opens the prefix card with each learned path, its MED (display only) and `via` (route server, bilateral, or unknown; #146). See [Prefix list](#prefix-list). The ASN map is on the same page.
 - **Improvements** (`/improvements.html`) are labeled recommended outside inject and active in inject.
 - **Reports** (`/reports.html`) and **troubleshooting** (`/troubleshooting.html`) are the same sections as before, on their own URLs.
 - **Optional sections** (POPs on Overview, threat mitigation on Protection) are hidden when not configured; the overview lists which optional features are on and off. Protection shows its empty state while the monitor is hidden.
@@ -64,7 +146,7 @@ docker run --network host --cap-add NET_RAW --cap-add NET_ADMIN \
 
 `GET /api/overview` (viewer) is the same summary as JSON: `mode`, `ready`, `started`, `sources`, `providers` (`name`, `up`, `ok`, `failed`, `last_error`), `counts`, `bgp`, `features` (`name`, `on`), and `setup` (`id`, `level`, `title`, `detail`, `doc`). It is read-only and announces nothing.
 
-CI runs a UI smoke test in the docker job (`lab/ui-smoke.sh`): headless Chrome loads every shell page from the stock image. The first run mounts `config.example.yaml` unchanged. The banner says observe and that it announces nothing, the header chip is `mode-observe`, the checklist on `/` asks for sources, `/providers.html` shows `no data yet`, `/improvements.html` says Recommended, and the empty pages name their issues. The second run uses a minimal file with no `mode` key and one static target (observe, the prefix measured with an RTT on `/prefixes.html`, no improvement). A third run turns the config editor on with basic auth and sqlite, saves a dashboard of providers and improvements, and loads `/`, `/settings.html`, and `/dashboards.html` through `lab/uiproxy` (headless Chrome does not send URL credentials on later fetches). That run checks the filled provider fields keep their labels, the improvements widget says Recommended, and the provider `since` time is the local format.
+CI runs a UI smoke test in the docker job (`lab/ui-smoke.sh`): headless Chrome loads every shell page from the stock image. The first run mounts `config.example.yaml` unchanged. The banner says observe and that it announces nothing, the header chip is `mode-observe`, the checklist on `/` asks for sources, `/providers.html` shows `no data yet`, `/improvements.html` says Recommended, and the empty pages name their issues. The second run uses a minimal file with no `mode` key and one static target (observe, the prefix measured with an RTT on `/prefixes.html`, no improvement). A third run turns the config editor on with basic auth and sqlite, saves a dashboard of providers and improvements, and loads `/`, `/settings.html`, and `/dashboards.html` through `lab/uiproxy` (headless Chrome does not send URL credentials on later fetches). That run checks the filled provider fields keep their labels, the improvements widget says Recommended, and the provider `since` time is the local format. The auth step of the docker job (#175) creates a viewer and a token through the API, then loads `/admin.html` and `/tokens.html` as the admin (the user table with its row actions) and as the viewer (the denial text, and only its own token), and the stock-image run checks both pages say they need `auth` when it is off. `internal/httpapi` tests drive the calls the pages make and read the audit log.
 
 The settings forms (#130) have their own smoke step in the same job. The stock image mounts an observe file that has a `flow`, `vip`, and `outage` source and a `rules` policy. The step reads the form through the API, merges an edit, and requires the editor's start checks to accept the result as observe with inject not enabled. It renders a wizard config with the flow step and requires the same. Headless Chrome then loads `/settings.html` through `lab/uiproxy` and checks that each section is filled from the file, that the observe banner is on top, and that the wizard has its optional flow step. `internal/configedit`, `internal/httpapi`, and `cmd/controller` tests round-trip every section through `config.Load` and the start checks.
 
@@ -284,4 +366,4 @@ The upgrade section (#196) is rolled back by removing the `upgrade` block (or `e
 
 The graphs (#129) are read-only and need no rollback. Delete a `timeseries` widget from a dashboard to hide it; a build from before #129 refuses to save a dashboard that still has one.
 
-The mitigation form and the inbound and anomaly sections (#131) are UI and API only and add no config key: revert the change to drop them, or remove the rules in the YAML (a restart withdraws every Packeteer route first, and mitigation rules are in memory, so they also go with a restart). The form sections and the wizard's flow step (#130) are UI and API only and add no config key: revert the change to drop them, or delete the `flow`, `vip`, and `outage` sources and the `rules` policy from the YAML (a restart withdraws every Packeteer route first). A file the form wrote is an ordinary config file that an older build loads unchanged. Remove `improvement_weights`, `http.config_editor`, and `report_subscriptions` and restart. The dashboard polish (#49) needs no rollback: it reads the same state, and `/api/overview` is read-only. The file config works exactly as before; the editor only ever wrote a plain YAML file. Stored dashboards stay in the database and are ignored by an older build. The display fixes (#171) are presentation only: revert that change to restore the previous chip, titles, timestamps, and unlabeled provider fields. The shell (#170) is presentation only as well: revert it to put every section back on `/`. No config key changes.
+The mitigation form and the inbound and anomaly sections (#131) are UI and API only and add no config key: revert the change to drop them, or remove the rules in the YAML (a restart withdraws every Packeteer route first, and mitigation rules are in memory, so they also go with a restart). The form sections and the wizard's flow step (#130) are UI and API only and add no config key: revert the change to drop them, or delete the `flow`, `vip`, and `outage` sources and the `rules` policies from the YAML (a restart withdraws every Packeteer route first). A file the form wrote is an ordinary config file that an older build loads unchanged. Remove `improvement_weights`, `http.config_editor`, and `report_subscriptions` and restart. The dashboard polish (#49) needs no rollback: it reads the same state, and `/api/overview` is read-only. The file config works exactly as before; the editor only ever wrote a plain YAML file. Stored dashboards stay in the database and are ignored by an older build. The display fixes (#171) are presentation only: revert that change to restore the previous chip, titles, timestamps, and unlabeled provider fields. The shell (#170) is presentation only as well: revert it to put every section back on `/`. The Events page (#173) only reads; revert it to bring back the empty page. The `events` table it adds to the `sqlite` file is ignored by an older build. No config key changes.

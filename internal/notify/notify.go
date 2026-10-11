@@ -28,12 +28,20 @@ type Target struct {
 	Notifier plugin.Notifier
 }
 
+// Recorder keeps every emitted event for the Events page (#173), whether
+// or not a notifier is configured or its filter passes. Record must not
+// block.
+type Recorder interface {
+	Record(plugin.Event)
+}
+
 // Options tune the dispatcher. Zero values use the defaults.
 type Options struct {
-	Queue   int
-	Timeout time.Duration
-	Logger  *slog.Logger
-	Now     func() time.Time
+	Queue    int
+	Timeout  time.Duration
+	Logger   *slog.Logger
+	Now      func() time.Time
+	Recorder Recorder
 }
 
 // Stats counts deliveries across all notifiers.
@@ -55,6 +63,7 @@ type worker struct {
 // Dispatcher delivers events asynchronously.
 type Dispatcher struct {
 	workers []*worker
+	rec     Recorder
 	timeout time.Duration
 	log     *slog.Logger
 	now     func() time.Time
@@ -84,7 +93,7 @@ func New(targets []Target, o Options) *Dispatcher {
 		o.Now = time.Now
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	d := &Dispatcher{timeout: o.Timeout, log: o.Logger, now: o.Now, ctx: ctx, cancel: cancel}
+	d := &Dispatcher{rec: o.Recorder, timeout: o.Timeout, log: o.Logger, now: o.Now, ctx: ctx, cancel: cancel}
 	for _, t := range targets {
 		if t.Notifier == nil {
 			continue
@@ -100,12 +109,14 @@ func New(targets []Target, o Options) *Dispatcher {
 	return d
 }
 
-// Enabled reports whether any notifier is configured.
-func (d *Dispatcher) Enabled() bool { return d != nil && len(d.workers) > 0 }
+// Enabled reports whether emitting does anything: a notifier is
+// configured or a recorder keeps events.
+func (d *Dispatcher) Enabled() bool { return d != nil && (len(d.workers) > 0 || d.rec != nil) }
 
-// Emit queues e for every notifier. It fills Time and Severity from the
-// catalog when they are empty. A full queue drops the event for that
-// notifier and counts it; the caller is never blocked.
+// Emit hands e to the recorder and queues it for every notifier. It fills
+// Time and Severity from the catalog when they are empty. A full queue
+// drops the event for that notifier and counts it; the caller is never
+// blocked.
 func (d *Dispatcher) Emit(e plugin.Event) {
 	if !d.Enabled() {
 		return
@@ -119,6 +130,9 @@ func (d *Dispatcher) Emit(e plugin.Event) {
 		} else {
 			e.Severity = plugin.SeverityInfo
 		}
+	}
+	if d.rec != nil {
+		d.rec.Record(e)
 	}
 	d.mu.RLock()
 	defer d.mu.RUnlock()

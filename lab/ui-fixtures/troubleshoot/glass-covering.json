@@ -1,0 +1,6 @@
+{
+  "query": "198.51.100.64/26",
+  "rib_ready": true,
+  "covering": {"prefix": "198.51.100.0/24", "next_hop": "192.0.2.1", "provider": "transit-a", "as_path": [64496, 64500], "neighbor": "192.0.2.254", "since": "2026-01-01T00:00:00Z", "source": "ibgp"},
+  "more_specifics": []
+}

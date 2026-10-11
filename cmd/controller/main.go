@@ -13,6 +13,7 @@ import (
 	"io"
 	"log/slog"
 	"maps"
+	"net"
 	"net/netip"
 	"os"
 	"os/signal"
@@ -259,6 +260,9 @@ func run(ctx context.Context, args []string, getenv func(string) string, stdout,
 		fmt.Fprintf(stdout, "anomaly: detector=%s interval=%s rules=%d max_active=%d max_actions_per_hour=%d (acts only through mitigation, for an explicit rule)\n",
 			a.Detector.Type, a.Interval, len(a.Rules), a.MaxActive, a.MaxActionsPerHour)
 	}
+	if cfg.LeakWatching() {
+		fmt.Fprintf(stdout, "leak_watch: on sources=%d (withdraws a leaked injected route and holds it out until cleared)\n", len(plugins.LeakSources))
+	}
 	if el := plugins.Elector; el != nil {
 		fmt.Fprintf(stdout, "ha: %s id=%s (standby until elected; only the active instance announces)\n", el.Type, el.Plugin.Status().ID)
 	}
@@ -415,13 +419,30 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 		}
 	}
 	// Built before the HTTP server: the audit log goes to the notifiers.
-	dispatch := newDispatcher(plugins, notify.Options{Logger: log})
+	evlog := newEventLog(plugins, log)
+	dispatch := newDispatcher(plugins, notify.Options{Logger: log, Recorder: evlog})
 	defer func() {
 		closeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		_ = dispatch.Close(closeCtx)
+		_ = evlog.Close(closeCtx)
 	}()
 	audit := newAuditor(plugins, dispatch, log)
+	// The leak watch (#199) reaches the outbound announcer through ctl,
+	// which is assigned once the RIB view exists. Held and Injected are
+	// nil-safe until then.
+	var ctl *announce.Controller
+	lw, lerr := newLeakWatch(cfg, plugins, dispatch,
+		func(p netip.Prefix) bool { return ctl.Injected(p) },
+		func(ctx context.Context, p netip.Prefix) error { return ctl.WithdrawPrefix(ctx, p) }, log)
+	if lerr != nil {
+		log.Error("refusing to start", "err", lerr)
+		return 1
+	}
+	var leakAPI httpapi.LeakControl
+	if lw != nil {
+		leakAPI = leakControl{w: lw, poke: poke}
+	}
 	authSvc, aerr := newAuthService(cfg, plugins, log)
 	if aerr != nil {
 		log.Error("refusing to start", "err", aerr)
@@ -474,8 +495,8 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 		var err error
 		httpSrv, err = httpapi.New(httpapi.Options{
 			Addr: addr, User: httpUser, Password: httpPass, Snapshot: col.Snapshot, Logger: log,
-			Auth: authSvc, Audit: audit, AllowFrom: cfg.HTTPAllowFrom(),
-			Maintenance: maint, Reports: reports, Tools: tools, Inbound: inboundStatus, Mitigation: mitAPI, Anomaly: anomAPI,
+			Auth: authSvc, Audit: audit, Events: evlog, AllowFrom: cfg.HTTPAllowFrom(),
+			Maintenance: maint, Reports: reports, Tools: tools, Inbound: inboundStatus, Mitigation: mitAPI, Anomaly: anomAPI, Leaks: leakAPI,
 			Federation: fed.status, HA: haStatus,
 			ConfigEditor: editorAPI, Dashboards: dashboardStore(plugins), Subscriptions: subsAPI,
 			Setup: setupInfo(cfg, plugins), Upgrade: upgradeAPI,
@@ -515,18 +536,17 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 	}
 	// The two controllers share max_improvements, so each reads the other's
 	// count. ctl is assigned right below; Active is nil-safe until then.
-	var ctl *announce.Controller
 	if err := setMitigationRIB(mit, view); err != nil {
 		log.Error("refusing to start", "err", err)
 		return 1
 	}
 	setAnomalyRIB(anom, view)
-	inb, err = newInbound(cfg, plugins, view, func() int { return ctl.Active() }, mit, log)
+	inb, err = newInbound(cfg, plugins, view, func() int { return ctl.Active() }, mit, lw.Held, log)
 	if err != nil {
 		log.Error("refusing to start", "err", err)
 		return 1
 	}
-	ctl, err = newController(cfg, plugins, view, inb, mit, log)
+	ctl, err = newController(cfg, plugins, view, inb, mit, lw.Held, log)
 	if err != nil {
 		log.Error("refusing to start", "err", err)
 		return 1
@@ -673,15 +693,14 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 					recordMitigations(rec, mitChanges)
 					recordAnomalies(rec, anomChanges)
 				}
-				if dispatch.Enabled() {
-					watch.anomaly(anomChanges)
-					watch.mitigation(mitChanges)
-					watch.announce(now, err)
-				}
+				watch.anomaly(anomChanges)
+				watch.mitigation(mitChanges)
+				watch.announce(now, err)
 				return
 			}
 			leading = true
 			in := decisionInput(loopCtx, now, engine, view, plugins, fed)
+			in.Held = lw.Held
 			changes, err := runDecision(now, decider, in, ctl, log, snap.Mode, engine)
 			fed.publish(now, in, decider.Improvements())
 			if rec != nil {
@@ -693,9 +712,6 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 			if rec != nil {
 				recordMitigations(rec, mitChanges)
 				recordAnomalies(rec, anomChanges)
-			}
-			if !dispatch.Enabled() {
-				return
 			}
 			watch.anomaly(anomChanges)
 			watch.mitigation(mitChanges)
@@ -711,6 +727,14 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 			}
 		})
 	}()
+	if lw != nil {
+		// Stopped before the shutdown withdraw, like the decision loop.
+		loopWG.Add(1)
+		go func() {
+			defer loopWG.Done()
+			lw.Run(loopCtx)
+		}()
+	}
 	if anom != nil {
 		// Its own interval, independent of probe rounds. Stopped with the
 		// decision loop, before the shutdown withdraw, so it cannot add a
@@ -832,6 +856,11 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 	notifyCtx, notifyCancel := context.WithTimeout(stopCtx, 5*time.Second)
 	_ = dispatch.Close(notifyCtx)
 	notifyCancel()
+	// Its own bound: a slow notifier must not leave controller.stopping
+	// unwritten when the store closes.
+	evCtx, evCancel := context.WithTimeout(stopCtx, 5*time.Second)
+	_ = evlog.Close(evCtx)
+	evCancel()
 	if err := plugins.Stop(stopCtx); err != nil {
 		log.Error("plugin shutdown", "err", err)
 		return 1
@@ -1000,7 +1029,7 @@ func inboundInput(ctx context.Context, plugins *pluginhost.Set, in policy.Input)
 
 // newInbound returns nil when inbound is not configured. others counts
 // outbound improvements on the wire for the shared cap.
-func newInbound(cfg *config.Config, plugins *pluginhost.Set, view *rib.View, others func() int, mit *mitigation.Controller, log *slog.Logger) (*inbound.Controller, error) {
+func newInbound(cfg *config.Config, plugins *pluginhost.Set, view *rib.View, others func() int, mit *mitigation.Controller, held func(netip.Prefix) bool, log *slog.Logger) (*inbound.Controller, error) {
 	in := cfg.Inbound
 	if in == nil {
 		return nil, nil
@@ -1026,7 +1055,7 @@ func newInbound(cfg *config.Config, plugins *pluginhost.Set, view *rib.View, oth
 			Backoff: in.Damping.Backoff, MaxHold: in.Damping.MaxHold,
 		},
 		Moderated: map[string]bool{},
-		Excluded:  mit.Holds,
+		Excluded:  func(p netip.Prefix) bool { return mit.Holds(p) || held(p) },
 		Leader:    haLeader(plugins),
 	}
 	if pf := in.Performance; pf != nil {
@@ -1246,7 +1275,7 @@ func formatCommunityOverrides(cfg *config.Config) string {
 	return b.String()
 }
 
-func newController(cfg *config.Config, plugins *pluginhost.Set, view *rib.View, inb *inbound.Controller, mit *mitigation.Controller, log *slog.Logger) (*announce.Controller, error) {
+func newController(cfg *config.Config, plugins *pluginhost.Set, view *rib.View, inb *inbound.Controller, mit *mitigation.Controller, held func(netip.Prefix) bool, log *slog.Logger) (*announce.Controller, error) {
 	var ann plugin.Announcer
 	if plugins.Announcer != nil {
 		ann = plugins.Announcer.Plugin
@@ -1275,6 +1304,7 @@ func newController(cfg *config.Config, plugins *pluginhost.Set, view *rib.View, 
 	// A prefix is reserved while inbound steering owns it or a mitigation
 	// rule holds it (#28). Both are nil-safe.
 	ac.Reserved = func(p netip.Prefix) bool { return inb.Reserved(p) || mit.Holds(p) }
+	ac.Held = held
 	for _, p := range cfg.Providers {
 		nh, err := parseAddr(p.NextHop)
 		if err != nil {
@@ -1389,12 +1419,23 @@ func newTools(cfg *config.Config, plugins *pluginhost.Set) (*troubleshoot.Tools,
 		Timeout:   cfg.Probe.Timeout,
 		MaxHops:   cfg.Troubleshoot.MaxHops,
 		Hop:       traceroute.Hop,
+		Reverse:   reverseName,
 		Limiter:   rate.NewLimiter(rate.Every(time.Minute/time.Duration(rpm)), min(rpm, 3)),
 	}
 	if plugins.Whois != nil {
 		opt.Whois = plugins.Whois.Plugin
 	}
 	return troubleshoot.New(opt), nil
+}
+
+// reverseName is the PTR name of a traceroute hop through the container's
+// resolver, or "" when there is none.
+func reverseName(ctx context.Context, a netip.Addr) string {
+	names, err := net.DefaultResolver.LookupAddr(ctx, a.String())
+	if err != nil || len(names) == 0 {
+		return ""
+	}
+	return strings.TrimSuffix(names[0], ".")
 }
 
 func newEngine(cfg *config.Config, plugins *pluginhost.Set, log *slog.Logger, onRound func(), onProbe func(probe.Result)) (*probe.Engine, error) {

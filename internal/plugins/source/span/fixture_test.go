@@ -31,9 +31,6 @@ var (
 	otherLocal = netip.MustParseAddr("192.0.2.99")        // local to local: ignored
 )
 
-// fixtureLocal is the local config matching the fixture.
-var fixtureLocal = []string{"192.0.2.0/24", "2001:db8:1::/48"}
-
 type pkt struct {
 	at    time.Duration
 	src   netip.AddrPort

@@ -149,7 +149,7 @@ vtysh -c 'show bgp neighbors 192.0.2.10'
 
 `BGP state = Established`.
 
-What Packeteer learned: `curl -fsS http://127.0.0.1:8080/api/prefixes` on the Packeteer host. Each probed prefix has `in_rib: true` and `rib_provider` set to the provider whose `next_hop` matches. An empty `rib_provider` means the next hop matches no provider.
+What Packeteer learned: `curl -fsS "http://127.0.0.1:8080/api/prefixes?prefix=198.51.100.0/24"` on the Packeteer host (the list is paged, 100 rows by default; `prefix=` with a CIDR picks one). Each probed prefix has `in_rib: true` and `rib_provider` set to the provider whose `next_hop` matches. An empty `rib_provider` means the next hop matches no provider.
 
 In inject, the route Packeteer sent:
 

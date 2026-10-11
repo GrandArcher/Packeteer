@@ -12,6 +12,8 @@ Two filters are required on the router:
 1. **From Packeteer**: accept only routes that carry `packeteer_community`. Reject everything else.
 2. **Toward eBGP (every transit and peer)**: reject routes that carry `packeteer_community`. `no-export` is a second layer; the filter is the one you control.
 
+`leak_watch` checks continuously that these filters hold and withdraws a route that gets out ([leak-watch.md](leak-watch.md)).
+
 Leave BGP graceful restart **off** on the Packeteer session. Packeteer never enables it, withdraws on shutdown, and the session drop is the backstop. If Packeteer disappears, the edge falls back to the paths it learned from its providers.
 
 ## Local preference on import

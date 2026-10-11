@@ -1,0 +1,27 @@
+{
+  "target": "203.0.113.7",
+  "traces": [
+    {
+      "provider": "transit-a", "source": "192.0.2.10", "reached": true,
+      "hops": [
+        {"ttl": 1, "address": "192.0.2.1", "rtt_ms": 0.4, "name": "gw.transit-a.example.net", "origin_as": 64496},
+        {"ttl": 2},
+        {"ttl": 3, "address": "198.51.100.1", "rtt_ms": 8.2, "origin_as": 64500},
+        {"ttl": 4, "address": "203.0.113.7", "rtt_ms": 12.5, "reached": true, "origin_as": 64496}
+      ]
+    },
+    {
+      "provider": "transit-b", "source": "192.0.2.11", "reached": false,
+      "hops": [
+        {"ttl": 1, "address": "192.0.2.2", "rtt_ms": 0.5},
+        {"ttl": 2, "error": "send: network is unreachable"},
+        {"ttl": 3}
+      ]
+    },
+    {
+      "provider": "transit-c", "source": "192.0.2.12", "reached": false,
+      "hops": [],
+      "error": "bind: source address unavailable"
+    }
+  ]
+}

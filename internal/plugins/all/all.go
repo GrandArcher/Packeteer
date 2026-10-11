@@ -8,6 +8,7 @@ import (
 	_ "github.com/GrandArcher/Packeteer/internal/plugins/elector/lease"      // lease-file HA elector
 	_ "github.com/GrandArcher/Packeteer/internal/plugins/exec"               // exec prober/source/notifier
 	_ "github.com/GrandArcher/Packeteer/internal/plugins/federation/mtls"    // mTLS multi-POP federation
+	_ "github.com/GrandArcher/Packeteer/internal/plugins/leaksource/rislive" // RIPE RIS Live leak source
 	_ "github.com/GrandArcher/Packeteer/internal/plugins/notifier/smtp"      // smtp notifier
 	_ "github.com/GrandArcher/Packeteer/internal/plugins/notifier/snmptrap"  // snmptrap notifier
 	_ "github.com/GrandArcher/Packeteer/internal/plugins/notifier/webhook"   // webhook notifier
@@ -17,7 +18,7 @@ import (
 	_ "github.com/GrandArcher/Packeteer/internal/plugins/prober/icmp"        // icmp prober
 	_ "github.com/GrandArcher/Packeteer/internal/plugins/prober/tcp"         // tcp prober
 	_ "github.com/GrandArcher/Packeteer/internal/plugins/prober/udp"         // udp prober
-	_ "github.com/GrandArcher/Packeteer/internal/plugins/ribsource/bmp"      // BMP monitoring station (RIB source)
+	_ "github.com/GrandArcher/Packeteer/internal/plugins/ribsource/bmp"      // BMP monitoring station (RIB source, leak source)
 	_ "github.com/GrandArcher/Packeteer/internal/plugins/scorer/commit"      // commit scorer
 	_ "github.com/GrandArcher/Packeteer/internal/plugins/scorer/cost"        // cost scorer
 	_ "github.com/GrandArcher/Packeteer/internal/plugins/scorer/weighted"    // weighted scorer

@@ -152,10 +152,10 @@ Router-side show commands are in each guide: [mikrotik.md](mikrotik.md), [frr.md
 
 ## Prefixes are not in the RIB, or the current exit is empty
 
-`/api/prefixes` shows `in_rib: false`, or `in_rib: true` with no `rib_provider`.
+`/api/prefixes?prefix=<cidr>` shows `in_rib: false`, or `in_rib: true` with no `rib_provider`.
 
 - `in_rib: false`: the router is not sending that prefix to Packeteer. Check what the router advertises to Packeteer (MikroTik `output.redistribute=bgp`; FRR, Junos, IOS send their best BGP paths by default). The probed prefix must match a learned route (the longest covering route counts for the current exit).
-- No `rib_provider`: the learned next hop matches no provider's `next_hop`. The router may set `next-hop-self` toward Packeteer, or the provider `next_hop` is not the address the router uses. Compare `next_hop` in `/api/prefixes` with the config.
+- No `rib_provider`: the learned next hop matches no provider's `next_hop`. The router may set `next-hop-self` toward Packeteer, or the provider `next_hop` is not the address the router uses. Compare `next_hop` in `/api/prefixes?prefix=<cidr>` with the config.
 - The log's periodic `rib ready=true prefixes=N` shows how much Packeteer learned. `ready=false` means no session is established.
 
 ## Nothing is recommended

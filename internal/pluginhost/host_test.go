@@ -336,3 +336,23 @@ func TestTrackStartKeepsAnnouncersStoppingFirst(t *testing.T) {
 		t.Fatalf("stop order = %v, want %v", stopped, want)
 	}
 }
+
+func TestLeakSourcesBuiltOnlyWhenEnabled(t *testing.T) {
+	// rislive refuses to build without the local ASN, so this also shows
+	// that the host passes config asn to plugins.
+	set, err := Build(load(t, "packeteer_community: \"64512:666\"\nleak_watch:\n  enabled: true\n  sources: [{type: rislive}]\n"), Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(set.LeakSources) != 1 || set.LeakSources[0].Type != "rislive" {
+		t.Fatalf("leak sources %+v", set.LeakSources)
+	}
+	set, err = Build(load(t, "packeteer_community: \"64512:666\"\nleak_watch:\n  enabled: false\n  sources: [{type: nope}]\n"), Options{})
+	if err != nil || len(set.LeakSources) != 0 {
+		t.Fatalf("a disabled leak_watch built sources: %v %+v", err, set)
+	}
+	_, err = Build(load(t, "packeteer_community: \"64512:666\"\nleak_watch:\n  enabled: true\n  sources: [{type: nope}]\n"), Options{})
+	if err == nil || !strings.Contains(err.Error(), `leak_watch.sources[0] (nope): unknown leak_source type "nope" (available: bmp, rislive)`) {
+		t.Fatalf("err %v", err)
+	}
+}

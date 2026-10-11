@@ -358,6 +358,180 @@ func ssoLogin(t *testing.T, s *Service, mutate func(cb *http.Request)) (Principa
 	return p, nil, err
 }
 
+// signIn posts a sign-in like the page would and returns the session
+// cookie, if one was set.
+func signIn(s *Service, remote, name, pw string, mod func(*http.Request)) (Principal, *http.Cookie, error) {
+	r := httptest.NewRequest(http.MethodPost, "/auth/signin", nil)
+	r.RemoteAddr = remote
+	if mod != nil {
+		mod(r)
+	}
+	w := httptest.NewRecorder()
+	p, err := s.SignIn(w, r, name, pw)
+	for _, c := range w.Result().Cookies() {
+		if c.Name == SessionCookie && c.Value != "" {
+			return p, c, err
+		}
+	}
+	return p, nil, err
+}
+
+func TestLocalSession(t *testing.T) {
+	s, _, c := newSvc(t, nil)
+	ctx := context.Background()
+	if _, err := s.CreateUser(ctx, "noc", plugin.RoleOperator, "operator-password"); err != nil {
+		t.Fatal(err)
+	}
+	p, cookie, err := signIn(s, "192.0.2.5:1", "noc", "operator-password", nil)
+	if err != nil || cookie == nil || p.User != "noc" || p.Role != plugin.RoleOperator || p.Method != MethodPassword || !p.Session {
+		t.Fatalf("sign in: %+v %+v %v", p, cookie, err)
+	}
+	if !cookie.HttpOnly || !cookie.Secure || cookie.SameSite != http.SameSiteStrictMode || cookie.Path != "/" || cookie.MaxAge != int(DefaultSessionTTL/time.Second) {
+		t.Fatalf("cookie rules: %+v", cookie)
+	}
+	withCookie := func(r *http.Request) { r.AddCookie(cookie) }
+	got, err := s.Authenticate(req("192.0.2.5:1", withCookie))
+	if err != nil || got.User != "noc" || got.Method != MethodPassword || !got.Session {
+		t.Fatalf("session: %+v %v", got, err)
+	}
+	// A local session may mint a token like a basic-auth password does.
+	if _, _, err := s.CreateToken(ctx, got, "t", "", 0); err != nil {
+		t.Fatalf("token from session: %v", err)
+	}
+	// A new password, a new role, or disabling ends the session.
+	pw := "another-long-password"
+	if _, err := s.UpdateUser(ctx, "noc", UserUpdate{Password: &pw}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Authenticate(req("192.0.2.5:1", withCookie)); !errors.Is(err, ErrNoCredentials) {
+		t.Fatalf("session after password change: %v", err)
+	}
+	// Signing in again with the old cookie ends the old session.
+	_, first, _ := signIn(s, "192.0.2.5:1", "noc", pw, nil)
+	_, second, err := signIn(s, "192.0.2.5:1", "noc", pw, func(r *http.Request) { r.AddCookie(first) })
+	if err != nil || second.Value == first.Value {
+		t.Fatalf("second sign in: %v", err)
+	}
+	if _, err := s.Authenticate(req("192.0.2.5:1", func(r *http.Request) { r.AddCookie(first) })); !errors.Is(err, ErrNoCredentials) {
+		t.Fatalf("replaced session still works: %v", err)
+	}
+	// Expiry.
+	c.add(DefaultSessionTTL)
+	if _, err := s.Authenticate(req("192.0.2.5:1", func(r *http.Request) { r.AddCookie(second) })); !errors.Is(err, ErrNoCredentials) {
+		t.Fatalf("expired session: %v", err)
+	}
+	// Sign-out ends the session on the server: the old cookie is dead.
+	_, cookie, _ = signIn(s, "192.0.2.5:1", "noc", pw, nil)
+	lr := httptest.NewRequest(http.MethodPost, "/auth/logout", nil)
+	lr.AddCookie(cookie)
+	lw := httptest.NewRecorder()
+	who, ok := s.Logout(lw, lr)
+	if !ok || who.User != "noc" || who.Method != MethodPassword {
+		t.Fatalf("logout: %+v %v", who, ok)
+	}
+	if cs := lw.Result().Cookies(); len(cs) != 1 || cs[0].Name != SessionCookie || cs[0].MaxAge >= 0 {
+		t.Fatalf("logout cookie: %+v", cs)
+	}
+	if _, err := s.Authenticate(req("192.0.2.5:1", func(r *http.Request) { r.AddCookie(cookie) })); !errors.Is(err, ErrNoCredentials) {
+		t.Fatalf("after logout: %v", err)
+	}
+}
+
+// TestSignInSessionCap: a user who signs in without ever signing out
+// keeps the newest maxUserSessions sessions and cannot push out another
+// user's.
+func TestSignInSessionCap(t *testing.T) {
+	s, _, c := newSvc(t, nil)
+	ctx := context.Background()
+	for _, n := range []string{"noc", "other"} {
+		if _, err := s.CreateUser(ctx, n, plugin.RoleViewer, "viewer-password-"+n); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_, keep, err := signIn(s, "192.0.2.5:1", "other", "viewer-password-other", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cookies []*http.Cookie
+	for i := 0; i < maxUserSessions+3; i++ {
+		c.add(time.Second)
+		_, ck, err := signIn(s, "192.0.2.5:1", "noc", "viewer-password-noc", nil)
+		if err != nil {
+			t.Fatalf("sign in %d: %v", i, err)
+		}
+		cookies = append(cookies, ck)
+	}
+	alive := func(ck *http.Cookie) bool {
+		_, err := s.Authenticate(req("192.0.2.5:1", func(r *http.Request) { r.AddCookie(ck) }))
+		return err == nil
+	}
+	for i, ck := range cookies {
+		if want := i >= 3; alive(ck) != want {
+			t.Errorf("session %d alive = %v, want %v", i, !want, want)
+		}
+	}
+	if !alive(keep) {
+		t.Error("another user's session was evicted")
+	}
+}
+
+// TestSignInLockout: the form and basic auth share one failure count per
+// address, and a locked address cannot sign in even with the right password.
+func TestSignInLockout(t *testing.T) {
+	s, _, c := newSvc(t, nil)
+	ctx := context.Background()
+	if _, err := s.CreateUser(ctx, "noc", plugin.RoleViewer, "viewer-password-1"); err != nil {
+		t.Fatal(err)
+	}
+	const ip = "198.51.100.7:4000"
+	for i := 0; i < failLimit-1; i++ {
+		if _, cookie, err := signIn(s, ip, "noc", "wrong-password-x", nil); !errors.Is(err, ErrBadCredentials) || cookie != nil {
+			t.Fatalf("form failure %d: %v %v", i, cookie, err)
+		}
+	}
+	// The tenth failure comes from basic auth; it counts with the form's.
+	if _, err := s.Authenticate(req(ip, basic("nobody", "wrong-password-x"))); !errors.Is(err, ErrBadCredentials) {
+		t.Fatalf("basic failure: %v", err)
+	}
+	if _, cookie, err := signIn(s, ip, "noc", "viewer-password-1", nil); !errors.Is(err, ErrThrottled) || cookie != nil {
+		t.Fatalf("locked form sign-in: %v %v", cookie, err)
+	}
+	if _, err := s.Authenticate(req(ip, basic("noc", "viewer-password-1"))); !errors.Is(err, ErrThrottled) {
+		t.Fatalf("locked basic auth: %v", err)
+	}
+	// Another address is unaffected, and the window ends.
+	if _, cookie, err := signIn(s, "198.51.100.8:4000", "noc", "viewer-password-1", nil); err != nil || cookie == nil {
+		t.Fatalf("other address: %v", err)
+	}
+	c.add(failWindow)
+	if _, cookie, err := signIn(s, ip, "noc", "viewer-password-1", nil); err != nil || cookie == nil {
+		t.Fatalf("after window: %v", err)
+	}
+}
+
+func TestSignInRefusals(t *testing.T) {
+	sso := &fakeSSO{id: plugin.SSOIdentity{User: "idp@example.net", Role: plugin.RoleViewer}}
+	s, _, _ := newSvc(t, sso)
+	ctx := context.Background()
+	_, _ = s.CreateUser(ctx, "off", plugin.RoleViewer, "disabled-password")
+	yes := true
+	_, _ = s.UpdateUser(ctx, "off", UserUpdate{Disabled: &yes})
+	if _, _, err := ssoLogin(t, s, nil); err != nil {
+		t.Fatal(err)
+	}
+	for name, cred := range map[string][2]string{
+		"disabled":     {"off", "disabled-password"},
+		"unknown":      {"ghost", "whatever-password"},
+		"sso user":     {"idp@example.net", ""},
+		"empty":        {"", ""},
+		"sso password": {"idp@example.net", "whatever-password"},
+	} {
+		if _, cookie, err := signIn(s, "192.0.2.9:1", cred[0], cred[1], nil); !errors.Is(err, ErrBadCredentials) || cookie != nil {
+			t.Errorf("%s: %v %v", name, cookie, err)
+		}
+	}
+}
+
 func TestSSO(t *testing.T) {
 	sso := &fakeSSO{id: plugin.SSOIdentity{User: "noc@example.net", Subject: "s1", Role: plugin.RoleOperator}}
 	s, st, c := newSvc(t, sso)
@@ -427,8 +601,8 @@ func TestSSO(t *testing.T) {
 	_, cookie, _ = ssoLogin(t, s, nil)
 	lr := httptest.NewRequest(http.MethodPost, "/auth/logout", nil)
 	lr.AddCookie(cookie)
-	if user, ok := s.Logout(httptest.NewRecorder(), lr); !ok || user != "other@example.net" {
-		t.Fatalf("logout: %q %v", user, ok)
+	if who, ok := s.Logout(httptest.NewRecorder(), lr); !ok || who.User != "other@example.net" || who.Method != MethodSSO {
+		t.Fatalf("logout: %+v %v", who, ok)
 	}
 	if _, err := s.Authenticate(req("192.0.2.5:1", func(r *http.Request) { r.AddCookie(cookie) })); !errors.Is(err, ErrNoCredentials) {
 		t.Fatalf("after logout: %v", err)

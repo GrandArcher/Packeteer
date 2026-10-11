@@ -157,6 +157,9 @@ type Config struct {
 	// Anomaly is automatic traffic anomaly detection (#33). It acts only
 	// through Mitigation, and only for an explicit rule. Nil disables it.
 	Anomaly *Anomaly `yaml:"anomaly"`
+	// LeakWatch withdraws and holds out an injected route that shows up
+	// outside the AS (#199). Nil or disabled is off.
+	LeakWatch *LeakWatch `yaml:"leak_watch"`
 	// MoreSpecific announces, with each improvement, the more-specifics
 	// inside its prefix that a neighbor advertises in the learned RIB
 	// (#56, docs/design/more-specific.md). Nil or disabled is off.
@@ -1029,6 +1032,9 @@ func (c *Config) Validate() error {
 	validateSpecs("telemetry", c.Telemetry)
 	validateSpecs("policies", c.Policies)
 	validateSpecs("rib_sources", c.RIBSources)
+	if c.LeakWatching() {
+		validateSpecs("leak_watch.sources", c.LeakWatch.Sources)
+	}
 	if len(c.RIBSources) > 0 && len(c.BGP.Neighbors) == 0 {
 		add("rib_sources requires at least one bgp.neighbors entry (the RIB view and the announcer use the iBGP session)")
 	}
@@ -1136,6 +1142,7 @@ func (c *Config) Validate() error {
 	c.validateInbound(add)
 	c.validateMitigation(add)
 	c.validateAnomaly(add)
+	c.validateLeakWatch(add)
 	c.validateSubscriptions(add)
 	c.validateUpgrade(add)
 

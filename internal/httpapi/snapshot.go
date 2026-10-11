@@ -149,6 +149,14 @@ type Prefix struct {
 	Heterogeneous bool       `json:"heterogeneous,omitempty"`
 	Subranges     []Subrange `json:"subranges,omitempty"`
 	Probes        []Probe    `json:"probes"`
+	// Gain is the scorer's gain (current score minus recommended score,
+	// lower score is better) when the recommended exit differs from the
+	// current one and both were usable. ExitLossPct and ExitRTTMs are the
+	// measurement of the current exit, or of the recommended exit when the
+	// current one has no successful probe. They order the paged list (#183).
+	Gain        float64  `json:"gain,omitempty"`
+	ExitLossPct *float64 `json:"exit_loss_pct,omitempty"`
+	ExitRTTMs   *float64 `json:"exit_rtt_ms,omitempty"`
 	// Paths are the learned paths for this prefix, including inactive
 	// add-path and BMP paths. MED on a path is display only.
 	Paths []LearnedPath `json:"paths,omitempty"`
@@ -184,9 +192,12 @@ type ASNNode struct {
 // provider carries a measured prefix this site does not: a full table
 // next to a partial route-server table.
 type ASNSite struct {
-	Provider string   `json:"provider,omitempty"`
-	NextHop  string   `json:"next_hop,omitempty"`
+	Provider string `json:"provider,omitempty"`
+	NextHop  string `json:"next_hop,omitempty"`
+	// Prefixes is every prefix on the site; the API lists at most
+	// asnSitePrefixes of them and Count is the full number.
 	Prefixes []string `json:"prefixes"`
+	Count    int      `json:"count"`
 	Partial  bool     `json:"partial,omitempty"`
 }
 
@@ -582,6 +593,7 @@ func assemblePrefixes(in Input) []Prefix {
 		row.Native, row.Current, row.Recommended = d.Native, d.Current, d.Recommended
 		row.Action, row.Reason = d.Action, d.Reason
 		row.Heterogeneous, row.Subranges = d.Heterogeneous, subrangesFrom(d.Subranges)
+		row.Gain = scoreGain(d)
 	}
 	for _, im := range in.Improvements {
 		row := add(im.Prefix)
@@ -652,9 +664,42 @@ func assemblePrefixes(in Input) []Prefix {
 	for _, k := range order {
 		row := rows[k]
 		sort.Slice(row.Probes, func(i, j int) bool { return row.Probes[i].Provider < row.Probes[j].Provider })
+		row.setExit()
 		out = append(out, *row)
 	}
 	return out
+}
+
+// scoreGain is the scorer's gain of the recommended exit over the current
+// one. Zero unless both were usable and the exits differ.
+func scoreGain(d policy.Decision) float64 {
+	if d.Recommended == "" || d.Recommended == d.Current {
+		return 0
+	}
+	var cur, rec *policy.Candidate
+	for i := range d.Candidates {
+		switch d.Candidates[i].Provider {
+		case d.Current:
+			cur = &d.Candidates[i]
+		case d.Recommended:
+			rec = &d.Candidates[i]
+		}
+	}
+	if cur == nil || rec == nil || !cur.Usable || !rec.Usable {
+		return 0
+	}
+	return jsonFloat(cur.Score - rec.Score)
+}
+
+func (p *Prefix) setExit() {
+	for _, name := range []string{p.Current, p.Recommended} {
+		for i := range p.Probes {
+			if pr := &p.Probes[i]; pr.OK && name != "" && pr.Provider == name {
+				p.ExitLossPct, p.ExitRTTMs = &pr.LossPct, &pr.RTTAvgMs
+				return
+			}
+		}
+	}
 }
 
 func probeFrom(r probe.Result) Probe {
@@ -843,6 +888,7 @@ func assembleASNMap(prefixes []Prefix) []ASNNode {
 			Provider: bk.site.provider,
 			NextHop:  bk.site.hop,
 			Prefixes: prefs,
+			Count:    len(prefs),
 			Partial:  partial[bk.site],
 		})
 	}

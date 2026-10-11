@@ -12,6 +12,7 @@ package main
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -30,7 +31,7 @@ func main() {
 
 func run(args []string, getenv func(string) string, out io.Writer) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: relsign keygen | relsign sign DIR FILE...")
+		return errors.New("usage: relsign keygen | relsign sign DIR FILE")
 	}
 	switch args[0] {
 	case "keygen":
@@ -42,7 +43,7 @@ func run(args []string, getenv func(string) string, out io.Writer) error {
 		return nil
 	case "sign":
 		if len(args) < 3 {
-			return fmt.Errorf("usage: relsign sign DIR FILE...")
+			return errors.New("usage: relsign sign DIR FILE")
 		}
 		key := getenv("PACKETEER_RELEASE_KEY")
 		if key == "" {

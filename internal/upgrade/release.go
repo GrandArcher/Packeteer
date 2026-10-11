@@ -3,7 +3,6 @@ package upgrade
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -189,8 +188,6 @@ func (c *client) releases(ctx context.Context, prerelease bool) ([]Release, erro
 	}
 	return out, nil
 }
-
-var errNoRelease = errors.New("no such release")
 
 func loopbackHost(h string) bool {
 	if h == "localhost" {

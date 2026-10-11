@@ -1,9 +1,18 @@
 "use strict";
 // Shared chrome (#170): current page, account menu, role-gated nav, and
-// the mode line on pages that do not load app.js. Same-origin only.
+// the mode line on pages that do not load app.js. The sign-in page (#176)
+// loads it only for these helpers. Same-origin only.
 
 var SHELL_REFRESH_MS = 5000;
 var shellLastOK = null;
+
+// The events indicator counts warnings (and worse) newer than the time the
+// Events page was last opened in this browser. The time is the
+// controller's own clock, kept in localStorage; nothing is stored on the
+// controller.
+var EVENTS_SEEN_KEY = "packeteer.events.seen";
+var EVENTS_BADGE_MS = 15000;
+var EVENTS_BADGE_MAX = 100;
 
 var SHELL_MODE_TEXT = {
   observe: "Observe mode: Packeteer measures and recommends. It announces nothing.",
@@ -75,7 +84,7 @@ function shellApplyMe(me) {
     else who.textContent = me.user + (me.role ? " (" + me.role + ")" : "");
   }
   var out = document.getElementById("account-out");
-  if (out) out.hidden = !(me && me.sso);
+  if (out) out.hidden = !(me && me.session);
   if (!admin && document.body.getAttribute("data-page") === "admin") {
     var denied = document.getElementById("page-denied");
     var body = document.getElementById("admin-body");
@@ -85,6 +94,34 @@ function shellApplyMe(me) {
     }
     if (body) body.hidden = true;
   }
+}
+
+function shellRenderEventsBadge(n) {
+  var link = document.querySelector("#events-slot a");
+  if (!link) return;
+  var old = link.querySelector(".events-count");
+  if (old) link.removeChild(old);
+  link.removeAttribute("aria-label");
+  if (!n) return;
+  var text = n >= EVENTS_BADGE_MAX ? EVENTS_BADGE_MAX + "+" : String(n);
+  link.appendChild(shellEl("span", "events-count", text));
+  link.setAttribute("aria-label", "Events, " + text + " warnings since you last opened the page");
+}
+
+function shellMarkEventsSeen(nowISO) {
+  if (!nowISO) return;
+  try { localStorage.setItem(EVENTS_SEEN_KEY, nowISO); } catch (e) { /* storage blocked: the count stays */ }
+  shellRenderEventsBadge(0);
+}
+
+function shellEventsBadge() {
+  var seen = null;
+  try { seen = localStorage.getItem(EVENTS_SEEN_KEY); } catch (e) { seen = null; }
+  var path = "/api/events?severity=warning&limit=" + EVENTS_BADGE_MAX;
+  if (seen) path += "&from=" + encodeURIComponent(seen);
+  shellJSON(path).then(function (body) {
+    shellRenderEventsBadge((body.events || []).length);
+  }, function () { /* the indicator is optional: keep the last count */ });
 }
 
 function shellRenderBanner(mode) {
@@ -167,17 +204,23 @@ function shellAccount() {
   }
 }
 
-shellMarkCurrent();
-shellAccount();
-shellJSON("/api/me").then(shellApplyMe, function () {});
-if (document.body.getAttribute("data-live") !== "app") {
-  var refreshBtn = document.getElementById("refresh");
-  if (refreshBtn) {
-    refreshBtn.addEventListener("click", function () {
-      shellRefresh();
-      if (typeof renderGrid === "function") renderGrid();
-    });
+if (document.body.getAttribute("data-page") !== "signin") {
+  shellMarkCurrent();
+  shellAccount();
+  shellJSON("/api/me").then(shellApplyMe, function () {});
+  if (document.body.getAttribute("data-page") !== "events") {
+    shellEventsBadge();
+    setInterval(shellEventsBadge, EVENTS_BADGE_MS);
   }
-  shellRefresh();
-  setInterval(shellRefresh, SHELL_REFRESH_MS);
+  if (document.body.getAttribute("data-live") !== "app") {
+    var refreshBtn = document.getElementById("refresh");
+    if (refreshBtn) {
+      refreshBtn.addEventListener("click", function () {
+        shellRefresh();
+        if (typeof renderGrid === "function") renderGrid();
+      });
+    }
+    shellRefresh();
+    setInterval(shellRefresh, SHELL_REFRESH_MS);
+  }
 }

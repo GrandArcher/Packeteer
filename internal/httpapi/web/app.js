@@ -2,6 +2,7 @@
 
 var REFRESH_MS = 5000;
 var refreshing = false;
+var refreshAgain = false;
 var lastProviders = null;
 var lastPrefixes = null;
 var lastImprovements = null;
@@ -131,141 +132,130 @@ function renderProviders(data) {
   root.appendChild(pt);
 }
 
-function renderPrefixes(data) {
-  var root = document.getElementById("prefixes");
-  if (!root) return;
-  clear(root);
-  var rows = (data && data.prefixes) || [];
-  if (!rows.length) {
-    var o = lastOverview;
-    var msg = "No probed prefixes yet.";
-    if (o && !(o.sources || []).length) msg = "Nothing to probe: the config has no sources. See the setup checklist on Overview.";
-    else if (o) msg = "No probed prefixes yet. The first probe round fills this in.";
-    root.appendChild(el("p", "empty", msg));
-    return;
-  }
-  var q = document.getElementById("prefix-filter").value.trim().toLowerCase();
-  var changes = document.getElementById("prefix-changes").checked;
-  var shown = rows.filter(function (row) {
-    if (changes && !(row.current && row.recommended && row.recommended !== row.current)) return false;
-    if (!q) return true;
-    if (String(row.prefix).toLowerCase().indexOf(q) >= 0) return true;
-    return (row.probes || []).some(function (pr) { return String(pr.provider).toLowerCase().indexOf(q) >= 0; }) ||
-      [row.current, row.recommended].some(function (v) { return v && String(v).toLowerCase().indexOf(q) >= 0; });
+// prefixCard is the per-prefix card: exits, per-provider probes, measured
+// sub-ranges, and learned paths. Used by the expandable rows of the Prefixes
+// page and by the prefix page.
+function prefixCard(row) {
+  var card = el("article", "card");
+  var head = el("div", "card-head");
+  head.appendChild(el("h3", "mono", row.prefix));
+  var exits = el("p", "exits");
+  exits.appendChild(el("span", "k", "Current"));
+  exits.appendChild(el("span", "v", row.current || "—"));
+  exits.appendChild(el("span", "k", "Recommended"));
+  var differs = row.recommended && row.recommended !== row.current;
+  exits.appendChild(el("span", differs ? "v diff" : "v", row.recommended || "—"));
+  head.appendChild(exits);
+  if (row.action) head.appendChild(el("span", "badge", row.action));
+  head.appendChild(el("span", row.in_rib ? "badge" : "badge muted", row.in_rib ? "in RIB" : "not in RIB"));
+  if (row.heterogeneous) head.appendChild(el("span", "badge warn", "heterogeneous"));
+  card.appendChild(head);
+  if (row.reason) card.appendChild(el("p", "reason", row.reason));
+  var table = el("table");
+  var hr = el("tr");
+  ["Provider", "Loss", "RTT", "Jitter", "Probe"].forEach(function (h) {
+    hr.appendChild(el("th", "", h));
   });
-  if (shown.length !== rows.length) root.appendChild(el("p", "tag", "Showing " + shown.length + " of " + rows.length + " prefixes."));
-  if (!shown.length) {
-    root.appendChild(el("p", "empty", "No prefix matches the filter."));
-    return;
-  }
-  shown.forEach(function (row) {
-    var card = el("article", "card");
-    var head = el("div", "card-head");
-    head.appendChild(el("h3", "mono", row.prefix));
-    var exits = el("p", "exits");
-    exits.appendChild(el("span", "k", "Current"));
-    exits.appendChild(el("span", "v", row.current || "—"));
-    exits.appendChild(el("span", "k", "Recommended"));
-    var differs = row.recommended && row.recommended !== row.current;
-    exits.appendChild(el("span", differs ? "v diff" : "v", row.recommended || "—"));
-    head.appendChild(exits);
-    if (row.action) head.appendChild(el("span", "badge", row.action));
-    head.appendChild(el("span", row.in_rib ? "badge" : "badge muted", row.in_rib ? "in RIB" : "not in RIB"));
-    if (row.heterogeneous) head.appendChild(el("span", "badge warn", "heterogeneous"));
-    card.appendChild(head);
-    if (row.reason) card.appendChild(el("p", "reason", row.reason));
-    var table = el("table");
-    var hr = el("tr");
-    ["Provider", "Loss", "RTT", "Jitter", "Probe"].forEach(function (h) {
-      hr.appendChild(el("th", "", h));
-    });
-    var thead = el("thead");
-    thead.appendChild(hr);
-    table.appendChild(thead);
-    var tb = el("tbody");
-    (row.probes || []).forEach(function (pr) {
-      var tr = el("tr");
-      var cls = "";
-      if (row.current && pr.provider === row.current) cls = "is-current";
-      if (row.recommended && pr.provider === row.recommended) cls = (cls + " is-recommended").trim();
-      if (cls) tr.className = cls;
-      tr.appendChild(el("td", "", pr.provider));
-      if (!pr.ok) {
-        tr.appendChild(el("td", "", "—"));
-        tr.appendChild(el("td", "", "—"));
-        tr.appendChild(el("td", "", "—"));
-        tr.appendChild(el("td", "bad", pr.error || "failed"));
-      } else {
-        tr.appendChild(el("td", "num", fmtPct(pr.loss_pct)));
-        tr.appendChild(el("td", "num", fmtMs(pr.rtt_avg_ms)));
-        tr.appendChild(el("td", "num", fmtMs(pr.jitter_ms)));
-        var probeCell = el("td", "", pr.prober || "ok");
-        if (pr.indirect) {
-          var tag = el("span", "badge muted", "indirect");
-          tag.title = "Every address inside the prefix was silent. Measured at this provider's traceroute hop " + (pr.target || "") + ".";
-          probeCell.appendChild(document.createTextNode(" "));
-          probeCell.appendChild(tag);
-        }
-        tr.appendChild(probeCell);
+  var thead = el("thead");
+  thead.appendChild(hr);
+  table.appendChild(thead);
+  var tb = el("tbody");
+  (row.probes || []).forEach(function (pr) {
+    var tr = el("tr");
+    var cls = "";
+    if (row.current && pr.provider === row.current) cls = "is-current";
+    if (row.recommended && pr.provider === row.recommended) cls = (cls + " is-recommended").trim();
+    if (cls) tr.className = cls;
+    tr.appendChild(el("td", "", pr.provider));
+    if (!pr.ok) {
+      tr.appendChild(el("td", "", "—"));
+      tr.appendChild(el("td", "", "—"));
+      tr.appendChild(el("td", "", "—"));
+      tr.appendChild(el("td", "bad", pr.error || "failed"));
+    } else {
+      tr.appendChild(el("td", "num", fmtPct(pr.loss_pct)));
+      tr.appendChild(el("td", "num", fmtMs(pr.rtt_avg_ms)));
+      tr.appendChild(el("td", "num", fmtMs(pr.jitter_ms)));
+      var probeCell = el("td", "", pr.prober || "ok");
+      if (pr.indirect) {
+        var tag = el("span", "badge muted", "indirect");
+        tag.title = "Every address inside the prefix was silent. Measured at this provider's traceroute hop " + (pr.target || "") + ".";
+        probeCell.appendChild(document.createTextNode(" "));
+        probeCell.appendChild(tag);
       }
-      tb.appendChild(tr);
-    });
-    table.appendChild(tb);
-    card.appendChild(table);
-    var subs = row.subranges || [];
-    if (subs.length) {
-      card.appendChild(el("p", "reason", row.heterogeneous ?
-        "Measured sub-ranges disagree on the best provider. The prefix decision uses their traffic-weighted score. Sub-ranges are measured only, never announced." :
-        "Measured sub-ranges. The prefix decision uses their traffic-weighted score. Sub-ranges are measured only, never announced."));
-      var st = el("table");
-      var shr = el("tr");
-      ["Sub-range", "Share", "Best"].forEach(function (h) {
-        shr.appendChild(el("th", "", h));
-      });
-      var shead = el("thead");
-      shead.appendChild(shr);
-      st.appendChild(shead);
-      var total = subs.reduce(function (a, s) { return a + (s.weight || 0); }, 0);
-      var sb = el("tbody");
-      subs.forEach(function (s) {
-        var tr = el("tr");
-        tr.appendChild(el("td", "mono", s.prefix));
-        tr.appendChild(el("td", "num", total > 0 ? fmtPct(100 * (s.weight || 0) / total) : "—"));
-        tr.appendChild(el("td", s.best && s.best !== row.recommended ? "diff" : "", s.best || "—"));
-        sb.appendChild(tr);
-      });
-      st.appendChild(sb);
-      card.appendChild(st);
+      tr.appendChild(probeCell);
     }
-    var paths = row.paths || [];
-    if (paths.length) {
-      card.appendChild(el("p", "reason", "Learned paths. MED is display only and does not choose the exit. Via is route server, bilateral, or unknown."));
-      var pt = el("table");
-      var phr = el("tr");
-      ["State", "Provider", "Next hop", "AS path", "Via", "MED", "Whose MED"].forEach(function (h) {
-        phr.appendChild(el("th", "", h));
-      });
-      var phead = el("thead");
-      phead.appendChild(phr);
-      pt.appendChild(phead);
-      var pb = el("tbody");
-      paths.forEach(function (path) {
-        var tr = el("tr");
-        if (path.selected) tr.className = "is-current";
-        tr.appendChild(el("td", "", path.selected ? "selected" : "inactive"));
-        tr.appendChild(el("td", "", path.provider || "—"));
-        tr.appendChild(el("td", "mono", path.next_hop || "—"));
-        tr.appendChild(el("td", "mono", fmtAS(path.as_path)));
-        tr.appendChild(el("td", "", fmtVia(path.via)));
-        tr.appendChild(el("td", "num", path.med === undefined || path.med === null ? "—" : String(path.med)));
-        tr.appendChild(el("td", "", path.med_from || "—"));
-        pb.appendChild(tr);
-      });
-      pt.appendChild(pb);
-      card.appendChild(pt);
-    }
-    root.appendChild(card);
+    tb.appendChild(tr);
   });
+  table.appendChild(tb);
+  card.appendChild(table);
+  var subs = row.subranges || [];
+  if (subs.length) {
+    card.appendChild(el("p", "reason", row.heterogeneous ?
+      "Measured sub-ranges disagree on the best provider. The prefix decision uses their traffic-weighted score. Sub-ranges are measured only, never announced." :
+      "Measured sub-ranges. The prefix decision uses their traffic-weighted score. Sub-ranges are measured only, never announced."));
+    var st = el("table");
+    var shr = el("tr");
+    ["Sub-range", "Share", "Best"].forEach(function (h) {
+      shr.appendChild(el("th", "", h));
+    });
+    var shead = el("thead");
+    shead.appendChild(shr);
+    st.appendChild(shead);
+    var total = subs.reduce(function (a, s) { return a + (s.weight || 0); }, 0);
+    var sb = el("tbody");
+    subs.forEach(function (s) {
+      var tr = el("tr");
+      tr.appendChild(el("td", "mono", s.prefix));
+      tr.appendChild(el("td", "num", total > 0 ? fmtPct(100 * (s.weight || 0) / total) : "—"));
+      tr.appendChild(el("td", s.best && s.best !== row.recommended ? "diff" : "", s.best || "—"));
+      sb.appendChild(tr);
+    });
+    st.appendChild(sb);
+    card.appendChild(st);
+  }
+  var paths = row.paths || [];
+  if (paths.length) {
+    card.appendChild(el("p", "reason", "Learned paths. MED is display only and does not choose the exit. Via is route server, bilateral, or unknown."));
+    var pt = el("table");
+    var phr = el("tr");
+    ["State", "Provider", "Next hop", "AS path", "Via", "MED", "Whose MED"].forEach(function (h) {
+      phr.appendChild(el("th", "", h));
+    });
+    var phead = el("thead");
+    phead.appendChild(phr);
+    pt.appendChild(phead);
+    var pb = el("tbody");
+    paths.forEach(function (path) {
+      var tr = el("tr");
+      if (path.selected) tr.className = "is-current";
+      tr.appendChild(el("td", "", path.selected ? "selected" : "inactive"));
+      tr.appendChild(el("td", "", path.provider || "—"));
+      tr.appendChild(el("td", "mono", path.next_hop || "—"));
+      tr.appendChild(el("td", "mono", fmtAS(path.as_path)));
+      tr.appendChild(el("td", "", fmtVia(path.via)));
+      tr.appendChild(el("td", "num", path.med === undefined || path.med === null ? "—" : String(path.med)));
+      tr.appendChild(el("td", "", path.med_from || "—"));
+      pb.appendChild(tr);
+    });
+    pt.appendChild(pb);
+    card.appendChild(pt);
+  }
+
+  return card;
+}
+
+// prefixHref is the shareable detail page of a prefix (#179).
+function prefixHref(prefix) {
+  return "/prefix/" + encodeURI(prefix);
+}
+
+function prefixCell(prefix) {
+  var td = el("td", "mono");
+  var a = el("a", "", prefix);
+  a.href = prefixHref(prefix);
+  td.appendChild(a);
+  return td;
 }
 
 function fmtAS(path) {
@@ -289,20 +279,33 @@ function renderASNMap(data) {
     root.appendChild(el("p", "empty", "No measured prefix has a learned path yet."));
     return;
   }
+  if (data.asn_total > nodes.length) {
+    root.appendChild(el("p", "tag", "Showing the first " + nodes.length + " of " + data.asn_total + " origin ASNs. Filter the table above by ASN to see one."));
+  }
   nodes.forEach(function (node) {
     var card = el("article", "card");
     var head = el("div", "card-head");
-    head.appendChild(el("h3", "mono", node.asn ? "AS" + node.asn : "No origin AS"));
+    var title = el("h3", "mono");
+    if (node.asn) {
+      var link = el("a", "", "AS" + node.asn);
+      link.href = "/prefixes.html?asn=" + node.asn;
+      link.title = "List the prefixes with this origin AS";
+      title.appendChild(link);
+    } else {
+      title.textContent = "No origin AS";
+    }
+    head.appendChild(title);
     card.appendChild(head);
     var t = table(["Provider", "Site", "Prefixes", "Table"]);
     (node.sites || []).forEach(function (site) {
       var prefs = site.prefixes || [];
-      var shown = prefs.slice(0, 8).join(", ");
-      if (prefs.length > 8) shown += " +" + (prefs.length - 8);
+      var count = site.count || prefs.length;
+      var shown = prefs.join(", ");
+      if (count > prefs.length) shown += " +" + (count - prefs.length);
       var tr = el("tr");
       tr.appendChild(el("td", "", site.provider || "—"));
       tr.appendChild(el("td", "mono", site.next_hop || "—"));
-      tr.appendChild(el("td", "", prefs.length + (shown ? " (" + shown + ")" : "")));
+      tr.appendChild(el("td", "", count + (shown ? " (" + shown + ")" : "")));
       tr.appendChild(el("td", "", site.partial ? "partial" : "full"));
       t.body.appendChild(tr);
     });
@@ -342,7 +345,7 @@ function renderImprovements(data) {
   var tb = el("tbody");
   rows.forEach(function (im) {
     var tr = el("tr");
-    tr.appendChild(el("td", "mono", im.prefix));
+    tr.appendChild(prefixCell(im.prefix));
     tr.appendChild(el("td", "", im.native || "—"));
     tr.appendChild(el("td", "", im.provider || "—"));
     tr.appendChild(el("td", "", im.cause || "—"));
@@ -635,15 +638,27 @@ function renderFederation(data) {
   root.appendChild(g.table);
 }
 
+// fetchPrefixes reads the one page of the measured-prefix list that the
+// page asked for (#183). Pages that show no list do not read it.
+// prefixListQuery is defined by prefixes.js and prefix.js, which load
+// before this file.
+function fetchPrefixes() {
+  if (typeof prefixListQuery !== "function") return Promise.resolve(null);
+  return getJSON("/api/prefixes?" + prefixListQuery());
+}
+
 function refresh() {
-  if (refreshing) return;
+  if (refreshing) {
+    refreshAgain = true;
+    return;
+  }
   refreshing = true;
   var readyReq = fetch("/readyz", {cache: "no-store", headers: {Accept: "application/json"}}).then(function (res) {
     return res.json();
   });
   Promise.allSettled([
     getJSON("/api/providers"),
-    getJSON("/api/prefixes"),
+    fetchPrefixes(),
     getJSON("/api/improvements"),
     readyReq,
     getJSON("/api/mitigations"),
@@ -666,8 +681,9 @@ function refresh() {
     if (!err) lastOK = new Date().toISOString();
     if (lastProviders) renderProviders(lastProviders);
     if (lastPrefixes) {
-      renderPrefixes(lastPrefixes);
+      if (typeof renderPrefixes === "function") renderPrefixes(lastPrefixes);
       renderASNMap(lastPrefixes);
+      if (typeof prefixPageUpdate === "function") prefixPageUpdate(lastPrefixes);
     }
     if (lastImprovements) renderImprovements(lastImprovements);
     // Mitigation is optional; its failure does not mark the page stale.
@@ -678,10 +694,19 @@ function refresh() {
     renderStatus(err);
     renderConn(err);
   }).then(function () {
-    refreshing = false;
+    refreshDone();
   }, function () {
-    refreshing = false;
+    refreshDone();
   });
+}
+
+// A filter change while a refresh is running is fetched right after it.
+function refreshDone() {
+  refreshing = false;
+  if (refreshAgain) {
+    refreshAgain = false;
+    refresh();
+  }
 }
 
 function reportURL(format) {
@@ -705,6 +730,7 @@ function renderReport(data) {
   if (!root) return;
   clear(root);
   var rows = (data && data.rows) || [];
+  var linkable = data && (data.report === "improvements" || data.report === "prefixes");
   if (!rows.length) {
     root.appendChild(el("p", "empty", "No history in this range."));
     return;
@@ -725,7 +751,7 @@ function renderReport(data) {
   rows.forEach(function (r) {
     var tr = el("tr");
     cols.forEach(function (c) {
-      tr.appendChild(el("td", c === "prefix" ? "mono" : "", fmtCell(r[c])));
+      tr.appendChild(c === "prefix" && linkable ? prefixCell(r[c]) : el("td", c === "prefix" ? "mono" : "", fmtCell(r[c])));
     });
     tb.appendChild(tr);
   });
@@ -790,65 +816,12 @@ function postJSON(path, body) {
   });
 }
 
-function runTool() {
-  var tool = document.getElementById("tool-name").value;
-  var target = document.getElementById("tool-target").value.trim();
-  var provider = document.getElementById("tool-provider").value;
-  var status = document.getElementById("tool-status");
-  var out = document.getElementById("tool-out");
-  if (!target) {
-    status.textContent = "Enter a prefix, address, or ASN.";
-    return;
-  }
-  status.textContent = "Running " + tool + "…";
-  out.textContent = "";
-  var req;
-  if (tool === "lookingglass") {
-    req = getJSON("/api/troubleshoot/lookingglass?prefix=" + encodeURIComponent(target));
-  } else if (tool === "whois") {
-    req = postJSON("/api/troubleshoot/whois", {query: target});
-  } else if (tool === "traceroute") {
-    req = postJSON("/api/troubleshoot/traceroute", {target: target, provider: provider});
-  } else {
-    req = postJSON("/api/troubleshoot/probe", {target: target});
-  }
-  req.then(function (data) {
-    status.textContent = "Done.";
-    out.textContent = JSON.stringify(data, null, 2);
-  }, function (err) {
-    status.textContent = err.message;
-  });
-}
-
-function initTools() {
-  var run = document.getElementById("tool-run");
-  if (!run) return;
-  getJSON("/api/troubleshoot").then(function (data) {
-    var sel = document.getElementById("tool-provider");
-    if (!sel) return;
-    ((data && data.providers) || []).forEach(function (name) {
-      var o = el("option", "", name);
-      o.value = name;
-      sel.appendChild(o);
-    });
-    if (data && !data.enabled) {
-      var status = document.getElementById("tool-status");
-      if (status) status.textContent = "Probe, traceroute, and whois are off (troubleshoot.enabled: false).";
-    }
-  }, function () {});
-  run.addEventListener("click", runTool);
-}
-
 function bind(id, ev, fn) {
   var n = document.getElementById(id);
   if (n) n.addEventListener(ev, fn);
 }
 
 initReports();
-initTools();
 bind("refresh", "click", refresh);
-function rerenderPrefixes() { if (lastPrefixes) renderPrefixes(lastPrefixes); }
-bind("prefix-filter", "input", rerenderPrefixes);
-bind("prefix-changes", "change", rerenderPrefixes);
 refresh();
 setInterval(refresh, REFRESH_MS);

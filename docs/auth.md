@@ -25,7 +25,7 @@ docker run --network host --cap-add NET_RAW --cap-add NET_ADMIN \
 
 At start the controller creates the admin `admin` (or `PACKETEER_ADMIN_USER`) with that password if no user has that name. It never changes an existing user, so change the password through the API and drop the variable. `auth` refuses to start together with `PACKETEER_HTTP_USER`: the single basic-auth account is replaced.
 
-Passwords are 12 to 256 characters and stored as PBKDF2-HMAC-SHA256 hashes (600,000 iterations). Local users sign in with HTTP basic auth, so the browser prompts on the dashboard. Put a TLS proxy in front, or keep `http.listen` on loopback, when the network between you and Packeteer is not trusted. Ten failed passwords or tokens from one address within five minutes block that address for the rest of the window (`429`).
+Passwords are 12 to 256 characters and stored as PBKDF2-HMAC-SHA256 hashes (600,000 iterations). Local users sign in on the sign-in page (below), or with HTTP basic auth from scripts. Put a TLS proxy in front, or keep `http.listen` on loopback, when the network between you and Packeteer is not trusted. Ten failed passwords or tokens from one address within five minutes block that address for the rest of the window (`429`).
 
 ## Roles
 
@@ -35,9 +35,17 @@ Passwords are 12 to 256 characters and stored as PBKDF2-HMAC-SHA256 hashes (600,
 | `operator` | Everything a viewer may, plus open and close maintenance windows, add and remove mitigation rules, and run the on-demand probe, traceroute, and whois. |
 | `admin` | Everything, plus manage users (`/api/users`), read the audit log (`/api/audit`), and, with `upgrade.enabled`, check, upgrade, and roll back the Packeteer version (`/api/upgrade*`, #196). |
 
-`/healthz`, `/readyz`, `/auth/login`, `/auth/callback`, and `/auth/logout` are public. Anything else without credentials is `401`; with a role that is too low it is `403` (`forbidden: needs role operator`). The full route-to-role table is `routeTable` in `internal/httpapi/access.go`, and a test walks every route with every role.
+`/healthz`, `/readyz`, `/auth/login`, `/auth/callback`, `/auth/signin`, `/auth/logout`, and the sign-in page with the files it loads (`/signin.html`, `/signin.js`, `/shell.js`, `/app.css`) are public. Anything else without credentials is `401`; with a role that is too low it is `403` (`forbidden: needs role operator`). The full route-to-role table is `routeTable` in `internal/httpapi/access.go`, and a test walks every route with every role.
+
+## Sign-in page (local users)
+
+A browser without a session that asks for a page is redirected to `/signin.html` when the request is https (or carries `X-Forwarded-Proto: https`) or the page is on localhost. Over plain http to another address the basic-auth prompt stays, so a trusted LAN without TLS keeps working with a password prompt and no session. The form posts `{"name", "password"}` to `POST /auth/signin`. On success the server starts an in-memory session and sets the `packeteer_session` cookie (`HttpOnly`, `Secure`, `SameSite=Strict`, `auth.session_ttl`, default 12h); the cookie is `Secure`, so use https (a TLS proxy) or localhost. A user keeps at most 10 sessions; a new sign-in beyond that ends the oldest. The session has the user's role and ends on sign-out (`POST /auth/logout`, the account menu's Sign out), at expiry, on restart, and when an admin changes the user's password or role or disables the user. Signing in again replaces the session the browser held.
+
+Failed sign-ins count toward the same per-address lockout as basic auth and tokens (ten in five minutes, then `429` even for the right password). They are audited as `auth.login` with result `denied` and, when the name is a valid user name, as the target; sign-ins and sign-outs are audited as `auth.login` and `auth.logout` with method `password`. Passwords are not logged or audited. Basic auth and API tokens are unchanged for scripts, and for browsers on plain http. `GET /auth/signin` is public and returns `sso` and the controller `mode`, so the page can show its banner. Rollback: `auth.enabled: false`.
 
 ## Users (admin)
+
+The Admin page (`/admin.html`) and the Tokens page (`/tokens.html`) make these calls from the browser ([ui.md](ui.md#users-and-api-tokens)).
 
 ```sh
 curl -u admin:... -H 'Content-Type: application/json' http://127.0.0.1:8080/api/users \
@@ -86,9 +94,9 @@ Browsers may not send a cross-site change: `POST`, `PATCH`, and `DELETE` with a 
 
 ## Audit log
 
-Every request that can change something (`POST`, `PATCH`, `DELETE`) is recorded after it runs, allowed or not: who (`actor`, `role`, `method`: `password`, `token`, `sso`, or `basic`), from where (`remote`), what (`action`, e.g. `POST /api/mitigations`; `target`, e.g. the rule id; `detail`, e.g. the prefix and action), and how it ended (`result`: `ok`, `denied`, or `failed`, and the HTTP `status`). Changes refused for lack of role are recorded as `denied`. SSO sign-ins (and refused ones), sign-outs, the admin created from the environment, and SIGHUP config reloads are recorded too. Reads are not. Secrets (passwords, token secrets) never are.
+Every request that can change something (`POST`, `PATCH`, `DELETE`) is recorded after it runs, allowed or not: who (`actor`, `role`, `method`: `password`, `token`, `sso`, or `basic`; a session from the sign-in page is `password`), from where (`remote`), what (`action`, e.g. `POST /api/mitigations`; `target`, e.g. the rule id; `detail`, e.g. the prefix and action), and how it ended (`result`: `ok`, `denied`, or `failed`, and the HTTP `status`). Changes refused for lack of role are recorded as `denied`. Sign-ins (and refused ones), sign-outs, the admin created from the environment, and SIGHUP config reloads are recorded too. Reads are not. Secrets (passwords, token secrets) never are.
 
-Each record goes to the log, to the `sqlite` store (pruned with `retention`), and to every notifier as an `audit.recorded` event ([EVENTS.md](EVENTS.md)); filter it per notifier with `events`. A store or notifier failure is logged and never blocks the change. Admins read it with `GET /api/audit?limit=100&from=<RFC 3339>&to=<RFC 3339>` (newest first, at most 1000). Without `auth`, changes through the basic-auth account are still audited (actor = that user). With no auth at all, only anonymous requests that succeed (troubleshooting tools) are recorded; a refused anonymous request changed nothing and is not.
+Each record goes to the log, to the `sqlite` store (pruned with `retention`), and to every notifier as an `audit.recorded` event ([EVENTS.md](EVENTS.md)); filter it per notifier with `events`. A store or notifier failure is logged and never blocks the change. Admins read it with `GET /api/audit?limit=100&from=<RFC 3339>&to=<RFC 3339>` (newest first, at most 1000). The Audit tab on the Events page shows it ([ui.md](ui.md#events-and-audit-log)). Without `auth`, changes through the basic-auth account are still audited (actor = that user). With no auth at all, only anonymous requests that succeed (troubleshooting tools) are recorded; a refused anonymous request changed nothing and is not.
 
 ## Rollback
 

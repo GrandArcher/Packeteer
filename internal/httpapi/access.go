@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"mime"
+	"net"
 	"net/http"
 	"net/netip"
 	"strconv"
@@ -24,7 +25,8 @@ import (
 // audit log. http.allow_from restricts client addresses in both modes.
 
 // route is one endpoint and the lowest role that may call it. An empty
-// role is public: health checks and the SSO sign-in endpoints.
+// role is public: health checks, the sign-in endpoints, and the sign-in
+// page with the three files it loads (signin.js, shell.js, app.css).
 type route struct {
 	pattern string
 	role    plugin.Role
@@ -49,6 +51,7 @@ func (s *Server) routeTable() []route {
 		{"GET /api/providers", viewer, s.handleProviders},
 		{"GET /api/probes", viewer, s.handleProbes},
 		{"GET /api/prefixes", viewer, s.handlePrefixes},
+		{"GET /api/prefixes/history", viewer, s.handlePrefixHistory},
 		{"GET /api/decisions", viewer, s.handleDecisions},
 		{"GET /api/improvements", viewer, s.handleImprovements},
 		{"GET /api/telemetry", viewer, s.handleTelemetry},
@@ -66,6 +69,8 @@ func (s *Server) routeTable() []route {
 		{"POST /api/mitigations", operator, s.handleMitigationAdd},
 		{"DELETE /api/mitigations/{id}", operator, s.handleMitigationRemove},
 		{"GET /api/anomalies", viewer, s.handleAnomalies},
+		{"GET /api/leaks", viewer, s.handleLeaks},
+		{"POST /api/leaks/clear", operator, s.handleLeakClear},
 		{"GET /api/troubleshoot", viewer, s.handleToolStatus},
 		{"GET /api/troubleshoot/lookingglass", viewer, s.handleLookingGlass},
 		{"POST /api/troubleshoot/probe", operator, s.handleToolProbe},
@@ -79,6 +84,7 @@ func (s *Server) routeTable() []route {
 		{"POST /api/users", admin, s.handleUserCreate},
 		{"PATCH /api/users/{name}", admin, s.handleUserUpdate},
 		{"DELETE /api/users/{name}", admin, s.handleUserDelete},
+		{"GET /api/events", viewer, s.handleEvents},
 		{"GET /api/audit", admin, s.handleAudit},
 		{"GET /api/config", admin, s.handleConfig},
 		{"POST /api/config/validate", admin, s.handleConfigValidate},
@@ -97,7 +103,14 @@ func (s *Server) routeTable() []route {
 		{"POST /api/subscriptions/{name}/send", operator, s.handleSubscriptionSend},
 		{"GET /auth/login", public, s.handleLogin},
 		{"GET /auth/callback", public, s.handleCallback},
+		{"GET /auth/signin", public, s.handleSigninInfo},
+		{"POST /auth/signin", public, s.handleSignin},
 		{"POST /auth/logout", public, s.handleLogout},
+		{"GET /signin.html", public, serveFile("signin.html")},
+		{"GET /signin.js", public, serveFile("signin.js")},
+		{"GET /shell.js", public, serveFile("shell.js")},
+		{"GET /app.css", public, serveFile("app.css")},
+		{"GET /prefix/", viewer, serveFile("prefix.html")},
 		{"GET /", viewer, files.ServeHTTP},
 	}
 }
@@ -234,9 +247,9 @@ func (s *Server) authorize(w http.ResponseWriter, r *http.Request, rt route) (au
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "user store unavailable"})
 		return p, false
 	default:
-		if errors.Is(err, auth.ErrNoCredentials) && r.Method == http.MethodGet && s.auth.SSOEnabled() &&
+		if errors.Is(err, auth.ErrNoCredentials) && r.Method == http.MethodGet && cookieUsable(r) &&
 			!strings.HasPrefix(r.URL.Path, "/api/") && r.URL.Path != "/metrics" {
-			http.Redirect(w, r, "/auth/login", http.StatusFound)
+			http.Redirect(w, r, "/signin.html", http.StatusFound)
 			return p, false
 		}
 		w.Header().Set("WWW-Authenticate", `Basic realm="packeteer"`)
@@ -252,6 +265,25 @@ func (s *Server) authorize(w http.ResponseWriter, r *http.Request, rt route) (au
 		return p, false
 	}
 	return p, true
+}
+
+// cookieUsable reports whether the browser will keep the Secure session
+// cookie: the request came over TLS (directly or through a proxy that
+// says so) or the page is on localhost. Elsewhere a redirect to the
+// sign-in page would loop, so the basic-auth prompt stays.
+func cookieUsable(r *http.Request) bool {
+	if r.TLS != nil || strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https") {
+		return true
+	}
+	host := r.Host
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		host = h
+	}
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip, err := netip.ParseAddr(strings.Trim(host, "[]"))
+	return err == nil && ip.IsLoopback()
 }
 
 // withAllowFrom refuses clients outside http.allow_from.
@@ -478,30 +510,41 @@ func (s *Server) handleTokenRevoke(w http.ResponseWriter, r *http.Request) {
 
 const maxAuditRows = 1000
 
+// parseRowsAndRange reads limit (1..max) and the RFC 3339 from and to of
+// a list request. On a bad value it writes the 400 and returns false.
+func parseRowsAndRange(w http.ResponseWriter, r *http.Request, def, max int) (limit int, from, to time.Time, ok bool) {
+	v := r.URL.Query()
+	limit = def
+	if l := v.Get("limit"); l != "" {
+		n, err := strconv.Atoi(l)
+		if err != nil || n < 1 || n > max {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "limit must be 1-" + strconv.Itoa(max)})
+			return 0, from, to, false
+		}
+		limit = n
+	}
+	for key, dst := range map[string]*time.Time{"from": &from, "to": &to} {
+		if t := v.Get(key); t != "" {
+			at, err := time.Parse(time.RFC3339, t)
+			if err != nil {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": key + ": want RFC 3339"})
+				return 0, from, to, false
+			}
+			*dst = at
+		}
+	}
+	return limit, from, to, true
+}
+
 func (s *Server) handleAudit(w http.ResponseWriter, r *http.Request) {
 	if !s.audit.Stored() {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": auth.ErrNoAuditStore.Error()})
 		return
 	}
 	q := plugin.AuditQuery{Limit: 100}
-	v := r.URL.Query()
-	if l := v.Get("limit"); l != "" {
-		n, err := strconv.Atoi(l)
-		if err != nil || n < 1 || n > maxAuditRows {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "limit must be 1-" + strconv.Itoa(maxAuditRows)})
-			return
-		}
-		q.Limit = n
-	}
-	for key, dst := range map[string]*time.Time{"from": &q.From, "to": &q.To} {
-		if t := v.Get(key); t != "" {
-			at, err := time.Parse(time.RFC3339, t)
-			if err != nil {
-				writeJSON(w, http.StatusBadRequest, map[string]string{"error": key + ": want RFC 3339"})
-				return
-			}
-			*dst = at
-		}
+	var ok bool
+	if q.Limit, q.From, q.To, ok = parseRowsAndRange(w, r, q.Limit, maxAuditRows); !ok {
+		return
 	}
 	recs, err := s.audit.Query(r.Context(), q)
 	if err != nil {
@@ -541,13 +584,67 @@ func (s *Server) handleCallback(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/", http.StatusFound)
 }
 
+// serveFile serves one embedded file. The route's role decides who may read it.
+func serveFile(name string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) { http.ServeFileFS(w, r, webRoot, name) }
+}
+
+// handleSigninInfo tells the sign-in page whether to offer single sign-on
+// and which mode to show in the banner. The page cannot read
+// /api/overview before a user is signed in.
+func (s *Server) handleSigninInfo(w http.ResponseWriter, _ *http.Request) {
+	if s.auth == nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "sign-in needs auth (auth.enabled and a storage plugin)"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"sso": s.auth.SSOEnabled(), "mode": s.snapshot().Mode})
+}
+
+type signinRequest struct {
+	Name     string `json:"name"`
+	Password string `json:"password"`
+}
+
+// handleSignin signs a local user in and sets the session cookie. A wrong
+// name or password is one answer for both. Failures are audited with the
+// attempted name when it is a valid user name (an admin may read it); the
+// password is never logged or audited.
+func (s *Server) handleSignin(w http.ResponseWriter, r *http.Request) {
+	if s.auth == nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "sign-in needs auth (auth.enabled and a storage plugin)"})
+		return
+	}
+	var req signinRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	p, err := s.auth.SignIn(w, r, req.Name, req.Password)
+	switch {
+	case err == nil:
+		s.record(r, p, "auth.login", p.User, "", http.StatusOK)
+		writeJSON(w, http.StatusOK, map[string]any{"user": p.User, "role": p.Role})
+	case errors.Is(err, auth.ErrThrottled):
+		writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": err.Error()})
+	case errors.Is(err, auth.ErrBadCredentials):
+		target := ""
+		if auth.ValidUserName(req.Name) {
+			target = req.Name
+		}
+		s.record(r, auth.Principal{Method: auth.MethodPassword}, "auth.login", target, "invalid credentials", http.StatusUnauthorized)
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid user name or password"})
+	default:
+		s.log.Error("sign-in", "err", err)
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "sign-in unavailable"})
+	}
+}
+
 func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 	if s.auth == nil {
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
-	if user, ok := s.auth.Logout(w, r); ok {
-		s.record(r, auth.Principal{User: user, Method: auth.MethodSSO}, "auth.logout", user, "", http.StatusNoContent)
+	if p, ok := s.auth.Logout(w, r); ok {
+		s.record(r, p, "auth.logout", p.User, "", http.StatusNoContent)
 	}
 	w.WriteHeader(http.StatusNoContent)
 }

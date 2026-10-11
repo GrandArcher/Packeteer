@@ -54,6 +54,9 @@ type Set struct {
 	// It never announces; the core acts on its anomalies only through
 	// threat mitigation and only for an explicit rule.
 	Detector *Instance[plugin.Detector]
+	// LeakSources feed the leak watch (leak_watch.sources, #199). They
+	// only read; the core decides what to withdraw.
+	LeakSources []Instance[plugin.LeakSource]
 
 	mu      sync.RWMutex
 	started []namedLifecycle
@@ -151,6 +154,9 @@ func Build(cfg *config.Config, opts Options) (*Set, error) {
 			s.Detector = &b[0]
 		}
 	}
+	if cfg.LeakWatching() {
+		s.LeakSources = build(plugin.LeakSources, "leak_watch.sources", cfg.LeakWatch.Sources, base, &errs)
+	}
 	if cfg.Troubleshoot.Whois != nil {
 		if b := build(plugin.Whoises, "troubleshoot.whois", []config.PluginSpec{*cfg.Troubleshoot.Whois}, base, &errs); len(b) == 1 {
 			s.Whois = &b[0]
@@ -202,6 +208,9 @@ func (s *Set) all() []namedLifecycle {
 	}
 	if s.Detector != nil {
 		add(plugin.KindDetector, s.Detector.Name, s.Detector.Plugin)
+	}
+	for _, p := range s.LeakSources {
+		add(plugin.KindLeakSource, p.Name, p.Plugin)
 	}
 	for _, p := range s.Probers {
 		add(plugin.KindProber, p.Name, p.Plugin)
@@ -361,13 +370,14 @@ func optionsEnv(cfg *config.Config, opts Options) plugin.Env {
 		opts.Getenv = func(string) string { return "" }
 	}
 	dir := ""
+	var asn uint32
 	if cfg != nil {
-		dir = cfg.PluginDir
+		dir, asn = cfg.PluginDir, cfg.ASN
 	}
 	if opts.PluginDir != "" {
 		dir = opts.PluginDir
 	}
-	return plugin.Env{Logger: opts.Logger, PluginDir: dir, Getenv: opts.Getenv, Providers: providerNames(cfg), CheckOnly: opts.CheckOnly}
+	return plugin.Env{Logger: opts.Logger, PluginDir: dir, Getenv: opts.Getenv, Providers: providerNames(cfg), ASN: asn, CheckOnly: opts.CheckOnly}
 }
 
 // BuildSources constructs the named target sources. They are not started.

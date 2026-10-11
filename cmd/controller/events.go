@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log/slog"
 	"math"
 	"net/netip"
 	"strconv"
@@ -11,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/GrandArcher/Packeteer/internal/eventlog"
 	"github.com/GrandArcher/Packeteer/internal/inbound"
 	"github.com/GrandArcher/Packeteer/internal/mitigation"
 	"github.com/GrandArcher/Packeteer/internal/notify"
@@ -24,6 +26,16 @@ import (
 // emitter is where catalog events go. *notify.Dispatcher implements it.
 type emitter interface {
 	Emit(plugin.Event)
+}
+
+// newEventLog keeps recent events for the Events page: in the storage
+// plugin when it keeps them, otherwise in memory since start.
+func newEventLog(plugins *pluginhost.Set, log *slog.Logger) *eventlog.Log {
+	var store plugin.EventStore
+	if plugins != nil && plugins.Storage != nil {
+		store, _ = plugins.Storage.Plugin.(plugin.EventStore)
+	}
+	return eventlog.New(store, log)
 }
 
 func newDispatcher(plugins *pluginhost.Set, opt notify.Options) *notify.Dispatcher {
