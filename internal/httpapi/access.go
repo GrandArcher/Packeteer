@@ -51,6 +51,7 @@ func (s *Server) routeTable() []route {
 		{"GET /api/providers", viewer, s.handleProviders},
 		{"GET /api/probes", viewer, s.handleProbes},
 		{"GET /api/prefixes", viewer, s.handlePrefixes},
+		{"GET /api/prefixes/history", viewer, s.handlePrefixHistory},
 		{"GET /api/decisions", viewer, s.handleDecisions},
 		{"GET /api/improvements", viewer, s.handleImprovements},
 		{"GET /api/telemetry", viewer, s.handleTelemetry},
@@ -99,10 +100,11 @@ func (s *Server) routeTable() []route {
 		{"GET /auth/signin", public, s.handleSigninInfo},
 		{"POST /auth/signin", public, s.handleSignin},
 		{"POST /auth/logout", public, s.handleLogout},
-		{"GET /signin.html", public, servePublic("signin.html")},
-		{"GET /signin.js", public, servePublic("signin.js")},
-		{"GET /shell.js", public, servePublic("shell.js")},
-		{"GET /app.css", public, servePublic("app.css")},
+		{"GET /signin.html", public, serveFile("signin.html")},
+		{"GET /signin.js", public, serveFile("signin.js")},
+		{"GET /shell.js", public, serveFile("shell.js")},
+		{"GET /app.css", public, serveFile("app.css")},
+		{"GET /prefix/", viewer, serveFile("prefix.html")},
 		{"GET /", viewer, files.ServeHTTP},
 	}
 }
@@ -576,8 +578,8 @@ func (s *Server) handleCallback(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/", http.StatusFound)
 }
 
-// servePublic serves one embedded file without a sign-in.
-func servePublic(name string) http.HandlerFunc {
+// serveFile serves one embedded file. The route's role decides who may read it.
+func serveFile(name string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) { http.ServeFileFS(w, r, webRoot, name) }
 }
 

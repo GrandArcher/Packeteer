@@ -67,7 +67,8 @@ function cellText(v) {
 }
 
 // dataTable renders an array of objects: scalar columns first, at most 10.
-function dataTable(rows) {
+// With prefixLinks, a prefix column links to the prefix page (#179).
+function dataTable(rows, prefixLinks) {
   if (!rows || !rows.length) return el("p", "empty", "No rows.");
   var cols = [];
   rows.forEach(function (r) {
@@ -85,7 +86,16 @@ function dataTable(rows) {
   var tb = el("tbody");
   rows.slice(0, 200).forEach(function (r) {
     var tr = el("tr");
-    cols.forEach(function (c) { tr.appendChild(el("td", "", cellText(r[c]))); });
+    cols.forEach(function (c) {
+      var td = el("td", "", cellText(r[c]));
+      if (prefixLinks && c === "prefix" && r[c]) {
+        clear(td);
+        var a = el("a", "", r[c]);
+        a.href = "/prefix/" + encodeURI(r[c]);
+        td.appendChild(a);
+      }
+      tr.appendChild(td);
+    });
     tb.appendChild(tr);
   });
   t.appendChild(tb);

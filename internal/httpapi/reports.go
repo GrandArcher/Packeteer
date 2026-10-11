@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"net/netip"
 	"strconv"
 	"time"
 
@@ -14,6 +15,7 @@ import (
 // plugin is configured.
 type ReportSource interface {
 	Report(ctx context.Context, q history.Query) (history.Report, error)
+	Prefix(ctx context.Context, p netip.Prefix, q history.Query) (history.PrefixHistory, error)
 }
 
 // Report range bounds.
@@ -134,4 +136,42 @@ func (s *Server) handleReport(w http.ResponseWriter, r *http.Request) {
 		meta
 		history.Report
 	}{meta: snap.meta(), Report: rep})
+}
+
+// handlePrefixHistory serves one prefix's stored probe rollups and
+// improvements for the prefix page (#179). Without a storage plugin it
+// answers enabled: false so the page can say so. It reads only.
+func (s *Server) handlePrefixHistory(w http.ResponseWriter, r *http.Request) {
+	p, err := netip.ParsePrefix(r.URL.Query().Get("prefix"))
+	if err != nil || p != p.Masked() {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "prefix must be a network in CIDR form, such as 192.0.2.0/24"})
+		return
+	}
+	snap := s.snapshot()
+	if s.reports == nil {
+		writeJSON(w, http.StatusOK, struct {
+			meta
+			Enabled bool   `json:"enabled"`
+			Prefix  string `json:"prefix"`
+		}{meta: snap.meta(), Prefix: p.String()})
+		return
+	}
+	q, err := reportQuery(r, "", time.Now())
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+	h, err := s.reports.Prefix(ctx, p, q)
+	if err != nil {
+		s.log.Warn("prefix history", "prefix", p, "err", err)
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "history store unavailable"})
+		return
+	}
+	writeJSON(w, http.StatusOK, struct {
+		meta
+		Enabled bool `json:"enabled"`
+		history.PrefixHistory
+	}{meta: snap.meta(), Enabled: true, PrefixHistory: h})
 }
