@@ -55,10 +55,10 @@ type Form struct {
 	Allowlist    []string       `json:"allowlist"`
 	// Sections (#130). A nil section in a request leaves that part of the
 	// file alone; ParseForm always fills them.
-	Flow     *FormFlow     `json:"flow"`
-	Policies *FormPolicies `json:"policies"`
-	VIP      *FormVIP      `json:"vip"`
-	Outage   *FormOutage   `json:"outage"`
+	Flows    []FormFlow     `json:"flows"`
+	Policies []FormPolicies `json:"policies"`
+	VIPs     []FormVIP      `json:"vips"`
+	Outages  []FormOutage   `json:"outages"`
 	// #131: the inbound block and anomaly.rules, same rules.
 	Inbound *FormInbound `json:"inbound"`
 	Anomaly *FormAnomaly `json:"anomaly"`

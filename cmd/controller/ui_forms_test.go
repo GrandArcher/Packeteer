@@ -20,20 +20,13 @@ func TestFormSectionsPassStartChecks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	form.Flow.Enabled = true
-	form.Flow.Listen = []string{"127.0.0.1:2055"}
-	form.Flow.TopN = "20"
-	form.Flow.MinPct = "1"
-	form.Policies.Rules = []configedit.FormRule{
+	form.Flows = []configedit.FormFlow{{Listen: []string{"127.0.0.1:2055"}, TopN: "20", MinPct: "1"}}
+	form.Policies = []configedit.FormPolicies{{Rules: []configedit.FormRule{
 		{Name: "pin", Action: "static", Providers: []string{"transit-a"}, Prefixes: []string{"203.0.113.0/24"}, MaxLossPct: "1"},
 		{Name: "vips", Action: "vip", Prefixes: []string{"198.51.100.0/24"}},
-	}
-	form.VIP.Enabled = true
-	form.VIP.Interval = "10s"
-	form.VIP.Prefixes = []configedit.FormTarget{{Prefix: "198.51.100.0/24"}}
-	form.Outage.Enabled = true
-	form.Outage.MinPrefixes = "3"
-	form.Outage.Interval = "5s"
+	}}}
+	form.VIPs = []configedit.FormVIP{{Interval: "10s", Prefixes: []configedit.FormTarget{{Prefix: "198.51.100.0/24"}}}}
+	form.Outages = []configedit.FormOutage{{MinPrefixes: "3", Interval: "5s"}}
 	merged, err := configedit.ApplyForm([]byte(uiBase), form)
 	if err != nil {
 		t.Fatal(err)
@@ -64,29 +57,19 @@ func TestFormSectionsLoaderChecksStillApply(t *testing.T) {
 		want string
 	}{
 		"flow tail": {func(f *configedit.Form) {
-			f.Flow.Enabled = true
-			f.Flow.Listen = []string{"127.0.0.1:2055"}
-			f.Flow.TopN = "10"
-			f.Flow.MaxTargets = "20"
+			f.Flows = []configedit.FormFlow{{Listen: []string{"127.0.0.1:2055"}, TopN: "10", MaxTargets: "20"}}
 		}, "tail_interval"},
 		"flow tail inside probe interval": {func(f *configedit.Form) {
-			f.Flow.Enabled = true
-			f.Flow.Listen = []string{"127.0.0.1:2055"}
-			f.Flow.TopN = "10"
-			f.Flow.MaxTargets = "20"
-			f.Flow.TailInterval = "1s"
+			f.Flows = []configedit.FormFlow{{Listen: []string{"127.0.0.1:2055"}, TopN: "10", MaxTargets: "20", TailInterval: "1s"}}
 		}, "tail_interval"},
 		"rule with a country and no database": {func(f *configedit.Form) {
-			f.Policies.Rules = []configedit.FormRule{{Action: "ignore", Countries: []string{"ZZ"}}}
-		}, "geoip"},
+			f.Policies = []configedit.FormPolicies{{GeoIPDB: "/nonexistent/geo.mmdb", Rules: []configedit.FormRule{{Action: "ignore", Countries: []string{"ZZ"}}}}}
+		}, "geoip_db"},
 		"vip slower than the staleness window": {func(f *configedit.Form) {
-			f.VIP.Enabled = true
-			f.VIP.Interval = "24h"
-			f.VIP.Prefixes = []configedit.FormTarget{{Prefix: "198.51.100.0/24"}}
+			f.VIPs = []configedit.FormVIP{{Interval: "24h", Prefixes: []configedit.FormTarget{{Prefix: "198.51.100.0/24"}}}}
 		}, "interval"},
 		"outage slower than probing": {func(f *configedit.Form) {
-			f.Outage.Enabled = true
-			f.Outage.Interval = "24h"
+			f.Outages = []configedit.FormOutage{{Interval: "24h"}}
 		}, "interval"},
 	} {
 		form, _ := configedit.ParseForm([]byte(uiBase))
@@ -110,8 +93,7 @@ func TestFormSectionsNeverEnableInjectUnconfirmed(t *testing.T) {
 	before, _ := os.ReadFile(path)
 	form, _ := configedit.ParseForm([]byte(uiBase))
 	form.Mode = "inject"
-	form.Flow.Enabled = true
-	form.Flow.Listen = []string{"127.0.0.1:2055"}
+	form.Flows = []configedit.FormFlow{{Listen: []string{"127.0.0.1:2055"}}}
 	merged, err := configedit.ApplyForm([]byte(uiBase), form)
 	if err != nil {
 		t.Fatal(err)
@@ -148,5 +130,37 @@ func TestWizardFlowPassesStartChecks(t *testing.T) {
 	cfg, err := config.Parse(out)
 	if err != nil || cfg.Mode != config.ModeObserve || len(cfg.Allowlist.Prefixes) != 0 || cfg.Announcer != nil {
 		t.Fatalf("wizard flow can announce: %v %+v", err, cfg)
+	}
+}
+
+// Two flow sources and two rules policies are each edited through the
+// form, and the saved file passes the start checks with both of each.
+func TestFormMultipleSourcesAndPoliciesPassStartChecks(t *testing.T) {
+	ed, path := editorFor(t, uiBase)
+	form, err := configedit.ParseForm([]byte(uiBase))
+	if err != nil {
+		t.Fatal(err)
+	}
+	form.Flows = []configedit.FormFlow{
+		{Name: "flow-a", Listen: []string{"127.0.0.1:2055"}, TopN: "20", AggregateV4: "22"},
+		{Name: "flow-b", Listen: []string{"127.0.0.1:6343"}, TopN: "30", AggregateV6: "56"},
+	}
+	form.Policies = []configedit.FormPolicies{
+		{Name: "pins", Rules: []configedit.FormRule{{Name: "pin", Action: "static", Providers: []string{"transit-a"}, Prefixes: []string{"203.0.113.0/24"}, MaxLossPct: "1"}}},
+		{Name: "vips", Rules: []configedit.FormRule{{Name: "vips", Action: "vip", Prefixes: []string{"198.51.100.0/24"}}}},
+	}
+	merged, err := configedit.ApplyForm([]byte(uiBase), form)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, res, err := ed.Save(merged, configedit.Hash([]byte(uiBase)), false); err != nil || !res.Valid || res.EnablesInject {
+		t.Fatalf("save: %v %+v\n%s", err, res, merged)
+	}
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.Sources) != 2 || len(cfg.Policies) != 2 || cfg.Mode != config.ModeObserve {
+		t.Fatalf("sources %d policies %d mode %s", len(cfg.Sources), len(cfg.Policies), cfg.Mode)
 	}
 }

@@ -465,12 +465,20 @@ jobs:
               config:
                 targets: [{prefix: 198.51.100.0/24}]
             - type: flow
+              name: flow-a
               config:
                 listen: 127.0.0.1:12055
                 window: 10m
                 top_n: 20
                 min_pct: 0.5
                 exclude: [192.0.2.0/25]
+                aggregate_v4: 22
+            - type: flow
+              name: flow-b
+              config:
+                listen: 127.0.0.1:12056
+                window: 15m
+                top_n: 40
             - type: vip
               config:
                 interval: 10s
@@ -481,6 +489,7 @@ jobs:
                 loss_pct: 30
           policies:
             - type: rules
+              name: pins
               config:
                 rules:
                   - name: pin-a
@@ -488,6 +497,10 @@ jobs:
                     providers: [lab-a]
                     prefixes: [203.0.113.0/24]
                     max_loss_pct: 1
+            - type: rules
+              name: denies
+              config:
+                rules:
                   - name: no-b-64500
                     action: deny
                     providers: [lab-b]
@@ -522,12 +535,16 @@ jobs:
           # checks accept the result. Nothing is written (read-only mount).
           yaml="$(curl -fsS "${auth[@]}" "$base/api/config" | jq -r .yaml)"
           jq -n --arg y "$yaml" '{yaml:$y}' | curl -fsS "${auth[@]}" -H 'Content-Type: application/json' -d @- "$base/api/config/form" >/tmp/form130.json
-          jq -e '.form.flow.enabled and .form.flow.listen[0] == "127.0.0.1:12055" and .form.vip.enabled and .form.outage.min_prefixes == "4" and (.form.policies.rules | length) == 2' /tmp/form130.json
-          jq '.form | .flow.top_n = "30" | .outage.min_prefixes = "6"
-            | .policies.rules += [{key:"",name:"vips",action:"vip",providers:[],prefixes:["198.51.100.0/24"],asns:[],countries:[],traffic:"",max_loss_pct:"",max_rtt:""}]' /tmp/form130.json >/tmp/form130-edit.json
+          jq -e '(.form.flows | length) == 2 and .form.flows[0].listen[0] == "127.0.0.1:12055" and .form.flows[0].aggregate_v4 == "22" and .form.flows[1].listen[0] == "127.0.0.1:12056"
+            and (.form.vips | length) == 1 and .form.outages[0].min_prefixes == "4"
+            and (.form.policies | length) == 2 and .form.policies[0].rules[0].name == "pin-a" and .form.policies[1].rules[0].name == "no-b-64500"' /tmp/form130.json
+          jq '.form | .flows[0].top_n = "30" | .flows[1].top_n = "45" | .outages[0].min_prefixes = "6"
+            | .policies[1].rules += [{key:"",name:"vips",action:"vip",providers:[],prefixes:["198.51.100.0/24"],asns:[],countries:[],traffic:"",max_loss_pct:"",max_rtt:""}]' /tmp/form130.json >/tmp/form130-edit.json
           jq -n --arg y "$yaml" --slurpfile f /tmp/form130-edit.json '{yaml:$y,apply:true,form:$f[0]}' \
             | curl -fsS "${auth[@]}" -H 'Content-Type: application/json' -d @- "$base/api/config/form" | jq -r .yaml >/tmp/merged130.yaml
           grep -q 'top_n: 30' /tmp/merged130.yaml
+          grep -q 'top_n: 45' /tmp/merged130.yaml
+          grep -q 'listen: 127.0.0.1:12056' /tmp/merged130.yaml
           grep -q 'name: vips' /tmp/merged130.yaml
           grep -q 'mode: observe' /tmp/merged130.yaml
           ! grep -q 'announcer' /tmp/merged130.yaml
@@ -558,10 +575,11 @@ jobs:
           # is on top, and the wizard has its optional flow step.
           bash lab/ui-smoke.sh http://127.0.0.1:18133/settings.html \
             'mode-observe' 'It announces nothing.' \
-            'Flow collector' 'value="127.0.0.1:12055"' 'value="10m"' 'value="0.5"' 'value="192.0.2.0/25"' \
-            'Policies (rules)' 'value="pin-a"' 'value="no-b-64500"' '>Action</span>' '>Max loss (%)</span>' \
-            'VIP' 'value="10s"' 'value="203.0.113.1"' \
-            'Outage detection' 'value="4"' 'value="30"' \
+            'Flow collector 1' 'Flow collector 2' 'value="flow-a"' 'value="flow-b"' 'value="127.0.0.1:12055"' 'value="127.0.0.1:12056"' \
+            'value="10m"' 'value="15m"' 'value="0.5"' 'value="192.0.2.0/25"' 'value="22"' \
+            'Rules policy 1' 'Rules policy 2' 'value="pins"' 'value="denies"' 'value="pin-a"' 'value="no-b-64500"' '>Action</span>' '>Max loss (%)</span>' \
+            'VIP source 1' 'value="10s"' 'value="203.0.113.1"' \
+            'Outage detection 1' 'value="4"' 'value="30"' \
             '4. Flow (optional)' 'Collect flow records' 'Exporter setup' \
             --absent 'The config editor is off' 'mode-inject'
       - name: UI mitigation, inbound, and anomaly forms smoke (#131; add and remove a rule in observe)
