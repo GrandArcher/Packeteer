@@ -98,6 +98,7 @@ func TestUIShell(t *testing.T) {
 		"troubleshooting.html": {`<body data-page="troubleshooting" data-live="app">`, `id="tool-run"`, "Looking glass"},
 		"protection.html":      {`<body data-page="protection" data-live="app">`, `id="mitigation-section" hidden`, `id="mitigation"`, `id="protection-empty"`, `id="mit-form"`, `id="mf-prefix"`, `src="/protection.js"`, `id="mit-badge"`},
 		"graphs.html":          {`<body data-page="graphs" data-live="app">`, `id="graph"`, `id="graph-bucket"`, `id="graph-days"`, `id="graph-csv"`, `src="/charts.js"`, `src="/graphs.js"`, "nothing here announces a route"},
+		"prefix.html":          {`<body data-page="prefixes" data-live="app">`, `id="prefix-title"`, `id="prefix-live"`, `id="prefix-probe"`, `id="prefix-timeline"`, `id="prefix-days"`, `src="/prefix.js"`, "MED is display only"},
 		"commit.html":          {`<body data-page="commit" data-live="app">`, "#174"},
 		"policies.html":        {`<body data-page="policies" data-live="app">`, "#130"},
 		"events.html":          {`<body data-page="events">`, `id="events"`, `id="audit"`, `id="tab-audit"`, `data-min-role="admin">Audit`, `id="ev-severity"`, `id="ev-q"`, `id="ev-range"`, `src="/events.js"`},
@@ -123,7 +124,7 @@ func TestUIShell(t *testing.T) {
 
 	e := newUI(t)
 	for _, path := range []string{
-		"/", "/improvements.html", "/prefixes.html", "/graphs.html", "/reports.html",
+		"/", "/improvements.html", "/prefixes.html", "/prefix/192.0.2.0/24", "/graphs.html", "/reports.html",
 		"/providers.html", "/commit.html", "/policies.html", "/protection.html",
 		"/troubleshooting.html", "/events.html", "/tokens.html", "/settings.html", "/admin.html", "/dashboards.html",
 	} {

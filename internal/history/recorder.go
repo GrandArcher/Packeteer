@@ -552,3 +552,15 @@ func (r *Recorder) Report(ctx context.Context, q Query) (Report, error) {
 	}
 	return Build(h, q)
 }
+
+// Prefix builds the stored history of one prefix for [q.From, q.To).
+func (r *Recorder) Prefix(ctx context.Context, p netip.Prefix, q Query) (PrefixHistory, error) {
+	h, err := r.History(ctx, q.From, q.To)
+	if err != nil {
+		return PrefixHistory{}, err
+	}
+	if q.Now.IsZero() {
+		q.Now = r.opt.Now()
+	}
+	return BuildPrefix(h, p, q), nil
+}

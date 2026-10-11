@@ -365,6 +365,20 @@ func optS(v *float64) string {
 	return f(*v)
 }
 
+func improvementRow(r plugin.ImprovementRecord, hours float64) ImprovementRow {
+	row := ImprovementRow{
+		Prefix: r.Prefix.String(), Provider: r.Provider, Native: r.Native, Cause: cause(r), Reason: r.Reason, Mode: r.Mode,
+		Start: r.Start.UTC(), EndReason: r.EndReason, Hours: round(hours),
+		BeforeLossPct: opt(r.HasBefore, r.BeforeLoss), BeforeRTTMs: opt(r.HasBefore, r.BeforeRTT),
+		AfterLossPct: opt(r.HasAfter, r.AfterLoss), AfterRTTMs: opt(r.HasAfter, r.AfterRTT),
+		OriginASN: r.OriginASN, Country: r.Country, VolumeMbps: r.VolumeMbps, CostDelta: r.CostDelta, EstSavings: r.EstSavings,
+	}
+	if !r.End.IsZero() {
+		row.End = r.End.UTC()
+	}
+	return row
+}
+
 func (a *agg) improvements(rep *Report) {
 	imps := slices.Clone(a.imps)
 	slices.SortFunc(imps, func(x, y plugin.ImprovementRecord) int {
@@ -380,16 +394,7 @@ func (a *agg) improvements(rep *Report) {
 	rep.head = []string{"prefix", "provider", "native", "cause", "reason", "mode", "start", "end", "end_reason", "hours",
 		"before_loss_pct", "after_loss_pct", "before_rtt_ms", "after_rtt_ms", "origin_asn", "country", "volume_mbps", "cost_delta", "est_savings"}
 	for _, r := range imps {
-		row := ImprovementRow{
-			Prefix: r.Prefix.String(), Provider: r.Provider, Native: r.Native, Cause: cause(r), Reason: r.Reason, Mode: r.Mode,
-			Start: r.Start.UTC(), EndReason: r.EndReason, Hours: round(a.hours(r)),
-			BeforeLossPct: opt(r.HasBefore, r.BeforeLoss), BeforeRTTMs: opt(r.HasBefore, r.BeforeRTT),
-			AfterLossPct: opt(r.HasAfter, r.AfterLoss), AfterRTTMs: opt(r.HasAfter, r.AfterRTT),
-			OriginASN: r.OriginASN, Country: r.Country, VolumeMbps: r.VolumeMbps, CostDelta: r.CostDelta, EstSavings: r.EstSavings,
-		}
-		if !r.End.IsZero() {
-			row.End = r.End.UTC()
-		}
+		row := improvementRow(r, a.hours(r))
 		rows = append(rows, row)
 		asn := ""
 		if r.OriginASN != 0 {
