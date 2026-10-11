@@ -8,7 +8,7 @@
 <title>Packeteer events</title>
 <link rel="stylesheet" href="/app.css">
 </head>
-<body data-page="events" data-live="app">
+<body data-page="events">
 <div id="banner" class="banner" role="status" hidden></div>
 <div id="conn" class="conn" role="alert" hidden></div>
 <div class="app">
@@ -49,12 +49,49 @@
 <main>
   <section>
     <h2>Events</h2>
-    <p class="empty">The events and audit log page is not built yet. It is tracked in #173.</p>
+    <div class="tabs" role="tablist" aria-label="Events and audit log">
+      <button type="button" role="tab" id="tab-events" aria-selected="true" aria-controls="panel-events">Events</button>
+      <button type="button" role="tab" id="tab-audit" aria-selected="false" aria-controls="panel-audit" data-min-role="admin">Audit</button>
+    </div>
+    <div id="panel-events" role="tabpanel" aria-labelledby="tab-events">
+      <p class="tag">What the controller reports to notifiers, newest first. This page only reads; it changes nothing. The catalog is in docs/EVENTS.md.</p>
+      <p id="events-kept" class="tag" role="status"></p>
+      <div class="form events-filter">
+        <label>Severity
+          <select id="ev-severity">
+            <option value="">All</option>
+            <option value="warning">Warning and critical</option>
+            <option value="critical">Critical</option>
+          </select>
+        </label>
+        <label>Search <input id="ev-q" type="search" maxlength="200" placeholder="Event, message, provider, prefix" autocomplete="off"></label>
+        <label>Range
+          <select id="ev-range">
+            <option value="">All kept</option>
+            <option value="1h">Last hour</option>
+            <option value="24h">Last 24 hours</option>
+            <option value="7d">Last 7 days</option>
+            <option value="30d">Last 30 days</option>
+            <option value="custom">Custom</option>
+          </select>
+        </label>
+        <label id="ev-from-wrap" hidden>From <input id="ev-from" type="datetime-local"></label>
+        <label id="ev-to-wrap" hidden>To <input id="ev-to" type="datetime-local"></label>
+      </div>
+      <p id="events-status" class="tag" role="status"></p>
+      <div id="events"></div>
+    </div>
+    <div id="panel-audit" role="tabpanel" aria-labelledby="tab-audit" hidden>
+      <p class="tag">Changes, denied changes, and sign-ins on the ops API, newest 200. Admin only. Passwords and token secrets are never recorded.</p>
+      <p id="audit-status" class="tag" role="status"></p>
+      <div id="audit"></div>
+    </div>
   </section>
 </main>
 </div>
 </div>
+<script src="/ui.js"></script>
 <script src="/shell.js"></script>
-<script src="/app.js"></script>
+<script src="/events.js"></script>
 </body>
 </html>

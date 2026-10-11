@@ -172,3 +172,43 @@ func TestNoNotifiers(t *testing.T) {
 	nilD.Emit(plugin.Event{})
 	_ = nilD.Close(context.Background())
 }
+
+type recorder struct {
+	mu  sync.Mutex
+	got []plugin.Event
+}
+
+func (r *recorder) Record(e plugin.Event) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.got = append(r.got, e)
+}
+
+// The recorder sees every event with the catalog defaults filled in, even
+// with no notifier configured and for events a notifier's filter drops.
+func TestRecorderSeesEveryEvent(t *testing.T) {
+	now := time.Unix(500, 0)
+	rec := &recorder{}
+	d := New(nil, Options{Recorder: rec, Now: func() time.Time { return now }})
+	if !d.Enabled() {
+		t.Fatal("a recorder alone must enable emitting")
+	}
+	d.Emit(plugin.Event{Kind: plugin.EventProviderDown, Message: "down"})
+	closeNow(t, d)
+	if len(rec.got) != 1 || rec.got[0].Severity != plugin.SeverityCritical || !rec.got[0].Time.Equal(now) {
+		t.Fatalf("recorded %+v", rec.got)
+	}
+
+	rec = &recorder{}
+	crit, _ := plugin.NewEventGate(plugin.EventFilter{MinSeverity: plugin.SeverityCritical})
+	f := &fake{gate: crit}
+	d = New([]Target{{Name: "f", Notifier: gated{f}}}, Options{Recorder: rec})
+	d.Emit(plugin.NewEvent(plugin.EventControllerStarted, time.Time{}, "up", nil))
+	closeNow(t, d)
+	if len(f.events()) != 0 {
+		t.Fatalf("the filter let an info event through: %+v", f.events())
+	}
+	if len(rec.got) != 1 || rec.got[0].Kind != plugin.EventControllerStarted {
+		t.Fatalf("the recorder missed an event the filter dropped: %+v", rec.got)
+	}
+}

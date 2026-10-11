@@ -144,6 +144,7 @@ Leave graceful restart off on the session. Guides:
 - [docs/routers.md](docs/routers.md) — what every router guide shares, what happens when the native path disappears, and exchange peers
 - [docs/route-reflector.md](docs/route-reflector.md) — several edge routers, per-router provider reachability, route reflectors, Internet exchange peers, and SIGHUP reload of neighbors, thresholds, policies, and sources
 - [docs/multi-pop.md](docs/multi-pop.md) — several POPs (routing domains) federated over mutual TLS: inter-DC RTT in the path cost, global commit across POPs, and the central view. Lab-proven only
+- [docs/leak-watch.md](docs/leak-watch.md) — how Packeteer keeps its routes inside your AS: the rails, and `leak_watch`, which withdraws and holds out a route seen outside the AS. Lab-proven only
 - [docs/policy-routing.md](docs/policy-routing.md) — probe sources behind the router
 - [docs/ui.md](docs/ui.md) — config editor and first-run wizard, custom dashboards, email report subscriptions, and improvement weights
 
@@ -245,7 +246,7 @@ The server is read-only (GET and HEAD), except on-demand maintenance windows (`P
 
 | Path | Body |
 |---|---|
-| `/` | Overview (#170): the mode banner (first on every page; observe says it announces nothing), tiles, and the setup checklist. Each area has its own URL under the left navigation: improvements, prefixes and ASNs, reports, providers, troubleshooting, settings, and the pages that are still empty states. See [docs/ui.md](docs/ui.md). When the controller cannot be reached, the page says so and keeps the last data, marked stale. |
+| `/` | Overview (#170): the mode banner (first on every page; observe says it announces nothing), tiles, and the setup checklist. Each area has its own URL under the left navigation: improvements, prefixes and ASNs, reports, providers, troubleshooting, settings, the events and audit log page (#173), and the pages that are still empty states. See [docs/ui.md](docs/ui.md). When the controller cannot be reached, the page says so and keeps the last data, marked stale. |
 | `/api/overview` | The dashboard's summary: mode, readiness, counts, per-provider probe results, optional features on or off, and the setup checklist (`setup`: `id`, `level` `todo`/`warn`/`info`, `title`, `detail`, `doc`). |
 | `/healthz` | Liveness. JSON `status` is `ok`. |
 | `/readyz` | Readiness. 503 until startup finishes, and until an iBGP session is up when neighbors are configured. |
@@ -264,6 +265,7 @@ The server is read-only (GET and HEAD), except on-demand maintenance windows (`P
 | `/api/troubleshoot/traceroute` | `POST {"target":"<address>","provider":"<optional name>"}`. UDP traceroute from each provider's source. Needs `troubleshoot.enabled`. |
 | `/api/troubleshoot/whois` | `POST {"query":"<address, prefix, or ASN>"}`. RDAP lookup through `troubleshoot.whois`. Needs `troubleshoot.enabled`. |
 | `/api/mitigations` | Threat mitigation rules (RTBH, BGP redirect, FlowSpec drop/rate-limit/redirect), the catalog, the mitigation allowlist, and the feed of recent changes. `POST {"prefix","action","target","ttl","reason"}` (FlowSpec adds `match`, `source_countries`, `rate_mbps`) adds a rule and `DELETE /api/mitigations/<id>` removes one, when `mitigation` is configured and basic auth is on ([docs/mitigation.md](docs/mitigation.md)). Lab-proven only. |
+| `/api/leaks` | Leak watch (#199): `state` (`watching` or `unknown`), each source's health, and the prefixes held out because a route was seen outside the AS. `POST /api/leaks/clear {"prefix"}` releases one, with auth ([docs/leak-watch.md](docs/leak-watch.md)). |
 | `/api/ha` | Active/standby role (#31): `role` (`active` or `standby`), `holder`, `eligible`, `detail`, `takeovers`. `ha_enabled: false` and `role: active` when `ha` is not configured ([docs/ha.md](docs/ha.md)). |
 | `/api/federation` | Central view of every federated instance (#30): this instance's published snapshot, each peer's freshness, last error, snapshot, and inter-DC RTT, and the global commits with each member's usage. Read-only. `enabled: false` when `federation` is not configured ([docs/multi-pop.md](docs/multi-pop.md)). |
 | `/api/me` | Who you are: `auth` (`rbac`, `basic`, or `off`), `user`, `role`, `method`. |

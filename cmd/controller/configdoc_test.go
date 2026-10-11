@@ -12,6 +12,7 @@ import (
 	"github.com/GrandArcher/Packeteer/internal/plugins/elector/lease"
 	"github.com/GrandArcher/Packeteer/internal/plugins/exec"
 	"github.com/GrandArcher/Packeteer/internal/plugins/federation/mtls"
+	"github.com/GrandArcher/Packeteer/internal/plugins/leaksource/rislive"
 	"github.com/GrandArcher/Packeteer/internal/plugins/notifier/smtp"
 	"github.com/GrandArcher/Packeteer/internal/plugins/notifier/snmptrap"
 	"github.com/GrandArcher/Packeteer/internal/plugins/notifier/webhook"
@@ -90,6 +91,8 @@ func TestConfigDocCoversStructs(t *testing.T) {
 		sqlite.Config{},
 		rdap.Config{},
 		bmp.Config{},
+		bmp.LeakConfig{},
+		rislive.Config{},
 		mtls.Config{},
 		mtls.Peer{},
 		lease.Config{},

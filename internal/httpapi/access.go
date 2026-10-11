@@ -51,6 +51,7 @@ func (s *Server) routeTable() []route {
 		{"GET /api/providers", viewer, s.handleProviders},
 		{"GET /api/probes", viewer, s.handleProbes},
 		{"GET /api/prefixes", viewer, s.handlePrefixes},
+		{"GET /api/prefixes/history", viewer, s.handlePrefixHistory},
 		{"GET /api/decisions", viewer, s.handleDecisions},
 		{"GET /api/improvements", viewer, s.handleImprovements},
 		{"GET /api/telemetry", viewer, s.handleTelemetry},
@@ -68,6 +69,8 @@ func (s *Server) routeTable() []route {
 		{"POST /api/mitigations", operator, s.handleMitigationAdd},
 		{"DELETE /api/mitigations/{id}", operator, s.handleMitigationRemove},
 		{"GET /api/anomalies", viewer, s.handleAnomalies},
+		{"GET /api/leaks", viewer, s.handleLeaks},
+		{"POST /api/leaks/clear", operator, s.handleLeakClear},
 		{"GET /api/troubleshoot", viewer, s.handleToolStatus},
 		{"GET /api/troubleshoot/lookingglass", viewer, s.handleLookingGlass},
 		{"POST /api/troubleshoot/probe", operator, s.handleToolProbe},
@@ -81,6 +84,7 @@ func (s *Server) routeTable() []route {
 		{"POST /api/users", admin, s.handleUserCreate},
 		{"PATCH /api/users/{name}", admin, s.handleUserUpdate},
 		{"DELETE /api/users/{name}", admin, s.handleUserDelete},
+		{"GET /api/events", viewer, s.handleEvents},
 		{"GET /api/audit", admin, s.handleAudit},
 		{"GET /api/config", admin, s.handleConfig},
 		{"POST /api/config/validate", admin, s.handleConfigValidate},
@@ -98,10 +102,11 @@ func (s *Server) routeTable() []route {
 		{"GET /auth/signin", public, s.handleSigninInfo},
 		{"POST /auth/signin", public, s.handleSignin},
 		{"POST /auth/logout", public, s.handleLogout},
-		{"GET /signin.html", public, servePublic("signin.html")},
-		{"GET /signin.js", public, servePublic("signin.js")},
-		{"GET /shell.js", public, servePublic("shell.js")},
-		{"GET /app.css", public, servePublic("app.css")},
+		{"GET /signin.html", public, serveFile("signin.html")},
+		{"GET /signin.js", public, serveFile("signin.js")},
+		{"GET /shell.js", public, serveFile("shell.js")},
+		{"GET /app.css", public, serveFile("app.css")},
+		{"GET /prefix/", viewer, serveFile("prefix.html")},
 		{"GET /", viewer, files.ServeHTTP},
 	}
 }
@@ -501,30 +506,41 @@ func (s *Server) handleTokenRevoke(w http.ResponseWriter, r *http.Request) {
 
 const maxAuditRows = 1000
 
+// parseRowsAndRange reads limit (1..max) and the RFC 3339 from and to of
+// a list request. On a bad value it writes the 400 and returns false.
+func parseRowsAndRange(w http.ResponseWriter, r *http.Request, def, max int) (limit int, from, to time.Time, ok bool) {
+	v := r.URL.Query()
+	limit = def
+	if l := v.Get("limit"); l != "" {
+		n, err := strconv.Atoi(l)
+		if err != nil || n < 1 || n > max {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "limit must be 1-" + strconv.Itoa(max)})
+			return 0, from, to, false
+		}
+		limit = n
+	}
+	for key, dst := range map[string]*time.Time{"from": &from, "to": &to} {
+		if t := v.Get(key); t != "" {
+			at, err := time.Parse(time.RFC3339, t)
+			if err != nil {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": key + ": want RFC 3339"})
+				return 0, from, to, false
+			}
+			*dst = at
+		}
+	}
+	return limit, from, to, true
+}
+
 func (s *Server) handleAudit(w http.ResponseWriter, r *http.Request) {
 	if !s.audit.Stored() {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": auth.ErrNoAuditStore.Error()})
 		return
 	}
 	q := plugin.AuditQuery{Limit: 100}
-	v := r.URL.Query()
-	if l := v.Get("limit"); l != "" {
-		n, err := strconv.Atoi(l)
-		if err != nil || n < 1 || n > maxAuditRows {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "limit must be 1-" + strconv.Itoa(maxAuditRows)})
-			return
-		}
-		q.Limit = n
-	}
-	for key, dst := range map[string]*time.Time{"from": &q.From, "to": &q.To} {
-		if t := v.Get(key); t != "" {
-			at, err := time.Parse(time.RFC3339, t)
-			if err != nil {
-				writeJSON(w, http.StatusBadRequest, map[string]string{"error": key + ": want RFC 3339"})
-				return
-			}
-			*dst = at
-		}
+	var ok bool
+	if q.Limit, q.From, q.To, ok = parseRowsAndRange(w, r, q.Limit, maxAuditRows); !ok {
+		return
 	}
 	recs, err := s.audit.Query(r.Context(), q)
 	if err != nil {
@@ -564,8 +580,8 @@ func (s *Server) handleCallback(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/", http.StatusFound)
 }
 
-// servePublic serves one embedded file without a sign-in.
-func servePublic(name string) http.HandlerFunc {
+// serveFile serves one embedded file. The route's role decides who may read it.
+func serveFile(name string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) { http.ServeFileFS(w, r, webRoot, name) }
 }
 

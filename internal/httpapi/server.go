@@ -27,6 +27,7 @@ import (
 
 	"github.com/GrandArcher/Packeteer/internal/anomaly"
 	"github.com/GrandArcher/Packeteer/internal/auth"
+	"github.com/GrandArcher/Packeteer/internal/eventlog"
 	"github.com/GrandArcher/Packeteer/internal/exchange"
 	"github.com/GrandArcher/Packeteer/internal/federation"
 	"github.com/GrandArcher/Packeteer/internal/inbound"
@@ -45,6 +46,9 @@ type Options struct {
 	Auth *auth.Service
 	// Audit records changes. Nil records nothing.
 	Audit *auth.Auditor
+	// Events keeps recent events for GET /api/events (#173). Nil makes
+	// that endpoint answer 404.
+	Events *eventlog.Log
 	// AllowFrom restricts client addresses (http.allow_from). Empty
 	// allows any.
 	AllowFrom []netip.Prefix
@@ -64,6 +68,8 @@ type Options struct {
 	// Anomaly is traffic anomaly detection (#33). Nil means it is not
 	// configured.
 	Anomaly func() anomaly.Status
+	// Leaks is the leak watch (#199). Nil means it is not enabled.
+	Leaks LeakControl
 	// Federation is the central view of every instance (#30). Nil means
 	// the instance runs standalone.
 	Federation func() federation.Status
@@ -92,6 +98,7 @@ type Server struct {
 	password   string
 	auth       *auth.Service
 	audit      *auth.Auditor
+	events     *eventlog.Log
 	allowFrom  []netip.Prefix
 	snap       func() Snapshot
 	maint      MaintenanceControl
@@ -100,6 +107,7 @@ type Server struct {
 	inbound    func() inbound.Status
 	mitigation MitigationControl
 	anomaly    func() anomaly.Status
+	leaks      LeakControl
 	federation func() federation.Status
 	ha         func() plugin.ElectorStatus
 	editor     ConfigEditor
@@ -145,7 +153,7 @@ func New(opt Options) (*Server, error) {
 	if opt.Logger == nil {
 		opt.Logger = slog.Default()
 	}
-	s := &Server{addr: opt.Addr, user: opt.User, password: opt.Password, auth: opt.Auth, audit: opt.Audit, allowFrom: opt.AllowFrom, snap: opt.Snapshot, maint: opt.Maintenance, reports: opt.Reports, tools: opt.Tools, inbound: opt.Inbound, mitigation: opt.Mitigation, anomaly: opt.Anomaly, federation: opt.Federation, ha: opt.HA,
+	s := &Server{addr: opt.Addr, user: opt.User, password: opt.Password, auth: opt.Auth, audit: opt.Audit, events: opt.Events, allowFrom: opt.AllowFrom, snap: opt.Snapshot, maint: opt.Maintenance, reports: opt.Reports, tools: opt.Tools, inbound: opt.Inbound, mitigation: opt.Mitigation, anomaly: opt.Anomaly, leaks: opt.Leaks, federation: opt.Federation, ha: opt.HA,
 		editor: opt.ConfigEditor, dashboards: opt.Dashboards, subs: opt.Subscriptions, log: opt.Logger}
 	setup := opt.Setup
 	s.setup.Store(&setup)
@@ -282,6 +290,9 @@ func (s *Server) handleMetrics(w http.ResponseWriter, _ *http.Request) {
 	}
 	if s.anomaly != nil {
 		_, _ = w.Write(AnomalyMetrics(s.anomaly()))
+	}
+	if s.leaks != nil {
+		_, _ = w.Write(LeakMetrics(s.leaks.Status()))
 	}
 	if s.ha != nil {
 		_, _ = w.Write(HAMetrics(s.ha()))

@@ -347,6 +347,7 @@ http:
 # the dashboard and /api/reports. An embedded SQLite file. Mount a volume on
 # /var/lib/packeteer so it survives a restart. The same file keeps SNMP
 # 95th-percentile samples for the open billing period when telemetry is on.
+# It also keeps recent events and the audit log for the Events page.
 # Delete this block to turn history off; probing and decisions do not depend
 # on it, and the 95th window then stays in memory only. Does not announce.
 storage:
@@ -557,3 +558,18 @@ plugin_dir: /etc/packeteer/plugins
 #           name: withhold
 #           withhold: true              # edge does not export to transit-b
 #           communities: ["64512:1209"]
+
+# Leak watch (#199, lab-proven only; see docs/leak-watch.md). Off unless
+# enabled. Needs packeteer_community. A route that carries the community, or
+# an injected prefix with your asn in its path (as_path_rule, off by default;
+# leave it off if you export transit to customers), seen outside the AS is
+# withdrawn alone and held out until POST /api/leaks/clear.
+# leak_watch:
+#   enabled: true
+#   as_path_rule: false
+#   sources:
+#     - type: bmp                       # routers outside the AS stream BMP here
+#       config:
+#         external_routers: [192.0.2.30]
+#         own_routers: [192.0.2.254]    # your edge: Adj-RIB-Out toward eBGP
+#     - type: rislive                   # public RIPE RIS Live, read-only

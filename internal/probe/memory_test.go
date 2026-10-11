@@ -83,9 +83,9 @@ func TestProberRecheckStartsAtChainHead(t *testing.T) {
 	var icmpAnswers atomic.Bool
 	icmp := &fakeProber{fn: func(_ context.Context, req plugin.ProbeRequest) (plugin.ProbeResult, error) {
 		if icmpAnswers.Load() {
-			return allReplies(nil, req)
+			return allReplies(context.TODO(), req)
 		}
-		return noReplies(nil, req)
+		return noReplies(context.TODO(), req)
 	}}
 	tcp := &fakeProber{fn: allReplies}
 	o := opts()
@@ -142,7 +142,7 @@ func TestProberMemoryBounded(t *testing.T) {
 	var icmpTargets []netip.Addr
 	icmp := &fakeProber{fn: func(_ context.Context, req plugin.ProbeRequest) (plugin.ProbeResult, error) {
 		icmpTargets = append(icmpTargets, req.Target)
-		return noReplies(nil, req)
+		return noReplies(context.TODO(), req)
 	}}
 	tcp := &fakeProber{fn: allReplies}
 	o := opts()
@@ -286,9 +286,9 @@ func TestProberMemoryKeepsHostThatIsNotDue(t *testing.T) {
 func TestProberMemorySharedAcrossProviders(t *testing.T) {
 	icmp := &fakeProber{fn: func(_ context.Context, req plugin.ProbeRequest) (plugin.ProbeResult, error) {
 		if req.Provider == provA.Name {
-			return allReplies(nil, req)
+			return allReplies(context.TODO(), req)
 		}
-		return noReplies(nil, req)
+		return noReplies(context.TODO(), req)
 	}}
 	tcp := &fakeProber{fn: allReplies}
 	o := opts()
@@ -326,9 +326,9 @@ func TestProberMemoryMovesForward(t *testing.T) {
 	icmp := &fakeProber{fn: noReplies}
 	tcp := &fakeProber{fn: func(_ context.Context, req plugin.ProbeRequest) (plugin.ProbeResult, error) {
 		if tcpSilent.Load() {
-			return noReplies(nil, req)
+			return noReplies(context.TODO(), req)
 		}
-		return allReplies(nil, req)
+		return allReplies(context.TODO(), req)
 	}}
 	udp := &fakeProber{fn: allReplies}
 	o := opts()
@@ -365,13 +365,13 @@ func TestRetryStaysOnRememberedProber(t *testing.T) {
 	tcp := &fakeProber{fn: func(_ context.Context, req plugin.ProbeRequest) (plugin.ProbeResult, error) {
 		n := tcpCalls.Add(1)
 		if n == 1 {
-			return allReplies(nil, req)
+			return allReplies(context.TODO(), req)
 		}
 		// Second round's first sample is lossy. The retry must stay on tcp.
 		if n == 2 {
 			return plugin.ProbeResult{Sent: req.Count, RTTs: ms(5)}, nil
 		}
-		return allReplies(nil, req)
+		return allReplies(context.TODO(), req)
 	}}
 	lim := &countingLimiter{}
 	o := opts()
@@ -410,7 +410,7 @@ func TestRememberedProberSourceDownFailsClosed(t *testing.T) {
 		if down.Load() {
 			return plugin.ProbeResult{}, fmt.Errorf("%w: 192.0.2.11", plugin.ErrSourceUnavailable)
 		}
-		return allReplies(nil, req)
+		return allReplies(context.TODO(), req)
 	}}
 	e := newChain(t, opts(), icmp, tcp, plugin.Target{Prefix: pfx1, Host: netip.MustParseAddr("198.51.100.1")})
 	e.RunOnce(context.Background())

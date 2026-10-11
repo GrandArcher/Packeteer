@@ -41,7 +41,7 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-      - uses: golangci/golangci-lint-action@v8
+      - uses: golangci/golangci-lint-action@v9
         with:
           version: v2.14.0
 
@@ -63,7 +63,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - uses: gitleaks/gitleaks-action@v2
+      - uses: gitleaks/gitleaks-action@v3
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -76,7 +76,7 @@ jobs:
         with:
           go-version-file: go.mod
       - name: build image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           load: true
@@ -184,7 +184,15 @@ jobs:
             --absent 'Cannot reach'
           bash lab/ui-smoke.sh "$base/reports.html" 'CSV' 'It announces nothing.'
           bash lab/ui-smoke.sh "$base/troubleshooting.html" 'Looking glass' 'It announces nothing.'
-          bash lab/ui-smoke.sh "$base/events.html" '#173' 'It announces nothing.'
+          # Events (#173): the controller.started event of this run is listed
+          # with its source, storage is on in the example so the page says
+          # events survive a restart, and the Audit tab is a tab, not a page.
+          curl -fsS "$base/api/events" | jq -e '.stored == true and (.events | map(.kind) | index("controller.started")) != null'
+          bash lab/ui-smoke.sh "$base/events.html" 'It announces nothing.' 'mode-observe' 'controller.started' '>controller<' \
+            'survive a restart' 'id="ev-severity"' 'id="ev-range"' 'id="tab-audit"' \
+            --absent 'Storage is off' 'Cannot reach' 'No events match.'
+          bash lab/ui-smoke.sh "$base/events.html#audit" 'It announces nothing.' 'id="panel-audit" role="tabpanel" aria-labelledby="tab-audit">' \
+            --absent 'Cannot reach'
           # Without auth the Admin and Tokens pages say users and tokens need it (#175).
           bash lab/ui-smoke.sh "$base/admin.html" 'id="users-off" class="empty">' 'It announces nothing.' \
             --absent 'id="users-on">' 'Your account may not read this page.'
@@ -441,6 +449,15 @@ jobs:
             --absent 'No before/after data' 'Cannot reach' 'mode-inject'
           bash lab/ui-smoke.sh http://127.0.0.1:18098/dashboards.html 'class="ts-chart"' 'Before/after graphs: 50% or more better' \
             'Data (5 days)' 'It announces nothing.' --absent 'No before/after data' 'Cannot reach'
+          # The prefix page (#179) reads the same seeded history: rollups and
+          # the improvement, worded "recommended" in observe, MED display-only,
+          # and a Probe now link that opens the Probe tool for the prefix.
+          curl -fsS "${auth[@]}" "$base/api/prefixes/history?prefix=198.51.100.0/24&days=7" | tee /tmp/ph179.json
+          jq -e '.enabled and (.days | length == 10) and (.improvements | length == 1) and .improvements[0].provider == "lab-b"' /tmp/ph179.json
+          bash lab/ui-smoke.sh http://127.0.0.1:18098/prefix/198.51.100.0/24 '198.51.100.0/24' 'Recommended' 'lab-b over lab-a' \
+            'probe rollup' 'MED is display only' 'href="/troubleshooting.html?tool=probe&amp;target=198.51.100.0%2F24"' 'mode-observe' 'It announces nothing.' \
+            --absent 'Announced' 'Cannot reach' 'mode-inject'
+          bash lab/ui-smoke.sh 'http://127.0.0.1:18098/troubleshooting.html?tool=probe&target=198.51.100.0/24' 'value="198.51.100.0/24"' 'It announces nothing.'
       - name: UI settings forms smoke (#130; flow, rules, VIP, outage, wizard flow step, observe)
         run: |
           set -euo pipefail
@@ -807,6 +824,18 @@ jobs:
             --absent 'aria-label="Delete admin"' 'aria-label="Delete viewer1"'
           bash lab/ui-smoke.sh http://127.0.0.1:18188/tokens.html 'It announces nothing.' 'Create a token' '>ci<' \
             --absent 'pkt_' 'Cannot reach'
+          # Events and audit log (#173). The admin's Audit tab lists the
+          # changes made above by actor, action, and target, and never a
+          # secret. The viewer sees the events but no Audit tab, and the
+          # audit read is refused for it.
+          bash lab/ui-smoke.sh http://127.0.0.1:18187/events.html#audit 'It announces nothing.' 'mode-observe' \
+            '>admin<' '>POST /api/users<' '>viewer1<' '>POST /api/tokens<' 'id="panel-audit" role="tabpanel" aria-labelledby="tab-audit">' \
+            --absent 'pkt_' 'ci-viewer-password' 'ci-admin-password-1' 'Cannot reach' 'Your account may not read'
+          bash lab/ui-smoke.sh http://127.0.0.1:18188/events.html 'It announces nothing.' 'controller.started' \
+            'id="tab-audit" aria-selected="false" aria-controls="panel-audit" data-min-role="admin" hidden=""' \
+            --absent 'Cannot reach'
+          bash lab/ui-smoke.sh http://127.0.0.1:18188/events.html#audit 'Your account may not read the audit log.' \
+            --absent 'POST /api/users'
           kill "$padmin" "$pviewer"
           stop
           # Restart on the same volume: users and tokens persist, and the
@@ -815,6 +844,9 @@ jobs:
           authup admin:ci-admin-password-1
           test "$(code -u admin:ci-admin-password-1 $base/api/providers)" = 200
           test "$(code -u admin:a-different-password $base/api/providers)" = 401
+          # Events survive the restart (#173): this run's start and the
+          # first run's start and stop are all in the stored log.
+          curl -fsS -u admin:ci-admin-password-1 "$base/api/events" | tee /tmp/events.json | jq -e '.stored == true and ([.events[] | select(.kind == "controller.started")] | length) >= 2 and ([.events[].kind] | index("controller.stopping")) != null'
           test "$(code -H "Authorization: Bearer $tok" $base/api/providers)" = 200
           stop
           # Rollback: no auth block. Reads work, every change is refused.
@@ -1014,6 +1046,8 @@ jobs:
         run: bash lab/e2e-anomaly.sh
       - name: FRR more-specific lab (learned more-specifics only, route cap, RIB leave, SIGTERM, SIGKILL)
         run: bash lab/e2e-more-specific.sh
+      - name: FRR leak watch lab (clean run no false positive, misconfigured export leaks one route and only that route is withdrawn, hold until cleared, BMP feed loss is unknown, SIGTERM, SIGKILL)
+        run: bash lab/e2e-leak-watch.sh
       - name: FRR improvement-weights lab (heavier prefix wins the cap, unlearned prefix never announced, RIB leave, no displacement, SIGTERM, restart, SIGKILL)
         run: bash lab/e2e-weights.sh
       - name: FRR multi-POP lab (two federated instances over mTLS, inter-DC RTT, peer loss, global commit, SIGTERM, SIGKILL)
@@ -1061,7 +1095,7 @@ jobs:
         with:
           go-version-file: go.mod
       - name: build image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           load: true
@@ -1071,7 +1105,7 @@ jobs:
         env:
           SOAK_OUT: load-result.json
         run: bash lab/soak.sh packeteer:ci pr
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: load-result

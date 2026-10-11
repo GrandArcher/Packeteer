@@ -79,6 +79,8 @@ type Env struct {
 	// asking for that check (unit tests). An empty non-nil slice rejects
 	// every name.
 	Providers []string
+	// ASN is the controller's own AS (config asn).
+	ASN uint32
 	// CheckOnly is set when the config is only being checked (the config
 	// editor, #34) and the instance is thrown away. A plugin must then
 	// validate its config without starting a process, opening a

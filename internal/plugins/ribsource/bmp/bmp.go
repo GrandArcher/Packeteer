@@ -28,6 +28,7 @@ import (
 	"log/slog"
 	"net"
 	"net/netip"
+	"slices"
 	"strconv"
 	"sync"
 	"time"
@@ -78,8 +79,11 @@ type Station struct {
 	listen  string
 	routers map[netip.Addr]bool
 	locRIB  bool
-	idle    time.Duration
-	log     *slog.Logger
+	// adjOut also decodes post-policy Adj-RIB-Out (RFC 8671). Only the
+	// leak source sets it: the RIB view never reads routes a router sends.
+	adjOut bool
+	idle   time.Duration
+	log    *slog.Logger
 
 	mu    sync.Mutex
 	sink  func(plugin.RIBEvent)
@@ -112,30 +116,18 @@ func New(c plugin.Config, env plugin.Env) (plugin.RIBSource, error) {
 	if s.listen == "" {
 		s.listen = ":" + strconv.Itoa(DefaultPort)
 	}
-	host, port, err := net.SplitHostPort(s.listen)
-	if err != nil {
-		return nil, fmt.Errorf("bmp: listen %q: %w", s.listen, err)
-	}
-	if n, err := strconv.Atoi(port); err != nil || n < 0 || n > 65535 {
-		return nil, fmt.Errorf("bmp: listen %q: port must be 0-65535", s.listen)
-	}
-	if host != "" {
-		if _, err := netip.ParseAddr(host); err != nil {
-			return nil, fmt.Errorf("bmp: listen %q: host must be an IP address", s.listen)
-		}
+	if err := checkListen(s.listen); err != nil {
+		return nil, err
 	}
 	if len(cfg.Routers) == 0 {
 		return nil, errors.New("bmp: routers is required (addresses allowed to connect)")
 	}
-	for i, r := range cfg.Routers {
-		a, err := netip.ParseAddr(r)
-		if err != nil {
-			return nil, fmt.Errorf("bmp: routers[%d]: %q is not an IP address", i, r)
-		}
-		if s.routers[a.Unmap()] {
-			return nil, fmt.Errorf("bmp: routers[%d]: duplicate %s", i, a)
-		}
-		s.routers[a.Unmap()] = true
+	addrs, err := parseRouters("routers", cfg.Routers)
+	if err != nil {
+		return nil, err
+	}
+	for _, a := range addrs {
+		s.routers[a] = true
 	}
 	switch cfg.Policy {
 	case "", "post":
@@ -154,11 +146,52 @@ func New(c plugin.Config, env plugin.Env) (plugin.RIBSource, error) {
 	return s, nil
 }
 
+// checkListen validates a host:port listen address.
+func checkListen(listen string) error {
+	host, port, err := net.SplitHostPort(listen)
+	if err != nil {
+		return fmt.Errorf("bmp: listen %q: %w", listen, err)
+	}
+	if n, err := strconv.Atoi(port); err != nil || n < 0 || n > 65535 {
+		return fmt.Errorf("bmp: listen %q: port must be 0-65535", listen)
+	}
+	if host != "" {
+		if _, err := netip.ParseAddr(host); err != nil {
+			return fmt.Errorf("bmp: listen %q: host must be an IP address", listen)
+		}
+	}
+	return nil
+}
+
+// parseRouters parses a list of router addresses and rejects duplicates.
+func parseRouters(field string, list []string) ([]netip.Addr, error) {
+	var out []netip.Addr
+	for i, r := range list {
+		a, err := netip.ParseAddr(r)
+		if err != nil {
+			return nil, fmt.Errorf("bmp: %s[%d]: %q is not an IP address", field, i, r)
+		}
+		a = a.Unmap()
+		if slices.Contains(out, a) {
+			return nil, fmt.Errorf("bmp: %s[%d]: duplicate %s", field, i, a)
+		}
+		out = append(out, a)
+	}
+	return out, nil
+}
+
 // SetRIBSink implements plugin.RIBSource.
 func (s *Station) SetRIBSink(fn func(plugin.RIBEvent)) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.sink = fn
+}
+
+// sessions is the number of routers with an open session.
+func (s *Station) sessions() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.conns)
 }
 
 // Addr is the bound listener address, once started.
@@ -276,6 +309,7 @@ func (s *Station) serve(router netip.Addr, sess *session) {
 	defer sess.conn.Close()
 	s.log.Info("bmp session up", "router", router)
 	d := newDecoder(router, s.locRIB, s.log)
+	d.adjOut = s.adjOut
 	var r io.Reader = sess.conn
 	if s.idle > 0 {
 		r = &idleReader{conn: sess.conn, idle: s.idle}
@@ -344,6 +378,7 @@ func readMessages(r io.Reader, fn func([]byte) error) error {
 type decoder struct {
 	router netip.Addr
 	locRIB bool
+	adjOut bool
 	log    *slog.Logger
 	// skip holds peers whose routes are ignored until the next peer up.
 	skip map[plugin.RIBPeer]string
@@ -360,7 +395,7 @@ func newDecoder(router netip.Addr, locRIB bool, log *slog.Logger) *decoder {
 // options gives the parser the add-path families negotiated for the peer
 // in a per-peer header. Only Adj-RIB-In routes use them: those are routes
 // the router received. The Loc-RIB and Adj-RIB-Out are never add-path
-// decoded here (Adj-RIB-Out is not read at all).
+// decoded here.
 func (d *decoder) options(h gobmp.BMPPeerHeader) []*bgp.MarshallingOption {
 	if h.PeerType != gobmp.BMP_PEER_TYPE_GLOBAL || h.IsAdjRIBOut() {
 		return nil
@@ -430,7 +465,8 @@ func (d *decoder) message(raw []byte) (evs []plugin.RIBEvent, stop bool) {
 			return nil, false
 		}
 		ev.Kind = plugin.RIBPaths
-		ev.PostPolicy = !peer.LocRIB
+		ev.AdjRIBOut = msg.PeerHeader.IsAdjRIBOut()
+		ev.PostPolicy = !peer.LocRIB && !ev.AdjRIBOut
 		ev.Paths = paths(upd)
 		d.log.Debug("bmp route monitoring", "router", d.router, "peer", peer.Address, "loc_rib", peer.LocRIB, "paths", len(ev.Paths))
 		if len(ev.Paths) == 0 {
@@ -470,7 +506,8 @@ func (d *decoder) undecodable(raw []byte, err error) []plugin.RIBEvent {
 }
 
 // peer maps a per-peer header to a RIBPeer, or false when this station
-// does not read that table (pre-policy or Adj-RIB-Out routes, L3VPN).
+// does not read that table (pre-policy routes, Adj-RIB-Out unless adjOut,
+// L3VPN).
 // Only route monitoring is filtered by the L and O flags: peer up and
 // peer down describe the session, and routers (FRR) send them with the
 // flags clear whichever table is monitored. A peer down must never be
@@ -478,7 +515,7 @@ func (d *decoder) undecodable(raw []byte, err error) []plugin.RIBEvent {
 func (d *decoder) peer(h gobmp.BMPPeerHeader, routes bool) (plugin.RIBPeer, bool) {
 	switch h.PeerType {
 	case gobmp.BMP_PEER_TYPE_GLOBAL:
-		if routes && (h.IsAdjRIBOut() || !h.IsPostPolicy()) {
+		if routes && (!h.IsPostPolicy() || (h.IsAdjRIBOut() && !d.adjOut)) {
 			return plugin.RIBPeer{}, false
 		}
 		a, ok := netip.AddrFromSlice(h.PeerAddress)
