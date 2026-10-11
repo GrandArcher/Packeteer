@@ -10,6 +10,7 @@ import (
 	"github.com/GrandArcher/Packeteer/internal/config"
 	"github.com/GrandArcher/Packeteer/internal/configedit"
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
+	"gopkg.in/yaml.v3"
 )
 
 // The #130 sections go through the same two calls as the older fields:
@@ -24,28 +25,28 @@ func TestConfigFormSections(t *testing.T) {
 		t.Fatalf("parse: %d %s", rec.Code, rec.Body)
 	}
 	fm := got["form"].(map[string]any)
-	for _, k := range []string{"flow", "policies", "vip", "outage"} {
-		if _, ok := fm[k].(map[string]any); !ok {
-			t.Fatalf("form has no %s section: %s", k, rec.Body)
+	for _, k := range []string{"flows", "policies", "vips", "outages"} {
+		if list, _ := fm[k].([]any); len(list) != 0 {
+			t.Fatalf("a file without sources has %s: %s", k, rec.Body)
 		}
 	}
-	if fm["flow"].(map[string]any)["enabled"] != false {
-		t.Fatalf("flow starts enabled: %v", fm["flow"])
-	}
 
-	fm["flow"] = map[string]any{"enabled": true, "listen": []string{"192.0.2.10:2055"}, "window": "10m", "top_n": "50", "min_pct": "0.5", "exclude": []string{"192.0.2.0/25"}}
-	fm["policies"] = map[string]any{"rules": []map[string]any{
-		{"name": "pin-a", "action": "static", "providers": []string{"transit-a"}, "prefixes": []string{"203.0.113.0/24"}, "max_loss_pct": "1", "max_rtt": "150ms"},
-		{"name": "no-b", "action": "deny", "providers": []string{"transit-b"}, "asns": []string{"64500"}},
-	}}
-	fm["vip"] = map[string]any{"enabled": true, "interval": "10s", "prefixes": []map[string]any{{"prefix": "198.51.100.0/24", "host": "198.51.100.1"}}}
-	fm["outage"] = map[string]any{"enabled": true, "min_prefixes": "4", "loss_pct": "30"}
+	fm["flows"] = []map[string]any{
+		{"name": "edge-a", "listen": []string{"192.0.2.10:2055"}, "window": "10m", "top_n": "50", "min_pct": "0.5", "aggregate_v4": "22", "exclude": []string{"192.0.2.0/25"}},
+		{"name": "edge-b", "listen": []string{"192.0.2.10:6343"}},
+	}
+	fm["policies"] = []map[string]any{
+		{"name": "pins", "rules": []map[string]any{{"name": "pin-a", "action": "static", "providers": []string{"transit-a"}, "prefixes": []string{"203.0.113.0/24"}, "max_loss_pct": "1", "max_rtt": "150ms"}}},
+		{"name": "denies", "rules": []map[string]any{{"name": "no-b", "action": "deny", "providers": []string{"transit-b"}, "asns": []string{"64500"}}}},
+	}
+	fm["vips"] = []map[string]any{{"interval": "10s", "prefixes": []map[string]any{{"prefix": "198.51.100.0/24", "host": "198.51.100.1"}}}}
+	fm["outages"] = []map[string]any{{"min_prefixes": "4", "loss_pct": "30"}}
 	rec, got = e.do(t, "POST", "/api/config/form", admin, map[string]any{"yaml": editorYAML, "apply": true, "form": fm})
 	if rec.Code != http.StatusOK {
 		t.Fatalf("apply: %d %s", rec.Code, rec.Body)
 	}
 	yml := got["yaml"].(string)
-	for _, want := range []string{"type: flow", "listen: 192.0.2.10:2055", "min_pct: 0.5", "type: rules", "name: pin-a", "max_loss_pct: 1", "type: vip", "type: outage", "min_prefixes: 4"} {
+	for _, want := range []string{"type: flow", "name: edge-a", "name: edge-b", "listen: 192.0.2.10:2055", "listen: 192.0.2.10:6343", "min_pct: 0.5", "aggregate_v4: 22", "name: pins", "name: denies", "name: pin-a", "name: no-b", "max_loss_pct: 1", "type: vip", "type: outage", "min_prefixes: 4"} {
 		if !strings.Contains(yml, want) {
 			t.Errorf("merged yaml missing %q:\n%s", want, yml)
 		}
@@ -57,13 +58,12 @@ func TestConfigFormSections(t *testing.T) {
 		t.Fatal("apply wrote the file")
 	}
 	// The read-back form has the sections again.
-	if back := got["form"].(map[string]any); back["flow"].(map[string]any)["enabled"] != true || len(back["policies"].(map[string]any)["rules"].([]any)) != 2 {
+	if back := got["form"].(map[string]any); len(back["flows"].([]any)) != 2 || len(back["policies"].([]any)) != 2 {
 		t.Fatalf("read-back = %v", back)
 	}
 
 	// Refused with the field named; nothing is written.
-	bad := map[string]any{"enabled": true, "listen": []string{"2055"}}
-	fm["flow"] = bad
+	fm["flows"] = []map[string]any{{"name": "edge-a", "listen": []string{"2055"}}}
 	rec, _ = e.do(t, "POST", "/api/config/form", admin, map[string]any{"yaml": editorYAML, "apply": true, "form": fm})
 	if rec.Code != http.StatusUnprocessableEntity && rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "flow.listen") {
 		t.Fatalf("bad flow: %d %s", rec.Code, rec.Body)
@@ -75,7 +75,7 @@ func TestConfigFormSections(t *testing.T) {
 		t.Fatalf("save: %d %s", rec.Code, rec.Body)
 	}
 	cfg, err := config.Load(e.path)
-	if err != nil || cfg.Mode != config.ModeObserve || len(cfg.Sources) != 3 || len(cfg.Policies) != 1 || cfg.Announcer != nil {
+	if err != nil || cfg.Mode != config.ModeObserve || len(cfg.Sources) != 4 || len(cfg.Policies) != 2 || cfg.Announcer != nil {
 		t.Fatalf("saved config: %v %+v", err, cfg)
 	}
 	var audited bool
@@ -96,7 +96,7 @@ func TestConfigFormSections(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("old client: %d %s", rec.Code, rec.Body)
 	}
-	if out := got["yaml"].(string); !strings.Contains(out, "type: flow") || !strings.Contains(out, "type: outage") || !strings.Contains(out, "name: pin-a") || !strings.Contains(out, "hold_time: 20m") {
+	if out := got["yaml"].(string); !strings.Contains(out, "name: edge-b") || !strings.Contains(out, "type: outage") || !strings.Contains(out, "name: no-b") || !strings.Contains(out, "hold_time: 20m") {
 		t.Fatalf("old client lost a section:\n%s", out)
 	}
 
@@ -105,6 +105,81 @@ func TestConfigFormSections(t *testing.T) {
 		if rec, _ := e.do(t, "POST", "/api/config/form", role, map[string]any{"yaml": editorYAML}); rec.Code != http.StatusForbidden {
 			t.Fatalf("%s: %d", role, rec.Code)
 		}
+	}
+}
+
+// #226: with two flow sources and two policies of the same type, editing
+// the second of each reaches the saved file and leaves the first alone.
+func TestSettingsEditSecondOfEachType(t *testing.T) {
+	const seeded = editorYAML + `sources:
+  - {type: flow, name: edge-a, config: {listen: "192.0.2.10:2055"}}
+  - {type: flow, name: edge-b, config: {listen: "192.0.2.10:6343"}}
+policies:
+  - type: rules
+    name: pins
+    config:
+      rules:
+        - {name: pin-a, action: allow, providers: [transit-a], prefixes: [203.0.113.0/24]}
+  - type: rules
+    name: denies
+    config:
+      rules:
+        - {name: no-b, action: deny, providers: [transit-b]}
+`
+	e := newUI(t)
+	admin := plugin.RoleAdmin
+	if err := os.WriteFile(e.path, []byte(seeded), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	rec, got := e.do(t, "POST", "/api/config/form", admin, map[string]any{"yaml": seeded})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("parse: %d %s", rec.Code, rec.Body)
+	}
+	fm := got["form"].(map[string]any)
+	flows, policies := fm["flows"].([]any), fm["policies"].([]any)
+	if len(flows) != 2 || len(policies) != 2 {
+		t.Fatalf("form lists %d flows and %d policies: %s", len(flows), len(policies), rec.Body)
+	}
+	flows[1].(map[string]any)["window"] = "7m"
+	flows[1].(map[string]any)["aggregate_v4"] = "20"
+	rules := policies[1].(map[string]any)["rules"].([]any)
+	rules[0].(map[string]any)["asns"] = []string{"64500"}
+
+	rec, got = e.do(t, "POST", "/api/config/form", admin, map[string]any{"yaml": seeded, "apply": true, "form": fm})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("apply: %d %s", rec.Code, rec.Body)
+	}
+	rec, _ = e.do(t, "PUT", "/api/config", admin, map[string]any{"yaml": got["yaml"], "base": configedit.Hash([]byte(seeded))})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("save: %d %s", rec.Code, rec.Body)
+	}
+	cfg, err := config.Load(e.path)
+	if err != nil || len(cfg.Sources) != 2 || len(cfg.Policies) != 2 {
+		t.Fatalf("saved config: %v %+v", err, cfg)
+	}
+	decode := func(n yaml.Node) map[string]any {
+		var m map[string]any
+		if err := n.Decode(&m); err != nil {
+			t.Fatal(err)
+		}
+		return m
+	}
+	a, b := decode(cfg.Sources[0].Config), decode(cfg.Sources[1].Config)
+	if _, ok := a["window"]; ok || a["listen"] != "192.0.2.10:2055" {
+		t.Errorf("first flow changed: %v", a)
+	}
+	if b["window"] != "7m" || b["aggregate_v4"] != 20 || b["listen"] != "192.0.2.10:6343" {
+		t.Errorf("second flow = %v", b)
+	}
+	p0, p1 := cfg.Policies[0], cfg.Policies[1]
+	if p0.InstanceName() != "pins" || p1.InstanceName() != "denies" {
+		t.Fatalf("policy order = %s, %s", p0.InstanceName(), p1.InstanceName())
+	}
+	if r := decode(p0.Config)["rules"].([]any)[0].(map[string]any); r["asns"] != nil {
+		t.Errorf("first policy changed: %v", r)
+	}
+	if r := decode(p1.Config)["rules"].([]any)[0].(map[string]any); r["asns"] == nil {
+		t.Errorf("second policy not edited: %v", r)
 	}
 }
 
@@ -137,16 +212,15 @@ func TestSettingsPageSections(t *testing.T) {
 	e := newUI(t)
 	rec, _ := e.do(t, "GET", "/settings.html", plugin.RoleViewer, nil)
 	html := rec.Body.String()
-	for _, w := range []string{`id="fl-enabled"`, `id="fl-listen"`, `id="fl-top-n"`, `id="fl-max-targets"`, `id="fl-tail"`, `id="fl-min-bytes"`, `id="fl-min-pct"`,
-		`id="fl-exclude"`, `id="form-rules"`, `id="form-add-rule"`, `id="vip-enabled"`, `id="vip-interval"`, `id="form-vip-prefixes"`, `id="out-enabled"`, `id="out-min"`,
-		`id="out-ignore"`, `id="wz-4"`, `id="wz-flow"`, `id="wz-flow-addr"`, `id="wz-flow-port"`, "Exporter setup", "do not publish it"} {
+	for _, w := range []string{`id="form-flows"`, `id="form-add-flow"`, `id="form-policies"`, `id="form-add-policy"`, `id="form-vips"`, `id="form-add-vip"`,
+		`id="form-outages"`, `id="form-add-outage"`, `id="wz-4"`, `id="wz-flow"`, `id="wz-flow-addr"`, `id="wz-flow-port"`, "Exporter setup", "do not publish it"} {
 		if !strings.Contains(html, w) {
 			t.Errorf("settings.html missing %q", w)
 		}
 	}
 	rec, _ = e.do(t, "GET", "/settings.js", plugin.RoleViewer, nil)
 	js := rec.Body.String()
-	for _, w := range []string{"function renderRules", "function renderVIPPrefixes", "function readSections", "function wizardFlowListen", "body.flow"} {
+	for _, w := range []string{"function renderFlows", "function renderPolicies", "function renderVIPs", "function renderOutages", "function moveButtons", "function readSections", "function wizardFlowListen", "body.flow"} {
 		if !strings.Contains(js, w) {
 			t.Errorf("settings.js missing %q", w)
 		}

@@ -8,7 +8,7 @@ function emptyForm() {
     min_rtt_delta_pct: "", confirm_rounds: "",
     precedence: "", scorer_type: "", floor_max_loss_pct: "", floor_max_rtt: "",
     providers: [], targets: [], allowlist: [],
-    flow: emptyFlow(), policies: {rules: []}, vip: emptyVIP(), outage: emptyOutage(),
+    flows: [], policies: [], vips: [], outages: [],
     inbound: emptyInbound(), anomaly: emptyAnomaly()};
 }
 
@@ -23,16 +23,27 @@ function emptyAnomaly() {
   return {enabled: false, mitigation_mode: "", mitigation_allowlist: [], rules: []};
 }
 
+// A new entry has no key: Apply adds it to the file. An existing entry
+// keeps the key the server gave it, so unseen config keys survive.
 function emptyFlow() {
-  return {enabled: false, listen: [], window: "", top_n: "", max_targets: "", tail_interval: "", min_bytes: "", min_pct: "", exclude: []};
+  return {key: "", name: "", listen: [], window: "", top_n: "", max_targets: "", tail_interval: "", min_bytes: "", min_pct: "",
+    aggregate_v4: "", aggregate_v6: "", exclude: []};
+}
+
+function emptyPolicy() {
+  return {key: "", name: "", geoip_db: "", rules: []};
+}
+
+function emptyRule() {
+  return {key: "", name: "", action: "ignore", providers: [], prefixes: [], asns: [], countries: [], traffic: "", max_loss_pct: "", max_rtt: ""};
 }
 
 function emptyVIP() {
-  return {enabled: false, interval: "", max_targets: "", prefixes: [], asns: []};
+  return {key: "", name: "", interval: "", max_targets: "", prefixes: [], asns: []};
 }
 
 function emptyOutage() {
-  return {enabled: false, min_prefixes: "", window: "", loss_pct: "", rtt_ms: "", interval: "", max_targets: "", ignore_asns: []};
+  return {key: "", name: "", min_prefixes: "", window: "", loss_pct: "", rtt_ms: "", interval: "", max_targets: "", ignore_asns: []};
 }
 
 // Lists in the form's text fields are comma or space separated.
@@ -72,11 +83,11 @@ function editorOff(err) {
   var node = document.getElementById("ed-off");
   node.textContent = explain(err);
   node.hidden = !off;
-  ["ed-load", "ed-check", "ed-save", "wz-run", "wz-next", "wz-next-2", "wz-back", "wz-back-3", "wz-add-provider", "wz-sug", "form-apply", "form-reload", "form-add-provider", "form-add-target", "form-add-allow", "sug-refresh", "form-add-rule", "form-add-vip", "form-add-anomaly-rule", "wz-next-3", "wz-back-4"].forEach(function (id) {
+  ["ed-load", "ed-check", "ed-save", "wz-run", "wz-next", "wz-next-2", "wz-back", "wz-back-3", "wz-add-provider", "wz-sug", "form-apply", "form-reload", "form-add-provider", "form-add-target", "form-add-allow", "sug-refresh", "form-add-flow", "form-add-policy", "form-add-vip", "form-add-outage", "form-add-anomaly-rule", "wz-next-3", "wz-back-4"].forEach(function (id) {
     var b = document.getElementById(id);
     if (b) b.disabled = off;
   });
-  ["form-fields", "form-flow", "form-vip", "form-outage", "form-inbound"].forEach(function (id) {
+  ["form-fields", "form-flows", "form-policies", "form-vips", "form-outages", "form-inbound"].forEach(function (id) {
     var fields = document.getElementById(id);
     if (fields) fields.disabled = off;
   });
@@ -138,27 +149,6 @@ function readKnobs() {
 
 function readSections() {
   var t = function (id) { return byId(id).value.trim(); };
-  form.flow.enabled = byId("fl-enabled").checked;
-  form.flow.listen = splitList(byId("fl-listen").value);
-  form.flow.window = t("fl-window");
-  form.flow.top_n = t("fl-top-n");
-  form.flow.max_targets = t("fl-max-targets");
-  form.flow.tail_interval = t("fl-tail");
-  form.flow.min_bytes = t("fl-min-bytes");
-  form.flow.min_pct = t("fl-min-pct");
-  form.flow.exclude = splitList(byId("fl-exclude").value);
-  form.vip.enabled = byId("vip-enabled").checked;
-  form.vip.interval = t("vip-interval");
-  form.vip.max_targets = t("vip-max");
-  form.vip.asns = splitList(byId("vip-asns").value);
-  form.outage.enabled = byId("out-enabled").checked;
-  form.outage.min_prefixes = t("out-min");
-  form.outage.window = t("out-window");
-  form.outage.loss_pct = t("out-loss");
-  form.outage.rtt_ms = t("out-rtt");
-  form.outage.interval = t("out-interval");
-  form.outage.max_targets = t("out-max");
-  form.outage.ignore_asns = splitList(byId("out-ignore").value);
   var inb = form.inbound;
   inb.enabled = byId("in-enabled").checked;
   inb.mode = byId("in-mode").value;
@@ -189,28 +179,6 @@ function setChecked(id, on) {
 }
 
 function fillSections() {
-  var f = form.flow, v = form.vip, o = form.outage;
-  setChecked("fl-enabled", f.enabled);
-  setVal("fl-listen", listText(f.listen));
-  setVal("fl-window", f.window);
-  setVal("fl-top-n", f.top_n);
-  setVal("fl-max-targets", f.max_targets);
-  setVal("fl-tail", f.tail_interval);
-  setVal("fl-min-bytes", f.min_bytes);
-  setVal("fl-min-pct", f.min_pct);
-  setVal("fl-exclude", listText(f.exclude));
-  setChecked("vip-enabled", v.enabled);
-  setVal("vip-interval", v.interval);
-  setVal("vip-max", v.max_targets);
-  setVal("vip-asns", listText(v.asns));
-  setChecked("out-enabled", o.enabled);
-  setVal("out-min", o.min_prefixes);
-  setVal("out-window", o.window);
-  setVal("out-loss", o.loss_pct);
-  setVal("out-rtt", o.rtt_ms);
-  setVal("out-interval", o.interval);
-  setVal("out-max", o.max_targets);
-  setVal("out-ignore", listText(o.ignore_asns));
   fillInbound();
   fillAnomalyState();
 }
@@ -284,51 +252,157 @@ function selectInput(options, value) {
   return sel;
 }
 
-function renderRules() {
-  var root = byId("form-rules");
-  clear(root);
-  form.policies.rules.forEach(function (r, i) {
-    var row = el("div", "row");
-    var name = rowInput(r.name, "name");
-    var action = selectInput(ruleActions, r.action);
-    var provs = rowInput(listText(r.providers), "transit-a");
-    var prefixes = rowInput(listText(r.prefixes), "203.0.113.0/24", true);
-    var asns = rowInput(listText(r.asns), "64500");
-    var countries = rowInput(listText(r.countries), "DE, FR");
-    var traffic = selectInput([["", "any traffic"], ["transit", "transit"], ["local", "local"]], r.traffic);
-    var loss = rowInput(r.max_loss_pct, "static only");
-    var rtt = rowInput(r.max_rtt, "150ms");
-    var set = function () {
-      var x = form.policies.rules[i];
-      x.name = name.value.trim();
-      x.action = action.value;
-      x.providers = splitList(provs.value);
-      x.prefixes = splitList(prefixes.value);
-      x.asns = splitList(asns.value);
-      x.countries = splitList(countries.value);
-      x.traffic = traffic.value;
-      x.max_loss_pct = loss.value.trim();
-      x.max_rtt = rtt.value.trim();
-    };
-    [name, provs, prefixes, asns, countries, loss, rtt].forEach(function (n) { n.addEventListener("input", set); });
-    [action, traffic].forEach(function (n) { n.addEventListener("change", set); });
-    row.appendChild(labeled("Rule name", name));
-    row.appendChild(labeled("Action", action));
-    row.appendChild(labeled("Providers", provs));
-    row.appendChild(labeled("Prefixes", prefixes));
-    row.appendChild(labeled("Origin ASNs", asns));
-    row.appendChild(labeled("Countries", countries));
-    row.appendChild(labeled("Traffic class", traffic));
-    row.appendChild(labeled("Max loss (%)", loss));
-    row.appendChild(labeled("Max RTT", rtt));
-    var minus = el("button", "small", "−");
-    minus.type = "button";
-    minus.title = "Remove rule";
-    minus.addEventListener("click", function () { form.policies.rules.splice(i, 1); renderRules(); });
-    row.appendChild(minus);
-    root.appendChild(row);
+// moveButtons returns up and down buttons that reorder list in place.
+function moveButtons(list, i, rerender, what) {
+  var out = [];
+  [["▲", -1, "Move " + what + " up"], ["▼", 1, "Move " + what + " down"]].forEach(function (d) {
+    var b = el("button", "small", d[0]);
+    b.type = "button";
+    b.title = d[2];
+    b.disabled = i + d[1] < 0 || i + d[1] >= list.length;
+    b.addEventListener("click", function () {
+      var moved = list.splice(i, 1)[0];
+      list.splice(i + d[1], 0, moved);
+      rerender();
+    });
+    out.push(b);
   });
-  if (!form.policies.rules.length) root.appendChild(el("p", "empty", "No rules. Native routing and the normal thresholds apply."));
+  return out;
+}
+
+function removeButton(list, i, rerender, what) {
+  var b = el("button", "small", "−");
+  b.type = "button";
+  b.title = "Remove " + what;
+  b.addEventListener("click", function () { list.splice(i, 1); rerender(); });
+  return b;
+}
+
+// entryCard is one source or policy. Its name is what a second entry of the
+// same type needs: the loader requires unique instance names.
+function entryCard(root, heading, list, i, rerender, what, ordered) {
+  var card = el("div", "card");
+  var head = el("div", "card-head");
+  head.appendChild(el("strong", "", heading + " " + (i + 1)));
+  if (ordered) moveButtons(list, i, rerender, what).forEach(function (b) { head.appendChild(b); });
+  head.appendChild(removeButton(list, i, rerender, what));
+  card.appendChild(head);
+  root.appendChild(card);
+  return card;
+}
+
+// bindField adds a text field that writes straight into obj[key]. A list
+// field is comma separated.
+function bindField(parent, label, obj, key, placeholder, isList, wide) {
+  var input = rowInput(isList ? listText(obj[key]) : obj[key], placeholder, wide);
+  input.addEventListener("input", function () { obj[key] = isList ? splitList(input.value) : input.value.trim(); });
+  parent.appendChild(labeled(label, input));
+}
+
+function entryRow(card) {
+  var row = el("div", "row");
+  card.appendChild(row);
+  return row;
+}
+
+function renderFlows() {
+  var root = byId("form-flows");
+  clear(root);
+  form.flows.forEach(function (f, i) {
+    var card = entryCard(root, "Flow source", form.flows, i, renderFlows, "flow source", false);
+    var a = entryRow(card), b = entryRow(card);
+    bindField(a, "Name (flow " + (i + 1) + ")", f, "name", "flow");
+    bindField(a, "Listen (flow " + (i + 1) + ")", f, "listen", "192.0.2.10:2055", true, true);
+    bindField(a, "Exclude (flow " + (i + 1) + ")", f, "exclude", "192.0.2.0/24", true);
+    bindField(b, "Window", f, "window", "5m");
+    bindField(b, "Top N", f, "top_n", "100");
+    bindField(b, "Max targets", f, "max_targets", "same as top_n");
+    bindField(b, "Tail interval", f, "tail_interval", "60s");
+    bindField(b, "Min bytes", f, "min_bytes", "0 (off)");
+    bindField(b, "Min share (%)", f, "min_pct", "0 (off)");
+    bindField(b, "Aggregate IPv4 (/n)", f, "aggregate_v4", "24");
+    bindField(b, "Aggregate IPv6 (/n)", f, "aggregate_v6", "48");
+  });
+  if (!form.flows.length) root.appendChild(el("p", "empty", "No flow sources."));
+}
+
+function renderOutages() {
+  var root = byId("form-outages");
+  clear(root);
+  form.outages.forEach(function (o, i) {
+    var card = entryCard(root, "Outage detection", form.outages, i, renderOutages, "outage detection", false);
+    var a = entryRow(card);
+    bindField(a, "Name (outage " + (i + 1) + ")", o, "name", "outage");
+    bindField(a, "Min prefixes", o, "min_prefixes", "3");
+    bindField(a, "Window", o, "window", "2m");
+    bindField(a, "Loss (%)", o, "loss_pct", "20");
+    bindField(a, "RTT (ms)", o, "rtt_ms", "0 (off)");
+    bindField(a, "Interval", o, "interval", "5s");
+    bindField(a, "Max targets", o, "max_targets", "100");
+    bindField(a, "Ignore ASNs", o, "ignore_asns", "64500", true);
+  });
+  if (!form.outages.length) root.appendChild(el("p", "empty", "No outage detection."));
+}
+
+function renderVIPs() {
+  var root = byId("form-vips");
+  clear(root);
+  form.vips.forEach(function (v, i) {
+    var card = entryCard(root, "VIP source", form.vips, i, renderVIPs, "VIP source", false);
+    var a = entryRow(card);
+    bindField(a, "Name (VIP " + (i + 1) + ")", v, "name", "vip");
+    bindField(a, "Interval", v, "interval", "10s");
+    bindField(a, "Max targets", v, "max_targets", "100");
+    bindField(a, "VIP ASNs", v, "asns", "64500", true);
+    v.prefixes.forEach(function (t, j) {
+      var row = entryRow(card);
+      bindField(row, "VIP prefix", t, "prefix", "203.0.113.0/24", false, true);
+      bindField(row, "Pinned host", t, "host", "203.0.113.1");
+      row.appendChild(removeButton(v.prefixes, j, renderVIPs, "VIP prefix"));
+    });
+    var add = el("button", "small", "+ VIP prefix");
+    add.type = "button";
+    add.addEventListener("click", function () { v.prefixes.push({key: "", prefix: "", host: ""}); renderVIPs(); });
+    card.appendChild(add);
+  });
+  if (!form.vips.length) root.appendChild(el("p", "empty", "No VIP sources."));
+}
+
+function ruleRow(card, p, r, j) {
+  var row = entryRow(card);
+  var action = selectInput(ruleActions, r.action);
+  var traffic = selectInput([["", "any traffic"], ["transit", "transit"], ["local", "local"]], r.traffic);
+  action.addEventListener("change", function () { r.action = action.value; });
+  traffic.addEventListener("change", function () { r.traffic = traffic.value; });
+  bindField(row, "Rule name", r, "name", "name");
+  row.appendChild(labeled("Action", action));
+  bindField(row, "Providers", r, "providers", "transit-a", true);
+  bindField(row, "Prefixes", r, "prefixes", "203.0.113.0/24", true, true);
+  bindField(row, "Origin ASNs", r, "asns", "64500", true);
+  bindField(row, "Countries", r, "countries", "DE, FR", true);
+  row.appendChild(labeled("Traffic class", traffic));
+  bindField(row, "Max loss (%)", r, "max_loss_pct", "static only");
+  bindField(row, "Max RTT", r, "max_rtt", "150ms");
+  moveButtons(p.rules, j, renderPolicies, "rule").forEach(function (b) { row.appendChild(b); });
+  row.appendChild(removeButton(p.rules, j, renderPolicies, "rule"));
+}
+
+// Rule order is evaluation order, so rules and policies both reorder.
+function renderPolicies() {
+  var root = byId("form-policies");
+  clear(root);
+  form.policies.forEach(function (p, i) {
+    var card = entryCard(root, "Policy", form.policies, i, renderPolicies, "policy", true);
+    var head = entryRow(card);
+    bindField(head, "Name (policy " + (i + 1) + ")", p, "name", "rules");
+    bindField(head, "GeoIP database (policy " + (i + 1) + ")", p, "geoip_db", "/etc/packeteer/country.mmdb", false, true);
+    p.rules.forEach(function (r, j) { ruleRow(card, p, r, j); });
+    var add = el("button", "small", "+ Rule");
+    add.type = "button";
+    add.addEventListener("click", function () { p.rules.push(emptyRule()); renderPolicies(); });
+    card.appendChild(add);
+  });
+  if (!form.policies.length) root.appendChild(el("p", "empty", "No policies. Native routing and the normal thresholds apply."));
 }
 
 var anomalyActions = [["blackhole", "blackhole"], ["redirect", "redirect"], ["flowspec_drop", "flowspec drop"],
@@ -376,27 +450,6 @@ function renderAnomalyRules() {
     root.appendChild(row);
   });
   if (!form.anomaly.rules.length) root.appendChild(el("p", "empty", "No anomaly rules. Anomalies are detected and reported, and no mitigation rule is added."));
-}
-
-function renderVIPPrefixes() {
-  var root = byId("form-vip-prefixes");
-  clear(root);
-  form.vip.prefixes.forEach(function (t, i) {
-    var row = el("div", "row");
-    var prefix = rowInput(t.prefix, "203.0.113.0/24", true);
-    var host = rowInput(t.host, "203.0.113.1");
-    prefix.addEventListener("input", function () { form.vip.prefixes[i].prefix = prefix.value.trim(); });
-    host.addEventListener("input", function () { form.vip.prefixes[i].host = host.value.trim(); });
-    row.appendChild(labeled("VIP prefix", prefix));
-    row.appendChild(labeled("Pinned host", host));
-    var minus = el("button", "small", "−");
-    minus.type = "button";
-    minus.title = "Remove VIP prefix";
-    minus.addEventListener("click", function () { form.vip.prefixes.splice(i, 1); renderVIPPrefixes(); });
-    row.appendChild(minus);
-    root.appendChild(row);
-  });
-  if (!form.vip.prefixes.length) root.appendChild(el("p", "empty", "No VIP prefixes."));
 }
 
 function fillKnobs() {
@@ -542,8 +595,10 @@ function renderForm() {
   renderProviders();
   renderTargets();
   renderAllow();
-  renderRules();
-  renderVIPPrefixes();
+  renderFlows();
+  renderPolicies();
+  renderVIPs();
+  renderOutages();
   renderAnomalyRules();
   renderSuggestions(lastSuggestions);
 }
@@ -555,17 +610,7 @@ function loadForm(yaml) {
     if (!form.providers) form.providers = [];
     if (!form.targets) form.targets = [];
     if (!form.allowlist) form.allowlist = [];
-    var blank = emptyForm();
-    form.flow = Object.assign(blank.flow, form.flow || {});
-    form.vip = Object.assign(blank.vip, form.vip || {});
-    form.outage = Object.assign(blank.outage, form.outage || {});
-    loadProtectionDefaults();
-    if (!form.policies) form.policies = blank.policies;
-    if (!form.policies.rules) form.policies.rules = [];
-    ["listen", "exclude"].forEach(function (k) { if (!form.flow[k]) form.flow[k] = []; });
-    if (!form.vip.prefixes) form.vip.prefixes = [];
-    if (!form.vip.asns) form.vip.asns = [];
-    if (!form.outage.ignore_asns) form.outage.ignore_asns = [];
+    loadFormDefaults();
     renderForm();
     formStatus("");
   }, function (err) {
@@ -589,12 +634,21 @@ function loadProtectionDefaults() {
 }
 
 function loadFormDefaults() {
-  var blank = emptyForm();
-  form.flow = Object.assign(blank.flow, form.flow || {});
-  form.vip = Object.assign(blank.vip, form.vip || {});
-  form.outage = Object.assign(blank.outage, form.outage || {});
   loadProtectionDefaults();
-  if (!form.policies) form.policies = blank.policies;
+  ["flows", "policies", "vips", "outages"].forEach(function (k) { if (!form[k]) form[k] = []; });
+  form.flows.forEach(function (f) {
+    ["listen", "exclude"].forEach(function (k) { if (!f[k]) f[k] = []; });
+  });
+  form.policies.forEach(function (p) {
+    if (!p.rules) p.rules = [];
+    p.rules.forEach(function (r) {
+      ["providers", "prefixes", "asns", "countries"].forEach(function (k) { if (!r[k]) r[k] = []; });
+    });
+  });
+  form.vips.forEach(function (v) {
+    ["prefixes", "asns"].forEach(function (k) { if (!v[k]) v[k] = []; });
+  });
+  form.outages.forEach(function (o) { if (!o.ignore_asns) o.ignore_asns = []; });
 }
 
 function applyForm() {
@@ -904,22 +958,29 @@ document.getElementById("form-add-allow").addEventListener("click", function () 
   renderAllow();
 });
 document.getElementById("sug-refresh").addEventListener("click", loadSuggestions);
-byId("form-add-rule").addEventListener("click", function () {
-  form.policies.rules.push({key: "", name: "", action: "ignore", providers: [], prefixes: [], asns: [], countries: [], traffic: "", max_loss_pct: "", max_rtt: ""});
-  renderRules();
+byId("form-add-flow").addEventListener("click", function () {
+  form.flows.push(emptyFlow());
+  renderFlows();
+});
+byId("form-add-policy").addEventListener("click", function () {
+  var p = emptyPolicy();
+  p.rules.push(emptyRule());
+  form.policies.push(p);
+  renderPolicies();
 });
 byId("form-add-anomaly-rule").addEventListener("click", function () {
   form.anomaly.rules.push({key: "", name: "", prefixes: [], protocols: [], min_mbps: "", action: "blackhole", target: "", rate_mbps: "", ttl: ""});
   renderAnomalyRules();
 });
 byId("form-add-vip").addEventListener("click", function () {
-  form.vip.prefixes.push({key: "", prefix: "", host: ""});
-  renderVIPPrefixes();
+  form.vips.push(emptyVIP());
+  renderVIPs();
 });
-["fl-enabled", "fl-listen", "fl-window", "fl-top-n", "fl-max-targets", "fl-tail", "fl-min-bytes", "fl-min-pct", "fl-exclude",
-  "vip-enabled", "vip-interval", "vip-max", "vip-asns",
-  "out-enabled", "out-min", "out-window", "out-loss", "out-rtt", "out-interval", "out-max", "out-ignore",
-  "in-enabled", "in-mode", "in-prefixes", "in-local-pref", "in-release", "in-cap", "in-mod-commit", "in-mod-perf", "in-perf",
+byId("form-add-outage").addEventListener("click", function () {
+  form.outages.push(emptyOutage());
+  renderOutages();
+});
+["in-enabled", "in-mode", "in-prefixes", "in-local-pref", "in-release", "in-cap", "in-mod-commit", "in-mod-perf", "in-perf",
   "in-perf-loss", "in-perf-latency", "in-perf-min", "in-perf-release", "in-damp-off", "in-damp-confirm", "in-damp-backoff", "in-damp-max"].forEach(function (id) {
   byId(id).addEventListener("change", readSections);
   byId(id).addEventListener("input", readSections);

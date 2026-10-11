@@ -5,6 +5,7 @@ import (
 	"net"
 	"net/netip"
 	"reflect"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -12,26 +13,35 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// Form sections added in #130: the flow source, the rules policy, the vip
-// source, and the outage source. Each section is a pointer on Form. A nil
-// section in a request means "leave it alone", so an older client that
-// does not know the section cannot remove it. ParseForm always fills them.
-// Applying a section edits the YAML text only; Save runs the same checks
-// as a start, and nothing here can turn inject on or announce.
+// Form sections: the flow, vip, and outage sources and the rules
+// policies (#130, every instance in #226). Each is a list on Form. A nil
+// list in a request means "leave it alone", so an older client that does
+// not know the section cannot remove it; an empty list removes every
+// entry of that type. ParseForm always fills them. Applying a section edits
+// the YAML text only; Save runs the same checks as a start, and nothing
+// here can turn inject on or announce.
 
 // Section limits. A larger edit belongs in the YAML.
 const (
 	MaxFormRules      = 1000
 	MaxFormListValues = 4096
+	MaxFormEntries    = 64
 )
 
-// FormFlow is the first `flow` source. Enabled false removes that source
-// from the file, including its problems, transit, and subranges blocks.
-// Those three blocks, and aggregate_v4/aggregate_v6, are kept as they are
-// while the source stays. TopN is the priority tier, MaxTargets the larger
-// capped set, and TailInterval the interval for the rest.
+// Every row has a Name, the entry's instance name. It is empty for a
+// single entry of a type (the type is the name). A second entry of the
+// same type needs its own name: config.Load refuses duplicates.
+
+// FormFlow is one `flow` source. Key is the source's position in `sources`
+// when the form was loaded; empty means a new source. Dropping a row
+// removes the source, including its problems, transit, and subranges
+// blocks. Those three blocks are kept as they are while the source stays.
+// TopN is the priority tier, MaxTargets the larger capped set, and
+// TailInterval the interval for the rest. AggregateV4 and AggregateV6 are
+// the lengths a destination with no covering learned prefix is grouped to.
 type FormFlow struct {
-	Enabled      bool     `json:"enabled"`
+	Key          string   `json:"key"`
+	Name         string   `json:"name"`
 	Listen       []string `json:"listen"`
 	Window       string   `json:"window"`
 	TopN         string   `json:"top_n"`
@@ -39,17 +49,24 @@ type FormFlow struct {
 	TailInterval string   `json:"tail_interval"`
 	MinBytes     string   `json:"min_bytes"`
 	MinPct       string   `json:"min_pct"`
+	AggregateV4  string   `json:"aggregate_v4"`
+	AggregateV6  string   `json:"aggregate_v6"`
 	Exclude      []string `json:"exclude"`
 }
 
-// FormPolicies is the first `rules` policy. An empty Rules list removes
-// that policy (the loader requires at least one rule). `geoip_db` and
-// every other policy in the chain stay in the YAML.
-type FormPolicies struct {
-	Rules []FormRule `json:"rules"`
+// FormPolicy is one `rules` policy. Key is its position in `policies`
+// when the form was loaded; empty means a new policy. Policies are asked
+// in file order, so the list order is the chain order. GeoIPDB is the
+// absolute path of a country database mounted into the container; a rule
+// with countries needs it.
+type FormPolicy struct {
+	Key     string     `json:"key"`
+	Name    string     `json:"name"`
+	GeoIPDB string     `json:"geoip_db"`
+	Rules   []FormRule `json:"rules"`
 }
 
-// FormRule is one rule. Key is the rule's position in the file when the
+// FormRule is one rule. Key is the rule's position in its policy when the
 // form was loaded; empty means a new rule. Rule order is the file order.
 type FormRule struct {
 	Key        string   `json:"key"`
@@ -64,18 +81,20 @@ type FormRule struct {
 	MaxRTT     string   `json:"max_rtt"`
 }
 
-// FormVIP is the first `vip` source. Enabled false removes it.
+// FormVIP is one `vip` source. Dropping the row removes it.
 type FormVIP struct {
-	Enabled    bool         `json:"enabled"`
+	Key        string       `json:"key"`
+	Name       string       `json:"name"`
 	Interval   string       `json:"interval"`
 	MaxTargets string       `json:"max_targets"`
 	Prefixes   []FormTarget `json:"prefixes"`
 	ASNs       []string     `json:"asns"`
 }
 
-// FormOutage is the first `outage` source. Enabled false removes it.
+// FormOutage is one `outage` source. Dropping the row removes it.
 type FormOutage struct {
-	Enabled     bool     `json:"enabled"`
+	Key         string   `json:"key"`
+	Name        string   `json:"name"`
 	MinPrefixes string   `json:"min_prefixes"`
 	Window      string   `json:"window"`
 	LossPct     string   `json:"loss_pct"`
@@ -88,25 +107,29 @@ type FormOutage struct {
 // ---- reading ----
 
 func readSections(root *yaml.Node, f *Form) error {
-	flow := FormFlow{Listen: []string{}, Exclude: []string{}}
-	if src, ok := firstSource(root, "flow"); ok {
-		flow.Enabled = true
-		if cfg, ok := mappingChild(src, "config"); ok {
-			flow.Listen = listOrScalar(cfg, "listen")
-			flow.Window = scalar(cfg, "window")
-			flow.TopN = scalar(cfg, "top_n")
-			flow.MaxTargets = scalar(cfg, "max_targets")
-			flow.TailInterval = scalar(cfg, "tail_interval")
-			flow.MinBytes = scalar(cfg, "min_bytes")
-			flow.MinPct = scalar(cfg, "min_pct")
-			flow.Exclude = scalarList(cfg, "exclude")
+	f.Flows = []FormFlow{}
+	for _, e := range typedEntries(root, "sources", "flow") {
+		fl := FormFlow{Key: e.key, Name: scalar(e.node, "name"), Listen: []string{}, Exclude: []string{}}
+		if cfg, ok := mappingChild(e.node, "config"); ok {
+			fl.Listen = listOrScalar(cfg, "listen")
+			fl.Window = scalar(cfg, "window")
+			fl.TopN = scalar(cfg, "top_n")
+			fl.MaxTargets = scalar(cfg, "max_targets")
+			fl.TailInterval = scalar(cfg, "tail_interval")
+			fl.MinBytes = scalar(cfg, "min_bytes")
+			fl.MinPct = scalar(cfg, "min_pct")
+			fl.AggregateV4 = scalar(cfg, "aggregate_v4")
+			fl.AggregateV6 = scalar(cfg, "aggregate_v6")
+			fl.Exclude = scalarList(cfg, "exclude")
 		}
+		f.Flows = append(f.Flows, fl)
 	}
-	f.Flow = &flow
 
-	pol := FormPolicies{Rules: []FormRule{}}
-	if node, ok := rulesPolicy(root); ok {
-		if cfg, ok := mappingChild(node, "config"); ok {
+	f.Policies = []FormPolicy{}
+	for _, e := range typedEntries(root, "policies", "rules") {
+		pol := FormPolicy{Key: e.key, Name: scalar(e.node, "name"), Rules: []FormRule{}}
+		if cfg, ok := mappingChild(e.node, "config"); ok {
+			pol.GeoIPDB = scalar(cfg, "geoip_db")
 			if seq, ok := sequenceChild(cfg, "rules"); ok {
 				for i, item := range seq.Content {
 					if item.Kind != yaml.MappingNode {
@@ -122,13 +145,13 @@ func readSections(root *yaml.Node, f *Form) error {
 				}
 			}
 		}
+		f.Policies = append(f.Policies, pol)
 	}
-	f.Policies = &pol
 
-	vip := FormVIP{Prefixes: []FormTarget{}, ASNs: []string{}}
-	if src, ok := firstSource(root, "vip"); ok {
-		vip.Enabled = true
-		if cfg, ok := mappingChild(src, "config"); ok {
+	f.VIPs = []FormVIP{}
+	for _, e := range typedEntries(root, "sources", "vip") {
+		vip := FormVIP{Key: e.key, Name: scalar(e.node, "name"), Prefixes: []FormTarget{}, ASNs: []string{}}
+		if cfg, ok := mappingChild(e.node, "config"); ok {
 			vip.Interval = scalar(cfg, "interval")
 			vip.MaxTargets = scalar(cfg, "max_targets")
 			vip.ASNs = scalarList(cfg, "asns")
@@ -142,13 +165,13 @@ func readSections(root *yaml.Node, f *Form) error {
 				}
 			}
 		}
+		f.VIPs = append(f.VIPs, vip)
 	}
-	f.VIP = &vip
 
-	out := FormOutage{IgnoreASNs: []string{}}
-	if src, ok := firstSource(root, "outage"); ok {
-		out.Enabled = true
-		if cfg, ok := mappingChild(src, "config"); ok {
+	f.Outages = []FormOutage{}
+	for _, e := range typedEntries(root, "sources", "outage") {
+		out := FormOutage{Key: e.key, Name: scalar(e.node, "name"), IgnoreASNs: []string{}}
+		if cfg, ok := mappingChild(e.node, "config"); ok {
 			out.MinPrefixes = scalar(cfg, "min_prefixes")
 			out.Window = scalar(cfg, "window")
 			out.LossPct = scalar(cfg, "loss_pct")
@@ -157,37 +180,31 @@ func readSections(root *yaml.Node, f *Form) error {
 			out.MaxTargets = scalar(cfg, "max_targets")
 			out.IgnoreASNs = scalarList(cfg, "ignore_asns")
 		}
+		f.Outages = append(f.Outages, out)
 	}
-	f.Outage = &out
 	return readProtection(root, f)
 }
 
-// firstSource is the first source of the given type.
-func firstSource(root *yaml.Node, typ string) (*yaml.Node, bool) {
-	seq, ok := sequenceChild(root, "sources")
-	if !ok {
-		return nil, false
-	}
-	for _, item := range seq.Content {
-		if item.Kind == yaml.MappingNode && scalar(item, "type") == typ {
-			return item, true
-		}
-	}
-	return nil, false
+// typedEntry is one plugin entry of a type. key is its index in the list.
+type typedEntry struct {
+	key  string
+	node *yaml.Node
 }
 
-// rulesPolicy is the first policies entry of type rules.
-func rulesPolicy(root *yaml.Node) (*yaml.Node, bool) {
-	seq, ok := sequenceChild(root, "policies")
+// typedEntries lists the entries of one plugin type in a top-level list
+// (`sources` or `policies`), in file order.
+func typedEntries(root *yaml.Node, listKey, typ string) []typedEntry {
+	seq, ok := sequenceChild(root, listKey)
 	if !ok {
-		return nil, false
+		return nil
 	}
-	for _, item := range seq.Content {
-		if item.Kind == yaml.MappingNode && scalar(item, "type") == "rules" {
-			return item, true
+	var out []typedEntry
+	for i, item := range seq.Content {
+		if item.Kind == yaml.MappingNode && scalar(item, "type") == typ {
+			out = append(out, typedEntry{strconv.Itoa(i), item})
 		}
 	}
-	return nil, false
+	return out
 }
 
 // listOrScalar reads a key that is one string or a list of them.
@@ -210,19 +227,26 @@ func trimAll(in []string) []string {
 
 func (f *Form) normalizeSections() {
 	f.normalizeProtection()
-	if fl := f.Flow; fl != nil {
+	for i := range f.Flows {
+		fl := &f.Flows[i]
+		fl.Key = strings.TrimSpace(fl.Key)
+		fl.Name = strings.TrimSpace(fl.Name)
 		fl.Listen = trimAll(fl.Listen)
 		fl.Exclude = trimAll(fl.Exclude)
-		for _, p := range []*string{&fl.Window, &fl.TopN, &fl.MaxTargets, &fl.TailInterval, &fl.MinBytes, &fl.MinPct} {
+		for _, p := range []*string{&fl.Window, &fl.TopN, &fl.MaxTargets, &fl.TailInterval, &fl.MinBytes, &fl.MinPct, &fl.AggregateV4, &fl.AggregateV6} {
 			*p = strings.TrimSpace(*p)
 		}
 	}
-	if p := f.Policies; p != nil {
+	for i := range f.Policies {
+		p := &f.Policies[i]
+		p.Key = strings.TrimSpace(p.Key)
+		p.Name = strings.TrimSpace(p.Name)
+		p.GeoIPDB = strings.TrimSpace(p.GeoIPDB)
 		if p.Rules == nil {
 			p.Rules = []FormRule{}
 		}
-		for i := range p.Rules {
-			r := &p.Rules[i]
+		for j := range p.Rules {
+			r := &p.Rules[j]
 			r.Key = strings.TrimSpace(r.Key)
 			r.Name = strings.TrimSpace(r.Name)
 			r.Action = strings.TrimSpace(r.Action)
@@ -235,21 +259,27 @@ func (f *Form) normalizeSections() {
 			r.Countries = trimAll(r.Countries)
 		}
 	}
-	if v := f.VIP; v != nil {
+	for i := range f.VIPs {
+		v := &f.VIPs[i]
+		v.Key = strings.TrimSpace(v.Key)
+		v.Name = strings.TrimSpace(v.Name)
 		v.Interval = strings.TrimSpace(v.Interval)
 		v.MaxTargets = strings.TrimSpace(v.MaxTargets)
 		v.ASNs = trimAll(v.ASNs)
 		if v.Prefixes == nil {
 			v.Prefixes = []FormTarget{}
 		}
-		for i := range v.Prefixes {
-			t := &v.Prefixes[i]
+		for j := range v.Prefixes {
+			t := &v.Prefixes[j]
 			t.Key = strings.TrimSpace(t.Key)
 			t.Prefix = strings.TrimSpace(t.Prefix)
 			t.Host = strings.TrimSpace(t.Host)
 		}
 	}
-	if o := f.Outage; o != nil {
+	for i := range f.Outages {
+		o := &f.Outages[i]
+		o.Key = strings.TrimSpace(o.Key)
+		o.Name = strings.TrimSpace(o.Name)
 		for _, p := range []*string{&o.MinPrefixes, &o.Window, &o.LossPct, &o.RTTMs, &o.Interval, &o.MaxTargets} {
 			*p = strings.TrimSpace(*p)
 		}
@@ -257,39 +287,45 @@ func (f *Form) normalizeSections() {
 	}
 }
 
-// fillSections gives a nil section the file's current value, so a request
-// that omits it changes nothing. Every list becomes non-nil.
+// fillSections gives a nil list the file's current value, so a request
+// that omits it changes nothing. Every inner list becomes non-nil so a
+// round trip compares equal.
 func (f *Form) fillSections(cur Form) {
 	f.fillProtection(cur)
-	if f.Flow == nil {
-		f.Flow = cur.Flow
+	if f.Flows == nil {
+		f.Flows = cur.Flows
 	}
 	if f.Policies == nil {
 		f.Policies = cur.Policies
 	}
-	if f.VIP == nil {
-		f.VIP = cur.VIP
+	if f.VIPs == nil {
+		f.VIPs = cur.VIPs
 	}
-	if f.Outage == nil {
-		f.Outage = cur.Outage
+	if f.Outages == nil {
+		f.Outages = cur.Outages
 	}
-	if f.Flow != nil {
-		if f.Flow.Listen == nil {
-			f.Flow.Listen = []string{}
+	for i := range f.Flows {
+		fl := &f.Flows[i]
+		if fl.Listen == nil {
+			fl.Listen = []string{}
 		}
-		if f.Flow.Exclude == nil {
-			f.Flow.Exclude = []string{}
+		if fl.Exclude == nil {
+			fl.Exclude = []string{}
 		}
 	}
-	if f.VIP != nil && f.VIP.ASNs == nil {
-		f.VIP.ASNs = []string{}
+	for i := range f.VIPs {
+		if f.VIPs[i].ASNs == nil {
+			f.VIPs[i].ASNs = []string{}
+		}
 	}
-	if f.Outage != nil && f.Outage.IgnoreASNs == nil {
-		f.Outage.IgnoreASNs = []string{}
+	for i := range f.Outages {
+		if f.Outages[i].IgnoreASNs == nil {
+			f.Outages[i].IgnoreASNs = []string{}
+		}
 	}
-	if f.Policies != nil {
-		for i := range f.Policies.Rules {
-			r := &f.Policies.Rules[i]
+	for i := range f.Policies {
+		for j := range f.Policies[i].Rules {
+			r := &f.Policies[i].Rules[j]
 			for _, l := range []*[]string{&r.Providers, &r.Prefixes, &r.ASNs, &r.Countries} {
 				if *l == nil {
 					*l = []string{}
@@ -303,17 +339,17 @@ func (f *Form) fillSections(cur Form) {
 // so a file the form does not fully model still lets the other fields be
 // applied. Save runs the full checks either way.
 func (f Form) withoutUnchangedSections(cur Form) Form {
-	if reflect.DeepEqual(f.Flow, cur.Flow) {
-		f.Flow = nil
+	if reflect.DeepEqual(f.Flows, cur.Flows) {
+		f.Flows = nil
 	}
 	if reflect.DeepEqual(f.Policies, cur.Policies) {
 		f.Policies = nil
 	}
-	if reflect.DeepEqual(f.VIP, cur.VIP) {
-		f.VIP = nil
+	if reflect.DeepEqual(f.VIPs, cur.VIPs) {
+		f.VIPs = nil
 	}
-	if reflect.DeepEqual(f.Outage, cur.Outage) {
-		f.Outage = nil
+	if reflect.DeepEqual(f.Outages, cur.Outages) {
+		f.Outages = nil
 	}
 	if reflect.DeepEqual(f.Inbound, cur.Inbound) {
 		f.Inbound = nil
@@ -325,8 +361,8 @@ func (f Form) withoutUnchangedSections(cur Form) Form {
 }
 
 func sectionsEqual(f, g Form) bool {
-	return reflect.DeepEqual(f.Flow, g.Flow) && reflect.DeepEqual(f.Policies, g.Policies) &&
-		reflect.DeepEqual(f.VIP, g.VIP) && reflect.DeepEqual(f.Outage, g.Outage) && protectionEqual(f, g)
+	return reflect.DeepEqual(f.Flows, g.Flows) && reflect.DeepEqual(f.Policies, g.Policies) &&
+		reflect.DeepEqual(f.VIPs, g.VIPs) && reflect.DeepEqual(f.Outages, g.Outages) && protectionEqual(f, g)
 }
 
 func validateListLen(name string, n int) error {
@@ -394,7 +430,40 @@ func validPrefixList(name string, list []string) error {
 	return nil
 }
 
+func (f Form) validateNames() error {
+	sources := map[string]bool{}
+	var names []string
+	for _, e := range f.Flows {
+		names = append(names, e.Name)
+	}
+	if err := checkNames("flow", names, sources); err != nil {
+		return err
+	}
+	names = nil
+	for _, e := range f.VIPs {
+		names = append(names, e.Name)
+	}
+	if err := checkNames("vip", names, sources); err != nil {
+		return err
+	}
+	names = nil
+	for _, e := range f.Outages {
+		names = append(names, e.Name)
+	}
+	if err := checkNames("outage", names, sources); err != nil {
+		return err
+	}
+	names = nil
+	for _, e := range f.Policies {
+		names = append(names, e.Name)
+	}
+	return checkNames("rules", names, map[string]bool{})
+}
+
 func (f Form) validateSections() error {
+	if err := f.validateNames(); err != nil {
+		return err
+	}
 	if err := f.validateFlow(); err != nil {
 		return err
 	}
@@ -410,18 +479,72 @@ func (f Form) validateSections() error {
 	return f.validateProtection()
 }
 
-func (f Form) validateFlow() error {
-	fl := f.Flow
-	if fl == nil || !fl.Enabled {
-		return nil
+// checkKeys refuses a list that names one existing entry twice.
+func checkKeys(noun string, keys []string) error {
+	seen := map[string]bool{}
+	for _, k := range keys {
+		if k == "" {
+			continue
+		}
+		if seen[k] {
+			return fmt.Errorf("%w: %s %s is listed twice", ErrForm, noun, k)
+		}
+		seen[k] = true
 	}
+	return nil
+}
+
+var instanceName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
+
+// checkNames refuses a bad or repeated instance name. A blank name is the
+// type, so two blanks of one type collide too.
+func checkNames(typ string, names []string, seen map[string]bool) error {
+	for _, n := range names {
+		if n != "" && !instanceName.MatchString(n) {
+			return fmt.Errorf("%w: %s name %q must be 1 to 64 letters, digits, dot, dash, or underscore", ErrForm, typ, n)
+		}
+		eff := n
+		if eff == "" {
+			eff = typ
+		}
+		if seen[eff] {
+			return fmt.Errorf("%w: two %s entries are named %q; give each its own name", ErrForm, typ, eff)
+		}
+		seen[eff] = true
+	}
+	return nil
+}
+
+func validateEntryCount(noun string, n int) error {
+	if n > MaxFormEntries {
+		return fmt.Errorf("%w: at most %d %s in the form", ErrForm, MaxFormEntries, noun)
+	}
+	return nil
+}
+
+func (f Form) validateFlow() error {
+	if err := validateEntryCount("flow sources", len(f.Flows)); err != nil {
+		return err
+	}
+	var keys []string
+	// Two collectors cannot bind the same UDP address.
+	bound := map[string]bool{}
+	for _, fl := range f.Flows {
+		keys = append(keys, fl.Key)
+		if err := validateOneFlow(fl, bound); err != nil {
+			return err
+		}
+	}
+	return checkKeys("flow source", keys)
+}
+
+func validateOneFlow(fl FormFlow, bound map[string]bool) error {
 	if len(fl.Listen) == 0 {
-		return fmt.Errorf("%w: flow: at least one listen address (host:port) is required; uncheck the collector to remove the source", ErrForm)
+		return fmt.Errorf("%w: flow: at least one listen address (host:port) is required; remove the source instead", ErrForm)
 	}
 	if err := validateListLen("flow.listen", len(fl.Listen)); err != nil {
 		return err
 	}
-	seen := map[string]bool{}
 	for _, l := range fl.Listen {
 		host, port, err := net.SplitHostPort(l)
 		if err != nil {
@@ -438,10 +561,10 @@ func (f Form) validateFlow() error {
 			host = a.String()
 		}
 		key := net.JoinHostPort(host, port)
-		if seen[key] {
+		if bound[key] {
 			return fmt.Errorf("%w: flow.listen: duplicate %s", ErrForm, l)
 		}
-		seen[key] = true
+		bound[key] = true
 	}
 	if err := validDuration("flow.window", fl.Window, time.Second, 24*time.Hour); err != nil {
 		return err
@@ -453,6 +576,12 @@ func (f Form) validateFlow() error {
 		return err
 	}
 	if err := validDuration("flow.tail_interval", fl.TailInterval, time.Second, 24*time.Hour); err != nil {
+		return err
+	}
+	if err := validInt("flow.aggregate_v4", fl.AggregateV4, 1, 32); err != nil {
+		return err
+	}
+	if err := validInt("flow.aggregate_v6", fl.AggregateV6, 1, 128); err != nil {
 		return err
 	}
 	if fl.MinBytes != "" {
@@ -469,21 +598,39 @@ func (f Form) validateFlow() error {
 var ruleActions = map[string]bool{"ignore": true, "allow": true, "deny": true, "static": true, "vip": true}
 
 func (f Form) validatePolicies() error {
-	p := f.Policies
-	if p == nil {
-		return nil
-	}
-	if len(p.Rules) > MaxFormRules {
-		return fmt.Errorf("%w: at most %d rules in the form", ErrForm, MaxFormRules)
+	if err := validateEntryCount("rules policies", len(f.Policies)); err != nil {
+		return err
 	}
 	provs := map[string]bool{}
 	for _, pr := range f.Providers {
 		provs[pr.Name] = true
 	}
+	var keys []string
+	total := 0
+	for i, p := range f.Policies {
+		keys = append(keys, p.Key)
+		total += len(p.Rules)
+		if total > MaxFormRules {
+			return fmt.Errorf("%w: at most %d rules in the form", ErrForm, MaxFormRules)
+		}
+		if err := validateOnePolicy(i, p, provs); err != nil {
+			return err
+		}
+	}
+	return checkKeys("rules policy", keys)
+}
+
+func validateOnePolicy(n int, p FormPolicy, provs map[string]bool) error {
+	if len(p.Rules) == 0 {
+		return fmt.Errorf("%w: policies[%d]: a rules policy needs at least one rule; remove the policy instead", ErrForm, n)
+	}
+	if p.GeoIPDB != "" && (!strings.HasPrefix(p.GeoIPDB, "/") || strings.ContainsAny(p.GeoIPDB, "\r\n")) {
+		return fmt.Errorf("%w: policies[%d]: geoip_db %q must be an absolute path (mount the file into the container)", ErrForm, n, p.GeoIPDB)
+	}
 	names := map[string]bool{}
 	keys := map[string]bool{}
 	for i, r := range p.Rules {
-		at := fmt.Sprintf("rules[%d]", i)
+		at := fmt.Sprintf("policies[%d] rules[%d]", n, i)
 		if r.Name != "" {
 			if strings.ContainsAny(r.Name, "\r\n") {
 				return fmt.Errorf("%w: %s: name must be one line", ErrForm, at)
@@ -492,7 +639,7 @@ func (f Form) validatePolicies() error {
 				return fmt.Errorf("%w: %s: duplicate name %s", ErrForm, at, r.Name)
 			}
 			names[r.Name] = true
-			at = fmt.Sprintf("rules[%d] (%s)", i, r.Name)
+			at = fmt.Sprintf("policies[%d] rules[%d] (%s)", n, i, r.Name)
 		}
 		if r.Key != "" {
 			if keys[r.Key] {
@@ -553,6 +700,9 @@ func (f Form) validatePolicies() error {
 		default:
 			return fmt.Errorf("%w: %s: traffic %q is invalid (want transit or local)", ErrForm, at, r.Traffic)
 		}
+		if len(r.Countries) > 0 && p.GeoIPDB == "" {
+			return fmt.Errorf("%w: %s: countries need a geoip_db on the policy", ErrForm, at)
+		}
 		if len(r.Prefixes) == 0 && len(r.ASNs) == 0 && len(r.Countries) == 0 && r.Traffic == "" {
 			return fmt.Errorf("%w: %s: a rule needs at least one of prefixes, asns, countries, or traffic", ErrForm, at)
 		}
@@ -561,10 +711,20 @@ func (f Form) validatePolicies() error {
 }
 
 func (f Form) validateVIP() error {
-	v := f.VIP
-	if v == nil || !v.Enabled {
-		return nil
+	if err := validateEntryCount("vip sources", len(f.VIPs)); err != nil {
+		return err
 	}
+	var keys []string
+	for _, v := range f.VIPs {
+		keys = append(keys, v.Key)
+		if err := validateOneVIP(v); err != nil {
+			return err
+		}
+	}
+	return checkKeys("vip source", keys)
+}
+
+func validateOneVIP(v FormVIP) error {
 	if v.Interval == "" {
 		return fmt.Errorf("%w: vip.interval is required (for example 10s)", ErrForm)
 	}
@@ -604,10 +764,20 @@ func (f Form) validateVIP() error {
 }
 
 func (f Form) validateOutage() error {
-	o := f.Outage
-	if o == nil || !o.Enabled {
-		return nil
+	if err := validateEntryCount("outage sources", len(f.Outages)); err != nil {
+		return err
 	}
+	var keys []string
+	for _, o := range f.Outages {
+		keys = append(keys, o.Key)
+		if err := validateOneOutage(o); err != nil {
+			return err
+		}
+	}
+	return checkKeys("outage source", keys)
+}
+
+func validateOneOutage(o FormOutage) error {
 	if err := validInt("outage.min_prefixes", o.MinPrefixes, 0, 10000); err != nil {
 		return err
 	}
@@ -638,52 +808,193 @@ func (f Form) validateOutage() error {
 // ---- applying ----
 
 func applySections(root *yaml.Node, cur, next Form) error {
-	if !reflect.DeepEqual(cur.Flow, next.Flow) {
-		applyFlow(root, next.Flow)
+	err := rewriteSection(root, "sources", "flow", cur.Flows, next.Flows, func(n *yaml.Node, e FormFlow) error { applyFlow(n, e); return nil })
+	if err == nil {
+		err = rewriteSection(root, "sources", "vip", cur.VIPs, next.VIPs, func(n *yaml.Node, e FormVIP) error { applyVIP(n, e); return nil })
 	}
-	if !reflect.DeepEqual(cur.VIP, next.VIP) {
-		applyVIP(root, next.VIP)
+	if err == nil {
+		err = rewriteSection(root, "sources", "outage", cur.Outages, next.Outages, func(n *yaml.Node, e FormOutage) error { applyOutage(n, e); return nil })
 	}
-	if !reflect.DeepEqual(cur.Outage, next.Outage) {
-		applyOutage(root, next.Outage)
+	if err == nil {
+		err = applyProtection(root, cur, next)
 	}
-	if err := applyProtection(root, cur, next); err != nil {
-		return err
+	if err == nil {
+		err = rewriteSection(root, "policies", "rules", cur.Policies, next.Policies, applyRules)
 	}
-	if !reflect.DeepEqual(cur.Policies, next.Policies) {
-		return applyRules(root, next.Policies)
-	}
-	return nil
+	return err
 }
 
-// sourceNode returns the first source of a type, creating it (type and an
-// empty config) when enabled and absent. Disabled removes it and returns
-// nil. A file with no sources key and nothing to enable is left alone.
-func sourceNode(root *yaml.Node, typ string, enabled bool) *yaml.Node {
-	seq, hasSeq := sequenceChild(root, "sources")
-	if !enabled {
-		if !hasSeq {
-			return nil
-		}
-		for i, item := range seq.Content {
-			if item.Kind == yaml.MappingNode && scalar(item, "type") == typ {
-				seq.Content = append(seq.Content[:i], seq.Content[i+1:]...)
-				break
-			}
-		}
-		if len(seq.Content) == 0 {
-			deleteKey(root, "sources")
-		}
+// entry is a form row that maps to one plugin entry in the file.
+type entry interface{ entryKey() string }
+
+func (e FormFlow) entryKey() string   { return e.Key }
+func (e FormVIP) entryKey() string    { return e.Key }
+func (e FormOutage) entryKey() string { return e.Key }
+func (e FormPolicy) entryKey() string { return e.Key }
+
+// rewriteSection applies a changed list. Entries that are the same as in
+// the file are not rewritten, so one edited source leaves its siblings
+// byte for byte alone.
+func rewriteSection[T entry](root *yaml.Node, listKey, typ string, cur, next []T, apply func(*yaml.Node, T) error) error {
+	if reflect.DeepEqual(cur, next) {
 		return nil
 	}
-	if src, ok := firstSource(root, typ); ok {
-		return src
+	keys := make([]string, len(next))
+	for i, e := range next {
+		keys[i] = e.entryKey()
 	}
-	seq = ensureSequence(root, "sources")
-	src := &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
-	setOrDelete(src, "type", typ, "!!str")
-	seq.Content = append(seq.Content, src)
-	return src
+	var applyErr error
+	err := rewriteTyped(root, listKey, typ, keys, func(i int, n *yaml.Node, isNew bool) {
+		e := next[i]
+		if !isNew {
+			for _, c := range cur {
+				if c.entryKey() == e.entryKey() && reflect.DeepEqual(c, e) {
+					return
+				}
+			}
+		}
+		if applyErr == nil {
+			applyErr = apply(n, e)
+		}
+	})
+	if err != nil {
+		return err
+	}
+	return applyErr
+}
+
+// keepsOrder reports that the form kept the file's entries in file order
+// and put every new entry after them. Then each kept entry stays in its
+// own slot and a dropped one just leaves, so removing a policy does not
+// move the ones after it past a policy of another type.
+func keepsOrder(keys []string, slots []int) bool {
+	pos := map[string]int{}
+	for n, i := range slots {
+		pos[strconv.Itoa(i)] = n
+	}
+	prev, newSeen := -1, false
+	for _, k := range keys {
+		if k == "" {
+			newSeen = true
+			continue
+		}
+		if newSeen || pos[k] <= prev {
+			return false
+		}
+		prev = pos[k]
+	}
+	return true
+}
+
+// placeTyped returns content with the typed entries replaced by next. In
+// order mode the kept entries keep their slots; otherwise next fills the
+// slots in form order. Entries beyond the slots go after the last slot.
+func placeTyped(content []*yaml.Node, slots []int, next []*yaml.Node, inOrder bool) []*yaml.Node {
+	isSlot := map[int]bool{}
+	for _, i := range slots {
+		isSlot[i] = true
+	}
+	kept := map[*yaml.Node]bool{}
+	for _, n := range next {
+		kept[n] = true
+	}
+	last := slots[len(slots)-1]
+	var out []*yaml.Node
+	j := 0
+	for i, item := range content {
+		switch {
+		case !isSlot[i]:
+			out = append(out, item)
+		case inOrder:
+			if kept[item] {
+				out = append(out, item)
+			}
+		case j < len(next):
+			out = append(out, next[j])
+			j++
+		}
+		if i != last {
+			continue
+		}
+		if inOrder {
+			for _, n := range next {
+				if !isOld(n, content, slots) {
+					out = append(out, n)
+				}
+			}
+		} else {
+			out = append(out, next[j:]...)
+		}
+	}
+	return out
+}
+
+func isOld(n *yaml.Node, content []*yaml.Node, slots []int) bool {
+	for _, i := range slots {
+		if content[i] == n {
+			return true
+		}
+	}
+	return false
+}
+
+// rewriteTyped rewrites the entries of one plugin type in a top-level
+// list. An entry with a key is the file's entry at that index and keeps
+// the keys the form does not show; an entry with no key is new. The
+// entries fill the slots the type already holds, in form order, so
+// entries of other types keep their place. Extra entries go after the
+// last slot, and entries the form dropped are removed. edit is called for
+// each entry.
+func rewriteTyped(root *yaml.Node, listKey, typ string, keys []string, edit func(i int, n *yaml.Node, isNew bool)) error {
+	seq, has := sequenceChild(root, listKey)
+	var slots []int
+	if has {
+		for i, item := range seq.Content {
+			if item.Kind == yaml.MappingNode && scalar(item, "type") == typ {
+				slots = append(slots, i)
+			}
+		}
+	}
+	old := map[string]*yaml.Node{}
+	for _, i := range slots {
+		old[strconv.Itoa(i)] = seq.Content[i]
+	}
+	next := make([]*yaml.Node, 0, len(keys))
+	used := map[*yaml.Node]bool{}
+	for i, k := range keys {
+		var n *yaml.Node
+		isNew := k == ""
+		if isNew {
+			n = &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
+			setOrDelete(n, "type", typ, "!!str")
+		} else {
+			n = old[k]
+			if n == nil {
+				return fmt.Errorf("%w: %s entry %s is not in the file anymore; reload the form", ErrForm, typ, k)
+			}
+			if used[n] {
+				return fmt.Errorf("%w: %s entry %s is listed twice", ErrForm, typ, k)
+			}
+		}
+		used[n] = true
+		edit(i, n, isNew)
+		next = append(next, n)
+	}
+	if len(next) == 0 && !has {
+		return nil
+	}
+	if !has {
+		seq = ensureSequence(root, listKey)
+	}
+	if len(slots) == 0 {
+		seq.Content = append(seq.Content, next...)
+	} else {
+		seq.Content = placeTyped(seq.Content, slots, next, keepsOrder(keys, slots))
+	}
+	if len(seq.Content) == 0 {
+		deleteKey(root, listKey)
+	}
+	return nil
 }
 
 // configOf is the source's config mapping. It is created when needed and
@@ -720,14 +1031,8 @@ func setStringList(m *yaml.Node, key string, vals []string, tag string) {
 	}
 }
 
-func applyFlow(root *yaml.Node, fl *FormFlow) {
-	if fl == nil {
-		return
-	}
-	src := sourceNode(root, "flow", fl.Enabled)
-	if src == nil {
-		return
-	}
+func applyFlow(src *yaml.Node, fl FormFlow) {
+	setOrDelete(src, "name", fl.Name, "!!str")
 	cfg := configOf(src)
 	// One address is written as a plain string, several as a list.
 	if len(fl.Listen) == 1 {
@@ -745,17 +1050,13 @@ func applyFlow(root *yaml.Node, fl *FormFlow) {
 	setOrDelete(cfg, "tail_interval", fl.TailInterval, "!!str")
 	setOrDelete(cfg, "min_bytes", fl.MinBytes, "!!int")
 	setOrDelete(cfg, "min_pct", fl.MinPct, "!!float")
+	setOrDelete(cfg, "aggregate_v4", fl.AggregateV4, "!!int")
+	setOrDelete(cfg, "aggregate_v6", fl.AggregateV6, "!!int")
 	setStringList(cfg, "exclude", fl.Exclude, "!!str")
 }
 
-func applyVIP(root *yaml.Node, v *FormVIP) {
-	if v == nil {
-		return
-	}
-	src := sourceNode(root, "vip", v.Enabled)
-	if src == nil {
-		return
-	}
+func applyVIP(src *yaml.Node, v FormVIP) {
+	setOrDelete(src, "name", v.Name, "!!str")
 	cfg := configOf(src)
 	setOrDelete(cfg, "interval", v.Interval, "!!str")
 	setOrDelete(cfg, "max_targets", v.MaxTargets, "!!int")
@@ -788,14 +1089,8 @@ func applyVIP(root *yaml.Node, v *FormVIP) {
 	setStringList(cfg, "asns", v.ASNs, "!!int")
 }
 
-func applyOutage(root *yaml.Node, o *FormOutage) {
-	if o == nil {
-		return
-	}
-	src := sourceNode(root, "outage", o.Enabled)
-	if src == nil {
-		return
-	}
+func applyOutage(src *yaml.Node, o FormOutage) {
+	setOrDelete(src, "name", o.Name, "!!str")
 	cfg := configOf(src)
 	setOrDelete(cfg, "min_prefixes", o.MinPrefixes, "!!int")
 	setOrDelete(cfg, "window", o.Window, "!!str")
@@ -807,34 +1102,10 @@ func applyOutage(root *yaml.Node, o *FormOutage) {
 	trimConfig(src)
 }
 
-func applyRules(root *yaml.Node, p *FormPolicies) error {
-	if p == nil {
-		return nil
-	}
-	node, exists := rulesPolicy(root)
-	if len(p.Rules) == 0 {
-		if !exists {
-			return nil
-		}
-		seq, _ := sequenceChild(root, "policies")
-		for i, item := range seq.Content {
-			if item == node {
-				seq.Content = append(seq.Content[:i], seq.Content[i+1:]...)
-				break
-			}
-		}
-		if len(seq.Content) == 0 {
-			deleteKey(root, "policies")
-		}
-		return nil
-	}
-	if !exists {
-		seq := ensureSequence(root, "policies")
-		node = &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
-		setOrDelete(node, "type", "rules", "!!str")
-		seq.Content = append(seq.Content, node)
-	}
+func applyRules(node *yaml.Node, p FormPolicy) error {
+	setOrDelete(node, "name", p.Name, "!!str")
 	cfg := ensureMapping(node, "config")
+	setOrDelete(cfg, "geoip_db", p.GeoIPDB, "!!str")
 	rules := ensureSequence(cfg, "rules")
 	old := map[string]*yaml.Node{}
 	for i, item := range rules.Content {
