@@ -61,6 +61,7 @@ The image entrypoint is the same binary. Flags go after the image name.
 | `inbound` | none | no | Inbound commit control: steer inbound traffic for your own prefixes away from a provider over commit with prepends and TE communities. Off unless set; its own `mode` defaults to `observe`. See [`inbound`](#inbound). Lab-proven only. |
 | `mitigation` | none | no | Threat mitigation: RTBH (blackhole), BGP redirect, and FlowSpec (drop, rate-limit, redirect, by source country too) for exact learned prefixes, added through `/api/mitigations`. Off unless set; its own `mode` defaults to `observe`. See [`mitigation`](#mitigation). Lab-proven only. |
 | `anomaly` | none | no | Automatic traffic anomaly (DDoS) detection: a detector plugin baselines flow volumes per destination prefix and IP protocol from a `flow` source and reports anomalies; an explicit rule can turn one into a mitigation rule, rate-limited and capped. Needs `mitigation` for rules. Off unless set. See [`anomaly`](#anomaly). Lab-proven only. |
+| `leak_watch` | none | no | Watches for Packeteer's routes outside the AS and withdraws a leaked route (one prefix, never in bulk), holding it out until an operator clears it. Off unless `enabled: true`. See [`leak_watch`](#leak_watch) and [leak-watch.md](leak-watch.md). Lab-proven only. |
 | `report_subscriptions` | none | no | Stored reports emailed as CSV on a daily, weekly, or monthly UTC schedule through an `smtp` notifier (#34). Needs `storage`. See [`report_subscriptions`](#report_subscriptions). Does not announce. |
 | `troubleshoot` | looking glass only | no | Read-only operator tools: looking glass, on-demand probe, traceroute, whois. Does not announce. See [`troubleshoot`](#troubleshoot). |
 
@@ -449,6 +450,18 @@ Each rule:
 | `ttl` | `mitigation.default_ttl` | The rule's lifetime, 1s to `mitigation.max_ttl`. The rule is removed earlier when the anomaly clears. |
 
 A rule the detector added is removed when its anomaly clears. The detector never replaces a rule someone else holds for the same key, adds nothing on an HA standby, and does not add a rule again for an anomaly whose rule expired or was deleted. When the flow source fails three rounds in a row, every anomaly clears, its rule is removed, and the baselines are learned again. Rollback: remove `rules` (alerts only) or the whole block and restart; a restart holds no rule.
+
+### `leak_watch`
+
+Leak watch (#199, not on a public edge). Contract: [leak-watch.md](leak-watch.md). Leak sources report routes seen outside the iBGP sessions. A route that carries `packeteer_community` (or, with `as_path_rule`, an injected prefix with `asn` in its path) is held out of outbound improvements and inbound steers and reported (`leak.detected`, `/api/leaks`) until `POST /api/leaks/clear` releases it.
+
+| Key | Default | Meaning |
+|---|---|---|
+| `enabled` | `false` | `true` turns the watch on. A block that is not enabled is ignored, sources included. Needs `packeteer_community` and at least one source. |
+| `as_path_rule` | `false` | Also flag an injected prefix seen outside with `asn` in its AS path. Leave off if you export transit routes to customers or list a customer router as a source: every injected prefix would match. |
+| `sources` | none | Leak source plugins, each `type` (and optional `name`, `config`): `bmp` ([Leak source `bmp`](#leak-source-bmp)) or `rislive` ([Leak source `rislive`](#leak-source-rislive)). In-process only. A source that is down is reported unknown and never blocks a withdraw. |
+
+An outbound route is withdrawn at once. An inbound steer is held and removed at the next inbound sync, and the leak shows `action: held`. Holds are in memory. Rollback: `enabled: false` and restart. The block is restart-only.
 
 ### `more_specific`
 
@@ -1267,6 +1280,26 @@ A standby takes a lease that is free or released at its next renewal. It takes a
 | Variable | Effect |
 |---|---|
 | `PACKETEER_HA_ID` | `id` when the config does not set it. |
+
+### Leak source `bmp`
+
+A BMP station for the leak watch (#199). It listens on its own port, separate from the [RIB source `bmp`](#rib-source-bmp), and nothing it receives enters the RIB view. It reads only post-policy tables: the Adj-RIB-In of `external_routers` (routers outside your AS) and the Adj-RIB-Out (RFC 8671) of `own_routers` toward eBGP peers. Pre-policy tables, Adj-RIB-Out of external routers, Adj-RIB-In of your own routers, and, in the Adj-RIB-Out of `own_routers`, sessions to a peer in your own AS are ignored. Healthy while at least one router has a session.
+
+| Key | Default | Meaning |
+|---|---|---|
+| `listen` | `:11020` | `host:port` for the station. |
+| `external_routers` | none | Addresses of routers outside the AS allowed to connect. |
+| `own_routers` | none | Addresses of your edge routers allowed to connect. An address cannot be in both lists, and at least one list is required. |
+| `idle_timeout` | off | Drop a router's session after this long without a BMP message (at least 10s). |
+
+### Leak source `rislive`
+
+Reads the public [RIPE RIS Live](https://ris-live.ripe.net) HTTP stream (#199). The subscription asks for UPDATE announcements whose AS path contains `asn`. The only request is the GET that opens the stream. A lost stream is retried after 5s, doubling to 5m; it is unhealthy meanwhile. A stream silent for 15 minutes is treated as lost and reopened, since the endpoint sends no keepalive. It needs the local `asn`. A route is seen only after it left the AS and propagated, so it complements a router-side source.
+
+| Key | Default | Meaning |
+|---|---|---|
+| `url` | `https://ris-live.ripe.net/v1/stream/` | Stream endpoint, `http` or `https`, without a query (`format=json` and `client` are added). |
+| `client` | `packeteer-leak-watch` | Client name sent to the service. |
 
 ### Detector `baseline`
 

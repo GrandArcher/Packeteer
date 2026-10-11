@@ -24,6 +24,7 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 
 ### Added
 
+- Leak watch (#199): optional `leak_watch` withdraws one injected route seen outside the AS and holds it out until `POST /api/leaks/clear`; rollback `enabled: false`.
 - Prefix detail page `/prefix/<prefix>` (#179): every improvement row, live and in the improvements and prefixes reports, links to the prefix card and a stored timeline, with a Probe now link. New read-only `GET /api/prefixes/history`.
 - Events and audit log page (#173): filterable recent events kept in `sqlite` storage or memory, an admin Audit tab, and a top bar count of new warnings.
 - Admin Users page and Tokens page over the existing /api/users and /api/tokens, with the same roles and audit (#175). Rollback: revert.
