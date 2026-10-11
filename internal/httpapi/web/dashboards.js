@@ -77,7 +77,7 @@ function renderWidget(w, box) {
     if (!r.ok) { body.appendChild(el("p", "empty", (r.data && r.data.error) || "unavailable")); return; }
     if (w.type === "timeseries") { renderTimeSeries(body, r.data, w.bucket || "all"); return; }
     var rows = firstArray(r.data);
-    if (rows) body.appendChild(dataTable(rows));
+    if (rows) body.appendChild(dataTable(rows, w.type === "improvements"));
     else body.appendChild(el("pre", "mono", formatJSON(r.data)));
   }, function (err) { clear(body); body.appendChild(el("p", "empty", err.message)); });
 }

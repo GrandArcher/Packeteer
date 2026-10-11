@@ -5,6 +5,7 @@ The remaining UI conveniences (#34). All of them work in the stock image with a 
 | Feature | Where | Who | Config |
 |---|---|---|---|
 | Before/after graphs (#129) | `/graphs.html`, `/api/reports/timeseries`, the `timeseries` dashboard widget | viewer | `storage: {type: sqlite}` |
+| Prefix detail and history (#179) | `/prefix/<prefix>`, `/api/prefixes/history` | viewer | `storage: {type: sqlite}` for the timeline |
 | Events and audit log (#173) | `/events.html`, `/api/events`, `/api/audit` | viewer for events, admin for the audit tab | `storage: {type: sqlite}` keeps events across a restart |
 | Users and API tokens (#175) | `/admin.html`, `/tokens.html`, `/api/users`, `/api/tokens` | admin for users, every signed-in user for tokens | `storage` + `auth.enabled` |
 | Dashboard overview and setup checklist (#49) | `/`, `/api/overview` | viewer | none |
@@ -62,6 +63,18 @@ A form adds a local user (`POST /api/users`). An SSO user's role comes from the 
 **Tokens** (`/tokens.html`, every signed-in user). A table of the user's tokens (an admin sees everyone's) with role, created, expires, and status, and a revoke button (two clicks). The create form takes a name, a role up to the user's own (default `viewer`), and a lifetime in hours (empty is `auth.token_ttl`). The secret appears once, in a box that stays until it is closed or the page is left; it is not in the table or the audit log, is never written to a cookie or browser storage, and closing the box removes it from the page. A request signed with an API token can list and revoke but not create, and the page says so.
 
 A password typed into the Admin page is sent and the field is cleared. Every change is written to the audit log with its actor, as for a script.
+
+## Prefix detail and history
+
+Every improvement row opens `/prefix/<prefix>` (#179), for example `/prefix/192.0.2.0/24` or `/prefix/2001:db8::/32`. The URL is shareable and a reload opens the same page. The links are on the Improvements page, the Improvements and Prefixes reports on Reports, and the improvements widget of a custom dashboard. The page is read-only and announces nothing; the mode banner is on top in every mode.
+
+- **Card.** The same card as the Prefixes page: per-provider loss, RTT, and jitter, the current and recommended exit, measured sub-ranges, and learned paths with AS path, via, and MED. MED is labelled display only and does not choose the exit. It refreshes every five seconds. For a prefix Packeteer is not measuring now, the page says so and still shows the stored timeline.
+- **Timeline.** Newest first, for 7, 30, 90, or 365 days: the daily probe rollup of each provider toward the prefix (UTC day, probes, failures, average loss, RTT, and jitter) and each improvement's start and end with provider, native provider, cause, reason, and the loss and RTT of both paths when it started (before and after) and why it ended. A record made in `observe` or `suggest` reads "Recommended"; only a record made in `inject` reads "Announced". Days are the finest history the store keeps. Without `storage: {type: sqlite}` the page says history is off.
+- **Probe now.** A link to `/troubleshooting.html?tool=probe&target=<prefix>`, which opens the Probe tool with the tool and target filled in. Nothing runs until Run is pressed, and Probe keeps its operator role and rate limit ([troubleshooting](troubleshooting.md)).
+
+`GET /api/prefixes/history?prefix=<prefix>&days=7` (viewer; `days`, or `from` and `to`, like the reports) returns `enabled`, `prefix`, `from`, `to`, `days` (`day`, `provider`, `probes`, `failed`, and the averages `loss_pct`, `rtt_ms`, `jitter_ms` when any probe returned statistics), and `improvements` (the rows of the improvements report, including `mode`). The prefix must be a network in CIDR form; anything else is a `400`. The match is exact: a covering or covered prefix is a different prefix. With no storage plugin it returns `enabled: false`.
+
+CI loads the page twice in the graphs step of the docker job (`lab/ui-smoke.sh`), against history seeded by `lab/mkhistory`: the timeline, the "Recommended" wording with no "Announced", the MED label, and the Probe now link; then the Probe tool with the prefix filled in. `internal/history` and `internal/httpapi` tests cover the filtering, the API, and the page wiring.
 
 ## Events and audit log
 
