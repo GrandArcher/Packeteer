@@ -730,7 +730,7 @@ jobs:
           curl -fsS -u admin:ci-admin-password-1 "$base/api/audit" | tee /tmp/audit2.json
           grep -q '"action":"auth.login","target":"viewer1","result":"denied"' /tmp/audit2.json
           grep -q '"actor":"viewer1","role":"viewer","method":"password","remote":"127.0.0.1","action":"auth.login"' /tmp/audit2.json
-          grep -q '"actor":"viewer1","role":"viewer","method":"password","remote":"127.0.0.1","action":"auth.logout"' /tmp/audit2.json
+          grep -q '"actor":"viewer1","method":"password","remote":"127.0.0.1","action":"auth.logout","target":"viewer1","result":"ok"' /tmp/audit2.json
           if grep -q 'wrong-password-x\|ci-viewer-password' /tmp/audit2.json; then echo "password in the audit log"; exit 1; fi
           stop
           # Restart on the same volume: users and tokens persist, and the
