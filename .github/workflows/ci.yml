@@ -971,6 +971,8 @@ jobs:
         run: bash lab/e2e-anomaly.sh
       - name: FRR more-specific lab (learned more-specifics only, route cap, RIB leave, SIGTERM, SIGKILL)
         run: bash lab/e2e-more-specific.sh
+      - name: FRR leak watch lab (clean run no false positive, misconfigured export leaks one route and only that route is withdrawn, hold until cleared, BMP feed loss is unknown, SIGTERM, SIGKILL)
+        run: bash lab/e2e-leak-watch.sh
       - name: FRR improvement-weights lab (heavier prefix wins the cap, unlearned prefix never announced, RIB leave, no displacement, SIGTERM, restart, SIGKILL)
         run: bash lab/e2e-weights.sh
       - name: FRR multi-POP lab (two federated instances over mTLS, inter-DC RTT, peer loss, global commit, SIGTERM, SIGKILL)

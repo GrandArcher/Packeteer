@@ -24,13 +24,13 @@ Milestones:
 | v0.2 | 25 |
 | v0.3 | 17 |
 | v0.4 | 13 |
-| v0.6 | 5 |
+| v0.6 | 6 |
 | won't do | 2 |
-| **total** | 86 |
+| **total** | 87 |
 
 | Status | Count |
 |---|---|
-| done | 71 |
+| done | 72 |
 | partial | 10 |
 | in progress | 0 |
 | planned | 3 |
@@ -132,6 +132,7 @@ Routing policies (#20) are `policy` plugins, a filter chain in front of the scor
 | iBGP injection with local-pref, communities, next-hop | done (lab-proven): global `local_pref`, optional per-cause and per-provider `local_pref`, optional extra communities per cause (`communities_cause`) and per provider (`providers[].communities`), and large communities (RFC 8092) on `packeteer_community` and those extras (#132). Extras are added after `packeteer_community`. The export policy matches only `packeteer_community`. The FRR lab checks the per-cause `local_pref` and the extra communities on the edge and withdraws them on SIGTERM and SIGKILL | v0.1 | announcer (`gobgp`) + core (`internal/announce`) | #8, #132 | no (lab-proven) |
 | More-specific injection (learned more-specifics only, `more_specific.max_routes` route cap) | done (lab-proven) | v0.3 | announcer (`gobgp`) + core (`internal/announce`) | #56 | no (lab-proven) |
 | Synthesized more-specific injection (opt-in `synthesize`: sub-ranges of a prefix a neighbor already advertises, covering-prefix allowlist, `max_bits`, route cap, community + NO_EXPORT + marker) | planned | v0.6 | announcer (`gobgp`) + core (`internal/announce`) | #122 (charter #114) | — |
+| Leak watch: withdraws and holds out a single injected route seen outside the AS (community; opt-in `as_path_rule`: injected prefix with the local ASN in its path); sources BMP (outside Adj-RIB-In, own Adj-RIB-Out) and RIPE RIS Live; a down source is unknown | done (lab-proven) | v0.6 | leak source (`bmp`, `rislive`) + core (`internal/leakwatch`) | #199 | no (lab-proven) |
 | RIB view from iBGP (learn current best exits) | done | v0.1 | core (`internal/rib`) | #6 | no |
 | BGP session health and withdraw when a still-advertised prefix leaves the RIB (a best-path hide is kept, not flapped) | done | v0.1 | announcer | #8, #43 | no |
 | AS-path behavior options (`bgp.as_path`: empty, native, or the chosen provider's learned path) | done (lab-proven) | v0.3 | announcer (`gobgp`) + core | #27 | no (lab-proven) |
@@ -142,6 +143,8 @@ Routing policies (#20) are `policy` plugins, a filter chain in front of the scor
 | Internet exchanges / many peers with per-peer next-hop (peers as route-checked providers, exchange statistics, discovered members) | done (lab-proven) | v0.3 | core (`exchanges`, `internal/rib`, `internal/exchange`, `/api/exchanges`) + announcer | #27, #145, #146 | no (lab-proven) |
 | Bgpd online reconfiguration (SIGHUP: add/remove/change iBGP sessions and the per-router table without touching other sessions) | done (lab-proven) | v0.3 | core + announcer (`gobgp`) + RIB | #27 | no (lab-proven) |
 | Online reconfiguration of core settings (thresholds, hold time, cap, policies, sources) without a restart or a withdraw | done (lab-proven) | v0.6 | core (`cmd/controller` reload, `internal/configedit`) | #128 | no (lab-proven) |
+
+Leak watch (#199, [leak-watch.md](leak-watch.md)) is off unless `leak_watch.enabled: true`, which needs `packeteer_community` and a source. A leak source reports routes seen outside the iBGP sessions; a sighting that carries `packeteer_community` (or, with `as_path_rule`, shows an injected prefix with `asn` in its path) withdraws that one outbound route at once (never in bulk), holds the prefix out of outbound improvements and inbound steers until `POST /api/leaks/clear`, and emits `leak.detected`. Sources: `bmp` (post-policy Adj-RIB-In of routers outside the AS and Adj-RIB-Out of your own edge toward eBGP) and `rislive`. A source that is down is unknown and never blocks a withdraw. Not built: the NLNOG RING looking glass as a source, the RPKI-invalid flag (needs #200), and the `synthesize` requirement (needs #122, which must reject `synthesize` without `leak_watch`). An inbound steer is held and removed at the next inbound sync. Threat mitigation routes are reported, not withdrawn. The FRR lab (`lab/e2e-leak-watch.sh`) runs a clean pass with no false positive, then a misconfigured export that leaks one of two injected routes: only that route is withdrawn and it stays out until cleared; a lost BMP feed reads unknown; SIGTERM and SIGKILL withdraw. Lab-proven only, not on a public edge. Rollback: `enabled: false` and restart.
 
 Online reconfiguration of core settings (#128) applies on SIGHUP and on `PUT /api/config` when every change is online. Thresholds, `hold_time`, `improvement_ttl`, `max_improvements` (including 0, which retires every improvement), policies, sources, probe timing (`interval`, `timeout`, `packets`, `retry_loss_pct`, `retry_packets`), `mode`, `allowlist`, and `bgp.neighbors` take effect on the next decision. A still-valid improvement stays up. Lowering the cap retires the lowest-ranked improvements inside `hold_time` with no cooldown (planned, then performance, then VIP, then static pins; smallest gain first). Leaving inject withdraws at once. Shrinking the allowlist retires a prefix that is no longer covered. An unchanged source or policy keeps running; a changed one is replaced. Replacing the flow source the anomaly detector was built with is refused. Probe workers, rate, dispersion, indirect probing, the announcer, providers, probers, `more_specific`, and `synthesize` stay restart-only and are refused by name. A mix is refused whole. An invalid file is refused before anything is applied. The audit log records each apply and each refusal (`config.reload`). Entering inject online runs the same inject checks as a start and can only succeed when the community, local preference, announcer, and neighbors were already valid, because changing those is still a restart. The announcer's mode, allowlist, and cap change only after the plugins swap, so a refused reload never announces. When `inbound` is configured, `max_improvements` is restart-only: inbound shares the cap and reads it at start, so a reload that changes it is refused by name. The learned-RIB check, community, NO_EXPORT, and withdraw rules are unchanged. A prefix that is not in the learned RIB is never announced. The FRR lab (`lab/e2e.sh`) lowers the latency threshold and the route stays, sets the cap to 0 and the route withdraws, then restores the file and the route returns. `lab/e2e-ix.sh` still covers neighbor reloads. Lab-proven only, not on a public edge. Rollback: revert this change; a SIGHUP then applies only `bgp.neighbors`, and any other key is refused until a restart.
 
