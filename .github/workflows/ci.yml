@@ -360,6 +360,14 @@ jobs:
             sleep 1
           done
           test "$ok" = 1
+          # healthz answers before storage starts; readyz waits for it, and
+          # the dashboard PUT below needs storage.
+          ok=0
+          for _ in $(seq 1 30); do
+            if curl -fsS "$base/readyz" >/dev/null 2>&1; then ok=1; break; fi
+            sleep 1
+          done
+          test "$ok" = 1
           since=""
           for _ in $(seq 1 20); do
             since="$(curl -fsS "${auth[@]}" "$base/api/providers" | jq -r '.providers[0].since // empty')"
