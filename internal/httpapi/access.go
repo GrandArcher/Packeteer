@@ -24,7 +24,8 @@ import (
 // audit log. http.allow_from restricts client addresses in both modes.
 
 // route is one endpoint and the lowest role that may call it. An empty
-// role is public: health checks and the SSO sign-in endpoints.
+// role is public: health checks, the sign-in endpoints, and the sign-in
+// page with the two files it loads.
 type route struct {
 	pattern string
 	role    plugin.Role
@@ -93,7 +94,13 @@ func (s *Server) routeTable() []route {
 		{"POST /api/subscriptions/{name}/send", operator, s.handleSubscriptionSend},
 		{"GET /auth/login", public, s.handleLogin},
 		{"GET /auth/callback", public, s.handleCallback},
+		{"GET /auth/signin", public, s.handleSigninInfo},
+		{"POST /auth/signin", public, s.handleSignin},
 		{"POST /auth/logout", public, s.handleLogout},
+		{"GET /signin.html", public, servePublic("signin.html")},
+		{"GET /signin.js", public, servePublic("signin.js")},
+		{"GET /shell.js", public, servePublic("shell.js")},
+		{"GET /app.css", public, servePublic("app.css")},
 		{"GET /", viewer, files.ServeHTTP},
 	}
 }
@@ -230,9 +237,9 @@ func (s *Server) authorize(w http.ResponseWriter, r *http.Request, rt route) (au
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "user store unavailable"})
 		return p, false
 	default:
-		if errors.Is(err, auth.ErrNoCredentials) && r.Method == http.MethodGet && s.auth.SSOEnabled() &&
+		if errors.Is(err, auth.ErrNoCredentials) && r.Method == http.MethodGet &&
 			!strings.HasPrefix(r.URL.Path, "/api/") && r.URL.Path != "/metrics" {
-			http.Redirect(w, r, "/auth/login", http.StatusFound)
+			http.Redirect(w, r, "/signin.html", http.StatusFound)
 			return p, false
 		}
 		w.Header().Set("WWW-Authenticate", `Basic realm="packeteer"`)
@@ -537,13 +544,67 @@ func (s *Server) handleCallback(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/", http.StatusFound)
 }
 
+// servePublic serves one embedded file without a sign-in.
+func servePublic(name string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) { http.ServeFileFS(w, r, webRoot, name) }
+}
+
+// handleSigninInfo tells the sign-in page whether to offer single sign-on
+// and which mode to show in the banner. The page cannot read
+// /api/overview before a user is signed in.
+func (s *Server) handleSigninInfo(w http.ResponseWriter, _ *http.Request) {
+	if s.auth == nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "sign-in needs auth (auth.enabled and a storage plugin)"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"sso": s.auth.SSOEnabled(), "mode": s.snapshot().Mode})
+}
+
+type signinRequest struct {
+	Name     string `json:"name"`
+	Password string `json:"password"`
+}
+
+// handleSignin signs a local user in and sets the session cookie. A wrong
+// name or password is one answer for both. Failures are audited with the
+// attempted name when it is a valid user name (an admin may read it); the
+// password is never logged or audited.
+func (s *Server) handleSignin(w http.ResponseWriter, r *http.Request) {
+	if s.auth == nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "sign-in needs auth (auth.enabled and a storage plugin)"})
+		return
+	}
+	var req signinRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	p, err := s.auth.SignIn(w, r, req.Name, req.Password)
+	switch {
+	case err == nil:
+		s.record(r, p, "auth.login", p.User, "", http.StatusOK)
+		writeJSON(w, http.StatusOK, map[string]any{"user": p.User, "role": p.Role})
+	case errors.Is(err, auth.ErrThrottled):
+		writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": err.Error()})
+	case errors.Is(err, auth.ErrBadCredentials):
+		target := ""
+		if auth.ValidUserName(req.Name) {
+			target = req.Name
+		}
+		s.record(r, auth.Principal{Method: auth.MethodPassword}, "auth.login", target, "invalid credentials", http.StatusUnauthorized)
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid user name or password"})
+	default:
+		s.log.Error("sign-in", "err", err)
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "sign-in unavailable"})
+	}
+}
+
 func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 	if s.auth == nil {
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
-	if user, ok := s.auth.Logout(w, r); ok {
-		s.record(r, auth.Principal{User: user, Method: auth.MethodSSO}, "auth.logout", user, "", http.StatusNoContent)
+	if p, ok := s.auth.Logout(w, r); ok {
+		s.record(r, p, "auth.logout", p.User, "", http.StatusNoContent)
 	}
 	w.WriteHeader(http.StatusNoContent)
 }

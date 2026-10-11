@@ -298,3 +298,12 @@ fieldset.form { border: 0; margin: 0; padding: 0; }
 .ts-key { margin-right: 16px; }
 .ts-data { margin-top: 8px; }
 .ts-data summary { cursor: pointer; }
+
+/* Sign-in page (#176) */
+.signin { max-width: 24rem; margin: 40px auto; }
+.signin h1 { font-size: 1.35rem; margin: 0 0 4px; }
+.signin-form { display: flex; flex-direction: column; gap: 12px; }
+.signin-form label { display: flex; flex-direction: column; gap: 4px; }
+.signin-form input { font: inherit; padding: 8px; border: 1px solid var(--line); border-radius: 4px; }
+.signin-form button.primary { margin: 0; background: var(--head); color: #fff; }
+.signin-form button.primary:disabled { opacity: 0.6; cursor: default; }
