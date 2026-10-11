@@ -76,7 +76,7 @@ jobs:
         with:
           go-version-file: go.mod
       - name: build image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           load: true
@@ -997,7 +997,7 @@ jobs:
         with:
           go-version-file: go.mod
       - name: build image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           load: true
