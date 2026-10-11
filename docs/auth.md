@@ -45,6 +45,8 @@ Failed sign-ins count toward the same per-address lockout as basic auth and toke
 
 ## Users (admin)
 
+The Admin page (`/admin.html`) and the Tokens page (`/tokens.html`) make these calls from the browser ([ui.md](ui.md#users-and-api-tokens)).
+
 ```sh
 curl -u admin:... -H 'Content-Type: application/json' http://127.0.0.1:8080/api/users \
   -d '{"name":"noc1","role":"operator","password":"another-long-password"}'

@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<meta name="robots" content="noindex">
+<title>Packeteer tokens</title>
+<link rel="stylesheet" href="/app.css">
+</head>
+<body data-page="tokens">
+<div id="banner" class="banner" role="status" hidden></div>
+<div id="conn" class="conn" role="alert" hidden></div>
+<div class="app">
+<nav class="sidenav" aria-label="Sections">
+  <a class="brand" href="/">Packeteer</a>
+  <a href="/" data-page="overview">Overview</a>
+  <a href="/dashboards.html" data-page="dashboards">Dashboards</a>
+  <a href="/improvements.html" data-page="improvements">Improvements</a>
+  <a href="/prefixes.html" data-page="prefixes">Prefixes &amp; ASNs</a>
+  <a href="/graphs.html" data-page="graphs">Graphs</a>
+  <a href="/reports.html" data-page="reports">Reports</a>
+  <a href="/providers.html" data-page="providers">Providers &amp; Exchanges</a>
+  <a href="/commit.html" data-page="commit">Commit &amp; Cost</a>
+  <a href="/policies.html" data-page="policies">Policies</a>
+  <a href="/protection.html" data-page="protection">Protection</a>
+  <a href="/troubleshooting.html" data-page="troubleshooting">Troubleshooting</a>
+  <a href="/events.html" data-page="events">Events</a>
+  <a href="/tokens.html" data-page="tokens">Tokens</a>
+  <a href="/settings.html" data-page="settings" data-min-role="admin">Settings</a>
+  <a href="/admin.html" data-page="admin" data-min-role="admin">Admin</a>
+</nav>
+<div class="app-main">
+<header class="topbar">
+  <div id="status" class="status">Loading</div>
+  <div class="top-slot top-search" id="search-slot">
+    <label>Search <input id="top-search" type="search" placeholder="Search" readonly></label>
+  </div>
+  <div class="top-slot" id="events-slot"><a class="top-link" href="/events.html">Events</a></div>
+  <div class="account" id="account">
+    <button type="button" id="account-btn" aria-haspopup="menu" aria-expanded="false" aria-controls="account-menu">Account</button>
+    <div id="account-menu" class="account-menu" role="menu" hidden>
+      <p id="account-who" class="tag">…</p>
+      <button type="button" id="account-out" hidden>Sign out</button>
+    </div>
+  </div>
+  <button type="button" id="refresh">Refresh</button>
+</header>
+<main>
+  <section>
+    <h2>API tokens</h2>
+    <p class="tag">Tokens are for scripts: send one as <code>Authorization: Bearer ...</code>. A token has at most the role of the user who made it and follows that user's role. It expires, and it is stored only as a hash. This page uses <code>/api/tokens</code>; the role checks and the audit record are the API's. See docs/auth.md.</p>
+    <p id="tokens-off" class="empty" hidden>API tokens need <code>auth.enabled</code> and a <code>storage</code> plugin in the mounted file (docs/auth.md).</p>
+    <div id="tokens-on" hidden>
+      <div id="token-secret" class="secret" role="alert" hidden>
+        <p><strong>Copy this token now.</strong> It is shown once, it is not stored, and it is gone when you close this box or leave the page.</p>
+        <p><code id="token-secret-value" class="mono"></code></p>
+        <div class="controls">
+          <button type="button" id="token-copy">Copy</button>
+          <button type="button" id="token-done">I have copied it</button>
+        </div>
+      </div>
+      <form id="token-form" class="token-form" autocomplete="off" aria-labelledby="token-form-title">
+        <h3 id="token-form-title">Create a token</h3>
+        <p id="token-form-note" class="tag"></p>
+        <div class="form">
+          <label>Name <input id="tf-name" type="text" maxlength="64" spellcheck="false" autocomplete="off"></label>
+          <label>Role <select id="tf-role"></select></label>
+          <label>Lifetime (hours, 1 to 8760; empty is the default) <input id="tf-ttl" type="text" inputmode="numeric" placeholder="2160" spellcheck="false" autocomplete="off"></label>
+        </div>
+        <div class="controls">
+          <button type="submit" id="tf-add">Create token</button>
+          <span id="tokens-status" class="tag" role="status"></span>
+        </div>
+      </form>
+      <div id="tokens"></div>
+    </div>
+  </section>
+</main>
+</div>
+</div>
+<script src="/ui.js"></script>
+<script src="/shell.js"></script>
+<script src="/tokens.js"></script>
+</body>
+</html>

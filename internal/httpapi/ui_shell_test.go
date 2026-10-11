@@ -81,6 +81,7 @@ func TestUIShell(t *testing.T) {
 		`href="/protection.html" data-page="protection"`,
 		`href="/troubleshooting.html" data-page="troubleshooting"`,
 		`href="/events.html" data-page="events"`,
+		`href="/tokens.html" data-page="tokens"`,
 		`href="/settings.html" data-page="settings" data-min-role="admin"`,
 		`href="/admin.html" data-page="admin" data-min-role="admin"`,
 	} {
@@ -100,7 +101,8 @@ func TestUIShell(t *testing.T) {
 		"commit.html":          {`<body data-page="commit" data-live="app">`, "#174"},
 		"policies.html":        {`<body data-page="policies" data-live="app">`, "#130"},
 		"events.html":          {`<body data-page="events" data-live="app">`, "#173"},
-		"admin.html":           {`<body data-page="admin" data-live="app">`, `id="page-denied"`, `id="admin-body"`, "#175"},
+		"admin.html":           {`<body data-page="admin">`, `id="page-denied"`, `id="admin-body"`, `id="user-form"`, `id="uf-name"`, `id="uf-role"`, `id="uf-password" type="password"`, `id="users-off" class="empty" hidden`, `id="users-on" hidden`, `src="/admin.js"`},
+		"tokens.html":          {`<body data-page="tokens">`, `id="tokens-off" class="empty" hidden`, `id="tokens-on" hidden`, `id="token-secret" class="secret" role="alert" hidden`, `id="token-form"`, `id="tf-name"`, `id="tf-role"`, `id="tf-ttl"`, `src="/tokens.js"`},
 		"settings.html":        {`<body data-page="settings">`, `src="/settings.js"`, `id="ed-yaml"`},
 		"dashboards.html":      {`<body data-page="dashboards">`, `src="/dashboards.js"`, `id="db-grid"`, "Custom dashboards"},
 	}
@@ -123,7 +125,7 @@ func TestUIShell(t *testing.T) {
 	for _, path := range []string{
 		"/", "/improvements.html", "/prefixes.html", "/graphs.html", "/reports.html",
 		"/providers.html", "/commit.html", "/policies.html", "/protection.html",
-		"/troubleshooting.html", "/events.html", "/settings.html", "/admin.html", "/dashboards.html",
+		"/troubleshooting.html", "/events.html", "/tokens.html", "/settings.html", "/admin.html", "/dashboards.html",
 	} {
 		rec, _ := e.do(t, "GET", path, plugin.RoleViewer, nil)
 		if rec.Code != 200 {
