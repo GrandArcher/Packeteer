@@ -152,45 +152,22 @@
         <p class="tag">Prefixes that may be injected. Empty means nothing may be announced.</p>
         <div id="form-allow"></div>
         <button type="button" id="form-add-allow">+ Allowlist prefix</button>
-        <h3>Flow collector</h3>
-        <p class="tag">The first <code>flow</code> source (NetFlow v5/v9, IPFIX, sFlow). It measures only. Unchecking removes the source from the YAML, including its <code>problems</code>, <code>transit</code>, and <code>subranges</code> blocks; those blocks and the aggregate lengths are otherwise kept. Separate several listen addresses and exclude prefixes with commas. Binds host UDP ports with <code>--network host</code>; do not publish them.</p>
-        <fieldset id="form-flow" class="form">
-          <label class="check"><input id="fl-enabled" type="checkbox"> Flow collector on</label>
-          <label>Listen (host:port) <input id="fl-listen" type="text" placeholder="192.0.2.10:2055, 192.0.2.10:6343" spellcheck="false"></label>
-          <label>Window <input id="fl-window" type="text" placeholder="5m" spellcheck="false"></label>
-          <label>Priority prefixes (top_n) <input id="fl-top-n" type="text" inputmode="numeric" placeholder="100" spellcheck="false"></label>
-          <label>Probed set (max_targets) <input id="fl-max-targets" type="text" inputmode="numeric" placeholder="same as top_n" spellcheck="false"></label>
-          <label>Tail interval <input id="fl-tail" type="text" placeholder="60s (needed when max_targets is above top_n)" spellcheck="false"></label>
-          <label>Minimum bytes (min_bytes) <input id="fl-min-bytes" type="text" inputmode="numeric" placeholder="0 (off)" spellcheck="false"></label>
-          <label>Minimum share (min_pct, %) <input id="fl-min-pct" type="text" inputmode="decimal" placeholder="0 (off)" spellcheck="false"></label>
-          <label>Exclude prefixes <input id="fl-exclude" type="text" placeholder="192.0.2.0/24" spellcheck="false"></label>
-        </fieldset>
+        <h3>Flow collectors</h3>
+        <p class="tag">Every <code>flow</code> source (NetFlow v5/v9, IPFIX, sFlow). They measure only. Removing one drops it from the YAML, including its <code>problems</code>, <code>transit</code>, and <code>subranges</code> blocks; those blocks are otherwise kept. Separate several listen addresses and exclude prefixes with commas. Each collector needs its own listen address. Binds host UDP ports with <code>--network host</code>; do not publish them.</p>
+        <div id="form-flows"></div>
+        <button type="button" id="form-add-flow">+ Flow collector</button>
         <h3>Policies (rules)</h3>
-        <p class="tag">The first <code>rules</code> policy. A policy only restricts or pins what the decision engine may choose: the learned-RIB check, allowlist, cap, hold time, and withdraw rules still apply. Rules keep their order. Provider, prefix, ASN, and country lists are comma separated. Removing every rule removes the policy. <code>geoip_db</code>, maintenance windows, and other policies stay in the YAML.</p>
+        <p class="tag">Every <code>rules</code> policy, in chain order. A policy only restricts or pins what the decision engine may choose: the learned-RIB check, allowlist, cap, hold time, and withdraw rules still apply. Rules keep their order. Provider, prefix, ASN, and country lists are comma separated. A rule with countries needs the policy's <code>geoip_db</code>: the absolute path of a MaxMind-format country database you mount; Packeteer does not download one. Maintenance windows and other policy types stay in the YAML.</p>
         <div id="form-rules"></div>
-        <button type="button" id="form-add-rule">+ Rule</button>
+        <button type="button" id="form-add-policy">+ Rules policy</button>
         <h3>VIP</h3>
-        <p class="tag">The first <code>vip</code> source: critical prefixes and ASNs probed on their own interval. Unchecking removes the source.</p>
-        <fieldset id="form-vip" class="form">
-          <label class="check"><input id="vip-enabled" type="checkbox"> VIP source on</label>
-          <label>Interval <input id="vip-interval" type="text" placeholder="10s" spellcheck="false"></label>
-          <label>Max targets <input id="vip-max" type="text" inputmode="numeric" placeholder="100" spellcheck="false"></label>
-          <label>VIP ASNs <input id="vip-asns" type="text" placeholder="64496, 64497" spellcheck="false"></label>
-        </fieldset>
-        <div id="form-vip-prefixes"></div>
-        <button type="button" id="form-add-vip">+ VIP prefix</button>
+        <p class="tag">Every <code>vip</code> source: critical prefixes and ASNs probed on their own interval. Removing one drops it from the YAML.</p>
+        <div id="form-vips"></div>
+        <button type="button" id="form-add-vip">+ VIP source</button>
         <h3>Outage detection</h3>
-        <p class="tag">The first <code>outage</code> source: when many prefixes fail together it re-probes them and raises an event. It never announces. Empty fields use the defaults. Unchecking removes the source.</p>
-        <fieldset id="form-outage" class="form">
-          <label class="check"><input id="out-enabled" type="checkbox"> Outage detection on</label>
-          <label>Minimum prefixes <input id="out-min" type="text" inputmode="numeric" placeholder="3" spellcheck="false"></label>
-          <label>Window <input id="out-window" type="text" placeholder="2m" spellcheck="false"></label>
-          <label>Loss (%) <input id="out-loss" type="text" inputmode="decimal" placeholder="20" spellcheck="false"></label>
-          <label>RTT (ms) <input id="out-rtt" type="text" inputmode="decimal" placeholder="0 (off)" spellcheck="false"></label>
-          <label>Re-probe interval <input id="out-interval" type="text" placeholder="5s" spellcheck="false"></label>
-          <label>Max targets <input id="out-max" type="text" inputmode="numeric" placeholder="100" spellcheck="false"></label>
-          <label>Ignore ASNs <input id="out-ignore" type="text" placeholder="64500" spellcheck="false"></label>
-        </fieldset>
+        <p class="tag">Every <code>outage</code> source: when many prefixes fail together it re-probes them and raises an event. It never announces. Empty fields use the defaults. Removing one drops it from the YAML.</p>
+        <div id="form-outages"></div>
+        <button type="button" id="form-add-outage">+ Outage source</button>
         <h3>Inbound optimization <span id="in-badge" class="badge mode-unknown">…</span></h3>
         <p class="tag">The <code>inbound</code> block (docs/inbound.md). <span id="in-badge-text">Observe logs steers and announces nothing.</span> The form never turns inject on: that is a YAML edit after the inject checklist, and Save asks you to confirm it. Unchecking removes the block, announcer included. Separate lists with commas. Each trigger you moderate is only suggested, even in inject. The announcer (<code>inbound.announcer</code>) stays in the YAML. <span id="in-announcer"></span></p>
         <fieldset id="form-inbound" class="form">

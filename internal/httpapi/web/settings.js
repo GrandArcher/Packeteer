@@ -8,7 +8,7 @@ function emptyForm() {
     min_rtt_delta_pct: "", confirm_rounds: "",
     precedence: "", scorer_type: "", floor_max_loss_pct: "", floor_max_rtt: "",
     providers: [], targets: [], allowlist: [],
-    flow: emptyFlow(), policies: {rules: []}, vip: emptyVIP(), outage: emptyOutage(),
+    flows: [], rules_policies: [], vips: [], outages: [],
     inbound: emptyInbound(), anomaly: emptyAnomaly()};
 }
 
@@ -23,16 +23,25 @@ function emptyAnomaly() {
   return {enabled: false, mitigation_mode: "", mitigation_allowlist: [], rules: []};
 }
 
-function emptyFlow() {
-  return {enabled: false, listen: [], window: "", top_n: "", max_targets: "", tail_interval: "", min_bytes: "", min_pct: "", exclude: []};
+function newFlow() {
+  return {key: "", name: "", listen: [], window: "", top_n: "", max_targets: "", tail_interval: "", min_bytes: "", min_pct: "",
+    aggregate_v4: "", aggregate_v6: "", exclude: []};
 }
 
-function emptyVIP() {
-  return {enabled: false, interval: "", max_targets: "", prefixes: [], asns: []};
+function newVIP() {
+  return {key: "", name: "", interval: "", max_targets: "", prefixes: [], asns: []};
 }
 
-function emptyOutage() {
-  return {enabled: false, min_prefixes: "", window: "", loss_pct: "", rtt_ms: "", interval: "", max_targets: "", ignore_asns: []};
+function newOutage() {
+  return {key: "", name: "", min_prefixes: "", window: "", loss_pct: "", rtt_ms: "", interval: "", max_targets: "", ignore_asns: []};
+}
+
+function newRulePolicy() {
+  return {key: "", name: "", geoip_db: "", rules: [newRule()]};
+}
+
+function newRule() {
+  return {key: "", name: "", action: "ignore", providers: [], prefixes: [], asns: [], countries: [], traffic: "", max_loss_pct: "", max_rtt: ""};
 }
 
 // Lists in the form's text fields are comma or space separated.
@@ -72,11 +81,11 @@ function editorOff(err) {
   var node = document.getElementById("ed-off");
   node.textContent = explain(err);
   node.hidden = !off;
-  ["ed-load", "ed-check", "ed-save", "wz-run", "wz-next", "wz-next-2", "wz-back", "wz-back-3", "wz-add-provider", "wz-sug", "form-apply", "form-reload", "form-add-provider", "form-add-target", "form-add-allow", "sug-refresh", "form-add-rule", "form-add-vip", "form-add-anomaly-rule", "wz-next-3", "wz-back-4"].forEach(function (id) {
+  ["ed-load", "ed-check", "ed-save", "wz-run", "wz-next", "wz-next-2", "wz-back", "wz-back-3", "wz-add-provider", "wz-sug", "form-apply", "form-reload", "form-add-provider", "form-add-target", "form-add-allow", "sug-refresh", "form-add-flow", "form-add-policy", "form-add-vip", "form-add-outage", "form-add-anomaly-rule", "wz-next-3", "wz-back-4"].forEach(function (id) {
     var b = document.getElementById(id);
     if (b) b.disabled = off;
   });
-  ["form-fields", "form-flow", "form-vip", "form-outage", "form-inbound"].forEach(function (id) {
+  ["form-fields", "form-flows", "form-rules", "form-vips", "form-outages", "form-inbound"].forEach(function (id) {
     var fields = document.getElementById(id);
     if (fields) fields.disabled = off;
   });
@@ -138,27 +147,6 @@ function readKnobs() {
 
 function readSections() {
   var t = function (id) { return byId(id).value.trim(); };
-  form.flow.enabled = byId("fl-enabled").checked;
-  form.flow.listen = splitList(byId("fl-listen").value);
-  form.flow.window = t("fl-window");
-  form.flow.top_n = t("fl-top-n");
-  form.flow.max_targets = t("fl-max-targets");
-  form.flow.tail_interval = t("fl-tail");
-  form.flow.min_bytes = t("fl-min-bytes");
-  form.flow.min_pct = t("fl-min-pct");
-  form.flow.exclude = splitList(byId("fl-exclude").value);
-  form.vip.enabled = byId("vip-enabled").checked;
-  form.vip.interval = t("vip-interval");
-  form.vip.max_targets = t("vip-max");
-  form.vip.asns = splitList(byId("vip-asns").value);
-  form.outage.enabled = byId("out-enabled").checked;
-  form.outage.min_prefixes = t("out-min");
-  form.outage.window = t("out-window");
-  form.outage.loss_pct = t("out-loss");
-  form.outage.rtt_ms = t("out-rtt");
-  form.outage.interval = t("out-interval");
-  form.outage.max_targets = t("out-max");
-  form.outage.ignore_asns = splitList(byId("out-ignore").value);
   var inb = form.inbound;
   inb.enabled = byId("in-enabled").checked;
   inb.mode = byId("in-mode").value;
@@ -189,28 +177,6 @@ function setChecked(id, on) {
 }
 
 function fillSections() {
-  var f = form.flow, v = form.vip, o = form.outage;
-  setChecked("fl-enabled", f.enabled);
-  setVal("fl-listen", listText(f.listen));
-  setVal("fl-window", f.window);
-  setVal("fl-top-n", f.top_n);
-  setVal("fl-max-targets", f.max_targets);
-  setVal("fl-tail", f.tail_interval);
-  setVal("fl-min-bytes", f.min_bytes);
-  setVal("fl-min-pct", f.min_pct);
-  setVal("fl-exclude", listText(f.exclude));
-  setChecked("vip-enabled", v.enabled);
-  setVal("vip-interval", v.interval);
-  setVal("vip-max", v.max_targets);
-  setVal("vip-asns", listText(v.asns));
-  setChecked("out-enabled", o.enabled);
-  setVal("out-min", o.min_prefixes);
-  setVal("out-window", o.window);
-  setVal("out-loss", o.loss_pct);
-  setVal("out-rtt", o.rtt_ms);
-  setVal("out-interval", o.interval);
-  setVal("out-max", o.max_targets);
-  setVal("out-ignore", listText(o.ignore_asns));
   fillInbound();
   fillAnomalyState();
 }
@@ -284,51 +250,165 @@ function selectInput(options, value) {
   return sel;
 }
 
-function renderRules() {
+// textField adds a labeled text input bound to obj[key]. asList edits an
+// array as comma separated text.
+function textField(parent, label, obj, key, placeholder, asList, wide) {
+  var input = rowInput(asList ? listText(obj[key]) : obj[key], placeholder, wide);
+  input.addEventListener("input", function () { obj[key] = asList ? splitList(input.value) : input.value.trim(); });
+  parent.appendChild(labeled(label, input));
+}
+
+function smallButton(text, title, disabled, onClick) {
+  var b = el("button", "small", text);
+  b.type = "button";
+  b.title = title;
+  b.disabled = !!disabled;
+  b.addEventListener("click", onClick);
+  return b;
+}
+
+// moveButtons are the up, down, and remove buttons of list[i]. Edits are
+// kept in the objects as they are typed, so moving loses nothing.
+function moveButtons(list, i, what, rerender) {
+  var wrap = el("span", "move");
+  wrap.appendChild(smallButton("↑", "Move " + what + " up", i === 0, function () {
+    list.splice(i - 1, 0, list.splice(i, 1)[0]);
+    rerender();
+  }));
+  wrap.appendChild(smallButton("↓", "Move " + what + " down", i === list.length - 1, function () {
+    list.splice(i + 1, 0, list.splice(i, 1)[0]);
+    rerender();
+  }));
+  wrap.appendChild(smallButton("−", "Remove " + what, false, function () {
+    list.splice(i, 1);
+    rerender();
+  }));
+  return wrap;
+}
+
+// instanceBox is one source or policy of a type: a legend with its
+// position, its fields, and the move and remove buttons.
+function instanceBox(list, i, what, rerender, fields) {
+  var box = el("fieldset", "form instance");
+  var legend = el("legend", "", what + " " + (i + 1) + " of " + list.length);
+  legend.appendChild(moveButtons(list, i, what, rerender));
+  box.appendChild(legend);
+  var row = el("div", "row");
+  box.appendChild(row);
+  textField(row, "Name (unique per type; blank = type name)", list[i], "name", "");
+  fields(row, list[i], box);
+  return box;
+}
+
+function renderFlows() {
+  var root = byId("form-flows");
+  clear(root);
+  form.flows.forEach(function (_, i) {
+    root.appendChild(instanceBox(form.flows, i, "Flow collector", renderFlows, function (row, f) {
+      textField(row, "Listen (host:port)", f, "listen", "192.0.2.10:2055, 192.0.2.10:6343", true, true);
+      textField(row, "Window", f, "window", "5m");
+      textField(row, "Priority prefixes (top_n)", f, "top_n", "100");
+      textField(row, "Probed set (max_targets)", f, "max_targets", "same as top_n");
+      textField(row, "Tail interval", f, "tail_interval", "60s (needed when max_targets is above top_n)");
+      textField(row, "Minimum bytes (min_bytes)", f, "min_bytes", "0 (off)");
+      textField(row, "Minimum share (min_pct, %)", f, "min_pct", "0 (off)");
+      textField(row, "IPv4 aggregate length (aggregate_v4)", f, "aggregate_v4", "24");
+      textField(row, "IPv6 aggregate length (aggregate_v6)", f, "aggregate_v6", "48");
+      textField(row, "Exclude prefixes", f, "exclude", "192.0.2.0/24", true);
+    }));
+  });
+  if (!form.flows.length) root.appendChild(el("p", "empty", "No flow collector."));
+}
+
+function renderOutages() {
+  var root = byId("form-outages");
+  clear(root);
+  form.outages.forEach(function (_, i) {
+    root.appendChild(instanceBox(form.outages, i, "Outage source", renderOutages, function (row, o) {
+      textField(row, "Minimum prefixes", o, "min_prefixes", "3");
+      textField(row, "Window", o, "window", "2m");
+      textField(row, "Loss (%)", o, "loss_pct", "20");
+      textField(row, "RTT (ms)", o, "rtt_ms", "0 (off)");
+      textField(row, "Re-probe interval", o, "interval", "5s");
+      textField(row, "Max targets", o, "max_targets", "100");
+      textField(row, "Ignore ASNs", o, "ignore_asns", "64500", true);
+    }));
+  });
+  if (!form.outages.length) root.appendChild(el("p", "empty", "No outage source."));
+}
+
+function renderVIPs() {
+  var root = byId("form-vips");
+  clear(root);
+  form.vips.forEach(function (_, i) {
+    root.appendChild(instanceBox(form.vips, i, "VIP source", renderVIPs, function (row, v, box) {
+      textField(row, "Interval", v, "interval", "10s");
+      textField(row, "Max targets", v, "max_targets", "100");
+      textField(row, "VIP ASNs", v, "asns", "64496, 64497", true);
+      var rows = el("div");
+      box.appendChild(rows);
+      var draw = function () {
+        clear(rows);
+        v.prefixes.forEach(function (t, j) {
+          var row = el("div", "row");
+          textField(row, "VIP prefix", t, "prefix", "203.0.113.0/24", false, true);
+          textField(row, "Pinned host", t, "host", "203.0.113.1");
+          row.appendChild(moveButtons(v.prefixes, j, "VIP prefix", draw));
+          rows.appendChild(row);
+        });
+        if (!v.prefixes.length) rows.appendChild(el("p", "empty", "No VIP prefixes."));
+      };
+      draw();
+      box.appendChild(smallButton("+ VIP prefix", "Add a VIP prefix", false, function () {
+        v.prefixes.push({key: "", prefix: "", host: ""});
+        draw();
+      }));
+    }));
+  });
+  if (!form.vips.length) root.appendChild(el("p", "empty", "No VIP source."));
+}
+
+function renderRulePolicies() {
   var root = byId("form-rules");
   clear(root);
-  form.policies.rules.forEach(function (r, i) {
-    var row = el("div", "row");
-    var name = rowInput(r.name, "name");
-    var action = selectInput(ruleActions, r.action);
-    var provs = rowInput(listText(r.providers), "transit-a");
-    var prefixes = rowInput(listText(r.prefixes), "203.0.113.0/24", true);
-    var asns = rowInput(listText(r.asns), "64500");
-    var countries = rowInput(listText(r.countries), "DE, FR");
-    var traffic = selectInput([["", "any traffic"], ["transit", "transit"], ["local", "local"]], r.traffic);
-    var loss = rowInput(r.max_loss_pct, "static only");
-    var rtt = rowInput(r.max_rtt, "150ms");
-    var set = function () {
-      var x = form.policies.rules[i];
-      x.name = name.value.trim();
-      x.action = action.value;
-      x.providers = splitList(provs.value);
-      x.prefixes = splitList(prefixes.value);
-      x.asns = splitList(asns.value);
-      x.countries = splitList(countries.value);
-      x.traffic = traffic.value;
-      x.max_loss_pct = loss.value.trim();
-      x.max_rtt = rtt.value.trim();
-    };
-    [name, provs, prefixes, asns, countries, loss, rtt].forEach(function (n) { n.addEventListener("input", set); });
-    [action, traffic].forEach(function (n) { n.addEventListener("change", set); });
-    row.appendChild(labeled("Rule name", name));
-    row.appendChild(labeled("Action", action));
-    row.appendChild(labeled("Providers", provs));
-    row.appendChild(labeled("Prefixes", prefixes));
-    row.appendChild(labeled("Origin ASNs", asns));
-    row.appendChild(labeled("Countries", countries));
-    row.appendChild(labeled("Traffic class", traffic));
-    row.appendChild(labeled("Max loss (%)", loss));
-    row.appendChild(labeled("Max RTT", rtt));
-    var minus = el("button", "small", "−");
-    minus.type = "button";
-    minus.title = "Remove rule";
-    minus.addEventListener("click", function () { form.policies.rules.splice(i, 1); renderRules(); });
-    row.appendChild(minus);
-    root.appendChild(row);
+  form.rules_policies.forEach(function (_, i) {
+    root.appendChild(instanceBox(form.rules_policies, i, "Rules policy", renderRulePolicies, function (row, p, box) {
+      textField(row, "Country database (geoip_db)", p, "geoip_db", "/etc/packeteer/GeoLite2-Country.mmdb", false, true);
+      var rows = el("div");
+      box.appendChild(rows);
+      var draw = function () {
+        clear(rows);
+        p.rules.forEach(function (_, j) { rows.appendChild(ruleRow(p.rules, j, draw)); });
+        if (!p.rules.length) rows.appendChild(el("p", "empty", "No rules. A policy needs at least one; remove the policy to drop it."));
+      };
+      draw();
+      box.appendChild(smallButton("+ Rule", "Add a rule to this policy", false, function () {
+        p.rules.push(newRule());
+        draw();
+      }));
+    }));
   });
-  if (!form.policies.rules.length) root.appendChild(el("p", "empty", "No rules. Native routing and the normal thresholds apply."));
+  if (!form.rules_policies.length) root.appendChild(el("p", "empty", "No policies. Native routing and the normal thresholds apply."));
+}
+
+function ruleRow(rules, j, redraw) {
+  var r = rules[j];
+  var row = el("div", "row");
+  textField(row, "Rule name", r, "name", "name");
+  var action = selectInput(ruleActions, r.action);
+  action.addEventListener("change", function () { r.action = action.value; });
+  row.appendChild(labeled("Action", action));
+  textField(row, "Providers", r, "providers", "transit-a", true);
+  textField(row, "Prefixes", r, "prefixes", "203.0.113.0/24", true, true);
+  textField(row, "Origin ASNs", r, "asns", "64500", true);
+  textField(row, "Countries", r, "countries", "DE, FR", true);
+  var traffic = selectInput([["", "any traffic"], ["transit", "transit"], ["local", "local"]], r.traffic);
+  traffic.addEventListener("change", function () { r.traffic = traffic.value; });
+  row.appendChild(labeled("Traffic class", traffic));
+  textField(row, "Max loss (%)", r, "max_loss_pct", "static only");
+  textField(row, "Max RTT", r, "max_rtt", "150ms");
+  row.appendChild(moveButtons(rules, j, "rule", redraw));
+  return row;
 }
 
 var anomalyActions = [["blackhole", "blackhole"], ["redirect", "redirect"], ["flowspec_drop", "flowspec drop"],
@@ -376,27 +456,6 @@ function renderAnomalyRules() {
     root.appendChild(row);
   });
   if (!form.anomaly.rules.length) root.appendChild(el("p", "empty", "No anomaly rules. Anomalies are detected and reported, and no mitigation rule is added."));
-}
-
-function renderVIPPrefixes() {
-  var root = byId("form-vip-prefixes");
-  clear(root);
-  form.vip.prefixes.forEach(function (t, i) {
-    var row = el("div", "row");
-    var prefix = rowInput(t.prefix, "203.0.113.0/24", true);
-    var host = rowInput(t.host, "203.0.113.1");
-    prefix.addEventListener("input", function () { form.vip.prefixes[i].prefix = prefix.value.trim(); });
-    host.addEventListener("input", function () { form.vip.prefixes[i].host = host.value.trim(); });
-    row.appendChild(labeled("VIP prefix", prefix));
-    row.appendChild(labeled("Pinned host", host));
-    var minus = el("button", "small", "−");
-    minus.type = "button";
-    minus.title = "Remove VIP prefix";
-    minus.addEventListener("click", function () { form.vip.prefixes.splice(i, 1); renderVIPPrefixes(); });
-    row.appendChild(minus);
-    root.appendChild(row);
-  });
-  if (!form.vip.prefixes.length) root.appendChild(el("p", "empty", "No VIP prefixes."));
 }
 
 function fillKnobs() {
@@ -542,8 +601,10 @@ function renderForm() {
   renderProviders();
   renderTargets();
   renderAllow();
-  renderRules();
-  renderVIPPrefixes();
+  renderFlows();
+  renderRulePolicies();
+  renderVIPs();
+  renderOutages();
   renderAnomalyRules();
   renderSuggestions(lastSuggestions);
 }
@@ -555,17 +616,7 @@ function loadForm(yaml) {
     if (!form.providers) form.providers = [];
     if (!form.targets) form.targets = [];
     if (!form.allowlist) form.allowlist = [];
-    var blank = emptyForm();
-    form.flow = Object.assign(blank.flow, form.flow || {});
-    form.vip = Object.assign(blank.vip, form.vip || {});
-    form.outage = Object.assign(blank.outage, form.outage || {});
-    loadProtectionDefaults();
-    if (!form.policies) form.policies = blank.policies;
-    if (!form.policies.rules) form.policies.rules = [];
-    ["listen", "exclude"].forEach(function (k) { if (!form.flow[k]) form.flow[k] = []; });
-    if (!form.vip.prefixes) form.vip.prefixes = [];
-    if (!form.vip.asns) form.vip.asns = [];
-    if (!form.outage.ignore_asns) form.outage.ignore_asns = [];
+    loadFormDefaults();
     renderForm();
     formStatus("");
   }, function (err) {
@@ -589,12 +640,15 @@ function loadProtectionDefaults() {
 }
 
 function loadFormDefaults() {
-  var blank = emptyForm();
-  form.flow = Object.assign(blank.flow, form.flow || {});
-  form.vip = Object.assign(blank.vip, form.vip || {});
-  form.outage = Object.assign(blank.outage, form.outage || {});
+  ["flows", "rules_policies", "vips", "outages"].forEach(function (k) { if (!form[k]) form[k] = []; });
+  form.flows.forEach(function (f) { ["listen", "exclude"].forEach(function (k) { if (!f[k]) f[k] = []; }); });
+  form.vips.forEach(function (v) {
+    if (!v.prefixes) v.prefixes = [];
+    if (!v.asns) v.asns = [];
+  });
+  form.outages.forEach(function (o) { if (!o.ignore_asns) o.ignore_asns = []; });
+  form.rules_policies.forEach(function (p) { if (!p.rules) p.rules = []; });
   loadProtectionDefaults();
-  if (!form.policies) form.policies = blank.policies;
 }
 
 function applyForm() {
@@ -904,22 +958,27 @@ document.getElementById("form-add-allow").addEventListener("click", function () 
   renderAllow();
 });
 document.getElementById("sug-refresh").addEventListener("click", loadSuggestions);
-byId("form-add-rule").addEventListener("click", function () {
-  form.policies.rules.push({key: "", name: "", action: "ignore", providers: [], prefixes: [], asns: [], countries: [], traffic: "", max_loss_pct: "", max_rtt: ""});
-  renderRules();
+byId("form-add-flow").addEventListener("click", function () {
+  form.flows.push(newFlow());
+  renderFlows();
+});
+byId("form-add-policy").addEventListener("click", function () {
+  form.rules_policies.push(newRulePolicy());
+  renderRulePolicies();
+});
+byId("form-add-vip").addEventListener("click", function () {
+  form.vips.push(newVIP());
+  renderVIPs();
+});
+byId("form-add-outage").addEventListener("click", function () {
+  form.outages.push(newOutage());
+  renderOutages();
 });
 byId("form-add-anomaly-rule").addEventListener("click", function () {
   form.anomaly.rules.push({key: "", name: "", prefixes: [], protocols: [], min_mbps: "", action: "blackhole", target: "", rate_mbps: "", ttl: ""});
   renderAnomalyRules();
 });
-byId("form-add-vip").addEventListener("click", function () {
-  form.vip.prefixes.push({key: "", prefix: "", host: ""});
-  renderVIPPrefixes();
-});
-["fl-enabled", "fl-listen", "fl-window", "fl-top-n", "fl-max-targets", "fl-tail", "fl-min-bytes", "fl-min-pct", "fl-exclude",
-  "vip-enabled", "vip-interval", "vip-max", "vip-asns",
-  "out-enabled", "out-min", "out-window", "out-loss", "out-rtt", "out-interval", "out-max", "out-ignore",
-  "in-enabled", "in-mode", "in-prefixes", "in-local-pref", "in-release", "in-cap", "in-mod-commit", "in-mod-perf", "in-perf",
+["in-enabled", "in-mode", "in-prefixes", "in-local-pref", "in-release", "in-cap", "in-mod-commit", "in-mod-perf", "in-perf",
   "in-perf-loss", "in-perf-latency", "in-perf-min", "in-perf-release", "in-damp-off", "in-damp-confirm", "in-damp-backoff", "in-damp-max"].forEach(function (id) {
   byId(id).addEventListener("change", readSections);
   byId(id).addEventListener("input", readSections);

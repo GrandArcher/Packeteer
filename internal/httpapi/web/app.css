@@ -199,6 +199,10 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .settings-split { display: grid; grid-template-columns: minmax(280px, 1fr) minmax(320px, 1.1fr); gap: 18px; align-items: start; }
 .settings-split h3 { margin: 14px 0 6px; font-size: 1rem; }
 fieldset.form { border: 0; margin: 0; padding: 0; }
+fieldset.instance { border: 1px solid var(--line); border-radius: 4px; padding: 6px 10px 10px; margin: 10px 0; }
+fieldset.instance legend { font-weight: 600; padding: 0 6px; }
+.move { margin-left: 8px; white-space: nowrap; }
+.move button { margin-right: 4px; }
 .row { display: flex; flex-wrap: wrap; gap: 6px; align-items: flex-end; margin: 6px 0; }
 .field { display: flex; flex-direction: column; gap: 2px; }
 .field-label { font-size: 0.75rem; line-height: 1.2; color: var(--ink); }

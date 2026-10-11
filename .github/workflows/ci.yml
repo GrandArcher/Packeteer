@@ -438,7 +438,7 @@ jobs:
             --absent 'No before/after data' 'Cannot reach' 'mode-inject'
           bash lab/ui-smoke.sh http://127.0.0.1:18098/dashboards.html 'class="ts-chart"' 'Before/after graphs: 50% or more better' \
             'Data (5 days)' 'It announces nothing.' --absent 'No before/after data' 'Cannot reach'
-      - name: UI settings forms smoke (#130; flow, rules, VIP, outage, wizard flow step, observe)
+      - name: UI settings forms smoke (#130, #226; two flows, two rules policies, VIP, outage, wizard flow step, observe)
         run: |
           set -euo pipefail
           base=http://127.0.0.1:18132
@@ -465,12 +465,20 @@ jobs:
               config:
                 targets: [{prefix: 198.51.100.0/24}]
             - type: flow
+              name: edge-a
               config:
                 listen: 127.0.0.1:12055
                 window: 10m
                 top_n: 20
                 min_pct: 0.5
                 exclude: [192.0.2.0/25]
+            - type: flow
+              name: edge-b
+              config:
+                listen: 127.0.0.1:12056
+                window: 7m
+                top_n: 15
+                aggregate_v4: 22
             - type: vip
               config:
                 interval: 10s
@@ -480,6 +488,13 @@ jobs:
                 min_prefixes: 4
                 loss_pct: 30
           policies:
+            - type: rules
+              name: second
+              config:
+                rules:
+                  - name: quiet-b
+                    action: ignore
+                    prefixes: [192.0.2.0/24]
             - type: rules
               config:
                 rules:
@@ -522,13 +537,16 @@ jobs:
           # checks accept the result. Nothing is written (read-only mount).
           yaml="$(curl -fsS "${auth[@]}" "$base/api/config" | jq -r .yaml)"
           jq -n --arg y "$yaml" '{yaml:$y}' | curl -fsS "${auth[@]}" -H 'Content-Type: application/json' -d @- "$base/api/config/form" >/tmp/form130.json
-          jq -e '.form.flow.enabled and .form.flow.listen[0] == "127.0.0.1:12055" and .form.vip.enabled and .form.outage.min_prefixes == "4" and (.form.policies.rules | length) == 2' /tmp/form130.json
-          jq '.form | .flow.top_n = "30" | .outage.min_prefixes = "6"
-            | .policies.rules += [{key:"",name:"vips",action:"vip",providers:[],prefixes:["198.51.100.0/24"],asns:[],countries:[],traffic:"",max_loss_pct:"",max_rtt:""}]' /tmp/form130.json >/tmp/form130-edit.json
+          jq -e '(.form.flows | length) == 2 and .form.flows[0].listen[0] == "127.0.0.1:12055" and .form.flows[1].listen[0] == "127.0.0.1:12056" and .form.flows[1].aggregate_v4 == "22" and (.form.vips | length) == 1 and .form.outages[0].min_prefixes == "4" and (.form.rules_policies | length) == 2 and (.form.rules_policies[0].rules | length) == 1 and (.form.rules_policies[1].rules | length) == 2' /tmp/form130.json
+          # Edit the second instance of each type; the first stays as it is.
+          jq '.form | .flows[1].top_n = "30" | .outages[0].min_prefixes = "6"
+            | .rules_policies[1].rules += [{key:"",name:"vips",action:"vip",providers:[],prefixes:["198.51.100.0/24"],asns:[],countries:[],traffic:"",max_loss_pct:"",max_rtt:""}]' /tmp/form130.json >/tmp/form130-edit.json
           jq -n --arg y "$yaml" --slurpfile f /tmp/form130-edit.json '{yaml:$y,apply:true,form:$f[0]}' \
             | curl -fsS "${auth[@]}" -H 'Content-Type: application/json' -d @- "$base/api/config/form" | jq -r .yaml >/tmp/merged130.yaml
           grep -q 'top_n: 30' /tmp/merged130.yaml
+          grep -q 'top_n: 20' /tmp/merged130.yaml
           grep -q 'name: vips' /tmp/merged130.yaml
+          grep -q 'name: edge-b' /tmp/merged130.yaml
           grep -q 'mode: observe' /tmp/merged130.yaml
           ! grep -q 'announcer' /tmp/merged130.yaml
           jq -n --rawfile y /tmp/merged130.yaml '{yaml:$y}' | curl -fsS "${auth[@]}" -H 'Content-Type: application/json' -d @- "$base/api/config/validate" | tee /tmp/validate130.json
@@ -558,8 +576,9 @@ jobs:
           # is on top, and the wizard has its optional flow step.
           bash lab/ui-smoke.sh http://127.0.0.1:18133/settings.html \
             'mode-observe' 'It announces nothing.' \
-            'Flow collector' 'value="127.0.0.1:12055"' 'value="10m"' 'value="0.5"' 'value="192.0.2.0/25"' \
-            'Policies (rules)' 'value="pin-a"' 'value="no-b-64500"' '>Action</span>' '>Max loss (%)</span>' \
+            'Flow collector 1 of 2' 'Flow collector 2 of 2' 'value="127.0.0.1:12055"' 'value="127.0.0.1:12056"' \
+            'value="10m"' 'value="7m"' 'value="0.5"' 'value="192.0.2.0/25"' 'value="edge-b"' \
+            'Rules policy 1 of 2' 'Rules policy 2 of 2' 'value="pin-a"' 'value="no-b-64500"' 'value="quiet-b"' '>Action</span>' '>Max loss (%)</span>' \
             'VIP' 'value="10s"' 'value="203.0.113.1"' \
             'Outage detection' 'value="4"' 'value="30"' \
             '4. Flow (optional)' 'Collect flow records' 'Exporter setup' \

@@ -1,0 +1,602 @@
+diff --git a/.editorconfig b/.editorconfig
+new file mode 100644
+index 0000000..e52ac56
+--- /dev/null
++++ b/.editorconfig
+@@ -0,0 +1,20 @@
++root = true
++
++[*]
++charset = utf-8
++end_of_line = lf
++insert_final_newline = true
++trim_trailing_whitespace = true
++
++[*.go]
++indent_style = tab
++
++[Makefile]
++indent_style = tab
++
++[*.{yml,yaml,json}]
++indent_style = space
++indent_size = 2
++
++[*.md]
++trim_trailing_whitespace = false
+diff --git a/.githooks/pre-commit b/.githooks/pre-commit
+new file mode 100755
+index 0000000..a2e6be9
+--- /dev/null
++++ b/.githooks/pre-commit
+@@ -0,0 +1,5 @@
++#!/bin/sh
++# Optional: enabled by `make setup`. Same gofmt and vet checks as CI.
++unformatted="$(gofmt -l .)"
++if [ -n "$unformatted" ]; then echo "gofmt needed on:"; echo "$unformatted"; exit 1; fi
++go vet ./...
+diff --git a/.github/CODEOWNERS b/.github/CODEOWNERS
+new file mode 100644
+index 0000000..06e4601
+--- /dev/null
++++ b/.github/CODEOWNERS
+@@ -0,0 +1 @@
++* @GrandArcher
+diff --git a/.github/copilot-instructions.md b/.github/copilot-instructions.md
+new file mode 100644
+index 0000000..05b61ee
+--- /dev/null
++++ b/.github/copilot-instructions.md
+@@ -0,0 +1,3 @@
++Read [AGENTS.md](../AGENTS.md) and [BOT.md](../BOT.md) first and follow them. They are the rules for this repository: safety (observe by default, never announce a prefix that is not in the learned RIB view), Docker-first, plugins behind `pkg/plugin`, tests for every inject-path change, one issue per PR.
++
++Before pushing: `make test lint` (same checks as CI).
+diff --git a/.github/dependabot.yml b/.github/dependabot.yml
+new file mode 100644
+index 0000000..d321086
+--- /dev/null
++++ b/.github/dependabot.yml
+@@ -0,0 +1,14 @@
++version: 2
++updates:
++  - package-ecosystem: gomod
++    directory: /
++    schedule:
++      interval: weekly
++  - package-ecosystem: github-actions
++    directory: /
++    schedule:
++      interval: weekly
++  - package-ecosystem: docker
++    directory: /
++    schedule:
++      interval: weekly
+diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
+index 632cd06..99f5984 100644
+--- a/.github/workflows/ci.yml
++++ b/.github/workflows/ci.yml
+@@ -34,6 +34,39 @@ jobs:
+           go test -c -o span.test ./internal/plugins/source/span/
+           sudo ./span.test -test.run AFPacket -test.v
+ 
++  lint:
++    runs-on: ubuntu-latest
++    steps:
++      - uses: actions/checkout@v4
++      - uses: actions/setup-go@v5
++        with:
++          go-version-file: go.mod
++      - uses: golangci/golangci-lint-action@v8
++        with:
++          version: v2.14.0
++
++  govulncheck:
++    runs-on: ubuntu-latest
++    steps:
++      - uses: actions/checkout@v4
++      - uses: actions/setup-go@v5
++        with:
++          go-version: stable
++      - name: govulncheck
++        run: |
++          go install golang.org/x/vuln/cmd/govulncheck@latest
++          scripts/govulncheck.sh
++
++  gitleaks:
++    runs-on: ubuntu-latest
++    steps:
++      - uses: actions/checkout@v4
++        with:
++          fetch-depth: 0
++      - uses: gitleaks/gitleaks-action@v2
++        env:
++          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
++
+   docker:
+     runs-on: ubuntu-latest
+     steps:
+diff --git a/.golangci.yml b/.golangci.yml
+new file mode 100644
+index 0000000..1094604
+--- /dev/null
++++ b/.golangci.yml
+@@ -0,0 +1,11 @@
++version: "2"
++run:
++  timeout: 5m
++# Conservative set. errcheck and staticcheck are deferred: they flag many
++# pre-existing findings (unchecked fmt.Fprintf to stderr, nil contexts in tests).
++linters:
++  default: none
++  enable:
++    - govet
++    - ineffassign
++    - unused
+diff --git a/.govulncheck-ignore b/.govulncheck-ignore
+new file mode 100644
+index 0000000..a635df4
+--- /dev/null
++++ b/.govulncheck-ignore
+@@ -0,0 +1 @@
++GO-2026-4736 GoBGP NEXT_HOP DoS; no upstream fix as of v3.37.0. Revisit on every GoBGP release.
+diff --git a/CLAUDE.md b/CLAUDE.md
+new file mode 100644
+index 0000000..65c3e2e
+--- /dev/null
++++ b/CLAUDE.md
+@@ -0,0 +1,3 @@
++Read [AGENTS.md](AGENTS.md) and [BOT.md](BOT.md) first and follow them. They are the rules for this repository.
++
++Build and check: `make test lint` (same checks as CI). `make setup` installs the tools.
+diff --git a/CONTRIBUTING.md b/CONTRIBUTING.md
+new file mode 100644
+index 0000000..6d5de95
+--- /dev/null
++++ b/CONTRIBUTING.md
+@@ -0,0 +1,24 @@
++# Contributing
++
++Read [AGENTS.md](AGENTS.md) first. It holds the safety, Docker-first, and plugin rules every change follows.
++
++## Setup
++
++```
++make setup   # installs golangci-lint and govulncheck, enables the pre-commit hook
++make test    # build, vet, gofmt check, go test (what CI runs)
++make lint    # golangci-lint
++make vuln    # govulncheck
++```
++
++Go 1.26 is required (see `go.mod`). Docker is not needed for unit tests; the container image and the FRR lab run in CI.
++
++## Pull requests
++
++- One issue per PR, from a branch off `main`. Never push to `main`.
++- Title: `#N outcome`. Body: `Closes #N`, summary, how tested, and rollback for any announce-path change.
++- Add tests for the behavior you change. BGP tests use simulated routers and documentation prefixes and ASNs only.
++- Keep `config.example.yaml` in `mode: observe`. Do not commit secrets, real prefixes, or live RIBs.
++- New capabilities are plugins behind the interfaces in `pkg/plugin` (see [docs/PLUGINS.md](docs/PLUGINS.md)).
++
++Environment variables are listed in [docs/ENV.md](docs/ENV.md). Vulnerabilities: see [SECURITY.md](SECURITY.md).
+diff --git a/Makefile b/Makefile
+new file mode 100644
+index 0000000..af4f6e5
+--- /dev/null
++++ b/Makefile
+@@ -0,0 +1,30 @@
++# Targets match what .github/workflows/ci.yml runs.
++GOLANGCI_LINT_VERSION ?= v2.14.0
++
++.PHONY: setup build vet fmt-check test lint vuln check
++
++setup: ## install dev tools (golangci-lint, govulncheck) and the pre-commit hook
++	go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)
++	go install golang.org/x/vuln/cmd/govulncheck@latest
++	git config core.hooksPath .githooks
++	go mod download
++
++build:
++	go build ./...
++
++vet:
++	go vet ./...
++
++fmt-check:
++	@unformatted="$$(gofmt -l .)"; if [ -n "$$unformatted" ]; then echo "gofmt needed on:"; echo "$$unformatted"; exit 1; fi
++
++test: build vet fmt-check
++	go test ./...
++
++lint:
++	golangci-lint run
++
++vuln:
++	scripts/govulncheck.sh
++
++check: test lint vuln
+diff --git a/SECURITY.md b/SECURITY.md
+new file mode 100644
+index 0000000..74400aa
+--- /dev/null
++++ b/SECURITY.md
+@@ -0,0 +1,9 @@
++# Security policy
++
++Packeteer can inject BGP routes, so please report vulnerabilities privately.
++
++Use GitHub's private vulnerability reporting: the **Security** tab of https://github.com/GrandArcher/Packeteer, then **Report a vulnerability**. Do not open a public issue for a vulnerability, and do not include real prefixes, SNMP communities, credentials, or customer data in a report.
++
++Useful details: the version or image tag, the config (redacted), what you expected, and what happened. We aim to acknowledge a report within a few days.
++
++Supported versions: the latest tagged release and `main`. See [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md) for what Packeteer defends against.
+diff --git a/docs/ENV.md b/docs/ENV.md
+new file mode 100644
+index 0000000..22068cf
+--- /dev/null
++++ b/docs/ENV.md
+@@ -0,0 +1,24 @@
++# Environment variables
++
++Set these on the container (`-e NAME`). Secrets belong here, never in the config file or git.
++
++## Controller
++
++| Variable | Effect |
++|---|---|
++| `PACKETEER_CONFIG` | Config path when `-config` is not given. Default `/etc/packeteer/config.yaml`. |
++| `PACKETEER_PLUGIN_DIR` | Overrides `plugin_dir`. |
++| `PACKETEER_LOG_LEVEL` | `debug`, `info`, `warn`, or `error`. Overrides `log.level`. |
++| `PACKETEER_LOG_FORMAT` | `text` or `json`. Overrides `log.format`. |
++| `PACKETEER_HTTP_LISTEN` | Overrides `http.listen`. `off` disables the HTTP server. |
++| `PACKETEER_HTTP_USER`, `PACKETEER_HTTP_PASSWORD` | The single basic-auth account. Not allowed when `auth.enabled` is true. |
++| `PACKETEER_ADMIN_USER`, `PACKETEER_ADMIN_PASSWORD` | First admin when `auth` is on (user defaults to `admin`). See [auth.md](auth.md). |
++| `PACKETEER_HA_ID` | Instance id for the `lease` elector. See [ha.md](ha.md). |
++
++## Referenced from config
++
++Plugins read secrets from variables whose names you choose in the config (`community_env`, `password_env`, `client_secret_env`, `routing_key_env`, ...). The names used in the docs and examples are `PACKETEER_SNMP_COMMUNITY`, `PACKETEER_SNMP_USER`, `PACKETEER_SNMP_AUTH`, `PACKETEER_SNMP_PRIV`, `PACKETEER_SMTP_USER`, `PACKETEER_SMTP_PASSWORD`, and `PACKETEER_OIDC_CLIENT_SECRET`.
++
++## Exec plugins
++
++An `exec` plugin process gets `PATH`, `PACKETEER_PLUGIN_KIND`, and its configured `env`, and nothing else. See [PLUGINS.md](PLUGINS.md).
+diff --git a/go.mod b/go.mod
+index 40fd185..655831a 100644
+--- a/go.mod
++++ b/go.mod
+@@ -8,11 +8,11 @@ require (
+ 	github.com/gosnmp/gosnmp v1.42.1
+ 	github.com/oschwald/maxminddb-golang/v2 v2.6.0
+ 	github.com/osrg/gobgp/v3 v3.37.0
+-	golang.org/x/net v0.59.0
++	golang.org/x/net v0.61.0
+ 	golang.org/x/oauth2 v0.37.0
+-	golang.org/x/sys v0.48.0
++	golang.org/x/sys v0.49.0
+ 	golang.org/x/time v0.16.0
+-	google.golang.org/protobuf v1.33.0
++	google.golang.org/protobuf v1.36.11
+ 	gopkg.in/yaml.v3 v3.0.1
+ 	modernc.org/sqlite v1.60.0
+ )
+@@ -23,7 +23,6 @@ require (
+ 	github.com/eapache/channels v1.1.0 // indirect
+ 	github.com/eapache/queue v1.1.0 // indirect
+ 	github.com/fsnotify/fsnotify v1.6.0 // indirect
+-	github.com/golang/protobuf v1.5.3 // indirect
+ 	github.com/google/uuid v1.6.0 // indirect
+ 	github.com/hashicorp/hcl v1.0.0 // indirect
+ 	github.com/k-sone/critbitgo v1.4.0 // indirect
+@@ -42,9 +41,9 @@ require (
+ 	github.com/subosito/gotenv v1.4.2 // indirect
+ 	github.com/vishvananda/netlink v1.2.1 // indirect
+ 	github.com/vishvananda/netns v0.0.4 // indirect
+-	golang.org/x/text v0.42.0 // indirect
+-	google.golang.org/genproto/googleapis/rpc v0.0.0-20230525234030-28d5490b6b19 // indirect
+-	google.golang.org/grpc v1.56.3 // indirect
++	golang.org/x/text v0.43.0 // indirect
++	google.golang.org/genproto/googleapis/rpc v0.0.0-20260526163538-3dc84a4a5aaa // indirect
++	google.golang.org/grpc v1.83.2 // indirect
+ 	gopkg.in/ini.v1 v1.67.0 // indirect
+ 	modernc.org/libc v1.77.1 // indirect
+ 	modernc.org/mathutil v1.7.1 // indirect
+diff --git a/go.sum b/go.sum
+index ec7efcb..3582813 100644
+--- a/go.sum
++++ b/go.sum
+@@ -39,6 +39,8 @@ dmitri.shuralyov.com/gpu/mtl v0.0.0-20190408044501-666a987793e9/go.mod h1:H6x//7
+ github.com/BurntSushi/toml v0.3.1/go.mod h1:xHWCNGjB5oqiDr8zfno3MHue2Ht5sIBksp03qcyfWMU=
+ github.com/BurntSushi/xgb v0.0.0-20160522181843-27f122750802/go.mod h1:IVnqGOEym/WlBOVXweHU+Q+/VP0lqqI8lqeDx9IjBqo=
+ github.com/census-instrumentation/opencensus-proto v0.2.1/go.mod h1:f6KPmirojxKA12rnyqOA5BBL4O983OfeGPqjHWSTneU=
++github.com/cespare/xxhash/v2 v2.3.0 h1:UL815xU9SqsFlibzuggzjXhog7bL6oX9BbNZnL2UFvs=
++github.com/cespare/xxhash/v2 v2.3.0/go.mod h1:VGX0DQ3Q6kWi7AoAeZDth3/j3BFtOZR5XLFGgcrjCOs=
+ github.com/chzyer/logex v1.1.10/go.mod h1:+Ywpsq7O8HXn0nuIou7OrIPyXbp3wmkHB+jjWRnGsAI=
+ github.com/chzyer/readline v0.0.0-20180603132655-2972be24d48e/go.mod h1:nSuG5e5PlCu98SY8svDHJxuZscDgtXS6KTTbou5AhLI=
+ github.com/chzyer/test v0.0.0-20180213035817-a1ea475d72b1/go.mod h1:Q3SI9o4m/ZMnBNeIyt5eFwwo7qiLfzFZmjNmxjkiQlU=
+@@ -74,6 +76,10 @@ github.com/go-gl/glfw/v3.3/glfw v0.0.0-20191125211704-12ad95a8df72/go.mod h1:tQ2
+ github.com/go-gl/glfw/v3.3/glfw v0.0.0-20200222043503-6f7a984d4dc4/go.mod h1:tQ2UAYgL5IevRw8kRxooKSPJfGvJ9fJQFa0TUsXzTg8=
+ github.com/go-jose/go-jose/v4 v4.1.4 h1:moDMcTHmvE6Groj34emNPLs/qtYXRVcd6S7NHbHz3kA=
+ github.com/go-jose/go-jose/v4 v4.1.4/go.mod h1:x4oUasVrzR7071A4TnHLGSPpNOm2a21K9Kf04k1rs08=
++github.com/go-logr/logr v1.4.3 h1:CjnDlHq8ikf6E492q6eKboGOC0T8CDaOvkHCIg8idEI=
++github.com/go-logr/logr v1.4.3/go.mod h1:9T104GzyrTigFIr8wt5mBrctHMim0Nb2HLGrmQ40KvY=
++github.com/go-logr/stdr v1.2.2 h1:hSWxHoqTgW2S2qGc0LTAI563KZ5YKYRhT3MFKZMbjag=
++github.com/go-logr/stdr v1.2.2/go.mod h1:mMo/vtBO5dYbehREoey6XUKy/eSumjCCveDpRre4VKE=
+ github.com/go-test/deep v1.1.0 h1:WOcxcdHcvdgThNXjw0t76K42FXTU7HpNQWHpA2HHNlg=
+ github.com/go-test/deep v1.1.0/go.mod h1:5C2ZWiW0ErCdrYzpqxLbTX7MG14M9iiw8DgHncVwcsE=
+ github.com/golang/glog v0.0.0-20160126235308-23def4e6c14b/go.mod h1:SBH7ygxi8pfUlaOkMMuAQtPIUF8ecWP5IEl/CR7VP2Q=
+@@ -101,9 +107,8 @@ github.com/golang/protobuf v1.4.0/go.mod h1:jodUvKwWbYaEsadDk5Fwe5c77LiNKVO9IDvq
+ github.com/golang/protobuf v1.4.1/go.mod h1:U8fpvMrcmy5pZrNK1lt4xCsGvpyWQ/VVv6QDs8UjoX8=
+ github.com/golang/protobuf v1.4.2/go.mod h1:oDoupMAO8OvCJWAcko0GGGIgR6R6ocIYbsSw735rRwI=
+ github.com/golang/protobuf v1.4.3/go.mod h1:oDoupMAO8OvCJWAcko0GGGIgR6R6ocIYbsSw735rRwI=
+-github.com/golang/protobuf v1.5.0/go.mod h1:FsONVRAS9T7sI+LIUmWTfcYkHO4aIWwzhcaSAoJOfIk=
+-github.com/golang/protobuf v1.5.3 h1:KhyjKVUg7Usr/dYsdSqoFveMYd5ko72D+zANwlG1mmg=
+-github.com/golang/protobuf v1.5.3/go.mod h1:XVQd3VNwM+JqD3oG2Ue2ip4fOMUkwXdXDdiuN0vRsmY=
++github.com/golang/protobuf v1.5.4 h1:i7eJL8qZTpSEXOPTxNKhASYpMn+8e5Q6AdndVa1dWek=
++github.com/golang/protobuf v1.5.4/go.mod h1:lnTiLA8Wa4RWRcIUkrtSVa5nRhsEGBg48fD6rSs7xps=
+ github.com/google/btree v0.0.0-20180813153112-4030bb1f1f0c/go.mod h1:lNA+9X1NB3Zf8V7Ke586lFgjr2dZNuvo3lPJSGZ5JPQ=
+ github.com/google/btree v1.0.0/go.mod h1:lNA+9X1NB3Zf8V7Ke586lFgjr2dZNuvo3lPJSGZ5JPQ=
+ github.com/google/go-cmp v0.2.0/go.mod h1:oXzfMopK8JAjlY9xF4vHSVASa0yLyX7SntLO5aqRK0M=
+@@ -115,7 +120,6 @@ github.com/google/go-cmp v0.5.0/go.mod h1:v8dTdLbMG2kIc/vJvl+f65V22dbkXbowE6jgT/
+ github.com/google/go-cmp v0.5.1/go.mod h1:v8dTdLbMG2kIc/vJvl+f65V22dbkXbowE6jgT/gNBxE=
+ github.com/google/go-cmp v0.5.2/go.mod h1:v8dTdLbMG2kIc/vJvl+f65V22dbkXbowE6jgT/gNBxE=
+ github.com/google/go-cmp v0.5.4/go.mod h1:v8dTdLbMG2kIc/vJvl+f65V22dbkXbowE6jgT/gNBxE=
+-github.com/google/go-cmp v0.5.5/go.mod h1:v8dTdLbMG2kIc/vJvl+f65V22dbkXbowE6jgT/gNBxE=
+ github.com/google/go-cmp v0.7.0 h1:wk8382ETsv4JYUZwIsn6YpYiWiBsYLSJiTsyBybVuN8=
+ github.com/google/go-cmp v0.7.0/go.mod h1:pXiqmnSA92OHEEa9HXL2W4E7lf9JzCmGVUdgjX3N/iU=
+ github.com/google/martian v2.1.0+incompatible/go.mod h1:9I4somxYTbIHy5NJKHRl3wXiIaQGbYVAs8BPL6v8lEs=
+@@ -227,6 +231,18 @@ go.opencensus.io v0.22.2/go.mod h1:yxeiOL68Rb0Xd1ddK5vPZ/oVn4vY4Ynel7k9FzqtOIw=
+ go.opencensus.io v0.22.3/go.mod h1:yxeiOL68Rb0Xd1ddK5vPZ/oVn4vY4Ynel7k9FzqtOIw=
+ go.opencensus.io v0.22.4/go.mod h1:yxeiOL68Rb0Xd1ddK5vPZ/oVn4vY4Ynel7k9FzqtOIw=
+ go.opencensus.io v0.22.5/go.mod h1:5pWMHQbX5EPX2/62yrJeAkowc+lfs/XD7Uxpq3pI6kk=
++go.opentelemetry.io/auto/sdk v1.2.1 h1:jXsnJ4Lmnqd11kwkBV2LgLoFMZKizbCi5fNZ/ipaZ64=
++go.opentelemetry.io/auto/sdk v1.2.1/go.mod h1:KRTj+aOaElaLi+wW1kO/DZRXwkF4C5xPbEe3ZiIhN7Y=
++go.opentelemetry.io/otel v1.44.0 h1:JjwHmHpA4iZ3wBxluu2fbbE7j4kqlE8jXyAyPXH7HqU=
++go.opentelemetry.io/otel v1.44.0/go.mod h1:BMgjTHL9WPRlRjL2oZCBTL4whCGtXch2H4BhOPIAyYc=
++go.opentelemetry.io/otel/metric v1.44.0 h1:1w0gILTcHdr3YI+ixLyjemwrVnsMURbTZFrSYCdDdmc=
++go.opentelemetry.io/otel/metric v1.44.0/go.mod h1:8O7hanEPBNgEMmybD3s2VBKcgWOCsA6tzHBPODAiquo=
++go.opentelemetry.io/otel/sdk v1.44.0 h1:nHYwb9lK+fJPU/dnT6s7W7Z8itMWyqrnVfbheVYrZ58=
++go.opentelemetry.io/otel/sdk v1.44.0/go.mod h1:Osuydd3Se74nqjAKxid74N5eC+jfEqfTegHRnq58oK0=
++go.opentelemetry.io/otel/sdk/metric v1.44.0 h1:3LlKgI+VjbVsjNRFZJZAJ30WjXC5VkNRks6si09iEfI=
++go.opentelemetry.io/otel/sdk/metric v1.44.0/go.mod h1:5B5pMARnXxKhltooO4xUuCBorl65a4EpnTalObqOigA=
++go.opentelemetry.io/otel/trace v1.44.0 h1:jxF5CsGYCe74MCRx2X4g7WsY/VBKRqqpNvXlX/6gtIk=
++go.opentelemetry.io/otel/trace v1.44.0/go.mod h1:oLl1jrMQAVo6v3GAggN+1VH9VIz9iUSvW53sW1Q8PIE=
+ go.yaml.in/yaml/v3 v3.0.5 h1:N6y/pJk8buWs9NY5ERU2HSMfm+IuD/OtfdAnq6kESPw=
+ go.yaml.in/yaml/v3 v3.0.5/go.mod h1:HVTZu1O7/Vkt2N+BFy8Zza+lnLsABggaTM2ZpNIGuKg=
+ golang.org/x/crypto v0.0.0-20190308221718-c2843e01d9a2/go.mod h1:djNgcEr1/C05ACkg1iLfiJU5Ep61QUkGW8qpdssI0+w=
+@@ -303,8 +319,8 @@ golang.org/x/net v0.0.0-20201209123823-ac852fbbde11/go.mod h1:m0MpNAwzfU5UDzcl9v
+ golang.org/x/net v0.0.0-20201224014010-6772e930b67b/go.mod h1:m0MpNAwzfU5UDzcl9v0D8zg8gWTRqZa9RBIspLL5mdg=
+ golang.org/x/net v0.0.0-20210226172049-e18ecbb05110/go.mod h1:m0MpNAwzfU5UDzcl9v0D8zg8gWTRqZa9RBIspLL5mdg=
+ golang.org/x/net v0.0.0-20211112202133-69e39bad7dc2/go.mod h1:9nx3DQGgdP8bBQD5qxJ1jj9UTztislL4KSBs9R2vV5Y=
+-golang.org/x/net v0.59.0 h1:5zfYln+w5XCxwrnMMJPufRgNoXEaGxl0wo5GqPXyues=
+-golang.org/x/net v0.59.0/go.mod h1:2DA/G1UfVbCpQPeWTmMPGY7Cs2PkBkwu743bVX5PIVg=
++golang.org/x/net v0.61.0 h1:RR+6j/BTBCrggOLugxa+66R8FvoN6MHlzDlZIbN9YFw=
++golang.org/x/net v0.61.0/go.mod h1:WgDCOTH8iwtB66T4/GfI94AHo/hhdb7Hah9NDseQfiI=
+ golang.org/x/oauth2 v0.0.0-20180821212333-d2e6202438be/go.mod h1:N/0e6XlmueqKjAGxoOufVs8QHGRruUQn6yWY3a++T0U=
+ golang.org/x/oauth2 v0.0.0-20190226205417-e64efc72b421/go.mod h1:gOpvHmFTYa4IltrdGE7lF6nIHvwfUNPOp7c8zoXwtLw=
+ golang.org/x/oauth2 v0.0.0-20190604053449-0f29369cfe45/go.mod h1:gOpvHmFTYa4IltrdGE7lF6nIHvwfUNPOp7c8zoXwtLw=
+@@ -326,8 +342,8 @@ golang.org/x/sync v0.0.0-20200317015054-43a5402ce75a/go.mod h1:RxMgew5VJxzue5/jJ
+ golang.org/x/sync v0.0.0-20200625203802-6e8e738ad208/go.mod h1:RxMgew5VJxzue5/jJTE5uejpjVlOe/izrB70Jof72aM=
+ golang.org/x/sync v0.0.0-20201020160332-67f06af15bc9/go.mod h1:RxMgew5VJxzue5/jJTE5uejpjVlOe/izrB70Jof72aM=
+ golang.org/x/sync v0.0.0-20201207232520-09787c993a3a/go.mod h1:RxMgew5VJxzue5/jJTE5uejpjVlOe/izrB70Jof72aM=
+-golang.org/x/sync v0.23.0 h1:KameEIfc1IkluZyXWLn39Wd4tURc6GbCiISGiZm2bQk=
+-golang.org/x/sync v0.23.0/go.mod h1:sUUOizhqBxiL6pEWpqNLUiaJn1ShEbZ6BBqskPbjZm0=
++golang.org/x/sync v0.24.0 h1:iqiDrGoDgyuvAKrhLQthUEzU/R378N78gXbBjxed7oA=
++golang.org/x/sync v0.24.0/go.mod h1:sUUOizhqBxiL6pEWpqNLUiaJn1ShEbZ6BBqskPbjZm0=
+ golang.org/x/sys v0.0.0-20180830151530-49385e6e1522/go.mod h1:STP8DvDyc/dI5b8T5hshtkjS+E42TnysNCUPdjciGhY=
+ golang.org/x/sys v0.0.0-20190215142949-d0b11bdaac8a/go.mod h1:STP8DvDyc/dI5b8T5hshtkjS+E42TnysNCUPdjciGhY=
+ golang.org/x/sys v0.0.0-20190312061237-fead79001313/go.mod h1:h1NjWce9XRLGQEsW7wpKNCjG9DtNlClVuFLEZdDNbEs=
+@@ -367,8 +383,8 @@ golang.org/x/sys v0.0.0-20220715151400-c0bba94af5f8/go.mod h1:oPkhp1MJrh7nUepCBc
+ golang.org/x/sys v0.0.0-20220908164124-27713097b956/go.mod h1:oPkhp1MJrh7nUepCBck5+mAzfO9JrbApNNgaTdGDITg=
+ golang.org/x/sys v0.2.0/go.mod h1:oPkhp1MJrh7nUepCBck5+mAzfO9JrbApNNgaTdGDITg=
+ golang.org/x/sys v0.10.0/go.mod h1:oPkhp1MJrh7nUepCBck5+mAzfO9JrbApNNgaTdGDITg=
+-golang.org/x/sys v0.48.0 h1:bbX/i/6MgT9BVLM9RT1thmxL04yeTAhbEz4SyadbXoo=
+-golang.org/x/sys v0.48.0/go.mod h1:hNLxWAXmnKAxqDtdwIYC4bM9oQPEecfsnNMuSxOs3og=
++golang.org/x/sys v0.49.0 h1:XbzkgYJHdqh/8m2Uu0W/dQv8nktxx4BFHp1M0gROTXA=
++golang.org/x/sys v0.49.0/go.mod h1:hNLxWAXmnKAxqDtdwIYC4bM9oQPEecfsnNMuSxOs3og=
+ golang.org/x/term v0.0.0-20201126162022-7de9c90e9dd1/go.mod h1:bj7SfCRtBDWHUb9snDiAeCFNEtKQo2Wmx5Cou7ajbmo=
+ golang.org/x/text v0.0.0-20170915032832-14c0d48ead0c/go.mod h1:NqM8EUOU14njkJ3fqMW+pc6Ldnwhi/IjpwHt7yyuwOQ=
+ golang.org/x/text v0.3.0/go.mod h1:NqM8EUOU14njkJ3fqMW+pc6Ldnwhi/IjpwHt7yyuwOQ=
+@@ -378,8 +394,8 @@ golang.org/x/text v0.3.3/go.mod h1:5Zoc/QRtKVWzQhOtBMvqHzDpF6irO9z98xDceosuGiQ=
+ golang.org/x/text v0.3.4/go.mod h1:5Zoc/QRtKVWzQhOtBMvqHzDpF6irO9z98xDceosuGiQ=
+ golang.org/x/text v0.3.6/go.mod h1:5Zoc/QRtKVWzQhOtBMvqHzDpF6irO9z98xDceosuGiQ=
+ golang.org/x/text v0.3.7/go.mod h1:u+2+/6zg+i71rQMx5EYifcz6MCKuco9NR6JIITiCfzQ=
+-golang.org/x/text v0.42.0 h1:JbOZXgfeCPU9gacVtYliJqOhD+zhrEqK4LfdpmlUZqI=
+-golang.org/x/text v0.42.0/go.mod h1:ojzP1Z+2QtioaF8DTtO8K5q7JWVVYwZKenzujK0Zd0E=
++golang.org/x/text v0.43.0 h1:1QivrlhwAsnMOcqgOdl9my7s9OyZl8O5/UGUTJVXoWc=
++golang.org/x/text v0.43.0/go.mod h1:hbSIYA/amXcRXTFSZqh8tWHEoqRvvbKPJ2uz/KU+a+s=
+ golang.org/x/time v0.0.0-20181108054448-85acf8d2951c/go.mod h1:tRJNPiyCQ0inRvYxbN9jk5I+vvW/OXSQhTDSoE431IQ=
+ golang.org/x/time v0.0.0-20190308202827-9d24e82272b4/go.mod h1:tRJNPiyCQ0inRvYxbN9jk5I+vvW/OXSQhTDSoE431IQ=
+ golang.org/x/time v0.0.0-20191024005414-555d28b269f0/go.mod h1:tRJNPiyCQ0inRvYxbN9jk5I+vvW/OXSQhTDSoE431IQ=
+@@ -432,12 +448,14 @@ golang.org/x/tools v0.0.0-20201208233053-a543418bbed2/go.mod h1:emZCQorbCU4vsT4f
+ golang.org/x/tools v0.0.0-20210105154028-b0ab187a4818/go.mod h1:emZCQorbCU4vsT4fOWvOPXz4eW1wZW4PmDk9uLelYpA=
+ golang.org/x/tools v0.0.0-20210108195828-e2f9c7f1fc8e/go.mod h1:emZCQorbCU4vsT4fOWvOPXz4eW1wZW4PmDk9uLelYpA=
+ golang.org/x/tools v0.1.0/go.mod h1:xkSsbof2nBLbhDlRMhhhyNLN/zl3eTqcnHD5viDpcZ0=
+-golang.org/x/tools v0.50.0 h1:c2ifzfcuY7L90lZ2aKd8S4K2NpASF08SZx9ZuJkHmSU=
+-golang.org/x/tools v0.50.0/go.mod h1:7ulVMw3831Mwi5EZD6RomGyffr4VFjuNYXf2BbCEAV0=
++golang.org/x/tools v0.51.0 h1:k4Xc/1Om9jwkBJBo4NVLMSARBoWtK10mx+W5BnXCeAI=
++golang.org/x/tools v0.51.0/go.mod h1:9eEncMayCV6zRMGhR5eZEC2iBx98qWcF1HZ9Z7wJOoA=
+ golang.org/x/xerrors v0.0.0-20190717185122-a985d3407aa7/go.mod h1:I/5z698sn9Ka8TeJc9MKroUUfqBBauWjQqLJ2OPfmY0=
+ golang.org/x/xerrors v0.0.0-20191011141410-1b5146add898/go.mod h1:I/5z698sn9Ka8TeJc9MKroUUfqBBauWjQqLJ2OPfmY0=
+ golang.org/x/xerrors v0.0.0-20191204190536-9bdfabe68543/go.mod h1:I/5z698sn9Ka8TeJc9MKroUUfqBBauWjQqLJ2OPfmY0=
+ golang.org/x/xerrors v0.0.0-20200804184101-5ec99f83aff1/go.mod h1:I/5z698sn9Ka8TeJc9MKroUUfqBBauWjQqLJ2OPfmY0=
++gonum.org/v1/gonum v0.17.0 h1:VbpOemQlsSMrYmn7T2OUvQ4dqxQXU+ouZFQsZOx50z4=
++gonum.org/v1/gonum v0.17.0/go.mod h1:El3tOrEuMpv2UdMrbNlKEh9vd86bmQ6vqIcDwxEOc1E=
+ google.golang.org/api v0.4.0/go.mod h1:8k5glujaEP+g9n7WNsDg8QP6cUVNI86fCNMcbazEtwE=
+ google.golang.org/api v0.7.0/go.mod h1:WtwebWUNSVBH/HAw79HIFXZNqEvBhG+Ra+ax0hx3E3M=
+ google.golang.org/api v0.8.0/go.mod h1:o4eAsZoiT+ibD93RtjEohWalFOjRDx6CVaqeizhEnKg=
+@@ -500,8 +518,8 @@ google.golang.org/genproto v0.0.0-20201210142538-e3217bee35cc/go.mod h1:FWY/as6D
+ google.golang.org/genproto v0.0.0-20201214200347-8c77b98c765d/go.mod h1:FWY/as6DDZQgahTzZj3fqbO1CbirC29ZNUFHwi0/+no=
+ google.golang.org/genproto v0.0.0-20210108203827-ffc7fda8c3d7/go.mod h1:FWY/as6DDZQgahTzZj3fqbO1CbirC29ZNUFHwi0/+no=
+ google.golang.org/genproto v0.0.0-20210226172003-ab064af71705/go.mod h1:FWY/as6DDZQgahTzZj3fqbO1CbirC29ZNUFHwi0/+no=
+-google.golang.org/genproto/googleapis/rpc v0.0.0-20230525234030-28d5490b6b19 h1:0nDDozoAU19Qb2HwhXadU8OcsiO/09cnTqhUtq2MEOM=
+-google.golang.org/genproto/googleapis/rpc v0.0.0-20230525234030-28d5490b6b19/go.mod h1:66JfowdXAEgad5O9NnYcsNPLCPZJD++2L9X0PCMODrA=
++google.golang.org/genproto/googleapis/rpc v0.0.0-20260526163538-3dc84a4a5aaa h1:mZHHdPZl0dbGHCflZgAq/Q468DWVFcU2whhB2KAo8fk=
++google.golang.org/genproto/googleapis/rpc v0.0.0-20260526163538-3dc84a4a5aaa/go.mod h1:4Hqkh8ycfw05ld/3BWL7rJOSfebL2Q+DVDeRgYgxUU8=
+ google.golang.org/grpc v1.19.0/go.mod h1:mqu4LbDTu4XGKhr4mRzUsmM4RtVoemTSY81AxZiDr8c=
+ google.golang.org/grpc v1.20.1/go.mod h1:10oTOabMzJvdu6/UiuZezV6QK5dSlG84ov/aaiqXj38=
+ google.golang.org/grpc v1.21.1/go.mod h1:oYelfM1adQP15Ek0mdvEgi9Df8B9CZIaU1084ijfRaM=
+@@ -518,8 +536,8 @@ google.golang.org/grpc v1.31.1/go.mod h1:N36X2cJ7JwdamYAgDz+s+rVMFjt3numwzf/HckM
+ google.golang.org/grpc v1.33.2/go.mod h1:JMHMWHQWaTccqQQlmk3MJZS+GWXOdAesneDmEnv2fbc=
+ google.golang.org/grpc v1.34.0/go.mod h1:WotjhfgOW/POjDeRt8vscBtXq+2VjORFy659qA51WJ8=
+ google.golang.org/grpc v1.35.0/go.mod h1:qjiiYl8FncCW8feJPdyg3v6XW24KsRHe+dy9BAGRRjU=
+-google.golang.org/grpc v1.56.3 h1:8I4C0Yq1EjstUzUJzpcRVbuYA2mODtEmpWiQoN/b2nc=
+-google.golang.org/grpc v1.56.3/go.mod h1:I9bI3vqKfayGqPUAwGdOSu7kt6oIJLixfffKrpXqQ9s=
++google.golang.org/grpc v1.83.2 h1:EManeRomTObA0BU7I8vXgg/78uE5MJ9M8B39EX2WscU=
++google.golang.org/grpc v1.83.2/go.mod h1:YPI1hK3kDked6iHvgX3tR0y+nX/qpMFKhPgFsokw1S8=
+ google.golang.org/protobuf v0.0.0-20200109180630-ec00e32a8dfd/go.mod h1:DFci5gLYBciE7Vtevhsrf46CRTquxDuWsQurQQe4oz8=
+ google.golang.org/protobuf v0.0.0-20200221191635-4d8936d0db64/go.mod h1:kwYJMbMJ01Woi6D6+Kah6886xMZcty6N08ah7+eCXa0=
+ google.golang.org/protobuf v0.0.0-20200228230310-ab0ca4ff8a60/go.mod h1:cfTl7dwQJ+fmap5saPgwCLgHXTUD7jkjRqWcaiX5VyM=
+@@ -530,10 +548,8 @@ google.golang.org/protobuf v1.23.0/go.mod h1:EGpADcykh3NcUnDUJcl1+ZksZNG86OlYog2
+ google.golang.org/protobuf v1.23.1-0.20200526195155-81db48ad09cc/go.mod h1:EGpADcykh3NcUnDUJcl1+ZksZNG86OlYog2l/sGQquU=
+ google.golang.org/protobuf v1.24.0/go.mod h1:r/3tXBNzIEhYS9I1OUVjXDlt8tc493IdKGjtUeSXeh4=
+ google.golang.org/protobuf v1.25.0/go.mod h1:9JNX74DMeImyA3h4bdi1ymwjUzf21/xIlbajtzgsN7c=
+-google.golang.org/protobuf v1.26.0-rc.1/go.mod h1:jlhhOSvTdKEhbULTjvd4ARK9grFBp09yW+WbY/TyQbw=
+-google.golang.org/protobuf v1.26.0/go.mod h1:9q0QmTI4eRPtz6boOQmLYwt+qCgq0jsYwAQnmE0givc=
+-google.golang.org/protobuf v1.33.0 h1:uNO2rsAINq/JlFpSdYEKIZ0uKD/R9cpdv0T+yoGwGmI=
+-google.golang.org/protobuf v1.33.0/go.mod h1:c6P6GXX6sHbq/GpV6MGZEdwhWPcYBgnhAHhKbcUYpos=
++google.golang.org/protobuf v1.36.11 h1:fV6ZwhNocDyBLK0dj+fg8ektcVegBBuEolpbTQyBNVE=
++google.golang.org/protobuf v1.36.11/go.mod h1:HTf+CrKn2C3g5S8VImy6tdcUvCska2kB7j23XfzDpco=
+ gopkg.in/check.v1 v0.0.0-20161208181325-20d25e280405/go.mod h1:Co6ibVJAznAaIkqp8huTwlJQCZ016jof/cbN4VW5Yz0=
+ gopkg.in/check.v1 v1.0.0-20180628173108-788fd7840127 h1:qIbj1fsPNlZgppZ+VLlY7N33q108Sa+fhmuc+sWQYwY=
+ gopkg.in/check.v1 v1.0.0-20180628173108-788fd7840127/go.mod h1:Co6ibVJAznAaIkqp8huTwlJQCZ016jof/cbN4VW5Yz0=
+diff --git a/internal/httpapi/server_test.go b/internal/httpapi/server_test.go
+index 667b9c5..c29ab23 100644
+--- a/internal/httpapi/server_test.go
++++ b/internal/httpapi/server_test.go
+@@ -168,7 +168,7 @@ func TestHealthAndReady(t *testing.T) {
+ 	notReady.BGPConfigured = true
+ 	notReady.RIBReady = false
+ 	ts2 := newTestServer(t, notReady, "", "")
+-	code, _, body = do(t, http.MethodGet, ts2.URL+"/healthz", "", "")
++	code, _, _ = do(t, http.MethodGet, ts2.URL+"/healthz", "", "")
+ 	if code != http.StatusOK {
+ 		t.Fatalf("healthz while not ready = %d", code)
+ 	}
+diff --git a/internal/httpapi/ui_forms_test.go b/internal/httpapi/ui_forms_test.go
+index 24edb56..1bd0d7c 100644
+--- a/internal/httpapi/ui_forms_test.go
++++ b/internal/httpapi/ui_forms_test.go
+@@ -70,7 +70,7 @@ func TestConfigFormSections(t *testing.T) {
+ 	}
+ 
+ 	// Save goes through the editor's checks and the audit log.
+-	rec, got = e.do(t, "PUT", "/api/config", admin, map[string]any{"yaml": yml, "base": configedit.Hash([]byte(editorYAML))})
++	rec, _ = e.do(t, "PUT", "/api/config", admin, map[string]any{"yaml": yml, "base": configedit.Hash([]byte(editorYAML))})
+ 	if rec.Code != http.StatusOK {
+ 		t.Fatalf("save: %d %s", rec.Code, rec.Body)
+ 	}
+diff --git a/internal/httpapi/ui_test.go b/internal/httpapi/ui_test.go
+index da146c2..1dfd950 100644
+--- a/internal/httpapi/ui_test.go
++++ b/internal/httpapi/ui_test.go
+@@ -341,7 +341,7 @@ func TestWizardAPIRoundTrip(t *testing.T) {
+ 	}
+ 	yml := got["yaml"].(string)
+ 	// The wizard output goes through the editor like any edit.
+-	rec, got = e.do(t, "PUT", "/api/config", plugin.RoleAdmin, map[string]any{"yaml": yml, "base": configedit.Hash([]byte(editorYAML))})
++	rec, _ = e.do(t, "PUT", "/api/config", plugin.RoleAdmin, map[string]any{"yaml": yml, "base": configedit.Hash([]byte(editorYAML))})
+ 	if rec.Code != http.StatusOK {
+ 		t.Fatalf("save wizard config: %d %s", rec.Code, rec.Body)
+ 	}
+diff --git a/internal/plugins/source/span/fixture_test.go b/internal/plugins/source/span/fixture_test.go
+index df1e966..d9d3fb5 100644
+--- a/internal/plugins/source/span/fixture_test.go
++++ b/internal/plugins/source/span/fixture_test.go
+@@ -31,9 +31,6 @@ var (
+ 	otherLocal = netip.MustParseAddr("192.0.2.99")        // local to local: ignored
+ )
+ 
+-// fixtureLocal is the local config matching the fixture.
+-var fixtureLocal = []string{"192.0.2.0/24", "2001:db8:1::/48"}
+-
+ type pkt struct {
+ 	at    time.Duration
+ 	src   netip.AddrPort
+diff --git a/internal/policy/commit_test.go b/internal/policy/commit_test.go
+index 5ea3871..9ae05c4 100644
+--- a/internal/policy/commit_test.go
++++ b/internal/policy/commit_test.go
+@@ -302,14 +302,14 @@ func TestDecideRefusesHigherLossAndNativeCommitMoves(t *testing.T) {
+ 		t.Fatalf("bare planner higher loss: %+v %+v", decision(t, out, pA), st.Improvements)
+ 	}
+ 
+-	st, out = Decide(NewState(), input, c, planStub{moves: []plugin.PlanMove{mv}, override: true, allow: true}, t0)
++	st, _ = Decide(NewState(), input, c, planStub{moves: []plugin.PlanMove{mv}, override: true, allow: true}, t0)
+ 	if st.Improvements[pA].Provider != "b" || st.Improvements[pA].Cause != plugin.CauseCommit {
+ 		t.Fatalf("loss override: %+v", st.Improvements)
+ 	}
+ 
+ 	input = commitInput()
+ 	native := plugin.PlanMove{Prefix: pA, Provider: "a", Reason: "stub", ReliefMbps: 60}
+-	st, out = Decide(NewState(), input, c, planStub{moves: []plugin.PlanMove{native}, override: true, allow: true}, t0)
++	st, _ = Decide(NewState(), input, c, planStub{moves: []plugin.PlanMove{native}, override: true, allow: true}, t0)
+ 	if len(st.Improvements) != 0 {
+ 		t.Fatalf("steered onto native: %+v", st.Improvements)
+ 	}
+diff --git a/internal/policy/confirm_test.go b/internal/policy/confirm_test.go
+index 47632a8..92e046c 100644
+--- a/internal/policy/confirm_test.go
++++ b/internal/policy/confirm_test.go
+@@ -289,7 +289,7 @@ func TestConfirmRoundsClearedWhenThePrefixLeaves(t *testing.T) {
+ 	if _, ok := st.confirm[pA]; ok || !strings.Contains(decision(t, out, pA).Reason, "not in RIB") {
+ 		t.Fatalf("RIB leave: %+v %+v", st.confirm, decision(t, out, pA))
+ 	}
+-	st, out = step(t, st, c, t0.Add(2*time.Minute), win)
++	st, _ = step(t, st, c, t0.Add(2*time.Minute), win)
+ 	if st.confirm[pA].Streak != 1 || len(st.Improvements) != 0 {
+ 		t.Fatalf("return did not start over: %+v", st.confirm[pA])
+ 	}
+@@ -300,7 +300,7 @@ func TestConfirmRoundsClearedWhenThePrefixLeaves(t *testing.T) {
+ 	if len(st.confirm) != 0 {
+ 		t.Fatalf("RIB not ready kept %+v", st.confirm)
+ 	}
+-	st, out = step(t, st, c, t0.Add(4*time.Minute), win)
++	st, _ = step(t, st, c, t0.Add(4*time.Minute), win)
+ 	if st.confirm[pA].Streak != 1 {
+ 		t.Fatalf("after session loss streak = %+v", st.confirm[pA])
+ 	}
+diff --git a/internal/policy/cost_test.go b/internal/policy/cost_test.go
+index e2961fc..2b1365e 100644
+--- a/internal/policy/cost_test.go
++++ b/internal/policy/cost_test.go
+@@ -255,8 +255,7 @@ func TestPerformanceDisplacesCostAtCap(t *testing.T) {
+ // rogue is a planner that proposes whatever it is told.
+ type rogue struct {
+ 	plugin.Base
+-	moves  []plugin.PlanMove
+-	policy bool
++	moves []plugin.PlanMove
+ }
+ 
+ func (r *rogue) Score(p plugin.PathStats) float64 {
+diff --git a/internal/probe/engine.go b/internal/probe/engine.go
+index ceaf536..0ceb3e2 100644
+--- a/internal/probe/engine.go
++++ b/internal/probe/engine.go
+@@ -855,7 +855,6 @@ func (e *Engine) targetsFrom(ctx context.Context, s NamedSource) (ts []plugin.Ta
+ 		}
+ 	}
+ 	ts, err = e.oneSource(ctx, s)
+-	called = true
+ 	if err != nil && (errors.Is(err, errSourceBusy) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled)) {
+ 		return nil, err, true
+ 	}
+diff --git a/scripts/govulncheck.sh b/scripts/govulncheck.sh
+new file mode 100755
+index 0000000..164b9dc
+--- /dev/null
++++ b/scripts/govulncheck.sh
+@@ -0,0 +1,14 @@
++#!/bin/sh
++# Runs govulncheck and fails on any finding whose ID is not listed in
++# .govulncheck-ignore (one "GO-YYYY-NNNN reason" per line).
++set -u
++out="$(govulncheck ./... 2>&1)"; rc=$?
++printf '%s\n' "$out" | tail -n 40
++[ "$rc" -eq 0 ] && exit 0
++ids="$(printf '%s\n' "$out" | sed -n 's/^Vulnerability #[0-9]*: \(GO-[0-9-]*\).*/\1/p')"
++[ -z "$ids" ] && { echo "govulncheck failed without findings"; exit "$rc"; }
++bad=0
++for id in $ids; do
++  grep -q "^$id\b" .govulncheck-ignore 2>/dev/null || { echo "unaccepted vulnerability: $id"; bad=1; }
++done
++exit $bad
