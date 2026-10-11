@@ -122,8 +122,18 @@ func TestMitigationAnnounceWithdrawAndCrash(t *testing.T) {
 	if err := m.Bind(v.Server(), "64512:666", allow, 2); err != nil {
 		t.Fatal(err)
 	}
-	if err := m.Bind(v.Server(), "64512:666", allow, 2); err == nil {
-		t.Fatal("second bind accepted")
+	// A reload that enters inject again binds the same settings: a no-op.
+	if err := m.Bind(v.Server(), "64512:666", allow, 2); err != nil {
+		t.Fatalf("identical rebind: %v", err)
+	}
+	if err := m.Bind(v.Server(), "64512:666", allow, 3); err == nil {
+		t.Fatal("rebind with a different cap accepted")
+	}
+	if err := m.Bind(v.Server(), "64512:666", allow[:0:0], 2); err == nil {
+		t.Fatal("rebind with an empty allowlist accepted")
+	}
+	if err := m.Bind(v.Server(), "64512:667", allow, 2); err == nil {
+		t.Fatal("rebind with a different community accepted")
 	}
 
 	victim := netip.MustParsePrefix("198.51.100.0/24")

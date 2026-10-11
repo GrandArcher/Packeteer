@@ -236,11 +236,8 @@ func New(cfg Config, ann plugin.MitigationAnnouncer, log *slog.Logger) (*Control
 		return nil, errors.New("mitigation: default_ttl must be positive and at most max_ttl")
 	}
 	if cfg.Mode == config.ModeInject {
-		if ann == nil {
-			return nil, errors.New("mitigation: inject mode requires mitigation.announcer")
-		}
-		if cfg.LocalPref == 0 || cfg.Community == "" {
-			return nil, errors.New("mitigation: inject mode requires local_pref and packeteer_community")
+		if err := checkInject(cfg, ann); err != nil {
+			return nil, err
 		}
 	}
 	if log == nil {
@@ -260,14 +257,77 @@ func New(cfg Config, ann plugin.MitigationAnnouncer, log *slog.Logger) (*Control
 	return c, nil
 }
 
-// SetRIB gives the controller the RIB view. Inject needs one; Sync
-// withdraws everything and announces nothing without it.
-func (c *Controller) SetRIB(rib RIB) error {
-	if c.cfg.Mode == config.ModeInject && rib == nil {
-		return errors.New("mitigation: inject mode requires a RIB view")
+func checkInject(cfg Config, ann plugin.MitigationAnnouncer) error {
+	if ann == nil {
+		return errors.New("mitigation: inject mode requires mitigation.announcer")
+	}
+	if cfg.LocalPref == 0 || cfg.Community == "" {
+		return errors.New("mitigation: inject mode requires local_pref and packeteer_community")
+	}
+	return nil
+}
+
+// PrepareRuntime checks that the controller can enter mode. It changes
+// nothing, so a reload that is refused later leaves the controller as it
+// was.
+func (c *Controller) PrepareRuntime(mode string) error {
+	if c == nil || mode != config.ModeInject {
+		return nil
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	return c.checkEnterLocked()
+}
+
+func (c *Controller) checkEnterLocked() error {
+	if err := checkInject(c.cfg, c.ann); err != nil {
+		return err
+	}
+	if c.rib == nil {
+		return errors.New("mitigation: inject mode requires a RIB view")
+	}
+	return nil
+}
+
+// ApplyRuntime changes the mode while running (#233). Leaving inject
+// withdraws every route before the mode changes, under the lock Sync takes,
+// and keeps the rules as a dry run. Entering inject drops the rules held
+// outside it: a rule added as a dry run must not reach the edge because a
+// mode flipped. A failed withdraw leaves the mode as it was.
+func (c *Controller) ApplyRuntime(ctx context.Context, mode string) error {
+	if c == nil {
+		return nil
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	now := time.Now()
+	defer c.settleLocked(now)
+	switch {
+	case c.cfg.Mode == config.ModeInject && mode != config.ModeInject:
+		if err := c.withdrawAllLocked(ctx); err != nil {
+			return err
+		}
+	case c.cfg.Mode != config.ModeInject && mode == config.ModeInject:
+		if err := c.checkEnterLocked(); err != nil {
+			return err
+		}
+		for k, r := range c.rules {
+			delete(c.rules, k)
+			c.changeLocked(now, ChangeRemoved, r, "dropped: mitigation.mode changed to inject")
+		}
+	}
+	c.cfg.Mode = mode
+	return nil
+}
+
+// SetRIB gives the controller the RIB view. Inject needs one; Sync
+// withdraws everything and announces nothing without it.
+func (c *Controller) SetRIB(rib RIB) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.cfg.Mode == config.ModeInject && rib == nil {
+		return errors.New("mitigation: inject mode requires a RIB view")
+	}
 	c.rib = rib
 	return nil
 }
@@ -298,12 +358,15 @@ func unicastKey(p netip.Prefix) string { return "route " + p.String() }
 // prefix. FlowSpec rules never hold a prefix. Outside inject it is always
 // false: observe is a dry run and changes nothing.
 func (c *Controller) Holds(p netip.Prefix) bool {
-	if c == nil || c.cfg.Mode != config.ModeInject {
+	if c == nil {
 		return false
 	}
 	p = p.Masked()
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if c.cfg.Mode != config.ModeInject {
+		return false
+	}
 	_, r := c.rules[unicastKey(p)]
 	_, w := c.wire[p]
 	return r || w
@@ -800,12 +863,15 @@ func (c *Controller) announcedLocked(r *Rule) bool {
 // WithdrawAll removes every mitigation route and keeps the rules. It is
 // safe to call more than once and in every mode.
 func (c *Controller) WithdrawAll(ctx context.Context) error {
-	if c == nil || c.ann == nil || c.cfg.Mode != config.ModeInject {
+	if c == nil || c.ann == nil {
 		return nil
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	defer c.settleLocked(time.Now())
+	if c.cfg.Mode != config.ModeInject {
+		return nil
+	}
 	return c.withdrawAllLocked(ctx)
 }
 

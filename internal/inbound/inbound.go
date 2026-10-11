@@ -247,19 +247,8 @@ type Controller struct {
 // suggest then plan without a catalog.
 func New(cfg Config, ann plugin.InboundAnnouncer, rib RIB, log *slog.Logger) (*Controller, error) {
 	if cfg.Mode == config.ModeInject {
-		switch {
-		case ann == nil:
-			return nil, errors.New("inbound: inject mode requires an inbound announcer")
-		case rib == nil:
-			return nil, errors.New("inbound: inject mode requires a RIB view")
-		case cfg.LocalPref == 0:
-			return nil, errors.New("inbound: inject mode requires local_pref")
-		case cfg.Community == "":
-			return nil, errors.New("inbound: inject mode requires a community")
-		case cfg.MaxImprovements < 1:
-			return nil, errors.New("inbound: max_improvements must be positive")
-		case len(cfg.Allowlist) == 0:
-			return nil, errors.New("inbound: inject mode requires an allowlist")
+		if err := checkInject(cfg, ann, rib); err != nil {
+			return nil, err
 		}
 	}
 	if cfg.ReleasePct <= 0 || cfg.ReleasePct > 100 {
@@ -290,6 +279,78 @@ func New(cfg Config, ann plugin.InboundAnnouncer, rib RIB, log *slog.Logger) (*C
 		steers: map[string]Steer{}, cooldown: map[string]time.Time{}, active: map[netip.Prefix]Route{},
 		pending: map[string]time.Time{}, damp: map[string]*damping{},
 	}, nil
+}
+
+// checkInject is what inject mode needs, at start and when a reload enters
+// inject.
+func checkInject(cfg Config, ann plugin.InboundAnnouncer, rib RIB) error {
+	switch {
+	case ann == nil:
+		return errors.New("inbound: inject mode requires an inbound announcer")
+	case rib == nil:
+		return errors.New("inbound: inject mode requires a RIB view")
+	case cfg.LocalPref == 0:
+		return errors.New("inbound: inject mode requires local_pref")
+	case cfg.Community == "":
+		return errors.New("inbound: inject mode requires a community")
+	case cfg.MaxImprovements < 1:
+		return errors.New("inbound: max_improvements must be positive")
+	case len(cfg.Allowlist) == 0:
+		return errors.New("inbound: inject mode requires an allowlist")
+	}
+	return nil
+}
+
+// Runtime is what a reload changes while the controller runs (#233).
+type Runtime struct {
+	Mode      string
+	Allowlist []netip.Prefix
+	// HoldTime and TTL apply to steers created after the change; a steer
+	// in flight keeps the hold it was given.
+	HoldTime time.Duration
+	TTL      time.Duration
+}
+
+// PrepareRuntime checks that rt can take effect. It changes nothing, so a
+// reload that is refused later leaves the controller as it was.
+func (c *Controller) PrepareRuntime(rt Runtime) error {
+	if c == nil || rt.Mode != config.ModeInject {
+		return nil
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	next := c.cfg
+	next.Allowlist = rt.Allowlist
+	return checkInject(next, c.ann, c.rib)
+}
+
+// ApplyRuntime installs rt. Leaving inject withdraws every steer route
+// before the mode changes, under the same lock Sync takes, so a concurrent
+// Sync cannot announce again. A failed withdraw leaves everything as it
+// was.
+func (c *Controller) ApplyRuntime(ctx context.Context, rt Runtime) error {
+	if c == nil {
+		return nil
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	defer c.storeActive()
+	if c.cfg.Mode == config.ModeInject && rt.Mode != config.ModeInject {
+		if err := c.withdrawAllLocked(ctx); err != nil {
+			return err
+		}
+	}
+	if c.cfg.Mode != config.ModeInject && rt.Mode == config.ModeInject {
+		next := c.cfg
+		next.Allowlist = rt.Allowlist
+		if err := checkInject(next, c.ann, c.rib); err != nil {
+			return err
+		}
+	}
+	c.cfg.Mode = rt.Mode
+	c.cfg.Allowlist = slices.Clone(rt.Allowlist)
+	c.cfg.HoldTime, c.cfg.TTL = rt.HoldTime, rt.TTL
+	return nil
 }
 
 // Reserved reports whether p is an inbound prefix. The outbound announcer
@@ -659,12 +720,15 @@ func (c *Controller) performance(now time.Time, paths []Path) perfView {
 // inject it returns at once. When the RIB is not ready every steer route
 // is withdrawn.
 func (c *Controller) Sync(ctx context.Context) error {
-	if c == nil || c.cfg.Mode != config.ModeInject {
+	if c == nil {
 		return nil
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	defer c.storeActive()
+	if c.cfg.Mode != config.ModeInject {
+		return nil
+	}
 	if c.cfg.Leader != nil && !c.cfg.Leader() {
 		if len(c.active) > 0 {
 			c.log.Warn("ha standby; withdrawing inbound steer routes")
@@ -696,14 +760,16 @@ func (c *Controller) Sync(ctx context.Context) error {
 			}
 			continue
 		}
-		if on && strings.Join(cur.Away, ",") == key {
-			continue
-		}
+		// Before the unchanged shortcut: a reload can shrink the allowlist
+		// under a route that is already on the wire.
 		if !coveredBy(c.cfg.Allowlist, p) {
 			if on {
 				errs = append(errs, c.withdrawLocked(ctx, p))
 			}
 			errs = append(errs, fmt.Errorf("inbound: %s is not allowlisted", p))
+			continue
+		}
+		if on && strings.Join(cur.Away, ",") == key {
 			continue
 		}
 		nh := cur.NextHop
@@ -737,12 +803,15 @@ func (c *Controller) Sync(ctx context.Context) error {
 // WithdrawAll removes every steer route. It is safe to call more than once
 // and in every mode.
 func (c *Controller) WithdrawAll(ctx context.Context) error {
-	if c == nil || c.ann == nil || c.cfg.Mode != config.ModeInject {
+	if c == nil || c.ann == nil {
 		return nil
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	defer c.storeActive()
+	if c.cfg.Mode != config.ModeInject {
+		return nil
+	}
 	return c.withdrawAllLocked(ctx)
 }
 

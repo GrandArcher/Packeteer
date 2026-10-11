@@ -455,3 +455,88 @@ func TestNoReplaceAndHas(t *testing.T) {
 		t.Fatal("nil controller has a rule")
 	}
 }
+
+// Observe to inject and back at runtime (#233). A rule added as a dry run
+// is dropped on entering inject, never announced because a mode flipped.
+// Leaving inject withdraws under the lock and keeps the rules as a dry run.
+func TestRuntimeModeEnterAndLeaveInject(t *testing.T) {
+	ctx := context.Background()
+	c, ann, _ := newTest(t, config.ModeObserve)
+	req := Request{Prefix: victim, Action: plugin.MitigationBlackhole}
+
+	if _, err := c.Add(req, t0); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Sync(ctx, t0); err != nil || len(ann.wire) != 0 {
+		t.Fatalf("observe announced: %v %v", err, ann.wire)
+	}
+
+	if err := c.ApplyRuntime(ctx, config.ModeInject); err != nil {
+		t.Fatal(err)
+	}
+	if st := c.Status(); st.Mode != config.ModeInject || len(st.Rules) != 0 {
+		t.Fatalf("dry-run rule survived entering inject: %+v", st)
+	}
+	if err := c.Sync(ctx, t0); err != nil || len(ann.wire) != 0 {
+		t.Fatalf("a dry-run rule reached the wire: %v %v", err, ann.wire)
+	}
+
+	if _, err := c.Add(req, t0); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Sync(ctx, t0); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := ann.on(victim); !ok || !c.Holds(victim) || c.Active() != 1 {
+		t.Fatalf("inject did not announce: wire %v active %d", ann.wire, c.Active())
+	}
+
+	if err := c.ApplyRuntime(ctx, config.ModeObserve); err != nil {
+		t.Fatal(err)
+	}
+	st := c.Status()
+	if len(ann.wire) != 0 || c.Active() != 0 || c.Holds(victim) || st.Mode != config.ModeObserve || len(st.Rules) != 1 || st.Rules[0].Announced {
+		t.Fatalf("leaving inject: wire %v active %d status %+v", ann.wire, c.Active(), st)
+	}
+	withdraws := ann.withdraw
+	if err := c.Sync(ctx, t0); err != nil || ann.withdraw != withdraws || len(ann.wire) != 0 {
+		t.Fatalf("sync after leaving inject touched the wire: %v", err)
+	}
+}
+
+// Entering inject needs an announcer, local preference, community, and a
+// RIB view, as at start; a refused apply leaves the mode as it was.
+func TestRuntimeEnterInjectChecks(t *testing.T) {
+	ctx := context.Background()
+	noAnn, err := New(testConfig(config.ModeObserve), nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := noAnn.SetRIB(&fakeRIB{ready: true}); err != nil {
+		t.Fatal(err)
+	}
+	noRIB, err := New(testConfig(config.ModeObserve), newFakeAnn(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := testConfig(config.ModeObserve)
+	cfg.LocalPref = 0
+	noPref, err := New(cfg, newFakeAnn(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := noPref.SetRIB(&fakeRIB{ready: true}); err != nil {
+		t.Fatal(err)
+	}
+	for name, c := range map[string]*Controller{"announcer": noAnn, "rib": noRIB, "local_pref": noPref} {
+		if err := c.PrepareRuntime(config.ModeInject); err == nil {
+			t.Errorf("%s: prepare accepted inject", name)
+		}
+		if err := c.ApplyRuntime(ctx, config.ModeInject); err == nil || c.Status().Mode != config.ModeObserve {
+			t.Errorf("%s: apply err %v mode %s", name, err, c.Status().Mode)
+		}
+	}
+	if err := noAnn.PrepareRuntime(config.ModeObserve); err != nil {
+		t.Errorf("observe needs no checks: %v", err)
+	}
+}
