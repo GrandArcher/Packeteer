@@ -94,6 +94,11 @@ type Config struct {
 	// mitigation holds (#28). They are never announced as outbound
 	// improvements, so no two of them share a prefix.
 	Reserved func(netip.Prefix) bool
+	// Held reports prefixes the leak watch holds out (#199): a route for
+	// one was seen outside the AS. Sync withdraws such a route and never
+	// announces it again until the hold is cleared. Held covers only the
+	// exact prefix; a learned more-specific is held on its own.
+	Held func(netip.Prefix) bool
 	// Others counts routes inbound steering has on the wire. They count
 	// toward MaxImprovements too.
 	Others func() int
@@ -516,6 +521,13 @@ func (c *Controller) Sync(ctx context.Context, imps []policy.Improvement) error 
 func (c *Controller) syncImprovementLocked(ctx context.Context, im policy.Improvement, learned []netip.Prefix) error {
 	p := im.Prefix.Masked()
 	s, on := c.active[p]
+	if c.cfg.Held != nil && c.cfg.Held(p) {
+		if on {
+			c.log.Warn("leak watch holds this prefix out; withdrawing", "prefix", p)
+			return c.withdrawLocked(ctx, p)
+		}
+		return nil
+	}
 	if c.cfg.Reserved != nil && c.cfg.Reserved(p) {
 		var err error
 		if on {
@@ -554,6 +566,47 @@ func (c *Controller) syncImprovementLocked(ctx context.Context, im policy.Improv
 	return c.announceLocked(ctx, im)
 }
 
+// barred reports a prefix no more-specific may use: reserved for inbound
+// steering or mitigation, or held out by the leak watch.
+func (c *Controller) barred(p netip.Prefix) bool {
+	return (c.cfg.Reserved != nil && c.cfg.Reserved(p)) || (c.cfg.Held != nil && c.cfg.Held(p))
+}
+
+// Injected reports whether p is an outbound route on the wire now, an
+// improvement or a learned more-specific.
+func (c *Controller) Injected(p netip.Prefix) bool {
+	if c == nil {
+		return false
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	_, on := c.active[p.Masked()]
+	return on
+}
+
+// WithdrawPrefix withdraws the route for p and, when p is an improvement,
+// its learned more-specifics, and nothing else. The leak watch calls it
+// the moment a leak is seen; Held keeps Sync from announcing it again.
+func (c *Controller) WithdrawPrefix(ctx context.Context, p netip.Prefix) error {
+	if c == nil {
+		return nil
+	}
+	p = p.Masked()
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	defer c.store()
+	var errs []error
+	for q, s := range c.active {
+		if q != p && !(s.moreSpecific() && s.parent == p) {
+			continue
+		}
+		if err := c.withdrawLocked(ctx, q); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
+}
+
 // usedRoutesLocked is the routes that count toward MaxRoutes: every route
 // this controller has on the wire plus Others.
 func (c *Controller) usedRoutesLocked() int {
@@ -586,7 +639,7 @@ func (c *Controller) learnedMoreSpecifics(want map[netip.Prefix]policy.Improveme
 			continue
 		}
 		seen[m] = true
-		if _, ok := want[m]; ok || !allowed(c.cfg.Allowlist, m) || (c.cfg.Reserved != nil && c.cfg.Reserved(m)) {
+		if _, ok := want[m]; ok || !allowed(c.cfg.Allowlist, m) || c.barred(m) {
 			continue
 		}
 		var best netip.Prefix
@@ -635,7 +688,7 @@ func (c *Controller) syncMoreSpecificsLocked(ctx context.Context, p netip.Prefix
 			continue // a longer improvement owns it now
 		}
 		s := c.active[m]
-		if !allowed(c.cfg.Allowlist, m) || (c.cfg.Reserved != nil && c.cfg.Reserved(m)) {
+		if !allowed(c.cfg.Allowlist, m) || c.barred(m) {
 			if err := c.withdrawLocked(ctx, m); err != nil {
 				errs = append(errs, err)
 				visited[m] = true

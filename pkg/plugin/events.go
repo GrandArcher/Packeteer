@@ -59,6 +59,8 @@ const (
 	EventAnomalyMitigated   = "anomaly.mitigated"
 	EventAnomalyHeld        = "anomaly.held"
 	EventAnomalyCleared     = "anomaly.cleared"
+	EventLeakDetected       = "leak.detected"
+	EventLeakCleared        = "leak.cleared"
 	EventHAStandby          = "ha.standby"
 	EventHAActive           = "ha.active"
 	// EventAudit is one audit log record (#32): a change or sign-in on
@@ -129,6 +131,10 @@ var eventCatalog = []EventSpec{
 		Summary: "An anomaly rule matched but no mitigation rule was added, or it ended early: not an exact learned prefix, HA standby, max_active, max_actions_per_hour, max_rules, or refused."},
 	{Kind: EventAnomalyCleared, Severity: SeverityInfo, Group: "anomaly", Keys: []string{"anomaly"}, TrapID: 30, Resolves: true,
 		Summary: "An anomaly ended (traffic back within its baseline, or flow data unavailable); the mitigation rule it added is removed."},
+	{Kind: EventLeakDetected, Severity: SeverityCritical, Group: "leak", Keys: []string{"prefix"}, TrapID: 31,
+		Summary: "A route carrying packeteer_community, or an injected prefix with the local ASN in its path, was seen outside the AS. The route is withdrawn and held out until an operator clears it."},
+	{Kind: EventLeakCleared, Severity: SeverityInfo, Group: "leak", Keys: []string{"prefix"}, TrapID: 32, Resolves: true,
+		Summary: "An operator cleared the hold on a leaked prefix; it may be announced again."},
 }
 
 // EventCatalog returns a copy of every event kind the controller emits.

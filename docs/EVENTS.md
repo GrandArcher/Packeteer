@@ -50,10 +50,12 @@ The same object is the `generic` webhook body and the `exec` `notify` params.
 | `anomaly.mitigated` | warning | 28 | `anomaly` | An anomaly rule matched and the detector added a mitigation rule (`rule`, `mitigation`, `action`). The mitigation events follow for that rule; in `mitigation.mode: observe` it is a dry run. |
 | `anomaly.held` | warning | 29 | `anomaly` | An anomaly rule matched but no mitigation rule was added, or the one added ended while the anomaly lasts. `detail` says why: not an exact prefix in the learned RIB, HA standby, `max_active`, `max_actions_per_hour`, `mitigation.max_rules`, refused (for example another rule holds the key), or ended (expired or deleted; not added again for this anomaly). Fires once per state. |
 | `anomaly.cleared` | info | 30 | `anomaly` | The anomaly ended: traffic back within its baseline, or flow data unavailable for three rounds. The mitigation rule it added, if any, is removed. Resolves the anomaly. |
+| `leak.detected` | critical | 31 | `prefix` | A route carrying `packeteer_community` (or, with `as_path_rule`, an injected prefix with the local ASN in its path) was seen outside the AS ([leak-watch.md](leak-watch.md)). Fields: `prefix`, `reason` (`community`, `as_path`), `action` (`withdrawn`, `withdraw_failed`, `held`), `source`, `seen`, `as_path`. An outbound route is withdrawn alone; the prefix is held out until an operator clears it. |
+| `leak.cleared` | info | 32 | `prefix` | An operator cleared the hold on a leaked prefix; it may be announced again. Resolves the leak. |
 
 Problems and the events that resolve them share a **dedup key**: `packeteer/<group>/<key>=<value>`, for example `packeteer/provider/provider=transit-a` for both `provider.down` and `provider.up`. The `pagerduty` preset uses it as `dedup_key`, and `snmptrap` sends it as a varbind.
 
-State events (`provider.*`, `bgp.*`, `commit.*`, `announce.*`, `inbound.*`, `mitigation.*`, `anomaly.*`, `ha.*`) fire on transitions only. They are checked on every decision (each probe round, each RIB change, and at least every `probe.interval`); commit is checked at most once a minute. They are not repeated while the state holds.
+State events (`provider.*`, `bgp.*`, `commit.*`, `announce.*`, `inbound.*`, `mitigation.*`, `anomaly.*`, `ha.*`) fire on transitions only. They are checked on every decision (each probe round, each RIB change, and at least every `probe.interval`); commit is checked at most once a minute. They are not repeated while the state holds. `leak.*` events fire on the first sighting of a prefix and when its hold is cleared.
 
 ## Testing delivery
 

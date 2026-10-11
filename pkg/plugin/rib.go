@@ -77,6 +77,10 @@ type RIBEvent struct {
 	// and one of those must never make a prefix learned or pass a route
 	// check. Loc-RIB paths are the router's own selection and need no flag.
 	PostPolicy bool
+	// AdjRIBOut marks RIBPaths from the router's post-policy Adj-RIB-Out
+	// toward Peer (RFC 8671): routes it sends. Only the leak watch reads
+	// them; the bmp rib_source never sets it.
+	AdjRIBOut bool
 }
 
 // RIBSource feeds routes the edge routers learned into the RIB view. It is
