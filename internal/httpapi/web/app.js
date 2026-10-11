@@ -810,69 +810,12 @@ function postJSON(path, body) {
   });
 }
 
-function runTool() {
-  var tool = document.getElementById("tool-name").value;
-  var target = document.getElementById("tool-target").value.trim();
-  var provider = document.getElementById("tool-provider").value;
-  var status = document.getElementById("tool-status");
-  var out = document.getElementById("tool-out");
-  if (!target) {
-    status.textContent = "Enter a prefix, address, or ASN.";
-    return;
-  }
-  status.textContent = "Running " + tool + "…";
-  out.textContent = "";
-  var req;
-  if (tool === "lookingglass") {
-    req = getJSON("/api/troubleshoot/lookingglass?prefix=" + encodeURIComponent(target));
-  } else if (tool === "whois") {
-    req = postJSON("/api/troubleshoot/whois", {query: target});
-  } else if (tool === "traceroute") {
-    req = postJSON("/api/troubleshoot/traceroute", {target: target, provider: provider});
-  } else {
-    req = postJSON("/api/troubleshoot/probe", {target: target});
-  }
-  req.then(function (data) {
-    status.textContent = "Done.";
-    out.textContent = JSON.stringify(data, null, 2);
-  }, function (err) {
-    status.textContent = err.message;
-  });
-}
-
-function initTools() {
-  var run = document.getElementById("tool-run");
-  if (!run) return;
-  getJSON("/api/troubleshoot").then(function (data) {
-    var sel = document.getElementById("tool-provider");
-    if (!sel) return;
-    ((data && data.providers) || []).forEach(function (name) {
-      var o = el("option", "", name);
-      o.value = name;
-      sel.appendChild(o);
-    });
-    if (data && !data.enabled) {
-      var status = document.getElementById("tool-status");
-      if (status) status.textContent = "Probe, traceroute, and whois are off (troubleshoot.enabled: false).";
-    }
-  }, function () {});
-  // The prefix page (#179) links here with the tool and target filled in.
-  // Nothing runs until the operator presses Run.
-  var qs = new URLSearchParams(window.location.search);
-  var toolSel = document.getElementById("tool-name");
-  var want = qs.get("tool");
-  if (want && Array.prototype.some.call(toolSel.options, function (o) { return o.value === want; })) toolSel.value = want;
-  if (qs.get("target")) document.getElementById("tool-target").defaultValue = qs.get("target");
-  run.addEventListener("click", runTool);
-}
-
 function bind(id, ev, fn) {
   var n = document.getElementById(id);
   if (n) n.addEventListener(ev, fn);
 }
 
 initReports();
-initTools();
 bind("refresh", "click", refresh);
 function rerenderPrefixes() { if (lastPrefixes) renderPrefixes(lastPrefixes); }
 bind("prefix-filter", "input", rerenderPrefixes);

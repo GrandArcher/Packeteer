@@ -1,10 +1,17 @@
 package main
 
 import (
+	"bytes"
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
+
+	"github.com/GrandArcher/Packeteer/internal/troubleshoot"
 )
 
 func TestProxyAddsBasicAuth(t *testing.T) {
@@ -52,5 +59,98 @@ func TestProxyRefusesOpenListenAndMissingAuth(t *testing.T) {
 	}
 	if _, err := handler("http://lab:lab-only@127.0.0.1:8080", "lab", "lab-only"); err == nil {
 		t.Fatal("userinfo in the upstream URL accepted")
+	}
+}
+
+const troubleshootFixtures = "../ui-fixtures/troubleshoot"
+
+func TestFixturesStubAndInject(t *testing.T) {
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/troubleshooting.html" {
+			w.Header().Set("Content-Type", "text/html")
+			_, _ = io.WriteString(w, "<html><body><main></main></body></html>")
+			return
+		}
+		_, _ = io.WriteString(w, "origin "+r.URL.Path)
+	}))
+	defer origin.Close()
+	h, err := handler(origin.URL, "lab", "lab-only")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f, err := loadFixtures(troubleshootFixtures)
+	if err != nil {
+		t.Fatal(err)
+	}
+	front := httptest.NewServer(f.wrap(h))
+	defer front.Close()
+
+	do := func(method, path, body string) (int, string) {
+		t.Helper()
+		req, _ := http.NewRequest(method, front.URL+path, strings.NewReader(body))
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		b, _ := io.ReadAll(resp.Body)
+		return resp.StatusCode, string(b)
+	}
+	if code, body := do("GET", "/api/troubleshoot/lookingglass?prefix=198.51.100.0%2F24", ""); code != 200 || !strings.Contains(body, `"rib_ready": true`) {
+		t.Errorf("stubbed glass: %d %s", code, body)
+	}
+	if code, body := do("POST", "/api/troubleshoot/traceroute", `{"target":"203.0.113.99","provider":""}`); code != 429 || !strings.Contains(body, "rate limited") {
+		t.Errorf("stubbed rate limit: %d %s", code, body)
+	}
+	// A call with no stub, and the same path with another target, reach the origin.
+	if code, body := do("GET", "/api/troubleshoot/lookingglass?prefix=192.0.2.0%2F24", ""); code != 200 || body != "origin /api/troubleshoot/lookingglass" {
+		t.Errorf("unstubbed glass: %d %s", code, body)
+	}
+	if code, body := do("POST", "/api/troubleshoot/traceroute", `{"target":"192.0.2.77"}`); code != 200 || !strings.HasPrefix(body, "origin ") {
+		t.Errorf("unstubbed trace: %d %s", code, body)
+	}
+	code, page := do("GET", "/troubleshooting.html", "")
+	if code != 200 || !strings.Contains(page, `<script src="/__fixture-driver.js"></script></body>`) {
+		t.Errorf("injected page: %d %s", code, page)
+	}
+	if code, js := do("GET", driverPath, ""); code != 200 || !strings.Contains(js, "press(") {
+		t.Errorf("driver: %d", code)
+	}
+}
+
+// TestTroubleshootFixturesMatchAPI decodes each canned answer with the types
+// the API returns, so a renamed or removed field breaks this test instead of
+// leaving the UI smoke test drawing a shape the server no longer sends.
+func TestTroubleshootFixturesMatchAPI(t *testing.T) {
+	decode := func(file string, v any) {
+		t.Helper()
+		raw, err := os.ReadFile(filepath.Join(troubleshootFixtures, file))
+		if err != nil {
+			t.Fatal(err)
+		}
+		dec := json.NewDecoder(bytes.NewReader(raw))
+		dec.DisallowUnknownFields()
+		if err := dec.Decode(v); err != nil {
+			t.Errorf("%s: %v", file, err)
+		}
+	}
+	var g troubleshoot.Glass
+	decode("glass-learned.json", &g)
+	if g.Exact == nil || len(g.Paths) != 2 || g.Paths[1].MED == nil || len(g.MoreSpecifics) != 1 {
+		t.Errorf("learned glass: %+v", g)
+	}
+	decode("glass-covering.json", &g)
+	var multi, single troubleshoot.TraceAnswer
+	decode("trace-multi.json", &multi)
+	decode("trace-single.json", &single)
+	if len(multi.Traces) != 3 || multi.Traces[0].Hops[0].OriginAS != 64496 || multi.Traces[2].Error == "" || len(single.Traces) != 1 {
+		t.Errorf("traces: %+v %+v", multi, single)
+	}
+	var e struct {
+		Error string `json:"error"`
+	}
+	decode("rate-limited.json", &e)
+	if e.Error != troubleshoot.ErrBusy.Error() {
+		t.Errorf("rate-limited fixture says %q, the API says %q", e.Error, troubleshoot.ErrBusy)
 	}
 }

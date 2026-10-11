@@ -252,6 +252,84 @@ func TestTraceroute(t *testing.T) {
 	}
 }
 
+// TestTracerouteHopAnnotations checks the origin AS comes from the learned
+// RIB (longest match, last ASN, no default route) and that reverse names
+// are attached per hop.
+func TestTracerouteHopAnnotations(t *testing.T) {
+	r := testRIB()
+	r.routes = append(r.routes,
+		rib.Route{Prefix: pfx("0.0.0.0/0"), NextHop: addr("192.0.2.1"), ASPath: []uint32{64499}},
+		rib.Route{Prefix: pfx("192.0.2.96/28"), NextHop: addr("192.0.2.1"), ASPath: []uint32{64496, 0}},
+		rib.Route{Prefix: pfx("192.0.2.112/28"), NextHop: addr("192.0.2.1")},
+	)
+	hop := func(_ context.Context, _, dst netip.Addr, ttl, _ int, _ time.Duration) (netip.Addr, bool, error) {
+		switch ttl {
+		case 1:
+			return addr("198.51.100.200"), false, nil // inside 198.51.100.128/25: AS64500, not the /24's
+		case 2:
+			return netip.Addr{}, false, nil
+		case 3:
+			return addr("192.0.2.5"), false, nil // only the default route covers it
+		case 4:
+			return addr("192.0.2.100"), false, nil // trailing zero ASN is skipped
+		case 5:
+			return addr("192.0.2.120"), false, nil // learned route with an empty AS path
+		}
+		return dst, true, nil
+	}
+	rev := func(_ context.Context, a netip.Addr) string {
+		if a == addr("198.51.100.200") {
+			return "edge1.example.net"
+		}
+		return ""
+	}
+	tl := New(Options{Enabled: true, Providers: provs[:1], Hop: hop, Reverse: rev, MaxHops: 10})
+	tl.SetRIB(r)
+	ans, err := tl.Traceroute(context.Background(), addr("203.0.113.5"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := ans.Traces[0].Hops
+	if len(got) != 6 {
+		t.Fatalf("hops: %+v", got)
+	}
+	for i, want := range []struct {
+		as   uint32
+		name string
+	}{{64500, "edge1.example.net"}, {0, ""}, {0, ""}, {64496, ""}, {0, ""}, {64496, ""}} {
+		if got[i].OriginAS != want.as || got[i].Name != want.name {
+			t.Errorf("hop %d: origin %d name %q, want %d %q", got[i].TTL, got[i].OriginAS, got[i].Name, want.as, want.name)
+		}
+	}
+
+	// Without a RIB view or a resolver the hops carry neither.
+	bare := New(Options{Enabled: true, Providers: provs[:1], Hop: hop, MaxHops: 10})
+	ans, _ = bare.Traceroute(context.Background(), addr("203.0.113.5"), "")
+	for _, h := range ans.Traces[0].Hops {
+		if h.OriginAS != 0 || h.Name != "" {
+			t.Errorf("bare hop %d annotated: %+v", h.TTL, h)
+		}
+	}
+}
+
+// TestTracerouteSlowResolver checks one slow resolver cannot hold the
+// answer past the shared reverse-lookup deadline.
+func TestTracerouteSlowResolver(t *testing.T) {
+	tl := New(Options{Enabled: true, Providers: provs[:1], Hop: fakeNet(2, 99), MaxHops: 4,
+		Reverse: func(ctx context.Context, _ netip.Addr) string {
+			<-ctx.Done()
+			return ""
+		}})
+	start := time.Now()
+	ans, err := tl.Traceroute(context.Background(), addr("203.0.113.5"), "")
+	if err != nil || !ans.Traces[0].Reached {
+		t.Fatalf("trace: %+v %v", ans, err)
+	}
+	if d := time.Since(start); d > reverseTimeout+2*time.Second {
+		t.Fatalf("answer took %v", d)
+	}
+}
+
 type fakeWhois struct {
 	plugin.Base
 	got []string

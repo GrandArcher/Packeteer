@@ -21,7 +21,6 @@ func TestPrefixPageAssets(t *testing.T) {
 		`data.report === "improvements"`,                   // report rows
 		`c === "prefix" && linkable ? prefixCell(r[c])`,    // report prefix cells
 		`return "/prefix/" + encodeURI(prefix);`,           // shareable URL
-		`defaultValue = qs.get("target")`,                  // Probe tool prefill
 		`prefixPageUpdate(lastPrefixes)`,                   // live card refresh
 		`function prefixCard(row)`,                         // the existing card, shared
 		`"Learned paths. MED is display only and does not`, // MED label inside the card
@@ -29,6 +28,9 @@ func TestPrefixPageAssets(t *testing.T) {
 		if !strings.Contains(app, s) {
 			t.Errorf("app.js missing %s", s)
 		}
+	}
+	if tools := mustWeb(t, "web/tools.js"); !strings.Contains(tools, `defaultValue = qs.get("target")`) {
+		t.Error("tools.js does not prefill the target from the link") // Probe tool prefill
 	}
 	for _, s := range []string{
 		`"/api/prefixes/history?prefix=" + encodeURIComponent(thisPrefix)`,

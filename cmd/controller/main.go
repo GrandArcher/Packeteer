@@ -13,6 +13,7 @@ import (
 	"io"
 	"log/slog"
 	"maps"
+	"net"
 	"net/netip"
 	"os"
 	"os/signal"
@@ -1386,12 +1387,23 @@ func newTools(cfg *config.Config, plugins *pluginhost.Set) (*troubleshoot.Tools,
 		Timeout:   cfg.Probe.Timeout,
 		MaxHops:   cfg.Troubleshoot.MaxHops,
 		Hop:       traceroute.Hop,
+		Reverse:   reverseName,
 		Limiter:   rate.NewLimiter(rate.Every(time.Minute/time.Duration(rpm)), min(rpm, 3)),
 	}
 	if plugins.Whois != nil {
 		opt.Whois = plugins.Whois.Plugin
 	}
 	return troubleshoot.New(opt), nil
+}
+
+// reverseName is the PTR name of a traceroute hop through the container's
+// resolver, or "" when there is none.
+func reverseName(ctx context.Context, a netip.Addr) string {
+	names, err := net.DefaultResolver.LookupAddr(ctx, a.String())
+	if err != nil || len(names) == 0 {
+		return ""
+	}
+	return strings.TrimSuffix(names[0], ".")
 }
 
 func newEngine(cfg *config.Config, plugins *pluginhost.Set, log *slog.Logger, onRound func(), onProbe func(probe.Result)) (*probe.Engine, error) {

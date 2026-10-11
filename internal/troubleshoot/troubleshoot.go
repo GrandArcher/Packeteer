@@ -32,6 +32,7 @@ const (
 	maxMoreSpecifics         = 100
 	tracePort                = 33434
 	gapHops                  = 3
+	reverseTimeout           = 3 * time.Second
 )
 
 // ErrDisabled is returned by the active tools when they are not enabled.
@@ -73,9 +74,11 @@ type Options struct {
 	Timeout   time.Duration
 	MaxHops   int
 	Hop       HopFunc
-	Whois     plugin.Whois
-	Limiter   Limiter
-	Now       func() time.Time
+	// Reverse names a hop address (a PTR lookup). Empty means no name.
+	Reverse func(ctx context.Context, a netip.Addr) string
+	Whois   plugin.Whois
+	Limiter Limiter
+	Now     func() time.Time
 }
 
 // Tools is safe for concurrent use.
@@ -284,6 +287,11 @@ type TraceHop struct {
 	RTTMs   float64    `json:"rtt_ms,omitempty"`
 	Reached bool       `json:"reached,omitempty"`
 	Error   string     `json:"error,omitempty"`
+	// Name is the reverse name of Address when Options.Reverse knows one.
+	Name string `json:"name,omitempty"`
+	// OriginAS is the last ASN on the longest learned route covering
+	// Address. It comes from the learned RIB only; 0 means none.
+	OriginAS uint32 `json:"origin_as,omitempty"`
 }
 
 // Trace is one provider's traceroute.
@@ -333,7 +341,52 @@ func (t *Tools) Traceroute(ctx context.Context, target netip.Addr, provider stri
 		}()
 	}
 	wg.Wait()
+	t.annotate(ctx, ans.Traces)
 	return ans, nil
+}
+
+// annotate fills each hop's origin AS from the learned RIB and, with
+// Options.Reverse, its reverse name. Lookups run together and share one
+// deadline so a slow resolver cannot stretch the answer.
+func (t *Tools) annotate(ctx context.Context, traces []Trace) {
+	v := t.view()
+	var wg sync.WaitGroup
+	rctx, cancel := context.WithTimeout(ctx, reverseTimeout)
+	defer cancel()
+	for i := range traces {
+		for j := range traces[i].Hops {
+			h := &traces[i].Hops[j]
+			if !h.Address.IsValid() {
+				continue
+			}
+			if v != nil {
+				h.OriginAS = originAS(v, h.Address)
+			}
+			if t.opt.Reverse != nil {
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					h.Name = t.opt.Reverse(rctx, h.Address)
+				}()
+			}
+		}
+	}
+	wg.Wait()
+}
+
+// originAS is the last non-zero ASN of the longest learned route covering
+// a. A default route is not a match.
+func originAS(v RIB, a netip.Addr) uint32 {
+	r, ok := v.Covering(netip.PrefixFrom(a, a.BitLen()))
+	if !ok || r.Prefix.Bits() == 0 {
+		return 0
+	}
+	for i := len(r.ASPath) - 1; i >= 0; i-- {
+		if r.ASPath[i] != 0 {
+			return r.ASPath[i]
+		}
+	}
+	return 0
 }
 
 func (t *Tools) traceOne(ctx context.Context, p probe.Provider, target netip.Addr) Trace {

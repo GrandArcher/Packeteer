@@ -5,6 +5,7 @@ The remaining UI conveniences (#34). All of them work in the stock image with a 
 | Feature | Where | Who | Config |
 |---|---|---|---|
 | Before/after graphs (#129) | `/graphs.html`, `/api/reports/timeseries`, the `timeseries` dashboard widget | viewer | `storage: {type: sqlite}` |
+| Troubleshooting results (#180) | `/troubleshooting.html`, `/api/troubleshoot/...` | viewer for the looking glass, operator for probe, traceroute, and whois | `troubleshoot.enabled` for the active tools |
 | Prefix detail and history (#179) | `/prefix/<prefix>`, `/api/prefixes/history` | viewer | `storage: {type: sqlite}` for the timeline |
 | Events and audit log (#173) | `/events.html`, `/api/events`, `/api/audit` | viewer for events, admin for the audit tab | `storage: {type: sqlite}` keeps events across a restart |
 | Users and API tokens (#175) | `/admin.html`, `/tokens.html`, `/api/users`, `/api/tokens` | admin for users, every signed-in user for tokens | `storage` + `auth.enabled` |
@@ -33,7 +34,7 @@ Every page has the same chrome (#170). The mode banner is the first thing on the
 | Commit & Cost | `/commit.html` | Empty (#174) |
 | Policies | `/policies.html` | Points to Settings, where the `rules` policy is edited (#130). It does not list rules yet |
 | Protection | `/protection.html` | The threat-mitigation monitor with an add and remove rule form (#131) when that feature is on. Otherwise an empty state that says how to configure it |
-| Troubleshooting | `/troubleshooting.html` | Looking glass, probe, traceroute, whois |
+| Troubleshooting | `/troubleshooting.html` | Looking glass, probe, traceroute, whois ([below](#troubleshooting-results)) |
 | Events | `/events.html` | Recent events and, for admins, the audit log ([below](#events-and-audit-log)) |
 | Tokens | `/tokens.html` | The signed-in user's API tokens ([below](#users-and-api-tokens)) |
 | Settings | `/settings.html` | Wizard, settings form, YAML, report subscriptions. Admin |
@@ -63,6 +64,17 @@ A form adds a local user (`POST /api/users`). An SSO user's role comes from the 
 **Tokens** (`/tokens.html`, every signed-in user). A table of the user's tokens (an admin sees everyone's) with role, created, expires, and status, and a revoke button (two clicks). The create form takes a name, a role up to the user's own (default `viewer`), and a lifetime in hours (empty is `auth.token_ttl`). The secret appears once, in a box that stays until it is closed or the page is left; it is not in the table or the audit log, is never written to a cookie or browser storage, and closing the box removes it from the page. A request signed with an API token can list and revoke but not create, and the page says so.
 
 A password typed into the Admin page is sent and the field is cleared. Every change is written to the audit log with its actor, as for a script.
+
+## Troubleshooting results
+
+The Troubleshooting page (#180) draws looking glass and traceroute answers as tables. It sends the same requests as before, so the roles, the `troubleshoot.requests_per_minute` limit, and the `troubleshoot.enabled` switch are unchanged ([CONFIG.md](CONFIG.md#troubleshoot)). Nothing on it announces anything, and the mode banner is on top in every mode.
+
+- **Looking glass.** Learned paths for the query: state (`selected` for the path the RIB view publishes, `inactive` for add-path and BMP paths), provider, next hop, AS path, via, and MED. MED is display only and does not choose the exit. Below it, the longest covering route when it is not the query itself, and the learned more-specifics (cut off at 100).
+- **Traceroute.** One block per provider: its source address, whether the target was reached or the trace's error, a diagram of the hops (silent hops are dashed, `*`), and a table of hop, address, reverse name, origin AS, RTT, loss, and error. The origin AS is the last AS on the longest learned route that covers the hop address; a default route is not a match, and a hop outside the learned RIB shows none. No external data is used. The reverse name is a PTR lookup through the container's resolver, bounded to three seconds for the whole trace, and is empty when there is none. One probe is sent per hop, so loss reads 0% (it answered) or 100% (it did not).
+- **Raw JSON.** Every result keeps a collapsible raw view. Probe and whois results show only the raw JSON, open.
+- **Stack.** Results stack newest first, up to 20, in the page and are gone when it is closed or reloaded. Rerun sends the same request again and adds a new result on top. Remove drops one result. A refused or failed request, such as the rate limit, is a result with its message.
+
+The smoke step "UI troubleshooting smoke" in the docker job (`lab/ui-smoke.sh`) loads the page through `lab/uiproxy -fixtures lab/ui-fixtures/troubleshoot`. The proxy answers the looking glass and traceroute calls from canned files on documentation prefixes and ASNs (a learned best and an inactive path, a covering route, a three-provider trace with a silent hop, an error, and a provider whose source is unavailable, a single-provider trace, and a rate-limited call) and adds a script that presses Run, Remove, and Rerun, because headless Chrome cannot click. The step checks the tables, the diagram, the raw view, the error text, a real unstubbed looking glass call against the image, and the newest-first order after a remove and a rerun. `lab/uiproxy` tests decode the canned files with the API's own types. `internal/troubleshoot` tests cover the origin AS and reverse name on each hop.
 
 ## Prefix detail and history
 
