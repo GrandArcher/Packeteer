@@ -20,7 +20,9 @@ func TestUIShell(t *testing.T) {
 	pages := map[string]string{}
 	var nav string
 	for _, e := range entries {
-		if !strings.HasSuffix(e.Name(), ".html") {
+		// The sign-in page has no navigation or account menu; TestSigninPage
+		// covers it.
+		if !strings.HasSuffix(e.Name(), ".html") || e.Name() == "signin.html" {
 			continue
 		}
 		body := mustWeb(t, "web/"+e.Name())
@@ -171,6 +173,7 @@ func TestModeBannerCopy(t *testing.T) {
 		"Your account may not read this page.",
 		`data-min-role`,
 		`/auth/logout`,
+		`out.hidden = !(me && me.session)`,
 	} {
 		if !strings.Contains(shell, s) {
 			t.Errorf("shell.js missing %s", s)

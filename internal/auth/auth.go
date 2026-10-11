@@ -47,19 +47,23 @@ const (
 	// MaxTokensPerUser caps live tokens per user.
 	MaxTokensPerUser = 20
 
-	// SessionCookie holds an SSO session id.
+	// SessionCookie holds a server-side session id, from SSO or from the
+	// local sign-in page.
 	SessionCookie = "packeteer_session"
 	// StateCookie ties an SSO callback to the browser that started it.
 	StateCookie = "packeteer_sso"
 
-	loginTTL       = 10 * time.Minute
-	maxPending     = 1000
-	maxSessions    = 10000
-	cacheTTL       = 5 * time.Minute
-	failWindow     = 5 * time.Minute
-	failLimit      = 10
-	maxThrottleIPs = 10000
-	tokenPrefix    = "pkt_"
+	loginTTL    = 10 * time.Minute
+	maxPending  = 1000
+	maxSessions = 10000
+	// maxUserSessions bounds one user's sessions; the oldest is replaced so
+	// a scripted sign-in loop cannot fill the shared pool.
+	maxUserSessions = 10
+	cacheTTL        = 5 * time.Minute
+	failWindow      = 5 * time.Minute
+	failLimit       = 10
+	maxThrottleIPs  = 10000
+	tokenPrefix     = "pkt_"
 )
 
 // Errors.
@@ -87,6 +91,9 @@ type Principal struct {
 	Role    plugin.Role `json:"role"`
 	Method  string      `json:"method"`
 	TokenID string      `json:"token_id,omitempty"`
+	// Session is true when the request carried a session cookie, which
+	// the caller can end with Logout.
+	Session bool `json:"session,omitempty"`
 }
 
 // Options configure a Service.
@@ -101,7 +108,10 @@ type Options struct {
 }
 
 type session struct {
-	user    string
+	user string
+	// method is how the user proved who they are: MethodSSO or
+	// MethodPassword.
+	method  string
 	expires time.Time
 }
 
@@ -389,7 +399,81 @@ func (s *Service) session(ctx context.Context, id string, now time.Time) (Princi
 		s.smu.Unlock()
 		return Principal{}, ErrBadCredentials
 	}
-	return Principal{User: u.Name, Role: u.Role, Method: MethodSSO}, nil
+	return Principal{User: u.Name, Role: u.Role, Method: ss.method, Session: true}, nil
+}
+
+// SignIn checks a local user's password for the sign-in page and starts a
+// session. It shares the per-address failure count with Authenticate, so
+// the form and basic auth lock out together. A session the browser
+// already holds is ended first.
+func (s *Service) SignIn(w http.ResponseWriter, r *http.Request, name, pw string) (Principal, error) {
+	ip := RemoteIP(r)
+	now := s.now()
+	if s.throttled(ip, now) {
+		return Principal{}, ErrThrottled
+	}
+	p, err := s.password(r.Context(), name, pw, now)
+	if errors.Is(err, ErrBadCredentials) {
+		s.fail(ip, now)
+	}
+	if err != nil {
+		return Principal{}, err
+	}
+	if c, err := r.Cookie(SessionCookie); err == nil && c.Value != "" {
+		s.smu.Lock()
+		delete(s.sessions, c.Value)
+		s.smu.Unlock()
+	}
+	if err := s.startSession(w, p.User, MethodPassword, now); err != nil {
+		return Principal{}, err
+	}
+	p.Session = true
+	return p, nil
+}
+
+// startSession records a session for user and sets its cookie.
+func (s *Service) startSession(w http.ResponseWriter, user, method string, now time.Time) error {
+	sid := randomToken()
+	s.smu.Lock()
+	s.evictOldest(user)
+	if len(s.sessions) >= maxSessions {
+		for k, ss := range s.sessions {
+			if !now.Before(ss.expires) {
+				delete(s.sessions, k)
+			}
+		}
+	}
+	if len(s.sessions) >= maxSessions {
+		s.smu.Unlock()
+		return errors.New("too many sessions; try again later")
+	}
+	s.sessions[sid] = session{user: user, method: method, expires: now.Add(s.sessionTTL)}
+	s.smu.Unlock()
+	http.SetCookie(w, s.sessionCookie(sid, int(s.sessionTTL/time.Second)))
+	return nil
+}
+
+// evictOldest drops user's earliest-expiring session when the user is at
+// maxUserSessions. smu must be held.
+func (s *Service) evictOldest(user string) {
+	count, oldest := 0, ""
+	for k, ss := range s.sessions {
+		if ss.user != user {
+			continue
+		}
+		count++
+		if oldest == "" || ss.expires.Before(s.sessions[oldest].expires) {
+			oldest = k
+		}
+	}
+	if count >= maxUserSessions {
+		delete(s.sessions, oldest)
+	}
+}
+
+func (s *Service) sessionCookie(value string, maxAge int) *http.Cookie {
+	return &http.Cookie{Name: SessionCookie, Value: value, Path: "/", MaxAge: maxAge,
+		HttpOnly: true, Secure: true, SameSite: http.SameSiteStrictMode}
 }
 
 // ---- Single sign-on ----
@@ -482,38 +566,25 @@ func (s *Service) FinishLogin(w http.ResponseWriter, r *http.Request) (Principal
 	if err := s.users.PutUser(r.Context(), u); err != nil {
 		return Principal{}, id.User, fmt.Errorf("%w: %v", ErrUnavailable, err)
 	}
-	sid := randomToken()
-	s.smu.Lock()
-	if len(s.sessions) >= maxSessions {
-		for k, ss := range s.sessions {
-			if !now.Before(ss.expires) {
-				delete(s.sessions, k)
-			}
-		}
+	if err := s.startSession(w, u.Name, MethodSSO, now); err != nil {
+		return Principal{}, id.User, err
 	}
-	if len(s.sessions) >= maxSessions {
-		s.smu.Unlock()
-		return Principal{}, id.User, errors.New("too many sessions; try again later")
-	}
-	s.sessions[sid] = session{user: u.Name, expires: now.Add(s.sessionTTL)}
-	s.smu.Unlock()
-	http.SetCookie(w, &http.Cookie{Name: SessionCookie, Value: sid, Path: "/", MaxAge: int(s.sessionTTL / time.Second),
-		HttpOnly: true, Secure: true, SameSite: http.SameSiteStrictMode})
-	return Principal{User: u.Name, Role: u.Role, Method: MethodSSO}, u.Name, nil
+	return Principal{User: u.Name, Role: u.Role, Method: MethodSSO, Session: true}, u.Name, nil
 }
 
-// Logout ends the request's SSO session, if any, and clears the cookie.
-func (s *Service) Logout(w http.ResponseWriter, r *http.Request) (string, bool) {
-	http.SetCookie(w, &http.Cookie{Name: SessionCookie, Value: "", Path: "/", MaxAge: -1, HttpOnly: true, Secure: true, SameSite: http.SameSiteStrictMode})
+// Logout ends the request's session, if any, and clears the cookie. The
+// returned principal names the user and how they signed in.
+func (s *Service) Logout(w http.ResponseWriter, r *http.Request) (Principal, bool) {
+	http.SetCookie(w, s.sessionCookie("", -1))
 	c, err := r.Cookie(SessionCookie)
 	if err != nil || c.Value == "" {
-		return "", false
+		return Principal{}, false
 	}
 	s.smu.Lock()
 	defer s.smu.Unlock()
 	ss, ok := s.sessions[c.Value]
 	delete(s.sessions, c.Value)
-	return ss.user, ok
+	return Principal{User: ss.user, Method: ss.method, Session: true}, ok
 }
 
 func (s *Service) dropSessions(user string) {

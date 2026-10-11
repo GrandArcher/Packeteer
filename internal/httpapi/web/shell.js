@@ -1,6 +1,7 @@
 "use strict";
 // Shared chrome (#170): current page, account menu, role-gated nav, and
-// the mode line on pages that do not load app.js. Same-origin only.
+// the mode line on pages that do not load app.js. The sign-in page (#176)
+// loads it only for these helpers. Same-origin only.
 
 var SHELL_REFRESH_MS = 5000;
 var shellLastOK = null;
@@ -75,7 +76,7 @@ function shellApplyMe(me) {
     else who.textContent = me.user + (me.role ? " (" + me.role + ")" : "");
   }
   var out = document.getElementById("account-out");
-  if (out) out.hidden = !(me && me.sso);
+  if (out) out.hidden = !(me && me.session);
   if (!admin && document.body.getAttribute("data-page") === "admin") {
     var denied = document.getElementById("page-denied");
     var body = document.getElementById("admin-body");
@@ -167,17 +168,19 @@ function shellAccount() {
   }
 }
 
-shellMarkCurrent();
-shellAccount();
-shellJSON("/api/me").then(shellApplyMe, function () {});
-if (document.body.getAttribute("data-live") !== "app") {
-  var refreshBtn = document.getElementById("refresh");
-  if (refreshBtn) {
-    refreshBtn.addEventListener("click", function () {
-      shellRefresh();
-      if (typeof renderGrid === "function") renderGrid();
-    });
+if (document.body.getAttribute("data-page") !== "signin") {
+  shellMarkCurrent();
+  shellAccount();
+  shellJSON("/api/me").then(shellApplyMe, function () {});
+  if (document.body.getAttribute("data-live") !== "app") {
+    var refreshBtn = document.getElementById("refresh");
+    if (refreshBtn) {
+      refreshBtn.addEventListener("click", function () {
+        shellRefresh();
+        if (typeof renderGrid === "function") renderGrid();
+      });
+    }
+    shellRefresh();
+    setInterval(shellRefresh, SHELL_REFRESH_MS);
   }
-  shellRefresh();
-  setInterval(shellRefresh, SHELL_REFRESH_MS);
 }

@@ -223,7 +223,7 @@ storage:
   type: sqlite            # users, token hashes, and the audit log live here
 auth:
   enabled: true
-  session_ttl: 12h        # SSO sign-ins
+  session_ttl: 12h        # sign-in page and SSO sessions
   token_ttl: 2160h        # API tokens when the request names no ttl
   sso:                    # optional
     type: oidc
@@ -238,11 +238,11 @@ auth:
 | Key | Default | Meaning |
 |---|---|---|
 | `enabled` | `false` | Turns auth on. Requires `storage` (a plugin that keeps users, e.g. `sqlite`) and refuses to start with `PACKETEER_HTTP_USER` set. `false`, or no `auth` block, keeps the single basic-auth account: the rollback. |
-| `session_ttl` | `12h` | Lifetime of an SSO session, `5m`–`168h`. Sessions are in memory; a restart signs everyone out. |
+| `session_ttl` | `12h` | Lifetime of a session from the sign-in page or SSO, `5m`–`168h`. Sessions are in memory; a restart signs everyone out. |
 | `token_ttl` | `2160h` | API token lifetime when the request names none, `1h`–`8760h`. A request may ask for up to `8760h`. |
 | `sso` | none | Single sign-on plugin entry (`type: oidc`). Needs `enabled: true`. |
 
-Roles: `viewer` reads everything a dashboard or API client reads (and manages its own API tokens), `operator` also opens and closes maintenance windows, adds and removes mitigation rules, and runs the troubleshooting tools, `admin` also manages users and reads the audit log. `/healthz`, `/readyz`, and the SSO sign-in endpoints are public. The first admin comes from `PACKETEER_ADMIN_USER` and `PACKETEER_ADMIN_PASSWORD`. Auth never changes what is announced: allowlist, learned-RIB check, community, NO_EXPORT, `max_improvements`, hold time, and withdraw-on-failure are the same for every role.
+Roles: `viewer` reads everything a dashboard or API client reads (and manages its own API tokens), `operator` also opens and closes maintenance windows, adds and removes mitigation rules, and runs the troubleshooting tools, `admin` also manages users and reads the audit log. `/healthz`, `/readyz`, the sign-in page and endpoints, and the SSO endpoints are public. The first admin comes from `PACKETEER_ADMIN_USER` and `PACKETEER_ADMIN_PASSWORD`. Auth never changes what is announced: allowlist, learned-RIB check, community, NO_EXPORT, `max_improvements`, hold time, and withdraw-on-failure are the same for every role.
 
 ### `bgp`
 

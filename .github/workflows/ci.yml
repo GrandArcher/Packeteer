@@ -744,6 +744,27 @@ jobs:
           grep -q '"actor":"viewer1","role":"viewer","method":"password","remote":"127.0.0.1","action":"POST /api/users","result":"denied"' /tmp/audit.json
           grep -q '"action":"POST /api/tokens"' /tmp/audit.json
           if grep -q "$tok" /tmp/audit.json; then echo "token secret in the audit log"; exit 1; fi
+          # Sign-in page (#176): a browser without a session lands on it, a
+          # local user signs in with the form's call, browses on the cookie,
+          # and signs out; basic auth and the token above keep working.
+          bash lab/ui-smoke.sh "$base/" 'id="signin-form"' 'Observe mode: Packeteer measures and recommends. It announces nothing.' \
+            --absent 'id="account"' 'Cannot reach'
+          test "$(code -H "$json" -d '{"name":"viewer1","password":"wrong-password-x"}' $base/auth/signin)" = 401
+          curl -sS -D /tmp/signin.hdr -o /dev/null -H "$json" -d '{"name":"viewer1","password":"ci-viewer-password"}' $base/auth/signin
+          tr -d '\r' </tmp/signin.hdr | grep -i '^set-cookie: packeteer_session=' | grep -q 'HttpOnly; Secure; SameSite=Strict'
+          sess="$(tr -d '\r' </tmp/signin.hdr | sed -n 's/^[Ss]et-[Cc]ookie: \(packeteer_session=[^;]*\).*/\1/p')"
+          test -n "$sess"
+          curl -fsS -H "Cookie: $sess" $base/api/me | grep -q '"user":"viewer1".*"session":true'
+          test "$(code -H "Cookie: $sess" $base/)" = 200
+          test "$(code -H "Cookie: $sess" $base/api/audit)" = 403
+          test "$(code -X POST -H "Cookie: $sess" $base/auth/logout)" = 204
+          test "$(code -H "Cookie: $sess" $base/api/me)" = 401
+          test "$(code -u viewer1:ci-viewer-password $base/api/providers)" = 200
+          curl -fsS -u admin:ci-admin-password-1 "$base/api/audit" | tee /tmp/audit2.json
+          grep -q '"action":"auth.login","target":"viewer1","result":"denied"' /tmp/audit2.json
+          grep -q '"actor":"viewer1","role":"viewer","method":"password","remote":"127.0.0.1","action":"auth.login"' /tmp/audit2.json
+          grep -q '"actor":"viewer1","method":"password","remote":"127.0.0.1","action":"auth.logout","target":"viewer1","result":"ok"' /tmp/audit2.json
+          if grep -q 'wrong-password-x\|ci-viewer-password' /tmp/audit2.json; then echo "password in the audit log"; exit 1; fi
           stop
           # Restart on the same volume: users and tokens persist, and the
           # bootstrap variable never resets an existing admin.
