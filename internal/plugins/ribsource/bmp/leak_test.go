@@ -5,9 +5,9 @@ import (
 	"net"
 	"net/netip"
 	"strings"
-	"time"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
 	"github.com/osrg/gobgp/v3/pkg/packet/bgp"
