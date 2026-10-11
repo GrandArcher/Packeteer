@@ -403,11 +403,13 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 		}
 	}
 	// Built before the HTTP server: the audit log goes to the notifiers.
-	dispatch := newDispatcher(plugins, notify.Options{Logger: log})
+	evlog := newEventLog(plugins, log)
+	dispatch := newDispatcher(plugins, notify.Options{Logger: log, Recorder: evlog})
 	defer func() {
 		closeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		_ = dispatch.Close(closeCtx)
+		_ = evlog.Close(closeCtx)
 	}()
 	audit := newAuditor(plugins, dispatch, log)
 	// The leak watch (#199) reaches the outbound announcer through ctl,
@@ -460,7 +462,7 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 		var err error
 		httpSrv, err = httpapi.New(httpapi.Options{
 			Addr: addr, User: httpUser, Password: httpPass, Snapshot: col.Snapshot, Logger: log,
-			Auth: authSvc, Audit: audit, AllowFrom: cfg.HTTPAllowFrom(),
+			Auth: authSvc, Audit: audit, Events: evlog, AllowFrom: cfg.HTTPAllowFrom(),
 			Maintenance: maint, Reports: reports, Tools: tools, Inbound: inboundStatus, Mitigation: mitAPI, Anomaly: anomAPI, Leaks: leakAPI,
 			Federation: fed.status, HA: haStatus,
 			ConfigEditor: editorAPI, Dashboards: dashboardStore(plugins), Subscriptions: subsAPI,
@@ -658,11 +660,9 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 					recordMitigations(rec, mitChanges)
 					recordAnomalies(rec, anomChanges)
 				}
-				if dispatch.Enabled() {
-					watch.anomaly(anomChanges)
-					watch.mitigation(mitChanges)
-					watch.announce(now, err)
-				}
+				watch.anomaly(anomChanges)
+				watch.mitigation(mitChanges)
+				watch.announce(now, err)
 				return
 			}
 			leading = true
@@ -679,9 +679,6 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 			if rec != nil {
 				recordMitigations(rec, mitChanges)
 				recordAnomalies(rec, anomChanges)
-			}
-			if !dispatch.Enabled() {
-				return
 			}
 			watch.anomaly(anomChanges)
 			watch.mitigation(mitChanges)
@@ -826,6 +823,11 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 	notifyCtx, notifyCancel := context.WithTimeout(stopCtx, 5*time.Second)
 	_ = dispatch.Close(notifyCtx)
 	notifyCancel()
+	// Its own bound: a slow notifier must not leave controller.stopping
+	// unwritten when the store closes.
+	evCtx, evCancel := context.WithTimeout(stopCtx, 5*time.Second)
+	_ = evlog.Close(evCtx)
+	evCancel()
 	if err := plugins.Stop(stopCtx); err != nil {
 		log.Error("plugin shutdown", "err", err)
 		return 1

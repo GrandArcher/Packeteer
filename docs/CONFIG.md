@@ -1149,13 +1149,14 @@ Off unless `storage.type` is `sqlite`. Keeps report history in an embedded SQLit
 | Key | Default | Meaning |
 |---|---|---|
 | `path` | `/var/lib/packeteer/packeteer.db` | Database file. Must be absolute. The directory is created on start. Mount a volume on it (`-v packeteer-data:/var/lib/packeteer`) so history survives a container restart. |
-| `retention` | `9600h` (400 days) | Rows older than this are deleted on start and once a day. `24h`–`87600h`. An improvement that is still active is kept. |
+| `retention` | `9600h` (400 days) | Rows older than this (audit records and events included) are deleted on start and once a day. `24h`–`87600h`. An improvement that is still active is kept. |
 
 What is stored:
 
 - Daily probe rollups per prefix and provider (UTC day): probes, failed probes, and sums of loss, RTT, and jitter. Raw probe results are not stored.
 - One row per improvement, from start to end. A switch to another provider ends the row and starts a new one. Each row has the cause, reason, mode, the native provider's loss and RTT and the chosen provider's loss and RTT at the decision that started it, `cost_delta`, `est_savings`, the prefix volume when known, the origin ASN (last AS in the learned path), and the country. In observe and suggest these are recommendations; in inject they were announced.
 - Per prefix: origin ASN, country, and latest volume.
+- Recent events (#173) for the Events page: time, kind, severity, message, and fields. Pruned by `retention`. Without `storage` the page keeps the newest 1000 in memory.
 - SNMP 95th-percentile samples (#127), when a `telemetry` plugin of type `snmp` is configured: one row per provider binding and sample time (inbound and outbound bits per second, and the billing period). The collector loads the open period on start. A closed period stays until `retention` (rows whose period has ended by the cutoff). This does not announce. Without `storage`, those samples stay in memory and a restart clears them.
 
 The recorder buffers in memory and writes once a minute and on shutdown, after the routes are withdrawn. Rows a previous process left open are closed on start with `controller restarted (routes withdrawn)`.

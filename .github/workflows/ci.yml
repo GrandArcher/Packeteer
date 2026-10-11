@@ -184,7 +184,15 @@ jobs:
             --absent 'Cannot reach'
           bash lab/ui-smoke.sh "$base/reports.html" 'CSV' 'It announces nothing.'
           bash lab/ui-smoke.sh "$base/troubleshooting.html" 'Looking glass' 'It announces nothing.'
-          bash lab/ui-smoke.sh "$base/events.html" '#173' 'It announces nothing.'
+          # Events (#173): the controller.started event of this run is listed
+          # with its source, storage is on in the example so the page says
+          # events survive a restart, and the Audit tab is a tab, not a page.
+          curl -fsS "$base/api/events" | jq -e '.stored == true and (.events | map(.kind) | index("controller.started")) != null'
+          bash lab/ui-smoke.sh "$base/events.html" 'It announces nothing.' 'mode-observe' 'controller.started' '>controller<' \
+            'survive a restart' 'id="ev-severity"' 'id="ev-range"' 'id="tab-audit"' \
+            --absent 'Storage is off' 'Cannot reach' 'No events match.'
+          bash lab/ui-smoke.sh "$base/events.html#audit" 'It announces nothing.' 'id="panel-audit" role="tabpanel" aria-labelledby="tab-audit">' \
+            --absent 'Cannot reach'
           # Without auth the Admin and Tokens pages say users and tokens need it (#175).
           bash lab/ui-smoke.sh "$base/admin.html" 'id="users-off" class="empty">' 'It announces nothing.' \
             --absent 'id="users-on">' 'Your account may not read this page.'
@@ -790,6 +798,18 @@ jobs:
             --absent 'aria-label="Delete admin"' 'aria-label="Delete viewer1"'
           bash lab/ui-smoke.sh http://127.0.0.1:18188/tokens.html 'It announces nothing.' 'Create a token' '>ci<' \
             --absent 'pkt_' 'Cannot reach'
+          # Events and audit log (#173). The admin's Audit tab lists the
+          # changes made above by actor, action, and target, and never a
+          # secret. The viewer sees the events but no Audit tab, and the
+          # audit read is refused for it.
+          bash lab/ui-smoke.sh http://127.0.0.1:18187/events.html#audit 'It announces nothing.' 'mode-observe' \
+            '>admin<' '>POST /api/users<' '>viewer1<' '>POST /api/tokens<' 'id="panel-audit" role="tabpanel" aria-labelledby="tab-audit">' \
+            --absent 'pkt_' 'ci-viewer-password' 'ci-admin-password-1' 'Cannot reach' 'Your account may not read'
+          bash lab/ui-smoke.sh http://127.0.0.1:18188/events.html 'It announces nothing.' 'controller.started' \
+            'id="tab-audit" aria-selected="false" aria-controls="panel-audit" data-min-role="admin" hidden=""' \
+            --absent 'Cannot reach'
+          bash lab/ui-smoke.sh http://127.0.0.1:18188/events.html#audit 'Your account may not read the audit log.' \
+            --absent 'POST /api/users'
           kill "$padmin" "$pviewer"
           stop
           # Restart on the same volume: users and tokens persist, and the
@@ -798,6 +818,9 @@ jobs:
           authup admin:ci-admin-password-1
           test "$(code -u admin:ci-admin-password-1 $base/api/providers)" = 200
           test "$(code -u admin:a-different-password $base/api/providers)" = 401
+          # Events survive the restart (#173): this run's start and the
+          # first run's start and stop are all in the stored log.
+          curl -fsS -u admin:ci-admin-password-1 "$base/api/events" | tee /tmp/events.json | jq -e '.stored == true and ([.events[] | select(.kind == "controller.started")] | length) >= 2 and ([.events[].kind] | index("controller.stopping")) != null'
           test "$(code -H "Authorization: Bearer $tok" $base/api/providers)" = 200
           stop
           # Rollback: no auth block. Reads work, every change is refused.

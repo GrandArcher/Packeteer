@@ -1,6 +1,7 @@
 package plugin
 
 import (
+	"context"
 	"fmt"
 	"path"
 	"strconv"
@@ -213,6 +214,18 @@ func SeverityRank(s Severity) (int, bool) {
 	return r, ok
 }
 
+// SeveritiesFrom lists the severities at min or above, lowest first. An
+// empty or unknown min lists them all.
+func SeveritiesFrom(min Severity) []Severity {
+	var out []Severity
+	for _, s := range []Severity{SeverityInfo, SeverityWarning, SeverityCritical} {
+		if severityRank[s] >= severityRank[min] {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
 // EventFilter is the per-notifier filter and rate limit. Notifiers embed it
 // inline in their config block, so the keys sit next to the plugin's own.
 type EventFilter struct {
@@ -366,4 +379,62 @@ func (e Event) WithSuppressed(n int) Event {
 	f["suppressed"] = strconv.Itoa(n)
 	e.Fields = f
 	return e
+}
+
+// Source names where an event comes from: the catalog group, or the part
+// of the kind before the first dot for a kind that is not in the catalog.
+func (e Event) Source() string {
+	if s, ok := LookupEvent(e.Kind); ok {
+		return s.Group
+	}
+	group, _, _ := strings.Cut(e.Kind, ".")
+	return group
+}
+
+// EventQuery selects stored events whose Time is in [From, To). A zero
+// bound is open. MinSeverity keeps events at that severity or above; an
+// empty value keeps all. Text keeps events whose kind, message, or field
+// names and values contain it, ignoring case. Limit caps the rows
+// (newest first); zero means no cap.
+type EventQuery struct {
+	From        time.Time
+	To          time.Time
+	MinSeverity Severity
+	Text        string
+	Limit       int
+}
+
+// Match reports whether e is selected by q. Limit is not checked.
+func (q EventQuery) Match(e Event) bool {
+	if !q.From.IsZero() && e.Time.Before(q.From) {
+		return false
+	}
+	if !q.To.IsZero() && !e.Time.Before(q.To) {
+		return false
+	}
+	if q.MinSeverity != "" && severityRank[e.Severity] < severityRank[q.MinSeverity] {
+		return false
+	}
+	if q.Text == "" {
+		return true
+	}
+	text := strings.ToLower(q.Text)
+	if strings.Contains(strings.ToLower(e.Kind), text) || strings.Contains(strings.ToLower(e.Message), text) {
+		return true
+	}
+	for k, v := range e.Fields {
+		if strings.Contains(strings.ToLower(k), text) || strings.Contains(strings.ToLower(v), text) {
+			return true
+		}
+	}
+	return false
+}
+
+// EventStore is optional on a storage plugin: recent events for the Events
+// page. Rows older than the plugin's retention are deleted. It never
+// announces and never changes a decision.
+type EventStore interface {
+	AppendEvent(ctx context.Context, e Event) error
+	// Events returns matching events, newest first.
+	Events(ctx context.Context, q EventQuery) ([]Event, error)
 }

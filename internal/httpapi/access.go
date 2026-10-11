@@ -83,6 +83,7 @@ func (s *Server) routeTable() []route {
 		{"POST /api/users", admin, s.handleUserCreate},
 		{"PATCH /api/users/{name}", admin, s.handleUserUpdate},
 		{"DELETE /api/users/{name}", admin, s.handleUserDelete},
+		{"GET /api/events", viewer, s.handleEvents},
 		{"GET /api/audit", admin, s.handleAudit},
 		{"GET /api/config", admin, s.handleConfig},
 		{"POST /api/config/validate", admin, s.handleConfigValidate},
@@ -503,30 +504,41 @@ func (s *Server) handleTokenRevoke(w http.ResponseWriter, r *http.Request) {
 
 const maxAuditRows = 1000
 
+// parseRowsAndRange reads limit (1..max) and the RFC 3339 from and to of
+// a list request. On a bad value it writes the 400 and returns false.
+func parseRowsAndRange(w http.ResponseWriter, r *http.Request, def, max int) (limit int, from, to time.Time, ok bool) {
+	v := r.URL.Query()
+	limit = def
+	if l := v.Get("limit"); l != "" {
+		n, err := strconv.Atoi(l)
+		if err != nil || n < 1 || n > max {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "limit must be 1-" + strconv.Itoa(max)})
+			return 0, from, to, false
+		}
+		limit = n
+	}
+	for key, dst := range map[string]*time.Time{"from": &from, "to": &to} {
+		if t := v.Get(key); t != "" {
+			at, err := time.Parse(time.RFC3339, t)
+			if err != nil {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": key + ": want RFC 3339"})
+				return 0, from, to, false
+			}
+			*dst = at
+		}
+	}
+	return limit, from, to, true
+}
+
 func (s *Server) handleAudit(w http.ResponseWriter, r *http.Request) {
 	if !s.audit.Stored() {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": auth.ErrNoAuditStore.Error()})
 		return
 	}
 	q := plugin.AuditQuery{Limit: 100}
-	v := r.URL.Query()
-	if l := v.Get("limit"); l != "" {
-		n, err := strconv.Atoi(l)
-		if err != nil || n < 1 || n > maxAuditRows {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "limit must be 1-" + strconv.Itoa(maxAuditRows)})
-			return
-		}
-		q.Limit = n
-	}
-	for key, dst := range map[string]*time.Time{"from": &q.From, "to": &q.To} {
-		if t := v.Get(key); t != "" {
-			at, err := time.Parse(time.RFC3339, t)
-			if err != nil {
-				writeJSON(w, http.StatusBadRequest, map[string]string{"error": key + ": want RFC 3339"})
-				return
-			}
-			*dst = at
-		}
+	var ok bool
+	if q.Limit, q.From, q.To, ok = parseRowsAndRange(w, r, q.Limit, maxAuditRows); !ok {
+		return
 	}
 	recs, err := s.audit.Query(r.Context(), q)
 	if err != nil {

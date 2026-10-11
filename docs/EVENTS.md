@@ -2,6 +2,8 @@
 
 Packeteer emits the events below to every configured notifier (`notifiers:` in the config). Notifiers are plugins: `webhook` (with `slack`, `teams`, and `pagerduty` presets, or a custom template for SMS and chat gateways), `smtp`, `snmptrap`, and out-of-process `exec`. Keys are in [CONFIG.md](CONFIG.md#notifier-filters-every-notifier).
 
+The same events, except `audit.recorded`, are kept for the Events page ([ui.md](ui.md#events-and-audit-log)), with or without a notifier. With storage, the write queue holds 256 events; when it is full, new events are dropped and logged.
+
 Notifications are read-only. A notifier never announces or withdraws a route, and a notifier that fails or is slow does not change a decision or delay a withdraw. Events are emitted in every mode. In `observe` and `suggest` an improvement event says the route was not announced.
 
 ## Event shape

@@ -4,9 +4,9 @@
 // It stores daily probe rollups, one row per improvement, one row per
 // threat mitigation rule, and per-prefix facts (origin ASN, country,
 // volume). Raw probe results are not stored. It also keeps HTTP users,
-// API token hashes, the audit log (#32), and SNMP 95th-percentile
+// API token hashes, the audit log (#32), recent events (#173), and SNMP 95th-percentile
 // samples for the open billing period (#127).
-// Rows older than retention (audit records included) are deleted on start and once a day. The plugin
+// Rows older than retention (audit records and events included) are deleted on start and once a day. The plugin
 // records history only; it never announces routes or changes decisions.
 package sqlite
 
@@ -204,6 +204,15 @@ CREATE TABLE IF NOT EXISTS audit (
 	detail TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS audit_time ON audit (time_ms);
+CREATE TABLE IF NOT EXISTS events (
+	seq INTEGER PRIMARY KEY AUTOINCREMENT,
+	time_ms INTEGER NOT NULL,
+	kind TEXT NOT NULL,
+	severity TEXT NOT NULL,
+	message TEXT NOT NULL,
+	fields TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS events_time ON events (time_ms);
 CREATE TABLE IF NOT EXISTS dashboards (
 	owner TEXT NOT NULL,
 	name TEXT NOT NULL,
@@ -313,6 +322,9 @@ func (s *Store) prune(ctx context.Context) error {
 		return err
 	}
 	if _, err := db.ExecContext(ctx, `DELETE FROM audit WHERE time_ms < ?`, cutoff.UnixMilli()); err != nil {
+		return err
+	}
+	if _, err := db.ExecContext(ctx, `DELETE FROM events WHERE time_ms < ?`, cutoff.UnixMilli()); err != nil {
 		return err
 	}
 	// Closed billing periods only. The open period's end is still ahead,
