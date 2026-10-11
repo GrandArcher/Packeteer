@@ -1054,7 +1054,7 @@ jobs:
         env:
           SOAK_OUT: load-result.json
         run: bash lab/soak.sh packeteer:ci pr
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: load-result
