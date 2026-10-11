@@ -346,3 +346,8 @@ a.button { display: inline-block; padding: 8px 14px; border: 1px solid var(--hea
 .hop-silent { border-style: dashed; border-color: var(--muted); }
 .hop-error { border-color: var(--down); }
 .tool-result tr.is-current td { background: #e8f3ee; }
+
+/* Paged prefix list (#183). */
+.prefix-row .small { margin-left: 0; }
+.prefix-detail > td { padding: 0 10px; }
+.pager { margin-top: 12px; }

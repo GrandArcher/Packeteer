@@ -6,6 +6,7 @@ The remaining UI conveniences (#34). All of them work in the stock image with a 
 |---|---|---|---|
 | Before/after graphs (#129) | `/graphs.html`, `/api/reports/timeseries`, the `timeseries` dashboard widget | viewer | `storage: {type: sqlite}` |
 | Troubleshooting results (#180) | `/troubleshooting.html`, `/api/troubleshoot/...` | viewer for the looking glass, operator for probe, traceroute, and whois | `troubleshoot.enabled` for the active tools |
+| Prefix list (#183) | `/prefixes.html`, `/api/prefixes` | viewer | none |
 | Prefix detail and history (#179) | `/prefix/<prefix>`, `/api/prefixes/history` | viewer | `storage: {type: sqlite}` for the timeline |
 | Events and audit log (#173) | `/events.html`, `/api/events`, `/api/audit` | viewer for events, admin for the audit tab | `storage: {type: sqlite}` keeps events across a restart |
 | Users and API tokens (#175) | `/admin.html`, `/tokens.html`, `/api/users`, `/api/tokens` | admin for users, every signed-in user for tokens | `storage` + `auth.enabled` |
@@ -27,7 +28,7 @@ Every page has the same chrome (#170). The mode banner is the first thing on the
 | Overview | `/` | Tiles, setup checklist, optional features, and POPs when federation is on |
 | Dashboards | `/dashboards.html` | Custom dashboards (the existing page) |
 | Improvements | `/improvements.html` | Recommended or active improvements |
-| Prefixes & ASNs | `/prefixes.html` | Prefix cards and the ASN map |
+| Prefixes & ASNs | `/prefixes.html` | The measured-prefix table, one page at a time, and the ASN map ([below](#prefix-list)) |
 | Graphs | `/graphs.html` | Before/after loss and latency charts (#129; [below](#graphs)). Empty state without history |
 | Reports | `/reports.html` | History reports and CSV |
 | Providers & Exchanges | `/providers.html` | Provider health. The exchange view is empty (#148) |
@@ -76,6 +77,29 @@ The Troubleshooting page (#180) draws looking glass and traceroute answers as ta
 
 The smoke step "UI troubleshooting smoke" in the docker job (`lab/ui-smoke.sh`) loads the page through `lab/uiproxy -fixtures lab/ui-fixtures/troubleshoot`. The proxy answers the looking glass and traceroute calls from canned files on documentation prefixes and ASNs (a learned best and an inactive path, a covering route, a three-provider trace with a silent hop, an error, and a provider whose source is unavailable, a single-provider trace, and a rate-limited call) and adds a script that presses Run, Remove, and Rerun, because headless Chrome cannot click. The step checks the tables, the diagram, the raw view, the error text, a real unstubbed looking glass call against the image, and the newest-first order after a remove and a rerun. `lab/uiproxy` tests decode the canned files with the API's own types. `internal/troubleshoot` tests cover the origin AS and reverse name on each hop.
 
+## Prefix list
+
+`/prefixes.html` (#183) shows the measured prefixes as a table, one page at a time, so a table of 100k prefixes costs one page per request. It is read-only and announces nothing; the mode banner is on top in every mode.
+
+- **Table.** Prefix (links to its [detail page](#prefix-detail-and-history)), current exit, recommended exit, score gain, loss, RTT, and whether it is in the RIB. Loss and RTT are those of the current exit, or of the recommended exit when the current one has no successful probe. Score gain is the scorer's gain of the recommended exit over the current one (current score minus recommended score), and is blank unless the exits differ and both were usable. Details opens the same card as the prefix page, with the measured sub-ranges and the learned paths. MED in it is labelled display only and does not choose the exit. The card is built when a row opens, and open rows stay open through the 5-second refresh while they remain on the page.
+- **Filters.** Prefix (a CIDR matches that prefix; other text matches as a substring), origin AS (the last AS of a learned path, as on the ASN map; `64500` or `AS64500`), provider (a probed, current, or recommended exit), and only where the recommended exit differs. Sort is prefix order, largest score gain, highest loss, or highest RTT; for loss and RTT, rows without a measurement sort last, and for score gain a row with none counts as zero; equal values keep prefix order so pages do not overlap. Rows per page is 25, 50 (default), 100, or 200.
+- **URL.** The filters, sort, `page`, and `size` are in the query string (`/prefixes.html?asn=64500&sort=gain&page=2`), so a link opens the same view. Defaults are left out. A page past the end opens the last page.
+- **Refresh.** Every 5 seconds the page asks for its own page again, not the table. Other pages do not read the list at all.
+- **ASN map.** Bounded in the same response: the first 100 origin ASNs, each site listing at most 8 prefixes next to its full count. The heading of an ASN filters the table to it. Filtering by origin AS shows only that ASN. An origin AS that is not a number is marked on the page and not applied.
+
+`GET /api/prefixes` (viewer) takes:
+
+| Query | Meaning |
+|---|---|
+| `limit` | Rows per page, 1 to 500. Default 100. |
+| `offset` | Rows to skip, 0 or more. Default 0. |
+| `prefix`, `asn`, `provider`, `differs` | The filters above. `differs` is `true` or `false`. |
+| `sort` | `prefix` (default), `gain`, `loss`, or `rtt`. The last three are highest first. |
+
+A bad value is a `400`. The body keeps `prefixes` (each row also has `gain`, `exit_loss_pct`, and `exit_rtt_ms` when known) and `asn_map`, and adds `total` (rows that matched), `measured` (before filtering), `offset`, `limit`, and `asn_total` (origin ASNs after the origin AS filter, before the cut). A client that sends no parameters gets the first 100 rows in prefix order and can read `total` to see there are more; `/api/probes` is not paged. The `prefixes` dashboard widget shows that first page. In `asn_map`, a site's `prefixes` is cut to 8 and `count` is the full number.
+
+The smoke step "UI prefix list smoke" in the docker job (`lab/ui-smoke.sh`) loads the page through `lab/uiproxy -fixtures lab/ui-fixtures/prefixes`. The proxy answers `/api/prefixes` with canned pages of 25 rows that claim 100000 measured prefixes (documentation prefixes and ASNs) and adds a script that opens a row, presses Next, and types an origin AS, because headless Chrome cannot click. The step checks the open card and its MED label, the bounded ASN map, the page 2 URL and rows, and the filtered result. The stock-image steps check the real API (default page, `offset` past the end, filters, and the `400` cases) and the page against it. `lab/uiproxy` tests decode the canned pages with the API's own type. `internal/httpapi` tests cover the filters, orders, and the response size and ASN map bound with 100k prefixes.
+
 ## Prefix detail and history
 
 Every improvement row opens `/prefix/<prefix>` (#179), for example `/prefix/192.0.2.0/24` or `/prefix/2001:db8::/32`. The URL is shareable and a reload opens the same page. The links are on the Improvements page, the Improvements and Prefixes reports on Reports, and the improvements widget of a custom dashboard. The page is read-only and announces nothing; the mode banner is on top in every mode.
@@ -113,7 +137,7 @@ docker run --network host --cap-add NET_RAW --cap-add NET_ADMIN \
 - **Overview tiles.** Mode, status (ready, not ready, starting), providers up, prefixes measured (and which sources list them), recommended improvements (outside inject) or active improvements (inject) against `max_improvements`, and BGP sessions with the number of probed prefixes in the learned RIB.
 - **Setup checklist.** Shown until there is nothing left to do, most urgent first. `todo`: no `sources` (nothing to probe). `warn`: every probe through a provider fails (with the last error), every provider is down, `bgp.neighbors` is set but no session is up, or no probed prefix is in the learned RIB. `info`: still starting, waiting for the first round, no `bgp.neighbors` (the current exit is unknown), report history off. Each line names the doc to read. The checklist only reads state; fix the mounted file and restart.
 - **Providers** (`/providers.html`) show `no data yet` until something is measured through them, `no answer` when every probe through them fails, and per-provider probe counts. The exchange view on that page is an empty state (#148).
-- **Prefixes** (`/prefixes.html`) have a filter (prefix or provider) and a switch for prefixes whose recommended exit differs from the learned one. A prefix card lists each learned path, including inactive add-path and BMP paths, with its MED (display only) and `via` (route server, bilateral, or unknown; #146). The ASN map is on the same page.
+- **Prefixes** (`/prefixes.html`) are a filtered, paged table; a row opens the prefix card with each learned path, its MED (display only) and `via` (route server, bilateral, or unknown; #146). See [Prefix list](#prefix-list). The ASN map is on the same page.
 - **Improvements** (`/improvements.html`) are labeled recommended outside inject and active in inject.
 - **Reports** (`/reports.html`) and **troubleshooting** (`/troubleshooting.html`) are the same sections as before, on their own URLs.
 - **Optional sections** (POPs on Overview, threat mitigation on Protection) are hidden when not configured; the overview lists which optional features are on and off. Protection shows its empty state while the monitor is hidden.

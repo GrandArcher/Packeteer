@@ -53,7 +53,7 @@ docker exec pkw-edge vtysh -c 'show bgp ipv4 unicast 198.51.100.0/24'
 Packeteer learned the prefix over iBGP, matched its next hop to `transit-a`, and measured both providers:
 
 ```sh
-curl -fsS http://127.0.0.1:18090/api/prefixes
+curl -fsS "http://127.0.0.1:18090/api/prefixes?limit=500"
 ```
 <!-- ci-retry: 60 -->
 <!-- ci-expect: "prefix":"198.51.100.0/24" -->
@@ -217,7 +217,7 @@ rm -rf lab/walkthrough
 The steps are the same. What changes:
 
 1. **Observe first, for days.** Install with [quickstart.md](quickstart.md). Set up probe sources with [policy-routing.md](policy-routing.md) and check each provider's numbers against what you know.
-2. **Peer with the router** (still observe): `bgp.neighbors` in the config, and the session from the router guide for [MikroTik](mikrotik.md), [FRR](frr.md), [Junos](junos.md), or [Cisco IOS / IOS-XE](cisco.md). `/readyz` turns 200 once the session is up, and `/api/prefixes` fills `rib_provider`.
+2. **Peer with the router** (still observe): `bgp.neighbors` in the config, and the session from the router guide for [MikroTik](mikrotik.md), [FRR](frr.md), [Junos](junos.md), or [Cisco IOS / IOS-XE](cisco.md). `/readyz` turns 200 once the session is up, and `/api/prefixes` (paged; `?prefix=<cidr>` picks one) fills `rib_provider`.
 3. **Install both filters** on the router before inject, and test them: the guide for your router shows how to check that a tagged route is accepted from Packeteer and never exported.
 4. **Suggest**, with the thresholds you mean to run, until the recommendations are ones you would make by hand.
 5. **Inject one prefix.** Allowlist one prefix you operate, keep `max_improvements` small, and set `hold_time` (15 minutes in the example config) so a route that goes up stays up long enough to judge it. Confirm the route on the router with your router guide's check command, and confirm it is absent toward every eBGP neighbor.

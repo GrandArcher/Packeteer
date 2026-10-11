@@ -1,0 +1,26 @@
+{
+  "inject": {
+    "page": "/prefixes.html",
+    "script": "driver.js"
+  },
+  "stubs": [
+    {
+      "method": "GET",
+      "path": "/api/prefixes",
+      "contains": "asn=64500",
+      "file": "filtered.json"
+    },
+    {
+      "method": "GET",
+      "path": "/api/prefixes",
+      "contains": "offset=25",
+      "file": "page2.json"
+    },
+    {
+      "method": "GET",
+      "path": "/api/prefixes",
+      "contains": "offset=0",
+      "file": "page1.json"
+    }
+  ]
+}
