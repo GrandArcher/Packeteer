@@ -245,7 +245,7 @@ func TestConfirmRoundsSwitch(t *testing.T) {
 		t.Fatalf("inside hold: %+v %+v", decision(t, out, pA), st.Improvements[pA])
 	}
 	at = t0.Add(2 * time.Minute)
-	st, out = Decide(st, in(results(at, pA, ms...), native), c, scorer(t), at)
+	st, _ = Decide(st, in(results(at, pA, ms...), native), c, scorer(t), at)
 	if st.confirm[pA].Streak != 2 || st.Improvements[pA].Provider != "b" {
 		t.Fatalf("second win inside hold: %+v", st.confirm[pA])
 	}
