@@ -2,7 +2,7 @@
 // Troubleshooting page (#24, #180). Looking glass and traceroute answers
 // are drawn as tables; every answer keeps its raw JSON. Results stack
 // newest first for this browser session only. Needs el, clear, getJSON,
-// postJSON, fmtAS, fmtVia, fmtMs, and fmtTime from app.js. Read-only: the
+// postJSON, fmtAS, fmtVia, and fmtMs from app.js. Read-only: the
 // requests are the ones the page always made, with the same roles and
 // rate limits.
 
@@ -211,8 +211,8 @@ function startTool(tool, target, provider) {
     paintEntry(e);
   }, function (err) {
     e.running = false;
-    // getJSON prefixes the request path; the server's reason is what matters.
-    e.error = err.message.replace(/^\S+ failed: /, "");
+    // Only getJSON (looking glass) prefixes the request path to its errors.
+    e.error = tool === "lookingglass" ? err.message.replace(/^\S+ failed: /, "") : err.message;
     paintEntry(e);
   });
 }
