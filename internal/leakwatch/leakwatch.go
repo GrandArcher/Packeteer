@@ -202,6 +202,9 @@ func (w *Watcher) handle(ctx context.Context, sg sighting) {
 		return
 	}
 	now := time.Now()
+	// Lock order: the announcer's lock may be held while it calls Held, so
+	// w.mu is never held across a call into cfg (Injected, Withdraw, Emit).
+	on := w.cfg.Injected(s.Prefix)
 	w.mu.Lock()
 	if l, ok := w.held[s.Prefix]; ok {
 		l.Sightings++
@@ -209,7 +212,6 @@ func (w *Watcher) handle(ctx context.Context, sg sighting) {
 		w.mu.Unlock()
 		return
 	}
-	on := w.cfg.Injected(s.Prefix)
 	// A full set drops only prefixes that are not on the wire: anyone
 	// downstream can tag routes with the community, but a route that is
 	// announced right now must still be withdrawn and held.

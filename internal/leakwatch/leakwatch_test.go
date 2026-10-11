@@ -321,3 +321,57 @@ func TestNilWatcherIsInert(t *testing.T) {
 		t.Fatal("nil watcher holds a prefix")
 	}
 }
+
+// TestHandleDoesNotDeadlockWithSync reproduces the announcer's lock order:
+// Sync holds its lock and calls Held while handle asks Injected, which takes
+// that same lock. handle must not hold w.mu across Injected.
+func TestHandleDoesNotDeadlockWithSync(t *testing.T) {
+	var amu sync.Mutex // the announcer's c.mu
+	prefix := netip.MustParsePrefix("198.51.100.0/24")
+	inInjected := make(chan struct{}, 1)
+	syncHolds := make(chan struct{})
+	var w *Watcher
+	w = New(Config{
+		ASN: localASN, Community: community,
+		Injected: func(netip.Prefix) bool {
+			select {
+			case inInjected <- struct{}{}:
+				<-syncHolds
+			default:
+			}
+			amu.Lock()
+			defer amu.Unlock()
+			return true
+		},
+		Withdraw: func(context.Context, netip.Prefix) error { amu.Lock(); defer amu.Unlock(); return nil },
+		Log:      slog.New(slog.DiscardHandler),
+	}, nil)
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			w.handle(context.Background(), sighting{source: "feed", s: sight("198.51.100.0/24", nil, community)})
+		}()
+		go func() { // Controller.Sync
+			defer wg.Done()
+			<-inInjected
+			amu.Lock()
+			close(syncHolds)
+			w.Held(prefix)
+			amu.Unlock()
+		}()
+		wg.Wait()
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("handle and Sync deadlocked on w.mu and the announcer lock")
+	}
+	if !w.Held(prefix) {
+		t.Fatal("prefix not held after the sighting")
+	}
+}
