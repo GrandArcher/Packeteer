@@ -8,7 +8,7 @@ function emptyForm() {
     min_rtt_delta_pct: "", confirm_rounds: "",
     precedence: "", scorer_type: "", floor_max_loss_pct: "", floor_max_rtt: "",
     providers: [], targets: [], allowlist: [],
-    flow: emptyFlow(), policies: {rules: []}, vip: emptyVIP(), outage: emptyOutage(),
+    flows: [], policies: [], vips: [], outages: [],
     inbound: emptyInbound(), anomaly: emptyAnomaly()};
 }
 
@@ -21,18 +21,6 @@ function emptyInbound() {
 
 function emptyAnomaly() {
   return {enabled: false, mitigation_mode: "", mitigation_allowlist: [], rules: []};
-}
-
-function emptyFlow() {
-  return {enabled: false, listen: [], window: "", top_n: "", max_targets: "", tail_interval: "", min_bytes: "", min_pct: "", exclude: []};
-}
-
-function emptyVIP() {
-  return {enabled: false, interval: "", max_targets: "", prefixes: [], asns: []};
-}
-
-function emptyOutage() {
-  return {enabled: false, min_prefixes: "", window: "", loss_pct: "", rtt_ms: "", interval: "", max_targets: "", ignore_asns: []};
 }
 
 // Lists in the form's text fields are comma or space separated.
@@ -72,11 +60,11 @@ function editorOff(err) {
   var node = document.getElementById("ed-off");
   node.textContent = explain(err);
   node.hidden = !off;
-  ["ed-load", "ed-check", "ed-save", "wz-run", "wz-next", "wz-next-2", "wz-back", "wz-back-3", "wz-add-provider", "wz-sug", "form-apply", "form-reload", "form-add-provider", "form-add-target", "form-add-allow", "sug-refresh", "form-add-rule", "form-add-vip", "form-add-anomaly-rule", "wz-next-3", "wz-back-4"].forEach(function (id) {
+  ["ed-load", "ed-check", "ed-save", "wz-run", "wz-next", "wz-next-2", "wz-back", "wz-back-3", "wz-add-provider", "wz-sug", "form-apply", "form-reload", "form-add-provider", "form-add-target", "form-add-allow", "sug-refresh", "form-add-flow", "form-add-policy", "form-add-vip", "form-add-outage", "form-add-anomaly-rule", "wz-next-3", "wz-back-4"].forEach(function (id) {
     var b = document.getElementById(id);
     if (b) b.disabled = off;
   });
-  ["form-fields", "form-flow", "form-vip", "form-outage", "form-inbound"].forEach(function (id) {
+  ["form-fields", "form-flows", "form-policies", "form-vips", "form-outages", "form-inbound"].forEach(function (id) {
     var fields = document.getElementById(id);
     if (fields) fields.disabled = off;
   });
@@ -138,27 +126,6 @@ function readKnobs() {
 
 function readSections() {
   var t = function (id) { return byId(id).value.trim(); };
-  form.flow.enabled = byId("fl-enabled").checked;
-  form.flow.listen = splitList(byId("fl-listen").value);
-  form.flow.window = t("fl-window");
-  form.flow.top_n = t("fl-top-n");
-  form.flow.max_targets = t("fl-max-targets");
-  form.flow.tail_interval = t("fl-tail");
-  form.flow.min_bytes = t("fl-min-bytes");
-  form.flow.min_pct = t("fl-min-pct");
-  form.flow.exclude = splitList(byId("fl-exclude").value);
-  form.vip.enabled = byId("vip-enabled").checked;
-  form.vip.interval = t("vip-interval");
-  form.vip.max_targets = t("vip-max");
-  form.vip.asns = splitList(byId("vip-asns").value);
-  form.outage.enabled = byId("out-enabled").checked;
-  form.outage.min_prefixes = t("out-min");
-  form.outage.window = t("out-window");
-  form.outage.loss_pct = t("out-loss");
-  form.outage.rtt_ms = t("out-rtt");
-  form.outage.interval = t("out-interval");
-  form.outage.max_targets = t("out-max");
-  form.outage.ignore_asns = splitList(byId("out-ignore").value);
   var inb = form.inbound;
   inb.enabled = byId("in-enabled").checked;
   inb.mode = byId("in-mode").value;
@@ -189,28 +156,6 @@ function setChecked(id, on) {
 }
 
 function fillSections() {
-  var f = form.flow, v = form.vip, o = form.outage;
-  setChecked("fl-enabled", f.enabled);
-  setVal("fl-listen", listText(f.listen));
-  setVal("fl-window", f.window);
-  setVal("fl-top-n", f.top_n);
-  setVal("fl-max-targets", f.max_targets);
-  setVal("fl-tail", f.tail_interval);
-  setVal("fl-min-bytes", f.min_bytes);
-  setVal("fl-min-pct", f.min_pct);
-  setVal("fl-exclude", listText(f.exclude));
-  setChecked("vip-enabled", v.enabled);
-  setVal("vip-interval", v.interval);
-  setVal("vip-max", v.max_targets);
-  setVal("vip-asns", listText(v.asns));
-  setChecked("out-enabled", o.enabled);
-  setVal("out-min", o.min_prefixes);
-  setVal("out-window", o.window);
-  setVal("out-loss", o.loss_pct);
-  setVal("out-rtt", o.rtt_ms);
-  setVal("out-interval", o.interval);
-  setVal("out-max", o.max_targets);
-  setVal("out-ignore", listText(o.ignore_asns));
   fillInbound();
   fillAnomalyState();
 }
@@ -284,51 +229,182 @@ function selectInput(options, value) {
   return sel;
 }
 
-function renderRules() {
-  var root = byId("form-rules");
-  clear(root);
-  form.policies.rules.forEach(function (r, i) {
-    var row = el("div", "row");
-    var name = rowInput(r.name, "name");
-    var action = selectInput(ruleActions, r.action);
-    var provs = rowInput(listText(r.providers), "transit-a");
-    var prefixes = rowInput(listText(r.prefixes), "203.0.113.0/24", true);
-    var asns = rowInput(listText(r.asns), "64500");
-    var countries = rowInput(listText(r.countries), "DE, FR");
-    var traffic = selectInput([["", "any traffic"], ["transit", "transit"], ["local", "local"]], r.traffic);
-    var loss = rowInput(r.max_loss_pct, "static only");
-    var rtt = rowInput(r.max_rtt, "150ms");
-    var set = function () {
-      var x = form.policies.rules[i];
-      x.name = name.value.trim();
-      x.action = action.value;
-      x.providers = splitList(provs.value);
-      x.prefixes = splitList(prefixes.value);
-      x.asns = splitList(asns.value);
-      x.countries = splitList(countries.value);
-      x.traffic = traffic.value;
-      x.max_loss_pct = loss.value.trim();
-      x.max_rtt = rtt.value.trim();
-    };
-    [name, provs, prefixes, asns, countries, loss, rtt].forEach(function (n) { n.addEventListener("input", set); });
-    [action, traffic].forEach(function (n) { n.addEventListener("change", set); });
-    row.appendChild(labeled("Rule name", name));
-    row.appendChild(labeled("Action", action));
-    row.appendChild(labeled("Providers", provs));
-    row.appendChild(labeled("Prefixes", prefixes));
-    row.appendChild(labeled("Origin ASNs", asns));
-    row.appendChild(labeled("Countries", countries));
-    row.appendChild(labeled("Traffic class", traffic));
-    row.appendChild(labeled("Max loss (%)", loss));
-    row.appendChild(labeled("Max RTT", rtt));
-    var minus = el("button", "small", "−");
-    minus.type = "button";
-    minus.title = "Remove rule";
-    minus.addEventListener("click", function () { form.policies.rules.splice(i, 1); renderRules(); });
-    row.appendChild(minus);
-    root.appendChild(row);
+// Sources and rules policies are lists of cards. A card's key is the
+// entry's position in the file when the form loaded; the server matches
+// edits to the entries by it, so reordering and removing are safe.
+function moveItem(list, i, d) {
+  var j = i + d;
+  if (j < 0 || j >= list.length) return false;
+  var x = list[i];
+  list[i] = list[j];
+  list[j] = x;
+  return true;
+}
+
+// card is one entry: a heading, move and remove buttons, and its fields.
+function card(title, list, i, rerender, what, ordered) {
+  var box = el("fieldset", "form entry");
+  var head = el("div", "row");
+  head.appendChild(el("strong", "", title + " " + (i + 1)));
+  var buttons = [];
+  if (ordered) {
+    buttons.push(["↑", "Move " + what + " up", function () { if (moveItem(list, i, -1)) rerender(); }]);
+    buttons.push(["↓", "Move " + what + " down", function () { if (moveItem(list, i, 1)) rerender(); }]);
+  }
+  buttons.push(["−", "Remove " + what, function () { list.splice(i, 1); rerender(); }]);
+  buttons.forEach(function (b) {
+    var btn = el("button", "small", b[0]);
+    btn.type = "button";
+    btn.title = b[1];
+    btn.addEventListener("click", b[2]);
+    head.appendChild(btn);
   });
-  if (!form.policies.rules.length) root.appendChild(el("p", "empty", "No rules. Native routing and the normal thresholds apply."));
+  box.appendChild(head);
+  return box;
+}
+
+// bind wires an input to a field of an entry; conv turns the text into
+// the stored value.
+function bind(input, obj, field, conv) {
+  var set = function () { obj[field] = conv ? conv(input.value) : input.value.trim(); };
+  input.addEventListener("input", set);
+  input.addEventListener("change", set);
+  return input;
+}
+
+function textField(obj, field, label, placeholder, list, wide) {
+  var input = rowInput(list ? listText(obj[field]) : obj[field], placeholder, wide);
+  return labeled(label, bind(input, obj, field, list ? splitList : null));
+}
+
+function renderFlows() {
+  var root = byId("form-flows");
+  clear(root);
+  form.flows.forEach(function (f, i) {
+    var box = card("Flow collector", form.flows, i, renderFlows, "flow collector", false);
+    var row = el("div", "row");
+    row.appendChild(textField(f, "name", "Name", "flow"));
+    row.appendChild(textField(f, "listen", "Listen (host:port)", "192.0.2.10:2055, 192.0.2.10:6343", true, true));
+    row.appendChild(textField(f, "window", "Window", "5m"));
+    row.appendChild(textField(f, "top_n", "Priority prefixes (top_n)", "100"));
+    row.appendChild(textField(f, "max_targets", "Probed set (max_targets)", "same as top_n"));
+    row.appendChild(textField(f, "tail_interval", "Tail interval", "60s"));
+    row.appendChild(textField(f, "min_bytes", "Minimum bytes", "0 (off)"));
+    row.appendChild(textField(f, "min_pct", "Minimum share (%)", "0 (off)"));
+    row.appendChild(textField(f, "aggregate_v4", "Aggregate IPv4 length", "24"));
+    row.appendChild(textField(f, "aggregate_v6", "Aggregate IPv6 length", "48"));
+    row.appendChild(textField(f, "exclude", "Exclude prefixes", "192.0.2.0/24", true, true));
+    box.appendChild(row);
+    root.appendChild(box);
+  });
+  if (!form.flows.length) root.appendChild(el("p", "empty", "No flow collector."));
+}
+
+function renderOutages() {
+  var root = byId("form-outages");
+  clear(root);
+  form.outages.forEach(function (o, i) {
+    var box = card("Outage detection", form.outages, i, renderOutages, "outage source", false);
+    var row = el("div", "row");
+    row.appendChild(textField(o, "name", "Name", "outage"));
+    row.appendChild(textField(o, "min_prefixes", "Minimum prefixes", "3"));
+    row.appendChild(textField(o, "window", "Window", "2m"));
+    row.appendChild(textField(o, "loss_pct", "Loss (%)", "20"));
+    row.appendChild(textField(o, "rtt_ms", "RTT (ms)", "0 (off)"));
+    row.appendChild(textField(o, "interval", "Re-probe interval", "5s"));
+    row.appendChild(textField(o, "max_targets", "Max targets", "100"));
+    row.appendChild(textField(o, "ignore_asns", "Ignore ASNs", "64500", true));
+    box.appendChild(row);
+    root.appendChild(box);
+  });
+  if (!form.outages.length) root.appendChild(el("p", "empty", "No outage source."));
+}
+
+function renderVIPs() {
+  var root = byId("form-vips");
+  clear(root);
+  form.vips.forEach(function (v, i) {
+    var box = card("VIP source", form.vips, i, renderVIPs, "VIP source", false);
+    var row = el("div", "row");
+    row.appendChild(textField(v, "name", "Name", "vip"));
+    row.appendChild(textField(v, "interval", "Interval", "10s"));
+    row.appendChild(textField(v, "max_targets", "Max targets", "100"));
+    row.appendChild(textField(v, "asns", "VIP ASNs", "64496, 64497", true));
+    box.appendChild(row);
+    v.prefixes.forEach(function (t, j) {
+      var prow = el("div", "row");
+      prow.appendChild(textField(t, "prefix", "VIP prefix", "203.0.113.0/24", false, true));
+      prow.appendChild(textField(t, "host", "Pinned host", "203.0.113.1"));
+      var minus = el("button", "small", "−");
+      minus.type = "button";
+      minus.title = "Remove VIP prefix";
+      minus.addEventListener("click", function () { v.prefixes.splice(j, 1); renderVIPs(); });
+      prow.appendChild(minus);
+      box.appendChild(prow);
+    });
+    var add = el("button", "small", "+ VIP prefix");
+    add.type = "button";
+    add.addEventListener("click", function () { v.prefixes.push({key: "", prefix: "", host: ""}); renderVIPs(); });
+    box.appendChild(add);
+    root.appendChild(box);
+  });
+  if (!form.vips.length) root.appendChild(el("p", "empty", "No VIP source."));
+}
+
+function newRule() {
+  return {key: "", name: "", action: "ignore", providers: [], prefixes: [], asns: [], countries: [], traffic: "", max_loss_pct: "", max_rtt: ""};
+}
+
+function renderPolicies() {
+  var root = byId("form-policies");
+  clear(root);
+  form.policies.forEach(function (p, i) {
+    var box = card("Rules policy", form.policies, i, renderPolicies, "policy", true);
+    var row = el("div", "row");
+    row.appendChild(textField(p, "name", "Name", "rules"));
+    row.appendChild(textField(p, "geoip_db", "GeoIP database (absolute path)", "/etc/packeteer/GeoLite2-Country.mmdb", false, true));
+    box.appendChild(row);
+    p.rules.forEach(function (r, j) {
+      box.appendChild(ruleRow(p, r, j));
+    });
+    if (!p.rules.length) box.appendChild(el("p", "empty", "No rules. A policy needs at least one; remove it to drop it."));
+    var add = el("button", "small", "+ Rule");
+    add.type = "button";
+    add.addEventListener("click", function () { p.rules.push(newRule()); renderPolicies(); });
+    box.appendChild(add);
+    root.appendChild(box);
+  });
+  if (!form.policies.length) root.appendChild(el("p", "empty", "No rules policy. Native routing and the normal thresholds apply."));
+}
+
+function ruleRow(p, r, j) {
+  var row = el("div", "row");
+  var action = selectInput(ruleActions, r.action);
+  var traffic = selectInput([["", "any traffic"], ["transit", "transit"], ["local", "local"]], r.traffic);
+  action.addEventListener("change", function () { r.action = action.value; });
+  traffic.addEventListener("change", function () { r.traffic = traffic.value; });
+  row.appendChild(textField(r, "name", "Rule name", "name"));
+  row.appendChild(labeled("Action", action));
+  row.appendChild(textField(r, "providers", "Providers", "transit-a", true));
+  row.appendChild(textField(r, "prefixes", "Prefixes", "203.0.113.0/24", true, true));
+  row.appendChild(textField(r, "asns", "Origin ASNs", "64500", true));
+  row.appendChild(textField(r, "countries", "Countries", "DE, FR", true));
+  row.appendChild(labeled("Traffic class", traffic));
+  row.appendChild(textField(r, "max_loss_pct", "Max loss (%)", "static only"));
+  row.appendChild(textField(r, "max_rtt", "Max RTT", "150ms"));
+  [["↑", "Move rule up", -1], ["↓", "Move rule down", 1]].forEach(function (b) {
+    var btn = el("button", "small", b[0]);
+    btn.type = "button";
+    btn.title = b[1];
+    btn.addEventListener("click", function () { if (moveItem(p.rules, j, b[2])) renderPolicies(); });
+    row.appendChild(btn);
+  });
+  var minus = el("button", "small", "−");
+  minus.type = "button";
+  minus.title = "Remove rule";
+  minus.addEventListener("click", function () { p.rules.splice(j, 1); renderPolicies(); });
+  row.appendChild(minus);
+  return row;
 }
 
 var anomalyActions = [["blackhole", "blackhole"], ["redirect", "redirect"], ["flowspec_drop", "flowspec drop"],
@@ -376,27 +452,6 @@ function renderAnomalyRules() {
     root.appendChild(row);
   });
   if (!form.anomaly.rules.length) root.appendChild(el("p", "empty", "No anomaly rules. Anomalies are detected and reported, and no mitigation rule is added."));
-}
-
-function renderVIPPrefixes() {
-  var root = byId("form-vip-prefixes");
-  clear(root);
-  form.vip.prefixes.forEach(function (t, i) {
-    var row = el("div", "row");
-    var prefix = rowInput(t.prefix, "203.0.113.0/24", true);
-    var host = rowInput(t.host, "203.0.113.1");
-    prefix.addEventListener("input", function () { form.vip.prefixes[i].prefix = prefix.value.trim(); });
-    host.addEventListener("input", function () { form.vip.prefixes[i].host = host.value.trim(); });
-    row.appendChild(labeled("VIP prefix", prefix));
-    row.appendChild(labeled("Pinned host", host));
-    var minus = el("button", "small", "−");
-    minus.type = "button";
-    minus.title = "Remove VIP prefix";
-    minus.addEventListener("click", function () { form.vip.prefixes.splice(i, 1); renderVIPPrefixes(); });
-    row.appendChild(minus);
-    root.appendChild(row);
-  });
-  if (!form.vip.prefixes.length) root.appendChild(el("p", "empty", "No VIP prefixes."));
 }
 
 function fillKnobs() {
@@ -542,8 +597,10 @@ function renderForm() {
   renderProviders();
   renderTargets();
   renderAllow();
-  renderRules();
-  renderVIPPrefixes();
+  renderFlows();
+  renderPolicies();
+  renderVIPs();
+  renderOutages();
   renderAnomalyRules();
   renderSuggestions(lastSuggestions);
 }
@@ -555,17 +612,7 @@ function loadForm(yaml) {
     if (!form.providers) form.providers = [];
     if (!form.targets) form.targets = [];
     if (!form.allowlist) form.allowlist = [];
-    var blank = emptyForm();
-    form.flow = Object.assign(blank.flow, form.flow || {});
-    form.vip = Object.assign(blank.vip, form.vip || {});
-    form.outage = Object.assign(blank.outage, form.outage || {});
-    loadProtectionDefaults();
-    if (!form.policies) form.policies = blank.policies;
-    if (!form.policies.rules) form.policies.rules = [];
-    ["listen", "exclude"].forEach(function (k) { if (!form.flow[k]) form.flow[k] = []; });
-    if (!form.vip.prefixes) form.vip.prefixes = [];
-    if (!form.vip.asns) form.vip.asns = [];
-    if (!form.outage.ignore_asns) form.outage.ignore_asns = [];
+    loadFormDefaults();
     renderForm();
     formStatus("");
   }, function (err) {
@@ -589,12 +636,22 @@ function loadProtectionDefaults() {
 }
 
 function loadFormDefaults() {
-  var blank = emptyForm();
-  form.flow = Object.assign(blank.flow, form.flow || {});
-  form.vip = Object.assign(blank.vip, form.vip || {});
-  form.outage = Object.assign(blank.outage, form.outage || {});
+  ["flows", "policies", "vips", "outages"].forEach(function (k) { if (!form[k]) form[k] = []; });
+  form.flows.forEach(function (f) {
+    ["listen", "exclude"].forEach(function (k) { if (!f[k]) f[k] = []; });
+  });
+  form.vips.forEach(function (v) {
+    if (!v.prefixes) v.prefixes = [];
+    if (!v.asns) v.asns = [];
+  });
+  form.outages.forEach(function (o) { if (!o.ignore_asns) o.ignore_asns = []; });
+  form.policies.forEach(function (p) {
+    if (!p.rules) p.rules = [];
+    p.rules.forEach(function (r) {
+      ["providers", "prefixes", "asns", "countries"].forEach(function (k) { if (!r[k]) r[k] = []; });
+    });
+  });
   loadProtectionDefaults();
-  if (!form.policies) form.policies = blank.policies;
 }
 
 function applyForm() {
@@ -904,22 +961,27 @@ document.getElementById("form-add-allow").addEventListener("click", function () 
   renderAllow();
 });
 document.getElementById("sug-refresh").addEventListener("click", loadSuggestions);
-byId("form-add-rule").addEventListener("click", function () {
-  form.policies.rules.push({key: "", name: "", action: "ignore", providers: [], prefixes: [], asns: [], countries: [], traffic: "", max_loss_pct: "", max_rtt: ""});
-  renderRules();
+byId("form-add-flow").addEventListener("click", function () {
+  form.flows.push({key: "", name: "", listen: [], window: "", top_n: "", max_targets: "", tail_interval: "", min_bytes: "", min_pct: "", aggregate_v4: "", aggregate_v6: "", exclude: []});
+  renderFlows();
+});
+byId("form-add-policy").addEventListener("click", function () {
+  form.policies.push({key: "", name: "", geoip_db: "", rules: [newRule()]});
+  renderPolicies();
+});
+byId("form-add-vip").addEventListener("click", function () {
+  form.vips.push({key: "", name: "", interval: "", max_targets: "", prefixes: [], asns: []});
+  renderVIPs();
+});
+byId("form-add-outage").addEventListener("click", function () {
+  form.outages.push({key: "", name: "", min_prefixes: "", window: "", loss_pct: "", rtt_ms: "", interval: "", max_targets: "", ignore_asns: []});
+  renderOutages();
 });
 byId("form-add-anomaly-rule").addEventListener("click", function () {
   form.anomaly.rules.push({key: "", name: "", prefixes: [], protocols: [], min_mbps: "", action: "blackhole", target: "", rate_mbps: "", ttl: ""});
   renderAnomalyRules();
 });
-byId("form-add-vip").addEventListener("click", function () {
-  form.vip.prefixes.push({key: "", prefix: "", host: ""});
-  renderVIPPrefixes();
-});
-["fl-enabled", "fl-listen", "fl-window", "fl-top-n", "fl-max-targets", "fl-tail", "fl-min-bytes", "fl-min-pct", "fl-exclude",
-  "vip-enabled", "vip-interval", "vip-max", "vip-asns",
-  "out-enabled", "out-min", "out-window", "out-loss", "out-rtt", "out-interval", "out-max", "out-ignore",
-  "in-enabled", "in-mode", "in-prefixes", "in-local-pref", "in-release", "in-cap", "in-mod-commit", "in-mod-perf", "in-perf",
+["in-enabled", "in-mode", "in-prefixes", "in-local-pref", "in-release", "in-cap", "in-mod-commit", "in-mod-perf", "in-perf",
   "in-perf-loss", "in-perf-latency", "in-perf-min", "in-perf-release", "in-damp-off", "in-damp-confirm", "in-damp-backoff", "in-damp-max"].forEach(function (id) {
   byId(id).addEventListener("change", readSections);
   byId(id).addEventListener("input", readSections);

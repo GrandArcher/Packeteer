@@ -53,12 +53,13 @@ type Form struct {
 	Providers    []FormProvider `json:"providers"`
 	Targets      []FormTarget   `json:"targets"`
 	Allowlist    []string       `json:"allowlist"`
-	// Sections (#130). A nil section in a request leaves that part of the
-	// file alone; ParseForm always fills them.
-	Flow     *FormFlow     `json:"flow"`
-	Policies *FormPolicies `json:"policies"`
-	VIP      *FormVIP      `json:"vip"`
-	Outage   *FormOutage   `json:"outage"`
+	// Sections (#130). A nil list in a request leaves that part of the
+	// file alone; an empty one removes every entry of that type.
+	// ParseForm always fills them.
+	Flows    []FormFlow        `json:"flows"`
+	Policies []FormRulesPolicy `json:"policies"`
+	VIPs     []FormVIP         `json:"vips"`
+	Outages  []FormOutage      `json:"outages"`
 	// #131: the inbound block and anomaly.rules, same rules.
 	Inbound *FormInbound `json:"inbound"`
 	Anomaly *FormAnomaly `json:"anomaly"`
