@@ -61,6 +61,14 @@ function prefixSyncURL() {
   window.history.replaceState(null, "", window.location.pathname + (qs ? "?" + qs : ""));
 }
 
+// prefixMarkASN flags an origin AS that is left out of the API query, so the
+// unfiltered table is not mistaken for a filtered one.
+function prefixMarkASN() {
+  var bad = !!prefixView.asn && !prefixASNValid(prefixView.asn);
+  document.getElementById("prefix-asn").setAttribute("aria-invalid", bad ? "true" : "false");
+  document.getElementById("prefix-asn-error").hidden = !bad;
+}
+
 function prefixApply(resetPage) {
   var v = prefixView;
   v.prefix = document.getElementById("prefix-filter").value.trim();
@@ -70,7 +78,7 @@ function prefixApply(resetPage) {
   v.sort = document.getElementById("prefix-sort").value;
   v.size = parseInt(document.getElementById("prefix-size").value, 10);
   if (resetPage) v.page = 1;
-  document.getElementById("prefix-asn").setAttribute("aria-invalid", v.asn && !prefixASNValid(v.asn) ? "true" : "false");
+  prefixMarkASN();
   prefixSyncURL();
   refresh();
 }
@@ -139,7 +147,7 @@ function prefixRow(row, body) {
   if (prefixExpanded[row.prefix]) prefixOpen(tr, row, true);
 }
 
-function prefixPager(total, pages) {
+function prefixPager(pages) {
   var v = prefixView;
   var bar = el("div", "controls pager");
   var prev = el("button", "small", "Previous");
@@ -192,13 +200,14 @@ function renderPrefixes(data) {
   });
   prefixExpanded = keep;
   root.appendChild(t.table);
-  root.appendChild(prefixPager(data.total, pages));
+  root.appendChild(prefixPager(pages));
 }
 
 function initPrefixList() {
   var v = prefixView;
   document.getElementById("prefix-filter").value = v.prefix;
   document.getElementById("prefix-asn").value = v.asn;
+  prefixMarkASN();
   document.getElementById("prefix-changes").checked = v.differs;
   document.getElementById("prefix-sort").value = v.sort;
   document.getElementById("prefix-size").value = String(v.size);

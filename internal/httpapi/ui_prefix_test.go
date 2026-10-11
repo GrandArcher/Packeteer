@@ -100,7 +100,7 @@ func TestPrefixListAssets(t *testing.T) {
 			t.Errorf("prefixes.js contains %s", bad)
 		}
 	}
-	for _, id := range []string{"prefix-filter", "prefix-asn", "prefix-provider", "prefix-changes", "prefix-sort", "prefix-size"} {
+	for _, id := range []string{"prefix-filter", "prefix-asn", "prefix-asn-error", "prefix-provider", "prefix-changes", "prefix-sort", "prefix-size"} {
 		if !strings.Contains(html, `id="`+id+`"`) {
 			t.Errorf("prefixes.html has no #%s", id)
 		}

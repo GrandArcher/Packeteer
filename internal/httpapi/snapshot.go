@@ -671,8 +671,7 @@ func assemblePrefixes(in Input) []Prefix {
 }
 
 // scoreGain is the scorer's gain of the recommended exit over the current
-// one, the same difference Decide ranks moves by. Zero unless both were
-// usable and the exits differ.
+// one. Zero unless both were usable and the exits differ.
 func scoreGain(d policy.Decision) float64 {
 	if d.Recommended == "" || d.Recommended == d.Current {
 		return 0

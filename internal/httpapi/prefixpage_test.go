@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -21,7 +22,7 @@ func pagedRows(n int) []Prefix {
 	rows := make([]Prefix, 0, n)
 	for i := range n {
 		b := netip.MustParseAddr("2001:db8::").As16()
-		b[4], b[5] = byte(i>>8), byte(i)
+		binary.BigEndian.PutUint32(b[4:8], uint32(i))
 		p := netip.PrefixFrom(netip.AddrFrom16(b), 64)
 		loss, rtt := float64(i%10), float64(n-i)
 		row := Prefix{
@@ -126,8 +127,8 @@ func TestPrefixesPaging(t *testing.T) {
 	if got.Total != 1 || got.Prefixes[0].Prefix != all[7] {
 		t.Fatalf("exact prefix = %+v", got)
 	}
-	got, _, _ = getPage(t, base, "?prefix=db8:1:")
-	if got.Total != 1 || got.Prefixes[0].Prefix != "2001:db8:1::/64" {
+	got, _, _ = getPage(t, base, "?prefix=db8:0:1:")
+	if got.Total != 1 || got.Prefixes[0].Prefix != "2001:db8:0:1::/64" {
 		t.Fatalf("substring = %v", prefixNames(got.Prefixes))
 	}
 	// Filters apply before the window, and the window moves inside them.
