@@ -2,6 +2,7 @@
 
 var REFRESH_MS = 5000;
 var refreshing = false;
+var refreshAgain = false;
 var lastProviders = null;
 var lastPrefixes = null;
 var lastImprovements = null;
@@ -131,38 +132,9 @@ function renderProviders(data) {
   root.appendChild(pt);
 }
 
-function renderPrefixes(data) {
-  var root = document.getElementById("prefixes");
-  if (!root) return;
-  clear(root);
-  var rows = (data && data.prefixes) || [];
-  if (!rows.length) {
-    var o = lastOverview;
-    var msg = "No probed prefixes yet.";
-    if (o && !(o.sources || []).length) msg = "Nothing to probe: the config has no sources. See the setup checklist on Overview.";
-    else if (o) msg = "No probed prefixes yet. The first probe round fills this in.";
-    root.appendChild(el("p", "empty", msg));
-    return;
-  }
-  var q = document.getElementById("prefix-filter").value.trim().toLowerCase();
-  var changes = document.getElementById("prefix-changes").checked;
-  var shown = rows.filter(function (row) {
-    if (changes && !(row.current && row.recommended && row.recommended !== row.current)) return false;
-    if (!q) return true;
-    if (String(row.prefix).toLowerCase().indexOf(q) >= 0) return true;
-    return (row.probes || []).some(function (pr) { return String(pr.provider).toLowerCase().indexOf(q) >= 0; }) ||
-      [row.current, row.recommended].some(function (v) { return v && String(v).toLowerCase().indexOf(q) >= 0; });
-  });
-  if (shown.length !== rows.length) root.appendChild(el("p", "tag", "Showing " + shown.length + " of " + rows.length + " prefixes."));
-  if (!shown.length) {
-    root.appendChild(el("p", "empty", "No prefix matches the filter."));
-    return;
-  }
-  shown.forEach(function (row) { root.appendChild(prefixCard(row)); });
-}
-
 // prefixCard is the per-prefix card: exits, per-provider probes, measured
-// sub-ranges, and learned paths. Used by the Prefixes page and the prefix page.
+// sub-ranges, and learned paths. Used by the expandable rows of the Prefixes
+// page and by the prefix page.
 function prefixCard(row) {
   var card = el("article", "card");
   var head = el("div", "card-head");
@@ -307,20 +279,33 @@ function renderASNMap(data) {
     root.appendChild(el("p", "empty", "No measured prefix has a learned path yet."));
     return;
   }
+  if (data.asn_total > nodes.length) {
+    root.appendChild(el("p", "tag", "Showing the first " + nodes.length + " of " + data.asn_total + " origin ASNs. Filter the table above by ASN to see one."));
+  }
   nodes.forEach(function (node) {
     var card = el("article", "card");
     var head = el("div", "card-head");
-    head.appendChild(el("h3", "mono", node.asn ? "AS" + node.asn : "No origin AS"));
+    var title = el("h3", "mono");
+    if (node.asn) {
+      var link = el("a", "", "AS" + node.asn);
+      link.href = "/prefixes.html?asn=" + node.asn;
+      link.title = "List the prefixes with this origin AS";
+      title.appendChild(link);
+    } else {
+      title.textContent = "No origin AS";
+    }
+    head.appendChild(title);
     card.appendChild(head);
     var t = table(["Provider", "Site", "Prefixes", "Table"]);
     (node.sites || []).forEach(function (site) {
       var prefs = site.prefixes || [];
-      var shown = prefs.slice(0, 8).join(", ");
-      if (prefs.length > 8) shown += " +" + (prefs.length - 8);
+      var count = site.count || prefs.length;
+      var shown = prefs.join(", ");
+      if (count > prefs.length) shown += " +" + (count - prefs.length);
       var tr = el("tr");
       tr.appendChild(el("td", "", site.provider || "—"));
       tr.appendChild(el("td", "mono", site.next_hop || "—"));
-      tr.appendChild(el("td", "", prefs.length + (shown ? " (" + shown + ")" : "")));
+      tr.appendChild(el("td", "", count + (shown ? " (" + shown + ")" : "")));
       tr.appendChild(el("td", "", site.partial ? "partial" : "full"));
       t.body.appendChild(tr);
     });
@@ -653,15 +638,27 @@ function renderFederation(data) {
   root.appendChild(g.table);
 }
 
+// fetchPrefixes reads the one page of the measured-prefix list that the
+// page asked for (#183). Pages that show no list do not read it.
+// prefixListQuery is defined by prefixes.js and prefix.js, which load
+// before this file.
+function fetchPrefixes() {
+  if (typeof prefixListQuery !== "function") return Promise.resolve(null);
+  return getJSON("/api/prefixes?" + prefixListQuery());
+}
+
 function refresh() {
-  if (refreshing) return;
+  if (refreshing) {
+    refreshAgain = true;
+    return;
+  }
   refreshing = true;
   var readyReq = fetch("/readyz", {cache: "no-store", headers: {Accept: "application/json"}}).then(function (res) {
     return res.json();
   });
   Promise.allSettled([
     getJSON("/api/providers"),
-    getJSON("/api/prefixes"),
+    fetchPrefixes(),
     getJSON("/api/improvements"),
     readyReq,
     getJSON("/api/mitigations"),
@@ -684,7 +681,7 @@ function refresh() {
     if (!err) lastOK = new Date().toISOString();
     if (lastProviders) renderProviders(lastProviders);
     if (lastPrefixes) {
-      renderPrefixes(lastPrefixes);
+      if (typeof renderPrefixes === "function") renderPrefixes(lastPrefixes);
       renderASNMap(lastPrefixes);
       if (typeof prefixPageUpdate === "function") prefixPageUpdate(lastPrefixes);
     }
@@ -697,10 +694,19 @@ function refresh() {
     renderStatus(err);
     renderConn(err);
   }).then(function () {
-    refreshing = false;
+    refreshDone();
   }, function () {
-    refreshing = false;
+    refreshDone();
   });
+}
+
+// A filter change while a refresh is running is fetched right after it.
+function refreshDone() {
+  refreshing = false;
+  if (refreshAgain) {
+    refreshAgain = false;
+    refresh();
+  }
 }
 
 function reportURL(format) {
@@ -817,8 +823,5 @@ function bind(id, ev, fn) {
 
 initReports();
 bind("refresh", "click", refresh);
-function rerenderPrefixes() { if (lastPrefixes) renderPrefixes(lastPrefixes); }
-bind("prefix-filter", "input", rerenderPrefixes);
-bind("prefix-changes", "change", rerenderPrefixes);
 refresh();
 setInterval(refresh, REFRESH_MS);

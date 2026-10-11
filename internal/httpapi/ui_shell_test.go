@@ -183,7 +183,7 @@ func TestModeBannerCopy(t *testing.T) {
 		}
 	}
 	// A missing section must not throw when the page does not have it.
-	for _, fn := range []string{"renderProviders", "renderPrefixes", "renderImprovements", "renderMitigation", "renderFederation", "renderTiles", "renderSetup"} {
+	for _, fn := range []string{"renderProviders", "renderImprovements", "renderMitigation", "renderFederation", "renderTiles", "renderSetup"} {
 		if !strings.Contains(app, "function "+fn) || !strings.Contains(app, "if (!root) return;") {
 			t.Errorf("%s is not guarded", fn)
 		}

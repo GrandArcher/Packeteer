@@ -49,10 +49,24 @@
 <main>
   <section>
     <h2>Prefixes</h2>
-    <p class="tag">Latency, loss, and jitter per provider. Current exit and recommended exit come from the latest decision. MED on a learned path is shown and is not used to choose the exit. Via is route server, bilateral, or unknown.</p>
+    <p class="tag">Measured prefixes, one page at a time. Current exit and recommended exit come from the latest decision. Score gain is the scorer's gain of the recommended exit over the current one. Loss and RTT are those of the current exit. Details opens the prefix card. MED on a learned path is shown and is not used to choose the exit. Nothing here announces a route.</p>
     <div class="controls">
-      <label>Filter <input id="prefix-filter" type="search" size="24" placeholder="prefix or provider"></label>
+      <label>Prefix <input id="prefix-filter" type="search" size="22" placeholder="198.51.100.0/24 or part"></label>
+      <label>Origin AS <input id="prefix-asn" type="search" size="10" placeholder="64500" inputmode="numeric"></label>
+      <label>Provider <select id="prefix-provider"><option value="">All providers</option></select></label>
       <label><input id="prefix-changes" type="checkbox"> Only where the recommended exit differs</label>
+      <label>Sort <select id="prefix-sort">
+        <option value="prefix">Prefix</option>
+        <option value="gain">Largest score gain</option>
+        <option value="loss">Highest loss</option>
+        <option value="rtt">Highest RTT</option>
+      </select></label>
+      <label>Rows <select id="prefix-size">
+        <option value="25">25</option>
+        <option value="50">50</option>
+        <option value="100">100</option>
+        <option value="200">200</option>
+      </select></label>
     </div>
     <div id="prefixes"><p class="empty">Loading…</p></div>
   </section>
@@ -65,6 +79,7 @@
 </div>
 </div>
 <script src="/shell.js"></script>
+<script src="/prefixes.js"></script>
 <script src="/app.js"></script>
 </body>
 </html>

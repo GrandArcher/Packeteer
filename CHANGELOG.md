@@ -24,6 +24,7 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 
 ### Added
 
+- Measured-prefix list is server-paged (#183): `/api/prefixes` takes `limit`, `offset`, `prefix`, `asn`, `provider`, `differs`, `sort`; `/prefixes.html` is a table whose rows open the card, filters in the URL.
 - Troubleshooting page draws looking glass paths and per-provider traceroute hops (origin AS from the learned RIB, reverse name, hop diagram) as tables, with raw JSON, rerun, and remove, read-only with roles unchanged (#180).
 - Leak watch (#199): optional `leak_watch` withdraws one injected route seen outside the AS and holds it out until `POST /api/leaks/clear`; rollback `enabled: false`.
 - Prefix detail page `/prefix/<prefix>` (#179): every improvement row, live and in the improvements and prefixes reports, links to the prefix card and a stored timeline, with a Probe now link. New read-only `GET /api/prefixes/history`.

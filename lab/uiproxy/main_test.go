@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/GrandArcher/Packeteer/internal/httpapi"
 	"github.com/GrandArcher/Packeteer/internal/troubleshoot"
 )
 
@@ -152,5 +153,35 @@ func TestTroubleshootFixturesMatchAPI(t *testing.T) {
 	decode("rate-limited.json", &e)
 	if e.Error != troubleshoot.ErrBusy.Error() {
 		t.Errorf("rate-limited fixture says %q, the API says %q", e.Error, troubleshoot.ErrBusy)
+	}
+}
+
+// TestPrefixFixturesMatchAPI decodes the canned /api/prefixes pages with the
+// type the API returns (#183), so a renamed field fails here and not as a
+// silently empty table in the UI smoke test.
+func TestPrefixFixturesMatchAPI(t *testing.T) {
+	f, err := loadFixtures("../ui-fixtures/prefixes")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(f.Stubs) != 3 {
+		t.Fatalf("stubs = %d", len(f.Stubs))
+	}
+	for _, s := range f.Stubs {
+		var page httpapi.PrefixPage
+		dec := json.NewDecoder(bytes.NewReader(s.body))
+		dec.DisallowUnknownFields()
+		if err := dec.Decode(&page); err != nil {
+			t.Errorf("%s: %v", s.File, err)
+			continue
+		}
+		if page.Limit != 25 || len(page.Prefixes) == 0 || len(page.Prefixes) > page.Limit || page.Total < len(page.Prefixes) || page.Measured < page.Total {
+			t.Errorf("%s: limit %d rows %d total %d measured %d", s.File, page.Limit, len(page.Prefixes), page.Total, page.Measured)
+		}
+		for _, r := range page.Prefixes {
+			if r.Probes == nil || len(r.Paths) == 0 || r.Paths[0].MED == nil || r.ExitRTTMs == nil {
+				t.Errorf("%s: row %s is missing probes, a path with MED, or the exit measurement", s.File, r.Prefix)
+			}
+		}
 	}
 }

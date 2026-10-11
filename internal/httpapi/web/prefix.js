@@ -1,6 +1,8 @@
 "use strict";
 // Prefix page (#179): the live card for one prefix plus its stored
-// timeline. Loaded after app.js (el, clear, getJSON, prefixCard, fmt*).
+// timeline. Loaded before app.js, which fetches prefixListQuery() on every
+// refresh and calls prefixPageUpdate; the rest waits for DOMContentLoaded
+// so app.js helpers (el, clear, getJSON, prefixCard, fmt*) exist.
 // Read-only. "Probe now" only links to the Probe tool.
 
 var PREFIX_PATH = "/prefix/";
@@ -12,6 +14,12 @@ function pagePrefix() {
 }
 
 var thisPrefix = pagePrefix();
+
+// prefixListQuery asks the paged list for this one prefix; a CIDR matches
+// exactly.
+function prefixListQuery() {
+  return "prefix=" + encodeURIComponent(thisPrefix) + "&limit=1";
+}
 
 // prefixPageUpdate is called by app.js with every refresh of /api/prefixes.
 function prefixPageUpdate(data) {
@@ -104,4 +112,4 @@ function initPrefixPage() {
   loadTimeline();
 }
 
-initPrefixPage();
+window.addEventListener("DOMContentLoaded", initPrefixPage);

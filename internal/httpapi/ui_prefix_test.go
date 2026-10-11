@@ -53,3 +53,65 @@ func TestPrefixPageAssets(t *testing.T) {
 		t.Error("the dashboard improvements widget does not link prefixes")
 	}
 }
+
+// TestPrefixListAssets checks the paged Prefixes page wiring (#183): the
+// filter lives in the URL, only the visible page is fetched, a row opens
+// the existing card, and nothing on the page writes. The rendered page is
+// covered by the UI smoke test in CI.
+func TestPrefixListAssets(t *testing.T) {
+	app := mustWeb(t, "web/app.js")
+	js := mustWeb(t, "web/prefixes.js")
+	html := mustWeb(t, "web/prefixes.html")
+	prefix := mustWeb(t, "web/prefix.js")
+	prefixPage := mustWeb(t, "web/prefix.html")
+
+	for _, s := range []string{
+		`getJSON("/api/prefixes?" + prefixListQuery())`,
+		`typeof prefixListQuery !== "function"`, // pages without a list fetch none
+		`refreshAgain`,                          // a filter change during a refresh is fetched
+		`data.asn_total > nodes.length`,         // the ASN map says it is cut
+		`site.count || prefs.length`,
+		`"/prefixes.html?asn=" + node.asn`,
+	} {
+		if !strings.Contains(app, s) {
+			t.Errorf("app.js missing %s", s)
+		}
+	}
+	if strings.Contains(app, "function renderPrefixes") || strings.Contains(app, `getJSON("/api/prefixes")`) {
+		t.Error("app.js still renders or fetches the whole list")
+	}
+	for _, s := range []string{
+		`q.set("offset", String((v.page - 1) * v.size))`,
+		`q.set("limit", String(v.size))`,
+		`window.history.replaceState(null, "", window.location.pathname`,
+		`new URLSearchParams(window.location.search)`,
+		`td.appendChild(prefixCard(row))`, // the existing card, built when a row opens
+		`prefixExpanded = keep`,           // open rows are pruned to the visible page
+		`"Score gain"`,
+		`if (!root) return;`,
+		`window.addEventListener("DOMContentLoaded", initPrefixList)`,
+	} {
+		if !strings.Contains(js, s) {
+			t.Errorf("prefixes.js missing %s", s)
+		}
+	}
+	for _, bad := range []string{"postJSON", "method:", "innerHTML", "localStorage", "eval("} {
+		if strings.Contains(js, bad) {
+			t.Errorf("prefixes.js contains %s", bad)
+		}
+	}
+	for _, id := range []string{"prefix-filter", "prefix-asn", "prefix-provider", "prefix-changes", "prefix-sort", "prefix-size"} {
+		if !strings.Contains(html, `id="`+id+`"`) {
+			t.Errorf("prefixes.html has no #%s", id)
+		}
+	}
+	for name, page := range map[string]string{"/prefixes.js": html, "/prefix.js": prefixPage} {
+		own, appAt := strings.Index(page, `src="`+name+`"`), strings.Index(page, `src="/app.js"`)
+		if own < 0 || appAt < 0 || own > appAt {
+			t.Errorf("%s must load before app.js so app.js sees prefixListQuery", name)
+		}
+	}
+	if !strings.Contains(prefix, `"prefix=" + encodeURIComponent(thisPrefix) + "&limit=1"`) {
+		t.Error("the prefix page does not ask for its one prefix")
+	}
+}

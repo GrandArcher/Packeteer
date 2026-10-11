@@ -253,7 +253,7 @@ The server is read-only (GET and HEAD), except on-demand maintenance windows (`P
 | `/metrics` | Prometheus text. |
 | `/api/providers` | Providers, probe-source health, and BGP sessions. |
 | `/api/probes` | Latest probe per provider and prefix. |
-| `/api/prefixes` | Probed prefixes with measurements, current exit, and recommended exit. Prefixes that are only in the RIB are not listed. |
+| `/api/prefixes` | Probed prefixes with measurements, current exit, and recommended exit, one page at a time (`limit` up to 500, default 100; `offset`, `prefix`, `asn`, `provider`, `differs`, `sort`; [ui.md](docs/ui.md#prefix-list)). Prefixes that are only in the RIB are not listed. |
 | `/api/decisions` | Latest per-prefix decision. |
 | `/api/improvements` | Active improvements. In observe and suggest these are recommendations. In inject they are the routes being announced. |
 | `/api/telemetry` | Interface rates and 95th-percentile usage when a telemetry plugin is configured. Empty when it is not. This does not announce. |
