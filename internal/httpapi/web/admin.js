@@ -4,7 +4,7 @@
 // server checks the admin role, the last-admin lockout, and the password
 // rules, and writes the audit record on every call; this file only builds
 // the requests. A password is read from its field, sent, and the field is
-// cleared; it is never kept in a variable or storage. Uses api, el, clear,
+// cleared; it is never kept in storage. Uses api, el, clear,
 // and fmtTime from ui.js. No inline script: the CSP allows scripts from
 // this origin only.
 

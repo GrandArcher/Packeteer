@@ -60,7 +60,7 @@ A form adds a local user (`POST /api/users`). An SSO user's role comes from the 
 
 **Tokens** (`/tokens.html`, every signed-in user). A table of the user's tokens (an admin sees everyone's) with role, created, expires, and status, and a revoke button (two clicks). The create form takes a name, a role up to the user's own (default `viewer`), and a lifetime in hours (empty is `auth.token_ttl`). The secret appears once, in a box that stays until it is closed or the page is left; it is not in the table or the audit log, is never written to a cookie or browser storage, and closing the box removes it from the page. A request signed with an API token can list and revoke but not create, and the page says so.
 
-A password typed into either page is sent and the field is cleared. Every change is written to the audit log with its actor, as for a script.
+A password typed into the Admin page is sent and the field is cleared. Every change is written to the audit log with its actor, as for a script.
 
 ## Dashboard and first run
 

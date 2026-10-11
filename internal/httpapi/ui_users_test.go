@@ -246,7 +246,7 @@ func TestTokensPage(t *testing.T) {
 	if !ok || !strings.Contains(created.Detail, "name=grafana") || !strings.Contains(created.Detail, "role=viewer") {
 		t.Errorf("create audit: %+v ok=%v", created, ok)
 	}
-	if r, ok := e.audited("DELETE /api/tokens/{id}", viewer, made.ID, "user=viewer-user name=grafana", "ok"); !ok || !strings.Contains(r.Detail, "name=grafana") {
+	if r, ok := e.audited("DELETE /api/tokens/{id}", viewer, made.ID, "user=viewer-user name=grafana", "ok"); !ok {
 		t.Errorf("revoke audit: %+v ok=%v", r, ok)
 	}
 	for _, r := range e.store.Records() {
