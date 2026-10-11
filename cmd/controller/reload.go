@@ -435,6 +435,9 @@ func (r *reloader) reload(ctx context.Context) (applied []string, refused, fatal
 		return nil, nil, nil
 	}
 	if err := r.applyOnline(ctx, next, plan.online); err != nil {
+		if errors.Is(err, errPartialApply) {
+			return nil, nil, err
+		}
 		return nil, err, nil
 	}
 	// Close removed sessions first, so a router leaving the table never
@@ -604,7 +607,9 @@ func inboundRuntimeFor(next *config.Config, pc policy.Config) inbound.Runtime {
 // prepareSteering checks, and binds the announcers for, inbound and
 // mitigation entering inject (#233). It changes no mode, so a reload that
 // is refused later never lets either announce. The outbound controller has
-// already installed the export policy the two announcers need.
+// already installed the export policy the two announcers need. Binding
+// inbound is not undone by a later refusal: the speaker keeps its import
+// policy (and has soft-reset its peers), which announces nothing.
 func (r *reloader) prepareSteering(next *config.Config, pc policy.Config, online []string) error {
 	if r.inb != nil && inboundRuntime(online) {
 		rt := inboundRuntimeFor(next, pc)
@@ -671,8 +676,21 @@ func (r *reloader) applyRuntime(ctx context.Context, next *config.Config, pc pol
 	if next.Mode != config.ModeInject {
 		slices.Reverse(steps)
 	}
-	for _, step := range steps {
+	return runSteps(steps)
+}
+
+// errPartialApply marks a failure after an earlier step already changed
+// its controller. Those steps withdrew and switched mode and cannot be
+// undone, so the running config no longer matches r.cur: the caller stops,
+// which withdraws everything, instead of reporting a refusal.
+var errPartialApply = errors.New("reload partly applied")
+
+func runSteps(steps []func() error) error {
+	for i, step := range steps {
 		if err := step(); err != nil {
+			if i > 0 {
+				return fmt.Errorf("%w: %w", errPartialApply, err)
+			}
 			return err
 		}
 	}

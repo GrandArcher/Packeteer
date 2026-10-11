@@ -129,8 +129,8 @@ func TestMitigationAnnounceWithdrawAndCrash(t *testing.T) {
 	if err := m.Bind(v.Server(), "64512:666", allow, 3); err == nil {
 		t.Fatal("rebind with a different cap accepted")
 	}
-	if err := m.Bind(v.Server(), "64512:666", allow[:0:0], 2); err == nil {
-		t.Fatal("rebind with an empty allowlist accepted")
+	if err := m.Bind(v.Server(), "64512:666", allow[:1], 2); err == nil {
+		t.Fatal("rebind with a different allowlist accepted")
 	}
 	if err := m.Bind(v.Server(), "64512:667", allow, 2); err == nil {
 		t.Fatal("rebind with a different community accepted")

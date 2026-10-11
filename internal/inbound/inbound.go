@@ -305,8 +305,9 @@ func checkInject(cfg Config, ann plugin.InboundAnnouncer, rib RIB) error {
 type Runtime struct {
 	Mode      string
 	Allowlist []netip.Prefix
-	// HoldTime and TTL apply to steers created after the change; a steer
-	// in flight keeps the hold it was given.
+	// HoldTime applies to steers created after the change; a steer in
+	// flight keeps the hold it was given. TTL is read against every
+	// running steer, so it applies to those too.
 	HoldTime time.Duration
 	TTL      time.Duration
 }

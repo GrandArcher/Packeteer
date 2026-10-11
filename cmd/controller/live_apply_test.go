@@ -350,3 +350,23 @@ func TestReloadMitigationInjectRefusals(t *testing.T) {
 		t.Fatal("a refused prepare changed the mode")
 	}
 }
+
+func TestRunStepsPartialApplyIsFatal(t *testing.T) {
+	boom := errors.New("withdraw failed")
+	var ran []int
+	step := func(n int, err error) func() error {
+		return func() error { ran = append(ran, n); return err }
+	}
+	err := runSteps([]func() error{step(0, boom), step(1, nil)})
+	if !errors.Is(err, boom) || errors.Is(err, errPartialApply) || !slices.Equal(ran, []int{0}) {
+		t.Fatalf("first step failed: err %v ran %v", err, ran)
+	}
+	ran = nil
+	err = runSteps([]func() error{step(0, nil), step(1, boom), step(2, nil)})
+	if !errors.Is(err, boom) || !errors.Is(err, errPartialApply) || !slices.Equal(ran, []int{0, 1}) {
+		t.Fatalf("later step failed: err %v ran %v", err, ran)
+	}
+	if err := runSteps([]func() error{step(0, nil)}); err != nil {
+		t.Fatal(err)
+	}
+}
