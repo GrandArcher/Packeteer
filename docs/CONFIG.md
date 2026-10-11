@@ -453,7 +453,7 @@ A rule the detector added is removed when its anomaly clears. The detector never
 
 ### `leak_watch`
 
-Leak watch (#199, lab-proven only, not on a public edge). Contract: [leak-watch.md](leak-watch.md). Leak sources report routes seen outside the iBGP sessions. A route that carries `packeteer_community` (or, with `as_path_rule`, an injected prefix with `asn` in its path) is held out of outbound improvements and inbound steers and reported (`leak.detected`, `/api/leaks`) until `POST /api/leaks/clear` releases it.
+Leak watch (#199, not on a public edge). Contract: [leak-watch.md](leak-watch.md). Leak sources report routes seen outside the iBGP sessions. A route that carries `packeteer_community` (or, with `as_path_rule`, an injected prefix with `asn` in its path) is held out of outbound improvements and inbound steers and reported (`leak.detected`, `/api/leaks`) until `POST /api/leaks/clear` releases it.
 
 | Key | Default | Meaning |
 |---|---|---|
@@ -1282,7 +1282,7 @@ A standby takes a lease that is free or released at its next renewal. It takes a
 
 ### Leak source `bmp`
 
-A BMP station for the leak watch (#199). It listens on its own port, separate from the [RIB source `bmp`](#rib-source-bmp), and nothing it receives enters the RIB view. It reads only post-policy tables: the Adj-RIB-In of `external_routers` (routers outside your AS) and the Adj-RIB-Out (RFC 8671) of `own_routers` toward eBGP peers. Pre-policy tables, Adj-RIB-Out of external routers, Adj-RIB-In of your own routers, and sessions to a peer in your own AS are ignored. Healthy while at least one router has a session.
+A BMP station for the leak watch (#199). It listens on its own port, separate from the [RIB source `bmp`](#rib-source-bmp), and nothing it receives enters the RIB view. It reads only post-policy tables: the Adj-RIB-In of `external_routers` (routers outside your AS) and the Adj-RIB-Out (RFC 8671) of `own_routers` toward eBGP peers. Pre-policy tables, Adj-RIB-Out of external routers, Adj-RIB-In of your own routers, and, in the Adj-RIB-Out of `own_routers`, sessions to a peer in your own AS are ignored. Healthy while at least one router has a session.
 
 | Key | Default | Meaning |
 |---|---|---|

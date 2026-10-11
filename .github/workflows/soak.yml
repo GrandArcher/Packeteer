@@ -31,7 +31,7 @@ jobs:
         with:
           go-version-file: go.mod
       - name: build image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           load: true
@@ -41,7 +41,7 @@ jobs:
         env:
           SOAK_OUT: soak-result.json
         run: bash lab/soak.sh packeteer:soak soak "${{ inputs.duration || '5h30m' }}"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: soak-result

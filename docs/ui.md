@@ -5,6 +5,7 @@ The remaining UI conveniences (#34). All of them work in the stock image with a 
 | Feature | Where | Who | Config |
 |---|---|---|---|
 | Before/after graphs (#129) | `/graphs.html`, `/api/reports/timeseries`, the `timeseries` dashboard widget | viewer | `storage: {type: sqlite}` |
+| Users and API tokens (#175) | `/admin.html`, `/tokens.html`, `/api/users`, `/api/tokens` | admin for users, every signed-in user for tokens | `storage` + `auth.enabled` |
 | Dashboard overview and setup checklist (#49) | `/`, `/api/overview` | viewer | none |
 | Config editor and settings form (#102, inbound and anomaly rules #131) | `/settings.html`, `/api/config`, `POST /api/config/form` | admin | `http.config_editor: true` + auth or basic auth |
 | Setup wizard (#106, flow step #130) | `/settings.html`, `POST /api/config/wizard` | admin | `http.config_editor: true` + auth or basic auth |
@@ -32,8 +33,9 @@ Every page has the same chrome (#170). The mode banner is the first thing on the
 | Protection | `/protection.html` | The threat-mitigation monitor with an add and remove rule form (#131) when that feature is on. Otherwise an empty state that says how to configure it |
 | Troubleshooting | `/troubleshooting.html` | Looking glass, probe, traceroute, whois |
 | Events | `/events.html` | Empty (#173) |
+| Tokens | `/tokens.html` | The signed-in user's API tokens ([below](#users-and-api-tokens)) |
 | Settings | `/settings.html` | Wizard, settings form, YAML, report subscriptions. Admin |
-| Admin | `/admin.html` | Empty (#175). Admin |
+| Admin | `/admin.html` | Users ([below](#users-and-api-tokens)). Admin |
 
 POPs stay on Overview and the threat-mitigation monitor stays on Protection. Both stay hidden when the feature is off, as they did on the single dashboard.
 
@@ -42,6 +44,23 @@ The top bar holds the mode chip, a search slot, an events slot, and the account 
 **Sign-in page (#176).** With `auth.enabled`, a browser without a session that asks for a page over https (or through a proxy that sends `X-Forwarded-Proto: https`) or on localhost is sent to `/signin.html`. Over plain http to any other address it gets the basic-auth prompt, because the browser would drop the `Secure` cookie. API paths and `/metrics` answer `401`. The page asks for a user name and password, posts them as JSON to `POST /auth/signin`, and on success loads the dashboard. The server keeps the session in memory and sets a `packeteer_session` cookie (`HttpOnly`, `Secure`, `SameSite=Strict`, lifetime `auth.session_ttl`). The page shows the mode banner and a single sign-on link when an `sso` plugin is configured. A wrong user name or password gets one answer (`401`); ten failures from one address in five minutes lock that address out (`429`), counted together with basic auth. Basic auth and API tokens work as before for scripts. The mode banner on the page comes from `GET /auth/signin`, which needs no sign-in. Without `auth.enabled` the sign-in POST answers `404` and the browser keeps its basic-auth prompt.
 
 Settings and Admin are marked admin-only. With role-based auth, a viewer or an operator does not see those two links. Opening Admin directly says "Your account may not read this page." Opening Settings directly keeps the editor's existing not-allowed message; report subscriptions on that page are unchanged. With auth off, or with the one basic-auth account, both links are shown. Nothing in the shell announces, and it does not write config.
+
+## Users and API tokens
+
+Two pages put `/api/users` and `/api/tokens` on screen (#175). They need `auth.enabled` and a `storage` plugin ([auth.md](auth.md)); without them each page says so and has no form. They call the existing endpoints, so the role checks, the last-admin lockout, the password rules, and the audit record are the API's. Neither page can announce anything.
+
+**Users** (`/admin.html`, admin role). A table of every user with role, source (local or SSO), status, and last change. Actions per row:
+
+- change the role (`PATCH /api/users/{name}` with `role`);
+- reset the password (`password`; the user's sessions end);
+- disable or enable (`disabled`);
+- delete (two clicks; the user's tokens go with it).
+
+A form adds a local user (`POST /api/users`). An SSO user's role comes from the identity provider, so only disable, enable, and delete are offered for it. A refused change, such as demoting or deleting the last enabled admin, shows the API's message. A viewer or an operator does not get the Admin link, and opening the page says the account may not read it; `/api/users` answers `403` either way.
+
+**Tokens** (`/tokens.html`, every signed-in user). A table of the user's tokens (an admin sees everyone's) with role, created, expires, and status, and a revoke button (two clicks). The create form takes a name, a role up to the user's own (default `viewer`), and a lifetime in hours (empty is `auth.token_ttl`). The secret appears once, in a box that stays until it is closed or the page is left; it is not in the table or the audit log, is never written to a cookie or browser storage, and closing the box removes it from the page. A request signed with an API token can list and revoke but not create, and the page says so.
+
+A password typed into the Admin page is sent and the field is cleared. Every change is written to the audit log with its actor, as for a script.
 
 ## Dashboard and first run
 
@@ -65,7 +84,7 @@ docker run --network host --cap-add NET_RAW --cap-add NET_ADMIN \
 
 `GET /api/overview` (viewer) is the same summary as JSON: `mode`, `ready`, `started`, `sources`, `providers` (`name`, `up`, `ok`, `failed`, `last_error`), `counts`, `bgp`, `features` (`name`, `on`), and `setup` (`id`, `level`, `title`, `detail`, `doc`). It is read-only and announces nothing.
 
-CI runs a UI smoke test in the docker job (`lab/ui-smoke.sh`): headless Chrome loads every shell page from the stock image. The first run mounts `config.example.yaml` unchanged. The banner says observe and that it announces nothing, the header chip is `mode-observe`, the checklist on `/` asks for sources, `/providers.html` shows `no data yet`, `/improvements.html` says Recommended, and the empty pages name their issues. The second run uses a minimal file with no `mode` key and one static target (observe, the prefix measured with an RTT on `/prefixes.html`, no improvement). A third run turns the config editor on with basic auth and sqlite, saves a dashboard of providers and improvements, and loads `/`, `/settings.html`, and `/dashboards.html` through `lab/uiproxy` (headless Chrome does not send URL credentials on later fetches). That run checks the filled provider fields keep their labels, the improvements widget says Recommended, and the provider `since` time is the local format.
+CI runs a UI smoke test in the docker job (`lab/ui-smoke.sh`): headless Chrome loads every shell page from the stock image. The first run mounts `config.example.yaml` unchanged. The banner says observe and that it announces nothing, the header chip is `mode-observe`, the checklist on `/` asks for sources, `/providers.html` shows `no data yet`, `/improvements.html` says Recommended, and the empty pages name their issues. The second run uses a minimal file with no `mode` key and one static target (observe, the prefix measured with an RTT on `/prefixes.html`, no improvement). A third run turns the config editor on with basic auth and sqlite, saves a dashboard of providers and improvements, and loads `/`, `/settings.html`, and `/dashboards.html` through `lab/uiproxy` (headless Chrome does not send URL credentials on later fetches). That run checks the filled provider fields keep their labels, the improvements widget says Recommended, and the provider `since` time is the local format. The auth step of the docker job (#175) creates a viewer and a token through the API, then loads `/admin.html` and `/tokens.html` as the admin (the user table with its row actions) and as the viewer (the denial text, and only its own token), and the stock-image run checks both pages say they need `auth` when it is off. `internal/httpapi` tests drive the calls the pages make and read the audit log.
 
 The settings forms (#130) have their own smoke step in the same job. The stock image mounts an observe file that has a `flow`, `vip`, and `outage` source and a `rules` policy. The step reads the form through the API, merges an edit, and requires the editor's start checks to accept the result as observe with inject not enabled. It renders a wizard config with the flow step and requires the same. Headless Chrome then loads `/settings.html` through `lab/uiproxy` and checks that each section is filled from the file, that the observe banner is on top, and that the wizard has its optional flow step. `internal/configedit`, `internal/httpapi`, and `cmd/controller` tests round-trip every section through `config.Load` and the start checks.
 

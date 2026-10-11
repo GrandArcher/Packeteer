@@ -16,7 +16,7 @@ RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
 # ---- runtime stage ----
 # Alpine (not distroless) so exec plugins written as shell scripts work in the
 # stock image. The image ships only the documentation-prefix example config.
-FROM alpine:3.20
+FROM alpine:3.24
 RUN apk add --no-cache ca-certificates \
  && mkdir -p /etc/packeteer/plugins /var/lib/packeteer
 COPY --from=build /out/packeteer /usr/local/bin/packeteer

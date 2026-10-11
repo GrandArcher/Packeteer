@@ -222,9 +222,12 @@ func (w *Watcher) handle(ctx context.Context, sg sighting) {
 	}
 	l := &Leak{Prefix: s.Prefix, Reason: reason, Action: ActionHeld, Source: sg.source, Seen: s.Seen,
 		ASPath: slices.Clone(s.ASPath), Since: now, LastSeen: now, Sightings: 1}
-	// Held before the withdraw, so a concurrent Sync cannot announce it again.
+	// Held before the withdraw and the recheck below, so no Sync after this
+	// point announces it again.
 	w.held[s.Prefix] = l
 	w.mu.Unlock()
+	// A Sync between the first Injected and the hold may have announced it.
+	on = on || w.cfg.Injected(s.Prefix)
 
 	var werr error
 	if on {

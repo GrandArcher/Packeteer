@@ -307,3 +307,9 @@ fieldset.form { border: 0; margin: 0; padding: 0; }
 .signin-form input { font: inherit; padding: 8px; border: 1px solid var(--line); border-radius: 4px; }
 .signin-form button.primary { margin: 0; background: var(--head); color: #fff; }
 .signin-form button.primary:disabled { opacity: 0.6; cursor: default; }
+
+/* Users and API tokens (#175). */
+.secret { background: #fff4e0; border: 1px solid var(--diff); border-radius: 8px; padding: 10px 14px; margin: 0 0 12px; }
+.secret code { word-break: break-all; user-select: all; }
+.inline-form { display: inline-flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 6px 0 0; }
+.user-form, .token-form { margin: 0 0 14px; }
