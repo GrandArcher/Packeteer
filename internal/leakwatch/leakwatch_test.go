@@ -330,8 +330,7 @@ func TestHandleDoesNotDeadlockWithSync(t *testing.T) {
 	prefix := netip.MustParsePrefix("198.51.100.0/24")
 	inInjected := make(chan struct{}, 1)
 	syncHolds := make(chan struct{})
-	var w *Watcher
-	w = New(Config{
+	w := New(Config{
 		ASN: localASN, Community: community,
 		Injected: func(netip.Prefix) bool {
 			select {
