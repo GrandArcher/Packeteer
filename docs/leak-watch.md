@@ -29,7 +29,7 @@ On a leak Packeteer, for that one prefix only:
 
 It never withdraws anything in bulk. The hold lasts until an operator clears it with `POST /api/leaks/clear {"prefix": "..."}` (operator role, auth required) after fixing the filter, which emits `leak.cleared`. If the route is still visible outside, the next sighting holds it again. Holds are in memory: a restart clears them, and a route that is still leaking is held again at its next sighting.
 
-A sighting for a prefix that is not an outbound route on the wire is held and reported but has nothing to withdraw (`action: held`). The held set keeps at most 1000 such prefixes, since anyone downstream can tag routes with the community; a prefix that is on the wire is always withdrawn and held. Routes from threat mitigation rules are reported, not withdrawn: a rule is an operator's decision.
+A sighting for a prefix that is not an outbound route on the wire is held and reported but has nothing to withdraw (`action: held`). The held set keeps at most 1000 such prefixes, since anyone downstream can tag routes with the community; an outbound route on the wire is always withdrawn and held. Inbound steers count toward that limit. Routes from threat mitigation rules are reported, not withdrawn: a rule is an operator's decision.
 
 ## Sources
 

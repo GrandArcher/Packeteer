@@ -53,7 +53,7 @@ The same object is the `generic` webhook body and the `exec` `notify` params.
 
 Problems and the events that resolve them share a **dedup key**: `packeteer/<group>/<key>=<value>`, for example `packeteer/provider/provider=transit-a` for both `provider.down` and `provider.up`. The `pagerduty` preset uses it as `dedup_key`, and `snmptrap` sends it as a varbind.
 
-State events (`provider.*`, `bgp.*`, `commit.*`, `announce.*`, `inbound.*`, `mitigation.*`, `anomaly.*`, `ha.*`) fire on transitions only. They are checked on every decision (each probe round, each RIB change, and at least every `probe.interval`); commit is checked at most once a minute. They are not repeated while the state holds. `leak.*` events fire when a sighting is handled or a hold is cleared.
+State events (`provider.*`, `bgp.*`, `commit.*`, `announce.*`, `inbound.*`, `mitigation.*`, `anomaly.*`, `ha.*`) fire on transitions only. They are checked on every decision (each probe round, each RIB change, and at least every `probe.interval`); commit is checked at most once a minute. They are not repeated while the state holds. `leak.*` events fire on the first sighting of a prefix and when its hold is cleared.
 
 ## Testing delivery
 

@@ -5,6 +5,7 @@ import (
 	"net"
 	"net/netip"
 	"strings"
+	"time"
 	"sync"
 	"testing"
 
@@ -158,6 +159,9 @@ func TestLeakStationRefusesUnlistedRouter(t *testing.T) {
 	defer l.Stop(context.Background())
 	c := dialFrom(t, l.st, "127.0.0.1")
 	defer c.Close()
+	if err := c.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
 	buf := make([]byte, 1)
 	if _, err := c.Read(buf); err == nil || strings.Contains(err.Error(), "timeout") {
 		t.Fatalf("session from an unlisted address stayed open: %v", err)

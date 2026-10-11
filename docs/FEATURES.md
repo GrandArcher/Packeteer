@@ -14,7 +14,7 @@ Milestones:
 - **v0.3**: inbound optimization, BMP, multiple routers and IX, FlowSpec/RTBH, transit optimization.
 - **v0.4**: multi-POP, HA, RBAC, anomaly detection, remaining UI and ops features.
 - **v0.5**: hardening and polish on the rows above. Dashboard clarity and the first-run checklist (#49), CI-tested quickstart, walkthrough, troubleshooting, and router guides (#50), load and soak budgets and the flow-ingest fix (#51), MikroTik CHR in QEMU on CI (#52), and the router interop matrix (#53) are done. They are not new capability rows, so the counts below are unchanged. Field feedback from observe-mode deployments (#54) is still open. Lab-proven only; the safety rules above are unchanged.
-- **v0.6**: gaps found in the 2026-10-07 review of prefix selection, measurement, and the UI. The partial rows say what is missing and link their issue; keeping an improved prefix probed after its source drops it is done (#116), an RTT win can also require a percent of the current path while a new performance move waits for consecutive fresh rounds (#117), the probe engine remembers which prober a host answers (#120), a host qualifies by reply count and RTT spread, with a wide spread escalated to a full probe (#119), and a flow prefix stays eligible on a byte floor or a percent of the window, with `top_n` the priority tier inside a larger capped set (#118), and the probe scheduler stores each prefix whose probes all finished, even when the round times out, while a flow sketch counts prefixes past the exact cell cap (#125). 3 new rows are planned and 1 is won't do. The recount does not change any behavior.
+- **v0.6**: gaps found in the 2026-10-07 review of prefix selection, measurement, and the UI. The partial rows say what is missing and link their issue; keeping an improved prefix probed after its source drops it is done (#116), an RTT win can also require a percent of the current path while a new performance move waits for consecutive fresh rounds (#117), the probe engine remembers which prober a host answers (#120), a host qualifies by reply count and RTT spread, with a wide spread escalated to a full probe (#119), and a flow prefix stays eligible on a byte floor or a percent of the window, with `top_n` the priority tier inside a larger capped set (#118), and the probe scheduler stores each prefix whose probes all finished, even when the round times out, while a flow sketch counts prefixes past the exact cell cap (#125). 3 new rows are planned, 1 is won't do, and leak watch is partial (#199). The recount does not change any behavior.
 
 ## Summary
 
@@ -30,8 +30,8 @@ Milestones:
 
 | Status | Count |
 |---|---|
-| done | 72 |
-| partial | 10 |
+| done | 71 |
+| partial | 11 |
 | in progress | 0 |
 | planned | 3 |
 | won't do | 2 |
@@ -132,7 +132,7 @@ Routing policies (#20) are `policy` plugins, a filter chain in front of the scor
 | iBGP injection with local-pref, communities, next-hop | done (lab-proven): global `local_pref`, optional per-cause and per-provider `local_pref`, optional extra communities per cause (`communities_cause`) and per provider (`providers[].communities`), and large communities (RFC 8092) on `packeteer_community` and those extras (#132). Extras are added after `packeteer_community`. The export policy matches only `packeteer_community`. The FRR lab checks the per-cause `local_pref` and the extra communities on the edge and withdraws them on SIGTERM and SIGKILL | v0.1 | announcer (`gobgp`) + core (`internal/announce`) | #8, #132 | no (lab-proven) |
 | More-specific injection (learned more-specifics only, `more_specific.max_routes` route cap) | done (lab-proven) | v0.3 | announcer (`gobgp`) + core (`internal/announce`) | #56 | no (lab-proven) |
 | Synthesized more-specific injection (opt-in `synthesize`: sub-ranges of a prefix a neighbor already advertises, covering-prefix allowlist, `max_bits`, route cap, community + NO_EXPORT + marker) | planned | v0.6 | announcer (`gobgp`) + core (`internal/announce`) | #122 (charter #114) | — |
-| Leak watch: withdraws and holds out a single injected route seen outside the AS (community; opt-in `as_path_rule`: injected prefix with the local ASN in its path); sources BMP (outside Adj-RIB-In, own Adj-RIB-Out) and RIPE RIS Live; a down source is unknown | partial | v0.6 | leak source (`bmp`, `rislive`) + core (`internal/leakwatch`) | #199 | no |
+| Leak watch: withdraws and holds out a single injected route seen outside the AS (community; opt-in `as_path_rule`: injected prefix with the local ASN in its path); sources BMP (outside Adj-RIB-In, own Adj-RIB-Out) and RIPE RIS Live; a down source is unknown | partial | v0.6 | leak source (`bmp`, `rislive`) + core (`internal/leakwatch`) | #199 | no (lab-proven) |
 | RIB view from iBGP (learn current best exits) | done | v0.1 | core (`internal/rib`) | #6 | no |
 | BGP session health and withdraw when a still-advertised prefix leaves the RIB (a best-path hide is kept, not flapped) | done | v0.1 | announcer | #8, #43 | no |
 | AS-path behavior options (`bgp.as_path`: empty, native, or the chosen provider's learned path) | done (lab-proven) | v0.3 | announcer (`gobgp`) + core | #27 | no (lab-proven) |
