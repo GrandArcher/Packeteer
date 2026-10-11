@@ -95,6 +95,11 @@ type Input struct {
 	// whose prefix disappears sooner is kept: that is the router hiding the
 	// native path because Packeteer's route won, not the prefix leaving.
 	Native map[netip.Prefix]string
+	// Held reports prefixes the leak watch holds off the wire (#199). The
+	// neighbor advertising the native path then is expected, so it does not
+	// arm the withdraw check above; otherwise clearing the hold would read
+	// the router hiding the native path as the prefix leaving. Nil is none.
+	Held func(netip.Prefix) bool
 	// Usage is the latest telemetry snapshot. Commit control reads it only
 	// when the scorer implements plugin.Planner.
 	Usage []plugin.Usage
@@ -434,6 +439,10 @@ func Decide(prev State, in Input, cfg Config, scorer plugin.Scorer, now time.Tim
 			if in.RIBEnabled {
 				_, inRIB := in.Native[p]
 				switch {
+				case inRIB && in.Held != nil && in.Held(p):
+					imp.nativeSeen = time.Time{}
+					imp.nativeHeld = false
+					st.Improvements[p] = imp
 				case inRIB:
 					if imp.nativeSeen.IsZero() {
 						imp.nativeSeen = now

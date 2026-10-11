@@ -311,6 +311,36 @@ func TestConfirmedNativeWithdrawRetires(t *testing.T) {
 	}
 }
 
+// TestHeldNativeSightingIsNotALeave is a leak watch hold (#199): the
+// router advertises the native path while the improvement is off the wire,
+// then hides it once the hold is cleared and the route returns.
+func TestHeldNativeSightingIsNotALeave(t *testing.T) {
+	c, s := cfg(), scorer(t)
+	native := map[netip.Prefix]string{pA: "a"}
+	ms := []m{{"a", 0, 90}, {"b", 0, 30}}
+	st := NewState()
+	st.Improvements[pA] = Improvement{Prefix: pA, Provider: "b", Native: "a", Since: t0}
+
+	held := true
+	for i := 1; i <= 3; i++ {
+		at := t0.Add(time.Duration(i) * nativePathConfirm)
+		input := in(results(at, pA, ms...), native)
+		input.Held = func(netip.Prefix) bool { return held }
+		st, _ = Decide(st, input, c, s, at)
+	}
+	if st.Improvements[pA].nativeHeld {
+		t.Fatalf("held sighting armed the withdraw check: %+v", st.Improvements[pA])
+	}
+	held = false
+	cleared := t0.Add(4 * nativePathConfirm)
+	input := in(results(cleared, pA, ms...), map[netip.Prefix]string{})
+	input.Held = func(netip.Prefix) bool { return held }
+	st, out := Decide(st, input, c, s, cleared)
+	if _, ok := st.Improvements[pA]; !ok || decision(t, out, pA).Action != ActionKeep {
+		t.Fatalf("cleared hold retired the improvement: %+v", out.Decisions)
+	}
+}
+
 func TestNativeDownKeepsImprovement(t *testing.T) {
 	s := NewState()
 	s.Improvements[pA] = Improvement{Prefix: pA, Provider: "b", Native: "a", Since: t0}

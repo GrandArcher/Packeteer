@@ -667,6 +667,7 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 			}
 			leading = true
 			in := decisionInput(loopCtx, now, engine, view, plugins, fed)
+			in.Held = lw.Held
 			changes, err := runDecision(now, decider, in, ctl, log, snap.Mode, engine)
 			fed.publish(now, in, decider.Improvements())
 			if rec != nil {
