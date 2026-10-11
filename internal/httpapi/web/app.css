@@ -256,6 +256,7 @@ fieldset.form { border: 0; margin: 0; padding: 0; }
   color: var(--ink);
 }
 .top-link { color: #fff; }
+.events-count { margin-left: 6px; padding: 0 7px; border-radius: 999px; background: #fbf1e4; color: #6a3b06; font-size: 0.78rem; font-weight: 600; }
 .account { position: relative; }
 .account-menu {
   position: absolute;
@@ -313,3 +314,11 @@ fieldset.form { border: 0; margin: 0; padding: 0; }
 .secret code { word-break: break-all; user-select: all; }
 .inline-form { display: inline-flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 6px 0 0; }
 .user-form, .token-form { margin: 0 0 14px; }
+
+/* Events and audit log (#173). */
+.tabs { display: flex; gap: 6px; margin: 0 0 12px; border-bottom: 1px solid var(--line); }
+.tabs button { margin: 0; border: 1px solid var(--line); border-bottom: 0; border-radius: 6px 6px 0 0; background: var(--card); color: var(--ink); }
+.tabs button[aria-selected="true"] { background: var(--head); color: #fff; }
+.events-filter { margin: 0 0 8px; }
+.badge.sev-warning { color: #6a3b06; background: #f6e4c4; }
+.badge.sev-critical { color: #fff; background: #9d1c2a; }

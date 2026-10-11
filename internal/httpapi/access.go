@@ -81,6 +81,7 @@ func (s *Server) routeTable() []route {
 		{"POST /api/users", admin, s.handleUserCreate},
 		{"PATCH /api/users/{name}", admin, s.handleUserUpdate},
 		{"DELETE /api/users/{name}", admin, s.handleUserDelete},
+		{"GET /api/events", viewer, s.handleEvents},
 		{"GET /api/audit", admin, s.handleAudit},
 		{"GET /api/config", admin, s.handleConfig},
 		{"POST /api/config/validate", admin, s.handleConfigValidate},

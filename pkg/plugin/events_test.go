@@ -156,3 +156,49 @@ func TestEventGateRateLimit(t *testing.T) {
 		}
 	}
 }
+
+func TestEventSource(t *testing.T) {
+	for kind, want := range map[string]string{
+		EventProviderDown:     "provider",
+		EventBGPSessionUp:     "bgp",
+		EventHAActive:         "ha",
+		EventAudit:            "audit",
+		"exchange.session_up": "exchange", // not in the catalog: the part before the dot
+		"plain":               "plain",
+	} {
+		if got := (Event{Kind: kind}).Source(); got != want {
+			t.Errorf("Source(%q) = %q, want %q", kind, got, want)
+		}
+	}
+}
+
+func TestEventQueryMatch(t *testing.T) {
+	at := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
+	e := Event{Time: at, Kind: EventProviderDown, Severity: SeverityCritical, Message: "probe source is down",
+		Fields: map[string]string{"provider": "Transit-A"}}
+	for name, tc := range map[string]struct {
+		q    EventQuery
+		want bool
+	}{
+		"empty":                  {EventQuery{}, true},
+		"from is inclusive":      {EventQuery{From: at}, true},
+		"to is exclusive":        {EventQuery{To: at}, false},
+		"before from":            {EventQuery{From: at.Add(time.Second)}, false},
+		"severity at the floor":  {EventQuery{MinSeverity: SeverityCritical}, true},
+		"severity above floor":   {EventQuery{MinSeverity: SeverityWarning}, true},
+		"text in kind":           {EventQuery{Text: "PROVIDER.DOWN"}, true},
+		"text in message":        {EventQuery{Text: "source is"}, true},
+		"text in field value":    {EventQuery{Text: "transit-a"}, true},
+		"text in field name":     {EventQuery{Text: "provider"}, true},
+		"text nowhere":           {EventQuery{Text: "transit-b"}, false},
+		"text matches but range": {EventQuery{Text: "transit-a", To: at}, false},
+	} {
+		if got := tc.q.Match(e); got != tc.want {
+			t.Errorf("%s: Match = %v, want %v", name, got, tc.want)
+		}
+	}
+	info := Event{Time: at, Kind: EventControllerStarted, Severity: SeverityInfo}
+	if (EventQuery{MinSeverity: SeverityWarning}).Match(info) {
+		t.Error("an info event passed a warning floor")
+	}
+}
