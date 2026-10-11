@@ -147,7 +147,7 @@ func TestStoredLogWritesAndFlushesOnClose(t *testing.T) {
 }
 
 // A store that stalls must not block Record: the queue fills, the extra
-// events are dropped and counted, and the caller returns at once.
+// events are dropped and logged, and the caller returns at once.
 func TestStoredLogNeverBlocksTheCaller(t *testing.T) {
 	st := &fakeStore{gate: make(chan struct{})}
 	lg, out := capture()

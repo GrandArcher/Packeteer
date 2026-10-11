@@ -3,6 +3,7 @@ package sqlite
 import (
 	"context"
 	"encoding/json"
+	"strings"
 
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
 )
@@ -25,8 +26,8 @@ func (s *Store) AppendEvent(ctx context.Context, e plugin.Event) error {
 }
 
 // Events returns events matching q, newest first. Time and severity are
-// not filtered in SQL: the text match is shared with the in-memory log, so
-// rows are read newest first and stop once Limit matches are found.
+// filtered in SQL. The text match is not: it is shared with the in-memory
+// log, so rows are read newest first and stop once Limit matches are found.
 func (s *Store) Events(ctx context.Context, q plugin.EventQuery) ([]plugin.Event, error) {
 	db, err := s.handle()
 	if err != nil {
@@ -39,8 +40,16 @@ func (s *Store) Events(ctx context.Context, q plugin.EventQuery) ([]plugin.Event
 	if !q.To.IsZero() {
 		to = q.To.UnixMilli()
 	}
+	args := []any{from, to}
+	sevs := plugin.SeveritiesFrom(q.MinSeverity)
+	marks := make([]string, len(sevs))
+	for i, sv := range sevs {
+		marks[i] = "?"
+		args = append(args, string(sv))
+	}
 	rows, err := db.QueryContext(ctx, `SELECT time_ms, kind, severity, message, fields
-FROM events WHERE time_ms >= ? AND time_ms < ? ORDER BY time_ms DESC, seq DESC`, from, to)
+FROM events WHERE time_ms >= ? AND time_ms < ? AND severity IN (`+strings.Join(marks, ",")+`)
+ORDER BY time_ms DESC, seq DESC`, args...)
 	if err != nil {
 		return nil, err
 	}

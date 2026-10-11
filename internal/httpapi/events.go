@@ -28,16 +28,12 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "the event log is off"})
 		return
 	}
-	q := plugin.EventQuery{Limit: defaultEventRows}
-	v := r.URL.Query()
-	if l := v.Get("limit"); l != "" {
-		n, err := strconv.Atoi(l)
-		if err != nil || n < 1 || n > maxEventRows {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "limit must be 1-" + strconv.Itoa(maxEventRows)})
-			return
-		}
-		q.Limit = n
+	var q plugin.EventQuery
+	var ok bool
+	if q.Limit, q.From, q.To, ok = parseRowsAndRange(w, r, defaultEventRows, maxEventRows); !ok {
+		return
 	}
+	v := r.URL.Query()
 	if sev := v.Get("severity"); sev != "" {
 		if _, ok := plugin.SeverityRank(plugin.Severity(sev)); !ok {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "severity must be info, warning, or critical"})
@@ -48,16 +44,6 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	if q.Text = v.Get("q"); len(q.Text) > maxEventText {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "q must be at most " + strconv.Itoa(maxEventText) + " bytes"})
 		return
-	}
-	for key, dst := range map[string]*time.Time{"from": &q.From, "to": &q.To} {
-		if t := v.Get(key); t != "" {
-			at, err := time.Parse(time.RFC3339, t)
-			if err != nil {
-				writeJSON(w, http.StatusBadRequest, map[string]string{"error": key + ": want RFC 3339"})
-				return
-			}
-			*dst = at
-		}
 	}
 	evs, err := s.events.Query(r.Context(), q)
 	if err != nil {

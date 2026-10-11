@@ -60,15 +60,16 @@ func TestEvents(t *testing.T) {
 		q    plugin.EventQuery
 		want []string
 	}{
-		"all, newest first":  {plugin.EventQuery{}, []string{"improvement.added", "commit.exceeded", "provider.down"}},
-		"warning and above":  {plugin.EventQuery{MinSeverity: plugin.SeverityWarning}, []string{"commit.exceeded", "provider.down"}},
-		"critical only":      {plugin.EventQuery{MinSeverity: plugin.SeverityCritical}, []string{"provider.down"}},
-		"text in a field":    {plugin.EventQuery{Text: "TRANSIT-B"}, []string{"commit.exceeded"}},
-		"text in a message":  {plugin.EventQuery{Text: "198.51.100"}, []string{"improvement.added"}},
-		"range":              {plugin.EventQuery{From: now.Add(-150 * time.Minute), To: now.Add(-90 * time.Minute)}, []string{"commit.exceeded"}},
-		"limit keeps newest": {plugin.EventQuery{Limit: 2}, []string{"improvement.added", "commit.exceeded"}},
-		"limit after search": {plugin.EventQuery{Text: "transit", Limit: 1}, []string{"commit.exceeded"}},
-		"no match":           {plugin.EventQuery{Text: "nothing like this"}, nil},
+		"all, newest first":    {plugin.EventQuery{}, []string{"improvement.added", "commit.exceeded", "provider.down"}},
+		"warning and above":    {plugin.EventQuery{MinSeverity: plugin.SeverityWarning}, []string{"commit.exceeded", "provider.down"}},
+		"critical only":        {plugin.EventQuery{MinSeverity: plugin.SeverityCritical}, []string{"provider.down"}},
+		"text in a field":      {plugin.EventQuery{Text: "TRANSIT-B"}, []string{"commit.exceeded"}},
+		"text in a message":    {plugin.EventQuery{Text: "198.51.100"}, []string{"improvement.added"}},
+		"range":                {plugin.EventQuery{From: now.Add(-150 * time.Minute), To: now.Add(-90 * time.Minute)}, []string{"commit.exceeded"}},
+		"limit keeps newest":   {plugin.EventQuery{Limit: 2}, []string{"improvement.added", "commit.exceeded"}},
+		"limit after search":   {plugin.EventQuery{Text: "transit", Limit: 1}, []string{"commit.exceeded"}},
+		"limit after severity": {plugin.EventQuery{MinSeverity: plugin.SeverityWarning, Limit: 1}, []string{"commit.exceeded"}},
+		"no match":             {plugin.EventQuery{Text: "nothing like this"}, nil},
 	} {
 		if got := kinds(tc.q); !reflect.DeepEqual(got, tc.want) {
 			t.Errorf("%s: got %v, want %v", name, got, tc.want)

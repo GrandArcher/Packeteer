@@ -1,6 +1,7 @@
 package plugin
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -200,5 +201,18 @@ func TestEventQueryMatch(t *testing.T) {
 	info := Event{Time: at, Kind: EventControllerStarted, Severity: SeverityInfo}
 	if (EventQuery{MinSeverity: SeverityWarning}).Match(info) {
 		t.Error("an info event passed a warning floor")
+	}
+}
+
+func TestSeveritiesFrom(t *testing.T) {
+	for min, want := range map[Severity][]Severity{
+		"":               {SeverityInfo, SeverityWarning, SeverityCritical},
+		SeverityInfo:     {SeverityInfo, SeverityWarning, SeverityCritical},
+		SeverityWarning:  {SeverityWarning, SeverityCritical},
+		SeverityCritical: {SeverityCritical},
+	} {
+		if got := SeveritiesFrom(min); !reflect.DeepEqual(got, want) {
+			t.Errorf("SeveritiesFrom(%q) = %v, want %v", min, got, want)
+		}
 	}
 }

@@ -208,6 +208,18 @@ func SeverityRank(s Severity) (int, bool) {
 	return r, ok
 }
 
+// SeveritiesFrom lists the severities at min or above, lowest first. An
+// empty or unknown min lists them all.
+func SeveritiesFrom(min Severity) []Severity {
+	var out []Severity
+	for _, s := range []Severity{SeverityInfo, SeverityWarning, SeverityCritical} {
+		if severityRank[s] >= severityRank[min] {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
 // EventFilter is the per-notifier filter and rate limit. Notifiers embed it
 // inline in their config block, so the keys sit next to the plugin's own.
 type EventFilter struct {
