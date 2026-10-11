@@ -185,8 +185,11 @@ jobs:
           bash lab/ui-smoke.sh "$base/reports.html" 'CSV' 'It announces nothing.'
           bash lab/ui-smoke.sh "$base/troubleshooting.html" 'Looking glass' 'It announces nothing.'
           bash lab/ui-smoke.sh "$base/events.html" '#173' 'It announces nothing.'
-          bash lab/ui-smoke.sh "$base/admin.html" '#175' 'It announces nothing.' \
-            --absent 'Your account may not read this page.'
+          # Without auth the Admin and Tokens pages say users and tokens need it (#175).
+          bash lab/ui-smoke.sh "$base/admin.html" 'id="users-off" class="empty">' 'It announces nothing.' \
+            --absent 'id="users-on">' 'Your account may not read this page.'
+          bash lab/ui-smoke.sh "$base/tokens.html" 'id="tokens-off" class="empty">' 'It announces nothing.' \
+            --absent 'id="tokens-on">'
           bash lab/ui-smoke.sh "$base/settings.html" 'The config editor is off' 'It announces nothing.' \
             '>Name</span>' '>Probe source</span>' '>Next hop</span>'
           bash lab/ui-smoke.sh "$base/dashboards.html" 'Custom dashboards' 'Recommended improvements' 'It announces nothing.' \
@@ -765,6 +768,29 @@ jobs:
           grep -q '"actor":"viewer1","role":"viewer","method":"password","remote":"127.0.0.1","action":"auth.login"' /tmp/audit2.json
           grep -q '"actor":"viewer1","method":"password","remote":"127.0.0.1","action":"auth.logout","target":"viewer1","result":"ok"' /tmp/audit2.json
           if grep -q 'wrong-password-x\|ci-viewer-password' /tmp/audit2.json; then echo "password in the audit log"; exit 1; fi
+          # Users and Tokens pages (#175). The proxy signs the browser in with
+          # basic auth. The admin sees the users made above, with row actions;
+          # the viewer sees no Users page, only its own token. Observe banner
+          # on both.
+          go build -o /tmp/uiproxy ./lab/uiproxy
+          /tmp/uiproxy -listen 127.0.0.1:18187 -upstream "$base" -user admin -password ci-admin-password-1 >/tmp/uiproxy175a.log 2>&1 &
+          padmin=$!
+          /tmp/uiproxy -listen 127.0.0.1:18188 -upstream "$base" -user viewer1 -password ci-viewer-password >/tmp/uiproxy175v.log 2>&1 &
+          pviewer=$!
+          for port in 18187 18188; do
+            for _ in $(seq 1 20); do curl -fsS "http://127.0.0.1:$port/healthz" >/dev/null 2>&1 && break; sleep 0.2; done
+            curl -fsS "http://127.0.0.1:$port/healthz" >/dev/null
+          done
+          bash lab/ui-smoke.sh http://127.0.0.1:18187/admin.html 'It announces nothing.' 'mode-observe' 'Add a local user' \
+            '>viewer1<' 'aria-label="Change role of viewer1"' 'aria-label="Reset password of viewer1"' 'aria-label="Delete viewer1"' \
+            --absent 'id="users-off" class="empty">' 'Your account may not read this page.' 'Cannot reach'
+          bash lab/ui-smoke.sh http://127.0.0.1:18187/tokens.html 'It announces nothing.' 'Create a token' '>viewer1<' '>ci<' 'aria-label="Revoke token ci of viewer1"' \
+            --absent 'pkt_' 'Cannot reach'
+          bash lab/ui-smoke.sh http://127.0.0.1:18188/admin.html 'It announces nothing.' 'Your account may not read this page.' \
+            --absent 'aria-label="Delete admin"' 'aria-label="Delete viewer1"'
+          bash lab/ui-smoke.sh http://127.0.0.1:18188/tokens.html 'It announces nothing.' 'Create a token' '>ci<' \
+            --absent 'pkt_' 'Cannot reach'
+          kill "$padmin" "$pviewer"
           stop
           # Restart on the same volume: users and tokens persist, and the
           # bootstrap variable never resets an existing admin.
