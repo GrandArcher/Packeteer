@@ -33,8 +33,6 @@ type counters struct {
 	// pruned is the last prune for a new key at the cap. At most one a
 	// minute, so a full map is not rescanned on every new key (#51).
 	pruned time.Time
-	// refused counts new keys the cap turned away since start.
-	refused uint64
 }
 
 func newCounters(max int) *counters {
@@ -56,7 +54,6 @@ func (c *counters) add(at time.Time, p netip.Prefix, proto uint8, n uint64) {
 				c.pruned = at
 			}
 			if len(c.keys) >= c.max {
-				c.refused++
 				return
 			}
 		}
@@ -67,12 +64,6 @@ func (c *counters) add(at time.Time, p netip.Prefix, proto uint8, n uint64) {
 	if at.After(e.seen) {
 		e.seen = at
 	}
-}
-
-func (c *counters) refusedTotal() uint64 {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.refused
 }
 
 func (c *counters) pruneLocked(now time.Time) {

@@ -182,8 +182,7 @@ type cell struct {
 }
 
 // Per-bucket prefix cap shared by the flow and span sources
-// (max_prefixes). A flow cell costs about 220 bytes; a 5-minute window is 30
-// buckets, so the default can hold 127 MiB and the limit 1.5 GiB.
+// (max_prefixes).
 const (
 	DefaultMaxPrefixes = 20000
 	MaxPrefixesLimit   = 250000

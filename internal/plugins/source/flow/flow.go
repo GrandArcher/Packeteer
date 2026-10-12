@@ -399,6 +399,9 @@ func newProblems(c *ProblemsConfig, window time.Duration, maxPrefixes int) (*pro
 	if c.MaxTargets < 1 || c.MaxTargets > maxTopN {
 		return nil, fmt.Errorf("problems.max_targets %d must be between 1 and %d", c.MaxTargets, maxTopN)
 	}
+	if c.MaxTargets > maxPrefixes {
+		return nil, fmt.Errorf("problems.max_targets %d exceeds max_prefixes %d: the window cannot hold that many targets", c.MaxTargets, maxPrefixes)
+	}
 	th := passive.Thresholds{FailurePct: c.FailurePct, MinFlows: c.MinFlows}
 	if err := th.Validate(); err != nil {
 		return nil, fmt.Errorf("problems: %w", err)
@@ -804,10 +807,10 @@ func (s *Source) Tracked() int {
 	return s.win.tracked(now())
 }
 
-// Truncated is how many prefixes the window and counters lost to
-// max_prefixes since start, with the problem window's refusals.
+// Truncated is how many prefix cells the window buckets dropped at
+// max_prefixes since start (refused or evicted), problem window included.
 func (s *Source) Truncated() map[string]uint64 {
-	n := s.win.truncatedTotal() + s.ctr.refusedTotal()
+	n := s.win.truncatedTotal()
 	if s.prob != nil {
 		n += s.prob.win.Truncated()
 	}

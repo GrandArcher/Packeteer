@@ -569,10 +569,10 @@ func validateOneFlow(fl FormFlow, bound map[string]bool) error {
 	if err := validDuration("flow.window", fl.Window, time.Second, 24*time.Hour); err != nil {
 		return err
 	}
-	if err := validInt("flow.top_n", fl.TopN, 1, 100000); err != nil {
+	if err := validInt("flow.top_n", fl.TopN, 1, 10000); err != nil {
 		return err
 	}
-	if err := validInt("flow.max_targets", fl.MaxTargets, 0, 100000); err != nil {
+	if err := validInt("flow.max_targets", fl.MaxTargets, 0, 10000); err != nil {
 		return err
 	}
 	if err := validDuration("flow.tail_interval", fl.TailInterval, time.Second, 24*time.Hour); err != nil {

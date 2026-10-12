@@ -125,7 +125,7 @@ scorer:
 #       window: 5m
 #       top_n: 100                  # priority tier, probed every probe.interval. An active improvement stays probed after it falls off the list, until the improvement retires
 #       max_targets: 100            # cap. 0 or omitted matches top_n. Up to 100000 and max_prefixes. A larger value also returns the next prefixes
-#       # max_prefixes: 20000       # exact prefix cells per 10s bucket; packeteer_truncated_total counts what it turns away
+#       # max_prefixes: 20000       # exact prefix cells per 10s bucket; packeteer_truncated_total counts cells it drops
 #       min_bytes: 1000000          # absolute floor over the window. 0 disables this bar
 #       min_pct: 0                  # percent of window bytes. 0 disables this bar. Either enabled bar keeps a prefix
 #       # tail_interval: 60s        # required when max_targets is greater than top_n. Longer than probe.interval, shorter than the staleness window

@@ -49,7 +49,7 @@ The growth figure compares the warmup with the second half of the run, so it can
 
 ## Scaling model and sizing
 
-The model is linear in table size, from the `pr` figures. About 1.7 KB of live heap per prefix, with the collector holding the heap at up to 1.5 times that (`GOGC=50`), makes the peak on the nine green `pr` runs through 2026-10-01 4.0 to 4.4 KiB per prefix (4869 to 5353 MiB over 1.25M). The budget is 5.0 KiB per prefix (4915.2 MiB per million), about 15% over the worst of those runs. Learn time and the growth and rising-RSS checks are budgeted as fixed shares of that: 72 s, 307.2 MiB, and 153.6 MiB per million prefixes. What does not scale with the table is the work around it: flow rate, churn, and the probe target set. CPU, threads, flow drops, API latency, and reconverge time keep one budget at every size.
+The model is linear in table size, from the `pr` figures. Peak RSS on the nine green `pr` runs through 2026-10-01 was 4869 to 5353 MiB over 1.25M prefixes, 4.0 to 4.4 KiB per prefix. Those runs predate `GOGC=50` (#112), so the figures include the collector's default headroom. The budget is 5.0 KiB per prefix (4915.2 MiB per million), about 15% over the worst of those runs. Learn time and the growth and rising-RSS checks are budgeted as fixed shares of that: 72 s, 307.2 MiB, and 153.6 MiB per million prefixes. What does not scale with the table is the work around it: flow rate, churn, and the probe target set. CPU, threads, flow drops, API latency, and reconverge time keep one budget at every size.
 
 The limits the harness applies, and the RAM to give a host (the peak limit plus a quarter, for the kernel and other processes):
 
@@ -67,7 +67,7 @@ Passive measurement keeps bounded tables. Each cap, its default at 5M paths, and
 
 | Cap | Default | Limit | Reviewed at 5M paths |
 |---|---|---|---|
-| flow and span `max_prefixes` | 20000 | 250000 | Exact cells per 10-second bucket (a 5-minute window has 30). A cell costs about 220 bytes (measured on a 200,000-cell bucket), so the default holds at most 127 MiB. It is per bucket of traffic, not per table prefix, and the busiest prefixes are what it keeps, so it stays 20000. Raise it when `packeteer_truncated_total{limit="max_prefixes"}` climbs while you need more probe targets (`top_n` and `max_targets` cannot exceed it). The limit holds at most 1.5 GiB. |
+| flow and span `max_prefixes` | 20000 | 250000 | Exact cells per 10-second bucket (a 5-minute window has 30). A flow cell costs about 220 bytes (`BenchmarkCellBytes` in `internal/plugins/source/flow` reads 223 on a 200,000-cell bucket), so the default holds at most 127 MiB. It is per bucket of traffic, not per table prefix, and the busiest prefixes are what it keeps, so it stays 20000. Raise it when `packeteer_truncated_total{limit="max_prefixes"}` climbs while you need more probe targets (`top_n` and `max_targets` cannot exceed it). The limit holds at most 1.5 GiB. |
 | flow and span `top_n`, `max_targets` | 100 | 100000 | Was 10000. Probe time still bounds it: every packet waits on `probe.rate_limit_pps`. |
 | outage, vip `max_targets`, outage `min_prefixes` | 100, 3 | 100000 | Was 10000. `min_prefixes` is a count, not a percent of the table. |
 | anomaly `max_keys` | 10000 | 1000000 | Was 100000. Keys come from the flow source's counters, which `max_prefixes` bounds. |
@@ -76,7 +76,7 @@ Passive measurement keeps bounded tables. Each cap, its default at 5M paths, and
 | `max_improvements` | 50 | 10000 | Unchanged. It caps routes Packeteer announces, a safety limit rather than a size limit. |
 | history `maxPending` | 200000 | none | Unchanged. It bounds unflushed rollups only while the store keeps failing, so it does not follow the table. |
 
-`packeteer_truncated_total{limit}` counts what a cap turned away since start: `max_prefixes` is new prefixes a full flow or span window bucket refused or evicted, plus flow counter keys refused; `max_flows` is span connections not tracked. A reload that replaces a source restarts its count. A value that stays at 0 means the cap is not binding.
+`packeteer_truncated_total{limit}` counts cap events since start, not distinct prefixes: `max_prefixes` is cells a full flow or span window bucket refused (flow also counts the cells it evicts for a larger prefix; counter keys are not counted); `max_flows` is span connections not tracked. A reload that replaces a source restarts its count. A value that stays at 0 means the cap is not binding.
 
 ## Findings fixed with this test
 

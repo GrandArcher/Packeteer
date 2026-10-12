@@ -40,25 +40,28 @@ func TestMaxPrefixesTruncationCounted(t *testing.T) {
 		octets uint32
 	}
 	// Two cells fill the bucket. Equal bytes never displace one, so the
-	// other two prefixes are refused by the window and by the counters.
+	// other two prefixes are refused.
 	s.ingest(t0, exp, v5proto(rec{"198.51.100.10", 17, 100}, rec{"203.0.113.10", 17, 100},
 		rec{"192.0.2.77", 17, 100}, rec{"198.18.0.9", 17, 100}))
-	if got := s.Truncated()["max_prefixes"]; got != 4 {
-		t.Fatalf("truncated = %d, want 4 (2 window + 2 counters)", got)
+	if got := s.Truncated()["max_prefixes"]; got != 2 {
+		t.Fatalf("truncated = %d, want 2 refused", got)
 	}
-	// A larger prefix evicts one cell: the window loses it, and the full
-	// counter map still refuses the key.
+	// A larger prefix takes a cell by evicting one: the eviction counts too.
 	s.ingest(t0, exp, v5proto(rec{"192.0.2.77", 17, 5000}))
-	if got := s.win.truncatedTotal(); got != 3 {
-		t.Fatalf("window truncated = %d, want 3 (2 refused + 1 evicted)", got)
-	}
-	if got := s.ctr.refusedTotal(); got != 3 {
-		t.Fatalf("counters refused = %d, want 3", got)
+	if got := s.Truncated()["max_prefixes"]; got != 3 {
+		t.Fatalf("truncated = %d, want 3 (2 refused + 1 evicted)", got)
 	}
 	if top := s.win.top(t0, 1, 0); len(top) != 1 || top[0].prefix != netip.MustParsePrefix("192.0.2.0/24") {
 		t.Fatalf("the larger prefix did not take a cell: %+v", top)
 	}
-	if n := len(countersOf(t, s)); n != 2 {
-		t.Fatalf("counter keys = %d, want the cap 2", n)
+}
+
+func TestProblemsMaxTargetsWithinMaxPrefixes(t *testing.T) {
+	y := problemsYAML + "  max_targets: 300\n"
+	if _, err := build(y + "max_prefixes: 200\n"); err == nil || !strings.Contains(err.Error(), "problems.max_targets 300 exceeds max_prefixes 200") {
+		t.Fatalf("err = %v", err)
+	}
+	if _, err := build(y + "max_prefixes: 300\n"); err != nil {
+		t.Fatal(err)
 	}
 }

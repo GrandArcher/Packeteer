@@ -782,7 +782,7 @@ Off unless this source is listed. NetFlow v5, NetFlow v9, IPFIX, and sFlow v5. R
 | `window` | `5m` | `1s`–`24h`. |
 | `top_n` | 100 | 1–100000, and at most `max_prefixes`. Priority tier, probed every `probe.interval`. |
 | `max_targets` | `top_n` | 0 matches `top_n`. Otherwise from `top_n` through 100000, and at most `max_prefixes`. Cap on the probed set. |
-| `max_prefixes` | 20000 | 1–250000 (#217). Exact prefix cells per time bucket and anomaly counter keys. A new prefix past it is counted in `packeteer_truncated_total{limit="max_prefixes"}`. A cell costs about 220 bytes and a 5-minute window has 30 buckets, so the default can hold 127 MiB and 250000 about 1.5 GiB. See [performance](performance.md#limits-at-large-tables). |
+| `max_prefixes` | 20000 | 1–250000 (#217). Exact prefix cells per time bucket, and anomaly counter keys. A cell the window buckets refuse or evict is counted in `packeteer_truncated_total{limit="max_prefixes"}` (counter keys are not). A cell costs about 220 bytes and a 5-minute window has 30 buckets, so the default can hold 127 MiB and 250000 about 1.5 GiB. See [performance](performance.md#limits-at-large-tables). |
 | `min_bytes` | 0 | Absolute floor, in bytes over `window`. 0 disables this bar. |
 | `min_pct` | 0 | 0–100, in steps of 0.0001. Percent of the bytes counted in the window. 0 disables this bar. |
 | `tail_interval` | 0 | `1s`–`24h` when set. Required when `max_targets` is greater than `top_n`. Must be longer than `probe.interval` and shorter than the staleness window. |
