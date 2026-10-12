@@ -45,7 +45,7 @@ const (
 	maxRateMbps    = 100000000.0
 	maxWarmup      = 100000
 	maxRounds      = 1000
-	maxKeysLimit   = 100000
+	maxKeysLimit   = 1000000
 
 	// forgetMbps: an idle key whose mean decayed below this is dropped.
 	forgetMbps = 0.001

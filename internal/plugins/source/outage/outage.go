@@ -49,10 +49,10 @@ const (
 	DefaultLossPct     = 20
 	DefaultInterval    = 5 * time.Second
 	DefaultMaxTargets  = 100
-	MaxTargetsLimit    = 10000
+	MaxTargetsLimit    = 100000
 	MinInterval        = time.Second
 	MaxWindow          = 24 * time.Hour
-	MaxMinPrefixes     = 10000
+	MaxMinPrefixes     = 100000
 )
 
 func init() { plugin.Sources.Register(TypeName, New) }

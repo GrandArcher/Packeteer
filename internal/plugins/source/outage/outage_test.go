@@ -57,7 +57,7 @@ func TestConfigValidation(t *testing.T) {
 		want string
 	}{
 		{"one prefix", "min_prefixes: 1\n", "min_prefixes"},
-		{"huge minimum", "min_prefixes: 10001\n", "min_prefixes"},
+		{"huge minimum", "min_prefixes: 100001\n", "min_prefixes"},
 		{"short window", "window: 10ms\n", "window"},
 		{"long window", "window: 48h\n", "window"},
 		{"loss", "loss_pct: 101\n", "loss_pct"},

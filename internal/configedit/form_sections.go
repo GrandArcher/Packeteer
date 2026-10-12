@@ -731,7 +731,7 @@ func validateOneVIP(v FormVIP) error {
 	if err := validDuration("vip.interval", v.Interval, time.Second, 24*time.Hour); err != nil {
 		return err
 	}
-	if err := validInt("vip.max_targets", v.MaxTargets, 1, 10000); err != nil {
+	if err := validInt("vip.max_targets", v.MaxTargets, 1, 100000); err != nil {
 		return err
 	}
 	if len(v.Prefixes) == 0 && len(v.ASNs) == 0 {
@@ -778,7 +778,7 @@ func (f Form) validateOutage() error {
 }
 
 func validateOneOutage(o FormOutage) error {
-	if err := validInt("outage.min_prefixes", o.MinPrefixes, 0, 10000); err != nil {
+	if err := validInt("outage.min_prefixes", o.MinPrefixes, 0, 100000); err != nil {
 		return err
 	}
 	if o.MinPrefixes == "1" {
@@ -799,7 +799,7 @@ func validateOneOutage(o FormOutage) error {
 	if err := validDuration("outage.interval", o.Interval, 0, 24*time.Hour); err != nil {
 		return err
 	}
-	if err := validInt("outage.max_targets", o.MaxTargets, 0, 10000); err != nil {
+	if err := validInt("outage.max_targets", o.MaxTargets, 0, 100000); err != nil {
 		return err
 	}
 	return validASNs("outage.ignore_asns", o.IgnoreASNs)

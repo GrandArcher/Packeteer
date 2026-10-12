@@ -109,6 +109,9 @@ func TestWindowBucketCap(t *testing.T) {
 	if len(tot) != 1 || tot[pA].Counts.Flows != 2 {
 		t.Fatalf("totals = %+v", tot)
 	}
+	if w.Truncated() != 1 {
+		t.Fatalf("truncated = %d, want 1 (pB refused; pA's second record is not a new prefix)", w.Truncated())
+	}
 }
 
 func TestFreshAndHelpers(t *testing.T) {

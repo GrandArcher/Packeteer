@@ -61,11 +61,11 @@ const (
 	defaultTopN     = 100
 	defaultAgg4     = 24
 	defaultAgg6     = 48
-	maxTopN         = 10000
+	maxTopN         = 100000
+	maxSubTotal     = 10000
 	maxWindow       = 24 * time.Hour
 	minWindow       = time.Second
 	minTailInterval = time.Second
-	maxPrefixes     = 20000
 	// minPctScale turns a percent (1 means 1%) into millionths of the
 	// window. 1% is 10_000, 100% is 1_000_000, and the step is 0.0001
 	// percentage points.
@@ -108,10 +108,14 @@ var (
 
 // Config is the flow source's config block.
 type Config struct {
-	Listen       listenList    `yaml:"listen"`
-	Window       time.Duration `yaml:"window"`
-	TopN         int           `yaml:"top_n"`
-	MaxTargets   int           `yaml:"max_targets"`
+	Listen     listenList    `yaml:"listen"`
+	Window     time.Duration `yaml:"window"`
+	TopN       int           `yaml:"top_n"`
+	MaxTargets int           `yaml:"max_targets"`
+	// MaxPrefixes caps the exact prefix cells in one window bucket, and
+	// the anomaly counter keys. Default 20000. Prefixes past it are
+	// counted in packeteer_truncated_total.
+	MaxPrefixes  int           `yaml:"max_prefixes"`
 	MinBytes     uint64        `yaml:"min_bytes"`
 	MinPct       float64       `yaml:"min_pct"`
 	TailInterval time.Duration `yaml:"tail_interval"`
@@ -216,6 +220,7 @@ type Source struct {
 	window       time.Duration
 	topN         int
 	maxTargets   int
+	maxPrefixes  int
 	minBytes     uint64
 	minPctPPM    uint64
 	tailInterval time.Duration
@@ -280,6 +285,12 @@ func New(c plugin.Config, env plugin.Env) (plugin.TargetSource, error) {
 	if cfg.TopN < 1 || cfg.TopN > maxTopN {
 		return nil, fmt.Errorf("top_n %d must be between 1 and %d", cfg.TopN, maxTopN)
 	}
+	if cfg.MaxPrefixes == 0 {
+		cfg.MaxPrefixes = passive.DefaultMaxPrefixes
+	}
+	if cfg.MaxPrefixes < 1 || cfg.MaxPrefixes > passive.MaxPrefixesLimit {
+		return nil, fmt.Errorf("max_prefixes %d must be between 1 and %d", cfg.MaxPrefixes, passive.MaxPrefixesLimit)
+	}
 	ppm, err := minPctMillionths(cfg.MinPct)
 	if err != nil {
 		return nil, err
@@ -315,7 +326,10 @@ func New(c plugin.Config, env plugin.Env) (plugin.TargetSource, error) {
 	if err != nil {
 		return nil, err
 	}
-	prob, err := newProblems(cfg.Problems, cfg.Window)
+	if cfg.MaxTargets > cfg.MaxPrefixes {
+		return nil, fmt.Errorf("max_targets (top_n when unset) %d exceeds max_prefixes %d: the window cannot hold that many targets", cfg.MaxTargets, cfg.MaxPrefixes)
+	}
+	prob, err := newProblems(cfg.Problems, cfg.Window, cfg.MaxPrefixes)
 	if err != nil {
 		return nil, err
 	}
@@ -330,7 +344,7 @@ func New(c plugin.Config, env plugin.Env) (plugin.TargetSource, error) {
 	if env.Logger == nil {
 		env.Logger = slog.Default()
 	}
-	win := newSlide(cfg.Window, maxPrefixes)
+	win := newSlide(cfg.Window, cfg.MaxPrefixes)
 	if sub != nil {
 		win.subCap = min(sub.maxPer*subTrackPerSubrange, maxSubTrackPerBucket)
 	}
@@ -343,6 +357,7 @@ func New(c plugin.Config, env plugin.Env) (plugin.TargetSource, error) {
 		window:       cfg.Window,
 		topN:         cfg.TopN,
 		maxTargets:   cfg.MaxTargets,
+		maxPrefixes:  cfg.MaxPrefixes,
 		minBytes:     cfg.MinBytes,
 		minPctPPM:    ppm,
 		tailInterval: cfg.TailInterval,
@@ -352,11 +367,11 @@ func New(c plugin.Config, env plugin.Env) (plugin.TargetSource, error) {
 		now:          time.Now,
 		dec:          &decoder{},
 		win:          win,
-		ctr:          newCounters(maxPrefixes),
+		ctr:          newCounters(cfg.MaxPrefixes),
 	}, nil
 }
 
-func newProblems(c *ProblemsConfig, window time.Duration) (*problems, error) {
+func newProblems(c *ProblemsConfig, window time.Duration, maxPrefixes int) (*problems, error) {
 	if c == nil {
 		return nil, nil
 	}
@@ -383,6 +398,9 @@ func newProblems(c *ProblemsConfig, window time.Duration) (*problems, error) {
 	}
 	if c.MaxTargets < 1 || c.MaxTargets > maxTopN {
 		return nil, fmt.Errorf("problems.max_targets %d must be between 1 and %d", c.MaxTargets, maxTopN)
+	}
+	if c.MaxTargets > maxPrefixes {
+		return nil, fmt.Errorf("problems.max_targets %d exceeds max_prefixes %d: the window cannot hold that many targets", c.MaxTargets, maxPrefixes)
 	}
 	th := passive.Thresholds{FailurePct: c.FailurePct, MinFlows: c.MinFlows}
 	if err := th.Validate(); err != nil {
@@ -416,8 +434,8 @@ func newSubranges(c *SubrangesConfig) (*subranges, error) {
 	if c.MaxTotal == 0 {
 		c.MaxTotal = defaultSubMaxTotal
 	}
-	if c.MaxTotal < minMaxSubranges || c.MaxTotal > maxTopN {
-		return nil, fmt.Errorf("subranges.max_total %d must be between %d and %d", c.MaxTotal, minMaxSubranges, maxTopN)
+	if c.MaxTotal < minMaxSubranges || c.MaxTotal > maxSubTotal {
+		return nil, fmt.Errorf("subranges.max_total %d must be between %d and %d", c.MaxTotal, minMaxSubranges, maxSubTotal)
 	}
 	return &subranges{bits4: c.BitsV4, bits6: c.BitsV6, maxPer: c.MaxSubranges, maxTotal: c.MaxTotal}, nil
 }
@@ -789,13 +807,23 @@ func (s *Source) Tracked() int {
 	return s.win.tracked(now())
 }
 
+// Truncated is how many prefix cells the window buckets dropped at
+// max_prefixes since start (refused or evicted), problem window included.
+func (s *Source) Truncated() map[string]uint64 {
+	n := s.win.truncatedTotal()
+	if s.prob != nil {
+		n += s.prob.win.Truncated()
+	}
+	return map[string]uint64{"max_prefixes": n}
+}
+
 // Volumes implements plugin.VolumeSource. Mbps is bytes over the configured
 // window. The list is not limited to top_n. It does not announce.
 func (s *Source) Volumes(ctx context.Context) ([]plugin.PrefixVolume, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	rows := s.win.totals(s.now(), maxPrefixes)
+	rows := s.win.totals(s.now(), s.maxPrefixes)
 	out := make([]plugin.PrefixVolume, 0, len(rows))
 	for _, r := range rows {
 		if r.bytes == 0 {
@@ -826,7 +854,7 @@ func (s *Source) TrafficMix(ctx context.Context) ([]plugin.TrafficMix, error) {
 	if s.tr == nil {
 		return nil, nil
 	}
-	rows := s.win.totals(s.now(), maxPrefixes)
+	rows := s.win.totals(s.now(), s.maxPrefixes)
 	out := make([]plugin.TrafficMix, 0, len(rows))
 	for _, r := range rows {
 		c := s.tr.class(r.local, r.transit)
@@ -865,7 +893,7 @@ func (s *Source) Targets(context.Context) ([]plugin.Target, error) {
 			}
 		}
 	}
-	rows, total, overflow := s.win.aggregate(now, maxPrefixes, must)
+	rows, total, overflow := s.win.aggregate(now, s.maxPrefixes, must)
 	hostOf := make(map[netip.Prefix][]netip.Addr, len(rows))
 	subsOf := make(map[netip.Prefix][]subRank, len(rows))
 	for _, r := range rows {

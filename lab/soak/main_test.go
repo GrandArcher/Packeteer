@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"log/slog"
+	"math"
 	"net"
 	"net/netip"
 	"os"
@@ -214,7 +215,7 @@ func TestActivePerHourScalesAfterWarmup(t *testing.T) {
 }
 
 func TestBudgetFileProfilesAndGeneratedConfig(t *testing.T) {
-	for _, name := range []string{"smoke", "pr", "soak", "routes3m", "rate"} {
+	for _, name := range []string{"smoke", "pr", "soak", "routes3m", "large", "rate"} {
 		p, err := loadProfile("budgets.yaml", name)
 		if err != nil {
 			t.Fatal(err)
@@ -240,14 +241,12 @@ func TestBudgetFileProfilesAndGeneratedConfig(t *testing.T) {
 				t.Fatal("rate profile must generate 100 pps")
 			}
 		case "routes3m":
-			// Opt-in 3M table (#103). Report only: no measured budgets yet,
-			// and this name must not become what CI's load job runs.
+			// Opt-in 3M table (#103) with the pr per-million budgets (#217).
+			// This name must not become what CI's load job runs.
 			if p.Prefixes != 3000000 {
 				t.Fatalf("routes3m prefixes %d, want 3000000", p.Prefixes)
 			}
-			if p.Budgets != (Budgets{}) {
-				t.Fatalf("routes3m budgets must stay unset until a measured run: %+v", p.Budgets)
-			}
+			wantBudget(t, name, "peak", p.Budgets.RSSPeakMB, 3*4915.2)
 			tbl := newTable(p.Prefixes)
 			if !tbl.valid() || tbl.v6Bits != 54 {
 				t.Fatalf("routes3m table %+v, want a valid /54 IPv6 half", tbl)
@@ -256,21 +255,37 @@ func TestBudgetFileProfilesAndGeneratedConfig(t *testing.T) {
 			if !docV6.Contains(last.Addr()) || last.Bits() != 54 {
 				t.Fatalf("routes3m last prefix %v", last)
 			}
+		case "large":
+			// About 5M paths (#217): the pr per-million budgets times 5.
+			if p.Prefixes != 5000000 {
+				t.Fatalf("large prefixes %d, want 5000000", p.Prefixes)
+			}
+			tbl := newTable(p.Prefixes)
+			last := tbl.prefix(p.Prefixes - 1)
+			if !tbl.valid() || tbl.v6Bits != 55 || !docV6.Contains(last.Addr()) || last.Bits() != 55 {
+				t.Fatalf("large table %+v, last prefix %v, want a /55 IPv6 half inside the documentation block", tbl, last)
+			}
+			wantBudget(t, name, "learn", p.Budgets.LearnSeconds, 360)
+			wantBudget(t, name, "peak", p.Budgets.RSSPeakMB, 24576)
+			wantBudget(t, name, "growth", p.Budgets.RSSGrowthMB, 1536)
+			wantBudget(t, name, "slope", p.Budgets.RSSSlopeMB, 768)
 		case "pr":
 			if p.Prefixes != 1250000 {
 				t.Fatalf("pr prefixes changed: %d", p.Prefixes)
 			}
-			if p.Budgets.RSSGrowthMB != 384 {
-				t.Fatalf("pr rss_growth_mb = %v, want 384", p.Budgets.RSSGrowthMB)
-			}
+			// The scaled budgets equal the flat ones they replaced (#217).
+			wantBudget(t, name, "learn", p.Budgets.LearnSeconds, 90)
+			wantBudget(t, name, "peak", p.Budgets.RSSPeakMB, 6144)
+			wantBudget(t, name, "growth", p.Budgets.RSSGrowthMB, 384)
+			wantBudget(t, name, "slope", p.Budgets.RSSSlopeMB, 192)
 			if p.Budgets.MinActivePerHour != 180000 || p.Budgets.MinPassiveTracked != 50000 {
 				t.Fatalf("pr probe budgets %+v", p.Budgets)
 			}
 			if p.RateLimitPPS != 0 || !strings.Contains(cfgText, "rate_limit_pps: 100000\n") {
 				t.Fatal("pr must keep rate_limit_pps 100000")
 			}
-			fallthrough
-		default:
+		}
+		if name == "pr" || name == "soak" || name == "large" {
 			if p.Prefixes < 1000000 {
 				t.Fatalf("%s: %d prefixes is not full-table sized", name, p.Prefixes)
 			}
@@ -294,7 +309,17 @@ func TestBudgetFileProfilesAndGeneratedConfig(t *testing.T) {
 	if _, err := loadProfile("budgets.yaml", "nope"); err == nil {
 		t.Fatal("unknown profile accepted")
 	}
-	// The load job and the weekly soak must keep their own profiles.
+	// The load job and the weekly soak must keep their own profiles. The
+	// large table (#217) has its own scheduled workflow and never runs on
+	// a pull request.
+	large, err := os.ReadFile("../../.github/workflows/load-large.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(large), "lab/soak.sh packeteer:large large") || strings.Contains(string(large), "pull_request") ||
+		!strings.Contains(string(large), "vars.LARGE_RUNNER") {
+		t.Fatal("load-large.yml must run the large profile on a configured runner and not on pull requests")
+	}
 	for _, path := range []string{"../../.github/workflows/ci.yml", "../../.github/workflows/soak.yml"} {
 		b, err := os.ReadFile(path)
 		if err != nil {
@@ -302,6 +327,9 @@ func TestBudgetFileProfilesAndGeneratedConfig(t *testing.T) {
 		}
 		if strings.Contains(string(b), "routes3m") {
 			t.Fatalf("%s names the opt-in 3M profile", path)
+		}
+		if strings.Contains(string(b), "packeteer:large") {
+			t.Fatalf("%s names the large-table profile", path)
 		}
 		if strings.Contains(string(b), "packeteer:ci rate") || strings.Contains(string(b), "packeteer:soak rate") {
 			t.Fatalf("%s names the opt-in rate profile", path)
@@ -379,16 +407,14 @@ func TestGrowthIgnoresScavengerValley(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if p.Budgets.RSSPeakMB != 6144 || p.Budgets.RSSGrowthMB != 384 {
-		t.Fatalf("pr peak or growth budget changed: peak %v growth %v", p.Budgets.RSSPeakMB, p.Budgets.RSSGrowthMB)
-	}
+	wantBudget(t, "pr", "peak", p.Budgets.RSSPeakMB, 6144)
+	wantBudget(t, "pr", "growth", p.Budgets.RSSGrowthMB, 384)
 	soak, err := loadProfile("budgets.yaml", "soak")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if soak.Budgets.RSSPeakMB != 6656 {
-		t.Fatalf("soak peak budget changed: %v", soak.Budgets.RSSPeakMB)
-	}
+	wantBudget(t, "soak", "peak", soak.Budgets.RSSPeakMB, 6656)
+	wantBudget(t, "soak", "growth", soak.Budgets.RSSGrowthMB, 512)
 	warm := append([]float64{5000}, repeatN(4620, 29)...)
 	valley := append(repeatN(4480, 40), repeatN(4820, 40)...)
 	base, end := growth(warm, valley)
@@ -431,9 +457,7 @@ func TestRiseLastThird(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if p.Budgets.RSSGrowthMB != 384 {
-		t.Fatalf("pr growth budget changed: %v", p.Budgets.RSSGrowthMB)
-	}
+	wantBudget(t, "pr", "growth", p.Budgets.RSSGrowthMB, 384)
 	for _, name := range []string{"rss-main-a.txt", "rss-pr-a.txt", "rss-pr-b.txt"} {
 		rss := readRSS(t, name)
 		if len(rss) != 120 {
@@ -508,5 +532,61 @@ func TestReportFailsWhenStillRising(t *testing.T) {
 	r.RSSSlopeMB = 400
 	if text, ok := report(r, b); ok || !strings.Contains(text, "**OVER**") {
 		t.Fatalf("a climbing run passed:\n%s", text)
+	}
+}
+
+// wantBudget compares a resolved budget with the figure it must equal. The
+// per-million values are decimals, so the product is checked to a hundredth.
+func wantBudget(t *testing.T, profile, what string, got, want float64) {
+	t.Helper()
+	if math.Abs(got-want) > 0.01 {
+		t.Fatalf("%s %s budget = %v, want %v", profile, what, got, want)
+	}
+}
+
+// Budgets are per million prefixes, so the same file gives a bigger limit to
+// a bigger table, and a figure left out stays unchecked (#217).
+func TestBudgetsScaleWithTable(t *testing.T) {
+	b := Budgets{LearnSecondsPerM: 72, RSSPeakMBPerM: 5000, RSSGrowthMBPerM: 300, RSSSlopeMBPerM: 150, CPUAvgCores: 2}
+	small, big := b.scaled(1_000_000), b.scaled(5_000_000)
+	if small.LearnSeconds != 72 || small.RSSPeakMB != 5000 || small.RSSGrowthMB != 300 || small.RSSSlopeMB != 150 {
+		t.Fatalf("1M: %+v", small)
+	}
+	if big.LearnSeconds != 360 || big.RSSPeakMB != 25000 || big.RSSGrowthMB != 1500 || big.RSSSlopeMB != 750 {
+		t.Fatalf("5M: %+v", big)
+	}
+	if big.CPUAvgCores != 2 {
+		t.Fatalf("a table-independent budget was scaled: %v", big.CPUAvgCores)
+	}
+	if got := (Budgets{}).scaled(5_000_000); got.RSSPeakMB != 0 || got.LearnSeconds != 0 || got.RSSGrowthMB != 0 || got.RSSSlopeMB != 0 {
+		t.Fatalf("unset budgets became checked: %+v", got)
+	}
+	// 20 GiB of RSS fails the 1M peak budget and passes the 5M one.
+	r := Result{Profile: "x", RSSPeakMB: 20000, Failures: []string{}}
+	if _, ok := report(r, small); ok {
+		t.Fatal("20 GiB passed a 1M table budget")
+	}
+	if _, ok := report(r, big); !ok {
+		t.Fatal("20 GiB failed a 5M table budget")
+	}
+}
+
+func TestNegativeBudgetRejected(t *testing.T) {
+	dir := t.TempDir()
+	path := dir + "/b.yaml"
+	y := "profiles:\n  x:\n    prefixes: 20000\n    duration: 1m\n    warmup: 10s\n    sample: 2s\n    budgets: {rss_peak_mb_per_mprefix: -1}\n"
+	if err := os.WriteFile(path, []byte(y), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := loadProfile(path, "x"); err == nil || !strings.Contains(err.Error(), "negative") {
+		t.Fatalf("err = %v, want a negative budget error", err)
+	}
+	// The flat names are gone: a stale key is an error, not an ignored limit.
+	y = strings.Replace(y, "rss_peak_mb_per_mprefix: -1", "rss_peak_mb: 6144", 1)
+	if err := os.WriteFile(path, []byte(y), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := loadProfile(path, "x"); err == nil {
+		t.Fatal("a flat rss_peak_mb key was accepted")
 	}
 }

@@ -616,6 +616,7 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 	wireOutage(plugins, engine, view, dispatch)
 	col.SetTelemetry(func() []plugin.Usage { return collectTelemetry(context.Background(), plugins) })
 	col.SetFlowTracked(func() int { return flowTracked(plugins) })
+	col.SetTruncated(func() map[string]uint64 { return truncated(plugins) })
 	col.Attach(engine, decider, view)
 	httpSrv.SetQuarantine(quarantineControl{decider: decider, out: dispatch, poke: poke, now: time.Now})
 	wireExchanges(cfg, col, view)
@@ -1882,6 +1883,25 @@ func flowTracked(plugins *pluginhost.Set) int {
 		n += t.Tracked()
 	}
 	return n
+}
+
+// truncated sums what the flow and span sources' caps turned away, by
+// config key (packeteer_truncated_total).
+func truncated(plugins *pluginhost.Set) map[string]uint64 {
+	out := map[string]uint64{}
+	if plugins == nil {
+		return out
+	}
+	for _, src := range plugins.Sources {
+		t, ok := src.Plugin.(interface{ Truncated() map[string]uint64 })
+		if !ok {
+			continue
+		}
+		for k, n := range t.Truncated() {
+			out[k] += n
+		}
+	}
+	return out
 }
 
 func collectTelemetry(ctx context.Context, plugins *pluginhost.Set) []plugin.Usage {

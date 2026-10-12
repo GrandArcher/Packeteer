@@ -9,6 +9,14 @@
 # Budgets are set for a GitHub-hosted ubuntu-latest runner (4 vCPU, 16 GB)
 # with headroom over what that runner measures. Raise one only with the
 # reason in the PR; a regression that needs a higher budget is a finding.
+#
+# Learn time and the three RSS figures grow with the table, so they are
+# written per million prefixes (#217): the limit is the number times the
+# profile's prefixes / 1,000,000. The `pr` values below equal the old flat
+# limits at 1,250,000 prefixes (90 s, 6144, 384, and 192 MiB); nothing was
+# raised. The `large` profile reuses the same per-million numbers, so it is
+# a test of the scaling model: if 5M paths cost more per prefix than 1.25M
+# did, that run fails and the miss is the finding.
 profiles:
   # Quick local try (a minute, a small table). Report only.
   smoke:
@@ -34,8 +42,9 @@ profiles:
     flow_top_n: 2000
     static_targets: 1000
     churn: 6000 # prefixes withdrawn and re-announced per minute
-    # rss_growth_mb is the median RSS over the second half after warmup
-    # minus the median during warmup (see docs/performance.md). The nine
+    # rss_growth_mb_per_mprefix (307.2; 384 MiB at this size) is the median
+    # RSS over the second half after warmup minus the median during
+    # warmup (see docs/performance.md). The nine
     # ubuntu-latest pr runs through 2026-10-01 were at most 146 MiB. The
     # old tenth-of-a-window median read a scavenger valley on Actions run
     # 36902639588 as 342. Same-day green main runs on 2026-10-07 measured
@@ -44,8 +53,8 @@ profiles:
     # runs and RSS fell from 4966 to 4827. 384 is that sample plus
     # headroom. A second half 400 MiB above warmup still fails.
     #
-    # rss_slope_mb (#112) is how far RSS is still climbing at the end of
-    # the run: the smaller of the Theil-Sen slope over the last third
+    # rss_slope_mb_per_mprefix (#112; 153.6, 192 MiB at this size) is how
+    # far RSS is still climbing at the end of the run: the smaller of the Theil-Sen slope over the last third
     # times that third, and the last-sixth median minus the middle-third
     # median (lab/soak/budget.go riseLastThird). A heap still growing when
     # the run ends fails even when growth is under budget. Three green
@@ -53,10 +62,10 @@ profiles:
     # read 0, 0, and 103 MiB: the collector's sawtooth, not a leak. 192 is
     # about twice the worst of those and half the growth budget.
     budgets:
-      learn_seconds: 90
-      rss_peak_mb: 6144
-      rss_growth_mb: 384
-      rss_slope_mb: 192
+      learn_seconds_per_mprefix: 72 # 90 s at 1.25M
+      rss_peak_mb_per_mprefix: 4915.2 # 6144 MiB at 1.25M, about 5 KiB a prefix
+      rss_growth_mb_per_mprefix: 307.2
+      rss_slope_mb_per_mprefix: 153.6
       cpu_avg_cores: 2.0
       threads: 64
       udp_drop_pct: 5
@@ -79,13 +88,10 @@ profiles:
 
   # Opt-in (#103). Not the `load` job and not soak.yml. A human passes
   # the name: `bash lab/soak.sh IMAGE routes3m`. Same workload as `pr`
-  # except the table is 3 million prefixes. Budgets stay empty until a
-  # run on a large host records learn time, RSS, and API latency; a zero
-  # budget is reported and not checked. Do not copy the `pr` limits up
-  # to hide a miss, and do not point CI at this name. The 1.25M table
-  # measured about 4.5 GiB RSS, so 3M is on the order of 11 GiB before
-  # collector headroom. With no learn_seconds budget the harness waits
-  # up to 30 minutes.
+  # except the table is 3 million prefixes, with the `pr` per-million
+  # budgets (#217), so it needs about 15 GiB of RAM at peak: not a
+  # 16 GB hosted runner. Nothing has measured it. A miss is read against
+  # the scaling model in docs/performance.md, not by raising a number.
   routes3m:
     prefixes: 3000000
     duration: 10m
@@ -96,7 +102,45 @@ profiles:
     flow_top_n: 2000
     static_targets: 1000
     churn: 6000
-    budgets: {}
+    budgets:
+      learn_seconds_per_mprefix: 72
+      rss_peak_mb_per_mprefix: 4915.2
+      rss_growth_mb_per_mprefix: 307.2
+      rss_slope_mb_per_mprefix: 153.6
+
+  # Large table (#217): about 5 million paths, the size of several full
+  # tables plus peering. Weekly in .github/workflows/load-large.yml on a
+  # runner with at least 32 GB of RAM (a repository variable names it; it
+  # is skipped when none is set). Not the `load` job, not on pull
+  # requests. The same observe workload as `pr` over a longer window,
+  # because a collection cycle on a heap this size takes longer. The table
+  # is one path per prefix: the harness plays one iBGP session, so
+  # "paths" here is prefixes. Budgets are the `pr` per-million numbers
+  # times 5: 360 s, 24 GiB peak, 1536 MiB growth, 768 MiB still rising.
+  large:
+    prefixes: 5000000
+    duration: 20m
+    warmup: 6m
+    sample: 10s
+    flow_rate: 20000
+    flow_hot: 5000
+    flow_top_n: 2000
+    static_targets: 1000
+    churn: 6000
+    budgets:
+      learn_seconds_per_mprefix: 72
+      rss_peak_mb_per_mprefix: 4915.2
+      rss_growth_mb_per_mprefix: 307.2
+      rss_slope_mb_per_mprefix: 153.6
+      cpu_avg_cores: 2.0
+      threads: 64
+      udp_drop_pct: 5
+      api_p99_ms: 1500
+      reconverge_seconds: 30
+      shutdown_seconds: 20
+      min_measured: 2500
+      min_active_per_hour: 180000
+      min_passive_tracked: 50000
 
   # Opt-in (#125). Not the `load` job and not soak.yml. A human passes
   # the name: `bash lab/soak.sh IMAGE rate`. A 20,000-prefix table at
@@ -133,13 +177,13 @@ profiles:
     static_targets: 1000
     churn: 6000
     budgets:
-      learn_seconds: 90
-      rss_peak_mb: 6656
-      rss_growth_mb: 512
+      learn_seconds_per_mprefix: 72
+      rss_peak_mb_per_mprefix: 5324.8 # 6656 MiB at 1.25M
+      rss_growth_mb_per_mprefix: 409.6 # 512 MiB at 1.25M
       # The last third is 110 minutes, so the collector's sawtooth is
       # small beside it. No soak run has measured this figure yet; a miss
       # is read against the logged RSS series before anything changes.
-      rss_slope_mb: 192
+      rss_slope_mb_per_mprefix: 153.6
       cpu_avg_cores: 2.0
       threads: 64
       udp_drop_pct: 5

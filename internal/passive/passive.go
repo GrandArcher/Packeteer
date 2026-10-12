@@ -163,13 +163,16 @@ type Problem struct {
 
 // Window sums Counts per prefix over a sliding window of fixed buckets.
 // Each bucket keeps at most maxPrefixes prefixes; a new prefix in a full
-// bucket is dropped, so a scan cannot grow memory without bound.
+// bucket is dropped and counted (Truncated), so a scan cannot grow memory
+// without bound.
 type Window struct {
 	mu     sync.Mutex
 	window time.Duration
 	bucket time.Duration
 	max    int
 	slots  map[int64]map[netip.Prefix]*cell
+	// truncated counts new prefixes a full bucket refused since start.
+	truncated uint64
 }
 
 type cell struct {
@@ -177,6 +180,13 @@ type cell struct {
 	host       netip.Addr
 	hostEvents uint64
 }
+
+// Per-bucket prefix cap shared by the flow and span sources
+// (max_prefixes).
+const (
+	DefaultMaxPrefixes = 20000
+	MaxPrefixesLimit   = 250000
+)
 
 // NewWindow returns an empty window. maxPrefixes below 1 is treated as 1.
 func NewWindow(window time.Duration, maxPrefixes int) *Window {
@@ -188,6 +198,13 @@ func NewWindow(window time.Duration, maxPrefixes int) *Window {
 		maxPrefixes = 1
 	}
 	return &Window{window: window, bucket: b, max: maxPrefixes, slots: map[int64]map[netip.Prefix]*cell{}}
+}
+
+// Truncated is how many new prefixes a full bucket has refused since start.
+func (w *Window) Truncated() uint64 {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.truncated
 }
 
 // Window is the configured length.
@@ -211,6 +228,7 @@ func (w *Window) Add(at time.Time, p netip.Prefix, host netip.Addr, d Counts) {
 	c := b[p]
 	if c == nil {
 		if len(b) >= w.max {
+			w.truncated++
 			return
 		}
 		c = &cell{}

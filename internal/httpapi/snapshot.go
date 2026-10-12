@@ -58,6 +58,9 @@ type Input struct {
 	// is a routing input.
 	ProbePrefixCommits uint64 `json:"-"`
 	FlowTracked        int    `json:"-"`
+	// Truncated is items the passive-measurement caps turned away, by
+	// config key (packeteer_truncated_total).
+	Truncated map[string]uint64 `json:"-"`
 }
 
 // Snapshot is the read-only document the HTTP handlers serve.
@@ -89,6 +92,9 @@ type Snapshot struct {
 	// are not part of the JSON API.
 	ProbePrefixCommits uint64 `json:"-"`
 	FlowTracked        int    `json:"-"`
+	// Truncated is packeteer_truncated_total. It is not part of the
+	// JSON API.
+	Truncated map[string]uint64 `json:"-"`
 	// ASNMap groups measured prefixes by origin ASN and provider site.
 	// It is display only and is not a routing decision.
 	ASNMap []ASNNode
@@ -340,6 +346,7 @@ func Assemble(in Input) Snapshot {
 		ExchangeLANDrops:   in.ExchangeLANDrops,
 		ProbePrefixCommits: in.ProbePrefixCommits,
 		FlowTracked:        in.FlowTracked,
+		Truncated:          in.Truncated,
 	}
 	snap.ASNMap = assembleASNMap(snap.Prefixes)
 	snap.zeroNil()

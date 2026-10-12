@@ -547,10 +547,15 @@ func TestFormSectionErrors(t *testing.T) {
 		"vip host outside": {vip(func(v *FormVIP) {
 			v.Prefixes = []FormTarget{{Prefix: "203.0.113.0/24", Host: "192.0.2.1"}}
 		}), "inside"},
-		"outage min 1":   {outage(func(o *FormOutage) { o.MinPrefixes = "1" }), "below 2"},
-		"outage loss":    {outage(func(o *FormOutage) { o.LossPct = "200" }), "outage.loss_pct"},
-		"outage rtt":     {outage(func(o *FormOutage) { o.RTTMs = "-3" }), "outage.rtt_ms"},
-		"outage asn dup": {outage(func(o *FormOutage) { o.IgnoreASNs = []string{"64500", "64500"} }), "duplicate AS"},
+		"vip targets cap":    {vip(func(v *FormVIP) { v.MaxTargets = "100001" }), "vip.max_targets"},
+		"outage min cap":     {outage(func(o *FormOutage) { o.MinPrefixes = "100001" }), "outage.min_prefixes"},
+		"outage targets cap": {outage(func(o *FormOutage) { o.MaxTargets = "100001" }), "outage.max_targets"},
+		"flow top_n cap":     {flow(func(fl *FormFlow) { fl.TopN = "10001" }), "flow.top_n"},
+		"flow targets cap":   {flow(func(fl *FormFlow) { fl.MaxTargets = "10001" }), "flow.max_targets"},
+		"outage min 1":       {outage(func(o *FormOutage) { o.MinPrefixes = "1" }), "below 2"},
+		"outage loss":        {outage(func(o *FormOutage) { o.LossPct = "200" }), "outage.loss_pct"},
+		"outage rtt":         {outage(func(o *FormOutage) { o.RTTMs = "-3" }), "outage.rtt_ms"},
+		"outage asn dup":     {outage(func(o *FormOutage) { o.IgnoreASNs = []string{"64500", "64500"} }), "duplicate AS"},
 	} {
 		f, err := ParseForm([]byte(base))
 		if err != nil {
@@ -560,6 +565,27 @@ func TestFormSectionErrors(t *testing.T) {
 		out, err := ApplyForm([]byte(base), f)
 		if err == nil || !strings.Contains(err.Error(), tc.want) {
 			t.Errorf("%s: err = %v, want %q (out %q)", name, err, tc.want, out)
+		}
+	}
+}
+
+func TestFormTargetCapsAtLimit(t *testing.T) {
+	f, err := ParseForm([]byte(observeYAML))
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.VIPs = []FormVIP{{Interval: "10s", ASNs: []string{"64496"}, MaxTargets: "100000"}}
+	f.Outages = []FormOutage{{MinPrefixes: "100000", MaxTargets: "100000"}}
+	out, err := ApplyForm([]byte(observeYAML), f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := config.Parse(out); err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	for _, want := range []string{"max_targets: 100000", "min_prefixes: 100000"} {
+		if !strings.Contains(string(out), want) {
+			t.Errorf("lost %q:\n%s", want, out)
 		}
 	}
 }

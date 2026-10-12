@@ -289,6 +289,35 @@ func TestMaxFlowsAndPrefixLookup(t *testing.T) {
 	if len(tot) != 2 || s.trk.size() != 2 || s.trk.dropped != 1 {
 		t.Fatalf("max_flows not enforced: %v size %d dropped %d", tot, s.trk.size(), s.trk.dropped)
 	}
+	if got := s.Truncated(); got["max_flows"] != 1 || got["max_prefixes"] != 0 {
+		t.Fatalf("Truncated = %v, want max_flows 1", got)
+	}
+}
+
+func TestMaxPrefixes(t *testing.T) {
+	if s := mustSource(t, baseYAML); s.win.Truncated() != 0 {
+		t.Fatal("a fresh window reports truncation")
+	}
+	for y, want := range map[string]string{
+		baseYAML + "max_prefixes: 250001\n":            "max_prefixes 250001 must be between 1 and 250000",
+		baseYAML + "max_prefixes: 5\nmax_targets: 6\n": "max_targets 6 exceeds max_prefixes 5",
+		baseYAML + "max_targets: 30000\n":              "exceeds max_prefixes 20000",
+	} {
+		if _, err := build(y); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%q: err = %v, want %q", y, err, want)
+		}
+	}
+	s := mustSource(t, baseYAML+"max_prefixes: 1\nmax_targets: 1\n")
+	at := time.Unix(1_800_000_000, 0)
+	for i, dst := range []string{"198.51.100.10", "203.0.113.5"} {
+		s.trk.observe(at, segment{src: localV4, sport: uint16(40000 + i), dst: netip.MustParseAddr(dst), dport: 443, flags: flagSYN})
+	}
+	if tot := s.win.Totals(at); len(tot) != 1 {
+		t.Fatalf("max_prefixes 1 kept %v", tot)
+	}
+	if got := s.Truncated()["max_prefixes"]; got != 1 {
+		t.Fatalf("truncated = %d, want 1", got)
+	}
 }
 
 func TestStartReplaysPcapFile(t *testing.T) {
@@ -350,7 +379,7 @@ func TestConfigValidation(t *testing.T) {
 		"syn timeout":        baseYAML + "syn_timeout: 10ms\n",
 		"idle under syn":     baseYAML + "syn_timeout: 5s\nflow_idle: 5s\n",
 		"max flows":          baseYAML + "max_flows: -1\n",
-		"max targets":        baseYAML + "max_targets: 10001\n",
+		"max targets":        baseYAML + "max_targets: 100001\n",
 		"agg v4":             baseYAML + "aggregate_v4: 33\n",
 		"agg v6":             baseYAML + "aggregate_v6: 129\n",
 		"unknown field":      baseYAML + "nope: 1\n",

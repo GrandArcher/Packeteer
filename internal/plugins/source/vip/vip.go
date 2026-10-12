@@ -36,7 +36,7 @@ const MinInterval = time.Second
 const DefaultMaxTargets = 100
 
 // MaxTargetsLimit is the largest max_targets config accepts.
-const MaxTargetsLimit = 10000
+const MaxTargetsLimit = 100000
 
 func init() { plugin.Sources.Register(TypeName, New) }
 

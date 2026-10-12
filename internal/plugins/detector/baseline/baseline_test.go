@@ -59,7 +59,7 @@ func TestConfigDefaultsAndBounds(t *testing.T) {
 	}
 	for _, bad := range []string{
 		"sensitivity: -1", "sensitivity: 101", "sensitivity: .nan", "min_ratio: 0.5", "min_mbps: -2", "max_mbps: 5",
-		"alpha: 1.5", "alpha: -0.1", "warmup: -1", "trigger_rounds: 1001", "clear_rounds: -3", "max_keys: 100001", "nope: 1",
+		"alpha: 1.5", "alpha: -0.1", "warmup: -1", "trigger_rounds: 1001", "clear_rounds: -3", "max_keys: 1000001", "nope: 1",
 	} {
 		c, _ := plugin.ConfigFromYAML(bad)
 		if _, err := New(c, plugin.Env{}); err == nil {

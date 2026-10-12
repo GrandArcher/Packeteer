@@ -24,6 +24,9 @@ type slide struct {
 	// scratch is the eviction sort buffer. add holds mu, so one slice
 	// serves every bucket and a full table does not allocate it per record.
 	scratch []uint64
+	// truncated counts prefixes a full bucket refused or evicted since
+	// start, so an operator can tell max_prefixes is binding.
+	truncated uint64
 }
 
 type bucket struct {
@@ -136,11 +139,13 @@ func (s *slide) addSub(at time.Time, p, sub netip.Prefix, host netip.Addr, n uin
 		b = &bucket{cells: map[netip.Prefix]*cell{}}
 		s.slots[slot] = b
 	}
-	b.add(p, sub, host, n, t, s.max, s.subCap, &s.scratch)
+	s.truncated += b.add(p, sub, host, n, t, s.max, s.subCap, &s.scratch)
 	s.prune(at)
 }
 
-func (b *bucket) add(p, sub netip.Prefix, host netip.Addr, n uint64, t traffic, max, subCap int, scratch *[]uint64) {
+// add returns how many prefixes the bucket lost to its cap: evicted cells,
+// or the new prefix when it was refused.
+func (b *bucket) add(p, sub netip.Prefix, host netip.Addr, n uint64, t traffic, max, subCap int, scratch *[]uint64) (lost uint64) {
 	b.seen.add(p)
 	if c, ok := b.cells[p]; ok {
 		c.bytes += n
@@ -150,16 +155,21 @@ func (b *bucket) add(p, sub netip.Prefix, host netip.Addr, n uint64, t traffic, 
 		if b.minOK && p == b.minP {
 			b.minOK = false
 		}
-		return
+		return 0
 	}
-	if len(b.cells) >= max && !b.evict(max/16+1, n, scratch) {
-		return
+	if len(b.cells) >= max {
+		freed := b.evict(max/16+1, n, scratch)
+		lost = uint64(freed)
+		if freed == 0 {
+			return 1
+		}
 	}
 	c := &cell{bytes: n}
 	c.note(n, t)
 	c.noteHost(host, n)
 	c.noteSub(sub, host, n, subCap)
 	b.cells[p] = c
+	return lost
 }
 
 // noteSub keeps the busiest sub-ranges in this bucket, the same way
@@ -232,13 +242,13 @@ func (c *cell) noteHost(host netip.Addr, n uint64) {
 }
 
 // evict makes room in a full bucket for a prefix with n bytes. It drops up
-// to k of the smallest cells, but only cells smaller than n, and reports
-// whether any room was made. Freeing a batch at once keeps a full bucket
+// to k of the smallest cells, but only cells smaller than n, and returns
+// how many it freed. Freeing a batch at once keeps a full bucket
 // from rescanning every cell on each new prefix: with a full-table flow
 // mix nearly every record is a new prefix (#51).
-func (b *bucket) evict(k int, n uint64, scratch *[]uint64) bool {
+func (b *bucket) evict(k int, n uint64, scratch *[]uint64) int {
 	if b.minOK && n <= b.minB {
-		return false
+		return 0
 	}
 	vals := (*scratch)[:0]
 	if cap(vals) < len(b.cells) {
@@ -260,21 +270,31 @@ func (b *bucket) evict(k int, n uint64, scratch *[]uint64) bool {
 				break
 			}
 		}
-		return false
+		return 0
 	}
 	thr := vals[k-1]
 	ties := k - sort.Search(k, func(i int) bool { return vals[i] >= thr })
+	freed := 0
 	for p, c := range b.cells {
 		switch {
 		case c.bytes < thr:
 			delete(b.cells, p)
+			freed++
 		case c.bytes == thr && ties > 0:
 			delete(b.cells, p)
 			ties--
+			freed++
 		}
 	}
 	b.minOK = false
-	return true
+	return freed
+}
+
+// truncatedTotal is the prefixes lost to the cap since start.
+func (s *slide) truncatedTotal() uint64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.truncated
 }
 
 // tracked is the distinct prefixes observed in the current window,
