@@ -40,6 +40,7 @@ The image entrypoint is the same binary. Flags go after the image name.
 | `max_improvements` | 50 | no | Cap on active improvements. Integer from 0 to 10000. `0` retires every improvement on the next decision. Biggest gains win when the cap binds, or the scorer's [`improvement_weights`](#improvement-weights) when set. |
 | `hold_time` | 0 | inject: positive | Minimum life of an improvement, and the cooldown after a flip-back or a confirmed RIB leave. `0` is legal in observe and suggest (a flip can happen on the next evaluation). Negative is an error. |
 | `improvement_ttl` | `1h` | no | Retire an improvement after this long so the native path is measured again. A negative duration disables the TTL. `0` selects the default `1h`. While it is active the prefix stays a probe target after its source drops it. |
+| `flap_quarantine` | on | no | Parks a prefix that keeps changing its chosen provider (#228). See [`flap_quarantine`](#flap_quarantine). |
 | `thresholds` | zeros | inject: both positive | See below. With both deltas at `0`, the decision engine records no improvement in any mode. |
 | `providers` | none | at least one | Probe sources and injection next hops. |
 | `exchanges` | none | no | Internet exchanges: each listed peer is a provider with its own next hop on the peering LAN, always route-checked. See [`exchanges`](#exchanges). Lab-proven only. |
@@ -108,6 +109,20 @@ communities_cause:
   commit: ["64512:300"]
   cost: ["64512:1:40"]
 ```
+
+### `flap_quarantine`
+
+| Key | Default | Bounds |
+|---|---|---|
+| `disabled` | `false` | `true` turns the quarantine off and releases anything parked on the next decision. |
+| `max_flips` | 6 | At least 1. A prefix is parked when one more change would make it more than this many in `window`. |
+| `window` | `1h` | Positive. Changes older than this no longer count. |
+| `cooldown` | `15m` | Positive. How long the first quarantine lasts. |
+| `max_cooldown` | `4h` | Not shorter than `cooldown` (default raised to `cooldown` when that is longer). Caps the grown cool-down, and a prefix quiet for longer than this after its release starts over at `cooldown`. |
+
+A change is a new improvement (any cause), a performance switch to another provider, or a flip-back to the native path. The change that would pass `max_flips` is not made: the improvement is withdrawn (or never announced) and the prefix stays on the router's native path until the cool-down ends, even while another provider keeps measuring better. Each repeat offense doubles the cool-down, up to `max_cooldown`. It only withdraws and blocks; it never announces, and `hold_time`, `confirm_rounds`, the cap, the allowlist, and the route check apply as before. The quarantine is in memory: a restart or an HA handover clears it.
+
+A start and an end are logged (`flap quarantine started`, `flap quarantine released`), emitted as `flap.quarantined` and `flap.released` ([EVENTS.md](EVENTS.md)), and written to the audit log as the `system` actor (`flap.quarantine`, `flap.release`). `GET /api/quarantine` lists the parked prefixes (`prefix`, `since`, `until`, `flips`, `strikes`); `/api/prefixes` rows and the prefix page carry the same `quarantine` object. `POST /api/quarantine/release` with `{"prefix": "..."}` (operator role, auth required) ends one early and is audited; a prefix that flips again is parked again for longer. Metrics: `packeteer_flap_quarantined` (count) and `packeteer_flap_quarantine{prefix,strikes}`. `flap_quarantine` applies on a SIGHUP reload without a restart.
 
 ### `thresholds`
 
@@ -314,7 +329,7 @@ Paths are read when the route is announced. If the router stops sending the nati
 
 Applied while running:
 
-- `thresholds`, `hold_time`, `improvement_ttl`, and `max_improvements`. Lowering the cap, including to `0`, retires the lowest-ranked improvements on the next decision, inside `hold_time` and without a cooldown. Planned moves go first, then performance, then VIP, then static pins. Inside a rank the smallest gain goes first, and a larger prefix before a smaller one. Survivors keep their slots. Raising the cap can admit a retired prefix on the next round. With `inbound` configured, `max_improvements` is restart-only: the inbound controller shares the cap and reads it at start, so a reload that changes it is refused (`changed max_improvements (shared with inbound)`).
+- `thresholds`, `flap_quarantine`, `hold_time`, `improvement_ttl`, and `max_improvements`. Lowering the cap, including to `0`, retires the lowest-ranked improvements on the next decision, inside `hold_time` and without a cooldown. Planned moves go first, then performance, then VIP, then static pins. Inside a rank the smallest gain goes first, and a larger prefix before a smaller one. Survivors keep their slots. Raising the cap can admit a retired prefix on the next round. With `inbound` configured, `max_improvements` is restart-only: the inbound controller shares the cap and reads it at start, so a reload that changes it is refused (`changed max_improvements (shared with inbound)`).
 - `policies` and `sources`. An unchanged instance keeps running. A new or changed one is built and started; a removed one is stopped. The others are not touched. Replacing the flow source the anomaly detector was built with is refused. A source that listens (flow) is stopped and the new one binds the same address when the first start finds it busy.
 - Probe timing: `probe.interval`, `probe.timeout`, `probe.packets`, `probe.retry_loss_pct`, and `probe.retry_packets`. The staleness window follows them. `probe.workers`, `probe.rate_limit_pps`, `probe.per_target_concurrency`, `probe.min_replies`, `probe.dispersion_ms`, `probe.prober_recheck_rounds`, `probe.prober_memory`, and `probe.indirect` need a restart.
 - `mode` and `allowlist`. Leaving inject withdraws every Packeteer route before the mode changes, so a concurrent sync cannot announce again. Entering inject runs the same inject checks as a start, then binds the speaker the process started with. The announcer's mode, allowlist, and cap change only after the plugins swap, so a refused reload never announces. That works only when `packeteer_community`, `local_pref`, the allowlist, the announcer, and the neighbors were already valid: changing those is still a restart, so a file that only flips mode was already able to inject. Shrinking the allowlist retires a prefix that is no longer covered (`not allowlisted`) on the next decision, and the announcer withdraws it.

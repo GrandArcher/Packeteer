@@ -1156,6 +1156,8 @@ jobs:
           go-version-file: go.mod
       - name: FRR announce/withdraw lab
         run: bash lab/e2e.sh
+      - name: FRR flap quarantine lab (oscillating latency withdraws after max_flips, native path while parked, cool-down release, SIGTERM)
+        run: bash lab/e2e-flap.sh
       - name: FRR commit-control lab
         run: bash lab/e2e-commit.sh
       - name: FRR cost-mode lab

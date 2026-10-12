@@ -149,6 +149,7 @@ function prefixCard(row) {
   if (row.action) head.appendChild(el("span", "badge", row.action));
   head.appendChild(el("span", row.in_rib ? "badge" : "badge muted", row.in_rib ? "in RIB" : "not in RIB"));
   if (row.heterogeneous) head.appendChild(el("span", "badge warn", "heterogeneous"));
+  if (row.quarantine) head.appendChild(el("span", "badge warn", "quarantined"));
   card.appendChild(head);
   if (row.reason) card.appendChild(el("p", "reason", row.reason));
   var table = el("table");

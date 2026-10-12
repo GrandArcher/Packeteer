@@ -154,6 +154,16 @@ func (w *eventWatch) improvements(now time.Time, changes []policy.Change) {
 	}
 }
 
+// quarantines reports flap quarantines starting and ending (#228).
+func (w *eventWatch) quarantines(now time.Time, changes []policy.QuarantineChange) {
+	if w == nil || w.out == nil {
+		return
+	}
+	for _, c := range changes {
+		w.out.Emit(quarantineEvent(now, c))
+	}
+}
+
 // providers reports probe-source transitions. A provider first seen down
 // is reported; one first seen up is not.
 func (w *eventWatch) providerStatus(now time.Time, st []probe.ProviderStatus) {

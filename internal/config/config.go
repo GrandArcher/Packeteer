@@ -108,7 +108,10 @@ type Config struct {
 	// path is re-measured (default 1h; negative disables).
 	ImprovementTTL time.Duration `yaml:"improvement_ttl"`
 	Thresholds     Thresholds    `yaml:"thresholds"`
-	Providers      []Provider    `yaml:"providers"`
+	// FlapQuarantine parks a prefix whose chosen provider keeps changing
+	// (#228). On by default; it only withdraws.
+	FlapQuarantine FlapQuarantine `yaml:"flap_quarantine"`
+	Providers      []Provider     `yaml:"providers"`
 	// Exchanges are Internet exchanges whose peers are providers (#27).
 	// Parse expands every peer into Providers, so the rest of the
 	// controller sees each peer as a provider with its own next hop.
@@ -460,6 +463,26 @@ type Thresholds struct {
 	ConfirmRounds int `yaml:"confirm_rounds"`
 }
 
+// Flap quarantine defaults (#228).
+const (
+	DefaultFlapMaxFlips    = 6
+	DefaultFlapWindow      = time.Hour
+	DefaultFlapCooldown    = 15 * time.Minute
+	DefaultFlapMaxCooldown = 4 * time.Hour
+)
+
+// FlapQuarantine withdraws Packeteer's route for a prefix that changes its
+// chosen provider more than MaxFlips times in Window, and leaves it on the
+// router's native path for Cooldown. Cooldown doubles on each repeat
+// offense inside MaxCooldown of the last release, up to MaxCooldown.
+type FlapQuarantine struct {
+	Disabled    bool          `yaml:"disabled"`
+	MaxFlips    int           `yaml:"max_flips"`
+	Window      time.Duration `yaml:"window"`
+	Cooldown    time.Duration `yaml:"cooldown"`
+	MaxCooldown time.Duration `yaml:"max_cooldown"`
+}
+
 // CommunityCauses is an optional list of extra outbound communities per
 // improvement cause (#132). Each value is a standard community or a large
 // community (RFC 8092). Unknown keys are rejected. An empty list is the
@@ -725,6 +748,20 @@ func (c *Config) applyDefaults() {
 	if c.Thresholds.ConfirmRounds == 0 {
 		c.Thresholds.ConfirmRounds = 1
 	}
+	if f := &c.FlapQuarantine; !f.Disabled {
+		if f.MaxFlips == 0 {
+			f.MaxFlips = DefaultFlapMaxFlips
+		}
+		if f.Window == 0 {
+			f.Window = DefaultFlapWindow
+		}
+		if f.Cooldown == 0 {
+			f.Cooldown = DefaultFlapCooldown
+		}
+		if f.MaxCooldown == 0 {
+			f.MaxCooldown = max(DefaultFlapMaxCooldown, f.Cooldown)
+		}
+	}
 	if strings.TrimSpace(c.Log.Level) == "" {
 		c.Log.Level = "info"
 	}
@@ -822,6 +859,21 @@ func (c *Config) Validate() error {
 
 	if c.HoldTime < 0 {
 		add("hold_time %s must not be negative", c.HoldTime)
+	}
+
+	if f := c.FlapQuarantine; !f.Disabled {
+		if f.MaxFlips < 1 {
+			add("flap_quarantine.max_flips %d must be at least 1", f.MaxFlips)
+		}
+		if f.Window <= 0 {
+			add("flap_quarantine.window %s must be positive", f.Window)
+		}
+		if f.Cooldown <= 0 {
+			add("flap_quarantine.cooldown %s must be positive", f.Cooldown)
+		}
+		if f.MaxCooldown < f.Cooldown {
+			add("flap_quarantine.max_cooldown %s must not be shorter than cooldown %s", f.MaxCooldown, f.Cooldown)
+		}
 	}
 
 	if c.Thresholds.MinLossDeltaPct < 0 || c.Thresholds.MinLossDeltaPct > 100 {

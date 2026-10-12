@@ -160,7 +160,7 @@ func normTable(t []plugin.RouterExport) []plugin.RouterExport {
 // onlineTop are top-level keys a reload applies. probe and bgp are split
 // below: only some of their fields apply online.
 var onlineTop = map[string]bool{
-	"mode": true, "thresholds": true, "hold_time": true, "improvement_ttl": true,
+	"mode": true, "thresholds": true, "hold_time": true, "improvement_ttl": true, "flap_quarantine": true,
 	"max_improvements": true, "policies": true, "sources": true, "allowlist": true,
 }
 

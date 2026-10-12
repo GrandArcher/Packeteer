@@ -69,6 +69,8 @@ func (s *Server) routeTable() []route {
 		{"POST /api/mitigations", operator, s.handleMitigationAdd},
 		{"DELETE /api/mitigations/{id}", operator, s.handleMitigationRemove},
 		{"GET /api/anomalies", viewer, s.handleAnomalies},
+		{"GET /api/quarantine", viewer, s.handleQuarantine},
+		{"POST /api/quarantine/release", operator, s.handleQuarantineRelease},
 		{"GET /api/leaks", viewer, s.handleLeaks},
 		{"POST /api/leaks/clear", operator, s.handleLeakClear},
 		{"GET /api/troubleshoot", viewer, s.handleToolStatus},

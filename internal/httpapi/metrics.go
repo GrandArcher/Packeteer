@@ -115,6 +115,12 @@ func Metrics(s Snapshot) []byte {
 		savings += im.EstSavings
 	}
 	writeGauge(&b, "packeteer_improvement", "Active improvement. cause is performance, commit, or cost. The value is always 1.", imps...)
+	var parked []sample
+	for _, q := range s.Quarantined {
+		parked = append(parked, sample{labels: []lbl{{"prefix", q.Prefix}, {"strikes", strconv.Itoa(q.Strikes)}}, value: 1})
+	}
+	writeGauge(&b, "packeteer_flap_quarantine", "Prefix held on its native path after changing provider too often. The value is always 1.", parked...)
+	writeGauge(&b, "packeteer_flap_quarantined", "Number of prefixes in flap quarantine.", sample{value: float64(len(s.Quarantined))})
 	writeGauge(&b, "packeteer_estimated_savings", "Sum of est_savings over active improvements: native cost per Mbps minus steered cost per Mbps, times prefix volume. Negative is extra spend.",
 		sample{value: savings})
 

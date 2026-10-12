@@ -29,6 +29,8 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 
 ### Added
 
+- Flap quarantine (#228): a prefix that changes provider over `max_flips` times in `window` is withdrawn and held on its native path for a doubling cool-down. Events, audit, metric, release API.
+
 - Measured-prefix list is server-paged (#183): `/api/prefixes` takes `limit`, `offset`, `prefix`, `asn`, `provider`, `differs`, `sort`; `/prefixes.html` is a table whose rows open the card, filters in the URL.
 - Troubleshooting page draws looking glass paths and per-provider traceroute hops (origin AS from the learned RIB, reverse name, hop diagram) as tables, with raw JSON, rerun, and remove, read-only with roles unchanged (#180).
 - Leak watch (#199): optional `leak_watch` withdraws one injected route seen outside the AS and holds it out until `POST /api/leaks/clear`; rollback `enabled: false`.

@@ -2,6 +2,7 @@ package policy
 
 import (
 	"net/netip"
+	"sort"
 	"sync"
 	"time"
 
@@ -31,6 +32,41 @@ func (e *Engine) Evaluate(in Input, now time.Time) []Change {
 	st, out := Decide(e.state, in, e.cfg, e.scorer, now)
 	e.state, e.last, e.at = st, out, now
 	return out.Changes
+}
+
+// Quarantined returns the prefixes parked by the flap quarantine, sorted
+// by prefix.
+func (e *Engine) Quarantined() []Quarantine {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	out := make([]Quarantine, 0, len(e.state.quarantine))
+	for _, q := range e.state.quarantine {
+		out = append(out, q)
+	}
+	sort.Slice(out, func(i, j int) bool { return lessPrefix(out[i].Prefix, out[j].Prefix) })
+	return out
+}
+
+// QuarantineChanges are the quarantines the latest evaluation started or
+// ended.
+func (e *Engine) QuarantineChanges() []QuarantineChange {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	return append([]QuarantineChange(nil), e.last.Quarantines...)
+}
+
+// Release ends a prefix's quarantine at an operator's request. It reports
+// false when the prefix is not quarantined. It announces nothing: the next
+// evaluation decides the prefix as usual, and a prefix that flips again is
+// parked again with a longer cool-down.
+func (e *Engine) Release(p netip.Prefix, now time.Time) (Quarantine, bool) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	q, ok := e.state.quarantine[p.Masked()]
+	if ok {
+		e.state.releaseQuarantine(q.Prefix, now)
+	}
+	return q, ok
 }
 
 // Decisions returns the latest per-prefix decisions and when they were made.

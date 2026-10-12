@@ -61,6 +61,8 @@ const (
 	EventAnomalyCleared     = "anomaly.cleared"
 	EventLeakDetected       = "leak.detected"
 	EventLeakCleared        = "leak.cleared"
+	EventFlapQuarantined    = "flap.quarantined"
+	EventFlapReleased       = "flap.released"
 	EventHAStandby          = "ha.standby"
 	EventHAActive           = "ha.active"
 	// EventAudit is one audit log record (#32): a change or sign-in on
@@ -135,6 +137,10 @@ var eventCatalog = []EventSpec{
 		Summary: "A route carrying packeteer_community, or an injected prefix with the local ASN in its path, was seen outside the AS. The route is withdrawn and held out until an operator clears it."},
 	{Kind: EventLeakCleared, Severity: SeverityInfo, Group: "leak", Keys: []string{"prefix"}, TrapID: 32, Resolves: true,
 		Summary: "An operator cleared the hold on a leaked prefix; it may be announced again."},
+	{Kind: EventFlapQuarantined, Severity: SeverityWarning, Group: "flap", Keys: []string{"prefix"}, TrapID: 33,
+		Summary: "A prefix changed its chosen provider too often. Its route is withdrawn and it stays on the native path until the cool-down ends or an operator releases it."},
+	{Kind: EventFlapReleased, Severity: SeverityInfo, Group: "flap", Keys: []string{"prefix"}, TrapID: 34, Resolves: true,
+		Summary: "A flap quarantine ended: the cool-down elapsed, an operator released the prefix, or the feature was turned off."},
 }
 
 // EventCatalog returns a copy of every event kind the controller emits.
