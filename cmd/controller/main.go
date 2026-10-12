@@ -605,6 +605,7 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 		log.Error("refusing to start", "err", err)
 		return 1
 	}
+	tools.SetQueue(engine)
 	watch := newEventWatch(dispatch, cfg.Mode)
 	if err := wireRIBSources(plugins, view); err != nil {
 		log.Error("refusing to start", "err", err)
@@ -1426,10 +1427,14 @@ func newTools(cfg *config.Config, plugins *pluginhost.Set) (*troubleshoot.Tools,
 		MaxHops:   cfg.Troubleshoot.MaxHops,
 		Hop:       traceroute.Hop,
 		Reverse:   reverseName,
+		Indirect:  indirectTracer(cfg),
 		Limiter:   rate.NewLimiter(rate.Every(time.Minute/time.Duration(rpm)), min(rpm, 3)),
 	}
 	if plugins.Whois != nil {
 		opt.Whois = plugins.Whois.Plugin
+	}
+	if plugins.Scorer != nil {
+		opt.Scorer = plugins.Scorer.Plugin
 	}
 	return troubleshoot.New(opt), nil
 }
@@ -1501,26 +1506,39 @@ func newEngine(cfg *config.Config, plugins *pluginhost.Set, log *slog.Logger, on
 	})
 }
 
+// indirectTracer walks TTL from a provider's source with the built-in Linux
+// traceroute. It uses the probe.indirect settings when they are enabled and
+// the same defaults otherwise, so an on-demand probe's indirect fallback
+// (#126) does not need background indirect probing on. Hops on an exchange
+// LAN are not adopted.
+func indirectTracer(cfg *config.Config) traceroute.Tracer {
+	in := cfg.Probe.Indirect
+	if in == nil || !in.Enabled {
+		in = &config.ProbeIndirect{MaxHops: config.DefaultIndirectMaxHops, Probes: config.DefaultIndirectProbes,
+			MinReplies: config.DefaultIndirectMinReplies, Port: config.DefaultIndirectPort, Timeout: config.DefaultIndirectTimeout}
+	}
+	lans := exchangeLANPrefixes(cfg)
+	return traceroute.Tracer{
+		MaxHops:    in.MaxHops,
+		Probes:     in.Probes,
+		MinReplies: in.MinReplies,
+		Port:       in.Port,
+		Timeout:    in.Timeout,
+		Hop:        traceroute.Hop,
+		Skip:       func(a netip.Addr) bool { return exchange.ContainsAddr(lans, a) },
+	}
+}
+
 // indirectOptions turns probe.indirect into engine options (#123). Nil
-// when it is omitted or disabled. Traces use the built-in Linux
-// traceroute from each provider's source; every packet waits on the
-// engine's rate limit. Hops on an exchange LAN are not adopted.
+// when it is omitted or disabled. Traces use indirectTracer; every packet
+// waits on the engine's rate limit.
 func indirectOptions(cfg *config.Config) *probe.Indirect {
 	in := cfg.Probe.Indirect
 	if in == nil || !in.Enabled {
 		return nil
 	}
-	lans := exchangeLANPrefixes(cfg)
 	return &probe.Indirect{
-		Tracer: traceroute.Tracer{
-			MaxHops:    in.MaxHops,
-			Probes:     in.Probes,
-			MinReplies: in.MinReplies,
-			Port:       in.Port,
-			Timeout:    in.Timeout,
-			Hop:        traceroute.Hop,
-			Skip:       func(a netip.Addr) bool { return exchange.ContainsAddr(lans, a) },
-		},
+		Tracer:   indirectTracer(cfg),
 		Budget:   in.Budget,
 		MinShare: in.Timeout,
 		CacheTTL: in.CacheTTL,

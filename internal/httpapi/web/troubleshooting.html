@@ -49,7 +49,7 @@
 <main>
   <section>
     <h2>Troubleshooting</h2>
-    <p class="tag">Read-only. The looking glass reads the learned RIB. Probe, traceroute, and whois need <code>troubleshoot.enabled</code> and are rate limited. Nothing here announces.</p>
+    <p class="tag">The looking glass reads the learned RIB. Probe, traceroute, and whois need <code>troubleshoot.enabled</code> and are rate limited. Nothing here announces. Probe and optimize only queues the covering learned prefix for measuring; any move comes from the decision engine.</p>
     <div class="controls">
       <label>Tool <select id="tool-name">
         <option value="lookingglass">Looking glass</option>
@@ -57,7 +57,7 @@
         <option value="traceroute">Traceroute</option>
         <option value="whois">Whois</option>
       </select></label>
-      <label>Target <input id="tool-target" type="text" size="24" placeholder="198.51.100.0/24"></label>
+      <label>Target <input id="tool-target" type="text" size="24" placeholder="198.51.100.0/24 or host.example.net"></label>
       <label>Provider <select id="tool-provider"><option value="">all</option></select></label>
       <button type="button" id="tool-run">Run</button>
     </div>

@@ -179,6 +179,8 @@ type Engine struct {
 	// still probes on this round. The global rate limit still applies.
 	// An empty set clears the mark. Guarded by mu.
 	urgent map[netip.Prefix]struct{}
+	// manual is the operator's queue (QueueManual, #126), guarded by mu.
+	manual map[netip.Prefix]*manualEntry
 	// probedAt is when Run last probed the prefix. SetUrgent uses it so
 	// a confirm streak does not wake the scheduler before the quarter-
 	// interval gap. Guarded by mu.
@@ -679,6 +681,7 @@ func (e *Engine) gatherTargets(ctx context.Context) ([]plugin.Target, bool) {
 	if !incomplete {
 		e.keepImproved(&out)
 		e.applyUrgent(&out)
+		e.applyManual(&out)
 		e.dropExchangeLANs(&out)
 	}
 	return out, incomplete
@@ -786,6 +789,7 @@ func (e *Engine) rememberProbes(probed map[netip.Prefix]struct{}) {
 	now := e.opt.Now()
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	e.noteManualProbedLocked(probed)
 	if e.probedAt == nil {
 		e.probedAt = map[netip.Prefix]time.Time{}
 	}

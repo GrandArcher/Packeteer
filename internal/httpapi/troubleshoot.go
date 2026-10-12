@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/GrandArcher/Packeteer/internal/probe"
 	"github.com/GrandArcher/Packeteer/internal/troubleshoot"
 )
 
@@ -106,18 +107,31 @@ func (s *Server) handleToolProbe(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	a, ok := s.toolTarget(w, req)
+	ctx, cancel := context.WithTimeout(r.Context(), toolTimeout)
+	defer cancel()
+	ans, err := s.tools.Probe(ctx, req.Target)
+	if err != nil {
+		writeToolError(w, err)
+		return
+	}
+	s.log.Info("on-demand probe", "target", ans.Target, "host", ans.Host, "remote", r.RemoteAddr)
+	writeJSON(w, http.StatusOK, ans)
+}
+
+func (s *Server) handleToolOptimize(w http.ResponseWriter, r *http.Request) {
+	req, ok := s.readTool(w, r)
 	if !ok {
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), toolTimeout)
 	defer cancel()
-	ans, err := s.tools.Probe(ctx, a)
+	ans, err := s.tools.Optimize(ctx, req.Target)
 	if err != nil {
 		writeToolError(w, err)
 		return
 	}
-	s.log.Info("on-demand probe", "target", a, "remote", r.RemoteAddr)
+	noteAudit(r, ans.Prefix.String(), "queued for probing from "+ans.Target.String())
+	s.log.Info("probe and optimize queued", "prefix", ans.Prefix, "target", ans.Target, "remote", r.RemoteAddr)
 	writeJSON(w, http.StatusOK, ans)
 }
 
@@ -166,8 +180,10 @@ func writeToolError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, troubleshoot.ErrDisabled):
 		status = http.StatusForbidden
-	case errors.Is(err, troubleshoot.ErrNoRIB), errors.Is(err, troubleshoot.ErrNoWhois):
+	case errors.Is(err, troubleshoot.ErrNoRIB), errors.Is(err, troubleshoot.ErrNoWhois), errors.Is(err, troubleshoot.ErrNoOptimize):
 		status = http.StatusNotFound
+	case errors.Is(err, probe.ErrManualFull):
+		status = http.StatusConflict
 	case errors.Is(err, troubleshoot.ErrBusy):
 		w.Header().Set("Retry-After", "10")
 		status = http.StatusTooManyRequests

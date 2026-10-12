@@ -1,0 +1,20 @@
+{
+  "host": "host.example.net",
+  "addresses": ["198.51.100.9", "2001:db8::9"],
+  "target": "198.51.100.9",
+  "route": {"prefix": "198.51.100.0/24", "next_hop": "192.0.2.1", "provider": "transit-a", "as_path": [64496, 64500], "source": "ibgp"},
+  "current": "transit-a",
+  "best": "transit-b",
+  "results": [
+    {
+      "provider": "transit-a", "prefix": "198.51.100.9/32", "target": "198.51.100.9", "prober": "icmp",
+      "stats": {"sent": 5, "received": 4, "loss_pct": 20, "rtt_min": 21000000, "rtt_avg": 24000000, "rtt_max": 30000000, "jitter": 3000000},
+      "time": "2026-01-01T00:00:00Z"
+    },
+    {
+      "provider": "transit-b", "prefix": "198.51.100.9/32", "target": "192.0.2.77", "prober": "icmp", "indirect": true,
+      "stats": {"sent": 5, "received": 5, "loss_pct": 0, "rtt_min": 9000000, "rtt_avg": 11000000, "rtt_max": 14000000, "jitter": 1000000},
+      "time": "2026-01-01T00:00:00Z"
+    }
+  ]
+}

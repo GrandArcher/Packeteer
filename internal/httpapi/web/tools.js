@@ -4,7 +4,9 @@
 // newest first for this browser session only. Needs el, clear, getJSON,
 // postJSON, fmtAS, fmtVia, and fmtMs from app.js. Read-only: the
 // requests are the ones the page always made, with the same roles and
-// rate limits.
+// rate limits. A probe answer adds "Probe and optimize" (#126), which asks
+// the controller to measure the covering learned prefix for a while; any
+// move still comes from the decision engine.
 
 var TOOL_STACK_MAX = 20;
 var TOOL_NAMES = {lookingglass: "Looking glass", probe: "Probe", traceroute: "Traceroute", whois: "Whois"};
@@ -143,6 +145,83 @@ function renderTrace(a) {
   return box;
 }
 
+function nsToMs(ns) {
+  return ns == null ? null : ns / 1e6;
+}
+
+function probeRole(a, provider) {
+  var roles = [];
+  if (provider === a.current) roles.push("current");
+  if (provider === a.best) roles.push("best");
+  return roles.join(", ");
+}
+
+function probeRow(a, r) {
+  var tr = el("tr");
+  if (r.provider === a.current) tr.className = "is-current";
+  if (r.provider === a.best) tr.className += " is-best";
+  var st = r.stats || {};
+  var answered = !r.error && st.received > 0;
+  tr.appendChild(toolCell(r.provider));
+  tr.appendChild(toolCell(probeRole(a, r.provider)));
+  tr.appendChild(toolCell(r.error ? "" : fmtPct(st.loss_pct), "num"));
+  tr.appendChild(toolCell(answered ? fmtMs(nsToMs(st.rtt_avg)) : "", "num"));
+  tr.appendChild(toolCell(answered ? fmtMs(nsToMs(st.jitter)) : "", "num"));
+  tr.appendChild(toolCell(r.target, "mono"));
+  tr.appendChild(toolCell(r.indirect ? "indirect: nothing in the target answered, so the highest stable traceroute hop was probed" : (r.error || (answered ? "" : "no reply"))));
+  return tr;
+}
+
+function renderProbe(a) {
+  var box = el("div");
+  var sec = el("div", "tool-section");
+  var used = a.host ? a.host + " resolved to " + a.target : "Probed " + a.target;
+  var more = (a.addresses || []).filter(function (x) { return x !== a.target; });
+  if (a.host && more.length) used += " (also " + more.join(", ") + ")";
+  sec.appendChild(el("p", "tag", used));
+  if (a.route) {
+    sec.appendChild(el("p", "tag", "Covering learned prefix " + a.route.prefix + (a.current ? ", current exit " + a.current : "") +
+      (a.best && a.best !== a.current ? ". The best measured exit is " + a.best + "." : ".")));
+  } else {
+    sec.appendChild(el("p", "tag", "No learned prefix covers this address."));
+  }
+  sec.appendChild(toolTable(["Provider", "Exit",
+    {text: "Loss", title: "Packets with no reply."}, "RTT", "Jitter", "Probed address", "Note"],
+  (a.results || []).map(function (r) { return probeRow(a, r); })));
+  box.appendChild(sec);
+  if (a.route && a.route.prefix.slice(-2) !== "/0") box.appendChild(optimizeControl(a));
+  return box;
+}
+
+function optimizeControl(a) {
+  var box = el("div", "tool-section");
+  var btn = el("button", "", "Probe and optimize");
+  btn.type = "button";
+  btn.title = "Measure " + a.route.prefix + " on the next round. A move still needs the decision rules.";
+  var out = el("p", "tag");
+  out.id = "optimize-status";
+  btn.addEventListener("click", function () {
+    btn.disabled = true;
+    out.textContent = "Queuing…";
+    postJSON("/api/troubleshoot/optimize", {target: a.target}).then(function (r) {
+      clear(out);
+      out.appendChild(document.createTextNode("Queued " + r.prefix + " for probing until " + new Date(r.expires).toLocaleTimeString() +
+        ". Any improvement comes from the decision engine: see "));
+      var link = el("a", "", "the prefix page");
+      link.href = prefixHref(r.prefix);
+      out.appendChild(link);
+      out.appendChild(document.createTextNode("."));
+      btn.disabled = false;
+    }, function (err) {
+      out.textContent = err.message;
+      btn.disabled = false;
+    });
+  });
+  box.appendChild(btn);
+  box.appendChild(out);
+  return box;
+}
+
 function rawJSON(data, open) {
   var d = el("details", "tool-raw");
   if (open) d.open = true;
@@ -179,7 +258,8 @@ function paintEntry(e) {
   } else {
     if (e.tool === "lookingglass") e.node.appendChild(renderGlass(e.data));
     else if (e.tool === "traceroute") e.node.appendChild(renderTrace(e.data));
-    e.node.appendChild(rawJSON(e.data, e.tool !== "lookingglass" && e.tool !== "traceroute"));
+    else if (e.tool === "probe") e.node.appendChild(renderProbe(e.data));
+    e.node.appendChild(rawJSON(e.data, e.tool === "whois"));
   }
 }
 
@@ -222,7 +302,7 @@ function runTool() {
   var target = document.getElementById("tool-target").value.trim();
   var status = document.getElementById("tool-status");
   if (!target) {
-    status.textContent = "Enter a prefix, address, or ASN.";
+    status.textContent = "Enter a prefix, address, hostname, or ASN.";
     return;
   }
   status.textContent = "";

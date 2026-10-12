@@ -3,6 +3,7 @@ package httpapi
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/netip"
 	"strings"
@@ -52,10 +53,47 @@ type tsLimit struct{ n int }
 
 func (l *tsLimit) Allow() bool { l.n--; return l.n >= 0 }
 
+// tsResolver answers the one documentation hostname the tests use.
+type tsResolver struct{}
+
+func (tsResolver) LookupNetIP(_ context.Context, _, host string) ([]netip.Addr, error) {
+	if host == "host.example.net" {
+		return []netip.Addr{netip.MustParseAddr("127.0.0.1"), netip.MustParseAddr("198.51.100.9")}, nil
+	}
+	return nil, errors.New("no such host")
+}
+
+type tsScorer struct{ plugin.Base }
+
+func (tsScorer) Score(s plugin.PathStats) float64 { return s.LossPct }
+
+// tsQueue records what the probe-and-optimize action queued.
+type tsQueue struct {
+	got []netip.Prefix
+	ttl time.Duration
+	err error
+}
+
+func (q *tsQueue) QueueManual(p netip.Prefix, ttl time.Duration) error {
+	if q.err != nil {
+		return q.err
+	}
+	q.got, q.ttl = append(q.got, p), ttl
+	return nil
+}
+
 func toolServer(t *testing.T, enabled bool, lim troubleshoot.Limiter) (http.Handler, *tsProber) {
 	t.Helper()
-	pr := &tsProber{}
+	h, pr, _ := toolServerQ(t, enabled, lim)
+	return h, pr
+}
+
+func toolServerQ(t *testing.T, enabled bool, lim troubleshoot.Limiter) (http.Handler, *tsProber, *tsQueue) {
+	t.Helper()
+	pr, q := &tsProber{}, &tsQueue{}
 	tools := troubleshoot.New(troubleshoot.Options{
+		Resolver:  tsResolver{},
+		Scorer:    tsScorer{},
 		Enabled:   enabled,
 		Providers: []probe.Provider{{Name: "transit-a", Source: netip.MustParseAddr("192.0.2.10")}},
 		Probers:   []probe.NamedProber{{Name: "fake", Prober: pr}},
@@ -70,11 +108,12 @@ func toolServer(t *testing.T, enabled bool, lim troubleshoot.Limiter) (http.Hand
 		Limiter: lim,
 	})
 	tools.SetRIB(tsRIB{r: rib.Route{Prefix: netip.MustParsePrefix("198.51.100.0/24"), NextHop: netip.MustParseAddr("192.0.2.1"), Provider: "transit-a", ASPath: []uint32{64496}}})
+	tools.SetQueue(q)
 	s, err := New(Options{Tools: tools, Snapshot: func() Snapshot { return Assemble(sampleInput()) }})
 	if err != nil {
 		t.Fatal(err)
 	}
-	return s.Handler(), pr
+	return s.Handler(), pr, q
 }
 
 func TestToolStatusAndLookingGlass(t *testing.T) {

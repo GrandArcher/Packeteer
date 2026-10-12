@@ -136,7 +136,7 @@ func TestProbeAllProviders(t *testing.T) {
 	fp := &fakeProber{}
 	tl := New(Options{Enabled: true, Providers: provs, Probers: []probe.NamedProber{{Name: "fake", Prober: fp}}, Packets: 4, Timeout: 10 * time.Millisecond})
 	tl.SetRIB(testRIB())
-	ans, err := tl.Probe(context.Background(), addr("203.0.113.9"))
+	ans, err := tl.Probe(context.Background(), "203.0.113.9")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -156,7 +156,7 @@ func TestProbeAllProviders(t *testing.T) {
 func TestProbeSourceDownAndErrors(t *testing.T) {
 	fp := &fakeProber{fail: map[netip.Addr]error{addr("192.0.2.11"): fmt.Errorf("bind: %w", plugin.ErrSourceUnavailable)}}
 	tl := New(Options{Enabled: true, Providers: provs, Probers: []probe.NamedProber{{Name: "fake", Prober: fp}}})
-	ans, err := tl.Probe(context.Background(), addr("198.51.100.1"))
+	ans, err := tl.Probe(context.Background(), "198.51.100.1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -164,7 +164,7 @@ func TestProbeSourceDownAndErrors(t *testing.T) {
 		t.Fatalf("results: %+v", ans.Results)
 	}
 	for _, a := range []string{"127.0.0.1", "0.0.0.0", "224.0.0.1", "fe80::1", "255.255.255.255", "::1"} {
-		if _, err := tl.Probe(context.Background(), addr(a)); err == nil {
+		if _, err := tl.Probe(context.Background(), a); err == nil {
 			t.Errorf("%s: expected refusal", a)
 		}
 	}
@@ -176,7 +176,7 @@ func TestDisabledAndRateLimit(t *testing.T) {
 		t.Fatal("hop while disabled")
 		return netip.Addr{}, false, nil
 	}})
-	if _, err := off.Probe(context.Background(), addr("198.51.100.1")); !errors.Is(err, ErrDisabled) {
+	if _, err := off.Probe(context.Background(), "198.51.100.1"); !errors.Is(err, ErrDisabled) {
 		t.Fatalf("probe: %v", err)
 	}
 	if _, err := off.Traceroute(context.Background(), addr("198.51.100.1"), ""); !errors.Is(err, ErrDisabled) {
@@ -189,10 +189,10 @@ func TestDisabledAndRateLimit(t *testing.T) {
 		t.Fatal("probes sent while disabled")
 	}
 	on := New(Options{Enabled: true, Providers: provs, Probers: []probe.NamedProber{{Name: "fake", Prober: fp}}, Limiter: &allow{n: 1}})
-	if _, err := on.Probe(context.Background(), addr("198.51.100.1")); err != nil {
+	if _, err := on.Probe(context.Background(), "198.51.100.1"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := on.Probe(context.Background(), addr("198.51.100.1")); !errors.Is(err, ErrBusy) {
+	if _, err := on.Probe(context.Background(), "198.51.100.1"); !errors.Is(err, ErrBusy) {
 		t.Fatalf("second: %v", err)
 	}
 }
