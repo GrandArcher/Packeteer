@@ -94,7 +94,6 @@ type fakeRelease struct {
 	bins    map[string]string
 	badSig  bool
 	badSum  bool
-	hits    atomic.Int32
 	notes   map[string]string
 	missing map[string]bool // tag -> no signature asset
 }
@@ -115,7 +114,6 @@ func newFake(t *testing.T, versions ...string) *fakeRelease {
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /repos/example/packeteer/releases", func(w http.ResponseWriter, r *http.Request) {
-		f.hits.Add(1)
 		var parts []string
 		for _, v := range versions {
 			assets := []string{
@@ -579,5 +577,39 @@ func TestFailedApplyKeepsTheRollbackTarget(t *testing.T) {
 	}
 	if _, err := m3.Rollback(ctx, Request{Confirm: true}); err != nil {
 		t.Fatalf("rollback after the failed upgrade: %v", err)
+	}
+}
+
+func TestAbortKeepsTheRollbackTarget(t *testing.T) {
+	f := newFake(t, "v0.6.0", "v0.7.0")
+	r := newRig(t, f, "0.5.0")
+	r.noHA()
+	if _, err := r.m.Apply(context.Background(), Request{Tag: "v0.6.0", Confirm: true}); err != nil {
+		t.Fatal(err)
+	}
+	r.m.mu.Lock()
+	r.m.pending, r.m.undo = nil, nil // the 0.6.0 switch ran
+	r.m.mu.Unlock()
+	before, _ := r.m.store.load()
+	if _, err := r.m.Apply(context.Background(), Request{Tag: "v0.7.0", Confirm: true}); err != nil {
+		t.Fatal(err)
+	}
+	r.m.Abort("shutdown did not finish")
+	st, _ := r.m.store.load()
+	if st.Active != before.Active || st.Previous != before.Previous || st.Previous.Path != r.base {
+		t.Fatalf("after abort: active %+v previous %+v, want %+v %+v", st.Active, st.Previous, before.Active, before.Previous)
+	}
+}
+
+func TestRefusesRedirectToPlainHTTP(t *testing.T) {
+	f := newFake(t, "v0.6.0")
+	r := newRig(t, f, "0.5.0")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		http.Redirect(w, req, "http://example.net/packeteer-linux-amd64", http.StatusFound)
+	}))
+	t.Cleanup(srv.Close)
+	_, err := r.m.cl.get(context.Background(), srv.URL+"/dl", 1<<20, "")
+	if err == nil || !strings.Contains(err.Error(), "refusing non-https URL") {
+		t.Fatalf("redirect to plain http: err = %v", err)
 	}
 }

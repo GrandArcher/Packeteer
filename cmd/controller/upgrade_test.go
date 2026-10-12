@@ -101,7 +101,7 @@ func (e *haEdge) advertiseNative(t *testing.T) {
 
 const upgradeUser, upgradePass = "admin", "lab-password-1"
 
-func startUpgradeInstance(t *testing.T, edge *haEdge, cfgPath string, env map[string]string, httpPort int) *upgradeInstance {
+func startUpgradeInstance(t *testing.T, cfgPath string, env map[string]string, httpPort int) *upgradeInstance {
 	t.Helper()
 	in := &upgradeInstance{http: httpPort, done: make(chan int, 1), exited: make(chan struct{}), logs: &syncBuf{}}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -278,7 +278,7 @@ func TestDaemonUpgradeWithdrawsRelearnsAndRollsBack(t *testing.T) {
 	}
 
 	// Version A (the installed binary) announces the improvement.
-	a := startUpgradeInstance(t, edge, cfgPath, nil, httpPort)
+	a := startUpgradeInstance(t, cfgPath, nil, httpPort)
 	a.waitHTTP(t)
 	waitRoute("the first version to announce", a)
 
@@ -329,7 +329,7 @@ func TestDaemonUpgradeWithdrawsRelearnsAndRollsBack(t *testing.T) {
 	// not in its learned view.
 	edge.withdrawNative(t)
 	newEnv := map[string]string{upgrade.LaunchedEnv: "0.6.0"}
-	b := startUpgradeInstance(t, edge, cfgPath, newEnv, httpPort)
+	b := startUpgradeInstance(t, cfgPath, newEnv, httpPort)
 	b.waitHTTP(t)
 	deadline := time.Now().Add(6 * time.Second) // several probe rounds and hold times
 	for time.Now().Before(deadline) {
@@ -383,7 +383,7 @@ func TestSignalDuringPreparedUpgradeDoesNotStartTheNewVersion(t *testing.T) {
 		t.Skip("daemon upgrade test")
 	}
 	lab := newUpgradeLab(t)
-	a := startUpgradeInstance(t, lab.edge, lab.cfgPath, nil, lab.httpPort)
+	a := startUpgradeInstance(t, lab.cfgPath, nil, lab.httpPort)
 	a.waitHTTP(t)
 	if code, body := a.post(t, "/api/upgrade/apply", `{"tag":"v0.6.0","confirm":true}`); code != http.StatusAccepted {
 		t.Fatalf("apply: %d %s", code, body)

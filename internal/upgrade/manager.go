@@ -129,6 +129,7 @@ type Manager struct {
 	mu        sync.Mutex
 	busy      bool
 	pending   *Target
+	undo      *undoState // state fields before the pending switch
 	releases  []Release
 	checkedAt time.Time
 	checkErr  string
@@ -156,6 +157,9 @@ func New(opt Options, launched bool) (*Manager, error) {
 	if opt.HTTP == nil {
 		opt.HTTP = &http.Client{Timeout: 5 * time.Minute}
 	}
+	hc := *opt.HTTP
+	hc.CheckRedirect = checkRedirect
+	opt.HTTP = &hc
 	if opt.StopDelay == 0 {
 		opt.StopDelay = 500 * time.Millisecond
 	}
@@ -228,7 +232,12 @@ func (m *Manager) Abort(reason string) {
 		return
 	}
 	st.LastError = reason
-	revert(st)
+	if u := m.undo; u != nil {
+		st.Active, st.Previous, st.Attempts, st.Confirmed = u.active, u.previous, u.attempts, u.confirmed
+	} else {
+		revert(st)
+	}
+	m.undo = nil
 	_ = m.store.save(st, m.opt.Now())
 }
 
@@ -527,6 +536,7 @@ func (m *Manager) switchTo(e Entry, verb string) (Result, error) {
 			Active: Entry{Version: m.baseVer, Path: m.basePath}}
 	}
 	from := Normalize(m.opt.Version)
+	undo := &undoState{active: st.Active, previous: st.Previous, attempts: st.Attempts, confirmed: st.Confirmed}
 	st.Previous = st.Active
 	if st.Previous.Path == "" {
 		st.Previous = Entry{Version: m.baseVer, Path: m.basePath}
@@ -548,6 +558,7 @@ func (m *Manager) switchTo(e Entry, verb string) (Result, error) {
 	m.store.prune(st)
 	m.mu.Lock()
 	m.pending = &target
+	m.undo = undo
 	m.lastErr = ""
 	m.mu.Unlock()
 	delay := m.opt.StopDelay
@@ -596,4 +607,11 @@ func tail(s string) string {
 		return "…" + s[len(s)-n:]
 	}
 	return s
+}
+
+// undoState is what Abort puts back when a switch never ran.
+type undoState struct {
+	active, previous Entry
+	attempts         int
+	confirmed        bool
 }

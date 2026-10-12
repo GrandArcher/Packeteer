@@ -3,6 +3,7 @@ package upgrade
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -83,6 +84,15 @@ func allowedURL(raw string) (*url.URL, error) {
 		return u, nil
 	}
 	return nil, fmt.Errorf("refusing non-https URL %q", raw)
+}
+
+// checkRedirect applies the allowedURL rule to every redirect hop.
+func checkRedirect(req *http.Request, via []*http.Request) error {
+	if len(via) >= 10 {
+		return errors.New("stopped after 10 redirects")
+	}
+	_, err := allowedURL(req.URL.String())
+	return err
 }
 
 func (c *client) get(ctx context.Context, raw string, limit int64, accept string) ([]byte, error) {
