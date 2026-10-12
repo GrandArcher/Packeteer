@@ -121,6 +121,7 @@ func (c *Collector) Snapshot() Snapshot {
 	if decider != nil {
 		in.Decisions, in.DecidedAt = decider.Decisions()
 		in.Improvements = decider.Improvements()
+		in.Quarantined = decider.Quarantined()
 	}
 	if view != nil {
 		in.BGPConfigured = true

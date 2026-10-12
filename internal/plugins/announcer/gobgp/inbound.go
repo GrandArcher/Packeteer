@@ -358,5 +358,12 @@ func installInboundImport(ctx context.Context, srv *server.BgpServer, prefixes [
 	}}); err != nil {
 		return fmt.Errorf("inbound announcer: import assignment: %w", err)
 	}
+	// Paths learned before the policy existed (inbound entered inject on
+	// a running speaker, #233) stay in the global RIB until the import
+	// policy runs on them again. Left alone they outrank the steer route
+	// and it is never advertised.
+	if err := srv.ResetPeer(ctx, &api.ResetPeerRequest{Soft: true, Direction: api.ResetPeerRequest_IN}); err != nil {
+		return fmt.Errorf("inbound announcer: soft reset in: %w", err)
+	}
 	return nil
 }

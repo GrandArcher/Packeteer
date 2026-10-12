@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"math"
 	"net/netip"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -64,6 +65,8 @@ type Config struct {
 	// Providers carries group, precedence, and cc_disable. Empty means
 	// commit control has no provider policy (the weighted scorer ignores it).
 	Providers []ProviderPolicy
+	// Flap parks prefixes whose chosen provider keeps changing (#228).
+	Flap FlapConfig
 }
 
 // ProviderPolicy is the commit-control and cost configuration of one
@@ -178,6 +181,11 @@ type State struct {
 	Cooldown map[netip.Prefix]time.Time
 	// confirm is the in-progress performance confirmation, per prefix.
 	confirm map[netip.Prefix]confirm
+	// flips are the recent provider changes per prefix, oldest first.
+	flips map[netip.Prefix][]time.Time
+	// quarantine holds the prefixes parked on their native path (#228).
+	quarantine map[netip.Prefix]Quarantine
+	offenses   map[netip.Prefix]offense
 }
 
 // NewState returns an empty state.
@@ -186,6 +194,9 @@ func NewState() State {
 		Improvements: map[netip.Prefix]Improvement{},
 		Cooldown:     map[netip.Prefix]time.Time{},
 		confirm:      map[netip.Prefix]confirm{},
+		flips:        map[netip.Prefix][]time.Time{},
+		quarantine:   map[netip.Prefix]Quarantine{},
+		offenses:     map[netip.Prefix]offense{},
 	}
 }
 
@@ -199,6 +210,15 @@ func (s State) clone() State {
 	}
 	for k, v := range s.confirm {
 		n.confirm[k] = v
+	}
+	for k, v := range s.flips {
+		n.flips[k] = slices.Clone(v)
+	}
+	for k, v := range s.quarantine {
+		n.quarantine[k] = v
+	}
+	for k, v := range s.offenses {
+		n.offenses[k] = v
 	}
 	return n
 }
@@ -286,6 +306,9 @@ type Output struct {
 	// them after a quarter of their interval. A round that cannot
 	// compare leaves this empty. The global rate limit still applies.
 	Urgent []netip.Prefix
+	// Quarantines are the flap quarantines that started or ended in this
+	// evaluation (#228).
+	Quarantines []QuarantineChange
 }
 
 // nativeOf is the native provider of p: the one recorded on an active
@@ -319,6 +342,7 @@ func Decide(prev State, in Input, cfg Config, scorer plugin.Scorer, now time.Tim
 			delete(st.Cooldown, p)
 		}
 	}
+	st.expireFlap(now, cfg.Flap, &out)
 
 	retire := func(p netip.Prefix, reason string, cooldown bool) {
 		old := st.Improvements[p]
@@ -561,6 +585,11 @@ func Decide(prev State, in Input, cfg Config, scorer plugin.Scorer, now time.Tim
 					continue
 				}
 				retire(p, "native path better again", true)
+				if st.flapNext(p, now, cfg.Flap) {
+					st.quarantinePrefix(p, now, cfg.Flap, &out)
+				} else {
+					st.noteFlip(p, now, cfg.Flap)
+				}
 				d.Action, d.Reason, d.Current = ActionRetire, "native path better again", imp.Native
 				continue
 			}
@@ -575,6 +604,13 @@ func Decide(prev State, in Input, cfg Config, scorer plugin.Scorer, now time.Tim
 					continue
 				}
 				if !held {
+					if st.flapNext(p, now, cfg.Flap) {
+						q := st.quarantinePrefix(p, now, cfg.Flap, &out)
+						retire(p, flapReason(q), false)
+						d.Action, d.Reason, d.Current = ActionRetire, flapReason(q), imp.Native
+						continue
+					}
+					st.noteFlip(p, now, cfg.Flap)
 					delete(st.confirm, p)
 					sw := Improvement{Prefix: p, Provider: alt.Provider, Native: imp.Native, Since: now,
 						Reason: reasonText(alt, cur), Cause: plugin.CausePerformance, nativeSeen: imp.nativeSeen, nativeHeld: imp.nativeHeld}
@@ -610,6 +646,11 @@ func Decide(prev State, in Input, cfg Config, scorer plugin.Scorer, now time.Tim
 		if ignore {
 			delete(st.confirm, p)
 			d.Reason = "policy ignore (" + verdict.Rule + ")"
+			continue
+		}
+		if q, parked := st.quarantine[p]; parked {
+			delete(st.confirm, p)
+			d.Reason = flapReason(q)
 			continue
 		}
 		if static != "" {
@@ -719,6 +760,12 @@ func Decide(prev State, in Input, cfg Config, scorer plugin.Scorer, now time.Tim
 	})
 	for _, w := range wants {
 		w.d.Cause = w.imp.Cause
+		if st.flapNext(w.imp.Prefix, now, cfg.Flap) {
+			q := st.quarantinePrefix(w.imp.Prefix, now, cfg.Flap, &out)
+			w.d.Reason, w.d.Recommended = flapReason(q), w.imp.Provider
+			delete(st.confirm, w.imp.Prefix)
+			continue
+		}
 		for len(st.Improvements) >= cfg.MaxImprovements {
 			if w.commit || cfg.MaxImprovements <= 0 || !displaceCommit(st, decIdx, in.VolumeMbps, retire) {
 				w.d.Action, w.d.Reason, w.d.Recommended = ActionCapped, fmt.Sprintf("max_improvements (%d) reached", cfg.MaxImprovements), w.imp.Provider
@@ -728,6 +775,7 @@ func Decide(prev State, in Input, cfg Config, scorer plugin.Scorer, now time.Tim
 		if w.d.Action == ActionCapped {
 			continue
 		}
+		st.noteFlip(w.imp.Prefix, now, cfg.Flap)
 		delete(st.confirm, w.imp.Prefix)
 		st.Improvements[w.imp.Prefix] = w.imp
 		out.Changes = append(out.Changes, Change{Action: ActionImprove, New: w.imp})

@@ -747,3 +747,46 @@ func TestTroubleshootDefaultsAndBounds(t *testing.T) {
 		t.Fatalf("enabled: %+v %v", cfg.Troubleshoot, err)
 	}
 }
+
+func TestFlapQuarantineDefaultsAndValidation(t *testing.T) {
+	cfg, err := Parse([]byte(validYAML))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := FlapQuarantine{MaxFlips: DefaultFlapMaxFlips, Window: DefaultFlapWindow, Cooldown: DefaultFlapCooldown, MaxCooldown: DefaultFlapMaxCooldown}
+	if cfg.FlapQuarantine != want {
+		t.Fatalf("defaults = %+v, want %+v", cfg.FlapQuarantine, want)
+	}
+
+	cfg, err = Parse([]byte(validYAML + "flap_quarantine:\n  max_flips: 3\n  window: 30m\n  cooldown: 5m\n  max_cooldown: 20m\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if f := cfg.FlapQuarantine; f.MaxFlips != 3 || f.Window != 30*time.Minute || f.Cooldown != 5*time.Minute || f.MaxCooldown != 20*time.Minute {
+		t.Fatalf("parsed %+v", f)
+	}
+
+	// A cooldown longer than the default cap raises the cap with it.
+	cfg, err = Parse([]byte(validYAML + "flap_quarantine:\n  cooldown: 8h\n"))
+	if err != nil || cfg.FlapQuarantine.MaxCooldown != 8*time.Hour {
+		t.Fatalf("cooldown 8h: %+v %v", cfg.FlapQuarantine, err)
+	}
+
+	cfg, err = Parse([]byte(validYAML + "flap_quarantine:\n  disabled: true\n"))
+	if err != nil || cfg.FlapQuarantine.MaxFlips != 0 {
+		t.Fatalf("disabled keeps no defaults: %+v %v", cfg.FlapQuarantine, err)
+	}
+
+	for _, tc := range []struct{ block, want string }{
+		{"max_flips: -1", "flap_quarantine.max_flips"},
+		{"window: -1m", "flap_quarantine.window"},
+		{"cooldown: -1m", "flap_quarantine.cooldown"},
+		{"cooldown: 1h\n  max_cooldown: 10m", "flap_quarantine.max_cooldown"},
+		{"max_flip: 3", "max_flip"},
+	} {
+		_, err := Parse([]byte(validYAML + "flap_quarantine:\n  " + tc.block + "\n"))
+		if err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("%q: err = %v, want mention of %s", tc.block, err, tc.want)
+		}
+	}
+}

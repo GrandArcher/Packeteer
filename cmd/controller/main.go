@@ -617,6 +617,7 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 	col.SetTelemetry(func() []plugin.Usage { return collectTelemetry(context.Background(), plugins) })
 	col.SetFlowTracked(func() int { return flowTracked(plugins) })
 	col.Attach(engine, decider, view)
+	httpSrv.SetQuarantine(quarantineControl{decider: decider, out: dispatch, poke: poke, now: time.Now})
 	wireExchanges(cfg, col, view)
 	wireSuggestions(cfg, httpSrv, view)
 	wireMitigationCandidates(httpSrv, mit, view)
@@ -716,6 +717,9 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 			watch.anomaly(anomChanges)
 			watch.mitigation(mitChanges)
 			watch.improvements(now, changes)
+			qc := decider.QuarantineChanges()
+			watch.quarantines(now, qc)
+			auditQuarantines(audit, qc)
 			watch.inbound(now, snap.InboundMode(), inChanges)
 			watch.announce(now, errors.Join(err, inErr, mitErr))
 			watch.providerStatus(now, engine.Providers())
@@ -749,8 +753,9 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 	rl := &reloader{
 		path: path, getenv: getenv, log: log, cur: cfg, ctl: ctl, poke: poke,
 		plugins: plugins, engine: engine, decider: decider, fed: fed, col: col,
-		watch: watch, live: live, dispatch: dispatch, hist: rec,
-		opts: pluginhost.Options{Logger: log, Getenv: getenv, PluginDir: getenv(PluginDirEnv)},
+		watch: watch, live: live, dispatch: dispatch, hist: rec, inb: inb, mit: mit,
+		flowSpecUp: view != nil && mitigationFlowSpec(cfg, plugins),
+		opts:       pluginhost.Options{Logger: log, Getenv: getenv, PluginDir: getenv(PluginDirEnv)},
 	}
 	if editor != nil {
 		rl.applied = editor.SetRunning
@@ -1585,6 +1590,7 @@ func runDecision(now time.Time, decider *policy.Engine, in policy.Input, ctl *an
 		engine.SetUrgent(decider.Urgent())
 	}
 	logChanges(log, mode, changes)
+	logQuarantines(log, decider.QuarantineChanges())
 	actx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	err := ctl.Sync(actx, decider.Improvements())
@@ -2232,6 +2238,9 @@ func policyConfig(cfg *config.Config) (policy.Config, error) {
 	}
 	if cfg.ImprovementTTL > 0 {
 		pc.ImprovementTTL = cfg.ImprovementTTL
+	}
+	if f := cfg.FlapQuarantine; !f.Disabled {
+		pc.Flap = policy.FlapConfig{MaxFlips: f.MaxFlips, Window: f.Window, Cooldown: f.Cooldown, MaxCooldown: f.MaxCooldown}
 	}
 	for _, p := range cfg.Providers {
 		if p.Exclude {

@@ -16,6 +16,8 @@ import (
 	"github.com/GrandArcher/Packeteer/internal/config"
 	"github.com/GrandArcher/Packeteer/internal/history"
 	"github.com/GrandArcher/Packeteer/internal/httpapi"
+	"github.com/GrandArcher/Packeteer/internal/inbound"
+	"github.com/GrandArcher/Packeteer/internal/mitigation"
 	"github.com/GrandArcher/Packeteer/internal/pluginhost"
 	"github.com/GrandArcher/Packeteer/internal/policy"
 	"github.com/GrandArcher/Packeteer/internal/probe"
@@ -26,7 +28,8 @@ import (
 // Online reconfiguration (#27, #128). On SIGHUP, and on PUT /api/config
 // when every change can apply online, the controller reads the config file
 // again. Thresholds, hold_time, improvement_ttl, max_improvements, policies,
-// sources, probe timing, mode, allowlist, and bgp.neighbors are applied.
+// sources, probe timing, mode, allowlist, bgp.neighbors, inbound.mode, and
+// mitigation.mode are applied.
 // The next Decide uses the new values; nothing on the wire changes except
 // what Decide (or a mode change off inject) withdraws. A key that cannot
 // apply online is refused by name and the running config stays. An invalid
@@ -157,7 +160,7 @@ func normTable(t []plugin.RouterExport) []plugin.RouterExport {
 // onlineTop are top-level keys a reload applies. probe and bgp are split
 // below: only some of their fields apply online.
 var onlineTop = map[string]bool{
-	"mode": true, "thresholds": true, "hold_time": true, "improvement_ttl": true,
+	"mode": true, "thresholds": true, "hold_time": true, "improvement_ttl": true, "flap_quarantine": true,
 	"max_improvements": true, "policies": true, "sources": true, "allowlist": true,
 }
 
@@ -199,6 +202,14 @@ func classify(a, b *config.Config) (restart, online []string) {
 			}
 		case "probe":
 			pr, po := probeKeys(x.(config.Probe), y.(config.Probe))
+			restart = append(restart, pr...)
+			online = append(online, po...)
+		case "inbound":
+			pr, po := modeKeys(name, x.(*config.Inbound), y.(*config.Inbound), func(b *config.Inbound) *string { return &b.Mode })
+			restart = append(restart, pr...)
+			online = append(online, po...)
+		case "mitigation":
+			pr, po := modeKeys(name, x.(*config.Mitigation), y.(*config.Mitigation), func(b *config.Mitigation) *string { return &b.Mode })
 			restart = append(restart, pr...)
 			online = append(online, po...)
 		default:
@@ -251,6 +262,28 @@ func probeKeys(a, b config.Probe) (restart, online []string) {
 	pair("prober_recheck_rounds", a.ProberRecheckRounds, b.ProberRecheckRounds, false)
 	pair("prober_memory", a.ProberMemory, b.ProberMemory, false)
 	pair("indirect", a.Indirect, b.Indirect, false)
+	return restart, online
+}
+
+// modeKeys splits a change to a block (inbound, mitigation) into its mode,
+// which applies online, and everything else, which is restart-only. A
+// block that appears or disappears is a restart.
+func modeKeys[T any](name string, a, b *T, mode func(*T) *string) (restart, online []string) {
+	if a == nil || b == nil {
+		if a != b {
+			restart = append(restart, name)
+		}
+		return restart, nil
+	}
+	ac, bc := *a, *b
+	am, bm := *mode(&ac), *mode(&bc)
+	*mode(&ac), *mode(&bc) = "", ""
+	if !sameYAML(ac, bc) {
+		restart = append(restart, name)
+	}
+	if am != bm {
+		online = append(online, name+".mode")
+	}
 	return restart, online
 }
 
@@ -318,6 +351,13 @@ type reloader struct {
 	// setup, when set, is told the cap and source types the overview
 	// shows after a reload changes them.
 	setup func(httpapi.Setup)
+
+	// inb and mit are nil when the block is not configured. flowSpecUp is
+	// true when the sessions negotiated FlowSpec at start; they cannot
+	// later, so mitigation cannot start injecting a FlowSpec catalog.
+	inb        *inbound.Controller
+	mit        *mitigation.Controller
+	flowSpecUp bool
 
 	plugins  *pluginhost.Set
 	engine   *probe.Engine
@@ -395,6 +435,9 @@ func (r *reloader) reload(ctx context.Context) (applied []string, refused, fatal
 		return nil, nil, nil
 	}
 	if err := r.applyOnline(ctx, next, plan.online); err != nil {
+		if errors.Is(err, errPartialApply) {
+			return nil, nil, err
+		}
 		return nil, err, nil
 	}
 	// Close removed sessions first, so a router leaving the table never
@@ -463,6 +506,9 @@ func (r *reloader) applyOnline(ctx context.Context, next *config.Config, online 
 			return err
 		}
 	}
+	if err := r.prepareSteering(next, pc, online); err != nil {
+		return err
+	}
 	pluginChange := r.plugins != nil && (slices.Contains(online, "sources") || slices.Contains(online, "policies"))
 	var started []startedPlugin
 	if pluginChange && (len(toStart) > 0 || len(toStop) > 0) {
@@ -476,14 +522,12 @@ func (r *reloader) applyOnline(ctx context.Context, next *config.Config, online 
 			return err
 		}
 	}
-	if runtime {
-		if err := r.ctl.ApplyRuntime(ctx, next.Mode, pc.Allowlist, pc.MaxImprovements); err != nil {
-			r.stopStarted(ctx, started)
-			if restartErr := r.restartStopped(ctx, toStop); restartErr != nil {
-				return fmt.Errorf("%w (restarting the previous plugin failed: %v)", err, restartErr)
-			}
-			return err
+	if err := r.applyRuntime(ctx, next, pc, online, runtime); err != nil {
+		r.stopStarted(ctx, started)
+		if restartErr := r.restartStopped(ctx, toStop); restartErr != nil {
+			return fmt.Errorf("%w (restarting the previous plugin failed: %v)", err, restartErr)
 		}
+		return err
 	}
 	if pluginChange {
 		if slices.Contains(online, "sources") {
@@ -541,6 +585,114 @@ func (r *reloader) applyOnline(ctx context.Context, next *config.Config, online 
 	}
 	if r.hist != nil {
 		r.hist.SetMode(next.Mode)
+	}
+	return nil
+}
+
+// inboundRuntime and mitigationRuntime say whether online changes a value
+// the controller holds. inbound.mode inject needs mode inject, so a mode
+// change always comes with the block's own.
+func inboundRuntime(online []string) bool {
+	return slices.ContainsFunc(online, func(k string) bool {
+		return k == "mode" || k == "allowlist" || k == "hold_time" || k == "improvement_ttl" || k == "inbound.mode"
+	})
+}
+
+func mitigationRuntime(online []string) bool { return slices.Contains(online, "mitigation.mode") }
+
+func inboundRuntimeFor(next *config.Config, pc policy.Config) inbound.Runtime {
+	return inbound.Runtime{Mode: next.InboundMode(), Allowlist: pc.Allowlist, HoldTime: next.HoldTime, TTL: next.ImprovementTTL}
+}
+
+// prepareSteering checks, and binds the announcers for, inbound and
+// mitigation entering inject (#233). It changes no mode, so a reload that
+// is refused later never lets either announce. The outbound controller has
+// already installed the export policy the two announcers need. Binding
+// inbound is not undone by a later refusal: the speaker keeps its import
+// policy (and has soft-reset its peers), which announces nothing.
+func (r *reloader) prepareSteering(next *config.Config, pc policy.Config, online []string) error {
+	if r.inb != nil && inboundRuntime(online) {
+		rt := inboundRuntimeFor(next, pc)
+		if err := r.inb.PrepareRuntime(rt); err != nil {
+			return err
+		}
+		if rt.Mode == config.ModeInject && r.cur.InboundMode() != config.ModeInject {
+			srv, err := r.speaker()
+			if err != nil {
+				return fmt.Errorf("inbound: %w", err)
+			}
+			if err := bindInbound(next, r.plugins, srv); err != nil {
+				return err
+			}
+		}
+	}
+	if r.mit != nil && mitigationRuntime(online) {
+		if err := r.mit.PrepareRuntime(next.MitigationMode()); err != nil {
+			return err
+		}
+		if next.MitigationMode() == config.ModeInject && r.cur.MitigationMode() != config.ModeInject {
+			if !r.flowSpecUp && mitigationFlowSpec(next, r.plugins) {
+				return errors.New("restart required: mitigation.mode inject with a FlowSpec announcer (the sessions negotiate FlowSpec at start)")
+			}
+			srv, err := r.speaker()
+			if err != nil {
+				return fmt.Errorf("mitigation: %w", err)
+			}
+			if err := bindMitigation(next, r.plugins, srv); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// speaker is the embedded iBGP speaker an announcer binds to.
+func (r *reloader) speaker() (any, error) {
+	if r.rib == nil || r.rib.Server() == nil {
+		return nil, errors.New("inject needs an iBGP session")
+	}
+	return r.rib.Server(), nil
+}
+
+// applyRuntime changes the mode, allowlist, and cap of the outbound
+// controller and the mode (and hold time and TTL) of inbound and
+// mitigation. Entering inject goes outbound first; leaving goes inbound
+// and mitigation first, so a failed withdraw never leaves a steering
+// controller injecting under a config that says it is not. Each step
+// withdraws under its own announcer lock before its mode changes.
+func (r *reloader) applyRuntime(ctx context.Context, next *config.Config, pc policy.Config, online []string, outbound bool) error {
+	var steps []func() error
+	if outbound {
+		steps = append(steps, func() error {
+			return r.ctl.ApplyRuntime(ctx, next.Mode, pc.Allowlist, pc.MaxImprovements)
+		})
+	}
+	if r.inb != nil && inboundRuntime(online) {
+		steps = append(steps, func() error { return r.inb.ApplyRuntime(ctx, inboundRuntimeFor(next, pc)) })
+	}
+	if r.mit != nil && mitigationRuntime(online) {
+		steps = append(steps, func() error { return r.mit.ApplyRuntime(ctx, next.MitigationMode()) })
+	}
+	if next.Mode != config.ModeInject {
+		slices.Reverse(steps)
+	}
+	return runSteps(steps)
+}
+
+// errPartialApply marks a failure after an earlier step already changed
+// its controller. Those steps withdrew and switched mode and cannot be
+// undone, so the running config no longer matches r.cur: the caller stops,
+// which withdraws everything, instead of reporting a refusal.
+var errPartialApply = errors.New("reload partly applied")
+
+func runSteps(steps []func() error) error {
+	for i, step := range steps {
+		if err := step(); err != nil {
+			if i > 0 {
+				return fmt.Errorf("%w: %w", errPartialApply, err)
+			}
+			return err
+		}
 	}
 	return nil
 }

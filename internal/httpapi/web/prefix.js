@@ -32,6 +32,15 @@ function prefixPageUpdate(data) {
     return;
   }
   root.appendChild(prefixCard(row));
+  if (row.quarantine) root.appendChild(quarantineNote(row.quarantine));
+}
+
+// quarantineNote explains a flap quarantine (#228). The page stays
+// read-only: an operator ends it early with POST /api/quarantine/release.
+function quarantineNote(q) {
+  return el("p", "reason", "Flap quarantine: this prefix changed its chosen provider " + q.flips +
+    " times in the window (offense " + q.strikes + "). Packeteer's route is withdrawn and traffic uses the router's native path until " +
+    fmtTime(q.until) + ". An operator can release it with POST /api/quarantine/release.");
 }
 
 // verb never says "announced" for a record made outside inject.

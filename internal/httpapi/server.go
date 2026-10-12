@@ -122,6 +122,9 @@ type Server struct {
 	// row (#102). Nil means there is nothing to suggest. It must not write
 	// config or announce.
 	suggest atomic.Value
+	// quarantine releases a flap-quarantined prefix (#228). Nil until
+	// SetQuarantine.
+	quarantine atomic.Value
 	// candidates is the Protection form's prefix picker (#131).
 	candidates atomic.Value
 	// apply, when set, applies a file that was just written and whose
@@ -192,6 +195,15 @@ func (s *Server) SetSuggestions(fn func() []Suggestion) {
 		return
 	}
 	s.suggest.Store(fn)
+}
+
+// SetQuarantine installs the release handle for the flap quarantine
+// (#228). It is stored after New, once the decision engine exists.
+func (s *Server) SetQuarantine(c QuarantineControl) {
+	if s == nil {
+		return
+	}
+	s.quarantine.Store(c)
 }
 
 // Handler is the read-only API and dashboard.

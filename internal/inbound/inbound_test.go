@@ -444,3 +444,120 @@ func TestStandbyWithdrawsSteers(t *testing.T) {
 		t.Fatalf("demoted instance kept steers: %v %v", err, ann.routes)
 	}
 }
+
+func steerNow(t *testing.T, c *Controller, now time.Time) {
+	t.Helper()
+	if ch := c.Evaluate(now, usage(now, map[string]float64{"transit-a": 150, "transit-b": 20})); len(ch) != 1 {
+		t.Fatalf("steer: %+v", ch)
+	}
+}
+
+// Observe to inject and back at runtime (#233): entering runs the inject
+// checks and changes nothing when they fail; leaving withdraws every route
+// under the controller's lock before the mode changes, and a later Sync
+// announces nothing.
+func TestRuntimeModeEnterAndLeaveInject(t *testing.T) {
+	ctx := context.Background()
+	ann := newFakeAnn("transit-a", "transit-b")
+	c := mustNew(t, baseConfig(config.ModeObserve), ann, readyRIB())
+	rt := Runtime{Mode: config.ModeInject, Allowlist: baseConfig("").Allowlist, HoldTime: 5 * time.Minute, TTL: time.Hour}
+
+	steerNow(t, c, start)
+	if err := c.Sync(ctx); err != nil || len(ann.routes) != 0 {
+		t.Fatalf("observe announced: %v %v", err, ann.routes)
+	}
+	noAllow := rt
+	noAllow.Allowlist = nil
+	if err := c.PrepareRuntime(noAllow); err == nil {
+		t.Fatal("prepare accepted inject with no allowlist")
+	}
+	if err := c.ApplyRuntime(ctx, noAllow); err == nil || c.Status().Mode != config.ModeObserve {
+		t.Fatalf("apply with no allowlist: err %v mode %s", err, c.Status().Mode)
+	}
+	if err := c.Sync(ctx); err != nil || len(ann.routes) != 0 {
+		t.Fatalf("a refused apply announced: %v %v", err, ann.routes)
+	}
+
+	if err := c.PrepareRuntime(rt); err != nil {
+		t.Fatal(err)
+	}
+	if c.Status().Mode != config.ModeObserve {
+		t.Fatal("prepare changed the mode")
+	}
+	if err := c.ApplyRuntime(ctx, rt); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Sync(ctx); err != nil || len(ann.routes) != 1 || c.Active() != 1 {
+		t.Fatalf("inject did not announce: %v %v", err, ann.routes)
+	}
+
+	leave := rt
+	leave.Mode = config.ModeObserve
+	if err := c.ApplyRuntime(ctx, leave); err != nil {
+		t.Fatal(err)
+	}
+	if len(ann.routes) != 0 || c.Active() != 0 || c.Status().Mode != config.ModeObserve {
+		t.Fatalf("leaving inject left routes %v active %d mode %s", ann.routes, c.Active(), c.Status().Mode)
+	}
+	calls := ann.calls
+	if err := c.Sync(ctx); err != nil || ann.calls != calls {
+		t.Fatalf("sync after leaving inject touched the announcer: %v", err)
+	}
+
+	// And back in: the same steer set announces again.
+	if err := c.ApplyRuntime(ctx, rt); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Sync(ctx); err != nil || len(ann.routes) != 1 {
+		t.Fatalf("re-entered inject did not announce: %v %v", err, ann.routes)
+	}
+}
+
+// A reload's hold_time and improvement_ttl reach steers created after it,
+// and a shrunk allowlist withdraws the prefix it no longer covers.
+func TestRuntimeHoldTTLAndAllowlist(t *testing.T) {
+	ctx := context.Background()
+	ann := newFakeAnn("transit-a", "transit-b")
+	cfg := baseConfig(config.ModeInject)
+	c := mustNew(t, cfg, ann, readyRIB())
+
+	steerNow(t, c, start)
+	if st := c.Status(); st.Steers[0].Hold != 5*time.Minute {
+		t.Fatalf("hold = %s", st.Steers[0].Hold)
+	}
+	if err := c.Sync(ctx); err != nil || len(ann.routes) != 1 {
+		t.Fatalf("sync: %v %v", err, ann.routes)
+	}
+
+	short := Runtime{Mode: config.ModeInject, Allowlist: cfg.Allowlist, HoldTime: time.Minute, TTL: 2 * time.Minute}
+	if err := c.ApplyRuntime(ctx, short); err != nil {
+		t.Fatal(err)
+	}
+	// improvement_ttl applies to the steer already running.
+	now := start.Add(3 * time.Minute)
+	ch := c.Evaluate(now, usage(now, map[string]float64{"transit-a": 150, "transit-b": 20}))
+	if len(ch) != 1 || ch[0].Action != ActionRelease || !strings.Contains(ch[0].Reason, "improvement_ttl") {
+		t.Fatalf("new ttl was not applied: %+v", ch)
+	}
+	// The new hold_time applies to the next steer.
+	now = now.Add(time.Second)
+	steerNow(t, c, now)
+	if st := c.Status(); st.Steers[0].Hold != time.Minute {
+		t.Fatalf("hold after reload = %s", st.Steers[0].Hold)
+	}
+	if err := c.Sync(ctx); err != nil || len(ann.routes) != 1 {
+		t.Fatalf("sync: %v %v", err, ann.routes)
+	}
+
+	// The allowlist no longer covers the inbound prefix.
+	short.Allowlist = []netip.Prefix{own2}
+	if err := c.ApplyRuntime(ctx, short); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Sync(ctx); err == nil || !strings.Contains(err.Error(), "not allowlisted") {
+		t.Fatalf("sync = %v", err)
+	}
+	if len(ann.routes) != 0 || c.Active() != 0 {
+		t.Fatalf("a prefix outside the allowlist stayed on the wire: %v", ann.routes)
+	}
+}
