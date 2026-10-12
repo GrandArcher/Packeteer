@@ -804,12 +804,15 @@ func (c *Controller) announceMoreSpecificLocked(ctx context.Context, m, parent n
 
 // WithdrawAll removes every announced route. It is safe to call more than once.
 func (c *Controller) WithdrawAll(ctx context.Context) error {
-	if c == nil || c.cfg.Mode != config.ModeInject || c.ann == nil {
+	if c == nil || c.ann == nil {
 		return nil
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	defer c.store()
+	if c.cfg.Mode != config.ModeInject {
+		return nil
+	}
 	return c.withdrawAllLocked(ctx)
 }
 

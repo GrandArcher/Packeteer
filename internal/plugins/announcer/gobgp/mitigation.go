@@ -255,7 +255,16 @@ func (a *MitigationAnnouncer) Bind(srv any, community string, allow []netip.Pref
 		return errors.New("mitigation announcer: embedded speaker is required")
 	}
 	if a.srv != nil {
-		return errors.New("mitigation announcer: already bound")
+		// A reload enters inject again after leaving it; the announcer
+		// stays bound to the same speaker with the same settings.
+		same := a.srv == s && a.community == community && a.max == maxRules && len(a.allow) == len(allow)
+		for i := 0; same && i < len(allow); i++ {
+			same = a.allow[i] == allow[i].Masked()
+		}
+		if !same {
+			return errors.New("mitigation announcer: already bound")
+		}
+		return nil
 	}
 	if !hasPolicy(context.Background(), s, policyName) {
 		return errors.New("mitigation announcer: the gobgp announcer's export policy is not installed (bind it first)")
