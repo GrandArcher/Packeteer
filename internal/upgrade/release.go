@@ -6,10 +6,11 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/netip"
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/GrandArcher/Packeteer/internal/config"
 )
 
 // Release assets. A release carries one static binary per architecture
@@ -34,9 +35,7 @@ const (
 // Release is one GitHub release, trimmed to what the page shows.
 type Release struct {
 	Tag        string    `json:"tag"`
-	Name       string    `json:"name,omitempty"`
 	Notes      string    `json:"notes,omitempty"`
-	URL        string    `json:"url,omitempty"`
 	Prerelease bool      `json:"prerelease,omitempty"`
 	Published  time.Time `json:"published,omitzero"`
 	// assets maps asset name to download URL.
@@ -56,9 +55,7 @@ func (r Release) Installable(goarch string) bool {
 
 type ghRelease struct {
 	TagName     string    `json:"tag_name"`
-	Name        string    `json:"name"`
 	Body        string    `json:"body"`
-	HTMLURL     string    `json:"html_url"`
 	Draft       bool      `json:"draft"`
 	Prerelease  bool      `json:"prerelease"`
 	PublishedAt time.Time `json:"published_at"`
@@ -82,7 +79,7 @@ func allowedURL(raw string) (*url.URL, error) {
 	if err != nil || u.Host == "" {
 		return nil, fmt.Errorf("bad URL %q", raw)
 	}
-	if u.Scheme == "https" || (u.Scheme == "http" && loopbackHost(u.Hostname())) {
+	if u.Scheme == "https" || (u.Scheme == "http" && config.LoopbackHost(u.Hostname())) {
 		return u, nil
 	}
 	return nil, fmt.Errorf("refusing non-https URL %q", raw)
@@ -171,7 +168,7 @@ func (c *client) releases(ctx context.Context, prerelease bool) ([]Release, erro
 		if g.Draft || !ValidTag(g.TagName) || (g.Prerelease && !prerelease) {
 			continue
 		}
-		r := Release{Tag: g.TagName, Name: g.Name, Notes: g.Body, URL: g.HTMLURL, Prerelease: g.Prerelease,
+		r := Release{Tag: g.TagName, Notes: g.Body, Prerelease: g.Prerelease,
 			Published: g.PublishedAt.UTC(), assets: map[string]string{}}
 		if len(r.Notes) > maxNotes {
 			r.Notes = r.Notes[:maxNotes] + "\n…"
@@ -187,12 +184,4 @@ func (c *client) releases(ctx context.Context, prerelease bool) ([]Release, erro
 		}
 	}
 	return out, nil
-}
-
-func loopbackHost(h string) bool {
-	if h == "localhost" {
-		return true
-	}
-	a, err := netip.ParseAddr(h)
-	return err == nil && a.IsLoopback()
 }

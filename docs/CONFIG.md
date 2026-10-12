@@ -512,7 +512,7 @@ Version check, one-click upgrade, and rollback on the Settings page (#196). Off 
 | `public_key` | none | Required when enabled. The Ed25519 public key (base64, 32 bytes) that signs each release's `SHA256SUMS`. A release whose signature or checksum does not verify is never switched to. |
 | `repo` | `GrandArcher/Packeteer` | `owner/name` whose GitHub releases are read. |
 | `api_url` | `https://api.github.com` | GitHub API base. Must be `https`, or `http` on a loopback address (a local mirror). Asset downloads follow the same rule. |
-| `dir` | `/var/lib/packeteer/upgrade` | Absolute path where staged versions and the switch state are kept. In the container it is on the image's data volume; mount a volume on `/var/lib/packeteer` to keep a staged version when the container is recreated. |
+| `dir` | `/var/lib/packeteer/upgrade` | Absolute path where staged versions and the switch state are kept. In the container, mount a volume on `/var/lib/packeteer` to keep a staged version when the container is recreated. |
 | `check_interval` | `0` (off) | `0`, or 1h to 720h. A background check that only notifies: the Settings page shows the newer release and the log says so. It never upgrades. Needs `enabled`. |
 | `allow_prerelease` | `false` | List pre-releases too. |
 

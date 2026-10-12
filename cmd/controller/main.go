@@ -47,6 +47,7 @@ import (
 	"github.com/GrandArcher/Packeteer/internal/rib"
 	"github.com/GrandArcher/Packeteer/internal/subscribe"
 	"github.com/GrandArcher/Packeteer/internal/troubleshoot"
+	"github.com/GrandArcher/Packeteer/internal/upgrade"
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
 )
 
@@ -303,12 +304,11 @@ func run(ctx context.Context, args []string, getenv func(string) string, stdout,
 		fmt.Fprintln(stdout, "check: ok (no probes sent, no BGP sessions opened)")
 		return 0
 	}
-	up := &upgradeRun{}
-	code := daemon(ctx, cfg, plugins, log, httpUser, httpPass, *path, getenv, up)
+	var upMgr *upgrade.Manager
+	code := daemon(ctx, cfg, plugins, log, httpUser, httpPass, *path, getenv, &upMgr)
 	// The daemon has withdrawn and stopped. A prepared upgrade or rollback
 	// starts its binary now; the new process learns the RIB before it injects.
-	code, _ = finishUpgrade(up, code, args, log)
-	return code
+	return finishUpgrade(ctx, upMgr, code, args, log)
 }
 
 // preflight builds the plugin set and runs every check the controller runs
@@ -345,7 +345,7 @@ func preflight(cfg *config.Config, log *slog.Logger, getenv func(string) string,
 	return plugins, nil
 }
 
-func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, log *slog.Logger, httpUser, httpPass, path string, getenv func(string) string, up *upgradeRun) int {
+func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, log *slog.Logger, httpUser, httpPass, path string, getenv func(string) string, upgradeOut **upgrade.Manager) int {
 	// SIGHUP reloads online keys (#27, #128). Registered first: Go's
 	// default for SIGHUP ends the process.
 	hup := make(chan os.Signal, 1)
@@ -458,7 +458,7 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 	var upgradeAPI httpapi.UpgradeControl
 	if upMgr != nil {
 		upgradeAPI = upMgr
-		up.mgr = upMgr
+		*upgradeOut = upMgr
 		if httpUser == "" && authSvc == nil {
 			log.Warn("upgrade.enabled is on but neither auth nor basic auth is: upgrade and rollback stay off")
 		}

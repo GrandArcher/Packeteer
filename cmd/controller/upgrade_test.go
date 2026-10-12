@@ -161,21 +161,31 @@ func (in *upgradeInstance) waitHTTP(t *testing.T) {
 	t.Fatalf("http never came up\n%s", in.logs.String())
 }
 
-// TestDaemonUpgradeWithdrawsRelearnsAndRollsBack is the lab test of #196:
-// a controller in inject has a route on the simulated edge; an admin
-// upgrades through the API; the edge sees the route withdrawn before the
-// new binary is started; the new version, with the edge no longer
-// advertising the prefix, announces nothing (it is not in the RIB view);
-// when the edge advertises the prefix again the route returns. Rollback
-// does the same in reverse. The config file is never touched.
-func TestDaemonUpgradeWithdrawsRelearnsAndRollsBack(t *testing.T) {
-	if testing.Short() {
-		t.Skip("daemon upgrade test")
-	}
+// upgradeLab is an inject controller with upgrade on, aimed at a signed
+// release server and the simulated edge. Its exec is stubbed: it records
+// what it was asked to start and what the edge held at that moment.
+type upgradeLab struct {
+	edge     *haEdge
+	dir      string
+	cfgPath  string
+	httpPort int
+	self     string
+
+	mu    sync.Mutex
+	calls []execCall
+}
+
+func (l *upgradeLab) execCalls() []execCall {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return append([]execCall(nil), l.calls...)
+}
+
+func newUpgradeLab(t *testing.T) *upgradeLab {
+	t.Helper()
 	url, pub := upgradeServer(t)
-	edge := newHAEdge(t)
-	dir := t.TempDir()
-	httpPort := freePort(t)
+	lab := &upgradeLab{edge: newHAEdge(t), dir: t.TempDir(), httpPort: freePort(t)}
+	edge, dir, httpPort := lab.edge, lab.dir, lab.httpPort
 	cfg := fmt.Sprintf(`mode: inject
 asn: 64512
 router_id: 192.0.2.10
@@ -206,28 +216,41 @@ upgrade:
   api_url: %s
   dir: %s
 `, httpPort, edge.port, pub, url, filepath.Join(dir, "upgrade"))
-	cfgPath := filepath.Join(dir, "config.yaml")
-	if err := os.WriteFile(cfgPath, []byte(cfg), 0o600); err != nil {
+	lab.cfgPath = filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(lab.cfgPath, []byte(cfg), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
-	var mu sync.Mutex
-	var calls []execCall
 	execFn = func(path string, argv, env []string) error {
-		mu.Lock()
-		defer mu.Unlock()
-		calls = append(calls, execCall{path: path, argv: argv, env: env, edge: edge.routes()})
+		lab.mu.Lock()
+		defer lab.mu.Unlock()
+		lab.calls = append(lab.calls, execCall{path: path, argv: argv, env: env, edge: edge.routes()})
 		return nil
 	}
-	self := filepath.Join(dir, "packeteer-installed")
-	executableFn = func() (string, error) { return self, nil }
+	lab.self = filepath.Join(dir, "packeteer-installed")
+	executableFn = func() (string, error) { return lab.self, nil }
 	environFn = func() []string { return []string{"PATH=" + os.Getenv("PATH")} }
 	trialFn = func(context.Context, string, string) error { return nil }
 	confirmAfter = 200 * time.Millisecond
 	t.Cleanup(func() {
 		execFn, environFn, executableFn, trialFn, confirmAfter = syscall.Exec, os.Environ, os.Executable, nil, 30*time.Second
 	})
+	return lab
+}
 
+// TestDaemonUpgradeWithdrawsRelearnsAndRollsBack is the lab test of #196:
+// a controller in inject has a route on the simulated edge; an admin
+// upgrades through the API; the edge sees the route withdrawn before the
+// new binary is started; the new version, with the edge no longer
+// advertising the prefix, announces nothing (it is not in the RIB view);
+// when the edge advertises the prefix again the route returns. Rollback
+// does the same in reverse. The config file is never touched.
+func TestDaemonUpgradeWithdrawsRelearnsAndRollsBack(t *testing.T) {
+	if testing.Short() {
+		t.Skip("daemon upgrade test")
+	}
+	lab := newUpgradeLab(t)
+	edge, dir, cfgPath, httpPort, self := lab.edge, lab.dir, lab.cfgPath, lab.httpPort, lab.self
 	start := time.Now()
 	step := func(what string) { t.Logf("%6.1fs %s", time.Since(start).Seconds(), what) }
 	waitRoute := func(what string, in *upgradeInstance) {
@@ -263,7 +286,7 @@ upgrade:
 	if code, body := a.post(t, "/api/upgrade/apply", `{"tag":"v0.6.0"}`); code != 400 {
 		t.Fatalf("unconfirmed apply: %d %s", code, body)
 	}
-	if !onlyFrom(edge.routes(), "127.0.0.2") || len(calls) != 0 {
+	if !onlyFrom(edge.routes(), "127.0.0.2") || len(lab.execCalls()) != 0 {
 		t.Fatal("an unconfirmed upgrade changed something")
 	}
 	if code, body := a.post(t, "/api/upgrade/check", `{}`); code != 200 || !strings.Contains(body, `"v0.6.0"`) || !strings.Contains(body, `"available":true`) {
@@ -277,12 +300,11 @@ upgrade:
 		t.Fatalf("apply: %d %s", code, body)
 	}
 	waitDone("upgrade shutdown", a)
-	mu.Lock()
+	calls := lab.execCalls()
 	if len(calls) != 1 {
 		t.Fatalf("exec calls = %d", len(calls))
 	}
 	c := calls[0]
-	mu.Unlock()
 	staged := filepath.Join(dir, "upgrade", "versions", "0.6.0", "packeteer")
 	if c.path != staged || c.argv[0] != staged || !strings.Contains(strings.Join(c.argv, " "), "-config "+cfgPath) {
 		t.Fatalf("exec = %+v", c)
@@ -341,17 +363,58 @@ upgrade:
 		t.Fatalf("rollback: %d %s", code, body)
 	}
 	waitDone("rollback shutdown", b)
-	mu.Lock()
+	calls = lab.execCalls()
 	if len(calls) != 2 {
 		t.Fatalf("exec calls = %d", len(calls))
 	}
 	c = calls[1]
-	mu.Unlock()
 	if c.path != self || strings.Contains(strings.Join(c.env, "\n"), upgrade.LaunchedEnv) || len(c.edge) != 0 {
 		t.Fatalf("rollback exec = %+v", c)
 	}
 	if got, _ := os.ReadFile(cfgPath); !bytes.Equal(got, before) {
 		t.Fatal("the config file changed by the rollback")
+	}
+}
+
+// A SIGTERM that arrives while a switch is prepared stops Packeteer: the
+// new version is not started and the state goes back to what ran.
+func TestSignalDuringPreparedUpgradeDoesNotStartTheNewVersion(t *testing.T) {
+	if testing.Short() {
+		t.Skip("daemon upgrade test")
+	}
+	lab := newUpgradeLab(t)
+	a := startUpgradeInstance(t, lab.edge, lab.cfgPath, nil, lab.httpPort)
+	a.waitHTTP(t)
+	if code, body := a.post(t, "/api/upgrade/apply", `{"tag":"v0.6.0","confirm":true}`); code != http.StatusAccepted {
+		t.Fatalf("apply: %d %s", code, body)
+	}
+	a.cancel() // the signal, inside the manager's stop delay
+	select {
+	case code := <-a.done:
+		if code != 0 {
+			t.Fatalf("exit %d\n%s", code, a.logs.String())
+		}
+	case <-time.After(30 * time.Second):
+		t.Fatalf("did not stop\n%s", a.logs.String())
+	}
+	if calls := lab.execCalls(); len(calls) != 0 {
+		t.Fatalf("a signal started another version: %+v", calls)
+	}
+	if len(lab.edge.routes()) != 0 {
+		t.Fatalf("routes left on the edge: %v", lab.edge.routes())
+	}
+	raw, err := os.ReadFile(filepath.Join(lab.dir, "upgrade", "state.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var st struct {
+		Active struct{ Version string }
+	}
+	if err := json.Unmarshal(raw, &st); err != nil {
+		t.Fatal(err)
+	}
+	if st.Active.Version == "0.6.0" {
+		t.Fatalf("the state still names the new version: %s", raw)
 	}
 }
 

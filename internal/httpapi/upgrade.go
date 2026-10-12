@@ -55,7 +55,6 @@ func (s *Server) handleUpgradeCheck(w http.ResponseWriter, r *http.Request) {
 	if !s.upgradeAllowed(w, r, &req) {
 		return
 	}
-	noteAudit(r, "releases", "check")
 	st, err := s.upgrade.Check(r.Context())
 	if err != nil {
 		noteAudit(r, "releases", "check: "+err.Error())

@@ -42,7 +42,7 @@ type Upgrade struct {
 	// must be https, or http on a loopback address for a local mirror.
 	APIURL string `yaml:"api_url"`
 	// Dir keeps staged versions and the switch state (default
-	// /var/lib/packeteer/upgrade, the image's data volume).
+	// /var/lib/packeteer/upgrade; mount a volume there to keep it).
 	Dir string `yaml:"dir"`
 	// CheckInterval turns on a background check that only notifies: the
 	// Settings page shows the newer release. 0 (default) checks only when
@@ -92,7 +92,7 @@ func (c *Config) validateUpgrade(add func(string, ...any)) {
 	}
 	if pu, err := url.Parse(u.APIURL); err != nil || pu.Host == "" || pu.User != nil || pu.RawQuery != "" || pu.Fragment != "" {
 		add("upgrade.api_url %q must be an https URL with a host", u.APIURL)
-	} else if pu.Scheme != "https" && !(pu.Scheme == "http" && loopbackHost(pu.Hostname())) {
+	} else if pu.Scheme != "https" && !(pu.Scheme == "http" && LoopbackHost(pu.Hostname())) {
 		add("upgrade.api_url %q must be https (http only for a loopback address)", u.APIURL)
 	}
 	if !filepath.IsAbs(u.Dir) {
@@ -106,7 +106,8 @@ func (c *Config) validateUpgrade(add func(string, ...any)) {
 	}
 }
 
-func loopbackHost(h string) bool {
+// LoopbackHost reports whether h is localhost or a loopback address.
+func LoopbackHost(h string) bool {
 	if h == "localhost" {
 		return true
 	}

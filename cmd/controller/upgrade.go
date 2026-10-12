@@ -34,12 +34,6 @@ var trialFn func(ctx context.Context, path, version string) error
 // dropped for the previous one (upgrade.MaxAttempts).
 var confirmAfter = 30 * time.Second
 
-// upgradeRun carries the manager out of daemon, so run can start the new
-// binary once the daemon has stopped.
-type upgradeRun struct {
-	mgr *upgrade.Manager
-}
-
 // launchStaged is the launcher at start: when the state names a staged
 // version for this installed binary, start it in place of this process.
 // It runs only for the daemon, never for -check, and never in a process
@@ -106,20 +100,29 @@ func confirmUpgrade(ctx context.Context, mgr *upgrade.Manager, getenv func(strin
 	}()
 }
 
-// finishUpgrade starts the prepared version after a clean shutdown. A
-// shutdown that failed undoes the switch: the state goes back to what ran.
-func finishUpgrade(up *upgradeRun, code int, args []string, log *slog.Logger) (int, bool) {
-	if up == nil || up.mgr == nil {
-		return code, false
+// finishUpgrade starts the prepared version once the daemon has stopped.
+// It does so only when the manager's own stop ended the daemon: a SIGINT
+// or SIGTERM from outside (ctx done) means the operator wants Packeteer
+// stopped, so the switch is undone and the process exits. A shutdown that
+// failed undoes it too: the state goes back to what ran.
+func finishUpgrade(ctx context.Context, mgr *upgrade.Manager, code int, args []string, log *slog.Logger) int {
+	if mgr == nil {
+		return code
 	}
-	tg, ok := up.mgr.Pending()
+	tg, ok := mgr.Pending()
 	if !ok {
-		return code, false
+		return code
+	}
+	if ctx.Err() != nil {
+		log.Info("stopped by a signal during a prepared upgrade; not starting the new version")
+		mgr.Abort("stopped by a signal before the switch")
+		return code
 	}
 	if code != 0 {
 		log.Error("shutdown for the upgrade did not finish cleanly; staying on the current version")
-		up.mgr.Abort("shutdown for the switch ended with exit code " + strconv.Itoa(code))
-		return code, false
+		mgr.Abort("shutdown for the switch ended with exit code " + strconv.Itoa(code))
+		return code
 	}
-	return execInto(tg, args, log)
+	code, _ = execInto(tg, args, log)
+	return code
 }

@@ -24,7 +24,6 @@ import (
 
 // Refusals the API maps to a status. Each leaves everything as it was.
 var (
-	ErrDisabled   = errors.New("upgrade is not enabled (upgrade.enabled)")
 	ErrNoConfirm  = errors.New("an upgrade needs explicit confirmation")
 	ErrBusy       = errors.New("an upgrade or rollback is already in progress")
 	ErrBadTag     = errors.New("that is not a release version")
@@ -88,7 +87,6 @@ type Status struct {
 	LastError    string        `json:"last_error,omitempty"`
 	Pending      string        `json:"pending,omitempty"`
 	CheckEvery   string        `json:"check_interval,omitempty"`
-	HA           string        `json:"ha,omitempty"`
 	NeedsStandby bool          `json:"needs_standby_upgraded"`
 }
 
@@ -279,7 +277,6 @@ func (m *Manager) statusLocked() Status {
 	}
 	if m.opt.HA != nil {
 		ha := m.opt.HA()
-		s.HA = ha.Role
 		s.NeedsStandby = ha.Role == plugin.RoleActive
 	}
 	return s
@@ -468,20 +465,17 @@ func (m *Manager) apply(ctx context.Context, req Request) (Result, error) {
 	if err := os.Chmod(tmp.Name(), 0o755); err != nil {
 		return Result{}, err
 	}
+	// The trial runs on the download: a file already at dest may be the
+	// rollback target and must stay as recorded until the new one passes.
+	if err := m.opt.Trial(ctx, tmp.Name(), version); err != nil {
+		return Result{}, fmt.Errorf("%w: %v", ErrTrial, err)
+	}
 	dest := m.store.versionPath(version)
 	if err := os.MkdirAll(filepath.Dir(dest), 0o700); err != nil {
 		return Result{}, err
 	}
-	_, statErr := os.Stat(dest)
-	existed := statErr == nil
 	if err := os.Rename(tmp.Name(), dest); err != nil {
 		return Result{}, err
-	}
-	if err := m.opt.Trial(ctx, dest, version); err != nil {
-		if !existed {
-			_ = os.RemoveAll(filepath.Dir(dest))
-		}
-		return Result{}, fmt.Errorf("%w: %v", ErrTrial, err)
 	}
 	return m.switchTo(Entry{Version: version, Path: dest, SHA256: got}, "Upgrading")
 }

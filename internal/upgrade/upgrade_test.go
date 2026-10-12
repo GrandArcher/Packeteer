@@ -543,3 +543,41 @@ func TestRefusesPlainHTTPAndOtherSchemes(t *testing.T) {
 		}
 	}
 }
+
+// A failed upgrade to the version that is the rollback target must leave
+// that staged file as recorded, so the rollback still works.
+func TestFailedApplyKeepsTheRollbackTarget(t *testing.T) {
+	f := newFake(t, "v0.7.0", "v0.6.0")
+	r := newRig(t, f, "0.5.0")
+	r.noHA()
+	ctx := context.Background()
+	restart := func(m *Manager, version string) *Manager {
+		opt := m.opt
+		opt.Version, opt.Exe = version, filepath.Join(r.dir, "versions", version, "packeteer")
+		m2, err := New(opt, true)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return m2
+	}
+	if _, err := r.m.Apply(ctx, Request{Tag: "v0.6.0", Confirm: true}); err != nil {
+		t.Fatal(err)
+	}
+	m2 := restart(r.m, "0.6.0")
+	if _, err := m2.Apply(ctx, Request{Tag: "v0.7.0", Confirm: true}); err != nil {
+		t.Fatal(err)
+	}
+	m3 := restart(m2, "0.7.0")
+	prevPath := filepath.Join(r.dir, "versions", "0.6.0", "packeteer")
+
+	f.bins["v0.6.0"] = script("0.9.9")
+	if _, err := m3.Apply(ctx, Request{Tag: "v0.6.0", Confirm: true}); !errors.Is(err, ErrTrial) {
+		t.Fatalf("err = %v, want ErrTrial", err)
+	}
+	if b, _ := os.ReadFile(prevPath); string(b) != script("0.6.0") {
+		t.Fatalf("the rollback target was overwritten: %q", b)
+	}
+	if _, err := m3.Rollback(ctx, Request{Confirm: true}); err != nil {
+		t.Fatalf("rollback after the failed upgrade: %v", err)
+	}
+}

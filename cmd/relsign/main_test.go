@@ -37,6 +37,7 @@ func TestSignThenVerify(t *testing.T) {
 		}
 		return ""
 	}
+	out.Reset()
 	if err := run([]string{"sign", dir, amd, arm}, env, &out); err != nil {
 		t.Fatal(err)
 	}
@@ -48,8 +49,8 @@ func TestSignThenVerify(t *testing.T) {
 	if !strings.Contains(string(sums), "  packeteer-linux-amd64\n") || strings.Contains(string(sums), dir) {
 		t.Fatalf("sums = %q", sums)
 	}
-	if strings.Contains(out.String(), priv+"\n") && strings.Count(out.String(), priv) > 1 {
-		t.Fatal("the private key was printed by sign")
+	if out.Len() != 0 {
+		t.Fatalf("sign wrote %q, want nothing", out.String())
 	}
 	if err := run([]string{"sign", dir, amd}, func(string) string { return "" }, &out); err == nil {
 		t.Fatal("signed without a key")
