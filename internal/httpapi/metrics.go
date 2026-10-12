@@ -9,6 +9,10 @@ import (
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
 )
 
+// truncatedLimits are the caps packeteer_truncated_total reports, in the
+// order they are written. Zero when the source that owns a cap is absent.
+var truncatedLimits = []string{"max_prefixes", "max_flows"}
+
 // Canonical BGP FSM states from the GoBGP session enum. A state outside
 // this list is emitted as well so a future name is still visible.
 var bgpFSM = []string{"UNKNOWN", "IDLE", "CONNECT", "ACTIVE", "OPENSENT", "OPENCONFIRM", "ESTABLISHED"}
@@ -73,6 +77,11 @@ func Metrics(s Snapshot) []byte {
 		sample{value: float64(s.ProbePrefixCommits)})
 	writeGauge(&b, "packeteer_flow_prefixes_tracked", "Distinct destination prefixes the flow window has seen, including ones past the exact cell cap. A HyperLogLog estimate. Zero when no flow source is configured.",
 		sample{value: float64(s.FlowTracked)})
+	var trunc []sample
+	for _, k := range truncatedLimits {
+		trunc = append(trunc, sample{labels: []lbl{{"limit", k}}, value: float64(s.Truncated[k])})
+	}
+	writeCounter(&b, "packeteer_truncated_total", "Items a passive-measurement cap turned away since start, by the config key that capped them: max_prefixes (flow and span window prefixes, flow counter keys) and max_flows (span connections). A rising value means that cap is binding; see docs/performance.md.", trunc...)
 
 	counts := map[string]float64{}
 	actions := append([]string(nil), decisionActions...)
@@ -250,6 +259,14 @@ type sample struct {
 }
 
 func writeGauge(b *strings.Builder, name, help string, samples ...sample) {
+	writeSeries(b, "gauge", name, help, samples...)
+}
+
+func writeCounter(b *strings.Builder, name, help string, samples ...sample) {
+	writeSeries(b, "counter", name, help, samples...)
+}
+
+func writeSeries(b *strings.Builder, typ, name, help string, samples ...sample) {
 	if len(samples) == 0 {
 		return
 	}
@@ -260,7 +277,9 @@ func writeGauge(b *strings.Builder, name, help string, samples ...sample) {
 	b.WriteByte('\n')
 	b.WriteString("# TYPE ")
 	b.WriteString(name)
-	b.WriteString(" gauge\n")
+	b.WriteByte(' ')
+	b.WriteString(typ)
+	b.WriteByte('\n')
 	for _, s := range samples {
 		b.WriteString(name)
 		if len(s.labels) > 0 {

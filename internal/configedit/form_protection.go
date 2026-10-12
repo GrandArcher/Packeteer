@@ -276,7 +276,7 @@ func (f Form) validateInbound() error {
 				return fmt.Errorf("%w: inbound.performance: loss_pct and latency_ms cannot both be off", ErrForm)
 			}
 		}
-		if err := validInt("inbound.performance.min_prefixes", pf.MinPrefixes, 1, 10000); err != nil {
+		if err := validInt("inbound.performance.min_prefixes", pf.MinPrefixes, 1, 100000); err != nil {
 			return err
 		}
 		if err := pctField("inbound.performance.release_pct", pf.ReleasePct); err != nil {

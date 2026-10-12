@@ -27,6 +27,7 @@ type Collector struct {
 	view        *rib.View
 	telemetry   func() []plugin.Usage
 	flowTracked func() int
+	truncated   func() map[string]uint64
 	exchanges   []exchange.Exchange
 	hops        func() []rib.NextHopCount
 }
@@ -52,6 +53,15 @@ func (c *Collector) Attach(engine *probe.Engine, decider *policy.Engine, view *r
 func (c *Collector) SetFlowTracked(fn func() int) {
 	c.mu.Lock()
 	c.flowTracked = fn
+	c.mu.Unlock()
+}
+
+// SetTruncated installs the read of the passive caps' truncation counts,
+// by config key. Nil reports none. The function may run while Snapshot is
+// called.
+func (c *Collector) SetTruncated(fn func() map[string]uint64) {
+	c.mu.Lock()
+	c.truncated = fn
 	c.mu.Unlock()
 }
 
@@ -97,7 +107,7 @@ func (c *Collector) Snapshot() Snapshot {
 	c.mu.RLock()
 	mode := c.mode
 	started, engine, decider, view, telemetry := c.started, c.engine, c.decider, c.view, c.telemetry
-	exs, hops, flowTracked := c.exchanges, c.hops, c.flowTracked
+	exs, hops, flowTracked, truncated := c.exchanges, c.hops, c.flowTracked, c.truncated
 	c.mu.RUnlock()
 
 	in := Input{
@@ -117,6 +127,9 @@ func (c *Collector) Snapshot() Snapshot {
 	}
 	if flowTracked != nil {
 		in.FlowTracked = flowTracked()
+	}
+	if truncated != nil {
+		in.Truncated = truncated()
 	}
 	if decider != nil {
 		in.Decisions, in.DecidedAt = decider.Decisions()

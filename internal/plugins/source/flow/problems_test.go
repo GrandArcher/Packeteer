@@ -158,7 +158,7 @@ func TestFlowProblemsConfig(t *testing.T) {
 		"listen: 127.0.0.1:2055\nproblems:\n  local: [0.0.0.0/0]\n",
 		"listen: 127.0.0.1:2055\nproblems:\n  local: [192.0.2.1/24]\n",
 		problemsYAML + "  failure_pct: 101\n",
-		problemsYAML + "  max_targets: 10001\n",
+		problemsYAML + "  max_targets: 100001\n",
 		problemsYAML + "  retrans_pct: 5\n", // not measurable from flows
 	} {
 		if _, err := build(y); err == nil {

@@ -42,11 +42,22 @@ type Profile struct {
 }
 
 // Budgets are the limits. Zero leaves a figure reported but unchecked.
+//
+// The four figures that grow with the table (learn time and the three RSS
+// ones) are written per million prefixes in the file, so one number holds
+// from a 1M to a 5M table (#217). loadProfile multiplies them by the
+// profile's prefixes into the flat fields the checks read.
 type Budgets struct {
-	LearnSeconds      float64 `yaml:"learn_seconds"`
-	RSSPeakMB         float64 `yaml:"rss_peak_mb"`
-	RSSGrowthMB       float64 `yaml:"rss_growth_mb"`
-	RSSSlopeMB        float64 `yaml:"rss_slope_mb"`
+	LearnSeconds float64 `yaml:"-"`
+	RSSPeakMB    float64 `yaml:"-"`
+	RSSGrowthMB  float64 `yaml:"-"`
+	RSSSlopeMB   float64 `yaml:"-"`
+
+	LearnSecondsPerM float64 `yaml:"learn_seconds_per_mprefix"`
+	RSSPeakMBPerM    float64 `yaml:"rss_peak_mb_per_mprefix"`
+	RSSGrowthMBPerM  float64 `yaml:"rss_growth_mb_per_mprefix"`
+	RSSSlopeMBPerM   float64 `yaml:"rss_slope_mb_per_mprefix"`
+
 	CPUAvgCores       float64 `yaml:"cpu_avg_cores"`
 	Threads           int     `yaml:"threads"`
 	UDPDropPct        float64 `yaml:"udp_drop_pct"`
@@ -56,6 +67,17 @@ type Budgets struct {
 	MinMeasured       int     `yaml:"min_measured"`
 	MinActivePerHour  int     `yaml:"min_active_per_hour"`
 	MinPassiveTracked int     `yaml:"min_passive_tracked"`
+}
+
+// scaled fills the flat limits from the per-million ones for a table of n
+// prefixes.
+func (b Budgets) scaled(n int) Budgets {
+	m := float64(n) / 1e6
+	b.LearnSeconds = b.LearnSecondsPerM * m
+	b.RSSPeakMB = b.RSSPeakMBPerM * m
+	b.RSSGrowthMB = b.RSSGrowthMBPerM * m
+	b.RSSSlopeMB = b.RSSSlopeMBPerM * m
+	return b
 }
 
 type budgetFile struct {
@@ -82,6 +104,7 @@ func loadProfile(path, name string) (Profile, error) {
 		slices.Sort(names)
 		return Profile{}, fmt.Errorf("%s: no profile %q (have %s)", path, name, strings.Join(names, ", "))
 	}
+	p.Budgets = p.Budgets.scaled(p.Prefixes)
 	return p, p.validate()
 }
 
@@ -95,6 +118,9 @@ func (p Profile) validate() error {
 	}
 	if p.FlowRate < 0 || p.Churn < 0 || p.FlowTopN < 0 || p.StaticTargets < 0 || p.FlowHot < 0 {
 		errs = append(errs, errors.New("rates and counts must not be negative"))
+	}
+	if b := p.Budgets; b.LearnSecondsPerM < 0 || b.RSSPeakMBPerM < 0 || b.RSSGrowthMBPerM < 0 || b.RSSSlopeMBPerM < 0 {
+		errs = append(errs, errors.New("per-million budgets must not be negative"))
 	}
 	if p.StaticTargets > p.Prefixes {
 		errs = append(errs, errors.New("static_targets exceeds prefixes"))

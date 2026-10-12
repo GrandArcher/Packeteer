@@ -744,7 +744,7 @@ Off unless this source is listed. Critical prefixes, and prefixes whose learned 
 | `interval` | none | Required, at least `1s`. Must be shorter than the staleness window (`3 * probe.interval + packets * timeout`, plus retry packets when retry is on). The controller refuses to start otherwise. Shorter than `probe.interval` is the usual setting. |
 | `prefixes` | none | CIDRs, no host bits, no default route, no duplicates. Optional `host` must sit inside the prefix. Count toward `max_targets`. |
 | `asns` | none | Non-zero ASNs, no duplicates. Matched against the learned AS path only while the RIB is ready. |
-| `max_targets` | 100 | 1–10000. Cap on configured prefixes plus ASN matches. The list is truncated and a warning is logged. The expansion is rebuilt only when the RIB changes. |
+| `max_targets` | 100 | 1–100000. Cap on configured prefixes plus ASN matches. The list is truncated and a warning is logged. The expansion is rebuilt only when the RIB changes. |
 
 At least one prefix or ASN is required. The prefix list cannot be longer than `max_targets`. A prefix that is also returned by an earlier source keeps that source's host. A later interval wins only when it is shorter than the interval already chosen, and an unset interval means `probe.interval`. Listing a transit ASN does not turn the whole table into targets.
 
@@ -764,12 +764,12 @@ The re-queue is probe targets only. An AS incident includes every learned prefix
 
 | Key | Default | Bounds |
 |---|---|---|
-| `min_prefixes` | 3 | 2–10000. Zero uses the default. One noisy prefix is not an incident. |
+| `min_prefixes` | 3 | 2–100000. Zero uses the default. One noisy prefix is not an incident. |
 | `window` | `2m` | `1s`–`24h`. Zero uses the default. |
 | `loss_pct` | 20 | 0–100. Zero uses the default of 20, so loss detection stays on. A failed probe still counts when loss is below this. |
 | `rtt_ms` | 0 | Not negative. Zero disables the RTT check. A positive value also treats average RTT at or above this many milliseconds as degraded. |
 | `interval` | `5s` | `1s`–`24h`. Zero uses the default. Must be shorter than `probe.interval` and shorter than the staleness window. The controller refuses to start otherwise. |
-| `max_targets` | 100 | 1–10000. Cap on the re-queue. Truncation is logged. Degraded prefixes are kept first. |
+| `max_targets` | 100 | 1–100000. Cap on the re-queue. Truncation is logged. Degraded prefixes are kept first. |
 | `ignore_asns` | none | Non-zero ASNs, no duplicates. Skipped when looking for a sick ASN. |
 
 ### Source `flow`
@@ -780,8 +780,9 @@ Off unless this source is listed. NetFlow v5, NetFlow v9, IPFIX, and sFlow v5. R
 |---|---|---|
 | `listen` | none | Required. One `host:port` or a list. Host is an IP address or empty. Duplicate addresses are errors. |
 | `window` | `5m` | `1s`–`24h`. |
-| `top_n` | 100 | 1–10000. Priority tier, probed every `probe.interval`. |
-| `max_targets` | `top_n` | 0 matches `top_n`. Otherwise from `top_n` through 10000. Cap on the probed set. |
+| `top_n` | 100 | 1–100000, and at most `max_prefixes`. Priority tier, probed every `probe.interval`. |
+| `max_targets` | `top_n` | 0 matches `top_n`. Otherwise from `top_n` through 100000, and at most `max_prefixes`. Cap on the probed set. |
+| `max_prefixes` | 20000 | 1–250000 (#217). Exact prefix cells per time bucket and anomaly counter keys. A new prefix past it is counted in `packeteer_truncated_total{limit="max_prefixes"}`. A cell costs about 220 bytes and a 5-minute window has 30 buckets, so the default can hold 127 MiB and 250000 about 1.5 GiB. See [performance](performance.md#limits-at-large-tables). |
 | `min_bytes` | 0 | Absolute floor, in bytes over `window`. 0 disables this bar. |
 | `min_pct` | 0 | 0–100, in steps of 0.0001. Percent of the bytes counted in the window. 0 disables this bar. |
 | `tail_interval` | 0 | `1s`–`24h` when set. Required when `max_targets` is greater than `top_n`. Must be longer than `probe.interval` and shorter than the staleness window. |
@@ -791,11 +792,11 @@ Off unless this source is listed. NetFlow v5, NetFlow v9, IPFIX, and sFlow v5. R
 
 A destination inside an `exchanges[].lans` prefix is ignored the same way as `exclude` (#145): it is not aggregated, and it is not the candidate host. That includes an address no learned route covers, which would otherwise become `aggregate_v4` or `aggregate_v6`. Those bytes are not in the window, the volume, or the anomaly counters.
 
-With `--network host`, `listen` binds host UDP ports. Do not publish them. Each time bucket keeps at most 20000 prefixes. Those exact cells are what become probe targets and what the commit scorer reads as volume. It also counts bytes per destination prefix and IP protocol since it started (at most 20000 keys; a key idle for an hour is forgotten), which [`anomaly`](#anomaly) reads for its baselines. Each bucket also keeps a fixed HyperLogLog (4096 registers, 4 KiB) of every prefix offered to it, including ones the exact map refused (#125). A 5-minute window is about 30 buckets, about 120 KiB. The window merges the live buckets into `packeteer_flow_prefixes_tracked`. The sketch does not add probe targets and is not the commit scorer's volume. The protocol comes from NetFlow v5, v9/IPFIX (information element 4), and sFlow (sampled IPv4/IPv6 records and the IP header; IPv6 extension headers are not followed); records without it count as protocol `any`. The commit scorer reads the busiest prefixes, up to 20000, as a rate (bytes × 8 / window, decimal megabits per second), including prefixes the floor or the cap did not offer as probe targets. A prefix past that set is not a volume. Its bytes still count toward `min_pct`. Merging the window builds a destination list only for those prefixes and for a problem prefix outside the set.
+With `--network host`, `listen` binds host UDP ports. Do not publish them. Each time bucket keeps at most `max_prefixes` prefixes (20000 by default). Those exact cells are what become probe targets and what the commit scorer reads as volume. It also counts bytes per destination prefix and IP protocol since it started (at most `max_prefixes` keys; a key idle for an hour is forgotten), which [`anomaly`](#anomaly) reads for its baselines. Each bucket also keeps a fixed HyperLogLog (4096 registers, 4 KiB) of every prefix offered to it, including ones the exact map refused (#125). A 5-minute window is about 30 buckets, about 120 KiB. The window merges the live buckets into `packeteer_flow_prefixes_tracked`. The sketch does not add probe targets and is not the commit scorer's volume. The protocol comes from NetFlow v5, v9/IPFIX (information element 4), and sFlow (sampled IPv4/IPv6 records and the IP header; IPv6 extension headers are not followed); records without it count as protocol `any`. The commit scorer reads the busiest prefixes, up to 20000, as a rate (bytes × 8 / window, decimal megabits per second), including prefixes the floor or the cap did not offer as probe targets. A prefix past that set is not a volume. Its bytes still count toward `min_pct`. Merging the window builds a destination list only for those prefixes and for a problem prefix outside the set.
 
 A prefix is eligible when it clears at least one enabled floor (#118). `min_bytes` above 0 is an absolute total. `min_pct` above 0 is that percent of every byte the window counted. When both are above 0, either one is enough: a busy prefix under the percent still qualifies, and a smaller prefix that is a large share of the window still qualifies. When both are 0, every prefix with bytes is eligible and `top_n` still cuts the list, which is the previous behavior. Eligible prefixes are largest first. An equal total breaks by prefix text, and that order does not change between reads.
 
-`top_n` is the priority tier. Those targets leave their interval unset, so the engine probes them every `probe.interval`. `max_targets` is the larger set. 0 or omitted means the same number as `top_n`, so the default list is unchanged. It cannot be set below `top_n` or above 10000. Prefixes past `top_n`, up to that cap, are still returned and carry `tail_interval`. That key is required only then. The controller refuses to start when `tail_interval` is not longer than `probe.interval` or is not shorter than the staleness window (`3 * probe.interval + packets * timeout`, plus retry packets when a second probe can run). A slower tail would be stale on every decision, and stale data withdraws an improvement. Problem prefixes stay ahead of this list, keep the normal interval, and a problem prefix that also clears the floor still uses one slot.
+`top_n` is the priority tier. Those targets leave their interval unset, so the engine probes them every `probe.interval`. `max_targets` is the larger set. 0 or omitted means the same number as `top_n`, so the default list is unchanged. It cannot be set below `top_n` or above 100000, or above `max_prefixes`. Prefixes past `top_n`, up to that cap, are still returned and carry `tail_interval`. That key is required only then. The controller refuses to start when `tail_interval` is not longer than `probe.interval` or is not shorter than the staleness window (`3 * probe.interval + packets * timeout`, plus retry packets when a second probe can run). A slower tail would be stale on every decision, and stale data withdraws an improvement. Problem prefixes stay ahead of this list, keep the normal interval, and a problem prefix that also clears the floor still uses one slot.
 
 Up to three destinations on a flow target are probe candidates, not pins (#113, #119). They are the destinations with the most bytes in the prefix over the window, busiest first. Each time bucket keeps only its own three busiest destinations, and a destination that never makes a bucket's three is not recovered when the window is summed. A problem prefix lists the address the failures were seen on first, then those destinations, still at most three. The engine probes the named addresses first. When fewer than three were named, it fills with the automatic in-prefix addresses (the first host, a quarter point, and a halfway point). When three were named, it does not add those automatic addresses. A usable provider `next_hop` still takes the last of the four slots. A host that sends no reply, or that does not qualify under `probe.min_replies` and `probe.dispersion_ms`, is left out of the loss and latency when another address inside the prefix qualifies. When none qualify, every measured host still counts. The addresses tried are on the probe result (`targets`). An operator `host` on `static`, `vip`, or `traceroute` for the same prefix is still the only address probed. An active improvement whose prefix falls off this list (below both floors, or past `max_targets`) stays on that last host and interval until the improvement retires. This does not announce. Every packet still waits on `probe.rate_limit_pps`.
 
@@ -806,7 +807,7 @@ Up to three destinations on a flow target are probe candidates, not pins (#113, 
 | `problems.local` | none | Required when `problems` is set. Your own networks, CIDRs, no host bits, no default route, no duplicates. |
 | `problems.failure_pct` | 20 | 0–100. Zero uses the default. |
 | `problems.min_flows` | 10 | Zero uses the default. |
-| `problems.max_targets` | 100 | 1–10000. |
+| `problems.max_targets` | 100 | 1–100000. |
 
 `transit` (optional, off when omitted) classifies traffic as transiting or local (#29, IRP "optimization of transiting traffic"). A flow record whose source address is inside `customers` (the customer or downstream networks behind this edge, whose traffic crosses your network to the Internet) is transit; a record with any other source is local. Records without a source address (an sFlow raw header that is not IP, or a NetFlow v9/IPFIX template without IE 8 or 27) are not classified. NetFlow v5, v9, IPFIX, and sFlow (sampled IPv4/IPv6 records and raw headers) all carry the source. Per prefix, over the same `window`, the source keeps the transit and local byte counts; a prefix whose transit share is at least `share_pct` is a `transit` prefix, otherwise `local`. The class does not change the targets or their weights. Before each decision the controller passes it to the policy chain, where `rules` with `traffic: transit` or `traffic: local` give customer-originated and local traffic separate policies (see [Policy `rules`](#policy-rules)). A prefix with no classified bytes in the window has no class, and traffic rules do not match it. Classification never announces: the allowlist, learned-RIB check, community and NO_EXPORT, `max_improvements`, hold time, and withdraw rules are unchanged. Rollback: remove `transit` (and the `traffic` rules).
 
@@ -856,8 +857,9 @@ A remote prefix is a problem when retransmissions / data segments ≥ `retrans_p
 | `min_flows` | 10 | Zero uses the default. Also the minimum RTT samples. |
 | `syn_timeout` | `3s` | `100ms`–`1m`. |
 | `flow_idle` | `2m` | Longer than `syn_timeout`, at most `1h`. Idle connections are forgotten. |
-| `max_flows` | 100000 | 1–10000000. A new connection beyond the cap is not tracked. |
-| `max_targets` | 100 | 1–10000. |
+| `max_flows` | 100000 | 1–10000000. A new connection beyond the cap is not tracked and is counted in `packeteer_truncated_total{limit="max_flows"}`. |
+| `max_targets` | 100 | 1–100000, and at most `max_prefixes`. |
+| `max_prefixes` | 20000 | 1–250000 (#217). Prefix cells per time bucket. A new prefix past it is counted in `packeteer_truncated_total{limit="max_prefixes"}`. |
 | `aggregate_v4` | 24 | 1–32. |
 | `aggregate_v6` | 48 | 1–128. |
 
@@ -1353,7 +1355,7 @@ The built-in anomaly detector (#33). For each destination prefix and IP protocol
 | `warmup` | `30` | Rounds a key learns before the baseline test applies. 1–100000. |
 | `trigger_rounds` | `2` | Anomalous rounds in a row before an anomaly opens. 1–1000. |
 | `clear_rounds` | `3` | Normal rounds in a row before it clears. 1–1000. |
-| `max_keys` | `10000` | Keys tracked; new keys past it are not tracked. 1–100000. An idle key is forgotten once its mean decays to nothing. |
+| `max_keys` | `10000` | Keys tracked; new keys past it are not tracked. 1–1000000. An idle key is forgotten once its mean decays to nothing. |
 
 ### Announcer `gobgp`
 

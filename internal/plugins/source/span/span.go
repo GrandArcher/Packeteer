@@ -55,8 +55,7 @@ const (
 	maxSYNTimeout = time.Minute
 	maxFlowIdle   = time.Hour
 	maxFlowsLimit = 10000000
-	maxTargets    = 10000
-	maxPrefixes   = 20000
+	maxTargets    = 100000
 
 	captureBuffer = 8 << 20
 	snapLen       = 512
@@ -91,8 +90,11 @@ type Config struct {
 	FlowIdle    time.Duration `yaml:"flow_idle"`
 	MaxFlows    int           `yaml:"max_flows"`
 	MaxTargets  int           `yaml:"max_targets"`
-	AggregateV4 int           `yaml:"aggregate_v4"`
-	AggregateV6 int           `yaml:"aggregate_v6"`
+	// MaxPrefixes caps the prefix cells in one window bucket. Default
+	// 20000. Prefixes past it are counted in packeteer_truncated_total.
+	MaxPrefixes int `yaml:"max_prefixes"`
+	AggregateV4 int `yaml:"aggregate_v4"`
+	AggregateV6 int `yaml:"aggregate_v6"`
 }
 
 // Source detects problem prefixes from mirrored TCP traffic.
@@ -217,6 +219,15 @@ func New(c plugin.Config, env plugin.Env) (plugin.TargetSource, error) {
 	if cfg.MaxTargets < 1 || cfg.MaxTargets > maxTargets {
 		return nil, fmt.Errorf("max_targets %d must be between 1 and %d", cfg.MaxTargets, maxTargets)
 	}
+	if cfg.MaxPrefixes == 0 {
+		cfg.MaxPrefixes = passive.DefaultMaxPrefixes
+	}
+	if cfg.MaxPrefixes < 1 || cfg.MaxPrefixes > passive.MaxPrefixesLimit {
+		return nil, fmt.Errorf("max_prefixes %d must be between 1 and %d", cfg.MaxPrefixes, passive.MaxPrefixesLimit)
+	}
+	if cfg.MaxTargets > cfg.MaxPrefixes {
+		return nil, fmt.Errorf("max_targets %d exceeds max_prefixes %d: the window cannot hold that many targets", cfg.MaxTargets, cfg.MaxPrefixes)
+	}
 	if cfg.AggregateV4 == 0 {
 		cfg.AggregateV4 = defaultAgg4
 	}
@@ -247,7 +258,7 @@ func New(c plugin.Config, env plugin.Env) (plugin.TargetSource, error) {
 		th:         th,
 		maxTargets: cfg.MaxTargets,
 		now:        time.Now,
-		win:        passive.NewWindow(cfg.Window, maxPrefixes),
+		win:        passive.NewWindow(cfg.Window, cfg.MaxPrefixes),
 		stop:       make(chan struct{}),
 	}
 	s.trk = &tracker{
@@ -261,6 +272,12 @@ func New(c plugin.Config, env plugin.Env) (plugin.TargetSource, error) {
 		flows:      map[flowKey]*flowState{},
 	}
 	return s, nil
+}
+
+// Truncated is how many prefixes and connections the caps turned away
+// since start.
+func (s *Source) Truncated() map[string]uint64 {
+	return map[string]uint64{"max_prefixes": s.win.Truncated(), "max_flows": s.trk.droppedTotal()}
 }
 
 // Fresh tells the probe engine to read Targets every round: the list
