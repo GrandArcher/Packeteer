@@ -68,6 +68,10 @@ The edge must accept both sessions with the same import policy (accept only `pac
 
 Rollback: remove `ha` from the config and run one instance.
 
+## Upgrading a pair
+
+With `upgrade.enabled` ([ui.md](ui.md#upgrade-from-the-ui), #196) upgrade the standby first. The upgrade refuses on a standby when no node holds the lease, and on the active node unless the request confirms (`standby_upgraded`) that the standby already runs the target version. The active node's shutdown withdraws its routes and releases the lease after the withdraw, so the upgraded standby takes over; the restarted node comes back as the standby. Never both at once: the lease serializes announcing, and a node being replaced has no route on the wire when it restarts.
+
 ## Backup and restore
 
 ```sh

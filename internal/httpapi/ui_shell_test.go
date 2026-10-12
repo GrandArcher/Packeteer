@@ -104,7 +104,7 @@ func TestUIShell(t *testing.T) {
 		"events.html":          {`<body data-page="events">`, `id="events"`, `id="audit"`, `id="tab-audit"`, `data-min-role="admin">Audit`, `id="ev-severity"`, `id="ev-q"`, `id="ev-range"`, `src="/events.js"`},
 		"admin.html":           {`<body data-page="admin">`, `id="page-denied"`, `id="admin-body"`, `id="user-form"`, `id="uf-name"`, `id="uf-role"`, `id="uf-password" type="password"`, `id="users-off" class="empty" hidden`, `id="users-on" hidden`, `src="/admin.js"`},
 		"tokens.html":          {`<body data-page="tokens">`, `id="tokens-off" class="empty" hidden`, `id="tokens-on" hidden`, `id="token-secret" class="secret" role="alert" hidden`, `id="token-form"`, `id="tf-name"`, `id="tf-role"`, `id="tf-ttl"`, `src="/tokens.js"`},
-		"settings.html":        {`<body data-page="settings">`, `src="/settings.js"`, `id="ed-yaml"`},
+		"settings.html":        {`<body data-page="settings">`, `src="/settings.js"`, `id="ed-yaml"`, `src="/upgrade.js"`, `id="up-check"`, `id="up-confirm"`},
 		"dashboards.html":      {`<body data-page="dashboards">`, `src="/dashboards.js"`, `id="db-grid"`, "Custom dashboards"},
 	}
 	if len(pages) != len(want) {
