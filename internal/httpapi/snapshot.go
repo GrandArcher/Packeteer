@@ -30,6 +30,7 @@ type Input struct {
 	Decisions    []policy.Decision
 	DecidedAt    time.Time
 	Improvements []policy.Improvement
+	Quarantined  []policy.Quarantine
 
 	BGPConfigured bool
 	RIBReady      bool
@@ -75,9 +76,12 @@ type Snapshot struct {
 	Prefixes     []Prefix
 	Decisions    []Decision
 	Improvements []Improvement
-	Peers        []Peer
-	Telemetry    []Telemetry
-	Exchanges    []exchange.Stats
+	// Quarantined are the prefixes the flap quarantine holds on their
+	// native path (#228).
+	Quarantined []Quarantine
+	Peers       []Peer
+	Telemetry   []Telemetry
+	Exchanges   []exchange.Stats
 	// ExchangeLANDrops is packeteer_exchange_lan_targets_dropped. It is
 	// not part of the JSON API.
 	ExchangeLANDrops uint64 `json:"-"`
@@ -160,6 +164,9 @@ type Prefix struct {
 	// Paths are the learned paths for this prefix, including inactive
 	// add-path and BMP paths. MED on a path is display only.
 	Paths []LearnedPath `json:"paths,omitempty"`
+	// Quarantine is set while the flap quarantine holds the prefix on its
+	// native path (#228).
+	Quarantine *Quarantine `json:"quarantine,omitempty"`
 }
 
 // LearnedPath is one path the edge advertised for a measured prefix.
@@ -326,6 +333,7 @@ func Assemble(in Input) Snapshot {
 		Prefixes:           assemblePrefixes(in),
 		Decisions:          assembleDecisions(in.Decisions),
 		Improvements:       assembleImprovements(in.Improvements),
+		Quarantined:        assembleQuarantine(in.Quarantined),
 		Peers:              assemblePeers(in.Peers),
 		Telemetry:          assembleTelemetry(in.Telemetry),
 		Exchanges:          in.Exchanges,
@@ -344,6 +352,7 @@ func (s *Snapshot) zeroNil() {
 	s.Prefixes = nz(s.Prefixes)
 	s.Decisions = nz(s.Decisions)
 	s.Improvements = nz(s.Improvements)
+	s.Quarantined = nz(s.Quarantined)
 	s.Peers = nz(s.Peers)
 	s.Telemetry = nz(s.Telemetry)
 	s.Exchanges = nz(s.Exchanges)
@@ -611,6 +620,15 @@ func assemblePrefixes(in Input) []Prefix {
 		}
 		if row.Reason == "" {
 			row.Reason = im.Reason
+		}
+	}
+	for _, q := range assembleQuarantine(in.Quarantined) {
+		p, err := netip.ParsePrefix(q.Prefix)
+		if err != nil {
+			continue
+		}
+		if row := add(p); row != nil {
+			row.Quarantine = &q
 		}
 	}
 	for k, row := range rows {

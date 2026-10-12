@@ -124,6 +124,7 @@ func TestPlanReload(t *testing.T) {
 		{"hold_time", strings.Replace(one, "hold_time: 1m", "hold_time: 2m", 1), "hold_time"},
 		{"thresholds", strings.Replace(one, "min_rtt_delta_ms: 15", "min_rtt_delta_ms: 10", 1), "thresholds"},
 		{"cap", one + "max_improvements: 0\n", "max_improvements"},
+		{"flap_quarantine", one + "flap_quarantine: {max_flips: 2}\n", "flap_quarantine"},
 		{"mode", strings.Replace(one, "mode: inject", "mode: observe\n", 1), "mode"},
 		{"allowlist", strings.Replace(one, `allowlist: {prefixes: ["198.51.100.0/24"]}`, `allowlist: {prefixes: ["203.0.113.0/24"]}`, 1), "allowlist"},
 		{"probe", one + "probe: {interval: 3s}\n", "probe.interval"},

@@ -24,13 +24,13 @@ Milestones:
 | v0.2 | 25 |
 | v0.3 | 17 |
 | v0.4 | 13 |
-| v0.6 | 6 |
+| v0.6 | 7 |
 | won't do | 2 |
-| **total** | 87 |
+| **total** | 88 |
 
 | Status | Count |
 |---|---|
-| done | 71 |
+| done | 72 |
 | partial | 11 |
 | in progress | 0 |
 | planned | 3 |
@@ -58,6 +58,7 @@ Recount (2026-10-07): the earlier 79 of 82 counted 13 rows as done that cover on
 | VIP (critical) prefixes/ASNs with more frequent probing | done | v0.2 | source (`vip`) | #15 | no |
 | Retry / aggressive probing | done (#119): loss at `retry_loss_pct`, or an RTT spread over `dispersion_ms`, is probed again with `retry_packets` before it is stored (both off by default; the retry sample replaces the first; too few replies do not escalate) | v0.2 | core (probe engine) | #15, #119 | no |
 | Hysteresis, thresholds, hold time before flip | done (#117): an RTT win needs `min_rtt_delta_ms` and, when `min_rtt_delta_pct` is set, that percent of the current path's RTT; a new performance move or switch waits for `confirm_rounds` consecutive fresh wins (a stale round does not count, a miss resets, including a switch off a commit or cost steer, and those wins count during hold time). Early probes wait a quarter of the prefix interval; a round that cannot compare does not keep the prober awake. Flip-back does not wait. Defaults (percent 0, one round) are the previous rule | v0.1 | scorer | #7, #117 | no |
+| Flap quarantine (a prefix that changes its chosen provider more than `max_flips` times in `window` is withdrawn and left on the native path for a `cooldown` that doubles on repeat offenses) | done (lab-proven): on by default, only withdraws, never announces; counts new improvements, switches, and flip-backs; logged as `flap.quarantined`/`flap.released` events and audit records; `packeteer_flap_quarantined` metric; listed on `/api/quarantine` and the prefix card; `POST /api/quarantine/release` ends it early | v0.6 | core (`internal/policy`) | #228 | no (lab-proven) |
 | Max improvements cap | done | v0.1 | core | #7 | no |
 | Improvement retirement / periodic re-probe of improvements (including a staleness timer when a probe round never finishes) | done (#116): an active improvement keeps its prefix on the last host and interval after its source drops it (for example flow `top_n`), until flip-back, `improvement_ttl`, the provider is unusable, a RIB leave, policy, or the allowlist | v0.1 | core | #7, #46, #116 | no |
 | Host qualification and probe consistency (enough consistent replies, RTT dispersion limit; fast probe escalating to a full probe) | done (#119): a host qualifies with at least `probe.min_replies` replies (default 1) and, when `probe.dispersion_ms` is set, an RTT spread (maximum minus minimum) no wider than that limit. An unqualified host drops out of the score the way a silent host does. A spread over the limit escalates to the retry probe. Defaults keep the previous rule. Flow prefixes offer up to three of the busiest destinations as candidates, probed first; automatic addresses fill in only when fewer than three were named. An operator pin stays the only target | v0.6 | core (probe engine) | #119 | no |
@@ -73,6 +74,8 @@ Flow selection (#118) keeps a prefix when an enabled floor passes. `min_bytes` a
 The `outage` source (#16, #124) correlates probe results inside `window` (default 2m). An ASN incident needs `min_prefixes` (default 3, minimum 2) degraded prefixes that cross that ASN and are degraded on every measured provider. The ASN can sit on the native AS path, on another provider's learned path (add-path or BMP), or be the origin ASN of a traceroute hop. A hop address maps to the last ASN of the longest matching learned prefix; a default route is not a match, and no external data is used. Hops come from per-provider indirect traces when a trace is cached. A prefix that is still healthy on another provider does not count toward that rule unless the ASN appears only on the degraded provider's path, in which case the incident is attributed to that provider and is not also a circuit. A provider incident is the same count of prefixes degraded on that provider and healthy on another, and not already explained by a sick ASN. One noisy prefix does not fire. With no traces and no alternate paths the correlation is the native AS path alone. The probe loop wakes and re-queues the affected prefixes, including other learned prefixes that cross the sick ASN, capped by `max_targets`. Events go to the configured notifiers. The source does not announce.
 
 Passive problem detection (#21) feeds probing; it never announces. The `span` source reads a mirror port with AF_PACKET (`NET_RAW`, host networking) or replays a classic pcap, follows TCP connections between the configured `local` networks and remote addresses, and scores each remote prefix by outbound retransmissions, handshake timeouts, remote resets, and optionally handshake RTT. The `flow` source's optional `problems` block does the same from TCP flags on unsampled NetFlow v5/v9 and IPFIX records (SYN without ACK outbound, RST inbound); retransmissions and RTT are not visible in flow records, and sampled exports and sFlow are skipped. Problem prefixes are probed first; injection still needs the learned RIB, allowlist, thresholds, cap, community, and hold time. Tests use a synthetic pcap fixture with documentation prefixes and, in CI, a root-only AF_PACKET capture on loopback. Removing the source (or the `problems` block) and restarting is the rollback.
+
+Flap quarantine (#228, [CONFIG.md](CONFIG.md#flap_quarantine)) is on by default and only withdraws. Each new improvement, switch, and flip-back of a prefix is one change. A change that would be more than `max_flips` inside `window` is not made: the route is withdrawn (or never announced) and the prefix stays on the native path for `cooldown`, doubled for each repeat offense within `max_cooldown` of the last release and capped at `max_cooldown`. It applies on top of `hold_time`, `confirm_rounds`, the cap, and the allowlist, and blocks every cause, static pins included. State is in memory, so a restart clears it. Lab-proven only (`lab/e2e-flap.sh`). Rollback: `flap_quarantine: {disabled: true}`.
 
 ## Cost / commit
 
