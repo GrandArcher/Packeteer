@@ -109,8 +109,6 @@ type Options struct {
 	// StopDelay lets the API response go out before Stop runs.
 	StopDelay time.Duration
 	Log       *slog.Logger
-	HTTP      *http.Client
-	Now       func() time.Time
 	// Trial runs a staged binary's start checks. Nil uses the binary's
 	// -version and -check.
 	Trial func(ctx context.Context, path, version string) error
@@ -148,18 +146,9 @@ func New(opt Options, launched bool) (*Manager, error) {
 	if opt.Log == nil {
 		opt.Log = slog.Default()
 	}
-	if opt.Now == nil {
-		opt.Now = time.Now
-	}
 	if opt.Arch == "" {
 		opt.Arch = runtime.GOARCH
 	}
-	if opt.HTTP == nil {
-		opt.HTTP = &http.Client{Timeout: 5 * time.Minute}
-	}
-	hc := *opt.HTTP
-	hc.CheckRedirect = checkRedirect
-	opt.HTTP = &hc
 	if opt.StopDelay == 0 {
 		opt.StopDelay = 500 * time.Millisecond
 	}
@@ -169,7 +158,7 @@ func New(opt Options, launched bool) (*Manager, error) {
 		}
 	}
 	m := &Manager{opt: opt, store: store{dir: opt.Config.Dir},
-		cl:      &client{api: opt.Config.APIURL, repo: opt.Config.Repo, http: opt.HTTP},
+		cl:      &client{api: opt.Config.APIURL, repo: opt.Config.Repo, http: &http.Client{Timeout: 5 * time.Minute, CheckRedirect: checkRedirect}},
 		baseVer: opt.Version, basePath: opt.Exe, staged: launched}
 	if launched {
 		st, err := m.store.load()
@@ -177,6 +166,11 @@ func New(opt Options, launched bool) (*Manager, error) {
 			return nil, fmt.Errorf("upgrade: started from a staged binary but the state is unreadable: %v", err)
 		}
 		m.baseVer, m.basePath = st.BaseVersion, st.BasePath
+	}
+	// Cleanup runs only here, after a switch has really happened, so an
+	// aborted switch never loses the rollback target.
+	if st, err := m.store.load(); err == nil && st != nil {
+		m.store.prune(st)
 	}
 	return m, nil
 }
@@ -202,7 +196,7 @@ func (m *Manager) Confirm() {
 		return
 	}
 	st.Confirmed, st.Attempts, st.LastError = true, 0, ""
-	if err := m.store.save(st, m.opt.Now()); err != nil {
+	if err := m.store.save(st, time.Now()); err != nil {
 		m.opt.Log.Warn("upgrade: confirm not saved", "err", err)
 	}
 }
@@ -232,13 +226,10 @@ func (m *Manager) Abort(reason string) {
 		return
 	}
 	st.LastError = reason
-	if u := m.undo; u != nil {
-		st.Active, st.Previous, st.Attempts, st.Confirmed = u.active, u.previous, u.attempts, u.confirmed
-	} else {
-		revert(st)
-	}
+	u := m.undo
+	st.Active, st.Previous, st.Attempts, st.Confirmed = u.active, u.previous, u.attempts, u.confirmed
 	m.undo = nil
-	_ = m.store.save(st, m.opt.Now())
+	_ = m.store.save(st, time.Now())
 }
 
 // Status reports the running version, the last check, and the rollback
@@ -298,7 +289,7 @@ func (m *Manager) Check(ctx context.Context) (Status, error) {
 	rels, err := m.cl.releases(ctx, m.opt.Config.AllowPrerelease)
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.checkedAt = m.opt.Now()
+	m.checkedAt = time.Now()
 	if err != nil {
 		m.checkErr = err.Error()
 		return m.statusLocked(), fmt.Errorf("%w: %v", ErrFetch, err)
@@ -552,10 +543,9 @@ func (m *Manager) switchTo(e Entry, verb string) (Result, error) {
 		st.Attempts = 1
 		target.Env = withLaunched(m.opt.Environ, e.Version)
 	}
-	if err := m.store.save(st, m.opt.Now()); err != nil {
+	if err := m.store.save(st, time.Now()); err != nil {
 		return Result{}, err
 	}
-	m.store.prune(st)
 	m.mu.Lock()
 	m.pending = &target
 	m.undo = undo

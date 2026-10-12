@@ -613,3 +613,38 @@ func TestRefusesRedirectToPlainHTTP(t *testing.T) {
 		t.Fatalf("redirect to plain http: err = %v", err)
 	}
 }
+
+func TestAbortKeepsAStagedRollbackTarget(t *testing.T) {
+	f := newFake(t, "v0.6.0", "v0.7.0", "v0.8.0")
+	r := newRig(t, f, "0.5.0")
+	r.noHA()
+	ctx := context.Background()
+	m := r.m
+	for _, v := range []string{"0.6.0", "0.7.0"} {
+		if _, err := m.Apply(ctx, Request{Tag: "v" + v, Confirm: true}); err != nil {
+			t.Fatal(err)
+		}
+		opt := m.opt
+		opt.Version, opt.Exe = v, filepath.Join(r.dir, "versions", v, "packeteer")
+		next, err := New(opt, true)
+		if err != nil {
+			t.Fatal(err)
+		}
+		next.Confirm()
+		m = next
+	}
+	if _, err := m.Apply(ctx, Request{Tag: "v0.8.0", Confirm: true}); err != nil {
+		t.Fatal(err)
+	}
+	m.Abort("SIGTERM during the stop delay")
+	if _, err := os.Stat(filepath.Join(r.dir, "versions", "0.6.0", "packeteer")); err != nil {
+		t.Fatalf("rollback target removed: %v", err)
+	}
+	res, err := m.Rollback(ctx, Request{Confirm: true})
+	if err != nil {
+		t.Fatalf("rollback after abort: %v", err)
+	}
+	if res.To != "0.6.0" {
+		t.Fatalf("rolled back to %q", res.To)
+	}
+}
