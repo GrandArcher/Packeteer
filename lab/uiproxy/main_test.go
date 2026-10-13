@@ -103,6 +103,15 @@ func TestFixturesStubAndInject(t *testing.T) {
 	if code, body := do("POST", "/api/troubleshoot/traceroute", `{"target":"203.0.113.99","provider":""}`); code != 429 || !strings.Contains(body, "rate limited") {
 		t.Errorf("stubbed rate limit: %d %s", code, body)
 	}
+	if code, body := do("POST", "/api/troubleshoot/probe", `{"target":"host.example.net"}`); code != 200 || !strings.Contains(body, `"best": "transit-b"`) {
+		t.Errorf("stubbed hostname probe: %d %s", code, body)
+	}
+	if code, body := do("POST", "/api/troubleshoot/optimize", `{"target":"198.51.100.9"}`); code != 200 || !strings.Contains(body, `"prefix": "198.51.100.0/24"`) {
+		t.Errorf("stubbed optimize: %d %s", code, body)
+	}
+	if code, body := do("GET", "/api/troubleshoot", ""); code != 200 || !strings.Contains(body, `"optimize": true`) {
+		t.Errorf("stubbed status: %d %s", code, body)
+	}
 	// A call with no stub, and the same path with another target, reach the origin.
 	if code, body := do("GET", "/api/troubleshoot/lookingglass?prefix=192.0.2.0%2F24", ""); code != 200 || body != "origin /api/troubleshoot/lookingglass" {
 		t.Errorf("unstubbed glass: %d %s", code, body)
@@ -146,6 +155,17 @@ func TestTroubleshootFixturesMatchAPI(t *testing.T) {
 	decode("trace-single.json", &single)
 	if len(multi.Traces) != 3 || multi.Traces[0].Hops[0].OriginAS != 64496 || multi.Traces[2].Error == "" || len(single.Traces) != 1 {
 		t.Errorf("traces: %+v %+v", multi, single)
+	}
+	var probed troubleshoot.ProbeAnswer
+	decode("probe-host.json", &probed)
+	if probed.Host == "" || len(probed.Results) != 2 || !probed.Results[1].Indirect || probed.Results[1].Stats.Received != 5 ||
+		probed.Current != "transit-a" || probed.Best != "transit-b" || probed.Route == nil || probed.Route.Provider != probed.Current {
+		t.Errorf("hostname probe: %+v", probed)
+	}
+	var queued troubleshoot.OptimizeAnswer
+	decode("optimize.json", &queued)
+	if queued.Prefix != probed.Route.Prefix || queued.Target != probed.Target || queued.Expires.IsZero() {
+		t.Errorf("optimize: %+v", queued)
 	}
 	var e struct {
 		Error string `json:"error"`

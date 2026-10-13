@@ -76,6 +76,7 @@ func (s *Server) routeTable() []route {
 		{"GET /api/troubleshoot", viewer, s.handleToolStatus},
 		{"GET /api/troubleshoot/lookingglass", viewer, s.handleLookingGlass},
 		{"POST /api/troubleshoot/probe", operator, s.handleToolProbe},
+		{"POST /api/troubleshoot/optimize", operator, s.handleToolOptimize},
 		{"POST /api/troubleshoot/traceroute", operator, s.handleToolTrace},
 		{"POST /api/troubleshoot/whois", operator, s.handleToolWhois},
 		{"GET /api/me", viewer, s.handleMe},

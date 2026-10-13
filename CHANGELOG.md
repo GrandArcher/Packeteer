@@ -10,6 +10,7 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 
 ### Changed
 
+- Manual probe takes a hostname, shows current vs best per provider and the covering prefix, falls back to indirect hops; Probe and optimize queues that prefix for 10 minutes (#126).
 - Load budgets scale per million prefixes with a `large` 5M profile; flow and span `max_prefixes` is configurable, target caps rise, and `packeteer_truncated_total` meters the caps (#217).
 - Settings forms list and edit every `flow`, `vip`, `outage` source and `rules` policy with add, remove, reorder, names, flow aggregate lengths and a policy `geoip_db` path (#226).
 

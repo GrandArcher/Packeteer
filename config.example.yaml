@@ -364,7 +364,9 @@ storage:
 # Troubleshooting tools on the ops server (/api/troubleshoot, dashboard).
 # The looking glass (learned RIB) is always on. enabled: true adds an
 # on-demand probe and traceroute from every provider source and a whois
-# (RDAP) lookup, rate limited. Read-only: nothing here announces.
+# (RDAP) lookup, rate limited. The probe takes an IP or a hostname. Nothing
+# here announces; Probe and optimize only queues the covering learned prefix
+# for measuring (10 minutes) and the decision rules still apply.
 # troubleshoot:
 #   enabled: true
 #   requests_per_minute: 6

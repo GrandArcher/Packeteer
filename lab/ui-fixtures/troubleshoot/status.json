@@ -1,0 +1,9 @@
+{
+  "looking_glass": true,
+  "enabled": true,
+  "probe": true,
+  "traceroute": true,
+  "whois": true,
+  "optimize": true,
+  "providers": []
+}
