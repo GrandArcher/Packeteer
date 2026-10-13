@@ -292,6 +292,7 @@ func (f *Form) normalizeSections() {
 // round trip compares equal.
 func (f *Form) fillSections(cur Form) {
 	f.fillProtection(cur)
+	f.fillExchanges(cur)
 	if f.Flows == nil {
 		f.Flows = cur.Flows
 	}
@@ -351,6 +352,9 @@ func (f Form) withoutUnchangedSections(cur Form) Form {
 	if reflect.DeepEqual(f.Outages, cur.Outages) {
 		f.Outages = nil
 	}
+	if reflect.DeepEqual(f.Exchanges, cur.Exchanges) {
+		f.Exchanges = nil
+	}
 	if reflect.DeepEqual(f.Inbound, cur.Inbound) {
 		f.Inbound = nil
 	}
@@ -362,7 +366,8 @@ func (f Form) withoutUnchangedSections(cur Form) Form {
 
 func sectionsEqual(f, g Form) bool {
 	return reflect.DeepEqual(f.Flows, g.Flows) && reflect.DeepEqual(f.Policies, g.Policies) &&
-		reflect.DeepEqual(f.VIPs, g.VIPs) && reflect.DeepEqual(f.Outages, g.Outages) && protectionEqual(f, g)
+		reflect.DeepEqual(f.VIPs, g.VIPs) && reflect.DeepEqual(f.Outages, g.Outages) &&
+		reflect.DeepEqual(f.Exchanges, g.Exchanges) && protectionEqual(f, g)
 }
 
 func validateListLen(name string, n int) error {
@@ -474,6 +479,9 @@ func (f Form) validateSections() error {
 		return err
 	}
 	if err := f.validateOutage(); err != nil {
+		return err
+	}
+	if err := f.validateExchanges(); err != nil {
 		return err
 	}
 	return f.validateProtection()
@@ -814,6 +822,9 @@ func applySections(root *yaml.Node, cur, next Form) error {
 	}
 	if err == nil {
 		err = rewriteSection(root, "sources", "outage", cur.Outages, next.Outages, func(n *yaml.Node, e FormOutage) error { applyOutage(n, e); return nil })
+	}
+	if err == nil {
+		err = applyExchanges(root, cur, next)
 	}
 	if err == nil {
 		err = applyProtection(root, cur, next)

@@ -8,7 +8,7 @@ function emptyForm() {
     min_rtt_delta_pct: "", confirm_rounds: "",
     precedence: "", scorer_type: "", floor_max_loss_pct: "", floor_max_rtt: "",
     providers: [], targets: [], allowlist: [],
-    flows: [], policies: [], vips: [], outages: [],
+    flows: [], policies: [], vips: [], outages: [], exchanges: [],
     inbound: emptyInbound(), anomaly: emptyAnomaly()};
 }
 
@@ -40,6 +40,14 @@ function emptyRule() {
 
 function emptyVIP() {
   return {key: "", name: "", interval: "", max_targets: "", prefixes: [], asns: []};
+}
+
+function emptyExchange() {
+  return {key: "", name: "", lans: [], bmp: "", group: "", peers: [emptyPeer()]};
+}
+
+function emptyPeer() {
+  return {key: "", name: "", asn: "", next_hop: "", source_ip: "", cost: ""};
 }
 
 function emptyOutage() {
@@ -83,7 +91,7 @@ function editorOff(err) {
   var node = document.getElementById("ed-off");
   node.textContent = explain(err);
   node.hidden = !off;
-  ["ed-load", "ed-check", "ed-save", "wz-run", "wz-next", "wz-next-2", "wz-back", "wz-back-3", "wz-add-provider", "wz-sug", "form-apply", "form-reload", "form-add-provider", "form-add-target", "form-add-allow", "sug-refresh", "form-add-flow", "form-add-policy", "form-add-vip", "form-add-outage", "form-add-anomaly-rule", "wz-next-3", "wz-back-4"].forEach(function (id) {
+  ["ed-load", "ed-check", "ed-save", "wz-run", "wz-next", "wz-next-2", "wz-back", "wz-back-3", "wz-add-provider", "wz-sug", "form-apply", "form-reload", "form-add-provider", "form-add-target", "form-add-allow", "sug-refresh", "form-add-flow", "form-add-policy", "form-add-vip", "form-add-outage", "form-add-exchange", "form-add-anomaly-rule", "wz-next-3", "wz-back-4"].forEach(function (id) {
     var b = document.getElementById(id);
     if (b) b.disabled = off;
   });
@@ -324,6 +332,37 @@ function renderFlows() {
     bindField(b, "Aggregate IPv6 (/n)", f, "aggregate_v6", "48");
   });
   if (!form.flows.length) root.appendChild(el("p", "empty", "No flow sources."));
+}
+
+var bmpChoices = [["", "off"], ["prefer", "prefer"], ["only", "only"]];
+
+function renderExchanges() {
+  var root = byId("form-exchanges");
+  clear(root);
+  form.exchanges.forEach(function (x, i) {
+    var card = entryCard(root, "Exchange", form.exchanges, i, renderExchanges, "exchange", false);
+    var a = entryRow(card);
+    bindField(a, "Name (exchange " + (i + 1) + ")", x, "name", "ix-lab");
+    bindField(a, "Peering LANs (exchange " + (i + 1) + ")", x, "lans", "203.0.113.0/24", true, true);
+    bindField(a, "Group (exchange " + (i + 1) + ")", x, "group", "ix");
+    var bmp = selectInput(bmpChoices, x.bmp);
+    bmp.addEventListener("change", function () { x.bmp = bmp.value; });
+    a.appendChild(labeled("BMP (exchange " + (i + 1) + ")", bmp));
+    x.peers.forEach(function (p, j) {
+      var row = entryRow(card);
+      bindField(row, "Peer name", p, "name", "ix-peer-a");
+      bindField(row, "Peer AS", p, "asn", "64501");
+      bindField(row, "Peer next hop", p, "next_hop", "203.0.113.11");
+      bindField(row, "Peer probe source", p, "source_ip", "192.0.2.31");
+      bindField(row, "Peer cost", p, "cost", "");
+      row.appendChild(removeButton(x.peers, j, renderExchanges, "peer"));
+    });
+    var add = el("button", "small", "+ Peer");
+    add.type = "button";
+    add.addEventListener("click", function () { x.peers.push(emptyPeer()); renderExchanges(); });
+    card.appendChild(add);
+  });
+  if (!form.exchanges.length) root.appendChild(el("p", "empty", "No exchanges."));
 }
 
 function renderOutages() {
@@ -599,6 +638,7 @@ function renderForm() {
   renderPolicies();
   renderVIPs();
   renderOutages();
+  renderExchanges();
   renderAnomalyRules();
   renderSuggestions(lastSuggestions);
 }
@@ -635,7 +675,10 @@ function loadProtectionDefaults() {
 
 function loadFormDefaults() {
   loadProtectionDefaults();
-  ["flows", "policies", "vips", "outages"].forEach(function (k) { if (!form[k]) form[k] = []; });
+  ["flows", "policies", "vips", "outages", "exchanges"].forEach(function (k) { if (!form[k]) form[k] = []; });
+  form.exchanges.forEach(function (x) {
+    ["lans", "peers"].forEach(function (k) { if (!x[k]) x[k] = []; });
+  });
   form.flows.forEach(function (f) {
     ["listen", "exclude"].forEach(function (k) { if (!f[k]) f[k] = []; });
   });
@@ -971,6 +1014,10 @@ byId("form-add-policy").addEventListener("click", function () {
 byId("form-add-anomaly-rule").addEventListener("click", function () {
   form.anomaly.rules.push({key: "", name: "", prefixes: [], protocols: [], min_mbps: "", action: "blackhole", target: "", rate_mbps: "", ttl: ""});
   renderAnomalyRules();
+});
+byId("form-add-exchange").addEventListener("click", function () {
+  form.exchanges.push(emptyExchange());
+  renderExchanges();
 });
 byId("form-add-vip").addEventListener("click", function () {
   form.vips.push(emptyVIP());

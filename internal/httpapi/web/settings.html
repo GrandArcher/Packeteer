@@ -109,7 +109,7 @@
   </section>
   <section id="editor-section">
     <h2>Settings</h2>
-    <p class="tag">The form edits providers, probe prefixes, the allowlist, the flow, VIP, and outage sources, the <code>rules</code> policies, and the knobs that change a decision. The YAML stays beside it: anything the form does not show is kept. Apply copies the form into the YAML and does not write the file. Save runs the same checks as a start. Thresholds, hold time, the improvement cap, policies, sources, probe timing, mode, the allowlist, and <code>bgp.neighbors</code> apply on Save. Any other change waits for a restart. Turning inject on still needs the confirmation. Secrets stay in environment variables, not in the form. Needs <code>http.config_editor: true</code> and the admin role.</p>
+    <p class="tag">The form edits providers, exchanges and their peers, probe prefixes, the allowlist, the flow, VIP, and outage sources, the <code>rules</code> policies, and the knobs that change a decision. The YAML stays beside it: anything the form does not show is kept. Apply copies the form into the YAML and does not write the file. Save runs the same checks as a start. Thresholds, hold time, the improvement cap, policies, sources, probe timing, mode, the allowlist, and <code>bgp.neighbors</code> apply on Save. Any other change waits for a restart. Turning inject on still needs the confirmation. Secrets stay in environment variables, not in the form. Needs <code>http.config_editor: true</code> and the admin role.</p>
     <div class="settings-split">
       <div>
         <h3>Decision</h3>
@@ -145,6 +145,10 @@
           <button type="button" id="sug-refresh">Refresh suggestions</button>
         </div>
         <div id="form-suggestions"></div>
+        <h3>Exchanges</h3>
+        <p class="tag">Every <code>exchanges</code> entry: its peering LANs and the peers on them. A peer is a provider with its own next hop on a LAN. It is always route-checked, so the file needs <code>add_path</code> on a <code>bgp.neighbors</code> entry or <code>bmp: prefer</code> or <code>only</code> with <code>rib_sources</code>; Save checks that. The probe source of a peer is required before Save. Exclude and precedence stay in the YAML. Separate LANs with commas. No session or route-server credential is asked for. Nothing is probed or announced until you save and restart.</p>
+        <fieldset id="form-exchanges" class="form"></fieldset>
+        <button type="button" id="form-add-exchange">+ Exchange</button>
         <h3>Prefixes to probe</h3>
         <p class="tag">The first <code>static</code> source. Other sources stay in the YAML.</p>
         <div id="form-targets"></div>
