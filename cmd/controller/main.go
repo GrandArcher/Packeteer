@@ -1433,6 +1433,7 @@ func newTools(cfg *config.Config, plugins *pluginhost.Set, lim *rate.Limiter) (*
 		Limiter:   rate.NewLimiter(rate.Every(time.Minute/time.Duration(rpm)), min(rpm, 3)),
 		// The indirect fallback trace packets share the engine's budget.
 		PacketLimiter: lim,
+		ExchangeLANs:  exchangeLANPrefixes(cfg),
 	}
 	if plugins.Whois != nil {
 		opt.Whois = plugins.Whois.Plugin

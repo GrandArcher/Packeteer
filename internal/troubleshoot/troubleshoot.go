@@ -21,6 +21,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/GrandArcher/Packeteer/internal/exchange"
 	"github.com/GrandArcher/Packeteer/internal/probe"
 	"github.com/GrandArcher/Packeteer/internal/rib"
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
@@ -100,6 +101,9 @@ type Options struct {
 	Reverse func(ctx context.Context, a netip.Addr) string
 	Whois   plugin.Whois
 	Limiter Limiter
+	// ExchangeLANs are the configured peering LANs (#145). Optimize refuses
+	// a learned prefix inside one, because the probe engine never measures it.
+	ExchangeLANs []netip.Prefix
 	// PacketLimiter paces every indirect trace packet. Nil sends unpaced.
 	PacketLimiter probe.Limiter
 	Now           func() time.Time
@@ -482,6 +486,11 @@ func (t *Tools) probeOne(ctx context.Context, p probe.Provider, target netip.Add
 // ErrNoOptimize is returned by Optimize when the probe queue is not wired.
 var ErrNoOptimize = errors.New("probe and optimize is not available")
 
+// ErrExchangeLAN is returned by Optimize when the learned prefix is inside a
+// peering LAN. The probe engine drops such a prefix, so queuing it would
+// report success for a measurement that never runs.
+var ErrExchangeLAN = errors.New("prefix is inside an exchange LAN and is not probed")
+
 // OptimizeAnswer names the prefix Optimize queued.
 type OptimizeAnswer struct {
 	Host      string       `json:"host,omitempty"`
@@ -528,6 +537,9 @@ func (t *Tools) Optimize(ctx context.Context, input string) (OptimizeAnswer, err
 	r, ok := v.Covering(netip.PrefixFrom(ans.Target, ans.Target.BitLen()))
 	if !ok || r.Prefix.Bits() == 0 {
 		return OptimizeAnswer{}, fmt.Errorf("no learned prefix covers %s", ans.Target)
+	}
+	if exchange.PrefixInside(t.opt.ExchangeLANs, r.Prefix) {
+		return OptimizeAnswer{}, ErrExchangeLAN
 	}
 	ans.Prefix = r.Prefix
 	if err := q.QueueManual(r.Prefix, OptimizeTTL); err != nil {
