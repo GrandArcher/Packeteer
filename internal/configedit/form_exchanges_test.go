@@ -228,3 +228,49 @@ func TestFormExchangesErrors(t *testing.T) {
 		}
 	}
 }
+
+// #155: a draft peer from a discovered member carries only the AS and next
+// hop. Once named and given a probe source it is written like any peer;
+// the draft flag is never written, and without the name or source the
+// start checks refuse it.
+func TestFormExchangesDraftPeer(t *testing.T) {
+	draft := FormExchangePeer{ASN: "64503", NextHop: "203.0.113.13", Draft: true}
+
+	f, err := ParseForm([]byte(exchangeFormYAML))
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.Exchanges[0].Peers = append(f.Exchanges[0].Peers, draft)
+	if _, err := ApplyForm([]byte(exchangeFormYAML), f); err == nil || !strings.Contains(err.Error(), "name is required") {
+		t.Fatalf("unnamed draft: err = %v", err)
+	}
+
+	f.Exchanges[0].Peers[2].Name = "ix-peer-c"
+	out, err := ApplyForm([]byte(exchangeFormYAML), f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(out), "draft") {
+		t.Fatalf("draft flag was written:\n%s", out)
+	}
+	if _, err := config.Parse(out); err == nil || !strings.Contains(err.Error(), "source_ip") {
+		t.Fatalf("a draft without a probe source must not load: err = %v", err)
+	}
+
+	f.Exchanges[0].Peers[2].SourceIP = "192.0.2.33"
+	out, err = ApplyForm([]byte(exchangeFormYAML), f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Parse(out)
+	if err != nil {
+		t.Fatalf("load: %v\n%s", err, out)
+	}
+	c := peerByName(t, cfg, "ix-peer-c")
+	if c.PeerASN != 64503 || c.NextHop != "203.0.113.13" || c.Exchange != "ix-lab" || c.Cost != nil {
+		t.Fatalf("peer c = %+v", c)
+	}
+	if cfg.Mode != config.ModeObserve {
+		t.Fatalf("mode = %q", cfg.Mode)
+	}
+}
