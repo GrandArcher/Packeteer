@@ -11,10 +11,32 @@ import (
 	"github.com/GrandArcher/Packeteer/internal/syshealth"
 )
 
-// Keys under which results are kept for the System page (#184).
-const storageKey = "storage"
+// Keys under which results are kept for the System page (#184). History
+// and the event log write to the same storage plugin under separate keys,
+// so a failed history write is not overwritten by a later event write.
+const (
+	historyKey = "storage/history"
+	eventsKey  = "storage/events"
+)
 
 func notifierKey(name string) string { return "notifier/" + name }
+
+// storageOutcome is the storage row's result: a failed write of either
+// writer wins over a successful one, and between two of the same kind the
+// later one is shown.
+func storageOutcome(health *syshealth.Tracker) *syshealth.Outcome {
+	var out *syshealth.Outcome
+	for _, key := range []string{historyKey, eventsKey} {
+		o, ok := health.Get(key)
+		if !ok {
+			continue
+		}
+		if out == nil || (!o.OK && out.OK) || (o.OK == out.OK && o.At.After(out.At)) {
+			out = &o
+		}
+	}
+	return out
+}
 
 // systemFacts reads the configured plugins and their latest results for
 // GET /api/system. The engine is created after the HTTP server, so it is
@@ -47,9 +69,7 @@ func systemFacts(plugins *pluginhost.Set, engine *atomic.Pointer[probe.Engine], 
 		}
 		if plugins.Storage != nil {
 			fact := httpapi.StorageFact{PluginFact: httpapi.PluginFact{Name: plugins.Storage.Name, Type: plugins.Storage.Type}}
-			if o, ok := health.Get(storageKey); ok {
-				fact.Last = &o
-			}
+			fact.Last = storageOutcome(health)
 			f.Storage = &fact
 		}
 		for _, n := range plugins.Notifiers {

@@ -36,7 +36,7 @@ func newEventLog(plugins *pluginhost.Set, log *slog.Logger, health *syshealth.Tr
 	if plugins != nil && plugins.Storage != nil {
 		store, _ = plugins.Storage.Plugin.(plugin.EventStore)
 	}
-	return eventlog.New(store, log, func(err error) { health.Record(storageKey, err) })
+	return eventlog.New(store, log, func(err error) { health.Record(eventsKey, err) })
 }
 
 func newDispatcher(plugins *pluginhost.Set, opt notify.Options) *notify.Dispatcher {

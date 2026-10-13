@@ -2,9 +2,11 @@ package httpapi
 
 import (
 	"fmt"
+	"maps"
 	"net/http"
 	"net/url"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -267,12 +269,14 @@ func ribSourceRow(src RIBSourceFact) Component {
 	}
 	var up, down int
 	var since time.Time
-	for router, o := range src.Routers {
+	var errs []string
+	for _, router := range slices.Sorted(maps.Keys(src.Routers)) {
+		o := src.Routers[router]
 		if o.OK {
 			up++
 		} else {
 			down++
-			c.Error = router + ": " + o.Err
+			errs = append(errs, router+": "+o.Err)
 		}
 		if since.IsZero() || o.Since.After(since) {
 			since = o.Since
@@ -287,8 +291,8 @@ func ribSourceRow(src RIBSourceFact) Component {
 		c.State = StateDegraded
 	default:
 		c.State = StateOK
-		c.Error = ""
 	}
+	c.Error = strings.Join(errs, "; ")
 	return c
 }
 
@@ -327,12 +331,10 @@ func proberRow(p PluginFact, snap Snapshot) Component {
 		if pb.OK && pb.Prober == p.Name {
 			answered++
 		}
-		if pb.Error != "" {
-			failed++
-			for _, line := range strings.Split(pb.Error, "\n") {
-				if msg, ok := strings.CutPrefix(line, p.Name+": "); ok {
-					c.Error = msg
-				}
+		for _, line := range strings.Split(pb.Error, "\n") {
+			if msg, ok := strings.CutPrefix(line, p.Name+": "); ok {
+				failed++
+				c.Error = msg
 			}
 		}
 	}
@@ -341,9 +343,6 @@ func proberRow(p PluginFact, snap Snapshot) Component {
 		c.State, c.Detail, c.Error = StateOK, fmt.Sprintf("measured %d provider paths", answered), ""
 	case failed > 0:
 		c.State = StateDown
-		if c.Error == "" {
-			c.Error = "no probe was answered"
-		}
 	default:
 		c.State, c.Detail = StateIdle, "no probe has used this prober yet, or an earlier prober in the chain answered"
 	}

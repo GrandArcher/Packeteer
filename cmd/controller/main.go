@@ -2778,7 +2778,7 @@ func newRecorder(cfg *config.Config, plugins *pluginhost.Set, log *slog.Logger, 
 		Logger:   log.With("component", "history"),
 		Describe: describe,
 		Volumes:  func(ctx context.Context) map[netip.Prefix]float64 { return collectVolumes(ctx, plugins) },
-		OnWrite:  func(err error) { health.Record(storageKey, err) },
+		OnWrite:  func(err error) { health.Record(historyKey, err) },
 	})
 }
 

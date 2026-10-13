@@ -72,7 +72,7 @@ func TestSystemFactsShowInjectedFailures(t *testing.T) {
 	}
 
 	// Storage: the history recorder's flush reports its write.
-	rec := history.New(history.Options{Store: store, FlushEvery: time.Hour, OnWrite: func(err error) { health.Record(storageKey, err) }})
+	rec := history.New(history.Options{Store: store, FlushEvery: time.Hour, OnWrite: func(err error) { health.Record(historyKey, err) }})
 	rec.Probe(probe.Result{Provider: "transit-a", Prefix: netip.MustParsePrefix("198.51.100.0/24"), Time: time.Now(),
 		Stats: probe.Stats{Sent: 1, Received: 1}})
 	if err := rec.Flush(context.Background()); err == nil {
@@ -155,5 +155,24 @@ func TestSystemFactsShowInjectedFailures(t *testing.T) {
 		if state[key] != want {
 			t.Errorf("%s = %q, want %q", key, state[key], want)
 		}
+	}
+}
+
+func TestStorageOutcomeShowsAFailedWriterOverAPassingOne(t *testing.T) {
+	now := time.Date(2026, 9, 1, 10, 0, 0, 0, time.UTC)
+	tr := syshealth.New(func() time.Time { return now })
+	if got := storageOutcome(tr); got != nil {
+		t.Fatalf("no write yet, outcome = %+v", got)
+	}
+	tr.Record(historyKey, errors.New("history write failed"))
+	now = now.Add(time.Minute)
+	tr.Record(eventsKey, nil)
+	if got := storageOutcome(tr); got == nil || got.OK || got.Err != "history write failed" {
+		t.Fatalf("event write hid a failed history write: %+v", got)
+	}
+	now = now.Add(time.Minute)
+	tr.Record(historyKey, nil)
+	if got := storageOutcome(tr); got == nil || !got.OK {
+		t.Fatalf("both writers ok, outcome = %+v", got)
 	}
 }

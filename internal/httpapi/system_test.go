@@ -2,7 +2,6 @@ package httpapi
 
 import (
 	"encoding/json"
-	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -122,6 +121,32 @@ func TestBuildSystemProberErrorsComeFromTheirOwnLines(t *testing.T) {
 	}
 }
 
+func TestBuildSystemProberWithoutItsOwnErrorLineIsNotDown(t *testing.T) {
+	snap := healthySnap("observe")
+	snap.Providers = []Provider{{Name: "transit-a", Up: true}}
+	snap.Probes = []Probe{{Provider: "transit-a", Prefix: "198.51.100.0/24", Error: "icmp: no raw socket"}}
+	got := BuildSystem(snap, SystemFacts{Probers: []PluginFact{{Name: "icmp", Type: "icmp"}, {Name: "tcp", Type: "tcp"}}}, nil, nil)
+	if c := find(t, got, KindProber, "tcp"); c.State != StateIdle || c.Error != "" {
+		t.Errorf("tcp blamed for icmp's failure: %+v", c)
+	}
+}
+
+func TestBuildSystemRIBSourceListsEveryDownRouter(t *testing.T) {
+	failedAt := sysT0.Add(time.Hour)
+	facts := SystemFacts{RIBSources: []RIBSourceFact{{PluginFact: PluginFact{Name: "bmp", Type: "bmp"},
+		Routers: map[string]syshealth.Outcome{
+			"192.0.2.254": {OK: false, Since: failedAt, Err: "monitoring session closed"},
+			"192.0.2.253": {OK: false, Since: failedAt, Err: "read timeout"},
+			"192.0.2.252": {OK: true, Since: sysT0},
+		}}}}
+	want := "192.0.2.253: read timeout; 192.0.2.254: monitoring session closed"
+	for range 20 {
+		if c := find(t, BuildSystem(healthySnap("observe"), facts, nil, nil), KindRIBSource, "bmp"); c.Error != want {
+			t.Fatalf("rib source error = %q, want %q", c.Error, want)
+		}
+	}
+}
+
 func TestBuildSystemAnnouncerSaysWhetherItMayAnnounce(t *testing.T) {
 	ann := &PluginFact{Name: "gobgp", Type: "gobgp"}
 	for _, mode := range []string{"observe", "suggest"} {
@@ -201,7 +226,7 @@ func TestSystemAPIIsViewerReadableAndCarriesNoSecrets(t *testing.T) {
 	e := newUIWith(t, func(o *Options) {
 		o.System = func() SystemFacts {
 			return SystemFacts{Notifiers: []NotifierFact{{PluginFact: PluginFact{Name: "hook", Type: "webhook"},
-				Last: &syshealth.Outcome{Err: errors.New("Post \"https://hooks.example.net/" + secret + "\": refused").Error(), At: sysT0, Since: sysT0}}}}
+				Last: &syshealth.Outcome{Err: "Post \"https://hooks.example.net/" + secret + "\": refused", At: sysT0, Since: sysT0}}}}
 		}
 	})
 	rec, body := e.do(t, "GET", "/api/system", plugin.RoleViewer, nil)

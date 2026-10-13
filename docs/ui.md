@@ -165,12 +165,12 @@ The System page (#184) answers "which part is broken" when the status tile says 
 | `source` | `sources` entry | `down` when its last call failed; `since` is when it started or stopped failing |
 | `scorer` | the scorer | always `ok` |
 | `announcer` | the announcer | `idle` and "announces nothing in observe mode" (or suggest) whatever is configured; in inject `ok` and "may announce allowlisted prefixes that are in the learned RIB", "announces nothing while this instance is standby", `degraded` without an iBGP session, `down` if inject has no announcer |
-| `storage` | the storage plugin | the latest write by the history recorder or the event log: `down` with the error when it failed, `idle` before the first write. `idle` without a storage plugin |
+| `storage` | the storage plugin | the history recorder's and the event log's latest writes: `down` with the error while either one's latest write failed (the later failure is shown), `idle` before the first write. `idle` without a storage plugin |
 | `notifier` | `notifiers` entry | the latest delivery attempt: `down` with the error when it failed, `idle` before the first. An event a filter or rate limit turned away is not an attempt |
 | `telemetry` | `telemetry` entry | `down` when the poll or a binding reports an error; detail has the last poll |
 | `federation_peer` | federation peer | `down` when its snapshot is stale or never seen. One `idle` row when standalone |
 
-`since` is set where the component records state changes (sessions, sources, storage, notifiers, RIB sources, probe sources, HA). Probers, telemetry, and federation peers show the last poll or sighting in `detail` instead.
+`since` is set where the component records state changes (sessions, sources, storage, notifiers, RIB sources, probe sources, HA). Telemetry and federation peers show the last poll or sighting in `detail` instead.
 
 Results of storage writes, notifier deliveries, and BMP sessions are kept in memory from the start of the process. A notifier's state therefore reads `idle` until it has delivered once; a restart clears it. Nothing is probed or sent to build the page.
 
