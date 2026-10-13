@@ -33,13 +33,13 @@ The image is `ghcr.io/grandarcher/packeteer`, linux/amd64 and linux/arm64. It ru
 
 **Step by step: [docs/quickstart.md](docs/quickstart.md).** It goes from an empty directory to a running instance in observe, with a first run on loopback, `docker run` and Compose, and the stop. CI runs every command on that page against the image built from the same commit.
 
-The short version, with `:edge` (published on every push to `main`; for a pinned install, set `IMAGE=ghcr.io/grandarcher/packeteer:0.6.0`):
+The short version, pinned to 0.6.0. Take the example config from the same tag as the image: the file on `main` can carry keys a release does not know yet, and unknown keys refuse startup. For `:edge`, use `main` in both places.
 
 ```sh
-curl -fsSLo config.yaml https://raw.githubusercontent.com/GrandArcher/Packeteer/main/config.example.yaml
+IMAGE=ghcr.io/grandarcher/packeteer:0.6.0
+curl -fsSLo config.yaml https://raw.githubusercontent.com/GrandArcher/Packeteer/v0.6.0/config.example.yaml
 # Edit providers and source IPs. Leave mode: observe.
 mkdir -p plugins
-IMAGE=ghcr.io/grandarcher/packeteer:edge
 
 docker run --rm \
   -v "$PWD/config.yaml:/etc/packeteer/config.yaml:ro" \
@@ -58,10 +58,12 @@ docker run -d --name packeteer --network host \
 
 ```sh
 docker run --rm -e PACKETEER_CONFIG=/etc/packeteer/config.example.yaml \
-  ghcr.io/grandarcher/packeteer:edge -check
+  ghcr.io/grandarcher/packeteer:0.6.0 -check
 ```
 
 The default config path inside the container is `/etc/packeteer/config.yaml` (`PACKETEER_CONFIG`, or `-config`).
+
+Without `NET_RAW`, or where ICMP is filtered, the probe falls back to TCP port 443 (the log shows `prober=tcp`). The settings form, setup wizard, and config editor in the dashboard stay off until you set `http.config_editor: true` and turn on auth or basic auth ([docs/ui.md](docs/ui.md), [docs/auth.md](docs/auth.md)). Every environment variable: [docs/ENV.md](docs/ENV.md).
 
 The `packeteer-data` volume keeps report history (`storage: {type: sqlite}`, file `/var/lib/packeteer/packeteer.db`) across container restarts and upgrades, and the open billing period of SNMP 95th-percentile samples when telemetry is configured. Without the volume, reports and that window start empty after the container is recreated. Leave out `storage` to turn history off; the probe and decision loop does not depend on it, and the 95th window then lives in memory only.
 
@@ -150,11 +152,7 @@ Leave graceful restart off on the session. Guides:
 
 A flow export (NetFlow, IPFIX, or sFlow) is optional. It only adds probe targets. It does not inject routes. With host networking the collector's UDP port is a host port; firewall it to the exporter.
 
-A `udp` prober is an optional fallback after ICMP and TCP. It counts a reply from the target, not an ICMP unreachable from a firewall on the path. A `traceroute` source discovers the probe host in the background and moves the probe onto the last stable hop when the configured host does not answer. A `vip` source probes a capped prefix list, and a capped set of prefixes whose learned AS path contains a listed ASN, on an interval that must stay inside the staleness window.
-
-Set `probe.retry_loss_pct` to re-measure a lossy sample, or `probe.dispersion_ms` to leave out a host whose RTT spread (slowest reply minus fastest) is wider than that limit and re-measure it, before the sample is stored. `probe.min_replies` (default 1) is how many replies a host needs before it defines the score. Both checks default off. A flow prefix offers up to three of its busiest destinations as candidates. The engine remembers which prober got a reply from a host and starts the next round there. Every `probe.prober_recheck_rounds` (default 10) it starts at the first prober again, so a host that begins answering ICMP is noticed.
-
-The memory is capped, and a host that leaves the probe set is forgotten. Nothing is announced. An `outage` source watches completed rounds. When several prefixes that share an ASN (native path, another provider's learned path, or a traceroute hop's origin in the learned RIB), or that fail on one provider only, degrade together, it re-queues them and emits `outage.as` or `outage.circuit` to the configured notifiers. One noisy prefix does not. The re-queue is capped and is not an announcement. None of these announce a route. The global packet rate limit still applies. Details are in [docs/PLUGINS.md](docs/PLUGINS.md).
+Optional probers, target sources, and probe tuning (`udp`, `traceroute`, `vip`, `outage`, retries, dispersion): [docs/operating.md](docs/operating.md#probing-options).
 
 ## Start in observe
 
@@ -176,46 +174,11 @@ Stay here until the numbers match what you expect from each transit. A `probe fa
 
 ## Suggest, then inject
 
-The whole sequence on a simulated FRR edge, with the output to expect at each step, is [docs/walkthrough.md](docs/walkthrough.md).
-
-`mode: suggest` is the same process as observe. It writes recommendations to the log, the dashboard, and `/api/decisions`, and it still announces nothing. Set the thresholds from the example config first. With both deltas at `0`, no improvement is recorded.
-
-Read `/api/improvements` and the dashboard's current exit against the recommended exit. An improvement appears only when the prefix is in the learned RIB, both the native provider and the candidate have fresh measurements, the gain clears the thresholds, the candidate's score is lower, the provider is not excluded, and the cap has room. When `thresholds.min_rtt_delta_pct` is set, an RTT win also has to be that percent of the current path's RTT. `thresholds.confirm_rounds` (default 1) is how many consecutive fresh rounds a new performance move or switch must win; while that streak is short, `/api/decisions` says `confirming` and nothing is announced. Early probes wait a quarter of the probe interval, and a round that cannot compare does not keep asking. Flip-back does not wait.
-
-Inject only after the router filters in the guides are in place, and only for prefixes you mean to steer. Change the mounted config (do not change the example in this repository):
-
-- `mode: inject`
-- `allowlist.prefixes`: prefixes you operate. A learned prefix is eligible when it is equal to an entry or more specific and inside it. Packeteer announces that learned prefix. An entry that overlaps an exchange peering LAN is a load error.
-- `packeteer_community`: `"<asn>:<value>"`, each half 0–65535, or a large community `"<global>:<data1>:<data2>"` (RFC 8092). Quote it. The export policy matches only this community.
-- `local_pref`: higher than the native local preference on the edge. Optional `local_pref_cause` and `providers[].local_pref` override it (provider, then cause, then this value). A set `0` is rejected.
-- Optional extra communities: `communities_cause` and `providers[].communities`, added after `packeteer_community`. The export policy does not match them. At most 16. No `0:x` or `65535:x`.
-- `hold_time`: a positive duration (`15m` in the example).
-- `thresholds.min_loss_delta_pct` and `thresholds.min_rtt_delta_ms`: both greater than 0.
-- `bgp.neighbors`: at least one iBGP neighbor.
-- `announcer` with `type: gobgp`. The announcer has no config block.
-
-Packeteer reads the file at startup. Restart after you edit it:
-
-```sh
-docker restart -t 30 packeteer
-# or, from the Compose directory:
-docker compose restart -t 30
-```
-
-Then confirm one route on the router before you widen the allowlist.
-
-On the router, an injected route shows your community and `no-export`:
-
-- MikroTik: `/routing route print where bgp.communities~"64512:666"`
-- FRR: `vtysh -c 'show bgp ipv4 unicast <prefix> json'` (communities `64512:666` and `no-export`, next hop of the chosen provider)
-- Junos: `show route community 64512:666`
-- IOS: `show ip bgp community 64512:666`
-
-Replace `64512:666` with your community. The full filter snippets are in the router guides, not here, so this page cannot be copied onto an edge as an inject config.
+`mode: suggest` recommends and announces nothing. `mode: inject` needs the allowlist, `packeteer_community`, `local_pref`, `hold_time`, non-zero thresholds, an iBGP neighbor, `announcer.type: gobgp`, and the router filters from the guides. The full list, what to check on the router, and the lab run: [docs/operating.md](docs/operating.md#suggest-then-inject) and [docs/walkthrough.md](docs/walkthrough.md).
 
 ## Rollback
 
-Stopping the container withdraws every Packeteer route.
+Stopping the container withdraws every Packeteer route. Give it 30 seconds; Docker's default 10 races the withdraw.
 
 ```sh
 docker stop -t 30 packeteer
@@ -223,24 +186,7 @@ docker stop -t 30 packeteer
 docker compose stop -t 30
 ```
 
-`docker stop` sends SIGTERM. Packeteer withdraws, then closes the iBGP session. The Compose `restart: unless-stopped` policy does not start it again after `docker stop` or `docker compose stop`. Give the process 30 seconds so Docker does not SIGKILL it while the withdraw is in flight. The default Docker stop timeout is 10 seconds, which races the withdraw.
-
-Confirm the routes are gone with the same show commands as above. The community lookup should be empty, and the prefix should be back on the provider exit. `docker compose down -t 30` stops and removes the container; the effect on BGP is the same.
-
-`docker kill` does not withdraw. The routes remain until the router's BGP hold timer expires. The Compose restart policy also starts the container again after a kill. Use `docker stop` when you want the routes gone and the process left stopped.
-
-With an active/standby pair (`ha`, [docs/ha.md](docs/ha.md)), stopping the active instance withdraws its routes and hands over to the standby, which then announces. Stop both, or remove `ha` and run one instance, to roll back. `packeteer -backup` and `-restore` copy the config and report history.
-
-Switching the file back to `mode: observe` and restarting withdraws as well: the old process withdraws on the way down, and the new process does not announce.
-
-Other withdraws, while the container is still running:
-
-- measurements older than about three probe intervals (a round that never finishes counts)
-- a provider probe source that fails
-- every iBGP session down
-- the router withdraws a prefix it was still advertising after the improvement had been up for a few seconds
-
-When Packeteer's route is best, a normal iBGP session stops sending the native path back. That hide is not a withdraw. The improvement stays until flip-back or `improvement_ttl`. See [docs/routers.md](docs/routers.md).
+`docker kill` does not withdraw: the routes stay until the router's hold timer expires, and the Compose restart policy starts the container again. Switching back to `mode: observe` and restarting also withdraws. HA pairs, the other automatic withdraws, and the show commands to confirm: [docs/operating.md](docs/operating.md#rollback).
 
 ## Dashboard, API, and metrics
 
@@ -248,47 +194,12 @@ When Packeteer's route is best, a normal iBGP session stops sending the native p
 
 The server is read-only (GET and HEAD), except on-demand maintenance windows (`POST` and `DELETE` on `/api/maintenance`), which need basic auth or an operator and can only exclude providers, threat mitigation rules (`POST` and `DELETE` on `/api/mitigations`), which need basic auth or an operator and announce only when `mitigation.mode` is `inject`, the troubleshooting tools (`POST` on `/api/troubleshoot/probe`, `traceroute`, and `whois`), which measure or look up and change nothing, and `/api/troubleshoot/optimize`, which only queues a learned prefix for measuring, with `upgrade.enabled`, an admin's confirmed upgrade or rollback of the Packeteer binary (`POST` on `/api/upgrade/check`, `apply`, and `rollback`; the controller withdraws every route first, [docs/ui.md](docs/ui.md#upgrade-from-the-ui)), and, with `auth`, users and API tokens. Every change is written to the audit log and sent to the notifiers. The dashboard loads no remote assets and refreshes every 5 seconds.
 
-| Path | Body |
-|---|---|
-| `/` | Overview (#170): the mode banner (first on every page; observe says it announces nothing), tiles, and the setup checklist. Each area has its own URL under the left navigation: improvements, prefixes and ASNs, reports, providers, troubleshooting, settings, the events and audit log page (#173), and the pages that are still empty states. See [docs/ui.md](docs/ui.md). When the controller cannot be reached, the page says so and keeps the last data, marked stale. |
-| `/api/overview` | The dashboard's summary: mode, readiness, counts, per-provider probe results, optional features on or off, and the setup checklist (`setup`: `id`, `level` `todo`/`warn`/`info`, `title`, `detail`, `doc`). |
-| `/healthz` | Liveness. JSON `status` is `ok`. |
-| `/readyz` | Readiness. 503 until startup finishes, and until an iBGP session is up when neighbors are configured. |
-| `/metrics` | Prometheus text. |
-| `/api/providers` | Providers, probe-source health, and BGP sessions. |
-| `/api/probes` | Latest probe per provider and prefix. |
-| `/api/prefixes` | Probed prefixes with measurements, current exit, and recommended exit, one page at a time (`limit` up to 500, default 100; `offset`, `prefix`, `asn`, `provider`, `differs`, `sort`; [ui.md](docs/ui.md#prefix-list)). Prefixes that are only in the RIB are not listed. |
-| `/api/decisions` | Latest per-prefix decision. |
-| `/api/improvements` | Active improvements. In observe and suggest these are recommendations. In inject they are the routes being announced. |
-| `/api/telemetry` | Interface rates and 95th-percentile usage when a telemetry plugin is configured. Empty when it is not. This does not announce. |
-| `/api/reports` | The report list, and whether history storage is on. |
-| `/api/reports/<name>` | One report as JSON, or CSV with `?format=csv`. Range: `?days=7` (default), or `from` and `to` as RFC 3339 or `YYYY-MM-DD` (UTC). `limit` and, for `prefixes`, `asns`, and `countries`, `sort=problems\|volume\|loss`. Reports: `summary`, `improvements`, `causes`, `performance` (loss and latency before and after), `providers` (efficiency), `prefixes`, `asns`, `countries`, `probes` (per day), `savings`, `timeseries` (before/after loss and latency per day and bucket, drawn on `/graphs.html`). Needs `storage`. |
-| `/api/troubleshoot` | Which troubleshooting tools are on ([CONFIG.md](docs/CONFIG.md#troubleshoot)). |
-| `/api/troubleshoot/lookingglass?prefix=<prefix or address>` | Learned route for exactly that prefix, the longest covering route, and learned more-specifics (up to 100). Read from the RIB view; always on. |
-| `/api/troubleshoot/probe` | `POST {"target":"<address or hostname>"}`. Resolves a hostname (`host`, `addresses`, and the `target` used), probes the address from every provider with the prober chain, and adds the covering learned `route`, the `current` exit, and the `best` measured exit. A provider that gets no reply is traced and its highest stable hop is probed (`indirect`). The result is returned only; it does not feed decisions. Needs `troubleshoot.enabled`. |
-| `/api/troubleshoot/optimize` | `POST {"target":"<address or hostname>"}`, operator. Queues the learned prefix covering the target as an urgent probe target for 10 minutes. The decision engine still applies every rule to the result ([docs/ui.md](docs/ui.md#troubleshooting-results)). Needs `troubleshoot.enabled`. |
-| `/api/troubleshoot/traceroute` | `POST {"target":"<address>","provider":"<optional name>"}`. UDP traceroute from each provider's source. Needs `troubleshoot.enabled`. |
-| `/api/troubleshoot/whois` | `POST {"query":"<address, prefix, or ASN>"}`. RDAP lookup through `troubleshoot.whois`. Needs `troubleshoot.enabled`. |
-| `/api/mitigations` | Threat mitigation rules (RTBH, BGP redirect, FlowSpec drop/rate-limit/redirect), the catalog, the mitigation allowlist, and the feed of recent changes. `POST {"prefix","action","target","ttl","reason"}` (FlowSpec adds `match`, `source_countries`, `rate_mbps`) adds a rule and `DELETE /api/mitigations/<id>` removes one, when `mitigation` is configured and basic auth is on ([docs/mitigation.md](docs/mitigation.md)). Lab-proven only. |
-| `/api/leaks` | Leak watch (#199): `state` (`watching` or `unknown`), each source's health, and the prefixes held out because a route was seen outside the AS. `POST /api/leaks/clear {"prefix"}` releases one, with auth ([docs/leak-watch.md](docs/leak-watch.md)). |
-| `/api/ha` | Active/standby role (#31): `role` (`active` or `standby`), `holder`, `eligible`, `detail`, `takeovers`. `ha_enabled: false` and `role: active` when `ha` is not configured ([docs/ha.md](docs/ha.md)). |
-| `/api/federation` | Central view of every federated instance (#30): this instance's published snapshot, each peer's freshness, last error, snapshot, and inter-DC RTT, and the global commits with each member's usage. Read-only. `enabled: false` when `federation` is not configured ([docs/multi-pop.md](docs/multi-pop.md)). |
-| `/api/me` | Who you are: `auth` (`rbac`, `basic`, or `off`), `user`, `role`, `method`. |
-| `/api/tokens` | Your API tokens (an admin sees all). `POST {"name","role","ttl"}` creates one and returns its secret once; `DELETE /api/tokens/<id>` revokes one. Needs `auth` ([docs/auth.md](docs/auth.md)). |
-| `/api/users` | Admin only. Users and roles. `POST {"name","role","password"}`, `PATCH /api/users/<name>` (`role`, `password`, `disabled`), `DELETE /api/users/<name>`. Needs `auth`. |
-| `/api/audit` | Admin only. The audit log, newest first: `?limit=` (1–1000, default 100), `from`, `to` (RFC 3339). Needs a `storage` plugin. |
-| `/auth/login`, `/auth/callback`, `/auth/logout` | OIDC single sign-on when `auth.sso` is set. |
-| `/api/config` | Admin only, with `http.config_editor: true` and auth or basic auth (#34, #102). `GET` returns the mounted config file and its `sha256`; `POST /api/config/validate {"yaml"}` runs the start checks; `PUT {"yaml","base","confirm_inject"}` writes it (needs the `sha256` it edits, and `confirm_inject` to turn inject on). Applies on restart. `POST /api/config/form` reads or merges the settings form into YAML without writing. `GET /api/config/suggestions` lists iBGP or BMP next hops that are not providers (a draft row only; it does not probe or announce). `POST /api/config/wizard` renders an observe config from the setup wizard (edge session, provider rows, optional pinned probe host, optional flow collector; inject is not a step). The settings form also edits every `flow`, `vip`, and `outage` source and every `rules` policy (#130, #226). UI: `/settings.html` ([docs/ui.md](docs/ui.md)). |
-| `/api/dashboards` | Your custom dashboards and the widget catalog (#34). `PUT /api/dashboards/<name>` saves one, `DELETE` removes it. Needs a storage plugin and auth or basic auth. UI: `/dashboards.html`. |
-| `/api/upgrade` | Admin only. Running version, install type, the last release check, and the rollback target (#196). `POST /api/upgrade/check` lists GitHub releases and changes nothing; `POST /api/upgrade/apply {"tag","confirm":true}` and `POST /api/upgrade/rollback {"confirm":true}` switch versions after the SIGTERM shutdown path has withdrawn every route. Need `upgrade.enabled`, `upgrade.public_key`, and auth or basic auth ([docs/ui.md](docs/ui.md#upgrade-from-the-ui)). |
-| `/api/subscriptions` | Report subscriptions (#34): schedule, next and last send, errors. `POST /api/subscriptions/<name>/send` (operator) sends one now. |
-| `/api/maintenance` | Open, upcoming, and finished maintenance windows. `POST` opens an on-demand window and `DELETE /api/maintenance/<id>` closes one, when a `maintenance` policy is configured and basic auth is on ([CONFIG.md](docs/CONFIG.md#policy-maintenance)). |
-
+Every endpoint, with its body and the role it needs, is in [docs/API.md](docs/API.md).
 Basic auth is off unless both `PACKETEER_HTTP_USER` and `PACKETEER_HTTP_PASSWORD` are set. Setting only one refuses to start. Set both when `http.listen` is not loopback. The password is not read from the config file and is not written to the log.
 
 For more than one person, turn on `auth` (#32): users with roles (`viewer`, `operator`, `admin`) kept in the storage plugin, API tokens for scripts and Prometheus, an audit log of every change (stored, on `/api/audit`, and sent to the notifiers as `audit.recorded`), optional OIDC single sign-on, and `http.allow_from` to restrict client addresses. The first admin comes from `PACKETEER_ADMIN_PASSWORD`. Guide: [docs/auth.md](docs/auth.md). Rollback: `auth.enabled: false` and restart.
 
-Prometheus metrics are `packeteer_up`, `packeteer_ready`, `packeteer_build_info`, `packeteer_provider_up`, `packeteer_probe_success`, `packeteer_probe_rtt_seconds`, `packeteer_probe_rtt_min_seconds`, `packeteer_probe_rtt_max_seconds`, `packeteer_probe_loss_ratio`, `packeteer_probe_jitter_seconds`, `packeteer_probe_prefix_commits`, `packeteer_flow_prefixes_tracked`, `packeteer_truncated_total`, `packeteer_decisions`, `packeteer_decision`, `packeteer_improvements_active`, `packeteer_improvement`, `packeteer_estimated_savings`, `packeteer_bgp_configured`, `packeteer_bgp_ready`, `packeteer_rib_prefixes`, `packeteer_bgp_session_up`, `packeteer_bgp_session`, and, when telemetry is configured, `packeteer_telemetry_up`, `packeteer_telemetry_in_bps`, `packeteer_telemetry_out_bps`, `packeteer_telemetry_in_95th_bps`, `packeteer_telemetry_out_95th_bps`, `packeteer_telemetry_usage_bps`, `packeteer_telemetry_commit_bps`, and `packeteer_telemetry_samples`.
+The Prometheus metric names are listed in [docs/API.md](docs/API.md#metrics).
 
 Scrape `http://127.0.0.1:8080/metrics` on the host.
 
@@ -296,13 +207,24 @@ Scrape `http://127.0.0.1:8080/metrics` on the host.
 
 ## Plugins
 
-Probers, target sources, the scorer, routing policies, the announcer, notifiers, and telemetry are plugins selected by `type` in the config. Unknown types and unknown keys inside a plugin `config` block refuse startup.
+Almost every part of Packeteer is a plugin selected by `type` in the config. Unknown types and unknown keys inside a plugin `config` block refuse startup. The built-ins, by kind:
 
-Built-ins: probers `icmp`, `tcp`, `udp`, and `fixed` (labs only); sources `static`, `flow` (optionally scoring TCP failures from flow records), `traceroute`, `vip`, `outage`, and `span` (passive problem detection from a mirror port or pcap; needs `NET_RAW`; does not announce); scorers `weighted` (default), `commit` (optional commit control and provider groups; does not announce), and `cost` (optional: cheapest provider inside a performance floor; does not announce); announcer `gobgp`; notifiers `webhook` (generic JSON, Slack, Teams, PagerDuty, or a template for SMS gateways), `smtp`, and `snmptrap`, each with its own event filter and rate limit ([docs/EVENTS.md](docs/EVENTS.md)); policies `rules` (ignore, allow, deny, static, or VIP by prefix, origin ASN, or GeoIP country) and `maintenance` (scheduled or on-demand provider maintenance windows); telemetry `snmp` (interface counters and 95th percentile; credentials from the environment; does not announce) and `fixed` (labs only; a configured usage figure; does not announce); storage `sqlite` (report history on a mounted volume; does not announce); whois `rdap` (troubleshooting lookups; does not announce).
+- **Probers:** `icmp`, `tcp`, `udp`, `fixed` (labs only).
+- **Target sources:** `static`, `flow` (NetFlow, IPFIX, sFlow), `traceroute`, `vip`, `outage`, `span` (mirror port or pcap; needs `NET_RAW`).
+- **Route feeds:** rib_source `bmp` (BMP and add-path from the routers).
+- **Scorers:** `weighted` (default), `commit`, `cost`.
+- **Policies:** `rules` (ignore, allow, deny, static, or VIP by prefix, origin ASN, or country) and `maintenance`.
+- **Announcers:** `gobgp` for outbound, plus the `gobgp` inbound and mitigation announcers ([inbound.md](docs/inbound.md), [mitigation.md](docs/mitigation.md)).
+- **Notifiers:** `webhook` (JSON, Slack, Teams, PagerDuty, templates), `smtp`, `snmptrap` ([EVENTS.md](docs/EVENTS.md)).
+- **Telemetry:** `snmp` and `fixed` (labs only).
+- **Storage:** `sqlite` (report history, users, audit log, dashboards).
+- **Detection and safety:** detector `baseline` (flow anomaly detection, [anomaly.md](docs/anomaly.md)) and leak_source `bmp` and `rislive` ([leak-watch.md](docs/leak-watch.md)).
+- **Clusters:** elector `lease` (active/standby, [ha.md](docs/ha.md)) and federation `mtls` (several POPs, [multi-pop.md](docs/multi-pop.md)).
+- **Sign-in and lookups:** sso `oidc` ([auth.md](docs/auth.md)) and whois `rdap` (troubleshooting).
 
-An `exec` plugin is any executable you mount at `/etc/packeteer/plugins` and works in the stock image. Announcers are in-process only. Telemetry is built in.
+Only the announcers and the plugins that feed route decisions can put a route on the session, and those are compiled in only. An `exec` plugin is any executable you mount at `/etc/packeteer/plugins`; it works in the stock image as a prober, a target source, or a notifier, speaking one JSON request and one JSON reply.
 
-Details, the exec protocol, and a shell example: [docs/PLUGINS.md](docs/PLUGINS.md). Keys: [docs/CONFIG.md](docs/CONFIG.md).
+Interfaces, the exec protocol, and a shell example: [docs/PLUGINS.md](docs/PLUGINS.md). Keys: [docs/CONFIG.md](docs/CONFIG.md).
 
 ## FAQ
 
@@ -332,10 +254,24 @@ Status as of v0.6.0, from [docs/FEATURES.md](docs/FEATURES.md):
 | Done, v0.2 | 25 |
 | Done, v0.3 | 17 |
 | Done, v0.4 | 13 |
-| Done, v0.6 | 6 |
+| Done, v0.6 | 7 |
 | Won't do | 3 |
 
 v0.1 is the outbound loop: probes, static and flow targets, an iBGP RIB, scoring with hysteresis, optional injection, the read-only UI and API, the container, and the FRR lab. v0.2 adds cost and commit control, SNMP, policies, alerts, and reports. v0.3 adds inbound optimization, BMP and add-path, multiple routers and IX, RTBH/FlowSpec mitigation, transit classification, and capped more-specific injection, all lab-proven. v0.4 adds multi-POP federation, active/standby HA and backup, RBAC/SSO/audit, flow-baseline anomaly detection that mitigates only on explicit rules, and the remaining UI rows. v0.5 is hardening on that matrix: dashboard clarity and a first-run checklist, CI-tested install and walkthrough docs, load and soak budgets with a flow-ingest fix, a MikroTik CHR lab in CI, and a scheduled router interop matrix. Those are lab-proven only. Field feedback from real observe-mode deployments (#54) is still open. v0.6 (this release) closes the gaps from the 2026-10-07 review of prefix selection, measurement, and the UI, adds flap quarantine, live apply, scale budgets up to multi-million path tables, upgrade from the UI, and a failure-mode e2e matrix; also lab-proven only. It does not relax the safety rules above.
+
+## Upgrades
+
+Pulling a newer image and recreating the container is the plain upgrade. Your config and the `packeteer-data` volume carry over.
+
+The Settings page can also upgrade in place (#196). It is off by default. It needs `upgrade.enabled: true`, the release public key in `upgrade.public_key` ([CONFIG.md](docs/CONFIG.md#upgrade)), an admin login (auth or basic auth), and the `packeteer-data` volume to keep the new version across restarts. The public key is printed in the [v0.6.0 release notes](https://github.com/GrandArcher/Packeteer/releases/tag/v0.6.0). Every route is withdrawn before the switch, and a release whose signature or checksum does not match is refused. Details: [docs/ui.md](docs/ui.md#upgrade-from-the-ui).
+
+## Roadmap and contributing
+
+- What is done, partial, and planned: [docs/FEATURES.md](docs/FEATURES.md) and the [milestones](https://github.com/GrandArcher/Packeteer/milestones).
+- How to send a change: [CONTRIBUTING.md](CONTRIBUTING.md). Safety and doc rules for every change: [AGENTS.md](AGENTS.md).
+- Plugin roadmap: out-of-process plugins with state ([#286](https://github.com/GrandArcher/Packeteer/issues/286)), InfluxDB and OTLP exporters ([#287](https://github.com/GrandArcher/Packeteer/issues/287)), a plugin author guide and community plugin list ([#288](https://github.com/GrandArcher/Packeteer/issues/288)), and PeeringDB and IRR record checks ([#289](https://github.com/GrandArcher/Packeteer/issues/289)).
+
+Bug reports and field reports from observe-mode deployments (#54) are the most useful contribution right now.
 
 ## Build from source
 

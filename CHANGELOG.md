@@ -9,6 +9,7 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 - Policies page lists maintenance windows (current, upcoming, finished) and opens or closes on-demand ones in local time; `POST /api/maintenance` takes `start`/`end` and `GET` lists the rest (#177).
 - Settings form lists discovered exchange LAN members; Accept adds a draft peer with its AS and next hop, and saves, probes, and announces nothing (#155).
 - Prefix, ASN, and exchange-peer pages link out to HE BGP Toolkit, RIPEstat, PeeringDB, bgp.tools, Cloudflare Radar, IRR Explorer, opt-in NLNOG RING; `linkouts` sets sites and https URLs (#211).
+- Router guides give the export deny for `packeteer_community`, standard and large, on every customer, peer, and transit session for FRR, Junos, Cisco, and MikroTik, with a check per vendor (#210).
 
 ## [0.6.0] - 2026-10-13
 
@@ -16,7 +17,6 @@ Sixth release: gaps found in the 2026-10-07 review of prefix selection, measurem
 
 ### Added
 
-- Router guides give the export deny for `packeteer_community`, standard and large, on every customer, peer, and transit session for FRR, Junos, Cisco, and MikroTik, with a check per vendor (#210).
 - Failure-mode e2e matrix across outbound, more-specific, inbound, mitigation, and HA: six failures per surface, one CI matrix job, a broken withdraw path fails it (#234).
 
 ### Changed
