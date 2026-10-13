@@ -6,6 +6,7 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 
 ### Added
 
+- Router guides give the export deny for `packeteer_community`, standard and large, on every customer, peer, and transit session for FRR, Junos, Cisco, and MikroTik, with a check per vendor (#210).
 - Failure-mode e2e matrix across outbound, more-specific, inbound, mitigation, and HA: six failures per surface, one CI matrix job, a broken withdraw path fails it (#234).
 
 ### Changed

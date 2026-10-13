@@ -16,6 +16,75 @@ Two filters are required on the router:
 
 Leave BGP graceful restart **off** on the Packeteer session. Packeteer never enables it, withdraws on shutdown, and the session drop is the backstop. If Packeteer disappears, the edge falls back to the paths it learned from its providers.
 
+## Export filters on every eBGP session
+
+Customers, peers, and transits are all eBGP sessions, and a customer can re-export what it hears ([leak-watch.md](leak-watch.md) has the 2019 case). NO_EXPORT keeps an injected route from eBGP neighbors only while the router honors it, and a policy that strips communities undoes it. So put the deny first in the outbound policy of every eBGP neighbor, customers included, for both forms of `packeteer_community`. A deny for a community you do not configure matches nothing, so keep both.
+
+Each vendor below uses `64512:666` (standard) and `64512:1:666` (large). Replace them with your `packeteer_community`. Each check command shows what the neighbor receives. It does not prove the filter alone, because NO_EXPORT also hides the prefix; the filter is the layer you control.
+
+FRR. The `ebgp-out` route-map of [frr.md](frr.md), which the walkthrough lab loads:
+
+```
+bgp community-list standard packeteer permit 64512:666
+bgp large-community-list standard packeteer-large permit 64512:1:666
+route-map ebgp-out deny 10
+ match community packeteer
+route-map ebgp-out deny 11
+ match large-community packeteer-large
+! your existing terms follow
+```
+
+Check: `vtysh -c 'show bgp ipv4 unicast neighbors 192.0.2.21 advertised-routes'`. The steered prefix is not listed.
+
+Junos. The first two terms of each eBGP export policy:
+
+```
+policy-options {
+    community packeteer members 64512:666;
+    community packeteer-large members large:64512:1:666;
+    policy-statement ebgp-out {
+        term no-packeteer {
+            from community packeteer;
+            then reject;
+        }
+        term no-packeteer-large {
+            from community packeteer-large;
+            then reject;
+        }
+        /* your existing terms follow */
+    }
+}
+```
+
+Check: `show route advertising-protocol bgp 192.0.2.21`. The steered prefix is not listed.
+
+Cisco IOS / IOS-XE. The deny entries at the top of each eBGP outbound route-map. The large-community form needs an RFC 8092 release; confirm `ip large-community-list` on yours, since it is not tested in CI:
+
+```
+ip community-list standard PACKETEER permit 64512:666
+ip large-community-list standard PACKETEER-LARGE permit 64512:1:666
+route-map EBGP-OUT deny 10
+ match community PACKETEER
+route-map EBGP-OUT deny 11
+ match large-community PACKETEER-LARGE
+! your existing terms follow
+```
+
+Check: `show ip bgp neighbors 192.0.2.21 advertised-routes`. The steered prefix is not listed.
+
+MikroTik RouterOS 7. Two deny rules before the final accept in `ebgp-out`, which the [CHR lab](mikrotik.md#tested-in-ci-chr-in-qemu) applies for the standard form. The large rule is not in CI:
+
+```routeros
+/routing filter rule add chain=ebgp-out \
+    rule="if (bgp-communities includes 64512:666) { reject }"
+/routing filter rule add chain=ebgp-out \
+    rule="if (bgp-large-communities includes 64512:1:666) { reject }"
+/routing filter rule add chain=ebgp-out rule="accept"
+/routing bgp connection set [find where local.role=ebgp] output.filter-chain=ebgp-out
+```
+
+Check: `/routing bgp connection print where local.role=ebgp` shows `output.filter-chain=ebgp-out` on every eBGP connection. Then `/routing filter rule print where chain=ebgp-out` lists the two denies ahead of `accept`.
+
 ## Local preference on import
 
 The edge compares local preference and keeps the higher one. Give every transit's import a native value, and do not rewrite local preference on the Packeteer import: Packeteer already set it. Every Packeteer value (`local_pref`, each `local_pref_cause` entry, and each `providers[].local_pref`) has to be above that native value. `0` is rejected. The addresses below are documentation ranges.
