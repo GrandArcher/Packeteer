@@ -16,7 +16,9 @@ import (
 
 // fakeReports builds reports from a fixed history and records the query.
 type fakeReports struct {
-	last history.Query
+	last      history.Query
+	search    history.SearchQuery
+	searchErr error
 }
 
 func (f *fakeReports) Report(_ context.Context, q history.Query) (history.Report, error) {
@@ -280,4 +282,22 @@ func TestPrefixPageRoute(t *testing.T) {
 	if code, _, _ := do(t, http.MethodGet, ts.URL+"/api/prefixes/history?prefix=192.0.2.0/24", "", ""); code != http.StatusUnauthorized {
 		t.Errorf("history without credentials: %d", code)
 	}
+}
+
+func (f *fakeReports) Search(_ context.Context, q history.SearchQuery) (history.SearchResult, error) {
+	f.search = q
+	if f.searchErr != nil {
+		return history.SearchResult{}, f.searchErr
+	}
+	h := plugin.History{
+		Buckets: []plugin.ProbeBucket{
+			{Day: q.To.Truncate(24 * time.Hour), Prefix: netip.MustParsePrefix("198.51.100.0/24"), Provider: "transit-a", Probes: 4, Measured: 4, LossSum: 8, RTTSumMs: 80},
+		},
+		Improvements: []plugin.ImprovementRecord{
+			{ID: "1", Prefix: netip.MustParsePrefix("198.51.100.0/24"), Provider: "transit-b", Native: "transit-a", Start: q.To.Add(-48 * time.Hour), OriginASN: 64510},
+			{ID: "2", Prefix: netip.MustParsePrefix("203.0.113.0/24"), Provider: "transit-b", Native: "transit-a", Start: q.To.Add(-24 * time.Hour), OriginASN: 64511},
+		},
+		Prefixes: []plugin.PrefixInfo{{Prefix: netip.MustParsePrefix("198.51.100.0/24"), OriginASN: 64510}},
+	}
+	return history.Search(h, q), nil
 }

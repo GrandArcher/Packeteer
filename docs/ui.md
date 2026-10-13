@@ -10,6 +10,7 @@ The remaining UI conveniences (#34). All of them work in the stock image with a 
 | Prefix detail and history (#179) | `/prefix/<prefix>`, `/api/prefixes/history` | viewer | `storage: {type: sqlite}` for the timeline |
 | Maintenance windows (#177) | `/policies.html`, `GET`/`POST /api/maintenance`, `DELETE /api/maintenance/{id}` | viewer reads, operator opens and closes | a `maintenance` policy; opening needs auth or basic auth |
 | Link-outs (#211) | `/prefix/<prefix>`, `/prefixes.html`, `/providers.html`, `GET /api/linkouts` | viewer | `linkouts` (optional) |
+| Global search (#172) | the top bar on every page, `/search.html`, `GET /api/search` | viewer | `storage: {type: sqlite}` for history |
 | System health (#184) | `/system.html`, `/api/system`, the System tile on `/` | viewer | none |
 | Events and audit log (#173) | `/events.html`, `/api/events`, `/api/audit` | viewer for events, admin for the audit tab | `storage: {type: sqlite}` keeps events across a restart |
 | Users and API tokens (#175) | `/admin.html`, `/tokens.html`, `/api/users`, `/api/tokens` | admin for users, every signed-in user for tokens | `storage` + `auth.enabled` |
@@ -147,6 +148,35 @@ The RING link is a page the operator opens by hand. Packeteer does not call RING
 The server builds every URL, so the browser never assembles one. `GET /api/linkouts?prefix=<cidr>&asn=<n>` (viewer; both repeatable, at most 300 values; a bad value is a `400`) returns `{"prefix": {<cidr>: [{"name", "url"}]}, "asn": {<n>: [...]}}`. A prefix is masked and written as CIDR with `/` and `:` left readable; an AS is decimal digits. With `linkouts.hide_internal` on (default) an RFC 1918, ULA, loopback, or link-local prefix and a private-use AS (RFC 6996: 64512-65534, 4200000000-4294967294) get an empty list, so the page shows no link for it. Documentation prefixes and ASNs are not internal. Settings and the `linkouts` keys are in [CONFIG.md](CONFIG.md#linkouts); a change needs a restart.
 
 The `ui-smoke` steps of the docker job load `/prefix/2001:db8::%2F32` and `/prefixes.html?asn=64496` in headless Chrome and check the rendered `href`s, `target`, and `rel`, that NLNOG RING is absent, and that an RFC 1918 prefix and a private-use AS render no link. `internal/linkout`, `internal/config`, and `internal/httpapi` tests cover the URLs, the template checks, and the page wiring.
+
+## Global search
+
+The search box in the top bar (#172) takes a prefix, an address, an AS number, or an AS name, and Enter opens `/search.html?q=<query>`. The page and `GET /api/search?q=` are read-only: they change nothing, announce nothing, and the mode banner stays on top.
+
+| You type | Matches |
+|---|---|
+| `192.0.2.0/24` | That prefix (`exact`), prefixes that contain it (`covering`), and prefixes inside it (`more-specific`). A default route is never a covering match. |
+| `192.0.2.77` | Prefixes that contain the address. |
+| `AS64510`, `as64510`, or `64510` | Rows whose origin AS is that AS: the last AS of a learned path, and the origin stored with an improvement or a probe rollup. |
+| `carrier` | Every AS whose known name contains the text (any case), then the rows of those AS numbers (at most 10 of them). |
+
+Packeteer has no AS-name database. A name is known from an exchange peer in the config (`exchanges`, shown as the provider name) or from an ASN lookup made with the whois tool on the Troubleshooting page since the process started (at most 1000, kept in memory). A name that Packeteer has not seen finds nothing; search its AS number instead.
+
+Results are grouped by type, newest first, at most 25 rows per list; each heading shows the full count:
+
+- **AS numbers**: the AS or ASes searched, with the name when known.
+- **Measured prefixes**: the prefixes Packeteer probes now, with the current and recommended exit and the last probe time.
+- **Learned routes (RIB)**: routes in the learned RIB view, newest first.
+- **Current recommendations** (current improvements in inject): what the decision engine holds now.
+- **Stored improvements** and **Probe rollups**, for the last 90 days: improvement records and the per-prefix daily probe rollups, newest first. Without `storage: {type: sqlite}` these lists are empty and the page says history is off, so only live data was searched.
+
+Each row links to its prefix page (`/prefix/<prefix>`), to the improvements report filtered to that prefix or origin AS (`/reports.html?report=improvements&prefix=<prefix>` or `&asn=<number>`, 90 days; the same `prefix` and `asn` parameters filter `GET /api/reports/improvements` and its CSV), and to the Probe tool (`/troubleshooting.html?tool=probe&target=<prefix>`, which runs nothing until Run). An AS row links to the Prefixes page filtered by AS, the filtered report, and the whois tool.
+
+The last five searches are kept in this browser's local storage under the signed-in user's name (`local` without auth) and offered in the search box and on the search page. Nothing is stored on the controller.
+
+`GET /api/search?q=` needs the viewer role. Input that is not a prefix, an address, an AS number from 1 to 4294967295, or a name of 2 to 64 letters, digits, spaces, and `. , & ( ) ' -` is a `400`. Each caller (user, or client address without auth) may search 10 times at once and then twice a second; more is a `429` with `Retry-After`. The body has `query`, `kind` (`prefix`, `asn`, or `name`), `limit`, `history` (`enabled`, `days`, and a `note` when history is off or did not answer), and the lists `asns`, `measured`, `rib`, `recommendations`, `improvements`, and `rollups`, each `{total, rows}`.
+
+CI loads the page against the stock image (`lab/ui-smoke.sh`, docker job, "history survives a container restart" step): the grouped results, the links, the history-off note on the stock example config, the `400` cases, and the rate limit. `internal/httpapi`, `internal/history`, `internal/rib`, and `internal/troubleshoot` tests cover matching, ordering, caps, the limiter, and the name source.
 
 ## System health
 

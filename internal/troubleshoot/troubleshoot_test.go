@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/netip"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -358,5 +359,44 @@ func TestWhois(t *testing.T) {
 	}
 	if len(fw.got) != 4 {
 		t.Fatalf("plugin saw %v", fw.got)
+	}
+}
+
+func TestWhoisRemembersASNames(t *testing.T) {
+	tl := New(Options{Enabled: true, Whois: &fakeWhois{}})
+	if got := tl.ASNames(); len(got) != 0 {
+		t.Fatalf("names before any lookup: %v", got)
+	}
+	for _, q := range []string{"AS64496", "64500", "192.0.2.0/24", "2001:db8::1", "as0"} {
+		if _, err := tl.Whois(context.Background(), q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got := tl.ASNames()
+	if len(got) != 2 || got[64496] != "DOC-ASN" || got[64500] != "DOC-ASN" {
+		t.Fatalf("names = %v", got)
+	}
+	got[64496] = "changed"
+	if tl.ASNames()[64496] != "DOC-ASN" {
+		t.Error("ASNames returns the internal map")
+	}
+}
+
+func TestASNameLimits(t *testing.T) {
+	tl := New(Options{Enabled: true})
+	for i := uint32(1); i <= maxASNames+5; i++ {
+		tl.rememberASName(strconv.Itoa(int(i)), plugin.WhoisResult{Kind: "asn", Name: "N"})
+	}
+	if len(tl.ASNames()) != maxASNames {
+		t.Fatalf("kept %d names", len(tl.ASNames()))
+	}
+	// A known AS still updates when the map is full.
+	tl.rememberASName("1", plugin.WhoisResult{Kind: "asn", Name: strings.Repeat("x", 300)})
+	if got := tl.ASNames()[1]; len(got) != maxASNameLen {
+		t.Errorf("name length %d", len(got))
+	}
+	var nilTools *Tools
+	if nilTools.ASNames() != nil {
+		t.Error("nil Tools has names")
 	}
 }

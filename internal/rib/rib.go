@@ -1758,6 +1758,31 @@ func (v *View) Routes() []Route {
 	return v.routesLocked()
 }
 
+// Find returns the first limit selected routes for which keep is true,
+// in the order before gives, and the number of routes that matched. It
+// holds the read lock for one pass over the table and keeps no more than
+// limit routes, so a search does not copy a full table. before must be a
+// strict order. AS paths alias the view as in Routes.
+func (v *View) Find(keep func(Route) bool, before func(a, b Route) bool, limit int) (routes []Route, matched int) {
+	v.mu.RLock()
+	defer v.mu.RUnlock()
+	for _, r := range v.routes {
+		if !keep(r) {
+			continue
+		}
+		matched++
+		i := sort.Search(len(routes), func(i int) bool { return before(r, routes[i]) })
+		if i >= limit {
+			continue
+		}
+		routes = slices.Insert(routes, i, r)
+		if len(routes) > limit {
+			routes = routes[:limit]
+		}
+	}
+	return routes, matched
+}
+
 // AltPath is one provider's learned AS path for a prefix other than the
 // selected route's own path (#124). Outage correlation reads it next to
 // the native AS path. ASPath is a copy.

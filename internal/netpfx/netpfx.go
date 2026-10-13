@@ -29,3 +29,27 @@ func CoveredBy(list []netip.Prefix, p netip.Prefix) bool {
 	}
 	return false
 }
+
+// How a prefix relates to a searched one (Relation).
+const (
+	RelExact        = "exact"
+	RelCovering     = "covering"
+	RelMoreSpecific = "more-specific"
+)
+
+// Relation says how p relates to the searched prefix q: equal, a covering
+// prefix of q, or a more specific inside q. It is "" for an unrelated
+// prefix or one of the other address family. A default route is not a
+// covering match, since it would match every search.
+func Relation(q, p netip.Prefix) string {
+	q, p = q.Masked(), p.Masked()
+	switch {
+	case p == q:
+		return RelExact
+	case p.Bits() > 0 && p.Bits() < q.Bits() && p.Contains(q.Addr()):
+		return RelCovering
+	case p.Bits() > q.Bits() && q.Contains(p.Addr()):
+		return RelMoreSpecific
+	}
+	return ""
+}

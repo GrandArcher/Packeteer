@@ -594,6 +594,7 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 	if view != nil {
 		view.OnChange(poke)
 		tools.SetRIB(view)
+		httpSrv.SetSearchRIB(view)
 	}
 	var engine *probe.Engine
 	onRound := func() {

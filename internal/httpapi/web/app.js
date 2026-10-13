@@ -795,12 +795,33 @@ function refreshDone() {
   }
 }
 
+// The search page (#172) links here with the improvements report narrowed
+// to one prefix or one origin AS. The filter applies to that report only.
+function reportFilter() {
+  var q = new URLSearchParams(window.location.search);
+  var f = {};
+  if (q.get("prefix")) f.prefix = q.get("prefix");
+  if (q.get("asn")) f.asn = q.get("asn");
+  return f;
+}
+
 function reportURL(format) {
   var nameEl = document.getElementById("report-name");
   var daysEl = document.getElementById("report-days");
   var name = nameEl && nameEl.value || "summary";
   var days = daysEl && daysEl.value || "7";
   var url = "/api/reports/" + encodeURIComponent(name) + "?days=" + encodeURIComponent(days);
+  var f = reportFilter();
+  var note = document.getElementById("report-filter");
+  var filtered = name === "improvements" && (f.prefix || f.asn);
+  if (filtered) {
+    if (f.prefix) url += "&prefix=" + encodeURIComponent(f.prefix);
+    if (f.asn) url += "&asn=" + encodeURIComponent(f.asn);
+  }
+  if (note) {
+    note.hidden = !filtered;
+    note.textContent = filtered ? "Only improvements for " + (f.prefix ? f.prefix : "") + (f.prefix && f.asn ? " and " : "") + (f.asn ? "origin AS" + f.asn.replace(/^as/i, "") : "") + "." : "";
+  }
   if (format) url += "&format=" + format;
   return url;
 }
@@ -867,6 +888,12 @@ function initReports() {
       o.title = r.summary || "";
       sel.appendChild(o);
     });
+    var want = new URLSearchParams(window.location.search).get("report");
+    if (want === "improvements") {
+      sel.value = want;
+      var daysSel = document.getElementById("report-days");
+      if (daysSel) daysSel.value = "90";
+    }
     if (!data || !data.enabled) {
       var root = document.getElementById("report");
       if (root) {

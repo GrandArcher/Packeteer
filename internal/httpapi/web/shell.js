@@ -20,6 +20,12 @@ var SHELL_MODE_TEXT = {
   inject: "Inject mode: improvements for allowlisted prefixes are announced to the edge routers."
 };
 
+// The top bar search (#172) keeps the last few searches in this browser,
+// under the signed-in user's name. Nothing is stored on the controller.
+var SEARCH_RECENT_KEY = "packeteer.search.recent.";
+var SEARCH_RECENT_MAX = 5;
+var shellUser = "";
+
 function shellEl(tag, className, text) {
   var n = document.createElement(tag);
   if (className) n.className = className;
@@ -74,6 +80,7 @@ function shellMarkCurrent() {
 // does not see them in the nav. A deep link to Admin shows the same 403
 // text the dashboard uses. Settings keeps its own editor message.
 function shellApplyMe(me) {
+  shellUser = (me && me.user) || "";
   var rbac = me && me.auth === "rbac";
   var admin = !rbac || me.role === "admin";
   var gated = document.querySelectorAll("[data-min-role='admin']");
@@ -94,6 +101,49 @@ function shellApplyMe(me) {
     }
     if (body) body.hidden = true;
   }
+}
+
+function shellRecentSearches() {
+  try {
+    var list = JSON.parse(localStorage.getItem(SEARCH_RECENT_KEY + (shellUser || "local")) || "[]");
+    return Array.isArray(list) ? list.filter(function (q) { return typeof q === "string"; }).slice(0, SEARCH_RECENT_MAX) : [];
+  } catch (e) { return []; }
+}
+
+function shellRememberSearch(q) {
+  var list = shellRecentSearches().filter(function (old) { return old !== q; });
+  list.unshift(q);
+  try {
+    localStorage.setItem(SEARCH_RECENT_KEY + (shellUser || "local"), JSON.stringify(list.slice(0, SEARCH_RECENT_MAX)));
+  } catch (e) { /* storage blocked: the list is not kept */ }
+}
+
+function shellFillRecent() {
+  var list = document.getElementById("top-search-recent");
+  if (!list) return;
+  shellClear(list);
+  shellRecentSearches().forEach(function (q) {
+    var o = document.createElement("option");
+    o.value = q;
+    list.appendChild(o);
+  });
+}
+
+function shellSearchGo(q) {
+  shellMeReady.then(function () {
+    shellRememberSearch(q);
+    window.location.href = "/search.html?q=" + encodeURIComponent(q);
+  });
+}
+
+function shellSearch() {
+  var input = document.getElementById("top-search");
+  if (!input) return;
+  input.addEventListener("keydown", function (ev) {
+    if (ev.key !== "Enter") return;
+    var q = input.value.trim();
+    if (q) shellSearchGo(q);
+  });
 }
 
 function shellRenderEventsBadge(n) {
@@ -207,7 +257,12 @@ function shellAccount() {
 if (document.body.getAttribute("data-page") !== "signin") {
   shellMarkCurrent();
   shellAccount();
-  shellJSON("/api/me").then(shellApplyMe, function () {});
+  var shellMeReady = shellJSON("/api/me").then(function (me) {
+    shellApplyMe(me);
+    shellFillRecent();
+    return me;
+  }, function () { return null; });
+  shellSearch();
   if (document.body.getAttribute("data-page") !== "events") {
     shellEventsBadge();
     setInterval(shellEventsBadge, EVENTS_BADGE_MS);
