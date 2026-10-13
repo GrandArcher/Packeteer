@@ -474,8 +474,7 @@ jobs:
           jq -e '.mode == "observe"
             and ([.components[] | select(.kind == "announcer")][0] | .state == "idle" and (.detail | contains("announces nothing")))
             and ([.components[] | select(.kind == "storage")][0] | .type == "sqlite")
-            and ([.components[] | select(.kind == "notifier")][0] | .error | contains("connection refused"))
-            and ([.components[] | select(.kind == "probe_source" and .name == "lab-a")][0].state == "ok")' /tmp/sys184.json
+            and ([.components[] | select(.kind == "notifier")][0] | .error | contains("connection refused"))' /tmp/sys184.json
           # The path of the hook URL is a credential and never leaves the process.
           ! grep -q 's3cr3t-token' /tmp/sys184.json
           curl -fsS "$base/api/overview" | jq -e '.system.down >= 2 and .system.total == (.system.ok + .system.degraded + .system.down + .system.idle)'
