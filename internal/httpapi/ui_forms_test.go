@@ -108,6 +108,81 @@ func TestConfigFormSections(t *testing.T) {
 	}
 }
 
+// #181: the exchanges block goes through the same two calls. Apply writes
+// nothing, Save runs the loader (route check requirement included), and a
+// client that does not send the section leaves the block alone.
+func TestConfigFormExchanges(t *testing.T) {
+	e := newUI(t)
+	admin := plugin.RoleAdmin
+	withIX := editorYAML + `exchanges:
+  - name: ix-lab
+    lans: [203.0.113.0/24]
+    peers:
+      - name: ix-peer-a
+        asn: 64501
+        next_hop: 203.0.113.11
+        source_ip: 192.0.2.31
+        precedence: 50
+bgp:
+  neighbors:
+    - address: 192.0.2.254
+      add_path: true
+`
+	rec, got := e.do(t, "POST", "/api/config/form", admin, map[string]any{"yaml": withIX})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("parse: %d %s", rec.Code, rec.Body)
+	}
+	fm := got["form"].(map[string]any)
+	exs := fm["exchanges"].([]any)
+	peers := exs[0].(map[string]any)["peers"].([]any)
+	if len(exs) != 1 || len(peers) != 1 || peers[0].(map[string]any)["asn"] != "64501" || peers[0].(map[string]any)["next_hop"] != "203.0.113.11" {
+		t.Fatalf("exchanges = %v", exs)
+	}
+
+	exs[0].(map[string]any)["peers"] = append(peers, map[string]any{"name": "ix-peer-b", "asn": "64502", "next_hop": "203.0.113.12", "source_ip": "192.0.2.32", "cost": "2"})
+	rec, got = e.do(t, "POST", "/api/config/form", admin, map[string]any{"yaml": withIX, "apply": true, "form": fm})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("apply: %d %s", rec.Code, rec.Body)
+	}
+	yml := got["yaml"].(string)
+	for _, want := range []string{"name: ix-peer-b", "asn: 64502", "precedence: 50", "add_path: true"} {
+		if !strings.Contains(yml, want) {
+			t.Errorf("merged yaml missing %q:\n%s", want, yml)
+		}
+	}
+	if disk, _ := os.ReadFile(e.path); string(disk) != editorYAML {
+		t.Fatal("apply wrote the file")
+	}
+	if back := got["form"].(map[string]any)["exchanges"].([]any); len(back[0].(map[string]any)["peers"].([]any)) != 2 {
+		t.Fatalf("read-back = %v", back)
+	}
+
+	// A next hop off the LAN is refused with the field named.
+	exs[0].(map[string]any)["peers"].([]any)[1].(map[string]any)["next_hop"] = "198.51.100.9"
+	rec, _ = e.do(t, "POST", "/api/config/form", admin, map[string]any{"yaml": withIX, "apply": true, "form": fm})
+	if rec.Code != http.StatusUnprocessableEntity || !strings.Contains(rec.Body.String(), "not inside the exchange") {
+		t.Fatalf("off-LAN next hop: %d %s", rec.Code, rec.Body)
+	}
+
+	rec, _ = e.do(t, "PUT", "/api/config", admin, map[string]any{"yaml": yml, "base": configedit.Hash([]byte(editorYAML))})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("save: %d %s", rec.Code, rec.Body)
+	}
+	cfg, err := config.Load(e.path)
+	if err != nil || len(cfg.Exchanges) != 1 || len(cfg.Exchanges[0].Peers) != 2 || cfg.Mode != config.ModeObserve {
+		t.Fatalf("saved config: %v %+v", err, cfg)
+	}
+
+	// A client that does not know the section leaves it.
+	rec, got = e.do(t, "POST", "/api/config/form", admin, map[string]any{"yaml": yml, "apply": true,
+		"form": map[string]any{"mode": "observe", "hold_time": "20m", "providers": []map[string]any{
+			{"key": "transit-a", "name": "transit-a", "source_ip": "192.0.2.11", "next_hop": "192.0.2.1"},
+			{"key": "transit-b", "name": "transit-b", "source_ip": "192.0.2.12", "next_hop": "192.0.2.2"}}}})
+	if out, _ := got["yaml"].(string); rec.Code != http.StatusOK || !strings.Contains(out, "name: ix-peer-b") || !strings.Contains(out, "hold_time: 20m") {
+		t.Fatalf("old client: %d %s", rec.Code, rec.Body)
+	}
+}
+
 // #226: with two flow sources and two policies of the same type, editing
 // the second of each reaches the saved file and leaves the first alone.
 func TestSettingsEditSecondOfEachType(t *testing.T) {
@@ -213,14 +288,14 @@ func TestSettingsPageSections(t *testing.T) {
 	rec, _ := e.do(t, "GET", "/settings.html", plugin.RoleViewer, nil)
 	html := rec.Body.String()
 	for _, w := range []string{`id="form-flows"`, `id="form-add-flow"`, `id="form-policies"`, `id="form-add-policy"`, `id="form-vips"`, `id="form-add-vip"`,
-		`id="form-outages"`, `id="form-add-outage"`, `id="wz-4"`, `id="wz-flow"`, `id="wz-flow-addr"`, `id="wz-flow-port"`, "Exporter setup", "do not publish it"} {
+		`id="form-outages"`, `id="form-add-outage"`, `id="form-exchanges"`, `id="form-add-exchange"`, `id="wz-4"`, `id="wz-flow"`, `id="wz-flow-addr"`, `id="wz-flow-port"`, "Exporter setup", "do not publish it"} {
 		if !strings.Contains(html, w) {
 			t.Errorf("settings.html missing %q", w)
 		}
 	}
 	rec, _ = e.do(t, "GET", "/settings.js", plugin.RoleViewer, nil)
 	js := rec.Body.String()
-	for _, w := range []string{"function renderFlows", "function renderPolicies", "function renderVIPs", "function renderOutages", "function moveButtons", "function readSections", "function wizardFlowListen", "body.flow"} {
+	for _, w := range []string{"function renderFlows", "function renderPolicies", "function renderVIPs", "function renderOutages", "function renderExchanges", "function moveButtons", "function readSections", "function wizardFlowListen", "body.flow"} {
 		if !strings.Contains(js, w) {
 			t.Errorf("settings.js missing %q", w)
 		}

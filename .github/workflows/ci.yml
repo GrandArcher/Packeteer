@@ -605,7 +605,7 @@ jobs:
             'filtered: ?asn=AS64500&amp;sort=gain&amp;size=25 first 2001:db8:1::/48 rows 3' \
             'Showing 1–3 of 3 matching (100000 measured) prefixes.' 'Page 1 of 1' \
             --absent 'Cannot reach' 'mode-inject'
-      - name: UI settings forms smoke (#130; flow, rules, VIP, outage, wizard flow step, observe)
+      - name: UI settings forms smoke (#130, #181; flow, rules, VIP, outage, exchanges, wizard flow step, observe)
         run: |
           set -euo pipefail
           base=http://127.0.0.1:18132
@@ -623,10 +623,24 @@ jobs:
             - name: lab-b
               source_ip: 127.0.0.2
               next_hop: 192.0.2.2
+          exchanges:
+            - name: ix-lab
+              lans: [203.0.113.0/24]
+              peers:
+                - name: ix-peer-a
+                  asn: 64501
+                  next_hop: 203.0.113.11
+                  source_ip: 127.0.0.3
+                - name: ix-peer-b
+                  asn: 64502
+                  next_hop: 203.0.113.12
+                  source_ip: 127.0.0.4
+                  precedence: 50
           probe: {interval: 30s, timeout: 200ms, packets: 1}
           bgp:
             neighbors:
               - address: 192.0.2.254
+                add_path: true
           sources:
             - type: static
               config:
@@ -676,7 +690,7 @@ jobs:
           probers:
             - type: fixed
               config:
-                paths: [{provider: lab-a, rtt_ms: 12}, {provider: lab-b, rtt_ms: 20}]
+                paths: [{provider: lab-a, rtt_ms: 12}, {provider: lab-b, rtt_ms: 20}, {provider: ix-peer-a, rtt_ms: 15}, {provider: ix-peer-b, rtt_ms: 25}]
           YAML
           docker run -d --name pkui130 --network host --cap-add NET_RAW --cap-add NET_ADMIN \
             -e PACKETEER_HTTP_USER=lab -e PACKETEER_HTTP_PASSWORD=lab-only \
@@ -704,7 +718,9 @@ jobs:
           yaml="$(curl -fsS "${auth[@]}" "$base/api/config" | jq -r .yaml)"
           jq -n --arg y "$yaml" '{yaml:$y}' | curl -fsS "${auth[@]}" -H 'Content-Type: application/json' -d @- "$base/api/config/form" >/tmp/form130.json
           jq -e '(.form.flows | length) == 2 and .form.flows[0].listen[0] == "127.0.0.1:12055" and .form.flows[1].name == "flow-b" and (.form.vips | length) == 1 and .form.outages[0].min_prefixes == "4" and (.form.policies | length) == 2 and (.form.policies[0].rules | length) == 2 and .form.policies[1].name == "rules-b"' /tmp/form130.json
+          jq -e '(.form.exchanges | length) == 1 and .form.exchanges[0].lans == ["203.0.113.0/24"] and (.form.exchanges[0].peers | map(.asn)) == ["64501", "64502"] and (.form.providers | length) == 2' /tmp/form130.json
           jq '.form | .flows[1].window = "9m" | .flows[1].top_n = "30" | .outages[0].min_prefixes = "6"
+            | .exchanges[0].peers += [{key:"",name:"ix-peer-c",asn:"64503",next_hop:"203.0.113.13",source_ip:"127.0.0.5",cost:"1.5"}]
             | .policies[1].rules += [{key:"",name:"vips",action:"vip",providers:[],prefixes:["198.51.100.0/24"],asns:[],countries:[],traffic:"",max_loss_pct:"",max_rtt:""}]' /tmp/form130.json >/tmp/form130-edit.json
           jq -n --arg y "$yaml" --slurpfile f /tmp/form130-edit.json '{yaml:$y,apply:true,form:$f[0]}' \
             | curl -fsS "${auth[@]}" -H 'Content-Type: application/json' -d @- "$base/api/config/form" | jq -r .yaml >/tmp/merged130.yaml
@@ -712,6 +728,11 @@ jobs:
           grep -q 'window: 9m' /tmp/merged130.yaml
           grep -q 'window: 10m' /tmp/merged130.yaml
           grep -q 'name: vips' /tmp/merged130.yaml
+          # An added peer is merged, the peer's precedence the form does not
+          # show is kept, and the loader's route check requirement (the
+          # add_path neighbor) still holds.
+          grep -q 'name: ix-peer-c' /tmp/merged130.yaml
+          grep -q 'precedence: 50' /tmp/merged130.yaml
           grep -q 'mode: observe' /tmp/merged130.yaml
           ! grep -q 'announcer' /tmp/merged130.yaml
           jq -n --rawfile y /tmp/merged130.yaml '{yaml:$y}' | curl -fsS "${auth[@]}" -H 'Content-Type: application/json' -d @- "$base/api/config/validate" | tee /tmp/validate130.json
@@ -746,6 +767,8 @@ jobs:
             'Policies (rules)' 'Policy 1' 'Policy 2' 'value="rules-b"' 'value="pin-a"' 'value="no-b-64500"' 'value="allow-b"' '>Action</span>' '>Max loss (%)</span>' \
             'VIP' 'value="10s"' 'value="203.0.113.1"' \
             'Outage detection' 'value="4"' 'value="30"' \
+            'Exchange 1' 'value="ix-lab"' 'value="203.0.113.0/24"' 'value="ix-peer-a"' 'value="64501"' 'value="203.0.113.11"' 'value="127.0.0.3"' \
+            'value="ix-peer-b"' 'value="64502"' '>Peer name</span>' '>Peer AS</span>' '>Peer next hop</span>' '>Peer probe source</span>' '+ Peer' \
             '4. Flow (optional)' 'Collect flow records' 'Exporter setup' \
             --absent 'The config editor is off' 'mode-inject'
       - name: UI mitigation, inbound, and anomaly forms smoke (#131; add and remove a rule in observe)

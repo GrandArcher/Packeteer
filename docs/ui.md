@@ -11,7 +11,7 @@ The remaining UI conveniences (#34). All of them work in the stock image with a 
 | Events and audit log (#173) | `/events.html`, `/api/events`, `/api/audit` | viewer for events, admin for the audit tab | `storage: {type: sqlite}` keeps events across a restart |
 | Users and API tokens (#175) | `/admin.html`, `/tokens.html`, `/api/users`, `/api/tokens` | admin for users, every signed-in user for tokens | `storage` + `auth.enabled` |
 | Dashboard overview and setup checklist (#49) | `/`, `/api/overview` | viewer | none |
-| Config editor and settings form (#102, inbound and anomaly rules #131) | `/settings.html`, `/api/config`, `POST /api/config/form` | admin | `http.config_editor: true` + auth or basic auth |
+| Config editor and settings form (#102, inbound and anomaly rules #131, exchanges #181) | `/settings.html`, `/api/config`, `POST /api/config/form` | admin | `http.config_editor: true` + auth or basic auth |
 | Setup wizard (#106, flow step #130) | `/settings.html`, `POST /api/config/wizard` | admin | `http.config_editor: true` + auth or basic auth |
 | Custom dashboards | `/dashboards.html`, `/api/dashboards` | every signed-in user, own dashboards | `storage: {type: sqlite}` + auth or basic auth |
 | Report subscriptions | `report_subscriptions`, `/api/subscriptions` | viewers see them, operators send now | `storage` + an `smtp` notifier |
@@ -154,7 +154,7 @@ A third run turns the config editor on with basic auth and sqlite, saves a dashb
 
 The auth step of the docker job (#175) creates a viewer and a token through the API, then loads `/admin.html` and `/tokens.html` as the admin (the user table with its row actions) and as the viewer (the denial text, and only its own token), and the stock-image run checks both pages say they need `auth` when it is off. `internal/httpapi` tests drive the calls the pages make and read the audit log.
 
-The settings forms (#130) have their own smoke step in the same job. The stock image mounts an observe file that has a `flow`, `vip`, and `outage` source and a `rules` policy. The step reads the form through the API, merges an edit, and requires the editor's start checks to accept the result as observe with inject not enabled. It renders a wizard config with the flow step and requires the same. Headless Chrome then loads `/settings.html` through `lab/uiproxy` and checks that each section is filled from the file, that the observe banner is on top, and that the wizard has its optional flow step. `internal/configedit`, `internal/httpapi`, and `cmd/controller` tests round-trip every section through `config.Load` and the start checks.
+The settings forms (#130, #181) have their own smoke step in the same job. The stock image mounts an observe file that has a `flow`, `vip`, and `outage` source, a `rules` policy, and an exchange of two peers with an add-path neighbor. The step reads the form through the API, merges an edit, and requires the editor's start checks to accept the result as observe with inject not enabled. The merge adds a third peer, keeps the peers' hidden `precedence`, and the start checks accept it. It renders a wizard config with the flow step and requires the same. Headless Chrome then loads `/settings.html` through `lab/uiproxy` and checks that each section, the exchange and its peers included, is filled from the file, that the observe banner is on top, and that the wizard has its optional flow step. `internal/configedit`, `internal/httpapi`, and `cmd/controller` tests round-trip every section through `config.Load` and the start checks.
 
 ## Graphs
 
@@ -246,6 +246,14 @@ A policy or source only restricts, orders, or measures. The learned-RIB check, t
 **Exec plugins.** Checking or saving a candidate never runs a program. `exec` plugins in the candidate are validated without running their command (no `init` handshake), and a candidate that adds or changes an `exec` plugin (command, args, env, anything in its block) or changes `plugin_dir` is refused with `422`. Which programs the controller runs is set only by editing the mounted file; removing an `exec` plugin through the editor is allowed.
 
 The file is read-only in many deployments (`:ro`). Then saving fails with a clear error and nothing changes. Leave `config_editor` off if you manage the file with Git or configuration management.
+
+### Exchanges (#181)
+
+The Exchanges section lists every `exchanges` entry: `name`, peering `lans` (comma separated), `bmp`, `group`, and a row per peer (`name`, AS, next hop, probe source, cost). Plus and minus add and remove exchanges and peers. A peer's `exclude` and `precedence` stay in the YAML. There is no field for a session or route-server credential.
+
+Apply checks what the form can see: names (unique across providers, exchanges, and peers), LANs without host bits, a non-zero AS, and a next hop inside one of the exchange's LANs. The route check requirement (`add_path` on a `bgp.neighbors` entry, or `bmp: prefer` or `only` with `rib_sources`), a peer's probe source, and the allowlist-versus-LAN overlap are checked by Validate and Save, as for a start. A file whose only providers are exchange peers is accepted. Exchanges are not an online key: Save writes the file and the change applies on restart. Nothing is probed or announced until then, and mode and the allowlist are not touched. A form that leaves `exchanges` out of the request leaves the block alone, and an unchanged form is not reformatted.
+
+Accepting a discovered LAN member as a draft peer row waits on #155.
 
 ### Mitigation, inbound, and anomaly rules (#131)
 

@@ -60,6 +60,8 @@ type Form struct {
 	Policies []FormPolicy `json:"policies"`
 	VIPs     []FormVIP    `json:"vips"`
 	Outages  []FormOutage `json:"outages"`
+	// #181: the exchanges block, same rules.
+	Exchanges []FormExchange `json:"exchanges"`
 	// #131: the inbound block and anomaly.rules, same rules.
 	Inbound *FormInbound `json:"inbound"`
 	Anomaly *FormAnomaly `json:"anomaly"`
@@ -138,6 +140,9 @@ func ParseForm(data []byte) (Form, error) {
 	if err := readSections(root, &f); err != nil {
 		return Form{}, err
 	}
+	if err := readExchanges(root, &f); err != nil {
+		return Form{}, err
+	}
 	f.normalize()
 	return f, nil
 }
@@ -154,6 +159,11 @@ func ApplyForm(data []byte, form Form) ([]byte, error) {
 	form.fillSections(cur)
 	if err := form.checkProtectionChange(cur); err != nil {
 		return nil, err
+	}
+	// Exchange peers are providers once the file loads, so they count here
+	// even when the exchanges section is unchanged and skipped below.
+	if len(form.Providers) == 0 && form.peerCount() == 0 {
+		return nil, fmt.Errorf("%w: at least one provider is required", ErrForm)
 	}
 	if err := form.withoutUnchangedSections(cur).validate(); err != nil {
 		return nil, err
@@ -219,6 +229,7 @@ func (f *Form) normalize() {
 		f.Allowlist = []string{}
 	}
 	f.normalizeSections()
+	f.normalizeExchanges()
 	for i := range f.Providers {
 		p := &f.Providers[i]
 		p.Key = strings.TrimSpace(p.Key)
@@ -335,9 +346,6 @@ func (f Form) validate() error {
 		if err != nil || d < 0 {
 			return fmt.Errorf("%w: floor.max_rtt %q is not a duration (for example 10ms)", ErrForm, f.FloorRTT)
 		}
-	}
-	if len(f.Providers) == 0 {
-		return fmt.Errorf("%w: at least one provider is required", ErrForm)
 	}
 	if len(f.Providers) > MaxFormProviders {
 		return fmt.Errorf("%w: at most %d providers in the form", ErrForm, MaxFormProviders)
