@@ -109,6 +109,9 @@ func TestFixturesStubAndInject(t *testing.T) {
 	if code, body := do("POST", "/api/troubleshoot/optimize", `{"target":"198.51.100.9"}`); code != 200 || !strings.Contains(body, `"prefix": "198.51.100.0/24"`) {
 		t.Errorf("stubbed optimize: %d %s", code, body)
 	}
+	if code, body := do("GET", "/api/troubleshoot", ""); code != 200 || !strings.Contains(body, `"optimize": true`) {
+		t.Errorf("stubbed status: %d %s", code, body)
+	}
 	// A call with no stub, and the same path with another target, reach the origin.
 	if code, body := do("GET", "/api/troubleshoot/lookingglass?prefix=192.0.2.0%2F24", ""); code != 200 || body != "origin /api/troubleshoot/lookingglass" {
 		t.Errorf("unstubbed glass: %d %s", code, body)

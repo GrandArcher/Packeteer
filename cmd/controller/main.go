@@ -1390,9 +1390,10 @@ func routerExports(cfg *config.Config) ([]plugin.RouterExport, error) {
 	return out, nil
 }
 
-// newTools builds the read-only troubleshooting tools. They share the
-// provider sources and prober chain with the engine but never feed it:
-// on-demand results go back to the HTTP caller only.
+// newTools builds the troubleshooting tools. They share the provider
+// sources and prober chain with the engine but never feed it: on-demand
+// results go back to the HTTP caller only, and the one write (SetQueue)
+// only queues a probe target.
 func newTools(cfg *config.Config, plugins *pluginhost.Set) (*troubleshoot.Tools, error) {
 	var providers []probe.Provider
 	for _, p := range cfg.Providers {

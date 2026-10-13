@@ -118,7 +118,7 @@ func TestQueueManualBounds(t *testing.T) {
 		t.Fatal("zero ttl accepted")
 	}
 	for i := range MaxManual {
-		p := netip.PrefixFrom(netip.AddrFrom4([4]byte{198, 18, byte(i), 0}), 24)
+		p := netip.PrefixFrom(netip.AddrFrom4([4]byte{198, 51, 100, byte(i * 4)}), 30)
 		if err := e.QueueManual(p, time.Minute); err != nil {
 			t.Fatalf("queue %d: %v", i, err)
 		}
@@ -126,7 +126,7 @@ func TestQueueManualBounds(t *testing.T) {
 	if err := e.QueueManual(pfx1, time.Minute); !errors.Is(err, ErrManualFull) {
 		t.Fatalf("over the cap = %v", err)
 	}
-	renew := netip.PrefixFrom(netip.AddrFrom4([4]byte{198, 18, 0, 0}), 24)
+	renew := netip.PrefixFrom(netip.AddrFrom4([4]byte{198, 51, 100, 0}), 30)
 	if err := e.QueueManual(renew, time.Minute); err != nil {
 		t.Fatalf("renewing a queued prefix = %v", err)
 	}

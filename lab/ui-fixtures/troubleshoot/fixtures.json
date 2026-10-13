@@ -1,6 +1,7 @@
 {
   "inject": {"page": "/troubleshooting.html", "script": "driver.js"},
   "stubs": [
+    {"method": "GET", "path": "/api/troubleshoot", "file": "status.json"},
     {"method": "GET", "path": "/api/troubleshoot/lookingglass", "contains": "prefix=198.51.100.0%2F24", "file": "glass-learned.json"},
     {"method": "GET", "path": "/api/troubleshoot/lookingglass", "contains": "prefix=198.51.100.64%2F26", "file": "glass-covering.json"},
     {"method": "POST", "path": "/api/troubleshoot/traceroute", "contains": "203.0.113.7\"", "file": "trace-multi.json"},

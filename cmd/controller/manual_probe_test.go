@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"log/slog"
 	"net/netip"
 	"testing"
 	"time"
@@ -180,4 +181,60 @@ func TestOptimizeNeverBypassesDecideRails(t *testing.T) {
 		t.Fatalf("control decide = %+v", changes)
 	}
 	m.requireRoute()
+}
+
+// TestOptimizedImprovementWithdraws: a route that exists only because a
+// queued prefix was measured goes away on the same triggers as any other
+// improvement: the prefix leaving the RIB view, the RIB session dropping,
+// and shutdown. Withdrawing also drops the probe target once the queue
+// entry has expired.
+func TestOptimizedImprovementWithdraws(t *testing.T) {
+	improved := func(t *testing.T) *manualRig {
+		t.Helper()
+		m := newManualRig(t)
+		m.optimize("198.51.100.77")
+		m.now = m.now.Add(time.Second)
+		m.probe()
+		if changes := m.decide("transit-a"); len(changes) != 1 || changes[0].Action != policy.ActionImprove {
+			t.Fatalf("decide = %+v\n%s", changes, m.logs.String())
+		}
+		m.requireRoute()
+		return m
+	}
+
+	t.Run("rib leave", func(t *testing.T) {
+		m := improved(t)
+		m.now = m.now.Add(time.Second)
+		m.probe()
+		if changes := m.decide("transit-a"); len(changes) != 0 {
+			t.Fatalf("withdrew while the prefix was still in the RIB: %+v", changes)
+		}
+		m.now = m.now.Add(5 * time.Second)
+		m.probe()
+		m.requireWithdrawn(m.decide(""), "prefix no longer in RIB")
+	})
+
+	t.Run("rib session lost", func(t *testing.T) {
+		m := improved(t)
+		in := policy.Input{
+			Results:    m.engine.Results(),
+			ProviderUp: map[string]bool{"transit-a": true, "transit-b": true},
+			RIBEnabled: true, RIBReady: false,
+		}
+		changes, err := runDecision(m.now, m.dec, in, m.ctl, slog.New(slog.NewTextHandler(m.logs, nil)), "inject", m.engine)
+		if err != nil {
+			t.Fatal(err)
+		}
+		m.requireWithdrawn(changes, "bgp session down")
+	})
+
+	t.Run("shutdown", func(t *testing.T) {
+		m := improved(t)
+		if err := m.ctl.WithdrawAll(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		if m.ann.count() != 0 {
+			t.Fatalf("%d routes left after shutdown", m.ann.count())
+		}
+	})
 }

@@ -2,13 +2,13 @@
 // Troubleshooting page (#24, #180). Looking glass and traceroute answers
 // are drawn as tables; every answer keeps its raw JSON. Results stack
 // newest first for this browser session only. Needs el, clear, getJSON,
-// postJSON, fmtAS, fmtVia, and fmtMs from app.js. Read-only: the
-// requests are the ones the page always made, with the same roles and
-// rate limits. A probe answer adds "Probe and optimize" (#126), which asks
-// the controller to measure the covering learned prefix for a while; any
-// move still comes from the decision engine.
+// postJSON, fmtAS, fmtVia, and fmtMs from app.js. A probe answer adds "Probe and optimize" (#126) when
+// /api/troubleshoot reports optimize; it asks the controller to measure
+// the covering learned prefix for a while, and any move still comes from
+// the decision engine.
 
 var TOOL_STACK_MAX = 20;
+var toolOptimize = false;
 var TOOL_NAMES = {lookingglass: "Looking glass", probe: "Probe", traceroute: "Traceroute", whois: "Whois"};
 
 function toolCell(text, className) {
@@ -189,7 +189,7 @@ function renderProbe(a) {
     {text: "Loss", title: "Packets with no reply."}, "RTT", "Jitter", "Probed address", "Note"],
   (a.results || []).map(function (r) { return probeRow(a, r); })));
   box.appendChild(sec);
-  if (a.route && a.route.prefix.slice(-2) !== "/0") box.appendChild(optimizeControl(a));
+  if (toolOptimize && a.route && a.route.prefix.slice(-2) !== "/0") box.appendChild(optimizeControl(a));
   return box;
 }
 
@@ -318,6 +318,7 @@ function initTools() {
       o.value = name;
       sel.appendChild(o);
     });
+    toolOptimize = !!(data && data.optimize);
     if (data && !data.enabled) {
       document.getElementById("tool-status").textContent = "Probe, traceroute, and whois are off (troubleshoot.enabled: false).";
     }
