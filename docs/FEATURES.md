@@ -24,19 +24,21 @@ Milestones:
 | v0.2 | 25 |
 | v0.3 | 17 |
 | v0.4 | 13 |
-| v0.6 | 8 |
+| v0.6 | 9 |
+| v0.7 | 1 |
+| v0.8 | 6 |
 | won't do | 2 |
-| **total** | 89 |
+| **total** | 97 |
 
 | Status | Count |
 |---|---|
-| done | 74 |
+| done | 80 |
 | partial | 10 |
 | in progress | 0 |
-| planned | 3 |
+| planned | 5 |
 | won't do | 2 |
 
-Recount (2026-10-07): the earlier 79 of 82 counted 13 rows as done that cover only part of the intended behavior, and missed 6 behaviors. Those rows are now partial and the 6 are listed. Scale is tracked as a budget, not a row: the load test learns a 1,250,000-prefix table and measures 3,000 prefixes with a prober that sends no packets ([performance.md](performance.md)).
+Recount (2026-10-07): the earlier 79 of 82 counted 13 rows as done that cover only part of the intended behavior, and missed 6 behaviors. Those rows are now partial and the 6 are listed. The Internet exchanges row was split (#159): it stays one done row, four exchange gaps are partial, and three are planned. The counts above are taken from the table (v0.1 includes the three rows tagged v0.1, v0.5). Scale is tracked as a budget, not a row: the load test learns a 1,250,000-prefix table and measures 3,000 prefixes with a prober that sends no packets ([performance.md](performance.md)).Scale is tracked as a budget, not a row: the load test learns a 1,250,000-prefix table and measures 3,000 prefixes with a prober that sends no packets ([performance.md](performance.md)).
 
 Since #217 the RSS and learn-time budgets are per million prefixes, a `large` profile (5,000,000 prefixes, weekly on a runner with 32 GB, not on pull requests) tests the scaling model, flow and span `max_prefixes` is configurable, and `packeteer_truncated_total` meters what the caps turn away. #125 is that scheduler and the passive count: due prefixes are probed in priority order and each prefix whose probes all finished is stored, providers together, when the round ends or times out, so one slow round no longer discards the round.
 
@@ -178,6 +180,13 @@ The `maintenance` policy excludes providers during cron-scheduled, one-off, or o
 | Multiple edge routers (N iBGP sessions, per-router provider reachability and next hop, egress-router loss retires) | done (lab-proven) | v0.3 | announcer (`gobgp`) + core | #27 | no (lab-proven) |
 | Centralized route reflector support (Packeteer as a reflector client, deployment guide) | done (lab-proven) | v0.3 | announcer (`gobgp`) | #27 | no (lab-proven) |
 | Internet exchanges / many peers with per-peer next-hop (peers as route-checked providers, exchange statistics, discovered members) | done (lab-proven) | v0.3 | core (`exchanges`, `internal/rib`, `internal/exchange`, `/api/exchanges`) + announcer | #27, #145, #146 | no (lab-proven) |
+| Exchange autoconfig: accept a discovered LAN member as a draft peer (ASN, next hop) | partial: discovered exchange members are not offered as draft peers yet; PeeringDB or IX-F enrichment is #153 | v0.8 | core (`exchanges`) + UI | #155 | no |
+| Exchange UI: the exchange page and the settings form for the `exchanges` block | partial: the providers page has an Exchanges placeholder and the settings form edits providers only (the `exchanges` block is YAML only) | v0.7 | UI (`providers.html`, `settings.html`) | #181, #148 | no |
+| Per-peer session monitor: BMP peer-down reasons, per-peer prefix counts, and max-prefix warnings | partial: BMP Statistics Reports are dropped and a Peer Down does not surface its reason or count prefixes per peer | v0.8 | RIB source (`bmp`) + core | #147 | no |
+| Probe-path (PBR) check per provider and IX peer | partial: [policy-routing.md](policy-routing.md) sets the routing by hand and an unusable `source_ip` fails closed; there is no automatic first-hop check against `next_hop` | v0.8 | probe engine (`traceroute`) + core | #150, #24 | no |
+| Probe multiplexing for large IXs (shared probe source with per-peer fwmark or DSCP) and PBR generator (Linux and router snippets, generation only) | planned | v0.8 | core (generator; never pushes to a router) | #157 | — |
+| Shared IX port: capacity, commit, and flat port cost across peers | planned | v0.8 | core (`exchanges[].port`) + scorer (`commit`, `cost`) | #151 | — |
+| Improvements to exchanges report: active improvements per peer with Mbps moved | planned | v0.8 | storage (`sqlite`) + UI | #148 | — |
 | Bgpd online reconfiguration (SIGHUP: add/remove/change iBGP sessions and the per-router table without touching other sessions) | done (lab-proven) | v0.3 | core + announcer (`gobgp`) + RIB | #27 | no (lab-proven) |
 | Online reconfiguration of core settings (thresholds, hold time, cap, policies, sources) without a restart or a withdraw | done (lab-proven) | v0.6 | core (`cmd/controller` reload, `internal/configedit`) | #128 | no (lab-proven) |
 
