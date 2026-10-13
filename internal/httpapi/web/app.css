@@ -131,6 +131,13 @@ th { font-size: 0.8rem; color: var(--muted); font-weight: 600; }
 .badge.win-upcoming { color: #0b3a5b; background: #d4e4f4; }
 .badge.win-finished { color: #3b4a59; background: #e7eef5; }
 
+/* System page state (#184). The text names the state; the color only
+   repeats it. Each pair meets WCAG AA. */
+.badge.sys-ok { color: #0b5a3a; background: #e5f6ef; }
+.badge.sys-degraded { color: #6a3b06; background: #f6e4c4; }
+.badge.sys-down { color: #ffffff; background: #9d1c2a; }
+.badge.sys-idle { color: #3b4a59; background: #e7eef5; }
+
 .bad { color: var(--down); }
 
 .empty { color: var(--muted); }

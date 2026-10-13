@@ -240,6 +240,32 @@ type sourceSnap struct {
 	targets []plugin.Target
 	err     error
 	fast    bool
+	// since is when the source last went from failing to working or back.
+	since time.Time
+}
+
+// SourceStatus is the outcome of a target source's latest call. Since is
+// when it last started or stopped failing.
+type SourceStatus struct {
+	Targets int
+	Err     string
+	Since   time.Time
+}
+
+// SourceStatus reports the latest call to the named source. It is false
+// until the source has answered once.
+func (e *Engine) SourceStatus(name string) (SourceStatus, bool) {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	c, ok := e.srcCache[name]
+	if !ok {
+		return SourceStatus{}, false
+	}
+	st := SourceStatus{Targets: len(c.targets), Since: c.since}
+	if c.err != nil {
+		st.Err = c.err.Error()
+	}
+	return st, true
 }
 
 // New validates inputs and returns an engine.
@@ -892,7 +918,12 @@ func (e *Engine) storeSource(name string, ts []plugin.Target, err error) {
 	if e.srcCache == nil {
 		e.srcCache = map[string]sourceSnap{}
 	}
-	e.srcCache[name] = sourceSnap{at: e.opt.Now(), targets: cloneTargets(ts), err: err, fast: fast}
+	now := e.opt.Now()
+	since := now
+	if prev, ok := e.srcCache[name]; ok && (prev.err == nil) == (err == nil) {
+		since = prev.since
+	}
+	e.srcCache[name] = sourceSnap{at: now, targets: cloneTargets(ts), err: err, fast: fast, since: since}
 	e.mu.Unlock()
 }
 

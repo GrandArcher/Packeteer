@@ -42,6 +42,10 @@ type Options struct {
 	Logger   *slog.Logger
 	Now      func() time.Time
 	Recorder Recorder
+	// Result, when set, is told the outcome of each delivery attempt (not
+	// of an event a filter or rate limit turned away). The System page
+	// shows it per notifier.
+	Result func(notifier string, err error)
 }
 
 // Stats counts deliveries across all notifiers.
@@ -64,6 +68,7 @@ type worker struct {
 type Dispatcher struct {
 	workers []*worker
 	rec     Recorder
+	result  func(string, error)
 	timeout time.Duration
 	log     *slog.Logger
 	now     func() time.Time
@@ -93,7 +98,7 @@ func New(targets []Target, o Options) *Dispatcher {
 		o.Now = time.Now
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	d := &Dispatcher{rec: o.Recorder, timeout: o.Timeout, log: o.Logger, now: o.Now, ctx: ctx, cancel: cancel}
+	d := &Dispatcher{rec: o.Recorder, result: o.Result, timeout: o.Timeout, log: o.Logger, now: o.Now, ctx: ctx, cancel: cancel}
 	for _, t := range targets {
 		if t.Notifier == nil {
 			continue
@@ -171,7 +176,11 @@ func (d *Dispatcher) deliver(w *worker, e plugin.Event) {
 	e = e.WithSuppressed(suppressed)
 	ctx, cancel := context.WithTimeout(d.ctx, d.timeout)
 	defer cancel()
-	if err := w.n.Notify(ctx, e); err != nil {
+	err := w.n.Notify(ctx, e)
+	if d.result != nil {
+		d.result(w.name, err)
+	}
+	if err != nil {
 		d.failed.Add(1)
 		d.log.Warn("notify", "notifier", w.name, "kind", e.Kind, "err", err)
 		return

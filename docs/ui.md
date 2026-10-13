@@ -10,6 +10,7 @@ The remaining UI conveniences (#34). All of them work in the stock image with a 
 | Prefix detail and history (#179) | `/prefix/<prefix>`, `/api/prefixes/history` | viewer | `storage: {type: sqlite}` for the timeline |
 | Maintenance windows (#177) | `/policies.html`, `GET`/`POST /api/maintenance`, `DELETE /api/maintenance/{id}` | viewer reads, operator opens and closes | a `maintenance` policy; opening needs auth or basic auth |
 | Link-outs (#211) | `/prefix/<prefix>`, `/prefixes.html`, `/providers.html`, `GET /api/linkouts` | viewer | `linkouts` (optional) |
+| System health (#184) | `/system.html`, `/api/system`, the System tile on `/` | viewer | none |
 | Events and audit log (#173) | `/events.html`, `/api/events`, `/api/audit` | viewer for events, admin for the audit tab | `storage: {type: sqlite}` keeps events across a restart |
 | Users and API tokens (#175) | `/admin.html`, `/tokens.html`, `/api/users`, `/api/tokens` | admin for users, every signed-in user for tokens | `storage` + `auth.enabled` |
 | Dashboard overview and setup checklist (#49) | `/`, `/api/overview` | viewer | none |
@@ -40,6 +41,7 @@ Every page has the same chrome (#170). The mode banner is the first thing on the
 | Protection | `/protection.html` | The threat-mitigation monitor with an add and remove rule form (#131) when that feature is on. Otherwise an empty state that says how to configure it |
 | Troubleshooting | `/troubleshooting.html` | Looking glass, probe, traceroute, whois ([below](#troubleshooting-results)) |
 | Events | `/events.html` | Recent events and, for admins, the audit log ([below](#events-and-audit-log)) |
+| System | `/system.html` | One row per component with state, since, and last error ([below](#system-health)) |
 | Tokens | `/tokens.html` | The signed-in user's API tokens ([below](#users-and-api-tokens)) |
 | Settings | `/settings.html` | Wizard, settings form, YAML, report subscriptions. Admin |
 | Admin | `/admin.html` | Users ([below](#users-and-api-tokens)). Admin |
@@ -145,6 +147,36 @@ The RING link is a page the operator opens by hand. Packeteer does not call RING
 The server builds every URL, so the browser never assembles one. `GET /api/linkouts?prefix=<cidr>&asn=<n>` (viewer; both repeatable, at most 300 values; a bad value is a `400`) returns `{"prefix": {<cidr>: [{"name", "url"}]}, "asn": {<n>: [...]}}`. A prefix is masked and written as CIDR with `/` and `:` left readable; an AS is decimal digits. With `linkouts.hide_internal` on (default) an RFC 1918, ULA, loopback, or link-local prefix and a private-use AS (RFC 6996: 64512-65534, 4200000000-4294967294) get an empty list, so the page shows no link for it. Documentation prefixes and ASNs are not internal. Settings and the `linkouts` keys are in [CONFIG.md](CONFIG.md#linkouts); a change needs a restart.
 
 The `ui-smoke` steps of the docker job load `/prefix/2001:db8::%2F32` and `/prefixes.html?asn=64496` in headless Chrome and check the rendered `href`s, `target`, and `rel`, that NLNOG RING is absent, and that an RFC 1918 prefix and a private-use AS render no link. `internal/linkout`, `internal/config`, and `internal/httpapi` tests cover the URLs, the template checks, and the page wiring.
+
+## System health
+
+The System page (#184) answers "which part is broken" when the status tile says not ready. It is read-only, announces nothing, and shows the mode banner in every mode. The Overview has a System tile (components down or degraded, or "all ok") that links to it.
+
+`GET /api/system` (viewer) returns `summary` (`total`, `ok`, `degraded`, `down`, `idle`) and `components`. Each component has `kind`, `name`, `type`, `state`, `since`, `error`, and `detail`. `state` is `ok`, `degraded`, `down`, or `idle` (configured but nothing to do or report yet; not a fault).
+
+| Kind | One row per | State comes from |
+|---|---|---|
+| `version` | the process | always `ok`; detail has the version and mode |
+| `ha` | the elector, or one `role` row without `ha` | `degraded` when ineligible, or standby with no lease holder |
+| `bgp_session` | `bgp.neighbors` entry | `down` until the session is established; `since` is the last state change. One `idle` row without neighbors |
+| `rib_source` | `rib_sources` entry (BMP) | `down` when every router that reported a peer has closed its session, `degraded` when some have, `degraded` before any router reported. `since` is the latest change |
+| `probe_source` | provider | the provider's probe-source health; `down` with the reason (for example the source address is not on the host). A provider measured by a peer POP is `idle` |
+| `prober` | `probers` entry | `ok` when it produced a measurement (a 100% loss result counts), `down` when probes failed with an error naming it, `idle` when none used it (an earlier prober in the chain answered). Results of providers whose probe source is down are ignored |
+| `source` | `sources` entry | `down` when its last call failed; `since` is when it started or stopped failing |
+| `scorer` | the scorer | always `ok` |
+| `announcer` | the announcer | `idle` and "announces nothing in observe mode" (or suggest) whatever is configured; in inject `ok` and "may announce allowlisted prefixes that are in the learned RIB", "announces nothing while this instance is standby", `degraded` without an iBGP session, `down` if inject has no announcer |
+| `storage` | the storage plugin | the history recorder's and the event log's latest writes: `down` with the error while either one's latest write failed (the later failure is shown), `idle` before the first write. `idle` without a storage plugin |
+| `notifier` | `notifiers` entry | the latest delivery attempt: `down` with the error when it failed, `idle` before the first. An event a filter or rate limit turned away is not an attempt |
+| `telemetry` | `telemetry` entry | `down` when the poll or a binding reports an error; detail has the last poll |
+| `federation_peer` | federation peer | `down` when its snapshot is stale or never seen. One `idle` row when standalone |
+
+`since` is set where the component records state changes (sessions, sources, storage, notifiers, RIB sources, probe sources, HA). Telemetry and federation peers show the last poll or sighting in `detail` instead.
+
+Results of storage writes, notifier deliveries, and BMP sessions are kept in memory from the start of the process. A notifier's state therefore reads `idle` until its first delivery attempt; a restart clears it. Nothing is probed or sent to build the page.
+
+**No secrets.** Rows carry names, types, states, and error text only. A URL in an error is cut to scheme and host, so a webhook's path and token never appear. Plugin config, credentials, and SNMP communities are not read.
+
+The "UI system page smoke" step of the docker job (`lab/ui-smoke.sh`) mounts an observe file with a webhook notifier aimed at a closed port, a provider whose probe source address is not on the host, and a `static` source, then loads `/system.html` in headless Chrome. It checks the rows and their states, that the announcer row says "announces nothing", that the webhook path never appears in the DOM, and `GET /api/system` and the System tile on `/`. `internal/httpapi` tests cover every state, the announcer wording by mode, and the redaction. `cmd/controller` tests inject a failing notifier, a read-only store, a failing source, and a closed BMP session through the real hooks and read them back on their rows.
 
 ## Events and audit log
 
@@ -437,5 +469,7 @@ The graphs (#129) are read-only and need no rollback. Delete a `timeseries` widg
 The mitigation form and the inbound and anomaly sections (#131) are UI and API only and add no config key: revert the change to drop them, or remove the rules in the YAML (a restart withdraws every Packeteer route first, and mitigation rules are in memory, so they also go with a restart). The form sections and the wizard's flow step (#130) are UI and API only and add no config key: revert the change to drop them, or delete the `flow`, `vip`, and `outage` sources and the `rules` policies from the YAML (a restart withdraws every Packeteer route first). A file the form wrote is an ordinary config file that an older build loads unchanged.
 
 Remove `improvement_weights`, `http.config_editor`, and `report_subscriptions` and restart. The dashboard polish (#49) needs no rollback: it reads the same state, and `/api/overview` is read-only. The file config works exactly as before; the editor only ever wrote a plain YAML file. Stored dashboards stay in the database and are ignored by an older build. The display fixes (#171) are presentation only: revert that change to restore the previous chip, titles, timestamps, and unlabeled provider fields. The shell (#170) is presentation only as well: revert it to put every section back on `/`.
+
+The System page (#184) is UI and API only and adds no config key; revert it to drop the page, the tile, and `/api/system`. The result hooks it adds (notifier delivery, storage write, BMP session) only record.
 
 The Events page (#173) only reads; revert it to bring back the empty page. The `events` table it adds to the `sqlite` file is ignored by an older build. No config key changes.

@@ -427,6 +427,66 @@ jobs:
           bash lab/ui-smoke.sh http://127.0.0.1:18089/dashboards.html \
             'Recommended improvements' 'NOC' '>lab-a<' \
             --absent 'Active improvements' "$since"
+      - name: UI system page smoke (#184; a failing notifier and a dead probe source show on their rows, observe)
+        run: |
+          set -euo pipefail
+          base=http://127.0.0.1:18184
+          cat > /tmp/ui184.yaml <<'YAML'
+          mode: observe
+          asn: 64512
+          router_id: 192.0.2.10
+          http:
+            listen: "127.0.0.1:18184"
+          providers:
+            - name: lab-a
+              source_ip: 127.0.0.1
+              next_hop: 192.0.2.1
+            - name: lab-dead
+              source_ip: 192.0.2.77
+              next_hop: 192.0.2.2
+          probe: {interval: 2s, timeout: 200ms, packets: 1}
+          sources:
+            - type: static
+              config:
+                targets: [{prefix: 198.51.100.0/24}]
+          storage:
+            type: sqlite
+          notifiers:
+            - type: webhook
+              name: hook
+              config:
+                url: http://127.0.0.1:9/services/T000/s3cr3t-token
+          YAML
+          docker run -d --name pkui184 --network host --cap-add NET_RAW --cap-add NET_ADMIN \
+            -v /tmp/ui184.yaml:/etc/packeteer/config.yaml:ro packeteer:ci
+          for _ in $(seq 1 20); do curl -fsS "$base/healthz" >/dev/null 2>&1 && break; sleep 1; done
+          # The webhook fails on controller.started and the dead provider's
+          # probe source fails closed; both must show up on their rows.
+          ok=0
+          for _ in $(seq 1 20); do
+            if curl -fsS "$base/api/system" -o /tmp/sys184.json \
+              && jq -e '([.components[] | select(.kind == "notifier" and .name == "hook" and .state == "down")] | length) == 1
+                and ([.components[] | select(.kind == "probe_source" and .name == "lab-dead" and .state == "down")] | length) == 1' /tmp/sys184.json >/dev/null; then ok=1; break; fi
+            sleep 1
+          done
+          cat /tmp/sys184.json
+          test "$ok" = 1
+          jq -e '.mode == "observe"
+            and ([.components[] | select(.kind == "announcer")][0] | .state == "idle" and (.detail | contains("announces nothing")))
+            and ([.components[] | select(.kind == "storage")][0] | .type == "sqlite")
+            and ([.components[] | select(.kind == "notifier")][0] | .error | contains("connection refused"))' /tmp/sys184.json
+          # The path of the hook URL is a credential and never leaves the process.
+          ! grep -q 's3cr3t-token' /tmp/sys184.json
+          curl -fsS "$base/api/overview" | jq -e '.system.down >= 2 and .system.total == (.system.ok + .system.degraded + .system.down + .system.idle)'
+          test "$(curl -s -o /dev/null -w '%{http_code}' -X POST "$base/api/system")" = "405"
+          bash lab/ui-smoke.sh "$base/system.html" 'Observe mode: Packeteer measures and recommends. It announces nothing.' \
+            'mode-observe' 'aria-current="page"' 'data-kind="notifier" data-name="hook"' 'data-kind="probe_source" data-name="lab-dead"' \
+            'badge sys-down' 'badge sys-ok' 'announces nothing in observe mode' 'connection refused' \
+            --absent 'Cannot reach' 's3cr3t-token' 'Inject mode'
+          bash lab/ui-smoke.sh "$base/" 'Observe mode' 'System page' 'href="/system.html"' --absent 'Cannot reach' 's3cr3t-token'
+          docker stop -t 15 pkui184
+          test "$(docker inspect -f '{{.State.ExitCode}}' pkui184)" = "0"
+          docker rm pkui184
       - name: UI graphs smoke (#129; before/after charts from seeded history, observe)
         run: |
           set -euo pipefail

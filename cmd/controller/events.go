@@ -20,6 +20,7 @@ import (
 	"github.com/GrandArcher/Packeteer/internal/policy"
 	"github.com/GrandArcher/Packeteer/internal/probe"
 	"github.com/GrandArcher/Packeteer/internal/rib"
+	"github.com/GrandArcher/Packeteer/internal/syshealth"
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
 )
 
@@ -30,12 +31,12 @@ type emitter interface {
 
 // newEventLog keeps recent events for the Events page: in the storage
 // plugin when it keeps them, otherwise in memory since start.
-func newEventLog(plugins *pluginhost.Set, log *slog.Logger) *eventlog.Log {
+func newEventLog(plugins *pluginhost.Set, log *slog.Logger, health *syshealth.Tracker) *eventlog.Log {
 	var store plugin.EventStore
 	if plugins != nil && plugins.Storage != nil {
 		store, _ = plugins.Storage.Plugin.(plugin.EventStore)
 	}
-	return eventlog.New(store, log)
+	return eventlog.New(store, log, func(err error) { health.Record(eventsKey, err) })
 }
 
 func newDispatcher(plugins *pluginhost.Set, opt notify.Options) *notify.Dispatcher {

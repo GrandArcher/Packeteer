@@ -50,6 +50,9 @@ type Options struct {
 	// Volumes returns observed per-prefix rates in Mbps. Nil records none.
 	Volumes func(ctx context.Context) map[netip.Prefix]float64
 	Now     func() time.Time
+	// OnWrite, when set, is told the result of each store write the
+	// flush attempts. The System page shows it as the storage state.
+	OnWrite func(error)
 }
 
 type bucketKey struct {
@@ -453,7 +456,11 @@ func (r *Recorder) Flush(ctx context.Context) error {
 	if len(b.Buckets) == 0 && len(b.Improvements) == 0 && len(b.Prefixes) == 0 && len(b.Mitigations) == 0 && len(b.Anomalies) == 0 {
 		return nil
 	}
-	if err := r.opt.Store.Write(ctx, b); err != nil {
+	err := r.opt.Store.Write(ctx, b)
+	if r.opt.OnWrite != nil {
+		r.opt.OnWrite(err)
+	}
+	if err != nil {
 		r.requeue(b, ps)
 		return err
 	}

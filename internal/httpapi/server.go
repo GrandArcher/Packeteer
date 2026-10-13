@@ -94,6 +94,9 @@ type Options struct {
 	Upgrade UpgradeControl
 	// Linkouts builds the "open in" links (#211). Nil uses the defaults.
 	Linkouts *linkout.Set
+	// System reads the configured plugins and their latest results for
+	// the System page (#184). Nil lists only what the snapshot knows.
+	System func() SystemFacts
 }
 
 // Server is an HTTP server. Handler serves the routes without listening,
@@ -121,6 +124,7 @@ type Server struct {
 	subs       Subscriptions
 	upgrade    UpgradeControl
 	linkouts   *linkout.Set
+	sysFacts   func() SystemFacts
 	setup      atomic.Pointer[Setup]
 	// suggest lists next hops the operator may accept as a draft provider
 	// row (#102). Nil means there is nothing to suggest. It must not write
@@ -169,6 +173,7 @@ func New(opt Options) (*Server, error) {
 	setup := opt.Setup
 	s.setup.Store(&setup)
 	s.linkouts = opt.Linkouts
+	s.sysFacts = opt.System
 	if s.linkouts == nil {
 		s.linkouts = linkout.New(linkout.Config{})
 	}

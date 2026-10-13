@@ -8,6 +8,7 @@ The dashboard, JSON API, and Prometheus metrics share one listener, `http.listen
 |---|---|
 | `/` | Overview (#170): the mode banner (first on every page; observe says it announces nothing), tiles, and the setup checklist. Each area has its own URL under the left navigation: improvements, prefixes and ASNs, reports, providers, troubleshooting, settings, the events and audit log page (#173), and the pages that are still empty states. See [docs/ui.md](ui.md). When the controller cannot be reached, the page says so and keeps the last data, marked stale. |
 | `/api/overview` | The dashboard's summary: mode, readiness, counts, per-provider probe results, optional features on or off, and the setup checklist (`setup`: `id`, `level` `todo`/`warn`/`info`, `title`, `detail`, `doc`). |
+| `/api/system` | Per-component health (#184): `summary` counts by state and `components` (`kind`, `name`, `type`, `state` `ok`/`degraded`/`down`/`idle`, `since`, `error`, `detail`). Viewer; read-only; no secrets ([ui.md](ui.md#system-health)). `/api/overview` carries the same `summary` as `system`. |
 | `/healthz` | Liveness. JSON `status` is `ok`. |
 | `/readyz` | Readiness. 503 until startup finishes, and until an iBGP session is up when neighbors are configured. |
 | `/metrics` | Prometheus text. |
