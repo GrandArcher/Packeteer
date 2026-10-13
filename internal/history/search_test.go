@@ -14,8 +14,8 @@ func ids(rows []SearchImprovement) []string {
 }
 
 func TestSearchByPrefix(t *testing.T) {
-	// pfxA is 192.0.2.0/24: the /23 search covers it, the exact search
-	// matches it, and neither reaches pfxB or pfxC.
+	// pfxA is 192.0.2.0/24: the exact search matches it and does not
+	// reach pfxB or pfxC.
 	got := Search(seed(), SearchQuery{Prefix: netip.MustParsePrefix("192.0.2.0/24"), From: from, To: to, Limit: 10})
 	if got.ImprovementsTotal != 2 || len(got.Improvements) != 2 {
 		t.Fatalf("improvements = %v", ids(got.Improvements))

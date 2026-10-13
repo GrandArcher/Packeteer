@@ -93,7 +93,7 @@ func parseSearch(raw string) (searchTerm, bool) {
 		return searchTerm{kind: kindPrefix, prefix: netip.PrefixFrom(a, a.BitLen())}, true
 	}
 	if asnPattern.MatchString(q) {
-		n, err := strconv.ParseUint(strings.TrimLeft(strings.ToUpper(q), "AS"), 10, 32)
+		n, err := strconv.ParseUint(strings.TrimPrefix(strings.ToUpper(q), "AS"), 10, 32)
 		if err != nil || n == 0 {
 			return searchTerm{}, false
 		}
@@ -318,14 +318,7 @@ func searchMeasured(rows []Prefix, m matcher) searchGroup[SearchMeasured] {
 		if err != nil {
 			continue
 		}
-		// Any learned path may end at a followed AS, as /api/prefixes?asn= does.
-		var origins []uint32
-		for _, lp := range row.Paths {
-			if n := len(lp.ASPath); n > 0 {
-				origins = append(origins, lp.ASPath[n-1])
-			}
-		}
-		rel, ok := m.match(p, origins...)
+		rel, ok := m.match(p, pathOrigins(row)...)
 		if !ok {
 			continue
 		}
@@ -344,6 +337,18 @@ func searchMeasured(rows []Prefix, m matcher) searchGroup[SearchMeasured] {
 	return group(out[:min(total, searchLimit)], total)
 }
 
+// pathOrigins are the origins of every learned path: any of them may be a
+// followed AS, as /api/prefixes?asn= has it.
+func pathOrigins(row *Prefix) []uint32 {
+	var out []uint32
+	for _, lp := range row.Paths {
+		if n := len(lp.ASPath); n > 0 {
+			out = append(out, lp.ASPath[n-1])
+		}
+	}
+	return out
+}
+
 // originASN is the origin of the first learned path that has one, the
 // same origin the ASN map groups by.
 func originASN(row *Prefix) uint32 {
@@ -356,9 +361,9 @@ func originASN(row *Prefix) uint32 {
 }
 
 func searchImprovements(snap Snapshot, m matcher) searchGroup[SearchImprovement] {
-	origin := map[string]uint32{}
+	rows := make(map[string]*Prefix, len(snap.Prefixes))
 	for i := range snap.Prefixes {
-		origin[snap.Prefixes[i].Prefix] = originASN(&snap.Prefixes[i])
+		rows[snap.Prefixes[i].Prefix] = &snap.Prefixes[i]
 	}
 	var out []SearchImprovement
 	for _, im := range snap.Improvements {
@@ -366,8 +371,14 @@ func searchImprovements(snap Snapshot, m matcher) searchGroup[SearchImprovement]
 		if err != nil {
 			continue
 		}
-		if rel, ok := m.match(p, origin[im.Prefix]); ok {
-			out = append(out, SearchImprovement{Prefix: im.Prefix, Relation: rel, OriginASN: origin[im.Prefix],
+		row := rows[im.Prefix]
+		var origins []uint32
+		var first uint32
+		if row != nil {
+			origins, first = pathOrigins(row), originASN(row)
+		}
+		if rel, ok := m.match(p, origins...); ok {
+			out = append(out, SearchImprovement{Prefix: im.Prefix, Relation: rel, OriginASN: first,
 				Provider: im.Provider, Native: im.Native, Cause: im.Cause, Since: im.Since.UTC()})
 		}
 	}

@@ -69,7 +69,6 @@ func (nameWhois) Lookup(_ context.Context, q string) (plugin.WhoisResult, error)
 
 type searchEnv struct {
 	calls int
-	srv   *Server
 	h     http.Handler
 	hist  *fakeReports
 	tools *troubleshoot.Tools
@@ -91,7 +90,7 @@ func newSearchEnv(t *testing.T, withHistory bool, routes fakeSearchRIB) *searchE
 	if routes != nil {
 		srv.SetSearchRIB(routes)
 	}
-	e.srv, e.h = srv, srv.Handler()
+	e.h = srv.Handler()
 	return e
 }
 
@@ -287,11 +286,36 @@ func TestSearchHistoryErrorKeepsLiveResults(t *testing.T) {
 	}
 }
 
-func TestSearchCapsEveryList(t *testing.T) {
+func TestSearchCapsEveryLiveList(t *testing.T) {
 	var many fakeSearchRIB
+	var rows []Prefix
+	var imps []Improvement
 	for i := range 40 {
 		many = append(many, rib.Route{Prefix: netip.MustParsePrefix(fmt.Sprintf("198.51.100.%d/32", i)), ASPath: []uint32{64510}, Age: time.Unix(int64(i), 0)})
+		name := fmt.Sprintf("198.51.100.%d/32", i)
+		rows = append(rows, Prefix{Prefix: name, Paths: []LearnedPath{{ASPath: []uint32{64496, 64510}}},
+			Probes: []Probe{{Time: time.Unix(int64(i), 0)}}})
+		imps = append(imps, Improvement{Prefix: name, Provider: "transit-b", Since: time.Unix(int64(i), 0)})
 	}
+	m := matcher{prefix: netip.MustParsePrefix("198.51.100.0/24")}
+
+	measured := searchMeasured(rows, m)
+	if measured.Total != 40 || len(measured.Rows) != searchLimit {
+		t.Fatalf("measured %d rows of %d", len(measured.Rows), measured.Total)
+	}
+	// Most recently probed first: the kept rows are .39 down to .15.
+	if measured.Rows[0].Prefix != "198.51.100.39/32" || measured.Rows[searchLimit-1].Prefix != "198.51.100.15/32" {
+		t.Errorf("measured rows run from %s to %s", measured.Rows[0].Prefix, measured.Rows[searchLimit-1].Prefix)
+	}
+
+	recs := searchImprovements(Snapshot{Prefixes: rows, Improvements: imps}, m)
+	if recs.Total != 40 || len(recs.Rows) != searchLimit {
+		t.Fatalf("recommendations %d rows of %d", len(recs.Rows), recs.Total)
+	}
+	if recs.Rows[0].Prefix != "198.51.100.39/32" || recs.Rows[searchLimit-1].Prefix != "198.51.100.15/32" {
+		t.Errorf("recommendation rows run from %s to %s", recs.Rows[0].Prefix, recs.Rows[searchLimit-1].Prefix)
+	}
+
 	e := newSearchEnv(t, false, many)
 	_, got, _ := e.get(t, "198.51.100.0/24")
 	if got.RIB.Total != 40 || len(got.RIB.Rows) != searchLimit {
@@ -300,6 +324,25 @@ func TestSearchCapsEveryList(t *testing.T) {
 	// Newest first: the kept rows are the 25 youngest, .39 down to .15.
 	if got.RIB.Rows[0].Prefix != "198.51.100.39/32" || got.RIB.Rows[searchLimit-1].Prefix != "198.51.100.15/32" {
 		t.Errorf("rib rows run from %s to %s", got.RIB.Rows[0].Prefix, got.RIB.Rows[searchLimit-1].Prefix)
+	}
+}
+
+// An AS search lists a prefix's recommendation whenever it lists the prefix
+// as measured, whichever learned path ends at the searched AS.
+func TestSearchASMatchesRecommendationsOnAnyPath(t *testing.T) {
+	rows := []Prefix{{Prefix: "198.51.100.0/24", Paths: []LearnedPath{
+		{ASPath: []uint32{64496, 64510}},
+		{ASPath: []uint32{64497, 64511}},
+	}}}
+	imps := []Improvement{{Prefix: "198.51.100.0/24", Provider: "transit-b"}}
+	m := matcher{asns: []uint32{64511}}
+
+	if got := searchMeasured(rows, m); got.Total != 1 {
+		t.Fatalf("measured = %+v", got)
+	}
+	got := searchImprovements(Snapshot{Prefixes: rows, Improvements: imps}, m)
+	if got.Total != 1 || got.Rows[0].OriginASN != 64510 {
+		t.Errorf("recommendations = %+v", got)
 	}
 }
 
@@ -391,7 +434,7 @@ func TestImprovementsReportFilters(t *testing.T) {
 	}
 	for _, path := range []string{
 		"/api/reports/improvements?prefix=192.0.2.5/24", "/api/reports/improvements?prefix=nope",
-		"/api/reports/improvements?asn=0", "/api/reports/improvements?asn=x", "/api/reports/summary?asn=64500",
+		"/api/reports/improvements?asn=0", "/api/reports/improvements?asn=x", "/api/reports/improvements?asn=SA64500", "/api/reports/improvements?asn=S64500", "/api/reports/improvements?asn=ASAS64500", "/api/reports/summary?asn=64500",
 	} {
 		if code, _, body := do(t, http.MethodGet, ts.URL+path, "", ""); code != http.StatusBadRequest {
 			t.Errorf("%s: %d %s", path, code, body)

@@ -320,7 +320,8 @@ jobs:
             sleep 1
           done
           # Global search (#172) over live data and stored history: the probed
-          # prefix is found by prefix, covering prefix, and address; an AS no one
+          # prefix is found by exact prefix, by an address inside it (covering), and by a
+          # /16 around it (more-specific); an AS no one
           # originates finds nothing; bad input is a 400; searches are rate
           # limited. The rate-limit check runs last so the page loads above are
           # not throttled.

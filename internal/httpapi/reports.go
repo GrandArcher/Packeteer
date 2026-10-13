@@ -104,7 +104,7 @@ func reportQuery(r *http.Request, name string, now time.Time) (history.Query, er
 			q.Prefix = p
 		}
 		if s := v.Get("asn"); s != "" {
-			n, err := strconv.ParseUint(strings.TrimLeft(strings.ToUpper(s), "AS"), 10, 32)
+			n, err := strconv.ParseUint(strings.TrimPrefix(strings.ToUpper(s), "AS"), 10, 32)
 			if err != nil || n == 0 {
 				return q, fmt.Errorf("asn must be an AS number such as 64500")
 			}
