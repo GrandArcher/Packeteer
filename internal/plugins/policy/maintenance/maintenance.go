@@ -33,8 +33,12 @@ const (
 	MaxDuration           = 7 * 24 * time.Hour
 	DefaultMaxAPIDuration = 24 * time.Hour
 	MaxWindows            = 1000
-	// MaxAPIWindows caps windows opened on demand and still open.
+	// MaxAPIWindows caps windows opened on demand and not yet ended.
 	MaxAPIWindows = 100
+	// MaxFinished bounds the ended windows kept for the UI list. An ended
+	// on-demand window is dropped after FinishedKeep.
+	MaxFinished  = 50
+	FinishedKeep = 24 * time.Hour
 )
 
 func init() { plugin.Policies.Register(TypeName, New) }
@@ -212,18 +216,13 @@ func (p *Policy) Active(now time.Time) []plugin.MaintenanceWindow {
 		out = append(out, mw)
 	}
 	p.mu.Lock()
-	kept := p.api[:0]
+	p.prune(now)
 	for _, w := range p.api {
-		if !now.Before(w.End) {
-			continue
-		}
-		kept = append(kept, w)
-		if !now.Before(w.Start) {
+		if !now.Before(w.Start) && now.Before(w.End) {
 			w.Providers = slices.Clone(w.Providers)
 			out = append(out, w)
 		}
 	}
-	p.api = kept
 	p.mu.Unlock()
 	sort.SliceStable(out, func(i, j int) bool {
 		if !out[i].Start.Equal(out[j].Start) {
@@ -234,19 +233,83 @@ func (p *Policy) Active(now time.Time) []plugin.MaintenanceWindow {
 	return out
 }
 
-// Open starts an on-demand window at now for d. It exists in memory only.
-func (p *Policy) Open(providers []string, d time.Duration, reason string, now time.Time) (plugin.MaintenanceWindow, error) {
+// prune drops ended on-demand windows after FinishedKeep and keeps at most
+// MaxFinished of them. The caller holds p.mu.
+func (p *Policy) prune(now time.Time) {
+	var live, done []plugin.MaintenanceWindow
+	for _, w := range p.api {
+		switch {
+		case now.Before(w.End):
+			live = append(live, w)
+		case now.Sub(w.End) < FinishedKeep:
+			done = append(done, w)
+		}
+	}
+	sort.SliceStable(done, func(i, j int) bool { return done[i].End.Before(done[j].End) })
+	if len(done) > MaxFinished {
+		done = done[len(done)-MaxFinished:]
+	}
+	p.api = append(done, live...)
+}
+
+// Windows returns the configured one-off windows and the on-demand windows
+// that have not started (upcoming, soonest first) or have ended (finished,
+// latest first, at most MaxFinished). A recurring window appears in Active
+// only while it is open.
+func (p *Policy) Windows(now time.Time) (upcoming, finished []plugin.MaintenanceWindow) {
+	var all []plugin.MaintenanceWindow
+	for _, w := range p.windows {
+		if w.sched == nil {
+			all = append(all, plugin.MaintenanceWindow{ID: "schedule-" + w.name, Name: w.name, Providers: slices.Clone(w.providers),
+				Start: w.start.UTC(), End: w.end.UTC(), Source: "schedule", Reason: w.reason})
+		}
+	}
+	p.mu.Lock()
+	p.prune(now)
+	for _, w := range p.api {
+		w.Providers = slices.Clone(w.Providers)
+		all = append(all, w)
+	}
+	p.mu.Unlock()
+	for _, w := range all {
+		switch {
+		case now.Before(w.Start):
+			upcoming = append(upcoming, w)
+		case !now.Before(w.End):
+			finished = append(finished, w)
+		}
+	}
+	sort.SliceStable(upcoming, func(i, j int) bool { return upcoming[i].Start.Before(upcoming[j].Start) })
+	sort.SliceStable(finished, func(i, j int) bool { return finished[i].End.After(finished[j].End) })
+	if len(finished) > MaxFinished {
+		finished = finished[:MaxFinished]
+	}
+	return upcoming, finished
+}
+
+// Open adds an on-demand window from start to end. It exists in memory
+// only. A start in the past is allowed while end is still ahead, so a
+// window "from now" typed to the minute is not refused; a start more than
+// MaxDuration ahead is.
+func (p *Policy) Open(providers []string, start, end time.Time, reason string, now time.Time) (plugin.MaintenanceWindow, error) {
 	if err := p.checkProviders(providers); err != nil {
 		return plugin.MaintenanceWindow{}, err
 	}
-	if d < MinDuration || d > p.maxAPI {
+	if d := end.Sub(start); d < MinDuration || d > p.maxAPI {
 		return plugin.MaintenanceWindow{}, fmt.Errorf("duration %s must be between %s and %s", d, MinDuration, p.maxAPI)
+	}
+	if !end.After(now) {
+		return plugin.MaintenanceWindow{}, errors.New("end is already past")
+	}
+	if start.Sub(now) > MaxDuration {
+		return plugin.MaintenanceWindow{}, fmt.Errorf("start is more than %s ahead", MaxDuration)
 	}
 	if len(reason) > 256 {
 		return plugin.MaintenanceWindow{}, errors.New("reason is longer than 256 characters")
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	p.prune(now)
 	open := 0
 	for _, w := range p.api {
 		if now.Before(w.End) {
@@ -259,13 +322,14 @@ func (p *Policy) Open(providers []string, d time.Duration, reason string, now ti
 	p.nextID++
 	w := plugin.MaintenanceWindow{
 		ID: fmt.Sprintf("api-%d", p.nextID), Name: "on-demand", Providers: slices.Clone(providers),
-		Start: now.UTC(), End: now.Add(d).UTC(), Source: "api", Reason: reason,
+		Start: start.UTC(), End: end.UTC(), Source: "api", Reason: reason,
 	}
 	p.api = append(p.api, w)
 	return w, nil
 }
 
-// Close ends an on-demand window. Configured windows cannot be closed.
+// Close removes an on-demand window, open, upcoming, or finished. Configured
+// windows cannot be closed.
 func (p *Policy) Close(id string) bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()

@@ -8,6 +8,7 @@ The remaining UI conveniences (#34). All of them work in the stock image with a 
 | Troubleshooting results (#180) | `/troubleshooting.html`, `/api/troubleshoot/...` | viewer for the looking glass, operator for probe, traceroute, and whois | `troubleshoot.enabled` for the active tools |
 | Prefix list (#183) | `/prefixes.html`, `/api/prefixes` | viewer | none |
 | Prefix detail and history (#179) | `/prefix/<prefix>`, `/api/prefixes/history` | viewer | `storage: {type: sqlite}` for the timeline |
+| Maintenance windows (#177) | `/policies.html`, `GET`/`POST /api/maintenance`, `DELETE /api/maintenance/{id}` | viewer reads, operator opens and closes | a `maintenance` policy; opening needs auth or basic auth |
 | Link-outs (#211) | `/prefix/<prefix>`, `/prefixes.html`, `/providers.html`, `GET /api/linkouts` | viewer | `linkouts` (optional) |
 | Events and audit log (#173) | `/events.html`, `/api/events`, `/api/audit` | viewer for events, admin for the audit tab | `storage: {type: sqlite}` keeps events across a restart |
 | Users and API tokens (#175) | `/admin.html`, `/tokens.html`, `/api/users`, `/api/tokens` | admin for users, every signed-in user for tokens | `storage` + `auth.enabled` |
@@ -35,7 +36,7 @@ Every page has the same chrome (#170). The mode banner is the first thing on the
 | Reports | `/reports.html` | History reports and CSV |
 | Providers & Exchanges | `/providers.html` | Provider health. The exchange view is empty (#148) |
 | Commit & Cost | `/commit.html` | Empty (#174) |
-| Policies | `/policies.html` | Points to Settings, where the `rules` policy is edited (#130). It does not list rules yet |
+| Policies | `/policies.html` | Points to Settings, where the `rules` policy is edited (#130). It does not list rules yet. With a `maintenance` policy, it lists maintenance windows ([below](#maintenance-windows)) |
 | Protection | `/protection.html` | The threat-mitigation monitor with an add and remove rule form (#131) when that feature is on. Otherwise an empty state that says how to configure it |
 | Troubleshooting | `/troubleshooting.html` | Looking glass, probe, traceroute, whois ([below](#troubleshooting-results)) |
 | Events | `/events.html` | Recent events and, for admins, the audit log ([below](#events-and-audit-log)) |
@@ -185,6 +186,19 @@ A third run turns the config editor on with basic auth and sqlite, saves a dashb
 The auth step of the docker job (#175) creates a viewer and a token through the API, then loads `/admin.html` and `/tokens.html` as the admin (the user table with its row actions) and as the viewer (the denial text, and only its own token), and the stock-image run checks both pages say they need `auth` when it is off. `internal/httpapi` tests drive the calls the pages make and read the audit log.
 
 The settings forms (#130, #181) have their own smoke step in the same job. The stock image mounts an observe file that has a `flow`, `vip`, and `outage` source, a `rules` policy, and an exchange of two peers with an add-path neighbor. The step reads the form through the API, merges an edit, and requires the editor's start checks to accept the result as observe with inject not enabled. The merge adds a third peer, keeps the peers' hidden `precedence`, and the start checks accept it. It renders a wizard config with the flow step and requires the same. Headless Chrome then loads `/settings.html` through `lab/uiproxy` and checks that each section, the exchange and its peers included, is filled from the file, that the observe banner is on top, and that the wizard has its optional flow step. `internal/configedit`, `internal/httpapi`, and `cmd/controller` tests round-trip every section through `config.Load` and the start checks.
+
+## Maintenance windows
+
+With a `maintenance` policy ([CONFIG.md](CONFIG.md#policy-maintenance)), the Policies page (#177) lists its windows and opens and closes on-demand ones. It calls the existing API, so the role check, the policy's limits, and the audit record are the API's, and a window only excludes providers from improvements. The page announces nothing, the mode banner stays on top, and without the policy the section is hidden.
+
+- **List.** One row per window with its state: `current` (open now), `upcoming`, or `finished`, each also in a color, then providers, start, end, source (`configured` or `on demand`), and note. Times show in the browser's time zone. Configured one-off windows are listed in all three states. A recurring (`schedule`) window is listed only while it is open. Finished on-demand windows stay for 24 hours (the last 50).
+- **Open a window** (operator). Providers, a start, an end, and a note. The browser reads start and end as local time and sends them as RFC 3339 (`start`, `end`, `reason` in `POST /api/maintenance`). The policy's limits apply: the length is 1 minute to `max_api_duration`, the start is at most 7 days ahead, and a start that is already past is fine while the end is not. An upcoming window excludes nothing until its start.
+- **Close** (operator). Each `current` or `upcoming` on-demand row has a Close button. Configured windows cannot be closed here. A closed window leaves the list.
+- **Viewer.** The list only. There is no form and no Close button, and the page says opening needs the operator role. It also says so when auth or basic auth is off.
+
+On-demand windows are in memory and end at a restart; put a planned window in the policy's `windows`.
+
+The "UI maintenance page smoke" step of the docker job (`lab/ui-smoke.sh`) mounts an observe file with a `maintenance` policy (one past and one far-future one-off window) and loads `/policies.html` through `lab/uiproxy -fixtures lab/ui-fixtures/maintenance`. A driver script presses Open window twice (from now, and tomorrow at 10:00 local) and Close once, because headless Chrome cannot click. With Chrome in `Asia/Kolkata`, the step checks the list and its states, that 10:00 is shown as 10:00 and sent as `T04:30:00.000Z`, that Close removes the current window, and, through the real API, what is left. A second run through `lab/ui-fixtures/maintenance-viewer` answers `/api/me` as a viewer and checks the form is hidden, there is no Close button, and no write call is made. `internal/httpapi` tests cover the roles, the audit record, and the list against the real policy; `internal/plugins/policy/maintenance` tests cover future, finished, and bounded windows.
 
 ## Graphs
 

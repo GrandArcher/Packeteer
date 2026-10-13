@@ -38,7 +38,7 @@ The dashboard, JSON API, and Prometheus metrics share one listener, `http.listen
 | `/api/dashboards` | Your custom dashboards and the widget catalog (#34). `PUT /api/dashboards/<name>` saves one, `DELETE` removes it. Needs a storage plugin and auth or basic auth. UI: `/dashboards.html`. |
 | `/api/upgrade` | Admin only. Running version, install type, the last release check, and the rollback target (#196). `POST /api/upgrade/check` lists GitHub releases and changes nothing; `POST /api/upgrade/apply {"tag","confirm":true}` and `POST /api/upgrade/rollback {"confirm":true}` switch versions after the SIGTERM shutdown path has withdrawn every route. Need `upgrade.enabled`, `upgrade.public_key`, and auth or basic auth ([docs/ui.md](ui.md#upgrade-from-the-ui)). |
 | `/api/subscriptions` | Report subscriptions (#34): schedule, next and last send, errors. `POST /api/subscriptions/<name>/send` (operator) sends one now. |
-| `/api/maintenance` | Open maintenance windows. `POST` opens an on-demand window and `DELETE /api/maintenance/<id>` closes one, when a `maintenance` policy is configured and basic auth is on ([CONFIG.md](CONFIG.md#policy-maintenance)). |
+| `/api/maintenance` | Open, upcoming, and finished maintenance windows. `POST` opens an on-demand window and `DELETE /api/maintenance/<id>` closes one, when a `maintenance` policy is configured and basic auth is on ([CONFIG.md](CONFIG.md#policy-maintenance)). |
 
 ## Metrics
 

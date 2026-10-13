@@ -51,10 +51,30 @@
     <h2>Policies</h2>
     <p class="empty">Policy rules are edited in <a href="/settings.html">Settings</a> (#130), together with the flow, VIP, and outage sources. This page does not list them yet.</p>
   </section>
+  <section id="maint-section" hidden>
+    <h2>Maintenance windows</h2>
+    <p class="tag">While a window is open, its providers carry no improvements: existing ones are retired and no move may land there. Native routing through the provider is not moved, and nothing here announces a route. A window is opened and closed through <code>/api/maintenance</code> (operator role, audited). Times are in your browser's time zone (<span id="maint-zone"></span>) and are sent as RFC 3339. Configured recurring windows are listed while they are open.</p>
+    <form id="maint-form" hidden autocomplete="off" aria-labelledby="maint-form-title">
+      <h3 id="maint-form-title">Open a window</h3>
+      <fieldset class="form" id="mw-providers"><legend>Providers</legend></fieldset>
+      <div class="form">
+        <label>Start <input id="mw-start" type="datetime-local" required></label>
+        <label>End <input id="mw-end" type="datetime-local" required></label>
+        <label>Note <input id="mw-note" type="text" maxlength="256" spellcheck="false"></label>
+      </div>
+      <div class="controls">
+        <button type="submit" id="mw-open">Open window</button>
+        <span id="mw-status" class="tag" role="status"></span>
+      </div>
+    </form>
+    <p id="maint-readonly" class="tag" hidden></p>
+    <div id="maint-list"></div>
+  </section>
 </main>
 </div>
 </div>
 <script src="/shell.js"></script>
 <script src="/app.js"></script>
+<script src="/maintenance.js"></script>
 </body>
 </html>

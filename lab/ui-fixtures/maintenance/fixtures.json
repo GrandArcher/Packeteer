@@ -1,0 +1,4 @@
+{
+  "inject": {"page": "/policies.html", "script": "driver.js"},
+  "stubs": []
+}
