@@ -1,8 +1,12 @@
 # Changelog
 
-All notable changes to Packeteer are documented here. Versions are Git tags on `main`. The image tags `ghcr.io/grandarcher/packeteer:<version>` (for example `:0.5.0`) and `:latest` are published from each `v<version>` tag. `:edge` tracks `main`.
+All notable changes to Packeteer are documented here. Versions are Git tags on `main`. The image tags `ghcr.io/grandarcher/packeteer:<version>` (for example `:0.6.0`) and `:latest` are published from each `v<version>` tag. `:edge` tracks `main`.
 
 ## [Unreleased]
+
+## [0.6.0] - 2026-10-13
+
+Sixth release: gaps found in the 2026-10-07 review of prefix selection, measurement, and the UI (#113–#132, #145–#146, #170–#183), plus hardening (#217, #223, #226, #228, #233, #234, #240) and upgrade from the UI (#196). Probe targeting and qualification, switch thresholds with confirm rounds, scale limits up to multi-million path tables, flap quarantine, live apply for core, inbound and mitigation settings, a UI shell with pages per area and full settings forms, a manual probe, and a failure-mode e2e matrix across every injection surface. Lab-proven only, against simulated routers in CI with documentation prefixes and private ASNs, not on a public edge. Safety rules are unchanged: the default stays `mode: observe`, an announcement still needs the exact prefix in the learned RIB, the allowlist, the configured community and NO_EXPORT, the improvement cap, and hold time. The opt-in synthesized more-specific block (#122) is not part of this release.
 
 ### Added
 
