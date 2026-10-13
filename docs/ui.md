@@ -172,7 +172,7 @@ The System page (#184) answers "which part is broken" when the status tile says 
 
 `since` is set where the component records state changes (sessions, sources, storage, notifiers, RIB sources, probe sources, HA). Telemetry and federation peers show the last poll or sighting in `detail` instead.
 
-Results of storage writes, notifier deliveries, and BMP sessions are kept in memory from the start of the process. A notifier's state therefore reads `idle` until it has delivered once; a restart clears it. Nothing is probed or sent to build the page.
+Results of storage writes, notifier deliveries, and BMP sessions are kept in memory from the start of the process. A notifier's state therefore reads `idle` until its first delivery attempt; a restart clears it. Nothing is probed or sent to build the page.
 
 **No secrets.** Rows carry names, types, states, and error text only. A URL in an error is cut to scheme and host, so a webhook's path and token never appear. Plugin config, credentials, and SNMP communities are not read.
 
