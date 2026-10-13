@@ -1090,11 +1090,14 @@ On-demand windows go through the ops API and live in memory only; a restart ends
 curl -u "$USER:$PASS" -H 'Content-Type: application/json' \
   -d '{"providers":["transit-b"],"duration":"2h","reason":"provider ticket"}' \
   http://127.0.0.1:8080/api/maintenance
+curl -u "$USER:$PASS" -H 'Content-Type: application/json' \
+  -d '{"providers":["transit-b"],"start":"2026-10-20T01:00:00Z","end":"2026-10-20T03:00:00Z"}' \
+  http://127.0.0.1:8080/api/maintenance
 curl -u "$USER:$PASS" http://127.0.0.1:8080/api/maintenance
 curl -u "$USER:$PASS" -X DELETE http://127.0.0.1:8080/api/maintenance/api-1
 ```
 
-`GET /api/maintenance` lists open windows from every maintenance policy. `POST` opens a window on the first `maintenance` entry (JSON only; at most 100 open at a time). `DELETE /api/maintenance/<id>` closes an on-demand window; configured windows cannot be closed from the API.
+`GET /api/maintenance` lists `windows` open now from every maintenance policy, `upcoming` windows (configured one-off and on demand), and `finished` ones (configured one-off, and on-demand ones for 24 hours; at most 50). A recurring window is listed only while it is open. `POST` opens a window on the first `maintenance` entry (JSON only; at most 100 open or upcoming at a time). Give `duration` (a window from now) or both `start` and `end` (RFC 3339); the length is 1 minute to `max_api_duration`, `end` must be ahead, and `start` at most 7 days ahead. A window that has not started excludes nothing. `DELETE /api/maintenance/<id>` closes an on-demand window; configured windows cannot be closed from the API.
 
 ### Notifier filters (every notifier)
 

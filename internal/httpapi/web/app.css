@@ -125,6 +125,12 @@ th { font-size: 0.8rem; color: var(--muted); font-weight: 600; }
 .badge.mode-inject { color: #ffffff; background: #9d1c2a; }
 .badge.mode-unknown { color: #12263a; background: #e7eef5; }
 
+/* Maintenance window state (#177). The text names the state; the color
+   only repeats it. Each pair meets WCAG AA. */
+.badge.win-current { color: #6a3b06; background: #f6e4c4; }
+.badge.win-upcoming { color: #0b3a5b; background: #d4e4f4; }
+.badge.win-finished { color: #3b4a59; background: #e7eef5; }
+
 .bad { color: var(--down); }
 
 .empty { color: var(--muted); }

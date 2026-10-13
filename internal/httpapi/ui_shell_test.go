@@ -100,7 +100,7 @@ func TestUIShell(t *testing.T) {
 		"graphs.html":          {`<body data-page="graphs" data-live="app">`, `id="graph"`, `id="graph-bucket"`, `id="graph-days"`, `id="graph-csv"`, `src="/charts.js"`, `src="/graphs.js"`, "nothing here announces a route"},
 		"prefix.html":          {`<body data-page="prefixes" data-live="app">`, `id="prefix-title"`, `id="prefix-live"`, `id="prefix-probe"`, `id="prefix-timeline"`, `id="prefix-days"`, `src="/prefix.js"`, "MED is display only"},
 		"commit.html":          {`<body data-page="commit" data-live="app">`, "#174"},
-		"policies.html":        {`<body data-page="policies" data-live="app">`, "#130"},
+		"policies.html":        {`<body data-page="policies" data-live="app">`, "#130", `id="maint-section" hidden`, `id="maint-form" hidden`, `src="/maintenance.js"`},
 		"events.html":          {`<body data-page="events">`, `id="events"`, `id="audit"`, `id="tab-audit"`, `data-min-role="admin">Audit`, `id="ev-severity"`, `id="ev-q"`, `id="ev-range"`, `src="/events.js"`},
 		"admin.html":           {`<body data-page="admin">`, `id="page-denied"`, `id="admin-body"`, `id="user-form"`, `id="uf-name"`, `id="uf-role"`, `id="uf-password" type="password"`, `id="users-off" class="empty" hidden`, `id="users-on" hidden`, `src="/admin.js"`},
 		"tokens.html":          {`<body data-page="tokens">`, `id="tokens-off" class="empty" hidden`, `id="tokens-on" hidden`, `id="token-secret" class="secret" role="alert" hidden`, `id="token-form"`, `id="tf-name"`, `id="tf-role"`, `id="tf-ttl"`, `src="/tokens.js"`},

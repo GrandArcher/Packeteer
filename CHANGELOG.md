@@ -6,6 +6,7 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 
 ### Added
 
+- Policies page lists maintenance windows (current, upcoming, finished) and opens or closes on-demand ones in local time; `POST /api/maintenance` takes `start`/`end` and `GET` lists the rest (#177).
 - Settings form lists discovered exchange LAN members; Accept adds a draft peer with its AS and next hop, and saves, probes, and announces nothing (#155).
 - Prefix, ASN, and exchange-peer pages link out to HE BGP Toolkit, RIPEstat, PeeringDB, bgp.tools, Cloudflare Radar, IRR Explorer, opt-in NLNOG RING; `linkouts` sets sites and https URLs (#211).
 

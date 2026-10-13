@@ -231,3 +231,30 @@ func TestExchangeFixturesMatchAPI(t *testing.T) {
 		t.Fatalf("exchanges = %+v", out.Exchanges)
 	}
 }
+
+// TestMaintenanceFixturesMatchAPI decodes the canned /api/maintenance answer
+// with the type the API returns (#177), so a renamed field fails here and
+// not as an empty table in the UI smoke test.
+func TestMaintenanceFixturesMatchAPI(t *testing.T) {
+	f, err := loadFixtures("../ui-fixtures/maintenance-viewer")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var list httpapi.MaintenanceList
+	for _, s := range f.Stubs {
+		if s.Path != "/api/maintenance" {
+			continue
+		}
+		dec := json.NewDecoder(bytes.NewReader(s.body))
+		dec.DisallowUnknownFields()
+		if err := dec.Decode(&list); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if !list.Configured || !list.OnDemand || len(list.Windows) != 1 || len(list.Upcoming) != 1 || len(list.Finished) != 1 {
+		t.Fatalf("list = %+v", list)
+	}
+	if w := list.Windows[0]; w.ID != "api-3" || w.Source != "api" || !w.End.After(w.Start) {
+		t.Fatalf("open window = %+v", w)
+	}
+}

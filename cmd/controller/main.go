@@ -2442,7 +2442,8 @@ func applyPolicies(in *policy.Input, now time.Time, routes routeLookup, plugins 
 // maintenanceOpener is implemented by the maintenance policy.
 type maintenanceOpener interface {
 	plugin.Maintenance
-	Open(providers []string, d time.Duration, reason string, now time.Time) (plugin.MaintenanceWindow, error)
+	Windows(now time.Time) (upcoming, finished []plugin.MaintenanceWindow)
+	Open(providers []string, start, end time.Time, reason string, now time.Time) (plugin.MaintenanceWindow, error)
 	Close(id string) bool
 }
 
@@ -2500,17 +2501,30 @@ func (mc *maintenanceControl) Active(now time.Time) []plugin.MaintenanceWindow {
 	return out
 }
 
+func (mc *maintenanceControl) Windows(now time.Time) (upcoming, finished []plugin.MaintenanceWindow) {
+	if mc == nil || mc.plugins == nil {
+		return nil, nil
+	}
+	for _, pol := range mc.plugins.PoliciesSnapshot() {
+		if m, ok := pol.Plugin.(maintenanceOpener); ok {
+			u, f := m.Windows(now)
+			upcoming, finished = append(upcoming, u...), append(finished, f...)
+		}
+	}
+	return upcoming, finished
+}
+
 func (mc *maintenanceControl) CanOpen() bool {
 	_, opener := mc.policies()
 	return opener != nil
 }
 
-func (mc *maintenanceControl) Open(providers []string, d time.Duration, reason string, now time.Time) (plugin.MaintenanceWindow, error) {
+func (mc *maintenanceControl) Open(providers []string, start, end time.Time, reason string, now time.Time) (plugin.MaintenanceWindow, error) {
 	_, opener := mc.policies()
 	if opener == nil {
 		return plugin.MaintenanceWindow{}, errors.New("no maintenance policy configured")
 	}
-	w, err := opener.Open(providers, d, reason, now)
+	w, err := opener.Open(providers, start, end, reason, now)
 	if err != nil {
 		return w, err
 	}

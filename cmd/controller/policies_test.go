@@ -107,7 +107,7 @@ func TestMaintenanceControlWakesDecisions(t *testing.T) {
 		t.Fatal("no control")
 	}
 	now := time.Now()
-	w, err := mc.Open([]string{"transit-a"}, time.Hour, "test", now)
+	w, err := mc.Open([]string{"transit-a"}, now, now.Add(time.Hour), "test", now)
 	if err != nil || woke != 1 {
 		t.Fatalf("open: %v woke=%d", err, woke)
 	}
@@ -116,10 +116,28 @@ func TestMaintenanceControlWakesDecisions(t *testing.T) {
 	if len(in.Maintenance) != 1 || in.Maintenance[0] != "transit-a" {
 		t.Fatalf("maintenance = %v", in.Maintenance)
 	}
-	if len(mc.Active(now)) != 1 || !mc.Close(w.ID) || woke != 2 || mc.Close(w.ID) || woke != 2 {
+	if up, fin := mc.Windows(now); len(up) != 0 || len(fin) != 0 {
+		t.Fatalf("open window listed as upcoming or finished: %v %v", up, fin)
+	}
+	later, err := mc.Open([]string{"transit-b"}, now.Add(time.Hour), now.Add(2*time.Hour), "", now)
+	if err != nil || woke != 2 {
+		t.Fatalf("future open: %v woke=%d", err, woke)
+	}
+	if up, _ := mc.Windows(now); len(up) != 1 || up[0].ID != later.ID {
+		t.Fatalf("upcoming = %v", up)
+	}
+	in = policy.Input{}
+	applyPolicies(&in, now.Add(time.Minute), nil, set, nil)
+	if len(in.Maintenance) != 1 || in.Maintenance[0] != "transit-a" {
+		t.Fatalf("a window that has not started excluded %v", in.Maintenance)
+	}
+	if !mc.Close(later.ID) {
+		t.Fatal("close upcoming")
+	}
+	if len(mc.Active(now)) != 1 || !mc.Close(w.ID) || woke != 4 || mc.Close(w.ID) || woke != 4 {
 		t.Fatalf("close woke=%d", woke)
 	}
-	if _, err := mc.Open([]string{"transit-z"}, time.Hour, "", now); err == nil || woke != 2 {
+	if _, err := mc.Open([]string{"transit-z"}, now, now.Add(time.Hour), "", now); err == nil || woke != 4 {
 		t.Fatal("bad open accepted or woke the loop")
 	}
 }

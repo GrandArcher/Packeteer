@@ -102,7 +102,7 @@ func TestOnDemand(t *testing.T) {
 		t.Fatal(err)
 	}
 	now := ts("2026-09-25T12:00:00Z")
-	w, err := p.Open([]string{"transit-a"}, time.Hour, "provider ticket", now)
+	w, err := p.Open([]string{"transit-a"}, now, now.Add(time.Hour), "provider ticket", now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -115,12 +115,12 @@ func TestOnDemand(t *testing.T) {
 	if got := activeProviders(p, now.Add(time.Hour)); got != "" {
 		t.Fatalf("expired window still active: %q", got)
 	}
-	w2, _ := p.Open([]string{"transit-b"}, time.Hour, "", now)
+	w2, _ := p.Open([]string{"transit-b"}, now, now.Add(time.Hour), "", now)
 	if !p.Close(w2.ID) || p.Close(w2.ID) || p.Close("schedule-x") {
 		t.Fatal("Close")
 	}
-	if got := activeProviders(p, now); got != "" {
-		t.Fatalf("closed window still active: %q", got)
+	if got := activeProviders(p, now); got != "api-1=transit-a" {
+		t.Fatalf("active after closing api-2 = %q", got)
 	}
 	for _, tt := range []struct {
 		prov []string
@@ -132,7 +132,7 @@ func TestOnDemand(t *testing.T) {
 		{[]string{"transit-a"}, 3 * time.Hour, "must be between"},
 		{[]string{"transit-a"}, time.Second, "must be between"},
 	} {
-		if _, err := p.Open(tt.prov, tt.d, "", now); err == nil || !strings.Contains(err.Error(), tt.want) {
+		if _, err := p.Open(tt.prov, now, now.Add(tt.d), "", now); err == nil || !strings.Contains(err.Error(), tt.want) {
 			t.Errorf("Open(%v, %s) err = %v, want %q", tt.prov, tt.d, err, tt.want)
 		}
 	}
@@ -142,11 +142,11 @@ func TestOnDemandCap(t *testing.T) {
 	p, _ := build(t, ``)
 	now := ts("2026-09-25T12:00:00Z")
 	for i := 0; i < MaxAPIWindows; i++ {
-		if _, err := p.Open([]string{"transit-a"}, time.Hour, "", now); err != nil {
+		if _, err := p.Open([]string{"transit-a"}, now, now.Add(time.Hour), "", now); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if _, err := p.Open([]string{"transit-a"}, time.Hour, "", now); err == nil {
+	if _, err := p.Open([]string{"transit-a"}, now, now.Add(time.Hour), "", now); err == nil {
 		t.Fatal("cap not enforced")
 	}
 }
@@ -281,4 +281,99 @@ func (s schedule) matches(t time.Time) bool {
 		return false
 	}
 	return s.dayMatches(t)
+}
+
+func TestOnDemandFutureWindow(t *testing.T) {
+	p, _ := build(t, ``)
+	now := ts("2026-09-25T12:00:00Z")
+	w, err := p.Open([]string{"transit-a"}, now.Add(2*time.Hour), now.Add(3*time.Hour), "planned", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := activeProviders(p, now.Add(time.Hour)); got != "" {
+		t.Fatalf("window active before its start: %q", got)
+	}
+	if got := activeProviders(p, now.Add(150*time.Minute)); got != "api-1=transit-a" {
+		t.Fatalf("active inside the window = %q", got)
+	}
+	up, fin := p.Windows(now)
+	if len(up) != 1 || up[0].ID != w.ID || len(fin) != 0 {
+		t.Fatalf("Windows = %+v %+v", up, fin)
+	}
+	for _, tt := range []struct {
+		name       string
+		start, end time.Time
+		want       string
+	}{
+		{"end past", now.Add(-2 * time.Hour), now.Add(-time.Hour), "already past"},
+		{"too far ahead", now.Add(MaxDuration + time.Hour), now.Add(MaxDuration + 2*time.Hour), "ahead"},
+		{"end before start", now.Add(2 * time.Hour), now.Add(time.Hour), "must be between"},
+	} {
+		if _, err := p.Open([]string{"transit-a"}, tt.start, tt.end, "", now); err == nil || !strings.Contains(err.Error(), tt.want) {
+			t.Errorf("%s: err = %v, want %q", tt.name, err, tt.want)
+		}
+	}
+	// A start a few seconds ago (a form typed to the minute) is fine.
+	if _, err := p.Open([]string{"transit-a"}, now.Add(-30*time.Second), now.Add(time.Hour), "", now); err != nil {
+		t.Fatalf("start just past: %v", err)
+	}
+}
+
+func TestWindowsListsStates(t *testing.T) {
+	p, err := build(t, `
+windows:
+  - {name: past, providers: [transit-a], start: "2026-09-25T08:00:00Z", end: "2026-09-25T09:00:00Z"}
+  - {name: soon, providers: [transit-b], start: "2026-09-25T14:00:00Z", end: "2026-09-25T15:00:00Z"}
+  - {name: weekly, providers: [transit-a], schedule: "0 2 * * 6", duration: 1h}
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := ts("2026-09-25T12:00:00Z")
+	if _, err := p.Open([]string{"transit-a"}, now.Add(-2*time.Hour), now.Add(-time.Hour+time.Minute), "ended", now.Add(-3*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := p.Open([]string{"transit-b"}, now.Add(time.Hour), now.Add(2*time.Hour), "", now); err != nil {
+		t.Fatal(err)
+	}
+	up, fin := p.Windows(now)
+	ids := func(ws []plugin.MaintenanceWindow) string {
+		var out []string
+		for _, w := range ws {
+			out = append(out, w.ID)
+		}
+		return strings.Join(out, ",")
+	}
+	if got := ids(up); got != "api-2,schedule-soon" {
+		t.Fatalf("upcoming = %q", got)
+	}
+	if got := ids(fin); got != "api-1,schedule-past" {
+		t.Fatalf("finished = %q", got)
+	}
+	// The recurring window is not listed outside its slot, and the
+	// finished on-demand window leaves after FinishedKeep.
+	if _, fin = p.Windows(now.Add(FinishedKeep + 2*time.Hour)); ids(fin) != "schedule-soon,schedule-past" {
+		t.Fatalf("finished after keep = %q", ids(fin))
+	}
+}
+
+func TestFinishedWindowsBounded(t *testing.T) {
+	p, _ := build(t, ``)
+	t0 := ts("2026-09-25T00:00:00Z")
+	for i := 0; i < MaxFinished+10; i++ {
+		start := t0.Add(time.Duration(i) * time.Minute)
+		if _, err := p.Open([]string{"transit-a"}, start, start.Add(time.Minute), "", start); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_, fin := p.Windows(t0.Add(time.Hour))
+	if len(fin) != MaxFinished {
+		t.Fatalf("finished = %d, want %d", len(fin), MaxFinished)
+	}
+	if fin[0].ID != "api-60" || fin[len(fin)-1].ID != "api-11" {
+		t.Fatalf("kept %s..%s, want the newest %d", fin[0].ID, fin[len(fin)-1].ID, MaxFinished)
+	}
+	if len(p.api) != MaxFinished {
+		t.Fatalf("p.api holds %d", len(p.api))
+	}
 }

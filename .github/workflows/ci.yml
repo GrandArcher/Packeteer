@@ -205,7 +205,7 @@ jobs:
           bash lab/ui-smoke.sh "$base/graphs.html" 'No before/after data in this range' 'It announces nothing.' \
             'id="graph-bucket"' --absent 'class="ts-chart"' 'Cannot reach'
           bash lab/ui-smoke.sh "$base/commit.html" '#174' 'It announces nothing.'
-          bash lab/ui-smoke.sh "$base/policies.html" '#130' 'It announces nothing.'
+          bash lab/ui-smoke.sh "$base/policies.html" '#130' 'It announces nothing.' 'id="maint-section" hidden=""' --absent 'No maintenance windows.'
           bash lab/ui-smoke.sh "$base/protection.html" 'Threat mitigation is not configured' 'It announces nothing.' \
             --absent 'Cannot reach'
           bash lab/ui-smoke.sh "$base/reports.html" 'CSV' 'It announces nothing.'
@@ -915,6 +915,101 @@ jobs:
             'mode-observe' 'It announces nothing.' 'Inbound optimization' 'value="198.51.100.0/24"' 'value="50"' \
             'Anomaly rules' 'value="udp-flood"' 'value="flowspec_drop"' 'value="30m"' \
             --absent 'The config editor is off' 'mode-inject'
+      - name: UI maintenance page smoke (#177; open and close a window from the page, viewer is read-only, observe)
+        run: |
+          set -euo pipefail
+          base=http://127.0.0.1:18177
+          cat > /tmp/ui177.yaml <<'YAML'
+          mode: observe
+          asn: 64512
+          router_id: 192.0.2.10
+          http:
+            listen: "127.0.0.1:18177"
+          providers:
+            - name: lab-a
+              source_ip: 127.0.0.1
+              next_hop: 192.0.2.1
+            - name: lab-b
+              source_ip: 127.0.0.2
+              next_hop: 192.0.2.2
+          sources:
+            - type: static
+              config:
+                targets: [{prefix: 198.51.100.0/24}]
+          policies:
+            - type: maintenance
+              config:
+                windows:
+                  - {name: past-lab, providers: [lab-a], start: "2020-01-01T00:00:00Z", end: "2020-01-01T01:00:00Z", reason: old}
+                  - {name: far-lab, providers: [lab-b], start: "2099-01-01T00:00:00Z", end: "2099-01-01T01:00:00Z"}
+          probe: {interval: 30s, timeout: 200ms, packets: 1}
+          probers:
+            - type: fixed
+              config:
+                paths: [{provider: lab-a, rtt_ms: 12}, {provider: lab-b, rtt_ms: 20}]
+          YAML
+          docker run -d --name pkui177 --network host --cap-add NET_RAW --cap-add NET_ADMIN \
+            -e PACKETEER_HTTP_USER=lab -e PACKETEER_HTTP_PASSWORD=lab-only \
+            -v /tmp/ui177.yaml:/etc/packeteer/config.yaml:ro packeteer:ci
+          proxy=""
+          cleanup() {
+            if [ -n "$proxy" ]; then kill "$proxy" 2>/dev/null || true; fi
+            docker stop -t 15 pkui177 >/dev/null || true
+            docker logs pkui177 2>&1 | tail -n 40
+            code="$(docker inspect -f '{{.State.ExitCode}}' pkui177)"
+            docker rm pkui177 >/dev/null || true
+            test "$code" = "0"
+          }
+          trap cleanup EXIT
+          auth=(-u lab:lab-only)
+          ok=0
+          for _ in $(seq 1 30); do
+            if curl -fsS "${auth[@]}" "$base/healthz" >/dev/null 2>&1; then ok=1; break; fi
+            sleep 1
+          done
+          test "$ok" = 1
+          curl -fsS "${auth[@]}" "$base/api/maintenance" | jq -e '.configured and .on_demand and (.windows | length) == 0 and (.upcoming | map(.id)) == ["schedule-far-lab"] and (.finished | map(.id)) == ["schedule-past-lab"]'
+          # Headless Chrome cannot click, so uiproxy adds a driver to
+          # /policies.html. It fills the form, opens a window tomorrow at
+          # 10:00 and one from now, and closes the current one. Chrome runs in
+          # Asia/Kolkata (UTC+5:30): 10:00 typed is shown as 10:00 and sent as
+          # 04:30Z. The page is the image's; the calls are the API's.
+          go build -o /tmp/uiproxy ./lab/uiproxy
+          /tmp/uiproxy -listen 127.0.0.1:18178 -upstream "$base" -user lab -password lab-only \
+            -fixtures lab/ui-fixtures/maintenance >/tmp/uiproxy177.log 2>&1 &
+          proxy=$!
+          for _ in $(seq 1 20); do
+            curl -fsS http://127.0.0.1:18178/healthz >/dev/null 2>&1 && break
+            sleep 0.2
+          done
+          curl -fsS http://127.0.0.1:18178/healthz >/dev/null
+          TZ=Asia/Kolkata UI_SMOKE_ATTEMPTS=1 bash lab/ui-smoke.sh http://127.0.0.1:18178/policies.html \
+            'mode-observe' 'It announces nothing.' 'Maintenance windows' \
+            'before: upcoming|lab-b|' '|configured|| ; finished|lab-a|' '|configured|old|' \
+            'open: current|lab-a|' '|on demand||Close ; upcoming|lab-b|' ' 10:00:00' '|on demand|fiber work|Close ; upcoming|lab-b|' \
+            'T04:30:00.000Z","end":"' 'T06:30:00.000Z","reason":"fiber work"}' \
+            'closed: upcoming|lab-b|' 'status [Closed api-2.]' \
+            --absent 'Cannot reach' 'mode-inject' 'closed: current'
+          # The page's calls reached the real API: the closed window is gone,
+          # and the one for tomorrow is listed with the UTC time that was sent.
+          curl -fsS "${auth[@]}" "$base/api/maintenance" | tee /tmp/maint177.json
+          jq -e '(.windows | length) == 0 and (.upcoming | map(.source) | sort) == ["api", "schedule"] and (.upcoming[] | select(.source == "api") | .start | endswith("T04:30:00Z") and (. | startswith("2099") | not)) and (.finished | length) == 1' /tmp/maint177.json
+          # A viewer sees the list and no form. uiproxy answers /api/me as a
+          # viewer and /api/maintenance with one window per state; the driver
+          # reports the hidden form, no Close button, and no write call.
+          kill "$proxy"
+          /tmp/uiproxy -listen 127.0.0.1:18179 -upstream "$base" -user lab -password lab-only \
+            -fixtures lab/ui-fixtures/maintenance-viewer >/tmp/uiproxy177v.log 2>&1 &
+          proxy=$!
+          for _ in $(seq 1 20); do
+            curl -fsS http://127.0.0.1:18179/healthz >/dev/null 2>&1 && break
+            sleep 0.2
+          done
+          curl -fsS http://127.0.0.1:18179/healthz >/dev/null
+          UI_SMOKE_ATTEMPTS=1 bash lab/ui-smoke.sh http://127.0.0.1:18179/policies.html \
+            'mode-observe' 'It announces nothing.' 'Opening and closing a window needs the operator role.' \
+            'viewer: form hidden true close buttons 0 writes 0 rows current|lab-a|' '|on demand|fiber work| ; upcoming|lab-b|' ' ; finished|lab-a, lab-b|' \
+            --absent 'Cannot reach' 'mode-inject'
       - name: auth in the stock image (users, roles, tokens, audit, rollback; observe)
         run: |
           cat > /tmp/auth.yaml <<'YAML'

@@ -282,7 +282,7 @@ The server is read-only (GET and HEAD), except on-demand maintenance windows (`P
 | `/api/dashboards` | Your custom dashboards and the widget catalog (#34). `PUT /api/dashboards/<name>` saves one, `DELETE` removes it. Needs a storage plugin and auth or basic auth. UI: `/dashboards.html`. |
 | `/api/upgrade` | Admin only. Running version, install type, the last release check, and the rollback target (#196). `POST /api/upgrade/check` lists GitHub releases and changes nothing; `POST /api/upgrade/apply {"tag","confirm":true}` and `POST /api/upgrade/rollback {"confirm":true}` switch versions after the SIGTERM shutdown path has withdrawn every route. Need `upgrade.enabled`, `upgrade.public_key`, and auth or basic auth ([docs/ui.md](docs/ui.md#upgrade-from-the-ui)). |
 | `/api/subscriptions` | Report subscriptions (#34): schedule, next and last send, errors. `POST /api/subscriptions/<name>/send` (operator) sends one now. |
-| `/api/maintenance` | Open maintenance windows. `POST` opens an on-demand window and `DELETE /api/maintenance/<id>` closes one, when a `maintenance` policy is configured and basic auth is on ([CONFIG.md](docs/CONFIG.md#policy-maintenance)). |
+| `/api/maintenance` | Open, upcoming, and finished maintenance windows. `POST` opens an on-demand window and `DELETE /api/maintenance/<id>` closes one, when a `maintenance` policy is configured and basic auth is on ([CONFIG.md](docs/CONFIG.md#policy-maintenance)). |
 
 Basic auth is off unless both `PACKETEER_HTTP_USER` and `PACKETEER_HTTP_PASSWORD` are set. Setting only one refuses to start. Set both when `http.listen` is not loopback. The password is not read from the config file and is not written to the log.
 
