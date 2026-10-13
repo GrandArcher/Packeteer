@@ -205,6 +205,43 @@ docker exec pkw-edge vtysh -c 'show bgp ipv4 unicast 198.51.100.0/24'
 <!-- ci-expect: 192.0.2.21 from 192.0.2.21 -->
 <!-- ci-absent: 64512:666 -->
 
+## 6. Large community
+
+A `packeteer_community` of three parts is a large community (RFC 8092). The lab edge accepts it from Packeteer, strips it from outside, and rejects it toward the transits with the `large-community` terms of [frr.md](frr.md). Switch the lab to `64512:1:666` and inject again:
+
+```sh
+sed -e 's/^mode: observe$/mode: inject/' -e 's/^packeteer_community: .*/packeteer_community: "64512:1:666"/' lab/walkthrough/config.yaml > lab/walkthrough/config.new
+mv lab/walkthrough/config.new lab/walkthrough/config.yaml
+docker restart -t 30 pkw-packeteer
+```
+
+```sh
+docker exec pkw-edge vtysh -c 'show bgp ipv4 unicast 198.51.100.0/24'
+```
+<!-- ci-retry: 90 -->
+<!-- ci-expect: 192.0.2.22 from 192.0.2.10 -->
+<!-- ci-expect: Large Community: 64512:1:666 -->
+<!-- ci-expect: no-export -->
+
+The route is the edge's best path, and neither transit hears it:
+
+```sh
+docker exec pkw-edge vtysh -c 'show bgp ipv4 unicast neighbors 192.0.2.21 advertised-routes'
+docker exec pkw-edge vtysh -c 'show bgp ipv4 unicast neighbors 192.0.2.22 advertised-routes'
+```
+<!-- ci-expect: 203.0.113.0/24 -->
+<!-- ci-absent: 198.51.100.0/24 -->
+
+Stopping withdraws it, as in step 5:
+
+```sh
+docker stop -t 30 pkw-packeteer
+docker exec pkw-edge vtysh -c 'show bgp ipv4 unicast 198.51.100.0/24'
+```
+<!-- ci-retry: 60 -->
+<!-- ci-expect: 192.0.2.21 from 192.0.2.21 -->
+<!-- ci-absent: 64512:1:666 -->
+
 Clean up:
 
 ```sh

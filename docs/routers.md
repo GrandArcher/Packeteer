@@ -20,7 +20,7 @@ Leave BGP graceful restart **off** on the Packeteer session. Packeteer never ena
 
 Customers, peers, and transits are all eBGP sessions, and a customer can re-export what it hears ([leak-watch.md](leak-watch.md) has the 2019 case). NO_EXPORT keeps an injected route from eBGP neighbors only while the router honors it, and a policy that strips communities undoes it. So put the deny first in the outbound policy of every eBGP neighbor, customers included, for both forms of `packeteer_community`. A deny for a community you do not configure matches nothing, so keep both.
 
-Each vendor below uses `64512:666` (standard) and `64512:1:666` (large). Replace them with your `packeteer_community`. Each check command shows what the neighbor receives. It does not prove the filter alone, because NO_EXPORT also hides the prefix; the filter is the layer you control.
+Each vendor below uses `64512:666` (standard) and `64512:1:666` (large). Replace them with your `packeteer_community`. The FRR, Junos, and Cisco checks show what the neighbor receives; the MikroTik check shows configuration only. None proves the filter alone, because NO_EXPORT also hides the prefix; the filter is the layer you control.
 
 FRR. The `ebgp-out` route-map of [frr.md](frr.md), which the walkthrough lab loads:
 
@@ -80,10 +80,10 @@ MikroTik RouterOS 7. Two deny rules before the final accept in `ebgp-out`, which
 /routing filter rule add chain=ebgp-out \
     rule="if (bgp-large-communities includes 64512:1:666) { reject }"
 /routing filter rule add chain=ebgp-out rule="accept"
-/routing bgp connection set [find where local.role=ebgp] output.filter-chain=ebgp-out
+/routing bgp connection set [find where local.role~"^ebgp"] output.filter-chain=ebgp-out
 ```
 
-Check: `/routing bgp connection print where local.role=ebgp` shows `output.filter-chain=ebgp-out` on every eBGP connection. Then `/routing filter rule print where chain=ebgp-out` lists the two denies ahead of `accept`.
+The pattern matches `ebgp` and the RFC 9234 roles (`ebgp-customer`, `ebgp-peer`, `ebgp-provider`, `ebgp-rs`, `ebgp-rs-client`); a connection with any other role needs the chain set by name. Check: `/routing bgp connection print detail where local.role~"^ebgp"` shows `output.filter-chain=ebgp-out` on every eBGP connection. Then `/routing filter rule print where chain=ebgp-out` lists the two denies ahead of `accept`.
 
 ## Local preference on import
 
