@@ -2,7 +2,8 @@
 // Troubleshooting page (#24, #180). Looking glass and traceroute answers
 // are drawn as tables; every answer keeps its raw JSON. Results stack
 // newest first for this browser session only. Needs el, clear, getJSON,
-// postJSON, fmtAS, fmtVia, and fmtMs from app.js. A probe answer adds "Probe and optimize" (#126) when
+// postJSON, fmtAS, fmtVia, fmtMs, fmtPct, and prefixHref from app.js.
+// A probe answer adds "Probe and optimize" (#126) when
 // /api/troubleshoot reports optimize; it asks the controller to measure
 // the covering learned prefix for a while, and any move still comes from
 // the decision engine.

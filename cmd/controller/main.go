@@ -1391,9 +1391,9 @@ func routerExports(cfg *config.Config) ([]plugin.RouterExport, error) {
 }
 
 // newTools builds the troubleshooting tools. They share the provider
-// sources and prober chain with the engine but never feed it: on-demand
-// results go back to the HTTP caller only, and the one write (SetQueue)
-// only queues a probe target.
+// sources and prober chain with the engine. On-demand results go back to
+// the HTTP caller only. Optimize is the one write: it adds a learned prefix
+// to the engine's probe targets (wired through SetQueue).
 func newTools(cfg *config.Config, plugins *pluginhost.Set) (*troubleshoot.Tools, error) {
 	var providers []probe.Provider
 	for _, p := range cfg.Providers {
