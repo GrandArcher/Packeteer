@@ -4,6 +4,10 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 
 ## [Unreleased]
 
+### Added
+
+- Failure-mode e2e matrix across outbound, more-specific, inbound, mitigation, and HA: six failures per surface, one CI matrix job, a broken withdraw path fails it (#234).
+
 ### Changed
 
 - Load budgets scale per million prefixes with a `large` 5M profile; flow and span `max_prefixes` is configurable, target caps rise, and `packeteer_truncated_total` meters the caps (#217).
