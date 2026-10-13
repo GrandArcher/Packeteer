@@ -2,6 +2,10 @@
 
 Read [AGENTS.md](AGENTS.md) first. It holds the safety, Docker-first, and plugin rules every change follows.
 
+## Community
+
+Chat with maintainers and other contributors on the [Packeteer Discord](https://discord.gg/MWCCGw8Rq6). Bugs and feature requests still go in GitHub issues.
+
 ## Setup
 
 ```
