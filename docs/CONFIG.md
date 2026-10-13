@@ -577,9 +577,21 @@ Version check, one-click upgrade, and rollback on the Settings page (#196). Off 
 ```yaml
 upgrade:
   enabled: true
-  public_key: "<base64 key published with the release>"   # not a secret
+  public_key: "xbP7Os7YIqfBhu36+E+WK0xvTizFyPROA1QCAseqEkA="   # not a secret
   # check_interval: 24h
 ```
+
+#### Release signing key
+
+Releases from v0.6.0 on are signed with this Ed25519 public key (not a secret):
+
+```
+xbP7Os7YIqfBhu36+E+WK0xvTizFyPROA1QCAseqEkA=
+```
+
+Each release carries `SHA256SUMS` (the SHA-256 of every binary) and `SHA256SUMS.sig`, a base64 Ed25519 signature over `SHA256SUMS`. The upgrade checks the signature against `upgrade.public_key`, then the binary against its `SHA256SUMS` entry. The same key is listed in each release's notes; compare it with this page before you pin it.
+
+Key rotation: a new key is announced in the release notes and this page at least one release before it is used. During the change, update `upgrade.public_key`; a release signed with a key you have not pinned is refused and nothing changes. If a key is ever compromised, the notes say so, the old key must be removed, and releases signed with it are not trusted.
 
 ### Multi-POP (federation)
 
