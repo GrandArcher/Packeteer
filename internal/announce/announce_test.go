@@ -9,6 +9,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/GrandArcher/Packeteer/internal/netpfx"
 	"github.com/GrandArcher/Packeteer/internal/policy"
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
 )
@@ -37,7 +38,7 @@ func (m memRIB) MoreSpecifics(parents []netip.Prefix) []netip.Prefix {
 			}
 		}
 	}
-	sortPrefixes(out)
+	netpfx.Sort(out)
 	return out
 }
 

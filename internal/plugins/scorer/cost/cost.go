@@ -23,6 +23,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/GrandArcher/Packeteer/internal/netpfx"
 	"github.com/GrandArcher/Packeteer/internal/plugins/scorer/weights"
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
 )
@@ -178,7 +179,7 @@ func (s *Scorer) Plan(in plugin.PlanInput) []plugin.PlanMove {
 	}
 
 	prefixes := append([]plugin.PlanPrefix(nil), in.Prefixes...)
-	sort.SliceStable(prefixes, func(i, j int) bool { return lessPrefix(prefixes[i].Prefix, prefixes[j].Prefix) })
+	sort.SliceStable(prefixes, func(i, j int) bool { return netpfx.Less(prefixes[i].Prefix, prefixes[j].Prefix) })
 	var moves []plugin.PlanMove
 	seen := map[netip.Prefix]bool{}
 	for _, px := range prefixes {
@@ -274,11 +275,4 @@ func tieFirst(a, b, keep, native string) bool {
 		return ra < rb
 	}
 	return a < b
-}
-
-func lessPrefix(a, b netip.Prefix) bool {
-	if c := a.Addr().Compare(b.Addr()); c != 0 {
-		return c < 0
-	}
-	return a.Bits() < b.Bits()
 }

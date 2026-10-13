@@ -33,13 +33,13 @@ import (
 	"log/slog"
 	"net/netip"
 	"slices"
-	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/GrandArcher/Packeteer/internal/config"
+	"github.com/GrandArcher/Packeteer/internal/netpfx"
 	"github.com/GrandArcher/Packeteer/internal/policy"
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
 )
@@ -492,7 +492,7 @@ func (c *Controller) Sync(ctx context.Context, imps []policy.Improvement) error 
 	for p := range want {
 		order = append(order, p)
 	}
-	sortPrefixes(order)
+	netpfx.Sort(order)
 	for _, p := range order {
 		if err := c.syncImprovementLocked(ctx, want[p], kids[p]); err != nil {
 			errs = append(errs, err)
@@ -631,7 +631,7 @@ func (c *Controller) learnedMoreSpecifics(want map[netip.Prefix]policy.Improveme
 	for p := range want {
 		parents = append(parents, p)
 	}
-	sortPrefixes(parents)
+	netpfx.Sort(parents)
 	seen := map[netip.Prefix]bool{}
 	for _, m := range c.rib.(MoreSpecificRIB).MoreSpecifics(parents) {
 		m = m.Masked()
@@ -655,7 +655,7 @@ func (c *Controller) learnedMoreSpecifics(want map[netip.Prefix]policy.Improveme
 		owner[m] = best
 	}
 	for _, ms := range kids {
-		sortPrefixes(ms)
+		netpfx.Sort(ms)
 	}
 	return kids, owner
 }
@@ -682,7 +682,7 @@ func (c *Controller) syncMoreSpecificsLocked(ctx context.Context, p netip.Prefix
 			mine = append(mine, m)
 		}
 	}
-	sortPrefixes(mine)
+	netpfx.Sort(mine)
 	for _, m := range mine {
 		if o, ok := owner[m]; ok && o != p {
 			continue // a longer improvement owns it now
@@ -1005,15 +1005,6 @@ func (c *Controller) Routers() []plugin.RouterExport {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.cfg.Routers
-}
-
-func sortPrefixes(ps []netip.Prefix) {
-	sort.Slice(ps, func(i, j int) bool {
-		if c := ps[i].Addr().Compare(ps[j].Addr()); c != 0 {
-			return c < 0
-		}
-		return ps[i].Bits() < ps[j].Bits()
-	})
 }
 
 // allowed reports whether p is an allowlist entry or covered by one.

@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/GrandArcher/Packeteer/internal/netpfx"
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
 )
 
@@ -43,7 +44,7 @@ func (e *Engine) Quarantined() []Quarantine {
 	for _, q := range e.state.quarantine {
 		out = append(out, q)
 	}
-	sort.Slice(out, func(i, j int) bool { return lessPrefix(out[i].Prefix, out[j].Prefix) })
+	sort.Slice(out, func(i, j int) bool { return netpfx.Less(out[i].Prefix, out[j].Prefix) })
 	return out
 }
 

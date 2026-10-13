@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/GrandArcher/Packeteer/internal/netpfx"
 	"github.com/GrandArcher/Packeteer/internal/policy"
 )
 
@@ -42,7 +43,7 @@ func (f *fakeAnn) onWire() []netip.Prefix {
 	for p := range f.routes {
 		out = append(out, p)
 	}
-	sortPrefixes(out)
+	netpfx.Sort(out)
 	return out
 }
 
@@ -52,7 +53,7 @@ func wantWire(t *testing.T, ann *fakeAnn, want ...string) {
 	for _, s := range want {
 		w = append(w, pfx(s))
 	}
-	sortPrefixes(w)
+	netpfx.Sort(w)
 	if got := ann.onWire(); !slices.Equal(got, w) {
 		t.Fatalf("on the wire %v, want %v", got, w)
 	}
