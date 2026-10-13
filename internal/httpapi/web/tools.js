@@ -214,7 +214,7 @@ function optimizeControl(a) {
       out.appendChild(document.createTextNode("."));
       btn.disabled = false;
     }, function (err) {
-      out.textContent = err.message;
+      out.textContent = "Not queued: " + err.message + ".";
       btn.disabled = false;
     });
   });

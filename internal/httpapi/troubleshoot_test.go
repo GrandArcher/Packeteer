@@ -90,14 +90,20 @@ func toolServer(t *testing.T, enabled bool, lim troubleshoot.Limiter) (http.Hand
 
 func toolServerQ(t *testing.T, enabled bool, lim troubleshoot.Limiter) (http.Handler, *tsProber, *tsQueue) {
 	t.Helper()
+	return toolServerLANs(t, enabled, lim, nil)
+}
+
+func toolServerLANs(t *testing.T, enabled bool, lim troubleshoot.Limiter, lans []netip.Prefix) (http.Handler, *tsProber, *tsQueue) {
+	t.Helper()
 	pr, q := &tsProber{}, &tsQueue{}
 	tools := troubleshoot.New(troubleshoot.Options{
-		Resolver:  tsResolver{},
-		Scorer:    tsScorer{},
-		Enabled:   enabled,
-		Providers: []probe.Provider{{Name: "transit-a", Source: netip.MustParseAddr("192.0.2.10")}},
-		Probers:   []probe.NamedProber{{Name: "fake", Prober: pr}},
-		Packets:   2,
+		Resolver:     tsResolver{},
+		Scorer:       tsScorer{},
+		ExchangeLANs: lans,
+		Enabled:      enabled,
+		Providers:    []probe.Provider{{Name: "transit-a", Source: netip.MustParseAddr("192.0.2.10")}},
+		Probers:      []probe.NamedProber{{Name: "fake", Prober: pr}},
+		Packets:      2,
 		Hop: func(_ context.Context, _, dst netip.Addr, ttl, _ int, _ time.Duration) (netip.Addr, bool, error) {
 			if ttl == 2 {
 				return dst, true, nil

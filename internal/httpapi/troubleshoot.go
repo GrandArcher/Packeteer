@@ -184,6 +184,8 @@ func writeToolError(w http.ResponseWriter, err error) {
 		status = http.StatusNotFound
 	case errors.Is(err, probe.ErrManualFull):
 		status = http.StatusConflict
+	case errors.Is(err, troubleshoot.ErrExchangeLAN):
+		status = http.StatusUnprocessableEntity
 	case errors.Is(err, troubleshoot.ErrBusy):
 		w.Header().Set("Retry-After", "10")
 		status = http.StatusTooManyRequests

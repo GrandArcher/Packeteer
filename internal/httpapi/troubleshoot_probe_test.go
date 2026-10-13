@@ -91,6 +91,28 @@ func TestToolOptimize(t *testing.T) {
 	}
 }
 
+// A learned prefix inside a peering LAN is refused with 422 and nothing is
+// queued, because the probe engine would drop it without a sign.
+func TestToolOptimizeRefusesExchangeLAN(t *testing.T) {
+	h, _, q := toolServerLANs(t, true, nil, []netip.Prefix{netip.MustParsePrefix("198.51.100.0/24")})
+	rec := mdo(h, "POST", "/api/troubleshoot/optimize", "application/json", `{"target":"198.51.100.9"}`, false)
+	if rec.Code != http.StatusUnprocessableEntity || !strings.Contains(rec.Body.String(), "inside an exchange LAN and is not probed") {
+		t.Fatalf("exchange LAN: %d %s", rec.Code, rec.Body)
+	}
+	if len(q.got) != 0 {
+		t.Fatalf("queued %v", q.got)
+	}
+
+	// A LAN that does not contain the learned prefix does not refuse it.
+	h, _, q = toolServerLANs(t, true, nil, []netip.Prefix{netip.MustParsePrefix("203.0.113.0/24")})
+	if rec := mdo(h, "POST", "/api/troubleshoot/optimize", "application/json", `{"target":"198.51.100.9"}`, false); rec.Code != http.StatusOK {
+		t.Fatalf("outside LAN: %d %s", rec.Code, rec.Body)
+	}
+	if len(q.got) != 1 || q.got[0].String() != "198.51.100.0/24" {
+		t.Fatalf("queued %v", q.got)
+	}
+}
+
 func TestToolOptimizeDisabledAndRateLimited(t *testing.T) {
 	h, _, q := toolServerQ(t, false, nil)
 	if rec := mdo(h, "POST", "/api/troubleshoot/optimize", "application/json", `{"target":"198.51.100.9"}`, false); rec.Code != 403 {
