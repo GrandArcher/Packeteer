@@ -140,7 +140,7 @@
         <div id="form-providers"></div>
         <button type="button" id="form-add-provider">+ Provider</button>
         <h3>Suggestions from BGP</h3>
-        <p class="tag">Next hops on iBGP or BMP that are not configured providers. Accept adds a draft row with the next hop and the AS filled in. Probe source, cost, and commit stay empty. Accepting does not save, does not probe, and does not announce. Exchange LAN hops stay on the exchange view until you add them as peers.</p>
+        <p class="tag">Next hops on iBGP or BMP that are not configured providers. Accept adds a draft row with the next hop and the AS filled in. Probe source, cost, and commit stay empty. Accepting does not save, does not probe, and does not announce. Exchange LAN hops are offered under Discovered members in Exchanges instead.</p>
         <div class="controls">
           <button type="button" id="sug-refresh">Refresh suggestions</button>
         </div>
@@ -149,6 +149,12 @@
         <p class="tag">Every <code>exchanges</code> entry: its peering LANs and the peers on them. A peer is a provider with its own next hop on a LAN. It is always route-checked, so the file needs <code>add_path</code> on a <code>bgp.neighbors</code> entry or <code>bmp: prefer</code> or <code>only</code> with <code>rib_sources</code>; Save checks that. The probe source of a peer is required before Save. Exclude and precedence stay in the YAML. Separate LANs with commas. No session or route-server credential is asked for. Nothing is probed or announced until you save and restart.</p>
         <fieldset id="form-exchanges" class="form"></fieldset>
         <button type="button" id="form-add-exchange">+ Exchange</button>
+        <h3>Discovered members</h3>
+        <p class="tag">Next hops on an exchange's peering LAN that are not peers, as the running controller sees them. Accept adds a draft peer with the AS and next hop filled in. Name, probe source, and cost stay empty. Accepting does not save, does not probe, and does not announce. Only an exchange that is already running lists members.</p>
+        <div class="controls">
+          <button type="button" id="ix-refresh">Refresh discovered members</button>
+        </div>
+        <div id="form-ix-discovered"></div>
         <h3>Prefixes to probe</h3>
         <p class="tag">The first <code>static</code> source. Other sources stay in the YAML.</p>
         <div id="form-targets"></div>

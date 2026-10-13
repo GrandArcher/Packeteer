@@ -38,7 +38,8 @@ type FormExchange struct {
 
 // FormExchangePeer is one peer. Key is its name in the file when the form
 // was loaded; empty means a new peer. SourceIP may be empty in a draft row;
-// Save refuses the file until it is set.
+// Save refuses the file until it is set. Draft marks a row filled from a
+// discovered LAN member (#155); it is display only and Apply never writes it.
 type FormExchangePeer struct {
 	Key      string `json:"key"`
 	Name     string `json:"name"`
@@ -46,6 +47,7 @@ type FormExchangePeer struct {
 	NextHop  string `json:"next_hop"`
 	SourceIP string `json:"source_ip"`
 	Cost     string `json:"cost"`
+	Draft    bool   `json:"draft,omitempty"`
 }
 
 func readExchanges(root *yaml.Node, f *Form) error {
@@ -98,6 +100,7 @@ func (f *Form) normalizeExchanges() {
 			for _, s := range []*string{&p.Key, &p.Name, &p.ASN, &p.NextHop, &p.SourceIP, &p.Cost} {
 				*s = strings.TrimSpace(*s)
 			}
+			p.Draft = false
 		}
 	}
 }

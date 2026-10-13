@@ -91,7 +91,7 @@ function editorOff(err) {
   var node = document.getElementById("ed-off");
   node.textContent = explain(err);
   node.hidden = !off;
-  ["ed-load", "ed-check", "ed-save", "wz-run", "wz-next", "wz-next-2", "wz-back", "wz-back-3", "wz-add-provider", "wz-sug", "form-apply", "form-reload", "form-add-provider", "form-add-target", "form-add-allow", "sug-refresh", "form-add-flow", "form-add-policy", "form-add-vip", "form-add-outage", "form-add-exchange", "form-add-anomaly-rule", "wz-next-3", "wz-back-4"].forEach(function (id) {
+  ["ed-load", "ed-check", "ed-save", "wz-run", "wz-next", "wz-next-2", "wz-back", "wz-back-3", "wz-add-provider", "wz-sug", "form-apply", "form-reload", "form-add-provider", "form-add-target", "form-add-allow", "sug-refresh", "form-add-flow", "form-add-policy", "form-add-vip", "form-add-outage", "form-add-exchange", "ix-refresh", "form-add-anomaly-rule", "wz-next-3", "wz-back-4"].forEach(function (id) {
     var b = document.getElementById(id);
     if (b) b.disabled = off;
   });
@@ -111,6 +111,7 @@ function loadConfig() {
     edStatus("Loaded.");
     loadForm(f.yaml);
     loadSuggestions();
+    loadDiscovered();
   }, function (err) { editorOff(err); edStatus(explain(err)); });
 }
 
@@ -355,6 +356,7 @@ function renderExchanges() {
       bindField(row, "Peer next hop", p, "next_hop", "203.0.113.11");
       bindField(row, "Peer probe source", p, "source_ip", "192.0.2.31");
       bindField(row, "Peer cost", p, "cost", "");
+      if (p.draft) row.appendChild(el("span", "tag", "draft"));
       row.appendChild(removeButton(x.peers, j, renderExchanges, "peer"));
     });
     var add = el("button", "small", "+ Peer");
@@ -363,6 +365,53 @@ function renderExchanges() {
     card.appendChild(add);
   });
   if (!form.exchanges.length) root.appendChild(el("p", "empty", "No exchanges."));
+  renderDiscovered();
+}
+
+var runningExchanges = [];
+
+// Discovered LAN members come from the running exchanges (GET
+// /api/exchanges), so only an exchange that is already running, matched by
+// name, lists any. A member that is already a peer row is not offered again.
+function renderDiscovered() {
+  var root = byId("form-ix-discovered");
+  clear(root);
+  var shown = 0;
+  form.exchanges.forEach(function (x) {
+    var running = runningExchanges.filter(function (r) { return r.name === x.name; })[0];
+    if (!running) return;
+    var taken = {};
+    x.peers.forEach(function (p) { if (p.next_hop) taken[p.next_hop] = true; });
+    (running.discovered || []).filter(function (d) { return !taken[d.next_hop]; }).forEach(function (d) {
+      shown++;
+      var row = el("div", "row");
+      row.appendChild(el("span", "tag", x.name));
+      row.appendChild(el("span", "mono", d.next_hop));
+      row.appendChild(el("span", "tag", d.asn ? "AS " + d.asn : "AS unknown"));
+      row.appendChild(el("span", "tag", d.prefixes + " prefixes"));
+      var b = el("button", "small", "Accept");
+      b.type = "button";
+      b.addEventListener("click", function () { acceptDiscovered(x, d); });
+      row.appendChild(b);
+      root.appendChild(row);
+    });
+  });
+  if (!shown) root.appendChild(el("p", "empty", "No discovered members. Refresh after the exchange has routes."));
+}
+
+// acceptDiscovered adds a draft peer row. It does not call the API, so it
+// cannot write a peer, start probing, or announce.
+function acceptDiscovered(x, d) {
+  x.peers.push({key: "", name: "", asn: d.asn ? String(d.asn) : "", next_hop: d.next_hop, source_ip: "", cost: "", draft: true});
+  renderExchanges();
+  formStatus("Draft peer added to " + x.name + ". Name it and fill in the probe source. Cost stays empty. Nothing is saved.");
+}
+
+function loadDiscovered() {
+  api("GET", "/api/exchanges").then(function (out) {
+    runningExchanges = (out && out.exchanges) || [];
+    renderDiscovered();
+  }, function () { runningExchanges = []; renderDiscovered(); });
 }
 
 function renderOutages() {
@@ -1019,6 +1068,7 @@ byId("form-add-exchange").addEventListener("click", function () {
   form.exchanges.push(emptyExchange());
   renderExchanges();
 });
+byId("ix-refresh").addEventListener("click", loadDiscovered);
 byId("form-add-vip").addEventListener("click", function () {
   form.vips.push(emptyVIP());
   renderVIPs();
