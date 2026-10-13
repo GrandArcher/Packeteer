@@ -5,6 +5,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/GrandArcher/Packeteer/internal/netpfx"
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
 )
 
@@ -519,7 +520,7 @@ func Detect(now time.Time, samples []Sample, routes []Route, cfg Config) Outcome
 		targets = append(targets, plugin.Target{Prefix: p, Interval: cfg.Interval})
 	}
 	addSorted := func(ps []netip.Prefix) {
-		sortPrefixes(ps)
+		netpfx.Sort(ps)
 		for _, p := range ps {
 			add(p)
 		}
@@ -634,17 +635,8 @@ func prefixKeys(m map[netip.Prefix]struct{}) []netip.Prefix {
 	for p := range m {
 		out = append(out, p)
 	}
-	sortPrefixes(out)
+	netpfx.Sort(out)
 	return out
-}
-
-func sortPrefixes(ps []netip.Prefix) {
-	sort.Slice(ps, func(i, j int) bool {
-		if c := ps[i].Addr().Compare(ps[j].Addr()); c != 0 {
-			return c < 0
-		}
-		return ps[i].Bits() < ps[j].Bits()
-	})
 }
 
 func stringKeys(m map[string]struct{}) []string {

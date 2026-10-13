@@ -6,6 +6,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/GrandArcher/Packeteer/internal/netpfx"
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
 )
 
@@ -274,7 +275,7 @@ func sortedCommitOK(ok map[netip.Prefix]bool) []netip.Prefix {
 			out = append(out, p)
 		}
 	}
-	sortPrefixes(out)
+	netpfx.Sort(out)
 	return out
 }
 
@@ -362,7 +363,7 @@ func buildPlan(
 			perf = append(perf, w.imp)
 		}
 	}
-	sort.Slice(perf, func(i, j int) bool { return lessPrefix(perf[i].Prefix, perf[j].Prefix) })
+	sort.Slice(perf, func(i, j int) bool { return netpfx.Less(perf[i].Prefix, perf[j].Prefix) })
 	for _, imp := range perf {
 		cur := imp.Provider
 		if cur == "" {

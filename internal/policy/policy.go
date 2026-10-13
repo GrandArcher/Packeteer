@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/GrandArcher/Packeteer/internal/netpfx"
 	"github.com/GrandArcher/Packeteer/internal/probe"
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
 )
@@ -410,7 +411,7 @@ func Decide(prev State, in Input, cfg Config, scorer plugin.Scorer, now time.Tim
 	for p := range byPrefix {
 		prefixes = append(prefixes, p)
 	}
-	sortPrefixes(prefixes)
+	netpfx.Sort(prefixes)
 	decisions := make([]Decision, len(prefixes))
 
 	for i, p := range prefixes {
@@ -756,7 +757,7 @@ func Decide(prev State, in Input, cfg Config, scorer plugin.Scorer, now time.Tim
 		if wants[a].gain != wants[b].gain {
 			return wants[a].gain > wants[b].gain
 		}
-		return lessPrefix(wants[a].imp.Prefix, wants[b].imp.Prefix)
+		return netpfx.Less(wants[a].imp.Prefix, wants[b].imp.Prefix)
 	})
 	for _, w := range wants {
 		w.d.Cause = w.imp.Cause
@@ -821,7 +822,7 @@ func trimToCap(st State, decIdx map[netip.Prefix]*Decision, byPrefix map[netip.P
 		if items[i].gain != items[j].gain {
 			return items[i].gain < items[j].gain
 		}
-		return lessPrefix(items[j].p, items[i].p)
+		return netpfx.Less(items[j].p, items[i].p)
 	})
 	reason := fmt.Sprintf("max_improvements (%d) reached", cfg.MaxImprovements)
 	for _, it := range items {
@@ -931,7 +932,7 @@ func attachSubranges(d *Decision, m map[netip.Prefix]*SubrangeDecision, excluded
 		if list[a].Weight != list[b].Weight {
 			return list[a].Weight > list[b].Weight
 		}
-		return lessPrefix(list[a].Prefix, list[b].Prefix)
+		return netpfx.Less(list[a].Prefix, list[b].Prefix)
 	})
 	best := ""
 	for _, s := range list {
@@ -1177,7 +1178,7 @@ func markPendingUrgent(st State, out *Output, rounds int) {
 			ps = append(ps, p)
 		}
 	}
-	sortPrefixes(ps)
+	netpfx.Sort(ps)
 	out.Urgent = append(out.Urgent, ps...)
 }
 
@@ -1223,17 +1224,6 @@ func allowed(list []netip.Prefix, p netip.Prefix) bool {
 	return false
 }
 
-func sortPrefixes(ps []netip.Prefix) {
-	sort.Slice(ps, func(i, j int) bool { return lessPrefix(ps[i], ps[j]) })
-}
-
-func lessPrefix(a, b netip.Prefix) bool {
-	if c := a.Addr().Compare(b.Addr()); c != 0 {
-		return c < 0
-	}
-	return a.Bits() < b.Bits()
-}
-
 // displaceCommit retires one commit or cost improvement so a performance
 // move can use the slot. The smallest volume goes first (it relieves the least);
 // equal volume breaks by prefix. The prefix takes a hold_time cooldown so
@@ -1250,7 +1240,7 @@ func displaceCommit(st State, decIdx map[netip.Prefix]*Decision, volume map[neti
 		if volume != nil {
 			vol = volume[p]
 		}
-		if !found || vol < pickVol || (vol == pickVol && lessPrefix(p, pick)) {
+		if !found || vol < pickVol || (vol == pickVol && netpfx.Less(p, pick)) {
 			pick, pickVol, found = p, vol, true
 		}
 	}
@@ -1269,7 +1259,7 @@ func sortedKeys(m map[netip.Prefix]Improvement) []netip.Prefix {
 	for k := range m {
 		out = append(out, k)
 	}
-	sortPrefixes(out)
+	netpfx.Sort(out)
 	return out
 }
 

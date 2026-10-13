@@ -47,6 +47,7 @@ import (
 	"time"
 
 	"github.com/GrandArcher/Packeteer/internal/config"
+	"github.com/GrandArcher/Packeteer/internal/netpfx"
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
 )
 
@@ -272,7 +273,7 @@ func New(cfg Config, ann plugin.InboundAnnouncer, rib RIB, log *slog.Logger) (*C
 	for _, p := range cfg.Prefixes {
 		prefixes = append(prefixes, p.Masked())
 	}
-	sortPrefixes(prefixes)
+	netpfx.Sort(prefixes)
 	cfg.Prefixes = prefixes
 	return &Controller{
 		cfg: cfg, ann: ann, rib: rib, log: log,
@@ -763,7 +764,7 @@ func (c *Controller) Sync(ctx context.Context) error {
 		}
 		// Before the unchanged shortcut: a reload can shrink the allowlist
 		// under a route that is already on the wire.
-		if !coveredBy(c.cfg.Allowlist, p) {
+		if !netpfx.CoveredBy(c.cfg.Allowlist, p) {
 			if on {
 				errs = append(errs, c.withdrawLocked(ctx, p))
 			}
@@ -857,7 +858,7 @@ func (c *Controller) Status() Status {
 	for p := range c.active {
 		order = append(order, p)
 	}
-	sortPrefixes(order)
+	netpfx.Sort(order)
 	for _, p := range order {
 		st.Announced = append(st.Announced, c.active[p])
 	}
@@ -872,22 +873,4 @@ func sortedKeys[V any](m map[string]V) []string {
 	}
 	sort.Strings(out)
 	return out
-}
-
-func sortPrefixes(ps []netip.Prefix) {
-	sort.Slice(ps, func(i, j int) bool {
-		if c := ps[i].Addr().Compare(ps[j].Addr()); c != 0 {
-			return c < 0
-		}
-		return ps[i].Bits() < ps[j].Bits()
-	})
-}
-
-func coveredBy(list []netip.Prefix, p netip.Prefix) bool {
-	for _, a := range list {
-		if a.Bits() <= p.Bits() && a.Contains(p.Addr()) {
-			return true
-		}
-	}
-	return false
 }

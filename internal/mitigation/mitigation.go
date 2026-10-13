@@ -46,6 +46,7 @@ import (
 
 	"github.com/GrandArcher/Packeteer/internal/config"
 	"github.com/GrandArcher/Packeteer/internal/geoip"
+	"github.com/GrandArcher/Packeteer/internal/netpfx"
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
 )
 
@@ -389,7 +390,7 @@ func (c *Controller) Add(req Request, now time.Time) (Rule, error) {
 	if p.Bits() == 0 {
 		return bad("a default route is never mitigated")
 	}
-	if !coveredBy(c.cfg.Allowlist, p) {
+	if !netpfx.CoveredBy(c.cfg.Allowlist, p) {
 		return bad("%s is not in mitigation.allowlist", p)
 	}
 	if len(req.Reason) > 256 {
@@ -698,7 +699,7 @@ func (c *Controller) syncUnicastLocked(ctx context.Context) error {
 	for p := range uni {
 		order = append(order, p)
 	}
-	sortPrefixes(order)
+	netpfx.Sort(order)
 	for _, p := range order {
 		r := uni[p]
 		cur, on := c.wire[p]
@@ -706,7 +707,7 @@ func (c *Controller) syncUnicastLocked(ctx context.Context) error {
 			r.Pending = ""
 			continue
 		}
-		if !coveredBy(c.cfg.Allowlist, p) {
+		if !netpfx.CoveredBy(c.cfg.Allowlist, p) {
 			r.Pending = "not in mitigation.allowlist"
 			if on {
 				errs = append(errs, c.withdrawLocked(ctx, p))
@@ -787,7 +788,7 @@ func (c *Controller) syncFlowSpecLocked(ctx context.Context) error {
 			r.Pending = "flowspec is not configured on the mitigation announcer"
 			continue
 		}
-		if !coveredBy(c.cfg.Allowlist, r.Prefix) {
+		if !netpfx.CoveredBy(c.cfg.Allowlist, r.Prefix) {
 			r.Pending = "not in mitigation.allowlist"
 			if on {
 				errs = append(errs, c.withdrawFlowSpecLocked(ctx, k))
@@ -960,7 +961,7 @@ func (c *Controller) Status() Status {
 	sort.Slice(rules, func(i, j int) bool {
 		a, b := rules[i], rules[j]
 		if a.Prefix != b.Prefix {
-			return lessPrefix(a.Prefix, b.Prefix)
+			return netpfx.Less(a.Prefix, b.Prefix)
 		}
 		return a.key < b.key
 	})
@@ -1008,24 +1009,4 @@ func newID() string {
 	var b [8]byte
 	_, _ = rand.Read(b[:])
 	return hex.EncodeToString(b[:])
-}
-
-func lessPrefix(a, b netip.Prefix) bool {
-	if c := a.Addr().Compare(b.Addr()); c != 0 {
-		return c < 0
-	}
-	return a.Bits() < b.Bits()
-}
-
-func sortPrefixes(ps []netip.Prefix) {
-	sort.Slice(ps, func(i, j int) bool { return lessPrefix(ps[i], ps[j]) })
-}
-
-func coveredBy(list []netip.Prefix, p netip.Prefix) bool {
-	for _, a := range list {
-		if a.Bits() <= p.Bits() && a.Contains(p.Addr()) {
-			return true
-		}
-	}
-	return false
 }

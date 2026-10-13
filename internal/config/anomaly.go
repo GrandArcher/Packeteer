@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/GrandArcher/Packeteer/internal/netpfx"
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
 )
 
@@ -176,7 +177,7 @@ func (c *Config) validateAnomaly(add func(string, ...any)) {
 				at("prefixes[%d]: %q has host bits set (did you mean %s?)", j, s, p.Masked())
 			case p.Bits() == 0:
 				at("prefixes[%d]: %s would match every prefix", j, p)
-			case m != nil && !coveredBy(allow, p):
+			case m != nil && !netpfx.CoveredBy(allow, p):
 				at("prefixes[%d]: %s is not inside mitigation.allowlist", j, p)
 			}
 		}

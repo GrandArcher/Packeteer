@@ -5,6 +5,8 @@ import (
 	"net/netip"
 	"slices"
 	"time"
+
+	"github.com/GrandArcher/Packeteer/internal/netpfx"
 )
 
 // FlapConfig is the flap quarantine (#228). A prefix whose chosen provider
@@ -125,7 +127,7 @@ func (s *State) expireFlap(now time.Time, cfg FlapConfig, out *Output) {
 	for p := range s.quarantine {
 		ps = append(ps, p)
 	}
-	sortPrefixes(ps)
+	netpfx.Sort(ps)
 	for _, p := range ps {
 		q := s.quarantine[p]
 		switch {

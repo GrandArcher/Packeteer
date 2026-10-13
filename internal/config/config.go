@@ -20,8 +20,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/GrandArcher/Packeteer/internal/exchange"
 	"gopkg.in/yaml.v3"
+
+	"github.com/GrandArcher/Packeteer/internal/exchange"
+	"github.com/GrandArcher/Packeteer/internal/netpfx"
 )
 
 // Operating modes.
@@ -1385,7 +1387,7 @@ func (c *Config) validateInbound(add func(string, ...any)) {
 			add("inbound.prefixes[%d]: duplicate prefix %s", i, p)
 		}
 		seen[p] = true
-		if in.Mode == ModeInject && !coveredBy(allow, p) {
+		if in.Mode == ModeInject && !netpfx.CoveredBy(allow, p) {
 			add("inbound.prefixes[%d]: %s is not covered by allowlist.prefixes", i, p)
 		}
 	}
@@ -1439,16 +1441,6 @@ func (c *Config) validateInbound(add func(string, ...any)) {
 		}
 		seenTrigger[t] = true
 	}
-}
-
-// coveredBy reports whether p is an entry of list or inside one.
-func coveredBy(list []netip.Prefix, p netip.Prefix) bool {
-	for _, a := range list {
-		if a.Bits() <= p.Bits() && a.Contains(p.Addr()) {
-			return true
-		}
-	}
-	return false
 }
 
 func (c *Config) normalize() {

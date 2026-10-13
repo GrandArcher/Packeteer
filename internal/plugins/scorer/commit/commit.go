@@ -24,6 +24,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/GrandArcher/Packeteer/internal/netpfx"
 	"github.com/GrandArcher/Packeteer/internal/plugins/scorer/weights"
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
 )
@@ -245,7 +246,7 @@ func (s *Scorer) Plan(in plugin.PlanInput) []plugin.PlanMove {
 		prefs = append(prefs, placed{PlanPrefix: px, base: base})
 	}
 	sort.SliceStable(prefs, func(i, j int) bool {
-		return lessPrefix(prefs[i].Prefix, prefs[j].Prefix)
+		return netpfx.Less(prefs[i].Prefix, prefs[j].Prefix)
 	})
 
 	moved := map[netip.Prefix]bool{}
@@ -424,7 +425,7 @@ func smallest(ps []*placed) int {
 	best := 0
 	for i := 1; i < len(ps); i++ {
 		if ps[i].VolumeMbps < ps[best].VolumeMbps-mbpsEps ||
-			(within(ps[i].VolumeMbps, ps[best].VolumeMbps) && lessPrefix(ps[i].Prefix, ps[best].Prefix)) {
+			(within(ps[i].VolumeMbps, ps[best].VolumeMbps) && netpfx.Less(ps[i].Prefix, ps[best].Prefix)) {
 			best = i
 		}
 	}
@@ -435,7 +436,7 @@ func largest(ps []*placed) int {
 	best := 0
 	for i := 1; i < len(ps); i++ {
 		if ps[i].VolumeMbps > ps[best].VolumeMbps+mbpsEps ||
-			(within(ps[i].VolumeMbps, ps[best].VolumeMbps) && lessPrefix(ps[i].Prefix, ps[best].Prefix)) {
+			(within(ps[i].VolumeMbps, ps[best].VolumeMbps) && netpfx.Less(ps[i].Prefix, ps[best].Prefix)) {
 			best = i
 		}
 	}
@@ -642,11 +643,4 @@ func pathLoss(paths []plugin.PlanPath, provider string) (float64, bool) {
 		}
 	}
 	return 0, false
-}
-
-func lessPrefix(a, b netip.Prefix) bool {
-	if c := a.Addr().Compare(b.Addr()); c != 0 {
-		return c < 0
-	}
-	return a.Bits() < b.Bits()
 }
