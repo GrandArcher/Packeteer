@@ -75,7 +75,7 @@ var (
 	namePattern = regexp.MustCompile(`^[\p{L}\p{N} ._,&()'-]+$`)
 )
 
-const searchInputHint = "q must be a prefix such as 192.0.2.0/24, an address, an AS number such as AS64510, or an AS name of 2-64 letters"
+const searchInputHint = "q must be a prefix such as 192.0.2.0/24, an address, an AS number such as AS64510, or an AS name of 2-64 bytes of letters, digits, spaces, or . _ , & ( ) ' -"
 
 // parseSearch classifies the query. Anything else is refused, so a
 // search term never carries control characters or markup into a log or
