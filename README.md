@@ -268,6 +268,8 @@ The Settings page can also upgrade in place (#196). It is off by default. It nee
 
 ## Roadmap and contributing
 
+Questions, ideas, or just want to talk routing? Join the [Packeteer Discord](https://discord.gg/MWCCGw8Rq6).
+
 - What is done, partial, and planned: [docs/FEATURES.md](docs/FEATURES.md) and the [milestones](https://github.com/GrandArcher/Packeteer/milestones).
 - How to send a change: [CONTRIBUTING.md](CONTRIBUTING.md). Safety and doc rules for every change: [AGENTS.md](AGENTS.md).
 - Plugin roadmap: out-of-process plugins with state ([#286](https://github.com/GrandArcher/Packeteer/issues/286)), InfluxDB and OTLP exporters ([#287](https://github.com/GrandArcher/Packeteer/issues/287)), a plugin author guide and community plugin list ([#288](https://github.com/GrandArcher/Packeteer/issues/288)), and PeeringDB and IRR record checks ([#289](https://github.com/GrandArcher/Packeteer/issues/289)).
