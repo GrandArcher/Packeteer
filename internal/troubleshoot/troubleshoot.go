@@ -100,7 +100,9 @@ type Options struct {
 	Reverse func(ctx context.Context, a netip.Addr) string
 	Whois   plugin.Whois
 	Limiter Limiter
-	Now     func() time.Time
+	// PacketLimiter paces every indirect trace packet. Nil sends unpaced.
+	PacketLimiter probe.Limiter
+	Now           func() time.Time
 	// Resolver resolves hostnames. Nil uses net.DefaultResolver.
 	Resolver Resolver
 	// Scorer ranks providers for the best exit in a probe answer. Nil
@@ -428,7 +430,7 @@ func (t *Tools) probeProvider(ctx context.Context, p probe.Provider, target neti
 	if t.opt.Indirect == nil || (res.OK() && res.Stats.Received > 0) || p.Source.Is4() != target.Is4() {
 		return res
 	}
-	hop, ok, err := t.opt.Indirect.Trace(ctx, p.Source, target, nil)
+	hop, ok, err := t.opt.Indirect.Trace(ctx, p.Source, target, t.waitPacket)
 	if err != nil || !ok {
 		return res
 	}
@@ -438,6 +440,16 @@ func (t *Tools) probeProvider(ctx context.Context, p probe.Provider, target neti
 	}
 	via.Prefix, via.Indirect = res.Prefix, true
 	return via
+}
+
+// waitPacket takes one packet from the packet budget. One request can
+// otherwise send max_hops × probes trace packets per silent provider on
+// one request token.
+func (t *Tools) waitPacket(ctx context.Context) error {
+	if t.opt.PacketLimiter == nil {
+		return nil
+	}
+	return t.opt.PacketLimiter.WaitN(ctx, 1)
 }
 
 func (t *Tools) probeOne(ctx context.Context, p probe.Provider, target netip.Addr) probe.Result {
@@ -491,8 +503,9 @@ func (t *Tools) Optimize(ctx context.Context, input string) (OptimizeAnswer, err
 	if err != nil {
 		return OptimizeAnswer{}, err
 	}
-	if err := t.admit(); err != nil {
-		return OptimizeAnswer{}, err
+	// Refusals that need no token come first.
+	if !t.opt.Enabled {
+		return OptimizeAnswer{}, ErrDisabled
 	}
 	q := t.manualQueue()
 	if q == nil {
@@ -504,6 +517,9 @@ func (t *Tools) Optimize(ctx context.Context, input string) (OptimizeAnswer, err
 	}
 	if !v.Ready() {
 		return OptimizeAnswer{}, errors.New("the learned RIB view is not ready")
+	}
+	if err := t.admit(); err != nil {
+		return OptimizeAnswer{}, err
 	}
 	ans := OptimizeAnswer{Host: host.name}
 	if ans.Target, ans.Addresses, err = t.resolve(ctx, host); err != nil {

@@ -257,7 +257,7 @@ func TestRemoteProvidersNotProbed(t *testing.T) {
 		t.Fatal(err)
 	}
 	probers := &pluginhost.Set{Probers: []pluginhost.Instance[plugin.Prober]{{Name: "p", Type: "fake", Plugin: &hungProber{allow: 1 << 30}}}}
-	engine, err := newEngine(cfg, probers, slog.Default(), nil, nil)
+	engine, err := newEngine(cfg, probers, slog.Default(), nil, nil, packetLimiter(cfg))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -265,7 +265,7 @@ func TestRemoteProvidersNotProbed(t *testing.T) {
 	if len(ps) != 1 || ps[0].Name != "x-a" {
 		t.Fatalf("engine providers = %+v", ps)
 	}
-	tools, err := newTools(cfg, &pluginhost.Set{})
+	tools, err := newTools(cfg, &pluginhost.Set{}, packetLimiter(cfg))
 	if err != nil {
 		t.Fatal(err)
 	}

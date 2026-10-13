@@ -404,7 +404,8 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 	if anom != nil {
 		anomAPI = anom.Status
 	}
-	tools, terr := newTools(cfg, plugins)
+	pktLimiter := packetLimiter(cfg)
+	tools, terr := newTools(cfg, plugins, pktLimiter)
 	if terr != nil {
 		log.Error("refusing to start", "err", terr)
 		return 1
@@ -600,7 +601,7 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 			rec.Probe(r)
 		}
 	}
-	engine, err = newEngine(cfg, plugins, log, onRound, onProbe)
+	engine, err = newEngine(cfg, plugins, log, onRound, onProbe, pktLimiter)
 	if err != nil {
 		log.Error("refusing to start", "err", err)
 		return 1
@@ -1394,7 +1395,7 @@ func routerExports(cfg *config.Config) ([]plugin.RouterExport, error) {
 // sources and prober chain with the engine. On-demand results go back to
 // the HTTP caller only. Optimize is the one write: it adds a learned prefix
 // to the engine's probe targets (wired through SetQueue).
-func newTools(cfg *config.Config, plugins *pluginhost.Set) (*troubleshoot.Tools, error) {
+func newTools(cfg *config.Config, plugins *pluginhost.Set, lim *rate.Limiter) (*troubleshoot.Tools, error) {
 	var providers []probe.Provider
 	for _, p := range cfg.Providers {
 		if cfg.Remote(p) {
@@ -1430,6 +1431,8 @@ func newTools(cfg *config.Config, plugins *pluginhost.Set) (*troubleshoot.Tools,
 		Reverse:   reverseName,
 		Indirect:  indirectTracer(cfg),
 		Limiter:   rate.NewLimiter(rate.Every(time.Minute/time.Duration(rpm)), min(rpm, 3)),
+		// The indirect fallback trace packets share the engine's budget.
+		PacketLimiter: lim,
 	}
 	if plugins.Whois != nil {
 		opt.Whois = plugins.Whois.Plugin
@@ -1450,7 +1453,7 @@ func reverseName(ctx context.Context, a netip.Addr) string {
 	return strings.TrimSuffix(names[0], ".")
 }
 
-func newEngine(cfg *config.Config, plugins *pluginhost.Set, log *slog.Logger, onRound func(), onProbe func(probe.Result)) (*probe.Engine, error) {
+func newEngine(cfg *config.Config, plugins *pluginhost.Set, log *slog.Logger, onRound func(), onProbe func(probe.Result), lim *rate.Limiter) (*probe.Engine, error) {
 	var providers []probe.Provider
 	for _, p := range cfg.Providers {
 		if cfg.Remote(p) {
@@ -1470,14 +1473,6 @@ func newEngine(cfg *config.Config, plugins *pluginhost.Set, log *slog.Logger, on
 	var sources []probe.NamedSource
 	for _, s := range plugins.Sources {
 		sources = append(sources, probe.NamedSource{Name: s.Name, Source: s.Plugin})
-	}
-	burst := cfg.Probe.RateLimitPPS
-	need := cfg.Probe.Packets
-	if cfg.Probe.RetryPackets > need {
-		need = cfg.Probe.RetryPackets
-	}
-	if burst < need {
-		burst = need
 	}
 	onResult := func(r probe.Result) {
 		logResult(log, r)
@@ -1500,11 +1495,25 @@ func newEngine(cfg *config.Config, plugins *pluginhost.Set, log *slog.Logger, on
 		ProberMemory:         cfg.Probe.ProberMemory,
 		ExchangeLANs:         exchangeLANPrefixes(cfg),
 		Indirect:             indirectOptions(cfg),
-		Limiter:              rate.NewLimiter(rate.Limit(cfg.Probe.RateLimitPPS), burst),
+		Limiter:              lim,
 		Logger:               log,
 		OnResult:             onResult,
 		OnRound:              onRound,
 	})
+}
+
+// packetLimiter is the global probe.rate_limit_pps budget. The probe engine
+// and the troubleshooting tools' indirect fallback trace packets share it.
+func packetLimiter(cfg *config.Config) *rate.Limiter {
+	burst := cfg.Probe.RateLimitPPS
+	need := cfg.Probe.Packets
+	if cfg.Probe.RetryPackets > need {
+		need = cfg.Probe.RetryPackets
+	}
+	if burst < need {
+		burst = need
+	}
+	return rate.NewLimiter(rate.Limit(cfg.Probe.RateLimitPPS), burst)
 }
 
 // indirectTracer walks TTL from a provider's source with the built-in Linux

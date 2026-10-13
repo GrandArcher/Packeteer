@@ -17,6 +17,7 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 
 ### Fixed
 
+- Troubleshooting indirect traces wait on `probe.rate_limit_pps` per packet, and Probe and optimize refuses setup errors before it spends a rate-limit token (#272, #274).
 - Live apply for inbound and mitigation (#233): `inbound.mode`/`mitigation.mode`, `hold_time`, `improvement_ttl` and the allowlist apply on reload; a shrunk allowlist withdraws a steer on the wire.
 - Load-test RSS plateau and leak check (#112): trimmed per-prefix heap, `GOGC=50` when unset, and a new `rss_slope_mb` budget fails the load job if RSS is still climbing at the end. No budget raised.
 

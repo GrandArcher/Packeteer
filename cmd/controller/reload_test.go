@@ -560,7 +560,7 @@ http: {listen: ""}
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = plugins.Stop(context.Background()) })
-	engine, err := newEngine(cfg, plugins, log, nil, nil)
+	engine, err := newEngine(cfg, plugins, log, nil, nil, packetLimiter(cfg))
 	if err != nil {
 		t.Fatal(err)
 	}

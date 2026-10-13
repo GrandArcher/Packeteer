@@ -224,7 +224,15 @@ upgrade:
 	execFn = func(path string, argv, env []string) error {
 		lab.mu.Lock()
 		defer lab.mu.Unlock()
-		lab.calls = append(lab.calls, execCall{path: path, argv: argv, env: env, edge: edge.routes()})
+		// The edge reads the withdraw and the session close on its own
+		// goroutines, so a snapshot taken the instant the daemon returns can
+		// still show the route. A route that never leaves stays in the record.
+		seen := edge.routes()
+		for deadline := time.Now().Add(3 * time.Second); len(seen) != 0 && time.Now().Before(deadline); {
+			time.Sleep(20 * time.Millisecond)
+			seen = edge.routes()
+		}
+		lab.calls = append(lab.calls, execCall{path: path, argv: argv, env: env, edge: seen})
 		return nil
 	}
 	lab.self = filepath.Join(dir, "packeteer-installed")
