@@ -57,6 +57,75 @@ function getJSON(path) {
   });
 }
 
+// Link-outs (#211). The server builds every URL from the object's own
+// prefix or ASN (/api/linkouts) and drops internal ones when
+// linkouts.hide_internal is on; the page only places them. Spans made in
+// one pass share one request. Packeteer fetches none of these sites.
+var LINKOUT_BATCH = 200;
+var linkoutCache = {};
+var linkoutWaiting = {};
+var linkoutTimer = null;
+
+function linkoutSpan(kind, value) {
+  var span = el("span", "linkouts");
+  var key = kind + "|" + value;
+  if (linkoutCache[key]) {
+    fillLinkouts(span, linkoutCache[key]);
+    return span;
+  }
+  (linkoutWaiting[key] = linkoutWaiting[key] || []).push(span);
+  if (!linkoutTimer) linkoutTimer = setTimeout(flushLinkouts, 0);
+  return span;
+}
+
+function fillLinkouts(span, links) {
+  var shown = links.filter(function (l) { return /^https:/.test(l.url); });
+  if (!shown.length) return;
+  span.appendChild(el("span", "k", "Open in"));
+  shown.forEach(function (l) {
+    var a = el("a", "", l.name);
+    a.href = l.url;
+    a.target = "_blank";
+    a.rel = "noopener noreferrer";
+    span.appendChild(a);
+  });
+}
+
+function flushLinkouts() {
+  var waiting = linkoutWaiting;
+  linkoutWaiting = {};
+  linkoutTimer = null;
+  var keys = Object.keys(waiting);
+  if (Object.keys(linkoutCache).length > 2000) linkoutCache = {};
+  for (var i = 0; i < keys.length; i += LINKOUT_BATCH) {
+    var chunk = keys.slice(i, i + LINKOUT_BATCH);
+    var q = new URLSearchParams();
+    chunk.forEach(function (key) {
+      var at = key.indexOf("|");
+      q.append(key.slice(0, at), key.slice(at + 1));
+    });
+    getJSON("/api/linkouts?" + q.toString()).then(function (data) {
+      chunk.forEach(function (key) {
+        var at = key.indexOf("|");
+        var links = ((data[key.slice(0, at)] || {})[key.slice(at + 1)]) || [];
+        linkoutCache[key] = links;
+        waiting[key].forEach(function (span) { fillLinkouts(span, links); });
+      });
+    }, function () {});
+  }
+}
+
+// originASN is the last AS on the first learned path that has one, the
+// same origin the ASN map groups by.
+function originASN(row) {
+  var paths = (row && row.paths) || [];
+  for (var i = 0; i < paths.length; i++) {
+    var p = paths[i].as_path || [];
+    if (p.length) return p[p.length - 1];
+  }
+  return 0;
+}
+
 function renderProviders(data) {
   var root = document.getElementById("providers");
   if (!root) return;
@@ -70,7 +139,7 @@ function renderProviders(data) {
   var head = el("tr");
   var health = {};
   ((lastOverview && lastOverview.providers) || []).forEach(function (h) { health[h.name] = h; });
-  ["Provider", "Source", "Next hop", "Health", "Probes", "Since", "Detail"].forEach(function (h) {
+  ["Provider", "Source", "Next hop", "Open in", "Health", "Probes", "Since", "Detail"].forEach(function (h) {
     head.appendChild(el("th", "", h));
   });
   var thead = el("thead");
@@ -87,6 +156,14 @@ function renderProviders(data) {
     tr.appendChild(name);
     tr.appendChild(el("td", "mono", p.source || "—"));
     tr.appendChild(el("td", "mono", p.next_hop || "—"));
+    var peer = el("td");
+    if (p.peer_asn) {
+      peer.appendChild(el("span", "k", p.exchange + " AS" + p.peer_asn));
+      peer.appendChild(linkoutSpan("asn", p.peer_asn));
+    } else {
+      peer.textContent = "—";
+    }
+    tr.appendChild(peer);
     var h = health[p.name];
     var cell = el("td");
     if (p.up && h && !h.ok && !h.failed) cell.appendChild(el("span", "badge muted", "no data yet"));
@@ -296,6 +373,7 @@ function renderASNMap(data) {
       title.textContent = "No origin AS";
     }
     head.appendChild(title);
+    if (node.asn) head.appendChild(linkoutSpan("asn", node.asn));
     card.appendChild(head);
     var t = table(["Provider", "Site", "Prefixes", "Table"]);
     (node.sites || []).forEach(function (site) {

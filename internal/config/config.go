@@ -23,6 +23,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/GrandArcher/Packeteer/internal/exchange"
+	"github.com/GrandArcher/Packeteer/internal/linkout"
 	"github.com/GrandArcher/Packeteer/internal/netpfx"
 )
 
@@ -194,6 +195,9 @@ type Config struct {
 	// the Settings page (#196). Nil or disabled: the page only shows the
 	// running version.
 	Upgrade *Upgrade `yaml:"upgrade"`
+	// Linkouts picks the "open in" links on the prefix, ASN, and provider
+	// pages (#211). Display only; Packeteer requests none of those sites.
+	Linkouts linkout.Config `yaml:"linkouts"`
 }
 
 // GlobalCommit is one commit shared by several providers, usually links
@@ -1199,6 +1203,7 @@ func (c *Config) Validate() error {
 	c.validateLeakWatch(add)
 	c.validateSubscriptions(add)
 	c.validateUpgrade(add)
+	c.Linkouts.Validate(add)
 
 	return errors.Join(errs...)
 }

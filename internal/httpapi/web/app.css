@@ -352,3 +352,6 @@ a.button { display: inline-block; padding: 8px 14px; border: 1px solid var(--hea
 .prefix-row .small { margin-left: 0; }
 .prefix-detail > td { padding: 0 10px; }
 .pager { margin-top: 12px; }
+
+.linkouts { display: inline-flex; flex-wrap: wrap; gap: 4px 10px; align-items: baseline; }
+.linkout-row { display: flex; flex-wrap: wrap; gap: 4px 10px; margin: 4px 0; align-items: baseline; }

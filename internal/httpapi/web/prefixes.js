@@ -69,6 +69,16 @@ function prefixMarkASN() {
   document.getElementById("prefix-asn-error").hidden = !bad;
 }
 
+// prefixLinkASN shows the link-outs for the origin AS in the filter.
+function prefixLinkASN() {
+  var root = document.getElementById("prefix-asn-links");
+  clear(root);
+  if (!prefixView.asn || !prefixASNValid(prefixView.asn)) return;
+  var asn = String(parseInt(prefixView.asn.replace(/^AS/i, ""), 10));
+  root.appendChild(el("span", "k", "AS" + asn));
+  root.appendChild(linkoutSpan("asn", asn));
+}
+
 function prefixApply(resetPage) {
   var v = prefixView;
   v.prefix = document.getElementById("prefix-filter").value.trim();
@@ -79,6 +89,7 @@ function prefixApply(resetPage) {
   v.size = parseInt(document.getElementById("prefix-size").value, 10);
   if (resetPage) v.page = 1;
   prefixMarkASN();
+  prefixLinkASN();
   prefixSyncURL();
   refresh();
 }
@@ -115,6 +126,9 @@ function prefixOpen(tr, row, open) {
     var detail = el("tr", "prefix-detail");
     var td = el("td");
     td.colSpan = 8;
+    var links = el("p", "linkout-row");
+    links.appendChild(linkoutSpan("prefix", row.prefix));
+    td.appendChild(links);
     td.appendChild(prefixCard(row));
     detail.appendChild(td);
     tr.parentNode.insertBefore(detail, tr.nextSibling);
@@ -208,6 +222,7 @@ function initPrefixList() {
   document.getElementById("prefix-filter").value = v.prefix;
   document.getElementById("prefix-asn").value = v.asn;
   prefixMarkASN();
+  prefixLinkASN();
   document.getElementById("prefix-changes").checked = v.differs;
   document.getElementById("prefix-sort").value = v.sort;
   document.getElementById("prefix-size").value = String(v.size);
