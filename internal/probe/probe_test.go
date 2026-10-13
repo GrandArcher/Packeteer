@@ -1717,3 +1717,33 @@ func TestShutdownMidRoundStoresNothing(t *testing.T) {
 		}
 	}
 }
+
+func TestSourceStatusSinceMovesOnlyWhenFailureFlips(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0)
+	o := opts()
+	o.Now = func() time.Time { return now }
+	good := &fakeSource{targets: []plugin.Target{{Prefix: pfx1}}}
+	e, err := New([]Provider{provA}, []NamedProber{{"p", &fakeProber{fn: ok(1)}}}, []NamedSource{{Name: "static", Source: good}}, o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := e.SourceStatus("static"); ok {
+		t.Fatal("a source that has not been called has a status")
+	}
+	e.RunOnce(context.Background())
+	start := now
+	st, ok := e.SourceStatus("static")
+	if !ok || st.Err != "" || st.Targets != 1 || !st.Since.Equal(start) {
+		t.Fatalf("working source = %+v ok=%v", st, ok)
+	}
+	now = now.Add(time.Minute)
+	good.targets, good.err = nil, errors.New("feed unreachable")
+	e.RunOnce(context.Background())
+	failedAt := now
+	now = now.Add(time.Minute)
+	e.RunOnce(context.Background())
+	st, _ = e.SourceStatus("static")
+	if st.Err != "feed unreachable" || st.Targets != 0 || !st.Since.Equal(failedAt) {
+		t.Fatalf("failing source = %+v, want since %v", st, failedAt)
+	}
+}

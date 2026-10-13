@@ -428,3 +428,26 @@ func TestRecorderAnomalies(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestRecorderReportsEachStoreWrite(t *testing.T) {
+	clock := t0
+	store := &memStore{}
+	var results []error
+	r := New(Options{Store: store, Mode: "observe", FlushEvery: time.Hour, Now: func() time.Time { return clock },
+		OnWrite: func(err error) { results = append(results, err) }})
+	if err := r.Flush(context.Background()); err != nil || len(results) != 0 {
+		t.Fatalf("an empty flush wrote or reported: err=%v results=%v", err, results)
+	}
+	r.Probe(result(pfxA, "lab-a", 0, 5*time.Millisecond, clock))
+	store.fail = errors.New("disk is read-only")
+	if err := r.Flush(context.Background()); err == nil {
+		t.Fatal("flush with a failing store returned nil")
+	}
+	store.fail = nil
+	if err := r.Flush(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 2 || results[0] == nil || results[0].Error() != "disk is read-only" || results[1] != nil {
+		t.Fatalf("OnWrite results = %v, want the failure then success", results)
+	}
+}

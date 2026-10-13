@@ -212,3 +212,24 @@ func TestRecorderSeesEveryEvent(t *testing.T) {
 		t.Fatalf("the recorder missed an event the filter dropped: %+v", rec.got)
 	}
 }
+
+func TestResultReportsDeliveriesNotFilteredEvents(t *testing.T) {
+	crit, _ := plugin.NewEventGate(plugin.EventFilter{MinSeverity: plugin.SeverityCritical})
+	down := &fake{err: errors.New("connection refused")}
+	quiet := &fake{gate: crit}
+	var mu sync.Mutex
+	got := map[string][]error{}
+	d := New([]Target{{Name: "hook", Notifier: down}, {Name: "pager", Notifier: gated{quiet}}}, Options{
+		Result: func(name string, err error) { mu.Lock(); got[name] = append(got[name], err); mu.Unlock() },
+	})
+	d.Emit(plugin.NewEvent(plugin.EventImprovementAdded, time.Now(), "info", nil))
+	closeNow(t, d)
+	mu.Lock()
+	defer mu.Unlock()
+	if len(got["hook"]) != 1 || got["hook"][0] == nil || got["hook"][0].Error() != "connection refused" {
+		t.Errorf("hook results = %v, want the delivery error", got["hook"])
+	}
+	if len(got["pager"]) != 0 {
+		t.Errorf("a filtered event was reported as a delivery: %v", got["pager"])
+	}
+}

@@ -59,6 +59,8 @@ type Overview struct {
 	BGP       OverviewBGP      `json:"bgp"`
 	Features  []Feature        `json:"features"`
 	Setup     []Hint           `json:"setup"`
+	// System counts the System page's components by state (#184).
+	System SystemSummary `json:"system"`
 }
 
 // OverviewCounts are the headline numbers.
@@ -98,7 +100,9 @@ func (s *Server) overview() Overview {
 		{"federation", s.federation != nil && s.federation().Enabled},
 		{"ha", s.ha != nil},
 	}
-	return BuildOverview(snap, *s.setup.Load(), features)
+	out := BuildOverview(snap, *s.setup.Load(), features)
+	out.System = s.system(snap).Summary
+	return out
 }
 
 // BuildOverview is pure: it reads a snapshot, the setup facts, and the

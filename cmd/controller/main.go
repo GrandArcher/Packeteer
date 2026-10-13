@@ -47,6 +47,7 @@ import (
 	"github.com/GrandArcher/Packeteer/internal/probe"
 	"github.com/GrandArcher/Packeteer/internal/rib"
 	"github.com/GrandArcher/Packeteer/internal/subscribe"
+	"github.com/GrandArcher/Packeteer/internal/syshealth"
 	"github.com/GrandArcher/Packeteer/internal/troubleshoot"
 	"github.com/GrandArcher/Packeteer/internal/upgrade"
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
@@ -372,7 +373,8 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 	// The recorder is built before the RIB view exists; describe reads it
 	// through this variable once it is set.
 	var view *rib.View
-	rec := newRecorder(cfg, plugins, log, func() *rib.View { return view })
+	health := syshealth.New(nil)
+	rec := newRecorder(cfg, plugins, log, func() *rib.View { return view }, health)
 	var reports httpapi.ReportSource
 	if rec != nil {
 		reports = rec
@@ -421,8 +423,9 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 		}
 	}
 	// Built before the HTTP server: the audit log goes to the notifiers.
-	evlog := newEventLog(plugins, log)
-	dispatch := newDispatcher(plugins, notify.Options{Logger: log, Recorder: evlog})
+	evlog := newEventLog(plugins, log, health)
+	dispatch := newDispatcher(plugins, notify.Options{Logger: log, Recorder: evlog,
+		Result: func(name string, err error) { health.Record(notifierKey(name), err) }})
 	defer func() {
 		closeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
@@ -492,6 +495,7 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 			log.Warn("http.config_editor is on but neither auth nor basic auth is: the editor stays off")
 		}
 	}
+	var sysEngine atomic.Pointer[probe.Engine]
 	var httpSrv *httpapi.Server
 	if addr := cfg.HTTPListen(); addr != "" {
 		var err error
@@ -502,6 +506,7 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 			Federation: fed.status, HA: haStatus,
 			ConfigEditor: editorAPI, Dashboards: dashboardStore(plugins), Subscriptions: subsAPI,
 			Setup: setupInfo(cfg, plugins), Upgrade: upgradeAPI, Linkouts: linkout.New(cfg.Linkouts),
+			System: systemFacts(plugins, &sysEngine, health),
 		})
 		if err != nil {
 			log.Error("refusing to start", "err", err)
@@ -608,8 +613,9 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 		return 1
 	}
 	tools.SetQueue(engine)
+	sysEngine.Store(engine)
 	watch := newEventWatch(dispatch, cfg.Mode)
-	if err := wireRIBSources(plugins, view); err != nil {
+	if err := wireRIBSources(plugins, view, health); err != nil {
 		log.Error("refusing to start", "err", err)
 		return 1
 	}
@@ -2236,7 +2242,7 @@ func ownCommunity(s string) (uint32, string, error) {
 
 // wireRIBSources points every RIB source (BMP) at the view. It runs before
 // the plugins start, so no event is lost.
-func wireRIBSources(plugins *pluginhost.Set, view *rib.View) error {
+func wireRIBSources(plugins *pluginhost.Set, view *rib.View, health *syshealth.Tracker) error {
 	if len(plugins.RIBSources) == 0 {
 		return nil
 	}
@@ -2244,10 +2250,31 @@ func wireRIBSources(plugins *pluginhost.Set, view *rib.View) error {
 		return errors.New("rib_sources require bgp.neighbors")
 	}
 	for _, s := range plugins.RIBSources {
-		s.Plugin.SetRIBSink(view.ApplyRIB)
+		s.Plugin.SetRIBSink(ribSink(view, health, s.Name))
 	}
 	return nil
 }
+
+// ribSink passes a source's events to the view and notes which routers
+// have a monitoring session, for the System page. Only the events that
+// change a router's state are noted, not the path updates.
+func ribSink(view *rib.View, health *syshealth.Tracker, source string) func(plugin.RIBEvent) {
+	return func(ev plugin.RIBEvent) {
+		switch ev.Kind {
+		case plugin.RIBRouterDown:
+			health.Record(ribRouterKey(source, ev.Router), errors.New("monitoring session closed"))
+		case plugin.RIBPeerUp:
+			health.Record(ribRouterKey(source, ev.Router), nil)
+		}
+		view.ApplyRIB(ev)
+	}
+}
+
+func ribRouterKey(source string, router netip.Addr) string {
+	return ribRouterPrefix(source) + router.String()
+}
+
+func ribRouterPrefix(source string) string { return "rib/" + source + "/" }
 
 func logRIB(ctx context.Context, v *rib.View, log *slog.Logger) {
 	t := time.NewTicker(time.Minute)
@@ -2724,7 +2751,7 @@ func logChanges(log *slog.Logger, mode string, changes []policy.Change) {
 // newRecorder returns nil when no storage plugin is configured. It reads
 // the RIB view for origin ASNs and asks policy plugins that have a GeoIP
 // database for countries. History never announces or changes a decision.
-func newRecorder(cfg *config.Config, plugins *pluginhost.Set, log *slog.Logger, view func() *rib.View) *history.Recorder {
+func newRecorder(cfg *config.Config, plugins *pluginhost.Set, log *slog.Logger, view func() *rib.View, health *syshealth.Tracker) *history.Recorder {
 	if plugins == nil || plugins.Storage == nil {
 		return nil
 	}
@@ -2751,6 +2778,7 @@ func newRecorder(cfg *config.Config, plugins *pluginhost.Set, log *slog.Logger, 
 		Logger:   log.With("component", "history"),
 		Describe: describe,
 		Volumes:  func(ctx context.Context) map[netip.Prefix]float64 { return collectVolumes(ctx, plugins) },
+		OnWrite:  func(err error) { health.Record(storageKey, err) },
 	})
 }
 

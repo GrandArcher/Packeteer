@@ -503,6 +503,13 @@ function renderTiles(o) {
   var b = o.bgp || {};
   root.appendChild(tile("BGP sessions", b.configured ? b.established + " of " + b.peers : "off",
     b.configured ? (c.in_rib + " probed prefixes in RIB") : "no edge router", b.configured && !b.established ? "bad" : ""));
+  var sys = o.system || {};
+  var sysTile = tile("System", sys.down ? sys.down + " down" : (sys.degraded ? sys.degraded + " degraded" : "all ok"),
+    (sys.total || 0) + " components", sys.down ? "bad" : (sys.degraded ? "warn" : ""));
+  var sysLink = el("a", "", "System page");
+  sysLink.href = "/system.html";
+  sysTile.appendChild(sysLink);
+  root.appendChild(sysTile);
 }
 
 function renderSetup(o) {

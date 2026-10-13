@@ -30,6 +30,7 @@ const (
 type Log struct {
 	store   plugin.EventStore
 	log     *slog.Logger
+	onWrite func(error)
 	started time.Time
 
 	mu     sync.Mutex
@@ -40,12 +41,13 @@ type Log struct {
 }
 
 // New returns a log. store may be nil. With a store it starts the writer;
-// Close stops it.
-func New(store plugin.EventStore, log *slog.Logger) *Log {
+// Close stops it. onWrite, when set, is told the result of each store
+// write.
+func New(store plugin.EventStore, log *slog.Logger, onWrite func(error)) *Log {
 	if log == nil {
 		log = slog.Default()
 	}
-	l := &Log{store: store, log: log, started: time.Now()}
+	l := &Log{store: store, log: log, onWrite: onWrite, started: time.Now()}
 	if store != nil {
 		l.q = make(chan plugin.Event, QueueCap)
 		l.done = make(chan struct{})
@@ -92,7 +94,11 @@ func (l *Log) write() {
 	defer close(l.done)
 	for e := range l.q {
 		ctx, cancel := context.WithTimeout(context.Background(), writeTimeout)
-		if err := l.store.AppendEvent(ctx, e); err != nil {
+		err := l.store.AppendEvent(ctx, e)
+		if l.onWrite != nil {
+			l.onWrite(err)
+		}
+		if err != nil {
 			l.log.Error("event store write failed", "kind", e.Kind, "err", err)
 		}
 		cancel()

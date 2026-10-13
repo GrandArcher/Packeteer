@@ -14,7 +14,7 @@ import (
 
 func eventsEnv(t *testing.T) (*uiEnv, *eventlog.Log) {
 	t.Helper()
-	log := eventlog.New(nil, nil)
+	log := eventlog.New(nil, nil, nil)
 	t0 := time.Now().Add(-time.Hour).UTC()
 	log.Record(plugin.Event{Time: t0, Kind: plugin.EventControllerStarted, Severity: plugin.SeverityInfo, Message: "packeteer started"})
 	log.Record(plugin.Event{Time: t0.Add(time.Minute), Kind: plugin.EventCommitExceeded, Severity: plugin.SeverityWarning, Message: "over commit",

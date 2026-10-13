@@ -56,7 +56,7 @@ func messages(t *testing.T, l *Log, q plugin.EventQuery) []string {
 }
 
 func TestMemoryLogIsCappedAndNewestFirst(t *testing.T) {
-	l := New(nil, nil)
+	l := New(nil, nil, nil)
 	if l.Stored() {
 		t.Fatal("a log without a store says it is stored")
 	}
@@ -73,7 +73,7 @@ func TestMemoryLogIsCappedAndNewestFirst(t *testing.T) {
 }
 
 func TestMemoryLogFiltersAndSkipsAudit(t *testing.T) {
-	l := New(nil, nil)
+	l := New(nil, nil, nil)
 	l.Record(ev(plugin.EventControllerStarted, plugin.SeverityInfo, 0))
 	l.Record(ev(plugin.EventAudit, plugin.SeverityInfo, 1))
 	l.Record(ev(plugin.EventCommitExceeded, plugin.SeverityWarning, 2))
@@ -124,7 +124,7 @@ func (f *fakeStore) Events(_ context.Context, q plugin.EventQuery) ([]plugin.Eve
 
 func TestStoredLogWritesAndFlushesOnClose(t *testing.T) {
 	st := &fakeStore{}
-	l := New(st, nil)
+	l := New(st, nil, nil)
 	if !l.Stored() {
 		t.Fatal("a log with a store says it is not stored")
 	}
@@ -151,7 +151,7 @@ func TestStoredLogWritesAndFlushesOnClose(t *testing.T) {
 func TestStoredLogNeverBlocksTheCaller(t *testing.T) {
 	st := &fakeStore{gate: make(chan struct{})}
 	lg, out := capture()
-	l := New(st, lg)
+	l := New(st, lg, nil)
 	done := make(chan struct{})
 	go func() {
 		for i := 0; i < QueueCap+50; i++ {
@@ -178,12 +178,33 @@ func TestStoredLogNeverBlocksTheCaller(t *testing.T) {
 func TestStoredLogLogsFailedWrites(t *testing.T) {
 	st := &fakeStore{failing: true}
 	lg, out := capture()
-	l := New(st, lg)
+	l := New(st, lg, nil)
 	l.Record(ev(plugin.EventProviderDown, plugin.SeverityCritical, 0))
 	if err := l.Close(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(out.String(), "event store write failed") || !strings.Contains(out.String(), "disk full") {
 		t.Errorf("a failed write was not logged: %q", out.String())
+	}
+}
+
+func TestOnWriteSeesStoreFailureAndRecovery(t *testing.T) {
+	st := &fakeStore{failing: true}
+	results := make(chan error, 4)
+	l := New(st, nil, func(err error) { results <- err })
+	l.Record(ev(plugin.EventControllerStarted, plugin.SeverityInfo, 0))
+	first := <-results
+	if first == nil || first.Error() != "disk full" {
+		t.Fatalf("first write result = %v, want disk full", first)
+	}
+	st.mu.Lock()
+	st.failing = false
+	st.mu.Unlock()
+	l.Record(ev(plugin.EventProviderDown, plugin.SeverityCritical, 1))
+	if second := <-results; second != nil {
+		t.Fatalf("second write result = %v, want success", second)
+	}
+	if err := l.Close(context.Background()); err != nil {
+		t.Fatal(err)
 	}
 }
