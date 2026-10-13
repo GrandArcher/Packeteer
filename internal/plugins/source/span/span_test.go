@@ -489,3 +489,10 @@ func TestPcapReaderFormats(t *testing.T) {
 		t.Fatal("802.11 accepted")
 	}
 }
+
+// size is the number of tracked connections.
+func (t *tracker) size() int {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return len(t.flows)
+}

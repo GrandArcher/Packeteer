@@ -397,3 +397,19 @@ func newRestoreStore(t *testing.T, path string) *sqlite.Store {
 	}
 	return s
 }
+
+// addSample records one rate the way a successful poll does, including
+// the store. Tests use it so they do not open a socket.
+func (c *Collector) addSample(provider string, at time.Time, inBps, outBps float64) {
+	at = at.UTC()
+	c.mu.Lock()
+	st := c.states[provider]
+	st.win.add(at, inBps, outBps)
+	st.lastIn = inBps / 1e6
+	st.lastOut = outBps / 1e6
+	st.updated = at
+	st.err = ""
+	rec := c.sampleRecord(st, at, inBps, outBps)
+	c.mu.Unlock()
+	c.persist(rec)
+}

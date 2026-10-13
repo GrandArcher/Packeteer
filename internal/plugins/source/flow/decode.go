@@ -99,19 +99,19 @@ type decoder struct {
 // so a pathological exporter cannot pin it.
 var obsPool = sync.Pool{New: func() any {
 	s := make([]observation, 0, 64)
-	return s
+	return &s
 }}
 
 func getObs() []observation {
-	s := obsPool.Get().([]observation)
-	return s[:0]
+	return (*obsPool.Get().(*[]observation))[:0]
 }
 
 func putObs(s []observation) {
 	if cap(s) == 0 || cap(s) > 4096 {
 		return
 	}
-	obsPool.Put(s[:0])
+	s = s[:0]
+	obsPool.Put(&s)
 }
 
 func (d *decoder) decode(exporter netip.Addr, payload []byte) ([]observation, error) {

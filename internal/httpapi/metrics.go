@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -87,7 +88,7 @@ func Metrics(s Snapshot) []byte {
 	actions := append([]string(nil), decisionActions...)
 	for _, d := range s.Decisions {
 		counts[d.Action]++
-		if !contains(actions, d.Action) && d.Action != "" {
+		if !slices.Contains(actions, d.Action) && d.Action != "" {
 			actions = append(actions, d.Action)
 		}
 	}
@@ -176,7 +177,7 @@ func Metrics(s Snapshot) []byte {
 				cur = "UNKNOWN"
 			}
 			states := append([]string(nil), bgpFSM...)
-			if !contains(states, cur) {
+			if !slices.Contains(states, cur) {
 				states = append(states, cur)
 			}
 			for _, st := range states {
@@ -339,13 +340,4 @@ func clamp01(v float64) float64 {
 		return 1
 	}
 	return v
-}
-
-func contains(ss []string, s string) bool {
-	for _, v := range ss {
-		if v == s {
-			return true
-		}
-	}
-	return false
 }

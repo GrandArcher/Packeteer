@@ -93,18 +93,3 @@ func TestConfigDecode(t *testing.T) {
 		})
 	}
 }
-
-func TestConfigRaw(t *testing.T) {
-	c, _ := ConfigFromYAML("a: 1\nb: [x, y]")
-	v, err := c.Raw()
-	if err != nil {
-		t.Fatal(err)
-	}
-	m, ok := v.(map[string]any)
-	if !ok || m["a"] != 1 {
-		t.Fatalf("Raw = %#v", v)
-	}
-	if v, _ := (Config{}).Raw(); v != nil {
-		t.Errorf("zero Raw = %v", v)
-	}
-}

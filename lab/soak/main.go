@@ -176,13 +176,13 @@ func run(ctx context.Context, o runOpts) (Result, error) {
 	defer rt.stop()
 
 	if !waitFor(ctx, 2*time.Minute, func() bool { _, _, err := papi.metrics(ctx); return err == nil }) {
-		return r, errors.New("Packeteer ops API did not come up")
+		return r, errors.New("ops API did not come up")
 	}
 	if _, err := readP(); err != nil {
 		return r, fmt.Errorf("read Packeteer process %d: %w", o.pid, err)
 	}
 	if ov, _, err := papi.overview(ctx); err != nil || ov.Mode != "observe" {
-		return r, fmt.Errorf("Packeteer must run in observe mode (got %q, %v)", ov.Mode, err)
+		return r, fmt.Errorf("controller must run in observe mode (got %q, %v)", ov.Mode, err)
 	}
 
 	// Learn: Packeteer connects and the session opens with a full-table
@@ -311,7 +311,7 @@ loop:
 	log.Printf("active prefixes per hour %.0f; passive tracked %d", r.ActivePerHour, r.PassiveTracked)
 	cpu1, err := readP()
 	if err != nil {
-		return r, fmt.Errorf("Packeteer process gone after soak: %w", err)
+		return r, fmt.Errorf("controller process gone after soak: %w", err)
 	}
 	r.CPUAvgCores = (cpu1.CPU - cpu0.CPU) / r.DurationSeconds
 	r.RSSPeakMB = float64(cpu1.HWM) / (1 << 20)

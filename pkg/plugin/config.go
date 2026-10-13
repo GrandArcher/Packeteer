@@ -49,16 +49,3 @@ func (c Config) Decode(v any) error {
 	}
 	return nil
 }
-
-// Raw returns the config as a generic value (maps, slices, scalars), e.g. to
-// forward it to an out-of-process plugin as JSON.
-func (c Config) Raw() (any, error) {
-	if c.IsZero() {
-		return nil, nil
-	}
-	var v any
-	if err := c.node.Decode(&v); err != nil {
-		return nil, err
-	}
-	return v, nil
-}
