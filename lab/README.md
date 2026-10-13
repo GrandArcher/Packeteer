@@ -105,6 +105,23 @@ for r in frr bird2 bird3 gobgp; do
 done
 ```
 
+## Failure-mode matrix (#234)
+
+`lab/e2e-failure-matrix.sh SURFACE [FAILURE...]` runs one injection surface through six failures, each from a fresh Packeteer and the surface's baseline routes, and asserts on the simulated routers (never on Packeteer's own view). On every sample no prefix outside the surface's learned set and no more than its route cap may be on the router.
+
+| Failure | What is done | Routes afterwards |
+|---|---|---|
+| `sigkill` | `docker kill -s KILL` | gone within the router's hold timer; HA: the standby's route, never both |
+| `session-loss` | `neighbor shutdown` on the edge | gone while Packeteer runs; HA: the standby's route |
+| `stale-measurements` | outbound, more-specific, HA: the fixed prober's file is removed; inbound: the telemetry file; mitigation: the prober file | withdrawn; mitigation keeps its rules (probe results never keep or drop them, the TTL does) |
+| `source-gone` | outbound, more-specific, HA: the prefix leaves the static target source on a reload, then the probe file is removed; inbound: the probe file under a performance steer; mitigation: rules with a 30s TTL and no client | outbound, more-specific, HA: kept while measurements are fresh (an improvement keeps its prefix probed, #116), then withdrawn; inbound, mitigation: withdrawn |
+| `reload-observe` | SIGHUP with `mode: observe` | withdrawn and not re-announced |
+| `lowered-cap` | SIGHUP with a lower cap | outbound, more-specific, HA: `max_improvements: 0` withdraws; inbound (shared cap) and mitigation (`max_rules`): the reload is refused by name and the routes stay |
+
+Surfaces are the files in `lab/failure-matrix/`. A new surface adds its file, which must answer every failure with a `case_<failure>` function or a reasoned `na_<failure>`, and an entry in the `failure-matrix` job in `.github/workflows/ci.yml`; `go test ./lab/failure-matrix` fails until both exist. `lab/matrixcfg` moves a lab config's inline fixed-prober results into a file so the case can remove them.
+
+`MATRIX_BREAK=reload-observe` skips the config edit of that case, as a controller whose withdraw path is broken would: the SIGHUP changes nothing and the routes stay. The CI job runs that and requires the matrix to fail on the routes left on the router.
+
 ## Running demo
 
 The running demo is a separate checkout, not a compose file in this repo. It has two transit providers, one customer, and one IX peer. Telling those sessions apart (peer vs customer vs transit) and suggesting the role is still open (#103). A suggestion must not write itself into the running config.

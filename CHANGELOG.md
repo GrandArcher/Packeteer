@@ -4,6 +4,10 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 
 ## [Unreleased]
 
+### Added
+
+- Failure-mode e2e matrix across outbound, more-specific, inbound, mitigation, and HA: six failures per surface, one CI matrix job, a broken withdraw path fails it (#234).
+
 ### Changed
 
 - Manual probe takes a hostname, shows current vs best per provider and the covering prefix, falls back to indirect hops; Probe and optimize queues that prefix for 10 minutes (#126).

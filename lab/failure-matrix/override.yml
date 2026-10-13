@@ -1,0 +1,10 @@
+# Failure-mode matrix (#234): lab/e2e-failure-matrix.sh mounts a writable
+# copy of the surface's Packeteer config, plus a directory of probe files,
+# over the ones the surface's own compose file mounts. Compose merges
+# volumes by container path, so these replace those two mounts and leave
+# every other mount alone.
+services:
+  packeteer:
+    volumes:
+      - ${PACKETEER_LAB_CONFIG}:/etc/packeteer/config.yaml:ro
+      - ${PACKETEER_LAB_DIR}:/etc/packeteer/probes:ro

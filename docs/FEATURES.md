@@ -24,13 +24,13 @@ Milestones:
 | v0.2 | 25 |
 | v0.3 | 17 |
 | v0.4 | 13 |
-| v0.6 | 7 |
+| v0.6 | 8 |
 | won't do | 2 |
-| **total** | 88 |
+| **total** | 89 |
 
 | Status | Count |
 |---|---|
-| done | 73 |
+| done | 74 |
 | partial | 10 |
 | in progress | 0 |
 | planned | 3 |
@@ -228,6 +228,7 @@ Troubleshooting tools (#24) live on the ops HTTP server. The looking glass reads
 | Operator quick start, config reference, and changelog; CI-tested single-container quickstart, MikroTik/FRR/Junos/Cisco router guides, observe → suggest → inject walkthrough (lab), and troubleshooting | done | v0.1, v0.5 | - | #11, #50 | no |
 | Plugin system (in-process + exec + webhook) | done | v0.1 | all kinds | #13 | no |
 | Simulated-router e2e lab (announce, clean withdraw, SIGKILL session-loss within the BGP hold timer); MikroTik RouterOS CHR in QEMU on CI runners (free image, iBGP accept and filters, community + NO_EXPORT, no eBGP export, withdraw on SIGTERM, frozen process, and SIGKILL); scheduled router interop matrix (FRR, BIRD 2/3, GoBGP edges × iBGP, add-path, BMP where supported, plus CHR; [routers.md](routers.md#interop-matrix)) | done (lab-proven) | v0.1, v0.5 | - | #10, #45, #52, #53 | no (lab-proven) |
+| Failure-mode matrix: outbound steering, more-specific, inbound, mitigation (RTBH and FlowSpec), and HA takeover each run SIGKILL, BGP session loss, missing measurements, a source going away, a reload to observe, and a lowered cap against simulated FRR routers, asserted on the routers; one CI matrix job, a new surface adds its row, and a deliberately broken withdraw path fails it ([lab/README.md](../lab/README.md#failure-mode-matrix-234)) | done (lab-proven) | v0.6 | - | #234 | no (lab-proven) |
 | Upgrade from the UI: version check, one-click upgrade, and rollback in Settings ([ui.md](ui.md#upgrade-from-the-ui)). Opt-in (`upgrade.enabled` + `upgrade.public_key`); a check never upgrades; an upgrade needs confirmation, a verified Ed25519-signed `SHA256SUMS` and binary checksum, and a start check of the new binary against the mounted config; then the SIGTERM shutdown path withdraws every route before the new version starts in the configured mode and re-learns the RIB; the previous version stays for one-click rollback; HA: standby first; container and binary installs; every check, upgrade, and rollback is audited. Lab-proven against a simulated edge | done (lab-proven) | v0.6 | - | #196 | no (lab-proven) |
 | Software management / upgrades via package manager | won't do (Replaced by container images and tags, and the Settings upgrade above; there are no distro packages.) | - | - | - | — |
 
