@@ -12,7 +12,7 @@ Each is enforced in code and covered by tests. `mode`, the allowlist, and `max_i
 - **Withdrawn on failure.** Shutdown, SIGTERM, probe-source loss, stale data, and RIB session loss withdraw. Graceful restart is never enabled, so a crash drops the routes with the iBGP session.
 - **Default `observe`.** Nothing is announced until `mode: inject`.
 
-The one thing Packeteer does not control is your router's export policy. NO_EXPORT is honored by routers by default, but a policy that removes communities on import, or an eBGP export that ignores them, undoes it. [routers.md](routers.md) lists the two filters the edge needs: accept only the Packeteer community from Packeteer, and reject it toward every eBGP session.
+The one thing Packeteer does not control is your router's export policy. NO_EXPORT is honored by routers by default, but a policy that removes communities on import, or an eBGP export that ignores them, undoes it. [routers.md](routers.md) lists the two filters the edge needs: accept only the Packeteer community from Packeteer, and reject it toward every eBGP session ([per vendor](routers.md#export-filters-on-every-ebgp-session)).
 
 ## What `leak_watch` adds
 
