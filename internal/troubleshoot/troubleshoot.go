@@ -85,12 +85,6 @@ type HopFunc func(ctx context.Context, src, dst netip.Addr, ttl, port int, timeo
 // Limiter admits one request. *rate.Limiter's Allow satisfies it.
 type Limiter interface{ Allow() bool }
 
-// PacketLimiter waits for the budget of n packets. *rate.Limiter's WaitN
-// satisfies it.
-type PacketLimiter interface {
-	WaitN(ctx context.Context, n int) error
-}
-
 // Options configure Tools.
 type Options struct {
 	// Enabled turns on the active tools (probe, traceroute, whois). The
@@ -107,7 +101,7 @@ type Options struct {
 	Whois   plugin.Whois
 	Limiter Limiter
 	// PacketLimiter paces every indirect trace packet. Nil sends unpaced.
-	PacketLimiter PacketLimiter
+	PacketLimiter probe.Limiter
 	Now           func() time.Time
 	// Resolver resolves hostnames. Nil uses net.DefaultResolver.
 	Resolver Resolver
@@ -509,7 +503,7 @@ func (t *Tools) Optimize(ctx context.Context, input string) (OptimizeAnswer, err
 	if err != nil {
 		return OptimizeAnswer{}, err
 	}
-	// Setup checks come before admit so a refused request spends no token.
+	// Refusals that need no token come first.
 	if !t.opt.Enabled {
 		return OptimizeAnswer{}, ErrDisabled
 	}

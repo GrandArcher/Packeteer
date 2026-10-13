@@ -6,6 +6,7 @@ import (
 	"net/netip"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -227,21 +228,21 @@ func TestProbeIndirectFallbackForSilentTarget(t *testing.T) {
 }
 
 // pacer counts the packets the tools ask to pace.
-type pacer struct{ n int }
+type pacer struct{ n atomic.Int64 }
 
 func (p *pacer) WaitN(_ context.Context, n int) error {
-	p.n += n
+	p.n.Add(int64(n))
 	return nil
 }
 
 // pacedTracer waits once per trace packet, as the traceroute source does.
 type pacedTracer struct {
 	packets int
-	calls   int
+	calls   atomic.Int64
 }
 
 func (f *pacedTracer) Trace(ctx context.Context, _, _ netip.Addr, wait func(context.Context) error) (netip.Addr, bool, error) {
-	f.calls++
+	f.calls.Add(1)
 	for range f.packets {
 		if err := wait(ctx); err != nil {
 			return netip.Addr{}, false, err
@@ -259,8 +260,8 @@ func TestProbeIndirectTracePacketsWaitOnThePacketBudget(t *testing.T) {
 	if _, err := tl.Probe(context.Background(), target.String()); err != nil {
 		t.Fatal(err)
 	}
-	if tr.calls != len(provs) || pace.n != len(provs)*tr.packets {
-		t.Fatalf("traces %d, paced packets %d: want one trace per silent provider and one wait per packet", tr.calls, pace.n)
+	if tr.calls.Load() != int64(len(provs)) || pace.n.Load() != int64(len(provs)*tr.packets) {
+		t.Fatalf("traces %d, paced packets %d: want one trace per silent provider and one wait per packet", tr.calls.Load(), pace.n.Load())
 	}
 }
 
@@ -346,6 +347,12 @@ func TestOptimizeRefusalsSpendNoToken(t *testing.T) {
 	lim := &allow{n: 1}
 	tl, res := optimizeTools(q, lim)
 
+	disabled := New(Options{Providers: provs, Limiter: lim})
+	disabled.SetRIB(testRIB())
+	disabled.SetQueue(q)
+	if _, err := disabled.Optimize(context.Background(), "198.51.100.200"); !errors.Is(err, ErrDisabled) {
+		t.Fatalf("disabled: %v", err)
+	}
 	tl.SetQueue(nil)
 	if _, err := tl.Optimize(context.Background(), "198.51.100.200"); !errors.Is(err, ErrNoOptimize) {
 		t.Fatalf("no queue: %v", err)

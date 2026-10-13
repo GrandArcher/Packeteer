@@ -1431,7 +1431,7 @@ func newTools(cfg *config.Config, plugins *pluginhost.Set, lim *rate.Limiter) (*
 		Reverse:   reverseName,
 		Indirect:  indirectTracer(cfg),
 		Limiter:   rate.NewLimiter(rate.Every(time.Minute/time.Duration(rpm)), min(rpm, 3)),
-		// Shared with the probe engine: one packet budget for every sender.
+		// The indirect fallback trace packets share the engine's budget.
 		PacketLimiter: lim,
 	}
 	if plugins.Whois != nil {
@@ -1503,7 +1503,7 @@ func newEngine(cfg *config.Config, plugins *pluginhost.Set, log *slog.Logger, on
 }
 
 // packetLimiter is the global probe.rate_limit_pps budget. The probe engine
-// and the troubleshooting tools share it so one budget covers every packet.
+// and the troubleshooting tools' indirect fallback trace packets share it.
 func packetLimiter(cfg *config.Config) *rate.Limiter {
 	burst := cfg.Probe.RateLimitPPS
 	need := cfg.Probe.Packets
