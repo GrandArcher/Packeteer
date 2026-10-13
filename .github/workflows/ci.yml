@@ -188,6 +188,19 @@ jobs:
             --absent 'Cannot reach'
           bash lab/ui-smoke.sh "$base/prefixes.html" 'ASN map' 'It announces nothing.' \
             --absent 'Cannot reach'
+          # Link-outs (#211): the prefix and ASN pages link to public tools in a
+          # new tab, with the URL built from the object alone. NLNOG RING is off
+          # by default, and an RFC 1918 prefix or private-use AS gets no link.
+          bash lab/ui-smoke.sh "$base/prefix/2001:db8::%2F32" 'href="https://bgp.he.net/net/2001:db8::/32"' \
+            'href="https://stat.ripe.net/app/launchpad/2001:db8::/32"' 'href="https://bgp.tools/prefix/2001:db8::/32"' \
+            'href="https://irrexplorer.nlnog.net/prefix/2001:db8::/32"' 'href="https://lg.he.net/"' \
+            'target="_blank"' 'rel="noopener noreferrer"' --absent 'ring.nlnog.net' 'Cannot reach'
+          bash lab/ui-smoke.sh "$base/prefixes.html?asn=64496" 'href="https://bgp.he.net/AS64496"' \
+            'href="https://stat.ripe.net/app/launchpad/AS64496"' 'href="https://www.peeringdb.com/asn/64496"' \
+            'href="https://bgp.tools/as/64496"' 'href="https://radar.cloudflare.com/routing/as64496"' \
+            --absent 'ring.nlnog.net' 'Cannot reach'
+          bash lab/ui-smoke.sh "$base/prefix/10.1.0.0%2F16" 'id="prefix-links"' --absent 'bgp.he.net' 'Open in'
+          bash lab/ui-smoke.sh "$base/prefixes.html?asn=65000" 'id="prefix-asn-links"' --absent 'bgp.he.net' 'Open in'
           # Graphs (#129) with history on but nothing recorded: an empty state, no chart.
           bash lab/ui-smoke.sh "$base/graphs.html" 'No before/after data in this range' 'It announces nothing.' \
             'id="graph-bucket"' --absent 'class="ts-chart"' 'Cannot reach'

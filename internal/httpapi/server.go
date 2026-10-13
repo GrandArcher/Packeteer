@@ -31,6 +31,7 @@ import (
 	"github.com/GrandArcher/Packeteer/internal/exchange"
 	"github.com/GrandArcher/Packeteer/internal/federation"
 	"github.com/GrandArcher/Packeteer/internal/inbound"
+	"github.com/GrandArcher/Packeteer/internal/linkout"
 	"github.com/GrandArcher/Packeteer/internal/troubleshoot"
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
 )
@@ -91,6 +92,8 @@ type Options struct {
 	// Upgrade is the version check, upgrade, and rollback (#196). Nil when
 	// upgrade.enabled is off.
 	Upgrade UpgradeControl
+	// Linkouts builds the "open in" links (#211). Nil uses the defaults.
+	Linkouts *linkout.Set
 }
 
 // Server is an HTTP server. Handler serves the routes without listening,
@@ -117,6 +120,7 @@ type Server struct {
 	dashboards plugin.DashboardStore
 	subs       Subscriptions
 	upgrade    UpgradeControl
+	linkouts   *linkout.Set
 	setup      atomic.Pointer[Setup]
 	// suggest lists next hops the operator may accept as a draft provider
 	// row (#102). Nil means there is nothing to suggest. It must not write
@@ -164,6 +168,10 @@ func New(opt Options) (*Server, error) {
 		editor: opt.ConfigEditor, dashboards: opt.Dashboards, subs: opt.Subscriptions, upgrade: opt.Upgrade, log: opt.Logger}
 	setup := opt.Setup
 	s.setup.Store(&setup)
+	s.linkouts = opt.Linkouts
+	if s.linkouts == nil {
+		s.linkouts = linkout.New(linkout.Config{})
+	}
 	s.handler = s.routes()
 	return s, nil
 }

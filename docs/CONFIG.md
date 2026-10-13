@@ -64,6 +64,7 @@ The image entrypoint is the same binary. Flags go after the image name.
 | `anomaly` | none | no | Automatic traffic anomaly (DDoS) detection: a detector plugin baselines flow volumes per destination prefix and IP protocol from a `flow` source and reports anomalies; an explicit rule can turn one into a mitigation rule, rate-limited and capped. Needs `mitigation` for rules. Off unless set. See [`anomaly`](#anomaly). Lab-proven only. |
 | `upgrade` | off | no | Version check, one-click upgrade, and rollback in Settings (#196). Needs `public_key`. See [`upgrade`](#upgrade). Never upgrades without an admin's confirmation; does not announce. |
 | `leak_watch` | none | no | Watches for Packeteer's routes outside the AS and withdraws a leaked route (one prefix, never in bulk), holding it out until an operator clears it. Off unless `enabled: true`. See [`leak_watch`](#leak_watch) and [leak-watch.md](leak-watch.md). Lab-proven only. |
+| `linkouts` | defaults | no | Which "open in" links the prefix, ASN, and provider pages show, custom URL templates, and `hide_internal` (#211). Display only; Packeteer requests none of those sites. See [`linkouts`](#linkouts). |
 | `report_subscriptions` | none | no | Stored reports emailed as CSV on a daily, weekly, or monthly UTC schedule through an `smtp` notifier (#34). Needs `storage`. See [`report_subscriptions`](#report_subscriptions). Does not announce. |
 | `troubleshoot` | looking glass only | no | Read-only operator tools: looking glass, on-demand probe, traceroute, whois. Does not announce. See [`troubleshoot`](#troubleshoot). |
 
@@ -514,6 +515,23 @@ More-specific injection (#56, lab-proven only, not on a public edge). Design and
 | `max_routes` | `100` | Cap on routes on a router: improvements, their more-specifics, and inbound steer routes. 1–1000. A new improvement is announced whole (P and all its learned more-specifics) or not at all; a more-specific learned later is added only while there is room. Nothing on the wire is withdrawn to make room. `max_improvements` still caps improvements. |
 
 A more-specific is withdrawn with its improvement (flip-back, TTL, policy, P leaving the RIB), when the RIB is not ready, on shutdown, and when it really leaves the RIB: the neighbor advertised it for at least 5s while Packeteer's route was on the wire and then stopped. A shorter gap is the router hiding its own path because Packeteer's route won, and the route stays. A change needs a restart (SIGHUP refuses it). Rollback: remove the block or set `enabled: false` and restart; only improvements' own prefixes are announced again.
+
+### `linkouts`
+
+The "open in" links on the prefix, ASN, and exchange-peer views (#211). Display only: the controller makes no request to any listed site. Every key is checked at load, and unknown keys are errors. A change needs a restart. See [ui.md](ui.md#link-outs).
+
+| Key | Default | Meaning |
+|---|---|---|
+| `enabled` | `he`, `he_lg`, `ripestat`, `peeringdb`, `bgptools`, `cloudflare_radar`, `irr_explorer` | Built-in sites to show: those names plus `nlnog_ring` (off unless listed). A name twice or unknown is an error. `[]` shows no built-in site. |
+| `custom` | none | Up to 20 entries of `name` (1-40 printable characters, unique) and `url`. The URL must be `https` with a host, hold exactly one of `{prefix}` or `{asn}` (any other `{...}` is an error), carry no credentials or fragment, and keep the placeholder out of the host. `{prefix}` is the CIDR with `/` and `:` unescaped; `{asn}` is decimal digits. Custom links are always shown. |
+| `hide_internal` | `true` | No link for an RFC 1918, ULA, loopback, or link-local prefix or a private-use AS. `false` links them too. |
+
+```yaml
+linkouts:
+  enabled: [he, ripestat, bgptools, nlnog_ring]
+  custom:
+    - {name: internal LG, url: "https://lg.example.net/route?prefix={prefix}"}
+```
 
 ### `report_subscriptions`
 

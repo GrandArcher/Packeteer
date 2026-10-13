@@ -109,6 +109,9 @@ type Provider struct {
 	Group      string `json:"group,omitempty"`
 	Precedence int    `json:"precedence,omitempty"`
 	CCDisable  bool   `json:"cc_disable,omitempty"`
+	// Exchange and PeerASN are set on an Internet exchange peer (#27).
+	Exchange string `json:"exchange,omitempty"`
+	PeerASN  uint32 `json:"peer_asn,omitempty"`
 	// Domain is the provider's routing domain (#30), when configured.
 	Domain string    `json:"domain,omitempty"`
 	Up     bool      `json:"up"`
@@ -397,6 +400,7 @@ func assembleProviders(in Input) []Provider {
 		row := Provider{
 			Name: p.Name, Source: p.SourceIP, NextHop: p.NextHop, Exclude: p.Exclude,
 			Group: p.Group, Precedence: p.Precedence, CCDisable: p.CCDisable, Domain: p.Domain,
+			Exchange: p.Exchange, PeerASN: p.PeerASN,
 		}
 		if st, ok := status[p.Name]; ok {
 			row.Up, row.Reason, row.Since = st.Up, st.Reason, st.Since

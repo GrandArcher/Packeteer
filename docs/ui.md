@@ -8,6 +8,7 @@ The remaining UI conveniences (#34). All of them work in the stock image with a 
 | Troubleshooting results (#180) | `/troubleshooting.html`, `/api/troubleshoot/...` | viewer for the looking glass, operator for probe, traceroute, and whois | `troubleshoot.enabled` for the active tools |
 | Prefix list (#183) | `/prefixes.html`, `/api/prefixes` | viewer | none |
 | Prefix detail and history (#179) | `/prefix/<prefix>`, `/api/prefixes/history` | viewer | `storage: {type: sqlite}` for the timeline |
+| Link-outs (#211) | `/prefix/<prefix>`, `/prefixes.html`, `/providers.html`, `GET /api/linkouts` | viewer | `linkouts` (optional) |
 | Events and audit log (#173) | `/events.html`, `/api/events`, `/api/audit` | viewer for events, admin for the audit tab | `storage: {type: sqlite}` keeps events across a restart |
 | Users and API tokens (#175) | `/admin.html`, `/tokens.html`, `/api/users`, `/api/tokens` | admin for users, every signed-in user for tokens | `storage` + `auth.enabled` |
 | Dashboard overview and setup checklist (#49) | `/`, `/api/overview` | viewer | none |
@@ -114,6 +115,35 @@ Every improvement row opens `/prefix/<prefix>` (#179), for example `/prefix/192.
 `GET /api/prefixes/history?prefix=<prefix>&days=7` (viewer; `days`, or `from` and `to`, like the reports) returns `enabled`, `prefix`, `from`, `to`, `days` (`day`, `provider`, `probes`, `failed`, and the averages `loss_pct`, `rtt_ms`, `jitter_ms` when any probe returned statistics), and `improvements` (the rows of the improvements report, including `mode`). The prefix must be a network in CIDR form; anything else is a `400`. The match is exact: a covering or covered prefix is a different prefix. With no storage plugin it returns `enabled: false`.
 
 CI loads the page twice in the graphs step of the docker job (`lab/ui-smoke.sh`), against history seeded by `lab/mkhistory`: the timeline, the "Recommended" wording with no "Announced", the MED label, and the Probe now link; then the Probe tool with the prefix filled in. `internal/history` and `internal/httpapi` tests cover the filtering, the API, and the page wiring.
+
+## Link-outs
+
+Prefix, ASN, and exchange-peer views link to the same object in public tools (#211). The links are display only. Packeteer makes no request to any of these sites, scrapes nothing, stores nothing they show, and the links do not affect probing or announcements. Each opens in a new tab with `noopener noreferrer`.
+
+| Where | Links |
+|---|---|
+| Prefix page (`/prefix/<prefix>`) and an open row on `/prefixes.html` | The prefix, and on the prefix page the origin AS of its first learned path |
+| `/prefixes.html?asn=<asn>` and each ASN map heading | The AS |
+| Providers table (`/providers.html`), exchange peers only | The peer's AS (`peer_asn` in `GET /api/providers`) |
+
+Built-in sites (names for `linkouts.enabled`; defaults marked):
+
+| Name | Site | Prefix | AS |
+|---|---|---|---|
+| `he` (default) | Hurricane Electric BGP Toolkit | `bgp.he.net/net/<prefix>` | `bgp.he.net/AS<asn>` |
+| `he_lg` (default) | HE looking glass | `lg.he.net`, opened without a query | - |
+| `ripestat` (default) | RIPEstat | `stat.ripe.net/app/launchpad/<prefix>` | `stat.ripe.net/app/launchpad/AS<asn>` |
+| `peeringdb` (default) | PeeringDB | - | `www.peeringdb.com/asn/<asn>` |
+| `bgptools` (default) | bgp.tools | `bgp.tools/prefix/<prefix>` | `bgp.tools/as/<asn>` |
+| `cloudflare_radar` (default) | Cloudflare Radar | - | `radar.cloudflare.com/routing/as<asn>` |
+| `irr_explorer` (default) | IRR Explorer | `irrexplorer.nlnog.net/prefix/<prefix>` | - |
+| `nlnog_ring` (off) | NLNOG RING looking glass | `lg.ring.nlnog.net/prefix?q=<prefix>` | - |
+
+The RING link is a page the operator opens by hand. Packeteer does not call RING's API, log in to RING, or run commands on any RING node. PeeringDB is linked per AS: its AS page lists the exchanges the AS is on, and the exchange name in `exchanges` is a local label, not a PeeringDB object.
+
+The server builds every URL, so the browser never assembles one. `GET /api/linkouts?prefix=<cidr>&asn=<n>` (viewer; both repeatable, at most 300 values; a bad value is a `400`) returns `{"prefix": {<cidr>: [{"name", "url"}]}, "asn": {<n>: [...]}}`. A prefix is masked and written as CIDR with `/` and `:` left readable; an AS is decimal digits. With `linkouts.hide_internal` on (default) an RFC 1918, ULA, loopback, or link-local prefix and a private-use AS (RFC 6996: 64512-65534, 4200000000-4294967294) get an empty list, so the page shows no link for it. Documentation prefixes and ASNs are not internal. Settings and the `linkouts` keys are in [CONFIG.md](CONFIG.md#linkouts); a change needs a restart.
+
+The `ui-smoke` steps of the docker job load `/prefix/2001:db8::%2F32` and `/prefixes.html?asn=64496` in headless Chrome and check the rendered `href`s, `target`, and `rel`, that NLNOG RING is absent, and that an RFC 1918 prefix and a private-use AS render no link. `internal/linkout`, `internal/config`, and `internal/httpapi` tests cover the URLs, the template checks, and the page wiring.
 
 ## Events and audit log
 

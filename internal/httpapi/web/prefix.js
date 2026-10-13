@@ -32,6 +32,16 @@ function prefixPageUpdate(data) {
     return;
   }
   root.appendChild(prefixCard(row));
+  var origin = originASN(row);
+  if (origin) {
+    var links = document.getElementById("prefix-links");
+    if (!links.querySelector("[data-origin]")) {
+      var span = linkoutSpan("asn", origin);
+      span.setAttribute("data-origin", String(origin));
+      links.appendChild(el("span", "k", "Origin AS" + origin));
+      links.appendChild(span);
+    }
+  }
   if (row.quarantine) root.appendChild(quarantineNote(row.quarantine));
 }
 
@@ -115,6 +125,7 @@ function initPrefixPage() {
   if (!title) return;
   title.textContent = thisPrefix || "Prefix";
   document.title = "Packeteer prefix " + thisPrefix;
+  document.getElementById("prefix-links").appendChild(linkoutSpan("prefix", thisPrefix));
   document.getElementById("prefix-probe").href = "/troubleshooting.html?tool=probe&target=" + encodeURIComponent(thisPrefix);
   document.getElementById("prefix-load").addEventListener("click", loadTimeline);
   document.getElementById("prefix-days").addEventListener("change", loadTimeline);
