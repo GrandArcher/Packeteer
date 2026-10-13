@@ -24,7 +24,7 @@ docker run --rm -v "$PWD/config.yaml:/etc/packeteer/config.yaml:ro" "$IMAGE" -ch
 <!-- ci-expect: announce: disabled -->
 <!-- ci-expect: check: ok -->
 
-`-check` loads the file, validates every plugin block, prints a summary, and exits. It ends with `check: ok (no probes sent, no BGP sessions opened)`. `:edge` is the build from `main`; to pin a release use `IMAGE=ghcr.io/grandarcher/packeteer:0.6.0` (see the tags in the [README](../README.md#install)).
+`-check` loads the file, validates every plugin block, prints a summary, and exits. It ends with `check: ok (no probes sent, no BGP sessions opened)`. `:edge` is the build from `main`. To pin a release, use `IMAGE=ghcr.io/grandarcher/packeteer:0.6.0` and download the example from the same tag (`.../Packeteer/v0.6.0/config.example.yaml`), since the file on `main` can carry keys the release does not know yet (see the tags in the [README](../README.md#install)).
 
 ## 2. A first run on loopback
 
@@ -136,7 +136,7 @@ curl -fsS http://127.0.0.1:8080/api/overview
 <!-- ci-expect: "status":"ok" -->
 <!-- ci-expect: "mode":"observe" -->
 
-`/api/overview` carries the dashboard's setup checklist (`setup`): what to add next and what looks broken. The dashboard at <http://127.0.0.1:8080/> shows the same list until the instance is fully set up. `/readyz` returns 503 until startup finishes and, once `bgp.neighbors` is set, until an iBGP session is up.
+The settings form and setup wizard on `/settings.html` need `http.config_editor: true` plus auth or basic auth ([ui.md](ui.md)); until then, edit the mounted file and restart. `/api/overview` carries the dashboard's setup checklist (`setup`): what to add next and what looks broken. The dashboard at <http://127.0.0.1:8080/> shows the same list until the instance is fully set up. `/readyz` returns 503 until startup finishes and, once `bgp.neighbors` is set, until an iBGP session is up.
 
 ```sh
 docker logs packeteer 2>&1 | grep 'packeteer running'
