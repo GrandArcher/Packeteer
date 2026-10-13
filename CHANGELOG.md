@@ -7,6 +7,7 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 ### Added
 
 - Prefix, ASN, and exchange-peer pages link out to HE BGP Toolkit, RIPEstat, PeeringDB, bgp.tools, Cloudflare Radar, IRR Explorer, opt-in NLNOG RING; `linkouts` sets sites and https URLs (#211).
+- Steering precedence doc and pairwise interaction tests for mitigation, inbound, outbound, shared cap, quarantine and HA handover (#235).
 
 ## [0.6.0] - 2026-10-13
 
