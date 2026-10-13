@@ -1,3 +1,5 @@
+<p align="center"><img src="docs/assets/logo.png" alt="Packeteer logo" width="160"></p>
+
 # Packeteer
 
 Open-source BGP path performance controller for multi-homed networks. One container, a mounted config file, and the edge router you already run.
