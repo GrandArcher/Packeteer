@@ -207,10 +207,3 @@ func (t *tracker) droppedTotal() uint64 {
 	defer t.mu.Unlock()
 	return t.dropped
 }
-
-// size is the number of tracked connections.
-func (t *tracker) size() int {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	return len(t.flows)
-}

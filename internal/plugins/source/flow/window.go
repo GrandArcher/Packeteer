@@ -120,10 +120,6 @@ func newSlide(window time.Duration, max int) *slide {
 	return &slide{window: window, bucket: b, max: max, slots: map[int64]*bucket{}}
 }
 
-func (s *slide) add(at time.Time, p netip.Prefix, host netip.Addr, n uint64, t traffic) {
-	s.addSub(at, p, netip.Prefix{}, host, n, t)
-}
-
 // addSub is add with the destination's sub-range (#121). An invalid sub,
 // or subCap zero, counts no sub-range.
 func (s *slide) addSub(at time.Time, p, sub netip.Prefix, host netip.Addr, n uint64, t traffic) {
@@ -318,21 +314,6 @@ func (s *slide) prune(now time.Time) {
 			delete(s.slots, slot)
 		}
 	}
-}
-
-func (s *slide) top(now time.Time, n int, minBytes uint64) []rank {
-	rows, _, _ := s.aggregate(now, n, nil)
-	out := make([]rank, 0, len(rows))
-	for _, r := range rows {
-		if r.bytes == 0 || r.bytes < minBytes {
-			continue
-		}
-		out = append(out, r)
-	}
-	if n < len(out) {
-		out = out[:n]
-	}
-	return out
 }
 
 // totals returns the busiest prefixes in the window, largest first, capped

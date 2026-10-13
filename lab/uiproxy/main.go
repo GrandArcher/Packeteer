@@ -57,14 +57,11 @@ func handler(upstream, user, password string) (http.Handler, error) {
 	if err != nil || u.Scheme == "" || u.Host == "" || u.User != nil {
 		return nil, fmt.Errorf("upstream must be an absolute URL without userinfo")
 	}
-	rp := httputil.NewSingleHostReverseProxy(u)
-	orig := rp.Director
-	rp.Director = func(r *http.Request) {
-		orig(r)
-		r.Host = u.Host
-		r.SetBasicAuth(user, password)
-	}
-	return rp, nil
+	return &httputil.ReverseProxy{Rewrite: func(r *httputil.ProxyRequest) {
+		r.SetURL(u)
+		r.SetXForwarded()
+		r.Out.SetBasicAuth(user, password)
+	}}, nil
 }
 
 func loopback(addr string) error {

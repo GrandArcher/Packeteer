@@ -1,8 +1,8 @@
 version: "2"
 run:
   timeout: 5m
-# Conservative set. errcheck and staticcheck are deferred: they flag many
-# pre-existing findings (unchecked fmt.Fprintf to stderr, nil contexts in tests).
+# Conservative set. staticcheck and deadcode run as separate steps (make lint);
+# errcheck is deferred: it flags unchecked fmt.Fprintf to stderr.
 linters:
   default: none
   enable:

@@ -209,14 +209,6 @@ func (s *Server) SetQuarantine(c QuarantineControl) {
 // Handler is the read-only API and dashboard.
 func (s *Server) Handler() http.Handler { return s.handler }
 
-// Addr is the bound address after Start, or the configured address before.
-func (s *Server) Addr() string {
-	if s.ln != nil {
-		return s.ln.Addr().String()
-	}
-	return s.addr
-}
-
 // Start listens and serves until Shutdown. A bind error is returned to
 // the caller; later serve errors are logged.
 func (s *Server) Start() error {

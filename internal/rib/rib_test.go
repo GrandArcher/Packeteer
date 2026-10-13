@@ -560,3 +560,20 @@ func TestRouteHoldIsNegotiatedHoldTime(t *testing.T) {
 	eventually(t, "session up", v.Ready)
 	eventually(t, "negotiated 9s", func() bool { return v.RouteHold(ctx) == 9*time.Second })
 }
+
+// selectRoute picks one advertised path. Higher local preference wins; equal
+// preference breaks toward the lower neighbor address. Several add-path
+// paths from one neighbor then break toward the shorter AS path and the
+// lower path identifier: an estimate of the router's best, which add-path
+// does not mark. MED is not a step. It is shown, and it does not choose
+// the exit.
+func selectRoute(paths map[adjKey]Route) (Route, bool) {
+	var best Route
+	ok := false
+	for _, rt := range paths {
+		if !ok || adjLess(rt, best) {
+			best, ok = rt, true
+		}
+	}
+	return best, ok
+}

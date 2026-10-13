@@ -274,3 +274,11 @@ func BenchmarkLastStartRare(b *testing.B) {
 		s.lastStart(now, MaxDuration, time.UTC)
 	}
 }
+
+// matches reports whether the minute starting at t is a start time.
+func (s schedule) matches(t time.Time) bool {
+	if s.minute&(1<<uint(t.Minute())) == 0 || s.hour&(1<<uint(t.Hour())) == 0 || s.month&(1<<uint(t.Month())) == 0 {
+		return false
+	}
+	return s.dayMatches(t)
+}

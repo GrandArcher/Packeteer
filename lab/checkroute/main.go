@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -45,15 +46,6 @@ func main() {
 		os.Exit(0)
 	}
 	os.Exit(1)
-}
-
-// check reports whether mode ("present" or "absent") holds for raw vtysh
-// output at the default local preference 250. present requires next hop
-// 192.0.2.2, that local preference, community 64512:666, and no-export.
-// absent requires that community to be gone; the router's own copy of the
-// prefix may remain. The commit and cost labs call this with no override.
-func check(mode, raw string) bool {
-	return checkAt(mode, raw, localPref)
 }
 
 // checkAt is check with an explicit local preference. lab/e2e.sh passes
@@ -213,18 +205,18 @@ func communities(path map[string]any) []string {
 }
 
 func hasPacketeer(path map[string]any) bool {
-	return contains(communities(path), community)
+	return slices.Contains(communities(path), community)
 }
 
 func isInjected(path map[string]any, wantPref int) bool {
 	comms := communities(path)
 	lp, ok := localPrefOf(path)
-	return ok && contains(nexthops(path), nextHop) && lp == wantPref && contains(comms, community) && (contains(comms, "no-export") || contains(comms, "no_export"))
+	return ok && slices.Contains(nexthops(path), nextHop) && lp == wantPref && slices.Contains(comms, community) && (slices.Contains(comms, "no-export") || slices.Contains(comms, "no_export"))
 }
 
 func nhAndPref(path map[string]any, wantPref int) bool {
 	lp, ok := localPrefOf(path)
-	return ok && contains(nexthops(path), nextHop) && lp == wantPref
+	return ok && slices.Contains(nexthops(path), nextHop) && lp == wantPref
 }
 
 func textHasInjected(text string, wantPref int) bool {
@@ -236,13 +228,4 @@ func textHasInjected(text string, wantPref int) bool {
 
 func textHasCommunity(text string) bool {
 	return strings.Contains(text, "64512:666") || strings.Contains(text, "no-export")
-}
-
-func contains(list []string, want string) bool {
-	for _, s := range list {
-		if s == want {
-			return true
-		}
-	}
-	return false
 }

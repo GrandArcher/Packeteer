@@ -133,3 +133,22 @@ func TestAggregateHostListsStayBounded(t *testing.T) {
 		t.Fatalf("aggregate allocated %d bytes", delta)
 	}
 }
+
+func (s *slide) add(at time.Time, p netip.Prefix, host netip.Addr, n uint64, t traffic) {
+	s.addSub(at, p, netip.Prefix{}, host, n, t)
+}
+
+func (s *slide) top(now time.Time, n int, minBytes uint64) []rank {
+	rows, _, _ := s.aggregate(now, n, nil)
+	out := make([]rank, 0, len(rows))
+	for _, r := range rows {
+		if r.bytes == 0 || r.bytes < minBytes {
+			continue
+		}
+		out = append(out, r)
+	}
+	if n < len(out) {
+		out = out[:n]
+	}
+	return out
+}
