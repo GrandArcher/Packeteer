@@ -46,6 +46,17 @@ jobs:
       - uses: golangci/golangci-lint-action@v9
         with:
           version: v2.14.0
+      - name: staticcheck
+        run: |
+          go install honnef.co/go/tools/cmd/staticcheck@2026.2.1
+          staticcheck ./...
+      - name: deadcode (test-reachable code only)
+        run: |
+          go install golang.org/x/tools/cmd/deadcode@v0.52.0
+          dead="$(deadcode -test ./...)"
+          if [ -n "$dead" ]; then echo "unreachable code:"; echo "$dead"; exit 1; fi
+      - name: CHANGELOG entries are one short line
+        run: scripts/check-changelog.sh
 
   govulncheck:
     runs-on: ubuntu-latest

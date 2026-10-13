@@ -137,3 +137,12 @@ func mustJSON(v any) string {
 	}
 	return string(b)
 }
+
+// check reports whether mode ("present" or "absent") holds for raw vtysh
+// output at the default local preference 250. present requires next hop
+// 192.0.2.2, that local preference, community 64512:666, and no-export.
+// absent requires that community to be gone; the router's own copy of the
+// prefix may remain. The commit and cost labs call this with no override.
+func check(mode, raw string) bool {
+	return checkAt(mode, raw, localPref)
+}

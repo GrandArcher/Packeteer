@@ -91,14 +91,6 @@ func parseField(s string, lo, hi int) (uint64, error) {
 	return bits, nil
 }
 
-// matches reports whether the minute starting at t is a start time.
-func (s schedule) matches(t time.Time) bool {
-	if s.minute&(1<<uint(t.Minute())) == 0 || s.hour&(1<<uint(t.Hour())) == 0 || s.month&(1<<uint(t.Month())) == 0 {
-		return false
-	}
-	return s.dayMatches(t)
-}
-
 func (s schedule) dayMatches(t time.Time) bool {
 	domOK := s.dom&(1<<uint(t.Day())) != 0
 	dowOK := s.dow&(1<<uint(t.Weekday())) != 0

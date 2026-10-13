@@ -324,7 +324,9 @@ func (s *Station) serve(router netip.Addr, sess *session) {
 		}
 		return nil
 	})
-	if err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, net.ErrClosed) {
+	// readMessages only returns on an error, so EOF and a closed conn are
+	// the clean ends.
+	if !errors.Is(err, io.EOF) && !errors.Is(err, net.ErrClosed) {
 		s.log.Warn("bmp session ended", "router", router, "err", err)
 		return
 	}

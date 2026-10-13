@@ -629,3 +629,11 @@ func TestMetricsRIBPrefixes(t *testing.T) {
 		}
 	}
 }
+
+// Addr is the bound address after Start, or the configured address before.
+func (s *Server) Addr() string {
+	if s.ln != nil {
+		return s.ln.Addr().String()
+	}
+	return s.addr
+}

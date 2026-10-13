@@ -1,7 +1,5 @@
 package rib
 
-import "net/netip"
-
 // pathSet is the iBGP paths for one prefix.
 //
 // A full table is almost all single-path prefixes (no add-path). Those
@@ -101,18 +99,4 @@ func (s *pathSet) each(fn func(adjKey, Route)) {
 	for k, rt := range s.many {
 		fn(k, rt)
 	}
-}
-
-// putAdj replaces the iBGP paths for p. Tests build a view without a
-// session. An empty paths map removes p.
-func (v *View) putAdj(p netip.Prefix, paths map[adjKey]Route) {
-	var s pathSet
-	for k, rt := range paths {
-		s.set(k, rt)
-	}
-	if s.n == 0 {
-		delete(v.adj, p)
-		return
-	}
-	v.adj[p] = s
 }

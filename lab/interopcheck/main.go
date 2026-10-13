@@ -137,9 +137,9 @@ func Check(paths []Path, w Want) error {
 	p := mine[0]
 	switch {
 	case !p.Best:
-		return fmt.Errorf("Packeteer's path is not the best path: %+v", p)
+		return fmt.Errorf("the Packeteer path is not the best path: %+v", p)
 	case p.From != w.Peer:
-		return fmt.Errorf("Packeteer's path is from %q, want %s", p.From, w.Peer)
+		return fmt.Errorf("the Packeteer path is from %q, want %s", p.From, w.Peer)
 	case p.NextHop != w.NextHop:
 		return fmt.Errorf("next hop %q, want %s", p.NextHop, w.NextHop)
 	case p.LocalPref != w.LocalPref:

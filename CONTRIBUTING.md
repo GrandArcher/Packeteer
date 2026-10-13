@@ -5,9 +5,9 @@ Read [AGENTS.md](AGENTS.md) first. It holds the safety, Docker-first, and plugin
 ## Setup
 
 ```
-make setup   # installs golangci-lint and govulncheck, enables the pre-commit hook
+make setup   # installs golangci-lint, staticcheck, deadcode, and govulncheck, enables the pre-commit hook
 make test    # build, vet, gofmt check, go test (what CI runs)
-make lint    # golangci-lint
+make lint    # golangci-lint, staticcheck, deadcode -test, CHANGELOG line length
 make vuln    # govulncheck
 ```
 
