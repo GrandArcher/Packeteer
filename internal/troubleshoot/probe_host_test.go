@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/netip"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -187,15 +188,25 @@ func (r *replyFrom) Probe(_ context.Context, req plugin.ProbeRequest) (plugin.Pr
 }
 
 type fakeTracer struct {
-	hop   netip.Addr
-	ok    bool
-	err   error
+	hop netip.Addr
+	ok  bool
+	err error
+	// Probe traces each silent provider from its own goroutine.
+	mu    sync.Mutex
 	calls []netip.Addr
 }
 
 func (f *fakeTracer) Trace(_ context.Context, src, _ netip.Addr, _ func(context.Context) error) (netip.Addr, bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.calls = append(f.calls, src)
 	return f.hop, f.ok, f.err
+}
+
+func (f *fakeTracer) traced() []netip.Addr {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.calls)
 }
 
 func TestProbeIndirectFallbackForSilentTarget(t *testing.T) {
@@ -209,8 +220,8 @@ func TestProbeIndirectFallbackForSilentTarget(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(tr.calls) != 2 {
-		t.Fatalf("expected a trace from each silent provider, got %v", tr.calls)
+	if len(tr.traced()) != 2 {
+		t.Fatalf("expected a trace from each silent provider, got %v", tr.traced())
 	}
 	for _, r := range a.Results {
 		if !r.Indirect || r.Target != hop || r.Prefix != netip.PrefixFrom(target, 32) || r.Stats.Received != 3 {
@@ -222,8 +233,8 @@ func TestProbeIndirectFallbackForSilentTarget(t *testing.T) {
 	pr.live = map[netip.Addr]bool{target: true}
 	tr.calls = nil
 	a, _ = tl.Probe(context.Background(), target.String())
-	if len(tr.calls) != 0 || a.Results[0].Indirect || a.Results[1].Indirect {
-		t.Fatalf("traced a reachable target: calls %v results %+v", tr.calls, a.Results)
+	if len(tr.traced()) != 0 || a.Results[0].Indirect || a.Results[1].Indirect {
+		t.Fatalf("traced a reachable target: calls %v results %+v", tr.traced(), a.Results)
 	}
 }
 
@@ -291,8 +302,8 @@ func TestProbeIndirectFallbackKeepsSilentResult(t *testing.T) {
 	tr := &fakeTracer{hop: hop, ok: true}
 	v6 := New(Options{Enabled: true, Providers: []probe.Provider{{Name: "transit-v6", Source: addr("2001:db8::10")}},
 		Probers: []probe.NamedProber{{Name: "fake", Prober: &replyFrom{}}}, Indirect: tr})
-	if _, err := v6.Probe(context.Background(), target.String()); err != nil || len(tr.calls) != 0 {
-		t.Fatalf("family mismatch traced: %v %v", err, tr.calls)
+	if _, err := v6.Probe(context.Background(), target.String()); err != nil || len(tr.traced()) != 0 {
+		t.Fatalf("family mismatch traced: %v %v", err, tr.traced())
 	}
 }
 
