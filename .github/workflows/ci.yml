@@ -1198,6 +1198,37 @@ jobs:
           PACKETEER_DOCS_CLEANUP: docker compose -f lab/docker-compose-walkthrough.yml down -v --remove-orphans; rm -rf lab/walkthrough
         run: bash lab/e2e-docs.sh docs/walkthrough.md
 
+  failure-matrix:
+    # Failure-mode matrix (#234): each injection surface against SIGKILL,
+    # BGP session loss, missing measurements, a source going away, a reload
+    # to observe, and a lowered cap, asserted on the simulated routers. A new
+    # surface adds a file in lab/failure-matrix/ and an entry here;
+    # lab/failure-matrix/matrix_test.go fails until it does.
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        surface: [outbound, more-specific, inbound, mitigation, ha]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: failure-mode matrix, ${{ matrix.surface }}
+        run: bash lab/e2e-failure-matrix.sh ${{ matrix.surface }}
+      - name: a broken withdraw path must fail the matrix (#234; the reload to observe never reaches the controller)
+        if: matrix.surface == 'outbound'
+        run: |
+          rc=0
+          MATRIX_BREAK=reload-observe bash lab/e2e-failure-matrix.sh outbound reload-observe >broken.log 2>&1 || rc=$?
+          tail -n 40 broken.log
+          if [ "$rc" -eq 0 ]; then
+            echo "the matrix passed with a broken withdraw path"
+            exit 1
+          fi
+          grep -q 'Packeteer routes still on the router' broken.log
+
   chr:
     # MikroTik RouterOS CHR in QEMU (#52). The free CHR image is fetched
     # from MikroTik at run time (checksum pinned in lab/e2e-chr.sh) and runs
