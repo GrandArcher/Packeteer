@@ -28,21 +28,27 @@ ip route 203.0.113.0/24 blackhole
 ip prefix-list own-prefixes seq 5 permit 203.0.113.0/24
 !
 bgp community-list standard packeteer permit 64512:666
+bgp large-community-list standard packeteer-large permit 64512:1:666
 !
 ! From Packeteer: only routes that carry the Packeteer community.
 route-map packeteer-in permit 10
  match community packeteer
+route-map packeteer-in permit 11
+ match large-community packeteer-large
 route-map packeteer-in deny 100
 !
 ! From every eBGP neighbor: your usual import policy, and strip the
 ! Packeteer community so nobody outside can set it.
 route-map transit-in permit 10
  set comm-list packeteer delete
+ set large-comm-list packeteer-large delete
 !
 ! Toward every eBGP neighbor: never a route with the Packeteer community,
 ! then your usual export policy (here: only your own prefix).
 route-map ebgp-out deny 10
  match community packeteer
+route-map ebgp-out deny 11
+ match large-community packeteer-large
 route-map ebgp-out permit 20
  match ip address prefix-list own-prefixes
 route-map ebgp-out deny 100
@@ -74,9 +80,9 @@ router bgp 64512
 
 What each part does:
 
-- **`packeteer-in`** on the Packeteer session accepts only routes that carry `64512:666`. In observe and suggest Packeteer sends nothing, so the filter changes nothing until inject. It is still the first thing to install.
-- **`ebgp-out`** on every eBGP session rejects a route with `64512:666` first, then applies your normal export policy. Packeteer also tags every route `no-export`; this filter is the layer you control. Put the deny at the top of the export route-map you already have.
-- **`transit-in`** strips `64512:666` from routes learned from outside, so nobody outside your AS can make a route look like Packeteer's.
+- **`packeteer-in`** on the Packeteer session accepts only routes that carry `64512:666` (or `64512:1:666`, for a large `packeteer_community`). In observe and suggest Packeteer sends nothing, so the filter changes nothing until inject. It is still the first thing to install.
+- **`ebgp-out`** on every eBGP session rejects a route with either community first, then applies your normal export policy. Packeteer also tags every route `no-export`; this filter is the layer you control. Put the deny at the top of the export route-map you already have.
+- **`transit-in`** strips `64512:666` and `64512:1:666` from routes learned from outside, so nobody outside your AS can make a route look like Packeteer's.
 - **`graceful-restart-disable`** on the Packeteer neighbor. Packeteer never offers graceful restart, so its routes go with the session either way. This makes it explicit even when the router has graceful restart on for other peers.
 - **`timers 10 30`** bounds how long a route stays after Packeteer dies without withdrawing (a `docker kill`, a host crash): the hold time, 30 seconds. A clean stop withdraws first and does not wait for it. Packeteer proposes 90 seconds; the lower value wins.
 - **No next-hop change toward Packeteer.** FRR leaves the eBGP next hop on routes it sends over iBGP. Packeteer names today's exit by that next hop, so each provider's `next_hop` in Packeteer's config must be the transit's address as the edge sees it (`192.0.2.21`, `192.0.2.22`). Do not set `next-hop-self` on the Packeteer session.
