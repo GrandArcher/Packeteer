@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/GrandArcher/Packeteer/internal/exchange"
 	"github.com/GrandArcher/Packeteer/internal/httpapi"
 	"github.com/GrandArcher/Packeteer/internal/troubleshoot"
 )
@@ -203,5 +204,30 @@ func TestPrefixFixturesMatchAPI(t *testing.T) {
 				t.Errorf("%s: row %s is missing probes, a path with MED, or the exit measurement", s.File, r.Prefix)
 			}
 		}
+	}
+}
+
+// TestExchangeFixturesMatchAPI decodes the canned /api/exchanges answer with
+// the type the API returns (#155), so a renamed field fails here and not as
+// an empty list in the UI smoke test.
+func TestExchangeFixturesMatchAPI(t *testing.T) {
+	f, err := loadFixtures("../ui-fixtures/exchanges")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(f.Stubs) != 1 || f.Inject.Page != "/settings.html" {
+		t.Fatalf("stubs = %d, page = %q", len(f.Stubs), f.Inject.Page)
+	}
+	var out struct {
+		Exchanges []exchange.Stats `json:"exchanges"`
+	}
+	dec := json.NewDecoder(bytes.NewReader(f.Stubs[0].body))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&out); err != nil {
+		t.Fatal(err)
+	}
+	if len(out.Exchanges) != 2 || out.Exchanges[0].Name != "ix-lab" || len(out.Exchanges[0].Discovered) != 2 ||
+		out.Exchanges[0].Discovered[0].NextHop != "203.0.113.13" || out.Exchanges[0].Discovered[0].ASN != 64503 || out.Exchanges[0].Discovered[1].ASN != 0 {
+		t.Fatalf("exchanges = %+v", out.Exchanges)
 	}
 }

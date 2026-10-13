@@ -618,7 +618,7 @@ jobs:
             'filtered: ?asn=AS64500&amp;sort=gain&amp;size=25 first 2001:db8:1::/48 rows 3' \
             'Showing 1–3 of 3 matching (100000 measured) prefixes.' 'Page 1 of 1' \
             --absent 'Cannot reach' 'mode-inject'
-      - name: UI settings forms smoke (#130, #181; flow, rules, VIP, outage, exchanges, wizard flow step, observe)
+      - name: UI settings forms smoke (#130, #181, #155; flow, rules, VIP, outage, exchanges, accept a discovered member, wizard flow step, observe)
         run: |
           set -euo pipefail
           base=http://127.0.0.1:18132
@@ -784,6 +784,25 @@ jobs:
             'value="ix-peer-b"' 'value="64502"' '>Peer name</span>' '>Peer AS</span>' '>Peer next hop</span>' '>Peer probe source</span>' '+ Peer' \
             '4. Flow (optional)' 'Collect flow records' 'Exporter setup' \
             --absent 'The config editor is off' 'mode-inject'
+          # Headless Chrome cannot click, so uiproxy answers /api/exchanges
+          # from lab/ui-fixtures/exchanges (documentation prefixes and ASNs:
+          # two discovered members of ix-lab, one of an exchange the form
+          # does not have) and adds a driver that presses Accept on the
+          # first. The page is the image's. The accepted row is a draft peer
+          # with the AS and next hop; no config write is made (#155).
+          kill "$proxy"
+          /tmp/uiproxy -listen 127.0.0.1:18136 -upstream "$base" -user lab -password lab-only \
+            -fixtures lab/ui-fixtures/exchanges >/tmp/uiproxy155.log 2>&1 &
+          proxy=$!
+          for _ in $(seq 1 20); do
+            curl -fsS http://127.0.0.1:18136/healthz >/dev/null 2>&1 && break
+            sleep 0.2
+          done
+          curl -fsS http://127.0.0.1:18136/healthz >/dev/null
+          bash lab/ui-smoke.sh http://127.0.0.1:18136/settings.html 'mode-observe' 'It announces nothing.' \
+            'before: 2 members ix-lab203.0.113.13AS 645033 prefixesAccept | ix-lab203.0.113.14AS unknown1 prefixesAccept' \
+            'after: peers 3 members 1 draft true name [] as [64503] hop [203.0.113.13] source [] cost [] writes 0' \
+            --absent '198.51.100.77' 'mode-inject'
       - name: UI mitigation, inbound, and anomaly forms smoke (#131; add and remove a rule in observe)
         run: |
           set -euo pipefail
