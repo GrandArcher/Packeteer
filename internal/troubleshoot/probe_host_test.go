@@ -226,6 +226,44 @@ func TestProbeIndirectFallbackForSilentTarget(t *testing.T) {
 	}
 }
 
+// pacer counts the packets the tools ask to pace.
+type pacer struct{ n int }
+
+func (p *pacer) WaitN(_ context.Context, n int) error {
+	p.n += n
+	return nil
+}
+
+// pacedTracer waits once per trace packet, as the traceroute source does.
+type pacedTracer struct {
+	packets int
+	calls   int
+}
+
+func (f *pacedTracer) Trace(ctx context.Context, _, _ netip.Addr, wait func(context.Context) error) (netip.Addr, bool, error) {
+	f.calls++
+	for range f.packets {
+		if err := wait(ctx); err != nil {
+			return netip.Addr{}, false, err
+		}
+	}
+	return netip.Addr{}, false, nil
+}
+
+func TestProbeIndirectTracePacketsWaitOnThePacketBudget(t *testing.T) {
+	target := addr("203.0.113.9")
+	pace := &pacer{}
+	tr := &pacedTracer{packets: 3}
+	tl := New(Options{Enabled: true, Providers: provs, Probers: []probe.NamedProber{{Name: "fake", Prober: &replyFrom{}}},
+		Packets: 2, Timeout: 10 * time.Millisecond, Indirect: tr, PacketLimiter: pace})
+	if _, err := tl.Probe(context.Background(), target.String()); err != nil {
+		t.Fatal(err)
+	}
+	if tr.calls != len(provs) || pace.n != len(provs)*tr.packets {
+		t.Fatalf("traces %d, paced packets %d: want one trace per silent provider and one wait per packet", tr.calls, pace.n)
+	}
+}
+
 func TestProbeIndirectFallbackKeepsSilentResult(t *testing.T) {
 	target, hop := addr("203.0.113.9"), addr("192.0.2.77")
 	for name, tr := range map[string]*fakeTracer{
@@ -300,6 +338,34 @@ func TestOptimizeRefusesWhatTheRIBDoesNotHold(t *testing.T) {
 	}
 	if len(q.got) != 0 {
 		t.Fatalf("queued %v", q.got)
+	}
+}
+
+func TestOptimizeRefusalsSpendNoToken(t *testing.T) {
+	q := &fakeQueue{}
+	lim := &allow{n: 1}
+	tl, res := optimizeTools(q, lim)
+
+	tl.SetQueue(nil)
+	if _, err := tl.Optimize(context.Background(), "198.51.100.200"); !errors.Is(err, ErrNoOptimize) {
+		t.Fatalf("no queue: %v", err)
+	}
+	tl.SetQueue(q)
+	tl.SetRIB(nil)
+	if _, err := tl.Optimize(context.Background(), "198.51.100.200"); !errors.Is(err, ErrNoRIB) {
+		t.Fatalf("no RIB: %v", err)
+	}
+	tl.SetRIB(notReady{testRIB()})
+	if _, err := tl.Optimize(context.Background(), "host.example.net"); err == nil || !strings.Contains(err.Error(), "not ready") {
+		t.Fatalf("RIB not ready: %v", err)
+	}
+	if lim.n != 1 || len(res.calls) != 0 {
+		t.Fatalf("refused requests spent a token (%d left) or looked up %v", lim.n, res.calls)
+	}
+
+	tl.SetRIB(testRIB())
+	if _, err := tl.Optimize(context.Background(), "host.example.net"); err != nil || lim.n != 0 {
+		t.Fatalf("admitted request: err %v, %d tokens left", err, lim.n)
 	}
 }
 
