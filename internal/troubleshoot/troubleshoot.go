@@ -1,17 +1,21 @@
 // Package troubleshoot holds Packeteer's operator tools: a looking glass
-// over the learned RIB view, an on-demand probe of one address across every
-// provider, a per-provider traceroute, and a whois/RDAP lookup.
+// over the learned RIB view, an on-demand probe of one address or hostname
+// across every provider, a per-provider traceroute, and a whois/RDAP lookup.
 //
-// Every tool is read-only. Nothing here announces, withdraws, or feeds
-// the decision engine: on-demand probe results are returned to the caller
-// and never stored as probe results.
+// The tools never announce or withdraw, and on-demand probe results are
+// returned to the caller and never stored as probe results. The one write is
+// Optimize, which asks the probe engine to measure the learned prefix
+// covering a target for a limited time. Any move still comes from the
+// decision engine.
 package troubleshoot
 
 import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"net/netip"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -33,6 +37,12 @@ const (
 	tracePort                = 33434
 	gapHops                  = 3
 	reverseTimeout           = 3 * time.Second
+	resolveTimeout           = 5 * time.Second
+	maxHostnameLen           = 253
+	maxLabelLen              = 63
+
+	// OptimizeTTL is how long Optimize keeps a prefix in the probe set.
+	OptimizeTTL = 10 * time.Minute
 )
 
 // ErrDisabled is returned by the active tools when they are not enabled.
@@ -54,6 +64,18 @@ type RIB interface {
 	// Paths lists every path held for exactly p (iBGP add-path and BMP
 	// paths included), not only the published best.
 	Paths(p netip.Prefix) []rib.Route
+}
+
+// Resolver looks up hostnames. *net.Resolver implements it.
+type Resolver interface {
+	LookupNetIP(ctx context.Context, network, host string) ([]netip.Addr, error)
+}
+
+// Queue asks the probe engine to measure a prefix for ttl. *probe.Engine
+// implements it. A queued prefix is only measured; the decision engine
+// decides whether any move follows.
+type Queue interface {
+	QueueManual(p netip.Prefix, ttl time.Duration) error
 }
 
 // HopFunc sends one TTL-limited probe. The traceroute source's Hop is the
@@ -79,14 +101,24 @@ type Options struct {
 	Whois   plugin.Whois
 	Limiter Limiter
 	Now     func() time.Time
+	// Resolver resolves hostnames. Nil uses net.DefaultResolver.
+	Resolver Resolver
+	// Scorer ranks providers for the best exit in a probe answer. Nil
+	// leaves Best empty.
+	Scorer plugin.Scorer
+	// Indirect traces from a provider's source toward a target that
+	// answered no probe there, and probes the highest stable hop instead
+	// (#123). Nil disables the fallback.
+	Indirect probe.Tracer
 }
 
 // Tools is safe for concurrent use.
 type Tools struct {
 	opt Options
 
-	mu  sync.RWMutex
-	rib RIB
+	mu    sync.RWMutex
+	rib   RIB
+	queue Queue
 }
 
 // New returns Tools. The RIB is attached later with SetRIB because the
@@ -104,6 +136,9 @@ func New(opt Options) *Tools {
 	if opt.Now == nil {
 		opt.Now = time.Now
 	}
+	if opt.Resolver == nil {
+		opt.Resolver = net.DefaultResolver
+	}
 	return &Tools{opt: opt}
 }
 
@@ -112,6 +147,20 @@ func (t *Tools) SetRIB(r RIB) {
 	t.mu.Lock()
 	t.rib = r
 	t.mu.Unlock()
+}
+
+// SetQueue attaches the probe engine's manual queue. Nil leaves Optimize
+// unavailable.
+func (t *Tools) SetQueue(q Queue) {
+	t.mu.Lock()
+	t.queue = q
+	t.mu.Unlock()
+}
+
+func (t *Tools) manualQueue() Queue {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	return t.queue
 }
 
 func (t *Tools) view() RIB {
@@ -127,6 +176,7 @@ type Status struct {
 	Probe        bool     `json:"probe"`
 	Traceroute   bool     `json:"traceroute"`
 	Whois        bool     `json:"whois"`
+	Optimize     bool     `json:"optimize"`
 	Providers    []string `json:"providers"`
 }
 
@@ -142,6 +192,7 @@ func (t *Tools) Status() Status {
 		Probe:        t.opt.Enabled && len(t.opt.Probers) > 0 && len(t.opt.Providers) > 0,
 		Traceroute:   t.opt.Enabled && t.opt.Hop != nil && len(t.opt.Providers) > 0,
 		Whois:        t.opt.Enabled && t.opt.Whois != nil,
+		Optimize:     t.opt.Enabled && t.manualQueue() != nil && t.view() != nil,
 		Providers:    names,
 	}
 }
@@ -216,17 +267,30 @@ func (t *Tools) admit() error {
 
 // ProbeAnswer is one on-demand probe across every provider.
 type ProbeAnswer struct {
-	Target  netip.Addr     `json:"target"`
-	Route   *rib.Route     `json:"route,omitempty"` // learned route covering Target
+	// Host is the hostname the caller gave, and Addresses is every routable
+	// address it resolved to. Both are empty when the caller gave an IP.
+	Host      string       `json:"host,omitempty"`
+	Addresses []netip.Addr `json:"addresses,omitempty"`
+	// Target is the address that was probed.
+	Target netip.Addr `json:"target"`
+	Route  *rib.Route `json:"route,omitempty"` // learned route covering Target
+	// Current is the provider of Route: the exit the edge uses now. Best
+	// is the provider with the lowest score from the configured scorer
+	// among those that answered. Either is empty when unknown.
+	Current string         `json:"current,omitempty"`
+	Best    string         `json:"best,omitempty"`
 	Results []probe.Result `json:"results"`
 }
 
-// Probe measures target from every provider's source with the configured
-// prober chain. Results go to the caller only; they never reach the probe
-// engine, the decision loop, or the announcer.
-func (t *Tools) Probe(ctx context.Context, target netip.Addr) (ProbeAnswer, error) {
-	target = target.Unmap()
-	if err := CheckTarget(target); err != nil {
+// Probe measures the target from every provider's source with the
+// configured prober chain. input is an IP address or a hostname; a
+// hostname is resolved and the first routable address is probed. A provider
+// whose probes get no reply is traced and its highest stable hop probed
+// when Options.Indirect is set. Results go to the caller only; they never
+// reach the probe engine, the decision loop, or the announcer.
+func (t *Tools) Probe(ctx context.Context, input string) (ProbeAnswer, error) {
+	host, err := parseHostOrAddr(input)
+	if err != nil {
 		return ProbeAnswer{}, err
 	}
 	if err := t.admit(); err != nil {
@@ -235,10 +299,16 @@ func (t *Tools) Probe(ctx context.Context, target netip.Addr) (ProbeAnswer, erro
 	if len(t.opt.Probers) == 0 || len(t.opt.Providers) == 0 {
 		return ProbeAnswer{}, errors.New("no probers or providers configured")
 	}
-	ans := ProbeAnswer{Target: target, Results: make([]probe.Result, len(t.opt.Providers))}
+	ans := ProbeAnswer{Host: host.name}
+	if ans.Target, ans.Addresses, err = t.resolve(ctx, host); err != nil {
+		return ProbeAnswer{}, err
+	}
+	target := ans.Target
+	ans.Results = make([]probe.Result, len(t.opt.Providers))
 	if v := t.view(); v != nil {
 		if r, ok := v.Covering(netip.PrefixFrom(target, target.BitLen())); ok {
 			ans.Route = &r
+			ans.Current = r.Provider
 		}
 	}
 	var wg sync.WaitGroup
@@ -246,11 +316,128 @@ func (t *Tools) Probe(ctx context.Context, target netip.Addr) (ProbeAnswer, erro
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			ans.Results[i] = t.probeOne(ctx, p, target)
+			ans.Results[i] = t.probeProvider(ctx, p, target)
 		}()
 	}
 	wg.Wait()
+	ans.Best = t.best(ans.Results)
 	return ans, nil
+}
+
+// hostInput is a parsed Probe input: an address, or a hostname to resolve.
+type hostInput struct {
+	name string
+	addr netip.Addr
+}
+
+// parseHostOrAddr accepts an IP address or a DNS name. A name needs a
+// non-numeric last label so that forms such as 127.1 are never handed to
+// the resolver as an address.
+func parseHostOrAddr(input string) (hostInput, error) {
+	input = strings.TrimSpace(input)
+	if a, err := netip.ParseAddr(input); err == nil {
+		a = a.Unmap()
+		if err := CheckTarget(a); err != nil {
+			return hostInput{}, err
+		}
+		return hostInput{addr: a}, nil
+	}
+	name := strings.TrimSuffix(input, ".")
+	if err := checkHostname(name); err != nil {
+		return hostInput{}, err
+	}
+	return hostInput{name: strings.ToLower(name)}, nil
+}
+
+func checkHostname(name string) error {
+	if name == "" || len(name) > maxHostnameLen {
+		return errors.New("target must be an IP address or a hostname")
+	}
+	labels := strings.Split(name, ".")
+	for _, l := range labels {
+		if l == "" || len(l) > maxLabelLen || l[0] == '-' || l[len(l)-1] == '-' {
+			return errors.New("target must be an IP address or a hostname")
+		}
+		for _, c := range l {
+			if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '-' || c == '_') {
+				return errors.New("target must be an IP address or a hostname")
+			}
+		}
+	}
+	if last := labels[len(labels)-1]; strings.Trim(last, "0123456789") == "" {
+		return errors.New("target must be an IP address or a hostname")
+	}
+	return nil
+}
+
+// resolve returns the address to probe and, for a hostname, every routable
+// address it resolved to. The first address whose family a provider source
+// can use wins, else the first routable one.
+func (t *Tools) resolve(ctx context.Context, h hostInput) (target netip.Addr, addrs []netip.Addr, err error) {
+	if h.addr.IsValid() {
+		return h.addr, nil, nil
+	}
+	rctx, cancel := context.WithTimeout(ctx, resolveTimeout)
+	defer cancel()
+	found, err := t.opt.Resolver.LookupNetIP(rctx, "ip", h.name)
+	if err != nil {
+		return netip.Addr{}, nil, fmt.Errorf("cannot resolve %s: %w", h.name, err)
+	}
+	for _, a := range found {
+		if a = a.Unmap(); CheckTarget(a) == nil && !slices.Contains(addrs, a) {
+			addrs = append(addrs, a)
+		}
+	}
+	if len(addrs) == 0 {
+		return netip.Addr{}, nil, fmt.Errorf("%s resolves to no routable address", h.name)
+	}
+	for _, a := range addrs {
+		for _, p := range t.opt.Providers {
+			if p.Source.Is4() == a.Is4() {
+				return a, addrs, nil
+			}
+		}
+	}
+	return addrs[0], addrs, nil
+}
+
+// best is the answering provider with the lowest score. Equal scores keep
+// the earlier provider.
+func (t *Tools) best(rs []probe.Result) string {
+	if t.opt.Scorer == nil {
+		return ""
+	}
+	best, bestScore := "", 0.0
+	for _, r := range rs {
+		if !r.OK() || r.Stats.Received == 0 {
+			continue
+		}
+		sc := t.opt.Scorer.Score(plugin.PathStats{Provider: r.Provider, LossPct: r.Stats.LossPct, RTTAvg: r.Stats.RTTAvg, Jitter: r.Stats.Jitter})
+		if best == "" || sc < bestScore {
+			best, bestScore = r.Provider, sc
+		}
+	}
+	return best
+}
+
+// probeProvider probes target from one provider and, when nothing there
+// answered, falls back to the highest stable traceroute hop. The hop is
+// reported as the target with Indirect set, as the probe engine does.
+func (t *Tools) probeProvider(ctx context.Context, p probe.Provider, target netip.Addr) probe.Result {
+	res := t.probeOne(ctx, p, target)
+	if t.opt.Indirect == nil || (res.OK() && res.Stats.Received > 0) || p.Source.Is4() != target.Is4() {
+		return res
+	}
+	hop, ok, err := t.opt.Indirect.Trace(ctx, p.Source, target, nil)
+	if err != nil || !ok {
+		return res
+	}
+	via := t.probeOne(ctx, p, hop)
+	if !via.OK() || via.Stats.Received == 0 {
+		return res
+	}
+	via.Prefix, via.Indirect = res.Prefix, true
+	return via
 }
 
 func (t *Tools) probeOne(ctx context.Context, p probe.Provider, target netip.Addr) probe.Result {
@@ -278,6 +465,60 @@ func (t *Tools) probeOne(ctx context.Context, p probe.Provider, target netip.Add
 	}
 	res.Err, res.Time = errors.Join(errs...).Error(), t.opt.Now()
 	return res
+}
+
+// ErrNoOptimize is returned by Optimize when the probe queue is not wired.
+var ErrNoOptimize = errors.New("probe and optimize is not available")
+
+// OptimizeAnswer names the prefix Optimize queued.
+type OptimizeAnswer struct {
+	Host      string       `json:"host,omitempty"`
+	Addresses []netip.Addr `json:"addresses,omitempty"`
+	Target    netip.Addr   `json:"target"`
+	// Prefix is the learned route covering Target: the exact prefix the
+	// decision engine would act on.
+	Prefix  netip.Prefix `json:"prefix"`
+	Expires time.Time    `json:"expires"`
+}
+
+// Optimize queues the learned prefix covering the target as an urgent
+// probe target for OptimizeTTL. Only prefixes in the learned RIB view are
+// queued, never the default route, and queuing only measures: the next
+// decision round applies the usual rules (exact learned prefix, allowlist
+// in inject mode, max_improvements, thresholds, hold time) to the result.
+func (t *Tools) Optimize(ctx context.Context, input string) (OptimizeAnswer, error) {
+	host, err := parseHostOrAddr(input)
+	if err != nil {
+		return OptimizeAnswer{}, err
+	}
+	if err := t.admit(); err != nil {
+		return OptimizeAnswer{}, err
+	}
+	q := t.manualQueue()
+	if q == nil {
+		return OptimizeAnswer{}, ErrNoOptimize
+	}
+	v := t.view()
+	if v == nil {
+		return OptimizeAnswer{}, ErrNoRIB
+	}
+	if !v.Ready() {
+		return OptimizeAnswer{}, errors.New("the learned RIB view is not ready")
+	}
+	ans := OptimizeAnswer{Host: host.name}
+	if ans.Target, ans.Addresses, err = t.resolve(ctx, host); err != nil {
+		return OptimizeAnswer{}, err
+	}
+	r, ok := v.Covering(netip.PrefixFrom(ans.Target, ans.Target.BitLen()))
+	if !ok || r.Prefix.Bits() == 0 {
+		return OptimizeAnswer{}, fmt.Errorf("no learned prefix covers %s", ans.Target)
+	}
+	ans.Prefix = r.Prefix
+	if err := q.QueueManual(r.Prefix, OptimizeTTL); err != nil {
+		return OptimizeAnswer{}, err
+	}
+	ans.Expires = t.opt.Now().Add(OptimizeTTL)
+	return ans, nil
 }
 
 // TraceHop is one TTL of a trace.

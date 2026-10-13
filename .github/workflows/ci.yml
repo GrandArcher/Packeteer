@@ -492,7 +492,7 @@ jobs:
             'probe rollup' 'MED is display only' 'href="/troubleshooting.html?tool=probe&amp;target=198.51.100.0%2F24"' 'mode-observe' 'It announces nothing.' \
             --absent 'Announced' 'Cannot reach' 'mode-inject'
           bash lab/ui-smoke.sh 'http://127.0.0.1:18098/troubleshooting.html?tool=probe&target=198.51.100.0/24' 'value="198.51.100.0/24"' 'It announces nothing.'
-      - name: UI troubleshooting smoke (#180; looking glass and traceroute tables from canned answers, observe)
+      - name: UI troubleshooting smoke (#180, #126; looking glass, traceroute, and hostname probe from canned answers, observe)
         run: |
           set -euo pipefail
           base=http://127.0.0.1:18180
@@ -546,6 +546,9 @@ jobs:
             'no BGP RIB view configured' \
             'order: Traceroute 203.0.113.99 | Traceroute 198.51.100.9 | Traceroute 203.0.113.7 | Looking glass 192.0.2.0/24 | Looking glass 198.51.100.64/26 | Looking glass 198.51.100.0/24' \
             'after: Traceroute 198.51.100.9 | Traceroute 198.51.100.9 | Traceroute 203.0.113.7 | Looking glass 192.0.2.0/24 | Looking glass 198.51.100.64/26 | Looking glass 198.51.100.0/24' \
+            'host.example.net resolved to 198.51.100.9 (also 2001:db8::9)' 'Covering learned prefix 198.51.100.0/24, current exit transit-a. The best measured exit is transit-b.' \
+            '>current<' '>best<' 'indirect: nothing in the target answered' '>Probe and optimize<' \
+            'Queued 198.51.100.0/24 for probing until' 'the prefix page' \
             --absent 'rate limited; try again shortly' 'Cannot reach' 'mode-inject'
       - name: UI prefix list smoke (#183; a 100000-prefix list from canned pages, observe)
         run: |

@@ -392,14 +392,18 @@ Peers get `add_path: true` automatically when a neighbor has `add_path` (and `bm
 
 ### `troubleshoot`
 
-Operator tools on the ops HTTP server (`/api/troubleshoot/...` and the dashboard's Troubleshooting section). None of them announces, withdraws, or changes a decision. On-demand probe results go back to the caller only; they are not stored as probe results and never reach the decision loop.
+Operator tools on the ops HTTP server (`/api/troubleshoot/...` and the dashboard's Troubleshooting section). None of them announces or withdraws a route. On-demand probe results go back to the caller only and are not stored as probe results. The one write is `POST /api/troubleshoot/optimize` (operator): it adds a learned prefix to the probe set for a while, so the decision engine can then improve it under its usual rules (below).
 
 | Key | Default | Meaning |
 |---|---|---|
-| `enabled` | `false` | Turns on the tools that send traffic or query a registry: the on-demand probe (the configured prober chain from every provider's `source_ip`), traceroute (UDP from each provider's `source_ip`, `NET_RAW` not needed), and whois. The looking glass only reads the learned RIB and is always on. |
-| `requests_per_minute` | `6` | Probe, traceroute, and whois requests together, 1–600. Excess requests get `429`. |
+| `enabled` | `false` | Turns on the tools that send traffic or query a registry: the on-demand probe (the configured prober chain from every provider's `source_ip`) and probe and optimize, traceroute (UDP from each provider's `source_ip`, `NET_RAW` not needed), and whois. The looking glass only reads the learned RIB and is always on. |
+| `requests_per_minute` | `6` | Probe, probe and optimize, traceroute, and whois requests together, 1–600. Excess requests get `429`. |
 | `max_hops` | `30` | TTL limit for one traceroute, 1–64. One probe per hop, `probe.timeout` per hop. A trace stops early after six silent hops in a row. Each hop answer carries its `origin_as` (from the learned RIB) and, when the container's resolver has a PTR record, its `name`; the PTR lookups share a three-second limit. |
 | `whois` | none | One whois plugin entry (`type: rdap`). Without it, whois answers `404`. |
+
+The probe and probe-and-optimize targets are an IP address or a hostname. A hostname is resolved through the container's resolver (five-second limit); addresses that are loopback, link-local, multicast, broadcast, or unspecified are dropped, and the first remaining address whose family a provider `source_ip` can use is probed. The answer lists every address and the one used. A provider whose probes get no reply is traced from its `source_ip` with the `probe.indirect` trace settings (the defaults when `probe.indirect` is off) and the highest stable hop is probed instead, marked `indirect`. The trace packets are not metered per packet, so one request can send up to `max_hops` × `probes` of them (16 × 3 by default) per silent provider for one rate-limit token. `best` is the answering provider with the lowest score from the configured scorer; `current` is the provider of the covering learned route.
+
+`POST /api/troubleshoot/optimize` takes the same target and queues the longest learned prefix that covers it (never the default route, and never a prefix the RIB view does not hold) as an urgent probe target for 10 minutes, at most 64 at once (`409` past that). The prefix is probed on the next round, then on its normal interval until the 10 minutes end; the next completed round after that drops it unless a source lists it or an improvement keeps it. Queuing changes nothing on the wire. A move still needs the decision engine's rules: exact learned prefix, allowlist (inject), `max_improvements`, thresholds, `hold_time`, and the same withdraw triggers. In `observe` the result is a recommendation. Each request is audited with the queued prefix. A prefix inside an `exchange` LAN is not probed.
 
 The tools refuse loopback, link-local, multicast, broadcast, and unspecified targets. Whois accepts only an address, a prefix, or an ASN (`AS64496` or `64496`). The active tools are `POST` with a JSON body, so a cross-site page cannot trigger them. When basic auth is on, every tool needs it.
 
