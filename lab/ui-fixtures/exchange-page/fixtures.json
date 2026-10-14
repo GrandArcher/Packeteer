@@ -1,6 +1,7 @@
 {
   "stubs": [
     {"method": "GET", "path": "/api/exchanges", "file": "exchanges.json"},
+    {"method": "GET", "path": "/api/exchanges/offload", "file": "offload.json"},
     {"method": "GET", "path": "/api/reports/exchanges", "file": "report.json"}
   ]
 }

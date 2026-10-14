@@ -4,12 +4,13 @@
 // members on the peering LAN that are not peers. Per member it compares the
 // prefixes seen via the route server, bilaterally, or both (#156). Reads
 // GET /api/exchanges, GET /api/exchanges/member, and the stored exchanges
-// report. Read-only. Rows are built with
-// textContent only. Uses getJSON, el, clear, and fmtTime from app.js. No
+// report. The offload section (#152) reads GET /api/exchanges/offload.
+// Read-only. Rows are built with textContent only. Uses getJSON, el, clear, and fmtTime from app.js. No
 // inline script: the CSP allows scripts from this origin only.
 
 var EXCHANGE_REFRESH_MS = 5000;
 var EXCHANGE_REPORT_DAYS = 7;
+var OFFLOAD_ROWS = 100;
 var VIA_LABELS = {route_server: "route server", bilateral: "bilateral", unknown: "unknown"};
 var FLAG_LABELS = {
   rs_partial: ["RS partial", "Some prefixes arrive only bilaterally. The route server feed is partial or filtered."],
@@ -181,7 +182,34 @@ function renderExchangeReport(rep) {
   })));
 }
 
+function renderOffload(rep) {
+  var root = document.getElementById("offload");
+  var note = document.getElementById("offload-note");
+  clear(root);
+  var rows = (rep && rep.rows) || [];
+  if (!rows.length) {
+    note.textContent = "No prefix leaves through a transit that an exchange peer advertises.";
+    return;
+  }
+  var total = "Total " + rep.prefixes + " prefixes, " + exMbps(rep.mbps);
+  if (rep.est_savings != null) total += ", estimated saving " + rep.est_savings;
+  if (rep.truncated) total += ". Showing the first " + rows.length + "; the CSV holds up to 1000";
+  note.textContent = total + ".";
+  root.appendChild(exTable(["Prefix", "Bytes", "Rate", "Transit", "Exchange peers", "Est. saving"], rows.map(function (r) {
+    var peers = (r.peers || []).map(function (p) { return p.exchange + "/" + p.peer; }).join(", ");
+    return [exCell(r.prefix, "mono"), exCell(r.bytes), exCell(exMbps(r.mbps)), exCell(r.transit), exCell(peers), exCell(r.est_savings != null ? r.est_savings : "—")];
+  })));
+}
+
+function loadOffload() {
+  getJSON("/api/exchanges/offload?limit=" + OFFLOAD_ROWS).then(renderOffload, function (err) {
+    clear(document.getElementById("offload"));
+    document.getElementById("offload-note").textContent = err.status === 404 ? "No exchanges in the config." : err.message;
+  });
+}
+
 function loadExchanges() {
+  loadOffload();
   var status = document.getElementById("exchanges-status");
   getJSON("/api/exchanges").then(function (data) {
     status.textContent = "";

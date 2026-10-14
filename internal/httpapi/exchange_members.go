@@ -10,16 +10,18 @@ import (
 )
 
 const (
-	defaultMemberPrefixes = 100
-	maxMemberPrefixes     = 1000
+	defaultExchangeRows = 100
+	maxExchangeRows     = 1000
 )
 
-// ExchangeMembers is what the member comparison reads beyond the snapshot
-// (#156): the recorded counts and the prefixes of one class. Prefixes is
-// nil without a RIB view.
+// ExchangeMembers is what the exchange endpoints read beyond the snapshot:
+// for the member comparison (#156) the recorded counts and the prefixes of
+// one class (Prefixes is nil without a RIB view), and for the offload
+// report (#152) the report cut at a row limit.
 type ExchangeMembers struct {
 	History  *exchange.History
 	Prefixes func(nh netip.Addr, class string, limit int) ([]netip.Prefix, int)
+	Offload  func(limit int) exchange.Offload
 }
 
 // SetExchangeMembers attaches the member comparison reads. It may be
@@ -64,11 +66,11 @@ func (s *Server) handleExchangeMember(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "class must be route_server_only, bilateral_only, or both"})
 		return
 	}
-	limit := defaultMemberPrefixes
+	limit := defaultExchangeRows
 	if v := q.Get("limit"); v != "" {
 		n, err := strconv.Atoi(v)
-		if err != nil || n < 1 || n > maxMemberPrefixes {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "limit must be 1 to " + strconv.Itoa(maxMemberPrefixes)})
+		if err != nil || n < 1 || n > maxExchangeRows {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "limit must be 1 to " + strconv.Itoa(maxExchangeRows)})
 			return
 		}
 		limit = n
