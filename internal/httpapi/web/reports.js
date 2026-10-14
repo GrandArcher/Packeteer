@@ -18,7 +18,6 @@ var REPORT_PRESETS = ["1", "7", "30", "90", "365"];
 var reportDefs = [];
 var reportDef = null;
 var reportView = null;
-var reportData = null;
 
 // reportViewFromURL reads the page URL, which uses the API's own
 // parameters: days, or from and to (UTC), then the filters, sort, order,
@@ -208,7 +207,6 @@ function reportHeader(col) {
 }
 
 function reportRender(data) {
-  reportData = data;
   var root = document.getElementById("report");
   clear(root);
   var rows = (data && data.rows) || [];
@@ -244,7 +242,6 @@ function reportLoad() {
   document.getElementById("report-xlsx").setAttribute("href", reportAPI(reportView, "xlsx"));
   var root = document.getElementById("report");
   getJSON(reportAPI(reportView, "")).then(reportRender, function (err) {
-    reportData = null;
     clear(root);
     document.getElementById("report-count").textContent = "";
     root.appendChild(el("p", "empty", err.message.replace(/^\S+ failed: /, "")));

@@ -892,9 +892,11 @@ func (r *Report) sortBy(i int, typ string, desc bool) {
 func compareCells(typ, a, b string) int {
 	switch typ {
 	case TypeNumber:
-		x, _ := strconv.ParseFloat(a, 64)
-		y, _ := strconv.ParseFloat(b, 64)
-		return cmp.Compare(x, y)
+		x, err1 := strconv.ParseFloat(a, 64)
+		y, err2 := strconv.ParseFloat(b, 64)
+		if err1 == nil && err2 == nil {
+			return cmp.Compare(x, y)
+		}
 	case TypePrefix:
 		x, err1 := netip.ParsePrefix(a)
 		y, err2 := netip.ParsePrefix(b)

@@ -428,10 +428,10 @@ func TestReportListHasCategoriesFiltersAndColumns(t *testing.T) {
 	if err := json.Unmarshal(body, &got); err != nil || len(got.Reports) != len(history.Reports) {
 		t.Fatalf("%v %s", err, body)
 	}
-	for _, d := range got.Reports {
-		if d.Category == "" || len(d.Columns) == 0 || len(d.Filters) == 0 {
-			t.Errorf("%s: %+v", d.Name, d)
-		}
+	want, _ := json.Marshal(history.Reports)
+	have, _ := json.Marshal(got.Reports)
+	if !bytes.Equal(have, want) {
+		t.Errorf("report list differs from the catalog:\n got %s\nwant %s", have, want)
 	}
 }
 

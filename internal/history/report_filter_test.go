@@ -428,3 +428,19 @@ func TestASNFilterOnProbeRowsUsesTheStoredPrefixOrigin(t *testing.T) {
 		t.Errorf("improvement origin: %d rows, want 0", got)
 	}
 }
+
+func TestCompareCellsFallsBackToTextOnUnparsableCells(t *testing.T) {
+	for _, c := range []struct {
+		typ, a, b string
+		want      int
+	}{
+		{TypeNumber, "9", "10", -1},
+		{TypeNumber, "n/a", "10", 1},
+		{TypePrefix, "192.0.2.0/24", "198.51.100.0/24", -1},
+		{TypePrefix, "bad", "192.0.2.0/24", 1},
+	} {
+		if got := compareCells(c.typ, c.a, c.b); got != c.want {
+			t.Errorf("%s %q vs %q: got %d, want %d", c.typ, c.a, c.b, got, c.want)
+		}
+	}
+}

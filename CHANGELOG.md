@@ -6,7 +6,7 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 
 ### Added
 
-- Reports page: any date range, filters (provider, origin AS, prefix, cause, IP version), sortable columns, CSV and XLSX of the filtered rows, add to dashboard; unknown filters are a 400 (#178).
+- Reports page: filters, sortable columns, CSV/XLSX export, dashboard widget; unknown filters and `limit` on uncut reports are a 400; AS search also matches a prefix's stored origin (#178).
 - Top bar search and `GET /api/search`: a prefix (exact, covering, more specific), AS number, or AS name over live data and stored history; the improvements report takes `prefix` and `asn` (#172).
 - System page and `GET /api/system` show state, since, and last error per component (BGP, BMP, probes, sources, announcer, storage, notifiers, telemetry, HA); Overview tile links to it (#184).
 - Policies page lists maintenance windows (current, upcoming, finished) and opens or closes on-demand ones in local time; `POST /api/maintenance` takes `start`/`end` and `GET` lists the rest (#177).
