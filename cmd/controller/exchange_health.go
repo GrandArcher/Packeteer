@@ -14,11 +14,6 @@ import (
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
 )
 
-// hopProber measures next hops. *probe.Engine implements it.
-type hopProber interface {
-	ProbeHops(context.Context, []probe.HopTarget) []probe.HopResult
-}
-
 // exchangeHealth builds the next-hop targets and the health tracker for the
 // exchanges that have health on (#149). It returns nil when none do.
 func exchangeHealth(cfg *config.Config) ([]probe.HopTarget, *exchange.Health) {
@@ -56,7 +51,7 @@ func exchangeHealth(cfg *config.Config) ([]probe.HopTarget, *exchange.Health) {
 // healthRound probes every target once and feeds the tracker. A prober
 // error is an unmeasured sample, not a degraded peer: it says nothing
 // about the exchange.
-func healthRound(ctx context.Context, p hopProber, h *exchange.Health, targets []probe.HopTarget, now func() time.Time, emit func(plugin.Event)) {
+func healthRound(ctx context.Context, p *probe.Engine, h *exchange.Health, targets []probe.HopTarget, now func() time.Time, emit func(plugin.Event)) {
 	results := p.ProbeHops(ctx, targets)
 	if ctx.Err() != nil {
 		return
@@ -74,7 +69,7 @@ func healthRound(ctx context.Context, p hopProber, h *exchange.Health, targets [
 
 // runExchangeHealth probes the exchange peers' next hops once per probe
 // interval until ctx ends. It announces and withdraws nothing.
-func runExchangeHealth(ctx context.Context, p hopProber, h *exchange.Health, targets []probe.HopTarget, interval func() time.Duration, emit func(plugin.Event)) {
+func runExchangeHealth(ctx context.Context, p *probe.Engine, h *exchange.Health, targets []probe.HopTarget, interval func() time.Duration, emit func(plugin.Event)) {
 	for {
 		healthRound(ctx, p, h, targets, time.Now, emit)
 		timer := time.NewTimer(interval())

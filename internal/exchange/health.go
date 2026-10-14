@@ -71,7 +71,6 @@ type Change struct {
 	Degraded      bool
 	DegradedPeers []string
 	Peers         int
-	Since         time.Time
 }
 
 type peerState struct {
@@ -143,10 +142,11 @@ func (h *Health) Update(now time.Time, samples []Sample) []Change {
 			continue
 		}
 		ex.degraded = deg
+		ex.since = time.Time{}
 		if deg {
 			ex.since = now.UTC()
 		}
-		out = append(out, Change{Exchange: ex.spec.Exchange, Degraded: deg, DegradedPeers: bad, Peers: n, Since: ex.since})
+		out = append(out, Change{Exchange: ex.spec.Exchange, Degraded: deg, DegradedPeers: bad, Peers: n})
 	}
 	return out
 }

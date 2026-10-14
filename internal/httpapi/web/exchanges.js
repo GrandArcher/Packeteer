@@ -4,9 +4,9 @@
 // members on the peering LAN that are not peers. Each peer shows the last
 // probe of its next hop (#149), and an exchange where enough peers fail it
 // says so. Reads GET /api/exchanges and the stored exchanges report.
-// Read-only. Rows are built with
-// textContent only. Uses getJSON, el, clear, and fmtTime from app.js. No
-// inline script: the CSP allows scripts from this origin only.
+// Read-only. Rows are built with textContent only. Uses getJSON, el, clear,
+// and fmtTime from app.js. No inline script: the CSP allows scripts from this
+// origin only.
 
 var EXCHANGE_REFRESH_MS = 5000;
 var EXCHANGE_REPORT_DAYS = 7;

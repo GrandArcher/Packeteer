@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/netip"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -104,5 +105,38 @@ func TestProbeHopsRespectsLimiterAndContext(t *testing.T) {
 	}
 	if n := p.calls.Load(); n != 1 {
 		t.Fatalf("prober calls = %d, want 1", n)
+	}
+}
+
+// A next hop is also probed in normal rounds, so hop probes share its
+// per-target concurrency limit.
+func TestProbeHopsHonoursPerTargetConcurrency(t *testing.T) {
+	var cur, peak atomic.Int32
+	p := &fakeProber{fn: func(_ context.Context, req plugin.ProbeRequest) (plugin.ProbeResult, error) {
+		n := cur.Add(1)
+		defer cur.Add(-1)
+		for old := peak.Load(); n > old && !peak.CompareAndSwap(old, n); old = peak.Load() {
+		}
+		time.Sleep(20 * time.Millisecond)
+		return plugin.ProbeResult{Sent: req.Count, RTTs: ms(2)}, nil
+	}}
+	o := opts()
+	o.PerTargetConcurrency = 1
+	e, err := New([]Provider{provA}, []NamedProber{{Name: "icmp", Prober: p}}, nil, o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nh := netip.MustParseAddr("203.0.113.11")
+	var targets []HopTarget
+	for _, name := range []string{"ix-peer-a", "ix-peer-b", "ix-peer-c", "ix-peer-d"} {
+		targets = append(targets, HopTarget{Provider: name, Source: provA.Source, NextHop: nh})
+	}
+	for _, r := range e.ProbeHops(context.Background(), targets) {
+		if r.Err != "" || r.Stats.Received == 0 {
+			t.Fatalf("hop result = %+v", r)
+		}
+	}
+	if got := peak.Load(); got != 1 {
+		t.Fatalf("peak concurrent probes of one next hop = %d, want 1", got)
 	}
 }

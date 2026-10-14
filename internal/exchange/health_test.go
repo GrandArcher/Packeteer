@@ -47,8 +47,11 @@ func TestKPeersDegradeThenRecover(t *testing.T) {
 	// The third degrades a minute later: the window adds them up.
 	ch := h.Update(t1, []Sample{good("a"), good("b"), lost("c", 50), good("d")})
 	if len(ch) != 1 || !ch[0].Degraded || ch[0].Exchange != "ix-lab" || ch[0].Peers != 4 ||
-		!slices.Equal(ch[0].DegradedPeers, []string{"a", "b", "c"}) || !ch[0].Since.Equal(t1) {
+		!slices.Equal(ch[0].DegradedPeers, []string{"a", "b", "c"}) {
 		t.Fatalf("change = %+v", ch)
+	}
+	if snap := h.Snapshot(t1)["ix-lab"]; !snap.Since.Equal(t1) {
+		t.Fatalf("since = %v, want %v", snap.Since, t1)
 	}
 	// Still inside the window: no repeat.
 	t2 := t1.Add(time.Minute)
@@ -61,8 +64,8 @@ func TestKPeersDegradeThenRecover(t *testing.T) {
 	if len(ch) != 1 || ch[0].Degraded || !slices.Equal(ch[0].DegradedPeers, []string{"c"}) {
 		t.Fatalf("recovery = %+v", ch)
 	}
-	if h.Snapshot(t3)["ix-lab"].Degraded {
-		t.Fatal("still degraded after recovery")
+	if snap := h.Snapshot(t3)["ix-lab"]; snap.Degraded || !snap.Since.IsZero() {
+		t.Fatalf("after recovery degraded = %v since = %v", snap.Degraded, snap.Since)
 	}
 }
 

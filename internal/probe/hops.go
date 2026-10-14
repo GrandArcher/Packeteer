@@ -55,6 +55,13 @@ func (e *Engine) probeHop(ctx context.Context, t HopTarget) HopResult {
 	if ctx.Err() != nil {
 		return HopResult{Provider: t.Provider, Err: ctx.Err().Error()}
 	}
+	sem := e.sem(nh)
+	select {
+	case sem <- struct{}{}:
+	case <-ctx.Done():
+		return HopResult{Provider: t.Provider, Err: ctx.Err().Error()}
+	}
+	defer func() { <-sem }()
 	r, _ := e.runChain(ctx, res, Provider{Name: t.Provider, Source: t.Source}, e.packets(), 0, nil)
 	return HopResult{Provider: t.Provider, Stats: r.Stats, Err: r.Err}
 }

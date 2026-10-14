@@ -32,7 +32,7 @@ type ExchangeHealth struct {
 	// be. An exchange with fewer peers never raises the alert.
 	MinPeers int `yaml:"min_peers"`
 	// MinPercent, when positive, also raises the alert when that share of
-	// the measured peers is degraded.
+	// the exchange's peers is degraded.
 	MinPercent int `yaml:"min_percent"`
 	// Window is how long a peer counts as degraded after its last
 	// degraded probe, which is also how long the alert holds after the
