@@ -50,7 +50,7 @@
 <main>
   <section>
     <h2>Custom dashboards</h2>
-    <p class="tag">Your own layouts of read-only widgets, kept per user in storage. Refreshes every 15 seconds.</p>
+    <p class="tag">Your own layouts of read-only widgets, kept per user in storage. Each widget reads again on its own interval (15 seconds unless you set another). Move a widget with its ⠿ grip (drag it, or focus it and press the arrow keys) and resize it with its ◢ grip (drag it, or press the arrow keys); the list under Edit does the same with buttons and menus.</p>
     <div class="controls">
       <label>Dashboard <select id="db-name"></select></label>
       <button type="button" id="db-delete">Delete</button>
@@ -66,11 +66,19 @@
       <label>Report <select id="db-report"></select></label>
       <label>Graph destinations <select id="db-bucket"></select></label>
       <label>Days <input id="db-days" type="number" min="1" max="3660" value="7" size="4"></label>
-      <label><input id="db-wide" type="checkbox"> Wide</label>
+      <label>Width <select id="db-width">
+        <option value="3">3 of 12</option>
+        <option value="4">4 of 12</option>
+        <option value="6" selected>6 of 12</option>
+        <option value="8">8 of 12</option>
+        <option value="12">12 of 12</option>
+      </select></label>
+      <label><input id="db-favorite" type="checkbox"> Open this one first</label>
       <button type="button" id="db-add">Add widget</button>
       <button type="button" id="db-save">Save</button>
     </div>
     <ol id="db-widgets" class="widgets-list"></ol>
+    <p id="db-live" class="tag" role="status" aria-live="polite"></p>
   </section>
   <section>
     <h2 id="db-heading">Widgets</h2>

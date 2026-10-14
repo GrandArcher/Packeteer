@@ -520,7 +520,7 @@ jobs:
           docker stop -t 15 pkui184
           test "$(docker inspect -f '{{.State.ExitCode}}' pkui184)" = "0"
           docker rm pkui184
-      - name: UI graphs smoke (#129; before/after charts from seeded history, observe)
+      - name: UI graphs and dashboard widgets smoke (#129, #182; before/after charts from seeded history, widget move and resize, observe)
         run: |
           set -euo pipefail
           base=http://127.0.0.1:18097
@@ -598,6 +598,60 @@ jobs:
             'probe rollup' 'MED is display only' 'href="/troubleshooting.html?tool=probe&amp;target=198.51.100.0%2F24"' 'mode-observe' 'It announces nothing.' \
             --absent 'Announced' 'Cannot reach' 'mode-inject'
           bash lab/ui-smoke.sh 'http://127.0.0.1:18098/troubleshooting.html?tool=probe&target=198.51.100.0/24' 'value="198.51.100.0/24"' 'It announces nothing.'
+          # Dashboard widgets (#182). A stored layout from before the width
+          # field ("wide") is a full row. The chart widgets draw with data
+          # (improvements by cause from the seeded history) and without it
+          # (provider usage vs commit: no telemetry binding). The favorite
+          # dashboard opens first.
+          curl -fsS "${auth[@]}" -X PUT -H 'Content-Type: application/json' -d '{"widgets":[{"type":"status"}]}' "$base/api/dashboards/a-other" >/dev/null
+          curl -fsS "${auth[@]}" -X PUT -H 'Content-Type: application/json' \
+            -d '{"title":"Layout","favorite":true,"widgets":[{"type":"status","w":3},{"type":"providers","w":3},{"type":"causes","days":7,"w":6},{"type":"commit","days":7,"w":12,"h":3},{"type":"timeseries","bucket":"better_50","days":7,"wide":true}]}' \
+            "$base/api/dashboards/layout" >/dev/null
+          bash lab/ui-smoke.sh http://127.0.0.1:18098/dashboards.html 'id="db-favorite"' '★ layout' 'class="card widget w-3"' 'class="card widget w-6"' 'class="card widget w-12 h-3"' \
+            'class="card widget w-12"' 'class="ts-chart cause-chart"' 'Improvements started per day' 'Performance: 2' 'Cost: 1' \
+            'No provider has a telemetry binding' 'class="ts-chart"' 'mode-observe' 'It announces nothing.' --absent 'Cannot reach' 'mode-inject' 'No improvements started in this range.'
+          # Headless Chrome cannot click or press keys, so uiproxy adds a
+          # driver to /dashboards.html. It moves and resizes widgets with the
+          # arrow keys, the list buttons and menus, and a drag, sets a time
+          # window and a refresh, and saves. The layout it reloads must equal
+          # the one it saved.
+          /tmp/uiproxy -listen 127.0.0.1:18099 -upstream "$base" -user lab -password lab-only \
+            -fixtures lab/ui-fixtures/dashboards >/tmp/uiproxy182d.log 2>&1 &
+          proxy182=$!
+          for _ in $(seq 1 20); do
+            curl -fsS http://127.0.0.1:18099/healthz >/dev/null 2>&1 && break
+            sleep 0.2
+          done
+          curl -fsS http://127.0.0.1:18099/healthz >/dev/null
+          UI_SMOKE_ATTEMPTS=1 bash lab/ui-smoke.sh http://127.0.0.1:18099/dashboards.html 'mode-observe' 'It announces nothing.' \
+            'open: layout | favorite true | Readiness w-3 | Providers w-3 | Improvements by cause w-6 | Provider usage vs commit w-12 h-3 | Before/after graphs: 50% or more better w-12' \
+            'key move: Providers w-3 | Readiness w-3 | Improvements by cause w-6 | Provider usage vs commit w-12 h-3 | Before/after graphs: 50% or more better w-12 | focus grip grip-move' \
+            'key size: Providers w-3 | Readiness w-4 h-2 | Improvements by cause w-6 | Provider usage vs commit w-12 h-3 | Before/after graphs: 50% or more better w-12 | Readiness is 4 of 12 columns and 2 rows tall.' \
+            'list move: Providers w-3 | Improvements by cause w-6 | Readiness w-4 h-2 | Provider usage vs commit w-12 h-3 | Before/after graphs: 50% or more better w-12 | focus Move Improvements by cause earlier' \
+            'list size: Providers w-3 | Improvements by cause w-12 h-2 | Readiness w-4 h-2 | Provider usage vs commit w-12 h-3 | Before/after graphs: 50% or more better w-12 | causes window 30 | commit refresh 60' \
+            'drag: Before/after graphs: 50% or more better w-12 | Providers w-3 | Improvements by cause w-12 h-2 | Readiness w-4 h-2 | Provider usage vs commit w-12 h-3' \
+            'save: Saved layout. | Before/after graphs: 50% or more better w-12 | Providers w-3 | Improvements by cause w-12 h-2 | Readiness w-4 h-2 | Provider usage vs commit w-12 h-3 | identical true' \
+            --absent 'Cannot reach' 'mode-inject'
+          kill "$proxy182"
+          # The stored layout is the one on screen, with the legacy flag gone,
+          # and a plain reload shows the same sizes in the same order.
+          curl -fsS "${auth[@]}" "$base/api/dashboards" | tee /tmp/dash182.json
+          jq -e '.dashboards[] | select(.name == "layout") | .spec == {"title": "Layout", "favorite": true, "widgets": [
+            {"type": "timeseries", "days": 7, "bucket": "better_50", "w": 12}, {"type": "providers", "w": 3},
+            {"type": "causes", "days": 30, "w": 12, "h": 2}, {"type": "status", "w": 4, "h": 2},
+            {"type": "commit", "days": 7, "w": 12, "h": 3, "refresh": 60}]}' /tmp/dash182.json
+          jq -e '[.dashboards[] | select(.spec.favorite)] | length == 1' /tmp/dash182.json
+          bash lab/ui-smoke.sh http://127.0.0.1:18098/dashboards.html 'class="card widget w-12 h-2"' 'class="card widget w-4 h-2"' 'class="card widget w-3"' 'class="card widget w-12 h-3"' \
+            'It announces nothing.' --absent 'Cannot reach'
+          # The caps hold: a 25th widget, and a layout field that is not in the list.
+          test "$(jq -n '{widgets: [range(25) | {type: "status"}]}' | curl -s -o /dev/null -w '%{http_code}' "${auth[@]}" -X PUT \
+            -H 'Content-Type: application/json' --data-binary @- "$base/api/dashboards/over")" = 400
+          test "$(jq -n '{widgets: [range(24) | {type: "status", w: 3, h: 2}]}' | curl -s -o /dev/null -w '%{http_code}' "${auth[@]}" -X PUT \
+            -H 'Content-Type: application/json' --data-binary @- "$base/api/dashboards/full")" = 200
+          test "$(curl -s -o /dev/null -w '%{http_code}' "${auth[@]}" -X PUT -H 'Content-Type: application/json' \
+            -d '{"widgets":[{"type":"status","x":2}]}' "$base/api/dashboards/over")" = 400
+          test "$(curl -s -o /dev/null -w '%{http_code}' "${auth[@]}" -X PUT -H 'Content-Type: application/json' \
+            -d '{"widgets":[{"type":"status","w":13}]}' "$base/api/dashboards/over")" = 400
       - name: UI commit smoke (#174; 95th vs commit graph from seeded samples, commit setup flow, observe)
         run: |
           set -euo pipefail
@@ -699,6 +753,11 @@ jobs:
             'No stored samples for lab-c in this range.' 'It announces nothing.' --absent 'Cannot reach' 'Announced:' 'Recommended:'
           bash lab/ui-smoke.sh 'http://127.0.0.1:18175/commit.html?days=30' 'class="ts-chart usage-chart"' 'Data (3' 'Announced: 1 prefix off lab-a toward lab-b' \
             'Recommended: 2 prefixes off lab-a toward lab-b' 'It announces nothing.' --absent 'Cannot reach'
+          # The same graph as a dashboard widget (#182), with its own time window.
+          curl -fsS "${auth[@]}" -X PUT -H 'Content-Type: application/json' \
+            -d '{"widgets":[{"type":"commit","days":30,"w":12,"h":4}]}' "$base/api/dashboards/usage" >/dev/null
+          bash lab/ui-smoke.sh http://127.0.0.1:18175/dashboards.html 'class="card widget w-12 h-4"' 'class="ts-chart usage-chart"' 'lab-a: billable 95th' \
+            'Announced: 1 prefix off lab-a toward lab-b' 'No stored samples for lab-c in this range.' 'It announces nothing.' --absent 'Cannot reach' 'No provider has a telemetry binding'
           kill "$proxy"
           # Headless Chrome cannot click, so uiproxy adds a driver to
           # /settings.html. It walks the Commit setup: the commit scorer, a
@@ -839,7 +898,7 @@ jobs:
             --absent 'Cannot reach' 'mode-inject'
           # The widget holds the page's query and shows the same rows.
           curl -fsS "${auth[@]}" "$base/api/dashboards" | tee /tmp/dash178.json
-          jq -e '.dashboards[] | select(.name == "a-reports") | .spec.widgets == [{"type": "report", "title": "improvements (cause cost)", "report": "improvements", "days": 30, "query": "cause=cost&sort=prefix&order=desc", "wide": true}]' /tmp/dash178.json
+          jq -e '.dashboards[] | select(.name == "a-reports") | .spec.widgets == [{"type": "report", "title": "improvements (cause cost)", "report": "improvements", "days": 30, "query": "cause=cost&sort=prefix&order=desc", "w": 12}]' /tmp/dash178.json
           bash lab/ui-smoke.sh http://127.0.0.1:18209/dashboards.html 'improvements (cause cost)' '192.0.2.0/24' 'It announces nothing.' --absent 'Cannot reach' '198.51.100.0/24'
       - name: UI troubleshooting smoke (#180, #126; looking glass, traceroute, and hostname probe from canned answers, observe)
         run: |

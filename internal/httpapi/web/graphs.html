@@ -61,7 +61,14 @@
       </select></label>
       <button type="button" id="graph-load">Load</button>
       <a id="graph-csv" href="/api/reports/timeseries?days=7&amp;format=csv">CSV</a>
+      <button type="button" id="graph-add">Add to dashboard</button>
     </div>
+    <form id="graph-add-form" class="controls" hidden>
+      <label>Dashboard <select id="graph-dash"></select></label>
+      <label>New dashboard <input id="graph-dash-new" type="text" size="16" maxlength="63" placeholder="name"></label>
+      <button type="submit" id="graph-add-go">Add</button>
+    </form>
+    <p id="graph-status" class="tag" role="status"></p>
     <p id="graph-note" class="tag"></p>
     <div id="graph" class="graph"><p class="empty">Loading…</p></div>
   </section>
@@ -71,6 +78,7 @@
 <script src="/charts.js"></script>
 <script src="/shell.js"></script>
 <script src="/app.js"></script>
+<script src="/adddash.js"></script>
 <script src="/graphs.js"></script>
 </body>
 </html>

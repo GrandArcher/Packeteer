@@ -175,9 +175,43 @@ footer a { color: var(--head); }
 textarea.editor { width: 100%; font-size: 0.85rem; padding: 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--card); }
 .errors { color: var(--down); margin: 6px 0; }
 button.small { margin-left: 6px; padding: 3px 8px; border: 1px solid var(--line); }
-.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(420px, 1fr)); gap: 14px; }
-.widget.wide { grid-column: 1 / -1; }
-.widget { overflow-x: auto; }
+.grid { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); gap: 14px; }
+.widget { grid-column: span 6; overflow: auto; position: relative; }
+.widget-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.widget-head h3 { margin: 0 0 6px; }
+.widget-tools { display: flex; gap: 4px; }
+.grip { padding: 2px 8px; border: 1px solid var(--line); border-radius: 4px; background: var(--card); cursor: grab; }
+.grip-size { cursor: nwse-resize; touch-action: none; }
+.widget.dragging { opacity: 0.5; }
+.widget:focus-within { outline: 2px solid var(--head); outline-offset: 2px; }
+.widget-body { min-width: 0; }
+.widget.w-1 { grid-column: span 1; }
+.widget.w-2 { grid-column: span 2; }
+.widget.w-3 { grid-column: span 3; }
+.widget.w-4 { grid-column: span 4; }
+.widget.w-5 { grid-column: span 5; }
+.widget.w-6 { grid-column: span 6; }
+.widget.w-7 { grid-column: span 7; }
+.widget.w-8 { grid-column: span 8; }
+.widget.w-9 { grid-column: span 9; }
+.widget.w-10 { grid-column: span 10; }
+.widget.w-11 { grid-column: span 11; }
+.widget.w-12 { grid-column: span 12; }
+.widget.h-1 { height: 144px; }
+.widget.h-2 { height: 288px; }
+.widget.h-3 { height: 432px; }
+.widget.h-4 { height: 576px; }
+.widget.h-5 { height: 720px; }
+.widget.h-6 { height: 864px; }
+.widget.h-7 { height: 1008px; }
+.widget.h-8 { height: 1152px; }
+@media (max-width: 760px) { .grid .widget { grid-column: 1 / -1; } }
+.cause-bar.cause-performance { fill: #1f5fa8; }
+.cause-bar.cause-commit { fill: var(--diff); }
+.cause-bar.cause-cost { fill: var(--up); }
+.ts-key.cause-performance { color: #1f5fa8; }
+.ts-key.cause-commit { color: var(--diff); }
+.ts-key.cause-cost { color: var(--up); }
 .widgets-list li { margin: 4px 0; }
 
 /* Dashboard clarity, first run, and error states (#49). */

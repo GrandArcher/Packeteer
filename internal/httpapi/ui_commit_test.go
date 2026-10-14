@@ -21,7 +21,8 @@ func jsIDs(js string) []string {
 // rendered page is covered by the UI smoke test in CI.
 func TestCommitPageAssets(t *testing.T) {
 	html := mustWeb(t, "web/commit.html")
-	js := mustWeb(t, "web/commit.js")
+	page := mustWeb(t, "web/commit.js")
+	js := page + mustWeb(t, "web/charts.js") // the drawing code is shared with the dashboard widget (#182)
 
 	if strings.Contains(html, "#174") || strings.Contains(html, "not built yet") {
 		t.Error("commit.html still has the placeholder")
@@ -30,7 +31,7 @@ func TestCommitPageAssets(t *testing.T) {
 	if charts < 0 || charts > app || strings.Index(html, `src="/commit.js"`) < app {
 		t.Error("commit.html must load charts.js, app.js, then commit.js")
 	}
-	for _, id := range jsIDs(js) {
+	for _, id := range jsIDs(page) {
 		if !strings.Contains(html, `id="`+id+`"`) {
 			t.Errorf("commit.js looks up #%s, which commit.html lacks", id)
 		}
