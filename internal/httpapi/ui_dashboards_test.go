@@ -47,10 +47,11 @@ func TestDashboardsPageAssets(t *testing.T) {
 	// grip takes the arrow keys; the list under the form has the same
 	// actions as buttons and menus.
 	for _, s := range []string{
-		`ArrowLeft: i - 1`, `ArrowRight: i + 1`, `Home: 0`, `End: current.widgets.length - 1`,
+		`ArrowLeft: i - 1`, `ArrowUp: i - 1`, `ArrowRight: i + 1`, `ArrowDown: i + 1`, `Home: 0`, `End: current.widgets.length - 1`,
 		`{ArrowLeft: -1, ArrowRight: 1}`, `{ArrowUp: -1, ArrowDown: 1}`,
 		`"Move " + t + " earlier"`, `"Move " + t + " later"`, `"Width of " + t`, `"Height of " + t`, `"Refresh of " + t`, `"Time window of " + t`,
 		`move.draggable = true`, `"drop"`, `"pointerdown"`, `announce(`,
+		`var seq = ++c.seq;`, `if (seq !== c.seq) return;`,
 	} {
 		if !strings.Contains(js, s) {
 			t.Errorf("dashboards.js lacks %q", s)

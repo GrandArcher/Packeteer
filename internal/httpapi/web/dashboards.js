@@ -65,9 +65,14 @@ function renderWidget(w, box) {
   var path = apiFor(w);
   var body = box.querySelector(".widget-body");
   if (!path) { body.textContent = "Unknown widget."; return; }
+  // A refresh and a window change can overlap; only the newest answer is drawn,
+  // so an older response (say, the previous window) cannot land last.
+  var c = cards.get(w);
+  var seq = ++c.seq;
   fetch(path, {cache: "no-store", headers: {Accept: "application/json"}}).then(function (res) {
     return res.json().then(function (data) { return {ok: res.ok, data: data}; });
   }).then(function (r) {
+    if (seq !== c.seq) return;
     clear(body);
     if (w.type === "status") {
       var ready = r.data && r.data.ready;
@@ -92,7 +97,11 @@ function renderWidget(w, box) {
     var rows = firstArray(r.data);
     if (rows) body.appendChild(dataTable(rows, w.type === "improvements"));
     else body.appendChild(el("pre", "mono", formatJSON(r.data)));
-  }, function (err) { clear(body); body.appendChild(el("p", "empty", err.message)); });
+  }, function (err) {
+    if (seq !== c.seq) return;
+    clear(body);
+    body.appendChild(el("p", "empty", err.message));
+  });
 }
 
 // Grid geometry: a row has GRID_COLUMNS columns; a widget with h set is h
@@ -180,7 +189,7 @@ function dragResize(w, handle, e) {
     var r = box.getBoundingClientRect();
     var cols = Math.round((ev.clientX - r.left) / colW);
     var rows = Math.round((ev.clientY - r.top) / GRID_ROW_PX);
-    if (clamp(cols, 1, GRID_COLUMNS) !== widgetW(w) || clamp(rows, 1, MAX_ROWS) !== (w.h || 0)) resizeWidget(w, cols, rows);
+    if (clamp(cols, 1, GRID_COLUMNS) !== widgetW(w) || clamp(rows, 0, MAX_ROWS) !== (w.h || 0)) resizeWidget(w, cols, rows);
   }
   function done() {
     handle.removeEventListener("pointermove", move);
@@ -260,7 +269,7 @@ function renderGrid() {
   }
   current.widgets.forEach(function (w) {
     var box = buildCard(w);
-    cards.set(w, {box: box, timer: 0});
+    cards.set(w, {box: box, timer: 0, seq: 0});
     grid.appendChild(box);
     renderWidget(w, box);
     startTimer(w);
