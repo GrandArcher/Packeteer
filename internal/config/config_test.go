@@ -790,3 +790,51 @@ func TestFlapQuarantineDefaultsAndValidation(t *testing.T) {
 		}
 	}
 }
+
+// TestValidateSectionOrder pins that one error from each validation
+// section is reported, in the order the sections run.
+func TestValidateSectionOrder(t *testing.T) {
+	y := minimalYAML + `
+allowlist:
+  prefixes: ["not-a-cidr"]
+probe:
+  interval: 30s
+  timeout: 40s
+  workers: 100000
+bgp:
+  listen_port: 70000
+probers:
+  - config: {}
+troubleshoot:
+  max_hops: 1000
+log:
+  level: loud
+more_specific:
+  max_routes: 100000
+`
+	y = edit(t, y, "mode: observe", "mode: yolo")
+	_, err := Parse([]byte(y))
+	if err == nil {
+		t.Fatal("want error")
+	}
+	wants := []string{
+		"mode \"yolo\" is invalid",
+		"allowlist.prefixes[0]",
+		"probe.timeout",
+		"bgp.listen_port",
+		"probers[0]: type is required",
+		"troubleshoot.max_hops",
+		"probe.workers",
+		"log.level",
+		"more_specific.max_routes",
+	}
+	msg := err.Error()
+	at := 0
+	for _, w := range wants {
+		i := strings.Index(msg[at:], w)
+		if i < 0 {
+			t.Fatalf("error missing %q after offset %d:\n%s", w, at, msg)
+		}
+		at += i + len(w)
+	}
+}
