@@ -629,7 +629,7 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 	col.SetTruncated(func() map[string]uint64 { return truncated(plugins) })
 	col.Attach(engine, decider, view)
 	httpSrv.SetQuarantine(quarantineControl{decider: decider, out: dispatch, poke: poke, now: time.Now})
-	wireExchanges(ctx, cfg, col, httpSrv, view)
+	wireExchanges(ctx, cfg, col, httpSrv, view, plugins, decider)
 	hopTargets, ixHealth := exchangeHealth(cfg)
 	col.SetExchangeHealth(ixHealth)
 	wireSuggestions(cfg, httpSrv, view)
@@ -896,8 +896,8 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 // wireExchanges gives the ops API the exchange statistics (#27). The next
 // hop counts walk every learned path, so they are rebuilt only when the
 // RIB generation changes. It also starts the member availability history
-// (#156), which stops with ctx.
-func wireExchanges(ctx context.Context, cfg *config.Config, col *httpapi.Collector, srv *httpapi.Server, view *rib.View) {
+// (#156), which stops with ctx, and the offload report (#152).
+func wireExchanges(ctx context.Context, cfg *config.Config, col *httpapi.Collector, srv *httpapi.Server, view *rib.View, plugins *pluginhost.Set, decider *policy.Engine) {
 	if len(cfg.Exchanges) == 0 || view == nil {
 		return
 	}
@@ -931,7 +931,7 @@ func wireExchanges(ctx context.Context, cfg *config.Config, col *httpapi.Collect
 
 	// Member counts over time (#156): in memory, read-only.
 	hist := exchange.NewHistory()
-	srv.SetExchangeMembers(httpapi.ExchangeMembers{History: hist, Prefixes: view.MemberPrefixes})
+	srv.SetExchangeMembers(httpapi.ExchangeMembers{History: hist, Prefixes: view.MemberPrefixes, Offload: offloadReport(cfg, plugins, view, decider)})
 	go hist.Run(ctx, exchange.SampleEvery, func() []exchange.Stats { return exchange.Build(exs, hops(), nil, nil, nil) })
 }
 
@@ -2714,6 +2714,19 @@ func collectTraffic(ctx context.Context, plugins *pluginhost.Set) map[netip.Pref
 // largest rate wins when two sources name one prefix. A source that does
 // not implement VolumeSource is skipped. This does not announce.
 func collectVolumes(ctx context.Context, plugins *pluginhost.Set) map[netip.Prefix]float64 {
+	var out map[netip.Prefix]float64
+	for p, v := range collectVolumeRows(ctx, plugins) {
+		if out == nil {
+			out = map[netip.Prefix]float64{}
+		}
+		out[p] = v.Mbps()
+	}
+	return out
+}
+
+// collectVolumeRows is collectVolumes with the bytes and window kept. A
+// prefix with no rate is left out.
+func collectVolumeRows(ctx context.Context, plugins *pluginhost.Set) map[netip.Prefix]plugin.PrefixVolume {
 	if plugins == nil {
 		return nil
 	}
@@ -2722,7 +2735,7 @@ func collectVolumes(ctx context.Context, plugins *pluginhost.Set) map[netip.Pref
 	}
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
-	var out map[netip.Prefix]float64
+	var out map[netip.Prefix]plugin.PrefixVolume
 	for _, src := range plugins.SourcesSnapshot() {
 		if ctx.Err() != nil {
 			return out
@@ -2741,10 +2754,10 @@ func collectVolumes(ctx context.Context, plugins *pluginhost.Set) map[netip.Pref
 				continue
 			}
 			if out == nil {
-				out = map[netip.Prefix]float64{}
+				out = map[netip.Prefix]plugin.PrefixVolume{}
 			}
-			if mbps > out[row.Prefix] {
-				out[row.Prefix] = mbps
+			if mbps > out[row.Prefix].Mbps() {
+				out[row.Prefix] = row
 			}
 		}
 	}
