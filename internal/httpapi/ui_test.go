@@ -397,6 +397,7 @@ func TestDashboardsAPI(t *testing.T) {
 		"report on non-report": DashboardSpec{Widgets: []Widget{{Type: "providers", Report: "summary"}}},
 		"bucket on report":     DashboardSpec{Widgets: []Widget{{Type: "report", Report: "summary", Bucket: "all"}}},
 		"bucket on providers":  DashboardSpec{Widgets: []Widget{{Type: "providers", Bucket: "all"}}},
+		"query on timeseries":  DashboardSpec{Widgets: []Widget{{Type: "timeseries", Query: "asn=64500"}}},
 		"unknown bucket":       DashboardSpec{Widgets: []Widget{{Type: "timeseries", Bucket: "better_99"}}},
 		"report on timeseries": DashboardSpec{Widgets: []Widget{{Type: "timeseries", Report: "summary"}}},
 		"days too long":        DashboardSpec{Widgets: []Widget{{Type: "timeseries", Days: MaxReportDays + 1}}},
@@ -462,6 +463,8 @@ func TestUIPages(t *testing.T) {
 		"/dashboards.js":   {"/api/dashboards", "widget_types", "renderTimeSeries"},
 		"/graphs.html":     {`src="/charts.js"`, `src="/graphs.js"`, `id="graph"`},
 		"/graphs.js":       {"/api/reports/timeseries", "renderTimeSeries"},
+		"/reports.html":    {`src="/reports.js"`, `id="report-form"`},
+		"/reports.js":      {"/api/reports/", "/api/dashboards", "aria-sort", "utcFromInput", "format"},
 		"/charts.js":       {"createElementNS", "function renderTimeSeries", "No before/after data in this range"},
 		"/":                {`href="/settings.html"`, `href="/dashboards.html"`},
 	} {

@@ -64,7 +64,7 @@ func Search(h plugin.History, q SearchQuery) SearchResult {
 
 	imps := []SearchImprovement{}
 	for _, r := range a.imps {
-		if rel, ok := match(r.Prefix, r.OriginASN); ok {
+		if rel, ok := match(r.Prefix, improvementOrigin(r, a.info)); ok {
 			imps = append(imps, SearchImprovement{ImprovementRow: improvementRow(r, a.hours(r)), Relation: rel})
 		}
 	}

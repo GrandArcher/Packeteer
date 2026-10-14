@@ -372,3 +372,12 @@ a.button { display: inline-block; padding: 8px 14px; border: 1px solid var(--hea
 /* Search (#172) */
 .search-group { margin-top: 18px; }
 .search-group h3 { margin-bottom: 6px; }
+
+/* Reports page (#178). */
+.catalog h3 { font-size: 0.8rem; color: var(--muted); font-weight: 600; margin: 8px 0 4px; }
+.catalog a { display: inline-block; margin: 0 8px 4px 0; padding: 3px 9px; border: 1px solid var(--line); border-radius: 14px; background: var(--card); text-decoration: none; }
+.catalog a[aria-current="page"] { font-weight: 600; border-color: currentColor; }
+th button.sortbtn { all: unset; cursor: pointer; font: inherit; color: inherit; white-space: nowrap; }
+th button.sortbtn:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
+td.num { text-align: right; }
+.table-wrap { overflow-x: auto; }

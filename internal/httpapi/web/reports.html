@@ -50,26 +50,69 @@
 <main>
   <section>
     <h2>Reports</h2>
-    <p class="tag">History from the storage plugin. Loaded on demand, not on every refresh. Times are UTC.</p>
-    <div class="controls">
-      <label>Report <select id="report-name"></select></label>
-      <label>Days <select id="report-days">
-        <option value="1">1</option>
-        <option value="7" selected>7</option>
-        <option value="30">30</option>
-        <option value="90">90</option>
-        <option value="365">365</option>
+    <p class="tag">History from the storage plugin, loaded on demand. Pick a range in your local time; it is sent to the server as UTC. The table, CSV, and XLSX come from the same query, so they hold the same rows. Read-only: nothing here announces a route.</p>
+    <div id="report-catalog" class="catalog"></div>
+  </section>
+  <section id="report-view" hidden>
+    <h2 id="report-title"></h2>
+    <p id="report-summary" class="tag"></p>
+    <form id="report-form" class="controls">
+      <label>Range <select id="report-range" name="range">
+        <option value="1">Last 1 day</option>
+        <option value="7" selected>Last 7 days</option>
+        <option value="30">Last 30 days</option>
+        <option value="90">Last 90 days</option>
+        <option value="365">Last 365 days</option>
+        <option value="custom">Custom</option>
       </select></label>
-      <button type="button" id="report-load">Load</button>
+      <label id="report-from-label" hidden>From <input id="report-from" type="datetime-local"></label>
+      <label id="report-to-label" hidden>To <input id="report-to" type="datetime-local"></label>
+      <label id="rf-provider-label" hidden>Provider <input id="rf-provider" type="search" size="14" maxlength="100" placeholder="transit-a" list="rf-providers"></label>
+      <datalist id="rf-providers"></datalist>
+      <label id="rf-asn-label" hidden>Origin AS <input id="rf-asn" type="search" size="9" placeholder="64500" inputmode="numeric"></label>
+      <label id="rf-prefix-label" hidden>Prefix <input id="rf-prefix" type="search" size="18" placeholder="192.0.2.0/24"></label>
+      <label id="rf-cause-label" hidden>Cause <select id="rf-cause">
+        <option value="">Any</option>
+        <option value="performance">performance</option>
+        <option value="commit">commit</option>
+        <option value="cost">cost</option>
+        <option value="static">static</option>
+      </select></label>
+      <label id="rf-ip-label" hidden>IP version <select id="rf-ip">
+        <option value="">Any</option>
+        <option value="4">IPv4</option>
+        <option value="6">IPv6</option>
+      </select></label>
+      <label id="report-limit-label" hidden>Rows <select id="report-limit">
+        <option value="">Default</option>
+        <option value="20">20</option>
+        <option value="100">100</option>
+        <option value="500">500</option>
+        <option value="1000">1000</option>
+        <option value="10000">10000</option>
+      </select></label>
+      <button type="submit" id="report-apply">Apply</button>
+    </form>
+    <p id="report-error" class="tag" role="alert" hidden></p>
+    <p class="controls">
+      <span id="report-count" class="tag" role="status"></span>
       <a id="report-csv" href="/api/reports/summary?days=7&amp;format=csv">CSV</a>
-    </div>
-    <p id="report-filter" class="tag" hidden></p>
-    <div id="report"></div>
+      <a id="report-xlsx" href="/api/reports/summary?days=7&amp;format=xlsx">XLSX</a>
+      <button type="button" id="report-add">Add to dashboard</button>
+    </p>
+    <form id="report-add-form" class="controls" hidden>
+      <label>Dashboard <select id="report-dash"></select></label>
+      <label>New dashboard <input id="report-dash-new" type="text" size="16" maxlength="63" placeholder="name"></label>
+      <button type="submit" id="report-add-go">Add</button>
+    </form>
+    <p id="report-status" class="tag" role="status"></p>
+    <div id="report"><p class="empty">Loading…</p></div>
   </section>
 </main>
 </div>
 </div>
 <script src="/shell.js"></script>
 <script src="/app.js"></script>
+<script src="/reports.js"></script>
 </body>
 </html>

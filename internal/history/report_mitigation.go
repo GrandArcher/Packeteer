@@ -32,19 +32,14 @@ type MitigationRow struct {
 }
 
 func mitigations(in []plugin.MitigationRecord, q Query, rep *Report) {
-	ms := slices.Clone(in)
+	ms := slices.DeleteFunc(slices.Clone(in), func(m plugin.MitigationRecord) bool { return !q.matchPrefix(m.Prefix) })
 	slices.SortFunc(ms, func(x, y plugin.MitigationRecord) int {
 		if c := y.Created.Compare(x.Created); c != 0 {
 			return c
 		}
 		return cmp.Compare(x.ID, y.ID)
 	})
-	if len(ms) > q.Limit {
-		ms = ms[:q.Limit]
-	}
 	rows := make([]MitigationRow, 0, len(ms))
-	rep.head = []string{"id", "prefix", "action", "target", "match", "source_countries", "rate_mbps", "routes", "reason", "mode",
-		"created", "expires", "announced", "end", "end_reason", "announced_hours"}
 	for _, m := range ms {
 		row := MitigationRow{ID: m.ID, Prefix: m.Prefix.String(), Action: m.Action, Target: m.Target, Match: m.Match, Countries: m.Countries,
 			RateMbps: m.RateMbps, Routes: m.Routes, Reason: m.Reason, Mode: m.Mode, Created: m.Created.UTC(), Expires: m.Expires.UTC(),

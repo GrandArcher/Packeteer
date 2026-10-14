@@ -795,122 +795,6 @@ function refreshDone() {
   }
 }
 
-// The search page (#172) links here with the improvements report narrowed
-// to one prefix or one origin AS. The filter applies to that report only.
-function reportFilter() {
-  var q = new URLSearchParams(window.location.search);
-  var f = {};
-  if (q.get("prefix")) f.prefix = q.get("prefix");
-  if (q.get("asn")) f.asn = q.get("asn");
-  return f;
-}
-
-function reportURL(format) {
-  var nameEl = document.getElementById("report-name");
-  var daysEl = document.getElementById("report-days");
-  var name = nameEl && nameEl.value || "summary";
-  var days = daysEl && daysEl.value || "7";
-  var url = "/api/reports/" + encodeURIComponent(name) + "?days=" + encodeURIComponent(days);
-  var f = reportFilter();
-  var note = document.getElementById("report-filter");
-  var filtered = name === "improvements" && (f.prefix || f.asn);
-  if (filtered) {
-    if (f.prefix) url += "&prefix=" + encodeURIComponent(f.prefix);
-    if (f.asn) url += "&asn=" + encodeURIComponent(f.asn);
-  }
-  if (note) {
-    note.hidden = !filtered;
-    note.textContent = filtered ? "Only improvements for " + (f.prefix ? f.prefix : "") + (f.prefix && f.asn ? " and " : "") + (f.asn ? "origin AS" + f.asn.replace(/^as/i, "") : "") + "." : "";
-  }
-  if (format) url += "&format=" + format;
-  return url;
-}
-
-function fmtCell(v) {
-  if (v == null) return "—";
-  if (typeof v === "number") return String(Math.round(v * 1000) / 1000);
-  return String(v);
-}
-
-function renderReport(data) {
-  var root = document.getElementById("report");
-  if (!root) return;
-  clear(root);
-  var rows = (data && data.rows) || [];
-  var linkable = data && (data.report === "improvements" || data.report === "prefixes");
-  if (!rows.length) {
-    root.appendChild(el("p", "empty", "No history in this range."));
-    return;
-  }
-  var cols = [];
-  rows.forEach(function (r) {
-    Object.keys(r).forEach(function (k) {
-      if (cols.indexOf(k) < 0) cols.push(k);
-    });
-  });
-  var table = el("table");
-  var hr = el("tr");
-  cols.forEach(function (c) { hr.appendChild(el("th", "", c.replace(/_/g, " "))); });
-  var thead = el("thead");
-  thead.appendChild(hr);
-  table.appendChild(thead);
-  var tb = el("tbody");
-  rows.forEach(function (r) {
-    var tr = el("tr");
-    cols.forEach(function (c) {
-      tr.appendChild(c === "prefix" && linkable ? prefixCell(r[c]) : el("td", c === "prefix" ? "mono" : "", fmtCell(r[c])));
-    });
-    tb.appendChild(tr);
-  });
-  table.appendChild(tb);
-  root.appendChild(table);
-}
-
-function loadReport() {
-  var csv = document.getElementById("report-csv");
-  if (csv) csv.setAttribute("href", reportURL("csv"));
-  var root = document.getElementById("report");
-  if (!root) return;
-  getJSON(reportURL("")).then(renderReport, function (err) {
-    clear(root);
-    root.appendChild(el("p", "empty", err.message));
-  });
-}
-
-function initReports() {
-  var sel = document.getElementById("report-name");
-  if (!sel) return;
-  getJSON("/api/reports").then(function (data) {
-    clear(sel);
-    ((data && data.reports) || []).forEach(function (r) {
-      var o = el("option", "", r.name);
-      o.value = r.name;
-      o.title = r.summary || "";
-      sel.appendChild(o);
-    });
-    var want = new URLSearchParams(window.location.search).get("report");
-    if (want === "improvements") {
-      sel.value = want;
-      var daysSel = document.getElementById("report-days");
-      if (daysSel) daysSel.value = "90";
-    }
-    if (!data || !data.enabled) {
-      var root = document.getElementById("report");
-      if (root) {
-        clear(root);
-        root.appendChild(el("p", "empty", "History is off. Add storage: {type: sqlite} to the config and mount /var/lib/packeteer."));
-      }
-      return;
-    }
-    loadReport();
-  }, function () {});
-  var loadBtn = document.getElementById("report-load");
-  if (loadBtn) loadBtn.addEventListener("click", loadReport);
-  sel.addEventListener("change", loadReport);
-  var days = document.getElementById("report-days");
-  if (days) days.addEventListener("change", loadReport);
-}
-
 function postJSON(path, body) {
   return fetch(path, {
     method: "POST",
@@ -934,7 +818,6 @@ function bind(id, ev, fn) {
   if (n) n.addEventListener(ev, fn);
 }
 
-initReports();
 bind("refresh", "click", refresh);
 refresh();
 setInterval(refresh, REFRESH_MS);

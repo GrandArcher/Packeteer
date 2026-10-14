@@ -1,8 +1,11 @@
 package httpapi
 
 import (
+	"archive/zip"
+	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
@@ -321,12 +324,20 @@ func TestReportQueryFilters(t *testing.T) {
 			t.Errorf("%s accepted", bad)
 		}
 	}
-	for _, other := range []string{history.ReportSummary, history.ReportPrefixes} {
-		for _, qs := range []string{"prefix=198.51.100.0/24", "asn=64510"} {
-			if _, err := parse(other, qs); err == nil {
-				t.Errorf("%s?%s accepted", other, qs)
-			}
+	// A filter the report does not list, and a parameter nobody lists.
+	for _, bad := range [][2]string{
+		{history.ReportSummary, "cause=cost"}, {history.ReportTimeSeries, "provider=transit-a"}, {history.ReportMitigations, "asn=64510"},
+		{history.ReportImprovements, "provder=transit-a"}, {history.ReportImprovements, "cause=nope"}, {history.ReportImprovements, "ip_version=5"},
+		{history.ReportImprovements, "order=desc"}, {history.ReportImprovements, "sort=nope"}, {history.ReportImprovements, "sort=volume"},
+	} {
+		if _, err := parse(bad[0], bad[1]); err == nil {
+			t.Errorf("%s?%s accepted", bad[0], bad[1])
 		}
+	}
+	q, err = parse(history.ReportPrefixes, "provider=transit-a&asn=64510&prefix=198.51.100.0/24&ip_version=4&sort=avg_rtt_ms&order=desc&from=2026-09-01&to=2026-09-02")
+	if err != nil || q.Provider != "transit-a" || q.ASN != 64510 || q.IPVersion != 4 || q.Sort != "avg_rtt_ms" || q.Order != history.OrderDesc ||
+		!q.From.Equal(time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)) || !q.To.Equal(time.Date(2026, 9, 2, 0, 0, 0, 0, time.UTC)) {
+		t.Errorf("prefixes filters: %+v, %v", q, err)
 	}
 	// The prefix history call passes no report name and keeps its own prefix.
 	if _, err := parse("", "prefix=198.51.100.0/24&asn=64510"); err != nil {
@@ -341,9 +352,112 @@ func TestReportFilterOverHTTP(t *testing.T) {
 	if code != http.StatusOK || src.last.Prefix != netip.MustParsePrefix("198.51.100.0/24") || src.last.ASN != 64510 {
 		t.Fatalf("filtered: %d %s %+v", code, body, src.last)
 	}
-	for _, path := range []string{"/api/reports/improvements?asn=x", "/api/reports/summary?asn=64510", "/api/reports/summary?prefix=198.51.100.0/24"} {
+	for _, path := range []string{"/api/reports/improvements?asn=x", "/api/reports/summary?cause=cost", "/api/reports/summary?color=red", "/api/reports/summary?format=pdf"} {
 		if code, _, body := do(t, http.MethodGet, ts.URL+path, "", ""); code != http.StatusBadRequest {
 			t.Errorf("%s: %d %s", path, code, body)
+		}
+	}
+}
+
+func TestReportXLSXAndCSVHoldTheSameFilteredRows(t *testing.T) {
+	src := &fakeReports{}
+	ts := reportServer(t, src, "", "")
+	const qs = "?days=2&provider=transit-b&asn=64500&cause=performance&ip_version=4&sort=hours&order=desc"
+	code, hdr, body := do(t, http.MethodGet, ts.URL+"/api/reports/improvements"+qs+"&format=xlsx", "", "")
+	if code != http.StatusOK || hdr.Get("Content-Type") != history.XLSXContentType ||
+		!strings.HasPrefix(hdr.Get("Content-Disposition"), `attachment; filename="packeteer-improvements-`) || !strings.HasSuffix(hdr.Get("Content-Disposition"), `.xlsx"`) {
+		t.Fatalf("xlsx %d %v", code, hdr)
+	}
+	zr, err := zip.NewReader(bytes.NewReader(body), int64(len(body)))
+	if err != nil {
+		t.Fatalf("not a workbook: %v", err)
+	}
+	var sheet string
+	for _, f := range zr.File {
+		if f.Name == "xl/worksheets/sheet1.xml" {
+			rc, _ := f.Open()
+			b, _ := io.ReadAll(rc)
+			rc.Close()
+			sheet = string(b)
+		}
+	}
+	if !strings.Contains(sheet, "<t>Prefix</t>") || !strings.Contains(sheet, "192.0.2.0/24") || !strings.Contains(sheet, "transit-b") {
+		t.Errorf("sheet = %s", sheet)
+	}
+	q := src.last
+	if q.Provider != "transit-b" || q.ASN != 64500 || q.Cause != "performance" || q.IPVersion != 4 || q.Sort != "hours" || q.Order != "desc" {
+		t.Errorf("xlsx query = %+v", q)
+	}
+	// CSV and JSON take the same parameters, so the three exports agree.
+	code, _, csvBody := do(t, http.MethodGet, ts.URL+"/api/reports/improvements"+qs+"&format=csv", "", "")
+	if code != http.StatusOK || strings.Count(strings.TrimSpace(string(csvBody)), "\n") != 1 ||
+		src.last.Provider != q.Provider || src.last.ASN != q.ASN || src.last.Cause != q.Cause || src.last.IPVersion != q.IPVersion || src.last.Sort != q.Sort || src.last.Order != q.Order {
+		t.Errorf("csv %d %s, query %+v", code, csvBody, src.last)
+	}
+	// A filter that matches nothing is an empty report, not an error.
+	code, _, body = do(t, http.MethodGet, ts.URL+"/api/reports/improvements?provider=nobody", "", "")
+	var got struct {
+		Total   int              `json:"total"`
+		Rows    []map[string]any `json:"rows"`
+		Columns []history.Column `json:"columns"`
+	}
+	if err := json.Unmarshal(body, &got); err != nil || code != http.StatusOK || got.Total != 0 || len(got.Rows) != 0 || len(got.Columns) == 0 {
+		t.Errorf("no match: %d %s", code, body)
+	}
+}
+
+func TestReportDaysURLsKeepWorking(t *testing.T) {
+	src := &fakeReports{}
+	ts := reportServer(t, src, "", "")
+	for _, qs := range []string{"", "?days=30", "?days=30&format=csv", "?days=1&limit=5&sort=loss", "?from=2026-09-01&to=2026-09-03", "?to=2026-09-03&days=2"} {
+		if code, _, body := do(t, http.MethodGet, ts.URL+"/api/reports/prefixes"+qs, "", ""); code != http.StatusOK {
+			t.Errorf("prefixes%s: %d %s", qs, code, body)
+		}
+	}
+	if code, _, _ := do(t, http.MethodGet, ts.URL+"/api/reports/summary?days=2&from=2026-09-01", "", ""); code != http.StatusBadRequest {
+		t.Errorf("days with from: %d", code)
+	}
+}
+
+func TestReportListHasCategoriesFiltersAndColumns(t *testing.T) {
+	ts := reportServer(t, &fakeReports{}, "", "")
+	_, _, body := do(t, http.MethodGet, ts.URL+"/api/reports", "", "")
+	var got struct {
+		Reports []history.Def `json:"reports"`
+	}
+	if err := json.Unmarshal(body, &got); err != nil || len(got.Reports) != len(history.Reports) {
+		t.Fatalf("%v %s", err, body)
+	}
+	want, _ := json.Marshal(history.Reports)
+	have, _ := json.Marshal(got.Reports)
+	if !bytes.Equal(have, want) {
+		t.Errorf("report list differs from the catalog:\n got %s\nwant %s", have, want)
+	}
+}
+
+func TestWidgetQueryIsCheckedLikeTheEndpoint(t *testing.T) {
+	ok := []Widget{
+		{Type: "report", Report: "improvements", Days: 30, Query: "provider=transit-a&sort=hours&order=desc"},
+		{Type: "report", Report: "prefixes", Query: "from=2026-09-01&to=2026-09-03&ip_version=6"},
+		{Type: "report", Report: "summary", Days: 7},
+	}
+	if err := (DashboardSpec{Widgets: ok}).Validate(); err != nil {
+		t.Fatal(err)
+	}
+	for name, w := range map[string]Widget{
+		"unsupported filter": {Type: "report", Report: "summary", Query: "cause=cost"},
+		"unknown parameter":  {Type: "report", Report: "summary", Query: "color=red"},
+		"days in the query":  {Type: "report", Report: "summary", Query: "days=3"},
+		"format":             {Type: "report", Report: "summary", Query: "format=csv"},
+		"days and from":      {Type: "report", Report: "summary", Days: 3, Query: "from=2026-09-01"},
+		"bad value":          {Type: "report", Report: "improvements", Query: "prefix=nope"},
+		"newline":            {Type: "report", Report: "summary", Query: "provider=a\nb"},
+		"too long":           {Type: "report", Report: "summary", Query: "provider=" + strings.Repeat("a", 600)},
+		"on timeseries":      {Type: "timeseries", Query: "provider=a"},
+		"on providers":       {Type: "providers", Query: "provider=a"},
+	} {
+		if err := (DashboardSpec{Widgets: []Widget{w}}).Validate(); err == nil {
+			t.Errorf("%s accepted", name)
 		}
 	}
 }

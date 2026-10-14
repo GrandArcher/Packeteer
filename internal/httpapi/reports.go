@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/netip"
+	"net/url"
+	"slices"
 	"strconv"
 	"time"
 
@@ -47,11 +49,26 @@ func parseTime(v string) (time.Time, error) {
 	return t.UTC(), nil
 }
 
-// reportQuery reads from, to, days, limit, and sort. The default range is
-// the last DefaultReportDays days.
+// reportParams are the query parameters every report takes besides its
+// filters.
+var reportParams = []string{"days", "from", "to", "limit", "sort", "order", "format"}
+
+// reportQuery reads the range, limit, sort, and filters. The default range
+// is the last DefaultReportDays days. An unknown parameter is an error, so a
+// misspelled filter cannot return unfiltered rows.
 func reportQuery(r *http.Request, name string, now time.Time) (history.Query, error) {
-	q := history.Query{Name: name, To: now.UTC(), Sort: r.URL.Query().Get("sort")}
-	v := r.URL.Query()
+	return reportQueryValues(r.URL.Query(), name, now)
+}
+
+func reportQueryValues(v url.Values, name string, now time.Time) (history.Query, error) {
+	q := history.Query{Name: name, To: now.UTC(), Sort: v.Get("sort"), Order: v.Get("order")}
+	if name != "" {
+		for k := range v {
+			if !slices.Contains(reportParams, k) && !slices.Contains(history.Filters, k) {
+				return q, fmt.Errorf("unknown parameter %q", k)
+			}
+		}
+	}
 	if s := v.Get("to"); s != "" {
 		t, err := parseTime(s)
 		if err != nil {
@@ -91,28 +108,37 @@ func reportQuery(r *http.Request, name string, now time.Time) (history.Query, er
 		}
 		q.Limit = n
 	}
-	// The prefix history call has no report name and its own prefix.
-	if name != "" && (v.Has("prefix") || v.Has("asn")) {
-		if name != history.ReportImprovements {
-			return q, fmt.Errorf("prefix and asn filter only the %s report", history.ReportImprovements)
-		}
-		if s := v.Get("prefix"); s != "" {
-			p, err := netip.ParsePrefix(s)
-			if err != nil || p != p.Masked() {
-				return q, fmt.Errorf("prefix must be a network in CIDR form, such as 192.0.2.0/24")
-			}
-			q.Prefix = p
-		}
-		if s := v.Get("asn"); s != "" {
-			n, ok := netpfx.ParseASN(s)
-			if !ok {
-				return q, fmt.Errorf("asn must be an AS number such as 64500")
-			}
-			q.ASN = n
-		}
-	}
 	q.Now = now.UTC()
-	return q, nil
+	// The prefix history call has no report name and its own prefix.
+	if name == "" {
+		return q, nil
+	}
+	if s := v.Get(history.FilterPrefix); s != "" {
+		p, err := netip.ParsePrefix(s)
+		if err != nil || p != p.Masked() {
+			return q, fmt.Errorf("prefix must be a network in CIDR form, such as 192.0.2.0/24")
+		}
+		q.Prefix = p
+	}
+	if s := v.Get(history.FilterASN); s != "" {
+		n, ok := netpfx.ParseASN(s)
+		if !ok {
+			return q, fmt.Errorf("asn must be an AS number such as 64500")
+		}
+		q.ASN = n
+	}
+	if q.Provider = v.Get(history.FilterProvider); !validText(q.Provider, 100) {
+		return q, fmt.Errorf("provider must be one line of at most 100 bytes")
+	}
+	q.Cause = v.Get(history.FilterCause)
+	if s := v.Get(history.FilterIPVersion); s != "" {
+		n, err := strconv.Atoi(s)
+		if err != nil {
+			return q, fmt.Errorf("ip_version must be 4 or 6")
+		}
+		q.IPVersion = n
+	}
+	return q, q.Validate()
 }
 
 func (s *Server) handleReport(w http.ResponseWriter, r *http.Request) {
@@ -126,8 +152,8 @@ func (s *Server) handleReport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	format := r.URL.Query().Get("format")
-	if format != "" && format != "json" && format != "csv" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "format must be json or csv"})
+	if format != "" && format != "json" && format != "csv" && format != "xlsx" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "format must be json, csv, or xlsx"})
 		return
 	}
 	q, err := reportQuery(r, name, time.Now())
@@ -143,13 +169,17 @@ func (s *Server) handleReport(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
-	if format == "csv" {
-		w.Header().Set("Content-Type", "text/csv; charset=utf-8")
-		w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="packeteer-%s-%s-%s.csv"`,
-			name, q.From.Format("20060102T150405Z"), q.To.Format("20060102T150405Z")))
+	if format == "csv" || format == "xlsx" {
+		contentType, write := "text/csv; charset=utf-8", rep.CSV
+		if format == "xlsx" {
+			contentType, write = history.XLSXContentType, rep.XLSX
+		}
+		w.Header().Set("Content-Type", contentType)
+		w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="packeteer-%s-%s-%s.%s"`,
+			name, q.From.Format("20060102T150405Z"), q.To.Format("20060102T150405Z"), format))
 		w.WriteHeader(http.StatusOK)
-		if err := rep.CSV(w); err != nil {
-			s.log.Warn("report csv", "name", name, "err", err)
+		if err := write(w); err != nil {
+			s.log.Warn("report export", "name", name, "format", format, "err", err)
 		}
 		return
 	}

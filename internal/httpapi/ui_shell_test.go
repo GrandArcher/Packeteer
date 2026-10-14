@@ -95,7 +95,7 @@ func TestUIShell(t *testing.T) {
 		"improvements.html":    {`<body data-page="improvements" data-live="app">`, `id="improvements"`, `id="improvements-title">Recommended improvements`},
 		"prefixes.html":        {`<body data-page="prefixes" data-live="app">`, `id="prefixes"`, `id="asn-map"`, "ASN map", "MED"},
 		"providers.html":       {`<body data-page="providers" data-live="app">`, `id="providers"`, "#148"},
-		"reports.html":         {`<body data-page="reports" data-live="app">`, `id="report-name"`, `id="report-csv"`},
+		"reports.html":         {`<body data-page="reports" data-live="app">`, `id="report-catalog"`, `id="report-range"`, `id="report-csv"`, `id="report-xlsx"`, `id="report-add"`, `src="/reports.js"`},
 		"troubleshooting.html": {`<body data-page="troubleshooting" data-live="app">`, `id="tool-run"`, `id="tool-results"`, `id="tool-empty"`, `src="/tools.js"`, "Looking glass"},
 		"protection.html":      {`<body data-page="protection" data-live="app">`, `id="mitigation-section" hidden`, `id="mitigation"`, `id="protection-empty"`, `id="mit-form"`, `id="mf-prefix"`, `src="/protection.js"`, `id="mit-badge"`},
 		"graphs.html":          {`<body data-page="graphs" data-live="app">`, `id="graph"`, `id="graph-bucket"`, `id="graph-days"`, `id="graph-csv"`, `src="/charts.js"`, `src="/graphs.js"`, "nothing here announces a route"},

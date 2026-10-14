@@ -4,6 +4,7 @@ The remaining UI conveniences (#34). All of them work in the stock image with a 
 
 | Feature | Where | Who | Config |
 |---|---|---|---|
+| Reports page (#178) | `/reports.html`, `GET /api/reports`, `GET /api/reports/{name}` (JSON, CSV, XLSX) | viewer | `storage: {type: sqlite}` |
 | Before/after graphs (#129) | `/graphs.html`, `/api/reports/timeseries`, the `timeseries` dashboard widget | viewer | `storage: {type: sqlite}` |
 | Troubleshooting results (#180) | `/troubleshooting.html`, `/api/troubleshoot/...` | viewer for the looking glass, operator for probe, traceroute, and whois | `troubleshoot.enabled` for the active tools |
 | Prefix list (#183) | `/prefixes.html`, `/api/prefixes` | viewer | none |
@@ -35,7 +36,7 @@ Every page has the same chrome (#170). The mode banner is the first thing on the
 | Improvements | `/improvements.html` | Recommended or active improvements |
 | Prefixes & ASNs | `/prefixes.html` | The measured-prefix table, one page at a time, and the ASN map ([below](#prefix-list)) |
 | Graphs | `/graphs.html` | Before/after loss and latency charts (#129; [below](#graphs)). Empty state without history |
-| Reports | `/reports.html` | History reports and CSV |
+| Reports | `/reports.html` | History reports by category with a range, filters, sortable columns, and CSV and XLSX export ([below](#reports)) |
 | Providers & Exchanges | `/providers.html` | Provider health. The exchange view is empty (#148) |
 | Commit & Cost | `/commit.html` | Empty (#174) |
 | Policies | `/policies.html` | Points to Settings, where the `rules` policy is edited (#130). It does not list rules yet. With a `maintenance` policy, it lists maintenance windows ([below](#maintenance-windows)) |
@@ -119,6 +120,39 @@ Every improvement row opens `/prefix/<prefix>` (#179), for example `/prefix/192.
 `GET /api/prefixes/history?prefix=<prefix>&days=7` (viewer; `days`, or `from` and `to`, like the reports) returns `enabled`, `prefix`, `from`, `to`, `days` (`day`, `provider`, `probes`, `failed`, and the averages `loss_pct`, `rtt_ms`, `jitter_ms` when any probe returned statistics), and `improvements` (the rows of the improvements report, including `mode`). The prefix must be a network in CIDR form; anything else is a `400`. The match is exact: a covering or covered prefix is a different prefix. With no storage plugin it returns `enabled: false`.
 
 CI loads the page twice in the graphs step of the docker job (`lab/ui-smoke.sh`), against history seeded by `lab/mkhistory`: the timeline, the "Recommended" wording with no "Announced", the MED label, and the Probe now link; then the Probe tool with the prefix filled in. `internal/history` and `internal/httpapi` tests cover the filtering, the API, and the page wiring.
+
+## Reports
+
+`/reports.html` (#178) lists the stored reports by category: Overview (`summary`), Improvements (`improvements`, `causes`), Performance (`performance`, `timeseries`, `providers`, `probes`), Traffic (`prefixes`, `asns`, `countries`), Cost (`savings`), and Protection (`mitigations`, `anomalies`). It needs `storage: {type: sqlite}` and says so when history is off. It is read-only and announces nothing; the mode banner is on top in every mode.
+
+- **Range.** Last 1, 7, 30, 90, or 365 days, or a custom From and To typed in the browser's local time. The page sends a custom range as UTC (`from` and `to` as RFC 3339), and the count line shows the range back in local time. A range is at most 3660 days.
+- **Filters.** Only the filters the report takes are shown. A filter that matches nothing gives an empty table, not an error.
+- **Columns.** Each column has a label and, for numbers, a unit (`Avg loss (%)`, `Active (h)`). Click a header to sort by it; click again to reverse. Numbers and times sort largest or latest first, text and prefixes A to Z. Prefixes sort by address, not as text. An empty cell sorts last in either direction. Prefix cells link to the [prefix page](#prefix-detail-and-history) and origin AS cells to `/prefixes.html?asn=<number>`.
+- **Rows.** `improvements`, `savings`, `prefixes`, `asns`, `countries`, `mitigations`, and `anomalies` are cut to a row limit (the Rows menu; default 100 for `improvements`, `savings`, `mitigations`, and `anomalies`, 20 for the others, at most 10000). The sort happens before the cut, so sorting by Active (h) shows the longest improvements, not the longest of the newest 100. "Showing 20 of 140 rows" says when the table is cut. The other reports have one row per day, provider, or cause and are never cut.
+- **Export.** CSV and XLSX download the same query as the table: same range, filters, sort, and row limit. The CSV header names are unchanged. XLSX has one sheet named after the report, a bold header row of the labels with units, numbers as numeric cells, and everything else as text, so text that starts with `=` is never evaluated.
+- **Add to dashboard.** Saves the current view as a `report` widget on one of the user's [dashboards](#custom-dashboards) (or a new one) with the same filters, sort, and limit. It uses `PUT /api/dashboards/<name>`, so it needs `storage`, auth or basic auth, and the dashboard limits apply. A range from the preset menu is saved as `days` and keeps following the present; a custom range is saved as that fixed range.
+- **URL.** The view is in the query string using the API's parameters (`/reports.html?report=improvements&days=30&provider=transit-a&sort=hours&order=desc`), so a link opens the same view. A link with `report=improvements` and no range opens 90 days, as the search page links always did.
+
+Filters by report. All filters are optional and combine with AND.
+
+| Report | Filters |
+|---|---|
+| `improvements`, `causes`, `performance`, `savings` | `provider`, `asn`, `prefix`, `cause`, `ip_version` |
+| `summary`, `providers`, `probes`, `prefixes`, `asns`, `countries` | `provider`, `asn`, `prefix`, `ip_version` |
+| `timeseries` | `asn`, `prefix`, `cause`, `ip_version` |
+| `mitigations`, `anomalies` | `prefix`, `ip_version` |
+
+| Filter | Keeps |
+|---|---|
+| `provider` | Probe rows of that provider, and improvements where it is the chosen or the native provider. In `providers` only that provider's row remains; its counts still come from the improvements that involve it. |
+| `asn` | Origin AS (`64500` or `AS64500`): the origin stored with an improvement, or the prefix's origin when the improvement has none. Probe rows use the prefix's stored origin, or the origin of its matching improvements when it has none. |
+| `prefix` | That exact prefix in CIDR form (`192.0.2.0/24`). A covering or covered prefix is a different prefix. |
+| `cause` | Improvements with that cause: `performance`, `commit`, `cost`, or `static`. An improvement stored with no cause is `performance`. |
+| `ip_version` | `4` or `6`. |
+
+`GET /api/reports/<name>` takes `days` or `from` and `to` (not both), `limit`, `format` (`json`, `csv`, or `xlsx`), the filters above, and `sort` with `order`. `sort` is a column `key` from the response's `columns`, or for `prefixes`, `asns`, and `countries` still `problems`, `volume`, or `loss` (which rows the top list keeps). `order` is `asc` (default) or `desc` and goes with a column `sort`. Every other parameter is a `400`, as is a filter the report does not take, `limit` on a report that is never cut, a bad value, and `order` without a column `sort`, so a misspelled filter cannot return unfiltered rows. `GET /api/reports` lists each report with `category`, `summary`, `filters`, `columns` (`key`, `label`, `unit`, `type` of `text`, `number`, `time`, or `prefix`), and `limited`. The body of a report adds `columns` and `total` (the rows that matched, before the row limit). `days=` URLs and report subscriptions work as before.
+
+The "UI reports smoke" step of the docker job (`lab/ui-smoke.sh`) mounts history seeded by `lab/mkhistory` and checks the API (filters, sort before the limit, the `400` cases, the old URLs, and that the CSV and the XLSX hold the same rows in the same order). It loads the page from URLs, then loads it through `lab/uiproxy -fixtures lab/ui-fixtures/reports`, whose script presses the Prefix header twice, filters by cause, picks a custom range, and adds the view to a dashboard, because headless Chrome cannot click. Chrome runs in `Asia/Kolkata`, so the step checks that 08:30 typed is sent as `03:00Z`, and that the saved widget holds the page's query and shows the same rows. `internal/history` tests cover the filters, the sort, the cut, and the XLSX file; `internal/httpapi` tests cover the parameters, the downloads, and the widget check.
 
 ## Link-outs
 
@@ -412,11 +446,11 @@ There is no field for a password, a community string, or any other secret. Those
 
 ## Custom dashboards
 
-`/dashboards.html` builds dashboards from read-only widgets. Each user has their own (at most 20, with at most 24 widgets each), kept by the storage plugin (`sqlite`, table `dashboards`). Widgets read endpoints the viewer role can already read: readiness, providers, prefixes, improvements, decisions, provider usage, inbound steers, threat mitigation, anomalies, POPs, HA, report subscriptions, and any stored report with a range in days, and the before/after graphs (type `timeseries`, below). A widget can span the full row.
+`/dashboards.html` builds dashboards from read-only widgets. Each user has their own (at most 20, with at most 24 widgets each), kept by the storage plugin (`sqlite`, table `dashboards`). Widgets read endpoints the viewer role can already read: readiness, providers, prefixes, improvements, decisions, provider usage, inbound steers, threat mitigation, anomalies, POPs, HA, report subscriptions, and any stored report with a range in days or a saved Reports view (`query`, below), and the before/after graphs (type `timeseries`, below). A widget can span the full row.
 
 The improvements widget is titled Recommended improvements in observe and suggest, and Active improvements in inject (#171). A title the operator set on that widget is kept. Timestamps in a widget use the same local format as the main dashboard (`toLocaleString`). An unparseable value stays as returned.
 
-API: `GET /api/dashboards` returns `widget_types`, the report list, and your dashboards; `PUT /api/dashboards/<name>` with `{"title": "...", "widgets": [{"type": "providers"}, {"type": "report", "report": "summary", "days": 7, "wide": true}, {"type": "timeseries", "days": 30, "bucket": "better_50"}]}` saves one (unknown widget types, unknown reports, an unknown `bucket`, `report`, `days`, or `bucket` on a widget type that does not take them, and unknown fields are refused); `DELETE /api/dashboards/<name>` removes it. Deleting a user deletes that user's dashboards.
+API: `GET /api/dashboards` returns `widget_types`, the report list, and your dashboards; `PUT /api/dashboards/<name>` with `{"title": "...", "widgets": [{"type": "providers"}, {"type": "report", "report": "summary", "days": 7, "wide": true}, {"type": "report", "report": "improvements", "days": 30, "query": "provider=transit-a&sort=hours&order=desc"}, {"type": "timeseries", "days": 30, "bucket": "better_50"}]}` saves one (unknown widget types, unknown reports, an unknown `bucket`, `report`, `days`, `query`, or `bucket` on a widget type that does not take them, a `query` that `/api/reports/<name>` would refuse, and unknown fields are refused; `query` holds the filters, `sort`, `order`, and `limit`, or `from` and `to` instead of `days`); `DELETE /api/dashboards/<name>` removes it. Deleting a user deletes that user's dashboards.
 
 ## Report subscriptions
 

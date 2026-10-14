@@ -434,7 +434,7 @@ func TestImprovementsReportFilters(t *testing.T) {
 	}
 	for _, path := range []string{
 		"/api/reports/improvements?prefix=192.0.2.5/24", "/api/reports/improvements?prefix=nope",
-		"/api/reports/improvements?asn=0", "/api/reports/improvements?asn=x", "/api/reports/improvements?asn=SA64500", "/api/reports/improvements?asn=S64500", "/api/reports/improvements?asn=ASAS64500", "/api/reports/summary?asn=64500",
+		"/api/reports/improvements?asn=0", "/api/reports/improvements?asn=x", "/api/reports/improvements?asn=SA64500", "/api/reports/improvements?asn=S64500", "/api/reports/improvements?asn=ASAS64500", "/api/reports/mitigations?asn=64500",
 	} {
 		if code, _, body := do(t, http.MethodGet, ts.URL+path, "", ""); code != http.StatusBadRequest {
 			t.Errorf("%s: %d %s", path, code, body)
