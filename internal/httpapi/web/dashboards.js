@@ -16,10 +16,19 @@ function bucketLabel(id) {
   return id;
 }
 
+// reportWidgetAPI is the report URL of a widget: its saved query from the
+// Reports page (#178), with days unless the query has its own range.
+function reportWidgetAPI(w) {
+  var q = new URLSearchParams(w.query || "");
+  if (w.days) q.set("days", String(w.days));
+  else if (!q.has("from") && !q.has("to")) q.set("days", "7");
+  return "/api/reports/" + encodeURIComponent(w.report) + "?" + q.toString();
+}
+
 function apiFor(w) {
   for (var i = 0; i < catalog.length; i++) {
     if (catalog[i].type === w.type) {
-      if (w.type === "report") return "/api/reports/" + encodeURIComponent(w.report) + "?days=" + (w.days || 7);
+      if (w.type === "report") return reportWidgetAPI(w);
       if (w.type === "timeseries") return "/api/reports/timeseries?days=" + (w.days || 7);
       return catalog[i].api;
     }

@@ -167,7 +167,6 @@ func (a *agg) timeseries(rep *Report) {
 		return cmp.Compare(slices.Index(Buckets, x.bucket), slices.Index(Buckets, y.bucket))
 	})
 	rows := make([]TimeSeriesRow, 0, len(keys))
-	rep.head = []string{"day", "bucket", "prefixes", "before_loss_pct", "after_loss_pct", "before_rtt_ms", "after_rtt_ms"}
 	for _, k := range keys {
 		x := cells[k]
 		row := TimeSeriesRow{

@@ -342,8 +342,8 @@ jobs:
             'href="/reports.html?report=improvements&amp;prefix=198.51.100.0%2F24"' --absent 'Cannot reach' 'History is off'
           bash lab/ui-smoke.sh "$hist/search.html?q=AS64496" 'AS numbers (1)' 'href="/prefixes.html?asn=64496"' \
             'href="/reports.html?report=improvements&amp;asn=64496"' 'No measured prefix matches.' --absent 'Cannot reach'
-          bash lab/ui-smoke.sh "$hist/reports.html?report=improvements&prefix=198.51.100.0%2F24" 'Only improvements for 198.51.100.0/24.' \
-            'prefix=198.51.100.0%2F24' --absent 'Cannot reach'
+          bash lab/ui-smoke.sh "$hist/reports.html?report=improvements&prefix=198.51.100.0%2F24" 'id="rf-prefix"' \
+            'prefix=198.51.100.0%2F24&amp;format=csv' --absent 'Cannot reach'
           limited=0
           for _ in $(seq 1 20); do
             if [ "$(curl -s -o /dev/null -w '%{http_code}' "$hist/api/search?q=AS64496")" = 429 ]; then limited=1; break; fi
@@ -595,6 +595,124 @@ jobs:
             'probe rollup' 'MED is display only' 'href="/troubleshooting.html?tool=probe&amp;target=198.51.100.0%2F24"' 'mode-observe' 'It announces nothing.' \
             --absent 'Announced' 'Cannot reach' 'mode-inject'
           bash lab/ui-smoke.sh 'http://127.0.0.1:18098/troubleshooting.html?tool=probe&target=198.51.100.0/24' 'value="198.51.100.0/24"' 'It announces nothing.'
+      - name: UI reports smoke (#178; range, filters, sorting, CSV and XLSX from seeded history, observe)
+        run: |
+          set -euo pipefail
+          base=http://127.0.0.1:18207
+          mkdir -p /tmp/pkrep
+          go run ./lab/mkhistory -o /tmp/pkrep/packeteer.db
+          cat > /tmp/ui178.yaml <<'YAML'
+          mode: observe
+          asn: 64512
+          router_id: 192.0.2.10
+          http:
+            listen: "127.0.0.1:18207"
+          providers:
+            - name: lab-a
+              source_ip: 127.0.0.1
+              next_hop: 192.0.2.1
+            - name: lab-b
+              source_ip: 127.0.0.2
+              next_hop: 192.0.2.2
+          storage:
+            type: sqlite
+          YAML
+          docker run -d --name pkui178 --network host --cap-add NET_RAW --cap-add NET_ADMIN \
+            -e PACKETEER_HTTP_USER=lab -e PACKETEER_HTTP_PASSWORD=lab-only \
+            -v /tmp/ui178.yaml:/etc/packeteer/config.yaml:ro -v /tmp/pkrep:/var/lib/packeteer packeteer:ci
+          proxy=""
+          cleanup() {
+            if [ -n "$proxy" ]; then kill "$proxy" 2>/dev/null || true; fi
+            docker stop -t 15 pkui178 >/dev/null || true
+            docker logs pkui178 2>&1 | tail -n 40
+            code="$(docker inspect -f '{{.State.ExitCode}}' pkui178)"
+            docker rm pkui178 >/dev/null || true
+            test "$code" = "0"
+          }
+          trap cleanup EXIT
+          auth=(-u lab:lab-only)
+          ok=0
+          for _ in $(seq 1 30); do
+            if curl -fsS "${auth[@]}" "$base/healthz" >/dev/null 2>&1; then ok=1; break; fi
+            sleep 1
+          done
+          test "$ok" = 1
+          rep() { curl -fsS "${auth[@]}" "$base/api/reports/$1"; }
+          code() { curl -s -o /dev/null -w '%{http_code}' "${auth[@]}" "$base/api/reports/$1"; }
+          # The seed has three improvements: two performance (198.51.100.0/24,
+          # 203.0.113.0/24) and one cost (192.0.2.0/24), lab-a to lab-b.
+          rep 'improvements?days=30' | jq -e '.total == 3 and (.rows | length) == 3 and (.columns | map(.key) | index("hours")) != null'
+          rep 'improvements?days=30&cause=cost' | jq -e '.total == 1 and .rows[0].prefix == "192.0.2.0/24"'
+          rep 'improvements?days=30&provider=lab-a&ip_version=4&sort=prefix&order=desc' | jq -e '[.rows[].prefix] == ["203.0.113.0/24", "198.51.100.0/24", "192.0.2.0/24"]'
+          rep 'improvements?days=30&ip_version=6' | jq -e '.total == 0 and (.rows | length) == 0'
+          rep 'improvements?days=30&sort=prefix&limit=1' | jq -e '.total == 3 and (.rows | length) == 1 and .rows[0].prefix == "192.0.2.0/24"'
+          rep 'providers?days=30&provider=lab-b' | jq -e '(.rows | length) == 1 and .rows[0].provider == "lab-b"'
+          # Unknown parameters, filters a report does not take, and bad values are refused.
+          for q in 'improvements?colour=red' 'summary?cause=cost' 'timeseries?provider=lab-a' 'improvements?cause=nope' 'improvements?ip_version=5' \
+            'improvements?sort=nope' 'improvements?order=desc' 'improvements?days=7&from=2026-01-01' 'improvements?format=pdf'; do
+            test "$(code "$q")" = 400 || { echo "not refused: $q"; exit 1; }
+          done
+          # Old URLs keep working.
+          for q in 'summary' 'summary?days=7' 'prefixes?days=30&sort=loss&limit=5' 'improvements?days=90&format=csv'; do
+            test "$(code "$q")" = 200 || { echo "refused: $q"; exit 1; }
+          done
+          # CSV and XLSX of one filtered, sorted view hold the same rows in the same order.
+          qs='days=30&provider=lab-b&sort=prefix&order=desc'
+          rep "improvements?$qs&format=csv" > /tmp/rep178.csv
+          rep "improvements?$qs&format=xlsx" > /tmp/rep178.xlsx
+          unzip -p /tmp/rep178.xlsx xl/worksheets/sheet1.xml > /tmp/rep178.xml
+          test "$(grep -o '<row r=' /tmp/rep178.xml | wc -l)" = "$(wc -l < /tmp/rep178.csv)"
+          test "$(sed -n '2p' /tmp/rep178.csv | cut -d, -f1)" = 203.0.113.0/24
+          grep -o '<c r="A[0-9]*" t="inlineStr"><is><t xml:space="preserve">[^<]*' /tmp/rep178.xml | sed 's/.*>//' | paste -sd, | grep -qx '203.0.113.0/24,198.51.100.0/24,192.0.2.0/24'
+          curl -s -D - -o /dev/null "${auth[@]}" "$base/api/reports/summary?format=xlsx" | grep -i 'content-type: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+          go build -o /tmp/uiproxy ./lab/uiproxy
+          /tmp/uiproxy -listen 127.0.0.1:18208 -upstream "$base" -user lab -password lab-only >/tmp/uiproxy178.log 2>&1 &
+          proxy=$!
+          for _ in $(seq 1 20); do
+            curl -fsS http://127.0.0.1:18208/healthz >/dev/null 2>&1 && break
+            sleep 0.2
+          done
+          curl -fsS http://127.0.0.1:18208/healthz >/dev/null
+          # The page reads its view from the URL: the catalog by category, the
+          # filters this report takes, the sorted column, the row count, and
+          # exports with the same query.
+          bash lab/ui-smoke.sh 'http://127.0.0.1:18208/reports.html?report=improvements&days=30&provider=lab-b&sort=hours&order=desc' \
+            'mode-observe' 'It announces nothing.' '>Improvements</h3>' '>Protection</h3>' 'aria-current="page"' 'id="rf-cause-label"' \
+            'aria-sort="descending"' 'Active (h) ▼' 'Showing 3 of 3 rows' 'href="/prefix/198.51.100.0/24"' \
+            'provider=lab-b&amp;sort=hours&amp;order=desc&amp;format=csv' 'provider=lab-b&amp;sort=hours&amp;order=desc&amp;format=xlsx' \
+            --absent 'Cannot reach' 'mode-inject' 'History is off'
+          bash lab/ui-smoke.sh 'http://127.0.0.1:18208/reports.html?report=improvements&days=30&cause=cost' 'Showing 1 of 1 rows' 'href="/prefix/192.0.2.0/24"' \
+            --absent 'href="/prefix/198.51.100.0/24"' 'Cannot reach'
+          bash lab/ui-smoke.sh 'http://127.0.0.1:18208/reports.html?report=summary&days=7' 'id="rf-provider-label"' 'id="rf-cause-label" hidden=""' 'Showing 1 of 1 rows' --absent 'Cannot reach' 'id="rf-provider-label" hidden=""'
+          bash lab/ui-smoke.sh 'http://127.0.0.1:18208/reports.html?report=summary&cause=cost' 'the summary report has no cause filter' --absent 'Cannot reach' 'Showing'
+          kill "$proxy"
+          # Headless Chrome cannot click, so uiproxy adds a driver to
+          # /reports.html. It sorts the Prefix column twice, filters by cause,
+          # picks a custom range typed in local time, and adds the view to a
+          # dashboard. Chrome runs in Asia/Kolkata (UTC+5:30): 08:30 typed is
+          # sent as 03:00Z. The answers are the API's.
+          /tmp/uiproxy -listen 127.0.0.1:18209 -upstream "$base" -user lab -password lab-only \
+            -fixtures lab/ui-fixtures/reports >/tmp/uiproxy178d.log 2>&1 &
+          proxy=$!
+          for _ in $(seq 1 20); do
+            curl -fsS http://127.0.0.1:18209/healthz >/dev/null 2>&1 && break
+            sleep 0.2
+          done
+          curl -fsS http://127.0.0.1:18209/healthz >/dev/null
+          TZ=Asia/Kolkata UI_SMOKE_ATTEMPTS=1 bash lab/ui-smoke.sh 'http://127.0.0.1:18209/reports.html?report=improvements&days=30' \
+            'mode-observe' 'It announces nothing.' \
+            'fixture-default: ?report=improvements&amp;days=30 | unsorted | 198.51.100.0/24 203.0.113.0/24 192.0.2.0/24 | Showing 3 of 3 rows' \
+            'fixture-asc: ?report=improvements&amp;days=30&amp;sort=prefix&amp;order=asc | ascending | 192.0.2.0/24 198.51.100.0/24 203.0.113.0/24 | Showing 3 of 3 rows' \
+            'fixture-desc: ?report=improvements&amp;days=30&amp;sort=prefix&amp;order=desc | descending | 203.0.113.0/24 198.51.100.0/24 192.0.2.0/24 | Showing 3 of 3 rows' \
+            'fixture-cause: ?report=improvements&amp;days=30&amp;cause=cost&amp;sort=prefix&amp;order=desc | descending | 192.0.2.0/24 | Showing 1 of 1 rows' \
+            'links: /api/reports/improvements?days=30&amp;cause=cost&amp;sort=prefix&amp;order=desc&amp;format=csv /api/reports/improvements?days=30&amp;cause=cost&amp;sort=prefix&amp;order=desc&amp;format=xlsx' \
+            'range: from=2020-01-01T03:00:00Z to=2020-01-02T03:00:00Z | No rows match this range and these filters.' \
+            'add: Added improvements to dashboard a-reports.' \
+            --absent 'Cannot reach' 'mode-inject'
+          # The widget holds the page's query and shows the same rows.
+          curl -fsS "${auth[@]}" "$base/api/dashboards" | tee /tmp/dash178.json
+          jq -e '.dashboards[] | select(.name == "a-reports") | .spec.widgets == [{"type": "report", "title": "improvements (cause cost)", "report": "improvements", "days": 30, "query": "cause=cost&sort=prefix&order=desc", "wide": true}]' /tmp/dash178.json
+          bash lab/ui-smoke.sh http://127.0.0.1:18209/dashboards.html 'improvements (cause cost)' '192.0.2.0/24' 'It announces nothing.' --absent 'Cannot reach' '198.51.100.0/24'
       - name: UI troubleshooting smoke (#180, #126; looking glass, traceroute, and hostname probe from canned answers, observe)
         run: |
           set -euo pipefail

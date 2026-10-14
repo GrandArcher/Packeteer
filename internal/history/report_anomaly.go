@@ -27,19 +27,14 @@ type AnomalyRow struct {
 }
 
 func anomalies(in []plugin.AnomalyRecord, q Query, rep *Report) {
-	as := slices.Clone(in)
+	as := slices.DeleteFunc(slices.Clone(in), func(a plugin.AnomalyRecord) bool { return !q.matchPrefix(a.Prefix) })
 	slices.SortFunc(as, func(x, y plugin.AnomalyRecord) int {
 		if c := y.Start.Compare(x.Start); c != 0 {
 			return c
 		}
 		return cmp.Compare(x.ID, y.ID)
 	})
-	if len(as) > q.Limit {
-		as = as[:q.Limit]
-	}
 	rows := make([]AnomalyRow, 0, len(as))
-	rep.head = []string{"id", "prefix", "protocol", "peak_mbps", "baseline_mbps", "reason", "rule", "mitigation", "action",
-		"start", "end", "end_reason", "minutes"}
 	for _, a := range as {
 		row := AnomalyRow{ID: a.ID, Prefix: a.Prefix.String(), Protocol: a.Protocol, PeakMbps: round(a.PeakMbps), BaselineMbps: round(a.BaselineMbps),
 			Reason: a.Reason, Rule: a.Rule, Mitigation: a.Mitigation, Action: a.Action, Start: a.Start.UTC(), EndReason: a.EndReason}

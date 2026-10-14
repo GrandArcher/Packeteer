@@ -462,6 +462,8 @@ func TestUIPages(t *testing.T) {
 		"/dashboards.js":   {"/api/dashboards", "widget_types", "renderTimeSeries"},
 		"/graphs.html":     {`src="/charts.js"`, `src="/graphs.js"`, `id="graph"`},
 		"/graphs.js":       {"/api/reports/timeseries", "renderTimeSeries"},
+		"/reports.html":    {`src="/reports.js"`, `id="report-form"`},
+		"/reports.js":      {"/api/reports/", "/api/dashboards", "aria-sort", "utcFromInput", "format"},
 		"/charts.js":       {"createElementNS", "function renderTimeSeries", "No before/after data in this range"},
 		"/":                {`href="/settings.html"`, `href="/dashboards.html"`},
 	} {

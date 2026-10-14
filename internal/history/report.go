@@ -3,12 +3,13 @@ package history
 import (
 	"cmp"
 	"encoding/csv"
-	"fmt"
 	"io"
 	"math"
 	"net/netip"
+	"reflect"
 	"slices"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
@@ -30,36 +31,6 @@ const (
 	ReportMitigations  = "mitigations"
 	ReportAnomalies    = "anomalies"
 )
-
-// Reports lists every report name with a one-line description.
-var Reports = []struct {
-	Name    string `json:"name"`
-	Summary string `json:"summary"`
-}{
-	{ReportSummary, "Totals: improvements by cause, active now, average loss and latency before and after, probes, estimated savings."},
-	{ReportImprovements, "Every improvement that overlaps the range, newest first."},
-	{ReportCauses, "Improvements started per UTC day, by cause (performance, commit, cost)."},
-	{ReportPerformance, "Loss and latency before (native) and after (chosen provider), by cause."},
-	{ReportTimeSeries, "Loss and latency per UTC day, before (native) and after (chosen provider), for all, problem, 20%-better, and 50%-better destinations. Not cut by limit."},
-	{ReportProviders, "Provider efficiency: measured loss, latency, failures, and improvements onto and off each provider."},
-	{ReportPrefixes, "Top prefixes by problems, volume, or loss."},
-	{ReportASNs, "Top origin ASNs by problems, volume, or loss."},
-	{ReportCountries, "Top countries by problems, volume, or loss (needs a rules policy with geoip_db)."},
-	{ReportProbes, "Probes per UTC day."},
-	{ReportSavings, "Estimated cost savings per improvement between priced providers."},
-	{ReportMitigations, "Threat mitigation history: every RTBH, redirect, and FlowSpec rule that overlaps the range, newest first."},
-	{ReportAnomalies, "Traffic anomaly history: every detected anomaly that overlaps the range, the rule that matched, and the mitigation added, newest first."},
-}
-
-// Known reports whether name is a report.
-func Known(name string) bool {
-	for _, r := range Reports {
-		if r.Name == name {
-			return true
-		}
-	}
-	return false
-}
 
 // HoursPerMonth converts a monthly price per Mbps into an hourly accrual.
 // Savings accrue as est_savings × hours / HoursPerMonth.
@@ -86,20 +57,30 @@ type Query struct {
 	// Now bounds open improvements. It defaults to To.
 	Now   time.Time
 	Limit int
+	// Sort is problems, volume, or loss (which top-N rows to keep), or a
+	// column key of the report (#178). Order is asc or desc and goes with a
+	// column key; the default is asc.
 	Sort  string
-	// Prefix and ASN narrow the improvements report to one prefix or one
-	// origin ASN (#172). Zero is no filter. Other reports ignore them.
-	Prefix netip.Prefix
-	ASN    uint32
+	Order string
+	// The filters (#172, #178). Zero is no filter. A report refuses a
+	// filter it does not list in its Def (see Validate).
+	Prefix    netip.Prefix
+	ASN       uint32
+	Provider  string
+	Cause     string
+	IPVersion int
 }
 
 // Report is one report's rows. Rows is a typed slice for JSON; CSV writes
 // the same rows with a header.
 type Report struct {
-	Name  string    `json:"report"`
-	From  time.Time `json:"from"`
-	To    time.Time `json:"to"`
-	Rows  any       `json:"rows"`
+	Name    string    `json:"report"`
+	From    time.Time `json:"from"`
+	To      time.Time `json:"to"`
+	Columns []Column  `json:"columns"`
+	Rows    any       `json:"rows"`
+	// Total is the rows that matched, before the row limit cut them.
+	Total int `json:"total"`
 	head  []string
 	lines [][]string
 }
@@ -123,25 +104,23 @@ func Build(h plugin.History, q Query) (Report, error) {
 	if q.Now.IsZero() || q.Now.After(q.To) {
 		q.Now = q.To
 	}
-	if q.Limit <= 0 {
-		q.Limit = DefaultLimit
+	if err := q.Validate(); err != nil {
+		return Report{}, err
+	}
+	def, _ := Lookup(q.Name)
+	limit := q.Limit
+	if limit <= 0 {
+		limit = DefaultLimit
 		if q.Name == ReportImprovements || q.Name == ReportSavings || q.Name == ReportMitigations || q.Name == ReportAnomalies {
-			q.Limit = 100
+			limit = 100
 		}
 	}
-	if q.Limit > MaxLimit {
-		q.Limit = MaxLimit
-	}
+	limit = min(limit, MaxLimit)
 	if q.Sort == "" {
 		q.Sort = SortProblems
 	}
-	switch q.Sort {
-	case SortProblems, SortVolume, SortLoss:
-	default:
-		return Report{}, fmt.Errorf("sort %q is invalid (want problems, volume, loss)", q.Sort)
-	}
 	a := newAgg(h, q)
-	rep := Report{Name: q.Name, From: q.From.UTC(), To: q.To.UTC()}
+	rep := Report{Name: q.Name, From: q.From.UTC(), To: q.To.UTC(), Columns: def.Columns}
 	switch q.Name {
 	case ReportSummary:
 		a.summary(&rep)
@@ -169,8 +148,17 @@ func Build(h plugin.History, q Query) (Report, error) {
 		mitigations(h.Mitigations, q, &rep)
 	case ReportAnomalies:
 		anomalies(h.Anomalies, q, &rep)
-	default:
-		return Report{}, fmt.Errorf("unknown report %q", q.Name)
+	}
+	rep.head = make([]string, len(def.Columns))
+	for i, c := range def.Columns {
+		rep.head[i] = c.header()
+	}
+	if i, ok := def.column(q.Sort); ok {
+		rep.sortBy(i, def.Columns[i].Type, q.Order == OrderDesc)
+	}
+	rep.Total = len(rep.lines)
+	if def.Limited {
+		rep.cut(limit)
 	}
 	return rep, nil
 }
@@ -184,18 +172,33 @@ type agg struct {
 
 func newAgg(h plugin.History, q Query) *agg {
 	a := &agg{q: q, info: map[netip.Prefix]plugin.PrefixInfo{}}
+	for _, p := range h.Prefixes {
+		a.info[p.Prefix] = p
+	}
+	var asnOf map[netip.Prefix]uint32
+	if q.ASN != 0 {
+		asnOf = map[netip.Prefix]uint32{}
+		for _, p := range h.Prefixes {
+			asnOf[p.Prefix] = p.OriginASN
+		}
+		for _, r := range h.Improvements {
+			if asnOf[r.Prefix] == 0 {
+				asnOf[r.Prefix] = r.OriginASN
+			}
+		}
+	}
 	for _, b := range h.Buckets {
-		if !b.Day.Before(q.From.UTC().Truncate(24*time.Hour)) && b.Day.Before(q.To) {
+		if !b.Day.Before(q.From.UTC().Truncate(24*time.Hour)) && b.Day.Before(q.To) &&
+			q.matchPrefix(b.Prefix) && (q.ASN == 0 || asnOf[b.Prefix] == q.ASN) && (q.Provider == "" || b.Provider == q.Provider) {
 			a.buckets = append(a.buckets, b)
 		}
 	}
 	for _, r := range h.Improvements {
-		if r.Start.Before(q.To) && (r.End.IsZero() || !r.End.Before(q.From)) {
+		if r.Start.Before(q.To) && (r.End.IsZero() || !r.End.Before(q.From)) &&
+			q.matchPrefix(r.Prefix) && (q.ASN == 0 || asnOf[r.Prefix] == q.ASN) &&
+			(q.Provider == "" || r.Provider == q.Provider || r.Native == q.Provider) && (q.Cause == "" || cause(r) == q.Cause) {
 			a.imps = append(a.imps, r)
 		}
-	}
-	for _, p := range h.Prefixes {
-		a.info[p.Prefix] = p
 	}
 	return a
 }
@@ -321,8 +324,6 @@ func (a *agg) summary(rep *Report) {
 	s.BeforeLossPct, s.AfterLossPct, s.BeforeRTTMs, s.AfterRTTMs = bl.val(), al.val(), br.val(), ar.val()
 	s.SteeredHours, s.EstSavingsRate, s.EstSavingsAccrued = round(s.SteeredHours), round(s.EstSavingsRate), round(s.EstSavingsAccrued)
 	rep.Rows = []SummaryRow{s}
-	rep.head = []string{"improvements", "performance", "commit", "cost", "active", "steered_hours", "before_loss_pct", "after_loss_pct",
-		"before_rtt_ms", "after_rtt_ms", "probes", "failed_probes", "prefixes", "est_savings_rate", "est_savings_accrued"}
 	rep.lines = [][]string{{
 		strconv.Itoa(s.Improvements), strconv.Itoa(s.Performance), strconv.Itoa(s.Commit), strconv.Itoa(s.Cost), strconv.Itoa(s.Active),
 		f(s.SteeredHours), f(s.BeforeLossPct), f(s.AfterLossPct), f(s.BeforeRTTMs), f(s.AfterRTTMs),
@@ -385,21 +386,13 @@ func improvementRow(r plugin.ImprovementRecord, hours float64) ImprovementRow {
 
 func (a *agg) improvements(rep *Report) {
 	imps := slices.Clone(a.imps)
-	imps = slices.DeleteFunc(imps, func(r plugin.ImprovementRecord) bool {
-		return (a.q.Prefix.IsValid() && r.Prefix != a.q.Prefix) || (a.q.ASN != 0 && r.OriginASN != a.q.ASN)
-	})
 	slices.SortFunc(imps, func(x, y plugin.ImprovementRecord) int {
 		if c := y.Start.Compare(x.Start); c != 0 {
 			return c
 		}
 		return cmp.Compare(x.ID, y.ID)
 	})
-	if len(imps) > a.q.Limit {
-		imps = imps[:a.q.Limit]
-	}
 	rows := make([]ImprovementRow, 0, len(imps))
-	rep.head = []string{"prefix", "provider", "native", "cause", "reason", "mode", "start", "end", "end_reason", "hours",
-		"before_loss_pct", "after_loss_pct", "before_rtt_ms", "after_rtt_ms", "origin_asn", "country", "volume_mbps", "cost_delta", "est_savings"}
 	for _, r := range imps {
 		row := improvementRow(r, a.hours(r))
 		rows = append(rows, row)
@@ -453,7 +446,6 @@ func (a *agg) causes(rep *Report) {
 	}
 	slices.SortFunc(rows, func(x, y CauseRow) int { return cmp.Compare(x.Day, y.Day) })
 	rep.Rows = rows
-	rep.head = []string{"day", "performance", "commit", "cost", "total"}
 	for _, r := range rows {
 		rep.lines = append(rep.lines, []string{r.Day, strconv.Itoa(r.Performance), strconv.Itoa(r.Commit), strconv.Itoa(r.Cost), strconv.Itoa(r.Total)})
 	}
@@ -507,7 +499,6 @@ func (a *agg) performance(rep *Report) {
 	}
 	rows = append(rows, row("all", all))
 	rep.Rows = rows
-	rep.head = []string{"cause", "improvements", "before_loss_pct", "after_loss_pct", "loss_reduced_pct", "before_rtt_ms", "after_rtt_ms", "rtt_reduced_ms"}
 	for _, r := range rows {
 		rep.lines = append(rep.lines, []string{r.Cause, strconv.Itoa(r.Improvements), f(r.BeforeLossPct), f(r.AfterLossPct), f(r.LossReduced),
 			f(r.BeforeRTTMs), f(r.AfterRTTMs), f(r.RTTReducedMs)})
@@ -567,6 +558,10 @@ func (a *agg) providers(rep *Report) {
 	}
 	rows := make([]ProviderRow, 0, len(by))
 	for name, x := range by {
+		// The counterpart of a filtered improvement is only a counter here.
+		if a.q.Provider != "" && name != a.q.Provider {
+			continue
+		}
 		fp := 0.0
 		if x.probes > 0 {
 			fp = round(100 * float64(x.failed) / float64(x.probes))
@@ -578,7 +573,6 @@ func (a *agg) providers(rep *Report) {
 	}
 	slices.SortFunc(rows, func(x, y ProviderRow) int { return cmp.Compare(x.Provider, y.Provider) })
 	rep.Rows = rows
-	rep.head = []string{"provider", "probes", "failed_pct", "avg_loss_pct", "avg_rtt_ms", "avg_jitter_ms", "improvements_to", "improvements_from", "steered_hours"}
 	for _, r := range rows {
 		rep.lines = append(rep.lines, []string{r.Provider, strconv.Itoa(r.Probes), f(r.FailedPct), f(r.AvgLossPct), f(r.AvgRTTMs), f(r.AvgJitterMs),
 			strconv.Itoa(r.ImprovementsTo), strconv.Itoa(r.ImprovementsFrom), f(r.SteeredHours)})
@@ -685,14 +679,10 @@ func (a *agg) prefixes(rep *Report) {
 		}
 		return cmp.Compare(x.Prefix, y.Prefix)
 	})
-	if len(rows) > a.q.Limit {
-		rows = rows[:a.q.Limit]
-	}
 	if rows == nil {
 		rows = []PrefixRow{}
 	}
 	rep.Rows = rows
-	rep.head = []string{"prefix", "origin_asn", "country", "volume_mbps", "probes", "avg_loss_pct", "avg_rtt_ms", "improvements", "steered_hours"}
 	for _, r := range rows {
 		asn := ""
 		if r.OriginASN != 0 {
@@ -762,15 +752,7 @@ func (a *agg) groups(rep *Report, by string) {
 		}
 		return cmp.Compare(x.Key, y.Key)
 	})
-	if len(rows) > a.q.Limit {
-		rows = rows[:a.q.Limit]
-	}
 	rep.Rows = rows
-	key := "country"
-	if by == "asn" {
-		key = "origin_asn"
-	}
-	rep.head = []string{key, "prefixes", "volume_mbps", "probes", "avg_loss_pct", "avg_rtt_ms", "improvements", "steered_hours"}
 	for _, r := range rows {
 		rep.lines = append(rep.lines, []string{r.Key, strconv.Itoa(r.Prefixes), f(r.VolumeMbps), strconv.Itoa(r.Probes), f(r.AvgLossPct),
 			f(r.AvgRTTMs), strconv.Itoa(r.Improvements), f(r.SteeredHours)})
@@ -815,7 +797,6 @@ func (a *agg) probes(rep *Report) {
 	}
 	slices.SortFunc(rows, func(x, y ProbeDayRow) int { return cmp.Compare(x.Day, y.Day) })
 	rep.Rows = rows
-	rep.head = []string{"day", "probes", "failed", "prefixes", "avg_loss_pct", "avg_rtt_ms"}
 	for _, r := range rows {
 		rep.lines = append(rep.lines, []string{r.Day, strconv.Itoa(r.Probes), strconv.Itoa(r.Failed), strconv.Itoa(r.Prefixes), f(r.AvgLossPct), f(r.AvgRTTMs)})
 	}
@@ -863,14 +844,10 @@ func (a *agg) savings(rep *Report) {
 		}
 		return x.Start.Compare(y.Start)
 	})
-	if len(rows) > a.q.Limit {
-		rows = rows[:a.q.Limit]
-	}
 	if rows == nil {
 		rows = []SavingsRow{}
 	}
 	rep.Rows = rows
-	rep.head = []string{"prefix", "native", "provider", "cause", "start", "end", "cost_delta", "volume_mbps", "est_savings", "hours", "accrued"}
 	for _, r := range rows {
 		rep.lines = append(rep.lines, []string{r.Prefix, r.Native, r.Provider, r.Cause, ts(r.Start), ts(r.End), f(r.CostDelta), f(r.VolumeMbps),
 			f(r.EstSavings), f(r.Hours), f(r.Accrued)})
@@ -879,3 +856,65 @@ func (a *agg) savings(rep *Report) {
 
 // Len is the number of rows.
 func (r Report) Len() int { return len(r.lines) }
+
+// sortBy orders the rows by column i. The sort is stable, so equal cells
+// keep the report's own order, and an empty cell sorts last either way. It
+// reorders the JSON rows with the CSV lines, so both stay the same rows.
+func (r *Report) sortBy(i int, typ string, desc bool) {
+	order := make([]int, len(r.lines))
+	for k := range order {
+		order[k] = k
+	}
+	slices.SortStableFunc(order, func(x, y int) int {
+		a, b := r.lines[x][i], r.lines[y][i]
+		switch {
+		case a == b && a == "":
+			return 0
+		case a == "":
+			return 1
+		case b == "":
+			return -1
+		}
+		c := compareCells(typ, a, b)
+		if desc {
+			return -c
+		}
+		return c
+	})
+	lines := make([][]string, len(order))
+	rows := reflect.ValueOf(r.Rows)
+	sorted := reflect.MakeSlice(rows.Type(), len(order), len(order))
+	for k, from := range order {
+		lines[k] = r.lines[from]
+		sorted.Index(k).Set(rows.Index(from))
+	}
+	r.lines, r.Rows = lines, sorted.Interface()
+}
+
+func compareCells(typ, a, b string) int {
+	switch typ {
+	case TypeNumber:
+		x, _ := strconv.ParseFloat(a, 64)
+		y, _ := strconv.ParseFloat(b, 64)
+		return cmp.Compare(x, y)
+	case TypePrefix:
+		x, err1 := netip.ParsePrefix(a)
+		y, err2 := netip.ParsePrefix(b)
+		if err1 == nil && err2 == nil {
+			if c := x.Addr().Compare(y.Addr()); c != 0 {
+				return c
+			}
+			return cmp.Compare(x.Bits(), y.Bits())
+		}
+	}
+	return strings.Compare(a, b)
+}
+
+// cut keeps the first n rows.
+func (r *Report) cut(n int) {
+	if len(r.lines) <= n {
+		return
+	}
+	r.lines = r.lines[:n]
+	r.Rows = reflect.ValueOf(r.Rows).Slice(0, n).Interface()
+}

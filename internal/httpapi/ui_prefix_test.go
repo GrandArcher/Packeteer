@@ -18,8 +18,6 @@ func TestPrefixPageAssets(t *testing.T) {
 
 	for _, s := range []string{
 		`tr.appendChild(prefixCell(im.prefix));`,           // live improvements table
-		`data.report === "improvements"`,                   // report rows
-		`c === "prefix" && linkable ? prefixCell(r[c])`,    // report prefix cells
 		`return "/prefix/" + encodeURI(prefix);`,           // shareable URL
 		`prefixPageUpdate(lastPrefixes)`,                   // live card refresh
 		`function prefixCard(row)`,                         // the existing card, shared
@@ -28,6 +26,9 @@ func TestPrefixPageAssets(t *testing.T) {
 		if !strings.Contains(app, s) {
 			t.Errorf("app.js missing %s", s)
 		}
+	}
+	if reports := mustWeb(t, "web/reports.js"); !strings.Contains(reports, `prefixCell(v)`) || strings.Contains(reports, "innerHTML") {
+		t.Error("reports.js does not link prefix cells to the prefix page, or builds markup") // report prefix cells
 	}
 	if tools := mustWeb(t, "web/tools.js"); !strings.Contains(tools, `defaultValue = qs.get("target")`) {
 		t.Error("tools.js does not prefill the target from the link") // Probe tool prefill

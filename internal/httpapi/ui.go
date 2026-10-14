@@ -8,8 +8,10 @@ import (
 	"io"
 	"mime"
 	"net/http"
+	"net/url"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -316,13 +318,16 @@ type DashboardSpec struct {
 	Widgets []Widget `json:"widgets"`
 }
 
-// Widget is one panel. Report and Days are for type report. Days and Bucket
-// (one of history.Buckets, default all) are for type timeseries.
+// Widget is one panel. Report, Days, and Query are for type report; Query
+// is the filters, sort, and limit (or a from/to range instead of Days) of
+// /api/reports/{report} as a URL query string (#178). Days and Bucket (one
+// of history.Buckets, default all) are for type timeseries.
 type Widget struct {
 	Type   string `json:"type"`
 	Title  string `json:"title,omitempty"`
 	Report string `json:"report,omitempty"`
 	Days   int    `json:"days,omitempty"`
+	Query  string `json:"query,omitempty"`
 	Bucket string `json:"bucket,omitempty"`
 	// Wide spans the full row.
 	Wide bool `json:"wide,omitempty"`
@@ -360,8 +365,11 @@ func (d DashboardSpec) Validate() error {
 			if w.Bucket != "" {
 				return fmt.Errorf("widgets[%d]: bucket is only for type timeseries", i)
 			}
+			if err := w.checkQuery(); err != nil {
+				return fmt.Errorf("widgets[%d]: query: %w", i, err)
+			}
 		case "timeseries":
-			if w.Report != "" {
+			if w.Report != "" || w.Query != "" {
 				return fmt.Errorf("widgets[%d]: report is only for type report", i)
 			}
 			if w.Days < 0 || w.Days > MaxReportDays {
@@ -371,12 +379,35 @@ func (d DashboardSpec) Validate() error {
 				return fmt.Errorf("widgets[%d]: bucket %q is unknown (want %s)", i, w.Bucket, strings.Join(history.Buckets, ", "))
 			}
 		default:
-			if w.Report != "" || w.Days != 0 || w.Bucket != "" {
-				return fmt.Errorf("widgets[%d]: report, days, and bucket are only for type report or timeseries", i)
+			if w.Report != "" || w.Days != 0 || w.Bucket != "" || w.Query != "" {
+				return fmt.Errorf("widgets[%d]: report, days, bucket, and query are only for type report or timeseries", i)
 			}
 		}
 	}
 	return nil
+}
+
+// checkQuery runs the report's own parameter checks on a widget's query, so
+// a stored widget can never ask for a filter the report refuses.
+func (w Widget) checkQuery() error {
+	if w.Query == "" {
+		return nil
+	}
+	if !validText(w.Query, 512) {
+		return errors.New("must be one line of at most 512 bytes")
+	}
+	v, err := url.ParseQuery(w.Query)
+	if err != nil {
+		return err
+	}
+	if v.Has("format") || v.Has("days") {
+		return errors.New("format and days are not allowed (days is its own field)")
+	}
+	if w.Days > 0 {
+		v.Set("days", strconv.Itoa(w.Days))
+	}
+	_, err = reportQueryValues(v, w.Report, time.Now())
+	return err
 }
 
 // DashboardView is a stored dashboard.
