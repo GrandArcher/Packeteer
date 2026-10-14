@@ -1291,6 +1291,85 @@ type NextHopCount struct {
 	// route_server, bilateral, or unknown when the paths disagree or
 	// only iBGP add-path has been seen. Display only.
 	Via string `json:"via,omitempty"`
+	// RouteServerOnly, BilateralOnly, and Both count the prefixes whose
+	// BMP Adj-RIB-In paths through this next hop came only via a route
+	// server, only over a bilateral session, or over both (#156). A
+	// prefix seen only on iBGP or Loc-RIB paths is in none of them.
+	RouteServerOnly int `json:"route_server_only"`
+	BilateralOnly   int `json:"bilateral_only"`
+	Both            int `json:"both"`
+}
+
+// Availability classes of one prefix through one next hop (#156).
+const (
+	AvailRouteServerOnly = "route_server_only"
+	AvailBilateralOnly   = "bilateral_only"
+	AvailBoth            = "both"
+)
+
+const (
+	seenRouteServer uint8 = 1 << iota
+	seenBilateral
+)
+
+// availClass maps the BMP evidence bits of one prefix to its class, or ""
+// when no BMP Adj-RIB-In path classified it.
+func availClass(bits uint8) string {
+	switch bits & (seenRouteServer | seenBilateral) {
+	case seenRouteServer:
+		return AvailRouteServerOnly
+	case seenBilateral:
+		return AvailBilateralOnly
+	case seenRouteServer | seenBilateral:
+		return AvailBoth
+	default:
+		return ""
+	}
+}
+
+// MemberPrefixes lists, sorted, up to limit prefixes of one availability
+// class through next hop nh, and how many there are in all. It walks the
+// BMP paths, so it is for an on-demand read, not a hot path.
+func (v *View) MemberPrefixes(nh netip.Addr, class string, limit int) ([]netip.Prefix, int) {
+	nh = nh.Unmap()
+	bits := map[netip.Prefix]uint8{}
+	v.mu.RLock()
+	for p, paths := range v.bmp {
+		for _, rt := range paths {
+			if rt.LocRIB || rt.NextHop.Unmap() != nh {
+				continue
+			}
+			bits[p] |= viaBit(rt.Via)
+		}
+	}
+	v.mu.RUnlock()
+	var out []netip.Prefix
+	for p, b := range bits {
+		if availClass(b) == class {
+			out = append(out, p)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if c := out[i].Addr().Compare(out[j].Addr()); c != 0 {
+			return c < 0
+		}
+		return out[i].Bits() < out[j].Bits()
+	})
+	total := len(out)
+	if limit >= 0 && len(out) > limit {
+		out = out[:limit]
+	}
+	return out, total
+}
+
+func viaBit(via string) uint8 {
+	switch via {
+	case ViaRouteServer:
+		return seenRouteServer
+	case ViaBilateral:
+		return seenBilateral
+	}
+	return 0
 }
 
 // maxSuggestNextHops caps how many undiscovered next hops one read
@@ -1353,23 +1432,30 @@ func (v *View) SuggestNextHops(configured []netip.Addr, lans []netip.Prefix) []N
 
 func (v *View) countNextHops(keep func(netip.Addr) bool) []NextHopCount {
 	type acc struct {
-		prefixes    map[netip.Prefix]bool
+		prefixes    map[netip.Prefix]uint8
 		asns        map[uint32]int
 		routeServer bool
 		bilateral   bool
 	}
 	hops := map[netip.Addr]*acc{}
-	add := func(rt Route) {
+	// adjIn is true for a BMP Adj-RIB-In path, the only evidence of how a
+	// prefix arrived: an iBGP or Loc-RIB path takes its Via from the
+	// next hop, not from the prefix.
+	add := func(rt Route, adjIn bool) {
 		nh := rt.NextHop.Unmap()
 		if !nh.IsValid() || !keep(nh) {
 			return
 		}
 		a := hops[nh]
 		if a == nil {
-			a = &acc{prefixes: map[netip.Prefix]bool{}, asns: map[uint32]int{}}
+			a = &acc{prefixes: map[netip.Prefix]uint8{}, asns: map[uint32]int{}}
 			hops[nh] = a
 		}
-		a.prefixes[rt.Prefix] = true
+		if adjIn {
+			a.prefixes[rt.Prefix] |= viaBit(rt.Via)
+		} else {
+			a.prefixes[rt.Prefix] |= 0
+		}
 		if len(rt.ASPath) > 0 {
 			a.asns[rt.ASPath[0]]++
 		}
@@ -1384,19 +1470,29 @@ func (v *View) countNextHops(keep func(netip.Addr) bool) []NextHopCount {
 	for _, s := range v.adj {
 		s.each(func(_ adjKey, rt Route) {
 			if v.usableLocked(rt) {
-				add(rt)
+				add(rt, false)
 			}
 		})
 	}
 	for _, paths := range v.bmp {
 		for _, rt := range paths {
-			add(rt)
+			add(rt, !rt.LocRIB)
 		}
 	}
 	v.mu.RUnlock()
 	out := make([]NextHopCount, 0, len(hops))
 	for nh, a := range hops {
 		c := NextHopCount{NextHop: nh, Prefixes: len(a.prefixes), Via: hopVia(a.routeServer, a.bilateral)}
+		for _, b := range a.prefixes {
+			switch availClass(b) {
+			case AvailRouteServerOnly:
+				c.RouteServerOnly++
+			case AvailBilateralOnly:
+				c.BilateralOnly++
+			case AvailBoth:
+				c.Both++
+			}
+		}
 		best := 0
 		for asn, n := range a.asns {
 			if n > best || (n == best && asn < c.ASN) {
