@@ -242,7 +242,7 @@ func TestExchangePageFixturesMatchAPI(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(f.Stubs) != 2 || f.Inject.Page != "" {
+	if len(f.Stubs) != 3 || f.Inject.Page != "" {
 		t.Fatalf("stubs = %d, inject = %q", len(f.Stubs), f.Inject.Page)
 	}
 	strict := func(body []byte, v any) {
@@ -271,13 +271,20 @@ func TestExchangePageFixturesMatchAPI(t *testing.T) {
 		b.Availability.Flag != "" || b.Availability.RouteServerOnly != 3 || c.Availability.Flag != exchange.FlagRSMissing || c.Availability.BilateralOnly != 4 {
 		t.Fatalf("availability = %+v %+v %+v", a.Availability, b.Availability, c.Availability)
 	}
+	// #152: the offload table the smoke test looks for.
+	var off exchange.Offload
+	strict(f.Stubs[1].body, &off)
+	if off.Prefixes != len(off.Rows) || off.Rows[0].Bytes < off.Rows[1].Bytes || off.Rows[0].EstSavings != nil ||
+		off.Rows[1].EstSavings == nil || *off.Rows[1].EstSavings != *off.EstSavings || len(off.Rows[0].Peers) != 2 {
+		t.Fatalf("offload = %+v", off)
+	}
 	var rep struct {
 		Report string                `json:"report"`
 		From   string                `json:"from"`
 		To     string                `json:"to"`
 		Rows   []history.ExchangeRow `json:"rows"`
 	}
-	strict(f.Stubs[1].body, &rep)
+	strict(f.Stubs[2].body, &rep)
 	if rep.Report != "exchanges" || len(rep.Rows) != 2 || rep.Rows[0].Peer != "ix-peer-a" || rep.Rows[0].VolumeMbps != 61.5 {
 		t.Fatalf("report = %+v", rep)
 	}
