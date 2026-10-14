@@ -242,7 +242,7 @@ func TestExchangePageFixturesMatchAPI(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(f.Stubs) != 3 || f.Inject.Page != "" {
+	if len(f.Stubs) != 5 || f.Inject.Page != "" {
 		t.Fatalf("stubs = %d, inject = %q", len(f.Stubs), f.Inject.Page)
 	}
 	strict := func(body []byte, v any) {
@@ -278,13 +278,21 @@ func TestExchangePageFixturesMatchAPI(t *testing.T) {
 		off.Rows[1].EstSavings == nil || *off.Rows[1].EstSavings != *off.EstSavings || len(off.Rows[0].Peers) != 2 {
 		t.Fatalf("offload = %+v", off)
 	}
+	// #154: the two potential-peers tables the smoke test looks for.
+	var rs, bi exchange.PotentialPeers
+	strict(f.Stubs[2].body, &rs)
+	strict(f.Stubs[3].body, &bi)
+	if rs.ASNs != len(rs.Rows) || rs.Rows[0].Class != exchange.ClassRouteServer || rs.Rows[0].LANPrefixes >= rs.Rows[0].Prefixes ||
+		bi.Rows[0].Class != exchange.ClassBilateral || bi.Rows[0].Members[0].Peer != "ix-peer-c" || rs.Classes[exchange.ClassAbsent].ASNs != 3 {
+		t.Fatalf("potential peers = %+v %+v", rs, bi)
+	}
 	var rep struct {
 		Report string                `json:"report"`
 		From   string                `json:"from"`
 		To     string                `json:"to"`
 		Rows   []history.ExchangeRow `json:"rows"`
 	}
-	strict(f.Stubs[2].body, &rep)
+	strict(f.Stubs[4].body, &rep)
 	if rep.Report != "exchanges" || len(rep.Rows) != 2 || rep.Rows[0].Peer != "ix-peer-a" || rep.Rows[0].VolumeMbps != 61.5 {
 		t.Fatalf("report = %+v", rep)
 	}

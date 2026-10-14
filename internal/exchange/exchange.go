@@ -121,6 +121,8 @@ type Discovered struct {
 	NextHop  string `json:"next_hop"`
 	ASN      uint32 `json:"asn,omitempty"`
 	Prefixes int    `json:"prefixes"`
+	// Via is the session type seen for this next hop, as on a peer (#154).
+	Via string `json:"via"`
 }
 
 // Build joins the configured exchanges with next hop counts from the RIB
@@ -166,7 +168,11 @@ func Build(exs []Exchange, hops []rib.NextHopCount, up map[string]bool, improvem
 		}
 		for nh, h := range byHop {
 			if !used[nh] {
-				st.Discovered = append(st.Discovered, Discovered{NextHop: nh.String(), ASN: h.ASN, Prefixes: h.Prefixes})
+				via := h.Via
+				if via == "" {
+					via = rib.ViaUnknown
+				}
+				st.Discovered = append(st.Discovered, Discovered{NextHop: nh.String(), ASN: h.ASN, Prefixes: h.Prefixes, Via: via})
 			}
 		}
 		sort.Slice(st.Discovered, func(i, j int) bool {

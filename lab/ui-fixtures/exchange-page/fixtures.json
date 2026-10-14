@@ -2,6 +2,8 @@
   "stubs": [
     {"method": "GET", "path": "/api/exchanges", "file": "exchanges.json"},
     {"method": "GET", "path": "/api/exchanges/offload", "file": "offload.json"},
+    {"method": "GET", "path": "/api/exchanges/potential-peers", "contains": "class=route_server", "file": "potential-route-server.json"},
+    {"method": "GET", "path": "/api/exchanges/potential-peers", "contains": "class=bilateral", "file": "potential-bilateral.json"},
     {"method": "GET", "path": "/api/reports/exchanges", "file": "report.json"}
   ]
 }

@@ -1,0 +1,27 @@
+{
+  "asns": 1,
+  "bytes": 250000000,
+  "mbps": 200,
+  "classes": {
+    "route_server": {"asns": 1, "bytes": 250000000},
+    "bilateral": {"asns": 1, "bytes": 90000000},
+    "unknown": {"asns": 1, "bytes": 5000000},
+    "absent": {"asns": 3, "bytes": 800000000}
+  },
+  "unattributed_bytes": 0,
+  "truncated": false,
+  "rows": [
+    {
+      "asn": 64503,
+      "class": "route_server",
+      "bytes": 250000000,
+      "mbps": 200,
+      "prefixes": 4,
+      "lan_prefixes": 1,
+      "lan_bytes": 50000000,
+      "members": [
+        {"exchange": "ix-lab", "next_hop": "203.0.113.13", "via": "route_server"}
+      ]
+    }
+  ]
+}

@@ -925,8 +925,12 @@ func wireExchanges(ctx context.Context, cfg *config.Config, col *httpapi.Collect
 
 	// Member counts over time (#156): in memory, read-only.
 	hist := exchange.NewHistory()
-	srv.SetExchangeMembers(httpapi.ExchangeMembers{History: hist, Prefixes: view.MemberPrefixes, Offload: offloadReport(cfg, plugins, view, decider)})
-	go hist.Run(ctx, exchange.SampleEvery, func() []exchange.Stats { return exchange.Build(exs, hops(), nil, nil) })
+	stats := func() []exchange.Stats { return exchange.Build(exs, hops(), nil, nil) }
+	srv.SetExchangeMembers(httpapi.ExchangeMembers{
+		History: hist, Prefixes: view.MemberPrefixes, Offload: offloadReport(cfg, plugins, view, decider),
+		PotentialPeers: potentialPeersReport(cfg.ASN, plugins, view, lans, stats),
+	})
+	go hist.Run(ctx, exchange.SampleEvery, stats)
 }
 
 // wireSuggestions gives the settings form next hops seen on iBGP or BMP

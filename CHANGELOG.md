@@ -6,6 +6,7 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 
 ### Added
 
+- Potential-peers report: destination origin ASNs by flow bytes, present at an exchange or not, LAN path today, route server vs bilateral; `GET /api/exchanges/potential-peers`, CSV (#154).
 - Transit-to-IX offload report: prefixes that leave through a transit while an exchange peer advertises them, by bytes, with the saving at the transit's cost; `GET /api/exchanges/offload`, CSV (#152).
 - Exchange peers: prefixes seen only via the route server, only bilaterally, or both, counts over time, and a partial-feed flag; `GET /api/exchanges/member` (#156).
 - Exchange view on Providers & Exchanges: peers, type, improvements with Mbps moved, discovered members; `exchanges` report and `volume_mbps` on improvements (#148).

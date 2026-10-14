@@ -30,9 +30,13 @@ func TestExchangePageIsReadOnly(t *testing.T) {
 	if rec, _ := e.do(t, "GET", "/api/exchanges/offload", viewer, nil); rec.Code != http.StatusNotFound {
 		t.Errorf("viewer GET /api/exchanges/offload = %d, want 404", rec.Code)
 	}
+	// #154: the same for the potential-peers report.
+	if rec, _ := e.do(t, "GET", "/api/exchanges/potential-peers", viewer, nil); rec.Code != http.StatusNotFound {
+		t.Errorf("viewer GET /api/exchanges/potential-peers = %d, want 404", rec.Code)
+	}
 	rec, _ := e.do(t, "GET", "/exchanges.js", viewer, nil)
 	js := rec.Body.String()
-	for _, want := range []string{`getJSON("/api/exchanges")`, `"/api/reports/exchanges?days="`, `"/api/exchanges/member?exchange="`, `"/api/exchanges/offload?limit="`} {
+	for _, want := range []string{`getJSON("/api/exchanges")`, `"/api/reports/exchanges?days="`, `"/api/exchanges/member?exchange="`, `"/api/exchanges/offload?limit="`, `"/api/exchanges/potential-peers?limit="`} {
 		if !strings.Contains(js, want) {
 			t.Errorf("exchanges.js missing %q", want)
 		}
@@ -43,7 +47,7 @@ func TestExchangePageIsReadOnly(t *testing.T) {
 		}
 	}
 	for _, method := range []string{"POST", "PUT", "DELETE"} {
-		for _, path := range []string{"/api/exchanges", "/api/exchanges/member", "/api/exchanges/offload"} {
+		for _, path := range []string{"/api/exchanges", "/api/exchanges/member", "/api/exchanges/offload", "/api/exchanges/potential-peers"} {
 			if rec, _ := e.do(t, method, path, plugin.RoleAdmin, nil); rec.Code == http.StatusOK {
 				t.Errorf("%s %s = %d, want a refusal", method, path, rec.Code)
 			}
@@ -77,5 +81,26 @@ func TestExchangePageShowsOffloadReport(t *testing.T) {
 	rec, _ = e.do(t, "GET", "/api/exchanges/offload?format=csv", viewer, nil)
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "198.51.100.0/24,100000000,80.00,transit-a,ix-lab/ix-peer-a,160.00") {
 		t.Errorf("viewer offload CSV = %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+// #154: the page has the potential-peers section with a CSV link, and a
+// viewer can read the report.
+func TestExchangePageShowsPotentialPeers(t *testing.T) {
+	e := newUI(t)
+	e.srv.SetExchangeMembers(ExchangeMembers{PotentialPeers: func(class string, _ int) exchange.PotentialPeers {
+		return exchange.PotentialPeers{ASNs: 1, Rows: []exchange.PotentialRow{{ASN: 64510, Class: class, Bytes: 5, Members: []exchange.MemberRef{}}}}
+	}})
+	viewer := plugin.RoleViewer
+	rec, _ := e.do(t, "GET", "/providers.html", viewer, nil)
+	page := rec.Body.String()
+	for _, want := range []string{`id="potential"`, `id="potential-note"`, `href="/api/exchanges/potential-peers?format=csv"`} {
+		if !strings.Contains(page, want) {
+			t.Errorf("providers.html missing %q", want)
+		}
+	}
+	rec, _ = e.do(t, "GET", "/api/exchanges/potential-peers?class=bilateral", viewer, nil)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"class":"bilateral"`) {
+		t.Errorf("viewer potential peers JSON = %d %s", rec.Code, rec.Body.String())
 	}
 }

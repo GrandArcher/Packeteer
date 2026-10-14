@@ -27,7 +27,7 @@
         }
       ],
       "discovered": [
-        {"next_hop": "203.0.113.13", "asn": 64503, "prefixes": 3}
+        {"next_hop": "203.0.113.13", "asn": 64503, "prefixes": 3, "via": "route_server"}
       ]
     }
   ]
