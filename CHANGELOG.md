@@ -26,6 +26,7 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 ### Changed
 
 - `internal/config/config.go` split into schema, `defaults.go`, and `validate.go` with one validate method per section; behavior unchanged (#236, part 1 of 3).
+- `cmd/controller/main.go` split into per-area wiring files (surfaces, inbound, announce, probing, sources, rib, decision, maintenance); pure moves (#236, part 2 of 3).
 
 ## [0.6.0] - 2026-10-13
 
