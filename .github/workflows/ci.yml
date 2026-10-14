@@ -320,11 +320,11 @@ jobs:
             sleep 1
           done
           # Global search (#172) over live data and stored history: the probed
-          # prefix is found by exact prefix, by an address inside it (covering), and by a
-          # /16 around it (more-specific); an AS no one
-          # originates finds nothing; bad input is a 400; searches are rate
-          # limited. The rate-limit check runs last so the page loads above are
-          # not throttled.
+          # prefix is found by exact prefix, by an address inside it (covering),
+          # and by a /16 around it (more-specific); an AS no one originates
+          # finds nothing; bad input is a 400; searches are rate limited. The
+          # rate-limit check runs last so the page loads above are not
+          # throttled.
           hist=http://127.0.0.1:18083
           search() { curl -fsS -G "$hist/api/search" --data-urlencode "q=$1"; }
           search 198.51.100.0/24 | jq -e '.kind == "prefix" and .history.enabled == true and .measured.total == 1 and .measured.rows[0].relation == "exact" and .rollups.total == 1 and .rollups.rows[0].prefix == "198.51.100.0/24" and (.rollups.rows[0].probes >= 1)'

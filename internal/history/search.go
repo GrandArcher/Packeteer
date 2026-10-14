@@ -57,18 +57,8 @@ type SearchResult struct {
 // is pure and reads only.
 func Search(h plugin.History, q SearchQuery) SearchResult {
 	a := newAgg(h, Query{From: q.From, To: q.To, Now: q.To})
-	asns := map[uint32]bool{}
-	for _, n := range q.ASNs {
-		asns[n] = true
-	}
-	// match gives the relation to the searched prefix, and whether the
-	// row matched at all.
 	match := func(p netip.Prefix, origin uint32) (string, bool) {
-		rel := ""
-		if q.Prefix.IsValid() {
-			rel = netpfx.Relation(q.Prefix, p)
-		}
-		return rel, rel != "" || (origin != 0 && asns[origin])
+		return netpfx.Match(q.Prefix, q.ASNs, p, origin)
 	}
 	res := SearchResult{Improvements: []SearchImprovement{}, Rollups: []SearchRollup{}}
 

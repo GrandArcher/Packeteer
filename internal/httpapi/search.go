@@ -7,7 +7,6 @@ import (
 	"net/netip"
 	"regexp"
 	"slices"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -93,11 +92,11 @@ func parseSearch(raw string) (searchTerm, bool) {
 		return searchTerm{kind: kindPrefix, prefix: netip.PrefixFrom(a, a.BitLen())}, true
 	}
 	if asnPattern.MatchString(q) {
-		n, err := strconv.ParseUint(strings.TrimPrefix(strings.ToUpper(q), "AS"), 10, 32)
-		if err != nil || n == 0 {
+		n, ok := netpfx.ParseASN(q)
+		if !ok {
 			return searchTerm{}, false
 		}
-		return searchTerm{kind: kindASN, asn: uint32(n)}, true
+		return searchTerm{kind: kindASN, asn: n}, true
 	}
 	if len(q) >= 2 && namePattern.MatchString(q) && strings.IndexFunc(q, unicode.IsLetter) >= 0 {
 		return searchTerm{kind: kindName, name: q}, true
@@ -115,19 +114,7 @@ type matcher struct {
 // match returns the row's relation to the searched prefix, which is empty
 // for a row that matched by origin only, and whether it matched.
 func (m matcher) match(p netip.Prefix, origins ...uint32) (string, bool) {
-	rel := ""
-	if m.prefix.IsValid() {
-		rel = netpfx.Relation(m.prefix, p)
-	}
-	if rel != "" {
-		return rel, true
-	}
-	for _, o := range origins {
-		if o != 0 && slices.Contains(m.asns, o) {
-			return "", true
-		}
-	}
-	return "", false
+	return netpfx.Match(m.prefix, m.asns, p, origins...)
 }
 
 // searchGroup is one list of the answer: at most searchLimit rows and
@@ -342,8 +329,8 @@ func searchMeasured(rows []Prefix, m matcher) searchGroup[SearchMeasured] {
 func pathOrigins(row *Prefix) []uint32 {
 	var out []uint32
 	for _, lp := range row.Paths {
-		if n := len(lp.ASPath); n > 0 {
-			out = append(out, lp.ASPath[n-1])
+		if o := netpfx.LastAS(lp.ASPath); o != 0 {
+			out = append(out, o)
 		}
 	}
 	return out
@@ -353,8 +340,8 @@ func pathOrigins(row *Prefix) []uint32 {
 // same origin the ASN map groups by.
 func originASN(row *Prefix) uint32 {
 	for i := range row.Paths {
-		if p := row.Paths[i].ASPath; len(p) > 0 {
-			return p[len(p)-1]
+		if o := netpfx.LastAS(row.Paths[i].ASPath); o != 0 {
+			return o
 		}
 	}
 	return 0
@@ -397,12 +384,7 @@ func (s *Server) searchRoutes(m matcher) searchGroup[SearchRoute] {
 	if src == nil {
 		return group[SearchRoute](nil, 0)
 	}
-	origin := func(r rib.Route) uint32 {
-		if n := len(r.ASPath); n > 0 {
-			return r.ASPath[n-1]
-		}
-		return 0
-	}
+	origin := func(r rib.Route) uint32 { return netpfx.LastAS(r.ASPath) }
 	routes, total := src.Find(func(r rib.Route) bool {
 		_, ok := m.match(r.Prefix, origin(r))
 		return ok

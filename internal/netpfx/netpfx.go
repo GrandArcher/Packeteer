@@ -1,11 +1,32 @@
-// Package netpfx holds small netip.Prefix helpers shared by the routing
-// packages.
+// Package netpfx holds small prefix and AS number helpers shared by the
+// routing packages.
 package netpfx
 
 import (
 	"net/netip"
+	"slices"
 	"sort"
+	"strconv"
+	"strings"
 )
+
+// ParseASN reads an AS number written as 64500 or AS64500, ignoring case and
+// surrounding space. Zero is not an AS number.
+func ParseASN(s string) (uint32, bool) {
+	n, err := strconv.ParseUint(strings.TrimPrefix(strings.ToUpper(strings.TrimSpace(s)), "AS"), 10, 32)
+	if err != nil || n == 0 {
+		return 0, false
+	}
+	return uint32(n), true
+}
+
+// LastAS is the origin of an AS path, or 0 for an empty path.
+func LastAS(path []uint32) uint32 {
+	if len(path) == 0 {
+		return 0
+	}
+	return path[len(path)-1]
+}
 
 // Less orders prefixes by address, then by prefix length.
 func Less(a, b netip.Prefix) bool {
@@ -52,4 +73,23 @@ func Relation(q, p netip.Prefix) string {
 		return RelMoreSpecific
 	}
 	return ""
+}
+
+// Match reports how p relates to the searched prefix q (empty when q is
+// invalid or only an origin matched), and whether the row belongs to a
+// search at all: p relates to q, or one of its origins is in asns.
+func Match(q netip.Prefix, asns []uint32, p netip.Prefix, origins ...uint32) (string, bool) {
+	rel := ""
+	if q.IsValid() {
+		rel = Relation(q, p)
+	}
+	if rel != "" {
+		return rel, true
+	}
+	for _, o := range origins {
+		if o != 0 && slices.Contains(asns, o) {
+			return "", true
+		}
+	}
+	return "", false
 }

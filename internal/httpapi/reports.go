@@ -6,10 +6,10 @@ import (
 	"net/http"
 	"net/netip"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/GrandArcher/Packeteer/internal/history"
+	"github.com/GrandArcher/Packeteer/internal/netpfx"
 )
 
 // ReportSource builds reports from stored history. Nil when no storage
@@ -104,11 +104,11 @@ func reportQuery(r *http.Request, name string, now time.Time) (history.Query, er
 			q.Prefix = p
 		}
 		if s := v.Get("asn"); s != "" {
-			n, err := strconv.ParseUint(strings.TrimPrefix(strings.ToUpper(s), "AS"), 10, 32)
-			if err != nil || n == 0 {
+			n, ok := netpfx.ParseASN(s)
+			if !ok {
 				return q, fmt.Errorf("asn must be an AS number such as 64500")
 			}
-			q.ASN = uint32(n)
+			q.ASN = n
 		}
 	}
 	q.Now = now.UTC()

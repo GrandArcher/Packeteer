@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/GrandArcher/Packeteer/internal/exchange"
+	"github.com/GrandArcher/Packeteer/internal/netpfx"
 	"github.com/GrandArcher/Packeteer/internal/probe"
 	"github.com/GrandArcher/Packeteer/internal/rib"
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
@@ -735,8 +736,8 @@ func (t *Tools) rememberASName(q string, res plugin.WhoisResult) {
 	if res.Kind != "asn" || res.Name == "" {
 		return
 	}
-	asn, err := strconv.ParseUint(strings.TrimPrefix(strings.ToUpper(q), "AS"), 10, 32)
-	if err != nil || asn == 0 {
+	asn, ok := netpfx.ParseASN(q)
+	if !ok {
 		return
 	}
 	name := res.Name
@@ -745,13 +746,13 @@ func (t *Tools) rememberASName(q string, res plugin.WhoisResult) {
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	if _, known := t.names[uint32(asn)]; !known && len(t.names) >= maxASNames {
+	if _, known := t.names[asn]; !known && len(t.names) >= maxASNames {
 		return
 	}
 	if t.names == nil {
 		t.names = map[uint32]string{}
 	}
-	t.names[uint32(asn)] = name
+	t.names[asn] = name
 }
 
 // ASNames returns the AS names that whois lookups returned since the
