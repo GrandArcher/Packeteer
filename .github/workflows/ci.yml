@@ -342,8 +342,8 @@ jobs:
             'href="/reports.html?report=improvements&amp;prefix=198.51.100.0%2F24"' --absent 'Cannot reach' 'History is off'
           bash lab/ui-smoke.sh "$hist/search.html?q=AS64496" 'AS numbers (1)' 'href="/prefixes.html?asn=64496"' \
             'href="/reports.html?report=improvements&amp;asn=64496"' 'No measured prefix matches.' --absent 'Cannot reach'
-          bash lab/ui-smoke.sh "$hist/reports.html?report=improvements&prefix=198.51.100.0%2F24" 'id="rf-prefix"' \
-            'prefix=198.51.100.0%2F24&amp;format=csv' --absent 'Cannot reach'
+          bash lab/ui-smoke.sh "$hist/reports.html?report=improvements&prefix=198.51.100.0%2F24" 'Showing 1 of 1 rows' \
+            'prefix=198.51.100.0%2F24&amp;format=csv' --absent 'Cannot reach' '203.0.113.0/24'
           limited=0
           for _ in $(seq 1 20); do
             if [ "$(curl -s -o /dev/null -w '%{http_code}' "$hist/api/search?q=AS64496")" = 429 ]; then limited=1; break; fi

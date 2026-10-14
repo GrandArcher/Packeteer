@@ -136,9 +136,9 @@ func reportQueryValues(v url.Values, name string, now time.Time) (history.Query,
 	}
 	q.Cause = v.Get(history.FilterCause)
 	if s := v.Get(history.FilterIPVersion); s != "" {
-		n, err := history.ParseIPVersion(s)
+		n, err := strconv.Atoi(s)
 		if err != nil {
-			return q, err
+			return q, fmt.Errorf("ip_version must be 4 or 6")
 		}
 		q.IPVersion = n
 	}

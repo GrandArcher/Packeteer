@@ -195,12 +195,22 @@ func newAgg(h plugin.History, q Query) *agg {
 	}
 	for _, r := range h.Improvements {
 		if r.Start.Before(q.To) && (r.End.IsZero() || !r.End.Before(q.From)) &&
-			q.matchPrefix(r.Prefix) && (q.ASN == 0 || asnOf[r.Prefix] == q.ASN) &&
+			q.matchPrefix(r.Prefix) && (q.ASN == 0 || improvementOrigin(r, a.info) == q.ASN) &&
 			(q.Provider == "" || r.Provider == q.Provider || r.Native == q.Provider) && (q.Cause == "" || cause(r) == q.Cause) {
 			a.imps = append(a.imps, r)
 		}
 	}
 	return a
+}
+
+// improvementOrigin is the origin recorded with r, falling back to the
+// prefix's stored origin when r has none. Search matches the same way, so
+// its report links agree with it.
+func improvementOrigin(r plugin.ImprovementRecord, info map[netip.Prefix]plugin.PrefixInfo) uint32 {
+	if r.OriginASN != 0 {
+		return r.OriginASN
+	}
+	return info[r.Prefix].OriginASN
 }
 
 // started reports whether r started inside the range.

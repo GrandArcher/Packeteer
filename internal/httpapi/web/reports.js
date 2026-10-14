@@ -72,7 +72,6 @@ function localInput(iso) {
 }
 
 // utcFromInput turns a datetime-local value (local time) into RFC 3339 UTC.
-// A date-only value from an old link is already UTC and is kept.
 function utcFromInput(value) {
   var d = new Date(value);
   if (Number.isNaN(d.getTime())) return "";
@@ -179,8 +178,7 @@ function reportCell(col, row) {
   }
   if (col.type === "time") { td.textContent = fmtTime(v); return td; }
   if (col.type === "prefix") {
-    var cell = prefixCell(v);
-    return cell;
+    return prefixCell(v);
   }
   td.textContent = String(v);
   return td;

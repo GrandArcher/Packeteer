@@ -207,17 +207,6 @@ const (
 	OrderDesc = "desc"
 )
 
-// ParseIPVersion reads the ip_version filter: 4 or 6.
-func ParseIPVersion(s string) (int, error) {
-	switch s {
-	case "4":
-		return 4, nil
-	case "6":
-		return 6, nil
-	}
-	return 0, fmt.Errorf("ip_version must be 4 or 6")
-}
-
 var causes = []string{plugin.CausePerformance, plugin.CauseCommit, plugin.CauseCost, plugin.CauseStatic}
 
 // Validate checks q against its report: the sort key and order, the cause,

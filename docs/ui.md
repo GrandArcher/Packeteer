@@ -145,7 +145,7 @@ Filters by report. All filters are optional and combine with AND.
 | Filter | Keeps |
 |---|---|
 | `provider` | Probe rows of that provider, and improvements where it is the chosen or the native provider. In `providers` only that provider's row remains; its counts still come from the improvements that involve it. |
-| `asn` | Origin AS (`64500` or `AS64500`): the origin stored with an improvement, or with the prefix. |
+| `asn` | Origin AS (`64500` or `AS64500`): the origin stored with an improvement, or the prefix's origin when the improvement has none. Probe rows use the prefix's origin. |
 | `prefix` | That exact prefix in CIDR form (`192.0.2.0/24`). A covering or covered prefix is a different prefix. |
 | `cause` | Improvements with that cause: `performance`, `commit`, `cost`, or `static`. An improvement stored with no cause is `performance`. |
 | `ip_version` | `4` or `6`. |

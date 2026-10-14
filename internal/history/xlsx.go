@@ -36,6 +36,8 @@ func (r Report) XLSX(w io.Writer) error {
 			`<Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>` +
 			`<Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/></Types>`},
 		{"_rels/.rels", xmlHeader + `<Relationships xmlns="` + nsPkgRel + `"><Relationship Id="rId1" Type="` + relOffice + `" Target="xl/workbook.xml"/></Relationships>`},
+		// Names come from the fixed catalog (12 bytes at most, no XML characters);
+		// escape and cap them at 31 characters if they ever become user-defined.
 		{"xl/workbook.xml", xmlHeader + `<workbook xmlns="` + nsMain + `" xmlns:r="` + nsRel + `"><sheets><sheet name="` + r.Name + `" sheetId="1" r:id="rId1"/></sheets></workbook>`},
 		{"xl/_rels/workbook.xml.rels", xmlHeader + `<Relationships xmlns="` + nsPkgRel + `">` +
 			`<Relationship Id="rId1" Type="` + relSheet + `" Target="worksheets/sheet1.xml"/>` +

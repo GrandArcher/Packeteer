@@ -252,11 +252,16 @@ func TestSortBeforeTheRowLimit(t *testing.T) {
 	if def.lines[0][9] == "5" || top.lines[0][9] != "5" || top.Total != 6 || len(top.lines) != 1 || len(top.Rows.([]ImprovementRow)) != 1 {
 		t.Errorf("default %v, sorted %v, total %d", def.lines, top.lines, top.Total)
 	}
-	// A top-N report keeps the rows its own key picks, then orders them.
+	// A top-N report is cut by its own key; a column sort replaces that key
+	// before the cut.
 	byLoss := buildAll(t, ReportPrefixes, func(q *Query) { q.Sort, q.Limit = SortLoss, 2 })
 	byPrefix := buildAll(t, ReportPrefixes, func(q *Query) { q.Sort, q.Order, q.Limit = "prefix", OrderAsc, 100 })
 	if byLoss.Total != 4 || len(byLoss.lines) != 2 || len(byPrefix.lines) != 4 || byPrefix.lines[0][0] != "192.0.2.0/24" {
 		t.Errorf("loss %v, prefix %v", byLoss.lines, byPrefix.lines)
+	}
+	cut := buildAll(t, ReportPrefixes, func(q *Query) { q.Sort, q.Order, q.Limit = "prefix", OrderDesc, 2 })
+	if cut.Total != 4 || len(cut.lines) != 2 || cut.lines[0][0] != byPrefix.lines[3][0] || cut.lines[1][0] != byPrefix.lines[2][0] {
+		t.Errorf("column sort replaces the top key before the cut: %v, all %v", cut.lines, byPrefix.lines)
 	}
 	// Reports that are never cut keep every row.
 	if rep := buildAll(t, ReportCauses, func(q *Query) { q.Limit = 1 }); len(rep.lines) != 2 || rep.Total != 2 {
@@ -361,5 +366,33 @@ func TestColName(t *testing.T) {
 		if got := colName(i); got != want {
 			t.Errorf("colName(%d) = %s, want %s", i, got, want)
 		}
+	}
+}
+
+func TestASNFilterMatchesTheOriginRecordedWithTheImprovement(t *testing.T) {
+	h := seed()
+	// The prefix is stored under 64501 but this improvement was recorded under 64500, as Search sees it.
+	h.Prefixes = []plugin.PrefixInfo{{Prefix: pfxA, OriginASN: 64501}}
+	h.Improvements = []plugin.ImprovementRecord{
+		{ID: "1", Prefix: pfxA, Provider: "transit-a", Start: from.Add(time.Hour), End: from.Add(2 * time.Hour), OriginASN: 64500},
+		{ID: "2", Prefix: pfxA, Provider: "transit-a", Start: from.Add(3 * time.Hour), End: from.Add(4 * time.Hour)},
+	}
+	ids := func(asn uint32) string {
+		rep, err := Build(h, Query{Name: ReportImprovements, From: from, To: to, Now: now, ASN: asn})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var out []string
+		for _, r := range rep.Rows.([]ImprovementRow) {
+			out = append(out, strconv.Itoa(int(r.Start.Sub(from).Hours())))
+		}
+		slices.Sort(out)
+		return strings.Join(out, ",")
+	}
+	if got := ids(64500); got != "1" {
+		t.Errorf("recorded origin: %q", got)
+	}
+	if got := ids(64501); got != "3" {
+		t.Errorf("stored origin applies only to an improvement with none: %q", got)
 	}
 }
