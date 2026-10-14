@@ -221,7 +221,7 @@ func integrateCommit(
 			// Performance precedence: the performance move stands.
 			continue
 		}
-		if cfg.Mode == "inject" && !allowed(cfg.Allowlist, p) {
+		if cfg.Mode == "inject" && !netpfx.CoveredBy(cfg.Allowlist, p) {
 			d.Recommended = mv.Provider
 			d.Reason = mv.Cause + " move available but prefix not allowlisted"
 			d.Cause = mv.Cause

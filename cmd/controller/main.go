@@ -1751,9 +1751,6 @@ func wireLearnedRoutes(plugins *pluginhost.Set, view *rib.View) {
 	}
 }
 
-// checkVIPIntervals rejects a VIP cadence that is not inside the staleness
-// window. A longer interval leaves that prefix permanently stale, and the
-// controller withdraws any improvement on it.
 // noteOutages correlates the round that just finished. A new incident
 // wakes the probe loop so the re-queued prefixes are measured without
 // waiting out probe.interval. Observe and inject both call this; the
@@ -2034,6 +2031,9 @@ func checkFlowTailSourceIntervals(cfg *config.Config, sources []pluginhost.Insta
 	return errors.Join(errs...)
 }
 
+// checkVIPIntervals rejects a VIP cadence that is not inside the staleness
+// window. A longer interval leaves that prefix permanently stale, and the
+// controller withdraws any improvement on it.
 func checkVIPIntervals(cfg *config.Config, plugins *pluginhost.Set) error {
 	if plugins == nil {
 		return nil

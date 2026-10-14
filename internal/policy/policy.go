@@ -511,7 +511,7 @@ func Decide(prev State, in Input, cfg Config, scorer plugin.Scorer, now time.Tim
 				retire(p, "provider excluded", false)
 				d.Action, d.Reason, d.Current = ActionRetire, "provider excluded", imp.Native
 				continue
-			case cfg.Mode == "inject" && !allowed(cfg.Allowlist, p):
+			case cfg.Mode == "inject" && !netpfx.CoveredBy(cfg.Allowlist, p):
 				retire(p, "not allowlisted", false)
 				d.Action, d.Reason, d.Current = ActionRetire, "not allowlisted", imp.Native
 				continue
@@ -678,7 +678,7 @@ func Decide(prev State, in Input, cfg Config, scorer plugin.Scorer, now time.Tim
 				d.Reason = "cooldown until " + until.Format(time.RFC3339)
 				continue
 			}
-			if cfg.Mode == "inject" && !allowed(cfg.Allowlist, p) {
+			if cfg.Mode == "inject" && !netpfx.CoveredBy(cfg.Allowlist, p) {
 				d.Reason = "policy static but prefix not allowlisted"
 				continue
 			}
@@ -704,7 +704,7 @@ func Decide(prev State, in Input, cfg Config, scorer plugin.Scorer, now time.Tim
 			d.Reason = "cooldown after flip-back until " + until.Format(time.RFC3339)
 			continue
 		}
-		if cfg.Mode == "inject" && !allowed(cfg.Allowlist, p) {
+		if cfg.Mode == "inject" && !netpfx.CoveredBy(cfg.Allowlist, p) {
 			d.Recommended, d.Reason = alt.Provider, "better path exists but prefix not allowlisted"
 			continue
 		}
@@ -1217,15 +1217,6 @@ func whyUnusable(cands []Candidate, provider string) string {
 func reasonText(to, from Candidate) string {
 	return fmt.Sprintf("%s: loss %.1f%%→%.1f%%, rtt %s→%s", to.Provider, from.LossPct, to.LossPct,
 		from.RTTAvg.Round(time.Millisecond/10), to.RTTAvg.Round(time.Millisecond/10))
-}
-
-func allowed(list []netip.Prefix, p netip.Prefix) bool {
-	for _, a := range list {
-		if a.Bits() <= p.Bits() && a.Contains(p.Addr()) {
-			return true
-		}
-	}
-	return false
 }
 
 // displaceCommit retires one commit or cost improvement so a performance

@@ -428,7 +428,7 @@ func (f Form) checkProtectionChange(cur Form) error {
 	return fmt.Errorf("%w: inbound.mode inject is not a form choice: edit the YAML (and confirm_inject on save) after the inject checklist in docs/CONFIG.md", ErrForm)
 }
 
-// protectionUnchanged reports whether the #131 sections match.
+// protectionEqual reports whether the #131 sections match.
 func protectionEqual(f, g Form) bool {
 	return reflect.DeepEqual(f.Inbound, g.Inbound) && reflect.DeepEqual(f.Anomaly, g.Anomaly)
 }
