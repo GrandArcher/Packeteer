@@ -38,6 +38,12 @@ type Stats struct {
 	Improvements int          `json:"improvements"`
 	Peers        []PeerStats  `json:"peers"`
 	Discovered   []Discovered `json:"discovered"`
+	// Degraded is true while enough peers fail their next-hop probe to
+	// point at the exchange or our port, not one member (#149).
+	// DegradedPeers are those peers and DegradedSince is when it began.
+	Degraded      bool      `json:"degraded"`
+	DegradedPeers []string  `json:"degraded_peers"`
+	DegradedSince time.Time `json:"degraded_since,omitzero"`
 }
 
 // PeerStats is one configured peer.
@@ -65,6 +71,9 @@ type PeerStats struct {
 	// has been seen, or the peer has no path. Display only. It is not a
 	// route check and it never changes an improvement.
 	Via string `json:"via"`
+	// Reach is the latest probe of the peer's next hop from its source_ip
+	// (#149). Measurement only.
+	Reach PeerReach `json:"reach"`
 	// Availability compares the route server and bilateral feeds (#156).
 	Availability Availability `json:"availability"`
 }
@@ -127,11 +136,15 @@ type Discovered struct {
 
 // Build joins the configured exchanges with next hop counts from the RIB
 // (rib.View.NextHops over every exchange LAN), provider health, and the
-// active improvements per provider.
-func Build(exs []Exchange, hops []rib.NextHopCount, up map[string]bool, improvements map[string][]Move) []Stats {
+// active improvements per provider. health is Health.Snapshot, nil when no
+// next hop is probed.
+func Build(exs []Exchange, hops []rib.NextHopCount, up map[string]bool, improvements map[string][]Move, health map[string]ExchangeHealth) []Stats {
 	out := make([]Stats, 0, len(exs))
 	for _, ex := range exs {
-		st := Stats{Name: ex.Name, LANs: []string{}, Peers: []PeerStats{}, Discovered: []Discovered{}}
+		st := Stats{Name: ex.Name, LANs: []string{}, Peers: []PeerStats{}, Discovered: []Discovered{}, DegradedPeers: []string{}}
+		hl := health[ex.Name]
+		st.Degraded, st.DegradedSince = hl.Degraded, hl.Since
+		st.DegradedPeers = append(st.DegradedPeers, hl.DegradedPeers...)
 		for _, l := range ex.LANs {
 			st.LANs = append(st.LANs, l.String())
 		}
@@ -153,7 +166,10 @@ func Build(exs []Exchange, hops []rib.NextHopCount, up map[string]bool, improvem
 			if moves == nil {
 				moves = []Move{}
 			}
-			ps := PeerStats{Name: p.Name, ASN: p.ASN, NextHop: nh.String(), Prefixes: h.Prefixes, Up: up[p.Name], Improvements: len(moves), Moves: moves, Via: h.Via, Availability: availability(h, rsSeen)}
+			ps := PeerStats{Name: p.Name, ASN: p.ASN, NextHop: nh.String(), Prefixes: h.Prefixes, Up: up[p.Name], Improvements: len(moves), Moves: moves, Via: h.Via, Availability: availability(h, rsSeen), Reach: PeerReach{State: ReachUnknown}}
+			if r, ok := hl.Peers[p.Name]; ok {
+				ps.Reach = r
+			}
 			for _, m := range moves {
 				ps.MovedMbps += m.VolumeMbps
 			}

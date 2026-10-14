@@ -30,6 +30,7 @@ type Collector struct {
 	truncated   func() map[string]uint64
 	exchanges   []exchange.Exchange
 	hops        func() []rib.NextHopCount
+	health      *exchange.Health
 }
 
 // NewCollector copies providers. The caller may reuse the slice afterward.
@@ -82,6 +83,14 @@ func (c *Collector) SetExchanges(exs []exchange.Exchange, hops func() []rib.Next
 	c.mu.Unlock()
 }
 
+// SetExchangeHealth installs the next-hop health of the exchange peers
+// (#149). Nil leaves the peers' reachability unknown.
+func (c *Collector) SetExchangeHealth(h *exchange.Health) {
+	c.mu.Lock()
+	c.health = h
+	c.mu.Unlock()
+}
+
 // SetMode updates the mode Snapshot reports. A reload that changes mode
 // calls it so the dashboard matches the running config.
 func (c *Collector) SetMode(mode string) {
@@ -108,6 +117,7 @@ func (c *Collector) Snapshot() Snapshot {
 	mode := c.mode
 	started, engine, decider, view, telemetry := c.started, c.engine, c.decider, c.view, c.telemetry
 	exs, hops, flowTracked, truncated := c.exchanges, c.hops, c.flowTracked, c.truncated
+	health := c.health
 	c.mu.RUnlock()
 
 	in := Input{
@@ -182,7 +192,7 @@ func (c *Collector) Snapshot() Snapshot {
 		for _, im := range in.Improvements {
 			imps[im.Provider] = append(imps[im.Provider], exchange.Move{Prefix: im.Prefix.String(), Since: im.Since.UTC(), VolumeMbps: jsonFloat(im.VolumeMbps)})
 		}
-		in.Exchanges = exchange.Build(exs, nh, up, imps)
+		in.Exchanges = exchange.Build(exs, nh, up, imps, health.Snapshot())
 	}
 	in.ExchangeLANDrops = exchange.LANDrops()
 	return Assemble(in)

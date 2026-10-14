@@ -54,10 +54,12 @@ The same object is the `generic` webhook body and the `exec` `notify` params.
 | `leak.cleared` | info | 32 | `prefix` | An operator cleared the hold on a leaked prefix; it may be announced again. Resolves the leak. |
 | `flap.quarantined` | warning | 33 | `prefix` | A prefix changed its chosen provider too often ([CONFIG.md](CONFIG.md#flap_quarantine)). Its route is withdrawn and it stays on the native path until `until`. Fields: `prefix`, `reason`, `flips`, `strikes`, `until`. |
 | `flap.released` | info | 34 | `prefix` | A flap quarantine ended: the cool-down elapsed, an operator released it, or `flap_quarantine` was turned off. Same fields. Resolves the quarantine. |
+| `exchange.degraded` | warning | 35 | `exchange` | Enough peers of one exchange fail the next-hop probe inside `exchanges[].health.window` ([CONFIG.md](CONFIG.md#exchanges)): the exchange or our port, not one member. Fields: `exchange`, `degraded_peers` (comma separated), `degraded`, `peers`. Measurement only. |
+| `exchange.recovered` | info | 36 | `exchange` | Too few peers are degraded for the alert to hold. Same fields. Resolves `exchange.degraded`. |
 
 Problems and the events that resolve them share a **dedup key**: `packeteer/<group>/<key>=<value>`, for example `packeteer/provider/provider=transit-a` for both `provider.down` and `provider.up`. The `pagerduty` preset uses it as `dedup_key`, and `snmptrap` sends it as a varbind.
 
-State events (`provider.*`, `bgp.*`, `commit.*`, `announce.*`, `inbound.*`, `mitigation.*`, `anomaly.*`, `ha.*`, `flap.*`) fire on transitions only. They are checked on every decision (each probe round, each RIB change, and at least every `probe.interval`); commit is checked at most once a minute. They are not repeated while the state holds. `leak.*` events fire on the first sighting of a prefix and when its hold is cleared.
+State events (`provider.*`, `bgp.*`, `commit.*`, `announce.*`, `inbound.*`, `mitigation.*`, `anomaly.*`, `ha.*`, `flap.*`, `exchange.*`) fire on transitions only. Except `exchange.*`, they are checked on every decision (each probe round, each RIB change, and at least every `probe.interval`); `exchange.*` is checked once per `probe.interval` in the exchange health loop, and commit at most once a minute. They are not repeated while the state holds. `leak.*` events fire on the first sighting of a prefix and when its hold is cleared.
 
 ## Testing delivery
 

@@ -48,6 +48,7 @@ func (c *Config) applyDefaults() {
 		c.Probe.ProberMemory = DefaultProbeProberMemory
 	}
 	c.defaultIndirect()
+	c.defaultExchangeHealth()
 	if c.Probe.MinReplies == 0 {
 		c.Probe.MinReplies = DefaultProbeMinReplies
 	}

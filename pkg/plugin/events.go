@@ -63,6 +63,8 @@ const (
 	EventLeakCleared        = "leak.cleared"
 	EventFlapQuarantined    = "flap.quarantined"
 	EventFlapReleased       = "flap.released"
+	EventExchangeDegraded   = "exchange.degraded"
+	EventExchangeRecovered  = "exchange.recovered"
 	EventHAStandby          = "ha.standby"
 	EventHAActive           = "ha.active"
 	// EventAudit is one audit log record (#32): a change or sign-in on
@@ -141,6 +143,10 @@ var eventCatalog = []EventSpec{
 		Summary: "A prefix changed its chosen provider too often. Its route is withdrawn and it stays on the native path until the cool-down ends or an operator releases it."},
 	{Kind: EventFlapReleased, Severity: SeverityInfo, Group: "flap", Keys: []string{"prefix"}, TrapID: 34, Resolves: true,
 		Summary: "A flap quarantine ended: the cool-down elapsed, an operator released the prefix, or the feature was turned off."},
+	{Kind: EventExchangeDegraded, Severity: SeverityWarning, Group: "exchange", Keys: []string{"exchange"}, TrapID: 35,
+		Summary: "Enough peers on one exchange fail their next-hop probe inside the window to point at the exchange or our port, not one member. Measurement only."},
+	{Kind: EventExchangeRecovered, Severity: SeverityInfo, Group: "exchange", Keys: []string{"exchange"}, TrapID: 36, Resolves: true,
+		Summary: "Too few peers on the exchange are degraded for the alert to hold."},
 }
 
 // EventCatalog returns a copy of every event kind the controller emits.

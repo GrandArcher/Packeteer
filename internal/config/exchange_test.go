@@ -3,6 +3,7 @@ package config
 import (
 	"strings"
 	"testing"
+	"time"
 )
 
 // exchangeYAML is one edge with a transit and an exchange of two peers
@@ -139,5 +140,56 @@ func TestAllowlistBesideExchangeLAN(t *testing.T) {
 	// No exchanges: an allowlist may contain any documentation prefix.
 	if _, err := Parse([]byte(minimalYAML + "allowlist:\n  prefixes: [203.0.113.0/24]\n")); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestExchangeHealthDefaults(t *testing.T) {
+	cfg, err := Parse([]byte(exchangeYAML))
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := cfg.Exchanges[0].Health
+	if !h.On() || h.LossPct != 50 || h.RTTMS != 0 || h.MinPeers != 3 || h.MinPercent != 0 || h.Window != 5*time.Minute {
+		t.Fatalf("health defaults = %+v", h)
+	}
+}
+
+func TestExchangeHealthSettings(t *testing.T) {
+	y := edit(t, exchangeYAML, "    group: ix\n", `    group: ix
+    health:
+      enabled: false
+      loss_pct: 20
+      rtt_ms: 80
+      min_peers: 2
+      min_percent: 30
+      window: 10m
+`)
+	cfg, err := Parse([]byte(y))
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := cfg.Exchanges[0].Health
+	if h.On() || h.LossPct != 20 || h.RTTMS != 80 || h.MinPeers != 2 || h.MinPercent != 30 || h.Window != 10*time.Minute {
+		t.Fatalf("health = %+v", h)
+	}
+}
+
+func TestExchangeHealthErrors(t *testing.T) {
+	cases := map[string]struct{ set, want string }{
+		"loss over 100":   {"loss_pct: 101", "loss_pct 101 must be above 0 and at most 100"},
+		"loss negative":   {"loss_pct: -1", "loss_pct -1 must be above 0"},
+		"rtt negative":    {"rtt_ms: -5", "rtt_ms -5 must be between 0 and"},
+		"one peer":        {"min_peers: 1", "min_peers 1 must be at least 2"},
+		"percent over":    {"min_percent: 101", "min_percent 101 must be between 0 and 100"},
+		"window short":    {"window: 1s", "window 1s must be between probe.interval"},
+		"window too long": {"window: 48h", "window 48h0m0s must be between probe.interval"},
+		"unknown key":     {"min_peer: 3", "field min_peer not found"},
+	}
+	for name, tc := range cases {
+		y := edit(t, exchangeYAML, "    group: ix\n", "    group: ix\n    health:\n      "+tc.set+"\n")
+		_, err := Parse([]byte(y))
+		if err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("%s: err = %v, want %q", name, err, tc.want)
+		}
 	}
 }

@@ -3,6 +3,7 @@ package configedit
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/GrandArcher/Packeteer/internal/config"
 )
@@ -272,5 +273,15 @@ func TestFormExchangesDraftPeer(t *testing.T) {
 	}
 	if cfg.Mode != config.ModeObserve {
 		t.Fatalf("mode = %q", cfg.Mode)
+	}
+}
+
+// The form has no field for exchanges[].health (#149); a form edit keeps it.
+func TestFormExchangesKeepHealth(t *testing.T) {
+	src := strings.Replace(exchangeFormYAML, "    group: ix\n", "    group: ix\n    health: {loss_pct: 30, min_peers: 2, window: 10m}\n", 1)
+	_, cfg := applyAndLoad(t, src, func(f *Form) { f.Exchanges[0].Peers[0].ASN = "64511" })
+	h := cfg.Exchanges[0].Health
+	if h.LossPct != 30 || h.MinPeers != 2 || h.Window != 10*time.Minute {
+		t.Fatalf("health = %+v", h)
 	}
 }

@@ -30,6 +30,7 @@ func (c *Config) Validate() error {
 	c.validateIndirect(add)
 	c.validateBGP(add)
 	c.validateExchanges(add)
+	c.validateExchangeHealth(add)
 	c.validateRouters(add)
 	c.validatePlugins(add)
 	c.validateTroubleshoot(add)
