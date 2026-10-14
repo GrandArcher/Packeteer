@@ -1,6 +1,7 @@
 "use strict";
 // Graphs page (#129): the timeseries report as before/after charts. Loaded
-// after app.js (el, clear, getJSON) and charts.js. Read-only.
+// after app.js (el, clear, getJSON), charts.js, and adddash.js. Read-only
+// apart from saving a dashboard widget.
 
 var graphData = null;
 
@@ -43,9 +44,18 @@ function loadGraph() {
   });
 }
 
+// graphWidget is the dashboard widget for the graphs on screen: the same
+// destinations and number of days.
+function graphWidget() {
+  var bucket = graphBucket();
+  var label = "Before/after graphs: " + TS_BUCKETS.filter(function (b) { return b.id === bucket; })[0].label;
+  return {widget: {type: "timeseries", bucket: bucket, days: Number(document.getElementById("graph-days").value) || 7, w: 12}, what: label};
+}
+
 function initGraphs() {
   var sel = document.getElementById("graph-bucket");
   if (!sel) return;
+  dashAddInit("graph", graphWidget);
   TS_BUCKETS.forEach(function (b) {
     var o = el("option", "", b.label);
     o.value = b.id;

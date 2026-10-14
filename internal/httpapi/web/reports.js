@@ -4,7 +4,7 @@
 // CSV and XLSX export, and "add to dashboard". The view lives in the URL.
 // Sorting and filtering happen on the server, so the table, CSV, and XLSX
 // hold the same rows. Loaded after app.js (el, clear, getJSON, fmtTime,
-// prefixCell). Read-only apart from saving a dashboard widget.
+// prefixCell) and adddash.js. Read-only apart from saving a dashboard widget.
 
 var REPORT_FILTERS = [
   {name: "provider", input: "rf-provider"},
@@ -271,7 +271,7 @@ function reportWidgetTitle(v) {
 // parameters as the page, so the widget shows the same rows.
 function reportWidget(v) {
   var q = reportParams(v);
-  var w = {type: "report", report: v.report, wide: true};
+  var w = {type: "report", report: v.report, w: 12};
   var days = q.get("days");
   if (days) { w.days = Number(days); q.delete("days"); }
   var query = q.toString();
@@ -279,63 +279,6 @@ function reportWidget(v) {
   var title = reportWidgetTitle(v);
   if (title) w.title = title;
   return w;
-}
-
-function reportStatus(text) {
-  document.getElementById("report-status").textContent = text;
-}
-
-function reportSend(method, path, body) {
-  return fetch(path, {method: method, cache: "no-store", headers: {Accept: "application/json", "Content-Type": "application/json"},
-    body: body === undefined ? undefined : JSON.stringify(body)}).then(function (res) {
-    return res.text().then(function (text) {
-      var data = null;
-      try { data = text ? JSON.parse(text) : null; } catch (e) { data = null; }
-      if (!res.ok) throw new Error((data && data.error) || res.statusText);
-      return data;
-    });
-  });
-}
-
-function reportOpenAdd() {
-  var form = document.getElementById("report-add-form");
-  if (!form.hidden) { form.hidden = true; return; }
-  reportStatus("");
-  getJSON("/api/dashboards").then(function (data) {
-    if (!data || !data.enabled) {
-      reportStatus("Custom dashboards need a storage plugin that keeps them (sqlite) and auth or basic auth.");
-      return;
-    }
-    var sel = document.getElementById("report-dash");
-    clear(sel);
-    var fresh = el("option", "", "(new dashboard)");
-    fresh.value = "";
-    sel.appendChild(fresh);
-    (data.dashboards || []).forEach(function (d) {
-      var o = el("option", "", d.name);
-      o.value = d.name;
-      sel.appendChild(o);
-    });
-    if (data.dashboards && data.dashboards.length) sel.value = data.dashboards[0].name;
-    form.hidden = false;
-  }, function (err) { reportStatus(err.message); });
-}
-
-function reportAddWidget(e) {
-  e.preventDefault();
-  var chosen = document.getElementById("report-dash").value;
-  var name = chosen || document.getElementById("report-dash-new").value.trim();
-  if (!name) { reportStatus("Pick a dashboard or name a new one."); return; }
-  var widget = reportWidget(reportView);
-  getJSON("/api/dashboards").then(function (data) {
-    var spec = {title: "", widgets: []};
-    (data.dashboards || []).forEach(function (d) { if (d.name === name) spec = d.spec; });
-    spec.widgets = (spec.widgets || []).concat([widget]);
-    return reportSend("PUT", "/api/dashboards/" + encodeURIComponent(name), spec);
-  }).then(function () {
-    document.getElementById("report-add-form").hidden = true;
-    reportStatus("Added " + reportView.report + " to dashboard " + name + ".");
-  }, function (err) { reportStatus(err.message.replace(/^\S+ failed: /, "")); });
 }
 
 function reportFillProviders() {
@@ -356,8 +299,7 @@ function reportInit() {
     e.preventDefault();
     if (reportReadForm()) reportLoad();
   });
-  document.getElementById("report-add").addEventListener("click", reportOpenAdd);
-  document.getElementById("report-add-form").addEventListener("submit", reportAddWidget);
+  dashAddInit("report", function () { return {widget: reportWidget(reportView), what: reportView.report}; });
   reportFillProviders();
   getJSON("/api/reports").then(function (data) {
     reportDefs = (data && data.reports) || [];

@@ -431,6 +431,125 @@ func TestDashboardsAPI(t *testing.T) {
 	}
 }
 
+func TestDashboardLayoutRoundTrip(t *testing.T) {
+	e := newUI(t)
+	spec := DashboardSpec{Title: "NOC", Favorite: true, Widgets: []Widget{
+		{Type: "commit", Days: 30, W: 12, H: 4, Refresh: 300},
+		{Type: "causes", Days: 90, W: 4, H: 2},
+		{Type: "timeseries", Bucket: "better_50", Days: 7, W: 8, Refresh: 60},
+		{Type: "providers", W: 3, H: 8, Refresh: 15},
+		{Type: "status"},
+		{Type: "improvements", Wide: true},
+	}}
+	if rec, _ := e.do(t, "PUT", "/api/dashboards/noc", plugin.RoleViewer, spec); rec.Code != http.StatusOK {
+		t.Fatalf("put: %d %s", rec.Code, rec.Body)
+	}
+	rec, _ := e.do(t, "GET", "/api/dashboards", plugin.RoleViewer, nil)
+	var got struct {
+		Dashboards []DashboardView `json:"dashboards"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil || len(got.Dashboards) != 1 {
+		t.Fatalf("get: %v %s", err, rec.Body)
+	}
+	if !reflect.DeepEqual(got.Dashboards[0].Spec, spec) {
+		t.Fatalf("layout changed on reload:\n got %+v\nwant %+v", got.Dashboards[0].Spec, spec)
+	}
+	// A swap of two widgets is a different stored layout, and reloads as saved.
+	spec.Widgets[0], spec.Widgets[1] = spec.Widgets[1], spec.Widgets[0]
+	e.do(t, "PUT", "/api/dashboards/noc", plugin.RoleViewer, spec)
+	rec, _ = e.do(t, "GET", "/api/dashboards", plugin.RoleViewer, nil)
+	got.Dashboards = nil
+	_ = json.Unmarshal(rec.Body.Bytes(), &got)
+	if got.Dashboards[0].Spec.Widgets[0].Type != "causes" || got.Dashboards[0].Spec.Widgets[1].Type != "commit" {
+		t.Fatalf("order not kept: %+v", got.Dashboards[0].Spec.Widgets)
+	}
+}
+
+func TestDashboardLayoutIsChecked(t *testing.T) {
+	e := newUI(t)
+	for name, w := range map[string]Widget{
+		"too wide":            {Type: "providers", W: GridColumns + 1},
+		"negative width":      {Type: "providers", W: -1},
+		"too tall":            {Type: "providers", H: MaxWidgetRows + 1},
+		"wide with width":     {Type: "providers", Wide: true, W: 6},
+		"refresh off the set": {Type: "providers", Refresh: 7},
+		"commit 90 days":      {Type: "commit", Days: 90},
+		"causes beyond range": {Type: "causes", Days: MaxReportDays + 1},
+		"bucket on commit":    {Type: "commit", Bucket: "all"},
+		"report on causes":    {Type: "causes", Report: "summary"},
+		"query on causes":     {Type: "causes", Query: "asn=64500"},
+	} {
+		if rec, _ := e.do(t, "PUT", "/api/dashboards/x", plugin.RoleViewer, DashboardSpec{Widgets: []Widget{w}}); rec.Code != http.StatusBadRequest {
+			t.Errorf("%s: %d %s", name, rec.Code, rec.Body)
+		}
+	}
+	for _, field := range []string{`"x":1`, `"col":2`, `"script":"a"`} {
+		body := `{"widgets":[{"type":"providers",` + field + `}]}`
+		if rec, _ := e.do(t, "PUT", "/api/dashboards/x", plugin.RoleViewer, body); rec.Code != http.StatusBadRequest {
+			t.Errorf("unknown widget field %s: %d", field, rec.Code)
+		}
+	}
+	// Twenty-four widgets with a size each are fine; a twenty-fifth is not.
+	full := make([]Widget, MaxDashboardWidgets)
+	for i := range full {
+		full[i] = Widget{Type: "status", W: 1 + i%GridColumns, H: 1 + i%MaxWidgetRows}
+	}
+	if rec, _ := e.do(t, "PUT", "/api/dashboards/full", plugin.RoleViewer, DashboardSpec{Widgets: full}); rec.Code != http.StatusOK {
+		t.Fatalf("24 sized widgets: %d %s", rec.Code, rec.Body)
+	}
+	full = append(full, Widget{Type: "status"})
+	if rec, _ := e.do(t, "PUT", "/api/dashboards/full", plugin.RoleViewer, DashboardSpec{Widgets: full}); rec.Code != http.StatusBadRequest {
+		t.Fatalf("25 widgets: %d", rec.Code)
+	}
+}
+
+func TestDashboardFavoriteIsOnePerUser(t *testing.T) {
+	e := newUI(t)
+	put := func(user plugin.Role, name string, fav bool) {
+		t.Helper()
+		spec := DashboardSpec{Favorite: fav, Widgets: []Widget{{Type: "status", W: 3}}}
+		if rec, _ := e.do(t, "PUT", "/api/dashboards/"+name, user, spec); rec.Code != http.StatusOK {
+			t.Fatalf("put %s: %d %s", name, rec.Code, rec.Body)
+		}
+	}
+	favorites := func(user plugin.Role) string {
+		rec, _ := e.do(t, "GET", "/api/dashboards", user, nil)
+		var got struct {
+			Dashboards []DashboardView `json:"dashboards"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+			t.Fatal(err)
+		}
+		var names []string
+		for _, d := range got.Dashboards {
+			if d.Spec.Favorite {
+				names = append(names, d.Name)
+			}
+			if len(d.Spec.Widgets) != 1 || d.Spec.Widgets[0].W != 3 {
+				t.Errorf("%s lost its layout: %+v", d.Name, d.Spec)
+			}
+		}
+		return strings.Join(names, ",")
+	}
+	put(plugin.RoleViewer, "a", true)
+	put(plugin.RoleViewer, "b", false)
+	put(plugin.RoleOperator, "a", true)
+	if got := favorites(plugin.RoleViewer); got != "a" {
+		t.Fatalf("favorites = %q, want a", got)
+	}
+	put(plugin.RoleViewer, "b", true)
+	if got := favorites(plugin.RoleViewer); got != "b" {
+		t.Fatalf("favorites after moving it = %q, want b", got)
+	}
+	if got := favorites(plugin.RoleOperator); got != "a" {
+		t.Fatalf("another user's favorite changed: %q", got)
+	}
+	put(plugin.RoleViewer, "b", false)
+	if got := favorites(plugin.RoleViewer); got != "" {
+		t.Fatalf("favorites after clearing it = %q", got)
+	}
+}
+
 func TestSubscriptionsAPI(t *testing.T) {
 	e := newUI(t)
 	rec, got := e.do(t, "GET", "/api/subscriptions", plugin.RoleViewer, nil)
@@ -458,14 +577,15 @@ func TestUIPages(t *testing.T) {
 	e := newUI(t)
 	for page, wants := range map[string][]string{
 		"/settings.html":   {`src="/ui.js"`, `src="/settings.js"`, `id="ed-yaml"`, `id="wz-run"`, `id="wz-edge"`, `id="wz-add-provider"`, `id="wz-host"`, `id="subs"`, `id="form-apply"`, `id="form-providers"`, `id="sug-refresh"`, `id="fm-rtt-pct"`, `id="fm-rounds"`},
-		"/dashboards.html": {`src="/ui.js"`, `src="/charts.js"`, `src="/dashboards.js"`, `id="db-grid"`, `id="db-bucket"`},
+		"/dashboards.html": {`src="/ui.js"`, `src="/charts.js"`, `src="/dashboards.js"`, `id="db-grid"`, `id="db-bucket"`, `id="db-live"`, `id="db-favorite"`, `id="db-width"`},
 		"/settings.js":     {"/api/config/validate", "/api/config/wizard", "/api/config/form", "/api/config/suggestions", "confirm_inject", "/api/subscriptions/", "function acceptSuggestion", "inject is not a step", "function renderWzProviders", "min_rtt_delta_pct", "confirm_rounds"},
-		"/dashboards.js":   {"/api/dashboards", "widget_types", "renderTimeSeries"},
-		"/graphs.html":     {`src="/charts.js"`, `src="/graphs.js"`, `id="graph"`},
-		"/graphs.js":       {"/api/reports/timeseries", "renderTimeSeries"},
-		"/reports.html":    {`src="/reports.js"`, `id="report-form"`},
-		"/reports.js":      {"/api/reports/", "/api/dashboards", "aria-sort", "utcFromInput", "format"},
-		"/charts.js":       {"createElementNS", "function renderTimeSeries", "No before/after data in this range"},
+		"/dashboards.js":   {"/api/dashboards", "widget_types", "renderTimeSeries", "renderCauses", "renderCommitGraphs"},
+		"/graphs.html":     {`src="/charts.js"`, `src="/adddash.js"`, `src="/graphs.js"`, `id="graph"`, `id="graph-add"`, `id="graph-add-form"`, `id="graph-dash"`, `id="graph-dash-new"`, `id="graph-status"`},
+		"/graphs.js":       {"/api/reports/timeseries", "renderTimeSeries", `dashAddInit("graph"`},
+		"/reports.html":    {`src="/adddash.js"`, `src="/reports.js"`, `id="report-form"`, `id="report-add"`, `id="report-add-form"`, `id="report-dash"`, `id="report-dash-new"`, `id="report-status"`},
+		"/reports.js":      {"/api/reports/", `dashAddInit("report"`, "aria-sort", "utcFromInput", "format"},
+		"/adddash.js":      {"/api/dashboards", `dashSend("PUT"`},
+		"/charts.js":       {"createElementNS", "function renderTimeSeries", "No before/after data in this range", "function renderCauses", "function renderCommitGraphs"},
 		"/":                {`href="/settings.html"`, `href="/dashboards.html"`},
 	} {
 		rec, _ := e.do(t, "GET", page, plugin.RoleViewer, nil)

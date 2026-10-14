@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/GrandArcher/Packeteer/internal/commitview"
 	"github.com/GrandArcher/Packeteer/internal/configedit"
 	"github.com/GrandArcher/Packeteer/internal/history"
 	"github.com/GrandArcher/Packeteer/internal/subscribe"
@@ -301,6 +302,8 @@ var WidgetTypes = []struct {
 	{"subscriptions", "Report subscriptions", "/api/subscriptions"},
 	{"report", "Report", "/api/reports/{report}"},
 	{"timeseries", "Before/after graphs", "/api/reports/timeseries"},
+	{"commit", "Provider usage vs commit", "/api/commit"},
+	{"causes", "Improvements by cause", "/api/reports/causes"},
 }
 
 func knownWidget(t string) bool {
@@ -312,16 +315,32 @@ func knownWidget(t string) bool {
 	return false
 }
 
-// DashboardSpec is a dashboard's layout.
+// Grid limits for widgets (#182): a row has GridColumns columns and a
+// widget may be up to MaxWidgetRows rows tall.
+const (
+	GridColumns   = 12
+	MaxWidgetRows = 8
+)
+
+// WidgetRefreshes are the seconds a widget may wait between reads; 0 is
+// the default, the first of them.
+var WidgetRefreshes = []int{15, 30, 60, 300}
+
+// DashboardSpec is a dashboard's layout. The widgets are in reading order;
+// a widget's place is its position in the list and its W and H. Favorite
+// marks the one a user's dashboards page opens first; the server keeps at
+// most one per user.
 type DashboardSpec struct {
-	Title   string   `json:"title,omitempty"`
-	Widgets []Widget `json:"widgets"`
+	Title    string   `json:"title,omitempty"`
+	Favorite bool     `json:"favorite,omitempty"`
+	Widgets  []Widget `json:"widgets"`
 }
 
 // Widget is one panel. Report, Days, and Query are for type report; Query
 // is the filters, sort, and limit (or a from/to range instead of Days) of
 // /api/reports/{report} as a URL query string (#178). Days and Bucket (one
-// of history.Buckets, default all) are for type timeseries.
+// of history.Buckets, default all) are for type timeseries. Days is also
+// the time window of types causes and commit (commit: 1, 7, or 30).
 type Widget struct {
 	Type   string `json:"type"`
 	Title  string `json:"title,omitempty"`
@@ -329,8 +348,15 @@ type Widget struct {
 	Days   int    `json:"days,omitempty"`
 	Query  string `json:"query,omitempty"`
 	Bucket string `json:"bucket,omitempty"`
-	// Wide spans the full row.
+	// Wide is the pre-#182 way to span the full row. It is read from stored
+	// layouts and means W 12; the page saves W instead.
 	Wide bool `json:"wide,omitempty"`
+	// W is the width in columns of GridColumns (0 is 6) and H the height in
+	// rows (0 fits the content). Refresh is the seconds between reads, one
+	// of WidgetRefreshes (0 is 15).
+	W       int `json:"w,omitempty"`
+	H       int `json:"h,omitempty"`
+	Refresh int `json:"refresh,omitempty"`
 }
 
 var dashboardName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9 _.-]{0,62}$`)
@@ -354,7 +380,26 @@ func (d DashboardSpec) Validate() error {
 		if !validText(w.Title, 100) {
 			return fmt.Errorf("widgets[%d]: title must be one line of at most 100 bytes", i)
 		}
+		if w.W < 0 || w.W > GridColumns || (w.Wide && w.W != 0) {
+			return fmt.Errorf("widgets[%d]: w must be 1-%d, and not together with wide", i, GridColumns)
+		}
+		if w.H < 0 || w.H > MaxWidgetRows {
+			return fmt.Errorf("widgets[%d]: h must be 1-%d", i, MaxWidgetRows)
+		}
+		if w.Refresh != 0 && !slices.Contains(WidgetRefreshes, w.Refresh) {
+			return fmt.Errorf("widgets[%d]: refresh must be one of %v seconds", i, WidgetRefreshes)
+		}
 		switch w.Type {
+		case "causes", "commit":
+			if w.Report != "" || w.Query != "" || w.Bucket != "" {
+				return fmt.Errorf("widgets[%d]: report, query, and bucket are not for type %s", i, w.Type)
+			}
+			if _, ok := commitview.Steps[w.Days]; w.Type == "commit" && w.Days != 0 && !ok {
+				return fmt.Errorf("widgets[%d]: days must be 1, 7, or 30 for type commit", i)
+			}
+			if w.Days < 0 || w.Days > MaxReportDays {
+				return fmt.Errorf("widgets[%d]: days must be 0-%d", i, MaxReportDays)
+			}
 		case "report":
 			if !history.Known(w.Report) {
 				return fmt.Errorf("widgets[%d]: report %q is unknown", i, w.Report)
@@ -493,8 +538,11 @@ func (s *Server) handleDashboardPut(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusConflict, map[string]string{"error": fmt.Sprintf("at most %d dashboards per user", MaxDashboards)})
 		return
 	}
-	raw, _ := json.Marshal(spec)
 	now := time.Now().UTC()
+	if spec.Favorite && !s.clearFavorites(w, r, owner, name, existing) {
+		return
+	}
+	raw, _ := json.Marshal(spec)
 	if err := s.dashboards.PutDashboard(r.Context(), plugin.Dashboard{Owner: owner, Name: name, Spec: raw, Updated: now}); err != nil {
 		s.log.Error("dashboard write", "err", err)
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "dashboard store unavailable"})
@@ -502,6 +550,28 @@ func (s *Server) handleDashboardPut(w http.ResponseWriter, r *http.Request) {
 	}
 	noteAudit(r, name, fmt.Sprintf("widgets=%d", len(spec.Widgets)))
 	writeJSON(w, http.StatusOK, DashboardView{Name: name, Spec: spec, Updated: now})
+}
+
+// clearFavorites drops the favorite mark from the owner's other dashboards,
+// so a user has one. It runs before the new favorite is written: if a write
+// fails halfway the user is left with none, never two. The layouts and their
+// update times are kept.
+func (s *Server) clearFavorites(w http.ResponseWriter, r *http.Request, owner, keep string, existing []plugin.Dashboard) bool {
+	for _, d := range existing {
+		var spec DashboardSpec
+		if d.Name == keep || json.Unmarshal(d.Spec, &spec) != nil || !spec.Favorite {
+			continue
+		}
+		spec.Favorite = false
+		raw, _ := json.Marshal(spec)
+		d.Spec = raw
+		if err := s.dashboards.PutDashboard(r.Context(), d); err != nil {
+			s.log.Error("dashboard write", "err", err)
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "dashboard store unavailable"})
+			return false
+		}
+	}
+	return true
 }
 
 func (s *Server) handleDashboardDelete(w http.ResponseWriter, r *http.Request) {
