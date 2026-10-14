@@ -65,6 +65,46 @@ type PeerStats struct {
 	// has been seen, or the peer has no path. Display only. It is not a
 	// route check and it never changes an improvement.
 	Via string `json:"via"`
+	// Availability compares the route server and bilateral feeds (#156).
+	Availability Availability `json:"availability"`
+}
+
+// Flags on a member whose route server feed lacks prefixes it sends over a
+// bilateral session (#156). Packeteer cannot tell whether the route server,
+// the member's export policy, or an import filter dropped them.
+const (
+	// FlagRSPartial: paths arrive via a route server, and some prefixes
+	// arrive only bilaterally.
+	FlagRSPartial = "rs_partial"
+	// FlagRSMissing: no path arrives via a route server although the
+	// exchange shows route server paths for other members, and some
+	// prefixes arrive bilaterally.
+	FlagRSMissing = "rs_missing"
+)
+
+// Availability counts the prefixes through one member's next hop by how
+// the router learned them (#156). Same next hop, so this is availability,
+// not latency. Only BMP Adj-RIB-In paths are classified, so a peer that is
+// not set to bmp: prefer or only shows zeros.
+type Availability struct {
+	RouteServerOnly int    `json:"route_server_only"`
+	BilateralOnly   int    `json:"bilateral_only"`
+	Both            int    `json:"both"`
+	Flag            string `json:"flag,omitempty"`
+}
+
+// availability counts one next hop. rsSeen is true when some member of the
+// exchange has a path via a route server.
+func availability(h rib.NextHopCount, rsSeen bool) Availability {
+	a := Availability{RouteServerOnly: h.RouteServerOnly, BilateralOnly: h.BilateralOnly, Both: h.Both}
+	switch {
+	case a.BilateralOnly == 0:
+	case a.RouteServerOnly+a.Both > 0:
+		a.Flag = FlagRSPartial
+	case rsSeen:
+		a.Flag = FlagRSMissing
+	}
+	return a
 }
 
 // Move is one active improvement onto a peer.
@@ -74,7 +114,9 @@ type Move struct {
 	VolumeMbps float64   `json:"volume_mbps,omitempty"`
 }
 
-// Discovered is a next hop on the peering LAN that no peer uses.
+// Discovered is a next hop on the peering LAN that no peer uses. It has no
+// Availability: the RIB keeps BMP Adj-RIB-In paths only for configured
+// providers, so there is nothing to classify.
 type Discovered struct {
 	NextHop  string `json:"next_hop"`
 	ASN      uint32 `json:"asn,omitempty"`
@@ -92,10 +134,12 @@ func Build(exs []Exchange, hops []rib.NextHopCount, up map[string]bool, improvem
 			st.LANs = append(st.LANs, l.String())
 		}
 		byHop := map[netip.Addr]rib.NextHopCount{}
+		rsSeen := false
 		for _, h := range hops {
 			if inLANs(ex.LANs, h.NextHop) {
 				byHop[h.NextHop] = h
 				st.Prefixes += h.Prefixes
+				rsSeen = rsSeen || h.RouteServerOnly+h.Both > 0
 			}
 		}
 		used := map[netip.Addr]bool{}
@@ -107,7 +151,7 @@ func Build(exs []Exchange, hops []rib.NextHopCount, up map[string]bool, improvem
 			if moves == nil {
 				moves = []Move{}
 			}
-			ps := PeerStats{Name: p.Name, ASN: p.ASN, NextHop: nh.String(), Prefixes: h.Prefixes, Up: up[p.Name], Improvements: len(moves), Moves: moves, Via: h.Via}
+			ps := PeerStats{Name: p.Name, ASN: p.ASN, NextHop: nh.String(), Prefixes: h.Prefixes, Up: up[p.Name], Improvements: len(moves), Moves: moves, Via: h.Via, Availability: availability(h, rsSeen)}
 			for _, m := range moves {
 				ps.MovedMbps += m.VolumeMbps
 			}

@@ -6,6 +6,7 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 
 ### Added
 
+- Exchange peers: prefixes seen only via the route server, only bilaterally, or both, counts over time, and a partial-feed flag; `GET /api/exchanges/member` (#156).
 - Exchange view on Providers & Exchanges: peers, type, improvements with Mbps moved, discovered members; `exchanges` report and `volume_mbps` on improvements (#148).
 - Dashboard widgets: chart widgets (improvements by cause, provider usage vs commit), grid move and resize by drag or keyboard, per-widget refresh and window, a favorite dashboard (#182).
 - Commit & Cost page and `GET /api/commit`: samples, running 95th, commit, and commit moves per provider for 1, 7, 30 days; Commit setup in Settings (#174).

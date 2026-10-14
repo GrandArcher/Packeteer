@@ -26,13 +26,13 @@ Milestones:
 | v0.4 | 13 |
 | v0.6 | 9 |
 | v0.7 | 3 |
-| v0.8 | 6 |
+| v0.8 | 7 |
 | won't do | 2 |
-| **total** | 99 |
+| **total** | 100 |
 
 | Status | Count |
 |---|---|
-| done | 83 |
+| done | 84 |
 | partial | 9 |
 | in progress | 0 |
 | planned | 5 |
@@ -187,6 +187,7 @@ The `maintenance` policy excludes providers during cron-scheduled, one-off, or o
 | Probe multiplexing for large IXs (shared probe source with per-peer fwmark or DSCP) and PBR generator (Linux and router snippets, generation only) | planned | v0.8 | core (generator; never pushes to a router) | #157 | — |
 | Shared IX port: capacity, commit, and flat port cost across peers | planned | v0.8 | core (`exchanges[].port`) + scorer (`commit`, `cost`) | #151 | — |
 | Improvements to exchanges report: improvements per peer with Mbps moved | done (#148: the `exchanges` report and a table on `/providers.html`; Mbps is the prefix rate a target source reports, `—` when none does) | v0.8 | storage (`sqlite`) + UI | #148 | no |
+| Per-member route server vs bilateral availability: prefixes seen only via the route server, only bilaterally, or both, with counts over time and a flag for a partial or filtered route server feed | done (#156: counts and flags on `/api/exchanges`, `GET /api/exchanges/member` for the prefixes and the counts kept in memory every 15 minutes, and columns on `/providers.html`; BMP Adj-RIB-In paths only, so a peer without `bmp: prefer` or `only` shows zero, and discovered members are not classified; read-only) | v0.8 | core (`internal/rib`, `internal/exchange`) + UI | #156 | no |
 | Bgpd online reconfiguration (SIGHUP: add/remove/change iBGP sessions and the per-router table without touching other sessions) | done (lab-proven) | v0.3 | core + announcer (`gobgp`) + RIB | #27 | no (lab-proven) |
 | Online reconfiguration of core settings (thresholds, hold time, cap, policies, sources) without a restart or a withdraw | done (lab-proven) | v0.6 | core (`cmd/controller` reload, `internal/configedit`) | #128 | no (lab-proven) |
 
@@ -230,7 +231,7 @@ Internet exchanges (#27, second half) are an `exchanges` list. Each peer is a pr
 
 Exchange statistics are live on `/api/exchanges` and `packeteer_exchange_*`: per peer, the prefixes seen through its next hop, a mismatched observed AS, probe health, and active improvements; and next hops on the peering LAN that are not configured (`discovered`), which are never probed or used. A peer is not assumed to be a route server (#146). Probe targets whose prefix is inside an exchange LAN are dropped (#145). A flow or span destination on a peering LAN is not aggregated into a probe prefix, and a pinned host on a LAN is not probed. Traceroute does not adopt a hop on a LAN. `allowlist.prefixes` may not overlap a LAN.
 
-`packeteer_exchange_lan_targets_dropped` counts the omissions. Nothing is announced. Each learned path carries `via`: `route_server` when a BMP neighbor on the exchange LAN is not the path's next hop (the MED label names that neighbor), `bilateral` when the neighbor is the next hop, and `unknown` on an iBGP add-path or Loc-RIB path until BMP paths for the same next hop agree. `/api/exchanges` shows the same value per peer, `unknown` when the paths disagree or none have been seen. MED stays display-only. The route check is unchanged.
+`packeteer_exchange_lan_targets_dropped` counts the omissions. Nothing is announced. Each learned path carries `via`: `route_server` when a BMP neighbor on the exchange LAN is not the path's next hop (the MED label names that neighbor), `bilateral` when the neighbor is the next hop, and `unknown` on an iBGP add-path or Loc-RIB path until BMP paths for the same next hop agree. `/api/exchanges` shows the same value per peer, `unknown` when the paths disagree or none have been seen. MED stays display-only. Per member, `availability` counts prefixes seen only via a route server, only bilaterally, or both, from BMP Adj-RIB-In paths, and flags `rs_partial` or `rs_missing` (#156). The route check is unchanged.
 
 `bgp.as_path` sets the AS path on injected routes: `empty` (default, as before), `native` (the learned route's), or `provider` (the chosen provider's own learned path, else native); Packeteer never prepends its own AS. Online reconfiguration: SIGHUP reloads the file and applies `bgp.neighbors` to the running speaker. Sessions are added and removed without touching the others, a changed per-router table replaces the export policy (outbound routes are withdrawn first and announced again under it), and egress routers are recomputed.
 

@@ -265,6 +265,12 @@ func TestExchangePageFixturesMatchAPI(t *testing.T) {
 		a.Improvements != len(a.Moves) || b.ObservedASN != 64599 || b.Up || b.Via != "route_server" {
 		t.Fatalf("peers = %+v", ex.Exchanges[0].Peers)
 	}
+	// #156: the comparison columns and flags the smoke test looks for.
+	c := ex.Exchanges[0].Peers[2]
+	if a.Availability.Flag != exchange.FlagRSPartial || a.Availability.RouteServerOnly+a.Availability.BilateralOnly+a.Availability.Both != 8 ||
+		b.Availability.Flag != "" || b.Availability.RouteServerOnly != 3 || c.Availability.Flag != exchange.FlagRSMissing || c.Availability.BilateralOnly != 4 {
+		t.Fatalf("availability = %+v %+v %+v", a.Availability, b.Availability, c.Availability)
+	}
 	var rep struct {
 		Report string                `json:"report"`
 		From   string                `json:"from"`

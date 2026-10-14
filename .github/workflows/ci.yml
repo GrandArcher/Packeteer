@@ -1204,7 +1204,8 @@ jobs:
           # (documentation prefixes and ASNs). The page is the image's. The
           # step checks the peer table (type, mismatched AS, probe state),
           # the improvements with their Mbps, the discovered member, and the
-          # report table; the view only reads.
+          # report table, and (#156) the route server vs bilateral columns
+          # with the partial and missing flags; the view only reads.
           kill "$proxy"
           /tmp/uiproxy -listen 127.0.0.1:18137 -upstream "$base" -user lab -password lab-only \
             -fixtures lab/ui-fixtures/exchange-page >/tmp/uiproxy148.log 2>&1 &
@@ -1219,6 +1220,7 @@ jobs:
             'sees AS64599' '<span class="dot down">down</span>' '<td>42.5 Mbps</td>' \
             '<td class="mono">192.0.2.0/24</td>' '<td>30.5 Mbps</td>' '<td>12.0 Mbps</td>' \
             '<td class="mono">203.0.113.13</td>' '<td>AS64503</td>' '<td>61.5 Mbps</td>' '<td>120.5</td>' \
+            '<th>Bilateral only</th>' '>RS partial</span>' '>RS missing</span>' 'data-member="ix-lab/203.0.113.11"' '>Compare</button>' \
             --absent 'not built yet' 'mode-inject'
       - name: UI mitigation, inbound, and anomaly forms smoke (#131; add and remove a rule in observe)
         run: |
