@@ -178,9 +178,9 @@ func (c *Collector) Snapshot() Snapshot {
 		for _, st := range in.Status {
 			up[st.Name] = st.Up
 		}
-		imps := map[string]int{}
+		imps := map[string][]exchange.Move{}
 		for _, im := range in.Improvements {
-			imps[im.Provider]++
+			imps[im.Provider] = append(imps[im.Provider], exchange.Move{Prefix: im.Prefix.String(), Since: im.Since.UTC(), VolumeMbps: jsonFloat(im.VolumeMbps)})
 		}
 		in.Exchanges = exchange.Build(exs, nh, up, imps)
 	}

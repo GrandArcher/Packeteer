@@ -150,6 +150,10 @@ type Improvement struct {
 	// change a decision.
 	CostDelta  float64 `json:"cost_delta,omitempty"`
 	EstSavings float64 `json:"est_savings,omitempty"`
+	// VolumeMbps is the prefix's observed rate at the last decision, the
+	// traffic this improvement moves. Zero when no source reports volume.
+	// Display only: it does not change a decision.
+	VolumeMbps float64 `json:"volume_mbps,omitempty"`
 
 	// nativeSeen is the first decision, after this improvement already
 	// existed, that still saw the prefix in the RIB. nativeHeld is that
@@ -994,9 +998,9 @@ func costFirst(scorer plugin.Scorer) (plugin.CostPolicy, bool) {
 	return cp, true
 }
 
-// annotateCost sets the cost estimate on every improvement and change whose
-// native and steered providers both have a cost. It does not change a
-// decision.
+// annotateCost sets the observed volume on every improvement and change, and
+// the cost estimate on those whose native and steered providers both have a
+// cost. It does not change a decision.
 func annotateCost(st State, out *Output, cfg Config, volume map[netip.Prefix]float64) {
 	for p, imp := range st.Improvements {
 		st.Improvements[p] = withCost(imp, cfg, volume)
@@ -1011,9 +1015,9 @@ func annotateCost(st State, out *Output, cfg Config, volume map[netip.Prefix]flo
 	}
 }
 
-// withCost returns imp with CostDelta and EstSavings recomputed.
+// withCost returns imp with VolumeMbps, CostDelta, and EstSavings recomputed.
 func withCost(imp Improvement, cfg Config, volume map[netip.Prefix]float64) Improvement {
-	imp.CostDelta, imp.EstSavings = 0, 0
+	imp.VolumeMbps, imp.CostDelta, imp.EstSavings = volume[imp.Prefix], 0, 0
 	nat, ok1 := providerCost(cfg, imp.Native)
 	cur, ok2 := providerCost(cfg, imp.Provider)
 	if ok1 && ok2 {

@@ -1,0 +1,27 @@
+{
+  "exchanges": [
+    {
+      "name": "ix-lab",
+      "lans": ["203.0.113.0/24"],
+      "prefixes": 14,
+      "improvements": 2,
+      "peers": [
+        {
+          "name": "ix-peer-a", "asn": 64501, "next_hop": "203.0.113.11", "prefixes": 8, "up": true, "improvements": 2,
+          "moved_mbps": 42.5, "via": "bilateral",
+          "moves": [
+            {"prefix": "192.0.2.0/24", "since": "2026-10-07T10:00:00Z", "volume_mbps": 30.5},
+            {"prefix": "198.51.100.0/24", "since": "2026-10-07T11:30:00Z", "volume_mbps": 12}
+          ]
+        },
+        {
+          "name": "ix-peer-b", "asn": 64502, "observed_asn": 64599, "next_hop": "203.0.113.12", "prefixes": 3, "up": false, "improvements": 0,
+          "moved_mbps": 0, "via": "route_server", "moves": []
+        }
+      ],
+      "discovered": [
+        {"next_hop": "203.0.113.13", "asn": 64503, "prefixes": 3}
+      ]
+    }
+  ]
+}

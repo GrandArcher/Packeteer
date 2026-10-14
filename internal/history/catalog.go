@@ -107,6 +107,12 @@ var Reports = []Def{
 			txt("country", "Country"), num("volume_mbps", "Volume", "Mbps"), num("cost_delta", "Cost delta", "per Mbps"),
 			num("est_savings", "Est. savings", "per month"),
 		}},
+	{Name: ReportExchanges, Category: CategoryImprovements, Filters: Filters,
+		Summary: "Improvements onto each Internet exchange peer: started, active now, prefixes, Mbps moved, and hours steered.",
+		Columns: []Column{
+			txt("exchange", "Exchange"), txt("peer", "Peer"), num("improvements", "Improvements", ""), num("active", "Active now", ""),
+			num("prefixes", "Prefixes", ""), num("volume_mbps", "Moved", "Mbps"), num("steered_hours", "Steered", "h"),
+		}},
 	{Name: ReportCauses, Category: CategoryImprovements, Filters: Filters,
 		Summary: "Improvements started per UTC day, by cause (performance, commit, cost).",
 		Columns: []Column{

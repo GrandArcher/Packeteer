@@ -9,6 +9,7 @@ package exchange
 import (
 	"net/netip"
 	"sort"
+	"time"
 
 	"github.com/GrandArcher/Packeteer/internal/rib"
 )
@@ -54,11 +55,23 @@ type PeerStats struct {
 	Up       bool `json:"up"` // probe source up
 	// Improvements is the number of active improvements onto the peer.
 	Improvements int `json:"improvements"`
+	// Moves are those improvements and MovedMbps the observed rate of
+	// their prefixes together. A prefix whose rate no source reports adds
+	// nothing, so MovedMbps is a floor.
+	MovedMbps float64 `json:"moved_mbps"`
+	Moves     []Move  `json:"moves"`
 	// Via is how the router shows this peer (#146): route_server,
 	// bilateral, or unknown when the paths disagree, only iBGP add-path
 	// has been seen, or the peer has no path. Display only. It is not a
 	// route check and it never changes an improvement.
 	Via string `json:"via"`
+}
+
+// Move is one active improvement onto a peer.
+type Move struct {
+	Prefix     string    `json:"prefix"`
+	Since      time.Time `json:"since,omitzero"`
+	VolumeMbps float64   `json:"volume_mbps,omitempty"`
 }
 
 // Discovered is a next hop on the peering LAN that no peer uses.
@@ -71,7 +84,7 @@ type Discovered struct {
 // Build joins the configured exchanges with next hop counts from the RIB
 // (rib.View.NextHops over every exchange LAN), provider health, and the
 // active improvements per provider.
-func Build(exs []Exchange, hops []rib.NextHopCount, up map[string]bool, improvements map[string]int) []Stats {
+func Build(exs []Exchange, hops []rib.NextHopCount, up map[string]bool, improvements map[string][]Move) []Stats {
 	out := make([]Stats, 0, len(exs))
 	for _, ex := range exs {
 		st := Stats{Name: ex.Name, LANs: []string{}, Peers: []PeerStats{}, Discovered: []Discovered{}}
@@ -90,7 +103,14 @@ func Build(exs []Exchange, hops []rib.NextHopCount, up map[string]bool, improvem
 			nh := p.NextHop.Unmap()
 			used[nh] = true
 			h := byHop[nh]
-			ps := PeerStats{Name: p.Name, ASN: p.ASN, NextHop: nh.String(), Prefixes: h.Prefixes, Up: up[p.Name], Improvements: improvements[p.Name], Via: h.Via}
+			moves := improvements[p.Name]
+			if moves == nil {
+				moves = []Move{}
+			}
+			ps := PeerStats{Name: p.Name, ASN: p.ASN, NextHop: nh.String(), Prefixes: h.Prefixes, Up: up[p.Name], Improvements: len(moves), Moves: moves, Via: h.Via}
+			for _, m := range moves {
+				ps.MovedMbps += m.VolumeMbps
+			}
 			if ps.Via == "" {
 				ps.Via = rib.ViaUnknown
 			}

@@ -271,6 +271,9 @@ type Improvement struct {
 	// EstSavings is that times the prefix volume. Estimates for reports.
 	CostDelta  float64 `json:"cost_delta,omitempty"`
 	EstSavings float64 `json:"est_savings,omitempty"`
+	// VolumeMbps is the prefix's observed rate, the traffic the improvement
+	// moves. Omitted when no target source reports volume.
+	VolumeMbps float64 `json:"volume_mbps,omitempty"`
 }
 
 // Telemetry is one provider's interface usage for the open billing period.
@@ -517,6 +520,7 @@ func assembleImprovements(in []policy.Improvement) []Improvement {
 			Cause:      im.Cause,
 			CostDelta:  im.CostDelta,
 			EstSavings: im.EstSavings,
+			VolumeMbps: jsonFloat(im.VolumeMbps),
 		})
 	}
 	sort.Slice(out, func(i, j int) bool { return lessPrefix(out[i].Prefix, out[j].Prefix) < 0 })

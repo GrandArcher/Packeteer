@@ -451,3 +451,31 @@ func TestRecorderReportsEachStoreWrite(t *testing.T) {
 		t.Fatalf("OnWrite results = %v, want the failure then success", results)
 	}
 }
+
+// An improvement is stored with the volume the decision saw, and Report
+// names the configured exchange peers (#148).
+func TestRecorderExchangeReport(t *testing.T) {
+	ctx := context.Background()
+	clock := t0
+	store := &memStore{}
+	rec := New(Options{Store: store, Mode: "observe", FlushEvery: time.Hour, Now: func() time.Time { return clock },
+		Exchanges: map[string]string{"ix-peer-a": "ix-lab", "ix-peer-b": "ix-lab"}})
+	rec.Decision(t0, []policy.Change{{Action: policy.ActionImprove, New: policy.Improvement{Prefix: pfxA, Provider: "ix-peer-a", Native: "transit-a", VolumeMbps: 30}}}, nil)
+	rec.Decision(t0, []policy.Change{{Action: policy.ActionImprove, New: policy.Improvement{Prefix: pfxB, Provider: "transit-b", Native: "transit-a", VolumeMbps: 99}}}, nil)
+	clock = t0.Add(time.Hour)
+	if err := rec.Flush(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if i := slices.IndexFunc(store.h.Improvements, func(r plugin.ImprovementRecord) bool { return r.Provider == "ix-peer-a" }); i < 0 || store.h.Improvements[i].VolumeMbps != 30 {
+		t.Fatalf("stored improvements = %+v", store.h.Improvements)
+	}
+	rep, err := rec.Report(ctx, Query{Name: ReportExchanges, From: t0.Truncate(24 * time.Hour), To: t0.Add(24 * time.Hour)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows := rep.Rows.([]ExchangeRow)
+	if len(rows) != 2 || rows[0].Peer != "ix-peer-a" || rows[0].Exchange != "ix-lab" || rows[0].VolumeMbps != 30 || rows[0].Active != 1 ||
+		rows[1].Peer != "ix-peer-b" || rows[1].Improvements != 0 {
+		t.Fatalf("rows = %+v", rows)
+	}
+}

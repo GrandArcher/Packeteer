@@ -152,7 +152,25 @@ func TestImprovementWeightsOwnVolume(t *testing.T) {
 	if w := decision(t, out, pB).Weight; w != 830 {
 		t.Fatalf("pB weight = %v", w)
 	}
-	if imp.CostDelta != 8 || imp.EstSavings != 0 {
+	if imp.CostDelta != 8 || imp.EstSavings != 0 || imp.VolumeMbps != 0 {
 		t.Fatalf("cost annotation read the weights' volume: %+v", imp)
+	}
+}
+
+// An improvement carries the observed volume of its prefix even when no
+// provider has a cost, and a change carries it too.
+func TestImprovementCarriesVolume(t *testing.T) {
+	input, c := weightsInput()
+	want := input.VolumeMbps[pB]
+	if want <= 0 {
+		t.Fatalf("fixture has no volume for %s", pB)
+	}
+	st, out := Decide(NewState(), input, c, weightedScorer(t, "improvement_weights: {volume: 1}"), t0)
+	imp, ok := st.Improvements[pB]
+	if !ok || imp.VolumeMbps != want || imp.CostDelta != 0 {
+		t.Fatalf("improvement %+v, want volume %v and no cost", imp, want)
+	}
+	if len(out.Changes) == 0 || out.Changes[0].New.VolumeMbps != want {
+		t.Fatalf("change %+v", out.Changes)
 	}
 }
