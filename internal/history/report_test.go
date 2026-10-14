@@ -3,6 +3,7 @@ package history
 import (
 	"bytes"
 	"encoding/json"
+	"net/netip"
 	"strings"
 	"testing"
 	"time"
@@ -254,5 +255,31 @@ func TestCSV(t *testing.T) {
 	lines := strings.Split(strings.TrimSpace(buf.String()), "\n")
 	if len(lines) != 2 || !strings.HasPrefix(lines[1], "203.0.113.0/24,transit-a,transit-b,commit,") || !strings.Contains(lines[1], ",64500,") {
 		t.Fatalf("improvements csv =\n%s", buf.String())
+	}
+}
+
+func TestImprovementsFilter(t *testing.T) {
+	ids := func(mod func(*Query)) string {
+		var out []string
+		for _, r := range build(t, ReportImprovements, mod).Rows.([]ImprovementRow) {
+			out = append(out, r.Prefix+"/"+r.Cause)
+		}
+		return strings.Join(out, ",")
+	}
+	for _, c := range []struct {
+		name string
+		mod  func(*Query)
+		want string
+	}{
+		{"prefix", func(q *Query) { q.Prefix = pfxB }, "198.51.100.0/24/cost,198.51.100.0/24/cost"},
+		{"asn", func(q *Query) { q.ASN = 64500 }, "203.0.113.0/24/commit,192.0.2.0/24/performance,192.0.2.0/24/performance"},
+		{"prefix and asn", func(q *Query) { q.Prefix, q.ASN = pfxA, 64500 }, "192.0.2.0/24/performance,192.0.2.0/24/performance"},
+		{"prefix with another asn", func(q *Query) { q.Prefix, q.ASN = pfxA, 64501 }, ""},
+		{"prefix with no records", func(q *Query) { q.Prefix = netip.MustParsePrefix("192.0.2.0/25") }, ""},
+		{"no filter", func(*Query) {}, "203.0.113.0/24/commit,198.51.100.0/24/cost,192.0.2.0/24/performance,192.0.2.0/24/performance,198.51.100.0/24/cost"},
+	} {
+		if got := ids(c.mod); got != c.want {
+			t.Errorf("%s: rows = %q, want %q", c.name, got, c.want)
+		}
 	}
 }

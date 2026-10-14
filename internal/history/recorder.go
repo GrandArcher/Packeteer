@@ -571,3 +571,12 @@ func (r *Recorder) Prefix(ctx context.Context, p netip.Prefix, q Query) (PrefixH
 	}
 	return BuildPrefix(h, p, q), nil
 }
+
+// Search finds the stored improvements and probe rollups that match q.
+func (r *Recorder) Search(ctx context.Context, q SearchQuery) (SearchResult, error) {
+	h, err := r.History(ctx, q.From, q.To)
+	if err != nil {
+		return SearchResult{}, err
+	}
+	return Search(h, q), nil
+}

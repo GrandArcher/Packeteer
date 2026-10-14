@@ -13,6 +13,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"net"
 	"net/netip"
 	"slices"
@@ -22,6 +23,7 @@ import (
 	"time"
 
 	"github.com/GrandArcher/Packeteer/internal/exchange"
+	"github.com/GrandArcher/Packeteer/internal/netpfx"
 	"github.com/GrandArcher/Packeteer/internal/probe"
 	"github.com/GrandArcher/Packeteer/internal/rib"
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
@@ -125,7 +127,18 @@ type Tools struct {
 	mu    sync.RWMutex
 	rib   RIB
 	queue Queue
+	// names are AS names that ASN whois lookups returned, for the global
+	// search (#172). A lookup of an AS already here replaces its name; a
+	// new AS is dropped once maxASNames are held.
+	names map[uint32]string
 }
+
+// maxASNames bounds the AS names kept from whois lookups. maxASNameLen
+// bounds one name, which a registry supplies.
+const (
+	maxASNames   = 1000
+	maxASNameLen = 100
+)
 
 // New returns Tools. The RIB is attached later with SetRIB because the
 // HTTP server starts before the BGP view exists.
@@ -712,7 +725,45 @@ func (t *Tools) Whois(ctx context.Context, q string) (plugin.WhoisResult, error)
 	if err := t.admit(); err != nil {
 		return plugin.WhoisResult{}, err
 	}
-	return t.opt.Whois.Lookup(ctx, q)
+	res, err := t.opt.Whois.Lookup(ctx, q)
+	if err == nil {
+		t.rememberASName(q, res)
+	}
+	return res, err
+}
+
+func (t *Tools) rememberASName(q string, res plugin.WhoisResult) {
+	if res.Kind != "asn" || res.Name == "" {
+		return
+	}
+	asn, ok := netpfx.ParseASN(q)
+	if !ok {
+		return
+	}
+	name := res.Name
+	if len(name) > maxASNameLen {
+		name = strings.ToValidUTF8(name[:maxASNameLen], "")
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if _, known := t.names[asn]; !known && len(t.names) >= maxASNames {
+		return
+	}
+	if t.names == nil {
+		t.names = map[uint32]string{}
+	}
+	t.names[asn] = name
+}
+
+// ASNames returns the AS names that whois lookups returned since the
+// process started.
+func (t *Tools) ASNames() map[uint32]string {
+	if t == nil {
+		return nil
+	}
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	return maps.Clone(t.names)
 }
 
 // CheckWhoisQuery accepts an IP address, a prefix, or an ASN (with or

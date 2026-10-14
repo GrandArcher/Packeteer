@@ -130,6 +130,10 @@ type Server struct {
 	// row (#102). Nil means there is nothing to suggest. It must not write
 	// config or announce.
 	suggest atomic.Value
+	// searchRIB is the learned RIB the global search reads (#172). Nil
+	// until SetSearchRIB.
+	searchRIB atomic.Pointer[SearchRIB]
+	searches  searchLimiters
 	// quarantine releases a flap-quarantined prefix (#228). Nil until
 	// SetQuarantine.
 	quarantine atomic.Value

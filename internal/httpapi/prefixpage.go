@@ -8,6 +8,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/GrandArcher/Packeteer/internal/netpfx"
 )
 
 // The measured-prefix list is served in pages (#183), so a table of 100k
@@ -49,11 +51,11 @@ func parsePrefixQuery(v url.Values) (prefixQuery, error) {
 		}
 	}
 	if s := strings.TrimSpace(v.Get("asn")); s != "" {
-		n, err := strconv.ParseUint(strings.TrimPrefix(strings.ToUpper(s), "AS"), 10, 32)
-		if err != nil || n == 0 {
+		n, ok := netpfx.ParseASN(s)
+		if !ok {
 			return q, fmt.Errorf("asn must be an AS number such as 64500")
 		}
-		q.asn = uint32(n)
+		q.asn = n
 	}
 	if s := v.Get("differs"); s != "" {
 		b, err := strconv.ParseBool(s)
@@ -118,7 +120,7 @@ func rowHasProvider(row *Prefix, name string) bool {
 // rowHasOrigin uses the last AS of a learned path, as the ASN map does.
 func rowHasOrigin(row *Prefix, asn uint32) bool {
 	for i := range row.Paths {
-		if p := row.Paths[i].ASPath; len(p) > 0 && p[len(p)-1] == asn {
+		if netpfx.LastAS(row.Paths[i].ASPath) == asn {
 			return true
 		}
 	}

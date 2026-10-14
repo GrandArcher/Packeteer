@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/GrandArcher/Packeteer/internal/history"
+	"github.com/GrandArcher/Packeteer/internal/netpfx"
 )
 
 // ReportSource builds reports from stored history. Nil when no storage
@@ -16,6 +17,7 @@ import (
 type ReportSource interface {
 	Report(ctx context.Context, q history.Query) (history.Report, error)
 	Prefix(ctx context.Context, p netip.Prefix, q history.Query) (history.PrefixHistory, error)
+	Search(ctx context.Context, q history.SearchQuery) (history.SearchResult, error)
 }
 
 // Report range bounds.
@@ -88,6 +90,26 @@ func reportQuery(r *http.Request, name string, now time.Time) (history.Query, er
 			return q, fmt.Errorf("limit must be 1-%d", history.MaxLimit)
 		}
 		q.Limit = n
+	}
+	// The prefix history call has no report name and its own prefix.
+	if name != "" && (v.Has("prefix") || v.Has("asn")) {
+		if name != history.ReportImprovements {
+			return q, fmt.Errorf("prefix and asn filter only the %s report", history.ReportImprovements)
+		}
+		if s := v.Get("prefix"); s != "" {
+			p, err := netip.ParsePrefix(s)
+			if err != nil || p != p.Masked() {
+				return q, fmt.Errorf("prefix must be a network in CIDR form, such as 192.0.2.0/24")
+			}
+			q.Prefix = p
+		}
+		if s := v.Get("asn"); s != "" {
+			n, ok := netpfx.ParseASN(s)
+			if !ok {
+				return q, fmt.Errorf("asn must be an AS number such as 64500")
+			}
+			q.ASN = n
+		}
 	}
 	q.Now = now.UTC()
 	return q, nil

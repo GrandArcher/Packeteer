@@ -37,9 +37,9 @@ func TestUIShell(t *testing.T) {
 				t.Errorf("%s missing %s", e.Name(), id)
 			}
 		}
-		// The search slot does not query (#172). The events slot opens Events.
-		if !strings.Contains(body, `id="top-search" type="search" placeholder="Search" readonly`) {
-			t.Errorf("%s search slot is not a read-only placeholder", e.Name())
+		// The search box is the same on every page (#172). The events slot opens Events.
+		if !strings.Contains(body, `<input id="top-search" type="search" placeholder="Prefix, AS, or name" maxlength="64" autocomplete="off" list="top-search-recent"></label><datalist id="top-search-recent"></datalist>`) {
+			t.Errorf("%s search slot is not the search box", e.Name())
 		}
 		if !strings.Contains(body, `href="/events.html">Events`) {
 			t.Errorf("%s events slot does not open the Events page", e.Name())
@@ -103,6 +103,7 @@ func TestUIShell(t *testing.T) {
 		"commit.html":          {`<body data-page="commit" data-live="app">`, "#174"},
 		"policies.html":        {`<body data-page="policies" data-live="app">`, "#130", `id="maint-section" hidden`, `id="maint-form" hidden`, `src="/maintenance.js"`},
 		"events.html":          {`<body data-page="events">`, `id="events"`, `id="audit"`, `id="tab-audit"`, `data-min-role="admin">Audit`, `id="ev-severity"`, `id="ev-q"`, `id="ev-range"`, `src="/events.js"`},
+		"search.html":          {`<body data-page="search">`, `id="search-results"`, `id="search-status"`, `id="search-recent"`, `src="/search.js"`, "only reads"},
 		"system.html":          {`<body data-page="system">`, `id="system"`, `id="system-summary"`, `src="/system.js"`, "only reads"},
 		"admin.html":           {`<body data-page="admin">`, `id="page-denied"`, `id="admin-body"`, `id="user-form"`, `id="uf-name"`, `id="uf-role"`, `id="uf-password" type="password"`, `id="users-off" class="empty" hidden`, `id="users-on" hidden`, `src="/admin.js"`},
 		"tokens.html":          {`<body data-page="tokens">`, `id="tokens-off" class="empty" hidden`, `id="tokens-on" hidden`, `id="token-secret" class="secret" role="alert" hidden`, `id="token-form"`, `id="tf-name"`, `id="tf-role"`, `id="tf-ttl"`, `src="/tokens.js"`},
@@ -128,7 +129,7 @@ func TestUIShell(t *testing.T) {
 	for _, path := range []string{
 		"/", "/improvements.html", "/prefixes.html", "/prefix/192.0.2.0/24", "/graphs.html", "/reports.html",
 		"/providers.html", "/commit.html", "/policies.html", "/protection.html",
-		"/troubleshooting.html", "/events.html", "/system.html", "/tokens.html", "/settings.html", "/admin.html", "/dashboards.html",
+		"/troubleshooting.html", "/events.html", "/search.html?q=AS64510", "/system.html", "/tokens.html", "/settings.html", "/admin.html", "/dashboards.html",
 	} {
 		rec, _ := e.do(t, "GET", path, plugin.RoleViewer, nil)
 		if rec.Code != 200 {

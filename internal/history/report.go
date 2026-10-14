@@ -87,6 +87,10 @@ type Query struct {
 	Now   time.Time
 	Limit int
 	Sort  string
+	// Prefix and ASN narrow the improvements report to one prefix or one
+	// origin ASN (#172). Zero is no filter. Other reports ignore them.
+	Prefix netip.Prefix
+	ASN    uint32
 }
 
 // Report is one report's rows. Rows is a typed slice for JSON; CSV writes
@@ -381,6 +385,9 @@ func improvementRow(r plugin.ImprovementRecord, hours float64) ImprovementRow {
 
 func (a *agg) improvements(rep *Report) {
 	imps := slices.Clone(a.imps)
+	imps = slices.DeleteFunc(imps, func(r plugin.ImprovementRecord) bool {
+		return (a.q.Prefix.IsValid() && r.Prefix != a.q.Prefix) || (a.q.ASN != 0 && r.OriginASN != a.q.ASN)
+	})
 	slices.SortFunc(imps, func(x, y plugin.ImprovementRecord) int {
 		if c := y.Start.Compare(x.Start); c != 0 {
 			return c

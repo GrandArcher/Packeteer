@@ -16,7 +16,9 @@ import (
 
 // fakeReports builds reports from a fixed history and records the query.
 type fakeReports struct {
-	last history.Query
+	last      history.Query
+	search    history.SearchQuery
+	searchErr error
 }
 
 func (f *fakeReports) Report(_ context.Context, q history.Query) (history.Report, error) {
@@ -279,5 +281,69 @@ func TestPrefixPageRoute(t *testing.T) {
 	}
 	if code, _, _ := do(t, http.MethodGet, ts.URL+"/api/prefixes/history?prefix=192.0.2.0/24", "", ""); code != http.StatusUnauthorized {
 		t.Errorf("history without credentials: %d", code)
+	}
+}
+
+func (f *fakeReports) Search(_ context.Context, q history.SearchQuery) (history.SearchResult, error) {
+	f.search = q
+	if f.searchErr != nil {
+		return history.SearchResult{}, f.searchErr
+	}
+	h := plugin.History{
+		Buckets: []plugin.ProbeBucket{
+			{Day: q.To.Truncate(24 * time.Hour), Prefix: netip.MustParsePrefix("198.51.100.0/24"), Provider: "transit-a", Probes: 4, Measured: 4, LossSum: 8, RTTSumMs: 80},
+		},
+		Improvements: []plugin.ImprovementRecord{
+			{ID: "1", Prefix: netip.MustParsePrefix("198.51.100.0/24"), Provider: "transit-b", Native: "transit-a", Start: q.To.Add(-48 * time.Hour), OriginASN: 64510},
+			{ID: "2", Prefix: netip.MustParsePrefix("203.0.113.0/24"), Provider: "transit-b", Native: "transit-a", Start: q.To.Add(-24 * time.Hour), OriginASN: 64511},
+		},
+		Prefixes: []plugin.PrefixInfo{{Prefix: netip.MustParsePrefix("198.51.100.0/24"), OriginASN: 64510}},
+	}
+	return history.Search(h, q), nil
+}
+
+func TestReportQueryFilters(t *testing.T) {
+	now := time.Date(2026, 9, 3, 0, 0, 0, 0, time.UTC)
+	parse := func(name, qs string) (history.Query, error) {
+		r := httptest.NewRequest(http.MethodGet, "/x?"+qs, nil)
+		return reportQuery(r, name, now)
+	}
+	q, err := parse(history.ReportImprovements, "prefix=198.51.100.0/24&asn=%20as64510")
+	if err != nil || q.Prefix != netip.MustParsePrefix("198.51.100.0/24") || q.ASN != 64510 {
+		t.Errorf("good input: %+v, %v", q, err)
+	}
+	q, err = parse(history.ReportImprovements, "days=2")
+	if err != nil || q.Prefix.IsValid() || q.ASN != 0 {
+		t.Errorf("no filter: %+v, %v", q, err)
+	}
+	for _, bad := range []string{"prefix=198.51.100.5/24", "prefix=198.51.100.0", "prefix=x", "asn=0", "asn=AS", "asn=4294967296", "asn=64510x"} {
+		if _, err := parse(history.ReportImprovements, bad); err == nil {
+			t.Errorf("%s accepted", bad)
+		}
+	}
+	for _, other := range []string{history.ReportSummary, history.ReportPrefixes} {
+		for _, qs := range []string{"prefix=198.51.100.0/24", "asn=64510"} {
+			if _, err := parse(other, qs); err == nil {
+				t.Errorf("%s?%s accepted", other, qs)
+			}
+		}
+	}
+	// The prefix history call passes no report name and keeps its own prefix.
+	if _, err := parse("", "prefix=198.51.100.0/24&asn=64510"); err != nil {
+		t.Errorf("prefix history call: %v", err)
+	}
+}
+
+func TestReportFilterOverHTTP(t *testing.T) {
+	src := &fakeReports{}
+	ts := reportServer(t, src, "", "")
+	code, _, body := do(t, http.MethodGet, ts.URL+"/api/reports/improvements?prefix=198.51.100.0/24&asn=AS64510", "", "")
+	if code != http.StatusOK || src.last.Prefix != netip.MustParsePrefix("198.51.100.0/24") || src.last.ASN != 64510 {
+		t.Fatalf("filtered: %d %s %+v", code, body, src.last)
+	}
+	for _, path := range []string{"/api/reports/improvements?asn=x", "/api/reports/summary?asn=64510", "/api/reports/summary?prefix=198.51.100.0/24"} {
+		if code, _, body := do(t, http.MethodGet, ts.URL+path, "", ""); code != http.StatusBadRequest {
+			t.Errorf("%s: %d %s", path, code, body)
+		}
 	}
 }
