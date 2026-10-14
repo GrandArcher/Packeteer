@@ -5,7 +5,7 @@
 // text, and Save is the editor's. There is no field for a secret: a new
 // SNMP host names the environment variable that holds its community.
 
-var cs = {scorer: "weighted", balance: "", precedence: "performance", step: 1, tracked: {}};
+var cs = {scorer: "weighted", balance: "", precedence: "performance", tracked: {}};
 var CS_ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
 var CS_PERCENTILES = [["greater_separate", "greater of the in and out 95th"], ["greater", "95th of the larger direction"], ["separate", "in and out apart (out is compared)"]];
 
@@ -72,7 +72,6 @@ function csSync() {
 }
 
 function csShowStep(n) {
-  cs.step = n;
   [1, 2, 3, 4].forEach(function (i) {
     byId("cs-" + i).hidden = i !== n;
     byId("cs-tab-" + i).className = i === n ? "on" : "";
@@ -106,7 +105,7 @@ function csProblems(step) {
   if (step === 3) {
     csProviders().forEach(function (pr) {
       var row = csRow(pr);
-      if (row.precedence !== "" && !(/^\d+$/.test(row.precedence) && Number(row.precedence) <= 10000)) p.push("Provider " + pr.name + ": precedence is a whole number from 0 to 10000.");
+      if (row.precedence !== "" && !(/^\d+$/.test(row.precedence) && Number(row.precedence) <= 10000)) p.push("Provider " + pr.name + ": precedence is a whole number from 0 to 10000 (0 means 100).");
       if (row.group !== "" && !/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(row.group)) p.push("Provider " + pr.name + ": group is 1 to 64 letters, digits, dot, dash, or underscore.");
     });
   }

@@ -283,6 +283,15 @@ func (f Form) checkCommitChange(cur Form) error {
 			return fmt.Errorf("%w: SNMP host %s is removed in the YAML, not in the form", ErrForm, key)
 		}
 	}
+	bound := map[string]bool{}
+	for _, p := range cur.Commit.Providers {
+		bound[p.Name] = p.Host != ""
+	}
+	for _, p := range f.Commit.Providers {
+		if p.Host == "" && bound[p.Name] {
+			return fmt.Errorf("%w: commit.providers %s: its telemetry binding is removed in the YAML, not in the form", ErrForm, p.Name)
+		}
+	}
 	return nil
 }
 

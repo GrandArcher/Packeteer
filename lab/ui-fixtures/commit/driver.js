@@ -105,7 +105,6 @@ var steps = [
   },
   function () {
     note("cs-valid", "validated: " + byId("ed-status").textContent);
-    note("cs-after", "after apply: " + byId("cs-status").textContent + " | scorer " + byId("cs-scorer").value);
   }
 ];
 

@@ -187,6 +187,15 @@ func TestCommitSetupEditsExistingBindingAndLeavesHosts(t *testing.T) {
 	}
 
 	f, _ = ParseForm([]byte(formYAML))
+	for i, r := range f.Commit.Providers {
+		if r.Host != "" {
+			f.Commit.Providers[i] = FormCommitProvider{Name: r.Name}
+		}
+	}
+	if _, err := ApplyForm([]byte(formYAML), f); err == nil || !strings.Contains(err.Error(), "binding is removed") {
+		t.Fatalf("clearing a binding: %v", err)
+	}
+	f, _ = ParseForm([]byte(formYAML))
 	f.Commit.Hosts[0].Address = "192.0.2.99"
 	if _, err := ApplyForm([]byte(formYAML), f); err == nil || !strings.Contains(err.Error(), "edited in the YAML") {
 		t.Fatalf("existing host edit: %v", err)

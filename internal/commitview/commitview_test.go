@@ -135,6 +135,7 @@ func TestMovesGroupByDirectionPeerAndBucket(t *testing.T) {
 		row("198.51.100.0/24", "transit-b", "transit-a", "performance", "inject", time.Minute),
 		row("198.51.100.0/24", "transit-b", "transit-c", "commit", "inject", time.Minute),
 		row("198.51.100.0/24", "transit-b", "transit-a", "commit", "inject", -time.Minute),
+		row("192.0.2.0/24", "transit-b", "transit-a", "commit", "inject", 2*time.Minute),
 	}
 	got := Moves(rows, "transit-a", from, time.Hour)
 	want := []Move{

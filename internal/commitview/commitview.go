@@ -108,6 +108,7 @@ func Moves(rows []history.ImprovementRow, provider string, from time.Time, step 
 		bucket          int64
 	}
 	groups := map[key]*Move{}
+	seen := map[key]map[string]bool{}
 	for _, r := range rows {
 		if r.Cause != plugin.CauseCommit || r.Start.Before(from) {
 			continue
@@ -127,9 +128,13 @@ func Moves(rows []history.ImprovementRow, provider string, from time.Time, step 
 		if m == nil {
 			m = &Move{At: r.Start, Direction: direction, Peer: peer, Announced: announced}
 			groups[k] = m
+			seen[k] = map[string]bool{}
 		}
 		m.At = minTime(m.At, r.Start)
-		m.Prefixes++
+		if !seen[k][r.Prefix] {
+			seen[k][r.Prefix] = true
+			m.Prefixes++
+		}
 	}
 	out := make([]Move, 0, len(groups))
 	for _, m := range groups {
