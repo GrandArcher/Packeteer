@@ -66,7 +66,8 @@ func seed(now time.Time) plugin.HistoryBatch {
 
 // commitDays of samples, one every five minutes, ending at the last full
 // five-minute mark. lab-a runs under its 100 Mbps commit at first and
-// ends the window over it; lab-b stays far under 200. Billing day 1, so a
+// ends the window over it even at night, so the open period's 95th is over
+// the commit from its first sample; lab-b stays far under 200. Billing day 1, so a
 // sample belongs to the UTC month it was taken in.
 const commitDays = 30
 
@@ -80,19 +81,21 @@ func commitSeed(now time.Time) ([]plugin.UsageSample, plugin.HistoryBatch) {
 		for _, p := range []struct {
 			name string
 			out  float64
-		}{{"lab-a", 40 + 60*day + 40*(1-age)}, {"lab-b", 20 + 10*day}} {
+		}{{"lab-a", 40 + 60*day + 70*(1-age)}, {"lab-b", 20 + 10*day}} {
 			samples = append(samples, plugin.UsageSample{Provider: p.name, Host: "edge", Interface: "ether1",
 				PeriodStart: start, PeriodEnd: start.AddDate(0, 1, 0), At: at, InBps: p.out * 2e5, OutBps: p.out * 1e6})
 		}
 	}
 	var b plugin.HistoryBatch
 	// Three prefixes taken off lab-a for commit while only recommending
-	// (observe), and one move an earlier inject run announced.
+	// (observe), and one move an earlier inject run announced. The two
+	// observe moves are 4h apart so they never share a 2h point of the
+	// 30-day range, whatever hour the seed runs.
 	for i, r := range []struct {
 		prefix string
 		mode   string
 		ago    time.Duration
-	}{{"198.51.100.0/24", "observe", 50 * time.Hour}, {"203.0.113.0/24", "observe", 50 * time.Hour}, {"192.0.2.0/24", "observe", 49 * time.Hour}, {"198.51.100.0/24", "inject", 6 * 24 * time.Hour}} {
+	}{{"198.51.100.0/24", "observe", 50 * time.Hour}, {"203.0.113.0/24", "observe", 50 * time.Hour}, {"192.0.2.0/24", "observe", 46 * time.Hour}, {"198.51.100.0/24", "inject", 6 * 24 * time.Hour}} {
 		b.Improvements = append(b.Improvements, plugin.ImprovementRecord{
 			ID: fmt.Sprintf("commit-%d", i), Prefix: netip.MustParsePrefix(r.prefix), Provider: "lab-b", Native: "lab-a",
 			Cause: plugin.CauseCommit, Mode: r.mode, Start: end.Add(-r.ago), End: end.Add(-r.ago + 3*time.Hour),
@@ -106,7 +109,7 @@ func main() {
 	commit := flag.Bool("commit", false, "write commit samples and commit improvements instead")
 	flag.Parse()
 	if *out == "" {
-		fmt.Fprintln(os.Stderr, "usage: mkhistory -o FILE")
+		fmt.Fprintln(os.Stderr, "usage: mkhistory [-commit] -o FILE")
 		os.Exit(2)
 	}
 	c, err := plugin.ConfigFromYAML("path: " + *out)
@@ -124,7 +127,7 @@ func main() {
 		fmt.Fprintln(os.Stderr, "mkhistory:", err)
 		os.Exit(1)
 	}
-	batch := seed(time.Now())
+	var batch plugin.HistoryBatch
 	if *commit {
 		var samples []plugin.UsageSample
 		samples, batch = commitSeed(time.Now())
@@ -132,6 +135,8 @@ func main() {
 			fmt.Fprintln(os.Stderr, "mkhistory:", err)
 			os.Exit(1)
 		}
+	} else {
+		batch = seed(time.Now())
 	}
 	if err := s.Write(ctx, batch); err != nil {
 		fmt.Fprintln(os.Stderr, "mkhistory:", err)

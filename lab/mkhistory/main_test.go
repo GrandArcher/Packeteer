@@ -1,9 +1,11 @@
 package main
 
 import (
+	"slices"
 	"testing"
 	"time"
 
+	"github.com/GrandArcher/Packeteer/internal/commitview"
 	"github.com/GrandArcher/Packeteer/internal/history"
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
 )
@@ -70,6 +72,42 @@ func TestCommitSeed(t *testing.T) {
 	}
 	if len(b.Improvements) != 4 || announced != 1 {
 		t.Fatalf("%d improvements, %d announced", len(b.Improvements), announced)
+	}
+}
+
+// The smoke test runs at any UTC time: on the 1st just after midnight the
+// open period holds only night samples and lab-a must still be over its
+// commit, and the 30-day range must keep the two observe moves apart.
+func TestCommitSeedAnyHour(t *testing.T) {
+	for h := range 24 {
+		now := time.Date(2026, 11, 1, h, 5, 0, 0, time.UTC)
+		samples, b := commitSeed(now)
+		var open []float64
+		for _, s := range samples {
+			if s.Provider == "lab-a" && s.PeriodStart.Equal(time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)) {
+				open = append(open, s.OutBps)
+			}
+		}
+		if p, ok := plugin.Percentile95(open); !ok || p/1e6 <= 100 {
+			t.Fatalf("%s: open period 95th of lab-a %.1f Mbps from %d samples, want over 100", now, p/1e6, len(open))
+		}
+		rows := make([]history.ImprovementRow, 0, len(b.Improvements))
+		for _, r := range b.Improvements {
+			rows = append(rows, history.ImprovementRow{Prefix: r.Prefix.String(), Provider: r.Provider, Native: r.Native, Cause: r.Cause, Mode: r.Mode, Start: r.Start})
+		}
+		for days, want := range map[int][]int{1: {}, 7: {1, 2, 1}, 30: {1, 2, 1}} {
+			from := now.Add(-time.Duration(days) * 24 * time.Hour)
+			var got []int
+			for _, m := range commitview.Moves(rows, "lab-b", from, commitview.Steps[days]) {
+				if m.Direction != "onto" {
+					t.Fatalf("%s: move %+v", now, m)
+				}
+				got = append(got, m.Prefixes)
+			}
+			if !slices.Equal(got, want) {
+				t.Fatalf("%s, %d days: prefixes per move %v, want %v", now, days, got, want)
+			}
+		}
 	}
 }
 

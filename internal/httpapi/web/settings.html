@@ -111,7 +111,7 @@
   <section id="commit-setup">
     <h2>Commit setup</h2>
     <p class="tag">Four steps to turn on commit control for the providers you pay a commit on, then review the YAML. It works on the settings form below and writes the YAML text only: nothing is saved or announced until you Save, and the scorer, telemetry, and provider changes apply after a restart. A provider needs a telemetry binding (an SNMP host and interface) to have a commit; the community is read from an environment variable named here, never typed in. Observe stays the default. The result shows on <a href="/commit.html">Commit &amp; Cost</a>.</p>
-    <ol class="steps" id="cs-steps">
+    <ol class="steps">
       <li id="cs-tab-1" class="on">1. Strategy</li>
       <li id="cs-tab-2">2. Commit and telemetry</li>
       <li id="cs-tab-3">3. Groups and precedence</li>
@@ -155,7 +155,7 @@
       </div>
     </div>
     <div id="cs-3" hidden>
-      <p id="cs-groups-note" class="tag">A group shares traffic between its members when the commit scorer's balance is not off. A lower precedence is preferred; the highest is a last resort that takes commit traffic only when every lower one is full (blank means 100). Leave a provider out of commit control with cc_disable; performance moves can still use it.</p>
+      <p class="tag">A group shares traffic between its members when the commit scorer's balance is not off. A lower precedence is preferred; the highest is a last resort that takes commit traffic only when every lower one is full (blank means 100). Leave a provider out of commit control with cc_disable; performance moves can still use it.</p>
       <div id="cs-groups"></div>
       <div class="controls">
         <button type="button" id="cs-back-3">Back</button>
