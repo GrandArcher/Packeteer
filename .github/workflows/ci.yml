@@ -1203,7 +1203,8 @@ jobs:
           # exchanges report from lab/ui-fixtures/exchange-page
           # (documentation prefixes and ASNs). The page is the image's. The
           # step checks the peer table (type, mismatched AS, probe state),
-          # the improvements with their Mbps, the discovered member, and the
+          # the improvements with their Mbps, the discovered member, the
+          # next-hop probe state and the degraded exchange banner (#149), the
           # report table, and (#156) the route server vs bilateral columns
           # with the partial and missing flags, and (#152) the transit to
           # exchange offload table; the view only reads.
@@ -1221,6 +1222,7 @@ jobs:
             'sees AS64599' '<span class="dot down">down</span>' '<td>42.5 Mbps</td>' \
             '<td class="mono">192.0.2.0/24</td>' '<td>30.5 Mbps</td>' '<td>12.0 Mbps</td>' \
             '<td class="mono">203.0.113.13</td>' '<td>AS64503</td>' '<td>61.5 Mbps</td>' '<td>120.5</td>' \
+            'data-degraded="ix-lab"' '<td class="bad">2.5 ms, 60% loss</td>' '<td class="bad">unreachable</td>' \
             '<th>Bilateral only</th>' '>RS partial</span>' '>RS missing</span>' 'data-member="ix-lab/203.0.113.11"' '>Compare</button>' \
             'Total 2 prefixes, 200.0 Mbps, estimated saving 160' '<td>transit-b</td>' '<td>ix-lab/ix-peer-a, ix-lab/ix-peer-b</td>' '<td>120.0 Mbps</td>' \
             --absent 'not built yet' 'mode-inject'

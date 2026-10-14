@@ -1594,12 +1594,18 @@ func (e *Engine) probeOne(ctx context.Context, p Provider, prefix netip.Prefix, 
 		return res, false
 	}
 	defer func() { <-sem }()
+	return e.runChain(ctx, res, p, count, e.proberStart(host), func(i int) { e.noteProber(host, i) })
+}
 
+// runChain tries the probers from index start. note, when set, is told
+// the index of a prober that got a reply. res carries the provider,
+// prefix, and target.
+func (e *Engine) runChain(ctx context.Context, res Result, p Provider, count, start int, note func(int)) (Result, bool) {
+	host := res.Target
 	req := plugin.ProbeRequest{Provider: p.Name, Source: p.Source,
 		Target: host, Count: count, Timeout: e.timeout()}
 	var errs []error
 	var fallback *Result
-	start := e.proberStart(host)
 	for i := start; i < len(e.probers); i++ {
 		pr := e.probers[i]
 		if e.opt.Limiter != nil {
@@ -1622,7 +1628,9 @@ func (e *Engine) probeOne(ctx context.Context, p Provider, prefix netip.Prefix, 
 		r := res
 		r.Prober, r.Stats, r.Time = pr.Name, Compute(raw), e.opt.Now()
 		if r.Stats.Received > 0 {
-			e.noteProber(host, i)
+			if note != nil {
+				note(i)
+			}
 			return r, false
 		}
 		if fallback == nil {

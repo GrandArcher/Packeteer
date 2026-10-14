@@ -630,6 +630,8 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 	col.Attach(engine, decider, view)
 	httpSrv.SetQuarantine(quarantineControl{decider: decider, out: dispatch, poke: poke, now: time.Now})
 	wireExchanges(ctx, cfg, col, httpSrv, view, plugins, decider)
+	hopTargets, ixHealth := exchangeHealth(cfg)
+	col.SetExchangeHealth(ixHealth)
 	wireSuggestions(cfg, httpSrv, view)
 	wireMitigationCandidates(httpSrv, mit, view)
 	// Active/standby (#31): registered before the elector starts. A
@@ -657,6 +659,10 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 	}
 	if subs != nil && rec != nil {
 		go subs.Run(ctx)
+	}
+	if ixHealth != nil {
+		go runExchangeHealth(ctx, engine, ixHealth, hopTargets, func() time.Duration { return engine.TimingNow().Interval },
+			func(ev plugin.Event) { dispatch.Emit(ev) })
 	}
 	col.SetStarted(true)
 	defer col.SetStarted(false)
@@ -926,7 +932,7 @@ func wireExchanges(ctx context.Context, cfg *config.Config, col *httpapi.Collect
 	// Member counts over time (#156): in memory, read-only.
 	hist := exchange.NewHistory()
 	srv.SetExchangeMembers(httpapi.ExchangeMembers{History: hist, Prefixes: view.MemberPrefixes, Offload: offloadReport(cfg, plugins, view, decider)})
-	go hist.Run(ctx, exchange.SampleEvery, func() []exchange.Stats { return exchange.Build(exs, hops(), nil, nil) })
+	go hist.Run(ctx, exchange.SampleEvery, func() []exchange.Stats { return exchange.Build(exs, hops(), nil, nil, nil) })
 }
 
 // wireSuggestions gives the settings form next hops seen on iBGP or BMP

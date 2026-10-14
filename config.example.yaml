@@ -215,6 +215,10 @@ scorer:
 # exchanges:
 #   - name: ix-example
 #     lans: [203.0.113.0/24]
+#     # Each probe interval every peer's next_hop is probed from its source_ip
+#     # (#149); exchange.degraded fires when min_peers of them fail inside
+#     # window. Measurement only. Defaults shown.
+#     health: {enabled: true, loss_pct: 50, min_peers: 3, window: 5m}
 #     peers:
 #       - name: ix-peer-a
 #         asn: 64501

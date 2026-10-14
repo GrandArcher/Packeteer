@@ -366,6 +366,7 @@ Internet exchanges (#27, IRP 1.2.11). Each peer listed on an exchange is a provi
 
 - **Every peer is route-checked.** A peer carries only its own routes, so no improvement goes to a peer unless the router shows Packeteer the peer's path for the exact prefix, and that path's first AS is the peer's `asn`. An active one is retired at once (reason `no route via provider (route check)`) when the path goes. No visible path means no route: the check fails closed. The paths come from iBGP add-path (a `bgp.neighbors` entry with `add_path: true`, the router sending every path) or BMP (`bmp: prefer` or `only`, with `rib_sources`); one of the two is required.
 - **Statistics** are on `/api/exchanges` and `packeteer_exchange_*` metrics: per peer, the prefixes the router shows through its next hop, the most common first AS when it differs from `asn` (`observed_asn`, a misconfigured peer), probe-source health, and active improvements with the Mbps they move (`moved_mbps`, `moves`); and the next hops on the peering LAN that are not configured peers (`discovered`, with AS and prefix count). A discovered next hop is never probed or used. To use it, add it as a peer (with a probe source) and restart; the settings form's Discovered members list starts that draft row.
+- **LAN health** (#149). Each probe interval, every peer's `next_hop` is probed from that peer's `source_ip` with the configured prober chain and `probe.packets`. Every packet waits on `probe.rate_limit_pps`, so a large exchange spends the same budget as any other probe. `/api/exchanges` shows per peer `reach`: `state` (`reachable`, `unreachable` when nothing answered, or `unknown` before the first probe, with `health` off, or when no prober could run), `loss_pct`, `rtt_ms`, and `degraded`. The metrics are `packeteer_exchange_peer_reachable`, `_peer_rtt_seconds`, `_peer_loss_percent`, and `packeteer_exchange_degraded`. A peer is degraded when its loss is at least `loss_pct`, or its mean RTT is above `rtt_ms` (when set), and stays degraded for `window` after its last such probe. An exchange is degraded, and `exchange.degraded` fires ([EVENTS.md](EVENTS.md)), when at least `min_peers` peers are (never fewer than two, and never more than the exchange has), or, with `min_percent`, that share of its peers: that points at the exchange or our port, not one member. `exchange.recovered` follows once too few peers are degraded. A probe that could not run (no prober, unusable `source_ip`) is not a degraded peer. The probes are measurement only: they do not change the provider's probe-source state, a decision, or a route.
 - **Session type** (`via` on each learned path, and on each peer in `/api/exchanges`): `route_server`, `bilateral`, or `unknown` (#146). There is no config key. A BMP path whose neighbor is inside `lans` and is not the path's next hop came through a route server; the MED label names that neighbor, not the member. A neighbor equal to the next hop is bilateral. An iBGP add-path path, and a Loc-RIB path, stay `unknown` until the BMP paths for that same next hop agree. When both types are seen, the peer's `via` is `unknown`. A peer with no path is `unknown`. MED stays display-only and is not an input to the exit. The route check is unchanged: it still requires the peer's own path for the exact prefix (first AS = `asn`).
 - **The peering LAN is not a probe target** (#145). A target whose prefix is inside `lans` is dropped. A pinned host on a LAN is not probed. Flow and span destinations on a LAN are not aggregated into a probe prefix, so a /64 LAN does not become an `aggregate_v6` prefix. Traceroute does not adopt a hop on a LAN. It does not trace a prefix or a configured host that is inside one; when the only stable hops are on the LAN and the configured host is not, that host is used. A traceroute host on the LAN, including the default first address of the prefix, is not probed. The peer's `next_hop` on the LAN is still the far-side gateway probe. `packeteer_exchange_lan_targets_dropped` counts the omissions, once per collection for each omitted prefix or LAN, not per packet. Nothing is announced. `allowlist.prefixes` may not overlap a LAN. The learned-RIB check, improvement cap, community and NO_EXPORT, hold time, and withdraw rules are unchanged.
 
@@ -387,9 +388,20 @@ Each peer:
 | `source_ip` | yes | Probe source for this peer, unique like any provider's. The host (or router) must route traffic from it to this peer's `next_hop` ([policy-routing.md](policy-routing.md)). |
 | `exclude`, `precedence`, `cost` | no | As on providers. |
 
+`health` (optional, per exchange; a change needs a restart):
+
+| Key | Default | Meaning |
+|---|---|---|
+| `enabled` | `true` | `false` stops the next-hop probes and the alert for this exchange. |
+| `loss_pct` | `50` | Loss at or above which a peer is degraded. Above 0, at most 100. |
+| `rtt_ms` | `0` (off) | A mean RTT above this also degrades a peer. Up to 60000. |
+| `min_peers` | `3` | Degraded peers that make the exchange degraded. At least 2; capped at the number of peers. |
+| `min_percent` | `0` (off) | Also degrade the exchange when this share of its peers is degraded. 0 to 100. |
+| `window` | `5m` | How long a degraded probe counts, and so how long the alert holds after recovery. Between `probe.interval` and 24h. A reload that breaks this is refused. |
+
 Peers get `add_path: true` automatically when a neighbor has `add_path` (and `bmp` is not `only`). `-check` prints each peer with its exchange and AS.
 
-**Rollback:** remove the `exchanges` block and restart; improvements toward peers are withdrawn at shutdown.
+**Rollback:** remove the `exchanges` block and restart; improvements toward peers are withdrawn at shutdown. To stop only the next-hop probes, set `health.enabled: false` and restart.
 
 ### `troubleshoot`
 

@@ -47,7 +47,7 @@ func TestExchangeMemberAvailability(t *testing.T) {
 
 	exs := []exchange.Exchange{{Name: "ix-lab", LANs: []netip.Prefix{lan}, Peers: []exchange.Peer{{Name: "ix-peer-a", ASN: 64501, NextHop: member}}}}
 	snap := sampleSnap()
-	snap.Exchanges = exchange.Build(exs, view.NextHops([]netip.Prefix{lan}), nil, nil)
+	snap.Exchanges = exchange.Build(exs, view.NextHops([]netip.Prefix{lan}), nil, nil, nil)
 	snap.Exchanges[0].Discovered = []exchange.Discovered{{NextHop: "203.0.113.50", Prefixes: 2}}
 	s, err := New(Options{Snapshot: func() Snapshot { return snap }})
 	if err != nil {

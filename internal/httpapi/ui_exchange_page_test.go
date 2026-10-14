@@ -32,7 +32,7 @@ func TestExchangePageIsReadOnly(t *testing.T) {
 	}
 	rec, _ := e.do(t, "GET", "/exchanges.js", viewer, nil)
 	js := rec.Body.String()
-	for _, want := range []string{`getJSON("/api/exchanges")`, `"/api/reports/exchanges?days="`, `"/api/exchanges/member?exchange="`, `"/api/exchanges/offload?limit="`} {
+	for _, want := range []string{`getJSON("/api/exchanges")`, `"/api/reports/exchanges?days="`, `p.reach`, `data-degraded`, `"/api/exchanges/member?exchange="`, `"/api/exchanges/offload?limit="`} {
 		if !strings.Contains(js, want) {
 			t.Errorf("exchanges.js missing %q", want)
 		}
