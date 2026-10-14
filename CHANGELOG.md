@@ -6,7 +6,7 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 
 ### Added
 
-- Dashboard widgets: chart widgets (improvements by cause, provider usage vs commit), drag or keyboard move and resize on a 12-column grid, per-widget refresh and window, a favorite dashboard, add to dashboard from Graphs (#182).
+- Dashboard widgets: chart widgets (improvements by cause, provider usage vs commit), grid move and resize by drag or keyboard, per-widget refresh and window, a favorite dashboard (#182).
 - Commit & Cost page and `GET /api/commit`: samples, running 95th, commit, and commit moves per provider for 1, 7, 30 days; Commit setup in Settings (#174).
 - Reports page: filters, sortable columns, CSV/XLSX export, and a dashboard widget (#178).
 - Reports API: an unknown parameter, a filter or `sort` the report does not take, or `limit` on an uncut report is a 400 (#178).
