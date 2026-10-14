@@ -84,7 +84,8 @@ const (
 
 // Availability counts the prefixes through one member's next hop by how
 // the router learned them (#156). Same next hop, so this is availability,
-// not latency. Only BMP Adj-RIB-In paths are classified.
+// not latency. Only BMP Adj-RIB-In paths are classified, so a peer that is
+// not set to bmp: prefer or only shows zeros.
 type Availability struct {
 	RouteServerOnly int    `json:"route_server_only"`
 	BilateralOnly   int    `json:"bilateral_only"`
@@ -113,12 +114,13 @@ type Move struct {
 	VolumeMbps float64   `json:"volume_mbps,omitempty"`
 }
 
-// Discovered is a next hop on the peering LAN that no peer uses.
+// Discovered is a next hop on the peering LAN that no peer uses. It has no
+// Availability: the RIB keeps BMP Adj-RIB-In paths only for configured
+// providers, so there is nothing to classify.
 type Discovered struct {
-	NextHop      string       `json:"next_hop"`
-	ASN          uint32       `json:"asn,omitempty"`
-	Prefixes     int          `json:"prefixes"`
-	Availability Availability `json:"availability"`
+	NextHop  string `json:"next_hop"`
+	ASN      uint32 `json:"asn,omitempty"`
+	Prefixes int    `json:"prefixes"`
 }
 
 // Build joins the configured exchanges with next hop counts from the RIB
@@ -164,7 +166,7 @@ func Build(exs []Exchange, hops []rib.NextHopCount, up map[string]bool, improvem
 		}
 		for nh, h := range byHop {
 			if !used[nh] {
-				st.Discovered = append(st.Discovered, Discovered{NextHop: nh.String(), ASN: h.ASN, Prefixes: h.Prefixes, Availability: availability(h, rsSeen)})
+				st.Discovered = append(st.Discovered, Discovered{NextHop: nh.String(), ASN: h.ASN, Prefixes: h.Prefixes})
 			}
 		}
 		sort.Slice(st.Discovered, func(i, j int) bool {

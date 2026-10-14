@@ -3,7 +3,7 @@
     {
       "name": "ix-lab",
       "lans": ["203.0.113.0/24"],
-      "prefixes": 14,
+      "prefixes": 18,
       "improvements": 2,
       "peers": [
         {
@@ -19,10 +19,15 @@
           "name": "ix-peer-b", "asn": 64502, "observed_asn": 64599, "next_hop": "203.0.113.12", "prefixes": 3, "up": false, "improvements": 0,
           "moved_mbps": 0, "via": "route_server", "moves": [],
           "availability": {"route_server_only": 3, "bilateral_only": 0, "both": 0}
+        },
+        {
+          "name": "ix-peer-c", "asn": 64504, "next_hop": "203.0.113.14", "prefixes": 4, "up": true, "improvements": 0,
+          "moved_mbps": 0, "via": "bilateral", "moves": [],
+          "availability": {"route_server_only": 0, "bilateral_only": 4, "both": 0, "flag": "rs_missing"}
         }
       ],
       "discovered": [
-        {"next_hop": "203.0.113.13", "asn": 64503, "prefixes": 3, "availability": {"route_server_only": 0, "bilateral_only": 3, "both": 0, "flag": "rs_missing"}}
+        {"next_hop": "203.0.113.13", "asn": 64503, "prefixes": 3}
       ]
     }
   ]

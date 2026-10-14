@@ -20,6 +20,7 @@ var MEMBER_CLASSES = [
   ["bilateral_only", "Only bilateral"],
   ["both", "Both"]
 ];
+var MEMBER_HISTORY_ROWS = 12;
 var openMembers = {};
 
 function exMbps(v) {
@@ -73,26 +74,27 @@ function exFlagCell(a) {
   return td;
 }
 
-// The prefixes and recorded counts of one member. Nothing is written.
+// The prefixes and recorded counts of one peer. Nothing is written. The
+// answer is fetched once per click: it takes three walks of the RIB's BMP
+// table, so the 5 second refresh redraws the kept answer instead.
 function exMemberButton(exName, nextHop) {
   var key = exName + "/" + nextHop;
   var cell = el("td");
   var btn = el("button", "", "Compare");
   btn.type = "button";
-  var detail = el("div");
+  var detail = openMembers[key] || el("div");
   detail.setAttribute("data-member", key);
   btn.addEventListener("click", function () {
     if (openMembers[key]) {
       delete openMembers[key];
-      clear(detail);
+      detail.remove();
       return;
     }
-    openMembers[key] = true;
+    openMembers[key] = detail;
     loadMember(exName, nextHop, detail);
   });
   cell.appendChild(btn);
   cell.appendChild(detail);
-  if (openMembers[key]) loadMember(exName, nextHop, detail);
   return cell;
 }
 
@@ -100,8 +102,8 @@ function loadMember(exName, nextHop, box) {
   var base = "/api/exchanges/member?exchange=" + encodeURIComponent(exName) + "&next_hop=" + encodeURIComponent(nextHop);
   Promise.all(MEMBER_CLASSES.map(function (c) { return getJSON(base + "&class=" + c[0] + "&limit=50"); })).then(function (answers) {
     clear(box);
-    var hist = (answers[0].history || []).slice(-12);
-    box.appendChild(el("p", "tag", "Counts every 15 minutes, kept in memory (a restart empties them)."));
+    var hist = (answers[0].history || []).slice(-MEMBER_HISTORY_ROWS);
+    box.appendChild(el("p", "tag", "Loaded " + fmtTime(new Date().toISOString()) + ". Counts every 15 minutes, kept in memory (a restart empties them). Close and open Compare to reload."));
     if (hist.length) {
       box.appendChild(exTable(["At", "RS only", "Bilateral only", "Both"], hist.map(function (h) {
         return [exCell(fmtTime(h.at)), exCell(h.route_server_only), exCell(h.bilateral_only), exCell(h.both)];
@@ -109,8 +111,9 @@ function loadMember(exName, nextHop, box) {
     }
     answers.forEach(function (a, i) {
       var list = a.prefixes || [];
-      var more = a.prefixes_total > list.length ? " (first " + list.length + " of " + a.prefixes_total + ")" : "";
-      box.appendChild(el("h5", "", MEMBER_CLASSES[i][1] + ": " + a.prefixes_total + more));
+      var total = a.prefixes_total || 0;
+      var more = total > list.length ? " (first " + list.length + " of " + total + ")" : "";
+      box.appendChild(el("h5", "", MEMBER_CLASSES[i][1] + ": " + total + more));
       if (list.length) box.appendChild(el("p", "mono", list.join(" ")));
     });
   }, function (err) {
@@ -147,9 +150,8 @@ function renderExchange(root, ex) {
     section.appendChild(el("p", "empty", "Every next hop on the LAN is a peer."));
   } else {
     section.appendChild(el("p", "tag", "Next hops on the LAN that are not peers. They are never probed or used."));
-    section.appendChild(exTable(["Next hop", "AS", "Prefixes", "RS only", "Bilateral only", "Both", "RS feed", ""], found.map(function (d) {
-      return [exCell(d.next_hop, "mono"), exCell(d.asn ? "AS" + d.asn : "unknown"), exCell(d.prefixes), exCell(d.availability.route_server_only),
-        exCell(d.availability.bilateral_only), exCell(d.availability.both), exFlagCell(d.availability), exMemberButton(ex.name, d.next_hop)];
+    section.appendChild(exTable(["Next hop", "AS", "Prefixes"], found.map(function (d) {
+      return [exCell(d.next_hop, "mono"), exCell(d.asn ? "AS" + d.asn : "unknown"), exCell(d.prefixes)];
     })));
   }
   root.appendChild(section);

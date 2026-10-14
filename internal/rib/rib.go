@@ -1451,11 +1451,11 @@ func (v *View) countNextHops(keep func(netip.Addr) bool) []NextHopCount {
 			a = &acc{prefixes: map[netip.Prefix]uint8{}, asns: map[uint32]int{}}
 			hops[nh] = a
 		}
+		var bit uint8
 		if adjIn {
-			a.prefixes[rt.Prefix] |= viaBit(rt.Via)
-		} else {
-			a.prefixes[rt.Prefix] |= 0
+			bit = viaBit(rt.Via)
 		}
+		a.prefixes[rt.Prefix] |= bit
 		if len(rt.ASPath) > 0 {
 			a.asns[rt.ASPath[0]]++
 		}

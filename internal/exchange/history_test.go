@@ -2,7 +2,6 @@ package exchange
 
 import (
 	"context"
-	"fmt"
 	"net/netip"
 	"testing"
 	"time"
@@ -35,7 +34,7 @@ func TestHistoryKeepsRecentSamples(t *testing.T) {
 	}
 }
 
-func TestHistoryForgetsGoneMembersAndCapsSeries(t *testing.T) {
+func TestHistoryForgetsGonePeers(t *testing.T) {
 	h := NewHistory()
 	t0 := time.Date(2026, 10, 14, 0, 0, 0, 0, time.UTC)
 	gone, stay := "203.0.113.11", "203.0.113.12"
@@ -45,16 +44,6 @@ func TestHistoryForgetsGoneMembersAndCapsSeries(t *testing.T) {
 	}
 	if len(h.Series("ix-lab", netip.MustParseAddr(gone))) != 0 {
 		t.Fatal("a member unseen for the whole window was kept")
-	}
-
-	h = NewHistory()
-	var many []Stats
-	for i := 0; i < maxSeries+5; i++ {
-		many = append(many, statsFor(fmt.Sprintf("10.%d.%d.1", i/256, i%256), 1, 0, 0)...)
-	}
-	h.Record(t0, many)
-	if len(h.series) != maxSeries {
-		t.Fatalf("series = %d, want %d", len(h.series), maxSeries)
 	}
 }
 
@@ -80,5 +69,23 @@ func TestHistoryRunSamplesUntilCancelled(t *testing.T) {
 	}
 	if n := len(h.Series("ix-lab", netip.MustParseAddr("203.0.113.11"))); n < 2 {
 		t.Fatalf("samples = %d, want at least 2", n)
+	}
+}
+
+// Samples are kept per exchange: the same next hop on two exchanges has two
+// series, and a discovered member (no availability) has none.
+func TestHistoryIsPerExchangeAndPeersOnly(t *testing.T) {
+	h := NewHistory()
+	nh := netip.MustParseAddr("203.0.113.11")
+	peer := func(ex string, rs int) Stats {
+		return Stats{Name: ex, Peers: []PeerStats{{NextHop: nh.String(), Availability: Availability{RouteServerOnly: rs}}}}
+	}
+	disc := Stats{Name: "ix-a", Discovered: []Discovered{{NextHop: "203.0.113.13", Prefixes: 3}}}
+	h.Record(time.Date(2026, 10, 14, 0, 0, 0, 0, time.UTC), []Stats{peer("ix-a", 1), peer("ix-b", 2), disc})
+	if a, b := h.Series("ix-a", nh), h.Series("ix-b", nh); len(a) != 1 || len(b) != 1 || a[0].RouteServerOnly != 1 || b[0].RouteServerOnly != 2 {
+		t.Fatalf("series = %+v %+v", a, b)
+	}
+	if len(h.series) != 2 {
+		t.Fatalf("series = %d, want 2 (the discovered member is not recorded)", len(h.series))
 	}
 }

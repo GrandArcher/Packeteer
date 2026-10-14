@@ -48,6 +48,7 @@ func TestExchangeMemberAvailability(t *testing.T) {
 	exs := []exchange.Exchange{{Name: "ix-lab", LANs: []netip.Prefix{lan}, Peers: []exchange.Peer{{Name: "ix-peer-a", ASN: 64501, NextHop: member}}}}
 	snap := sampleSnap()
 	snap.Exchanges = exchange.Build(exs, view.NextHops([]netip.Prefix{lan}), nil, nil)
+	snap.Exchanges[0].Discovered = []exchange.Discovered{{NextHop: "203.0.113.50", Prefixes: 2}}
 	s, err := New(Options{Snapshot: func() Snapshot { return snap }})
 	if err != nil {
 		t.Fatal(err)
@@ -71,7 +72,7 @@ func TestExchangeMemberAvailability(t *testing.T) {
 		t.Fatalf("member = %d %+v", code, d)
 	}
 	code, d = get("exchange=ix-lab&next_hop=203.0.113.11&class=bilateral_only&limit=1")
-	if code != http.StatusOK || d.Class != "bilateral_only" || d.PrefixesTotal != 2 || !slices.Equal(d.Prefixes, []string{"192.0.2.128/25"}) {
+	if code != http.StatusOK || d.Class != "bilateral_only" || d.PrefixesTotal == nil || *d.PrefixesTotal != 2 || !slices.Equal(d.Prefixes, []string{"192.0.2.128/25"}) {
 		t.Fatalf("bilateral_only limit 1 = %d %+v", code, d)
 	}
 	code, d = get("exchange=ix-lab&next_hop=203.0.113.11&class=both")
@@ -89,8 +90,9 @@ func TestExchangeMemberAvailability(t *testing.T) {
 			t.Errorf("%s = %d, want 400", q, code)
 		}
 	}
-	// A next hop that is not on the exchange is not read from the RIB.
-	for _, q := range []string{"exchange=ix-lab&next_hop=192.0.2.21", "exchange=other&next_hop=203.0.113.11"} {
+	// Only a configured peer is compared: a discovered next hop has no
+	// classified paths, and a next hop outside the exchange is not read.
+	for _, q := range []string{"exchange=ix-lab&next_hop=203.0.113.50", "exchange=ix-lab&next_hop=192.0.2.21", "exchange=other&next_hop=203.0.113.11"} {
 		if code, _ := get(q); code != http.StatusNotFound {
 			t.Errorf("%s = %d, want 404", q, code)
 		}

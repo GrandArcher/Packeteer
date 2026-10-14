@@ -8,16 +8,13 @@ import (
 )
 
 // History bounds (#156). Counts are kept in memory: a restart empties them.
-// 288 samples at 15 minutes is three days per member.
+// 288 samples at 15 minutes is three days per peer.
 const (
 	SampleEvery = 15 * time.Minute
 	maxSamples  = 288
-	// maxSeries caps the members tracked, so a LAN of unconfigured
-	// next hops cannot grow memory without bound.
-	maxSeries = 4096
 )
 
-// Sample is one member's availability counts at one time.
+// Sample is one peer's availability counts at one time.
 type Sample struct {
 	At              time.Time `json:"at"`
 	RouteServerOnly int       `json:"route_server_only"`
@@ -30,7 +27,8 @@ type seriesKey struct {
 	nextHop  netip.Addr
 }
 
-// History keeps recent availability counts per exchange member (#156).
+// History keeps recent availability counts per configured peer (#156), so
+// its size is bounded by the config.
 type History struct {
 	mu     sync.Mutex
 	series map[seriesKey][]Sample
@@ -41,8 +39,8 @@ func NewHistory() *History {
 	return &History{series: map[seriesKey][]Sample{}}
 }
 
-// Record appends one sample per member in stats, drops the oldest beyond
-// the bound, and forgets members not seen for the whole window.
+// Record appends one sample per peer in stats, drops the oldest beyond
+// the bound, and forgets peers not seen for the whole window.
 func (h *History) Record(at time.Time, stats []Stats) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -52,10 +50,7 @@ func (h *History) Record(at time.Time, stats []Stats) {
 			return
 		}
 		k := seriesKey{ex, nh}
-		s, ok := h.series[k]
-		if !ok && len(h.series) >= maxSeries {
-			return
-		}
+		s := h.series[k]
 		s = append(s, Sample{At: at, RouteServerOnly: a.RouteServerOnly, BilateralOnly: a.BilateralOnly, Both: a.Both})
 		if len(s) > maxSamples {
 			s = append(s[:0], s[len(s)-maxSamples:]...)
@@ -66,9 +61,6 @@ func (h *History) Record(at time.Time, stats []Stats) {
 		for _, p := range st.Peers {
 			add(st.Name, p.NextHop, p.Availability)
 		}
-		for _, d := range st.Discovered {
-			add(st.Name, d.NextHop, d.Availability)
-		}
 	}
 	for k, s := range h.series {
 		if at.Sub(s[len(s)-1].At) >= maxSamples*SampleEvery {
@@ -77,7 +69,7 @@ func (h *History) Record(at time.Time, stats []Stats) {
 	}
 }
 
-// Series returns a copy of one member's samples, oldest first.
+// Series returns a copy of one peer's samples, oldest first.
 func (h *History) Series(ex string, nh netip.Addr) []Sample {
 	h.mu.Lock()
 	defer h.mu.Unlock()

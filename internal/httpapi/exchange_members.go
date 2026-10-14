@@ -39,15 +39,16 @@ type memberDetail struct {
 	Availability exchange.Availability `json:"availability"`
 	History      []exchange.Sample     `json:"history"`
 	// Class, Prefixes, and PrefixesTotal are set when ?class= is given.
-	// Prefixes is cut at ?limit=; PrefixesTotal is the full count.
+	// Prefixes is cut at ?limit=; PrefixesTotal is the full count, and is
+	// present (also as 0) whenever a class was asked for.
 	Class         string   `json:"class,omitempty"`
 	Prefixes      []string `json:"prefixes,omitempty"`
-	PrefixesTotal int      `json:"prefixes_total,omitempty"`
+	PrefixesTotal *int     `json:"prefixes_total,omitempty"`
 }
 
 // handleExchangeMember compares one member's route server and bilateral
-// prefixes (#156). The member must be a peer or a discovered next hop of
-// the named exchange. Read-only.
+// prefixes (#156). The member must be a configured peer of the named
+// exchange: only a peer's paths are classified. Read-only.
 func (s *Server) handleExchangeMember(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	nh, err := netip.ParseAddr(q.Get("next_hop"))
@@ -84,11 +85,6 @@ func (s *Server) handleExchangeMember(w http.ResponseWriter, r *http.Request) {
 				out.Availability, found = p.Availability, true
 			}
 		}
-		for _, d := range ex.Discovered {
-			if d.NextHop == out.NextHop {
-				out.Availability, found = d.Availability, true
-			}
-		}
 	}
 	if !found {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "no such member on that exchange"})
@@ -100,7 +96,7 @@ func (s *Server) handleExchangeMember(w http.ResponseWriter, r *http.Request) {
 		}
 		if class != "" && m.Prefixes != nil {
 			ps, total := m.Prefixes(nh, class, limit)
-			out.Class, out.PrefixesTotal = class, total
+			out.Class, out.PrefixesTotal = class, &total
 			for _, p := range ps {
 				out.Prefixes = append(out.Prefixes, p.String())
 			}
