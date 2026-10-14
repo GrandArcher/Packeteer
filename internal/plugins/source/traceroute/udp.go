@@ -154,7 +154,7 @@ func sockaddr(addr netip.Addr, port int) (unix.Sockaddr, error) {
 	return sa, nil
 }
 
-// classifyHop reports whether typ is a traceroute reply, and whether it
+// classify reports whether typ is a traceroute reply, and whether it
 // means the probe got as far as a host that will not forward it.
 func classify(v6 bool, typ byte) (hop, reached bool) {
 	if v6 {

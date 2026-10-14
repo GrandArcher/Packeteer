@@ -545,7 +545,7 @@ func (c *Controller) syncImprovementLocked(ctx context.Context, im policy.Improv
 	if on && !s.moreSpecific() && s.provider == im.Provider && s.localPref == lp && slices.Equal(s.communities, comms) && slices.Equal(s.asPath, c.asPath(p, im.Provider)) {
 		return nil
 	}
-	if !allowed(c.cfg.Allowlist, p) {
+	if !netpfx.CoveredBy(c.cfg.Allowlist, p) {
 		var err error
 		if on {
 			err = c.withdrawLocked(ctx, p)
@@ -639,7 +639,7 @@ func (c *Controller) learnedMoreSpecifics(want map[netip.Prefix]policy.Improveme
 			continue
 		}
 		seen[m] = true
-		if _, ok := want[m]; ok || !allowed(c.cfg.Allowlist, m) || c.barred(m) {
+		if _, ok := want[m]; ok || !netpfx.CoveredBy(c.cfg.Allowlist, m) || c.barred(m) {
 			continue
 		}
 		var best netip.Prefix
@@ -688,7 +688,7 @@ func (c *Controller) syncMoreSpecificsLocked(ctx context.Context, p netip.Prefix
 			continue // a longer improvement owns it now
 		}
 		s := c.active[m]
-		if !allowed(c.cfg.Allowlist, m) || c.barred(m) {
+		if !netpfx.CoveredBy(c.cfg.Allowlist, m) || c.barred(m) {
 			if err := c.withdrawLocked(ctx, m); err != nil {
 				errs = append(errs, err)
 				visited[m] = true
@@ -761,7 +761,7 @@ func (c *Controller) syncMoreSpecificsLocked(ctx context.Context, p netip.Prefix
 // and, when it is not already on the wire, exactly in the RIB.
 func (c *Controller) announceMoreSpecificLocked(ctx context.Context, m, parent netip.Prefix, provider string) error {
 	m = m.Masked()
-	if !allowed(c.cfg.Allowlist, m) {
+	if !netpfx.CoveredBy(c.cfg.Allowlist, m) {
 		return fmt.Errorf("announce: %s is not allowlisted", m)
 	}
 	old, on := c.active[m]
@@ -838,7 +838,7 @@ func (c *Controller) withdrawLocked(ctx context.Context, p netip.Prefix) error {
 
 func (c *Controller) announceLocked(ctx context.Context, imp policy.Improvement) error {
 	p := imp.Prefix.Masked()
-	if !allowed(c.cfg.Allowlist, p) {
+	if !netpfx.CoveredBy(c.cfg.Allowlist, p) {
 		return fmt.Errorf("announce: %s is not allowlisted", p)
 	}
 	if _, on := c.active[p]; !on && !c.rib.Contains(p) {
@@ -1005,16 +1005,4 @@ func (c *Controller) Routers() []plugin.RouterExport {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.cfg.Routers
-}
-
-// allowed reports whether p is an allowlist entry or covered by one.
-// Announce publishes p itself, and only when that exact prefix is in the RIB.
-func allowed(list []netip.Prefix, p netip.Prefix) bool {
-	p = p.Masked()
-	for _, a := range list {
-		if a.Bits() <= p.Bits() && a.Contains(p.Addr()) {
-			return true
-		}
-	}
-	return false
 }
