@@ -397,7 +397,7 @@ Each peer:
 | `rtt_ms` | `0` (off) | A mean RTT above this also degrades a peer. Up to 60000. |
 | `min_peers` | `3` | Degraded peers that make the exchange degraded. At least 2; capped at the number of peers. |
 | `min_percent` | `0` (off) | Also degrade the exchange when this share of its peers is degraded. 0 to 100. |
-| `window` | `5m` | How long a degraded probe counts, and so how long the alert holds after recovery. Between `probe.interval` and 24h. |
+| `window` | `5m` | How long a degraded probe counts, and so how long the alert holds after recovery. Between `probe.interval` and 24h. A reload that breaks this is refused. |
 
 Peers get `add_path: true` automatically when a neighbor has `add_path` (and `bmp` is not `only`). `-check` prints each peer with its exchange and AS.
 

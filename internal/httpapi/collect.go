@@ -192,7 +192,7 @@ func (c *Collector) Snapshot() Snapshot {
 		for _, im := range in.Improvements {
 			imps[im.Provider] = append(imps[im.Provider], exchange.Move{Prefix: im.Prefix.String(), Since: im.Since.UTC(), VolumeMbps: jsonFloat(im.VolumeMbps)})
 		}
-		in.Exchanges = exchange.Build(exs, nh, up, imps, health.Snapshot(time.Now()))
+		in.Exchanges = exchange.Build(exs, nh, up, imps, health.Snapshot())
 	}
 	in.ExchangeLANDrops = exchange.LANDrops()
 	return Assemble(in)

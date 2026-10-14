@@ -29,7 +29,7 @@ type ExchangeHealth struct {
 	// it. Zero judges loss only.
 	RTTMS int `yaml:"rtt_ms"`
 	// MinPeers is how many peers must be degraded for the exchange to
-	// be. An exchange with fewer peers never raises the alert.
+	// be. It is capped at the exchange's peer count, never below two.
 	MinPeers int `yaml:"min_peers"`
 	// MinPercent, when positive, also raises the alert when that share of
 	// the exchange's peers is degraded.

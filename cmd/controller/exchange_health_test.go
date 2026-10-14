@@ -2,7 +2,10 @@ package main
 
 import (
 	"context"
+	"log/slog"
 	"net/netip"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -109,7 +112,7 @@ func TestExchangeHealthRaisesAndResolves(t *testing.T) {
 	if evs := round(); len(evs) != 0 {
 		t.Fatalf("healthy exchange emitted %s", kinds(evs))
 	}
-	snap := h.Snapshot(clock)["ix-lab"]
+	snap := h.Snapshot()["ix-lab"]
 	if r := snap.Peers["ix-peer-a"]; r.State != "reachable" || r.RTTMs != 3 || r.LossPct != 0 {
 		t.Fatalf("peer a = %+v", r)
 	}
@@ -127,7 +130,7 @@ func TestExchangeHealthRaisesAndResolves(t *testing.T) {
 	if evs := round(); len(evs) != 0 {
 		t.Fatalf("one peer down emitted %s", kinds(evs))
 	}
-	if r := h.Snapshot(clock)["ix-lab"].Peers["ix-peer-a"]; r.State != "unreachable" || r.LossPct != 100 {
+	if r := h.Snapshot()["ix-lab"].Peers["ix-peer-a"]; r.State != "unreachable" || r.LossPct != 100 {
 		t.Fatalf("peer a down = %+v", r)
 	}
 
@@ -184,7 +187,7 @@ func TestExchangeHealthRoundIgnoresCancelledProbes(t *testing.T) {
 	if evs := s.take(); len(evs) != 0 {
 		t.Fatalf("cancelled round emitted %s", kinds(evs))
 	}
-	if r := h.Snapshot(time.Now())["ix-lab"].Peers["ix-peer-a"]; r.State != "unknown" {
+	if r := h.Snapshot()["ix-lab"].Peers["ix-peer-a"]; r.State != "unknown" {
 		t.Fatalf("peer a = %+v", r)
 	}
 }
@@ -196,5 +199,31 @@ func TestNoHealthWithoutExchanges(t *testing.T) {
 	}
 	if targets, h := exchangeHealth(cfg); targets != nil || h != nil {
 		t.Fatalf("targets %v, health %v", targets, h)
+	}
+}
+
+// probe.interval reloads online, but a reload that raises it above an
+// exchange's health window is refused: a bad sample must not age out
+// before the next probe.
+func TestReloadKeepsHealthWindowAboveInterval(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte(healthYAML), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(healthYAML+"probe: {interval: 10m}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	rl := &reloader{path: path, getenv: noEnv, log: slog.New(slog.DiscardHandler), cur: cfg}
+	applied, refused, fatal := rl.reload(context.Background())
+	if fatal != nil || len(applied) != 0 || refused == nil ||
+		!strings.Contains(refused.Error(), "health.window 5m0s must be between probe.interval (10m0s)") {
+		t.Fatalf("applied %v refused %v fatal %v", applied, refused, fatal)
+	}
+	if rl.cur != cfg {
+		t.Fatal("refused reload replaced the running config")
 	}
 }

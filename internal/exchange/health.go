@@ -92,6 +92,9 @@ type Health struct {
 	mu     sync.Mutex
 	byPeer map[string]*exchangeState
 	ex     []*exchangeState
+	// at is the last Update. Snapshot judges the window at this time, so
+	// Degraded and the degraded peers it shows come from the same round.
+	at time.Time
 }
 
 // NewHealth watches the given exchanges. A peer listed twice or on two
@@ -121,6 +124,7 @@ func (o HealthOptions) bad(s HopSample) bool {
 func (h *Health) Update(now time.Time, samples []HopSample) []Change {
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	h.at = now
 	for _, s := range samples {
 		ex := h.byPeer[s.Peer]
 		if ex == nil {
@@ -164,8 +168,9 @@ func (ex *exchangeState) degradedPeers(now time.Time) []string {
 	return out
 }
 
-// Snapshot is the latest health per exchange name. A nil Health has none.
-func (h *Health) Snapshot(now time.Time) map[string]ExchangeHealth {
+// Snapshot is the health per exchange name as of the last Update. A nil
+// Health has none.
+func (h *Health) Snapshot() map[string]ExchangeHealth {
 	if h == nil {
 		return nil
 	}
@@ -173,9 +178,9 @@ func (h *Health) Snapshot(now time.Time) map[string]ExchangeHealth {
 	defer h.mu.Unlock()
 	out := make(map[string]ExchangeHealth, len(h.ex))
 	for _, ex := range h.ex {
-		eh := ExchangeHealth{Degraded: ex.degraded, DegradedPeers: ex.degradedPeers(now), Since: ex.since, Peers: map[string]PeerReach{}}
+		eh := ExchangeHealth{Degraded: ex.degraded, DegradedPeers: ex.degradedPeers(h.at), Since: ex.since, Peers: map[string]PeerReach{}}
 		for name, p := range ex.peers {
-			eh.Peers[name] = ex.reach(p, now)
+			eh.Peers[name] = ex.reach(p, h.at)
 		}
 		out[ex.spec.Exchange] = eh
 	}

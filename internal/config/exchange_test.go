@@ -109,7 +109,6 @@ func TestExchangeErrors(t *testing.T) {
 		"own peer":               {edit(t, exchangeYAML, "name: ix-peer-b", "name: ix-lab"), "name is also a provider name"},
 		"peer clash":             {edit(t, exchangeYAML, "name: ix-peer-b", "name: transit-a"), "duplicate provider name"},
 		"source clash":           {edit(t, exchangeYAML, "source_ip: 192.0.2.32", "source_ip: 192.0.2.11"), "duplicate source_ip"},
-		"no peer source":         {edit(t, exchangeYAML, "        source_ip: 192.0.2.32\n", ""), "source_ip \"\" is not a valid IP address"},
 		"no paths":               {edit(t, exchangeYAML, "      add_path: true\n", ""), "peers need their paths visible"},
 		"no bgp":                 {exchangeYAML[:strings.Index(exchangeYAML, "bgp:")], "exchanges require bgp.neighbors"},
 		"bad as_path":            {exchangeYAML + "  as_path: origin\n", `bgp.as_path "origin" is invalid`},

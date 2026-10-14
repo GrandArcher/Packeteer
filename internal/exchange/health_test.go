@@ -27,7 +27,7 @@ func TestOneDegradedPeerIsNotTheExchange(t *testing.T) {
 	if ch := h.Update(t0, []HopSample{lost("a", 100), good("b"), good("c"), good("d")}); len(ch) != 0 {
 		t.Fatalf("one peer down raised %+v", ch)
 	}
-	snap := h.Snapshot(t0)["ix-lab"]
+	snap := h.Snapshot()["ix-lab"]
 	if snap.Degraded || !slices.Equal(snap.DegradedPeers, []string{"a"}) {
 		t.Fatalf("snapshot = %+v", snap)
 	}
@@ -50,7 +50,7 @@ func TestKPeersDegradeThenRecover(t *testing.T) {
 		!slices.Equal(ch[0].DegradedPeers, []string{"a", "b", "c"}) {
 		t.Fatalf("change = %+v", ch)
 	}
-	if snap := h.Snapshot(t1)["ix-lab"]; !snap.Since.Equal(t1) {
+	if snap := h.Snapshot()["ix-lab"]; !snap.Since.Equal(t1) {
 		t.Fatalf("since = %v, want %v", snap.Since, t1)
 	}
 	// Still inside the window: no repeat.
@@ -58,13 +58,18 @@ func TestKPeersDegradeThenRecover(t *testing.T) {
 	if ch := h.Update(t2, []HopSample{good("a"), good("b"), good("c"), good("d")}); len(ch) != 0 {
 		t.Fatalf("repeat or early clear: %+v", ch)
 	}
+	// The snapshot is judged at the last round, not when it is read: a
+	// degraded exchange keeps listing the peers that degraded it.
+	if snap := h.Snapshot()["ix-lab"]; !snap.Degraded || !slices.Equal(snap.DegradedPeers, []string{"a", "b", "c"}) || !snap.Peers["a"].Degraded {
+		t.Fatalf("snapshot after t2 = %+v", snap)
+	}
 	// a and b age out first (t0+5m), leaving only c: recovered.
 	t3 := t0.Add(5*time.Minute + time.Second)
 	ch = h.Update(t3, []HopSample{good("a"), good("b"), good("c"), good("d")})
 	if len(ch) != 1 || ch[0].Degraded || !slices.Equal(ch[0].DegradedPeers, []string{"c"}) {
 		t.Fatalf("recovery = %+v", ch)
 	}
-	if snap := h.Snapshot(t3)["ix-lab"]; snap.Degraded || !snap.Since.IsZero() {
+	if snap := h.Snapshot()["ix-lab"]; snap.Degraded || !snap.Since.IsZero() {
 		t.Fatalf("after recovery degraded = %v since = %v", snap.Degraded, snap.Since)
 	}
 }
@@ -86,14 +91,14 @@ func TestRTTDegradesOnlyWhenSet(t *testing.T) {
 	slow := HopSample{Peer: "a", Measured: true, RTT: 80 * time.Millisecond}
 	h := NewHealth([]HealthSpec{spec("a", "b")})
 	h.Update(t0, []HopSample{slow})
-	if h.Snapshot(t0)["ix-lab"].Peers["a"].Degraded {
+	if h.Snapshot()["ix-lab"].Peers["a"].Degraded {
 		t.Fatal("slow peer degraded with rtt_ms off")
 	}
 	sp := spec("a", "b")
 	sp.RTT = 50 * time.Millisecond
 	h = NewHealth([]HealthSpec{sp})
 	h.Update(t0, []HopSample{slow})
-	if !h.Snapshot(t0)["ix-lab"].Peers["a"].Degraded {
+	if !h.Snapshot()["ix-lab"].Peers["a"].Degraded {
 		t.Fatal("slow peer not degraded with rtt_ms 50")
 	}
 }
@@ -104,7 +109,7 @@ func TestUnmeasuredSamplesDoNotCount(t *testing.T) {
 	if ch := h.Update(t0, []HopSample{none("a"), none("b"), none("c")}); len(ch) != 0 {
 		t.Fatalf("prober errors raised %+v", ch)
 	}
-	snap := h.Snapshot(t0)["ix-lab"]
+	snap := h.Snapshot()["ix-lab"]
 	if len(snap.DegradedPeers) != 0 || snap.Peers["a"].State != ReachUnknown {
 		t.Fatalf("snapshot = %+v", snap)
 	}
@@ -130,11 +135,11 @@ func TestMinPeersAboveSizeIsCapped(t *testing.T) {
 func TestUnknownPeerSampleIgnored(t *testing.T) {
 	h := NewHealth([]HealthSpec{spec("a", "b")})
 	h.Update(t0, []HopSample{lost("zzz", 100)})
-	if got := h.Snapshot(t0)["ix-lab"]; len(got.DegradedPeers) != 0 || len(got.Peers) != 2 {
+	if got := h.Snapshot()["ix-lab"]; len(got.DegradedPeers) != 0 || len(got.Peers) != 2 {
 		t.Fatalf("snapshot = %+v", got)
 	}
 	var nilHealth *Health
-	if nilHealth.Snapshot(t0) != nil {
+	if nilHealth.Snapshot() != nil {
 		t.Fatal("nil Health has no snapshot")
 	}
 }

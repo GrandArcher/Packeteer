@@ -91,7 +91,7 @@ func TestExchangeHealthEndpointAndMetrics(t *testing.T) {
 		{Peer: "ix-peer-c", Measured: true, LossPct: 100},
 	})
 	snap := sampleSnap()
-	snap.Exchanges = exchange.Build(exs, nil, nil, nil, h.Snapshot(now))
+	snap.Exchanges = exchange.Build(exs, nil, nil, nil, h.Snapshot())
 	ts := newTestServer(t, snap, "", "")
 
 	_, _, body := do(t, http.MethodGet, ts.URL+"/api/exchanges", "", "")
