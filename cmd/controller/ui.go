@@ -64,6 +64,16 @@ func dashboardStore(plugins *pluginhost.Set) plugin.DashboardStore {
 	return ds
 }
 
+// usageReader is the storage plugin's persisted 95th-percentile samples,
+// when it keeps them (#127).
+func usageReader(plugins *pluginhost.Set) httpapi.UsageReader {
+	if plugins == nil || plugins.Storage == nil {
+		return nil
+	}
+	r, _ := plugins.Storage.Plugin.(plugin.SampleStore)
+	return r
+}
+
 // newConfigEditor returns the editor for the mounted file when
 // http.config_editor is on. A candidate passes the same steps as a start:
 // config.Parse, the runtime environment, and preflight (every plugin's

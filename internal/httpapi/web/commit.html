@@ -50,12 +50,24 @@
 <main>
   <section>
     <h2>Commit &amp; Cost</h2>
-    <p class="empty">The commit and cost page is not built yet. It is tracked in #174.</p>
+    <p class="tag">Billable usage against commit for each provider that has a telemetry binding: the samples, the running 95th of the billing period, the commit, and where commit control moved traffic. In observe a marker is a recommended move; only a move made in inject was announced. Read-only: nothing here announces a route. Set commit up in <a href="/settings.html#commit-setup">Settings</a>.</p>
+    <div class="controls">
+      <label>Range <select id="commit-days">
+        <option value="1">1 day</option>
+        <option value="7" selected>7 days</option>
+        <option value="30">30 days</option>
+      </select></label>
+      <button type="button" id="commit-load">Load</button>
+    </div>
+    <div id="commit-summary"></div>
+    <div id="commit-graphs"><p class="empty">Loading…</p></div>
   </section>
 </main>
 </div>
 </div>
+<script src="/charts.js"></script>
 <script src="/shell.js"></script>
 <script src="/app.js"></script>
+<script src="/commit.js"></script>
 </body>
 </html>

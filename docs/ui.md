@@ -4,6 +4,7 @@ The remaining UI conveniences (#34). All of them work in the stock image with a 
 
 | Feature | Where | Who | Config |
 |---|---|---|---|
+| Commit & Cost (#174) | `/commit.html`, `GET /api/commit`; setup in `/settings.html#commit-setup` | viewer to read, admin to set up | `telemetry` (`snmp`) + `storage: {type: sqlite}` for the graph |
 | Reports page (#178) | `/reports.html`, `GET /api/reports`, `GET /api/reports/{name}` (JSON, CSV, XLSX) | viewer | `storage: {type: sqlite}` |
 | Before/after graphs (#129) | `/graphs.html`, `/api/reports/timeseries`, the `timeseries` dashboard widget | viewer | `storage: {type: sqlite}` |
 | Troubleshooting results (#180) | `/troubleshooting.html`, `/api/troubleshoot/...` | viewer for the looking glass, operator for probe, traceroute, and whois | `troubleshoot.enabled` for the active tools |
@@ -38,7 +39,7 @@ Every page has the same chrome (#170). The mode banner is the first thing on the
 | Graphs | `/graphs.html` | Before/after loss and latency charts (#129; [below](#graphs)). Empty state without history |
 | Reports | `/reports.html` | History reports by category with a range, filters, sortable columns, and CSV and XLSX export ([below](#reports)) |
 | Providers & Exchanges | `/providers.html` | Provider health. The exchange view is empty (#148) |
-| Commit & Cost | `/commit.html` | Empty (#174) |
+| Commit & Cost | `/commit.html` | Usage against commit per provider, 1, 7, or 30 days ([below](#commit--cost)) |
 | Policies | `/policies.html` | Points to Settings, where the `rules` policy is edited (#130). It does not list rules yet. With a `maintenance` policy, it lists maintenance windows ([below](#maintenance-windows)) |
 | Protection | `/protection.html` | The threat-mitigation monitor with an add and remove rule form (#131) when that feature is on. Otherwise an empty state that says how to configure it |
 | Troubleshooting | `/troubleshooting.html` | Looking glass, probe, traceroute, whois ([below](#troubleshooting-results)) |
@@ -55,6 +56,30 @@ The top bar holds the mode chip, a search slot, an events slot, and the account 
 **Sign-in page (#176).** With `auth.enabled`, a browser without a session that asks for a page over https (or through a proxy that sends `X-Forwarded-Proto: https`) or on localhost is sent to `/signin.html`. Over plain http to any other address it gets the basic-auth prompt, because the browser would drop the `Secure` cookie. API paths and `/metrics` answer `401`. The page asks for a user name and password, posts them as JSON to `POST /auth/signin`, and on success loads the dashboard. The server keeps the session in memory and sets a `packeteer_session` cookie (`HttpOnly`, `Secure`, `SameSite=Strict`, lifetime `auth.session_ttl`). The page shows the mode banner and a single sign-on link when an `sso` plugin is configured. A wrong user name or password gets one answer (`401`); ten failures from one address in five minutes lock that address out (`429`), counted together with basic auth. Basic auth and API tokens work as before for scripts. The mode banner on the page comes from `GET /auth/signin`, which needs no sign-in. Without `auth.enabled` the sign-in POST answers `404` and the browser keeps its basic-auth prompt.
 
 Settings and Admin are marked admin-only. With role-based auth, a viewer or an operator does not see those two links. Opening Admin directly says "Your account may not read this page." Opening Settings directly keeps the editor's existing not-allowed message; report subscriptions on that page are unchanged. With auth off, or with the one basic-auth account, both links are shown. Nothing in the shell announces, and it does not write config.
+
+## Commit & Cost
+
+`/commit.html` (#174) shows billable usage against commit for each provider that has a telemetry binding. It is read-only and announces nothing; the mode banner is on top in every mode.
+
+- **Summary.** One row per binding: commit, the billable 95th (what commit control compares with the commit), its share of the commit (red at 100% or more), the samples in the open billing period, the period, the last sample, and the last poll error.
+- **Graph.** One per provider for 1, 7, or 30 days (`?days=30` in the URL): the busiest sample in each point (thin line), the running 95th of the billing period (thick line, which starts over at a period change), the commit (dashed), and a vertical bar where commit control moved traffic off or onto the provider. A point is 5 minutes, 30 minutes, or 2 hours wide. The running 95th counts the whole billing period, so a range that starts mid-period still starts from the period's samples. Which figure a sample is follows the binding's `percentile`: the larger direction for `greater` and `greater_separate`, outbound for `separate`. A Data table lists the newest points.
+- **Moves.** A bar is a commit improvement from stored history, grouped by time and peer. In observe, and in any record made outside inject, it reads "Recommended"; only a record made in inject reads "Announced". Without storage the page says moves are not recorded.
+- **Empty states.** With no telemetry binding the page says so and links to Commit setup. Without `storage: {type: sqlite}` the summary still shows the open period and the graph says samples are not stored. A binding with no stored samples in the range says so on its card. The `fixed` telemetry plugin has no interface, so it has a summary row and no graph.
+
+`GET /api/commit` is in [API.md](API.md).
+
+### Commit setup
+
+The Settings page has a four-step Commit setup (`#commit-setup`) over the settings form's `commit` section and `POST /api/config/form`. It needs `http.config_editor: true`, the admin role, and auth or basic auth, like the form. It writes YAML text only: Apply copies the choices into the editor and validates them with the same checks as a start, Save is the editor's (hash check, audit record), and nothing applies until a restart. It does not change `mode`, the allowlist, or `max_improvements`.
+
+1. **Strategy.** `weighted`, `commit` (with the balance mode for a group), or `cost` (cost or performance first). Switching keeps the shared weights and drops the other scorer's keys. A scorer of another type is not replaced.
+2. **Commit and telemetry.** Tick a provider, then its commit (Mbps), SNMP host, interface, billing day (1-28), and percentile. A host is picked from the file's `snmp` hosts, or added with a name, an address, and the name of the environment variable that holds the community (version 2c). No field takes a community or passphrase. An existing host, version 3, and removing a binding stay YAML edits. A commit with no binding is refused as before.
+3. **Groups and precedence.** Per provider: `group`, `precedence` (lower is preferred, blank is 100), and `cc_disable`.
+4. **Review.** The list of what Apply will write, then Apply.
+
+Next hops seen on iBGP or BMP stay suggestions in the provider table; they never become a provider here.
+
+The smoke steps "UI commit smoke" in the docker job (`lab/ui-smoke.sh`) and the empty state in the stock-image step load the page. The first seeds `lab/mkhistory -commit` (samples and commit improvements on documentation names, one move recorded in inject), checks `/api/commit` for 1, 7, and 30 days, loads the page for each, and then loads `/settings.html` through `lab/uiproxy -fixtures lab/ui-fixtures/commit`. The injected driver presses the setup through (headless Chrome cannot click), including a community typed where a variable name goes, which the page refuses; the answers are the real API's and the editor's check says Valid. `internal/commitview`, `internal/configedit`, and `internal/httpapi` tests cover the series, the form round trip through `config.Parse`, and the API.
 
 ## Users and API tokens
 

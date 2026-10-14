@@ -94,6 +94,9 @@ type Options struct {
 	Upgrade UpgradeControl
 	// Linkouts builds the "open in" links (#211). Nil uses the defaults.
 	Linkouts *linkout.Set
+	// Usage reads the persisted 95th-percentile samples for the Commit &
+	// Cost page (#174). Nil when the storage plugin keeps none.
+	Usage UsageReader
 	// System reads the configured plugins and their latest results for
 	// the System page (#184). Nil lists only what the snapshot knows.
 	System func() SystemFacts
@@ -125,6 +128,7 @@ type Server struct {
 	upgrade    UpgradeControl
 	linkouts   *linkout.Set
 	sysFacts   func() SystemFacts
+	usage      UsageReader
 	setup      atomic.Pointer[Setup]
 	// suggest lists next hops the operator may accept as a draft provider
 	// row (#102). Nil means there is nothing to suggest. It must not write
@@ -178,6 +182,7 @@ func New(opt Options) (*Server, error) {
 	s.setup.Store(&setup)
 	s.linkouts = opt.Linkouts
 	s.sysFacts = opt.System
+	s.usage = opt.Usage
 	if s.linkouts == nil {
 		s.linkouts = linkout.New(linkout.Config{})
 	}

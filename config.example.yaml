@@ -380,7 +380,8 @@ storage:
 # The community and v3 passphrases are environment variables named here,
 # never values in this file. Samples stay in memory. With storage above,
 # the open billing period is reloaded after a restart. The collector does
-# not announce.
+# not announce. Settings > Commit setup in the UI writes this block and the
+# commit scorer settings (docs/ui.md); /commit.html draws the result.
 # Docs: docs/PLUGINS.md and docs/CONFIG.md.
 # telemetry:
 #   - type: snmp

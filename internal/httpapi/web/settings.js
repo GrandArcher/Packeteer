@@ -9,7 +9,11 @@ function emptyForm() {
     precedence: "", scorer_type: "", floor_max_loss_pct: "", floor_max_rtt: "",
     providers: [], targets: [], allowlist: [],
     flows: [], policies: [], vips: [], outages: [], exchanges: [],
-    inbound: emptyInbound(), anomaly: emptyAnomaly()};
+    inbound: emptyInbound(), anomaly: emptyAnomaly(), commit: emptyCommit()};
+}
+
+function emptyCommit() {
+  return {scorer: "", balance: "", hosts: [], providers: []};
 }
 
 function emptyInbound() {
@@ -91,7 +95,7 @@ function editorOff(err) {
   var node = document.getElementById("ed-off");
   node.textContent = explain(err);
   node.hidden = !off;
-  ["ed-load", "ed-check", "ed-save", "wz-run", "wz-next", "wz-next-2", "wz-back", "wz-back-3", "wz-add-provider", "wz-sug", "form-apply", "form-reload", "form-add-provider", "form-add-target", "form-add-allow", "sug-refresh", "form-add-flow", "form-add-policy", "form-add-vip", "form-add-outage", "form-add-exchange", "ix-refresh", "form-add-anomaly-rule", "wz-next-3", "wz-back-4"].forEach(function (id) {
+  ["ed-load", "ed-check", "ed-save", "wz-run", "wz-next", "wz-next-2", "wz-back", "wz-back-3", "wz-add-provider", "wz-sug", "form-apply", "form-reload", "form-add-provider", "form-add-target", "form-add-allow", "sug-refresh", "form-add-flow", "form-add-policy", "form-add-vip", "form-add-outage", "form-add-exchange", "ix-refresh", "form-add-anomaly-rule", "wz-next-3", "wz-back-4", "cs-add-host", "cs-apply"].forEach(function (id) {
     var b = document.getElementById(id);
     if (b) b.disabled = off;
   });
@@ -690,6 +694,8 @@ function renderForm() {
   renderExchanges();
   renderAnomalyRules();
   renderSuggestions(lastSuggestions);
+  // commitsetup.js loads after this file and renders once itself.
+  if (typeof renderCommitSetup === "function") renderCommitSetup();
 }
 
 function loadForm(yaml) {
@@ -723,6 +729,9 @@ function loadProtectionDefaults() {
 }
 
 function loadFormDefaults() {
+  form.commit = Object.assign(emptyCommit(), form.commit || {});
+  form.commit.hosts = form.commit.hosts || [];
+  form.commit.providers = form.commit.providers || [];
   loadProtectionDefaults();
   ["flows", "policies", "vips", "outages", "exchanges"].forEach(function (k) { if (!form[k]) form[k] = []; });
   form.exchanges.forEach(function (x) {
@@ -745,16 +754,26 @@ function loadFormDefaults() {
 
 function applyForm() {
   readKnobs();
-  formStatus("Applying to the YAML…");
-  api("POST", "/api/config/form", {yaml: document.getElementById("ed-yaml").value, apply: true, form: form}).then(function (out) {
+  postForm(formStatus);
+}
+
+// postForm merges the form into the YAML in the editor. It resolves with
+// the reply, or with null after report() was given the refusal.
+function postForm(report) {
+  report("Applying to the YAML…");
+  return api("POST", "/api/config/form", {yaml: document.getElementById("ed-yaml").value, apply: true, form: form}).then(function (out) {
     document.getElementById("ed-yaml").value = out.yaml;
     if (out.form) {
       form = out.form;
       loadFormDefaults();
     }
     renderForm();
-    formStatus("Applied to the YAML. Not saved. Validate, then Save. Save applies thresholds, policies, sources, probe timing, mode, the allowlist, and bgp.neighbors online. Any other change waits for a restart.");
-  }, function (err) { formStatus(explain(err)); });
+    report("Applied to the YAML. Not saved. Validate, then Save. Save applies thresholds, policies, sources, probe timing, mode, the allowlist, and bgp.neighbors online. Any other change waits for a restart.");
+    return out;
+  }, function (err) {
+    report(explain(err));
+    return null;
+  });
 }
 
 var lastSuggestions = [];

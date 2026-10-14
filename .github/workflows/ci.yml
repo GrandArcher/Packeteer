@@ -204,7 +204,9 @@ jobs:
           # Graphs (#129) with history on but nothing recorded: an empty state, no chart.
           bash lab/ui-smoke.sh "$base/graphs.html" 'No before/after data in this range' 'It announces nothing.' \
             'id="graph-bucket"' --absent 'class="ts-chart"' 'Cannot reach'
-          bash lab/ui-smoke.sh "$base/commit.html" '#174' 'It announces nothing.'
+          # Commit & Cost (#174) with history on and no telemetry binding: the empty state.
+          bash lab/ui-smoke.sh "$base/commit.html" 'No provider has a telemetry binding' 'href="/settings.html#commit-setup"' \
+            'id="commit-days"' 'It announces nothing.' --absent 'class="ts-chart' 'Cannot reach' '#174'
           bash lab/ui-smoke.sh "$base/policies.html" '#130' 'It announces nothing.' 'id="maint-section" hidden=""' --absent 'No maintenance windows.'
           bash lab/ui-smoke.sh "$base/protection.html" 'Threat mitigation is not configured' 'It announces nothing.' \
             --absent 'Cannot reach'
@@ -596,6 +598,131 @@ jobs:
             'probe rollup' 'MED is display only' 'href="/troubleshooting.html?tool=probe&amp;target=198.51.100.0%2F24"' 'mode-observe' 'It announces nothing.' \
             --absent 'Announced' 'Cannot reach' 'mode-inject'
           bash lab/ui-smoke.sh 'http://127.0.0.1:18098/troubleshooting.html?tool=probe&target=198.51.100.0/24' 'value="198.51.100.0/24"' 'It announces nothing.'
+      - name: UI commit smoke (#174; 95th vs commit graph from seeded samples, commit setup flow, observe)
+        run: |
+          set -euo pipefail
+          base=http://127.0.0.1:18174
+          # Samples and commit improvements for two providers on documentation
+          # names, written by the same sqlite plugin the image uses. lab-a ends
+          # the window over its 100 Mbps commit, lab-b is far under. lab-c has a
+          # binding and no samples; lab-d has no binding. The SNMP host does not
+          # exist: the poll fails and the stored samples stay.
+          mkdir -p /tmp/pkcommit
+          go run ./lab/mkhistory -commit -o /tmp/pkcommit/packeteer.db
+          cat > /tmp/ui174.yaml <<'YAML'
+          mode: observe
+          asn: 64512
+          router_id: 192.0.2.10
+          http:
+            listen: "127.0.0.1:18174"
+            config_editor: true
+          providers:
+            - name: lab-a
+              source_ip: 127.0.0.1
+              next_hop: 192.0.2.1
+            - name: lab-b
+              source_ip: 127.0.0.2
+              next_hop: 192.0.2.2
+            - name: lab-c
+              source_ip: 127.0.0.3
+              next_hop: 192.0.2.3
+            - name: lab-d
+              source_ip: 127.0.0.4
+              next_hop: 192.0.2.4
+          storage:
+            type: sqlite
+          telemetry:
+            - type: snmp
+              config:
+                hosts:
+                  - name: edge
+                    address: 127.0.0.1
+                    port: 16161
+                    version: 2c
+                    community_env: PACKETEER_SNMP_COMMUNITY
+                providers:
+                  - {name: lab-a, host: edge, interface: ether1, commit_mbps: 100, billing_day: 1, percentile: separate}
+                  - {name: lab-b, host: edge, interface: ether1, commit_mbps: 200, billing_day: 1, percentile: separate}
+                  - {name: lab-c, host: edge, interface: ether3, commit_mbps: 50, billing_day: 1, percentile: separate}
+          YAML
+          docker run -d --name pkui174 --network host --cap-add NET_RAW --cap-add NET_ADMIN \
+            -e PACKETEER_HTTP_USER=lab -e PACKETEER_HTTP_PASSWORD=lab-only -e PACKETEER_SNMP_COMMUNITY=lab-only-community \
+            -v /tmp/ui174.yaml:/etc/packeteer/config.yaml:ro -v /tmp/pkcommit:/var/lib/packeteer packeteer:ci
+          proxy=""
+          cleanup() {
+            if [ -n "$proxy" ]; then kill "$proxy" 2>/dev/null || true; fi
+            docker stop -t 15 pkui174 >/dev/null || true
+            docker logs pkui174 2>&1 | tail -n 40
+            code="$(docker inspect -f '{{.State.ExitCode}}' pkui174)"
+            docker rm pkui174 >/dev/null || true
+            test "$code" = "0"
+          }
+          trap cleanup EXIT
+          auth=(-u lab:lab-only)
+          ok=0
+          for _ in $(seq 1 30); do
+            if curl -fsS "${auth[@]}" "$base/readyz" >/dev/null 2>&1; then ok=1; break; fi
+            sleep 1
+          done
+          test "$ok" = 1
+          # 1, 7, and 30 days from the persisted samples: every range has
+          # points, lab-a is over its commit, lab-b under, lab-c has no points,
+          # and the moves are the three recommended and the one announced.
+          # Any other range is refused.
+          curl -fsS "${auth[@]}" "$base/api/commit?days=30" | tee /tmp/commit174.json
+          jq -e '.mode == "observe" and .samples_stored and .moves_recorded and ([.providers[].provider] == ["lab-a","lab-b","lab-c"])
+            and (.providers[0].points | length > 340) and (.providers[0].billable_mbps > .providers[0].commit_mbps)
+            and (.providers[1].billable_mbps < .providers[1].commit_mbps) and (.providers[2].points | length == 0)
+            and ([.providers[0].moves[] | select(.announced)] | length == 1)
+            and ([.providers[0].moves[] | select(.announced | not) | .prefixes] | add == 3)
+            and ([.providers[1].moves[] | select(.direction == "onto")] | length == 3)' /tmp/commit174.json
+          curl -fsS "${auth[@]}" "$base/api/commit?days=7" | jq -e '.step_seconds == 1800 and (.providers[0].points | length >= 330 and length <= 340) and (.providers[0].moves | length == 3)'
+          curl -fsS "${auth[@]}" "$base/api/commit?days=1" | jq -e '.step_seconds == 300 and (.providers[0].points | length >= 280 and length <= 290) and (.providers[0].moves | length == 0)'
+          test "$(curl -s -o /dev/null -w '%{http_code}' "${auth[@]}" "$base/api/commit?days=2")" = 400
+          go build -o /tmp/uiproxy ./lab/uiproxy
+          /tmp/uiproxy -listen 127.0.0.1:18175 -upstream "$base" -user lab -password lab-only >/tmp/uiproxy174.log 2>&1 &
+          proxy=$!
+          for _ in $(seq 1 20); do
+            curl -fsS http://127.0.0.1:18175/healthz >/dev/null 2>&1 && break
+            sleep 0.2
+          done
+          curl -fsS http://127.0.0.1:18175/healthz >/dev/null
+          # The graph is drawn per provider: samples, running 95th, commit
+          # line, and the moves worded Recommended in observe and Announced
+          # only for the record an inject run made. lab-c has no samples.
+          bash lab/ui-smoke.sh http://127.0.0.1:18175/commit.html 'class="ts-chart usage-chart"' 'ts-line usage-sample' 'ts-line usage-p95' \
+            'class="usage-commit"' 'lab-a: billable 95th' 'Thick: running 95th of the billing period' 'Data (3' \
+            'Recommended: 2 prefixes off lab-a toward lab-b' 'Recommended: 1 prefix off lab-a toward lab-b' 'Announced: 1 prefix off lab-a toward lab-b' \
+            'Recommended: 2 prefixes onto lab-b from lab-a' 'No stored samples for lab-c in this range.' \
+            'mode-observe' 'It announces nothing.' --absent 'Cannot reach' 'mode-inject' 'No provider has a telemetry binding'
+          bash lab/ui-smoke.sh 'http://127.0.0.1:18175/commit.html?days=1' 'class="ts-chart usage-chart"' 'Data (2' 'Commit control moved no traffic for lab-a in this range.' \
+            'No stored samples for lab-c in this range.' 'It announces nothing.' --absent 'Cannot reach' 'Announced:' 'Recommended:'
+          bash lab/ui-smoke.sh 'http://127.0.0.1:18175/commit.html?days=30' 'class="ts-chart usage-chart"' 'Data (3' 'Announced: 1 prefix off lab-a toward lab-b' \
+            'Recommended: 2 prefixes off lab-a toward lab-b' 'It announces nothing.' --absent 'Cannot reach'
+          kill "$proxy"
+          # Headless Chrome cannot click, so uiproxy adds a driver to
+          # /settings.html. It walks the Commit setup: the commit scorer, a
+          # community typed where a variable name goes (refused in the page),
+          # a new SNMP host, a commit and binding on lab-d, a group. Apply
+          # writes the YAML text and the editor validates it with the same
+          # checks as a start. The file is mounted read-only and not saved.
+          /tmp/uiproxy -listen 127.0.0.1:18176 -upstream "$base" -user lab -password lab-only \
+            -fixtures lab/ui-fixtures/commit >/tmp/uiproxy174d.log 2>&1 &
+          proxy=$!
+          for _ in $(seq 1 20); do
+            curl -fsS http://127.0.0.1:18176/healthz >/dev/null 2>&1 && break
+            sleep 0.2
+          done
+          curl -fsS http://127.0.0.1:18176/healthz >/dev/null
+          bash lab/ui-smoke.sh http://127.0.0.1:18176/settings.html 'mode-observe' 'It announces nothing.' \
+            'start: 4 providers | scorer weighted' \
+            'balance shown: true | precedence shown: false' \
+            'refused: SNMP host edge2: enter the name of the environment variable that holds the community (letters, digits, underscore), not the community itself. | step 2 shown: true' \
+            'Scorer: commit (was weighted). | Balance in a group: equal. | New SNMP host edge2 at 192.0.2.253, version 2c, community read from the environment variable PACKETEER_SNMP_COMMUNITY.' \
+            'lab-d: commit 300 Mbps on edge2 ether2, billing day 5, greater_separate; group pair; precedence 200.' \
+            'yaml: commit scorer true | balance equal true | host edge2 true | env name true | commit 300 true | interface ether2 true | billing day 5 true | precedence 200 true | group pair true | mode observe true | no community true' \
+            'validated: Valid · mode observe · changed: providers, scorer, telemetry · restart required' \
+            --absent 'Cannot reach' 'mode-inject' 'lab-only-community' 's3cret-community'
       - name: UI reports smoke (#178; range, filters, sorting, CSV and XLSX from seeded history, observe)
         run: |
           set -euo pipefail
