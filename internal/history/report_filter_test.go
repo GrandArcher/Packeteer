@@ -191,6 +191,7 @@ func TestValidateRefusesWhatItWouldIgnore(t *testing.T) {
 		{"cause value", Query{Name: ReportImprovements, Cause: "nope"}},
 		{"ip version", Query{Name: ReportImprovements, IPVersion: 5}},
 		{"sort key", Query{Name: ReportImprovements, Sort: "nope"}},
+		{"top-N key outside the top-N reports", Query{Name: ReportImprovements, Sort: SortVolume}},
 		{"order without a column", Query{Name: ReportPrefixes, Sort: SortLoss, Order: OrderDesc}},
 		{"order value", Query{Name: ReportImprovements, Sort: "hours", Order: "up"}},
 		{"unknown report", Query{Name: "nope"}},
@@ -426,6 +427,28 @@ func TestASNFilterOnProbeRowsUsesTheStoredPrefixOrigin(t *testing.T) {
 	}
 	if got := count(64500); got != 0 {
 		t.Errorf("improvement origin: %d rows, want 0", got)
+	}
+}
+
+// A prefix with no stored origin shows its improvement's origin, so the asn
+// filter keeps its probe counts on that row too.
+func TestASNFilterKeepsProbesOfAPrefixWithNoStoredOrigin(t *testing.T) {
+	h := plugin.History{
+		Improvements: []plugin.ImprovementRecord{{ID: "1", Prefix: pfxA, Provider: "transit-a", Start: from.Add(time.Hour), End: from.Add(2 * time.Hour), OriginASN: 64500}},
+		Buckets:      []plugin.ProbeBucket{{Day: from, Prefix: pfxA, Provider: "transit-a", Probes: 3, Measured: 3, LossSum: 3, RTTSumMs: 30}},
+	}
+	rows := func(asn uint32) []PrefixRow {
+		rep, err := Build(h, Query{Name: ReportPrefixes, From: from, To: to, Now: now, ASN: asn})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return rep.Rows.([]PrefixRow)
+	}
+	if got := rows(64500); len(got) != 1 || got[0].OriginASN != 64500 || got[0].Probes != 3 || got[0].Improvements != 1 || got[0].SteeredHours != 1 {
+		t.Errorf("improvement origin: %+v", got)
+	}
+	if got := rows(64501); len(got) != 0 {
+		t.Errorf("other origin: %+v", got)
 	}
 }
 

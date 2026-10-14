@@ -239,14 +239,21 @@ func (q Query) Validate() error {
 		return fmt.Errorf("ip_version must be 4 or 6")
 	}
 	_, isColumn := d.column(q.Sort)
+	// Only the top-N reports pick their rows by problems, volume, or loss;
+	// the others would ignore those keys.
+	topN := d.Name == ReportPrefixes || d.Name == ReportASNs || d.Name == ReportCountries
 	switch {
-	case q.Sort == "" || q.Sort == SortProblems || q.Sort == SortVolume || q.Sort == SortLoss || isColumn:
+	case q.Sort == "" || isColumn:
+	case topN && (q.Sort == SortProblems || q.Sort == SortVolume || q.Sort == SortLoss):
 	default:
 		keys := make([]string, len(d.Columns))
 		for i, c := range d.Columns {
 			keys[i] = c.Key
 		}
-		return fmt.Errorf("sort %q is invalid (want %s, %s, %s, or a column: %s)", q.Sort, SortProblems, SortVolume, SortLoss, strings.Join(keys, ", "))
+		if topN {
+			return fmt.Errorf("sort %q is invalid (want %s, %s, %s, or a column: %s)", q.Sort, SortProblems, SortVolume, SortLoss, strings.Join(keys, ", "))
+		}
+		return fmt.Errorf("sort %q is invalid (want a column: %s)", q.Sort, strings.Join(keys, ", "))
 	}
 	switch q.Order {
 	case "":

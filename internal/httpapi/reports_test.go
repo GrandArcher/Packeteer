@@ -328,7 +328,7 @@ func TestReportQueryFilters(t *testing.T) {
 	for _, bad := range [][2]string{
 		{history.ReportSummary, "cause=cost"}, {history.ReportTimeSeries, "provider=transit-a"}, {history.ReportMitigations, "asn=64510"},
 		{history.ReportImprovements, "provder=transit-a"}, {history.ReportImprovements, "cause=nope"}, {history.ReportImprovements, "ip_version=5"},
-		{history.ReportImprovements, "order=desc"}, {history.ReportImprovements, "sort=nope"},
+		{history.ReportImprovements, "order=desc"}, {history.ReportImprovements, "sort=nope"}, {history.ReportImprovements, "sort=volume"},
 	} {
 		if _, err := parse(bad[0], bad[1]); err == nil {
 			t.Errorf("%s?%s accepted", bad[0], bad[1])

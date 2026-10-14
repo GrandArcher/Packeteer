@@ -175,17 +175,24 @@ func newAgg(h plugin.History, q Query) *agg {
 	for _, p := range h.Prefixes {
 		a.info[p.Prefix] = p
 	}
-	for _, b := range h.Buckets {
-		if !b.Day.Before(q.From.UTC().Truncate(24*time.Hour)) && b.Day.Before(q.To) &&
-			q.matchPrefix(b.Prefix) && (q.ASN == 0 || a.info[b.Prefix].OriginASN == q.ASN) && (q.Provider == "" || b.Provider == q.Provider) {
-			a.buckets = append(a.buckets, b)
-		}
-	}
+	// A prefix with no stored origin takes the origin of its kept
+	// improvements, as its row does, so the asn filter keeps its probe
+	// counts together with its improvement hours.
+	recorded := map[netip.Prefix]bool{}
 	for _, r := range h.Improvements {
 		if r.Start.Before(q.To) && (r.End.IsZero() || !r.End.Before(q.From)) &&
 			q.matchPrefix(r.Prefix) && (q.ASN == 0 || improvementOrigin(r, a.info) == q.ASN) &&
 			(q.Provider == "" || r.Provider == q.Provider || r.Native == q.Provider) && (q.Cause == "" || cause(r) == q.Cause) {
 			a.imps = append(a.imps, r)
+			recorded[r.Prefix] = true
+		}
+	}
+	for _, b := range h.Buckets {
+		origin := a.info[b.Prefix].OriginASN
+		if !b.Day.Before(q.From.UTC().Truncate(24*time.Hour)) && b.Day.Before(q.To) &&
+			q.matchPrefix(b.Prefix) && (q.ASN == 0 || origin == q.ASN || origin == 0 && recorded[b.Prefix]) &&
+			(q.Provider == "" || b.Provider == q.Provider) {
+			a.buckets = append(a.buckets, b)
 		}
 	}
 	return a

@@ -336,7 +336,7 @@ jobs:
           test "$(curl -s -o /dev/null -w '%{http_code}' "$hist/api/search")" = 400
           test "$(curl -s -o /dev/null -w '%{http_code}' -X POST "$hist/api/search?q=AS64496")" = 405
           curl -fsS "$hist/api/reports/improvements?days=7&prefix=198.51.100.0/24&asn=AS64496" | jq -e '.report == "improvements" and (.rows | length) == 0'
-          test "$(curl -s -o /dev/null -w '%{http_code}' "$hist/api/reports/summary?asn=64496")" = 400
+          test "$(curl -s -o /dev/null -w '%{http_code}' "$hist/api/reports/mitigations?asn=64496")" = 400
           bash lab/ui-smoke.sh "$hist/search.html?q=198.51.100.0/24" 'It announces nothing.' 'Measured prefixes (1)' 'Probe rollups, last 90 days (1)' \
             'href="/prefix/198.51.100.0%2F24"' 'href="/troubleshooting.html?tool=probe&amp;target=198.51.100.0%2F24"' \
             'href="/reports.html?report=improvements&amp;prefix=198.51.100.0%2F24"' --absent 'Cannot reach' 'History is off'
