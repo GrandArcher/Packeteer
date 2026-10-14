@@ -94,3 +94,71 @@ func TestBuildJoinsHealth(t *testing.T) {
 		t.Fatalf("an exchange without health is not degraded: %+v", got[1])
 	}
 }
+
+// #156: a member whose route server feed lacks prefixes it sends
+// bilaterally is flagged; a member with no bilateral-only prefix is not.
+func TestAvailabilityFlags(t *testing.T) {
+	a := netip.MustParseAddr
+	exs := []Exchange{{
+		Name: "ix-lab",
+		LANs: []netip.Prefix{netip.MustParsePrefix("203.0.113.0/24")},
+		Peers: []Peer{
+			{Name: "ix-peer-a", ASN: 64501, NextHop: a("203.0.113.11")},
+			{Name: "ix-peer-b", ASN: 64502, NextHop: a("203.0.113.12")},
+			{Name: "ix-peer-c", ASN: 64504, NextHop: a("203.0.113.14")},
+		},
+	}}
+	hops := []rib.NextHopCount{
+		{NextHop: a("203.0.113.11"), Prefixes: 10, RouteServerOnly: 2, BilateralOnly: 3, Both: 5},
+		{NextHop: a("203.0.113.12"), Prefixes: 4, BilateralOnly: 4},
+		{NextHop: a("203.0.113.13"), Prefixes: 6, RouteServerOnly: 6},
+		{NextHop: a("203.0.113.14"), Prefixes: 3, Both: 3},
+	}
+	st := Build(exs, hops, nil, nil, nil)[0]
+	pa, pb, pc := st.Peers[0], st.Peers[1], st.Peers[2]
+	if pa.Availability != (Availability{RouteServerOnly: 2, BilateralOnly: 3, Both: 5, Flag: FlagRSPartial}) {
+		t.Errorf("peer a = %+v", pa.Availability)
+	}
+	if pb.Availability.Flag != FlagRSMissing || pb.Availability.BilateralOnly != 4 {
+		t.Errorf("peer b (bilateral only, the exchange has a route server) = %+v", pb.Availability)
+	}
+	if pc.Availability.Flag != "" {
+		t.Errorf("peer c (everything on both) = %+v", pc.Availability)
+	}
+	if len(st.Discovered) != 1 || st.Discovered[0].NextHop != "203.0.113.13" || st.Discovered[0].Prefixes != 6 {
+		t.Errorf("discovered = %+v", st.Discovered)
+	}
+
+	// With no route server path anywhere, a bilateral-only member is not
+	// flagged: the exchange may have no route server in view.
+	noRS := Build(exs, []rib.NextHopCount{{NextHop: a("203.0.113.12"), Prefixes: 4, BilateralOnly: 4}}, nil, nil, nil)[0]
+	if f := noRS.Peers[1].Availability.Flag; f != "" {
+		t.Errorf("flag with no route server in view = %q", f)
+	}
+}
+
+// #156: the flags are decided per exchange. The same next hop on two
+// exchanges is flagged only where the exchange shows route server paths
+// for another member.
+func TestAvailabilityFlagsPerExchange(t *testing.T) {
+	a := netip.MustParseAddr
+	member := Peer{Name: "ix-peer-a", ASN: 64501, NextHop: a("203.0.113.11")}
+	exs := []Exchange{
+		{Name: "ix-wide", LANs: []netip.Prefix{netip.MustParsePrefix("203.0.113.0/24")}, Peers: []Peer{member, {Name: "ix-peer-rs", ASN: 64502, NextHop: a("203.0.113.200")}}},
+		{Name: "ix-narrow", LANs: []netip.Prefix{netip.MustParsePrefix("203.0.113.0/25")}, Peers: []Peer{member}},
+	}
+	hops := []rib.NextHopCount{
+		{NextHop: a("203.0.113.11"), Prefixes: 4, BilateralOnly: 4},
+		{NextHop: a("203.0.113.200"), Prefixes: 5, RouteServerOnly: 5},
+	}
+	got := Build(exs, hops, nil, nil, nil)
+	if f := got[0].Peers[0].Availability.Flag; f != FlagRSMissing {
+		t.Errorf("ix-wide flag = %q, want %q", f, FlagRSMissing)
+	}
+	if f := got[1].Peers[0].Availability.Flag; f != "" {
+		t.Errorf("ix-narrow flag = %q, want none (no route server path on that exchange)", f)
+	}
+	if got[1].Prefixes != 4 {
+		t.Errorf("ix-narrow prefixes = %d, want 4 (a next hop outside its LAN is not counted)", got[1].Prefixes)
+	}
+}

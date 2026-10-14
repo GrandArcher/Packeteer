@@ -38,10 +38,10 @@ type HealthSpec struct {
 	HealthOptions
 }
 
-// Sample is one probe of a peer's next hop. Measured is false when no
+// HopSample is one probe of a peer's next hop. Measured is false when no
 // measurement was possible (a prober error): it says nothing about the
 // peer and is not counted.
-type Sample struct {
+type HopSample struct {
 	Peer     string
 	Measured bool
 	LossPct  float64
@@ -74,7 +74,7 @@ type Change struct {
 }
 
 type peerState struct {
-	last    Sample
+	last    HopSample
 	checked time.Time
 	lastBad time.Time
 }
@@ -112,13 +112,13 @@ func NewHealth(specs []HealthSpec) *Health {
 	return h
 }
 
-func (o HealthOptions) bad(s Sample) bool {
+func (o HealthOptions) bad(s HopSample) bool {
 	return s.Measured && (s.LossPct >= o.LossPct || (o.RTT > 0 && s.RTT > o.RTT))
 }
 
 // Update records a round of samples and returns the exchanges whose state
 // changed. A sample for a peer the tracker does not watch is ignored.
-func (h *Health) Update(now time.Time, samples []Sample) []Change {
+func (h *Health) Update(now time.Time, samples []HopSample) []Change {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	for _, s := range samples {

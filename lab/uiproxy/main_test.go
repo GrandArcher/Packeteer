@@ -269,6 +269,12 @@ func TestExchangePageFixturesMatchAPI(t *testing.T) {
 		b.Reach.State != exchange.ReachUnreachable || !a.Reach.Degraded || !b.Reach.Degraded {
 		t.Fatalf("health = %+v", st)
 	}
+	// #156: the comparison columns and flags the smoke test looks for.
+	c := ex.Exchanges[0].Peers[2]
+	if a.Availability.Flag != exchange.FlagRSPartial || a.Availability.RouteServerOnly+a.Availability.BilateralOnly+a.Availability.Both != 8 ||
+		b.Availability.Flag != "" || b.Availability.RouteServerOnly != 3 || c.Availability.Flag != exchange.FlagRSMissing || c.Availability.BilateralOnly != 4 {
+		t.Fatalf("availability = %+v %+v %+v", a.Availability, b.Availability, c.Availability)
+	}
 	var rep struct {
 		Report string                `json:"report"`
 		From   string                `json:"from"`

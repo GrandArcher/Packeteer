@@ -14,17 +14,17 @@ func spec(peers ...string) HealthSpec {
 	}}
 }
 
-func good(peer string) Sample {
-	return Sample{Peer: peer, Measured: true, RTT: 2 * time.Millisecond}
+func good(peer string) HopSample {
+	return HopSample{Peer: peer, Measured: true, RTT: 2 * time.Millisecond}
 }
 
-func lost(peer string, pct float64) Sample {
-	return Sample{Peer: peer, Measured: true, LossPct: pct}
+func lost(peer string, pct float64) HopSample {
+	return HopSample{Peer: peer, Measured: true, LossPct: pct}
 }
 
 func TestOneDegradedPeerIsNotTheExchange(t *testing.T) {
 	h := NewHealth([]HealthSpec{spec("a", "b", "c", "d")})
-	if ch := h.Update(t0, []Sample{lost("a", 100), good("b"), good("c"), good("d")}); len(ch) != 0 {
+	if ch := h.Update(t0, []HopSample{lost("a", 100), good("b"), good("c"), good("d")}); len(ch) != 0 {
 		t.Fatalf("one peer down raised %+v", ch)
 	}
 	snap := h.Snapshot(t0)["ix-lab"]
@@ -42,10 +42,10 @@ func TestOneDegradedPeerIsNotTheExchange(t *testing.T) {
 func TestKPeersDegradeThenRecover(t *testing.T) {
 	h := NewHealth([]HealthSpec{spec("a", "b", "c", "d")})
 	// Two peers are not enough for MinPeers 3.
-	h.Update(t0, []Sample{lost("a", 100), lost("b", 60), good("c"), good("d")})
+	h.Update(t0, []HopSample{lost("a", 100), lost("b", 60), good("c"), good("d")})
 	t1 := t0.Add(time.Minute)
 	// The third degrades a minute later: the window adds them up.
-	ch := h.Update(t1, []Sample{good("a"), good("b"), lost("c", 50), good("d")})
+	ch := h.Update(t1, []HopSample{good("a"), good("b"), lost("c", 50), good("d")})
 	if len(ch) != 1 || !ch[0].Degraded || ch[0].Exchange != "ix-lab" || ch[0].Peers != 4 ||
 		!slices.Equal(ch[0].DegradedPeers, []string{"a", "b", "c"}) {
 		t.Fatalf("change = %+v", ch)
@@ -55,12 +55,12 @@ func TestKPeersDegradeThenRecover(t *testing.T) {
 	}
 	// Still inside the window: no repeat.
 	t2 := t1.Add(time.Minute)
-	if ch := h.Update(t2, []Sample{good("a"), good("b"), good("c"), good("d")}); len(ch) != 0 {
+	if ch := h.Update(t2, []HopSample{good("a"), good("b"), good("c"), good("d")}); len(ch) != 0 {
 		t.Fatalf("repeat or early clear: %+v", ch)
 	}
 	// a and b age out first (t0+5m), leaving only c: recovered.
 	t3 := t0.Add(5*time.Minute + time.Second)
-	ch = h.Update(t3, []Sample{good("a"), good("b"), good("c"), good("d")})
+	ch = h.Update(t3, []HopSample{good("a"), good("b"), good("c"), good("d")})
 	if len(ch) != 1 || ch[0].Degraded || !slices.Equal(ch[0].DegradedPeers, []string{"c"}) {
 		t.Fatalf("recovery = %+v", ch)
 	}
@@ -73,26 +73,26 @@ func TestPercentThreshold(t *testing.T) {
 	sp := spec("a", "b", "c", "d", "e")
 	sp.MinPeers, sp.MinPercent = 5, 40
 	h := NewHealth([]HealthSpec{sp})
-	if ch := h.Update(t0, []Sample{lost("a", 100), good("b"), good("c"), good("d"), good("e")}); len(ch) != 0 {
+	if ch := h.Update(t0, []HopSample{lost("a", 100), good("b"), good("c"), good("d"), good("e")}); len(ch) != 0 {
 		t.Fatalf("20%% raised %+v", ch)
 	}
-	ch := h.Update(t0, []Sample{lost("b", 100)})
+	ch := h.Update(t0, []HopSample{lost("b", 100)})
 	if len(ch) != 1 || !ch[0].Degraded || len(ch[0].DegradedPeers) != 2 {
 		t.Fatalf("40%% of 5 peers = %+v", ch)
 	}
 }
 
 func TestRTTDegradesOnlyWhenSet(t *testing.T) {
-	slow := Sample{Peer: "a", Measured: true, RTT: 80 * time.Millisecond}
+	slow := HopSample{Peer: "a", Measured: true, RTT: 80 * time.Millisecond}
 	h := NewHealth([]HealthSpec{spec("a", "b")})
-	h.Update(t0, []Sample{slow})
+	h.Update(t0, []HopSample{slow})
 	if h.Snapshot(t0)["ix-lab"].Peers["a"].Degraded {
 		t.Fatal("slow peer degraded with rtt_ms off")
 	}
 	sp := spec("a", "b")
 	sp.RTT = 50 * time.Millisecond
 	h = NewHealth([]HealthSpec{sp})
-	h.Update(t0, []Sample{slow})
+	h.Update(t0, []HopSample{slow})
 	if !h.Snapshot(t0)["ix-lab"].Peers["a"].Degraded {
 		t.Fatal("slow peer not degraded with rtt_ms 50")
 	}
@@ -100,8 +100,8 @@ func TestRTTDegradesOnlyWhenSet(t *testing.T) {
 
 func TestUnmeasuredSamplesDoNotCount(t *testing.T) {
 	h := NewHealth([]HealthSpec{spec("a", "b", "c")})
-	none := func(p string) Sample { return Sample{Peer: p} }
-	if ch := h.Update(t0, []Sample{none("a"), none("b"), none("c")}); len(ch) != 0 {
+	none := func(p string) HopSample { return HopSample{Peer: p} }
+	if ch := h.Update(t0, []HopSample{none("a"), none("b"), none("c")}); len(ch) != 0 {
 		t.Fatalf("prober errors raised %+v", ch)
 	}
 	snap := h.Snapshot(t0)["ix-lab"]
@@ -114,7 +114,7 @@ func TestSinglePeerExchangeNeverDegrades(t *testing.T) {
 	sp := spec("a")
 	sp.MinPeers, sp.MinPercent = 2, 1
 	h := NewHealth([]HealthSpec{sp})
-	if ch := h.Update(t0, []Sample{lost("a", 100)}); len(ch) != 0 {
+	if ch := h.Update(t0, []HopSample{lost("a", 100)}); len(ch) != 0 {
 		t.Fatalf("one member is not the exchange: %+v", ch)
 	}
 }
@@ -122,14 +122,14 @@ func TestSinglePeerExchangeNeverDegrades(t *testing.T) {
 func TestMinPeersAboveSizeIsCapped(t *testing.T) {
 	// Two peers with the default MinPeers 3 can still raise the alert.
 	h := NewHealth([]HealthSpec{spec("a", "b")})
-	if ch := h.Update(t0, []Sample{lost("a", 100), lost("b", 100)}); len(ch) != 1 || !ch[0].Degraded {
+	if ch := h.Update(t0, []HopSample{lost("a", 100), lost("b", 100)}); len(ch) != 1 || !ch[0].Degraded {
 		t.Fatalf("both peers of a two-peer exchange down = %+v", ch)
 	}
 }
 
 func TestUnknownPeerSampleIgnored(t *testing.T) {
 	h := NewHealth([]HealthSpec{spec("a", "b")})
-	h.Update(t0, []Sample{lost("zzz", 100)})
+	h.Update(t0, []HopSample{lost("zzz", 100)})
 	if got := h.Snapshot(t0)["ix-lab"]; len(got.DegradedPeers) != 0 || len(got.Peers) != 2 {
 		t.Fatalf("snapshot = %+v", got)
 	}

@@ -60,6 +60,7 @@ func (s *Server) routeTable() []route {
 		{"GET /api/commit", viewer, s.handleCommit},
 		{"GET /api/inbound", viewer, s.handleInbound},
 		{"GET /api/exchanges", viewer, s.handleExchanges},
+		{"GET /api/exchanges/member", viewer, s.handleExchangeMember},
 		{"GET /api/linkouts", viewer, s.handleLinkouts},
 		{"GET /api/federation", viewer, s.handleFederation},
 		{"GET /api/ha", viewer, s.handleHA},

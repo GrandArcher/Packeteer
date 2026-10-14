@@ -19,9 +19,14 @@ func TestExchangePageIsReadOnly(t *testing.T) {
 			t.Errorf("viewer GET %s = %d", path, rec.Code)
 		}
 	}
+	// #156: the member comparison is open to the viewer. This server has
+	// no such exchange, so the answer is a 404, not a refusal.
+	if rec, _ := e.do(t, "GET", "/api/exchanges/member?exchange=ix-lab&next_hop=203.0.113.11", viewer, nil); rec.Code != http.StatusNotFound {
+		t.Errorf("viewer GET /api/exchanges/member = %d, want 404", rec.Code)
+	}
 	rec, _ := e.do(t, "GET", "/exchanges.js", viewer, nil)
 	js := rec.Body.String()
-	for _, want := range []string{`getJSON("/api/exchanges")`, `"/api/reports/exchanges?days="`, `p.reach`, `data-degraded`} {
+	for _, want := range []string{`getJSON("/api/exchanges")`, `"/api/reports/exchanges?days="`, `p.reach`, `data-degraded`, `"/api/exchanges/member?exchange="`} {
 		if !strings.Contains(js, want) {
 			t.Errorf("exchanges.js missing %q", want)
 		}
@@ -32,8 +37,10 @@ func TestExchangePageIsReadOnly(t *testing.T) {
 		}
 	}
 	for _, method := range []string{"POST", "PUT", "DELETE"} {
-		if rec, _ := e.do(t, method, "/api/exchanges", plugin.RoleAdmin, nil); rec.Code == http.StatusOK {
-			t.Errorf("%s /api/exchanges = %d, want a refusal", method, rec.Code)
+		for _, path := range []string{"/api/exchanges", "/api/exchanges/member"} {
+			if rec, _ := e.do(t, method, path, plugin.RoleAdmin, nil); rec.Code == http.StatusOK {
+				t.Errorf("%s %s = %d, want a refusal", method, path, rec.Code)
+			}
 		}
 	}
 }

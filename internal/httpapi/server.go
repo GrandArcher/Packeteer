@@ -138,6 +138,9 @@ type Server struct {
 	// until SetSearchRIB.
 	searchRIB atomic.Pointer[SearchRIB]
 	searches  searchLimiters
+	// exMembers is the member comparison of the exchange view (#156). Nil
+	// until SetExchangeMembers.
+	exMembers atomic.Pointer[ExchangeMembers]
 	// quarantine releases a flap-quarantined prefix (#228). Nil until
 	// SetQuarantine.
 	quarantine atomic.Value

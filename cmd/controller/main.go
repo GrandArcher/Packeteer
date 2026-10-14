@@ -629,7 +629,7 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 	col.SetTruncated(func() map[string]uint64 { return truncated(plugins) })
 	col.Attach(engine, decider, view)
 	httpSrv.SetQuarantine(quarantineControl{decider: decider, out: dispatch, poke: poke, now: time.Now})
-	wireExchanges(cfg, col, view)
+	wireExchanges(ctx, cfg, col, httpSrv, view)
 	hopTargets, ixHealth := exchangeHealth(cfg)
 	col.SetExchangeHealth(ixHealth)
 	wireSuggestions(cfg, httpSrv, view)
@@ -895,8 +895,9 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 
 // wireExchanges gives the ops API the exchange statistics (#27). The next
 // hop counts walk every learned path, so they are rebuilt only when the
-// RIB generation changes.
-func wireExchanges(cfg *config.Config, col *httpapi.Collector, view *rib.View) {
+// RIB generation changes. It also starts the member availability history
+// (#156), which stops with ctx.
+func wireExchanges(ctx context.Context, cfg *config.Config, col *httpapi.Collector, srv *httpapi.Server, view *rib.View) {
 	if len(cfg.Exchanges) == 0 || view == nil {
 		return
 	}
@@ -917,7 +918,7 @@ func wireExchanges(cfg *config.Config, col *httpapi.Collector, view *rib.View) {
 	var gen uint64
 	var cached []rib.NextHopCount
 	built := false
-	col.SetExchanges(exs, func() []rib.NextHopCount {
+	hops := func() []rib.NextHopCount {
 		g := view.Generation()
 		mu.Lock()
 		defer mu.Unlock()
@@ -925,7 +926,13 @@ func wireExchanges(cfg *config.Config, col *httpapi.Collector, view *rib.View) {
 			cached, gen, built = view.NextHops(lans), g, true
 		}
 		return cached
-	})
+	}
+	col.SetExchanges(exs, hops)
+
+	// Member counts over time (#156): in memory, read-only.
+	hist := exchange.NewHistory()
+	srv.SetExchangeMembers(httpapi.ExchangeMembers{History: hist, Prefixes: view.MemberPrefixes})
+	go hist.Run(ctx, exchange.SampleEvery, func() []exchange.Stats { return exchange.Build(exs, hops(), nil, nil, nil) })
 }
 
 // wireSuggestions gives the settings form next hops seen on iBGP or BMP

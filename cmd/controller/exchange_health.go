@@ -56,9 +56,9 @@ func healthRound(ctx context.Context, p *probe.Engine, h *exchange.Health, targe
 	if ctx.Err() != nil {
 		return
 	}
-	samples := make([]exchange.Sample, 0, len(results))
+	samples := make([]exchange.HopSample, 0, len(results))
 	for _, r := range results {
-		samples = append(samples, exchange.Sample{Peer: r.Provider, Measured: r.Err == "",
+		samples = append(samples, exchange.HopSample{Peer: r.Provider, Measured: r.Err == "",
 			LossPct: r.Stats.LossPct, RTT: r.Stats.RTTAvg})
 	}
 	t := now()

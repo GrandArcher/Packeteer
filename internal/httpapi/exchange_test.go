@@ -85,7 +85,7 @@ func TestExchangeHealthEndpointAndMetrics(t *testing.T) {
 	now := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
 	h := exchange.NewHealth([]exchange.HealthSpec{{Exchange: "ix-lab", Peers: []string{"ix-peer-a", "ix-peer-b", "ix-peer-c"},
 		HealthOptions: exchange.HealthOptions{LossPct: 50, MinPeers: 2, Window: 5 * time.Minute}}})
-	h.Update(now, []exchange.Sample{
+	h.Update(now, []exchange.HopSample{
 		{Peer: "ix-peer-a", Measured: true, RTT: 4 * time.Millisecond},
 		{Peer: "ix-peer-b", Measured: true, LossPct: 100},
 		{Peer: "ix-peer-c", Measured: true, LossPct: 100},

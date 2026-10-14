@@ -3,7 +3,7 @@
     {
       "name": "ix-lab",
       "lans": ["203.0.113.0/24"],
-      "prefixes": 14,
+      "prefixes": 18,
       "improvements": 2,
       "degraded": true,
       "degraded_peers": ["ix-peer-a", "ix-peer-b"],
@@ -13,6 +13,7 @@
           "name": "ix-peer-a", "asn": 64501, "next_hop": "203.0.113.11", "prefixes": 8, "up": true, "improvements": 2,
           "moved_mbps": 42.5, "via": "bilateral",
           "reach": {"state": "reachable", "loss_pct": 60, "rtt_ms": 2.5, "degraded": true, "checked": "2026-10-07T12:00:00Z"},
+          "availability": {"route_server_only": 2, "bilateral_only": 3, "both": 3, "flag": "rs_partial"},
           "moves": [
             {"prefix": "192.0.2.0/24", "since": "2026-10-07T10:00:00Z", "volume_mbps": 30.5},
             {"prefix": "198.51.100.0/24", "since": "2026-10-07T11:30:00Z", "volume_mbps": 12}
@@ -21,7 +22,13 @@
         {
           "name": "ix-peer-b", "asn": 64502, "observed_asn": 64599, "next_hop": "203.0.113.12", "prefixes": 3, "up": false, "improvements": 0,
           "moved_mbps": 0, "via": "route_server", "moves": [],
-          "reach": {"state": "unreachable", "loss_pct": 100, "rtt_ms": 0, "degraded": true, "checked": "2026-10-07T12:00:00Z"}
+          "reach": {"state": "unreachable", "loss_pct": 100, "rtt_ms": 0, "degraded": true, "checked": "2026-10-07T12:00:00Z"},
+          "availability": {"route_server_only": 3, "bilateral_only": 0, "both": 0}
+        },
+        {
+          "name": "ix-peer-c", "asn": 64504, "next_hop": "203.0.113.14", "prefixes": 4, "up": true, "improvements": 0,
+          "moved_mbps": 0, "via": "bilateral", "moves": [],
+          "availability": {"route_server_only": 0, "bilateral_only": 4, "both": 0, "flag": "rs_missing"}
         }
       ],
       "discovered": [

@@ -3,14 +3,26 @@
 // its peers, the improvements onto them with the Mbps they move, and the
 // members on the peering LAN that are not peers. Each peer shows the last
 // probe of its next hop (#149), and an exchange where enough peers fail it
-// says so. Reads GET /api/exchanges and the stored exchanges report.
-// Read-only. Rows are built with textContent only. Uses getJSON, el, clear,
-// and fmtTime from app.js. No inline script: the CSP allows scripts from this
-// origin only.
+// says so. Per member it compares the prefixes seen via the route server,
+// bilaterally, or both (#156). Reads GET /api/exchanges, GET
+// /api/exchanges/member, and the stored exchanges report. Read-only. Rows
+// are built with textContent only. Uses getJSON, el, clear, and fmtTime from
+// app.js. No inline script: the CSP allows scripts from this origin only.
 
 var EXCHANGE_REFRESH_MS = 5000;
 var EXCHANGE_REPORT_DAYS = 7;
 var VIA_LABELS = {route_server: "route server", bilateral: "bilateral", unknown: "unknown"};
+var FLAG_LABELS = {
+  rs_partial: ["RS partial", "Some prefixes arrive only bilaterally. The route server feed is partial or filtered."],
+  rs_missing: ["RS missing", "No path arrives via a route server, though the exchange has one for other members. The feed is filtered or the member is not on it."]
+};
+var MEMBER_CLASSES = [
+  ["route_server_only", "Only via the route server"],
+  ["bilateral_only", "Only bilateral"],
+  ["both", "Both"]
+];
+var MEMBER_HISTORY_ROWS = 12;
+var openMembers = {};
 
 function exMbps(v) {
   return v > 0 ? Number(v).toFixed(1) + " Mbps" : "—";
@@ -45,7 +57,7 @@ function exReachCell(r) {
   return exCell(text, r.degraded ? "bad" : "");
 }
 
-function exPeerRow(p) {
+function exPeerRow(exName, p) {
   var asn = exCell("AS" + p.asn, "mono");
   if (p.observed_asn) {
     var mismatch = el("span", "badge warn", "sees AS" + p.observed_asn);
@@ -56,7 +68,67 @@ function exPeerRow(p) {
   up.appendChild(el("span", p.up ? "dot up" : "dot down", p.up ? "up" : "down"));
   var moved = p.improvements > 0 && !(p.moved_mbps > 0) ? "unknown" : exMbps(p.moved_mbps);
   return [exCell(p.name), asn, exCell(p.next_hop, "mono"), exCell(VIA_LABELS[p.via] || p.via || "unknown"), exCell(p.prefixes), up, exReachCell(p.reach),
-    exCell(p.improvements), exCell(moved)];
+    exCell(p.improvements), exCell(moved), exCell(p.availability.route_server_only), exCell(p.availability.bilateral_only), exCell(p.availability.both),
+    exFlagCell(p.availability), exMemberButton(exName, p.next_hop)];
+}
+
+function exFlagCell(a) {
+  var td = el("td");
+  var f = FLAG_LABELS[a.flag];
+  if (f) {
+    var badge = el("span", "badge warn", f[0]);
+    badge.title = f[1];
+    td.appendChild(badge);
+  }
+  return td;
+}
+
+// The prefixes and recorded counts of one peer. Nothing is written. The
+// answer is fetched once per click: it takes three walks of the RIB's BMP
+// table, so the 5 second refresh redraws the kept answer instead.
+function exMemberButton(exName, nextHop) {
+  var key = exName + "/" + nextHop;
+  var cell = el("td");
+  var btn = el("button", "", "Compare");
+  btn.type = "button";
+  var detail = openMembers[key] || el("div");
+  detail.setAttribute("data-member", key);
+  btn.addEventListener("click", function () {
+    if (openMembers[key]) {
+      delete openMembers[key];
+      detail.remove();
+      return;
+    }
+    openMembers[key] = detail;
+    loadMember(exName, nextHop, detail);
+  });
+  cell.appendChild(btn);
+  cell.appendChild(detail);
+  return cell;
+}
+
+function loadMember(exName, nextHop, box) {
+  var base = "/api/exchanges/member?exchange=" + encodeURIComponent(exName) + "&next_hop=" + encodeURIComponent(nextHop);
+  Promise.all(MEMBER_CLASSES.map(function (c) { return getJSON(base + "&class=" + c[0] + "&limit=50"); })).then(function (answers) {
+    clear(box);
+    var hist = (answers[0].history || []).slice(-MEMBER_HISTORY_ROWS);
+    box.appendChild(el("p", "tag", "Loaded " + fmtTime(new Date().toISOString()) + ". Counts every 15 minutes, kept in memory (a restart empties them). Close and open Compare to reload."));
+    if (hist.length) {
+      box.appendChild(exTable(["At", "RS only", "Bilateral only", "Both"], hist.map(function (h) {
+        return [exCell(fmtTime(h.at)), exCell(h.route_server_only), exCell(h.bilateral_only), exCell(h.both)];
+      })));
+    }
+    answers.forEach(function (a, i) {
+      var list = a.prefixes || [];
+      var total = a.prefixes_total || 0;
+      var more = total > list.length ? " (first " + list.length + " of " + total + ")" : "";
+      box.appendChild(el("h5", "", MEMBER_CLASSES[i][1] + ": " + total + more));
+      if (list.length) box.appendChild(el("p", "mono", list.join(" ")));
+    });
+  }, function (err) {
+    clear(box);
+    box.appendChild(el("p", "bad", err.message));
+  });
 }
 
 function renderExchange(root, ex) {
@@ -76,7 +148,8 @@ function renderExchange(root, ex) {
   if (!peers.length) {
     section.appendChild(el("p", "empty", "No peers in the config."));
   } else {
-    section.appendChild(exTable(["Peer", "AS", "Next hop", "Type", "Prefixes", "Probe source", "Next-hop probe", "Improvements", "Moved"], peers.map(exPeerRow)));
+    section.appendChild(exTable(["Peer", "AS", "Next hop", "Type", "Prefixes", "Probe source", "Next-hop probe", "Improvements", "Moved", "RS only", "Bilateral only", "Both", "RS feed", ""],
+      peers.map(function (p) { return exPeerRow(ex.name, p); })));
   }
 
   var moves = [];
