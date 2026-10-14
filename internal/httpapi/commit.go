@@ -19,9 +19,10 @@ type UsageReader interface {
 }
 
 // commitProvider is one telemetry binding: the figures of /api/telemetry,
-// the billable 95th as commit control reads it, the drawn points, and the
-// commit moves. Points is empty when no sample is stored; Moves when
-// nothing moved or history is off.
+// the billable 95th as commit control reads it (absent without a stored
+// sample or a positive commit), the drawn points, and the commit moves.
+// Points is empty when no sample is stored; Moves when nothing moved or
+// history is off.
 type commitProvider struct {
 	Telemetry
 	BillableMbps *float64           `json:"billable_mbps,omitempty"`
@@ -47,6 +48,7 @@ func (s *Server) handleCommit(w http.ResponseWriter, r *http.Request) {
 	from := to.Add(-time.Duration(days) * 24 * time.Hour)
 
 	var moves []history.ImprovementRow
+	var movesTruncated bool
 	if s.reports != nil {
 		rep, err := s.reports.Report(r.Context(), history.Query{Name: history.ReportImprovements, From: from, To: to, Now: to, Cause: plugin.CauseCommit, Limit: history.MaxLimit})
 		if err != nil {
@@ -55,15 +57,16 @@ func (s *Server) handleCommit(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		moves, _ = rep.Rows.([]history.ImprovementRow)
+		movesTruncated = rep.Total > len(moves)
 	}
 	out := make([]commitProvider, 0, len(snap.Telemetry))
 	for _, t := range snap.Telemetry {
 		row := commitProvider{Telemetry: t, Points: []commitview.Point{}, Moves: commitview.Moves(moves, t.Provider, from, step)}
-		switch {
-		case t.UsageMbps != nil:
-			row.BillableMbps = t.UsageMbps
-		case t.Samples > 0:
-			v := t.OutMbps95
+		u := plugin.Usage{Samples: t.Samples, CommitMbps: t.CommitMbps, Single: t.UsageMbps != nil, OutMbps95: t.OutMbps95}
+		if t.UsageMbps != nil {
+			u.UsageMbps = *t.UsageMbps
+		}
+		if v, ok := u.BillableMbps(); ok {
 			row.BillableMbps = &v
 		}
 		if s.usage != nil && t.Host != "" && t.Interface != "" {
@@ -86,8 +89,9 @@ func (s *Server) handleCommit(w http.ResponseWriter, r *http.Request) {
 		StepSeconds int              `json:"step_seconds"`
 		Samples     bool             `json:"samples_stored"`
 		Moves       bool             `json:"moves_recorded"`
+		Truncated   bool             `json:"moves_truncated,omitempty"`
 		Providers   []commitProvider `json:"providers"`
-	}{m, days, from, to, int(step / time.Second), s.usage != nil, s.reports != nil, out})
+	}{m, days, from, to, int(step / time.Second), s.usage != nil, s.reports != nil, movesTruncated, out})
 }
 
 // usageSamples returns the binding's samples in [from, to] and, when the

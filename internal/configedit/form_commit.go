@@ -254,9 +254,9 @@ func (p FormCommitProvider) validate(hosts map[string]bool) error {
 	return fmt.Errorf("%w: %s: percentile %q is invalid (want separate, greater, or greater_separate)", ErrForm, label, p.Percentile)
 }
 
-// checkCommitChange refuses an edit to an SNMP host that is already in the
-// file. The setup shows those hosts for choosing; their address and
-// credentials stay in the YAML.
+// checkCommitChange refuses an edit to, or the removal of, an SNMP host that
+// is already in the file. The setup shows those hosts for choosing; their
+// address and credentials stay in the YAML.
 func (f Form) checkCommitChange(cur Form) error {
 	if f.Commit == nil || cur.Commit == nil {
 		return nil
@@ -265,7 +265,9 @@ func (f Form) checkCommitChange(cur Form) error {
 	for _, h := range cur.Commit.Hosts {
 		old[h.Key] = h
 	}
+	kept := map[string]bool{}
 	for _, h := range f.Commit.Hosts {
+		kept[h.Key] = true
 		if h.Key == "" {
 			if _, dup := old[h.Name]; dup {
 				return fmt.Errorf("%w: SNMP host %s is already in the file; choose it instead of adding it", ErrForm, h.Name)
@@ -274,6 +276,11 @@ func (f Form) checkCommitChange(cur Form) error {
 		}
 		if o, ok := old[h.Key]; !ok || o != h {
 			return fmt.Errorf("%w: SNMP host %s is edited in the YAML (its address, version, and credentials stay there)", ErrForm, h.Key)
+		}
+	}
+	for key := range old {
+		if !kept[key] {
+			return fmt.Errorf("%w: SNMP host %s is removed in the YAML, not in the form", ErrForm, key)
 		}
 	}
 	return nil

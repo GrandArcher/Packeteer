@@ -196,6 +196,42 @@ func TestCommitSetupEditsExistingBindingAndLeavesHosts(t *testing.T) {
 	if _, err := ApplyForm([]byte(formYAML), f); err == nil || !strings.Contains(err.Error(), "already in the file") {
 		t.Fatalf("duplicate host: %v", err)
 	}
+	f, _ = ParseForm([]byte(formYAML))
+	f.Commit.Hosts = []FormCommitHost{}
+	if _, err := ApplyForm([]byte(formYAML), f); err == nil || !strings.Contains(err.Error(), "removed in the YAML") {
+		t.Fatalf("dropped host: %v", err)
+	}
+}
+
+func TestCommitScorerSwitchFromCostToCommit(t *testing.T) {
+	f, err := ParseForm([]byte(formYAML))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if f.ScorerType != "cost" || f.Precedence == "" {
+		t.Fatalf("fixture scorer %q precedence %q", f.ScorerType, f.Precedence)
+	}
+	// What the Commit setup posts: the cost knobs are cleared with the switch.
+	commitRow(&f, "transit-a").BillingDay, commitRow(&f, "transit-a").Percentile = "1", "greater"
+	f.Commit.Scorer, f.Commit.Balance = "commit", "equal"
+	f.Precedence, f.FloorLossPct, f.FloorRTT = "", "", ""
+	out, err := ApplyForm([]byte(formYAML), f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Parse(out)
+	if err != nil {
+		t.Fatalf("parse: %v\n%s", err, out)
+	}
+	keys := scorerKeys(t, cfg)
+	if cfg.Scorer.Type != "commit" || keys["balance"] != "equal" {
+		t.Fatalf("scorer = %s %v", cfg.Scorer.Type, keys)
+	}
+	for _, k := range []string{"precedence", "floor_max_loss_pct", "floor_max_rtt"} {
+		if _, left := keys[k]; left {
+			t.Fatalf("cost-only key %s survived: %v", k, keys)
+		}
+	}
 }
 
 func TestCommitScorerSwitchDropsOtherScorersKeys(t *testing.T) {

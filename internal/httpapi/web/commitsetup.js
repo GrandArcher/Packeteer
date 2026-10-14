@@ -11,15 +11,25 @@ var CS_PERCENTILES = [["greater_separate", "greater of the in and out 95th"], ["
 
 function csKey(p) { return p.key || p.name; }
 
+var csRows = new WeakMap();
+
 // csRow is the commit row of a form provider. A provider the form just
-// added has none yet.
+// added has none yet. The row is remembered per provider object because
+// csSync renames it to the provider's edited name, after which the file
+// name no longer finds it.
 function csRow(p) {
+  var known = csRows.get(p);
+  if (known) return known;
   var rows = form.commit.providers;
-  for (var i = 0; i < rows.length; i++) {
-    if (rows[i].name === csKey(p)) return rows[i];
+  var row = null;
+  for (var i = 0; i < rows.length && !row; i++) {
+    if (rows[i].name === csKey(p)) row = rows[i];
   }
-  var row = {name: csKey(p), host: "", interface: "", billing_day: "", percentile: "", group: "", precedence: "", cc_disable: false};
-  rows.push(row);
+  if (!row) {
+    row = {name: csKey(p), host: "", interface: "", billing_day: "", percentile: "", group: "", precedence: "", cc_disable: false};
+    rows.push(row);
+  }
+  csRows.set(p, row);
   return row;
 }
 

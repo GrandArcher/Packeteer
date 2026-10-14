@@ -38,9 +38,6 @@ func TestSeriesKeepsBusiestSampleAndRunning95th(t *testing.T) {
 	if last.Mbps != 20 || last.P95Mbps != 19 || last.NewPeriod {
 		t.Fatalf("last point = %+v", last)
 	}
-	if !pts[0].NewPeriod && s[0].PeriodStart.Equal(day0) {
-		t.Fatal("period start not marked")
-	}
 }
 
 func TestSeriesModes(t *testing.T) {

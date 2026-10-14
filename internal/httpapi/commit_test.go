@@ -70,6 +70,7 @@ type commitBody struct {
 	StepSeconds int       `json:"step_seconds"`
 	Samples     bool      `json:"samples_stored"`
 	Moves       bool      `json:"moves_recorded"`
+	Truncated   bool      `json:"moves_truncated"`
 	Providers   []struct {
 		Telemetry
 		BillableMbps *float64           `json:"billable_mbps"`
@@ -193,6 +194,8 @@ type commitReports struct {
 	ReportSource
 	err  error
 	last history.Query
+	// cap, when set, cuts the report to that many rows as the real limit does.
+	cap int
 }
 
 func (c *commitReports) Report(_ context.Context, q history.Query) (history.Report, error) {
@@ -209,6 +212,9 @@ func (c *commitReports) Report(_ context.Context, q history.Query) (history.Repo
 		rec("3", "203.0.113.0/24", "transit-b", "transit-a", plugin.CausePerformance, "observe", 2*time.Hour),
 		rec("4", "192.0.2.0/24", "transit-b", "transit-a", plugin.CauseCommit, "observe", 40*24*time.Hour),
 	}}
+	if c.cap > 0 {
+		q.Limit = c.cap
+	}
 	return history.Build(h, q)
 }
 
@@ -228,6 +234,31 @@ func TestCommitMarksWhereCommitControlMovedTraffic(t *testing.T) {
 	}
 	if len(b.Points) != 0 {
 		t.Fatalf("transit-b has no stored samples but %d points", len(b.Points))
+	}
+	if got.Truncated {
+		t.Fatal("moves_truncated set though every row was read")
+	}
+}
+
+func TestCommitSaysWhenTheHistoryWasCut(t *testing.T) {
+	s := commitServer(t, []Telemetry{binding("transit-a", nil)}, nil, &commitReports{cap: 1})
+	_, got := getCommit(t, s, "?days=7")
+	if !got.Truncated {
+		t.Fatal("two matching rows, one read, and no sign of it")
+	}
+}
+
+func TestCommitBillableNeedsAPositiveCommit(t *testing.T) {
+	none := binding("transit-a", nil)
+	none.CommitMbps = 0
+	single := 410.0
+	one := binding("transit-b", &single)
+	_, got := getCommit(t, commitServer(t, []Telemetry{none, one}, nil, nil), "")
+	if got.Providers[0].BillableMbps != nil {
+		t.Fatalf("billable %v with no commit", *got.Providers[0].BillableMbps)
+	}
+	if b := got.Providers[1].BillableMbps; b == nil || *b != 410 {
+		t.Fatalf("single-figure billable = %v", b)
 	}
 }
 

@@ -148,6 +148,9 @@ function renderCommitGraphs(root, data) {
   if (!data.samples_stored) {
     root.appendChild(el("p", "empty", "Samples are not stored, so there is no history to draw. Add storage: {type: sqlite} to the config and mount /var/lib/packeteer. The figures above are the open billing period."));
   }
+  if (data.moves_truncated) {
+    root.appendChild(el("p", "empty", "The improvement history is longer than one report can return, so the moves below are incomplete."));
+  }
   data.providers.forEach(function (p) {
     var pts = p.points || [];
     var fig = el("figure", "ts-fig usage-fig");
