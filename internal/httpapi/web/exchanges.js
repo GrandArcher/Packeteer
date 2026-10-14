@@ -6,13 +6,19 @@
 // says so. Per member it compares the prefixes seen via the route server,
 // bilaterally, or both (#156). Reads GET /api/exchanges, GET
 // /api/exchanges/member, and the stored exchanges report. The offload
-// section (#152) reads GET /api/exchanges/offload. Read-only. Rows are built
+// section (#152) reads GET /api/exchanges/offload and the potential-peers
+// section (#154) GET /api/exchanges/potential-peers. Read-only. Rows are built
 // with textContent only. Uses getJSON, el, clear, and fmtTime from app.js. No
 // inline script: the CSP allows scripts from this origin only.
 
 var EXCHANGE_REFRESH_MS = 5000;
 var EXCHANGE_REPORT_DAYS = 7;
 var OFFLOAD_ROWS = 100;
+var POTENTIAL_ROWS = 50;
+var POTENTIAL_GROUPS = [
+  ["route_server", "On the route server: check our route server session or filters"],
+  ["bilateral", "Bilateral only: candidate for a peering request"]
+];
 var VIA_LABELS = {route_server: "route server", bilateral: "bilateral", unknown: "unknown"};
 var FLAG_LABELS = {
   rs_partial: ["RS partial", "Some prefixes arrive only bilaterally. The route server feed is partial or filtered."],
@@ -225,8 +231,51 @@ function loadOffload() {
   });
 }
 
+function potentialMembers(r) {
+  return (r.members || []).map(function (m) {
+    return m.exchange + "/" + (m.peer || m.next_hop) + " (" + (VIA_LABELS[m.via] || m.via) + ")";
+  }).join(", ");
+}
+
+function renderPotential(groups) {
+  var root = document.getElementById("potential");
+  var note = document.getElementById("potential-note");
+  clear(root);
+  var any = false;
+  groups.forEach(function (g) {
+    var rows = g.rep.rows || [];
+    if (!rows.length) return;
+    any = true;
+    var title = g.title + " (" + g.rep.asns + " ASNs" + (g.rep.truncated ? ", first " + rows.length : "") + ")";
+    root.appendChild(el("h3", "", title));
+    root.appendChild(exTable(["AS", "Bytes", "Rate", "Prefixes on the LAN", "Members"], rows.map(function (r) {
+      return [exCell("AS" + r.asn, "mono"), exCell(r.bytes), exCell(exMbps(r.mbps)), exCell(r.lan_prefixes + " of " + r.prefixes), exCell(potentialMembers(r))];
+    })));
+  });
+  var classes = (groups[0] && groups[0].rep.classes) || {};
+  var other = [];
+  if (classes.unknown) other.push(classes.unknown.asns + " on a LAN with an unknown session type");
+  if (classes.absent) other.push(classes.absent.asns + " not seen at an exchange");
+  var text = other.length ? "Also: " + other.join(", ") + ". The CSV lists them." : "";
+  if (!any) text = "No destination AS with traffic is on a route server or bilateral at an exchange. " + text;
+  note.textContent = text.trim();
+}
+
+function loadPotential() {
+  var calls = POTENTIAL_GROUPS.map(function (g) {
+    return getJSON("/api/exchanges/potential-peers?limit=" + POTENTIAL_ROWS + "&class=" + g[0]).then(function (rep) {
+      return {title: g[1], rep: rep};
+    });
+  });
+  Promise.all(calls).then(renderPotential, function (err) {
+    clear(document.getElementById("potential"));
+    document.getElementById("potential-note").textContent = err.status === 404 ? "No exchanges in the config." : err.message;
+  });
+}
+
 function loadExchanges() {
   loadOffload();
+  loadPotential();
   var status = document.getElementById("exchanges-status");
   getJSON("/api/exchanges").then(function (data) {
     status.textContent = "";

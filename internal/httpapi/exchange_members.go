@@ -17,11 +17,14 @@ const (
 // ExchangeMembers is what the exchange endpoints read beyond the snapshot:
 // for the member comparison (#156) the recorded counts and the prefixes of
 // one class (Prefixes is nil without a RIB view), and for the offload
-// report (#152) the report cut at a row limit.
+// report (#152) and the potential-peers report (#154) the report cut at a
+// row limit.
 type ExchangeMembers struct {
 	History  *exchange.History
 	Prefixes func(nh netip.Addr, class string, limit int) ([]netip.Prefix, int)
 	Offload  func(limit int) exchange.Offload
+	// PotentialPeers takes a class, "" for all.
+	PotentialPeers func(class string, limit int) exchange.PotentialPeers
 }
 
 // SetExchangeMembers attaches the member comparison reads. It may be

@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"net/http"
+	"net/url"
 	"strconv"
 
 	"github.com/GrandArcher/Packeteer/internal/exchange"
@@ -12,23 +13,9 @@ import (
 // exchange peer advertises the exact prefix, by bytes, as JSON or CSV.
 // Read-only: nothing is steered by it.
 func (s *Server) handleExchangeOffload(w http.ResponseWriter, r *http.Request) {
-	q := r.URL.Query()
-	format := q.Get("format")
-	if format != "" && format != "json" && format != "csv" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "format must be json or csv"})
+	format, limit, ok := exchangeReportParams(w, r.URL.Query())
+	if !ok {
 		return
-	}
-	limit := defaultExchangeRows
-	if format == "csv" {
-		limit = maxExchangeRows
-	}
-	if v := q.Get("limit"); v != "" {
-		n, err := strconv.Atoi(v)
-		if err != nil || n < 1 || n > maxExchangeRows {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "limit must be 1 to " + strconv.Itoa(maxExchangeRows)})
-			return
-		}
-		limit = n
 	}
 	m := s.exMembers.Load()
 	if m == nil || m.Offload == nil {
@@ -49,4 +36,27 @@ func (s *Server) handleExchangeOffload(w http.ResponseWriter, r *http.Request) {
 		meta
 		exchange.Offload
 	}{meta: s.snapshot().meta(), Offload: rep})
+}
+
+// exchangeReportParams reads format (json or csv) and limit of an exchange
+// report. The CSV defaults to the maximum rows. It writes the 400 itself.
+func exchangeReportParams(w http.ResponseWriter, q url.Values) (format string, limit int, ok bool) {
+	format = q.Get("format")
+	if format != "" && format != "json" && format != "csv" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "format must be json or csv"})
+		return "", 0, false
+	}
+	limit = defaultExchangeRows
+	if format == "csv" {
+		limit = maxExchangeRows
+	}
+	if v := q.Get("limit"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 1 || n > maxExchangeRows {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "limit must be 1 to " + strconv.Itoa(maxExchangeRows)})
+			return "", 0, false
+		}
+		limit = n
+	}
+	return format, limit, true
 }
