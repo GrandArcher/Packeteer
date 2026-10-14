@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -256,5 +257,43 @@ func TestMaintenanceFixturesMatchAPI(t *testing.T) {
 	}
 	if w := list.Windows[0]; w.ID != "api-3" || w.Source != "api" || !w.End.After(w.Start) {
 		t.Fatalf("open window = %+v", w)
+	}
+}
+
+// TestCommitDriverMatchesPage keeps the Commit setup driver (#174) in step
+// with the page it drives: it stubs nothing, injects into the settings page,
+// and every element id and field label it uses is in settings.html or
+// commitsetup.js, so a rename fails here and not as a timeout in CI.
+func TestCommitDriverMatchesPage(t *testing.T) {
+	f, err := loadFixtures("../ui-fixtures/commit")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(f.Stubs) != 0 || f.Inject.Page != "/settings.html" || len(f.driver) == 0 {
+		t.Fatalf("fixtures = %+v", f)
+	}
+	web := "../../internal/httpapi/web/"
+	page, err := os.ReadFile(web + "settings.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	script, err := os.ReadFile(web + "commitsetup.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	driver := string(f.driver)
+	ids := regexp.MustCompile(`byId\("([^"]+)"\)`).FindAllStringSubmatch(driver, -1)
+	if len(ids) == 0 {
+		t.Fatal("the driver uses no element")
+	}
+	for _, m := range ids {
+		if !strings.Contains(string(page), `id="`+m[1]+`"`) {
+			t.Errorf("driver uses #%s, which settings.html lacks", m[1])
+		}
+	}
+	for _, m := range regexp.MustCompile(`field\([^,]+, "([^"]+)"\)`).FindAllStringSubmatch(driver, -1) {
+		if !strings.Contains(string(script), `"`+m[1]+`"`) {
+			t.Errorf("driver looks for the label %q, which commitsetup.js lacks", m[1])
+		}
 	}
 }

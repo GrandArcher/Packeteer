@@ -506,7 +506,7 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 			Federation: fed.status, HA: haStatus,
 			ConfigEditor: editorAPI, Dashboards: dashboardStore(plugins), Subscriptions: subsAPI,
 			Setup: setupInfo(cfg, plugins), Upgrade: upgradeAPI, Linkouts: linkout.New(cfg.Linkouts),
-			System: systemFacts(plugins, &sysEngine, health),
+			System: systemFacts(plugins, &sysEngine, health), Usage: usageReader(plugins),
 		})
 		if err != nil {
 			log.Error("refusing to start", "err", err)

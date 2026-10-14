@@ -313,6 +313,18 @@ fieldset.form { border: 0; margin: 0; padding: 0; }
 .ts-key.ts-after { color: var(--up); }
 .ts-legend { margin: 6px 0; }
 .ts-key { margin-right: 16px; }
+.ts-line.usage-sample { stroke: var(--muted); stroke-width: 1; }
+.ts-line.usage-p95 { stroke: var(--up); stroke-width: 2.5; }
+.usage-dot.usage-sample { fill: var(--muted); }
+.usage-dot.usage-p95 { fill: var(--up); }
+.usage-commit { stroke: var(--down); stroke-width: 1.5; stroke-dasharray: 6 4; }
+.usage-move { stroke: var(--diff); stroke-width: 1.5; stroke-dasharray: 2 3; }
+.usage-move.usage-announced { stroke-dasharray: none; stroke-width: 2.5; }
+.ts-key.usage-sample { color: var(--muted); }
+.ts-key.usage-p95 { color: var(--up); }
+.ts-key.usage-commit-key { color: var(--down); }
+.usage-fig { margin: 0 0 14px; }
+.usage-moves { margin: 6px 0 0; padding-left: 20px; }
 .ts-data { margin-top: 8px; }
 .ts-data summary { cursor: pointer; }
 

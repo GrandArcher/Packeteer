@@ -65,6 +65,8 @@ type Form struct {
 	// #131: the inbound block and anomaly.rules, same rules.
 	Inbound *FormInbound `json:"inbound"`
 	Anomaly *FormAnomaly `json:"anomaly"`
+	// #174: the commit setup, same rules.
+	Commit *FormCommit `json:"commit"`
 }
 
 // FormProvider is one provider row. Key is the name in the file when the
@@ -143,6 +145,7 @@ func ParseForm(data []byte) (Form, error) {
 	if err := readExchanges(root, &f); err != nil {
 		return Form{}, err
 	}
+	readCommit(root, &f)
 	f.normalize()
 	return f, nil
 }
@@ -158,6 +161,9 @@ func ApplyForm(data []byte, form Form) ([]byte, error) {
 	form.normalize()
 	form.fillSections(cur)
 	if err := form.checkProtectionChange(cur); err != nil {
+		return nil, err
+	}
+	if err := form.checkCommitChange(cur); err != nil {
 		return nil, err
 	}
 	// Exchange peers are providers once the file loads, so they count here
@@ -178,10 +184,13 @@ func ApplyForm(data []byte, form Form) ([]byte, error) {
 	if err := applyScalars(root, form); err != nil {
 		return nil, err
 	}
-	if err := applyScorer(root, cur, form); err != nil {
+	if err := applyProviders(root, form); err != nil {
 		return nil, err
 	}
-	if err := applyProviders(root, form); err != nil {
+	if err := applyCommit(root, cur, form); err != nil {
+		return nil, err
+	}
+	if err := applyScorer(root, cur, form); err != nil {
 		return nil, err
 	}
 	if err := applyCommits(root, cur, form); err != nil {
@@ -510,6 +519,10 @@ func applyScorer(root *yaml.Node, cur, next Form) error {
 	switch typ {
 	case "", "weighted", "cost":
 	default:
+		if next.Precedence == "" && next.FloorLossPct == "" && next.FloorRTT == "" {
+			// The knobs are unused under this scorer; clearing them is no change.
+			return nil
+		}
 		return fmt.Errorf("%w: the cost floor and whether cost or performance wins are the cost scorer's knobs; this file uses scorer type %s. Change the scorer in the YAML if you mean to replace it", ErrForm, typ)
 	}
 	if next.Precedence == "" && next.FloorLossPct == "" && next.FloorRTT == "" {
@@ -842,32 +855,57 @@ func deleteKey(m *yaml.Node, key string) {
 	m.Content = append(m.Content[:i], m.Content[i+2:]...)
 }
 
-// bindingCommit is the first snmp telemetry binding's commit for name.
-// The secret (community, passphrase) is never read into the form.
-func bindingCommit(root *yaml.Node, name string) (string, bool) {
+// snmpConfigs are the config mappings of every snmp telemetry entry.
+func snmpConfigs(root *yaml.Node) []*yaml.Node {
 	seq, ok := sequenceChild(root, "telemetry")
 	if !ok {
-		return "", false
+		return nil
 	}
+	var out []*yaml.Node
 	for _, item := range seq.Content {
 		if item.Kind != yaml.MappingNode || scalar(item, "type") != "snmp" {
 			continue
 		}
-		cfg, ok := mappingChild(item, "config")
-		if !ok {
-			continue
+		if cfg, ok := mappingChild(item, "config"); ok {
+			out = append(out, cfg)
 		}
-		provs, ok := sequenceChild(cfg, "providers")
-		if !ok {
-			continue
-		}
-		for _, b := range provs.Content {
-			if b.Kind == yaml.MappingNode && scalar(b, "name") == name {
-				return scalar(b, "commit_mbps"), true
+	}
+	return out
+}
+
+// bindingNodes are the providers entries of every snmp telemetry entry.
+func bindingNodes(root *yaml.Node) []*yaml.Node {
+	var out []*yaml.Node
+	for _, cfg := range snmpConfigs(root) {
+		if provs, ok := sequenceChild(cfg, "providers"); ok {
+			for _, b := range provs.Content {
+				if b.Kind == yaml.MappingNode {
+					out = append(out, b)
+				}
 			}
 		}
 	}
-	return "", false
+	return out
+}
+
+// findBinding is the first snmp telemetry binding for name, or nil.
+func findBinding(root *yaml.Node, name string) *yaml.Node {
+	for _, b := range bindingNodes(root) {
+		if scalar(b, "name") == name {
+			return b
+		}
+	}
+	return nil
+}
+
+// bindingCommit is the first snmp telemetry binding's commit for name.
+// The secret (community, passphrase) is never read into the form.
+func bindingCommit(root *yaml.Node, name string) (string, bool) {
+	b := findBinding(root, name)
+	if b == nil {
+		return "", false
+	}
+	return scalar(b, "commit_mbps"), true
 }
 
 // rewriteBinding retargets snmp bindings from the provider's previous
@@ -876,39 +914,22 @@ func bindingCommit(root *yaml.Node, name string) (string, bool) {
 // refuses a clear instead of deleting a required field. Community strings
 // and passphrases are not read or written.
 func rewriteBinding(root *yaml.Node, from, to, commit string, commitChanged bool) int {
-	seq, ok := sequenceChild(root, "telemetry")
-	if !ok {
-		return 0
-	}
 	match := from
 	if match == "" {
 		match = to
 	}
 	n := 0
-	for _, item := range seq.Content {
-		if item.Kind != yaml.MappingNode || scalar(item, "type") != "snmp" {
+	for _, b := range bindingNodes(root) {
+		if scalar(b, "name") != match {
 			continue
 		}
-		cfg, ok := mappingChild(item, "config")
-		if !ok {
-			continue
+		if from != "" && from != to {
+			setOrDelete(b, "name", to, "!!str")
 		}
-		provs, ok := sequenceChild(cfg, "providers")
-		if !ok {
-			continue
+		if commitChanged && commit != "" {
+			setOrDelete(b, "commit_mbps", commit, "!!float")
 		}
-		for _, b := range provs.Content {
-			if b.Kind != yaml.MappingNode || scalar(b, "name") != match {
-				continue
-			}
-			if from != "" && from != to {
-				setOrDelete(b, "name", to, "!!str")
-			}
-			if commitChanged && commit != "" {
-				setOrDelete(b, "commit_mbps", commit, "!!float")
-			}
-			n++
-		}
+		n++
 	}
 	return n
 }

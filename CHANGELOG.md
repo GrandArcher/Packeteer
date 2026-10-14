@@ -6,6 +6,7 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 
 ### Added
 
+- Commit & Cost page and `GET /api/commit`: samples, running 95th, commit, and commit moves per provider for 1, 7, 30 days; Commit setup in Settings (#174).
 - Reports page: filters, sortable columns, CSV/XLSX export, and a dashboard widget (#178).
 - Reports API: an unknown parameter, a filter or `sort` the report does not take, or `limit` on an uncut report is a 400 (#178).
 - AS search matches an improvement recorded without an origin by its prefix's stored origin (#178).
