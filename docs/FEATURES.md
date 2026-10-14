@@ -26,13 +26,13 @@ Milestones:
 | v0.4 | 13 |
 | v0.6 | 9 |
 | v0.7 | 3 |
-| v0.8 | 6 |
+| v0.8 | 7 |
 | won't do | 2 |
-| **total** | 99 |
+| **total** | 100 |
 
 | Status | Count |
 |---|---|
-| done | 83 |
+| done | 84 |
 | partial | 9 |
 | in progress | 0 |
 | planned | 5 |
@@ -187,6 +187,7 @@ The `maintenance` policy excludes providers during cron-scheduled, one-off, or o
 | Probe multiplexing for large IXs (shared probe source with per-peer fwmark or DSCP) and PBR generator (Linux and router snippets, generation only) | planned | v0.8 | core (generator; never pushes to a router) | #157 | — |
 | Shared IX port: capacity, commit, and flat port cost across peers | planned | v0.8 | core (`exchanges[].port`) + scorer (`commit`, `cost`) | #151 | — |
 | Improvements to exchanges report: improvements per peer with Mbps moved | done (#148: the `exchanges` report and a table on `/providers.html`; Mbps is the prefix rate a target source reports, `—` when none does) | v0.8 | storage (`sqlite`) + UI | #148 | no |
+| IX LAN health: each peer's next hop is probed from the peer's `source_ip` every probe interval (within `probe.rate_limit_pps`); per-peer reachability, RTT, and loss; `exchange.degraded` when enough peers degrade inside a window | done (#149: `exchanges[].health`, `/api/exchanges` `reach`, `packeteer_exchange_peer_*` and `packeteer_exchange_degraded`, shown on `/providers.html`; measurement only, nothing is announced, withdrawn, or steered from it) | v0.8 | probe engine + core (`internal/exchange`) + notifier events | #149, #104, #124 | no |
 | Bgpd online reconfiguration (SIGHUP: add/remove/change iBGP sessions and the per-router table without touching other sessions) | done (lab-proven) | v0.3 | core + announcer (`gobgp`) + RIB | #27 | no (lab-proven) |
 | Online reconfiguration of core settings (thresholds, hold time, cap, policies, sources) without a restart or a withdraw | done (lab-proven) | v0.6 | core (`cmd/controller` reload, `internal/configedit`) | #128 | no (lab-proven) |
 
@@ -228,7 +229,7 @@ The FRR lab (`lab/e2e-multirouter.sh`: two edges, a reflector, two transits) pro
 
 Internet exchanges (#27, second half) are an `exchanges` list. Each peer is a provider with its own `next_hop` on the peering LAN, its own probe `source_ip`, and its AS. A peer carries only its own routes, so it is always route-checked: no improvement goes to it unless the router shows Packeteer the peer's own path for the exact prefix (first AS = the peer's `asn`), through iBGP add-path or BMP, and an active one is retired at once when that path goes; with no visible path the check fails closed. An exchange name in `bgp.neighbors[].providers` or `next_hops` stands for all its peers.
 
-Exchange statistics are live on `/api/exchanges` and `packeteer_exchange_*`: per peer, the prefixes seen through its next hop, a mismatched observed AS, probe health, and active improvements; and next hops on the peering LAN that are not configured (`discovered`), which are never probed or used. A peer is not assumed to be a route server (#146). Probe targets whose prefix is inside an exchange LAN are dropped (#145). A flow or span destination on a peering LAN is not aggregated into a probe prefix, and a pinned host on a LAN is not probed. Traceroute does not adopt a hop on a LAN. `allowlist.prefixes` may not overlap a LAN.
+Exchange statistics are live on `/api/exchanges` and `packeteer_exchange_*`: per peer, the prefixes seen through its next hop, a mismatched observed AS, probe health, and active improvements; and next hops on the peering LAN that are not configured (`discovered`), which are never probed or used. A peer is not assumed to be a route server (#146). Probe targets whose prefix is inside an exchange LAN are dropped (#145). A flow or span destination on a peering LAN is not aggregated into a probe prefix, and a pinned host on a LAN is not probed. Traceroute does not adopt a hop on a LAN. `allowlist.prefixes` may not overlap a LAN. Each peer's next hop is probed from its `source_ip` every probe interval and `exchange.degraded` fires when enough peers fail it inside a window (#149; [CONFIG.md](CONFIG.md#exchanges)).
 
 `packeteer_exchange_lan_targets_dropped` counts the omissions. Nothing is announced. Each learned path carries `via`: `route_server` when a BMP neighbor on the exchange LAN is not the path's next hop (the MED label names that neighbor), `bilateral` when the neighbor is the next hop, and `unknown` on an iBGP add-path or Loc-RIB path until BMP paths for the same next hop agree. `/api/exchanges` shows the same value per peer, `unknown` when the paths disagree or none have been seen. MED stays display-only. The route check is unchanged.
 

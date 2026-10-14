@@ -265,6 +265,10 @@ func TestExchangePageFixturesMatchAPI(t *testing.T) {
 		a.Improvements != len(a.Moves) || b.ObservedASN != 64599 || b.Up || b.Via != "route_server" {
 		t.Fatalf("peers = %+v", ex.Exchanges[0].Peers)
 	}
+	if st := ex.Exchanges[0]; !st.Degraded || len(st.DegradedPeers) != 2 || a.Reach.State != exchange.ReachReachable || a.Reach.LossPct != 60 ||
+		b.Reach.State != exchange.ReachUnreachable || !a.Reach.Degraded || !b.Reach.Degraded {
+		t.Fatalf("health = %+v", st)
+	}
 	var rep struct {
 		Report string                `json:"report"`
 		From   string                `json:"from"`

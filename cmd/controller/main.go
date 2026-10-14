@@ -630,6 +630,8 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 	col.Attach(engine, decider, view)
 	httpSrv.SetQuarantine(quarantineControl{decider: decider, out: dispatch, poke: poke, now: time.Now})
 	wireExchanges(cfg, col, view)
+	hopTargets, ixHealth := exchangeHealth(cfg)
+	col.SetExchangeHealth(ixHealth)
 	wireSuggestions(cfg, httpSrv, view)
 	wireMitigationCandidates(httpSrv, mit, view)
 	// Active/standby (#31): registered before the elector starts. A
@@ -657,6 +659,10 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 	}
 	if subs != nil && rec != nil {
 		go subs.Run(ctx)
+	}
+	if ixHealth != nil {
+		go runExchangeHealth(ctx, engine, ixHealth, hopTargets, func() time.Duration { return engine.TimingNow().Interval },
+			func(ev plugin.Event) { dispatch.Emit(ev) })
 	}
 	col.SetStarted(true)
 	defer col.SetStarted(false)

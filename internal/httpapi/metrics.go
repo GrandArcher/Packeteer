@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/GrandArcher/Packeteer/internal/exchange"
 	"github.com/GrandArcher/Packeteer/internal/mitigation"
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
 )
@@ -192,17 +193,34 @@ func Metrics(s Snapshot) []byte {
 		writeGauge(&b, "packeteer_bgp_session", "1 if the iBGP session is currently in this FSM state.", sessionState...)
 	}
 
-	var ixPrefixes, ixImps, ixDiscovered []sample
+	var ixPrefixes, ixImps, ixDiscovered, ixReach, ixRTT, ixLoss, ixDegraded []sample
 	for _, ex := range s.Exchanges {
+		probed := false
 		for _, p := range ex.Peers {
 			l := []lbl{{"exchange", ex.Name}, {"peer", p.Name}}
 			ixPrefixes = append(ixPrefixes, sample{labels: l, value: float64(p.Prefixes)})
 			ixImps = append(ixImps, sample{labels: l, value: float64(p.Improvements)})
+			if p.Reach.State == exchange.ReachUnknown {
+				continue
+			}
+			probed = true
+			ixReach = append(ixReach, sample{labels: l, value: boolFloat(p.Reach.State == exchange.ReachReachable)})
+			ixLoss = append(ixLoss, sample{labels: l, value: p.Reach.LossPct})
+			if p.Reach.State == exchange.ReachReachable {
+				ixRTT = append(ixRTT, sample{labels: l, value: p.Reach.RTTMs / 1000})
+			}
+		}
+		if probed {
+			ixDegraded = append(ixDegraded, sample{labels: []lbl{{"exchange", ex.Name}}, value: boolFloat(ex.Degraded)})
 		}
 		ixDiscovered = append(ixDiscovered, sample{labels: []lbl{{"exchange", ex.Name}}, value: float64(len(ex.Discovered))})
 	}
 	writeGauge(&b, "packeteer_exchange_peer_prefixes", "Prefixes the router shows through the exchange peer's next hop.", ixPrefixes...)
 	writeGauge(&b, "packeteer_exchange_peer_improvements", "Active improvements onto the exchange peer.", ixImps...)
+	writeGauge(&b, "packeteer_exchange_peer_reachable", "1 if the exchange peer's next hop answered the last probe from the peer's source address.", ixReach...)
+	writeGauge(&b, "packeteer_exchange_peer_rtt_seconds", "Mean round-trip time of the last next-hop probe of the exchange peer.", ixRTT...)
+	writeGauge(&b, "packeteer_exchange_peer_loss_percent", "Loss of the last next-hop probe of the exchange peer.", ixLoss...)
+	writeGauge(&b, "packeteer_exchange_degraded", "1 while enough peers on the exchange fail their next-hop probe to point at the exchange or our port.", ixDegraded...)
 	writeGauge(&b, "packeteer_exchange_discovered_peers", "Next hops on the peering LAN that are not configured peers.", ixDiscovered...)
 	writeGauge(&b, "packeteer_exchange_lan_targets_dropped", "Probe targets omitted because the prefix or the pinned host is inside an exchange peering LAN. Cumulative omissions per collection, not per packet.",
 		sample{value: float64(s.ExchangeLANDrops)})

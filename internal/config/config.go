@@ -574,6 +574,8 @@ type Exchange struct {
 	// Group is the peers' load-balancing group, as on providers.
 	Group string         `yaml:"group"`
 	Peers []ExchangePeer `yaml:"peers"`
+	// Health tunes the next-hop probes and the exchange.degraded alert (#149).
+	Health ExchangeHealth `yaml:"health"`
 }
 
 // ExchangePeer is one peer on an exchange.

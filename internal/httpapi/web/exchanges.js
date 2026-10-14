@@ -1,8 +1,10 @@
 "use strict";
 // The exchange view of the Providers & Exchanges page (#148): per exchange,
 // its peers, the improvements onto them with the Mbps they move, and the
-// members on the peering LAN that are not peers. Reads GET /api/exchanges
-// and the stored exchanges report. Read-only. Rows are built with
+// members on the peering LAN that are not peers. Each peer shows the last
+// probe of its next hop (#149), and an exchange where enough peers fail it
+// says so. Reads GET /api/exchanges and the stored exchanges report.
+// Read-only. Rows are built with
 // textContent only. Uses getJSON, el, clear, and fmtTime from app.js. No
 // inline script: the CSP allows scripts from this origin only.
 
@@ -35,6 +37,14 @@ function exCell(text, className) {
   return el("td", className || "", text);
 }
 
+function exReachCell(r) {
+  r = r || {state: "unknown"};
+  var text = "not probed";
+  if (r.state === "unreachable") text = "unreachable";
+  else if (r.state === "reachable") text = Number(r.rtt_ms).toFixed(1) + " ms, " + Number(r.loss_pct).toFixed(0) + "% loss";
+  return exCell(text, r.degraded ? "bad" : "");
+}
+
 function exPeerRow(p) {
   var asn = exCell("AS" + p.asn, "mono");
   if (p.observed_asn) {
@@ -45,7 +55,7 @@ function exPeerRow(p) {
   var up = el("td");
   up.appendChild(el("span", p.up ? "dot up" : "dot down", p.up ? "up" : "down"));
   var moved = p.improvements > 0 && !(p.moved_mbps > 0) ? "unknown" : exMbps(p.moved_mbps);
-  return [exCell(p.name), asn, exCell(p.next_hop, "mono"), exCell(VIA_LABELS[p.via] || p.via || "unknown"), exCell(p.prefixes), up,
+  return [exCell(p.name), asn, exCell(p.next_hop, "mono"), exCell(VIA_LABELS[p.via] || p.via || "unknown"), exCell(p.prefixes), up, exReachCell(p.reach),
     exCell(p.improvements), exCell(moved)];
 }
 
@@ -55,11 +65,18 @@ function renderExchange(root, ex) {
   section.appendChild(el("h3", "", ex.name));
   section.appendChild(el("p", "tag", "Peering LAN " + (ex.lans || []).join(", ") + ": " + ex.prefixes + " paths seen, " + ex.improvements + " active improvements."));
 
+  if (ex.degraded) {
+    var banner = el("p", "bad", "Degraded: " + (ex.degraded_peers || []).length + " of " + (ex.peers || []).length +
+      " peers fail the next-hop probe (" + (ex.degraded_peers || []).join(", ") + "). That points at the exchange or our port, not one member.");
+    banner.setAttribute("data-degraded", ex.name);
+    section.appendChild(banner);
+  }
+
   var peers = ex.peers || [];
   if (!peers.length) {
     section.appendChild(el("p", "empty", "No peers in the config."));
   } else {
-    section.appendChild(exTable(["Peer", "AS", "Next hop", "Type", "Prefixes", "Probe source", "Improvements", "Moved"], peers.map(exPeerRow)));
+    section.appendChild(exTable(["Peer", "AS", "Next hop", "Type", "Prefixes", "Probe source", "Next-hop probe", "Improvements", "Moved"], peers.map(exPeerRow)));
   }
 
   var moves = [];
