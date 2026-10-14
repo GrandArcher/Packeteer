@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/GrandArcher/Packeteer/internal/exchange"
+	"github.com/GrandArcher/Packeteer/internal/history"
 	"github.com/GrandArcher/Packeteer/internal/httpapi"
 	"github.com/GrandArcher/Packeteer/internal/troubleshoot"
 )
@@ -230,6 +231,49 @@ func TestExchangeFixturesMatchAPI(t *testing.T) {
 	if len(out.Exchanges) != 2 || out.Exchanges[0].Name != "ix-lab" || len(out.Exchanges[0].Discovered) != 2 ||
 		out.Exchanges[0].Discovered[0].NextHop != "203.0.113.13" || out.Exchanges[0].Discovered[0].ASN != 64503 || out.Exchanges[0].Discovered[1].ASN != 0 {
 		t.Fatalf("exchanges = %+v", out.Exchanges)
+	}
+}
+
+// TestExchangePageFixturesMatchAPI decodes the canned exchange page answers
+// with the API's own types (#148), so a renamed field fails here and not as
+// an empty table in the UI smoke test.
+func TestExchangePageFixturesMatchAPI(t *testing.T) {
+	f, err := loadFixtures("../ui-fixtures/exchange-page")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(f.Stubs) != 2 || f.Inject.Page != "" {
+		t.Fatalf("stubs = %d, inject = %q", len(f.Stubs), f.Inject.Page)
+	}
+	strict := func(body []byte, v any) {
+		t.Helper()
+		dec := json.NewDecoder(bytes.NewReader(body))
+		dec.DisallowUnknownFields()
+		if err := dec.Decode(v); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var ex struct {
+		Exchanges []exchange.Stats `json:"exchanges"`
+	}
+	strict(f.Stubs[0].body, &ex)
+	if len(ex.Exchanges) != 1 {
+		t.Fatalf("exchanges = %+v", ex.Exchanges)
+	}
+	a, b := ex.Exchanges[0].Peers[0], ex.Exchanges[0].Peers[1]
+	if a.Via != "bilateral" || a.MovedMbps != 42.5 || len(a.Moves) != 2 || a.Moves[0].VolumeMbps+a.Moves[1].VolumeMbps != a.MovedMbps ||
+		a.Improvements != len(a.Moves) || b.ObservedASN != 64599 || b.Up || b.Via != "route_server" {
+		t.Fatalf("peers = %+v", ex.Exchanges[0].Peers)
+	}
+	var rep struct {
+		Report string                `json:"report"`
+		From   string                `json:"from"`
+		To     string                `json:"to"`
+		Rows   []history.ExchangeRow `json:"rows"`
+	}
+	strict(f.Stubs[1].body, &rep)
+	if rep.Report != "exchanges" || len(rep.Rows) != 2 || rep.Rows[0].Peer != "ix-peer-a" || rep.Rows[0].VolumeMbps != 61.5 {
+		t.Fatalf("report = %+v", rep)
 	}
 }
 

@@ -38,7 +38,7 @@ Every page has the same chrome (#170). The mode banner is the first thing on the
 | Prefixes & ASNs | `/prefixes.html` | The measured-prefix table, one page at a time, and the ASN map ([below](#prefix-list)) |
 | Graphs | `/graphs.html` | Before/after loss and latency charts (#129; [below](#graphs)). Empty state without history |
 | Reports | `/reports.html` | History reports by category with a range, filters, sortable columns, and CSV and XLSX export ([below](#reports)) |
-| Providers & Exchanges | `/providers.html` | Provider health. The exchange view is empty (#148) |
+| Providers & Exchanges | `/providers.html` | Provider health, and per exchange its peers, improvements with Mbps moved, and discovered members ([below](#exchanges-view)) |
 | Commit & Cost | `/commit.html` | Usage against commit per provider, 1, 7, or 30 days ([below](#commit--cost)) |
 | Policies | `/policies.html` | Points to Settings, where the `rules` policy is edited (#130). It does not list rules yet. With a `maintenance` policy, it lists maintenance windows ([below](#maintenance-windows)) |
 | Protection | `/protection.html` | The threat-mitigation monitor with an add and remove rule form (#131) when that feature is on. Otherwise an empty state that says how to configure it |
@@ -148,7 +148,7 @@ CI loads the page twice in the graphs step of the docker job (`lab/ui-smoke.sh`)
 
 ## Reports
 
-`/reports.html` (#178) lists the stored reports by category: Overview (`summary`), Improvements (`improvements`, `causes`), Performance (`performance`, `timeseries`, `providers`, `probes`), Traffic (`prefixes`, `asns`, `countries`), Cost (`savings`), and Protection (`mitigations`, `anomalies`). It needs `storage: {type: sqlite}` and says so when history is off. It is read-only and announces nothing; the mode banner is on top in every mode.
+`/reports.html` (#178) lists the stored reports by category: Overview (`summary`), Improvements (`improvements`, `exchanges`, `causes`), Performance (`performance`, `timeseries`, `providers`, `probes`), Traffic (`prefixes`, `asns`, `countries`), Cost (`savings`), and Protection (`mitigations`, `anomalies`). It needs `storage: {type: sqlite}` and says so when history is off. It is read-only and announces nothing; the mode banner is on top in every mode.
 
 - **Range.** Last 1, 7, 30, 90, or 365 days, or a custom From and To typed in the browser's local time. The page sends a custom range as UTC (`from` and `to` as RFC 3339), and the count line shows the range back in local time. A range is at most 3660 days.
 - **Filters.** Only the filters the report takes are shown. A filter that matches nothing gives an empty table, not an error.
@@ -162,7 +162,7 @@ Filters by report. All filters are optional and combine with AND.
 
 | Report | Filters |
 |---|---|
-| `improvements`, `causes`, `performance`, `savings` | `provider`, `asn`, `prefix`, `cause`, `ip_version` |
+| `improvements`, `exchanges`, `causes`, `performance`, `savings` | `provider`, `asn`, `prefix`, `cause`, `ip_version` |
 | `summary`, `providers`, `probes`, `prefixes`, `asns`, `countries` | `provider`, `asn`, `prefix`, `ip_version` |
 | `timeseries` | `asn`, `prefix`, `cause`, `ip_version` |
 | `mitigations`, `anomalies` | `prefix`, `ip_version` |
@@ -291,7 +291,7 @@ docker run --network host --cap-add NET_RAW --cap-add NET_ADMIN \
 - **Mode chip (#171).** The header chip sets its own text and background. Observe is `#0b3a5b` on `#d4e4f4`, suggest is `#6a3b06` on `#f6e4c4`, inject is white on `#9d1c2a`, and any other mode is `#12263a` on `#e7eef5`. Each pair meets WCAG AA (4.5:1) for this text size. The chip no longer inherits the header's white text.
 - **Overview tiles.** Mode, status (ready, not ready, starting), providers up, prefixes measured (and which sources list them), recommended improvements (outside inject) or active improvements (inject) against `max_improvements`, and BGP sessions with the number of probed prefixes in the learned RIB.
 - **Setup checklist.** Shown until there is nothing left to do, most urgent first. `todo`: no `sources` (nothing to probe). `warn`: every probe through a provider fails (with the last error), every provider is down, `bgp.neighbors` is set but no session is up, or no probed prefix is in the learned RIB. `info`: still starting, waiting for the first round, no `bgp.neighbors` (the current exit is unknown), report history off. Each line names the doc to read. The checklist only reads state; fix the mounted file and restart.
-- **Providers** (`/providers.html`) show `no data yet` until something is measured through them, `no answer` when every probe through them fails, and per-provider probe counts. The exchange view on that page is an empty state (#148).
+- **Providers** (`/providers.html`) show `no data yet` until something is measured through them, `no answer` when every probe through them fails, and per-provider probe counts. The exchange view on that page is described [below](#exchanges-view).
 - **Prefixes** (`/prefixes.html`) are a filtered, paged table; a row opens the prefix card with each learned path, its MED (display only) and `via` (route server, bilateral, or unknown; #146). See [Prefix list](#prefix-list). The ASN map is on the same page.
 - **Improvements** (`/improvements.html`) are labeled recommended outside inject and active in inject.
 - **Reports** (`/reports.html`) and **troubleshooting** (`/troubleshooting.html`) are the same sections as before, on their own URLs.
@@ -411,6 +411,16 @@ A policy or source only restricts, orders, or measures. The learned-RIB check, t
 **Exec plugins.** Checking or saving a candidate never runs a program. `exec` plugins in the candidate are validated without running their command (no `init` handshake), and a candidate that adds or changes an `exec` plugin (command, args, env, anything in its block) or changes `plugin_dir` is refused with `422`. Which programs the controller runs is set only by editing the mounted file; removing an `exec` plugin through the editor is allowed.
 
 The file is read-only in many deployments (`:ro`). Then saving fails with a clear error and nothing changes. Leave `config_editor` off if you manage the file with Git or configuration management.
+
+### Exchanges view
+
+The Exchanges section of `/providers.html` (#148) reads `GET /api/exchanges` every 5 seconds. Per exchange it shows the peering LANs and, per configured peer: AS (with `sees AS<n>` when most paths through the next hop start with another AS, a misconfigured peer that fails the route check), next hop, type (`route server`, `bilateral`, or `unknown`, from #146), prefixes seen through the next hop, probe-source state, active improvements, and Mbps moved. Below the peers are the active improvements onto them (prefix, since, Mbps) and the discovered members. A discovered member is never probed or used.
+
+Mbps moved is the observed rate of the prefixes steered onto the peer, from a target source that reports volume (a flow source or a static `mbps`). A prefix with no reported rate adds nothing and shows `—`; `unknown` means improvements exist but no rate is known. `moved_mbps` and `moves` (`prefix`, `since`, `volume_mbps`) are on each peer in the API, and `volume_mbps` is on each entry of `/api/improvements`. It is display only and changes no decision.
+
+"Improvements to exchanges, last 7 days" below it is the `exchanges` report: one row per configured exchange peer, with improvements started in the range, active now, prefixes, Mbps moved (each prefix counted once, at its latest improvement), and hours steered. It needs `storage` and says so without it; the Reports page opens it with the same filters as `improvements` (`/reports.html?report=exchanges`). Exchange peers come from the config at start. The view is read-only, the viewer role may open it, the mode banner stays on top, and nothing on it announces.
+
+The smoke step "UI settings forms smoke" in the docker job (`lab/ui-smoke.sh`) also loads `/providers.html` through `lab/uiproxy -fixtures lab/ui-fixtures/exchange-page`, which answers the two calls with documentation prefixes and ASNs, and checks the peer table, the improvements with their Mbps, the discovered member, and the report table. The stock-image step checks the empty state. `lab/uiproxy` tests decode the canned files with the API's own types; `internal/exchange`, `internal/policy`, and `internal/history` tests cover the moves, the volume, and the report.
 
 ### Exchanges (#181)
 

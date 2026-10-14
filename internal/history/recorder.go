@@ -49,7 +49,10 @@ type Options struct {
 	Describe func(netip.Prefix) (asn uint32, country string)
 	// Volumes returns observed per-prefix rates in Mbps. Nil records none.
 	Volumes func(ctx context.Context) map[netip.Prefix]float64
-	Now     func() time.Time
+	// Exchanges maps each exchange peer (a provider name) to its exchange
+	// for the exchanges report. Nil when no exchange is configured.
+	Exchanges map[string]string
+	Now       func() time.Time
 	// OnWrite, when set, is told the result of each store write the
 	// flush attempts. The System page shows it as the storage state.
 	OnWrite func(error)
@@ -338,7 +341,7 @@ func (r *Recorder) Decision(now time.Time, changes []policy.Change, results []pr
 			rec := plugin.ImprovementRecord{
 				ID:     fmt.Sprintf("%s@%d.%d", imp.Prefix, now.UnixNano(), r.seq),
 				Prefix: imp.Prefix, Provider: imp.Provider, Native: imp.Native, Cause: imp.Cause, Reason: imp.Reason,
-				Mode: r.opt.Mode, Start: now, CostDelta: imp.CostDelta, EstSavings: imp.EstSavings,
+				Mode: r.opt.Mode, Start: now, CostDelta: imp.CostDelta, EstSavings: imp.EstSavings, VolumeMbps: imp.VolumeMbps,
 			}
 			if rec.Cause == "" {
 				rec.Cause = plugin.CausePerformance
@@ -557,6 +560,7 @@ func (r *Recorder) Report(ctx context.Context, q Query) (Report, error) {
 	if q.Now.IsZero() {
 		q.Now = r.opt.Now()
 	}
+	q.Exchanges = r.opt.Exchanges
 	return Build(h, q)
 }
 

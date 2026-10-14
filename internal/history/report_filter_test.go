@@ -38,7 +38,7 @@ func everyReportHistory() plugin.History {
 
 func buildAll(t *testing.T, name string, mod ...func(*Query)) Report {
 	t.Helper()
-	q := Query{Name: name, From: from, To: to, Now: now}
+	q := Query{Name: name, From: from, To: to, Now: now, Exchanges: map[string]string{"transit-b": "ix-lab"}}
 	for _, m := range mod {
 		m(&q)
 	}

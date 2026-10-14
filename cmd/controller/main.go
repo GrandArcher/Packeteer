@@ -2773,13 +2773,23 @@ func newRecorder(cfg *config.Config, plugins *pluginhost.Set, log *slog.Logger, 
 		}
 		return asn, ""
 	}
+	var peers map[string]string
+	for _, p := range cfg.Providers {
+		if p.Exchange != "" {
+			if peers == nil {
+				peers = map[string]string{}
+			}
+			peers[p.Name] = p.Exchange
+		}
+	}
 	return history.New(history.Options{
-		Store:    plugins.Storage.Plugin,
-		Mode:     cfg.Mode,
-		Logger:   log.With("component", "history"),
-		Describe: describe,
-		Volumes:  func(ctx context.Context) map[netip.Prefix]float64 { return collectVolumes(ctx, plugins) },
-		OnWrite:  func(err error) { health.Record(historyKey, err) },
+		Store:     plugins.Storage.Plugin,
+		Mode:      cfg.Mode,
+		Logger:    log.With("component", "history"),
+		Describe:  describe,
+		Volumes:   func(ctx context.Context) map[netip.Prefix]float64 { return collectVolumes(ctx, plugins) },
+		Exchanges: peers,
+		OnWrite:   func(err error) { health.Record(historyKey, err) },
 	})
 }
 

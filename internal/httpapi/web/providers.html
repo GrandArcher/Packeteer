@@ -54,12 +54,21 @@
   </section>
   <section>
     <h2>Exchanges</h2>
-    <p class="empty">The exchange page is not built yet. It is tracked in #148.</p>
+    <p class="tag">Per exchange: peers, the improvements onto them and the Mbps they move, and LAN members that are not peers. This view only reads; it changes nothing and announces nothing.</p>
+    <p id="exchanges-status" class="tag" role="status"></p>
+    <div id="exchanges"><p class="empty">Loading…</p></div>
+  </section>
+  <section>
+    <h2>Improvements to exchanges, last 7 days</h2>
+    <p class="tag">From stored history. <a href="/reports.html?report=exchanges&amp;days=7">Open in Reports</a></p>
+    <p id="exchange-report-note" class="tag" role="status"></p>
+    <div id="exchange-report"></div>
   </section>
 </main>
 </div>
 </div>
 <script src="/shell.js"></script>
 <script src="/app.js"></script>
+<script src="/exchanges.js"></script>
 </body>
 </html>

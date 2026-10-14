@@ -30,6 +30,7 @@ const (
 	ReportSavings      = "savings"
 	ReportMitigations  = "mitigations"
 	ReportAnomalies    = "anomalies"
+	ReportExchanges    = "exchanges"
 )
 
 // HoursPerMonth converts a monthly price per Mbps into an hourly accrual.
@@ -69,6 +70,10 @@ type Query struct {
 	Provider  string
 	Cause     string
 	IPVersion int
+	// Exchanges maps each exchange peer (a provider name) to its exchange.
+	// The recorder fills it from the config; the exchanges report has one
+	// row per entry.
+	Exchanges map[string]string
 }
 
 // Report is one report's rows. Rows is a typed slice for JSON; CSV writes
@@ -144,6 +149,8 @@ func Build(h plugin.History, q Query) (Report, error) {
 		a.probes(&rep)
 	case ReportSavings:
 		a.savings(&rep)
+	case ReportExchanges:
+		a.exchanges(&rep)
 	case ReportMitigations:
 		mitigations(h.Mitigations, q, &rep)
 	case ReportAnomalies:

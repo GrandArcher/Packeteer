@@ -21,7 +21,7 @@ func TestExchangesEndpointAndMetrics(t *testing.T) {
 	}}, []rib.NextHopCount{
 		{NextHop: netip.MustParseAddr("203.0.113.11"), Prefixes: 4, ASN: 64501, Via: rib.ViaBilateral},
 		{NextHop: netip.MustParseAddr("203.0.113.13"), Prefixes: 2, ASN: 64503},
-	}, map[string]bool{"ix-peer-a": true}, map[string]int{"ix-peer-a": 1})
+	}, map[string]bool{"ix-peer-a": true}, map[string][]exchange.Move{"ix-peer-a": {{Prefix: "192.0.2.0/24", VolumeMbps: 12.5}}})
 	ts := newTestServer(t, snap, "", "")
 
 	code, _, body := do(t, http.MethodGet, ts.URL+"/api/exchanges", "", "")
@@ -36,6 +36,9 @@ func TestExchangesEndpointAndMetrics(t *testing.T) {
 	}
 	if len(doc.Exchanges) != 1 || doc.Exchanges[0].Peers[0].Prefixes != 4 || doc.Exchanges[0].Peers[0].Via != rib.ViaBilateral || doc.Exchanges[0].Discovered[0].ASN != 64503 {
 		t.Fatalf("body %s", body)
+	}
+	if pa := doc.Exchanges[0].Peers[0]; pa.MovedMbps != 12.5 || len(pa.Moves) != 1 || pa.Moves[0].Prefix != "192.0.2.0/24" {
+		t.Fatalf("moves: %s", body)
 	}
 	if !strings.Contains(string(body), `"via":"bilateral"`) {
 		t.Fatalf("peer via missing: %s", body)
