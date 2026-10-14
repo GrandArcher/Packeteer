@@ -98,7 +98,7 @@ function reportFillForm() {
   });
   document.getElementById("report-limit-label").hidden = !reportDef.limited;
   var limit = document.getElementById("report-limit");
-  if (reportDef.limited && v.limit && !limit.querySelector("option[value='" + v.limit + "']")) {
+  if (reportDef.limited && v.limit && !Array.from(limit.options).some(function (o) { return o.value === String(v.limit); })) {
     var lo = el("option", "", v.limit);
     lo.value = v.limit;
     limit.appendChild(lo);

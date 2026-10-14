@@ -263,9 +263,18 @@ func TestSortBeforeTheRowLimit(t *testing.T) {
 	if cut.Total != 4 || len(cut.lines) != 2 || cut.lines[0][0] != byPrefix.lines[3][0] || cut.lines[1][0] != byPrefix.lines[2][0] {
 		t.Errorf("column sort replaces the top key before the cut: %v, all %v", cut.lines, byPrefix.lines)
 	}
-	// Reports that are never cut keep every row.
-	if rep := buildAll(t, ReportCauses, func(q *Query) { q.Limit = 1 }); len(rep.lines) != 2 || rep.Total != 2 {
-		t.Errorf("causes cut by the limit: %v", rep.lines)
+}
+
+// A report that is never cut refuses a limit instead of ignoring it.
+func TestLimitRefusedOnReportsThatAreNeverCut(t *testing.T) {
+	for _, d := range Reports {
+		err := Query{Name: d.Name, From: from, To: to, Now: now, Limit: 5}.Validate()
+		if d.Limited && err != nil {
+			t.Errorf("%s: %v", d.Name, err)
+		}
+		if !d.Limited && (err == nil || !strings.Contains(err.Error(), "no limit")) {
+			t.Errorf("%s: err = %v, want a limit refusal", d.Name, err)
+		}
 	}
 }
 
@@ -371,7 +380,7 @@ func TestColName(t *testing.T) {
 
 func TestASNFilterMatchesTheOriginRecordedWithTheImprovement(t *testing.T) {
 	h := seed()
-	// The prefix is stored under 64501 but this improvement was recorded under 64500, as Search sees it.
+	// The prefix is stored under 64501 but this improvement was recorded under 64500, as Search and the filter see it.
 	h.Prefixes = []plugin.PrefixInfo{{Prefix: pfxA, OriginASN: 64501}}
 	h.Improvements = []plugin.ImprovementRecord{
 		{ID: "1", Prefix: pfxA, Provider: "transit-a", Start: from.Add(time.Hour), End: from.Add(2 * time.Hour), OriginASN: 64500},
@@ -394,5 +403,28 @@ func TestASNFilterMatchesTheOriginRecordedWithTheImprovement(t *testing.T) {
 	}
 	if got := ids(64501); got != "3" {
 		t.Errorf("stored origin applies only to an improvement with none: %q", got)
+	}
+}
+
+// Probe rows carry no origin of their own: the asn filter uses the prefix's
+// stored origin, like Search, and not an improvement's recorded one (this one is outside the range).
+func TestASNFilterOnProbeRowsUsesTheStoredPrefixOrigin(t *testing.T) {
+	h := plugin.History{
+		Prefixes:     []plugin.PrefixInfo{{Prefix: pfxA, OriginASN: 64501}},
+		Improvements: []plugin.ImprovementRecord{{ID: "1", Prefix: pfxA, Provider: "transit-a", Start: from.Add(-48 * time.Hour), End: from.Add(-47 * time.Hour), OriginASN: 64500}},
+		Buckets:      []plugin.ProbeBucket{{Day: from, Prefix: pfxA, Provider: "transit-a", Probes: 3, Measured: 3, LossSum: 3, RTTSumMs: 30}},
+	}
+	count := func(asn uint32) int {
+		rep, err := Build(h, Query{Name: ReportPrefixes, From: from, To: to, Now: now, ASN: asn})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return len(rep.Rows.([]PrefixRow))
+	}
+	if got := count(64501); got != 1 {
+		t.Errorf("stored origin: %d rows, want 1", got)
+	}
+	if got := count(64500); got != 0 {
+		t.Errorf("improvement origin: %d rows, want 0", got)
 	}
 }

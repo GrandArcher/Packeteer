@@ -75,8 +75,11 @@ func num(key, label, unit string) Column {
 func txt(key, label string) Column  { return Column{Key: key, Label: label, Type: TypeText} }
 func when(key, label string) Column { return Column{Key: key, Label: label, Type: TypeTime} }
 
+// Filters are all the filter parameters. Which of them a report takes is in
+// its Def.
+var Filters = []string{FilterProvider, FilterASN, FilterPrefix, FilterCause, FilterIPVersion}
+
 var (
-	allFilters   = []string{FilterProvider, FilterASN, FilterPrefix, FilterCause, FilterIPVersion}
 	noCause      = []string{FilterProvider, FilterASN, FilterPrefix, FilterIPVersion}
 	noProvider   = []string{FilterASN, FilterPrefix, FilterCause, FilterIPVersion}
 	prefixFilter = []string{FilterPrefix, FilterIPVersion}
@@ -94,7 +97,7 @@ var Reports = []Def{
 			num("probes", "Probes", ""), num("failed_probes", "Failed probes", ""), num("prefixes", "Prefixes", ""),
 			num("est_savings_rate", "Est. savings rate", "per month"), num("est_savings_accrued", "Est. savings accrued", ""),
 		}},
-	{Name: ReportImprovements, Category: CategoryImprovements, Filters: allFilters, Limited: true,
+	{Name: ReportImprovements, Category: CategoryImprovements, Filters: Filters, Limited: true,
 		Summary: "Every improvement that overlaps the range, newest first.",
 		Columns: []Column{
 			{Key: "prefix", Label: "Prefix", Type: TypePrefix}, txt("provider", "Chosen provider"), txt("native", "Native provider"), txt("cause", "Cause"),
@@ -104,12 +107,12 @@ var Reports = []Def{
 			txt("country", "Country"), num("volume_mbps", "Volume", "Mbps"), num("cost_delta", "Cost delta", "per Mbps"),
 			num("est_savings", "Est. savings", "per month"),
 		}},
-	{Name: ReportCauses, Category: CategoryImprovements, Filters: allFilters,
+	{Name: ReportCauses, Category: CategoryImprovements, Filters: Filters,
 		Summary: "Improvements started per UTC day, by cause (performance, commit, cost).",
 		Columns: []Column{
 			txt("day", "Day (UTC)"), num("performance", "Performance", ""), num("commit", "Commit", ""), num("cost", "Cost", ""), num("total", "Total", ""),
 		}},
-	{Name: ReportPerformance, Category: CategoryPerformance, Filters: allFilters,
+	{Name: ReportPerformance, Category: CategoryPerformance, Filters: Filters,
 		Summary: "Loss and latency before (native) and after (chosen provider), by cause.",
 		Columns: []Column{
 			txt("cause", "Cause"), num("improvements", "Improvements", ""), num("before_loss_pct", "Loss before", "%"), num("after_loss_pct", "Loss after", "%"),
@@ -157,7 +160,7 @@ var Reports = []Def{
 			num("probes", "Probes", ""), num("avg_loss_pct", "Avg loss", "%"), num("avg_rtt_ms", "Avg RTT", "ms"),
 			num("improvements", "Improvements", ""), num("steered_hours", "Steered", "h"),
 		}},
-	{Name: ReportSavings, Category: CategoryCost, Filters: allFilters, Limited: true,
+	{Name: ReportSavings, Category: CategoryCost, Filters: Filters, Limited: true,
 		Summary: "Estimated cost savings per improvement between priced providers.",
 		Columns: []Column{
 			{Key: "prefix", Label: "Prefix", Type: TypePrefix}, txt("native", "Native provider"), txt("provider", "Chosen provider"), txt("cause", "Cause"),
@@ -221,10 +224,13 @@ func (q Query) Validate() error {
 		FilterProvider: q.Provider != "", FilterASN: q.ASN != 0, FilterPrefix: q.Prefix.IsValid(),
 		FilterCause: q.Cause != "", FilterIPVersion: q.IPVersion != 0,
 	}
-	for _, name := range []string{FilterProvider, FilterASN, FilterPrefix, FilterCause, FilterIPVersion} {
+	for _, name := range Filters {
 		if set[name] && !slices.Contains(d.Filters, name) {
 			return fmt.Errorf("the %s report has no %s filter (it takes %s)", d.Name, name, strings.Join(d.Filters, ", "))
 		}
+	}
+	if q.Limit != 0 && !d.Limited {
+		return fmt.Errorf("the %s report is never cut, so it takes no limit", d.Name)
 	}
 	if q.Cause != "" && !slices.Contains(causes, q.Cause) {
 		return fmt.Errorf("cause must be one of %s", strings.Join(causes, ", "))

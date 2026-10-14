@@ -175,21 +175,9 @@ func newAgg(h plugin.History, q Query) *agg {
 	for _, p := range h.Prefixes {
 		a.info[p.Prefix] = p
 	}
-	var asnOf map[netip.Prefix]uint32
-	if q.ASN != 0 {
-		asnOf = map[netip.Prefix]uint32{}
-		for _, p := range h.Prefixes {
-			asnOf[p.Prefix] = p.OriginASN
-		}
-		for _, r := range h.Improvements {
-			if asnOf[r.Prefix] == 0 {
-				asnOf[r.Prefix] = r.OriginASN
-			}
-		}
-	}
 	for _, b := range h.Buckets {
 		if !b.Day.Before(q.From.UTC().Truncate(24*time.Hour)) && b.Day.Before(q.To) &&
-			q.matchPrefix(b.Prefix) && (q.ASN == 0 || asnOf[b.Prefix] == q.ASN) && (q.Provider == "" || b.Provider == q.Provider) {
+			q.matchPrefix(b.Prefix) && (q.ASN == 0 || a.info[b.Prefix].OriginASN == q.ASN) && (q.Provider == "" || b.Provider == q.Provider) {
 			a.buckets = append(a.buckets, b)
 		}
 	}
@@ -204,8 +192,8 @@ func newAgg(h plugin.History, q Query) *agg {
 }
 
 // improvementOrigin is the origin recorded with r, falling back to the
-// prefix's stored origin when r has none. Search matches the same way, so
-// its report links agree with it.
+// prefix's stored origin when r has none. Search and the asn filter share
+// it, so a report link from a search hit shows the same rows.
 func improvementOrigin(r plugin.ImprovementRecord, info map[netip.Prefix]plugin.PrefixInfo) uint32 {
 	if r.OriginASN != 0 {
 		return r.OriginASN

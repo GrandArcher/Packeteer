@@ -164,10 +164,10 @@ func TestTimeSeriesEmptyAndUnmeasured(t *testing.T) {
 	}
 }
 
-func TestTimeSeriesNotCutByLimitAndCSV(t *testing.T) {
-	rep := buildTS(t, tsSeed(), func(q *Query) { q.Limit = 1 })
+func TestTimeSeriesCSV(t *testing.T) {
+	rep := buildTS(t, tsSeed())
 	if n := len(rep.Rows.([]TimeSeriesRow)); n != 8 {
-		t.Fatalf("limit 1 gave %d rows, want all 8", n)
+		t.Fatalf("got %d rows, want all 8", n)
 	}
 	var buf bytes.Buffer
 	if err := rep.CSV(&buf); err != nil {

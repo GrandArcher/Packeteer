@@ -397,6 +397,7 @@ func TestDashboardsAPI(t *testing.T) {
 		"report on non-report": DashboardSpec{Widgets: []Widget{{Type: "providers", Report: "summary"}}},
 		"bucket on report":     DashboardSpec{Widgets: []Widget{{Type: "report", Report: "summary", Bucket: "all"}}},
 		"bucket on providers":  DashboardSpec{Widgets: []Widget{{Type: "providers", Bucket: "all"}}},
+		"query on timeseries":  DashboardSpec{Widgets: []Widget{{Type: "timeseries", Query: "asn=64500"}}},
 		"unknown bucket":       DashboardSpec{Widgets: []Widget{{Type: "timeseries", Bucket: "better_99"}}},
 		"report on timeseries": DashboardSpec{Widgets: []Widget{{Type: "timeseries", Report: "summary"}}},
 		"days too long":        DashboardSpec{Widgets: []Widget{{Type: "timeseries", Days: MaxReportDays + 1}}},

@@ -53,10 +53,6 @@ func parseTime(v string) (time.Time, error) {
 // filters.
 var reportParams = []string{"days", "from", "to", "limit", "sort", "order", "format"}
 
-// reportFilters are all the filter parameters. Which of them a report takes
-// is in its history.Def.
-var reportFilters = []string{history.FilterProvider, history.FilterASN, history.FilterPrefix, history.FilterCause, history.FilterIPVersion}
-
 // reportQuery reads the range, limit, sort, and filters. The default range
 // is the last DefaultReportDays days. An unknown parameter is an error, so a
 // misspelled filter cannot return unfiltered rows.
@@ -68,7 +64,7 @@ func reportQueryValues(v url.Values, name string, now time.Time) (history.Query,
 	q := history.Query{Name: name, To: now.UTC(), Sort: v.Get("sort"), Order: v.Get("order")}
 	if name != "" {
 		for k := range v {
-			if !slices.Contains(reportParams, k) && !slices.Contains(reportFilters, k) {
+			if !slices.Contains(reportParams, k) && !slices.Contains(history.Filters, k) {
 				return q, fmt.Errorf("unknown parameter %q", k)
 			}
 		}

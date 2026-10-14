@@ -370,7 +370,7 @@ func (d DashboardSpec) Validate() error {
 			}
 		case "timeseries":
 			if w.Report != "" || w.Query != "" {
-				return fmt.Errorf("widgets[%d]: report is only for type report", i)
+				return fmt.Errorf("widgets[%d]: report and query are only for type report", i)
 			}
 			if w.Days < 0 || w.Days > MaxReportDays {
 				return fmt.Errorf("widgets[%d]: days must be 0-%d", i, MaxReportDays)

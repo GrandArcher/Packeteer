@@ -62,12 +62,13 @@ func TestSearchCoveringAndMoreSpecific(t *testing.T) {
 func TestSearchByASN(t *testing.T) {
 	got := Search(seed(), SearchQuery{ASNs: []uint32{64501}, From: from, To: to, Limit: 10})
 	// AS64501 originates pfxB only. Improvement 0 on pfxB has no origin
-	// recorded, so only improvement 3 and pfxB's day-2 rollup match.
-	if got.ImprovementsTotal != 1 {
+	// recorded and matches through the prefix's stored origin, like the
+	// reports' asn filter.
+	if got.ImprovementsTotal != 2 {
 		t.Fatalf("improvements = %v", ids(got.Improvements))
 	}
 	for _, r := range got.Improvements {
-		if r.OriginASN != 64501 || r.Prefix != "198.51.100.0/24" {
+		if r.Prefix != "198.51.100.0/24" || (r.OriginASN != 64501 && r.OriginASN != 0) {
 			t.Errorf("row = %+v", r)
 		}
 		if r.Relation != "" {
