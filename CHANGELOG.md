@@ -6,7 +6,7 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 
 ### Added
 
-- IX LAN health: each exchange peer's next hop is probed from its `source_ip`; reachability, RTT, loss on `/api/exchanges`, metrics, and the page; `exchange.degraded` and `exchange.recovered` events (#149).
+- IX LAN health: each exchange peer's next hop is probed from its `source_ip`; reachability, RTT, loss on `/api/exchanges` and metrics; `exchange.degraded` and `exchange.recovered` events (#149).
 - Exchange peers: prefixes seen only via the route server, only bilaterally, or both, counts over time, and a partial-feed flag; `GET /api/exchanges/member` (#156).
 - Exchange view on Providers & Exchanges: peers, type, improvements with Mbps moved, discovered members; `exchanges` report and `volume_mbps` on improvements (#148).
 - Dashboard widgets: chart widgets (improvements by cause, provider usage vs commit), grid move and resize by drag or keyboard, per-widget refresh and window, a favorite dashboard (#182).
