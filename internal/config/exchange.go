@@ -59,6 +59,19 @@ func (c *Config) expandExchanges() {
 	}
 }
 
+// DefaultExchangeMaxPrefixWarnPct is the share of a peer's max_prefix at
+// which exchange.max_prefix fires (#147).
+const DefaultExchangeMaxPrefixWarnPct = 90
+
+// defaultExchangeMaxPrefix fills in the warning share for each exchange.
+func (c *Config) defaultExchangeMaxPrefix() {
+	for i := range c.Exchanges {
+		if c.Exchanges[i].MaxPrefixWarnPct == 0 {
+			c.Exchanges[i].MaxPrefixWarnPct = DefaultExchangeMaxPrefixWarnPct
+		}
+	}
+}
+
 // validateExchanges checks the exchange entries. The peers themselves are
 // providers by now and get the provider checks (unique name, source_ip,
 // next_hop, bmp, cost, precedence) there.
@@ -108,6 +121,9 @@ func (c *Config) validateExchanges(add func(string, ...any)) {
 		if !addPath && bmp != BMPPrefer && bmp != BMPOnly {
 			add("%s: peers need their paths visible: set add_path on a bgp.neighbors entry, or bmp: prefer or only with rib_sources", label)
 		}
+		if ex.MaxPrefixWarnPct < 1 || ex.MaxPrefixWarnPct > 100 {
+			add("%s: max_prefix_warn_pct %d must be between 1 and 100", label, ex.MaxPrefixWarnPct)
+		}
 		if len(ex.Peers) == 0 {
 			add("%s: peers: at least one peer is required", label)
 		}
@@ -118,6 +134,9 @@ func (c *Config) validateExchanges(add func(string, ...any)) {
 			}
 			if p.ASN == 0 {
 				add("%s: asn is required (the first AS on the peer's paths)", pl)
+			}
+			if p.MaxPrefix < 0 {
+				add("%s: max_prefix %d must not be negative", pl, p.MaxPrefix)
 			}
 			nh, err := netip.ParseAddr(p.NextHop)
 			if err != nil {

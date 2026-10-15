@@ -97,6 +97,26 @@ func TestExchangeBMPOnly(t *testing.T) {
 	}
 }
 
+func TestExchangeMaxPrefix(t *testing.T) {
+	y := edit(t, exchangeYAML, "        asn: 64501\n", "        asn: 64501\n        max_prefix: 1000\n")
+	y = edit(t, y, "    group: ix\n", "    group: ix\n    max_prefix_warn_pct: 80\n")
+	cfg, err := Parse([]byte(y))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ex := cfg.Exchanges[0]
+	if ex.MaxPrefixWarnPct != 80 || ex.Peers[0].MaxPrefix != 1000 || ex.Peers[1].MaxPrefix != 0 {
+		t.Fatalf("exchange = %+v", ex)
+	}
+	cfg, err = Parse([]byte(exchangeYAML))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := cfg.Exchanges[0].MaxPrefixWarnPct; got != DefaultExchangeMaxPrefixWarnPct {
+		t.Fatalf("default max_prefix_warn_pct = %d", got)
+	}
+}
+
 func TestExchangeErrors(t *testing.T) {
 	cases := map[string]struct{ yaml, want string }{
 		"no lans":                {edit(t, exchangeYAML, "    lans: [203.0.113.0/24]\n", ""), "lans: at least one"},
@@ -110,6 +130,8 @@ func TestExchangeErrors(t *testing.T) {
 		"peer clash":             {edit(t, exchangeYAML, "name: ix-peer-b", "name: transit-a"), "duplicate provider name"},
 		"source clash":           {edit(t, exchangeYAML, "source_ip: 192.0.2.32", "source_ip: 192.0.2.11"), "duplicate source_ip"},
 		"no paths":               {edit(t, exchangeYAML, "      add_path: true\n", ""), "peers need their paths visible"},
+		"negative max_prefix":    {edit(t, exchangeYAML, "        asn: 64501\n", "        asn: 64501\n        max_prefix: -1\n"), "max_prefix -1 must not be negative"},
+		"bad max_prefix_warn":    {edit(t, exchangeYAML, "    group: ix\n", "    group: ix\n    max_prefix_warn_pct: 101\n"), "max_prefix_warn_pct 101 must be between 1 and 100"},
 		"no bgp":                 {exchangeYAML[:strings.Index(exchangeYAML, "bgp:")], "exchanges require bgp.neighbors"},
 		"bad as_path":            {exchangeYAML + "  as_path: origin\n", `bgp.as_path "origin" is invalid`},
 		"allowlist equals lan":   {exchangeYAML + "allowlist:\n  prefixes: [203.0.113.0/24]\n", "overlaps exchange LAN 203.0.113.0/24"},

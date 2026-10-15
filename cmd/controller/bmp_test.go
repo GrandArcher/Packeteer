@@ -57,13 +57,13 @@ func TestBMPWiringAndRouteCheck(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := wireRIBSources(set, nil, nil); err == nil {
+	if err := wireRIBSources(set, nil, nil, nil, nil); err == nil {
 		t.Fatal("rib sources without a view must refuse to start")
 	}
 	// Capture the sink the station would call.
 	var sink func(plugin.RIBEvent)
 	set.RIBSources[0].Plugin = &sinkSpy{RIBSource: set.RIBSources[0].Plugin, got: &sink}
-	if err := wireRIBSources(set, view, nil); err != nil || sink == nil {
+	if err := wireRIBSources(set, view, nil, nil, nil); err != nil || sink == nil {
 		t.Fatalf("sink not wired: %v", err)
 	}
 	edge := netip.MustParseAddr("192.0.2.254")
