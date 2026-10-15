@@ -1,9 +1,9 @@
 # IXP mode (#160)
 
-Status: charter, config gate, and IX-F member import (#161). Fabric
-probing, route-server history, signals, member pages, and multi-site
-fabric health are #162-#167 and are not built. An `ixp` block does not
-announce, probe members, or open a route-server session.
+Status: charter, config gate, IX-F member import (#161), and fabric
+probes (#162). Route-server history, signals, member pages, and
+multi-site fabric health are #163-#167 and are not built. An `ixp`
+block does not announce or open a route-server session.
 
 An Internet exchange operator runs Packeteer to observe its fabric,
 route servers, and members. It does not route for them. This is not the
@@ -11,15 +11,16 @@ route servers, and members. It does not route for them. This is not the
 
 ## Turning it on
 
-`ixp: {}` in the config. The only key is `members` (#161). Any other
-key is an error. Omitted, or `ixp: null`, is not IXP mode. `mode` stays
-`observe`. `mode: suggest` is accepted and announces nothing. The
-shipped example leaves the block commented out.
+`ixp: {}` in the config. The keys are `members` (#161), `vantages`,
+and `fabric` (#162). Any other key is an error. Omitted, or `ixp: null`,
+is not IXP mode. `mode` stays `observe`. `mode: suggest` is accepted
+and announces nothing. The shipped example leaves the block commented
+out.
 
 IXP mode does not need `bgp.neighbors`. With no neighbors the controller
 does not build a RIB view. A neighbor list is still allowed; it is the
 operator's own iBGP, not route-server data. Providers are still
-required. Fabric vantages are #162 (`ixp.vantages`), not providers.
+required. Fabric vantages are `ixp.vantages` (#162), not providers.
 
 Adding or removing `ixp` needs a restart. An online reload cannot do it.
 
@@ -73,9 +74,15 @@ IXP Manager and Birdseye are read with GET only. No other method.
   `api/routes/count/protocol/{protocol}`,
   `api/routes/lc-zwild/protocol/{protocol}/{rs-asn}/1101`.
 
-IXP Manager's per-interface "Can Ping" opt-out is #162. This import does
-not probe, so the opt-out has nothing to apply to yet. A member
-interface that opts out is not probed once fabric probes exist.
+IXP Manager's per-interface "Can Ping" opt-out is honored by `ixp.fabric`
+(#162). The prober GETs `/api/v4/nagios/customers/{vlan}/{ipv4|ipv6}` on
+the same origin as the member export, with the same API key header,
+and no other nagios route. Redirects are not followed. A host
+with no PING service is not probed. PING-Busy keeps the looser warning.
+A named IX-F URL does not use that GET. An IX-F address with
+`can_ping: false` is not probed either. Probes stay inside the VLAN
+prefix. Nothing is announced, and the measurements are not an input to
+Decide.
 
 ## Lab data
 
@@ -84,5 +91,5 @@ Member data is never committed. Lab fixtures use documentation prefixes
 documentation or private ASNs (64496-64511, 65536-65551, or
 64512-65534).
 
-Rollback: remove `ixp.members` or the `ixp` block and restart. Nothing
-was announced.
+Rollback: remove `ixp.members`, or `ixp.vantages` and `ixp.fabric`, or
+the `ixp` block, and restart. Nothing was announced.

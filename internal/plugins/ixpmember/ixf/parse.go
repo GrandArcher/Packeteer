@@ -98,6 +98,10 @@ type ixfAddr struct {
 	RouteServer bool   `json:"routeserver"`
 	ASMacro     string `json:"as_macro"`
 	MaxPrefix   int    `json:"max_prefix"`
+	// CanPing and BusyHost are not in stock IX-F. IXP Manager's member
+	// export omits them. A document that sets can_ping false is an opt-out.
+	CanPing  *bool `json:"can_ping"`
+	BusyHost bool  `json:"busy_host"`
 }
 
 type swInfo struct {
@@ -364,6 +368,7 @@ func convAddr(p, family string, vlan int, in *ixfAddr) (plugin.IXPAddress, error
 	return plugin.IXPAddress{
 		Family: family, Address: a.String(), VLANID: vlan,
 		RouteServer: in.RouteServer, MaxPrefix: in.MaxPrefix, ASMacro: in.ASMacro,
+		CanPing: in.CanPing, BusyHost: in.BusyHost,
 	}, nil
 }
 

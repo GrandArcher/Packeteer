@@ -2,15 +2,35 @@ package config
 
 import (
 	"errors"
+	"fmt"
+	"net/netip"
 
 	"gopkg.in/yaml.v3"
 )
 
+// Bounds for ixp.vantages (#162).
+const (
+	maxVantages = 64
+	maxVLANID   = 1_000_000
+)
+
 // IXP is exchange-operator mode (#160). A non-nil value, including an
-// empty block, is IXP mode. IXP mode never announces. The only key is
-// members (#161), a read-only IX-F import. Any other key is a parse error.
+// empty block, is IXP mode. IXP mode never announces. Keys are members
+// (#161), vantages, and fabric (#162). Any other key is a parse error.
 type IXP struct {
-	Members *PluginSpec `yaml:"members,omitempty"`
+	Members  *PluginSpec `yaml:"members,omitempty"`
+	Vantages []Vantage   `yaml:"vantages,omitempty"`
+	Fabric   *PluginSpec `yaml:"fabric,omitempty"`
+}
+
+// Vantage is one IX-owned monitoring address on a peering LAN (#162).
+// Probes to member addresses on that VLAN are sourced from Address.
+// IXPID 0 means the vlan id is unique in the member list.
+type Vantage struct {
+	Name    string `yaml:"name"`
+	VLANID  int    `yaml:"vlan_id"`
+	IXPID   int    `yaml:"ixp_id,omitempty"`
+	Address string `yaml:"address"`
 }
 
 // ixpForbidsSynthesize rejects a synthesize key when an ixp block is
@@ -66,4 +86,75 @@ func (c *Config) validateIXP(add func(string, ...any)) {
 	if c.MoreSpecific != nil {
 		add("ixp forbids more_specific: IXP mode never announces")
 	}
+	c.validateVantages(add)
+}
+
+func (c *Config) validateVantages(add func(string, ...any)) {
+	ix := c.IXP
+	hasV := len(ix.Vantages) > 0
+	hasF := ix.Fabric != nil
+	switch {
+	case hasV && !hasF:
+		add("ixp.vantages requires ixp.fabric")
+	case hasF && !hasV:
+		add("ixp.fabric requires ixp.vantages")
+	case hasF && ix.Members == nil:
+		add("ixp.fabric requires ixp.members")
+	}
+	if len(ix.Vantages) > maxVantages {
+		add("ixp.vantages: more than %d", maxVantages)
+	}
+	seenName := map[string]bool{}
+	seenAddr := map[string]bool{}
+	for i := range ix.Vantages {
+		v := &ix.Vantages[i]
+		p := fmt.Sprintf("ixp.vantages[%d]", i)
+		if !validVantageName(v.Name) {
+			add("%s.name is invalid", p)
+		} else if seenName[v.Name] {
+			add("%s.name %q is duplicated", p, v.Name)
+		}
+		seenName[v.Name] = true
+		if v.VLANID < 1 || v.VLANID > maxVLANID {
+			add("%s.vlan_id is invalid", p)
+		}
+		if v.IXPID < 0 || v.IXPID > maxVLANID {
+			add("%s.ixp_id is invalid", p)
+		}
+		addr, err := netip.ParseAddr(v.Address)
+		if err != nil || addr.Zone() != "" {
+			add("%s.address is not an IP address", p)
+			continue
+		}
+		addr = addr.Unmap()
+		if !usableVantage(addr) {
+			add("%s.address is not a usable vantage address", p)
+			continue
+		}
+		v.Address = addr.String()
+		key := fmt.Sprintf("%d/%d/%s", v.IXPID, v.VLANID, v.Address)
+		if seenAddr[key] {
+			add("%s.address is duplicated on this vlan", p)
+		}
+		seenAddr[key] = true
+	}
+}
+
+func validVantageName(s string) bool {
+	if s == "" || len(s) > 64 {
+		return false
+	}
+	for i, c := range s {
+		switch {
+		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9':
+		case i > 0 && (c == '.' || c == '_' || c == '-'):
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+func usableVantage(a netip.Addr) bool {
+	return a.IsValid() && !a.IsUnspecified() && !a.IsMulticast() && !a.IsLoopback() && !a.IsLinkLocalUnicast() && !a.IsLinkLocalMulticast()
 }

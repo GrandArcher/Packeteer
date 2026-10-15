@@ -135,6 +135,57 @@ ixp:
 	}
 }
 
+func TestIXPFabricDoesNotAnnounce(t *testing.T) {
+	cfg := load(t, `
+ixp:
+  members:
+    type: ixf
+    config:
+      url: https://ixp.example.invalid/members.json
+  vantages:
+    - {name: lan1-v4, vlan_id: 10, address: 192.0.2.8}
+  fabric:
+    type: icmp
+`)
+	s, err := Build(cfg, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.IXPFabric == nil || s.IXPFabric.Type != "icmp" {
+		t.Fatalf("%+v", s.IXPFabric)
+	}
+	if s.Announcer != nil || len(s.RIBSources) != 0 {
+		t.Fatalf("announcer %v rib %d", s.Announcer, len(s.RIBSources))
+	}
+	sum := s.Summary()
+	for _, want := range []string{"prober icmp", "prober tcp", "ixp_member ixf", "ixp_fabric icmp"} {
+		if !slices.Contains(sum, want) {
+			t.Fatalf("summary %v missing %s", sum, want)
+		}
+	}
+	view := s.IXPFabric.Plugin.View()
+	if !view.Configured || len(view.Samples) != 0 || len(view.Vantages) != 0 {
+		t.Fatalf("%+v", view)
+	}
+	bad := load(t, `
+ixp:
+  members:
+    type: ixf
+    config:
+      url: https://ixp.example.invalid/members.json
+  vantages:
+    - {name: lan1-v4, vlan_id: 10, address: 192.0.2.8}
+  fabric:
+    type: icmp
+    config:
+      rate_limit_pps: 1
+      member_pps: 2
+`)
+	if _, err := Build(bad, Options{}); err == nil || !strings.Contains(err.Error(), "member_pps") {
+		t.Fatalf("member_pps: %v", err)
+	}
+}
+
 func TestBuildAndLifecycle(t *testing.T) {
 	events = nil
 	cfg := load(t, "sources:\n  - type: test-source\n    name: s1\nnotifiers:\n  - type: test-notifier\n")

@@ -104,6 +104,92 @@ func TestIXPMembersAPIAndMetrics(t *testing.T) {
 	}
 }
 
+func TestIXPProbesAPIAndMetrics(t *testing.T) {
+	s := newIXPServer(t)
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/ixp/probes", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("%d %s", rec.Code, rec.Body)
+	}
+	var body map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body["configured"] != false || body["mode"] != "observe" {
+		t.Fatalf("%s", rec.Body)
+	}
+	vantages, ok := body["vantages"].([]any)
+	samples, ok2 := body["samples"].([]any)
+	if !ok || len(vantages) != 0 || !ok2 || len(samples) != 0 {
+		t.Fatalf("lists %#v %#v", body["vantages"], body["samples"])
+	}
+	mrec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(mrec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	if strings.Contains(mrec.Body.String(), "packeteer_ixp_") {
+		t.Fatalf("metrics without fabric:\n%s", mrec.Body)
+	}
+
+	round := time.Unix(1000, 0).UTC()
+	s.SetIXPFabric(func() plugin.FabricView {
+		return plugin.FabricView{
+			Configured: true,
+			Round:      round,
+			Targets:    3,
+			OptOut:     1,
+			Vantages:   []plugin.FabricVantageStatus{{Name: "lan1-v4", Address: "192.0.2.8", VLANID: 10, Up: true, Targets: 3}},
+			Samples: []plugin.FabricSample{
+				{Vantage: "lan1-v4", ASN: 64496, Address: "192.0.2.20", LossPct: 20, RTTMs: 12, JitterMs: 2, PastTolerance: true},
+				{Vantage: "lan1-v4", ASN: 64497, Address: "192.0.2.21", PastTolerance: false},
+			},
+		}
+	})
+	rec = httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/ixp/probes", nil))
+	text := rec.Body.String()
+	for _, want := range []string{`"targets":3`, `"opt_out":1`, `"asn":64496`, `"loss_pct":20`, `"rtt_ms":12`, `"jitter_ms":2`, `"past_tolerance":true`, `"name":"lan1-v4"`} {
+		if !strings.Contains(text, want) {
+			t.Errorf("missing %s in %s", want, text)
+		}
+	}
+	if strings.Contains(text, "api_key") || strings.Contains(text, "SuperSecret") {
+		t.Fatalf("secret field in %s", text)
+	}
+	mrec = httptest.NewRecorder()
+	s.Handler().ServeHTTP(mrec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	metrics := mrec.Body.String()
+	for _, want := range []string{
+		"packeteer_ixp_fabric_up 1\n",
+		"packeteer_ixp_fabric_targets 3\n",
+		"packeteer_ixp_fabric_opt_out 1\n",
+		"packeteer_ixp_fabric_past_tolerance 1\n",
+	} {
+		if !strings.Contains(metrics, want) {
+			t.Errorf("missing %s in\n%s", want, metrics)
+		}
+	}
+	if strings.Contains(metrics, "packeteer_ixp_member_rtt") {
+		t.Fatalf("per-member series:\n%s", metrics)
+	}
+
+	s.SetIXPFabric(func() plugin.FabricView {
+		return plugin.FabricView{Configured: true, Stale: true, Round: round, Targets: 3, OptOut: 1, Error: "member list is stale",
+			Samples: []plugin.FabricSample{{PastTolerance: true}}}
+	})
+	mrec = httptest.NewRecorder()
+	s.Handler().ServeHTTP(mrec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	metrics = mrec.Body.String()
+	for _, want := range []string{
+		"packeteer_ixp_fabric_up 0\n",
+		"packeteer_ixp_fabric_targets 0\n",
+		"packeteer_ixp_fabric_past_tolerance 0\n",
+		"packeteer_ixp_fabric_age_seconds",
+	} {
+		if !strings.Contains(metrics, want) {
+			t.Errorf("stale missing %s in\n%s", want, metrics)
+		}
+	}
+}
+
 func newIXPServer(t *testing.T) *Server {
 	t.Helper()
 	s, err := New(Options{Snapshot: func() Snapshot { return Snapshot{Version: "test", Mode: "observe", Started: true} }})
