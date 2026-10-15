@@ -108,6 +108,33 @@ func load(t *testing.T, extra string) *config.Config {
 	return cfg
 }
 
+func TestIXPMembersIsNotARIBSource(t *testing.T) {
+	cfg := load(t, `
+ixp:
+  members:
+    type: ixf
+    config:
+      url: https://ixp.example.invalid/members.json
+`)
+	s, err := Build(cfg, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.IXPMembers == nil || s.IXPMembers.Type != "ixf" {
+		t.Fatalf("%+v", s.IXPMembers)
+	}
+	if len(s.RIBSources) != 0 || s.Announcer != nil {
+		t.Fatalf("rib %d announcer %v", len(s.RIBSources), s.Announcer)
+	}
+	if !slices.Contains(s.Summary(), "ixp_member ixf") {
+		t.Fatalf("summary %v", s.Summary())
+	}
+	v := s.IXPMembers.Plugin.View()
+	if !v.Configured || v.MemberCount != 0 || len(v.Members) != 0 {
+		t.Fatalf("%+v", v)
+	}
+}
+
 func TestBuildAndLifecycle(t *testing.T) {
 	events = nil
 	cfg := load(t, "sources:\n  - type: test-source\n    name: s1\nnotifiers:\n  - type: test-notifier\n")

@@ -60,10 +60,12 @@ The same object is the `generic` webhook body and the `exec` `notify` params.
 | `exchange.peer_up` | info | 38 | `exchange`, `peer` | The router reported the exchange peer's BGP session up. Resolves `exchange.peer_down`. |
 | `exchange.max_prefix` | warning | 39 | `exchange`, `peer` | The peer's Adj-RIB-In route count reached `max_prefix_warn_pct` of its `max_prefix` (from a BMP Statistics Report). Fields: `prefixes`, `max_prefix`. Read-only. |
 | `exchange.max_prefix_cleared` | info | 40 | `exchange`, `peer` | The count fell back below that share. Same fields. Resolves `exchange.max_prefix`. |
+| `ixp.api_key_expiring` | warning | 41 | `identifier` | The IXP Manager API key has 14 days or fewer left, or is already past `key_expires`. `identifier` is the key id. The secret is not included. |
+| `ixp.api_key_ok` | info | 42 | `identifier` | The same key has more than 14 days left. Resolves `ixp.api_key_expiring`. |
 
 Problems and the events that resolve them share a **dedup key**: `packeteer/<group>/<key>=<value>`, for example `packeteer/provider/provider=transit-a` for both `provider.down` and `provider.up`. The `pagerduty` preset uses it as `dedup_key`, and `snmptrap` sends it as a varbind.
 
-State events (`provider.*`, `bgp.*`, `commit.*`, `announce.*`, `inbound.*`, `mitigation.*`, `anomaly.*`, `ha.*`, `flap.*`, `exchange.*`) fire on transitions only. Except `exchange.*`, they are checked on every decision (each probe round, each RIB change, and at least every `probe.interval`); `exchange.degraded` and `exchange.recovered` are checked once per `probe.interval` in the exchange health loop, `exchange.peer_*` and `exchange.max_prefix*` when the BMP RIB source reports a session event or a statistics count, and commit at most once a minute. They are not repeated while the state holds. `leak.*` events fire on the first sighting of a prefix and when its hold is cleared.
+State events (`provider.*`, `bgp.*`, `commit.*`, `announce.*`, `inbound.*`, `mitigation.*`, `anomaly.*`, `ha.*`, `flap.*`, `exchange.*`, `ixp.api_key_*`) fire on transitions only. Except `exchange.*` and `ixp.api_key_*`, they are checked on every decision (each probe round, each RIB change, and at least every `probe.interval`); `exchange.degraded` and `exchange.recovered` are checked once per `probe.interval` in the exchange health loop, `exchange.peer_*` and `exchange.max_prefix*` when the BMP RIB source reports a session event or a statistics count, `ixp.api_key_expiring` and `ixp.api_key_ok` when the member import starts and on each refresh, and commit at most once a minute. They are not repeated while the state holds. `leak.*` events fire on the first sighting of a prefix and when its hold is cleared.
 
 ## Testing delivery
 

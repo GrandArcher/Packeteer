@@ -70,8 +70,14 @@ const (
 	EventExchangeMaxPrefix  = "exchange.max_prefix"
 	// EventExchangeMaxPrefixCleared resolves EventExchangeMaxPrefix.
 	EventExchangeMaxPrefixCleared = "exchange.max_prefix_cleared"
-	EventHAStandby                = "ha.standby"
-	EventHAActive                 = "ha.active"
+	// EventIXPKeyExpiring fires when the IXP Manager API key has 14 days
+	// or fewer left, or is already past its expiry date (#161).
+	EventIXPKeyExpiring = "ixp.api_key_expiring"
+	// EventIXPKeyOK resolves EventIXPKeyExpiring once the key is more
+	// than 14 days from expiry.
+	EventIXPKeyOK  = "ixp.api_key_ok"
+	EventHAStandby = "ha.standby"
+	EventHAActive  = "ha.active"
 	// EventAudit is one audit log record (#32): a change or sign-in on
 	// the ops API, or a config reload.
 	EventAudit = "audit.recorded"
@@ -160,6 +166,10 @@ var eventCatalog = []EventSpec{
 		Summary: "An exchange peer's Adj-RIB-In reached the configured share of its max_prefix (exchanges[].max_prefix_warn_pct)."},
 	{Kind: EventExchangeMaxPrefixCleared, Severity: SeverityInfo, Group: "exchange_prefix", Keys: []string{"exchange", "peer"}, TrapID: 40, Resolves: true,
 		Summary: "The exchange peer's Adj-RIB-In fell back below the max-prefix warning share."},
+	{Kind: EventIXPKeyExpiring, Severity: SeverityWarning, Group: "ixp_api_key", Keys: []string{"identifier"}, TrapID: 41,
+		Summary: "The IXP Manager API key expires within 14 days, or has already expired. The field identifier is the key id; the secret is not included."},
+	{Kind: EventIXPKeyOK, Severity: SeverityInfo, Group: "ixp_api_key", Keys: []string{"identifier"}, TrapID: 42, Resolves: true,
+		Summary: "The IXP Manager API key has more than 14 days left. Resolves ixp.api_key_expiring."},
 }
 
 // EventCatalog returns a copy of every event kind the controller emits.

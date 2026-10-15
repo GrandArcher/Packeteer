@@ -43,6 +43,18 @@ func TestEventCatalogIsConsistent(t *testing.T) {
 	}
 }
 
+func TestIXPKeyEventDedup(t *testing.T) {
+	now := time.Unix(100, 0)
+	exp := NewEvent(EventIXPKeyExpiring, now, "soon", map[string]string{"identifier": "DocKeyIdent1", "days_left": "14"})
+	ok := NewEvent(EventIXPKeyOK, now, "ok", map[string]string{"identifier": "DocKeyIdent1", "days_left": "15"})
+	if exp.Severity != SeverityWarning || !ok.Resolves() || exp.Resolves() {
+		t.Fatalf("exp %+v ok %+v", exp, ok)
+	}
+	if exp.DedupKey() != ok.DedupKey() || exp.DedupKey() != "packeteer/ixp_api_key/identifier=DocKeyIdent1" {
+		t.Fatalf("dedup %q %q", exp.DedupKey(), ok.DedupKey())
+	}
+}
+
 func TestEventCatalogCopy(t *testing.T) {
 	c := EventCatalog()
 	c[0].Kind = "changed"

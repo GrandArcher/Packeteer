@@ -7,10 +7,15 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 ### Added
 
 - Settings form uses guided inputs: a number and a unit, one prefix or address per row, dropdowns that stay free text when no list is known (#329).
+- IX-F member import: read-only GET of the IXP Manager member export or a named IX-F URL; key from PACKETEER_IXP_MANAGER_API_KEY header only; 14-day expiry warning (#161).
 - Web UI shows the Packeteer logo next to the name and as the favicon (#327).
 - IXP mode: `ixp: {}` is observe-only and refuses `mode: inject`, `announcer`, `mitigation`, `inbound`, `synthesize`, and `more_specific`; no BGP neighbors or RIB view required (#160).
 - Probe-path check: a TTL-1 probe from each provider's `source_ip` must leave through `next_hop`; a mismatch marks it down with reason `probe path mismatch`; `path_check: false` opts out (#150).
 - BMP exchange peer session monitor: `exchange.peer_up`/`peer_down` with the decoded reason (Cease subcode 1), Adj-RIB-In count as `adj_rib_in` and a metric, and `exchange.max_prefix` warnings (#147).
+
+### Fixed
+
+- IX-F import rejects an IPv4-mapped prefix on an IPv6 LAN, a percent-encoded API key in the manager URL, and a switch id from another IXP (#161).
 
 ## [0.7.0] - 2026-10-15
 
