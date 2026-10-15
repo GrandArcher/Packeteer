@@ -40,6 +40,9 @@ type Set struct {
 	Storage    *Instance[plugin.Storage]
 	// Whois serves the troubleshooting API only. It never announces.
 	Whois *Instance[plugin.Whois]
+	// IXPMembers imports an IX-F member list (#161). It never announces
+	// and it is not a RIB source.
+	IXPMembers *Instance[plugin.MemberSource]
 	// RIBSources feed the RIB view (BMP). They never announce.
 	RIBSources []Instance[plugin.RIBSource]
 	// Federation is the multi-POP transport (#30). It never announces.
@@ -162,6 +165,11 @@ func Build(cfg *config.Config, opts Options) (*Set, error) {
 			s.Whois = &b[0]
 		}
 	}
+	if cfg.IXP != nil && cfg.IXP.Members != nil {
+		if b := build(plugin.MemberSources, "ixp.members", []config.PluginSpec{*cfg.IXP.Members}, base, &errs); len(b) == 1 {
+			s.IXPMembers = &b[0]
+		}
+	}
 	if err := errors.Join(errs...); err != nil {
 		return nil, err
 	}
@@ -232,6 +240,9 @@ func (s *Set) all() []namedLifecycle {
 	}
 	if s.Whois != nil {
 		add(plugin.KindWhois, s.Whois.Name, s.Whois.Plugin)
+	}
+	if s.IXPMembers != nil {
+		add(plugin.KindMemberSource, s.IXPMembers.Name, s.IXPMembers.Plugin)
 	}
 	// Before the announcers, so it stops after them. The core withdraws
 	// and resigns before any plugin stops.

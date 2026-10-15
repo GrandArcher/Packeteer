@@ -129,3 +129,27 @@ func TestIXPBlockRejectsUnknownKeys(t *testing.T) {
 		t.Fatalf("err = %v", err)
 	}
 }
+
+func TestIXPMembersConfig(t *testing.T) {
+	y := minimalYAML + `
+ixp:
+  members:
+    type: ixf
+    config:
+      url: https://ixp.example.invalid/members.json
+`
+	cfg, err := Parse([]byte(y))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.IXP == nil || cfg.IXP.Members == nil || cfg.IXP.Members.Type != "ixf" {
+		t.Fatalf("%+v", cfg.IXP)
+	}
+	if cfg.Mode != ModeObserve || cfg.Announcer != nil {
+		t.Fatalf("mode %s announcer %v", cfg.Mode, cfg.Announcer)
+	}
+	_, err = Parse([]byte(minimalYAML + "ixp:\n  members: {}\n"))
+	if err == nil || !strings.Contains(err.Error(), "ixp.members: type is required") {
+		t.Fatalf("missing type: %v", err)
+	}
+}

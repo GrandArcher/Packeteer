@@ -7,9 +7,11 @@ import (
 )
 
 // IXP is exchange-operator mode (#160). A non-nil value, including an
-// empty block, is IXP mode. The block has no keys: a key is a parse
-// error until the issue that defines it. IXP mode never announces.
-type IXP struct{}
+// empty block, is IXP mode. IXP mode never announces. The only key is
+// members (#161), a read-only IX-F import. Any other key is a parse error.
+type IXP struct {
+	Members *PluginSpec `yaml:"members,omitempty"`
+}
 
 // ixpForbidsSynthesize rejects a synthesize key when an ixp block is
 // present. synthesize is not a field (#122); without this check the
