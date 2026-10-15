@@ -26,7 +26,8 @@ import (
 
 // route is one endpoint and the lowest role that may call it. An empty
 // role is public: health checks, the sign-in endpoints, and the sign-in
-// page with the three files it loads (signin.js, shell.js, app.css).
+// page with the files it loads (signin.js, shell.js, app.css, logo.png).
+// The logo is also the favicon, so it has to load before a session.
 type route struct {
 	pattern string
 	role    plugin.Role
@@ -120,6 +121,7 @@ func (s *Server) routeTable() []route {
 		{"GET /signin.js", public, serveFile("signin.js")},
 		{"GET /shell.js", public, serveFile("shell.js")},
 		{"GET /app.css", public, serveFile("app.css")},
+		{"GET /logo.png", public, serveFile("logo.png")},
 		{"GET /prefix/", viewer, serveFile("prefix.html")},
 		{"GET /", viewer, files.ServeHTTP},
 	}

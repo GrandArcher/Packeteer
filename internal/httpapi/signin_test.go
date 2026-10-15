@@ -35,7 +35,8 @@ func withCookie(c *http.Cookie) func(*http.Request) { return func(r *http.Reques
 
 func TestSigninPage(t *testing.T) {
 	e := newRBAC(t, nil)
-	// The page and the three files it loads need no sign-in.
+	// The page and the files it loads need no sign-in. The logo is one of
+	// them: the favicon is requested before a session exists.
 	for path, want := range map[string]string{
 		"/signin.html": `id="signin-form"`,
 		"/signin.js":   "/auth/signin",
@@ -48,7 +49,7 @@ func TestSigninPage(t *testing.T) {
 		}
 	}
 	page := e.do("GET", "/signin.html", "", "").Body.String()
-	for _, want := range []string{`id="banner"`, `<label>User name `, `<label>Password `, `type="password"`, `autocomplete="current-password"`, `src="/signin.js"`} {
+	for _, want := range []string{`id="banner"`, `<label>User name `, `<label>Password `, `type="password"`, `autocomplete="current-password"`, `src="/signin.js"`, `rel="icon" href="/logo.png"`, `alt="Packeteer logo"`, `src="/logo.png"`} {
 		if !strings.Contains(page, want) {
 			t.Errorf("signin.html missing %s", want)
 		}

@@ -6,6 +6,7 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 
 ### Added
 
+- Web UI shows the Packeteer logo next to the name and as the favicon (#327).
 - IXP mode: `ixp: {}` is observe-only and refuses `mode: inject`, `announcer`, `mitigation`, `inbound`, `synthesize`, and `more_specific`; no BGP neighbors or RIB view required (#160).
 - Probe-path check: a TTL-1 probe from each provider's `source_ip` must leave through `next_hop`; a mismatch marks it down with reason `probe path mismatch`; `path_check: false` opts out (#150).
 - BMP exchange peer session monitor: `exchange.peer_up`/`peer_down` with the decoded reason (Cease subcode 1), Adj-RIB-In count as `adj_rib_in` and a metric, and `exchange.max_prefix` warnings (#147).

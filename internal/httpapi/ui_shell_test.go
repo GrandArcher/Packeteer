@@ -44,6 +44,13 @@ func TestUIShell(t *testing.T) {
 		if !strings.Contains(body, `href="/events.html">Events`) {
 			t.Errorf("%s events slot does not open the Events page", e.Name())
 		}
+		// The brand logo and the favicon are the embedded file (#327).
+		if !strings.Contains(body, `<link rel="icon" href="/logo.png" type="image/png" sizes="128x128">`) {
+			t.Errorf("%s missing favicon", e.Name())
+		}
+		if !strings.Contains(body, `<a class="brand" href="/"><img class="logo" src="/logo.png" width="32" height="32" alt="Packeteer logo">Packeteer</a>`) {
+			t.Errorf("%s brand has no logo", e.Name())
+		}
 		bi, ni := strings.Index(body, `id="banner"`), strings.Index(body, `<nav class="sidenav"`)
 		if bi < 0 || ni < 0 || bi > ni {
 			t.Errorf("%s mode banner is not before the navigation", e.Name())
