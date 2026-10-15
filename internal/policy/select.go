@@ -69,7 +69,7 @@ func whyUnusable(cands []Candidate, provider string) string {
 }
 
 func reasonText(to, from Candidate) string {
-	return fmt.Sprintf("%s: loss %.1f%%→%.1f%%, rtt %s→%s", to.Provider, from.LossPct, to.LossPct,
+	return fmt.Sprintf("%s: loss %.1f%%->%.1f%%, rtt %s->%s", to.Provider, from.LossPct, to.LossPct,
 		from.RTTAvg.Round(time.Millisecond/10), to.RTTAvg.Round(time.Millisecond/10))
 }
 
