@@ -123,7 +123,7 @@ func TestEndpoints(t *testing.T) {
 	paths := []string{
 		"/healthz", "/readyz", "/metrics",
 		"/api/providers", "/api/probes", "/api/prefixes", "/api/decisions", "/api/improvements", "/api/telemetry",
-		"/", "/app.js", "/app.css",
+		"/", "/app.js", "/app.css", "/logo.png",
 	}
 	for _, p := range paths {
 		code, hdr, body := do(t, http.MethodGet, ts.URL+p, "", "")

@@ -280,7 +280,11 @@ fieldset.form { border: 0; margin: 0; padding: 0; }
   text-decoration: none;
   padding: 7px 16px;
 }
-.sidenav a.brand { font-weight: 700; font-size: 1.15rem; padding-top: 12px; padding-bottom: 12px; }
+.sidenav a.brand { display: flex; align-items: center; gap: 8px; font-weight: 700; font-size: 1.15rem; padding-top: 12px; padding-bottom: 12px; }
+/* 32px is a quarter of the 128px file, so the downscale stays sharp.
+   The mark keeps its own navy field, so the white nodes stay readable
+   on the dark nav and on the light sign-in page. */
+.logo { width: 32px; height: 32px; flex: none; border-radius: 6px; }
 .sidenav a[aria-current="page"] { background: rgba(255, 255, 255, 0.14); font-weight: 600; }
 .app-main { flex: 1; min-width: 0; }
 .topbar {
@@ -364,7 +368,7 @@ fieldset.form { border: 0; margin: 0; padding: 0; }
 
 /* Sign-in page (#176) */
 .signin { max-width: 24rem; margin: 40px auto; }
-.signin h1 { font-size: 1.35rem; margin: 0 0 4px; }
+.signin h1 { display: flex; align-items: center; gap: 8px; font-size: 1.35rem; margin: 0 0 4px; }
 .signin-form { display: flex; flex-direction: column; gap: 12px; }
 .signin-form label { display: flex; flex-direction: column; gap: 4px; }
 .signin-form input { font: inherit; padding: 8px; border: 1px solid var(--line); border-radius: 4px; }
