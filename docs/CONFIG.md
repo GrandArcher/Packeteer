@@ -23,7 +23,8 @@ The image entrypoint is the same binary. Flags go after the image name.
 
 | Key | Default | Required | Meaning |
 |---|---|---|---|
-| `mode` | `observe` | no | `observe`, `suggest`, or `inject`. A file without `mode` (or with an empty one) observes. `inject` is never a default: it needs `mode: inject` and the [inject checklist](#inject-checklist). |
+| `mode` | `observe` | no | `observe`, `suggest`, or `inject`. A file without `mode` (or with an empty one) observes. `inject` is never a default: it needs `mode: inject` and the [inject checklist](#inject-checklist). An [`ixp`](#ixp) block refuses `inject`. |
+| `ixp` | absent | no | Exchange-operator mode (#160). `ixp: {}` refuses inject, announcer, mitigation, inbound, synthesize, and more_specific. No `bgp.neighbors` required. See [`ixp`](#ixp). |
 | `asn` | none | yes, non-zero | BGP ASN of this speaker. Neighbors are iBGP in this ASN. |
 | `router_id` | none | yes | IPv4 address. IPv6 is rejected. |
 | `packeteer_community` | empty | inject | Standard community `asn:value` (each half 0–65535) or a large community `global:data1:data2` (RFC 8092, each part 0–4294967295). Quote it in YAML (`"64512:666"`). The export policy matches only this community. A two-part value above 16 bits is rejected; write a 4-byte ASN as a large community (`"70000:1:0"`). |
@@ -369,9 +370,19 @@ Applied while running:
 - `inbound.mode` and `mitigation.mode` (#233). `inject` for either needs `mode: inject` in the same file. `hold_time` and `improvement_ttl` reach the inbound controller: a changed `improvement_ttl` applies to steers already running, a changed `hold_time` to steers created after the reload, and a shrunk `allowlist` withdraws an inbound steer it no longer covers. Entering inject runs the same checks as a start and binds the inbound or mitigation announcer on the running speaker; if the reload is then refused, the speaker keeps the inbound import policy, which announces nothing. If leaving inject fails after one controller already withdrew, the reload is fatal: the process stops and withdraws everything. Leaving inject withdraws that controller's routes under its lock before the mode changes. A mitigation rule held outside inject is dropped on entering it, so a dry-run rule never reaches the edge because a mode flipped. Entering mitigation inject with a FlowSpec catalog is refused (`restart required`) unless the process started in inject with it: the sessions negotiate FlowSpec only at start. Every other `inbound` or `mitigation` key stays restart-only.
 - `bgp.neighbors`, as before (#27). A new neighbor gets a session; a removed one is closed (its paths leave the view at once, as on a session loss). A neighbor whose session settings changed (`port`, `local_address`, `passive`, `add_path`) is closed and opened again. Other sessions are not touched. A changed per-router table (`providers`, `next_hops`) replaces the announcer's export policy on the running speaker. Every outbound route is withdrawn first (GoBGP sends a withdraw only where the current policy would send the route, so a route withdrawn after the swap could stay on a router the new table blocks) and announced again under the new table on the next evaluation, once the prefix is back in the learned RIB. Inbound steer routes are not affected. A change that leaves the table as it was (adding a neighbor with no lists to a config with no lists) withdraws nothing. Egress routers are recomputed, so `egress router down` follows the new lists. `bgp.neighbors` cannot become empty on a reload. `bgp.listen_port`, `bgp.listen_addresses`, and `bgp.as_path` need a restart.
 
-The announcer plugin, providers, probers, and every other key stay restart-only. `more_specific` and `synthesize` are restart-only. A reload that changes any restart-only key is refused whole, including the online keys in the same file: the log says `config reload refused` with the keys (`restart required: changed local_pref`), and the running config stays. A file that does not parse or validate is refused the same way, before anything is applied. Comments and YAML style do not count as changes. The audit log records each apply (`config.reload`, with the keys) and each refusal.
+The announcer plugin, providers, probers, and every other key stay restart-only. `more_specific`, `synthesize`, and `ixp` are restart-only. A reload that changes any restart-only key is refused whole, including the online keys in the same file: the log says `config reload refused` with the keys (`restart required: changed local_pref`), and the running config stays. A file that does not parse or validate is refused the same way, before anything is applied. Comments and YAML style do not count as changes. The audit log records each apply (`config.reload`, with the keys) and each refusal.
 
 If a reload fails after it has changed the speaker, Packeteer stops (exit status 1), which withdraws every Packeteer route; the container's restart policy brings it back with the new file. The learned-RIB check, community, NO_EXPORT, and withdraw rules are unchanged. A prefix that is not in the learned RIB is never announced. Environment overlays (`PACKETEER_LOG_LEVEL`, ...) are applied to the reloaded file as at startup. Lab-proven only (`lab/e2e.sh` for a threshold that keeps the route and a cap of 0 that withdraws it; `lab/e2e-ix.sh` for neighbors).
+
+### `ixp`
+
+Exchange-operator mode (#160, [design/ixp.md](design/ixp.md)). Not the [`exchanges`](#exchanges) block, which is an edge network's own peers.
+
+`ixp: {}` turns it on. The block has no keys; any key is an error. Omitted, or `ixp: null`, leaves the file as an edge controller. `mode` stays `observe`. `mode: suggest` is accepted and announces nothing.
+
+With the block set, validation refuses `mode: inject`, `announcer`, `mitigation` (including `mode: observe`), `inbound` (including `mode: observe`), `synthesize`, and `more_specific` (including `enabled: false`). `bgp.neighbors` is not required. With no neighbors the process does not build a RIB view. Route-server data is a separate read-only store and does not enter the RIB view or a decision; that store is not built yet (#164).
+
+Adding or removing `ixp` needs a restart. Rollback: remove the block and restart. Member import and fabric probes are not this block.
 
 ### `exchanges`
 
@@ -729,6 +740,7 @@ Set these in the container. They are not keys in the YAML file. `PACKETEER_HTTP_
 - `hold_time` is positive
 - both threshold deltas are positive
 - `more_specific_bits` is absent (`more_specific` is the replacement; it is off by default)
+- `ixp` is absent (`ixp` refuses `mode: inject`)
 
 The `gobgp` announcer has no `config` keys. A config block with any key is an error. Each announced route carries the provider `next_hop`, the resolved `local_pref` (the provider's, else the cause's, else the global value), `packeteer_community`, the cause's extra communities, the provider's extra communities, and `no-export`. The export policy accepts only routes Packeteer originated that carry `packeteer_community`. An extra community alone does not match.
 

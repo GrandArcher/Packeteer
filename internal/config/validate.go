@@ -39,6 +39,7 @@ func (c *Config) Validate() error {
 	c.validateLogHTTP(add)
 	c.validateMoreSpecific(add)
 	c.validateInject(add)
+	c.validateIXP(add)
 
 	// Cause and provider overrides are optional in every mode. A set 0 is
 	// rejected the same way inject rejects a global local_pref of 0, so a

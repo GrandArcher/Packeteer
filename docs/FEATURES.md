@@ -26,13 +26,13 @@ Milestones:
 | v0.4 | 13 |
 | v0.6 | 9 |
 | v0.7 | 3 |
-| v0.8 | 7 |
+| v0.8 | 8 |
 | won't do | 2 |
-| **total** | 100 |
+| **total** | 101 |
 
 | Status | Count |
 |---|---|
-| done | 84 |
+| done | 85 |
 | partial | 9 |
 | in progress | 0 |
 | planned | 5 |
@@ -191,8 +191,11 @@ The `maintenance` policy excludes providers during cron-scheduled, one-off, or o
 | Per-member route server vs bilateral availability: prefixes seen only via the route server, only bilaterally, or both, with counts over time and a flag for a partial or filtered route server feed | done (#156: counts and flags on `/api/exchanges`, `GET /api/exchanges/member` for the prefixes and the counts kept in memory every 15 minutes, and columns on `/providers.html`; BMP Adj-RIB-In paths only, so a peer without `bmp: prefer` or `only` shows zero, and discovered members are not classified; read-only) | v0.8 | core (`internal/rib`, `internal/exchange`) + UI | #156 | no |
 | Transit-to-IX offload report: flow bytes of prefixes whose exit is a transit while a configured IX peer advertises the exact prefix, with the estimated saving at the transit's `cost` | done (#152: `GET /api/exchanges/offload` as JSON or CSV, sorted by bytes, and a table on `/providers.html`; observe only, nothing is steered; needs a target source that reports volume and, per peer, the route check) | v0.8 | core (`internal/exchange`, `internal/httpapi`) + UI | #152 | no |
 | Potential-peers report: destination origin ASNs ranked by flow bytes, whether each is present at one of our exchanges, whether a path via the LAN exists today, split into on the route server (check our session or filters) and bilateral only (candidate for a request) | partial (#154: `GET /api/exchanges/potential-peers` as JSON or CSV, with `?class=`, and two tables on `/providers.html`; presence is the configured peers and the discovered LAN members, and the session type needs BMP Adj-RIB-In paths; observe only, no session is opened). Presence from PeeringDB or IX-F waits on #153 | v0.8 | core (`internal/exchange`, `internal/httpapi`) + UI | #154 | no |
+| IXP mode (exchange operator): `ixp: {}` refuses `mode: inject`, `announcer`, `mitigation`, `inbound`, `synthesize`, and `more_specific`; no `bgp.neighbors` or RIB view required; route-server data is a separate read-only store that never feeds the RIB or Decide | done (#160: charter and validation. Member import, fabric probes, route-server history, and member pages are #161-#167 and are not built) | v0.8 | core (`internal/config`) | #160 | no |
 | Bgpd online reconfiguration (SIGHUP: add/remove/change iBGP sessions and the per-router table without touching other sessions) | done (lab-proven) | v0.3 | core + announcer (`gobgp`) + RIB | #27 | no (lab-proven) |
 | Online reconfiguration of core settings (thresholds, hold time, cap, policies, sources) without a restart or a withdraw | done (lab-proven) | v0.6 | core (`cmd/controller` reload, `internal/configedit`) | #128 | no (lab-proven) |
+
+IXP mode (#160, [design](design/ixp.md)) is `ixp: {}`, for an exchange operator. It is not an edge network's `exchanges` peers. Validation refuses `mode: inject`, `announcer`, `mitigation`, `inbound`, `synthesize`, and `more_specific`. No `bgp.neighbors` and no RIB view are required. Route-server data is a separate read-only store and does not feed the RIB view or Decide; that store is #164. Rollback: remove `ixp` and restart.
 
 Leak watch (#199, [leak-watch.md](leak-watch.md)) is off unless `leak_watch.enabled: true`, which needs `packeteer_community` and a source. A leak source reports routes seen outside the iBGP sessions; a sighting that carries `packeteer_community` (or, with `as_path_rule`, shows an injected prefix with `asn` in its path) withdraws that one outbound route at once (never in bulk), holds the prefix out of outbound improvements and inbound steers until `POST /api/leaks/clear`, and emits `leak.detected`. Sources: `bmp` (post-policy Adj-RIB-In of routers outside the AS and Adj-RIB-Out of your own edge toward eBGP) and `rislive`. The export deny for customer, peer, and transit sessions, standard and large communities, is per vendor in [routers.md](routers.md#export-filters-on-every-ebgp-session) (#210).
 

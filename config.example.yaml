@@ -2,6 +2,12 @@
 # Every key, default, and bound: docs/CONFIG.md
 mode: observe               # also the default when mode is left out; inject is never a default
 
+# IXP mode (docs/design/ixp.md, #160) is an exchange operator, not this edge.
+# `ixp: {}` has no keys. It refuses mode inject, announcer, mitigation,
+# inbound, synthesize, and more_specific. bgp.neighbors is not required.
+# Leave it unset on an edge that may inject.
+# ixp: {}
+
 asn: 64512
 router_id: 192.0.2.10
 packeteer_community: "64512:666"

@@ -179,6 +179,9 @@ func run(ctx context.Context, args []string, getenv func(string) string, stdout,
 
 	fmt.Fprintf(stdout, "packeteer %s: config %s loaded\n", version, *path)
 	fmt.Fprintf(stdout, "mode: %s\n", cfg.Mode)
+	if cfg.IXP != nil {
+		fmt.Fprintln(stdout, "ixp: on (observe-only, never announces)")
+	}
 	fmt.Fprintf(stdout, "max_improvements: %d\n", *cfg.MaxImprovements)
 	fmt.Fprintf(stdout, "providers (%d):\n", len(cfg.Providers))
 	for _, p := range cfg.Providers {

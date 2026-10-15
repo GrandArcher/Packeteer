@@ -20,6 +20,15 @@ This repository controls BGP in real networks when injection is enabled. Treat e
 - Controller crash or probe-source loss must withdraw Packeteer-originated routes or leave native BGP untouched. No stale intent.
 - Tests are required for announce, withdraw, and crash/withdraw behavior before any inject-path code merges.
 
+## IXP mode
+
+An `ixp:` block is an Internet exchange operator observing the fabric, route servers, and members. It is not the `exchanges` block (an edge network's own peering). Design: docs/design/ixp.md.
+
+- IXP mode is observe-only and never announces. Nothing in it changes member routing. `mode: suggest` is allowed and announces nothing. Validation refuses `mode: inject`, `announcer`, `mitigation`, `inbound`, `synthesize`, and `more_specific`.
+- IXP mode does not need `bgp.neighbors` or the RIB view. Route-server data lives in a separate read-only store that never feeds the RIB view or `Decide`.
+- IXP Manager and Birdseye are read with GET only, from the fixed endpoint allowlist in docs/design/ixp.md. The API key comes from an environment variable, never from the URL or the config file. A warning fires before it expires. Use a low-privilege user's key. Honor IXP Manager's per-interface "Can Ping" opt-out.
+- Member data is never committed. Lab fixtures use documentation prefixes and documentation or private ASNs only.
+
 ## Docker-first (non-negotiable)
 
 - The primary install is ONE container:
