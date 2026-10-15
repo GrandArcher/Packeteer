@@ -16,6 +16,7 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 ### Fixed
 
 - IX-F import rejects an IPv4-mapped prefix on an IPv6 LAN, a percent-encoded API key in the manager URL, and a switch id from another IXP (#161).
+- RTR Serial Notify uses the client's last serial, Error Report code 2 keeps the cache and retries, and an empty RPKI source is skipped (#158).
 
 ## [0.7.0] - 2026-10-15
 

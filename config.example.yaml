@@ -285,7 +285,7 @@ scorer:
 # RPKI origin validation (off by default; docs/CONFIG.md#rpki). One or more
 # read-only RTR sources (RFC 8210) label each learned path's origin valid,
 # invalid, not found, or unknown. It never announces and never changes the
-# learned RIB. sources are tried in order; the first with a fresh cache
+# learned RIB. sources are tried in order; the first fresh non-empty cache
 # answers. avoid_invalid only refuses a new improvement onto an invalid path.
 # rpki:
 #   enabled: false

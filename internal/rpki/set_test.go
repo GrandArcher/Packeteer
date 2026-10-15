@@ -17,13 +17,14 @@ type fakeSource struct {
 func (f *fakeSource) Validate(netip.Prefix, uint32) plugin.RPKIValidity { return f.validity }
 func (f *fakeSource) Status() plugin.RPKIStatus                         { return f.status }
 
-// #158: the first source with a fresh cache answers; a stale source is
-// skipped so a second server can take over; with none the state is
-// unknown (fail open).
+// #158: the first fresh, non-empty source answers. A stale source and an
+// empty cache are skipped so a second server can take over. A fresh source
+// that has VRPs answers notfound for an uncovered prefix and does not fall
+// through. With no usable source the state is unknown (fail open).
 func TestSetFallback(t *testing.T) {
 	prefix := netip.MustParsePrefix("198.51.100.0/24")
-	stale := &fakeSource{validity: plugin.RPKIInvalid, status: plugin.RPKIStatus{Source: "first", Stale: true}}
-	fresh := &fakeSource{validity: plugin.RPKIValid, status: plugin.RPKIStatus{Source: "second", Up: true}}
+	stale := &fakeSource{validity: plugin.RPKIInvalid, status: plugin.RPKIStatus{Source: "first", Stale: true, VRPs: 4}}
+	fresh := &fakeSource{validity: plugin.RPKIValid, status: plugin.RPKIStatus{Source: "second", Up: true, VRPs: 4}}
 	s := NewSet([]plugin.RPKI{stale, fresh})
 	if !s.Enabled() {
 		t.Fatal("Enabled = false with sources")
@@ -31,11 +32,22 @@ func TestSetFallback(t *testing.T) {
 	if got := s.Validate(prefix, 64500); got != plugin.RPKIValid {
 		t.Fatalf("Validate = %q, want the fresh source's valid", got)
 	}
-	// The first fresh source answers even not-found: no fallthrough.
-	notFound := &fakeSource{validity: plugin.RPKINotFound, status: plugin.RPKIStatus{Source: "first", Up: true}}
+	// The first fresh source with VRPs answers even not-found: no fallthrough.
+	notFound := &fakeSource{validity: plugin.RPKINotFound, status: plugin.RPKIStatus{Source: "first", Up: true, VRPs: 4}}
 	s = NewSet([]plugin.RPKI{notFound, fresh})
 	if got := s.Validate(prefix, 64500); got != plugin.RPKINotFound {
 		t.Fatalf("Validate = %q, want the first fresh source's notfound", got)
+	}
+	// A fresh empty cache (zero-VRP End of Data) must not answer notfound
+	// and hide a backup that still has the invalid origin.
+	empty := &fakeSource{validity: plugin.RPKINotFound, status: plugin.RPKIStatus{Source: "empty", Up: true}}
+	backup := &fakeSource{validity: plugin.RPKIInvalid, status: plugin.RPKIStatus{Source: "backup", Up: true, VRPs: 3}}
+	s = NewSet([]plugin.RPKI{empty, backup})
+	if got := s.Validate(prefix, 64500); got != plugin.RPKIInvalid {
+		t.Fatalf("Validate = %q, want the backup's invalid", got)
+	}
+	if got := NewSet([]plugin.RPKI{empty}).Validate(prefix, 64500); got != plugin.RPKIUnknown {
+		t.Fatalf("only empty source = %q, want unknown", got)
 	}
 }
 

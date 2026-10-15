@@ -7,9 +7,9 @@ import (
 )
 
 // Set is the configured RPKI source: an ordered list of origin-validation
-// plugins. The first source with a fresh cache answers; a stale or empty
-// source is skipped, so a second server can take over. It never announces
-// and never changes the learned RIB.
+// plugins. The first source with a fresh, non-empty cache answers; a stale
+// or empty source is skipped, so a second server can take over. It never
+// announces and never changes the learned RIB.
 type Set struct {
 	sources []plugin.RPKI
 }
@@ -46,14 +46,18 @@ func (s *Set) Version() uint64 {
 	return h
 }
 
-// Validate applies the first fresh source. Without one it returns
-// RPKIUnknown, which is the fail-open state: it never blocks a withdraw.
+// Validate applies the first fresh, non-empty source. Without one it
+// returns RPKIUnknown, which is the fail-open state: it never blocks a
+// withdraw.
 func (s *Set) Validate(prefix netip.Prefix, origin uint32) plugin.RPKIValidity {
 	if s == nil {
 		return plugin.RPKIUnknown
 	}
 	for _, src := range s.sources {
-		if src.Status().Stale {
+		st := src.Status()
+		// An empty cache has nothing to apply. Skipping it lets the next
+		// source answer; a zero-VRP End of Data must not hide one.
+		if st.Stale || st.VRPs == 0 {
 			continue
 		}
 		return src.Validate(prefix, origin)

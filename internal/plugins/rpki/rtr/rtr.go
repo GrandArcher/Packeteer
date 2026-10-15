@@ -58,9 +58,6 @@ const (
 // RTR protocol version spoken (RFC 8210).
 const protocolVersion = 1
 
-// RTR error report codes.
-const errNoDataAvailable = 2
-
 const maxBackoff = time.Minute
 
 func init() { plugin.RPKIs.Register(TypeName, New) }
@@ -244,9 +241,9 @@ func (c *Client) session(ctx context.Context) error {
 	}
 	// A reset response is the full table: build it aside and swap at End
 	// of Data, so a dropped connection leaves the last cache in place.
-	// awaiting is true until the response to a query reaches End of Data
-	// (or an Error Report). It bounds that wait by timeout, so a silent
-	// server is dropped and redialed instead of held forever.
+	// awaiting is true until that response reaches End of Data. It bounds
+	// the wait by timeout, so a silent server is dropped and redialed
+	// instead of held forever.
 	pending := rpki.NewVRPs()
 	awaiting := true
 	var buf []byte
@@ -361,7 +358,29 @@ func (c *Client) handle(pdu []byte, pending *rpki.VRPs) (*rpki.VRPs, []byte, boo
 		if len(pdu) < 12 {
 			return pending, nil, false, errors.New("rtr: short serial notify")
 		}
-		return pending, serialQuery(binary.BigEndian.Uint16(pdu[2:4]), binary.BigEndian.Uint32(pdu[8:12])), false, nil
+		// RFC 8210 section 8.2: ignore a notify until End of Data. pending
+		// is the table a reset is still building, so a reply would be a
+		// second query on top of that exchange.
+		if pending != nil {
+			return pending, nil, false, nil
+		}
+		c.mu.Lock()
+		synced := !c.updated.IsZero()
+		session := c.sessionID
+		c.mu.Unlock()
+		if !synced {
+			// No completed fetch yet, so there is no serial to continue from.
+			return pending, nil, false, nil
+		}
+		if binary.BigEndian.Uint16(pdu[2:4]) != session {
+			// This serial belongs to a different session. Continue with
+			// a reset built aside so a dropped reply keeps the last cache.
+			return rpki.NewVRPs(), resetQuery(), false, nil
+		}
+		// The notify's serial is the cache's new one. A Serial Query for
+		// that serial asks for changes after it, so the delta in between
+		// is never applied (RFC 8210 section 5.3). Ask from our last serial.
+		return pending, c.query(), false, nil
 	case pduCacheReset:
 		return rpki.NewVRPs(), resetQuery(), false, nil
 	case pduRouterKey:
@@ -372,15 +391,13 @@ func (c *Client) handle(pdu []byte, pending *rpki.VRPs) (*rpki.VRPs, []byte, boo
 		if len(pdu) < 8 {
 			return pending, nil, false, errors.New("rtr: short error report")
 		}
-		if code := binary.BigEndian.Uint16(pdu[2:4]); code != errNoDataAvailable {
-			return pending, nil, false, fmt.Errorf("rtr: error report code %d", code)
-		}
-		// The server has no data: an empty cache is valid and fresh.
-		c.mu.Lock()
-		c.cache = rpki.NewVRPs()
-		c.mu.Unlock()
-		c.setUp(0, 0)
-		return nil, nil, true, nil
+		// RFC 8210 section 8.4: code 2 (No Data Available) is a retry, not
+		// an empty VRP set. An empty End of Data is the empty set. Leave
+		// the last cache in place and drop the session so run redials.
+		// Marking an empty table fresh would make a previously invalid
+		// origin look notfound while status stayed up.
+		code := binary.BigEndian.Uint16(pdu[2:4])
+		return pending, nil, false, fmt.Errorf("rtr: error report code %d", code)
 	default:
 		return pending, nil, false, fmt.Errorf("rtr: unexpected PDU type %d", pdu[1])
 	}

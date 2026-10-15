@@ -17,7 +17,7 @@ type fakeRPKI struct {
 }
 
 func (f fakeRPKI) Validate(netip.Prefix, uint32) plugin.RPKIValidity { return f.validity }
-func (f fakeRPKI) Status() plugin.RPKIStatus                         { return plugin.RPKIStatus{Up: true} }
+func (f fakeRPKI) Status() plugin.RPKIStatus                         { return plugin.RPKIStatus{Up: true, VRPs: 1} }
 
 // #158: newRPKISet wraps the configured sources in order and is off when
 // none is configured.

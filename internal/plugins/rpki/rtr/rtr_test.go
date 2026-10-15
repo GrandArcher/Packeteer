@@ -1,6 +1,7 @@
 package rtr
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
 	"io"
@@ -353,6 +354,380 @@ func TestConfigValidation(t *testing.T) {
 	c := p.(*Client)
 	if c.cfg.Refresh != DefaultRefresh || c.cfg.Staleness != DefaultStaleness || c.cfg.Timeout != DefaultTimeout {
 		t.Fatalf("defaults = %+v", c.cfg)
+	}
+}
+
+func serialNotifyPDU(session uint16, serial uint32) []byte {
+	b := make([]byte, 12)
+	b[0], b[1] = protocolVersion, pduSerialNotify
+	binary.BigEndian.PutUint16(b[2:4], session)
+	binary.BigEndian.PutUint32(b[4:8], 12)
+	binary.BigEndian.PutUint32(b[8:12], serial)
+	return b
+}
+
+func errorReportPDU(code uint16) []byte {
+	// Header, an empty encapsulated PDU, and empty text (RFC 8210 section 5.10).
+	b := make([]byte, 16)
+	b[0], b[1] = protocolVersion, pduErrorReport
+	binary.BigEndian.PutUint16(b[2:4], code)
+	binary.BigEndian.PutUint32(b[4:8], 16)
+	return b
+}
+
+// readQuery reads one Reset Query or Serial Query from the router.
+func readQuery(conn net.Conn) (byte, uint16, uint32, error) {
+	head := make([]byte, 8)
+	if _, err := io.ReadFull(conn, head); err != nil {
+		return 0, 0, 0, err
+	}
+	typ := head[1]
+	session := binary.BigEndian.Uint16(head[2:4])
+	n := binary.BigEndian.Uint32(head[4:8])
+	if n < 8 || n > 64 {
+		return typ, session, 0, io.ErrUnexpectedEOF
+	}
+	var serial uint32
+	if n > 8 {
+		rest := make([]byte, n-8)
+		if _, err := io.ReadFull(conn, rest); err != nil {
+			return typ, session, 0, err
+		}
+		if typ == pduSerialQuery && len(rest) >= 4 {
+			serial = binary.BigEndian.Uint32(rest[:4])
+		}
+	}
+	return typ, session, serial, nil
+}
+
+// A Serial Notify before End of Data draws no query. After End of Data, a
+// notify for the same session is answered with the client's last serial,
+// not the serial in the notify, and that delta is applied.
+func TestClientSerialNotifyAppliesDelta(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+	first := ipv4PDU(t, "198.51.100.0/24", 24, 64500, true)
+	delta := ipv4PDU(t, "203.0.113.0/24", 24, 64501, true)
+	notify := serialNotifyPDU(7, 99)
+	type query struct {
+		typ     byte
+		session uint16
+		serial  uint32
+	}
+	early := make(chan struct{}, 1)
+	got := make(chan query, 1)
+	go func() {
+		conn, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		typ, _, _, err := readQuery(conn)
+		if err != nil || typ != pduResetQuery {
+			return
+		}
+		if _, err := conn.Write(notify); err != nil {
+			return
+		}
+		_ = conn.SetReadDeadline(time.Now().Add(200 * time.Millisecond))
+		buf := make([]byte, 8)
+		n, _ := conn.Read(buf)
+		_ = conn.SetReadDeadline(time.Time{})
+		if n > 0 {
+			early <- struct{}{}
+			return
+		}
+		if _, err := conn.Write(cacheResponsePDU()); err != nil {
+			return
+		}
+		if _, err := conn.Write(first); err != nil {
+			return
+		}
+		if _, err := conn.Write(endOfDataPDU(10)); err != nil {
+			return
+		}
+		if _, err := conn.Write(notify); err != nil {
+			return
+		}
+		typ, session, serial, err := readQuery(conn)
+		if err != nil {
+			return
+		}
+		got <- query{typ, session, serial}
+		if typ != pduSerialQuery || session != 7 || serial != 10 {
+			return
+		}
+		_, _ = conn.Write(cacheResponsePDU())
+		_, _ = conn.Write(delta)
+		_, _ = conn.Write(endOfDataPDU(99))
+		_, _ = io.Copy(io.Discard, conn)
+	}()
+
+	cfg, err := plugin.ConfigFromYAML("address: " + ln.Addr().String() + "\nrefresh: 10s\nstaleness: 1h\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := New(cfg, plugin.Env{Name: "rpki-lab"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := p.(*Client)
+	if err := c.Start(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		ctx, cancel := contextWithTimeout(2 * time.Second)
+		defer cancel()
+		_ = c.Stop(ctx)
+	})
+	var q query
+	deadline := time.Now().Add(2 * time.Second)
+	for !c.Status().Up && time.Now().Before(deadline) {
+		select {
+		case <-early:
+			t.Fatal("serial notify before End of Data drew a query")
+		default:
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if !c.Status().Up {
+		select {
+		case <-early:
+			t.Fatal("serial notify before End of Data drew a query")
+		default:
+		}
+		t.Fatal("client never became up")
+	}
+	select {
+	case <-early:
+		t.Fatal("serial notify before End of Data drew a query")
+	case q = <-got:
+	case <-time.After(2 * time.Second):
+		t.Fatal("no query after serial notify")
+	}
+	if q.typ != pduSerialQuery || q.session != 7 || q.serial != 10 {
+		t.Fatalf("query type %d session %d serial %d, want serial query session 7 serial 10", q.typ, q.session, q.serial)
+	}
+	deadline = time.Now().Add(2 * time.Second)
+	next := mustPrefix(t, "203.0.113.0/24")
+	for time.Now().Before(deadline) {
+		if c.Validate(next, 64501) == plugin.RPKIValid {
+			if got := c.Validate(mustPrefix(t, "198.51.100.0/24"), 64500); got != plugin.RPKIValid {
+				t.Fatalf("original payload = %q, want valid", got)
+			}
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatal("serial delta was not applied")
+}
+
+// Same-session notify uses the stored serial. A different session starts a
+// reset whose End of Data replaces the cache instead of merging into it.
+func TestHandleSerialNotify(t *testing.T) {
+	c := &Client{cfg: Config{Staleness: time.Hour}, cache: rpki.NewVRPs()}
+	if _, reply, done, err := c.handle(serialNotifyPDU(7, 99), nil); err != nil || reply != nil || done {
+		t.Fatalf("unsynced notify reply=%v done=%v err=%v", reply, done, err)
+	}
+	if _, _, _, err := c.handle([]byte{protocolVersion, pduSerialNotify}, nil); err == nil {
+		t.Fatal("short serial notify accepted")
+	}
+
+	c.setUp(10, 7)
+	pending := rpki.NewVRPs()
+	gotPending, reply, done, err := c.handle(serialNotifyPDU(7, 99), pending)
+	if err != nil || reply != nil || done || gotPending != pending {
+		t.Fatalf("notify during reset reply=%v done=%v same=%v err=%v", reply, done, gotPending == pending, err)
+	}
+
+	_, reply, _, err = c.handle(serialNotifyPDU(7, 99), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(reply, serialQuery(7, 10)) {
+		t.Fatalf("serial query = %v, want session 7 serial 10", reply)
+	}
+
+	if _, _, _, err := c.handle(ipv4PDU(t, "198.51.100.0/24", 24, 64500, true), nil); err != nil {
+		t.Fatal(err)
+	}
+	pending, reply, _, err = c.handle(serialNotifyPDU(9, 50), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(reply, resetQuery()) {
+		t.Fatalf("session mismatch reply = %v, want reset query", reply)
+	}
+	if pending == nil || pending.Len() != 0 {
+		t.Fatal("session mismatch did not start an empty table")
+	}
+	if _, _, _, err := c.handle(ipv4PDU(t, "203.0.113.0/24", 24, 64501, true), pending); err != nil {
+		t.Fatal(err)
+	}
+	if got := c.Validate(mustPrefix(t, "198.51.100.0/24"), 64500); got != plugin.RPKIValid {
+		t.Fatalf("cache changed before End of Data: %q", got)
+	}
+	if _, _, done, err := c.handle(endOfDataPDU(3), pending); err != nil || !done {
+		t.Fatalf("end of data done=%v err=%v", done, err)
+	}
+	if got := c.Validate(mustPrefix(t, "198.51.100.0/24"), 64500); got != plugin.RPKINotFound {
+		t.Fatalf("old payload after reset = %q, want notfound", got)
+	}
+	if got := c.Validate(mustPrefix(t, "203.0.113.0/24"), 64501); got != plugin.RPKIValid {
+		t.Fatalf("reset payload = %q, want valid", got)
+	}
+}
+
+// Error Report code 2 is a retry. A cache that already validated an origin
+// keeps those VRPs, and the client opens a new session.
+func TestClientErrorReportKeepsCache(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+	payload := ipv4PDU(t, "198.51.100.0/24", 24, 64500, true)
+	report := errorReportPDU(2)
+	var accepts atomic.Int32
+	seen := make(chan struct{})
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			n := accepts.Add(1)
+			go func(conn net.Conn, n int32) {
+				defer conn.Close()
+				typ, _, _, err := readQuery(conn)
+				if err != nil || typ != pduResetQuery {
+					return
+				}
+				if n != 1 {
+					_, _ = io.Copy(io.Discard, conn)
+					return
+				}
+				_, _ = conn.Write(cacheResponsePDU())
+				_, _ = conn.Write(payload)
+				_, _ = conn.Write(endOfDataPDU(10))
+				select {
+				case <-seen:
+				case <-time.After(5 * time.Second):
+					return
+				}
+				_, _ = conn.Write(report)
+				_, _ = io.Copy(io.Discard, conn)
+			}(conn, n)
+		}
+	}()
+
+	cfg, err := plugin.ConfigFromYAML("address: " + ln.Addr().String() + "\nrefresh: 30s\ntimeout: 1s\nstaleness: 1h\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := New(cfg, plugin.Env{Name: "rpki-lab"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := p.(*Client)
+	if err := c.Start(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		ctx, cancel := contextWithTimeout(2 * time.Second)
+		defer cancel()
+		_ = c.Stop(ctx)
+	})
+	prefix := mustPrefix(t, "198.51.100.0/24")
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) && c.Validate(prefix, 64511) != plugin.RPKIInvalid {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if got := c.Validate(prefix, 64511); got != plugin.RPKIInvalid {
+		t.Fatalf("before error report = %q, want invalid", got)
+	}
+	close(seen)
+	deadline = time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) && accepts.Load() < 2 {
+		time.Sleep(20 * time.Millisecond)
+	}
+	if got := accepts.Load(); got < 2 {
+		t.Fatalf("error report was not retried (connections = %d)", got)
+	}
+	if got := c.Validate(prefix, 64511); got != plugin.RPKIInvalid {
+		t.Fatalf("after error report = %q, want invalid", got)
+	}
+	if got := c.Status().VRPs; got != 1 {
+		t.Fatalf("VRPs = %d after error report, want the previous cache", got)
+	}
+}
+
+// Error Report code 2 before any End of Data does not publish an empty
+// fresh cache. Lookups stay unknown and the client retries.
+func TestClientErrorReportWithoutDataStaysUnknown(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+	report := errorReportPDU(2)
+	var accepts atomic.Int32
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			accepts.Add(1)
+			go func(conn net.Conn) {
+				defer conn.Close()
+				typ, _, _, err := readQuery(conn)
+				if err != nil || typ != pduResetQuery {
+					return
+				}
+				_, _ = conn.Write(report)
+				_, _ = io.Copy(io.Discard, conn)
+			}(conn)
+		}
+	}()
+
+	cfg, err := plugin.ConfigFromYAML("address: " + ln.Addr().String() + "\nrefresh: 30s\ntimeout: 1s\nstaleness: 1h\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := New(cfg, plugin.Env{Name: "rpki-lab"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := p.(*Client)
+	if err := c.Start(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		ctx, cancel := contextWithTimeout(2 * time.Second)
+		defer cancel()
+		_ = c.Stop(ctx)
+	})
+	prefix := mustPrefix(t, "198.51.100.0/24")
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) && accepts.Load() < 2 {
+		st := c.Status()
+		if st.Up && !st.Stale && st.VRPs == 0 {
+			t.Fatal("error report code 2 marked an empty cache fresh")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if got := accepts.Load(); got < 2 {
+		t.Fatalf("error report was not retried (connections = %d)", got)
+	}
+	if got := c.Validate(prefix, 64511); got != plugin.RPKIUnknown {
+		t.Fatalf("no data = %q, want unknown", got)
+	}
+	if c.Status().Up {
+		t.Fatal("error report left the source up")
 	}
 }
 
