@@ -3,10 +3,19 @@
 mode: observe               # also the default when mode is left out; inject is never a default
 
 # IXP mode (docs/design/ixp.md, #160) is an exchange operator, not this edge.
-# `ixp: {}` has no keys. It refuses mode inject, announcer, mitigation,
-# inbound, synthesize, and more_specific. bgp.neighbors is not required.
-# Leave it unset on an edge that may inject.
-# ixp: {}
+# It refuses mode inject, announcer, mitigation, inbound, synthesize, and
+# more_specific. bgp.neighbors is not required. Leave it unset on an edge
+# that may inject. members (#161) is read-only and announces nothing.
+# The API key is PACKETEER_IXP_MANAGER_API_KEY, never this file.
+# ixp:
+#   members:
+#     type: ixf
+#     config:
+#       url: https://ixp.example.invalid/api/v4/member-export/ixf/1.0
+#       refresh: 15m
+#       timeout: 30s
+#       max_bytes: 8388608
+#       key_expires: "YYYY-MM-DD"   # required with the API key; at most 366 days ahead
 
 asn: 64512
 router_id: 192.0.2.10

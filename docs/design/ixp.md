@@ -1,10 +1,9 @@
 # IXP mode (#160)
 
-Status: charter and config gate. The `ixp` block is accepted and the
-refusals below are enforced. Member import, fabric probing, route-server
-history, signals, member pages, and multi-site fabric health are
-#161-#167 and are not built. An `ixp` block does not announce, probe
-members, or open a route-server session.
+Status: charter, config gate, and IX-F member import (#161). Fabric
+probing, route-server history, signals, member pages, and multi-site
+fabric health are #162-#167 and are not built. An `ixp` block does not
+announce, probe members, or open a route-server session.
 
 An Internet exchange operator runs Packeteer to observe its fabric,
 route servers, and members. It does not route for them. This is not the
@@ -12,10 +11,10 @@ route servers, and members. It does not route for them. This is not the
 
 ## Turning it on
 
-`ixp: {}` in the config. The block has no keys. A key inside it is an
-error until the issue that adds it. Omitted, or `ixp: null`, is not IXP
-mode. `mode` stays `observe`. `mode: suggest` is accepted and announces
-nothing. The shipped example leaves the block commented out.
+`ixp: {}` in the config. The only key is `members` (#161). Any other
+key is an error. Omitted, or `ixp: null`, is not IXP mode. `mode` stays
+`observe`. `mode: suggest` is accepted and announces nothing. The
+shipped example leaves the block commented out.
 
 IXP mode does not need `bgp.neighbors`. With no neighbors the controller
 does not build a RIB view. A neighbor list is still allowed; it is the
@@ -47,25 +46,34 @@ them. The store is not built yet.
 
 ## External reads
 
-IXP Manager and Birdseye are read with GET only. No other method. The
-path allowlist is not enforced in code yet; #161 and #164 must refuse
-anything else:
+IXP Manager and Birdseye are read with GET only. No other method.
 
-- IXP Manager member export: `GET /api/v4/member-export/ixf/1.0` on the
-  operator's base URL (#161). Auth is the `X-IXP-Manager-API-Key`
-  header. The key is the environment variable
-  `PACKETEER_IXP_MANAGER_API_KEY`. It is not a config key and not a
-  query parameter. The controller does not read it yet. The log may
-  record that a key is set, never the secret. A warning fires 14 days
-  before the key expires. Use a low-privilege user. Superuser endpoints
-  are not called.
-- An IX-F JSON document the operator names (#161) is also GET only.
-- Birdseye, GET only (#164): `api/status`, `api/protocols/bgp`,
+- IXP Manager member export (#161, enforced): `GET /api/v4/member-export/ixf/1.0`
+  on the operator's base URL, including a subdirectory install whose
+  path ends with that suffix. A bare origin uses that path. The only
+  query keys kept are `ignore_missing_ixfid=1` and `ixfid_<digits>=<digits>`.
+  `apikey`, `api_key`, `access_key`, `key`, `token`, `password`, and any
+  other query key are refused. Auth is the `X-IXP-Manager-API-Key`
+  header. The key is `PACKETEER_IXP_MANAGER_API_KEY`. It is not a config
+  value and not a query parameter. The log records the key identifier,
+  never the secret. `key_expires` (`YYYY-MM-DD`) is required when the
+  key is set, because the token and this export do not carry the expiry.
+  A warning fires when 14 days or fewer remain, including a key that is
+  already expired. A date more than 366 days ahead is refused. Redirects
+  are not followed. The response is capped (`max_bytes`, default 8 MiB)
+  and refreshed on `refresh` (default 15m, 1m-24h). Use a low-privilege
+  user. Superuser endpoints are not called. The list is served at
+  `GET /api/ixp/members`. It is not the RIB and not an input to Decide.
+- An IX-F JSON document the operator names (#161) is GET of that exact
+  URL, with no API key. Setting the key with a URL that is not the
+  member export is a config error.
+- Birdseye, GET only (#164, not built): `api/status`, `api/protocols/bgp`,
   `api/routes/count/protocol/{protocol}`,
   `api/routes/lc-zwild/protocol/{protocol}/{rs-asn}/1101`.
 
-IXP Manager's per-interface "Can Ping" opt-out is honored (#162). A
-member interface that opts out is not probed.
+IXP Manager's per-interface "Can Ping" opt-out is #162. This import does
+not probe, so the opt-out has nothing to apply to yet. A member
+interface that opts out is not probed once fabric probes exist.
 
 ## Lab data
 
@@ -74,4 +82,5 @@ Member data is never committed. Lab fixtures use documentation prefixes
 documentation or private ASNs (64496-64511, 65536-65551, or
 64512-65534).
 
-Rollback: remove the `ixp` block and restart.
+Rollback: remove `ixp.members` or the `ixp` block and restart. Nothing
+was announced.

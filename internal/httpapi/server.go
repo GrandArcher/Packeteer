@@ -141,6 +141,9 @@ type Server struct {
 	// exMembers is the member comparison of the exchange view (#156). Nil
 	// until SetExchangeMembers.
 	exMembers atomic.Pointer[ExchangeMembers]
+	// ixpMembers is the IX-F import (#161). Nil until SetIXPMembers.
+	// Read at request time. It never announces.
+	ixpMembers atomic.Value
 	// quarantine releases a flap-quarantined prefix (#228). Nil until
 	// SetQuarantine.
 	quarantine atomic.Value
@@ -329,6 +332,9 @@ func (s *Server) handleMetrics(w http.ResponseWriter, _ *http.Request) {
 	}
 	if s.ha != nil {
 		_, _ = w.Write(HAMetrics(s.ha()))
+	}
+	if v, ok := s.ixpMemberView(); ok && v.Configured {
+		_, _ = w.Write(IXPMemberMetrics(v, time.Now()))
 	}
 }
 

@@ -14,6 +14,7 @@ Set these on the container (`-e NAME`). Secrets belong here, never in the config
 | `PACKETEER_HTTP_USER`, `PACKETEER_HTTP_PASSWORD` | The single basic-auth account. Not allowed when `auth.enabled` is true. |
 | `PACKETEER_ADMIN_USER`, `PACKETEER_ADMIN_PASSWORD` | First admin when `auth` is on (user defaults to `admin`). See [auth.md](auth.md). |
 | `PACKETEER_HA_ID` | Instance id for the `lease` elector. See [ha.md](ha.md). |
+| `PACKETEER_IXP_MANAGER_API_KEY` | IXP Manager API key for `ixp.members` type `ixf` (#161). Sent only as the `X-IXP-Manager-API-Key` header, never in the URL. The log records the key identifier; the secret is never logged. |
 
 ## Referenced from config
 
