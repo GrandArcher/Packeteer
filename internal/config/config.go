@@ -189,6 +189,9 @@ type Config struct {
 	// Linkouts picks the "open in" links on the prefix, ASN, and provider
 	// pages (#211). Display only; Packeteer requests none of those sites.
 	Linkouts linkout.Config `yaml:"linkouts"`
+	// IXP is exchange-operator mode (#160). Nil is an edge controller.
+	// Set, Packeteer observes only and never announces.
+	IXP *IXP `yaml:"ixp"`
 }
 
 // GlobalCommit is one commit shared by several providers, usually links
@@ -668,6 +671,10 @@ func Load(path string) (*Config, error) {
 
 // Parse decodes YAML bytes strictly, applies defaults, and validates.
 func Parse(data []byte) (*Config, error) {
+	if err := ixpForbidsSynthesize(data); err != nil {
+		return nil, err
+	}
+
 	dec := yaml.NewDecoder(bytes.NewReader(data))
 	dec.KnownFields(true)
 
