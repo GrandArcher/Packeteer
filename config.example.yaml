@@ -281,6 +281,21 @@ scorer:
 # more_specific:
 #   enabled: false
 #   max_routes: 100
+#
+# RPKI origin validation (off by default; docs/CONFIG.md#rpki). One or more
+# read-only RTR sources (RFC 8210) label each learned path's origin valid,
+# invalid, not found, or unknown. It never announces and never changes the
+# learned RIB. sources are tried in order; the first with a fresh cache
+# answers. avoid_invalid only refuses a new improvement onto an invalid path.
+# rpki:
+#   enabled: false
+#   avoid_invalid: false
+#   sources:
+#     - type: rtr
+#       config:
+#         address: 192.0.2.20:3323
+#         refresh: 5m
+#         staleness: 1h
 
 # Multi-POP (off by default; docs/multi-pop.md). One instance per POP,
 # joined over mutual TLS. A provider in another domain is measured by the

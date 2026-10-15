@@ -23,6 +23,7 @@ import (
 	"github.com/GrandArcher/Packeteer/internal/plugins/prober/tcp"
 	"github.com/GrandArcher/Packeteer/internal/plugins/prober/udp"
 	"github.com/GrandArcher/Packeteer/internal/plugins/ribsource/bmp"
+	"github.com/GrandArcher/Packeteer/internal/plugins/rpki/rtr"
 	"github.com/GrandArcher/Packeteer/internal/plugins/scorer/commit"
 	"github.com/GrandArcher/Packeteer/internal/plugins/scorer/cost"
 	"github.com/GrandArcher/Packeteer/internal/plugins/scorer/weighted"
@@ -98,6 +99,7 @@ func TestConfigDocCoversStructs(t *testing.T) {
 		lease.Config{},
 		oidc.Config{},
 		baseline.Config{},
+		rtr.Config{},
 	) {
 		if !strings.Contains(text, "`"+key+"`") {
 			missing = append(missing, key)

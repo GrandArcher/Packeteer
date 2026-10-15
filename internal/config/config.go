@@ -161,6 +161,9 @@ type Config struct {
 	// inside its prefix that a neighbor advertises in the learned RIB
 	// (#56, docs/design/more-specific.md). Nil or disabled is off.
 	MoreSpecific *MoreSpecific `yaml:"more_specific"`
+	// RPKI is the shared RPKI origin-validation source (#158). Nil or
+	// disabled is off.
+	RPKI *RPKI `yaml:"rpki"`
 
 	// Instance and Domain name this instance and its routing domain (POP)
 	// for multi-POP federation (#30). Instance defaults to Domain.

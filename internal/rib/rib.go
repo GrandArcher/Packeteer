@@ -1301,6 +1301,35 @@ type NextHopCount struct {
 	RouteServerOnly int `json:"route_server_only"`
 	BilateralOnly   int `json:"bilateral_only"`
 	Both            int `json:"both"`
+	// RPKI counts the distinct prefixes through this next hop by the
+	// origin-validation state of their paths (#158). Nil when RPKI is
+	// off. Display only.
+	RPKI *RPKICounts `json:"rpki,omitempty"`
+}
+
+// RPKICounts is the origin-validation state of the distinct prefixes
+// seen through one next hop (#158). When a prefix has several paths, the
+// most severe state counts: invalid before valid, valid before not-found,
+// and not-found before unknown.
+type RPKICounts struct {
+	Valid    int `json:"valid"`
+	Invalid  int `json:"invalid"`
+	NotFound int `json:"notfound"`
+	Unknown  int `json:"unknown"`
+}
+
+// rpkiRank orders the states for aggregation. A higher rank wins.
+func rpkiRank(v plugin.RPKIValidity) int {
+	switch v {
+	case plugin.RPKIInvalid:
+		return 3
+	case plugin.RPKIValid:
+		return 2
+	case plugin.RPKINotFound:
+		return 1
+	default:
+		return 0
+	}
 }
 
 // Availability classes of one prefix through one next hop (#156).
@@ -1383,6 +1412,17 @@ const maxSuggestNextHops = 64
 // with a usable path through it (iBGP, including add-path, and BMP). It
 // walks every path, so callers cache it against Generation.
 func (v *View) NextHops(lans []netip.Prefix) []NextHopCount {
+	return v.nextHops(lans, nil)
+}
+
+// NextHopsRPKI is NextHops with each next hop's prefixes counted by the
+// RFC 6811 origin-validation state of their paths (#158), from validate.
+// It walks every path, so callers cache it against Generation.
+func (v *View) NextHopsRPKI(lans []netip.Prefix, validate func(netip.Prefix, uint32) plugin.RPKIValidity) []NextHopCount {
+	return v.nextHops(lans, validate)
+}
+
+func (v *View) nextHops(lans []netip.Prefix, validate func(netip.Prefix, uint32) plugin.RPKIValidity) []NextHopCount {
 	if len(lans) == 0 {
 		return nil
 	}
@@ -1393,7 +1433,7 @@ func (v *View) NextHops(lans []netip.Prefix) []NextHopCount {
 			}
 		}
 		return false
-	})
+	}, validate)
 	sort.Slice(out, func(i, j int) bool { return out[i].NextHop.Less(out[j].NextHop) })
 	return out
 }
@@ -1420,7 +1460,7 @@ func (v *View) SuggestNextHops(configured []netip.Addr, lans []netip.Prefix) []N
 			}
 		}
 		return true
-	})
+	}, nil)
 	sort.Slice(out, func(i, j int) bool {
 		if out[i].Prefixes != out[j].Prefixes {
 			return out[i].Prefixes > out[j].Prefixes
@@ -1433,10 +1473,11 @@ func (v *View) SuggestNextHops(configured []netip.Addr, lans []netip.Prefix) []N
 	return out
 }
 
-func (v *View) countNextHops(keep func(netip.Addr) bool) []NextHopCount {
+func (v *View) countNextHops(keep func(netip.Addr) bool, validate func(netip.Prefix, uint32) plugin.RPKIValidity) []NextHopCount {
 	type acc struct {
 		prefixes    map[netip.Prefix]uint8
 		asns        map[uint32]int
+		rpki        map[netip.Prefix]plugin.RPKIValidity
 		routeServer bool
 		bilateral   bool
 	}
@@ -1461,6 +1502,16 @@ func (v *View) countNextHops(keep func(netip.Addr) bool) []NextHopCount {
 		a.prefixes[rt.Prefix] |= bit
 		if len(rt.ASPath) > 0 {
 			a.asns[rt.ASPath[0]]++
+			if validate != nil {
+				if a.rpki == nil {
+					a.rpki = map[netip.Prefix]plugin.RPKIValidity{}
+				}
+				origin := rt.ASPath[len(rt.ASPath)-1]
+				v := validate(rt.Prefix, origin)
+				if old, ok := a.rpki[rt.Prefix]; !ok || rpkiRank(v) > rpkiRank(old) {
+					a.rpki[rt.Prefix] = v
+				}
+			}
 		}
 		switch rt.Via {
 		case ViaRouteServer:
@@ -1501,6 +1552,26 @@ func (v *View) countNextHops(keep func(netip.Addr) bool) []NextHopCount {
 			if n > best || (n == best && asn < c.ASN) {
 				c.ASN, best = asn, n
 			}
+		}
+		if validate != nil {
+			rc := &RPKICounts{}
+			for _, v := range a.rpki {
+				switch v {
+				case plugin.RPKIValid:
+					rc.Valid++
+				case plugin.RPKIInvalid:
+					rc.Invalid++
+				case plugin.RPKINotFound:
+					rc.NotFound++
+				default:
+					rc.Unknown++
+				}
+			}
+			// A prefix with no origin AS in its path is unknown.
+			if n := len(a.prefixes) - len(a.rpki); n > 0 {
+				rc.Unknown += n
+			}
+			c.RPKI = rc
 		}
 		out = append(out, c)
 	}

@@ -12,13 +12,14 @@ import (
 	_ "github.com/GrandArcher/Packeteer/internal/plugins/all"
 	"github.com/GrandArcher/Packeteer/internal/policy"
 	"github.com/GrandArcher/Packeteer/internal/rib"
+	"github.com/GrandArcher/Packeteer/internal/rpki"
 )
 
 // wireExchanges gives the ops API the exchange statistics (#27). The next
 // hop counts walk every learned path, so they are rebuilt only when the
 // RIB generation changes. It also starts the member availability history
 // (#156), which stops with ctx, and the offload report (#152).
-func wireExchanges(ctx context.Context, cfg *config.Config, col *httpapi.Collector, srv *httpapi.Server, view *rib.View, plugins *pluginhost.Set, decider *policy.Engine) {
+func wireExchanges(ctx context.Context, cfg *config.Config, col *httpapi.Collector, srv *httpapi.Server, view *rib.View, plugins *pluginhost.Set, decider *policy.Engine, origins *rpki.Set) {
 	if len(cfg.Exchanges) == 0 || view == nil {
 		return
 	}
@@ -44,7 +45,12 @@ func wireExchanges(ctx context.Context, cfg *config.Config, col *httpapi.Collect
 		mu.Lock()
 		defer mu.Unlock()
 		if !built || g != gen {
-			cached, gen, built = view.NextHops(lans), g, true
+			if origins.Enabled() {
+				cached = view.NextHopsRPKI(lans, origins.Validate)
+			} else {
+				cached = view.NextHops(lans)
+			}
+			gen, built = g, true
 		}
 		return cached
 	}
