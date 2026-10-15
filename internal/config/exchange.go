@@ -24,6 +24,7 @@ func (c *Config) expandExchanges() {
 			c.Providers = append(c.Providers, Provider{
 				Name: p.Name, SourceIP: p.SourceIP, NextHop: p.NextHop, Exclude: p.Exclude,
 				Group: ex.Group, Precedence: p.Precedence, Cost: p.Cost, BMP: ex.BMP,
+				PathCheck: p.PathCheck,
 				// The add-path route check reads the iBGP paths; with bmp
 				// only they are ignored, and BMP alone checks the peer.
 				AddPath:  addPath && bmp != BMPOnly,

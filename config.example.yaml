@@ -34,6 +34,7 @@ providers:
     # local_pref: 350         # optional. Wins over local_pref_cause and the global local_pref. 0 is rejected. Set it above the edge's native local preference.
     # communities: ["64512:200", "64512:1:50"]  # optional extras, added after the cause's. The export policy does not match them. At most 16. No 0:x or 65535:x, no duplicate of packeteer_community.
     # bmp: prefer             # off (default), prefer, or only: use this provider's BMP paths (rib_sources)
+    # path_check: false       # opt out of the TTL-1 first-hop check (#150), e.g. next_hop is across another router
     # add_path: true          # route check from iBGP add-path paths (needs a neighbor with add_path)
 
 allowlist:
@@ -56,6 +57,9 @@ probe:
   #   enabled: true           # and score each provider at its own highest stable hop. Measurement only.
   #   budget: 10s             # wall clock for one background pass; passes are at least interval apart
   #   cache_ttl: 30m          # reuse a hop this long, or until an address inside the prefix answers
+  # path_check:               # on by default (#150). A TTL-1 probe from each source_ip must
+  #   enabled: true           # leave through that provider's next_hop; otherwise the provider is
+  #   interval: 5m            # marked down (reason "probe path mismatch"). Measurement only.
 
 # Probers are tried in order: ICMP echo, then TCP connect to port 443 when
 # ICMP errors or gets no replies. This is also the default when omitted.
@@ -229,6 +233,7 @@ scorer:
 #         source_ip: 192.0.2.31
 #         # Router maximum-prefix limit on this session, when known. Read-only.
 #         max_prefix: 100000
+#         # path_check: false  # opt out of the TTL-1 first-hop check (#150)
 
 # Injection (used only when mode: inject). local_pref is the default on
 # every injected route and should beat the edge's native local preference.

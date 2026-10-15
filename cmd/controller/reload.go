@@ -236,8 +236,9 @@ func classify(a, b *config.Config) (restart, online []string) {
 }
 
 // probeKeys splits a probe change into restart-only fields and timing
-// fields. indirect and the worker, rate, and dispersion fields stay
-// restart-only: they change how packets are sent, not only when.
+// fields. indirect, path_check, and the worker, rate, and dispersion
+// fields stay restart-only: they change how packets are sent, not only
+// when.
 func probeKeys(a, b config.Probe) (restart, online []string) {
 	pair := func(name string, x, y any, live bool) {
 		if sameYAML(x, y) {
@@ -262,6 +263,7 @@ func probeKeys(a, b config.Probe) (restart, online []string) {
 	pair("prober_recheck_rounds", a.ProberRecheckRounds, b.ProberRecheckRounds, false)
 	pair("prober_memory", a.ProberMemory, b.ProberMemory, false)
 	pair("indirect", a.Indirect, b.Indirect, false)
+	pair("path_check", a.PathCheck, b.PathCheck, false)
 	return restart, online
 }
 

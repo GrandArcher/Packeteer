@@ -25,8 +25,8 @@ The same object is the `generic` webhook body and the `exec` `notify` params.
 | `improvement.added` | info | 3 | `prefix` | A prefix was steered to a better provider. Fields: `provider`, `native`, `cause` (`performance`, `commit`, `cost`), `reason`, `mode`. |
 | `improvement.switched` | info | 4 | `prefix` | An improvement moved to another provider. Adds `previous`. |
 | `improvement.removed` | info | 5 | `prefix` | An improvement was retired; `reason` says why (native recovered, stale data, RIB loss, provider down, policy, maintenance, TTL). Resolves the prefix. |
-| `provider.down` | critical | 6 | `provider` | A provider's probe source failed. The provider is excluded and improvements onto it are withdrawn (fail closed). |
-| `provider.up` | info | 7 | `provider` | The probe source recovered. |
+| `provider.down` | critical | 6 | `provider` | A provider's probe source failed, or its TTL-1 path check found its probes leaving through another first hop (`reason` is `probe path mismatch`, #150). The provider is excluded and improvements onto it are withdrawn (fail closed). |
+| `provider.up` | info | 7 | `provider` | The probe source recovered, including a probe path that matches `next_hop` again. |
 | `bgp.session_down` | critical | 8 | `neighbor` | An Established iBGP session went down. A session that never came up is not reported. |
 | `bgp.session_up` | info | 9 | `neighbor` | An iBGP session reached Established. |
 | `commit.exceeded` | warning | 10 | `provider` | The billable 95th percentile for the open billing period is above `commit_mbps` (telemetry plugin required). Fields: `usage_mbps`, `commit_mbps`, `percentile`. |

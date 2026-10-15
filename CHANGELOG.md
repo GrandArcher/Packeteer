@@ -6,6 +6,7 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 
 ### Added
 
+- Probe-path check: a TTL-1 probe from each provider's `source_ip` must leave through `next_hop`; a mismatch marks it down with reason `probe path mismatch`; `path_check: false` opts out (#150).
 - BMP exchange peer session monitor: `exchange.peer_up`/`peer_down` with the decoded reason (Cease subcode 1), Adj-RIB-In count as `adj_rib_in` and a metric, and `exchange.max_prefix` warnings (#147).
 - Potential-peers report: destination origin ASNs by flow bytes, present at an exchange or not, LAN path today, route server vs bilateral; `GET /api/exchanges/potential-peers`, CSV (#154).
 - IX LAN health: each exchange peer's next hop is probed from its `source_ip`; reachability, RTT, loss on `/api/exchanges` and metrics; `exchange.degraded` and `exchange.recovered` events (#149).
