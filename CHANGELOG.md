@@ -1,12 +1,17 @@
 # Changelog
 
-All notable changes to Packeteer are documented here. Versions are Git tags on `main`. The image tags `ghcr.io/grandarcher/packeteer:<version>` (for example `:0.6.0`) and `:latest` are published from each `v<version>` tag. `:edge` tracks `main`.
+All notable changes to Packeteer are documented here. Versions are Git tags on `main`. The image tags `ghcr.io/grandarcher/packeteer:<version>` (for example `:0.7.0`) and `:latest` are published from each `v<version>` tag. `:edge` tracks `main`.
 
 ## [Unreleased]
 
 ### Added
 
 - BMP exchange peer session monitor: `exchange.peer_up`/`peer_down` with the decoded reason (Cease subcode 1), Adj-RIB-In count as `adj_rib_in` and a metric, and `exchange.max_prefix` warnings (#147).
+
+## [0.7.0] - 2026-10-15
+
+### Added
+
 - Potential-peers report: destination origin ASNs by flow bytes, present at an exchange or not, LAN path today, route server vs bilateral; `GET /api/exchanges/potential-peers`, CSV (#154).
 - IX LAN health: each exchange peer's next hop is probed from its `source_ip`; reachability, RTT, loss on `/api/exchanges` and metrics; `exchange.degraded` and `exchange.recovered` events (#149).
 - Transit-to-IX offload report: prefixes that leave through a transit while an exchange peer advertises them, by bytes, with the saving at the transit's cost; `GET /api/exchanges/offload`, CSV (#152).
