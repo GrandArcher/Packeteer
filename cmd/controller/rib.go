@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/GrandArcher/Packeteer/internal/config"
+	"github.com/GrandArcher/Packeteer/internal/exchange"
 	"github.com/GrandArcher/Packeteer/internal/pluginhost"
 	_ "github.com/GrandArcher/Packeteer/internal/plugins/all"
 	"github.com/GrandArcher/Packeteer/internal/rib"
@@ -193,8 +194,9 @@ func ownCommunity(s string) (uint32, string, error) {
 }
 
 // wireRIBSources points every RIB source (BMP) at the view. It runs before
-// the plugins start, so no event is lost.
-func wireRIBSources(plugins *pluginhost.Set, view *rib.View, health *syshealth.Tracker) error {
+// the plugins start, so no event is lost. mon and emit may be nil; mon
+// turns BMP session events into exchange peer events.
+func wireRIBSources(plugins *pluginhost.Set, view *rib.View, health *syshealth.Tracker, mon *exchange.PeerMonitor, emit func(plugin.Event)) error {
 	if len(plugins.RIBSources) == 0 {
 		return nil
 	}
@@ -202,21 +204,29 @@ func wireRIBSources(plugins *pluginhost.Set, view *rib.View, health *syshealth.T
 		return errors.New("rib_sources require bgp.neighbors")
 	}
 	for _, s := range plugins.RIBSources {
-		s.Plugin.SetRIBSink(ribSink(view, health, s.Name))
+		s.Plugin.SetRIBSink(ribSink(view, health, s.Name, mon, emit))
 	}
 	return nil
 }
 
 // ribSink passes a source's events to the view and notes which routers
 // have a monitoring session, for the System page. Only the events that
-// change a router's state are noted, not the path updates.
-func ribSink(view *rib.View, health *syshealth.Tracker, source string) func(plugin.RIBEvent) {
+// change a router's state are noted, not the path updates. The exchange
+// peer monitor sees every event first, read-only.
+func ribSink(view *rib.View, health *syshealth.Tracker, source string, mon *exchange.PeerMonitor, emit func(plugin.Event)) func(plugin.RIBEvent) {
 	return func(ev plugin.RIBEvent) {
 		switch ev.Kind {
 		case plugin.RIBRouterDown:
 			health.Record(ribRouterKey(source, ev.Router), errors.New("monitoring session closed"))
 		case plugin.RIBPeerUp:
 			health.Record(ribRouterKey(source, ev.Router), nil)
+		}
+		if emit != nil {
+			for _, c := range mon.Observe(ev) {
+				if e := peerChangeEvent(time.Now(), c); e.Kind != "" {
+					emit(e)
+				}
+			}
 		}
 		view.ApplyRIB(ev)
 	}

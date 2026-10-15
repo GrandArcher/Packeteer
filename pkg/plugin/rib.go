@@ -22,6 +22,10 @@ const (
 	// RIBPaths: announcements and withdrawals from Peer's post-policy
 	// Adj-RIB-In (PostPolicy set) or the router's Loc-RIB (Peer.LocRIB).
 	RIBPaths
+	// RIBPrefixCount: the number of routes the router holds for Peer,
+	// from a BMP Statistics Report (RFC 7854, Adj-RIB-In). It carries no
+	// paths and changes no route; the session monitor reads it.
+	RIBPrefixCount
 )
 
 // RIBPeer is one BGP session on a monitored router, or its Loc-RIB.
@@ -81,6 +85,13 @@ type RIBEvent struct {
 	// toward Peer (RFC 8671): routes it sends. Only the leak watch reads
 	// them; the bmp rib_source never sets it.
 	AdjRIBOut bool
+	// Reason is the decoded cause of a RIBPeerDown: the RFC 7854 reason
+	// and, when the session ended with a BGP Notification, the error code
+	// and subcode. Empty when the source has none.
+	Reason string
+	// Prefixes is the Adj-RIB-In route count carried by a RIBPrefixCount
+	// (BMP Statistics Report type 7). Unused by every other kind.
+	Prefixes int
 }
 
 // RIBSource feeds routes the edge routers learned into the RIB view. It is

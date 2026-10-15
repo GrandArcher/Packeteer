@@ -193,13 +193,14 @@ func Metrics(s Snapshot) []byte {
 		writeGauge(&b, "packeteer_bgp_session", "1 if the iBGP session is currently in this FSM state.", sessionState...)
 	}
 
-	var ixPrefixes, ixImps, ixDiscovered, ixReach, ixRTT, ixLoss, ixDegraded []sample
+	var ixPrefixes, ixImps, ixDiscovered, ixReach, ixRTT, ixLoss, ixDegraded, ixAdjRIBIn []sample
 	for _, ex := range s.Exchanges {
 		probed := false
 		for _, p := range ex.Peers {
 			l := []lbl{{"exchange", ex.Name}, {"peer", p.Name}}
 			ixPrefixes = append(ixPrefixes, sample{labels: l, value: float64(p.Prefixes)})
 			ixImps = append(ixImps, sample{labels: l, value: float64(p.Improvements)})
+			ixAdjRIBIn = append(ixAdjRIBIn, sample{labels: l, value: float64(p.AdjRIBIn)})
 			if p.Reach.State == exchange.ReachUnknown {
 				continue
 			}
@@ -216,6 +217,7 @@ func Metrics(s Snapshot) []byte {
 		ixDiscovered = append(ixDiscovered, sample{labels: []lbl{{"exchange", ex.Name}}, value: float64(len(ex.Discovered))})
 	}
 	writeGauge(&b, "packeteer_exchange_peer_prefixes", "Prefixes the router shows through the exchange peer's next hop.", ixPrefixes...)
+	writeGauge(&b, "packeteer_exchange_peer_adj_rib_in", "Routes the router holds in the exchange peer's Adj-RIB-In, from BMP statistics.", ixAdjRIBIn...)
 	writeGauge(&b, "packeteer_exchange_peer_improvements", "Active improvements onto the exchange peer.", ixImps...)
 	writeGauge(&b, "packeteer_exchange_peer_reachable", "1 if the exchange peer's next hop answered the last probe from the peer's source address.", ixReach...)
 	writeGauge(&b, "packeteer_exchange_peer_rtt_seconds", "Mean round-trip time of the last next-hop probe of the exchange peer.", ixRTT...)

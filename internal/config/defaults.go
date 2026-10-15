@@ -49,6 +49,7 @@ func (c *Config) applyDefaults() {
 	}
 	c.defaultIndirect()
 	c.defaultExchangeHealth()
+	c.defaultExchangeMaxPrefix()
 	if c.Probe.MinReplies == 0 {
 		c.Probe.MinReplies = DefaultProbeMinReplies
 	}

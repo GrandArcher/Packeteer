@@ -1092,6 +1092,9 @@ func (v *View) ApplyRIB(ev plugin.RIBEvent) {
 				changed = true
 			}
 		}
+	case plugin.RIBPrefixCount:
+		// A router's per-peer Adj-RIB-In tally for the session monitor.
+		// The view stores routes, not counts.
 	}
 	v.mu.Unlock()
 	if changed {

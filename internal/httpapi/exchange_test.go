@@ -56,6 +56,10 @@ func TestExchangesEndpointAndMetrics(t *testing.T) {
 			t.Errorf("metrics missing %s", want)
 		}
 	}
+	snap.Exchanges[0].Peers[0].AdjRIBIn = 12
+	if body := Metrics(snap); !strings.Contains(string(body), `packeteer_exchange_peer_adj_rib_in{exchange="ix-lab",peer="ix-peer-a"} 12`) {
+		t.Fatalf("adj_rib_in metric missing: %s", body)
+	}
 	snap.ExchangeLANDrops = 4
 	body = Metrics(snap)
 	if !strings.Contains(string(body), "packeteer_exchange_lan_targets_dropped 4") {

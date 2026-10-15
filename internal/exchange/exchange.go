@@ -59,6 +59,10 @@ type PeerStats struct {
 	// peer's next hop (add-path or BMP make inactive paths visible).
 	Prefixes int  `json:"prefixes"`
 	Up       bool `json:"up"` // probe source up
+	// AdjRIBIn is the router's own Adj-RIB-In route count for the peer's
+	// session, from a BMP Statistics Report (#147). 0 when no report has
+	// been seen. It is a session count, not the next-hop prefix count.
+	AdjRIBIn int `json:"adj_rib_in,omitempty"`
 	// Improvements is the number of active improvements onto the peer.
 	Improvements int `json:"improvements"`
 	// Moves are those improvements and MovedMbps the observed rate of

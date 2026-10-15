@@ -56,10 +56,14 @@ The same object is the `generic` webhook body and the `exec` `notify` params.
 | `flap.released` | info | 34 | `prefix` | A flap quarantine ended: the cool-down elapsed, an operator released it, or `flap_quarantine` was turned off. Same fields. Resolves the quarantine. |
 | `exchange.degraded` | warning | 35 | `exchange` | Enough peers of one exchange fail the next-hop probe inside `exchanges[].health.window` ([CONFIG.md](CONFIG.md#exchanges)): the exchange or our port, not one member. Fields: `exchange`, `degraded_peers` (comma separated), `degraded`, `peers`. Measurement only. |
 | `exchange.recovered` | info | 36 | `exchange` | Too few peers are degraded for the alert to hold. Same fields. Resolves `exchange.degraded`. |
+| `exchange.peer_down` | warning | 37 | `exchange`, `peer` | A monitored router reported the exchange peer's BGP session down over BMP. `reason` is the decoded RFC 7854 reason and, when the session ended with a BGP Notification, its error code and subcode (`Cease subcode 1 (maximum number of prefixes reached)` is the peer's max-prefix limit). Read-only; no route changes. |
+| `exchange.peer_up` | info | 38 | `exchange`, `peer` | The router reported the exchange peer's BGP session up. Resolves `exchange.peer_down`. |
+| `exchange.max_prefix` | warning | 39 | `exchange`, `peer` | The peer's Adj-RIB-In route count reached `max_prefix_warn_pct` of its `max_prefix` (from a BMP Statistics Report). Fields: `prefixes`, `max_prefix`. Read-only. |
+| `exchange.max_prefix_cleared` | info | 40 | `exchange`, `peer` | The count fell back below that share. Same fields. Resolves `exchange.max_prefix`. |
 
 Problems and the events that resolve them share a **dedup key**: `packeteer/<group>/<key>=<value>`, for example `packeteer/provider/provider=transit-a` for both `provider.down` and `provider.up`. The `pagerduty` preset uses it as `dedup_key`, and `snmptrap` sends it as a varbind.
 
-State events (`provider.*`, `bgp.*`, `commit.*`, `announce.*`, `inbound.*`, `mitigation.*`, `anomaly.*`, `ha.*`, `flap.*`, `exchange.*`) fire on transitions only. Except `exchange.*`, they are checked on every decision (each probe round, each RIB change, and at least every `probe.interval`); `exchange.*` is checked once per `probe.interval` in the exchange health loop, and commit at most once a minute. They are not repeated while the state holds. `leak.*` events fire on the first sighting of a prefix and when its hold is cleared.
+State events (`provider.*`, `bgp.*`, `commit.*`, `announce.*`, `inbound.*`, `mitigation.*`, `anomaly.*`, `ha.*`, `flap.*`, `exchange.*`) fire on transitions only. Except `exchange.*`, they are checked on every decision (each probe round, each RIB change, and at least every `probe.interval`); `exchange.degraded` and `exchange.recovered` are checked once per `probe.interval` in the exchange health loop, `exchange.peer_*` and `exchange.max_prefix*` when the BMP RIB source reports a session event or a statistics count, and commit at most once a minute. They are not repeated while the state holds. `leak.*` events fire on the first sighting of a prefix and when its hold is cleared.
 
 ## Testing delivery
 

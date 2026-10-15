@@ -219,11 +219,16 @@ scorer:
 #     # (#149); exchange.degraded fires when min_peers of them fail inside
 #     # window. Measurement only. Defaults shown.
 #     health: {enabled: true, loss_pct: 50, min_peers: 3, window: 5m}
+#     # BMP session events and per-peer Adj-RIB-In counts (#147). When a peer
+#     # sets max_prefix, exchange.max_prefix fires at this share of it.
+#     max_prefix_warn_pct: 90
 #     peers:
 #       - name: ix-peer-a
 #         asn: 64501
 #         next_hop: 203.0.113.11
 #         source_ip: 192.0.2.31
+#         # Router maximum-prefix limit on this session, when known. Read-only.
+#         max_prefix: 100000
 
 # Injection (used only when mode: inject). local_pref is the default on
 # every injected route and should beat the edge's native local preference.
