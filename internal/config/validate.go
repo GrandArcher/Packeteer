@@ -28,6 +28,7 @@ func (c *Config) Validate() error {
 	c.validateAllowlist(add)
 	c.validateProbe(add)
 	c.validateIndirect(add)
+	c.validatePathCheck(add)
 	c.validateBGP(add)
 	c.validateExchanges(add)
 	c.validateExchangeHealth(add)

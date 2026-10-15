@@ -16,6 +16,12 @@ providers:
 
 If a `source_ip` is not configured on the host, the probers return "source address unavailable". Packeteer then marks that provider **down** and leaves it out. It never guesses or probes from a different address (fail closed).
 
+## Automatic check
+
+The setup below is easy to get subtly wrong, and a mis-routed source silently measures another provider's path. Every `probe.path_check.interval` (default 5m) Packeteer sends one UDP probe with TTL 1 from each provider's `source_ip` toward a documentation address. The first router past the edge answers, and that reply address must be `next_hop`. A different address, no reply, or a send error marks the provider down with reason `probe path mismatch` and emits `provider.down`; a later match clears it. The provider is left out and its improvements are withdrawn while it is down, so a wrong policy route cannot keep steering traffic (fail closed). Every probe waits on `probe.rate_limit_pps`. Nothing is announced from the check.
+
+A provider whose traffic does not leave the edge directly through `next_hop` (for example one reached across another router, or a `bgp.neighbors[].next_hops` entry) sets `path_check: false`; an exchange peer does the same. A provider in another `domain` is not checked here. A loopback `source_ip` is skipped: its traffic never leaves the host. Turn the whole check off with `probe: {path_check: {enabled: false}}`.
+
 ## Linux (probe box directly connected to each transit, or to per-transit VLANs)
 
 ```sh

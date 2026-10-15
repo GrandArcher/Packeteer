@@ -651,6 +651,9 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 		go runExchangeHealth(ctx, engine, ixHealth, hopTargets, func() time.Duration { return engine.TimingNow().Interval },
 			func(ev plugin.Event) { dispatch.Emit(ev) })
 	}
+	if pc := pathCheckerFor(cfg, engine, pktLimiter, log); pc != nil {
+		go pc.run(ctx, cfg.Probe.PathCheck.Interval)
+	}
 	col.SetStarted(true)
 	defer col.SetStarted(false)
 	watch.emit(time.Now(), plugin.EventControllerStarted, "packeteer "+version+" started in "+cfg.Mode+" mode",

@@ -104,11 +104,12 @@ func TestPlanReload(t *testing.T) {
 	}
 
 	for name, tc := range map[string]struct{ yaml, want string }{
-		"asn":       {strings.Replace(one, "asn: 64512", "asn: 64513", 1), "changed asn"},
-		"providers": {strings.Replace(one, "rtt_ms: 1}", "rtt_ms: 2}", 1), "changed probers"},
-		"as_path":   {one + "  as_path: native\n", "changed bgp.as_path"},
-		"listen":    {one + "  listen_port: 1179\n", "changed bgp.listen_port"},
-		"two keys":  {strings.Replace(strings.Replace(one, "local_pref: 250", "local_pref: 300", 1), "hold_time: 1m", "hold_time: 2m", 1), "changed local_pref"},
+		"asn":        {strings.Replace(one, "asn: 64512", "asn: 64513", 1), "changed asn"},
+		"providers":  {strings.Replace(one, "rtt_ms: 1}", "rtt_ms: 2}", 1), "changed probers"},
+		"as_path":    {one + "  as_path: native\n", "changed bgp.as_path"},
+		"listen":     {one + "  listen_port: 1179\n", "changed bgp.listen_port"},
+		"path_check": {one + "probe: {path_check: {interval: 1m}}\n", "changed probe.path_check"},
+		"two keys":   {strings.Replace(strings.Replace(one, "local_pref: 250", "local_pref: 300", 1), "hold_time: 1m", "hold_time: 2m", 1), "changed local_pref"},
 	} {
 		if _, err := planReload(cur, mustParse(t, tc.yaml), nil); err == nil || !strings.Contains(err.Error(), tc.want) {
 			t.Errorf("%s: err = %v, want %q", name, err, tc.want)

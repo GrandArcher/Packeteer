@@ -549,6 +549,10 @@ type Provider struct {
 	// source_ip: the peer in that domain measures it, and next_hop is how
 	// this POP's routers reach it across the backbone.
 	Domain string `yaml:"domain"`
+	// PathCheck is the first-hop probe-path check for this provider
+	// (#150). Nil or true checks; false opts out, for a source_ip whose
+	// traffic does not leave the edge directly through next_hop.
+	PathCheck *bool `yaml:"path_check"`
 
 	// Exchange and PeerASN are set on providers expanded from exchanges
 	// (#27); they are not config keys. A peer always gets the route check:
@@ -595,6 +599,9 @@ type ExchangePeer struct {
 	// session, when known (#147). 0 (default) disables the warning. It is
 	// read-only: Packeteer never sets or changes the limit.
 	MaxPrefix int `yaml:"max_prefix"`
+	// PathCheck is the peer's first-hop probe-path check opt-out, as on
+	// providers (#150).
+	PathCheck *bool `yaml:"path_check"`
 }
 
 // Allowlist restricts which prefixes may ever be injected.
@@ -641,6 +648,9 @@ type Probe struct {
 	ProberMemory int `yaml:"prober_memory"`
 	// Indirect traces silent prefixes per provider (#123). Nil is off.
 	Indirect *ProbeIndirect `yaml:"indirect"`
+	// PathCheck verifies that probes from each provider's source_ip leave
+	// through that provider's next_hop (#150).
+	PathCheck ProbePathCheck `yaml:"path_check"`
 }
 
 // Load reads, parses, defaults, and validates the config file at path.

@@ -48,6 +48,7 @@ func (c *Config) applyDefaults() {
 		c.Probe.ProberMemory = DefaultProbeProberMemory
 	}
 	c.defaultIndirect()
+	c.defaultPathCheck()
 	c.defaultExchangeHealth()
 	c.defaultExchangeMaxPrefix()
 	if c.Probe.MinReplies == 0 {

@@ -164,6 +164,12 @@ type Engine struct {
 	mu      sync.RWMutex
 	results map[key]Result
 	status  map[string]ProviderStatus
+	// srcDown is the source-unavailable reason from the last round a
+	// provider ran; pathDown is the probe-path mismatch mark (#150). Both
+	// are guarded by mu and persist across rounds so a provider a round
+	// did not run, or a source that is still mis-routed, does not flip up.
+	srcDown  map[string]string
+	pathDown map[string]string
 	// cadence is the probe interval per prefix from the last complete
 	// target list. Positive target intervals override Options.Interval.
 	cadence map[netip.Prefix]time.Duration
@@ -326,6 +332,7 @@ func New(providers []Provider, probers []NamedProber, sources []NamedSource, opt
 	}
 	e := &Engine{providers: providers, probers: probers, sources: sources, opt: opt, log: opt.Logger,
 		results: map[key]Result{}, status: map[string]ProviderStatus{}, sems: map[netip.Addr]chan struct{}{},
+		srcDown: map[string]string{}, pathDown: map[string]string{},
 		wake: make(chan struct{}, 1), indCache: map[key]indirectHop{}, indQueued: map[key]indirectReq{},
 		indWake: make(chan struct{}, 1)}
 	now := opt.Now()
@@ -1395,19 +1402,42 @@ func (e *Engine) applyStatusLocked(ran map[string]bool, down map[string]string, 
 		if !ran[p.Name] {
 			continue
 		}
-		st := e.status[p.Name]
-		reason, isDown := down[p.Name]
-		if st.Up == !isDown {
-			continue
-		}
-		st.Up, st.Reason, st.Since = !isDown, reason, now
-		if isDown {
-			e.log.Error("probe source down; provider excluded (fail closed)", "provider", p.Name, "source", p.Source, "reason", reason)
+		if reason, isDown := down[p.Name]; isDown {
+			e.srcDown[p.Name] = reason
 		} else {
-			e.log.Info("probe source recovered", "provider", p.Name, "source", p.Source)
+			delete(e.srcDown, p.Name)
 		}
-		e.status[p.Name] = st
 	}
+	for _, p := range e.providers {
+		e.refreshStatusLocked(p.Name, now)
+	}
+}
+
+// refreshStatusLocked sets one provider's status from its stored source
+// and path-check marks. The caller holds e.mu. A log line is written only
+// when the provider changes state. A source that cannot be bound wins
+// over a path mismatch: the probe source is the more specific problem.
+func (e *Engine) refreshStatusLocked(name string, now time.Time) {
+	st, ok := e.status[name]
+	if !ok {
+		return
+	}
+	reason, isDown := "", false
+	if r, down := e.srcDown[name]; down {
+		reason, isDown = r, true
+	} else if r, down := e.pathDown[name]; down {
+		reason, isDown = r, true
+	}
+	if st.Up == !isDown {
+		return
+	}
+	st.Up, st.Reason, st.Since = !isDown, reason, now
+	if isDown {
+		e.log.Error("probe source down; provider excluded (fail closed)", "provider", name, "source", st.Source, "reason", reason)
+	} else {
+		e.log.Info("probe source recovered", "provider", name, "source", st.Source)
+	}
+	e.status[name] = st
 }
 
 func (e *Engine) sem(a netip.Addr) chan struct{} {
