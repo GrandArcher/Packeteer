@@ -65,8 +65,13 @@ const (
 	EventFlapReleased       = "flap.released"
 	EventExchangeDegraded   = "exchange.degraded"
 	EventExchangeRecovered  = "exchange.recovered"
-	EventHAStandby          = "ha.standby"
-	EventHAActive           = "ha.active"
+	EventExchangePeerDown   = "exchange.peer_down"
+	EventExchangePeerUp     = "exchange.peer_up"
+	EventExchangeMaxPrefix  = "exchange.max_prefix"
+	// EventExchangeMaxPrefixCleared resolves EventExchangeMaxPrefix.
+	EventExchangeMaxPrefixCleared = "exchange.max_prefix_cleared"
+	EventHAStandby                = "ha.standby"
+	EventHAActive                 = "ha.active"
 	// EventAudit is one audit log record (#32): a change or sign-in on
 	// the ops API, or a config reload.
 	EventAudit = "audit.recorded"
@@ -147,6 +152,14 @@ var eventCatalog = []EventSpec{
 		Summary: "Enough peers on one exchange fail their next-hop probe inside the window to point at the exchange or our port, not one member. Measurement only."},
 	{Kind: EventExchangeRecovered, Severity: SeverityInfo, Group: "exchange", Keys: []string{"exchange"}, TrapID: 36, Resolves: true,
 		Summary: "Too few peers on the exchange are degraded for the alert to hold."},
+	{Kind: EventExchangePeerDown, Severity: SeverityWarning, Group: "exchange_peer", Keys: []string{"exchange", "peer"}, TrapID: 37,
+		Summary: "A monitored router reported an exchange peer's BGP session down; the reason is decoded from BMP (including Cease subcode 1, maximum prefixes)."},
+	{Kind: EventExchangePeerUp, Severity: SeverityInfo, Group: "exchange_peer", Keys: []string{"exchange", "peer"}, TrapID: 38, Resolves: true,
+		Summary: "A monitored router reported the exchange peer's BGP session up."},
+	{Kind: EventExchangeMaxPrefix, Severity: SeverityWarning, Group: "exchange_prefix", Keys: []string{"exchange", "peer"}, TrapID: 39,
+		Summary: "An exchange peer's Adj-RIB-In reached the configured share of its max_prefix (exchanges[].max_prefix_warn_pct)."},
+	{Kind: EventExchangeMaxPrefixCleared, Severity: SeverityInfo, Group: "exchange_prefix", Keys: []string{"exchange", "peer"}, TrapID: 40, Resolves: true,
+		Summary: "The exchange peer's Adj-RIB-In fell back below the max-prefix warning share."},
 }
 
 // EventCatalog returns a copy of every event kind the controller emits.

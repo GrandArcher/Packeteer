@@ -31,6 +31,7 @@ type Collector struct {
 	exchanges   []exchange.Exchange
 	hops        func() []rib.NextHopCount
 	health      *exchange.Health
+	peerPrefix  func() map[string]int
 }
 
 // NewCollector copies providers. The caller may reuse the slice afterward.
@@ -91,6 +92,15 @@ func (c *Collector) SetExchangeHealth(h *exchange.Health) {
 	c.mu.Unlock()
 }
 
+// SetPeerPrefixes installs the read of each exchange peer's Adj-RIB-In
+// route count from BMP statistics (#147). Nil leaves the counts at zero.
+// The function may run while Snapshot is called.
+func (c *Collector) SetPeerPrefixes(fn func() map[string]int) {
+	c.mu.Lock()
+	c.peerPrefix = fn
+	c.mu.Unlock()
+}
+
 // SetMode updates the mode Snapshot reports. A reload that changes mode
 // calls it so the dashboard matches the running config.
 func (c *Collector) SetMode(mode string) {
@@ -117,7 +127,7 @@ func (c *Collector) Snapshot() Snapshot {
 	mode := c.mode
 	started, engine, decider, view, telemetry := c.started, c.engine, c.decider, c.view, c.telemetry
 	exs, hops, flowTracked, truncated := c.exchanges, c.hops, c.flowTracked, c.truncated
-	health := c.health
+	health, peerPrefix := c.health, c.peerPrefix
 	c.mu.RUnlock()
 
 	in := Input{
@@ -193,6 +203,14 @@ func (c *Collector) Snapshot() Snapshot {
 			imps[im.Provider] = append(imps[im.Provider], exchange.Move{Prefix: im.Prefix.String(), Since: im.Since.UTC(), VolumeMbps: jsonFloat(im.VolumeMbps)})
 		}
 		in.Exchanges = exchange.Build(exs, nh, up, imps, health.Snapshot())
+		if peerPrefix != nil {
+			counts := peerPrefix()
+			for i := range in.Exchanges {
+				for j := range in.Exchanges[i].Peers {
+					in.Exchanges[i].Peers[j].AdjRIBIn = counts[in.Exchanges[i].Peers[j].Name]
+				}
+			}
+		}
 	}
 	in.ExchangeLANDrops = exchange.LANDrops()
 	return Assemble(in)

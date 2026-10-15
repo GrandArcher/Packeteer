@@ -96,7 +96,7 @@ func TestSystemFactsShowInjectedFailures(t *testing.T) {
 	}
 	var sink func(plugin.RIBEvent)
 	bmpSet.RIBSources[0].Plugin = &sinkSpy{RIBSource: bmpSet.RIBSources[0].Plugin, got: &sink}
-	if err := wireRIBSources(bmpSet, view, health); err != nil {
+	if err := wireRIBSources(bmpSet, view, health, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	name := bmpSet.RIBSources[0].Name

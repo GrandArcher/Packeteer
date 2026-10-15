@@ -423,7 +423,7 @@ func (d *decoder) message(raw []byte) (evs []plugin.RIBEvent, stop bool) {
 		return nil, false
 	case gobmp.BMP_MSG_TERMINATION:
 		return nil, true
-	case gobmp.BMP_MSG_STATISTICS_REPORT, gobmp.BMP_MSG_ROUTE_MIRRORING:
+	case gobmp.BMP_MSG_ROUTE_MIRRORING:
 		return nil, false
 	}
 	peer, ok := d.peer(msg.PeerHeader, msg.Header.Type == gobmp.BMP_MSG_ROUTE_MONITORING)
@@ -447,9 +447,27 @@ func (d *decoder) message(raw []byte) (evs []plugin.RIBEvent, stop bool) {
 	case *gobmp.BMPPeerDownNotification:
 		delete(d.skip, peer)
 		delete(d.addPath, peer)
-		d.log.Info("bmp peer down", "router", d.router, "peer", peer.Address, "loc_rib", peer.LocRIB)
+		reason := peerDownReason(body)
+		d.log.Info("bmp peer down", "router", d.router, "peer", peer.Address, "loc_rib", peer.LocRIB, "reason", reason)
 		ev.Kind = plugin.RIBPeerDown
+		ev.Reason = reason
 		return []plugin.RIBEvent{ev}, false
+	case *gobmp.BMPStatisticsReport:
+		// The Adj-RIB-In count is the router's own tally for the session
+		// (RFC 7854 type 7). Loc-RIB counts are not a per-peer count.
+		if peer.LocRIB {
+			return nil, false
+		}
+		for _, t := range body.Stats {
+			s, ok := t.(*gobmp.BMPStatsTLV64)
+			if !ok || s.Type != gobmp.BMP_STAT_TYPE_ADJ_RIB_IN {
+				continue
+			}
+			ev.Kind = plugin.RIBPrefixCount
+			ev.Prefixes = int(s.Value)
+			return []plugin.RIBEvent{ev}, false
+		}
+		return nil, false
 	case *gobmp.BMPRouteMonitoring:
 		if _, skipped := d.skip[peer]; skipped {
 			return nil, false
@@ -460,6 +478,7 @@ func (d *decoder) message(raw []byte) (evs []plugin.RIBEvent, stop bool) {
 			d.skip[peer] = "decode error"
 			d.log.Warn("bmp: undecodable route monitoring; dropping peer", "router", d.router, "peer", peer.Address, "err", err)
 			ev.Kind = plugin.RIBPeerDown
+			ev.Reason = "undecodable route monitoring"
 			return []plugin.RIBEvent{ev}, false
 		}
 		upd, ok := body.BGPUpdate.Body.(*bgp.BGPUpdate)
@@ -504,7 +523,49 @@ func (d *decoder) undecodable(raw []byte, err error) []plugin.RIBEvent {
 	}
 	d.skip[peer] = "decode error"
 	d.log.Warn("bmp: undecodable message; dropping peer", "router", d.router, "peer", peer.Address, "type", raw[5], "err", err)
-	return []plugin.RIBEvent{{Kind: plugin.RIBPeerDown, Router: d.router, Peer: peer}}
+	return []plugin.RIBEvent{{Kind: plugin.RIBPeerDown, Router: d.router, Peer: peer, Reason: "undecodable message"}}
+}
+
+// peerDownReason decodes an RFC 7854 peer-down reason. When the router
+// carried the session's BGP Notification, that error code and subcode are
+// appended: a Cease subcode 1 is the peer's maximum-prefix limit, which is
+// the reason that matters for an IX session.
+func peerDownReason(b *gobmp.BMPPeerDownNotification) string {
+	var where string
+	switch b.Reason {
+	case gobmp.BMP_peerDownByUnknownReason,
+		gobmp.BMP_PEER_DOWN_REASON_LOCAL_BGP_NOTIFICATION,
+		gobmp.BMP_PEER_DOWN_REASON_LOCAL_NO_NOTIFICATION:
+		where = "local system closed"
+	case gobmp.BMP_PEER_DOWN_REASON_REMOTE_BGP_NOTIFICATION,
+		gobmp.BMP_PEER_DOWN_REASON_REMOTE_NO_NOTIFICATION:
+		where = "remote system closed"
+	case gobmp.BMP_PEER_DOWN_REASON_PEER_DE_CONFIGURED:
+		return "peer de-configured"
+	default:
+		return fmt.Sprintf("unknown reason %d", b.Reason)
+	}
+	if n := bgpNotification(b.BGPNotification); n != "" {
+		return where + ": " + n
+	}
+	return where
+}
+
+// bgpNotification names the error in a BGP Notification carried by a
+// peer-down message. Cease subcode 1 (maximum prefixes) is spelled out; the
+// rest are reported as code/subcode (RFC 4271, RFC 4486).
+func bgpNotification(m *bgp.BGPMessage) string {
+	if m == nil {
+		return ""
+	}
+	n, ok := m.Body.(*bgp.BGPNotification)
+	if !ok {
+		return ""
+	}
+	if n.ErrorCode == bgp.BGP_ERROR_CEASE && n.ErrorSubcode == bgp.BGP_ERROR_SUB_MAXIMUM_NUMBER_OF_PREFIXES_REACHED {
+		return "Cease subcode 1 (maximum number of prefixes reached)"
+	}
+	return fmt.Sprintf("notification %d/%d", n.ErrorCode, n.ErrorSubcode)
 }
 
 // peer maps a per-peer header to a RIBPeer, or false when this station

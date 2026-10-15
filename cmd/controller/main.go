@@ -601,7 +601,9 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 	tools.SetQueue(engine)
 	sysEngine.Store(engine)
 	watch := newEventWatch(dispatch, cfg.Mode)
-	if err := wireRIBSources(plugins, view, health); err != nil {
+	peerMon := exchangePeerMonitor(cfg)
+	col.SetPeerPrefixes(peerMon.Prefixes)
+	if err := wireRIBSources(plugins, view, health, peerMon, dispatch.Emit); err != nil {
 		log.Error("refusing to start", "err", err)
 		return 1
 	}

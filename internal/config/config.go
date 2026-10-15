@@ -576,6 +576,9 @@ type Exchange struct {
 	Peers []ExchangePeer `yaml:"peers"`
 	// Health tunes the next-hop probes and the exchange.degraded alert (#149).
 	Health ExchangeHealth `yaml:"health"`
+	// MaxPrefixWarnPct is the share of a peer's max_prefix at which
+	// exchange.max_prefix fires (#147). Omitted or 0 uses the default.
+	MaxPrefixWarnPct int `yaml:"max_prefix_warn_pct"`
 }
 
 // ExchangePeer is one peer on an exchange.
@@ -588,6 +591,10 @@ type ExchangePeer struct {
 	Exclude    bool     `yaml:"exclude"`
 	Precedence int      `yaml:"precedence"`
 	Cost       *float64 `yaml:"cost"`
+	// MaxPrefix is the router's maximum-prefix limit on this peer's
+	// session, when known (#147). 0 (default) disables the warning. It is
+	// read-only: Packeteer never sets or changes the limit.
+	MaxPrefix int `yaml:"max_prefix"`
 }
 
 // Allowlist restricts which prefixes may ever be injected.
