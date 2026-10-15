@@ -29,17 +29,17 @@ The image is `ghcr.io/grandarcher/packeteer`, linux/amd64 and linux/arm64. It ru
 
 | Tag | What it is |
 |---|---|
-| `0.6.0` | This release. Pin this. |
+| `0.7.0` | This release. Pin this. |
 | `latest` | The same release, updated when a release tag is published. |
 | `edge` | The build from `main`. The Compose file in this repo uses it. |
 
 **Step by step: [docs/quickstart.md](docs/quickstart.md).** It goes from an empty directory to a running instance in observe, with a first run on loopback, `docker run` and Compose, and the stop. CI runs every command on that page against the image built from the same commit.
 
-The short version, pinned to 0.6.0. Take the example config from the same tag as the image: the file on `main` can carry keys a release does not know yet, and unknown keys refuse startup. For `:edge`, use `main` in both places.
+The short version, pinned to 0.7.0. Take the example config from the same tag as the image: the file on `main` can carry keys a release does not know yet, and unknown keys refuse startup. For `:edge`, use `main` in both places.
 
 ```sh
-IMAGE=ghcr.io/grandarcher/packeteer:0.6.0
-curl -fsSLo config.yaml https://raw.githubusercontent.com/GrandArcher/Packeteer/v0.6.0/config.example.yaml
+IMAGE=ghcr.io/grandarcher/packeteer:0.7.0
+curl -fsSLo config.yaml https://raw.githubusercontent.com/GrandArcher/Packeteer/v0.7.0/config.example.yaml
 # Edit providers and source IPs. Leave mode: observe.
 mkdir -p plugins
 
@@ -60,7 +60,7 @@ docker run -d --name packeteer --network host \
 
 ```sh
 docker run --rm -e PACKETEER_CONFIG=/etc/packeteer/config.example.yaml \
-  ghcr.io/grandarcher/packeteer:0.6.0 -check
+  ghcr.io/grandarcher/packeteer:0.7.0 -check
 ```
 
 The default config path inside the container is `/etc/packeteer/config.yaml` (`PACKETEER_CONFIG`, or `-config`).
@@ -69,7 +69,7 @@ Without `NET_RAW`, or where ICMP is filtered, the probe falls back to TCP port 4
 
 The `packeteer-data` volume keeps report history (`storage: {type: sqlite}`, file `/var/lib/packeteer/packeteer.db`) across container restarts and upgrades, and the open billing period of SNMP 95th-percentile samples when telemetry is configured. Without the volume, reports and that window start empty after the container is recreated. Leave out `storage` to turn history off; the probe and decision loop does not depend on it, and the 95th window then lives in memory only.
 
-[docker-compose.yml](docker-compose.yml) runs the same container with Compose: host networking, the two capabilities, the mounts, and `restart: unless-stopped` ([quickstart, step 5](docs/quickstart.md#5-or-run-it-with-compose)). Its `image` line uses `:edge`; change it to `ghcr.io/grandarcher/packeteer:0.6.0` to pin. There is no `ports:` map: with host networking, `http.listen` is already an address on the host. Stop with `docker compose stop -t 30` (see [Rollback](#rollback)).
+[docker-compose.yml](docker-compose.yml) runs the same container with Compose: host networking, the two capabilities, the mounts, and `restart: unless-stopped` ([quickstart, step 5](docs/quickstart.md#5-or-run-it-with-compose)). Its `image` line uses `:edge`; change it to `ghcr.io/grandarcher/packeteer:0.7.0` to pin. There is no `ports:` map: with host networking, `http.listen` is already an address on the host. Stop with `docker compose stop -t 30` (see [Rollback](#rollback)).
 
 ## Minimum config
 
@@ -249,7 +249,7 @@ Symptoms, log lines, and fixes: [docs/troubleshooting.md](docs/troubleshooting.m
 
 ## Features
 
-Status as of v0.6.0, from [docs/FEATURES.md](docs/FEATURES.md):
+Status as of v0.7.0, from [docs/FEATURES.md](docs/FEATURES.md):
 
 | | Count |
 |---|---|
@@ -257,10 +257,11 @@ Status as of v0.6.0, from [docs/FEATURES.md](docs/FEATURES.md):
 | Done, v0.2 | 25 |
 | Done, v0.3 | 17 |
 | Done, v0.4 | 13 |
-| Done, v0.6 | 7 |
-| Won't do | 3 |
+| Done, v0.6 | 9 |
+| Done, v0.7 | 3 |
+| Won't do | 2 |
 
-v0.1 is the outbound loop: probes, static and flow targets, an iBGP RIB, scoring with hysteresis, optional injection, the read-only UI and API, the container, and the FRR lab. v0.2 adds cost and commit control, SNMP, policies, alerts, and reports. v0.3 adds inbound optimization, BMP and add-path, multiple routers and IX, RTBH/FlowSpec mitigation, transit classification, and capped more-specific injection, all lab-proven. v0.4 adds multi-POP federation, active/standby HA and backup, RBAC/SSO/audit, flow-baseline anomaly detection that mitigates only on explicit rules, and the remaining UI rows. v0.5 is hardening on that matrix: dashboard clarity and a first-run checklist, CI-tested install and walkthrough docs, load and soak budgets with a flow-ingest fix, a MikroTik CHR lab in CI, and a scheduled router interop matrix. Those are lab-proven only. Field feedback from real observe-mode deployments (#54) is still open. v0.6 (this release) closes the gaps from the 2026-10-07 review of prefix selection, measurement, and the UI, adds flap quarantine, live apply, scale budgets up to multi-million path tables, upgrade from the UI, and a failure-mode e2e matrix; also lab-proven only. It does not relax the safety rules above.
+v0.1 is the outbound loop: probes, static and flow targets, an iBGP RIB, scoring with hysteresis, optional injection, the read-only UI and API, the container, and the FRR lab. v0.2 adds cost and commit control, SNMP, policies, alerts, and reports. v0.3 adds inbound optimization, BMP and add-path, multiple routers and IX, RTBH/FlowSpec mitigation, transit classification, and capped more-specific injection, all lab-proven. v0.4 adds multi-POP federation, active/standby HA and backup, RBAC/SSO/audit, flow-baseline anomaly detection that mitigates only on explicit rules, and the remaining UI rows. v0.5 is hardening on that matrix: dashboard clarity and a first-run checklist, CI-tested install and walkthrough docs, load and soak budgets with a flow-ingest fix, a MikroTik CHR lab in CI, and a scheduled router interop matrix. Those are lab-proven only. Field feedback from real observe-mode deployments (#54) is still open. v0.6 closes the gaps from the 2026-10-07 review of prefix selection, measurement, and the UI, adds flap quarantine, live apply, scale budgets up to multi-million path tables, upgrade from the UI, and a failure-mode e2e matrix; also lab-proven only. v0.7 (this release) adds exchange (IX) visibility: an exchange view, IX LAN health probes, route-server vs bilateral prefix views, transit-to-IX offload and potential-peers reports; plus dashboard widgets, Commit & Cost, Reports, search, System, and maintenance pages, link-outs, steering precedence tests, and a split of the largest Go files. Also lab-proven only. It does not relax the safety rules above.
 
 ## Upgrades
 

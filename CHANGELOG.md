@@ -1,8 +1,10 @@
 # Changelog
 
-All notable changes to Packeteer are documented here. Versions are Git tags on `main`. The image tags `ghcr.io/grandarcher/packeteer:<version>` (for example `:0.6.0`) and `:latest` are published from each `v<version>` tag. `:edge` tracks `main`.
+All notable changes to Packeteer are documented here. Versions are Git tags on `main`. The image tags `ghcr.io/grandarcher/packeteer:<version>` (for example `:0.7.0`) and `:latest` are published from each `v<version>` tag. `:edge` tracks `main`.
 
 ## [Unreleased]
+
+## [0.7.0] - 2026-10-15
 
 ### Added
 
