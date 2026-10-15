@@ -70,6 +70,16 @@ func base62Decode(s string) (uint64, error) {
 	return n, nil
 }
 
+// keySecret is the 32-character secret inside a v7.3-sized key.
+// The checksum is not required: a mistyped key can still be the secret
+// pasted into a URL. Empty when key does not have that shape.
+func keySecret(key string) string {
+	if len(key) != keyLen || !strings.HasPrefix(key, keyPrefix) {
+		return ""
+	}
+	return key[len(keyPrefix)+identLen+1 : keyLen-crcLen]
+}
+
 // redact removes the key and its secret from a message. A redirect or a
 // transport error can echo the request, and the secret must not be stored
 // on the view.
@@ -85,8 +95,7 @@ func redact(msg, key string) string {
 	if esc := url.QueryEscape(key); esc != key {
 		msg = strings.ReplaceAll(msg, esc, ident)
 	}
-	if len(key) == keyLen {
-		secret := key[len(keyPrefix)+identLen+1 : keyLen-crcLen]
+	if secret := keySecret(key); secret != "" {
 		msg = strings.ReplaceAll(msg, secret, ident)
 		if esc := url.QueryEscape(secret); esc != secret {
 			msg = strings.ReplaceAll(msg, esc, ident)

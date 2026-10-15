@@ -82,8 +82,9 @@ type IXPConnection struct {
 }
 
 // IXPInterface is one physical interface. Switch and Colo are copied from
-// the switch list when switch_id matches; a missing switch leaves them
-// empty. PhysSpeedMbps is set only when the export included if_phys_speed.
+// the switch list of this connection's IXP when switch_id matches. A
+// missing switch, or the same id on another IXP, leaves them empty.
+// PhysSpeedMbps is set only when the export included if_phys_speed.
 type IXPInterface struct {
 	SwitchID      int    `json:"switch_id"`
 	Switch        string `json:"switch,omitempty"`

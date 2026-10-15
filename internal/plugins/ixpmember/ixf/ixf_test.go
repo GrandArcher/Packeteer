@@ -2,6 +2,7 @@ package ixf
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -84,6 +85,30 @@ func TestURLRejected(t *testing.T) {
 	}
 	if err := newErr(t, "url: https://ixp.example.invalid"+exportPath+"evil\nkey_expires: \""+utcDay(10)+"\"\n", docKey); err == nil || !strings.Contains(err.Error(), "only sent") {
 		t.Fatalf("near path: %v", err)
+	}
+}
+
+func TestEncodedKeyStaysOutOfFetchURL(t *testing.T) {
+	enc := "%" + fmt.Sprintf("%02X", docKey[0]) + docKey[1:]
+	raw := "https://ixp.example.invalid/" + enc + exportPath
+	if strings.Contains(raw, docKey) || !strings.Contains(raw, docSecret) {
+		t.Fatal("fixture did not encode only the first character")
+	}
+	got, manager, err := classifyURL(raw, docKey)
+	if err == nil || got != "" || manager {
+		t.Fatalf("classified %q manager %v err %v", got, manager, err)
+	}
+	if strings.Contains(err.Error(), docKey) || strings.Contains(err.Error(), docSecret) || strings.Contains(got, docSecret) || !strings.Contains(err.Error(), "API key") {
+		t.Fatalf("leak got %q err %v", got, err)
+	}
+	yml := "url: \"" + raw + "\"\nkey_expires: \"" + utcDay(10) + "\"\n"
+	if err := newErr(t, yml, docKey); err == nil || strings.Contains(err.Error(), docKey) || strings.Contains(err.Error(), docSecret) {
+		t.Fatalf("new %v", err)
+	}
+	qraw := "https://ixp.example.invalid" + exportPath + "?ixfid_1=" + enc
+	got, manager, err = classifyURL(qraw, docKey)
+	if err == nil || got != "" || manager || strings.Contains(err.Error(), docSecret) || strings.Contains(err.Error(), docKey) {
+		t.Fatalf("query got %q manager %v err %v", got, manager, err)
 	}
 }
 

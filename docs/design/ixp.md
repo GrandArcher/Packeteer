@@ -55,8 +55,10 @@ IXP Manager and Birdseye are read with GET only. No other method.
   `apikey`, `api_key`, `access_key`, `key`, `token`, `password`, and any
   other query key are refused. Auth is the `X-IXP-Manager-API-Key`
   header. The key is `PACKETEER_IXP_MANAGER_API_KEY`. It is not a config
-  value and not a query parameter. The log records the key identifier,
-  never the secret. `key_expires` (`YYYY-MM-DD`) is required when the
+  value and not a query parameter. A URL that contains the key, including
+  a percent-encoded form, is refused, so the secret is not stored on the
+  member list or sent in the request target. The log records the key
+  identifier, never the secret. `key_expires` (`YYYY-MM-DD`) is required when the
   key is set, because the token and this export do not carry the expiry.
   A warning fires when 14 days or fewer remain, including a key that is
   already expired. A date more than 366 days ahead is refused. Redirects

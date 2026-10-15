@@ -152,9 +152,6 @@ func New(c plugin.Config, env plugin.Env) (plugin.MemberSource, error) {
 		if err != nil {
 			return nil, err
 		}
-		if !manager {
-			return nil, errors.New("API key is only sent to the IXP Manager member export")
-		}
 	}
 	log := env.Logger
 	if log == nil {

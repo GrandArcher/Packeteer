@@ -2,6 +2,7 @@ package ixf
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -120,6 +121,59 @@ func TestParseSample(t *testing.T) {
 		if strings.Contains(string(raw), hidden) {
 			t.Fatalf("view contains %s: %s", hidden, raw)
 		}
+	}
+}
+
+func TestParseRejectsMappedIPv6Prefix(t *testing.T) {
+	for _, mask := range []int{0, 24, 32, 64} {
+		body := fmt.Sprintf(`{"version":"1.0","ixp_list":[{"ixp_id":1,"vlan":[{"id":1,"ipv6":{"prefix":"::ffff:192.0.2.0","mask_length":%d}}]}]}`, mask)
+		p, err := parseIXF([]byte(body))
+		if err == nil {
+			t.Fatalf("mask %d accepted %+v", mask, p.ixps)
+		}
+		if strings.Contains(err.Error(), "invalid Prefix") || strings.Contains(err.Error(), "192.0.2") || !strings.Contains(err.Error(), "ipv6") {
+			t.Fatalf("mask %d err %v", mask, err)
+		}
+	}
+	p, err := parseIXF([]byte(`{"version":"1.0","ixp_list":[{"ixp_id":1,"vlan":[{"id":1,"ipv4":{"prefix":"192.0.2.1","mask_length":24},"ipv6":{"prefix":"2001:db8::","mask_length":64}}]}]}`))
+	if err != nil || p.ixps[0].VLANs[0].IPv4 != "192.0.2.0/24" || p.ixps[0].VLANs[0].IPv6 != "2001:db8::/64" {
+		t.Fatalf("%+v %v", p, err)
+	}
+	_, err = parseIXF([]byte(`{"version":"1.0","member_list":[{"asnum":64496,"connection_list":[{"vlan_list":[{"vlan_id":1,"ipv6":{"address":"::ffff:192.0.2.1"}}]}]}]}`))
+	if err == nil || strings.Contains(err.Error(), "192.0.2") || !strings.Contains(err.Error(), "not an IPv6") {
+		t.Fatalf("mapped address %v", err)
+	}
+}
+
+func TestSwitchIDStaysOnIXP(t *testing.T) {
+	body := `{
+	  "version":"1.0",
+	  "ixp_list":[
+	    {"ixp_id":1,"switch":[{"id":7,"name":"sw-a","colo":"cab-a"}]},
+	    {"ixp_id":2,"switch":[{"id":7,"name":"sw-b","colo":"cab-b"}]}
+	  ],
+	  "member_list":[{"asnum":64496,"connection_list":[
+	    {"ixp_id":1,"if_list":[{"switch_id":7,"if_speed":1000}]},
+	    {"ixp_id":2,"if_list":[{"switch_id":7,"if_speed":10000}]},
+	    {"ixp_id":3,"if_list":[{"switch_id":7,"if_speed":100}]}
+	  ]}]
+	}`
+	p, err := parseIXF([]byte(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	conns := p.members[0].Connections
+	if len(conns) != 3 {
+		t.Fatalf("conns %d", len(conns))
+	}
+	if conns[0].IXPID != 1 || conns[0].Interfaces[0].Switch != "sw-a" || conns[0].Interfaces[0].Colo != "cab-a" {
+		t.Fatalf("ixp 1 %+v", conns[0].Interfaces)
+	}
+	if conns[1].IXPID != 2 || conns[1].Interfaces[0].Switch != "sw-b" || conns[1].Interfaces[0].Colo != "cab-b" {
+		t.Fatalf("ixp 2 %+v", conns[1].Interfaces)
+	}
+	if conns[2].IXPID != 3 || conns[2].Interfaces[0].Switch != "" || conns[2].Interfaces[0].Colo != "" || conns[2].Interfaces[0].SwitchID != 7 {
+		t.Fatalf("other ixp %+v", conns[2].Interfaces)
 	}
 }
 

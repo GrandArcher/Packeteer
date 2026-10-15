@@ -237,7 +237,15 @@ func convPfx(p string, in *ixfPfx, bits int) (string, error) {
 	if in.Mask < 0 || in.Mask > bits {
 		return "", fmt.Errorf("%s.mask_length is invalid", p)
 	}
-	return netip.PrefixFrom(a.Unmap(), in.Mask).Masked().String(), nil
+	// Unmap before PrefixFrom. An IPv4-mapped address in the IPv6 object
+	// becomes IPv4: a mask above 32 is not a valid prefix, and a mask of
+	// 0-32 would be stored as an IPv4 CIDR on the IPv6 field. convAddr
+	// rejects that address.
+	pfx := netip.PrefixFrom(a.Unmap(), in.Mask).Masked()
+	if !pfx.IsValid() || pfx.Addr().BitLen() != bits {
+		return "", fmt.Errorf("%s.prefix is not an IP address", p)
+	}
+	return pfx.String(), nil
 }
 
 func convMember(p string, in ixfMember, switches map[int]map[int]swInfo) (plugin.IXPMember, int, error) {
@@ -288,7 +296,10 @@ func convConn(p string, in ixfConn, switches map[int]map[int]swInfo) (plugin.IXP
 			return plugin.IXPConnection{}, 0, fmt.Errorf("%s.if_phys_speed is negative", ip)
 		}
 		out := plugin.IXPInterface{SwitchID: iface.SwitchID, SpeedMbps: iface.Speed, PhysSpeedMbps: iface.Phys}
-		if info, ok := lookupSwitch(switches, in.IXPID, iface.SwitchID); ok {
+		// switch_id is only meaningful on this connection's IXP. The same
+		// id on another IXP is a different switch, and map iteration would
+		// pick one of them at random.
+		if info, ok := switches[in.IXPID][iface.SwitchID]; ok {
 			out.Switch = info.name
 			out.Colo = info.colo
 		}
@@ -354,18 +365,6 @@ func convAddr(p, family string, vlan int, in *ixfAddr) (plugin.IXPAddress, error
 		Family: family, Address: a.String(), VLANID: vlan,
 		RouteServer: in.RouteServer, MaxPrefix: in.MaxPrefix, ASMacro: in.ASMacro,
 	}, nil
-}
-
-func lookupSwitch(all map[int]map[int]swInfo, ixpID, switchID int) (swInfo, bool) {
-	if info, ok := all[ixpID][switchID]; ok {
-		return info, true
-	}
-	for _, m := range all {
-		if info, ok := m[switchID]; ok {
-			return info, true
-		}
-	}
-	return swInfo{}, false
 }
 
 func clip(path, s string) error {
