@@ -41,7 +41,9 @@ func (t *VRPs) Len() int {
 	return t.n
 }
 
-// Add records one announcement, as an RTR IPv4 or IPv6 Prefix PDU.
+// Add records one announcement, as an RTR IPv4 or IPv6 Prefix PDU. It is
+// idempotent: RTR re-sends a serial's records after a reconnect or a lost
+// End of Data, and a stored duplicate would outlive one Remove.
 func (t *VRPs) Add(prefix netip.Prefix, maxLen uint8, asn uint32) {
 	if t == nil || !prefix.IsValid() {
 		return
@@ -49,6 +51,11 @@ func (t *VRPs) Add(prefix netip.Prefix, maxLen uint8, asn uint32) {
 	prefix = prefix.Masked()
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	for _, e := range t.m[prefix] {
+		if e.maxLen == maxLen && e.asn == asn {
+			return
+		}
+	}
 	t.m[prefix] = append(t.m[prefix], vrp{maxLen: maxLen, asn: asn})
 	t.n++
 }

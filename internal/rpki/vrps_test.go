@@ -74,6 +74,20 @@ func TestVRPsRemove(t *testing.T) {
 	}
 }
 
+// A replayed RTR announcement is stored once, so one Remove retires it.
+func TestVRPsAddIdempotent(t *testing.T) {
+	table := NewVRPs()
+	table.Add(p(t, "198.51.100.0/24"), 24, 64500)
+	table.Add(p(t, "198.51.100.0/24"), 24, 64500)
+	if table.Len() != 1 {
+		t.Fatalf("duplicate add stored %d payloads", table.Len())
+	}
+	table.Remove(p(t, "198.51.100.0/24"), 24, 64500)
+	if got := table.Validate(p(t, "198.51.100.0/24"), 64500); got == plugin.RPKIValid {
+		t.Fatalf("withdrawn payload still validates: %q", got)
+	}
+}
+
 // An empty and nil table are unknown, never invalid.
 func TestVRPsEmpty(t *testing.T) {
 	if got := NewVRPs().Validate(p(t, "198.51.100.0/24"), 64500); got != plugin.RPKINotFound {

@@ -1476,7 +1476,7 @@ Reads the public [RIPE RIS Live](https://ris-live.ripe.net) HTTP stream (#199). 
 
 ### RPKI source `rtr`
 
-Connects read-only to an RPKI-to-Router server (RFC 8210) such as the operator's Routinator, caches the validated ROA payloads, and validates origin ASNs (RFC 6811). It never announces and never changes the learned RIB. The cache is in memory and holds at most 2,000,000 payloads; a server that exceeds that is dropped. A lost connection is retried with backoff. When the cache is older than `staleness`, every lookup is `unknown` (fail open).
+Connects read-only to an RPKI-to-Router server (RFC 8210) such as the operator's Routinator, caches the validated ROA payloads, and validates origin ASNs (RFC 6811). It never announces and never changes the learned RIB. The cache is in memory and holds at most 2,000,000 payloads; a server that exceeds that is dropped. A lost or stalled connection is retried with backoff. When the cache is older than `staleness`, every lookup is `unknown` (fail open).
 
 | Key | Default | Meaning |
 |---|---|---|

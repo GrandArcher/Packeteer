@@ -6,9 +6,11 @@ import (
 	"io"
 	"net"
 	"net/netip"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/GrandArcher/Packeteer/internal/rpki"
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
 )
 
@@ -70,6 +72,14 @@ func endOfDataPDU(serial uint32) []byte {
 	binary.BigEndian.PutUint32(b[12:16], 300)
 	binary.BigEndian.PutUint32(b[16:20], 600)
 	binary.BigEndian.PutUint32(b[20:24], 3600)
+	return b
+}
+
+func routerKeyPDU() []byte {
+	b := make([]byte, 20)
+	b[0], b[1] = protocolVersion, pduRouterKey
+	b[2] = 1 // announce flag
+	binary.BigEndian.PutUint32(b[4:8], 20)
 	return b
 }
 
@@ -159,6 +169,113 @@ func TestClientValidates(t *testing.T) {
 	}
 	if got := c.Validate(mustPrefix(t, "2001:db8:1::/48"), 64502); got != plugin.RPKIValid {
 		t.Fatalf("ipv6 valid = %q", got)
+	}
+}
+
+// A Router Key PDU (RFC 8210 section 5.9) does not affect prefix origin
+// validation and must not abort the load before End of Data.
+func TestClientIgnoresRouterKey(t *testing.T) {
+	addr := stubServer(t,
+		routerKeyPDU(),
+		ipv4PDU(t, "198.51.100.0/24", 24, 64500, true),
+	)
+	c := startClient(t, addr)
+	if got := c.Validate(mustPrefix(t, "198.51.100.0/24"), 64500); got != plugin.RPKIValid {
+		t.Fatalf("validate after router key = %q, want valid", got)
+	}
+}
+
+// silentResetServer answers a Reset Query with a partial table and never
+// sends End of Data. It counts connections so a test can see the client
+// redial.
+func silentResetServer(t *testing.T, partial []byte) (string, *atomic.Int32) {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+	var accepts atomic.Int32
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			accepts.Add(1)
+			go func() {
+				defer conn.Close()
+				head := make([]byte, 8)
+				if _, err := io.ReadFull(conn, head); err != nil {
+					return
+				}
+				if head[1] != pduResetQuery {
+					return
+				}
+				_, _ = conn.Write(cacheResponsePDU())
+				_, _ = conn.Write(partial)
+				_, _ = io.Copy(io.Discard, conn)
+			}()
+		}
+	}()
+	return ln.Addr().String(), &accepts
+}
+
+// A reset that stalls before End of Data is dropped and redialed: the
+// configured timeout, not refresh, bounds one read while a load is in
+// flight.
+func TestClientRedialsSilentReset(t *testing.T) {
+	addr, accepts := silentResetServer(t, ipv4PDU(t, "198.51.100.0/24", 24, 64500, true))
+	cfg, err := plugin.ConfigFromYAML("address: " + addr + "\ntimeout: 1s\nrefresh: 1s\nstaleness: 1h\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := New(cfg, plugin.Env{Name: "silent"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := p.(*Client)
+	if err := c.Start(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := contextWithTimeout(2 * time.Second)
+	defer cancel()
+	defer func() { _ = c.Stop(ctx) }()
+	deadline := time.Now().Add(6 * time.Second)
+	for time.Now().Before(deadline) && accepts.Load() < 2 {
+		time.Sleep(20 * time.Millisecond)
+	}
+	if got := accepts.Load(); got < 2 {
+		t.Fatalf("stalled reset not redialed (connections = %d)", got)
+	}
+	if got := c.Validate(mustPrefix(t, "198.51.100.0/24"), 64500); got != plugin.RPKIUnknown {
+		t.Fatalf("partial reset served as %q, want unknown", got)
+	}
+}
+
+// A serial update re-sent after a lost End of Data must not store a
+// second copy, so one withdrawal retires the payload.
+func TestHandleReplayedAnnounce(t *testing.T) {
+	c := &Client{cfg: Config{Staleness: time.Hour}, cache: rpki.NewVRPs()}
+	c.setUp(1, 1)
+	pdu := ipv4PDU(t, "198.51.100.0/24", 24, 64500, true)
+	for i := 0; i < 2; i++ {
+		if _, _, _, err := c.handle(pdu, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := c.cache.Len(); got != 1 {
+		t.Fatalf("replayed announce stored %d payloads", got)
+	}
+	if got := c.Validate(mustPrefix(t, "198.51.100.0/24"), 64500); got != plugin.RPKIValid {
+		t.Fatalf("before withdraw = %q, want valid", got)
+	}
+	withdraw := ipv4PDU(t, "198.51.100.0/24", 24, 64500, false)
+	if _, _, _, err := c.handle(withdraw, nil); err != nil {
+		t.Fatal(err)
+	}
+	if got := c.Validate(mustPrefix(t, "198.51.100.0/24"), 64500); got == plugin.RPKIValid {
+		t.Fatalf("withdrawn payload still validates: %q", got)
 	}
 }
 

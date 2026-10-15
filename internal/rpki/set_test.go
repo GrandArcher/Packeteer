@@ -3,6 +3,7 @@ package rpki
 import (
 	"net/netip"
 	"testing"
+	"time"
 
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
 )
@@ -49,5 +50,37 @@ func TestSetEmpty(t *testing.T) {
 	}
 	if got := nilSet.Validate(prefix, 64500); got != plugin.RPKIUnknown {
 		t.Fatalf("nil set = %q, want unknown", got)
+	}
+}
+
+// Version changes when a source completes a fetch or goes stale, so a
+// cache of Validate results can invalidate without a RIB generation
+// change.
+func TestSetVersionChanges(t *testing.T) {
+	at := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	src := &fakeSource{status: plugin.RPKIStatus{Up: true, VRPs: 10, Updated: at}}
+	s := NewSet([]plugin.RPKI{src})
+	first := s.Version()
+	if first == 0 {
+		t.Fatal("Version = 0 with a source")
+	}
+	// A completed fetch with a different payload count changes it.
+	src.status = plugin.RPKIStatus{Up: true, VRPs: 11, Updated: at.Add(time.Minute)}
+	if second := s.Version(); second == first {
+		t.Fatal("Version did not change after a fetch")
+	} else {
+		first = second
+	}
+	// Going stale changes it even without a new fetch.
+	src.status.Stale = true
+	if third := s.Version(); third == first {
+		t.Fatal("Version ignores staleness")
+	}
+	if NewSet(nil).Version() != 0 {
+		t.Fatal("empty set Version is not 0")
+	}
+	var nilSet *Set
+	if nilSet.Version() != 0 {
+		t.Fatal("nil set Version is not 0")
 	}
 }

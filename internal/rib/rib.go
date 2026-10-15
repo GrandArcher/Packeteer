@@ -1474,6 +1474,20 @@ func (v *View) SuggestNextHops(configured []netip.Addr, lans []netip.Prefix) []N
 }
 
 func (v *View) countNextHops(keep func(netip.Addr) bool, validate func(netip.Prefix, uint32) plugin.RPKIValidity) []NextHopCount {
+	// Copy the paths that count under the RIB lock, then aggregate and,
+	// when validate is set, look up origin validity after it is released.
+	// A full-table RPKI lookup must not hold the RIB lock while BGP is
+	// still updating it. Without validate the path is folded in place, so
+	// no copy is made.
+	type hopPath struct {
+		nh     netip.Addr
+		prefix netip.Prefix
+		first  uint32
+		origin uint32
+		hasAS  bool
+		bit    uint8
+		via    string
+	}
 	type acc struct {
 		prefixes    map[netip.Prefix]uint8
 		asns        map[uint32]int
@@ -1482,58 +1496,72 @@ func (v *View) countNextHops(keep func(netip.Addr) bool, validate func(netip.Pre
 		bilateral   bool
 	}
 	hops := map[netip.Addr]*acc{}
-	// adjIn is true for a BMP Adj-RIB-In path, the only evidence of how a
-	// prefix arrived: an iBGP or Loc-RIB path takes its Via from the
-	// next hop, not from the prefix.
-	add := func(rt Route, adjIn bool) {
-		nh := rt.NextHop.Unmap()
-		if !nh.IsValid() || !keep(nh) {
-			return
-		}
-		a := hops[nh]
+	aggregate := func(p hopPath) {
+		a := hops[p.nh]
 		if a == nil {
 			a = &acc{prefixes: map[netip.Prefix]uint8{}, asns: map[uint32]int{}}
-			hops[nh] = a
+			hops[p.nh] = a
 		}
-		var bit uint8
-		if adjIn {
-			bit = viaBit(rt.Via)
-		}
-		a.prefixes[rt.Prefix] |= bit
-		if len(rt.ASPath) > 0 {
-			a.asns[rt.ASPath[0]]++
+		a.prefixes[p.prefix] |= p.bit
+		if p.hasAS {
+			a.asns[p.first]++
 			if validate != nil {
 				if a.rpki == nil {
 					a.rpki = map[netip.Prefix]plugin.RPKIValidity{}
 				}
-				origin := rt.ASPath[len(rt.ASPath)-1]
-				v := validate(rt.Prefix, origin)
-				if old, ok := a.rpki[rt.Prefix]; !ok || rpkiRank(v) > rpkiRank(old) {
-					a.rpki[rt.Prefix] = v
+				val := validate(p.prefix, p.origin)
+				if old, ok := a.rpki[p.prefix]; !ok || rpkiRank(val) > rpkiRank(old) {
+					a.rpki[p.prefix] = val
 				}
 			}
 		}
-		switch rt.Via {
+		switch p.via {
 		case ViaRouteServer:
 			a.routeServer = true
 		case ViaBilateral:
 			a.bilateral = true
 		}
 	}
+	var recs []hopPath
+	// adjIn is true for a BMP Adj-RIB-In path, the only evidence of how a
+	// prefix arrived: an iBGP or Loc-RIB path takes its Via from the
+	// next hop, not from the prefix.
+	collect := func(rt Route, adjIn bool) {
+		nh := rt.NextHop.Unmap()
+		if !nh.IsValid() || !keep(nh) {
+			return
+		}
+		p := hopPath{nh: nh, prefix: rt.Prefix, via: rt.Via}
+		if adjIn {
+			p.bit = viaBit(rt.Via)
+		}
+		if len(rt.ASPath) > 0 {
+			p.hasAS = true
+			p.first, p.origin = rt.ASPath[0], rt.ASPath[len(rt.ASPath)-1]
+		}
+		if validate == nil {
+			aggregate(p)
+			return
+		}
+		recs = append(recs, p)
+	}
 	v.mu.RLock()
 	for _, s := range v.adj {
 		s.each(func(_ adjKey, rt Route) {
 			if v.usableLocked(rt) {
-				add(rt, false)
+				collect(rt, false)
 			}
 		})
 	}
-	for _, paths := range v.bmp {
-		for _, rt := range paths {
-			add(rt, !rt.LocRIB)
+	for _, ps := range v.bmp {
+		for _, rt := range ps {
+			collect(rt, !rt.LocRIB)
 		}
 	}
 	v.mu.RUnlock()
+	for _, p := range recs {
+		aggregate(p)
+	}
 	out := make([]NextHopCount, 0, len(hops))
 	for nh, a := range hops {
 		c := NextHopCount{NextHop: nh, Prefixes: len(a.prefixes), Via: hopVia(a.routeServer, a.bilateral)}
