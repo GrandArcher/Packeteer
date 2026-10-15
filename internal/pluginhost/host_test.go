@@ -383,3 +383,21 @@ func TestLeakSourcesBuiltOnlyWhenEnabled(t *testing.T) {
 		t.Fatalf("err %v", err)
 	}
 }
+
+func TestRPKISourcesBuiltOnlyWhenEnabled(t *testing.T) {
+	set, err := Build(load(t, "rpki:\n  enabled: true\n  sources:\n    - type: rtr\n      config: {address: 192.0.2.20:3323}\n"), Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(set.RPKISources) != 1 || set.RPKISources[0].Type != "rtr" {
+		t.Fatalf("rpki sources %+v", set.RPKISources)
+	}
+	set, err = Build(load(t, "rpki:\n  enabled: false\n"), Options{})
+	if err != nil || len(set.RPKISources) != 0 {
+		t.Fatalf("a disabled rpki built sources: %v %+v", err, set)
+	}
+	_, err = Build(load(t, "rpki:\n  enabled: true\n  sources: [{type: nope}]\n"), Options{})
+	if err == nil || !strings.Contains(err.Error(), `rpki.sources[0] (nope): unknown rpki type "nope" (available: rtr)`) {
+		t.Fatalf("err %v", err)
+	}
+}

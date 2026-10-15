@@ -40,6 +40,7 @@ const (
 	KindNotifier    = "notifier"
 	KindTelemetry   = "telemetry"
 	KindFederation  = "federation_peer"
+	KindRPKI        = "rpki"
 )
 
 // Component is one row of the System page. Since is when the state last
@@ -116,6 +117,17 @@ type TelemetryFact struct {
 	Polled   time.Time
 }
 
+// RPKIFact is one RPKI origin-validation source and its cache health
+// (#158).
+type RPKIFact struct {
+	PluginFact
+	Up      bool
+	Stale   bool
+	VRPs    int
+	Updated time.Time
+	Err     string
+}
+
 // SystemFacts is what the controller knows about its configured plugins
 // and their latest results. Everything else on the page comes from the
 // snapshot, the elector, and the federation view. It holds no secrets and
@@ -129,6 +141,7 @@ type SystemFacts struct {
 	Notifiers  []NotifierFact
 	Telemetry  []TelemetryFact
 	RIBSources []RIBSourceFact
+	RPKI       []RPKIFact
 }
 
 func (s *Server) handleSystem(w http.ResponseWriter, _ *http.Request) {
@@ -166,6 +179,9 @@ func BuildSystem(snap Snapshot, facts SystemFacts, ha *plugin.ElectorStatus, fed
 	rows = append(rows, bgpRows(snap)...)
 	for _, src := range facts.RIBSources {
 		add(ribSourceRow(src))
+	}
+	for _, r := range facts.RPKI {
+		add(rpkiRow(r))
 	}
 	for _, p := range snap.Providers {
 		add(probeSourceRow(p))
@@ -293,6 +309,25 @@ func ribSourceRow(src RIBSourceFact) Component {
 		c.State = StateOK
 	}
 	c.Error = strings.Join(errs, "; ")
+	return c
+}
+
+// rpkiRow judges one RPKI source from its cache health (#158). A stale
+// cache is fail-open: it never blocks a withdraw, so it is degraded, not
+// down.
+func rpkiRow(f RPKIFact) Component {
+	c := Component{Kind: KindRPKI, Name: f.Name, Type: f.Type, Since: ptrTime(f.Updated), Error: f.Err}
+	switch {
+	case !f.Stale && f.Up:
+		c.State = StateOK
+		c.Detail = fmt.Sprintf("%d VRPs, updated %s", f.VRPs, f.Updated.UTC().Format(time.RFC3339))
+	case !f.Updated.IsZero():
+		c.State = StateDegraded
+		c.Detail = fmt.Sprintf("%d VRPs, stale since %s", f.VRPs, f.Updated.UTC().Format(time.RFC3339))
+	default:
+		c.State = StateDown
+		c.Detail = "no data"
+	}
 	return c
 }
 

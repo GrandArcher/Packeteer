@@ -1301,6 +1301,35 @@ type NextHopCount struct {
 	RouteServerOnly int `json:"route_server_only"`
 	BilateralOnly   int `json:"bilateral_only"`
 	Both            int `json:"both"`
+	// RPKI counts the distinct prefixes through this next hop by the
+	// origin-validation state of their paths (#158). Nil when RPKI is
+	// off. Display only.
+	RPKI *RPKICounts `json:"rpki,omitempty"`
+}
+
+// RPKICounts is the origin-validation state of the distinct prefixes
+// seen through one next hop (#158). When a prefix has several paths, the
+// most severe state counts: invalid before valid, valid before not-found,
+// and not-found before unknown.
+type RPKICounts struct {
+	Valid    int `json:"valid"`
+	Invalid  int `json:"invalid"`
+	NotFound int `json:"notfound"`
+	Unknown  int `json:"unknown"`
+}
+
+// rpkiRank orders the states for aggregation. A higher rank wins.
+func rpkiRank(v plugin.RPKIValidity) int {
+	switch v {
+	case plugin.RPKIInvalid:
+		return 3
+	case plugin.RPKIValid:
+		return 2
+	case plugin.RPKINotFound:
+		return 1
+	default:
+		return 0
+	}
 }
 
 // Availability classes of one prefix through one next hop (#156).
@@ -1383,6 +1412,17 @@ const maxSuggestNextHops = 64
 // with a usable path through it (iBGP, including add-path, and BMP). It
 // walks every path, so callers cache it against Generation.
 func (v *View) NextHops(lans []netip.Prefix) []NextHopCount {
+	return v.nextHops(lans, nil)
+}
+
+// NextHopsRPKI is NextHops with each next hop's prefixes counted by the
+// RFC 6811 origin-validation state of their paths (#158), from validate.
+// It walks every path, so callers cache it against Generation.
+func (v *View) NextHopsRPKI(lans []netip.Prefix, validate func(netip.Prefix, uint32) plugin.RPKIValidity) []NextHopCount {
+	return v.nextHops(lans, validate)
+}
+
+func (v *View) nextHops(lans []netip.Prefix, validate func(netip.Prefix, uint32) plugin.RPKIValidity) []NextHopCount {
 	if len(lans) == 0 {
 		return nil
 	}
@@ -1393,7 +1433,7 @@ func (v *View) NextHops(lans []netip.Prefix) []NextHopCount {
 			}
 		}
 		return false
-	})
+	}, validate)
 	sort.Slice(out, func(i, j int) bool { return out[i].NextHop.Less(out[j].NextHop) })
 	return out
 }
@@ -1420,7 +1460,7 @@ func (v *View) SuggestNextHops(configured []netip.Addr, lans []netip.Prefix) []N
 			}
 		}
 		return true
-	})
+	}, nil)
 	sort.Slice(out, func(i, j int) bool {
 		if out[i].Prefixes != out[j].Prefixes {
 			return out[i].Prefixes > out[j].Prefixes
@@ -1433,56 +1473,95 @@ func (v *View) SuggestNextHops(configured []netip.Addr, lans []netip.Prefix) []N
 	return out
 }
 
-func (v *View) countNextHops(keep func(netip.Addr) bool) []NextHopCount {
+func (v *View) countNextHops(keep func(netip.Addr) bool, validate func(netip.Prefix, uint32) plugin.RPKIValidity) []NextHopCount {
+	// Copy the paths that count under the RIB lock, then aggregate and,
+	// when validate is set, look up origin validity after it is released.
+	// A full-table RPKI lookup must not hold the RIB lock while BGP is
+	// still updating it. Without validate the path is folded in place, so
+	// no copy is made.
+	type hopPath struct {
+		nh     netip.Addr
+		prefix netip.Prefix
+		first  uint32
+		origin uint32
+		hasAS  bool
+		bit    uint8
+		via    string
+	}
 	type acc struct {
 		prefixes    map[netip.Prefix]uint8
 		asns        map[uint32]int
+		rpki        map[netip.Prefix]plugin.RPKIValidity
 		routeServer bool
 		bilateral   bool
 	}
 	hops := map[netip.Addr]*acc{}
-	// adjIn is true for a BMP Adj-RIB-In path, the only evidence of how a
-	// prefix arrived: an iBGP or Loc-RIB path takes its Via from the
-	// next hop, not from the prefix.
-	add := func(rt Route, adjIn bool) {
-		nh := rt.NextHop.Unmap()
-		if !nh.IsValid() || !keep(nh) {
-			return
-		}
-		a := hops[nh]
+	aggregate := func(p hopPath) {
+		a := hops[p.nh]
 		if a == nil {
 			a = &acc{prefixes: map[netip.Prefix]uint8{}, asns: map[uint32]int{}}
-			hops[nh] = a
+			hops[p.nh] = a
 		}
-		var bit uint8
-		if adjIn {
-			bit = viaBit(rt.Via)
+		a.prefixes[p.prefix] |= p.bit
+		if p.hasAS {
+			a.asns[p.first]++
+			if validate != nil {
+				if a.rpki == nil {
+					a.rpki = map[netip.Prefix]plugin.RPKIValidity{}
+				}
+				val := validate(p.prefix, p.origin)
+				if old, ok := a.rpki[p.prefix]; !ok || rpkiRank(val) > rpkiRank(old) {
+					a.rpki[p.prefix] = val
+				}
+			}
 		}
-		a.prefixes[rt.Prefix] |= bit
-		if len(rt.ASPath) > 0 {
-			a.asns[rt.ASPath[0]]++
-		}
-		switch rt.Via {
+		switch p.via {
 		case ViaRouteServer:
 			a.routeServer = true
 		case ViaBilateral:
 			a.bilateral = true
 		}
 	}
+	var recs []hopPath
+	// adjIn is true for a BMP Adj-RIB-In path, the only evidence of how a
+	// prefix arrived: an iBGP or Loc-RIB path takes its Via from the
+	// next hop, not from the prefix.
+	collect := func(rt Route, adjIn bool) {
+		nh := rt.NextHop.Unmap()
+		if !nh.IsValid() || !keep(nh) {
+			return
+		}
+		p := hopPath{nh: nh, prefix: rt.Prefix, via: rt.Via}
+		if adjIn {
+			p.bit = viaBit(rt.Via)
+		}
+		if len(rt.ASPath) > 0 {
+			p.hasAS = true
+			p.first, p.origin = rt.ASPath[0], rt.ASPath[len(rt.ASPath)-1]
+		}
+		if validate == nil {
+			aggregate(p)
+			return
+		}
+		recs = append(recs, p)
+	}
 	v.mu.RLock()
 	for _, s := range v.adj {
 		s.each(func(_ adjKey, rt Route) {
 			if v.usableLocked(rt) {
-				add(rt, false)
+				collect(rt, false)
 			}
 		})
 	}
-	for _, paths := range v.bmp {
-		for _, rt := range paths {
-			add(rt, !rt.LocRIB)
+	for _, ps := range v.bmp {
+		for _, rt := range ps {
+			collect(rt, !rt.LocRIB)
 		}
 	}
 	v.mu.RUnlock()
+	for _, p := range recs {
+		aggregate(p)
+	}
 	out := make([]NextHopCount, 0, len(hops))
 	for nh, a := range hops {
 		c := NextHopCount{NextHop: nh, Prefixes: len(a.prefixes), Via: hopVia(a.routeServer, a.bilateral)}
@@ -1501,6 +1580,26 @@ func (v *View) countNextHops(keep func(netip.Addr) bool) []NextHopCount {
 			if n > best || (n == best && asn < c.ASN) {
 				c.ASN, best = asn, n
 			}
+		}
+		if validate != nil {
+			rc := &RPKICounts{}
+			for _, v := range a.rpki {
+				switch v {
+				case plugin.RPKIValid:
+					rc.Valid++
+				case plugin.RPKIInvalid:
+					rc.Invalid++
+				case plugin.RPKINotFound:
+					rc.NotFound++
+				default:
+					rc.Unknown++
+				}
+			}
+			// A prefix with no origin AS in its path is unknown.
+			if n := len(a.prefixes) - len(a.rpki); n > 0 {
+				rc.Unknown += n
+			}
+			c.RPKI = rc
 		}
 		out = append(out, c)
 	}

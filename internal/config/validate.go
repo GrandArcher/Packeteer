@@ -38,6 +38,7 @@ func (c *Config) Validate() error {
 	c.validateProbeBudget(add)
 	c.validateLogHTTP(add)
 	c.validateMoreSpecific(add)
+	c.validateRPKI(add)
 	c.validateInject(add)
 	c.validateIXP(add)
 

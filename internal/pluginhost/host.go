@@ -60,6 +60,9 @@ type Set struct {
 	// LeakSources feed the leak watch (leak_watch.sources, #199). They
 	// only read; the core decides what to withdraw.
 	LeakSources []Instance[plugin.LeakSource]
+	// RPKISources validate path origins (rpki.sources, #158). They are an
+	// ordered fallback list and never announce.
+	RPKISources []Instance[plugin.RPKI]
 
 	mu      sync.RWMutex
 	started []namedLifecycle
@@ -160,6 +163,9 @@ func Build(cfg *config.Config, opts Options) (*Set, error) {
 	if cfg.LeakWatching() {
 		s.LeakSources = build(plugin.LeakSources, "leak_watch.sources", cfg.LeakWatch.Sources, base, &errs)
 	}
+	if cfg.RPKIOn() {
+		s.RPKISources = build(plugin.RPKIs, "rpki.sources", cfg.RPKI.Sources, base, &errs)
+	}
 	if cfg.Troubleshoot.Whois != nil {
 		if b := build(plugin.Whoises, "troubleshoot.whois", []config.PluginSpec{*cfg.Troubleshoot.Whois}, base, &errs); len(b) == 1 {
 			s.Whois = &b[0]
@@ -219,6 +225,9 @@ func (s *Set) all() []namedLifecycle {
 	}
 	for _, p := range s.LeakSources {
 		add(plugin.KindLeakSource, p.Name, p.Plugin)
+	}
+	for _, p := range s.RPKISources {
+		add(plugin.KindRPKI, p.Name, p.Plugin)
 	}
 	for _, p := range s.Probers {
 		add(plugin.KindProber, p.Name, p.Plugin)

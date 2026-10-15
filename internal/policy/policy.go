@@ -58,7 +58,11 @@ type Config struct {
 	ImprovementTTL  time.Duration // retire (and re-evaluate) after this long; 0 = never
 	MaxResultAge    time.Duration // probe results older than this are stale
 	Excluded        map[string]bool
-	Allowlist       []netip.Prefix // inject mode: only these (or more-specifics of them)
+	// RPKIAvoidInvalid refuses a new improvement onto a provider whose
+	// learned path for the prefix is RPKI-invalid (#158). It is off by
+	// default and never changes the learned RIB.
+	RPKIAvoidInvalid bool
+	Allowlist        []netip.Prefix // inject mode: only these (or more-specifics of them)
 	// Providers carries group, precedence, and cc_disable. Empty means
 	// commit control has no provider policy (the weighted scorer ignores it).
 	Providers []ProviderPolicy
@@ -127,6 +131,11 @@ type Input struct {
 	// new improvement goes there, and an active one is retired. The native
 	// provider is never marked.
 	EgressDown map[string]bool
+	// RPKI maps a prefix and provider to the RFC 6811 origin-validation
+	// state of that provider's learned path (#158). It is shown on the
+	// decision's candidates and, when RPKIAvoidInvalid is set, refuses a
+	// new improvement onto an invalid path. A missing entry is unknown.
+	RPKI map[netip.Prefix]map[string]plugin.RPKIValidity
 }
 
 // Improvement is an active (or, outside inject mode, recommended) steer.
@@ -233,6 +242,10 @@ type Candidate struct {
 	Jitter   time.Duration `json:"jitter"`
 	Usable   bool          `json:"usable"`
 	Why      string        `json:"why,omitempty"` // why not usable
+	// RPKI is the RFC 6811 origin-validation state of this provider's
+	// learned path for the prefix (#158). Display only unless
+	// Config.RPKIAvoidInvalid makes an invalid path unusable.
+	RPKI plugin.RPKIValidity `json:"rpki,omitempty"`
 }
 
 // Decision explains what happened to one prefix in one evaluation.

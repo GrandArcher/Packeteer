@@ -32,6 +32,7 @@ The image entrypoint is the same binary. Flags go after the image name.
 | `communities_cause` | none | no | Extra outbound communities per improvement cause (#132). Added after `packeteer_community`. See [`communities_cause`](#communities_cause). |
 | `more_specific_bits` | unset | must be absent | Any value, including `0`, is an error. Packeteer announces the exact prefix it learned from the RIB. |
 | `more_specific` | off | no | More-specific injection: with each improvement, also announce the more-specifics inside its prefix that a neighbor advertises in the learned RIB, under a route cap. Never a prefix that is not learned. See [`more_specific`](#more_specific). Lab-proven only. |
+| `rpki` | off | no | Shared RPKI origin validation (#158): read the operator's RTR server and label each learned path's origin valid, invalid, not found, or unknown. `avoid_invalid` refuses a new improvement onto an invalid path. Never announces and never changes the learned RIB. See [`rpki`](#rpki). Not on a public edge. |
 | `instance` | `domain` | no | This instance's name in a federation (#30). Peers expect it in its snapshot. Letters, digits, `_`, `.`, `-`, at most 64 characters. See [Multi-POP](#multi-pop-federation). |
 | `domain` | empty | with `federation` | This instance's routing domain (POP). Empty is a standalone instance. |
 | `inter_dc_rtt` | empty | per remote domain | Map of domain to round-trip time from this POP (for example `pop-b: 12ms`), 0–10s. Added to every path a peer in that domain measured. |
@@ -557,6 +558,16 @@ More-specific injection (#56, lab-proven only, not on a public edge). Design and
 | `max_routes` | `100` | Cap on routes on a router: improvements, their more-specifics, and inbound steer routes. 1–1000. A new improvement is announced whole (P and all its learned more-specifics) or not at all; a more-specific learned later is added only while there is room. Nothing on the wire is withdrawn to make room. `max_improvements` still caps improvements. |
 
 A more-specific is withdrawn with its improvement (flip-back, TTL, policy, P leaving the RIB), when the RIB is not ready, on shutdown, and when it really leaves the RIB: the neighbor advertised it for at least 5s while Packeteer's route was on the wire and then stopped. A shorter gap is the router hiding its own path because Packeteer's route won, and the route stays. A change needs a restart (SIGHUP refuses it). Rollback: remove the block or set `enabled: false` and restart; only improvements' own prefixes are announced again.
+
+### `rpki`
+
+Shared RPKI origin validation (#158, not on a public edge). Off by default. A source connects read-only to the operator's RPKI-to-Router server and labels each learned path's origin: `valid`, `invalid`, `notfound`, or `unknown`. The learned RIB is never changed and nothing is announced. Validity is shown on `/api/decisions` candidates, the prefix card's learned paths, the exchange peers, and the System page. `avoid_invalid` only refuses a new improvement; it never blocks a withdraw, and the learned-RIB rule, allowlist, cap, community + NO_EXPORT, hold time, and withdraw rules are unchanged. MED stays display-only.
+
+| Key | Default | Meaning |
+|---|---|---|
+| `enabled` | `false` | `true` turns the source on. A block that is not enabled is ignored, sources included. |
+| `sources` | none | Origin-validation plugins, tried in order. The first with a fresh, non-empty cache answers; a stale, unreachable, or empty source is skipped, so a second server takes over. Each is a plugin entry (`type`, optional `name`, `config`); only `rtr` exists ([RPKI source `rtr`](#rpki-source-rtr)). At least one is required when enabled. |
+| `avoid_invalid` | `false` | `true` refuses a new improvement onto a provider whose learned path for the prefix is `invalid`. An active improvement on a path that becomes invalid is retired through the normal path. Off changes nothing. |
 
 ### `linkouts`
 
@@ -1462,6 +1473,17 @@ Reads the public [RIPE RIS Live](https://ris-live.ripe.net) HTTP stream (#199). 
 |---|---|---|
 | `url` | `https://ris-live.ripe.net/v1/stream/` | Stream endpoint, `http` or `https`, without a query (`format=json` and `client` are added). |
 | `client` | `packeteer-leak-watch` | Client name sent to the service. |
+
+### RPKI source `rtr`
+
+Connects read-only to an RPKI-to-Router server (RFC 8210) such as the operator's Routinator, caches the validated ROA payloads, and validates origin ASNs (RFC 6811). It never announces and never changes the learned RIB. The cache is in memory and holds at most 2,000,000 payloads; a server that exceeds that is dropped. A lost or stalled connection is retried with backoff. When the cache is older than `staleness`, every lookup is `unknown` (fail open). An Error Report leaves the last cache in place and the session is retried. A Serial Notify is answered with the client's last serial, or a Reset Query when the session ID differs, and is ignored until End of Data.
+
+| Key | Default | Meaning |
+|---|---|---|
+| `address` | none | Required. The server as `host:port` (for example `routinator.example.net:3323`). An IPv6 host needs brackets. |
+| `refresh` | `5m` | How often a healthy session is polled for changes. 1s-24h. |
+| `staleness` | `1h` | How long the cache is served after the last complete fetch. At least `refresh`, at most 24h. Older or missing data is `unknown`. |
+| `timeout` | `30s` | Dial and read wait. 1s-5m. |
 
 ### Detector `baseline`
 
