@@ -46,6 +46,18 @@ func TestPathTargetsSkipsRemoteAndOptOut(t *testing.T) {
 	}
 }
 
+func TestPathTargetsSkipsLoopbackSource(t *testing.T) {
+	cfg := &config.Config{Providers: []config.Provider{
+		{Name: "loopback-v4", SourceIP: "127.0.0.1", NextHop: "192.0.2.1"},
+		{Name: "loopback-v6", SourceIP: "::1", NextHop: "2001:db8::1"},
+		{Name: "local", SourceIP: "192.0.2.11", NextHop: "192.0.2.1"},
+	}}
+	got := pathTargets(cfg)
+	if len(got) != 1 || got[0].Name != "local" {
+		t.Fatalf("targets = %+v", got)
+	}
+}
+
 func TestPathCheckRoundRecordsEveryVerdict(t *testing.T) {
 	status := &fakePathStatus{}
 	next := netip.MustParseAddr("192.0.2.1")

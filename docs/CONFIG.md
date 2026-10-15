@@ -244,7 +244,7 @@ Each provider expects probes from its `source_ip` to leave through its `next_hop
 | `enabled` | `true` | `false` stops the checks. |
 | `interval` | `5m` | `1s` to `24h`. How often every provider is checked. |
 
-A provider opts out with `path_check: false`; an exchange peer does the same. Opt out when the source's traffic does not leave the edge directly through `next_hop`, for example a provider reached across another router. A provider in another `domain` is not checked here. The probe waits on `probe.rate_limit_pps` and uses `probe.timeout`. The probe destination is a documentation address (TTL one, so it is never reached), so the check sends nothing toward a customer prefix. The socket calls are Linux-only; on other systems the check does not run. A `source_ip` that cannot be bound is reported by the normal probes and is not re-labelled a path mismatch.
+A provider opts out with `path_check: false`; an exchange peer does the same. Opt out when the source's traffic does not leave the edge directly through `next_hop`, for example a provider reached across another router. A provider in another `domain` is not checked here. A loopback `source_ip` is skipped: its traffic never leaves the host. The probe waits on `probe.rate_limit_pps` and uses `probe.timeout`. The probe destination is a documentation address (TTL one, so it is never reached), so the check sends nothing toward a customer prefix. The socket calls are Linux-only; on other systems the check does not run. A `source_ip` that cannot be bound is reported by the normal probes and is not re-labelled a path mismatch.
 
 ### `log`
 

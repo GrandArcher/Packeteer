@@ -69,7 +69,8 @@ type pathChecker struct {
 // source_ip to leave through their next_hop. A provider measured in
 // another domain is checked by its peer (#30), and path_check: false
 // opts one out. A target with an address Validate already rejects is
-// skipped.
+// skipped, and so is a loopback source: loopback traffic never leaves
+// the host, so its first hop says nothing about a provider path.
 func pathTargets(cfg *config.Config) []pathTarget {
 	var out []pathTarget
 	for _, p := range cfg.Providers {
@@ -78,7 +79,7 @@ func pathTargets(cfg *config.Config) []pathTarget {
 		}
 		src, serr := netip.ParseAddr(p.SourceIP)
 		nh, nerr := netip.ParseAddr(p.NextHop)
-		if serr != nil || nerr != nil || src.Is4() != nh.Is4() {
+		if serr != nil || nerr != nil || src.Is4() != nh.Is4() || src.IsLoopback() {
 			continue
 		}
 		out = append(out, pathTarget{Name: p.Name, Source: src, NextHop: nh.Unmap()})
