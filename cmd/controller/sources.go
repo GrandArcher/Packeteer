@@ -213,10 +213,6 @@ func outageSamples(rs []probe.Result) []outage.Sample {
 	return out
 }
 
-// checkOutageIntervals rejects a reprobe cadence that is not faster than
-// the normal probe interval, or that is outside the staleness window. A
-// longer interval would leave the re-queued prefixes stale, and the
-// controller would withdraw any improvement on them.
 // providerNamer is implemented by telemetry plugins that bind providers.
 type providerNamer interface {
 	ProviderNames() []string
@@ -301,6 +297,10 @@ func collectTelemetry(ctx context.Context, plugins *pluginhost.Set) []plugin.Usa
 	return out
 }
 
+// checkOutageIntervals rejects a reprobe cadence that is not faster than
+// the normal probe interval, or that is outside the staleness window. A
+// longer interval would leave the re-queued prefixes stale, and the
+// controller would withdraw any improvement on them.
 func checkOutageIntervals(cfg *config.Config, plugins *pluginhost.Set) error {
 	if plugins == nil {
 		return nil
