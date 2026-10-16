@@ -1177,7 +1177,7 @@ function moveButtons(list, i, rerender, what) {
 }
 
 function removeButton(list, i, rerender, what) {
-  var b = el("button", "small", "−");
+  var b = el("button", "small", "-");
   b.type = "button";
   b.title = "Remove " + what;
   b.addEventListener("click", function () { list.splice(i, 1); rerender(); });
@@ -1458,7 +1458,7 @@ function renderAnomalyRules() {
     row.appendChild(labeled("Anomaly rule target", target, "Redirect target. Type a name when none is known yet.", "anomaly.rules.target"));
     bindNumber(row, "Anomaly rule rate Mbit/s", r, "rate_mbps", "Rate cap for a rate-limit action.", "anomaly.rules.rate_mbps", {min: 0, max: 1e12, unit: "Mbps"});
     bindDuration(row, "Anomaly rule TTL", r, "ttl", "How long the mitigation rule stays. Empty uses the mitigation default.", "anomaly.rules.ttl", "m", false, 0, 86400000 * 30);
-    var minus = el("button", "small", "−");
+    var minus = el("button", "small", "-");
     minus.type = "button";
     minus.title = "Remove anomaly rule";
     minus.addEventListener("click", function () { form.anomaly.rules.splice(i, 1); renderAnomalyRules(); });
@@ -1498,7 +1498,7 @@ function anomalyPrefixPicks(row, r, allow) {
     if (known[p]) return;
     var line = el("div", "row");
     line.appendChild(el("span", "", p));
-    var minus = el("button", "small", "−");
+    var minus = el("button", "small", "-");
     minus.type = "button";
     minus.title = "Remove prefix";
     minus.addEventListener("click", function () {
@@ -1620,7 +1620,7 @@ function renderProviders() {
     row.appendChild(labeled("Commit", numberControl(p, "commit_mbps", {min: 0, max: 1e12, unit: "Mbps", positive: true}), p.commit_bound ? "Billing commit in Mbps." : "Billing commit in Mbps. This provider has no telemetry binding yet.", "providers.commit_mbps"));
     if (p.asn) row.appendChild(el("span", "tag", "AS " + p.asn + " from the session, not saved"));
     else if (p.draft) row.appendChild(el("span", "tag", "draft"));
-    var minus = el("button", "small", "−");
+    var minus = el("button", "small", "-");
     minus.type = "button";
     minus.title = "Remove provider";
     minus.addEventListener("click", function () {
@@ -1656,7 +1656,7 @@ function renderTargets() {
     });
     row.appendChild(labeled("Prefix", prefix, "Prefix to probe.", "sources.static.prefix"));
     row.appendChild(labeled("Host", host, "Optional address inside the prefix. Empty probes a few addresses inside it.", "sources.static.host"));
-    var minus = el("button", "small", "−");
+    var minus = el("button", "small", "-");
     minus.type = "button";
     minus.title = "Remove prefix";
     minus.addEventListener("click", function () { form.targets.splice(i, 1); renderTargets(); });
@@ -1676,7 +1676,7 @@ function renderAllow() {
     input.addEventListener("input", function () { markDirty(input); form.allowlist[i] = input.value.trim(); });
     attachCheck(input, function () { return checkCIDR(input.value.trim(), true, form.allowlist, i); });
     row.appendChild(labeled("Prefix", input, "Prefix that may be injected.", "allowlist"));
-    var minus = el("button", "small", "−");
+    var minus = el("button", "small", "-");
     minus.type = "button";
     minus.title = "Remove allowlist prefix";
     minus.addEventListener("click", function () { form.allowlist.splice(i, 1); renderAllow(); });
@@ -1867,7 +1867,7 @@ function renderWzProviders() {
     row.appendChild(labeled("Name", name, "Name of this provider.", "providers.name"));
     row.appendChild(labeled("Probe source", src, "Local address probes leave from.", "providers.source_ip"));
     row.appendChild(labeled("Next hop", hop, "Next hop seen on BGP or BMP, or type an address.", "providers.next_hop"));
-    var minus = el("button", "small", "−");
+    var minus = el("button", "small", "-");
     minus.type = "button";
     minus.title = "Remove provider";
     minus.addEventListener("click", function () {
