@@ -20,8 +20,11 @@ import (
 const memberExportSuffix = "/api/v4/member-export/ixf/1.0"
 
 // nagiosCustomersPrefix is the customers document on IXP Manager's external
-// superuser API (mounted at /admin/api/v4). The template suffix and every
-// other nagios route are refused because this builder never adds them.
+// superuser API. That group is mounted at /admin/api/v4. The /api/v4 alias
+// in the HTML docs is registered only when UNSECURED_API_ACCESS is on
+// (off by default since v7.2) and this builder does not request it.
+// The template suffix and every other nagios route are refused because
+// this builder never adds them.
 const nagiosCustomersPrefix = "/admin/api/v4/nagios/customers/"
 
 const (

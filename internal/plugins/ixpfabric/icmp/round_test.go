@@ -17,44 +17,89 @@ import (
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
 )
 
-// nagiosDoc matches IXP Manager's customers document: a host plus
-// use ixp-manager-member-ping-service (busy: ...-ping-busy-service).
-// service_description and check_command are not how Can Ping is granted.
+// nagiosDoc follows IXP Manager's customers foil: blank lines inside the
+// object, a ping service that is only "use" plus host_name, an opted-out
+// host with check_command null and no service, and a hostgroup whose
+// members line is wrapped. service_description and check_command on a
+// service do not grant Can Ping.
 const nagiosDoc = `
 # define host {
 #     host_name commented
 #     address 192.0.2.99
 # }
+#
+# VLAN id: 10; protocol: ipv4; tag: 100; name: Peering.
+#
+
+### Host: 192.0.2.20 / member-a.example / Peering.
+
 define host {
     use                     ixp-manager-member-host
+
     host_name               member-a-as64496-ipv4-vlanid10-vliid1
-    alias                   Member A
+
+    alias                   Member A / sw1 / Peering VLAN #1.
     address                 192.0.2.20
+
 }
+
+### Service: 192.0.2.20 / member-a.example / Peering.
+
 define service {
     use                     ixp-manager-member-ping-service
+
     host_name               member-a-as64496-ipv4-vlanid10-vliid1
+
 }
+
+### Host: 192.0.2.30 / member-b.example / Peering.
+
 define host {
     use                     ixp-manager-member-host
-    host_name               member-b-as64496-ipv4-vlanid10-vliid2
+
+    host_name               member-b-as64497-ipv4-vlanid10-vliid2
+
+    alias                   Member B / sw1 / Peering VLAN #1.
     address                 192.0.2.30
+
+    ## 'canping' is set to false for this vlan interface, disabling host check:
     check_command           null
+}
+
+### Service: 192.0.2.30 / member-b.example / Peering.
+
+# canping disabled for this, skipping service ping check
+
+### Host: 192.0.2.21 / member-c.example / Peering.
+
+define host {
+    use                     ixp-manager-member-host
+
+    host_name               member-c-as64498-ipv4-vlanid10-vliid3
+
+    alias                   Member C / sw1 / Peering VLAN #1.
+    address                 192.0.2.21
+
+}
+
+### Service: 192.0.2.21 / member-c.example / Peering.
+
+define service {
+    use                     ixp-manager-member-ping-busy-service
+
+    host_name               member-c-as64498-ipv4-vlanid10-vliid3
+
+}
+
+define host {
+    host_name               described-only
+    address                 192.0.2.41
 }
 define service {
     use                     ixp-manager-member-service
-    host_name               member-b-as64496-ipv4-vlanid10-vliid2
+    host_name               described-only
     service_description     PING
     check_command           check_ping!250.0,20%!500.0,60%
-}
-define host {
-    use                     ixp-manager-member-host
-    host_name               member-c-as64496-ipv4-vlanid10-vliid3
-    address                 192.0.2.21
-}
-define service {
-    use                     ixp-manager-member-ping-busy-service
-    host_name               member-c-as64496-ipv4-vlanid10-vliid3
 }
 define host {
     host_name               legacy
@@ -65,13 +110,33 @@ define service {
     service_description     PING-Busy
     check_command           check_ping!100.0,10%!1500.0,50%
 }
+
+### Host: 2001:db8::20 / member-v6.example / Peering.
+
 define host {
+    use                     ixp-manager-member-host
+
     host_name               member-v6
+
     address                 2001:db8::20
+
 }
+
 define service {
     use                     ixp-manager-member-ping-service
+
     host_name               member-v6
+
+}
+
+define hostgroup {
+    hostgroup_name  switch-ipv4-vlanid-10-sw1
+
+    alias           All IPv4 Members Connected to Switch sw1 for VLAN Peering
+
+    members         member-a-as64496-ipv4-vlanid10-vliid1, \
+        member-c-as64498-ipv4-vlanid10-vliid3
+
 }
 `
 
@@ -84,7 +149,11 @@ func TestParseNagios(t *testing.T) {
 	if !a.canPing || a.busy {
 		t.Fatalf("member-a %+v", a)
 	}
-	if hosts["192.0.2.30"].canPing {
+	b, ok := hosts["192.0.2.30"]
+	if !ok || b.canPing || b.busy {
+		t.Fatalf("opted-out host %+v present %v", b, ok)
+	}
+	if hosts["192.0.2.41"].canPing {
 		t.Fatal("service_description PING without the ping template was allowed")
 	}
 	if hosts["192.0.2.40"].canPing || hosts["192.0.2.40"].busy {
@@ -101,7 +170,7 @@ func TestParseNagios(t *testing.T) {
 	if !v6.canPing || v6.busy {
 		t.Fatalf("v6 %+v", v6)
 	}
-	if len(hosts) != 5 {
+	if len(hosts) != 6 {
 		t.Fatalf("hosts %d", len(hosts))
 	}
 	empty, err := parseNagios([]byte("# nothing\n"))

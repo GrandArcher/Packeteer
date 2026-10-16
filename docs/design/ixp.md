@@ -64,8 +64,8 @@ IXP Manager and Birdseye are read with GET only. No other method.
   A warning fires when 14 days or fewer remain, including a key that is
   already expired. A date more than 366 days ahead is refused. Redirects
   are not followed. The response is capped (`max_bytes`, default 8 MiB)
-  and refreshed on `refresh` (default 15m, 1m-24h). Use a low-privilege
-  user. The list is served at
+  and refreshed on `refresh` (default 15m, 1m-24h). This export does not
+  require a superuser. The list is served at
   `GET /api/ixp/members`. It is not the RIB and not an input to Decide.
 - IXP Manager customers document (#162, enforced):
   `GET /admin/api/v4/nagios/customers/{vlanid}/4` and
@@ -74,7 +74,13 @@ IXP Manager and Birdseye are read with GET only. No other method.
   VLAN database id. The last segment is `4` or `6`. No template suffix
   and no query string. Auth is the same `X-IXP-Manager-API-Key` header.
   This is the one route in IXP Manager's external superuser group that
-  this process GETs. Redirects are not followed. The body is capped at
+  this process GETs, so the key's user has to be a superuser. A 401
+  leaves that VLAN unprobed. IXP Manager mounts that group at
+  `/admin/api/v4` (its own `tools/runtime/nagios/update-nagios.sh` uses
+  that prefix). The HTML docs still show
+  `/api/v4/nagios/customers/{vlanid}/4`, which is registered only when
+  `UNSECURED_API_ACCESS` is on (off by default since v7.2) and is not
+  called. Redirects are not followed. The body is capped at
   2 MiB. A host is probed only when its service use is
   `ixp-manager-member-ping-service`, or
   `ixp-manager-member-ping-busy-service` for a busy host. The document
