@@ -15,6 +15,7 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 
 ### Fixed
 
+- Settings form lists a more-specific anomaly prefix and can remove it, drops a prefix outside the allowlist, stores a peer AS with an AS prefix as a number, and refuses VIP max_targets 0 (#329).
 - IX-F import rejects an IPv4-mapped prefix on an IPv6 LAN, a percent-encoded API key in the manager URL, and a switch id from another IXP (#161).
 
 ## [0.7.0] - 2026-10-15

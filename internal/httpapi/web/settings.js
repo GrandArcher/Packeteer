@@ -223,6 +223,14 @@ function checkASN(s, list) {
   }
   return "";
 }
+// readPeerASN stores the number when the field has an optional "AS" prefix.
+// The check accepts that prefix; Apply must not send the letters.
+function readPeerASN(raw) {
+  var q = String(raw || "").trim();
+  var bare = q.replace(/^AS/i, "");
+  if (checkASN(bare, null) === "") return String(Number(bare));
+  return q;
+}
 function checkInt(v, min, max) {
   if (!v) return "";
   if (!/^\d+$/.test(v)) return "Enter a whole number from " + min + " to " + max + ".";
@@ -1243,8 +1251,11 @@ function renderExchanges() {
       var row = entryRow(card);
       bindText(row, "Peer name", p, "name", "ix-peer-a", "Name of this peer. It must be unique.", "exchanges.peers.name");
       var asn = comboInput(p.asn, memberASNs.map(function (a) { return [a, asnName(a) ? "AS " + a + " " + asnName(a) : "AS " + a]; }), "64501");
-      asn.addEventListener("input", function () { markDirty(asn); p.asn = asn.value.trim(); });
-      attachCheck(asn, function () { return p.asn ? checkASN(p.asn.replace(/^AS/i, ""), null) : ""; });
+      asn.addEventListener("input", function () { markDirty(asn); p.asn = readPeerASN(asn.value); });
+      attachCheck(asn, function () {
+        p.asn = readPeerASN(asn.value);
+        return p.asn ? checkASN(p.asn, null) : "";
+      });
       row.appendChild(labeled("Peer AS", asn, "Peer AS. Pick a discovered member, or type the number.", "exchanges.peers.asn"));
       var hop = comboInput(p.next_hop, memberHops.map(function (h) { return [h, h]; }), "203.0.113.11");
       hop.addEventListener("input", function () { markDirty(hop); p.next_hop = hop.value.trim(); });
@@ -1352,7 +1363,7 @@ function renderVIPs() {
     var a = entryRow(card);
     bindText(a, "Name (VIP " + (i + 1) + ")", v, "name", "vip", "Name of this VIP source.", "sources.vip.name");
     bindDuration(a, "Interval", v, "interval", "How often these prefixes are probed.", "sources.vip.interval", "s", false, 1000, 86400000);
-    bindNumber(a, "Max targets", v, "max_targets", "Cap on prefixes this source probes.", "sources.vip.max_targets", {min: 0, max: 100000, integer: true, def: 100});
+    bindNumber(a, "Max targets", v, "max_targets", "Cap on prefixes this source probes. At least 1; empty uses 100.", "sources.vip.max_targets", {min: 1, max: 100000, integer: true, def: 100});
     bindChips(a, "VIP ASNs", v, "asns", "Origin AS numbers probed on this interval.", "sources.vip.asns", renderVIPs);
     v.prefixes.forEach(function (t, j) {
       var row = entryRow(card);
@@ -1479,11 +1490,28 @@ function anomalyPrefixPicks(row, r, allow) {
     lab.appendChild(el("span", "", p));
     box.appendChild(lab);
   });
+  // More-specifics of the allowlist are valid and must be removable. A prefix
+  // outside it is an error until this row is removed, or Apply stays blocked.
+  // The checkbox handler replaces the prefix list, so this control has to
+  // drop the prefix from the list it finds at click time.
   (r.prefixes || []).forEach(function (p) {
-    if (known[p] || prefixListed(p, allow)) return;
-    box.appendChild(el("span", "field-error", p + " is not inside the mitigation allowlist."));
+    if (known[p]) return;
+    var line = el("div", "row");
+    line.appendChild(el("span", "", p));
+    var minus = el("button", "small", "−");
+    minus.type = "button";
+    minus.title = "Remove prefix";
+    minus.addEventListener("click", function () {
+      var list = r.prefixes || [];
+      var at = list.indexOf(p);
+      if (at >= 0) list.splice(at, 1);
+      renderAnomalyRules();
+    });
+    line.appendChild(minus);
+    if (!prefixListed(p, allow)) line.appendChild(el("span", "field-error", p + " is not inside the mitigation allowlist."));
+    box.appendChild(line);
   });
-  block(row, "Anomaly rule prefixes", box, "Pick prefixes inside the mitigation allowlist.", "anomaly.rules.prefixes");
+  block(row, "Anomaly rule prefixes", box, "Pick prefixes inside the mitigation allowlist. A more-specific already in the file is listed and can be removed.", "anomaly.rules.prefixes");
 }
 function prefixListed(p, allow) {
   var parsed = parsePrefix(p);
