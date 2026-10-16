@@ -6,6 +6,7 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 
 ### Added
 
+- Settings form uses guided inputs: a number and a unit, one prefix or address per row, dropdowns that stay free text when no list is known (#329).
 - IX-F member import: read-only GET of the IXP Manager member export or a named IX-F URL; key from PACKETEER_IXP_MANAGER_API_KEY header only; 14-day expiry warning (#161).
 - Web UI shows the Packeteer logo next to the name and as the favicon (#327).
 - IXP mode: `ixp: {}` is observe-only and refuses `mode: inject`, `announcer`, `mitigation`, `inbound`, `synthesize`, and `more_specific`; no BGP neighbors or RIB view required (#160).
@@ -14,6 +15,7 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 
 ### Fixed
 
+- Settings form lists a more-specific anomaly prefix and can remove it, drops a prefix outside the allowlist, stores a peer AS with an AS prefix as a number, and refuses VIP max_targets 0 (#329).
 - IX-F import rejects an IPv4-mapped prefix on an IPv6 LAN, a percent-encoded API key in the manager URL, and a switch id from another IXP (#161).
 
 ## [0.7.0] - 2026-10-15
