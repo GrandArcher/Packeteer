@@ -65,8 +65,26 @@ IXP Manager and Birdseye are read with GET only. No other method.
   already expired. A date more than 366 days ahead is refused. Redirects
   are not followed. The response is capped (`max_bytes`, default 8 MiB)
   and refreshed on `refresh` (default 15m, 1m-24h). Use a low-privilege
-  user. Superuser endpoints are not called. The list is served at
+  user. The list is served at
   `GET /api/ixp/members`. It is not the RIB and not an input to Decide.
+- IXP Manager customers document (#162, enforced):
+  `GET /admin/api/v4/nagios/customers/{vlanid}/4` and
+  `GET /admin/api/v4/nagios/customers/{vlanid}/6` on the same origin as
+  the member export, including a subdirectory install. `vlanid` is the
+  VLAN database id. The last segment is `4` or `6`. No template suffix
+  and no query string. Auth is the same `X-IXP-Manager-API-Key` header.
+  This is the one route in IXP Manager's external superuser group that
+  this process GETs. Redirects are not followed. The body is capped at
+  2 MiB. A host is probed only when its service use is
+  `ixp-manager-member-ping-service`, or
+  `ixp-manager-member-ping-busy-service` for a busy host. The document
+  does not include `service_description` or `check_command`. The busy
+  template's warning is 1000ms or 80% loss; otherwise 250ms or 20%
+  loss. The busy critical RTT (2000ms) is the minimum per-packet
+  timeout for that host. A failed fetch keeps the last successful
+  list. With no successful list, that VLAN is not probed: the member
+  export omits `can_ping`. A named IX-F URL does not use this GET.
+  Switch, birdseye, and template nagios routes are not called.
 - An IX-F JSON document the operator names (#161) is GET of that exact
   URL, with no API key. Setting the key with a URL that is not the
   member export is a config error.
@@ -74,15 +92,9 @@ IXP Manager and Birdseye are read with GET only. No other method.
   `api/routes/count/protocol/{protocol}`,
   `api/routes/lc-zwild/protocol/{protocol}/{rs-asn}/1101`.
 
-IXP Manager's per-interface "Can Ping" opt-out is honored by `ixp.fabric`
-(#162). The prober GETs `/api/v4/nagios/customers/{vlan}/{ipv4|ipv6}` on
-the same origin as the member export, with the same API key header,
-and no other nagios route. Redirects are not followed. A host
-with no PING service is not probed. PING-Busy keeps the looser warning.
-A named IX-F URL does not use that GET. An IX-F address with
-`can_ping: false` is not probed either. Probes stay inside the VLAN
-prefix. Nothing is announced, and the measurements are not an input to
-Decide.
+An IX-F address with `can_ping: false` is not probed. Probes stay inside
+the VLAN prefix. Nothing is announced, and the measurements are not an
+input to Decide.
 
 ## Lab data
 

@@ -6,34 +6,36 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"math"
 	"net/http"
 	"net/netip"
 	"net/url"
-	"regexp"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/GrandArcher/Packeteer/internal/plugins/ixpmember/ixf"
 )
 
-// nagiosCustomers is the only IXP Manager path besides the member export
-// that this process GETs. It is the document that carries Can Ping and
-// Busy Host. The template suffix and every other nagios route are refused
-// because this builder never adds them.
-const nagiosSuffix = "/member-export/ixf/1.0"
+// memberExportSuffix is the only member-export path this builder accepts.
+// Stripping it leaves the install prefix, including a subdirectory.
+const memberExportSuffix = "/api/v4/member-export/ixf/1.0"
 
-const apiKeyHeader = "X-IXP-Manager-API-Key"
+// nagiosCustomersPrefix is the customers document on IXP Manager's external
+// superuser API (mounted at /admin/api/v4). The template suffix and every
+// other nagios route are refused because this builder never adds them.
+const nagiosCustomersPrefix = "/admin/api/v4/nagios/customers/"
 
-var checkPing = regexp.MustCompile(`check_ping!([0-9]+(?:\.[0-9]+)?),([0-9]+(?:\.[0-9]+)?)%!([0-9]+(?:\.[0-9]+)?),([0-9]+(?:\.[0-9]+)?)%`)
+const (
+	apiKeyHeader       = "X-IXP-Manager-API-Key"
+	pingServiceUse     = "ixp-manager-member-ping-service"
+	pingBusyServiceUse = "ixp-manager-member-ping-busy-service"
+)
 
-// nagiosURL is GET /api/v4/nagios/customers/{vlan}/{ipv4|ipv6} on the same
-// origin as the member export, including a subdirectory install. The query
-// string is dropped. vlan is the IX-F vlan id, which is IXP Manager's VLAN
-// database id.
+// nagiosURL is GET /admin/api/v4/nagios/customers/{vlanid}/4|6 on the same
+// origin as the member export. vlanid is the VLAN database id. The query
+// string is dropped. family is the vantage family, not the URL segment.
 func nagiosURL(memberURL string, vlan int, family string) (string, error) {
-	if vlan < 1 || (family != "ipv4" && family != "ipv6") {
+	proto, ok := familyProto(family)
+	if vlan < 1 || !ok {
 		return "", errors.New("can ping list: bad vlan")
 	}
 	u, err := url.Parse(memberURL)
@@ -41,13 +43,24 @@ func nagiosURL(memberURL string, vlan int, family string) (string, error) {
 		return "", errors.New("can ping list: member url is not the IXP Manager export")
 	}
 	path := strings.TrimRight(u.Path, "/")
-	if !strings.HasSuffix(path, nagiosSuffix) {
+	if !strings.HasSuffix(path, memberExportSuffix) {
 		return "", errors.New("can ping list: member url is not the IXP Manager export")
 	}
-	u.Path = strings.TrimSuffix(path, nagiosSuffix) + "/nagios/customers/" + strconv.Itoa(vlan) + "/" + family
+	u.Path = strings.TrimSuffix(path, memberExportSuffix) + nagiosCustomersPrefix + strconv.Itoa(vlan) + "/" + proto
 	u.RawQuery = ""
 	u.Fragment = ""
 	return u.String(), nil
+}
+
+func familyProto(family string) (string, bool) {
+	switch family {
+	case "ipv4":
+		return "4", true
+	case "ipv6":
+		return "6", true
+	default:
+		return "", false
+	}
 }
 
 func (r *runner) getNagios(ctx context.Context, raw string) ([]byte, error) {
@@ -104,9 +117,12 @@ func looksLikeHTML(body []byte) bool {
 	return bytes.Contains(low, []byte("<html")) || bytes.Contains(low, []byte("<!doctype"))
 }
 
-// parseNagios reads IXP Manager's customer Nagios config. A host with no
-// PING service has Can Ping off. PING-Busy is the busy-host tolerance.
-// The check_command warning values are that host's tolerance.
+// parseNagios reads IXP Manager's customers document. Can Ping is a service
+// whose use is ixp-manager-member-ping-service (busy:
+// ixp-manager-member-ping-busy-service). The document does not carry
+// service_description or check_command; those live on templates this
+// process does not fetch. A host with no ping service is not probed.
+// The busy name has the normal name as a prefix, so the match is exact.
 func parseNagios(body []byte) (map[string]nagiosHost, error) {
 	if looksLikeHTML(body) {
 		return nil, errors.New("can ping list: response was not a nagios config")
@@ -127,14 +143,14 @@ func parseNagios(body []byte) (map[string]nagiosHost, error) {
 	}
 	out := make(map[string]nagiosHost, len(byName))
 	for _, addr := range byName {
-		out[addr] = nagiosHost{canPing: false}
+		out[addr] = nagiosHost{}
 	}
 	for _, b := range blocks {
 		if b.typ != "service" {
 			continue
 		}
-		desc := b.fields["service_description"]
-		if desc != "PING" && desc != "PING-Busy" {
+		canPing, busy := pingTemplate(b.fields["use"])
+		if !canPing {
 			continue
 		}
 		addr, ok := byName[b.fields["host_name"]]
@@ -143,16 +159,23 @@ func parseNagios(body []byte) (map[string]nagiosHost, error) {
 		}
 		h := out[addr]
 		h.canPing = true
-		if desc == "PING-Busy" {
+		if busy {
 			h.busy = true
-		}
-		if tol, ok := parseCheck(b.fields["check_command"]); ok && (desc == "PING-Busy" || !h.haveTol) {
-			h.tol = tol
-			h.haveTol = true
 		}
 		out[addr] = h
 	}
 	return out, nil
+}
+
+func pingTemplate(use string) (canPing, busy bool) {
+	switch strings.TrimSpace(use) {
+	case pingBusyServiceUse:
+		return true, true
+	case pingServiceUse:
+		return true, false
+	default:
+		return false, false
+	}
 }
 
 type nagiosBlock struct {
@@ -198,22 +221,4 @@ func cutField(line string) (string, string, bool) {
 		return "", "", false
 	}
 	return line[:i], strings.TrimSpace(line[i:]), true
-}
-
-func parseCheck(s string) (tolerance, bool) {
-	m := checkPing.FindStringSubmatch(s)
-	if m == nil {
-		return tolerance{}, false
-	}
-	warnRTT, err1 := strconv.ParseFloat(m[1], 64)
-	warnLoss, err2 := strconv.ParseFloat(m[2], 64)
-	critRTT, err3 := strconv.ParseFloat(m[3], 64)
-	if err1 != nil || err2 != nil || err3 != nil || warnRTT < 0 || warnLoss < 0 || warnLoss > 100 || critRTT < 0 {
-		return tolerance{}, false
-	}
-	return tolerance{
-		warnRTT:  time.Duration(math.Round(warnRTT * float64(time.Millisecond))),
-		warnLoss: warnLoss,
-		critRTT:  time.Duration(math.Round(critRTT * float64(time.Millisecond))),
-	}, true
 }

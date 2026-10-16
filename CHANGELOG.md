@@ -15,6 +15,7 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 
 ### Fixed
 
+- Fabric probes read Can Ping from the customers document (`use` ping templates, GET /admin/api/v4/nagios/customers/{vlan}/4|6) and skip a manager export with no successful list (#162).
 - IX-F import rejects an IPv4-mapped prefix on an IPv6 LAN, a percent-encoded API key in the manager URL, and a switch id from another IXP (#161).
 
 ## [0.7.0] - 2026-10-15

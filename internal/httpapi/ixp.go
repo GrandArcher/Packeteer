@@ -138,7 +138,7 @@ func IXPFabricMetrics(v plugin.FabricView, now time.Time) []byte {
 		sample{value: boolFloat(up)})
 	writeGauge(&b, "packeteer_ixp_fabric_targets", "Member LAN addresses probed in the latest fabric round. Zero when the member list is stale.",
 		sample{value: float64(targets)})
-	writeGauge(&b, "packeteer_ixp_fabric_opt_out", "Member LAN addresses skipped because Can Ping is off. Zero when the member list is stale.",
+	writeGauge(&b, "packeteer_ixp_fabric_opt_out", "Member LAN addresses not probed because Can Ping did not allow them. Zero when the member list is stale.",
 		sample{value: float64(opt)})
 	writeGauge(&b, "packeteer_ixp_fabric_past_tolerance", "Probes at or past the ping warning (busy-host when that host is busy). Zero when the member list is stale.",
 		sample{value: float64(past)})

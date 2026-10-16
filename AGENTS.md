@@ -26,7 +26,7 @@ An `ixp:` block is an Internet exchange operator observing the fabric, route ser
 
 - IXP mode is observe-only and never announces. Nothing in it changes member routing. `mode: suggest` is allowed and announces nothing. Validation refuses `mode: inject`, `announcer`, `mitigation`, `inbound`, `synthesize`, and `more_specific`.
 - IXP mode does not need `bgp.neighbors` or the RIB view. Route-server data lives in a separate read-only store that never feeds the RIB view or `Decide`.
-- IXP Manager and Birdseye are read with GET only, from the fixed endpoint allowlist in docs/design/ixp.md. The API key comes from an environment variable, never from the URL or the config file. A warning fires before it expires. Use a low-privilege user's key. Honor IXP Manager's per-interface "Can Ping" opt-out.
+- IXP Manager and Birdseye are read with GET only, from the fixed endpoint allowlist in docs/design/ixp.md. The API key comes from an environment variable, never from the URL or the config file. A warning fires before it expires. The customers nagios document is the one superuser-group GET on that list. Honor IXP Manager's per-interface "Can Ping" opt-out.
 - Member data is never committed. Lab fixtures use documentation prefixes and documentation or private ASNs only.
 
 ## Docker-first (non-negotiable)

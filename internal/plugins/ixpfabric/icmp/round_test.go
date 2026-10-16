@@ -17,34 +17,61 @@ import (
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
 )
 
+// nagiosDoc matches IXP Manager's customers document: a host plus
+// use ixp-manager-member-ping-service (busy: ...-ping-busy-service).
+// service_description and check_command are not how Can Ping is granted.
 const nagiosDoc = `
-# comment only would be empty; this file lists hosts
+# define host {
+#     host_name commented
+#     address 192.0.2.99
+# }
 define host {
-    host_name member-a
-    address   192.0.2.20
+    use                     ixp-manager-member-host
+    host_name               member-a-as64496-ipv4-vlanid10-vliid1
+    alias                   Member A
+    address                 192.0.2.20
 }
 define service {
-    host_name member-a
-    service_description PING
-    check_command check_ping!250.0,20%!500.0,60%
+    use                     ixp-manager-member-ping-service
+    host_name               member-a-as64496-ipv4-vlanid10-vliid1
 }
 define host {
-    host_name member-b
-    address 192.0.2.30
+    use                     ixp-manager-member-host
+    host_name               member-b-as64496-ipv4-vlanid10-vliid2
+    address                 192.0.2.30
+    check_command           null
+}
+define service {
+    use                     ixp-manager-member-service
+    host_name               member-b-as64496-ipv4-vlanid10-vliid2
+    service_description     PING
+    check_command           check_ping!250.0,20%!500.0,60%
 }
 define host {
-    host_name member-c
-    address 192.0.2.21
+    use                     ixp-manager-member-host
+    host_name               member-c-as64496-ipv4-vlanid10-vliid3
+    address                 192.0.2.21
 }
 define service {
-    host_name member-c
-    service_description PING
-    check_command check_ping!250.0,20%!500.0,60%
+    use                     ixp-manager-member-ping-busy-service
+    host_name               member-c-as64496-ipv4-vlanid10-vliid3
+}
+define host {
+    host_name               legacy
+    address                 192.0.2.40
 }
 define service {
-    host_name member-c
-    service_description PING-Busy
-    check_command check_ping!100.0,10%!1500.0,50%
+    host_name               legacy
+    service_description     PING-Busy
+    check_command           check_ping!100.0,10%!1500.0,50%
+}
+define host {
+    host_name               member-v6
+    address                 2001:db8::20
+}
+define service {
+    use                     ixp-manager-member-ping-service
+    host_name               member-v6
 }
 `
 
@@ -54,15 +81,28 @@ func TestParseNagios(t *testing.T) {
 		t.Fatal(err)
 	}
 	a := hosts["192.0.2.20"]
-	if !a.canPing || a.busy || !a.haveTol || a.tol.warnLoss != 20 || a.tol.warnRTT != 250*time.Millisecond || a.tol.critRTT != 500*time.Millisecond {
+	if !a.canPing || a.busy {
 		t.Fatalf("member-a %+v", a)
 	}
 	if hosts["192.0.2.30"].canPing {
-		t.Fatal("host without PING was allowed")
+		t.Fatal("service_description PING without the ping template was allowed")
+	}
+	if hosts["192.0.2.40"].canPing || hosts["192.0.2.40"].busy {
+		t.Fatal("PING-Busy description without the busy template was allowed")
+	}
+	if _, ok := hosts["192.0.2.99"]; ok {
+		t.Fatal("commented host was parsed")
 	}
 	c := hosts["192.0.2.21"]
-	if !c.canPing || !c.busy || c.tol.warnLoss != 10 || c.tol.warnRTT != 100*time.Millisecond || c.tol.critRTT != 1500*time.Millisecond {
+	if !c.canPing || !c.busy {
 		t.Fatalf("busy %+v", c)
+	}
+	v6 := hosts["2001:db8::20"]
+	if !v6.canPing || v6.busy {
+		t.Fatalf("v6 %+v", v6)
+	}
+	if len(hosts) != 5 {
+		t.Fatalf("hosts %d", len(hosts))
 	}
 	empty, err := parseNagios([]byte("# nothing\n"))
 	if err != nil || len(empty) != 0 {
@@ -71,28 +111,33 @@ func TestParseNagios(t *testing.T) {
 	if _, err := parseNagios([]byte("<html><body>login</body></html>")); err == nil || !strings.Contains(err.Error(), "not a nagios config") {
 		t.Fatalf("html %v", err)
 	}
-	if _, ok := parseCheck("check_http!80"); ok {
-		t.Fatal("parsed a non-ping command")
+	can, busy := pingTemplate("ixp-manager-member-ping-service-extra")
+	if can || busy {
+		t.Fatal("a longer template name matched the ping service")
 	}
 }
 
 func TestNagiosURL(t *testing.T) {
 	got, err := nagiosURL("https://ixp.example/ixpm/api/v4/member-export/ixf/1.0?ignore_missing_ixfid=1", 10, "ipv4")
-	if err != nil || got != "https://ixp.example/ixpm/api/v4/nagios/customers/10/ipv4" {
+	if err != nil || got != "https://ixp.example/ixpm/admin/api/v4/nagios/customers/10/4" {
 		t.Fatalf("%s %v", got, err)
 	}
-	got, err = nagiosURL("https://ixp.example/api/v4/member-export/ixf/1.0", 10, "ipv6")
-	if err != nil || got != "https://ixp.example/api/v4/nagios/customers/10/ipv6" {
+	got, err = nagiosURL("https://ixp.example/api/v4/member-export/ixf/1.0", 2, "ipv6")
+	if err != nil || got != "https://ixp.example/admin/api/v4/nagios/customers/2/6" {
 		t.Fatalf("%s %v", got, err)
 	}
 	for _, raw := range []string{
 		"https://user:pass@ixp.example/api/v4/member-export/ixf/1.0",
 		"https://ixp.example/members.json",
+		"https://ixp.example/api/v4/nagios/customers/10/4",
 		"ftp://ixp.example/api/v4/member-export/ixf/1.0",
 	} {
 		if _, err := nagiosURL(raw, 10, "ipv4"); err == nil {
 			t.Fatalf("accepted %s", raw)
 		}
+	}
+	if _, err := nagiosURL("https://ixp.example/api/v4/member-export/ixf/1.0", 10, "4"); err == nil {
+		t.Fatal("accepted a protocol digit as the family")
 	}
 }
 
@@ -114,7 +159,7 @@ func TestNagiosFetchAndOptOut(t *testing.T) {
 			t.Errorf("header %q", r.Header.Get("X-IXP-Manager-API-Key"))
 		}
 		switch r.URL.Path {
-		case "/ixpm/api/v4/nagios/customers/10/ipv4":
+		case "/ixpm/admin/api/v4/nagios/customers/10/4":
 			_, _ = io.WriteString(w, nagiosDoc)
 		default:
 			t.Errorf("path %s", r.URL.Path)
@@ -123,13 +168,12 @@ func TestNagiosFetchAndOptOut(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	fp := &fakeProber{res: plugin.ProbeResult{Sent: 1, RTTs: []time.Duration{150 * time.Millisecond}}}
+	fp := &fakeProber{res: plugin.ProbeResult{Sent: 1, RTTs: []time.Duration{300 * time.Millisecond}}}
 	r := testRunner(fp)
 	r.apiKey = secret
 	r.workers = 2
 	off := v4("192.0.2.30")
 	on := v4("192.0.2.20")
-	on.CanPing = boolPtr(true)
 	busy := v4("192.0.2.21")
 	view := memberView([]plugin.IXPMember{oneMember(64496, "Member A", on, off, busy)})
 	view.Manager = true
@@ -161,14 +205,14 @@ func TestNagiosFetchAndOptOut(t *testing.T) {
 	if byTarget["192.0.2.20"].Timeout != time.Second {
 		t.Fatalf("normal timeout %s", byTarget["192.0.2.20"].Timeout)
 	}
-	if byTarget["192.0.2.21"].Timeout != 1500*time.Millisecond {
+	if byTarget["192.0.2.21"].Timeout != tolBusy.critRTT {
 		t.Fatalf("busy timeout %s", byTarget["192.0.2.21"].Timeout)
 	}
 	for _, s := range got.Samples {
-		if s.Address == "192.0.2.21" && (!s.BusyHost || !s.PastTolerance) {
+		if s.Address == "192.0.2.21" && (!s.BusyHost || s.PastTolerance) {
 			t.Fatalf("busy sample %+v", s)
 		}
-		if s.Address == "192.0.2.20" && (s.BusyHost || s.PastTolerance || s.LossPct != 0) {
+		if s.Address == "192.0.2.20" && (s.BusyHost || !s.PastTolerance || s.LossPct != 0) {
 			t.Fatalf("normal sample %+v", s)
 		}
 	}
@@ -216,7 +260,7 @@ func TestNagiosUnauthorizedAndRedirect(t *testing.T) {
 	r.setVantages([]plugin.FabricVantage{vantage("lan1-v4", "192.0.2.8")})
 	r.runRound(context.Background())
 	got := r.snapshot()
-	if fp.count() != 1 || !strings.Contains(got.Error, "HTTP 401") || strings.Contains(got.Error, secret) {
+	if fp.count() != 0 || got.OptOut != 1 || got.Targets != 0 || !strings.Contains(got.Error, "HTTP 401") || strings.Contains(got.Error, secret) {
 		t.Fatalf("probes %d view %+v", fp.count(), got)
 	}
 
@@ -240,7 +284,7 @@ func TestNagiosUnauthorizedAndRedirect(t *testing.T) {
 	r.parts = nil
 	r.runRound(context.Background())
 	got = r.snapshot()
-	if !strings.Contains(got.Error, "redirects are not followed") || strings.Contains(got.Error, secret) || fp.count() != 1 {
+	if !strings.Contains(got.Error, "redirects are not followed") || strings.Contains(got.Error, secret) || fp.count() != 0 || got.Targets != 0 {
 		t.Fatalf("probes %d view %+v", fp.count(), got)
 	}
 
@@ -478,10 +522,10 @@ func TestMemberLimiterEvictsAndPolicyDrops(t *testing.T) {
 
 	var vlan int
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if vlan == 10 && r.URL.Path != "/api/v4/nagios/customers/10/ipv4" {
+		if vlan == 10 && r.URL.Path != "/admin/api/v4/nagios/customers/10/4" {
 			t.Errorf("path %s", r.URL.Path)
 		}
-		if vlan == 11 && r.URL.Path != "/api/v4/nagios/customers/11/ipv4" {
+		if vlan == 11 && r.URL.Path != "/admin/api/v4/nagios/customers/11/4" {
 			t.Errorf("path %s", r.URL.Path)
 		}
 		_, _ = io.WriteString(w, "# empty\n")

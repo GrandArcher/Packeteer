@@ -160,6 +160,55 @@ func vantage(name, ip string) plugin.FabricVantage {
 	return plugin.FabricVantage{Name: name, VLANID: 10, Address: netip.MustParseAddr(ip)}
 }
 
+func TestManagerCanPingGate(t *testing.T) {
+	addr := v4("192.0.2.20")
+	busy := v4("192.0.2.21")
+	missing := v4("192.0.2.31")
+	view := memberView([]plugin.IXPMember{oneMember(64496, "Member A", addr, busy, missing)})
+	view.Manager = true
+	vantages := []plugin.FabricVantage{vantage("lan1-v4", "192.0.2.8")}
+
+	targets, opt, _ := selectTargets(view, vantages, nil)
+	if len(targets) != 0 || opt != 3 {
+		t.Fatalf("no list: targets %d opt %d", len(targets), opt)
+	}
+	targets, opt, _ = selectTargets(view, vantages, map[string]map[string]nagiosHost{"ipv4/10": {}})
+	if len(targets) != 0 || opt != 3 {
+		t.Fatalf("empty list: targets %d opt %d", len(targets), opt)
+	}
+
+	parts := map[string]map[string]nagiosHost{
+		"ipv4/10": {
+			"192.0.2.20": {canPing: true},
+			"192.0.2.21": {canPing: true, busy: true},
+		},
+	}
+	targets, opt, _ = selectTargets(view, vantages, parts)
+	if opt != 1 || len(targets) != 2 {
+		t.Fatalf("list: targets %d opt %d", len(targets), opt)
+	}
+	got := map[string]target{}
+	for _, tg := range targets {
+		got[tg.addr.String()] = tg
+	}
+	if got["192.0.2.20"].busy || got["192.0.2.20"].tol != tolNormal {
+		t.Fatalf("normal %+v", got["192.0.2.20"])
+	}
+	if !got["192.0.2.21"].busy || got["192.0.2.21"].tol != tolBusy {
+		t.Fatalf("busy %+v", got["192.0.2.21"])
+	}
+	if _, ok := got["192.0.2.31"]; ok {
+		t.Fatal("address missing from the customers document was probed")
+	}
+
+	addr.CanPing = boolPtr(false)
+	view.Members[0].Connections[0].Addresses[0] = addr
+	targets, opt, _ = selectTargets(view, vantages, parts)
+	if len(targets) != 1 || opt != 2 || targets[0].addr.String() != "192.0.2.21" {
+		t.Fatalf("ix-f opt-out: %+v opt %d", targets, opt)
+	}
+}
+
 func TestSelectAndMeasure(t *testing.T) {
 	off := v4("192.0.2.30")
 	off.CanPing = boolPtr(false)

@@ -9,10 +9,10 @@ import (
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
 )
 
-// IXP Manager's default Nagios ping thresholds. A parsed check_command
-// replaces the pair for that host. Warning is the tolerance; critical RTT
-// is the minimum per-packet timeout for a busy host so a slow reply is a
-// reply and not a loss.
+// IXP Manager's default member-ping thresholds. Warning is the tolerance.
+// For a busy host the critical RTT is the minimum per-packet timeout, so
+// a slow reply is a reply and not a loss. The customers document does not
+// carry per-host check_command values.
 var (
 	tolNormal = tolerance{warnRTT: 250 * time.Millisecond, warnLoss: 20, critRTT: 500 * time.Millisecond}
 	tolBusy   = tolerance{warnRTT: 1000 * time.Millisecond, warnLoss: 80, critRTT: 2 * time.Second}
@@ -25,12 +25,11 @@ type tolerance struct {
 	critRTT  time.Duration
 }
 
-// nagiosHost is one address in a Can Ping list.
+// nagiosHost is one address in a Can Ping list. canPing is set only when
+// the customers document gives that address a ping service.
 type nagiosHost struct {
 	canPing bool
 	busy    bool
-	tol     tolerance
-	haveTol bool
 }
 
 type target struct {
@@ -140,7 +139,7 @@ func selectTargets(view plugin.MemberView, vantages []plugin.FabricVantage, part
 						continue
 					}
 					seen[key] = true
-					skip, busy, tol := pingRule(parts, a)
+					skip, busy, tol := pingRule(parts, a, view.Manager)
 					if skip {
 						optOut++
 						continue
@@ -227,37 +226,33 @@ func switchesOf(c plugin.IXPConnection) []plugin.FabricSwitch {
 	return out
 }
 
-// pingRule applies an IX-F opt-out and, when the address is in a Can Ping
-// list, that list. Either source can opt out. Nagios busy-host wins when
-// the address is in the list; otherwise the IX-F busy_host flag does.
-func pingRule(parts map[string]map[string]nagiosHost, a plugin.IXPAddress) (skip, busy bool, tol tolerance) {
+// pingRule applies an IX-F opt-out and, for a manager export, the customers
+// document. The member export omits can_ping, so a missing or failed list
+// is not permission to probe. An address the list does not mark canPing
+// is not probed. A named IX-F document uses can_ping and busy_host only.
+func pingRule(parts map[string]map[string]nagiosHost, a plugin.IXPAddress, manager bool) (skip, busy bool, tol tolerance) {
 	if a.CanPing != nil && !*a.CanPing {
+		return true, false, tolerance{}
+	}
+	if !manager {
+		if a.BusyHost {
+			return false, true, tolBusy
+		}
+		return false, false, tolNormal
+	}
+	by, have := parts[famKey(a.VLANID, a.Family)]
+	if !have {
 		return true, false, tolerance{}
 	}
 	addr := a.Address
 	if parsed, err := netip.ParseAddr(a.Address); err == nil {
 		addr = parsed.Unmap().String()
 	}
-	var hit nagiosHost
-	var ok bool
-	if by := parts[famKey(a.VLANID, a.Family)]; by != nil {
-		hit, ok = by[addr]
-	}
-	if ok && !hit.canPing {
+	hit, ok := by[addr]
+	if !ok || !hit.canPing {
 		return true, false, tolerance{}
 	}
-	if ok {
-		tol = hit.tol
-		if !hit.haveTol {
-			if hit.busy {
-				tol = tolBusy
-			} else {
-				tol = tolNormal
-			}
-		}
-		return false, hit.busy, tol
-	}
-	if a.BusyHost {
+	if hit.busy {
 		return false, true, tolBusy
 	}
 	return false, false, tolNormal
