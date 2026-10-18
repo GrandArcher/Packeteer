@@ -96,6 +96,94 @@ func TestPeerMonitorRouterDownClearsWarning(t *testing.T) {
 	}
 }
 
+// A Statistics Report must not flip a down peer up: the next Peer Up still
+// reports, so exchange.peer_up resolves exchange.peer_down.
+func TestPeerMonitorStatsAfterDownKeepsDown(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		down plugin.RIBEvent
+	}{
+		{"peer down", monPeerEvent(plugin.RIBPeerDown, "remote system closed")},
+		{"router down", plugin.RIBEvent{Kind: plugin.RIBRouterDown, Router: monRouter}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := newMonitor()
+			m.Observe(monPeerEvent(plugin.RIBPeerUp, ""))
+			m.Observe(tc.down)
+			if evs := m.Observe(monCount(5)); len(evs) != 0 {
+				t.Fatalf("stats after down = %+v", evs)
+			}
+			up := m.Observe(monPeerEvent(plugin.RIBPeerUp, ""))
+			if len(up) != 1 || up[0].Kind != PeerChangeUp {
+				t.Fatalf("up after stats = %+v", up)
+			}
+		})
+	}
+}
+
+// A stats report before any Peer Up does not claim the peer is up, and a
+// later Peer Down is still reported.
+func TestPeerMonitorStatsDoNotMarkUp(t *testing.T) {
+	m := newMonitor()
+	if evs := m.Observe(monCount(5)); len(evs) != 0 {
+		t.Fatalf("stats = %+v", evs)
+	}
+	down := m.Observe(monPeerEvent(plugin.RIBPeerDown, "remote system closed"))
+	if len(down) != 1 || down[0].Kind != PeerChangeDown {
+		t.Fatalf("down after stats = %+v", down)
+	}
+}
+
+// Two routers with a BMP session to the same peer address keep separate
+// state: one going down or reporting down does not touch the other.
+func TestPeerMonitorKeysByRouter(t *testing.T) {
+	routerB := netip.MustParseAddr("192.0.2.253")
+	ev := func(kind plugin.RIBEventKind, r netip.Addr) plugin.RIBEvent {
+		return plugin.RIBEvent{Kind: kind, Router: r, Peer: plugin.RIBPeer{Address: monPeer}}
+	}
+	count := func(r netip.Addr, n int) plugin.RIBEvent {
+		e := ev(plugin.RIBPrefixCount, r)
+		e.Prefixes = n
+		return e
+	}
+	m := newMonitor()
+	for _, r := range []netip.Addr{monRouter, routerB} {
+		up := m.Observe(ev(plugin.RIBPeerUp, r))
+		if len(up) != 1 || up[0].Router != r {
+			t.Fatalf("up on %s = %+v", r, up)
+		}
+	}
+	m.Observe(count(monRouter, 95))
+	m.Observe(count(routerB, 20))
+	if got := m.Prefixes()["ix-peer-a"]; got != 115 {
+		t.Fatalf("summed prefixes = %d, want 115", got)
+	}
+
+	// Router A going down clears only A's count and warning.
+	evs := m.Observe(plugin.RIBEvent{Kind: plugin.RIBRouterDown, Router: monRouter})
+	if len(evs) != 1 || evs[0].Kind != PeerChangePrefixOK || evs[0].Router != monRouter {
+		t.Fatalf("router A down = %+v", evs)
+	}
+	if got := m.Prefixes()["ix-peer-a"]; got != 20 {
+		t.Fatalf("prefixes after router A down = %d, want 20", got)
+	}
+
+	// B still has the peer up, so a repeat up on B is silent and a down on B
+	// is reported even though A saw nothing.
+	if evs := m.Observe(ev(plugin.RIBPeerUp, routerB)); len(evs) != 0 {
+		t.Fatalf("repeat up on B = %+v", evs)
+	}
+	down := m.Observe(ev(plugin.RIBPeerDown, routerB))
+	if len(down) != 1 || down[0].Kind != PeerChangeDown || down[0].Router != routerB {
+		t.Fatalf("down on B = %+v", down)
+	}
+	// A's session was reset by its router going down, not reported down, so
+	// its next Peer Up is announced.
+	if up := m.Observe(ev(plugin.RIBPeerUp, monRouter)); len(up) != 1 || up[0].Router != monRouter {
+		t.Fatalf("up on A = %+v", up)
+	}
+}
+
 func TestPeerMonitorIgnoresUnwatchedAndLocRIB(t *testing.T) {
 	m := newMonitor()
 	if evs := m.Observe(plugin.RIBEvent{Kind: plugin.RIBPeerUp, Router: monRouter, Peer: plugin.RIBPeer{Address: netip.MustParseAddr("198.51.100.9")}}); len(evs) != 0 {
