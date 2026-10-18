@@ -32,6 +32,27 @@ function fmtPct(v) {
   return Number(v).toFixed(1) + "%";
 }
 
+// NO_REPLY is what a path with no answer shows instead of an RTT. A 0.0 ms
+// there would read as the fastest path (#343).
+var NO_REPLY = "no reply";
+
+// healthPill is the provider's measured state: red down, amber degraded,
+// green up. A provider with no result yet is not a problem.
+function healthPill(state) {
+  if (state === "down") return el("span", "dot down", "down");
+  if (state === "degraded") return el("span", "dot degraded", "degraded");
+  if (state === "unknown") return el("span", "badge muted", "no data yet");
+  return el("span", "dot up", "up");
+}
+
+function providerState(name) {
+  var list = (lastOverview && lastOverview.providers) || [];
+  for (var i = 0; i < list.length; i++) {
+    if (list[i].name === name) return list[i].state;
+  }
+  return "";
+}
+
 function fmtTime(s) {
   if (!s) return "—";
   var d = new Date(s);
@@ -148,6 +169,7 @@ function renderProviders(data) {
   var tb = el("tbody");
   rows.forEach(function (p) {
     var tr = el("tr");
+    tr.id = "provider-" + (p.name || "");
     var name = el("td");
     name.appendChild(document.createTextNode(p.name || ""));
     if (p.exclude) name.appendChild(el("span", "badge", "excluded"));
@@ -166,9 +188,8 @@ function renderProviders(data) {
     tr.appendChild(peer);
     var h = health[p.name];
     var cell = el("td");
-    if (p.up && h && !h.ok && !h.failed) cell.appendChild(el("span", "badge muted", "no data yet"));
-    else if (p.up && h && !h.ok) cell.appendChild(el("span", "dot down", "no answer"));
-    else cell.appendChild(el("span", p.up ? "dot up" : "dot down", p.up ? "up" : "down"));
+    cell.appendChild(h ? healthPill(h.state) : el("span", p.up ? "dot up" : "dot down", p.up ? "up" : "down"));
+    if (h && h.detail) cell.appendChild(el("span", "muted", " " + h.detail));
     tr.appendChild(cell);
     tr.appendChild(el("td", "", h ? probeCount(h) : "—"));
     tr.appendChild(el("td", "", fmtTime(p.since)));
@@ -244,17 +265,24 @@ function prefixCard(row) {
     if (row.current && pr.provider === row.current) cls = "is-current";
     if (row.recommended && pr.provider === row.recommended) cls = (cls + " is-recommended").trim();
     if (cls) tr.className = cls;
-    tr.appendChild(el("td", "", pr.provider));
+    var nameCell = el("td", "", pr.provider);
+    var state = providerState(pr.provider);
+    if (state === "down" || state === "degraded") {
+      nameCell.appendChild(document.createTextNode(" "));
+      nameCell.appendChild(healthPill(state));
+    }
+    tr.appendChild(nameCell);
     if (!pr.ok) {
       tr.appendChild(el("td", "", "—"));
-      tr.appendChild(el("td", "", "—"));
+      tr.appendChild(el("td", "bad", NO_REPLY));
       tr.appendChild(el("td", "", "—"));
       tr.appendChild(el("td", "bad", pr.error || "failed"));
     } else {
-      tr.appendChild(el("td", "num", fmtPct(pr.loss_pct)));
-      tr.appendChild(el("td", "num", fmtMs(pr.rtt_avg_ms)));
-      tr.appendChild(el("td", "num", fmtMs(pr.jitter_ms)));
-      var probeCell = el("td", "", pr.prober || "ok");
+      var silent = !pr.received;
+      tr.appendChild(el("td", silent ? "num bad" : "num", fmtPct(pr.loss_pct)));
+      tr.appendChild(silent ? el("td", "bad", NO_REPLY) : el("td", "num", fmtMs(pr.rtt_avg_ms)));
+      tr.appendChild(silent ? el("td", "", "\u2014") : el("td", "num", fmtMs(pr.jitter_ms)));
+      var probeCell = el("td", "", pr.prober || (silent ? "\u2014" : "ok"));
       if (pr.indirect) {
         var tag = el("span", "badge muted", "indirect");
         tag.title = "Every address inside the prefix was silent. Measured at this provider's traceroute hop " + (pr.target || "") + ".";
@@ -496,7 +524,11 @@ function renderTiles(o) {
   root.appendChild(tile("Mode", o.mode || "—", inject ? "announces" : "announces nothing", inject ? "warn" : ""));
   root.appendChild(tile("Status", o.ready ? "ready" : (o.started ? "not ready" : "starting"),
     o.bgp && o.bgp.configured && !o.bgp.ready ? "no iBGP session" : "", o.ready ? "good" : "bad"));
-  root.appendChild(tile("Providers up", c.providers_up + " of " + c.providers, "", c.providers && !c.providers_up ? "bad" : ""));
+  var problems = o.problems || [];
+  var worst = problems.some(function (p) { return p.state === "down"; }) ? "bad" : (problems.length ? "warn" : "");
+  var unmeasured = (o.providers || []).filter(function (p) { return p.state === "unknown"; }).length;
+  root.appendChild(tile("Providers", c.providers_healthy + " of " + c.providers + " healthy",
+    unmeasured ? unmeasured + " not measured yet" : "", worst));
   root.appendChild(tile("Prefixes measured", c.measured + " of " + c.prefixes,
     (o.sources || []).length ? "sources: " + o.sources.join(", ") : "no sources", c.prefixes ? "" : "muted"));
   root.appendChild(tile(inject ? "Improvements" : "Recommended", c.improvements + (c.max_improvements ? " of " + c.max_improvements : ""),
@@ -505,8 +537,11 @@ function renderTiles(o) {
   root.appendChild(tile("BGP sessions", b.configured ? b.established + " of " + b.peers : "off",
     b.configured ? (c.in_rib + " probed prefixes in RIB") : "no edge router", b.configured && !b.established ? "bad" : ""));
   var sys = o.system || {};
-  var sysTile = tile("System", sys.down ? sys.down + " down" : (sys.degraded ? sys.degraded + " degraded" : "all ok"),
-    (sys.total || 0) + " components", sys.down ? "bad" : (sys.degraded ? "warn" : ""));
+  var warns = c.warnings || 0;
+  var sysText = sys.down ? sys.down + " down" : (sys.degraded ? sys.degraded + " degraded" :
+    (warns ? warns + (warns === 1 ? " warning" : " warnings") : "all ok"));
+  var sysTile = tile("System", sysText,
+    (sys.total || 0) + " components", sys.down ? "bad" : (sys.degraded || warns ? "warn" : ""));
   var sysLink = el("a", "", "System page");
   sysLink.href = "/system.html";
   sysTile.appendChild(sysLink);
@@ -564,8 +599,30 @@ function renderFeatures(o) {
   if (node) node.textContent = (on.length ? "On: " + on.join(", ") + ". " : "") + (off.length ? "Off: " + off.join(", ") + "." : "");
 }
 
+// renderHeadline is the one sentence above the tiles when a provider is
+// down or degraded. It is hidden when every provider is healthy (#343).
+function renderHeadline(o) {
+  var node = document.getElementById("headline");
+  if (!node) return;
+  clear(node);
+  var problems = o.problems || [];
+  if (!problems.length) { node.hidden = true; return; }
+  var down = problems.some(function (p) { return p.state === "down"; });
+  node.className = "headline " + (down ? "headline-down" : "headline-degraded");
+  node.appendChild(el("strong", "", problems.length + (problems.length === 1 ? " problem: " : " problems: ")));
+  problems.forEach(function (p, i) {
+    if (i) node.appendChild(document.createTextNode(", "));
+    var a = el("a", "", p.provider);
+    a.href = "/providers.html#provider-" + encodeURIComponent(p.provider);
+    node.appendChild(a);
+    node.appendChild(document.createTextNode(" " + p.detail));
+  });
+  node.hidden = false;
+}
+
 function renderOverview(o) {
   renderBanner(o.mode);
+  renderHeadline(o);
   renderTiles(o);
   renderSetup(o);
   renderFeatures(o);

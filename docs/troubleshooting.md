@@ -15,7 +15,7 @@ curl -fsS http://127.0.0.1:8080/api/overview   # mode, readiness, counts, and th
 
 More detail in the log: `-e PACKETEER_LOG_LEVEL=debug` on `docker run` (or `log.level: debug`). JSON logs: `-e PACKETEER_LOG_FORMAT=json`.
 
-The dashboard's setup checklist (`setup` in `/api/overview`) names the most common gaps directly: no sources, no BGP neighbor, no history storage, a provider whose probes all fail, no iBGP session, and probed prefixes that are not in the learned RIB.
+The dashboard's setup checklist (`setup` in `/api/overview`) names the most common gaps directly: no sources, no BGP neighbor, no history storage, a provider whose probes all fail (its state is also `down` in `providers` and `problems`), no iBGP session, and probed prefixes that are not in the learned RIB.
 
 ## Startup errors
 

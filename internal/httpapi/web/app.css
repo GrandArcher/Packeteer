@@ -114,6 +114,8 @@ th { font-size: 0.8rem; color: var(--muted); font-weight: 600; }
 
 .dot.down { color: var(--down); background: #fdecee; }
 
+.dot.degraded { color: var(--diff); background: #fbf1e4; }
+
 .badge.muted { color: var(--muted); }
 
 .badge.warn { color: var(--diff); background: #fbf1e4; }
@@ -228,6 +230,11 @@ body.stale main { opacity: 0.6; }
 .tile.good { border-left-color: var(--up); }
 .tile.bad { border-left-color: var(--down); }
 .tile.warn { border-left-color: var(--diff); }
+.headline { margin: 0 0 12px; padding: 12px 14px; border-radius: 8px; border: 1px solid var(--line); border-left: 6px solid var(--down); font-size: 1.1rem; }
+.headline[hidden] { display: none; }
+.headline-down { background: #fdecee; color: var(--down); }
+.headline-degraded { background: #fbf1e4; color: var(--diff); border-left-color: var(--diff); }
+.headline a { color: inherit; font-weight: 600; }
 .tile.muted .tile-v { color: var(--muted); }
 .setup { background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; margin-bottom: 10px; }
 .setup .tag { margin: 4px 0 8px; }
