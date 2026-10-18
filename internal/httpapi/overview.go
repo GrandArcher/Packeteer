@@ -4,8 +4,7 @@ import (
 	"net/http"
 	"sort"
 	"strconv"
-
-	"github.com/GrandArcher/Packeteer/internal/config"
+	"strings"
 )
 
 // Setup is what the dashboard needs to know about the loaded config to
@@ -17,7 +16,7 @@ type Setup struct {
 	// MaxImprovements is the cap on active improvements.
 	MaxImprovements int
 	// DegradedLossPct and DownLossPct are probe.degraded_loss_pct and
-	// probe.down_loss_pct (#343). Zero uses the config default.
+	// probe.down_loss_pct (#343).
 	DegradedLossPct float64
 	DownLossPct     float64
 }
@@ -44,7 +43,8 @@ const (
 	HealthUp       = "up"
 	HealthDegraded = "degraded"
 	HealthDown     = "down"
-	// HealthUnknown is a provider with no probe result yet.
+	// HealthUnknown is a provider with no probe result yet, or one that a
+	// federation peer measures.
 	HealthUnknown = "unknown"
 )
 
@@ -63,6 +63,7 @@ type ProviderHealth struct {
 	Failed    int    `json:"failed"`
 	LastError string `json:"last_error,omitempty"`
 
+	reason          string
 	silent, errored int
 	lossSum         float64
 }
@@ -101,8 +102,8 @@ type Overview struct {
 // OverviewCounts are the headline numbers.
 type OverviewCounts struct {
 	ProvidersUp int `json:"providers_up"`
-	// ProvidersHealthy counts providers that are neither down nor
-	// degraded. One with no probe result yet is not a problem.
+	// ProvidersHealthy counts providers measured up. One with no result
+	// yet is neither healthy nor a problem.
 	ProvidersHealthy int `json:"providers_healthy"`
 	Providers        int `json:"providers"`
 	// Warnings is the number of warn-level lines in the setup checklist.
@@ -163,11 +164,7 @@ func BuildOverview(snap Snapshot, setup Setup, features []Feature) Overview {
 	}
 	health := map[string]*ProviderHealth{}
 	for _, p := range snap.Providers {
-		out.Providers = append(out.Providers, ProviderHealth{Name: p.Name, Up: p.Up, Excluded: p.Exclude})
-	}
-	reasons := map[string]string{}
-	for _, p := range snap.Providers {
-		reasons[p.Name] = p.Reason
+		out.Providers = append(out.Providers, ProviderHealth{Name: p.Name, Up: p.Up, Excluded: p.Exclude, reason: p.Reason})
 	}
 	for i := range out.Providers {
 		health[out.Providers[i].Name] = &out.Providers[i]
@@ -218,7 +215,7 @@ func BuildOverview(snap Snapshot, setup Setup, features []Feature) Overview {
 	}
 	out.Counts.Improvements = len(snap.Improvements)
 	out.Counts.MaxImprovements = setup.MaxImprovements
-	out.Problems = judgeProviders(&out, setup, reasons)
+	out.Problems = judgeProviders(&out, setup)
 	out.Setup = setupHints(out)
 	for _, h := range out.Setup {
 		if h.Level == HintWarn {
@@ -229,17 +226,12 @@ func BuildOverview(snap Snapshot, setup Setup, features []Feature) Overview {
 }
 
 // judgeProviders sets each provider's state and returns the problems. A
-// provider is down when its probe source is down, nothing came back, or
+// provider is down when its probe source failed, nothing came back, or
 // its mean loss reaches the down threshold; it is degraded at the
-// degraded threshold. A probe that errored counts as full loss.
-func judgeProviders(o *Overview, setup Setup, reasons map[string]string) []Problem {
+// degraded threshold. A probe that errored counts as full loss. A provider
+// not probed here (starting, or measured by a federation peer) is unknown.
+func judgeProviders(o *Overview, setup Setup) []Problem {
 	degradedAt, downAt := setup.DegradedLossPct, setup.DownLossPct
-	if degradedAt <= 0 {
-		degradedAt = config.DefaultProbeDegradedLossPct
-	}
-	if downAt <= 0 {
-		downAt = config.DefaultProbeDownLossPct
-	}
 	problems := []Problem{}
 	var degraded []Problem
 	for i := range o.Providers {
@@ -250,11 +242,13 @@ func judgeProviders(o *Overview, setup Setup, reasons map[string]string) []Probl
 		}
 		var detail string
 		switch {
+		case !h.Up && notProbedHere(h.reason):
+			h.State = HealthUnknown
 		case !h.Up:
 			h.State = HealthDown
 			detail = "probe source down"
-			if r := reasons[h.Name]; r != "" {
-				detail += ": " + r
+			if h.reason != "" {
+				detail += ": " + h.reason
 			}
 		case total == 0:
 			h.State = HealthUnknown
@@ -279,11 +273,18 @@ func judgeProviders(o *Overview, setup Setup, reasons map[string]string) []Probl
 			problems = append(problems, Problem{Provider: h.Name, State: h.State, Detail: detail})
 		case HealthDegraded:
 			degraded = append(degraded, Problem{Provider: h.Name, State: h.State, Detail: detail})
-		default:
+		case HealthUp:
 			o.Counts.ProvidersHealthy++
 		}
 	}
 	return append(problems, degraded...)
+}
+
+// notProbedHere is true for the reasons Assemble gives a provider that has
+// no probe status without a failure: before the first round, measured by a
+// federation peer, or not reported yet.
+func notProbedHere(reason string) bool {
+	return reason == ReasonStarting || reason == ReasonUnknown || strings.HasPrefix(reason, ReasonMeasuredByPeer)
 }
 
 func formatLoss(pct float64) string {

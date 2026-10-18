@@ -385,6 +385,13 @@ func (s *Snapshot) zeroNil() {
 	}
 }
 
+// Reasons Assemble gives a provider that has no probe status.
+const (
+	ReasonStarting       = "starting"
+	ReasonUnknown        = "unknown"
+	ReasonMeasuredByPeer = "measured by the peer"
+)
+
 func assembleProviders(in Input) []Provider {
 	status := map[string]probe.ProviderStatus{}
 	for _, st := range in.Status {
@@ -409,11 +416,11 @@ func assembleProviders(in Input) []Provider {
 			row.Up, row.Reason, row.Since = st.Up, st.Reason, st.Since
 		} else if p.Domain != "" {
 			// Not probed here: the peer in that domain measures it (#30).
-			row.Reason = "measured by the peer in domain " + p.Domain + " (see /api/federation)"
+			row.Reason = ReasonMeasuredByPeer + " in domain " + p.Domain + " (see /api/federation)"
 		} else if !in.Started {
-			row.Reason = "starting"
+			row.Reason = ReasonStarting
 		} else {
-			row.Reason = "unknown"
+			row.Reason = ReasonUnknown
 		}
 		add(row)
 	}

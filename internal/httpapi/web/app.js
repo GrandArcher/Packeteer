@@ -32,7 +32,7 @@ function fmtPct(v) {
   return Number(v).toFixed(1) + "%";
 }
 
-// noReply is what a path with no answer shows instead of an RTT. A 0.0 ms
+// NO_REPLY is what a path with no answer shows instead of an RTT. A 0.0 ms
 // there would read as the fastest path (#343).
 var NO_REPLY = "no reply";
 
@@ -525,7 +525,9 @@ function renderTiles(o) {
     o.bgp && o.bgp.configured && !o.bgp.ready ? "no iBGP session" : "", o.ready ? "good" : "bad"));
   var problems = o.problems || [];
   var worst = problems.some(function (p) { return p.state === "down"; }) ? "bad" : (problems.length ? "warn" : "");
-  root.appendChild(tile("Providers", c.providers_healthy + " of " + c.providers + " healthy", "", worst));
+  var unmeasured = (o.providers || []).filter(function (p) { return p.state === "unknown"; }).length;
+  root.appendChild(tile("Providers", c.providers_healthy + " of " + c.providers + " healthy",
+    unmeasured ? unmeasured + " not measured yet" : "", worst));
   root.appendChild(tile("Prefixes measured", c.measured + " of " + c.prefixes,
     (o.sources || []).length ? "sources: " + o.sources.join(", ") : "no sources", c.prefixes ? "" : "muted"));
   root.appendChild(tile(inject ? "Improvements" : "Recommended", c.improvements + (c.max_improvements ? " of " + c.max_improvements : ""),

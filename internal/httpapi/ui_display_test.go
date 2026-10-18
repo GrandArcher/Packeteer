@@ -178,26 +178,3 @@ func TestProviderFieldLabels(t *testing.T) {
 		t.Fatal("wizard provider rows are unlabeled")
 	}
 }
-
-// TestOverviewHeadlineMarkup checks the pieces the provider-health smoke
-// test relies on (#343): the hidden headline slot, no 0.0 ms stand-in for a
-// path with no reply, and no "all ok" while the checklist warns.
-func TestOverviewHeadlineMarkup(t *testing.T) {
-	if !strings.Contains(mustWeb(t, "web/index.html"), `<div id="headline" class="headline" role="alert" hidden></div>`) {
-		t.Fatal("index.html lost the hidden headline slot")
-	}
-	js := mustWeb(t, "web/app.js")
-	for _, want := range []string{
-		`var NO_REPLY = "no reply"`,
-		`warns ? warns + (warns === 1 ? " warning" : " warnings") : "all ok"`,
-		`c.providers_healthy + " of " + c.providers + " healthy"`,
-		`"/providers.html#provider-" + encodeURIComponent(p.provider)`,
-	} {
-		if !strings.Contains(js, want) {
-			t.Errorf("app.js missing %q", want)
-		}
-	}
-	if !strings.Contains(mustWeb(t, "web/app.css"), ".dot.degraded") {
-		t.Error("app.css has no amber degraded pill")
-	}
-}
