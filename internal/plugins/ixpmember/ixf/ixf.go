@@ -246,6 +246,15 @@ func (s *Source) View() plugin.MemberView {
 	v := s.view
 	refresh := s.refresh
 	s.mu.Unlock()
+	// Copy the times so a caller cannot write through to the source's state.
+	if v.Fetched != nil {
+		t := *v.Fetched
+		v.Fetched = &t
+	}
+	if v.KeyExpires != nil {
+		t := *v.KeyExpires
+		v.KeyExpires = &t
+	}
 	if v.IXPs == nil {
 		v.IXPs = []plugin.IXPSite{}
 	}

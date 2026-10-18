@@ -319,6 +319,24 @@ func TestUnsetTimesAreNil(t *testing.T) {
 	}
 }
 
+func TestViewTimesAreCopies(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, sampleIXF)
+	}))
+	defer srv.Close()
+	s := build(t, "url: "+srv.URL+"/members.json\n", "", nil)
+	s.fetch(context.Background())
+	v := s.View()
+	if v.Fetched == nil {
+		t.Fatal("fetched unset after a fetch")
+	}
+	want := *v.Fetched
+	*v.Fetched = time.Time{}
+	if got := s.View().Fetched; got == nil || !got.Equal(want) {
+		t.Fatalf("write through the view changed the source: %v want %v", got, want)
+	}
+}
+
 func bytesRepeat(n int) []byte {
 	b := make([]byte, n)
 	for i := range b {
