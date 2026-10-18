@@ -65,11 +65,11 @@ func New(c plugin.Config, env plugin.Env) (plugin.Telemetry, error) {
 	if err := c.Decode(&cfg); err != nil {
 		return nil, err
 	}
-	col := &Collector{file: cfg.File, known: env.Providers}
+	col := &Collector{file: cfg.File, known: env.BindingNames()}
 	if cfg.File == "" && len(cfg.Providers) == 0 {
 		return nil, fmt.Errorf("fixed telemetry: set providers or file")
 	}
-	if err := validate(cfg.Providers, env.Providers); err != nil {
+	if err := validate(cfg.Providers, col.known); err != nil {
 		return nil, err
 	}
 	col.providers = cfg.Providers
@@ -82,7 +82,7 @@ func New(c plugin.Config, env plugin.Env) (plugin.Telemetry, error) {
 		if err != nil {
 			return nil, err
 		}
-		if err := validate(rows, env.Providers); err != nil {
+		if err := validate(rows, col.known); err != nil {
 			return nil, fmt.Errorf("fixed telemetry: %s: %w", cfg.File, err)
 		}
 		for _, p := range rows {

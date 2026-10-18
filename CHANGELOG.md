@@ -7,6 +7,7 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 ### Added
 
 - Route-server signals: spikes in RPKI-invalid, IRR, and transit-free-ASN filtering, new origins, more-specific bursts, and RFC 7999 blackhole counts per member; GET only (#165).
+- Shared IX port: `exchanges[].port` (capacity, commit, flat `port_cost`) on one telemetry binding; the commit and cost scorers plan no move past its capacity or commit (#151).
 - Fabric incident correlation: fabric probes grouped by switch, colo, and bundle; `ixp.fabric_degraded` vs `ixp.member_degraded` events; `GET /api/ixp/correlation`; nothing announced (#163).
 - Route-server observability: Birdseye polls per member session (state, received, accepted, filtered, filtered-by-reason, max_prefix), in-memory history, `ixp.rs_*` alerts, GET only (#164).
 - PeeringDB / IX-F lookup: read-only cached org name, exchange membership, LAN addresses, route-server flag, policy, and prefix hints; GET /api/lookup; key from PACKETEER_PEERINGDB_API_KEY (#153).

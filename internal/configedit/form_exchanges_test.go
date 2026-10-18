@@ -285,3 +285,13 @@ func TestFormExchangesKeepHealth(t *testing.T) {
 		t.Fatalf("health = %+v", h)
 	}
 }
+
+// The form has no field for exchanges[].port (#151); a form edit keeps it.
+func TestFormExchangesKeepPort(t *testing.T) {
+	src := strings.Replace(exchangeFormYAML, "    group: ix\n", "    group: ix\n    port: {capacity_mbps: 10000, commit_mbps: 6000, port_cost: 1500}\n", 1)
+	_, cfg := applyAndLoad(t, src, func(f *Form) { f.Exchanges[0].Peers[0].ASN = "64511" })
+	pt := cfg.Exchanges[0].Port
+	if pt == nil || pt.CapacityMbps != 10000 || pt.CommitMbps != 6000 || pt.PortCost == nil || *pt.PortCost != 1500 {
+		t.Fatalf("port = %+v", pt)
+	}
+}

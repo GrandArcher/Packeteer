@@ -8,6 +8,7 @@ import (
 	"github.com/GrandArcher/Packeteer/internal/config"
 	"github.com/GrandArcher/Packeteer/internal/exchange"
 	"github.com/GrandArcher/Packeteer/internal/policy"
+	"github.com/GrandArcher/Packeteer/internal/portload"
 	"github.com/GrandArcher/Packeteer/internal/probe"
 	"github.com/GrandArcher/Packeteer/internal/rib"
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
@@ -32,6 +33,7 @@ type Collector struct {
 	hops        func() []rib.NextHopCount
 	health      *exchange.Health
 	peerPrefix  func() map[string]int
+	portMaxAge  time.Duration
 }
 
 // NewCollector copies providers. The caller may reuse the slice afterward.
@@ -84,6 +86,15 @@ func (c *Collector) SetExchanges(exs []exchange.Exchange, hops func() []rib.Next
 	c.mu.Unlock()
 }
 
+// SetPortMaxAge sets how old a port's telemetry row may be before
+// /api/exchanges reports it stale: the planning scorer's limit. Zero keeps
+// the default.
+func (c *Collector) SetPortMaxAge(d time.Duration) {
+	c.mu.Lock()
+	c.portMaxAge = d
+	c.mu.Unlock()
+}
+
 // SetExchangeHealth installs the next-hop health of the exchange peers
 // (#149). Nil leaves the peers' reachability unknown.
 func (c *Collector) SetExchangeHealth(h *exchange.Health) {
@@ -127,7 +138,7 @@ func (c *Collector) Snapshot() Snapshot {
 	mode := c.mode
 	started, engine, decider, view, telemetry := c.started, c.engine, c.decider, c.view, c.telemetry
 	exs, hops, flowTracked, truncated := c.exchanges, c.hops, c.flowTracked, c.truncated
-	health, peerPrefix := c.health, c.peerPrefix
+	health, peerPrefix, portMaxAge := c.health, c.peerPrefix, c.portMaxAge
 	c.mu.RUnlock()
 
 	in := Input{
@@ -203,6 +214,11 @@ func (c *Collector) Snapshot() Snapshot {
 			imps[im.Provider] = append(imps[im.Provider], exchange.Move{Prefix: im.Prefix.String(), Since: im.Since.UTC(), VolumeMbps: jsonFloat(im.VolumeMbps)})
 		}
 		in.Exchanges = exchange.Build(exs, nh, up, imps, health.Snapshot())
+		if portMaxAge <= 0 {
+			portMaxAge = portload.DefaultMaxAge
+		}
+		exchange.ApplyPorts(in.Exchanges, exs, in.Telemetry, in.At, portMaxAge)
+		in.Telemetry = exchange.WithPortCommit(in.Telemetry, exchange.PortCommits(exs))
 		if peerPrefix != nil {
 			counts := peerPrefix()
 			for i := range in.Exchanges {
