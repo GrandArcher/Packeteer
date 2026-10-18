@@ -57,6 +57,21 @@ mode: observe               # also the default when mode is left out; inject is 
 #       rounds: 2                # fabric rounds in a row before an event
 #       bundles:                 # IX-F has no core bundle; name the switch ids
 #         - {name: core-1, switches: [1, 2]}
+#   # Multi-site health (#167): one instance per site, joined by the top-level
+#   # federation block (needs domain). core pings the other sites' addresses.
+#   core:
+#     type: icmp
+#     config:
+#       interval: 1m
+#       timeout: 1s
+#       packets: 5
+#   core_links:
+#     - name: site-a-to-site-b
+#       peer: site-b             # the other site's federation instance name
+#       address: 192.0.2.40      # an address at that site, reached across the core
+#       source: 192.0.2.30       # optional
+#       max_loss_pct: 10
+#       max_rtt: 40ms            # optional; omitted is no RTT limit
 
 asn: 64512
 router_id: 192.0.2.10

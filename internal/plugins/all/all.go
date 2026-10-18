@@ -8,6 +8,7 @@ import (
 	_ "github.com/GrandArcher/Packeteer/internal/plugins/elector/lease"           // lease-file HA elector
 	_ "github.com/GrandArcher/Packeteer/internal/plugins/exec"                    // exec prober/source/notifier
 	_ "github.com/GrandArcher/Packeteer/internal/plugins/federation/mtls"         // mTLS multi-POP federation
+	_ "github.com/GrandArcher/Packeteer/internal/plugins/ixpcore/icmp"            // IX inter-site core prober (observe-only)
 	_ "github.com/GrandArcher/Packeteer/internal/plugins/ixpcorrelate/topology"   // IX fabric incident correlator (observe-only)
 	_ "github.com/GrandArcher/Packeteer/internal/plugins/ixpfabric/icmp"          // IX fabric prober (observe-only)
 	_ "github.com/GrandArcher/Packeteer/internal/plugins/ixpmember/ixf"           // IX-F member import (read-only)

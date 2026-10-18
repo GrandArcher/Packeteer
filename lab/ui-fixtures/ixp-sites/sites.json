@@ -1,0 +1,26 @@
+{
+  "version": "lab",
+  "mode": "observe",
+  "ready": true,
+  "generated_at": "2026-10-18T12:00:00Z",
+  "enabled": true,
+  "sites": [
+    {"name": "site-a", "self": true, "fresh": true, "last_seen": "2026-10-18T12:00:00Z", "status": "ok", "round": "2026-10-18T11:59:30Z",
+     "members_measured": 2, "members_past_tolerance": 0, "vantages": 1, "vantages_up": 1, "route_servers": 1, "route_servers_down": 0, "past_tolerance": []},
+    {"name": "site-b", "domain": "site-b", "self": false, "fresh": true, "last_seen": "2026-10-18T11:59:58Z", "status": "degraded", "round": "2026-10-18T11:59:20Z",
+     "members_measured": 3, "members_past_tolerance": 1, "vantages": 1, "vantages_up": 1, "route_servers": 2, "route_servers_down": 1,
+     "past_tolerance": [{"asn": 64497, "vlan_id": 10, "vantage": "lan1-b", "family": "ipv4", "loss_pct": 40, "rtt_ms": 310.5, "jitter_ms": 12.25, "past_tolerance": true}]},
+    {"name": "site-c", "self": false, "fresh": false, "error": "connection refused", "status": "unreachable",
+     "members_measured": 0, "members_past_tolerance": 0, "vantages": 0, "vantages_up": 0, "route_servers": 0, "route_servers_down": 0, "past_tolerance": []}
+  ],
+  "links": [
+    {"site": "site-a", "name": "a-to-b", "peer": "site-b", "address": "192.0.2.40", "sent": 5, "loss_pct": 0, "rtt_ms": 3.25, "jitter_ms": 0.5, "up": true, "degraded": false, "at": "2026-10-18T11:59:30Z"},
+    {"site": "site-a", "name": "a-to-c", "peer": "site-c", "address": "192.0.2.41", "sent": 5, "loss_pct": 100, "rtt_ms": 0, "jitter_ms": 0, "up": false, "degraded": true, "at": "2026-10-18T11:59:30Z"}
+  ],
+  "incidents": [
+    {"site": "site-b", "scope": "fabric", "detail": "switch sw2: 3 of 4 members degraded"},
+    {"site": "site-b", "scope": "route_server", "detail": "1 of 2 route servers are not answering"},
+    {"site": "site-a", "peer": "site-c", "scope": "core", "detail": "core link a-to-c has no reply"},
+    {"site": "site-c", "scope": "site", "detail": "no fresh federation snapshot (connection refused); the core link from site-a is degraded, so the site or the core is down"}
+  ]
+}

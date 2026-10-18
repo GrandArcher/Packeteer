@@ -13,6 +13,7 @@ The remaining UI conveniences (#34). All of them work in the stock image with a 
 | Maintenance windows (#177) | `/policies.html`, `GET`/`POST /api/maintenance`, `DELETE /api/maintenance/{id}` | viewer reads, operator opens and closes | a `maintenance` policy; opening needs auth or basic auth |
 | Link-outs (#211) | `/prefix/<prefix>`, `/prefixes.html`, `/providers.html`, `GET /api/linkouts` | viewer | `linkouts` (optional) |
 | Global search (#172) | the top bar on every page, `/search.html`, `GET /api/search` | viewer | `storage: {type: sqlite}` for history |
+| IXP site health (#167) | `/ixp/sites`, `GET /api/ixp/sites` | viewer | `ixp` and `federation` ([design/ixp.md](design/ixp.md#multi-site-fabric-health)) |
 | IXP member pages (#166) | `/ixp/member/<asn>`, `/ixp/member/`, `GET /api/ixp/members/{asn}` | viewer | `ixp` ([design/ixp.md](design/ixp.md#member-pages)) |
 | System health (#184) | `/system.html`, `/api/system`, the System tile on `/` | viewer | none |
 | Events and audit log (#173) | `/events.html`, `/api/events`, `/api/audit` | viewer for events, admin for the audit tab | `storage: {type: sqlite}` keeps events across a restart |

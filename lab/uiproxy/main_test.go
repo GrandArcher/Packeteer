@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/GrandArcher/Packeteer/internal/exchange"
+	"github.com/GrandArcher/Packeteer/internal/federation"
 	"github.com/GrandArcher/Packeteer/internal/history"
 	"github.com/GrandArcher/Packeteer/internal/httpapi"
 	"github.com/GrandArcher/Packeteer/internal/troubleshoot"
@@ -343,6 +344,44 @@ func TestIXPMemberFixturesMatchAPI(t *testing.T) {
 	strict(f.Stubs[1].body, &hist)
 	if hist.Session != page.Sessions[0].Session || len(hist.Samples) != 2 || hist.Samples[1].Filtered != 3 {
 		t.Fatalf("history = %+v", hist)
+	}
+}
+
+// TestIXPSitesFixturesMatchAPI decodes the canned /api/ixp/sites answer with
+// the API's own types (#167), so a renamed field fails here and not as an
+// empty table in the UI smoke test.
+func TestIXPSitesFixturesMatchAPI(t *testing.T) {
+	f, err := loadFixtures("../ui-fixtures/ixp-sites")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(f.Stubs) != 1 || f.Inject.Page != "" {
+		t.Fatalf("stubs = %d, inject = %q", len(f.Stubs), f.Inject.Page)
+	}
+	var v struct {
+		Version     string `json:"version"`
+		Mode        string `json:"mode"`
+		Ready       bool   `json:"ready"`
+		GeneratedAt string `json:"generated_at"`
+		federation.IXPSitesView
+	}
+	dec := json.NewDecoder(bytes.NewReader(f.Stubs[0].body))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&v); err != nil {
+		t.Fatal(err)
+	}
+	if !v.Enabled || len(v.Sites) != 3 || len(v.Links) != 2 || len(v.Incidents) != 4 {
+		t.Fatalf("view = %+v", v)
+	}
+	a, b, c := v.Sites[0], v.Sites[1], v.Sites[2]
+	if !a.Self || a.Status != federation.StatusOK || b.Status != federation.StatusDegraded || c.Status != federation.StatusUnreachable || c.Fresh {
+		t.Fatalf("sites = %+v", v.Sites)
+	}
+	if p := b.PastTolerance; len(p) != 1 || p[0].ASN != 64497 || p[0].LossPct != 40 || p[0].RTTMs != 310.5 {
+		t.Fatalf("site-b past tolerance = %+v", p)
+	}
+	if l := v.Links[1]; l.Site != "site-a" || l.Peer != "site-c" || l.Up || !l.Degraded {
+		t.Fatalf("link = %+v", l)
 	}
 }
 

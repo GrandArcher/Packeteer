@@ -329,6 +329,24 @@ func TestShiftSnapshotClockSkew(t *testing.T) {
 	}
 }
 
+func TestShiftSnapshotIXPTimes(t *testing.T) {
+	peerNow := t0.Add(time.Hour)
+	x := &plugin.FederatedIXP{
+		Round: peerNow.Add(-20 * time.Second),
+		Core:  []plugin.CoreLinkStatus{{Name: "b-to-a", At: peerNow.Add(-7 * time.Second)}},
+	}
+	got := plugin.ShiftSnapshot(plugin.InstanceSnapshot{Time: peerNow, IXP: x}, t0)
+	if got.IXP == x || !got.IXP.Round.Equal(t0.Add(-20*time.Second)) || !got.IXP.Core[0].At.Equal(t0.Add(-7*time.Second)) {
+		t.Fatalf("shifted = %+v", got.IXP)
+	}
+	if !x.Round.Equal(peerNow.Add(-20*time.Second)) || !x.Core[0].At.Equal(peerNow.Add(-7*time.Second)) {
+		t.Fatal("ShiftSnapshot changed the snapshot it was given")
+	}
+	if plugin.ShiftSnapshot(plugin.InstanceSnapshot{Time: peerNow}, t0).IXP != nil {
+		t.Fatal("a snapshot with no IXP data gained some")
+	}
+}
+
 func TestView(t *testing.T) {
 	local := Snapshot(popA(), SnapshotInput{Mode: "observe", Now: t0})
 	_, commits := ApplyGlobalCommit(nil, popA(), nil)

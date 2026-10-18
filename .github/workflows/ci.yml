@@ -1281,6 +1281,32 @@ jobs:
           # This controller has no IXP source, so an unstubbed ASN is a 404.
           bash lab/ui-smoke.sh http://127.0.0.1:18138/ixp/member/64499 'mode-observe' \
             'AS64499 is not an IXP member Packeteer knows.' --absent 'mode-inject' 'Open in IXP Manager'
+          # The multi-site page (#167) reads GET /api/ixp/sites, which a
+          # single-router lab controller cannot produce (no IXP source, no
+          # federation peer), so uiproxy answers it from
+          # lab/ui-fixtures/ixp-sites (documentation addresses). The page is
+          # the image's. The step checks the per-site status, the core link
+          # rows, the member path past tolerance, and the incidents with the
+          # site each is at; the page only reads.
+          kill "$proxy"
+          /tmp/uiproxy -listen 127.0.0.1:18141 -upstream "$base" -user lab -password lab-only \
+            -fixtures lab/ui-fixtures/ixp-sites >/tmp/uiproxy167.log 2>&1 &
+          proxy=$!
+          for _ in $(seq 1 20); do
+            curl -fsS http://127.0.0.1:18141/healthz >/dev/null 2>&1 && break
+            sleep 0.2
+          done
+          curl -fsS http://127.0.0.1:18141/healthz >/dev/null
+          bash lab/ui-smoke.sh http://127.0.0.1:18141/ixp/sites 'mode-observe' 'announces nothing' '>IXP sites</h2>' \
+            '<td>site-a (this site)</td>' '<td>site-b</td>' '<td>site-c</td>' \
+            '<td class="bad">degraded</td>' '<td class="bad">unreachable</td>' '<td>1 of 1</td>' '<td>1 of 2</td>' \
+            '<td>a-to-b</td>' '<td>3.25 ms</td>' '<td>0.00 %</td>' '<td>ok</td>' \
+            '<td>a-to-c</td>' '<td>100.00 %</td>' '<td class="bad">no reply</td>' \
+            '<td class="mono">AS64497</td>' '<td>lan1-b</td>' '<td>40.00 %</td>' '<td>310.50 ms</td>' \
+            '<td class="bad">Fabric</td>' '<td>switch sw2: 3 of 4 members degraded</td>' \
+            '<td class="bad">Core</td>' '<td>core link a-to-c has no reply</td>' \
+            '<td class="bad">Site</td>' 'so the site or the core is down' \
+            --absent 'mode-inject' 'No incident at any site.'
       - name: UI provider health smoke (#343; one provider at 100% loss, one with no answer, fixed prober, observe)
         run: |
           set -euo pipefail

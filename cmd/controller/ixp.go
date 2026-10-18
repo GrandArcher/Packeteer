@@ -4,6 +4,7 @@ import (
 	"net/netip"
 
 	"github.com/GrandArcher/Packeteer/internal/config"
+	"github.com/GrandArcher/Packeteer/internal/federation"
 	"github.com/GrandArcher/Packeteer/internal/httpapi"
 	"github.com/GrandArcher/Packeteer/internal/pluginhost"
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
@@ -76,6 +77,51 @@ func wireIXPCorrelate(plugins *pluginhost.Set, httpSrv *httpapi.Server, emit fun
 	if httpSrv != nil {
 		httpSrv.SetIXPCorrelation(c.View)
 	}
+}
+
+// wireIXPSites connects the core prober and the multi-site view (#167)
+// before plugins start. The snapshot published to the federation peers
+// carries this site's fabric health; the view reads the peers' last
+// snapshots. Both read views only and announce nothing.
+func wireIXPSites(cfg *config.Config, plugins *pluginhost.Set, fed *fedState, httpSrv *httpapi.Server) {
+	if cfg == nil || cfg.IXP == nil || fed == nil {
+		return
+	}
+	if plugins.IXPCore != nil {
+		plugins.IXPCore.Plugin.SetLinks(coreLinks(cfg.IXP.CoreLinks))
+	}
+	fed.setIXP(func() *plugin.FederatedIXP {
+		var in federation.IXPInput
+		if plugins.IXPFabric != nil {
+			in.Fabric = plugins.IXPFabric.Plugin.View()
+		}
+		if plugins.IXPCorrelate != nil {
+			in.Correlation = plugins.IXPCorrelate.Plugin.View()
+		}
+		if plugins.IXPRouteServers != nil {
+			in.RouteServer = plugins.IXPRouteServers.Plugin.View()
+		}
+		if plugins.IXPCore != nil {
+			in.Core = plugins.IXPCore.Plugin.View()
+		}
+		return federation.IXPSnapshot(in)
+	})
+	if httpSrv != nil {
+		httpSrv.SetIXPSites(fed.ixpSites)
+	}
+}
+
+func coreLinks(in []config.CoreLink) []plugin.CoreLink {
+	out := make([]plugin.CoreLink, 0, len(in))
+	for _, l := range in {
+		addr, err := netip.ParseAddr(l.Address)
+		if err != nil {
+			continue
+		}
+		src, _ := netip.ParseAddr(l.Source)
+		out = append(out, plugin.CoreLink{Name: l.Name, Peer: l.Peer, Source: src, Address: addr, MaxLossPct: l.MaxLossPct, MaxRTT: l.MaxRTT})
+	}
+	return out
 }
 
 func fabricVantages(in []config.Vantage) []plugin.FabricVantage {

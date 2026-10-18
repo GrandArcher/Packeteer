@@ -118,39 +118,9 @@ func IXPMemberFabricMetrics(v plugin.FabricView) []byte {
 	if !v.Configured || v.Stale {
 		return nil
 	}
-	type key struct {
-		asn     uint32
-		vlan    int
-		vantage string
-		family  string
-	}
-	worst := map[key]plugin.FabricSample{}
-	for _, sm := range v.Samples {
-		if sm.Error != "" {
-			continue
-		}
-		k := key{sm.ASN, sm.VLANID, sm.Vantage, sm.Family}
-		w, seen := worst[k]
-		if !seen {
-			worst[k] = sm
-			continue
-		}
-		w.LossPct = max(w.LossPct, sm.LossPct)
-		w.RTTMs = max(w.RTTMs, sm.RTTMs)
-		w.JitterMs = max(w.JitterMs, sm.JitterMs)
-		worst[k] = w
-	}
-	keys := make([]key, 0, len(worst))
-	for k := range worst {
-		keys = append(keys, k)
-	}
-	slices.SortFunc(keys, func(a, b key) int {
-		return cmp.Or(cmp.Compare(a.asn, b.asn), cmp.Compare(a.vlan, b.vlan), cmp.Compare(a.vantage, b.vantage), cmp.Compare(a.family, b.family))
-	})
 	var rtt, loss, jitter []sample
-	for _, k := range keys {
-		l := []lbl{{"asn", strconv.FormatUint(uint64(k.asn), 10)}, {"vlan", strconv.Itoa(k.vlan)}, {"vantage", k.vantage}, {"family", k.family}}
-		w := worst[k]
+	for _, w := range plugin.WorstFabricPaths(v.Samples) {
+		l := []lbl{{"asn", strconv.FormatUint(uint64(w.ASN), 10)}, {"vlan", strconv.Itoa(w.VLANID)}, {"vantage", w.Vantage}, {"family", w.Family}}
 		rtt = append(rtt, sample{labels: l, value: w.RTTMs})
 		loss = append(loss, sample{labels: l, value: w.LossPct})
 		jitter = append(jitter, sample{labels: l, value: w.JitterMs})
