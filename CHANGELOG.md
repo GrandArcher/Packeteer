@@ -27,6 +27,7 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 
 ### Fixed
 
+- Setup wizard collapses on a configured box and, over an existing config, shows a diff and what is lost before the editor changes; auth, http, storage, other blocks are kept (#345).
 - Observe and suggest: pages show "Traffic now (router)" (learned path) and "Packeteer recommends"; events read "Recommends moving X from A to B (not announced, observe mode)", not "steered" (#346).
 - Settings: Save applies pending form edits first instead of reporting Saved without them, names each changed key (old -> new), and a sticky bar flags unsaved changes (#344).
 - Provider health follows measurements: no reply or loss at `probe.down_loss_pct` is down, at `probe.degraded_loss_pct` degraded; "no reply" replaces 0.0 ms (#343).

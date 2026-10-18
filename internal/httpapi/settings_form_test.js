@@ -371,10 +371,19 @@ parseHTML(fs.readFileSync(path.join(dir, "web/settings.html"), "utf8"));
 assert(document.getElementById("editor-section"), "editor section missing");
 assert(document.getElementById("form-anomaly-rules"), "anomaly list missing");
 
+// With PACKETEER_URL set, the page talks to a real server (the Go test
+// starts one) instead of the canned replies below.
+var live = process.env.PACKETEER_URL;
+var realFetch = global.fetch;
+
 global.document = document;
 global.Event = Event;
 global.fetch = function (url, opts) {
   var method = (opts && opts.method) || "GET";
+  if (live) {
+    var headers = Object.assign({}, opts && opts.headers, {Authorization: "Bearer " + process.env.PACKETEER_TOKEN});
+    return realFetch(live + url, Object.assign({}, opts, {headers: headers}));
+  }
   calls.push({method: method, url: String(url), body: opts && opts.body});
   if (disk) {
     var served = serveConfig(method, String(url), opts && opts.body);
@@ -508,6 +517,10 @@ function posts() {
 }
 
 async function main() {
+  if (live) {
+    await liveWizard();
+    return;
+  }
   await flush();
   await flush();
   assert(typeof form === "object", "settings form did not load");
@@ -800,6 +813,62 @@ async function saveFlow() {
   await settle();
   assert(puts().length === before, "Save wrote with an invalid field");
   assert(document.getElementById("ed-status").textContent.indexOf("Nothing was saved: the form changes were not applied.") === 0, "invalid field: " + document.getElementById("ed-status").textContent);
+}
+
+function isAscii(text) {
+  for (var i = 0; i < text.length; i++) if (text.charCodeAt(i) > 0x7e || (text.charCodeAt(i) < 0x20 && text.charCodeAt(i) !== 10)) return false;
+  return true;
+}
+function yamlBox() { return document.getElementById("ed-yaml"); }
+function shown(id) { return !document.getElementById(id).hidden; }
+
+// liveWizard (#345): the server holds a working config with three providers
+// and sign-in on. The wizard starts collapsed, a one-provider run shows a diff
+// and what is lost without touching the editor, and after the operator
+// confirms the editor text still has sign-in on.
+async function liveWizard() {
+  var wait = async function (cond, what) {
+    for (var i = 0; i < 200 && !cond(); i++) await new Promise(function (r) { setTimeout(r, 10); });
+    assert(cond(), "timed out waiting for " + what);
+  };
+  await wait(function () { return yamlBox().value !== "" && typeof form === "object" && form.providers; }, "the config to load");
+  var original = yamlBox().value;
+  assert(/auth:\n\s+enabled: true/.test(original), "the fixture has no sign-in");
+
+  assert(shown("wz-again") && !shown("wz-body"), "the wizard is open on a configured box");
+  assert(document.getElementById("wz-reopen").textContent === "Run setup again (replaces your config)", "reopen button says " + document.getElementById("wz-reopen").textContent);
+  assert(document.getElementById("wz-run").textContent.indexOf("replaces your config") >= 0, "generate button says " + document.getElementById("wz-run").textContent);
+  document.getElementById("wz-reopen").click();
+  assert(shown("wz-body") && !shown("wz-again"), "Run setup again did not open the wizard");
+  assert(shown("wz-auth-row") && !document.getElementById("wz-auth-off").checked, "the sign-in checkbox is missing or ticked");
+
+  document.getElementById("wz-asn").value = "64512";
+  document.getElementById("wz-router").value = "192.0.2.10";
+  document.getElementById("wz-edge").value = "192.0.2.254";
+  wzProviders = [{name: "transit-a", source_ip: "192.0.2.11", next_hop: "192.0.2.1"}];
+  renderWzProviders();
+
+  document.getElementById("wz-run").click();
+  await wait(function () { return shown("wz-confirm"); }, "the confirm step");
+  var removes = document.getElementById("wz-removes").querySelectorAll("li").map(function (li) { return li.textContent; });
+  assert(removes.indexOf("Removes 2 providers (transit-b, transit-c)") >= 0, "removes = " + removes.join(" | "));
+  var diff = document.getElementById("wz-diff").textContent;
+  assert(diff.indexOf("-   - name: transit-b") >= 0 && diff.indexOf("+ hold_time: 15m") >= 0, "diff:\n" + diff);
+  assert(isAscii(diff + removes.join("")), "the diff has non-ASCII text");
+  assert(yamlBox().value === original, "the editor changed before the operator confirmed");
+
+  document.getElementById("wz-confirm-no").click();
+  assert(!shown("wz-confirm") && yamlBox().value === original, "Cancel changed the editor");
+
+  document.getElementById("wz-run").click();
+  await wait(function () { return shown("wz-confirm"); }, "the confirm step again");
+  document.getElementById("wz-confirm-yes").click();
+  var out = yamlBox().value;
+  assert(out !== original, "confirm did not replace the editor text");
+  assert(/auth:\n\s+enabled: true/.test(out), "sign-in is gone after the wizard:\n" + out);
+  assert(/config_editor: true/.test(out) && /path: \/data\/history\.db/.test(out), "http or storage lost:\n" + out);
+  assert(out.indexOf("transit-b") < 0 && out.indexOf("name: transit-a") >= 0, "providers after the wizard:\n" + out);
+  fs.writeFileSync(process.env.PACKETEER_OUT, out);
 }
 
 process.on("unhandledRejection", function (err) {

@@ -83,6 +83,26 @@ type File struct {
 	Path   string `json:"path"`
 	YAML   string `json:"yaml"`
 	SHA256 string `json:"sha256"`
+	// Configured is true when the file already has providers, BGP
+	// neighbors, or an ixp block, so the setup wizard starts collapsed.
+	Configured bool `json:"configured"`
+}
+
+// Configured reports whether data has at least one provider or BGP
+// neighbor, or an ixp block, which needs neither.
+func Configured(data []byte) bool {
+	root, err := mappingRoot(data)
+	if err != nil {
+		return false
+	}
+	if p, ok := sequenceChild(root, "providers"); ok && len(p.Content) > 0 {
+		return true
+	}
+	if len(neighborAddrs(root)) > 0 {
+		return true
+	}
+	_, ok := mappingChild(root, "ixp")
+	return ok
 }
 
 // Result is the outcome of checking a candidate.
@@ -119,7 +139,7 @@ func (e *Editor) Read() (File, error) {
 	if err != nil {
 		return File{}, err
 	}
-	return File{Path: e.path, YAML: string(data), SHA256: Hash(data)}, nil
+	return File{Path: e.path, YAML: string(data), SHA256: Hash(data), Configured: Configured(data)}, nil
 }
 
 // Check validates a candidate without writing it.
@@ -212,7 +232,7 @@ func (e *Editor) Save(data []byte, base string, confirmInject bool) (File, Resul
 		return File{}, res, fmt.Errorf("read back %s: %w", e.path, err)
 	}
 	res.Changes = Diff(cur, data)
-	return File{Path: e.path, YAML: string(data), SHA256: Hash(data)}, res, nil
+	return File{Path: e.path, YAML: string(data), SHA256: Hash(data), Configured: Configured(data)}, res, nil
 }
 
 // writeFile replaces path with data. It first writes a temporary file

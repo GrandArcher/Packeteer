@@ -20,7 +20,7 @@ The remaining UI conveniences (#34). All of them work in the stock image with a 
 | Users and API tokens (#175) | `/admin.html`, `/tokens.html`, `/api/users`, `/api/tokens` | admin for users, every signed-in user for tokens | `storage` + `auth.enabled` |
 | Dashboard overview and setup checklist (#49) | `/`, `/api/overview` | viewer | none |
 | Config editor and settings form (#102, inbound and anomaly rules #131, exchanges #181) | `/settings.html`, `/api/config`, `POST /api/config/form` | admin | `http.config_editor: true` + auth or basic auth |
-| Setup wizard (#106, flow step #130) | `/settings.html`, `POST /api/config/wizard` | admin | `http.config_editor: true` + auth or basic auth |
+| Setup wizard (#106, flow step #130, keeps an existing config #345) | `/settings.html`, `POST /api/config/wizard` | admin | `http.config_editor: true` + auth or basic auth |
 | Custom dashboards | `/dashboards.html`, `/api/dashboards` | every signed-in user, own dashboards | `storage: {type: sqlite}` + auth or basic auth |
 | Report subscriptions | `report_subscriptions`, `/api/subscriptions` | viewers see them, operators send now | `storage` + an `smtp` notifier |
 | Version check, upgrade, and rollback (#196) | `/settings.html`, `GET /api/upgrade`, `POST /api/upgrade/{check,apply,rollback}` | admin | `upgrade.enabled: true` + `upgrade.public_key` + auth or basic auth |
@@ -483,13 +483,23 @@ UI e2e: `internal/httpapi` tests drive the real mitigation controller in observe
 3. What to probe: an optional prefix and an optional pinned host inside it. Leave both empty to add targets later in the form. A prefix without a host is probed at a few addresses inside it, including the provider next hop when that address can be used. A host pins that prefix to one address. Report history (sqlite) is a checkbox on this step, not a secret.
 4. Flow collector (optional): a checkbox, a listen address (empty means every address), and a UDP port (default 2055). When on, the file gets a `flow` source listening there, with the source's defaults; tune it afterwards in the settings form. The step explains exporter setup: point the router's NetFlow v5/v9, IPFIX, or sFlow export at that host and port. Packeteer does not configure the router. With `--network host` the port is a host UDP port: do not publish it, and allow it only from the router. The generated file carries the same note. `POST /api/config/wizard` takes it as `"flow": {"listen": "192.0.2.10:2055"}`; a bad address or port is refused with the other wizard errors. Leaving the step off renders exactly what the wizard rendered before.
 
-The rendered file is always:
+### Over a config that already exists (#345)
+
+`GET /api/config` returns `configured: true` when the file has providers, BGP neighbors, or an `ixp` block. The page then collapses the wizard behind "Run setup again (replaces your config)", and its button reads "Generate (replaces your config)". An empty or fresh file shows it open.
+
+The page posts the editor text as `current`. The server replaces only the keys the wizard writes: `mode`, `asn`, `router_id`, `packeteer_community`, `max_improvements`, `hold_time`, `thresholds`, `providers`, `allowlist`, `bgp`, `sources`, and `scorer`. `auth`, `http`, `storage`, and every other block stay as they are. A new `storage` block is added only when the file has none. The reply adds `existing`, `diff` (a line diff, ASCII only: any other character in the file shows as a `\u` escape), and `removes`, for example `Removes 2 providers (transit-b, transit-c)`. It also names a mode change, a scorer change, and dropped sources, static targets, BGP neighbors, and allowlist prefixes. A provider or neighbor that keeps its name or address but loses other fields is listed too, for example `Resets provider transit-a: drops fwmark`, as is a `bgp` key the wizard does not write.
+
+The page keeps the editor text until you press "Replace the editor text" in the confirm box that shows `removes` and the diff. Cancel leaves it alone. Nothing is written to the file until you Save.
+
+Sign-in stays on. A tick box "Turn off sign-in" on the last step sends `"disable_auth": true`, which sets `auth.enabled: false` and lists "Turns off sign-in" in `removes`. Without it, a result that would turn sign-in off is refused. The flow-collector comment is written only to a fresh file. The reply is `422` when `current` is not a YAML mapping, or when the result does not load with the rest of the file.
+
+A fresh file is rendered as follows. Over an existing file, `announcer`, `http.listen` (unless the page sends a listen address), and every other kept block stay as they are; with `mode: observe` a kept `announcer` does not announce.
 
 - `mode: observe` (it measures and recommends; it never announces). Any other mode, including inject, is refused. Inject is not a step;
-- an empty allowlist and no announcer;
+- an empty allowlist and no announcer (a fresh file);
 - one `bgp.neighbors` entry, the edge address;
 - the `weighted` scorer, `max_improvements: 50`, `hold_time: 15m`, the default thresholds, and `http.listen: 127.0.0.1:8080`;
-- a `static` source only when a prefix was given, and a `flow` source only when the flow step was used;
+- a `static` source only when a prefix was given, and a `flow` source only when the flow step was used. Over an existing file this list replaces `sources`, so it can be empty; `removes` counts what is lost;
 - `packeteer_community` `<asn>:666` when the ASN fits in 16 bits.
 
 There is no field for a password, a community string, or any other secret. Those stay in environment variables. The page checks each step before continuing, and the server checks the whole body again with `config.Parse`. The wizard is part of the editor: it is off (`404`) unless `http.config_editor` is on. Turning inject on afterwards is a separate edit; follow the [inject checklist](CONFIG.md#inject-checklist).
