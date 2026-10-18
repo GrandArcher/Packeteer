@@ -976,6 +976,7 @@ function loadConfig() {
     document.getElementById("ed-path").textContent = f.path;
     document.getElementById("ed-sha").textContent = f.sha256.slice(0, 12);
     document.getElementById("ed-off").hidden = true;
+    setWizardConfigured(!!f.configured);
     edStatus("Loaded.");
     loadForm(f.yaml);
     loadSuggestions();
@@ -2078,18 +2079,61 @@ function runWizard() {
     status.textContent = "Fix the form first.";
     return;
   }
+  body.current = document.getElementById("ed-yaml").value;
+  if (wzConfigured && byId("wz-auth-off").checked) body.disable_auth = true;
   status.textContent = "Generating…";
   api("POST", "/api/config/wizard", body).then(function (out) {
-    document.getElementById("ed-yaml").value = out.yaml;
-    status.textContent = "Generated (observe). Review it below, then Save and restart the container. Nothing is written until you save.";
-    if (!base) api("GET", "/api/config").then(function (f) { base = f.sha256; }, function () {});
-    loadForm(out.yaml);
-    checkConfig();
-    document.getElementById("editor-section").scrollIntoView();
+    if (!out.existing) {
+      useWizardYaml(out);
+    } else if (!out.diff) {
+      status.textContent = "The setup matches the current config. Nothing changes.";
+    } else {
+      showWizardConfirm(out);
+    }
   }, function (err) {
     status.textContent = explain(err);
     wzErrors(err.data && err.data.errors);
   });
+}
+
+// setWizardConfigured collapses the wizard on a box that already has
+// providers or BGP neighbors (#345), so it is not run over a working config
+// by accident.
+var wzConfigured = false;
+function setWizardConfigured(on) {
+  wzConfigured = on;
+  byId("wz-again").hidden = !on;
+  byId("wz-body").hidden = on;
+  byId("wz-auth-row").hidden = !on;
+  byId("wz-run").textContent = on ? "Generate (replaces your config)" : "Generate observe config";
+  byId("wz-confirm").hidden = true;
+}
+
+var wzPending = null;
+
+// showWizardConfirm holds the generated config back until the operator has
+// seen the diff and what is lost. The editor is not touched before then.
+function showWizardConfirm(out) {
+  wzPending = out;
+  var text = "Nothing is written to the file until you press Save. Sign-in, http, storage, and other blocks are kept.";
+  if (!byId("unsaved").hidden) text += " Your unsaved edits in the editor are replaced.";
+  byId("wz-confirm-text").textContent = text;
+  var list = byId("wz-removes");
+  clear(list);
+  var removes = out.removes && out.removes.length ? out.removes : ["Nothing is removed."];
+  removes.forEach(function (r) { list.appendChild(el("li", "", r)); });
+  byId("wz-diff").textContent = out.diff;
+  byId("wz-confirm").hidden = false;
+  byId("wz-status").textContent = "Review the changes below. The editor is unchanged.";
+}
+
+function useWizardYaml(out) {
+  document.getElementById("ed-yaml").value = out.yaml;
+  document.getElementById("wz-status").textContent = "Generated (observe). Review it below, then Save and restart the container. Nothing is written until you save.";
+  if (!base) api("GET", "/api/config").then(function (f) { base = f.sha256; }, function () {});
+  loadForm(out.yaml);
+  checkConfig();
+  document.getElementById("editor-section").scrollIntoView();
 }
 
 function renderSubs() {
@@ -2135,6 +2179,21 @@ document.getElementById("ed-load").addEventListener("click", loadConfig);
 document.getElementById("ed-check").addEventListener("click", checkConfig);
 document.getElementById("ed-save").addEventListener("click", saveConfig);
 document.getElementById("wz-run").addEventListener("click", runWizard);
+byId("wz-reopen").addEventListener("click", function () {
+  byId("wz-again").hidden = true;
+  byId("wz-body").hidden = false;
+});
+byId("wz-confirm-yes").addEventListener("click", function () {
+  var out = wzPending;
+  wzPending = null;
+  byId("wz-confirm").hidden = true;
+  if (out) useWizardYaml(out);
+});
+byId("wz-confirm-no").addEventListener("click", function () {
+  wzPending = null;
+  byId("wz-confirm").hidden = true;
+  byId("wz-status").textContent = "Cancelled. The editor is unchanged.";
+});
 document.getElementById("wz-next").addEventListener("click", function () {
   var problems = edgeProblems();
   wzErrors(problems);

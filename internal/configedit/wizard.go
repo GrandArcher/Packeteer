@@ -48,6 +48,9 @@ type WizardInput struct {
 	// Mode must be empty or observe. Any other value is refused. The
 	// wizard never writes suggest or inject.
 	Mode string `json:"mode,omitempty"`
+	// DisableAuth turns sign-in off in a config that has it on. Only
+	// WizardOver reads it; without it auth is always kept.
+	DisableAuth bool `json:"disable_auth,omitempty"`
 }
 
 // WizardFlow is the optional flow collector. Listen is host:port for the

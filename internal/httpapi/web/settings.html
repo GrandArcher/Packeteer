@@ -53,6 +53,11 @@
   <section id="wizard">
     <h2>Setup wizard</h2>
     <p class="tag">Four steps, the last one optional. It always starts in observe: the edge session is learn-only, the allowlist stays empty, and there is no announcer. Inject is not a step. Secrets stay in environment variables; this wizard has no secret fields. Nothing is written until you save the YAML below.</p>
+    <div id="wz-again" hidden>
+      <p class="tag">This config already has providers or BGP neighbors. Running setup again replaces its providers, BGP neighbors, sources, allowlist, scorer, and decision settings. Sign-in, the http block, storage, and every other block are kept. You see a diff and confirm before anything reaches the editor.</p>
+      <button type="button" id="wz-reopen">Run setup again (replaces your config)</button>
+    </div>
+    <div id="wz-body">
     <ol class="steps" id="wz-steps">
       <li id="wz-tab-1" class="on">1. Edge</li>
       <li id="wz-tab-2">2. Providers</li>
@@ -105,9 +110,24 @@
         <button type="button" id="wz-back-4">Back</button>
         <button type="button" id="wz-run">Generate observe config</button>
       </div>
+      <div id="wz-auth-row" hidden>
+        <label class="check"><input id="wz-auth-off" type="checkbox"> Turn off sign-in</label>
+        <p class="tag">Leave this unticked to keep sign-in as it is. Ticked, the generated config sets auth.enabled to false.</p>
+      </div>
+    </div>
     </div>
     <div id="wz-status" class="tag"></div>
     <ul id="wz-errors" class="errors"></ul>
+    <div id="wz-confirm" class="confirm" role="alertdialog" aria-labelledby="wz-confirm-title" hidden>
+      <h3 id="wz-confirm-title">Replace your config?</h3>
+      <p id="wz-confirm-text" class="tag"></p>
+      <ul id="wz-removes"></ul>
+      <pre id="wz-diff" class="mono diff"></pre>
+      <div class="controls">
+        <button type="button" id="wz-confirm-yes">Replace the editor text</button>
+        <button type="button" id="wz-confirm-no">Cancel</button>
+      </div>
+    </div>
   </section>
   <section id="commit-setup">
     <h2>Commit setup</h2>

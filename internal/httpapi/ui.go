@@ -187,23 +187,28 @@ func short(h string) string {
 }
 
 // handleWizard renders a setup-wizard observe config (#106). It writes
-// nothing; the UI shows the result in the editor for review. Inject is
-// not accepted. It is part of the editor: off unless http.config_editor
-// is on.
+// nothing; the UI shows the result in the editor for review. Over a
+// current config it keeps auth, http, storage and unknown blocks and
+// returns a diff and what is lost (#345). Inject is not accepted. It is
+// part of the editor: off unless http.config_editor is on.
 func (s *Server) handleWizard(w http.ResponseWriter, r *http.Request) {
 	if !s.editorOn(w) {
 		return
 	}
-	var in configedit.WizardInput
-	if !decodeLarge(w, r, &in, 256<<10) {
+	var req struct {
+		configedit.WizardInput
+		Current string `json:"current"`
+	}
+	if !decodeLarge(w, r, &req, configBodyLimit) {
 		return
 	}
-	out, err := configedit.Wizard(in)
+	plan, err := configedit.WizardOver(req.WizardInput, []byte(req.Current))
 	if err != nil {
 		writeJSON(w, http.StatusUnprocessableEntity, map[string]any{"error": "wizard input is invalid", "errors": strings.Split(err.Error(), "\n")})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"yaml": string(out), "mode": "observe", "editor": true})
+	writeJSON(w, http.StatusOK, map[string]any{"yaml": plan.YAML, "mode": "observe", "editor": true,
+		"existing": plan.Existing, "diff": plan.Diff, "removes": plan.Removes})
 }
 
 // Suggestion is a next hop seen on iBGP or BMP that is not a configured
