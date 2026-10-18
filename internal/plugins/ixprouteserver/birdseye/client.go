@@ -68,6 +68,9 @@ func (w *Watch) get(ctx context.Context, base, path string, dst any) error {
 }
 
 type statusDoc struct {
+	API struct {
+		MaxRoutes int `json:"max_routes"`
+	} `json:"api"`
 	Status struct {
 		Version    string `json:"version"`
 		RouterID   string `json:"router_id"`
@@ -99,8 +102,7 @@ func (p protocol) established() bool {
 
 // stateText is the BGP state, else BIRD's protocol state.
 func (p protocol) stateText() string {
-	switch {
-	case p.BGPState != "":
+	if p.BGPState != "" {
 		return p.BGPState
 	}
 	if f := strings.Fields(p.Connection); len(f) > 0 {
@@ -109,7 +111,7 @@ func (p protocol) stateText() string {
 	return p.State
 }
 
-// protocols decodes api/protocols/bgp, sorted by name. PHP encodes an
+// decodeProtocols decodes api/protocols/bgp, sorted by name. PHP encodes an
 // empty array as [], which is no protocols.
 func decodeProtocols(raw json.RawMessage) ([]protocol, error) {
 	if len(raw) == 0 || string(raw) == "[]" || string(raw) == "null" {
@@ -162,8 +164,10 @@ func (w *Watch) routeCount(ctx context.Context, base, protocol string) (int, err
 
 // filtered reads the routes of one protocol that carry rs-asn:1101:x. It
 // returns the number of routes with at least one such tag and the count of
-// each x.
-func (w *Watch) filtered(ctx context.Context, base, protocol string, asn uint32) (int, map[int]int, error) {
+// each x. Birdseye caps a route listing at its api.max_routes (maxRoutes,
+// zero when it did not say). A listing that reaches the cap may be cut
+// short, so it is an error rather than an undercount.
+func (w *Watch) filtered(ctx context.Context, base, protocol string, asn uint32, maxRoutes int) (int, map[int]int, error) {
 	var doc struct {
 		Routes []struct {
 			BGP struct {
@@ -173,6 +177,9 @@ func (w *Watch) filtered(ctx context.Context, base, protocol string, asn uint32)
 	}
 	if err := w.get(ctx, base, pathFiltered(protocol, asn), &doc); err != nil {
 		return 0, nil, err
+	}
+	if maxRoutes > 0 && len(doc.Routes) >= maxRoutes {
+		return 0, nil, fmt.Errorf("route listing reached Birdseye api.max_routes (%d)", maxRoutes)
 	}
 	routes := 0
 	reasons := map[int]int{}

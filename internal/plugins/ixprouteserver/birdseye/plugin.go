@@ -38,8 +38,10 @@ const (
 	DefaultMaxPrefixWarnPct = 90
 	DefaultFilteredWarnPct  = 50
 
-	// maxServers and maxSessions bound memory: a session keeps maxSamples
-	// samples of about 56 bytes, so the worst case is a few hundred MiB.
+	// maxServers and maxSessions bound the live sessions. A session keeps
+	// maxSamples samples of 56 bytes plus up to maxReasons reason counts
+	// each, and the history of a session that left stays for the whole
+	// window, so churn can hold more than maxSessions histories per server.
 	maxServers  = 8
 	maxSessions = 2048
 	maxSamples  = 288

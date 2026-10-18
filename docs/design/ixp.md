@@ -109,7 +109,9 @@ IXP Manager and Birdseye are read with GET only. No other method.
   filters that way and does not export it. Per session, `received` is
   the protocol's route count, `filtered` is the number of routes with
   such a tag, `accepted` is the difference, and the reasons are the
-  counts by `x`. `max_prefix` is the IX-F value for the neighbor address
+  counts by `x`. If a route listing reaches the `api.max_routes` that
+  `api/status` reports, it may be cut short, so the session's counts are
+  not read (`counted: false`, `error` set). `max_prefix` is the IX-F value for the neighbor address
   when `ixp.members` is set, else Birdseye's import limit. A state or
   count change raises an `ixp.rs_*` event (docs/EVENTS.md). History is
   288 samples per session in memory; a restart empties it.

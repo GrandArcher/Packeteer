@@ -34,6 +34,7 @@ type fakeBirdseye struct {
 	tagged    map[string][][3]uint64 // one entry per route: its large communities
 	fail      int                    // HTTP status for every request when non-zero
 	bigLC     bool
+	maxRoutes int // api.max_routes in every response
 }
 
 func newFake(t *testing.T) *fakeBirdseye {
@@ -42,6 +43,7 @@ func newFake(t *testing.T) *fakeBirdseye {
 		protocols: map[string]map[string]any{},
 		counts:    map[string]int{},
 		tagged:    map[string][][3]uint64{},
+		maxRoutes: 1000,
 	}
 	f.srv = httptest.NewServer(http.HandlerFunc(f.serve))
 	t.Cleanup(f.srv.Close)
@@ -56,7 +58,7 @@ func (f *fakeBirdseye) serve(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "down", f.fail)
 		return
 	}
-	api := map[string]any{"version": "0.1.0", "max_routes": 1000}
+	api := map[string]any{"version": "0.1.0", "max_routes": f.maxRoutes}
 	var body any
 	switch p := r.URL.Path; {
 	case p == "/api/status":
@@ -531,5 +533,97 @@ func TestDecodeProtocolsEmptyArray(t *testing.T) {
 	ps, err = decodeProtocols(json.RawMessage(`{"b":{"bgp_state":"Established"},"a":{"connection":"Active   Socket: No route to host"}}`))
 	if err != nil || len(ps) != 2 || ps[0].Name != "a" || ps[0].established() || ps[0].stateText() != "Active" || !ps[1].established() {
 		t.Fatalf("%+v %v", ps, err)
+	}
+}
+
+func TestDownSessionHoldsMaxPrefixAlert(t *testing.T) {
+	f := newFake(t)
+	f.setSession("pb_a", 64497, "192.0.2.10", "Established", 100)
+	f.counts["pb_a"] = 100
+	w, ev := newWatch(t, f, nil)
+	w.round(context.Background(), t0)
+	ev.reset()
+
+	// BIRD drops the session at its import limit: the alert stays open.
+	f.setSession("pb_a", 64497, "192.0.2.10", "Idle", 100)
+	w.round(context.Background(), t0.Add(time.Minute))
+	w.round(context.Background(), t0.Add(2*time.Minute))
+	if got := ev.kinds(); !slices.Equal(got, []string{"ixp.rs_session_down pb_a"}) {
+		t.Fatalf("while down %v", got)
+	}
+
+	f.setSession("pb_a", 64497, "192.0.2.10", "Established", 100)
+	f.counts["pb_a"] = 10
+	w.round(context.Background(), t0.Add(3*time.Minute))
+	want := []string{"ixp.rs_session_down pb_a", "ixp.rs_session_up pb_a", "ixp.rs_max_prefix_cleared pb_a"}
+	if got := ev.kinds(); !slices.Equal(got, want) {
+		t.Fatalf("after return %v", got)
+	}
+}
+
+func TestStaleServerClosesItsAlerts(t *testing.T) {
+	f := newFake(t)
+	f.setSession("pb_a", 64497, "192.0.2.10", "Idle", 100)
+	f.setSession("pb_b", 64498, "192.0.2.11", "Established", 10)
+	f.counts["pb_b"] = 10
+	w, ev := newWatch(t, f, nil)
+	now := time.Now()
+	w.round(context.Background(), now.Add(-time.Hour))
+	f.mu.Lock()
+	f.fail = http.StatusServiceUnavailable
+	f.mu.Unlock()
+	ev.reset()
+	w.round(context.Background(), now)
+	got := ev.kinds()
+	slices.Sort(got)
+	want := []string{"ixp.rs_max_prefix_cleared pb_b", "ixp.rs_session_up pb_a"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("events %v", got)
+	}
+	for _, e := range ev.events {
+		if e.Kind == plugin.EventRSSessionUp && e.Fields["state"] != "stale" {
+			t.Fatalf("session up %+v", e)
+		}
+	}
+
+	// Closed once: another failed poll says nothing more.
+	ev.reset()
+	w.round(context.Background(), now.Add(time.Minute))
+	if got := ev.kinds(); slices.ContainsFunc(got, func(k string) bool { return strings.Contains(k, "pb_") }) {
+		t.Fatalf("repeated %v", got)
+	}
+
+	// The server returns: problems that remain are raised again.
+	f.mu.Lock()
+	f.fail = 0
+	f.mu.Unlock()
+	ev.reset()
+	w.round(context.Background(), now.Add(2*time.Minute))
+	got = ev.kinds()
+	slices.Sort(got)
+	want = []string{"ixp.rs_max_prefix pb_b", "ixp.rs_reachable ", "ixp.rs_session_down pb_a"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("after return %v", got)
+	}
+}
+
+func TestRouteListingAtBirdseyeCapIsNotCounted(t *testing.T) {
+	f := newFake(t)
+	f.maxRoutes = 2
+	f.setSession("pb_a", 64497, "192.0.2.10", "Established", 0)
+	f.counts["pb_a"] = 5
+	f.tagged["pb_a"] = [][3]uint64{{rsASN, 1101, 1}, {rsASN, 1101, 2}}
+	w, _ := newWatch(t, f, nil)
+	w.round(context.Background(), t0)
+	s := session(w.View(), "pb_a")
+	if s.Counted || s.Filtered != 0 || !strings.Contains(s.Error, "api.max_routes (2)") {
+		t.Fatalf("%+v", s)
+	}
+
+	f.maxRoutes = 3
+	w.round(context.Background(), t0.Add(time.Minute))
+	s = session(w.View(), "pb_a")
+	if !s.Counted || s.Filtered != 2 || s.Accepted != 3 {
+		t.Fatalf("%+v", s)
 	}
 }

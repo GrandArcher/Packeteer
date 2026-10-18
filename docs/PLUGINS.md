@@ -89,7 +89,7 @@ Announcers, inbound ones included, run **in-process only**, so an external proce
 ## Lifecycle
 
 1. **Factory (Init).** `func(cfg plugin.Config, env plugin.Env) (T, error)`. It decodes and validates config with `cfg.Decode(&myStruct)`. It must do no network I/O. `env` provides the instance name, a scoped `slog` logger, the plugin dir, and `Getenv`. When `env.CheckOnly` is set (the config editor checking a candidate file, #34), the instance is thrown away: validate the config, but start no process, open no connection, and write no file.
-2. **`Start(ctx)`.** Begins background work in goroutines and must not block. Plugins start in this order: storage, SSO, RIB sources, sources, detector, leak sources, probers, scorer, policies, telemetry, notifiers, federation, whois, ixp member source, ixp route-server watch, ixp fabric prober, elector, announcer, inbound announcer, mitigation announcer. If one fails, the ones already started are stopped.
+2. **`Start(ctx)`.** Begins background work in goroutines and must not block. Plugins start in this order: storage, SSO, RIB sources, sources, detector, leak sources, probers, scorer, policies, telemetry, notifiers, federation, whois, ixp member source, ixp fabric prober, ixp route-server watch, elector, announcer, inbound announcer, mitigation announcer. If one fails, the ones already started are stopped.
 3. **`Stop(ctx)`.** Releases everything before `ctx` expires. Plugins stop in reverse order, so the announcer stops first and routes are withdrawn early.
 
 Embed `plugin.Base` for no-op `Start`/`Stop`.

@@ -138,7 +138,7 @@ func (w *Watch) pollServer(ctx context.Context, s *server, members map[netip.Add
 		go func() {
 			defer wg.Done()
 			for i := range idx {
-				rows[i] = w.measure(ctx, s, protos[i], members, now)
+				rows[i] = w.measure(ctx, s, protos[i], members, st.API.MaxRoutes, now)
 			}
 		}()
 	}
@@ -171,7 +171,7 @@ func validProtocol(s string) bool {
 // measure builds one session's row. A session that is not Established has
 // no routes, so its counts are zero without asking Birdseye. A failed read
 // leaves Counted false with the counts zero and records the error.
-func (w *Watch) measure(ctx context.Context, s *server, p protocol, members map[netip.Addr]member, now time.Time) plugin.RouteServerSession {
+func (w *Watch) measure(ctx context.Context, s *server, p protocol, members map[netip.Addr]member, maxRoutes int, now time.Time) plugin.RouteServerSession {
 	v := plugin.RouteServerSession{
 		Server:      s.cfg.Name,
 		Session:     p.Name,
@@ -212,7 +212,7 @@ func (w *Watch) measure(ctx context.Context, s *server, p protocol, members map[
 	var filtered int
 	var reasons map[int]int
 	if received > 0 {
-		filtered, reasons, err = w.filtered(ctx, s.base, p.Name, s.cfg.ASN)
+		filtered, reasons, err = w.filtered(ctx, s.base, p.Name, s.cfg.ASN, maxRoutes)
 		if err != nil {
 			v.Error = err.Error()
 			return v
@@ -245,6 +245,11 @@ func (w *Watch) fail(s *server, now time.Time, err error) {
 		events = append(events, plugin.NewEvent(plugin.EventRSUnreachable, now,
 			fmt.Sprintf("Birdseye on route server %s is unreachable: %s", s.cfg.Name, err),
 			map[string]string{"server": s.cfg.Name, "error": err.Error()}))
+	}
+	if !s.lastOK.IsZero() && now.Sub(s.lastOK) > staleFactor*w.interval {
+		for _, st := range s.sessions {
+			events = append(events, w.closeAlerts(st, now, "is not visible: route server data is stale", "stale")...)
+		}
 	}
 	w.mu.Unlock()
 	w.log.Warn("route server poll failed", "server", s.cfg.Name, "error", err.Error())
@@ -284,7 +289,7 @@ func (w *Watch) apply(s *server, st statusDoc, rows []plugin.RouteServerSession,
 	}
 	for name, st := range s.sessions {
 		if !seen[name] {
-			events = append(events, w.resolveAll(st, now)...)
+			events = append(events, w.closeAlerts(st, now, "is no longer on the route server", "removed")...)
 			delete(s.sessions, name)
 		}
 	}
@@ -348,8 +353,10 @@ func label(row plugin.RouteServerSession) string {
 
 // evaluate compares a new row with the alerts open on its session. A first
 // sighting raises problems only: a session that is already up, small, and
-// clean says nothing. A row whose counts could not be read keeps the
-// prefix and filtered alerts as they are.
+// clean says nothing. A row whose counts could not be read, or whose
+// session is down, keeps the prefix and filtered alerts as they are: a
+// dropped session reads zero routes, and BIRD drops a session when its
+// import limit is hit, so a zero is not a recovery.
 func (w *Watch) evaluate(st *sess, row plugin.RouteServerSession, now time.Time) []plugin.Event {
 	var ev []plugin.Event
 	switch {
@@ -362,7 +369,7 @@ func (w *Watch) evaluate(st *sess, row plugin.RouteServerSession, now time.Time)
 		ev = append(ev, plugin.NewEvent(plugin.EventRSSessionUp, now,
 			fmt.Sprintf("%s is Established", label(row)), fields(row, "neighbor", row.Neighbor, "state", row.State)))
 	}
-	if !row.Counted {
+	if !row.Counted || !row.Established {
 		return ev
 	}
 	high := row.MaxPrefix > 0 && row.Accepted*100 >= w.prefPct*row.MaxPrefix
@@ -394,23 +401,26 @@ func (w *Watch) evaluate(st *sess, row plugin.RouteServerSession, now time.Time)
 	return ev
 }
 
-// resolveAll closes every alert open on a session that left the route
-// server, so a pager does not keep an incident for a session that is gone.
-func (w *Watch) resolveAll(st *sess, now time.Time) []plugin.Event {
+// closeAlerts resolves every alert open on a session that is no longer
+// visible, so a pager does not keep an incident for it. why is the
+// reason shown to the operator. The flags are cleared, so a session that
+// comes back is judged afresh.
+func (w *Watch) closeAlerts(st *sess, now time.Time, why, state string) []plugin.Event {
 	row := st.view
 	var ev []plugin.Event
 	if st.down {
 		ev = append(ev, plugin.NewEvent(plugin.EventRSSessionUp, now,
-			label(row)+" is no longer on the route server", fields(row, "neighbor", row.Neighbor, "state", "removed")))
+			label(row)+" "+why, fields(row, "neighbor", row.Neighbor, "state", state)))
 	}
 	if st.prefixHigh {
 		ev = append(ev, plugin.NewEvent(plugin.EventRSMaxPrefixCleared, now,
-			label(row)+" is no longer on the route server", fields(row, "accepted", "0", "max_prefix", strconv.Itoa(row.MaxPrefix))))
+			label(row)+" "+why, fields(row, "accepted", "0", "max_prefix", strconv.Itoa(row.MaxPrefix))))
 	}
 	if st.filteredHigh {
 		ev = append(ev, plugin.NewEvent(plugin.EventRSFilteredCleared, now,
-			label(row)+" is no longer on the route server", fields(row, "received", "0", "filtered", "0")))
+			label(row)+" "+why, fields(row, "received", "0", "filtered", "0")))
 	}
+	st.down, st.prefixHigh, st.filteredHigh = false, false, false
 	return ev
 }
 
