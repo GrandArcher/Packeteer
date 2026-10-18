@@ -162,12 +162,12 @@ func (r *runner) runRound(ctx context.Context) {
 	now := r.clock()
 	members := r.memberView()
 	vantages := r.vantageCopy()
-	if members.Stale || members.Fetched.IsZero() {
+	if members.Stale || members.Fetched == nil {
 		msg := members.Error
 		switch {
 		case members.Stale && msg == "":
 			msg = "member list is stale"
-		case members.Fetched.IsZero() && msg == "":
+		case members.Fetched == nil && msg == "":
 			msg = "member list has not loaded"
 		}
 		msg = ixf.Redact(msg, r.apiKey)

@@ -8,6 +8,7 @@ mode: observe               # also the default when mode is left out; inject is 
 # that may inject. members (#161) is read-only and announces nothing.
 # The API key is PACKETEER_IXP_MANAGER_API_KEY, never this file.
 # vantages and fabric (#162) probe member LAN addresses and announce nothing.
+# routeservers (#164) reads Birdseye with GET and announces nothing.
 # ixp:
 #   members:
 #     type: ixf
@@ -30,6 +31,19 @@ mode: observe               # also the default when mode is left out; inject is 
 #       workers: 4
 #       rate_limit_pps: 20
 #       member_pps: 1
+#   routeservers:                # Birdseye polls (#164), GET only, no key
+#     type: birdseye
+#     config:
+#       servers:
+#         - name: rs1
+#           url: http://rs1.example.invalid
+#           asn: 64496           # the route server ASN in asn:1101:x
+#       interval: 5m
+#       timeout: 15s
+#       workers: 4
+#       max_bytes: 8388608
+#       max_prefix_warn_pct: 90
+#       filtered_warn_pct: 50
 
 asn: 64512
 router_id: 192.0.2.10
@@ -418,6 +432,23 @@ storage:
 #     type: rdap
 #     config:
 #       base_url: https://rdap.org
+
+# PeeringDB / IX-F directory (#153): org name per ASN, membership and LAN
+# addresses at your exchanges, route-server flag, policy, and the
+# info_prefixes hint. GET only, cached in memory, refreshed daily. It
+# announces nothing and is not an input to the decision. Use the same name
+# as in exchanges. The optional API key is PACKETEER_PEERINGDB_API_KEY,
+# never this file. Without it PeeringDB rate-limits the requests.
+# lookup:
+#   type: peeringdb
+#   config:
+#     exchanges:
+#       - name: example-ix
+#         ix_id: 1                # PeeringDB ix id
+#         # ixf_url: https://ixp.example.invalid/members.json
+#     refresh: 24h
+#     timeout: 30s
+#     max_bytes: 8388608
 
 # Interface counters and 95th-percentile usage. Off unless listed.
 # The community and v3 passphrases are environment variables named here,

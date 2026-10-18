@@ -1,9 +1,10 @@
 # IXP mode (#160)
 
-Status: charter, config gate, IX-F member import (#161), and fabric
-probes (#162). Route-server history, signals, member pages, and
-multi-site fabric health are #163-#167 and are not built. An `ixp`
-block does not announce or open a route-server session.
+Status: charter, config gate, IX-F member import (#161), fabric
+probes (#162), and route-server history and alerts (#164). Signals,
+member pages, and multi-site fabric health are #163 and #165-#167 and
+are not built. An `ixp` block does not announce or open a route-server
+session.
 
 An Internet exchange operator runs Packeteer to observe its fabric,
 route servers, and members. It does not route for them. This is not the
@@ -11,8 +12,8 @@ route servers, and members. It does not route for them. This is not the
 
 ## Turning it on
 
-`ixp: {}` in the config. The keys are `members` (#161), `vantages`,
-and `fabric` (#162). Any other key is an error. Omitted, or `ixp: null`,
+`ixp: {}` in the config. The keys are `members` (#161), `vantages`
+and `fabric` (#162), and `routeservers` (#164). Any other key is an error. Omitted, or `ixp: null`,
 is not IXP mode. `mode` stays `observe`. `mode: suggest` is accepted
 and announces nothing. The shipped example leaves the block commented
 out.
@@ -43,7 +44,8 @@ mode changes member routing.
 Route-server data (#164, #165) lives in a separate read-only store.
 That store is not the RIB view and is not an input to `Decide`. No
 later issue may copy those routes into the RIB view or announce from
-them. The store is not built yet.
+them. #164 keeps counts and large-community tallies per member session,
+never the routes themselves, in memory inside the `birdseye` plugin.
 
 ## External reads
 
@@ -94,9 +96,25 @@ IXP Manager and Birdseye are read with GET only. No other method.
 - An IX-F JSON document the operator names (#161) is GET of that exact
   URL, with no API key. Setting the key with a URL that is not the
   member export is a config error.
-- Birdseye, GET only (#164, not built): `api/status`, `api/protocols/bgp`,
+- Birdseye, GET only (#164, enforced): `api/status`, `api/protocols/bgp`,
   `api/routes/count/protocol/{protocol}`,
-  `api/routes/lc-zwild/protocol/{protocol}/{rs-asn}/1101`.
+  `api/routes/lc-zwild/protocol/{protocol}/{rs-asn}/1101`, on the origin
+  or subdirectory URL of each `ixp.routeservers` server. Birdseye has no
+  key, so none is sent: the IXP Manager key never goes to a Birdseye
+  host, and a URL with userinfo or a query is refused. Redirects are not
+  followed. A response is capped (`max_bytes`, default 8 MiB). `protocol`
+  is a name Birdseye returned, limited to letters, digits, `_`, `.`, `-`.
+  `rs-asn` is the server's configured `asn`. `lc-zwild` lists the routes
+  of one session that carry `rs-asn:1101:x`; IXP Manager tags a route it
+  filters that way and does not export it. Per session, `received` is
+  the protocol's route count, `filtered` is the number of routes with
+  such a tag, `accepted` is the difference, and the reasons are the
+  counts by `x`. If a route listing reaches the `api.max_routes` that
+  `api/status` reports, it may be cut short, so the session's counts are
+  not read (`counted: false`, `error` set). `max_prefix` is the IX-F value for the neighbor address
+  when `ixp.members` is set, else Birdseye's import limit. A state or
+  count change raises an `ixp.rs_*` event (docs/EVENTS.md). History is
+  288 samples per session in memory; a restart empties it.
 
 An IX-F address with `can_ping: false` is not probed. Probes stay inside
 the VLAN prefix. Nothing is announced, and the measurements are not an
@@ -109,5 +127,5 @@ Member data is never committed. Lab fixtures use documentation prefixes
 documentation or private ASNs (64496-64511, 65536-65551, or
 64512-65534).
 
-Rollback: remove `ixp.members`, or `ixp.vantages` and `ixp.fabric`, or
-the `ixp` block, and restart. Nothing was announced.
+Rollback: remove `ixp.members`, `ixp.routeservers`, or `ixp.vantages`
+and `ixp.fabric`, or the `ixp` block, and restart. Nothing was announced.

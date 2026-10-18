@@ -14,11 +14,19 @@ const KindMemberSource Kind = "ixp_member"
 // input to Decide, and it never announces.
 const KindFabric Kind = "ixp_fabric"
 
+// KindRouteServer is the Birdseye route-server watch (#164). It reads
+// route-server state with GET only and keeps it in its own store. It is
+// not a RIB source, not an input to Decide, and it never announces.
+const KindRouteServer Kind = "ixp_routeserver"
+
 // MemberSources is the registry for ixp.members.
 var MemberSources = NewRegistry[MemberSource](KindMemberSource)
 
 // FabricProbes is the registry for ixp.fabric.
 var FabricProbes = NewRegistry[FabricProbe](KindFabric)
+
+// RouteServerWatches is the registry for ixp.routeservers.
+var RouteServerWatches = NewRegistry[RouteServerWatch](KindRouteServer)
 
 // MemberSource imports an IX-F member list. View never blocks and never
 // fetches. The slices it returns must not be modified. SetEventSink is
@@ -38,8 +46,8 @@ type MemberView struct {
 	URL          string      `json:"url,omitempty"`
 	Manager      bool        `json:"manager"`
 	KeyID        string      `json:"key_id,omitempty"`
-	KeyExpires   time.Time   `json:"key_expires,omitempty"`
-	Fetched      time.Time   `json:"fetched,omitempty"`
+	KeyExpires   *time.Time  `json:"key_expires,omitempty"`
+	Fetched      *time.Time  `json:"fetched,omitempty"`
 	Stale        bool        `json:"stale"`
 	Error        string      `json:"error,omitempty"`
 	MemberCount  int         `json:"member_count"`
@@ -195,4 +203,91 @@ type FabricSample struct {
 	PastTolerance bool           `json:"past_tolerance"`
 	Error         string         `json:"error,omitempty"`
 	At            time.Time      `json:"at"`
+}
+
+// RouteServerWatch polls Birdseye on each route server and keeps a short
+// per-session history (#164). View and History never block and never
+// fetch. SetMembers and SetEventSink are called before Start. An
+// implementation must not announce, must not write the RIB, and must not
+// call Decide.
+type RouteServerWatch interface {
+	Lifecycle
+	View() RouteServerView
+	// History returns one session's samples, oldest first. The bool is
+	// false when the server and session are not known.
+	History(server, session string) ([]RouteServerSample, bool)
+	SetMembers(fn func() MemberView)
+	SetEventSink(fn func(Event))
+}
+
+// RouteServerView is the latest poll of every configured route server.
+// A server whose polls keep failing is marked Stale and its sessions are
+// dropped from the view; its history stays.
+type RouteServerView struct {
+	Configured bool                 `json:"configured"`
+	Servers    []RouteServerStatus  `json:"servers"`
+	Sessions   []RouteServerSession `json:"sessions"`
+}
+
+// RouteServerStatus is one route server's last poll. Up is true when the
+// latest poll succeeded.
+type RouteServerStatus struct {
+	Name       string    `json:"name"`
+	URL        string    `json:"url"`
+	ASN        uint32    `json:"asn"`
+	Up         bool      `json:"up"`
+	Stale      bool      `json:"stale"`
+	Error      string    `json:"error,omitempty"`
+	Polled     time.Time `json:"polled,omitempty"`
+	Version    string    `json:"version,omitempty"`
+	RouterID   string    `json:"router_id,omitempty"`
+	LastReconf string    `json:"last_reconfig,omitempty"`
+	Message    string    `json:"message,omitempty"`
+	Sessions   int       `json:"sessions"`
+}
+
+// RouteServerReason is the number of routes tagged rs-asn:1101:Reason.
+type RouteServerReason struct {
+	Reason int `json:"reason"`
+	Count  int `json:"count"`
+}
+
+// RouteServerSession is one BGP session on a route server. Received is
+// the route count of the session's protocol, which includes routes the
+// server tagged rs-asn:1101:x. Filtered is the number of routes with at
+// least one such tag, and Accepted is Received minus Filtered. Reasons
+// counts each tag. MaxPrefix is the member's IX-F max_prefix for the
+// neighbor address, else Birdseye's import limit; zero means none.
+// UsedPct is Accepted as a share of MaxPrefix. Counted is false when the
+// counts could not be read; they are then zero.
+type RouteServerSession struct {
+	Server      string              `json:"server"`
+	Session     string              `json:"session"`
+	ASN         uint32              `json:"asn"`
+	Name        string              `json:"name,omitempty"`
+	Neighbor    string              `json:"neighbor,omitempty"`
+	Description string              `json:"description,omitempty"`
+	State       string              `json:"state"`
+	Established bool                `json:"established"`
+	Counted     bool                `json:"counted"`
+	Received    int                 `json:"received"`
+	Accepted    int                 `json:"accepted"`
+	Filtered    int                 `json:"filtered"`
+	Reasons     []RouteServerReason `json:"reasons"`
+	MaxPrefix   int                 `json:"max_prefix,omitempty"`
+	UsedPct     float64             `json:"used_pct,omitempty"`
+	Error       string              `json:"error,omitempty"`
+	At          time.Time           `json:"at"`
+}
+
+// RouteServerSample is one point of a session's history.
+type RouteServerSample struct {
+	At          time.Time           `json:"at"`
+	Established bool                `json:"established"`
+	Counted     bool                `json:"counted"`
+	Received    int                 `json:"received"`
+	Accepted    int                 `json:"accepted"`
+	Filtered    int                 `json:"filtered"`
+	Reasons     []RouteServerReason `json:"reasons"`
+	MaxPrefix   int                 `json:"max_prefix,omitempty"`
 }

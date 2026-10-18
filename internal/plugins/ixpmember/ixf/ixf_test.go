@@ -2,6 +2,7 @@ package ixf
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -199,7 +200,8 @@ func TestFailedFetchKeepsMembersUntilStale(t *testing.T) {
 		t.Fatalf("after size %+v", v)
 	}
 	s.mu.Lock()
-	s.view.Fetched = time.Now().Add(-3*s.refresh - time.Second)
+	old := time.Now().Add(-3*s.refresh - time.Second)
+	s.view.Fetched = &old
 	s.view.KeyID = docIdent
 	s.mu.Unlock()
 	v = s.View()
@@ -245,8 +247,93 @@ func TestFetchCancelled(t *testing.T) {
 	cancel()
 	s.fetch(ctx)
 	v := s.View()
-	if v.Error != "" || v.MemberCount != 0 || !v.Fetched.IsZero() {
+	if v.Error != "" || v.MemberCount != 0 || v.Fetched != nil {
 		t.Fatalf("%+v", v)
+	}
+}
+
+func TestViewURLDropsQuery(t *testing.T) {
+	cases := map[string]string{
+		"https://ixp.example.invalid/members.json?sig=s3cret&auth=x": "https://ixp.example.invalid/members.json",
+		"https://ixp.example.invalid/members.json?":                  "https://ixp.example.invalid/members.json",
+		"https://ixp.example.invalid" + exportPath + "?ixfid_1=2":    "https://ixp.example.invalid" + exportPath,
+		"https://ixp.example.invalid/members.json":                   "https://ixp.example.invalid/members.json",
+	}
+	for raw, want := range cases {
+		if got := viewURL(raw); got != want {
+			t.Errorf("viewURL(%q) = %q, want %q", raw, got, want)
+		}
+	}
+}
+
+func TestViewHidesQuery(t *testing.T) {
+	const secret = "QuerySecretQuerySecret1"
+	var got string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = r.URL.RawQuery
+		_, _ = io.WriteString(w, sampleIXF)
+	}))
+	defer srv.Close()
+	s := build(t, "url: "+srv.URL+"/members.json?sig="+secret+"&auth=x\n", "", nil)
+	s.fetch(context.Background())
+	v := s.View()
+	if v.Error != "" || v.MemberCount != 2 {
+		t.Fatalf("view %+v", v)
+	}
+	if got != "sig="+secret+"&auth=x" {
+		t.Fatalf("fetch dropped the query: %q", got)
+	}
+	if v.URL != srv.URL+"/members.json" || strings.Contains(v.URL, secret) {
+		t.Fatalf("view url %q", v.URL)
+	}
+}
+
+func TestFetchErrorHidesQuery(t *testing.T) {
+	const secret = "ErrSecretErrSecret1234"
+	srv := httptest.NewServer(http.NotFoundHandler())
+	base := srv.URL
+	srv.Close()
+	s := build(t, "url: "+base+"/members.json?sig="+secret+"\n", "", nil)
+	s.fetch(context.Background())
+	v := s.View()
+	if !strings.HasPrefix(v.Error, "member export: ") || v.Error == "member export: " {
+		t.Fatalf("error %q", v.Error)
+	}
+	if strings.Contains(v.Error, secret) || strings.Contains(v.Error, "members.json") {
+		t.Fatalf("error carries the request url: %q", v.Error)
+	}
+}
+
+func TestUnsetTimesAreNil(t *testing.T) {
+	s := build(t, "url: https://ixp.example.invalid/members.json\n", "", nil)
+	v := s.View()
+	if v.KeyExpires != nil || v.Fetched != nil {
+		t.Fatalf("unset times %v %v", v.KeyExpires, v.Fetched)
+	}
+	b, err := json.Marshal(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(b), "key_expires") || strings.Contains(string(b), "fetched") || strings.Contains(string(b), "0001-01-01") {
+		t.Fatalf("unset times in json: %s", b)
+	}
+}
+
+func TestViewTimesAreCopies(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, sampleIXF)
+	}))
+	defer srv.Close()
+	s := build(t, "url: "+srv.URL+"/members.json\n", "", nil)
+	s.fetch(context.Background())
+	v := s.View()
+	if v.Fetched == nil {
+		t.Fatal("fetched unset after a fetch")
+	}
+	want := *v.Fetched
+	*v.Fetched = time.Time{}
+	if got := s.View().Fetched; got == nil || !got.Equal(want) {
+		t.Fatalf("write through the view changed the source: %v want %v", got, want)
 	}
 }
 

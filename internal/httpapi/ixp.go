@@ -87,22 +87,22 @@ func IXPMemberMetrics(v plugin.MemberView, now time.Time) []byte {
 	if v.Stale {
 		members, addrs = 0, 0
 	}
-	up := v.Error == "" && !v.Stale && !v.Fetched.IsZero()
+	up := v.Error == "" && !v.Stale && v.Fetched != nil
 	writeGauge(&b, "packeteer_ixp_members", "Members in the latest IX-F import. Zero when the list is stale.",
 		sample{value: float64(members)})
 	writeGauge(&b, "packeteer_ixp_member_addresses", "LAN addresses in the latest IX-F import. Zero when the list is stale.",
 		sample{value: float64(addrs)})
 	writeGauge(&b, "packeteer_ixp_member_import_up", "1 when the latest IX-F import succeeded and the list is not stale.",
 		sample{value: boolFloat(up)})
-	if !v.Fetched.IsZero() {
-		age := now.Sub(v.Fetched).Seconds()
+	if v.Fetched != nil {
+		age := now.Sub(*v.Fetched).Seconds()
 		if age < 0 {
 			age = 0
 		}
 		writeGauge(&b, "packeteer_ixp_member_import_age_seconds", "Seconds since the last successful IX-F import.",
 			sample{value: age})
 	}
-	if !v.KeyExpires.IsZero() {
+	if v.KeyExpires != nil {
 		writeGauge(&b, "packeteer_ixp_api_key_expiry_seconds", "Unix time when the IXP Manager API key stops working.",
 			sample{value: float64(v.KeyExpires.Unix())})
 	}
@@ -148,6 +148,113 @@ func IXPFabricMetrics(v plugin.FabricView, now time.Time) []byte {
 			age = 0
 		}
 		writeGauge(&b, "packeteer_ixp_fabric_age_seconds", "Seconds since the latest fabric round.",
+			sample{value: age})
+	}
+	return []byte(b.String())
+}
+
+// routeServerSource is the Birdseye watch (#164): the latest poll and one
+// session's history. Neither fetches.
+type routeServerSource struct {
+	view    func() plugin.RouteServerView
+	history func(server, session string) ([]plugin.RouteServerSample, bool)
+}
+
+// SetIXPRouteServers installs the route-server reads (#164). Both
+// functions are called on each request. They must not fetch or announce.
+func (s *Server) SetIXPRouteServers(view func() plugin.RouteServerView, history func(server, session string) ([]plugin.RouteServerSample, bool)) {
+	if s == nil {
+		return
+	}
+	s.ixpRouteServers.Store(&routeServerSource{view: view, history: history})
+}
+
+func (s *Server) ixpRouteServerSource() (*routeServerSource, bool) {
+	src, _ := s.ixpRouteServers.Load().(*routeServerSource)
+	return src, src != nil
+}
+
+func (s *Server) handleIXPRouteServers(w http.ResponseWriter, _ *http.Request) {
+	var v plugin.RouteServerView
+	if src, ok := s.ixpRouteServerSource(); ok {
+		v = src.view()
+	}
+	if v.Servers == nil {
+		v.Servers = []plugin.RouteServerStatus{}
+	}
+	if v.Sessions == nil {
+		v.Sessions = []plugin.RouteServerSession{}
+	}
+	writeJSON(w, http.StatusOK, struct {
+		meta
+		plugin.RouteServerView
+	}{meta: s.snapshot().meta(), RouteServerView: v})
+}
+
+func (s *Server) handleIXPRouteServerHistory(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	server, session := q.Get("server"), q.Get("session")
+	if server == "" || session == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "server and session are required"})
+		return
+	}
+	src, ok := s.ixpRouteServerSource()
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "route servers are not configured"})
+		return
+	}
+	samples, found := src.history(server, session)
+	if !found {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "no history for that server and session"})
+		return
+	}
+	writeJSON(w, http.StatusOK, struct {
+		meta
+		Server  string                     `json:"server"`
+		Session string                     `json:"session"`
+		Samples []plugin.RouteServerSample `json:"samples"`
+	}{meta: s.snapshot().meta(), Server: server, Session: session, Samples: samples})
+}
+
+// IXPRouteServerMetrics renders the route-server watch. A stale server
+// counts as down and shows no sessions. There is no per-member series.
+func IXPRouteServerMetrics(v plugin.RouteServerView, now time.Time) []byte {
+	if !v.Configured {
+		return nil
+	}
+	up, newest := len(v.Servers) > 0, time.Time{}
+	for _, s := range v.Servers {
+		if !s.Up {
+			up = false
+		}
+		if s.Polled.After(newest) {
+			newest = s.Polled
+		}
+	}
+	var established, down, filtered int
+	for _, s := range v.Sessions {
+		if s.Established {
+			established++
+		} else {
+			down++
+		}
+		filtered += s.Filtered
+	}
+	var b strings.Builder
+	writeGauge(&b, "packeteer_ixp_rs_up", "1 when the latest Birdseye poll succeeded on every route server.",
+		sample{value: boolFloat(up)})
+	writeGauge(&b, "packeteer_ixp_rs_sessions_established", "Member sessions in the Established state on fresh route servers.",
+		sample{value: float64(established)})
+	writeGauge(&b, "packeteer_ixp_rs_sessions_down", "Member sessions not Established on fresh route servers.",
+		sample{value: float64(down)})
+	writeGauge(&b, "packeteer_ixp_rs_filtered_routes", "Routes tagged rs-asn:1101:x across fresh route servers.",
+		sample{value: float64(filtered)})
+	if !newest.IsZero() {
+		age := now.Sub(newest).Seconds()
+		if age < 0 {
+			age = 0
+		}
+		writeGauge(&b, "packeteer_ixp_rs_age_seconds", "Seconds since the latest Birdseye poll on any route server.",
 			sample{value: age})
 	}
 	return []byte(b.String())

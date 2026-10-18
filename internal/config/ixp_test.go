@@ -222,3 +222,32 @@ func TestIXPVantages(t *testing.T) {
 		}
 	}
 }
+
+func TestIXPRouteServersConfig(t *testing.T) {
+	y := minimalYAML + `
+ixp:
+  routeservers:
+    type: birdseye
+    config:
+      servers:
+        - {name: rs1, url: "http://192.0.2.5", asn: 64496}
+`
+	cfg, err := Parse([]byte(y))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.IXP == nil || cfg.IXP.RouteServers == nil || cfg.IXP.RouteServers.Type != "birdseye" {
+		t.Fatalf("%+v", cfg.IXP)
+	}
+	if cfg.Mode != ModeObserve || cfg.Announcer != nil || len(cfg.BGP.Neighbors) != 0 {
+		t.Fatalf("mode %s announcer %v neighbors %d", cfg.Mode, cfg.Announcer, len(cfg.BGP.Neighbors))
+	}
+	_, err = Parse([]byte(minimalYAML + "ixp:\n  routeservers: {}\n"))
+	if err == nil || !strings.Contains(err.Error(), "ixp.routeservers: type is required") {
+		t.Fatalf("missing type: %v", err)
+	}
+	inject := strings.Replace(minimalYAML, "mode: observe", "mode: inject", 1) + "ixp:\n  routeservers: {type: birdseye}\nannouncer: {type: gobgp}\n"
+	if _, err = Parse([]byte(inject)); err == nil || !strings.Contains(err.Error(), "ixp forbids mode inject") {
+		t.Fatalf("inject: %v", err)
+	}
+}

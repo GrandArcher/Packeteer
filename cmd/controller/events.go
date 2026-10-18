@@ -165,7 +165,7 @@ func (w *eventWatch) quarantines(now time.Time, changes []policy.QuarantineChang
 	}
 }
 
-// providers reports probe-source transitions. A provider first seen down
+// providerStatus reports probe-source transitions. A provider first seen down
 // is reported; one first seen up is not.
 func (w *eventWatch) providerStatus(now time.Time, st []probe.ProviderStatus) {
 	if w == nil {

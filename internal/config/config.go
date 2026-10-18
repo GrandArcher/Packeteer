@@ -189,6 +189,9 @@ type Config struct {
 	// Linkouts picks the "open in" links on the prefix, ASN, and provider
 	// pages (#211). Display only; Packeteer requests none of those sites.
 	Linkouts linkout.Config `yaml:"linkouts"`
+	// Lookup is the read-only PeeringDB / IX-F directory (#153). Nil
+	// disables it. It never announces.
+	Lookup *PluginSpec `yaml:"lookup"`
 	// IXP is exchange-operator mode (#160). Nil is an edge controller.
 	// Set, Packeteer observes only and never announces.
 	IXP *IXP `yaml:"ixp"`

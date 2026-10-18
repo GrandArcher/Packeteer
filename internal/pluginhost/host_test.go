@@ -186,6 +186,45 @@ ixp:
 	}
 }
 
+func TestIXPRouteServersDoNotAnnounce(t *testing.T) {
+	cfg := load(t, `
+ixp:
+  routeservers:
+    type: birdseye
+    config:
+      servers:
+        - {name: rs1, url: "http://192.0.2.5", asn: 64496}
+`)
+	s, err := Build(cfg, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.IXPRouteServers == nil || s.IXPRouteServers.Type != "birdseye" {
+		t.Fatalf("%+v", s.IXPRouteServers)
+	}
+	if s.Announcer != nil || len(s.RIBSources) != 0 || s.Inbound != nil || s.Mitigation != nil {
+		t.Fatalf("announce path built: %v rib %d", s.Announcer, len(s.RIBSources))
+	}
+	if !slices.Contains(s.Summary(), "ixp_routeserver birdseye") {
+		t.Fatalf("summary %v", s.Summary())
+	}
+	v := s.IXPRouteServers.Plugin.View()
+	if !v.Configured || len(v.Sessions) != 0 || len(v.Servers) != 1 {
+		t.Fatalf("%+v", v)
+	}
+	bad := load(t, `
+ixp:
+  routeservers:
+    type: birdseye
+    config:
+      servers:
+        - {name: rs1, url: "http://192.0.2.5?apikey=x", asn: 64496}
+`)
+	if _, err := Build(bad, Options{}); err == nil || !strings.Contains(err.Error(), "ixp.routeservers") {
+		t.Fatalf("bad url: %v", err)
+	}
+}
+
 func TestBuildAndLifecycle(t *testing.T) {
 	events = nil
 	cfg := load(t, "sources:\n  - type: test-source\n    name: s1\nnotifiers:\n  - type: test-notifier\n")
@@ -431,6 +470,48 @@ func TestLeakSourcesBuiltOnlyWhenEnabled(t *testing.T) {
 	}
 	_, err = Build(load(t, "packeteer_community: \"64512:666\"\nleak_watch:\n  enabled: true\n  sources: [{type: nope}]\n"), Options{})
 	if err == nil || !strings.Contains(err.Error(), `leak_watch.sources[0] (nope): unknown leak_source type "nope" (available: bmp, rislive)`) {
+		t.Fatalf("err %v", err)
+	}
+}
+
+func TestLookupIsNotARIBSource(t *testing.T) {
+	cfg := load(t, `
+lookup:
+  type: peeringdb
+  config:
+    exchanges:
+      - {name: example-ix, ix_id: 1}
+`)
+	s, err := Build(cfg, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.Lookup == nil || s.Lookup.Type != "peeringdb" {
+		t.Fatalf("%+v", s.Lookup)
+	}
+	if len(s.RIBSources) != 0 || s.Announcer != nil {
+		t.Fatalf("rib %d announcer %v", len(s.RIBSources), s.Announcer)
+	}
+	if !slices.Contains(s.Summary(), "lookup peeringdb") {
+		t.Fatalf("summary %v", s.Summary())
+	}
+	if v := s.Lookup.Plugin.View(); !v.Configured || v.NetworkCount != 0 || len(v.Memberships) != 0 {
+		t.Fatalf("%+v", v)
+	}
+}
+
+func TestLookupConfigErrorNamesTheBlock(t *testing.T) {
+	cfg := load(t, `
+lookup:
+  type: peeringdb
+  config:
+    exchanges: []
+`)
+	if _, err := Build(cfg, Options{}); err == nil || !strings.Contains(err.Error(), "lookup[0] (peeringdb)") || !strings.Contains(err.Error(), "exchanges is required") {
+		t.Fatalf("err %v", err)
+	}
+	cfg = load(t, "lookup:\n  type: nosuch\n")
+	if _, err := Build(cfg, Options{}); err == nil || !strings.Contains(err.Error(), `unknown lookup type "nosuch"`) {
 		t.Fatalf("err %v", err)
 	}
 }
