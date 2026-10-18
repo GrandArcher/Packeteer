@@ -30,7 +30,7 @@ func TestVRPsValidate(t *testing.T) {
 		{"exact match", "198.51.100.0/24", 64500, plugin.RPKIValid},
 		{"covered by max length", "203.0.113.128/26", 64501, plugin.RPKIValid},
 		{"wrong origin", "198.51.100.0/24", 64599, plugin.RPKIInvalid},
-		{"longer than max length", "203.0.113.0/27", 64501, plugin.RPKINotFound},
+		{"longer than max length", "203.0.113.0/27", 64501, plugin.RPKIInvalid},
 		{"no covering payload", "192.0.2.0/24", 64500, plugin.RPKINotFound},
 		{"ipv6 valid", "2001:db8:1::/48", 64502, plugin.RPKIValid},
 		{"ipv6 wrong origin", "2001:db8:1::/48", 64999, plugin.RPKIInvalid},
@@ -49,6 +49,39 @@ func TestVRPsValidate(t *testing.T) {
 	}
 	if table.Len() != 3 {
 		t.Fatalf("Len = %d, want 3", table.Len())
+	}
+}
+
+// #158: RFC 6811 counts a payload as covering regardless of its max length,
+// so a route longer than every matching max length (a more-specific hijack)
+// is invalid, not not-found.
+func TestVRPsValidateMaxLength(t *testing.T) {
+	table := NewVRPs()
+	table.Apply([]Change{
+		{Prefix: p(t, "192.0.2.0/24"), MaxLen: 24, ASN: 64500},
+		{Prefix: p(t, "2001:db8::/32"), MaxLen: 32, ASN: 64500},
+		{Prefix: p(t, "198.51.100.0/24"), MaxLen: 24, ASN: 64501},
+		{Prefix: p(t, "198.51.100.0/22"), MaxLen: 25, ASN: 64501},
+	})
+
+	tests := []struct {
+		name   string
+		prefix string
+		origin uint32
+		want   plugin.RPKIValidity
+	}{
+		{"ipv4 longer than max length", "192.0.2.0/25", 64500, plugin.RPKIInvalid},
+		{"ipv4 at max length", "192.0.2.0/24", 64500, plugin.RPKIValid},
+		{"ipv6 longer than max length", "2001:db8::/48", 64500, plugin.RPKIInvalid},
+		{"ipv6 at max length", "2001:db8::/32", 64500, plugin.RPKIValid},
+		{"another covering payload matches", "198.51.100.0/25", 64501, plugin.RPKIValid},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := table.Validate(p(t, tt.prefix), tt.origin); got != tt.want {
+				t.Fatalf("Validate(%s, %d) = %q, want %q", tt.prefix, tt.origin, got, tt.want)
+			}
+		})
 	}
 }
 

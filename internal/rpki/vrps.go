@@ -114,9 +114,10 @@ func (t *VRPs) removeLocked(prefix netip.Prefix, maxLen uint8, asn uint32) {
 }
 
 // Validate applies RFC 6811 to prefix and origin: valid when a covering
-// payload authorizes the origin, invalid when a payload covers the prefix
-// but none matches, and not-found when nothing covers it. An invalid
-// prefix argument is unknown.
+// payload authorizes the origin at a max length no shorter than the prefix,
+// invalid when a payload covers the prefix but none matches (a prefix
+// longer than every matching max length is invalid), and not-found when
+// nothing covers it. An invalid prefix argument is unknown.
 func (t *VRPs) Validate(prefix netip.Prefix, origin uint32) plugin.RPKIValidity {
 	if t == nil || !prefix.IsValid() {
 		return plugin.RPKIUnknown
@@ -129,11 +130,8 @@ func (t *VRPs) Validate(prefix netip.Prefix, origin uint32) plugin.RPKIValidity 
 	for i := 0; i <= bits; i++ {
 		cover := netip.PrefixFrom(prefix.Addr(), i).Masked()
 		for _, e := range t.m[cover] {
-			if int(e.maxLen) < bits {
-				continue
-			}
 			covered = true
-			if e.asn == origin {
+			if e.asn == origin && int(e.maxLen) >= bits {
 				return plugin.RPKIValid
 			}
 		}
