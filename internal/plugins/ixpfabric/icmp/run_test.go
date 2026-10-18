@@ -136,9 +136,10 @@ func v6(ip string) plugin.IXPAddress {
 func boolPtr(v bool) *bool { return &v }
 
 func memberView(members []plugin.IXPMember) plugin.MemberView {
+	fetched := time.Unix(50, 0).UTC()
 	return plugin.MemberView{
 		Configured: true,
-		Fetched:    time.Unix(50, 0).UTC(),
+		Fetched:    &fetched,
 		IXPs: []plugin.IXPSite{{
 			ID:    1,
 			VLANs: []plugin.IXPVLAN{{ID: 10, IPv4: "192.0.2.0/24", IPv6: "2001:db8::/64"}},
