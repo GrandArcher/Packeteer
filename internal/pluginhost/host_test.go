@@ -3,6 +3,7 @@ package pluginhost
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -183,6 +184,45 @@ ixp:
 `)
 	if _, err := Build(bad, Options{}); err == nil || !strings.Contains(err.Error(), "member_pps") {
 		t.Fatalf("member_pps: %v", err)
+	}
+}
+
+func TestIXPRouteServersDoNotAnnounce(t *testing.T) {
+	cfg := load(t, `
+ixp:
+  routeservers:
+    type: birdseye
+    config:
+      servers:
+        - {name: rs1, url: "http://192.0.2.5", asn: 64496}
+`)
+	s, err := Build(cfg, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.IXPRouteServers == nil || s.IXPRouteServers.Type != "birdseye" {
+		t.Fatalf("%+v", s.IXPRouteServers)
+	}
+	if s.Announcer != nil || len(s.RIBSources) != 0 || s.Inbound != nil || s.Mitigation != nil {
+		t.Fatalf("announce path built: %v rib %d", s.Announcer, len(s.RIBSources))
+	}
+	if !slices.Contains(s.Summary(), "ixp_routeserver birdseye") {
+		t.Fatalf("summary %v", s.Summary())
+	}
+	v := s.IXPRouteServers.Plugin.View()
+	if !v.Configured || len(v.Sessions) != 0 || len(v.Servers) != 1 {
+		t.Fatalf("%+v", v)
+	}
+	bad := load(t, `
+ixp:
+  routeservers:
+    type: birdseye
+    config:
+      servers:
+        - {name: rs1, url: "http://192.0.2.5?apikey=x", asn: 64496}
+`)
+	if _, err := Build(bad, Options{}); err == nil || !strings.Contains(err.Error(), "ixp.routeservers") {
+		t.Fatalf("bad url: %v", err)
 	}
 }
 
@@ -450,5 +490,122 @@ func TestRPKISourcesBuiltOnlyWhenEnabled(t *testing.T) {
 	_, err = Build(load(t, "rpki:\n  enabled: true\n  sources: [{type: nope}]\n"), Options{})
 	if err == nil || !strings.Contains(err.Error(), `rpki.sources[0] (nope): unknown rpki type "nope" (available: rtr)`) {
 		t.Fatalf("err %v", err)
+	}
+}
+
+func TestLookupIsNotARIBSource(t *testing.T) {
+	cfg := load(t, `
+lookup:
+  type: peeringdb
+  config:
+    exchanges:
+      - {name: example-ix, ix_id: 1}
+`)
+	s, err := Build(cfg, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.Lookup == nil || s.Lookup.Type != "peeringdb" {
+		t.Fatalf("%+v", s.Lookup)
+	}
+	if len(s.RIBSources) != 0 || s.Announcer != nil {
+		t.Fatalf("rib %d announcer %v", len(s.RIBSources), s.Announcer)
+	}
+	if !slices.Contains(s.Summary(), "lookup peeringdb") {
+		t.Fatalf("summary %v", s.Summary())
+	}
+	if v := s.Lookup.Plugin.View(); !v.Configured || v.NetworkCount != 0 || len(v.Memberships) != 0 {
+		t.Fatalf("%+v", v)
+	}
+}
+
+func TestLookupConfigErrorNamesTheBlock(t *testing.T) {
+	cfg := load(t, `
+lookup:
+  type: peeringdb
+  config:
+    exchanges: []
+`)
+	if _, err := Build(cfg, Options{}); err == nil || !strings.Contains(err.Error(), "lookup[0] (peeringdb)") || !strings.Contains(err.Error(), "exchanges is required") {
+		t.Fatalf("err %v", err)
+	}
+	cfg = load(t, "lookup:\n  type: nosuch\n")
+	if _, err := Build(cfg, Options{}); err == nil || !strings.Contains(err.Error(), `unknown lookup type "nosuch"`) {
+		t.Fatalf("err %v", err)
+	}
+}
+
+const portExchange = `
+exchanges:
+  - name: ix-lab
+    lans: [203.0.113.0/24]
+%s    peers:
+      - name: ix-peer-a
+        asn: 64501
+        next_hop: 203.0.113.11
+        source_ip: 192.0.2.31
+bgp:
+  neighbors:
+    - address: 192.0.2.254
+      add_path: true
+telemetry:
+  - type: fixed
+    config:
+      providers:
+        - {name: ix-lab, commit_mbps: 1, usage_mbps: 5}
+`
+
+func TestTelemetryBindsToAnExchangePort(t *testing.T) {
+	with := load(t, fmt.Sprintf(portExchange, "    port: {capacity_mbps: 1000}\n"))
+	s, err := Build(with, Options{})
+	if err != nil {
+		t.Fatalf("a binding named like an exchange with a port block was refused: %v", err)
+	}
+	if len(s.Telemetry) != 1 {
+		t.Fatalf("telemetry = %d", len(s.Telemetry))
+	}
+	without := load(t, fmt.Sprintf(portExchange, ""))
+	if _, err := Build(without, Options{}); err == nil || !strings.Contains(err.Error(), `provider "ix-lab" is not configured`) {
+		t.Fatalf("a binding with no port block: err = %v", err)
+	}
+}
+
+func TestIXPCorrelateDoesNotAnnounce(t *testing.T) {
+	const block = `
+ixp:
+  members:
+    type: ixf
+    config:
+      url: https://ixp.example.invalid/members.json
+  vantages:
+    - {name: lan1-v4, vlan_id: 10, address: 192.0.2.8}
+  fabric: {type: icmp}
+  correlate:
+    type: topology
+    config:
+      rounds: 3
+`
+	s, err := Build(load(t, block), Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.IXPCorrelate == nil || s.IXPCorrelate.Type != "topology" {
+		t.Fatalf("%+v", s.IXPCorrelate)
+	}
+	if s.Announcer != nil || len(s.RIBSources) != 0 || s.Inbound != nil || s.Mitigation != nil {
+		t.Fatalf("announce path built: %v rib %d", s.Announcer, len(s.RIBSources))
+	}
+	sum := s.Summary()
+	iFab, iCor := slices.Index(sum, "ixp_fabric icmp"), slices.Index(sum, "ixp_correlate topology")
+	if iFab < 0 || iCor < iFab {
+		t.Fatalf("the correlator must start after the fabric prober: %v", sum)
+	}
+	v := s.IXPCorrelate.Plugin.View()
+	if !v.Configured || len(v.Groups) != 0 || len(v.Members) != 0 {
+		t.Fatalf("%+v", v)
+	}
+	bad := strings.Replace(block, "rounds: 3", "rounds: 99", 1)
+	if _, err := Build(load(t, bad), Options{}); err == nil || !strings.Contains(err.Error(), "ixp.correlate") {
+		t.Fatalf("bad rounds: %v", err)
 	}
 }

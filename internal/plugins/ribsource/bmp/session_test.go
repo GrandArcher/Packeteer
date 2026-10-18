@@ -60,6 +60,7 @@ func TestPeerDownReason(t *testing.T) {
 		{"local no notification", gobmp.BMP_PEER_DOWN_REASON_LOCAL_NO_NOTIFICATION, nil, "local system closed"},
 		{"peer de-configured", gobmp.BMP_PEER_DOWN_REASON_PEER_DE_CONFIGURED, nil, "peer de-configured"},
 		{"unknown", 9, nil, "unknown reason 9"},
+		{"unknown reason code 0", gobmp.BMP_peerDownByUnknownReason, nil, "unknown reason 0"},
 		{"cease max prefixes", gobmp.BMP_PEER_DOWN_REASON_LOCAL_BGP_NOTIFICATION,
 			bgp.NewBGPNotificationMessage(bgp.BGP_ERROR_CEASE, bgp.BGP_ERROR_SUB_MAXIMUM_NUMBER_OF_PREFIXES_REACHED, nil),
 			"local system closed: Cease subcode 1 (maximum number of prefixes reached)"},

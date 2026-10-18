@@ -192,6 +192,9 @@ type Config struct {
 	// Linkouts picks the "open in" links on the prefix, ASN, and provider
 	// pages (#211). Display only; Packeteer requests none of those sites.
 	Linkouts linkout.Config `yaml:"linkouts"`
+	// Lookup is the read-only PeeringDB / IX-F directory (#153). Nil
+	// disables it. It never announces.
+	Lookup *PluginSpec `yaml:"lookup"`
 	// IXP is exchange-operator mode (#160). Nil is an edge controller.
 	// Set, Packeteer observes only and never announces.
 	IXP *IXP `yaml:"ixp"`
@@ -589,6 +592,23 @@ type Exchange struct {
 	// MaxPrefixWarnPct is the share of a peer's max_prefix at which
 	// exchange.max_prefix fires (#147). Omitted or 0 uses the default.
 	MaxPrefixWarnPct int `yaml:"max_prefix_warn_pct"`
+	// Port is the one interface every peer shares (#151). Nil leaves each
+	// peer an independent provider.
+	Port *ExchangePort `yaml:"port"`
+}
+
+// ExchangePort is an exchange's shared port. Its usage comes from a
+// telemetry binding named like the exchange (one interface); commit and cost
+// planning treat the peers as drawing from it.
+type ExchangePort struct {
+	// CapacityMbps is the port speed. Planned moves never push the port's
+	// load past it.
+	CapacityMbps float64 `yaml:"capacity_mbps"`
+	// CommitMbps is the port's own commit on its billable 95th, 0 for none.
+	CommitMbps float64 `yaml:"commit_mbps"`
+	// PortCost is the flat monthly fee. Set, it makes every peer's marginal
+	// cost 0 per Mbps while the port has room, so peers may not set cost.
+	PortCost *float64 `yaml:"port_cost"`
 }
 
 // ExchangePeer is one peer on an exchange.

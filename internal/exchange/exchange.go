@@ -19,6 +19,8 @@ type Exchange struct {
 	Name  string
 	LANs  []netip.Prefix
 	Peers []Peer
+	// Port is the shared port (#151), nil when the exchange has none.
+	Port *PortConfig
 }
 
 // Peer is one configured peer (a provider).
@@ -44,6 +46,8 @@ type Stats struct {
 	Degraded      bool      `json:"degraded"`
 	DegradedPeers []string  `json:"degraded_peers"`
 	DegradedSince time.Time `json:"degraded_since,omitzero"`
+	// Port is the shared port's configuration and latest reading (#151).
+	Port *PortStats `json:"port,omitempty"`
 }
 
 // PeerStats is one configured peer.

@@ -139,3 +139,88 @@ func TestConfig(t *testing.T) {
 		}
 	}
 }
+
+func portInput(capacity, commit float64, row plugin.Usage, have bool, vol float64) plugin.PlanInput {
+	return plugin.PlanInput{
+		Now: time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC),
+		Providers: []plugin.PlanProvider{
+			prov("transit", 10),
+			{Name: "ix-a", Up: true, HasCost: true, Port: "ix"},
+			{Name: "ix-b", Up: true, HasCost: true, Port: "ix"},
+		},
+		Ports: []plugin.PlanPort{{Name: "ix", CapacityMbps: capacity, CommitMbps: commit, Usage: row, HaveRow: have}},
+		Prefixes: []plugin.PlanPrefix{
+			{Prefix: p1, Native: "transit", Current: "transit", VolumeMbps: vol,
+				Paths: []plugin.PlanPath{path("transit", 0, 40), path("ix-a", 0, 40), path("ix-b", 0, 40)}},
+			{Prefix: p2, Native: "transit", Current: "transit", VolumeMbps: vol,
+				Paths: []plugin.PlanPath{path("transit", 0, 40), path("ix-a", 0, 40), path("ix-b", 0, 40)}},
+		},
+	}
+}
+
+func portRow(p95 float64) plugin.Usage {
+	return plugin.Usage{
+		Provider: "ix", CommitMbps: 1, Samples: 10, Single: true, UsageMbps: p95,
+		Updated: time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC),
+	}
+}
+
+func TestPortPeerCostsNothingUntilThePortIsFull(t *testing.T) {
+	s := build(t, "")
+	// Both prefixes fit: 100 of 1000 plus 2 x 100.
+	moves := s.Plan(portInput(1000, 0, portRow(100), true, 100))
+	if len(moves) != 2 {
+		t.Fatalf("moves %+v, want both prefixes on the free port", moves)
+	}
+	for _, m := range moves {
+		if m.Savings != 10*100 {
+			t.Fatalf("savings %v, want the whole transit price (10 per Mbps x 100 Mbps)", m.Savings)
+		}
+	}
+	// Only one fits in 150 Mbps of room, the second is held back.
+	moves = s.Plan(portInput(1000, 0, portRow(850), true, 100))
+	if len(moves) != 1 || moves[0].Prefix != p1 {
+		t.Fatalf("moves %+v, want only the first prefix (room for one)", moves)
+	}
+	// A port commit binds before the capacity does.
+	moves = s.Plan(portInput(1000, 250, portRow(100), true, 100))
+	if len(moves) != 1 {
+		t.Fatalf("moves %+v, want one move under a 250 Mbps commit", moves)
+	}
+}
+
+func TestPortRefusesWithoutAFreshReadingOrAVolume(t *testing.T) {
+	s := build(t, "")
+	stale := portRow(10)
+	stale.Updated = stale.Updated.Add(-time.Hour)
+	for name, in := range map[string]plugin.PlanInput{
+		"no row":         portInput(1000, 0, plugin.Usage{}, false, 100),
+		"stale row":      portInput(1000, 0, stale, true, 100),
+		"unknown volume": portInput(1000, 0, portRow(10), true, 0),
+	} {
+		if moves := s.Plan(in); len(moves) != 0 {
+			t.Errorf("%s: moves %+v onto a port that cannot be checked", name, moves)
+		}
+	}
+}
+
+func TestPortBooksLockedAndActiveSteers(t *testing.T) {
+	s := build(t, "")
+	in := portInput(1000, 0, portRow(850), true, 100)
+	// p2 is a performance steer onto the port: its 100 Mbps is not in the
+	// row yet, so the port has 50 Mbps of room left and p1 must stay.
+	in.Prefixes[1].Locked = true
+	in.Prefixes[1].Current = "ix-b"
+	if moves := s.Plan(in); len(moves) != 0 {
+		t.Fatalf("moves %+v ignored the locked steer's volume", moves)
+	}
+	// An active cost steer is already in the row. Replanned from native it
+	// frees its volume first, so it keeps its place.
+	in = portInput(1000, 0, portRow(950), true, 100)
+	in.Prefixes = in.Prefixes[:1]
+	in.Prefixes[0].Current, in.Prefixes[0].Reversible = "ix-a", true
+	moves := s.Plan(in)
+	if len(moves) != 1 || moves[0].Provider != "ix-a" {
+		t.Fatalf("moves %+v, want the active steer kept", moves)
+	}
+}

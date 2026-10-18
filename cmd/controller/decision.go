@@ -124,12 +124,22 @@ func policyConfig(cfg *config.Config) (policy.Config, error) {
 	if f := cfg.FlapQuarantine; !f.Disabled {
 		pc.Flap = policy.FlapConfig{MaxFlips: f.MaxFlips, Window: f.Window, Cooldown: f.Cooldown, MaxCooldown: f.MaxCooldown}
 	}
+	ported := map[string]bool{}
+	for _, ex := range cfg.Exchanges {
+		if ex.Port != nil {
+			ported[ex.Name] = true
+			pc.Ports = append(pc.Ports, policy.PortPolicy{Name: ex.Name, CapacityMbps: ex.Port.CapacityMbps, CommitMbps: ex.Port.CommitMbps})
+		}
+	}
 	for _, p := range cfg.Providers {
 		if p.Exclude {
 			pc.Excluded[p.Name] = true
 		}
 		pp := policy.ProviderPolicy{
 			Name: p.Name, Group: p.Group, Precedence: p.Precedence, CCDisable: p.CCDisable,
+		}
+		if ported[p.Exchange] {
+			pp.Port = p.Exchange
 		}
 		if p.Cost != nil {
 			pp.Cost, pp.HasCost = *p.Cost, true

@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/netip"
 	"sync"
+	"time"
 
 	"github.com/GrandArcher/Packeteer/internal/config"
 	"github.com/GrandArcher/Packeteer/internal/exchange"
@@ -15,18 +16,15 @@ import (
 	"github.com/GrandArcher/Packeteer/internal/rpki"
 )
 
-// wireExchanges gives the ops API the exchange statistics (#27). The next
-// hop counts walk every learned path, so they are rebuilt when the RIB
-// generation or the RPKI data changes. It also starts the member
-// availability history (#156), which stops with ctx, and the offload
-// report (#152).
-func wireExchanges(ctx context.Context, cfg *config.Config, col *httpapi.Collector, srv *httpapi.Server, view *rib.View, plugins *pluginhost.Set, decider *policy.Engine, origins *rpki.Set) {
-	if len(cfg.Exchanges) == 0 || view == nil {
-		return
-	}
+// exchangesFromConfig is the configured exchanges as the ops API and the
+// alerts see them.
+func exchangesFromConfig(cfg *config.Config) []exchange.Exchange {
 	var exs []exchange.Exchange
 	for _, ex := range cfg.Exchanges {
 		e := exchange.Exchange{Name: ex.Name, LANs: ex.ExchangeLANs()}
+		if pt := ex.Port; pt != nil {
+			e.Port = &exchange.PortConfig{CapacityMbps: pt.CapacityMbps, CommitMbps: pt.CommitMbps, PortCost: pt.PortCost}
+		}
 		for _, p := range ex.Peers {
 			nh, err := netip.ParseAddr(p.NextHop)
 			if err != nil {
@@ -36,6 +34,19 @@ func wireExchanges(ctx context.Context, cfg *config.Config, col *httpapi.Collect
 		}
 		exs = append(exs, e)
 	}
+	return exs
+}
+
+// wireExchanges gives the ops API the exchange statistics (#27). The next
+// hop counts walk every learned path, so they are rebuilt when the RIB
+// generation or the RPKI data changes. It also starts the member
+// availability history (#156), which stops with ctx, and the offload
+// report (#152).
+func wireExchanges(ctx context.Context, cfg *config.Config, col *httpapi.Collector, srv *httpapi.Server, view *rib.View, plugins *pluginhost.Set, decider *policy.Engine, origins *rpki.Set) {
+	if len(cfg.Exchanges) == 0 || view == nil {
+		return
+	}
+	exs := exchangesFromConfig(cfg)
 	lans := exchange.LANs(exs)
 	var mu sync.Mutex
 	var gen, rpkiVer uint64
@@ -59,6 +70,11 @@ func wireExchanges(ctx context.Context, cfg *config.Config, col *httpapi.Collect
 		return cached
 	}
 	col.SetExchanges(exs, hops)
+	if plugins != nil && plugins.Scorer != nil {
+		if s, ok := plugins.Scorer.Plugin.(interface{ TelemetryMaxAge() time.Duration }); ok {
+			col.SetPortMaxAge(s.TelemetryMaxAge())
+		}
+	}
 
 	// Member counts over time (#156): in memory, read-only.
 	hist := exchange.NewHistory()

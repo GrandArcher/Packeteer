@@ -222,3 +222,73 @@ func TestIXPVantages(t *testing.T) {
 		}
 	}
 }
+
+func TestIXPRouteServersConfig(t *testing.T) {
+	y := minimalYAML + `
+ixp:
+  routeservers:
+    type: birdseye
+    config:
+      servers:
+        - {name: rs1, url: "http://192.0.2.5", asn: 64496}
+`
+	cfg, err := Parse([]byte(y))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.IXP == nil || cfg.IXP.RouteServers == nil || cfg.IXP.RouteServers.Type != "birdseye" {
+		t.Fatalf("%+v", cfg.IXP)
+	}
+	if cfg.Mode != ModeObserve || cfg.Announcer != nil || len(cfg.BGP.Neighbors) != 0 {
+		t.Fatalf("mode %s announcer %v neighbors %d", cfg.Mode, cfg.Announcer, len(cfg.BGP.Neighbors))
+	}
+	_, err = Parse([]byte(minimalYAML + "ixp:\n  routeservers: {}\n"))
+	if err == nil || !strings.Contains(err.Error(), "ixp.routeservers: type is required") {
+		t.Fatalf("missing type: %v", err)
+	}
+	inject := strings.Replace(minimalYAML, "mode: observe", "mode: inject", 1) + "ixp:\n  routeservers: {type: birdseye}\nannouncer: {type: gobgp}\n"
+	if _, err = Parse([]byte(inject)); err == nil || !strings.Contains(err.Error(), "ixp forbids mode inject") {
+		t.Fatalf("inject: %v", err)
+	}
+}
+
+const ixpCorrelateBlock = `ixp:
+  members:
+    type: ixf
+    config:
+      url: https://ixp.example.invalid/members.json
+  vantages:
+    - {name: lan1-v4, vlan_id: 10, address: 192.0.2.8}
+  fabric: {type: icmp}
+  correlate:
+    type: topology
+    config:
+      min_members: 4
+      bundles:
+        - {name: core-1, switches: [1, 2]}
+`
+
+func TestIXPCorrelateConfig(t *testing.T) {
+	cfg, err := Parse([]byte(minimalYAML + ixpCorrelateBlock))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.IXP == nil || cfg.IXP.Correlate == nil || cfg.IXP.Correlate.Type != "topology" {
+		t.Fatalf("%+v", cfg.IXP)
+	}
+
+	noFabric := "ixp:\n  correlate: {type: topology}\n"
+	_, err = Parse([]byte(minimalYAML + noFabric))
+	if err == nil || !strings.Contains(err.Error(), "ixp.correlate requires ixp.fabric") {
+		t.Fatalf("no fabric: %v", err)
+	}
+	_, err = Parse([]byte(minimalYAML + "ixp:\n  correlate: {}\n"))
+	if err == nil || !strings.Contains(err.Error(), "ixp.correlate: type is required") {
+		t.Fatalf("no type: %v", err)
+	}
+	inject := strings.Replace(minimalYAML, "mode: observe", "mode: inject", 1) + ixpCorrelateBlock + "announcer: {type: gobgp}\n"
+	_, err = Parse([]byte(inject))
+	if err == nil || !strings.Contains(err.Error(), "ixp forbids mode inject") || !strings.Contains(err.Error(), "ixp forbids announcer") {
+		t.Fatalf("inject with correlate: %v", err)
+	}
+}

@@ -14,11 +14,28 @@ const KindMemberSource Kind = "ixp_member"
 // input to Decide, and it never announces.
 const KindFabric Kind = "ixp_fabric"
 
+// KindRouteServer is the Birdseye route-server watch (#164). It reads
+// route-server state with GET only and keeps it in its own store. It is
+// not a RIB source, not an input to Decide, and it never announces.
+const KindRouteServer Kind = "ixp_routeserver"
+
+// KindCorrelator is the fabric incident correlator (#163). It groups the
+// fabric probe samples by switch, colo, and core bundle and tells a fabric
+// problem from a member problem. It is not a provider, not an input to
+// Decide, and it never announces.
+const KindCorrelator Kind = "ixp_correlate"
+
 // MemberSources is the registry for ixp.members.
 var MemberSources = NewRegistry[MemberSource](KindMemberSource)
 
 // FabricProbes is the registry for ixp.fabric.
 var FabricProbes = NewRegistry[FabricProbe](KindFabric)
+
+// RouteServerWatches is the registry for ixp.routeservers.
+var RouteServerWatches = NewRegistry[RouteServerWatch](KindRouteServer)
+
+// FabricCorrelators is the registry for ixp.correlate.
+var FabricCorrelators = NewRegistry[FabricCorrelator](KindCorrelator)
 
 // MemberSource imports an IX-F member list. View never blocks and never
 // fetches. The slices it returns must not be modified. SetEventSink is
@@ -38,8 +55,8 @@ type MemberView struct {
 	URL          string      `json:"url,omitempty"`
 	Manager      bool        `json:"manager"`
 	KeyID        string      `json:"key_id,omitempty"`
-	KeyExpires   time.Time   `json:"key_expires,omitempty"`
-	Fetched      time.Time   `json:"fetched,omitempty"`
+	KeyExpires   *time.Time  `json:"key_expires,omitempty"`
+	Fetched      *time.Time  `json:"fetched,omitempty"`
 	Stale        bool        `json:"stale"`
 	Error        string      `json:"error,omitempty"`
 	MemberCount  int         `json:"member_count"`
@@ -195,4 +212,173 @@ type FabricSample struct {
 	PastTolerance bool           `json:"past_tolerance"`
 	Error         string         `json:"error,omitempty"`
 	At            time.Time      `json:"at"`
+}
+
+// RouteServerWatch polls Birdseye on each route server and keeps a short
+// per-session history (#164). View and History never block and never
+// fetch. SetMembers and SetEventSink are called before Start. An
+// implementation must not announce, must not write the RIB, and must not
+// call Decide.
+type RouteServerWatch interface {
+	Lifecycle
+	View() RouteServerView
+	// History returns one session's samples, oldest first. The bool is
+	// false when the server and session are not known.
+	History(server, session string) ([]RouteServerSample, bool)
+	SetMembers(fn func() MemberView)
+	SetEventSink(fn func(Event))
+}
+
+// RouteServerView is the latest poll of every configured route server.
+// A server whose polls keep failing is marked Stale and its sessions are
+// dropped from the view; its history stays.
+type RouteServerView struct {
+	Configured bool                 `json:"configured"`
+	Servers    []RouteServerStatus  `json:"servers"`
+	Sessions   []RouteServerSession `json:"sessions"`
+}
+
+// RouteServerStatus is one route server's last poll. Up is true when the
+// latest poll succeeded.
+type RouteServerStatus struct {
+	Name       string    `json:"name"`
+	URL        string    `json:"url"`
+	ASN        uint32    `json:"asn"`
+	Up         bool      `json:"up"`
+	Stale      bool      `json:"stale"`
+	Error      string    `json:"error,omitempty"`
+	Polled     time.Time `json:"polled,omitempty"`
+	Version    string    `json:"version,omitempty"`
+	RouterID   string    `json:"router_id,omitempty"`
+	LastReconf string    `json:"last_reconfig,omitempty"`
+	Message    string    `json:"message,omitempty"`
+	Sessions   int       `json:"sessions"`
+}
+
+// RouteServerReason is the number of routes tagged rs-asn:1101:Reason.
+type RouteServerReason struct {
+	Reason int `json:"reason"`
+	Count  int `json:"count"`
+}
+
+// RouteServerSession is one BGP session on a route server. Received is
+// the route count of the session's protocol, which includes routes the
+// server tagged rs-asn:1101:x. Filtered is the number of routes with at
+// least one such tag, and Accepted is Received minus Filtered. Reasons
+// counts each tag. MaxPrefix is the member's IX-F max_prefix for the
+// neighbor address, else Birdseye's import limit; zero means none.
+// UsedPct is Accepted as a share of MaxPrefix. Counted is false when the
+// counts could not be read; they are then zero. Scanned is true when
+// the session's routes were listed this poll (ixp.routeservers
+// route_signals); Blackhole is then the number of routes that carry the
+// RFC 7999 community 65535:666, and ScanError says why a listing failed.
+type RouteServerSession struct {
+	Server      string              `json:"server"`
+	Session     string              `json:"session"`
+	ASN         uint32              `json:"asn"`
+	Name        string              `json:"name,omitempty"`
+	Neighbor    string              `json:"neighbor,omitempty"`
+	Description string              `json:"description,omitempty"`
+	State       string              `json:"state"`
+	Established bool                `json:"established"`
+	Counted     bool                `json:"counted"`
+	Received    int                 `json:"received"`
+	Accepted    int                 `json:"accepted"`
+	Filtered    int                 `json:"filtered"`
+	Reasons     []RouteServerReason `json:"reasons"`
+	MaxPrefix   int                 `json:"max_prefix,omitempty"`
+	UsedPct     float64             `json:"used_pct,omitempty"`
+	Scanned     bool                `json:"scanned"`
+	Blackhole   int                 `json:"blackhole"`
+	ScanError   string              `json:"scan_error,omitempty"`
+	Error       string              `json:"error,omitempty"`
+	At          time.Time           `json:"at"`
+}
+
+// RouteServerSample is one point of a session's history.
+type RouteServerSample struct {
+	At          time.Time           `json:"at"`
+	Established bool                `json:"established"`
+	Counted     bool                `json:"counted"`
+	Received    int                 `json:"received"`
+	Accepted    int                 `json:"accepted"`
+	Filtered    int                 `json:"filtered"`
+	Reasons     []RouteServerReason `json:"reasons"`
+	MaxPrefix   int                 `json:"max_prefix,omitempty"`
+	Scanned     bool                `json:"scanned"`
+	Blackhole   int                 `json:"blackhole"`
+}
+
+// Correlation group scopes.
+const (
+	ScopeSwitch = "switch"
+	ScopeColo   = "colo"
+	ScopeBundle = "bundle"
+)
+
+// FabricCorrelator reads the fabric probe view and raises
+// ixp.fabric_degraded when many members behind one switch, colo, or core
+// bundle degrade together, and ixp.member_degraded when one member does
+// alone (#163). View never blocks. SetFabric and SetEventSink are called
+// before Start. An implementation must not announce, must not write the
+// RIB, and must not call Decide.
+type FabricCorrelator interface {
+	Lifecycle
+	View() CorrelationView
+	SetFabric(fn func() FabricView)
+	SetEventSink(fn func(Event))
+}
+
+// CorrelationView is the latest evaluated fabric round. Groups is every
+// switch, colo, and bundle that had a measured member. Members is each
+// member that is degraded on its own, outside every degraded group.
+type CorrelationView struct {
+	Configured bool                `json:"configured"`
+	Stale      bool                `json:"stale"`
+	Round      time.Time           `json:"round,omitempty"`
+	Groups     []CorrelationGroup  `json:"groups"`
+	Members    []CorrelationMember `json:"members"`
+}
+
+// CorrelationGroup is one switch, colo, or bundle in one round. Members
+// is the count of member ASNs measured behind it. A member is degraded
+// there when every one of its measured addresses behind the group is past
+// tolerance from every vantage that measured it. Active is true once the
+// group has met the thresholds for the configured number of rounds.
+type CorrelationGroup struct {
+	Scope       string   `json:"scope"`
+	IXPID       int      `json:"ixp_id"`
+	Name        string   `json:"name"`
+	Members     int      `json:"members"`
+	Degraded    int      `json:"degraded"`
+	DegradedPct float64  `json:"degraded_pct"`
+	Active      bool     `json:"active"`
+	ASNs        []uint32 `json:"asns"`
+}
+
+// CorrelationMember is one member degraded on its own. Active is true once
+// it has held for the configured number of rounds.
+type CorrelationMember struct {
+	ASN       uint32 `json:"asn"`
+	Name      string `json:"name,omitempty"`
+	Addresses int    `json:"addresses"`
+	Active    bool   `json:"active"`
+}
+
+// ValidLabel reports whether s is a short URL-safe label: a letter or
+// digit, then letters, digits, '.', '_' or '-', at most 64 characters.
+// Vantage, route server, exchange, and bundle names use it.
+func ValidLabel(s string) bool {
+	if s == "" || len(s) > 64 {
+		return false
+	}
+	for i, c := range s {
+		switch {
+		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9':
+		case i > 0 && (c == '.' || c == '_' || c == '-'):
+		default:
+			return false
+		}
+	}
+	return true
 }

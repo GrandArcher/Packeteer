@@ -60,6 +60,19 @@ func classifyURL(raw, apiKey string) (string, bool, error) {
 	return raw, false, nil
 }
 
+// viewURL is the URL the member view shows. The whole query string goes:
+// a named document can carry a secret under any key name, and the manager
+// export's filters are not needed to identify the source.
+func viewURL(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return ""
+	}
+	u.RawQuery = ""
+	u.ForceQuery = false
+	return u.String()
+}
+
 // urlHasKey reports whether the API key or its secret appears in raw or
 // in the decoded URL. url.Parse decodes the path but String keeps the
 // original percent-encoding, so both forms are checked.

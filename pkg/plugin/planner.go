@@ -46,12 +46,29 @@ type PlanProvider struct {
 	// destination and a prefix native to it is not cost-steered.
 	Cost    float64
 	HasCost bool
+	// Port names the shared exchange port this provider's peer draws
+	// from (#151). Empty for a provider that is not an exchange peer on a
+	// port.
+	Port string
+}
+
+// PlanPort is one exchange port (#151): the interface every peer of the
+// exchange shares. CommitMbps is 0 when the port has no commit. Usage is the
+// telemetry row bound to the port; HaveRow is false when none was reported.
+// A scorer must not plan a move onto a peer of a port it cannot read.
+type PlanPort struct {
+	Name         string
+	CapacityMbps float64
+	CommitMbps   float64
+	Usage        Usage
+	HaveRow      bool
 }
 
 // PlanInput is a snapshot. Plan must not announce or touch the network.
 type PlanInput struct {
 	Now       time.Time
 	Providers []PlanProvider
+	Ports     []PlanPort
 	Prefixes  []PlanPrefix
 }
 

@@ -93,3 +93,34 @@ func TestConfigDecode(t *testing.T) {
 		})
 	}
 }
+
+func TestEnvBindingNames(t *testing.T) {
+	if got := (Env{Ports: []string{"ix"}}).BindingNames(); got != nil {
+		t.Fatalf("nil Providers asks for no check, got %v", got)
+	}
+	e := Env{Providers: []string{"a"}, Ports: []string{"ix"}}
+	got := e.BindingNames()
+	if len(got) != 2 || got[0] != "a" || got[1] != "ix" {
+		t.Fatalf("names = %v", got)
+	}
+	got[0] = "x"
+	if e.Providers[0] != "a" {
+		t.Fatal("BindingNames must not alias Providers")
+	}
+	if got := (Env{Providers: []string{}}).BindingNames(); got == nil || len(got) != 0 {
+		t.Fatalf("an empty non-nil list must reject every name, got %v", got)
+	}
+}
+
+func TestValidLabel(t *testing.T) {
+	for _, ok := range []string{"a", "Example-IX.1", "ix_2", strings.Repeat("a", 64)} {
+		if !ValidLabel(ok) {
+			t.Errorf("%q rejected", ok)
+		}
+	}
+	for _, bad := range []string{"", "-a", "_a", ".a", "a b", "a/b", strings.Repeat("a", 65)} {
+		if ValidLabel(bad) {
+			t.Errorf("%q accepted", bad)
+		}
+	}
+}

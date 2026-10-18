@@ -13,8 +13,11 @@
 // path is already best within thresholds. cost offers every prefix to the
 // planner, keeps a native path that is inside the floor, and replaces a
 // performance move with a cheaper path inside the floor when there is one.
-// Decide enforces the floor and the price check itself. Plan does not
-// announce.
+// Decide enforces the floor and the price check itself. A peer on an exchange
+// port with a flat port_cost is priced at 0 per Mbps (the fee is paid either
+// way) and is a destination only while the shared port stays inside its
+// capacity and commit (#151); a port with no fresh reading takes no move.
+// Plan does not announce.
 package cost
 
 import (
@@ -24,7 +27,9 @@ import (
 	"time"
 
 	"github.com/GrandArcher/Packeteer/internal/netpfx"
+	"github.com/GrandArcher/Packeteer/internal/plugins/scorer/ports"
 	"github.com/GrandArcher/Packeteer/internal/plugins/scorer/weights"
+	"github.com/GrandArcher/Packeteer/internal/portload"
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
 )
 
@@ -180,6 +185,23 @@ func (s *Scorer) Plan(in plugin.PlanInput) []plugin.PlanMove {
 
 	prefixes := append([]plugin.PlanPrefix(nil), in.Prefixes...)
 	sort.SliceStable(prefixes, func(i, j int) bool { return netpfx.Less(prefixes[i].Prefix, prefixes[j].Prefix) })
+	led := ports.New(in, portload.DefaultMaxAge)
+	// Book the traffic before any new move: the row counts it where it
+	// flows now. A Locked performance steer may not show yet, so it is
+	// moved to its provider; an active cost steer is replanned from native.
+	booked := map[netip.Prefix]bool{}
+	for _, px := range prefixes {
+		if !px.Prefix.IsValid() || booked[px.Prefix] {
+			continue
+		}
+		booked[px.Prefix] = true
+		switch {
+		case px.Locked:
+			led.Move(px.Native, px.Current, px.VolumeMbps)
+		case px.Reversible:
+			led.Move(px.Current, px.Native, px.VolumeMbps)
+		}
+	}
 	var moves []plugin.PlanMove
 	seen := map[netip.Prefix]bool{}
 	for _, px := range prefixes {
@@ -199,7 +221,7 @@ func (s *Scorer) Plan(in plugin.PlanInput) []plugin.PlanMove {
 		best, bestCost, found := "", 0.0, false
 		for _, name := range inside {
 			c, ok := prices[name]
-			if !ok {
+			if !ok || !led.Allows(px.Native, name, px.VolumeMbps) {
 				continue
 			}
 			if !found || c < bestCost-costEps ||
@@ -210,6 +232,7 @@ func (s *Scorer) Plan(in plugin.PlanInput) []plugin.PlanMove {
 		if !found || best == px.Native || bestCost >= nc-costEps {
 			continue
 		}
+		led.Move(px.Native, best, px.VolumeMbps)
 		delta := nc - bestCost
 		savings := delta
 		if px.VolumeMbps > 0 {

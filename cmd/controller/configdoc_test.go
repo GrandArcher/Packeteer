@@ -12,8 +12,11 @@ import (
 	"github.com/GrandArcher/Packeteer/internal/plugins/elector/lease"
 	"github.com/GrandArcher/Packeteer/internal/plugins/exec"
 	"github.com/GrandArcher/Packeteer/internal/plugins/federation/mtls"
+	"github.com/GrandArcher/Packeteer/internal/plugins/ixpcorrelate/topology"
 	fabricicmp "github.com/GrandArcher/Packeteer/internal/plugins/ixpfabric/icmp"
+	"github.com/GrandArcher/Packeteer/internal/plugins/ixprouteserver/birdseye"
 	"github.com/GrandArcher/Packeteer/internal/plugins/leaksource/rislive"
+	"github.com/GrandArcher/Packeteer/internal/plugins/lookup/peeringdb"
 	"github.com/GrandArcher/Packeteer/internal/plugins/notifier/smtp"
 	"github.com/GrandArcher/Packeteer/internal/plugins/notifier/snmptrap"
 	"github.com/GrandArcher/Packeteer/internal/plugins/notifier/webhook"
@@ -102,13 +105,18 @@ func TestConfigDocCoversStructs(t *testing.T) {
 		baseline.Config{},
 		rtr.Config{},
 		fabricicmp.Config{},
+		birdseye.Config{},
+		birdseye.ServerConfig{},
+		topology.Config{},
+		topology.Bundle{},
+		peeringdb.Config{},
 	) {
 		if !strings.Contains(text, "`"+key+"`") {
 			missing = append(missing, key)
 		}
 	}
 	for _, env := range []string{
-		ConfigEnv, PluginDirEnv, LogLevelEnv, LogFormatEnv, HTTPListenEnv, HTTPUserEnv, HTTPPassEnv, lease.IDEnv, AdminUserEnv, AdminPassEnv,
+		ConfigEnv, PluginDirEnv, LogLevelEnv, LogFormatEnv, HTTPListenEnv, HTTPUserEnv, HTTPPassEnv, lease.IDEnv, peeringdb.APIKeyEnv, AdminUserEnv, AdminPassEnv,
 	} {
 		if !strings.Contains(text, "`"+env+"`") {
 			missing = append(missing, env)

@@ -11,6 +11,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync"
@@ -168,13 +169,16 @@ func New(c plugin.Config, env plugin.Env) (plugin.MemberSource, error) {
 		},
 		view: plugin.MemberView{
 			Configured: true,
-			URL:        fetchURL,
+			URL:        viewURL(fetchURL),
 			Manager:    manager,
 			KeyID:      ident,
-			KeyExpires: expires,
 			IXPs:       []plugin.IXPSite{},
 			Members:    []plugin.IXPMember{},
 		},
+	}
+	// Unset means absent from the API, not a zero time.
+	if !expires.IsZero() {
+		s.view.KeyExpires = &expires
 	}
 	return s, nil
 }
@@ -242,13 +246,22 @@ func (s *Source) View() plugin.MemberView {
 	v := s.view
 	refresh := s.refresh
 	s.mu.Unlock()
+	// Copy the times so a caller cannot write through to the source's state.
+	if v.Fetched != nil {
+		t := *v.Fetched
+		v.Fetched = &t
+	}
+	if v.KeyExpires != nil {
+		t := *v.KeyExpires
+		v.KeyExpires = &t
+	}
 	if v.IXPs == nil {
 		v.IXPs = []plugin.IXPSite{}
 	}
 	if v.Members == nil {
 		v.Members = []plugin.IXPMember{}
 	}
-	if !v.Fetched.IsZero() && v.Error != "" && time.Since(v.Fetched) > staleFactor*refresh {
+	if v.Fetched != nil && v.Error != "" && time.Since(*v.Fetched) > staleFactor*refresh {
 		v.Stale = true
 		v.Error = "member list is stale"
 		v.IXPs = []plugin.IXPSite{}
@@ -277,7 +290,8 @@ func (s *Source) fetch(ctx context.Context) {
 		return
 	}
 	s.mu.Lock()
-	s.view.Fetched = time.Now()
+	fetched := time.Now()
+	s.view.Fetched = &fetched
 	s.view.Error = ""
 	s.view.Stale = false
 	s.view.IXPs = p.ixps
@@ -307,6 +321,12 @@ func (s *Source) get(ctx context.Context) ([]byte, error) {
 	if err != nil {
 		if errors.Is(err, errNoRedirect) {
 			return nil, errors.New("member export: redirects are not followed")
+		}
+		// The client error carries the full request URL, query included.
+		// The view serves this text, so keep only the cause.
+		var ue *url.Error
+		if errors.As(err, &ue) {
+			err = ue.Err
 		}
 		return nil, errors.New("member export: " + redact(err.Error(), s.apiKey))
 	}

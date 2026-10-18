@@ -40,6 +40,37 @@ func TestIXPMembersUnconfigured(t *testing.T) {
 	}
 }
 
+func TestIXPMembersOmitUnsetTimes(t *testing.T) {
+	s := newIXPServer(t)
+	s.SetIXPMembers(func() plugin.MemberView { return plugin.MemberView{Configured: true} })
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/ixp/members", nil))
+	if strings.Contains(rec.Body.String(), `"fetched"`) || strings.Contains(rec.Body.String(), `"key_expires"`) || strings.Contains(rec.Body.String(), "0001-01-01") {
+		t.Fatalf("unset times in %s", rec.Body)
+	}
+	mrec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(mrec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	if strings.Contains(mrec.Body.String(), "packeteer_ixp_member_import_age_seconds") || strings.Contains(mrec.Body.String(), "packeteer_ixp_api_key_expiry_seconds") {
+		t.Fatalf("unset time metrics\n%s", mrec.Body)
+	}
+
+	fetched := time.Unix(1_800_000_000, 0).UTC()
+	expires := time.Unix(1_801_000_000, 0).UTC()
+	s.SetIXPMembers(func() plugin.MemberView {
+		return plugin.MemberView{Configured: true, Fetched: &fetched, KeyExpires: &expires}
+	})
+	rec = httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/ixp/members", nil))
+	if !strings.Contains(rec.Body.String(), `"fetched":"2027-01-15T08:00:00Z"`) || !strings.Contains(rec.Body.String(), `"key_expires":"2027-01-26T21:46:40Z"`) {
+		t.Fatalf("set times missing in %s", rec.Body)
+	}
+	mrec = httptest.NewRecorder()
+	s.Handler().ServeHTTP(mrec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	if !strings.Contains(mrec.Body.String(), "packeteer_ixp_member_import_age_seconds") || !strings.Contains(mrec.Body.String(), "packeteer_ixp_api_key_expiry_seconds 1.801e+09\n") {
+		t.Fatalf("set time metrics\n%s", mrec.Body)
+	}
+}
+
 func TestIXPMembersAPIAndMetrics(t *testing.T) {
 	doc := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet || r.Header.Get("X-IXP-Manager-API-Key") != "" {
@@ -190,6 +221,98 @@ func TestIXPProbesAPIAndMetrics(t *testing.T) {
 	}
 }
 
+func TestIXPRouteServersAPIAndMetrics(t *testing.T) {
+	s := newIXPServer(t)
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/ixp/routeservers", nil))
+	var body map[string]any
+	if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &body) != nil || body["configured"] != false {
+		t.Fatalf("%d %s", rec.Code, rec.Body)
+	}
+	if l, ok := body["servers"].([]any); !ok || len(l) != 0 {
+		t.Fatalf("servers %#v", body["servers"])
+	}
+	if l, ok := body["sessions"].([]any); !ok || len(l) != 0 {
+		t.Fatalf("sessions %#v", body["sessions"])
+	}
+	for _, path := range []string{"/api/ixp/routeservers/history?server=rs1&session=pb_a", "/api/ixp/routeservers/history"} {
+		rec = httptest.NewRecorder()
+		s.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+		want := http.StatusNotFound
+		if !strings.Contains(path, "server=") {
+			want = http.StatusBadRequest
+		}
+		if rec.Code != want {
+			t.Fatalf("%s: %d %s", path, rec.Code, rec.Body)
+		}
+	}
+	mrec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(mrec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	if strings.Contains(mrec.Body.String(), "packeteer_ixp_rs_") {
+		t.Fatalf("metrics without a watch:\n%s", mrec.Body)
+	}
+
+	polled := time.Now().Add(-30 * time.Second)
+	s.SetIXPRouteServers(func() plugin.RouteServerView {
+		return plugin.RouteServerView{
+			Configured: true,
+			Servers:    []plugin.RouteServerStatus{{Name: "rs1", ASN: 64496, Up: true, Polled: polled, Sessions: 2}},
+			Sessions: []plugin.RouteServerSession{
+				{Server: "rs1", Session: "pb_a", ASN: 64497, Name: "Doc Member", Established: true, Counted: true,
+					Received: 10, Accepted: 7, Filtered: 3, Reasons: []plugin.RouteServerReason{{Reason: 4, Count: 3}}, MaxPrefix: 100, UsedPct: 7,
+					Scanned: true, Blackhole: 5},
+				{Server: "rs1", Session: "pb_b", ASN: 64498, State: "Active"},
+			},
+		}
+	}, func(server, session string) ([]plugin.RouteServerSample, bool) {
+		if server != "rs1" || session != "pb_a" {
+			return nil, false
+		}
+		return []plugin.RouteServerSample{{At: polled, Established: true, Counted: true, Received: 10, Accepted: 7, Filtered: 3, Scanned: true, Blackhole: 5}}, true
+	})
+	rec = httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/ixp/routeservers", nil))
+	text := rec.Body.String()
+	for _, want := range []string{`"configured":true`, `"asn":64496`, `"session":"pb_a"`, `"name":"Doc Member"`, `"filtered":3`, `"reason":4`, `"used_pct":7`, `"scanned":true`, `"blackhole":5`, `"mode":"observe"`} {
+		if !strings.Contains(text, want) {
+			t.Errorf("missing %s in %s", want, text)
+		}
+	}
+	rec = httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/ixp/routeservers/history?server=rs1&session=pb_a", nil))
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"samples":[{`) || !strings.Contains(rec.Body.String(), `"accepted":7`) || !strings.Contains(rec.Body.String(), `"blackhole":5`) {
+		t.Fatalf("history %d %s", rec.Code, rec.Body)
+	}
+	rec = httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/ixp/routeservers/history?server=rs1&session=zzz", nil))
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("unknown session %d", rec.Code)
+	}
+	rec = httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/ixp/routeservers", nil))
+	if rec.Code == http.StatusOK {
+		t.Fatalf("POST accepted: %d", rec.Code)
+	}
+
+	mrec = httptest.NewRecorder()
+	s.Handler().ServeHTTP(mrec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	metrics := mrec.Body.String()
+	for _, want := range []string{
+		"packeteer_ixp_rs_up 1\n",
+		"packeteer_ixp_rs_sessions_established 1\n",
+		"packeteer_ixp_rs_sessions_down 1\n",
+		"packeteer_ixp_rs_filtered_routes 3\n",
+		"packeteer_ixp_rs_age_seconds ",
+	} {
+		if !strings.Contains(metrics, want) {
+			t.Errorf("missing %s in\n%s", want, metrics)
+		}
+	}
+	if strings.Contains(metrics, "pb_a") || strings.Contains(metrics, "64497") {
+		t.Fatalf("per-member series:\n%s", metrics)
+	}
+}
+
 func newIXPServer(t *testing.T) *Server {
 	t.Helper()
 	s, err := New(Options{Snapshot: func() Snapshot { return Snapshot{Version: "test", Mode: "observe", Started: true} }})
@@ -197,4 +320,64 @@ func newIXPServer(t *testing.T) *Server {
 		t.Fatal(err)
 	}
 	return s
+}
+
+func TestIXPCorrelationAPIAndMetrics(t *testing.T) {
+	s := newIXPServer(t)
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/ixp/correlation", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("%d %s", rec.Code, rec.Body)
+	}
+	var body map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	groups, ok := body["groups"].([]any)
+	members, ok2 := body["members"].([]any)
+	if body["configured"] != false || !ok || len(groups) != 0 || !ok2 || len(members) != 0 {
+		t.Fatalf("unconfigured: %s", rec.Body)
+	}
+	mrec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(mrec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	if strings.Contains(mrec.Body.String(), "packeteer_ixp_") {
+		t.Fatalf("metrics without the correlator:\n%s", mrec.Body)
+	}
+
+	s.SetIXPCorrelation(func() plugin.CorrelationView {
+		return plugin.CorrelationView{
+			Configured: true,
+			Round:      time.Unix(1000, 0).UTC(),
+			Groups: []plugin.CorrelationGroup{
+				{Scope: "switch", IXPID: 1, Name: "sw1", Members: 4, Degraded: 4, DegradedPct: 100, Active: true, ASNs: []uint32{64496, 64497, 64498, 64499}},
+				{Scope: "switch", IXPID: 1, Name: "sw2", Members: 3, Degraded: 1, DegradedPct: 33.3, ASNs: []uint32{64500}},
+			},
+			Members: []plugin.CorrelationMember{{ASN: 64501, Name: "Example Net", Addresses: 2, Active: true}, {ASN: 64502, Addresses: 1}},
+		}
+	})
+	rec = httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/ixp/correlation", nil))
+	text := rec.Body.String()
+	for _, want := range []string{`"configured":true`, `"scope":"switch"`, `"name":"sw1"`, `"degraded":4`, `"degraded_pct":100`, `"active":true`, `"asns":[64496,64497,64498,64499]`, `"asn":64501`, `"addresses":2`} {
+		if !strings.Contains(text, want) {
+			t.Errorf("missing %s in %s", want, text)
+		}
+	}
+	mrec = httptest.NewRecorder()
+	s.Handler().ServeHTTP(mrec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	metrics := mrec.Body.String()
+	for _, want := range []string{"packeteer_ixp_fabric_groups_degraded 1\n", "packeteer_ixp_members_degraded 1\n"} {
+		if !strings.Contains(metrics, want) {
+			t.Errorf("missing %s in\n%s", want, metrics)
+		}
+	}
+	if strings.Contains(metrics, "64501") || strings.Contains(metrics, "sw1") {
+		t.Fatalf("per-member or per-group series:\n%s", metrics)
+	}
+
+	wrong := httptest.NewRecorder()
+	s.Handler().ServeHTTP(wrong, httptest.NewRequest(http.MethodPost, "/api/ixp/correlation", nil))
+	if wrong.Code == http.StatusOK {
+		t.Fatalf("POST answered %d", wrong.Code)
+	}
 }

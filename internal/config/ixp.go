@@ -6,6 +6,8 @@ import (
 	"net/netip"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/GrandArcher/Packeteer/pkg/plugin"
 )
 
 // Bounds for ixp.vantages (#162).
@@ -16,11 +18,14 @@ const (
 
 // IXP is exchange-operator mode (#160). A non-nil value, including an
 // empty block, is IXP mode. IXP mode never announces. Keys are members
-// (#161), vantages, and fabric (#162). Any other key is a parse error.
+// (#161), vantages and fabric (#162), routeservers (#164), and correlate
+// (#163). Any other key is a parse error.
 type IXP struct {
-	Members  *PluginSpec `yaml:"members,omitempty"`
-	Vantages []Vantage   `yaml:"vantages,omitempty"`
-	Fabric   *PluginSpec `yaml:"fabric,omitempty"`
+	Members      *PluginSpec `yaml:"members,omitempty"`
+	Vantages     []Vantage   `yaml:"vantages,omitempty"`
+	Fabric       *PluginSpec `yaml:"fabric,omitempty"`
+	RouteServers *PluginSpec `yaml:"routeservers,omitempty"`
+	Correlate    *PluginSpec `yaml:"correlate,omitempty"`
 }
 
 // Vantage is one IX-owned monitoring address on a peering LAN (#162).
@@ -87,6 +92,9 @@ func (c *Config) validateIXP(add func(string, ...any)) {
 		add("ixp forbids more_specific: IXP mode never announces")
 	}
 	c.validateVantages(add)
+	if c.IXP.Correlate != nil && c.IXP.Fabric == nil {
+		add("ixp.correlate requires ixp.fabric")
+	}
 }
 
 func (c *Config) validateVantages(add func(string, ...any)) {
@@ -109,7 +117,7 @@ func (c *Config) validateVantages(add func(string, ...any)) {
 	for i := range ix.Vantages {
 		v := &ix.Vantages[i]
 		p := fmt.Sprintf("ixp.vantages[%d]", i)
-		if !validVantageName(v.Name) {
+		if !plugin.ValidLabel(v.Name) {
 			add("%s.name is invalid", p)
 		} else if seenName[v.Name] {
 			add("%s.name %q is duplicated", p, v.Name)
@@ -138,21 +146,6 @@ func (c *Config) validateVantages(add func(string, ...any)) {
 		}
 		seenAddr[key] = true
 	}
-}
-
-func validVantageName(s string) bool {
-	if s == "" || len(s) > 64 {
-		return false
-	}
-	for i, c := range s {
-		switch {
-		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9':
-		case i > 0 && (c == '.' || c == '_' || c == '-'):
-		default:
-			return false
-		}
-	}
-	return true
 }
 
 func usableVantage(a netip.Addr) bool {

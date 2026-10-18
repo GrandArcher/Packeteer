@@ -533,8 +533,7 @@ func (d *decoder) undecodable(raw []byte, err error) []plugin.RIBEvent {
 func peerDownReason(b *gobmp.BMPPeerDownNotification) string {
 	var where string
 	switch b.Reason {
-	case gobmp.BMP_peerDownByUnknownReason,
-		gobmp.BMP_PEER_DOWN_REASON_LOCAL_BGP_NOTIFICATION,
+	case gobmp.BMP_PEER_DOWN_REASON_LOCAL_BGP_NOTIFICATION,
 		gobmp.BMP_PEER_DOWN_REASON_LOCAL_NO_NOTIFICATION:
 		where = "local system closed"
 	case gobmp.BMP_PEER_DOWN_REASON_REMOTE_BGP_NOTIFICATION,
