@@ -10,6 +10,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/GrandArcher/Packeteer/internal/sockmark"
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
 )
 
@@ -17,10 +18,10 @@ import (
 // where an unreachable counts only when its source is the target
 // (udp_linux.go). Other systems cannot read that address from the
 // socket, so a connection refusal still counts as a reply.
-func onePacket(ctx context.Context, network string, laddr, raddr *net.UDPAddr, timeout time.Duration, start time.Time) (time.Duration, bool, error) {
-	c, err := net.DialUDP(network, laddr, raddr)
+func onePacket(ctx context.Context, network string, laddr, raddr *net.UDPAddr, m sockmark.Marking, timeout time.Duration, start time.Time) (time.Duration, bool, error) {
+	c, err := dialUDP(ctx, network, laddr, raddr, m)
 	if err != nil {
-		if errors.Is(err, syscall.EADDRNOTAVAIL) {
+		if errors.Is(err, syscall.EADDRNOTAVAIL) || errors.Is(err, sockmark.ErrTag) {
 			return 0, false, fmt.Errorf("%w: %s: %v", plugin.ErrSourceUnavailable, laddr.IP, err)
 		}
 		return 0, false, nil

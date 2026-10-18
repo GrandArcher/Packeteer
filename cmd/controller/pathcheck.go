@@ -13,6 +13,7 @@ import (
 	"github.com/GrandArcher/Packeteer/internal/config"
 	"github.com/GrandArcher/Packeteer/internal/plugins/source/traceroute"
 	"github.com/GrandArcher/Packeteer/internal/probe"
+	"github.com/GrandArcher/Packeteer/internal/sockmark"
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
 )
 
@@ -50,6 +51,9 @@ type pathTarget struct {
 	Name    string
 	Source  netip.Addr
 	NextHop netip.Addr
+	// Marking tags the check like the provider's own probes (#157), so a
+	// shared source_ip is checked along the path its tag selects.
+	Marking sockmark.Marking
 }
 
 // pathChecker verifies that probes from each target's source_ip leave
@@ -82,7 +86,7 @@ func pathTargets(cfg *config.Config) []pathTarget {
 		if serr != nil || nerr != nil || src.Is4() != nh.Is4() || src.IsLoopback() {
 			continue
 		}
-		out = append(out, pathTarget{Name: p.Name, Source: src, NextHop: nh.Unmap()})
+		out = append(out, pathTarget{Name: p.Name, Source: src, NextHop: nh.Unmap(), Marking: markingOf(p)})
 	}
 	return out
 }
@@ -148,7 +152,7 @@ func (c *pathChecker) one(ctx context.Context, t pathTarget) (mismatch, ok bool)
 	if t.NextHop.Is6() {
 		dst = pathSink6
 	}
-	from, _, err := c.hop(ctx, t.Source, dst, firstHopTTL, pathCheckPort, c.timeout)
+	from, _, err := c.hop(sockmark.WithContext(ctx, t.Marking), t.Source, dst, firstHopTTL, pathCheckPort, c.timeout)
 	if err != nil {
 		if ctx.Err() != nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) ||
 			errors.Is(err, plugin.ErrSourceUnavailable) {

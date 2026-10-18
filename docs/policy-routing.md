@@ -80,6 +80,35 @@ Check with `/tool traceroute 203.0.113.1 src-address=192.0.2.11` on the router, 
 
 If the probe box's source IPs are not routable on the Internet, source-NAT them to each transit's address on the router (`/ip firewall nat add chain=srcnat src-address=192.0.2.11 out-interface=ether-transit-a action=masquerade`).
 
+## Many providers on one `source_ip`
+
+A large exchange can have hundreds of peers; one address per peer does not scale. Providers and exchange peers may share a `source_ip` when each also sets a tag that the routing can match, and no two providers on that address use the same tag (#157):
+
+```yaml
+exchanges:
+  - name: ix-lab
+    lans: [203.0.113.0/24]
+    peers:
+      - {name: ix-peer-a, asn: 64501, next_hop: 203.0.113.11, source_ip: 192.0.2.31, dscp: 10}
+      - {name: ix-peer-b, asn: 64502, next_hop: 203.0.113.12, source_ip: 192.0.2.31, dscp: 12}
+```
+
+- `fwmark` sets a Linux `SO_MARK` on every probe socket. It is seen only by the probe host's own `ip rule`, and needs `--cap-add NET_ADMIN`.
+- `dscp` (1-63) is written in the IP header, so a router in front of the probe box can match it. Router policy routing cannot see a Linux fwmark: give a provider a `dscp` as well when a router selects its path.
+
+If a tag cannot be applied (no `NET_ADMIN`, not Linux), the provider is marked down like an unbindable `source_ip`; it is never probed untagged. Every probe from the provider carries the tag: the probers, the traceroute paths, and the `probe.path_check` above, which then verifies the first hop of each tagged path.
+
+`packeteer -pbr FORMAT` prints the routing for every provider measured here and exits. FORMAT is `linux`, `frr`, `junos`, `cisco`, or `mikrotik`. It reads the config and prints text for review: it applies nothing and never connects to a router.
+
+```sh
+docker run --rm -v "$PWD/config.yaml:/etc/packeteer/config.yaml" ghcr.io/grandarcher/packeteer -pbr linux
+```
+
+- `linux`: a table per provider with a default route via its `next_hop`, and an `ip rule` per provider (`from SOURCE`, plus `fwmark` when tagged). Table numbers and priorities are 1000 plus the provider's position in the list, so reordering providers renumbers them. A provider with only a `dscp` gets an nftables rule that turns the DSCP into a mark equal to its table, because the kernel's DSCP rule selector is not available everywhere.
+- `frr` (pbrd `pbr-map`), `junos` (firewall filter `next-ip`/`next-ip6`), `cisco` (extended ACL and `route-map` with `set ip next-hop`), and `mikrotik` (routing tables, plus `/routing rule` for an untagged source and a `/ip firewall mangle` `mark-routing` rule for a DSCP) match `src` and, when set, `dscp`, and set the provider's `next_hop`. A provider with `fwmark` but no `dscp` is an error for these formats. FRR `pbr-map` sequence numbers stop at 700, so more providers than that are an error. The interface that faces the probe host is left as `<probe-facing-interface>` in a comment; add the policy there.
+
+Provider names are reduced to letters, digits, `_`, `.` and `-` in the output. Check each snippet against your platform release before use.
+
 ## Internet exchange peers
 
 Each exchange peer (`exchanges[].peers[]`, #27) is measured from its own `source_ip`, so it needs its own table: a route via the peer's LAN address, and a rule from the source to that table. The peering LAN itself is not a probe target (#145): packets to customer prefixes still leave via that peer's `source_ip` and `next_hop`. On Linux, with the probe box on the peering LAN or behind the IX router:

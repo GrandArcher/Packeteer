@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/GrandArcher/Packeteer/internal/exchange"
+	"github.com/GrandArcher/Packeteer/internal/sockmark"
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
 )
 
@@ -23,6 +24,16 @@ type Provider struct {
 	// edge toward this provider. Zero means it is not known. It is a probe
 	// target only: it is not a new provider and nothing is announced to it.
 	NextHop netip.Addr
+	// Marking tags this provider's probe packets when its Source is shared
+	// with other providers (#157).
+	Marking sockmark.Marking
+}
+
+// Request builds a probe request from this provider toward target, with
+// its tag.
+func (p Provider) Request(target netip.Addr, count int, timeout time.Duration) plugin.ProbeRequest {
+	return plugin.ProbeRequest{Provider: p.Name, Source: p.Source, Target: target,
+		Count: count, Timeout: timeout, Mark: p.Marking.Mark, DSCP: p.Marking.DSCP}
 }
 
 // NamedProber is one entry of the ordered prober chain.
@@ -1632,8 +1643,7 @@ func (e *Engine) probeOne(ctx context.Context, p Provider, prefix netip.Prefix, 
 // prefix, and target.
 func (e *Engine) runChain(ctx context.Context, res Result, p Provider, count, start int, note func(int)) (Result, bool) {
 	host := res.Target
-	req := plugin.ProbeRequest{Provider: p.Name, Source: p.Source,
-		Target: host, Count: count, Timeout: e.timeout()}
+	req := p.Request(host, count, e.timeout())
 	var errs []error
 	var fallback *Result
 	for i := start; i < len(e.probers); i++ {

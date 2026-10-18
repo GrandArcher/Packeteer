@@ -960,3 +960,32 @@ func TestRunSpanCheck(t *testing.T) {
 		t.Fatalf("stderr = %q", errOut.String())
 	}
 }
+
+func TestRunPBR(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "c.yaml")
+	cfg := `asn: 64512
+router_id: 192.0.2.10
+providers:
+  - {name: ix-a, source_ip: 192.0.2.31, next_hop: 203.0.113.11, dscp: 10}
+  - {name: ix-b, source_ip: 192.0.2.31, next_hop: 203.0.113.12, dscp: 12}
+`
+	if err := os.WriteFile(path, []byte(cfg), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out, errOut bytes.Buffer
+	if code := run(context.Background(), []string{"-config", path, "-pbr", "frr"}, noEnv, &out, &errOut); code != 0 {
+		t.Fatalf("exit code %d, stderr: %s", code, errOut.String())
+	}
+	for _, want := range []string{"match src-ip 192.0.2.31/32", "match dscp 10", "set nexthop 203.0.113.12"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("stdout missing %q:\n%s", want, out.String())
+		}
+	}
+	out.Reset()
+	if code := run(context.Background(), []string{"-config", path, "-pbr", "bogus"}, noEnv, &out, &errOut); code != 1 || out.Len() != 0 {
+		t.Fatalf("unknown format: code %d, stdout %q", code, out.String())
+	}
+	if !strings.Contains(errOut.String(), "unknown format") {
+		t.Errorf("stderr = %q", errOut.String())
+	}
+}

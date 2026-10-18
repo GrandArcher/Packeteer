@@ -191,7 +191,7 @@ Response: `{"result": ...}` or `{"error": "message"}`.
 | kind | method | params | result |
 |---|---|---|---|
 | any | `init` | none | `{}`, or an error if the config is unacceptable. Called once at startup. Never called by the config editor, which does not run exec plugins ([ui.md](ui.md)). |
-| `prober` | `probe` | `{"provider","source","target","count","timeout_ms"}` | `{"sent": 10, "rtts_ms": [12.1, 11.8]}`, one RTT per reply, in send order |
+| `prober` | `probe` | `{"provider","source","target","count","timeout_ms"}`, plus `"mark"` (Linux fwmark) and `"dscp"` when the provider shares its source ([policy-routing.md](policy-routing.md)); the plugin must tag its packets or return an error | `{"sent": 10, "rtts_ms": [12.1, 11.8]}`, one RTT per reply, in send order |
 | `source` | `targets` | none | `{"targets":[{"prefix":"198.51.100.0/24","host":"198.51.100.1","weight":1}]}` (`host` must be inside `prefix`; `host` and `weight` are optional) |
 | `notifier` | `notify` | an event: `{"time","kind","severity","message","fields"}` | `{}` |
 
