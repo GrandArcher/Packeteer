@@ -1,9 +1,9 @@
 # IXP mode (#160)
 
 Status: charter, config gate, IX-F member import (#161), fabric
-probes (#162), and route-server history and alerts (#164). Signals,
-member pages, and multi-site fabric health are #163 and #165-#167 and
-are not built. An `ixp` block does not announce or open a route-server
+probes (#162), fabric incident correlation (#163), and route-server
+history and alerts (#164). Signals, member pages, and multi-site fabric
+health are #165-#167 and are not built. An `ixp` block does not announce or open a route-server
 session.
 
 An Internet exchange operator runs Packeteer to observe its fabric,
@@ -13,7 +13,7 @@ route servers, and members. It does not route for them. This is not the
 ## Turning it on
 
 `ixp: {}` in the config. The keys are `members` (#161), `vantages`
-and `fabric` (#162), and `routeservers` (#164). Any other key is an error. Omitted, or `ixp: null`,
+and `fabric` (#162), `routeservers` (#164), and `correlate` (#163). Any other key is an error. Omitted, or `ixp: null`,
 is not IXP mode. `mode` stays `observe`. `mode: suggest` is accepted
 and announces nothing. The shipped example leaves the block commented
 out.
@@ -121,6 +121,25 @@ An IX-F address with `can_ping: false` is not probed. Probes stay inside
 the VLAN prefix. Nothing is announced, and the measurements are not an
 input to Decide.
 
+## Fabric incident correlation
+
+`ixp.correlate` (#163) makes no request of its own. It reads the latest
+fabric probe round and groups the measured member addresses by the
+switches of their IX-F connection, the colo of those switches, and the
+operator's `bundles`. IX-F has no core bundle, so a bundle is a name and
+a list of switch ids. A member is degraded in a group when every measured
+address it has behind the group is past the ping tolerance from every
+vantage that measured it. A probe error is not a measurement.
+
+A group is a fabric problem (`ixp.fabric_degraded`) when `min_members`
+members and `degraded_pct` percent of its measured members are degraded.
+A member that is degraded on every address and is in no such group is a
+member problem (`ixp.member_degraded`). A member inside a fabric problem
+is reported only by that fabric event. Both need `rounds` consecutive
+rounds, and both clear after as many. With one vantage, a fault on the
+vantage's own link looks like a fabric fault; use two vantages on a LAN
+to tell them apart. The state is in memory.
+
 ## Lab data
 
 Member data is never committed. Lab fixtures use documentation prefixes
@@ -128,5 +147,5 @@ Member data is never committed. Lab fixtures use documentation prefixes
 documentation or private ASNs (64496-64511, 65536-65551, or
 64512-65534).
 
-Rollback: remove `ixp.members`, `ixp.routeservers`, or `ixp.vantages`
-and `ixp.fabric`, or the `ixp` block, and restart. Nothing was announced.
+Rollback: remove `ixp.members`, `ixp.routeservers`, `ixp.correlate`, or
+`ixp.vantages` and `ixp.fabric`, or the `ixp` block, and restart. Nothing was announced.

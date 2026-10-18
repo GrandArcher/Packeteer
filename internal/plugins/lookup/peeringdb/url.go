@@ -117,26 +117,3 @@ func redact(msg, key string) string {
 	}
 	return msg
 }
-
-// validName matches the exchange name rule used in config, so the same
-// label can name an exchange in both places. The config package is not
-// imported from a plugin.
-func validName(s string) bool {
-	if len(s) < 1 || len(s) > 64 {
-		return false
-	}
-	for i, r := range s {
-		letter := r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z'
-		digit := r >= '0' && r <= '9'
-		if i == 0 {
-			if !letter && !digit {
-				return false
-			}
-			continue
-		}
-		if !letter && !digit && r != '_' && r != '.' && r != '-' {
-			return false
-		}
-	}
-	return true
-}

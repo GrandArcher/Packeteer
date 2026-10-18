@@ -153,6 +153,9 @@ type Server struct {
 	// ixpRouteServers is the Birdseye watch (#164). Nil until
 	// SetIXPRouteServers. Read at request time. It never announces.
 	ixpRouteServers atomic.Value
+	// ixpCorrelation is the fabric incident correlator (#163). Nil until
+	// SetIXPCorrelation. Read at request time. It never announces.
+	ixpCorrelation atomic.Value
 	// quarantine releases a flap-quarantined prefix (#228). Nil until
 	// SetQuarantine.
 	quarantine atomic.Value
@@ -353,6 +356,9 @@ func (s *Server) handleMetrics(w http.ResponseWriter, _ *http.Request) {
 	}
 	if src, ok := s.ixpRouteServerSource(); ok {
 		_, _ = w.Write(IXPRouteServerMetrics(src.view(), time.Now()))
+	}
+	if v, ok := s.ixpCorrelationView(); ok && v.Configured {
+		_, _ = w.Write(IXPCorrelationMetrics(v))
 	}
 }
 

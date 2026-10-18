@@ -192,7 +192,7 @@ func normalizeExchanges(in []ExchangeConfig, key string) ([]exch, error) {
 	seenID := map[int]bool{}
 	out := make([]exch, 0, len(in))
 	for _, ex := range in {
-		if !validName(ex.Name) {
+		if !plugin.ValidLabel(ex.Name) {
 			return nil, fmt.Errorf("exchange name %q is invalid", ex.Name)
 		}
 		if ex.IXID <= 0 {

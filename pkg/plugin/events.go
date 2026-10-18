@@ -85,8 +85,13 @@ const (
 	EventRSMaxPrefixCleared = "ixp.rs_max_prefix_cleared"
 	EventRSFiltered         = "ixp.rs_filtered"
 	EventRSFilteredCleared  = "ixp.rs_filtered_cleared"
-	EventHAStandby          = "ha.standby"
-	EventHAActive           = "ha.active"
+	// Fabric incident correlation (#163). Each problem has a resolving event.
+	EventFabricDegraded  = "ixp.fabric_degraded"
+	EventFabricRecovered = "ixp.fabric_recovered"
+	EventMemberDegraded  = "ixp.member_degraded"
+	EventMemberRecovered = "ixp.member_recovered"
+	EventHAStandby       = "ha.standby"
+	EventHAActive        = "ha.active"
 	// EventAudit is one audit log record (#32): a change or sign-in on
 	// the ops API, or a config reload.
 	EventAudit = "audit.recorded"
@@ -195,6 +200,14 @@ var eventCatalog = []EventSpec{
 		Summary: "A member session has at least the warning share of its routes tagged rs-asn:1101:x (filtered by the route server)."},
 	{Kind: EventRSFilteredCleared, Severity: SeverityInfo, Group: "ixp_rs_filtered", Keys: []string{"server", "session"}, TrapID: 50, Resolves: true,
 		Summary: "The filtered share fell back below the warning share, or the session is gone. Resolves ixp.rs_filtered."},
+	{Kind: EventFabricDegraded, Severity: SeverityWarning, Group: "ixp_fabric", Keys: []string{"scope", "ixp_id", "group"}, TrapID: 51,
+		Summary: "Many members behind one switch, colo, or core bundle are past the ping tolerance together: a fabric problem, not a member problem."},
+	{Kind: EventFabricRecovered, Severity: SeverityInfo, Group: "ixp_fabric", Keys: []string{"scope", "ixp_id", "group"}, TrapID: 52, Resolves: true,
+		Summary: "The group is below the thresholds, has no measured members, or the fabric data went stale. Resolves ixp.fabric_degraded."},
+	{Kind: EventMemberDegraded, Severity: SeverityWarning, Group: "ixp_member", Keys: []string{"asn"}, TrapID: 53,
+		Summary: "One member is past the ping tolerance on every measured address while the groups behind it are not degraded: a member problem."},
+	{Kind: EventMemberRecovered, Severity: SeverityInfo, Group: "ixp_member", Keys: []string{"asn"}, TrapID: 54, Resolves: true,
+		Summary: "The member is back within tolerance, is part of a degraded group, or the fabric data went stale. Resolves ixp.member_degraded."},
 }
 
 // EventCatalog returns a copy of every event kind the controller emits.

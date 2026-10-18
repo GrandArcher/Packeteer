@@ -259,3 +259,59 @@ func IXPRouteServerMetrics(v plugin.RouteServerView, now time.Time) []byte {
 	}
 	return []byte(b.String())
 }
+
+// SetIXPCorrelation installs the fabric incident view (#163). The function
+// is called on each request. It must not probe or announce.
+func (s *Server) SetIXPCorrelation(fn func() plugin.CorrelationView) {
+	if s == nil {
+		return
+	}
+	s.ixpCorrelation.Store(fn)
+}
+
+func (s *Server) ixpCorrelationView() (plugin.CorrelationView, bool) {
+	fn, _ := s.ixpCorrelation.Load().(func() plugin.CorrelationView)
+	if fn == nil {
+		return plugin.CorrelationView{}, false
+	}
+	return fn(), true
+}
+
+func (s *Server) handleIXPCorrelation(w http.ResponseWriter, _ *http.Request) {
+	v, _ := s.ixpCorrelationView()
+	if v.Groups == nil {
+		v.Groups = []plugin.CorrelationGroup{}
+	}
+	if v.Members == nil {
+		v.Members = []plugin.CorrelationMember{}
+	}
+	writeJSON(w, http.StatusOK, struct {
+		meta
+		plugin.CorrelationView
+	}{meta: s.snapshot().meta(), CorrelationView: v})
+}
+
+// IXPCorrelationMetrics renders the incident correlator: the groups and
+// members whose events are open, which the view always lists. There is no per-member series.
+func IXPCorrelationMetrics(v plugin.CorrelationView) []byte {
+	if !v.Configured {
+		return nil
+	}
+	var groups, members int
+	for _, g := range v.Groups {
+		if g.Active {
+			groups++
+		}
+	}
+	for _, m := range v.Members {
+		if m.Active {
+			members++
+		}
+	}
+	var b strings.Builder
+	writeGauge(&b, "packeteer_ixp_fabric_groups_degraded", "Switches, colos, and bundles with an open ixp.fabric_degraded event.",
+		sample{value: float64(groups)})
+	writeGauge(&b, "packeteer_ixp_members_degraded", "Members with an open ixp.member_degraded event.",
+		sample{value: float64(members)})
+	return []byte(b.String())
+}
