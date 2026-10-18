@@ -63,9 +63,9 @@ type ProviderHealth struct {
 	Failed    int    `json:"failed"`
 	LastError string `json:"last_error,omitempty"`
 
-	reason          string
-	silent, errored int
-	lossSum         float64
+	reason  string
+	silent  int
+	lossSum float64
 }
 
 // Problem is a provider that is down or degraded, for the Overview
@@ -196,7 +196,6 @@ func BuildOverview(snap Snapshot, setup Setup, features []Feature) Overview {
 				h.lossSum += 100
 			default:
 				h.Failed++
-				h.errored++
 				h.lossSum += 100
 				if p.Error != "" {
 					h.LastError = p.Error

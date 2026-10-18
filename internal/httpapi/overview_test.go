@@ -293,7 +293,7 @@ func TestOverviewProviderHealthThresholds(t *testing.T) {
 	if o.Counts.ProvidersHealthy != 1 {
 		t.Errorf("healthy = %d", o.Counts.ProvidersHealthy)
 	}
-	// A raised threshold clears the degraded state; the default applies when unset.
+	// Raised thresholds move transit-b to up and transit-c to degraded.
 	o = BuildOverview(Assemble(in), Setup{DegradedLossPct: 20, DownLossPct: 70}, nil)
 	for _, h := range o.Providers {
 		if h.Name == "transit-b" && h.State != HealthUp {
