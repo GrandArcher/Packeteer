@@ -17,6 +17,7 @@ type server struct {
 	base string
 
 	status      plugin.RouteServerStatus
+	polled      bool
 	lastOK      time.Time
 	fails       int
 	unreachable bool
@@ -40,11 +41,24 @@ type sess struct {
 	down         bool
 	prefixHigh   bool
 	filteredHigh bool
+	// spike maps a filter reason with an open spike alert to the level it
+	// was compared with. The level stays fixed while the alert is open.
+	spike map[int]int
+
+	// routes is the accepted prefix to origin AS table of the last listing
+	// (route_signals); nil until the first one. fresh is true for a session
+	// that first appeared after the server's first poll, so its routes
+	// are judged instead of taken as the baseline.
+	routes     map[netip.Prefix]uint32
+	fresh      bool
+	originFlag map[netip.Prefix]uint32
+	msFlag     map[netip.Prefix]uint32
 }
 
 const (
 	flagEstablished = 1 << iota
 	flagCounted
+	flagScanned
 )
 
 // sample is a compact history point; a session keeps maxSamples of them.
@@ -55,6 +69,7 @@ type sample struct {
 	accepted int32
 	filtered int32
 	max      int32
+	black    int32
 	reasons  []plugin.RouteServerReason
 }
 
@@ -72,6 +87,8 @@ func (s sample) public() plugin.RouteServerSample {
 		Filtered:    int(s.filtered),
 		Reasons:     append([]plugin.RouteServerReason{}, r...),
 		MaxPrefix:   int(s.max),
+		Scanned:     s.flags&flagScanned != 0,
+		Blackhole:   int(s.black),
 	}
 }
 
@@ -131,6 +148,7 @@ func (w *Watch) pollServer(ctx context.Context, s *server, members map[netip.Add
 		return
 	}
 	rows := make([]plugin.RouteServerSession, len(protos))
+	scans := make([]*scan, len(protos))
 	idx := make(chan int)
 	var wg sync.WaitGroup
 	for i := 0; i < w.workers; i++ {
@@ -138,7 +156,7 @@ func (w *Watch) pollServer(ctx context.Context, s *server, members map[netip.Add
 		go func() {
 			defer wg.Done()
 			for i := range idx {
-				rows[i] = w.measure(ctx, s, protos[i], members, st.API.MaxRoutes, now)
+				rows[i], scans[i] = w.measure(ctx, s, protos[i], members, st.API.MaxRoutes, now)
 			}
 		}()
 	}
@@ -150,7 +168,7 @@ func (w *Watch) pollServer(ctx context.Context, s *server, members map[netip.Add
 	if ctx.Err() != nil {
 		return
 	}
-	w.apply(s, st, rows, now)
+	w.apply(s, st, rows, scans, now)
 }
 
 // validProtocol keeps a name from Birdseye usable as one URL segment.
@@ -171,7 +189,7 @@ func validProtocol(s string) bool {
 // measure builds one session's row. A session that is not Established has
 // no routes, so its counts are zero without asking Birdseye. A failed read
 // leaves Counted false with the counts zero and records the error.
-func (w *Watch) measure(ctx context.Context, s *server, p protocol, members map[netip.Addr]member, maxRoutes int, now time.Time) plugin.RouteServerSession {
+func (w *Watch) measure(ctx context.Context, s *server, p protocol, members map[netip.Addr]member, maxRoutes int, now time.Time) (plugin.RouteServerSession, *scan) {
 	v := plugin.RouteServerSession{
 		Server:      s.cfg.Name,
 		Session:     p.Name,
@@ -198,16 +216,16 @@ func (w *Watch) measure(ctx context.Context, s *server, p protocol, members map[
 	}
 	if !validProtocol(p.Name) {
 		v.Error = "session name is not usable in a URL"
-		return v
+		return v, nil
 	}
 	if !v.Established {
 		v.Counted = true
-		return v
+		return v, nil
 	}
 	received, err := w.routeCount(ctx, s.base, p.Name)
 	if err != nil {
 		v.Error = err.Error()
-		return v
+		return v, nil
 	}
 	var filtered int
 	var reasons map[int]int
@@ -215,7 +233,7 @@ func (w *Watch) measure(ctx context.Context, s *server, p protocol, members map[
 		filtered, reasons, err = w.filtered(ctx, s.base, p.Name, s.cfg.ASN, maxRoutes)
 		if err != nil {
 			v.Error = err.Error()
-			return v
+			return v, nil
 		}
 	}
 	v.Counted = true
@@ -229,7 +247,17 @@ func (w *Watch) measure(ctx context.Context, s *server, p protocol, members map[
 	if v.MaxPrefix > 0 {
 		v.UsedPct = float64(v.Accepted) * 100 / float64(v.MaxPrefix)
 	}
-	return v
+	if !w.signals {
+		return v, nil
+	}
+	sc, err := w.scanSession(ctx, s, p.Name, received, maxRoutes)
+	if err != nil {
+		v.ScanError = err.Error()
+		return v, nil
+	}
+	v.Scanned = true
+	v.Blackhole = sc.blackhole
+	return v, sc
 }
 
 // fail records a failed poll. The sessions keep their last state.
@@ -258,7 +286,7 @@ func (w *Watch) fail(s *server, now time.Time, err error) {
 
 // apply publishes a successful poll: the rows, the history, and the events
 // for every change since the last one.
-func (w *Watch) apply(s *server, st statusDoc, rows []plugin.RouteServerSession, now time.Time) {
+func (w *Watch) apply(s *server, st statusDoc, rows []plugin.RouteServerSession, scans []*scan, now time.Time) {
 	var events []plugin.Event
 	w.mu.Lock()
 	s.status = plugin.RouteServerStatus{
@@ -275,18 +303,35 @@ func (w *Watch) apply(s *server, st statusDoc, rows []plugin.RouteServerSession,
 			fmt.Sprintf("Birdseye on route server %s answers again", s.cfg.Name),
 			map[string]string{"server": s.cfg.Name}))
 	}
+	var idx routeIndex
+	tracked := 0
+	if w.signals {
+		idx = s.index()
+		tracked = s.tracked()
+	}
 	seen := make(map[string]bool, len(rows))
-	for _, row := range rows {
+	for i, row := range rows {
 		seen[row.Session] = true
 		st := s.sessions[row.Session]
 		if st == nil {
-			st = &sess{}
+			st = &sess{fresh: s.polled}
 			s.sessions[row.Session] = st
 		}
-		events = append(events, w.evaluate(st, row, now)...)
+		base, haveBase := s.baseline(row.Session)
+		events = append(events, w.evaluate(st, row, base, haveBase, now)...)
+		if sc := scans[i]; sc != nil {
+			if tracked+len(sc.routes)-len(st.routes) > w.maxTracked {
+				row.Scanned, row.Blackhole = false, 0
+				row.ScanError = fmt.Sprintf("more than %d accepted routes are tracked on this server", w.maxTracked)
+			} else {
+				tracked += len(sc.routes) - len(st.routes)
+				events = append(events, w.routeSignals(st, row, sc, idx, now)...)
+			}
+		}
 		st.view = row
 		s.record(row, now)
 	}
+	s.polled = true
 	for name, st := range s.sessions {
 		if !seen[name] {
 			events = append(events, w.closeAlerts(st, now, "is no longer on the route server", "removed")...)
@@ -305,6 +350,10 @@ func (s *server) record(row plugin.RouteServerSession, now time.Time) {
 		accepted: int32(row.Accepted),
 		filtered: int32(row.Filtered),
 		max:      int32(row.MaxPrefix),
+		black:    int32(row.Blackhole),
+	}
+	if row.Scanned {
+		smp.flags |= flagScanned
 	}
 	if row.Established {
 		smp.flags |= flagEstablished
@@ -357,7 +406,7 @@ func label(row plugin.RouteServerSession) string {
 // session is down, keeps the prefix and filtered alerts as they are: a
 // dropped session reads zero routes, and BIRD drops a session when its
 // import limit is hit, so a zero is not a recovery.
-func (w *Watch) evaluate(st *sess, row plugin.RouteServerSession, now time.Time) []plugin.Event {
+func (w *Watch) evaluate(st *sess, row plugin.RouteServerSession, base map[int]int, haveBase bool, now time.Time) []plugin.Event {
 	var ev []plugin.Event
 	switch {
 	case !row.Established && !st.down:
@@ -398,7 +447,7 @@ func (w *Watch) evaluate(st *sess, row plugin.RouteServerSession, now time.Time)
 			fmt.Sprintf("%s: %d of %d routes are filtered", label(row), row.Filtered, row.Received),
 			fields(row, "received", strconv.Itoa(row.Received), "filtered", strconv.Itoa(row.Filtered))))
 	}
-	return ev
+	return append(ev, w.spikes(st, row, base, haveBase, now)...)
 }
 
 // closeAlerts resolves every alert open on a session that is no longer
@@ -421,7 +470,7 @@ func (w *Watch) closeAlerts(st *sess, now time.Time, why, state string) []plugin
 			label(row)+" "+why, fields(row, "received", "0", "filtered", "0")))
 	}
 	st.down, st.prefixHigh, st.filteredHigh = false, false, false
-	return ev
+	return append(ev, w.closeSignals(st, now, why)...)
 }
 
 func (w *Watch) emit(events []plugin.Event) {

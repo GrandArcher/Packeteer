@@ -85,6 +85,13 @@ const (
 	EventRSMaxPrefixCleared = "ixp.rs_max_prefix_cleared"
 	EventRSFiltered         = "ixp.rs_filtered"
 	EventRSFilteredCleared  = "ixp.rs_filtered_cleared"
+	// Route-server signals (#165). Each problem has a resolving event.
+	EventRSOriginChange        = "ixp.rs_origin_change"
+	EventRSOriginChangeCleared = "ixp.rs_origin_change_cleared"
+	EventRSMoreSpecific        = "ixp.rs_morespecific_burst"
+	EventRSMoreSpecificCleared = "ixp.rs_morespecific_burst_cleared"
+	EventRSFilterSpike         = "ixp.rs_filter_spike"
+	EventRSFilterSpikeCleared  = "ixp.rs_filter_spike_cleared"
 	// Fabric incident correlation (#163). Each problem has a resolving event.
 	EventFabricDegraded  = "ixp.fabric_degraded"
 	EventFabricRecovered = "ixp.fabric_recovered"
@@ -208,6 +215,18 @@ var eventCatalog = []EventSpec{
 		Summary: "One member is past the ping tolerance on every measured address while the groups behind it are not degraded: a member problem."},
 	{Kind: EventMemberRecovered, Severity: SeverityInfo, Group: "ixp_member", Keys: []string{"asn"}, TrapID: 54, Resolves: true,
 		Summary: "The member is back within tolerance, is part of a degraded group, or the fabric data went stale. Resolves ixp.member_degraded."},
+	{Kind: EventRSOriginChange, Severity: SeverityWarning, Group: "ixp_rs_origin", Keys: []string{"server", "session"}, TrapID: 55,
+		Summary: "A member session announces a prefix with an origin AS that no other member's accepted route for the same prefix has: a possible hijack or leak."},
+	{Kind: EventRSOriginChangeCleared, Severity: SeverityInfo, Group: "ixp_rs_origin", Keys: []string{"server", "session"}, TrapID: 56, Resolves: true,
+		Summary: "The conflicting routes are gone, or the session is gone. Resolves ixp.rs_origin_change."},
+	{Kind: EventRSMoreSpecific, Severity: SeverityWarning, Group: "ixp_rs_morespecific", Keys: []string{"server", "session"}, TrapID: 57,
+		Summary: "A member session announced a burst of more-specifics of prefixes another member's route covers, with a different origin AS."},
+	{Kind: EventRSMoreSpecificCleared, Severity: SeverityInfo, Group: "ixp_rs_morespecific", Keys: []string{"server", "session"}, TrapID: 58, Resolves: true,
+		Summary: "The burst's more-specifics are gone, or the session is gone. Resolves ixp.rs_morespecific_burst."},
+	{Kind: EventRSFilterSpike, Severity: SeverityWarning, Group: "ixp_rs_spike", Keys: []string{"server", "session", "reason"}, TrapID: 59,
+		Summary: "The routes a route server filtered from a member for one reason (RPKI invalid, IRR prefix or origin, transit-free ASN) jumped above the recent level."},
+	{Kind: EventRSFilterSpikeCleared, Severity: SeverityInfo, Group: "ixp_rs_spike", Keys: []string{"server", "session", "reason"}, TrapID: 60, Resolves: true,
+		Summary: "The filtered count fell back below the spike threshold, or the session is gone. Resolves ixp.rs_filter_spike."},
 }
 
 // EventCatalog returns a copy of every event kind the controller emits.
