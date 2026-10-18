@@ -88,9 +88,11 @@ function knownGroups() {
   (form.providers || []).forEach(function (p) { pushUnique(out, p.group); });
   return out;
 }
+// foldDiscovered folds members of running exchanges that the form has,
+// matched by name, like the discovered list (#155).
 function foldDiscovered() {
-  runningExchanges.forEach(function (r) {
-    (r.discovered || []).forEach(function (d) {
+  (form.exchanges || []).forEach(function (x) {
+    exchangeMembers(x.name).forEach(function (d) {
       rememberHop(d.next_hop);
       if (d.asn) rememberASN(d.asn);
     });
@@ -1720,6 +1722,7 @@ function loadForm(yaml) {
     if (!form.targets) form.targets = [];
     if (!form.allowlist) form.allowlist = [];
     loadFormDefaults();
+    foldDiscovered();
     renderForm();
     formStatus("");
   }, function (err) {

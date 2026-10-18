@@ -570,6 +570,15 @@ async function main() {
   asnErr = fieldError(asn);
   assert(asnErr && !asnErr.hidden && asnErr.textContent.indexOf("AS number") >= 0, "nope has no AS error");
 
+  runningExchanges = [
+    {name: "ix-lab", discovered: [{next_hop: "203.0.113.13", asn: 64503, prefixes: 3}]},
+    {name: "ix-not-in-the-form", discovered: [{next_hop: "198.51.100.77", asn: 64511, prefixes: 9}]}
+  ];
+  foldDiscovered();
+  assert(guide.hops.indexOf("203.0.113.13") >= 0 && guide.asns.indexOf("64503") >= 0, "a member of a form exchange was not suggested");
+  assert(guide.hops.indexOf("198.51.100.77") < 0 && guide.asns.indexOf("64511") < 0, "a member of an exchange not in the form was suggested");
+  runningExchanges = [];
+
   form.vips = [{key: "", name: "vip", interval: "10s", max_targets: "", prefixes: [], asns: ["64496"]}];
   renderVIPs();
   var max = inputByLabel(document.getElementById("form-vips"), "Max targets");
