@@ -17,6 +17,7 @@ import (
 	"github.com/GrandArcher/Packeteer/internal/plugins/source/traceroute"
 	"github.com/GrandArcher/Packeteer/internal/policy"
 	"github.com/GrandArcher/Packeteer/internal/probe"
+	"github.com/GrandArcher/Packeteer/internal/sockmark"
 	"github.com/GrandArcher/Packeteer/internal/troubleshoot"
 )
 
@@ -42,7 +43,7 @@ func newTools(cfg *config.Config, plugins *pluginhost.Set, lim *rate.Limiter) (*
 				return nil, err
 			}
 		}
-		providers = append(providers, probe.Provider{Name: p.Name, Source: src, NextHop: hop})
+		providers = append(providers, probe.Provider{Name: p.Name, Source: src, NextHop: hop, Marking: markingOf(p)})
 	}
 	var probers []probe.NamedProber
 	for _, p := range plugins.Probers {
@@ -94,7 +95,7 @@ func newEngine(cfg *config.Config, plugins *pluginhost.Set, log *slog.Logger, on
 		if err != nil {
 			return nil, err
 		}
-		providers = append(providers, probe.Provider{Name: p.Name, Source: src})
+		providers = append(providers, probe.Provider{Name: p.Name, Source: src, Marking: markingOf(p)})
 	}
 	var probers []probe.NamedProber
 	for _, p := range plugins.Probers {
@@ -224,4 +225,9 @@ func logResult(log *slog.Logger, r probe.Result) {
 	log.Info("probe", "provider", r.Provider, "prefix", r.Prefix, "target", r.Target, "targets", r.Targets, "prober", r.Prober,
 		"loss_pct", s.LossPct, "rtt_avg", s.RTTAvg, "rtt_min", s.RTTMin, "rtt_max", s.RTTMax, "jitter", s.Jitter,
 		"sent", s.Sent, "received", s.Received)
+}
+
+// markingOf is the probe tag of a provider that shares its source_ip (#157).
+func markingOf(p config.Provider) sockmark.Marking {
+	return sockmark.Marking{Mark: p.FwMark, DSCP: uint8(p.DSCP)}
 }

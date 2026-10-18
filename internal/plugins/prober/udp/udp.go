@@ -13,6 +13,7 @@ import (
 	"net"
 	"time"
 
+	"github.com/GrandArcher/Packeteer/internal/sockmark"
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
 )
 
@@ -62,6 +63,17 @@ func New(c plugin.Config, _ plugin.Env) (plugin.Prober, error) {
 	return &Prober{port: cfg.Port, interval: cfg.PacketInterval}, nil
 }
 
+// dialUDP is net.DialUDP with the probe tag applied before the socket
+// connects.
+func dialUDP(ctx context.Context, network string, laddr, raddr *net.UDPAddr, m sockmark.Marking) (*net.UDPConn, error) {
+	d := net.Dialer{LocalAddr: laddr, Control: sockmark.Control(m)}
+	c, err := d.DialContext(ctx, network, raddr.String())
+	if err != nil {
+		return nil, err
+	}
+	return c.(*net.UDPConn), nil
+}
+
 // Probe implements plugin.Prober.
 func (p *Prober) Probe(ctx context.Context, req plugin.ProbeRequest) (plugin.ProbeResult, error) {
 	if req.Source.Is4() != req.Target.Is4() {
@@ -73,6 +85,7 @@ func (p *Prober) Probe(ctx context.Context, req plugin.ProbeRequest) (plugin.Pro
 	}
 	laddr := &net.UDPAddr{IP: req.Source.AsSlice()}
 	raddr := &net.UDPAddr{IP: req.Target.AsSlice(), Port: p.port}
+	m := sockmark.Marking{Mark: req.Mark, DSCP: req.DSCP}
 	res := plugin.ProbeResult{}
 	for i := 0; i < req.Count; i++ {
 		if err := ctx.Err(); err != nil {
@@ -80,7 +93,7 @@ func (p *Prober) Probe(ctx context.Context, req plugin.ProbeRequest) (plugin.Pro
 		}
 		start := time.Now()
 		res.Sent++
-		if rtt, ok, err := onePacket(ctx, network, laddr, raddr, req.Timeout, start); err != nil {
+		if rtt, ok, err := onePacket(ctx, network, laddr, raddr, m, req.Timeout, start); err != nil {
 			return res, err
 		} else if ok {
 			res.RTTs = append(res.RTTs, rtt)

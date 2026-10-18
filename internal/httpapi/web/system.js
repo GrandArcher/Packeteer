@@ -19,6 +19,7 @@ var KIND_TITLES = [
   ["storage", "Storage"],
   ["notifier", "Notifiers"],
   ["telemetry", "Telemetry"],
+  ["rpki", "RPKI"],
   ["federation_peer", "Federation peers"]
 ];
 

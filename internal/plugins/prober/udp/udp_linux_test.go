@@ -3,10 +3,14 @@
 package udp
 
 import (
+	"context"
 	"encoding/binary"
+	"net"
 	"net/netip"
 	"testing"
+	"time"
 
+	"github.com/GrandArcher/Packeteer/pkg/plugin"
 	"golang.org/x/sys/unix"
 )
 
@@ -48,4 +52,53 @@ func TestParseExtErrOffender(t *testing.T) {
 	if unreachableFromTarget(from, netip.MustParseAddr("198.51.100.1"), typ, false) {
 		t.Fatal("parsed offender matched a different target")
 	}
+}
+
+// The datagram a provider sharing its source_ip sends carries the DSCP its
+// policy route matches (#157).
+func TestProbeSendsDSCP(t *testing.T) {
+	ln, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		t.Skipf("udp listen: %v", err)
+	}
+	defer ln.Close()
+	raw, err := ln.SyscallConn()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var serr error
+	_ = raw.Control(func(fd uintptr) { serr = unix.SetsockoptInt(int(fd), unix.IPPROTO_IP, unix.IP_RECVTOS, 1) })
+	if serr != nil {
+		t.Skipf("IP_RECVTOS: %v", serr)
+	}
+
+	p := &Prober{port: ln.LocalAddr().(*net.UDPAddr).Port, interval: time.Millisecond}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_, _ = p.Probe(context.Background(), plugin.ProbeRequest{
+			Source: netip.MustParseAddr("127.0.0.1"), Target: netip.MustParseAddr("127.0.0.1"),
+			Count: 1, Timeout: 200 * time.Millisecond, DSCP: 46,
+		})
+	}()
+	buf, oob := make([]byte, 16), make([]byte, 64)
+	_ = ln.SetReadDeadline(time.Now().Add(2 * time.Second))
+	_, oobn, _, _, err := ln.ReadMsgUDP(buf, oob)
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-done
+	msgs, err := unix.ParseSocketControlMessage(oob[:oobn])
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, m := range msgs {
+		if m.Header.Level == unix.IPPROTO_IP && m.Header.Type == unix.IP_TOS {
+			if got := m.Data[0]; got != 46<<2 {
+				t.Fatalf("TOS byte = %#x, want %#x", got, 46<<2)
+			}
+			return
+		}
+	}
+	t.Fatalf("no TOS control message in %d messages", len(msgs))
 }

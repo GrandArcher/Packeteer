@@ -111,6 +111,12 @@ type ProbeRequest struct {
 	Target   netip.Addr    // destination host
 	Count    int           // packets to send
 	Timeout  time.Duration // per-packet timeout
+	// Mark and DSCP tag the probe packets (#157) so providers can share
+	// one Source: the host's policy routing matches the fwmark, a router
+	// matches the DSCP. Zero tags nothing. A prober that cannot apply a
+	// non-zero tag must return ErrSourceUnavailable, not probe untagged.
+	Mark uint32
+	DSCP uint8
 }
 
 // ProbeResult is the raw outcome of one probe run. The core computes loss,

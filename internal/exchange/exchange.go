@@ -84,6 +84,10 @@ type PeerStats struct {
 	Reach PeerReach `json:"reach"`
 	// Availability compares the route server and bilateral feeds (#156).
 	Availability Availability `json:"availability"`
+	// RPKI counts the peer's prefixes by the origin-validation state of
+	// the paths through its next hop (#158). Nil when RPKI is off.
+	// Display only.
+	RPKI *rib.RPKICounts `json:"rpki,omitempty"`
 }
 
 // Flags on a member whose route server feed lacks prefixes it sends over a
@@ -174,7 +178,7 @@ func Build(exs []Exchange, hops []rib.NextHopCount, up map[string]bool, improvem
 			if moves == nil {
 				moves = []Move{}
 			}
-			ps := PeerStats{Name: p.Name, ASN: p.ASN, NextHop: nh.String(), Prefixes: h.Prefixes, Up: up[p.Name], Improvements: len(moves), Moves: moves, Via: h.Via, Availability: availability(h, rsSeen), Reach: PeerReach{State: ReachUnknown}}
+			ps := PeerStats{Name: p.Name, ASN: p.ASN, NextHop: nh.String(), Prefixes: h.Prefixes, Up: up[p.Name], Improvements: len(moves), Moves: moves, Via: h.Via, Availability: availability(h, rsSeen), Reach: PeerReach{State: ReachUnknown}, RPKI: h.RPKI}
 			if r, ok := hl.Peers[p.Name]; ok {
 				ps.Reach = r
 			}

@@ -40,6 +40,9 @@ type Input struct {
 	// Paths are every learned path for those same prefixes, including
 	// inactive add-path and BMP paths. Assemble does not walk the RIB.
 	Paths map[netip.Prefix][]rib.Route
+	// RPKI, when set, labels each learned path with the origin-validation
+	// state of its origin AS (#158). Nil leaves the label empty.
+	RPKI func(netip.Prefix, uint32) plugin.RPKIValidity
 
 	// Telemetry is interface usage. It is not a routing decision.
 	Telemetry []plugin.Usage
@@ -195,6 +198,9 @@ type LearnedPath struct {
 	MEDFrom  string   `json:"med_from,omitempty"`
 	// Via is route_server, bilateral, or unknown (#146). Display only.
 	Via string `json:"via,omitempty"`
+	// RPKI is the RFC 6811 origin-validation state of this path's origin
+	// AS (#158). Empty when RPKI is off. Display only.
+	RPKI string `json:"rpki,omitempty"`
 }
 
 // ASNNode is one origin ASN on the map of measured prefixes.
@@ -226,6 +232,9 @@ type Candidate struct {
 	JitterMs float64 `json:"jitter_ms"`
 	Usable   bool    `json:"usable"`
 	Why      string  `json:"why,omitempty"`
+	// RPKI is the RFC 6811 origin-validation state of this provider's
+	// learned path for the prefix (#158). Empty when RPKI is off.
+	RPKI string `json:"rpki,omitempty"`
 }
 
 // Decision is the latest evaluation of one prefix.
@@ -470,6 +479,7 @@ func candidatesFrom(in []policy.Candidate) []Candidate {
 			JitterMs: millis(c.Jitter),
 			Usable:   c.Usable,
 			Why:      c.Why,
+			RPKI:     string(c.RPKI),
 		})
 	}
 	return out
@@ -697,7 +707,7 @@ func assemblePrefixes(in Input) []Prefix {
 				best, have = rt, true
 			}
 		}
-		row.Paths = learnedPaths(best, have, paths)
+		row.Paths = learnedPaths(best, have, paths, in.RPKI)
 	}
 	sort.Slice(order, func(i, j int) bool { return lessPrefix(order[i], order[j]) < 0 })
 	out := make([]Prefix, 0, len(order))
@@ -809,7 +819,7 @@ func lessPrefix(a, b string) int {
 	return pa.Bits() - pb.Bits()
 }
 
-func learnedPaths(best rib.Route, have bool, paths []rib.Route) []LearnedPath {
+func learnedPaths(best rib.Route, have bool, paths []rib.Route, rpki func(netip.Prefix, uint32) plugin.RPKIValidity) []LearnedPath {
 	if len(paths) == 0 {
 		return nil
 	}
@@ -824,6 +834,9 @@ func learnedPaths(best rib.Route, have bool, paths []rib.Route) []LearnedPath {
 			MED:      rt.MED,
 			MEDFrom:  rt.MEDFrom,
 			Via:      rt.Via,
+		}
+		if rpki != nil && len(rt.ASPath) > 0 {
+			lp.RPKI = string(rpki(rt.Prefix, rt.ASPath[len(rt.ASPath)-1]))
 		}
 		if rt.NextHop.IsValid() {
 			lp.NextHop = rt.NextHop.String()

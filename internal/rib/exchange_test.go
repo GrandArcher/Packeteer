@@ -90,6 +90,20 @@ func TestExchangePeerRouteCheck(t *testing.T) {
 	if _, ok := v.RouteCheck(p, "ix-peer-b"); ok {
 		t.Fatal("a path via the peer's next hop from another AS passed the route check")
 	}
+	if got := v.ProviderPaths(p, "ix-peer-b"); len(got) != 0 {
+		t.Fatalf("ix-peer-b paths = %v, want none", got)
+	}
+
+	// A second add-path path from transit-a: ProviderPaths lists both in
+	// ProviderPath's order, so a caller can judge every one.
+	r.addID(t, idPath(t, 6, "198.51.100.0/24", "192.0.2.1", []uint32{64496, 64511}))
+	eventually(t, "second transit path", func() bool { return len(v.Paths(p)) == 5 })
+	if got := v.ProviderPaths(p, "transit-a"); !slices.EqualFunc(got, [][]uint32{{64496, 64500}, {64496, 64511}}, slices.Equal) {
+		t.Fatalf("transit-a paths = %v", got)
+	}
+	if as, ok := v.ProviderPath(p, "transit-a"); !ok || !slices.Equal(as, []uint32{64496, 64500}) {
+		t.Fatalf("transit-a first path = %v %v", as, ok)
+	}
 
 	// ix-peer-a withdraws: the check fails at once.
 	r.delID(t, idPath(t, 2, "198.51.100.0/24", "203.0.113.11", []uint32{64501, 64501, 64500}))

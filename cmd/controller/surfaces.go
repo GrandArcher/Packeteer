@@ -13,6 +13,7 @@ import (
 	_ "github.com/GrandArcher/Packeteer/internal/plugins/all"
 	"github.com/GrandArcher/Packeteer/internal/policy"
 	"github.com/GrandArcher/Packeteer/internal/rib"
+	"github.com/GrandArcher/Packeteer/internal/rpki"
 )
 
 // exchangesFromConfig is the configured exchanges as the ops API and the
@@ -37,25 +38,34 @@ func exchangesFromConfig(cfg *config.Config) []exchange.Exchange {
 }
 
 // wireExchanges gives the ops API the exchange statistics (#27). The next
-// hop counts walk every learned path, so they are rebuilt only when the
-// RIB generation changes. It also starts the member availability history
-// (#156), which stops with ctx, and the offload report (#152).
-func wireExchanges(ctx context.Context, cfg *config.Config, col *httpapi.Collector, srv *httpapi.Server, view *rib.View, plugins *pluginhost.Set, decider *policy.Engine) {
+// hop counts walk every learned path, so they are rebuilt when the RIB
+// generation or the RPKI data changes. It also starts the member
+// availability history (#156), which stops with ctx, and the offload
+// report (#152).
+func wireExchanges(ctx context.Context, cfg *config.Config, col *httpapi.Collector, srv *httpapi.Server, view *rib.View, plugins *pluginhost.Set, decider *policy.Engine, origins *rpki.Set) {
 	if len(cfg.Exchanges) == 0 || view == nil {
 		return
 	}
 	exs := exchangesFromConfig(cfg)
 	lans := exchange.LANs(exs)
 	var mu sync.Mutex
-	var gen uint64
+	var gen, rpkiVer uint64
 	var cached []rib.NextHopCount
 	built := false
 	hops := func() []rib.NextHopCount {
 		g := view.Generation()
+		rv := origins.Version()
 		mu.Lock()
 		defer mu.Unlock()
-		if !built || g != gen {
-			cached, gen, built = view.NextHops(lans), g, true
+		// A VRP update does not change the RIB generation, so the RPKI
+		// data version is part of the key.
+		if !built || g != gen || rv != rpkiVer {
+			if origins.Enabled() {
+				cached = view.NextHopsRPKI(lans, origins.Validate)
+			} else {
+				cached = view.NextHops(lans)
+			}
+			gen, rpkiVer, built = g, rv, true
 		}
 		return cached
 	}

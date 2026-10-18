@@ -13,6 +13,9 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
       - name: build
         run: go build ./...
       - name: vet
@@ -1014,7 +1017,7 @@ jobs:
             'filtered: ?asn=AS64500&amp;sort=gain&amp;size=25 first 2001:db8:1::/48 rows 3' \
             'Showing 1–3 of 3 matching (100000 measured) prefixes.' 'Page 1 of 1' \
             --absent 'Cannot reach' 'mode-inject'
-      - name: UI settings forms smoke (#130, #181, #155; flow, rules, VIP, outage, exchanges, accept a discovered member, wizard flow step, observe)
+      - name: UI settings forms smoke (#130, #181, #155, #329; flow, rules, VIP, outage, exchanges, accept a discovered member, wizard flow step, guided inputs, observe)
         run: |
           set -euo pipefail
           base=http://127.0.0.1:18132
@@ -1180,6 +1183,22 @@ jobs:
             'value="ix-peer-b"' 'value="64502"' '>Peer name</span>' '>Peer AS</span>' '>Peer next hop</span>' '>Peer probe source</span>' '+ Peer' \
             '4. Flow (optional)' 'Collect flow records' 'Exporter setup' \
             --absent 'The config editor is off' 'mode-inject'
+          # Headless Chrome cannot click, so uiproxy adds the guided-input
+          # driver (#329). It presses Apply on the unchanged form and then
+          # types a bad prefix. The YAML in the editor stays byte for byte
+          # the same, and no PUT /api/config is made.
+          kill "$proxy"
+          /tmp/uiproxy -listen 127.0.0.1:18138 -upstream "$base" -user lab -password lab-only \
+            -fixtures lab/ui-fixtures/guided >/tmp/uiproxy329.log 2>&1 &
+          proxy=$!
+          for _ in $(seq 1 20); do
+            curl -fsS http://127.0.0.1:18138/healthz >/dev/null 2>&1 && break
+            sleep 0.2
+          done
+          curl -fsS http://127.0.0.1:18138/healthz >/dev/null
+          bash lab/ui-smoke.sh http://127.0.0.1:18138/settings.html 'mode-observe' 'It announces nothing.' \
+            'guided: yaml-same: true writes: 0 decision: yes providers: yes flow: yes policy: yes vip: yes outage: yes exchange: yes inbound: yes anomaly: yes inbound-prefix: none anomaly-name: none cidr-error: Enter a prefix, for example 192.0.2.0/24.' \
+            --absent 'mode-inject'
           # Headless Chrome cannot click, so uiproxy answers /api/exchanges
           # from lab/ui-fixtures/exchanges (documentation prefixes and ASNs:
           # two discovered members of ix-lab, one of an exchange the form
@@ -1295,7 +1314,7 @@ jobs:
           bash lab/ui-smoke.sh "$base/prefix/198.51.100.0%2F24" \
             '<td>lab-b <span class="dot down">down</span></td><td class="num bad">100.0%</td><td class="bad">no reply</td>' \
             '<td>lab-c <span class="dot down">down</span></td>' '<td class="num">12.0 ms</td>' --absent 'Cannot reach'
-      - name: UI mitigation, inbound, and anomaly forms smoke (#131; add and remove a rule in observe)
+      - name: UI mitigation, inbound, and anomaly forms smoke (#131, #329; add and remove a rule in observe, guided inputs)
         run: |
           set -euo pipefail
           base=http://127.0.0.1:18134
@@ -1407,6 +1426,20 @@ jobs:
             'mode-observe' 'It announces nothing.' 'Inbound optimization' 'value="198.51.100.0/24"' 'value="50"' \
             'Anomaly rules' 'value="udp-flood"' 'value="flowspec_drop"' 'value="30m"' \
             --absent 'The config editor is off' 'mode-inject'
+          # The same guided-input driver (#329) on the inbound and anomaly
+          # file. Apply leaves the YAML unchanged and writes nothing.
+          kill "$proxy"
+          /tmp/uiproxy -listen 127.0.0.1:18139 -upstream "$base" -user lab -password lab-only \
+            -fixtures lab/ui-fixtures/guided >/tmp/uiproxy329b.log 2>&1 &
+          proxy=$!
+          for _ in $(seq 1 20); do
+            curl -fsS http://127.0.0.1:18139/healthz >/dev/null 2>&1 && break
+            sleep 0.2
+          done
+          curl -fsS http://127.0.0.1:18139/healthz >/dev/null
+          bash lab/ui-smoke.sh http://127.0.0.1:18139/settings.html 'mode-observe' 'It announces nothing.' \
+            'guided: yaml-same: true writes: 0 decision: yes providers: yes flow: yes policy: no vip: no outage: no exchange: no inbound: yes anomaly: yes inbound-prefix: 198.51.100.0/24 anomaly-name: udp-flood cidr-error: Enter a prefix, for example 192.0.2.0/24.' \
+            --absent 'mode-inject'
       - name: UI maintenance page smoke (#177; open and close a window from the page, viewer is read-only, observe)
         run: |
           set -euo pipefail

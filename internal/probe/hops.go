@@ -4,6 +4,8 @@ import (
 	"context"
 	"net/netip"
 	"sync"
+
+	"github.com/GrandArcher/Packeteer/internal/sockmark"
 )
 
 // HopTarget is an exchange peer's next hop, probed from the peer's own
@@ -12,6 +14,7 @@ type HopTarget struct {
 	Provider string
 	Source   netip.Addr
 	NextHop  netip.Addr
+	Marking  sockmark.Marking
 }
 
 // HopResult is one next-hop measurement. Err is set when no measurement
@@ -62,6 +65,6 @@ func (e *Engine) probeHop(ctx context.Context, t HopTarget) HopResult {
 		return HopResult{Provider: t.Provider, Err: ctx.Err().Error()}
 	}
 	defer func() { <-sem }()
-	r, _ := e.runChain(ctx, res, Provider{Name: t.Provider, Source: t.Source}, e.packets(), 0, nil)
+	r, _ := e.runChain(ctx, res, Provider{Name: t.Provider, Source: t.Source, Marking: t.Marking}, e.packets(), 0, nil)
 	return HopResult{Provider: t.Provider, Stats: r.Stats, Err: r.Err}
 }

@@ -37,7 +37,7 @@ func exchangeHealth(cfg *config.Config) ([]probe.HopTarget, *exchange.Health) {
 			if serr != nil || nerr != nil {
 				continue // Validate reports it
 			}
-			targets = append(targets, probe.HopTarget{Provider: p.Name, Source: src, NextHop: nh})
+			targets = append(targets, probe.HopTarget{Provider: p.Name, Source: src, NextHop: nh, Marking: markingOf(byName[p.Name])})
 			sp.Peers = append(sp.Peers, p.Name)
 		}
 		specs = append(specs, sp)

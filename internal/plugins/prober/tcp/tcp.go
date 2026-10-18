@@ -18,6 +18,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/GrandArcher/Packeteer/internal/sockmark"
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
 )
 
@@ -71,7 +72,8 @@ func (p *Prober) Probe(ctx context.Context, req plugin.ProbeRequest) (plugin.Pro
 	if req.Source.Is4() != req.Target.Is4() {
 		return plugin.ProbeResult{}, fmt.Errorf("source %s and target %s differ in address family", req.Source, req.Target)
 	}
-	d := net.Dialer{LocalAddr: &net.TCPAddr{IP: req.Source.AsSlice()}, Timeout: req.Timeout}
+	d := net.Dialer{LocalAddr: &net.TCPAddr{IP: req.Source.AsSlice()}, Timeout: req.Timeout,
+		Control: sockmark.Control(sockmark.Marking{Mark: req.Mark, DSCP: req.DSCP})}
 	addr := netip.AddrPortFrom(req.Target, p.port).String()
 	res := plugin.ProbeResult{}
 	for i := 0; i < req.Count; i++ {
@@ -92,6 +94,8 @@ func (p *Prober) Probe(ctx context.Context, req plugin.ProbeRequest) (plugin.Pro
 		case errors.Is(err, syscall.ECONNREFUSED):
 			res.RTTs = append(res.RTTs, rtt) // host answered with RST
 		case errors.Is(err, syscall.EADDRNOTAVAIL):
+			return res, fmt.Errorf("%w: %s: %v", plugin.ErrSourceUnavailable, req.Source, err)
+		case errors.Is(err, sockmark.ErrTag):
 			return res, fmt.Errorf("%w: %s: %v", plugin.ErrSourceUnavailable, req.Source, err)
 		}
 		if i < req.Count-1 {

@@ -68,7 +68,8 @@ func Decide(prev State, in Input, cfg Config, scorer plugin.Scorer, now time.Tim
 	byPrefix := map[netip.Prefix][]Candidate{}
 	subs := map[netip.Prefix]map[netip.Prefix]*SubrangeDecision{}
 	for _, r := range in.Results {
-		c := Candidate{Provider: r.Provider, LossPct: r.Stats.LossPct, RTTAvg: r.Stats.RTTAvg, Jitter: r.Stats.Jitter, Usable: true}
+		c := Candidate{Provider: r.Provider, LossPct: r.Stats.LossPct, RTTAvg: r.Stats.RTTAvg, Jitter: r.Stats.Jitter, Usable: true,
+			RPKI: in.RPKI[r.Prefix][r.Provider]}
 		switch {
 		case !r.OK():
 			c.Usable, c.Why = false, "probe error"
@@ -82,6 +83,8 @@ func Decide(prev State, in Input, cfg Config, scorer plugin.Scorer, now time.Tim
 			c.Usable, c.Why = false, "no route via provider (route check)"
 		case in.EgressDown[r.Provider] && r.Provider != nativeOf(st, in, r.Prefix):
 			c.Usable, c.Why = false, "egress router down"
+		case cfg.RPKIAvoidInvalid && c.RPKI == plugin.RPKIInvalid && r.Provider != nativeOf(st, in, r.Prefix):
+			c.Usable, c.Why = false, "RPKI invalid"
 		}
 		if c.Usable {
 			c.Score = scorer.Score(plugin.PathStats{Provider: r.Provider, LossPct: c.LossPct, RTTAvg: c.RTTAvg, Jitter: c.Jitter})

@@ -162,6 +162,9 @@ func TestFormAnomalyRulesRoundTrip(t *testing.T) {
 	if len(rules) != 3 || rules[0].MinMbps != 250 || rules[1].RateMbps != 50 || rules[1].Action != "flowspec_rate_limit" || rules[2].Action != "blackhole" {
 		t.Fatalf("rules after round trip: %+v\n%s", rules, out)
 	}
+	if !reflect.DeepEqual(rules[1].Prefixes, []string{"203.0.113.0/25"}) || !reflect.DeepEqual(rules[2].Prefixes, []string{"203.0.113.128/25"}) {
+		t.Fatalf("more-specific anomaly prefixes: %+v\n%s", rules, out)
+	}
 	// The detector, mitigation block and the rest are untouched.
 	if cfg.Anomaly.Detector == nil || cfg.Anomaly.Detector.Type != "baseline" || cfg.Mitigation.Mode != config.ModeObserve {
 		t.Fatalf("anomaly edit changed other blocks: %+v", cfg.Anomaly)

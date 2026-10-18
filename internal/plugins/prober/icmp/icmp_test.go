@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/GrandArcher/Packeteer/internal/sockmark"
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
 )
 
@@ -81,5 +82,27 @@ func TestConfig(t *testing.T) {
 		if _, err := plugin.Probers.New(TypeName, c, plugin.Env{}); err != nil {
 			t.Errorf("%q: %v", y, err)
 		}
+	}
+}
+
+// A DSCP-tagged echo still gets its reply on the loopback (#157), and the
+// tag is on the socket.
+func TestTaggedEcho(t *testing.T) {
+	lo := netip.MustParseAddr("127.0.0.1")
+	pr := newProber(t, "packet_interval: 1ms").(*Prober)
+	c, err := pr.listen(lo, sockmark.Marking{DSCP: 46})
+	skipIfNoSocket(t, err)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.c.Close()
+	tos, err := c.c.IPv4PacketConn().TOS()
+	if err != nil || tos != 46<<2 {
+		t.Fatalf("TOS = %d, err %v, want %d", tos, err, 46<<2)
+	}
+	res, err := pr.Probe(context.Background(), plugin.ProbeRequest{Source: lo, Target: lo, Count: 2, Timeout: time.Second, DSCP: 46})
+	skipIfNoSocket(t, err)
+	if err != nil || res.Sent != 2 || len(res.RTTs) != 2 {
+		t.Fatalf("res = %+v, err %v", res, err)
 	}
 }

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/GrandArcher/Packeteer/internal/exchange"
+	"github.com/GrandArcher/Packeteer/internal/sockmark"
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
 )
 
@@ -346,7 +347,7 @@ func (e *Engine) IndirectPass(ctx context.Context) int {
 		if bctx.Err() != nil {
 			break
 		}
-		tctx, tcancel := context.WithTimeout(bctx, share)
+		tctx, tcancel := context.WithTimeout(sockmark.WithContext(bctx, r.provider.Marking), share)
 		var hops []netip.Addr
 		var hop netip.Addr
 		var ok bool

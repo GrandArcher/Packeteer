@@ -17,6 +17,7 @@ import (
 	"github.com/GrandArcher/Packeteer/internal/policy"
 	"github.com/GrandArcher/Packeteer/internal/probe"
 	"github.com/GrandArcher/Packeteer/internal/rib"
+	"github.com/GrandArcher/Packeteer/internal/rpki"
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
 )
 
@@ -113,8 +114,9 @@ func policyConfig(cfg *config.Config) (policy.Config, error) {
 		MaxImprovements: max,
 		// A result older than ~3 rounds is stale. The decision loop
 		// re-checks this on a ticker even when no round completes.
-		MaxResultAge: maxResultAge(cfg),
-		Excluded:     map[string]bool{},
+		MaxResultAge:     maxResultAge(cfg),
+		Excluded:         map[string]bool{},
+		RPKIAvoidInvalid: cfg.RPKIOn() && cfg.RPKI.AvoidInvalid,
 	}
 	if cfg.ImprovementTTL > 0 {
 		pc.ImprovementTTL = cfg.ImprovementTTL
@@ -165,12 +167,25 @@ func newDecider(cfg *config.Config, plugins *pluginhost.Set) (*policy.Engine, er
 	return policy.NewEngine(pc, plugins.Scorer.Plugin), nil
 }
 
+// newRPKISet wraps the configured origin-validation sources in order. An
+// empty set is RPKI off.
+func newRPKISet(plugins *pluginhost.Set) *rpki.Set {
+	if plugins == nil {
+		return rpki.NewSet(nil)
+	}
+	out := make([]plugin.RPKI, 0, len(plugins.RPKISources))
+	for _, s := range plugins.RPKISources {
+		out = append(out, s.Plugin)
+	}
+	return rpki.NewSet(out)
+}
+
 // decisionInput snapshots probe results, provider health, the RIB view,
 // and, when the scorer plans commit moves, telemetry and flow volumes.
 // A weighted scorer does not implement planning, so those reads are skipped.
 // With federation (#30), fresh peers' paths through providers in other
 // domains are merged in and global commits are applied to the usage.
-func decisionInput(ctx context.Context, now time.Time, engine *probe.Engine, view *rib.View, plugins *pluginhost.Set, fed *fedState) policy.Input {
+func decisionInput(ctx context.Context, now time.Time, engine *probe.Engine, view *rib.View, plugins *pluginhost.Set, fed *fedState, origins *rpki.Set) policy.Input {
 	in := policy.Input{Results: engine.Results(), ProviderUp: map[string]bool{}, Native: map[netip.Prefix]string{}}
 	for _, p := range engine.Providers() {
 		in.ProviderUp[p.Name] = p.Up
@@ -183,6 +198,7 @@ func decisionInput(ctx context.Context, now time.Time, engine *probe.Engine, vie
 			}
 		}
 		fillRouteChecks(&in, view)
+		fillRPKI(&in, view, origins)
 		in.EgressDown = view.EgressDown()
 	}
 	fed.merge(&in, now)
@@ -218,6 +234,55 @@ func fillRouteChecks(in *policy.Input, view routeChecker) {
 			in.NoRoute[r.Prefix] = map[string]bool{}
 		}
 		in.NoRoute[r.Prefix][r.Provider] = true
+	}
+}
+
+// providerPaths is the RIB surface fillRPKI reads. *rib.View implements it.
+type providerPaths interface {
+	ProviderPaths(netip.Prefix, string) [][]uint32
+}
+
+// rpkiRank orders validity from best to worst for a provider with several
+// learned paths.
+var rpkiRank = map[plugin.RPKIValidity]int{
+	plugin.RPKIValid:    0,
+	plugin.RPKINotFound: 1,
+	plugin.RPKIUnknown:  2,
+	plugin.RPKIInvalid:  3,
+}
+
+// fillRPKI records, per probed prefix and provider, the RFC 6811
+// origin-validation state of that provider's learned paths (#158). The
+// origin is the last AS in a path. A provider with several paths (add-path,
+// or BMP from several routers) gets the worst state among them: Decide
+// cannot tell which one the provider forwards on, so one invalid path makes
+// the provider invalid for rpki.avoid_invalid. It is display-only input to
+// Decide unless avoid_invalid is set; it never changes the learned RIB.
+func fillRPKI(in *policy.Input, view providerPaths, origins *rpki.Set) {
+	if in == nil || view == nil || !origins.Enabled() {
+		return
+	}
+	for _, r := range in.Results {
+		var state plugin.RPKIValidity
+		for _, path := range view.ProviderPaths(r.Prefix, r.Provider) {
+			if len(path) == 0 {
+				continue
+			}
+			v := origins.Validate(r.Prefix, path[len(path)-1])
+			if state == "" || rpkiRank[v] > rpkiRank[state] {
+				state = v
+			}
+		}
+		if state == "" {
+			continue
+		}
+		if in.RPKI == nil {
+			in.RPKI = map[netip.Prefix]map[string]plugin.RPKIValidity{}
+		}
+		if in.RPKI[r.Prefix] == nil {
+			in.RPKI[r.Prefix] = map[string]plugin.RPKIValidity{}
+		}
+		in.RPKI[r.Prefix][r.Provider] = state
 	}
 }
 
