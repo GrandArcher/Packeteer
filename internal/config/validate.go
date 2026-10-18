@@ -276,6 +276,10 @@ func (c *Config) validateProbe(add func(string, ...any)) {
 	if c.Probe.RetryLossPct < 0 || c.Probe.RetryLossPct > 100 {
 		add("probe.retry_loss_pct %v must be between 0 and 100", c.Probe.RetryLossPct)
 	}
+	if c.Probe.DegradedLossPct <= 0 || c.Probe.DownLossPct > 100 || c.Probe.DegradedLossPct > c.Probe.DownLossPct {
+		add("probe.degraded_loss_pct %v and probe.down_loss_pct %v must satisfy 0 < degraded <= down <= 100",
+			c.Probe.DegradedLossPct, c.Probe.DownLossPct)
+	}
 	if c.Probe.RetryPackets < 0 || c.Probe.RetryPackets > MaxProbePackets {
 		add("probe.retry_packets %d must be between 0 and %d", c.Probe.RetryPackets, MaxProbePackets)
 	}

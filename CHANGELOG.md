@@ -6,6 +6,7 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 
 ### Added
 
+- Overview problems headline and "N of M healthy" tile; `probe.degraded_loss_pct` and `probe.down_loss_pct` set the dashboard health labels, no decision uses them (#343).
 - Route-server signals: spikes in RPKI-invalid, IRR, and transit-free-ASN filtering, new origins, more-specific bursts, and RFC 7999 blackhole counts per member; GET only (#165).
 - Probe multiplexing: providers and exchange peers may share one `source_ip` with a distinct `fwmark` or `dscp`; `packeteer -pbr <format>` prints Linux and router PBR config, never applies it (#157).
 - Shared IX port: `exchanges[].port` (capacity, commit, flat `port_cost`) on one telemetry binding; the commit and cost scorers plan no move past its capacity or commit (#151).
@@ -23,6 +24,7 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 
 ### Fixed
 
+- Provider health follows measurements: no reply or loss at `probe.down_loss_pct` is down, at `probe.degraded_loss_pct` degraded; "no reply" replaces 0.0 ms (#343).
 - BMP exchange peer monitor: a stats report no longer marks a peer up, state is kept per router and peer, and an unknown peer-down reason reads `unknown reason N` (#338).
 - Fabric probes read Can Ping from the customers document (`use` ping templates, GET /admin/api/v4/nagios/customers/{vlan}/4|6) and skip a manager export with no successful list (#162).
 - Fabric probes stop using a Can Ping list older than three intervals after failed fetches, so opted-out members are not pinged (#336).

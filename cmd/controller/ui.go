@@ -184,7 +184,7 @@ func execSpecs(cfg *config.Config) []execSpec {
 // setupInfo is what the dashboard's first-run checklist reads from the
 // loaded config (#49): the target source types and the cap.
 func setupInfo(cfg *config.Config, plugins *pluginhost.Set) httpapi.Setup {
-	st := httpapi.Setup{}
+	st := httpapi.Setup{DegradedLossPct: cfg.Probe.DegradedLossPct, DownLossPct: cfg.Probe.DownLossPct}
 	if cfg.MaxImprovements != nil {
 		st.MaxImprovements = *cfg.MaxImprovements
 	}

@@ -344,10 +344,10 @@ func probeSourceRow(p Provider) Component {
 	switch {
 	case p.Up:
 		c.Detail = "probe source address usable"
-	case p.Domain != "" && strings.HasPrefix(p.Reason, "measured by the peer"):
+	case p.Domain != "" && strings.HasPrefix(p.Reason, ReasonMeasuredByPeer):
 		c.State, c.Detail = StateIdle, p.Reason
-	case p.Reason == "starting":
-		c.State, c.Detail = StateIdle, "starting"
+	case p.Reason == ReasonStarting:
+		c.State, c.Detail = StateIdle, ReasonStarting
 	default:
 		c.State, c.Error = StateDown, p.Reason
 	}
