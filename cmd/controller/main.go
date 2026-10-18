@@ -563,6 +563,7 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 		log.Error("refusing to start", "err", err)
 		return 1
 	}
+	rpkiSet := newRPKISet(plugins)
 	// The two controllers share max_improvements, so each reads the other's
 	// count. ctl is assigned right below; Active is nil-safe until then.
 	if err := setMitigationRIB(mit, view); err != nil {
@@ -653,8 +654,11 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 	col.SetFlowTracked(func() int { return flowTracked(plugins) })
 	col.SetTruncated(func() map[string]uint64 { return truncated(plugins) })
 	col.Attach(engine, decider, view)
+	if rpkiSet.Enabled() {
+		col.SetRPKI(rpkiSet.Validate)
+	}
 	httpSrv.SetQuarantine(quarantineControl{decider: decider, out: dispatch, poke: poke, now: time.Now})
-	wireExchanges(ctx, cfg, col, httpSrv, view, plugins, decider)
+	wireExchanges(ctx, cfg, col, httpSrv, view, plugins, decider, rpkiSet)
 	hopTargets, ixHealth := exchangeHealth(cfg)
 	col.SetExchangeHealth(ixHealth)
 	wireSuggestions(cfg, httpSrv, view)
@@ -750,7 +754,7 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 				return
 			}
 			leading = true
-			in := decisionInput(loopCtx, now, engine, view, plugins, fed)
+			in := decisionInput(loopCtx, now, engine, view, plugins, fed, rpkiSet)
 			in.Held = lw.Held
 			changes, err := runDecision(now, decider, in, ctl, log, snap.Mode, engine)
 			fed.publish(now, in, decider.Improvements())

@@ -77,7 +77,27 @@ function exPeerRow(exName, p) {
   var moved = p.improvements > 0 && !(p.moved_mbps > 0) ? "unknown" : exMbps(p.moved_mbps);
   return [exCell(p.name), asn, exCell(p.next_hop, "mono"), exCell(VIA_LABELS[p.via] || p.via || "unknown"), exCell(p.prefixes), up, exReachCell(p.reach),
     exCell(p.improvements), exCell(moved), exCell(p.availability.route_server_only), exCell(p.availability.bilateral_only), exCell(p.availability.both),
-    exFlagCell(p.availability), exMemberButton(exName, p.next_hop)];
+    exRPKICell(p.rpki), exFlagCell(p.availability), exMemberButton(exName, p.next_hop)];
+}
+
+// The origin-validation state of the peer's prefixes (#158). Empty when
+// RPKI is off.
+function exRPKICell(r) {
+  if (!r) return exCell("-");
+  var parts = [];
+  if (r.valid) parts.push(r.valid + " valid");
+  if (r.invalid) parts.push(r.invalid + " invalid");
+  if (r.notfound) parts.push(r.notfound + " not found");
+  if (r.unknown) parts.push(r.unknown + " unknown");
+  var td = el("td");
+  if (!parts.length) {
+    td.appendChild(document.createTextNode("0"));
+    return td;
+  }
+  var span = el("span", r.invalid ? "badge warn" : "", parts.join(", "));
+  if (r.invalid) span.title = "Some of this peer's prefixes have an RPKI-invalid origin.";
+  td.appendChild(span);
+  return td;
 }
 
 function exFlagCell(a) {
@@ -156,7 +176,7 @@ function renderExchange(root, ex) {
   if (!peers.length) {
     section.appendChild(el("p", "empty", "No peers in the config."));
   } else {
-    section.appendChild(exTable(["Peer", "AS", "Next hop", "Type", "Prefixes", "Probe source", "Next-hop probe", "Improvements", "Moved", "RS only", "Bilateral only", "Both", "RS feed", ""],
+    section.appendChild(exTable(["Peer", "AS", "Next hop", "Type", "Prefixes", "Probe source", "Next-hop probe", "Improvements", "Moved", "RS only", "Bilateral only", "Both", "RPKI", "RS feed", ""],
       peers.map(function (p) { return exPeerRow(ex.name, p); })));
   }
 

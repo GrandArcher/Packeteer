@@ -85,6 +85,13 @@ func systemFacts(plugins *pluginhost.Set, engine *atomic.Pointer[probe.Engine], 
 				Routers:    health.Under(ribRouterPrefix(r.Name)),
 			})
 		}
+		for _, r := range plugins.RPKISources {
+			st := r.Plugin.Status()
+			f.RPKI = append(f.RPKI, httpapi.RPKIFact{
+				PluginFact: httpapi.PluginFact{Name: r.Name, Type: r.Type},
+				Up:         st.Up, Stale: st.Stale, VRPs: st.VRPs, Updated: st.Updated, Err: st.Error,
+			})
+		}
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
 		for _, t := range plugins.Telemetry {

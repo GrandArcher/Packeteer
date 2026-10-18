@@ -17,6 +17,7 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 - IX-F member import: read-only GET of the IXP Manager member export or a named IX-F URL; key from PACKETEER_IXP_MANAGER_API_KEY header only; 14-day expiry warning (#161).
 - Web UI shows the Packeteer logo next to the name and as the favicon (#327).
 - IXP mode: `ixp: {}` is observe-only and refuses `mode: inject`, `announcer`, `mitigation`, `inbound`, `synthesize`, and `more_specific`; no BGP neighbors or RIB view required (#160).
+- RPKI origin validation: an opt-in `rpki` block reads an RTR server, labels learned paths valid/invalid/notfound/unknown, and `avoid_invalid` refuses a new steer onto an invalid path (#158).
 - Probe-path check: a TTL-1 probe from each provider's `source_ip` must leave through `next_hop`; a mismatch marks it down with reason `probe path mismatch`; `path_check: false` opts out (#150).
 - BMP exchange peer session monitor: `exchange.peer_up`/`peer_down` with the decoded reason (Cease subcode 1), Adj-RIB-In count as `adj_rib_in` and a metric, and `exchange.max_prefix` warnings (#147).
 
@@ -26,6 +27,8 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 - Fabric probes read Can Ping from the customers document (`use` ping templates, GET /admin/api/v4/nagios/customers/{vlan}/4|6) and skip a manager export with no successful list (#162).
 - Fabric probes stop using a Can Ping list older than three intervals after failed fetches, so opted-out members are not pinged (#336).
 - IX-F import rejects an IPv4-mapped prefix on an IPv6 LAN, a percent-encoded API key in the manager URL, and a switch id from another IXP (#161).
+- RTR Serial Notify uses the client's last serial, Error Report code 2 keeps the cache and retries, and an empty RPKI source is skipped (#158).
+- RTR applies a serial delta only at End of Data and ignores Serial Notify during any response; RPKI labels a provider by all its learned paths; the System row matches cache use (#158).
 - IX-F member view drops the URL query string, and fetch errors no longer include the request URL; `key_expires` and `fetched` are omitted when unset (#337).
 
 ## [0.7.0] - 2026-10-15
