@@ -33,48 +33,65 @@ const (
 	PeerChangePrefixOK
 )
 
-// PeerChange is one session transition for one exchange peer.
+// PeerChange is one session transition for one exchange peer on one
+// monitored router.
 type PeerChange struct {
 	Kind      PeerChangeKind
 	Exchange  string
 	Peer      string
+	Router    netip.Addr
 	Reason    string
 	Prefixes  int
 	MaxPrefix int
 }
 
+type sessionState uint8
+
+const (
+	// stateUnknown: no Peer Up or Peer Down seen since the router session
+	// started. A Statistics Report alone leaves it here.
+	stateUnknown sessionState = iota
+	stateUp
+	stateDown
+)
+
+// sessionKey is one peer as seen by one router: two edge routers can both
+// peer with the same address.
+type sessionKey struct {
+	router netip.Addr
+	name   string
+}
+
 type sessionPeer struct {
 	spec     PeerSpec
 	router   netip.Addr
-	seen     bool
-	up       bool
+	state    sessionState
 	reason   string
 	prefixes int
+	counted  bool
 	high     bool
 }
 
 // PeerMonitor tracks each configured exchange peer's BMP session state and
-// Adj-RIB-In route count (#147). It only reads RIB events from the BMP
-// station: it never announces, withdraws, or changes a decision. A nil
-// *PeerMonitor is usable and reports nothing.
+// Adj-RIB-In route count per monitoring router (#147). It only reads RIB
+// events from the BMP station: it never announces, withdraws, or changes a
+// decision. A nil *PeerMonitor is usable and reports nothing.
 type PeerMonitor struct {
-	mu     sync.Mutex
-	byAddr map[netip.Addr][]*sessionPeer
-	byName map[string]*sessionPeer
+	mu       sync.Mutex
+	byAddr   map[netip.Addr][]PeerSpec
+	sessions map[sessionKey]*sessionPeer
 }
 
 // NewPeerMonitor watches the given peers. A peer with no name or an
 // invalid next hop is skipped.
 func NewPeerMonitor(specs []PeerSpec) *PeerMonitor {
-	m := &PeerMonitor{byAddr: map[netip.Addr][]*sessionPeer{}, byName: map[string]*sessionPeer{}}
+	m := &PeerMonitor{byAddr: map[netip.Addr][]PeerSpec{}, sessions: map[sessionKey]*sessionPeer{}}
 	for _, sp := range specs {
 		if sp.Name == "" || !sp.NextHop.IsValid() {
 			continue
 		}
-		st := &sessionPeer{spec: sp}
-		m.byName[sp.Name] = st
 		nh := sp.NextHop.Unmap()
-		m.byAddr[nh] = append(m.byAddr[nh], st)
+		m.byAddr[nh] = append(m.byAddr[nh], sp)
 	}
 	return m
 }
@@ -107,32 +124,46 @@ func (m *PeerMonitor) Observe(ev plugin.RIBEvent) []PeerChange {
 	return nil
 }
 
-// Prefixes is the last Adj-RIB-In count per peer name. A peer whose router
-// has not sent a statistics report yet is absent.
+// Prefixes is the last Adj-RIB-In count per peer name, summed over the
+// routers that report it. A peer no router has sent a statistics report for
+// is absent.
 func (m *PeerMonitor) Prefixes() map[string]int {
 	if m == nil {
 		return nil
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	out := make(map[string]int, len(m.byName))
-	for name, st := range m.byName {
-		if st.seen {
-			out[name] = st.prefixes
+	out := map[string]int{}
+	for k, st := range m.sessions {
+		if st.counted {
+			out[k.name] += st.prefixes
 		}
 	}
 	return out
 }
 
+// match returns the monitored sessions the event is about, creating the
+// session for a router the first time it reports the peer.
 func (m *PeerMonitor) match(ev plugin.RIBEvent) []*sessionPeer {
 	if ev.Peer.LocRIB {
 		return nil
 	}
-	return m.byAddr[ev.Peer.Address.Unmap()]
+	router := ev.Router.Unmap()
+	var out []*sessionPeer
+	for _, sp := range m.byAddr[ev.Peer.Address.Unmap()] {
+		k := sessionKey{router: router, name: sp.Name}
+		st := m.sessions[k]
+		if st == nil {
+			st = &sessionPeer{spec: sp, router: router}
+			m.sessions[k] = st
+		}
+		out = append(out, st)
+	}
+	return out
 }
 
 func (m *PeerMonitor) change(st *sessionPeer, kind PeerChangeKind) PeerChange {
-	return PeerChange{Kind: kind, Exchange: st.spec.Exchange, Peer: st.spec.Name,
+	return PeerChange{Kind: kind, Exchange: st.spec.Exchange, Peer: st.spec.Name, Router: st.router,
 		Reason: st.reason, Prefixes: st.prefixes, MaxPrefix: st.spec.MaxPrefix}
 }
 
@@ -148,11 +179,10 @@ func (m *PeerMonitor) clearHigh(st *sessionPeer) (PeerChange, bool) {
 func (m *PeerMonitor) peerUp(ev plugin.RIBEvent) []PeerChange {
 	var out []PeerChange
 	for _, st := range m.match(ev) {
-		st.router, st.seen = ev.Router.Unmap(), true
-		if st.up {
+		if st.state == stateUp {
 			continue
 		}
-		st.up, st.reason = true, ""
+		st.state, st.reason = stateUp, ""
 		out = append(out, m.change(st, PeerChangeUp))
 	}
 	return out
@@ -161,11 +191,11 @@ func (m *PeerMonitor) peerUp(ev plugin.RIBEvent) []PeerChange {
 func (m *PeerMonitor) peerDown(ev plugin.RIBEvent) []PeerChange {
 	var out []PeerChange
 	for _, st := range m.match(ev) {
-		if st.seen && !st.up {
+		if st.state == stateDown {
 			continue
 		}
-		st.router, st.seen, st.up = ev.Router.Unmap(), true, false
-		st.reason, st.prefixes = ev.Reason, 0
+		st.state = stateDown
+		st.reason, st.prefixes, st.counted = ev.Reason, 0, true
 		if ch, ok := m.clearHigh(st); ok {
 			out = append(out, ch)
 		}
@@ -174,10 +204,17 @@ func (m *PeerMonitor) peerDown(ev plugin.RIBEvent) []PeerChange {
 	return out
 }
 
+// prefixCount records a Statistics Report count. It never changes the
+// up/down state: a report that follows a peer or router down must not hide
+// the next Peer Up. A report for a session known to be down is dropped, as
+// its count is zero until the peer comes back.
 func (m *PeerMonitor) prefixCount(ev plugin.RIBEvent) []PeerChange {
 	var out []PeerChange
 	for _, st := range m.match(ev) {
-		st.router, st.seen, st.up, st.reason, st.prefixes = ev.Router.Unmap(), true, true, "", ev.Prefixes
+		if st.state == stateDown {
+			continue
+		}
+		st.prefixes, st.counted = ev.Prefixes, true
 		if st.spec.MaxPrefix <= 0 || st.spec.WarnPct <= 0 {
 			continue
 		}
@@ -195,18 +232,22 @@ func (m *PeerMonitor) prefixCount(ev plugin.RIBEvent) []PeerChange {
 	return out
 }
 
-// routerDown clears the session state of every peer last seen on router.
-// The BGP sessions may still be up, so this reports no peer down; it only
-// drops the counts (and any max-prefix warning) that can no longer be
-// trusted.
+// routerDown clears the session state of the peers seen on router only;
+// other routers' sessions with the same peer are untouched. The BGP
+// sessions may still be up, so this reports no peer down; it only drops the
+// counts (and any max-prefix warning) that can no longer be trusted. A
+// session already known down stays down.
 func (m *PeerMonitor) routerDown(router netip.Addr) []PeerChange {
 	router = router.Unmap()
 	var out []PeerChange
-	for _, st := range m.byName {
+	for _, st := range m.sessions {
 		if st.router != router {
 			continue
 		}
-		st.up, st.prefixes = false, 0
+		if st.state == stateUp {
+			st.state = stateUnknown
+		}
+		st.prefixes = 0
 		if ch, ok := m.clearHigh(st); ok {
 			out = append(out, ch)
 		}

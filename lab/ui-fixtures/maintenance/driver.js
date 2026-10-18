@@ -56,8 +56,10 @@ var steps = [
   },
   function () { return rows().length === 3; },
   function () {
+    // local() truncates to the minute and Chrome's clock can run slightly
+    // ahead of the container's, so start a minute back to be current.
     var now = new Date();
-    fill("lab-a", local(now), local(new Date(now.getTime() + 7200000)), "");
+    fill("lab-a", local(new Date(now.getTime() - 60000)), local(new Date(now.getTime() + 7200000)), "");
   },
   function () { return rows().some(function (r) { return r.indexOf("current") === 0; }); },
   function () {
