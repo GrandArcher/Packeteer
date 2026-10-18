@@ -49,7 +49,7 @@ func TestExchangePeerMonitorEvents(t *testing.T) {
 		t.Fatalf("up = %+v", up)
 	}
 	if ev := peerChangeEvent(now, up[0]); ev.Kind != plugin.EventExchangePeerUp ||
-		ev.Fields["exchange"] != "ix-lab" || ev.Fields["peer"] != "ix-peer-a" {
+		ev.Fields["exchange"] != "ix-lab" || ev.Fields["peer"] != "ix-peer-a" || ev.Fields["router"] != "192.0.2.254" {
 		t.Fatalf("up event = %+v", ev)
 	}
 
