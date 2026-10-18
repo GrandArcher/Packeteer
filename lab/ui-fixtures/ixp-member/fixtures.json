@@ -1,0 +1,7 @@
+{
+  "stubs": [
+    {"method": "GET", "path": "/api/ixp/members/64496", "file": "member.json"},
+    {"method": "GET", "path": "/api/ixp/routeservers/history", "contains": "session=pb_a", "file": "history.json"},
+    {"method": "GET", "path": "/api/ixp/members", "file": "members.json"}
+  ]
+}

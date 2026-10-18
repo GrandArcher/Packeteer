@@ -111,7 +111,7 @@ func IXPMemberMetrics(v plugin.MemberView, now time.Time) []byte {
 
 // IXPFabricMetrics renders the fabric prober. Targets and the
 // past-tolerance count are zero while the member list is stale; age stays.
-// There is no per-member series.
+// The per-member series are IXPMemberFabricMetrics.
 func IXPFabricMetrics(v plugin.FabricView, now time.Time) []byte {
 	if !v.Configured {
 		return nil

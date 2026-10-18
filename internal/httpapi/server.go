@@ -353,6 +353,7 @@ func (s *Server) handleMetrics(w http.ResponseWriter, _ *http.Request) {
 	}
 	if v, ok := s.ixpFabricView(); ok && v.Configured {
 		_, _ = w.Write(IXPFabricMetrics(v, time.Now()))
+		_, _ = w.Write(IXPMemberFabricMetrics(v))
 	}
 	if src, ok := s.ixpRouteServerSource(); ok {
 		_, _ = w.Write(IXPRouteServerMetrics(src.view(), time.Now()))

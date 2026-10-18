@@ -266,6 +266,28 @@ func TestViewURLDropsQuery(t *testing.T) {
 	}
 }
 
+func TestManagerBase(t *testing.T) {
+	cases := []struct {
+		raw     string
+		manager bool
+		want    string
+	}{
+		{"https://ixp.example.invalid" + exportPath + "?ixfid_1=2", true, "https://ixp.example.invalid"},
+		{"https://ixp.example.invalid/ixp" + exportPath, true, "https://ixp.example.invalid/ixp"},
+		{"https://ixp.example.invalid:8443" + exportPath, true, "https://ixp.example.invalid:8443"},
+		{"https://ixp.example.invalid/members.json", false, ""},
+	}
+	for _, c := range cases {
+		if got := managerBase(c.raw, c.manager); got != c.want {
+			t.Errorf("managerBase(%q, %v) = %q, want %q", c.raw, c.manager, got, c.want)
+		}
+	}
+	s := build(t, "url: https://ixp.example.invalid/ixp"+exportPath+"\n", "", nil)
+	if s.View().ManagerURL != "https://ixp.example.invalid/ixp" {
+		t.Fatalf("view manager url %q", s.View().ManagerURL)
+	}
+}
+
 func TestViewHidesQuery(t *testing.T) {
 	const secret = "QuerySecretQuerySecret1"
 	var got string

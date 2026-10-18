@@ -198,8 +198,8 @@ func TestIXPProbesAPIAndMetrics(t *testing.T) {
 			t.Errorf("missing %s in\n%s", want, metrics)
 		}
 	}
-	if strings.Contains(metrics, "packeteer_ixp_member_rtt") {
-		t.Fatalf("per-member series:\n%s", metrics)
+	if !strings.Contains(metrics, `packeteer_ixp_member_rtt_ms{asn="64496",vlan="0",vantage="lan1-v4",family=""} 12`+"\n") {
+		t.Fatalf("per-member series missing:\n%s", metrics)
 	}
 
 	s.SetIXPFabric(func() plugin.FabricView {
@@ -218,6 +218,9 @@ func TestIXPProbesAPIAndMetrics(t *testing.T) {
 		if !strings.Contains(metrics, want) {
 			t.Errorf("stale missing %s in\n%s", want, metrics)
 		}
+	}
+	if strings.Contains(metrics, "packeteer_ixp_member_rtt") {
+		t.Fatalf("stale list kept per-member series:\n%s", metrics)
 	}
 }
 

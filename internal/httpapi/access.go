@@ -66,6 +66,7 @@ func (s *Server) routeTable() []route {
 		{"GET /api/exchanges/potential-peers", viewer, s.handleExchangePotentialPeers},
 		{"GET /api/lookup", viewer, s.handleLookup},
 		{"GET /api/ixp/members", viewer, s.handleIXPMembers},
+		{"GET /api/ixp/members/{asn}", viewer, s.handleIXPMember},
 		{"GET /api/ixp/probes", viewer, s.handleIXPProbes},
 		{"GET /api/ixp/routeservers", viewer, s.handleIXPRouteServers},
 		{"GET /api/ixp/routeservers/history", viewer, s.handleIXPRouteServerHistory},
@@ -129,6 +130,7 @@ func (s *Server) routeTable() []route {
 		{"GET /app.css", public, serveFile("app.css")},
 		{"GET /logo.png", public, serveFile("logo.png")},
 		{"GET /prefix/", viewer, serveFile("prefix.html")},
+		{"GET /ixp/member/", viewer, serveFile("ixp-member.html")},
 		{"GET /", viewer, files.ServeHTTP},
 	}
 }
