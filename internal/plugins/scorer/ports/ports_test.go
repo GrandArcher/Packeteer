@@ -4,6 +4,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/GrandArcher/Packeteer/internal/portload"
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
 )
 
@@ -24,7 +25,7 @@ func input(capacity, commit float64, u plugin.Usage, have bool) plugin.PlanInput
 }
 
 func TestAllowsCapacityAndCommit(t *testing.T) {
-	l := New(input(1000, 600, row(500, 550, t0), true), DefaultMaxAge)
+	l := New(input(1000, 600, row(500, 550, t0), true), portload.DefaultMaxAge)
 	for _, tc := range []struct {
 		name     string
 		from, to string
@@ -44,7 +45,7 @@ func TestAllowsCapacityAndCommit(t *testing.T) {
 	}
 
 	// No commit: only capacity limits. Load is the larger of out and p95.
-	l = New(input(1000, 0, row(100, 900, t0), true), DefaultMaxAge)
+	l = New(input(1000, 0, row(100, 900, t0), true), portload.DefaultMaxAge)
 	if l.Allows("transit", "peer-a", 150) || !l.Allows("transit", "peer-a", 100) {
 		t.Fatal("capacity must be judged on the larger of the outbound rate and the 95th")
 	}
@@ -60,7 +61,7 @@ func TestFailsClosedWithoutAFreshRow(t *testing.T) {
 		"zero commit":  input(1000, 0, plugin.Usage{Samples: 3, Single: true, UsageMbps: 1, Updated: t0}, true),
 		"stale+commit": input(1000, 500, row(1, 1, t0.Add(-time.Hour)), true),
 	} {
-		l := New(in, DefaultMaxAge)
+		l := New(in, portload.DefaultMaxAge)
 		if l.Allows("transit", "peer-a", 1) {
 			t.Errorf("%s: a port with no usable reading accepted a move", name)
 		}
@@ -74,7 +75,7 @@ func TestFailsClosedWithoutAFreshRow(t *testing.T) {
 }
 
 func TestMoveBooksBothEnds(t *testing.T) {
-	l := New(input(1000, 600, row(500, 500, t0), true), DefaultMaxAge)
+	l := New(input(1000, 600, row(500, 500, t0), true), portload.DefaultMaxAge)
 	if room, ok := l.Headroom("peer-a"); !ok || room != 100 {
 		t.Fatalf("headroom = %v %v, want 100", room, ok)
 	}
@@ -96,17 +97,5 @@ func TestMoveBooksBothEnds(t *testing.T) {
 	l.Move("peer-a", "transit", 5000)
 	if room, _ := l.Headroom("peer-a"); room != 600 {
 		t.Fatalf("load must not go negative: headroom %v, want 600", room)
-	}
-}
-
-func TestRoom(t *testing.T) {
-	if got := Room(1000, 0, 300, 100); got != 700 {
-		t.Fatalf("no commit: %v", got)
-	}
-	if got := Room(1000, 400, 300, 350); got != 50 {
-		t.Fatalf("commit tighter than capacity: %v", got)
-	}
-	if got := Room(1000, 400, 900, 100); got != 100 {
-		t.Fatalf("capacity tighter than commit: %v", got)
 	}
 }

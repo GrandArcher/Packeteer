@@ -1,8 +1,13 @@
 package main
 
 import (
+	"context"
+	"fmt"
 	"testing"
+	"time"
 
+	"github.com/GrandArcher/Packeteer/internal/exchange"
+	"github.com/GrandArcher/Packeteer/internal/pluginhost"
 	"github.com/GrandArcher/Packeteer/internal/policy"
 )
 
@@ -46,5 +51,40 @@ func TestPolicyConfigPorts(t *testing.T) {
 	}
 	if p := by["transit-a"]; p.Port != "" || !p.HasCost || p.Cost != 8 {
 		t.Fatalf("transit = %+v", p)
+	}
+}
+
+func TestPortRowUsesThePortCommit(t *testing.T) {
+	const bound = portConfigYAML + `telemetry:
+  - type: fixed
+    config:
+      providers:
+        - {name: ix-lab, commit_mbps: 1, usage_mbps: %s}
+`
+	for _, tc := range []struct {
+		usage string
+		want  string
+	}{{"5000", ""}, {"7000", "commit.exceeded"}} {
+		cfg := mustParse(t, fmt.Sprintf(bound, tc.usage))
+		set, err := pluginhost.Build(cfg, pluginhost.Options{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		raw := collectTelemetry(context.Background(), set)
+		if len(raw) != 1 || raw[0].CommitMbps != 1 {
+			t.Fatalf("usage %s: the scorers must read the binding as is: %+v", tc.usage, raw)
+		}
+		rows := exchange.WithPortCommit(raw, exchange.PortCommits(exchangesFromConfig(cfg)))
+		if len(rows) != 1 || rows[0].Provider != "ix-lab" || rows[0].CommitMbps != 6000 {
+			t.Fatalf("usage %s: rows = %+v, want the port commit 6000", tc.usage, rows)
+		}
+		if raw[0].CommitMbps != 1 {
+			t.Fatal("WithPortCommit changed its input")
+		}
+		s := &sink{}
+		newEventWatch(s, "observe").commit(time.Now(), rows)
+		if got := kinds(s.take()); got != tc.want {
+			t.Fatalf("usage %s: events %q, want %q", tc.usage, got, tc.want)
+		}
 	}
 }

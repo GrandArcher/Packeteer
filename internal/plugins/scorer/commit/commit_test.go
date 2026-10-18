@@ -468,3 +468,12 @@ func TestPortPeersAreNotBalancedAgainstEachOther(t *testing.T) {
 		t.Fatalf("peers of one port were balanced: %+v", moves)
 	}
 }
+
+func TestTelemetryMaxAge(t *testing.T) {
+	if got := build(t, "max_age: 40m").TelemetryMaxAge(); got != 40*time.Minute {
+		t.Fatalf("configured: %v", got)
+	}
+	if got := build(t, "{}").TelemetryMaxAge(); got != 15*time.Minute {
+		t.Fatalf("default: %v", got)
+	}
+}

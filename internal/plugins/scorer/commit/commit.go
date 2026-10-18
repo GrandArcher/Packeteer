@@ -29,6 +29,7 @@ import (
 	"github.com/GrandArcher/Packeteer/internal/netpfx"
 	"github.com/GrandArcher/Packeteer/internal/plugins/scorer/ports"
 	"github.com/GrandArcher/Packeteer/internal/plugins/scorer/weights"
+	"github.com/GrandArcher/Packeteer/internal/portload"
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
 )
 
@@ -44,7 +45,7 @@ const (
 	// preferred, so an explicit last-resort provider sets a higher number.
 	defaultPrecedence = 100
 	defaultSlack      = 0.10
-	defaultMaxAge     = ports.DefaultMaxAge
+	defaultMaxAge     = portload.DefaultMaxAge
 
 	balanceOff          = "off"
 	balanceEqual        = "equal"
@@ -293,6 +294,10 @@ func (s *Scorer) Plan(in plugin.PlanInput) []plugin.PlanMove {
 	return moves
 }
 
+// TelemetryMaxAge is how old a telemetry row may be before the scorer
+// ignores it.
+func (s *Scorer) TelemetryMaxAge() time.Duration { return s.maxAge }
+
 func (s *Scorer) fresh(u plugin.Usage, now time.Time) bool {
 	if _, ok := u.BillableMbps(); !ok {
 		return false
@@ -300,7 +305,7 @@ func (s *Scorer) fresh(u plugin.Usage, now time.Time) bool {
 	// The decision clock is read before telemetry is snapshotted, so a row
 	// read in the same round is stamped slightly after now. A row further
 	// ahead than the skew limit is a bad clock and is not fresh.
-	return ports.Fresh(u.Updated, now, s.maxAge)
+	return portload.Fresh(u.Updated, now, s.maxAge)
 }
 
 // relieve moves prefixes off providers whose projected usage is over commit.

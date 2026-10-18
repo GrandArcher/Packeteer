@@ -41,3 +41,25 @@ func TestApplyPorts(t *testing.T) {
 		t.Fatalf("an exchange without a port block got %+v", stats[3].Port)
 	}
 }
+
+func TestWithPortCommit(t *testing.T) {
+	exs := []Exchange{
+		{Name: "ix-a", Port: &PortConfig{CapacityMbps: 1000, CommitMbps: 400}},
+		{Name: "ix-b", Port: &PortConfig{CapacityMbps: 1000}},
+		{Name: "ix-c"},
+	}
+	in := []plugin.Usage{
+		{Provider: "ix-a", CommitMbps: 1}, {Provider: "ix-b", CommitMbps: 1},
+		{Provider: "ix-c", CommitMbps: 1}, {Provider: "transit", CommitMbps: 500},
+	}
+	got := WithPortCommit(in, PortCommits(exs))
+	want := []float64{400, 0, 1, 500}
+	for i, w := range want {
+		if got[i].CommitMbps != w {
+			t.Errorf("%s commit = %v, want %v", got[i].Provider, got[i].CommitMbps, w)
+		}
+	}
+	if in[0].CommitMbps != 1 {
+		t.Fatal("the input rows were changed")
+	}
+}

@@ -3,7 +3,7 @@ package exchange
 import (
 	"time"
 
-	"github.com/GrandArcher/Packeteer/internal/plugins/scorer/ports"
+	"github.com/GrandArcher/Packeteer/internal/portload"
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
 )
 
@@ -37,9 +37,35 @@ type PortStats struct {
 	HeadroomMbps float64 `json:"headroom_mbps"`
 }
 
+// PortCommits is port.commit_mbps by exchange name, for the exchanges that
+// have a port.
+func PortCommits(exs []Exchange) map[string]float64 {
+	out := map[string]float64{}
+	for _, ex := range exs {
+		if ex.Port != nil {
+			out[ex.Name] = ex.Port.CommitMbps
+		}
+	}
+	return out
+}
+
+// WithPortCommit returns rows with the commit of each port row set to the
+// port's. A port's telemetry binding needs a commit_mbps to be readable, but
+// it is a placeholder; alerts, metrics and the commit page must judge the
+// port by port.commit_mbps. The scorers read the rows unchanged.
+func WithPortCommit(rows []plugin.Usage, commits map[string]float64) []plugin.Usage {
+	out := append([]plugin.Usage(nil), rows...)
+	for i := range out {
+		if c, ok := commits[out[i].Provider]; ok {
+			out[i].CommitMbps = c
+		}
+	}
+	return out
+}
+
 // ApplyPorts fills Port on each exchange that has one, from the telemetry
-// rows (the row whose provider is the exchange name). maxAge is the commit
-// and cost planners' freshness limit.
+// rows (the row whose provider is the exchange name). maxAge is the
+// freshness limit of the scorer that plans against the port.
 func ApplyPorts(stats []Stats, exs []Exchange, rows []plugin.Usage, now time.Time, maxAge time.Duration) {
 	byName := map[string]plugin.Usage{}
 	for _, u := range rows {
@@ -58,9 +84,9 @@ func ApplyPorts(stats []Stats, exs []Exchange, rows []plugin.Usage, now time.Tim
 		}
 		ps := &PortStats{State: PortNoTelemetry, CapacityMbps: pc.CapacityMbps, CommitMbps: pc.CommitMbps, PortCost: pc.PortCost}
 		if u, ok := byName[stats[i].Name]; ok {
-			if load, p95, fresh := ports.Read(u, now, maxAge); fresh {
+			if load, p95, fresh := portload.Read(u, now, maxAge); fresh {
 				ps.State, ps.LoadMbps, ps.P95Mbps = PortOK, load, p95
-				ps.HeadroomMbps = ports.Room(pc.CapacityMbps, pc.CommitMbps, load, p95)
+				ps.HeadroomMbps = portload.Room(pc.CapacityMbps, pc.CommitMbps, load, p95)
 			} else {
 				ps.State = PortStale
 			}

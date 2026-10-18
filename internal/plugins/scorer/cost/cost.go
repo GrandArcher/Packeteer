@@ -29,6 +29,7 @@ import (
 	"github.com/GrandArcher/Packeteer/internal/netpfx"
 	"github.com/GrandArcher/Packeteer/internal/plugins/scorer/ports"
 	"github.com/GrandArcher/Packeteer/internal/plugins/scorer/weights"
+	"github.com/GrandArcher/Packeteer/internal/portload"
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
 )
 
@@ -184,7 +185,7 @@ func (s *Scorer) Plan(in plugin.PlanInput) []plugin.PlanMove {
 
 	prefixes := append([]plugin.PlanPrefix(nil), in.Prefixes...)
 	sort.SliceStable(prefixes, func(i, j int) bool { return netpfx.Less(prefixes[i].Prefix, prefixes[j].Prefix) })
-	led := ports.New(in, ports.DefaultMaxAge)
+	led := ports.New(in, portload.DefaultMaxAge)
 	// Book the traffic before any new move: the row counts it where it
 	// flows now. A Locked performance steer may not show yet, so it is
 	// moved to its provider; an active cost steer is replanned from native.
