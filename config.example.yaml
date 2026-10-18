@@ -8,6 +8,7 @@ mode: observe               # also the default when mode is left out; inject is 
 # that may inject. members (#161) is read-only and announces nothing.
 # The API key is PACKETEER_IXP_MANAGER_API_KEY, never this file.
 # vantages and fabric (#162) probe member LAN addresses and announce nothing.
+# routeservers (#164) reads Birdseye with GET and announces nothing.
 # ixp:
 #   members:
 #     type: ixf
@@ -30,6 +31,19 @@ mode: observe               # also the default when mode is left out; inject is 
 #       workers: 4
 #       rate_limit_pps: 20
 #       member_pps: 1
+#   routeservers:                # Birdseye polls (#164), GET only, no key
+#     type: birdseye
+#     config:
+#       servers:
+#         - name: rs1
+#           url: http://rs1.example.invalid
+#           asn: 64496           # the route server ASN in asn:1101:x
+#       interval: 5m
+#       timeout: 15s
+#       workers: 4
+#       max_bytes: 8388608
+#       max_prefix_warn_pct: 90
+#       filtered_warn_pct: 50
 
 asn: 64512
 router_id: 192.0.2.10

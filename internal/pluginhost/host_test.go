@@ -186,6 +186,45 @@ ixp:
 	}
 }
 
+func TestIXPRouteServersDoNotAnnounce(t *testing.T) {
+	cfg := load(t, `
+ixp:
+  routeservers:
+    type: birdseye
+    config:
+      servers:
+        - {name: rs1, url: "http://192.0.2.5", asn: 64496}
+`)
+	s, err := Build(cfg, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.IXPRouteServers == nil || s.IXPRouteServers.Type != "birdseye" {
+		t.Fatalf("%+v", s.IXPRouteServers)
+	}
+	if s.Announcer != nil || len(s.RIBSources) != 0 || s.Inbound != nil || s.Mitigation != nil {
+		t.Fatalf("announce path built: %v rib %d", s.Announcer, len(s.RIBSources))
+	}
+	if !slices.Contains(s.Summary(), "ixp_routeserver birdseye") {
+		t.Fatalf("summary %v", s.Summary())
+	}
+	v := s.IXPRouteServers.Plugin.View()
+	if !v.Configured || len(v.Sessions) != 0 || len(v.Servers) != 1 {
+		t.Fatalf("%+v", v)
+	}
+	bad := load(t, `
+ixp:
+  routeservers:
+    type: birdseye
+    config:
+      servers:
+        - {name: rs1, url: "http://192.0.2.5?apikey=x", asn: 64496}
+`)
+	if _, err := Build(bad, Options{}); err == nil || !strings.Contains(err.Error(), "ixp.routeservers") {
+		t.Fatalf("bad url: %v", err)
+	}
+}
+
 func TestBuildAndLifecycle(t *testing.T) {
 	events = nil
 	cfg := load(t, "sources:\n  - type: test-source\n    name: s1\nnotifiers:\n  - type: test-notifier\n")

@@ -150,6 +150,9 @@ type Server struct {
 	// lookup is the PeeringDB / IX-F directory (#153). Nil until SetLookup.
 	// Read at request time. It never announces.
 	lookup atomic.Value
+	// ixpRouteServers is the Birdseye watch (#164). Nil until
+	// SetIXPRouteServers. Read at request time. It never announces.
+	ixpRouteServers atomic.Value
 	// quarantine releases a flap-quarantined prefix (#228). Nil until
 	// SetQuarantine.
 	quarantine atomic.Value
@@ -347,6 +350,9 @@ func (s *Server) handleMetrics(w http.ResponseWriter, _ *http.Request) {
 	}
 	if v, ok := s.ixpFabricView(); ok && v.Configured {
 		_, _ = w.Write(IXPFabricMetrics(v, time.Now()))
+	}
+	if src, ok := s.ixpRouteServerSource(); ok {
+		_, _ = w.Write(IXPRouteServerMetrics(src.view(), time.Now()))
 	}
 }
 

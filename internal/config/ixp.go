@@ -16,11 +16,13 @@ const (
 
 // IXP is exchange-operator mode (#160). A non-nil value, including an
 // empty block, is IXP mode. IXP mode never announces. Keys are members
-// (#161), vantages, and fabric (#162). Any other key is a parse error.
+// (#161), vantages and fabric (#162), and routeservers (#164). Any other
+// key is a parse error.
 type IXP struct {
-	Members  *PluginSpec `yaml:"members,omitempty"`
-	Vantages []Vantage   `yaml:"vantages,omitempty"`
-	Fabric   *PluginSpec `yaml:"fabric,omitempty"`
+	Members      *PluginSpec `yaml:"members,omitempty"`
+	Vantages     []Vantage   `yaml:"vantages,omitempty"`
+	Fabric       *PluginSpec `yaml:"fabric,omitempty"`
+	RouteServers *PluginSpec `yaml:"routeservers,omitempty"`
 }
 
 // Vantage is one IX-owned monitoring address on a peering LAN (#162).

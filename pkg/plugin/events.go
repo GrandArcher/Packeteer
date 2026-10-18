@@ -75,9 +75,18 @@ const (
 	EventIXPKeyExpiring = "ixp.api_key_expiring"
 	// EventIXPKeyOK resolves EventIXPKeyExpiring once the key is more
 	// than 14 days from expiry.
-	EventIXPKeyOK  = "ixp.api_key_ok"
-	EventHAStandby = "ha.standby"
-	EventHAActive  = "ha.active"
+	EventIXPKeyOK = "ixp.api_key_ok"
+	// Route-server watch (#164). Each problem has a resolving event.
+	EventRSUnreachable      = "ixp.rs_unreachable"
+	EventRSReachable        = "ixp.rs_reachable"
+	EventRSSessionDown      = "ixp.rs_session_down"
+	EventRSSessionUp        = "ixp.rs_session_up"
+	EventRSMaxPrefix        = "ixp.rs_max_prefix"
+	EventRSMaxPrefixCleared = "ixp.rs_max_prefix_cleared"
+	EventRSFiltered         = "ixp.rs_filtered"
+	EventRSFilteredCleared  = "ixp.rs_filtered_cleared"
+	EventHAStandby          = "ha.standby"
+	EventHAActive           = "ha.active"
 	// EventAudit is one audit log record (#32): a change or sign-in on
 	// the ops API, or a config reload.
 	EventAudit = "audit.recorded"
@@ -170,6 +179,22 @@ var eventCatalog = []EventSpec{
 		Summary: "The IXP Manager API key expires within 14 days, or has already expired. The field identifier is the key id; the secret is not included."},
 	{Kind: EventIXPKeyOK, Severity: SeverityInfo, Group: "ixp_api_key", Keys: []string{"identifier"}, TrapID: 42, Resolves: true,
 		Summary: "The IXP Manager API key has more than 14 days left. Resolves ixp.api_key_expiring."},
+	{Kind: EventRSUnreachable, Severity: SeverityWarning, Group: "ixp_rs", Keys: []string{"server"}, TrapID: 43,
+		Summary: "Birdseye on a route server failed two polls in a row. Its sessions keep their last state until the data is stale."},
+	{Kind: EventRSReachable, Severity: SeverityInfo, Group: "ixp_rs", Keys: []string{"server"}, TrapID: 44, Resolves: true,
+		Summary: "Birdseye on the route server answered again. Resolves ixp.rs_unreachable."},
+	{Kind: EventRSSessionDown, Severity: SeverityWarning, Group: "ixp_rs_session", Keys: []string{"server", "session"}, TrapID: 45,
+		Summary: "A member session on a route server is not Established."},
+	{Kind: EventRSSessionUp, Severity: SeverityInfo, Group: "ixp_rs_session", Keys: []string{"server", "session"}, TrapID: 46, Resolves: true,
+		Summary: "The member session is Established again, or is no longer on the route server. Resolves ixp.rs_session_down."},
+	{Kind: EventRSMaxPrefix, Severity: SeverityWarning, Group: "ixp_rs_prefix", Keys: []string{"server", "session"}, TrapID: 47,
+		Summary: "Accepted routes from a member session reached the warning share of its max_prefix."},
+	{Kind: EventRSMaxPrefixCleared, Severity: SeverityInfo, Group: "ixp_rs_prefix", Keys: []string{"server", "session"}, TrapID: 48, Resolves: true,
+		Summary: "Accepted routes fell back below the warning share, or the session is gone. Resolves ixp.rs_max_prefix."},
+	{Kind: EventRSFiltered, Severity: SeverityWarning, Group: "ixp_rs_filtered", Keys: []string{"server", "session"}, TrapID: 49,
+		Summary: "A member session has at least the warning share of its routes tagged rs-asn:1101:x (filtered by the route server)."},
+	{Kind: EventRSFilteredCleared, Severity: SeverityInfo, Group: "ixp_rs_filtered", Keys: []string{"server", "session"}, TrapID: 50, Resolves: true,
+		Summary: "The filtered share fell back below the warning share, or the session is gone. Resolves ixp.rs_filtered."},
 }
 
 // EventCatalog returns a copy of every event kind the controller emits.

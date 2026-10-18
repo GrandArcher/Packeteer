@@ -42,6 +42,25 @@ func wireIXPFabric(cfg *config.Config, plugins *pluginhost.Set, httpSrv *httpapi
 	}
 }
 
+// wireIXPRouteServers connects the Birdseye watch (#164) before plugins
+// start. It reads the member view for ASNs, names, and max_prefix. It
+// polls with GET only and does not announce.
+func wireIXPRouteServers(plugins *pluginhost.Set, httpSrv *httpapi.Server, emit func(plugin.Event)) {
+	if plugins == nil || plugins.IXPRouteServers == nil {
+		return
+	}
+	w := plugins.IXPRouteServers.Plugin
+	if plugins.IXPMembers != nil {
+		w.SetMembers(plugins.IXPMembers.Plugin.View)
+	}
+	if emit != nil {
+		w.SetEventSink(emit)
+	}
+	if httpSrv != nil {
+		httpSrv.SetIXPRouteServers(w.View, w.History)
+	}
+}
+
 func fabricVantages(in []config.Vantage) []plugin.FabricVantage {
 	out := make([]plugin.FabricVantage, 0, len(in))
 	for _, v := range in {
