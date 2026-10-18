@@ -260,6 +260,8 @@ func probeKeys(a, b config.Probe) (restart, online []string) {
 	pair("per_target_concurrency", a.PerTargetConcurrency, b.PerTargetConcurrency, false)
 	pair("min_replies", a.MinReplies, b.MinReplies, false)
 	pair("dispersion_ms", a.DispersionMS, b.DispersionMS, false)
+	pair("degraded_loss_pct", a.DegradedLossPct, b.DegradedLossPct, false)
+	pair("down_loss_pct", a.DownLossPct, b.DownLossPct, false)
 	pair("prober_recheck_rounds", a.ProberRecheckRounds, b.ProberRecheckRounds, false)
 	pair("prober_memory", a.ProberMemory, b.ProberMemory, false)
 	pair("indirect", a.Indirect, b.Indirect, false)

@@ -838,3 +838,30 @@ more_specific:
 		at += i + len(w)
 	}
 }
+
+func TestProviderHealthThresholds(t *testing.T) {
+	cfg, err := Parse([]byte(minimalYAML))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Probe.DegradedLossPct != DefaultProbeDegradedLossPct || cfg.Probe.DownLossPct != DefaultProbeDownLossPct {
+		t.Fatalf("defaults = %v %v", cfg.Probe.DegradedLossPct, cfg.Probe.DownLossPct)
+	}
+	cfg, err = Parse([]byte(minimalYAML + "probe:\n  degraded_loss_pct: 2.5\n  down_loss_pct: 80\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Probe.DegradedLossPct != 2.5 || cfg.Probe.DownLossPct != 80 {
+		t.Fatalf("explicit = %v %v", cfg.Probe.DegradedLossPct, cfg.Probe.DownLossPct)
+	}
+	for _, y := range []string{
+		"probe:\n  degraded_loss_pct: -1\n",
+		"probe:\n  down_loss_pct: 101\n",
+		"probe:\n  degraded_loss_pct: 60\n",
+		"probe:\n  degraded_loss_pct: 30\n  down_loss_pct: 20\n",
+	} {
+		if _, err := Parse([]byte(minimalYAML + y)); err == nil || !strings.Contains(err.Error(), "degraded_loss_pct") {
+			t.Fatalf("yaml %q err = %v", y, err)
+		}
+	}
+}

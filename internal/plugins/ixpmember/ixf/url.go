@@ -73,6 +73,24 @@ func viewURL(raw string) string {
 	return u.String()
 }
 
+// managerBase is the IXP Manager install the export belongs to: the
+// export URL without its path suffix and query. Empty for a named
+// document, which has no IXP Manager behind it. The member pages link to
+// it from the operator's browser; this process never requests it.
+func managerBase(fetchURL string, manager bool) string {
+	if !manager {
+		return ""
+	}
+	u, err := url.Parse(fetchURL)
+	if err != nil {
+		return ""
+	}
+	u.Path = strings.TrimSuffix(strings.TrimRight(u.Path, "/"), exportPath)
+	u.RawQuery = ""
+	u.ForceQuery = false
+	return strings.TrimRight(u.String(), "/")
+}
+
 // urlHasKey reports whether the API key or its secret appears in raw or
 // in the decoded URL. url.Parse decodes the path but String keeps the
 // original percent-encoding, so both forms are checked.

@@ -185,7 +185,7 @@ jobs:
             'data-hint="sources"' 'Nothing to probe yet' 'mode-observe' 'aria-current="page"' \
             'href="/improvements.html"' 'href="/prefixes.html"' 'href="/settings.html"' 'id="search-slot"' 'id="top-search-recent"' 'id="events-slot"' 'id="account"' \
             'alt="Packeteer logo"' 'src="/logo.png"' 'rel="icon" href="/logo.png"' \
-            --absent 'Cannot reach' 'Inject mode' 'Active improvements' 'no data yet' 'docs/assets'
+            --absent 'Cannot reach' 'Inject mode' 'Active improvements' 'no data yet' 'docs/assets' 'problems: ' 'problem: '
           bash lab/ui-smoke.sh "$base/improvements.html" 'Recommended improvements' 'It announces nothing.' 'mode-observe' \
             --absent 'Active improvements' 'Cannot reach'
           bash lab/ui-smoke.sh "$base/providers.html" 'no data yet' 'It announces nothing.' 'No exchanges in the config.' \
@@ -1303,6 +1303,101 @@ jobs:
             'Bilateral only: candidate for a peering request (1 ASNs)' '<td class="mono">AS64504</td>' '<td>ix-lab/ix-peer-c (bilateral)</td>' \
             'Also: 1 on a LAN with an unknown session type, 3 not seen at an exchange.' \
             --absent 'not built yet' 'mode-inject'
+          # The IXP member pages (#166) read the member, fabric, and
+          # route-server endpoints, which this single-router config has no
+          # source for, so uiproxy answers them from
+          # lab/ui-fixtures/ixp-member (documentation ASNs and addresses).
+          # The page is the image's. The step checks the connection, the
+          # fabric rows by vantage with the past-tolerance flag, the
+          # route-server session and its filter history, the IXP Manager
+          # link, and the member list; the pages only read.
+          kill "$proxy"
+          /tmp/uiproxy -listen 127.0.0.1:18138 -upstream "$base" -user lab -password lab-only \
+            -fixtures lab/ui-fixtures/ixp-member >/tmp/uiproxy166.log 2>&1 &
+          proxy=$!
+          for _ in $(seq 1 20); do
+            curl -fsS http://127.0.0.1:18138/healthz >/dev/null 2>&1 && break
+            sleep 0.2
+          done
+          curl -fsS http://127.0.0.1:18138/healthz >/dev/null
+          bash lab/ui-smoke.sh http://127.0.0.1:18138/ixp/member/64496 'mode-observe' 'announces nothing' \
+            '>AS64496 Example Member A</h2>' 'id="member-ixpm"' 'href="https://ixp.example.invalid/admin/search?search=AS64496"' \
+            '<td>sw1</td>' '<td>cab-a</td>' '<td>10000 Mbit/s</td>' '<td class="mono">192.0.2.20</td>' \
+            '<td>lan1-a</td>' '<td>0.00 %</td>' '<td>0.42 ms</td>' '<td>ok</td>' \
+            '<td>lan1-b</td>' '<td>40.00 %</td>' '<td>310.50 ms</td>' '<td>12.25 ms</td>' '<td class="bad">past tolerance</td>' \
+            '<td>rs1</td>' '<td class="mono">192.0.2.20</td>' '<td>9: 3</td>' \
+            'data-history="rs1/pb_a"' 'Latest 2 of 2 samples, newest first.' \
+            --absent 'mode-inject' 'is not an IXP member'
+          bash lab/ui-smoke.sh http://127.0.0.1:18138/ixp/member/ 'mode-observe' '>IXP members</h2>' \
+            'href="/ixp/member/64496"' '>AS64497</a>' '<td>Example Member B</td>' \
+            --absent 'mode-inject'
+          # This controller has no IXP source, so an unstubbed ASN is a 404.
+          bash lab/ui-smoke.sh http://127.0.0.1:18138/ixp/member/64499 'mode-observe' \
+            'AS64499 is not an IXP member Packeteer knows.' --absent 'mode-inject' 'Open in IXP Manager'
+      - name: UI provider health smoke (#343; one provider at 100% loss, one with no answer, fixed prober, observe)
+        run: |
+          set -euo pipefail
+          base=http://127.0.0.1:18343
+          cat > /tmp/ui343.yaml <<'YAML'
+          mode: observe
+          asn: 64512
+          router_id: 192.0.2.10
+          http:
+            listen: "127.0.0.1:18343"
+          providers:
+            - name: lab-a
+              source_ip: 127.0.0.1
+              next_hop: 192.0.2.1
+            - name: lab-b
+              source_ip: 127.0.0.2
+              next_hop: 192.0.2.2
+            - name: lab-c
+              source_ip: 127.0.0.3
+              next_hop: 192.0.2.3
+          probe: {interval: 30s, timeout: 200ms, packets: 2}
+          sources:
+            - type: static
+              config:
+                targets:
+                  - {prefix: 198.51.100.0/24, host: 198.51.100.1}
+                  - {prefix: 203.0.113.0/24, host: 203.0.113.1}
+          probers:
+            - type: fixed
+              config:
+                paths:
+                  - {provider: lab-a, rtt_ms: 12}
+                  - {provider: lab-b, rtt_ms: 12, loss_pct: 100}
+          YAML
+          docker run -d --name pkui343 --network host --cap-add NET_RAW --cap-add NET_ADMIN \
+            -v /tmp/ui343.yaml:/etc/packeteer/config.yaml:ro packeteer:ci
+          cleanup() {
+            docker stop -t 15 pkui343 >/dev/null || true
+            docker logs pkui343 2>&1 | tail -n 20
+            code="$(docker inspect -f '{{.State.ExitCode}}' pkui343)"
+            docker rm pkui343 >/dev/null || true
+            test "$code" = "0"
+          }
+          trap cleanup EXIT
+          ok=0
+          for _ in $(seq 1 30); do
+            if curl -fsS "$base/healthz" >/dev/null 2>&1; then ok=1; break; fi
+            sleep 1
+          done
+          test "$ok" = 1
+          for _ in $(seq 1 30); do
+            curl -fsS "$base/api/overview" | jq -e '.counts.prefixes == 2 and (.providers | all(.state != "unknown"))' >/dev/null && break
+            sleep 1
+          done
+          curl -fsS "$base/api/overview" | jq -e '.mode == "observe" and .counts.providers_healthy == 1 and (.problems | map(.provider + ":" + .detail)) == ["lab-b:100% loss", "lab-c:no answer"]'
+          bash lab/ui-smoke.sh "$base/" '2 problems: </strong><a href="/providers.html#provider-lab-b">lab-b</a> 100% loss, <a href="/providers.html#provider-lab-c">lab-c</a> no answer' \
+            'headline headline-down' '<div class="tile bad"><span class="k">Providers</span><span class="tile-v">1 of 3 healthy</span>' \
+            '2 warnings' 'mode-observe' --absent 'all ok' 'Providers up' 'Cannot reach'
+          bash lab/ui-smoke.sh "$base/providers.html" '<span class="dot up">up</span>' \
+            '<span class="dot down">down</span><span class="muted"> 100% loss</span>' '<span class="dot down">down</span><span class="muted"> no answer</span>' \
+            '0 ok, 2 failed' --absent '2 ok, 0' 'Cannot reach'
+          bash lab/ui-smoke.sh "$base/prefix/198.51.100.0%2F24" \
+            '<td>lab-b <span class="dot down">down</span></td><td class="num bad">100.0%</td><td class="bad">no reply</td>' \
+            '<td>lab-c <span class="dot down">down</span></td>' '<td class="num">12.0 ms</td>' --absent 'Cannot reach'
       - name: UI mitigation, inbound, and anomaly forms smoke (#131, #329; add and remove a rule in observe, guided inputs)
         run: |
           set -euo pipefail
