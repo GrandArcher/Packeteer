@@ -64,6 +64,7 @@ func (s *Server) routeTable() []route {
 		{"GET /api/exchanges/member", viewer, s.handleExchangeMember},
 		{"GET /api/exchanges/offload", viewer, s.handleExchangeOffload},
 		{"GET /api/exchanges/potential-peers", viewer, s.handleExchangePotentialPeers},
+		{"GET /api/lookup", viewer, s.handleLookup},
 		{"GET /api/ixp/members", viewer, s.handleIXPMembers},
 		{"GET /api/ixp/probes", viewer, s.handleIXPProbes},
 		{"GET /api/linkouts", viewer, s.handleLinkouts},

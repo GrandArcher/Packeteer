@@ -434,3 +434,45 @@ func TestLeakSourcesBuiltOnlyWhenEnabled(t *testing.T) {
 		t.Fatalf("err %v", err)
 	}
 }
+
+func TestLookupIsNotARIBSource(t *testing.T) {
+	cfg := load(t, `
+lookup:
+  type: peeringdb
+  config:
+    exchanges:
+      - {name: example-ix, ix_id: 1}
+`)
+	s, err := Build(cfg, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.Lookup == nil || s.Lookup.Type != "peeringdb" {
+		t.Fatalf("%+v", s.Lookup)
+	}
+	if len(s.RIBSources) != 0 || s.Announcer != nil {
+		t.Fatalf("rib %d announcer %v", len(s.RIBSources), s.Announcer)
+	}
+	if !slices.Contains(s.Summary(), "lookup peeringdb") {
+		t.Fatalf("summary %v", s.Summary())
+	}
+	if v := s.Lookup.Plugin.View(); !v.Configured || v.NetworkCount != 0 || len(v.Memberships) != 0 {
+		t.Fatalf("%+v", v)
+	}
+}
+
+func TestLookupConfigErrorNamesTheBlock(t *testing.T) {
+	cfg := load(t, `
+lookup:
+  type: peeringdb
+  config:
+    exchanges: []
+`)
+	if _, err := Build(cfg, Options{}); err == nil || !strings.Contains(err.Error(), "lookup[0] (peeringdb)") || !strings.Contains(err.Error(), "exchanges is required") {
+		t.Fatalf("err %v", err)
+	}
+	cfg = load(t, "lookup:\n  type: nosuch\n")
+	if _, err := Build(cfg, Options{}); err == nil || !strings.Contains(err.Error(), `unknown lookup type "nosuch"`) {
+		t.Fatalf("err %v", err)
+	}
+}

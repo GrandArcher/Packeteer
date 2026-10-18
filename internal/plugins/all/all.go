@@ -11,6 +11,7 @@ import (
 	_ "github.com/GrandArcher/Packeteer/internal/plugins/ixpfabric/icmp"     // IX fabric prober (observe-only)
 	_ "github.com/GrandArcher/Packeteer/internal/plugins/ixpmember/ixf"      // IX-F member import (read-only)
 	_ "github.com/GrandArcher/Packeteer/internal/plugins/leaksource/rislive" // RIPE RIS Live leak source
+	_ "github.com/GrandArcher/Packeteer/internal/plugins/lookup/peeringdb"   // PeeringDB / IX-F directory (read-only)
 	_ "github.com/GrandArcher/Packeteer/internal/plugins/notifier/smtp"      // smtp notifier
 	_ "github.com/GrandArcher/Packeteer/internal/plugins/notifier/snmptrap"  // snmptrap notifier
 	_ "github.com/GrandArcher/Packeteer/internal/plugins/notifier/webhook"   // webhook notifier

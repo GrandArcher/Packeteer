@@ -419,6 +419,23 @@ storage:
 #     config:
 #       base_url: https://rdap.org
 
+# PeeringDB / IX-F directory (#153): org name per ASN, membership and LAN
+# addresses at your exchanges, route-server flag, policy, and the
+# info_prefixes hint. GET only, cached in memory, refreshed daily. It
+# announces nothing and is not an input to the decision. Use the same name
+# as in exchanges. The optional API key is PACKETEER_PEERINGDB_API_KEY,
+# never this file. Without it PeeringDB rate-limits the requests.
+# lookup:
+#   type: peeringdb
+#   config:
+#     exchanges:
+#       - name: example-ix
+#         ix_id: 1                # PeeringDB ix id
+#         # ixf_url: https://ixp.example.invalid/members.json
+#     refresh: 24h
+#     timeout: 30s
+#     max_bytes: 8388608
+
 # Interface counters and 95th-percentile usage. Off unless listed.
 # The community and v3 passphrases are environment variables named here,
 # never values in this file. Samples stay in memory. With storage above,
