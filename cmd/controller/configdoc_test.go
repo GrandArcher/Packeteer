@@ -12,6 +12,7 @@ import (
 	"github.com/GrandArcher/Packeteer/internal/plugins/elector/lease"
 	"github.com/GrandArcher/Packeteer/internal/plugins/exec"
 	"github.com/GrandArcher/Packeteer/internal/plugins/federation/mtls"
+	coreicmp "github.com/GrandArcher/Packeteer/internal/plugins/ixpcore/icmp"
 	"github.com/GrandArcher/Packeteer/internal/plugins/ixpcorrelate/topology"
 	fabricicmp "github.com/GrandArcher/Packeteer/internal/plugins/ixpfabric/icmp"
 	"github.com/GrandArcher/Packeteer/internal/plugins/ixprouteserver/birdseye"
@@ -109,6 +110,8 @@ func TestConfigDocCoversStructs(t *testing.T) {
 		birdseye.ServerConfig{},
 		topology.Config{},
 		topology.Bundle{},
+		coreicmp.Config{},
+		config.CoreLink{},
 		peeringdb.Config{},
 	) {
 		if !strings.Contains(text, "`"+key+"`") {

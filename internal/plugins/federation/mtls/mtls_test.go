@@ -190,6 +190,42 @@ func TestTwoInstances(t *testing.T) {
 	}
 }
 
+// TestIXPFabricHealthCrossesTheWire: a site's fabric health (#167) is part
+// of its snapshot, arrives intact, and its times are on the receiver's clock.
+func TestIXPFabricHealthCrossesTheWire(t *testing.T) {
+	p := newPKI(t)
+	b := instance(t, p, "site-b", map[string]any{"listen": "127.0.0.1:0", "allow_clients": []string{"site-a"}})
+	if err := b.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	defer stop(t, b)
+	s := snap("site-b", "site-b")
+	s.IXP = &plugin.FederatedIXP{
+		Round:    s.Time.Add(-30 * time.Second),
+		Vantages: []plugin.FabricVantageStatus{{Name: "lan1", VLANID: 10, Up: true}},
+		Members:  []plugin.FabricPath{{ASN: 64496, VLANID: 10, Vantage: "lan1", Family: "ipv4", LossPct: 40, RTTMs: 310.5, PastTolerance: true}},
+		Groups:   []plugin.CorrelationGroup{{Scope: plugin.ScopeSwitch, Name: "sw1", Members: 4, Degraded: 3, Active: true}},
+		Core:     []plugin.CoreLinkStatus{{Name: "b-to-a", Peer: "site-a", Up: true, RTTMs: 3.2, At: s.Time.Add(-5 * time.Second)}},
+	}
+	b.Publish(s)
+	a := instance(t, p, "site-a", map[string]any{"peers": []map[string]any{{"name": "site-b", "url": "https://" + b.Addr().String(), "server_name": "site-b"}}})
+	if err := a.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	defer stop(t, a)
+
+	got := waitPeer(t, a, func(s plugin.PeerState) bool { return s.Fresh }).Snapshot.IXP
+	if got == nil || len(got.Members) != 1 || got.Members[0].LossPct != 40 || !got.Members[0].PastTolerance || !got.Groups[0].Active || got.Core[0].RTTMs != 3.2 {
+		t.Fatalf("ixp = %+v", got)
+	}
+	if age := time.Since(got.Round); age < 29*time.Second || age > 35*time.Second {
+		t.Fatalf("round age %s, want about 30s as site-b measured it", age)
+	}
+	if age := time.Since(got.Core[0].At); age < 4*time.Second || age > 10*time.Second {
+		t.Fatalf("core link age %s, want about 5s", age)
+	}
+}
+
 func TestRefusesUnknownClientAndWrongInstance(t *testing.T) {
 	p := newPKI(t)
 	b := instance(t, p, "pop-b", map[string]any{"listen": "127.0.0.1:0", "allow_clients": []string{"pop-a"}})

@@ -3,7 +3,7 @@
 Status: charter, config gate, IX-F member import (#161), fabric
 probes (#162), fabric incident correlation (#163), route-server
 history and alerts (#164), route-server signals (#165), and member pages
-and series (#166). Multi-site fabric health is #167 and is not built. An `ixp` block does not announce or open a route-server
+and series (#166), and multi-site fabric health (#167). An `ixp` block does not announce or open a route-server
 session.
 
 An Internet exchange operator runs Packeteer to observe its fabric,
@@ -13,7 +13,7 @@ route servers, and members. It does not route for them. This is not the
 ## Turning it on
 
 `ixp: {}` in the config. The keys are `members` (#161), `vantages`
-and `fabric` (#162), `routeservers` (#164), and `correlate` (#163). Any other key is an error. Omitted, or `ixp: null`,
+and `fabric` (#162), `routeservers` (#164), `correlate` (#163), and `core` and `core_links` (#167). Any other key is an error. Omitted, or `ixp: null`,
 is not IXP mode. `mode` stays `observe`. `mode: suggest` is accepted
 and announces nothing. The shipped example leaves the block commented
 out.
@@ -193,6 +193,30 @@ VLAN and family the worst value shows, so a series never repeats. A probe
 error and a stale member list make no series. The count is members times
 vantages times families; size Prometheus accordingly.
 
+## Multi-site fabric health
+
+An exchange with several sites (colos) runs one IXP-mode instance per site and joins them with the top-level `federation` block (#30, [multi-pop.md](../multi-pop.md)). Each instance is its own `domain`; `instance` names the site. Federation is read-only here: a site serves its snapshot and reads its peers', and nothing is written to a peer.
+
+A site's snapshot gains an `ixp` part with:
+
+- the latest fabric round reduced to one path per ASN, VLAN id, vantage, and family (the worst address, the same reduction as the `packeteer_ixp_member_*` series, and a probe error is no path), with `past_tolerance`;
+- its vantages and whether each is up;
+- the correlator's groups, with `active`;
+- how many Birdseye servers there are and how many are not up;
+- its core links.
+
+`ixp.core` (`type: icmp`) measures the core. For each entry of `ixp.core_links` it pings `address`, an address at the other site that is reached across the core, from `source` (or the kernel's choice), and records loss, RTT, and jitter. The `peer` of a link is the other site's federation instance name. A link is degraded with no reply, a failed probe, loss above `max_loss_pct` (default 10), or RTT above `max_rtt` (default none). The prober is the built-in icmp prober and sends nothing but echo to the listed addresses. The inter-site RTT for a decision (`inter_dc_rtt`) is unrelated: this measurement is never read by `Decide`.
+
+`GET /api/ixp/sites` and `/ixp/sites` build one view from the local snapshot and the peers' last snapshots. A peer with no fresh snapshot (`max_age` of the federation plugin) is `unreachable` and none of its data is used. An incident is at a site when:
+
+- one of its correlator groups is active (`fabric`);
+- one of its vantages is down, or its member list is stale (`vantage`, `fabric`);
+- one of its route servers does not answer (`route_server`);
+- a core link it measures is degraded (`core`, listed at the measuring site with the far end as `peer`);
+- it has no fresh snapshot (`site`). The detail then says what the core links other sites measure to it show: a degraded link means the site or the core is down, a healthy link means its instance or federation is down.
+
+A core fault does not mark either end `degraded`; a fabric, vantage, or route-server incident does. Nothing here raises an event or a notification. The snapshot grows with members x vantages x families (about 100 bytes a path), so raise the federation `poll_interval` on a large exchange.
+
 ## Lab data
 
 Member data is never committed. Lab fixtures use documentation prefixes
@@ -200,6 +224,6 @@ Member data is never committed. Lab fixtures use documentation prefixes
 documentation or private ASNs (64496-64511, 65536-65551, or
 64512-65534).
 
-Rollback: remove `ixp.members`, `ixp.routeservers`, `ixp.correlate`, or
+Rollback: remove `ixp.core` and `ixp.core_links`, `ixp.members`, `ixp.routeservers`, `ixp.correlate`, or
 `ixp.vantages` and `ixp.fabric`, or the `ixp` block, and restart. The member pages and series need no config of
 their own and are empty without those sources. Nothing was announced.

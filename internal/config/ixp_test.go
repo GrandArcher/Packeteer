@@ -3,6 +3,7 @@ package config
 import (
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestIXPModeObserveWithoutRIB(t *testing.T) {
@@ -290,5 +291,54 @@ func TestIXPCorrelateConfig(t *testing.T) {
 	_, err = Parse([]byte(inject))
 	if err == nil || !strings.Contains(err.Error(), "ixp forbids mode inject") || !strings.Contains(err.Error(), "ixp forbids announcer") {
 		t.Fatalf("inject with correlate: %v", err)
+	}
+}
+
+const ixpFederation = `domain: site-a
+federation:
+  type: mtls
+  config: {}
+`
+
+const ixpCoreBlock = `ixp:
+  core:
+    type: icmp
+    config:
+      interval: 30s
+  core_links:
+    - {name: a-to-b, peer: site-b, address: 192.0.2.40, source: 192.0.2.30, max_rtt: 40ms}
+`
+
+func TestIXPCoreConfig(t *testing.T) {
+	cfg, err := Parse([]byte(minimalYAML + ixpFederation + ixpCoreBlock))
+	if err != nil {
+		t.Fatal(err)
+	}
+	l := cfg.IXP.CoreLinks[0]
+	if cfg.IXP.Core.Type != "icmp" || l.Peer != "site-b" || l.MaxLossPct != DefaultCoreMaxLossPct || l.MaxRTT != 40*time.Millisecond {
+		t.Fatalf("core = %+v links = %+v", cfg.IXP.Core, cfg.IXP.CoreLinks)
+	}
+
+	for _, tc := range []struct{ name, yaml, want string }{
+		{"links without core", ixpFederation + "ixp:\n  core_links:\n    - {name: l, peer: site-b, address: 192.0.2.40}\n", "ixp.core_links requires ixp.core"},
+		{"core without links", ixpFederation + "ixp:\n  core: {type: icmp}\n", "ixp.core requires ixp.core_links"},
+		{"no type", ixpFederation + "ixp:\n  core: {}\n  core_links:\n    - {name: l, peer: site-b, address: 192.0.2.40}\n", "ixp.core: type is required"},
+		{"no federation", ixpCoreBlock, "ixp.core requires federation"},
+		{"own name", ixpFederation + strings.Replace(ixpCoreBlock, "peer: site-b", "peer: site-a", 1), "is this instance"},
+		{"bad peer", ixpFederation + strings.Replace(ixpCoreBlock, "peer: site-b", "peer: site/b", 1), "peer is invalid"},
+		{"bad address", ixpFederation + strings.Replace(ixpCoreBlock, "address: 192.0.2.40", "address: 0.0.0.0", 1), "address is not a usable"},
+		{"bad source", ixpFederation + strings.Replace(ixpCoreBlock, "source: 192.0.2.30", "source: nope", 1), "source is not a usable"},
+		{"duplicate name", ixpFederation + ixpCoreBlock + "    - {name: a-to-b, peer: site-c, address: 192.0.2.41}\n", "duplicated"},
+		{"loss over 100", ixpFederation + strings.Replace(ixpCoreBlock, "max_rtt: 40ms", "max_loss_pct: 101", 1), "max_loss_pct"},
+		{"negative rtt", ixpFederation + strings.Replace(ixpCoreBlock, "max_rtt: 40ms", "max_rtt: -1s", 1), "max_rtt"},
+	} {
+		if _, err := Parse([]byte(minimalYAML + tc.yaml)); err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("%s: err = %v, want %q", tc.name, err, tc.want)
+		}
+	}
+
+	inject := strings.Replace(minimalYAML, "mode: observe", "mode: inject", 1) + ixpFederation + ixpCoreBlock + "announcer: {type: gobgp}\n"
+	if _, err := Parse([]byte(inject)); err == nil || !strings.Contains(err.Error(), "ixp forbids mode inject") {
+		t.Fatalf("inject with core: %v", err)
 	}
 }

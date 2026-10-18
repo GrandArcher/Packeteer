@@ -285,6 +285,8 @@ type SnapshotInput struct {
 	Input           policy.Input
 	Improvements    []policy.Improvement
 	Usage           []plugin.Usage
+	// IXP is this site's fabric health, set only in IXP mode (#167).
+	IXP *plugin.FederatedIXP
 }
 
 // Snapshot builds what this instance publishes: fresh measurements and
@@ -297,6 +299,7 @@ func Snapshot(cfg Config, in SnapshotInput) plugin.InstanceSnapshot {
 		Time: in.Now, RIBReady: in.RIBReady, MaxImprovements: in.MaxImprovements,
 		Providers: []plugin.FederatedProvider{}, Paths: []plugin.FederatedPath{},
 		Routes: []plugin.FederatedRoute{}, Improvements: []plugin.FederatedImprovement{},
+		IXP: in.IXP,
 	}
 	local := map[string]bool{}
 	usage := map[string]plugin.Usage{}

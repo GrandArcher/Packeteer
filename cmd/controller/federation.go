@@ -28,6 +28,10 @@ type fedState struct {
 	peers []plugin.PeerState
 	usage []plugin.Usage
 
+	// ixp builds this site's fabric health for the snapshot (#167). Nil
+	// outside IXP mode.
+	ixp func() *plugin.FederatedIXP
+
 	mu      sync.Mutex
 	local   *plugin.InstanceSnapshot
 	commits []federation.CommitStatus
@@ -125,10 +129,14 @@ func (f *fedState) publish(now time.Time, in policy.Input, imps []policy.Improve
 		return
 	}
 	mode, maxImps, maxAge := f.runtime()
+	var x *plugin.FederatedIXP
+	if f.ixp != nil {
+		x = f.ixp()
+	}
 	s := federation.Snapshot(f.cfg, federation.SnapshotInput{
 		Version: f.version, Mode: mode, Now: now, RIBReady: in.RIBReady,
 		MaxImprovements: maxImps, MaxResultAge: maxAge,
-		Input: in, Improvements: imps, Usage: f.usage,
+		Input: in, Improvements: imps, Usage: f.usage, IXP: x,
 	})
 	f.fed.Publish(s)
 	f.mu.Lock()
@@ -163,4 +171,17 @@ func (f *fedState) status() federation.Status {
 	local, commits := f.local, f.commits
 	f.mu.Unlock()
 	return federation.View(f.cfg, local, peers, commits)
+}
+
+// setIXP makes every later snapshot carry this site's fabric health.
+// Call it before the decision loop starts.
+func (f *fedState) setIXP(fn func() *plugin.FederatedIXP) { f.ixp = fn }
+
+// ixpSites is the multi-site fabric health view (#167).
+func (f *fedState) ixpSites() federation.IXPSitesView {
+	peers := f.fed.Peers(time.Now())
+	f.mu.Lock()
+	local := f.local
+	f.mu.Unlock()
+	return federation.IXPSites(f.cfg, local, peers)
 }

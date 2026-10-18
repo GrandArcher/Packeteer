@@ -6,6 +6,7 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 
 ### Added
 
+- Multi-site IXP health: each site publishes its fabric measurements over mTLS federation; `ixp.core` measures inter-site RTT and loss; `/ixp/sites`, `GET /api/ixp/sites` (#167).
 - IXP member pages `/ixp/member/{asn}` (fabric by vantage, filter history, IXP Manager link), `GET /api/ixp/members/{asn}`, `packeteer_ixp_member_{rtt_ms,loss_pct,jitter_ms}` (#166).
 - Overview problems headline and "N of M healthy" tile; `probe.degraded_loss_pct` and `probe.down_loss_pct` set the dashboard health labels, no decision uses them (#343).
 - Route-server signals: spikes in RPKI-invalid, IRR, and transit-free-ASN filtering, new origins, more-specific bursts, and RFC 7999 blackhole counts per member; GET only (#165).

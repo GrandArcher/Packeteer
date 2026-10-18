@@ -16,6 +16,7 @@ import (
 
 	"github.com/GrandArcher/Packeteer/internal/httpapi"
 	"github.com/GrandArcher/Packeteer/internal/pluginhost"
+	"github.com/GrandArcher/Packeteer/internal/policy"
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
 )
 
@@ -502,4 +503,136 @@ func TestIXPCorrelateWiring(t *testing.T) {
 	if !body.Configured || len(body.Groups) != 2 || !body.Groups[0].Active || len(body.Members) != 0 {
 		t.Fatalf("%s", rec.Body)
 	}
+}
+
+// fakeCore is a core prober with a fixed view that records its links.
+type fakeCore struct {
+	plugin.Base
+	links []plugin.CoreLink
+	view  plugin.CoreView
+}
+
+func (f *fakeCore) SetLinks(l []plugin.CoreLink) { f.links = l }
+func (f *fakeCore) View() plugin.CoreView        { return f.view }
+
+const ixpSitesYAML = `
+mode: observe
+asn: 64512
+router_id: 192.0.2.10
+domain: site-a
+providers:
+  - {name: transit-a, source_ip: 192.0.2.11, next_hop: 192.0.2.1}
+federation:
+  type: mtls
+ixp:
+  core:
+    type: icmp
+  core_links:
+    - {name: a-to-b, peer: site-b, address: 192.0.2.40, source: 192.0.2.30, max_rtt: 40ms}
+`
+
+// TestIXPSitesWiring: a site's snapshot to its peers carries its fabric
+// round and core links, the sites view puts an incident at the peer that
+// reports it, and the shutdown snapshot carries no IXP data.
+func TestIXPSitesWiring(t *testing.T) {
+	cfg := mustParse(t, ixpSitesYAML)
+	ff := &fakeFed{}
+	core := &fakeCore{view: plugin.CoreView{Configured: true, Round: time.Unix(1000, 0).UTC(), Links: []plugin.CoreLinkStatus{
+		{Name: "a-to-b", Peer: "site-b", Address: "192.0.2.40", Sent: 5, LossPct: 0, RTTMs: 3.2, Up: true},
+	}}}
+	round := plugin.FabricView{Configured: true, Round: time.Unix(1000, 0).UTC(),
+		Vantages: []plugin.FabricVantageStatus{{Name: "lan1-v4", Up: true}},
+		Samples:  []plugin.FabricSample{{Vantage: "lan1-v4", ASN: 64496, VLANID: 10, Family: "ipv4", Address: "192.0.2.20", LossPct: 40, RTTMs: 310.5, PastTolerance: true}}}
+	set := &pluginhost.Set{
+		Federation: &pluginhost.Instance[plugin.Federation]{Name: "mtls", Type: "mtls", Plugin: ff},
+		IXPCore:    &pluginhost.Instance[plugin.CoreProbe]{Name: "icmp", Type: "icmp", Plugin: core},
+		IXPFabric:  &pluginhost.Instance[plugin.FabricProbe]{Name: "icmp", Type: "icmp", Plugin: fabricRound{view: round}},
+	}
+	fed := newFedState(cfg, set)
+	srv, err := httpapi.New(httpapi.Options{Snapshot: func() httpapi.Snapshot { return httpapi.Snapshot{Version: "test", Mode: "observe", Started: true} }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	wireIXPSites(cfg, set, fed, srv)
+
+	if len(core.links) != 1 {
+		t.Fatalf("links = %+v", core.links)
+	}
+	l := core.links[0]
+	if l.Name != "a-to-b" || l.Peer != "site-b" || l.Address.String() != "192.0.2.40" || l.Source.String() != "192.0.2.30" || l.MaxLossPct != 10 || l.MaxRTT != 40*time.Millisecond {
+		t.Fatalf("link = %+v", l)
+	}
+
+	now := time.Unix(2000, 0).UTC()
+	fed.publish(now, policy.Input{}, nil)
+	x := ff.last().IXP
+	if x == nil || len(x.Members) != 1 || x.Members[0].ASN != 64496 || !x.Members[0].PastTolerance || len(x.Core) != 1 || x.Core[0].RTTMs != 3.2 {
+		t.Fatalf("published ixp = %+v", x)
+	}
+
+	ff.set([]plugin.PeerState{{Name: "site-b", Fresh: true, LastSeen: now, Snapshot: plugin.InstanceSnapshot{
+		Instance: "site-b", Domain: "site-b", Time: now, IXP: &plugin.FederatedIXP{
+			Vantages: []plugin.FabricVantageStatus{{Name: "lan1-v4", Up: true}},
+			Groups:   []plugin.CorrelationGroup{{Scope: plugin.ScopeSwitch, Name: "sw2", Members: 4, Degraded: 3, Active: true}},
+			Members:  []plugin.FabricPath{}, Core: []plugin.CoreLinkStatus{},
+		}}}})
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/ixp/sites", nil))
+	var body struct {
+		Enabled bool `json:"enabled"`
+		Sites   []struct {
+			Name   string `json:"name"`
+			Status string `json:"status"`
+		} `json:"sites"`
+		Links []struct {
+			Site string `json:"site"`
+			Peer string `json:"peer"`
+		} `json:"links"`
+		Incidents []struct {
+			Site   string `json:"site"`
+			Scope  string `json:"scope"`
+			Detail string `json:"detail"`
+		} `json:"incidents"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if !body.Enabled || len(body.Sites) != 2 || body.Sites[0].Name != "site-a" || body.Sites[0].Status != "ok" || body.Sites[1].Status != "degraded" {
+		t.Fatalf("sites = %s", rec.Body)
+	}
+	if len(body.Links) != 1 || body.Links[0].Site != "site-a" || body.Links[0].Peer != "site-b" {
+		t.Fatalf("links = %s", rec.Body)
+	}
+	if len(body.Incidents) != 1 || body.Incidents[0].Site != "site-b" || body.Incidents[0].Detail != "switch sw2: 3 of 4 members degraded" {
+		t.Fatalf("incidents = %s", rec.Body)
+	}
+
+	fed.publishDown(now)
+	if ff.last().IXP != nil {
+		t.Fatalf("shutdown snapshot carries ixp data: %+v", ff.last().IXP)
+	}
+}
+
+func TestIXPSitesNotWiredOutsideIXPModeOrWithoutFederation(t *testing.T) {
+	plain := mustParse(t, ixpSitesYAML[:strings.Index(ixpSitesYAML, "ixp:")])
+	ff := &fakeFed{}
+	set := &pluginhost.Set{Federation: &pluginhost.Instance[plugin.Federation]{Plugin: ff}}
+	fed := newFedState(plain, set)
+	srv, err := httpapi.New(httpapi.Options{Snapshot: func() httpapi.Snapshot { return httpapi.Snapshot{Mode: "observe", Started: true} }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	wireIXPSites(plain, set, fed, srv)
+	fed.publish(time.Unix(2000, 0).UTC(), policy.Input{}, nil)
+	if ff.last().IXP != nil {
+		t.Fatalf("an edge instance published ixp data: %+v", ff.last().IXP)
+	}
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/ixp/sites", nil))
+	if !strings.Contains(rec.Body.String(), `"enabled":false`) {
+		t.Fatalf("view = %s", rec.Body)
+	}
+
+	ixp := mustParse(t, ixpSitesYAML)
+	wireIXPSites(ixp, &pluginhost.Set{}, nil, srv)
 }

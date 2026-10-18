@@ -101,3 +101,44 @@ function dataTable(rows, prefixLinks) {
   t.appendChild(tb);
   return t;
 }
+
+// The IXP pages (#166, #167) share these: a table from header names and rows
+// of {text, cls, href} cells, a cell that shows a dash for no value, and a
+// number with a unit.
+function ixpTable(headers, rows) {
+  var t = el("table");
+  var hr = el("tr");
+  headers.forEach(function (h) { hr.appendChild(el("th", "", h)); });
+  t.appendChild(el("thead")).appendChild(hr);
+  var body = el("tbody");
+  rows.forEach(function (cells) {
+    var tr = el("tr");
+    cells.forEach(function (c) {
+      var td = el("td", c.cls || "", c.text);
+      if (c.href) {
+        clear(td);
+        var a = el("a", "", c.text);
+        a.href = c.href;
+        td.appendChild(a);
+      }
+      tr.appendChild(td);
+    });
+    body.appendChild(tr);
+  });
+  t.appendChild(body);
+  return t;
+}
+
+function ixpCell(text, cls) {
+  return {text: text == null || text === "" ? "\u2014" : String(text), cls: cls};
+}
+
+function ixpNum(v, unit) {
+  return typeof v === "number" ? v.toFixed(2) + unit : "\u2014";
+}
+
+function ixpSetBox(id, node) {
+  var box = document.getElementById(id);
+  clear(box);
+  box.appendChild(node);
+}
