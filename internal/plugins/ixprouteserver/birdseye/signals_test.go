@@ -308,7 +308,7 @@ func TestMoreSpecificBurst(t *testing.T) {
 		t.Fatalf("burst %v", got)
 	}
 	e := ev.events[0]
-	if e.Fields["count"] != "3" || e.Fields["prefix"] != "2001:db8:1::/48" && e.Fields["prefix"] != "192.0.2.32/27" || e.Severity != plugin.SeverityWarning {
+	if e.Fields["count"] != "3" || e.Severity != plugin.SeverityWarning {
 		t.Fatalf("event %+v", e)
 	}
 	if e.Fields["prefix"] != "192.0.2.32/27" {
@@ -355,7 +355,10 @@ func TestRemovedSessionClosesSignalAlerts(t *testing.T) {
 	}
 }
 
-func TestDownSessionHoldsSignalAlerts(t *testing.T) {
+// A down session's routes are gone from the route server, so its table
+// leaves the comparison and its origin alert closes. On return the routes
+// are judged afresh, so the alert opens again.
+func TestDownSessionDropsItsRoutes(t *testing.T) {
 	f := signalFake(t)
 	f.setRoutes(sessA, route("192.0.2.0/24", "64497"))
 	f.setRoutes(sessB, route("198.51.100.0/24", "64498"))
@@ -363,12 +366,37 @@ func TestDownSessionHoldsSignalAlerts(t *testing.T) {
 	tick(w, 0)
 	f.setRoutes(sessB, route("192.0.2.0/24", "64498"))
 	tick(w, 1)
+	if got := ev.kinds(); !slices.Equal(got, []string{"ixp.rs_origin_change " + sessB}) {
+		t.Fatalf("open events %v", got)
+	}
+	ev.reset()
 	f.setSession(sessB, 64498, "192.0.2.11", "Idle", 0)
 	tick(w, 2)
+	if got := ev.kinds(); !slices.Equal(got, []string{"ixp.rs_origin_change_cleared " + sessB, "ixp.rs_session_down " + sessB}) {
+		t.Fatalf("down events %v", got)
+	}
+	ev.reset()
 	f.setSession(sessB, 64498, "192.0.2.11", "Established", 0)
 	tick(w, 3)
-	want := []string{"ixp.rs_origin_change " + sessB, "ixp.rs_session_down " + sessB, "ixp.rs_session_up " + sessB}
+	want := []string{"ixp.rs_session_up " + sessB, "ixp.rs_origin_change " + sessB}
 	if got := ev.kinds(); !slices.Equal(got, want) {
+		t.Fatalf("up events %v", got)
+	}
+}
+
+// Sessions with an unknown ASN (0) are separate members, so each one's
+// origin is judged against the other's route.
+func TestUnknownASNSessionsAreSeparateMembers(t *testing.T) {
+	f := newFake(t)
+	f.setSession(sessA, 0, "192.0.2.10", "Established", 0)
+	f.setSession(sessB, 0, "192.0.2.11", "Established", 0)
+	f.setRoutes(sessA, route("192.0.2.0/24", "64497"))
+	f.setRoutes(sessB, route("203.0.113.0/24", "64498"))
+	w, ev := newWatch(t, f, map[string]any{"route_signals": true})
+	tick(w, 0)
+	f.setRoutes(sessB, route("203.0.113.0/24", "64498"), route("192.0.2.0/24", "64498"))
+	tick(w, 1)
+	if got := ev.kinds(); !slices.Equal(got, []string{"ixp.rs_origin_change " + sessB}) {
 		t.Fatalf("events %v", got)
 	}
 }

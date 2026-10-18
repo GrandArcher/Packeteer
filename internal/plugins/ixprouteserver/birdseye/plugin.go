@@ -1,9 +1,10 @@
 // Package birdseye is the ixp.routeservers plugin (#164, #165). It polls
 // Birdseye on each route server with GET only, keeps a short per-session
 // history, and emits events when a route server, a member session, a
-// max_prefix share, a filtered share, or a hijack, leak, or blackhole
-// signal changes. It does not announce, it
-// does not write the RIB view, and it is not an input to Decide.
+// max_prefix share, or a filtered share changes, and when a route signal
+// (origin change, more-specific burst, filter spike) opens or closes. Blackhole
+// routes are counted, not alerted on. It does not announce, it does not write
+// the RIB view, and it is not an input to Decide.
 package birdseye
 
 import (

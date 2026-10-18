@@ -306,6 +306,20 @@ func (w *Watch) apply(s *server, st statusDoc, rows []plugin.RouteServerSession,
 	var idx routeIndex
 	tracked := 0
 	if w.signals {
+		listed := make(map[string]bool, len(rows))
+		for i, row := range rows {
+			listed[row.Session] = scans[i] != nil
+		}
+		for name, st := range s.sessions {
+			if listed[name] {
+				continue
+			}
+			why := "has no route listing this poll"
+			if _, ok := listed[name]; !ok {
+				why = "is no longer on the route server"
+			}
+			events = append(events, dropRoutes(st, st.view, now, why)...)
+		}
 		idx = s.index()
 		tracked = s.tracked()
 	}
@@ -320,9 +334,11 @@ func (w *Watch) apply(s *server, st statusDoc, rows []plugin.RouteServerSession,
 		base, haveBase := s.baseline(row.Session)
 		events = append(events, w.evaluate(st, row, base, haveBase, now)...)
 		if sc := scans[i]; sc != nil {
-			if tracked+len(sc.routes)-len(st.routes) > w.maxTracked {
+			if tracked-len(st.routes)+len(sc.routes) > w.maxTracked {
+				tracked -= len(st.routes)
 				row.Scanned, row.Blackhole = false, 0
 				row.ScanError = fmt.Sprintf("more than %d accepted routes are tracked on this server", w.maxTracked)
+				events = append(events, dropRoutes(st, row, now, "has more than the tracked route limit on this server")...)
 			} else {
 				tracked += len(sc.routes) - len(st.routes)
 				events = append(events, w.routeSignals(st, row, sc, idx, now)...)

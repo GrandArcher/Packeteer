@@ -114,18 +114,29 @@ func originAS(path []string) (uint32, bool) {
 
 // owner is one session's accepted route for a prefix.
 type owner struct {
-	asn    uint32
-	origin uint32
+	asn     uint32
+	session string
+	origin  uint32
+}
+
+// sameMember is true when two sessions belong to one member: one ASN, or,
+// with an unknown ASN (0), the same session. Unknown ASNs must not merge.
+func sameMember(a, b owner) bool {
+	if a.asn != 0 || b.asn != 0 {
+		return a.asn == b.asn
+	}
+	return a.session == b.session
 }
 
 type routeIndex map[netip.Prefix][]owner
 
-// index lists, per prefix, who announced it in the last poll.
+// index lists, per prefix, who announced it in the last poll. A session
+// without a listing this poll has no routes here (see dropRoutes).
 func (s *server) index() routeIndex {
 	idx := routeIndex{}
-	for _, st := range s.sessions {
+	for name, st := range s.sessions {
 		for p, o := range st.routes {
-			idx[p] = append(idx[p], owner{asn: st.view.ASN, origin: o})
+			idx[p] = append(idx[p], owner{asn: st.view.ASN, session: name, origin: o})
 		}
 	}
 	return idx
@@ -140,14 +151,14 @@ func (s *server) tracked() int {
 }
 
 // others reports whether another member announced the prefix, and whether
-// one of them used the origin.
-func others(list []owner, member, origin uint32) (other, same bool) {
+// one of them used the origin of self.
+func others(list []owner, self owner) (other, same bool) {
 	for _, o := range list {
-		if o.asn == member {
+		if sameMember(o, self) {
 			continue
 		}
 		other = true
-		if o.origin == origin {
+		if o.origin == self.origin {
 			same = true
 		}
 	}
@@ -156,13 +167,13 @@ func others(list []owner, member, origin uint32) (other, same bool) {
 
 // coveredByOther is true when a shorter prefix of the route is accepted
 // from another member and none of them uses the route's origin.
-func coveredByOther(idx routeIndex, p netip.Prefix, member, origin uint32) bool {
+func coveredByOther(idx routeIndex, p netip.Prefix, self owner) bool {
 	for bits := p.Bits() - 1; bits >= 1; bits-- {
 		cover, err := p.Addr().Prefix(bits)
 		if err != nil {
 			return false
 		}
-		if other, same := others(idx[cover], member, origin); other && !same {
+		if other, same := others(idx[cover], self); other && !same {
 			return true
 		}
 	}
@@ -203,10 +214,11 @@ func (w *Watch) routeSignals(st *sess, row plugin.RouteServerSession, sc *scan, 
 		if po, ok := prev[p]; ok && po == o {
 			continue
 		}
-		switch other, same := others(idx[p], row.ASN, o); {
+		self := owner{asn: row.ASN, session: row.Session, origin: o}
+		switch other, same := others(idx[p], self); {
 		case other && !same:
 			st.originFlag[p] = o
-		case !other && coveredByOther(idx, p, row.ASN, o):
+		case !other && coveredByOther(idx, p, self):
 			burst[p] = o
 		}
 	}
@@ -312,9 +324,25 @@ func (w *Watch) spikes(st *sess, row plugin.RouteServerSession, base map[int]int
 	return ev
 }
 
-// closeSignals resolves the spike, origin, and more-specific alerts of a
-// session that is no longer visible. The route table is dropped and the
-// session counts as new, so it is judged afresh if it comes back.
+// dropRoutes forgets a session's route table and resolves its origin and
+// more-specific alerts. The session's routes are not on the route server
+// now, so other members are not judged against them. The session counts as
+// new, so its routes are judged when it comes back.
+func dropRoutes(st *sess, row plugin.RouteServerSession, now time.Time, why string) []plugin.Event {
+	var ev []plugin.Event
+	if len(st.originFlag) > 0 {
+		ev = append(ev, plugin.NewEvent(plugin.EventRSOriginChangeCleared, now, label(row)+" "+why, fields(row)))
+	}
+	if len(st.msFlag) > 0 {
+		ev = append(ev, plugin.NewEvent(plugin.EventRSMoreSpecificCleared, now, label(row)+" "+why, fields(row)))
+	}
+	st.originFlag, st.msFlag = nil, nil
+	st.routes, st.fresh = nil, true
+	return ev
+}
+
+// closeSignals resolves every signal alert of a session that is no longer
+// on the route server.
 func (w *Watch) closeSignals(st *sess, now time.Time, why string) []plugin.Event {
 	row := st.view
 	var ev []plugin.Event
@@ -327,13 +355,6 @@ func (w *Watch) closeSignals(st *sess, now time.Time, why string) []plugin.Event
 		ev = append(ev, plugin.NewEvent(plugin.EventRSFilterSpikeCleared, now,
 			label(row)+" "+why, fields(row, "reason", strconv.Itoa(c), "count", "0")))
 	}
-	if len(st.originFlag) > 0 {
-		ev = append(ev, plugin.NewEvent(plugin.EventRSOriginChangeCleared, now, label(row)+" "+why, fields(row)))
-	}
-	if len(st.msFlag) > 0 {
-		ev = append(ev, plugin.NewEvent(plugin.EventRSMoreSpecificCleared, now, label(row)+" "+why, fields(row)))
-	}
-	st.spike, st.originFlag, st.msFlag = nil, nil, nil
-	st.routes, st.fresh = nil, true
-	return ev
+	st.spike = nil
+	return append(ev, dropRoutes(st, row, now, why)...)
 }
