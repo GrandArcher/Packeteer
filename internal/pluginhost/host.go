@@ -52,6 +52,9 @@ type Set struct {
 	// IXPRouteServers polls Birdseye on each route server (#164). It reads
 	// with GET only, keeps its own store, and never announces.
 	IXPRouteServers *Instance[plugin.RouteServerWatch]
+	// IXPCorrelate tells a fabric problem from a member problem (#163). It
+	// reads the fabric probe view only and never announces.
+	IXPCorrelate *Instance[plugin.FabricCorrelator]
 	// RIBSources feed the RIB view (BMP). They never announce.
 	RIBSources []Instance[plugin.RIBSource]
 	// Federation is the multi-POP transport (#30). It never announces.
@@ -194,6 +197,11 @@ func Build(cfg *config.Config, opts Options) (*Set, error) {
 			s.IXPRouteServers = &b[0]
 		}
 	}
+	if cfg.IXP != nil && cfg.IXP.Correlate != nil {
+		if b := build(plugin.FabricCorrelators, "ixp.correlate", []config.PluginSpec{*cfg.IXP.Correlate}, base, &errs); len(b) == 1 {
+			s.IXPCorrelate = &b[0]
+		}
+	}
 	if err := errors.Join(errs...); err != nil {
 		return nil, err
 	}
@@ -279,6 +287,10 @@ func (s *Set) all() []namedLifecycle {
 	// After the member source, for the same reason. Nothing here announces.
 	if s.IXPRouteServers != nil {
 		add(plugin.KindRouteServer, s.IXPRouteServers.Name, s.IXPRouteServers.Plugin)
+	}
+	// After the fabric prober, whose view it reads. Nothing here announces.
+	if s.IXPCorrelate != nil {
+		add(plugin.KindCorrelator, s.IXPCorrelate.Name, s.IXPCorrelate.Plugin)
 	}
 	// Before the announcers, so it stops after them. The core withdraws
 	// and resigns before any plugin stops.

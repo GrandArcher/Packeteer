@@ -9,6 +9,7 @@ mode: observe               # also the default when mode is left out; inject is 
 # The API key is PACKETEER_IXP_MANAGER_API_KEY, never this file.
 # vantages and fabric (#162) probe member LAN addresses and announce nothing.
 # routeservers (#164) reads Birdseye with GET and announces nothing.
+# correlate (#163) reads the fabric probes, sends nothing, and announces nothing.
 # ixp:
 #   members:
 #     type: ixf
@@ -44,6 +45,14 @@ mode: observe               # also the default when mode is left out; inject is 
 #       max_bytes: 8388608
 #       max_prefix_warn_pct: 90
 #       filtered_warn_pct: 50
+#   correlate:                   # fabric vs member problem (#163), needs fabric
+#     type: topology
+#     config:
+#       min_members: 3           # members behind one switch, colo, or bundle
+#       degraded_pct: 50
+#       rounds: 2                # fabric rounds in a row before an event
+#       bundles:                 # IX-F has no core bundle; name the switch ids
+#         - {name: core-1, switches: [1, 2]}
 
 asn: 64512
 router_id: 192.0.2.10

@@ -354,6 +354,9 @@ func (c *Config) validatePlugins(add func(string, ...any)) {
 	if c.IXP != nil && c.IXP.RouteServers != nil && c.IXP.RouteServers.Type == "" {
 		add("ixp.routeservers: type is required")
 	}
+	if c.IXP != nil && c.IXP.Correlate != nil && c.IXP.Correlate.Type == "" {
+		add("ixp.correlate: type is required")
+	}
 	if c.Announcer != nil && c.Announcer.Type == "" {
 		add("announcer: type is required")
 	}

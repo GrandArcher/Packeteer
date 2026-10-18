@@ -185,7 +185,7 @@ func buildServers(in []ServerConfig) ([]*server, error) {
 	out := make([]*server, 0, len(in))
 	for i, sc := range in {
 		p := fmt.Sprintf("servers[%d]", i)
-		if !validName(sc.Name) {
+		if !plugin.ValidLabel(sc.Name) {
 			return nil, fmt.Errorf("%s.name is invalid", p)
 		}
 		if seen[sc.Name] {
@@ -215,23 +215,6 @@ func baseURL(raw string) (string, error) {
 	u.Path = strings.TrimRight(u.Path, "/")
 	u.RawPath = ""
 	return u.String(), nil
-}
-
-// validName allows a letter or digit, then letters, digits, '.', '_' or
-// '-', at most 64 characters. A name is a URL-safe label in events.
-func validName(s string) bool {
-	if s == "" || len(s) > 64 {
-		return false
-	}
-	for i, c := range s {
-		switch {
-		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9':
-		case i > 0 && (c == '.' || c == '_' || c == '-'):
-		default:
-			return false
-		}
-	}
-	return true
 }
 
 // SetMembers records the IX-F view. The controller calls it before Start.
