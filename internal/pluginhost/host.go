@@ -436,7 +436,7 @@ func optionsEnv(cfg *config.Config, opts Options) plugin.Env {
 	if opts.PluginDir != "" {
 		dir = opts.PluginDir
 	}
-	return plugin.Env{Logger: opts.Logger, PluginDir: dir, Getenv: opts.Getenv, Providers: providerNames(cfg), ASN: asn, CheckOnly: opts.CheckOnly}
+	return plugin.Env{Logger: opts.Logger, PluginDir: dir, Getenv: opts.Getenv, Providers: providerNames(cfg), Ports: portNames(cfg), ASN: asn, CheckOnly: opts.CheckOnly}
 }
 
 // BuildSources constructs the named target sources. They are not started.
@@ -457,6 +457,19 @@ func BuildPolicies(cfg *config.Config, specs []config.PluginSpec, opts Options) 
 		return nil, err
 	}
 	return out, nil
+}
+
+func portNames(cfg *config.Config) []string {
+	if cfg == nil {
+		return nil
+	}
+	var out []string
+	for _, ex := range cfg.Exchanges {
+		if ex.Port != nil {
+			out = append(out, ex.Name)
+		}
+	}
+	return out
 }
 
 func providerNames(cfg *config.Config) []string {

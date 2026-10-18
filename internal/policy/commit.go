@@ -328,7 +328,14 @@ func buildPlan(
 			Name: p.Name, Group: p.Group, Precedence: p.Precedence,
 			CCDisable: p.CCDisable, Excluded: cfg.Excluded[p.Name],
 			Up: in.ProviderUp[p.Name], Usage: u, HaveRow: have,
-			Cost: p.Cost, HasCost: p.HasCost,
+			Cost: p.Cost, HasCost: p.HasCost, Port: p.Port,
+		})
+	}
+	for _, pt := range cfg.Ports {
+		row, have := usage[pt.Name]
+		out.Ports = append(out.Ports, plugin.PlanPort{
+			Name: pt.Name, CapacityMbps: pt.CapacityMbps, CommitMbps: pt.CommitMbps,
+			Usage: row, HaveRow: have,
 		})
 	}
 	added := map[netip.Prefix]bool{}

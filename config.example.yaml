@@ -278,6 +278,12 @@ scorer:
 #     # BMP session events and per-peer Adj-RIB-In counts (#147). When a peer
 #     # sets max_prefix, exchange.max_prefix fires at this share of it.
 #     max_prefix_warn_pct: 90
+#     # One interface shared by every peer (#151). Its usage is a telemetry
+#     # binding named ix-example. The commit and cost scorers plan no move
+#     # that pushes the port past capacity or commit. port_cost is a flat
+#     # monthly fee: peers cost 0 per Mbps and may not set cost. The binding's
+#     # own commit_mbps is a placeholder (use 1); port.commit_mbps is the commit.
+#     port: {capacity_mbps: 10000, commit_mbps: 6000, port_cost: 1500}
 #     peers:
 #       - name: ix-peer-a
 #         asn: 64501
