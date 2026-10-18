@@ -121,3 +121,29 @@ func TestEditorRefusesIXPInject(t *testing.T) {
 		t.Fatalf("errors = %q", got)
 	}
 }
+
+func TestFormKeepsLookup(t *testing.T) {
+	y := observeYAML + `
+lookup:
+  type: peeringdb
+  config:
+    exchanges:
+      - {name: example-ix, ix_id: 1}
+`
+	f, err := ParseForm([]byte(y))
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.HoldTime = "20m"
+	out, err := ApplyForm([]byte(y), f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Parse(out)
+	if err != nil {
+		t.Fatalf("parse: %v\n%s", err, out)
+	}
+	if cfg.Lookup == nil || cfg.Lookup.Type != "peeringdb" || cfg.HoldTime != 20*time.Minute || !strings.Contains(string(out), "ix_id: 1") {
+		t.Fatalf("lookup %+v hold %s\n%s", cfg.Lookup, cfg.HoldTime, out)
+	}
+}

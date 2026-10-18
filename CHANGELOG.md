@@ -6,6 +6,7 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 
 ### Added
 
+- PeeringDB / IX-F lookup: read-only cached org name, exchange membership, LAN addresses, route-server flag, policy, and prefix hints; GET /api/lookup; key from PACKETEER_PEERINGDB_API_KEY (#153).
 - Fabric probes: member LAN loss, RTT, and jitter from ixp.vantages; Can Ping opt-out and busy-host tolerance; nothing announced (#162).
 - IX-F member import: read-only GET of the IXP Manager member export or a named IX-F URL; key from PACKETEER_IXP_MANAGER_API_KEY header only; 14-day expiry warning (#161).
 - Web UI shows the Packeteer logo next to the name and as the favicon (#327).
