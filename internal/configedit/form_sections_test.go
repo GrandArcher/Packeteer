@@ -548,6 +548,7 @@ func TestFormSectionErrors(t *testing.T) {
 			v.Prefixes = []FormTarget{{Prefix: "203.0.113.0/24", Host: "192.0.2.1"}}
 		}), "inside"},
 		"vip targets cap":    {vip(func(v *FormVIP) { v.MaxTargets = "100001" }), "vip.max_targets"},
+		"vip targets zero":   {vip(func(v *FormVIP) { v.MaxTargets = "0" }), "vip.max_targets"},
 		"outage min cap":     {outage(func(o *FormOutage) { o.MinPrefixes = "100001" }), "outage.min_prefixes"},
 		"outage targets cap": {outage(func(o *FormOutage) { o.MaxTargets = "100001" }), "outage.max_targets"},
 		"flow top_n cap":     {flow(func(fl *FormFlow) { fl.TopN = "10001" }), "flow.top_n"},
