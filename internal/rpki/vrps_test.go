@@ -17,9 +17,9 @@ func p(t *testing.T, s string) netip.Prefix {
 // when nothing covers.
 func TestVRPsValidate(t *testing.T) {
 	table := NewVRPs()
-	table.Add(p(t, "198.51.100.0/24"), 24, 64500)
-	table.Add(p(t, "203.0.113.0/24"), 26, 64501)
-	table.Add(p(t, "2001:db8::/32"), 48, 64502)
+	table.Apply([]Change{{Prefix: p(t, "198.51.100.0/24"), MaxLen: 24, ASN: 64500}})
+	table.Apply([]Change{{Prefix: p(t, "203.0.113.0/24"), MaxLen: 26, ASN: 64501}})
+	table.Apply([]Change{{Prefix: p(t, "2001:db8::/32"), MaxLen: 48, ASN: 64502}})
 
 	tests := []struct {
 		name   string
@@ -52,37 +52,45 @@ func TestVRPsValidate(t *testing.T) {
 	}
 }
 
-// A withdrawal removes exactly the payload it names.
-func TestVRPsRemove(t *testing.T) {
+// A withdrawal removes exactly the payload it names, and a delta applies
+// its records in order.
+func TestVRPsApply(t *testing.T) {
 	table := NewVRPs()
-	table.Add(p(t, "198.51.100.0/24"), 24, 64500)
-	table.Add(p(t, "198.51.100.0/24"), 25, 64500)
-	table.Remove(p(t, "198.51.100.0/24"), 24, 64500)
+	table.Apply([]Change{{Prefix: p(t, "198.51.100.0/24"), MaxLen: 24, ASN: 64500}})
+	table.Apply([]Change{{Prefix: p(t, "198.51.100.0/24"), MaxLen: 25, ASN: 64500}})
+	table.Apply([]Change{{Prefix: p(t, "198.51.100.0/24"), MaxLen: 24, ASN: 64500, Withdraw: true}})
 	if table.Len() != 1 {
 		t.Fatalf("Len = %d, want 1", table.Len())
 	}
 	if got := table.Validate(p(t, "198.51.100.0/24"), 64500); got != plugin.RPKIValid {
 		t.Fatalf("remaining payload should still validate: %q", got)
 	}
-	table.Remove(p(t, "198.51.100.0/24"), 24, 64500)
+	table.Apply([]Change{{Prefix: p(t, "198.51.100.0/24"), MaxLen: 24, ASN: 64500, Withdraw: true}})
 	if table.Len() != 1 {
 		t.Fatalf("removing an absent payload changed Len: %d", table.Len())
 	}
-	table.Remove(p(t, "198.51.100.0/24"), 25, 64500)
+	table.Apply([]Change{
+		{Prefix: p(t, "203.0.113.0/24"), MaxLen: 24, ASN: 64501},
+		{Prefix: p(t, "203.0.113.0/24"), MaxLen: 24, ASN: 64501, Withdraw: true},
+		{Prefix: p(t, "198.51.100.0/24"), MaxLen: 25, ASN: 64500, Withdraw: true},
+	})
+	if table.Len() != 0 {
+		t.Fatalf("announce then withdraw in one delta left Len %d", table.Len())
+	}
 	if got := table.Validate(p(t, "198.51.100.0/24"), 64500); got != plugin.RPKINotFound {
 		t.Fatalf("after both removals = %q, want notfound", got)
 	}
 }
 
-// A replayed RTR announcement is stored once, so one Remove retires it.
+// A replayed RTR announcement is stored once, so one withdrawal retires it.
 func TestVRPsAddIdempotent(t *testing.T) {
 	table := NewVRPs()
-	table.Add(p(t, "198.51.100.0/24"), 24, 64500)
-	table.Add(p(t, "198.51.100.0/24"), 24, 64500)
+	table.Apply([]Change{{Prefix: p(t, "198.51.100.0/24"), MaxLen: 24, ASN: 64500}})
+	table.Apply([]Change{{Prefix: p(t, "198.51.100.0/24"), MaxLen: 24, ASN: 64500}})
 	if table.Len() != 1 {
 		t.Fatalf("duplicate add stored %d payloads", table.Len())
 	}
-	table.Remove(p(t, "198.51.100.0/24"), 24, 64500)
+	table.Apply([]Change{{Prefix: p(t, "198.51.100.0/24"), MaxLen: 24, ASN: 64500}, {Prefix: p(t, "198.51.100.0/24"), MaxLen: 24, ASN: 64500, Withdraw: true}})
 	if got := table.Validate(p(t, "198.51.100.0/24"), 64500); got == plugin.RPKIValid {
 		t.Fatalf("withdrawn payload still validates: %q", got)
 	}

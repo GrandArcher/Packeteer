@@ -40,32 +40,60 @@ func TestNewRPKISet(t *testing.T) {
 	}
 }
 
-type fakePaths struct {
-	path []uint32
-	ok   bool
+// fakeOrigins validates by origin AS: an origin in invalid is invalid,
+// any other is valid.
+type fakeOrigins struct {
+	plugin.Base
+	invalid map[uint32]bool
 }
 
-func (f fakePaths) ProviderPath(netip.Prefix, string) ([]uint32, bool) { return f.path, f.ok }
+func (f fakeOrigins) Validate(_ netip.Prefix, origin uint32) plugin.RPKIValidity {
+	if f.invalid[origin] {
+		return plugin.RPKIInvalid
+	}
+	return plugin.RPKIValid
+}
+func (f fakeOrigins) Status() plugin.RPKIStatus { return plugin.RPKIStatus{Up: true, VRPs: 1} }
 
-// fillRPKI labels each provider path by its origin (the last AS) and skips
-// a provider without a path or with RPKI off.
+type fakePaths map[string][][]uint32
+
+func (f fakePaths) ProviderPaths(_ netip.Prefix, provider string) [][]uint32 { return f[provider] }
+
+// fillRPKI labels each provider by the origins (the last AS) of all its
+// learned paths, the worst one winning, and skips a provider without a
+// path or with RPKI off.
 func TestFillRPKI(t *testing.T) {
 	p := netip.MustParsePrefix("198.51.100.0/24")
-	src := rpki.NewSet([]plugin.RPKI{fakeRPKI{validity: plugin.RPKIInvalid}})
-	in := &policy.Input{Results: []probe.Result{{Provider: "transit-a", Prefix: p}}}
-	fillRPKI(in, fakePaths{path: []uint32{64500, 64511}, ok: true}, src)
-	if got := in.RPKI[p]["transit-a"]; got != plugin.RPKIInvalid {
-		t.Fatalf("validity = %q", got)
+	src := rpki.NewSet([]plugin.RPKI{fakeOrigins{invalid: map[uint32]bool{64511: true}}})
+	in := &policy.Input{Results: []probe.Result{
+		{Provider: "transit-a", Prefix: p},
+		{Provider: "transit-b", Prefix: p},
+		{Provider: "ix-peer-a", Prefix: p},
+		{Provider: "ix-peer-b", Prefix: p},
+	}}
+	fillRPKI(in, fakePaths{
+		"transit-a": {{64496, 64511}},
+		// The first path (as ProviderPath would pick) is valid; a later
+		// add-path or BMP path from the same provider is invalid.
+		"transit-b": {{64497, 64500}, {64497, 64511}},
+		"ix-peer-a": {{64501, 64500}, {64501, 64500}},
+	}, src)
+	want := map[string]plugin.RPKIValidity{
+		"transit-a": plugin.RPKIInvalid,
+		"transit-b": plugin.RPKIInvalid,
+		"ix-peer-a": plugin.RPKIValid,
 	}
-
-	noPath := &policy.Input{Results: []probe.Result{{Provider: "transit-a", Prefix: p}}}
-	fillRPKI(noPath, fakePaths{ok: false}, src)
-	if len(noPath.RPKI) != 0 {
-		t.Fatalf("a provider without a path was labelled: %+v", noPath.RPKI)
+	if len(in.RPKI[p]) != len(want) {
+		t.Fatalf("labels = %+v, want %+v", in.RPKI[p], want)
+	}
+	for provider, w := range want {
+		if got := in.RPKI[p][provider]; got != w {
+			t.Fatalf("%s validity = %q, want %q", provider, got, w)
+		}
 	}
 
 	off := &policy.Input{Results: []probe.Result{{Provider: "transit-a", Prefix: p}}}
-	fillRPKI(off, fakePaths{path: []uint32{64500}, ok: true}, rpki.NewSet(nil))
+	fillRPKI(off, fakePaths{"transit-a": {{64500}}}, rpki.NewSet(nil))
 	if len(off.RPKI) != 0 {
 		t.Fatalf("RPKI off labelled a path: %+v", off.RPKI)
 	}

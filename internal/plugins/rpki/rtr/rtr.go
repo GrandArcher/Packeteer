@@ -236,16 +236,13 @@ func (c *Client) session(ctx context.Context) error {
 	stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
 	defer stop()
 
-	if err := writePDU(conn, resetQuery()); err != nil {
+	// resp is the response in flight, nil while idle. While it is set the
+	// read wait is the timeout, so a silent server is dropped and redialed
+	// instead of held forever.
+	resp, q := resetRequest()
+	if err := writePDU(conn, q); err != nil {
 		return err
 	}
-	// A reset response is the full table: build it aside and swap at End
-	// of Data, so a dropped connection leaves the last cache in place.
-	// awaiting is true until that response reaches End of Data. It bounds
-	// the wait by timeout, so a silent server is dropped and redialed
-	// instead of held forever.
-	pending := rpki.NewVRPs()
-	awaiting := true
 	var buf []byte
 	tmp := make([]byte, 64<<10)
 	for {
@@ -253,7 +250,7 @@ func (c *Client) session(ctx context.Context) error {
 			return ctx.Err()
 		}
 		wait := c.cfg.Refresh
-		if pending != nil || awaiting {
+		if resp != nil {
 			wait = c.cfg.Timeout
 		}
 		_ = conn.SetReadDeadline(time.Now().Add(wait))
@@ -267,8 +264,7 @@ func (c *Client) session(ctx context.Context) error {
 			}
 			for _, pdu := range pdus {
 				var reply []byte
-				var done bool
-				pending, reply, done, err = c.handle(pdu, pending)
+				resp, reply, err = c.handle(pdu, resp)
 				if err != nil {
 					return err
 				}
@@ -276,10 +272,6 @@ func (c *Client) session(ctx context.Context) error {
 					if err := writePDU(conn, reply); err != nil {
 						return err
 					}
-					awaiting = true
-				}
-				if done {
-					awaiting = false
 				}
 			}
 		}
@@ -288,81 +280,107 @@ func (c *Client) session(ctx context.Context) error {
 		}
 		var ne net.Error
 		if errors.As(rerr, &ne) && ne.Timeout() && ctx.Err() == nil {
-			if pending != nil || awaiting {
-				// A reset load or a query response stalled: drop the
-				// connection so run redials instead of waiting forever.
+			if resp != nil {
 				return errors.New("rtr: timed out waiting for the server")
 			}
 			// Idle for one refresh: ask for changes.
-			if err := writePDU(conn, c.query()); err != nil {
+			resp, q = c.request()
+			if err := writePDU(conn, q); err != nil {
 				return err
 			}
-			awaiting = true
 			continue
 		}
 		return rerr
 	}
 }
 
-// query is the next query for the current session: a serial query once a
-// full load has completed, else a reset query.
-func (c *Client) query() []byte {
+// response is the RTR response the client is waiting for. Nothing in it
+// reaches the live cache before End of Data, so a dropped session or an
+// Error Report partway through leaves the last complete cache serving.
+type response struct {
+	// table is the full table a Reset Query builds; nil for a Serial
+	// Query, whose records collect in delta.
+	table *rpki.VRPs
+	delta []rpki.Change
+	adds  int
+}
+
+func resetRequest() (*response, []byte) {
+	return &response{table: rpki.NewVRPs()}, resetQuery()
+}
+
+// request is the next query and the response it opens: a Serial Query
+// from the last serial once a full load has completed, else a Reset Query.
+func (c *Client) request() (*response, []byte) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.updated.IsZero() {
-		return resetQuery()
+		return resetRequest()
 	}
-	return serialQuery(c.sessionID, c.serial)
+	return &response{}, serialQuery(c.sessionID, c.serial)
 }
 
-// handle applies one PDU and returns the pending table, an optional reply
-// to write, and whether the response cycle reached its end. pending is the
-// table a full reset is building; nil applies records to the live cache
-// (serial updates).
-func (c *Client) handle(pdu []byte, pending *rpki.VRPs) (*rpki.VRPs, []byte, bool, error) {
+// handle applies one PDU to the response in flight and returns the
+// response still in flight (nil once End of Data is applied) and an
+// optional query to write.
+func (c *Client) handle(pdu []byte, resp *response) (*response, []byte, error) {
 	switch pdu[1] {
 	case pduCacheResponse:
-		return pending, nil, false, nil
+		return resp, nil, nil
 	case pduIPv4Prefix, pduIPv6Prefix:
+		if resp == nil {
+			return nil, nil, errors.New("rtr: prefix PDU outside a response")
+		}
 		prefix, maxLen, asn, announce, err := decodePrefix(pdu)
 		if err != nil {
-			return pending, nil, false, err
+			return resp, nil, err
 		}
-		dst := pending
-		if dst == nil {
-			dst = c.liveCache()
-		}
-		if announce {
-			if dst.Len() >= maxVRPs {
-				return pending, nil, false, fmt.Errorf("rtr: VRP cache exceeds %d payloads", maxVRPs)
+		ch := rpki.Change{Prefix: prefix, MaxLen: maxLen, ASN: asn, Withdraw: !announce}
+		if resp.table != nil {
+			if announce && resp.table.Len() >= maxVRPs {
+				return resp, nil, fmt.Errorf("rtr: VRP cache exceeds %d payloads", maxVRPs)
 			}
-			dst.Add(prefix, maxLen, asn)
-		} else {
-			dst.Remove(prefix, maxLen, asn)
+			resp.table.Apply([]rpki.Change{ch})
+			return resp, nil, nil
 		}
-		return pending, nil, false, nil
+		if len(resp.delta) >= maxVRPs {
+			return resp, nil, fmt.Errorf("rtr: serial delta exceeds %d payloads", maxVRPs)
+		}
+		resp.delta = append(resp.delta, ch)
+		if announce {
+			resp.adds++
+		}
+		return resp, nil, nil
 	case pduEndOfData:
+		if resp == nil {
+			return nil, nil, errors.New("rtr: end of data outside a response")
+		}
 		serial, err := decodeEndOfData(pdu)
 		if err != nil {
-			return pending, nil, false, err
+			return resp, nil, err
 		}
-		if pending != nil {
+		if resp.table != nil {
 			c.mu.Lock()
-			c.cache = pending
+			c.cache = resp.table
 			c.mu.Unlock()
-			pending = nil
+		} else {
+			live := c.liveCache()
+			if live.Len()+resp.adds > maxVRPs {
+				return resp, nil, fmt.Errorf("rtr: VRP cache exceeds %d payloads", maxVRPs)
+			}
+			live.Apply(resp.delta)
 		}
 		c.setUp(serial, binary.BigEndian.Uint16(pdu[2:4]))
-		return pending, nil, true, nil
+		return nil, nil, nil
 	case pduSerialNotify:
 		if len(pdu) < 12 {
-			return pending, nil, false, errors.New("rtr: short serial notify")
+			return resp, nil, errors.New("rtr: short serial notify")
 		}
-		// RFC 8210 section 8.2: ignore a notify until End of Data. pending
-		// is the table a reset is still building, so a reply would be a
-		// second query on top of that exchange.
-		if pending != nil {
-			return pending, nil, false, nil
+		// RFC 8210 section 8.2: ignore a notify until End of Data. A
+		// query now would be a second one on top of the response in
+		// flight, reset or serial; the next refresh asks for the change.
+		if resp != nil {
+			return resp, nil, nil
 		}
 		c.mu.Lock()
 		synced := !c.updated.IsZero()
@@ -370,26 +388,28 @@ func (c *Client) handle(pdu []byte, pending *rpki.VRPs) (*rpki.VRPs, []byte, boo
 		c.mu.Unlock()
 		if !synced {
 			// No completed fetch yet, so there is no serial to continue from.
-			return pending, nil, false, nil
+			return nil, nil, nil
 		}
 		if binary.BigEndian.Uint16(pdu[2:4]) != session {
-			// This serial belongs to a different session. Continue with
-			// a reset built aside so a dropped reply keeps the last cache.
-			return rpki.NewVRPs(), resetQuery(), false, nil
+			// This serial belongs to a different session: reset.
+			resp, q := resetRequest()
+			return resp, q, nil
 		}
 		// The notify's serial is the cache's new one. A Serial Query for
 		// that serial asks for changes after it, so the delta in between
 		// is never applied (RFC 8210 section 5.3). Ask from our last serial.
-		return pending, c.query(), false, nil
+		resp, q := c.request()
+		return resp, q, nil
 	case pduCacheReset:
-		return rpki.NewVRPs(), resetQuery(), false, nil
+		resp, q := resetRequest()
+		return resp, q, nil
 	case pduRouterKey:
 		// RFC 8210 section 5.9: a Router Key does not affect prefix
 		// origin validation. Ignore it and keep reading to End of Data.
-		return pending, nil, false, nil
+		return resp, nil, nil
 	case pduErrorReport:
 		if len(pdu) < 8 {
-			return pending, nil, false, errors.New("rtr: short error report")
+			return resp, nil, errors.New("rtr: short error report")
 		}
 		// RFC 8210 section 8.4: code 2 (No Data Available) is a retry, not
 		// an empty VRP set. An empty End of Data is the empty set. Leave
@@ -397,9 +417,9 @@ func (c *Client) handle(pdu []byte, pending *rpki.VRPs) (*rpki.VRPs, []byte, boo
 		// Marking an empty table fresh would make a previously invalid
 		// origin look notfound while status stayed up.
 		code := binary.BigEndian.Uint16(pdu[2:4])
-		return pending, nil, false, fmt.Errorf("rtr: error report code %d", code)
+		return resp, nil, fmt.Errorf("rtr: error report code %d", code)
 	default:
-		return pending, nil, false, fmt.Errorf("rtr: unexpected PDU type %d", pdu[1])
+		return resp, nil, fmt.Errorf("rtr: unexpected PDU type %d", pdu[1])
 	}
 }
 

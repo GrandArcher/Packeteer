@@ -227,22 +227,43 @@ func fillRouteChecks(in *policy.Input, view routeChecker) {
 	}
 }
 
-// providerPath is the RIB surface fillRPKI reads. *rib.View implements it.
-type providerPath interface {
-	ProviderPath(netip.Prefix, string) ([]uint32, bool)
+// providerPaths is the RIB surface fillRPKI reads. *rib.View implements it.
+type providerPaths interface {
+	ProviderPaths(netip.Prefix, string) [][]uint32
+}
+
+// rpkiRank orders validity from best to worst for a provider with several
+// learned paths.
+var rpkiRank = map[plugin.RPKIValidity]int{
+	plugin.RPKIValid:    0,
+	plugin.RPKINotFound: 1,
+	plugin.RPKIUnknown:  2,
+	plugin.RPKIInvalid:  3,
 }
 
 // fillRPKI records, per probed prefix and provider, the RFC 6811
-// origin-validation state of that provider's learned path (#158). The
-// origin is the last AS in the path. It is display-only input to Decide
-// unless rpki.avoid_invalid is set; it never changes the learned RIB.
-func fillRPKI(in *policy.Input, view providerPath, origins *rpki.Set) {
+// origin-validation state of that provider's learned paths (#158). The
+// origin is the last AS in a path. A provider with several paths (add-path,
+// or BMP from several routers) gets the worst state among them: Decide
+// cannot tell which one the provider forwards on, so one invalid path makes
+// the provider invalid for rpki.avoid_invalid. It is display-only input to
+// Decide unless avoid_invalid is set; it never changes the learned RIB.
+func fillRPKI(in *policy.Input, view providerPaths, origins *rpki.Set) {
 	if in == nil || view == nil || !origins.Enabled() {
 		return
 	}
 	for _, r := range in.Results {
-		path, ok := view.ProviderPath(r.Prefix, r.Provider)
-		if !ok || len(path) == 0 {
+		var state plugin.RPKIValidity
+		for _, path := range view.ProviderPaths(r.Prefix, r.Provider) {
+			if len(path) == 0 {
+				continue
+			}
+			v := origins.Validate(r.Prefix, path[len(path)-1])
+			if state == "" || rpkiRank[v] > rpkiRank[state] {
+				state = v
+			}
+		}
+		if state == "" {
 			continue
 		}
 		if in.RPKI == nil {
@@ -251,7 +272,7 @@ func fillRPKI(in *policy.Input, view providerPath, origins *rpki.Set) {
 		if in.RPKI[r.Prefix] == nil {
 			in.RPKI[r.Prefix] = map[string]plugin.RPKIValidity{}
 		}
-		in.RPKI[r.Prefix][r.Provider] = origins.Validate(r.Prefix, path[len(path)-1])
+		in.RPKI[r.Prefix][r.Provider] = state
 	}
 }
 

@@ -1267,11 +1267,24 @@ func (v *View) RouteCheck(p netip.Prefix, provider string) (checked, ok bool) {
 // a router that reports the provider up. An exchange peer's path must
 // start with its AS, as in RouteCheck.
 func (v *View) ProviderPath(p netip.Prefix, provider string) ([]uint32, bool) {
+	paths := v.ProviderPaths(p, provider)
+	if len(paths) == 0 {
+		return nil, false
+	}
+	return paths[0], true
+}
+
+// ProviderPaths returns the AS path of every learned path ProviderPath
+// chooses from, in the same order. With add-path, or BMP from several
+// routers, a provider can have more than one, and the first may be an
+// inactive path.
+func (v *View) ProviderPaths(p netip.Prefix, provider string) [][]uint32 {
 	p = p.Masked()
 	v.mu.RLock()
 	defer v.mu.RUnlock()
 	on := v.coveringRoutersLocked(provider)
 	asn, peer := v.opt.PeerASN[provider]
+	var out [][]uint32
 	for _, rt := range v.pathsLocked(p) {
 		if rt.Provider != provider || (rt.Source == SourceBMP && !on[rt.Router]) {
 			continue
@@ -1279,9 +1292,9 @@ func (v *View) ProviderPath(p netip.Prefix, provider string) ([]uint32, bool) {
 		if peer && (len(rt.ASPath) == 0 || rt.ASPath[0] != asn) {
 			continue
 		}
-		return slices.Clone(rt.ASPath), true
+		out = append(out, slices.Clone(rt.ASPath))
 	}
-	return nil, false
+	return out
 }
 
 // NextHopCount is how many learned prefixes use one next hop.

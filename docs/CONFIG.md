@@ -572,8 +572,8 @@ Shared RPKI origin validation (#158, not on a public edge). Off by default. A so
 | Key | Default | Meaning |
 |---|---|---|
 | `enabled` | `false` | `true` turns the source on. A block that is not enabled is ignored, sources included. |
-| `sources` | none | Origin-validation plugins, tried in order. The first with a fresh, non-empty cache answers; a stale, unreachable, or empty source is skipped, so a second server takes over. Each is a plugin entry (`type`, optional `name`, `config`); only `rtr` exists ([RPKI source `rtr`](#rpki-source-rtr)). At least one is required when enabled. |
-| `avoid_invalid` | `false` | `true` refuses a new improvement onto a provider whose learned path for the prefix is `invalid`. An active improvement on a path that becomes invalid is retired through the normal path. Off changes nothing. |
+| `sources` | none | Origin-validation plugins, tried in order. The first with a fresh, non-empty cache answers, including one whose server is unreachable but whose last fetch is inside `staleness`; a stale or empty source is skipped, so a second server takes over. Each is a plugin entry (`type`, optional `name`, `config`); only `rtr` exists ([RPKI source `rtr`](#rpki-source-rtr)). At least one is required when enabled. |
+| `avoid_invalid` | `false` | `true` refuses a new improvement onto a provider with an `invalid` learned path for the prefix. With several paths from one provider (add-path, or BMP from several routers), the decision candidate carries the worst state, so one invalid path is enough. An active improvement on a path that becomes invalid is retired through the normal path. Off changes nothing. |
 
 ### `linkouts`
 
@@ -1482,7 +1482,7 @@ Reads the public [RIPE RIS Live](https://ris-live.ripe.net) HTTP stream (#199). 
 
 ### RPKI source `rtr`
 
-Connects read-only to an RPKI-to-Router server (RFC 8210) such as the operator's Routinator, caches the validated ROA payloads, and validates origin ASNs (RFC 6811). It never announces and never changes the learned RIB. The cache is in memory and holds at most 2,000,000 payloads; a server that exceeds that is dropped. A lost or stalled connection is retried with backoff. When the cache is older than `staleness`, every lookup is `unknown` (fail open). An Error Report leaves the last cache in place and the session is retried. A Serial Notify is answered with the client's last serial, or a Reset Query when the session ID differs, and is ignored until End of Data.
+Connects read-only to an RPKI-to-Router server (RFC 8210) such as the operator's Routinator, caches the validated ROA payloads, and validates origin ASNs (RFC 6811). It never announces and never changes the learned RIB. The cache is in memory and holds at most 2,000,000 payloads; a server that exceeds that is dropped. A lost or stalled connection is retried with backoff. When the cache is older than `staleness`, every lookup is `unknown` (fail open). A reset or serial response reaches the cache only at End of Data, so an Error Report or a dropped connection before it leaves the last complete cache in place, and the session is retried. A Serial Notify is answered with the client's last serial, or a Reset Query when the session ID differs, and is ignored while a reset or serial response is in flight.
 
 | Key | Default | Meaning |
 |---|---|---|

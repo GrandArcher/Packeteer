@@ -312,18 +312,26 @@ func ribSourceRow(src RIBSourceFact) Component {
 	return c
 }
 
-// rpkiRow judges one RPKI source from its cache health (#158). A stale
-// cache is fail-open: it never blocks a withdraw, so it is degraded, not
-// down.
+// rpkiRow judges one RPKI source from its cache health (#158). The state
+// follows rpki.Set.Validate: a fresh, non-empty cache answers lookups, so
+// it is ok even while the server is disconnected (Error says why). A stale
+// or empty cache is skipped and fails open, so it is degraded, not down.
 func rpkiRow(f RPKIFact) Component {
 	c := Component{Kind: KindRPKI, Name: f.Name, Type: f.Type, Since: ptrTime(f.Updated), Error: f.Err}
+	updated := f.Updated.UTC().Format(time.RFC3339)
 	switch {
-	case !f.Stale && f.Up:
+	case !f.Stale && f.VRPs > 0:
 		c.State = StateOK
-		c.Detail = fmt.Sprintf("%d VRPs, updated %s", f.VRPs, f.Updated.UTC().Format(time.RFC3339))
+		c.Detail = fmt.Sprintf("%d VRPs, updated %s", f.VRPs, updated)
+		if !f.Up {
+			c.Detail += ", in use while disconnected"
+		}
+	case !f.Stale && !f.Updated.IsZero():
+		c.State = StateDegraded
+		c.Detail = "0 VRPs, skipped, updated " + updated
 	case !f.Updated.IsZero():
 		c.State = StateDegraded
-		c.Detail = fmt.Sprintf("%d VRPs, stale since %s", f.VRPs, f.Updated.UTC().Format(time.RFC3339))
+		c.Detail = fmt.Sprintf("%d VRPs, stale since %s, skipped", f.VRPs, updated)
 	default:
 		c.State = StateDown
 		c.Detail = "no data"

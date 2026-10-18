@@ -10,6 +10,7 @@ import (
 	"github.com/GrandArcher/Packeteer/internal/policy"
 	"github.com/GrandArcher/Packeteer/internal/probe"
 	"github.com/GrandArcher/Packeteer/internal/rib"
+	"github.com/GrandArcher/Packeteer/internal/rpki"
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
 )
 
@@ -91,21 +92,63 @@ func TestRPKIDisplaySmoke(t *testing.T) {
 	}
 }
 
-// #158: the System page has one row per configured RPKI source.
+// #158: the System page has one row per configured RPKI source, and its
+// state matches whether lookups use that source's cache: a fresh cache is
+// ok while the server is disconnected, a stale or empty one is skipped.
 func TestRPKISystemRow(t *testing.T) {
 	at := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
-	sys := BuildSystem(Snapshot{Version: "test", Mode: "observe"}, SystemFacts{RPKI: []RPKIFact{
+	facts := []RPKIFact{
 		{PluginFact: PluginFact{Name: "routinator", Type: "rtr"}, Up: true, VRPs: 1234, Updated: at},
-		{PluginFact: PluginFact{Name: "backup", Type: "rtr"}, Stale: true, Updated: at.Add(-2 * time.Hour)},
-		{PluginFact: PluginFact{Name: "down", Type: "rtr"}},
-	}}, nil, nil)
-	var states []string
+		{PluginFact: PluginFact{Name: "disconnected", Type: "rtr"}, VRPs: 1234, Updated: at, Err: "connection refused"},
+		{PluginFact: PluginFact{Name: "empty", Type: "rtr"}, Up: true, Updated: at},
+		{PluginFact: PluginFact{Name: "backup", Type: "rtr"}, Stale: true, VRPs: 10, Updated: at.Add(-2 * time.Hour)},
+		{PluginFact: PluginFact{Name: "down", Type: "rtr"}, Stale: true},
+	}
+	want := map[string]struct{ state, detail string }{
+		"routinator":   {StateOK, "1234 VRPs, updated 2026-01-02T03:04:05Z"},
+		"disconnected": {StateOK, "1234 VRPs, updated 2026-01-02T03:04:05Z, in use while disconnected"},
+		"empty":        {StateDegraded, "0 VRPs, skipped, updated 2026-01-02T03:04:05Z"},
+		"backup":       {StateDegraded, "10 VRPs, stale since 2026-01-02T01:04:05Z, skipped"},
+		"down":         {StateDown, "no data"},
+	}
+	sys := BuildSystem(Snapshot{Version: "test", Mode: "observe"}, SystemFacts{RPKI: facts}, nil, nil)
+	seen := 0
 	for _, c := range sys.Components {
-		if c.Kind == KindRPKI {
-			states = append(states, c.State)
+		if c.Kind != KindRPKI {
+			continue
+		}
+		seen++
+		w := want[c.Name]
+		if c.State != w.state || c.Detail != w.detail {
+			t.Fatalf("%s = %s %q, want %s %q", c.Name, c.State, c.Detail, w.state, w.detail)
+		}
+		if c.Name == "disconnected" && c.Error != "connection refused" {
+			t.Fatalf("disconnected error = %q", c.Error)
 		}
 	}
-	if len(states) != 3 || states[0] != StateOK || states[1] != StateDegraded || states[2] != StateDown {
-		t.Fatalf("rpki rows = %v", states)
+	if seen != len(want) {
+		t.Fatalf("rpki rows = %d, want %d", seen, len(want))
 	}
+	// Each state agrees with the lookup path: only the ok rows answer.
+	for _, f := range facts {
+		src := rpki.NewSet([]plugin.RPKI{factSource{f: f}})
+		used := src.Validate(netip.MustParsePrefix("198.51.100.0/24"), 64500) != plugin.RPKIUnknown
+		if used != (want[f.Name].state == StateOK) {
+			t.Fatalf("%s: used by lookups = %v, row state %s", f.Name, used, want[f.Name].state)
+		}
+	}
+}
+
+// factSource is an RPKI source whose Status is one RPKIFact and whose
+// lookups are always valid when consulted.
+type factSource struct {
+	plugin.Base
+	f RPKIFact
+}
+
+func (s factSource) Validate(netip.Prefix, uint32) plugin.RPKIValidity {
+	return plugin.RPKIValid
+}
+func (s factSource) Status() plugin.RPKIStatus {
+	return plugin.RPKIStatus{Source: s.f.Name, Up: s.f.Up, Stale: s.f.Stale, VRPs: s.f.VRPs, Updated: s.f.Updated, Error: s.f.Err}
 }

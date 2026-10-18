@@ -251,7 +251,7 @@ The System page (#184) answers "which part is broken" when the status tile says 
 | `ha` | the elector, or one `role` row without `ha` | `degraded` when ineligible, or standby with no lease holder |
 | `bgp_session` | `bgp.neighbors` entry | `down` until the session is established; `since` is the last state change. One `idle` row without neighbors |
 | `rib_source` | `rib_sources` entry (BMP) | `down` when every router that reported a peer has closed its session, `degraded` when some have, `degraded` before any router reported. `since` is the latest change |
-| `rpki` | `rpki.sources` entry | `ok` when the cache is fresh and the session connected, `degraded` when the cached data is stale (fail open), `down` before any data. `since` is the last completed fetch |
+| `rpki` | `rpki.sources` entry | `ok` when lookups use the cache (fresh and non-empty, even while the session is down; `error` says why), `degraded` when the cache is stale or empty and skipped (fail open), `down` before any data. `since` is the last completed fetch |
 | `probe_source` | provider | the provider's probe-source health; `down` with the reason (for example the source address is not on the host). A provider measured by a peer POP is `idle` |
 | `prober` | `probers` entry | `ok` when it produced a measurement (a 100% loss result counts), `down` when probes failed with an error naming it, `idle` when none used it (an earlier prober in the chain answered). Results of providers whose probe source is down are ignored |
 | `source` | `sources` entry | `down` when its last call failed; `since` is when it started or stopped failing |

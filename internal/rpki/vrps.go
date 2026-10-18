@@ -41,16 +41,40 @@ func (t *VRPs) Len() int {
 	return t.n
 }
 
-// Add records one announcement, as an RTR IPv4 or IPv6 Prefix PDU. It is
-// idempotent: RTR re-sends a serial's records after a reconnect or a lost
-// End of Data, and a stored duplicate would outlive one Remove.
-func (t *VRPs) Add(prefix netip.Prefix, maxLen uint8, asn uint32) {
-	if t == nil || !prefix.IsValid() {
+// Change is one RTR Prefix PDU: an announcement or, with Withdraw set, a
+// withdrawal of one payload.
+type Change struct {
+	Prefix   netip.Prefix
+	MaxLen   uint8
+	ASN      uint32
+	Withdraw bool
+}
+
+// Apply applies RTR Prefix PDUs in order under a single lock, so a
+// concurrent Validate sees the cache before or after a whole serial delta
+// and never a part of it. An announcement is idempotent: RTR re-sends a
+// serial's records after a reconnect or a lost End of Data, and a stored
+// duplicate would outlive one withdrawal.
+func (t *VRPs) Apply(changes []Change) {
+	if t == nil {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	for _, c := range changes {
+		if c.Withdraw {
+			t.removeLocked(c.Prefix, c.MaxLen, c.ASN)
+		} else {
+			t.addLocked(c.Prefix, c.MaxLen, c.ASN)
+		}
+	}
+}
+
+func (t *VRPs) addLocked(prefix netip.Prefix, maxLen uint8, asn uint32) {
+	if !prefix.IsValid() {
 		return
 	}
 	prefix = prefix.Masked()
-	t.mu.Lock()
-	defer t.mu.Unlock()
 	for _, e := range t.m[prefix] {
 		if e.maxLen == maxLen && e.asn == asn {
 			return
@@ -60,15 +84,12 @@ func (t *VRPs) Add(prefix netip.Prefix, maxLen uint8, asn uint32) {
 	t.n++
 }
 
-// Remove records one withdrawal. It does nothing when the payload is not
-// in the cache.
-func (t *VRPs) Remove(prefix netip.Prefix, maxLen uint8, asn uint32) {
-	if t == nil || !prefix.IsValid() {
+// removeLocked does nothing when the payload is not in the cache.
+func (t *VRPs) removeLocked(prefix netip.Prefix, maxLen uint8, asn uint32) {
+	if !prefix.IsValid() {
 		return
 	}
 	prefix = prefix.Masked()
-	t.mu.Lock()
-	defer t.mu.Unlock()
 	entries, found := t.m[prefix]
 	if !found {
 		return
