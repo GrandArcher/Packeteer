@@ -90,9 +90,8 @@ IXP Manager and Birdseye are read with GET only. No other method.
   template's warning is 1000ms or 80% loss; otherwise 250ms or 20%
   loss. The busy critical RTT (2000ms) is the minimum per-packet
   timeout for that host. A failed fetch keeps the last successful
-  list for three prober intervals after that fetch, then the VLAN is
-  not probed until a fetch succeeds. The same three-interval rule
-  expires the member import. With no successful list, that VLAN is not
+  list for three prober intervals after the last successful fetch,
+  then the VLAN is not probed until a fetch succeeds. With no successful list, that VLAN is not
   probed: the member export omits `can_ping`. A named IX-F URL does not use this GET.
   Switch, birdseye, and template nagios routes are not called.
 - An IX-F JSON document the operator names (#161) is GET of that exact

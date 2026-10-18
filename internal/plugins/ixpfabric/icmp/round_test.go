@@ -11,6 +11,7 @@ import (
 	"net/netip"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -366,13 +367,13 @@ func TestNagiosUnauthorizedAndRedirect(t *testing.T) {
 	}
 }
 
-// A failed Can Ping fetch keeps the last list for policyStaleIntervals
+// A failed Can Ping fetch keeps the last list for staleFactor
 // intervals. After that the list is not used and the VLAN is not probed,
 // even though the member address was probed on the last good list.
 func TestNagiosListExpires(t *testing.T) {
-	var fail bool
+	var fail atomic.Bool
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		if fail {
+		if fail.Load() {
 			w.WriteHeader(http.StatusUnauthorized)
 			return
 		}
@@ -396,7 +397,7 @@ func TestNagiosListExpires(t *testing.T) {
 		t.Fatalf("good list probes %d", fp.count())
 	}
 
-	fail = true
+	fail.Store(true)
 	now = now.Add(2 * time.Minute)
 	fp.reqs = nil
 	r.runRound(context.Background())
@@ -405,7 +406,15 @@ func TestNagiosListExpires(t *testing.T) {
 		t.Fatalf("list inside the limit: probes %d view %+v", fp.count(), got)
 	}
 
-	now = now.Add(time.Minute + time.Second)
+	now = now.Add(time.Minute)
+	fp.reqs = nil
+	r.runRound(context.Background())
+	got = r.snapshot()
+	if fp.count() != 1 || got.Targets != 1 {
+		t.Fatalf("list at exactly the limit: probes %d view %+v", fp.count(), got)
+	}
+
+	now = now.Add(time.Second)
 	fp.reqs = nil
 	r.runRound(context.Background())
 	got = r.snapshot()
@@ -413,7 +422,7 @@ func TestNagiosListExpires(t *testing.T) {
 		t.Fatalf("expired list: probes %d view %+v", fp.count(), got)
 	}
 
-	fail = false
+	fail.Store(false)
 	fp.reqs = nil
 	r.runRound(context.Background())
 	if fp.count() != 1 {

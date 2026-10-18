@@ -313,7 +313,7 @@ func (r *runner) storePolicy(key string, hosts map[string]nagiosHost) {
 }
 
 // policySnapshot returns the Can Ping lists that may still be used. A list
-// from a successful fetch older than policyStaleIntervals rounds is dropped,
+// from a successful fetch older than staleFactor intervals is dropped,
 // so an opted-out member is not probed on a list that the IXP may have
 // changed. The error text of a failed fetch is still reported.
 func (r *runner) policySnapshot(now time.Time) (map[string]map[string]nagiosHost, string) {
@@ -325,7 +325,7 @@ func (r *runner) policySnapshot(now time.Time) (map[string]map[string]nagiosHost
 		keys = append(keys, k)
 	}
 	sort.Strings(keys)
-	expiry := policyStaleIntervals * r.interval
+	expiry := staleFactor * r.interval
 	var errs []string
 	for _, k := range keys {
 		p := r.parts[k]
