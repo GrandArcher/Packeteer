@@ -45,6 +45,10 @@ mode: observe               # also the default when mode is left out; inject is 
 #       max_bytes: 8388608
 #       max_prefix_warn_pct: 90
 #       filtered_warn_pct: 50
+#       route_signals: false     # list each session's routes: origin, more-specific, blackhole (#165)
+#       spike_min: 10            # filtered-reason jump that alerts (#165)
+#       spike_factor: 2
+#       burst_min: 20
 #   correlate:                   # fabric vs member problem (#163), needs fabric
 #     type: topology
 #     config:

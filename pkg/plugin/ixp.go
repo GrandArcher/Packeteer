@@ -268,7 +268,10 @@ type RouteServerReason struct {
 // counts each tag. MaxPrefix is the member's IX-F max_prefix for the
 // neighbor address, else Birdseye's import limit; zero means none.
 // UsedPct is Accepted as a share of MaxPrefix. Counted is false when the
-// counts could not be read; they are then zero.
+// counts could not be read; they are then zero. Scanned is true when
+// the session's routes were listed this poll (ixp.routeservers
+// route_signals); Blackhole is then the number of routes that carry the
+// RFC 7999 community 65535:666, and ScanError says why a listing failed.
 type RouteServerSession struct {
 	Server      string              `json:"server"`
 	Session     string              `json:"session"`
@@ -285,6 +288,9 @@ type RouteServerSession struct {
 	Reasons     []RouteServerReason `json:"reasons"`
 	MaxPrefix   int                 `json:"max_prefix,omitempty"`
 	UsedPct     float64             `json:"used_pct,omitempty"`
+	Scanned     bool                `json:"scanned"`
+	Blackhole   int                 `json:"blackhole"`
+	ScanError   string              `json:"scan_error,omitempty"`
 	Error       string              `json:"error,omitempty"`
 	At          time.Time           `json:"at"`
 }
@@ -299,6 +305,8 @@ type RouteServerSample struct {
 	Filtered    int                 `json:"filtered"`
 	Reasons     []RouteServerReason `json:"reasons"`
 	MaxPrefix   int                 `json:"max_prefix,omitempty"`
+	Scanned     bool                `json:"scanned"`
+	Blackhole   int                 `json:"blackhole"`
 }
 
 // Correlation group scopes.

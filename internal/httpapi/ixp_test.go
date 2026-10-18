@@ -259,7 +259,8 @@ func TestIXPRouteServersAPIAndMetrics(t *testing.T) {
 			Servers:    []plugin.RouteServerStatus{{Name: "rs1", ASN: 64496, Up: true, Polled: polled, Sessions: 2}},
 			Sessions: []plugin.RouteServerSession{
 				{Server: "rs1", Session: "pb_a", ASN: 64497, Name: "Doc Member", Established: true, Counted: true,
-					Received: 10, Accepted: 7, Filtered: 3, Reasons: []plugin.RouteServerReason{{Reason: 4, Count: 3}}, MaxPrefix: 100, UsedPct: 7},
+					Received: 10, Accepted: 7, Filtered: 3, Reasons: []plugin.RouteServerReason{{Reason: 4, Count: 3}}, MaxPrefix: 100, UsedPct: 7,
+					Scanned: true, Blackhole: 5},
 				{Server: "rs1", Session: "pb_b", ASN: 64498, State: "Active"},
 			},
 		}
@@ -267,19 +268,19 @@ func TestIXPRouteServersAPIAndMetrics(t *testing.T) {
 		if server != "rs1" || session != "pb_a" {
 			return nil, false
 		}
-		return []plugin.RouteServerSample{{At: polled, Established: true, Counted: true, Received: 10, Accepted: 7, Filtered: 3}}, true
+		return []plugin.RouteServerSample{{At: polled, Established: true, Counted: true, Received: 10, Accepted: 7, Filtered: 3, Scanned: true, Blackhole: 5}}, true
 	})
 	rec = httptest.NewRecorder()
 	s.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/ixp/routeservers", nil))
 	text := rec.Body.String()
-	for _, want := range []string{`"configured":true`, `"asn":64496`, `"session":"pb_a"`, `"name":"Doc Member"`, `"filtered":3`, `"reason":4`, `"used_pct":7`, `"mode":"observe"`} {
+	for _, want := range []string{`"configured":true`, `"asn":64496`, `"session":"pb_a"`, `"name":"Doc Member"`, `"filtered":3`, `"reason":4`, `"used_pct":7`, `"scanned":true`, `"blackhole":5`, `"mode":"observe"`} {
 		if !strings.Contains(text, want) {
 			t.Errorf("missing %s in %s", want, text)
 		}
 	}
 	rec = httptest.NewRecorder()
 	s.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/ixp/routeservers/history?server=rs1&session=pb_a", nil))
-	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"samples":[{`) || !strings.Contains(rec.Body.String(), `"accepted":7`) {
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"samples":[{`) || !strings.Contains(rec.Body.String(), `"accepted":7`) || !strings.Contains(rec.Body.String(), `"blackhole":5`) {
 		t.Fatalf("history %d %s", rec.Code, rec.Body)
 	}
 	rec = httptest.NewRecorder()

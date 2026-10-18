@@ -1,9 +1,9 @@
 # IXP mode (#160)
 
 Status: charter, config gate, IX-F member import (#161), fabric
-probes (#162), fabric incident correlation (#163), and route-server
-history and alerts (#164). Signals, member pages, and multi-site fabric
-health are #165-#167 and are not built. An `ixp` block does not announce or open a route-server
+probes (#162), fabric incident correlation (#163), route-server
+history and alerts (#164), and route-server signals (#165). Member pages
+and multi-site fabric health are #166-#167 and are not built. An `ixp` block does not announce or open a route-server
 session.
 
 An Internet exchange operator runs Packeteer to observe its fabric,
@@ -46,6 +46,9 @@ That store is not the RIB view and is not an input to `Decide`. No
 later issue may copy those routes into the RIB view or announce from
 them. #164 keeps counts and large-community tallies per member session,
 never the routes themselves, in memory inside the `birdseye` plugin.
+With `route_signals` (#165), the plugin also keeps each session's accepted
+prefix to origin AS table in memory, up to 250000 pairs per server, to
+compare members. It is never served by the API or written to disk.
 
 ## External reads
 
@@ -116,6 +119,16 @@ IXP Manager and Birdseye are read with GET only. No other method.
   when `ixp.members` is set, else Birdseye's import limit. A state or
   count change raises an `ixp.rs_*` event (docs/EVENTS.md). History is
   288 samples per session in memory; a restart empties it.
+- Birdseye route listing (#165, only with `route_signals`):
+  `api/routes/protocol/{protocol}` on the same origin, GET, same limits.
+  Birdseye refuses it above its own `max_routes`, so a session over that
+  count is not requested. It gives the origin AS, the standard
+  communities (`65535:666`, RFC 7999), and the `rs-asn:1101:x` tags of
+  each route. Signals: a jump in the count tagged `1101:9`, `10`, `13`, or
+  `14`; a new origin AS for a prefix another member's accepted route has;
+  a burst of new more-specifics of another member's prefix with another
+  origin; blackhole routes per member over time. They are hints; nothing
+  is announced or changed.
 
 An IX-F address with `can_ping: false` is not probed. Probes stay inside
 the VLAN prefix. Nothing is announced, and the measurements are not an
