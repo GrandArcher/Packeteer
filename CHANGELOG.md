@@ -16,7 +16,6 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 
 ### Fixed
 
-- Settings form lists a more-specific anomaly prefix and can remove it, drops a prefix outside the allowlist, stores a peer AS with an AS prefix as a number, and refuses VIP max_targets 0 (#329).
 - Fabric probes read Can Ping from the customers document (`use` ping templates, GET /admin/api/v4/nagios/customers/{vlan}/4|6) and skip a manager export with no successful list (#162).
 - IX-F import rejects an IPv4-mapped prefix on an IPv6 LAN, a percent-encoded API key in the manager URL, and a switch id from another IXP (#161).
 

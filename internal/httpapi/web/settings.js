@@ -340,7 +340,7 @@ function writeNum(id, raw) {
   n.dataset.raw = raw;
   delete n.dataset.dirty;
   if (raw && !/^[-+]?\d+(\.\d+)?$/.test(raw)) n.type = "text";
-  else if (n.dataset.kind !== "text") n.type = n.dataset.kind || "number";
+  else n.type = "number";
   n.value = raw;
   if (raw) n.setAttribute("value", raw); else n.removeAttribute("value");
 }
@@ -484,6 +484,9 @@ function bindText(parent, label, obj, key, placeholder, help, configKey, wide, c
   return input;
 }
 
+// The hidden g-raw input holds the YAML value as an attribute so a DOM dump
+// shows what the file says (the CI settings smoke matches value="10m"); the
+// number box only holds the number.
 function durationBox(raw, defUnit, withMs) {
   var wrap = el("span", "g-dur");
   var hidden = el("input");
@@ -592,7 +595,7 @@ function bindListens(parent, label, obj, key, help, configKey, rerender) {
     host.className += " g-host";
     var port = el("input");
     port.type = "number";
-    port.min = "0";
+    port.min = "1";
     port.max = "65535";
     port.step = "1";
     port.className = "g-port";
@@ -612,7 +615,7 @@ function bindListens(parent, label, obj, key, help, configKey, rerender) {
     attachCheck(port, function () {
       if (!host.value.trim() && !port.value.trim()) return "";
       if (port.dataset.dirty !== "1" && host.dataset.dirty !== "1") return "";
-      return checkPort(port.value.trim(), 0, 65535);
+      return checkPort(port.value.trim(), 1, 65535);
     });
     attachCheck(host, function () {
       var h = host.value.trim();
@@ -669,6 +672,13 @@ function commitASN(input, list, rerender) {
     api("GET", "/api/search?q=" + encodeURIComponent(q)).then(function (d) {
       var rows = (d && d.asns && d.asns.rows) || [];
       if (!rows.length) { showErr(input, "No matching AS. Type the AS number."); return; }
+      // A loose name match must not silently pick one of several ASes.
+      var exact = rows.filter(function (r) { return (r.name || "").toLowerCase() === q.toLowerCase(); });
+      if (exact.length === 1) rows = exact;
+      if (rows.length > 1) {
+        showErr(input, "Several ASes match: " + rows.slice(0, 3).map(function (r) { return "AS" + r.asn + (r.name ? " " + r.name : ""); }).join(", ") + ". Type the AS number.");
+        return;
+      }
       rememberASN(rows[0].asn, rows[0].name);
       var err = checkASN(String(rows[0].asn), list);
       if (err) { showErr(input, err); return; }

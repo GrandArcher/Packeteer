@@ -7,6 +7,7 @@ var path = require("path");
 var vm = require("vm");
 
 var calls = [];
+var searchRows = [];
 
 function assert(cond, msg) {
   if (!cond) {
@@ -356,7 +357,6 @@ function parseHTML(html) {
   }
 }
 function textNode(data) {
-  if (data === "") return {nodeType: 3, parentNode: null, childNodes: [], textContent: ""};
   return {nodeType: 3, parentNode: null, childNodes: [], textContent: data};
 }
 
@@ -371,6 +371,10 @@ global.fetch = function (url, opts) {
   var method = (opts && opts.method) || "GET";
   calls.push({method: method, url: String(url), body: opts && opts.body});
   if (method === "PUT") return Promise.reject(new Error("config write"));
+  if (method === "GET" && String(url).indexOf("/api/search?") === 0) return reply({asns: {rows: searchRows}});
+  if (method === "POST" && String(url) === "/api/config/validate") {
+    return reply({valid: false, errors: ["policies[0]: geoip_db: open /mnt/missing.mmdb: no such file or directory"]});
+  }
   if (method === "POST" && String(url) === "/api/config/form") {
     var req = JSON.parse(opts.body);
     return Promise.resolve({
@@ -383,7 +387,17 @@ global.fetch = function (url, opts) {
   return Promise.reject(new Error("offline"));
 };
 
+function reply(body) {
+  return Promise.resolve({
+    ok: true,
+    status: 200,
+    statusText: "OK",
+    text: function () { return Promise.resolve(JSON.stringify(body)); }
+  });
+}
+
 vm.runInThisContext(fs.readFileSync(path.join(dir, "web/ui.js"), "utf8"), {filename: "ui.js"});
+vm.runInThisContext(fs.readFileSync(path.join(dir, "web/countries.js"), "utf8"), {filename: "countries.js"});
 vm.runInThisContext(fs.readFileSync(path.join(dir, "web/settings.js"), "utf8"), {filename: "settings.js"});
 
 function flush() {
@@ -441,6 +455,21 @@ function checkbox(prefix) {
   var boxes = anomalyBox().querySelectorAll("input[type=checkbox]");
   for (var i = 0; i < boxes.length; i++) if (boxes[i].value === prefix) return boxes[i];
   return null;
+}
+function shownError(node) {
+  var e = fieldError(node);
+  return e && !e.hidden ? e.textContent : "";
+}
+function helpFor(node) {
+  var n = node;
+  while (n && n.tagName !== "LABEL") n = n.parentNode;
+  var help = n && n.querySelector(".field-help");
+  return help ? help.textContent : "";
+}
+function typed(node, value) {
+  node.value = value;
+  node.dispatchEvent(new Event("input"));
+  node.dispatchEvent(new Event("blur"));
 }
 function posts() {
   return calls.filter(function (c) { return c.method === "POST" && c.url === "/api/config/form"; });
@@ -562,6 +591,84 @@ async function main() {
   maxErr = fieldError(max);
   assert(!maxErr || maxErr.hidden || !maxErr.textContent, "empty VIP max_targets was refused");
   assert(form.vips[0].max_targets === "", "empty VIP max_targets stored " + form.vips[0].max_targets);
+
+  // Hold time and the thresholds have no Go default, so the page must not claim one.
+  ["fm-hold", "fm-loss", "fm-rtt"].forEach(function (id) {
+    var help = helpFor(document.getElementById(id));
+    assert(help.indexOf("Default") < 0 && help.indexOf("Inject needs more than 0.") >= 0, id + " help: " + help);
+    assert(document.getElementById(id).placeholder === "", id + " shows a placeholder default");
+  });
+  writeDur("fm-hold", "30s", "m");
+  assert(readDur("fm-hold") === "30s", "untouched hold time read " + readDur("fm-hold"));
+  var hold = document.getElementById("fm-hold");
+  assert(hold.value === "30" && document.getElementById("fm-hold-unit").value === "s", "hold time shown as " + hold.value);
+  typed(hold, "2");
+  var unit = document.getElementById("fm-hold-unit");
+  unit.value = "m";
+  unit.dispatchEvent(new Event("change"));
+  assert(readDur("fm-hold") === "2m" && form.hold_time === "2m", "hold time composed " + readDur("fm-hold"));
+  writeDur("fm-hold", "1h30m", "m");
+  assert(hold.type === "text" && hold.value === "1h30m" && unit.hidden, "a compound duration is not kept as text");
+  writeNum("fm-loss", "1e2");
+  assert(document.getElementById("fm-loss").type === "text", "a non-decimal number is not kept as text");
+  writeNum("fm-loss", "2.5");
+  assert(document.getElementById("fm-loss").type === "number", "a decimal number did not get a number box");
+
+  var vipAdd = document.getElementById("form-vips").querySelectorAll("input").filter(function (n) { return n.placeholder === "AS number or name"; })[0];
+  assert(vipAdd, "VIP AS picker missing");
+  searchRows = [{asn: 64501, name: "Lab Transit"}, {asn: 64502, name: "Lab Transit East"}];
+  vipAdd.value = "lab";
+  vipAdd.dispatchEvent(new Event("change"));
+  await flush();
+  await flush();
+  assert(form.vips[0].asns.length === 1, "an ambiguous name added " + form.vips[0].asns.join(","));
+  var several = shownError(vipAdd);
+  assert(several.indexOf("AS64501 Lab Transit, AS64502 Lab Transit East") >= 0, "ambiguous name error: " + several);
+  vipAdd.value = "lab transit";
+  vipAdd.dispatchEvent(new Event("change"));
+  await flush();
+  await flush();
+  assert(form.vips[0].asns.join(",") === "64496,64501", "the exact name match was not added: " + form.vips[0].asns.join(","));
+
+  form.flows = [{key: "", name: "flow", listen: ["127.0.0.1:2055"], window: "", top_n: "", max_targets: "", tail_interval: "", min_bytes: "", min_pct: "",
+    aggregate_v4: "", aggregate_v6: "", exclude: []}];
+  renderFlows();
+  var port = document.getElementById("form-flows").querySelector("input.g-port");
+  assert(port && port.min === "1", "flow port min is " + (port && port.min));
+  typed(port, "0");
+  assert(shownError(port) === "Enter a whole number from 1 to 65535.", "flow port 0: " + shownError(port));
+  typed(port, "2056");
+  assert(shownError(port) === "" && form.flows[0].listen[0] === "127.0.0.1:2056", "flow listen is " + form.flows[0].listen[0]);
+
+  var policy = emptyPolicy();
+  var rule = emptyRule();
+  rule.countries = ["ZZ"];
+  policy.rules.push(rule);
+  form.policies = [policy];
+  renderPolicies();
+  var countries = document.getElementById("form-policies").querySelector("select.g-countries");
+  assert(countries && countries.options.length > 240, "country picker missing");
+  var picked = countries.options.filter(function (o) { return o.selected; }).map(function (o) { return o.value; });
+  assert(picked.join(",") === "ZZ", "a code outside the list was not kept selected: " + picked.join(","));
+  countries.options.forEach(function (o) { o.selected = o.value === "DE" || o.value === "ZZ"; });
+  countries.dispatchEvent(new Event("change"));
+  assert(form.policies[0].rules[0].countries.join(",") === "DE,ZZ", "countries stored " + form.policies[0].rules[0].countries.join(","));
+
+  var geo = inputByLabel(document.getElementById("form-policies"), "GeoIP database");
+  typed(geo, "country.mmdb");
+  assert(shownError(geo) === "Enter an absolute path.", "relative GeoIP path: " + shownError(geo));
+  var validates = calls.filter(function (c) { return c.url === "/api/config/validate"; }).length;
+  assert(validates === 0, "a relative GeoIP path was sent to validate");
+  typed(geo, "/mnt/missing.mmdb");
+  await flush();
+  await flush();
+  var checks = calls.filter(function (c) { return c.url === "/api/config/validate"; });
+  assert(checks.length === 1, "GeoIP path was checked " + checks.length + " times");
+  assert(JSON.parse(checks[0].body).yaml.indexOf("geoip_db: '/mnt/missing.mmdb'") >= 0, "GeoIP check did not send the path");
+  var note = geo.parentNode.querySelector(".field-note");
+  assert(note && note.textContent.indexOf("geoip_db: open /mnt/missing.mmdb") >= 0, "GeoIP note: " + (note && note.textContent));
+  assert(form.policies[0].geoip_db === "/mnt/missing.mmdb", "GeoIP path stored " + form.policies[0].geoip_db);
+
   assert(!calls.some(function (c) { return c.method === "PUT"; }), "the form wrote the config file");
 }
 

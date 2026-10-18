@@ -192,8 +192,8 @@
             <span class="field-error" hidden></span>
           </label>
           <label class="field"><span class="field-label" title="hold_time">Hold time</span>
-            <span class="g-dur"><input id="fm-hold-raw" type="hidden" class="g-raw"><input id="fm-hold" class="g-num" type="number" min="0" step="any" placeholder="15"><select id="fm-hold-unit" class="g-unit" aria-label="Hold time unit"><option value="ms">ms</option><option value="s">s</option><option value="m" selected>m</option><option value="h">h</option></select></span>
-            <span class="field-help">How long a chosen path stays before it can move back. Default 15 minutes.</span>
+            <span class="g-dur"><input id="fm-hold-raw" type="hidden" class="g-raw"><input id="fm-hold" class="g-num" type="number" min="0" step="any"><select id="fm-hold-unit" class="g-unit" aria-label="Hold time unit"><option value="ms">ms</option><option value="s">s</option><option value="m" selected>m</option><option value="h">h</option></select></span>
+            <span class="field-help">How long a chosen path stays before it can move back. Empty is 0. Inject needs more than 0.</span>
             <span class="field-error" hidden></span>
           </label>
           <label class="field"><span class="field-label" title="max_improvements">Improvement cap</span>
@@ -202,13 +202,13 @@
             <span class="field-error" hidden></span>
           </label>
           <label class="field"><span class="field-label" title="thresholds.min_loss_delta_pct">Loss threshold</span>
-            <input id="fm-loss" class="g-num" type="number" min="0" max="100" step="any" placeholder="1"><span class="unit">points</span>
-            <span class="field-help">Minimum loss improvement, in percentage points. Default 1.</span>
+            <input id="fm-loss" class="g-num" type="number" min="0" max="100" step="any"><span class="unit">points</span>
+            <span class="field-help">Minimum loss improvement, in percentage points. Empty is 0. Inject needs more than 0.</span>
             <span class="field-error" hidden></span>
           </label>
           <label class="field"><span class="field-label" title="thresholds.min_rtt_delta_ms">Latency threshold</span>
-            <input id="fm-rtt" class="g-num" type="number" min="0" step="any" placeholder="15"><span class="unit">ms</span>
-            <span class="field-help">Minimum latency improvement, in milliseconds. Default 15.</span>
+            <input id="fm-rtt" class="g-num" type="number" min="0" step="any"><span class="unit">ms</span>
+            <span class="field-help">Minimum latency improvement, in milliseconds. Empty is 0. Inject needs more than 0.</span>
             <span class="field-error" hidden></span>
           </label>
           <label class="field"><span class="field-label" title="thresholds.min_rtt_delta_pct">RTT threshold</span>
