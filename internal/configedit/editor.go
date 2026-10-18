@@ -102,6 +102,9 @@ type Result struct {
 	// EnablesInject is true when the candidate is mode inject and the
 	// file on disk is not.
 	EnablesInject bool `json:"enables_inject"`
+	// Changes lists the scalar keys Save changed in the file, old and new
+	// value. Only Save sets it.
+	Changes []Change `json:"changes,omitempty"`
 }
 
 // Hash is the hex SHA-256 of data.
@@ -208,6 +211,7 @@ func (e *Editor) Save(data []byte, base string, confirmInject bool) (File, Resul
 	if _, err := config.Load(e.path); err != nil {
 		return File{}, res, fmt.Errorf("read back %s: %w", e.path, err)
 	}
+	res.Changes = Diff(cur, data)
 	return File{Path: e.path, YAML: string(data), SHA256: Hash(data)}, res, nil
 }
 
