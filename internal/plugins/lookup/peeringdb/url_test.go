@@ -80,19 +80,6 @@ func TestRedact(t *testing.T) {
 	}
 }
 
-func TestValidName(t *testing.T) {
-	for _, ok := range []string{"a", "Example-IX.1", "ix_2", strings.Repeat("a", 64)} {
-		if !validName(ok) {
-			t.Errorf("%q rejected", ok)
-		}
-	}
-	for _, bad := range []string{"", "-a", "_a", ".a", "a b", "a/b", strings.Repeat("a", 65)} {
-		if validName(bad) {
-			t.Errorf("%q accepted", bad)
-		}
-	}
-}
-
 func TestAuthorizeOnlyOnConfiguredBase(t *testing.T) {
 	s := newSource(t, "base_url: https://pdb.example.invalid\nexchanges:\n  - {name: a, ix_id: 1}\n", docKey)
 	for raw, want := range map[string]string{

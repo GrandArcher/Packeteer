@@ -93,3 +93,16 @@ func TestConfigDecode(t *testing.T) {
 		})
 	}
 }
+
+func TestValidLabel(t *testing.T) {
+	for _, ok := range []string{"a", "Example-IX.1", "ix_2", strings.Repeat("a", 64)} {
+		if !ValidLabel(ok) {
+			t.Errorf("%q rejected", ok)
+		}
+	}
+	for _, bad := range []string{"", "-a", "_a", ".a", "a b", "a/b", strings.Repeat("a", 65)} {
+		if ValidLabel(bad) {
+			t.Errorf("%q accepted", bad)
+		}
+	}
+}

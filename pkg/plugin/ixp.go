@@ -356,3 +356,21 @@ type CorrelationMember struct {
 	Addresses int    `json:"addresses"`
 	Active    bool   `json:"active"`
 }
+
+// ValidLabel reports whether s is a short URL-safe label: a letter or
+// digit, then letters, digits, '.', '_' or '-', at most 64 characters.
+// Vantage, route server, exchange, and bundle names use it.
+func ValidLabel(s string) bool {
+	if s == "" || len(s) > 64 {
+		return false
+	}
+	for i, c := range s {
+		switch {
+		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9':
+		case i > 0 && (c == '.' || c == '_' || c == '-'):
+		default:
+			return false
+		}
+	}
+	return true
+}

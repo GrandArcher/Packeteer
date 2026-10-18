@@ -292,7 +292,7 @@ func (s *Server) handleIXPCorrelation(w http.ResponseWriter, _ *http.Request) {
 }
 
 // IXPCorrelationMetrics renders the incident correlator: the groups and
-// members whose events are open. There is no per-member series.
+// members whose events are open, which the view always lists. There is no per-member series.
 func IXPCorrelationMetrics(v plugin.CorrelationView) []byte {
 	if !v.Configured {
 		return nil
@@ -309,9 +309,9 @@ func IXPCorrelationMetrics(v plugin.CorrelationView) []byte {
 		}
 	}
 	var b strings.Builder
-	writeGauge(&b, "packeteer_ixp_fabric_groups_degraded", "Switches, colos, and bundles with an open ixp.fabric_degraded event that are still degraded in the latest round.",
+	writeGauge(&b, "packeteer_ixp_fabric_groups_degraded", "Switches, colos, and bundles with an open ixp.fabric_degraded event.",
 		sample{value: float64(groups)})
-	writeGauge(&b, "packeteer_ixp_members_degraded", "Members degraded on their own, outside every degraded group, with an open ixp.member_degraded event, in the latest round.",
+	writeGauge(&b, "packeteer_ixp_members_degraded", "Members with an open ixp.member_degraded event.",
 		sample{value: float64(members)})
 	return []byte(b.String())
 }

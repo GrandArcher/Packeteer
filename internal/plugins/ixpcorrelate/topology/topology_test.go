@@ -82,7 +82,7 @@ func TestSwitchFaultIsFabricNotMember(t *testing.T) {
 	round(c, 1, cat(members(64500, 5, true, s1), members(64600, 4, false, s2)))
 	want := []string{
 		"ixp.fabric_degraded colo colo-a",
-		"ixp.fabric_degraded switch sw1",
+		"ixp.fabric_degraded switch 1",
 	}
 	if g := kinds(*got); !sameSet(g, want) {
 		t.Fatalf("events %v, want %v", g, want)
@@ -233,7 +233,7 @@ func TestMemberOnTwoSwitches(t *testing.T) {
 		members(64501, 2, true, s1),
 	)
 	round(c, 1, samples)
-	if g := kinds(*got); !sameSet(g, []string{"ixp.fabric_degraded switch sw1", "ixp.fabric_degraded colo colo-a"}) {
+	if g := kinds(*got); !sameSet(g, []string{"ixp.fabric_degraded switch 1", "ixp.fabric_degraded colo colo-a"}) {
 		t.Fatalf("events %v", g)
 	}
 }
@@ -331,7 +331,7 @@ func TestMemberThenFabric(t *testing.T) {
 	*got = nil
 	round(c, 2, members(64500, 6, true, s1))
 	g := kinds(*got)
-	if !sameSet(g, []string{"ixp.fabric_degraded switch sw1", "ixp.fabric_degraded colo colo-a", "ixp.member_recovered 64500 "}) {
+	if !sameSet(g, []string{"ixp.fabric_degraded switch 1", "ixp.fabric_degraded colo colo-a", "ixp.member_recovered 64500 "}) {
 		t.Fatalf("events %v", g)
 	}
 }
@@ -345,7 +345,7 @@ func TestStaleFabricResolves(t *testing.T) {
 	}
 	*got = nil
 	c.evaluate(plugin.FabricView{Configured: true, Stale: true, Round: t0.Add(2 * time.Minute), Samples: members(64500, 4, true, s1)})
-	if g := kinds(*got); !sameSet(g, []string{"ixp.fabric_recovered switch sw1", "ixp.fabric_recovered colo colo-a"}) {
+	if g := kinds(*got); !sameSet(g, []string{"ixp.fabric_recovered switch 1", "ixp.fabric_recovered colo colo-a"}) {
 		t.Fatalf("events %v", g)
 	}
 	v := c.View()
@@ -425,5 +425,73 @@ func TestConfigValidation(t *testing.T) {
 	}
 	if _, err := New(plugin.NewConfig(nil), plugin.Env{}); err != nil {
 		t.Fatalf("defaults: %v", err)
+	}
+}
+
+func TestSwitchEventKeyIsTheIDNotTheName(t *testing.T) {
+	c, got := newCorrelator(t, "rounds: 1")
+	s1 := plugin.FabricSwitch{ID: 1, Name: "old-name"}
+	round(c, 1, members(64500, 4, true, s1))
+	renamed := plugin.FabricSwitch{ID: 1, Name: "new-name"}
+	round(c, 2, members(64500, 4, false, renamed))
+	if len(*got) != 2 {
+		t.Fatalf("events %v", kinds(*got))
+	}
+	problem, recovery := (*got)[0], (*got)[1]
+	if problem.Fields["name"] != "old-name" || recovery.Fields["name"] != "new-name" {
+		t.Fatalf("names %v %v", problem.Fields, recovery.Fields)
+	}
+	if problem.DedupKey() != recovery.DedupKey() {
+		t.Fatalf("a rename changed the dedup key: %q vs %q", problem.DedupKey(), recovery.DedupKey())
+	}
+
+	c, got = newCorrelator(t, "rounds: 1")
+	twin := plugin.FabricSwitch{ID: 2, Name: "old-name"}
+	round(c, 1, cat(members(64500, 4, true, s1), members(64600, 4, true, twin)))
+	var keys []string
+	for _, e := range *got {
+		if e.Fields["scope"] == plugin.ScopeSwitch {
+			keys = append(keys, e.DedupKey())
+		}
+	}
+	if len(keys) != 2 || keys[0] == keys[1] {
+		t.Fatalf("two switches with one name share a dedup key: %v", keys)
+	}
+}
+
+func TestOpenIncidentStaysInViewWhenUnmeasured(t *testing.T) {
+	c, got := newCorrelator(t, "") // rounds default 2
+	s1 := sw(1, "colo-a")
+	bad := members(64500, 4, true, s1)
+	round(c, 1, bad)
+	round(c, 2, bad)
+	if len(*got) != 2 {
+		t.Fatalf("events %v", kinds(*got))
+	}
+	// A lone member elsewhere, degraded for two rounds, opens its own event.
+	lone := members(64700, 1, true, sw(9, "colo-z"))
+	round(c, 3, cat(bad, lone))
+	round(c, 4, cat(bad, lone))
+	if len(*got) != 3 || (*got)[2].Kind != plugin.EventMemberDegraded {
+		t.Fatalf("events %v", kinds(*got))
+	}
+
+	// Nothing is measured in the next round: both events are still open.
+	round(c, 5, []plugin.FabricSample{smp("v1", 64800, "192.0.2.99", false, sw(5, "colo-q"))})
+	v := c.View()
+	var open []string
+	for _, g := range v.Groups {
+		if g.Active {
+			if g.Members != 0 || g.Degraded != 0 || g.ASNs == nil {
+				t.Fatalf("unmeasured open group %+v", g)
+			}
+			open = append(open, g.Scope+" "+g.Name)
+		}
+	}
+	if !sameSet(open, []string{"switch sw1", "colo colo-a"}) {
+		t.Fatalf("open groups %v in %+v", open, v.Groups)
+	}
+	if len(v.Members) != 1 || v.Members[0].ASN != 64700 || !v.Members[0].Active || v.Members[0].Name != "member-64700" {
+		t.Fatalf("members %+v", v.Members)
 	}
 }

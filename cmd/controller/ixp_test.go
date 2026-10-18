@@ -429,9 +429,18 @@ func TestIXPCorrelateCheck(t *testing.T) {
 	}
 }
 
-// TestIXPCorrelateWiring connects the correlator to the fabric view, the
-// event sink, and the HTTP API. The fabric prober itself is not started:
-// the correlator is given a fabric round, as the prober would publish it.
+// fabricRound is a fabric prober that publishes one fixed round.
+type fabricRound struct {
+	plugin.FabricProbe
+	view plugin.FabricView
+}
+
+func (f fabricRound) View() plugin.FabricView { return f.view }
+
+// TestIXPCorrelateWiring connects the correlator to the fabric prober's
+// view, the event sink, and the HTTP API. The prober is replaced by one
+// that publishes a fixed round, so the correlator can only see that round
+// through the view wireIXPCorrelate hands it.
 func TestIXPCorrelateWiring(t *testing.T) {
 	cfg := mustParse(t, ixpCorrelateYAML)
 	plugins, err := pluginhost.Build(cfg, pluginhost.Options{})
@@ -442,10 +451,6 @@ func TestIXPCorrelateWiring(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	events := make(chan plugin.Event, 8)
-	wireIXPFabric(cfg, plugins, srv)
-	wireIXPCorrelate(plugins, srv, func(e plugin.Event) { events <- e })
-
 	sw := []plugin.FabricSwitch{{ID: 1, Name: "sw1", Colo: "colo-a"}}
 	var samples []plugin.FabricSample
 	for i := range 3 {
@@ -454,10 +459,14 @@ func TestIXPCorrelateWiring(t *testing.T) {
 			VLANID: 10, IXPID: 1, Switches: sw, Sent: 5, Received: 0, LossPct: 100, PastTolerance: true,
 		})
 	}
+	plugins.IXPFabric.Plugin = fabricRound{FabricProbe: plugins.IXPFabric.Plugin, view: plugin.FabricView{
+		Configured: true, Round: time.Unix(1000, 0).UTC(), Samples: samples,
+	}}
+	events := make(chan plugin.Event, 8)
+	wireIXPFabric(cfg, plugins, srv)
+	wireIXPCorrelate(plugins, srv, func(e plugin.Event) { events <- e })
+
 	c := plugins.IXPCorrelate.Plugin
-	c.SetFabric(func() plugin.FabricView {
-		return plugin.FabricView{Configured: true, Round: time.Unix(1000, 0).UTC(), Samples: samples}
-	})
 	if err := c.Start(t.Context()); err != nil {
 		t.Fatal(err)
 	}
@@ -473,7 +482,7 @@ func TestIXPCorrelateWiring(t *testing.T) {
 		}
 	}
 	slices.Sort(got)
-	want := []string{"ixp.fabric_degraded colo colo-a", "ixp.fabric_degraded switch sw1"}
+	want := []string{"ixp.fabric_degraded colo colo-a", "ixp.fabric_degraded switch 1"}
 	if !slices.Equal(got, want) {
 		t.Fatalf("events %v, want %v", got, want)
 	}

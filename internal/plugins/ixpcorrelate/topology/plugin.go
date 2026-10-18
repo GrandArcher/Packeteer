@@ -6,8 +6,10 @@
 package topology
 
 import (
+	"cmp"
 	"context"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -172,7 +174,7 @@ func validateBundles(bundles []Bundle) error {
 	}
 	names := map[string]bool{}
 	for i, b := range bundles {
-		if !validName(b.Name) {
+		if !plugin.ValidLabel(b.Name) {
 			return fmt.Errorf("bundles[%d].name is invalid", i)
 		}
 		if names[b.Name] {
@@ -192,21 +194,6 @@ func validateBundles(bundles []Bundle) error {
 		}
 	}
 	return nil
-}
-
-func validName(s string) bool {
-	if s == "" || len(s) > 64 {
-		return false
-	}
-	for i, c := range s {
-		switch {
-		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9':
-		case i > 0 && (c == '.' || c == '_' || c == '-'):
-		default:
-			return false
-		}
-	}
-	return true
 }
 
 // SetFabric records the fabric view to read. The controller calls it
@@ -372,15 +359,49 @@ func (c *Correlator) stepMembers(obs observation, now time.Time) []plugin.Event 
 	return events
 }
 
+// buildView lists the groups and members of this round, plus those whose
+// event is still open but that were not seen this round, so an open
+// event is always visible in the view.
 func (c *Correlator) buildView(fv plugin.FabricView, obs observation) plugin.CorrelationView {
+	groups := slices.Clone(obs.groups)
+	inRound := map[groupKey]bool{}
+	for _, g := range obs.groups {
+		inRound[g.key] = true
+	}
+	for k, st := range c.groups {
+		if st.active && !inRound[k] {
+			groups = append(groups, group{key: k, name: st.last.name})
+		}
+	}
+	slices.SortFunc(groups, func(a, b group) int {
+		switch {
+		case lessKey(a.key, b.key):
+			return -1
+		case lessKey(b.key, a.key):
+			return 1
+		}
+		return 0
+	})
+	members := slices.Clone(obs.alone)
+	alone := map[uint32]bool{}
+	for _, m := range obs.alone {
+		alone[m.asn] = true
+	}
+	for asn, st := range c.member {
+		if st.active && !alone[asn] {
+			members = append(members, member{asn: asn, name: st.last.name})
+		}
+	}
+	slices.SortFunc(members, func(a, b member) int { return cmp.Compare(a.asn, b.asn) })
+
 	v := plugin.CorrelationView{
 		Configured: true,
 		Stale:      fv.Stale,
 		Round:      fv.Round,
-		Groups:     make([]plugin.CorrelationGroup, 0, len(obs.groups)),
-		Members:    make([]plugin.CorrelationMember, 0, len(obs.alone)),
+		Groups:     make([]plugin.CorrelationGroup, 0, len(groups)),
+		Members:    make([]plugin.CorrelationMember, 0, len(members)),
 	}
-	for _, g := range obs.groups {
+	for _, g := range groups {
 		asns := g.degraded
 		if asns == nil {
 			asns = []uint32{}
@@ -396,7 +417,7 @@ func (c *Correlator) buildView(fv plugin.FabricView, obs observation) plugin.Cor
 			Active:      active, ASNs: asns,
 		})
 	}
-	for _, m := range obs.alone {
+	for _, m := range members {
 		active := false
 		if st := c.member[m.asn]; st != nil {
 			active = st.active
@@ -408,7 +429,7 @@ func (c *Correlator) buildView(fv plugin.FabricView, obs observation) plugin.Cor
 
 func groupEvent(degraded bool, g group, now time.Time) plugin.Event {
 	fields := map[string]string{
-		"scope": g.key.scope, "ixp_id": strconv.Itoa(g.key.ixp), "group": g.name,
+		"scope": g.key.scope, "ixp_id": strconv.Itoa(g.key.ixp), "group": g.key.id, "name": g.name,
 	}
 	label := g.key.scope + " " + g.name
 	if !degraded {
