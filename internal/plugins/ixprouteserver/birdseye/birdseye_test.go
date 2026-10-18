@@ -34,7 +34,18 @@ type fakeBirdseye struct {
 	tagged    map[string][][3]uint64 // one entry per route: its large communities
 	fail      int                    // HTTP status for every request when non-zero
 	bigLC     bool
-	maxRoutes int // api.max_routes in every response
+	routes    map[string][]fakeRoute // protocol listing for api/routes/protocol
+	listFail  int                    // HTTP status for protocol listings when non-zero
+	maxRoutes int                    // api.max_routes in every response
+}
+
+// fakeRoute is one route of a protocol listing. path is Birdseye's as_path:
+// strings, split on spaces.
+type fakeRoute struct {
+	network string
+	path    []string
+	comm    [][2]uint64
+	large   [][3]uint64
 }
 
 func newFake(t *testing.T) *fakeBirdseye {
@@ -43,6 +54,7 @@ func newFake(t *testing.T) *fakeBirdseye {
 		protocols: map[string]map[string]any{},
 		counts:    map[string]int{},
 		tagged:    map[string][][3]uint64{},
+		routes:    map[string][]fakeRoute{},
 		maxRoutes: 1000,
 	}
 	f.srv = httptest.NewServer(http.HandlerFunc(f.serve))
@@ -74,6 +86,23 @@ func (f *fakeBirdseye) serve(w http.ResponseWriter, r *http.Request) {
 	case strings.HasPrefix(p, "/api/routes/count/protocol/"):
 		name := strings.TrimPrefix(p, "/api/routes/count/protocol/")
 		body = map[string]any{"api": api, "count": map[string]any{"routes": f.counts[name]}}
+	case strings.HasPrefix(p, "/api/routes/protocol/"):
+		if f.listFail != 0 {
+			http.Error(w, "too many routes", f.listFail)
+			return
+		}
+		routes := []any{}
+		for _, r := range f.routes[strings.TrimPrefix(p, "/api/routes/protocol/")] {
+			bgp := map[string]any{"as_path": r.path}
+			if len(r.comm) > 0 {
+				bgp["communities"] = r.comm
+			}
+			if len(r.large) > 0 {
+				bgp["large_communities"] = r.large
+			}
+			routes = append(routes, map[string]any{"network": r.network, "bgp": bgp})
+		}
+		body = map[string]any{"api": api, "routes": routes}
 	case strings.HasPrefix(p, "/api/routes/lc-zwild/protocol/"):
 		parts := strings.Split(strings.TrimPrefix(p, "/api/routes/lc-zwild/protocol/"), "/")
 		routes := []any{}
@@ -496,6 +525,9 @@ func TestConfigValidation(t *testing.T) {
 		{"max bytes", map[string]any{"servers": []map[string]any{good}, "max_bytes": 5}, "max_bytes"},
 		{"prefix pct", map[string]any{"servers": []map[string]any{good}, "max_prefix_warn_pct": 101}, "max_prefix_warn_pct"},
 		{"filtered pct", map[string]any{"servers": []map[string]any{good}, "filtered_warn_pct": 101}, "filtered_warn_pct"},
+		{"spike min", map[string]any{"servers": []map[string]any{good}, "spike_min": -1}, "spike_min"},
+		{"spike factor", map[string]any{"servers": []map[string]any{good}, "spike_factor": 5000}, "spike_factor"},
+		{"burst min", map[string]any{"servers": []map[string]any{good}, "burst_min": -2}, "burst_min"},
 		{"unknown key", map[string]any{"servers": []map[string]any{good}, "apikey": "x"}, "apikey"},
 	}
 	for _, tc := range cases {
@@ -512,7 +544,8 @@ func TestConfigValidation(t *testing.T) {
 	}
 	w := p.(*Watch)
 	if w.servers[0].base != "https://rs1.example.invalid/birdseye" || w.interval != DefaultInterval ||
-		w.prefPct != DefaultMaxPrefixWarnPct || w.filtPct != DefaultFilteredWarnPct {
+		w.prefPct != DefaultMaxPrefixWarnPct || w.filtPct != DefaultFilteredWarnPct ||
+		w.signals || w.spikeMin != DefaultSpikeMin || w.spikeX != DefaultSpikeFactor || w.burstMin != DefaultBurstMin {
 		t.Fatalf("defaults %+v", w)
 	}
 }

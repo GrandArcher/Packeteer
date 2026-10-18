@@ -27,6 +27,10 @@ func pathCount(protocol string) string {
 	return "/api/routes/count/protocol/" + url.PathEscape(protocol)
 }
 
+func pathRoutes(protocol string) string {
+	return "/api/routes/protocol/" + url.PathEscape(protocol)
+}
+
 func pathFiltered(protocol string, asn uint32) string {
 	return fmt.Sprintf("/api/routes/lc-zwild/protocol/%s/%d/%d", url.PathEscape(protocol), asn, reasonCommunity)
 }

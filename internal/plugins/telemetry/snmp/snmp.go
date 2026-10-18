@@ -80,7 +80,7 @@ type observation struct {
 // New validates config and reads credentials. It does not open a socket.
 func New(c plugin.Config, e plugin.Env) (plugin.Telemetry, error) {
 	getenv := e.Getenv
-	interval, timeout, retries, maxSamples, hosts, bindings, err := decode(c, getenv, e.Providers)
+	interval, timeout, retries, maxSamples, hosts, bindings, err := decode(c, getenv, e.BindingNames())
 	if err != nil {
 		return nil, err
 	}

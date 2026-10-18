@@ -62,6 +62,9 @@ type Config struct {
 	// Providers carries group, precedence, and cc_disable. Empty means
 	// commit control has no provider policy (the weighted scorer ignores it).
 	Providers []ProviderPolicy
+	// Ports are the exchange ports (#151) the commit and cost planners
+	// share between a peer's providers.
+	Ports []PortPolicy
 	// Flap parks prefixes whose chosen provider keeps changing (#228).
 	Flap FlapConfig
 }
@@ -76,6 +79,16 @@ type ProviderPolicy struct {
 	CCDisable  bool
 	Cost       float64
 	HasCost    bool
+	// Port names the exchange port this provider's peer shares (#151).
+	Port string
+}
+
+// PortPolicy is one exchange port. Its telemetry row is the one whose
+// provider name equals Name.
+type PortPolicy struct {
+	Name         string
+	CapacityMbps float64
+	CommitMbps   float64
 }
 
 // Input is everything Decide looks at.

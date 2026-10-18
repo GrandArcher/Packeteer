@@ -24,6 +24,7 @@ import (
 	"github.com/GrandArcher/Packeteer/internal/announce"
 	"github.com/GrandArcher/Packeteer/internal/anomaly"
 	"github.com/GrandArcher/Packeteer/internal/config"
+	"github.com/GrandArcher/Packeteer/internal/exchange"
 	"github.com/GrandArcher/Packeteer/internal/httpapi"
 	"github.com/GrandArcher/Packeteer/internal/inbound"
 	"github.com/GrandArcher/Packeteer/internal/linkout"
@@ -619,6 +620,7 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 	tools.SetQueue(engine)
 	sysEngine.Store(engine)
 	watch := newEventWatch(dispatch, cfg.Mode)
+	portCommits := exchange.PortCommits(exchangesFromConfig(cfg))
 	peerMon := exchangePeerMonitor(cfg)
 	col.SetPeerPrefixes(peerMon.Prefixes)
 	if err := wireRIBSources(plugins, view, health, peerMon, dispatch.Emit); err != nil {
@@ -757,7 +759,7 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 				watch.peerStatus(now, view.Peers())
 			}
 			if len(plugins.Telemetry) > 0 && watch.commitDue(now) {
-				watch.commit(now, collectTelemetry(loopCtx, plugins))
+				watch.commit(now, exchange.WithPortCommit(collectTelemetry(loopCtx, plugins), portCommits))
 			}
 		})
 	}()
