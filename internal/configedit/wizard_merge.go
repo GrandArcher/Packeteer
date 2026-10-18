@@ -53,7 +53,8 @@ func WizardOver(in WizardInput, current []byte) (WizardPlan, error) {
 		return WizardPlan{}, err
 	}
 	removes := wizardRemoves(root, gen)
-	authWas := authOn(mustMapping(root, "auth"))
+	auth, _ := mappingChild(root, "auth")
+	authWas := authOn(auth)
 	for _, key := range wizardOwned {
 		if n, _ := child(gen, key); n != nil {
 			setChild(root, key, n)
@@ -72,7 +73,7 @@ func WizardOver(in WizardInput, current []byte) (WizardPlan, error) {
 	} else if in.HTTPListen != "" {
 		setOrDelete(ensureMapping(root, "http"), "listen", scalar(genHTTP, "listen"), "!!str")
 	}
-	if a := mustMapping(root, "auth"); in.DisableAuth && authOn(a) {
+	if a, _ := mappingChild(root, "auth"); in.DisableAuth && authOn(a) {
 		setOrDelete(a, "enabled", "false", "!!bool")
 		removes = append(removes, "Turns off sign-in")
 	}
@@ -98,13 +99,7 @@ func WizardOver(in WizardInput, current []byte) (WizardPlan, error) {
 	return WizardPlan{YAML: buf.String(), Existing: true, Diff: lineDiff(string(current), buf.String()), Removes: removes}, nil
 }
 
-// mustMapping is the mapping under key, or nil.
-func mustMapping(m *yaml.Node, key string) *yaml.Node {
-	n, _ := mappingChild(m, key)
-	return n
-}
-
-func authOn(a *yaml.Node) bool { return scalar(a, "enabled") == "true" }
+func authOn(a *yaml.Node) bool { return strings.EqualFold(scalar(a, "enabled"), "true") }
 
 // setChild puts val under key, in the key's place when it is there and at
 // the end otherwise.
@@ -142,7 +137,13 @@ func wizardRemoves(cur, gen *yaml.Node) []string {
 	lost(n, "BGP neighbor", addrs)
 	_, n = missing(sourceTypeNames(cur), sourceTypeNames(gen))
 	lost(n, "source", nil)
-	prefixes, n := missing(scalarList(mustMapping(cur, "allowlist"), "prefixes"), nil)
+	targets, n := missing(staticTargets(cur), staticTargets(gen))
+	lost(n, "static target", targets)
+	for _, d := range droppedFields(cur, gen) {
+		out = append(out, "Resets "+d)
+	}
+	curAllow, _ := mappingChild(cur, "allowlist")
+	prefixes, n := missing(scalarList(curAllow, "prefixes"), nil)
 	lost(n, "allowlist prefix", prefixes)
 	if ct, nt := scorerType(cur), scorerType(gen); ct != "" && ct != nt {
 		out = append(out, fmt.Sprintf("Changes scorer from %s to %s", asciiOnly(ct), nt))
@@ -180,7 +181,90 @@ func seqScalars(m *yaml.Node, seq, field string) []string {
 }
 
 func neighborAddrs(root *yaml.Node) []string {
-	return seqScalars(mustMapping(root, "bgp"), "neighbors", "address")
+	bgp, _ := mappingChild(root, "bgp")
+	return seqScalars(bgp, "neighbors", "address")
+}
+
+// staticTargets are the prefixes of every static source.
+func staticTargets(root *yaml.Node) []string {
+	srcs, ok := sequenceChild(root, "sources")
+	if !ok {
+		return nil
+	}
+	var out []string
+	for _, src := range srcs.Content {
+		if scalar(src, "type") != "static" {
+			continue
+		}
+		cfg, _ := mappingChild(src, "config")
+		if ts, ok := sequenceChild(cfg, "targets"); ok {
+			for _, t := range ts.Content {
+				out = append(out, scalar(t, "prefix"))
+			}
+		}
+	}
+	return out
+}
+
+// droppedFields names the settings that replacing cur with gen drops from
+// an entry that stays: a provider with the same name, a neighbor with the
+// same address, or the bgp block itself. The counts in the other lines do
+// not show these.
+func droppedFields(cur, gen *yaml.Node) []string {
+	var out []string
+	entry := func(noun, id string, c, g *yaml.Node) {
+		if keys := missingKeys(c, g, ""); len(keys) > 0 {
+			out = append(out, fmt.Sprintf("%s %s: drops %s", noun, asciiOnly(id), asciiOnly(strings.Join(keys, ", "))))
+		}
+	}
+	byID := func(root *yaml.Node, seq, field string) map[string]*yaml.Node {
+		m := map[string]*yaml.Node{}
+		if s, ok := sequenceChild(root, seq); ok {
+			for _, it := range s.Content {
+				m[scalar(it, field)] = it
+			}
+		}
+		return m
+	}
+	genProv := byID(gen, "providers", "name")
+	if s, ok := sequenceChild(cur, "providers"); ok {
+		for _, it := range s.Content {
+			if g := genProv[scalar(it, "name")]; g != nil {
+				entry("provider", scalar(it, "name"), it, g)
+			}
+		}
+	}
+	curBGP, _ := mappingChild(cur, "bgp")
+	genBGP, _ := mappingChild(gen, "bgp")
+	genNb := byID(genBGP, "neighbors", "address")
+	if s, ok := sequenceChild(curBGP, "neighbors"); ok {
+		for _, it := range s.Content {
+			if g := genNb[scalar(it, "address")]; g != nil {
+				entry("BGP neighbor", scalar(it, "address"), it, g)
+			}
+		}
+	}
+	if keys := missingKeys(curBGP, genBGP, "neighbors"); len(keys) > 0 {
+		out = append(out, "bgp: drops "+asciiOnly(strings.Join(keys, ", ")))
+	}
+	return out
+}
+
+// missingKeys are the keys of mapping c, except skip, that mapping g does
+// not have.
+func missingKeys(c, g *yaml.Node, skip string) []string {
+	if c == nil || c.Kind != yaml.MappingNode {
+		return nil
+	}
+	var out []string
+	for i := 0; i+1 < len(c.Content); i += 2 {
+		if k := c.Content[i].Value; k != skip {
+			if n, _ := child(g, k); n == nil {
+				out = append(out, k)
+			}
+		}
+	}
+	return out
 }
 
 func sourceTypeNames(root *yaml.Node) []string { return seqScalars(root, "sources", "type") }

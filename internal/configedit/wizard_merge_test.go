@@ -178,6 +178,49 @@ func TestWizardOverInjectBecomesObserve(t *testing.T) {
 	}
 }
 
+// A kept announcer block stays in the file; with mode observe it does not
+// announce, and the page says the wizard leaves such blocks alone.
+func TestWizardOverKeepsAnnouncerInObserve(t *testing.T) {
+	_, cfg := parseOver(t, oneProvider(), injectYAML)
+	if cfg.Announcer == nil || cfg.Announcer.Type != "gobgp" {
+		t.Fatalf("announcer = %+v", cfg.Announcer)
+	}
+	if cfg.Mode != config.ModeObserve {
+		t.Fatalf("mode = %q", cfg.Mode)
+	}
+}
+
+// Fields the wizard does not write are dropped with the block it replaces;
+// the confirm list names them.
+func TestWizardOverNamesDroppedFields(t *testing.T) {
+	cur := strings.Replace(configuredYAML, "    next_hop: 192.0.2.1\n", "    next_hop: 192.0.2.1\n    fwmark: 101\n", 1)
+	cur = strings.Replace(cur, "    - address: 192.0.2.254\n", "    - address: 192.0.2.254\n      hold_time: 90\n", 1)
+	cur = strings.Replace(cur, "bgp:\n", "bgp:\n  as_path: true\n", 1)
+	cur = strings.Replace(cur, "        - prefix: 198.51.100.0/24\n", "        - prefix: 198.51.100.0/24\n        - prefix: 203.0.113.0/24\n", 1)
+	in := oneProvider()
+	in.Prefix = "198.51.100.0/24"
+	plan, _ := parseOver(t, in, cur)
+	got := strings.Join(plan.Removes, "|")
+	for _, want := range []string{"Resets provider transit-a: drops fwmark", "Resets BGP neighbor 192.0.2.254: drops hold_time", "Resets bgp: drops as_path", "Removes 1 static target (203.0.113.0/24)"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("removes lack %q: %q", want, got)
+		}
+	}
+}
+
+func TestAuthOnAnyBoolSpelling(t *testing.T) {
+	for text, want := range map[string]bool{"true": true, "True": true, "TRUE": true, "false": false, "": false} {
+		root, err := mappingRoot([]byte("auth:\n  enabled: " + text + "\n"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		a, _ := mappingChild(root, "auth")
+		if got := authOn(a); got != want {
+			t.Errorf("authOn(%q) = %v", text, got)
+		}
+	}
+}
+
 func TestWizardOverRefusesBrokenCurrent(t *testing.T) {
 	for _, cur := range []string{"mode: [observe\n", "- a\n- b\n"} {
 		if _, err := WizardOver(oneProvider(), []byte(cur)); err == nil || !strings.Contains(err.Error(), "cannot be kept") {
@@ -225,6 +268,7 @@ func TestConfigured(t *testing.T) {
 		{string(fresh), true},
 		{configuredYAML, true},
 		{"mode: observe\nbgp:\n  neighbors:\n    - address: 192.0.2.254\n", true},
+		{"mode: observe\nixp:\n  fabric: {}\n", true},
 		{"mode: observe\n", false},
 		{"", false},
 		{"mode: [", false},

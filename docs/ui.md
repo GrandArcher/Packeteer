@@ -483,21 +483,21 @@ UI e2e: `internal/httpapi` tests drive the real mitigation controller in observe
 
 ### Over a config that already exists (#345)
 
-`GET /api/config` returns `configured: true` when the file has providers or BGP neighbors. The page then collapses the wizard behind "Run setup again (replaces your config)", and its button reads "Generate (replaces your config)". An empty or fresh file shows it open.
+`GET /api/config` returns `configured: true` when the file has providers, BGP neighbors, or an `ixp` block. The page then collapses the wizard behind "Run setup again (replaces your config)", and its button reads "Generate (replaces your config)". An empty or fresh file shows it open.
 
-The page posts the editor text as `current`. The server replaces only the keys the wizard writes: `mode`, `asn`, `router_id`, `packeteer_community`, `max_improvements`, `hold_time`, `thresholds`, `providers`, `allowlist`, `bgp`, `sources`, and `scorer`. `auth`, `http`, `storage`, and every other block stay as they are. A new `storage` block is added only when the file has none. The reply adds `existing`, `diff` (a line diff, ASCII only: any other character in the file shows as a `\u` escape), and `removes`, for example `Removes 2 providers (transit-b, transit-c)`. It also names a mode change, a scorer change, and dropped sources, BGP neighbors, and allowlist prefixes.
+The page posts the editor text as `current`. The server replaces only the keys the wizard writes: `mode`, `asn`, `router_id`, `packeteer_community`, `max_improvements`, `hold_time`, `thresholds`, `providers`, `allowlist`, `bgp`, `sources`, and `scorer`. `auth`, `http`, `storage`, and every other block stay as they are. A new `storage` block is added only when the file has none. The reply adds `existing`, `diff` (a line diff, ASCII only: any other character in the file shows as a `\u` escape), and `removes`, for example `Removes 2 providers (transit-b, transit-c)`. It also names a mode change, a scorer change, and dropped sources, static targets, BGP neighbors, and allowlist prefixes. A provider or neighbor that keeps its name or address but loses other fields is listed too, for example `Resets provider transit-a: drops fwmark`, as is a `bgp` key the wizard does not write.
 
 The page keeps the editor text until you press "Replace the editor text" in the confirm box that shows `removes` and the diff. Cancel leaves it alone. Nothing is written to the file until you Save.
 
 Sign-in stays on. A tick box "Turn off sign-in" on the last step sends `"disable_auth": true`, which sets `auth.enabled: false` and lists "Turns off sign-in" in `removes`. Without it, a result that would turn sign-in off is refused. The flow-collector comment is written only to a fresh file. The reply is `422` when `current` is not a YAML mapping, or when the result does not load with the rest of the file.
 
-The rendered file is always:
+A fresh file is rendered as follows. Over an existing file, `announcer`, `http.listen` (unless the page sends a listen address), and every other kept block stay as they are; with `mode: observe` a kept `announcer` does not announce.
 
 - `mode: observe` (it measures and recommends; it never announces). Any other mode, including inject, is refused. Inject is not a step;
-- an empty allowlist and no announcer;
+- an empty allowlist and no announcer (a fresh file);
 - one `bgp.neighbors` entry, the edge address;
 - the `weighted` scorer, `max_improvements: 50`, `hold_time: 15m`, the default thresholds, and `http.listen: 127.0.0.1:8080`;
-- a `static` source only when a prefix was given, and a `flow` source only when the flow step was used;
+- a `static` source only when a prefix was given, and a `flow` source only when the flow step was used. Over an existing file this list replaces `sources`, so it can be empty; `removes` counts what is lost;
 - `packeteer_community` `<asn>:666` when the ASN fits in 16 bits.
 
 There is no field for a password, a community string, or any other secret. Those stay in environment variables. The page checks each step before continuing, and the server checks the whole body again with `config.Parse`. The wizard is part of the editor: it is off (`404`) unless `http.config_editor` is on. Turning inject on afterwards is a separate edit; follow the [inject checklist](CONFIG.md#inject-checklist).

@@ -88,7 +88,8 @@ type File struct {
 	Configured bool `json:"configured"`
 }
 
-// Configured reports whether data has at least one provider or BGP neighbor.
+// Configured reports whether data has at least one provider or BGP
+// neighbor, or an ixp block, which needs neither.
 func Configured(data []byte) bool {
 	root, err := mappingRoot(data)
 	if err != nil {
@@ -97,7 +98,11 @@ func Configured(data []byte) bool {
 	if p, ok := sequenceChild(root, "providers"); ok && len(p.Content) > 0 {
 		return true
 	}
-	return len(neighborAddrs(root)) > 0
+	if len(neighborAddrs(root)) > 0 {
+		return true
+	}
+	_, ok := mappingChild(root, "ixp")
+	return ok
 }
 
 // Result is the outcome of checking a candidate.
