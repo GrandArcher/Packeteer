@@ -1,0 +1,16 @@
+{
+  "stubs": [
+    {
+      "method": "GET",
+      "path": "/api/prefixes",
+      "contains": "",
+      "file": "prefixes.json"
+    },
+    {
+      "method": "GET",
+      "path": "/api/events",
+      "contains": "",
+      "file": "events.json"
+    }
+  ]
+}

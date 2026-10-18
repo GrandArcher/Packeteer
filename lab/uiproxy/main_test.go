@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/GrandArcher/Packeteer/internal/exchange"
 	"github.com/GrandArcher/Packeteer/internal/history"
@@ -446,5 +447,45 @@ func TestGuidedDriverMatchesPage(t *testing.T) {
 		if !strings.Contains(driver, id) || !strings.Contains(string(page), `id="`+id+`"`) {
 			t.Errorf("guided card %s is missing from the driver or the page", id)
 		}
+	}
+}
+
+// TestObserveWordingFixturesMatchAPI decodes the canned observe-mode
+// answers with the API's own types (#346): a pending recommendation whose
+// current exit is the learned path, and the event worded as a recommendation.
+func TestObserveWordingFixturesMatchAPI(t *testing.T) {
+	f, err := loadFixtures("../ui-fixtures/observe-wording")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(f.Stubs) != 2 {
+		t.Fatalf("stubs = %d", len(f.Stubs))
+	}
+	var page httpapi.PrefixPage
+	dec := json.NewDecoder(bytes.NewReader(f.Stubs[0].body))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&page); err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Prefixes) != 1 || page.Prefixes[0].Prefix != "198.51.100.0/24" || page.Prefixes[0].Current != "lab-a" || page.Prefixes[0].Recommended != "lab-b" {
+		t.Fatalf("prefixes = %+v", page.Prefixes)
+	}
+	var events struct {
+		Events []struct {
+			plugin.Event
+			Source string `json:"source"`
+		} `json:"events"`
+		Stored bool      `json:"stored"`
+		Since  time.Time `json:"since"`
+		Now    time.Time `json:"now"`
+	}
+	dec = json.NewDecoder(bytes.NewReader(f.Stubs[1].body))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&events); err != nil {
+		t.Fatal(err)
+	}
+	const want = "Recommends moving 198.51.100.0/24 from lab-a to lab-b (not announced, observe mode)"
+	if len(events.Events) != 1 || events.Events[0].Message != want || events.Events[0].Kind != plugin.EventImprovementAdded {
+		t.Fatalf("events = %+v", events.Events)
 	}
 }

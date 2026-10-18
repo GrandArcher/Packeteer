@@ -25,6 +25,7 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 
 ### Fixed
 
+- Observe and suggest: pages show "Traffic now (router)" (learned path) and "Packeteer recommends"; events read "Recommends moving X from A to B (not announced, observe mode)", not "steered" (#346).
 - Settings: Save applies pending form edits first instead of reporting Saved without them, names each changed key (old -> new), and a sticky bar flags unsaved changes (#344).
 - Provider health follows measurements: no reply or loss at `probe.down_loss_pct` is down, at `probe.degraded_loss_pct` degraded; "no reply" replaces 0.0 ms (#343).
 - BMP exchange peer monitor: a stats report no longer marks a peer up, state is kept per router and peer, and an unknown peer-down reason reads `unknown reason N` (#338).
