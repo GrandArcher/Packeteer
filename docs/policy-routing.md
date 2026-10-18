@@ -94,9 +94,9 @@ exchanges:
 ```
 
 - `fwmark` sets a Linux `SO_MARK` on every probe socket. It is seen only by the probe host's own `ip rule`, and needs `--cap-add NET_ADMIN`.
-- `dscp` (1-63) is written in the IP header, so a router in front of the probe box can match it. Router policy routing cannot see a Linux fwmark: give a provider a `dscp` as well when a router selects its path.
+- `dscp` (1-63) is written in the IP header, so a router in front of the probe box can match it. That allows at most 63 providers per `source_ip` behind a router. Router policy routing cannot see a Linux fwmark: give a provider a `dscp` as well when a router selects its path.
 
-If a tag cannot be applied (no `NET_ADMIN`, not Linux), the provider is marked down like an unbindable `source_ip`; it is never probed untagged. Every probe from the provider carries the tag: the probers, the traceroute paths, and the `probe.path_check` above, which then verifies the first hop of each tagged path.
+If a tag cannot be applied (no `NET_ADMIN`, not Linux), the provider is marked down like an unbindable `source_ip`; a built-in prober never probes it untagged. Every probe from the provider carries the tag: the probers, the traceroute paths, and the `probe.path_check` above, which then verifies the first hop of each tagged path. An `exec` prober receives the tag as `mark`/`dscp` and must apply it or fail; Packeteer cannot tell whether it did ([PLUGINS.md](PLUGINS.md)).
 
 `packeteer -pbr FORMAT` prints the routing for every provider measured here and exits. FORMAT is `linux`, `frr`, `junos`, `cisco`, or `mikrotik`. It reads the config and prints text for review: it applies nothing and never connects to a router.
 
@@ -104,7 +104,7 @@ If a tag cannot be applied (no `NET_ADMIN`, not Linux), the provider is marked d
 docker run --rm -v "$PWD/config.yaml:/etc/packeteer/config.yaml" ghcr.io/grandarcher/packeteer -pbr linux
 ```
 
-- `linux`: a table per provider with a default route via its `next_hop`, and an `ip rule` per provider (`from SOURCE`, plus `fwmark` when tagged). Table numbers and priorities are 1000 plus the provider's position in the list, so reordering providers renumbers them. A provider with only a `dscp` gets an nftables rule that turns the DSCP into a mark equal to its table, because the kernel's DSCP rule selector is not available everywhere.
+- `linux`: a table per provider with a default route via its `next_hop`, and an `ip rule` per provider (`from SOURCE`, plus `fwmark` when tagged). Table numbers are 1000 plus the provider's position in the list and rule priorities are 2000 plus it (clear of the 101/102 tables and 1001/1002 priorities in the example above), so reordering providers renumbers them. A provider with only a `dscp` gets an nftables rule that turns the DSCP into a mark equal to its table, because the kernel's DSCP rule selector is not available everywhere. A configured `fwmark` equal to such a mark on the same source is an error.
 - `frr` (pbrd `pbr-map`), `junos` (firewall filter `next-ip`/`next-ip6`), `cisco` (extended ACL and `route-map` with `set ip next-hop`), and `mikrotik` (routing tables, plus `/routing rule` for an untagged source and a `/ip firewall mangle` `mark-routing` rule for a DSCP) match `src` and, when set, `dscp`, and set the provider's `next_hop`. A provider with `fwmark` but no `dscp` is an error for these formats. FRR `pbr-map` sequence numbers stop at 700, so more providers than that are an error. The interface that faces the probe host is left as `<probe-facing-interface>` in a comment; add the policy there.
 
 Provider names are reduced to letters, digits, `_`, `.` and `-` in the output. Check each snippet against your platform release before use.

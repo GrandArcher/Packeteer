@@ -1,6 +1,7 @@
 package pbr
 
 import (
+	"net/netip"
 	"strings"
 	"testing"
 
@@ -52,15 +53,15 @@ func TestGenerateLinux(t *testing.T) {
 	}
 	for _, want := range []string{
 		"ip route add default via 192.0.2.1 table 1001\n",
-		"ip rule add from 192.0.2.11 lookup 1001 priority 1001\n",
+		"ip rule add from 192.0.2.11 lookup 1001 priority 2001\n",
 		// dscp only: nftables maps it to a mark equal to the table id
 		"nft add rule inet packeteer probes ip saddr 192.0.2.31 ip dscp 10 meta mark set 1002\n",
-		"ip rule add from 192.0.2.31 fwmark 1002 lookup 1002 priority 1002\n",
+		"ip rule add from 192.0.2.31 fwmark 1002 lookup 1002 priority 2002\n",
 		// fwmark set: the probe socket carries it, no nft rule
-		"ip rule add from 192.0.2.31 fwmark 103 lookup 1004 priority 1004\n",
+		"ip rule add from 192.0.2.31 fwmark 103 lookup 1004 priority 2004\n",
 		"ip -6 route add default via 2001:db8:ffff::1 table 1005\n",
 		"nft add rule inet packeteer probes ip6 saddr 2001:db8:ffff::31 ip6 dscp 16 meta mark set 1005\n",
-		"ip -6 rule add from 2001:db8:ffff::31 fwmark 1005 lookup 1005 priority 1005\n",
+		"ip -6 rule add from 2001:db8:ffff::31 fwmark 1005 lookup 1005 priority 2005\n",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("missing %q in:\n%s", want, out)
@@ -133,7 +134,8 @@ func TestGenerateRejectsFwmarkOnlyForRouters(t *testing.T) {
 }
 
 func TestGenerateErrors(t *testing.T) {
-	if _, err := Generate("bogus", testEntries(t)); err == nil || !strings.Contains(err.Error(), `unknown format "bogus"`) {
+	base := testEntries(t)
+	if _, err := Generate("bogus", base); err == nil || !strings.Contains(err.Error(), `unknown format "bogus"`) {
 		t.Errorf("unknown format: %v", err)
 	}
 	if _, err := Generate(Linux, nil); err == nil {
@@ -141,10 +143,27 @@ func TestGenerateErrors(t *testing.T) {
 	}
 	many := make([]Entry, maxFRRSeq+1)
 	for i := range many {
-		many[i] = Entry{N: i + 1, Name: "p", Source: testEntries(t)[0].Source, NextHop: testEntries(t)[0].NextHop}
+		many[i] = Entry{N: i + 1, Name: "p", Source: base[0].Source, NextHop: base[0].NextHop}
 	}
 	if _, err := Generate(FRR, many); err == nil || !strings.Contains(err.Error(), "700") {
 		t.Errorf("frr sequence limit: %v", err)
+	}
+}
+
+// The nft mark of a dscp-only provider is its table id; a configured fwmark
+// with the same value on the same source would match both rules.
+func TestGenerateLinuxMarkClash(t *testing.T) {
+	src, nh := netip.MustParseAddr("192.0.2.31"), netip.MustParseAddr("203.0.113.11")
+	es := []Entry{
+		{N: 1, Name: "a", Source: src, NextHop: nh, DSCP: 10},
+		{N: 2, Name: "b", Source: src, NextHop: nh, FwMark: 1001},
+	}
+	if _, err := Generate(Linux, es); err == nil || !strings.Contains(err.Error(), "fwmark 1001") {
+		t.Errorf("clash on one source: %v", err)
+	}
+	es[1].Source = netip.MustParseAddr("192.0.2.32")
+	if _, err := Generate(Linux, es); err != nil {
+		t.Errorf("same value on another source is fine: %v", err)
 	}
 }
 

@@ -26,9 +26,13 @@ const (
 // Formats lists the output formats in help order.
 var Formats = []string{Linux, FRR, Junos, Cisco, MikroTik}
 
-// Linux table ids and rule priorities start here, clear of the reserved
-// tables 253-255 and of the hand-written examples in docs/policy-routing.md.
-const linuxBase = 1000
+// Linux table ids start at tableBase, clear of the reserved tables 253-255
+// and of the table ids in docs/policy-routing.md. Rule priorities start at
+// prioBase, clear of the priorities the doc's hand-written rules use.
+const (
+	tableBase = 1000
+	prioBase  = 2000
+)
 
 // maxFRRSeq is the highest pbr-map sequence number FRR accepts.
 const maxFRRSeq = 700
@@ -89,7 +93,7 @@ func Generate(format string, entries []Entry) (string, error) {
 	var err error
 	switch format {
 	case Linux:
-		genLinux(&b, entries)
+		err = genLinux(&b, entries)
 	case FRR:
 		err = genFRR(&b, entries)
 	case Junos:
@@ -127,17 +131,55 @@ func defaultRoute(a netip.Addr) string {
 	return "::/0"
 }
 
-func genLinux(b *strings.Builder, entries []Entry) {
+// linuxMarkClash rejects a configured fwmark that equals the mark nftables
+// sets for a DSCP-only provider on the same source: both rules would match
+// and the lower priority one would route probes through the wrong table.
+func linuxMarkClash(entries []Entry) error {
+	for _, d := range entries {
+		if d.FwMark != 0 || d.DSCP == 0 {
+			continue
+		}
+		for _, e := range entries {
+			if e.FwMark == uint32(tableBase+d.N) && e.Source == d.Source {
+				return fmt.Errorf("provider %s fwmark %d equals the mark generated for dscp-only provider %s on source %s: change its fwmark", e.Name, e.FwMark, d.Name, d.Source)
+			}
+		}
+	}
+	return nil
+}
+
+// pick returns v4 for an IPv4 address and v6 for an IPv6 one.
+func pick(a netip.Addr, v4, v6 string) string {
+	if a.Is4() {
+		return v4
+	}
+	return v6
+}
+
+// families reports which address families the entries use.
+func families(entries []Entry) (v4, v6 bool) {
+	for _, e := range entries {
+		if e.Source.Is4() {
+			v4 = true
+		} else {
+			v6 = true
+		}
+	}
+	return v4, v6
+}
+
+func genLinux(b *strings.Builder, entries []Entry) error {
+	if err := linuxMarkClash(entries); err != nil {
+		return err
+	}
 	b.WriteString("# Packeteer probe policy routing for the Linux host that sends the probes.\n")
 	b.WriteString("# Generated for review. Nothing is applied. Run as root, then check with\n")
 	b.WriteString("# ip route get <host> from <source> [mark <fwmark>].\n")
 	nft := false
 	for _, e := range entries {
-		table := linuxBase + e.N
-		fam := ""
-		if e.Source.Is6() {
-			fam = " -6"
-		}
+		table := tableBase + e.N
+		prio := prioBase + e.N
+		fam := pick(e.Source, "", " -6")
 		fmt.Fprintf(b, "\n# %s: source %s via %s", e.Ident(), e.Source, e.NextHop)
 		if e.FwMark != 0 {
 			fmt.Fprintf(b, ", fwmark %d", e.FwMark)
@@ -147,7 +189,7 @@ func genLinux(b *strings.Builder, entries []Entry) {
 		fmt.Fprintf(b, "\nip%s route add default via %s table %d\n", fam, e.NextHop, table)
 		switch {
 		case e.FwMark != 0:
-			fmt.Fprintf(b, "ip%s rule add from %s fwmark %d lookup %d priority %d\n", fam, e.Source, e.FwMark, table, table)
+			fmt.Fprintf(b, "ip%s rule add from %s fwmark %d lookup %d priority %d\n", fam, e.Source, e.FwMark, table, prio)
 		case e.DSCP != 0:
 			// The kernel rule selector for DSCP is not available everywhere,
 			// so nftables turns the DSCP into a mark that equals the table.
@@ -156,16 +198,14 @@ func genLinux(b *strings.Builder, entries []Entry) {
 				b.WriteString("nft add chain inet packeteer probes '{ type route hook output priority mangle ; }'\n")
 				nft = true
 			}
-			ip := "ip"
-			if e.Source.Is6() {
-				ip = "ip6"
-			}
+			ip := pick(e.Source, "ip", "ip6")
 			fmt.Fprintf(b, "nft add rule inet packeteer probes %s saddr %s %s dscp %d meta mark set %d\n", ip, e.Source, ip, e.DSCP, table)
-			fmt.Fprintf(b, "ip%s rule add from %s fwmark %d lookup %d priority %d\n", fam, e.Source, table, table, table)
+			fmt.Fprintf(b, "ip%s rule add from %s fwmark %d lookup %d priority %d\n", fam, e.Source, table, table, prio)
 		default:
-			fmt.Fprintf(b, "ip%s rule add from %s lookup %d priority %d\n", fam, e.Source, table, table)
+			fmt.Fprintf(b, "ip%s rule add from %s lookup %d priority %d\n", fam, e.Source, table, prio)
 		}
 	}
+	return nil
 }
 
 func genFRR(b *strings.Builder, entries []Entry) error {
@@ -195,14 +235,10 @@ func genJunos(b *strings.Builder, entries []Entry) error {
 	}
 	b.WriteString("# Packeteer probe policy routing for Junos filter-based forwarding.\n")
 	b.WriteString("# Generated for review. Nothing is applied. The next hops must be in inet.0 / inet6.0.\n")
-	have := map[bool]bool{}
 	for _, e := range entries {
-		v4 := e.Source.Is4()
-		fam, dscp, action := "inet", "dscp", "next-ip"
-		if !v4 {
-			fam, dscp, action = "inet6", "traffic-class", "next-ip6"
-		}
-		have[v4] = true
+		fam := pick(e.Source, "inet", "inet6")
+		dscp := pick(e.Source, "dscp", "traffic-class")
+		action := pick(e.Source, "next-ip", "next-ip6")
 		prefix := fmt.Sprintf("set firewall family %s filter PACKETEER-PROBES term %s", fam, e.Ident())
 		fmt.Fprintf(b, "%s from source-address %s\n", prefix, hostPrefix(e.Source))
 		if e.DSCP != 0 {
@@ -210,13 +246,10 @@ func genJunos(b *strings.Builder, entries []Entry) error {
 		}
 		fmt.Fprintf(b, "%s then %s %s\n", prefix, action, e.NextHop)
 	}
-	for _, v4 := range []bool{true, false} {
-		if !have[v4] {
+	have4, have6 := families(entries)
+	for _, fam := range []string{"inet", "inet6"} {
+		if (fam == "inet" && !have4) || (fam == "inet6" && !have6) {
 			continue
-		}
-		fam := "inet"
-		if !v4 {
-			fam = "inet6"
 		}
 		fmt.Fprintf(b, "set firewall family %s filter PACKETEER-PROBES term rest then accept\n", fam)
 		fmt.Fprintf(b, "# Apply it: set interfaces <probe-facing-interface> unit 0 family %s filter input PACKETEER-PROBES\n", fam)
@@ -230,10 +263,8 @@ func genCisco(b *strings.Builder, entries []Entry) error {
 	}
 	b.WriteString("! Packeteer probe policy routing for Cisco IOS / IOS XE. Generated for review.\n")
 	b.WriteString("! Nothing is applied.\n")
-	have := map[bool]bool{}
 	for _, e := range entries {
 		v4 := e.Source.Is4()
-		have[v4] = true
 		acl := "ACL-" + e.Ident()
 		dscp := ""
 		if e.DSCP != 0 {
@@ -248,10 +279,11 @@ func genCisco(b *strings.Builder, entries []Entry) error {
 		}
 	}
 	b.WriteString("!\n! Apply it on the interface that faces the probe host:\n! interface <probe-facing-interface>\n")
-	if have[true] {
+	have4, have6 := families(entries)
+	if have4 {
 		b.WriteString("!  ip policy route-map PACKETEER-PROBES\n")
 	}
-	if have[false] {
+	if have6 {
 		b.WriteString("!  ipv6 policy route-map PACKETEER-PROBES\n")
 	}
 	return nil
@@ -264,10 +296,7 @@ func genMikroTik(b *strings.Builder, entries []Entry) error {
 	b.WriteString("# Packeteer probe policy routing for RouterOS 7. Generated for review.\n")
 	b.WriteString("# Nothing is applied.\n")
 	for _, e := range entries {
-		ip := "/ip"
-		if e.Source.Is6() {
-			ip = "/ipv6"
-		}
+		ip := pick(e.Source, "/ip", "/ipv6")
 		id := e.Ident()
 		fmt.Fprintf(b, "\n/routing table add name=%s fib\n", id)
 		fmt.Fprintf(b, "%s route add dst-address=%s gateway=%s routing-table=%s\n", ip, defaultRoute(e.NextHop), e.NextHop, id)

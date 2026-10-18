@@ -454,7 +454,7 @@ Each peer:
 | `exclude`, `precedence`, `cost` | no | As on providers. |
 | `max_prefix` | no | The router's `maximum-prefix` limit on this peer's session, when known. 0 (default) disables the `exchange.max_prefix` warning. Read-only: Packeteer never sets or changes it. |
 | `path_check` | no | First-hop probe-path check (#150), as on providers. `false` opts the peer out. |
-| `fwmark`, `dscp` | no | Probe tag (#157), as on providers. Hundreds of peers can share one `source_ip` this way. |
+| `fwmark`, `dscp` | no | Probe tag (#157), as on providers. Hundreds of peers can share one `source_ip` with `fwmark` on a Linux probe host; `dscp` allows 63 per source, which is the limit behind a router. |
 
 `port` (#151):
 
