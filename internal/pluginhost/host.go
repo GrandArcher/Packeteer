@@ -40,6 +40,9 @@ type Set struct {
 	Storage    *Instance[plugin.Storage]
 	// Whois serves the troubleshooting API only. It never announces.
 	Whois *Instance[plugin.Whois]
+	// Lookup is the read-only PeeringDB / IX-F directory (#153). It never
+	// announces and it is not a RIB source.
+	Lookup *Instance[plugin.Lookup]
 	// IXPMembers imports an IX-F member list (#161). It never announces
 	// and it is not a RIB source.
 	IXPMembers *Instance[plugin.MemberSource]
@@ -171,6 +174,11 @@ func Build(cfg *config.Config, opts Options) (*Set, error) {
 			s.Whois = &b[0]
 		}
 	}
+	if cfg.Lookup != nil {
+		if b := build(plugin.Lookups, "lookup", []config.PluginSpec{*cfg.Lookup}, base, &errs); len(b) == 1 {
+			s.Lookup = &b[0]
+		}
+	}
 	if cfg.IXP != nil && cfg.IXP.Members != nil {
 		if b := build(plugin.MemberSources, "ixp.members", []config.PluginSpec{*cfg.IXP.Members}, base, &errs); len(b) == 1 {
 			s.IXPMembers = &b[0]
@@ -256,6 +264,9 @@ func (s *Set) all() []namedLifecycle {
 	}
 	if s.Whois != nil {
 		add(plugin.KindWhois, s.Whois.Name, s.Whois.Plugin)
+	}
+	if s.Lookup != nil {
+		add(plugin.KindLookup, s.Lookup.Name, s.Lookup.Plugin)
 	}
 	if s.IXPMembers != nil {
 		add(plugin.KindMemberSource, s.IXPMembers.Name, s.IXPMembers.Plugin)

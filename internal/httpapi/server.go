@@ -147,6 +147,9 @@ type Server struct {
 	// ixpFabric is the fabric prober (#162). Nil until SetIXPFabric.
 	// Read at request time. It never announces.
 	ixpFabric atomic.Value
+	// lookup is the PeeringDB / IX-F directory (#153). Nil until SetLookup.
+	// Read at request time. It never announces.
+	lookup atomic.Value
 	// ixpRouteServers is the Birdseye watch (#164). Nil until
 	// SetIXPRouteServers. Read at request time. It never announces.
 	ixpRouteServers atomic.Value
@@ -338,6 +341,9 @@ func (s *Server) handleMetrics(w http.ResponseWriter, _ *http.Request) {
 	}
 	if s.ha != nil {
 		_, _ = w.Write(HAMetrics(s.ha()))
+	}
+	if v, ok := s.lookupView(); ok && v.Configured {
+		_, _ = w.Write(LookupMetrics(v, time.Now()))
 	}
 	if v, ok := s.ixpMemberView(); ok && v.Configured {
 		_, _ = w.Write(IXPMemberMetrics(v, time.Now()))

@@ -342,6 +342,9 @@ func (c *Config) validatePlugins(add func(string, ...any)) {
 	if c.Scorer != nil && c.Scorer.Type == "" {
 		add("scorer: type is required")
 	}
+	if c.Lookup != nil && c.Lookup.Type == "" {
+		add("lookup: type is required")
+	}
 	if c.IXP != nil && c.IXP.Members != nil && c.IXP.Members.Type == "" {
 		add("ixp.members: type is required")
 	}

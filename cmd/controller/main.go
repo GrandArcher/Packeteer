@@ -191,6 +191,9 @@ func run(ctx context.Context, args []string, getenv func(string) string, stdout,
 			fmt.Fprintf(stdout, "ixp routeservers: %s (read-only, never announces)\n", cfg.IXP.RouteServers.Type)
 		}
 	}
+	if cfg.Lookup != nil {
+		fmt.Fprintf(stdout, "lookup: %s (read-only, never announces)\n", cfg.Lookup.Type)
+	}
 	fmt.Fprintf(stdout, "max_improvements: %d\n", *cfg.MaxImprovements)
 	fmt.Fprintf(stdout, "providers (%d):\n", len(cfg.Providers))
 	for _, p := range cfg.Providers {
@@ -633,6 +636,7 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 	col.SetExchangeHealth(ixHealth)
 	wireSuggestions(cfg, httpSrv, view)
 	wireMitigationCandidates(httpSrv, mit, view)
+	wireLookup(plugins, httpSrv)
 	wireIXPMembers(plugins, httpSrv, dispatch.Emit)
 	wireIXPFabric(cfg, plugins, httpSrv)
 	wireIXPRouteServers(plugins, httpSrv, dispatch.Emit)
