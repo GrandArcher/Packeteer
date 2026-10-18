@@ -95,7 +95,7 @@ function renderSearch(data) {
       searchCell(searchLinks("", r.asn))];
   });
   searchGroup(root, "search-measured", "Measured prefixes", "No measured prefix matches.", data.measured,
-    ["Prefix", "Match", "Origin", "Current", inject ? "Steered to" : "Recommended", "Last probe", "Open"], function (r) {
+    ["Prefix", "Match", "Origin", inject ? "Current" : "Traffic now (router)", inject ? "Steered to" : "Packeteer recommends", "Last probe", "Open"], function (r) {
       return [searchPrefixCell(r.prefix), searchCell(r.relation || "origin"), searchCell(searchAS(r.origin_asn)), searchCell(r.current),
         searchCell(r.recommended), searchCell(r.probed ? fmtTime(r.probed) : "—"), searchCell(searchLinks(r.prefix))];
     });

@@ -23,6 +23,7 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 
 ### Fixed
 
+- Observe and suggest: pages show "Traffic now (router)" (learned path) and "Packeteer recommends"; events read "Recommends moving X from A to B (not announced, observe mode)", not "steered" (#346).
 - BMP exchange peer monitor: a stats report no longer marks a peer up, state is kept per router and peer, and an unknown peer-down reason reads `unknown reason N` (#338).
 - Fabric probes read Can Ping from the customers document (`use` ping templates, GET /admin/api/v4/nagios/customers/{vlan}/4|6) and skip a manager export with no successful list (#162).
 - Fabric probes stop using a Can Ping list older than three intervals after failed fetches, so opted-out members are not pinged (#336).

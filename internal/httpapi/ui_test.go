@@ -605,7 +605,7 @@ func TestUIPages(t *testing.T) {
 }
 
 func TestDecisionWeightInSnapshot(t *testing.T) {
-	out := assembleDecisions([]policy.Decision{{Prefix: netip.MustParsePrefix("203.0.113.0/24"), Action: policy.ActionImprove, Weight: 530}})
+	out := assembleDecisions("inject", []policy.Decision{{Prefix: netip.MustParsePrefix("203.0.113.0/24"), Action: policy.ActionImprove, Weight: 530}})
 	if len(out) != 1 || out[0].Weight != 530 {
 		t.Fatalf("decisions = %+v", out)
 	}
@@ -715,7 +715,7 @@ func TestHeterogeneousInSnapshot(t *testing.T) {
 			{Prefix: netip.MustParsePrefix("198.51.100.0/26"), Weight: 600, Best: "a", Candidates: []policy.Candidate{{Provider: "a", Score: 10, Usable: true}}},
 			{Prefix: netip.MustParsePrefix("198.51.100.192/26"), Weight: 400, Best: "b", Candidates: []policy.Candidate{{Provider: "b", Score: 12, Usable: true}}},
 		}}
-	out := assembleDecisions([]policy.Decision{d})
+	out := assembleDecisions("inject", []policy.Decision{d})
 	if len(out) != 1 || !out[0].Heterogeneous || len(out[0].Subranges) != 2 || out[0].Subranges[1].Best != "b" {
 		t.Fatalf("decisions = %+v", out)
 	}
@@ -725,7 +725,7 @@ func TestHeterogeneousInSnapshot(t *testing.T) {
 			t.Fatalf("json missing %s: %s", want, raw)
 		}
 	}
-	plain, _ := json.Marshal(assembleDecisions([]policy.Decision{{Prefix: wide, Action: policy.ActionNone}})[0])
+	plain, _ := json.Marshal(assembleDecisions("inject", []policy.Decision{{Prefix: wide, Action: policy.ActionNone}})[0])
 	if strings.Contains(string(plain), "heterogeneous") || strings.Contains(string(plain), "subranges") {
 		t.Fatalf("plain decision json = %s", plain)
 	}

@@ -1,0 +1,67 @@
+{
+ "version": "fixture",
+ "mode": "observe",
+ "ready": true,
+ "generated_at": "2026-10-17T12:00:00Z",
+ "prefixes": [
+  {
+   "prefix": "198.51.100.0/24",
+   "native": "lab-a",
+   "current": "lab-a",
+   "recommended": "lab-b",
+   "action": "improve",
+   "reason": "lab-b beats lab-a on loss",
+   "in_rib": true,
+   "next_hop": "192.0.2.1",
+   "rib_provider": "lab-a",
+   "probes": [
+    {
+     "provider": "lab-a",
+     "prefix": "198.51.100.0/24",
+     "prober": "icmp",
+     "ok": true,
+     "loss_pct": 2.0,
+     "rtt_min_ms": 19.0,
+     "rtt_avg_ms": 21.0,
+     "rtt_max_ms": 24.0,
+     "jitter_ms": 1.5,
+     "sent": 10,
+     "received": 10
+    },
+    {
+     "provider": "lab-b",
+     "prefix": "198.51.100.0/24",
+     "prober": "icmp",
+     "ok": true,
+     "loss_pct": 0.0,
+     "rtt_min_ms": 8.0,
+     "rtt_avg_ms": 10.0,
+     "rtt_max_ms": 12.0,
+     "jitter_ms": 0.5,
+     "sent": 10,
+     "received": 10
+    }
+   ],
+   "exit_loss_pct": 2.0,
+   "exit_rtt_ms": 21.0,
+   "paths": [
+    {
+     "provider": "lab-a",
+     "next_hop": "192.0.2.1",
+     "as_path": [
+      64496,
+      64501
+     ],
+     "selected": true,
+     "via": "bilateral"
+    }
+   ],
+   "gain": 12.0
+  }
+ ],
+ "total": 1,
+ "measured": 1,
+ "offset": 0,
+ "limit": 100,
+ "asn_map": []
+}

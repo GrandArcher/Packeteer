@@ -209,6 +209,13 @@ function renderProviders(data) {
   root.appendChild(pt);
 }
 
+// exitLabels names the two exits of a prefix. Only inject moves traffic to
+// the engine's choice; elsewhere the router keeps its learned path (#346).
+function exitLabels() {
+  if (lastProviders && lastProviders.mode === "inject") return {now: "Current", pick: "Recommended"};
+  return {now: "Traffic now (router)", pick: "Packeteer recommends"};
+}
+
 // prefixCard is the per-prefix card: exits, per-provider probes, measured
 // sub-ranges, and learned paths. Used by the expandable rows of the Prefixes
 // page and by the prefix page.
@@ -217,9 +224,10 @@ function prefixCard(row) {
   var head = el("div", "card-head");
   head.appendChild(el("h3", "mono", row.prefix));
   var exits = el("p", "exits");
-  exits.appendChild(el("span", "k", "Current"));
+  var labels = exitLabels();
+  exits.appendChild(el("span", "k", labels.now));
   exits.appendChild(el("span", "v", row.current || "—"));
-  exits.appendChild(el("span", "k", "Recommended"));
+  exits.appendChild(el("span", "k", labels.pick));
   var differs = row.recommended && row.recommended !== row.current;
   exits.appendChild(el("span", differs ? "v diff" : "v", row.recommended || "—"));
   head.appendChild(exits);
