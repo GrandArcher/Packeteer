@@ -80,6 +80,13 @@ func keySecret(key string) string {
 	return key[len(keyPrefix)+identLen+1 : keyLen-crcLen]
 }
 
+// Redact removes the key and its secret from a message. A redirect or a
+// transport error can echo the request, and the secret must not be stored
+// on a view. The fabric prober uses the same rule for its Can Ping fetch.
+func Redact(msg, key string) string {
+	return redact(msg, key)
+}
+
 // redact removes the key and its secret from a message. A redirect or a
 // transport error can echo the request, and the secret must not be stored
 // on the view.

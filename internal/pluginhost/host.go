@@ -43,6 +43,9 @@ type Set struct {
 	// IXPMembers imports an IX-F member list (#161). It never announces
 	// and it is not a RIB source.
 	IXPMembers *Instance[plugin.MemberSource]
+	// IXPFabric probes member LAN addresses from ixp.vantages (#162).
+	// It is not a provider, not an input to Decide, and it never announces.
+	IXPFabric *Instance[plugin.FabricProbe]
 	// RIBSources feed the RIB view (BMP). They never announce.
 	RIBSources []Instance[plugin.RIBSource]
 	// Federation is the multi-POP transport (#30). It never announces.
@@ -176,6 +179,11 @@ func Build(cfg *config.Config, opts Options) (*Set, error) {
 			s.IXPMembers = &b[0]
 		}
 	}
+	if cfg.IXP != nil && cfg.IXP.Fabric != nil {
+		if b := build(plugin.FabricProbes, "ixp.fabric", []config.PluginSpec{*cfg.IXP.Fabric}, base, &errs); len(b) == 1 {
+			s.IXPFabric = &b[0]
+		}
+	}
 	if err := errors.Join(errs...); err != nil {
 		return nil, err
 	}
@@ -252,6 +260,11 @@ func (s *Set) all() []namedLifecycle {
 	}
 	if s.IXPMembers != nil {
 		add(plugin.KindMemberSource, s.IXPMembers.Name, s.IXPMembers.Plugin)
+	}
+	// After the member source, so the first round can see a fetch that
+	// has started. Stopped before it. Nothing here announces.
+	if s.IXPFabric != nil {
+		add(plugin.KindFabric, s.IXPFabric.Name, s.IXPFabric.Plugin)
 	}
 	// Before the announcers, so it stops after them. The core withdraws
 	// and resigns before any plugin stops.
