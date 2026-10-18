@@ -148,7 +148,7 @@ While the streak is short and this evaluation compared the paths, that prefix is
 | Key | Required | Meaning |
 |---|---|---|
 | `name` | yes | Unique. |
-| `source_ip` | yes, except in another domain | Source address of probes. Unique across providers. Must be configured on the host. Same address family as `next_hop`. Must be empty for a provider in another `domain`. |
+| `source_ip` | yes, except in another domain | Source address of probes. Unique across providers unless every provider on it sets a distinct `fwmark` or `dscp`. Must be configured on the host. Same address family as `next_hop`. Must be empty for a provider in another `domain`. |
 | `next_hop` | yes | BGP next hop used if this provider is selected. Also how a learned route is matched to a provider. For a provider in another domain, the address this POP's routers reach that POP's exit at across the backbone. |
 | `local_pref` | no | Local preference on routes steered to this provider (#132). Wins over `local_pref_cause` and the global `local_pref`. Omit it to use those. `0` is rejected in every mode. Set it above the edge's native local preference. |
 | `communities` | no | Extra communities on routes steered to this provider (#132), added after the cause's. The export policy does not match them. The same rules as [`communities_cause`](#communities_cause): at most 16, standard or large, no duplicates, not `packeteer_community`, and no `0:x` or `65535:x`. Omit it for none. An unknown provider name is rejected. Changing it requires a restart. |
@@ -161,6 +161,8 @@ While the streak is short and this evaluation compared the paths, that prefix is
 | `bmp` | no | How this provider uses paths from `rib_sources` (BMP): `off` (default), `prefer`, or `only`. `prefer` and `only` need a `rib_sources` entry. See [RIB source `bmp`](#rib-source-bmp). |
 | `add_path` | no | `true`: apply the route check to this provider from the iBGP add-path paths. Needs a `bgp.neighbors` entry with `add_path: true`. Not allowed with `bmp: only`. See [Add-path](#add-path). |
 | `path_check` | no | First-hop probe-path check (#150). `true` or omitted checks; `false` opts out. See [`probe.path_check`](#probepath_check). |
+| `fwmark` | no | Linux fwmark set on this provider's probe sockets (#157), so providers can share a `source_ip`. 0 or omitted: no mark. Needs `--cap-add NET_ADMIN`; without it the provider is down. Unique per `source_ip`. |
+| `dscp` | no | DSCP, 1-63, set on this provider's probe packets (#157). 0 or omitted: none. Unique per `source_ip`. Must be empty for a provider in another `domain`, like `fwmark`. See [policy-routing.md](policy-routing.md#many-providers-on-one-source_ip). |
 
 ### `allowlist`
 
@@ -448,10 +450,11 @@ Each peer:
 | `name` | yes | Provider name, unique across providers and peers. |
 | `asn` | yes | The peer's AS: the first AS on the paths it advertises (a route server is transparent). |
 | `next_hop` | yes | The peer's address on the peering LAN. Unique across providers. |
-| `source_ip` | yes | Probe source for this peer, unique like any provider's. The host (or router) must route traffic from it to this peer's `next_hop` ([policy-routing.md](policy-routing.md)). |
+| `source_ip` | yes | Probe source for this peer. Unique like any provider's, or shared with other peers that each set a distinct `fwmark` or `dscp`. The host (or router) must route traffic from it to this peer's `next_hop` ([policy-routing.md](policy-routing.md)). |
 | `exclude`, `precedence`, `cost` | no | As on providers. |
 | `max_prefix` | no | The router's `maximum-prefix` limit on this peer's session, when known. 0 (default) disables the `exchange.max_prefix` warning. Read-only: Packeteer never sets or changes it. |
 | `path_check` | no | First-hop probe-path check (#150), as on providers. `false` opts the peer out. |
+| `fwmark`, `dscp` | no | Probe tag (#157), as on providers. Hundreds of peers can share one `source_ip` with `fwmark` on a Linux probe host; `dscp` allows 63 per source, which is the limit behind a router. |
 
 `port` (#151):
 

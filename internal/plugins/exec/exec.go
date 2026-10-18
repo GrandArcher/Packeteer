@@ -290,6 +290,10 @@ type probeParams struct {
 	Target    string `json:"target"`
 	Count     int    `json:"count"`
 	TimeoutMs int64  `json:"timeout_ms"`
+	// Mark and DSCP are set only for a provider that shares its source
+	// (#157); the plugin must tag its packets or fail the probe.
+	Mark uint32 `json:"mark,omitempty"`
+	DSCP uint8  `json:"dscp,omitempty"`
 }
 
 type probeResult struct {
@@ -301,7 +305,7 @@ type probeResult struct {
 func (p *Prober) Probe(ctx context.Context, req plugin.ProbeRequest) (plugin.ProbeResult, error) {
 	var res probeResult
 	err := p.r.call(ctx, "probe", probeParams{Provider: req.Provider, Source: req.Source.String(),
-		Target: req.Target.String(), Count: req.Count, TimeoutMs: req.Timeout.Milliseconds()}, &res)
+		Target: req.Target.String(), Count: req.Count, TimeoutMs: req.Timeout.Milliseconds(), Mark: req.Mark, DSCP: req.DSCP}, &res)
 	if err != nil {
 		return plugin.ProbeResult{}, err
 	}

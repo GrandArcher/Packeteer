@@ -10,6 +10,7 @@ import (
 	"net/netip"
 	"time"
 
+	"github.com/GrandArcher/Packeteer/internal/sockmark"
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
 	"golang.org/x/sys/unix"
 )
@@ -50,6 +51,9 @@ func (udpHopper) Probe(ctx context.Context, src, dst netip.Addr, ttl, port int, 
 		}
 	}
 	v6 := !dst.Is4()
+	if err := sockmark.Apply(fd, v6, sockmark.FromContext(ctx)); err != nil {
+		return netip.Addr{}, false, fmt.Errorf("%w: %s: %v", plugin.ErrSourceUnavailable, src, err)
+	}
 	if v6 {
 		if err := unix.SetsockoptInt(fd, unix.IPPROTO_IPV6, unix.IPV6_RECVERR, 1); err != nil {
 			return netip.Addr{}, false, err

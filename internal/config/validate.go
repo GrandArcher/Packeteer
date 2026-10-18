@@ -13,6 +13,7 @@ import (
 
 	"github.com/GrandArcher/Packeteer/internal/exchange"
 	"github.com/GrandArcher/Packeteer/internal/netpfx"
+	"github.com/GrandArcher/Packeteer/internal/sockmark"
 )
 
 // Validate checks the config and returns all problems found, joined.
@@ -131,7 +132,7 @@ func (c *Config) validateProviders(add func(string, ...any)) {
 		add("providers: at least one provider is required")
 	}
 	names := map[string]bool{}
-	sources := map[netip.Addr]bool{}
+	sources := map[netip.Addr]*sharedSource{}
 	for i, p := range c.Providers {
 		label := fmt.Sprintf("providers[%d]", i)
 		if p.Name == "" {
@@ -148,17 +149,20 @@ func (c *Config) validateProviders(add func(string, ...any)) {
 		}
 		var src netip.Addr
 		var err error
+		if p.DSCP < 0 || p.DSCP > sockmark.MaxDSCP {
+			add("%s: dscp %d must be between 0 and %d", label, p.DSCP, sockmark.MaxDSCP)
+		}
 		if c.Remote(p) {
 			if p.SourceIP != "" {
 				add("%s: source_ip must be empty for a provider in domain %s (the peer there measures it)", label, p.Domain)
 			}
+			if p.FwMark != 0 || p.DSCP != 0 {
+				add("%s: fwmark and dscp must be empty for a provider in domain %s (the peer there measures it)", label, p.Domain)
+			}
 		} else if src, err = netip.ParseAddr(p.SourceIP); err != nil {
 			add("%s: source_ip %q is not a valid IP address", label, p.SourceIP)
 		} else {
-			if sources[src] {
-				add("%s: duplicate source_ip %s", label, src)
-			}
-			sources[src] = true
+			sources[src] = sources[src].admit(src, p, label, add)
 		}
 		nh, err := netip.ParseAddr(p.NextHop)
 		if err != nil {
@@ -193,6 +197,35 @@ func (c *Config) validateProviders(add func(string, ...any)) {
 			}
 		}
 	}
+}
+
+// sharedSource tracks the providers on one source_ip (#157). Providers may
+// share it only when each sets fwmark or dscp and no two use the same one,
+// so policy routing can tell them apart.
+type sharedSource struct {
+	untagged bool // a provider on the source sets neither fwmark nor dscp
+	marks    map[uint32]string
+	dscps    map[int]string
+}
+
+// admit records p on its source and reports what makes the share
+// ambiguous. A nil receiver is the first provider on the source.
+func (s *sharedSource) admit(src netip.Addr, p Provider, label string, add func(string, ...any)) *sharedSource {
+	tagged := p.FwMark != 0 || p.DSCP != 0
+	if s == nil {
+		s = &sharedSource{marks: map[uint32]string{}, dscps: map[int]string{}}
+	} else if s.untagged || !tagged {
+		add("%s: duplicate source_ip %s (providers may share one only when each sets fwmark or dscp)", label, src)
+	}
+	s.untagged = s.untagged || !tagged
+	if other, dup := s.marks[p.FwMark]; dup && p.FwMark != 0 {
+		add("%s: fwmark %d is already used by %s on source_ip %s", label, p.FwMark, other, src)
+	}
+	if other, dup := s.dscps[p.DSCP]; dup && p.DSCP != 0 {
+		add("%s: dscp %d is already used by %s on source_ip %s", label, p.DSCP, other, src)
+	}
+	s.marks[p.FwMark], s.dscps[p.DSCP] = p.Name, p.Name
+	return s
 }
 
 // validateAllowlist checks allowlist prefixes.

@@ -7,6 +7,7 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 ### Added
 
 - Route-server signals: spikes in RPKI-invalid, IRR, and transit-free-ASN filtering, new origins, more-specific bursts, and RFC 7999 blackhole counts per member; GET only (#165).
+- Probe multiplexing: providers and exchange peers may share one `source_ip` with a distinct `fwmark` or `dscp`; `packeteer -pbr <format>` prints Linux and router PBR config, never applies it (#157).
 - Shared IX port: `exchanges[].port` (capacity, commit, flat `port_cost`) on one telemetry binding; the commit and cost scorers plan no move past its capacity or commit (#151).
 - Fabric incident correlation: fabric probes grouped by switch, colo, and bundle; `ixp.fabric_degraded` vs `ixp.member_degraded` events; `GET /api/ixp/correlation`; nothing announced (#163).
 - Settings form uses guided inputs: a number and a unit, one prefix or address per row, dropdowns that stay free text when no list is known (#329).

@@ -12,6 +12,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/GrandArcher/Packeteer/internal/sockmark"
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
 	"golang.org/x/sys/unix"
 )
@@ -20,10 +21,10 @@ import (
 // An ICMP destination-unreachable counts only when the error-queue
 // offender is the target. Anything else, including icmp-port-unreachable
 // from a firewall, is loss. A missing source address fails closed.
-func onePacket(ctx context.Context, network string, laddr, raddr *net.UDPAddr, timeout time.Duration, start time.Time) (time.Duration, bool, error) {
-	c, err := net.DialUDP(network, laddr, raddr)
+func onePacket(ctx context.Context, network string, laddr, raddr *net.UDPAddr, m sockmark.Marking, timeout time.Duration, start time.Time) (time.Duration, bool, error) {
+	c, err := dialUDP(ctx, network, laddr, raddr, m)
 	if err != nil {
-		if errors.Is(err, syscall.EADDRNOTAVAIL) {
+		if errors.Is(err, syscall.EADDRNOTAVAIL) || errors.Is(err, sockmark.ErrTag) {
 			return 0, false, fmt.Errorf("%w: %s: %v", plugin.ErrSourceUnavailable, laddr.IP, err)
 		}
 		return 0, false, nil

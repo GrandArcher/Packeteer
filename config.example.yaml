@@ -92,6 +92,8 @@ providers:
     # bmp: prefer             # off (default), prefer, or only: use this provider's BMP paths (rib_sources)
     # path_check: false       # opt out of the TTL-1 first-hop check (#150), e.g. next_hop is across another router
     # add_path: true          # route check from iBGP add-path paths (needs a neighbor with add_path)
+    # fwmark: 101             # share source_ip with other providers: tag probes with a Linux fwmark and/or
+    # dscp: 10                #   a DSCP (1-63), distinct per source_ip. `packeteer -pbr linux` prints the routing for it (#157)
 
 allowlist:
   prefixes: []
@@ -296,6 +298,7 @@ scorer:
 #         # Router maximum-prefix limit on this session, when known. Read-only.
 #         max_prefix: 100000
 #         # path_check: false  # opt out of the TTL-1 first-hop check (#150)
+#         # dscp: 10           # share source_ip with other peers; distinct per source_ip (#157)
 
 # Injection (used only when mode: inject). local_pref is the default on
 # every injected route and should beat the edge's native local preference.

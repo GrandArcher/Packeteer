@@ -26,6 +26,7 @@ import (
 	"github.com/GrandArcher/Packeteer/internal/netpfx"
 	"github.com/GrandArcher/Packeteer/internal/probe"
 	"github.com/GrandArcher/Packeteer/internal/rib"
+	"github.com/GrandArcher/Packeteer/internal/sockmark"
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
 )
 
@@ -471,7 +472,7 @@ func (t *Tools) waitPacket(ctx context.Context) error {
 
 func (t *Tools) probeOne(ctx context.Context, p probe.Provider, target netip.Addr) probe.Result {
 	res := probe.Result{Provider: p.Name, Prefix: netip.PrefixFrom(target, target.BitLen()), Target: target}
-	req := plugin.ProbeRequest{Provider: p.Name, Source: p.Source, Target: target, Count: t.opt.Packets, Timeout: t.opt.Timeout}
+	req := p.Request(target, t.opt.Packets, t.opt.Timeout)
 	var errs []error
 	for _, pr := range t.opt.Probers {
 		pctx, cancel := context.WithTimeout(ctx, time.Duration(t.opt.Packets)*t.opt.Timeout+time.Second)
@@ -684,7 +685,7 @@ func (t *Tools) traceOne(ctx context.Context, p probe.Provider, target netip.Add
 			return tr
 		}
 		start := time.Now()
-		from, reached, err := t.opt.Hop(ctx, p.Source, target, ttl, tracePort+ttl-1, t.opt.Timeout)
+		from, reached, err := t.opt.Hop(sockmark.WithContext(ctx, p.Marking), p.Source, target, ttl, tracePort+ttl-1, t.opt.Timeout)
 		h := TraceHop{TTL: ttl}
 		if err != nil {
 			if errors.Is(err, plugin.ErrSourceUnavailable) {
