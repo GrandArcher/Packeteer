@@ -4,7 +4,7 @@ go 1.26.0
 
 require (
 	github.com/coreos/go-oidc/v3 v3.21.0
-	github.com/go-jose/go-jose/v4 v4.1.5
+	github.com/go-jose/go-jose/v4 v4.1.6
 	github.com/gosnmp/gosnmp v1.45.0
 	github.com/oschwald/maxminddb-golang/v2 v2.7.0
 	github.com/osrg/gobgp/v3 v3.37.0
