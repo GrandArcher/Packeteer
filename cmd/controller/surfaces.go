@@ -25,6 +25,9 @@ func wireExchanges(ctx context.Context, cfg *config.Config, col *httpapi.Collect
 	var exs []exchange.Exchange
 	for _, ex := range cfg.Exchanges {
 		e := exchange.Exchange{Name: ex.Name, LANs: ex.ExchangeLANs()}
+		if pt := ex.Port; pt != nil {
+			e.Port = &exchange.PortConfig{CapacityMbps: pt.CapacityMbps, CommitMbps: pt.CommitMbps, PortCost: pt.PortCost}
+		}
 		for _, p := range ex.Peers {
 			nh, err := netip.ParseAddr(p.NextHop)
 			if err != nil {

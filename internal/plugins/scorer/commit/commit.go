@@ -15,7 +15,9 @@
 // (lower is preferred) orders destinations ahead of spare capacity and ahead
 // of sharing a group. The highest precedence is used only when every lower
 // precedence lacks room. Balance moves are the ones that stay inside the
-// group. Plan does not announce.
+// group. Peers of an exchange port (#151) draw from one port: a move onto one
+// is allowed only while the port stays inside its capacity and commit, and a
+// port with no fresh reading takes none. Plan does not announce.
 package commit
 
 import (
@@ -25,6 +27,7 @@ import (
 	"time"
 
 	"github.com/GrandArcher/Packeteer/internal/netpfx"
+	"github.com/GrandArcher/Packeteer/internal/plugins/scorer/ports"
 	"github.com/GrandArcher/Packeteer/internal/plugins/scorer/weights"
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
 )
@@ -41,8 +44,7 @@ const (
 	// preferred, so an explicit last-resort provider sets a higher number.
 	defaultPrecedence = 100
 	defaultSlack      = 0.10
-	defaultMaxAge     = 15 * time.Minute
-	maxFutureSkew     = time.Minute
+	defaultMaxAge     = ports.DefaultMaxAge
 
 	balanceOff          = "off"
 	balanceEqual        = "equal"
@@ -171,6 +173,30 @@ type live struct {
 	have      bool
 	projected float64
 	target    float64
+	// onPort marks an exchange peer. Its room is the shared port's, kept
+	// in led, not a commit of its own.
+	onPort bool
+	led    *ports.Ledger
+}
+
+// eligible reports whether the provider can receive commit traffic at all.
+func (p *live) eligible() bool {
+	if !p.up || p.cc || p.excluded {
+		return false
+	}
+	if p.onPort {
+		_, ok := p.led.Headroom(p.name)
+		return ok
+	}
+	return p.have && p.commit > 0
+}
+
+func (p *live) headroom() float64 {
+	if p.onPort {
+		h, _ := p.led.Headroom(p.name)
+		return h
+	}
+	return p.commit - p.projected
 }
 
 type placed struct {
@@ -181,6 +207,7 @@ type placed struct {
 // Plan implements plugin.Planner.
 func (s *Scorer) Plan(in plugin.PlanInput) []plugin.PlanMove {
 	provs := map[string]*live{}
+	led := ports.New(in, s.maxAge)
 	var order []string
 	for _, p := range in.Providers {
 		if p.Name == "" {
@@ -192,6 +219,7 @@ func (s *Scorer) Plan(in plugin.PlanInput) []plugin.PlanMove {
 		lv := &live{
 			name: p.Name, group: p.Group, prec: p.Precedence,
 			cc: p.CCDisable, excluded: p.Excluded, up: p.Up,
+			onPort: led.OnPort(p.Name), led: led,
 		}
 		if lv.prec <= 0 {
 			lv.prec = defaultPrecedence
@@ -218,7 +246,7 @@ func (s *Scorer) Plan(in plugin.PlanInput) []plugin.PlanMove {
 		if px.Locked {
 			// Performance already claimed this volume. Count it on the
 			// provider it is moving to, and do not commit-steer it.
-			shiftLocked(provs, px)
+			shiftLocked(provs, led, px)
 			continue
 		}
 		if px.VolumeMbps < s.minMbps || px.VolumeMbps <= mbpsEps {
@@ -238,6 +266,7 @@ func (s *Scorer) Plan(in plugin.PlanInput) []plugin.PlanMove {
 			if nat := provs[px.Native]; nat != nil && nat.have {
 				nat.projected += px.VolumeMbps
 			}
+			led.Move(px.Current, px.Native, px.VolumeMbps)
 			base = px.Native
 		}
 		if base == "" {
@@ -268,14 +297,10 @@ func (s *Scorer) fresh(u plugin.Usage, now time.Time) bool {
 	if _, ok := u.BillableMbps(); !ok {
 		return false
 	}
-	if u.Updated.IsZero() || s.maxAge <= 0 || now.IsZero() {
-		return true
-	}
 	// The decision clock is read before telemetry is snapshotted, so a row
 	// read in the same round is stamped slightly after now. A row further
-	// ahead than maxFutureSkew is a bad clock and is not fresh.
-	age := now.Sub(u.Updated)
-	return age >= -maxFutureSkew && age <= s.maxAge
+	// ahead than the skew limit is a bad clock and is not fresh.
+	return ports.Fresh(u.Updated, now, s.maxAge)
 }
 
 // relieve moves prefixes off providers whose projected usage is over commit.
@@ -353,7 +378,7 @@ func (s *Scorer) balanceGroups(provs map[string]*live, prefs []placed, moved map
 func (s *Scorer) balanceSet(members []*live) ([]*live, bool) {
 	var active []*live
 	for _, m := range members {
-		if m.cc || m.excluded {
+		if m.cc || m.excluded || m.onPort {
 			continue
 		}
 		if !m.up || !m.have || m.commit <= 0 {
@@ -479,8 +504,7 @@ func betterDest(a, b *live) bool {
 	if a.prec != b.prec {
 		return a.prec < b.prec
 	}
-	ha := a.commit - a.projected
-	hb := b.commit - b.projected
+	ha, hb := a.headroom(), b.headroom()
 	if !within(ha, hb) {
 		return ha > hb
 	}
@@ -491,13 +515,17 @@ func (s *Scorer) canTake(dst, src *live, pf *placed, sameGroup bool) bool {
 	if dst == nil || src == nil || dst.name == src.name {
 		return false
 	}
-	if !dst.up || !dst.have || dst.cc || dst.excluded || dst.commit <= 0 {
+	if !dst.eligible() {
 		return false
 	}
 	if sameGroup && (src.group == "" || dst.group != src.group) {
 		return false
 	}
-	if dst.projected+pf.VolumeMbps > dst.commit+mbpsEps {
+	if dst.onPort {
+		if sameGroup || !dst.led.Allows(src.name, dst.name, pf.VolumeMbps) {
+			return false
+		}
+	} else if dst.projected+pf.VolumeMbps > dst.commit+mbpsEps {
 		return false
 	}
 	if sameGroup && dst.projected+pf.VolumeMbps >= src.projected-pf.VolumeMbps-mbpsEps {
@@ -538,6 +566,7 @@ func (s *Scorer) apply(src, dst *live, pf *placed, balancing bool, moved map[net
 		src.projected = 0
 	}
 	dst.projected += vol
+	dst.led.Move(src.name, dst.name, vol)
 	pf.base = dst.name
 	moved[pf.Prefix] = true
 	reason := fmt.Sprintf("commit: %s %.1f/%.1f Mbps, move %.1f Mbps to %s", src.name, before, src.commit, vol, dst.name)
@@ -552,7 +581,7 @@ func (s *Scorer) apply(src, dst *live, pf *placed, balancing bool, moved map[net
 // shiftLocked moves a performance steer's volume off Native onto Current.
 // The 95th still has that traffic on Native. Leaving it there makes commit
 // control move the same traffic a second time.
-func shiftLocked(provs map[string]*live, px plugin.PlanPrefix) {
+func shiftLocked(provs map[string]*live, led *ports.Ledger, px plugin.PlanPrefix) {
 	if px.VolumeMbps <= mbpsEps {
 		return
 	}
@@ -569,6 +598,7 @@ func shiftLocked(provs map[string]*live, px plugin.PlanPrefix) {
 	if dst := provs[to]; dst != nil && dst.have {
 		dst.projected += px.VolumeMbps
 	}
+	led.Move(from, to, px.VolumeMbps)
 }
 
 func heaviestOver(provs map[string]*live, skip map[string]bool) (*live, float64) {
@@ -619,7 +649,7 @@ func heaviestImbalance(active []*live, skip map[string]bool, slack float64) *liv
 func lastResort(provs map[string]*live) (int, bool) {
 	minP, maxP, n := 0, 0, 0
 	for _, p := range provs {
-		if !p.up || !p.have || p.cc || p.excluded || p.commit <= 0 {
+		if !p.eligible() {
 			continue
 		}
 		if n == 0 || p.prec < minP {

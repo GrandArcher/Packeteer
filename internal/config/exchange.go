@@ -21,9 +21,13 @@ func (c *Config) expandExchanges() {
 	for _, ex := range c.Exchanges {
 		bmp := strings.ToLower(strings.TrimSpace(ex.BMP))
 		for _, p := range ex.Peers {
+			cost := p.Cost
+			if ex.Port != nil && ex.Port.PortCost != nil {
+				cost = new(float64)
+			}
 			c.Providers = append(c.Providers, Provider{
 				Name: p.Name, SourceIP: p.SourceIP, NextHop: p.NextHop, Exclude: p.Exclude,
-				Group: ex.Group, Precedence: p.Precedence, Cost: p.Cost, BMP: ex.BMP,
+				Group: ex.Group, Precedence: p.Precedence, Cost: cost, BMP: ex.BMP,
 				PathCheck: p.PathCheck,
 				// The add-path route check reads the iBGP paths; with bmp
 				// only they are ignored, and BMP alone checks the peer.
@@ -128,6 +132,7 @@ func (c *Config) validateExchanges(add func(string, ...any)) {
 		if len(ex.Peers) == 0 {
 			add("%s: peers: at least one peer is required", label)
 		}
+		validateExchangePort(ex, label, add)
 		for j, p := range ex.Peers {
 			pl := fmt.Sprintf("%s: peers[%d]", label, j)
 			if p.Name != "" {
@@ -160,4 +165,31 @@ func (e Exchange) ExchangeLANs() []netip.Prefix {
 		}
 	}
 	return out
+}
+
+// maxPortMbps matches the snmp telemetry bound on a commit.
+const maxPortMbps = 1e8
+
+func validateExchangePort(ex Exchange, label string, add func(string, ...any)) {
+	pt := ex.Port
+	if pt == nil {
+		return
+	}
+	if !(pt.CapacityMbps > 0 && pt.CapacityMbps <= maxPortMbps) { // also rejects NaN
+		add("%s: port.capacity_mbps must be greater than 0 and at most %.0f", label, maxPortMbps)
+	}
+	if !(pt.CommitMbps >= 0 && pt.CommitMbps <= pt.CapacityMbps) {
+		add("%s: port.commit_mbps %v must be between 0 and capacity_mbps", label, pt.CommitMbps)
+	}
+	if pt.PortCost == nil {
+		return
+	}
+	if !(*pt.PortCost >= 0 && *pt.PortCost <= 1e9) {
+		add("%s: port.port_cost %v must be between 0 and 1000000000", label, *pt.PortCost)
+	}
+	for j, p := range ex.Peers {
+		if p.Cost != nil {
+			add("%s: peers[%d] (%s): cost conflicts with port.port_cost (the port fee is the cost; the peer's marginal cost is 0)", label, j, p.Name)
+		}
+	}
 }

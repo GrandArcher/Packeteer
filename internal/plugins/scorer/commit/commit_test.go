@@ -372,3 +372,99 @@ func TestReversibleCommitIsKeptUntilTheFigureDrops(t *testing.T) {
 		t.Fatalf("commit steer survived after the native provider could take it back: %+v", moves)
 	}
 }
+
+func portInput(commit, capacity float64, row plugin.Usage, have bool) plugin.PlanInput {
+	over := prov("a", "", 10, usage("a", 100, 150))
+	peerA := plugin.PlanProvider{Name: "ix-a", Up: true, Port: "ix"}
+	peerB := plugin.PlanProvider{Name: "ix-b", Up: true, Port: "ix"}
+	return plugin.PlanInput{
+		Now:       t0,
+		Providers: []plugin.PlanProvider{over, peerA, peerB},
+		Ports:     []plugin.PlanPort{{Name: "ix", CapacityMbps: capacity, CommitMbps: commit, Usage: row, HaveRow: have}},
+		Prefixes: []plugin.PlanPrefix{
+			prefix(p1, "a", 30, path("a", 0), path("ix-a", 0), path("ix-b", 0)),
+			prefix(p2, "a", 30, path("a", 0), path("ix-a", 0), path("ix-b", 0)),
+			prefix(p3, "a", 30, path("a", 0), path("ix-a", 0), path("ix-b", 0)),
+		},
+	}
+}
+
+func TestPortPeersShareOneCommitAndCapacity(t *testing.T) {
+	s := build(t, "")
+	// Provider a is 50 Mbps over its commit. The port has room for 60 under
+	// commit (500 of 560), so two 30 Mbps prefixes fit however the peers
+	// are chosen, and the third does not even though each peer looks empty.
+	in := portInput(560, 1000, usage("ix", 1, 500), true)
+	moves := s.Plan(in)
+	if len(moves) != 2 {
+		t.Fatalf("moves %+v, want exactly two (50 Mbps of relief fits in 60)", moves)
+	}
+	total := 0.0
+	for _, m := range moves {
+		if m.Provider != "ix-a" && m.Provider != "ix-b" {
+			t.Fatalf("move %+v is not onto a port peer", m)
+		}
+		total += m.ReliefMbps
+	}
+	if total > 60 {
+		t.Fatalf("planned %.0f Mbps onto a port with 60 Mbps of commit room", total)
+	}
+
+	// Capacity binds when there is no commit: 500 Mbps already flowing on
+	// a 520 Mbps port leaves room for none of the 30 Mbps prefixes.
+	if moves := s.Plan(portInput(0, 520, usage("ix", 1, 500), true)); len(moves) != 0 {
+		t.Fatalf("moves onto a port with 20 Mbps of capacity room: %+v", moves)
+	}
+	// The outbound rate counts too: the 95th is low but the port is busy now.
+	busy := usage("ix", 1, 100)
+	busy.OutMbps = 990
+	if moves := s.Plan(portInput(0, 1000, busy, true)); len(moves) != 0 {
+		t.Fatalf("moves onto a port that is nearly full right now: %+v", moves)
+	}
+}
+
+func TestPortWithoutAFreshReadingTakesNothing(t *testing.T) {
+	s := build(t, "")
+	stale := usage("ix", 1, 10)
+	stale.Updated = t0.Add(-time.Hour)
+	for name, in := range map[string]plugin.PlanInput{
+		"no row":    portInput(0, 1000, plugin.Usage{}, false),
+		"stale row": portInput(0, 1000, stale, true),
+	} {
+		if moves := s.Plan(in); len(moves) != 0 {
+			t.Errorf("%s: moves %+v onto a port whose headroom is unknown", name, moves)
+		}
+	}
+	// Control: the same input with a fresh reading does move.
+	if moves := s.Plan(portInput(0, 1000, usage("ix", 1, 10), true)); len(moves) == 0 {
+		t.Fatal("a fresh reading with room must allow the move")
+	}
+}
+
+func TestPortCountsAnActiveSteerOnce(t *testing.T) {
+	s := build(t, "")
+	in := portInput(560, 1000, usage("ix", 1, 500), true)
+	in.Providers[0] = prov("a", "", 10, usage("a", 100, 120))
+	// p1 is already steered to ix-a, so its 30 Mbps is in the port's 500.
+	in.Prefixes = []plugin.PlanPrefix{{
+		Prefix: p1, Native: "a", Current: "ix-a", VolumeMbps: 30, Reversible: true,
+		Paths: []plugin.PlanPath{path("a", 0), path("ix-a", 0)},
+	}}
+	got := movesTo(s.Plan(in))
+	if got[p1] != "ix-a" {
+		t.Fatalf("an active steer that still fits was dropped: %v", got)
+	}
+}
+
+func TestPortPeersAreNotBalancedAgainstEachOther(t *testing.T) {
+	s := build(t, "balance: equal")
+	in := portInput(0, 1000, usage("ix", 1, 10), true)
+	in.Providers[0] = prov("a", "", 10, usage("a", 1000, 10))
+	in.Providers[1].Group, in.Providers[2].Group = "g", "g"
+	for i := range in.Prefixes {
+		in.Prefixes[i].Native, in.Prefixes[i].Current = "ix-a", "ix-a"
+	}
+	if moves := s.Plan(in); len(moves) != 0 {
+		t.Fatalf("peers of one port were balanced: %+v", moves)
+	}
+}

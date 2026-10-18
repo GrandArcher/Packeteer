@@ -7,6 +7,7 @@ import (
 
 	"github.com/GrandArcher/Packeteer/internal/config"
 	"github.com/GrandArcher/Packeteer/internal/exchange"
+	"github.com/GrandArcher/Packeteer/internal/plugins/scorer/ports"
 	"github.com/GrandArcher/Packeteer/internal/policy"
 	"github.com/GrandArcher/Packeteer/internal/probe"
 	"github.com/GrandArcher/Packeteer/internal/rib"
@@ -203,6 +204,7 @@ func (c *Collector) Snapshot() Snapshot {
 			imps[im.Provider] = append(imps[im.Provider], exchange.Move{Prefix: im.Prefix.String(), Since: im.Since.UTC(), VolumeMbps: jsonFloat(im.VolumeMbps)})
 		}
 		in.Exchanges = exchange.Build(exs, nh, up, imps, health.Snapshot())
+		exchange.ApplyPorts(in.Exchanges, exs, in.Telemetry, in.At, ports.DefaultMaxAge)
 		if peerPrefix != nil {
 			counts := peerPrefix()
 			for i := range in.Exchanges {

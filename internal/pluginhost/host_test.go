@@ -3,6 +3,7 @@ package pluginhost
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -513,5 +514,40 @@ lookup:
 	cfg = load(t, "lookup:\n  type: nosuch\n")
 	if _, err := Build(cfg, Options{}); err == nil || !strings.Contains(err.Error(), `unknown lookup type "nosuch"`) {
 		t.Fatalf("err %v", err)
+	}
+}
+
+const portExchange = `
+exchanges:
+  - name: ix-lab
+    lans: [203.0.113.0/24]
+%s    peers:
+      - name: ix-peer-a
+        asn: 64501
+        next_hop: 203.0.113.11
+        source_ip: 192.0.2.31
+bgp:
+  neighbors:
+    - address: 192.0.2.254
+      add_path: true
+telemetry:
+  - type: fixed
+    config:
+      providers:
+        - {name: ix-lab, commit_mbps: 1, usage_mbps: 5}
+`
+
+func TestTelemetryBindsToAnExchangePort(t *testing.T) {
+	with := load(t, fmt.Sprintf(portExchange, "    port: {capacity_mbps: 1000}\n"))
+	s, err := Build(with, Options{})
+	if err != nil {
+		t.Fatalf("a binding named like an exchange with a port block was refused: %v", err)
+	}
+	if len(s.Telemetry) != 1 {
+		t.Fatalf("telemetry = %d", len(s.Telemetry))
+	}
+	without := load(t, fmt.Sprintf(portExchange, ""))
+	if _, err := Build(without, Options{}); err == nil || !strings.Contains(err.Error(), `provider "ix-lab" is not configured`) {
+		t.Fatalf("a binding with no port block: err = %v", err)
 	}
 }

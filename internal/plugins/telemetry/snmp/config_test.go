@@ -198,3 +198,19 @@ providers:
 		t.Fatalf("security = %#v", g.SecurityParameters)
 	}
 }
+
+func TestBindingMayBeAnExchangePort(t *testing.T) {
+	y := strings.Replace(baseYAML, "name: transit-a", "name: ix-lab", 1)
+	c, err := plugin.ConfigFromYAML(y)
+	if err != nil {
+		t.Fatal(err)
+	}
+	env := plugin.Env{Logger: discardLog(), Getenv: envOf(map[string]string{"PACKETEER_SNMP_COMMUNITY": "lab-community-value"}), Providers: []string{"transit-a"}}
+	if _, err := New(c, env); err == nil || !strings.Contains(err.Error(), `"ix-lab" is not a configured provider`) {
+		t.Fatalf("binding named like an unknown provider: err = %v", err)
+	}
+	env.Ports = []string{"ix-lab"}
+	if _, err := New(c, env); err != nil {
+		t.Fatalf("binding named like an exchange port: %v", err)
+	}
+}
