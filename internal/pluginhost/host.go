@@ -52,6 +52,9 @@ type Set struct {
 	// IXPRouteServers polls Birdseye on each route server (#164). It reads
 	// with GET only, keeps its own store, and never announces.
 	IXPRouteServers *Instance[plugin.RouteServerWatch]
+	// IXPCorrelate tells a fabric problem from a member problem (#163). It
+	// reads the fabric probe view only and never announces.
+	IXPCorrelate *Instance[plugin.FabricCorrelator]
 	// RIBSources feed the RIB view (BMP). They never announce.
 	RIBSources []Instance[plugin.RIBSource]
 	// Federation is the multi-POP transport (#30). It never announces.
@@ -194,6 +197,11 @@ func Build(cfg *config.Config, opts Options) (*Set, error) {
 			s.IXPRouteServers = &b[0]
 		}
 	}
+	if cfg.IXP != nil && cfg.IXP.Correlate != nil {
+		if b := build(plugin.FabricCorrelators, "ixp.correlate", []config.PluginSpec{*cfg.IXP.Correlate}, base, &errs); len(b) == 1 {
+			s.IXPCorrelate = &b[0]
+		}
+	}
 	if err := errors.Join(errs...); err != nil {
 		return nil, err
 	}
@@ -279,6 +287,10 @@ func (s *Set) all() []namedLifecycle {
 	// After the member source, for the same reason. Nothing here announces.
 	if s.IXPRouteServers != nil {
 		add(plugin.KindRouteServer, s.IXPRouteServers.Name, s.IXPRouteServers.Plugin)
+	}
+	// After the fabric prober, whose view it reads. Nothing here announces.
+	if s.IXPCorrelate != nil {
+		add(plugin.KindCorrelator, s.IXPCorrelate.Name, s.IXPCorrelate.Plugin)
 	}
 	// Before the announcers, so it stops after them. The core withdraws
 	// and resigns before any plugin stops.
@@ -424,7 +436,7 @@ func optionsEnv(cfg *config.Config, opts Options) plugin.Env {
 	if opts.PluginDir != "" {
 		dir = opts.PluginDir
 	}
-	return plugin.Env{Logger: opts.Logger, PluginDir: dir, Getenv: opts.Getenv, Providers: providerNames(cfg), ASN: asn, CheckOnly: opts.CheckOnly}
+	return plugin.Env{Logger: opts.Logger, PluginDir: dir, Getenv: opts.Getenv, Providers: providerNames(cfg), Ports: portNames(cfg), ASN: asn, CheckOnly: opts.CheckOnly}
 }
 
 // BuildSources constructs the named target sources. They are not started.
@@ -445,6 +457,19 @@ func BuildPolicies(cfg *config.Config, specs []config.PluginSpec, opts Options) 
 		return nil, err
 	}
 	return out, nil
+}
+
+func portNames(cfg *config.Config) []string {
+	if cfg == nil {
+		return nil
+	}
+	var out []string
+	for _, ex := range cfg.Exchanges {
+		if ex.Port != nil {
+			out = append(out, ex.Name)
+		}
+	}
+	return out
 }
 
 func providerNames(cfg *config.Config) []string {

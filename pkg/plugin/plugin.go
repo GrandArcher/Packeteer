@@ -79,6 +79,10 @@ type Env struct {
 	// asking for that check (unit tests). An empty non-nil slice rejects
 	// every name.
 	Providers []string
+	// Ports lists exchange names that have a port block (#151). A
+	// telemetry binding may use one of them as its name: the binding is
+	// the port's interface. Checked like Providers.
+	Ports []string
 	// ASN is the controller's own AS (config asn).
 	ASN uint32
 	// CheckOnly is set when the config is only being checked (the config
@@ -86,6 +90,16 @@ type Env struct {
 	// validate its config without starting a process, opening a
 	// connection, or writing a file.
 	CheckOnly bool
+}
+
+// BindingNames is the names a telemetry binding may use: the providers and
+// the exchanges with a port block. Nil when the caller did not ask for the
+// check (Providers is nil).
+func (e Env) BindingNames() []string {
+	if e.Providers == nil {
+		return nil
+	}
+	return append(append([]string{}, e.Providers...), e.Ports...)
 }
 
 // ---- Prober ----

@@ -215,3 +215,62 @@ func TestExchangeHealthErrors(t *testing.T) {
 		}
 	}
 }
+
+func TestExchangePort(t *testing.T) {
+	y := edit(t, exchangeYAML, "    group: ix\n", "    group: ix\n    port:\n      capacity_mbps: 10000\n      commit_mbps: 6000\n      port_cost: 1500\n")
+	cfg, err := Parse([]byte(y))
+	if err != nil {
+		t.Fatal(err)
+	}
+	pt := cfg.Exchanges[0].Port
+	if pt == nil || pt.CapacityMbps != 10000 || pt.CommitMbps != 6000 || pt.PortCost == nil || *pt.PortCost != 1500 {
+		t.Fatalf("port = %+v", pt)
+	}
+	for _, p := range cfg.Providers[1:] {
+		if p.Cost == nil || *p.Cost != 0 {
+			t.Fatalf("peer %s cost = %v, want marginal 0 under a flat port cost", p.Name, p.Cost)
+		}
+	}
+
+	// Without port_cost the peers keep their own price, and the port needs
+	// only a capacity.
+	y = edit(t, exchangeYAML, "    group: ix\n", "    group: ix\n    port:\n      capacity_mbps: 1000\n")
+	y = edit(t, y, "        asn: 64501\n", "        asn: 64501\n        cost: 3\n")
+	cfg, err = Parse([]byte(y))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c := cfg.Providers[1].Cost; c == nil || *c != 3 || cfg.Providers[2].Cost != nil {
+		t.Fatalf("peer costs = %v %v", cfg.Providers[1].Cost, cfg.Providers[2].Cost)
+	}
+	if cfg.Exchanges[0].Port.PortCost != nil || cfg.Exchanges[0].Port.CommitMbps != 0 {
+		t.Fatalf("port = %+v", cfg.Exchanges[0].Port)
+	}
+	cfg, err = Parse([]byte(exchangeYAML))
+	if err != nil || cfg.Exchanges[0].Port != nil {
+		t.Fatalf("no port block: %v %+v", err, cfg.Exchanges[0].Port)
+	}
+}
+
+func TestExchangePortErrors(t *testing.T) {
+	withPort := func(block string) string {
+		return edit(t, exchangeYAML, "    group: ix\n", "    group: ix\n    port:\n"+block)
+	}
+	cases := map[string]struct{ yaml, want string }{
+		"no capacity":         {withPort("      commit_mbps: 10\n"), "port.capacity_mbps must be greater than 0"},
+		"negative capacity":   {withPort("      capacity_mbps: -1\n"), "port.capacity_mbps must be greater than 0"},
+		"huge capacity":       {withPort("      capacity_mbps: 1e9\n"), "port.capacity_mbps must be greater than 0"},
+		"nan capacity":        {withPort("      capacity_mbps: .nan\n"), "port.capacity_mbps must be greater than 0"},
+		"negative commit":     {withPort("      capacity_mbps: 100\n      commit_mbps: -5\n"), "port.commit_mbps -5 must be between 0 and capacity_mbps"},
+		"commit over cap":     {withPort("      capacity_mbps: 100\n      commit_mbps: 101\n"), "port.commit_mbps 101 must be between 0 and capacity_mbps"},
+		"negative port cost":  {withPort("      capacity_mbps: 100\n      port_cost: -1\n"), "port.port_cost -1 must be between"},
+		"unknown port key":    {withPort("      capacity_mbps: 100\n      billing_day: 1\n"), "billing_day"},
+		"peer cost conflicts": {edit(t, withPort("      capacity_mbps: 100\n      port_cost: 10\n"), "        asn: 64501\n", "        asn: 64501\n        cost: 2\n"), "peers[0] (ix-peer-a): cost conflicts with port.port_cost"},
+	}
+	for name, tc := range cases {
+		_, err := Parse([]byte(tc.yaml))
+		if err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("%s: err = %v, want %q", name, err, tc.want)
+		}
+	}
+}

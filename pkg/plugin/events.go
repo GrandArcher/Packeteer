@@ -85,8 +85,20 @@ const (
 	EventRSMaxPrefixCleared = "ixp.rs_max_prefix_cleared"
 	EventRSFiltered         = "ixp.rs_filtered"
 	EventRSFilteredCleared  = "ixp.rs_filtered_cleared"
-	EventHAStandby          = "ha.standby"
-	EventHAActive           = "ha.active"
+	// Route-server signals (#165). Each problem has a resolving event.
+	EventRSOriginChange        = "ixp.rs_origin_change"
+	EventRSOriginChangeCleared = "ixp.rs_origin_change_cleared"
+	EventRSMoreSpecific        = "ixp.rs_morespecific_burst"
+	EventRSMoreSpecificCleared = "ixp.rs_morespecific_burst_cleared"
+	EventRSFilterSpike         = "ixp.rs_filter_spike"
+	EventRSFilterSpikeCleared  = "ixp.rs_filter_spike_cleared"
+	// Fabric incident correlation (#163). Each problem has a resolving event.
+	EventFabricDegraded  = "ixp.fabric_degraded"
+	EventFabricRecovered = "ixp.fabric_recovered"
+	EventMemberDegraded  = "ixp.member_degraded"
+	EventMemberRecovered = "ixp.member_recovered"
+	EventHAStandby       = "ha.standby"
+	EventHAActive        = "ha.active"
 	// EventAudit is one audit log record (#32): a change or sign-in on
 	// the ops API, or a config reload.
 	EventAudit = "audit.recorded"
@@ -167,13 +179,13 @@ var eventCatalog = []EventSpec{
 		Summary: "Enough peers on one exchange fail their next-hop probe inside the window to point at the exchange or our port, not one member. Measurement only."},
 	{Kind: EventExchangeRecovered, Severity: SeverityInfo, Group: "exchange", Keys: []string{"exchange"}, TrapID: 36, Resolves: true,
 		Summary: "Too few peers on the exchange are degraded for the alert to hold."},
-	{Kind: EventExchangePeerDown, Severity: SeverityWarning, Group: "exchange_peer", Keys: []string{"exchange", "peer"}, TrapID: 37,
+	{Kind: EventExchangePeerDown, Severity: SeverityWarning, Group: "exchange_peer", Keys: []string{"exchange", "peer", "router"}, TrapID: 37,
 		Summary: "A monitored router reported an exchange peer's BGP session down; the reason is decoded from BMP (including Cease subcode 1, maximum prefixes)."},
-	{Kind: EventExchangePeerUp, Severity: SeverityInfo, Group: "exchange_peer", Keys: []string{"exchange", "peer"}, TrapID: 38, Resolves: true,
+	{Kind: EventExchangePeerUp, Severity: SeverityInfo, Group: "exchange_peer", Keys: []string{"exchange", "peer", "router"}, TrapID: 38, Resolves: true,
 		Summary: "A monitored router reported the exchange peer's BGP session up."},
-	{Kind: EventExchangeMaxPrefix, Severity: SeverityWarning, Group: "exchange_prefix", Keys: []string{"exchange", "peer"}, TrapID: 39,
+	{Kind: EventExchangeMaxPrefix, Severity: SeverityWarning, Group: "exchange_prefix", Keys: []string{"exchange", "peer", "router"}, TrapID: 39,
 		Summary: "An exchange peer's Adj-RIB-In reached the configured share of its max_prefix (exchanges[].max_prefix_warn_pct)."},
-	{Kind: EventExchangeMaxPrefixCleared, Severity: SeverityInfo, Group: "exchange_prefix", Keys: []string{"exchange", "peer"}, TrapID: 40, Resolves: true,
+	{Kind: EventExchangeMaxPrefixCleared, Severity: SeverityInfo, Group: "exchange_prefix", Keys: []string{"exchange", "peer", "router"}, TrapID: 40, Resolves: true,
 		Summary: "The exchange peer's Adj-RIB-In fell back below the max-prefix warning share."},
 	{Kind: EventIXPKeyExpiring, Severity: SeverityWarning, Group: "ixp_api_key", Keys: []string{"identifier"}, TrapID: 41,
 		Summary: "The IXP Manager API key expires within 14 days, or has already expired. The field identifier is the key id; the secret is not included."},
@@ -195,6 +207,26 @@ var eventCatalog = []EventSpec{
 		Summary: "A member session has at least the warning share of its routes tagged rs-asn:1101:x (filtered by the route server)."},
 	{Kind: EventRSFilteredCleared, Severity: SeverityInfo, Group: "ixp_rs_filtered", Keys: []string{"server", "session"}, TrapID: 50, Resolves: true,
 		Summary: "The filtered share fell back below the warning share, or the session is gone. Resolves ixp.rs_filtered."},
+	{Kind: EventFabricDegraded, Severity: SeverityWarning, Group: "ixp_fabric", Keys: []string{"scope", "ixp_id", "group"}, TrapID: 51,
+		Summary: "Many members behind one switch, colo, or core bundle are past the ping tolerance together: a fabric problem, not a member problem."},
+	{Kind: EventFabricRecovered, Severity: SeverityInfo, Group: "ixp_fabric", Keys: []string{"scope", "ixp_id", "group"}, TrapID: 52, Resolves: true,
+		Summary: "The group is below the thresholds, has no measured members, or the fabric data went stale. Resolves ixp.fabric_degraded."},
+	{Kind: EventMemberDegraded, Severity: SeverityWarning, Group: "ixp_member", Keys: []string{"asn"}, TrapID: 53,
+		Summary: "One member is past the ping tolerance on every measured address while the groups behind it are not degraded: a member problem."},
+	{Kind: EventMemberRecovered, Severity: SeverityInfo, Group: "ixp_member", Keys: []string{"asn"}, TrapID: 54, Resolves: true,
+		Summary: "The member is back within tolerance, is part of a degraded group, or the fabric data went stale. Resolves ixp.member_degraded."},
+	{Kind: EventRSOriginChange, Severity: SeverityWarning, Group: "ixp_rs_origin", Keys: []string{"server", "session"}, TrapID: 55,
+		Summary: "A member session announces a prefix with an origin AS that no other member's accepted route for the same prefix has: a possible hijack or leak."},
+	{Kind: EventRSOriginChangeCleared, Severity: SeverityInfo, Group: "ixp_rs_origin", Keys: []string{"server", "session"}, TrapID: 56, Resolves: true,
+		Summary: "The conflicting routes are gone, or the session is gone. Resolves ixp.rs_origin_change."},
+	{Kind: EventRSMoreSpecific, Severity: SeverityWarning, Group: "ixp_rs_morespecific", Keys: []string{"server", "session"}, TrapID: 57,
+		Summary: "A member session announced a burst of more-specifics of prefixes another member's route covers, with a different origin AS."},
+	{Kind: EventRSMoreSpecificCleared, Severity: SeverityInfo, Group: "ixp_rs_morespecific", Keys: []string{"server", "session"}, TrapID: 58, Resolves: true,
+		Summary: "The burst's more-specifics are gone, or the session is gone. Resolves ixp.rs_morespecific_burst."},
+	{Kind: EventRSFilterSpike, Severity: SeverityWarning, Group: "ixp_rs_spike", Keys: []string{"server", "session", "reason"}, TrapID: 59,
+		Summary: "The routes a route server filtered from a member for one reason (RPKI invalid, IRR prefix or origin, transit-free ASN) jumped above the recent level."},
+	{Kind: EventRSFilterSpikeCleared, Severity: SeverityInfo, Group: "ixp_rs_spike", Keys: []string{"server", "session", "reason"}, TrapID: 60, Resolves: true,
+		Summary: "The filtered count fell back below the spike threshold, or the session is gone. Resolves ixp.rs_filter_spike."},
 }
 
 // EventCatalog returns a copy of every event kind the controller emits.

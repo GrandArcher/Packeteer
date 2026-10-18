@@ -1,8 +1,10 @@
-// Package birdseye is the ixp.routeservers plugin (#164). It polls
+// Package birdseye is the ixp.routeservers plugin (#164, #165). It polls
 // Birdseye on each route server with GET only, keeps a short per-session
 // history, and emits events when a route server, a member session, a
-// max_prefix share, or a filtered share changes. It does not announce, it
-// does not write the RIB view, and it is not an input to Decide.
+// max_prefix share, or a filtered share changes, and when a route signal
+// (origin change, more-specific burst, filter spike) opens or closes. Blackhole
+// routes are counted, not alerted on. It does not announce, it does not write
+// the RIB view, and it is not an input to Decide.
 package birdseye
 
 import (
@@ -37,6 +39,11 @@ const (
 	maxMaxBytes             = 32 << 20
 	DefaultMaxPrefixWarnPct = 90
 	DefaultFilteredWarnPct  = 50
+	DefaultSpikeMin         = 10
+	DefaultSpikeFactor      = 2
+	DefaultBurstMin         = 20
+	maxSpikeMin             = 1 << 20
+	maxSpikeFactor          = 1000
 
 	// maxServers and maxSessions bound the live sessions. A session keeps
 	// maxSamples samples of 56 bytes plus up to maxReasons reason counts
@@ -53,6 +60,12 @@ const (
 	staleFactor = 3
 	// failsBeforeAlert consecutive failed polls raise ixp.rs_unreachable.
 	failsBeforeAlert = 2
+	// maxTrackedRoutes bounds the accepted routes a server's sessions
+	// keep for the origin and more-specific signals (about 60 bytes each).
+	maxTrackedRoutes = 250000
+	// baselineSamples is how many earlier polls set the level a filtered
+	// reason is compared with.
+	baselineSamples = 12
 )
 
 // errNoRedirect refuses every redirect, so a poll never leaves the
@@ -75,6 +88,10 @@ type Config struct {
 	MaxBytes         int            `yaml:"max_bytes"`
 	MaxPrefixWarnPct int            `yaml:"max_prefix_warn_pct"`
 	FilteredWarnPct  int            `yaml:"filtered_warn_pct"`
+	RouteSignals     bool           `yaml:"route_signals"`
+	SpikeMin         int            `yaml:"spike_min"`
+	SpikeFactor      int            `yaml:"spike_factor"`
+	BurstMin         int            `yaml:"burst_min"`
 }
 
 func init() { plugin.RouteServerWatches.Register(TypeName, New) }
@@ -90,8 +107,14 @@ type Watch struct {
 	maxBytes int64
 	prefPct  int
 	filtPct  int
-	http     *http.Client
-	servers  []*server
+	signals  bool
+	spikeMin int
+	spikeX   int
+	burstMin int
+	// maxTracked caps the accepted routes kept per server.
+	maxTracked int
+	http       *http.Client
+	servers    []*server
 
 	mu      sync.Mutex
 	members func() plugin.MemberView
@@ -118,13 +141,18 @@ func New(c plugin.Config, env plugin.Env) (plugin.RouteServerWatch, error) {
 		log = slog.New(slog.DiscardHandler)
 	}
 	return &Watch{
-		log:      log,
-		interval: cfg.Interval,
-		workers:  cfg.Workers,
-		maxBytes: int64(cfg.MaxBytes),
-		prefPct:  cfg.MaxPrefixWarnPct,
-		filtPct:  cfg.FilteredWarnPct,
-		servers:  servers,
+		log:        log,
+		interval:   cfg.Interval,
+		workers:    cfg.Workers,
+		maxBytes:   int64(cfg.MaxBytes),
+		prefPct:    cfg.MaxPrefixWarnPct,
+		filtPct:    cfg.FilteredWarnPct,
+		signals:    cfg.RouteSignals,
+		spikeMin:   cfg.SpikeMin,
+		spikeX:     cfg.SpikeFactor,
+		burstMin:   cfg.BurstMin,
+		maxTracked: maxTrackedRoutes,
+		servers:    servers,
 		http: &http.Client{
 			Timeout: cfg.Timeout,
 			CheckRedirect: func(*http.Request, []*http.Request) error {
@@ -171,6 +199,24 @@ func applyDefaults(cfg *Config) error {
 	if cfg.FilteredWarnPct < 1 || cfg.FilteredWarnPct > 100 {
 		return fmt.Errorf("filtered_warn_pct %d must be between 1 and 100", cfg.FilteredWarnPct)
 	}
+	if cfg.SpikeMin == 0 {
+		cfg.SpikeMin = DefaultSpikeMin
+	}
+	if cfg.SpikeMin < 1 || cfg.SpikeMin > maxSpikeMin {
+		return fmt.Errorf("spike_min %d must be between 1 and %d", cfg.SpikeMin, maxSpikeMin)
+	}
+	if cfg.SpikeFactor == 0 {
+		cfg.SpikeFactor = DefaultSpikeFactor
+	}
+	if cfg.SpikeFactor < 1 || cfg.SpikeFactor > maxSpikeFactor {
+		return fmt.Errorf("spike_factor %d must be between 1 and %d", cfg.SpikeFactor, maxSpikeFactor)
+	}
+	if cfg.BurstMin == 0 {
+		cfg.BurstMin = DefaultBurstMin
+	}
+	if cfg.BurstMin < 1 || cfg.BurstMin > maxTrackedRoutes {
+		return fmt.Errorf("burst_min %d must be between 1 and %d", cfg.BurstMin, maxTrackedRoutes)
+	}
 	return nil
 }
 
@@ -185,7 +231,7 @@ func buildServers(in []ServerConfig) ([]*server, error) {
 	out := make([]*server, 0, len(in))
 	for i, sc := range in {
 		p := fmt.Sprintf("servers[%d]", i)
-		if !validName(sc.Name) {
+		if !plugin.ValidLabel(sc.Name) {
 			return nil, fmt.Errorf("%s.name is invalid", p)
 		}
 		if seen[sc.Name] {
@@ -215,23 +261,6 @@ func baseURL(raw string) (string, error) {
 	u.Path = strings.TrimRight(u.Path, "/")
 	u.RawPath = ""
 	return u.String(), nil
-}
-
-// validName allows a letter or digit, then letters, digits, '.', '_' or
-// '-', at most 64 characters. A name is a URL-safe label in events.
-func validName(s string) bool {
-	if s == "" || len(s) > 64 {
-		return false
-	}
-	for i, c := range s {
-		switch {
-		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9':
-		case i > 0 && (c == '.' || c == '_' || c == '-'):
-		default:
-			return false
-		}
-	}
-	return true
 }
 
 // SetMembers records the IX-F view. The controller calls it before Start.

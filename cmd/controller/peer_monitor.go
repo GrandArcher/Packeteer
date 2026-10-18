@@ -38,7 +38,7 @@ func exchangePeerMonitor(cfg *config.Config) *exchange.PeerMonitor {
 // peerChangeEvent turns one exchange peer transition into its catalog
 // event. An unknown kind returns a zero Event, which the caller skips.
 func peerChangeEvent(now time.Time, c exchange.PeerChange) plugin.Event {
-	fields := map[string]string{"exchange": c.Exchange, "peer": c.Peer}
+	fields := map[string]string{"exchange": c.Exchange, "peer": c.Peer, "router": c.Router.String()}
 	switch c.Kind {
 	case exchange.PeerChangeUp:
 		return plugin.NewEvent(plugin.EventExchangePeerUp, now,

@@ -24,6 +24,7 @@ import (
 	"github.com/GrandArcher/Packeteer/internal/announce"
 	"github.com/GrandArcher/Packeteer/internal/anomaly"
 	"github.com/GrandArcher/Packeteer/internal/config"
+	"github.com/GrandArcher/Packeteer/internal/exchange"
 	"github.com/GrandArcher/Packeteer/internal/httpapi"
 	"github.com/GrandArcher/Packeteer/internal/inbound"
 	"github.com/GrandArcher/Packeteer/internal/linkout"
@@ -189,6 +190,9 @@ func run(ctx context.Context, args []string, getenv func(string) string, stdout,
 		}
 		if cfg.IXP.RouteServers != nil {
 			fmt.Fprintf(stdout, "ixp routeservers: %s (read-only, never announces)\n", cfg.IXP.RouteServers.Type)
+		}
+		if cfg.IXP.Correlate != nil {
+			fmt.Fprintf(stdout, "ixp correlate: %s (reads the fabric probes, never announces)\n", cfg.IXP.Correlate.Type)
 		}
 	}
 	if cfg.Lookup != nil {
@@ -616,6 +620,7 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 	tools.SetQueue(engine)
 	sysEngine.Store(engine)
 	watch := newEventWatch(dispatch, cfg.Mode)
+	portCommits := exchange.PortCommits(exchangesFromConfig(cfg))
 	peerMon := exchangePeerMonitor(cfg)
 	col.SetPeerPrefixes(peerMon.Prefixes)
 	if err := wireRIBSources(plugins, view, health, peerMon, dispatch.Emit); err != nil {
@@ -640,6 +645,7 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 	wireIXPMembers(plugins, httpSrv, dispatch.Emit)
 	wireIXPFabric(cfg, plugins, httpSrv)
 	wireIXPRouteServers(plugins, httpSrv, dispatch.Emit)
+	wireIXPCorrelate(plugins, httpSrv, dispatch.Emit)
 	// Active/standby (#31): registered before the elector starts. A
 	// standby withdraws everything, runs no decisions, and announces
 	// nothing; the announce controllers check the same gate.
@@ -753,7 +759,7 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 				watch.peerStatus(now, view.Peers())
 			}
 			if len(plugins.Telemetry) > 0 && watch.commitDue(now) {
-				watch.commit(now, collectTelemetry(loopCtx, plugins))
+				watch.commit(now, exchange.WithPortCommit(collectTelemetry(loopCtx, plugins), portCommits))
 			}
 		})
 	}()

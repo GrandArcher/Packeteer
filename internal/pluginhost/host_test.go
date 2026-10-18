@@ -3,6 +3,7 @@ package pluginhost
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -513,5 +514,80 @@ lookup:
 	cfg = load(t, "lookup:\n  type: nosuch\n")
 	if _, err := Build(cfg, Options{}); err == nil || !strings.Contains(err.Error(), `unknown lookup type "nosuch"`) {
 		t.Fatalf("err %v", err)
+	}
+}
+
+const portExchange = `
+exchanges:
+  - name: ix-lab
+    lans: [203.0.113.0/24]
+%s    peers:
+      - name: ix-peer-a
+        asn: 64501
+        next_hop: 203.0.113.11
+        source_ip: 192.0.2.31
+bgp:
+  neighbors:
+    - address: 192.0.2.254
+      add_path: true
+telemetry:
+  - type: fixed
+    config:
+      providers:
+        - {name: ix-lab, commit_mbps: 1, usage_mbps: 5}
+`
+
+func TestTelemetryBindsToAnExchangePort(t *testing.T) {
+	with := load(t, fmt.Sprintf(portExchange, "    port: {capacity_mbps: 1000}\n"))
+	s, err := Build(with, Options{})
+	if err != nil {
+		t.Fatalf("a binding named like an exchange with a port block was refused: %v", err)
+	}
+	if len(s.Telemetry) != 1 {
+		t.Fatalf("telemetry = %d", len(s.Telemetry))
+	}
+	without := load(t, fmt.Sprintf(portExchange, ""))
+	if _, err := Build(without, Options{}); err == nil || !strings.Contains(err.Error(), `provider "ix-lab" is not configured`) {
+		t.Fatalf("a binding with no port block: err = %v", err)
+	}
+}
+
+func TestIXPCorrelateDoesNotAnnounce(t *testing.T) {
+	const block = `
+ixp:
+  members:
+    type: ixf
+    config:
+      url: https://ixp.example.invalid/members.json
+  vantages:
+    - {name: lan1-v4, vlan_id: 10, address: 192.0.2.8}
+  fabric: {type: icmp}
+  correlate:
+    type: topology
+    config:
+      rounds: 3
+`
+	s, err := Build(load(t, block), Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.IXPCorrelate == nil || s.IXPCorrelate.Type != "topology" {
+		t.Fatalf("%+v", s.IXPCorrelate)
+	}
+	if s.Announcer != nil || len(s.RIBSources) != 0 || s.Inbound != nil || s.Mitigation != nil {
+		t.Fatalf("announce path built: %v rib %d", s.Announcer, len(s.RIBSources))
+	}
+	sum := s.Summary()
+	iFab, iCor := slices.Index(sum, "ixp_fabric icmp"), slices.Index(sum, "ixp_correlate topology")
+	if iFab < 0 || iCor < iFab {
+		t.Fatalf("the correlator must start after the fabric prober: %v", sum)
+	}
+	v := s.IXPCorrelate.Plugin.View()
+	if !v.Configured || len(v.Groups) != 0 || len(v.Members) != 0 {
+		t.Fatalf("%+v", v)
+	}
+	bad := strings.Replace(block, "rounds: 3", "rounds: 99", 1)
+	if _, err := Build(load(t, bad), Options{}); err == nil || !strings.Contains(err.Error(), "ixp.correlate") {
+		t.Fatalf("bad rounds: %v", err)
 	}
 }
