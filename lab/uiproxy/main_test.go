@@ -410,3 +410,41 @@ func TestCommitDriverMatchesPage(t *testing.T) {
 		}
 	}
 }
+
+// TestGuidedDriverMatchesPage keeps the guided-input driver (#329) on the
+// settings page it drives. It stubs nothing, so Apply talks to the real
+// form API. A renamed id fails here instead of as a timeout in CI.
+func TestGuidedDriverMatchesPage(t *testing.T) {
+	f, err := loadFixtures("../ui-fixtures/guided")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(f.Stubs) != 0 || f.Inject.Page != "/settings.html" || len(f.driver) == 0 {
+		t.Fatalf("fixtures = %+v", f)
+	}
+	page, err := os.ReadFile("../../internal/httpapi/web/settings.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	driver := string(f.driver)
+	if !strings.Contains(driver, "yaml-same:") || !strings.Contains(driver, "999.1.1.1/24") || !strings.Contains(driver, `method === "PUT"`) {
+		t.Fatal("driver does not check an unchanged Apply, a bad prefix, and PUT")
+	}
+	if strings.Contains(driver, "confirm_inject") || strings.Contains(driver, "/api/config\"") {
+		t.Fatal("driver writes config")
+	}
+	ids := regexp.MustCompile(`byId\("([^"]+)"\)`).FindAllStringSubmatch(driver, -1)
+	if len(ids) == 0 {
+		t.Fatal("the driver uses no element")
+	}
+	for _, m := range ids {
+		if !strings.Contains(string(page), `id="`+m[1]+`"`) {
+			t.Errorf("driver uses #%s, which settings.html lacks", m[1])
+		}
+	}
+	for _, id := range []string{"form-providers", "form-flows", "form-policies", "form-vips", "form-outages", "form-exchanges", "form-allow", "form-anomaly-rules", "in-prefix-box", "in-perf-loss-on", "fm-hold"} {
+		if !strings.Contains(driver, id) || !strings.Contains(string(page), `id="`+id+`"`) {
+			t.Errorf("guided card %s is missing from the driver or the page", id)
+		}
+	}
+}

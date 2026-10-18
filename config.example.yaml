@@ -92,6 +92,8 @@ providers:
     # bmp: prefer             # off (default), prefer, or only: use this provider's BMP paths (rib_sources)
     # path_check: false       # opt out of the TTL-1 first-hop check (#150), e.g. next_hop is across another router
     # add_path: true          # route check from iBGP add-path paths (needs a neighbor with add_path)
+    # fwmark: 101             # share source_ip with other providers: tag probes with a Linux fwmark and/or
+    # dscp: 10                #   a DSCP (1-63), distinct per source_ip. `packeteer -pbr linux` prints the routing for it (#157)
 
 allowlist:
   prefixes: []
@@ -296,6 +298,7 @@ scorer:
 #         # Router maximum-prefix limit on this session, when known. Read-only.
 #         max_prefix: 100000
 #         # path_check: false  # opt out of the TTL-1 first-hop check (#150)
+#         # dscp: 10           # share source_ip with other peers; distinct per source_ip (#157)
 
 # Injection (used only when mode: inject). local_pref is the default on
 # every injected route and should beat the edge's native local preference.
@@ -328,6 +331,21 @@ scorer:
 # more_specific:
 #   enabled: false
 #   max_routes: 100
+#
+# RPKI origin validation (off by default; docs/CONFIG.md#rpki). One or more
+# read-only RTR sources (RFC 8210) label each learned path's origin valid,
+# invalid, not found, or unknown. It never announces and never changes the
+# learned RIB. sources are tried in order; the first fresh non-empty cache
+# answers. avoid_invalid only refuses a new improvement onto an invalid path.
+# rpki:
+#   enabled: false
+#   avoid_invalid: false
+#   sources:
+#     - type: rtr
+#       config:
+#         address: 192.0.2.20:3323
+#         refresh: 5m
+#         staleness: 1h
 
 # Multi-POP (off by default; docs/multi-pop.md). One instance per POP,
 # joined over mutual TLS. A provider in another domain is measured by the

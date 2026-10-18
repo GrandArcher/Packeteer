@@ -62,9 +62,9 @@
     <div id="wz-1">
       <p class="tag">The iBGP session Packeteer learns from. It does not announce.</p>
       <div class="form">
-        <label>ASN <input id="wz-asn" type="number" min="1" placeholder="64512"></label>
-        <label>Router ID <input id="wz-router" type="text" placeholder="192.0.2.10" spellcheck="false"></label>
-        <label>Edge address <input id="wz-edge" type="text" placeholder="192.0.2.254" spellcheck="false"></label>
+        <label class="field"><span class="field-label" title="asn">ASN</span><input id="wz-asn" type="number" min="1" max="4294967295" step="1" placeholder="64512"><span class="field-help">Your AS number. The learn-only session uses it.</span><span id="wz-asn-err" class="field-error" hidden></span></label>
+        <label class="field"><span class="field-label" title="router_id">Router ID</span><input id="wz-router" type="text" placeholder="192.0.2.10" spellcheck="false"><span class="field-help">IPv4 router ID, for example 192.0.2.10.</span><span id="wz-router-err" class="field-error" hidden></span></label>
+        <label class="field"><span class="field-label" title="bgp.neighbors">Edge address</span><input id="wz-edge" type="text" placeholder="192.0.2.254" spellcheck="false"><span class="field-help">Address of the router this session learns from.</span><span id="wz-edge-err" class="field-error" hidden></span></label>
       </div>
       <div class="controls"><button type="button" id="wz-next">Next</button></div>
     </div>
@@ -98,8 +98,8 @@
       <p class="tag">Exporter setup: on the router, send flow records to this host and port (for example NetFlow v9 or IPFIX to the address below). With <code>--network host</code> this is a host UDP port; do not publish it, and allow it only from the router. Packeteer does not configure the router.</p>
       <div class="form">
         <label class="check"><input id="wz-flow" type="checkbox"> Collect flow records</label>
-        <label>Listen address <input id="wz-flow-addr" type="text" placeholder="192.0.2.10 (empty: every address)" spellcheck="false"></label>
-        <label>UDP port <input id="wz-flow-port" type="text" inputmode="numeric" placeholder="2055" spellcheck="false"></label>
+        <label class="field"><span class="field-label" title="sources.flow.listen">Listen address</span><input id="wz-flow-addr" type="text" placeholder="192.0.2.10" spellcheck="false"><span class="field-help">Address flow records arrive on. Empty listens on every address.</span><span id="wz-flow-addr-err" class="field-error" hidden></span></label>
+        <label class="field"><span class="field-label" title="sources.flow.listen">UDP port</span><input id="wz-flow-port" type="number" min="1" max="65535" step="1" placeholder="2055"><span class="field-help">UDP port for NetFlow, IPFIX, or sFlow. 1 to 65535.</span><span id="wz-flow-port-err" class="field-error" hidden></span></label>
       </div>
       <div class="controls">
         <button type="button" id="wz-back-4">Back</button>
@@ -181,25 +181,61 @@
       <div>
         <h3>Decision</h3>
         <fieldset id="form-fields" class="form">
-          <label>Mode
+          <label class="field"><span class="field-label" title="mode">Mode</span>
             <select id="fm-mode">
               <option value="">(default observe)</option>
               <option value="observe">observe</option>
               <option value="suggest">suggest</option>
               <option value="inject">inject</option>
             </select>
+            <span class="field-help">Observe measures. Suggest recommends. Inject announces only after Save confirms it.</span>
+            <span class="field-error" hidden></span>
           </label>
-          <label>Hold time <input id="fm-hold" type="text" placeholder="15m" spellcheck="false"></label>
-          <label>Improvement cap <input id="fm-cap" type="text" inputmode="numeric" placeholder="50" spellcheck="false"></label>
-          <label>Loss threshold (points) <input id="fm-loss" type="text" inputmode="decimal" placeholder="min loss delta" spellcheck="false"></label>
-          <label>Latency threshold (ms) <input id="fm-rtt" type="text" inputmode="decimal" placeholder="min RTT delta" spellcheck="false"></label>
-          <label>RTT threshold (%) <input id="fm-rtt-pct" type="text" inputmode="decimal" placeholder="0 (off)" spellcheck="false"></label>
-          <label>Confirm rounds <input id="fm-rounds" type="text" inputmode="numeric" placeholder="1" spellcheck="false"></label>
-          <label>Cost or performance
+          <label class="field"><span class="field-label" title="hold_time">Hold time</span>
+            <span class="g-dur"><input id="fm-hold-raw" type="hidden" class="g-raw"><input id="fm-hold" class="g-num" type="number" min="0" step="any"><select id="fm-hold-unit" class="g-unit" aria-label="Hold time unit"><option value="ms">ms</option><option value="s">s</option><option value="m" selected>m</option><option value="h">h</option></select></span>
+            <span class="field-help">How long a chosen path stays before it can move back. Empty is 0. Inject needs more than 0.</span>
+            <span class="field-error" hidden></span>
+          </label>
+          <label class="field"><span class="field-label" title="max_improvements">Improvement cap</span>
+            <input id="fm-cap" class="g-num" type="number" min="0" max="10000" step="1" placeholder="50"><span class="unit">prefixes</span>
+            <span class="field-help">How many improvements may be active at once. 0 retires every one. Default 50.</span>
+            <span class="field-error" hidden></span>
+          </label>
+          <label class="field"><span class="field-label" title="thresholds.min_loss_delta_pct">Loss threshold</span>
+            <input id="fm-loss" class="g-num" type="number" min="0" max="100" step="any"><span class="unit">points</span>
+            <span class="field-help">Minimum loss improvement, in percentage points. Empty is 0. Inject needs more than 0.</span>
+            <span class="field-error" hidden></span>
+          </label>
+          <label class="field"><span class="field-label" title="thresholds.min_rtt_delta_ms">Latency threshold</span>
+            <input id="fm-rtt" class="g-num" type="number" min="0" step="any"><span class="unit">ms</span>
+            <span class="field-help">Minimum latency improvement, in milliseconds. Empty is 0. Inject needs more than 0.</span>
+            <span class="field-error" hidden></span>
+          </label>
+          <label class="field"><span class="field-label" title="thresholds.min_rtt_delta_pct">RTT threshold</span>
+            <input id="fm-rtt-pct" class="g-num" type="number" min="0" max="100" step="any" placeholder="0"><span class="unit">%</span>
+            <span class="field-help">Minimum latency improvement as a percent of the current path. 0 turns this check off.</span>
+            <span class="field-error" hidden></span>
+          </label>
+          <label class="field"><span class="field-label" title="thresholds.confirm_rounds">Confirm rounds</span>
+            <input id="fm-rounds" class="g-num" type="number" min="1" max="100" step="1" placeholder="1">
+            <span class="field-help">How many probe rounds a choice must win before it is used. Default 1.</span>
+            <span class="field-error" hidden></span>
+          </label>
+          <label class="field"><span class="field-label" title="scorer.precedence">Cost or performance</span>
             <select id="fm-precedence"></select>
+            <span class="field-help">Which one wins when the scorer is cost.</span>
+            <span class="field-error" hidden></span>
           </label>
-          <label>Extra loss <input id="fm-floor-loss" type="text" inputmode="decimal" placeholder="0" spellcheck="false"></label>
-          <label>Extra delay <input id="fm-floor-rtt" type="text" placeholder="10ms" spellcheck="false"></label>
+          <label class="field"><span class="field-label" title="floor.max_loss_pct">Extra loss</span>
+            <input id="fm-floor-loss" class="g-num" type="number" min="0" max="100" step="any" placeholder="0"><span class="unit">points</span>
+            <span class="field-help">A cheaper path must stay within this many extra loss points. Default 0.</span>
+            <span class="field-error" hidden></span>
+          </label>
+          <label class="field"><span class="field-label" title="floor.max_rtt">Extra delay</span>
+            <span class="g-dur"><input id="fm-floor-rtt-raw" type="hidden" class="g-raw"><input id="fm-floor-rtt" class="g-num" type="number" min="0" step="any" placeholder="10"><select id="fm-floor-rtt-unit" class="g-unit" aria-label="Extra delay unit"><option value="ms" selected>ms</option><option value="s">s</option><option value="m">m</option><option value="h">h</option></select></span>
+            <span class="field-help">A cheaper path must stay within this extra delay. Default 10 milliseconds.</span>
+            <span class="field-error" hidden></span>
+          </label>
         </fieldset>
         <p id="fm-scorer" class="tag"></p>
         <h3>Providers</h3>
@@ -213,7 +249,7 @@
         </div>
         <div id="form-suggestions"></div>
         <h3>Exchanges</h3>
-        <p class="tag">Every <code>exchanges</code> entry: its peering LANs and the peers on them. A peer is a provider with its own next hop on a LAN. It is always route-checked, so the file needs <code>add_path</code> on a <code>bgp.neighbors</code> entry or <code>bmp: prefer</code> or <code>only</code> with <code>rib_sources</code>; Save checks that. The probe source of a peer is required before Save. Exclude and precedence stay in the YAML. Separate LANs with commas. No session or route-server credential is asked for. Nothing is probed or announced until you save and restart.</p>
+        <p class="tag">Every <code>exchanges</code> entry: its peering LANs and the peers on them. A peer is a provider with its own next hop on a LAN. It is always route-checked, so the file needs <code>add_path</code> on a <code>bgp.neighbors</code> entry or <code>bmp: prefer</code> or <code>only</code> with <code>rib_sources</code>; Save checks that. The probe source of a peer is required before Save. Exclude and precedence stay in the YAML. Add one LAN per row. No session or route-server credential is asked for. Nothing is probed or announced until you save and restart.</p>
         <fieldset id="form-exchanges" class="form"></fieldset>
         <button type="button" id="form-add-exchange">+ Exchange</button>
         <h3>Discovered members</h3>
@@ -231,11 +267,11 @@
         <div id="form-allow"></div>
         <button type="button" id="form-add-allow">+ Allowlist prefix</button>
         <h3>Flow collectors</h3>
-        <p class="tag">Every <code>flow</code> source (NetFlow v5/v9, IPFIX, sFlow). It measures only. A second source needs its own name and listen address. Removing a source removes it from the YAML, including its <code>problems</code>, <code>transit</code>, and <code>subranges</code> blocks; those blocks are otherwise kept. Separate listen addresses and exclude prefixes with commas. Binds host UDP ports with <code>--network host</code>; do not publish them.</p>
+        <p class="tag">Every <code>flow</code> source (NetFlow v5/v9, IPFIX, sFlow). It measures only. A second source needs its own name and listen address. Removing a source removes it from the YAML, including its <code>problems</code>, <code>transit</code>, and <code>subranges</code> blocks; those blocks are otherwise kept. Each listen address and each excluded prefix is its own row. Binds host UDP ports with <code>--network host</code>; do not publish them.</p>
         <fieldset id="form-flows" class="form"></fieldset>
         <button type="button" id="form-add-flow">+ Flow source</button>
         <h3>Policies (rules)</h3>
-        <p class="tag">Every <code>rules</code> policy, in file order. A policy only restricts or pins what the decision engine may choose: the learned-RIB check, allowlist, cap, hold time, and withdraw rules still apply. Policies and the rules in them are evaluated in the order shown. A second policy needs its own name. Provider, prefix, ASN, and country lists are comma separated. A country rule needs a <code>geoip_db</code>: an absolute path to a database file mounted in the container; Packeteer does not fetch it. Removing a policy removes it from the YAML. Maintenance windows and other policy types stay as they are.</p>
+        <p class="tag">Every <code>rules</code> policy, in file order. A policy only restricts or pins what the decision engine may choose: the learned-RIB check, allowlist, cap, hold time, and withdraw rules still apply. Policies and the rules in them are evaluated in the order shown. A second policy needs its own name. Providers, prefixes, ASNs, and countries are picked one at a time. A country rule needs a GeoIP database: an absolute path to a file mounted in the container; Packeteer does not fetch it. Removing a policy removes it from the YAML. Maintenance windows and other policy types stay as they are.</p>
         <fieldset id="form-policies" class="form"></fieldset>
         <button type="button" id="form-add-policy">+ Policy</button>
         <h3>VIP</h3>
@@ -247,30 +283,32 @@
         <fieldset id="form-outages" class="form"></fieldset>
         <button type="button" id="form-add-outage">+ Outage detection</button>
         <h3>Inbound optimization <span id="in-badge" class="badge mode-unknown">…</span></h3>
-        <p class="tag">The <code>inbound</code> block (docs/inbound.md). <span id="in-badge-text">Observe logs steers and announces nothing.</span> The form never turns inject on: that is a YAML edit after the inject checklist, and Save asks you to confirm it. Unchecking removes the block, announcer included. Separate lists with commas. Each trigger you moderate is only suggested, even in inject. The announcer (<code>inbound.announcer</code>) stays in the YAML. <span id="in-announcer"></span></p>
+        <p class="tag">The <code>inbound</code> block (docs/inbound.md). <span id="in-badge-text">Observe logs steers and announces nothing.</span> The form never turns inject on: that is a YAML edit after the inject checklist, and Save asks you to confirm it. Unchecking removes the block, announcer included. Each prefix is its own row. Each trigger you moderate is only suggested, even in inject. The announcer (<code>inbound.announcer</code>) stays in the YAML. <span id="in-announcer"></span></p>
         <fieldset id="form-inbound" class="form">
-          <label class="check"><input id="in-enabled" type="checkbox"> Inbound optimization on</label>
-          <label>Mode
+          <label class="check" title="inbound"><input id="in-enabled" type="checkbox"> Inbound optimization on</label>
+          <label class="field"><span class="field-label" title="inbound.mode">Mode</span>
             <select id="in-mode">
               <option value="observe">observe</option>
               <option value="suggest">suggest</option>
             </select>
+            <span class="field-help">Observe logs steers. Suggest recommends them. Turning inject on stays a YAML edit.</span>
+            <span class="field-error" hidden></span>
           </label>
-          <label>Your prefixes to steer <input id="in-prefixes" type="text" placeholder="203.0.113.0/24" spellcheck="false"></label>
-          <label>Steer local pref <input id="in-local-pref" type="text" inputmode="numeric" placeholder="1" spellcheck="false"></label>
-          <label>Release (% of commit) <input id="in-release" type="text" inputmode="decimal" placeholder="90" spellcheck="false"></label>
-          <label>Steer cap <input id="in-cap" type="text" inputmode="numeric" placeholder="max_improvements" spellcheck="false"></label>
-          <label class="check"><input id="in-mod-commit" type="checkbox"> Commit steers are suggestions only</label>
-          <label class="check"><input id="in-mod-perf" type="checkbox"> Performance steers are suggestions only</label>
-          <label class="check"><input id="in-perf" type="checkbox"> Performance trigger on</label>
-          <label>Loss points over best <input id="in-perf-loss" type="text" inputmode="decimal" placeholder="5 (negative: off)" spellcheck="false"></label>
-          <label>Latency ms over best <input id="in-perf-latency" type="text" inputmode="decimal" placeholder="50 (negative: off)" spellcheck="false"></label>
-          <label>Minimum common prefixes <input id="in-perf-min" type="text" inputmode="numeric" placeholder="3" spellcheck="false"></label>
-          <label>Performance release (%) <input id="in-perf-release" type="text" inputmode="decimal" placeholder="50" spellcheck="false"></label>
-          <label class="check"><input id="in-damp-off" type="checkbox"> Damping off</label>
-          <label>Damping confirm <input id="in-damp-confirm" type="text" placeholder="1m" spellcheck="false"></label>
-          <label>Damping backoff <input id="in-damp-backoff" type="text" inputmode="decimal" placeholder="2" spellcheck="false"></label>
-          <label>Damping max hold <input id="in-damp-max" type="text" placeholder="8x hold time" spellcheck="false"></label>
+          <div class="field"><span class="field-label" title="inbound.prefixes">Your prefixes</span><input id="in-prefixes" type="hidden"><div id="in-prefix-box" class="g-prefixes"></div><span class="field-help">Prefixes this network originates. Pick one learned with an empty AS path, or add a prefix.</span><span class="field-error" hidden></span></div>
+          <label class="field"><span class="field-label" title="inbound.local_pref">Steer local pref</span><input id="in-local-pref" class="g-num" type="number" min="1" max="4294967295" step="1" placeholder="1"><span class="field-help">Local preference on a steer route. Default 1.</span><span class="field-error" hidden></span></label>
+          <label class="field"><span class="field-label" title="inbound.release_pct">Release</span><input id="in-release" class="g-pct" type="number" min="0" max="100" step="any" placeholder="90"><span class="unit">% of commit</span><span class="field-help">Release a steer when usage falls below this percent of commit. Default 90.</span><span class="field-error" hidden></span></label>
+          <label class="field"><span class="field-label" title="inbound.max_improvements">Steer cap</span><input id="in-cap" class="g-num" type="number" min="1" max="10000" step="1" placeholder="50"><span class="field-help">How many steer routes inbound may hold. Empty uses the decision cap.</span><span class="field-error" hidden></span></label>
+          <label class="check" title="inbound.moderated"><input id="in-mod-commit" type="checkbox"> Commit steers are suggestions only</label>
+          <label class="check" title="inbound.moderated"><input id="in-mod-perf" type="checkbox"> Performance steers are suggestions only</label>
+          <label class="check" title="inbound.performance"><input id="in-perf" type="checkbox"> Performance trigger on</label>
+          <label class="field"><span class="field-label" title="inbound.performance.loss_pct">Loss points over best</span><span class="g-off"><input id="in-perf-loss-on" type="checkbox" checked aria-label="Loss check on"><input id="in-perf-loss" class="g-num" type="number" min="0" max="100" step="any" placeholder="5"><span class="unit">points</span></span><span class="field-help">On compares loss with the best path. Off skips this check. Default 5 points.</span><span class="field-error" hidden></span></label>
+          <label class="field"><span class="field-label" title="inbound.performance.latency_ms">Latency over best</span><span class="g-off"><input id="in-perf-latency-on" type="checkbox" checked aria-label="Latency check on"><input id="in-perf-latency" class="g-num" type="number" min="0" step="any" placeholder="50"><span class="unit">ms</span></span><span class="field-help">On compares latency with the best path. Off skips this check. Default 50 milliseconds.</span><span class="field-error" hidden></span></label>
+          <label class="field"><span class="field-label" title="inbound.performance.min_prefixes">Minimum common prefixes</span><input id="in-perf-min" class="g-num" type="number" min="1" max="10000" step="1" placeholder="3"><span class="field-help">How many prefixes must agree before a performance steer. Default 3.</span><span class="field-error" hidden></span></label>
+          <label class="field"><span class="field-label" title="inbound.performance.release_pct">Performance release</span><input id="in-perf-release" class="g-pct" type="number" min="0" max="100" step="any" placeholder="50"><span class="unit">%</span><span class="field-help">Release a performance steer below this percent. Default 50.</span><span class="field-error" hidden></span></label>
+          <label class="check" title="inbound.damping.disabled"><input id="in-damp-off" type="checkbox"> Damping off</label>
+          <label class="field"><span class="field-label" title="inbound.damping.confirm">Damping confirm</span><span class="g-dur"><input id="in-damp-confirm-raw" type="hidden" class="g-raw"><input id="in-damp-confirm" class="g-num" type="number" min="0" step="any" placeholder="1"><select id="in-damp-confirm-unit" class="g-unit" aria-label="Damping confirm unit"><option value="ms">ms</option><option value="s">s</option><option value="m" selected>m</option><option value="h">h</option></select></span><span class="field-help">How long a steer must hold before it sticks. Default 1 minute.</span><span class="field-error" hidden></span></label>
+          <label class="field"><span class="field-label" title="inbound.damping.backoff">Damping backoff</span><input id="in-damp-backoff" class="g-num" type="number" min="1" max="16" step="any" placeholder="2"><span class="field-help">Multiplier applied each time a steer flaps. Default 2.</span><span class="field-error" hidden></span></label>
+          <label class="field"><span class="field-label" title="inbound.damping.max_hold">Damping max hold</span><span class="g-dur"><input id="in-damp-max-raw" type="hidden" class="g-raw"><input id="in-damp-max" class="g-num" type="number" min="0" step="any"><select id="in-damp-max-unit" class="g-unit" aria-label="Damping max hold unit"><option value="ms">ms</option><option value="s">s</option><option value="m" selected>m</option><option value="h">h</option></select></span><span class="field-help">Longest a damped steer stays. Empty uses eight times the hold time.</span><span class="field-error" hidden></span></label>
         </fieldset>
         <h3>Anomaly rules <span id="an-badge" class="badge mode-unknown">…</span></h3>
         <p class="tag">The <code>anomaly.rules</code> list (docs/anomaly.md). A rule turns a detected anomaly into a mitigation rule, and only the mitigation controller acts on it: its mode, allowlist, rule cap, and learned-RIB check apply. <span id="an-badge-text"></span> The first matching rule wins. The detector, source, and caps stay in the YAML, and the form cannot add a detector.</p>
@@ -328,6 +366,7 @@
 </div>
 <script src="/ui.js"></script>
 <script src="/shell.js"></script>
+<script src="/countries.js"></script>
 <script src="/settings.js"></script>
 <script src="/commitsetup.js"></script>
 <script src="/upgrade.js"></script>

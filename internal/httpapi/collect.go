@@ -33,6 +33,7 @@ type Collector struct {
 	hops        func() []rib.NextHopCount
 	health      *exchange.Health
 	peerPrefix  func() map[string]int
+	rpki        func(netip.Prefix, uint32) plugin.RPKIValidity
 	portMaxAge  time.Duration
 }
 
@@ -112,6 +113,15 @@ func (c *Collector) SetPeerPrefixes(fn func() map[string]int) {
 	c.mu.Unlock()
 }
 
+// SetRPKI installs the origin-validation lookup for learned paths (#158).
+// Nil leaves every path without a validity label. The function is
+// read-only and may run while Snapshot is called.
+func (c *Collector) SetRPKI(fn func(netip.Prefix, uint32) plugin.RPKIValidity) {
+	c.mu.Lock()
+	c.rpki = fn
+	c.mu.Unlock()
+}
+
 // SetMode updates the mode Snapshot reports. A reload that changes mode
 // calls it so the dashboard matches the running config.
 func (c *Collector) SetMode(mode string) {
@@ -138,7 +148,7 @@ func (c *Collector) Snapshot() Snapshot {
 	mode := c.mode
 	started, engine, decider, view, telemetry := c.started, c.engine, c.decider, c.view, c.telemetry
 	exs, hops, flowTracked, truncated := c.exchanges, c.hops, c.flowTracked, c.truncated
-	health, peerPrefix, portMaxAge := c.health, c.peerPrefix, c.portMaxAge
+	health, peerPrefix, rpki, portMaxAge := c.health, c.peerPrefix, c.rpki, c.portMaxAge
 	c.mu.RUnlock()
 
 	in := Input{
@@ -147,6 +157,7 @@ func (c *Collector) Snapshot() Snapshot {
 		Started:   started,
 		At:        time.Now().UTC(),
 		Providers: c.providers,
+		RPKI:      rpki,
 	}
 	if telemetry != nil {
 		in.Telemetry = telemetry()

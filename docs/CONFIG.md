@@ -33,6 +33,7 @@ The image entrypoint is the same binary. Flags go after the image name.
 | `communities_cause` | none | no | Extra outbound communities per improvement cause (#132). Added after `packeteer_community`. See [`communities_cause`](#communities_cause). |
 | `more_specific_bits` | unset | must be absent | Any value, including `0`, is an error. Packeteer announces the exact prefix it learned from the RIB. |
 | `more_specific` | off | no | More-specific injection: with each improvement, also announce the more-specifics inside its prefix that a neighbor advertises in the learned RIB, under a route cap. Never a prefix that is not learned. See [`more_specific`](#more_specific). Lab-proven only. |
+| `rpki` | off | no | Shared RPKI origin validation (#158): read the operator's RTR server and label each learned path's origin valid, invalid, not found, or unknown. `avoid_invalid` refuses a new improvement onto an invalid path. Never announces and never changes the learned RIB. See [`rpki`](#rpki). Not on a public edge. |
 | `instance` | `domain` | no | This instance's name in a federation (#30). Peers expect it in its snapshot. Letters, digits, `_`, `.`, `-`, at most 64 characters. See [Multi-POP](#multi-pop-federation). |
 | `domain` | empty | with `federation` | This instance's routing domain (POP). Empty is a standalone instance. |
 | `inter_dc_rtt` | empty | per remote domain | Map of domain to round-trip time from this POP (for example `pop-b: 12ms`), 0–10s. Added to every path a peer in that domain measured. |
@@ -148,7 +149,7 @@ While the streak is short and this evaluation compared the paths, that prefix is
 | Key | Required | Meaning |
 |---|---|---|
 | `name` | yes | Unique. |
-| `source_ip` | yes, except in another domain | Source address of probes. Unique across providers. Must be configured on the host. Same address family as `next_hop`. Must be empty for a provider in another `domain`. |
+| `source_ip` | yes, except in another domain | Source address of probes. Unique across providers unless every provider on it sets a distinct `fwmark` or `dscp`. Must be configured on the host. Same address family as `next_hop`. Must be empty for a provider in another `domain`. |
 | `next_hop` | yes | BGP next hop used if this provider is selected. Also how a learned route is matched to a provider. For a provider in another domain, the address this POP's routers reach that POP's exit at across the backbone. |
 | `local_pref` | no | Local preference on routes steered to this provider (#132). Wins over `local_pref_cause` and the global `local_pref`. Omit it to use those. `0` is rejected in every mode. Set it above the edge's native local preference. |
 | `communities` | no | Extra communities on routes steered to this provider (#132), added after the cause's. The export policy does not match them. The same rules as [`communities_cause`](#communities_cause): at most 16, standard or large, no duplicates, not `packeteer_community`, and no `0:x` or `65535:x`. Omit it for none. An unknown provider name is rejected. Changing it requires a restart. |
@@ -161,6 +162,8 @@ While the streak is short and this evaluation compared the paths, that prefix is
 | `bmp` | no | How this provider uses paths from `rib_sources` (BMP): `off` (default), `prefer`, or `only`. `prefer` and `only` need a `rib_sources` entry. See [RIB source `bmp`](#rib-source-bmp). |
 | `add_path` | no | `true`: apply the route check to this provider from the iBGP add-path paths. Needs a `bgp.neighbors` entry with `add_path: true`. Not allowed with `bmp: only`. See [Add-path](#add-path). |
 | `path_check` | no | First-hop probe-path check (#150). `true` or omitted checks; `false` opts out. See [`probe.path_check`](#probepath_check). |
+| `fwmark` | no | Linux fwmark set on this provider's probe sockets (#157), so providers can share a `source_ip`. 0 or omitted: no mark. Needs `--cap-add NET_ADMIN`; without it the provider is down. Unique per `source_ip`. |
+| `dscp` | no | DSCP, 1-63, set on this provider's probe packets (#157). 0 or omitted: none. Unique per `source_ip`. Must be empty for a provider in another `domain`, like `fwmark`. See [policy-routing.md](policy-routing.md#many-providers-on-one-source_ip). |
 
 ### `allowlist`
 
@@ -448,10 +451,11 @@ Each peer:
 | `name` | yes | Provider name, unique across providers and peers. |
 | `asn` | yes | The peer's AS: the first AS on the paths it advertises (a route server is transparent). |
 | `next_hop` | yes | The peer's address on the peering LAN. Unique across providers. |
-| `source_ip` | yes | Probe source for this peer, unique like any provider's. The host (or router) must route traffic from it to this peer's `next_hop` ([policy-routing.md](policy-routing.md)). |
+| `source_ip` | yes | Probe source for this peer. Unique like any provider's, or shared with other peers that each set a distinct `fwmark` or `dscp`. The host (or router) must route traffic from it to this peer's `next_hop` ([policy-routing.md](policy-routing.md)). |
 | `exclude`, `precedence`, `cost` | no | As on providers. |
 | `max_prefix` | no | The router's `maximum-prefix` limit on this peer's session, when known. 0 (default) disables the `exchange.max_prefix` warning. Read-only: Packeteer never sets or changes it. |
 | `path_check` | no | First-hop probe-path check (#150), as on providers. `false` opts the peer out. |
+| `fwmark`, `dscp` | no | Probe tag (#157), as on providers. Hundreds of peers can share one `source_ip` with `fwmark` on a Linux probe host; `dscp` allows 63 per source, which is the limit behind a router. |
 
 `port` (#151):
 
@@ -604,6 +608,16 @@ More-specific injection (#56, lab-proven only, not on a public edge). Design and
 | `max_routes` | `100` | Cap on routes on a router: improvements, their more-specifics, and inbound steer routes. 1–1000. A new improvement is announced whole (P and all its learned more-specifics) or not at all; a more-specific learned later is added only while there is room. Nothing on the wire is withdrawn to make room. `max_improvements` still caps improvements. |
 
 A more-specific is withdrawn with its improvement (flip-back, TTL, policy, P leaving the RIB), when the RIB is not ready, on shutdown, and when it really leaves the RIB: the neighbor advertised it for at least 5s while Packeteer's route was on the wire and then stopped. A shorter gap is the router hiding its own path because Packeteer's route won, and the route stays. A change needs a restart (SIGHUP refuses it). Rollback: remove the block or set `enabled: false` and restart; only improvements' own prefixes are announced again.
+
+### `rpki`
+
+Shared RPKI origin validation (#158, not on a public edge). Off by default. A source connects read-only to the operator's RPKI-to-Router server and labels each learned path's origin: `valid`, `invalid`, `notfound`, or `unknown`. The learned RIB is never changed and nothing is announced. Validity is shown on `/api/decisions` candidates, the prefix card's learned paths, the exchange peers, and the System page. `avoid_invalid` only refuses a new improvement; it never blocks a withdraw, and the learned-RIB rule, allowlist, cap, community + NO_EXPORT, hold time, and withdraw rules are unchanged. MED stays display-only.
+
+| Key | Default | Meaning |
+|---|---|---|
+| `enabled` | `false` | `true` turns the source on. A block that is not enabled is ignored, sources included. |
+| `sources` | none | Origin-validation plugins, tried in order. The first with a fresh, non-empty cache answers, including one whose server is unreachable but whose last fetch is inside `staleness`; a stale or empty source is skipped, so a second server takes over. Each is a plugin entry (`type`, optional `name`, `config`); only `rtr` exists ([RPKI source `rtr`](#rpki-source-rtr)). At least one is required when enabled. |
+| `avoid_invalid` | `false` | `true` refuses a new improvement onto a provider with an `invalid` learned path for the prefix. With several paths from one provider (add-path, or BMP from several routers), the decision candidate carries the worst state, so one invalid path is enough. An active improvement on a path that becomes invalid is retired through the normal path. Off changes nothing. |
 
 ### `linkouts`
 
@@ -1509,6 +1523,17 @@ Reads the public [RIPE RIS Live](https://ris-live.ripe.net) HTTP stream (#199). 
 |---|---|---|
 | `url` | `https://ris-live.ripe.net/v1/stream/` | Stream endpoint, `http` or `https`, without a query (`format=json` and `client` are added). |
 | `client` | `packeteer-leak-watch` | Client name sent to the service. |
+
+### RPKI source `rtr`
+
+Connects read-only to an RPKI-to-Router server (RFC 8210) such as the operator's Routinator, caches the validated ROA payloads, and validates origin ASNs (RFC 6811). It never announces and never changes the learned RIB. The cache is in memory and holds at most 2,000,000 payloads; a server that exceeds that is dropped. A lost or stalled connection is retried with backoff. When the cache is older than `staleness`, every lookup is `unknown` (fail open). A reset or serial response reaches the cache only at End of Data, so an Error Report or a dropped connection before it leaves the last complete cache in place, and the session is retried. A Serial Notify is answered with the client's last serial, or a Reset Query when the session ID differs, and is ignored while a reset or serial response is in flight.
+
+| Key | Default | Meaning |
+|---|---|---|
+| `address` | none | Required. The server as `host:port` (for example `routinator.example.net:3323`). An IPv6 host needs brackets. |
+| `refresh` | `5m` | How often a healthy session is polled for changes. 1s-24h. |
+| `staleness` | `1h` | How long the cache is served after the last complete fetch. At least `refresh`, at most 24h. Older or missing data is `unknown`. |
+| `timeout` | `30s` | Dial and read wait. 1s-5m. |
 
 ### Detector `baseline`
 

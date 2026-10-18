@@ -8,14 +8,17 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 
 - IXP member pages `/ixp/member/{asn}` (fabric by vantage, filter history, IXP Manager link), `GET /api/ixp/members/{asn}`, `packeteer_ixp_member_{rtt_ms,loss_pct,jitter_ms}` (#166).
 - Route-server signals: spikes in RPKI-invalid, IRR, and transit-free-ASN filtering, new origins, more-specific bursts, and RFC 7999 blackhole counts per member; GET only (#165).
+- Probe multiplexing: providers and exchange peers may share one `source_ip` with a distinct `fwmark` or `dscp`; `packeteer -pbr <format>` prints Linux and router PBR config, never applies it (#157).
 - Shared IX port: `exchanges[].port` (capacity, commit, flat `port_cost`) on one telemetry binding; the commit and cost scorers plan no move past its capacity or commit (#151).
 - Fabric incident correlation: fabric probes grouped by switch, colo, and bundle; `ixp.fabric_degraded` vs `ixp.member_degraded` events; `GET /api/ixp/correlation`; nothing announced (#163).
+- Settings form uses guided inputs: a number and a unit, one prefix or address per row, dropdowns that stay free text when no list is known (#329).
 - Route-server observability: Birdseye polls per member session (state, received, accepted, filtered, filtered-by-reason, max_prefix), in-memory history, `ixp.rs_*` alerts, GET only (#164).
 - PeeringDB / IX-F lookup: read-only cached org name, exchange membership, LAN addresses, route-server flag, policy, and prefix hints; GET /api/lookup; key from PACKETEER_PEERINGDB_API_KEY (#153).
 - Fabric probes: member LAN loss, RTT, and jitter from ixp.vantages; Can Ping opt-out and busy-host tolerance; nothing announced (#162).
 - IX-F member import: read-only GET of the IXP Manager member export or a named IX-F URL; key from PACKETEER_IXP_MANAGER_API_KEY header only; 14-day expiry warning (#161).
 - Web UI shows the Packeteer logo next to the name and as the favicon (#327).
 - IXP mode: `ixp: {}` is observe-only and refuses `mode: inject`, `announcer`, `mitigation`, `inbound`, `synthesize`, and `more_specific`; no BGP neighbors or RIB view required (#160).
+- RPKI origin validation: an opt-in `rpki` block reads an RTR server, labels learned paths valid/invalid/notfound/unknown, and `avoid_invalid` refuses a new steer onto an invalid path (#158).
 - Probe-path check: a TTL-1 probe from each provider's `source_ip` must leave through `next_hop`; a mismatch marks it down with reason `probe path mismatch`; `path_check: false` opts out (#150).
 - BMP exchange peer session monitor: `exchange.peer_up`/`peer_down` with the decoded reason (Cease subcode 1), Adj-RIB-In count as `adj_rib_in` and a metric, and `exchange.max_prefix` warnings (#147).
 
@@ -25,6 +28,8 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 - Fabric probes read Can Ping from the customers document (`use` ping templates, GET /admin/api/v4/nagios/customers/{vlan}/4|6) and skip a manager export with no successful list (#162).
 - Fabric probes stop using a Can Ping list older than three intervals after failed fetches, so opted-out members are not pinged (#336).
 - IX-F import rejects an IPv4-mapped prefix on an IPv6 LAN, a percent-encoded API key in the manager URL, and a switch id from another IXP (#161).
+- RTR Serial Notify uses the client's last serial, Error Report code 2 keeps the cache and retries, and an empty RPKI source is skipped (#158).
+- RTR applies a serial delta only at End of Data and ignores Serial Notify during any response; RPKI labels a provider by all its learned paths; the System row matches cache use (#158).
 - IX-F member view drops the URL query string, and fetch errors no longer include the request URL; `key_expires` and `fetched` are omitted when unset (#337).
 
 ## [0.7.0] - 2026-10-15

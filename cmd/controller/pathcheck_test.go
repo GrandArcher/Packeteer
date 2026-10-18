@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/netip"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"github.com/GrandArcher/Packeteer/internal/config"
+	"github.com/GrandArcher/Packeteer/internal/sockmark"
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
 )
 
@@ -170,5 +172,37 @@ func TestPathCheckerRunChecksAndStops(t *testing.T) {
 	case <-done:
 	case <-time.After(2 * time.Second):
 		t.Fatal("checker did not stop on cancel")
+	}
+}
+
+// A shared source_ip is checked along the path its tag selects (#157).
+func TestPathCheckTagsTheProbe(t *testing.T) {
+	cfg := &config.Config{Providers: []config.Provider{
+		{Name: "ix-a", SourceIP: "192.0.2.11", NextHop: "192.0.2.1", FwMark: 101, DSCP: 10},
+		{Name: "ix-b", SourceIP: "192.0.2.11", NextHop: "192.0.2.2", DSCP: 12},
+	}}
+	targets := pathTargets(cfg)
+	if len(targets) != 2 || targets[0].Marking != (sockmark.Marking{Mark: 101, DSCP: 10}) || targets[1].Marking != (sockmark.Marking{DSCP: 12}) {
+		t.Fatalf("targets = %+v", targets)
+	}
+	status := &fakePathStatus{}
+	got := map[string]sockmark.Marking{}
+	c := &pathChecker{
+		status:  status,
+		targets: targets,
+		hop: func(ctx context.Context, _, _ netip.Addr, _, _ int, _ time.Duration) (netip.Addr, bool, error) {
+			m := sockmark.FromContext(ctx)
+			got[fmt.Sprint(m)] = m
+			return netip.MustParseAddr("192.0.2.1"), true, nil // right for ix-a, wrong for ix-b
+		},
+		timeout: time.Second,
+		log:     discardLog(),
+	}
+	c.round(context.Background())
+	if len(got) != 2 {
+		t.Fatalf("hop saw markings %v", got)
+	}
+	if status.calls["ix-a"] || !status.calls["ix-b"] {
+		t.Fatalf("verdicts = %+v, want ix-a ok and ix-b mismatch", status.calls)
 	}
 }

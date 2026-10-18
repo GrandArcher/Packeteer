@@ -21,6 +21,7 @@ import (
 	"golang.org/x/net/ipv4"
 	"golang.org/x/net/ipv6"
 
+	"github.com/GrandArcher/Packeteer/internal/sockmark"
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
 )
 
@@ -89,7 +90,7 @@ type conn struct {
 	proto int
 }
 
-func (p *Prober) listen(src netip.Addr) (*conn, error) {
+func (p *Prober) listen(src netip.Addr, m sockmark.Marking) (*conn, error) {
 	v6 := src.Is6() && !src.Is4In6()
 	raw, dgram, proto := "ip4:icmp", "udp4", 1
 	if v6 {
@@ -112,6 +113,10 @@ func (p *Prober) listen(src netip.Addr) (*conn, error) {
 		}
 		c, err := xicmp.ListenPacket(network, src.String())
 		if err == nil {
+			if terr := tag(c, v6, m); terr != nil {
+				c.Close()
+				return nil, fmt.Errorf("%w: %s: %v", plugin.ErrSourceUnavailable, src, terr)
+			}
 			return &conn{c: c, udp: udp, proto: proto}, nil
 		}
 		if isSourceErr(err) {
@@ -125,12 +130,36 @@ func (p *Prober) listen(src netip.Addr) (*conn, error) {
 	return nil, fmt.Errorf("icmp socket unavailable (need CAP_NET_RAW or ping_group_range): %w", errors.Join(errs...))
 }
 
+// tag applies the probe tag to the socket behind c. x/net/icmp keeps the
+// socket private, but the embedded net.PacketConn of its ipv4/ipv6 wrapper
+// is exported.
+func tag(c *xicmp.PacketConn, v6 bool, m sockmark.Marking) error {
+	if m.IsZero() {
+		return nil
+	}
+	var pc net.PacketConn
+	if v6 {
+		pc = c.IPv6PacketConn().PacketConn
+	} else {
+		pc = c.IPv4PacketConn().PacketConn
+	}
+	sc, ok := pc.(syscall.Conn)
+	if !ok {
+		return fmt.Errorf("%w: socket has no raw access", sockmark.ErrTag)
+	}
+	rc, err := sc.SyscallConn()
+	if err != nil {
+		return fmt.Errorf("%w: %v", sockmark.ErrTag, err)
+	}
+	return sockmark.ApplyConn(rc, v6, m)
+}
+
 // Probe implements plugin.Prober.
 func (p *Prober) Probe(ctx context.Context, req plugin.ProbeRequest) (plugin.ProbeResult, error) {
 	if req.Source.Is4() != req.Target.Is4() {
 		return plugin.ProbeResult{}, fmt.Errorf("source %s and target %s differ in address family", req.Source, req.Target)
 	}
-	c, err := p.listen(req.Source)
+	c, err := p.listen(req.Source, sockmark.Marking{Mark: req.Mark, DSCP: req.DSCP})
 	if err != nil {
 		return plugin.ProbeResult{}, err
 	}

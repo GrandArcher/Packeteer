@@ -297,7 +297,7 @@ function prefixCard(row) {
     card.appendChild(el("p", "reason", "Learned paths. MED is display only and does not choose the exit. Via is route server, bilateral, or unknown."));
     var pt = el("table");
     var phr = el("tr");
-    ["State", "Provider", "Next hop", "AS path", "Via", "MED", "Whose MED"].forEach(function (h) {
+    ["State", "Provider", "Next hop", "AS path", "Via", "RPKI", "MED", "Whose MED"].forEach(function (h) {
       phr.appendChild(el("th", "", h));
     });
     var phead = el("thead");
@@ -312,6 +312,7 @@ function prefixCard(row) {
       tr.appendChild(el("td", "mono", path.next_hop || "—"));
       tr.appendChild(el("td", "mono", fmtAS(path.as_path)));
       tr.appendChild(el("td", "", fmtVia(path.via)));
+      tr.appendChild(el("td", path.rpki === "invalid" ? "badge warn" : "", path.rpki || "-"));
       tr.appendChild(el("td", "num", path.med === undefined || path.med === null ? "—" : String(path.med)));
       tr.appendChild(el("td", "", path.med_from || "—"));
       pb.appendChild(tr);

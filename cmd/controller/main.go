@@ -29,6 +29,7 @@ import (
 	"github.com/GrandArcher/Packeteer/internal/inbound"
 	"github.com/GrandArcher/Packeteer/internal/linkout"
 	"github.com/GrandArcher/Packeteer/internal/notify"
+	"github.com/GrandArcher/Packeteer/internal/pbr"
 	"github.com/GrandArcher/Packeteer/internal/pluginhost"
 	_ "github.com/GrandArcher/Packeteer/internal/plugins/all"
 	"github.com/GrandArcher/Packeteer/internal/probe"
@@ -127,6 +128,7 @@ func run(ctx context.Context, args []string, getenv func(string) string, stdout,
 	backup := fs.String("backup", "", "write the config and stored history to this archive and exit (no probes, no BGP; never overwrites)")
 	restoreFrom := fs.String("restore", "", "restore stored history from this archive into its config's storage and exit (stop the controller first)")
 	restoreConfig := fs.String("restore-config", "", "with -restore, also write the archived config to this path")
+	pbrFormat := fs.String("pbr", "", "print the probe policy routing for the configured providers ("+strings.Join(pbr.Formats, ", ")+") and exit; generation only, nothing is applied or sent to a router")
 	force := fs.Bool("force", false, "with -restore, replace existing history and config files")
 	if err := fs.Parse(args); err != nil {
 		return 2
@@ -155,6 +157,15 @@ func run(ctx context.Context, args []string, getenv func(string) string, stdout,
 	if err := applyRuntimeEnv(cfg, getenv); err != nil {
 		fmt.Fprintf(stderr, "packeteer: refusing to start: %v\n", err)
 		return 1
+	}
+	if *pbrFormat != "" {
+		text, err := pbr.Generate(*pbrFormat, pbr.Entries(cfg))
+		if err != nil {
+			fmt.Fprintf(stderr, "packeteer: -pbr: %v\n", err)
+			return 1
+		}
+		fmt.Fprint(stdout, text)
+		return 0
 	}
 	if *backup != "" {
 		return runBackup(ctx, *path, cfg, *backup, getenv, stdout, stderr)
@@ -213,7 +224,14 @@ func run(ctx context.Context, args []string, getenv func(string) string, stdout,
 			fmt.Fprintf(stdout, "  - %s domain=%s next_hop=%s (measured by the peer there)\n", p.Name, p.Domain, p.NextHop)
 			continue
 		}
-		fmt.Fprintf(stdout, "  - %s source_ip=%s next_hop=%s%s%s\n", p.Name, p.SourceIP, p.NextHop, bmp, ix)
+		tag := ""
+		if p.FwMark != 0 {
+			tag += fmt.Sprintf(" fwmark=%d", p.FwMark)
+		}
+		if p.DSCP != 0 {
+			tag += fmt.Sprintf(" dscp=%d", p.DSCP)
+		}
+		fmt.Fprintf(stdout, "  - %s source_ip=%s next_hop=%s%s%s%s\n", p.Name, p.SourceIP, p.NextHop, tag, bmp, ix)
 	}
 	for _, ex := range cfg.Exchanges {
 		fmt.Fprintf(stdout, "exchange %s: lans=%s peers=%d (route-checked)\n", ex.Name, strings.Join(ex.LANs, ","), len(ex.Peers))
@@ -545,6 +563,7 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 		log.Error("refusing to start", "err", err)
 		return 1
 	}
+	rpkiSet := newRPKISet(plugins)
 	// The two controllers share max_improvements, so each reads the other's
 	// count. ctl is assigned right below; Active is nil-safe until then.
 	if err := setMitigationRIB(mit, view); err != nil {
@@ -635,8 +654,11 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 	col.SetFlowTracked(func() int { return flowTracked(plugins) })
 	col.SetTruncated(func() map[string]uint64 { return truncated(plugins) })
 	col.Attach(engine, decider, view)
+	if rpkiSet.Enabled() {
+		col.SetRPKI(rpkiSet.Validate)
+	}
 	httpSrv.SetQuarantine(quarantineControl{decider: decider, out: dispatch, poke: poke, now: time.Now})
-	wireExchanges(ctx, cfg, col, httpSrv, view, plugins, decider)
+	wireExchanges(ctx, cfg, col, httpSrv, view, plugins, decider, rpkiSet)
 	hopTargets, ixHealth := exchangeHealth(cfg)
 	col.SetExchangeHealth(ixHealth)
 	wireSuggestions(cfg, httpSrv, view)
@@ -732,7 +754,7 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 				return
 			}
 			leading = true
-			in := decisionInput(loopCtx, now, engine, view, plugins, fed)
+			in := decisionInput(loopCtx, now, engine, view, plugins, fed, rpkiSet)
 			in.Held = lw.Held
 			changes, err := runDecision(now, decider, in, ctl, log, snap.Mode, engine)
 			fed.publish(now, in, decider.Improvements())
