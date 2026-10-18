@@ -144,6 +144,9 @@ type Server struct {
 	// ixpMembers is the IX-F import (#161). Nil until SetIXPMembers.
 	// Read at request time. It never announces.
 	ixpMembers atomic.Value
+	// ixpFabric is the fabric prober (#162). Nil until SetIXPFabric.
+	// Read at request time. It never announces.
+	ixpFabric atomic.Value
 	// quarantine releases a flap-quarantined prefix (#228). Nil until
 	// SetQuarantine.
 	quarantine atomic.Value
@@ -335,6 +338,9 @@ func (s *Server) handleMetrics(w http.ResponseWriter, _ *http.Request) {
 	}
 	if v, ok := s.ixpMemberView(); ok && v.Configured {
 		_, _ = w.Write(IXPMemberMetrics(v, time.Now()))
+	}
+	if v, ok := s.ixpFabricView(); ok && v.Configured {
+		_, _ = w.Write(IXPFabricMetrics(v, time.Now()))
 	}
 }
 

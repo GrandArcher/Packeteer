@@ -177,6 +177,26 @@ func TestSwitchIDStaysOnIXP(t *testing.T) {
 	}
 }
 
+func TestParseCanPing(t *testing.T) {
+	p, err := parseIXF([]byte(`{"version":"1.0","member_list":[{"asnum":64496,"connection_list":[{"state":"active","vlan_list":[
+		{"vlan_id":10,"ipv4":{"address":"192.0.2.20","can_ping":false,"busy_host":true}},
+		{"vlan_id":10,"ipv6":{"address":"2001:db8::20"}}
+	]}]}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	addrs := p.members[0].Connections[0].Addresses
+	if len(addrs) != 2 {
+		t.Fatalf("%+v", addrs)
+	}
+	if addrs[0].CanPing == nil || *addrs[0].CanPing || !addrs[0].BusyHost || addrs[0].Address != "192.0.2.20" {
+		t.Fatalf("v4 %+v", addrs[0])
+	}
+	if addrs[1].CanPing != nil || addrs[1].BusyHost || addrs[1].Address != "2001:db8::20" {
+		t.Fatalf("v6 %+v", addrs[1])
+	}
+}
+
 func TestParseEmpty(t *testing.T) {
 	p, err := parseIXF([]byte(`{"version":"1.0","ixp_list":[],"member_list":[]}`))
 	if err != nil || len(p.members) != 0 || p.addresses != 0 || p.members == nil || p.ixps == nil {
@@ -197,6 +217,7 @@ func TestParseRejects(t *testing.T) {
 		{`{"version":"1.0","member_list":[{"asnum":0,"name":"n"}]}`, "asnum is invalid", ""},
 		{`{"version":"1.0","member_list":[{"asnum":64496,"name":"n","connection_list":[{"vlan_list":[{"ipv4":{"address":"` + secret + `"}}]}]}]}`, "address is not an IP address", secret},
 		{`{"version":"1.0","member_list":[{"asnum":64496,"name":"` + strings.Repeat("LONGTOKEN", 40) + `"}]}`, "longer than", "LONGTOKEN"},
+		{`{"version":"1.0","member_list":[{"asnum":64496,"connection_list":[{"vlan_list":[{"vlan_id":10,"ipv4":{"address":"192.0.2.20","can_ping":"no"}}]}]}]}`, "invalid JSON", "192.0.2.20"},
 	}
 	for _, tc := range cases {
 		_, err := parseIXF([]byte(tc.body))

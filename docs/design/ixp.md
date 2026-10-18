@@ -1,9 +1,9 @@
 # IXP mode (#160)
 
-Status: charter, config gate, and IX-F member import (#161). Fabric
-probing, route-server history, signals, member pages, and multi-site
-fabric health are #162-#167 and are not built. An `ixp` block does not
-announce, probe members, or open a route-server session.
+Status: charter, config gate, IX-F member import (#161), and fabric
+probes (#162). Route-server history, signals, member pages, and
+multi-site fabric health are #163-#167 and are not built. An `ixp`
+block does not announce or open a route-server session.
 
 An Internet exchange operator runs Packeteer to observe its fabric,
 route servers, and members. It does not route for them. This is not the
@@ -11,15 +11,16 @@ route servers, and members. It does not route for them. This is not the
 
 ## Turning it on
 
-`ixp: {}` in the config. The only key is `members` (#161). Any other
-key is an error. Omitted, or `ixp: null`, is not IXP mode. `mode` stays
-`observe`. `mode: suggest` is accepted and announces nothing. The
-shipped example leaves the block commented out.
+`ixp: {}` in the config. The keys are `members` (#161), `vantages`,
+and `fabric` (#162). Any other key is an error. Omitted, or `ixp: null`,
+is not IXP mode. `mode` stays `observe`. `mode: suggest` is accepted
+and announces nothing. The shipped example leaves the block commented
+out.
 
 IXP mode does not need `bgp.neighbors`. With no neighbors the controller
 does not build a RIB view. A neighbor list is still allowed; it is the
 operator's own iBGP, not route-server data. Providers are still
-required. Fabric vantages are #162 (`ixp.vantages`), not providers.
+required. Fabric vantages are `ixp.vantages` (#162), not providers.
 
 Adding or removing `ixp` needs a restart. An online reload cannot do it.
 
@@ -63,9 +64,33 @@ IXP Manager and Birdseye are read with GET only. No other method.
   A warning fires when 14 days or fewer remain, including a key that is
   already expired. A date more than 366 days ahead is refused. Redirects
   are not followed. The response is capped (`max_bytes`, default 8 MiB)
-  and refreshed on `refresh` (default 15m, 1m-24h). Use a low-privilege
-  user. Superuser endpoints are not called. The list is served at
+  and refreshed on `refresh` (default 15m, 1m-24h). This export does not
+  require a superuser. The list is served at
   `GET /api/ixp/members`. It is not the RIB and not an input to Decide.
+- IXP Manager customers document (#162, enforced):
+  `GET /admin/api/v4/nagios/customers/{vlanid}/4` and
+  `GET /admin/api/v4/nagios/customers/{vlanid}/6` on the same origin as
+  the member export, including a subdirectory install. `vlanid` is the
+  VLAN database id. The last segment is `4` or `6`. No template suffix
+  and no query string. Auth is the same `X-IXP-Manager-API-Key` header.
+  This is the one route in IXP Manager's external superuser group that
+  this process GETs, so the key's user has to be a superuser. A 401
+  leaves that VLAN unprobed. IXP Manager mounts that group at
+  `/admin/api/v4` (its own `tools/runtime/nagios/update-nagios.sh` uses
+  that prefix). The HTML docs still show
+  `/api/v4/nagios/customers/{vlanid}/4`, which is registered only when
+  `UNSECURED_API_ACCESS` is on (off by default since v7.2) and is not
+  called. Redirects are not followed. The body is capped at
+  2 MiB. A host is probed only when its service use is
+  `ixp-manager-member-ping-service`, or
+  `ixp-manager-member-ping-busy-service` for a busy host. The document
+  does not include `service_description` or `check_command`. The busy
+  template's warning is 1000ms or 80% loss; otherwise 250ms or 20%
+  loss. The busy critical RTT (2000ms) is the minimum per-packet
+  timeout for that host. A failed fetch keeps the last successful
+  list. With no successful list, that VLAN is not probed: the member
+  export omits `can_ping`. A named IX-F URL does not use this GET.
+  Switch, birdseye, and template nagios routes are not called.
 - An IX-F JSON document the operator names (#161) is GET of that exact
   URL, with no API key. Setting the key with a URL that is not the
   member export is a config error.
@@ -73,9 +98,9 @@ IXP Manager and Birdseye are read with GET only. No other method.
   `api/routes/count/protocol/{protocol}`,
   `api/routes/lc-zwild/protocol/{protocol}/{rs-asn}/1101`.
 
-IXP Manager's per-interface "Can Ping" opt-out is #162. This import does
-not probe, so the opt-out has nothing to apply to yet. A member
-interface that opts out is not probed once fabric probes exist.
+An IX-F address with `can_ping: false` is not probed. Probes stay inside
+the VLAN prefix. Nothing is announced, and the measurements are not an
+input to Decide.
 
 ## Lab data
 
@@ -84,5 +109,5 @@ Member data is never committed. Lab fixtures use documentation prefixes
 documentation or private ASNs (64496-64511, 65536-65551, or
 64512-65534).
 
-Rollback: remove `ixp.members` or the `ixp` block and restart. Nothing
-was announced.
+Rollback: remove `ixp.members`, or `ixp.vantages` and `ixp.fabric`, or
+the `ixp` block, and restart. Nothing was announced.

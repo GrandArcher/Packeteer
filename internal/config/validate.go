@@ -345,6 +345,9 @@ func (c *Config) validatePlugins(add func(string, ...any)) {
 	if c.IXP != nil && c.IXP.Members != nil && c.IXP.Members.Type == "" {
 		add("ixp.members: type is required")
 	}
+	if c.IXP != nil && c.IXP.Fabric != nil && c.IXP.Fabric.Type == "" {
+		add("ixp.fabric: type is required")
+	}
 	if c.Announcer != nil && c.Announcer.Type == "" {
 		add("announcer: type is required")
 	}

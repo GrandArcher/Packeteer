@@ -184,6 +184,9 @@ func run(ctx context.Context, args []string, getenv func(string) string, stdout,
 		if cfg.IXP.Members != nil {
 			fmt.Fprintf(stdout, "ixp members: %s (read-only, never announces)\n", cfg.IXP.Members.Type)
 		}
+		if cfg.IXP.Fabric != nil {
+			fmt.Fprintf(stdout, "ixp fabric: %s (%d vantages, observe-only, never announces)\n", cfg.IXP.Fabric.Type, len(cfg.IXP.Vantages))
+		}
 	}
 	fmt.Fprintf(stdout, "max_improvements: %d\n", *cfg.MaxImprovements)
 	fmt.Fprintf(stdout, "providers (%d):\n", len(cfg.Providers))
@@ -628,6 +631,7 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 	wireSuggestions(cfg, httpSrv, view)
 	wireMitigationCandidates(httpSrv, mit, view)
 	wireIXPMembers(plugins, httpSrv, dispatch.Emit)
+	wireIXPFabric(cfg, plugins, httpSrv)
 	// Active/standby (#31): registered before the elector starts. A
 	// standby withdraws everything, runs no decisions, and announces
 	// nothing; the announce controllers check the same gate.
