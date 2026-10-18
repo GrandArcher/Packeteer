@@ -21,7 +21,7 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 
 ### Fixed
 
-- Provider health follows what was measured: a provider with no reply or loss at `probe.down_loss_pct` is `down`, at `probe.degraded_loss_pct` `degraded`; "no reply" replaces 0.0 ms; `counts.measured` now needs a reply (#343).
+- Provider health follows measurements: no reply or loss at `probe.down_loss_pct` is down, at `probe.degraded_loss_pct` degraded; "no reply" replaces 0.0 ms (#343).
 - BMP exchange peer monitor: a stats report no longer marks a peer up, state is kept per router and peer, and an unknown peer-down reason reads `unknown reason N` (#338).
 - Fabric probes read Can Ping from the customers document (`use` ping templates, GET /admin/api/v4/nagios/customers/{vlan}/4|6) and skip a manager export with no successful list (#162).
 - Fabric probes stop using a Can Ping list older than three intervals after failed fetches, so opted-out members are not pinged (#336).
