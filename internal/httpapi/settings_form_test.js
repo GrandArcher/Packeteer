@@ -8,6 +8,8 @@ var vm = require("vm");
 
 var calls = [];
 var searchRows = [];
+// disk stands in for the config file once a test sets it.
+var disk = null;
 
 function assert(cond, msg) {
   if (!cond) {
@@ -157,6 +159,9 @@ function queryAll(root, selector) {
   return found;
 }
 
+// These events bubble in a browser; blur does not.
+var bubbles = {input: true, change: true, click: true};
+
 var proto = {
   nodeType: 1,
   appendChild: appendChild,
@@ -169,6 +174,7 @@ var proto = {
   dispatchEvent: function (ev) {
     var list = (this._listeners[ev.type] || []).slice();
     for (var i = 0; i < list.length; i++) list[i].call(this, ev);
+    if (bubbles[ev.type] && this.parentNode && this.parentNode.nodeType === 1) this.parentNode.dispatchEvent(ev);
     return true;
   },
   getAttribute: function (name) {
@@ -370,6 +376,10 @@ global.Event = Event;
 global.fetch = function (url, opts) {
   var method = (opts && opts.method) || "GET";
   calls.push({method: method, url: String(url), body: opts && opts.body});
+  if (disk) {
+    var served = serveConfig(method, String(url), opts && opts.body);
+    if (served) return served;
+  }
   if (method === "PUT") return Promise.reject(new Error("config write"));
   if (method === "GET" && String(url).indexOf("/api/search?") === 0) return reply({asns: {rows: searchRows}});
   if (method === "POST" && String(url) === "/api/config/validate") {
@@ -386,6 +396,28 @@ global.fetch = function (url, opts) {
   }
   return Promise.reject(new Error("offline"));
 };
+
+// serveConfig plays the config API against disk: a file whose only setting
+// is hold_time, and a form that carries it.
+function serveConfig(method, url, raw) {
+  var req = raw ? JSON.parse(raw) : {};
+  var hold = function (yaml) { return /hold_time: (\S+)/.exec(yaml)[1]; };
+  if (method === "GET" && url === "/api/config") {
+    return reply({yaml: disk.yaml, path: "/etc/packeteer/config.yaml", sha256: disk.sha});
+  }
+  if (method === "POST" && url === "/api/config/form") {
+    if (!req.apply) return reply({yaml: req.yaml, form: Object.assign(emptyForm(), {mode: "observe", hold_time: hold(req.yaml)})});
+    return reply({yaml: req.yaml.replace(/hold_time: \S+/, "hold_time: " + req.form.hold_time), form: req.form});
+  }
+  if (method === "PUT" && url === "/api/config") {
+    var changes = [];
+    if (hold(req.yaml) !== hold(disk.yaml)) changes.push({key: "hold_time", old: hold(disk.yaml), new: hold(req.yaml)});
+    disk = {yaml: req.yaml, sha: "sha" + disk.writes, writes: disk.writes + 1};
+    return reply({result: {valid: true, mode: "observe", changes: changes, restart_required: false, reload_online: true},
+      applied: changes.length ? ["hold_time"] : [], file: {path: "/etc/packeteer/config.yaml", yaml: disk.yaml, sha256: disk.sha}});
+  }
+  return null;
+}
 
 function reply(body) {
   return Promise.resolve({
@@ -679,6 +711,95 @@ async function main() {
   assert(form.policies[0].geoip_db === "/mnt/missing.mmdb", "GeoIP path stored " + form.policies[0].geoip_db);
 
   assert(!calls.some(function (c) { return c.method === "PUT"; }), "the form wrote the config file");
+
+  await saveFlow();
+}
+
+function puts() {
+  return calls.filter(function (c) { return c.method === "PUT"; });
+}
+function bar() { return document.getElementById("save-bar"); }
+function unsaved() { return !document.getElementById("unsaved").hidden; }
+async function settle() {
+  for (var i = 0; i < 6; i++) await flush();
+}
+
+// Save must write what the form shows (#344), name each change, and the page
+// must show unsaved edits and keep Apply and Save in reach.
+async function saveFlow() {
+  disk = {yaml: "mode: observe\nhold_time: 1m\n", sha: "sha0", writes: 1};
+  loadConfig();
+  await settle();
+  assert(document.getElementById("ed-yaml").value === disk.yaml, "the file was not loaded");
+  assert(!unsaved() && bar().dataset.state === "clean", "a fresh load shows unsaved changes");
+  assert(document.getElementById("fm-hold").value === "1", "hold time shown as " + document.getElementById("fm-hold").value);
+
+  var bareSave = puts().length;
+  document.getElementById("ed-save").click();
+  await settle();
+  assert(puts().length === bareSave + 1, "Save with no edits did not reach the file");
+  assert(document.getElementById("ed-status").textContent === "No changes to save.", "unchanged Save said: " + document.getElementById("ed-status").textContent);
+
+  var hold = document.getElementById("fm-hold");
+  typed(hold, "2");
+  assert(unsaved() && bar().dataset.state === "form", "a form edit did not show as unsaved");
+  assert(document.getElementById("ed-yaml").value === disk.yaml, "the edit reached the YAML before Apply");
+  typed(hold, "1");
+  assert(!unsaved(), "undoing the edit left the unsaved flag");
+  typed(hold, "2");
+
+  var before = puts().length;
+  document.getElementById("ed-save").click();
+  await settle();
+  assert(puts().length === before + 1, "Save did not write the file");
+  assert(/hold_time: 2m/.test(disk.yaml), "the file still says " + disk.yaml);
+  var said = document.getElementById("ed-status").textContent;
+  assert(said.indexOf("Saved 1 change: hold_time 1m -> 2m (applied online)") === 0, "Save said: " + said);
+  assert(document.getElementById("bar-msg").textContent === said, "the bar does not repeat the result");
+  assert(!unsaved() && bar().dataset.state === "clean", "Save left the unsaved flag");
+
+  typed(hold, "3");
+  assert(unsaved() && bar().dataset.state === "form", "a second edit did not show as unsaved");
+  assert(document.getElementById("bar-save") && document.getElementById("bar-apply"), "the bar has no Apply and Save");
+  var css = fs.readFileSync(path.join(dir, "web/app.css"), "utf8");
+  assert(/\.savebar \{[^}]*position: sticky;[^}]*bottom: 0;/.test(css), "the bar is not sticky at the bottom");
+  var html = fs.readFileSync(path.join(dir, "web/settings.html"), "utf8");
+  assert(html.indexOf('<div id="save-bar"') > html.indexOf("</main>"), "the bar sits inside main, where it would end with the content");
+
+  // Apply from the bar copies the form into the YAML and does not write.
+  before = puts().length;
+  document.getElementById("bar-apply").click();
+  await settle();
+  assert(/hold_time: 3m/.test(document.getElementById("ed-yaml").value), "Apply did not reach the YAML");
+  assert(puts().length === before && /hold_time: 2m/.test(disk.yaml), "Apply wrote the file");
+  assert(unsaved() && bar().dataset.state === "yaml", "an applied edit is not shown as unsaved");
+  document.getElementById("bar-save").click();
+  await settle();
+  assert(/hold_time: 3m/.test(disk.yaml), "Save from the bar did not write");
+  assert(!unsaved(), "Save from the bar left the unsaved flag");
+
+  // A form edit beside a hand edit of the YAML is refused, not merged.
+  typed(hold, "4");
+  var text = document.getElementById("ed-yaml");
+  text.value = disk.yaml + "# by hand\n";
+  text.dispatchEvent(new Event("input"));
+  before = puts().length;
+  document.getElementById("ed-save").click();
+  await settle();
+  assert(puts().length === before, "Save wrote with form and YAML edits both pending");
+  said = document.getElementById("ed-status").textContent;
+  assert(said.indexOf("You have unapplied form changes") === 0 && said.indexOf("Nothing was saved") > 0, "refusal said: " + said);
+  assert(unsaved(), "the refused Save cleared the unsaved flag");
+  assert(/hold_time: 3m/.test(disk.yaml), "the refused Save changed the file");
+
+  // An invalid field stops the apply, so Save writes nothing.
+  text.value = disk.yaml;
+  typed(hold, "x");
+  before = puts().length;
+  document.getElementById("ed-save").click();
+  await settle();
+  assert(puts().length === before, "Save wrote with an invalid field");
+  assert(document.getElementById("ed-status").textContent.indexOf("Nothing was saved: the form changes were not applied.") === 0, "invalid field: " + document.getElementById("ed-status").textContent);
 }
 
 process.on("unhandledRejection", function (err) {

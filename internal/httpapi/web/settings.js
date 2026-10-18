@@ -1,6 +1,11 @@
 "use strict";
 
 var base = "";
+// What the page last loaded, applied, or saved. They tell an edit that is only
+// in the form from one that is in the YAML text or already in the file.
+var formBase = "";
+var yamlApplied = "";
+var yamlSaved = "";
 var form = emptyForm();
 
 function emptyForm() {
@@ -894,6 +899,38 @@ function edStatus(text, errors) {
   var ul = document.getElementById("ed-errors");
   clear(ul);
   (errors || []).forEach(function (e) { ul.appendChild(el("li", "", e)); });
+  barMessage(text + (errors && errors.length ? " " + errors[0] : ""));
+}
+
+// barMessage repeats the last result in the sticky bar, because the status
+// lines sit far from the buttons on a long page.
+function barMessage(text) {
+  byId("bar-msg").textContent = text || "";
+}
+
+// refreshUnsaved shows whether an edit has not reached the file yet, and where
+// it is: only in the form, or in the YAML text.
+function refreshUnsaved() {
+  if (!formBase) return;
+  var inForm = formEdited();
+  var inYaml = byId("ed-yaml").value !== yamlSaved;
+  byId("unsaved").hidden = !(inForm || inYaml);
+  byId("unsaved").textContent = inForm ? "Unsaved form changes" : "Unsaved changes";
+  byId("save-bar").dataset.state = inForm ? "form" : (inYaml ? "yaml" : "clean");
+}
+
+// formEdited is true when the form differs from what was last loaded or applied.
+function formEdited() {
+  if (!formBase) return false;
+  readKnobs();
+  return JSON.stringify(form) !== formBase;
+}
+
+function snapshotForm(yaml) {
+  readKnobs();
+  formBase = JSON.stringify(form);
+  yamlApplied = yaml;
+  refreshUnsaved();
 }
 
 function describe(res) {
@@ -921,7 +958,7 @@ function editorOff(err) {
   var node = document.getElementById("ed-off");
   node.textContent = explain(err);
   node.hidden = !off;
-  ["ed-load", "ed-check", "ed-save", "wz-run", "wz-next", "wz-next-2", "wz-back", "wz-back-3", "wz-add-provider", "wz-sug", "form-apply", "form-reload", "form-add-provider", "form-add-target", "form-add-allow", "sug-refresh", "form-add-flow", "form-add-policy", "form-add-vip", "form-add-outage", "form-add-exchange", "ix-refresh", "form-add-anomaly-rule", "wz-next-3", "wz-back-4", "cs-add-host", "cs-apply"].forEach(function (id) {
+  ["ed-load", "ed-check", "ed-save", "bar-apply", "bar-save", "wz-run", "wz-next", "wz-next-2", "wz-back", "wz-back-3", "wz-add-provider", "wz-sug", "form-apply", "form-reload", "form-add-provider", "form-add-target", "form-add-allow", "sug-refresh", "form-add-flow", "form-add-policy", "form-add-vip", "form-add-outage", "form-add-exchange", "ix-refresh", "form-add-anomaly-rule", "wz-next-3", "wz-back-4", "cs-add-host", "cs-apply"].forEach(function (id) {
     var b = document.getElementById(id);
     if (b) b.disabled = off;
   });
@@ -935,6 +972,7 @@ function loadConfig() {
   api("GET", "/api/config").then(function (f) {
     base = f.sha256;
     document.getElementById("ed-yaml").value = f.yaml;
+    yamlSaved = f.yaml;
     document.getElementById("ed-path").textContent = f.path;
     document.getElementById("ed-sha").textContent = f.sha256.slice(0, 12);
     document.getElementById("ed-off").hidden = true;
@@ -952,25 +990,73 @@ function checkConfig() {
   }, function (err) { edStatus(err.message); });
 }
 
+// saveConfig never writes the file without the form edits: it applies them to
+// the YAML first, or refuses when the YAML text has edits of its own that the
+// apply would overwrite.
 function saveConfig() {
+  if (!formEdited()) {
+    putConfig();
+    return;
+  }
+  if (byId("ed-yaml").value !== yamlApplied) {
+    edStatus("You have unapplied form changes, and the YAML text has edits of its own. Nothing was saved. Press Apply form to YAML (it replaces the keys the form shows), or Reload form from YAML to drop the form edits.");
+    return;
+  }
+  edStatus("Applying the form changes first...");
+  applyForm().then(function (out) {
+    if (out) putConfig();
+    else edStatus("Nothing was saved: the form changes were not applied. " + byId("form-status").textContent);
+  });
+}
+
+function putConfig() {
   var body = {yaml: document.getElementById("ed-yaml").value, base: base,
     confirm_inject: document.getElementById("ed-inject").checked};
   api("PUT", "/api/config", body).then(function (out) {
     base = out.file.sha256;
+    yamlSaved = body.yaml;
     document.getElementById("ed-sha").textContent = base.slice(0, 12);
     document.getElementById("ed-inject").checked = false;
-    var extra = "";
-    if (out.applied && out.applied.length) extra = " Applied online: " + out.applied.join(", ") + ".";
-    if (out.apply_error) extra = " Not applied: " + out.apply_error;
-    edStatus("Saved. " + describe(out.result) + extra);
+    edStatus(savedMessage(out));
+    refreshUnsaved();
   }, function (err) {
     var res = err.data && err.data.result;
-    edStatus(err.message + (res ? " — " + describe(res) : ""), res && res.errors);
+    edStatus(err.message + (res ? " - " + describe(res) : ""), res && res.errors);
   });
+}
+
+var maxListedChanges = 8;
+
+function changeValue(v) {
+  if (v == null) return "(unset)";
+  return v.length > 60 ? v.slice(0, 57) + "..." : v;
+}
+
+// savedMessage names each key the save changed, old value to new, and says
+// whether it is live. A save that changed nothing says so.
+function savedMessage(out) {
+  var res = out.result || {};
+  var changes = res.changes || [];
+  var live = "";
+  if (out.apply_error) live = " Not applied: " + out.apply_error;
+  else if (!changes.length) live = "";
+  else if (res.restart_required) live = " (restart required)";
+  else if (out.applied && out.applied.length) live = " (applied online)";
+  else if (res.reload_online) live = " (not applied yet: send SIGHUP)";
+  if (!changes.length) return "No changes to save." + live;
+  var shown = changes.slice(0, maxListedChanges).map(function (c) {
+    return c.key + " " + changeValue(c.old) + " -> " + changeValue(c.new);
+  });
+  if (changes.length > shown.length) shown.push("and " + (changes.length - shown.length) + " more");
+  var msg = "Saved " + changes.length + (changes.length === 1 ? " change: " : " changes: ") + shown.join("; ") + live + ".";
+  if (res.mode) msg += " Mode " + res.mode + ".";
+  if (res.enables_inject) msg += " Turns inject on.";
+  return msg;
 }
 
 function formStatus(text) {
   document.getElementById("form-status").textContent = text || "";
+  barMessage(text);
 }
 
 function readKnobs() {
@@ -1719,6 +1805,7 @@ function loadForm(yaml) {
     loadFormDefaults();
     foldDiscovered();
     renderForm();
+    snapshotForm(yaml);
     formStatus("");
   }, function (err) {
     formStatus(explain(err) + " The YAML is unchanged. Fix it, then reload the form.");
@@ -1773,10 +1860,10 @@ function applyForm() {
   for (var i = 0; i < bad.length; i++) {
     if (!bad[i].hidden && bad[i].textContent) {
       formStatus("Fix the highlighted fields before applying. Nothing was written.");
-      return;
+      return Promise.resolve(null);
     }
   }
-  postForm(formStatus);
+  return postForm(formStatus);
 }
 
 // postForm merges the form into the YAML in the editor. It resolves with
@@ -1790,6 +1877,7 @@ function postForm(report) {
       loadFormDefaults();
     }
     renderForm();
+    snapshotForm(out.yaml);
     report("Applied to the YAML. Not saved. Validate, then Save. Save applies thresholds, policies, sources, probe timing, mode, the allowlist, and bgp.neighbors online. Any other change waits for a restart.");
     return out;
   }, function (err) {
@@ -2080,6 +2168,11 @@ document.getElementById("wz-sug").addEventListener("click", function () {
 renderWzProviders();
 showWizardStep(1);
 document.getElementById("form-apply").addEventListener("click", applyForm);
+byId("bar-apply").addEventListener("click", applyForm);
+byId("bar-save").addEventListener("click", saveConfig);
+["input", "change", "click"].forEach(function (type) {
+  byId("editor-section").addEventListener(type, refreshUnsaved);
+});
 document.getElementById("form-reload").addEventListener("click", function () {
   readKnobs();
   loadForm(document.getElementById("ed-yaml").value);
