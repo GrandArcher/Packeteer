@@ -76,8 +76,8 @@ IXP Manager and Birdseye are read with GET only. No other method.
   VLAN database id. The last segment is `4` or `6`. No template suffix
   and no query string. Auth is the same `X-IXP-Manager-API-Key` header.
   This is the one route in IXP Manager's external superuser group that
-  this process GETs, so the key's user has to be a superuser. A 401
-  leaves that VLAN unprobed. IXP Manager mounts that group at
+  this process GETs, so the key's user has to be a superuser. A 401 is
+  a failed fetch like any other. IXP Manager mounts that group at
   `/admin/api/v4` (its own `tools/runtime/nagios/update-nagios.sh` uses
   that prefix). The HTML docs still show
   `/api/v4/nagios/customers/{vlanid}/4`, which is registered only when
@@ -90,8 +90,9 @@ IXP Manager and Birdseye are read with GET only. No other method.
   template's warning is 1000ms or 80% loss; otherwise 250ms or 20%
   loss. The busy critical RTT (2000ms) is the minimum per-packet
   timeout for that host. A failed fetch keeps the last successful
-  list. With no successful list, that VLAN is not probed: the member
-  export omits `can_ping`. A named IX-F URL does not use this GET.
+  list for three prober intervals after the last successful fetch,
+  then the VLAN is not probed until a fetch succeeds. With no successful list, that VLAN is not
+  probed: the member export omits `can_ping`. A named IX-F URL does not use this GET.
   Switch, birdseye, and template nagios routes are not called.
 - An IX-F JSON document the operator names (#161) is GET of that exact
   URL, with no API key. Setting the key with a URL that is not the
