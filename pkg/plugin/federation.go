@@ -79,6 +79,29 @@ type InstanceSnapshot struct {
 	Paths           []FederatedPath        `json:"paths"`
 	Routes          []FederatedRoute       `json:"routes"`
 	Improvements    []FederatedImprovement `json:"improvements"`
+	// IXP is this site's fabric health (#167). Nil when the instance is
+	// not in IXP mode or has not run a round.
+	IXP *FederatedIXP `json:"ixp,omitempty"`
+}
+
+// FederatedIXP is what an IXP-mode site publishes about its own fabric
+// (#167): the latest fabric round reduced to one path per member, VLAN,
+// vantage, and family, the correlator's groups, the route servers' health,
+// and the measured core links to other sites. It is read-only data for the
+// sites view. It is not an input to Decide and nothing is announced.
+type FederatedIXP struct {
+	// Round is when the fabric round ran, on the publisher's clock until
+	// ShiftSnapshot. Zero when no round has run.
+	Round time.Time `json:"round,omitzero"`
+	// Stale is the fabric prober's own flag: it used no member list.
+	Stale    bool                  `json:"stale"`
+	Vantages []FabricVantageStatus `json:"vantages"`
+	Members  []FabricPath          `json:"members"`
+	Groups   []CorrelationGroup    `json:"groups"`
+	// RouteServers counts Birdseye servers, and those that are not up.
+	RouteServers     int              `json:"route_servers"`
+	RouteServersDown int              `json:"route_servers_down"`
+	Core             []CoreLinkStatus `json:"core"`
 }
 
 // PeerState is the latest state of one configured peer. Fresh is false
@@ -148,6 +171,16 @@ func ShiftSnapshot(s InstanceSnapshot, fetched time.Time) InstanceSnapshot {
 		out.Improvements[i] = im
 	}
 	out.Routes = append([]FederatedRoute(nil), s.Routes...)
+	if s.IXP != nil {
+		x := *s.IXP
+		x.Round = shift(x.Round)
+		x.Core = make([]CoreLinkStatus, len(s.IXP.Core))
+		for i, l := range s.IXP.Core {
+			l.At = shift(l.At)
+			x.Core[i] = l
+		}
+		out.IXP = &x
+	}
 	out.Time = fetched
 	return out
 }

@@ -3,7 +3,9 @@ package config
 import (
 	"errors"
 	"fmt"
+	"math"
 	"net/netip"
+	"time"
 
 	"gopkg.in/yaml.v3"
 
@@ -19,14 +21,36 @@ const (
 // IXP is exchange-operator mode (#160). A non-nil value, including an
 // empty block, is IXP mode. IXP mode never announces. Keys are members
 // (#161), vantages and fabric (#162), routeservers (#164), and correlate
-// (#163). Any other key is a parse error.
+// (#163), and core and core_links (#167). Any other key is a parse error.
 type IXP struct {
 	Members      *PluginSpec `yaml:"members,omitempty"`
 	Vantages     []Vantage   `yaml:"vantages,omitempty"`
 	Fabric       *PluginSpec `yaml:"fabric,omitempty"`
 	RouteServers *PluginSpec `yaml:"routeservers,omitempty"`
 	Correlate    *PluginSpec `yaml:"correlate,omitempty"`
+	Core         *PluginSpec `yaml:"core,omitempty"`
+	CoreLinks    []CoreLink  `yaml:"core_links,omitempty"`
 }
+
+// CoreLink is one measured path from this site to another site's address
+// across the exchange core (#167). Peer is the other site's federation
+// instance name. Source is optional. MaxLossPct defaults to
+// DefaultCoreMaxLossPct; MaxRTT zero means no RTT limit.
+type CoreLink struct {
+	Name       string        `yaml:"name"`
+	Peer       string        `yaml:"peer"`
+	Address    string        `yaml:"address"`
+	Source     string        `yaml:"source,omitempty"`
+	MaxLossPct float64       `yaml:"max_loss_pct,omitempty"`
+	MaxRTT     time.Duration `yaml:"max_rtt,omitempty"`
+}
+
+// Bounds for ixp.core_links (#167).
+const (
+	maxCoreLinks          = 64
+	maxCoreRTT            = 10 * time.Second
+	DefaultCoreMaxLossPct = 10
+)
 
 // Vantage is one IX-owned monitoring address on a peering LAN (#162).
 // Probes to member addresses on that VLAN are sourced from Address.
@@ -92,6 +116,7 @@ func (c *Config) validateIXP(add func(string, ...any)) {
 		add("ixp forbids more_specific: IXP mode never announces")
 	}
 	c.validateVantages(add)
+	c.validateCoreLinks(add)
 	if c.IXP.Correlate != nil && c.IXP.Fabric == nil {
 		add("ixp.correlate requires ixp.fabric")
 	}
@@ -150,4 +175,58 @@ func (c *Config) validateVantages(add func(string, ...any)) {
 
 func usableVantage(a netip.Addr) bool {
 	return a.IsValid() && !a.IsUnspecified() && !a.IsMulticast() && !a.IsLoopback() && !a.IsLinkLocalUnicast() && !a.IsLinkLocalMulticast()
+}
+
+func (c *Config) validateCoreLinks(add func(string, ...any)) {
+	ix := c.IXP
+	hasC, hasL := ix.Core != nil, len(ix.CoreLinks) > 0
+	switch {
+	case hasL && !hasC:
+		add("ixp.core_links requires ixp.core")
+	case hasC && !hasL:
+		add("ixp.core requires ixp.core_links")
+	}
+	if hasC && c.Federation == nil {
+		add("ixp.core requires federation: a core link names the federation peer at the other site")
+	}
+	if len(ix.CoreLinks) > maxCoreLinks {
+		add("ixp.core_links: more than %d", maxCoreLinks)
+	}
+	seen := map[string]bool{}
+	for i := range ix.CoreLinks {
+		l := &ix.CoreLinks[i]
+		p := fmt.Sprintf("ixp.core_links[%d]", i)
+		if !plugin.ValidLabel(l.Name) {
+			add("%s.name is invalid", p)
+		} else if seen[l.Name] {
+			add("%s.name %q is duplicated", p, l.Name)
+		}
+		seen[l.Name] = true
+		if !validName(l.Peer) {
+			add("%s.peer is invalid", p)
+		} else if l.Peer == c.Instance {
+			add("%s.peer %q is this instance", p, l.Peer)
+		}
+		if a, err := netip.ParseAddr(l.Address); err != nil || a.Zone() != "" || !usableVantage(a.Unmap()) {
+			add("%s.address is not a usable IP address", p)
+		} else {
+			l.Address = a.Unmap().String()
+		}
+		if l.Source != "" {
+			if a, err := netip.ParseAddr(l.Source); err != nil || a.Zone() != "" || !usableVantage(a.Unmap()) {
+				add("%s.source is not a usable IP address", p)
+			} else {
+				l.Source = a.Unmap().String()
+			}
+		}
+		if l.MaxLossPct == 0 {
+			l.MaxLossPct = DefaultCoreMaxLossPct
+		}
+		if math.IsNaN(l.MaxLossPct) || l.MaxLossPct < 0 || l.MaxLossPct > 100 {
+			add("%s.max_loss_pct must be between 0 and 100", p)
+		}
+		if l.MaxRTT < 0 || l.MaxRTT > maxCoreRTT {
+			add("%s.max_rtt must be between 0 and %s", p, maxCoreRTT)
+		}
+	}
 }

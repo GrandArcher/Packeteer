@@ -156,6 +156,9 @@ type Server struct {
 	// ixpCorrelation is the fabric incident correlator (#163). Nil until
 	// SetIXPCorrelation. Read at request time. It never announces.
 	ixpCorrelation atomic.Value
+	// ixpSites is the multi-site fabric health view (#167). Nil until
+	// SetIXPSites. Read at request time. It never announces.
+	ixpSites atomic.Value
 	// quarantine releases a flap-quarantined prefix (#228). Nil until
 	// SetQuarantine.
 	quarantine atomic.Value
@@ -360,6 +363,9 @@ func (s *Server) handleMetrics(w http.ResponseWriter, _ *http.Request) {
 	}
 	if v, ok := s.ixpCorrelationView(); ok && v.Configured {
 		_, _ = w.Write(IXPCorrelationMetrics(v))
+	}
+	if v, ok := s.ixpSitesView(); ok {
+		_, _ = w.Write(IXPSitesMetrics(v))
 	}
 }
 

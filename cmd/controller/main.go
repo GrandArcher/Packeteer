@@ -205,6 +205,9 @@ func run(ctx context.Context, args []string, getenv func(string) string, stdout,
 		if cfg.IXP.Correlate != nil {
 			fmt.Fprintf(stdout, "ixp correlate: %s (reads the fabric probes, never announces)\n", cfg.IXP.Correlate.Type)
 		}
+		if cfg.IXP.Core != nil {
+			fmt.Fprintf(stdout, "ixp core: %s (%d links to other sites, observe-only, never announces)\n", cfg.IXP.Core.Type, len(cfg.IXP.CoreLinks))
+		}
 	}
 	if cfg.Lookup != nil {
 		fmt.Fprintf(stdout, "lookup: %s (read-only, never announces)\n", cfg.Lookup.Type)
@@ -668,6 +671,7 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 	wireIXPFabric(cfg, plugins, httpSrv)
 	wireIXPRouteServers(plugins, httpSrv, dispatch.Emit)
 	wireIXPCorrelate(plugins, httpSrv, dispatch.Emit)
+	wireIXPSites(cfg, plugins, fed, httpSrv)
 	// Active/standby (#31): registered before the elector starts. A
 	// standby withdraws everything, runs no decisions, and announces
 	// nothing; the announce controllers check the same gate.

@@ -6,6 +6,7 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 
 ### Added
 
+- Multi-site IXP health: each site publishes its fabric measurements over mTLS federation; `ixp.core` measures inter-site RTT and loss; `/ixp/sites`, `GET /api/ixp/sites` (#167).
 - IXP member pages `/ixp/member/{asn}` (fabric by vantage, filter history, IXP Manager link), `GET /api/ixp/members/{asn}`, `packeteer_ixp_member_{rtt_ms,loss_pct,jitter_ms}` (#166).
 - Overview problems headline and "N of M healthy" tile; `probe.degraded_loss_pct` and `probe.down_loss_pct` set the dashboard health labels, no decision uses them (#343).
 - Route-server signals: spikes in RPKI-invalid, IRR, and transit-free-ASN filtering, new origins, more-specific bursts, and RFC 7999 blackhole counts per member; GET only (#165).
@@ -26,6 +27,7 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 ### Fixed
 
 - Setup wizard collapses on a configured box and, over an existing config, shows a diff and what is lost before the editor changes; auth, http, storage, other blocks are kept (#345).
+- Observe and suggest: pages show "Traffic now (router)" (learned path) and "Packeteer recommends"; events read "Recommends moving X from A to B (not announced, observe mode)", not "steered" (#346).
 - Settings: Save applies pending form edits first instead of reporting Saved without them, names each changed key (old -> new), and a sticky bar flags unsaved changes (#344).
 - Provider health follows measurements: no reply or loss at `probe.down_loss_pct` is down, at `probe.degraded_loss_pct` degraded; "no reply" replaces 0.0 ms (#343).
 - BMP exchange peer monitor: a stats report no longer marks a peer up, state is kept per router and peer, and an unknown peer-down reason reads `unknown reason N` (#338).

@@ -609,3 +609,44 @@ ixp:
 		t.Fatalf("bad rounds: %v", err)
 	}
 }
+
+func TestIXPCoreDoesNotAnnounce(t *testing.T) {
+	const block = `
+domain: site-a
+federation:
+  type: mtls
+ixp:
+  core:
+    type: icmp
+    config:
+      interval: 30s
+  core_links:
+    - {name: a-to-b, peer: site-b, address: 192.0.2.40}
+`
+	cfg := load(t, block)
+	// The federation transport needs mounted certificates; this test is
+	// about the core prober.
+	cfg.Federation = nil
+	s, err := Build(cfg, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.IXPCore == nil || s.IXPCore.Type != "icmp" {
+		t.Fatalf("%+v", s.IXPCore)
+	}
+	if s.Announcer != nil || len(s.RIBSources) != 0 || s.Inbound != nil || s.Mitigation != nil {
+		t.Fatalf("announce path built: %v rib %d", s.Announcer, len(s.RIBSources))
+	}
+	if !slices.Contains(s.Summary(), "ixp_core icmp") {
+		t.Fatalf("summary = %v", s.Summary())
+	}
+	if v := s.IXPCore.Plugin.View(); !v.Configured || len(v.Links) != 0 {
+		t.Fatalf("%+v", v)
+	}
+	bad := strings.Replace(block, "interval: 30s", "interval: 1s", 1)
+	cfg = load(t, bad)
+	cfg.Federation = nil
+	if _, err := Build(cfg, Options{}); err == nil || !strings.Contains(err.Error(), "ixp.core") {
+		t.Fatalf("bad interval: %v", err)
+	}
+}

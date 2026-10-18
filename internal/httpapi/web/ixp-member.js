@@ -3,8 +3,8 @@
 // connections, latest fabric round by vantage, and route-server sessions,
 // and GET /api/ixp/routeservers/history for each session's filter history.
 // With no ASN in the path it lists the members. Read-only. Rows are built
-// with textContent only. Uses api, el, clear, and fmtTime from ui.js. No
-// inline script: the CSP allows scripts from this origin only.
+// with textContent only. Uses api, el, clear, fmtTime, and the ixp helpers
+// from ui.js. No inline script: the CSP allows scripts from this origin only.
 
 var MEMBER_PATH = "/ixp/member/";
 var MEMBER_REFRESH_MS = 15000;
@@ -17,55 +17,17 @@ var memberASN = (function () {
   return /^[0-9]{1,10}$/.test(rest) ? rest : "";
 })();
 
-function memberTable(headers, rows) {
-  var t = el("table");
-  var hr = el("tr");
-  headers.forEach(function (h) { hr.appendChild(el("th", "", h)); });
-  t.appendChild(el("thead")).appendChild(hr);
-  var body = el("tbody");
-  rows.forEach(function (cells) {
-    var tr = el("tr");
-    cells.forEach(function (c) {
-      var td = el("td", c.cls || "", c.text);
-      if (c.href) {
-        clear(td);
-        var a = el("a", "", c.text);
-        a.href = c.href;
-        td.appendChild(a);
-      }
-      tr.appendChild(td);
-    });
-    body.appendChild(tr);
-  });
-  t.appendChild(body);
-  return t;
-}
-
-function cell(text, cls) {
-  return {text: text == null || text === "" ? "\u2014" : String(text), cls: cls};
-}
-
-function num(v, unit) {
-  return typeof v === "number" ? v.toFixed(2) + unit : "\u2014";
-}
-
-function setBox(id, node) {
-  var box = document.getElementById(id);
-  clear(box);
-  box.appendChild(node);
-}
-
 function renderList(data) {
   var members = data.members || [];
   document.getElementById("member-title").textContent = "IXP members";
   document.title = "Packeteer IXP members";
   document.getElementById("member-list-section").hidden = false;
   if (!members.length) {
-    setBox("member-list", el("p", "empty", "No members. Set ixp.members to import the IX-F member list."));
+    ixpSetBox("member-list", el("p", "empty", "No members. Set ixp.members to import the IX-F member list."));
     return;
   }
-  setBox("member-list", memberTable(["AS", "Name"], members.map(function (m) {
-    return [{text: "AS" + m.asn, cls: "mono", href: MEMBER_PATH + m.asn}, cell(m.name)];
+  ixpSetBox("member-list", ixpTable(["AS", "Name"], members.map(function (m) {
+    return [{text: "AS" + m.asn, cls: "mono", href: MEMBER_PATH + m.asn}, ixpCell(m.name)];
   })));
 }
 
@@ -89,35 +51,35 @@ function renderConnections(d) {
   (d.connections || []).forEach(function (c) {
     var addrs = (c.addresses || []).map(function (a) { return a.address; }).join(", ");
     var ifs = c.interfaces || [];
-    if (!ifs.length) rows.push([cell(c.ixp_id), cell(c.state), cell(""), cell(""), cell(""), cell(addrs, "mono")]);
+    if (!ifs.length) rows.push([ixpCell(c.ixp_id), ixpCell(c.state), ixpCell(""), ixpCell(""), ixpCell(""), ixpCell(addrs, "mono")]);
     ifs.forEach(function (i) {
-      rows.push([cell(c.ixp_id), cell(c.state), cell(i.switch || i.switch_id), cell(i.colo), cell(i.speed_mbps ? i.speed_mbps + " Mbit/s" : ""), cell(addrs, "mono")]);
+      rows.push([ixpCell(c.ixp_id), ixpCell(c.state), ixpCell(i.switch || i.switch_id), ixpCell(i.colo), ixpCell(i.speed_mbps ? i.speed_mbps + " Mbit/s" : ""), ixpCell(addrs, "mono")]);
     });
   });
   if (!rows.length) {
-    setBox("member-connections", el("p", "empty", "Not in the IX-F member list."));
+    ixpSetBox("member-connections", el("p", "empty", "Not in the IX-F member list."));
     return;
   }
-  setBox("member-connections", memberTable(["IXP", "State", "Switch", "Colo", "Speed", "Addresses"], rows));
+  ixpSetBox("member-connections", ixpTable(["IXP", "State", "Switch", "Colo", "Speed", "Addresses"], rows));
 }
 
 function renderFabric(d) {
   var f = d.fabric || {};
   if (!f.configured) {
-    setBox("member-fabric", el("p", "empty", "Fabric probing is not configured (ixp.fabric)."));
+    ixpSetBox("member-fabric", el("p", "empty", "Fabric probing is not configured (ixp.fabric)."));
     return;
   }
   var samples = f.samples || [];
   if (!samples.length) {
-    setBox("member-fabric", el("p", "empty", f.stale ? "The member list is stale, so nothing is probed." : "No address of this member was measured in the latest round (no Can Ping, or no matching vantage)."));
+    ixpSetBox("member-fabric", el("p", "empty", f.stale ? "The member list is stale, so nothing is probed." : "No address of this member was measured in the latest round (no Can Ping, or no matching vantage)."));
     return;
   }
-  setBox("member-fabric", memberTable(["Vantage", "Address", "VLAN", "Loss", "RTT", "Jitter", "State", "At"], samples.map(function (s) {
+  ixpSetBox("member-fabric", ixpTable(["Vantage", "Address", "VLAN", "Loss", "RTT", "Jitter", "State", "At"], samples.map(function (s) {
     var state = s.error ? "error: " + s.error : (s.past_tolerance ? "past tolerance" : "ok");
     var bad = s.error || s.past_tolerance ? "bad" : "";
-    return [cell(s.vantage), cell(s.address, "mono"), cell(s.vlan_id),
-      cell(s.error ? "" : num(s.loss_pct, " %")), cell(s.error ? "" : num(s.rtt_ms, " ms")), cell(s.error ? "" : num(s.jitter_ms, " ms")),
-      cell(state, bad), cell(s.at ? fmtTime(s.at) : "")];
+    return [ixpCell(s.vantage), ixpCell(s.address, "mono"), ixpCell(s.vlan_id),
+      ixpCell(s.error ? "" : ixpNum(s.loss_pct, " %")), ixpCell(s.error ? "" : ixpNum(s.rtt_ms, " ms")), ixpCell(s.error ? "" : ixpNum(s.jitter_ms, " ms")),
+      ixpCell(state, bad), ixpCell(s.at ? fmtTime(s.at) : "")];
   })));
 }
 
@@ -128,12 +90,12 @@ function reasonText(reasons) {
 function renderSessions(d) {
   var sessions = d.route_server_sessions || [];
   if (!sessions.length) {
-    setBox("member-sessions", el("p", "empty", "No route-server session for this member (ixp.routeservers)."));
+    ixpSetBox("member-sessions", el("p", "empty", "No route-server session for this member (ixp.routeservers)."));
     return;
   }
-  setBox("member-sessions", memberTable(["Server", "Session", "State", "Received", "Accepted", "Filtered", "Reasons"], sessions.map(function (s) {
-    return [cell(s.server), cell(s.neighbor || s.session, "mono"), cell(s.state, s.established ? "" : "bad"),
-      cell(s.counted ? s.received : ""), cell(s.counted ? s.accepted : ""), cell(s.counted ? s.filtered : ""), cell(s.counted ? reasonText(s.reasons) : s.error)];
+  ixpSetBox("member-sessions", ixpTable(["Server", "Session", "State", "Received", "Accepted", "Filtered", "Reasons"], sessions.map(function (s) {
+    return [ixpCell(s.server), ixpCell(s.neighbor || s.session, "mono"), ixpCell(s.state, s.established ? "" : "bad"),
+      ixpCell(s.counted ? s.received : ""), ixpCell(s.counted ? s.accepted : ""), ixpCell(s.counted ? s.filtered : ""), ixpCell(s.counted ? reasonText(s.reasons) : s.error)];
   })));
 }
 
@@ -148,9 +110,9 @@ function historyPanel(s, data) {
   }
   var shown = samples.slice(0, HISTORY_ROWS);
   box.appendChild(el("p", "tag", "Latest " + shown.length + " of " + samples.length + " samples, newest first. History is in memory and a restart empties it."));
-  box.appendChild(memberTable(["At", "State", "Accepted", "Filtered", "Reasons"], shown.map(function (x) {
-    return [cell(fmtTime(x.at)), cell(x.established ? "Established" : "Down", x.established ? "" : "bad"),
-      cell(x.counted ? x.accepted : ""), cell(x.counted ? x.filtered : ""), cell(x.counted ? reasonText(x.reasons) : "")];
+  box.appendChild(ixpTable(["At", "State", "Accepted", "Filtered", "Reasons"], shown.map(function (x) {
+    return [ixpCell(fmtTime(x.at)), ixpCell(x.established ? "Established" : "Down", x.established ? "" : "bad"),
+      ixpCell(x.counted ? x.accepted : ""), ixpCell(x.counted ? x.filtered : ""), ixpCell(x.counted ? reasonText(x.reasons) : "")];
   })));
   return box;
 }

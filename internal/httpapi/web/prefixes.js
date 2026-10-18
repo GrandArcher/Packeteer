@@ -206,7 +206,8 @@ function renderPrefixes(data) {
     root.appendChild(el("p", "empty", "No prefix matches the filter."));
     return;
   }
-  var t = table(["More", "Prefix", "Current", "Recommended", "Score gain", "Loss", "RTT", "RIB"]);
+  var labels = exitLabels();
+  var t = table(["More", "Prefix", labels.now, labels.pick, "Score gain", "Loss", "RTT", "RIB"]);
   var keep = {};
   rows.forEach(function (row) {
     prefixRow(row, t.body);

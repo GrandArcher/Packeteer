@@ -395,6 +395,9 @@ func (c *Config) validatePlugins(add func(string, ...any)) {
 	if c.IXP != nil && c.IXP.Correlate != nil && c.IXP.Correlate.Type == "" {
 		add("ixp.correlate: type is required")
 	}
+	if c.IXP != nil && c.IXP.Core != nil && c.IXP.Core.Type == "" {
+		add("ixp.core: type is required")
+	}
 	if c.Announcer != nil && c.Announcer.Type == "" {
 		add("announcer: type is required")
 	}

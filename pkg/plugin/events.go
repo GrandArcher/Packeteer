@@ -112,7 +112,7 @@ var eventCatalog = []EventSpec{
 	{Kind: EventControllerStopping, Severity: SeverityWarning, Group: "controller", TrapID: 2,
 		Summary: "The controller is shutting down and has withdrawn its routes."},
 	{Kind: EventImprovementAdded, Severity: SeverityInfo, Group: "improvement", Keys: []string{"prefix"}, TrapID: 3,
-		Summary: "A prefix was steered to a better provider (announced in inject, logged only in observe and suggest)."},
+		Summary: "A prefix was steered to a better provider (announced in inject; in observe and suggest a recommendation that is logged only)."},
 	{Kind: EventImprovementSwitch, Severity: SeverityInfo, Group: "improvement", Keys: []string{"prefix"}, TrapID: 4,
 		Summary: "An existing improvement moved to another provider."},
 	{Kind: EventImprovementRemoved, Severity: SeverityInfo, Group: "improvement", Keys: []string{"prefix"}, TrapID: 5, Resolves: true,

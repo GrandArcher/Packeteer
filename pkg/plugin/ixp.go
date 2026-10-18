@@ -1,7 +1,9 @@
 package plugin
 
 import (
+	"cmp"
 	"net/netip"
+	"slices"
 	"time"
 )
 
@@ -25,6 +27,11 @@ const KindRouteServer Kind = "ixp_routeserver"
 // Decide, and it never announces.
 const KindCorrelator Kind = "ixp_correlate"
 
+// KindCore is the inter-site core prober (#167). It measures the path
+// from this site to each other site's address across the exchange core.
+// It is not a provider, not an input to Decide, and it never announces.
+const KindCore Kind = "ixp_core"
+
 // MemberSources is the registry for ixp.members.
 var MemberSources = NewRegistry[MemberSource](KindMemberSource)
 
@@ -36,6 +43,9 @@ var RouteServerWatches = NewRegistry[RouteServerWatch](KindRouteServer)
 
 // FabricCorrelators is the registry for ixp.correlate.
 var FabricCorrelators = NewRegistry[FabricCorrelator](KindCorrelator)
+
+// CoreProbes is the registry for ixp.core.
+var CoreProbes = NewRegistry[CoreProbe](KindCore)
 
 // MemberSource imports an IX-F member list. View never blocks and never
 // fetches. The slices it returns must not be modified. SetEventSink is
@@ -364,6 +374,105 @@ type CorrelationMember struct {
 	Name      string `json:"name,omitempty"`
 	Addresses int    `json:"addresses"`
 	Active    bool   `json:"active"`
+}
+
+// CoreProbe measures the core between sites (#167). View never blocks and
+// never probes. SetLinks is called before Start. An implementation must
+// not announce, must not write the RIB, and must not call Decide.
+type CoreProbe interface {
+	Lifecycle
+	View() CoreView
+	SetLinks(l []CoreLink)
+}
+
+// CoreLink is one measured path from this site to another. Peer is the
+// other site's federation instance name. Source may be the zero address,
+// which lets the kernel choose. MaxRTT zero means no RTT limit.
+type CoreLink struct {
+	Name       string
+	Peer       string
+	Source     netip.Addr
+	Address    netip.Addr
+	MaxLossPct float64
+	MaxRTT     time.Duration
+}
+
+// CoreView is the latest round over every link. Links is empty before the
+// first round.
+type CoreView struct {
+	Configured bool             `json:"configured"`
+	Round      time.Time        `json:"round,omitzero"`
+	Links      []CoreLinkStatus `json:"links"`
+}
+
+// CoreLinkStatus is one link after a round. Up is false when no reply came
+// back or the probe failed. Degraded is true when the link is down, loss
+// is above the link's limit, or RTT is above its limit. Loss and RTT are
+// zero when the probe failed (Error is set).
+type CoreLinkStatus struct {
+	Name     string    `json:"name"`
+	Peer     string    `json:"peer"`
+	Address  string    `json:"address"`
+	Sent     int       `json:"sent"`
+	LossPct  float64   `json:"loss_pct"`
+	RTTMs    float64   `json:"rtt_ms"`
+	JitterMs float64   `json:"jitter_ms"`
+	Up       bool      `json:"up"`
+	Degraded bool      `json:"degraded"`
+	Error    string    `json:"error,omitempty"`
+	At       time.Time `json:"at"`
+}
+
+// FabricPath is a member's worst measurement in one VLAN, vantage, and
+// address family: the highest loss, RTT, and jitter of its addresses
+// there, and whether any is past tolerance. A probe error is not a
+// measurement and makes no path.
+type FabricPath struct {
+	ASN           uint32  `json:"asn"`
+	VLANID        int     `json:"vlan_id"`
+	Vantage       string  `json:"vantage"`
+	Family        string  `json:"family"`
+	LossPct       float64 `json:"loss_pct"`
+	RTTMs         float64 `json:"rtt_ms"`
+	JitterMs      float64 `json:"jitter_ms"`
+	PastTolerance bool    `json:"past_tolerance"`
+}
+
+// WorstFabricPaths reduces a fabric round to one path per ASN, VLAN id,
+// vantage, and family, sorted by those keys. It is the one place that
+// decides what "worst address" means for the member series and for what a
+// site publishes to its peers.
+func WorstFabricPaths(samples []FabricSample) []FabricPath {
+	type key struct {
+		asn     uint32
+		vlan    int
+		vantage string
+		family  string
+	}
+	worst := map[key]FabricPath{}
+	for _, sm := range samples {
+		if sm.Error != "" {
+			continue
+		}
+		k := key{sm.ASN, sm.VLANID, sm.Vantage, sm.Family}
+		w, seen := worst[k]
+		if !seen {
+			w = FabricPath{ASN: sm.ASN, VLANID: sm.VLANID, Vantage: sm.Vantage, Family: sm.Family}
+		}
+		w.LossPct = max(w.LossPct, sm.LossPct)
+		w.RTTMs = max(w.RTTMs, sm.RTTMs)
+		w.JitterMs = max(w.JitterMs, sm.JitterMs)
+		w.PastTolerance = w.PastTolerance || sm.PastTolerance
+		worst[k] = w
+	}
+	out := make([]FabricPath, 0, len(worst))
+	for _, w := range worst {
+		out = append(out, w)
+	}
+	slices.SortFunc(out, func(a, b FabricPath) int {
+		return cmp.Or(cmp.Compare(a.ASN, b.ASN), cmp.Compare(a.VLANID, b.VLANID), cmp.Compare(a.Vantage, b.Vantage), cmp.Compare(a.Family, b.Family))
+	})
+	return out
 }
 
 // ValidLabel reports whether s is a short URL-safe label: a letter or
