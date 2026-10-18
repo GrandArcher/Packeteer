@@ -13,6 +13,7 @@ import (
 	"github.com/GrandArcher/Packeteer/internal/plugins/exec"
 	"github.com/GrandArcher/Packeteer/internal/plugins/federation/mtls"
 	fabricicmp "github.com/GrandArcher/Packeteer/internal/plugins/ixpfabric/icmp"
+	"github.com/GrandArcher/Packeteer/internal/plugins/ixprouteserver/birdseye"
 	"github.com/GrandArcher/Packeteer/internal/plugins/leaksource/rislive"
 	"github.com/GrandArcher/Packeteer/internal/plugins/notifier/smtp"
 	"github.com/GrandArcher/Packeteer/internal/plugins/notifier/snmptrap"
@@ -100,6 +101,8 @@ func TestConfigDocCoversStructs(t *testing.T) {
 		oidc.Config{},
 		baseline.Config{},
 		fabricicmp.Config{},
+		birdseye.Config{},
+		birdseye.ServerConfig{},
 	) {
 		if !strings.Contains(text, "`"+key+"`") {
 			missing = append(missing, key)
