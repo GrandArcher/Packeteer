@@ -80,6 +80,53 @@ func TestEventWatchImprovements(t *testing.T) {
 	}
 }
 
+// #346: outside inject the router's path did not move, so no event says a
+// prefix was steered; inject keeps its wording.
+func TestEventWatchImprovementWording(t *testing.T) {
+	p := netip.MustParsePrefix("198.51.100.0/24")
+	changes := []policy.Change{
+		{Action: policy.ActionImprove, New: policy.Improvement{Prefix: p, Provider: "lab-b", Native: "lab-a", Reason: "loss"}},
+		{Action: policy.ActionSwitch, Old: policy.Improvement{Prefix: p, Provider: "lab-b", Native: "lab-a"}, New: policy.Improvement{Prefix: p, Provider: "lab-c", Native: "lab-a"}},
+		{Action: policy.ActionRetire, Old: policy.Improvement{Prefix: p, Provider: "lab-c", Native: "lab-a", Reason: "native path better again"}},
+	}
+	cases := []struct {
+		mode string
+		want []string
+	}{
+		{"observe", []string{
+			"Recommends moving 198.51.100.0/24 from lab-a to lab-b (not announced, observe mode)",
+			"Recommends moving 198.51.100.0/24 from lab-a to lab-c (not announced, observe mode)",
+			"No longer recommends moving 198.51.100.0/24 from lab-a to lab-c (native path better again) (not announced, observe mode)",
+		}},
+		{"suggest", []string{
+			"Recommends moving 198.51.100.0/24 from lab-a to lab-b (not announced, suggest mode)",
+			"Recommends moving 198.51.100.0/24 from lab-a to lab-c (not announced, suggest mode)",
+			"No longer recommends moving 198.51.100.0/24 from lab-a to lab-c (native path better again) (not announced, suggest mode)",
+		}},
+		{"inject", []string{
+			"198.51.100.0/24 steered to lab-b",
+			"198.51.100.0/24 switched to lab-c",
+			"198.51.100.0/24 returned to native routing (native path better again)",
+		}},
+	}
+	for _, c := range cases {
+		s := &sink{}
+		newEventWatch(s, c.mode).improvements(time.Unix(10, 0), changes)
+		got := s.take()
+		if len(got) != len(c.want) {
+			t.Fatalf("%s: %d events, want %d", c.mode, len(got), len(c.want))
+		}
+		for i, e := range got {
+			if e.Message != c.want[i] {
+				t.Errorf("%s event %d = %q, want %q", c.mode, i, e.Message, c.want[i])
+			}
+			if c.mode != "inject" && strings.Contains(e.Message, "steered") {
+				t.Errorf("%s event %d says steered: %q", c.mode, i, e.Message)
+			}
+		}
+	}
+}
+
 func TestEventWatchProviderTransitions(t *testing.T) {
 	s := &sink{}
 	w := newEventWatch(s, "inject")

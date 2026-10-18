@@ -1017,6 +1017,59 @@ jobs:
             'filtered: ?asn=AS64500&amp;sort=gain&amp;size=25 first 2001:db8:1::/48 rows 3' \
             'Showing 1–3 of 3 matching (100000 measured) prefixes.' 'Page 1 of 1' \
             --absent 'Cannot reach' 'mode-inject'
+      - name: UI observe wording smoke (#346; a pending recommendation in observe, Traffic now vs Packeteer recommends)
+        run: |
+          set -euo pipefail
+          base=http://127.0.0.1:18346
+          cat > /tmp/ui346.yaml <<'YAML'
+          mode: observe
+          asn: 64512
+          router_id: 192.0.2.10
+          http:
+            listen: "127.0.0.1:18346"
+          providers:
+            - name: lab-a
+              source_ip: 127.0.0.1
+              next_hop: 192.0.2.1
+          YAML
+          docker run -d --name pkui346 --network host --cap-add NET_RAW --cap-add NET_ADMIN \
+            -v /tmp/ui346.yaml:/etc/packeteer/config.yaml:ro packeteer:ci
+          proxy=""
+          cleanup() {
+            if [ -n "$proxy" ]; then kill "$proxy" 2>/dev/null || true; fi
+            docker stop -t 15 pkui346 >/dev/null || true
+            docker logs pkui346 2>&1 | tail -n 40
+            code="$(docker inspect -f '{{.State.ExitCode}}' pkui346)"
+            docker rm pkui346 >/dev/null || true
+            test "$code" = "0"
+          }
+          trap cleanup EXIT
+          ok=0
+          for _ in $(seq 1 30); do
+            if curl -fsS "$base/healthz" >/dev/null 2>&1; then ok=1; break; fi
+            sleep 1
+          done
+          test "$ok" = 1
+          # The stock image has no router to learn from, so it cannot hold a
+          # recommendation. uiproxy answers /api/prefixes and /api/events with
+          # one, as the observe API returns it (the learned path lab-a as
+          # current, lab-b recommended); the page scripts and the mode are the
+          # image's. The Go tests assemble the same shape from the engine.
+          go build -o /tmp/uiproxy ./lab/uiproxy
+          /tmp/uiproxy -listen 127.0.0.1:18347 -upstream "$base" \
+            -user lab -password lab-only -fixtures lab/ui-fixtures/observe-wording >/tmp/uiproxy346.log 2>&1 &
+          proxy=$!
+          for _ in $(seq 1 20); do
+            curl -fsS http://127.0.0.1:18347/healthz >/dev/null 2>&1 && break
+            sleep 0.2
+          done
+          curl -fsS http://127.0.0.1:18347/healthz >/dev/null
+          bash lab/ui-smoke.sh http://127.0.0.1:18347/prefixes.html 'mode-observe' 'Traffic now (router)' 'Packeteer recommends' \
+            --absent 'steered' 'Steered' '>Current<' 'Cannot reach' 'mode-inject'
+          bash lab/ui-smoke.sh 'http://127.0.0.1:18347/prefix/198.51.100.0%2F24' 'mode-observe' 'Traffic now (router)' 'Packeteer recommends' \
+            'lab-a' 'lab-b' --absent 'steered' 'Steered' '>Current<' 'Cannot reach' 'mode-inject'
+          bash lab/ui-smoke.sh http://127.0.0.1:18347/events.html 'Recommends moving 198.51.100.0/24 from lab-a to lab-b (not announced, observe mode)' \
+            --absent 'steered' 'Cannot reach' 'mode-inject'
       - name: UI settings forms smoke (#130, #181, #155, #329; flow, rules, VIP, outage, exchanges, accept a discovered member, wizard flow step, guided inputs, observe)
         run: |
           set -euo pipefail

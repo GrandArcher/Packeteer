@@ -22,7 +22,7 @@ The same object is the `generic` webhook body and the `exec` `notify` params.
 |---|---|---|---|---|
 | `controller.started` | info | 1 | | The controller started and its plugins are running. Resolves `controller.stopping`. |
 | `controller.stopping` | warning | 2 | | Shutdown (SIGTERM, SIGINT). Sent after Packeteer routes are withdrawn; `fields.withdrawn` is `false` and `fields.error` is set when the withdraw failed. |
-| `improvement.added` | info | 3 | `prefix` | A prefix was steered to a better provider. Fields: `provider`, `native`, `cause` (`performance`, `commit`, `cost`), `reason`, `mode`. |
+| `improvement.added` | info | 3 | `prefix` | A prefix was steered to a better provider. In observe and suggest the message reads "Recommends moving X from A to B (not announced, observe mode)" because the router's path did not change. Fields: `provider`, `native`, `cause` (`performance`, `commit`, `cost`), `reason`, `mode`. |
 | `improvement.switched` | info | 4 | `prefix` | An improvement moved to another provider. Adds `previous`. |
 | `improvement.removed` | info | 5 | `prefix` | An improvement was retired; `reason` says why (native recovered, stale data, RIB loss, provider down, policy, maintenance, TTL). Resolves the prefix. |
 | `provider.down` | critical | 6 | `provider` | A provider's probe source failed, or its TTL-1 path check found its probes leaving through another first hop (`reason` is `probe path mismatch`, #150). The provider is excluded and improvements onto it are withdrawn (fail closed). |

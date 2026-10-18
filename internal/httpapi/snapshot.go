@@ -152,7 +152,7 @@ type Probe struct {
 type Prefix struct {
 	Prefix      string `json:"prefix"`
 	Native      string `json:"native,omitempty"`
-	Current     string `json:"current,omitempty"`
+	Current     string `json:"current,omitempty"` // the learned path; in inject, the engine's choice (#346)
 	Recommended string `json:"recommended,omitempty"`
 	Action      string `json:"action,omitempty"`
 	Reason      string `json:"reason,omitempty"`
@@ -352,7 +352,7 @@ func Assemble(in Input) Snapshot {
 		Providers:          assembleProviders(in),
 		Probes:             assembleProbes(in.Results),
 		Prefixes:           assemblePrefixes(in),
-		Decisions:          assembleDecisions(in.Decisions),
+		Decisions:          assembleDecisions(in.Mode, in.Decisions),
 		Improvements:       assembleImprovements(in.Improvements),
 		Quarantined:        assembleQuarantine(in.Quarantined),
 		Peers:              assemblePeers(in.Peers),
@@ -496,7 +496,17 @@ func subrangesFrom(in []policy.SubrangeDecision) []Subrange {
 	return out
 }
 
-func assembleDecisions(in []policy.Decision) []Decision {
+// exitNow is the exit of a decision as the API reports it as current. Only
+// inject moves traffic to the engine's choice; in observe and suggest the
+// router keeps its learned path, which is the decision's native exit (#346).
+func exitNow(mode string, d policy.Decision) string {
+	if mode == "inject" {
+		return d.Current
+	}
+	return d.Native
+}
+
+func assembleDecisions(mode string, in []policy.Decision) []Decision {
 	out := make([]Decision, 0, len(in))
 	for _, d := range in {
 		if !d.Prefix.IsValid() {
@@ -505,7 +515,7 @@ func assembleDecisions(in []policy.Decision) []Decision {
 		row := Decision{
 			Prefix:        d.Prefix.String(),
 			Native:        d.Native,
-			Current:       d.Current,
+			Current:       exitNow(mode, d),
 			Recommended:   d.Recommended,
 			Action:        d.Action,
 			Cause:         d.Cause,
@@ -631,6 +641,7 @@ func assemblePrefixes(in Input) []Prefix {
 		if row == nil {
 			continue
 		}
+		d.Current = exitNow(in.Mode, d)
 		row.Native, row.Current, row.Recommended = d.Native, d.Current, d.Recommended
 		row.Action, row.Reason = d.Action, d.Reason
 		row.Heterogeneous, row.Subranges = d.Heterogeneous, subrangesFrom(d.Subranges)
@@ -641,11 +652,14 @@ func assemblePrefixes(in Input) []Prefix {
 		if row == nil {
 			continue
 		}
-		if row.Current == "" {
-			row.Current = im.Provider
-		}
 		if row.Native == "" {
 			row.Native = im.Native
+		}
+		if row.Current == "" {
+			row.Current = im.Native
+			if in.Mode == "inject" {
+				row.Current = im.Provider
+			}
 		}
 		if row.Action == "" {
 			row.Action = "keep"
@@ -683,7 +697,7 @@ func assemblePrefixes(in Input) []Prefix {
 		if rt.Neighbor.IsValid() {
 			row.Neighbor = rt.Neighbor.String()
 		}
-		if row.Current == "" {
+		if row.Current == "" || (in.Mode != "inject" && rt.Provider != "") {
 			row.Current = rt.Provider
 		}
 		if row.Native == "" {

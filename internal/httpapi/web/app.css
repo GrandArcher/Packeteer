@@ -448,3 +448,9 @@ th button.sortbtn { all: unset; cursor: pointer; font: inherit; color: inherit; 
 th button.sortbtn:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
 td.num { text-align: right; }
 .table-wrap { overflow-x: auto; }
+
+/* Apply and Save stay in view on the long settings page (#344). */
+.savebar { position: sticky; bottom: 0; z-index: 5; display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; padding: 8px 20px; background: var(--card); border-top: 1px solid var(--line); }
+.savebar [hidden] { display: none; }
+.savebar #bar-msg { flex: 1; min-width: 12rem; margin: 0; }
+.savebar[data-state="form"] { border-top-color: var(--diff); }

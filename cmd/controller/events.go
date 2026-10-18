@@ -121,19 +121,16 @@ func (w *eventWatch) improvements(now time.Time, changes []policy.Change) {
 		return
 	}
 	mode := w.currentMode()
-	suffix := ""
-	if mode != "inject" {
-		suffix = " (" + mode + ": not announced)"
-	}
+	inject := mode == "inject"
 	for _, c := range changes {
-		imp, kind, verb := c.New, "", ""
+		imp, kind := c.New, ""
 		switch c.Action {
 		case policy.ActionImprove:
-			kind, verb = plugin.EventImprovementAdded, "steered to"
+			kind = plugin.EventImprovementAdded
 		case policy.ActionSwitch:
-			kind, verb = plugin.EventImprovementSwitch, "switched to"
+			kind = plugin.EventImprovementSwitch
 		case policy.ActionRetire:
-			imp, kind, verb = c.Old, plugin.EventImprovementRemoved, "returned from"
+			imp, kind = c.Old, plugin.EventImprovementRemoved
 		default:
 			continue
 		}
@@ -147,12 +144,29 @@ func (w *eventWatch) improvements(now time.Time, changes []policy.Change) {
 		if c.Action == policy.ActionSwitch && c.Old.Provider != "" {
 			fields["previous"] = c.Old.Provider
 		}
-		msg := fmt.Sprintf("%s %s %s%s", imp.Prefix, verb, imp.Provider, suffix)
-		if c.Action == policy.ActionRetire {
-			msg = fmt.Sprintf("%s returned to native routing (%s)%s", imp.Prefix, imp.Reason, suffix)
-		}
+		msg := improvementMessage(inject, mode, c, imp)
 		w.emit(now, kind, msg, fields)
 	}
+}
+
+// improvementMessage words a decision change. Outside inject the router's
+// path never moved, so the text says Packeteer recommends and never says
+// traffic was steered (#346).
+func improvementMessage(inject bool, mode string, c policy.Change, imp policy.Improvement) string {
+	if inject {
+		switch c.Action {
+		case policy.ActionRetire:
+			return fmt.Sprintf("%s returned to native routing (%s)", imp.Prefix, imp.Reason)
+		case policy.ActionSwitch:
+			return fmt.Sprintf("%s switched to %s", imp.Prefix, imp.Provider)
+		}
+		return fmt.Sprintf("%s steered to %s", imp.Prefix, imp.Provider)
+	}
+	tail := " (not announced, " + mode + " mode)"
+	if c.Action == policy.ActionRetire {
+		return fmt.Sprintf("No longer recommends moving %s from %s to %s (%s)%s", imp.Prefix, imp.Native, imp.Provider, imp.Reason, tail)
+	}
+	return fmt.Sprintf("Recommends moving %s from %s to %s%s", imp.Prefix, imp.Native, imp.Provider, tail)
 }
 
 // quarantines reports flap quarantines starting and ending (#228).
