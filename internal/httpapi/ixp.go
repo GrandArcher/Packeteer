@@ -87,22 +87,22 @@ func IXPMemberMetrics(v plugin.MemberView, now time.Time) []byte {
 	if v.Stale {
 		members, addrs = 0, 0
 	}
-	up := v.Error == "" && !v.Stale && !v.Fetched.IsZero()
+	up := v.Error == "" && !v.Stale && v.Fetched != nil
 	writeGauge(&b, "packeteer_ixp_members", "Members in the latest IX-F import. Zero when the list is stale.",
 		sample{value: float64(members)})
 	writeGauge(&b, "packeteer_ixp_member_addresses", "LAN addresses in the latest IX-F import. Zero when the list is stale.",
 		sample{value: float64(addrs)})
 	writeGauge(&b, "packeteer_ixp_member_import_up", "1 when the latest IX-F import succeeded and the list is not stale.",
 		sample{value: boolFloat(up)})
-	if !v.Fetched.IsZero() {
-		age := now.Sub(v.Fetched).Seconds()
+	if v.Fetched != nil {
+		age := now.Sub(*v.Fetched).Seconds()
 		if age < 0 {
 			age = 0
 		}
 		writeGauge(&b, "packeteer_ixp_member_import_age_seconds", "Seconds since the last successful IX-F import.",
 			sample{value: age})
 	}
-	if !v.KeyExpires.IsZero() {
+	if v.KeyExpires != nil {
 		writeGauge(&b, "packeteer_ixp_api_key_expiry_seconds", "Unix time when the IXP Manager API key stops working.",
 			sample{value: float64(v.KeyExpires.Unix())})
 	}

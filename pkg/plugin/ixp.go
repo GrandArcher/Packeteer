@@ -38,8 +38,8 @@ type MemberView struct {
 	URL          string      `json:"url,omitempty"`
 	Manager      bool        `json:"manager"`
 	KeyID        string      `json:"key_id,omitempty"`
-	KeyExpires   time.Time   `json:"key_expires,omitempty"`
-	Fetched      time.Time   `json:"fetched,omitempty"`
+	KeyExpires   *time.Time  `json:"key_expires,omitempty"`
+	Fetched      *time.Time  `json:"fetched,omitempty"`
 	Stale        bool        `json:"stale"`
 	Error        string      `json:"error,omitempty"`
 	MemberCount  int         `json:"member_count"`

@@ -40,6 +40,37 @@ func TestIXPMembersUnconfigured(t *testing.T) {
 	}
 }
 
+func TestIXPMembersOmitUnsetTimes(t *testing.T) {
+	s := newIXPServer(t)
+	s.SetIXPMembers(func() plugin.MemberView { return plugin.MemberView{Configured: true} })
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/ixp/members", nil))
+	if strings.Contains(rec.Body.String(), `"fetched"`) || strings.Contains(rec.Body.String(), `"key_expires"`) || strings.Contains(rec.Body.String(), "0001-01-01") {
+		t.Fatalf("unset times in %s", rec.Body)
+	}
+	mrec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(mrec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	if strings.Contains(mrec.Body.String(), "packeteer_ixp_member_import_age_seconds") || strings.Contains(mrec.Body.String(), "packeteer_ixp_api_key_expiry_seconds") {
+		t.Fatalf("unset time metrics\n%s", mrec.Body)
+	}
+
+	fetched := time.Unix(1_800_000_000, 0).UTC()
+	expires := time.Unix(1_801_000_000, 0).UTC()
+	s.SetIXPMembers(func() plugin.MemberView {
+		return plugin.MemberView{Configured: true, Fetched: &fetched, KeyExpires: &expires}
+	})
+	rec = httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/ixp/members", nil))
+	if !strings.Contains(rec.Body.String(), `"fetched":"2027-01-15T08:00:00Z"`) || !strings.Contains(rec.Body.String(), `"key_expires":"2027-01-26T21:46:40Z"`) {
+		t.Fatalf("set times missing in %s", rec.Body)
+	}
+	mrec = httptest.NewRecorder()
+	s.Handler().ServeHTTP(mrec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	if !strings.Contains(mrec.Body.String(), "packeteer_ixp_member_import_age_seconds") || !strings.Contains(mrec.Body.String(), "packeteer_ixp_api_key_expiry_seconds 1.801e+09\n") {
+		t.Fatalf("set time metrics\n%s", mrec.Body)
+	}
+}
+
 func TestIXPMembersAPIAndMetrics(t *testing.T) {
 	doc := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet || r.Header.Get("X-IXP-Manager-API-Key") != "" {
