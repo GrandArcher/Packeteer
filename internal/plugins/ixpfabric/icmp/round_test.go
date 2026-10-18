@@ -366,6 +366,61 @@ func TestNagiosUnauthorizedAndRedirect(t *testing.T) {
 	}
 }
 
+// A failed Can Ping fetch keeps the last list for policyStaleIntervals
+// intervals. After that the list is not used and the VLAN is not probed,
+// even though the member address was probed on the last good list.
+func TestNagiosListExpires(t *testing.T) {
+	var fail bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if fail {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		_, _ = io.WriteString(w, nagiosDoc)
+	}))
+	defer srv.Close()
+
+	now := time.Unix(100, 0).UTC()
+	fp := &fakeProber{res: plugin.ProbeResult{Sent: 1, RTTs: []time.Duration{300 * time.Millisecond}}}
+	r := testRunner(fp)
+	r.now = func() time.Time { return now }
+	on := v4("192.0.2.20")
+	view := memberView([]plugin.IXPMember{oneMember(64496, "Member A", on)})
+	view.Manager = true
+	view.URL = srv.URL + "/ixpm/api/v4/member-export/ixf/1.0"
+	r.setMembers(func() plugin.MemberView { return view })
+	r.setVantages([]plugin.FabricVantage{vantage("lan1-v4", "192.0.2.8")})
+
+	r.runRound(context.Background())
+	if fp.count() != 1 {
+		t.Fatalf("good list probes %d", fp.count())
+	}
+
+	fail = true
+	now = now.Add(2 * time.Minute)
+	fp.reqs = nil
+	r.runRound(context.Background())
+	got := r.snapshot()
+	if fp.count() != 1 || got.Targets != 1 || !strings.Contains(got.Error, "HTTP 401") {
+		t.Fatalf("list inside the limit: probes %d view %+v", fp.count(), got)
+	}
+
+	now = now.Add(time.Minute + time.Second)
+	fp.reqs = nil
+	r.runRound(context.Background())
+	got = r.snapshot()
+	if fp.count() != 0 || got.Targets != 0 || got.OptOut != 1 || !strings.Contains(got.Error, "HTTP 401") {
+		t.Fatalf("expired list: probes %d view %+v", fp.count(), got)
+	}
+
+	fail = false
+	fp.reqs = nil
+	r.runRound(context.Background())
+	if fp.count() != 1 {
+		t.Fatalf("after recovery probes %d", fp.count())
+	}
+}
+
 func TestNagiosBodyCap(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write(bytes.Repeat([]byte("a"), nagiosMaxBytes+1))

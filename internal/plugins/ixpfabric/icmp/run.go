@@ -22,9 +22,10 @@ type waiter interface {
 }
 
 type nagiosPart struct {
-	by  map[string]nagiosHost
-	ok  bool
-	err string
+	by      map[string]nagiosHost
+	ok      bool
+	fetched time.Time
+	err     string
 }
 
 type runner struct {
@@ -186,7 +187,7 @@ func (r *runner) runRound(ctx context.Context) {
 	if ctx.Err() != nil {
 		return
 	}
-	parts, polErr := r.policySnapshot()
+	parts, polErr := r.policySnapshot(now)
 	targets, optOut, statuses := selectTargets(members, vantages, parts)
 	samples := r.probeAll(ctx, targets, now)
 	if ctx.Err() != nil {
@@ -308,10 +309,14 @@ func (r *runner) storePolicy(key string, hosts map[string]nagiosHost) {
 	if r.parts == nil {
 		r.parts = map[string]nagiosPart{}
 	}
-	r.parts[key] = nagiosPart{by: hosts, ok: true}
+	r.parts[key] = nagiosPart{by: hosts, ok: true, fetched: r.clock()}
 }
 
-func (r *runner) policySnapshot() (map[string]map[string]nagiosHost, string) {
+// policySnapshot returns the Can Ping lists that may still be used. A list
+// from a successful fetch older than policyStaleIntervals rounds is dropped,
+// so an opted-out member is not probed on a list that the IXP may have
+// changed. The error text of a failed fetch is still reported.
+func (r *runner) policySnapshot(now time.Time) (map[string]map[string]nagiosHost, string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	out := make(map[string]map[string]nagiosHost, len(r.parts))
@@ -320,11 +325,15 @@ func (r *runner) policySnapshot() (map[string]map[string]nagiosHost, string) {
 		keys = append(keys, k)
 	}
 	sort.Strings(keys)
+	expiry := policyStaleIntervals * r.interval
 	var errs []string
 	for _, k := range keys {
 		p := r.parts[k]
 		if p.err != "" {
 			errs = append(errs, p.err)
+		}
+		if p.ok && now.Sub(p.fetched) > expiry {
+			continue
 		}
 		if p.ok || len(p.by) > 0 {
 			out[k] = p.by

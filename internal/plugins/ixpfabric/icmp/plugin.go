@@ -45,6 +45,11 @@ const (
 	// the list is small and a slow manager must not stall the process.
 	nagiosTimeout  = 30 * time.Second
 	nagiosMaxBytes = 2 << 20
+
+	// policyStaleIntervals is the age, in prober intervals, after which a
+	// Can Ping list is not used. It matches the member import (ixf
+	// staleFactor), so both lists expire on the same rule.
+	policyStaleIntervals = 3
 )
 
 // errNoRedirect refuses every redirect so the API key header cannot be
