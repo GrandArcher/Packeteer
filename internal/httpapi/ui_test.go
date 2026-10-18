@@ -254,6 +254,10 @@ func TestConfigEditorAPI(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("save: %d %s", rec.Code, rec.Body)
 	}
+	changes, _ := got["result"].(map[string]any)["changes"].([]any)
+	if len(changes) != 1 || changes[0].(map[string]any)["key"] != "router_id" || changes[0].(map[string]any)["old"] != "192.0.2.10" || changes[0].(map[string]any)["new"] != "192.0.2.20" {
+		t.Fatalf("changes = %v", changes)
+	}
 	loaded, err := config.Load(e.path)
 	if err != nil {
 		t.Fatal(err)
