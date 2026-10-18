@@ -61,6 +61,23 @@ func wireIXPRouteServers(plugins *pluginhost.Set, httpSrv *httpapi.Server, emit 
 	}
 }
 
+// wireIXPCorrelate connects the fabric incident correlator (#163) before
+// plugins start. It reads the fabric prober's view. It does not probe and
+// it does not announce.
+func wireIXPCorrelate(plugins *pluginhost.Set, httpSrv *httpapi.Server, emit func(plugin.Event)) {
+	if plugins == nil || plugins.IXPCorrelate == nil || plugins.IXPFabric == nil {
+		return
+	}
+	c := plugins.IXPCorrelate.Plugin
+	c.SetFabric(plugins.IXPFabric.Plugin.View)
+	if emit != nil {
+		c.SetEventSink(emit)
+	}
+	if httpSrv != nil {
+		httpSrv.SetIXPCorrelation(c.View)
+	}
+}
+
 func fabricVantages(in []config.Vantage) []plugin.FabricVantage {
 	out := make([]plugin.FabricVantage, 0, len(in))
 	for _, v := range in {

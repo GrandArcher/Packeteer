@@ -320,3 +320,63 @@ func newIXPServer(t *testing.T) *Server {
 	}
 	return s
 }
+
+func TestIXPCorrelationAPIAndMetrics(t *testing.T) {
+	s := newIXPServer(t)
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/ixp/correlation", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("%d %s", rec.Code, rec.Body)
+	}
+	var body map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	groups, ok := body["groups"].([]any)
+	members, ok2 := body["members"].([]any)
+	if body["configured"] != false || !ok || len(groups) != 0 || !ok2 || len(members) != 0 {
+		t.Fatalf("unconfigured: %s", rec.Body)
+	}
+	mrec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(mrec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	if strings.Contains(mrec.Body.String(), "packeteer_ixp_") {
+		t.Fatalf("metrics without the correlator:\n%s", mrec.Body)
+	}
+
+	s.SetIXPCorrelation(func() plugin.CorrelationView {
+		return plugin.CorrelationView{
+			Configured: true,
+			Round:      time.Unix(1000, 0).UTC(),
+			Groups: []plugin.CorrelationGroup{
+				{Scope: "switch", IXPID: 1, Name: "sw1", Members: 4, Degraded: 4, DegradedPct: 100, Active: true, ASNs: []uint32{64496, 64497, 64498, 64499}},
+				{Scope: "switch", IXPID: 1, Name: "sw2", Members: 3, Degraded: 1, DegradedPct: 33.3, ASNs: []uint32{64500}},
+			},
+			Members: []plugin.CorrelationMember{{ASN: 64501, Name: "Example Net", Addresses: 2, Active: true}, {ASN: 64502, Addresses: 1}},
+		}
+	})
+	rec = httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/ixp/correlation", nil))
+	text := rec.Body.String()
+	for _, want := range []string{`"configured":true`, `"scope":"switch"`, `"name":"sw1"`, `"degraded":4`, `"degraded_pct":100`, `"active":true`, `"asns":[64496,64497,64498,64499]`, `"asn":64501`, `"addresses":2`} {
+		if !strings.Contains(text, want) {
+			t.Errorf("missing %s in %s", want, text)
+		}
+	}
+	mrec = httptest.NewRecorder()
+	s.Handler().ServeHTTP(mrec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	metrics := mrec.Body.String()
+	for _, want := range []string{"packeteer_ixp_fabric_groups_degraded 1\n", "packeteer_ixp_members_degraded 1\n"} {
+		if !strings.Contains(metrics, want) {
+			t.Errorf("missing %s in\n%s", want, metrics)
+		}
+	}
+	if strings.Contains(metrics, "64501") || strings.Contains(metrics, "sw1") {
+		t.Fatalf("per-member or per-group series:\n%s", metrics)
+	}
+
+	wrong := httptest.NewRecorder()
+	s.Handler().ServeHTTP(wrong, httptest.NewRequest(http.MethodPost, "/api/ixp/correlation", nil))
+	if wrong.Code == http.StatusOK {
+		t.Fatalf("POST answered %d", wrong.Code)
+	}
+}

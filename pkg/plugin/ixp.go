@@ -19,6 +19,12 @@ const KindFabric Kind = "ixp_fabric"
 // not a RIB source, not an input to Decide, and it never announces.
 const KindRouteServer Kind = "ixp_routeserver"
 
+// KindCorrelator is the fabric incident correlator (#163). It groups the
+// fabric probe samples by switch, colo, and core bundle and tells a fabric
+// problem from a member problem. It is not a provider, not an input to
+// Decide, and it never announces.
+const KindCorrelator Kind = "ixp_correlate"
+
 // MemberSources is the registry for ixp.members.
 var MemberSources = NewRegistry[MemberSource](KindMemberSource)
 
@@ -27,6 +33,9 @@ var FabricProbes = NewRegistry[FabricProbe](KindFabric)
 
 // RouteServerWatches is the registry for ixp.routeservers.
 var RouteServerWatches = NewRegistry[RouteServerWatch](KindRouteServer)
+
+// FabricCorrelators is the registry for ixp.correlate.
+var FabricCorrelators = NewRegistry[FabricCorrelator](KindCorrelator)
 
 // MemberSource imports an IX-F member list. View never blocks and never
 // fetches. The slices it returns must not be modified. SetEventSink is
@@ -290,4 +299,60 @@ type RouteServerSample struct {
 	Filtered    int                 `json:"filtered"`
 	Reasons     []RouteServerReason `json:"reasons"`
 	MaxPrefix   int                 `json:"max_prefix,omitempty"`
+}
+
+// Correlation group scopes.
+const (
+	ScopeSwitch = "switch"
+	ScopeColo   = "colo"
+	ScopeBundle = "bundle"
+)
+
+// FabricCorrelator reads the fabric probe view and raises
+// ixp.fabric_degraded when many members behind one switch, colo, or core
+// bundle degrade together, and ixp.member_degraded when one member does
+// alone (#163). View never blocks. SetFabric and SetEventSink are called
+// before Start. An implementation must not announce, must not write the
+// RIB, and must not call Decide.
+type FabricCorrelator interface {
+	Lifecycle
+	View() CorrelationView
+	SetFabric(fn func() FabricView)
+	SetEventSink(fn func(Event))
+}
+
+// CorrelationView is the latest evaluated fabric round. Groups is every
+// switch, colo, and bundle that had a measured member. Members is each
+// member that is degraded on its own, outside every degraded group.
+type CorrelationView struct {
+	Configured bool                `json:"configured"`
+	Stale      bool                `json:"stale"`
+	Round      time.Time           `json:"round,omitempty"`
+	Groups     []CorrelationGroup  `json:"groups"`
+	Members    []CorrelationMember `json:"members"`
+}
+
+// CorrelationGroup is one switch, colo, or bundle in one round. Members
+// is the count of member ASNs measured behind it. A member is degraded
+// there when every one of its measured addresses behind the group is past
+// tolerance from every vantage that measured it. Active is true once the
+// group has met the thresholds for the configured number of rounds.
+type CorrelationGroup struct {
+	Scope       string   `json:"scope"`
+	IXPID       int      `json:"ixp_id"`
+	Name        string   `json:"name"`
+	Members     int      `json:"members"`
+	Degraded    int      `json:"degraded"`
+	DegradedPct float64  `json:"degraded_pct"`
+	Active      bool     `json:"active"`
+	ASNs        []uint32 `json:"asns"`
+}
+
+// CorrelationMember is one member degraded on its own. Active is true once
+// it has held for the configured number of rounds.
+type CorrelationMember struct {
+	ASN       uint32 `json:"asn"`
+	Name      string `json:"name,omitempty"`
+	Addresses int    `json:"addresses"`
+	Active    bool   `json:"active"`
 }

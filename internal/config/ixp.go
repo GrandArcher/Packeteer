@@ -16,13 +16,14 @@ const (
 
 // IXP is exchange-operator mode (#160). A non-nil value, including an
 // empty block, is IXP mode. IXP mode never announces. Keys are members
-// (#161), vantages and fabric (#162), and routeservers (#164). Any other
-// key is a parse error.
+// (#161), vantages and fabric (#162), routeservers (#164), and correlate
+// (#163). Any other key is a parse error.
 type IXP struct {
 	Members      *PluginSpec `yaml:"members,omitempty"`
 	Vantages     []Vantage   `yaml:"vantages,omitempty"`
 	Fabric       *PluginSpec `yaml:"fabric,omitempty"`
 	RouteServers *PluginSpec `yaml:"routeservers,omitempty"`
+	Correlate    *PluginSpec `yaml:"correlate,omitempty"`
 }
 
 // Vantage is one IX-owned monitoring address on a peering LAN (#162).
@@ -89,6 +90,9 @@ func (c *Config) validateIXP(add func(string, ...any)) {
 		add("ixp forbids more_specific: IXP mode never announces")
 	}
 	c.validateVantages(add)
+	if c.IXP.Correlate != nil && c.IXP.Fabric == nil {
+		add("ixp.correlate requires ixp.fabric")
+	}
 }
 
 func (c *Config) validateVantages(add func(string, ...any)) {

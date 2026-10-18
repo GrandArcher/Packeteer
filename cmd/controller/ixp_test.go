@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -383,5 +384,113 @@ func TestIXPRouteServersWiring(t *testing.T) {
 		if !strings.HasPrefix(r, "GET /api/") {
 			t.Fatalf("request %q", r)
 		}
+	}
+}
+
+const ixpCorrelateYAML = `
+mode: observe
+asn: 64512
+router_id: 192.0.2.10
+providers:
+  - {name: transit-a, source_ip: 192.0.2.11, next_hop: 192.0.2.1}
+ixp:
+  members:
+    type: ixf
+    config:
+      url: https://ixp.example.invalid/members.json
+  vantages:
+    - {name: lan1-v4, vlan_id: 10, address: 192.0.2.8}
+  fabric: {type: icmp}
+  correlate:
+    type: topology
+    config:
+      rounds: 1
+`
+
+func TestIXPCorrelateCheck(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "c.yaml")
+	if err := os.WriteFile(path, []byte(ixpCorrelateYAML), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out, errOut strings.Builder
+	if code := run(t.Context(), []string{"-check", "-config", path}, noEnv, &out, &errOut); code != 0 {
+		t.Fatalf("exit %d stderr %s", code, errOut.String())
+	}
+	for _, want := range []string{"ixp correlate: topology (reads the fabric probes, never announces)", "announce: disabled", "check: ok"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("stdout missing %q:\n%s", want, out.String())
+		}
+	}
+	cur := mustParse(t, ixpCorrelateYAML)
+	next := mustParse(t, strings.Replace(ixpCorrelateYAML, "rounds: 1", "rounds: 2", 1))
+	restart, online := classify(cur, next)
+	if !slices.Contains(restart, "ixp") || len(online) != 0 {
+		t.Fatalf("restart %v online %v", restart, online)
+	}
+}
+
+// TestIXPCorrelateWiring connects the correlator to the fabric view, the
+// event sink, and the HTTP API. The fabric prober itself is not started:
+// the correlator is given a fabric round, as the prober would publish it.
+func TestIXPCorrelateWiring(t *testing.T) {
+	cfg := mustParse(t, ixpCorrelateYAML)
+	plugins, err := pluginhost.Build(cfg, pluginhost.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv, err := httpapi.New(httpapi.Options{Snapshot: func() httpapi.Snapshot { return httpapi.Snapshot{Version: "test", Mode: "observe", Started: true} }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	events := make(chan plugin.Event, 8)
+	wireIXPFabric(cfg, plugins, srv)
+	wireIXPCorrelate(plugins, srv, func(e plugin.Event) { events <- e })
+
+	sw := []plugin.FabricSwitch{{ID: 1, Name: "sw1", Colo: "colo-a"}}
+	var samples []plugin.FabricSample
+	for i := range 3 {
+		samples = append(samples, plugin.FabricSample{
+			Vantage: "lan1-v4", ASN: uint32(64496 + i), Address: "192.0.2." + strconv.Itoa(20+i),
+			VLANID: 10, IXPID: 1, Switches: sw, Sent: 5, Received: 0, LossPct: 100, PastTolerance: true,
+		})
+	}
+	c := plugins.IXPCorrelate.Plugin
+	c.SetFabric(func() plugin.FabricView {
+		return plugin.FabricView{Configured: true, Round: time.Unix(1000, 0).UTC(), Samples: samples}
+	})
+	if err := c.Start(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = c.Stop(t.Context()) }()
+
+	var got []string
+	for len(got) < 2 {
+		select {
+		case e := <-events:
+			got = append(got, e.Kind+" "+e.Fields["scope"]+" "+e.Fields["group"])
+		case <-time.After(5 * time.Second):
+			t.Fatalf("events %v", got)
+		}
+	}
+	slices.Sort(got)
+	want := []string{"ixp.fabric_degraded colo colo-a", "ixp.fabric_degraded switch sw1"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("events %v, want %v", got, want)
+	}
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/ixp/correlation", nil))
+	var body struct {
+		Configured bool `json:"configured"`
+		Groups     []struct {
+			Name   string `json:"name"`
+			Active bool   `json:"active"`
+		} `json:"groups"`
+		Members []any `json:"members"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if !body.Configured || len(body.Groups) != 2 || !body.Groups[0].Active || len(body.Members) != 0 {
+		t.Fatalf("%s", rec.Body)
 	}
 }
