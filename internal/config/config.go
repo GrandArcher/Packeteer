@@ -65,6 +65,10 @@ const (
 	DefaultProbeDegradedLossPct = 5
 	DefaultProbeDownLossPct     = 50
 
+	// DefaultBGPNotEstablishedAfter is how long a neighbor may stay down
+	// from the start before the controller raises an event (#347).
+	DefaultBGPNotEstablishedAfter = 5 * time.Minute
+
 	// MaxConfirmRounds is the upper bound of thresholds.confirm_rounds.
 	// Omitted or 0 means 1 (announce on the first fresh win).
 	MaxConfirmRounds = 100
@@ -401,6 +405,10 @@ type BGP struct {
 	// native (the learned path of the prefix), or provider (the chosen
 	// provider's learned path, else the native one).
 	ASPath string `yaml:"as_path"`
+	// NotEstablishedAfter is how long a configured neighbor may stay out of
+	// Established, from the start, before bgp.session_not_established
+	// fires (#347). Zero uses the default.
+	NotEstablishedAfter time.Duration `yaml:"not_established_after"`
 }
 
 // AS path behavior on injected routes (bgp.as_path).

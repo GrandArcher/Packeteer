@@ -358,3 +358,63 @@ func TestOverviewUnprobedProvidersAreNotProblems(t *testing.T) {
 		})
 	}
 }
+
+// The events judge providers with the Overview's rules (#347): the same
+// results give the same state, loss, and detail in both.
+func TestMeasureProvidersMatchesOverview(t *testing.T) {
+	p1 := netip.MustParsePrefix("198.51.100.0/24")
+	p2 := netip.MustParsePrefix("203.0.113.0/24")
+	in := healthInput(
+		answered("transit-a", p1, 10, 10), answered("transit-a", p2, 10, 10),
+		answered("transit-b", p1, 10, 0), answered("transit-b", p2, 10, 0),
+		answered("transit-c", p1, 10, 8), answered("transit-c", p2, 10, 8),
+	)
+	in.Status[0].Up = false
+	in.Status[0].Reason = "bind failed"
+	o := BuildOverview(Assemble(in), Setup{Sources: []string{"static"}, DegradedLossPct: 5, DownLossPct: 50}, nil)
+	got := MeasureProviders(in.Status, in.Results, 5, 50)
+	if len(got) != len(o.Providers) {
+		t.Fatalf("got %d providers, overview %d", len(got), len(o.Providers))
+	}
+	for i, h := range got {
+		w := o.Providers[i]
+		if h.Name != w.Name || h.State != w.State || h.LossPct != w.LossPct || h.Detail != w.Detail || h.OK != w.OK || h.Failed != w.Failed {
+			t.Errorf("%s: events judge %+v, overview %+v", h.Name, h, w)
+		}
+	}
+	want := map[string][2]string{"transit-a": {HealthDown, "probe source down: bind failed"}, "transit-b": {HealthDown, "100% loss"}, "transit-c": {HealthDegraded, "20% loss"}}
+	for _, h := range got {
+		if w := want[h.Name]; h.State != w[0] || h.Detail != w[1] {
+			t.Errorf("%s = %s %q, want %v", h.Name, h.State, h.Detail, w)
+		}
+	}
+	// No results yet: unknown, not down.
+	for _, h := range MeasureProviders([]probe.ProviderStatus{{Name: "transit-a", Up: true}}, nil, 5, 50) {
+		if h.State != HealthUnknown {
+			t.Errorf("unmeasured provider = %s", h.State)
+		}
+	}
+}
+
+// A checklist doc is a link under DocBase, not bare text (#347).
+func TestChecklistDocURL(t *testing.T) {
+	in := firstRun()
+	in.Status[0].Up, in.Status[1].Up = false, false
+	o := BuildOverview(Assemble(in), Setup{DegradedLossPct: 5, DownLossPct: 50}, nil)
+	var found bool
+	for _, h := range o.Setup {
+		if h.Doc == "" {
+			if h.DocURL != "" {
+				t.Errorf("%s: a doc_url without a doc", h.ID)
+			}
+			continue
+		}
+		if h.DocURL != DocBase+h.Doc {
+			t.Errorf("%s: doc_url = %q", h.ID, h.DocURL)
+		}
+		found = found || h.ID == "providers-down" && h.DocURL == DocBase+"docs/policy-routing.md"
+	}
+	if !found {
+		t.Errorf("providers-down hint with its doc link missing: %+v", o.Setup)
+	}
+}

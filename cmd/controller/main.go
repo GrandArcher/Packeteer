@@ -780,9 +780,9 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 			auditQuarantines(audit, qc)
 			watch.inbound(now, snap.InboundMode(), inChanges)
 			watch.announce(now, errors.Join(err, inErr, mitErr))
-			watch.providerStatus(now, engine.Providers())
+			watch.providerStatus(now, engine.Providers(), in.Results, snap.Probe.DegradedLossPct, snap.Probe.DownLossPct)
 			if view != nil {
-				watch.peerStatus(now, view.Peers())
+				watch.peerStatus(now, view.Peers(), snap.BGP.NotEstablishedAfter)
 			}
 			if len(plugins.Telemetry) > 0 && watch.commitDue(now) {
 				watch.commit(now, exchange.WithPortCommit(collectTelemetry(loopCtx, plugins), portCommits))
@@ -897,16 +897,12 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 	}
 	// Tell notifiers after the withdraw, and give them a bounded moment
 	// before they stop. Notification never delays the withdraw.
-	stopMode := cfg.Mode
+	stopCfg := cfg
 	if snap := live.snapshot(); snap != nil {
-		stopMode = snap.Mode
+		stopCfg = snap
 	}
-	stopFields := map[string]string{"mode": stopMode, "withdrawn": "true"}
-	if withdrawErr != nil {
-		stopFields["withdrawn"] = "false"
-		stopFields["error"] = withdrawErr.Error()
-	}
-	watch.emit(time.Now(), plugin.EventControllerStopping, "packeteer is shutting down; Packeteer routes withdrawn", stopFields)
+	announces := stopCfg.Mode == "inject" || stopCfg.InboundMode() == "inject" || stopCfg.MitigationMode() == "inject"
+	watch.stopping(time.Now(), stopCfg.Mode, announces, withdrawErr)
 	if rec != nil {
 		// After the withdraw: open improvement records end here. The store
 		// is stopped with the other plugins below.

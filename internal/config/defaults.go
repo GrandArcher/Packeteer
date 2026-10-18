@@ -80,6 +80,9 @@ func (c *Config) applyDefaults() {
 	if strings.TrimSpace(c.BGP.ASPath) == "" {
 		c.BGP.ASPath = ASPathEmpty
 	}
+	if c.BGP.NotEstablishedAfter == 0 {
+		c.BGP.NotEstablishedAfter = DefaultBGPNotEstablishedAfter
+	}
 	if c.Scorer == nil {
 		c.Scorer = &PluginSpec{Type: "weighted"}
 	}

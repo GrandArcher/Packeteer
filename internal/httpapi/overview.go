@@ -5,6 +5,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/GrandArcher/Packeteer/internal/probe"
 )
 
 // Setup is what the dashboard needs to know about the loaded config to
@@ -36,6 +38,8 @@ type Hint struct {
 	Title  string `json:"title"`
 	Detail string `json:"detail"`
 	Doc    string `json:"doc,omitempty"`
+	// DocURL is Doc under DocBase, for a link (#347).
+	DocURL string `json:"doc_url,omitempty"`
 }
 
 // Provider health states (#343), derived from what was measured.
@@ -178,28 +182,11 @@ func BuildOverview(snap Snapshot, setup Setup, features []Feature) Overview {
 		out.Counts.Prefixes++
 		measured := false
 		for _, p := range pr.Probes {
-			h := health[p.Provider]
-			replied := p.OK && p.Received > 0
-			if replied {
+			if h := health[p.Provider]; h != nil {
+				h.tally(p.OK, p.Received, p.LossPct, p.Error)
+			}
+			if p.OK && p.Received > 0 {
 				measured = true
-			}
-			if h == nil {
-				continue
-			}
-			switch {
-			case replied:
-				h.OK++
-				h.lossSum += p.LossPct
-			case p.OK:
-				h.Failed++
-				h.silent++
-				h.lossSum += 100
-			default:
-				h.Failed++
-				h.lossSum += 100
-				if p.Error != "" {
-					h.LastError = p.Error
-				}
 			}
 		}
 		if measured {
@@ -224,54 +211,97 @@ func BuildOverview(snap Snapshot, setup Setup, features []Feature) Overview {
 	return out
 }
 
-// judgeProviders sets each provider's state and returns the problems. A
-// provider is down when its probe source failed, nothing came back, or
-// its mean loss reaches the down threshold; it is degraded at the
-// degraded threshold. A probe that errored counts as full loss. A provider
-// not probed here (starting, or measured by a federation peer) is unknown.
+// tally adds one probe result to the provider's counts. A probe that errored or got no reply counts as full loss.
+func (h *ProviderHealth) tally(ok bool, received int, lossPct float64, errText string) {
+	switch {
+	case ok && received > 0:
+		h.OK++
+		h.lossSum += lossPct
+	case ok:
+		h.Failed++
+		h.silent++
+		h.lossSum += 100
+	default:
+		h.Failed++
+		h.lossSum += 100
+		if errText != "" {
+			h.LastError = errText
+		}
+	}
+}
+
+// judge sets the provider's loss, state, and detail from its tallies. A
+// provider is down when its probe source failed, nothing came back, or its
+// mean loss reaches downAt; it is degraded at degradedAt. A provider not
+// probed here (starting, or measured by a federation peer) is unknown.
+func (h *ProviderHealth) judge(degradedAt, downAt float64) {
+	total := h.OK + h.Failed
+	if total > 0 {
+		h.LossPct = h.lossSum / float64(total)
+	}
+	h.Detail = ""
+	switch {
+	case !h.Up && notProbedHere(h.reason):
+		h.State = HealthUnknown
+	case !h.Up:
+		h.State = HealthDown
+		h.Detail = "probe source down"
+		if h.reason != "" {
+			h.Detail += ": " + h.reason
+		}
+	case total == 0:
+		h.State = HealthUnknown
+	case h.OK == 0:
+		h.State = HealthDown
+		h.Detail = "100% loss"
+		if h.silent == 0 {
+			h.Detail = "no answer"
+		}
+	case h.LossPct >= downAt:
+		h.State = HealthDown
+		h.Detail = formatLoss(h.LossPct)
+	case h.LossPct >= degradedAt:
+		h.State = HealthDegraded
+		h.Detail = formatLoss(h.LossPct)
+	default:
+		h.State = HealthUp
+	}
+}
+
+// MeasureProviders judges each probe-source status from the latest
+// results with the same rules as the Overview (#343), for the events
+// (#347). Thresholds are probe.degraded_loss_pct and probe.down_loss_pct.
+func MeasureProviders(status []probe.ProviderStatus, results []probe.Result, degradedAt, downAt float64) []ProviderHealth {
+	out := make([]ProviderHealth, len(status))
+	byName := make(map[string]*ProviderHealth, len(status))
+	for i, st := range status {
+		out[i] = ProviderHealth{Name: st.Name, Up: st.Up, reason: st.Reason}
+		byName[st.Name] = &out[i]
+	}
+	for _, r := range results {
+		if h := byName[r.Provider]; h != nil {
+			h.tally(r.OK(), r.Stats.Received, jsonFloat(r.Stats.LossPct), r.Err)
+		}
+	}
+	for i := range out {
+		out[i].judge(degradedAt, downAt)
+	}
+	return out
+}
+
+// judgeProviders judges every provider of the overview and returns the
+// problems: down ones first, then degraded ones.
 func judgeProviders(o *Overview, setup Setup) []Problem {
-	degradedAt, downAt := setup.DegradedLossPct, setup.DownLossPct
 	problems := []Problem{}
 	var degraded []Problem
 	for i := range o.Providers {
 		h := &o.Providers[i]
-		total := h.OK + h.Failed
-		if total > 0 {
-			h.LossPct = h.lossSum / float64(total)
-		}
-		var detail string
-		switch {
-		case !h.Up && notProbedHere(h.reason):
-			h.State = HealthUnknown
-		case !h.Up:
-			h.State = HealthDown
-			detail = "probe source down"
-			if h.reason != "" {
-				detail += ": " + h.reason
-			}
-		case total == 0:
-			h.State = HealthUnknown
-		case h.OK == 0:
-			h.State = HealthDown
-			detail = "100% loss"
-			if h.silent == 0 {
-				detail = "no answer"
-			}
-		case h.LossPct >= downAt:
-			h.State = HealthDown
-			detail = formatLoss(h.LossPct)
-		case h.LossPct >= degradedAt:
-			h.State = HealthDegraded
-			detail = formatLoss(h.LossPct)
-		default:
-			h.State = HealthUp
-		}
-		h.Detail = detail
+		h.judge(setup.DegradedLossPct, setup.DownLossPct)
 		switch h.State {
 		case HealthDown:
-			problems = append(problems, Problem{Provider: h.Name, State: h.State, Detail: detail})
+			problems = append(problems, Problem{Provider: h.Name, State: h.State, Detail: h.Detail})
 		case HealthDegraded:
-			degraded = append(degraded, Problem{Provider: h.Name, State: h.State, Detail: detail})
+			degraded = append(degraded, Problem{Provider: h.Name, State: h.State, Detail: h.Detail})
 		case HealthUp:
 			o.Counts.ProvidersHealthy++
 		}
@@ -295,7 +325,11 @@ func formatLoss(pct float64) string {
 func setupHints(o Overview) []Hint {
 	var h []Hint
 	add := func(id, level, title, detail, doc string) {
-		h = append(h, Hint{ID: id, Level: level, Title: title, Detail: detail, Doc: doc})
+		hint := Hint{ID: id, Level: level, Title: title, Detail: detail, Doc: doc}
+		if doc != "" {
+			hint.DocURL = DocBase + doc
+		}
+		h = append(h, hint)
 	}
 	if !o.Started {
 		add("starting", HintInfo, "Starting",
