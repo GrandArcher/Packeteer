@@ -464,7 +464,6 @@ function numberControl(obj, key, spec) {
       if (spec.refuse && v === spec.refuse) return spec.refuse + " is refused. Use 2 or more, or leave it empty.";
       return checkInt(v, spec.min, spec.max);
     }
-    if (spec.pctOpen) return checkPctOpen(v);
     if (spec.positive && v && Number(v) <= 0) return "Enter a number greater than 0.";
     if (spec.min != null) return checkNum(v, spec.min, spec.max == null ? 1e15 : spec.max);
     return "";
@@ -753,11 +752,7 @@ function bindMulti(parent, label, obj, key, help, configKey, options) {
 function bindCountries(parent, label, obj, key, help, configKey) {
   var list = obj[key] || [];
   obj[key] = list;
-  var countries = (typeof isoCountries === "undefined") ? [] : isoCountries;
-  if (!countries.length) {
-    bindChips(parent, label, obj, key, help, configKey, function () { renderPolicies(); });
-    return;
-  }
+  var countries = isoCountries;
   var box = el("div", "g-country");
   var search = el("input");
   search.type = "search";
