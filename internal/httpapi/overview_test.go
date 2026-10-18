@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
+	"strings"
 	"testing"
 	"time"
 
@@ -212,5 +213,118 @@ func TestOverviewFederationFeature(t *testing.T) {
 				t.Errorf("federation on = %v, want %v", f.On, on)
 			}
 		}
+	}
+}
+
+func healthInput(res ...probe.Result) Input {
+	in := firstRun()
+	in.Providers = append(in.Providers, config.Provider{Name: "transit-c", SourceIP: "192.0.2.13", NextHop: "192.0.2.3"})
+	in.Status = append(in.Status, probe.ProviderStatus{Name: "transit-c", Up: true})
+	in.Results = res
+	return in
+}
+
+func answered(name string, p netip.Prefix, sent, got int) probe.Result {
+	st := probe.Stats{Sent: sent, Received: got, LossPct: 100 * float64(sent-got) / float64(sent)}
+	if got > 0 {
+		st.RTTAvg, st.RTTMin, st.RTTMax = 12*time.Millisecond, 12*time.Millisecond, 12*time.Millisecond
+	}
+	return probe.Result{Provider: name, Prefix: p, Stats: st, Time: time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)}
+}
+
+// A provider with 100% loss or no answer is down, partial loss above the
+// threshold is degraded, and the rest stay up (#343).
+func TestOverviewProviderHealthFromMeasurement(t *testing.T) {
+	p1 := netip.MustParsePrefix("198.51.100.0/24")
+	p2 := netip.MustParsePrefix("203.0.113.0/24")
+	at := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	in := healthInput(
+		answered("transit-a", p1, 10, 10), answered("transit-a", p2, 10, 10),
+		answered("transit-b", p1, 10, 0), answered("transit-b", p2, 10, 0),
+		probe.Result{Provider: "transit-c", Prefix: p1, Err: "fixed prober: no result", Time: at},
+		probe.Result{Provider: "transit-c", Prefix: p2, Err: "fixed prober: no result", Time: at},
+	)
+	o := BuildOverview(Assemble(in), Setup{Sources: []string{"static"}}, []Feature{{"history", true}})
+	state := map[string]ProviderHealth{}
+	for _, h := range o.Providers {
+		state[h.Name] = h
+	}
+	if state["transit-a"].State != HealthUp || state["transit-a"].OK != 2 {
+		t.Errorf("transit-a = %+v", state["transit-a"])
+	}
+	b := state["transit-b"]
+	if b.State != HealthDown || b.OK != 0 || b.Failed != 2 || b.LossPct != 100 {
+		t.Errorf("a provider at 100%% loss must be down and not counted ok: %+v", b)
+	}
+	if c := state["transit-c"]; c.State != HealthDown || c.Failed != 2 {
+		t.Errorf("transit-c = %+v", c)
+	}
+	if o.Counts.ProvidersUp != 3 || o.Counts.ProvidersHealthy != 1 || o.Counts.Providers != 3 {
+		t.Errorf("counts = %+v", o.Counts)
+	}
+	want := []Problem{
+		{Provider: "transit-b", State: HealthDown, Detail: "100% loss"},
+		{Provider: "transit-c", State: HealthDown, Detail: "no answer"},
+	}
+	if len(o.Problems) != 2 || o.Problems[0] != want[0] || o.Problems[1] != want[1] {
+		t.Errorf("problems = %+v", o.Problems)
+	}
+	if !hasHint(o.Setup, "provider-transit-b") || o.Counts.Warnings != 2 {
+		t.Errorf("warnings = %d, hints %v", o.Counts.Warnings, hintIDs(o.Setup))
+	}
+}
+
+func TestOverviewProviderHealthThresholds(t *testing.T) {
+	p1 := netip.MustParsePrefix("198.51.100.0/24")
+	in := healthInput(answered("transit-a", p1, 10, 10), answered("transit-b", p1, 10, 9), answered("transit-c", p1, 10, 4))
+	o := BuildOverview(Assemble(in), Setup{Sources: []string{"static"}, DegradedLossPct: 5, DownLossPct: 50}, nil)
+	got := map[string]string{}
+	for _, h := range o.Providers {
+		got[h.Name] = h.State
+	}
+	if got["transit-a"] != HealthUp || got["transit-b"] != HealthDegraded || got["transit-c"] != HealthDown {
+		t.Errorf("states = %v", got)
+	}
+	// Down providers are listed before degraded ones.
+	if len(o.Problems) != 2 || o.Problems[0].Provider != "transit-c" || o.Problems[0].Detail != "60% loss" ||
+		o.Problems[1].Provider != "transit-b" || o.Problems[1].State != HealthDegraded || o.Problems[1].Detail != "10% loss" {
+		t.Errorf("problems = %+v", o.Problems)
+	}
+	if o.Counts.ProvidersHealthy != 1 {
+		t.Errorf("healthy = %d", o.Counts.ProvidersHealthy)
+	}
+	// A raised threshold clears the degraded state; the default applies when unset.
+	o = BuildOverview(Assemble(in), Setup{DegradedLossPct: 20, DownLossPct: 70}, nil)
+	for _, h := range o.Providers {
+		if h.Name == "transit-b" && h.State != HealthUp {
+			t.Errorf("transit-b at 10%% loss with degraded_loss_pct 20 = %s", h.State)
+		}
+		if h.Name == "transit-c" && h.State != HealthDegraded {
+			t.Errorf("transit-c at 60%% loss with down_loss_pct 70 = %s", h.State)
+		}
+	}
+}
+
+func TestOverviewHealthyHasNoProblems(t *testing.T) {
+	p1 := netip.MustParsePrefix("198.51.100.0/24")
+	in := healthInput(answered("transit-a", p1, 10, 10), answered("transit-b", p1, 10, 10))
+	o := BuildOverview(Assemble(in), Setup{Sources: []string{"static"}}, []Feature{{"history", true}})
+	// transit-c has no result yet: not a problem.
+	if o.Problems == nil || len(o.Problems) != 0 || o.Counts.ProvidersHealthy != 3 {
+		t.Errorf("problems %+v healthy %d", o.Problems, o.Counts.ProvidersHealthy)
+	}
+	raw, err := json.Marshal(o)
+	if err != nil || !strings.Contains(string(raw), `"problems":[]`) || !strings.Contains(string(raw), `"state":"unknown"`) {
+		t.Errorf("json = %s %v", raw, err)
+	}
+}
+
+func TestOverviewSourceDownIsDown(t *testing.T) {
+	in := healthInput()
+	in.Status[1] = probe.ProviderStatus{Name: "transit-b", Up: false, Reason: "bind: cannot assign requested address"}
+	o := BuildOverview(Assemble(in), Setup{}, nil)
+	if len(o.Problems) != 1 || o.Problems[0].Provider != "transit-b" ||
+		o.Problems[0].Detail != "probe source down: bind: cannot assign requested address" {
+		t.Errorf("problems = %+v", o.Problems)
 	}
 }

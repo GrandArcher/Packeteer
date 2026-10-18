@@ -47,6 +47,12 @@ func (c *Config) applyDefaults() {
 	if c.Probe.ProberMemory == 0 {
 		c.Probe.ProberMemory = DefaultProbeProberMemory
 	}
+	if c.Probe.DegradedLossPct == 0 {
+		c.Probe.DegradedLossPct = DefaultProbeDegradedLossPct
+	}
+	if c.Probe.DownLossPct == 0 {
+		c.Probe.DownLossPct = DefaultProbeDownLossPct
+	}
 	c.defaultIndirect()
 	c.defaultPathCheck()
 	c.defaultExchangeHealth()

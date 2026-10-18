@@ -59,6 +59,12 @@ const (
 	// milliseconds, an operator may require of a qualified host.
 	MaxProbeDispersionMS = 600000
 
+	// Provider health (#343): a provider's mean loss at or above
+	// DefaultProbeDegradedLossPct shows degraded, at or above
+	// DefaultProbeDownLossPct shows down. No reply at all is always down.
+	DefaultProbeDegradedLossPct = 5
+	DefaultProbeDownLossPct     = 50
+
 	// MaxConfirmRounds is the upper bound of thresholds.confirm_rounds.
 	// Omitted or 0 means 1 (announce on the first fresh win).
 	MaxConfirmRounds = 100
@@ -645,6 +651,12 @@ type Probe struct {
 	// way a silent host is, and that prefix is probed again with
 	// RetryPackets.
 	DispersionMS int `yaml:"dispersion_ms"`
+	// DegradedLossPct and DownLossPct set when the dashboard shows a
+	// provider as degraded or down, from its mean loss over the measured
+	// prefixes. They only label; they do not change any decision. Zero
+	// uses the default.
+	DegradedLossPct float64 `yaml:"degraded_loss_pct"`
+	DownLossPct     float64 `yaml:"down_loss_pct"`
 	// ProberRecheckRounds is how often each host is probed from the first
 	// prober again. Omitted or 0 uses the default. The other rounds start
 	// at the prober that last got a reply from that host.

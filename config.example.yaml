@@ -101,6 +101,8 @@ probe:
   per_target_concurrency: 2   # concurrent runs toward one destination host
   prober_recheck_rounds: 10   # every Nth probe of a host starts at the first prober again
   prober_memory: 100000       # hosts that remember which prober answered; oldest are dropped past this
+  # degraded_loss_pct: 5    # dashboard shows a provider degraded at this mean loss
+  # down_loss_pct: 50        # and down at this one. No reply at all is always down.
   # retry_loss_pct: 20        # 0 (default) disables. Re-probe before storing a lossy sample.
   # retry_packets: 30         # default is 3x packets when retry_loss_pct or dispersion_ms is set
   # min_replies: 1            # replies a host needs before it defines the score. 1 is any reply.
