@@ -446,8 +446,19 @@ function renderImprovements(data) {
     "Mode " + (mode || "observe") + ": these are what inject would announce. Nothing is announced. ") +
     (cap ? "At most " + cap + " at a time (max_improvements)." : "");
   if (!rows.length) {
-    root.appendChild(el("p", "empty", inject ? "No active improvements." :
-      "None. A move is recommended only when another provider beats the current exit by the configured thresholds."));
+    var p = el("p", "empty");
+    var bgp = lastOverview && lastOverview.bgp;
+    if (bgp && !bgp.established) {
+      p.appendChild(document.createTextNode("No BGP session, so Packeteer can't see current routes and makes no recommendations. Fix the edge session on the "));
+      var sys = el("a", "", "System page");
+      sys.href = "/system.html";
+      p.appendChild(sys);
+      p.appendChild(document.createTextNode("."));
+    } else {
+      p.textContent = inject ? "No active improvements." :
+        "None. A move is recommended only when another provider beats the current exit by the configured thresholds.";
+    }
+    root.appendChild(p);
     return;
   }
   var table = el("table");
@@ -574,7 +585,9 @@ function renderSetup(o) {
     li.appendChild(el("span", "", " " + h.detail));
     if (h.doc) {
       li.appendChild(document.createTextNode(" "));
-      li.appendChild(el("code", "muted", h.doc));
+      var code = el("code", "muted");
+      code.appendChild(docLink(h.doc_url, h.doc));
+      li.appendChild(code);
     }
     ul.appendChild(li);
   });

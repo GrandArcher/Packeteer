@@ -127,6 +127,25 @@ func TestEventWatchImprovementWording(t *testing.T) {
 	}
 }
 
+// probes builds one result per loss figure for a provider. A negative
+// loss is a probe that errored.
+func probes(provider string, losses ...float64) []probe.Result {
+	var out []probe.Result
+	for i, l := range losses {
+		r := probe.Result{Provider: provider, Prefix: netip.PrefixFrom(netip.AddrFrom4([4]byte{198, 51, 100, byte(i)}), 32)}
+		switch {
+		case l < 0:
+			r.Err = "no route"
+		case l >= 100:
+			r.Stats = probe.Stats{Sent: 3}
+		default:
+			r.Stats = probe.Stats{Sent: 3, Received: 3, LossPct: l}
+		}
+		out = append(out, r)
+	}
+	return out
+}
+
 func TestEventWatchProviderTransitions(t *testing.T) {
 	s := &sink{}
 	w := newEventWatch(s, "inject")
@@ -134,27 +153,85 @@ func TestEventWatchProviderTransitions(t *testing.T) {
 	st := func(up bool) []probe.ProviderStatus {
 		return []probe.ProviderStatus{{Name: "transit-a", Source: src, Up: up, Reason: "bind failed"}, {Name: "transit-b", Up: true}}
 	}
+	res := append(probes("transit-a", 0), probes("transit-b", 0)...)
 	now := time.Now()
-	w.providerStatus(now, st(true))
+	w.providerStatus(now, st(true), res, 5, 50)
 	if e := s.take(); len(e) != 0 {
 		t.Fatalf("first up must be quiet: %s", kinds(e))
 	}
-	w.providerStatus(now, st(false))
-	w.providerStatus(now, st(false))
+	w.providerStatus(now, st(false), res, 5, 50)
+	w.providerStatus(now, st(false), res, 5, 50)
 	e := s.take()
-	if kinds(e) != "provider.down" || e[0].Severity != plugin.SeverityCritical || e[0].Fields["reason"] != "bind failed" {
+	if kinds(e) != "provider.down" || e[0].Severity != plugin.SeverityCritical || e[0].Fields["reason"] != "bind failed" ||
+		!strings.Contains(e[0].Message, "probe source failed (bind failed)") {
 		t.Fatalf("down: %+v", e)
 	}
-	w.providerStatus(now, st(true))
-	if e := s.take(); kinds(e) != "provider.up" {
-		t.Fatalf("up: %s", kinds(e))
+	w.providerStatus(now, st(true), res, 5, 50)
+	if e := s.take(); kinds(e) != "provider.up" || e[0].Message != "Provider transit-a is healthy again" {
+		t.Fatalf("up: %+v", e)
 	}
 	// A provider first seen down is reported.
 	w2 := newEventWatch(s, "inject")
-	w2.providerStatus(now, st(false))
+	w2.providerStatus(now, st(false), res, 5, 50)
 	if e := s.take(); kinds(e) != "provider.down" {
 		t.Fatalf("initial down: %s", kinds(e))
 	}
+}
+
+// A provider whose probes all fail is down, one above the degraded loss is
+// degraded, and each clears with provider.up (#347).
+func TestEventWatchProviderMeasured(t *testing.T) {
+	s := &sink{}
+	w := newEventWatch(s, "observe")
+	up := func(names ...string) []probe.ProviderStatus {
+		var out []probe.ProviderStatus
+		for _, n := range names {
+			out = append(out, probe.ProviderStatus{Name: n, Up: true})
+		}
+		return out
+	}
+	now := time.Now()
+	check := func(res []probe.Result, want string) []plugin.Event {
+		t.Helper()
+		w.providerStatus(now, up("lab-a", "lab-b", "lab-c"), res, 5, 50)
+		e := s.take()
+		if kinds(e) != want {
+			t.Fatalf("kinds = %q, want %q: %+v", kinds(e), want, e)
+		}
+		return e
+	}
+	healthy := probes("lab-a", 0, 0)
+	// Nothing measured yet: quiet.
+	check(nil, "")
+	// lab-b loses every packet, lab-c never gets a probe through.
+	e := check(append(append(append([]probe.Result{}, healthy...), probes("lab-b", 100, 100)...), probes("lab-c", -1, -1)...), "provider.down,provider.down")
+	if e[0].Fields["provider"] != "lab-b" || e[0].Fields["reason"] != "100% loss" || e[0].Severity != plugin.SeverityCritical ||
+		e[0].Message != "Provider lab-b is down: 100% loss on its probes" {
+		t.Fatalf("lab-b: %+v", e[0])
+	}
+	if e[1].Fields["provider"] != "lab-c" || e[1].Fields["reason"] != "no answer" {
+		t.Fatalf("lab-c: %+v", e[1])
+	}
+	// The same state is not repeated.
+	check(append(append(append([]probe.Result{}, healthy...), probes("lab-b", 100, 100)...), probes("lab-c", -1, -1)...), "")
+	// lab-b answers with 20% mean loss: degraded, a warning. lab-c recovers.
+	e = check(append(append(append([]probe.Result{}, healthy...), probes("lab-b", 20, 20)...), probes("lab-c", 0)...), "provider.degraded,provider.up")
+	if e[0].Severity != plugin.SeverityWarning || e[0].Fields["loss_pct"] != "20.0" || e[0].Fields["state"] != "degraded" ||
+		e[0].Message != "Provider lab-b is degraded: 20% loss on its probes" {
+		t.Fatalf("degraded: %+v", e[0])
+	}
+	// Worse again: down. Then back under the degraded line.
+	check(append(append(append([]probe.Result{}, healthy...), probes("lab-b", 60, 60)...), probes("lab-c", 0)...), "provider.down")
+	e = check(append(append(append([]probe.Result{}, healthy...), probes("lab-b", 1, 1)...), probes("lab-c", 0)...), "provider.up")
+	if e[0].Fields["provider"] != "lab-b" || e[0].Resolves() != true || e[0].DedupKey() != "packeteer/provider/provider=lab-b" {
+		t.Fatalf("up: %+v", e[0])
+	}
+	// A degraded event shares the dedup key that provider.up resolves.
+	if d := plugin.NewEvent(plugin.EventProviderDegraded, now, "", map[string]string{"provider": "lab-b"}); d.DedupKey() != e[0].DedupKey() {
+		t.Fatalf("dedup keys differ: %s vs %s", d.DedupKey(), e[0].DedupKey())
+	}
+	// Results that vanish keep the last state instead of flapping.
+	check(nil, "")
 }
 
 func TestEventWatchPeers(t *testing.T) {
@@ -165,16 +242,89 @@ func TestEventWatchPeers(t *testing.T) {
 		return []rib.PeerState{{Address: a, Description: "edge1", State: state, Established: est}}
 	}
 	now := time.Now()
-	w.peerStatus(now, peer(false, "idle"))
+	const after = 5 * time.Minute
+	w.peerStatus(now, peer(false, "idle"), after)
 	if e := s.take(); len(e) != 0 {
-		t.Fatalf("never-up session must be quiet: %s", kinds(e))
+		t.Fatalf("a session that is only starting must be quiet: %s", kinds(e))
 	}
-	w.peerStatus(now, peer(true, "established"))
-	w.peerStatus(now, peer(true, "established"))
-	w.peerStatus(now, peer(false, "active"))
+	w.peerStatus(now, peer(true, "established"), after)
+	w.peerStatus(now, peer(true, "established"), after)
+	w.peerStatus(now, peer(false, "active"), after)
 	e := s.take()
 	if kinds(e) != "bgp.session_up,bgp.session_down" || e[1].Fields["neighbor"] != "192.0.2.1" || e[1].Fields["state"] != "active" {
 		t.Fatalf("peers %+v", e)
+	}
+	// Long after, the dropped session is not reported a second time.
+	w.peerStatus(now.Add(time.Hour), peer(false, "active"), after)
+	if e := s.take(); len(e) != 0 {
+		t.Fatalf("a dropped session is reported once: %s", kinds(e))
+	}
+}
+
+// A session that never reaches Established raises one event after the wait
+// and bgp.session_up resolves it (#347).
+func TestEventWatchPeerNeverEstablished(t *testing.T) {
+	s := &sink{}
+	w := newEventWatch(s, "observe")
+	a := netip.MustParseAddr("192.0.2.1")
+	peer := func(est bool, state string) []rib.PeerState {
+		return []rib.PeerState{{Address: a, Description: "edge1", State: state, Established: est}}
+	}
+	t0 := time.Unix(1000, 0)
+	const after = 5 * time.Minute
+	w.peerStatus(t0, peer(false, "idle"), after)
+	w.peerStatus(t0.Add(after-time.Second), peer(false, "active"), after)
+	if e := s.take(); len(e) != 0 {
+		t.Fatalf("before the wait: %s", kinds(e))
+	}
+	w.peerStatus(t0.Add(after), peer(false, "active"), after)
+	e := s.take()
+	if kinds(e) != "bgp.session_not_established" || e[0].Severity != plugin.SeverityCritical || e[0].Fields["state"] != "active" ||
+		e[0].Fields["neighbor"] != "192.0.2.1" || e[0].Fields["after"] != "5m0s" ||
+		!strings.Contains(e[0].Message, "edge1 (192.0.2.1) is still active after 5m0s") {
+		t.Fatalf("not established: %+v", e)
+	}
+	w.peerStatus(t0.Add(2*after), peer(false, "idle"), after)
+	if e := s.take(); len(e) != 0 {
+		t.Fatalf("repeated: %s", kinds(e))
+	}
+	w.peerStatus(t0.Add(3*after), peer(true, "established"), after)
+	e = s.take()
+	if kinds(e) != "bgp.session_up" || e[0].DedupKey() != "packeteer/bgp/neighbor=192.0.2.1" || !e[0].Resolves() {
+		t.Fatalf("up: %+v", e)
+	}
+	// With the wait off (zero) nothing fires.
+	w2 := newEventWatch(s, "observe")
+	w2.peerStatus(t0, peer(false, "idle"), 0)
+	w2.peerStatus(t0.Add(time.Hour), peer(false, "idle"), 0)
+	if e := s.take(); len(e) != 0 {
+		t.Fatalf("zero wait: %s", kinds(e))
+	}
+}
+
+// A routine restart in a mode that announces nothing is info and says so;
+// inject, or a failed withdraw, keeps the warning (#347).
+func TestEventWatchStopping(t *testing.T) {
+	now := time.Now()
+	for name, tc := range map[string]struct {
+		mode      string
+		announces bool
+		err       error
+		sev       plugin.Severity
+		msg       string
+		withdrawn string
+	}{
+		"observe": {"observe", false, nil, plugin.SeverityInfo, "Packeteer is shutting down (observe mode: it announced no routes)", "true"},
+		"inject":  {"inject", true, nil, plugin.SeverityWarning, "Packeteer is shutting down; Packeteer routes withdrawn", "true"},
+		"failed":  {"observe", false, errors.New("session lost"), plugin.SeverityWarning, "Packeteer is shutting down; Packeteer routes withdrawn", "false"},
+	} {
+		s := &sink{}
+		newEventWatch(s, tc.mode).stopping(now, tc.mode, tc.announces, tc.err)
+		e := s.take()
+		if len(e) != 1 || e[0].Kind != plugin.EventControllerStopping || e[0].Severity != tc.sev || e[0].Message != tc.msg ||
+			e[0].Fields["withdrawn"] != tc.withdrawn || e[0].Fields["mode"] != tc.mode {
+			t.Errorf("%s: %+v", name, e)
+		}
 	}
 }
 

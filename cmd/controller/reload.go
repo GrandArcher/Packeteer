@@ -197,6 +197,9 @@ func classify(a, b *config.Config) (restart, online []string) {
 			if !sameYAML(ab.ASPath, bb.ASPath) {
 				restart = append(restart, "bgp.as_path")
 			}
+			if !sameYAML(ab.NotEstablishedAfter, bb.NotEstablishedAfter) {
+				restart = append(restart, "bgp.not_established_after")
+			}
 			if !sameYAML(ab, bb) && !slices.ContainsFunc(restart, func(k string) bool { return strings.HasPrefix(k, "bgp.") }) {
 				restart = append(restart, "bgp")
 			}

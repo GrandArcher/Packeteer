@@ -33,6 +33,19 @@ function shellEl(tag, className, text) {
   return n;
 }
 
+// docLink is an anchor to a dashboard page (a path) or, for a doc, a URL
+// under the project repository: the image carries no docs. A doc opens in a
+// new tab, so the dashboard stays open, and sends no referrer.
+function docLink(url, text) {
+  var a = shellEl("a", "doc-link", text);
+  a.href = url;
+  if (url.charAt(0) !== "/") {
+    a.target = "_blank";
+    a.rel = "noopener noreferrer";
+  }
+  return a;
+}
+
 function shellClear(node) {
   while (node.firstChild) node.removeChild(node.firstChild);
 }

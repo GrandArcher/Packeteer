@@ -383,6 +383,12 @@ fieldset.form { border: 0; margin: 0; padding: 0; }
 .ts-data { margin-top: 8px; }
 .ts-data summary { cursor: pointer; }
 
+/* Event rows (#347): a plain headline, then the next step and the fields. */
+.event-headline { font-weight: 600; }
+.event-fields { margin-top: 4px; }
+.event-fields summary { cursor: pointer; }
+.doc-link { margin-right: 12px; }
+
 /* Sign-in page (#176) */
 .signin { max-width: 24rem; margin: 40px auto; }
 .signin h1 { display: flex; align-items: center; gap: 8px; font-size: 1.35rem; margin: 0 0 4px; }

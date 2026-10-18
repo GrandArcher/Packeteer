@@ -32,12 +32,18 @@ function eventsQuery() {
   return p.join("&");
 }
 
+// eventDetail leads with the plain message and the "What to do" link. The
+// key=value fields sit behind a Details toggle.
 function eventDetail(e) {
   var td = el("td");
-  td.appendChild(document.createTextNode(e.message || ""));
+  td.appendChild(el("div", "event-headline", e.message || ""));
+  if (e.help_url) td.appendChild(docLink(e.help_url, "What to do"));
   var keys = Object.keys(e.fields || {}).sort();
   if (keys.length) {
-    td.appendChild(el("div", "tag mono", keys.map(function (k) { return k + "=" + e.fields[k]; }).join(" ")));
+    var d = el("details", "event-fields");
+    d.appendChild(el("summary", "", "Details"));
+    d.appendChild(el("div", "tag mono", keys.map(function (k) { return k + "=" + e.fields[k]; }).join(" ")));
+    td.appendChild(d);
   }
   return td;
 }
@@ -51,7 +57,7 @@ function renderEvents(list) {
   }
   var table = el("table");
   var head = el("tr");
-  ["Time", "Source", "Severity", "Event", "Detail"].forEach(function (h) { head.appendChild(el("th", "", h)); });
+  ["Time", "Source", "Severity", "Event", "What happened"].forEach(function (h) { head.appendChild(el("th", "", h)); });
   table.appendChild(el("thead")).appendChild(head);
   var body = el("tbody");
   list.forEach(function (e) {
@@ -85,6 +91,7 @@ function loadEvents() {
     status.textContent = "";
     status.className = "tag";
     eventsKept(data);
+    if (data.doc_base) document.getElementById("events-doc").href = data.doc_base + "docs/EVENTS.md";
     renderEvents(data.events || []);
     shellMarkEventsSeen(data.now);
   }, function (err) {

@@ -40,8 +40,10 @@ const (
 	EventImprovementRemoved = "improvement.removed"
 	EventProviderDown       = "provider.down"
 	EventProviderUp         = "provider.up"
+	EventProviderDegraded   = "provider.degraded"
 	EventBGPSessionDown     = "bgp.session_down"
 	EventBGPSessionUp       = "bgp.session_up"
+	EventBGPSessionStuck    = "bgp.session_not_established"
 	EventCommitExceeded     = "commit.exceeded"
 	EventCommitCleared      = "commit.cleared"
 	EventAnnounceFailed     = "announce.failed"
@@ -118,13 +120,17 @@ var eventCatalog = []EventSpec{
 	{Kind: EventImprovementRemoved, Severity: SeverityInfo, Group: "improvement", Keys: []string{"prefix"}, TrapID: 5, Resolves: true,
 		Summary: "An improvement was retired: native path recovered, stale data, RIB loss, policy, maintenance, or TTL."},
 	{Kind: EventProviderDown, Severity: SeverityCritical, Group: "provider", Keys: []string{"provider"}, TrapID: 6,
-		Summary: "A provider's probe source failed. Improvements onto it are withdrawn (fail closed)."},
+		Summary: "A provider is down: its probe source failed, every probe through it got no reply, or its mean loss is at or above probe.down_loss_pct."},
 	{Kind: EventProviderUp, Severity: SeverityInfo, Group: "provider", Keys: []string{"provider"}, TrapID: 7, Resolves: true,
-		Summary: "A provider's probe source recovered."},
+		Summary: "A provider is healthy again. Resolves provider.down and provider.degraded."},
 	{Kind: EventBGPSessionDown, Severity: SeverityCritical, Group: "bgp", Keys: []string{"neighbor"}, TrapID: 8,
 		Summary: "An established iBGP session to an edge router went down."},
 	{Kind: EventBGPSessionUp, Severity: SeverityInfo, Group: "bgp", Keys: []string{"neighbor"}, TrapID: 9, Resolves: true,
-		Summary: "An iBGP session to an edge router reached Established."},
+		Summary: "An iBGP session to an edge router reached Established. Resolves bgp.session_down and bgp.session_not_established."},
+	{Kind: EventProviderDegraded, Severity: SeverityWarning, Group: "provider", Keys: []string{"provider"}, TrapID: 61,
+		Summary: "A provider's mean loss is at or above probe.degraded_loss_pct but below probe.down_loss_pct."},
+	{Kind: EventBGPSessionStuck, Severity: SeverityCritical, Group: "bgp", Keys: []string{"neighbor"}, TrapID: 62,
+		Summary: "An iBGP session has not reached Established within bgp.not_established_after of the start."},
 	{Kind: EventCommitExceeded, Severity: SeverityWarning, Group: "commit", Keys: []string{"provider"}, TrapID: 10,
 		Summary: "A provider's billable 95th percentile for the open period is above its commit."},
 	{Kind: EventCommitCleared, Severity: SeverityInfo, Group: "commit", Keys: []string{"provider"}, TrapID: 11, Resolves: true,
