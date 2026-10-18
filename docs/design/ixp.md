@@ -2,8 +2,8 @@
 
 Status: charter, config gate, IX-F member import (#161), fabric
 probes (#162), fabric incident correlation (#163), route-server
-history and alerts (#164), and route-server signals (#165). Member pages
-and multi-site fabric health are #166-#167 and are not built. An `ixp` block does not announce or open a route-server
+history and alerts (#164), route-server signals (#165), and member pages
+and series (#166). Multi-site fabric health is #167 and is not built. An `ixp` block does not announce or open a route-server
 session.
 
 An Internet exchange operator runs Packeteer to observe its fabric,
@@ -153,6 +153,46 @@ rounds, and both clear after as many. With one vantage, a fault on the
 vantage's own link looks like a fabric fault; use two vantages on a LAN
 to tell them apart. The state is in memory.
 
+## Member pages
+
+`/ixp/member/{asn}` (#166) shows one member: its IX-F connections, its
+latest fabric samples by vantage (loss, RTT, jitter, past tolerance), its
+route-server sessions with the filter history, and a link to IXP Manager.
+`/ixp/member/` lists the members. The page reads `GET /api/ixp/members/{asn}`
+and `GET /api/ixp/routeservers/history`. It is built from the views the
+other `ixp` endpoints serve, so it fetches nothing and announces nothing. An
+ASN with no IX-F entry and no route-server session is a 404.
+
+Access is the same as every other page: every Packeteer login is staff
+(viewer and above). IXP Manager's `GRAPHER_ACCESS_CUSTOMER` default is
+`own_graphs_only`, where a member sees only its own graphs; Packeteer has no
+such scope yet. A member-scoped login through OIDC
+claims is a later step; until then do not give a member a Packeteer account.
+
+The IXP Manager link is `{base}/admin/search?search=AS{asn}`. IXP Manager's
+IX-F export does not carry its customer id, and its admin search takes an
+ASN and lists the customer with a link. The base is the member export URL
+without `/api/v4/member-export/ixf/1.0`, so a subdirectory install works. It
+is shown only for the manager export, never for a named IX-F document. The
+link is for the staff browser, which signs in to IXP Manager itself;
+Packeteer does not request it and sends no key.
+
+IXP Manager can link back with a skin: set `VIEW_SKIN=<name>` in its `.env`
+and copy `resources/views/customer/overview.foil.php` to
+`resources/skins/<name>/customer/overview.foil.php`, then add, where `$c` is
+the customer the template already has:
+
+```php
+<a class="btn btn-white" href="https://packeteer.example.net/ixp/member/<?= (int)$c->autsys ?>">Packeteer</a>
+```
+
+The series are `packeteer_ixp_member_rtt_ms`, `packeteer_ixp_member_loss_pct`,
+and `packeteer_ixp_member_jitter_ms` with labels `asn`, `vlan` (the VLAN id),
+`vantage`, and `family` (`ipv4` or `ipv6`). With more than one address in a
+VLAN and family the worst value shows, so a series never repeats. A probe
+error and a stale member list make no series. The count is members times
+vantages times families; size Prometheus accordingly.
+
 ## Lab data
 
 Member data is never committed. Lab fixtures use documentation prefixes
@@ -161,4 +201,5 @@ documentation or private ASNs (64496-64511, 65536-65551, or
 64512-65534).
 
 Rollback: remove `ixp.members`, `ixp.routeservers`, `ixp.correlate`, or
-`ixp.vantages` and `ixp.fabric`, or the `ixp` block, and restart. Nothing was announced.
+`ixp.vantages` and `ixp.fabric`, or the `ixp` block, and restart. The member pages and series need no config of
+their own and are empty without those sources. Nothing was announced.

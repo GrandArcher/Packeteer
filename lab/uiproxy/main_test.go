@@ -16,6 +16,7 @@ import (
 	"github.com/GrandArcher/Packeteer/internal/history"
 	"github.com/GrandArcher/Packeteer/internal/httpapi"
 	"github.com/GrandArcher/Packeteer/internal/troubleshoot"
+	"github.com/GrandArcher/Packeteer/pkg/plugin"
 )
 
 func TestProxyAddsBasicAuth(t *testing.T) {
@@ -299,6 +300,49 @@ func TestExchangePageFixturesMatchAPI(t *testing.T) {
 	strict(f.Stubs[4].body, &rep)
 	if rep.Report != "exchanges" || len(rep.Rows) != 2 || rep.Rows[0].Peer != "ix-peer-a" || rep.Rows[0].VolumeMbps != 61.5 {
 		t.Fatalf("report = %+v", rep)
+	}
+}
+
+// TestIXPMemberFixturesMatchAPI decodes the canned member page answers with
+// the API's own types (#166), so a renamed field fails here and not as an
+// empty table in the UI smoke test.
+func TestIXPMemberFixturesMatchAPI(t *testing.T) {
+	f, err := loadFixtures("../ui-fixtures/ixp-member")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(f.Stubs) != 3 || f.Inject.Page != "" {
+		t.Fatalf("stubs = %d, inject = %q", len(f.Stubs), f.Inject.Page)
+	}
+	strict := func(body []byte, v any) {
+		t.Helper()
+		dec := json.NewDecoder(bytes.NewReader(body))
+		dec.DisallowUnknownFields()
+		if err := dec.Decode(v); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var page httpapi.IXPMemberPage
+	strict(f.Stubs[0].body, &page)
+	if page.ASN != 64496 || len(page.Connections) != 1 || len(page.Fabric.Samples) != 2 || len(page.Sessions) != 1 ||
+		!strings.HasPrefix(page.ManagerLink, "https://ixp.example.invalid/admin/search?search=AS") {
+		t.Fatalf("page = %+v", page)
+	}
+	if a, b := page.Fabric.Samples[0], page.Fabric.Samples[1]; a.PastTolerance || !b.PastTolerance || b.LossPct != 40 || b.RTTMs != 310.5 {
+		t.Fatalf("samples = %+v %+v", a, b)
+	}
+	var hist struct {
+		Version     string                     `json:"version"`
+		Mode        string                     `json:"mode"`
+		Ready       bool                       `json:"ready"`
+		GeneratedAt string                     `json:"generated_at"`
+		Server      string                     `json:"server"`
+		Session     string                     `json:"session"`
+		Samples     []plugin.RouteServerSample `json:"samples"`
+	}
+	strict(f.Stubs[1].body, &hist)
+	if hist.Session != page.Sessions[0].Session || len(hist.Samples) != 2 || hist.Samples[1].Filtered != 3 {
+		t.Fatalf("history = %+v", hist)
 	}
 }
 

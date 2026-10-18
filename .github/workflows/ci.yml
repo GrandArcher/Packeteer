@@ -1250,6 +1250,37 @@ jobs:
             'Bilateral only: candidate for a peering request (1 ASNs)' '<td class="mono">AS64504</td>' '<td>ix-lab/ix-peer-c (bilateral)</td>' \
             'Also: 1 on a LAN with an unknown session type, 3 not seen at an exchange.' \
             --absent 'not built yet' 'mode-inject'
+          # The IXP member pages (#166) read the member, fabric, and
+          # route-server endpoints, which this single-router config has no
+          # source for, so uiproxy answers them from
+          # lab/ui-fixtures/ixp-member (documentation ASNs and addresses).
+          # The page is the image's. The step checks the connection, the
+          # fabric rows by vantage with the past-tolerance flag, the
+          # route-server session and its filter history, the IXP Manager
+          # link, and the member list; the pages only read.
+          kill "$proxy"
+          /tmp/uiproxy -listen 127.0.0.1:18138 -upstream "$base" -user lab -password lab-only \
+            -fixtures lab/ui-fixtures/ixp-member >/tmp/uiproxy166.log 2>&1 &
+          proxy=$!
+          for _ in $(seq 1 20); do
+            curl -fsS http://127.0.0.1:18138/healthz >/dev/null 2>&1 && break
+            sleep 0.2
+          done
+          curl -fsS http://127.0.0.1:18138/healthz >/dev/null
+          bash lab/ui-smoke.sh http://127.0.0.1:18138/ixp/member/64496 'mode-observe' 'announces nothing' \
+            '>AS64496 Example Member A</h2>' 'id="member-ixpm"' 'href="https://ixp.example.invalid/admin/search?search=AS64496"' \
+            '<td>sw1</td>' '<td>cab-a</td>' '<td>10000 Mbit/s</td>' '<td class="mono">192.0.2.20</td>' \
+            '<td>lan1-a</td>' '<td>0.00 %</td>' '<td>0.42 ms</td>' '<td>ok</td>' \
+            '<td>lan1-b</td>' '<td>40.00 %</td>' '<td>310.50 ms</td>' '<td>12.25 ms</td>' '<td class="bad">past tolerance</td>' \
+            '<td>rs1</td>' '<td class="mono">192.0.2.20</td>' '<td>9: 3</td>' \
+            'data-history="rs1/pb_a"' 'Latest 2 of 2 samples, newest first.' \
+            --absent 'mode-inject' 'is not an IXP member'
+          bash lab/ui-smoke.sh http://127.0.0.1:18138/ixp/member/ 'mode-observe' '>IXP members</h2>' \
+            'href="/ixp/member/64496"' '>AS64497</a>' '<td>Example Member B</td>' \
+            --absent 'mode-inject'
+          # This controller has no IXP source, so an unstubbed ASN is a 404.
+          bash lab/ui-smoke.sh http://127.0.0.1:18138/ixp/member/64499 'mode-observe' \
+            'AS64499 is not an IXP member Packeteer knows.' --absent 'mode-inject' 'Open in IXP Manager'
       - name: UI provider health smoke (#343; one provider at 100% loss, one with no answer, fixed prober, observe)
         run: |
           set -euo pipefail

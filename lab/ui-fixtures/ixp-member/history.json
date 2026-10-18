@@ -1,0 +1,12 @@
+{
+  "version": "lab",
+  "mode": "observe",
+  "ready": true,
+  "generated_at": "2026-10-18T12:00:00Z",
+  "server": "rs1",
+  "session": "pb_a",
+  "samples": [
+    {"at": "2026-10-18T11:50:00Z", "established": true, "counted": true, "received": 8, "accepted": 8, "filtered": 0, "reasons": [], "scanned": false, "blackhole": 0},
+    {"at": "2026-10-18T11:55:00Z", "established": true, "counted": true, "received": 10, "accepted": 7, "filtered": 3, "reasons": [{"reason": 9, "count": 3}], "scanned": false, "blackhole": 0}
+  ]
+}

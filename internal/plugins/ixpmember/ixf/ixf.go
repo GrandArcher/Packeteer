@@ -171,6 +171,7 @@ func New(c plugin.Config, env plugin.Env) (plugin.MemberSource, error) {
 			Configured: true,
 			URL:        viewURL(fetchURL),
 			Manager:    manager,
+			ManagerURL: managerBase(fetchURL, manager),
 			KeyID:      ident,
 			IXPs:       []plugin.IXPSite{},
 			Members:    []plugin.IXPMember{},

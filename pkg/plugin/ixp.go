@@ -54,6 +54,7 @@ type MemberView struct {
 	Configured   bool        `json:"configured"`
 	URL          string      `json:"url,omitempty"`
 	Manager      bool        `json:"manager"`
+	ManagerURL   string      `json:"manager_url,omitempty"`
 	KeyID        string      `json:"key_id,omitempty"`
 	KeyExpires   *time.Time  `json:"key_expires,omitempty"`
 	Fetched      *time.Time  `json:"fetched,omitempty"`

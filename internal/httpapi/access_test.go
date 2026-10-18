@@ -134,7 +134,7 @@ func TestAuthzEveryEndpoint(t *testing.T) {
 				return
 			}
 			// A browser asking for a page is sent to the sign-in page.
-			page := r.pattern == "GET /" || r.pattern == "GET /prefix/"
+			page := r.pattern == "GET /" || r.pattern == "GET /prefix/" || r.pattern == "GET /ixp/member/"
 			switch {
 			case page && (anon.Code != http.StatusFound || anon.Header().Get("Location") != "/signin.html"):
 				t.Fatalf("anonymous page: %d %s", anon.Code, anon.Body)
