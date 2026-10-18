@@ -83,8 +83,8 @@ type File struct {
 	Path   string `json:"path"`
 	YAML   string `json:"yaml"`
 	SHA256 string `json:"sha256"`
-	// Configured is true when the file already has providers or BGP
-	// neighbors, so the setup wizard starts collapsed.
+	// Configured is true when the file already has providers, BGP
+	// neighbors, or an ixp block, so the setup wizard starts collapsed.
 	Configured bool `json:"configured"`
 }
 

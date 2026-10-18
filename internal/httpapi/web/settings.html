@@ -54,7 +54,7 @@
     <h2>Setup wizard</h2>
     <p class="tag">Four steps, the last one optional. It always starts in observe: the edge session is learn-only, and the allowlist stays empty. A fresh file has no announcer; over an existing config, blocks the wizard does not write are kept. Inject is not a step. Secrets stay in environment variables; this wizard has no secret fields. Nothing is written until you save the YAML below.</p>
     <div id="wz-again" hidden>
-      <p class="tag">This config already has providers or BGP neighbors. Running setup again replaces its providers, BGP neighbors, sources, allowlist, scorer, and decision settings. Sign-in, the http block, storage, and every other block are kept. You see a diff and confirm before anything reaches the editor.</p>
+      <p class="tag">This config already has providers, BGP neighbors, or an ixp block. Running setup again replaces its providers, BGP neighbors, sources, allowlist, scorer, and decision settings. Sign-in, the http block, storage, and every other block are kept. You see a diff and confirm before anything reaches the editor.</p>
       <button type="button" id="wz-reopen">Run setup again (replaces your config)</button>
     </div>
     <div id="wz-body">
