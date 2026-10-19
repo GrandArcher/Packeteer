@@ -185,7 +185,6 @@ func TestFirstRunGeneratesAdminPassword(t *testing.T) {
 	dir, start := firstRunStore(t, &logs, noEnv)
 	ctx := context.Background()
 	plugins, _ := start()
-	var svc *auth.Service
 	store := plugins.Storage.Plugin.(plugin.UserStore)
 	u, found, _ := store.User(ctx, "admin")
 	if !found || u.Role != plugin.RoleAdmin || !u.MustChange {
@@ -213,7 +212,7 @@ func TestFirstRunGeneratesAdminPassword(t *testing.T) {
 	// A restart before the change creates nothing new and does not log it again.
 	_ = plugins.Stop(ctx)
 	logs.Reset()
-	plugins, svc = start()
+	plugins, svc := start()
 	if strings.Contains(logs.String(), pw) {
 		t.Fatalf("restart logged the password again:\n%s", logs.String())
 	}

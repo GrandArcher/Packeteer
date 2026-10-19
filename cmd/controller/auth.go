@@ -140,7 +140,11 @@ func bootstrapAdmin(ctx context.Context, svc *auth.Service, audit *auth.Auditor,
 	}
 	generated := false
 	if pw == "" && !svc.SSOEnabled() {
-		if has, err := svc.HasUsers(ctx); err == nil && !has {
+		has, err := svc.HasUsers(ctx)
+		switch {
+		case err != nil:
+			log.Error("auth: is on but the user list cannot be read; no admin was created", "err", err)
+		case !has:
 			pw, generated = auth.GeneratePassword(), true
 		}
 	}

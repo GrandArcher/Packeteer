@@ -10,7 +10,7 @@ The examples in [Startup errors](#startup-errors) and [Probes fail](#probes-fail
 docker ps -a --filter name=packeteer      # running, restarting, or exited?
 docker logs --tail 100 packeteer          # the reason is usually here
 docker run --rm -v "$PWD/config.yaml:/etc/packeteer/config.yaml:ro" ghcr.io/grandarcher/packeteer:edge -check
-curl -fsS -u admin:... http://127.0.0.1:8080/api/overview   # mode, readiness, counts, and the setup checklist (sign-in is on by default)
+curl -fsS -u admin:"$PW" http://127.0.0.1:8080/api/overview   # PW: the password you set, or the changed generated one; mode, readiness, counts, setup checklist
 ```
 
 More detail in the log: `-e PACKETEER_LOG_LEVEL=debug` on `docker run` (or `log.level: debug`). JSON logs: `-e PACKETEER_LOG_FORMAT=json`.

@@ -113,9 +113,11 @@ Every key is in [CONFIG.md](CONFIG.md). The example file comments each one.
 
 ```sh
 mkdir -p plugins
+PW='quickstart-admin-password'
 docker run --rm -v "$PWD/config.yaml:/etc/packeteer/config.yaml:ro" "$IMAGE" -check
 docker run -d --name packeteer --network host \
   --cap-add NET_RAW --cap-add NET_ADMIN \
+  -e PACKETEER_ADMIN_PASSWORD="$PW" \
   --restart unless-stopped \
   -v "$PWD/config.yaml:/etc/packeteer/config.yaml:ro" \
   -v "$PWD/plugins:/etc/packeteer/plugins:ro" \
@@ -134,7 +136,7 @@ Check that it is up and in observe:
 
 ```sh
 curl -fsS http://127.0.0.1:8080/healthz
-curl -fsS http://127.0.0.1:8080/api/overview
+curl -fsS -u "admin:$PW" http://127.0.0.1:8080/api/overview
 ```
 <!-- ci-retry: 60 -->
 <!-- ci-expect: "status":"ok" -->
@@ -148,14 +150,13 @@ docker logs packeteer 2>&1 | grep 'packeteer running'
 <!-- ci-expect: mode=observe -->
 <!-- ci-expect: announce=disabled -->
 
-This run set no `PACKETEER_ADMIN_PASSWORD`, so the first start made the admin `admin` with a random password. The log shows it once, and `/var/lib/packeteer/first-run-admin-password` in the volume holds it until you change it:
+`PACKETEER_ADMIN_PASSWORD` set the first admin's password. Leave it out and the first start generates one: the log shows it once, and `/var/lib/packeteer/first-run-admin-password` in the volume holds it until you change it.
 
-```sh
+```
 docker logs packeteer 2>&1 | grep 'generated admin password'
 ```
-<!-- ci-expect: generated admin password -->
 
-Open <http://127.0.0.1:8080/>. It redirects to the sign-in page, which asks for a new password after the first sign-in. [auth.md](auth.md#first-run) covers the opt-out and the other ways to set the password.
+Open <http://127.0.0.1:8080/>. It redirects to the sign-in page; a generated password has to be changed there before anything else works. [auth.md](auth.md#first-run) covers the opt-out and the other ways to set the password.
 
 ## 5. Or run it with Compose
 

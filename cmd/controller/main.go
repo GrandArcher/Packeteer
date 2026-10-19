@@ -829,7 +829,7 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 	}
 
 	rl := &reloader{
-		path: path, getenv: getenv, log: log, cur: cfg, ctl: ctl, poke: poke,
+		path: path, getenv: getenv, httpUser: httpUser, log: log, cur: cfg, ctl: ctl, poke: poke,
 		plugins: plugins, engine: engine, decider: decider, fed: fed, col: col,
 		watch: watch, live: live, dispatch: dispatch, hist: rec, inb: inb, mit: mit,
 		flowSpecUp: view != nil && mitigationFlowSpec(cfg, plugins),

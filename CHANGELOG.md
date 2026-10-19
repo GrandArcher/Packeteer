@@ -6,7 +6,7 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 
 ### Changed
 
-- Upgrade note: sign-in is now on by default. With no `auth.enabled` and no `PACKETEER_HTTP_USER` you get sqlite and a generated admin password; opt out with `auth.enabled: false` (#328).
+- Sign-in is on by default when the HTTP server runs without `auth.enabled` or `PACKETEER_HTTP_USER`: sqlite is added if `storage` is unset and a first-run admin password is generated; opt out with `auth.enabled: false` (#328).
 
 ### Added
 

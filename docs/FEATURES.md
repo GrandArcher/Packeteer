@@ -358,7 +358,7 @@ The improvements widget is titled Recommended improvements outside inject and Ac
 
 Rollback: remove `improvement_weights`, `http.config_editor`, and `report_subscriptions` and restart; the file config works as before.
 
-Reports (#23) come from the `sqlite` storage plugin, which is off unless `storage` is set (the example config sets it). It keeps daily probe rollups per prefix and provider, one row per improvement with the native and chosen provider's loss and RTT at the decision, and per-prefix origin ASN, country (from a `rules` policy with `geoip_db`), and volume.
+Reports (#23) come from the `sqlite` storage plugin, which is on when `storage` is set (the example config sets it) or when sign-in defaults on (#328), and off otherwise. It keeps daily probe rollups per prefix and provider, one row per improvement with the native and chosen provider's loss and RTT at the decision, and per-prefix origin ASN, country (from a `rules` policy with `geoip_db`), and volume.
 
 `/api/reports/<name>` serves `summary`, `improvements`, `exchanges`, `causes`, `performance`, `providers`, `prefixes`, `asns`, `countries`, `probes`, `savings`, and `timeseries` (#129, per-day before/after loss and RTT for the all, problem, 20%-better, and 50%-better buckets) as JSON or CSV, and the dashboard shows them. `/graphs.html` and the `timeseries` dashboard widget draw `timeseries` as charts ([ui.md](ui.md#graphs)). Mount `/var/lib/packeteer` so history survives a restart. The recorder writes once a minute and never blocks a decision or a withdraw; it does not announce.
 
