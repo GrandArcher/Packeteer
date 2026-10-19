@@ -127,7 +127,7 @@ func writeCanonicalString(b *bytes.Buffer, s string) {
 			case r < 0x20:
 				fmt.Fprintf(b, `\u%04x`, r)
 			case r == utf8.RuneError:
-				b.WriteString(`�`)
+				b.WriteString("\ufffd")
 			default:
 				b.WriteRune(r)
 			}

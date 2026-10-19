@@ -68,6 +68,10 @@ Probe results and usage come from `lab/probes/multipop/` files the script swaps.
 
 (4) With x-a and y-a within the threshold and x-b at 60+10ms (so the steer through POP B flips back to native), x-a at 60 of its own 100 and x-b at 60 in POP B put carrier X at 120: the prefix moves to y-a (`192.0.2.2`, cause commit). (5) POP B's usage drops to 5 and the commit steer is released. (6) SIGTERM of packeteer-a withdraws, and SIGKILL drops the route with the session within the 9s hold timer.
 
+`lab/e2e-herd.sh` is herd phase 1 (#260) on its own topology (`lab/docker-compose-herd.yml`): three Packeteer members in observe mode (member-a 192.0.2.10 in US, member-b 192.0.2.11 in DE, member-c 192.0.2.12 in JP) behind one FRR edge (`lab/frr-herd-edge`) that learns `192.0.2.128/26` with path `64501 64510` from an upstream (`lab/frr-herd-upstream`, 192.0.2.21), which also owns `192.0.2.130` so the members' real ICMP probes are answered. Keys come from `lab/mkherdkeys` per run; no seed is configured and nothing talks to a real herd. member-a and member-b share at origin-ASN level and list what they share; member-c excludes `192.0.2.0/24`, so it records and serves nothing but pulls from both.
+
+It checks: (1) every member pulls both peers without failures and the edge holds no route from a member. (2) `GET /api/herd/vantages?origin_asn=64510` shows one vantage per member and country (a: itself and b; c: a and b and none of its own; b: itself and a), never merged. (3) The preview on a and b is signed, origin-level, and holds no prefix, provider name, or AS path; member-c's preview is empty. (4) Each served pull is in the audit log as `herd.serve`. (5) With member-b paused (a peer that never answers), a and c report b failing, member-a keeps probing and stays ready. (6) SIGTERM stops member-a. Limit defaults are exercised here, not tuned.
+
 `lab/e2e-ha.sh` is active/standby HA (#31) on its own topology (`lab/docker-compose-ha.yml`): one FRR edge (`lab/frr-ha`, hold time 9s) with two Packeteer instances as iBGP neighbors, pk-a (`lab/packeteer-ha-a.yaml`, 192.0.2.10) and pk-b (`lab/packeteer-ha-b.yaml`, 192.0.2.20), sharing a `lease` elector file on one Docker volume (`ttl` 4s, `renew` 1s). On every sample, with `lab/checkpop`, it fails if the edge holds Packeteer routes from both instances at once. It checks: (1) pk-a alone takes the lease and announces `198.51.100.0/24` with next hop `192.0.2.2`, local-pref 250, `64512:666`, and `no-export`.
 
 (2) pk-b starts, is eligible, and stays standby for 20s with nothing announced. (3) `packeteer -backup` inside the running pk-a. (4) SIGKILL of pk-a: the edge drops its route with the session, and pk-b takes the expired lease and announces only after that. (5) pk-a restarts and stays standby. (6) A neighbor shutdown on the edge for the active pk-b: pk-b steps down and resigns, and pk-a takes over; pk-b's session returns and it stays standby. (7) SIGTERM of pk-a: it withdraws and releases the lease.
@@ -95,6 +99,7 @@ bash lab/e2e-ix.sh
 bash lab/e2e-more-specific.sh
 bash lab/e2e-leak-watch.sh
 bash lab/e2e-multipop.sh
+bash lab/e2e-herd.sh
 bash lab/e2e-ha.sh
 PACKETEER_DOCS_DIR=. bash lab/e2e-docs.sh docs/walkthrough.md
 ```

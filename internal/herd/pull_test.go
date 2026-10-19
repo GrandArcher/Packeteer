@@ -569,7 +569,7 @@ func TestPerPeerRecordCaps(t *testing.T) {
 }
 
 func TestPulledDiskBudgetDropsOldestFirstAndLeavesOwnRecords(t *testing.T) {
-	m, f, p := newPullFixture(t, func(h *config.Herd) { h.Limits.PulledBytes = 1 << 20 })
+	m, f, _ := newPullFixture(t, func(h *config.Herd) { h.Limits.PulledBytes = 1 << 20 })
 	m.seedN(3, 64510)
 	one := goodRecord("probe")
 	body, _ := json.Marshal(pulledBody{Record: one})

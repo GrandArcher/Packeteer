@@ -11,9 +11,9 @@ import (
 
 // Herd data never enters a decision, a scorer, an announcer, or the RIB
 // view (docs/design/herd.md, Hard rules 1 and 2). The only importers of this
-// package are the daemon wiring and the ops API.
+// package are the daemon wiring, the ops API, and the lab key helper.
 func TestOnlyTheDaemonAndTheOpsAPIImportHerd(t *testing.T) {
-	allowed := map[string]bool{"cmd/controller": true, "internal/httpapi": true}
+	allowed := map[string]bool{"cmd/controller": true, "internal/httpapi": true, "lab/mkherdkeys": true}
 	root := filepath.Join("..", "..")
 	fset := token.NewFileSet()
 	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
