@@ -39,6 +39,19 @@ jobs:
           go test -c -o span.test ./internal/plugins/source/span/
           sudo ./span.test -test.run AFPacket -test.v
 
+  race:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: test with the race detector (#380)
+        run: go test -race ./...
+
   lint:
     runs-on: ubuntu-latest
     steps:

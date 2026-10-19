@@ -7,6 +7,7 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 ### Added
 
 - Settings page: forms for scorer, SNMP v2c/v3 hosts, BGP, BMP, maintenance, flow extras, inbound announcer, anomaly, mitigation, plugins, HTTP; Preview diff; raw YAML under Advanced (#330).
+- CI runs `go test -race ./...` on every PR as its own `race` job; `make race` runs it locally (#380).
 - Multi-site IXP health: each site publishes its fabric measurements over mTLS federation; `ixp.core` measures inter-site RTT and loss; `/ixp/sites`, `GET /api/ixp/sites` (#167).
 - Events: `provider.down` and `provider.degraded` from measured loss, `bgp.session_not_established`, plain headline with What to do link, Details fold; observe restart is info (#347).
 - IXP member pages `/ixp/member/{asn}` (fabric by vantage, filter history, IXP Manager link), `GET /api/ixp/members/{asn}`, `packeteer_ixp_member_{rtt_ms,loss_pct,jitter_ms}` (#166).
@@ -28,6 +29,7 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 
 ### Fixed
 
+- A mitigation rule added mid-round waits until outbound has released its prefix, so one prefix never carries both an outbound and a mitigation route (#379).
 - Peer events read the neighbor set under the RIB lock, so a reload that adds or removes a neighbor during a session change no longer races and crashes the controller (#378).
 - Steer reason text (performance and cost moves) uses ASCII `->` instead of a Unicode arrow in logs, events, and the UI (#335).
 - Commit setup form reads `cc_disable: True` and `percentile: Separate` as the loader does, and keeps a new provider's Track commit across a rename (#311).

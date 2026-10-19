@@ -34,6 +34,7 @@ A mitigation route, an inbound steer, and an outbound route for one prefix share
 | Pair | Wins | How | Log | Test |
 |---|---|---|---|---|
 | Mitigation over outbound | Mitigation | Outbound withdraws its route and refuses the prefix; the rule's route stays on the wire across rounds and the outbound withdraw does not touch it | `announce` error `announce: P is reserved for inbound steering or threat mitigation` each round | `TestInteractionMitigationTakesPrefixFromOutboundSteer` |
+| Rule added after this round's outbound sync, prefix still announced by outbound | Outbound | The rule waits with pending `waiting for outbound to release the prefix`; next round outbound releases the prefix and the rule is announced | none | `TestRuleAddedMidRoundWaitsForOutbound` |
 | Mitigation over inbound | Mitigation | Inbound withdraws its steer and skips the prefix | none | `TestInteractionMitigationTakesPrefixFromInboundSteer` |
 | Inbound over outbound | Inbound | The outbound announcer refuses a configured inbound prefix | same `announce` error as above | `TestInteractionInboundPrefixIsNeverAnOutboundSteer` |
 | Leak hold over outbound and inbound | Hold | Outbound withdraws at once; an inbound steer is removed at its next sync | one `route seen outside the AS` warning at the sighting; a held outbound prefix is then silent | `TestHeldPrefixIsWithdrawnAndNeverAnnounced`, `TestDaemonLeakWatchWithdrawsOnlyTheLeakedRoute` |

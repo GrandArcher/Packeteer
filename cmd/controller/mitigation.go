@@ -105,9 +105,10 @@ func bindMitigation(cfg *config.Config, plugins *pluginhost.Set, srv any) error 
 }
 
 // runMitigation expires rules and syncs mitigation routes. It runs after
-// the outbound and inbound syncs in the same round, so a prefix a new rule
-// holds has already been released by them. It returns the rule changes
-// since the last round, for events and history.
+// the outbound and inbound syncs in the same round, so a prefix a rule
+// already held has been released by them. A rule added since then waits
+// for the next round (mitigation.Controller.SetOutbound). It returns the
+// rule changes since the last round, for events and history.
 func runMitigation(now time.Time, mit *mitigation.Controller, log *slog.Logger) ([]mitigation.Change, error) {
 	if mit == nil {
 		return nil, nil
