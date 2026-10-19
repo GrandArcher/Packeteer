@@ -233,7 +233,7 @@ var blockDefs = []Block{
 		ID: "http", Title: "HTTP server", YAML: "http", path: []string{"http"},
 		Help: "The dashboard, API, and this page. A change to these needs a restart. Mind lock-out: a listen address or allowed range that excludes you, or the editor off, ends this page.",
 		Fields: []Field{
-			field("listen", "Listen", "host:port. Empty keeps the default 127.0.0.1:8080. Wrap IPv6 in brackets.", KindString).check("ipport").dflt("127.0.0.1:8080"),
+			field("listen", "Listen", "host:port, for example localhost:8080. Empty uses the default 127.0.0.1:8080. Wrap IPv6 in brackets.", KindString).check("hostport").dflt("127.0.0.1:8080"),
 			field("config_editor", "Config editor", "Lets an admin edit this file here. It also needs sign-in. Turning it off removes this page.", KindBool),
 			field("allow_from", "Allowed clients", "Client ranges that may connect, one per row. Empty allows any. Others get 403 on every path.", KindCIDRs),
 		},

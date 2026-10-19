@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"net"
 	"net/netip"
 	"reflect"
 	"slices"
@@ -101,18 +102,19 @@ var checkers = map[string]func(string) error{
 		}
 		return nil
 	},
+	// hostport matches the loader's http.listen check; ipport matches the
+	// BMP station's, which also wants the host to be an IP address.
+	"hostport": func(s string) error {
+		_, err := splitListen(s)
+		return err
+	},
 	"ipport": func(s string) error {
-		host, port, err := splitHostPort(s)
+		host, err := splitListen(s)
 		if err != nil {
 			return err
 		}
-		if host != "" {
-			if _, err := netip.ParseAddr(strings.Trim(host, "[]")); err != nil {
-				return fmt.Errorf("%q: the host must be an IP address", s)
-			}
-		}
-		if n, err := strconv.Atoi(port); err != nil || n < 1 || n > 65535 {
-			return fmt.Errorf("%q: the port must be 1 to 65535", s)
+		if _, err := netip.ParseAddr(host); host != "" && err != nil {
+			return fmt.Errorf("%q: the host must be an IP address", s)
 		}
 		return nil
 	},
@@ -134,12 +136,15 @@ var checkers = map[string]func(string) error{
 	},
 }
 
-func splitHostPort(s string) (host, port string, err error) {
-	i := strings.LastIndex(s, ":")
-	if i < 0 {
-		return "", "", fmt.Errorf("%q must be host:port", s)
+func splitListen(s string) (host string, err error) {
+	host, port, err := net.SplitHostPort(s)
+	if err != nil {
+		return "", fmt.Errorf("%q must be host:port (wrap IPv6 in brackets)", s)
 	}
-	return s[:i], s[i+1:], nil
+	if n, err := strconv.Atoi(port); err != nil || n < 0 || n > 65535 {
+		return "", fmt.Errorf("%q: the port must be 0 to 65535", s)
+	}
+	return host, nil
 }
 
 // readValues reads the fields of mapping m. A nil m reads as an empty

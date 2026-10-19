@@ -425,9 +425,9 @@ func TestBlocksMitigation(t *testing.T) {
 func TestBlocksHTTP(t *testing.T) {
 	out, cfg := editBlocks(t, func(f *Form) {
 		f.Blocks["http"]["allow_from"] = []string{"127.0.0.0/8", "192.0.2.0/24", "2001:db8::/32"}
-		f.Blocks["http"]["listen"] = "0.0.0.0:9090"
+		f.Blocks["http"]["listen"] = "localhost:9090"
 	})
-	if len(cfg.HTTP.AllowFrom) != 3 || *cfg.HTTP.Listen != "0.0.0.0:9090" || !cfg.HTTP.ConfigEditor {
+	if len(cfg.HTTP.AllowFrom) != 3 || *cfg.HTTP.Listen != "localhost:9090" || !cfg.HTTP.ConfigEditor {
 		t.Fatalf("http = %+v\n%s", cfg.HTTP, out)
 	}
 	off, _ := editBlocks(t, func(f *Form) {
@@ -833,6 +833,8 @@ func TestBlocksRefusals(t *testing.T) {
 		{"geoip path", func(f *Form) { f.Blocks["mitigation"]["geoip_db"] = "geo.mmdb" }, "absolute path"},
 		{"http allow", func(f *Form) { f.Blocks["http"]["allow_from"] = []string{"nope"} }, "http.allow_from[0]"},
 		{"http listen", func(f *Form) { f.Blocks["http"]["listen"] = "8080" }, "http.listen"},
+		{"http listen unbracketed IPv6", func(f *Form) { f.Blocks["http"]["listen"] = "::1:8080" }, "wrap IPv6 in brackets"},
+		{"bmp listen host name", func(f *Form) { f.Blocks["bmp"]["listen"] = "localhost:11019" }, "must be an IP address"},
 		{"community secret", func(f *Form) { f.Blocks["inject"]["packeteer_community"] = "x" }, "packeteer_community"},
 		{"scorer weight", func(f *Form) { f.Blocks["scorer"]["loss_weight"] = "-1" }, "loss_weight"},
 		{"unknown block", func(f *Form) { f.Blocks["magic"] = Values{} }, "not a settings block"},

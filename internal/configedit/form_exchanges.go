@@ -1,6 +1,7 @@
 package configedit
 
 import (
+	"encoding/json"
 	"fmt"
 	"math"
 	"net/netip"
@@ -52,6 +53,51 @@ type FormExchangePeer struct {
 	Exclude    bool   `json:"exclude"`
 	Precedence string `json:"precedence"`
 	Draft      bool   `json:"draft,omitempty"`
+	// keepExclude and keepPrecedence mark a request that left the field
+	// out; see keepOmitted.
+	keepExclude, keepPrecedence bool
+}
+
+// UnmarshalJSON marks a request that leaves exclude or precedence out, so a
+// client older than the fields keeps the file's values.
+func (p *FormExchangePeer) UnmarshalJSON(b []byte) error {
+	type plain FormExchangePeer
+	var v struct {
+		plain
+		Exclude    *bool   `json:"exclude"`
+		Precedence *string `json:"precedence"`
+	}
+	if err := json.Unmarshal(b, &v); err != nil {
+		return err
+	}
+	*p = FormExchangePeer(v.plain)
+	p.keepExclude, p.keepPrecedence = v.Exclude == nil, v.Precedence == nil
+	if v.Exclude != nil {
+		p.Exclude = *v.Exclude
+	}
+	if v.Precedence != nil {
+		p.Precedence = *v.Precedence
+	}
+	return nil
+}
+
+// exchangePeer is the peer key of exchange exKey, or nil when either key is
+// empty or not in f.
+func (f Form) exchangePeer(exKey, key string) *FormExchangePeer {
+	if exKey == "" || key == "" {
+		return nil
+	}
+	for i := range f.Exchanges {
+		if f.Exchanges[i].Key != exKey {
+			continue
+		}
+		for j := range f.Exchanges[i].Peers {
+			if f.Exchanges[i].Peers[j].Key == key {
+				return &f.Exchanges[i].Peers[j]
+			}
+		}
+	}
+	return nil
 }
 
 func readExchanges(root *yaml.Node, f *Form) error {

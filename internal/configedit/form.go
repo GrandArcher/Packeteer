@@ -2,6 +2,7 @@ package configedit
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/netip"
@@ -90,6 +91,57 @@ type FormProvider struct {
 	CommitBound bool   `json:"commit_bound"`
 	ASN         string `json:"asn,omitempty"`
 	Draft       bool   `json:"draft,omitempty"`
+	// keepBMP marks a request that left bmp out; see keepOmitted.
+	keepBMP bool
+}
+
+// UnmarshalJSON marks a request that leaves bmp out, so a client older than
+// the field keeps the file's value instead of clearing it.
+func (p *FormProvider) UnmarshalJSON(b []byte) error {
+	type plain FormProvider
+	var v struct {
+		plain
+		BMP *string `json:"bmp"`
+	}
+	if err := json.Unmarshal(b, &v); err != nil {
+		return err
+	}
+	*p = FormProvider(v.plain)
+	p.keepBMP = v.BMP == nil
+	if v.BMP != nil {
+		p.BMP = *v.BMP
+	}
+	return nil
+}
+
+// keepOmitted gives a row whose request left out bmp, exclude, or
+// precedence the file's value, matched by key, and clears the marks so the
+// rows compare equal to the parsed file.
+func (f *Form) keepOmitted(cur Form) {
+	for i := range f.Providers {
+		p := &f.Providers[i]
+		for _, c := range cur.Providers {
+			if p.keepBMP && p.Key != "" && c.Key == p.Key {
+				p.BMP = c.BMP
+			}
+		}
+		p.keepBMP = false
+	}
+	for i := range f.Exchanges {
+		ex := &f.Exchanges[i]
+		for j := range ex.Peers {
+			p := &ex.Peers[j]
+			if c := cur.exchangePeer(ex.Key, p.Key); c != nil {
+				if p.keepExclude {
+					p.Exclude = c.Exclude
+				}
+				if p.keepPrecedence {
+					p.Precedence = c.Precedence
+				}
+			}
+			p.keepExclude, p.keepPrecedence = false, false
+		}
+	}
 }
 
 // FormTarget is one static probe target. Key is the prefix in the file
@@ -167,6 +219,7 @@ func ApplyForm(data []byte, form Form) ([]byte, error) {
 		return nil, err
 	}
 	form.normalize()
+	form.keepOmitted(cur)
 	if form.Plugins == nil {
 		form.Plugins = cur.Plugins
 	}

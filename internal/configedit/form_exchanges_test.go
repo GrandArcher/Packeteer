@@ -1,6 +1,7 @@
 package configedit
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -320,5 +321,56 @@ func TestFormExchangesKeepPort(t *testing.T) {
 	pt := cfg.Exchanges[0].Port
 	if pt == nil || pt.CapacityMbps != 10000 || pt.CommitMbps != 6000 || pt.PortCost == nil || *pt.PortCost != 1500 {
 		t.Fatalf("port = %+v", pt)
+	}
+}
+
+// TestFormOmittedFieldsKeepFile (#330): a client older than the provider bmp
+// and peer exclude and precedence fields posts rows without them. The file's
+// values stay; the edit it did send is written.
+func TestFormOmittedFieldsKeepFile(t *testing.T) {
+	in := strings.Replace(exchangeFormYAML, "next_hop: 192.0.2.21\n", "next_hop: 192.0.2.21\n    bmp: prefer\n", 1) +
+		"rib_sources:\n  - type: bmp\n    config:\n      routers: [192.0.2.254]\n"
+	out, cfg := applyAndLoad(t, in, func(f *Form) {
+		f.Providers[0].Cost = "5"
+		f.Exchanges[0].Peers[1].Cost = "7"
+		b, err := json.Marshal(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var raw map[string]any
+		if err := json.Unmarshal(b, &raw); err != nil {
+			t.Fatal(err)
+		}
+		delete(raw["providers"].([]any)[0].(map[string]any), "bmp")
+		for _, p := range raw["exchanges"].([]any)[0].(map[string]any)["peers"].([]any) {
+			delete(p.(map[string]any), "exclude")
+			delete(p.(map[string]any), "precedence")
+		}
+		if b, err = json.Marshal(raw); err != nil {
+			t.Fatal(err)
+		}
+		*f = Form{}
+		if err := json.Unmarshal(b, f); err != nil {
+			t.Fatal(err)
+		}
+	})
+	a, peer := peerByName(t, cfg, "transit-a"), peerByName(t, cfg, "ix-peer-b")
+	if a.BMP != config.BMPPrefer || a.Cost == nil || *a.Cost != 5 {
+		t.Fatalf("provider = %+v\n%s", a, out)
+	}
+	if peer.Precedence != 50 || !peer.Exclude || peer.Cost == nil || *peer.Cost != 7 {
+		t.Fatalf("peer = %+v\n%s", peer, out)
+	}
+
+	// A client that sends the fields still clears them.
+	_, cfg = applyAndLoad(t, in, func(f *Form) {
+		f.Providers[0].BMP = ""
+		f.Exchanges[0].Peers[1].Exclude = false
+		f.Exchanges[0].Peers[1].Precedence = ""
+		*f = roundTripJSON(t, *f)
+	})
+	a, peer = peerByName(t, cfg, "transit-a"), peerByName(t, cfg, "ix-peer-b")
+	if (a.BMP != config.BMPOff && a.BMP != "") || peer.Exclude || peer.Precedence != 0 {
+		t.Fatalf("sent fields not cleared: provider %+v peer %+v", a, peer)
 	}
 }

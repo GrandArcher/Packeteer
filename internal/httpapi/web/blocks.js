@@ -40,12 +40,11 @@ function blankValues(fields) {
 
 var jsChecks = {
   ip: function (v) { return checkIP(v) ? "" : "Enter an IP address."; },
+  hostport: function (v) { return listenParts(v).err; },
   ipport: function (v) {
-    var p = splitHostPort(v);
-    if (!v || v.indexOf(":") < 0) return "Enter host:port, for example 127.0.0.1:8080.";
-    var host = p.host.charAt(0) === "[" ? p.host.slice(1, -1) : p.host;
-    if (host && !checkIP(host)) return "The host must be an IP address.";
-    return checkPort(p.port, 1, 65535);
+    var p = listenParts(v);
+    if (p.err) return p.err;
+    return checkIP(p.host) ? "" : "The host must be an IP address.";
   },
   name: function (v) { return /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(v) ? "" : "Use up to 64 letters, digits, dot, dash, or underscore."; },
   community: function (v) {
@@ -56,6 +55,14 @@ var jsChecks = {
   },
   abspath: function (v) { return v.charAt(0) === "/" ? "" : "Enter an absolute path, starting with /."; }
 };
+
+// listenParts splits host:port the way Go's net.SplitHostPort does, so the
+// page refuses what the loader refuses: IPv6 needs brackets.
+function listenParts(v) {
+  var m = /^\[([^\[\]]*)\]:([^:]*)$/.exec(v) || /^([^:\[\]]*):([^:\[\]]*)$/.exec(v);
+  if (!m) return {err: "Enter host:port, for example 127.0.0.1:8080. Wrap IPv6 in brackets."};
+  return {host: m[1], err: checkPort(m[2], 0, 65535)};
+}
 
 function checkFor(f) {
   var fn = jsChecks[f.check];
@@ -463,14 +470,20 @@ function renderPlugins() {
     name.addEventListener("input", function () { markDirty(name); p.name = name.value.trim(); });
     attachCheck(name, function () { return name.value.trim() ? jsChecks.name(name.value.trim()) : ""; });
     card.appendChild(labeled("Name", name, "Optional label. It defaults to the type.", "name"));
-    renderSettings(card, p, "plugins[" + i + "]");
+    renderSettings(card, p, "plugins[" + i + "]", p.type === "exec");
+    // The server refuses any change to an exec plugin: it runs a program,
+    // so it is edited only in the raw YAML.
+    if (p.type === "exec") {
+      card.querySelectorAll("input, select, button").forEach(function (c) { c.disabled = true; });
+      head.appendChild(el("span", "tag", "read-only: it runs a program, edit it in the raw YAML"));
+    }
     root.appendChild(card);
   });
   if (!list.length) root.appendChild(el("p", "empty", "No plugins beyond the cards above."));
   renderAddPlugin(root);
 }
 
-function renderSettings(card, p, at) {
+function renderSettings(card, p, at, locked) {
   var fold = el("details", "advanced");
   fold.appendChild(el("summary", "", "Show settings"));
   (p.settings || []).forEach(function (s, j) {
@@ -494,6 +507,10 @@ function renderSettings(card, p, at) {
     var lab = labeled(s.key, control, "Empty removes the setting.", "config." + s.key);
     box.appendChild(lab);
   });
+  if (locked) {
+    card.appendChild(fold);
+    return;
+  }
   var key = rowInput("", "setting name", false);
   var value = rowInput("", "value", false);
   var add = el("button", "small", "+ Setting");
