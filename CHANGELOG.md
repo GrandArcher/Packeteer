@@ -7,6 +7,7 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 ### Added
 
 - Herd phase 1: opt-in `herd:` stores per-round records, serves them signed over pinned mutual TLS, and pulls static peers; `GET /api/herd`, `/api/herd/vantages`, `/api/herd/preview` (#260).
+- CI runs `go test -race ./...` on every PR as its own `race` job; `make race` runs it locally (#380).
 - Multi-site IXP health: each site publishes its fabric measurements over mTLS federation; `ixp.core` measures inter-site RTT and loss; `/ixp/sites`, `GET /api/ixp/sites` (#167).
 - Events: `provider.down` and `provider.degraded` from measured loss, `bgp.session_not_established`, plain headline with What to do link, Details fold; observe restart is info (#347).
 - IXP member pages `/ixp/member/{asn}` (fabric by vantage, filter history, IXP Manager link), `GET /api/ixp/members/{asn}`, `packeteer_ixp_member_{rtt_ms,loss_pct,jitter_ms}` (#166).

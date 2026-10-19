@@ -480,8 +480,38 @@ func (v *View) stopServer() {
 	if v.srv == nil {
 		return
 	}
+	v.quiesceSessions()
 	_ = v.srv.StopBgp(context.Background(), &api.StopBgpRequest{})
 	v.srv.Stop()
+}
+
+// quiesceSessions admin-downs every peer and waits for established sessions
+// to leave that state. StopBgp clears the global config without a lock that
+// an established session's receive loop also reads, so it must not run while
+// one is still receiving. A session reports a non-established state only
+// after its loops have exited.
+func (v *View) quiesceSessions() {
+	ctx := context.Background()
+	var addrs []string
+	_ = v.srv.ListPeer(ctx, &api.ListPeerRequest{}, func(p *api.Peer) {
+		addrs = append(addrs, p.State.NeighborAddress)
+	})
+	for _, a := range addrs {
+		_ = v.srv.DisablePeer(ctx, &api.DisablePeerRequest{Address: a})
+	}
+	deadline := time.Now().Add(quiesceTimeout)
+	for time.Now().Before(deadline) {
+		up := false
+		_ = v.srv.ListPeer(ctx, &api.ListPeerRequest{}, func(p *api.Peer) {
+			if p.State.SessionState == api.PeerState_ESTABLISHED {
+				up = true
+			}
+		})
+		if !up {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 }
 
 // Stop tears down the sessions and speaker and clears the view.
@@ -1424,6 +1454,9 @@ func viaBit(via string) uint8 {
 // maxSuggestNextHops caps how many undiscovered next hops one read
 // returns. The busiest hops are kept.
 const maxSuggestNextHops = 64
+
+// quiesceTimeout bounds the wait for sessions to drop at shutdown.
+const quiesceTimeout = 3 * time.Second
 
 // NextHops counts, for every next hop inside lans, the distinct prefixes
 // with a usable path through it (iBGP, including add-path, and BMP). It
