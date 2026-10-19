@@ -94,7 +94,7 @@ func TestHerdValidation(t *testing.T) {
 		{"limit range", func(s string) string { return s + "  limits: {max_conns: 0, page_records: 9999}\n" }, "page_records 9999"},
 		{"preview with listen", func(s string) string {
 			return strings.Replace(s, "enabled: true", "enabled: true\n  preview_only: true", 1)
-		}, "remove herd.listen and herd.peers"},
+		}, "remove herd.listen, herd.peers, and herd.hub"},
 		{"duplicate peer", func(s string) string {
 			i := strings.Index(s, "    - url")
 			return s + s[i:]
@@ -146,5 +146,47 @@ func TestHerdDisabledKeepsSettingsForRollback(t *testing.T) {
 	y := minimalYAML + strings.Replace(herdOn, "enabled: true", "enabled: false", 1)
 	if _, err := Parse([]byte(y)); err != nil {
 		t.Fatalf("disabling herd must not need other herd keys removed: %v", err)
+	}
+}
+
+const herdHubYAML = "  hub: {url: \"https://hub.example.net/herd.json\"}\n"
+
+func TestHerdHubDefaultsAndNoPeersNeeded(t *testing.T) {
+	cfg, err := Parse([]byte(herdBase + herdOn[:strings.Index(herdOn, "  peers:")] + herdHubYAML))
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := cfg.Herd.Hub
+	if h == nil || h.URL != "https://hub.example.net/herd.json" || h.Refresh != 6*time.Hour || h.MaxPeers != 16 {
+		t.Errorf("hub = %+v, want url set, refresh 6h, max_peers 16", h)
+	}
+	if cfg2, err := Parse([]byte(herdBase + herdOn)); err != nil || cfg2.Herd.Hub != nil {
+		t.Errorf("no hub block must stay off: %v %+v", err, cfg2.Herd.Hub)
+	}
+}
+
+func TestHerdHubValidation(t *testing.T) {
+	for name, tt := range map[string]struct{ hub, want string }{
+		"http":         {"  hub: {url: \"http://hub.example.net/herd.json\"}\n", "must be an https URL"},
+		"no url":       {"  hub: {refresh: 1h}\n", "must be an https URL"},
+		"credentials":  {"  hub: {url: \"https://user:pw@hub.example.net/herd.json\"}\n", "must be an https URL"},
+		"fast refresh": {"  hub: {url: \"https://hub.example.net/h.json\", refresh: 1m}\n", "herd.hub.refresh"},
+		"slow refresh": {"  hub: {url: \"https://hub.example.net/h.json\", refresh: 240h}\n", "herd.hub.refresh"},
+		"many peers":   {"  hub: {url: \"https://hub.example.net/h.json\", max_peers: 65}\n", "herd.hub.max_peers 65"},
+		"unknown key":  {"  hub: {url: \"https://hub.example.net/h.json\", trust: true}\n", "trust"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := Parse([]byte(herdBase + herdOn + tt.hub))
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("err = %v, want it to contain %q", err, tt.want)
+			}
+		})
+	}
+}
+
+func TestHerdHubNeedsAListener(t *testing.T) {
+	y := herdBase + "herd:\n  enabled: true\n  share: {classes: [measurements]}\n  vantage: {country: US}\n" + herdHubYAML
+	if _, err := Parse([]byte(y)); err == nil || !strings.Contains(err.Error(), "herd.listen") {
+		t.Errorf("err = %v, want herd.listen", err)
 	}
 }

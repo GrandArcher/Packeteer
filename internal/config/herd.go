@@ -34,7 +34,21 @@ type Herd struct {
 	// KeyFile is this node's Ed25519 key, created on first start.
 	KeyFile string     `yaml:"key_file"`
 	Peers   []HerdPeer `yaml:"peers"`
-	Limits  HerdLimits `yaml:"limits"`
+	// Hub is the public list of herd servers used as seeds (#261). Nil
+	// means no hub: only the static peers are used.
+	Hub    *HerdHub   `yaml:"hub"`
+	Limits HerdLimits `yaml:"limits"`
+}
+
+// HerdHub is the hub list a node fetches over HTTPS to find seed peers.
+// Every entry in it is verified by this node; the hub is never trusted.
+type HerdHub struct {
+	// URL is the https address of the list document.
+	URL string `yaml:"url"`
+	// Refresh is how often the list is fetched again (default 6h).
+	Refresh time.Duration `yaml:"refresh"`
+	// MaxPeers caps the peers taken from the list (default 16).
+	MaxPeers int `yaml:"max_peers"`
 }
 
 // HerdShare chooses what leaves the box.
@@ -116,6 +130,11 @@ const (
 	MaxHerdRetentionDays     = 365
 	MaxHerdPeers             = 16
 	DefaultHerdKeyFile       = "/var/lib/packeteer/herd/node.key"
+	DefaultHerdHubRefresh    = 6 * time.Hour
+	MinHerdHubRefresh        = 10 * time.Minute
+	MaxHerdHubRefresh        = 7 * 24 * time.Hour
+	DefaultHerdHubPeers      = 16
+	MaxHerdHubPeers          = 64
 )
 
 // Herd values.
@@ -196,7 +215,28 @@ func (c *Config) defaultHerd() {
 	if h.KeyFile == "" {
 		h.KeyFile = DefaultHerdKeyFile
 	}
+	if h.Hub != nil {
+		if h.Hub.Refresh == 0 {
+			h.Hub.Refresh = DefaultHerdHubRefresh
+		}
+		if h.Hub.MaxPeers == 0 {
+			h.Hub.MaxPeers = DefaultHerdHubPeers
+		}
+	}
 	h.Limits.applyDefaults()
+}
+
+// CheckHerdURL checks a herd endpoint address: https://host:port, nothing
+// else.
+func CheckHerdURL(s string) error {
+	u, err := url.Parse(s)
+	if err != nil || u.Scheme != "https" || u.Host == "" || (u.Path != "" && u.Path != "/") || u.RawQuery != "" || u.User != nil {
+		return errors.New("must be https://host:port")
+	}
+	if _, _, err := net.SplitHostPort(u.Host); err != nil {
+		return errors.New("needs a port")
+	}
+	return nil
 }
 
 // ParseHerdKey decodes "ed25519:<base64>" into the 32-byte public key.
@@ -300,27 +340,27 @@ func (c *Config) validateHerd(add func(string, ...any)) {
 		}
 	})
 	if h.PreviewOnly {
-		if h.Listen != "" || len(h.Peers) > 0 {
-			add("herd.preview_only serves and pulls nothing: remove herd.listen and herd.peers")
+		if h.Listen != "" || len(h.Peers) > 0 || h.Hub != nil {
+			add("herd.preview_only serves and pulls nothing: remove herd.listen, herd.peers, and herd.hub")
 		}
 		return
 	}
 	if _, _, err := net.SplitHostPort(h.Listen); err != nil {
 		add("herd.listen %q must be host:port (or set herd.preview_only)", h.Listen)
 	}
-	if len(h.Peers) == 0 {
-		add("herd.peers: at least one peer is required to serve or pull (or set herd.preview_only)")
+	if len(h.Peers) == 0 && h.Hub == nil {
+		add("herd.peers: at least one peer (or herd.hub) is required to serve or pull (or set herd.preview_only)")
 	}
 	if len(h.Peers) > MaxHerdPeers {
 		add("herd.peers: at most %d peers", MaxHerdPeers)
 	}
+	if h.Hub != nil {
+		h.Hub.validate(add)
+	}
 	urls, keys := map[string]bool{}, map[string]bool{}
 	for i, p := range h.Peers {
-		u, err := url.Parse(p.URL)
-		if err != nil || u.Scheme != "https" || u.Host == "" || (u.Path != "" && u.Path != "/") || u.RawQuery != "" || u.User != nil {
-			add("herd.peers[%d]: url %q must be https://host:port", i, p.URL)
-		} else if _, _, err := net.SplitHostPort(u.Host); err != nil {
-			add("herd.peers[%d]: url %q needs a port", i, p.URL)
+		if err := CheckHerdURL(p.URL); err != nil {
+			add("herd.peers[%d]: url %q %s", i, p.URL, err)
 		}
 		if _, err := ParseHerdKey(p.Key); err != nil {
 			add("herd.peers[%d]: key %s", i, err)
@@ -329,5 +369,17 @@ func (c *Config) validateHerd(add func(string, ...any)) {
 			add("herd.peers[%d]: duplicate url or key", i)
 		}
 		urls[p.URL], keys[p.Key] = true, true
+	}
+}
+
+func (b *HerdHub) validate(add func(string, ...any)) {
+	if u, err := url.Parse(b.URL); err != nil || u.Scheme != "https" || u.Host == "" || u.User != nil || u.Fragment != "" {
+		add("herd.hub.url %q must be an https URL", b.URL)
+	}
+	if b.Refresh < MinHerdHubRefresh || b.Refresh > MaxHerdHubRefresh {
+		add("herd.hub.refresh %s must be between %s and %s", b.Refresh, MinHerdHubRefresh, MaxHerdHubRefresh)
+	}
+	if b.MaxPeers < 1 || b.MaxPeers > MaxHerdHubPeers {
+		add("herd.hub.max_peers %d must be between 1 and %d", b.MaxPeers, MaxHerdHubPeers)
 	}
 }

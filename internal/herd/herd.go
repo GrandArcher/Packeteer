@@ -64,6 +64,7 @@ type Herd struct {
 	rec   *Recorder
 	srv   *Server
 	pull  *Puller
+	hub   *Hub
 
 	mu     sync.Mutex
 	cancel context.CancelFunc
@@ -92,8 +93,12 @@ func New(o Options) (*Herd, error) {
 	if err != nil {
 		return nil, err
 	}
+	var hubKeys *KeySet
+	if o.Cfg.Serving() && o.Cfg.Hub != nil {
+		hubKeys = &KeySet{}
+	}
 	h.srv = NewServer(ServerOptions{
-		Cfg: o.Cfg, ASN: o.ASN, Node: node, Store: o.Store, RIB: o.RIB, Rules: o.Rules, Peers: keys, Now: o.Now,
+		Cfg: o.Cfg, ASN: o.ASN, Node: node, Store: o.Store, RIB: o.RIB, Rules: o.Rules, Peers: keys, Hub: hubKeys, Now: o.Now,
 		Log: o.Log, Trips: h.trips, Active: o.Active, Audit: o.Audit,
 	})
 	if o.Cfg.Serving() {
@@ -103,6 +108,20 @@ func New(o Options) (*Herd, error) {
 		}); err != nil {
 			return nil, err
 		}
+	}
+	if hubKeys != nil {
+		static := map[string]bool{}
+		for _, p := range o.Cfg.Peers {
+			static[p.URL] = true
+		}
+		h.hub = NewHub(HubOptions{
+			Cfg: o.Cfg.Hub, Self: node.ID(), ASN: o.ASN, Now: o.Now, Log: o.Log, Event: o.Event,
+			Skip: func(id, url string) bool { _, ok := keys[id]; return ok || static[url] },
+			Apply: func(peers []HubPeer) {
+				h.pull.SetHub(peers)
+				hubKeys.Set(peers)
+			},
+		})
 	}
 	return h, nil
 }
@@ -133,6 +152,9 @@ func (h *Herd) Start(ctx context.Context) error {
 	run(h.rec.Run)
 	if h.pull != nil {
 		run(h.pull.Run)
+	}
+	if h.hub != nil {
+		run(h.hub.Run)
 	}
 	go func() { wg.Wait(); close(h.done) }()
 	h.o.Log.Info("herd on", "key", h.node.ID(), "granularity", h.o.Cfg.Share.Granularity, "serving", h.o.Cfg.Serving())
@@ -196,6 +218,7 @@ type NodeStatus struct {
 	Discovery     string       `json:"discovery"`
 	RetentionDays int          `json:"retention_days"`
 	Peers         []PeerStatus `json:"peers"`
+	Hub           *HubStatus   `json:"hub,omitempty"`
 	Limits        []TripCount  `json:"limit_trips"`
 	Queue         QueueStatus  `json:"queue"`
 	Store         StoreStatus  `json:"store"`
@@ -231,6 +254,10 @@ func (h *Herd) Status(ctx context.Context) NodeStatus {
 	if h.pull != nil {
 		st.Peers = h.pull.Peers()
 		st.Queue.Restarts += h.pull.Restarts()
+	}
+	if h.hub != nil {
+		hs := h.hub.Status()
+		st.Hub = &hs
 	}
 	if s, err := h.o.Store.HerdStats(ctx); err == nil {
 		st.Store = StoreStatus{
