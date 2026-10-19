@@ -1,0 +1,1572 @@
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+index 7ad5326..11da785 100644
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -6,6 +6,7 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
+ 
+ ### Added
+ 
++- Route-server signals: spikes in RPKI-invalid, IRR, and transit-free-ASN filtering, new origins, more-specific bursts, and RFC 7999 blackhole counts per member; GET only (#165).
+ - Fabric incident correlation: fabric probes grouped by switch, colo, and bundle; `ixp.fabric_degraded` vs `ixp.member_degraded` events; `GET /api/ixp/correlation`; nothing announced (#163).
+ - Route-server observability: Birdseye polls per member session (state, received, accepted, filtered, filtered-by-reason, max_prefix), in-memory history, `ixp.rs_*` alerts, GET only (#164).
+ - PeeringDB / IX-F lookup: read-only cached org name, exchange membership, LAN addresses, route-server flag, policy, and prefix hints; GET /api/lookup; key from PACKETEER_PEERINGDB_API_KEY (#153).
+diff --git a/README.md b/README.md
+index 0401b42..e37eff6 100644
+--- a/README.md
++++ b/README.md
+@@ -13,7 +13,7 @@ The feature matrix is [docs/FEATURES.md](docs/FEATURES.md).
+ Read this before you change `mode`.
+ 
+ - The default mode is `observe`. The file in this repository stays `observe`. `suggest` probes and recommends, and announces nothing.
+-- An `ixp: {}` block is an exchange operator, not an edge that injects. It refuses `mode: inject`, `announcer`, `mitigation`, `inbound`, `synthesize`, and `more_specific`, and it does not need `bgp.neighbors` ([design](docs/design/ixp.md)). Optional `ixp.members` (`type: ixf`) imports the IX-F member list and announces nothing. Optional `ixp.vantages` and `ixp.fabric` (`type: icmp`) record member LAN loss, RTT, and jitter from those vantages and announce nothing. Optional `ixp.routeservers` (`type: birdseye`) polls Birdseye with GET only and keeps per-session history and alerts. Optional `ixp.correlate` (`type: topology`) groups the fabric probes by switch, colo, and core bundle and alerts on a fabric problem or a member problem.
++- An `ixp: {}` block is an exchange operator, not an edge that injects. It refuses `mode: inject`, `announcer`, `mitigation`, `inbound`, `synthesize`, and `more_specific`, and it does not need `bgp.neighbors` ([design](docs/design/ixp.md)). Optional `ixp.members` (`type: ixf`) imports the IX-F member list and announces nothing. Optional `ixp.vantages` and `ixp.fabric` (`type: icmp`) record member LAN loss, RTT, and jitter from those vantages and announce nothing. Optional `ixp.routeservers` (`type: birdseye`) polls Birdseye with GET only, keeps per-session history and alerts, and with `route_signals` flags new origins and more-specific bursts, and counts blackhole routes. Optional `ixp.correlate` (`type: topology`) groups the fabric probes by switch, colo, and core bundle and alerts on a fabric problem or a member problem.
+ - `inject` is a separate config: `mode: inject`, a non-empty allowlist, `packeteer_community`, `local_pref`, a positive `hold_time`, positive loss and latency thresholds, an iBGP neighbor, and `announcer.type: gobgp`.
+ - Packeteer announces a prefix only when that exact prefix is in the RIB it learned from the router. It does not invent a more-specific. A config that sets `more_specific_bits` is rejected. The optional `more_specific` block (off by default) also announces the more-specifics a neighbor already advertises inside an improvement's prefix, under a route cap ([design](docs/design/more-specific.md)).
+ - Active improvements are capped (`max_improvements`, default 50).
+diff --git a/config.example.yaml b/config.example.yaml
+index cb75651..c103c76 100644
+--- a/config.example.yaml
++++ b/config.example.yaml
+@@ -45,6 +45,10 @@ mode: observe               # also the default when mode is left out; inject is
+ #       max_bytes: 8388608
+ #       max_prefix_warn_pct: 90
+ #       filtered_warn_pct: 50
++#       route_signals: false     # list each session's routes: origin, more-specific, blackhole (#165)
++#       spike_min: 10            # filtered-reason jump that alerts (#165)
++#       spike_factor: 2
++#       burst_min: 20
+ #   correlate:                   # fabric vs member problem (#163), needs fabric
+ #     type: topology
+ #     config:
+diff --git a/docs/API.md b/docs/API.md
+index 0e1117c..f891c60 100644
+--- a/docs/API.md
++++ b/docs/API.md
+@@ -25,9 +25,9 @@ The dashboard, JSON API, and Prometheus metrics share one listener, `http.listen
+ | `/api/lookup` | Viewer. The PeeringDB / IX-F cache when `lookup` is configured (#153): `configured`, `anonymous`, `base_url`, `fetched`, `stale`, `error`, `network_count`, `membership_count`, `exchanges` (`name`, `ix_id`, `ix_name`, `city`, `country`, `ixf_url`, `error`, `ixf_error`), `networks` (`asn`, `name`, `org`, `policy`, `policy_url`, `info_prefixes4`, `info_prefixes6`; an absent hint is omitted and a zero is a real zero), and `memberships` (`exchange`, `asn`, `name`, `ipv4`, `ipv6`, `route_server`). `?asn=` (a number or `AS64496`) keeps one network and its memberships. Empty lists and `configured: false` when it is not. The API key is not included. Read-only. |
+ | `/api/ixp/members` | Viewer. The IX-F member list when `ixp.members` is configured (#161): `configured`, `url` (no query string), `manager`, `key_id`, `key_expires` and `fetched` (both absent until known), `stale`, `error`, `member_count`, `address_count`, `ixps`, and `members` (ASN, name, connections, LAN addresses, route-server flag, `max_prefix`, `as_macro`, switch and colo from that connection's IXP). Empty lists and `configured: false` when it is not. The API key is not included. Read-only. |
+ | `/api/ixp/probes` | Viewer. The latest fabric round when `ixp.fabric` is configured (#162): `configured`, `stale`, `error`, `round`, `targets`, `opt_out`, `vantages` (`name`, `address`, `vlan_id`, `up`, `targets`, `error`), and `samples` (vantage, ASN, address, loss, RTT, jitter, busy-host, past the ping warning, switch and colo). Empty lists and `configured: false` when it is not. The API key is not included. Read-only. Nothing is announced. |
+-| `/api/ixp/routeservers` | Viewer. The latest Birdseye poll when `ixp.routeservers` is configured (#164): `configured`, `servers` (`name`, `url`, `asn`, `up`, `stale`, `error`, `polled`, `version`, `router_id`, `last_reconfig`, `message`, `sessions`), and `sessions` (`server`, `session`, `asn`, `name`, `neighbor`, `description`, `state`, `established`, `counted`, `received`, `accepted`, `filtered`, `reasons` as `reason` and `count`, `max_prefix`, `used_pct`, `error`, `at`). A stale server shows no sessions. Empty lists and `configured: false` when it is not. Read-only. Nothing is announced. |
++| `/api/ixp/routeservers` | Viewer. The latest Birdseye poll when `ixp.routeservers` is configured (#164): `configured`, `servers` (`name`, `url`, `asn`, `up`, `stale`, `error`, `polled`, `version`, `router_id`, `last_reconfig`, `message`, `sessions`), and `sessions` (`server`, `session`, `asn`, `name`, `neighbor`, `description`, `state`, `established`, `counted`, `received`, `accepted`, `filtered`, `reasons` as `reason` and `count`, `max_prefix`, `used_pct`, `scanned`, `blackhole`, `scan_error`, `error`, `at`). A stale server shows no sessions. Empty lists and `configured: false` when it is not. Read-only. Nothing is announced. |
+ | `/api/ixp/correlation` | Viewer. The latest fabric incident view when `ixp.correlate` is configured (#163): `configured`, `stale`, `round`, `groups` (`scope` of `switch`, `colo`, or `bundle`, `ixp_id`, `name`, `members` measured, `degraded`, `degraded_pct`, `active`, `asns` of the degraded members), and `members` (each member degraded on its own, outside every degraded group: `asn`, `name`, `addresses`, `active`). `active` is true while the matching event is open: it takes `rounds` rounds to open and `rounds` to close, and a group or member that is open but not measured this round is still listed, with `degraded` 0. Empty lists and `configured: false` when it is not. Read-only. Nothing is announced. |
+-| `/api/ixp/routeservers/history` | Viewer. `?server=<name>&session=<protocol>`: `samples`, oldest first (up to 288, kept in memory), each with `at`, `established`, `counted`, `received`, `accepted`, `filtered`, `reasons`, and `max_prefix`. `400` without both parameters, `404` for a server or session with no history. Read-only (#164). |
++| `/api/ixp/routeservers/history` | Viewer. `?server=<name>&session=<protocol>`: `samples`, oldest first (up to 288, kept in memory), each with `at`, `established`, `counted`, `received`, `accepted`, `filtered`, `reasons`, `max_prefix`, `scanned`, and `blackhole`. `400` without both parameters, `404` for a server or session with no history. Read-only (#164). |
+ | `/api/exchanges/potential-peers` | Viewer. Destination origin ASNs ranked by flow bytes: `rows` with `asn`, `class`, `bytes`, `mbps`, `prefixes` (with traffic), `lan_prefixes` and `lan_bytes` (those with a learned path whose next hop is on an exchange LAN today), and `members` (`exchange`, `peer` for a configured peer, `next_hop`, `via`). `class` is `route_server` (a member with that AS has paths via a route server), `bilateral` (members seen only bilaterally), `unknown` (on a LAN, session type not visible), or `absent` (no peer or LAN member has that AS). `?class=` keeps one class; `asns`, `bytes`, and `mbps` total it, `classes` counts every class, and `unattributed_bytes` had no covering learned route or belong to the local AS. `limit` as for the offload report; `?format=csv` downloads the rows. The origin AS is the last AS of the covering learned route. `400` for a bad parameter, `404` without exchanges. Read-only (#154). |
+ | `/api/telemetry` | Interface rates and 95th-percentile usage when a telemetry plugin is configured. Empty when it is not. This does not announce. |
+ | `/api/reports` | The report list with each report's `category`, `summary`, `filters`, and `columns`, and whether history storage is on. |
+diff --git a/docs/CONFIG.md b/docs/CONFIG.md
+index b56f21e..29d4d97 100644
+--- a/docs/CONFIG.md
++++ b/docs/CONFIG.md
+@@ -391,10 +391,12 @@ With the block set, validation refuses `mode: inject`, `announcer`, `mitigation`
+ 
+ Only connection states `active`, `connected`, and `operational` are probed, and only an address inside the VLAN prefix. The vantage address itself is not a target. `can_ping: false` on an IX-F address is an opt-out. When the import is the IXP Manager export, each round also GETs `/admin/api/v4/nagios/customers/{vlanid}/4` or `/6` on that same origin, including a subdirectory install. `vlanid` is the VLAN database id. That is the only extra path. The template suffix and every other nagios route are not called. The same `X-IXP-Manager-API-Key` header is used. The key's user must be a superuser. Redirects are not followed. A host is probed only when a service uses `ixp-manager-member-ping-service` (busy: `ixp-manager-member-ping-busy-service`). The busy template uses the looser warning (1000ms or 80% loss; otherwise 250ms or 20% loss). The busy critical RTT (2000ms) is the minimum per-packet timeout for that host. A failed fetch (a 401 included) keeps the last successful list for three `interval`s after that successful fetch; then that VLAN is not probed until a fetch succeeds. With no successful list, that VLAN is not probed, because the member export omits `can_ping`. A named IX-F URL is not the manager export, so that GET is not made. `GET /api/ixp/probes` serves the round. The metrics are `packeteer_ixp_fabric_up`, `packeteer_ixp_fabric_targets`, `packeteer_ixp_fabric_opt_out`, `packeteer_ixp_fabric_past_tolerance`, and `packeteer_ixp_fabric_age_seconds`. There is no per-member series.
+ 
+-`routeservers` is one plugin. The only type is `birdseye`. It polls Birdseye on each route server with GET only and keeps a history per member session. It reads `api/status`, `api/protocols/bgp`, `api/routes/count/protocol/{protocol}`, and `api/routes/lc-zwild/protocol/{protocol}/{asn}/1101`, and nothing else. Birdseye is read without a key: the IXP Manager API key is never sent to it, and a `url` with userinfo or a query is refused. Redirects are not followed. `members` is optional; with it, a session's ASN, name, and `max_prefix` come from the IX-F entry for its neighbor address, and without it `max_prefix` is Birdseye's import limit. `servers` lists at most 8 route servers, each with `name` (as for a vantage), `url` (the Birdseye origin, or a subdirectory install), and `asn` (the route server's ASN, the first part of the `asn:1101:x` tag IXP Manager puts on a filtered route). `interval` (default 5m, 1m to 1h), `timeout` (default 15s, 1s to 2m), `workers` (default 4, 1 to 8, concurrent session reads per server), `max_bytes` (default 8 MiB, 1024 to 32 MiB, per response; a larger response leaves that session uncounted), `max_prefix_warn_pct` (default 90, 1 to 100), `filtered_warn_pct` (default 50, 1 to 100).
++`routeservers` is one plugin. The only type is `birdseye`. It polls Birdseye on each route server with GET only and keeps a history per member session. It reads `api/status`, `api/protocols/bgp`, `api/routes/count/protocol/{protocol}`, and `api/routes/lc-zwild/protocol/{protocol}/{asn}/1101`, and with `route_signals` `api/routes/protocol/{protocol}`, and nothing else. Birdseye is read without a key: the IXP Manager API key is never sent to it, and a `url` with userinfo or a query is refused. Redirects are not followed. `members` is optional; with it, a session's ASN, name, and `max_prefix` come from the IX-F entry for its neighbor address, and without it `max_prefix` is Birdseye's import limit. `servers` lists at most 8 route servers, each with `name` (as for a vantage), `url` (the Birdseye origin, or a subdirectory install), and `asn` (the route server's ASN, the first part of the `asn:1101:x` tag IXP Manager puts on a filtered route). `interval` (default 5m, 1m to 1h), `timeout` (default 15s, 1s to 2m), `workers` (default 4, 1 to 8, concurrent session reads per server), `max_bytes` (default 8 MiB, 1024 to 32 MiB, per response; a larger response leaves that session uncounted), `max_prefix_warn_pct` (default 90, 1 to 100), `filtered_warn_pct` (default 50, 1 to 100), `spike_min` (default 10, 1 to 1048576), `spike_factor` (default 2, 1 to 1000), `burst_min` (default 20, 1 to 250000), and `route_signals` (default false, below).
+ 
+ Per session: `received` is the route count of the session's protocol, `filtered` is the number of routes with an `asn:1101:x` tag, `accepted` is the difference, and `reasons` counts each tag by `x`. Each poll adds a sample to the session's history (up to 288, in memory; a restart empties it; about 16 KiB per session). A server holds at most 2048 sessions. A failed poll keeps the last sessions; after three intervals without a success the server is stale and shows none. The events are `ixp.rs_*` ([EVENTS.md](EVENTS.md)). `GET /api/ixp/routeservers` and `GET /api/ixp/routeservers/history` serve the data; the metrics are `packeteer_ixp_rs_up`, `packeteer_ixp_rs_sessions_established`, `packeteer_ixp_rs_sessions_down`, `packeteer_ixp_rs_filtered_routes`, and `packeteer_ixp_rs_age_seconds`. Each session read asks Birdseye for the session's routes, so a large table costs the route server a `show route` per interval; Birdseye caches for a few minutes.
+ 
++Signals (#165). `ixp.rs_filter_spike` fires when the routes tagged `asn:1101:x` for `x` 9, 10 (IRR), 13 (RPKI invalid), or 14 (transit-free ASN) rise by at least `spike_min` and to at least `spike_factor` times the highest count of the last 12 polls. It closes at the same threshold, measured against the level from before the spike. A session's first poll has no level and raises nothing. `route_signals: true` also reads `api/routes/protocol/{protocol}` for each Established session, which Birdseye refuses above its own `max_routes` (the session is then not listed and `scan_error` says so). From that listing: `blackhole` counts routes with the RFC 7999 community `65535:666` (kept in the history); `ixp.rs_origin_change` fires when a session announces a prefix with an origin AS (the last AS of the path) that no other member's accepted route for it has; `ixp.rs_morespecific_burst` fires when at least `burst_min` routes new in one poll are more-specifics of a prefix another member announces, with another origin. Routes tagged `asn:1101:x`, blackhole routes, and paths ending in an AS set are left out of the last two. Two sessions of one ASN are one member; sessions with ASN 0 (unknown) are separate members. The first listing of a session that is there at the first poll is the baseline: only changes after it alert, and a session that joins later is judged from its first listing. A session with no listing in a poll (down, not listed, or over the tracked limit) drops its table, so its routes leave the comparison, its origin and more-specific alerts close, and it is judged afresh when it is listed again. Each server keeps at most 250000 accepted prefix and origin pairs in memory; a session that would pass that is not listed (`scan_error`). The signals are hints for a human: they never change route-server config or member routing.
++
+ `correlate` is one plugin. The only type is `topology`. It requires `fabric` and reads only the fabric prober's latest round; it sends no probes and no requests. Each round it groups the measured member addresses by the switches on their connection (`switch`), the colo of those switches (`colo`), and the `bundles` you list (`bundle`). The IX-F export has no core bundle, so a bundle is a name and the IX-F switch ids behind it. An address is degraded when every vantage that measured it saw it past the ping tolerance; a probe error is not a measurement. A member is degraded in a group when all of its measured addresses behind that group are degraded. A group is a fabric problem when at least `min_members` members (default 3, 2 to 1000) and at least `degraded_pct` percent of its measured members (default 50, 1 to 100) are degraded; it raises `ixp.fabric_degraded`. A member that is degraded on every measured address and is in no such group raises `ixp.member_degraded`; one that is in such a group is part of the fabric event, not a member problem. A condition has to hold for `rounds` fabric rounds in a row (default 2, 1 to 10) before its event, and has to clear for as many before the resolving event, so one noisy round raises nothing. A switch and its colo, or a switch and a bundle, can all fire for one fault. An address behind two switches counts in both. A round with a stale member list has no samples, so open events resolve. `bundles` lists at most 64 entries, each with `name` (as for a vantage), optional `ixp_id` (switch ids are per IXP; 0 or omitted matches any), and `switches` (1 to 256 IX-F switch ids). Open events are held in memory; a restart starts clean. `GET /api/ixp/correlation` serves the latest evaluation; the metrics are `packeteer_ixp_fabric_groups_degraded` and `packeteer_ixp_members_degraded`. The events are `ixp.fabric_*` and `ixp.member_*` ([EVENTS.md](EVENTS.md)).
+ 
+ Adding or removing `ixp`, including `members`, `vantages`, `fabric`, `routeservers`, and `correlate`, needs a restart. Rollback: remove `correlate`, or `routeservers`, or `vantages` and `fabric`, or the `ixp` block, and restart. Nothing was announced.
+diff --git a/docs/EVENTS.md b/docs/EVENTS.md
+index 8db5aa2..fb3b6f0 100644
+--- a/docs/EVENTS.md
++++ b/docs/EVENTS.md
+@@ -70,6 +70,12 @@ The same object is the `generic` webhook body and the `exec` `notify` params.
+ | `ixp.rs_max_prefix_cleared` | info | 48 | `server`, `session` | Accepted routes fell back below that share, the session is gone, or its server is stale. Not sent while the session is down, because a dropped session has no routes. Resolves `ixp.rs_max_prefix`. |
+ | `ixp.rs_filtered` | warning | 49 | `server`, `session` | At least `filtered_warn_pct` of a session's routes carry an `rs-asn:1101:x` tag. Fields: `asn`, `received`, `filtered`. |
+ | `ixp.rs_filtered_cleared` | info | 50 | `server`, `session` | The filtered share fell back below that, the session is gone, or its server is stale. Not sent while the session is down. Resolves `ixp.rs_filtered`. |
++| `ixp.rs_origin_change` | warning | 55 | `server`, `session` | With `route_signals`, a session announces a prefix with an origin AS that no other member's accepted route for that prefix has (#165). Fields: `asn`, `count`, `prefix` (the lowest), `origin`. Stays open while those routes stay; closes when the session is down or not listed. |
++| `ixp.rs_origin_change_cleared` | info | 56 | `server`, `session` | The conflicting routes are gone, or the session is gone or its server is stale. Resolves `ixp.rs_origin_change`. |
++| `ixp.rs_morespecific_burst` | warning | 57 | `server`, `session` | With `route_signals`, at least `burst_min` routes new in one poll lie inside a prefix another member announces, with another origin AS (#165). Fields: `asn`, `count`, `prefix` (the lowest), `origin`. |
++| `ixp.rs_morespecific_burst_cleared` | info | 58 | `server`, `session` | Those routes are gone, or the session is gone or its server is stale. Resolves `ixp.rs_morespecific_burst`. |
++| `ixp.rs_filter_spike` | warning | 59 | `server`, `session`, `reason` | The routes tagged `rs-asn:1101:x` for `x` 9, 10, 13 (RPKI invalid), or 14 (transit-free ASN) rose by at least `spike_min` and to `spike_factor` times the highest of the last 12 polls (#165). Not sent for a session's first poll. Fields: `asn`, `reason`, `count`, `baseline`. |
++| `ixp.rs_filter_spike_cleared` | info | 60 | `server`, `session`, `reason` | The count fell below that threshold, or the session is gone or its server is stale. Resolves `ixp.rs_filter_spike`. |
+ | `ixp.fabric_degraded` | warning | 51 | `scope`, `ixp_id`, `group` | At least `min_members` members behind one switch, colo, or core bundle, and at least `degraded_pct` of the members measured there, are past the ping tolerance on every address, for `rounds` fabric rounds in a row (`ixp.correlate`, #163). `scope` is `switch`, `colo`, or `bundle`. `group` is the switch id, the colo name, or the bundle name. Fields: `name` (the display name), `members`, `degraded`, `asns` (the first 10). |
+ | `ixp.fabric_recovered` | info | 52 | `scope`, `ixp_id`, `group` | The group stayed below those thresholds, or had no measured member, or the fabric data went stale, for `rounds` rounds. Resolves `ixp.fabric_degraded`. |
+ | `ixp.member_degraded` | warning | 53 | `asn` | One member is past the ping tolerance on every measured address and is in no degraded group, for `rounds` rounds. Fields: `name`, `addresses`. |
+diff --git a/docs/FEATURES.md b/docs/FEATURES.md
+index af80fa6..aac4df2 100644
+--- a/docs/FEATURES.md
++++ b/docs/FEATURES.md
+@@ -191,7 +191,7 @@ The `maintenance` policy excludes providers during cron-scheduled, one-off, or o
+ | Per-member route server vs bilateral availability: prefixes seen only via the route server, only bilaterally, or both, with counts over time and a flag for a partial or filtered route server feed | done (#156: counts and flags on `/api/exchanges`, `GET /api/exchanges/member` for the prefixes and the counts kept in memory every 15 minutes, and columns on `/providers.html`; BMP Adj-RIB-In paths only, so a peer without `bmp: prefer` or `only` shows zero, and discovered members are not classified; read-only) | v0.8 | core (`internal/rib`, `internal/exchange`) + UI | #156 | no |
+ | Transit-to-IX offload report: flow bytes of prefixes whose exit is a transit while a configured IX peer advertises the exact prefix, with the estimated saving at the transit's `cost` | done (#152: `GET /api/exchanges/offload` as JSON or CSV, sorted by bytes, and a table on `/providers.html`; observe only, nothing is steered; needs a target source that reports volume and, per peer, the route check) | v0.8 | core (`internal/exchange`, `internal/httpapi`) + UI | #152 | no |
+ | Potential-peers report: destination origin ASNs ranked by flow bytes, whether each is present at one of our exchanges, whether a path via the LAN exists today, split into on the route server (check our session or filters) and bilateral only (candidate for a request) | partial (#154: `GET /api/exchanges/potential-peers` as JSON or CSV, with `?class=`, and two tables on `/providers.html`; presence is the configured peers and the discovered LAN members, and the session type needs BMP Adj-RIB-In paths; observe only, no session is opened). This report does not read `GET /api/lookup` (#153) yet | v0.8 | core (`internal/exchange`, `internal/httpapi`) + UI | #154 | no |
+-| IXP mode (exchange operator): `ixp: {}` refuses `mode: inject`, `announcer`, `mitigation`, `inbound`, `synthesize`, and `more_specific`; no `bgp.neighbors` or RIB view required; route-server data is a separate read-only store that never feeds the RIB or Decide | done (#160: charter and validation; #161: IX-F member import; #162: fabric probes; #164: route-server history and alerts. #163: fabric incident correlation. Signals and member pages are #165-#167 and are not built) | v0.8 | core (`internal/config`) + `ixp_member` (`ixf`) + `ixp_fabric` (`icmp`) + `ixp_routeserver` (`birdseye`) + `ixp_correlate` (`topology`) | #160, #161, #162, #163, #164 | no |
++| IXP mode (exchange operator): `ixp: {}` refuses `mode: inject`, `announcer`, `mitigation`, `inbound`, `synthesize`, and `more_specific`; no `bgp.neighbors` or RIB view required; route-server data is a separate read-only store that never feeds the RIB or Decide | done (#160: charter and validation; #161: IX-F member import; #162: fabric probes; #164: route-server history and alerts. #163: fabric incident correlation. #165: route-server signals. Member pages and multi-site health are #166-#167 and are not built) | v0.8 | core (`internal/config`) + `ixp_member` (`ixf`) + `ixp_fabric` (`icmp`) + `ixp_routeserver` (`birdseye`) + `ixp_correlate` (`topology`) | #160, #161, #162, #163, #164, #165 | no |
+ | IX-F member import: members, ASNs, LAN addresses, port speeds, route-server client flags, `max_prefix`, `as_macro`, and switch or colo from IXP Manager or one named IX-F JSON URL | done (#161: `ixp.members` type `ixf`, `GET /api/ixp/members`, metrics; read-only, not the RIB, not an input to Decide, nothing announced) | v0.8 | `ixp_member` (`ixf`) | #161 | no |
+ | Fabric probes from IX vantages: loss, RTT, and jitter for each member LAN address, honoring Can Ping and the busy-host tolerance | done (#162: `ixp.vantages` and `ixp.fabric` type `icmp`, `GET /api/ixp/probes`, aggregate metrics; observe-only, not an input to Decide, nothing announced) | v0.8 | `ixp_fabric` (`icmp`) | #162 | no |
+ | Route-server observability via Birdseye: per member session state, received, accepted, and filtered counts, filtered-by-reason counts (`rs-asn:1101:x`), and accepted against `max_prefix`, kept as history, with alerts on changes | done (#164: `ixp.routeservers` type `birdseye`, `GET /api/ixp/routeservers` and `/history`, `ixp.rs_*` events, aggregate metrics; GET only, history is in memory, not the RIB, not an input to Decide, nothing announced) | v0.8 | `ixp_routeserver` (`birdseye`) + notifier events | #164 | no |
+diff --git a/docs/PLUGINS.md b/docs/PLUGINS.md
+index 04cbed1..8f002be 100644
+--- a/docs/PLUGINS.md
++++ b/docs/PLUGINS.md
+@@ -130,7 +130,7 @@ Embed `plugin.Base` for no-op `Start`/`Stop`.
+ - `ixf` (ixp_member, #161): one IX-F 1.0 member list under `ixp.members`. `url` (required), `refresh` (default 15m, 1m-24h), `timeout` (default 30s, 1s-2m), `max_bytes` (default 8 MiB, 1024 to 32 MiB), `key_expires` (`YYYY-MM-DD`, required when `PACKETEER_IXP_MANAGER_API_KEY` is set). The key is that environment variable, sent only as `X-IXP-Manager-API-Key` and only to the IXP Manager member export. A named IX-F URL is fetched with no key. It does not announce. See [CONFIG.md](CONFIG.md#ixp).
+ - `icmp` (ixp_fabric, #162): member LAN probes under `ixp.fabric`, sourced from `ixp.vantages`. `interval` (default 1m, 10s-1h), `timeout` (default 1s, 100ms-5s), `packets` (default 5, 1-20), `workers` (default 4, 1-64), `rate_limit_pps` (default 20, 1-10000), `member_pps` (default 1, per member ASN, at most `rate_limit_pps`). The packet sender is the built-in icmp prober. Can Ping off, and a customers-document host that does not use the member ping template, are not probed. A manager export with no successful Can Ping list, or one older than three intervals, is not probed. It does not announce. See [CONFIG.md](CONFIG.md#ixp).
+ - `topology` (ixp_correlate, #163): fabric incident correlation under `ixp.correlate`, which requires `ixp.fabric`. `min_members` (default 3, 2-1000), `degraded_pct` (default 50, 1-100), `rounds` (default 2, 1-10), `bundles` (at most 64: `name`, optional `ixp_id`, `switches` as IX-F switch ids). See [CONFIG.md](CONFIG.md#ixp).
+-- `birdseye` (ixp_routeserver, #164): Birdseye polls under `ixp.routeservers`. `servers` (required, at most 8: `name`, `url`, `asn`), `interval` (default 5m, 1m-1h), `timeout` (default 15s, 1s-2m), `workers` (default 4, 1-8), `max_bytes` (default 8 MiB, 1024-32 MiB), `max_prefix_warn_pct` (default 90), `filtered_warn_pct` (default 50). GET only, four endpoints, no key, no redirects. See [CONFIG.md](CONFIG.md#ixp).
++- `birdseye` (ixp_routeserver, #164): Birdseye polls under `ixp.routeservers`. `servers` (required, at most 8: `name`, `url`, `asn`), `interval` (default 5m, 1m-1h), `timeout` (default 15s, 1s-2m), `workers` (default 4, 1-8), `max_bytes` (default 8 MiB, 1024-32 MiB), `max_prefix_warn_pct` (default 90), `filtered_warn_pct` (default 50), `route_signals` (default false), `spike_min` (default 10, 1 to 1048576), `spike_factor` (default 2, 1 to 1000), `burst_min` (default 20, 1 to 250000). GET only, four endpoints, plus `api/routes/protocol/{protocol}` with `route_signals`; no key, no redirects. See [CONFIG.md](CONFIG.md#ixp).
+ - `sqlite` (storage): report history in an embedded SQLite file. `path` (default `/var/lib/packeteer/packeteer.db`, absolute; mount a volume on the directory) and `retention` (default 400 days, `24h`–`87600h`). Daily probe rollups, one row per improvement with before/after loss and RTT, and per-prefix origin ASN, country, and volume. It also keeps SNMP 95th-percentile samples (#127): the open billing period is reloaded on start, and a closed period stays until `retention`. The controller buffers report rows and writes once a minute, so a slow disk never delays a decision or a withdraw. Sample writes happen when a poll is accepted and do not announce. Reports are built from the history rows by the core (`/api/reports`, CSV, dashboard). A `rules` policy with `geoip_db` supplies countries (`plugin.CountryLookup`). It does not announce. See [CONFIG.md](CONFIG.md#storage-sqlite).
+ - `fixed`: reports `usage_mbps` and `commit_mbps` from config or from a file re-read on every snapshot. Labs and tests only. It does not poll and it does not announce. A deployment uses `snmp`.
+ 
+diff --git a/docs/THREAT_MODEL.md b/docs/THREAT_MODEL.md
+index 15c3880..84dd707 100644
+--- a/docs/THREAT_MODEL.md
++++ b/docs/THREAT_MODEL.md
+@@ -7,7 +7,7 @@ Packeteer can change how a network forwards packets. Failure modes matter more t
+ - **Flap** — oscillating improvements. Mitigate with hold time, hysteresis, and by keeping an improvement when the router hides the native path because Packeteer's route won. Withdrawing on that hide brings the native path back and the next round injects again.
+ - **Leak** — more-specifics learned from Packeteer advertised to transit. Mitigate with a well-known community and outbound filters on every eBGP session.
+ - **Blackhole** — inject toward a next-hop that is down. Mitigate by requiring a live RIB path and withdrawing on probe-source or session failure.
+-- **IXP mode.** An `ixp` block is an exchange operator. Validation refuses `mode: inject`, `announcer`, `mitigation`, `inbound`, `synthesize`, and `more_specific`. It does not announce and it does not change member routing. `ixp.members` is GET only, to the IXP Manager member export or one named IX-F URL. `ixp.fabric` probes member LAN addresses from `ixp.vantages` and, for a manager export, also GETs `/admin/api/v4/nagios/customers/{vlanid}/4` or `/6` on that same origin. A manager export is not probed unless that list was fetched. The API key comes from `PACKETEER_IXP_MANAGER_API_KEY` and is sent only as a header. `ixp.routeservers` GETs four Birdseye paths without a key and never sends the IXP Manager key there. `ixp.correlate` reads the fabric probe results and makes no request. None of them announces or changes member routing. See [design/ixp.md](design/ixp.md).
++- **IXP mode.** An `ixp` block is an exchange operator. Validation refuses `mode: inject`, `announcer`, `mitigation`, `inbound`, `synthesize`, and `more_specific`. It does not announce and it does not change member routing. `ixp.members` is GET only, to the IXP Manager member export or one named IX-F URL. `ixp.fabric` probes member LAN addresses from `ixp.vantages` and, for a manager export, also GETs `/admin/api/v4/nagios/customers/{vlanid}/4` or `/6` on that same origin. A manager export is not probed unless that list was fetched. The API key comes from `PACKETEER_IXP_MANAGER_API_KEY` and is sent only as a header. `ixp.routeservers` GETs four Birdseye paths (a fifth, the session's route listing, with `route_signals`) without a key and never sends the IXP Manager key there. `ixp.correlate` reads the fabric probe results and makes no request. None of them announces or changes member routing. See [design/ixp.md](design/ixp.md).
+ - **PeeringDB lookup.** `lookup` type `peeringdb` sends only GETs to `base_url` and to each `ixf_url`. `PACKETEER_PEERINGDB_API_KEY` goes only in an `Authorization` header to `base_url`; a URL holding the key is refused, redirects are not followed, and the key is redacted from errors and absent from the API. Responses and rows are size-capped, a bad refresh keeps the last good cache, and a stale cache serves nothing. It never announces and never feeds the RIB view or Decide.
+ - **Over-injection** — synthesizing more-specifics can exhaust TCAM. Packeteer announces only the exact prefix a neighbor advertised, so `max_improvements` bounds the number of routes. A config that sets `more_specific_bits` is rejected. With `more_specific` on, an improvement also announces learned more-specifics (still exact RIB prefixes), and `more_specific.max_routes` (default 100, at most 1000) bounds the routes on the router.
+ - **Stale intent** — controller dies, or keeps announcing a prefix the edge no longer has, or keeps announcing after probes stop refreshing. Packeteer withdraws on shutdown, when a prefix the router was still advertising disappears, when measurements are older than the max result age (checked on a timer, not only when a round completes), and at `improvement_ttl` when the native path is hidden by Packeteer's own route. A probe round that does not finish is abandoned at that same age and does not refresh results. It never enables graceful restart. The BGP hold timer is the backstop if the process is killed before the withdraw is sent. Packeteer proposes a 90s hold time so the timer cannot negotiate off; the router's shorter timer wins. The lab SIGKILLs Packeteer and checks that FRR drops the injected route once the session is down, and no later than that hold timer.
+diff --git a/docs/design/ixp.md b/docs/design/ixp.md
+index f0662e2..5279481 100644
+--- a/docs/design/ixp.md
++++ b/docs/design/ixp.md
+@@ -1,9 +1,9 @@
+ # IXP mode (#160)
+ 
+ Status: charter, config gate, IX-F member import (#161), fabric
+-probes (#162), fabric incident correlation (#163), and route-server
+-history and alerts (#164). Signals, member pages, and multi-site fabric
+-health are #165-#167 and are not built. An `ixp` block does not announce or open a route-server
++probes (#162), fabric incident correlation (#163), route-server
++history and alerts (#164), and route-server signals (#165). Member pages
++and multi-site fabric health are #166-#167 and are not built. An `ixp` block does not announce or open a route-server
+ session.
+ 
+ An Internet exchange operator runs Packeteer to observe its fabric,
+@@ -46,6 +46,9 @@ That store is not the RIB view and is not an input to `Decide`. No
+ later issue may copy those routes into the RIB view or announce from
+ them. #164 keeps counts and large-community tallies per member session,
+ never the routes themselves, in memory inside the `birdseye` plugin.
++With `route_signals` (#165), the plugin also keeps each session's accepted
++prefix to origin AS table in memory, up to 250000 pairs per server, to
++compare members. It is never served by the API or written to disk.
+ 
+ ## External reads
+ 
+@@ -116,6 +119,16 @@ IXP Manager and Birdseye are read with GET only. No other method.
+   when `ixp.members` is set, else Birdseye's import limit. A state or
+   count change raises an `ixp.rs_*` event (docs/EVENTS.md). History is
+   288 samples per session in memory; a restart empties it.
++- Birdseye route listing (#165, only with `route_signals`):
++  `api/routes/protocol/{protocol}` on the same origin, GET, same limits.
++  Birdseye refuses it above its own `max_routes`, so a session over that
++  count is not requested. It gives the origin AS, the standard
++  communities (`65535:666`, RFC 7999), and the `rs-asn:1101:x` tags of
++  each route. Signals: a jump in the count tagged `1101:9`, `10`, `13`, or
++  `14`; a new origin AS for a prefix another member's accepted route has;
++  a burst of new more-specifics of another member's prefix with another
++  origin; blackhole routes per member over time. They are hints; nothing
++  is announced or changed.
+ 
+ An IX-F address with `can_ping: false` is not probed. Probes stay inside
+ the VLAN prefix. Nothing is announced, and the measurements are not an
+diff --git a/internal/httpapi/ixp_test.go b/internal/httpapi/ixp_test.go
+index bd44e2a..4ab25b3 100644
+--- a/internal/httpapi/ixp_test.go
++++ b/internal/httpapi/ixp_test.go
+@@ -259,7 +259,8 @@ func TestIXPRouteServersAPIAndMetrics(t *testing.T) {
+ 			Servers:    []plugin.RouteServerStatus{{Name: "rs1", ASN: 64496, Up: true, Polled: polled, Sessions: 2}},
+ 			Sessions: []plugin.RouteServerSession{
+ 				{Server: "rs1", Session: "pb_a", ASN: 64497, Name: "Doc Member", Established: true, Counted: true,
+-					Received: 10, Accepted: 7, Filtered: 3, Reasons: []plugin.RouteServerReason{{Reason: 4, Count: 3}}, MaxPrefix: 100, UsedPct: 7},
++					Received: 10, Accepted: 7, Filtered: 3, Reasons: []plugin.RouteServerReason{{Reason: 4, Count: 3}}, MaxPrefix: 100, UsedPct: 7,
++					Scanned: true, Blackhole: 5},
+ 				{Server: "rs1", Session: "pb_b", ASN: 64498, State: "Active"},
+ 			},
+ 		}
+@@ -267,19 +268,19 @@ func TestIXPRouteServersAPIAndMetrics(t *testing.T) {
+ 		if server != "rs1" || session != "pb_a" {
+ 			return nil, false
+ 		}
+-		return []plugin.RouteServerSample{{At: polled, Established: true, Counted: true, Received: 10, Accepted: 7, Filtered: 3}}, true
++		return []plugin.RouteServerSample{{At: polled, Established: true, Counted: true, Received: 10, Accepted: 7, Filtered: 3, Scanned: true, Blackhole: 5}}, true
+ 	})
+ 	rec = httptest.NewRecorder()
+ 	s.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/ixp/routeservers", nil))
+ 	text := rec.Body.String()
+-	for _, want := range []string{`"configured":true`, `"asn":64496`, `"session":"pb_a"`, `"name":"Doc Member"`, `"filtered":3`, `"reason":4`, `"used_pct":7`, `"mode":"observe"`} {
++	for _, want := range []string{`"configured":true`, `"asn":64496`, `"session":"pb_a"`, `"name":"Doc Member"`, `"filtered":3`, `"reason":4`, `"used_pct":7`, `"scanned":true`, `"blackhole":5`, `"mode":"observe"`} {
+ 		if !strings.Contains(text, want) {
+ 			t.Errorf("missing %s in %s", want, text)
+ 		}
+ 	}
+ 	rec = httptest.NewRecorder()
+ 	s.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/ixp/routeservers/history?server=rs1&session=pb_a", nil))
+-	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"samples":[{`) || !strings.Contains(rec.Body.String(), `"accepted":7`) {
++	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"samples":[{`) || !strings.Contains(rec.Body.String(), `"accepted":7`) || !strings.Contains(rec.Body.String(), `"blackhole":5`) {
+ 		t.Fatalf("history %d %s", rec.Code, rec.Body)
+ 	}
+ 	rec = httptest.NewRecorder()
+diff --git a/internal/plugins/ixprouteserver/birdseye/birdseye_test.go b/internal/plugins/ixprouteserver/birdseye/birdseye_test.go
+index 5a6e446..acfdf61 100644
+--- a/internal/plugins/ixprouteserver/birdseye/birdseye_test.go
++++ b/internal/plugins/ixprouteserver/birdseye/birdseye_test.go
+@@ -34,7 +34,18 @@ type fakeBirdseye struct {
+ 	tagged    map[string][][3]uint64 // one entry per route: its large communities
+ 	fail      int                    // HTTP status for every request when non-zero
+ 	bigLC     bool
+-	maxRoutes int // api.max_routes in every response
++	routes    map[string][]fakeRoute // protocol listing for api/routes/protocol
++	listFail  int                    // HTTP status for protocol listings when non-zero
++	maxRoutes int                    // api.max_routes in every response
++}
++
++// fakeRoute is one route of a protocol listing. path is Birdseye's as_path:
++// strings, split on spaces.
++type fakeRoute struct {
++	network string
++	path    []string
++	comm    [][2]uint64
++	large   [][3]uint64
+ }
+ 
+ func newFake(t *testing.T) *fakeBirdseye {
+@@ -43,6 +54,7 @@ func newFake(t *testing.T) *fakeBirdseye {
+ 		protocols: map[string]map[string]any{},
+ 		counts:    map[string]int{},
+ 		tagged:    map[string][][3]uint64{},
++		routes:    map[string][]fakeRoute{},
+ 		maxRoutes: 1000,
+ 	}
+ 	f.srv = httptest.NewServer(http.HandlerFunc(f.serve))
+@@ -74,6 +86,23 @@ func (f *fakeBirdseye) serve(w http.ResponseWriter, r *http.Request) {
+ 	case strings.HasPrefix(p, "/api/routes/count/protocol/"):
+ 		name := strings.TrimPrefix(p, "/api/routes/count/protocol/")
+ 		body = map[string]any{"api": api, "count": map[string]any{"routes": f.counts[name]}}
++	case strings.HasPrefix(p, "/api/routes/protocol/"):
++		if f.listFail != 0 {
++			http.Error(w, "too many routes", f.listFail)
++			return
++		}
++		routes := []any{}
++		for _, r := range f.routes[strings.TrimPrefix(p, "/api/routes/protocol/")] {
++			bgp := map[string]any{"as_path": r.path}
++			if len(r.comm) > 0 {
++				bgp["communities"] = r.comm
++			}
++			if len(r.large) > 0 {
++				bgp["large_communities"] = r.large
++			}
++			routes = append(routes, map[string]any{"network": r.network, "bgp": bgp})
++		}
++		body = map[string]any{"api": api, "routes": routes}
+ 	case strings.HasPrefix(p, "/api/routes/lc-zwild/protocol/"):
+ 		parts := strings.Split(strings.TrimPrefix(p, "/api/routes/lc-zwild/protocol/"), "/")
+ 		routes := []any{}
+@@ -496,6 +525,9 @@ func TestConfigValidation(t *testing.T) {
+ 		{"max bytes", map[string]any{"servers": []map[string]any{good}, "max_bytes": 5}, "max_bytes"},
+ 		{"prefix pct", map[string]any{"servers": []map[string]any{good}, "max_prefix_warn_pct": 101}, "max_prefix_warn_pct"},
+ 		{"filtered pct", map[string]any{"servers": []map[string]any{good}, "filtered_warn_pct": 101}, "filtered_warn_pct"},
++		{"spike min", map[string]any{"servers": []map[string]any{good}, "spike_min": -1}, "spike_min"},
++		{"spike factor", map[string]any{"servers": []map[string]any{good}, "spike_factor": 5000}, "spike_factor"},
++		{"burst min", map[string]any{"servers": []map[string]any{good}, "burst_min": -2}, "burst_min"},
+ 		{"unknown key", map[string]any{"servers": []map[string]any{good}, "apikey": "x"}, "apikey"},
+ 	}
+ 	for _, tc := range cases {
+@@ -512,7 +544,8 @@ func TestConfigValidation(t *testing.T) {
+ 	}
+ 	w := p.(*Watch)
+ 	if w.servers[0].base != "https://rs1.example.invalid/birdseye" || w.interval != DefaultInterval ||
+-		w.prefPct != DefaultMaxPrefixWarnPct || w.filtPct != DefaultFilteredWarnPct {
++		w.prefPct != DefaultMaxPrefixWarnPct || w.filtPct != DefaultFilteredWarnPct ||
++		w.signals || w.spikeMin != DefaultSpikeMin || w.spikeX != DefaultSpikeFactor || w.burstMin != DefaultBurstMin {
+ 		t.Fatalf("defaults %+v", w)
+ 	}
+ }
+diff --git a/internal/plugins/ixprouteserver/birdseye/client.go b/internal/plugins/ixprouteserver/birdseye/client.go
+index 4eb2fa8..fa0bf21 100644
+--- a/internal/plugins/ixprouteserver/birdseye/client.go
++++ b/internal/plugins/ixprouteserver/birdseye/client.go
+@@ -27,6 +27,10 @@ func pathCount(protocol string) string {
+ 	return "/api/routes/count/protocol/" + url.PathEscape(protocol)
+ }
+ 
++func pathRoutes(protocol string) string {
++	return "/api/routes/protocol/" + url.PathEscape(protocol)
++}
++
+ func pathFiltered(protocol string, asn uint32) string {
+ 	return fmt.Sprintf("/api/routes/lc-zwild/protocol/%s/%d/%d", url.PathEscape(protocol), asn, reasonCommunity)
+ }
+diff --git a/internal/plugins/ixprouteserver/birdseye/plugin.go b/internal/plugins/ixprouteserver/birdseye/plugin.go
+index f0ff120..12e1be3 100644
+--- a/internal/plugins/ixprouteserver/birdseye/plugin.go
++++ b/internal/plugins/ixprouteserver/birdseye/plugin.go
+@@ -1,8 +1,10 @@
+-// Package birdseye is the ixp.routeservers plugin (#164). It polls
++// Package birdseye is the ixp.routeservers plugin (#164, #165). It polls
+ // Birdseye on each route server with GET only, keeps a short per-session
+ // history, and emits events when a route server, a member session, a
+-// max_prefix share, or a filtered share changes. It does not announce, it
+-// does not write the RIB view, and it is not an input to Decide.
++// max_prefix share, or a filtered share changes, and when a route signal
++// (origin change, more-specific burst, filter spike) opens or closes. Blackhole
++// routes are counted, not alerted on. It does not announce, it does not write
++// the RIB view, and it is not an input to Decide.
+ package birdseye
+ 
+ import (
+@@ -37,6 +39,11 @@ const (
+ 	maxMaxBytes             = 32 << 20
+ 	DefaultMaxPrefixWarnPct = 90
+ 	DefaultFilteredWarnPct  = 50
++	DefaultSpikeMin         = 10
++	DefaultSpikeFactor      = 2
++	DefaultBurstMin         = 20
++	maxSpikeMin             = 1 << 20
++	maxSpikeFactor          = 1000
+ 
+ 	// maxServers and maxSessions bound the live sessions. A session keeps
+ 	// maxSamples samples of 56 bytes plus up to maxReasons reason counts
+@@ -53,6 +60,12 @@ const (
+ 	staleFactor = 3
+ 	// failsBeforeAlert consecutive failed polls raise ixp.rs_unreachable.
+ 	failsBeforeAlert = 2
++	// maxTrackedRoutes bounds the accepted routes a server's sessions
++	// keep for the origin and more-specific signals (about 60 bytes each).
++	maxTrackedRoutes = 250000
++	// baselineSamples is how many earlier polls set the level a filtered
++	// reason is compared with.
++	baselineSamples = 12
+ )
+ 
+ // errNoRedirect refuses every redirect, so a poll never leaves the
+@@ -75,6 +88,10 @@ type Config struct {
+ 	MaxBytes         int            `yaml:"max_bytes"`
+ 	MaxPrefixWarnPct int            `yaml:"max_prefix_warn_pct"`
+ 	FilteredWarnPct  int            `yaml:"filtered_warn_pct"`
++	RouteSignals     bool           `yaml:"route_signals"`
++	SpikeMin         int            `yaml:"spike_min"`
++	SpikeFactor      int            `yaml:"spike_factor"`
++	BurstMin         int            `yaml:"burst_min"`
+ }
+ 
+ func init() { plugin.RouteServerWatches.Register(TypeName, New) }
+@@ -90,8 +107,14 @@ type Watch struct {
+ 	maxBytes int64
+ 	prefPct  int
+ 	filtPct  int
+-	http     *http.Client
+-	servers  []*server
++	signals  bool
++	spikeMin int
++	spikeX   int
++	burstMin int
++	// maxTracked caps the accepted routes kept per server.
++	maxTracked int
++	http       *http.Client
++	servers    []*server
+ 
+ 	mu      sync.Mutex
+ 	members func() plugin.MemberView
+@@ -118,13 +141,18 @@ func New(c plugin.Config, env plugin.Env) (plugin.RouteServerWatch, error) {
+ 		log = slog.New(slog.DiscardHandler)
+ 	}
+ 	return &Watch{
+-		log:      log,
+-		interval: cfg.Interval,
+-		workers:  cfg.Workers,
+-		maxBytes: int64(cfg.MaxBytes),
+-		prefPct:  cfg.MaxPrefixWarnPct,
+-		filtPct:  cfg.FilteredWarnPct,
+-		servers:  servers,
++		log:        log,
++		interval:   cfg.Interval,
++		workers:    cfg.Workers,
++		maxBytes:   int64(cfg.MaxBytes),
++		prefPct:    cfg.MaxPrefixWarnPct,
++		filtPct:    cfg.FilteredWarnPct,
++		signals:    cfg.RouteSignals,
++		spikeMin:   cfg.SpikeMin,
++		spikeX:     cfg.SpikeFactor,
++		burstMin:   cfg.BurstMin,
++		maxTracked: maxTrackedRoutes,
++		servers:    servers,
+ 		http: &http.Client{
+ 			Timeout: cfg.Timeout,
+ 			CheckRedirect: func(*http.Request, []*http.Request) error {
+@@ -171,6 +199,24 @@ func applyDefaults(cfg *Config) error {
+ 	if cfg.FilteredWarnPct < 1 || cfg.FilteredWarnPct > 100 {
+ 		return fmt.Errorf("filtered_warn_pct %d must be between 1 and 100", cfg.FilteredWarnPct)
+ 	}
++	if cfg.SpikeMin == 0 {
++		cfg.SpikeMin = DefaultSpikeMin
++	}
++	if cfg.SpikeMin < 1 || cfg.SpikeMin > maxSpikeMin {
++		return fmt.Errorf("spike_min %d must be between 1 and %d", cfg.SpikeMin, maxSpikeMin)
++	}
++	if cfg.SpikeFactor == 0 {
++		cfg.SpikeFactor = DefaultSpikeFactor
++	}
++	if cfg.SpikeFactor < 1 || cfg.SpikeFactor > maxSpikeFactor {
++		return fmt.Errorf("spike_factor %d must be between 1 and %d", cfg.SpikeFactor, maxSpikeFactor)
++	}
++	if cfg.BurstMin == 0 {
++		cfg.BurstMin = DefaultBurstMin
++	}
++	if cfg.BurstMin < 1 || cfg.BurstMin > maxTrackedRoutes {
++		return fmt.Errorf("burst_min %d must be between 1 and %d", cfg.BurstMin, maxTrackedRoutes)
++	}
+ 	return nil
+ }
+ 
+diff --git a/internal/plugins/ixprouteserver/birdseye/poll.go b/internal/plugins/ixprouteserver/birdseye/poll.go
+index f3e84f0..21c4ce9 100644
+--- a/internal/plugins/ixprouteserver/birdseye/poll.go
++++ b/internal/plugins/ixprouteserver/birdseye/poll.go
+@@ -17,6 +17,7 @@ type server struct {
+ 	base string
+ 
+ 	status      plugin.RouteServerStatus
++	polled      bool
+ 	lastOK      time.Time
+ 	fails       int
+ 	unreachable bool
+@@ -40,11 +41,24 @@ type sess struct {
+ 	down         bool
+ 	prefixHigh   bool
+ 	filteredHigh bool
++	// spike maps a filter reason with an open spike alert to the level it
++	// was compared with. The level stays fixed while the alert is open.
++	spike map[int]int
++
++	// routes is the accepted prefix to origin AS table of the last listing
++	// (route_signals); nil until the first one. fresh is true for a session
++	// that first appeared after the server's first poll, so its routes
++	// are judged instead of taken as the baseline.
++	routes     map[netip.Prefix]uint32
++	fresh      bool
++	originFlag map[netip.Prefix]uint32
++	msFlag     map[netip.Prefix]uint32
+ }
+ 
+ const (
+ 	flagEstablished = 1 << iota
+ 	flagCounted
++	flagScanned
+ )
+ 
+ // sample is a compact history point; a session keeps maxSamples of them.
+@@ -55,6 +69,7 @@ type sample struct {
+ 	accepted int32
+ 	filtered int32
+ 	max      int32
++	black    int32
+ 	reasons  []plugin.RouteServerReason
+ }
+ 
+@@ -72,6 +87,8 @@ func (s sample) public() plugin.RouteServerSample {
+ 		Filtered:    int(s.filtered),
+ 		Reasons:     append([]plugin.RouteServerReason{}, r...),
+ 		MaxPrefix:   int(s.max),
++		Scanned:     s.flags&flagScanned != 0,
++		Blackhole:   int(s.black),
+ 	}
+ }
+ 
+@@ -131,6 +148,7 @@ func (w *Watch) pollServer(ctx context.Context, s *server, members map[netip.Add
+ 		return
+ 	}
+ 	rows := make([]plugin.RouteServerSession, len(protos))
++	scans := make([]*scan, len(protos))
+ 	idx := make(chan int)
+ 	var wg sync.WaitGroup
+ 	for i := 0; i < w.workers; i++ {
+@@ -138,7 +156,7 @@ func (w *Watch) pollServer(ctx context.Context, s *server, members map[netip.Add
+ 		go func() {
+ 			defer wg.Done()
+ 			for i := range idx {
+-				rows[i] = w.measure(ctx, s, protos[i], members, st.API.MaxRoutes, now)
++				rows[i], scans[i] = w.measure(ctx, s, protos[i], members, st.API.MaxRoutes, now)
+ 			}
+ 		}()
+ 	}
+@@ -150,7 +168,7 @@ func (w *Watch) pollServer(ctx context.Context, s *server, members map[netip.Add
+ 	if ctx.Err() != nil {
+ 		return
+ 	}
+-	w.apply(s, st, rows, now)
++	w.apply(s, st, rows, scans, now)
+ }
+ 
+ // validProtocol keeps a name from Birdseye usable as one URL segment.
+@@ -171,7 +189,7 @@ func validProtocol(s string) bool {
+ // measure builds one session's row. A session that is not Established has
+ // no routes, so its counts are zero without asking Birdseye. A failed read
+ // leaves Counted false with the counts zero and records the error.
+-func (w *Watch) measure(ctx context.Context, s *server, p protocol, members map[netip.Addr]member, maxRoutes int, now time.Time) plugin.RouteServerSession {
++func (w *Watch) measure(ctx context.Context, s *server, p protocol, members map[netip.Addr]member, maxRoutes int, now time.Time) (plugin.RouteServerSession, *scan) {
+ 	v := plugin.RouteServerSession{
+ 		Server:      s.cfg.Name,
+ 		Session:     p.Name,
+@@ -198,16 +216,16 @@ func (w *Watch) measure(ctx context.Context, s *server, p protocol, members map[
+ 	}
+ 	if !validProtocol(p.Name) {
+ 		v.Error = "session name is not usable in a URL"
+-		return v
++		return v, nil
+ 	}
+ 	if !v.Established {
+ 		v.Counted = true
+-		return v
++		return v, nil
+ 	}
+ 	received, err := w.routeCount(ctx, s.base, p.Name)
+ 	if err != nil {
+ 		v.Error = err.Error()
+-		return v
++		return v, nil
+ 	}
+ 	var filtered int
+ 	var reasons map[int]int
+@@ -215,7 +233,7 @@ func (w *Watch) measure(ctx context.Context, s *server, p protocol, members map[
+ 		filtered, reasons, err = w.filtered(ctx, s.base, p.Name, s.cfg.ASN, maxRoutes)
+ 		if err != nil {
+ 			v.Error = err.Error()
+-			return v
++			return v, nil
+ 		}
+ 	}
+ 	v.Counted = true
+@@ -229,7 +247,17 @@ func (w *Watch) measure(ctx context.Context, s *server, p protocol, members map[
+ 	if v.MaxPrefix > 0 {
+ 		v.UsedPct = float64(v.Accepted) * 100 / float64(v.MaxPrefix)
+ 	}
+-	return v
++	if !w.signals {
++		return v, nil
++	}
++	sc, err := w.scanSession(ctx, s, p.Name, received, maxRoutes)
++	if err != nil {
++		v.ScanError = err.Error()
++		return v, nil
++	}
++	v.Scanned = true
++	v.Blackhole = sc.blackhole
++	return v, sc
+ }
+ 
+ // fail records a failed poll. The sessions keep their last state.
+@@ -258,7 +286,7 @@ func (w *Watch) fail(s *server, now time.Time, err error) {
+ 
+ // apply publishes a successful poll: the rows, the history, and the events
+ // for every change since the last one.
+-func (w *Watch) apply(s *server, st statusDoc, rows []plugin.RouteServerSession, now time.Time) {
++func (w *Watch) apply(s *server, st statusDoc, rows []plugin.RouteServerSession, scans []*scan, now time.Time) {
+ 	var events []plugin.Event
+ 	w.mu.Lock()
+ 	s.status = plugin.RouteServerStatus{
+@@ -275,18 +303,51 @@ func (w *Watch) apply(s *server, st statusDoc, rows []plugin.RouteServerSession,
+ 			fmt.Sprintf("Birdseye on route server %s answers again", s.cfg.Name),
+ 			map[string]string{"server": s.cfg.Name}))
+ 	}
++	var idx routeIndex
++	tracked := 0
++	if w.signals {
++		listed := make(map[string]bool, len(rows))
++		for i, row := range rows {
++			listed[row.Session] = scans[i] != nil
++		}
++		for name, st := range s.sessions {
++			if listed[name] {
++				continue
++			}
++			why := "has no route listing this poll"
++			if _, ok := listed[name]; !ok {
++				why = "is no longer on the route server"
++			}
++			events = append(events, dropRoutes(st, st.view, now, why)...)
++		}
++		idx = s.index()
++		tracked = s.tracked()
++	}
+ 	seen := make(map[string]bool, len(rows))
+-	for _, row := range rows {
++	for i, row := range rows {
+ 		seen[row.Session] = true
+ 		st := s.sessions[row.Session]
+ 		if st == nil {
+-			st = &sess{}
++			st = &sess{fresh: s.polled}
+ 			s.sessions[row.Session] = st
+ 		}
+-		events = append(events, w.evaluate(st, row, now)...)
++		base, haveBase := s.baseline(row.Session)
++		events = append(events, w.evaluate(st, row, base, haveBase, now)...)
++		if sc := scans[i]; sc != nil {
++			if tracked-len(st.routes)+len(sc.routes) > w.maxTracked {
++				tracked -= len(st.routes)
++				row.Scanned, row.Blackhole = false, 0
++				row.ScanError = fmt.Sprintf("more than %d accepted routes are tracked on this server", w.maxTracked)
++				events = append(events, dropRoutes(st, row, now, "has more than the tracked route limit on this server")...)
++			} else {
++				tracked += len(sc.routes) - len(st.routes)
++				events = append(events, w.routeSignals(st, row, sc, idx, now)...)
++			}
++		}
+ 		st.view = row
+ 		s.record(row, now)
+ 	}
++	s.polled = true
+ 	for name, st := range s.sessions {
+ 		if !seen[name] {
+ 			events = append(events, w.closeAlerts(st, now, "is no longer on the route server", "removed")...)
+@@ -305,6 +366,10 @@ func (s *server) record(row plugin.RouteServerSession, now time.Time) {
+ 		accepted: int32(row.Accepted),
+ 		filtered: int32(row.Filtered),
+ 		max:      int32(row.MaxPrefix),
++		black:    int32(row.Blackhole),
++	}
++	if row.Scanned {
++		smp.flags |= flagScanned
+ 	}
+ 	if row.Established {
+ 		smp.flags |= flagEstablished
+@@ -357,7 +422,7 @@ func label(row plugin.RouteServerSession) string {
+ // session is down, keeps the prefix and filtered alerts as they are: a
+ // dropped session reads zero routes, and BIRD drops a session when its
+ // import limit is hit, so a zero is not a recovery.
+-func (w *Watch) evaluate(st *sess, row plugin.RouteServerSession, now time.Time) []plugin.Event {
++func (w *Watch) evaluate(st *sess, row plugin.RouteServerSession, base map[int]int, haveBase bool, now time.Time) []plugin.Event {
+ 	var ev []plugin.Event
+ 	switch {
+ 	case !row.Established && !st.down:
+@@ -398,7 +463,7 @@ func (w *Watch) evaluate(st *sess, row plugin.RouteServerSession, now time.Time)
+ 			fmt.Sprintf("%s: %d of %d routes are filtered", label(row), row.Filtered, row.Received),
+ 			fields(row, "received", strconv.Itoa(row.Received), "filtered", strconv.Itoa(row.Filtered))))
+ 	}
+-	return ev
++	return append(ev, w.spikes(st, row, base, haveBase, now)...)
+ }
+ 
+ // closeAlerts resolves every alert open on a session that is no longer
+@@ -421,7 +486,7 @@ func (w *Watch) closeAlerts(st *sess, now time.Time, why, state string) []plugin
+ 			label(row)+" "+why, fields(row, "received", "0", "filtered", "0")))
+ 	}
+ 	st.down, st.prefixHigh, st.filteredHigh = false, false, false
+-	return ev
++	return append(ev, w.closeSignals(st, now, why)...)
+ }
+ 
+ func (w *Watch) emit(events []plugin.Event) {
+diff --git a/internal/plugins/ixprouteserver/birdseye/signals.go b/internal/plugins/ixprouteserver/birdseye/signals.go
+new file mode 100644
+index 0000000..7a5d63f
+--- /dev/null
++++ b/internal/plugins/ixprouteserver/birdseye/signals.go
+@@ -0,0 +1,360 @@
++package birdseye
++
++import (
++	"context"
++	"fmt"
++	"net/netip"
++	"sort"
++	"strconv"
++	"strings"
++	"time"
++
++	"github.com/GrandArcher/Packeteer/pkg/plugin"
++)
++
++// blackholeASN and blackholeValue are the RFC 7999 BLACKHOLE community
++// 65535:666. A route that carries it is counted, and left out of the
++// origin and more-specific checks: a member blackholing a /32 inside
++// another network's space is expected.
++const (
++	blackholeASN   = 65535
++	blackholeValue = 666
++)
++
++// spikeReasons are the rs-asn:1101:x tags watched for a jump in the number
++// of filtered routes.
++var spikeReasons = []struct {
++	code  int
++	label string
++}{
++	{9, "IRR filter"},
++	{10, "IRR filter"},
++	{13, "RPKI invalid"},
++	{14, "transit-free ASN in the path"},
++}
++
++// scan is the accepted routes of one session and its blackhole count.
++type scan struct {
++	routes    map[netip.Prefix]uint32
++	blackhole int
++}
++
++// scanSession lists a session's routes. Birdseye refuses a listing over
++// its max_routes, so a larger session is not requested.
++func (w *Watch) scanSession(ctx context.Context, s *server, name string, received, maxRoutes int) (*scan, error) {
++	if maxRoutes > 0 && received > maxRoutes {
++		return nil, fmt.Errorf("session has more routes than Birdseye api.max_routes (%d)", maxRoutes)
++	}
++	var doc struct {
++		Routes []struct {
++			Network string `json:"network"`
++			BGP     struct {
++				ASPath      []string    `json:"as_path"`
++				Communities [][2]uint64 `json:"communities"`
++				Large       [][3]uint64 `json:"large_communities"`
++			} `json:"bgp"`
++		} `json:"routes"`
++	}
++	if err := w.get(ctx, s.base, pathRoutes(name), &doc); err != nil {
++		return nil, err
++	}
++	sc := &scan{routes: make(map[netip.Prefix]uint32, len(doc.Routes))}
++	for _, r := range doc.Routes {
++		if hasCommunity(r.BGP.Communities, blackholeASN, blackholeValue) {
++			sc.blackhole++
++			continue
++		}
++		if filteredByServer(r.BGP.Large, s.cfg.ASN) {
++			continue
++		}
++		pfx, err := netip.ParsePrefix(r.Network)
++		if err != nil {
++			continue
++		}
++		origin, ok := originAS(r.BGP.ASPath)
++		if !ok {
++			continue
++		}
++		sc.routes[pfx.Masked()] = origin
++	}
++	return sc, nil
++}
++
++func hasCommunity(list [][2]uint64, asn, value uint64) bool {
++	for _, c := range list {
++		if c[0] == asn && c[1] == value {
++			return true
++		}
++	}
++	return false
++}
++
++// filteredByServer is true for a route tagged rs-asn:1101:x.
++func filteredByServer(large [][3]uint64, asn uint32) bool {
++	for _, c := range large {
++		if c[0] == uint64(asn) && c[1] == reasonCommunity {
++			return true
++		}
++	}
++	return false
++}
++
++// originAS is the last AS of the path. A path that ends in an AS set, or
++// is empty, has no single origin.
++func originAS(path []string) (uint32, bool) {
++	if len(path) == 0 {
++		return 0, false
++	}
++	n, err := strconv.ParseUint(strings.TrimSpace(path[len(path)-1]), 10, 32)
++	if err != nil || n == 0 {
++		return 0, false
++	}
++	return uint32(n), true
++}
++
++// owner is one session's accepted route for a prefix.
++type owner struct {
++	asn     uint32
++	session string
++	origin  uint32
++}
++
++// sameMember is true when two sessions belong to one member: one ASN, or,
++// with an unknown ASN (0), the same session. Unknown ASNs must not merge.
++func sameMember(a, b owner) bool {
++	if a.asn != 0 || b.asn != 0 {
++		return a.asn == b.asn
++	}
++	return a.session == b.session
++}
++
++type routeIndex map[netip.Prefix][]owner
++
++// index lists, per prefix, who announced it in the last poll. A session
++// without a listing this poll has no routes here (see dropRoutes).
++func (s *server) index() routeIndex {
++	idx := routeIndex{}
++	for name, st := range s.sessions {
++		for p, o := range st.routes {
++			idx[p] = append(idx[p], owner{asn: st.view.ASN, session: name, origin: o})
++		}
++	}
++	return idx
++}
++
++func (s *server) tracked() int {
++	n := 0
++	for _, st := range s.sessions {
++		n += len(st.routes)
++	}
++	return n
++}
++
++// others reports whether another member announced the prefix, and whether
++// one of them used the origin of self.
++func others(list []owner, self owner) (other, same bool) {
++	for _, o := range list {
++		if sameMember(o, self) {
++			continue
++		}
++		other = true
++		if o.origin == self.origin {
++			same = true
++		}
++	}
++	return other, same
++}
++
++// coveredByOther is true when a shorter prefix of the route is accepted
++// from another member and none of them uses the route's origin.
++func coveredByOther(idx routeIndex, p netip.Prefix, self owner) bool {
++	for bits := p.Bits() - 1; bits >= 1; bits-- {
++		cover, err := p.Addr().Prefix(bits)
++		if err != nil {
++			return false
++		}
++		if other, same := others(idx[cover], self); other && !same {
++			return true
++		}
++	}
++	return false
++}
++
++// routeSignals judges a session's new routes against what the other
++// members announced in the previous poll (idx). A route is new when the
++// session did not announce that prefix with that origin last time. The
++// first listing of a session that was there at the server's first poll is
++// its baseline and raises nothing. A route that gives a prefix an origin no
++// other member uses is an origin change. At least burst_min new routes
++// inside another member's prefix, with another origin, are a burst. Both
++// alerts stay open while the routes stay.
++func (w *Watch) routeSignals(st *sess, row plugin.RouteServerSession, sc *scan, idx routeIndex, now time.Time) []plugin.Event {
++	prev := st.routes
++	st.routes = sc.routes
++	if prev == nil && !st.fresh {
++		return nil
++	}
++	if st.originFlag == nil {
++		st.originFlag = map[netip.Prefix]uint32{}
++		st.msFlag = map[netip.Prefix]uint32{}
++	}
++	hadOrigin, hadMS := len(st.originFlag) > 0, len(st.msFlag) > 0
++	for p, o := range st.originFlag {
++		if sc.routes[p] != o {
++			delete(st.originFlag, p)
++		}
++	}
++	for p, o := range st.msFlag {
++		if sc.routes[p] != o {
++			delete(st.msFlag, p)
++		}
++	}
++	burst := map[netip.Prefix]uint32{}
++	for p, o := range sc.routes {
++		if po, ok := prev[p]; ok && po == o {
++			continue
++		}
++		self := owner{asn: row.ASN, session: row.Session, origin: o}
++		switch other, same := others(idx[p], self); {
++		case other && !same:
++			st.originFlag[p] = o
++		case !other && coveredByOther(idx, p, self):
++			burst[p] = o
++		}
++	}
++	if len(burst) >= w.burstMin {
++		for p, o := range burst {
++			st.msFlag[p] = o
++		}
++	}
++	var ev []plugin.Event
++	if n := len(st.originFlag); n > 0 && !hadOrigin {
++		p, o := firstRoute(st.originFlag)
++		ev = append(ev, plugin.NewEvent(plugin.EventRSOriginChange, now,
++			fmt.Sprintf("%s: %d prefixes announced with an origin AS no other member uses, such as %s from AS%d", label(row), n, p, o),
++			fields(row, "count", strconv.Itoa(n), "prefix", p.String(), "origin", strconv.FormatUint(uint64(o), 10))))
++	} else if n == 0 && hadOrigin {
++		ev = append(ev, plugin.NewEvent(plugin.EventRSOriginChangeCleared, now,
++			label(row)+": the conflicting origins are gone", fields(row)))
++	}
++	if n := len(st.msFlag); n > 0 && !hadMS {
++		p, o := firstRoute(st.msFlag)
++		ev = append(ev, plugin.NewEvent(plugin.EventRSMoreSpecific, now,
++			fmt.Sprintf("%s: %d more-specifics of other members' prefixes, such as %s from AS%d", label(row), n, p, o),
++			fields(row, "count", strconv.Itoa(n), "prefix", p.String(), "origin", strconv.FormatUint(uint64(o), 10))))
++	} else if n == 0 && hadMS {
++		ev = append(ev, plugin.NewEvent(plugin.EventRSMoreSpecificCleared, now,
++			label(row)+": the more-specifics are gone", fields(row)))
++	}
++	return ev
++}
++
++// firstRoute is the lowest prefix of the set, so an event names the same
++// example for the same data.
++func firstRoute(m map[netip.Prefix]uint32) (netip.Prefix, uint32) {
++	var best netip.Prefix
++	for p := range m {
++		if !best.IsValid() || p.Addr().Less(best.Addr()) || (p.Addr() == best.Addr() && p.Bits() < best.Bits()) {
++			best = p
++		}
++	}
++	return best, m[best]
++}
++
++// baseline is, per spike reason, the highest count in the last
++// baselineSamples counted samples of the session. The bool is false
++// before the session has one.
++func (s *server) baseline(session string) (map[int]int, bool) {
++	h := s.history[session]
++	out := map[int]int{}
++	n := 0
++	for i := len(h) - 1; i >= 0 && n < baselineSamples; i-- {
++		if h[i].flags&flagCounted == 0 || h[i].flags&flagEstablished == 0 {
++			continue
++		}
++		n++
++		for _, r := range h[i].reasons {
++			out[r.Reason] = max(out[r.Reason], r.Count)
++		}
++	}
++	return out, n > 0
++}
++
++func reasonCount(list []plugin.RouteServerReason, code int) int {
++	for _, r := range list {
++		if r.Reason == code {
++			return r.Count
++		}
++	}
++	return 0
++}
++
++// isSpike is true when n is at least spike_min above the level and at least
++// spike_factor times it.
++func (w *Watch) isSpike(n, level int) bool {
++	return n-level >= w.spikeMin && n >= level*w.spikeX
++}
++
++// spikes opens an alert when a watched reason's count jumps above the
++// level of the last polls, and closes it when the count falls back below
++// the same threshold. The level is fixed while the alert is open.
++func (w *Watch) spikes(st *sess, row plugin.RouteServerSession, base map[int]int, haveBase bool, now time.Time) []plugin.Event {
++	var ev []plugin.Event
++	for _, r := range spikeReasons {
++		n := reasonCount(row.Reasons, r.code)
++		f := fields(row, "reason", strconv.Itoa(r.code), "count", strconv.Itoa(n))
++		if level, open := st.spike[r.code]; open {
++			if !w.isSpike(n, level) {
++				delete(st.spike, r.code)
++				ev = append(ev, plugin.NewEvent(plugin.EventRSFilterSpikeCleared, now,
++					fmt.Sprintf("%s: %d routes filtered as %s (1101:%d)", label(row), n, r.label, r.code), f))
++			}
++			continue
++		}
++		if haveBase && w.isSpike(n, base[r.code]) {
++			if st.spike == nil {
++				st.spike = map[int]int{}
++			}
++			st.spike[r.code] = base[r.code]
++			f["baseline"] = strconv.Itoa(base[r.code])
++			ev = append(ev, plugin.NewEvent(plugin.EventRSFilterSpike, now,
++				fmt.Sprintf("%s: %d routes filtered as %s (1101:%d), up from %d", label(row), n, r.label, r.code, base[r.code]), f))
++		}
++	}
++	return ev
++}
++
++// dropRoutes forgets a session's route table and resolves its origin and
++// more-specific alerts. The session's routes are not on the route server
++// now, so other members are not judged against them. The session counts as
++// new, so its routes are judged when it comes back.
++func dropRoutes(st *sess, row plugin.RouteServerSession, now time.Time, why string) []plugin.Event {
++	var ev []plugin.Event
++	if len(st.originFlag) > 0 {
++		ev = append(ev, plugin.NewEvent(plugin.EventRSOriginChangeCleared, now, label(row)+" "+why, fields(row)))
++	}
++	if len(st.msFlag) > 0 {
++		ev = append(ev, plugin.NewEvent(plugin.EventRSMoreSpecificCleared, now, label(row)+" "+why, fields(row)))
++	}
++	st.originFlag, st.msFlag = nil, nil
++	st.routes, st.fresh = nil, true
++	return ev
++}
++
++// closeSignals resolves every signal alert of a session that is no longer
++// on the route server.
++func (w *Watch) closeSignals(st *sess, now time.Time, why string) []plugin.Event {
++	row := st.view
++	var ev []plugin.Event
++	codes := make([]int, 0, len(st.spike))
++	for c := range st.spike {
++		codes = append(codes, c)
++	}
++	sort.Ints(codes)
++	for _, c := range codes {
++		ev = append(ev, plugin.NewEvent(plugin.EventRSFilterSpikeCleared, now,
++			label(row)+" "+why, fields(row, "reason", strconv.Itoa(c), "count", "0")))
++	}
++	st.spike = nil
++	return append(ev, dropRoutes(st, row, now, why)...)
++}
+diff --git a/internal/plugins/ixprouteserver/birdseye/signals_test.go b/internal/plugins/ixprouteserver/birdseye/signals_test.go
+new file mode 100644
+index 0000000..c8f69f9
+--- /dev/null
++++ b/internal/plugins/ixprouteserver/birdseye/signals_test.go
+@@ -0,0 +1,465 @@
++package birdseye
++
++import (
++	"context"
++	"net/http"
++	"slices"
++	"strconv"
++	"strings"
++	"testing"
++	"time"
++
++	"github.com/GrandArcher/Packeteer/pkg/plugin"
++)
++
++const (
++	sessA = "pb_0001_as64497"
++	sessB = "pb_0002_as64498"
++)
++
++// signalFake has two Established members, A (AS64497) and B (AS64498).
++func signalFake(t *testing.T) *fakeBirdseye {
++	t.Helper()
++	f := newFake(t)
++	f.setSession(sessA, 64497, "192.0.2.10", "Established", 0)
++	f.setSession(sessB, 64498, "192.0.2.11", "Established", 0)
++	return f
++}
++
++// setRoutes replaces a session's listing and its route count.
++func (f *fakeBirdseye) setRoutes(session string, routes ...fakeRoute) {
++	f.mu.Lock()
++	defer f.mu.Unlock()
++	f.routes[session] = routes
++	f.counts[session] = len(routes)
++}
++
++func route(network string, path ...string) fakeRoute {
++	return fakeRoute{network: network, path: path}
++}
++
++func tick(w *Watch, i int) {
++	w.round(context.Background(), t0.Add(time.Duration(i)*time.Minute))
++}
++
++func TestFilterSpikeOpensAndCloses(t *testing.T) {
++	f := signalFake(t)
++	f.counts[sessA] = 500
++	w, ev := newWatch(t, f, nil)
++	tag := func(reason uint64, n int) [][3]uint64 {
++		var out [][3]uint64
++		for i := 0; i < n; i++ {
++			out = append(out, [3]uint64{rsASN, 1101, reason})
++		}
++		return out
++	}
++
++	// First sighting has no baseline: 30 RPKI-invalid routes say nothing.
++	f.tagged[sessA] = tag(13, 30)
++	tick(w, 0)
++	if got := ev.kinds(); len(got) != 0 {
++		t.Fatalf("first poll %v", got)
++	}
++
++	// Up by 9 is under spike_min (10); up by 10 and 2x opens the alert.
++	f.tagged[sessA] = tag(13, 39)
++	tick(w, 1)
++	if got := ev.kinds(); len(got) != 0 {
++		t.Fatalf("under spike_min %v", got)
++	}
++	f.tagged[sessA] = append(tag(13, 60), tag(3, 80)...)
++	tick(w, 2)
++	// Reason 3 (a bogon) is not watched, and 60 is under 2x the level of 39.
++	if got := ev.kinds(); len(got) != 0 {
++		t.Fatalf("under factor %v", got)
++	}
++	f.tagged[sessA] = tag(13, 130)
++	tick(w, 3)
++	if got := ev.kinds(); !slices.Equal(got, []string{"ixp.rs_filter_spike " + sessA}) {
++		t.Fatalf("spike %v", got)
++	}
++	e := ev.events[0]
++	if e.Severity != plugin.SeverityWarning || e.Fields["reason"] != "13" || e.Fields["count"] != "130" ||
++		e.Fields["baseline"] != "60" || e.Fields["asn"] != "64497" || e.Fields["server"] != "rs1" {
++		t.Fatalf("event %+v", e)
++	}
++
++	// Still high: not repeated. The level is the one before the spike, so
++	// the alert closes at the same threshold it opened at.
++	ev.reset()
++	tick(w, 4)
++	tick(w, 5)
++	if got := ev.kinds(); len(got) != 0 {
++		t.Fatalf("repeated %v", got)
++	}
++	f.tagged[sessA] = tag(13, 125)
++	tick(w, 6)
++	if got := ev.kinds(); len(got) != 0 {
++		t.Fatalf("closed too early %v", got)
++	}
++	f.tagged[sessA] = tag(13, 100)
++	tick(w, 7)
++	if got := ev.kinds(); !slices.Equal(got, []string{"ixp.rs_filter_spike_cleared " + sessA}) {
++		t.Fatalf("clear %v", got)
++	}
++	if ev.events[0].DedupKey() != e.DedupKey() || !ev.events[0].Resolves() {
++		t.Fatalf("dedup %q vs %q", ev.events[0].DedupKey(), e.DedupKey())
++	}
++}
++
++func TestFilterSpikeKnobsAndReasons(t *testing.T) {
++	f := signalFake(t)
++	f.counts[sessA] = 100
++	w, ev := newWatch(t, f, map[string]any{"spike_min": 3, "spike_factor": 1})
++	tick(w, 0)
++	for _, reason := range []uint64{9, 10, 14} {
++		f.tagged[sessA] = [][3]uint64{{rsASN, 1101, reason}, {rsASN, 1101, reason}, {rsASN, 1101, reason}}
++		ev.reset()
++		tick(w, int(reason))
++		got := ev.kinds()
++		if len(got) != 1 || ev.events[0].Fields["reason"] != itoa(reason) {
++			t.Fatalf("reason %d: %v", reason, got)
++		}
++		f.tagged[sessA] = nil
++		tick(w, int(reason)+100)
++	}
++}
++
++func itoa(n uint64) string { return strconv.FormatUint(n, 10) }
++
++func TestNoRouteListingUnlessEnabled(t *testing.T) {
++	f := signalFake(t)
++	f.setRoutes(sessA, route("192.0.2.0/24", "64497"))
++	w, _ := newWatch(t, f, nil)
++	tick(w, 0)
++	for _, r := range f.get() {
++		if strings.Contains(r, "/api/routes/protocol/") {
++			t.Fatalf("listing requested: %s", r)
++		}
++	}
++	s := session(w.View(), sessA)
++	if s.Scanned || s.Blackhole != 0 {
++		t.Fatalf("session %+v", s)
++	}
++}
++
++func TestOnlyAllowlistedGETsWithRouteSignals(t *testing.T) {
++	f := signalFake(t)
++	f.setRoutes(sessA, route("192.0.2.0/24", "64497"))
++	f.counts[sessB] = 0
++	w, _ := newWatch(t, f, map[string]any{"route_signals": true})
++	tick(w, 0)
++	want := []string{
++		"GET /api/status",
++		"GET /api/protocols/bgp",
++		"GET /api/routes/count/protocol/" + sessA,
++		"GET /api/routes/count/protocol/" + sessB,
++		"GET /api/routes/lc-zwild/protocol/" + sessA + "/64496/1101",
++		"GET /api/routes/protocol/" + sessA,
++		"GET /api/routes/protocol/" + sessB,
++	}
++	got := f.get()
++	slices.Sort(got[2:])
++	slices.Sort(want[2:])
++	if !slices.Equal(got, want) {
++		t.Fatalf("requests\n got %v\nwant %v", got, want)
++	}
++}
++
++func TestBlackholeRoutesAreCountedPerMember(t *testing.T) {
++	f := signalFake(t)
++	bh := fakeRoute{network: "192.0.2.77/32", path: []string{"64498"}, comm: [][2]uint64{{65535, 666}, {64496, 1}}}
++	other := fakeRoute{network: "192.0.2.78/32", path: []string{"64498"}, comm: [][2]uint64{{65535, 667}}}
++	filteredBH := fakeRoute{network: "192.0.2.79/32", path: []string{"64498"}, comm: [][2]uint64{{65535, 666}},
++		large: [][3]uint64{{rsASN, 1101, 4}}}
++	f.setRoutes(sessA, route("192.0.2.0/24", "64497"))
++	f.setRoutes(sessB, bh, other, filteredBH)
++	w, ev := newWatch(t, f, map[string]any{"route_signals": true})
++	tick(w, 0)
++	f.setRoutes(sessB, bh, other)
++	tick(w, 1)
++
++	v := w.View()
++	if a := session(v, sessA); !a.Scanned || a.Blackhole != 0 {
++		t.Fatalf("A %+v", a)
++	}
++	if b := session(v, sessB); !b.Scanned || b.Blackhole != 1 || b.ScanError != "" {
++		t.Fatalf("B %+v", b)
++	}
++	h, ok := w.History("rs1", sessB)
++	if !ok || len(h) != 2 || h[0].Blackhole != 2 || h[1].Blackhole != 1 || !h[0].Scanned || !h[1].Scanned {
++		t.Fatalf("history %+v", h)
++	}
++	// A /32 blackhole inside A's /24, with another origin, is expected.
++	if got := ev.kinds(); len(got) != 0 {
++		t.Fatalf("events %v", got)
++	}
++}
++
++func TestOriginChangeAgainstAnotherMember(t *testing.T) {
++	f := signalFake(t)
++	a := []fakeRoute{route("192.0.2.0/24", "64497"), route("203.0.113.0/24", "64500", "64497")}
++	b := []fakeRoute{route("198.51.100.0/24", "64498")}
++	f.setRoutes(sessA, a...)
++	f.setRoutes(sessB, b...)
++	w, ev := newWatch(t, f, map[string]any{"route_signals": true})
++	tick(w, 0)
++	if got := ev.kinds(); len(got) != 0 {
++		t.Fatalf("baseline %v", got)
++	}
++
++	// B announces A's 203.0.113.0/24 with A's own origin (a customer behind
++	// two members): not a change. It also announces 192.0.2.0/24 with its
++	// own origin: a change. A tagged route of B with a new origin is
++	// filtered, so it is ignored.
++	filtered := fakeRoute{network: "2001:db8::/32", path: []string{"64498"}, large: [][3]uint64{{rsASN, 1101, 13}}}
++	f.setRoutes(sessA, append(a, route("2001:db8::/32", "64497"))...)
++	tick(w, 1)
++	ev.reset()
++	f.setRoutes(sessB, append(b, route("203.0.113.0/24", "64501", "64497"), route("192.0.2.0/24", "64498"), filtered)...)
++	tick(w, 2)
++	if got := ev.kinds(); !slices.Equal(got, []string{"ixp.rs_origin_change " + sessB}) {
++		t.Fatalf("events %v", got)
++	}
++	e := ev.events[0]
++	if e.Fields["count"] != "1" || e.Fields["prefix"] != "192.0.2.0/24" || e.Fields["origin"] != "64498" || e.Severity != plugin.SeverityWarning {
++		t.Fatalf("event %+v", e)
++	}
++
++	// Held while the route stays; closed when it leaves.
++	ev.reset()
++	tick(w, 3)
++	if got := ev.kinds(); len(got) != 0 {
++		t.Fatalf("repeated %v", got)
++	}
++	f.setRoutes(sessB, append(b, route("203.0.113.0/24", "64501", "64497"))...)
++	tick(w, 4)
++	if got := ev.kinds(); !slices.Equal(got, []string{"ixp.rs_origin_change_cleared " + sessB}) {
++		t.Fatalf("clear %v", got)
++	}
++	if ev.events[0].DedupKey() != e.DedupKey() || !ev.events[0].Resolves() {
++		t.Fatalf("dedup")
++	}
++}
++
++func TestOriginChangeBaselineAndNewSession(t *testing.T) {
++	f := signalFake(t)
++	// The conflict is there at the first poll: that is the baseline.
++	f.setRoutes(sessA, route("192.0.2.0/24", "64497"))
++	f.setRoutes(sessB, route("192.0.2.0/24", "64498"))
++	w, ev := newWatch(t, f, map[string]any{"route_signals": true})
++	tick(w, 0)
++	tick(w, 1)
++	if got := ev.kinds(); len(got) != 0 {
++		t.Fatalf("baseline %v", got)
++	}
++
++	// A session that joins later is judged from its first listing.
++	f.setSession("pb_0003_as64499", 64499, "192.0.2.12", "Established", 0)
++	f.setRoutes("pb_0003_as64499", route("198.51.100.0/24", "64499"), route("192.0.2.0/24", "64497"))
++	tick(w, 2)
++	if got := ev.kinds(); len(got) != 0 {
++		t.Fatalf("same origin joined %v", got)
++	}
++	f.setSession("pb_0004_as64500", 64500, "192.0.2.13", "Established", 0)
++	f.setRoutes("pb_0004_as64500", route("198.51.100.0/24", "64500"))
++	tick(w, 3)
++	if got := ev.kinds(); !slices.Equal(got, []string{"ixp.rs_origin_change pb_0004_as64500"}) {
++		t.Fatalf("new session %v", got)
++	}
++}
++
++func TestOriginOfSameMemberTwoSessionsIsNotAChange(t *testing.T) {
++	f := signalFake(t)
++	f.setSession("pb_0005_as64497_v6", 64497, "192.0.2.14", "Established", 0)
++	f.setRoutes(sessA, route("192.0.2.0/24", "64497"))
++	f.setRoutes("pb_0005_as64497_v6", route("198.51.100.0/24", "64497"))
++	w, ev := newWatch(t, f, map[string]any{"route_signals": true})
++	tick(w, 0)
++	f.setRoutes("pb_0005_as64497_v6", route("198.51.100.0/24", "64497"), route("192.0.2.0/24", "64510"))
++	tick(w, 1)
++	if got := ev.kinds(); len(got) != 0 {
++		t.Fatalf("own prefix via a second session: %v", got)
++	}
++}
++
++func TestMoreSpecificBurst(t *testing.T) {
++	f := signalFake(t)
++	f.setRoutes(sessA, route("192.0.2.0/24", "64497"), route("2001:db8::/32", "64497"))
++	f.setRoutes(sessB, route("198.51.100.0/24", "64498"))
++	w, ev := newWatch(t, f, map[string]any{"route_signals": true, "burst_min": 3})
++	tick(w, 0)
++
++	b := []fakeRoute{route("198.51.100.0/24", "64498")}
++	// Two more-specifics are under burst_min; one has A's origin, so it
++	// does not count either.
++	b1 := append(slices.Clone(b), route("192.0.2.0/25", "64498"), route("192.0.2.128/25", "64498"), route("192.0.2.64/26", "64500", "64497"))
++	f.setRoutes(sessB, b1...)
++	tick(w, 1)
++	if got := ev.kinds(); len(got) != 0 {
++		t.Fatalf("small %v", got)
++	}
++
++	// Three new ones, one of them IPv6, in one poll are a burst.
++	b2 := append(slices.Clone(b1), route("192.0.2.32/27", "64498"), route("192.0.2.96/27", "64498"), route("2001:db8:1::/48", "64498"))
++	f.setRoutes(sessB, b2...)
++	tick(w, 2)
++	if got := ev.kinds(); !slices.Equal(got, []string{"ixp.rs_morespecific_burst " + sessB}) {
++		t.Fatalf("burst %v", got)
++	}
++	e := ev.events[0]
++	if e.Fields["count"] != "3" || e.Severity != plugin.SeverityWarning {
++		t.Fatalf("event %+v", e)
++	}
++	if e.Fields["prefix"] != "192.0.2.32/27" {
++		t.Fatalf("example is not the lowest prefix: %v", e.Fields["prefix"])
++	}
++
++	// The alert closes only when all three are gone.
++	ev.reset()
++	f.setRoutes(sessB, b1...)
++	tick(w, 3)
++	if got := ev.kinds(); !slices.Equal(got, []string{"ixp.rs_morespecific_burst_cleared " + sessB}) {
++		t.Fatalf("clear %v", got)
++	}
++	if ev.events[0].DedupKey() != e.DedupKey() || !ev.events[0].Resolves() {
++		t.Fatalf("dedup")
++	}
++}
++
++func TestRemovedSessionClosesSignalAlerts(t *testing.T) {
++	f := signalFake(t)
++	f.counts[sessB] = 100
++	f.setRoutes(sessA, route("192.0.2.0/24", "64497"))
++	w, ev := newWatch(t, f, map[string]any{"route_signals": true, "spike_min": 2})
++	f.setRoutes(sessB, route("198.51.100.0/24", "64498"))
++	tick(w, 0)
++	f.setRoutes(sessB, route("198.51.100.0/24", "64498"), route("192.0.2.0/24", "64498"))
++	f.tagged[sessB] = [][3]uint64{{rsASN, 1101, 13}, {rsASN, 1101, 13}}
++	tick(w, 1)
++	got := ev.kinds()
++	slices.Sort(got)
++	if want := []string{"ixp.rs_filter_spike " + sessB, "ixp.rs_filtered " + sessB, "ixp.rs_origin_change " + sessB}; !slices.Equal(got, want) {
++		t.Fatalf("open %v", got)
++	}
++	ev.reset()
++	f.mu.Lock()
++	delete(f.protocols, sessB)
++	f.mu.Unlock()
++	tick(w, 2)
++	got = ev.kinds()
++	slices.Sort(got)
++	want := []string{"ixp.rs_filter_spike_cleared " + sessB, "ixp.rs_filtered_cleared " + sessB, "ixp.rs_origin_change_cleared " + sessB}
++	if !slices.Equal(got, want) {
++		t.Fatalf("close %v", got)
++	}
++}
++
++// A down session's routes are gone from the route server, so its table
++// leaves the comparison and its origin alert closes. On return the routes
++// are judged afresh, so the alert opens again.
++func TestDownSessionDropsItsRoutes(t *testing.T) {
++	f := signalFake(t)
++	f.setRoutes(sessA, route("192.0.2.0/24", "64497"))
++	f.setRoutes(sessB, route("198.51.100.0/24", "64498"))
++	w, ev := newWatch(t, f, map[string]any{"route_signals": true})
++	tick(w, 0)
++	f.setRoutes(sessB, route("192.0.2.0/24", "64498"))
++	tick(w, 1)
++	if got := ev.kinds(); !slices.Equal(got, []string{"ixp.rs_origin_change " + sessB}) {
++		t.Fatalf("open events %v", got)
++	}
++	ev.reset()
++	f.setSession(sessB, 64498, "192.0.2.11", "Idle", 0)
++	tick(w, 2)
++	if got := ev.kinds(); !slices.Equal(got, []string{"ixp.rs_origin_change_cleared " + sessB, "ixp.rs_session_down " + sessB}) {
++		t.Fatalf("down events %v", got)
++	}
++	ev.reset()
++	f.setSession(sessB, 64498, "192.0.2.11", "Established", 0)
++	tick(w, 3)
++	want := []string{"ixp.rs_session_up " + sessB, "ixp.rs_origin_change " + sessB}
++	if got := ev.kinds(); !slices.Equal(got, want) {
++		t.Fatalf("up events %v", got)
++	}
++}
++
++// Sessions with an unknown ASN (0) are separate members, so each one's
++// origin is judged against the other's route.
++func TestUnknownASNSessionsAreSeparateMembers(t *testing.T) {
++	f := newFake(t)
++	f.setSession(sessA, 0, "192.0.2.10", "Established", 0)
++	f.setSession(sessB, 0, "192.0.2.11", "Established", 0)
++	f.setRoutes(sessA, route("192.0.2.0/24", "64497"))
++	f.setRoutes(sessB, route("203.0.113.0/24", "64498"))
++	w, ev := newWatch(t, f, map[string]any{"route_signals": true})
++	tick(w, 0)
++	f.setRoutes(sessB, route("203.0.113.0/24", "64498"), route("192.0.2.0/24", "64498"))
++	tick(w, 1)
++	if got := ev.kinds(); !slices.Equal(got, []string{"ixp.rs_origin_change " + sessB}) {
++		t.Fatalf("events %v", got)
++	}
++}
++
++func TestListingFailureKeepsCounts(t *testing.T) {
++	f := signalFake(t)
++	f.setRoutes(sessA, route("192.0.2.0/24", "64497"))
++	f.listFail = http.StatusForbidden
++	w, _ := newWatch(t, f, map[string]any{"route_signals": true})
++	tick(w, 0)
++	s := session(w.View(), sessA)
++	if !s.Counted || s.Received != 1 || s.Scanned || s.ScanError != "HTTP 403" || s.Error != "" {
++		t.Fatalf("session %+v", s)
++	}
++
++	// A session over Birdseye's max_routes is not listed at all.
++	f.listFail = 0
++	f.maxRoutes = 1
++	f.setRoutes(sessA, route("192.0.2.0/24", "64497"), route("198.51.100.0/24", "64497"))
++	before := len(f.get())
++	tick(w, 1)
++	for _, r := range f.get()[before:] {
++		if r == "GET /api/routes/protocol/"+sessA {
++			t.Fatalf("listing requested: %s", r)
++		}
++	}
++	s = session(w.View(), sessA)
++	if s.Scanned || !strings.Contains(s.ScanError, "api.max_routes (1)") {
++		t.Fatalf("session %+v", s)
++	}
++}
++
++func TestTrackedRoutesAreBounded(t *testing.T) {
++	f := signalFake(t)
++	f.setRoutes(sessA, route("192.0.2.0/24", "64497"), route("198.51.100.0/24", "64497"))
++	f.setRoutes(sessB, route("203.0.113.0/24", "64498"), route("2001:db8::/32", "64498"))
++	w, _ := newWatch(t, f, map[string]any{"route_signals": true})
++	w.maxTracked = 3
++	tick(w, 0)
++	v := w.View()
++	a, b := session(v, sessA), session(v, sessB)
++	if !a.Scanned || b.Scanned || !strings.Contains(b.ScanError, "more than 3") || !b.Counted {
++		t.Fatalf("A %+v B %+v", a, b)
++	}
++}
++
++func TestOriginAS(t *testing.T) {
++	cases := []struct {
++		path []string
++		want uint32
++		ok   bool
++	}{
++		{[]string{"64500", "64497"}, 64497, true},
++		{[]string{"64497"}, 64497, true},
++		{[]string{"64500", "{64497,64498}"}, 0, false},
++		{[]string{}, 0, false},
++		{[]string{"0"}, 0, false},
++		{[]string{"x"}, 0, false},
++	}
++	for _, c := range cases {
++		got, ok := originAS(c.path)
++		if got != c.want || ok != c.ok {
++			t.Errorf("%v: %d %v", c.path, got, ok)
++		}
++	}
++}
+diff --git a/pkg/plugin/events.go b/pkg/plugin/events.go
+index 7378367..f9cc167 100644
+--- a/pkg/plugin/events.go
++++ b/pkg/plugin/events.go
+@@ -85,6 +85,13 @@ const (
+ 	EventRSMaxPrefixCleared = "ixp.rs_max_prefix_cleared"
+ 	EventRSFiltered         = "ixp.rs_filtered"
+ 	EventRSFilteredCleared  = "ixp.rs_filtered_cleared"
++	// Route-server signals (#165). Each problem has a resolving event.
++	EventRSOriginChange        = "ixp.rs_origin_change"
++	EventRSOriginChangeCleared = "ixp.rs_origin_change_cleared"
++	EventRSMoreSpecific        = "ixp.rs_morespecific_burst"
++	EventRSMoreSpecificCleared = "ixp.rs_morespecific_burst_cleared"
++	EventRSFilterSpike         = "ixp.rs_filter_spike"
++	EventRSFilterSpikeCleared  = "ixp.rs_filter_spike_cleared"
+ 	// Fabric incident correlation (#163). Each problem has a resolving event.
+ 	EventFabricDegraded  = "ixp.fabric_degraded"
+ 	EventFabricRecovered = "ixp.fabric_recovered"
+@@ -208,6 +215,18 @@ var eventCatalog = []EventSpec{
+ 		Summary: "One member is past the ping tolerance on every measured address while the groups behind it are not degraded: a member problem."},
+ 	{Kind: EventMemberRecovered, Severity: SeverityInfo, Group: "ixp_member", Keys: []string{"asn"}, TrapID: 54, Resolves: true,
+ 		Summary: "The member is back within tolerance, is part of a degraded group, or the fabric data went stale. Resolves ixp.member_degraded."},
++	{Kind: EventRSOriginChange, Severity: SeverityWarning, Group: "ixp_rs_origin", Keys: []string{"server", "session"}, TrapID: 55,
++		Summary: "A member session announces a prefix with an origin AS that no other member's accepted route for the same prefix has: a possible hijack or leak."},
++	{Kind: EventRSOriginChangeCleared, Severity: SeverityInfo, Group: "ixp_rs_origin", Keys: []string{"server", "session"}, TrapID: 56, Resolves: true,
++		Summary: "The conflicting routes are gone, or the session is gone. Resolves ixp.rs_origin_change."},
++	{Kind: EventRSMoreSpecific, Severity: SeverityWarning, Group: "ixp_rs_morespecific", Keys: []string{"server", "session"}, TrapID: 57,
++		Summary: "A member session announced a burst of more-specifics of prefixes another member's route covers, with a different origin AS."},
++	{Kind: EventRSMoreSpecificCleared, Severity: SeverityInfo, Group: "ixp_rs_morespecific", Keys: []string{"server", "session"}, TrapID: 58, Resolves: true,
++		Summary: "The burst's more-specifics are gone, or the session is gone. Resolves ixp.rs_morespecific_burst."},
++	{Kind: EventRSFilterSpike, Severity: SeverityWarning, Group: "ixp_rs_spike", Keys: []string{"server", "session", "reason"}, TrapID: 59,
++		Summary: "The routes a route server filtered from a member for one reason (RPKI invalid, IRR prefix or origin, transit-free ASN) jumped above the recent level."},
++	{Kind: EventRSFilterSpikeCleared, Severity: SeverityInfo, Group: "ixp_rs_spike", Keys: []string{"server", "session", "reason"}, TrapID: 60, Resolves: true,
++		Summary: "The filtered count fell back below the spike threshold, or the session is gone. Resolves ixp.rs_filter_spike."},
+ }
+ 
+ // EventCatalog returns a copy of every event kind the controller emits.
+diff --git a/pkg/plugin/ixp.go b/pkg/plugin/ixp.go
+index 4f86c80..0fa4f4d 100644
+--- a/pkg/plugin/ixp.go
++++ b/pkg/plugin/ixp.go
+@@ -268,7 +268,10 @@ type RouteServerReason struct {
+ // counts each tag. MaxPrefix is the member's IX-F max_prefix for the
+ // neighbor address, else Birdseye's import limit; zero means none.
+ // UsedPct is Accepted as a share of MaxPrefix. Counted is false when the
+-// counts could not be read; they are then zero.
++// counts could not be read; they are then zero. Scanned is true when
++// the session's routes were listed this poll (ixp.routeservers
++// route_signals); Blackhole is then the number of routes that carry the
++// RFC 7999 community 65535:666, and ScanError says why a listing failed.
+ type RouteServerSession struct {
+ 	Server      string              `json:"server"`
+ 	Session     string              `json:"session"`
+@@ -285,6 +288,9 @@ type RouteServerSession struct {
+ 	Reasons     []RouteServerReason `json:"reasons"`
+ 	MaxPrefix   int                 `json:"max_prefix,omitempty"`
+ 	UsedPct     float64             `json:"used_pct,omitempty"`
++	Scanned     bool                `json:"scanned"`
++	Blackhole   int                 `json:"blackhole"`
++	ScanError   string              `json:"scan_error,omitempty"`
+ 	Error       string              `json:"error,omitempty"`
+ 	At          time.Time           `json:"at"`
+ }
+@@ -299,6 +305,8 @@ type RouteServerSample struct {
+ 	Filtered    int                 `json:"filtered"`
+ 	Reasons     []RouteServerReason `json:"reasons"`
+ 	MaxPrefix   int                 `json:"max_prefix,omitempty"`
++	Scanned     bool                `json:"scanned"`
++	Blackhole   int                 `json:"blackhole"`
+ }
+ 
+ // Correlation group scopes.

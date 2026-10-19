@@ -1,0 +1,2295 @@
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+index 95a6de0..7ad5326 100644
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -6,6 +6,7 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
+ 
+ ### Added
+ 
++- Fabric incident correlation: fabric probes grouped by switch, colo, and bundle; `ixp.fabric_degraded` vs `ixp.member_degraded` events; `GET /api/ixp/correlation`; nothing announced (#163).
+ - Route-server observability: Birdseye polls per member session (state, received, accepted, filtered, filtered-by-reason, max_prefix), in-memory history, `ixp.rs_*` alerts, GET only (#164).
+ - PeeringDB / IX-F lookup: read-only cached org name, exchange membership, LAN addresses, route-server flag, policy, and prefix hints; GET /api/lookup; key from PACKETEER_PEERINGDB_API_KEY (#153).
+ - Fabric probes: member LAN loss, RTT, and jitter from ixp.vantages; Can Ping opt-out and busy-host tolerance; nothing announced (#162).
+diff --git a/README.md b/README.md
+index 3a21799..0401b42 100644
+--- a/README.md
++++ b/README.md
+@@ -13,7 +13,7 @@ The feature matrix is [docs/FEATURES.md](docs/FEATURES.md).
+ Read this before you change `mode`.
+ 
+ - The default mode is `observe`. The file in this repository stays `observe`. `suggest` probes and recommends, and announces nothing.
+-- An `ixp: {}` block is an exchange operator, not an edge that injects. It refuses `mode: inject`, `announcer`, `mitigation`, `inbound`, `synthesize`, and `more_specific`, and it does not need `bgp.neighbors` ([design](docs/design/ixp.md)). Optional `ixp.members` (`type: ixf`) imports the IX-F member list and announces nothing. Optional `ixp.vantages` and `ixp.fabric` (`type: icmp`) record member LAN loss, RTT, and jitter from those vantages and announce nothing. Optional `ixp.routeservers` (`type: birdseye`) polls Birdseye with GET only and keeps per-session history and alerts.
++- An `ixp: {}` block is an exchange operator, not an edge that injects. It refuses `mode: inject`, `announcer`, `mitigation`, `inbound`, `synthesize`, and `more_specific`, and it does not need `bgp.neighbors` ([design](docs/design/ixp.md)). Optional `ixp.members` (`type: ixf`) imports the IX-F member list and announces nothing. Optional `ixp.vantages` and `ixp.fabric` (`type: icmp`) record member LAN loss, RTT, and jitter from those vantages and announce nothing. Optional `ixp.routeservers` (`type: birdseye`) polls Birdseye with GET only and keeps per-session history and alerts. Optional `ixp.correlate` (`type: topology`) groups the fabric probes by switch, colo, and core bundle and alerts on a fabric problem or a member problem.
+ - `inject` is a separate config: `mode: inject`, a non-empty allowlist, `packeteer_community`, `local_pref`, a positive `hold_time`, positive loss and latency thresholds, an iBGP neighbor, and `announcer.type: gobgp`.
+ - Packeteer announces a prefix only when that exact prefix is in the RIB it learned from the router. It does not invent a more-specific. A config that sets `more_specific_bits` is rejected. The optional `more_specific` block (off by default) also announces the more-specifics a neighbor already advertises inside an improvement's prefix, under a route cap ([design](docs/design/more-specific.md)).
+ - Active improvements are capped (`max_improvements`, default 50).
+diff --git a/cmd/controller/configdoc_test.go b/cmd/controller/configdoc_test.go
+index 9d380f8..b013803 100644
+--- a/cmd/controller/configdoc_test.go
++++ b/cmd/controller/configdoc_test.go
+@@ -12,6 +12,7 @@ import (
+ 	"github.com/GrandArcher/Packeteer/internal/plugins/elector/lease"
+ 	"github.com/GrandArcher/Packeteer/internal/plugins/exec"
+ 	"github.com/GrandArcher/Packeteer/internal/plugins/federation/mtls"
++	"github.com/GrandArcher/Packeteer/internal/plugins/ixpcorrelate/topology"
+ 	fabricicmp "github.com/GrandArcher/Packeteer/internal/plugins/ixpfabric/icmp"
+ 	"github.com/GrandArcher/Packeteer/internal/plugins/ixprouteserver/birdseye"
+ 	"github.com/GrandArcher/Packeteer/internal/plugins/leaksource/rislive"
+@@ -104,6 +105,8 @@ func TestConfigDocCoversStructs(t *testing.T) {
+ 		fabricicmp.Config{},
+ 		birdseye.Config{},
+ 		birdseye.ServerConfig{},
++		topology.Config{},
++		topology.Bundle{},
+ 		peeringdb.Config{},
+ 	) {
+ 		if !strings.Contains(text, "`"+key+"`") {
+diff --git a/cmd/controller/ixp.go b/cmd/controller/ixp.go
+index 5f56982..243b3f4 100644
+--- a/cmd/controller/ixp.go
++++ b/cmd/controller/ixp.go
+@@ -61,6 +61,23 @@ func wireIXPRouteServers(plugins *pluginhost.Set, httpSrv *httpapi.Server, emit
+ 	}
+ }
+ 
++// wireIXPCorrelate connects the fabric incident correlator (#163) before
++// plugins start. It reads the fabric prober's view. It does not probe and
++// it does not announce.
++func wireIXPCorrelate(plugins *pluginhost.Set, httpSrv *httpapi.Server, emit func(plugin.Event)) {
++	if plugins == nil || plugins.IXPCorrelate == nil || plugins.IXPFabric == nil {
++		return
++	}
++	c := plugins.IXPCorrelate.Plugin
++	c.SetFabric(plugins.IXPFabric.Plugin.View)
++	if emit != nil {
++		c.SetEventSink(emit)
++	}
++	if httpSrv != nil {
++		httpSrv.SetIXPCorrelation(c.View)
++	}
++}
++
+ func fabricVantages(in []config.Vantage) []plugin.FabricVantage {
+ 	out := make([]plugin.FabricVantage, 0, len(in))
+ 	for _, v := range in {
+diff --git a/cmd/controller/ixp_test.go b/cmd/controller/ixp_test.go
+index 9ed8e24..0eccc1a 100644
+--- a/cmd/controller/ixp_test.go
++++ b/cmd/controller/ixp_test.go
+@@ -8,6 +8,7 @@ import (
+ 	"os"
+ 	"path/filepath"
+ 	"slices"
++	"strconv"
+ 	"strings"
+ 	"sync"
+ 	"testing"
+@@ -385,3 +386,120 @@ func TestIXPRouteServersWiring(t *testing.T) {
+ 		}
+ 	}
+ }
++
++const ixpCorrelateYAML = `
++mode: observe
++asn: 64512
++router_id: 192.0.2.10
++providers:
++  - {name: transit-a, source_ip: 192.0.2.11, next_hop: 192.0.2.1}
++ixp:
++  members:
++    type: ixf
++    config:
++      url: https://ixp.example.invalid/members.json
++  vantages:
++    - {name: lan1-v4, vlan_id: 10, address: 192.0.2.8}
++  fabric: {type: icmp}
++  correlate:
++    type: topology
++    config:
++      rounds: 1
++`
++
++func TestIXPCorrelateCheck(t *testing.T) {
++	path := filepath.Join(t.TempDir(), "c.yaml")
++	if err := os.WriteFile(path, []byte(ixpCorrelateYAML), 0o600); err != nil {
++		t.Fatal(err)
++	}
++	var out, errOut strings.Builder
++	if code := run(t.Context(), []string{"-check", "-config", path}, noEnv, &out, &errOut); code != 0 {
++		t.Fatalf("exit %d stderr %s", code, errOut.String())
++	}
++	for _, want := range []string{"ixp correlate: topology (reads the fabric probes, never announces)", "announce: disabled", "check: ok"} {
++		if !strings.Contains(out.String(), want) {
++			t.Errorf("stdout missing %q:\n%s", want, out.String())
++		}
++	}
++	cur := mustParse(t, ixpCorrelateYAML)
++	next := mustParse(t, strings.Replace(ixpCorrelateYAML, "rounds: 1", "rounds: 2", 1))
++	restart, online := classify(cur, next)
++	if !slices.Contains(restart, "ixp") || len(online) != 0 {
++		t.Fatalf("restart %v online %v", restart, online)
++	}
++}
++
++// fabricRound is a fabric prober that publishes one fixed round.
++type fabricRound struct {
++	plugin.FabricProbe
++	view plugin.FabricView
++}
++
++func (f fabricRound) View() plugin.FabricView { return f.view }
++
++// TestIXPCorrelateWiring connects the correlator to the fabric prober's
++// view, the event sink, and the HTTP API. The prober is replaced by one
++// that publishes a fixed round, so the correlator can only see that round
++// through the view wireIXPCorrelate hands it.
++func TestIXPCorrelateWiring(t *testing.T) {
++	cfg := mustParse(t, ixpCorrelateYAML)
++	plugins, err := pluginhost.Build(cfg, pluginhost.Options{})
++	if err != nil {
++		t.Fatal(err)
++	}
++	srv, err := httpapi.New(httpapi.Options{Snapshot: func() httpapi.Snapshot { return httpapi.Snapshot{Version: "test", Mode: "observe", Started: true} }})
++	if err != nil {
++		t.Fatal(err)
++	}
++	sw := []plugin.FabricSwitch{{ID: 1, Name: "sw1", Colo: "colo-a"}}
++	var samples []plugin.FabricSample
++	for i := range 3 {
++		samples = append(samples, plugin.FabricSample{
++			Vantage: "lan1-v4", ASN: uint32(64496 + i), Address: "192.0.2." + strconv.Itoa(20+i),
++			VLANID: 10, IXPID: 1, Switches: sw, Sent: 5, Received: 0, LossPct: 100, PastTolerance: true,
++		})
++	}
++	plugins.IXPFabric.Plugin = fabricRound{FabricProbe: plugins.IXPFabric.Plugin, view: plugin.FabricView{
++		Configured: true, Round: time.Unix(1000, 0).UTC(), Samples: samples,
++	}}
++	events := make(chan plugin.Event, 8)
++	wireIXPFabric(cfg, plugins, srv)
++	wireIXPCorrelate(plugins, srv, func(e plugin.Event) { events <- e })
++
++	c := plugins.IXPCorrelate.Plugin
++	if err := c.Start(t.Context()); err != nil {
++		t.Fatal(err)
++	}
++	defer func() { _ = c.Stop(t.Context()) }()
++
++	var got []string
++	for len(got) < 2 {
++		select {
++		case e := <-events:
++			got = append(got, e.Kind+" "+e.Fields["scope"]+" "+e.Fields["group"])
++		case <-time.After(5 * time.Second):
++			t.Fatalf("events %v", got)
++		}
++	}
++	slices.Sort(got)
++	want := []string{"ixp.fabric_degraded colo colo-a", "ixp.fabric_degraded switch 1"}
++	if !slices.Equal(got, want) {
++		t.Fatalf("events %v, want %v", got, want)
++	}
++	rec := httptest.NewRecorder()
++	srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/ixp/correlation", nil))
++	var body struct {
++		Configured bool `json:"configured"`
++		Groups     []struct {
++			Name   string `json:"name"`
++			Active bool   `json:"active"`
++		} `json:"groups"`
++		Members []any `json:"members"`
++	}
++	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
++		t.Fatal(err)
++	}
++	if !body.Configured || len(body.Groups) != 2 || !body.Groups[0].Active || len(body.Members) != 0 {
++		t.Fatalf("%s", rec.Body)
++	}
++}
+diff --git a/cmd/controller/main.go b/cmd/controller/main.go
+index 66c2b1f..51642ae 100644
+--- a/cmd/controller/main.go
++++ b/cmd/controller/main.go
+@@ -190,6 +190,9 @@ func run(ctx context.Context, args []string, getenv func(string) string, stdout,
+ 		if cfg.IXP.RouteServers != nil {
+ 			fmt.Fprintf(stdout, "ixp routeservers: %s (read-only, never announces)\n", cfg.IXP.RouteServers.Type)
+ 		}
++		if cfg.IXP.Correlate != nil {
++			fmt.Fprintf(stdout, "ixp correlate: %s (reads the fabric probes, never announces)\n", cfg.IXP.Correlate.Type)
++		}
+ 	}
+ 	if cfg.Lookup != nil {
+ 		fmt.Fprintf(stdout, "lookup: %s (read-only, never announces)\n", cfg.Lookup.Type)
+@@ -640,6 +643,7 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
+ 	wireIXPMembers(plugins, httpSrv, dispatch.Emit)
+ 	wireIXPFabric(cfg, plugins, httpSrv)
+ 	wireIXPRouteServers(plugins, httpSrv, dispatch.Emit)
++	wireIXPCorrelate(plugins, httpSrv, dispatch.Emit)
+ 	// Active/standby (#31): registered before the elector starts. A
+ 	// standby withdraws everything, runs no decisions, and announces
+ 	// nothing; the announce controllers check the same gate.
+diff --git a/config.example.yaml b/config.example.yaml
+index f60072a..cb75651 100644
+--- a/config.example.yaml
++++ b/config.example.yaml
+@@ -9,6 +9,7 @@ mode: observe               # also the default when mode is left out; inject is
+ # The API key is PACKETEER_IXP_MANAGER_API_KEY, never this file.
+ # vantages and fabric (#162) probe member LAN addresses and announce nothing.
+ # routeservers (#164) reads Birdseye with GET and announces nothing.
++# correlate (#163) reads the fabric probes, sends nothing, and announces nothing.
+ # ixp:
+ #   members:
+ #     type: ixf
+@@ -44,6 +45,14 @@ mode: observe               # also the default when mode is left out; inject is
+ #       max_bytes: 8388608
+ #       max_prefix_warn_pct: 90
+ #       filtered_warn_pct: 50
++#   correlate:                   # fabric vs member problem (#163), needs fabric
++#     type: topology
++#     config:
++#       min_members: 3           # members behind one switch, colo, or bundle
++#       degraded_pct: 50
++#       rounds: 2                # fabric rounds in a row before an event
++#       bundles:                 # IX-F has no core bundle; name the switch ids
++#         - {name: core-1, switches: [1, 2]}
+ 
+ asn: 64512
+ router_id: 192.0.2.10
+diff --git a/docs/API.md b/docs/API.md
+index f0af78c..0e1117c 100644
+--- a/docs/API.md
++++ b/docs/API.md
+@@ -26,6 +26,7 @@ The dashboard, JSON API, and Prometheus metrics share one listener, `http.listen
+ | `/api/ixp/members` | Viewer. The IX-F member list when `ixp.members` is configured (#161): `configured`, `url` (no query string), `manager`, `key_id`, `key_expires` and `fetched` (both absent until known), `stale`, `error`, `member_count`, `address_count`, `ixps`, and `members` (ASN, name, connections, LAN addresses, route-server flag, `max_prefix`, `as_macro`, switch and colo from that connection's IXP). Empty lists and `configured: false` when it is not. The API key is not included. Read-only. |
+ | `/api/ixp/probes` | Viewer. The latest fabric round when `ixp.fabric` is configured (#162): `configured`, `stale`, `error`, `round`, `targets`, `opt_out`, `vantages` (`name`, `address`, `vlan_id`, `up`, `targets`, `error`), and `samples` (vantage, ASN, address, loss, RTT, jitter, busy-host, past the ping warning, switch and colo). Empty lists and `configured: false` when it is not. The API key is not included. Read-only. Nothing is announced. |
+ | `/api/ixp/routeservers` | Viewer. The latest Birdseye poll when `ixp.routeservers` is configured (#164): `configured`, `servers` (`name`, `url`, `asn`, `up`, `stale`, `error`, `polled`, `version`, `router_id`, `last_reconfig`, `message`, `sessions`), and `sessions` (`server`, `session`, `asn`, `name`, `neighbor`, `description`, `state`, `established`, `counted`, `received`, `accepted`, `filtered`, `reasons` as `reason` and `count`, `max_prefix`, `used_pct`, `error`, `at`). A stale server shows no sessions. Empty lists and `configured: false` when it is not. Read-only. Nothing is announced. |
++| `/api/ixp/correlation` | Viewer. The latest fabric incident view when `ixp.correlate` is configured (#163): `configured`, `stale`, `round`, `groups` (`scope` of `switch`, `colo`, or `bundle`, `ixp_id`, `name`, `members` measured, `degraded`, `degraded_pct`, `active`, `asns` of the degraded members), and `members` (each member degraded on its own, outside every degraded group: `asn`, `name`, `addresses`, `active`). `active` is true while the matching event is open: it takes `rounds` rounds to open and `rounds` to close, and a group or member that is open but not measured this round is still listed, with `degraded` 0. Empty lists and `configured: false` when it is not. Read-only. Nothing is announced. |
+ | `/api/ixp/routeservers/history` | Viewer. `?server=<name>&session=<protocol>`: `samples`, oldest first (up to 288, kept in memory), each with `at`, `established`, `counted`, `received`, `accepted`, `filtered`, `reasons`, and `max_prefix`. `400` without both parameters, `404` for a server or session with no history. Read-only (#164). |
+ | `/api/exchanges/potential-peers` | Viewer. Destination origin ASNs ranked by flow bytes: `rows` with `asn`, `class`, `bytes`, `mbps`, `prefixes` (with traffic), `lan_prefixes` and `lan_bytes` (those with a learned path whose next hop is on an exchange LAN today), and `members` (`exchange`, `peer` for a configured peer, `next_hop`, `via`). `class` is `route_server` (a member with that AS has paths via a route server), `bilateral` (members seen only bilaterally), `unknown` (on a LAN, session type not visible), or `absent` (no peer or LAN member has that AS). `?class=` keeps one class; `asns`, `bytes`, and `mbps` total it, `classes` counts every class, and `unattributed_bytes` had no covering learned route or belong to the local AS. `limit` as for the offload report; `?format=csv` downloads the rows. The origin AS is the last AS of the covering learned route. `400` for a bad parameter, `404` without exchanges. Read-only (#154). |
+ | `/api/telemetry` | Interface rates and 95th-percentile usage when a telemetry plugin is configured. Empty when it is not. This does not announce. |
+@@ -64,4 +65,6 @@ When `ixp.fabric` is configured, `/metrics` also has `packeteer_ixp_fabric_up`,
+ 
+ When `ixp.routeservers` is configured, `/metrics` also has `packeteer_ixp_rs_up`, `packeteer_ixp_rs_sessions_established`, `packeteer_ixp_rs_sessions_down`, `packeteer_ixp_rs_filtered_routes`, and `packeteer_ixp_rs_age_seconds`. A stale server counts as down and its sessions are not counted. There is no per-member series.
+ 
++When `ixp.correlate` is configured, `/metrics` also has `packeteer_ixp_fabric_groups_degraded` (switches, colos, and bundles with an open `ixp.fabric_degraded`) and `packeteer_ixp_members_degraded` (members with an open `ixp.member_degraded`). There is no per-member or per-group series.
++
+ Scrape `http://127.0.0.1:8080/metrics` on the host. With `auth` on, use an API token ([auth.md](auth.md)).
+diff --git a/docs/CONFIG.md b/docs/CONFIG.md
+index e32a479..b56f21e 100644
+--- a/docs/CONFIG.md
++++ b/docs/CONFIG.md
+@@ -25,7 +25,7 @@ The image entrypoint is the same binary. Flags go after the image name.
+ |---|---|---|---|
+ | `mode` | `observe` | no | `observe`, `suggest`, or `inject`. A file without `mode` (or with an empty one) observes. `inject` is never a default: it needs `mode: inject` and the [inject checklist](#inject-checklist). An [`ixp`](#ixp) block refuses `inject`. |
+ | `lookup` | absent | no | Read-only PeeringDB / IX-F directory (#153). One plugin, `type: peeringdb`. Announces nothing. See [`lookup`](#lookup). |
+-| `ixp` | absent | no | Exchange-operator mode (#160). `ixp: {}` refuses inject, announcer, mitigation, inbound, synthesize, and more_specific. Optional `members` imports an IX-F list, and `routeservers` polls Birdseye; neither announces (#161, #164). No `bgp.neighbors` required. See [`ixp`](#ixp). |
++| `ixp` | absent | no | Exchange-operator mode (#160). `ixp: {}` refuses inject, announcer, mitigation, inbound, synthesize, and more_specific. Optional `members` imports an IX-F list, `routeservers` polls Birdseye, and `correlate` tells a fabric problem from a member problem; none announces (#161, #164, #163). No `bgp.neighbors` required. See [`ixp`](#ixp). |
+ | `asn` | none | yes, non-zero | BGP ASN of this speaker. Neighbors are iBGP in this ASN. |
+ | `router_id` | none | yes | IPv4 address. IPv6 is rejected. |
+ | `packeteer_community` | empty | inject | Standard community `asn:value` (each half 0–65535) or a large community `global:data1:data2` (RFC 8092, each part 0–4294967295). Quote it in YAML (`"64512:666"`). The export policy matches only this community. A two-part value above 16 bits is rejected; write a 4-byte ASN as a large community (`"70000:1:0"`). |
+@@ -371,7 +371,7 @@ Applied while running:
+ - `inbound.mode` and `mitigation.mode` (#233). `inject` for either needs `mode: inject` in the same file. `hold_time` and `improvement_ttl` reach the inbound controller: a changed `improvement_ttl` applies to steers already running, a changed `hold_time` to steers created after the reload, and a shrunk `allowlist` withdraws an inbound steer it no longer covers. Entering inject runs the same checks as a start and binds the inbound or mitigation announcer on the running speaker; if the reload is then refused, the speaker keeps the inbound import policy, which announces nothing. If leaving inject fails after one controller already withdrew, the reload is fatal: the process stops and withdraws everything. Leaving inject withdraws that controller's routes under its lock before the mode changes. A mitigation rule held outside inject is dropped on entering it, so a dry-run rule never reaches the edge because a mode flipped. Entering mitigation inject with a FlowSpec catalog is refused (`restart required`) unless the process started in inject with it: the sessions negotiate FlowSpec only at start. Every other `inbound` or `mitigation` key stays restart-only.
+ - `bgp.neighbors`, as before (#27). A new neighbor gets a session; a removed one is closed (its paths leave the view at once, as on a session loss). A neighbor whose session settings changed (`port`, `local_address`, `passive`, `add_path`) is closed and opened again. Other sessions are not touched. A changed per-router table (`providers`, `next_hops`) replaces the announcer's export policy on the running speaker. Every outbound route is withdrawn first (GoBGP sends a withdraw only where the current policy would send the route, so a route withdrawn after the swap could stay on a router the new table blocks) and announced again under the new table on the next evaluation, once the prefix is back in the learned RIB. Inbound steer routes are not affected. A change that leaves the table as it was (adding a neighbor with no lists to a config with no lists) withdraws nothing. Egress routers are recomputed, so `egress router down` follows the new lists. `bgp.neighbors` cannot become empty on a reload. `bgp.listen_port`, `bgp.listen_addresses`, and `bgp.as_path` need a restart.
+ 
+-The announcer plugin, providers, probers, and every other key stay restart-only. `more_specific`, `synthesize`, `lookup`, and `ixp` (including `ixp.members`, `ixp.vantages`, `ixp.fabric`, and `ixp.routeservers`) are restart-only. A reload that changes any restart-only key is refused whole, including the online keys in the same file: the log says `config reload refused` with the keys (`restart required: changed local_pref`), and the running config stays. A file that does not parse or validate is refused the same way, before anything is applied. Comments and YAML style do not count as changes. The audit log records each apply (`config.reload`, with the keys) and each refusal.
++The announcer plugin, providers, probers, and every other key stay restart-only. `more_specific`, `synthesize`, `lookup`, and `ixp` (including `ixp.members`, `ixp.vantages`, `ixp.fabric`, `ixp.routeservers`, and `ixp.correlate`) are restart-only. A reload that changes any restart-only key is refused whole, including the online keys in the same file: the log says `config reload refused` with the keys (`restart required: changed local_pref`), and the running config stays. A file that does not parse or validate is refused the same way, before anything is applied. Comments and YAML style do not count as changes. The audit log records each apply (`config.reload`, with the keys) and each refusal.
+ 
+ If a reload fails after it has changed the speaker, Packeteer stops (exit status 1), which withdraws every Packeteer route; the container's restart policy brings it back with the new file. The learned-RIB check, community, NO_EXPORT, and withdraw rules are unchanged. A prefix that is not in the learned RIB is never announced. Environment overlays (`PACKETEER_LOG_LEVEL`, ...) are applied to the reloaded file as at startup. Lab-proven only (`lab/e2e.sh` for a threshold that keeps the route and a cap of 0 that withdraws it; `lab/e2e-ix.sh` for neighbors).
+ 
+@@ -379,7 +379,7 @@ If a reload fails after it has changed the speaker, Packeteer stops (exit status
+ 
+ Exchange-operator mode (#160, [design/ixp.md](design/ixp.md)). Not the [`exchanges`](#exchanges) block, which is an edge network's own peers.
+ 
+-`ixp: {}` turns it on. The keys are `members` (#161), `vantages` and `fabric` (#162), and `routeservers` (#164). Any other key is an error. Omitted, or `ixp: null`, leaves the file as an edge controller. `mode` stays `observe`. `mode: suggest` is accepted and announces nothing.
++`ixp: {}` turns it on. The keys are `members` (#161), `vantages` and `fabric` (#162), `routeservers` (#164), and `correlate` (#163). Any other key is an error. Omitted, or `ixp: null`, leaves the file as an edge controller. `mode` stays `observe`. `mode: suggest` is accepted and announces nothing.
+ 
+ `ixp.members` is one plugin (`type: ixf`). It GETs an IX-F 1.0 member list and announces nothing. It is not a RIB source and not an input to Decide. `config.url` is the IXP Manager origin or the member-export path (a subdirectory install ends in `/api/v4/member-export/ixf/1.0`; a bare origin uses that path), or one other IX-F JSON URL. On the manager URL the only query keys kept are `ignore_missing_ixfid=1` and `ixfid_<digits>=<digits>`. `apikey`, `access_key`, and any other query key are refused. Redirects are not followed. The API key is `PACKETEER_IXP_MANAGER_API_KEY`, sent only as `X-IXP-Manager-API-Key`. This import sends it only to the manager URL. A URL that contains the key, including a percent-encoded form, is refused. `key_expires` (`YYYY-MM-DD`, quote it) is required with the key; a date more than 366 days ahead is refused. The controller warns when 14 days or fewer remain. `refresh` (default 15m, 1m-24h), `timeout` (default 30s, 1s-2m), `max_bytes` (default 8 MiB, 1024 to 32 MiB). A failed refresh keeps the last good list until three refresh intervals have passed, then the served list is empty. `GET /api/ixp/members` reads it.
+ 
+@@ -395,7 +395,9 @@ Only connection states `active`, `connected`, and `operational` are probed, and
+ 
+ Per session: `received` is the route count of the session's protocol, `filtered` is the number of routes with an `asn:1101:x` tag, `accepted` is the difference, and `reasons` counts each tag by `x`. Each poll adds a sample to the session's history (up to 288, in memory; a restart empties it; about 16 KiB per session). A server holds at most 2048 sessions. A failed poll keeps the last sessions; after three intervals without a success the server is stale and shows none. The events are `ixp.rs_*` ([EVENTS.md](EVENTS.md)). `GET /api/ixp/routeservers` and `GET /api/ixp/routeservers/history` serve the data; the metrics are `packeteer_ixp_rs_up`, `packeteer_ixp_rs_sessions_established`, `packeteer_ixp_rs_sessions_down`, `packeteer_ixp_rs_filtered_routes`, and `packeteer_ixp_rs_age_seconds`. Each session read asks Birdseye for the session's routes, so a large table costs the route server a `show route` per interval; Birdseye caches for a few minutes.
+ 
+-Adding or removing `ixp`, including `members`, `vantages`, `fabric`, and `routeservers`, needs a restart. Rollback: remove `routeservers`, or `vantages` and `fabric`, or the `ixp` block, and restart. Nothing was announced.
++`correlate` is one plugin. The only type is `topology`. It requires `fabric` and reads only the fabric prober's latest round; it sends no probes and no requests. Each round it groups the measured member addresses by the switches on their connection (`switch`), the colo of those switches (`colo`), and the `bundles` you list (`bundle`). The IX-F export has no core bundle, so a bundle is a name and the IX-F switch ids behind it. An address is degraded when every vantage that measured it saw it past the ping tolerance; a probe error is not a measurement. A member is degraded in a group when all of its measured addresses behind that group are degraded. A group is a fabric problem when at least `min_members` members (default 3, 2 to 1000) and at least `degraded_pct` percent of its measured members (default 50, 1 to 100) are degraded; it raises `ixp.fabric_degraded`. A member that is degraded on every measured address and is in no such group raises `ixp.member_degraded`; one that is in such a group is part of the fabric event, not a member problem. A condition has to hold for `rounds` fabric rounds in a row (default 2, 1 to 10) before its event, and has to clear for as many before the resolving event, so one noisy round raises nothing. A switch and its colo, or a switch and a bundle, can all fire for one fault. An address behind two switches counts in both. A round with a stale member list has no samples, so open events resolve. `bundles` lists at most 64 entries, each with `name` (as for a vantage), optional `ixp_id` (switch ids are per IXP; 0 or omitted matches any), and `switches` (1 to 256 IX-F switch ids). Open events are held in memory; a restart starts clean. `GET /api/ixp/correlation` serves the latest evaluation; the metrics are `packeteer_ixp_fabric_groups_degraded` and `packeteer_ixp_members_degraded`. The events are `ixp.fabric_*` and `ixp.member_*` ([EVENTS.md](EVENTS.md)).
++
++Adding or removing `ixp`, including `members`, `vantages`, `fabric`, `routeservers`, and `correlate`, needs a restart. Rollback: remove `correlate`, or `routeservers`, or `vantages` and `fabric`, or the `ixp` block, and restart. Nothing was announced.
+ 
+ ### `lookup`
+ 
+diff --git a/docs/EVENTS.md b/docs/EVENTS.md
+index 42a2cba..8db5aa2 100644
+--- a/docs/EVENTS.md
++++ b/docs/EVENTS.md
+@@ -70,10 +70,14 @@ The same object is the `generic` webhook body and the `exec` `notify` params.
+ | `ixp.rs_max_prefix_cleared` | info | 48 | `server`, `session` | Accepted routes fell back below that share, the session is gone, or its server is stale. Not sent while the session is down, because a dropped session has no routes. Resolves `ixp.rs_max_prefix`. |
+ | `ixp.rs_filtered` | warning | 49 | `server`, `session` | At least `filtered_warn_pct` of a session's routes carry an `rs-asn:1101:x` tag. Fields: `asn`, `received`, `filtered`. |
+ | `ixp.rs_filtered_cleared` | info | 50 | `server`, `session` | The filtered share fell back below that, the session is gone, or its server is stale. Not sent while the session is down. Resolves `ixp.rs_filtered`. |
++| `ixp.fabric_degraded` | warning | 51 | `scope`, `ixp_id`, `group` | At least `min_members` members behind one switch, colo, or core bundle, and at least `degraded_pct` of the members measured there, are past the ping tolerance on every address, for `rounds` fabric rounds in a row (`ixp.correlate`, #163). `scope` is `switch`, `colo`, or `bundle`. `group` is the switch id, the colo name, or the bundle name. Fields: `name` (the display name), `members`, `degraded`, `asns` (the first 10). |
++| `ixp.fabric_recovered` | info | 52 | `scope`, `ixp_id`, `group` | The group stayed below those thresholds, or had no measured member, or the fabric data went stale, for `rounds` rounds. Resolves `ixp.fabric_degraded`. |
++| `ixp.member_degraded` | warning | 53 | `asn` | One member is past the ping tolerance on every measured address and is in no degraded group, for `rounds` rounds. Fields: `name`, `addresses`. |
++| `ixp.member_recovered` | info | 54 | `asn` | The member is back within tolerance, is now part of a degraded group, or the fabric data went stale. Resolves `ixp.member_degraded`. |
+ 
+ Problems and the events that resolve them share a **dedup key**: `packeteer/<group>/<key>=<value>`, for example `packeteer/provider/provider=transit-a` for both `provider.down` and `provider.up`. The `pagerduty` preset uses it as `dedup_key`, and `snmptrap` sends it as a varbind.
+ 
+-State events (`provider.*`, `bgp.*`, `commit.*`, `announce.*`, `inbound.*`, `mitigation.*`, `anomaly.*`, `ha.*`, `flap.*`, `exchange.*`, `ixp.rs_*`, `ixp.api_key_*`) fire on transitions only. Except `exchange.*`, `ixp.rs_*`, and `ixp.api_key_*`, they are checked on every decision (each probe round, each RIB change, and at least every `probe.interval`); `exchange.degraded` and `exchange.recovered` are checked once per `probe.interval` in the exchange health loop, `exchange.peer_*` and `exchange.max_prefix*` when the BMP RIB source reports a session event or a statistics count, `ixp.api_key_expiring` and `ixp.api_key_ok` when the member import starts and on each refresh, `ixp.rs_*` on each route-server poll, and commit at most once a minute. They are not repeated while the state holds. `leak.*` events fire on the first sighting of a prefix and when its hold is cleared.
++State events (`provider.*`, `bgp.*`, `commit.*`, `announce.*`, `inbound.*`, `mitigation.*`, `anomaly.*`, `ha.*`, `flap.*`, `exchange.*`, `ixp.rs_*`, `ixp.fabric_*`, `ixp.member_*`, `ixp.api_key_*`) fire on transitions only. Except `exchange.*`, `ixp.rs_*`, `ixp.fabric_*`, `ixp.member_*`, and `ixp.api_key_*`, they are checked on every decision (each probe round, each RIB change, and at least every `probe.interval`); `exchange.degraded` and `exchange.recovered` are checked once per `probe.interval` in the exchange health loop, `exchange.peer_*` and `exchange.max_prefix*` when the BMP RIB source reports a session event or a statistics count, `ixp.api_key_expiring` and `ixp.api_key_ok` when the member import starts and on each refresh, `ixp.rs_*` on each route-server poll, `ixp.fabric_*` and `ixp.member_*` on each new fabric probe round, and commit at most once a minute. They are not repeated while the state holds. `leak.*` events fire on the first sighting of a prefix and when its hold is cleared.
+ 
+ ## Testing delivery
+ 
+diff --git a/docs/FEATURES.md b/docs/FEATURES.md
+index 95a067e..af80fa6 100644
+--- a/docs/FEATURES.md
++++ b/docs/FEATURES.md
+@@ -191,10 +191,11 @@ The `maintenance` policy excludes providers during cron-scheduled, one-off, or o
+ | Per-member route server vs bilateral availability: prefixes seen only via the route server, only bilaterally, or both, with counts over time and a flag for a partial or filtered route server feed | done (#156: counts and flags on `/api/exchanges`, `GET /api/exchanges/member` for the prefixes and the counts kept in memory every 15 minutes, and columns on `/providers.html`; BMP Adj-RIB-In paths only, so a peer without `bmp: prefer` or `only` shows zero, and discovered members are not classified; read-only) | v0.8 | core (`internal/rib`, `internal/exchange`) + UI | #156 | no |
+ | Transit-to-IX offload report: flow bytes of prefixes whose exit is a transit while a configured IX peer advertises the exact prefix, with the estimated saving at the transit's `cost` | done (#152: `GET /api/exchanges/offload` as JSON or CSV, sorted by bytes, and a table on `/providers.html`; observe only, nothing is steered; needs a target source that reports volume and, per peer, the route check) | v0.8 | core (`internal/exchange`, `internal/httpapi`) + UI | #152 | no |
+ | Potential-peers report: destination origin ASNs ranked by flow bytes, whether each is present at one of our exchanges, whether a path via the LAN exists today, split into on the route server (check our session or filters) and bilateral only (candidate for a request) | partial (#154: `GET /api/exchanges/potential-peers` as JSON or CSV, with `?class=`, and two tables on `/providers.html`; presence is the configured peers and the discovered LAN members, and the session type needs BMP Adj-RIB-In paths; observe only, no session is opened). This report does not read `GET /api/lookup` (#153) yet | v0.8 | core (`internal/exchange`, `internal/httpapi`) + UI | #154 | no |
+-| IXP mode (exchange operator): `ixp: {}` refuses `mode: inject`, `announcer`, `mitigation`, `inbound`, `synthesize`, and `more_specific`; no `bgp.neighbors` or RIB view required; route-server data is a separate read-only store that never feeds the RIB or Decide | done (#160: charter and validation; #161: IX-F member import; #162: fabric probes; #164: route-server history and alerts. Signals and member pages are #163, #165-#167 and are not built) | v0.8 | core (`internal/config`) + `ixp_member` (`ixf`) + `ixp_fabric` (`icmp`) + `ixp_routeserver` (`birdseye`) | #160, #161, #162, #164 | no |
++| IXP mode (exchange operator): `ixp: {}` refuses `mode: inject`, `announcer`, `mitigation`, `inbound`, `synthesize`, and `more_specific`; no `bgp.neighbors` or RIB view required; route-server data is a separate read-only store that never feeds the RIB or Decide | done (#160: charter and validation; #161: IX-F member import; #162: fabric probes; #164: route-server history and alerts. #163: fabric incident correlation. Signals and member pages are #165-#167 and are not built) | v0.8 | core (`internal/config`) + `ixp_member` (`ixf`) + `ixp_fabric` (`icmp`) + `ixp_routeserver` (`birdseye`) + `ixp_correlate` (`topology`) | #160, #161, #162, #163, #164 | no |
+ | IX-F member import: members, ASNs, LAN addresses, port speeds, route-server client flags, `max_prefix`, `as_macro`, and switch or colo from IXP Manager or one named IX-F JSON URL | done (#161: `ixp.members` type `ixf`, `GET /api/ixp/members`, metrics; read-only, not the RIB, not an input to Decide, nothing announced) | v0.8 | `ixp_member` (`ixf`) | #161 | no |
+ | Fabric probes from IX vantages: loss, RTT, and jitter for each member LAN address, honoring Can Ping and the busy-host tolerance | done (#162: `ixp.vantages` and `ixp.fabric` type `icmp`, `GET /api/ixp/probes`, aggregate metrics; observe-only, not an input to Decide, nothing announced) | v0.8 | `ixp_fabric` (`icmp`) | #162 | no |
+ | Route-server observability via Birdseye: per member session state, received, accepted, and filtered counts, filtered-by-reason counts (`rs-asn:1101:x`), and accepted against `max_prefix`, kept as history, with alerts on changes | done (#164: `ixp.routeservers` type `birdseye`, `GET /api/ixp/routeservers` and `/history`, `ixp.rs_*` events, aggregate metrics; GET only, history is in memory, not the RIB, not an input to Decide, nothing announced) | v0.8 | `ixp_routeserver` (`birdseye`) + notifier events | #164 | no |
++| Fabric incident correlation: member fabric probes grouped by switch, colo, and core bundle; `ixp.fabric_degraded` when many members behind one group degrade together, `ixp.member_degraded` when one member does alone | done (#163: `ixp.correlate` type `topology`, `GET /api/ixp/correlation`, `ixp.fabric_*` and `ixp.member_*` events, aggregate metrics; reads the fabric probes only, the core bundle is an operator-named list of switch ids because IX-F carries none, in-memory state, not an input to Decide, nothing announced) | v0.8 | `ixp_correlate` (`topology`) + notifier events | #163 | no |
+ | PeeringDB / IX-F lookup: organization and network name per ASN, membership and LAN addresses at our exchanges, route-server participation, policy, and the `info_prefixes4`/`info_prefixes6` hint | done (#153: `lookup` type `peeringdb`, `GET /api/lookup`, metrics; read-only GETs into an in-memory cache refreshed daily and size-capped; optional IX-F URL per exchange; optional API key from `PACKETEER_PEERINGDB_API_KEY`; display only, not the RIB, not an input to Decide, nothing announced) | v0.8 | `lookup` (`peeringdb`) | #153 | no |
+ | Bgpd online reconfiguration (SIGHUP: add/remove/change iBGP sessions and the per-router table without touching other sessions) | done (lab-proven) | v0.3 | core + announcer (`gobgp`) + RIB | #27 | no (lab-proven) |
+ | Online reconfiguration of core settings (thresholds, hold time, cap, policies, sources) without a restart or a withdraw | done (lab-proven) | v0.6 | core (`cmd/controller` reload, `internal/configedit`) | #128 | no (lab-proven) |
+@@ -209,6 +210,8 @@ PeeringDB / IX-F lookup (#153) is the top-level `lookup` block with `type: peeri
+ 
+ Route-server observability (#164) is `ixp.routeservers` with `type: birdseye`. It GETs Birdseye's `api/status`, `api/protocols/bgp`, `api/routes/count/protocol/{protocol}`, and `api/routes/lc-zwild/protocol/{protocol}/{rs-asn}/1101` on each route server, without a key, and keeps per-session history (288 samples in memory) of state, received, accepted, filtered, filtered-by-reason, and `max_prefix`. Events: `ixp.rs_unreachable`, `ixp.rs_session_down`, `ixp.rs_max_prefix`, and `ixp.rs_filtered`, each with a resolving event. `GET /api/ixp/routeservers` serves the latest poll and `GET /api/ixp/routeservers/history` one session's samples. It is not an input to Decide, and nothing is announced. Rollback: remove `ixp.routeservers` and restart.
+ 
++Fabric incident correlation (#163) is `ixp.correlate` with `type: topology`, and needs `ixp.fabric`. It groups each fabric round by switch, colo, and `bundles` (operator-named lists of IX-F switch ids; IX-F has no core bundle). Events: `ixp.fabric_degraded` when at least `min_members` members and `degraded_pct` percent of the members measured behind one group are past the ping tolerance for `rounds` rounds, and `ixp.member_degraded` for one member that is degraded in no such group, each with a resolving event. `GET /api/ixp/correlation` serves the evaluation. It sends no probes and no requests, is not an input to Decide, and nothing is announced. Rollback: remove `ixp.correlate` and restart.
++
+ Leak watch (#199, [leak-watch.md](leak-watch.md)) is off unless `leak_watch.enabled: true`, which needs `packeteer_community` and a source. A leak source reports routes seen outside the iBGP sessions; a sighting that carries `packeteer_community` (or, with `as_path_rule`, shows an injected prefix with `asn` in its path) withdraws that one outbound route at once (never in bulk), holds the prefix out of outbound improvements and inbound steers until `POST /api/leaks/clear`, and emits `leak.detected`. Sources: `bmp` (post-policy Adj-RIB-In of routers outside the AS and Adj-RIB-Out of your own edge toward eBGP) and `rislive`. The export deny for customer, peer, and transit sessions, standard and large communities, is per vendor in [routers.md](routers.md#export-filters-on-every-ebgp-session) (#210).
+ 
+ A source that is down is unknown and never blocks a withdraw. Not built: the NLNOG RING looking glass as a source, the RPKI-invalid flag (needs #200), and the `synthesize` requirement (needs #122, which must reject `synthesize` without `leak_watch`). An inbound steer is held and removed at the next inbound sync. Threat mitigation routes are reported, not withdrawn. The FRR lab (`lab/e2e-leak-watch.sh`) runs a clean pass with no false positive, then a misconfigured export that leaks one of two injected routes: only that route is withdrawn and it stays out until cleared; a lost BMP feed reads unknown; SIGTERM and SIGKILL withdraw.
+diff --git a/docs/PLUGINS.md b/docs/PLUGINS.md
+index 93ece26..04cbed1 100644
+--- a/docs/PLUGINS.md
++++ b/docs/PLUGINS.md
+@@ -64,6 +64,7 @@ Each entry has `type` (required), an optional `name` (defaults to the type and m
+ | `lookup` | `View() LookupView`. Read-only PeeringDB / IX-F directory (#153); one instance under `lookup:`. Not a RIB source, not an input to Decide, and never announces | `peeringdb` | never |
+ | `ixp_member` | `View() MemberView`, `SetEventSink`. Read-only IX-F member list; one instance under `ixp.members`. Not a RIB source and never announces | `ixf` | never |
+ | `ixp_routeserver` | `View() RouteServerView`, `History(server, session)`, `SetMembers`, `SetEventSink`. Birdseye route-server poll with per-session history and alerts under `ixp.routeservers`. GET only, not a RIB source, not an input to Decide, and never announces | `birdseye` | never |
++| `ixp_correlate` | `View() CorrelationView`, `SetFabric`, `SetEventSink`. Groups the fabric samples by switch, colo, and core bundle and raises `ixp.fabric_degraded` or `ixp.member_degraded` (#163); one instance under `ixp.correlate`. Reads the fabric view only, not an input to Decide, and never announces | `topology` | never |
+ | `ixp_fabric` | `View() FabricView`, `SetMembers`, `SetVantages`. Member LAN loss, RTT, and jitter from `ixp.vantages`. Not a provider, not an input to Decide, and never announces | `icmp` | never |
+ | `elector` | `SetCandidate(func() Candidacy)`, `OnChange(func())`, `Active() bool`, `Resign(ctx)`, `Status()`. Active/standby leader election (#31); one instance under `ha:`. The core gates every announcer on `Active` and withdraws when it turns false | `lease` (lease file on a shared volume) | **never** |
+ | `federation` | `Publish(InstanceSnapshot)`, `Peers(now) []PeerState`. Instance-to-instance transport for multi-POP (#30); one instance under `federation:`. Transport only: the core merges fresh peer data into decisions | `mtls` (mutual TLS) | **never** |
+@@ -128,6 +129,7 @@ Embed `plugin.Base` for no-op `Start`/`Stop`.
+ - `peeringdb` (lookup, #153): under `lookup`. `exchanges` (required: `name`, `ix_id`, optional `ixf_url`), `base_url` (default `https://www.peeringdb.com`), `refresh` (default 24h, 1h-24h), `timeout` (default 30s, 1s-2m), `max_bytes` (default 8 MiB, 1024 to 32 MiB). The key is `PACKETEER_PEERINGDB_API_KEY`, sent only as an `Authorization` header to `base_url`. GET only, redirects refused, one request per 3 seconds (2 with a key). It does not announce. See [CONFIG.md](CONFIG.md#lookup).
+ - `ixf` (ixp_member, #161): one IX-F 1.0 member list under `ixp.members`. `url` (required), `refresh` (default 15m, 1m-24h), `timeout` (default 30s, 1s-2m), `max_bytes` (default 8 MiB, 1024 to 32 MiB), `key_expires` (`YYYY-MM-DD`, required when `PACKETEER_IXP_MANAGER_API_KEY` is set). The key is that environment variable, sent only as `X-IXP-Manager-API-Key` and only to the IXP Manager member export. A named IX-F URL is fetched with no key. It does not announce. See [CONFIG.md](CONFIG.md#ixp).
+ - `icmp` (ixp_fabric, #162): member LAN probes under `ixp.fabric`, sourced from `ixp.vantages`. `interval` (default 1m, 10s-1h), `timeout` (default 1s, 100ms-5s), `packets` (default 5, 1-20), `workers` (default 4, 1-64), `rate_limit_pps` (default 20, 1-10000), `member_pps` (default 1, per member ASN, at most `rate_limit_pps`). The packet sender is the built-in icmp prober. Can Ping off, and a customers-document host that does not use the member ping template, are not probed. A manager export with no successful Can Ping list, or one older than three intervals, is not probed. It does not announce. See [CONFIG.md](CONFIG.md#ixp).
++- `topology` (ixp_correlate, #163): fabric incident correlation under `ixp.correlate`, which requires `ixp.fabric`. `min_members` (default 3, 2-1000), `degraded_pct` (default 50, 1-100), `rounds` (default 2, 1-10), `bundles` (at most 64: `name`, optional `ixp_id`, `switches` as IX-F switch ids). See [CONFIG.md](CONFIG.md#ixp).
+ - `birdseye` (ixp_routeserver, #164): Birdseye polls under `ixp.routeservers`. `servers` (required, at most 8: `name`, `url`, `asn`), `interval` (default 5m, 1m-1h), `timeout` (default 15s, 1s-2m), `workers` (default 4, 1-8), `max_bytes` (default 8 MiB, 1024-32 MiB), `max_prefix_warn_pct` (default 90), `filtered_warn_pct` (default 50). GET only, four endpoints, no key, no redirects. See [CONFIG.md](CONFIG.md#ixp).
+ - `sqlite` (storage): report history in an embedded SQLite file. `path` (default `/var/lib/packeteer/packeteer.db`, absolute; mount a volume on the directory) and `retention` (default 400 days, `24h`–`87600h`). Daily probe rollups, one row per improvement with before/after loss and RTT, and per-prefix origin ASN, country, and volume. It also keeps SNMP 95th-percentile samples (#127): the open billing period is reloaded on start, and a closed period stays until `retention`. The controller buffers report rows and writes once a minute, so a slow disk never delays a decision or a withdraw. Sample writes happen when a poll is accepted and do not announce. Reports are built from the history rows by the core (`/api/reports`, CSV, dashboard). A `rules` policy with `geoip_db` supplies countries (`plugin.CountryLookup`). It does not announce. See [CONFIG.md](CONFIG.md#storage-sqlite).
+ - `fixed`: reports `usage_mbps` and `commit_mbps` from config or from a file re-read on every snapshot. Labs and tests only. It does not poll and it does not announce. A deployment uses `snmp`.
+diff --git a/docs/THREAT_MODEL.md b/docs/THREAT_MODEL.md
+index 2ef7ce4..15c3880 100644
+--- a/docs/THREAT_MODEL.md
++++ b/docs/THREAT_MODEL.md
+@@ -7,7 +7,7 @@ Packeteer can change how a network forwards packets. Failure modes matter more t
+ - **Flap** — oscillating improvements. Mitigate with hold time, hysteresis, and by keeping an improvement when the router hides the native path because Packeteer's route won. Withdrawing on that hide brings the native path back and the next round injects again.
+ - **Leak** — more-specifics learned from Packeteer advertised to transit. Mitigate with a well-known community and outbound filters on every eBGP session.
+ - **Blackhole** — inject toward a next-hop that is down. Mitigate by requiring a live RIB path and withdrawing on probe-source or session failure.
+-- **IXP mode.** An `ixp` block is an exchange operator. Validation refuses `mode: inject`, `announcer`, `mitigation`, `inbound`, `synthesize`, and `more_specific`. It does not announce and it does not change member routing. `ixp.members` is GET only, to the IXP Manager member export or one named IX-F URL. `ixp.fabric` probes member LAN addresses from `ixp.vantages` and, for a manager export, also GETs `/admin/api/v4/nagios/customers/{vlanid}/4` or `/6` on that same origin. A manager export is not probed unless that list was fetched. The API key comes from `PACKETEER_IXP_MANAGER_API_KEY` and is sent only as a header. `ixp.routeservers` GETs four Birdseye paths without a key and never sends the IXP Manager key there. None of them announces or changes member routing. See [design/ixp.md](design/ixp.md).
++- **IXP mode.** An `ixp` block is an exchange operator. Validation refuses `mode: inject`, `announcer`, `mitigation`, `inbound`, `synthesize`, and `more_specific`. It does not announce and it does not change member routing. `ixp.members` is GET only, to the IXP Manager member export or one named IX-F URL. `ixp.fabric` probes member LAN addresses from `ixp.vantages` and, for a manager export, also GETs `/admin/api/v4/nagios/customers/{vlanid}/4` or `/6` on that same origin. A manager export is not probed unless that list was fetched. The API key comes from `PACKETEER_IXP_MANAGER_API_KEY` and is sent only as a header. `ixp.routeservers` GETs four Birdseye paths without a key and never sends the IXP Manager key there. `ixp.correlate` reads the fabric probe results and makes no request. None of them announces or changes member routing. See [design/ixp.md](design/ixp.md).
+ - **PeeringDB lookup.** `lookup` type `peeringdb` sends only GETs to `base_url` and to each `ixf_url`. `PACKETEER_PEERINGDB_API_KEY` goes only in an `Authorization` header to `base_url`; a URL holding the key is refused, redirects are not followed, and the key is redacted from errors and absent from the API. Responses and rows are size-capped, a bad refresh keeps the last good cache, and a stale cache serves nothing. It never announces and never feeds the RIB view or Decide.
+ - **Over-injection** — synthesizing more-specifics can exhaust TCAM. Packeteer announces only the exact prefix a neighbor advertised, so `max_improvements` bounds the number of routes. A config that sets `more_specific_bits` is rejected. With `more_specific` on, an improvement also announces learned more-specifics (still exact RIB prefixes), and `more_specific.max_routes` (default 100, at most 1000) bounds the routes on the router.
+ - **Stale intent** — controller dies, or keeps announcing a prefix the edge no longer has, or keeps announcing after probes stop refreshing. Packeteer withdraws on shutdown, when a prefix the router was still advertising disappears, when measurements are older than the max result age (checked on a timer, not only when a round completes), and at `improvement_ttl` when the native path is hidden by Packeteer's own route. A probe round that does not finish is abandoned at that same age and does not refresh results. It never enables graceful restart. The BGP hold timer is the backstop if the process is killed before the withdraw is sent. Packeteer proposes a 90s hold time so the timer cannot negotiate off; the router's shorter timer wins. The lab SIGKILLs Packeteer and checks that FRR drops the injected route once the session is down, and no later than that hold timer.
+diff --git a/docs/design/ixp.md b/docs/design/ixp.md
+index 5ed341e..f0662e2 100644
+--- a/docs/design/ixp.md
++++ b/docs/design/ixp.md
+@@ -1,9 +1,9 @@
+ # IXP mode (#160)
+ 
+ Status: charter, config gate, IX-F member import (#161), fabric
+-probes (#162), and route-server history and alerts (#164). Signals,
+-member pages, and multi-site fabric health are #163 and #165-#167 and
+-are not built. An `ixp` block does not announce or open a route-server
++probes (#162), fabric incident correlation (#163), and route-server
++history and alerts (#164). Signals, member pages, and multi-site fabric
++health are #165-#167 and are not built. An `ixp` block does not announce or open a route-server
+ session.
+ 
+ An Internet exchange operator runs Packeteer to observe its fabric,
+@@ -13,7 +13,7 @@ route servers, and members. It does not route for them. This is not the
+ ## Turning it on
+ 
+ `ixp: {}` in the config. The keys are `members` (#161), `vantages`
+-and `fabric` (#162), and `routeservers` (#164). Any other key is an error. Omitted, or `ixp: null`,
++and `fabric` (#162), `routeservers` (#164), and `correlate` (#163). Any other key is an error. Omitted, or `ixp: null`,
+ is not IXP mode. `mode` stays `observe`. `mode: suggest` is accepted
+ and announces nothing. The shipped example leaves the block commented
+ out.
+@@ -121,6 +121,25 @@ An IX-F address with `can_ping: false` is not probed. Probes stay inside
+ the VLAN prefix. Nothing is announced, and the measurements are not an
+ input to Decide.
+ 
++## Fabric incident correlation
++
++`ixp.correlate` (#163) makes no request of its own. It reads the latest
++fabric probe round and groups the measured member addresses by the
++switches of their IX-F connection, the colo of those switches, and the
++operator's `bundles`. IX-F has no core bundle, so a bundle is a name and
++a list of switch ids. A member is degraded in a group when every measured
++address it has behind the group is past the ping tolerance from every
++vantage that measured it. A probe error is not a measurement.
++
++A group is a fabric problem (`ixp.fabric_degraded`) when `min_members`
++members and `degraded_pct` percent of its measured members are degraded.
++A member that is degraded on every address and is in no such group is a
++member problem (`ixp.member_degraded`). A member inside a fabric problem
++is reported only by that fabric event. Both need `rounds` consecutive
++rounds, and both clear after as many. With one vantage, a fault on the
++vantage's own link looks like a fabric fault; use two vantages on a LAN
++to tell them apart. The state is in memory.
++
+ ## Lab data
+ 
+ Member data is never committed. Lab fixtures use documentation prefixes
+@@ -128,5 +147,5 @@ Member data is never committed. Lab fixtures use documentation prefixes
+ documentation or private ASNs (64496-64511, 65536-65551, or
+ 64512-65534).
+ 
+-Rollback: remove `ixp.members`, `ixp.routeservers`, or `ixp.vantages`
+-and `ixp.fabric`, or the `ixp` block, and restart. Nothing was announced.
++Rollback: remove `ixp.members`, `ixp.routeservers`, `ixp.correlate`, or
++`ixp.vantages` and `ixp.fabric`, or the `ixp` block, and restart. Nothing was announced.
+diff --git a/internal/config/ixp.go b/internal/config/ixp.go
+index 80427bf..1874f97 100644
+--- a/internal/config/ixp.go
++++ b/internal/config/ixp.go
+@@ -6,6 +6,8 @@ import (
+ 	"net/netip"
+ 
+ 	"gopkg.in/yaml.v3"
++
++	"github.com/GrandArcher/Packeteer/pkg/plugin"
+ )
+ 
+ // Bounds for ixp.vantages (#162).
+@@ -16,13 +18,14 @@ const (
+ 
+ // IXP is exchange-operator mode (#160). A non-nil value, including an
+ // empty block, is IXP mode. IXP mode never announces. Keys are members
+-// (#161), vantages and fabric (#162), and routeservers (#164). Any other
+-// key is a parse error.
++// (#161), vantages and fabric (#162), routeservers (#164), and correlate
++// (#163). Any other key is a parse error.
+ type IXP struct {
+ 	Members      *PluginSpec `yaml:"members,omitempty"`
+ 	Vantages     []Vantage   `yaml:"vantages,omitempty"`
+ 	Fabric       *PluginSpec `yaml:"fabric,omitempty"`
+ 	RouteServers *PluginSpec `yaml:"routeservers,omitempty"`
++	Correlate    *PluginSpec `yaml:"correlate,omitempty"`
+ }
+ 
+ // Vantage is one IX-owned monitoring address on a peering LAN (#162).
+@@ -89,6 +92,9 @@ func (c *Config) validateIXP(add func(string, ...any)) {
+ 		add("ixp forbids more_specific: IXP mode never announces")
+ 	}
+ 	c.validateVantages(add)
++	if c.IXP.Correlate != nil && c.IXP.Fabric == nil {
++		add("ixp.correlate requires ixp.fabric")
++	}
+ }
+ 
+ func (c *Config) validateVantages(add func(string, ...any)) {
+@@ -111,7 +117,7 @@ func (c *Config) validateVantages(add func(string, ...any)) {
+ 	for i := range ix.Vantages {
+ 		v := &ix.Vantages[i]
+ 		p := fmt.Sprintf("ixp.vantages[%d]", i)
+-		if !validVantageName(v.Name) {
++		if !plugin.ValidLabel(v.Name) {
+ 			add("%s.name is invalid", p)
+ 		} else if seenName[v.Name] {
+ 			add("%s.name %q is duplicated", p, v.Name)
+@@ -142,21 +148,6 @@ func (c *Config) validateVantages(add func(string, ...any)) {
+ 	}
+ }
+ 
+-func validVantageName(s string) bool {
+-	if s == "" || len(s) > 64 {
+-		return false
+-	}
+-	for i, c := range s {
+-		switch {
+-		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9':
+-		case i > 0 && (c == '.' || c == '_' || c == '-'):
+-		default:
+-			return false
+-		}
+-	}
+-	return true
+-}
+-
+ func usableVantage(a netip.Addr) bool {
+ 	return a.IsValid() && !a.IsUnspecified() && !a.IsMulticast() && !a.IsLoopback() && !a.IsLinkLocalUnicast() && !a.IsLinkLocalMulticast()
+ }
+diff --git a/internal/config/ixp_test.go b/internal/config/ixp_test.go
+index 46dde8e..f2e7cb7 100644
+--- a/internal/config/ixp_test.go
++++ b/internal/config/ixp_test.go
+@@ -251,3 +251,44 @@ ixp:
+ 		t.Fatalf("inject: %v", err)
+ 	}
+ }
++
++const ixpCorrelateBlock = `ixp:
++  members:
++    type: ixf
++    config:
++      url: https://ixp.example.invalid/members.json
++  vantages:
++    - {name: lan1-v4, vlan_id: 10, address: 192.0.2.8}
++  fabric: {type: icmp}
++  correlate:
++    type: topology
++    config:
++      min_members: 4
++      bundles:
++        - {name: core-1, switches: [1, 2]}
++`
++
++func TestIXPCorrelateConfig(t *testing.T) {
++	cfg, err := Parse([]byte(minimalYAML + ixpCorrelateBlock))
++	if err != nil {
++		t.Fatal(err)
++	}
++	if cfg.IXP == nil || cfg.IXP.Correlate == nil || cfg.IXP.Correlate.Type != "topology" {
++		t.Fatalf("%+v", cfg.IXP)
++	}
++
++	noFabric := "ixp:\n  correlate: {type: topology}\n"
++	_, err = Parse([]byte(minimalYAML + noFabric))
++	if err == nil || !strings.Contains(err.Error(), "ixp.correlate requires ixp.fabric") {
++		t.Fatalf("no fabric: %v", err)
++	}
++	_, err = Parse([]byte(minimalYAML + "ixp:\n  correlate: {}\n"))
++	if err == nil || !strings.Contains(err.Error(), "ixp.correlate: type is required") {
++		t.Fatalf("no type: %v", err)
++	}
++	inject := strings.Replace(minimalYAML, "mode: observe", "mode: inject", 1) + ixpCorrelateBlock + "announcer: {type: gobgp}\n"
++	_, err = Parse([]byte(inject))
++	if err == nil || !strings.Contains(err.Error(), "ixp forbids mode inject") || !strings.Contains(err.Error(), "ixp forbids announcer") {
++		t.Fatalf("inject with correlate: %v", err)
++	}
++}
+diff --git a/internal/config/validate.go b/internal/config/validate.go
+index 56efdb8..ffa1006 100644
+--- a/internal/config/validate.go
++++ b/internal/config/validate.go
+@@ -354,6 +354,9 @@ func (c *Config) validatePlugins(add func(string, ...any)) {
+ 	if c.IXP != nil && c.IXP.RouteServers != nil && c.IXP.RouteServers.Type == "" {
+ 		add("ixp.routeservers: type is required")
+ 	}
++	if c.IXP != nil && c.IXP.Correlate != nil && c.IXP.Correlate.Type == "" {
++		add("ixp.correlate: type is required")
++	}
+ 	if c.Announcer != nil && c.Announcer.Type == "" {
+ 		add("announcer: type is required")
+ 	}
+diff --git a/internal/httpapi/access.go b/internal/httpapi/access.go
+index 3d4e6c5..425c37f 100644
+--- a/internal/httpapi/access.go
++++ b/internal/httpapi/access.go
+@@ -69,6 +69,7 @@ func (s *Server) routeTable() []route {
+ 		{"GET /api/ixp/probes", viewer, s.handleIXPProbes},
+ 		{"GET /api/ixp/routeservers", viewer, s.handleIXPRouteServers},
+ 		{"GET /api/ixp/routeservers/history", viewer, s.handleIXPRouteServerHistory},
++		{"GET /api/ixp/correlation", viewer, s.handleIXPCorrelation},
+ 		{"GET /api/linkouts", viewer, s.handleLinkouts},
+ 		{"GET /api/federation", viewer, s.handleFederation},
+ 		{"GET /api/ha", viewer, s.handleHA},
+diff --git a/internal/httpapi/ixp.go b/internal/httpapi/ixp.go
+index 153813d..e6a3b09 100644
+--- a/internal/httpapi/ixp.go
++++ b/internal/httpapi/ixp.go
+@@ -259,3 +259,59 @@ func IXPRouteServerMetrics(v plugin.RouteServerView, now time.Time) []byte {
+ 	}
+ 	return []byte(b.String())
+ }
++
++// SetIXPCorrelation installs the fabric incident view (#163). The function
++// is called on each request. It must not probe or announce.
++func (s *Server) SetIXPCorrelation(fn func() plugin.CorrelationView) {
++	if s == nil {
++		return
++	}
++	s.ixpCorrelation.Store(fn)
++}
++
++func (s *Server) ixpCorrelationView() (plugin.CorrelationView, bool) {
++	fn, _ := s.ixpCorrelation.Load().(func() plugin.CorrelationView)
++	if fn == nil {
++		return plugin.CorrelationView{}, false
++	}
++	return fn(), true
++}
++
++func (s *Server) handleIXPCorrelation(w http.ResponseWriter, _ *http.Request) {
++	v, _ := s.ixpCorrelationView()
++	if v.Groups == nil {
++		v.Groups = []plugin.CorrelationGroup{}
++	}
++	if v.Members == nil {
++		v.Members = []plugin.CorrelationMember{}
++	}
++	writeJSON(w, http.StatusOK, struct {
++		meta
++		plugin.CorrelationView
++	}{meta: s.snapshot().meta(), CorrelationView: v})
++}
++
++// IXPCorrelationMetrics renders the incident correlator: the groups and
++// members whose events are open, which the view always lists. There is no per-member series.
++func IXPCorrelationMetrics(v plugin.CorrelationView) []byte {
++	if !v.Configured {
++		return nil
++	}
++	var groups, members int
++	for _, g := range v.Groups {
++		if g.Active {
++			groups++
++		}
++	}
++	for _, m := range v.Members {
++		if m.Active {
++			members++
++		}
++	}
++	var b strings.Builder
++	writeGauge(&b, "packeteer_ixp_fabric_groups_degraded", "Switches, colos, and bundles with an open ixp.fabric_degraded event.",
++		sample{value: float64(groups)})
++	writeGauge(&b, "packeteer_ixp_members_degraded", "Members with an open ixp.member_degraded event.",
++		sample{value: float64(members)})
++	return []byte(b.String())
++}
+diff --git a/internal/httpapi/ixp_test.go b/internal/httpapi/ixp_test.go
+index 2ffd17b..bd44e2a 100644
+--- a/internal/httpapi/ixp_test.go
++++ b/internal/httpapi/ixp_test.go
+@@ -320,3 +320,63 @@ func newIXPServer(t *testing.T) *Server {
+ 	}
+ 	return s
+ }
++
++func TestIXPCorrelationAPIAndMetrics(t *testing.T) {
++	s := newIXPServer(t)
++	rec := httptest.NewRecorder()
++	s.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/ixp/correlation", nil))
++	if rec.Code != http.StatusOK {
++		t.Fatalf("%d %s", rec.Code, rec.Body)
++	}
++	var body map[string]any
++	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
++		t.Fatal(err)
++	}
++	groups, ok := body["groups"].([]any)
++	members, ok2 := body["members"].([]any)
++	if body["configured"] != false || !ok || len(groups) != 0 || !ok2 || len(members) != 0 {
++		t.Fatalf("unconfigured: %s", rec.Body)
++	}
++	mrec := httptest.NewRecorder()
++	s.Handler().ServeHTTP(mrec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
++	if strings.Contains(mrec.Body.String(), "packeteer_ixp_") {
++		t.Fatalf("metrics without the correlator:\n%s", mrec.Body)
++	}
++
++	s.SetIXPCorrelation(func() plugin.CorrelationView {
++		return plugin.CorrelationView{
++			Configured: true,
++			Round:      time.Unix(1000, 0).UTC(),
++			Groups: []plugin.CorrelationGroup{
++				{Scope: "switch", IXPID: 1, Name: "sw1", Members: 4, Degraded: 4, DegradedPct: 100, Active: true, ASNs: []uint32{64496, 64497, 64498, 64499}},
++				{Scope: "switch", IXPID: 1, Name: "sw2", Members: 3, Degraded: 1, DegradedPct: 33.3, ASNs: []uint32{64500}},
++			},
++			Members: []plugin.CorrelationMember{{ASN: 64501, Name: "Example Net", Addresses: 2, Active: true}, {ASN: 64502, Addresses: 1}},
++		}
++	})
++	rec = httptest.NewRecorder()
++	s.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/ixp/correlation", nil))
++	text := rec.Body.String()
++	for _, want := range []string{`"configured":true`, `"scope":"switch"`, `"name":"sw1"`, `"degraded":4`, `"degraded_pct":100`, `"active":true`, `"asns":[64496,64497,64498,64499]`, `"asn":64501`, `"addresses":2`} {
++		if !strings.Contains(text, want) {
++			t.Errorf("missing %s in %s", want, text)
++		}
++	}
++	mrec = httptest.NewRecorder()
++	s.Handler().ServeHTTP(mrec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
++	metrics := mrec.Body.String()
++	for _, want := range []string{"packeteer_ixp_fabric_groups_degraded 1\n", "packeteer_ixp_members_degraded 1\n"} {
++		if !strings.Contains(metrics, want) {
++			t.Errorf("missing %s in\n%s", want, metrics)
++		}
++	}
++	if strings.Contains(metrics, "64501") || strings.Contains(metrics, "sw1") {
++		t.Fatalf("per-member or per-group series:\n%s", metrics)
++	}
++
++	wrong := httptest.NewRecorder()
++	s.Handler().ServeHTTP(wrong, httptest.NewRequest(http.MethodPost, "/api/ixp/correlation", nil))
++	if wrong.Code == http.StatusOK {
++		t.Fatalf("POST answered %d", wrong.Code)
++	}
++}
+diff --git a/internal/httpapi/server.go b/internal/httpapi/server.go
+index d94c2b6..7c2d925 100644
+--- a/internal/httpapi/server.go
++++ b/internal/httpapi/server.go
+@@ -153,6 +153,9 @@ type Server struct {
+ 	// ixpRouteServers is the Birdseye watch (#164). Nil until
+ 	// SetIXPRouteServers. Read at request time. It never announces.
+ 	ixpRouteServers atomic.Value
++	// ixpCorrelation is the fabric incident correlator (#163). Nil until
++	// SetIXPCorrelation. Read at request time. It never announces.
++	ixpCorrelation atomic.Value
+ 	// quarantine releases a flap-quarantined prefix (#228). Nil until
+ 	// SetQuarantine.
+ 	quarantine atomic.Value
+@@ -354,6 +357,9 @@ func (s *Server) handleMetrics(w http.ResponseWriter, _ *http.Request) {
+ 	if src, ok := s.ixpRouteServerSource(); ok {
+ 		_, _ = w.Write(IXPRouteServerMetrics(src.view(), time.Now()))
+ 	}
++	if v, ok := s.ixpCorrelationView(); ok && v.Configured {
++		_, _ = w.Write(IXPCorrelationMetrics(v))
++	}
+ }
+ 
+ func (s *Server) handleProviders(w http.ResponseWriter, _ *http.Request) {
+diff --git a/internal/pluginhost/host.go b/internal/pluginhost/host.go
+index 0e0c3e6..0d5237e 100644
+--- a/internal/pluginhost/host.go
++++ b/internal/pluginhost/host.go
+@@ -52,6 +52,9 @@ type Set struct {
+ 	// IXPRouteServers polls Birdseye on each route server (#164). It reads
+ 	// with GET only, keeps its own store, and never announces.
+ 	IXPRouteServers *Instance[plugin.RouteServerWatch]
++	// IXPCorrelate tells a fabric problem from a member problem (#163). It
++	// reads the fabric probe view only and never announces.
++	IXPCorrelate *Instance[plugin.FabricCorrelator]
+ 	// RIBSources feed the RIB view (BMP). They never announce.
+ 	RIBSources []Instance[plugin.RIBSource]
+ 	// Federation is the multi-POP transport (#30). It never announces.
+@@ -194,6 +197,11 @@ func Build(cfg *config.Config, opts Options) (*Set, error) {
+ 			s.IXPRouteServers = &b[0]
+ 		}
+ 	}
++	if cfg.IXP != nil && cfg.IXP.Correlate != nil {
++		if b := build(plugin.FabricCorrelators, "ixp.correlate", []config.PluginSpec{*cfg.IXP.Correlate}, base, &errs); len(b) == 1 {
++			s.IXPCorrelate = &b[0]
++		}
++	}
+ 	if err := errors.Join(errs...); err != nil {
+ 		return nil, err
+ 	}
+@@ -280,6 +288,10 @@ func (s *Set) all() []namedLifecycle {
+ 	if s.IXPRouteServers != nil {
+ 		add(plugin.KindRouteServer, s.IXPRouteServers.Name, s.IXPRouteServers.Plugin)
+ 	}
++	// After the fabric prober, whose view it reads. Nothing here announces.
++	if s.IXPCorrelate != nil {
++		add(plugin.KindCorrelator, s.IXPCorrelate.Name, s.IXPCorrelate.Plugin)
++	}
+ 	// Before the announcers, so it stops after them. The core withdraws
+ 	// and resigns before any plugin stops.
+ 	if s.Elector != nil {
+diff --git a/internal/pluginhost/host_test.go b/internal/pluginhost/host_test.go
+index f6d5254..1ca181a 100644
+--- a/internal/pluginhost/host_test.go
++++ b/internal/pluginhost/host_test.go
+@@ -515,3 +515,43 @@ lookup:
+ 		t.Fatalf("err %v", err)
+ 	}
+ }
++
++func TestIXPCorrelateDoesNotAnnounce(t *testing.T) {
++	const block = `
++ixp:
++  members:
++    type: ixf
++    config:
++      url: https://ixp.example.invalid/members.json
++  vantages:
++    - {name: lan1-v4, vlan_id: 10, address: 192.0.2.8}
++  fabric: {type: icmp}
++  correlate:
++    type: topology
++    config:
++      rounds: 3
++`
++	s, err := Build(load(t, block), Options{})
++	if err != nil {
++		t.Fatal(err)
++	}
++	if s.IXPCorrelate == nil || s.IXPCorrelate.Type != "topology" {
++		t.Fatalf("%+v", s.IXPCorrelate)
++	}
++	if s.Announcer != nil || len(s.RIBSources) != 0 || s.Inbound != nil || s.Mitigation != nil {
++		t.Fatalf("announce path built: %v rib %d", s.Announcer, len(s.RIBSources))
++	}
++	sum := s.Summary()
++	iFab, iCor := slices.Index(sum, "ixp_fabric icmp"), slices.Index(sum, "ixp_correlate topology")
++	if iFab < 0 || iCor < iFab {
++		t.Fatalf("the correlator must start after the fabric prober: %v", sum)
++	}
++	v := s.IXPCorrelate.Plugin.View()
++	if !v.Configured || len(v.Groups) != 0 || len(v.Members) != 0 {
++		t.Fatalf("%+v", v)
++	}
++	bad := strings.Replace(block, "rounds: 3", "rounds: 99", 1)
++	if _, err := Build(load(t, bad), Options{}); err == nil || !strings.Contains(err.Error(), "ixp.correlate") {
++		t.Fatalf("bad rounds: %v", err)
++	}
++}
+diff --git a/internal/plugins/all/all.go b/internal/plugins/all/all.go
+index 602c23e..3ffd3cf 100644
+--- a/internal/plugins/all/all.go
++++ b/internal/plugins/all/all.go
+@@ -8,6 +8,7 @@ import (
+ 	_ "github.com/GrandArcher/Packeteer/internal/plugins/elector/lease"           // lease-file HA elector
+ 	_ "github.com/GrandArcher/Packeteer/internal/plugins/exec"                    // exec prober/source/notifier
+ 	_ "github.com/GrandArcher/Packeteer/internal/plugins/federation/mtls"         // mTLS multi-POP federation
++	_ "github.com/GrandArcher/Packeteer/internal/plugins/ixpcorrelate/topology"   // IX fabric incident correlator (observe-only)
+ 	_ "github.com/GrandArcher/Packeteer/internal/plugins/ixpfabric/icmp"          // IX fabric prober (observe-only)
+ 	_ "github.com/GrandArcher/Packeteer/internal/plugins/ixpmember/ixf"           // IX-F member import (read-only)
+ 	_ "github.com/GrandArcher/Packeteer/internal/plugins/ixprouteserver/birdseye" // Birdseye route-server watch (read-only)
+diff --git a/internal/plugins/ixpcorrelate/topology/correlate.go b/internal/plugins/ixpcorrelate/topology/correlate.go
+new file mode 100644
+index 0000000..00501e9
+--- /dev/null
++++ b/internal/plugins/ixpcorrelate/topology/correlate.go
+@@ -0,0 +1,190 @@
++package topology
++
++import (
++	"sort"
++	"strconv"
++
++	"github.com/GrandArcher/Packeteer/pkg/plugin"
++)
++
++// groupKey identifies one switch, colo, or bundle. Switch ids are per
++// IXP, so the IXP id is part of every key. id is the switch id, the colo
++// name, or the bundle name.
++type groupKey struct {
++	scope string
++	ixp   int
++	id    string
++}
++
++// group is one group in one round.
++type group struct {
++	key      groupKey
++	name     string
++	members  int
++	degraded []uint32
++}
++
++// member is a member that is degraded on every measured address.
++type member struct {
++	asn       uint32
++	name      string
++	addresses int
++}
++
++// observation is one round, before any hysteresis.
++type observation struct {
++	groups []group
++	// firing is the keys of the groups that meet the thresholds.
++	firing map[groupKey]bool
++	// alone is the degraded members that no firing group explains.
++	alone []member
++}
++
++type addrKey struct {
++	ixp, vlan int
++	addr      string
++}
++
++type addrState struct {
++	asn      uint32
++	name     string
++	ixp      int
++	switches []plugin.FabricSwitch
++	bad      bool
++}
++
++// tally counts one member's measured addresses behind one group.
++type tally struct{ total, bad int }
++
++type groupAcc struct {
++	name    string
++	members map[uint32]*tally
++}
++
++// observe groups one fabric round. An address is measured when at least
++// one vantage got a result for it, and degraded when every such vantage
++// saw it past tolerance. A probe error is not a measurement. A member is
++// degraded in a group when every address it has there is degraded. A
++// member behind several switches counts in each of them.
++func observe(samples []plugin.FabricSample, bundles []Bundle, cfg thresholds) observation {
++	addrs := map[addrKey]*addrState{}
++	for _, s := range samples {
++		if s.Error != "" || s.Sent == 0 {
++			continue
++		}
++		k := addrKey{s.IXPID, s.VLANID, s.Address}
++		a := addrs[k]
++		if a == nil {
++			a = &addrState{asn: s.ASN, name: s.Name, ixp: s.IXPID, switches: s.Switches, bad: true}
++			addrs[k] = a
++		}
++		if !s.PastTolerance {
++			a.bad = false
++		}
++	}
++
++	byMember := map[uint32]*tally{}
++	names := map[uint32]string{}
++	acc := map[groupKey]*groupAcc{}
++	for _, a := range addrs {
++		t := byMember[a.asn]
++		if t == nil {
++			t = &tally{}
++			byMember[a.asn] = t
++		}
++		names[a.asn] = a.name
++		t.total++
++		if a.bad {
++			t.bad++
++		}
++		for k, name := range groupsOf(a, bundles) {
++			g := acc[k]
++			if g == nil {
++				g = &groupAcc{name: name, members: map[uint32]*tally{}}
++				acc[k] = g
++			}
++			mt := g.members[a.asn]
++			if mt == nil {
++				mt = &tally{}
++				g.members[a.asn] = mt
++			}
++			mt.total++
++			if a.bad {
++				mt.bad++
++			}
++		}
++	}
++
++	obs := observation{firing: map[groupKey]bool{}}
++	explained := map[uint32]bool{}
++	for k, g := range acc {
++		out := group{key: k, name: g.name, members: len(g.members)}
++		for asn, t := range g.members {
++			if t.bad == t.total {
++				out.degraded = append(out.degraded, asn)
++			}
++		}
++		sort.Slice(out.degraded, func(i, j int) bool { return out.degraded[i] < out.degraded[j] })
++		if cfg.fires(len(out.degraded), out.members) {
++			obs.firing[k] = true
++			for _, asn := range out.degraded {
++				explained[asn] = true
++			}
++		}
++		obs.groups = append(obs.groups, out)
++	}
++	sort.Slice(obs.groups, func(i, j int) bool { return lessKey(obs.groups[i].key, obs.groups[j].key) })
++
++	for asn, t := range byMember {
++		if t.bad == t.total && !explained[asn] {
++			obs.alone = append(obs.alone, member{asn: asn, name: names[asn], addresses: t.total})
++		}
++	}
++	sort.Slice(obs.alone, func(i, j int) bool { return obs.alone[i].asn < obs.alone[j].asn })
++	return obs
++}
++
++func lessKey(a, b groupKey) bool {
++	if a.scope != b.scope {
++		return a.scope < b.scope
++	}
++	if a.ixp != b.ixp {
++		return a.ixp < b.ixp
++	}
++	return a.id < b.id
++}
++
++// groupsOf returns the groups an address belongs to, with display names.
++// Two switches in one colo put the address in that colo once.
++func groupsOf(a *addrState, bundles []Bundle) map[groupKey]string {
++	out := map[groupKey]string{}
++	for _, sw := range a.switches {
++		id := strconv.Itoa(sw.ID)
++		name := sw.Name
++		if name == "" {
++			name = "switch-" + id
++		}
++		out[groupKey{plugin.ScopeSwitch, a.ixp, id}] = name
++		if sw.Colo != "" {
++			out[groupKey{plugin.ScopeColo, a.ixp, sw.Colo}] = sw.Colo
++		}
++		for _, b := range bundles {
++			if b.has(a.ixp, sw.ID) {
++				out[groupKey{plugin.ScopeBundle, a.ixp, b.Name}] = b.Name
++			}
++		}
++	}
++	return out
++}
++
++// thresholds decide when a group is a fabric problem.
++type thresholds struct {
++	minMembers int
++	pct        int
++}
++
++// fires is true when enough members are degraded, and enough of the
++// measured members. Both guard against a two-member switch alarming.
++func (t thresholds) fires(degraded, measured int) bool {
++	return degraded >= t.minMembers && degraded*100 >= t.pct*measured
++}
+diff --git a/internal/plugins/ixpcorrelate/topology/plugin.go b/internal/plugins/ixpcorrelate/topology/plugin.go
+new file mode 100644
+index 0000000..a6c8671
+--- /dev/null
++++ b/internal/plugins/ixpcorrelate/topology/plugin.go
+@@ -0,0 +1,469 @@
++// Package topology is the ixp.correlate plugin (#163). It reads the fabric
++// probe view, groups member measurements by switch, colo, and core bundle,
++// and raises ixp.fabric_degraded when many members behind one group
++// degrade together and ixp.member_degraded when one member does alone. It
++// does not probe, does not announce, and is not an input to Decide.
++package topology
++
++import (
++	"cmp"
++	"context"
++	"fmt"
++	"slices"
++	"strconv"
++	"strings"
++	"sync"
++	"time"
++
++	"github.com/GrandArcher/Packeteer/pkg/plugin"
++)
++
++// TypeName is the config type.
++const TypeName = "topology"
++
++// Defaults and bounds. A zero value in config selects the default.
++const (
++	DefaultMinMembers  = 3
++	minMinMembers      = 2
++	maxMinMembers      = 1000
++	DefaultDegradedPct = 50
++	DefaultRounds      = 2
++	maxRounds          = 10
++	maxBundles         = 64
++	maxBundleSwitches  = 256
++
++	// pollEvery is how often the loop looks for a new fabric round. It is
++	// not a config knob: the prober interval is at least 10 seconds.
++	pollEvery = 5 * time.Second
++	// maxASNsInEvent bounds the asns field of an event.
++	maxASNsInEvent = 10
++)
++
++// Bundle names the switches that share one core link bundle. IX-F carries
++// no core bundle, so the operator lists them. IXPID 0 matches any IXP.
++type Bundle struct {
++	Name     string `yaml:"name"`
++	IXPID    int    `yaml:"ixp_id"`
++	Switches []int  `yaml:"switches"`
++}
++
++func (b Bundle) has(ixp, sw int) bool {
++	if b.IXPID != 0 && b.IXPID != ixp {
++		return false
++	}
++	for _, id := range b.Switches {
++		if id == sw {
++			return true
++		}
++	}
++	return false
++}
++
++// Config is the topology correlator's config block.
++type Config struct {
++	MinMembers  int      `yaml:"min_members"`
++	DegradedPct int      `yaml:"degraded_pct"`
++	Rounds      int      `yaml:"rounds"`
++	Bundles     []Bundle `yaml:"bundles"`
++}
++
++func init() { plugin.FabricCorrelators.Register(TypeName, New) }
++
++// The controller stores the correlator as a FabricCorrelator.
++var _ plugin.FabricCorrelator = (*Correlator)(nil)
++
++// flip is a state with hysteresis: it changes only after rounds
++// consecutive observations that disagree with it.
++type flip struct {
++	active bool
++	n      int
++}
++
++func (f *flip) step(cond bool, rounds int) bool {
++	if cond == f.active {
++		f.n = 0
++		return false
++	}
++	f.n++
++	if f.n < rounds {
++		return false
++	}
++	f.active, f.n = cond, 0
++	return true
++}
++
++func (f *flip) idle() bool { return !f.active && f.n == 0 }
++
++type groupState struct {
++	flip
++	last group
++}
++
++type memberState struct {
++	flip
++	last member
++}
++
++// Correlator is the topology correlator.
++type Correlator struct {
++	th      thresholds
++	rounds  int
++	bundles []Bundle
++	now     func() time.Time
++
++	mu     sync.Mutex
++	fabric func() plugin.FabricView
++	sink   func(plugin.Event)
++	groups map[groupKey]*groupState
++	member map[uint32]*memberState
++	seen   time.Time
++	view   plugin.CorrelationView
++	cancel context.CancelFunc
++	done   chan struct{}
++}
++
++// New validates the config. It does not read the fabric view.
++func New(c plugin.Config, _ plugin.Env) (plugin.FabricCorrelator, error) {
++	var cfg Config
++	if err := c.Decode(&cfg); err != nil {
++		return nil, err
++	}
++	if err := applyDefaults(&cfg); err != nil {
++		return nil, err
++	}
++	return &Correlator{
++		th:      thresholds{minMembers: cfg.MinMembers, pct: cfg.DegradedPct},
++		rounds:  cfg.Rounds,
++		bundles: cfg.Bundles,
++		now:     time.Now,
++		groups:  map[groupKey]*groupState{},
++		member:  map[uint32]*memberState{},
++		view: plugin.CorrelationView{
++			Configured: true,
++			Groups:     []plugin.CorrelationGroup{},
++			Members:    []plugin.CorrelationMember{},
++		},
++	}, nil
++}
++
++func applyDefaults(cfg *Config) error {
++	if cfg.MinMembers == 0 {
++		cfg.MinMembers = DefaultMinMembers
++	}
++	if cfg.MinMembers < minMinMembers || cfg.MinMembers > maxMinMembers {
++		return fmt.Errorf("min_members %d must be between %d and %d", cfg.MinMembers, minMinMembers, maxMinMembers)
++	}
++	if cfg.DegradedPct == 0 {
++		cfg.DegradedPct = DefaultDegradedPct
++	}
++	if cfg.DegradedPct < 1 || cfg.DegradedPct > 100 {
++		return fmt.Errorf("degraded_pct %d must be between 1 and 100", cfg.DegradedPct)
++	}
++	if cfg.Rounds == 0 {
++		cfg.Rounds = DefaultRounds
++	}
++	if cfg.Rounds < 1 || cfg.Rounds > maxRounds {
++		return fmt.Errorf("rounds %d must be between 1 and %d", cfg.Rounds, maxRounds)
++	}
++	return validateBundles(cfg.Bundles)
++}
++
++func validateBundles(bundles []Bundle) error {
++	if len(bundles) > maxBundles {
++		return fmt.Errorf("bundles: more than %d", maxBundles)
++	}
++	names := map[string]bool{}
++	for i, b := range bundles {
++		if !plugin.ValidLabel(b.Name) {
++			return fmt.Errorf("bundles[%d].name is invalid", i)
++		}
++		if names[b.Name] {
++			return fmt.Errorf("bundles[%d].name %q is duplicated", i, b.Name)
++		}
++		names[b.Name] = true
++		if b.IXPID < 0 {
++			return fmt.Errorf("bundles[%d].ixp_id is invalid", i)
++		}
++		if len(b.Switches) == 0 || len(b.Switches) > maxBundleSwitches {
++			return fmt.Errorf("bundles[%d].switches needs 1 to %d switch ids", i, maxBundleSwitches)
++		}
++		for _, id := range b.Switches {
++			if id < 1 {
++				return fmt.Errorf("bundles[%d].switches has an invalid switch id %d", i, id)
++			}
++		}
++	}
++	return nil
++}
++
++// SetFabric records the fabric view to read. The controller calls it
++// before Start.
++func (c *Correlator) SetFabric(fn func() plugin.FabricView) {
++	c.mu.Lock()
++	c.fabric = fn
++	c.mu.Unlock()
++}
++
++// SetEventSink records where events go. The controller calls it before
++// Start.
++func (c *Correlator) SetEventSink(fn func(plugin.Event)) {
++	c.mu.Lock()
++	c.sink = fn
++	c.mu.Unlock()
++}
++
++// View returns the latest evaluated round.
++func (c *Correlator) View() plugin.CorrelationView {
++	c.mu.Lock()
++	defer c.mu.Unlock()
++	return c.view
++}
++
++// Start begins the loop. It does not block.
++func (c *Correlator) Start(ctx context.Context) error {
++	ctx, cancel := context.WithCancel(ctx)
++	done := make(chan struct{})
++	c.mu.Lock()
++	c.cancel, c.done = cancel, done
++	c.mu.Unlock()
++	go c.loop(ctx, done)
++	return nil
++}
++
++// Stop cancels the loop and waits for it to leave.
++func (c *Correlator) Stop(ctx context.Context) error {
++	c.mu.Lock()
++	cancel, done := c.cancel, c.done
++	c.mu.Unlock()
++	if cancel != nil {
++		cancel()
++	}
++	if done == nil {
++		return nil
++	}
++	select {
++	case <-done:
++		return nil
++	case <-ctx.Done():
++		return ctx.Err()
++	}
++}
++
++func (c *Correlator) loop(ctx context.Context, done chan struct{}) {
++	defer close(done)
++	t := time.NewTicker(pollEvery)
++	defer t.Stop()
++	for {
++		c.poll()
++		select {
++		case <-ctx.Done():
++			return
++		case <-t.C:
++		}
++	}
++}
++
++// poll evaluates the fabric view when it holds a round not seen before.
++func (c *Correlator) poll() {
++	c.mu.Lock()
++	fn := c.fabric
++	c.mu.Unlock()
++	if fn == nil {
++		return
++	}
++	c.evaluate(fn())
++}
++
++// evaluate applies one fabric round. A stale round has no samples, so
++// every open incident counts toward its resolving event.
++func (c *Correlator) evaluate(fv plugin.FabricView) {
++	if fv.Round.IsZero() {
++		return
++	}
++	c.mu.Lock()
++	if fv.Round.Equal(c.seen) {
++		c.mu.Unlock()
++		return
++	}
++	c.seen = fv.Round
++	samples := fv.Samples
++	if fv.Stale {
++		samples = nil
++	}
++	obs := observe(samples, c.bundles, c.th)
++	now := c.now()
++	events := c.stepGroups(obs, now)
++	events = append(events, c.stepMembers(obs, now)...)
++	c.view = c.buildView(fv, obs)
++	sink := c.sink
++	c.mu.Unlock()
++	if sink == nil {
++		return
++	}
++	for _, e := range events {
++		sink(e)
++	}
++}
++
++func (c *Correlator) stepGroups(obs observation, now time.Time) []plugin.Event {
++	var events []plugin.Event
++	seen := map[groupKey]bool{}
++	for _, g := range obs.groups {
++		seen[g.key] = true
++		st := c.groups[g.key]
++		if st == nil {
++			st = &groupState{}
++			c.groups[g.key] = st
++		}
++		st.last = g
++		if st.step(obs.firing[g.key], c.rounds) {
++			events = append(events, groupEvent(st.active, g, now))
++		}
++	}
++	for k, st := range c.groups {
++		if !seen[k] && st.step(false, c.rounds) {
++			events = append(events, groupEvent(false, st.last, now))
++		}
++	}
++	for k, st := range c.groups {
++		if st.idle() {
++			delete(c.groups, k)
++		}
++	}
++	return events
++}
++
++func (c *Correlator) stepMembers(obs observation, now time.Time) []plugin.Event {
++	var events []plugin.Event
++	seen := map[uint32]bool{}
++	for _, m := range obs.alone {
++		seen[m.asn] = true
++		st := c.member[m.asn]
++		if st == nil {
++			st = &memberState{}
++			c.member[m.asn] = st
++		}
++		st.last = m
++		if st.step(true, c.rounds) {
++			events = append(events, memberEvent(true, m, now))
++		}
++	}
++	for asn, st := range c.member {
++		if !seen[asn] && st.step(false, c.rounds) {
++			events = append(events, memberEvent(false, st.last, now))
++		}
++		if st.idle() {
++			delete(c.member, asn)
++		}
++	}
++	return events
++}
++
++// buildView lists the groups and members of this round, plus those whose
++// event is still open but that were not seen this round, so an open
++// event is always visible in the view.
++func (c *Correlator) buildView(fv plugin.FabricView, obs observation) plugin.CorrelationView {
++	groups := slices.Clone(obs.groups)
++	inRound := map[groupKey]bool{}
++	for _, g := range obs.groups {
++		inRound[g.key] = true
++	}
++	for k, st := range c.groups {
++		if st.active && !inRound[k] {
++			groups = append(groups, group{key: k, name: st.last.name})
++		}
++	}
++	slices.SortFunc(groups, func(a, b group) int {
++		switch {
++		case lessKey(a.key, b.key):
++			return -1
++		case lessKey(b.key, a.key):
++			return 1
++		}
++		return 0
++	})
++	members := slices.Clone(obs.alone)
++	alone := map[uint32]bool{}
++	for _, m := range obs.alone {
++		alone[m.asn] = true
++	}
++	for asn, st := range c.member {
++		if st.active && !alone[asn] {
++			members = append(members, member{asn: asn, name: st.last.name})
++		}
++	}
++	slices.SortFunc(members, func(a, b member) int { return cmp.Compare(a.asn, b.asn) })
++
++	v := plugin.CorrelationView{
++		Configured: true,
++		Stale:      fv.Stale,
++		Round:      fv.Round,
++		Groups:     make([]plugin.CorrelationGroup, 0, len(groups)),
++		Members:    make([]plugin.CorrelationMember, 0, len(members)),
++	}
++	for _, g := range groups {
++		asns := g.degraded
++		if asns == nil {
++			asns = []uint32{}
++		}
++		active := false
++		if st := c.groups[g.key]; st != nil {
++			active = st.active
++		}
++		v.Groups = append(v.Groups, plugin.CorrelationGroup{
++			Scope: g.key.scope, IXPID: g.key.ixp, Name: g.name,
++			Members: g.members, Degraded: len(g.degraded),
++			DegradedPct: float64(len(g.degraded)) * 100 / float64(max(g.members, 1)),
++			Active:      active, ASNs: asns,
++		})
++	}
++	for _, m := range members {
++		active := false
++		if st := c.member[m.asn]; st != nil {
++			active = st.active
++		}
++		v.Members = append(v.Members, plugin.CorrelationMember{ASN: m.asn, Name: m.name, Addresses: m.addresses, Active: active})
++	}
++	return v
++}
++
++func groupEvent(degraded bool, g group, now time.Time) plugin.Event {
++	fields := map[string]string{
++		"scope": g.key.scope, "ixp_id": strconv.Itoa(g.key.ixp), "group": g.key.id, "name": g.name,
++	}
++	label := g.key.scope + " " + g.name
++	if !degraded {
++		return plugin.NewEvent(plugin.EventFabricRecovered, now, label+" is no longer degraded", fields)
++	}
++	fields["members"] = strconv.Itoa(g.members)
++	fields["degraded"] = strconv.Itoa(len(g.degraded))
++	fields["asns"] = asnList(g.degraded)
++	return plugin.NewEvent(plugin.EventFabricDegraded, now,
++		fmt.Sprintf("%s: %d of %d members degraded", label, len(g.degraded), g.members), fields)
++}
++
++func memberEvent(degraded bool, m member, now time.Time) plugin.Event {
++	asn := strconv.FormatUint(uint64(m.asn), 10)
++	fields := map[string]string{"asn": asn}
++	if m.name != "" {
++		fields["name"] = m.name
++	}
++	if degraded {
++		fields["addresses"] = strconv.Itoa(m.addresses)
++		return plugin.NewEvent(plugin.EventMemberDegraded, now,
++			fmt.Sprintf("AS%s is degraded on all %d measured addresses and no switch, colo, or bundle behind it is degraded", asn, m.addresses), fields)
++	}
++	return plugin.NewEvent(plugin.EventMemberRecovered, now, "AS"+asn+" is no longer degraded on its own", fields)
++}
++
++func asnList(asns []uint32) string {
++	n := min(len(asns), maxASNsInEvent)
++	parts := make([]string, 0, n+1)
++	for _, a := range asns[:n] {
++		parts = append(parts, strconv.FormatUint(uint64(a), 10))
++	}
++	if len(asns) > n {
++		parts = append(parts, "...")
++	}
++	return strings.Join(parts, ",")
++}
+diff --git a/internal/plugins/ixpcorrelate/topology/topology_test.go b/internal/plugins/ixpcorrelate/topology/topology_test.go
+new file mode 100644
+index 0000000..7eb1428
+--- /dev/null
++++ b/internal/plugins/ixpcorrelate/topology/topology_test.go
+@@ -0,0 +1,497 @@
++package topology
++
++import (
++	"context"
++	"fmt"
++	"strings"
++	"testing"
++	"time"
++
++	"gopkg.in/yaml.v3"
++
++	"github.com/GrandArcher/Packeteer/pkg/plugin"
++)
++
++var t0 = time.Date(2026, 10, 18, 12, 0, 0, 0, time.UTC)
++
++// sw is a switch in a documentation colo.
++func sw(id int, colo string) plugin.FabricSwitch {
++	return plugin.FabricSwitch{ID: id, Name: fmt.Sprintf("sw%d", id), Colo: colo}
++}
++
++// smp is one probe of one member address from one vantage.
++func smp(vantage string, asn uint32, addr string, bad bool, switches ...plugin.FabricSwitch) plugin.FabricSample {
++	return plugin.FabricSample{
++		Vantage: vantage, ASN: asn, Name: fmt.Sprintf("member-%d", asn), Address: addr,
++		Family: "ipv4", VLANID: 10, IXPID: 1, Switches: switches,
++		Sent: 5, Received: 5, PastTolerance: bad,
++	}
++}
++
++// members returns n members starting at base, one address each behind sw.
++func members(base uint32, n int, bad bool, sws ...plugin.FabricSwitch) []plugin.FabricSample {
++	var out []plugin.FabricSample
++	for i := 0; i < n; i++ {
++		asn := base + uint32(i)
++		out = append(out, smp("v1", asn, fmt.Sprintf("192.0.2.%d", asn-64000), bad, sws...))
++	}
++	return out
++}
++
++func cat(parts ...[]plugin.FabricSample) []plugin.FabricSample {
++	var out []plugin.FabricSample
++	for _, p := range parts {
++		out = append(out, p...)
++	}
++	return out
++}
++
++func newCorrelator(t *testing.T, yamlCfg string) (*Correlator, *[]plugin.Event) {
++	t.Helper()
++	var node yaml.Node
++	if err := yaml.Unmarshal([]byte(yamlCfg), &node); err != nil {
++		t.Fatal(err)
++	}
++	p, err := New(plugin.NewConfig(&node), plugin.Env{})
++	if err != nil {
++		t.Fatal(err)
++	}
++	c := p.(*Correlator)
++	var got []plugin.Event
++	c.SetEventSink(func(e plugin.Event) { got = append(got, e) })
++	c.now = func() time.Time { return t0 }
++	return c, &got
++}
++
++// round feeds one fabric round. n distinguishes rounds.
++func round(c *Correlator, n int, samples []plugin.FabricSample) {
++	c.evaluate(plugin.FabricView{Configured: true, Round: t0.Add(time.Duration(n) * time.Minute), Samples: samples})
++}
++
++func kinds(evs []plugin.Event) []string {
++	var out []string
++	for _, e := range evs {
++		out = append(out, e.Kind+" "+e.Fields["scope"]+e.Fields["asn"]+" "+e.Fields["group"])
++	}
++	return out
++}
++
++func TestSwitchFaultIsFabricNotMember(t *testing.T) {
++	c, got := newCorrelator(t, "rounds: 1")
++	s1, s2 := sw(1, "colo-a"), sw(2, "colo-b")
++	round(c, 1, cat(members(64500, 5, true, s1), members(64600, 4, false, s2)))
++	want := []string{
++		"ixp.fabric_degraded colo colo-a",
++		"ixp.fabric_degraded switch 1",
++	}
++	if g := kinds(*got); !sameSet(g, want) {
++		t.Fatalf("events %v, want %v", g, want)
++	}
++	for _, e := range *got {
++		if e.Kind == plugin.EventMemberDegraded {
++			t.Fatalf("a member behind a degraded switch must not raise member_degraded: %+v", e)
++		}
++		if e.Fields["members"] != "5" || e.Fields["degraded"] != "5" || e.Fields["ixp_id"] != "1" {
++			t.Fatalf("fields %v", e.Fields)
++		}
++		if e.Fields["asns"] != "64500,64501,64502,64503,64504" {
++			t.Fatalf("asns %q", e.Fields["asns"])
++		}
++	}
++	v := c.View()
++	if len(v.Members) != 0 {
++		t.Fatalf("members %+v", v.Members)
++	}
++	var sw2 *plugin.CorrelationGroup
++	for i := range v.Groups {
++		if v.Groups[i].Name == "sw2" {
++			sw2 = &v.Groups[i]
++		}
++	}
++	if sw2 == nil || sw2.Members != 4 || sw2.Degraded != 0 || sw2.Active {
++		t.Fatalf("sw2 %+v", sw2)
++	}
++}
++
++func sameSet(a, b []string) bool {
++	if len(a) != len(b) {
++		return false
++	}
++	m := map[string]int{}
++	for _, x := range a {
++		m[x]++
++	}
++	for _, x := range b {
++		m[x]--
++	}
++	for _, n := range m {
++		if n != 0 {
++			return false
++		}
++	}
++	return true
++}
++
++func TestSingleMemberIsMemberNotFabric(t *testing.T) {
++	c, got := newCorrelator(t, "rounds: 1")
++	s1 := sw(1, "colo-a")
++	round(c, 1, cat(members(64500, 1, true, s1), members(64501, 8, false, s1)))
++	if g := kinds(*got); len(g) != 1 || g[0] != "ixp.member_degraded 64500 " {
++		t.Fatalf("events %v", g)
++	}
++	e := (*got)[0]
++	if e.Severity != plugin.SeverityWarning || e.Fields["addresses"] != "1" || e.Fields["name"] != "member-64500" {
++		t.Fatalf("event %+v", e)
++	}
++	v := c.View()
++	if len(v.Members) != 1 || v.Members[0].ASN != 64500 || !v.Members[0].Active {
++		t.Fatalf("members %+v", v.Members)
++	}
++	for _, g := range v.Groups {
++		if g.Active || g.Degraded != 1 {
++			t.Fatalf("group %+v", g)
++		}
++	}
++}
++
++func TestThresholds(t *testing.T) {
++	s1 := sw(1, "colo-a")
++	cases := []struct {
++		name        string
++		cfg         string
++		bad, good   int
++		wantFabric  bool
++		wantMembers int
++	}{
++		{"two of two is below min_members", "rounds: 1", 2, 0, false, 2},
++		{"three of three fires", "rounds: 1", 3, 0, true, 0},
++		{"three of ten is under the share", "rounds: 1", 3, 7, false, 3},
++		{"five of ten fires at 50 percent", "rounds: 1", 5, 5, true, 0},
++		{"custom share", "rounds: 1\ndegraded_pct: 20", 3, 7, true, 0},
++		{"custom min_members", "rounds: 1\nmin_members: 2", 2, 0, true, 0},
++	}
++	for _, tc := range cases {
++		t.Run(tc.name, func(t *testing.T) {
++			c, got := newCorrelator(t, tc.cfg)
++			round(c, 1, cat(members(64500, tc.bad, true, s1), members(64700, tc.good, false, s1)))
++			fabric, mem := 0, 0
++			for _, e := range *got {
++				switch e.Kind {
++				case plugin.EventFabricDegraded:
++					fabric++
++				case plugin.EventMemberDegraded:
++					mem++
++				}
++			}
++			if (fabric > 0) != tc.wantFabric || mem != tc.wantMembers {
++				t.Fatalf("fabric %d members %d, events %v", fabric, mem, kinds(*got))
++			}
++		})
++	}
++}
++
++func TestMeasurementRules(t *testing.T) {
++	c, got := newCorrelator(t, "rounds: 1\nmin_members: 2")
++	s1 := sw(1, "colo-a")
++	// 64500 is bad from v1 but fine from v2: not degraded. 64501 and
++	// 64502 are bad from every vantage that measured them. 64503 has only
++	// probe errors: not measured. 64504 has one bad and one good address:
++	// not degraded.
++	samples := []plugin.FabricSample{
++		smp("v1", 64500, "192.0.2.1", true, s1), smp("v2", 64500, "192.0.2.1", false, s1),
++		smp("v1", 64501, "192.0.2.2", true, s1), smp("v2", 64501, "192.0.2.2", true, s1),
++		smp("v1", 64502, "192.0.2.3", true, s1),
++		smp("v1", 64504, "192.0.2.5", true, s1), smp("v1", 64504, "192.0.2.6", false, s1),
++		{Vantage: "v1", ASN: 64503, Address: "192.0.2.4", IXPID: 1, VLANID: 10, Switches: []plugin.FabricSwitch{s1}, Error: "send failed", PastTolerance: true},
++	}
++	round(c, 1, samples)
++	v := c.View()
++	var g plugin.CorrelationGroup
++	for _, x := range v.Groups {
++		if x.Scope == plugin.ScopeSwitch {
++			g = x
++		}
++	}
++	if g.Members != 4 || g.Degraded != 2 || len(g.ASNs) != 2 || g.ASNs[0] != 64501 || g.ASNs[1] != 64502 || !g.Active {
++		t.Fatalf("group %+v", g)
++	}
++	if g.DegradedPct != 50 {
++		t.Fatalf("pct %v", g.DegradedPct)
++	}
++	if len(*got) != 2 { // switch and colo
++		t.Fatalf("events %v", kinds(*got))
++	}
++}
++
++func TestMemberOnTwoSwitches(t *testing.T) {
++	c, got := newCorrelator(t, "rounds: 1")
++	s1, s2 := sw(1, "colo-a"), sw(2, "colo-b")
++	// 64500 has an address behind each switch. Only the one behind sw1 is
++	// bad, so the member is degraded in sw1 but not overall.
++	samples := cat(
++		[]plugin.FabricSample{smp("v1", 64500, "192.0.2.1", true, s1), smp("v1", 64500, "192.0.2.2", false, s2)},
++		members(64501, 2, true, s1),
++	)
++	round(c, 1, samples)
++	if g := kinds(*got); !sameSet(g, []string{"ixp.fabric_degraded switch 1", "ixp.fabric_degraded colo colo-a"}) {
++		t.Fatalf("events %v", g)
++	}
++}
++
++func TestBundleGroup(t *testing.T) {
++	cfg := "rounds: 1\nbundles:\n  - name: core-1\n    ixp_id: 1\n    switches: [1, 2]\n  - name: core-other\n    ixp_id: 2\n    switches: [1]\n"
++	c, got := newCorrelator(t, cfg)
++	s1, s2, s3 := sw(1, "colo-a"), sw(2, "colo-b"), sw(3, "colo-c")
++	// Two members per switch on the bundle fail, which is under min_members
++	// for each switch and colo but not for the bundle.
++	round(c, 1, cat(members(64500, 2, true, s1), members(64510, 2, true, s2), members(64520, 4, false, s3)))
++	g := kinds(*got)
++	if len(g) != 1 || g[0] != "ixp.fabric_degraded bundle core-1" {
++		t.Fatalf("events %v", g)
++	}
++	if (*got)[0].Fields["degraded"] != "4" || (*got)[0].Fields["members"] != "4" {
++		t.Fatalf("fields %v", (*got)[0].Fields)
++	}
++	// A member behind a degraded bundle is explained, so no member event.
++	for _, e := range *got {
++		if e.Kind == plugin.EventMemberDegraded {
++			t.Fatalf("member event %+v", e)
++		}
++	}
++}
++
++func TestHysteresis(t *testing.T) {
++	c, got := newCorrelator(t, "") // rounds default 2
++	s1 := sw(1, "colo-a")
++	bad := members(64500, 4, true, s1)
++	good := members(64500, 4, false, s1)
++
++	round(c, 1, bad)
++	if len(*got) != 0 {
++		t.Fatalf("one bad round raised %v", kinds(*got))
++	}
++	round(c, 2, good) // a single bad round does not count
++	round(c, 3, bad)
++	if len(*got) != 0 {
++		t.Fatalf("a broken streak raised %v", kinds(*got))
++	}
++	round(c, 4, bad)
++	if len(*got) != 2 {
++		t.Fatalf("two bad rounds in a row: %v", kinds(*got))
++	}
++	// The same round again is not a new observation.
++	round(c, 4, good)
++	if len(*got) != 2 {
++		t.Fatalf("repeated round: %v", kinds(*got))
++	}
++	round(c, 5, good)
++	if len(*got) != 2 {
++		t.Fatalf("one good round resolved: %v", kinds(*got))
++	}
++	if v := c.View(); !v.Groups[0].Active {
++		t.Fatalf("the group stays active until it clears: %+v", v.Groups)
++	}
++	round(c, 6, good)
++	if len(*got) != 4 {
++		t.Fatalf("recovery: %v", kinds(*got))
++	}
++	rec := (*got)[2:]
++	for i, want := range []string{plugin.EventFabricRecovered, plugin.EventFabricRecovered} {
++		if rec[i].Kind != want || !rec[i].Resolves() {
++			t.Fatalf("recovery %d: %+v", i, rec[i])
++		}
++	}
++	if (*got)[0].DedupKey() != findKind(rec, (*got)[0].Fields["scope"]).DedupKey() {
++		t.Fatalf("a recovery must share its problem's dedup key")
++	}
++	round(c, 7, good)
++	if len(c.groups) != 0 || len(c.member) != 0 {
++		t.Fatalf("state leaked: %d groups %d members", len(c.groups), len(c.member))
++	}
++}
++
++func findKind(evs []plugin.Event, scope string) plugin.Event {
++	for _, e := range evs {
++		if e.Fields["scope"] == scope {
++			return e
++		}
++	}
++	return plugin.Event{}
++}
++
++func TestMemberThenFabric(t *testing.T) {
++	c, got := newCorrelator(t, "rounds: 1")
++	s1 := sw(1, "colo-a")
++	round(c, 1, cat(members(64500, 1, true, s1), members(64501, 5, false, s1)))
++	if g := kinds(*got); len(g) != 1 || g[0] != "ixp.member_degraded 64500 " {
++		t.Fatalf("events %v", g)
++	}
++	// The rest of the switch fails too: now the whole switch is the
++	// problem and the first member is no longer a separate one.
++	*got = nil
++	round(c, 2, members(64500, 6, true, s1))
++	g := kinds(*got)
++	if !sameSet(g, []string{"ixp.fabric_degraded switch 1", "ixp.fabric_degraded colo colo-a", "ixp.member_recovered 64500 "}) {
++		t.Fatalf("events %v", g)
++	}
++}
++
++func TestStaleFabricResolves(t *testing.T) {
++	c, got := newCorrelator(t, "rounds: 1")
++	s1 := sw(1, "colo-a")
++	round(c, 1, members(64500, 4, true, s1))
++	if len(*got) != 2 {
++		t.Fatalf("events %v", kinds(*got))
++	}
++	*got = nil
++	c.evaluate(plugin.FabricView{Configured: true, Stale: true, Round: t0.Add(2 * time.Minute), Samples: members(64500, 4, true, s1)})
++	if g := kinds(*got); !sameSet(g, []string{"ixp.fabric_recovered switch 1", "ixp.fabric_recovered colo colo-a"}) {
++		t.Fatalf("events %v", g)
++	}
++	v := c.View()
++	if !v.Stale || len(v.Groups) != 0 || len(v.Members) != 0 {
++		t.Fatalf("view %+v", v)
++	}
++}
++
++func TestNoRoundNoEvaluation(t *testing.T) {
++	c, got := newCorrelator(t, "rounds: 1")
++	c.evaluate(plugin.FabricView{Configured: true, Samples: members(64500, 4, true, sw(1, "c"))})
++	if len(*got) != 0 || !c.View().Round.IsZero() {
++		t.Fatalf("a view with no round was evaluated: %v", kinds(*got))
++	}
++}
++
++func TestAsnListIsBounded(t *testing.T) {
++	c, got := newCorrelator(t, "rounds: 1")
++	round(c, 1, members(64500, 14, true, sw(1, "colo-a")))
++	if a := (*got)[0].Fields["asns"]; strings.Count(a, ",") != maxASNsInEvent || !strings.HasSuffix(a, ",...") {
++		t.Fatalf("asns %q", a)
++	}
++	if (*got)[0].Fields["degraded"] != "14" {
++		t.Fatalf("fields %v", (*got)[0].Fields)
++	}
++}
++
++func TestStartReadsFabricAndStops(t *testing.T) {
++	c, _ := newCorrelator(t, "rounds: 1")
++	ch := make(chan plugin.Event, 4)
++	c.SetEventSink(func(e plugin.Event) { ch <- e })
++	c.SetFabric(func() plugin.FabricView {
++		return plugin.FabricView{Configured: true, Round: t0, Samples: members(64500, 3, true, sw(1, "colo-a"))}
++	})
++	if err := c.Start(context.Background()); err != nil {
++		t.Fatal(err)
++	}
++	select {
++	case e := <-ch:
++		if e.Kind != plugin.EventFabricDegraded {
++			t.Fatalf("event %+v", e)
++		}
++	case <-time.After(5 * time.Second):
++		t.Fatal("no event from the loop")
++	}
++	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
++	defer cancel()
++	if err := c.Stop(ctx); err != nil {
++		t.Fatal(err)
++	}
++}
++
++func TestConfigValidation(t *testing.T) {
++	cases := []struct{ name, cfg, want string }{
++		{"min_members low", "min_members: 1", "min_members"},
++		{"degraded_pct high", "degraded_pct: 101", "degraded_pct"},
++		{"degraded_pct negative", "degraded_pct: -1", "degraded_pct"},
++		{"rounds high", "rounds: 11", "rounds"},
++		{"bundle name", "bundles: [{name: 'a b', switches: [1]}]", "bundles[0].name"},
++		{"bundle duplicate", "bundles: [{name: a, switches: [1]}, {name: a, switches: [2]}]", "duplicated"},
++		{"bundle no switches", "bundles: [{name: a}]", "switches"},
++		{"bundle bad switch", "bundles: [{name: a, switches: [0]}]", "switch id"},
++		{"bundle bad ixp", "bundles: [{name: a, ixp_id: -1, switches: [1]}]", "ixp_id"},
++		{"unknown key", "extra: 1", "extra"},
++	}
++	for _, tc := range cases {
++		t.Run(tc.name, func(t *testing.T) {
++			var node yaml.Node
++			if err := yaml.Unmarshal([]byte(tc.cfg), &node); err != nil {
++				t.Fatal(err)
++			}
++			_, err := New(plugin.NewConfig(&node), plugin.Env{})
++			if err == nil || !strings.Contains(err.Error(), tc.want) {
++				t.Fatalf("err %v, want %q", err, tc.want)
++			}
++		})
++	}
++	if _, err := New(plugin.NewConfig(nil), plugin.Env{}); err != nil {
++		t.Fatalf("defaults: %v", err)
++	}
++}
++
++func TestSwitchEventKeyIsTheIDNotTheName(t *testing.T) {
++	c, got := newCorrelator(t, "rounds: 1")
++	s1 := plugin.FabricSwitch{ID: 1, Name: "old-name"}
++	round(c, 1, members(64500, 4, true, s1))
++	renamed := plugin.FabricSwitch{ID: 1, Name: "new-name"}
++	round(c, 2, members(64500, 4, false, renamed))
++	if len(*got) != 2 {
++		t.Fatalf("events %v", kinds(*got))
++	}
++	problem, recovery := (*got)[0], (*got)[1]
++	if problem.Fields["name"] != "old-name" || recovery.Fields["name"] != "new-name" {
++		t.Fatalf("names %v %v", problem.Fields, recovery.Fields)
++	}
++	if problem.DedupKey() != recovery.DedupKey() {
++		t.Fatalf("a rename changed the dedup key: %q vs %q", problem.DedupKey(), recovery.DedupKey())
++	}
++
++	c, got = newCorrelator(t, "rounds: 1")
++	twin := plugin.FabricSwitch{ID: 2, Name: "old-name"}
++	round(c, 1, cat(members(64500, 4, true, s1), members(64600, 4, true, twin)))
++	var keys []string
++	for _, e := range *got {
++		if e.Fields["scope"] == plugin.ScopeSwitch {
++			keys = append(keys, e.DedupKey())
++		}
++	}
++	if len(keys) != 2 || keys[0] == keys[1] {
++		t.Fatalf("two switches with one name share a dedup key: %v", keys)
++	}
++}
++
++func TestOpenIncidentStaysInViewWhenUnmeasured(t *testing.T) {
++	c, got := newCorrelator(t, "") // rounds default 2
++	s1 := sw(1, "colo-a")
++	bad := members(64500, 4, true, s1)
++	round(c, 1, bad)
++	round(c, 2, bad)
++	if len(*got) != 2 {
++		t.Fatalf("events %v", kinds(*got))
++	}
++	// A lone member elsewhere, degraded for two rounds, opens its own event.
++	lone := members(64700, 1, true, sw(9, "colo-z"))
++	round(c, 3, cat(bad, lone))
++	round(c, 4, cat(bad, lone))
++	if len(*got) != 3 || (*got)[2].Kind != plugin.EventMemberDegraded {
++		t.Fatalf("events %v", kinds(*got))
++	}
++
++	// Nothing is measured in the next round: both events are still open.
++	round(c, 5, []plugin.FabricSample{smp("v1", 64800, "192.0.2.99", false, sw(5, "colo-q"))})
++	v := c.View()
++	var open []string
++	for _, g := range v.Groups {
++		if g.Active {
++			if g.Members != 0 || g.Degraded != 0 || g.ASNs == nil {
++				t.Fatalf("unmeasured open group %+v", g)
++			}
++			open = append(open, g.Scope+" "+g.Name)
++		}
++	}
++	if !sameSet(open, []string{"switch sw1", "colo colo-a"}) {
++		t.Fatalf("open groups %v in %+v", open, v.Groups)
++	}
++	if len(v.Members) != 1 || v.Members[0].ASN != 64700 || !v.Members[0].Active || v.Members[0].Name != "member-64700" {
++		t.Fatalf("members %+v", v.Members)
++	}
++}
+diff --git a/internal/plugins/ixprouteserver/birdseye/plugin.go b/internal/plugins/ixprouteserver/birdseye/plugin.go
+index c4e0ed2..f0ff120 100644
+--- a/internal/plugins/ixprouteserver/birdseye/plugin.go
++++ b/internal/plugins/ixprouteserver/birdseye/plugin.go
+@@ -185,7 +185,7 @@ func buildServers(in []ServerConfig) ([]*server, error) {
+ 	out := make([]*server, 0, len(in))
+ 	for i, sc := range in {
+ 		p := fmt.Sprintf("servers[%d]", i)
+-		if !validName(sc.Name) {
++		if !plugin.ValidLabel(sc.Name) {
+ 			return nil, fmt.Errorf("%s.name is invalid", p)
+ 		}
+ 		if seen[sc.Name] {
+@@ -217,23 +217,6 @@ func baseURL(raw string) (string, error) {
+ 	return u.String(), nil
+ }
+ 
+-// validName allows a letter or digit, then letters, digits, '.', '_' or
+-// '-', at most 64 characters. A name is a URL-safe label in events.
+-func validName(s string) bool {
+-	if s == "" || len(s) > 64 {
+-		return false
+-	}
+-	for i, c := range s {
+-		switch {
+-		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9':
+-		case i > 0 && (c == '.' || c == '_' || c == '-'):
+-		default:
+-			return false
+-		}
+-	}
+-	return true
+-}
+-
+ // SetMembers records the IX-F view. The controller calls it before Start.
+ func (w *Watch) SetMembers(fn func() plugin.MemberView) {
+ 	w.mu.Lock()
+diff --git a/internal/plugins/lookup/peeringdb/peeringdb.go b/internal/plugins/lookup/peeringdb/peeringdb.go
+index 9b28e3f..d859ea7 100644
+--- a/internal/plugins/lookup/peeringdb/peeringdb.go
++++ b/internal/plugins/lookup/peeringdb/peeringdb.go
+@@ -192,7 +192,7 @@ func normalizeExchanges(in []ExchangeConfig, key string) ([]exch, error) {
+ 	seenID := map[int]bool{}
+ 	out := make([]exch, 0, len(in))
+ 	for _, ex := range in {
+-		if !validName(ex.Name) {
++		if !plugin.ValidLabel(ex.Name) {
+ 			return nil, fmt.Errorf("exchange name %q is invalid", ex.Name)
+ 		}
+ 		if ex.IXID <= 0 {
+diff --git a/internal/plugins/lookup/peeringdb/url.go b/internal/plugins/lookup/peeringdb/url.go
+index da12012..683a521 100644
+--- a/internal/plugins/lookup/peeringdb/url.go
++++ b/internal/plugins/lookup/peeringdb/url.go
+@@ -117,26 +117,3 @@ func redact(msg, key string) string {
+ 	}
+ 	return msg
+ }
+-
+-// validName matches the exchange name rule used in config, so the same
+-// label can name an exchange in both places. The config package is not
+-// imported from a plugin.
+-func validName(s string) bool {
+-	if len(s) < 1 || len(s) > 64 {
+-		return false
+-	}
+-	for i, r := range s {
+-		letter := r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z'
+-		digit := r >= '0' && r <= '9'
+-		if i == 0 {
+-			if !letter && !digit {
+-				return false
+-			}
+-			continue
+-		}
+-		if !letter && !digit && r != '_' && r != '.' && r != '-' {
+-			return false
+-		}
+-	}
+-	return true
+-}
+diff --git a/internal/plugins/lookup/peeringdb/url_test.go b/internal/plugins/lookup/peeringdb/url_test.go
+index 1954c23..a1af0c2 100644
+--- a/internal/plugins/lookup/peeringdb/url_test.go
++++ b/internal/plugins/lookup/peeringdb/url_test.go
+@@ -80,19 +80,6 @@ func TestRedact(t *testing.T) {
+ 	}
+ }
+ 
+-func TestValidName(t *testing.T) {
+-	for _, ok := range []string{"a", "Example-IX.1", "ix_2", strings.Repeat("a", 64)} {
+-		if !validName(ok) {
+-			t.Errorf("%q rejected", ok)
+-		}
+-	}
+-	for _, bad := range []string{"", "-a", "_a", ".a", "a b", "a/b", strings.Repeat("a", 65)} {
+-		if validName(bad) {
+-			t.Errorf("%q accepted", bad)
+-		}
+-	}
+-}
+-
+ func TestAuthorizeOnlyOnConfiguredBase(t *testing.T) {
+ 	s := newSource(t, "base_url: https://pdb.example.invalid\nexchanges:\n  - {name: a, ix_id: 1}\n", docKey)
+ 	for raw, want := range map[string]string{
+diff --git a/pkg/plugin/events.go b/pkg/plugin/events.go
+index b3a348e..7378367 100644
+--- a/pkg/plugin/events.go
++++ b/pkg/plugin/events.go
+@@ -85,8 +85,13 @@ const (
+ 	EventRSMaxPrefixCleared = "ixp.rs_max_prefix_cleared"
+ 	EventRSFiltered         = "ixp.rs_filtered"
+ 	EventRSFilteredCleared  = "ixp.rs_filtered_cleared"
+-	EventHAStandby          = "ha.standby"
+-	EventHAActive           = "ha.active"
++	// Fabric incident correlation (#163). Each problem has a resolving event.
++	EventFabricDegraded  = "ixp.fabric_degraded"
++	EventFabricRecovered = "ixp.fabric_recovered"
++	EventMemberDegraded  = "ixp.member_degraded"
++	EventMemberRecovered = "ixp.member_recovered"
++	EventHAStandby       = "ha.standby"
++	EventHAActive        = "ha.active"
+ 	// EventAudit is one audit log record (#32): a change or sign-in on
+ 	// the ops API, or a config reload.
+ 	EventAudit = "audit.recorded"
+@@ -195,6 +200,14 @@ var eventCatalog = []EventSpec{
+ 		Summary: "A member session has at least the warning share of its routes tagged rs-asn:1101:x (filtered by the route server)."},
+ 	{Kind: EventRSFilteredCleared, Severity: SeverityInfo, Group: "ixp_rs_filtered", Keys: []string{"server", "session"}, TrapID: 50, Resolves: true,
+ 		Summary: "The filtered share fell back below the warning share, or the session is gone. Resolves ixp.rs_filtered."},
++	{Kind: EventFabricDegraded, Severity: SeverityWarning, Group: "ixp_fabric", Keys: []string{"scope", "ixp_id", "group"}, TrapID: 51,
++		Summary: "Many members behind one switch, colo, or core bundle are past the ping tolerance together: a fabric problem, not a member problem."},
++	{Kind: EventFabricRecovered, Severity: SeverityInfo, Group: "ixp_fabric", Keys: []string{"scope", "ixp_id", "group"}, TrapID: 52, Resolves: true,
++		Summary: "The group is below the thresholds, has no measured members, or the fabric data went stale. Resolves ixp.fabric_degraded."},
++	{Kind: EventMemberDegraded, Severity: SeverityWarning, Group: "ixp_member", Keys: []string{"asn"}, TrapID: 53,
++		Summary: "One member is past the ping tolerance on every measured address while the groups behind it are not degraded: a member problem."},
++	{Kind: EventMemberRecovered, Severity: SeverityInfo, Group: "ixp_member", Keys: []string{"asn"}, TrapID: 54, Resolves: true,
++		Summary: "The member is back within tolerance, is part of a degraded group, or the fabric data went stale. Resolves ixp.member_degraded."},
+ }
+ 
+ // EventCatalog returns a copy of every event kind the controller emits.
+diff --git a/pkg/plugin/ixp.go b/pkg/plugin/ixp.go
+index 4ef64a2..4f86c80 100644
+--- a/pkg/plugin/ixp.go
++++ b/pkg/plugin/ixp.go
+@@ -19,6 +19,12 @@ const KindFabric Kind = "ixp_fabric"
+ // not a RIB source, not an input to Decide, and it never announces.
+ const KindRouteServer Kind = "ixp_routeserver"
+ 
++// KindCorrelator is the fabric incident correlator (#163). It groups the
++// fabric probe samples by switch, colo, and core bundle and tells a fabric
++// problem from a member problem. It is not a provider, not an input to
++// Decide, and it never announces.
++const KindCorrelator Kind = "ixp_correlate"
++
+ // MemberSources is the registry for ixp.members.
+ var MemberSources = NewRegistry[MemberSource](KindMemberSource)
+ 
+@@ -28,6 +34,9 @@ var FabricProbes = NewRegistry[FabricProbe](KindFabric)
+ // RouteServerWatches is the registry for ixp.routeservers.
+ var RouteServerWatches = NewRegistry[RouteServerWatch](KindRouteServer)
+ 
++// FabricCorrelators is the registry for ixp.correlate.
++var FabricCorrelators = NewRegistry[FabricCorrelator](KindCorrelator)
++
+ // MemberSource imports an IX-F member list. View never blocks and never
+ // fetches. The slices it returns must not be modified. SetEventSink is
+ // called before Start; the sink is how a key-expiry warning is delivered.
+@@ -291,3 +300,77 @@ type RouteServerSample struct {
+ 	Reasons     []RouteServerReason `json:"reasons"`
+ 	MaxPrefix   int                 `json:"max_prefix,omitempty"`
+ }
++
++// Correlation group scopes.
++const (
++	ScopeSwitch = "switch"
++	ScopeColo   = "colo"
++	ScopeBundle = "bundle"
++)
++
++// FabricCorrelator reads the fabric probe view and raises
++// ixp.fabric_degraded when many members behind one switch, colo, or core
++// bundle degrade together, and ixp.member_degraded when one member does
++// alone (#163). View never blocks. SetFabric and SetEventSink are called
++// before Start. An implementation must not announce, must not write the
++// RIB, and must not call Decide.
++type FabricCorrelator interface {
++	Lifecycle
++	View() CorrelationView
++	SetFabric(fn func() FabricView)
++	SetEventSink(fn func(Event))
++}
++
++// CorrelationView is the latest evaluated fabric round. Groups is every
++// switch, colo, and bundle that had a measured member. Members is each
++// member that is degraded on its own, outside every degraded group.
++type CorrelationView struct {
++	Configured bool                `json:"configured"`
++	Stale      bool                `json:"stale"`
++	Round      time.Time           `json:"round,omitempty"`
++	Groups     []CorrelationGroup  `json:"groups"`
++	Members    []CorrelationMember `json:"members"`
++}
++
++// CorrelationGroup is one switch, colo, or bundle in one round. Members
++// is the count of member ASNs measured behind it. A member is degraded
++// there when every one of its measured addresses behind the group is past
++// tolerance from every vantage that measured it. Active is true once the
++// group has met the thresholds for the configured number of rounds.
++type CorrelationGroup struct {
++	Scope       string   `json:"scope"`
++	IXPID       int      `json:"ixp_id"`
++	Name        string   `json:"name"`
++	Members     int      `json:"members"`
++	Degraded    int      `json:"degraded"`
++	DegradedPct float64  `json:"degraded_pct"`
++	Active      bool     `json:"active"`
++	ASNs        []uint32 `json:"asns"`
++}
++
++// CorrelationMember is one member degraded on its own. Active is true once
++// it has held for the configured number of rounds.
++type CorrelationMember struct {
++	ASN       uint32 `json:"asn"`
++	Name      string `json:"name,omitempty"`
++	Addresses int    `json:"addresses"`
++	Active    bool   `json:"active"`
++}
++
++// ValidLabel reports whether s is a short URL-safe label: a letter or
++// digit, then letters, digits, '.', '_' or '-', at most 64 characters.
++// Vantage, route server, exchange, and bundle names use it.
++func ValidLabel(s string) bool {
++	if s == "" || len(s) > 64 {
++		return false
++	}
++	for i, c := range s {
++		switch {
++		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9':
++		case i > 0 && (c == '.' || c == '_' || c == '-'):
++		default:
++			return false
++		}
++	}
++	return true
++}
+diff --git a/pkg/plugin/plugin_test.go b/pkg/plugin/plugin_test.go
+index 03c8ddc..428dc3e 100644
+--- a/pkg/plugin/plugin_test.go
++++ b/pkg/plugin/plugin_test.go
+@@ -93,3 +93,16 @@ func TestConfigDecode(t *testing.T) {
+ 		})
+ 	}
+ }
++
++func TestValidLabel(t *testing.T) {
++	for _, ok := range []string{"a", "Example-IX.1", "ix_2", strings.Repeat("a", 64)} {
++		if !ValidLabel(ok) {
++			t.Errorf("%q rejected", ok)
++		}
++	}
++	for _, bad := range []string{"", "-a", "_a", ".a", "a b", "a/b", strings.Repeat("a", 65)} {
++		if ValidLabel(bad) {
++			t.Errorf("%q accepted", bad)
++		}
++	}
++}

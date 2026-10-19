@@ -1,0 +1,3502 @@
+diff --git a/AGENTS.md b/AGENTS.md
+index 6e15099..8e1e023 100644
+--- a/AGENTS.md
++++ b/AGENTS.md
+@@ -26,7 +26,7 @@ An `ixp:` block is an Internet exchange operator observing the fabric, route ser
+ 
+ - IXP mode is observe-only and never announces. Nothing in it changes member routing. `mode: suggest` is allowed and announces nothing. Validation refuses `mode: inject`, `announcer`, `mitigation`, `inbound`, `synthesize`, and `more_specific`.
+ - IXP mode does not need `bgp.neighbors` or the RIB view. Route-server data lives in a separate read-only store that never feeds the RIB view or `Decide`.
+-- IXP Manager and Birdseye are read with GET only, from the fixed endpoint allowlist in docs/design/ixp.md. The API key comes from an environment variable, never from the URL or the config file. A warning fires before it expires. Use a low-privilege user's key. Honor IXP Manager's per-interface "Can Ping" opt-out.
++- IXP Manager and Birdseye are read with GET only, from the fixed endpoint allowlist in docs/design/ixp.md. The API key comes from an environment variable, never from the URL or the config file. A warning fires before it expires. The customers nagios document is the one superuser-group GET on that list. Honor IXP Manager's per-interface "Can Ping" opt-out.
+ - Member data is never committed. Lab fixtures use documentation prefixes and documentation or private ASNs only.
+ 
+ ## Docker-first (non-negotiable)
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+index dfb2566..0d4b8ef 100644
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -6,6 +6,7 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
+ 
+ ### Added
+ 
++- Fabric probes: member LAN loss, RTT, and jitter from ixp.vantages; Can Ping opt-out and busy-host tolerance; nothing announced (#162).
+ - IX-F member import: read-only GET of the IXP Manager member export or a named IX-F URL; key from PACKETEER_IXP_MANAGER_API_KEY header only; 14-day expiry warning (#161).
+ - Web UI shows the Packeteer logo next to the name and as the favicon (#327).
+ - IXP mode: `ixp: {}` is observe-only and refuses `mode: inject`, `announcer`, `mitigation`, `inbound`, `synthesize`, and `more_specific`; no BGP neighbors or RIB view required (#160).
+@@ -14,6 +15,7 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
+ 
+ ### Fixed
+ 
++- Fabric probes read Can Ping from the customers document (`use` ping templates, GET /admin/api/v4/nagios/customers/{vlan}/4|6) and skip a manager export with no successful list (#162).
+ - IX-F import rejects an IPv4-mapped prefix on an IPv6 LAN, a percent-encoded API key in the manager URL, and a switch id from another IXP (#161).
+ 
+ ## [0.7.0] - 2026-10-15
+diff --git a/README.md b/README.md
+index 1958c1e..c7115d4 100644
+--- a/README.md
++++ b/README.md
+@@ -13,7 +13,7 @@ The feature matrix is [docs/FEATURES.md](docs/FEATURES.md).
+ Read this before you change `mode`.
+ 
+ - The default mode is `observe`. The file in this repository stays `observe`. `suggest` probes and recommends, and announces nothing.
+-- An `ixp: {}` block is an exchange operator, not an edge that injects. It refuses `mode: inject`, `announcer`, `mitigation`, `inbound`, `synthesize`, and `more_specific`, and it does not need `bgp.neighbors` ([design](docs/design/ixp.md)). Optional `ixp.members` (`type: ixf`) imports the IX-F member list and announces nothing.
++- An `ixp: {}` block is an exchange operator, not an edge that injects. It refuses `mode: inject`, `announcer`, `mitigation`, `inbound`, `synthesize`, and `more_specific`, and it does not need `bgp.neighbors` ([design](docs/design/ixp.md)). Optional `ixp.members` (`type: ixf`) imports the IX-F member list and announces nothing. Optional `ixp.vantages` and `ixp.fabric` (`type: icmp`) record member LAN loss, RTT, and jitter from those vantages and announce nothing.
+ - `inject` is a separate config: `mode: inject`, a non-empty allowlist, `packeteer_community`, `local_pref`, a positive `hold_time`, positive loss and latency thresholds, an iBGP neighbor, and `announcer.type: gobgp`.
+ - Packeteer announces a prefix only when that exact prefix is in the RIB it learned from the router. It does not invent a more-specific. A config that sets `more_specific_bits` is rejected. The optional `more_specific` block (off by default) also announces the more-specifics a neighbor already advertises inside an improvement's prefix, under a route cap ([design](docs/design/more-specific.md)).
+ - Active improvements are capped (`max_improvements`, default 50).
+diff --git a/cmd/controller/configdoc_test.go b/cmd/controller/configdoc_test.go
+index 28074f3..c5351d2 100644
+--- a/cmd/controller/configdoc_test.go
++++ b/cmd/controller/configdoc_test.go
+@@ -12,6 +12,7 @@ import (
+ 	"github.com/GrandArcher/Packeteer/internal/plugins/elector/lease"
+ 	"github.com/GrandArcher/Packeteer/internal/plugins/exec"
+ 	"github.com/GrandArcher/Packeteer/internal/plugins/federation/mtls"
++	fabricicmp "github.com/GrandArcher/Packeteer/internal/plugins/ixpfabric/icmp"
+ 	"github.com/GrandArcher/Packeteer/internal/plugins/leaksource/rislive"
+ 	"github.com/GrandArcher/Packeteer/internal/plugins/notifier/smtp"
+ 	"github.com/GrandArcher/Packeteer/internal/plugins/notifier/snmptrap"
+@@ -98,6 +99,7 @@ func TestConfigDocCoversStructs(t *testing.T) {
+ 		lease.Config{},
+ 		oidc.Config{},
+ 		baseline.Config{},
++		fabricicmp.Config{},
+ 	) {
+ 		if !strings.Contains(text, "`"+key+"`") {
+ 			missing = append(missing, key)
+diff --git a/cmd/controller/ixp.go b/cmd/controller/ixp.go
+index c2a1477..dfabf7b 100644
+--- a/cmd/controller/ixp.go
++++ b/cmd/controller/ixp.go
+@@ -1,6 +1,9 @@
+ package main
+ 
+ import (
++	"net/netip"
++
++	"github.com/GrandArcher/Packeteer/internal/config"
+ 	"github.com/GrandArcher/Packeteer/internal/httpapi"
+ 	"github.com/GrandArcher/Packeteer/internal/pluginhost"
+ 	"github.com/GrandArcher/Packeteer/pkg/plugin"
+@@ -21,3 +24,32 @@ func wireIXPMembers(plugins *pluginhost.Set, httpSrv *httpapi.Server, emit func(
+ 		httpSrv.SetIXPMembers(src.View)
+ 	}
+ }
++
++// wireIXPFabric connects the fabric prober (#162) before plugins start.
++// It reads the member view and the configured vantages. It does not fetch
++// and it does not announce.
++func wireIXPFabric(cfg *config.Config, plugins *pluginhost.Set, httpSrv *httpapi.Server) {
++	if plugins == nil || plugins.IXPFabric == nil || cfg == nil || cfg.IXP == nil {
++		return
++	}
++	p := plugins.IXPFabric.Plugin
++	if plugins.IXPMembers != nil {
++		p.SetMembers(plugins.IXPMembers.Plugin.View)
++	}
++	p.SetVantages(fabricVantages(cfg.IXP.Vantages))
++	if httpSrv != nil {
++		httpSrv.SetIXPFabric(p.View)
++	}
++}
++
++func fabricVantages(in []config.Vantage) []plugin.FabricVantage {
++	out := make([]plugin.FabricVantage, 0, len(in))
++	for _, v := range in {
++		addr, err := netip.ParseAddr(v.Address)
++		if err != nil {
++			continue
++		}
++		out = append(out, plugin.FabricVantage{Name: v.Name, IXPID: v.IXPID, VLANID: v.VLANID, Address: addr})
++	}
++	return out
++}
+diff --git a/cmd/controller/ixp_test.go b/cmd/controller/ixp_test.go
+index ba4305c..99b78fc 100644
+--- a/cmd/controller/ixp_test.go
++++ b/cmd/controller/ixp_test.go
+@@ -191,3 +191,57 @@ func TestRunIXPMembersCheck(t *testing.T) {
+ 		t.Fatalf("stdout %s", out.String())
+ 	}
+ }
++
++const ixpFabricYAML = `
++mode: observe
++asn: 64512
++router_id: 192.0.2.10
++providers:
++  - {name: transit-a, source_ip: 192.0.2.11, next_hop: 192.0.2.1}
++ixp:
++  members:
++    type: ixf
++    config:
++      url: https://ixp.example.invalid/members.json
++  vantages:
++    - name: lan1-v4
++      vlan_id: 10
++      address: 192.0.2.8
++  fabric:
++    type: icmp
++`
++
++func TestIXPFabricCheck(t *testing.T) {
++	path := filepath.Join(t.TempDir(), "c.yaml")
++	if err := os.WriteFile(path, []byte(ixpFabricYAML), 0o600); err != nil {
++		t.Fatal(err)
++	}
++	var out, errOut strings.Builder
++	if code := run(t.Context(), []string{"-check", "-config", path}, noEnv, &out, &errOut); code != 0 {
++		t.Fatalf("exit %d stderr %s", code, errOut.String())
++	}
++	for _, want := range []string{
++		"ixp: on (observe-only, never announces)",
++		"ixp members: ixf (read-only, never announces)",
++		"ixp fabric: icmp (1 vantages, observe-only, never announces)",
++		"announce: disabled",
++		"check: ok",
++	} {
++		if !strings.Contains(out.String(), want) {
++			t.Errorf("stdout missing %q:\n%s", want, out.String())
++		}
++	}
++	cur := mustParse(t, ixpFabricYAML)
++	next := mustParse(t, strings.Replace(ixpFabricYAML, "192.0.2.8", "192.0.2.9", 1))
++	restart, online := classify(cur, next)
++	if !slices.Contains(restart, "ixp") || len(online) != 0 {
++		t.Fatalf("restart %v online %v", restart, online)
++	}
++	if _, err := planReload(cur, next, nil); err == nil || !strings.Contains(err.Error(), "restart required: changed ixp") {
++		t.Fatalf("planReload: %v", err)
++	}
++	got := fabricVantages(cur.IXP.Vantages)
++	if len(got) != 1 || got[0].Name != "lan1-v4" || got[0].Address.String() != "192.0.2.8" || got[0].VLANID != 10 {
++		t.Fatalf("%+v", got)
++	}
++}
+diff --git a/cmd/controller/main.go b/cmd/controller/main.go
+index 352c3c4..2be696e 100644
+--- a/cmd/controller/main.go
++++ b/cmd/controller/main.go
+@@ -184,6 +184,9 @@ func run(ctx context.Context, args []string, getenv func(string) string, stdout,
+ 		if cfg.IXP.Members != nil {
+ 			fmt.Fprintf(stdout, "ixp members: %s (read-only, never announces)\n", cfg.IXP.Members.Type)
+ 		}
++		if cfg.IXP.Fabric != nil {
++			fmt.Fprintf(stdout, "ixp fabric: %s (%d vantages, observe-only, never announces)\n", cfg.IXP.Fabric.Type, len(cfg.IXP.Vantages))
++		}
+ 	}
+ 	fmt.Fprintf(stdout, "max_improvements: %d\n", *cfg.MaxImprovements)
+ 	fmt.Fprintf(stdout, "providers (%d):\n", len(cfg.Providers))
+@@ -628,6 +631,7 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
+ 	wireSuggestions(cfg, httpSrv, view)
+ 	wireMitigationCandidates(httpSrv, mit, view)
+ 	wireIXPMembers(plugins, httpSrv, dispatch.Emit)
++	wireIXPFabric(cfg, plugins, httpSrv)
+ 	// Active/standby (#31): registered before the elector starts. A
+ 	// standby withdraws everything, runs no decisions, and announces
+ 	// nothing; the announce controllers check the same gate.
+diff --git a/config.example.yaml b/config.example.yaml
+index 31e7b53..de701f1 100644
+--- a/config.example.yaml
++++ b/config.example.yaml
+@@ -7,6 +7,7 @@ mode: observe               # also the default when mode is left out; inject is
+ # more_specific. bgp.neighbors is not required. Leave it unset on an edge
+ # that may inject. members (#161) is read-only and announces nothing.
+ # The API key is PACKETEER_IXP_MANAGER_API_KEY, never this file.
++# vantages and fabric (#162) probe member LAN addresses and announce nothing.
+ # ixp:
+ #   members:
+ #     type: ixf
+@@ -16,6 +17,19 @@ mode: observe               # also the default when mode is left out; inject is
+ #       timeout: 30s
+ #       max_bytes: 8388608
+ #       key_expires: "YYYY-MM-DD"   # required with the API key; at most 366 days ahead
++#   vantages:
++#     - name: lan1-v4
++#       vlan_id: 10
++#       address: 192.0.2.8
++#   fabric:
++#     type: icmp
++#     config:
++#       interval: 1m
++#       timeout: 1s
++#       packets: 5
++#       workers: 4
++#       rate_limit_pps: 20
++#       member_pps: 1
+ 
+ asn: 64512
+ router_id: 192.0.2.10
+diff --git a/docs/API.md b/docs/API.md
+index d08d431..80608a5 100644
+--- a/docs/API.md
++++ b/docs/API.md
+@@ -23,6 +23,7 @@ The dashboard, JSON API, and Prometheus metrics share one listener, `http.listen
+ | `/api/exchanges/member` | Viewer. `?exchange=<name>&next_hop=<ip>` for a configured peer: `availability` and `history` (counts every 15 minutes, up to 3 days, kept in memory). `&class=route_server_only\|bilateral_only\|both` adds `prefixes` (first `limit`, default 100, max 1000) and `prefixes_total`. `400` for a bad parameter, `404` for a next hop that is not a peer of that exchange. Read-only (#156). |
+ | `/api/exchanges/offload` | Viewer. Prefixes whose exit is a transit while a configured exchange peer advertises the exact prefix (the route check passes), sorted by bytes: `rows` with `prefix`, `bytes`, `mbps`, `transit`, `peers` (`exchange`, `peer`), and `est_savings` (the transit's `cost` times `mbps`, absent when the transit has no `cost`). `prefixes`, `bytes`, `mbps`, and `est_savings` total all candidates; `truncated` is true when `rows` was cut at `limit` (default 100, max 1000; the CSV defaults to 1000). `?format=csv` downloads the rows. The exit is the RIB's best path, or the active improvement's provider in `inject`; volume comes from target sources that report it. `400` for a bad parameter, `404` without exchanges. Read-only (#152). |
+ | `/api/ixp/members` | Viewer. The IX-F member list when `ixp.members` is configured (#161): `configured`, `url`, `manager`, `key_id`, `key_expires`, `fetched`, `stale`, `error`, `member_count`, `address_count`, `ixps`, and `members` (ASN, name, connections, LAN addresses, route-server flag, `max_prefix`, `as_macro`, switch and colo from that connection's IXP). Empty lists and `configured: false` when it is not. The API key is not included. Read-only. |
++| `/api/ixp/probes` | Viewer. The latest fabric round when `ixp.fabric` is configured (#162): `configured`, `stale`, `error`, `round`, `targets`, `opt_out`, `vantages` (`name`, `address`, `vlan_id`, `up`, `targets`, `error`), and `samples` (vantage, ASN, address, loss, RTT, jitter, busy-host, past the ping warning, switch and colo). Empty lists and `configured: false` when it is not. The API key is not included. Read-only. Nothing is announced. |
+ | `/api/exchanges/potential-peers` | Viewer. Destination origin ASNs ranked by flow bytes: `rows` with `asn`, `class`, `bytes`, `mbps`, `prefixes` (with traffic), `lan_prefixes` and `lan_bytes` (those with a learned path whose next hop is on an exchange LAN today), and `members` (`exchange`, `peer` for a configured peer, `next_hop`, `via`). `class` is `route_server` (a member with that AS has paths via a route server), `bilateral` (members seen only bilaterally), `unknown` (on a LAN, session type not visible), or `absent` (no peer or LAN member has that AS). `?class=` keeps one class; `asns`, `bytes`, and `mbps` total it, `classes` counts every class, and `unattributed_bytes` had no covering learned route or belong to the local AS. `limit` as for the offload report; `?format=csv` downloads the rows. The origin AS is the last AS of the covering learned route. `400` for a bad parameter, `404` without exchanges. Read-only (#154). |
+ | `/api/telemetry` | Interface rates and 95th-percentile usage when a telemetry plugin is configured. Empty when it is not. This does not announce. |
+ | `/api/reports` | The report list with each report's `category`, `summary`, `filters`, and `columns`, and whether history storage is on. |
+@@ -54,4 +55,6 @@ Prometheus metrics are `packeteer_up`, `packeteer_ready`, `packeteer_build_info`
+ 
+ When `ixp.members` is configured, `/metrics` also has `packeteer_ixp_members`, `packeteer_ixp_member_addresses`, `packeteer_ixp_member_import_up`, `packeteer_ixp_member_import_age_seconds`, and, when `key_expires` is set, `packeteer_ixp_api_key_expiry_seconds` (Unix time). Member and address gauges are zero while the list is stale. They are absent when the import is not configured.
+ 
++When `ixp.fabric` is configured, `/metrics` also has `packeteer_ixp_fabric_up`, `packeteer_ixp_fabric_targets`, `packeteer_ixp_fabric_opt_out`, `packeteer_ixp_fabric_past_tolerance`, and `packeteer_ixp_fabric_age_seconds`. Targets and the past-tolerance count are zero while the member list is stale; age stays. They are absent when fabric probes are not configured. There is no per-member series.
++
+ Scrape `http://127.0.0.1:8080/metrics` on the host. With `auth` on, use an API token ([auth.md](auth.md)).
+diff --git a/docs/CONFIG.md b/docs/CONFIG.md
+index f522d92..02d04c7 100644
+--- a/docs/CONFIG.md
++++ b/docs/CONFIG.md
+@@ -370,7 +370,7 @@ Applied while running:
+ - `inbound.mode` and `mitigation.mode` (#233). `inject` for either needs `mode: inject` in the same file. `hold_time` and `improvement_ttl` reach the inbound controller: a changed `improvement_ttl` applies to steers already running, a changed `hold_time` to steers created after the reload, and a shrunk `allowlist` withdraws an inbound steer it no longer covers. Entering inject runs the same checks as a start and binds the inbound or mitigation announcer on the running speaker; if the reload is then refused, the speaker keeps the inbound import policy, which announces nothing. If leaving inject fails after one controller already withdrew, the reload is fatal: the process stops and withdraws everything. Leaving inject withdraws that controller's routes under its lock before the mode changes. A mitigation rule held outside inject is dropped on entering it, so a dry-run rule never reaches the edge because a mode flipped. Entering mitigation inject with a FlowSpec catalog is refused (`restart required`) unless the process started in inject with it: the sessions negotiate FlowSpec only at start. Every other `inbound` or `mitigation` key stays restart-only.
+ - `bgp.neighbors`, as before (#27). A new neighbor gets a session; a removed one is closed (its paths leave the view at once, as on a session loss). A neighbor whose session settings changed (`port`, `local_address`, `passive`, `add_path`) is closed and opened again. Other sessions are not touched. A changed per-router table (`providers`, `next_hops`) replaces the announcer's export policy on the running speaker. Every outbound route is withdrawn first (GoBGP sends a withdraw only where the current policy would send the route, so a route withdrawn after the swap could stay on a router the new table blocks) and announced again under the new table on the next evaluation, once the prefix is back in the learned RIB. Inbound steer routes are not affected. A change that leaves the table as it was (adding a neighbor with no lists to a config with no lists) withdraws nothing. Egress routers are recomputed, so `egress router down` follows the new lists. `bgp.neighbors` cannot become empty on a reload. `bgp.listen_port`, `bgp.listen_addresses`, and `bgp.as_path` need a restart.
+ 
+-The announcer plugin, providers, probers, and every other key stay restart-only. `more_specific`, `synthesize`, and `ixp` (including `ixp.members`) are restart-only. A reload that changes any restart-only key is refused whole, including the online keys in the same file: the log says `config reload refused` with the keys (`restart required: changed local_pref`), and the running config stays. A file that does not parse or validate is refused the same way, before anything is applied. Comments and YAML style do not count as changes. The audit log records each apply (`config.reload`, with the keys) and each refusal.
++The announcer plugin, providers, probers, and every other key stay restart-only. `more_specific`, `synthesize`, and `ixp` (including `ixp.members`, `ixp.vantages`, and `ixp.fabric`) are restart-only. A reload that changes any restart-only key is refused whole, including the online keys in the same file: the log says `config reload refused` with the keys (`restart required: changed local_pref`), and the running config stays. A file that does not parse or validate is refused the same way, before anything is applied. Comments and YAML style do not count as changes. The audit log records each apply (`config.reload`, with the keys) and each refusal.
+ 
+ If a reload fails after it has changed the speaker, Packeteer stops (exit status 1), which withdraws every Packeteer route; the container's restart policy brings it back with the new file. The learned-RIB check, community, NO_EXPORT, and withdraw rules are unchanged. A prefix that is not in the learned RIB is never announced. Environment overlays (`PACKETEER_LOG_LEVEL`, ...) are applied to the reloaded file as at startup. Lab-proven only (`lab/e2e.sh` for a threshold that keeps the route and a cap of 0 that withdraws it; `lab/e2e-ix.sh` for neighbors).
+ 
+@@ -378,13 +378,19 @@ If a reload fails after it has changed the speaker, Packeteer stops (exit status
+ 
+ Exchange-operator mode (#160, [design/ixp.md](design/ixp.md)). Not the [`exchanges`](#exchanges) block, which is an edge network's own peers.
+ 
+-`ixp: {}` turns it on. The only key is `members` (#161). Any other key is an error. Omitted, or `ixp: null`, leaves the file as an edge controller. `mode` stays `observe`. `mode: suggest` is accepted and announces nothing.
++`ixp: {}` turns it on. The keys are `members` (#161), `vantages`, and `fabric` (#162). Any other key is an error. Omitted, or `ixp: null`, leaves the file as an edge controller. `mode` stays `observe`. `mode: suggest` is accepted and announces nothing.
+ 
+-`ixp.members` is one plugin (`type: ixf`). It GETs an IX-F 1.0 member list and announces nothing. It is not a RIB source and not an input to Decide. `config.url` is the IXP Manager origin or the member-export path (a subdirectory install ends in `/api/v4/member-export/ixf/1.0`; a bare origin uses that path), or one other IX-F JSON URL. On the manager URL the only query keys kept are `ignore_missing_ixfid=1` and `ixfid_<digits>=<digits>`. `apikey`, `access_key`, and any other query key are refused. Redirects are not followed. The API key is `PACKETEER_IXP_MANAGER_API_KEY`, sent only as `X-IXP-Manager-API-Key` and only to the manager URL. A URL that contains the key, including a percent-encoded form, is refused. `key_expires` (`YYYY-MM-DD`, quote it) is required with the key; a date more than 366 days ahead is refused. The controller warns when 14 days or fewer remain. `refresh` (default 15m, 1m-24h), `timeout` (default 30s, 1s-2m), `max_bytes` (default 8 MiB, 1024 to 32 MiB). A failed refresh keeps the last good list until three refresh intervals have passed, then the served list is empty. `GET /api/ixp/members` reads it.
++`ixp.members` is one plugin (`type: ixf`). It GETs an IX-F 1.0 member list and announces nothing. It is not a RIB source and not an input to Decide. `config.url` is the IXP Manager origin or the member-export path (a subdirectory install ends in `/api/v4/member-export/ixf/1.0`; a bare origin uses that path), or one other IX-F JSON URL. On the manager URL the only query keys kept are `ignore_missing_ixfid=1` and `ixfid_<digits>=<digits>`. `apikey`, `access_key`, and any other query key are refused. Redirects are not followed. The API key is `PACKETEER_IXP_MANAGER_API_KEY`, sent only as `X-IXP-Manager-API-Key`. This import sends it only to the manager URL. A URL that contains the key, including a percent-encoded form, is refused. `key_expires` (`YYYY-MM-DD`, quote it) is required with the key; a date more than 366 days ahead is refused. The controller warns when 14 days or fewer remain. `refresh` (default 15m, 1m-24h), `timeout` (default 30s, 1s-2m), `max_bytes` (default 8 MiB, 1024 to 32 MiB). A failed refresh keeps the last good list until three refresh intervals have passed, then the served list is empty. `GET /api/ixp/members` reads it.
+ 
+ With the block set, validation refuses `mode: inject`, `announcer`, `mitigation` (including `mode: observe`), `inbound` (including `mode: observe`), `synthesize`, and `more_specific` (including `enabled: false`). `bgp.neighbors` is not required. With no neighbors the process does not build a RIB view. Route-server data is a separate read-only store and does not enter the RIB view or a decision; that store is not built yet (#164).
+ 
+-Adding or removing `ixp`, including `members`, needs a restart. Rollback: remove `ixp.members` or the block and restart. Nothing was announced. Fabric probes are #162. This import does not probe, so the Can Ping opt-out has nothing to apply to yet.
++`vantages` lists IX-owned monitoring addresses, at most 64. Each entry has `name` (a letter or digit, then letters, digits, `.`, `_`, or `-`, at most 64 characters), `vlan_id` (the IX-F vlan id, 1 to 1000000), optional `ixp_id` (required when that vlan id is on more than one IXP; omit it when the id is unique), and `address`. The address is unicast and not loopback or link-local. A private peering LAN is allowed. It must sit inside that VLAN's prefix or the vantage probes nobody.
++
++`fabric` is one plugin. The only type is `icmp`. It probes each member LAN address on a vantage's VLAN from that vantage and records loss, RTT, and jitter. It is not a provider, not an input to Decide, and it announces nothing. `vantages` and `fabric` are set together, and `fabric` requires `members`. `interval` (default 1m, 10s to 1h), `timeout` (default 1s, 100ms to 5s, per packet), `packets` (default 5, 1 to 20), `workers` (default 4, 1 to 64), `rate_limit_pps` (default 20, 1 to 10000, global), `member_pps` (default 1, 1 to 10000, per member ASN, and not above `rate_limit_pps`).
++
++Only connection states `active`, `connected`, and `operational` are probed, and only an address inside the VLAN prefix. The vantage address itself is not a target. `can_ping: false` on an IX-F address is an opt-out. When the import is the IXP Manager export, each round also GETs `/admin/api/v4/nagios/customers/{vlanid}/4` or `/6` on that same origin, including a subdirectory install. `vlanid` is the VLAN database id. That is the only extra path. The template suffix and every other nagios route are not called. The same `X-IXP-Manager-API-Key` header is used. The key's user must be a superuser; a 401 leaves that VLAN unprobed. Redirects are not followed. A host is probed only when a service uses `ixp-manager-member-ping-service` (busy: `ixp-manager-member-ping-busy-service`). The busy template uses the looser warning (1000ms or 80% loss; otherwise 250ms or 20% loss). The busy critical RTT (2000ms) is the minimum per-packet timeout for that host. A failed fetch keeps the last successful list. With no successful list, that VLAN is not probed, because the member export omits `can_ping`. A named IX-F URL is not the manager export, so that GET is not made. `GET /api/ixp/probes` serves the round. The metrics are `packeteer_ixp_fabric_up`, `packeteer_ixp_fabric_targets`, `packeteer_ixp_fabric_opt_out`, `packeteer_ixp_fabric_past_tolerance`, and `packeteer_ixp_fabric_age_seconds`. There is no per-member series.
++
++Adding or removing `ixp`, including `members`, `vantages`, and `fabric`, needs a restart. Rollback: remove `vantages` and `fabric`, or the `ixp` block, and restart. Nothing was announced.
+ 
+ ### `exchanges`
+ 
+diff --git a/docs/ENV.md b/docs/ENV.md
+index 6c6642a..16df67a 100644
+--- a/docs/ENV.md
++++ b/docs/ENV.md
+@@ -14,7 +14,7 @@ Set these on the container (`-e NAME`). Secrets belong here, never in the config
+ | `PACKETEER_HTTP_USER`, `PACKETEER_HTTP_PASSWORD` | The single basic-auth account. Not allowed when `auth.enabled` is true. |
+ | `PACKETEER_ADMIN_USER`, `PACKETEER_ADMIN_PASSWORD` | First admin when `auth` is on (user defaults to `admin`). See [auth.md](auth.md). |
+ | `PACKETEER_HA_ID` | Instance id for the `lease` elector. See [ha.md](ha.md). |
+-| `PACKETEER_IXP_MANAGER_API_KEY` | IXP Manager API key for `ixp.members` type `ixf` (#161). Sent only as the `X-IXP-Manager-API-Key` header, never in the URL. The log records the key identifier; the secret is never logged. |
++| `PACKETEER_IXP_MANAGER_API_KEY` | IXP Manager API key for `ixp.members` type `ixf` (#161) and, when that import is the manager export, for the fabric prober's Can Ping GET (#162). Sent only as the `X-IXP-Manager-API-Key` header, never in the URL. The log records the key identifier; the secret is never logged. |
+ 
+ ## Referenced from config
+ 
+diff --git a/docs/FEATURES.md b/docs/FEATURES.md
+index 580879e..1cabc26 100644
+--- a/docs/FEATURES.md
++++ b/docs/FEATURES.md
+@@ -26,13 +26,13 @@ Milestones:
+ | v0.4 | 13 |
+ | v0.6 | 9 |
+ | v0.7 | 3 |
+-| v0.8 | 8 |
++| v0.8 | 9 |
+ | won't do | 2 |
+-| **total** | 101 |
++| **total** | 102 |
+ 
+ | Status | Count |
+ |---|---|
+-| done | 85 |
++| done | 86 |
+ | partial | 9 |
+ | in progress | 0 |
+ | planned | 5 |
+@@ -191,14 +191,17 @@ The `maintenance` policy excludes providers during cron-scheduled, one-off, or o
+ | Per-member route server vs bilateral availability: prefixes seen only via the route server, only bilaterally, or both, with counts over time and a flag for a partial or filtered route server feed | done (#156: counts and flags on `/api/exchanges`, `GET /api/exchanges/member` for the prefixes and the counts kept in memory every 15 minutes, and columns on `/providers.html`; BMP Adj-RIB-In paths only, so a peer without `bmp: prefer` or `only` shows zero, and discovered members are not classified; read-only) | v0.8 | core (`internal/rib`, `internal/exchange`) + UI | #156 | no |
+ | Transit-to-IX offload report: flow bytes of prefixes whose exit is a transit while a configured IX peer advertises the exact prefix, with the estimated saving at the transit's `cost` | done (#152: `GET /api/exchanges/offload` as JSON or CSV, sorted by bytes, and a table on `/providers.html`; observe only, nothing is steered; needs a target source that reports volume and, per peer, the route check) | v0.8 | core (`internal/exchange`, `internal/httpapi`) + UI | #152 | no |
+ | Potential-peers report: destination origin ASNs ranked by flow bytes, whether each is present at one of our exchanges, whether a path via the LAN exists today, split into on the route server (check our session or filters) and bilateral only (candidate for a request) | partial (#154: `GET /api/exchanges/potential-peers` as JSON or CSV, with `?class=`, and two tables on `/providers.html`; presence is the configured peers and the discovered LAN members, and the session type needs BMP Adj-RIB-In paths; observe only, no session is opened). Presence from PeeringDB or IX-F waits on #153 | v0.8 | core (`internal/exchange`, `internal/httpapi`) + UI | #154 | no |
+-| IXP mode (exchange operator): `ixp: {}` refuses `mode: inject`, `announcer`, `mitigation`, `inbound`, `synthesize`, and `more_specific`; no `bgp.neighbors` or RIB view required; route-server data is a separate read-only store that never feeds the RIB or Decide | done (#160: charter and validation; #161: IX-F member import. Fabric probes, route-server history, and member pages are #162-#167 and are not built) | v0.8 | core (`internal/config`) + `ixp_member` (`ixf`) | #160, #161 | no |
++| IXP mode (exchange operator): `ixp: {}` refuses `mode: inject`, `announcer`, `mitigation`, `inbound`, `synthesize`, and `more_specific`; no `bgp.neighbors` or RIB view required; route-server data is a separate read-only store that never feeds the RIB or Decide | done (#160: charter and validation; #161: IX-F member import; #162: fabric probes. Route-server history, signals, and member pages are #163-#167 and are not built) | v0.8 | core (`internal/config`) + `ixp_member` (`ixf`) + `ixp_fabric` (`icmp`) | #160, #161, #162 | no |
+ | IX-F member import: members, ASNs, LAN addresses, port speeds, route-server client flags, `max_prefix`, `as_macro`, and switch or colo from IXP Manager or one named IX-F JSON URL | done (#161: `ixp.members` type `ixf`, `GET /api/ixp/members`, metrics; read-only, not the RIB, not an input to Decide, nothing announced) | v0.8 | `ixp_member` (`ixf`) | #161 | no |
++| Fabric probes from IX vantages: loss, RTT, and jitter for each member LAN address, honoring Can Ping and the busy-host tolerance | done (#162: `ixp.vantages` and `ixp.fabric` type `icmp`, `GET /api/ixp/probes`, aggregate metrics; observe-only, not an input to Decide, nothing announced) | v0.8 | `ixp_fabric` (`icmp`) | #162 | no |
+ | Bgpd online reconfiguration (SIGHUP: add/remove/change iBGP sessions and the per-router table without touching other sessions) | done (lab-proven) | v0.3 | core + announcer (`gobgp`) + RIB | #27 | no (lab-proven) |
+ | Online reconfiguration of core settings (thresholds, hold time, cap, policies, sources) without a restart or a withdraw | done (lab-proven) | v0.6 | core (`cmd/controller` reload, `internal/configedit`) | #128 | no (lab-proven) |
+ 
+ IXP mode (#160, [design](design/ixp.md)) is `ixp: {}`, for an exchange operator. It is not an edge network's `exchanges` peers. Validation refuses `mode: inject`, `announcer`, `mitigation`, `inbound`, `synthesize`, and `more_specific`. No `bgp.neighbors` and no RIB view are required. Route-server data is a separate read-only store and does not feed the RIB view or Decide; that store is #164. Rollback: remove `ixp` and restart.
+ 
+-IX-F member import (#161) is `ixp.members` with `type: ixf`. It GETs IXP Manager's `/api/v4/member-export/ixf/1.0` (or a subdirectory path that ends with that suffix) or one named IX-F JSON URL. The API key is `PACKETEER_IXP_MANAGER_API_KEY`, sent only as `X-IXP-Manager-API-Key` and only to the manager URL. A URL that contains the key, including a percent-encoded form, is refused. `key_expires` is required when the key is set. `refresh` is 1m to 24h (default 15m) and `max_bytes` defaults to 8 MiB. `GET /api/ixp/members` serves the list. It is not the RIB and not an input to Decide, and nothing is announced. Rollback: remove `ixp.members` and restart.
++IX-F member import (#161) is `ixp.members` with `type: ixf`. It GETs IXP Manager's `/api/v4/member-export/ixf/1.0` (or a subdirectory path that ends with that suffix) or one named IX-F JSON URL. The API key is `PACKETEER_IXP_MANAGER_API_KEY`, sent only as `X-IXP-Manager-API-Key`. This import sends it only to the manager URL. A URL that contains the key, including a percent-encoded form, is refused. `key_expires` is required when the key is set. `refresh` is 1m to 24h (default 15m) and `max_bytes` defaults to 8 MiB. `GET /api/ixp/members` serves the list. It is not the RIB and not an input to Decide, and nothing is announced. Rollback: remove `ixp.members` and restart.
++
++Fabric probes (#162) are `ixp.vantages` plus `ixp.fabric` with `type: icmp`. Each vantage is an IX-owned address on one peering LAN. The prober measures loss, RTT, and jitter to member addresses on that LAN. Connection states other than `active`, `connected`, and `operational` are not probed. Can Ping off is not probed: IX-F `can_ping: false`, or a customers-document host whose service does not `use` `ixp-manager-member-ping-service` (busy: `ixp-manager-member-ping-busy-service`). The busy template uses the looser warning. The list is `GET /admin/api/v4/nagios/customers/{vlanid}/4` or `/6` on the same IXP Manager origin as the member export, and only then. With no successful list, that VLAN is not probed. `GET /api/ixp/probes` serves the round. It is not an input to Decide, and nothing is announced. Rollback: remove `ixp.vantages` and `ixp.fabric`, or the `ixp` block, and restart.
+ 
+ Leak watch (#199, [leak-watch.md](leak-watch.md)) is off unless `leak_watch.enabled: true`, which needs `packeteer_community` and a source. A leak source reports routes seen outside the iBGP sessions; a sighting that carries `packeteer_community` (or, with `as_path_rule`, shows an injected prefix with `asn` in its path) withdraws that one outbound route at once (never in bulk), holds the prefix out of outbound improvements and inbound steers until `POST /api/leaks/clear`, and emits `leak.detected`. Sources: `bmp` (post-policy Adj-RIB-In of routers outside the AS and Adj-RIB-Out of your own edge toward eBGP) and `rislive`. The export deny for customer, peer, and transit sessions, standard and large communities, is per vendor in [routers.md](routers.md#export-filters-on-every-ebgp-session) (#210).
+ 
+diff --git a/docs/PLUGINS.md b/docs/PLUGINS.md
+index 9069b2e..8eafb0d 100644
+--- a/docs/PLUGINS.md
++++ b/docs/PLUGINS.md
+@@ -62,6 +62,7 @@ Each entry has `type` (required), an optional `name` (defaults to the type and m
+ | `sso` | `AuthURL(ctx, state, nonce, verifier) (string, error)`, `Exchange(ctx, code, nonce, verifier) (SSOIdentity, error)`. Single sign-on for the ops API (#32); one instance under `auth.sso:`. Says who a user is and which role the provider grants; it never announces | `oidc` (OpenID Connect, code flow + PKCE) | none |
+ | `whois` | `Lookup(ctx, query) (WhoisResult, error)`. Troubleshooting registry lookups; one instance under `troubleshoot.whois:` | `rdap` | none |
+ | `ixp_member` | `View() MemberView`, `SetEventSink`. Read-only IX-F member list; one instance under `ixp.members`. Not a RIB source and never announces | `ixf` | never |
++| `ixp_fabric` | `View() FabricView`, `SetMembers`, `SetVantages`. Member LAN loss, RTT, and jitter from `ixp.vantages`. Not a provider, not an input to Decide, and never announces | `icmp` | never |
+ | `elector` | `SetCandidate(func() Candidacy)`, `OnChange(func())`, `Active() bool`, `Resign(ctx)`, `Status()`. Active/standby leader election (#31); one instance under `ha:`. The core gates every announcer on `Active` and withdraws when it turns false | `lease` (lease file on a shared volume) | **never** |
+ | `federation` | `Publish(InstanceSnapshot)`, `Peers(now) []PeerState`. Instance-to-instance transport for multi-POP (#30); one instance under `federation:`. Transport only: the core merges fresh peer data into decisions | `mtls` (mutual TLS) | **never** |
+ | `leak_source` | `SetLeakSink(func(LeakSighting))`, `Healthy() bool`. Reports routes seen outside the AS to the leak watch (#199); list under `leak_watch.sources:` | `bmp` (BMP Adj-RIB-In of outside routers, Adj-RIB-Out of the edge), `rislive` (RIPE RIS Live) | **never** |
+@@ -87,7 +88,7 @@ Announcers, inbound ones included, run **in-process only**, so an external proce
+ ## Lifecycle
+ 
+ 1. **Factory (Init).** `func(cfg plugin.Config, env plugin.Env) (T, error)`. It decodes and validates config with `cfg.Decode(&myStruct)`. It must do no network I/O. `env` provides the instance name, a scoped `slog` logger, the plugin dir, and `Getenv`. When `env.CheckOnly` is set (the config editor checking a candidate file, #34), the instance is thrown away: validate the config, but start no process, open no connection, and write no file.
+-2. **`Start(ctx)`.** Begins background work in goroutines and must not block. Plugins start in this order: storage, SSO, RIB sources, sources, detector, leak sources, probers, scorer, policies, telemetry, notifiers, federation, whois, ixp member source, elector, announcer, inbound announcer, mitigation announcer. If one fails, the ones already started are stopped.
++2. **`Start(ctx)`.** Begins background work in goroutines and must not block. Plugins start in this order: storage, SSO, RIB sources, sources, detector, leak sources, probers, scorer, policies, telemetry, notifiers, federation, whois, ixp member source, ixp fabric prober, elector, announcer, inbound announcer, mitigation announcer. If one fails, the ones already started are stopped.
+ 3. **`Stop(ctx)`.** Releases everything before `ctx` expires. Plugins stop in reverse order, so the announcer stops first and routes are withdrawn early.
+ 
+ Embed `plugin.Base` for no-op `Start`/`Stop`.
+@@ -123,6 +124,7 @@ Embed `plugin.Base` for no-op `Start`/`Stop`.
+ - `lease` (elector, #31): `path` (required, absolute, on a volume both instances mount), `id` (default `PACKETEER_HA_ID`, then the hostname), `ttl` (default 10s, 2s–5m), `renew` (default `ttl`/5, at most `ttl`/4). The active instance stops announcing `ttl`/2 after its last successful renewal. A standby takes a released lease at its next renewal, and a held one only after it has not changed for `ttl`/2 + the holder's recorded BGP hold time + `renew` (at least `ttl`), on its own monotonic clock. Locking is `flock` on `path.lock` with an atomic rename. It never announces. Lab-proven only. See [ha.md](ha.md).
+ - `rdap` (whois): RDAP lookups for the troubleshooting API. `base_url` (default `https://rdap.org`), `timeout` (default `5s`), `max_bytes` (default 256 KiB). The core validates the query (address, prefix, or ASN only) and rate-limits it. It reads only and does not announce. See [CONFIG.md](CONFIG.md#whois-rdap).
+ - `ixf` (ixp_member, #161): one IX-F 1.0 member list under `ixp.members`. `url` (required), `refresh` (default 15m, 1m-24h), `timeout` (default 30s, 1s-2m), `max_bytes` (default 8 MiB, 1024 to 32 MiB), `key_expires` (`YYYY-MM-DD`, required when `PACKETEER_IXP_MANAGER_API_KEY` is set). The key is that environment variable, sent only as `X-IXP-Manager-API-Key` and only to the IXP Manager member export. A named IX-F URL is fetched with no key. It does not announce. See [CONFIG.md](CONFIG.md#ixp).
++- `icmp` (ixp_fabric, #162): member LAN probes under `ixp.fabric`, sourced from `ixp.vantages`. `interval` (default 1m, 10s-1h), `timeout` (default 1s, 100ms-5s), `packets` (default 5, 1-20), `workers` (default 4, 1-64), `rate_limit_pps` (default 20, 1-10000), `member_pps` (default 1, per member ASN, at most `rate_limit_pps`). The packet sender is the built-in icmp prober. Can Ping off, and a customers-document host that does not use the member ping template, are not probed. A manager export with no successful Can Ping list is not probed. It does not announce. See [CONFIG.md](CONFIG.md#ixp).
+ - `sqlite` (storage): report history in an embedded SQLite file. `path` (default `/var/lib/packeteer/packeteer.db`, absolute; mount a volume on the directory) and `retention` (default 400 days, `24h`–`87600h`). Daily probe rollups, one row per improvement with before/after loss and RTT, and per-prefix origin ASN, country, and volume. It also keeps SNMP 95th-percentile samples (#127): the open billing period is reloaded on start, and a closed period stays until `retention`. The controller buffers report rows and writes once a minute, so a slow disk never delays a decision or a withdraw. Sample writes happen when a poll is accepted and do not announce. Reports are built from the history rows by the core (`/api/reports`, CSV, dashboard). A `rules` policy with `geoip_db` supplies countries (`plugin.CountryLookup`). It does not announce. See [CONFIG.md](CONFIG.md#storage-sqlite).
+ - `fixed`: reports `usage_mbps` and `commit_mbps` from config or from a file re-read on every snapshot. Labs and tests only. It does not poll and it does not announce. A deployment uses `snmp`.
+ 
+diff --git a/docs/THREAT_MODEL.md b/docs/THREAT_MODEL.md
+index 8e1e2dc..0335f03 100644
+--- a/docs/THREAT_MODEL.md
++++ b/docs/THREAT_MODEL.md
+@@ -7,7 +7,7 @@ Packeteer can change how a network forwards packets. Failure modes matter more t
+ - **Flap** — oscillating improvements. Mitigate with hold time, hysteresis, and by keeping an improvement when the router hides the native path because Packeteer's route won. Withdrawing on that hide brings the native path back and the next round injects again.
+ - **Leak** — more-specifics learned from Packeteer advertised to transit. Mitigate with a well-known community and outbound filters on every eBGP session.
+ - **Blackhole** — inject toward a next-hop that is down. Mitigate by requiring a live RIB path and withdrawing on probe-source or session failure.
+-- **IXP mode.** An `ixp` block is an exchange operator. Validation refuses `mode: inject`, `announcer`, `mitigation`, `inbound`, `synthesize`, and `more_specific`. It does not announce and it does not change member routing. `ixp.members` is GET only, to the IXP Manager member export or one named IX-F URL. The API key comes from `PACKETEER_IXP_MANAGER_API_KEY` and is sent only as a header to the manager URL. See [design/ixp.md](design/ixp.md).
++- **IXP mode.** An `ixp` block is an exchange operator. Validation refuses `mode: inject`, `announcer`, `mitigation`, `inbound`, `synthesize`, and `more_specific`. It does not announce and it does not change member routing. `ixp.members` is GET only, to the IXP Manager member export or one named IX-F URL. `ixp.fabric` probes member LAN addresses from `ixp.vantages` and, for a manager export, also GETs `/admin/api/v4/nagios/customers/{vlanid}/4` or `/6` on that same origin. A manager export is not probed unless that list was fetched. The API key comes from `PACKETEER_IXP_MANAGER_API_KEY` and is sent only as a header. Neither one announces or changes member routing. See [design/ixp.md](design/ixp.md).
+ - **Over-injection** — synthesizing more-specifics can exhaust TCAM. Packeteer announces only the exact prefix a neighbor advertised, so `max_improvements` bounds the number of routes. A config that sets `more_specific_bits` is rejected. With `more_specific` on, an improvement also announces learned more-specifics (still exact RIB prefixes), and `more_specific.max_routes` (default 100, at most 1000) bounds the routes on the router.
+ - **Stale intent** — controller dies, or keeps announcing a prefix the edge no longer has, or keeps announcing after probes stop refreshing. Packeteer withdraws on shutdown, when a prefix the router was still advertising disappears, when measurements are older than the max result age (checked on a timer, not only when a round completes), and at `improvement_ttl` when the native path is hidden by Packeteer's own route. A probe round that does not finish is abandoned at that same age and does not refresh results. It never enables graceful restart. The BGP hold timer is the backstop if the process is killed before the withdraw is sent. Packeteer proposes a 90s hold time so the timer cannot negotiate off; the router's shorter timer wins. The lab SIGKILLs Packeteer and checks that FRR drops the injected route once the session is down, and no later than that hold timer.
+ 
+diff --git a/docs/design/ixp.md b/docs/design/ixp.md
+index 8dd38ca..deac8a9 100644
+--- a/docs/design/ixp.md
++++ b/docs/design/ixp.md
+@@ -1,9 +1,9 @@
+ # IXP mode (#160)
+ 
+-Status: charter, config gate, and IX-F member import (#161). Fabric
+-probing, route-server history, signals, member pages, and multi-site
+-fabric health are #162-#167 and are not built. An `ixp` block does not
+-announce, probe members, or open a route-server session.
++Status: charter, config gate, IX-F member import (#161), and fabric
++probes (#162). Route-server history, signals, member pages, and
++multi-site fabric health are #163-#167 and are not built. An `ixp`
++block does not announce or open a route-server session.
+ 
+ An Internet exchange operator runs Packeteer to observe its fabric,
+ route servers, and members. It does not route for them. This is not the
+@@ -11,15 +11,16 @@ route servers, and members. It does not route for them. This is not the
+ 
+ ## Turning it on
+ 
+-`ixp: {}` in the config. The only key is `members` (#161). Any other
+-key is an error. Omitted, or `ixp: null`, is not IXP mode. `mode` stays
+-`observe`. `mode: suggest` is accepted and announces nothing. The
+-shipped example leaves the block commented out.
++`ixp: {}` in the config. The keys are `members` (#161), `vantages`,
++and `fabric` (#162). Any other key is an error. Omitted, or `ixp: null`,
++is not IXP mode. `mode` stays `observe`. `mode: suggest` is accepted
++and announces nothing. The shipped example leaves the block commented
++out.
+ 
+ IXP mode does not need `bgp.neighbors`. With no neighbors the controller
+ does not build a RIB view. A neighbor list is still allowed; it is the
+ operator's own iBGP, not route-server data. Providers are still
+-required. Fabric vantages are #162 (`ixp.vantages`), not providers.
++required. Fabric vantages are `ixp.vantages` (#162), not providers.
+ 
+ Adding or removing `ixp` needs a restart. An online reload cannot do it.
+ 
+@@ -63,9 +64,33 @@ IXP Manager and Birdseye are read with GET only. No other method.
+   A warning fires when 14 days or fewer remain, including a key that is
+   already expired. A date more than 366 days ahead is refused. Redirects
+   are not followed. The response is capped (`max_bytes`, default 8 MiB)
+-  and refreshed on `refresh` (default 15m, 1m-24h). Use a low-privilege
+-  user. Superuser endpoints are not called. The list is served at
++  and refreshed on `refresh` (default 15m, 1m-24h). This export does not
++  require a superuser. The list is served at
+   `GET /api/ixp/members`. It is not the RIB and not an input to Decide.
++- IXP Manager customers document (#162, enforced):
++  `GET /admin/api/v4/nagios/customers/{vlanid}/4` and
++  `GET /admin/api/v4/nagios/customers/{vlanid}/6` on the same origin as
++  the member export, including a subdirectory install. `vlanid` is the
++  VLAN database id. The last segment is `4` or `6`. No template suffix
++  and no query string. Auth is the same `X-IXP-Manager-API-Key` header.
++  This is the one route in IXP Manager's external superuser group that
++  this process GETs, so the key's user has to be a superuser. A 401
++  leaves that VLAN unprobed. IXP Manager mounts that group at
++  `/admin/api/v4` (its own `tools/runtime/nagios/update-nagios.sh` uses
++  that prefix). The HTML docs still show
++  `/api/v4/nagios/customers/{vlanid}/4`, which is registered only when
++  `UNSECURED_API_ACCESS` is on (off by default since v7.2) and is not
++  called. Redirects are not followed. The body is capped at
++  2 MiB. A host is probed only when its service use is
++  `ixp-manager-member-ping-service`, or
++  `ixp-manager-member-ping-busy-service` for a busy host. The document
++  does not include `service_description` or `check_command`. The busy
++  template's warning is 1000ms or 80% loss; otherwise 250ms or 20%
++  loss. The busy critical RTT (2000ms) is the minimum per-packet
++  timeout for that host. A failed fetch keeps the last successful
++  list. With no successful list, that VLAN is not probed: the member
++  export omits `can_ping`. A named IX-F URL does not use this GET.
++  Switch, birdseye, and template nagios routes are not called.
+ - An IX-F JSON document the operator names (#161) is GET of that exact
+   URL, with no API key. Setting the key with a URL that is not the
+   member export is a config error.
+@@ -73,9 +98,9 @@ IXP Manager and Birdseye are read with GET only. No other method.
+   `api/routes/count/protocol/{protocol}`,
+   `api/routes/lc-zwild/protocol/{protocol}/{rs-asn}/1101`.
+ 
+-IXP Manager's per-interface "Can Ping" opt-out is #162. This import does
+-not probe, so the opt-out has nothing to apply to yet. A member
+-interface that opts out is not probed once fabric probes exist.
++An IX-F address with `can_ping: false` is not probed. Probes stay inside
++the VLAN prefix. Nothing is announced, and the measurements are not an
++input to Decide.
+ 
+ ## Lab data
+ 
+@@ -84,5 +109,5 @@ Member data is never committed. Lab fixtures use documentation prefixes
+ documentation or private ASNs (64496-64511, 65536-65551, or
+ 64512-65534).
+ 
+-Rollback: remove `ixp.members` or the `ixp` block and restart. Nothing
+-was announced.
++Rollback: remove `ixp.members`, or `ixp.vantages` and `ixp.fabric`, or
++the `ixp` block, and restart. Nothing was announced.
+diff --git a/internal/config/ixp.go b/internal/config/ixp.go
+index 0da7657..1795efb 100644
+--- a/internal/config/ixp.go
++++ b/internal/config/ixp.go
+@@ -2,15 +2,35 @@ package config
+ 
+ import (
+ 	"errors"
++	"fmt"
++	"net/netip"
+ 
+ 	"gopkg.in/yaml.v3"
+ )
+ 
++// Bounds for ixp.vantages (#162).
++const (
++	maxVantages = 64
++	maxVLANID   = 1_000_000
++)
++
+ // IXP is exchange-operator mode (#160). A non-nil value, including an
+-// empty block, is IXP mode. IXP mode never announces. The only key is
+-// members (#161), a read-only IX-F import. Any other key is a parse error.
++// empty block, is IXP mode. IXP mode never announces. Keys are members
++// (#161), vantages, and fabric (#162). Any other key is a parse error.
+ type IXP struct {
+-	Members *PluginSpec `yaml:"members,omitempty"`
++	Members  *PluginSpec `yaml:"members,omitempty"`
++	Vantages []Vantage   `yaml:"vantages,omitempty"`
++	Fabric   *PluginSpec `yaml:"fabric,omitempty"`
++}
++
++// Vantage is one IX-owned monitoring address on a peering LAN (#162).
++// Probes to member addresses on that VLAN are sourced from Address.
++// IXPID 0 means the vlan id is unique in the member list.
++type Vantage struct {
++	Name    string `yaml:"name"`
++	VLANID  int    `yaml:"vlan_id"`
++	IXPID   int    `yaml:"ixp_id,omitempty"`
++	Address string `yaml:"address"`
+ }
+ 
+ // ixpForbidsSynthesize rejects a synthesize key when an ixp block is
+@@ -66,4 +86,75 @@ func (c *Config) validateIXP(add func(string, ...any)) {
+ 	if c.MoreSpecific != nil {
+ 		add("ixp forbids more_specific: IXP mode never announces")
+ 	}
++	c.validateVantages(add)
++}
++
++func (c *Config) validateVantages(add func(string, ...any)) {
++	ix := c.IXP
++	hasV := len(ix.Vantages) > 0
++	hasF := ix.Fabric != nil
++	switch {
++	case hasV && !hasF:
++		add("ixp.vantages requires ixp.fabric")
++	case hasF && !hasV:
++		add("ixp.fabric requires ixp.vantages")
++	case hasF && ix.Members == nil:
++		add("ixp.fabric requires ixp.members")
++	}
++	if len(ix.Vantages) > maxVantages {
++		add("ixp.vantages: more than %d", maxVantages)
++	}
++	seenName := map[string]bool{}
++	seenAddr := map[string]bool{}
++	for i := range ix.Vantages {
++		v := &ix.Vantages[i]
++		p := fmt.Sprintf("ixp.vantages[%d]", i)
++		if !validVantageName(v.Name) {
++			add("%s.name is invalid", p)
++		} else if seenName[v.Name] {
++			add("%s.name %q is duplicated", p, v.Name)
++		}
++		seenName[v.Name] = true
++		if v.VLANID < 1 || v.VLANID > maxVLANID {
++			add("%s.vlan_id is invalid", p)
++		}
++		if v.IXPID < 0 || v.IXPID > maxVLANID {
++			add("%s.ixp_id is invalid", p)
++		}
++		addr, err := netip.ParseAddr(v.Address)
++		if err != nil || addr.Zone() != "" {
++			add("%s.address is not an IP address", p)
++			continue
++		}
++		addr = addr.Unmap()
++		if !usableVantage(addr) {
++			add("%s.address is not a usable vantage address", p)
++			continue
++		}
++		v.Address = addr.String()
++		key := fmt.Sprintf("%d/%d/%s", v.IXPID, v.VLANID, v.Address)
++		if seenAddr[key] {
++			add("%s.address is duplicated on this vlan", p)
++		}
++		seenAddr[key] = true
++	}
++}
++
++func validVantageName(s string) bool {
++	if s == "" || len(s) > 64 {
++		return false
++	}
++	for i, c := range s {
++		switch {
++		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9':
++		case i > 0 && (c == '.' || c == '_' || c == '-'):
++		default:
++			return false
++		}
++	}
++	return true
++}
++
++func usableVantage(a netip.Addr) bool {
++	return a.IsValid() && !a.IsUnspecified() && !a.IsMulticast() && !a.IsLoopback() && !a.IsLinkLocalUnicast() && !a.IsLinkLocalMulticast()
+ }
+diff --git a/internal/config/ixp_test.go b/internal/config/ixp_test.go
+index 0e71818..37258a4 100644
+--- a/internal/config/ixp_test.go
++++ b/internal/config/ixp_test.go
+@@ -153,3 +153,72 @@ ixp:
+ 		t.Fatalf("missing type: %v", err)
+ 	}
+ }
++
++func fabricYAML(addr string) string {
++	return minimalYAML + `
++ixp:
++  members:
++    type: ixf
++    config:
++      url: https://ixp.example.invalid/members.json
++  vantages:
++    - name: lan1-v4
++      vlan_id: 10
++      address: ` + addr + `
++  fabric:
++    type: icmp
++`
++}
++
++func TestIXPVantages(t *testing.T) {
++	cfg, err := Parse([]byte(fabricYAML("192.0.2.8")))
++	if err != nil {
++		t.Fatal(err)
++	}
++	if cfg.IXP.Fabric == nil || cfg.IXP.Fabric.Type != "icmp" || len(cfg.IXP.Vantages) != 1 {
++		t.Fatalf("%+v", cfg.IXP)
++	}
++	if cfg.IXP.Vantages[0].Name != "lan1-v4" || cfg.IXP.Vantages[0].VLANID != 10 || cfg.IXP.Vantages[0].Address != "192.0.2.8" {
++		t.Fatalf("%+v", cfg.IXP.Vantages[0])
++	}
++	if cfg.Mode != ModeObserve || cfg.Announcer != nil {
++		t.Fatalf("mode %s announcer %v", cfg.Mode, cfg.Announcer)
++	}
++	cfg, err = Parse([]byte(fabricYAML("10.1.1.8")))
++	if err != nil || cfg.IXP.Vantages[0].Address != "10.1.1.8" {
++		t.Fatalf("private LAN: %v %+v", err, cfg)
++	}
++	cfg, err = Parse([]byte(fabricYAML("2001:db8:0:0::8")))
++	if err != nil || cfg.IXP.Vantages[0].Address != "2001:db8::8" {
++		t.Fatalf("canonical v6: %v %+v", err, cfg)
++	}
++	cfg, err = Parse([]byte(fabricYAML("::ffff:192.0.2.8")))
++	if err != nil || cfg.IXP.Vantages[0].Address != "192.0.2.8" {
++		t.Fatalf("unmap: %v %+v", err, cfg)
++	}
++
++	bad := []struct{ body, want string }{
++		{fabricYAML("not-an-ip"), "address is not an IP address"},
++		{fabricYAML("127.0.0.1"), "not a usable vantage address"},
++		{fabricYAML("169.254.1.1"), "not a usable vantage address"},
++		{fabricYAML("224.0.0.1"), "not a usable vantage address"},
++		{fabricYAML("192.0.2.8%eth0"), "address is not an IP address"},
++		{strings.Replace(fabricYAML("192.0.2.8"), "vlan_id: 10", "vlan_id: 0", 1), "vlan_id is invalid"},
++		{strings.Replace(fabricYAML("192.0.2.8"), "    type: icmp\n", "    type: \"\"\n", 1), "ixp.fabric: type is required"},
++		{strings.Replace(fabricYAML("192.0.2.8"), "  fabric:\n    type: icmp\n", "", 1), "ixp.vantages requires ixp.fabric"},
++		{strings.Replace(fabricYAML("192.0.2.8"), "  vantages:\n    - name: lan1-v4\n      vlan_id: 10\n      address: 192.0.2.8\n", "", 1), "ixp.fabric requires ixp.vantages"},
++		{minimalYAML + "ixp:\n  fabric: {type: icmp}\n  vantages:\n    - {name: lan1-v4, vlan_id: 10, address: 192.0.2.8}\n", "ixp.fabric requires ixp.members"},
++		{minimalYAML + "ixp: {probes: true}\n", "field probes not found"},
++		{strings.Replace(minimalYAML, "mode: observe", "mode: inject", 1) + "ixp:\n  fabric: {type: icmp}\n  vantages:\n    - {name: lan1-v4, vlan_id: 10, address: 192.0.2.8}\n  members: {type: ixf, config: {url: https://ixp.example.invalid/members.json}}\nannouncer: {type: gobgp}\n", "ixp forbids mode inject"},
++	}
++	dup := strings.Replace(fabricYAML("192.0.2.8"), "  fabric:\n", "    - name: lan1-v4\n      vlan_id: 10\n      address: 192.0.2.9\n  fabric:\n", 1)
++	bad = append(bad, struct{ body, want string }{dup, "is duplicated"})
++	same := strings.Replace(fabricYAML("192.0.2.8"), "  fabric:\n", "    - name: lan1-v4b\n      vlan_id: 10\n      address: 192.0.2.8\n  fabric:\n", 1)
++	bad = append(bad, struct{ body, want string }{same, "duplicated on this vlan"})
++	for _, tc := range bad {
++		_, err := Parse([]byte(tc.body))
++		if err == nil || !strings.Contains(err.Error(), tc.want) {
++			t.Errorf("want %q in %v\n%s", tc.want, err, tc.body)
++		}
++	}
++}
+diff --git a/internal/config/validate.go b/internal/config/validate.go
+index 4d8357e..64e1b95 100644
+--- a/internal/config/validate.go
++++ b/internal/config/validate.go
+@@ -345,6 +345,9 @@ func (c *Config) validatePlugins(add func(string, ...any)) {
+ 	if c.IXP != nil && c.IXP.Members != nil && c.IXP.Members.Type == "" {
+ 		add("ixp.members: type is required")
+ 	}
++	if c.IXP != nil && c.IXP.Fabric != nil && c.IXP.Fabric.Type == "" {
++		add("ixp.fabric: type is required")
++	}
+ 	if c.Announcer != nil && c.Announcer.Type == "" {
+ 		add("announcer: type is required")
+ 	}
+diff --git a/internal/configedit/ixp_test.go b/internal/configedit/ixp_test.go
+index 68498ad..00647dd 100644
+--- a/internal/configedit/ixp_test.go
++++ b/internal/configedit/ixp_test.go
+@@ -60,6 +60,43 @@ ixp:
+ 	}
+ }
+ 
++func TestFormKeepsIXPVantages(t *testing.T) {
++	y := observeYAML + `
++ixp:
++  members:
++    type: ixf
++    config:
++      url: https://ixp.example.invalid/members.json
++  vantages:
++    - name: lan1-v4
++      vlan_id: 10
++      address: 192.0.2.8
++  fabric:
++    type: icmp
++    config:
++      interval: 1m
++`
++	f, err := ParseForm([]byte(y))
++	if err != nil {
++		t.Fatal(err)
++	}
++	f.HoldTime = "20m"
++	out, err := ApplyForm([]byte(y), f)
++	if err != nil {
++		t.Fatal(err)
++	}
++	if !strings.Contains(string(out), "lan1-v4") || !strings.Contains(string(out), "192.0.2.8") || !strings.Contains(string(out), "type: icmp") {
++		t.Fatalf("form dropped vantages:\n%s", out)
++	}
++	cfg, err := config.Parse(out)
++	if err != nil {
++		t.Fatalf("parse: %v\n%s", err, out)
++	}
++	if cfg.IXP == nil || len(cfg.IXP.Vantages) != 1 || cfg.IXP.Vantages[0].Address != "192.0.2.8" || cfg.IXP.Fabric == nil || cfg.HoldTime != 20*time.Minute {
++		t.Fatalf("ixp %+v hold %s", cfg.IXP, cfg.HoldTime)
++	}
++}
++
+ func TestEditorRefusesIXPInject(t *testing.T) {
+ 	y := observeYAML + "ixp: {}\n"
+ 	e, _ := editor(t, y)
+diff --git a/internal/httpapi/access.go b/internal/httpapi/access.go
+index b3cd1e0..9463297 100644
+--- a/internal/httpapi/access.go
++++ b/internal/httpapi/access.go
+@@ -65,6 +65,7 @@ func (s *Server) routeTable() []route {
+ 		{"GET /api/exchanges/offload", viewer, s.handleExchangeOffload},
+ 		{"GET /api/exchanges/potential-peers", viewer, s.handleExchangePotentialPeers},
+ 		{"GET /api/ixp/members", viewer, s.handleIXPMembers},
++		{"GET /api/ixp/probes", viewer, s.handleIXPProbes},
+ 		{"GET /api/linkouts", viewer, s.handleLinkouts},
+ 		{"GET /api/federation", viewer, s.handleFederation},
+ 		{"GET /api/ha", viewer, s.handleHA},
+diff --git a/internal/httpapi/ixp.go b/internal/httpapi/ixp.go
+index fb09b8a..8905329 100644
+--- a/internal/httpapi/ixp.go
++++ b/internal/httpapi/ixp.go
+@@ -42,6 +42,40 @@ func (s *Server) handleIXPMembers(w http.ResponseWriter, _ *http.Request) {
+ 	}{meta: s.snapshot().meta(), MemberView: v})
+ }
+ 
++// SetIXPFabric installs the fabric probe view (#162). The function is
++// called on each request. It must not fetch or announce.
++func (s *Server) SetIXPFabric(fn func() plugin.FabricView) {
++	if s == nil {
++		return
++	}
++	s.ixpFabric.Store(fn)
++}
++
++func (s *Server) ixpFabricView() (plugin.FabricView, bool) {
++	fn, _ := s.ixpFabric.Load().(func() plugin.FabricView)
++	if fn == nil {
++		return plugin.FabricView{}, false
++	}
++	return fn(), true
++}
++
++func (s *Server) handleIXPProbes(w http.ResponseWriter, _ *http.Request) {
++	v, ok := s.ixpFabricView()
++	if !ok {
++		v = plugin.FabricView{}
++	}
++	if v.Vantages == nil {
++		v.Vantages = []plugin.FabricVantageStatus{}
++	}
++	if v.Samples == nil {
++		v.Samples = []plugin.FabricSample{}
++	}
++	writeJSON(w, http.StatusOK, struct {
++		meta
++		plugin.FabricView
++	}{meta: s.snapshot().meta(), FabricView: v})
++}
++
+ // IXPMemberMetrics renders the IX-F import. member and address gauges are
+ // zero while the list is stale; age and key expiry stay.
+ func IXPMemberMetrics(v plugin.MemberView, now time.Time) []byte {
+@@ -74,3 +108,47 @@ func IXPMemberMetrics(v plugin.MemberView, now time.Time) []byte {
+ 	}
+ 	return []byte(b.String())
+ }
++
++// IXPFabricMetrics renders the fabric prober. Targets and the
++// past-tolerance count are zero while the member list is stale; age stays.
++// There is no per-member series.
++func IXPFabricMetrics(v plugin.FabricView, now time.Time) []byte {
++	if !v.Configured {
++		return nil
++	}
++	up := !v.Stale && !v.Round.IsZero()
++	targets, opt, past := v.Targets, v.OptOut, 0
++	if v.Stale {
++		targets, opt, past = 0, 0, 0
++		up = false
++	} else {
++		for _, s := range v.Samples {
++			if s.PastTolerance {
++				past++
++			}
++		}
++		for _, st := range v.Vantages {
++			if !st.Up {
++				up = false
++			}
++		}
++	}
++	var b strings.Builder
++	writeGauge(&b, "packeteer_ixp_fabric_up", "1 when the latest fabric round used a fresh member list and every vantage could probe.",
++		sample{value: boolFloat(up)})
++	writeGauge(&b, "packeteer_ixp_fabric_targets", "Member LAN addresses probed in the latest fabric round. Zero when the member list is stale.",
++		sample{value: float64(targets)})
++	writeGauge(&b, "packeteer_ixp_fabric_opt_out", "Member LAN addresses not probed because Can Ping did not allow them. Zero when the member list is stale.",
++		sample{value: float64(opt)})
++	writeGauge(&b, "packeteer_ixp_fabric_past_tolerance", "Probes at or past the ping warning (busy-host when that host is busy). Zero when the member list is stale.",
++		sample{value: float64(past)})
++	if !v.Round.IsZero() {
++		age := now.Sub(v.Round).Seconds()
++		if age < 0 {
++			age = 0
++		}
++		writeGauge(&b, "packeteer_ixp_fabric_age_seconds", "Seconds since the latest fabric round.",
++			sample{value: age})
++	}
++	return []byte(b.String())
++}
+diff --git a/internal/httpapi/ixp_test.go b/internal/httpapi/ixp_test.go
+index ca49cc7..b580414 100644
+--- a/internal/httpapi/ixp_test.go
++++ b/internal/httpapi/ixp_test.go
+@@ -104,6 +104,92 @@ func TestIXPMembersAPIAndMetrics(t *testing.T) {
+ 	}
+ }
+ 
++func TestIXPProbesAPIAndMetrics(t *testing.T) {
++	s := newIXPServer(t)
++	rec := httptest.NewRecorder()
++	s.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/ixp/probes", nil))
++	if rec.Code != http.StatusOK {
++		t.Fatalf("%d %s", rec.Code, rec.Body)
++	}
++	var body map[string]any
++	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
++		t.Fatal(err)
++	}
++	if body["configured"] != false || body["mode"] != "observe" {
++		t.Fatalf("%s", rec.Body)
++	}
++	vantages, ok := body["vantages"].([]any)
++	samples, ok2 := body["samples"].([]any)
++	if !ok || len(vantages) != 0 || !ok2 || len(samples) != 0 {
++		t.Fatalf("lists %#v %#v", body["vantages"], body["samples"])
++	}
++	mrec := httptest.NewRecorder()
++	s.Handler().ServeHTTP(mrec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
++	if strings.Contains(mrec.Body.String(), "packeteer_ixp_") {
++		t.Fatalf("metrics without fabric:\n%s", mrec.Body)
++	}
++
++	round := time.Unix(1000, 0).UTC()
++	s.SetIXPFabric(func() plugin.FabricView {
++		return plugin.FabricView{
++			Configured: true,
++			Round:      round,
++			Targets:    3,
++			OptOut:     1,
++			Vantages:   []plugin.FabricVantageStatus{{Name: "lan1-v4", Address: "192.0.2.8", VLANID: 10, Up: true, Targets: 3}},
++			Samples: []plugin.FabricSample{
++				{Vantage: "lan1-v4", ASN: 64496, Address: "192.0.2.20", LossPct: 20, RTTMs: 12, JitterMs: 2, PastTolerance: true},
++				{Vantage: "lan1-v4", ASN: 64497, Address: "192.0.2.21", PastTolerance: false},
++			},
++		}
++	})
++	rec = httptest.NewRecorder()
++	s.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/ixp/probes", nil))
++	text := rec.Body.String()
++	for _, want := range []string{`"targets":3`, `"opt_out":1`, `"asn":64496`, `"loss_pct":20`, `"rtt_ms":12`, `"jitter_ms":2`, `"past_tolerance":true`, `"name":"lan1-v4"`} {
++		if !strings.Contains(text, want) {
++			t.Errorf("missing %s in %s", want, text)
++		}
++	}
++	if strings.Contains(text, "api_key") || strings.Contains(text, "SuperSecret") {
++		t.Fatalf("secret field in %s", text)
++	}
++	mrec = httptest.NewRecorder()
++	s.Handler().ServeHTTP(mrec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
++	metrics := mrec.Body.String()
++	for _, want := range []string{
++		"packeteer_ixp_fabric_up 1\n",
++		"packeteer_ixp_fabric_targets 3\n",
++		"packeteer_ixp_fabric_opt_out 1\n",
++		"packeteer_ixp_fabric_past_tolerance 1\n",
++	} {
++		if !strings.Contains(metrics, want) {
++			t.Errorf("missing %s in\n%s", want, metrics)
++		}
++	}
++	if strings.Contains(metrics, "packeteer_ixp_member_rtt") {
++		t.Fatalf("per-member series:\n%s", metrics)
++	}
++
++	s.SetIXPFabric(func() plugin.FabricView {
++		return plugin.FabricView{Configured: true, Stale: true, Round: round, Targets: 3, OptOut: 1, Error: "member list is stale",
++			Samples: []plugin.FabricSample{{PastTolerance: true}}}
++	})
++	mrec = httptest.NewRecorder()
++	s.Handler().ServeHTTP(mrec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
++	metrics = mrec.Body.String()
++	for _, want := range []string{
++		"packeteer_ixp_fabric_up 0\n",
++		"packeteer_ixp_fabric_targets 0\n",
++		"packeteer_ixp_fabric_past_tolerance 0\n",
++		"packeteer_ixp_fabric_age_seconds",
++	} {
++		if !strings.Contains(metrics, want) {
++			t.Errorf("stale missing %s in\n%s", want, metrics)
++		}
++	}
++}
++
+ func newIXPServer(t *testing.T) *Server {
+ 	t.Helper()
+ 	s, err := New(Options{Snapshot: func() Snapshot { return Snapshot{Version: "test", Mode: "observe", Started: true} }})
+diff --git a/internal/httpapi/server.go b/internal/httpapi/server.go
+index 712fb8d..97e05eb 100644
+--- a/internal/httpapi/server.go
++++ b/internal/httpapi/server.go
+@@ -144,6 +144,9 @@ type Server struct {
+ 	// ixpMembers is the IX-F import (#161). Nil until SetIXPMembers.
+ 	// Read at request time. It never announces.
+ 	ixpMembers atomic.Value
++	// ixpFabric is the fabric prober (#162). Nil until SetIXPFabric.
++	// Read at request time. It never announces.
++	ixpFabric atomic.Value
+ 	// quarantine releases a flap-quarantined prefix (#228). Nil until
+ 	// SetQuarantine.
+ 	quarantine atomic.Value
+@@ -336,6 +339,9 @@ func (s *Server) handleMetrics(w http.ResponseWriter, _ *http.Request) {
+ 	if v, ok := s.ixpMemberView(); ok && v.Configured {
+ 		_, _ = w.Write(IXPMemberMetrics(v, time.Now()))
+ 	}
++	if v, ok := s.ixpFabricView(); ok && v.Configured {
++		_, _ = w.Write(IXPFabricMetrics(v, time.Now()))
++	}
+ }
+ 
+ func (s *Server) handleProviders(w http.ResponseWriter, _ *http.Request) {
+diff --git a/internal/pluginhost/host.go b/internal/pluginhost/host.go
+index 6b1c729..7b2564d 100644
+--- a/internal/pluginhost/host.go
++++ b/internal/pluginhost/host.go
+@@ -43,6 +43,9 @@ type Set struct {
+ 	// IXPMembers imports an IX-F member list (#161). It never announces
+ 	// and it is not a RIB source.
+ 	IXPMembers *Instance[plugin.MemberSource]
++	// IXPFabric probes member LAN addresses from ixp.vantages (#162).
++	// It is not a provider, not an input to Decide, and it never announces.
++	IXPFabric *Instance[plugin.FabricProbe]
+ 	// RIBSources feed the RIB view (BMP). They never announce.
+ 	RIBSources []Instance[plugin.RIBSource]
+ 	// Federation is the multi-POP transport (#30). It never announces.
+@@ -170,6 +173,11 @@ func Build(cfg *config.Config, opts Options) (*Set, error) {
+ 			s.IXPMembers = &b[0]
+ 		}
+ 	}
++	if cfg.IXP != nil && cfg.IXP.Fabric != nil {
++		if b := build(plugin.FabricProbes, "ixp.fabric", []config.PluginSpec{*cfg.IXP.Fabric}, base, &errs); len(b) == 1 {
++			s.IXPFabric = &b[0]
++		}
++	}
+ 	if err := errors.Join(errs...); err != nil {
+ 		return nil, err
+ 	}
+@@ -244,6 +252,11 @@ func (s *Set) all() []namedLifecycle {
+ 	if s.IXPMembers != nil {
+ 		add(plugin.KindMemberSource, s.IXPMembers.Name, s.IXPMembers.Plugin)
+ 	}
++	// After the member source, so the first round can see a fetch that
++	// has started. Stopped before it. Nothing here announces.
++	if s.IXPFabric != nil {
++		add(plugin.KindFabric, s.IXPFabric.Name, s.IXPFabric.Plugin)
++	}
+ 	// Before the announcers, so it stops after them. The core withdraws
+ 	// and resigns before any plugin stops.
+ 	if s.Elector != nil {
+diff --git a/internal/pluginhost/host_test.go b/internal/pluginhost/host_test.go
+index 2e76fa7..33f93d2 100644
+--- a/internal/pluginhost/host_test.go
++++ b/internal/pluginhost/host_test.go
+@@ -135,6 +135,57 @@ ixp:
+ 	}
+ }
+ 
++func TestIXPFabricDoesNotAnnounce(t *testing.T) {
++	cfg := load(t, `
++ixp:
++  members:
++    type: ixf
++    config:
++      url: https://ixp.example.invalid/members.json
++  vantages:
++    - {name: lan1-v4, vlan_id: 10, address: 192.0.2.8}
++  fabric:
++    type: icmp
++`)
++	s, err := Build(cfg, Options{})
++	if err != nil {
++		t.Fatal(err)
++	}
++	if s.IXPFabric == nil || s.IXPFabric.Type != "icmp" {
++		t.Fatalf("%+v", s.IXPFabric)
++	}
++	if s.Announcer != nil || len(s.RIBSources) != 0 {
++		t.Fatalf("announcer %v rib %d", s.Announcer, len(s.RIBSources))
++	}
++	sum := s.Summary()
++	for _, want := range []string{"prober icmp", "prober tcp", "ixp_member ixf", "ixp_fabric icmp"} {
++		if !slices.Contains(sum, want) {
++			t.Fatalf("summary %v missing %s", sum, want)
++		}
++	}
++	view := s.IXPFabric.Plugin.View()
++	if !view.Configured || len(view.Samples) != 0 || len(view.Vantages) != 0 {
++		t.Fatalf("%+v", view)
++	}
++	bad := load(t, `
++ixp:
++  members:
++    type: ixf
++    config:
++      url: https://ixp.example.invalid/members.json
++  vantages:
++    - {name: lan1-v4, vlan_id: 10, address: 192.0.2.8}
++  fabric:
++    type: icmp
++    config:
++      rate_limit_pps: 1
++      member_pps: 2
++`)
++	if _, err := Build(bad, Options{}); err == nil || !strings.Contains(err.Error(), "member_pps") {
++		t.Fatalf("member_pps: %v", err)
++	}
++}
++
+ func TestBuildAndLifecycle(t *testing.T) {
+ 	events = nil
+ 	cfg := load(t, "sources:\n  - type: test-source\n    name: s1\nnotifiers:\n  - type: test-notifier\n")
+diff --git a/internal/plugins/all/all.go b/internal/plugins/all/all.go
+index 7d3155e..c1db25f 100644
+--- a/internal/plugins/all/all.go
++++ b/internal/plugins/all/all.go
+@@ -8,6 +8,7 @@ import (
+ 	_ "github.com/GrandArcher/Packeteer/internal/plugins/elector/lease"      // lease-file HA elector
+ 	_ "github.com/GrandArcher/Packeteer/internal/plugins/exec"               // exec prober/source/notifier
+ 	_ "github.com/GrandArcher/Packeteer/internal/plugins/federation/mtls"    // mTLS multi-POP federation
++	_ "github.com/GrandArcher/Packeteer/internal/plugins/ixpfabric/icmp"     // IX fabric prober (observe-only)
+ 	_ "github.com/GrandArcher/Packeteer/internal/plugins/ixpmember/ixf"      // IX-F member import (read-only)
+ 	_ "github.com/GrandArcher/Packeteer/internal/plugins/leaksource/rislive" // RIPE RIS Live leak source
+ 	_ "github.com/GrandArcher/Packeteer/internal/plugins/notifier/smtp"      // smtp notifier
+diff --git a/internal/plugins/ixpfabric/icmp/nagios.go b/internal/plugins/ixpfabric/icmp/nagios.go
+new file mode 100644
+index 0000000..1be3fd2
+--- /dev/null
++++ b/internal/plugins/ixpfabric/icmp/nagios.go
+@@ -0,0 +1,227 @@
++package icmp
++
++import (
++	"bytes"
++	"context"
++	"errors"
++	"fmt"
++	"io"
++	"net/http"
++	"net/netip"
++	"net/url"
++	"strconv"
++	"strings"
++
++	"github.com/GrandArcher/Packeteer/internal/plugins/ixpmember/ixf"
++)
++
++// memberExportSuffix is the only member-export path this builder accepts.
++// Stripping it leaves the install prefix, including a subdirectory.
++const memberExportSuffix = "/api/v4/member-export/ixf/1.0"
++
++// nagiosCustomersPrefix is the customers document on IXP Manager's external
++// superuser API. That group is mounted at /admin/api/v4. The /api/v4 alias
++// in the HTML docs is registered only when UNSECURED_API_ACCESS is on
++// (off by default since v7.2) and this builder does not request it.
++// The template suffix and every other nagios route are refused because
++// this builder never adds them.
++const nagiosCustomersPrefix = "/admin/api/v4/nagios/customers/"
++
++const (
++	apiKeyHeader       = "X-IXP-Manager-API-Key"
++	pingServiceUse     = "ixp-manager-member-ping-service"
++	pingBusyServiceUse = "ixp-manager-member-ping-busy-service"
++)
++
++// nagiosURL is GET /admin/api/v4/nagios/customers/{vlanid}/4|6 on the same
++// origin as the member export. vlanid is the VLAN database id. The query
++// string is dropped. family is the vantage family, not the URL segment.
++func nagiosURL(memberURL string, vlan int, family string) (string, error) {
++	proto, ok := familyProto(family)
++	if vlan < 1 || !ok {
++		return "", errors.New("can ping list: bad vlan")
++	}
++	u, err := url.Parse(memberURL)
++	if err != nil || u.Host == "" || u.User != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Fragment != "" {
++		return "", errors.New("can ping list: member url is not the IXP Manager export")
++	}
++	path := strings.TrimRight(u.Path, "/")
++	if !strings.HasSuffix(path, memberExportSuffix) {
++		return "", errors.New("can ping list: member url is not the IXP Manager export")
++	}
++	u.Path = strings.TrimSuffix(path, memberExportSuffix) + nagiosCustomersPrefix + strconv.Itoa(vlan) + "/" + proto
++	u.RawQuery = ""
++	u.Fragment = ""
++	return u.String(), nil
++}
++
++func familyProto(family string) (string, bool) {
++	switch family {
++	case "ipv4":
++		return "4", true
++	case "ipv6":
++		return "6", true
++	default:
++		return "", false
++	}
++}
++
++func (r *runner) getNagios(ctx context.Context, raw string) ([]byte, error) {
++	if r.apiKey != "" && urlHasKey(raw, r.apiKey) {
++		return nil, errors.New("can ping list: url must not contain the API key")
++	}
++	req, err := http.NewRequestWithContext(ctx, http.MethodGet, raw, nil)
++	if err != nil {
++		return nil, errors.New("can ping list: bad url")
++	}
++	req.Header.Set("Accept", "text/plain")
++	req.Header.Set("User-Agent", "packeteer")
++	if r.apiKey != "" {
++		req.Header.Set(apiKeyHeader, r.apiKey)
++	}
++	resp, err := r.http.Do(req)
++	if err != nil {
++		if errors.Is(err, errNoRedirect) {
++			return nil, errors.New("can ping list: redirects are not followed")
++		}
++		return nil, errors.New("can ping list: " + ixf.Redact(err.Error(), r.apiKey))
++	}
++	defer resp.Body.Close()
++	if resp.StatusCode != http.StatusOK {
++		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1024))
++		return nil, fmt.Errorf("can ping list: HTTP %d", resp.StatusCode)
++	}
++	body, err := io.ReadAll(io.LimitReader(resp.Body, nagiosMaxBytes+1))
++	if err != nil {
++		return nil, errors.New("can ping list: read failed")
++	}
++	if len(body) > nagiosMaxBytes {
++		return nil, errors.New("can ping list: response exceeds max_bytes")
++	}
++	if looksLikeHTML(body) {
++		return nil, errors.New("can ping list: response was not a nagios config")
++	}
++	return body, nil
++}
++
++func urlHasKey(raw, key string) bool {
++	if key == "" {
++		return false
++	}
++	if strings.Contains(raw, key) {
++		return true
++	}
++	esc := url.QueryEscape(key)
++	return esc != key && strings.Contains(raw, esc)
++}
++
++func looksLikeHTML(body []byte) bool {
++	low := bytes.ToLower(body)
++	return bytes.Contains(low, []byte("<html")) || bytes.Contains(low, []byte("<!doctype"))
++}
++
++// parseNagios reads IXP Manager's customers document. Can Ping is a service
++// whose use is ixp-manager-member-ping-service (busy:
++// ixp-manager-member-ping-busy-service). The document does not carry
++// service_description or check_command; those live on templates this
++// process does not fetch. A host with no ping service is not probed.
++// The busy name has the normal name as a prefix, so the match is exact.
++func parseNagios(body []byte) (map[string]nagiosHost, error) {
++	if looksLikeHTML(body) {
++		return nil, errors.New("can ping list: response was not a nagios config")
++	}
++	blocks := nagiosBlocks(string(body))
++	byName := map[string]string{}
++	for _, b := range blocks {
++		if b.typ != "host" {
++			continue
++		}
++		name := b.fields["host_name"]
++		raw := b.fields["address"]
++		addr, err := netip.ParseAddr(raw)
++		if err != nil || addr.Zone() != "" || name == "" {
++			continue
++		}
++		byName[name] = addr.Unmap().String()
++	}
++	out := make(map[string]nagiosHost, len(byName))
++	for _, addr := range byName {
++		out[addr] = nagiosHost{}
++	}
++	for _, b := range blocks {
++		if b.typ != "service" {
++			continue
++		}
++		canPing, busy := pingTemplate(b.fields["use"])
++		if !canPing {
++			continue
++		}
++		addr, ok := byName[b.fields["host_name"]]
++		if !ok {
++			continue
++		}
++		h := out[addr]
++		h.canPing = true
++		if busy {
++			h.busy = true
++		}
++		out[addr] = h
++	}
++	return out, nil
++}
++
++func pingTemplate(use string) (canPing, busy bool) {
++	switch strings.TrimSpace(use) {
++	case pingBusyServiceUse:
++		return true, true
++	case pingServiceUse:
++		return true, false
++	default:
++		return false, false
++	}
++}
++
++type nagiosBlock struct {
++	typ    string
++	fields map[string]string
++}
++
++func nagiosBlocks(text string) []nagiosBlock {
++	lines := strings.Split(text, "\n")
++	var out []nagiosBlock
++	for i := 0; i < len(lines); i++ {
++		line := strings.TrimSpace(lines[i])
++		if !strings.HasPrefix(line, "define ") {
++			continue
++		}
++		rest := strings.TrimSpace(strings.TrimPrefix(line, "define "))
++		rest = strings.TrimSuffix(rest, "{")
++		typ := strings.TrimSpace(rest)
++		fields := map[string]string{}
++		for i+1 < len(lines) {
++			i++
++			l := strings.TrimSpace(lines[i])
++			if l == "}" {
++				break
++			}
++			if l == "" || strings.HasPrefix(l, "#") || strings.HasPrefix(l, ";") {
++				continue
++			}
++			k, v, ok := cutField(l)
++			if ok {
++				fields[k] = v
++			}
++		}
++		out = append(out, nagiosBlock{typ: typ, fields: fields})
++	}
++	return out
++}
++
++func cutField(line string) (string, string, bool) {
++	line = strings.TrimSpace(line)
++	i := strings.IndexAny(line, " \t")
++	if i <= 0 {
++		return "", "", false
++	}
++	return line[:i], strings.TrimSpace(line[i:]), true
++}
+diff --git a/internal/plugins/ixpfabric/icmp/plugin.go b/internal/plugins/ixpfabric/icmp/plugin.go
+new file mode 100644
+index 0000000..ae38e0a
+--- /dev/null
++++ b/internal/plugins/ixpfabric/icmp/plugin.go
+@@ -0,0 +1,187 @@
++// Package icmp is the ixp.fabric prober (#162). It sends ICMP echo from
++// each configured vantage to member LAN addresses on that peering LAN and
++// records loss, RTT, and jitter. It does not announce and it is not an
++// input to Decide.
++package icmp
++
++import (
++	"context"
++	"errors"
++	"fmt"
++	"log/slog"
++	"net/http"
++	"time"
++
++	"golang.org/x/time/rate"
++
++	"github.com/GrandArcher/Packeteer/internal/plugins/ixpmember/ixf"
++	"github.com/GrandArcher/Packeteer/pkg/plugin"
++
++	// The packet sender is the built-in icmp prober. Register it even when
++	// the controller did not import the prober set on its own.
++	_ "github.com/GrandArcher/Packeteer/internal/plugins/prober/icmp"
++)
++
++// TypeName is the config type.
++const TypeName = "icmp"
++
++// Defaults and bounds. A zero value in config selects the default.
++const (
++	DefaultInterval  = time.Minute
++	minInterval      = 10 * time.Second
++	maxInterval      = time.Hour
++	DefaultTimeout   = time.Second
++	minTimeout       = 100 * time.Millisecond
++	maxTimeout       = 5 * time.Second
++	DefaultPackets   = 5
++	maxPackets       = 20
++	DefaultWorkers   = 4
++	maxWorkers       = 64
++	DefaultRate      = 20
++	maxRate          = 10000
++	DefaultMemberPPS = 1
++
++	// nagiosTimeout bounds the Can Ping fetch. It is not a config knob:
++	// the list is small and a slow manager must not stall the process.
++	nagiosTimeout  = 30 * time.Second
++	nagiosMaxBytes = 2 << 20
++)
++
++// errNoRedirect refuses every redirect so the API key header cannot be
++// forwarded to another host.
++var errNoRedirect = errors.New("redirects are not followed")
++
++// Config is the fabric prober's config block.
++type Config struct {
++	Interval     time.Duration `yaml:"interval"`
++	Timeout      time.Duration `yaml:"timeout"`
++	Packets      int           `yaml:"packets"`
++	Workers      int           `yaml:"workers"`
++	RateLimitPPS int           `yaml:"rate_limit_pps"`
++	MemberPPS    int           `yaml:"member_pps"`
++}
++
++func init() { plugin.FabricProbes.Register(TypeName, New) }
++
++// The controller stores the prober as a FabricProbe.
++var _ plugin.FabricProbe = (*Prober)(nil)
++
++// Prober is the icmp fabric prober.
++type Prober struct {
++	r *runner
++}
++
++// New validates the config. It does not dial and it does not fetch.
++func New(c plugin.Config, env plugin.Env) (plugin.FabricProbe, error) {
++	var cfg Config
++	if err := c.Decode(&cfg); err != nil {
++		return nil, err
++	}
++	if err := applyDefaults(&cfg); err != nil {
++		return nil, err
++	}
++	getenv := env.Getenv
++	if getenv == nil {
++		getenv = func(string) string { return "" }
++	}
++	log := env.Logger
++	if log == nil {
++		log = slog.New(slog.DiscardHandler)
++	}
++	sender, err := plugin.Probers.New(TypeName, plugin.NewConfig(nil), env)
++	if err != nil {
++		return nil, err
++	}
++	return &Prober{r: &runner{
++		log:       log,
++		prober:    sender,
++		interval:  cfg.Interval,
++		timeout:   cfg.Timeout,
++		packets:   cfg.Packets,
++		workers:   cfg.Workers,
++		memberPPS: cfg.MemberPPS,
++		global:    rate.NewLimiter(rate.Limit(cfg.RateLimitPPS), burst(cfg.RateLimitPPS, cfg.Packets)),
++		apiKey:    getenv(ixf.APIKeyEnv),
++		http: &http.Client{
++			Timeout: nagiosTimeout,
++			CheckRedirect: func(*http.Request, []*http.Request) error {
++				return errNoRedirect
++			},
++		},
++		view: plugin.FabricView{
++			Configured: true,
++			Vantages:   []plugin.FabricVantageStatus{},
++			Samples:    []plugin.FabricSample{},
++		},
++		memberLim: map[uint32]*rate.Limiter{},
++	}}, nil
++}
++
++func applyDefaults(cfg *Config) error {
++	if cfg.Interval == 0 {
++		cfg.Interval = DefaultInterval
++	}
++	if cfg.Interval < minInterval || cfg.Interval > maxInterval {
++		return fmt.Errorf("interval %s must be between %s and %s", cfg.Interval, minInterval, maxInterval)
++	}
++	if cfg.Timeout == 0 {
++		cfg.Timeout = DefaultTimeout
++	}
++	if cfg.Timeout < minTimeout || cfg.Timeout > maxTimeout {
++		return fmt.Errorf("timeout %s must be between %s and %s", cfg.Timeout, minTimeout, maxTimeout)
++	}
++	if cfg.Packets == 0 {
++		cfg.Packets = DefaultPackets
++	}
++	if cfg.Packets < 1 || cfg.Packets > maxPackets {
++		return fmt.Errorf("packets %d must be between 1 and %d", cfg.Packets, maxPackets)
++	}
++	if cfg.Workers == 0 {
++		cfg.Workers = DefaultWorkers
++	}
++	if cfg.Workers < 1 || cfg.Workers > maxWorkers {
++		return fmt.Errorf("workers %d must be between 1 and %d", cfg.Workers, maxWorkers)
++	}
++	if cfg.RateLimitPPS == 0 {
++		cfg.RateLimitPPS = DefaultRate
++	}
++	if cfg.RateLimitPPS < 1 || cfg.RateLimitPPS > maxRate {
++		return fmt.Errorf("rate_limit_pps %d must be between 1 and %d", cfg.RateLimitPPS, maxRate)
++	}
++	if cfg.MemberPPS == 0 {
++		cfg.MemberPPS = DefaultMemberPPS
++	}
++	if cfg.MemberPPS < 1 || cfg.MemberPPS > maxRate {
++		return fmt.Errorf("member_pps %d must be between 1 and %d", cfg.MemberPPS, maxRate)
++	}
++	if cfg.MemberPPS > cfg.RateLimitPPS {
++		return fmt.Errorf("member_pps %d must not exceed rate_limit_pps %d", cfg.MemberPPS, cfg.RateLimitPPS)
++	}
++	return nil
++}
++
++// burst is large enough for one probe. The limiter's rate is the sustained
++// cap; the first probe may send its packets together, matching the edge
++// probe engine.
++func burst(pps, packets int) int {
++	if pps < packets {
++		return packets
++	}
++	return pps
++}
++
++// SetMembers records the IX-F view. The controller calls it before Start.
++func (p *Prober) SetMembers(fn func() plugin.MemberView) { p.r.setMembers(fn) }
++
++// SetVantages records the monitoring addresses. The controller calls it
++// before Start.
++func (p *Prober) SetVantages(v []plugin.FabricVantage) { p.r.setVantages(v) }
++
++// View returns the latest round.
++func (p *Prober) View() plugin.FabricView { return p.r.snapshot() }
++
++// Start begins the probe loop. It does not block.
++func (p *Prober) Start(ctx context.Context) error { return p.r.start(ctx) }
++
++// Stop cancels the loop and waits for it to leave.
++func (p *Prober) Stop(ctx context.Context) error { return p.r.stop(ctx) }
+diff --git a/internal/plugins/ixpfabric/icmp/round_test.go b/internal/plugins/ixpfabric/icmp/round_test.go
+new file mode 100644
+index 0000000..867eba8
+--- /dev/null
++++ b/internal/plugins/ixpfabric/icmp/round_test.go
+@@ -0,0 +1,692 @@
++package icmp
++
++import (
++	"bytes"
++	"context"
++	"errors"
++	"io"
++	"log/slog"
++	"net/http"
++	"net/http/httptest"
++	"net/netip"
++	"strings"
++	"sync"
++	"testing"
++	"time"
++
++	"github.com/GrandArcher/Packeteer/pkg/plugin"
++)
++
++// nagiosDoc follows IXP Manager's customers foil: blank lines inside the
++// object, a ping service that is only "use" plus host_name, an opted-out
++// host with check_command null and no service, and a hostgroup whose
++// members line is wrapped. service_description and check_command on a
++// service do not grant Can Ping.
++const nagiosDoc = `
++# define host {
++#     host_name commented
++#     address 192.0.2.99
++# }
++#
++# VLAN id: 10; protocol: ipv4; tag: 100; name: Peering.
++#
++
++### Host: 192.0.2.20 / member-a.example / Peering.
++
++define host {
++    use                     ixp-manager-member-host
++
++    host_name               member-a-as64496-ipv4-vlanid10-vliid1
++
++    alias                   Member A / sw1 / Peering VLAN #1.
++    address                 192.0.2.20
++
++}
++
++### Service: 192.0.2.20 / member-a.example / Peering.
++
++define service {
++    use                     ixp-manager-member-ping-service
++
++    host_name               member-a-as64496-ipv4-vlanid10-vliid1
++
++}
++
++### Host: 192.0.2.30 / member-b.example / Peering.
++
++define host {
++    use                     ixp-manager-member-host
++
++    host_name               member-b-as64497-ipv4-vlanid10-vliid2
++
++    alias                   Member B / sw1 / Peering VLAN #1.
++    address                 192.0.2.30
++
++    ## 'canping' is set to false for this vlan interface, disabling host check:
++    check_command           null
++}
++
++### Service: 192.0.2.30 / member-b.example / Peering.
++
++# canping disabled for this, skipping service ping check
++
++### Host: 192.0.2.21 / member-c.example / Peering.
++
++define host {
++    use                     ixp-manager-member-host
++
++    host_name               member-c-as64498-ipv4-vlanid10-vliid3
++
++    alias                   Member C / sw1 / Peering VLAN #1.
++    address                 192.0.2.21
++
++}
++
++### Service: 192.0.2.21 / member-c.example / Peering.
++
++define service {
++    use                     ixp-manager-member-ping-busy-service
++
++    host_name               member-c-as64498-ipv4-vlanid10-vliid3
++
++}
++
++define host {
++    host_name               described-only
++    address                 192.0.2.41
++}
++define service {
++    use                     ixp-manager-member-service
++    host_name               described-only
++    service_description     PING
++    check_command           check_ping!250.0,20%!500.0,60%
++}
++define host {
++    host_name               legacy
++    address                 192.0.2.40
++}
++define service {
++    host_name               legacy
++    service_description     PING-Busy
++    check_command           check_ping!100.0,10%!1500.0,50%
++}
++
++### Host: 2001:db8::20 / member-v6.example / Peering.
++
++define host {
++    use                     ixp-manager-member-host
++
++    host_name               member-v6
++
++    address                 2001:db8::20
++
++}
++
++define service {
++    use                     ixp-manager-member-ping-service
++
++    host_name               member-v6
++
++}
++
++define hostgroup {
++    hostgroup_name  switch-ipv4-vlanid-10-sw1
++
++    alias           All IPv4 Members Connected to Switch sw1 for VLAN Peering
++
++    members         member-a-as64496-ipv4-vlanid10-vliid1, \
++        member-c-as64498-ipv4-vlanid10-vliid3
++
++}
++`
++
++func TestParseNagios(t *testing.T) {
++	hosts, err := parseNagios([]byte(nagiosDoc))
++	if err != nil {
++		t.Fatal(err)
++	}
++	a := hosts["192.0.2.20"]
++	if !a.canPing || a.busy {
++		t.Fatalf("member-a %+v", a)
++	}
++	b, ok := hosts["192.0.2.30"]
++	if !ok || b.canPing || b.busy {
++		t.Fatalf("opted-out host %+v present %v", b, ok)
++	}
++	if hosts["192.0.2.41"].canPing {
++		t.Fatal("service_description PING without the ping template was allowed")
++	}
++	if hosts["192.0.2.40"].canPing || hosts["192.0.2.40"].busy {
++		t.Fatal("PING-Busy description without the busy template was allowed")
++	}
++	if _, ok := hosts["192.0.2.99"]; ok {
++		t.Fatal("commented host was parsed")
++	}
++	c := hosts["192.0.2.21"]
++	if !c.canPing || !c.busy {
++		t.Fatalf("busy %+v", c)
++	}
++	v6 := hosts["2001:db8::20"]
++	if !v6.canPing || v6.busy {
++		t.Fatalf("v6 %+v", v6)
++	}
++	if len(hosts) != 6 {
++		t.Fatalf("hosts %d", len(hosts))
++	}
++	empty, err := parseNagios([]byte("# nothing\n"))
++	if err != nil || len(empty) != 0 {
++		t.Fatalf("comment-only %+v %v", empty, err)
++	}
++	if _, err := parseNagios([]byte("<html><body>login</body></html>")); err == nil || !strings.Contains(err.Error(), "not a nagios config") {
++		t.Fatalf("html %v", err)
++	}
++	can, busy := pingTemplate("ixp-manager-member-ping-service-extra")
++	if can || busy {
++		t.Fatal("a longer template name matched the ping service")
++	}
++}
++
++func TestNagiosURL(t *testing.T) {
++	got, err := nagiosURL("https://ixp.example/ixpm/api/v4/member-export/ixf/1.0?ignore_missing_ixfid=1", 10, "ipv4")
++	if err != nil || got != "https://ixp.example/ixpm/admin/api/v4/nagios/customers/10/4" {
++		t.Fatalf("%s %v", got, err)
++	}
++	got, err = nagiosURL("https://ixp.example/api/v4/member-export/ixf/1.0", 2, "ipv6")
++	if err != nil || got != "https://ixp.example/admin/api/v4/nagios/customers/2/6" {
++		t.Fatalf("%s %v", got, err)
++	}
++	for _, raw := range []string{
++		"https://user:pass@ixp.example/api/v4/member-export/ixf/1.0",
++		"https://ixp.example/members.json",
++		"https://ixp.example/api/v4/nagios/customers/10/4",
++		"ftp://ixp.example/api/v4/member-export/ixf/1.0",
++	} {
++		if _, err := nagiosURL(raw, 10, "ipv4"); err == nil {
++			t.Fatalf("accepted %s", raw)
++		}
++	}
++	if _, err := nagiosURL("https://ixp.example/api/v4/member-export/ixf/1.0", 10, "4"); err == nil {
++		t.Fatal("accepted a protocol digit as the family")
++	}
++}
++
++func TestNagiosFetchAndOptOut(t *testing.T) {
++	secret := "SuperSecretValue99"
++	var hits int
++	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		hits++
++		if r.Method != http.MethodGet {
++			t.Errorf("method %s", r.Method)
++		}
++		if r.URL.RawQuery != "" {
++			t.Errorf("query %s", r.URL.RawQuery)
++		}
++		if strings.Contains(r.URL.String(), secret) {
++			t.Errorf("url contains the key")
++		}
++		if r.Header.Get("X-IXP-Manager-API-Key") != secret {
++			t.Errorf("header %q", r.Header.Get("X-IXP-Manager-API-Key"))
++		}
++		switch r.URL.Path {
++		case "/ixpm/admin/api/v4/nagios/customers/10/4":
++			_, _ = io.WriteString(w, nagiosDoc)
++		default:
++			t.Errorf("path %s", r.URL.Path)
++			http.NotFound(w, r)
++		}
++	}))
++	defer srv.Close()
++
++	fp := &fakeProber{res: plugin.ProbeResult{Sent: 1, RTTs: []time.Duration{300 * time.Millisecond}}}
++	r := testRunner(fp)
++	r.apiKey = secret
++	r.workers = 2
++	off := v4("192.0.2.30")
++	on := v4("192.0.2.20")
++	busy := v4("192.0.2.21")
++	view := memberView([]plugin.IXPMember{oneMember(64496, "Member A", on, off, busy)})
++	view.Manager = true
++	view.URL = srv.URL + "/ixpm/api/v4/member-export/ixf/1.0?ignore_missing_ixfid=1"
++	r.setMembers(func() plugin.MemberView { return view })
++	r.setVantages([]plugin.FabricVantage{vantage("lan1-v4", "192.0.2.8")})
++	r.runRound(context.Background())
++	if hits != 1 {
++		t.Fatalf("hits %d", hits)
++	}
++	got := r.snapshot()
++	if got.OptOut != 1 || got.Targets != 2 || got.Error != "" || got.Stale {
++		t.Fatalf("%+v", got)
++	}
++	reqs := fp.requests()
++	if len(reqs) != 2 {
++		t.Fatalf("probes %d", len(reqs))
++	}
++	byTarget := map[string]plugin.ProbeRequest{}
++	for _, req := range reqs {
++		byTarget[req.Target.String()] = req
++		if req.Provider != "lan1-v4" || req.Source.String() != "192.0.2.8" || req.Count != 5 {
++			t.Fatalf("request %+v", req)
++		}
++	}
++	if _, ok := byTarget["192.0.2.30"]; ok {
++		t.Fatal("opt-out address was probed")
++	}
++	if byTarget["192.0.2.20"].Timeout != time.Second {
++		t.Fatalf("normal timeout %s", byTarget["192.0.2.20"].Timeout)
++	}
++	if byTarget["192.0.2.21"].Timeout != tolBusy.critRTT {
++		t.Fatalf("busy timeout %s", byTarget["192.0.2.21"].Timeout)
++	}
++	for _, s := range got.Samples {
++		if s.Address == "192.0.2.21" && (!s.BusyHost || s.PastTolerance) {
++			t.Fatalf("busy sample %+v", s)
++		}
++		if s.Address == "192.0.2.20" && (s.BusyHost || !s.PastTolerance || s.LossPct != 0) {
++			t.Fatalf("normal sample %+v", s)
++		}
++	}
++
++	// A later failure keeps the opt-out.
++	hits = 0
++	fail := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		hits++
++		w.WriteHeader(http.StatusInternalServerError)
++		_, _ = io.WriteString(w, secret)
++	}))
++	defer fail.Close()
++	view.URL = fail.URL + "/api/v4/member-export/ixf/1.0"
++	fp.reqs = nil
++	r.runRound(context.Background())
++	got = r.snapshot()
++	if hits != 1 || got.OptOut != 1 || fp.count() != 2 || !strings.Contains(got.Error, "HTTP 500") || strings.Contains(got.Error, secret) {
++		t.Fatalf("hits %d probes %d view %+v", hits, fp.count(), got)
++	}
++	if _, ok := r.parts["ipv4/10"]; !ok {
++		t.Fatalf("policy dropped %+v", r.parts)
++	}
++}
++
++func TestNagiosUnauthorizedAndRedirect(t *testing.T) {
++	secret := "SuperSecretValue99"
++	body := "<html>" + secret + "</html>"
++	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		if strings.Contains(r.URL.RequestURI(), secret) {
++			t.Errorf("request target contains the key")
++		}
++		w.WriteHeader(http.StatusUnauthorized)
++		_, _ = io.WriteString(w, body)
++	}))
++	defer srv.Close()
++
++	fp := &fakeProber{}
++	r := testRunner(fp)
++	r.apiKey = secret
++	addr := v4("192.0.2.20")
++	view := memberView([]plugin.IXPMember{oneMember(64496, "Member A", addr)})
++	view.Manager = true
++	view.URL = srv.URL + "/api/v4/member-export/ixf/1.0"
++	r.setMembers(func() plugin.MemberView { return view })
++	r.setVantages([]plugin.FabricVantage{vantage("lan1-v4", "192.0.2.8")})
++	r.runRound(context.Background())
++	got := r.snapshot()
++	if fp.count() != 0 || got.OptOut != 1 || got.Targets != 0 || !strings.Contains(got.Error, "HTTP 401") || strings.Contains(got.Error, secret) {
++		t.Fatalf("probes %d view %+v", fp.count(), got)
++	}
++
++	fp.reqs = nil
++	addr.CanPing = boolPtr(false)
++	view.Members[0].Connections[0].Addresses[0] = addr
++	r.runRound(context.Background())
++	got = r.snapshot()
++	if fp.count() != 0 || got.OptOut != 1 || strings.Contains(got.Error, secret) {
++		t.Fatalf("opt-out probes %d view %+v", fp.count(), got)
++	}
++
++	redir := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		http.Redirect(w, r, srv.URL+"/elsewhere", http.StatusFound)
++	}))
++	defer redir.Close()
++	addr.CanPing = nil
++	view.Members[0].Connections[0].Addresses[0] = addr
++	view.URL = redir.URL + "/api/v4/member-export/ixf/1.0"
++	fp.reqs = nil
++	r.parts = nil
++	r.runRound(context.Background())
++	got = r.snapshot()
++	if !strings.Contains(got.Error, "redirects are not followed") || strings.Contains(got.Error, secret) || fp.count() != 0 || got.Targets != 0 {
++		t.Fatalf("probes %d view %+v", fp.count(), got)
++	}
++
++	// The key must not be fetched even if a caller builds a URL that contains it.
++	var called bool
++	blocked := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { called = true }))
++	defer blocked.Close()
++	if _, err := r.getNagios(context.Background(), blocked.URL+"/?k="+secret); err == nil || !strings.Contains(err.Error(), "must not contain") || called {
++		t.Fatalf("called %v err %v", called, err)
++	}
++}
++
++func TestNagiosBodyCap(t *testing.T) {
++	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
++		_, _ = w.Write(bytes.Repeat([]byte("a"), nagiosMaxBytes+1))
++	}))
++	defer srv.Close()
++	r := testRunner(&fakeProber{})
++	if _, err := r.getNagios(context.Background(), srv.URL); err == nil || !strings.Contains(err.Error(), "max_bytes") {
++		t.Fatal(err)
++	}
++}
++
++func TestNamedIXFDoesNotFetchNagios(t *testing.T) {
++	var hits int
++	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { hits++ }))
++	defer srv.Close()
++	fp := &fakeProber{}
++	r := testRunner(fp)
++	off := v4("192.0.2.30")
++	off.CanPing = boolPtr(false)
++	view := memberView([]plugin.IXPMember{oneMember(64496, "Member A", v4("192.0.2.20"), off)})
++	view.Manager = false
++	view.URL = srv.URL + "/members.json"
++	r.setMembers(func() plugin.MemberView { return view })
++	r.setVantages([]plugin.FabricVantage{vantage("lan1-v4", "192.0.2.8")})
++	r.runRound(context.Background())
++	got := r.snapshot()
++	if hits != 0 || got.Targets != 1 || got.OptOut != 1 || fp.count() != 1 {
++		t.Fatalf("hits %d probes %d view %+v", hits, fp.count(), got)
++	}
++}
++
++func TestRoundFailClosed(t *testing.T) {
++	fp := &fakeProber{}
++	var log bytes.Buffer
++	r := testRunner(fp)
++	r.log = slog.New(slog.NewTextHandler(&log, nil))
++	r.setVantages([]plugin.FabricVantage{vantage("lan1-v4", "192.0.2.8")})
++	r.publish(plugin.FabricView{Configured: true, Targets: 1, Samples: []plugin.FabricSample{{Address: "192.0.2.20", RTTMs: 4}}})
++
++	r.setMembers(func() plugin.MemberView { return plugin.MemberView{Configured: true} })
++	r.runRound(context.Background())
++	got := r.snapshot()
++	if !got.Stale || got.Error != "member list has not loaded" || len(got.Samples) != 0 || fp.count() != 0 {
++		t.Fatalf("%+v probes %d", got, fp.count())
++	}
++
++	stale := memberView([]plugin.IXPMember{oneMember(64496, "Member A", v4("192.0.2.20"))})
++	stale.Stale = true
++	stale.Error = "member list is stale"
++	r.setMembers(func() plugin.MemberView { return stale })
++	r.runRound(context.Background())
++	got = r.snapshot()
++	if !got.Stale || len(got.Samples) != 0 || got.Targets != 0 || fp.count() != 0 || got.Error != "member list is stale" {
++		t.Fatalf("%+v", got)
++	}
++
++	fresh := memberView([]plugin.IXPMember{oneMember(64496, "Member A", v4("192.0.2.20"))})
++	fresh.Error = "temporary refresh failure"
++	r.setMembers(func() plugin.MemberView { return fresh })
++	r.runRound(context.Background())
++	got = r.snapshot()
++	if got.Stale || got.Error != "" || got.Targets != 1 || fp.count() != 1 {
++		t.Fatalf("non-stale error stopped the round: %+v probes %d", got, fp.count())
++	}
++
++	fp.err = errors.New("bind 192.0.2.8: cannot assign requested address")
++	fp.reqs = nil
++	r.runRound(context.Background())
++	got = r.snapshot()
++	if len(got.Samples) != 1 || got.Samples[0].Error == "" || got.Samples[0].PastTolerance || got.Samples[0].Sent != 0 || got.Vantages[0].Up || got.Vantages[0].Error == "" {
++		t.Fatalf("%+v", got)
++	}
++
++	ctx, cancel := context.WithCancel(context.Background())
++	cancel()
++	before := got
++	r.runRound(ctx)
++	if r.snapshot().Samples[0].Error != before.Samples[0].Error || fp.count() != 1 {
++		t.Fatal("cancelled round published")
++	}
++
++	if strings.Count(log.String(), "ixp fabric round") < 1 || strings.Contains(log.String(), "192.0.2.20") {
++		t.Fatalf("log\n%s", log.String())
++	}
++}
++
++func TestRateLimitsBlockTheNextProbe(t *testing.T) {
++	view := memberView([]plugin.IXPMember{oneMember(64496, "Member A", v4("192.0.2.20"), v4("192.0.2.21"))})
++	fp := &fakeProber{}
++	first := make(chan struct{})
++	var once sync.Once
++	fp.onDone = func(n int) {
++		if n == 1 {
++			once.Do(func() { close(first) })
++		}
++	}
++	r := testRunner(fp)
++	r.workers = 2
++	r.packets = 5
++	member := &seqWait{blockOn: 2, hold: make(chan struct{}), hit: make(chan struct{})}
++	r.memberWait = func(asn uint32) waiter {
++		if asn != 64496 {
++			t.Errorf("asn %d", asn)
++		}
++		return member
++	}
++	r.global = allowWait{}
++	r.setMembers(func() plugin.MemberView { return view })
++	r.setVantages([]plugin.FabricVantage{vantage("lan1-v4", "192.0.2.8")})
++	done := make(chan struct{})
++	go func() {
++		r.runRound(context.Background())
++		close(done)
++	}()
++	select {
++	case <-member.hit:
++	case <-t.Context().Done():
++		t.Fatal("member limiter did not block")
++	}
++	select {
++	case <-first:
++	case <-t.Context().Done():
++		t.Fatal("first probe did not finish")
++	}
++	if fp.count() != 1 {
++		t.Fatalf("probes while the second member wait blocked: %d", fp.count())
++	}
++	close(member.hold)
++	select {
++	case <-done:
++	case <-t.Context().Done():
++		t.Fatal("round did not finish")
++	}
++	if fp.count() != 2 || member.calls != 2 || member.ns[0] != 5 {
++		t.Fatalf("probes %d calls %d ns %v", fp.count(), member.calls, member.ns)
++	}
++
++	fp2 := &fakeProber{}
++	first = make(chan struct{})
++	once = sync.Once{}
++	fp2.onDone = func(n int) {
++		if n == 1 {
++			once.Do(func() { close(first) })
++		}
++	}
++	r.prober = fp2
++	global := &seqWait{blockOn: 2, hold: make(chan struct{}), hit: make(chan struct{})}
++	r.global = global
++	r.memberWait = func(uint32) waiter { return allowWait{} }
++	two := memberView([]plugin.IXPMember{
++		oneMember(64496, "Member A", v4("192.0.2.20")),
++		oneMember(64497, "Member B", v4("192.0.2.21")),
++	})
++	r.setMembers(func() plugin.MemberView { return two })
++	done = make(chan struct{})
++	go func() {
++		r.runRound(context.Background())
++		close(done)
++	}()
++	select {
++	case <-global.hit:
++	case <-t.Context().Done():
++		t.Fatal("global limiter did not block")
++	}
++	select {
++	case <-first:
++	case <-t.Context().Done():
++		t.Fatal("first global probe did not finish")
++	}
++	if fp2.count() != 1 {
++		t.Fatalf("probes while the global wait blocked: %d", fp2.count())
++	}
++	close(global.hold)
++	select {
++	case <-done:
++	case <-t.Context().Done():
++		t.Fatal("global round did not finish")
++	}
++	if fp2.count() != 2 {
++		t.Fatalf("probes %d", fp2.count())
++	}
++
++	var waits int
++	r.memberWait = func(uint32) waiter {
++		return fnWait{fn: func(context.Context, int) error { waits++; return nil }}
++	}
++	r.global = fnWait{fn: func(context.Context, int) error { waits++; return nil }}
++	off := v4("192.0.2.20")
++	off.CanPing = boolPtr(false)
++	r.setMembers(func() plugin.MemberView {
++		return memberView([]plugin.IXPMember{oneMember(64496, "Member A", off)})
++	})
++	fp3 := &fakeProber{}
++	r.prober = fp3
++	r.runRound(context.Background())
++	if waits != 0 || fp3.count() != 0 || r.snapshot().OptOut != 1 {
++		t.Fatalf("waits %d probes %d view %+v", waits, fp3.count(), r.snapshot())
++	}
++}
++
++func TestMemberLimiterEvictsAndPolicyDrops(t *testing.T) {
++	fp := &fakeProber{}
++	r := testRunner(fp)
++	r.memberWait = nil
++	r.memberPPS = 1
++	r.packets = 5
++	r.global = allowWait{}
++	r.setVantages([]plugin.FabricVantage{vantage("lan1-v4", "192.0.2.8")})
++	r.setMembers(func() plugin.MemberView {
++		return memberView([]plugin.IXPMember{oneMember(64496, "Member A", v4("192.0.2.20"))})
++	})
++	r.runRound(context.Background())
++	if _, ok := r.memberLim[64496]; !ok || len(r.memberLim) != 1 {
++		t.Fatalf("limiters %+v", r.memberLim)
++	}
++	r.setMembers(func() plugin.MemberView {
++		return memberView([]plugin.IXPMember{oneMember(64497, "Member B", v4("192.0.2.21"))})
++	})
++	r.runRound(context.Background())
++	if _, ok := r.memberLim[64496]; ok || len(r.memberLim) != 1 {
++		t.Fatalf("limiters after leave %+v", r.memberLim)
++	}
++
++	var vlan int
++	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		if vlan == 10 && r.URL.Path != "/admin/api/v4/nagios/customers/10/4" {
++			t.Errorf("path %s", r.URL.Path)
++		}
++		if vlan == 11 && r.URL.Path != "/admin/api/v4/nagios/customers/11/4" {
++			t.Errorf("path %s", r.URL.Path)
++		}
++		_, _ = io.WriteString(w, "# empty\n")
++	}))
++	defer srv.Close()
++	view := memberView(nil)
++	view.Manager = true
++	view.URL = srv.URL + "/api/v4/member-export/ixf/1.0"
++	view.IXPs[0].VLANs = append(view.IXPs[0].VLANs, plugin.IXPVLAN{ID: 11, IPv4: "198.51.100.0/24"})
++	vlan = 10
++	r.setMembers(func() plugin.MemberView { return view })
++	r.setVantages([]plugin.FabricVantage{vantage("lan1-v4", "192.0.2.8")})
++	r.runRound(context.Background())
++	if _, ok := r.parts["ipv4/10"]; !ok {
++		t.Fatalf("parts %+v", r.parts)
++	}
++	vlan = 11
++	r.setVantages([]plugin.FabricVantage{{Name: "lan2-v4", VLANID: 11, Address: netip.MustParseAddr("198.51.100.8")}})
++	r.runRound(context.Background())
++	if _, ok := r.parts["ipv4/10"]; ok {
++		t.Fatalf("old policy kept %+v", r.parts)
++	}
++	if _, ok := r.parts["ipv4/11"]; !ok {
++		t.Fatalf("new policy missing %+v", r.parts)
++	}
++}
++
++func TestStopCancelsABlockedProbe(t *testing.T) {
++	cfg, err := plugin.ConfigFromYAML("interval: 1m\npackets: 1\nrate_limit_pps: 10\nmember_pps: 1\n")
++	if err != nil {
++		t.Fatal(err)
++	}
++	p, err := New(cfg, plugin.Env{})
++	if err != nil {
++		t.Fatal(err)
++	}
++	pr := p.(*Prober)
++	if pr.r.interval != time.Minute || pr.r.packets != 1 || pr.r.workers != DefaultWorkers {
++		t.Fatalf("defaults not applied: interval %s packets %d workers %d", pr.r.interval, pr.r.packets, pr.r.workers)
++	}
++	fp := &fakeProber{entered: make(chan struct{}), block: make(chan struct{})}
++	pr.r.prober = fp
++	pr.r.global = allowWait{}
++	pr.r.memberWait = func(uint32) waiter { return allowWait{} }
++	pr.SetMembers(func() plugin.MemberView {
++		return memberView([]plugin.IXPMember{oneMember(64496, "Member A", v4("192.0.2.20"))})
++	})
++	pr.SetVantages([]plugin.FabricVantage{vantage("lan1-v4", "192.0.2.8")})
++	if err := pr.Start(context.Background()); err != nil {
++		t.Fatal(err)
++	}
++	select {
++	case <-fp.entered:
++	case <-t.Context().Done():
++		t.Fatal("probe did not start")
++	}
++	stopCtx, cancel := context.WithCancel(context.Background())
++	defer cancel()
++	if err := pr.Stop(stopCtx); err != nil {
++		t.Fatal(err)
++	}
++	if fp.count() != 1 {
++		t.Fatalf("probes %d", fp.count())
++	}
++}
++
++func TestNewRejectsBadConfig(t *testing.T) {
++	for _, y := range []string{
++		"interval: 1s\n",
++		"timeout: 10s\n",
++		"packets: 21\n",
++		"workers: 65\n",
++		"rate_limit_pps: 1\nmember_pps: 2\n",
++		"nope: 1\n",
++	} {
++		cfg, err := plugin.ConfigFromYAML(y)
++		if err != nil {
++			t.Fatalf("%s: %v", y, err)
++		}
++		if _, err := New(cfg, plugin.Env{CheckOnly: true}); err == nil {
++			t.Fatalf("accepted %s", y)
++		}
++	}
++	cfg, err := plugin.ConfigFromYAML("")
++	if err != nil {
++		t.Fatal(err)
++	}
++	p, err := New(cfg, plugin.Env{})
++	if err != nil {
++		t.Fatal(err)
++	}
++	if !p.View().Configured || len(p.View().Samples) != 0 {
++		t.Fatalf("%+v", p.View())
++	}
++}
+diff --git a/internal/plugins/ixpfabric/icmp/run.go b/internal/plugins/ixpfabric/icmp/run.go
+new file mode 100644
+index 0000000..096edc6
+--- /dev/null
++++ b/internal/plugins/ixpfabric/icmp/run.go
+@@ -0,0 +1,457 @@
++package icmp
++
++import (
++	"context"
++	"log/slog"
++	"net/http"
++	"sort"
++	"strconv"
++	"strings"
++	"sync"
++	"time"
++
++	"golang.org/x/time/rate"
++
++	"github.com/GrandArcher/Packeteer/internal/plugins/ixpmember/ixf"
++	"github.com/GrandArcher/Packeteer/pkg/plugin"
++)
++
++// waiter is the packet budget. *rate.Limiter satisfies it.
++type waiter interface {
++	WaitN(ctx context.Context, n int) error
++}
++
++type nagiosPart struct {
++	by  map[string]nagiosHost
++	ok  bool
++	err string
++}
++
++type runner struct {
++	log       *slog.Logger
++	prober    plugin.Prober
++	interval  time.Duration
++	timeout   time.Duration
++	packets   int
++	workers   int
++	memberPPS int
++	global    waiter
++	// memberWait, when set, replaces the per-ASN limiter. Tests use it.
++	memberWait func(asn uint32) waiter
++	apiKey     string
++	http       *http.Client
++	now        func() time.Time
++
++	mu        sync.Mutex
++	members   func() plugin.MemberView
++	vantages  []plugin.FabricVantage
++	view      plugin.FabricView
++	parts     map[string]nagiosPart
++	memberLim map[uint32]*rate.Limiter
++	cancel    context.CancelFunc
++	done      chan struct{}
++}
++
++func (r *runner) setMembers(fn func() plugin.MemberView) {
++	r.mu.Lock()
++	r.members = fn
++	r.mu.Unlock()
++}
++
++func (r *runner) setVantages(v []plugin.FabricVantage) {
++	r.mu.Lock()
++	r.vantages = append([]plugin.FabricVantage(nil), v...)
++	r.mu.Unlock()
++}
++
++func (r *runner) snapshot() plugin.FabricView {
++	r.mu.Lock()
++	v := r.view
++	r.mu.Unlock()
++	if v.Vantages == nil {
++		v.Vantages = []plugin.FabricVantageStatus{}
++	}
++	if v.Samples == nil {
++		v.Samples = []plugin.FabricSample{}
++	}
++	return v
++}
++
++func (r *runner) start(ctx context.Context) error {
++	ctx, cancel := context.WithCancel(ctx)
++	done := make(chan struct{})
++	r.mu.Lock()
++	r.cancel = cancel
++	r.done = done
++	r.mu.Unlock()
++	go r.loop(ctx, done)
++	return nil
++}
++
++func (r *runner) loop(ctx context.Context, done chan struct{}) {
++	defer close(done)
++	for {
++		if ctx.Err() != nil {
++			return
++		}
++		start := r.clock()
++		r.runRound(ctx)
++		wait := r.interval - r.clock().Sub(start)
++		if wait < 0 {
++			wait = 0
++		}
++		timer := time.NewTimer(wait)
++		select {
++		case <-ctx.Done():
++			timer.Stop()
++			return
++		case <-timer.C:
++		}
++	}
++}
++
++func (r *runner) stop(ctx context.Context) error {
++	r.mu.Lock()
++	cancel, done := r.cancel, r.done
++	r.mu.Unlock()
++	if cancel != nil {
++		cancel()
++	}
++	if done == nil {
++		return nil
++	}
++	select {
++	case <-done:
++		return nil
++	case <-ctx.Done():
++		return ctx.Err()
++	}
++}
++
++func (r *runner) clock() time.Time {
++	if r.now != nil {
++		return r.now()
++	}
++	return time.Now()
++}
++
++func (r *runner) memberView() plugin.MemberView {
++	r.mu.Lock()
++	fn := r.members
++	r.mu.Unlock()
++	if fn == nil {
++		return plugin.MemberView{}
++	}
++	return fn()
++}
++
++func (r *runner) vantageCopy() []plugin.FabricVantage {
++	r.mu.Lock()
++	defer r.mu.Unlock()
++	return append([]plugin.FabricVantage(nil), r.vantages...)
++}
++
++// runRound measures the current member list once. A stale or unloaded
++// list clears samples and sends nothing: there is no route to withdraw,
++// and a stale LAN address must not keep being probed. A cancelled round
++// leaves the previous samples in place.
++func (r *runner) runRound(ctx context.Context) {
++	if ctx.Err() != nil {
++		return
++	}
++	now := r.clock()
++	members := r.memberView()
++	vantages := r.vantageCopy()
++	if members.Stale || members.Fetched.IsZero() {
++		msg := members.Error
++		switch {
++		case members.Stale && msg == "":
++			msg = "member list is stale"
++		case members.Fetched.IsZero() && msg == "":
++			msg = "member list has not loaded"
++		}
++		msg = ixf.Redact(msg, r.apiKey)
++		r.publish(plugin.FabricView{
++			Configured: true,
++			Stale:      true,
++			Error:      msg,
++			Round:      now,
++			Vantages:   emptyStatuses(vantages),
++			Samples:    []plugin.FabricSample{},
++		})
++		r.logRound(0, 0, msg)
++		return
++	}
++	r.refreshPolicy(ctx, members, vantages)
++	if ctx.Err() != nil {
++		return
++	}
++	parts, polErr := r.policySnapshot()
++	targets, optOut, statuses := selectTargets(members, vantages, parts)
++	samples := r.probeAll(ctx, targets, now)
++	if ctx.Err() != nil {
++		return
++	}
++	applyVantageHealth(statuses, samples)
++	keep := map[uint32]bool{}
++	for _, t := range targets {
++		keep[t.asn] = true
++	}
++	r.evictMembers(keep)
++	r.publish(plugin.FabricView{
++		Configured: true,
++		Error:      polErr,
++		Round:      now,
++		Targets:    len(targets),
++		OptOut:     optOut,
++		Vantages:   statuses,
++		Samples:    samples,
++	})
++	r.logRound(len(targets), optOut, polErr)
++}
++
++func (r *runner) logRound(targets, optOut int, err string) {
++	if r.log != nil {
++		r.log.Info("ixp fabric round", "targets", targets, "opt_out", optOut, "error", err)
++	}
++}
++
++func emptyStatuses(vantages []plugin.FabricVantage) []plugin.FabricVantageStatus {
++	out := make([]plugin.FabricVantageStatus, len(vantages))
++	for i, v := range vantages {
++		out[i] = plugin.FabricVantageStatus{Name: v.Name, Address: v.Address.String(), VLANID: v.VLANID, IXPID: v.IXPID}
++	}
++	return out
++}
++
++func (r *runner) publish(v plugin.FabricView) {
++	if v.Vantages == nil {
++		v.Vantages = []plugin.FabricVantageStatus{}
++	}
++	if v.Samples == nil {
++		v.Samples = []plugin.FabricSample{}
++	}
++	r.mu.Lock()
++	r.view = v
++	r.mu.Unlock()
++}
++
++func (r *runner) refreshPolicy(ctx context.Context, view plugin.MemberView, vantages []plugin.FabricVantage) {
++	if !view.Manager || view.URL == "" {
++		return
++	}
++	seen := map[string]bool{}
++	for _, v := range vantages {
++		if ctx.Err() != nil {
++			return
++		}
++		fam := "ipv4"
++		if v.Address.Is6() {
++			fam = "ipv6"
++		}
++		key := famKey(v.VLANID, fam)
++		if seen[key] {
++			continue
++		}
++		seen[key] = true
++		raw, err := nagiosURL(view.URL, v.VLANID, fam)
++		if err != nil {
++			r.notePolicyErr(key, err)
++			continue
++		}
++		body, err := r.getNagios(ctx, raw)
++		if err != nil {
++			if ctx.Err() != nil {
++				return
++			}
++			r.notePolicyErr(key, err)
++			continue
++		}
++		hosts, err := parseNagios(body)
++		if err != nil {
++			r.notePolicyErr(key, err)
++			continue
++		}
++		r.storePolicy(key, hosts)
++	}
++	r.evictPolicy(seen)
++}
++
++func famKey(vlan int, family string) string {
++	return family + "/" + strconv.Itoa(vlan)
++}
++
++func (r *runner) notePolicyErr(key string, err error) {
++	r.mu.Lock()
++	defer r.mu.Unlock()
++	if r.parts == nil {
++		r.parts = map[string]nagiosPart{}
++	}
++	p := r.parts[key]
++	p.err = ixf.Redact(err.Error(), r.apiKey)
++	r.parts[key] = p
++}
++
++func (r *runner) evictPolicy(keep map[string]bool) {
++	r.mu.Lock()
++	defer r.mu.Unlock()
++	for k := range r.parts {
++		if !keep[k] {
++			delete(r.parts, k)
++		}
++	}
++}
++
++func (r *runner) storePolicy(key string, hosts map[string]nagiosHost) {
++	r.mu.Lock()
++	defer r.mu.Unlock()
++	if r.parts == nil {
++		r.parts = map[string]nagiosPart{}
++	}
++	r.parts[key] = nagiosPart{by: hosts, ok: true}
++}
++
++func (r *runner) policySnapshot() (map[string]map[string]nagiosHost, string) {
++	r.mu.Lock()
++	defer r.mu.Unlock()
++	out := make(map[string]map[string]nagiosHost, len(r.parts))
++	keys := make([]string, 0, len(r.parts))
++	for k := range r.parts {
++		keys = append(keys, k)
++	}
++	sort.Strings(keys)
++	var errs []string
++	for _, k := range keys {
++		p := r.parts[k]
++		if p.err != "" {
++			errs = append(errs, p.err)
++		}
++		if p.ok || len(p.by) > 0 {
++			out[k] = p.by
++		}
++	}
++	return out, strings.Join(errs, "; ")
++}
++
++func (r *runner) probeAll(ctx context.Context, targets []target, now time.Time) []plugin.FabricSample {
++	if len(targets) == 0 {
++		return []plugin.FabricSample{}
++	}
++	limits := make(map[uint32]waiter, len(targets))
++	for _, t := range targets {
++		if _, ok := limits[t.asn]; !ok {
++			limits[t.asn] = r.limitFor(t.asn)
++		}
++	}
++	workers := r.workers
++	if workers < 1 {
++		workers = 1
++	}
++	out := make([]plugin.FabricSample, len(targets))
++	var wg sync.WaitGroup
++	sem := make(chan struct{}, workers)
++	for i, t := range targets {
++		if ctx.Err() != nil {
++			out[i] = t.errored(now, "round cancelled")
++			continue
++		}
++		wg.Add(1)
++		select {
++		case sem <- struct{}{}:
++		case <-ctx.Done():
++			wg.Done()
++			out[i] = t.errored(now, "round cancelled")
++			continue
++		}
++		go func(i int, t target) {
++			defer wg.Done()
++			defer func() { <-sem }()
++			out[i] = r.probeOne(ctx, t, limits[t.asn], now)
++		}(i, t)
++	}
++	wg.Wait()
++	return out
++}
++
++func (r *runner) probeOne(ctx context.Context, t target, member waiter, now time.Time) plugin.FabricSample {
++	if member != nil {
++		if err := member.WaitN(ctx, r.packets); err != nil {
++			return t.errored(now, ixf.Redact("member rate limit: "+err.Error(), r.apiKey))
++		}
++	}
++	if r.global != nil {
++		if err := r.global.WaitN(ctx, r.packets); err != nil {
++			return t.errored(now, ixf.Redact("rate limit: "+err.Error(), r.apiKey))
++		}
++	}
++	to := r.timeout
++	if t.busy && t.tol.critRTT > to {
++		to = t.tol.critRTT
++	}
++	res, err := r.prober.Probe(ctx, plugin.ProbeRequest{
++		Provider: t.vantage,
++		Source:   t.source,
++		Target:   t.addr,
++		Count:    r.packets,
++		Timeout:  to,
++	})
++	if err != nil {
++		return t.errored(now, ixf.Redact(err.Error(), r.apiKey))
++	}
++	return t.measured(now, res)
++}
++
++func (r *runner) limitFor(asn uint32) waiter {
++	if r.memberWait != nil {
++		return r.memberWait(asn)
++	}
++	r.mu.Lock()
++	defer r.mu.Unlock()
++	if r.memberLim == nil {
++		r.memberLim = map[uint32]*rate.Limiter{}
++	}
++	if r.memberLim[asn] == nil {
++		r.memberLim[asn] = rate.NewLimiter(rate.Limit(r.memberPPS), burst(r.memberPPS, r.packets))
++	}
++	return r.memberLim[asn]
++}
++
++func (r *runner) evictMembers(keep map[uint32]bool) {
++	r.mu.Lock()
++	defer r.mu.Unlock()
++	for asn := range r.memberLim {
++		if !keep[asn] {
++			delete(r.memberLim, asn)
++		}
++	}
++}
++
++func applyVantageHealth(st []plugin.FabricVantageStatus, samples []plugin.FabricSample) {
++	for i := range st {
++		if st[i].Error != "" {
++			st[i].Up = false
++			continue
++		}
++		n, bad := 0, 0
++		first := ""
++		for _, s := range samples {
++			if s.Vantage != st[i].Name {
++				continue
++			}
++			n++
++			if s.Error != "" {
++				bad++
++				if first == "" {
++					first = s.Error
++				}
++			}
++		}
++		st[i].Targets = n
++		if n > 0 && bad == n {
++			st[i].Up = false
++			st[i].Error = first
++			continue
++		}
++		st[i].Up = true
++	}
++}
+diff --git a/internal/plugins/ixpfabric/icmp/run_test.go b/internal/plugins/ixpfabric/icmp/run_test.go
+new file mode 100644
+index 0000000..f083f3a
+--- /dev/null
++++ b/internal/plugins/ixpfabric/icmp/run_test.go
+@@ -0,0 +1,365 @@
++package icmp
++
++import (
++	"context"
++	"log/slog"
++	"net/http"
++	"net/netip"
++	"sync"
++	"testing"
++	"time"
++
++	"golang.org/x/time/rate"
++
++	"github.com/GrandArcher/Packeteer/pkg/plugin"
++)
++
++type fakeProber struct {
++	plugin.Base
++	mu      sync.Mutex
++	reqs    []plugin.ProbeRequest
++	err     error
++	res     plugin.ProbeResult
++	block   chan struct{}
++	entered chan struct{}
++	once    sync.Once
++	onDone  func(n int)
++}
++
++func (f *fakeProber) Probe(ctx context.Context, req plugin.ProbeRequest) (plugin.ProbeResult, error) {
++	f.mu.Lock()
++	f.reqs = append(f.reqs, req)
++	n := len(f.reqs)
++	err, res, block := f.err, f.res, f.block
++	f.mu.Unlock()
++	if f.entered != nil {
++		f.once.Do(func() { close(f.entered) })
++	}
++	if f.onDone != nil {
++		f.onDone(n)
++	}
++	if block != nil {
++		select {
++		case <-block:
++		case <-ctx.Done():
++			return plugin.ProbeResult{}, ctx.Err()
++		}
++	}
++	if err != nil {
++		return plugin.ProbeResult{}, err
++	}
++	if res.Sent == 0 && res.RTTs == nil {
++		res = plugin.ProbeResult{Sent: 5, RTTs: []time.Duration{time.Millisecond, time.Millisecond, time.Millisecond, time.Millisecond, time.Millisecond}}
++	}
++	return res, nil
++}
++
++func (f *fakeProber) count() int {
++	f.mu.Lock()
++	defer f.mu.Unlock()
++	return len(f.reqs)
++}
++
++func (f *fakeProber) requests() []plugin.ProbeRequest {
++	f.mu.Lock()
++	defer f.mu.Unlock()
++	return append([]plugin.ProbeRequest(nil), f.reqs...)
++}
++
++type allowWait struct{}
++
++func (allowWait) WaitN(context.Context, int) error { return nil }
++
++type fnWait struct {
++	fn func(context.Context, int) error
++}
++
++func (f fnWait) WaitN(ctx context.Context, n int) error { return f.fn(ctx, n) }
++
++// seqWait lets the first calls through and blocks the call numbered blockOn.
++type seqWait struct {
++	mu      sync.Mutex
++	calls   int
++	ns      []int
++	blockOn int
++	hold    chan struct{}
++	hit     chan struct{}
++}
++
++func (s *seqWait) WaitN(ctx context.Context, n int) error {
++	s.mu.Lock()
++	s.calls++
++	c := s.calls
++	s.ns = append(s.ns, n)
++	s.mu.Unlock()
++	if c == s.blockOn {
++		close(s.hit)
++		select {
++		case <-s.hold:
++			return nil
++		case <-ctx.Done():
++			return ctx.Err()
++		}
++	}
++	return nil
++}
++
++func testRunner(fp *fakeProber) *runner {
++	return &runner{
++		log:        slog.New(slog.DiscardHandler),
++		prober:     fp,
++		interval:   time.Minute,
++		timeout:    time.Second,
++		packets:    5,
++		workers:    4,
++		memberPPS:  1,
++		global:     allowWait{},
++		memberWait: func(uint32) waiter { return allowWait{} },
++		http: &http.Client{
++			Timeout:       time.Second,
++			CheckRedirect: func(*http.Request, []*http.Request) error { return errNoRedirect },
++		},
++		view:      plugin.FabricView{Configured: true, Vantages: []plugin.FabricVantageStatus{}, Samples: []plugin.FabricSample{}},
++		memberLim: map[uint32]*rate.Limiter{},
++		now:       func() time.Time { return time.Unix(100, 0).UTC() },
++	}
++}
++
++func v4(ip string) plugin.IXPAddress {
++	return plugin.IXPAddress{Family: "ipv4", Address: ip, VLANID: 10}
++}
++
++func v6(ip string) plugin.IXPAddress {
++	return plugin.IXPAddress{Family: "ipv6", Address: ip, VLANID: 10}
++}
++
++func boolPtr(v bool) *bool { return &v }
++
++func memberView(members []plugin.IXPMember) plugin.MemberView {
++	return plugin.MemberView{
++		Configured: true,
++		Fetched:    time.Unix(50, 0).UTC(),
++		IXPs: []plugin.IXPSite{{
++			ID:    1,
++			VLANs: []plugin.IXPVLAN{{ID: 10, IPv4: "192.0.2.0/24", IPv6: "2001:db8::/64"}},
++		}},
++		Members: members,
++	}
++}
++
++func oneMember(asn uint32, name string, addrs ...plugin.IXPAddress) plugin.IXPMember {
++	return plugin.IXPMember{ASN: asn, Name: name, Connections: []plugin.IXPConnection{{
++		IXPID:      1,
++		State:      "active",
++		Interfaces: []plugin.IXPInterface{{SwitchID: 7, Switch: "sw1", Colo: "cab-a"}},
++		Addresses:  addrs,
++	}}}
++}
++
++func vantage(name, ip string) plugin.FabricVantage {
++	return plugin.FabricVantage{Name: name, VLANID: 10, Address: netip.MustParseAddr(ip)}
++}
++
++func TestManagerCanPingGate(t *testing.T) {
++	addr := v4("192.0.2.20")
++	busy := v4("192.0.2.21")
++	missing := v4("192.0.2.31")
++	view := memberView([]plugin.IXPMember{oneMember(64496, "Member A", addr, busy, missing)})
++	view.Manager = true
++	vantages := []plugin.FabricVantage{vantage("lan1-v4", "192.0.2.8")}
++
++	targets, opt, _ := selectTargets(view, vantages, nil)
++	if len(targets) != 0 || opt != 3 {
++		t.Fatalf("no list: targets %d opt %d", len(targets), opt)
++	}
++	targets, opt, _ = selectTargets(view, vantages, map[string]map[string]nagiosHost{"ipv4/10": {}})
++	if len(targets) != 0 || opt != 3 {
++		t.Fatalf("empty list: targets %d opt %d", len(targets), opt)
++	}
++
++	parts := map[string]map[string]nagiosHost{
++		"ipv4/10": {
++			"192.0.2.20": {canPing: true},
++			"192.0.2.21": {canPing: true, busy: true},
++		},
++	}
++	targets, opt, _ = selectTargets(view, vantages, parts)
++	if opt != 1 || len(targets) != 2 {
++		t.Fatalf("list: targets %d opt %d", len(targets), opt)
++	}
++	got := map[string]target{}
++	for _, tg := range targets {
++		got[tg.addr.String()] = tg
++	}
++	if got["192.0.2.20"].busy || got["192.0.2.20"].tol != tolNormal {
++		t.Fatalf("normal %+v", got["192.0.2.20"])
++	}
++	if !got["192.0.2.21"].busy || got["192.0.2.21"].tol != tolBusy {
++		t.Fatalf("busy %+v", got["192.0.2.21"])
++	}
++	if _, ok := got["192.0.2.31"]; ok {
++		t.Fatal("address missing from the customers document was probed")
++	}
++
++	addr.CanPing = boolPtr(false)
++	view.Members[0].Connections[0].Addresses[0] = addr
++	targets, opt, _ = selectTargets(view, vantages, parts)
++	if len(targets) != 1 || opt != 2 || targets[0].addr.String() != "192.0.2.21" {
++		t.Fatalf("ix-f opt-out: %+v opt %d", targets, opt)
++	}
++}
++
++func TestSelectAndMeasure(t *testing.T) {
++	off := v4("192.0.2.30")
++	off.CanPing = boolPtr(false)
++	busy := v4("192.0.2.21")
++	busy.BusyHost = true
++	rs := v4("192.0.2.22")
++	rs.RouteServer = true
++	outside := v4("198.51.100.9")
++	otherVLAN := v4("192.0.2.23")
++	otherVLAN.VLANID = 11
++	self := v4("192.0.2.8")
++	down := oneMember(64496, "Down", v4("192.0.2.40"))
++	down.Connections[0].State = ""
++	view := memberView([]plugin.IXPMember{
++		oneMember(64500, "Later", v4("192.0.2.20")),
++		oneMember(64496, "Member A", v4("192.0.2.20"), busy, rs, outside, otherVLAN, self, off, v6("2001:db8::20")),
++		down,
++	})
++	// The lower ASN owns 192.0.2.20 even though it is listed second.
++	view.Members[1].Connections[0].State = "connected"
++	vantages := []plugin.FabricVantage{vantage("lan1-v4", "192.0.2.8"), vantage("lan1-v6", "2001:db8::8")}
++	targets, opt, statuses := selectTargets(view, vantages, nil)
++	if opt != 1 {
++		t.Fatalf("opt out %d", opt)
++	}
++	if len(statuses) != 2 || statuses[0].Error != "" || statuses[1].Error != "" {
++		t.Fatalf("statuses %+v", statuses)
++	}
++	got := map[string]target{}
++	for _, tg := range targets {
++		got[tg.vantage+"/"+tg.addr.String()] = tg
++	}
++	if len(got) != 4 {
++		t.Fatalf("targets %d %+v", len(got), targets)
++	}
++	a := got["lan1-v4/192.0.2.20"]
++	if a.asn != 64496 || a.name != "Member A" || a.busy || a.source.String() != "192.0.2.8" {
++		t.Fatalf("owner %+v", a)
++	}
++	if len(a.switches) != 1 || a.switches[0].ID != 7 || a.switches[0].Name != "sw1" || a.switches[0].Colo != "cab-a" {
++		t.Fatalf("switches %+v", a.switches)
++	}
++	if !got["lan1-v4/192.0.2.21"].busy || got["lan1-v4/192.0.2.21"].tol != tolBusy {
++		t.Fatalf("busy %+v", got["lan1-v4/192.0.2.21"])
++	}
++	if _, ok := got["lan1-v4/192.0.2.22"]; !ok {
++		t.Fatal("route server was not a target")
++	}
++	if got["lan1-v6/2001:db8::20"].source.String() != "2001:db8::8" || got["lan1-v6/2001:db8::20"].family != "ipv6" {
++		t.Fatalf("v6 %+v", got["lan1-v6/2001:db8::20"])
++	}
++	for _, absent := range []string{"lan1-v4/192.0.2.30", "lan1-v4/192.0.2.8", "lan1-v4/198.51.100.9", "lan1-v4/192.0.2.23", "lan1-v4/192.0.2.40"} {
++		if _, ok := got[absent]; ok {
++			t.Fatalf("probed %s", absent)
++		}
++	}
++
++	now := time.Unix(100, 0).UTC()
++	res := plugin.ProbeResult{Sent: 5, RTTs: []time.Duration{10 * time.Millisecond, 12 * time.Millisecond, 11 * time.Millisecond, 15 * time.Millisecond}}
++	sample := a.measured(now, res)
++	if sample.LossPct != 20 || sample.RTTMs != 12 || sample.JitterMs != float64(7*time.Millisecond/3)/float64(time.Millisecond) || !sample.PastTolerance {
++		t.Fatalf("stats %+v", sample)
++	}
++	bad := a.errored(now, "bind failed")
++	if bad.PastTolerance || bad.Sent != 0 || bad.Error != "bind failed" {
++		t.Fatalf("error sample %+v", bad)
++	}
++}
++
++func TestToleranceBounds(t *testing.T) {
++	now := time.Unix(1, 0).UTC()
++	normal := target{tol: tolNormal}
++	busy := target{tol: tolBusy}
++	cases := []struct {
++		name string
++		tg   target
++		res  plugin.ProbeResult
++		past bool
++	}{
++		{"normal 50% loss", normal, plugin.ProbeResult{Sent: 2, RTTs: []time.Duration{time.Millisecond}}, true},
++		{"normal 400ms", normal, plugin.ProbeResult{Sent: 1, RTTs: []time.Duration{400 * time.Millisecond}}, true},
++		{"normal exact 20%", normal, plugin.ProbeResult{Sent: 5, RTTs: []time.Duration{time.Millisecond, time.Millisecond, time.Millisecond, time.Millisecond}}, true},
++		{"normal 250ms", normal, plugin.ProbeResult{Sent: 1, RTTs: []time.Duration{250 * time.Millisecond}}, true},
++		{"normal inside", normal, plugin.ProbeResult{Sent: 5, RTTs: []time.Duration{10 * time.Millisecond, 10 * time.Millisecond, 10 * time.Millisecond, 10 * time.Millisecond, 10 * time.Millisecond}}, false},
++		{"busy 50% and 400ms", busy, plugin.ProbeResult{Sent: 2, RTTs: []time.Duration{400 * time.Millisecond}}, false},
++		{"busy 999ms", busy, plugin.ProbeResult{Sent: 1, RTTs: []time.Duration{999 * time.Millisecond}}, false},
++		{"busy 85%", busy, plugin.ProbeResult{Sent: 20, RTTs: makeRTTs(3, time.Millisecond)}, true},
++		{"busy 1000ms", busy, plugin.ProbeResult{Sent: 1, RTTs: []time.Duration{1000 * time.Millisecond}}, true},
++		{"busy 100% loss", busy, plugin.ProbeResult{Sent: 5}, true},
++		{"sent 0", normal, plugin.ProbeResult{}, false},
++	}
++	for _, tc := range cases {
++		s := tc.tg.measured(now, tc.res)
++		if s.PastTolerance != tc.past {
++			t.Errorf("%s past=%v loss=%v rtt=%v", tc.name, s.PastTolerance, s.LossPct, s.RTTMs)
++		}
++	}
++	custom := target{tol: tolerance{warnRTT: 100 * time.Millisecond, warnLoss: 10, critRTT: 1500 * time.Millisecond}}
++	if custom.measured(now, plugin.ProbeResult{Sent: 1, RTTs: []time.Duration{50 * time.Millisecond}}).PastTolerance {
++		t.Fatal("custom inside was past")
++	}
++	if !custom.measured(now, plugin.ProbeResult{Sent: 10, RTTs: makeRTTs(9, time.Millisecond)}).PastTolerance {
++		t.Fatal("custom 10% loss was not past")
++	}
++}
++
++func makeRTTs(n int, d time.Duration) []time.Duration {
++	out := make([]time.Duration, n)
++	for i := range out {
++		out[i] = d
++	}
++	return out
++}
++
++func TestVantageSelectionFailsClosed(t *testing.T) {
++	view := memberView([]plugin.IXPMember{oneMember(64496, "Member A", v4("192.0.2.20"))})
++	_, _, st := selectTargets(view, []plugin.FabricVantage{vantage("lan1-v4", "198.51.100.8")}, nil)
++	if len(st) != 1 || st[0].Error != "vantage address is not on the peering LAN" || st[0].Up {
++		t.Fatalf("%+v", st)
++	}
++	_, _, st = selectTargets(view, []plugin.FabricVantage{{Name: "lan1-v4", VLANID: 99, Address: netip.MustParseAddr("192.0.2.8")}}, nil)
++	if st[0].Error != "vlan_id is not in the member list" {
++		t.Fatalf("%+v", st)
++	}
++	two := view
++	two.IXPs = append(two.IXPs, plugin.IXPSite{ID: 2, VLANs: []plugin.IXPVLAN{{ID: 10, IPv4: "192.0.2.0/24"}}})
++	_, _, st = selectTargets(two, []plugin.FabricVantage{vantage("lan1-v4", "192.0.2.8")}, nil)
++	if st[0].Error != "vlan_id is on more than one ixp; set ixp_id" {
++		t.Fatalf("%+v", st)
++	}
++	picked := vantage("lan1-v4", "192.0.2.8")
++	picked.IXPID = 1
++	targets, _, st := selectTargets(two, []plugin.FabricVantage{picked}, nil)
++	if st[0].Error != "" || len(targets) != 1 || targets[0].ixp != 1 {
++		t.Fatalf("targets %d status %+v", len(targets), st)
++	}
++
++	for _, state := range []string{"active", "connected", "operational"} {
++		m := oneMember(64496, "Member A", v4("192.0.2.20"))
++		m.Connections[0].State = state
++		targets, _, _ := selectTargets(memberView([]plugin.IXPMember{m}), []plugin.FabricVantage{vantage("lan1-v4", "192.0.2.8")}, nil)
++		if len(targets) != 1 {
++			t.Fatalf("state %s targets %d", state, len(targets))
++		}
++	}
++	for _, state := range []string{"", "down", "disabled"} {
++		m := oneMember(64496, "Member A", v4("192.0.2.20"))
++		m.Connections[0].State = state
++		targets, _, _ := selectTargets(memberView([]plugin.IXPMember{m}), []plugin.FabricVantage{vantage("lan1-v4", "192.0.2.8")}, nil)
++		if len(targets) != 0 {
++			t.Fatalf("state %q was probed", state)
++		}
++	}
++}
+diff --git a/internal/plugins/ixpfabric/icmp/targets.go b/internal/plugins/ixpfabric/icmp/targets.go
+new file mode 100644
+index 0000000..a146ccb
+--- /dev/null
++++ b/internal/plugins/ixpfabric/icmp/targets.go
+@@ -0,0 +1,259 @@
++package icmp
++
++import (
++	"net/netip"
++	"sort"
++	"time"
++
++	"github.com/GrandArcher/Packeteer/internal/probe"
++	"github.com/GrandArcher/Packeteer/pkg/plugin"
++)
++
++// IXP Manager's default member-ping thresholds. Warning is the tolerance.
++// For a busy host the critical RTT is the minimum per-packet timeout, so
++// a slow reply is a reply and not a loss. The customers document does not
++// carry per-host check_command values.
++var (
++	tolNormal = tolerance{warnRTT: 250 * time.Millisecond, warnLoss: 20, critRTT: 500 * time.Millisecond}
++	tolBusy   = tolerance{warnRTT: 1000 * time.Millisecond, warnLoss: 80, critRTT: 2 * time.Second}
++)
++
++// tolerance is one host's ping warning and the critical RTT.
++type tolerance struct {
++	warnRTT  time.Duration
++	warnLoss float64
++	critRTT  time.Duration
++}
++
++// nagiosHost is one address in a Can Ping list. canPing is set only when
++// the customers document gives that address a ping service.
++type nagiosHost struct {
++	canPing bool
++	busy    bool
++}
++
++type target struct {
++	vantage  string
++	source   netip.Addr
++	addr     netip.Addr
++	asn      uint32
++	name     string
++	family   string
++	vlan     int
++	ixp      int
++	switches []plugin.FabricSwitch
++	busy     bool
++	tol      tolerance
++}
++
++func (t target) base(now time.Time) plugin.FabricSample {
++	return plugin.FabricSample{
++		Vantage: t.vantage, ASN: t.asn, Name: t.name, Address: t.addr.String(),
++		Family: t.family, VLANID: t.vlan, IXPID: t.ixp, Switches: t.switches,
++		BusyHost: t.busy, At: now,
++	}
++}
++
++func (t target) measured(now time.Time, res plugin.ProbeResult) plugin.FabricSample {
++	st := probe.Compute(res)
++	s := t.base(now)
++	s.Sent = st.Sent
++	s.Received = st.Received
++	s.LossPct = st.LossPct
++	s.RTTMs = float64(st.RTTAvg) / float64(time.Millisecond)
++	s.JitterMs = float64(st.Jitter) / float64(time.Millisecond)
++	s.PastTolerance = pastTolerance(st, t.tol)
++	return s
++}
++
++func (t target) errored(now time.Time, msg string) plugin.FabricSample {
++	s := t.base(now)
++	s.Error = msg
++	return s
++}
++
++func pastTolerance(st probe.Stats, tol tolerance) bool {
++	if st.Sent == 0 {
++		return false
++	}
++	if st.LossPct >= tol.warnLoss {
++		return true
++	}
++	return st.Received > 0 && st.RTTAvg >= tol.warnRTT
++}
++
++// selectTargets picks member LAN addresses a vantage may probe.
++// An address outside the VLAN prefix is not a target: fabric probes stay
++// on the peering LAN. Opt-out addresses are counted and not returned.
++// The first member that owns an address wins.
++func selectTargets(view plugin.MemberView, vantages []plugin.FabricVantage, parts map[string]map[string]nagiosHost) ([]target, int, []plugin.FabricVantageStatus) {
++	statuses := make([]plugin.FabricVantageStatus, 0, len(vantages))
++	var targets []target
++	seen := map[string]bool{}
++	optOut := 0
++	// The lowest ASN that owns an address decides the opt-out and the name.
++	order := make([]int, len(view.Members))
++	for i := range view.Members {
++		order[i] = i
++	}
++	sort.SliceStable(order, func(i, j int) bool {
++		return view.Members[order[i]].ASN < view.Members[order[j]].ASN
++	})
++	for _, v := range vantages {
++		st := plugin.FabricVantageStatus{Name: v.Name, Address: v.Address.String(), VLANID: v.VLANID, IXPID: v.IXPID}
++		vlan, ixpID, errMsg := findVLAN(view, v)
++		if errMsg != "" {
++			st.Error = errMsg
++			statuses = append(statuses, st)
++			continue
++		}
++		st.IXPID = ixpID
++		pfx, ok := vlanPrefix(vlan, v.Address)
++		if !ok || !pfx.Contains(v.Address) {
++			st.Error = "vantage address is not on the peering LAN"
++			statuses = append(statuses, st)
++			continue
++		}
++		statuses = append(statuses, st)
++		for _, mi := range order {
++			m := view.Members[mi]
++			for _, c := range m.Connections {
++				if c.IXPID != ixpID || !upState(c.State) {
++					continue
++				}
++				sw := switchesOf(c)
++				for _, a := range c.Addresses {
++					if a.VLANID != v.VLANID || !sameFamily(a.Family, v.Address) {
++						continue
++					}
++					addr, err := netip.ParseAddr(a.Address)
++					if err != nil {
++						continue
++					}
++					addr = addr.Unmap()
++					if !pfx.Contains(addr) || addr == v.Address {
++						continue
++					}
++					key := v.Name + "/" + addr.String()
++					if seen[key] {
++						continue
++					}
++					seen[key] = true
++					skip, busy, tol := pingRule(parts, a, view.Manager)
++					if skip {
++						optOut++
++						continue
++					}
++					targets = append(targets, target{
++						vantage: v.Name, source: v.Address, addr: addr, asn: m.ASN, name: m.Name,
++						family: a.Family, vlan: a.VLANID, ixp: ixpID, switches: sw, busy: busy, tol: tol,
++					})
++				}
++			}
++		}
++	}
++	sort.Slice(targets, func(i, j int) bool {
++		if targets[i].vantage != targets[j].vantage {
++			return targets[i].vantage < targets[j].vantage
++		}
++		return targets[i].addr.Compare(targets[j].addr) < 0
++	})
++	return targets, optOut, statuses
++}
++
++func findVLAN(view plugin.MemberView, v plugin.FabricVantage) (plugin.IXPVLAN, int, string) {
++	type hit struct {
++		vlan plugin.IXPVLAN
++		ixp  int
++	}
++	var hits []hit
++	for _, site := range view.IXPs {
++		if v.IXPID != 0 && site.ID != v.IXPID {
++			continue
++		}
++		for _, vlan := range site.VLANs {
++			if vlan.ID == v.VLANID {
++				hits = append(hits, hit{vlan, site.ID})
++			}
++		}
++	}
++	switch len(hits) {
++	case 0:
++		return plugin.IXPVLAN{}, 0, "vlan_id is not in the member list"
++	case 1:
++		return hits[0].vlan, hits[0].ixp, ""
++	default:
++		return plugin.IXPVLAN{}, 0, "vlan_id is on more than one ixp; set ixp_id"
++	}
++}
++
++func vlanPrefix(vlan plugin.IXPVLAN, addr netip.Addr) (netip.Prefix, bool) {
++	raw := vlan.IPv4
++	if addr.Is6() {
++		raw = vlan.IPv6
++	}
++	p, err := netip.ParsePrefix(raw)
++	if err != nil || !p.IsValid() {
++		return netip.Prefix{}, false
++	}
++	return p, true
++}
++
++func sameFamily(family string, addr netip.Addr) bool {
++	if addr.Is4() {
++		return family == "ipv4"
++	}
++	return family == "ipv6"
++}
++
++func upState(s string) bool {
++	switch s {
++	case "active", "connected", "operational":
++		return true
++	default:
++		return false
++	}
++}
++
++func switchesOf(c plugin.IXPConnection) []plugin.FabricSwitch {
++	if len(c.Interfaces) == 0 {
++		return nil
++	}
++	out := make([]plugin.FabricSwitch, len(c.Interfaces))
++	for i, iface := range c.Interfaces {
++		out[i] = plugin.FabricSwitch{ID: iface.SwitchID, Name: iface.Switch, Colo: iface.Colo}
++	}
++	return out
++}
++
++// pingRule applies an IX-F opt-out and, for a manager export, the customers
++// document. The member export omits can_ping, so a missing or failed list
++// is not permission to probe. An address the list does not mark canPing
++// is not probed. A named IX-F document uses can_ping and busy_host only.
++func pingRule(parts map[string]map[string]nagiosHost, a plugin.IXPAddress, manager bool) (skip, busy bool, tol tolerance) {
++	if a.CanPing != nil && !*a.CanPing {
++		return true, false, tolerance{}
++	}
++	if !manager {
++		if a.BusyHost {
++			return false, true, tolBusy
++		}
++		return false, false, tolNormal
++	}
++	by, have := parts[famKey(a.VLANID, a.Family)]
++	if !have {
++		return true, false, tolerance{}
++	}
++	addr := a.Address
++	if parsed, err := netip.ParseAddr(a.Address); err == nil {
++		addr = parsed.Unmap().String()
++	}
++	hit, ok := by[addr]
++	if !ok || !hit.canPing {
++		return true, false, tolerance{}
++	}
++	if hit.busy {
++		return false, true, tolBusy
++	}
++	return false, false, tolNormal
++}
+diff --git a/internal/plugins/ixpmember/ixf/key.go b/internal/plugins/ixpmember/ixf/key.go
+index 789ab77..72253fa 100644
+--- a/internal/plugins/ixpmember/ixf/key.go
++++ b/internal/plugins/ixpmember/ixf/key.go
+@@ -80,6 +80,13 @@ func keySecret(key string) string {
+ 	return key[len(keyPrefix)+identLen+1 : keyLen-crcLen]
+ }
+ 
++// Redact removes the key and its secret from a message. A redirect or a
++// transport error can echo the request, and the secret must not be stored
++// on a view. The fabric prober uses the same rule for its Can Ping fetch.
++func Redact(msg, key string) string {
++	return redact(msg, key)
++}
++
+ // redact removes the key and its secret from a message. A redirect or a
+ // transport error can echo the request, and the secret must not be stored
+ // on the view.
+diff --git a/internal/plugins/ixpmember/ixf/parse.go b/internal/plugins/ixpmember/ixf/parse.go
+index f2925c0..c424c72 100644
+--- a/internal/plugins/ixpmember/ixf/parse.go
++++ b/internal/plugins/ixpmember/ixf/parse.go
+@@ -98,6 +98,10 @@ type ixfAddr struct {
+ 	RouteServer bool   `json:"routeserver"`
+ 	ASMacro     string `json:"as_macro"`
+ 	MaxPrefix   int    `json:"max_prefix"`
++	// CanPing and BusyHost are not in stock IX-F. IXP Manager's member
++	// export omits them. A document that sets can_ping false is an opt-out.
++	CanPing  *bool `json:"can_ping"`
++	BusyHost bool  `json:"busy_host"`
+ }
+ 
+ type swInfo struct {
+@@ -364,6 +368,7 @@ func convAddr(p, family string, vlan int, in *ixfAddr) (plugin.IXPAddress, error
+ 	return plugin.IXPAddress{
+ 		Family: family, Address: a.String(), VLANID: vlan,
+ 		RouteServer: in.RouteServer, MaxPrefix: in.MaxPrefix, ASMacro: in.ASMacro,
++		CanPing: in.CanPing, BusyHost: in.BusyHost,
+ 	}, nil
+ }
+ 
+diff --git a/internal/plugins/ixpmember/ixf/parse_test.go b/internal/plugins/ixpmember/ixf/parse_test.go
+index d20f6eb..6eb4530 100644
+--- a/internal/plugins/ixpmember/ixf/parse_test.go
++++ b/internal/plugins/ixpmember/ixf/parse_test.go
+@@ -177,6 +177,26 @@ func TestSwitchIDStaysOnIXP(t *testing.T) {
+ 	}
+ }
+ 
++func TestParseCanPing(t *testing.T) {
++	p, err := parseIXF([]byte(`{"version":"1.0","member_list":[{"asnum":64496,"connection_list":[{"state":"active","vlan_list":[
++		{"vlan_id":10,"ipv4":{"address":"192.0.2.20","can_ping":false,"busy_host":true}},
++		{"vlan_id":10,"ipv6":{"address":"2001:db8::20"}}
++	]}]}]}`))
++	if err != nil {
++		t.Fatal(err)
++	}
++	addrs := p.members[0].Connections[0].Addresses
++	if len(addrs) != 2 {
++		t.Fatalf("%+v", addrs)
++	}
++	if addrs[0].CanPing == nil || *addrs[0].CanPing || !addrs[0].BusyHost || addrs[0].Address != "192.0.2.20" {
++		t.Fatalf("v4 %+v", addrs[0])
++	}
++	if addrs[1].CanPing != nil || addrs[1].BusyHost || addrs[1].Address != "2001:db8::20" {
++		t.Fatalf("v6 %+v", addrs[1])
++	}
++}
++
+ func TestParseEmpty(t *testing.T) {
+ 	p, err := parseIXF([]byte(`{"version":"1.0","ixp_list":[],"member_list":[]}`))
+ 	if err != nil || len(p.members) != 0 || p.addresses != 0 || p.members == nil || p.ixps == nil {
+@@ -197,6 +217,7 @@ func TestParseRejects(t *testing.T) {
+ 		{`{"version":"1.0","member_list":[{"asnum":0,"name":"n"}]}`, "asnum is invalid", ""},
+ 		{`{"version":"1.0","member_list":[{"asnum":64496,"name":"n","connection_list":[{"vlan_list":[{"ipv4":{"address":"` + secret + `"}}]}]}]}`, "address is not an IP address", secret},
+ 		{`{"version":"1.0","member_list":[{"asnum":64496,"name":"` + strings.Repeat("LONGTOKEN", 40) + `"}]}`, "longer than", "LONGTOKEN"},
++		{`{"version":"1.0","member_list":[{"asnum":64496,"connection_list":[{"vlan_list":[{"vlan_id":10,"ipv4":{"address":"192.0.2.20","can_ping":"no"}}]}]}]}`, "invalid JSON", "192.0.2.20"},
+ 	}
+ 	for _, tc := range cases {
+ 		_, err := parseIXF([]byte(tc.body))
+diff --git a/pkg/plugin/ixp.go b/pkg/plugin/ixp.go
+index 9c73fc0..86cf11a 100644
+--- a/pkg/plugin/ixp.go
++++ b/pkg/plugin/ixp.go
+@@ -1,14 +1,25 @@
+ package plugin
+ 
+-import "time"
++import (
++	"net/netip"
++	"time"
++)
+ 
+ // KindMemberSource is the read-only IX-F member import (#161).
+ // It is not a RIB source and it never announces.
+ const KindMemberSource Kind = "ixp_member"
+ 
++// KindFabric is the IX fabric prober (#162). It measures member LAN
++// addresses from configured vantages. It is not a provider, it is not an
++// input to Decide, and it never announces.
++const KindFabric Kind = "ixp_fabric"
++
+ // MemberSources is the registry for ixp.members.
+ var MemberSources = NewRegistry[MemberSource](KindMemberSource)
+ 
++// FabricProbes is the registry for ixp.fabric.
++var FabricProbes = NewRegistry[FabricProbe](KindFabric)
++
+ // MemberSource imports an IX-F member list. View never blocks and never
+ // fetches. The slices it returns must not be modified. SetEventSink is
+ // called before Start; the sink is how a key-expiry warning is delivered.
+@@ -94,6 +105,11 @@ type IXPInterface struct {
+ }
+ 
+ // IXPAddress is one LAN address on a connection.
++// CanPing is IXP Manager's per-protocol opt-out when the export carries
++// it. Nil means the document did not say. False means do not probe.
++// BusyHost selects the looser ping tolerance (a slow control plane).
++// Stock IX-F omits both; the fabric prober also reads them from IXP
++// Manager's Nagios customer list when the import is the manager export.
+ type IXPAddress struct {
+ 	Family      string `json:"family"`
+ 	Address     string `json:"address"`
+@@ -101,4 +117,82 @@ type IXPAddress struct {
+ 	RouteServer bool   `json:"route_server"`
+ 	MaxPrefix   int    `json:"max_prefix,omitempty"`
+ 	ASMacro     string `json:"as_macro,omitempty"`
++	CanPing     *bool  `json:"can_ping,omitempty"`
++	BusyHost    bool   `json:"busy_host,omitempty"`
++}
++
++// FabricProbe measures member LAN addresses from IX vantages (#162).
++// View never blocks and never fetches. SetMembers and SetVantages are
++// called before Start. An implementation must not announce and must not
++// write the RIB or call Decide.
++type FabricProbe interface {
++	Lifecycle
++	View() FabricView
++	SetMembers(fn func() MemberView)
++	SetVantages(v []FabricVantage)
++}
++
++// FabricVantage is one IX-owned monitoring address on a peering LAN.
++// IXPID 0 means the vlan id is unique in the member list.
++type FabricVantage struct {
++	Name    string
++	IXPID   int
++	VLANID  int
++	Address netip.Addr
++}
++
++// FabricView is the latest fabric round. Samples is empty when probing
++// is off, the member list is stale, or a vantage source cannot be used.
++// The API key is never included.
++type FabricView struct {
++	Configured bool                  `json:"configured"`
++	Stale      bool                  `json:"stale"`
++	Error      string                `json:"error,omitempty"`
++	Round      time.Time             `json:"round,omitempty"`
++	Targets    int                   `json:"targets"`
++	OptOut     int                   `json:"opt_out"`
++	Vantages   []FabricVantageStatus `json:"vantages"`
++	Samples    []FabricSample        `json:"samples"`
++}
++
++// FabricVantageStatus is one vantage after a round. Up is false when its
++// address is not on the peering LAN or every probe from it failed.
++type FabricVantageStatus struct {
++	Name    string `json:"name"`
++	Address string `json:"address"`
++	VLANID  int    `json:"vlan_id"`
++	IXPID   int    `json:"ixp_id,omitempty"`
++	Up      bool   `json:"up"`
++	Targets int    `json:"targets"`
++	Error   string `json:"error,omitempty"`
++}
++
++// FabricSwitch is one switch behind a member connection.
++type FabricSwitch struct {
++	ID   int    `json:"id"`
++	Name string `json:"name,omitempty"`
++	Colo string `json:"colo,omitempty"`
++}
++
++// FabricSample is one member address measured from one vantage.
++// PastTolerance uses IXP Manager's ping warning (busy-host when set).
++// An Error means the probe did not produce a measurement.
++type FabricSample struct {
++	Vantage       string         `json:"vantage"`
++	ASN           uint32         `json:"asn"`
++	Name          string         `json:"name,omitempty"`
++	Address       string         `json:"address"`
++	Family        string         `json:"family"`
++	VLANID        int            `json:"vlan_id"`
++	IXPID         int            `json:"ixp_id"`
++	Switches      []FabricSwitch `json:"switches,omitempty"`
++	BusyHost      bool           `json:"busy_host"`
++	Sent          int            `json:"sent"`
++	Received      int            `json:"received"`
++	LossPct       float64        `json:"loss_pct"`
++	RTTMs         float64        `json:"rtt_ms"`
++	JitterMs      float64        `json:"jitter_ms"`
++	PastTolerance bool           `json:"past_tolerance"`
++	Error         string         `json:"error,omitempty"`
++	At            time.Time      `json:"at"`
+ }

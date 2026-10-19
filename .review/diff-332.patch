@@ -1,0 +1,2832 @@
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+index 82f9263..dfb2566 100644
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -6,11 +6,16 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
+ 
+ ### Added
+ 
++- IX-F member import: read-only GET of the IXP Manager member export or a named IX-F URL; key from PACKETEER_IXP_MANAGER_API_KEY header only; 14-day expiry warning (#161).
+ - Web UI shows the Packeteer logo next to the name and as the favicon (#327).
+ - IXP mode: `ixp: {}` is observe-only and refuses `mode: inject`, `announcer`, `mitigation`, `inbound`, `synthesize`, and `more_specific`; no BGP neighbors or RIB view required (#160).
+ - Probe-path check: a TTL-1 probe from each provider's `source_ip` must leave through `next_hop`; a mismatch marks it down with reason `probe path mismatch`; `path_check: false` opts out (#150).
+ - BMP exchange peer session monitor: `exchange.peer_up`/`peer_down` with the decoded reason (Cease subcode 1), Adj-RIB-In count as `adj_rib_in` and a metric, and `exchange.max_prefix` warnings (#147).
+ 
++### Fixed
++
++- IX-F import rejects an IPv4-mapped prefix on an IPv6 LAN, a percent-encoded API key in the manager URL, and a switch id from another IXP (#161).
++
+ ## [0.7.0] - 2026-10-15
+ 
+ ### Added
+diff --git a/README.md b/README.md
+index 56e2eee..1958c1e 100644
+--- a/README.md
++++ b/README.md
+@@ -13,7 +13,7 @@ The feature matrix is [docs/FEATURES.md](docs/FEATURES.md).
+ Read this before you change `mode`.
+ 
+ - The default mode is `observe`. The file in this repository stays `observe`. `suggest` probes and recommends, and announces nothing.
+-- An `ixp: {}` block is an exchange operator, not an edge that injects. It refuses `mode: inject`, `announcer`, `mitigation`, `inbound`, `synthesize`, and `more_specific`, and it does not need `bgp.neighbors` ([design](docs/design/ixp.md)).
++- An `ixp: {}` block is an exchange operator, not an edge that injects. It refuses `mode: inject`, `announcer`, `mitigation`, `inbound`, `synthesize`, and `more_specific`, and it does not need `bgp.neighbors` ([design](docs/design/ixp.md)). Optional `ixp.members` (`type: ixf`) imports the IX-F member list and announces nothing.
+ - `inject` is a separate config: `mode: inject`, a non-empty allowlist, `packeteer_community`, `local_pref`, a positive `hold_time`, positive loss and latency thresholds, an iBGP neighbor, and `announcer.type: gobgp`.
+ - Packeteer announces a prefix only when that exact prefix is in the RIB it learned from the router. It does not invent a more-specific. A config that sets `more_specific_bits` is rejected. The optional `more_specific` block (off by default) also announces the more-specifics a neighbor already advertises inside an improvement's prefix, under a route cap ([design](docs/design/more-specific.md)).
+ - Active improvements are capped (`max_improvements`, default 50).
+diff --git a/cmd/controller/ixp.go b/cmd/controller/ixp.go
+new file mode 100644
+index 0000000..c2a1477
+--- /dev/null
++++ b/cmd/controller/ixp.go
+@@ -0,0 +1,23 @@
++package main
++
++import (
++	"github.com/GrandArcher/Packeteer/internal/httpapi"
++	"github.com/GrandArcher/Packeteer/internal/pluginhost"
++	"github.com/GrandArcher/Packeteer/pkg/plugin"
++)
++
++// wireIXPMembers connects the IX-F import (#161) before plugins start.
++// The sink is set first so the expiry check in Start can emit. The HTTP
++// callback reads the plugin view; it does not fetch and it does not announce.
++func wireIXPMembers(plugins *pluginhost.Set, httpSrv *httpapi.Server, emit func(plugin.Event)) {
++	if plugins == nil || plugins.IXPMembers == nil {
++		return
++	}
++	src := plugins.IXPMembers.Plugin
++	if emit != nil {
++		src.SetEventSink(emit)
++	}
++	if httpSrv != nil {
++		httpSrv.SetIXPMembers(src.View)
++	}
++}
+diff --git a/cmd/controller/ixp_test.go b/cmd/controller/ixp_test.go
+index c5d74f0..ba4305c 100644
+--- a/cmd/controller/ixp_test.go
++++ b/cmd/controller/ixp_test.go
+@@ -6,6 +6,7 @@ import (
+ 	"slices"
+ 	"strings"
+ 	"testing"
++	"time"
+ )
+ 
+ const ixpObserveYAML = `
+@@ -79,3 +80,114 @@ func TestRunIXPCheck(t *testing.T) {
+ 		}
+ 	}
+ }
++
++const ixpMembersYAML = `
++mode: observe
++asn: 64512
++router_id: 192.0.2.10
++providers:
++  - {name: transit-a, source_ip: 192.0.2.11, next_hop: 192.0.2.1}
++ixp:
++  members:
++    type: ixf
++    config:
++      url: https://ixp.example.invalid/members.json
++`
++
++func TestIXPMembersBuildNoRIB(t *testing.T) {
++	cfg := mustParse(t, ixpMembersYAML)
++	if cfg.IXP == nil || cfg.IXP.Members == nil || len(cfg.BGP.Neighbors) != 0 {
++		t.Fatalf("ixp %+v neighbors %d", cfg.IXP, len(cfg.BGP.Neighbors))
++	}
++	view, err := newRIB(cfg, nil)
++	if err != nil || view != nil {
++		t.Fatalf("members config built a RIB view: view=%v err=%v", view, err)
++	}
++}
++
++func TestIXPMembersChangeNeedsRestart(t *testing.T) {
++	cur := mustParse(t, ixpObserveYAML)
++	next := mustParse(t, ixpMembersYAML)
++	restart, online := classify(cur, next)
++	if !slices.Contains(restart, "ixp") || len(online) != 0 {
++		t.Fatalf("restart %v online %v", restart, online)
++	}
++}
++
++func TestRunIXPMembersCheck(t *testing.T) {
++	path := filepath.Join(t.TempDir(), "c.yaml")
++	if err := os.WriteFile(path, []byte(ixpMembersYAML), 0o600); err != nil {
++		t.Fatal(err)
++	}
++	var out, errOut strings.Builder
++	if code := run(t.Context(), []string{"-check", "-config", path}, noEnv, &out, &errOut); code != 0 {
++		t.Fatalf("exit %d stderr %s", code, errOut.String())
++	}
++	for _, want := range []string{
++		"ixp: on (observe-only, never announces)",
++		"ixp members: ixf (read-only, never announces)",
++		"announce: disabled",
++		"check: ok",
++	} {
++		if !strings.Contains(out.String(), want) {
++			t.Errorf("stdout missing %q:\n%s", want, out.String())
++		}
++	}
++
++	secret := "SuperSecretValue99"
++	leaked := strings.Replace(ixpMembersYAML, "https://ixp.example.invalid/members.json",
++		"https://ixp.example.invalid/api/v4/member-export/ixf/1.0?apikey="+secret, 1)
++	if err := os.WriteFile(path, []byte(leaked), 0o600); err != nil {
++		t.Fatal(err)
++	}
++	out.Reset()
++	errOut.Reset()
++	if code := run(t.Context(), []string{"-check", "-config", path}, noEnv, &out, &errOut); code != 1 {
++		t.Fatalf("exit %d stdout %s stderr %s", code, out.String(), errOut.String())
++	}
++	if strings.Contains(out.String(), secret) || strings.Contains(errOut.String(), secret) {
++		t.Fatalf("secret leaked stdout %s stderr %s", out.String(), errOut.String())
++	}
++
++	// Same vector as internal/plugins/ixpmember/ixf tests. Checksum is independent of the parser.
++	const docKey = "ixpm_DocKeyIdent1_DocSecretDocSecretDocSecretDocSe3DqwgX"
++	const docSecret = "DocSecretDocSecretDocSecretDocSe"
++	keyed := strings.Replace(ixpMembersYAML, "https://ixp.example.invalid/members.json",
++		"https://ixp.example.invalid/api/v4/member-export/ixf/1.0", 1)
++	keyed += "      key_expires: \"2099-01-01\"\n"
++	// 2099 is more than 366 days ahead and must fail closed without the secret.
++	if err := os.WriteFile(path, []byte(keyed), 0o600); err != nil {
++		t.Fatal(err)
++	}
++	getenv := func(k string) string {
++		if k == "PACKETEER_IXP_MANAGER_API_KEY" {
++			return docKey
++		}
++		return ""
++	}
++	out.Reset()
++	errOut.Reset()
++	if code := run(t.Context(), []string{"-check", "-config", path}, getenv, &out, &errOut); code != 1 {
++		t.Fatalf("far expiry exit %d stdout %s stderr %s", code, out.String(), errOut.String())
++	}
++	if strings.Contains(out.String()+errOut.String(), docSecret) || strings.Contains(out.String()+errOut.String(), docKey) {
++		t.Fatalf("key leaked stdout %s stderr %s", out.String(), errOut.String())
++	}
++
++	day := time.Now().UTC().AddDate(0, 0, 30).Format("2006-01-02")
++	good := strings.Replace(keyed, "2099-01-01", day, 1)
++	if err := os.WriteFile(path, []byte(good), 0o600); err != nil {
++		t.Fatal(err)
++	}
++	out.Reset()
++	errOut.Reset()
++	if code := run(t.Context(), []string{"-check", "-config", path}, getenv, &out, &errOut); code != 0 {
++		t.Fatalf("keyed check exit %d stdout %s stderr %s", code, out.String(), errOut.String())
++	}
++	if strings.Contains(out.String()+errOut.String(), docSecret) || strings.Contains(out.String()+errOut.String(), docKey) {
++		t.Fatalf("key leaked on success stdout %s stderr %s", out.String(), errOut.String())
++	}
++	if !strings.Contains(out.String(), "ixp members: ixf (read-only, never announces)") || !strings.Contains(out.String(), "announce: disabled") {
++		t.Fatalf("stdout %s", out.String())
++	}
++}
+diff --git a/cmd/controller/main.go b/cmd/controller/main.go
+index 39f4a3d..352c3c4 100644
+--- a/cmd/controller/main.go
++++ b/cmd/controller/main.go
+@@ -181,6 +181,9 @@ func run(ctx context.Context, args []string, getenv func(string) string, stdout,
+ 	fmt.Fprintf(stdout, "mode: %s\n", cfg.Mode)
+ 	if cfg.IXP != nil {
+ 		fmt.Fprintln(stdout, "ixp: on (observe-only, never announces)")
++		if cfg.IXP.Members != nil {
++			fmt.Fprintf(stdout, "ixp members: %s (read-only, never announces)\n", cfg.IXP.Members.Type)
++		}
+ 	}
+ 	fmt.Fprintf(stdout, "max_improvements: %d\n", *cfg.MaxImprovements)
+ 	fmt.Fprintf(stdout, "providers (%d):\n", len(cfg.Providers))
+@@ -624,6 +627,7 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
+ 	col.SetExchangeHealth(ixHealth)
+ 	wireSuggestions(cfg, httpSrv, view)
+ 	wireMitigationCandidates(httpSrv, mit, view)
++	wireIXPMembers(plugins, httpSrv, dispatch.Emit)
+ 	// Active/standby (#31): registered before the elector starts. A
+ 	// standby withdraws everything, runs no decisions, and announces
+ 	// nothing; the announce controllers check the same gate.
+diff --git a/config.example.yaml b/config.example.yaml
+index a0fa589..31e7b53 100644
+--- a/config.example.yaml
++++ b/config.example.yaml
+@@ -3,10 +3,19 @@
+ mode: observe               # also the default when mode is left out; inject is never a default
+ 
+ # IXP mode (docs/design/ixp.md, #160) is an exchange operator, not this edge.
+-# `ixp: {}` has no keys. It refuses mode inject, announcer, mitigation,
+-# inbound, synthesize, and more_specific. bgp.neighbors is not required.
+-# Leave it unset on an edge that may inject.
+-# ixp: {}
++# It refuses mode inject, announcer, mitigation, inbound, synthesize, and
++# more_specific. bgp.neighbors is not required. Leave it unset on an edge
++# that may inject. members (#161) is read-only and announces nothing.
++# The API key is PACKETEER_IXP_MANAGER_API_KEY, never this file.
++# ixp:
++#   members:
++#     type: ixf
++#     config:
++#       url: https://ixp.example.invalid/api/v4/member-export/ixf/1.0
++#       refresh: 15m
++#       timeout: 30s
++#       max_bytes: 8388608
++#       key_expires: "YYYY-MM-DD"   # required with the API key; at most 366 days ahead
+ 
+ asn: 64512
+ router_id: 192.0.2.10
+diff --git a/docs/API.md b/docs/API.md
+index a1290e3..d08d431 100644
+--- a/docs/API.md
++++ b/docs/API.md
+@@ -22,6 +22,7 @@ The dashboard, JSON API, and Prometheus metrics share one listener, `http.listen
+ | `/api/exchanges` | Viewer. Per exchange: `lans`, `prefixes`, `improvements`, and `peers` (`asn`, `next_hop`, `via`, `prefixes`, `up`, `adj_rib_in` from BMP statistics when seen, `improvements`, `moved_mbps`, `moves` with `prefix`, `since`, and `volume_mbps`, `observed_asn` when it differs, and `reach`: `state`, `loss_pct`, `rtt_ms`, `degraded`, `checked` from the next-hop probe, #149), `degraded`, `degraded_peers`, and `degraded_since` for the exchange, and `discovered` LAN members. Each peer has `availability`: prefixes through its next hop seen `route_server_only`, `bilateral_only`, or `both`, and a `flag` (`rs_partial`, `rs_missing`) when the route server feed lacks prefixes it sends bilaterally. Read-only (#148, #149, #156, #147). |
+ | `/api/exchanges/member` | Viewer. `?exchange=<name>&next_hop=<ip>` for a configured peer: `availability` and `history` (counts every 15 minutes, up to 3 days, kept in memory). `&class=route_server_only\|bilateral_only\|both` adds `prefixes` (first `limit`, default 100, max 1000) and `prefixes_total`. `400` for a bad parameter, `404` for a next hop that is not a peer of that exchange. Read-only (#156). |
+ | `/api/exchanges/offload` | Viewer. Prefixes whose exit is a transit while a configured exchange peer advertises the exact prefix (the route check passes), sorted by bytes: `rows` with `prefix`, `bytes`, `mbps`, `transit`, `peers` (`exchange`, `peer`), and `est_savings` (the transit's `cost` times `mbps`, absent when the transit has no `cost`). `prefixes`, `bytes`, `mbps`, and `est_savings` total all candidates; `truncated` is true when `rows` was cut at `limit` (default 100, max 1000; the CSV defaults to 1000). `?format=csv` downloads the rows. The exit is the RIB's best path, or the active improvement's provider in `inject`; volume comes from target sources that report it. `400` for a bad parameter, `404` without exchanges. Read-only (#152). |
++| `/api/ixp/members` | Viewer. The IX-F member list when `ixp.members` is configured (#161): `configured`, `url`, `manager`, `key_id`, `key_expires`, `fetched`, `stale`, `error`, `member_count`, `address_count`, `ixps`, and `members` (ASN, name, connections, LAN addresses, route-server flag, `max_prefix`, `as_macro`, switch and colo from that connection's IXP). Empty lists and `configured: false` when it is not. The API key is not included. Read-only. |
+ | `/api/exchanges/potential-peers` | Viewer. Destination origin ASNs ranked by flow bytes: `rows` with `asn`, `class`, `bytes`, `mbps`, `prefixes` (with traffic), `lan_prefixes` and `lan_bytes` (those with a learned path whose next hop is on an exchange LAN today), and `members` (`exchange`, `peer` for a configured peer, `next_hop`, `via`). `class` is `route_server` (a member with that AS has paths via a route server), `bilateral` (members seen only bilaterally), `unknown` (on a LAN, session type not visible), or `absent` (no peer or LAN member has that AS). `?class=` keeps one class; `asns`, `bytes`, and `mbps` total it, `classes` counts every class, and `unattributed_bytes` had no covering learned route or belong to the local AS. `limit` as for the offload report; `?format=csv` downloads the rows. The origin AS is the last AS of the covering learned route. `400` for a bad parameter, `404` without exchanges. Read-only (#154). |
+ | `/api/telemetry` | Interface rates and 95th-percentile usage when a telemetry plugin is configured. Empty when it is not. This does not announce. |
+ | `/api/reports` | The report list with each report's `category`, `summary`, `filters`, and `columns`, and whether history storage is on. |
+@@ -51,4 +52,6 @@ The dashboard, JSON API, and Prometheus metrics share one listener, `http.listen
+ 
+ Prometheus metrics are `packeteer_up`, `packeteer_ready`, `packeteer_build_info`, `packeteer_provider_up`, `packeteer_probe_success`, `packeteer_probe_rtt_seconds`, `packeteer_probe_rtt_min_seconds`, `packeteer_probe_rtt_max_seconds`, `packeteer_probe_loss_ratio`, `packeteer_probe_jitter_seconds`, `packeteer_probe_prefix_commits`, `packeteer_flow_prefixes_tracked`, `packeteer_truncated_total`, `packeteer_decisions`, `packeteer_decision`, `packeteer_improvements_active`, `packeteer_improvement`, `packeteer_estimated_savings`, `packeteer_bgp_configured`, `packeteer_bgp_ready`, `packeteer_rib_prefixes`, `packeteer_bgp_session_up`, `packeteer_bgp_session`, and, when telemetry is configured, `packeteer_telemetry_up`, `packeteer_telemetry_in_bps`, `packeteer_telemetry_out_bps`, `packeteer_telemetry_in_95th_bps`, `packeteer_telemetry_out_95th_bps`, `packeteer_telemetry_usage_bps`, `packeteer_telemetry_commit_bps`, and `packeteer_telemetry_samples`.
+ 
++When `ixp.members` is configured, `/metrics` also has `packeteer_ixp_members`, `packeteer_ixp_member_addresses`, `packeteer_ixp_member_import_up`, `packeteer_ixp_member_import_age_seconds`, and, when `key_expires` is set, `packeteer_ixp_api_key_expiry_seconds` (Unix time). Member and address gauges are zero while the list is stale. They are absent when the import is not configured.
++
+ Scrape `http://127.0.0.1:8080/metrics` on the host. With `auth` on, use an API token ([auth.md](auth.md)).
+diff --git a/docs/CONFIG.md b/docs/CONFIG.md
+index c7fc31d..f522d92 100644
+--- a/docs/CONFIG.md
++++ b/docs/CONFIG.md
+@@ -24,7 +24,7 @@ The image entrypoint is the same binary. Flags go after the image name.
+ | Key | Default | Required | Meaning |
+ |---|---|---|---|
+ | `mode` | `observe` | no | `observe`, `suggest`, or `inject`. A file without `mode` (or with an empty one) observes. `inject` is never a default: it needs `mode: inject` and the [inject checklist](#inject-checklist). An [`ixp`](#ixp) block refuses `inject`. |
+-| `ixp` | absent | no | Exchange-operator mode (#160). `ixp: {}` refuses inject, announcer, mitigation, inbound, synthesize, and more_specific. No `bgp.neighbors` required. See [`ixp`](#ixp). |
++| `ixp` | absent | no | Exchange-operator mode (#160). `ixp: {}` refuses inject, announcer, mitigation, inbound, synthesize, and more_specific. Optional `members` imports an IX-F list and announces nothing (#161). No `bgp.neighbors` required. See [`ixp`](#ixp). |
+ | `asn` | none | yes, non-zero | BGP ASN of this speaker. Neighbors are iBGP in this ASN. |
+ | `router_id` | none | yes | IPv4 address. IPv6 is rejected. |
+ | `packeteer_community` | empty | inject | Standard community `asn:value` (each half 0–65535) or a large community `global:data1:data2` (RFC 8092, each part 0–4294967295). Quote it in YAML (`"64512:666"`). The export policy matches only this community. A two-part value above 16 bits is rejected; write a 4-byte ASN as a large community (`"70000:1:0"`). |
+@@ -370,7 +370,7 @@ Applied while running:
+ - `inbound.mode` and `mitigation.mode` (#233). `inject` for either needs `mode: inject` in the same file. `hold_time` and `improvement_ttl` reach the inbound controller: a changed `improvement_ttl` applies to steers already running, a changed `hold_time` to steers created after the reload, and a shrunk `allowlist` withdraws an inbound steer it no longer covers. Entering inject runs the same checks as a start and binds the inbound or mitigation announcer on the running speaker; if the reload is then refused, the speaker keeps the inbound import policy, which announces nothing. If leaving inject fails after one controller already withdrew, the reload is fatal: the process stops and withdraws everything. Leaving inject withdraws that controller's routes under its lock before the mode changes. A mitigation rule held outside inject is dropped on entering it, so a dry-run rule never reaches the edge because a mode flipped. Entering mitigation inject with a FlowSpec catalog is refused (`restart required`) unless the process started in inject with it: the sessions negotiate FlowSpec only at start. Every other `inbound` or `mitigation` key stays restart-only.
+ - `bgp.neighbors`, as before (#27). A new neighbor gets a session; a removed one is closed (its paths leave the view at once, as on a session loss). A neighbor whose session settings changed (`port`, `local_address`, `passive`, `add_path`) is closed and opened again. Other sessions are not touched. A changed per-router table (`providers`, `next_hops`) replaces the announcer's export policy on the running speaker. Every outbound route is withdrawn first (GoBGP sends a withdraw only where the current policy would send the route, so a route withdrawn after the swap could stay on a router the new table blocks) and announced again under the new table on the next evaluation, once the prefix is back in the learned RIB. Inbound steer routes are not affected. A change that leaves the table as it was (adding a neighbor with no lists to a config with no lists) withdraws nothing. Egress routers are recomputed, so `egress router down` follows the new lists. `bgp.neighbors` cannot become empty on a reload. `bgp.listen_port`, `bgp.listen_addresses`, and `bgp.as_path` need a restart.
+ 
+-The announcer plugin, providers, probers, and every other key stay restart-only. `more_specific`, `synthesize`, and `ixp` are restart-only. A reload that changes any restart-only key is refused whole, including the online keys in the same file: the log says `config reload refused` with the keys (`restart required: changed local_pref`), and the running config stays. A file that does not parse or validate is refused the same way, before anything is applied. Comments and YAML style do not count as changes. The audit log records each apply (`config.reload`, with the keys) and each refusal.
++The announcer plugin, providers, probers, and every other key stay restart-only. `more_specific`, `synthesize`, and `ixp` (including `ixp.members`) are restart-only. A reload that changes any restart-only key is refused whole, including the online keys in the same file: the log says `config reload refused` with the keys (`restart required: changed local_pref`), and the running config stays. A file that does not parse or validate is refused the same way, before anything is applied. Comments and YAML style do not count as changes. The audit log records each apply (`config.reload`, with the keys) and each refusal.
+ 
+ If a reload fails after it has changed the speaker, Packeteer stops (exit status 1), which withdraws every Packeteer route; the container's restart policy brings it back with the new file. The learned-RIB check, community, NO_EXPORT, and withdraw rules are unchanged. A prefix that is not in the learned RIB is never announced. Environment overlays (`PACKETEER_LOG_LEVEL`, ...) are applied to the reloaded file as at startup. Lab-proven only (`lab/e2e.sh` for a threshold that keeps the route and a cap of 0 that withdraws it; `lab/e2e-ix.sh` for neighbors).
+ 
+@@ -378,11 +378,13 @@ If a reload fails after it has changed the speaker, Packeteer stops (exit status
+ 
+ Exchange-operator mode (#160, [design/ixp.md](design/ixp.md)). Not the [`exchanges`](#exchanges) block, which is an edge network's own peers.
+ 
+-`ixp: {}` turns it on. The block has no keys; any key is an error. Omitted, or `ixp: null`, leaves the file as an edge controller. `mode` stays `observe`. `mode: suggest` is accepted and announces nothing.
++`ixp: {}` turns it on. The only key is `members` (#161). Any other key is an error. Omitted, or `ixp: null`, leaves the file as an edge controller. `mode` stays `observe`. `mode: suggest` is accepted and announces nothing.
++
++`ixp.members` is one plugin (`type: ixf`). It GETs an IX-F 1.0 member list and announces nothing. It is not a RIB source and not an input to Decide. `config.url` is the IXP Manager origin or the member-export path (a subdirectory install ends in `/api/v4/member-export/ixf/1.0`; a bare origin uses that path), or one other IX-F JSON URL. On the manager URL the only query keys kept are `ignore_missing_ixfid=1` and `ixfid_<digits>=<digits>`. `apikey`, `access_key`, and any other query key are refused. Redirects are not followed. The API key is `PACKETEER_IXP_MANAGER_API_KEY`, sent only as `X-IXP-Manager-API-Key` and only to the manager URL. A URL that contains the key, including a percent-encoded form, is refused. `key_expires` (`YYYY-MM-DD`, quote it) is required with the key; a date more than 366 days ahead is refused. The controller warns when 14 days or fewer remain. `refresh` (default 15m, 1m-24h), `timeout` (default 30s, 1s-2m), `max_bytes` (default 8 MiB, 1024 to 32 MiB). A failed refresh keeps the last good list until three refresh intervals have passed, then the served list is empty. `GET /api/ixp/members` reads it.
+ 
+ With the block set, validation refuses `mode: inject`, `announcer`, `mitigation` (including `mode: observe`), `inbound` (including `mode: observe`), `synthesize`, and `more_specific` (including `enabled: false`). `bgp.neighbors` is not required. With no neighbors the process does not build a RIB view. Route-server data is a separate read-only store and does not enter the RIB view or a decision; that store is not built yet (#164).
+ 
+-Adding or removing `ixp` needs a restart. Rollback: remove the block and restart. Member import and fabric probes are not this block.
++Adding or removing `ixp`, including `members`, needs a restart. Rollback: remove `ixp.members` or the block and restart. Nothing was announced. Fabric probes are #162. This import does not probe, so the Can Ping opt-out has nothing to apply to yet.
+ 
+ ### `exchanges`
+ 
+diff --git a/docs/ENV.md b/docs/ENV.md
+index 22068cf..6c6642a 100644
+--- a/docs/ENV.md
++++ b/docs/ENV.md
+@@ -14,6 +14,7 @@ Set these on the container (`-e NAME`). Secrets belong here, never in the config
+ | `PACKETEER_HTTP_USER`, `PACKETEER_HTTP_PASSWORD` | The single basic-auth account. Not allowed when `auth.enabled` is true. |
+ | `PACKETEER_ADMIN_USER`, `PACKETEER_ADMIN_PASSWORD` | First admin when `auth` is on (user defaults to `admin`). See [auth.md](auth.md). |
+ | `PACKETEER_HA_ID` | Instance id for the `lease` elector. See [ha.md](ha.md). |
++| `PACKETEER_IXP_MANAGER_API_KEY` | IXP Manager API key for `ixp.members` type `ixf` (#161). Sent only as the `X-IXP-Manager-API-Key` header, never in the URL. The log records the key identifier; the secret is never logged. |
+ 
+ ## Referenced from config
+ 
+diff --git a/docs/EVENTS.md b/docs/EVENTS.md
+index 4f21c04..eb147ed 100644
+--- a/docs/EVENTS.md
++++ b/docs/EVENTS.md
+@@ -60,10 +60,12 @@ The same object is the `generic` webhook body and the `exec` `notify` params.
+ | `exchange.peer_up` | info | 38 | `exchange`, `peer` | The router reported the exchange peer's BGP session up. Resolves `exchange.peer_down`. |
+ | `exchange.max_prefix` | warning | 39 | `exchange`, `peer` | The peer's Adj-RIB-In route count reached `max_prefix_warn_pct` of its `max_prefix` (from a BMP Statistics Report). Fields: `prefixes`, `max_prefix`. Read-only. |
+ | `exchange.max_prefix_cleared` | info | 40 | `exchange`, `peer` | The count fell back below that share. Same fields. Resolves `exchange.max_prefix`. |
++| `ixp.api_key_expiring` | warning | 41 | `identifier` | The IXP Manager API key has 14 days or fewer left, or is already past `key_expires`. `identifier` is the key id. The secret is not included. |
++| `ixp.api_key_ok` | info | 42 | `identifier` | The same key has more than 14 days left. Resolves `ixp.api_key_expiring`. |
+ 
+ Problems and the events that resolve them share a **dedup key**: `packeteer/<group>/<key>=<value>`, for example `packeteer/provider/provider=transit-a` for both `provider.down` and `provider.up`. The `pagerduty` preset uses it as `dedup_key`, and `snmptrap` sends it as a varbind.
+ 
+-State events (`provider.*`, `bgp.*`, `commit.*`, `announce.*`, `inbound.*`, `mitigation.*`, `anomaly.*`, `ha.*`, `flap.*`, `exchange.*`) fire on transitions only. Except `exchange.*`, they are checked on every decision (each probe round, each RIB change, and at least every `probe.interval`); `exchange.degraded` and `exchange.recovered` are checked once per `probe.interval` in the exchange health loop, `exchange.peer_*` and `exchange.max_prefix*` when the BMP RIB source reports a session event or a statistics count, and commit at most once a minute. They are not repeated while the state holds. `leak.*` events fire on the first sighting of a prefix and when its hold is cleared.
++State events (`provider.*`, `bgp.*`, `commit.*`, `announce.*`, `inbound.*`, `mitigation.*`, `anomaly.*`, `ha.*`, `flap.*`, `exchange.*`, `ixp.api_key_*`) fire on transitions only. Except `exchange.*` and `ixp.api_key_*`, they are checked on every decision (each probe round, each RIB change, and at least every `probe.interval`); `exchange.degraded` and `exchange.recovered` are checked once per `probe.interval` in the exchange health loop, `exchange.peer_*` and `exchange.max_prefix*` when the BMP RIB source reports a session event or a statistics count, `ixp.api_key_expiring` and `ixp.api_key_ok` when the member import starts and on each refresh, and commit at most once a minute. They are not repeated while the state holds. `leak.*` events fire on the first sighting of a prefix and when its hold is cleared.
+ 
+ ## Testing delivery
+ 
+diff --git a/docs/FEATURES.md b/docs/FEATURES.md
+index 7641f97..580879e 100644
+--- a/docs/FEATURES.md
++++ b/docs/FEATURES.md
+@@ -191,12 +191,15 @@ The `maintenance` policy excludes providers during cron-scheduled, one-off, or o
+ | Per-member route server vs bilateral availability: prefixes seen only via the route server, only bilaterally, or both, with counts over time and a flag for a partial or filtered route server feed | done (#156: counts and flags on `/api/exchanges`, `GET /api/exchanges/member` for the prefixes and the counts kept in memory every 15 minutes, and columns on `/providers.html`; BMP Adj-RIB-In paths only, so a peer without `bmp: prefer` or `only` shows zero, and discovered members are not classified; read-only) | v0.8 | core (`internal/rib`, `internal/exchange`) + UI | #156 | no |
+ | Transit-to-IX offload report: flow bytes of prefixes whose exit is a transit while a configured IX peer advertises the exact prefix, with the estimated saving at the transit's `cost` | done (#152: `GET /api/exchanges/offload` as JSON or CSV, sorted by bytes, and a table on `/providers.html`; observe only, nothing is steered; needs a target source that reports volume and, per peer, the route check) | v0.8 | core (`internal/exchange`, `internal/httpapi`) + UI | #152 | no |
+ | Potential-peers report: destination origin ASNs ranked by flow bytes, whether each is present at one of our exchanges, whether a path via the LAN exists today, split into on the route server (check our session or filters) and bilateral only (candidate for a request) | partial (#154: `GET /api/exchanges/potential-peers` as JSON or CSV, with `?class=`, and two tables on `/providers.html`; presence is the configured peers and the discovered LAN members, and the session type needs BMP Adj-RIB-In paths; observe only, no session is opened). Presence from PeeringDB or IX-F waits on #153 | v0.8 | core (`internal/exchange`, `internal/httpapi`) + UI | #154 | no |
+-| IXP mode (exchange operator): `ixp: {}` refuses `mode: inject`, `announcer`, `mitigation`, `inbound`, `synthesize`, and `more_specific`; no `bgp.neighbors` or RIB view required; route-server data is a separate read-only store that never feeds the RIB or Decide | done (#160: charter and validation. Member import, fabric probes, route-server history, and member pages are #161-#167 and are not built) | v0.8 | core (`internal/config`) | #160 | no |
++| IXP mode (exchange operator): `ixp: {}` refuses `mode: inject`, `announcer`, `mitigation`, `inbound`, `synthesize`, and `more_specific`; no `bgp.neighbors` or RIB view required; route-server data is a separate read-only store that never feeds the RIB or Decide | done (#160: charter and validation; #161: IX-F member import. Fabric probes, route-server history, and member pages are #162-#167 and are not built) | v0.8 | core (`internal/config`) + `ixp_member` (`ixf`) | #160, #161 | no |
++| IX-F member import: members, ASNs, LAN addresses, port speeds, route-server client flags, `max_prefix`, `as_macro`, and switch or colo from IXP Manager or one named IX-F JSON URL | done (#161: `ixp.members` type `ixf`, `GET /api/ixp/members`, metrics; read-only, not the RIB, not an input to Decide, nothing announced) | v0.8 | `ixp_member` (`ixf`) | #161 | no |
+ | Bgpd online reconfiguration (SIGHUP: add/remove/change iBGP sessions and the per-router table without touching other sessions) | done (lab-proven) | v0.3 | core + announcer (`gobgp`) + RIB | #27 | no (lab-proven) |
+ | Online reconfiguration of core settings (thresholds, hold time, cap, policies, sources) without a restart or a withdraw | done (lab-proven) | v0.6 | core (`cmd/controller` reload, `internal/configedit`) | #128 | no (lab-proven) |
+ 
+ IXP mode (#160, [design](design/ixp.md)) is `ixp: {}`, for an exchange operator. It is not an edge network's `exchanges` peers. Validation refuses `mode: inject`, `announcer`, `mitigation`, `inbound`, `synthesize`, and `more_specific`. No `bgp.neighbors` and no RIB view are required. Route-server data is a separate read-only store and does not feed the RIB view or Decide; that store is #164. Rollback: remove `ixp` and restart.
+ 
++IX-F member import (#161) is `ixp.members` with `type: ixf`. It GETs IXP Manager's `/api/v4/member-export/ixf/1.0` (or a subdirectory path that ends with that suffix) or one named IX-F JSON URL. The API key is `PACKETEER_IXP_MANAGER_API_KEY`, sent only as `X-IXP-Manager-API-Key` and only to the manager URL. A URL that contains the key, including a percent-encoded form, is refused. `key_expires` is required when the key is set. `refresh` is 1m to 24h (default 15m) and `max_bytes` defaults to 8 MiB. `GET /api/ixp/members` serves the list. It is not the RIB and not an input to Decide, and nothing is announced. Rollback: remove `ixp.members` and restart.
++
+ Leak watch (#199, [leak-watch.md](leak-watch.md)) is off unless `leak_watch.enabled: true`, which needs `packeteer_community` and a source. A leak source reports routes seen outside the iBGP sessions; a sighting that carries `packeteer_community` (or, with `as_path_rule`, shows an injected prefix with `asn` in its path) withdraws that one outbound route at once (never in bulk), holds the prefix out of outbound improvements and inbound steers until `POST /api/leaks/clear`, and emits `leak.detected`. Sources: `bmp` (post-policy Adj-RIB-In of routers outside the AS and Adj-RIB-Out of your own edge toward eBGP) and `rislive`. The export deny for customer, peer, and transit sessions, standard and large communities, is per vendor in [routers.md](routers.md#export-filters-on-every-ebgp-session) (#210).
+ 
+ A source that is down is unknown and never blocks a withdraw. Not built: the NLNOG RING looking glass as a source, the RPKI-invalid flag (needs #200), and the `synthesize` requirement (needs #122, which must reject `synthesize` without `leak_watch`). An inbound steer is held and removed at the next inbound sync. Threat mitigation routes are reported, not withdrawn. The FRR lab (`lab/e2e-leak-watch.sh`) runs a clean pass with no false positive, then a misconfigured export that leaks one of two injected routes: only that route is withdrawn and it stays out until cleared; a lost BMP feed reads unknown; SIGTERM and SIGKILL withdraw.
+diff --git a/docs/PLUGINS.md b/docs/PLUGINS.md
+index 8b19279..9069b2e 100644
+--- a/docs/PLUGINS.md
++++ b/docs/PLUGINS.md
+@@ -61,6 +61,7 @@ Each entry has `type` (required), an optional `name` (defaults to the type and m
+ | `rib_source` | `SetRIBSink(func(RIBEvent))`. Feeds the RIB view (peer up/down, router down, paths) from outside the iBGP session. Learn-only; list under `rib_sources:` | `bmp` (BMP monitoring station) | **never** |
+ | `sso` | `AuthURL(ctx, state, nonce, verifier) (string, error)`, `Exchange(ctx, code, nonce, verifier) (SSOIdentity, error)`. Single sign-on for the ops API (#32); one instance under `auth.sso:`. Says who a user is and which role the provider grants; it never announces | `oidc` (OpenID Connect, code flow + PKCE) | none |
+ | `whois` | `Lookup(ctx, query) (WhoisResult, error)`. Troubleshooting registry lookups; one instance under `troubleshoot.whois:` | `rdap` | none |
++| `ixp_member` | `View() MemberView`, `SetEventSink`. Read-only IX-F member list; one instance under `ixp.members`. Not a RIB source and never announces | `ixf` | never |
+ | `elector` | `SetCandidate(func() Candidacy)`, `OnChange(func())`, `Active() bool`, `Resign(ctx)`, `Status()`. Active/standby leader election (#31); one instance under `ha:`. The core gates every announcer on `Active` and withdraws when it turns false | `lease` (lease file on a shared volume) | **never** |
+ | `federation` | `Publish(InstanceSnapshot)`, `Peers(now) []PeerState`. Instance-to-instance transport for multi-POP (#30); one instance under `federation:`. Transport only: the core merges fresh peer data into decisions | `mtls` (mutual TLS) | **never** |
+ | `leak_source` | `SetLeakSink(func(LeakSighting))`, `Healthy() bool`. Reports routes seen outside the AS to the leak watch (#199); list under `leak_watch.sources:` | `bmp` (BMP Adj-RIB-In of outside routers, Adj-RIB-Out of the edge), `rislive` (RIPE RIS Live) | **never** |
+@@ -86,7 +87,7 @@ Announcers, inbound ones included, run **in-process only**, so an external proce
+ ## Lifecycle
+ 
+ 1. **Factory (Init).** `func(cfg plugin.Config, env plugin.Env) (T, error)`. It decodes and validates config with `cfg.Decode(&myStruct)`. It must do no network I/O. `env` provides the instance name, a scoped `slog` logger, the plugin dir, and `Getenv`. When `env.CheckOnly` is set (the config editor checking a candidate file, #34), the instance is thrown away: validate the config, but start no process, open no connection, and write no file.
+-2. **`Start(ctx)`.** Begins background work in goroutines and must not block. Plugins start in this order: storage, SSO, RIB sources, sources, detector, leak sources, probers, scorer, policies, telemetry, notifiers, federation, whois, elector, announcer, inbound announcer, mitigation announcer. If one fails, the ones already started are stopped.
++2. **`Start(ctx)`.** Begins background work in goroutines and must not block. Plugins start in this order: storage, SSO, RIB sources, sources, detector, leak sources, probers, scorer, policies, telemetry, notifiers, federation, whois, ixp member source, elector, announcer, inbound announcer, mitigation announcer. If one fails, the ones already started are stopped.
+ 3. **`Stop(ctx)`.** Releases everything before `ctx` expires. Plugins stop in reverse order, so the announcer stops first and routes are withdrawn early.
+ 
+ Embed `plugin.Base` for no-op `Start`/`Stop`.
+@@ -121,6 +122,7 @@ Embed `plugin.Base` for no-op `Start`/`Stop`.
+ - `bmp` (rib_source): a BMP monitoring station (RFC 7854, Loc-RIB per RFC 9069). `listen` (default `:11019`), `routers` (required: addresses allowed to connect; others are closed), `policy` (`post` only: pre-policy routes the router may have rejected never count), `loc_rib` (default true), `idle_timeout` (default off; TCP keepalive notices a dead router in about 30s). Each provider's `bmp` key (`off`, `prefer`, `only`) decides whether its BMP paths count and whether the route check applies: a provider that is not advertising the exact prefix gets no improvement for it, and an active one is retired. A router's paths are dropped when its session ends; a peer's when it goes down or cannot be decoded. A peer that negotiated add-path with the router is decoded with path identifiers, so each of its paths is kept. It never announces. See [CONFIG.md](CONFIG.md#rib-source-bmp).
+ - `lease` (elector, #31): `path` (required, absolute, on a volume both instances mount), `id` (default `PACKETEER_HA_ID`, then the hostname), `ttl` (default 10s, 2s–5m), `renew` (default `ttl`/5, at most `ttl`/4). The active instance stops announcing `ttl`/2 after its last successful renewal. A standby takes a released lease at its next renewal, and a held one only after it has not changed for `ttl`/2 + the holder's recorded BGP hold time + `renew` (at least `ttl`), on its own monotonic clock. Locking is `flock` on `path.lock` with an atomic rename. It never announces. Lab-proven only. See [ha.md](ha.md).
+ - `rdap` (whois): RDAP lookups for the troubleshooting API. `base_url` (default `https://rdap.org`), `timeout` (default `5s`), `max_bytes` (default 256 KiB). The core validates the query (address, prefix, or ASN only) and rate-limits it. It reads only and does not announce. See [CONFIG.md](CONFIG.md#whois-rdap).
++- `ixf` (ixp_member, #161): one IX-F 1.0 member list under `ixp.members`. `url` (required), `refresh` (default 15m, 1m-24h), `timeout` (default 30s, 1s-2m), `max_bytes` (default 8 MiB, 1024 to 32 MiB), `key_expires` (`YYYY-MM-DD`, required when `PACKETEER_IXP_MANAGER_API_KEY` is set). The key is that environment variable, sent only as `X-IXP-Manager-API-Key` and only to the IXP Manager member export. A named IX-F URL is fetched with no key. It does not announce. See [CONFIG.md](CONFIG.md#ixp).
+ - `sqlite` (storage): report history in an embedded SQLite file. `path` (default `/var/lib/packeteer/packeteer.db`, absolute; mount a volume on the directory) and `retention` (default 400 days, `24h`–`87600h`). Daily probe rollups, one row per improvement with before/after loss and RTT, and per-prefix origin ASN, country, and volume. It also keeps SNMP 95th-percentile samples (#127): the open billing period is reloaded on start, and a closed period stays until `retention`. The controller buffers report rows and writes once a minute, so a slow disk never delays a decision or a withdraw. Sample writes happen when a poll is accepted and do not announce. Reports are built from the history rows by the core (`/api/reports`, CSV, dashboard). A `rules` policy with `geoip_db` supplies countries (`plugin.CountryLookup`). It does not announce. See [CONFIG.md](CONFIG.md#storage-sqlite).
+ - `fixed`: reports `usage_mbps` and `commit_mbps` from config or from a file re-read on every snapshot. Labs and tests only. It does not poll and it does not announce. A deployment uses `snmp`.
+ 
+diff --git a/docs/THREAT_MODEL.md b/docs/THREAT_MODEL.md
+index bc8ca0c..8e1e2dc 100644
+--- a/docs/THREAT_MODEL.md
++++ b/docs/THREAT_MODEL.md
+@@ -7,7 +7,7 @@ Packeteer can change how a network forwards packets. Failure modes matter more t
+ - **Flap** — oscillating improvements. Mitigate with hold time, hysteresis, and by keeping an improvement when the router hides the native path because Packeteer's route won. Withdrawing on that hide brings the native path back and the next round injects again.
+ - **Leak** — more-specifics learned from Packeteer advertised to transit. Mitigate with a well-known community and outbound filters on every eBGP session.
+ - **Blackhole** — inject toward a next-hop that is down. Mitigate by requiring a live RIB path and withdrawing on probe-source or session failure.
+-- **IXP mode.** An `ixp` block is an exchange operator. Validation refuses `mode: inject`, `announcer`, `mitigation`, `inbound`, `synthesize`, and `more_specific`. It does not announce and it does not change member routing. See [design/ixp.md](design/ixp.md).
++- **IXP mode.** An `ixp` block is an exchange operator. Validation refuses `mode: inject`, `announcer`, `mitigation`, `inbound`, `synthesize`, and `more_specific`. It does not announce and it does not change member routing. `ixp.members` is GET only, to the IXP Manager member export or one named IX-F URL. The API key comes from `PACKETEER_IXP_MANAGER_API_KEY` and is sent only as a header to the manager URL. See [design/ixp.md](design/ixp.md).
+ - **Over-injection** — synthesizing more-specifics can exhaust TCAM. Packeteer announces only the exact prefix a neighbor advertised, so `max_improvements` bounds the number of routes. A config that sets `more_specific_bits` is rejected. With `more_specific` on, an improvement also announces learned more-specifics (still exact RIB prefixes), and `more_specific.max_routes` (default 100, at most 1000) bounds the routes on the router.
+ - **Stale intent** — controller dies, or keeps announcing a prefix the edge no longer has, or keeps announcing after probes stop refreshing. Packeteer withdraws on shutdown, when a prefix the router was still advertising disappears, when measurements are older than the max result age (checked on a timer, not only when a round completes), and at `improvement_ttl` when the native path is hidden by Packeteer's own route. A probe round that does not finish is abandoned at that same age and does not refresh results. It never enables graceful restart. The BGP hold timer is the backstop if the process is killed before the withdraw is sent. Packeteer proposes a 90s hold time so the timer cannot negotiate off; the router's shorter timer wins. The lab SIGKILLs Packeteer and checks that FRR drops the injected route once the session is down, and no later than that hold timer.
+ 
+diff --git a/docs/design/ixp.md b/docs/design/ixp.md
+index b25de52..8dd38ca 100644
+--- a/docs/design/ixp.md
++++ b/docs/design/ixp.md
+@@ -1,10 +1,9 @@
+ # IXP mode (#160)
+ 
+-Status: charter and config gate. The `ixp` block is accepted and the
+-refusals below are enforced. Member import, fabric probing, route-server
+-history, signals, member pages, and multi-site fabric health are
+-#161-#167 and are not built. An `ixp` block does not announce, probe
+-members, or open a route-server session.
++Status: charter, config gate, and IX-F member import (#161). Fabric
++probing, route-server history, signals, member pages, and multi-site
++fabric health are #162-#167 and are not built. An `ixp` block does not
++announce, probe members, or open a route-server session.
+ 
+ An Internet exchange operator runs Packeteer to observe its fabric,
+ route servers, and members. It does not route for them. This is not the
+@@ -12,10 +11,10 @@ route servers, and members. It does not route for them. This is not the
+ 
+ ## Turning it on
+ 
+-`ixp: {}` in the config. The block has no keys. A key inside it is an
+-error until the issue that adds it. Omitted, or `ixp: null`, is not IXP
+-mode. `mode` stays `observe`. `mode: suggest` is accepted and announces
+-nothing. The shipped example leaves the block commented out.
++`ixp: {}` in the config. The only key is `members` (#161). Any other
++key is an error. Omitted, or `ixp: null`, is not IXP mode. `mode` stays
++`observe`. `mode: suggest` is accepted and announces nothing. The
++shipped example leaves the block commented out.
+ 
+ IXP mode does not need `bgp.neighbors`. With no neighbors the controller
+ does not build a RIB view. A neighbor list is still allowed; it is the
+@@ -47,25 +46,36 @@ them. The store is not built yet.
+ 
+ ## External reads
+ 
+-IXP Manager and Birdseye are read with GET only. No other method. The
+-path allowlist is not enforced in code yet; #161 and #164 must refuse
+-anything else:
+-
+-- IXP Manager member export: `GET /api/v4/member-export/ixf/1.0` on the
+-  operator's base URL (#161). Auth is the `X-IXP-Manager-API-Key`
+-  header. The key is the environment variable
+-  `PACKETEER_IXP_MANAGER_API_KEY`. It is not a config key and not a
+-  query parameter. The controller does not read it yet. The log may
+-  record that a key is set, never the secret. A warning fires 14 days
+-  before the key expires. Use a low-privilege user. Superuser endpoints
+-  are not called.
+-- An IX-F JSON document the operator names (#161) is also GET only.
+-- Birdseye, GET only (#164): `api/status`, `api/protocols/bgp`,
++IXP Manager and Birdseye are read with GET only. No other method.
++
++- IXP Manager member export (#161, enforced): `GET /api/v4/member-export/ixf/1.0`
++  on the operator's base URL, including a subdirectory install whose
++  path ends with that suffix. A bare origin uses that path. The only
++  query keys kept are `ignore_missing_ixfid=1` and `ixfid_<digits>=<digits>`.
++  `apikey`, `api_key`, `access_key`, `key`, `token`, `password`, and any
++  other query key are refused. Auth is the `X-IXP-Manager-API-Key`
++  header. The key is `PACKETEER_IXP_MANAGER_API_KEY`. It is not a config
++  value and not a query parameter. A URL that contains the key, including
++  a percent-encoded form, is refused, so the secret is not stored on the
++  member list or sent in the request target. The log records the key
++  identifier, never the secret. `key_expires` (`YYYY-MM-DD`) is required when the
++  key is set, because the token and this export do not carry the expiry.
++  A warning fires when 14 days or fewer remain, including a key that is
++  already expired. A date more than 366 days ahead is refused. Redirects
++  are not followed. The response is capped (`max_bytes`, default 8 MiB)
++  and refreshed on `refresh` (default 15m, 1m-24h). Use a low-privilege
++  user. Superuser endpoints are not called. The list is served at
++  `GET /api/ixp/members`. It is not the RIB and not an input to Decide.
++- An IX-F JSON document the operator names (#161) is GET of that exact
++  URL, with no API key. Setting the key with a URL that is not the
++  member export is a config error.
++- Birdseye, GET only (#164, not built): `api/status`, `api/protocols/bgp`,
+   `api/routes/count/protocol/{protocol}`,
+   `api/routes/lc-zwild/protocol/{protocol}/{rs-asn}/1101`.
+ 
+-IXP Manager's per-interface "Can Ping" opt-out is honored (#162). A
+-member interface that opts out is not probed.
++IXP Manager's per-interface "Can Ping" opt-out is #162. This import does
++not probe, so the opt-out has nothing to apply to yet. A member
++interface that opts out is not probed once fabric probes exist.
+ 
+ ## Lab data
+ 
+@@ -74,4 +84,5 @@ Member data is never committed. Lab fixtures use documentation prefixes
+ documentation or private ASNs (64496-64511, 65536-65551, or
+ 64512-65534).
+ 
+-Rollback: remove the `ixp` block and restart.
++Rollback: remove `ixp.members` or the `ixp` block and restart. Nothing
++was announced.
+diff --git a/internal/config/ixp.go b/internal/config/ixp.go
+index 73d00b8..0da7657 100644
+--- a/internal/config/ixp.go
++++ b/internal/config/ixp.go
+@@ -7,9 +7,11 @@ import (
+ )
+ 
+ // IXP is exchange-operator mode (#160). A non-nil value, including an
+-// empty block, is IXP mode. The block has no keys: a key is a parse
+-// error until the issue that defines it. IXP mode never announces.
+-type IXP struct{}
++// empty block, is IXP mode. IXP mode never announces. The only key is
++// members (#161), a read-only IX-F import. Any other key is a parse error.
++type IXP struct {
++	Members *PluginSpec `yaml:"members,omitempty"`
++}
+ 
+ // ixpForbidsSynthesize rejects a synthesize key when an ixp block is
+ // present. synthesize is not a field (#122); without this check the
+diff --git a/internal/config/ixp_test.go b/internal/config/ixp_test.go
+index 28e4364..0e71818 100644
+--- a/internal/config/ixp_test.go
++++ b/internal/config/ixp_test.go
+@@ -129,3 +129,27 @@ func TestIXPBlockRejectsUnknownKeys(t *testing.T) {
+ 		t.Fatalf("err = %v", err)
+ 	}
+ }
++
++func TestIXPMembersConfig(t *testing.T) {
++	y := minimalYAML + `
++ixp:
++  members:
++    type: ixf
++    config:
++      url: https://ixp.example.invalid/members.json
++`
++	cfg, err := Parse([]byte(y))
++	if err != nil {
++		t.Fatal(err)
++	}
++	if cfg.IXP == nil || cfg.IXP.Members == nil || cfg.IXP.Members.Type != "ixf" {
++		t.Fatalf("%+v", cfg.IXP)
++	}
++	if cfg.Mode != ModeObserve || cfg.Announcer != nil {
++		t.Fatalf("mode %s announcer %v", cfg.Mode, cfg.Announcer)
++	}
++	_, err = Parse([]byte(minimalYAML + "ixp:\n  members: {}\n"))
++	if err == nil || !strings.Contains(err.Error(), "ixp.members: type is required") {
++		t.Fatalf("missing type: %v", err)
++	}
++}
+diff --git a/internal/config/validate.go b/internal/config/validate.go
+index c0940cd..4d8357e 100644
+--- a/internal/config/validate.go
++++ b/internal/config/validate.go
+@@ -342,6 +342,9 @@ func (c *Config) validatePlugins(add func(string, ...any)) {
+ 	if c.Scorer != nil && c.Scorer.Type == "" {
+ 		add("scorer: type is required")
+ 	}
++	if c.IXP != nil && c.IXP.Members != nil && c.IXP.Members.Type == "" {
++		add("ixp.members: type is required")
++	}
+ 	if c.Announcer != nil && c.Announcer.Type == "" {
+ 		add("announcer: type is required")
+ 	}
+diff --git a/internal/configedit/ixp_test.go b/internal/configedit/ixp_test.go
+index ef21d0b..68498ad 100644
+--- a/internal/configedit/ixp_test.go
++++ b/internal/configedit/ixp_test.go
+@@ -31,6 +31,35 @@ func TestFormKeepsIXPBlock(t *testing.T) {
+ 	}
+ }
+ 
++func TestFormKeepsIXPMembers(t *testing.T) {
++	y := observeYAML + `
++ixp:
++  members:
++    type: ixf
++    config:
++      url: https://ixp.example.invalid/members.json
++`
++	f, err := ParseForm([]byte(y))
++	if err != nil {
++		t.Fatal(err)
++	}
++	f.HoldTime = "20m"
++	out, err := ApplyForm([]byte(y), f)
++	if err != nil {
++		t.Fatal(err)
++	}
++	if !strings.Contains(string(out), "type: ixf") || !strings.Contains(string(out), "https://ixp.example.invalid/members.json") {
++		t.Fatalf("form dropped members:\n%s", out)
++	}
++	cfg, err := config.Parse(out)
++	if err != nil {
++		t.Fatalf("parse: %v\n%s", err, out)
++	}
++	if cfg.IXP == nil || cfg.IXP.Members == nil || cfg.IXP.Members.Type != "ixf" || cfg.HoldTime != 20*time.Minute {
++		t.Fatalf("ixp %+v hold %s", cfg.IXP, cfg.HoldTime)
++	}
++}
++
+ func TestEditorRefusesIXPInject(t *testing.T) {
+ 	y := observeYAML + "ixp: {}\n"
+ 	e, _ := editor(t, y)
+diff --git a/internal/httpapi/access.go b/internal/httpapi/access.go
+index de830ee..b3cd1e0 100644
+--- a/internal/httpapi/access.go
++++ b/internal/httpapi/access.go
+@@ -64,6 +64,7 @@ func (s *Server) routeTable() []route {
+ 		{"GET /api/exchanges/member", viewer, s.handleExchangeMember},
+ 		{"GET /api/exchanges/offload", viewer, s.handleExchangeOffload},
+ 		{"GET /api/exchanges/potential-peers", viewer, s.handleExchangePotentialPeers},
++		{"GET /api/ixp/members", viewer, s.handleIXPMembers},
+ 		{"GET /api/linkouts", viewer, s.handleLinkouts},
+ 		{"GET /api/federation", viewer, s.handleFederation},
+ 		{"GET /api/ha", viewer, s.handleHA},
+diff --git a/internal/httpapi/ixp.go b/internal/httpapi/ixp.go
+new file mode 100644
+index 0000000..fb09b8a
+--- /dev/null
++++ b/internal/httpapi/ixp.go
+@@ -0,0 +1,76 @@
++package httpapi
++
++import (
++	"net/http"
++	"strings"
++	"time"
++
++	"github.com/GrandArcher/Packeteer/pkg/plugin"
++)
++
++// SetIXPMembers installs the read-only IX-F member list (#161). The
++// function is called on each request. It must not fetch or announce.
++func (s *Server) SetIXPMembers(fn func() plugin.MemberView) {
++	if s == nil {
++		return
++	}
++	s.ixpMembers.Store(fn)
++}
++
++func (s *Server) ixpMemberView() (plugin.MemberView, bool) {
++	fn, _ := s.ixpMembers.Load().(func() plugin.MemberView)
++	if fn == nil {
++		return plugin.MemberView{}, false
++	}
++	return fn(), true
++}
++
++func (s *Server) handleIXPMembers(w http.ResponseWriter, _ *http.Request) {
++	v, ok := s.ixpMemberView()
++	if !ok {
++		v = plugin.MemberView{}
++	}
++	if v.IXPs == nil {
++		v.IXPs = []plugin.IXPSite{}
++	}
++	if v.Members == nil {
++		v.Members = []plugin.IXPMember{}
++	}
++	writeJSON(w, http.StatusOK, struct {
++		meta
++		plugin.MemberView
++	}{meta: s.snapshot().meta(), MemberView: v})
++}
++
++// IXPMemberMetrics renders the IX-F import. member and address gauges are
++// zero while the list is stale; age and key expiry stay.
++func IXPMemberMetrics(v plugin.MemberView, now time.Time) []byte {
++	if !v.Configured {
++		return nil
++	}
++	var b strings.Builder
++	members, addrs := v.MemberCount, v.AddressCount
++	if v.Stale {
++		members, addrs = 0, 0
++	}
++	up := v.Error == "" && !v.Stale && !v.Fetched.IsZero()
++	writeGauge(&b, "packeteer_ixp_members", "Members in the latest IX-F import. Zero when the list is stale.",
++		sample{value: float64(members)})
++	writeGauge(&b, "packeteer_ixp_member_addresses", "LAN addresses in the latest IX-F import. Zero when the list is stale.",
++		sample{value: float64(addrs)})
++	writeGauge(&b, "packeteer_ixp_member_import_up", "1 when the latest IX-F import succeeded and the list is not stale.",
++		sample{value: boolFloat(up)})
++	if !v.Fetched.IsZero() {
++		age := now.Sub(v.Fetched).Seconds()
++		if age < 0 {
++			age = 0
++		}
++		writeGauge(&b, "packeteer_ixp_member_import_age_seconds", "Seconds since the last successful IX-F import.",
++			sample{value: age})
++	}
++	if !v.KeyExpires.IsZero() {
++		writeGauge(&b, "packeteer_ixp_api_key_expiry_seconds", "Unix time when the IXP Manager API key stops working.",
++			sample{value: float64(v.KeyExpires.Unix())})
++	}
++	return []byte(b.String())
++}
+diff --git a/internal/httpapi/ixp_test.go b/internal/httpapi/ixp_test.go
+new file mode 100644
+index 0000000..ca49cc7
+--- /dev/null
++++ b/internal/httpapi/ixp_test.go
+@@ -0,0 +1,114 @@
++package httpapi
++
++import (
++	"context"
++	"encoding/json"
++	"io"
++	"net/http"
++	"net/http/httptest"
++	"strings"
++	"testing"
++	"time"
++
++	"github.com/GrandArcher/Packeteer/internal/plugins/ixpmember/ixf"
++	"github.com/GrandArcher/Packeteer/pkg/plugin"
++)
++
++func TestIXPMembersUnconfigured(t *testing.T) {
++	s := newIXPServer(t)
++	rec := httptest.NewRecorder()
++	s.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/ixp/members", nil))
++	if rec.Code != http.StatusOK {
++		t.Fatalf("%d %s", rec.Code, rec.Body)
++	}
++	var body map[string]any
++	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
++		t.Fatal(err)
++	}
++	if body["configured"] != false || body["mode"] != "observe" {
++		t.Fatalf("%s", rec.Body)
++	}
++	members, ok := body["members"].([]any)
++	ixps, ok2 := body["ixps"].([]any)
++	if !ok || len(members) != 0 || !ok2 || len(ixps) != 0 {
++		t.Fatalf("lists %#v %#v", body["members"], body["ixps"])
++	}
++	mrec := httptest.NewRecorder()
++	s.Handler().ServeHTTP(mrec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
++	if strings.Contains(mrec.Body.String(), "packeteer_ixp_") {
++		t.Fatalf("metrics without a source:\n%s", mrec.Body)
++	}
++}
++
++func TestIXPMembersAPIAndMetrics(t *testing.T) {
++	doc := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		if r.Method != http.MethodGet || r.Header.Get("X-IXP-Manager-API-Key") != "" {
++			t.Errorf("method %s header %q", r.Method, r.Header.Get("X-IXP-Manager-API-Key"))
++		}
++		_, _ = io.WriteString(w, `{"version":"1.0","ixp_list":[{"ixp_id":1,"shortname":"example-ix","name":"Example IX","vlan":[{"id":10,"ipv4":{"prefix":"192.0.2.0","mask_length":24}}],"switch":[{"id":7,"name":"sw1","colo":"cab-a"}]}],"member_list":[{"asnum":64496,"name":"Member A","contact_email":["hidden@example.invalid"],"connection_list":[{"ixp_id":1,"state":"active","if_list":[{"switch_id":7,"if_speed":10000,"if_phys_speed":100000}],"vlan_list":[{"vlan_id":10,"ipv4":{"address":"192.0.2.20","routeserver":true,"as_macro":"AS64496:AS-EXAMPLE","max_prefix":10,"mac_addresses":["02:00:00:00:00:01"]}}]}]}]}`)
++	}))
++	defer doc.Close()
++	cfg, err := plugin.ConfigFromYAML("url: " + doc.URL + "/members.json\n")
++	if err != nil {
++		t.Fatal(err)
++	}
++	p, err := ixf.New(cfg, plugin.Env{})
++	if err != nil {
++		t.Fatal(err)
++	}
++	if err := p.Start(t.Context()); err != nil {
++		t.Fatal(err)
++	}
++	defer func() { _ = p.Stop(context.Background()) }()
++	deadline := time.Now().Add(2 * time.Second)
++	for time.Now().Before(deadline) && p.View().MemberCount != 1 {
++		time.Sleep(10 * time.Millisecond)
++	}
++	if p.View().Error != "" || p.View().MemberCount != 1 {
++		t.Fatalf("%+v", p.View())
++	}
++	s := newIXPServer(t)
++	s.SetIXPMembers(p.View)
++	rec := httptest.NewRecorder()
++	s.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/ixp/members", nil))
++	if rec.Code != http.StatusOK {
++		t.Fatalf("%d %s", rec.Code, rec.Body)
++	}
++	text := rec.Body.String()
++	for _, want := range []string{`"asn":64496`, `"address":"192.0.2.20"`, `"speed_mbps":10000`, `"if_phys_speed":100000`, `"colo":"cab-a"`, `"route_server":true`, `"as_macro":"AS64496:AS-EXAMPLE"`, `"mode":"observe"`} {
++		if !strings.Contains(text, want) {
++			t.Errorf("missing %s in %s", want, text)
++		}
++	}
++	for _, hidden := range []string{"hidden@example.invalid", "02:00:00:00:00:01"} {
++		if strings.Contains(text, hidden) {
++			t.Errorf("response contains %s", hidden)
++		}
++	}
++	mrec := httptest.NewRecorder()
++	s.Handler().ServeHTTP(mrec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
++	metrics := mrec.Body.String()
++	if !strings.Contains(metrics, "packeteer_ixp_members 1\n") || !strings.Contains(metrics, "packeteer_ixp_member_addresses 1\n") || !strings.Contains(metrics, "packeteer_ixp_member_import_up 1\n") {
++		t.Fatalf("metrics\n%s", metrics)
++	}
++
++	stale := p.View()
++	stale.Stale = true
++	stale.Error = "member list is stale"
++	s.SetIXPMembers(func() plugin.MemberView { return stale })
++	mrec = httptest.NewRecorder()
++	s.Handler().ServeHTTP(mrec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
++	metrics = mrec.Body.String()
++	if !strings.Contains(metrics, "packeteer_ixp_members 0\n") || !strings.Contains(metrics, "packeteer_ixp_member_import_up 0\n") || !strings.Contains(metrics, "packeteer_ixp_member_import_age_seconds") {
++		t.Fatalf("stale metrics\n%s", metrics)
++	}
++}
++
++func newIXPServer(t *testing.T) *Server {
++	t.Helper()
++	s, err := New(Options{Snapshot: func() Snapshot { return Snapshot{Version: "test", Mode: "observe", Started: true} }})
++	if err != nil {
++		t.Fatal(err)
++	}
++	return s
++}
+diff --git a/internal/httpapi/server.go b/internal/httpapi/server.go
+index b6373fd..712fb8d 100644
+--- a/internal/httpapi/server.go
++++ b/internal/httpapi/server.go
+@@ -141,6 +141,9 @@ type Server struct {
+ 	// exMembers is the member comparison of the exchange view (#156). Nil
+ 	// until SetExchangeMembers.
+ 	exMembers atomic.Pointer[ExchangeMembers]
++	// ixpMembers is the IX-F import (#161). Nil until SetIXPMembers.
++	// Read at request time. It never announces.
++	ixpMembers atomic.Value
+ 	// quarantine releases a flap-quarantined prefix (#228). Nil until
+ 	// SetQuarantine.
+ 	quarantine atomic.Value
+@@ -330,6 +333,9 @@ func (s *Server) handleMetrics(w http.ResponseWriter, _ *http.Request) {
+ 	if s.ha != nil {
+ 		_, _ = w.Write(HAMetrics(s.ha()))
+ 	}
++	if v, ok := s.ixpMemberView(); ok && v.Configured {
++		_, _ = w.Write(IXPMemberMetrics(v, time.Now()))
++	}
+ }
+ 
+ func (s *Server) handleProviders(w http.ResponseWriter, _ *http.Request) {
+diff --git a/internal/pluginhost/host.go b/internal/pluginhost/host.go
+index 43f62c9..6b1c729 100644
+--- a/internal/pluginhost/host.go
++++ b/internal/pluginhost/host.go
+@@ -40,6 +40,9 @@ type Set struct {
+ 	Storage    *Instance[plugin.Storage]
+ 	// Whois serves the troubleshooting API only. It never announces.
+ 	Whois *Instance[plugin.Whois]
++	// IXPMembers imports an IX-F member list (#161). It never announces
++	// and it is not a RIB source.
++	IXPMembers *Instance[plugin.MemberSource]
+ 	// RIBSources feed the RIB view (BMP). They never announce.
+ 	RIBSources []Instance[plugin.RIBSource]
+ 	// Federation is the multi-POP transport (#30). It never announces.
+@@ -162,6 +165,11 @@ func Build(cfg *config.Config, opts Options) (*Set, error) {
+ 			s.Whois = &b[0]
+ 		}
+ 	}
++	if cfg.IXP != nil && cfg.IXP.Members != nil {
++		if b := build(plugin.MemberSources, "ixp.members", []config.PluginSpec{*cfg.IXP.Members}, base, &errs); len(b) == 1 {
++			s.IXPMembers = &b[0]
++		}
++	}
+ 	if err := errors.Join(errs...); err != nil {
+ 		return nil, err
+ 	}
+@@ -233,6 +241,9 @@ func (s *Set) all() []namedLifecycle {
+ 	if s.Whois != nil {
+ 		add(plugin.KindWhois, s.Whois.Name, s.Whois.Plugin)
+ 	}
++	if s.IXPMembers != nil {
++		add(plugin.KindMemberSource, s.IXPMembers.Name, s.IXPMembers.Plugin)
++	}
+ 	// Before the announcers, so it stops after them. The core withdraws
+ 	// and resigns before any plugin stops.
+ 	if s.Elector != nil {
+diff --git a/internal/pluginhost/host_test.go b/internal/pluginhost/host_test.go
+index bd57300..2e76fa7 100644
+--- a/internal/pluginhost/host_test.go
++++ b/internal/pluginhost/host_test.go
+@@ -108,6 +108,33 @@ func load(t *testing.T, extra string) *config.Config {
+ 	return cfg
+ }
+ 
++func TestIXPMembersIsNotARIBSource(t *testing.T) {
++	cfg := load(t, `
++ixp:
++  members:
++    type: ixf
++    config:
++      url: https://ixp.example.invalid/members.json
++`)
++	s, err := Build(cfg, Options{})
++	if err != nil {
++		t.Fatal(err)
++	}
++	if s.IXPMembers == nil || s.IXPMembers.Type != "ixf" {
++		t.Fatalf("%+v", s.IXPMembers)
++	}
++	if len(s.RIBSources) != 0 || s.Announcer != nil {
++		t.Fatalf("rib %d announcer %v", len(s.RIBSources), s.Announcer)
++	}
++	if !slices.Contains(s.Summary(), "ixp_member ixf") {
++		t.Fatalf("summary %v", s.Summary())
++	}
++	v := s.IXPMembers.Plugin.View()
++	if !v.Configured || v.MemberCount != 0 || len(v.Members) != 0 {
++		t.Fatalf("%+v", v)
++	}
++}
++
+ func TestBuildAndLifecycle(t *testing.T) {
+ 	events = nil
+ 	cfg := load(t, "sources:\n  - type: test-source\n    name: s1\nnotifiers:\n  - type: test-notifier\n")
+diff --git a/internal/plugins/all/all.go b/internal/plugins/all/all.go
+index 96b70f0..7d3155e 100644
+--- a/internal/plugins/all/all.go
++++ b/internal/plugins/all/all.go
+@@ -8,6 +8,7 @@ import (
+ 	_ "github.com/GrandArcher/Packeteer/internal/plugins/elector/lease"      // lease-file HA elector
+ 	_ "github.com/GrandArcher/Packeteer/internal/plugins/exec"               // exec prober/source/notifier
+ 	_ "github.com/GrandArcher/Packeteer/internal/plugins/federation/mtls"    // mTLS multi-POP federation
++	_ "github.com/GrandArcher/Packeteer/internal/plugins/ixpmember/ixf"      // IX-F member import (read-only)
+ 	_ "github.com/GrandArcher/Packeteer/internal/plugins/leaksource/rislive" // RIPE RIS Live leak source
+ 	_ "github.com/GrandArcher/Packeteer/internal/plugins/notifier/smtp"      // smtp notifier
+ 	_ "github.com/GrandArcher/Packeteer/internal/plugins/notifier/snmptrap"  // snmptrap notifier
+diff --git a/internal/plugins/ixpmember/ixf/ixf.go b/internal/plugins/ixpmember/ixf/ixf.go
+new file mode 100644
+index 0000000..143b9c7
+--- /dev/null
++++ b/internal/plugins/ixpmember/ixf/ixf.go
+@@ -0,0 +1,398 @@
++// Package ixf is the built-in ixp_member plugin. It GETs one IX-F 1.0
++// member list, either IXP Manager's member export or one URL the operator
++// names, and serves it read-only. It never announces and it is not a RIB
++// source.
++package ixf
++
++import (
++	"context"
++	"errors"
++	"fmt"
++	"io"
++	"log/slog"
++	"net/http"
++	"strconv"
++	"strings"
++	"sync"
++	"time"
++
++	"github.com/GrandArcher/Packeteer/pkg/plugin"
++	"gopkg.in/yaml.v3"
++)
++
++// TypeName is the config type.
++const TypeName = "ixf"
++
++// exportPath is the only IXP Manager path this plugin requests.
++const exportPath = "/api/v4/member-export/ixf/1.0"
++
++// Defaults and bounds for the config knobs.
++const (
++	DefaultRefresh  = 15 * time.Minute
++	minRefresh      = time.Minute
++	maxRefresh      = 24 * time.Hour
++	DefaultTimeout  = 30 * time.Second
++	minTimeout      = time.Second
++	maxTimeout      = 2 * time.Minute
++	DefaultMaxBytes = 8 << 20
++	minMaxBytes     = 1024
++	maxMaxBytes     = 32 << 20
++	keyWarnDays     = 14
++	maxKeyLifeDays  = 366
++	staleFactor     = 3
++)
++
++// errNoRedirect refuses every redirect. net/http would copy
++// X-IXP-Manager-API-Key onto the next request.
++var errNoRedirect = errors.New("redirects are not followed")
++
++func init() { plugin.MemberSources.Register(TypeName, New) }
++
++// Config is the ixf plugin's config block.
++type Config struct {
++	URL        string        `yaml:"url"`
++	Refresh    time.Duration `yaml:"refresh"`
++	MaxBytes   int           `yaml:"max_bytes"`
++	Timeout    time.Duration `yaml:"timeout"`
++	KeyExpires ymd           `yaml:"key_expires"`
++}
++
++// ymd accepts a quoted YYYY-MM-DD, an unquoted YAML date, or RFC3339.
++// yaml.v3 tags an unquoted date as a timestamp; the node value is then
++// the timestamp text, which parseExpires also accepts.
++type ymd struct{ s string }
++
++func (d *ymd) UnmarshalYAML(n *yaml.Node) error {
++	if n.Tag == "!!null" {
++		d.s = ""
++		return nil
++	}
++	if n.Kind != yaml.ScalarNode {
++		return errors.New("key_expires must be YYYY-MM-DD")
++	}
++	d.s = n.Value
++	return nil
++}
++
++// Source is the ixf member importer.
++type Source struct {
++	plugin.Base
++	log      *slog.Logger
++	refresh  time.Duration
++	maxBytes int64
++	fetchURL string
++	manager  bool
++	apiKey   string
++	keyID    string
++	expires  time.Time
++	http     *http.Client
++
++	mu      sync.Mutex
++	view    plugin.MemberView
++	sink    func(plugin.Event)
++	keyNote keyState
++	cancel  context.CancelFunc
++	done    chan struct{}
++}
++
++type keyState int
++
++const (
++	keyNone keyState = iota
++	keyOK
++	keyExpiring
++)
++
++// New validates the config and the API key. It does not dial.
++func New(c plugin.Config, env plugin.Env) (plugin.MemberSource, error) {
++	var cfg Config
++	if err := c.Decode(&cfg); err != nil {
++		return nil, err
++	}
++	getenv := env.Getenv
++	if getenv == nil {
++		getenv = func(string) string { return "" }
++	}
++	apiKey := strings.TrimSpace(getenv(APIKeyEnv))
++	fetchURL, manager, err := classifyURL(cfg.URL, apiKey)
++	if err != nil {
++		return nil, err
++	}
++	if cfg.Refresh == 0 {
++		cfg.Refresh = DefaultRefresh
++	}
++	if cfg.Refresh < minRefresh || cfg.Refresh > maxRefresh {
++		return nil, fmt.Errorf("refresh %s must be between %s and %s", cfg.Refresh, minRefresh, maxRefresh)
++	}
++	if cfg.Timeout == 0 {
++		cfg.Timeout = DefaultTimeout
++	}
++	if cfg.Timeout < minTimeout || cfg.Timeout > maxTimeout {
++		return nil, fmt.Errorf("timeout %s must be between %s and %s", cfg.Timeout, minTimeout, maxTimeout)
++	}
++	if cfg.MaxBytes == 0 {
++		cfg.MaxBytes = DefaultMaxBytes
++	}
++	if cfg.MaxBytes < minMaxBytes || cfg.MaxBytes > maxMaxBytes {
++		return nil, fmt.Errorf("max_bytes %d must be between %d and %d", cfg.MaxBytes, minMaxBytes, maxMaxBytes)
++	}
++	var ident string
++	var expires time.Time
++	switch {
++	case apiKey != "" && cfg.KeyExpires.s == "":
++		return nil, fmt.Errorf("key_expires is required when %s is set", APIKeyEnv)
++	case apiKey == "" && cfg.KeyExpires.s != "":
++		return nil, fmt.Errorf("key_expires is set but %s is not", APIKeyEnv)
++	case apiKey != "":
++		ident, err = parseAPIKey(apiKey)
++		if err != nil {
++			return nil, err
++		}
++		expires, err = parseExpires(cfg.KeyExpires.s, time.Now())
++		if err != nil {
++			return nil, err
++		}
++	}
++	log := env.Logger
++	if log == nil {
++		log = slog.New(slog.DiscardHandler)
++	}
++	s := &Source{
++		log: log, refresh: cfg.Refresh, maxBytes: int64(cfg.MaxBytes),
++		fetchURL: fetchURL, manager: manager, apiKey: apiKey, keyID: ident, expires: expires,
++		http: &http.Client{
++			Timeout: cfg.Timeout,
++			CheckRedirect: func(*http.Request, []*http.Request) error {
++				return errNoRedirect
++			},
++		},
++		view: plugin.MemberView{
++			Configured: true,
++			URL:        fetchURL,
++			Manager:    manager,
++			KeyID:      ident,
++			KeyExpires: expires,
++			IXPs:       []plugin.IXPSite{},
++			Members:    []plugin.IXPMember{},
++		},
++	}
++	return s, nil
++}
++
++// SetEventSink records where key-expiry events go. The controller calls
++// it before Start. New does not emit: the sink is not set yet.
++func (s *Source) SetEventSink(fn func(plugin.Event)) {
++	s.mu.Lock()
++	s.sink = fn
++	s.mu.Unlock()
++}
++
++// Start fetches once, then on each refresh. It does not block.
++func (s *Source) Start(ctx context.Context) error {
++	s.noteKey(time.Now())
++	ctx, cancel := context.WithCancel(ctx)
++	done := make(chan struct{})
++	s.mu.Lock()
++	s.cancel = cancel
++	s.done = done
++	s.mu.Unlock()
++	go s.loop(ctx, done)
++	return nil
++}
++
++func (s *Source) loop(ctx context.Context, done chan struct{}) {
++	defer close(done)
++	s.fetch(ctx)
++	t := time.NewTicker(s.refresh)
++	defer t.Stop()
++	for {
++		select {
++		case <-ctx.Done():
++			return
++		case <-t.C:
++			s.noteKey(time.Now())
++			s.fetch(ctx)
++		}
++	}
++}
++
++// Stop cancels the refresh loop and waits for it to leave.
++func (s *Source) Stop(ctx context.Context) error {
++	s.mu.Lock()
++	cancel, done := s.cancel, s.done
++	s.mu.Unlock()
++	if cancel != nil {
++		cancel()
++	}
++	if done == nil {
++		return nil
++	}
++	select {
++	case <-done:
++		return nil
++	case <-ctx.Done():
++		return ctx.Err()
++	}
++}
++
++// View returns the latest import. After three refresh intervals without a
++// success the served list is empty, but the key id and the URL stay.
++func (s *Source) View() plugin.MemberView {
++	s.mu.Lock()
++	v := s.view
++	refresh := s.refresh
++	s.mu.Unlock()
++	if v.IXPs == nil {
++		v.IXPs = []plugin.IXPSite{}
++	}
++	if v.Members == nil {
++		v.Members = []plugin.IXPMember{}
++	}
++	if !v.Fetched.IsZero() && v.Error != "" && time.Since(v.Fetched) > staleFactor*refresh {
++		v.Stale = true
++		v.Error = "member list is stale"
++		v.IXPs = []plugin.IXPSite{}
++		v.Members = []plugin.IXPMember{}
++		v.MemberCount = 0
++		v.AddressCount = 0
++	}
++	return v
++}
++
++func (s *Source) fetch(ctx context.Context) {
++	if ctx.Err() != nil {
++		return
++	}
++	body, err := s.get(ctx)
++	if ctx.Err() != nil {
++		return
++	}
++	if err != nil {
++		s.publishErr(err)
++		return
++	}
++	p, err := parseIXF(body)
++	if err != nil {
++		s.publishErr(err)
++		return
++	}
++	s.mu.Lock()
++	s.view.Fetched = time.Now()
++	s.view.Error = ""
++	s.view.Stale = false
++	s.view.IXPs = p.ixps
++	s.view.Members = p.members
++	s.view.MemberCount = len(p.members)
++	s.view.AddressCount = p.addresses
++	s.mu.Unlock()
++}
++
++func (s *Source) publishErr(err error) {
++	s.mu.Lock()
++	s.view.Error = redact(err.Error(), s.apiKey)
++	s.mu.Unlock()
++}
++
++func (s *Source) get(ctx context.Context) ([]byte, error) {
++	req, err := http.NewRequestWithContext(ctx, http.MethodGet, s.fetchURL, nil)
++	if err != nil {
++		return nil, errors.New("member export: bad url")
++	}
++	req.Header.Set("Accept", "application/json")
++	req.Header.Set("User-Agent", "packeteer")
++	if s.manager && s.apiKey != "" {
++		req.Header.Set(apiKeyHeader, s.apiKey)
++	}
++	resp, err := s.http.Do(req)
++	if err != nil {
++		if errors.Is(err, errNoRedirect) {
++			return nil, errors.New("member export: redirects are not followed")
++		}
++		return nil, errors.New("member export: " + redact(err.Error(), s.apiKey))
++	}
++	defer resp.Body.Close()
++	body, err := io.ReadAll(io.LimitReader(resp.Body, s.maxBytes+1))
++	if err != nil {
++		return nil, errors.New("member export: read failed")
++	}
++	if int64(len(body)) > s.maxBytes {
++		return nil, fmt.Errorf("member export: response larger than %d bytes", s.maxBytes)
++	}
++	if resp.StatusCode != http.StatusOK {
++		return nil, fmt.Errorf("member export: HTTP %d", resp.StatusCode)
++	}
++	return body, nil
++}
++
++// noteKey emits ixp.api_key_expiring or ixp.api_key_ok on a transition.
++// The log and the event carry the identifier and the days left, never the secret.
++func (s *Source) noteKey(now time.Time) {
++	if s.keyID == "" {
++		return
++	}
++	days := daysLeft(s.expires, now)
++	next := keyOK
++	kind := plugin.EventIXPKeyOK
++	msg := fmt.Sprintf("IXP Manager API key %s is valid for %d days", s.keyID, days)
++	if days <= keyWarnDays {
++		next = keyExpiring
++		kind = plugin.EventIXPKeyExpiring
++		switch {
++		case days < 0:
++			msg = fmt.Sprintf("IXP Manager API key %s expired", s.keyID)
++		case days == 0:
++			msg = fmt.Sprintf("IXP Manager API key %s expires today", s.keyID)
++		default:
++			msg = fmt.Sprintf("IXP Manager API key %s expires in %d days", s.keyID, days)
++		}
++	}
++	s.mu.Lock()
++	if s.keyNote == next {
++		s.mu.Unlock()
++		return
++	}
++	s.keyNote = next
++	sink := s.sink
++	s.mu.Unlock()
++	attrs := []any{"key_id", s.keyID, "expires", s.expires.UTC().Format("2006-01-02"), "days_left", days}
++	if next == keyExpiring {
++		s.log.Warn("IXP Manager API key expiry", attrs...)
++	} else {
++		s.log.Info("IXP Manager API key expiry", attrs...)
++	}
++	if sink != nil {
++		sink(plugin.NewEvent(kind, now, msg, map[string]string{
++			"identifier": s.keyID,
++			"days_left":  strconv.Itoa(days),
++		}))
++	}
++}
++
++func daysLeft(expires, now time.Time) int {
++	e := time.Date(expires.UTC().Year(), expires.UTC().Month(), expires.UTC().Day(), 0, 0, 0, 0, time.UTC)
++	n := time.Date(now.UTC().Year(), now.UTC().Month(), now.UTC().Day(), 0, 0, 0, 0, time.UTC)
++	return int(e.Sub(n) / (24 * time.Hour))
++}
++
++func parseExpires(s string, now time.Time) (time.Time, error) {
++	var t time.Time
++	var err error
++	if len(s) == 10 {
++		t, err = time.Parse("2006-01-02", s)
++	} else {
++		var full time.Time
++		full, err = time.Parse(time.RFC3339, s)
++		if err == nil {
++			u := full.UTC()
++			t = time.Date(u.Year(), u.Month(), u.Day(), 0, 0, 0, 0, time.UTC)
++		}
++	}
++	if err != nil {
++		return time.Time{}, errors.New("key_expires must be YYYY-MM-DD")
++	}
++	today := time.Date(now.UTC().Year(), now.UTC().Month(), now.UTC().Day(), 0, 0, 0, 0, time.UTC)
++	if t.After(today.AddDate(0, 0, maxKeyLifeDays)) {
++		return time.Time{}, errors.New("key_expires is more than 366 days ahead")
++	}
++	return t, nil
++}
+diff --git a/internal/plugins/ixpmember/ixf/ixf_test.go b/internal/plugins/ixpmember/ixf/ixf_test.go
+new file mode 100644
+index 0000000..5f8fcd0
+--- /dev/null
++++ b/internal/plugins/ixpmember/ixf/ixf_test.go
+@@ -0,0 +1,259 @@
++package ixf
++
++import (
++	"context"
++	"fmt"
++	"io"
++	"net/http"
++	"net/http/httptest"
++	"strings"
++	"sync/atomic"
++	"testing"
++	"time"
++)
++
++func TestFetchAllowlist(t *testing.T) {
++	var paths []string
++	var methods []string
++	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		if r.Method != http.MethodGet {
++			t.Errorf("method %s", r.Method)
++		}
++		methods = append(methods, r.Method)
++		paths = append(paths, r.URL.RequestURI())
++		if strings.Contains(r.URL.String(), docSecret) || r.URL.Query().Get("apikey") != "" {
++			t.Errorf("key in url %s", r.URL)
++		}
++		if r.Header.Get(apiKeyHeader) != docKey {
++			t.Errorf("header %q", r.Header.Get(apiKeyHeader))
++		}
++		_, _ = io.WriteString(w, sampleIXF)
++	}))
++	defer srv.Close()
++
++	cases := []string{
++		srv.URL + "/",
++		srv.URL + exportPath,
++		srv.URL + "/ixpm" + exportPath,
++	}
++	for _, raw := range cases {
++		paths, methods = nil, nil
++		s := build(t, "url: "+raw+"\nkey_expires: \""+utcDay(30)+"\"\n", docKey, nil)
++		s.fetch(context.Background())
++		v := s.View()
++		if v.Error != "" || v.MemberCount != 2 || !v.Manager || v.KeyID != docIdent {
++			t.Fatalf("url %s view %+v", raw, v)
++		}
++		if len(paths) != 1 || !strings.HasPrefix(paths[0], exportPath) && !strings.Contains(paths[0], "/ixpm"+exportPath) {
++			t.Fatalf("url %s requested %v", raw, paths)
++		}
++		if raw == srv.URL+"/ixpm"+exportPath && paths[0] != "/ixpm"+exportPath {
++			t.Fatalf("subdirectory requested %s", paths[0])
++		}
++		if strings.Join(methods, ",") != http.MethodGet {
++			t.Fatalf("methods %v", methods)
++		}
++	}
++
++	paths = nil
++	q := srv.URL + exportPath + "?ixfid_1=2&ignore_missing_ixfid=1"
++	s := build(t, "url: "+q+"\nkey_expires: \""+utcDay(30)+"\"\n", docKey, nil)
++	s.fetch(context.Background())
++	if s.View().Error != "" {
++		t.Fatal(s.View().Error)
++	}
++	if len(paths) != 1 || !strings.Contains(paths[0], "ixfid_1=2") || !strings.Contains(paths[0], "ignore_missing_ixfid=1") {
++		t.Fatalf("query %v", paths)
++	}
++}
++
++func TestURLRejected(t *testing.T) {
++	if err := newErr(t, "url: https://ixp.example.invalid"+exportPath+"?apikey="+docSecret+"\n", ""); err == nil || strings.Contains(err.Error(), docSecret) || !strings.Contains(err.Error(), "apikey") {
++		t.Fatalf("apikey query: %v", err)
++	}
++	if err := newErr(t, "url: https://ixp.example.invalid/members.json?access_key="+docSecret+"\n", ""); err == nil || strings.Contains(err.Error(), docSecret) {
++		t.Fatalf("access_key: %v", err)
++	}
++	if err := newErr(t, "url: https://ixp.example.invalid"+exportPath+"?vlan=1\n", ""); err == nil || !strings.Contains(err.Error(), "vlan") {
++		t.Fatalf("manager query: %v", err)
++	}
++	if err := newErr(t, "url: https://ixp.example.invalid/"+docKey+"\nkey_expires: \""+utcDay(10)+"\"\n", docKey); err == nil || strings.Contains(err.Error(), docSecret) || strings.Contains(err.Error(), docKey) {
++		t.Fatalf("key in url: %v", err)
++	}
++	if err := newErr(t, "url: https://ixp.example.invalid/members.json\nkey_expires: \""+utcDay(10)+"\"\n", docKey); err == nil || !strings.Contains(err.Error(), "only sent") || strings.Contains(err.Error(), docSecret) {
++		t.Fatalf("named with key: %v", err)
++	}
++	if err := newErr(t, "url: https://ixp.example.invalid"+exportPath+"evil\nkey_expires: \""+utcDay(10)+"\"\n", docKey); err == nil || !strings.Contains(err.Error(), "only sent") {
++		t.Fatalf("near path: %v", err)
++	}
++}
++
++func TestEncodedKeyStaysOutOfFetchURL(t *testing.T) {
++	enc := "%" + fmt.Sprintf("%02X", docKey[0]) + docKey[1:]
++	raw := "https://ixp.example.invalid/" + enc + exportPath
++	if strings.Contains(raw, docKey) || !strings.Contains(raw, docSecret) {
++		t.Fatal("fixture did not encode only the first character")
++	}
++	got, manager, err := classifyURL(raw, docKey)
++	if err == nil || got != "" || manager {
++		t.Fatalf("classified %q manager %v err %v", got, manager, err)
++	}
++	if strings.Contains(err.Error(), docKey) || strings.Contains(err.Error(), docSecret) || strings.Contains(got, docSecret) || !strings.Contains(err.Error(), "API key") {
++		t.Fatalf("leak got %q err %v", got, err)
++	}
++	yml := "url: \"" + raw + "\"\nkey_expires: \"" + utcDay(10) + "\"\n"
++	if err := newErr(t, yml, docKey); err == nil || strings.Contains(err.Error(), docKey) || strings.Contains(err.Error(), docSecret) {
++		t.Fatalf("new %v", err)
++	}
++	qraw := "https://ixp.example.invalid" + exportPath + "?ixfid_1=" + enc
++	got, manager, err = classifyURL(qraw, docKey)
++	if err == nil || got != "" || manager || strings.Contains(err.Error(), docSecret) || strings.Contains(err.Error(), docKey) {
++		t.Fatalf("query got %q manager %v err %v", got, manager, err)
++	}
++}
++
++func TestNamedFetchHasNoKey(t *testing.T) {
++	var got string
++	var header string
++	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		got = r.URL.RequestURI()
++		header = r.Header.Get(apiKeyHeader)
++		if r.Method != http.MethodGet {
++			t.Errorf("method %s", r.Method)
++		}
++		_, _ = io.WriteString(w, `{"version":"1.0","member_list":[]}`)
++	}))
++	defer srv.Close()
++	s := build(t, "url: "+srv.URL+"/members.json?vlan=1\n", "", nil)
++	if s.manager {
++		t.Fatal("named url classified as manager")
++	}
++	s.fetch(context.Background())
++	v := s.View()
++	if v.Error != "" || v.MemberCount != 0 || v.Manager || header != "" || got != "/members.json?vlan=1" {
++		t.Fatalf("view %+v uri %s header %q", v, got, header)
++	}
++}
++
++func TestRedirectDropsKey(t *testing.T) {
++	var second atomic.Int32
++	steal := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		second.Add(1)
++		if r.Header.Get(apiKeyHeader) != "" {
++			t.Error("API key was forwarded")
++		}
++	}))
++	defer steal.Close()
++	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		if r.Header.Get(apiKeyHeader) != docKey {
++			t.Errorf("first header %q", r.Header.Get(apiKeyHeader))
++		}
++		http.Redirect(w, r, steal.URL+"/steal?k="+docKey, http.StatusFound)
++	}))
++	defer srv.Close()
++	s := build(t, "url: "+srv.URL+"/\nkey_expires: \""+utcDay(20)+"\"\n", docKey, nil)
++	s.fetch(context.Background())
++	v := s.View()
++	if second.Load() != 0 {
++		t.Fatalf("redirect target saw %d requests", second.Load())
++	}
++	if v.Error != "member export: redirects are not followed" || strings.Contains(v.Error, docSecret) || strings.Contains(v.Error, docKey) || v.MemberCount != 0 {
++		t.Fatalf("view %+v", v)
++	}
++}
++
++func TestFailedFetchKeepsMembersUntilStale(t *testing.T) {
++	var big atomic.Bool
++	var status atomic.Int32
++	status.Store(http.StatusOK)
++	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		if big.Load() {
++			_, _ = w.Write(bytesRepeat(3000))
++			return
++		}
++		w.WriteHeader(int(status.Load()))
++		if status.Load() == http.StatusOK {
++			_, _ = io.WriteString(w, sampleIXF)
++		}
++	}))
++	defer srv.Close()
++	s := build(t, "url: "+srv.URL+"/members.json\nmax_bytes: 2048\nrefresh: 1m\n", "", nil)
++	if len(sampleIXF) > 2048 {
++		t.Fatalf("fixture is %d bytes", len(sampleIXF))
++	}
++	s.fetch(context.Background())
++	if s.View().MemberCount != 2 || s.View().Error != "" {
++		t.Fatalf("first %+v", s.View())
++	}
++	status.Store(http.StatusInternalServerError)
++	s.fetch(context.Background())
++	v := s.View()
++	if v.MemberCount != 2 || v.Stale || !strings.Contains(v.Error, "HTTP 500") {
++		t.Fatalf("after 500 %+v", v)
++	}
++	big.Store(true)
++	status.Store(http.StatusOK)
++	s.fetch(context.Background())
++	v = s.View()
++	if v.MemberCount != 2 || !strings.Contains(v.Error, "larger than 2048") {
++		t.Fatalf("after size %+v", v)
++	}
++	s.mu.Lock()
++	s.view.Fetched = time.Now().Add(-3*s.refresh - time.Second)
++	s.view.KeyID = docIdent
++	s.mu.Unlock()
++	v = s.View()
++	if !v.Stale || len(v.Members) != 0 || len(v.IXPs) != 0 || v.MemberCount != 0 || v.KeyID != docIdent || v.Error != "member list is stale" || v.URL == "" {
++		t.Fatalf("stale %+v", v)
++	}
++}
++
++func TestStartFetchesOnce(t *testing.T) {
++	var n atomic.Int32
++	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		n.Add(1)
++		_, _ = io.WriteString(w, sampleIXF)
++	}))
++	defer srv.Close()
++	s := build(t, "url: "+srv.URL+"/members.json\nrefresh: 1m\n", "", nil)
++	ctx, cancel := context.WithCancel(context.Background())
++	defer cancel()
++	if err := s.Start(ctx); err != nil {
++		t.Fatal(err)
++	}
++	deadline := time.Now().Add(2 * time.Second)
++	for time.Now().Before(deadline) && s.View().MemberCount != 2 {
++		time.Sleep(10 * time.Millisecond)
++	}
++	if s.View().MemberCount != 2 || n.Load() != 1 {
++		t.Fatalf("count %d requests %d err %s", s.View().MemberCount, n.Load(), s.View().Error)
++	}
++	stop, cancelStop := context.WithTimeout(context.Background(), 2*time.Second)
++	defer cancelStop()
++	if err := s.Stop(stop); err != nil {
++		t.Fatal(err)
++	}
++}
++
++func TestFetchCancelled(t *testing.T) {
++	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		t.Error("fetch ran")
++	}))
++	defer srv.Close()
++	s := build(t, "url: "+srv.URL+"/members.json\n", "", nil)
++	ctx, cancel := context.WithCancel(context.Background())
++	cancel()
++	s.fetch(ctx)
++	v := s.View()
++	if v.Error != "" || v.MemberCount != 0 || !v.Fetched.IsZero() {
++		t.Fatalf("%+v", v)
++	}
++}
++
++func bytesRepeat(n int) []byte {
++	b := make([]byte, n)
++	for i := range b {
++		b[i] = 'x'
++	}
++	return b
++}
+diff --git a/internal/plugins/ixpmember/ixf/key.go b/internal/plugins/ixpmember/ixf/key.go
+new file mode 100644
+index 0000000..789ab77
+--- /dev/null
++++ b/internal/plugins/ixpmember/ixf/key.go
+@@ -0,0 +1,105 @@
++package ixf
++
++import (
++	"errors"
++	"hash/crc32"
++	"net/url"
++	"strings"
++)
++
++// APIKeyEnv is the IXP Manager API key. The header is the only place it
++// is sent. The value is never written to the config file or the URL.
++const APIKeyEnv = "PACKETEER_IXP_MANAGER_API_KEY"
++
++// apiKeyHeader is IXP Manager's v7.3 header. The query form (?apikey=)
++// is refused so the key cannot land in an access log.
++const apiKeyHeader = "X-IXP-Manager-API-Key"
++
++const (
++	keyPrefix = "ixpm_"
++	keyLen    = 56
++	identLen  = 12
++	secretLen = 32
++	crcLen    = 6
++)
++
++const base62 = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
++
++// parseAPIKey checks a v7.3 key and returns its identifier.
++// Legacy keys have no identifier; those are rejected so a log line cannot
++// carry a slice of the secret. The error text never includes the key.
++func parseAPIKey(key string) (string, error) {
++	if len(key) != keyLen || !strings.HasPrefix(key, keyPrefix) {
++		return "", errors.New("IXP Manager API key must be a v7.3 key (56 characters, ixpm_ prefix)")
++	}
++	payload := key[:keyLen-crcLen]
++	sum := key[keyLen-crcLen:]
++	got := crc32.ChecksumIEEE([]byte(payload))
++	want, err := base62Decode(sum)
++	if err != nil || got != uint32(want) {
++		return "", errors.New("IXP Manager API key checksum does not match")
++	}
++	parts := strings.Split(payload, "_")
++	if len(parts) != 3 || parts[0] != "ixpm" || len(parts[1]) != identLen || len(parts[2]) != secretLen ||
++		!base62Only(parts[1]) || !base62Only(parts[2]) {
++		return "", errors.New("IXP Manager API key must be a v7.3 key (12-character identifier, 32-character secret)")
++	}
++	return parts[1], nil
++}
++
++func base62Only(s string) bool {
++	for i := 0; i < len(s); i++ {
++		if strings.IndexByte(base62, s[i]) < 0 {
++			return false
++		}
++	}
++	return true
++}
++
++func base62Decode(s string) (uint64, error) {
++	if len(s) != crcLen || !base62Only(s) {
++		return 0, errors.New("bad checksum")
++	}
++	var n uint64
++	for i := 0; i < len(s); i++ {
++		n = n*62 + uint64(strings.IndexByte(base62, s[i]))
++	}
++	if n > 0xffffffff {
++		return 0, errors.New("bad checksum")
++	}
++	return n, nil
++}
++
++// keySecret is the 32-character secret inside a v7.3-sized key.
++// The checksum is not required: a mistyped key can still be the secret
++// pasted into a URL. Empty when key does not have that shape.
++func keySecret(key string) string {
++	if len(key) != keyLen || !strings.HasPrefix(key, keyPrefix) {
++		return ""
++	}
++	return key[len(keyPrefix)+identLen+1 : keyLen-crcLen]
++}
++
++// redact removes the key and its secret from a message. A redirect or a
++// transport error can echo the request, and the secret must not be stored
++// on the view.
++func redact(msg, key string) string {
++	if key == "" || msg == "" {
++		return msg
++	}
++	ident := ""
++	if id, err := parseAPIKey(key); err == nil {
++		ident = id
++	}
++	msg = strings.ReplaceAll(msg, key, ident)
++	if esc := url.QueryEscape(key); esc != key {
++		msg = strings.ReplaceAll(msg, esc, ident)
++	}
++	if secret := keySecret(key); secret != "" {
++		msg = strings.ReplaceAll(msg, secret, ident)
++		if esc := url.QueryEscape(secret); esc != secret {
++			msg = strings.ReplaceAll(msg, esc, ident)
++		}
++	}
++	return msg
++}
+diff --git a/internal/plugins/ixpmember/ixf/key_test.go b/internal/plugins/ixpmember/ixf/key_test.go
+new file mode 100644
+index 0000000..9689b35
+--- /dev/null
++++ b/internal/plugins/ixpmember/ixf/key_test.go
+@@ -0,0 +1,182 @@
++package ixf
++
++import (
++	"bytes"
++	"log/slog"
++	"strings"
++	"testing"
++	"time"
++
++	"github.com/GrandArcher/Packeteer/pkg/plugin"
++)
++
++// docKey is a v7.3-shaped vector. The checksum was computed with CRC-32/ISO-HDLC
++// (the same sum IXP Manager uses) of the 50-byte payload, then base62.
++// Identifier DocKeyIdent1, secret DocSecretDocSecretDocSecretDocSe.
++const (
++	docIdent  = "DocKeyIdent1"
++	docSecret = "DocSecretDocSecretDocSecretDocSe"
++	docKey    = "ixpm_DocKeyIdent1_DocSecretDocSecretDocSecretDocSe3DqwgX"
++)
++
++func TestParseAPIKey(t *testing.T) {
++	id, err := parseAPIKey(docKey)
++	if err != nil || id != docIdent {
++		t.Fatalf("id %q err %v", id, err)
++	}
++	if strings.Contains(docKey, docSecret) && len(docKey) != 56 {
++		t.Fatal("vector is not 56 characters")
++	}
++	flipped := docKey[:len(docKey)-1] + "Y"
++	if _, err := parseAPIKey(flipped); err == nil || strings.Contains(err.Error(), docSecret) || strings.Contains(err.Error(), flipped) {
++		t.Fatalf("flipped checksum: %v", err)
++	}
++	legacy := "LegacySecretLegacySecretLegacySecret12"
++	if _, err := parseAPIKey(legacy); err == nil || strings.Contains(err.Error(), legacy) || strings.Contains(err.Error(), "LegacySecret") {
++		t.Fatalf("legacy: %v", err)
++	}
++	short := docKey[:55]
++	if _, err := parseAPIKey(short); err == nil || strings.Contains(err.Error(), docSecret) {
++		t.Fatalf("short: %v", err)
++	}
++}
++
++func TestKeyExpiryEvents(t *testing.T) {
++	now := time.Date(2026, 10, 15, 12, 0, 0, 0, time.UTC)
++	cases := []struct {
++		days int
++		kind string
++		left string
++	}{
++		{15, plugin.EventIXPKeyOK, "15"},
++		{14, plugin.EventIXPKeyExpiring, "14"},
++		{0, plugin.EventIXPKeyExpiring, "0"},
++		{-3, plugin.EventIXPKeyExpiring, "-3"},
++	}
++	for _, tc := range cases {
++		var buf bytes.Buffer
++		log := slog.New(slog.NewTextHandler(&buf, nil))
++		s := build(t, managerYAML(now.AddDate(0, 0, tc.days).Format("2006-01-02")), docKey, log)
++		var got []plugin.Event
++		s.SetEventSink(func(e plugin.Event) { got = append(got, e) })
++		s.noteKey(now)
++		s.noteKey(now)
++		if len(got) != 1 || got[0].Kind != tc.kind {
++			t.Fatalf("days %d events %+v", tc.days, got)
++		}
++		if got[0].Fields["identifier"] != docIdent || got[0].Fields["days_left"] != tc.left {
++			t.Fatalf("days %d fields %v", tc.days, got[0].Fields)
++		}
++		text := buf.String() + got[0].Message
++		if !strings.Contains(text, docIdent) || strings.Contains(text, docSecret) || strings.Contains(text, docKey) {
++			t.Fatalf("days %d log %q", tc.days, text)
++		}
++	}
++}
++
++func TestKeyExpiryTransition(t *testing.T) {
++	now := time.Date(2026, 10, 15, 12, 0, 0, 0, time.UTC)
++	s := build(t, managerYAML(now.AddDate(0, 0, 15).Format("2006-01-02")), docKey, nil)
++	var kinds []string
++	s.SetEventSink(func(e plugin.Event) { kinds = append(kinds, e.Kind) })
++	s.noteKey(now)
++	s.noteKey(now.AddDate(0, 0, 1))
++	if strings.Join(kinds, ",") != plugin.EventIXPKeyOK+","+plugin.EventIXPKeyExpiring {
++		t.Fatalf("kinds %v", kinds)
++	}
++}
++
++func TestKeyConfigRules(t *testing.T) {
++	url := "https://ixp.example.invalid/api/v4/member-export/ixf/1.0"
++	if err := newErr(t, "url: "+url+"\n", docKey); err == nil || !strings.Contains(err.Error(), "key_expires is required") {
++		t.Fatalf("missing expiry: %v", err)
++	}
++	if err := newErr(t, "url: "+url+"\nkey_expires: \""+utcDay(10)+"\"\n", ""); err == nil || !strings.Contains(err.Error(), "key_expires is set") {
++		t.Fatalf("expiry without key: %v", err)
++	}
++	if err := newErr(t, "url: "+url+"\nkey_expires: \""+utcDay(367)+"\"\n", docKey); err == nil || !strings.Contains(err.Error(), "366") {
++		t.Fatalf("too far: %v", err)
++	}
++	for _, day := range []int{366, 0, -1} {
++		if err := newErr(t, "url: "+url+"\nkey_expires: \""+utcDay(day)+"\"\n", docKey); err != nil {
++			t.Fatalf("day %d: %v", day, err)
++		}
++	}
++	if err := newErr(t, "url: "+url+"\nkey_expires: \""+utcDay(10)+"\"\nextra: true\n", docKey); err == nil || !strings.Contains(err.Error(), "field extra not found") {
++		t.Fatalf("unknown field: %v", err)
++	}
++	quoted := build(t, "url: "+url+"\nkey_expires: \""+utcDay(20)+"\"\n", docKey, nil)
++	bare := build(t, "url: "+url+"\nkey_expires: "+utcDay(20)+"\n", docKey, nil)
++	stamp := time.Now().UTC().AddDate(0, 0, 20).Format(time.RFC3339)
++	rfc := build(t, "url: "+url+"\nkey_expires: \""+stamp+"\"\n", docKey, nil)
++	if quoted.expires.IsZero() || !quoted.expires.Equal(bare.expires) || !quoted.expires.Equal(rfc.expires) {
++		t.Fatalf("expires quoted %s bare %s rfc %s", quoted.expires, bare.expires, rfc.expires)
++	}
++	if quoted.keyID != docIdent {
++		t.Fatalf("key id %s", quoted.keyID)
++	}
++}
++
++func TestRefreshBounds(t *testing.T) {
++	base := "url: https://ixp.example.invalid/members.json\n"
++	s := build(t, base, "", nil)
++	if s.refresh != DefaultRefresh || s.http.Timeout != DefaultTimeout || s.maxBytes != DefaultMaxBytes {
++		t.Fatalf("defaults refresh %s timeout %s bytes %d", s.refresh, s.http.Timeout, s.maxBytes)
++	}
++	if err := newErr(t, base+"refresh: 30s\n", ""); err == nil {
++		t.Fatal("short refresh accepted")
++	}
++	if err := newErr(t, base+"refresh: 25h\n", ""); err == nil {
++		t.Fatal("long refresh accepted")
++	}
++	if err := newErr(t, base+"timeout: 500ms\n", ""); err == nil {
++		t.Fatal("short timeout accepted")
++	}
++	if err := newErr(t, base+"max_bytes: 512\n", ""); err == nil {
++		t.Fatal("small max_bytes accepted")
++	}
++	ok := build(t, base+"refresh: 1m\ntimeout: 2m\nmax_bytes: 1024\n", "", nil)
++	if ok.refresh != time.Minute || ok.http.Timeout != 2*time.Minute || ok.maxBytes != 1024 {
++		t.Fatalf("bounds refresh %s timeout %s bytes %d", ok.refresh, ok.http.Timeout, ok.maxBytes)
++	}
++}
++
++func managerYAML(day string) string {
++	return "url: https://ixp.example.invalid/api/v4/member-export/ixf/1.0\nkey_expires: \"" + day + "\"\n"
++}
++
++func utcDay(n int) string {
++	return time.Now().UTC().AddDate(0, 0, n).Format("2006-01-02")
++}
++
++func build(t *testing.T, yml, key string, log *slog.Logger) *Source {
++	t.Helper()
++	p, err := newPlugin(yml, key, log)
++	if err != nil {
++		t.Fatal(err)
++	}
++	return p
++}
++
++func newErr(t *testing.T, yml, key string) error {
++	t.Helper()
++	_, err := newPlugin(yml, key, nil)
++	return err
++}
++
++func newPlugin(yml, key string, log *slog.Logger) (*Source, error) {
++	cfg, err := plugin.ConfigFromYAML(yml)
++	if err != nil {
++		return nil, err
++	}
++	p, err := New(cfg, plugin.Env{Logger: log, Getenv: func(k string) string {
++		if k == APIKeyEnv {
++			return key
++		}
++		return ""
++	}})
++	if err != nil {
++		return nil, err
++	}
++	return p.(*Source), nil
++}
+diff --git a/internal/plugins/ixpmember/ixf/parse.go b/internal/plugins/ixpmember/ixf/parse.go
+new file mode 100644
+index 0000000..f2925c0
+--- /dev/null
++++ b/internal/plugins/ixpmember/ixf/parse.go
+@@ -0,0 +1,375 @@
++package ixf
++
++import (
++	"cmp"
++	"encoding/json"
++	"errors"
++	"fmt"
++	"net/netip"
++	"slices"
++
++	"github.com/GrandArcher/Packeteer/pkg/plugin"
++)
++
++// Bounds on one document. A document past any of them is rejected whole;
++// nothing is truncated into the served list.
++const (
++	maxMembers     = 20000
++	maxIXPs        = 64
++	maxSwitches    = 4000
++	maxSwitchesIXP = 2000
++	maxConns       = 64
++	maxIfaces      = 64
++	maxVLANs       = 32
++	maxIXPVLANs    = 256
++	maxString      = 256
++)
++
++type parsed struct {
++	ixps      []plugin.IXPSite
++	members   []plugin.IXPMember
++	addresses int
++}
++
++type ixfDoc struct {
++	Version json.RawMessage `json:"version"`
++	IXPs    []ixfIXP        `json:"ixp_list"`
++	Members []ixfMember     `json:"member_list"`
++}
++
++type ixfIXP struct {
++	ID        int         `json:"ixp_id"`
++	Shortname string      `json:"shortname"`
++	Name      string      `json:"name"`
++	VLANs     []ixfVLAN   `json:"vlan"`
++	Switches  []ixfSwitch `json:"switch"`
++}
++
++type ixfVLAN struct {
++	ID   int     `json:"id"`
++	Name string  `json:"name"`
++	IPv4 *ixfPfx `json:"ipv4"`
++	IPv6 *ixfPfx `json:"ipv6"`
++}
++
++type ixfPfx struct {
++	Prefix string `json:"prefix"`
++	Mask   int    `json:"mask_length"`
++}
++
++type ixfSwitch struct {
++	ID           int    `json:"id"`
++	Name         string `json:"name"`
++	Colo         string `json:"colo"`
++	City         string `json:"city"`
++	Country      string `json:"country"`
++	Manufacturer string `json:"manufacturer"`
++	Model        string `json:"model"`
++	Software     string `json:"software"`
++}
++
++type ixfMember struct {
++	ASN         int64     `json:"asnum"`
++	Name        string    `json:"name"`
++	Connections []ixfConn `json:"connection_list"`
++}
++
++type ixfConn struct {
++	IXPID int      `json:"ixp_id"`
++	State string   `json:"state"`
++	Ifs   []ixfIf  `json:"if_list"`
++	VLANs []ixfMVL `json:"vlan_list"`
++}
++
++type ixfIf struct {
++	SwitchID int  `json:"switch_id"`
++	Speed    int  `json:"if_speed"`
++	Phys     *int `json:"if_phys_speed"`
++}
++
++type ixfMVL struct {
++	ID   int      `json:"vlan_id"`
++	IPv4 *ixfAddr `json:"ipv4"`
++	IPv6 *ixfAddr `json:"ipv6"`
++}
++
++type ixfAddr struct {
++	Address     string `json:"address"`
++	RouteServer bool   `json:"routeserver"`
++	ASMacro     string `json:"as_macro"`
++	MaxPrefix   int    `json:"max_prefix"`
++}
++
++type swInfo struct {
++	name string
++	colo string
++}
++
++// parseIXF reads an IX-F 1.0 document. Unknown JSON fields are ignored.
++// Contact email, phone, and MAC addresses are not copied. Errors name a
++// JSON path and do not include the field value.
++func parseIXF(body []byte) (parsed, error) {
++	var doc ixfDoc
++	if err := json.Unmarshal(body, &doc); err != nil {
++		return parsed{}, errors.New("member export: invalid JSON")
++	}
++	if string(doc.Version) != `"1.0"` {
++		return parsed{}, errors.New(`member export: version must be "1.0"`)
++	}
++	if len(doc.IXPs) > maxIXPs {
++		return parsed{}, fmt.Errorf("ixp_list: more than %d entries", maxIXPs)
++	}
++	if len(doc.Members) > maxMembers {
++		return parsed{}, fmt.Errorf("member_list: more than %d entries", maxMembers)
++	}
++	switches := map[int]map[int]swInfo{}
++	ixps := make([]plugin.IXPSite, 0, len(doc.IXPs))
++	totalSW := 0
++	for i, ix := range doc.IXPs {
++		p := fmt.Sprintf("ixp_list[%d]", i)
++		site, err := convIXP(p, ix)
++		if err != nil {
++			return parsed{}, err
++		}
++		if len(ix.Switches) > maxSwitchesIXP {
++			return parsed{}, fmt.Errorf("%s.switch: more than %d entries", p, maxSwitchesIXP)
++		}
++		totalSW += len(ix.Switches)
++		if totalSW > maxSwitches {
++			return parsed{}, fmt.Errorf("ixp_list: more than %d switches", maxSwitches)
++		}
++		byID := map[int]swInfo{}
++		for _, sw := range site.Switches {
++			if _, ok := byID[sw.ID]; !ok {
++				byID[sw.ID] = swInfo{name: sw.Name, colo: sw.Colo}
++			}
++		}
++		switches[site.ID] = byID
++		ixps = append(ixps, site)
++	}
++	slices.SortStableFunc(ixps, func(a, b plugin.IXPSite) int { return cmp.Compare(a.ID, b.ID) })
++
++	members := make([]plugin.IXPMember, 0, len(doc.Members))
++	addrs := 0
++	for i, m := range doc.Members {
++		p := fmt.Sprintf("member_list[%d]", i)
++		mem, n, err := convMember(p, m, switches)
++		if err != nil {
++			return parsed{}, err
++		}
++		addrs += n
++		members = append(members, mem)
++	}
++	slices.SortStableFunc(members, func(a, b plugin.IXPMember) int {
++		if a.ASN != b.ASN {
++			return cmp.Compare(a.ASN, b.ASN)
++		}
++		return cmp.Compare(a.Name, b.Name)
++	})
++	return parsed{ixps: ixps, members: members, addresses: addrs}, nil
++}
++
++func convIXP(p string, in ixfIXP) (plugin.IXPSite, error) {
++	if in.ID < 0 {
++		return plugin.IXPSite{}, fmt.Errorf("%s.ixp_id is negative", p)
++	}
++	if err := clip(p+".shortname", in.Shortname); err != nil {
++		return plugin.IXPSite{}, err
++	}
++	if err := clip(p+".name", in.Name); err != nil {
++		return plugin.IXPSite{}, err
++	}
++	if len(in.VLANs) > maxIXPVLANs {
++		return plugin.IXPSite{}, fmt.Errorf("%s.vlan: more than %d entries", p, maxIXPVLANs)
++	}
++	vlans := make([]plugin.IXPVLAN, 0, len(in.VLANs))
++	for i, v := range in.VLANs {
++		vp := fmt.Sprintf("%s.vlan[%d]", p, i)
++		if err := clip(vp+".name", v.Name); err != nil {
++			return plugin.IXPSite{}, err
++		}
++		out := plugin.IXPVLAN{ID: v.ID, Name: v.Name}
++		var err error
++		if out.IPv4, err = convPfx(vp+".ipv4", v.IPv4, 32); err != nil {
++			return plugin.IXPSite{}, err
++		}
++		if out.IPv6, err = convPfx(vp+".ipv6", v.IPv6, 128); err != nil {
++			return plugin.IXPSite{}, err
++		}
++		vlans = append(vlans, out)
++	}
++	slices.SortStableFunc(vlans, func(a, b plugin.IXPVLAN) int { return cmp.Compare(a.ID, b.ID) })
++	sws := make([]plugin.IXPSwitch, 0, len(in.Switches))
++	for i, s := range in.Switches {
++		sp := fmt.Sprintf("%s.switch[%d]", p, i)
++		if s.ID < 0 {
++			return plugin.IXPSite{}, fmt.Errorf("%s.id is negative", sp)
++		}
++		for _, pair := range []struct{ path, val string }{
++			{sp + ".name", s.Name}, {sp + ".colo", s.Colo}, {sp + ".city", s.City},
++			{sp + ".country", s.Country}, {sp + ".manufacturer", s.Manufacturer},
++			{sp + ".model", s.Model}, {sp + ".software", s.Software},
++		} {
++			if err := clip(pair.path, pair.val); err != nil {
++				return plugin.IXPSite{}, err
++			}
++		}
++		sws = append(sws, plugin.IXPSwitch{
++			ID: s.ID, Name: s.Name, Colo: s.Colo, City: s.City, Country: s.Country,
++			Manufacturer: s.Manufacturer, Model: s.Model, Software: s.Software,
++		})
++	}
++	slices.SortStableFunc(sws, func(a, b plugin.IXPSwitch) int { return cmp.Compare(a.ID, b.ID) })
++	return plugin.IXPSite{ID: in.ID, Shortname: in.Shortname, Name: in.Name, VLANs: vlans, Switches: sws}, nil
++}
++
++func convPfx(p string, in *ixfPfx, bits int) (string, error) {
++	if in == nil {
++		return "", nil
++	}
++	if err := clip(p+".prefix", in.Prefix); err != nil {
++		return "", err
++	}
++	a, err := netip.ParseAddr(in.Prefix)
++	if err != nil || a.Zone() != "" || a.BitLen() != bits {
++		return "", fmt.Errorf("%s.prefix is not an IP address", p)
++	}
++	if in.Mask < 0 || in.Mask > bits {
++		return "", fmt.Errorf("%s.mask_length is invalid", p)
++	}
++	// Unmap before PrefixFrom. An IPv4-mapped address in the IPv6 object
++	// becomes IPv4: a mask above 32 is not a valid prefix, and a mask of
++	// 0-32 would be stored as an IPv4 CIDR on the IPv6 field. convAddr
++	// rejects that address.
++	pfx := netip.PrefixFrom(a.Unmap(), in.Mask).Masked()
++	if !pfx.IsValid() || pfx.Addr().BitLen() != bits {
++		return "", fmt.Errorf("%s.prefix is not an IP address", p)
++	}
++	return pfx.String(), nil
++}
++
++func convMember(p string, in ixfMember, switches map[int]map[int]swInfo) (plugin.IXPMember, int, error) {
++	if in.ASN <= 0 || in.ASN > 0xffffffff {
++		return plugin.IXPMember{}, 0, fmt.Errorf("%s.asnum is invalid", p)
++	}
++	if err := clip(p+".name", in.Name); err != nil {
++		return plugin.IXPMember{}, 0, err
++	}
++	if len(in.Connections) > maxConns {
++		return plugin.IXPMember{}, 0, fmt.Errorf("%s.connection_list: more than %d entries", p, maxConns)
++	}
++	conns := make([]plugin.IXPConnection, 0, len(in.Connections))
++	addrs := 0
++	for i, c := range in.Connections {
++		cp := fmt.Sprintf("%s.connection_list[%d]", p, i)
++		conn, n, err := convConn(cp, c, switches)
++		if err != nil {
++			return plugin.IXPMember{}, 0, err
++		}
++		addrs += n
++		conns = append(conns, conn)
++	}
++	slices.SortStableFunc(conns, func(a, b plugin.IXPConnection) int { return cmp.Compare(a.IXPID, b.IXPID) })
++	return plugin.IXPMember{ASN: uint32(in.ASN), Name: in.Name, Connections: conns}, addrs, nil
++}
++
++func convConn(p string, in ixfConn, switches map[int]map[int]swInfo) (plugin.IXPConnection, int, error) {
++	if err := clip(p+".state", in.State); err != nil {
++		return plugin.IXPConnection{}, 0, err
++	}
++	if len(in.Ifs) > maxIfaces {
++		return plugin.IXPConnection{}, 0, fmt.Errorf("%s.if_list: more than %d entries", p, maxIfaces)
++	}
++	if len(in.VLANs) > maxVLANs {
++		return plugin.IXPConnection{}, 0, fmt.Errorf("%s.vlan_list: more than %d entries", p, maxVLANs)
++	}
++	ifaces := make([]plugin.IXPInterface, 0, len(in.Ifs))
++	for i, iface := range in.Ifs {
++		ip := fmt.Sprintf("%s.if_list[%d]", p, i)
++		if iface.SwitchID < 0 {
++			return plugin.IXPConnection{}, 0, fmt.Errorf("%s.switch_id is negative", ip)
++		}
++		if iface.Speed < 0 {
++			return plugin.IXPConnection{}, 0, fmt.Errorf("%s.if_speed is negative", ip)
++		}
++		if iface.Phys != nil && *iface.Phys < 0 {
++			return plugin.IXPConnection{}, 0, fmt.Errorf("%s.if_phys_speed is negative", ip)
++		}
++		out := plugin.IXPInterface{SwitchID: iface.SwitchID, SpeedMbps: iface.Speed, PhysSpeedMbps: iface.Phys}
++		// switch_id is only meaningful on this connection's IXP. The same
++		// id on another IXP is a different switch, and map iteration would
++		// pick one of them at random.
++		if info, ok := switches[in.IXPID][iface.SwitchID]; ok {
++			out.Switch = info.name
++			out.Colo = info.colo
++		}
++		ifaces = append(ifaces, out)
++	}
++	slices.SortStableFunc(ifaces, func(a, b plugin.IXPInterface) int { return cmp.Compare(a.SwitchID, b.SwitchID) })
++	addresses := make([]plugin.IXPAddress, 0)
++	for i, v := range in.VLANs {
++		vp := fmt.Sprintf("%s.vlan_list[%d]", p, i)
++		for _, fam := range []struct {
++			name string
++			addr *ixfAddr
++		}{{"ipv4", v.IPv4}, {"ipv6", v.IPv6}} {
++			if fam.addr == nil {
++				continue
++			}
++			ap := vp + "." + fam.name
++			a, err := convAddr(ap, fam.name, v.ID, fam.addr)
++			if err != nil {
++				return plugin.IXPConnection{}, 0, err
++			}
++			addresses = append(addresses, a)
++		}
++	}
++	slices.SortStableFunc(addresses, func(a, b plugin.IXPAddress) int {
++		if a.VLANID != b.VLANID {
++			return cmp.Compare(a.VLANID, b.VLANID)
++		}
++		if a.Family != b.Family {
++			return cmp.Compare(a.Family, b.Family)
++		}
++		return cmp.Compare(a.Address, b.Address)
++	})
++	return plugin.IXPConnection{IXPID: in.IXPID, State: in.State, Interfaces: ifaces, Addresses: addresses}, len(addresses), nil
++}
++
++func convAddr(p, family string, vlan int, in *ixfAddr) (plugin.IXPAddress, error) {
++	if err := clip(p+".address", in.Address); err != nil {
++		return plugin.IXPAddress{}, err
++	}
++	if err := clip(p+".as_macro", in.ASMacro); err != nil {
++		return plugin.IXPAddress{}, err
++	}
++	if in.MaxPrefix < 0 {
++		return plugin.IXPAddress{}, fmt.Errorf("%s.max_prefix is negative", p)
++	}
++	a, err := netip.ParseAddr(in.Address)
++	if err != nil || a.Zone() != "" {
++		return plugin.IXPAddress{}, fmt.Errorf("%s.address is not an IP address", p)
++	}
++	a = a.Unmap()
++	switch family {
++	case "ipv4":
++		if !a.Is4() {
++			return plugin.IXPAddress{}, fmt.Errorf("%s.address is not an IPv4 address", p)
++		}
++	case "ipv6":
++		if !a.Is6() {
++			return plugin.IXPAddress{}, fmt.Errorf("%s.address is not an IPv6 address", p)
++		}
++	}
++	return plugin.IXPAddress{
++		Family: family, Address: a.String(), VLANID: vlan,
++		RouteServer: in.RouteServer, MaxPrefix: in.MaxPrefix, ASMacro: in.ASMacro,
++	}, nil
++}
++
++func clip(path, s string) error {
++	if len(s) > maxString {
++		return fmt.Errorf("%s is longer than %d bytes", path, maxString)
++	}
++	return nil
++}
+diff --git a/internal/plugins/ixpmember/ixf/parse_test.go b/internal/plugins/ixpmember/ixf/parse_test.go
+new file mode 100644
+index 0000000..d20f6eb
+--- /dev/null
++++ b/internal/plugins/ixpmember/ixf/parse_test.go
+@@ -0,0 +1,256 @@
++package ixf
++
++import (
++	"encoding/json"
++	"fmt"
++	"strings"
++	"testing"
++
++	"github.com/GrandArcher/Packeteer/pkg/plugin"
++)
++
++const sampleIXF = `{
++  "version": "1.0",
++  "generator": "test",
++  "ixp_list": [{
++    "ixp_id": 1,
++    "shortname": "example-ix",
++    "name": "Example IX",
++    "support_email": "ops@example.invalid",
++    "vlan": [{
++      "id": 10,
++      "name": "peering",
++      "ipv4": {"prefix": "192.0.2.0", "mask_length": 24},
++      "ipv6": {"prefix": "2001:db8:0:0:0:0:0:0", "mask_length": 64}
++    }],
++    "switch": [
++      {"id": 8, "name": "sw2", "colo": "cab-b", "city": "Doc City", "country": "ZZ", "manufacturer": "acme", "model": "s1", "software": "sw"},
++      {"id": 7, "name": "sw1", "colo": "cab-a"}
++    ]
++  }],
++  "member_list": [
++    {
++      "asnum": 64497,
++      "name": "Member B",
++      "url": "https://member.example.invalid/hidden",
++      "contact_email": ["hidden@example.invalid"],
++      "contact_phone": ["+0-000-000-0000"],
++      "connection_list": [{
++        "ixp_id": 1,
++        "state": "active",
++        "if_list": [
++          {"switch_id": 99, "if_speed": 1000},
++          {"switch_id": 7, "if_speed": 10000, "if_phys_speed": 100000}
++        ],
++        "vlan_list": [{
++          "vlan_id": 10,
++          "ipv4": {
++            "address": "::ffff:192.0.2.10",
++            "routeserver": true,
++            "as_macro": "AS64497:AS-EXAMPLE",
++            "max_prefix": 100,
++            "mac_addresses": ["02:00:00:00:00:01"]
++          },
++          "ipv6": {"address": "2001:db8:0:0:0:0:0:10", "routeserver": false, "max_prefix": 50}
++        }]
++      }]
++    },
++    {
++      "asnum": 64496,
++      "name": "Caf\u00e9",
++      "connection_list": [{
++        "ixp_id": 1,
++        "state": "active",
++        "if_list": [{"switch_id": 8, "if_speed": 1000}],
++        "vlan_list": [{"vlan_id": 10, "ipv4": {"address": "192.0.2.20", "routeserver": false}}]
++      }]
++    }
++  ]
++}`
++
++func TestParseSample(t *testing.T) {
++	p, err := parseIXF([]byte(sampleIXF))
++	if err != nil {
++		t.Fatal(err)
++	}
++	if len(p.members) != 2 || p.addresses != 3 {
++		t.Fatalf("members %d addresses %d", len(p.members), p.addresses)
++	}
++	if p.members[0].ASN != 64496 || p.members[0].Name != "Caf\u00e9" {
++		t.Fatalf("first member %+v", p.members[0])
++	}
++	a := p.members[0].Connections[0]
++	if len(a.Addresses) != 1 || a.Addresses[0].Family != "ipv4" || a.Addresses[0].Address != "192.0.2.20" || a.Addresses[0].RouteServer {
++		t.Fatalf("member A addresses %+v", a.Addresses)
++	}
++	if a.Interfaces[0].Switch != "sw2" || a.Interfaces[0].Colo != "cab-b" || a.Interfaces[0].SpeedMbps != 1000 || a.Interfaces[0].PhysSpeedMbps != nil {
++		t.Fatalf("member A interface %+v", a.Interfaces[0])
++	}
++	b := p.members[1]
++	if b.ASN != 64497 || b.Name != "Member B" || b.Connections[0].State != "active" {
++		t.Fatalf("member B %+v", b)
++	}
++	ifaces := b.Connections[0].Interfaces
++	if ifaces[0].SwitchID != 7 || ifaces[0].Switch != "sw1" || ifaces[0].Colo != "cab-a" || ifaces[0].SpeedMbps != 10000 || ifaces[0].PhysSpeedMbps == nil || *ifaces[0].PhysSpeedMbps != 100000 {
++		t.Fatalf("speed interface %+v", ifaces[0])
++	}
++	if ifaces[1].SwitchID != 99 || ifaces[1].Switch != "" || ifaces[1].Colo != "" || ifaces[1].SpeedMbps != 1000 {
++		t.Fatalf("missing switch %+v", ifaces[1])
++	}
++	addrs := b.Connections[0].Addresses
++	if addrs[0].Family != "ipv4" || addrs[0].Address != "192.0.2.10" || !addrs[0].RouteServer || addrs[0].MaxPrefix != 100 || addrs[0].ASMacro != "AS64497:AS-EXAMPLE" || addrs[0].VLANID != 10 {
++		t.Fatalf("v4 %+v", addrs[0])
++	}
++	if addrs[1].Family != "ipv6" || addrs[1].Address != "2001:db8::10" || addrs[1].RouteServer || addrs[1].MaxPrefix != 50 {
++		t.Fatalf("v6 %+v", addrs[1])
++	}
++	if len(p.ixps) != 1 || p.ixps[0].VLANs[0].IPv4 != "192.0.2.0/24" || p.ixps[0].VLANs[0].IPv6 != "2001:db8::/64" {
++		t.Fatalf("ixp %+v", p.ixps)
++	}
++	if p.ixps[0].Switches[0].ID != 7 || p.ixps[0].Switches[1].City != "Doc City" || p.ixps[0].Switches[1].Manufacturer != "acme" {
++		t.Fatalf("switches %+v", p.ixps[0].Switches)
++	}
++	raw, err := json.Marshal(struct {
++		IXPs    []plugin.IXPSite   `json:"ixps"`
++		Members []plugin.IXPMember `json:"members"`
++	}{p.ixps, p.members})
++	if err != nil {
++		t.Fatal(err)
++	}
++	for _, hidden := range []string{"hidden@example.invalid", "+0-000-000-0000", "02:00:00:00:00:01", "ops@example.invalid", "member.example.invalid"} {
++		if strings.Contains(string(raw), hidden) {
++			t.Fatalf("view contains %s: %s", hidden, raw)
++		}
++	}
++}
++
++func TestParseRejectsMappedIPv6Prefix(t *testing.T) {
++	for _, mask := range []int{0, 24, 32, 64} {
++		body := fmt.Sprintf(`{"version":"1.0","ixp_list":[{"ixp_id":1,"vlan":[{"id":1,"ipv6":{"prefix":"::ffff:192.0.2.0","mask_length":%d}}]}]}`, mask)
++		p, err := parseIXF([]byte(body))
++		if err == nil {
++			t.Fatalf("mask %d accepted %+v", mask, p.ixps)
++		}
++		if strings.Contains(err.Error(), "invalid Prefix") || strings.Contains(err.Error(), "192.0.2") || !strings.Contains(err.Error(), "ipv6") {
++			t.Fatalf("mask %d err %v", mask, err)
++		}
++	}
++	p, err := parseIXF([]byte(`{"version":"1.0","ixp_list":[{"ixp_id":1,"vlan":[{"id":1,"ipv4":{"prefix":"192.0.2.1","mask_length":24},"ipv6":{"prefix":"2001:db8::","mask_length":64}}]}]}`))
++	if err != nil || p.ixps[0].VLANs[0].IPv4 != "192.0.2.0/24" || p.ixps[0].VLANs[0].IPv6 != "2001:db8::/64" {
++		t.Fatalf("%+v %v", p, err)
++	}
++	_, err = parseIXF([]byte(`{"version":"1.0","member_list":[{"asnum":64496,"connection_list":[{"vlan_list":[{"vlan_id":1,"ipv6":{"address":"::ffff:192.0.2.1"}}]}]}]}`))
++	if err == nil || strings.Contains(err.Error(), "192.0.2") || !strings.Contains(err.Error(), "not an IPv6") {
++		t.Fatalf("mapped address %v", err)
++	}
++}
++
++func TestSwitchIDStaysOnIXP(t *testing.T) {
++	body := `{
++	  "version":"1.0",
++	  "ixp_list":[
++	    {"ixp_id":1,"switch":[{"id":7,"name":"sw-a","colo":"cab-a"}]},
++	    {"ixp_id":2,"switch":[{"id":7,"name":"sw-b","colo":"cab-b"}]}
++	  ],
++	  "member_list":[{"asnum":64496,"connection_list":[
++	    {"ixp_id":1,"if_list":[{"switch_id":7,"if_speed":1000}]},
++	    {"ixp_id":2,"if_list":[{"switch_id":7,"if_speed":10000}]},
++	    {"ixp_id":3,"if_list":[{"switch_id":7,"if_speed":100}]}
++	  ]}]
++	}`
++	p, err := parseIXF([]byte(body))
++	if err != nil {
++		t.Fatal(err)
++	}
++	conns := p.members[0].Connections
++	if len(conns) != 3 {
++		t.Fatalf("conns %d", len(conns))
++	}
++	if conns[0].IXPID != 1 || conns[0].Interfaces[0].Switch != "sw-a" || conns[0].Interfaces[0].Colo != "cab-a" {
++		t.Fatalf("ixp 1 %+v", conns[0].Interfaces)
++	}
++	if conns[1].IXPID != 2 || conns[1].Interfaces[0].Switch != "sw-b" || conns[1].Interfaces[0].Colo != "cab-b" {
++		t.Fatalf("ixp 2 %+v", conns[1].Interfaces)
++	}
++	if conns[2].IXPID != 3 || conns[2].Interfaces[0].Switch != "" || conns[2].Interfaces[0].Colo != "" || conns[2].Interfaces[0].SwitchID != 7 {
++		t.Fatalf("other ixp %+v", conns[2].Interfaces)
++	}
++}
++
++func TestParseEmpty(t *testing.T) {
++	p, err := parseIXF([]byte(`{"version":"1.0","ixp_list":[],"member_list":[]}`))
++	if err != nil || len(p.members) != 0 || p.addresses != 0 || p.members == nil || p.ixps == nil {
++		t.Fatalf("%+v %v", p, err)
++	}
++}
++
++func TestParseRejects(t *testing.T) {
++	secret := docSecret
++	cases := []struct {
++		body string
++		want string
++		hide string
++	}{
++		{`{"version":"0.7","member_list":[]}`, `version must be "1.0"`, ""},
++		{`{"version":1.0}`, `version must be "1.0"`, ""},
++		{`{"version":`, "invalid JSON", ""},
++		{`{"version":"1.0","member_list":[{"asnum":0,"name":"n"}]}`, "asnum is invalid", ""},
++		{`{"version":"1.0","member_list":[{"asnum":64496,"name":"n","connection_list":[{"vlan_list":[{"ipv4":{"address":"` + secret + `"}}]}]}]}`, "address is not an IP address", secret},
++		{`{"version":"1.0","member_list":[{"asnum":64496,"name":"` + strings.Repeat("LONGTOKEN", 40) + `"}]}`, "longer than", "LONGTOKEN"},
++	}
++	for _, tc := range cases {
++		_, err := parseIXF([]byte(tc.body))
++		if err == nil || !strings.Contains(err.Error(), tc.want) {
++			t.Fatalf("body %s err %v", tc.want, err)
++		}
++		if tc.hide != "" && strings.Contains(err.Error(), tc.hide) {
++			t.Fatalf("error echoes %s: %v", tc.hide, err)
++		}
++	}
++	_, err := parseIXF([]byte(overList("member_list", maxMembers+1, `{"asnum":64496,"name":"n"}`)))
++	if err == nil || !strings.Contains(err.Error(), "member_list: more than") {
++		t.Fatal(err)
++	}
++	_, err = parseIXF([]byte(overList("ixp_list", maxIXPs+1, `{"ixp_id":1}`)))
++	if err == nil || !strings.Contains(err.Error(), "ixp_list: more than") {
++		t.Fatal(err)
++	}
++	sw := `{"id":1,"name":"sw"}`
++	body := `{"version":"1.0","ixp_list":[{"ixp_id":1,"switch":[` + joinN(sw, maxSwitchesIXP+1) + `]}]}`
++	if _, err := parseIXF([]byte(body)); err == nil || !strings.Contains(err.Error(), "switch: more than") {
++		t.Fatal(err)
++	}
++	full := `{"ixp_id":1,"switch":[` + joinN(sw, maxSwitchesIXP) + `]}`
++	full2 := `{"ixp_id":2,"switch":[` + joinN(sw, maxSwitchesIXP) + `]}`
++	if _, err := parseIXF([]byte(`{"version":"1.0","ixp_list":[` + full + `,` + full2 + `]}`)); err != nil {
++		t.Fatal(err)
++	}
++	over := `{"version":"1.0","ixp_list":[` + full + `,` + full2 + `,{"ixp_id":3,"switch":[` + sw + `]}]}`
++	if _, err := parseIXF([]byte(over)); err == nil || !strings.Contains(err.Error(), "more than 4000 switches") {
++		t.Fatal(err)
++	}
++	conn := `{"version":"1.0","member_list":[{"asnum":64496,"connection_list":[` + joinN(`{}`, maxConns+1) + `]}]}`
++	if _, err := parseIXF([]byte(conn)); err == nil || !strings.Contains(err.Error(), "connection_list: more than") {
++		t.Fatal(err)
++	}
++	ifaces := `{"version":"1.0","member_list":[{"asnum":64496,"connection_list":[{"if_list":[` + joinN(`{"switch_id":1,"if_speed":10}`, maxIfaces+1) + `]}]}]}`
++	if _, err := parseIXF([]byte(ifaces)); err == nil || !strings.Contains(err.Error(), "if_list: more than") {
++		t.Fatal(err)
++	}
++	vlans := `{"version":"1.0","member_list":[{"asnum":64496,"connection_list":[{"vlan_list":[` + joinN(`{}`, maxVLANs+1) + `]}]}]}`
++	if _, err := parseIXF([]byte(vlans)); err == nil || !strings.Contains(err.Error(), "vlan_list: more than") {
++		t.Fatal(err)
++	}
++}
++
++func overList(field string, n int, item string) string {
++	return `{"version":"1.0","` + field + `":[` + joinN(item, n) + `]}`
++}
++
++func joinN(item string, n int) string {
++	parts := make([]string, n)
++	for i := range parts {
++		parts[i] = item
++	}
++	return strings.Join(parts, ",")
++}
+diff --git a/internal/plugins/ixpmember/ixf/url.go b/internal/plugins/ixpmember/ixf/url.go
+new file mode 100644
+index 0000000..b179b45
+--- /dev/null
++++ b/internal/plugins/ixpmember/ixf/url.go
+@@ -0,0 +1,137 @@
++package ixf
++
++import (
++	"errors"
++	"fmt"
++	"net/url"
++	"strings"
++)
++
++// secretQuery is never sent, on the manager URL or on a named document.
++// The error names the query key and not its value.
++var secretQuery = map[string]bool{
++	"apikey": true, "api_key": true, "access_key": true,
++	"key": true, "token": true, "password": true,
++}
++
++// classifyURL decides whether url is the IXP Manager member export or one
++// named IX-F document. The API key is sent only to the manager export.
++// An empty path, or a path that ends with the export path (a subdirectory
++// install), is the manager. Anything else is fetched exactly, with no key.
++// A key on a URL that is not the manager export is an error here.
++func classifyURL(raw, apiKey string) (string, bool, error) {
++	if strings.TrimSpace(raw) == "" {
++		return "", false, errors.New("url is required")
++	}
++	u, err := url.Parse(raw)
++	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.User != nil || u.Fragment != "" {
++		return "", false, errors.New("url must be an http or https URL with a host and no userinfo or fragment")
++	}
++	// Reject before the URL is copied into fetchURL. Percent-encoding the
++	// first character hides the key from a raw substring check, and
++	// EscapedPath keeps that encoding, so the secret would stay on the
++	// request line and on GET /api/ixp/members.
++	if urlHasKey(raw, u, apiKey) {
++		return "", false, errors.New("url must not contain the API key")
++	}
++	q := u.Query()
++	for k := range q {
++		if secretQuery[strings.ToLower(k)] {
++			return "", false, fmt.Errorf("url query %q is not allowed", k)
++		}
++	}
++	path := strings.TrimRight(u.Path, "/")
++	if managerPath(path) {
++		if err := allowManagerQuery(q); err != nil {
++			return "", false, err
++		}
++		if path == "" {
++			u.Path = exportPath
++		} else {
++			u.Path = path
++		}
++		u.RawQuery = q.Encode()
++		u.Fragment = ""
++		return u.String(), true, nil
++	}
++	if apiKey != "" {
++		return "", false, errors.New("API key is only sent to the IXP Manager member export")
++	}
++	return raw, false, nil
++}
++
++// urlHasKey reports whether the API key or its secret appears in raw or
++// in the decoded URL. url.Parse decodes the path but String keeps the
++// original percent-encoding, so both forms are checked.
++func urlHasKey(raw string, u *url.URL, apiKey string) bool {
++	if apiKey == "" {
++		return false
++	}
++	if keyIn(raw, apiKey) || keyIn(u.Path, apiKey) || keyIn(u.Host, apiKey) || keyIn(u.RawPath, apiKey) || keyIn(u.String(), apiKey) {
++		return true
++	}
++	if dec, err := url.PathUnescape(raw); err == nil && keyIn(dec, apiKey) {
++		return true
++	}
++	if dec, err := url.PathUnescape(u.Host); err == nil && keyIn(dec, apiKey) {
++		return true
++	}
++	for k, vals := range u.Query() {
++		if keyIn(k, apiKey) {
++			return true
++		}
++		for _, v := range vals {
++			if keyIn(v, apiKey) {
++				return true
++			}
++		}
++	}
++	return false
++}
++
++func keyIn(s, apiKey string) bool {
++	if s == "" || apiKey == "" {
++		return false
++	}
++	if strings.Contains(s, apiKey) {
++		return true
++	}
++	secret := keySecret(apiKey)
++	return secret != "" && strings.Contains(s, secret)
++}
++
++func managerPath(path string) bool {
++	if path == "" {
++		return true
++	}
++	return path == exportPath || strings.HasSuffix(path, exportPath)
++}
++
++func allowManagerQuery(q url.Values) error {
++	for k, vals := range q {
++		if len(vals) != 1 || !managerQueryOK(k, vals[0]) {
++			return fmt.Errorf("url query %q is not allowed", k)
++		}
++	}
++	return nil
++}
++
++func managerQueryOK(k, v string) bool {
++	if k == "ignore_missing_ixfid" && v == "1" {
++		return true
++	}
++	id, ok := strings.CutPrefix(k, "ixfid_")
++	return ok && digits(id) && digits(v)
++}
++
++func digits(s string) bool {
++	if s == "" {
++		return false
++	}
++	for _, c := range s {
++		if c < '0' || c > '9' {
++			return false
++		}
++	}
++	return true
++}
+diff --git a/pkg/plugin/events.go b/pkg/plugin/events.go
+index 097ab43..f54d6f2 100644
+--- a/pkg/plugin/events.go
++++ b/pkg/plugin/events.go
+@@ -70,8 +70,14 @@ const (
+ 	EventExchangeMaxPrefix  = "exchange.max_prefix"
+ 	// EventExchangeMaxPrefixCleared resolves EventExchangeMaxPrefix.
+ 	EventExchangeMaxPrefixCleared = "exchange.max_prefix_cleared"
+-	EventHAStandby                = "ha.standby"
+-	EventHAActive                 = "ha.active"
++	// EventIXPKeyExpiring fires when the IXP Manager API key has 14 days
++	// or fewer left, or is already past its expiry date (#161).
++	EventIXPKeyExpiring = "ixp.api_key_expiring"
++	// EventIXPKeyOK resolves EventIXPKeyExpiring once the key is more
++	// than 14 days from expiry.
++	EventIXPKeyOK  = "ixp.api_key_ok"
++	EventHAStandby = "ha.standby"
++	EventHAActive  = "ha.active"
+ 	// EventAudit is one audit log record (#32): a change or sign-in on
+ 	// the ops API, or a config reload.
+ 	EventAudit = "audit.recorded"
+@@ -160,6 +166,10 @@ var eventCatalog = []EventSpec{
+ 		Summary: "An exchange peer's Adj-RIB-In reached the configured share of its max_prefix (exchanges[].max_prefix_warn_pct)."},
+ 	{Kind: EventExchangeMaxPrefixCleared, Severity: SeverityInfo, Group: "exchange_prefix", Keys: []string{"exchange", "peer"}, TrapID: 40, Resolves: true,
+ 		Summary: "The exchange peer's Adj-RIB-In fell back below the max-prefix warning share."},
++	{Kind: EventIXPKeyExpiring, Severity: SeverityWarning, Group: "ixp_api_key", Keys: []string{"identifier"}, TrapID: 41,
++		Summary: "The IXP Manager API key expires within 14 days, or has already expired. The field identifier is the key id; the secret is not included."},
++	{Kind: EventIXPKeyOK, Severity: SeverityInfo, Group: "ixp_api_key", Keys: []string{"identifier"}, TrapID: 42, Resolves: true,
++		Summary: "The IXP Manager API key has more than 14 days left. Resolves ixp.api_key_expiring."},
+ }
+ 
+ // EventCatalog returns a copy of every event kind the controller emits.
+diff --git a/pkg/plugin/events_test.go b/pkg/plugin/events_test.go
+index 9d57682..12108ac 100644
+--- a/pkg/plugin/events_test.go
++++ b/pkg/plugin/events_test.go
+@@ -43,6 +43,18 @@ func TestEventCatalogIsConsistent(t *testing.T) {
+ 	}
+ }
+ 
++func TestIXPKeyEventDedup(t *testing.T) {
++	now := time.Unix(100, 0)
++	exp := NewEvent(EventIXPKeyExpiring, now, "soon", map[string]string{"identifier": "DocKeyIdent1", "days_left": "14"})
++	ok := NewEvent(EventIXPKeyOK, now, "ok", map[string]string{"identifier": "DocKeyIdent1", "days_left": "15"})
++	if exp.Severity != SeverityWarning || !ok.Resolves() || exp.Resolves() {
++		t.Fatalf("exp %+v ok %+v", exp, ok)
++	}
++	if exp.DedupKey() != ok.DedupKey() || exp.DedupKey() != "packeteer/ixp_api_key/identifier=DocKeyIdent1" {
++		t.Fatalf("dedup %q %q", exp.DedupKey(), ok.DedupKey())
++	}
++}
++
+ func TestEventCatalogCopy(t *testing.T) {
+ 	c := EventCatalog()
+ 	c[0].Kind = "changed"
+diff --git a/pkg/plugin/ixp.go b/pkg/plugin/ixp.go
+new file mode 100644
+index 0000000..9c73fc0
+--- /dev/null
++++ b/pkg/plugin/ixp.go
+@@ -0,0 +1,104 @@
++package plugin
++
++import "time"
++
++// KindMemberSource is the read-only IX-F member import (#161).
++// It is not a RIB source and it never announces.
++const KindMemberSource Kind = "ixp_member"
++
++// MemberSources is the registry for ixp.members.
++var MemberSources = NewRegistry[MemberSource](KindMemberSource)
++
++// MemberSource imports an IX-F member list. View never blocks and never
++// fetches. The slices it returns must not be modified. SetEventSink is
++// called before Start; the sink is how a key-expiry warning is delivered.
++// An implementation must not announce and must not write the RIB.
++type MemberSource interface {
++	Lifecycle
++	View() MemberView
++	SetEventSink(fn func(Event))
++}
++
++// MemberView is one imported member list. Counts are zero and the lists
++// are empty when the import is not configured, has not succeeded, or has
++// gone stale. KeyID is the key's identifier, never the secret.
++type MemberView struct {
++	Configured   bool        `json:"configured"`
++	URL          string      `json:"url,omitempty"`
++	Manager      bool        `json:"manager"`
++	KeyID        string      `json:"key_id,omitempty"`
++	KeyExpires   time.Time   `json:"key_expires,omitempty"`
++	Fetched      time.Time   `json:"fetched,omitempty"`
++	Stale        bool        `json:"stale"`
++	Error        string      `json:"error,omitempty"`
++	MemberCount  int         `json:"member_count"`
++	AddressCount int         `json:"address_count"`
++	IXPs         []IXPSite   `json:"ixps"`
++	Members      []IXPMember `json:"members"`
++}
++
++// IXPSite is one exchange in the IX-F ixp_list.
++type IXPSite struct {
++	ID        int         `json:"ixp_id"`
++	Shortname string      `json:"shortname,omitempty"`
++	Name      string      `json:"name,omitempty"`
++	VLANs     []IXPVLAN   `json:"vlans"`
++	Switches  []IXPSwitch `json:"switches"`
++}
++
++// IXPVLAN is one peering LAN. IPv4 and IPv6 are CIDR prefixes.
++type IXPVLAN struct {
++	ID   int    `json:"id"`
++	Name string `json:"name,omitempty"`
++	IPv4 string `json:"ipv4,omitempty"`
++	IPv6 string `json:"ipv6,omitempty"`
++}
++
++// IXPSwitch is one switch in the export. Colo is the cabinet name.
++type IXPSwitch struct {
++	ID           int    `json:"id"`
++	Name         string `json:"name,omitempty"`
++	Colo         string `json:"colo,omitempty"`
++	City         string `json:"city,omitempty"`
++	Country      string `json:"country,omitempty"`
++	Manufacturer string `json:"manufacturer,omitempty"`
++	Model        string `json:"model,omitempty"`
++	Software     string `json:"software,omitempty"`
++}
++
++// IXPMember is one member ASN and its connections at the exchange.
++type IXPMember struct {
++	ASN         uint32          `json:"asn"`
++	Name        string          `json:"name,omitempty"`
++	Connections []IXPConnection `json:"connections"`
++}
++
++// IXPConnection is one member connection. State is the IX-F state string.
++type IXPConnection struct {
++	IXPID      int            `json:"ixp_id"`
++	State      string         `json:"state,omitempty"`
++	Interfaces []IXPInterface `json:"interfaces"`
++	Addresses  []IXPAddress   `json:"addresses"`
++}
++
++// IXPInterface is one physical interface. Switch and Colo are copied from
++// the switch list of this connection's IXP when switch_id matches. A
++// missing switch, or the same id on another IXP, leaves them empty.
++// PhysSpeedMbps is set only when the export included if_phys_speed.
++type IXPInterface struct {
++	SwitchID      int    `json:"switch_id"`
++	Switch        string `json:"switch,omitempty"`
++	Colo          string `json:"colo,omitempty"`
++	SpeedMbps     int    `json:"speed_mbps"`
++	PhysSpeedMbps *int   `json:"if_phys_speed,omitempty"`
++}
++
++// IXPAddress is one LAN address on a connection.
++type IXPAddress struct {
++	Family      string `json:"family"`
++	Address     string `json:"address"`
++	VLANID      int    `json:"vlan_id,omitempty"`
++	RouteServer bool   `json:"route_server"`
++	MaxPrefix   int    `json:"max_prefix,omitempty"`
++	ASMacro     string `json:"as_macro,omitempty"`
++}

@@ -1,0 +1,1214 @@
+diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
+index e6cfd2f..c00e4ed 100644
+--- a/.github/workflows/ci.yml
++++ b/.github/workflows/ci.yml
+@@ -1250,6 +1250,37 @@ jobs:
+             'Bilateral only: candidate for a peering request (1 ASNs)' '<td class="mono">AS64504</td>' '<td>ix-lab/ix-peer-c (bilateral)</td>' \
+             'Also: 1 on a LAN with an unknown session type, 3 not seen at an exchange.' \
+             --absent 'not built yet' 'mode-inject'
++          # The IXP member pages (#166) read the member, fabric, and
++          # route-server endpoints, which this single-router config has no
++          # source for, so uiproxy answers them from
++          # lab/ui-fixtures/ixp-member (documentation ASNs and addresses).
++          # The page is the image's. The step checks the connection, the
++          # fabric rows by vantage with the past-tolerance flag, the
++          # route-server session and its filter history, the IXP Manager
++          # link, and the member list; the pages only read.
++          kill "$proxy"
++          /tmp/uiproxy -listen 127.0.0.1:18138 -upstream "$base" -user lab -password lab-only \
++            -fixtures lab/ui-fixtures/ixp-member >/tmp/uiproxy166.log 2>&1 &
++          proxy=$!
++          for _ in $(seq 1 20); do
++            curl -fsS http://127.0.0.1:18138/healthz >/dev/null 2>&1 && break
++            sleep 0.2
++          done
++          curl -fsS http://127.0.0.1:18138/healthz >/dev/null
++          bash lab/ui-smoke.sh http://127.0.0.1:18138/ixp/member/64496 'mode-observe' 'announces nothing' \
++            '>AS64496 Example Member A</h2>' 'id="member-ixpm"' 'href="https://ixp.example.invalid/admin/search?search=AS64496"' \
++            '<td>sw1</td>' '<td>cab-a</td>' '<td>10000 Mbit/s</td>' '<td class="mono">192.0.2.20</td>' \
++            '<td>lan1-a</td>' '<td>0.00 %</td>' '<td>0.42 ms</td>' '<td>ok</td>' \
++            '<td>lan1-b</td>' '<td>40.00 %</td>' '<td>310.50 ms</td>' '<td>12.25 ms</td>' '<td class="bad">past tolerance</td>' \
++            '<td>rs1</td>' '<td class="mono">192.0.2.20</td>' '<td>9: 3</td>' \
++            'data-history="rs1/pb_a"' 'Latest 2 of 2 samples, newest first.' \
++            --absent 'mode-inject' 'is not an IXP member'
++          bash lab/ui-smoke.sh http://127.0.0.1:18138/ixp/member/ 'mode-observe' '>IXP members</h2>' \
++            'href="/ixp/member/64496"' '>AS64497</a>' '<td>Example Member B</td>' \
++            --absent 'mode-inject'
++          # This controller has no IXP source, so an unstubbed ASN is a 404.
++          bash lab/ui-smoke.sh http://127.0.0.1:18138/ixp/member/64499 'mode-observe' \
++            'AS64499 is not an IXP member Packeteer knows.' --absent 'mode-inject' 'Open in IXP Manager'
+       - name: UI mitigation, inbound, and anomaly forms smoke (#131, #329; add and remove a rule in observe, guided inputs)
+         run: |
+           set -euo pipefail
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+index c4dae93..5ffb4c4 100644
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -6,6 +6,7 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
+ 
+ ### Added
+ 
++- IXP member pages `/ixp/member/{asn}` (fabric by vantage, filter history, IXP Manager link), `GET /api/ixp/members/{asn}`, `packeteer_ixp_member_{rtt_ms,loss_pct,jitter_ms}` (#166).
+ - Route-server signals: spikes in RPKI-invalid, IRR, and transit-free-ASN filtering, new origins, more-specific bursts, and RFC 7999 blackhole counts per member; GET only (#165).
+ - Probe multiplexing: providers and exchange peers may share one `source_ip` with a distinct `fwmark` or `dscp`; `packeteer -pbr <format>` prints Linux and router PBR config, never applies it (#157).
+ - Shared IX port: `exchanges[].port` (capacity, commit, flat `port_cost`) on one telemetry binding; the commit and cost scorers plan no move past its capacity or commit (#151).
+diff --git a/docs/API.md b/docs/API.md
+index 838ec90..7899ad4 100644
+--- a/docs/API.md
++++ b/docs/API.md
+@@ -24,6 +24,7 @@ The dashboard, JSON API, and Prometheus metrics share one listener, `http.listen
+ | `/api/exchanges/offload` | Viewer. Prefixes whose exit is a transit while a configured exchange peer advertises the exact prefix (the route check passes), sorted by bytes: `rows` with `prefix`, `bytes`, `mbps`, `transit`, `peers` (`exchange`, `peer`), and `est_savings` (the transit's `cost` times `mbps`, absent when the transit has no `cost`). `prefixes`, `bytes`, `mbps`, and `est_savings` total all candidates; `truncated` is true when `rows` was cut at `limit` (default 100, max 1000; the CSV defaults to 1000). `?format=csv` downloads the rows. The exit is the RIB's best path, or the active improvement's provider in `inject`; volume comes from target sources that report it. `400` for a bad parameter, `404` without exchanges. Read-only (#152). |
+ | `/api/lookup` | Viewer. The PeeringDB / IX-F cache when `lookup` is configured (#153): `configured`, `anonymous`, `base_url`, `fetched`, `stale`, `error`, `network_count`, `membership_count`, `exchanges` (`name`, `ix_id`, `ix_name`, `city`, `country`, `ixf_url`, `error`, `ixf_error`), `networks` (`asn`, `name`, `org`, `policy`, `policy_url`, `info_prefixes4`, `info_prefixes6`; an absent hint is omitted and a zero is a real zero), and `memberships` (`exchange`, `asn`, `name`, `ipv4`, `ipv6`, `route_server`). `?asn=` (a number or `AS64496`) keeps one network and its memberships. Empty lists and `configured: false` when it is not. The API key is not included. Read-only. |
+ | `/api/ixp/members` | Viewer. The IX-F member list when `ixp.members` is configured (#161): `configured`, `url` (no query string), `manager`, `key_id`, `key_expires` and `fetched` (both absent until known), `stale`, `error`, `member_count`, `address_count`, `ixps`, and `members` (ASN, name, connections, LAN addresses, route-server flag, `max_prefix`, `as_macro`, switch and colo from that connection's IXP). Empty lists and `configured: false` when it is not. The API key is not included. Read-only. |
++| `/api/ixp/members/{asn}` | Viewer. One member (#166): `asn`, `name`, `connections` from the IX-F list, `ixp_manager_url` (the admin search for the ASN, only for the IXP Manager export), `fabric` (`configured`, `stale`, `round`, and this member's `samples` sorted by vantage and address), and `route_server_sessions`. `400` for an ASN that is not 1 to 4294967295; `404` when the ASN has no IX-F entry and no route-server session. Read-only. Nothing is announced. |
+ | `/api/ixp/probes` | Viewer. The latest fabric round when `ixp.fabric` is configured (#162): `configured`, `stale`, `error`, `round`, `targets`, `opt_out`, `vantages` (`name`, `address`, `vlan_id`, `up`, `targets`, `error`), and `samples` (vantage, ASN, address, loss, RTT, jitter, busy-host, past the ping warning, switch and colo). Empty lists and `configured: false` when it is not. The API key is not included. Read-only. Nothing is announced. |
+ | `/api/ixp/routeservers` | Viewer. The latest Birdseye poll when `ixp.routeservers` is configured (#164): `configured`, `servers` (`name`, `url`, `asn`, `up`, `stale`, `error`, `polled`, `version`, `router_id`, `last_reconfig`, `message`, `sessions`), and `sessions` (`server`, `session`, `asn`, `name`, `neighbor`, `description`, `state`, `established`, `counted`, `received`, `accepted`, `filtered`, `reasons` as `reason` and `count`, `max_prefix`, `used_pct`, `scanned`, `blackhole`, `scan_error`, `error`, `at`). A stale server shows no sessions. Empty lists and `configured: false` when it is not. Read-only. Nothing is announced. |
+ | `/api/ixp/correlation` | Viewer. The latest fabric incident view when `ixp.correlate` is configured (#163): `configured`, `stale`, `round`, `groups` (`scope` of `switch`, `colo`, or `bundle`, `ixp_id`, `name`, `members` measured, `degraded`, `degraded_pct`, `active`, `asns` of the degraded members), and `members` (each member degraded on its own, outside every degraded group: `asn`, `name`, `addresses`, `active`). `active` is true while the matching event is open: it takes `rounds` rounds to open and `rounds` to close, and a group or member that is open but not measured this round is still listed, with `degraded` 0. Empty lists and `configured: false` when it is not. Read-only. Nothing is announced. |
+@@ -61,7 +62,9 @@ When `lookup` is configured, `/metrics` also has `packeteer_lookup_networks`, `p
+ 
+ When `ixp.members` is configured, `/metrics` also has `packeteer_ixp_members`, `packeteer_ixp_member_addresses`, `packeteer_ixp_member_import_up`, `packeteer_ixp_member_import_age_seconds`, and, when `key_expires` is set, `packeteer_ixp_api_key_expiry_seconds` (Unix time). Member and address gauges are zero while the list is stale. They are absent when the import is not configured.
+ 
+-When `ixp.fabric` is configured, `/metrics` also has `packeteer_ixp_fabric_up`, `packeteer_ixp_fabric_targets`, `packeteer_ixp_fabric_opt_out`, `packeteer_ixp_fabric_past_tolerance`, and `packeteer_ixp_fabric_age_seconds`. Targets and the past-tolerance count are zero while the member list is stale; age stays. They are absent when fabric probes are not configured. There is no per-member series.
++When `ixp.fabric` is configured, `/metrics` also has `packeteer_ixp_fabric_up`, `packeteer_ixp_fabric_targets`, `packeteer_ixp_fabric_opt_out`, `packeteer_ixp_fabric_past_tolerance`, and `packeteer_ixp_fabric_age_seconds`. Targets and the past-tolerance count are zero while the member list is stale; age stays. They are absent when fabric probes are not configured.
++
++With the same fabric probes (#166), `/metrics` has `packeteer_ixp_member_rtt_ms`, `packeteer_ixp_member_loss_pct`, and `packeteer_ixp_member_jitter_ms` with labels `asn`, `vlan`, `vantage`, and `family`: the latest round, the worst address per VLAN and family. A probe error and a stale member list make no series. There is one series per member, vantage, and family, so a large exchange needs the Prometheus capacity for that.
+ 
+ When `ixp.routeservers` is configured, `/metrics` also has `packeteer_ixp_rs_up`, `packeteer_ixp_rs_sessions_established`, `packeteer_ixp_rs_sessions_down`, `packeteer_ixp_rs_filtered_routes`, and `packeteer_ixp_rs_age_seconds`. A stale server counts as down and its sessions are not counted. There is no per-member series.
+ 
+diff --git a/docs/CONFIG.md b/docs/CONFIG.md
+index 3552796..d2a177e 100644
+--- a/docs/CONFIG.md
++++ b/docs/CONFIG.md
+@@ -392,7 +392,7 @@ With the block set, validation refuses `mode: inject`, `announcer`, `mitigation`
+ 
+ `fabric` is one plugin. The only type is `icmp`. It probes each member LAN address on a vantage's VLAN from that vantage and records loss, RTT, and jitter. It is not a provider, not an input to Decide, and it announces nothing. `vantages` and `fabric` are set together, and `fabric` requires `members`. `interval` (default 1m, 10s to 1h), `timeout` (default 1s, 100ms to 5s, per packet), `packets` (default 5, 1 to 20), `workers` (default 4, 1 to 64), `rate_limit_pps` (default 20, 1 to 10000, global), `member_pps` (default 1, 1 to 10000, per member ASN, and not above `rate_limit_pps`).
+ 
+-Only connection states `active`, `connected`, and `operational` are probed, and only an address inside the VLAN prefix. The vantage address itself is not a target. `can_ping: false` on an IX-F address is an opt-out. When the import is the IXP Manager export, each round also GETs `/admin/api/v4/nagios/customers/{vlanid}/4` or `/6` on that same origin, including a subdirectory install. `vlanid` is the VLAN database id. That is the only extra path. The template suffix and every other nagios route are not called. The same `X-IXP-Manager-API-Key` header is used. The key's user must be a superuser. Redirects are not followed. A host is probed only when a service uses `ixp-manager-member-ping-service` (busy: `ixp-manager-member-ping-busy-service`). The busy template uses the looser warning (1000ms or 80% loss; otherwise 250ms or 20% loss). The busy critical RTT (2000ms) is the minimum per-packet timeout for that host. A failed fetch (a 401 included) keeps the last successful list for three `interval`s after that successful fetch; then that VLAN is not probed until a fetch succeeds. With no successful list, that VLAN is not probed, because the member export omits `can_ping`. A named IX-F URL is not the manager export, so that GET is not made. `GET /api/ixp/probes` serves the round. The metrics are `packeteer_ixp_fabric_up`, `packeteer_ixp_fabric_targets`, `packeteer_ixp_fabric_opt_out`, `packeteer_ixp_fabric_past_tolerance`, and `packeteer_ixp_fabric_age_seconds`. There is no per-member series.
++Only connection states `active`, `connected`, and `operational` are probed, and only an address inside the VLAN prefix. The vantage address itself is not a target. `can_ping: false` on an IX-F address is an opt-out. When the import is the IXP Manager export, each round also GETs `/admin/api/v4/nagios/customers/{vlanid}/4` or `/6` on that same origin, including a subdirectory install. `vlanid` is the VLAN database id. That is the only extra path. The template suffix and every other nagios route are not called. The same `X-IXP-Manager-API-Key` header is used. The key's user must be a superuser. Redirects are not followed. A host is probed only when a service uses `ixp-manager-member-ping-service` (busy: `ixp-manager-member-ping-busy-service`). The busy template uses the looser warning (1000ms or 80% loss; otherwise 250ms or 20% loss). The busy critical RTT (2000ms) is the minimum per-packet timeout for that host. A failed fetch (a 401 included) keeps the last successful list for three `interval`s after that successful fetch; then that VLAN is not probed until a fetch succeeds. With no successful list, that VLAN is not probed, because the member export omits `can_ping`. A named IX-F URL is not the manager export, so that GET is not made. `GET /api/ixp/probes` serves the round. The metrics are `packeteer_ixp_fabric_up`, `packeteer_ixp_fabric_targets`, `packeteer_ixp_fabric_opt_out`, `packeteer_ixp_fabric_past_tolerance`, and `packeteer_ixp_fabric_age_seconds`. The per-member series (`packeteer_ixp_member_rtt_ms`, `packeteer_ixp_member_loss_pct`, `packeteer_ixp_member_jitter_ms`, labels `asn`, `vlan`, `vantage`, `family`, #166) and the `/ixp/member/{asn}` page need no key; see [design/ixp.md](design/ixp.md#member-pages).
+ 
+ `routeservers` is one plugin. The only type is `birdseye`. It polls Birdseye on each route server with GET only and keeps a history per member session. It reads `api/status`, `api/protocols/bgp`, `api/routes/count/protocol/{protocol}`, and `api/routes/lc-zwild/protocol/{protocol}/{asn}/1101`, and with `route_signals` `api/routes/protocol/{protocol}`, and nothing else. Birdseye is read without a key: the IXP Manager API key is never sent to it, and a `url` with userinfo or a query is refused. Redirects are not followed. `members` is optional; with it, a session's ASN, name, and `max_prefix` come from the IX-F entry for its neighbor address, and without it `max_prefix` is Birdseye's import limit. `servers` lists at most 8 route servers, each with `name` (as for a vantage), `url` (the Birdseye origin, or a subdirectory install), and `asn` (the route server's ASN, the first part of the `asn:1101:x` tag IXP Manager puts on a filtered route). `interval` (default 5m, 1m to 1h), `timeout` (default 15s, 1s to 2m), `workers` (default 4, 1 to 8, concurrent session reads per server), `max_bytes` (default 8 MiB, 1024 to 32 MiB, per response; a larger response leaves that session uncounted), `max_prefix_warn_pct` (default 90, 1 to 100), `filtered_warn_pct` (default 50, 1 to 100), `spike_min` (default 10, 1 to 1048576), `spike_factor` (default 2, 1 to 1000), `burst_min` (default 20, 1 to 250000), and `route_signals` (default false, below).
+ 
+diff --git a/docs/FEATURES.md b/docs/FEATURES.md
+index ee67dd4..838cc28 100644
+--- a/docs/FEATURES.md
++++ b/docs/FEATURES.md
+@@ -191,11 +191,12 @@ The `maintenance` policy excludes providers during cron-scheduled, one-off, or o
+ | Per-member route server vs bilateral availability: prefixes seen only via the route server, only bilaterally, or both, with counts over time and a flag for a partial or filtered route server feed | done (#156: counts and flags on `/api/exchanges`, `GET /api/exchanges/member` for the prefixes and the counts kept in memory every 15 minutes, and columns on `/providers.html`; BMP Adj-RIB-In paths only, so a peer without `bmp: prefer` or `only` shows zero, and discovered members are not classified; read-only) | v0.8 | core (`internal/rib`, `internal/exchange`) + UI | #156 | no |
+ | Transit-to-IX offload report: flow bytes of prefixes whose exit is a transit while a configured IX peer advertises the exact prefix, with the estimated saving at the transit's `cost` | done (#152: `GET /api/exchanges/offload` as JSON or CSV, sorted by bytes, and a table on `/providers.html`; observe only, nothing is steered; needs a target source that reports volume and, per peer, the route check) | v0.8 | core (`internal/exchange`, `internal/httpapi`) + UI | #152 | no |
+ | Potential-peers report: destination origin ASNs ranked by flow bytes, whether each is present at one of our exchanges, whether a path via the LAN exists today, split into on the route server (check our session or filters) and bilateral only (candidate for a request) | partial (#154: `GET /api/exchanges/potential-peers` as JSON or CSV, with `?class=`, and two tables on `/providers.html`; presence is the configured peers and the discovered LAN members, and the session type needs BMP Adj-RIB-In paths; observe only, no session is opened). This report does not read `GET /api/lookup` (#153) yet | v0.8 | core (`internal/exchange`, `internal/httpapi`) + UI | #154 | no |
+-| IXP mode (exchange operator): `ixp: {}` refuses `mode: inject`, `announcer`, `mitigation`, `inbound`, `synthesize`, and `more_specific`; no `bgp.neighbors` or RIB view required; route-server data is a separate read-only store that never feeds the RIB or Decide | done (#160: charter and validation; #161: IX-F member import; #162: fabric probes; #164: route-server history and alerts. #163: fabric incident correlation. #165: route-server signals. Member pages and multi-site health are #166-#167 and are not built) | v0.8 | core (`internal/config`) + `ixp_member` (`ixf`) + `ixp_fabric` (`icmp`) + `ixp_routeserver` (`birdseye`) + `ixp_correlate` (`topology`) | #160, #161, #162, #163, #164, #165 | no |
++| IXP mode (exchange operator): `ixp: {}` refuses `mode: inject`, `announcer`, `mitigation`, `inbound`, `synthesize`, and `more_specific`; no `bgp.neighbors` or RIB view required; route-server data is a separate read-only store that never feeds the RIB or Decide | done (#160: charter and validation; #161: IX-F member import; #162: fabric probes; #164: route-server history and alerts. #163: fabric incident correlation. #165: route-server signals. #166: member pages. Multi-site health is #167 and is not built) | v0.8 | core (`internal/config`) + `ixp_member` (`ixf`) + `ixp_fabric` (`icmp`) + `ixp_routeserver` (`birdseye`) + `ixp_correlate` (`topology`) | #160, #161, #162, #163, #164, #165, #166 | no |
+ | IX-F member import: members, ASNs, LAN addresses, port speeds, route-server client flags, `max_prefix`, `as_macro`, and switch or colo from IXP Manager or one named IX-F JSON URL | done (#161: `ixp.members` type `ixf`, `GET /api/ixp/members`, metrics; read-only, not the RIB, not an input to Decide, nothing announced) | v0.8 | `ixp_member` (`ixf`) | #161 | no |
+ | RPKI validity of IX paths: each learned path's origin labeled valid/invalid/notfound/unknown from an opt-in `rpki` block (RTR, RFC 8210), with an optional `avoid_invalid` no-steer policy | done (#158: an ordered `rpki.sources` list of `rtr` plugins labels `/api/decisions` candidates, the prefix card's learned paths, `/api/exchanges` peers, and the System page, and a source is skipped when stale or empty; `avoid_invalid` refuses a new improvement onto an invalid path and retires an active one through the normal path; nothing is announced and the learned RIB is unchanged; shares the source #200 will use) | v0.8 | rpki (`rtr`) + core (`internal/rpki`, `internal/policy`) | #158 | no |
+ | Fabric probes from IX vantages: loss, RTT, and jitter for each member LAN address, honoring Can Ping and the busy-host tolerance | done (#162: `ixp.vantages` and `ixp.fabric` type `icmp`, `GET /api/ixp/probes`, aggregate metrics; observe-only, not an input to Decide, nothing announced) | v0.8 | `ixp_fabric` (`icmp`) | #162 | no |
+ | Route-server observability via Birdseye: per member session state, received, accepted, and filtered counts, filtered-by-reason counts (`rs-asn:1101:x`), and accepted against `max_prefix`, kept as history, with alerts on changes | done (#164: `ixp.routeservers` type `birdseye`, `GET /api/ixp/routeservers` and `/history`, `ixp.rs_*` events, aggregate metrics; GET only, history is in memory, not the RIB, not an input to Decide, nothing announced) | v0.8 | `ixp_routeserver` (`birdseye`) + notifier events | #164 | no |
++| Per-member pages and series: fabric loss, RTT, and jitter by vantage, route-server filter history, a link to the member in IXP Manager, and `packeteer_ixp_member_*` series | done (#166: `/ixp/member/{asn}`, `GET /api/ixp/members/{asn}`, series by `asn`, `vlan`, `vantage`, `family`; staff logins only, member-scoped logins are not built; read-only, nothing announced) | v0.8 | core (`internal/httpapi`) | #166 | no |
+ | Fabric incident correlation: member fabric probes grouped by switch, colo, and core bundle; `ixp.fabric_degraded` when many members behind one group degrade together, `ixp.member_degraded` when one member does alone | done (#163: `ixp.correlate` type `topology`, `GET /api/ixp/correlation`, `ixp.fabric_*` and `ixp.member_*` events, aggregate metrics; reads the fabric probes only, the core bundle is an operator-named list of switch ids because IX-F carries none, in-memory state, not an input to Decide, nothing announced) | v0.8 | `ixp_correlate` (`topology`) + notifier events | #163 | no |
+ | PeeringDB / IX-F lookup: organization and network name per ASN, membership and LAN addresses at our exchanges, route-server participation, policy, and the `info_prefixes4`/`info_prefixes6` hint | done (#153: `lookup` type `peeringdb`, `GET /api/lookup`, metrics; read-only GETs into an in-memory cache refreshed daily and size-capped; optional IX-F URL per exchange; optional API key from `PACKETEER_PEERINGDB_API_KEY`; display only, not the RIB, not an input to Decide, nothing announced) | v0.8 | `lookup` (`peeringdb`) | #153 | no |
+ | Bgpd online reconfiguration (SIGHUP: add/remove/change iBGP sessions and the per-router table without touching other sessions) | done (lab-proven) | v0.3 | core + announcer (`gobgp`) + RIB | #27 | no (lab-proven) |
+diff --git a/docs/design/ixp.md b/docs/design/ixp.md
+index 5279481..78332b6 100644
+--- a/docs/design/ixp.md
++++ b/docs/design/ixp.md
+@@ -2,8 +2,8 @@
+ 
+ Status: charter, config gate, IX-F member import (#161), fabric
+ probes (#162), fabric incident correlation (#163), route-server
+-history and alerts (#164), and route-server signals (#165). Member pages
+-and multi-site fabric health are #166-#167 and are not built. An `ixp` block does not announce or open a route-server
++history and alerts (#164), route-server signals (#165), and member pages
++and series (#166). Multi-site fabric health is #167 and is not built. An `ixp` block does not announce or open a route-server
+ session.
+ 
+ An Internet exchange operator runs Packeteer to observe its fabric,
+@@ -153,6 +153,46 @@ rounds, and both clear after as many. With one vantage, a fault on the
+ vantage's own link looks like a fabric fault; use two vantages on a LAN
+ to tell them apart. The state is in memory.
+ 
++## Member pages
++
++`/ixp/member/{asn}` (#166) shows one member: its IX-F connections, its
++latest fabric samples by vantage (loss, RTT, jitter, past tolerance), its
++route-server sessions with the filter history, and a link to IXP Manager.
++`/ixp/member/` lists the members. The page reads `GET /api/ixp/members/{asn}`
++and `GET /api/ixp/routeservers/history`. It is built from the views the
++other `ixp` endpoints serve, so it fetches nothing and announces nothing. An
++ASN with no IX-F entry and no route-server session is a 404.
++
++Access is the same as every other page: every Packeteer login is staff
++(viewer and above). IXP Manager's `GRAPHER_ACCESS_CUSTOMER` default is
++`own_graphs_only`, where a member sees only its own graphs; Packeteer has no
++such scope yet. A member-scoped login through OIDC
++claims is a later step; until then do not give a member a Packeteer account.
++
++The IXP Manager link is `{base}/admin/search?search=AS{asn}`. IXP Manager's
++IX-F export does not carry its customer id, and its admin search takes an
++ASN and lists the customer with a link. The base is the member export URL
++without `/api/v4/member-export/ixf/1.0`, so a subdirectory install works. It
++is shown only for the manager export, never for a named IX-F document. The
++link is for the staff browser, which signs in to IXP Manager itself;
++Packeteer does not request it and sends no key.
++
++IXP Manager can link back with a skin: set `VIEW_SKIN=<name>` in its `.env`
++and copy `resources/views/customer/overview.foil.php` to
++`resources/skins/<name>/customer/overview.foil.php`, then add, where `$c` is
++the customer the template already has:
++
++```php
++<a class="btn btn-white" href="https://packeteer.example.net/ixp/member/<?= (int)$c->autsys ?>">Packeteer</a>
++```
++
++The series are `packeteer_ixp_member_rtt_ms`, `packeteer_ixp_member_loss_pct`,
++and `packeteer_ixp_member_jitter_ms` with labels `asn`, `vlan` (the VLAN id),
++`vantage`, and `family` (`ipv4` or `ipv6`). With more than one address in a
++VLAN and family the worst value shows, so a series never repeats. A probe
++error and a stale member list make no series. The count is members times
++vantages times families; size Prometheus accordingly.
++
+ ## Lab data
+ 
+ Member data is never committed. Lab fixtures use documentation prefixes
+@@ -161,4 +201,5 @@ documentation or private ASNs (64496-64511, 65536-65551, or
+ 64512-65534).
+ 
+ Rollback: remove `ixp.members`, `ixp.routeservers`, `ixp.correlate`, or
+-`ixp.vantages` and `ixp.fabric`, or the `ixp` block, and restart. Nothing was announced.
++`ixp.vantages` and `ixp.fabric`, or the `ixp` block, and restart. The member pages and series need no config of
++their own and are empty without those sources. Nothing was announced.
+diff --git a/docs/ui.md b/docs/ui.md
+index efa1c8e..05eb665 100644
+--- a/docs/ui.md
++++ b/docs/ui.md
+@@ -13,6 +13,7 @@ The remaining UI conveniences (#34). All of them work in the stock image with a
+ | Maintenance windows (#177) | `/policies.html`, `GET`/`POST /api/maintenance`, `DELETE /api/maintenance/{id}` | viewer reads, operator opens and closes | a `maintenance` policy; opening needs auth or basic auth |
+ | Link-outs (#211) | `/prefix/<prefix>`, `/prefixes.html`, `/providers.html`, `GET /api/linkouts` | viewer | `linkouts` (optional) |
+ | Global search (#172) | the top bar on every page, `/search.html`, `GET /api/search` | viewer | `storage: {type: sqlite}` for history |
++| IXP member pages (#166) | `/ixp/member/<asn>`, `/ixp/member/`, `GET /api/ixp/members/{asn}` | viewer | `ixp` ([design/ixp.md](design/ixp.md#member-pages)) |
+ | System health (#184) | `/system.html`, `/api/system`, the System tile on `/` | viewer | none |
+ | Events and audit log (#173) | `/events.html`, `/api/events`, `/api/audit` | viewer for events, admin for the audit tab | `storage: {type: sqlite}` keeps events across a restart |
+ | Users and API tokens (#175) | `/admin.html`, `/tokens.html`, `/api/users`, `/api/tokens` | admin for users, every signed-in user for tokens | `storage` + `auth.enabled` |
+diff --git a/internal/httpapi/access.go b/internal/httpapi/access.go
+index 425c37f..043fc9c 100644
+--- a/internal/httpapi/access.go
++++ b/internal/httpapi/access.go
+@@ -66,6 +66,7 @@ func (s *Server) routeTable() []route {
+ 		{"GET /api/exchanges/potential-peers", viewer, s.handleExchangePotentialPeers},
+ 		{"GET /api/lookup", viewer, s.handleLookup},
+ 		{"GET /api/ixp/members", viewer, s.handleIXPMembers},
++		{"GET /api/ixp/members/{asn}", viewer, s.handleIXPMember},
+ 		{"GET /api/ixp/probes", viewer, s.handleIXPProbes},
+ 		{"GET /api/ixp/routeservers", viewer, s.handleIXPRouteServers},
+ 		{"GET /api/ixp/routeservers/history", viewer, s.handleIXPRouteServerHistory},
+@@ -129,6 +130,7 @@ func (s *Server) routeTable() []route {
+ 		{"GET /app.css", public, serveFile("app.css")},
+ 		{"GET /logo.png", public, serveFile("logo.png")},
+ 		{"GET /prefix/", viewer, serveFile("prefix.html")},
++		{"GET /ixp/member/", viewer, serveFile("ixp-member.html")},
+ 		{"GET /", viewer, files.ServeHTTP},
+ 	}
+ }
+diff --git a/internal/httpapi/access_test.go b/internal/httpapi/access_test.go
+index f5f98f6..a5c4c4e 100644
+--- a/internal/httpapi/access_test.go
++++ b/internal/httpapi/access_test.go
+@@ -134,7 +134,7 @@ func TestAuthzEveryEndpoint(t *testing.T) {
+ 				return
+ 			}
+ 			// A browser asking for a page is sent to the sign-in page.
+-			page := r.pattern == "GET /" || r.pattern == "GET /prefix/"
++			page := r.pattern == "GET /" || r.pattern == "GET /prefix/" || r.pattern == "GET /ixp/member/"
+ 			switch {
+ 			case page && (anon.Code != http.StatusFound || anon.Header().Get("Location") != "/signin.html"):
+ 				t.Fatalf("anonymous page: %d %s", anon.Code, anon.Body)
+diff --git a/internal/httpapi/ixp.go b/internal/httpapi/ixp.go
+index e6a3b09..dc844fe 100644
+--- a/internal/httpapi/ixp.go
++++ b/internal/httpapi/ixp.go
+@@ -111,7 +111,7 @@ func IXPMemberMetrics(v plugin.MemberView, now time.Time) []byte {
+ 
+ // IXPFabricMetrics renders the fabric prober. Targets and the
+ // past-tolerance count are zero while the member list is stale; age stays.
+-// There is no per-member series.
++// The per-member series are IXPMemberFabricMetrics.
+ func IXPFabricMetrics(v plugin.FabricView, now time.Time) []byte {
+ 	if !v.Configured {
+ 		return nil
+diff --git a/internal/httpapi/ixp_member.go b/internal/httpapi/ixp_member.go
+new file mode 100644
+index 0000000..dc2d44c
+--- /dev/null
++++ b/internal/httpapi/ixp_member.go
+@@ -0,0 +1,163 @@
++package httpapi
++
++import (
++	"cmp"
++	"net/http"
++	"slices"
++	"strconv"
++	"strings"
++	"time"
++
++	"github.com/GrandArcher/Packeteer/pkg/plugin"
++)
++
++// IXPMemberPage is the body of GET /api/ixp/members/{asn} (#166): one member's
++// connections from the IX-F list, its latest fabric samples by vantage, and
++// its route-server sessions. The history of a session is
++// GET /api/ixp/routeservers/history. Every part comes from the views the
++// other ixp endpoints serve; nothing is fetched and nothing is announced.
++type IXPMemberPage struct {
++	meta
++	ASN         uint32                      `json:"asn"`
++	Name        string                      `json:"name,omitempty"`
++	ManagerLink string                      `json:"ixp_manager_url,omitempty"`
++	Connections []plugin.IXPConnection      `json:"connections"`
++	Fabric      IXPMemberFabric             `json:"fabric"`
++	Sessions    []plugin.RouteServerSession `json:"route_server_sessions"`
++}
++
++type IXPMemberFabric struct {
++	Configured bool                  `json:"configured"`
++	Stale      bool                  `json:"stale"`
++	Round      *time.Time            `json:"round,omitempty"`
++	Samples    []plugin.FabricSample `json:"samples"`
++}
++
++// ixpManagerLink is IXP Manager's admin search for the ASN. The IX-F
++// export does not carry IXP Manager's customer id, and the search page
++// lists the customer with its own link. The URL is for the operator's
++// browser; Packeteer never requests it.
++func ixpManagerLink(base string, asn uint32) string {
++	if base == "" {
++		return ""
++	}
++	return base + "/admin/search?search=AS" + strconv.FormatUint(uint64(asn), 10)
++}
++
++func parseASN(s string) (uint32, bool) {
++	n, err := strconv.ParseUint(s, 10, 32)
++	return uint32(n), err == nil && n > 0
++}
++
++func (s *Server) handleIXPMember(w http.ResponseWriter, r *http.Request) {
++	asn, ok := parseASN(r.PathValue("asn"))
++	if !ok {
++		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "asn must be a number from 1 to 4294967295"})
++		return
++	}
++	body := IXPMemberPage{
++		meta: s.snapshot().meta(), ASN: asn,
++		Connections: []plugin.IXPConnection{},
++		Fabric:      IXPMemberFabric{Samples: []plugin.FabricSample{}},
++		Sessions:    []plugin.RouteServerSession{},
++	}
++	known := false
++	if mv, ok := s.ixpMemberView(); ok {
++		for _, m := range mv.Members {
++			if m.ASN != asn {
++				continue
++			}
++			known, body.Name = true, m.Name
++			body.Connections = append(body.Connections, m.Connections...)
++			body.ManagerLink = ixpManagerLink(mv.ManagerURL, asn)
++		}
++	}
++	if fv, ok := s.ixpFabricView(); ok && fv.Configured {
++		body.Fabric.Configured, body.Fabric.Stale = true, fv.Stale
++		if !fv.Round.IsZero() {
++			round := fv.Round
++			body.Fabric.Round = &round
++		}
++		for _, sm := range fv.Samples {
++			if sm.ASN == asn {
++				body.Fabric.Samples = append(body.Fabric.Samples, sm)
++			}
++		}
++		slices.SortFunc(body.Fabric.Samples, func(a, b plugin.FabricSample) int {
++			return cmp.Or(cmp.Compare(a.Vantage, b.Vantage), cmp.Compare(a.Address, b.Address))
++		})
++	}
++	if src, ok := s.ixpRouteServerSource(); ok {
++		for _, ss := range src.view().Sessions {
++			if ss.ASN != asn {
++				continue
++			}
++			body.Sessions = append(body.Sessions, ss)
++			if body.Name == "" {
++				body.Name = ss.Name
++			}
++		}
++		slices.SortFunc(body.Sessions, func(a, b plugin.RouteServerSession) int {
++			return cmp.Or(cmp.Compare(a.Server, b.Server), cmp.Compare(a.Session, b.Session))
++		})
++	}
++	if !known && len(body.Sessions) == 0 {
++		writeJSON(w, http.StatusNotFound, map[string]string{"error": "no IXP member with that ASN"})
++		return
++	}
++	writeJSON(w, http.StatusOK, body)
++}
++
++// IXPMemberFabricMetrics renders the latest fabric round per member (#166):
++// loss, RTT, and jitter by ASN, VLAN id, vantage, and address family. A
++// member with several addresses in one VLAN and family shows the worst of
++// them, so a series never repeats. A probe error is not a measurement and
++// a stale member list has no round, so neither makes a series. The series
++// count is members x vantages x families.
++func IXPMemberFabricMetrics(v plugin.FabricView) []byte {
++	if !v.Configured || v.Stale {
++		return nil
++	}
++	type key struct {
++		asn     uint32
++		vlan    int
++		vantage string
++		family  string
++	}
++	worst := map[key]plugin.FabricSample{}
++	for _, sm := range v.Samples {
++		if sm.Error != "" {
++			continue
++		}
++		k := key{sm.ASN, sm.VLANID, sm.Vantage, sm.Family}
++		w, seen := worst[k]
++		if !seen {
++			worst[k] = sm
++			continue
++		}
++		w.LossPct = max(w.LossPct, sm.LossPct)
++		w.RTTMs = max(w.RTTMs, sm.RTTMs)
++		w.JitterMs = max(w.JitterMs, sm.JitterMs)
++		worst[k] = w
++	}
++	keys := make([]key, 0, len(worst))
++	for k := range worst {
++		keys = append(keys, k)
++	}
++	slices.SortFunc(keys, func(a, b key) int {
++		return cmp.Or(cmp.Compare(a.asn, b.asn), cmp.Compare(a.vlan, b.vlan), cmp.Compare(a.vantage, b.vantage), cmp.Compare(a.family, b.family))
++	})
++	var rtt, loss, jitter []sample
++	for _, k := range keys {
++		l := []lbl{{"asn", strconv.FormatUint(uint64(k.asn), 10)}, {"vlan", strconv.Itoa(k.vlan)}, {"vantage", k.vantage}, {"family", k.family}}
++		w := worst[k]
++		rtt = append(rtt, sample{labels: l, value: w.RTTMs})
++		loss = append(loss, sample{labels: l, value: w.LossPct})
++		jitter = append(jitter, sample{labels: l, value: w.JitterMs})
++	}
++	var b strings.Builder
++	writeGauge(&b, "packeteer_ixp_member_rtt_ms", "Round-trip time to the member's LAN address in the latest fabric round, worst address per VLAN and family.", rtt...)
++	writeGauge(&b, "packeteer_ixp_member_loss_pct", "Packet loss percent to the member's LAN address in the latest fabric round, worst address per VLAN and family.", loss...)
++	writeGauge(&b, "packeteer_ixp_member_jitter_ms", "Jitter to the member's LAN address in the latest fabric round, worst address per VLAN and family.", jitter...)
++	return []byte(b.String())
++}
+diff --git a/internal/httpapi/ixp_member_test.go b/internal/httpapi/ixp_member_test.go
+new file mode 100644
+index 0000000..fd4a9fb
+--- /dev/null
++++ b/internal/httpapi/ixp_member_test.go
+@@ -0,0 +1,224 @@
++package httpapi
++
++import (
++	"encoding/json"
++	"net/http"
++	"net/http/httptest"
++	"strings"
++	"testing"
++	"time"
++
++	"github.com/GrandArcher/Packeteer/pkg/plugin"
++)
++
++func memberFixture(t *testing.T) *Server {
++	t.Helper()
++	s := newIXPServer(t)
++	s.SetIXPMembers(func() plugin.MemberView {
++		return plugin.MemberView{
++			Configured: true, Manager: true, ManagerURL: "https://ixp.example.invalid/ixp",
++			Members: []plugin.IXPMember{
++				{ASN: 64496, Name: "Doc Member", Connections: []plugin.IXPConnection{{
++					IXPID: 1, State: "active",
++					Interfaces: []plugin.IXPInterface{{SwitchID: 7, Switch: "sw1", Colo: "cab-a", SpeedMbps: 10000}},
++					Addresses:  []plugin.IXPAddress{{Family: "ipv4", Address: "192.0.2.20", VLANID: 10}},
++				}}},
++				{ASN: 64497, Name: "Other Member"},
++			},
++		}
++	})
++	at := time.Unix(1_800_000_000, 0).UTC()
++	s.SetIXPFabric(func() plugin.FabricView {
++		return plugin.FabricView{Configured: true, Round: at, Samples: []plugin.FabricSample{
++			{Vantage: "v2", ASN: 64496, Address: "192.0.2.20", Family: "ipv4", VLANID: 10, LossPct: 0, RTTMs: 0.8, JitterMs: 0.1, At: at},
++			{Vantage: "v1", ASN: 64496, Address: "192.0.2.20", Family: "ipv4", VLANID: 10, LossPct: 5, RTTMs: 1.5, JitterMs: 0.2, PastTolerance: true, At: at},
++			{Vantage: "v1", ASN: 64497, Address: "192.0.2.21", Family: "ipv4", VLANID: 10, RTTMs: 9, At: at},
++		}}
++	})
++	s.SetIXPRouteServers(func() plugin.RouteServerView {
++		return plugin.RouteServerView{Configured: true, Sessions: []plugin.RouteServerSession{
++			{Server: "rs1", Session: "pb_a", ASN: 64496, Established: true, Counted: true, Received: 10, Accepted: 7, Filtered: 3},
++			{Server: "rs1", Session: "pb_b", ASN: 64497},
++		}}
++	}, func(server, session string) ([]plugin.RouteServerSample, bool) { return nil, false })
++	return s
++}
++
++func getJSONBody(t *testing.T, s *Server, path string) (int, map[string]any) {
++	t.Helper()
++	rec := httptest.NewRecorder()
++	s.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
++	var body map[string]any
++	_ = json.Unmarshal(rec.Body.Bytes(), &body)
++	return rec.Code, body
++}
++
++func TestIXPMemberAPI(t *testing.T) {
++	s := memberFixture(t)
++	code, body := getJSONBody(t, s, "/api/ixp/members/64496")
++	if code != http.StatusOK {
++		t.Fatalf("status %d", code)
++	}
++	if body["asn"] != float64(64496) || body["name"] != "Doc Member" {
++		t.Fatalf("identity %v", body)
++	}
++	if body["ixp_manager_url"] != "https://ixp.example.invalid/ixp/admin/search?search=AS64496" {
++		t.Fatalf("link %v", body["ixp_manager_url"])
++	}
++	if c, _ := body["connections"].([]any); len(c) != 1 {
++		t.Fatalf("connections %v", body["connections"])
++	}
++	fab, _ := body["fabric"].(map[string]any)
++	samples, _ := fab["samples"].([]any)
++	if len(samples) != 2 {
++		t.Fatalf("this member's samples only: %v", fab)
++	}
++	first, _ := samples[0].(map[string]any)
++	second, _ := samples[1].(map[string]any)
++	if first["vantage"] != "v1" || second["vantage"] != "v2" || first["loss_pct"] != float64(5) || first["rtt_ms"] != 1.5 {
++		t.Fatalf("samples not sorted by vantage or wrong values: %v", samples)
++	}
++	sess, _ := body["route_server_sessions"].([]any)
++	if len(sess) != 1 || sess[0].(map[string]any)["session"] != "pb_a" {
++		t.Fatalf("sessions %v", sess)
++	}
++
++	// A member the list does not know, and a bad ASN.
++	if code, _ := getJSONBody(t, s, "/api/ixp/members/64499"); code != http.StatusNotFound {
++		t.Errorf("unknown asn = %d", code)
++	}
++	for _, bad := range []string{"0", "abc", "4294967296", "-1", "AS64496"} {
++		if code, _ := getJSONBody(t, s, "/api/ixp/members/"+bad); code != http.StatusBadRequest {
++			t.Errorf("asn %q = %d, want 400", bad, code)
++		}
++	}
++}
++
++func TestIXPMemberAPIWithoutManagerOrFabric(t *testing.T) {
++	s := newIXPServer(t)
++	s.SetIXPMembers(func() plugin.MemberView {
++		return plugin.MemberView{Configured: true, Members: []plugin.IXPMember{{ASN: 64496}}}
++	})
++	code, body := getJSONBody(t, s, "/api/ixp/members/64496")
++	if code != http.StatusOK {
++		t.Fatalf("status %d", code)
++	}
++	if _, ok := body["ixp_manager_url"]; ok {
++		t.Errorf("a named IX-F document has no IXP Manager link: %v", body["ixp_manager_url"])
++	}
++	fab, _ := body["fabric"].(map[string]any)
++	if fab["configured"] != false {
++		t.Errorf("fabric %v", fab)
++	}
++	if l, ok := fab["samples"].([]any); !ok || len(l) != 0 {
++		t.Errorf("samples %#v", fab["samples"])
++	}
++	if l, ok := body["route_server_sessions"].([]any); !ok || len(l) != 0 {
++		t.Errorf("sessions %#v", body["route_server_sessions"])
++	}
++}
++
++func TestIXPMemberAPINeedsAnIXPSource(t *testing.T) {
++	if code, _ := getJSONBody(t, newIXPServer(t), "/api/ixp/members/64496"); code != http.StatusNotFound {
++		t.Fatalf("no ixp sources = %d, want 404", code)
++	}
++}
++
++// A route-server-only deployment (no ixp.members) still has pages.
++func TestIXPMemberFromRouteServerOnly(t *testing.T) {
++	s := newIXPServer(t)
++	s.SetIXPRouteServers(func() plugin.RouteServerView {
++		return plugin.RouteServerView{Configured: true, Sessions: []plugin.RouteServerSession{{Server: "rs1", Session: "pb_a", ASN: 64496, Name: "Doc Member"}}}
++	}, func(string, string) ([]plugin.RouteServerSample, bool) { return nil, false })
++	code, body := getJSONBody(t, s, "/api/ixp/members/64496")
++	if code != http.StatusOK || body["name"] != "Doc Member" {
++		t.Fatalf("%d %v", code, body)
++	}
++}
++
++func TestIXPMemberMetrics(t *testing.T) {
++	s := memberFixture(t)
++	rec := httptest.NewRecorder()
++	s.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
++	text := rec.Body.String()
++	for _, want := range []string{
++		`packeteer_ixp_member_rtt_ms{asn="64496",vlan="10",vantage="v1",family="ipv4"} 1.5` + "\n",
++		`packeteer_ixp_member_rtt_ms{asn="64496",vlan="10",vantage="v2",family="ipv4"} 0.8` + "\n",
++		`packeteer_ixp_member_loss_pct{asn="64496",vlan="10",vantage="v1",family="ipv4"} 5` + "\n",
++		`packeteer_ixp_member_jitter_ms{asn="64497",vlan="10",vantage="v1",family="ipv4"} 0` + "\n",
++	} {
++		if !strings.Contains(text, want) {
++			t.Errorf("missing %q in\n%s", want, text)
++		}
++	}
++}
++
++func TestIXPMemberMetricsWorstAddressErrorsAndStale(t *testing.T) {
++	samples := []plugin.FabricSample{
++		{Vantage: "v1", ASN: 64496, Address: "192.0.2.20", Family: "ipv4", VLANID: 10, LossPct: 1, RTTMs: 2, JitterMs: 0.5},
++		{Vantage: "v1", ASN: 64496, Address: "192.0.2.30", Family: "ipv4", VLANID: 10, LossPct: 4, RTTMs: 1, JitterMs: 0.1},
++		{Vantage: "v1", ASN: 64496, Address: "2001:db8::20", Family: "ipv6", VLANID: 10, RTTMs: 3},
++		{Vantage: "v1", ASN: 64496, Address: "192.0.2.40", Family: "ipv4", VLANID: 11, Error: "timeout"},
++	}
++	out := string(IXPMemberFabricMetrics(plugin.FabricView{Configured: true, Samples: samples}))
++	for _, want := range []string{
++		`packeteer_ixp_member_rtt_ms{asn="64496",vlan="10",vantage="v1",family="ipv4"} 2` + "\n",
++		`packeteer_ixp_member_loss_pct{asn="64496",vlan="10",vantage="v1",family="ipv4"} 4` + "\n",
++		`packeteer_ixp_member_jitter_ms{asn="64496",vlan="10",vantage="v1",family="ipv4"} 0.5` + "\n",
++		`packeteer_ixp_member_rtt_ms{asn="64496",vlan="10",vantage="v1",family="ipv6"} 3` + "\n",
++	} {
++		if !strings.Contains(out, want) {
++			t.Errorf("missing %q in\n%s", want, out)
++		}
++	}
++	if strings.Count(out, "packeteer_ixp_member_rtt_ms{") != 2 {
++		t.Errorf("one series per asn, vlan, vantage, family; an error is not a measurement:\n%s", out)
++	}
++	if strings.Contains(out, `vlan="11"`) {
++		t.Errorf("a probe error made a series:\n%s", out)
++	}
++	if b := IXPMemberFabricMetrics(plugin.FabricView{Configured: true, Stale: true, Samples: samples}); len(b) != 0 {
++		t.Errorf("stale list still has series:\n%s", b)
++	}
++	if b := IXPMemberFabricMetrics(plugin.FabricView{Samples: samples}); len(b) != 0 {
++		t.Errorf("unconfigured fabric has series:\n%s", b)
++	}
++}
++
++// #166: the pages and the member endpoint are GET only, open to every
++// signed-in role (all are exchange staff), and closed without a login.
++func TestIXPMemberPageRoles(t *testing.T) {
++	e := newUI(t)
++	for _, path := range []string{"/ixp/member/64496", "/ixp/member/", "/ixp-member.js", "/api/ixp/members/64496"} {
++		rec, _ := e.do(t, "GET", path, plugin.RoleViewer, nil)
++		want := http.StatusOK
++		if path == "/api/ixp/members/64496" {
++			want = http.StatusNotFound
++		}
++		if rec.Code != want {
++			t.Errorf("viewer GET %s = %d, want %d", path, rec.Code, want)
++		}
++		anon := httptest.NewRecorder()
++		e.h.ServeHTTP(anon, httptest.NewRequest(http.MethodGet, path, nil))
++		if anon.Code != http.StatusUnauthorized && anon.Code != http.StatusFound {
++			t.Errorf("anonymous GET %s = %d", path, anon.Code)
++		}
++	}
++	for _, method := range []string{"POST", "PUT", "PATCH", "DELETE"} {
++		if rec, _ := e.do(t, method, "/api/ixp/members/64496", plugin.RoleAdmin, nil); rec.Code == http.StatusOK {
++			t.Errorf("%s /api/ixp/members/64496 = %d, want a refusal", method, rec.Code)
++		}
++	}
++	rec, _ := e.do(t, "GET", "/ixp-member.js", plugin.RoleViewer, nil)
++	js := rec.Body.String()
++	for _, want := range []string{`"/api/ixp/members/"`, `"/api/ixp/routeservers/history`, `ixp_manager_url`, `rel = "noopener noreferrer"`} {
++		if !strings.Contains(js, want) {
++			t.Errorf("ixp-member.js missing %q", want)
++		}
++	}
++	for _, banned := range []string{"innerHTML", "outerHTML", "insertAdjacentHTML", `"POST"`, `"PUT"`, `"DELETE"`, "eval("} {
++		if strings.Contains(js, banned) {
++			t.Errorf("ixp-member.js contains %q", banned)
++		}
++	}
++}
+diff --git a/internal/httpapi/ixp_test.go b/internal/httpapi/ixp_test.go
+index 4ab25b3..e933e82 100644
+--- a/internal/httpapi/ixp_test.go
++++ b/internal/httpapi/ixp_test.go
+@@ -198,8 +198,8 @@ func TestIXPProbesAPIAndMetrics(t *testing.T) {
+ 			t.Errorf("missing %s in\n%s", want, metrics)
+ 		}
+ 	}
+-	if strings.Contains(metrics, "packeteer_ixp_member_rtt") {
+-		t.Fatalf("per-member series:\n%s", metrics)
++	if !strings.Contains(metrics, `packeteer_ixp_member_rtt_ms{asn="64496",vlan="0",vantage="lan1-v4",family=""} 12`+"\n") {
++		t.Fatalf("per-member series missing:\n%s", metrics)
+ 	}
+ 
+ 	s.SetIXPFabric(func() plugin.FabricView {
+@@ -219,6 +219,9 @@ func TestIXPProbesAPIAndMetrics(t *testing.T) {
+ 			t.Errorf("stale missing %s in\n%s", want, metrics)
+ 		}
+ 	}
++	if strings.Contains(metrics, "packeteer_ixp_member_rtt") {
++		t.Fatalf("stale list kept per-member series:\n%s", metrics)
++	}
+ }
+ 
+ func TestIXPRouteServersAPIAndMetrics(t *testing.T) {
+diff --git a/internal/httpapi/server.go b/internal/httpapi/server.go
+index 7c2d925..a9cb7b0 100644
+--- a/internal/httpapi/server.go
++++ b/internal/httpapi/server.go
+@@ -353,6 +353,7 @@ func (s *Server) handleMetrics(w http.ResponseWriter, _ *http.Request) {
+ 	}
+ 	if v, ok := s.ixpFabricView(); ok && v.Configured {
+ 		_, _ = w.Write(IXPFabricMetrics(v, time.Now()))
++		_, _ = w.Write(IXPMemberFabricMetrics(v))
+ 	}
+ 	if src, ok := s.ixpRouteServerSource(); ok {
+ 		_, _ = w.Write(IXPRouteServerMetrics(src.view(), time.Now()))
+diff --git a/internal/httpapi/ui_shell_test.go b/internal/httpapi/ui_shell_test.go
+index d12cb9f..7fb2628 100644
+--- a/internal/httpapi/ui_shell_test.go
++++ b/internal/httpapi/ui_shell_test.go
+@@ -111,6 +111,7 @@ func TestUIShell(t *testing.T) {
+ 		"policies.html":        {`<body data-page="policies" data-live="app">`, "#130", `id="maint-section" hidden`, `id="maint-form" hidden`, `src="/maintenance.js"`},
+ 		"events.html":          {`<body data-page="events">`, `id="events"`, `id="audit"`, `id="tab-audit"`, `data-min-role="admin">Audit`, `id="ev-severity"`, `id="ev-q"`, `id="ev-range"`, `src="/events.js"`},
+ 		"search.html":          {`<body data-page="search">`, `id="search-results"`, `id="search-status"`, `id="search-recent"`, `src="/search.js"`, "only reads"},
++		"ixp-member.html":      {`<body data-page="ixp-member">`, `id="member-title"`, `id="member-links"`, `id="member-list"`, `id="member-connections"`, `id="member-fabric"`, `id="member-sessions"`, `id="member-history"`, `src="/ixp-member.js"`, "announces nothing"},
+ 		"system.html":          {`<body data-page="system">`, `id="system"`, `id="system-summary"`, `src="/system.js"`, "only reads"},
+ 		"admin.html":           {`<body data-page="admin">`, `id="page-denied"`, `id="admin-body"`, `id="user-form"`, `id="uf-name"`, `id="uf-role"`, `id="uf-password" type="password"`, `id="users-off" class="empty" hidden`, `id="users-on" hidden`, `src="/admin.js"`},
+ 		"tokens.html":          {`<body data-page="tokens">`, `id="tokens-off" class="empty" hidden`, `id="tokens-on" hidden`, `id="token-secret" class="secret" role="alert" hidden`, `id="token-form"`, `id="tf-name"`, `id="tf-role"`, `id="tf-ttl"`, `src="/tokens.js"`},
+diff --git a/internal/httpapi/web/ixp-member.html b/internal/httpapi/web/ixp-member.html
+new file mode 100644
+index 0000000..0c1f1fa
+--- /dev/null
++++ b/internal/httpapi/web/ixp-member.html
+@@ -0,0 +1,78 @@
++<!DOCTYPE html>
++<html lang="en">
++<head>
++<meta charset="utf-8">
++<meta name="viewport" content="width=device-width, initial-scale=1">
++<meta name="referrer" content="no-referrer">
++<meta name="robots" content="noindex">
++<title>Packeteer IXP member</title>
++<link rel="stylesheet" href="/app.css">
++<link rel="icon" href="/logo.png" type="image/png" sizes="128x128">
++</head>
++<body data-page="ixp-member">
++<div id="banner" class="banner" role="status" hidden></div>
++<div id="conn" class="conn" role="alert" hidden></div>
++<div class="app">
++<nav class="sidenav" aria-label="Sections">
++  <a class="brand" href="/"><img class="logo" src="/logo.png" width="32" height="32" alt="Packeteer logo">Packeteer</a>
++  <a href="/" data-page="overview">Overview</a>
++  <a href="/dashboards.html" data-page="dashboards">Dashboards</a>
++  <a href="/improvements.html" data-page="improvements">Improvements</a>
++  <a href="/prefixes.html" data-page="prefixes">Prefixes &amp; ASNs</a>
++  <a href="/graphs.html" data-page="graphs">Graphs</a>
++  <a href="/reports.html" data-page="reports">Reports</a>
++  <a href="/providers.html" data-page="providers">Providers &amp; Exchanges</a>
++  <a href="/commit.html" data-page="commit">Commit &amp; Cost</a>
++  <a href="/policies.html" data-page="policies">Policies</a>
++  <a href="/protection.html" data-page="protection">Protection</a>
++  <a href="/troubleshooting.html" data-page="troubleshooting">Troubleshooting</a>
++  <a href="/events.html" data-page="events">Events</a>
++  <a href="/system.html" data-page="system">System</a>
++  <a href="/tokens.html" data-page="tokens">Tokens</a>
++  <a href="/settings.html" data-page="settings" data-min-role="admin">Settings</a>
++  <a href="/admin.html" data-page="admin" data-min-role="admin">Admin</a>
++</nav>
++<div class="app-main">
++<header class="topbar">
++  <div id="status" class="status">Loading</div>
++  <div class="top-slot top-search" id="search-slot">
++    <label>Search <input id="top-search" type="search" placeholder="Prefix, AS, or name" maxlength="64" autocomplete="off" list="top-search-recent"></label><datalist id="top-search-recent"></datalist>
++  </div>
++  <div class="top-slot" id="events-slot"><a class="top-link" href="/events.html">Events</a></div>
++  <div class="account" id="account">
++    <button type="button" id="account-btn" aria-haspopup="menu" aria-expanded="false" aria-controls="account-menu">Account</button>
++    <div id="account-menu" class="account-menu" role="menu" hidden>
++      <p id="account-who" class="tag">&hellip;</p>
++      <button type="button" id="account-out" hidden>Sign out</button>
++    </div>
++  </div>
++  <button type="button" id="refresh">Refresh</button>
++</header>
++<main>
++  <section>
++    <h2 id="member-title">IXP member</h2>
++    <p class="tag">This page only reads. It measures and reports the member's path across the exchange fabric and its route-server sessions. It changes no routing and announces nothing. Every Packeteer login is exchange staff; members have no login here.</p>
++    <p id="member-status" class="tag" role="status"></p>
++    <p id="member-links" class="linkout-row"></p>
++  </section>
++  <section id="member-list-section" hidden>
++    <h3>Members</h3>
++    <div id="member-list"></div>
++  </section>
++  <section id="member-detail" hidden>
++    <h3>Connections</h3>
++    <div id="member-connections"></div>
++    <h3>Fabric, latest round</h3>
++    <div id="member-fabric"></div>
++    <h3>Route servers</h3>
++    <div id="member-sessions"></div>
++    <div id="member-history"></div>
++  </section>
++</main>
++</div>
++</div>
++<script src="/ui.js"></script>
++<script src="/shell.js"></script>
++<script src="/ixp-member.js"></script>
++</body>
++</html>
+diff --git a/internal/httpapi/web/ixp-member.js b/internal/httpapi/web/ixp-member.js
+new file mode 100644
+index 0000000..d64d7eb
+--- /dev/null
++++ b/internal/httpapi/web/ixp-member.js
+@@ -0,0 +1,201 @@
++"use strict";
++// The IXP member page (#166): GET /api/ixp/members/{asn} for one member's
++// connections, latest fabric round by vantage, and route-server sessions,
++// and GET /api/ixp/routeservers/history for each session's filter history.
++// With no ASN in the path it lists the members. Read-only. Rows are built
++// with textContent only. Uses api, el, clear, and fmtTime from ui.js. No
++// inline script: the CSP allows scripts from this origin only.
++
++var MEMBER_PATH = "/ixp/member/";
++var MEMBER_REFRESH_MS = 15000;
++var HISTORY_ROWS = 24;
++
++var memberASN = (function () {
++  var path = window.location.pathname;
++  if (path.indexOf(MEMBER_PATH) !== 0) return "";
++  var rest = path.slice(MEMBER_PATH.length);
++  return /^[0-9]{1,10}$/.test(rest) ? rest : "";
++})();
++
++function memberTable(headers, rows) {
++  var t = el("table");
++  var hr = el("tr");
++  headers.forEach(function (h) { hr.appendChild(el("th", "", h)); });
++  t.appendChild(el("thead")).appendChild(hr);
++  var body = el("tbody");
++  rows.forEach(function (cells) {
++    var tr = el("tr");
++    cells.forEach(function (c) {
++      var td = el("td", c.cls || "", c.text);
++      if (c.href) {
++        clear(td);
++        var a = el("a", "", c.text);
++        a.href = c.href;
++        td.appendChild(a);
++      }
++      tr.appendChild(td);
++    });
++    body.appendChild(tr);
++  });
++  t.appendChild(body);
++  return t;
++}
++
++function cell(text, cls) {
++  return {text: text == null || text === "" ? "\u2014" : String(text), cls: cls};
++}
++
++function num(v, unit) {
++  return typeof v === "number" ? v.toFixed(2) + unit : "\u2014";
++}
++
++function setBox(id, node) {
++  var box = document.getElementById(id);
++  clear(box);
++  box.appendChild(node);
++}
++
++function renderList(data) {
++  var members = data.members || [];
++  document.getElementById("member-title").textContent = "IXP members";
++  document.title = "Packeteer IXP members";
++  document.getElementById("member-list-section").hidden = false;
++  if (!members.length) {
++    setBox("member-list", el("p", "empty", "No members. Set ixp.members to import the IX-F member list."));
++    return;
++  }
++  setBox("member-list", memberTable(["AS", "Name"], members.map(function (m) {
++    return [{text: "AS" + m.asn, cls: "mono", href: MEMBER_PATH + m.asn}, cell(m.name)];
++  })));
++}
++
++function renderLinks(d) {
++  var box = document.getElementById("member-links");
++  clear(box);
++  // The URL comes from the controller's own import config; it is still
++  // checked so a page can never carry a javascript: link.
++  if (d.ixp_manager_url && /^https?:\/\//.test(d.ixp_manager_url)) {
++    var a = el("a", "", "Open in IXP Manager");
++    a.id = "member-ixpm";
++    a.href = d.ixp_manager_url;
++    a.rel = "noopener noreferrer";
++    box.appendChild(a);
++    box.appendChild(el("span", "tag", " (IXP Manager asks you to sign in)"));
++  }
++}
++
++function renderConnections(d) {
++  var rows = [];
++  (d.connections || []).forEach(function (c) {
++    var addrs = (c.addresses || []).map(function (a) { return a.address; }).join(", ");
++    var ifs = c.interfaces || [];
++    if (!ifs.length) rows.push([cell(c.ixp_id), cell(c.state), cell(""), cell(""), cell(""), cell(addrs, "mono")]);
++    ifs.forEach(function (i) {
++      rows.push([cell(c.ixp_id), cell(c.state), cell(i.switch || i.switch_id), cell(i.colo), cell(i.speed_mbps ? i.speed_mbps + " Mbit/s" : ""), cell(addrs, "mono")]);
++    });
++  });
++  if (!rows.length) {
++    setBox("member-connections", el("p", "empty", "Not in the IX-F member list."));
++    return;
++  }
++  setBox("member-connections", memberTable(["IXP", "State", "Switch", "Colo", "Speed", "Addresses"], rows));
++}
++
++function renderFabric(d) {
++  var f = d.fabric || {};
++  if (!f.configured) {
++    setBox("member-fabric", el("p", "empty", "Fabric probing is not configured (ixp.fabric)."));
++    return;
++  }
++  var samples = f.samples || [];
++  if (!samples.length) {
++    setBox("member-fabric", el("p", "empty", f.stale ? "The member list is stale, so nothing is probed." : "No address of this member was measured in the latest round (no Can Ping, or no matching vantage)."));
++    return;
++  }
++  setBox("member-fabric", memberTable(["Vantage", "Address", "VLAN", "Loss", "RTT", "Jitter", "State", "At"], samples.map(function (s) {
++    var state = s.error ? "error: " + s.error : (s.past_tolerance ? "past tolerance" : "ok");
++    var bad = s.error || s.past_tolerance ? "bad" : "";
++    return [cell(s.vantage), cell(s.address, "mono"), cell(s.vlan_id),
++      cell(s.error ? "" : num(s.loss_pct, " %")), cell(s.error ? "" : num(s.rtt_ms, " ms")), cell(s.error ? "" : num(s.jitter_ms, " ms")),
++      cell(state, bad), cell(s.at ? fmtTime(s.at) : "")];
++  })));
++}
++
++function reasonText(reasons) {
++  return (reasons || []).map(function (r) { return r.reason + ": " + r.count; }).join(", ");
++}
++
++function renderSessions(d) {
++  var sessions = d.route_server_sessions || [];
++  if (!sessions.length) {
++    setBox("member-sessions", el("p", "empty", "No route-server session for this member (ixp.routeservers)."));
++    return;
++  }
++  setBox("member-sessions", memberTable(["Server", "Session", "State", "Received", "Accepted", "Filtered", "Reasons"], sessions.map(function (s) {
++    return [cell(s.server), cell(s.neighbor || s.session, "mono"), cell(s.state, s.established ? "" : "bad"),
++      cell(s.counted ? s.received : ""), cell(s.counted ? s.accepted : ""), cell(s.counted ? s.filtered : ""), cell(s.counted ? reasonText(s.reasons) : s.error)];
++  })));
++}
++
++function historyPanel(s, data) {
++  var box = el("div");
++  box.setAttribute("data-history", s.server + "/" + s.session);
++  var samples = (data.samples || []).slice().reverse();
++  box.appendChild(el("h4", "", "Filter history: " + s.server + " " + (s.neighbor || s.session)));
++  if (!samples.length) {
++    box.appendChild(el("p", "empty", "No samples yet."));
++    return box;
++  }
++  var shown = samples.slice(0, HISTORY_ROWS);
++  box.appendChild(el("p", "tag", "Latest " + shown.length + " of " + samples.length + " samples, newest first. History is in memory and a restart empties it."));
++  box.appendChild(memberTable(["At", "State", "Accepted", "Filtered", "Reasons"], shown.map(function (x) {
++    return [cell(fmtTime(x.at)), cell(x.established ? "Established" : "Down", x.established ? "" : "bad"),
++      cell(x.counted ? x.accepted : ""), cell(x.counted ? x.filtered : ""), cell(x.counted ? reasonText(x.reasons) : "")];
++  })));
++  return box;
++}
++
++function loadHistory(d) {
++  var root = document.getElementById("member-history");
++  var sessions = d.route_server_sessions || [];
++  Promise.all(sessions.map(function (s) {
++    var q = "?server=" + encodeURIComponent(s.server) + "&session=" + encodeURIComponent(s.session);
++    return api("GET", "/api/ixp/routeservers/history" + q).then(function (h) { return historyPanel(s, h); }, function (err) {
++      var box = el("div");
++      box.appendChild(el("p", "empty", s.server + " " + s.session + ": " + err.message));
++      return box;
++    });
++  })).then(function (panels) {
++    clear(root);
++    panels.forEach(function (p) { root.appendChild(p); });
++  });
++}
++
++function renderMember(d) {
++  var title = "AS" + d.asn + (d.name ? " " + d.name : "");
++  document.getElementById("member-title").textContent = title;
++  document.title = "Packeteer IXP " + title;
++  document.getElementById("member-detail").hidden = false;
++  renderLinks(d);
++  renderConnections(d);
++  renderFabric(d);
++  renderSessions(d);
++  loadHistory(d);
++}
++
++function loadMemberPage() {
++  var status = document.getElementById("member-status");
++  var path = memberASN ? "/api/ixp/members/" + memberASN : "/api/ixp/members";
++  return api("GET", path).then(function (data) {
++    status.textContent = "";
++    status.className = "tag";
++    if (memberASN) renderMember(data); else renderList(data);
++  }, function (err) {
++    status.textContent = err.status === 404 && memberASN ? "AS" + memberASN + " is not an IXP member Packeteer knows." : err.message;
++    status.className = "bad";
++  });
++}
++
++document.getElementById("refresh").addEventListener("click", loadMemberPage);
++loadMemberPage();
++setInterval(loadMemberPage, MEMBER_REFRESH_MS);
+diff --git a/internal/plugins/ixpmember/ixf/ixf.go b/internal/plugins/ixpmember/ixf/ixf.go
+index d878aae..c86bd36 100644
+--- a/internal/plugins/ixpmember/ixf/ixf.go
++++ b/internal/plugins/ixpmember/ixf/ixf.go
+@@ -171,6 +171,7 @@ func New(c plugin.Config, env plugin.Env) (plugin.MemberSource, error) {
+ 			Configured: true,
+ 			URL:        viewURL(fetchURL),
+ 			Manager:    manager,
++			ManagerURL: managerBase(fetchURL, manager),
+ 			KeyID:      ident,
+ 			IXPs:       []plugin.IXPSite{},
+ 			Members:    []plugin.IXPMember{},
+diff --git a/internal/plugins/ixpmember/ixf/ixf_test.go b/internal/plugins/ixpmember/ixf/ixf_test.go
+index dac282b..f2936ae 100644
+--- a/internal/plugins/ixpmember/ixf/ixf_test.go
++++ b/internal/plugins/ixpmember/ixf/ixf_test.go
+@@ -266,6 +266,28 @@ func TestViewURLDropsQuery(t *testing.T) {
+ 	}
+ }
+ 
++func TestManagerBase(t *testing.T) {
++	cases := []struct {
++		raw     string
++		manager bool
++		want    string
++	}{
++		{"https://ixp.example.invalid" + exportPath + "?ixfid_1=2", true, "https://ixp.example.invalid"},
++		{"https://ixp.example.invalid/ixp" + exportPath, true, "https://ixp.example.invalid/ixp"},
++		{"https://ixp.example.invalid:8443" + exportPath, true, "https://ixp.example.invalid:8443"},
++		{"https://ixp.example.invalid/members.json", false, ""},
++	}
++	for _, c := range cases {
++		if got := managerBase(c.raw, c.manager); got != c.want {
++			t.Errorf("managerBase(%q, %v) = %q, want %q", c.raw, c.manager, got, c.want)
++		}
++	}
++	s := build(t, "url: https://ixp.example.invalid/ixp"+exportPath+"\n", "", nil)
++	if s.View().ManagerURL != "https://ixp.example.invalid/ixp" {
++		t.Fatalf("view manager url %q", s.View().ManagerURL)
++	}
++}
++
+ func TestViewHidesQuery(t *testing.T) {
+ 	const secret = "QuerySecretQuerySecret1"
+ 	var got string
+diff --git a/internal/plugins/ixpmember/ixf/url.go b/internal/plugins/ixpmember/ixf/url.go
+index a3190ae..32a0278 100644
+--- a/internal/plugins/ixpmember/ixf/url.go
++++ b/internal/plugins/ixpmember/ixf/url.go
+@@ -73,6 +73,24 @@ func viewURL(raw string) string {
+ 	return u.String()
+ }
+ 
++// managerBase is the IXP Manager install the export belongs to: the
++// export URL without its path suffix and query. Empty for a named
++// document, which has no IXP Manager behind it. The member pages link to
++// it from the operator's browser; this process never requests it.
++func managerBase(fetchURL string, manager bool) string {
++	if !manager {
++		return ""
++	}
++	u, err := url.Parse(fetchURL)
++	if err != nil {
++		return ""
++	}
++	u.Path = strings.TrimSuffix(strings.TrimRight(u.Path, "/"), exportPath)
++	u.RawQuery = ""
++	u.ForceQuery = false
++	return strings.TrimRight(u.String(), "/")
++}
++
+ // urlHasKey reports whether the API key or its secret appears in raw or
+ // in the decoded URL. url.Parse decodes the path but String keeps the
+ // original percent-encoding, so both forms are checked.
+diff --git a/lab/ui-fixtures/ixp-member/fixtures.json b/lab/ui-fixtures/ixp-member/fixtures.json
+new file mode 100644
+index 0000000..d2f0a03
+--- /dev/null
++++ b/lab/ui-fixtures/ixp-member/fixtures.json
+@@ -0,0 +1,7 @@
++{
++  "stubs": [
++    {"method": "GET", "path": "/api/ixp/members/64496", "file": "member.json"},
++    {"method": "GET", "path": "/api/ixp/routeservers/history", "contains": "session=pb_a", "file": "history.json"},
++    {"method": "GET", "path": "/api/ixp/members", "file": "members.json"}
++  ]
++}
+diff --git a/lab/ui-fixtures/ixp-member/history.json b/lab/ui-fixtures/ixp-member/history.json
+new file mode 100644
+index 0000000..bfe69c2
+--- /dev/null
++++ b/lab/ui-fixtures/ixp-member/history.json
+@@ -0,0 +1,12 @@
++{
++  "version": "lab",
++  "mode": "observe",
++  "ready": true,
++  "generated_at": "2026-10-18T12:00:00Z",
++  "server": "rs1",
++  "session": "pb_a",
++  "samples": [
++    {"at": "2026-10-18T11:50:00Z", "established": true, "counted": true, "received": 8, "accepted": 8, "filtered": 0, "reasons": [], "scanned": false, "blackhole": 0},
++    {"at": "2026-10-18T11:55:00Z", "established": true, "counted": true, "received": 10, "accepted": 7, "filtered": 3, "reasons": [{"reason": 9, "count": 3}], "scanned": false, "blackhole": 0}
++  ]
++}
+diff --git a/lab/ui-fixtures/ixp-member/member.json b/lab/ui-fixtures/ixp-member/member.json
+new file mode 100644
+index 0000000..4c645f8
+--- /dev/null
++++ b/lab/ui-fixtures/ixp-member/member.json
+@@ -0,0 +1,33 @@
++{
++  "version": "lab",
++  "mode": "observe",
++  "ready": true,
++  "generated_at": "2026-10-18T12:00:00Z",
++  "asn": 64496,
++  "name": "Example Member A",
++  "ixp_manager_url": "https://ixp.example.invalid/admin/search?search=AS64496",
++  "connections": [
++    {
++      "ixp_id": 1,
++      "state": "active",
++      "interfaces": [{"switch_id": 7, "switch": "sw1", "colo": "cab-a", "speed_mbps": 10000}],
++      "addresses": [{"family": "ipv4", "address": "192.0.2.20", "vlan_id": 10, "route_server": true}]
++    }
++  ],
++  "fabric": {
++    "configured": true,
++    "stale": false,
++    "round": "2026-10-18T11:59:30Z",
++    "samples": [
++      {"vantage": "lan1-a", "asn": 64496, "address": "192.0.2.20", "family": "ipv4", "vlan_id": 10, "ixp_id": 1, "busy_host": false, "sent": 5, "received": 5, "loss_pct": 0, "rtt_ms": 0.42, "jitter_ms": 0.05, "past_tolerance": false, "at": "2026-10-18T11:59:30Z"},
++      {"vantage": "lan1-b", "asn": 64496, "address": "192.0.2.20", "family": "ipv4", "vlan_id": 10, "ixp_id": 1, "busy_host": false, "sent": 5, "received": 3, "loss_pct": 40, "rtt_ms": 310.5, "jitter_ms": 12.25, "past_tolerance": true, "at": "2026-10-18T11:59:30Z"}
++    ]
++  },
++  "route_server_sessions": [
++    {
++      "server": "rs1", "session": "pb_a", "asn": 64496, "name": "Example Member A", "neighbor": "192.0.2.20",
++      "state": "Established", "established": true, "counted": true, "received": 10, "accepted": 7, "filtered": 3,
++      "reasons": [{"reason": 9, "count": 3}], "max_prefix": 100, "scanned": false, "blackhole": 0, "at": "2026-10-18T11:59:00Z"
++    }
++  ]
++}
+diff --git a/lab/ui-fixtures/ixp-member/members.json b/lab/ui-fixtures/ixp-member/members.json
+new file mode 100644
+index 0000000..e81ea3f
+--- /dev/null
++++ b/lab/ui-fixtures/ixp-member/members.json
+@@ -0,0 +1,16 @@
++{
++  "version": "lab",
++  "mode": "observe",
++  "ready": true,
++  "generated_at": "2026-10-18T12:00:00Z",
++  "configured": true,
++  "manager": true,
++  "stale": false,
++  "member_count": 2,
++  "address_count": 2,
++  "ixps": [],
++  "members": [
++    {"asn": 64496, "name": "Example Member A", "connections": []},
++    {"asn": 64497, "name": "Example Member B", "connections": []}
++  ]
++}
+diff --git a/lab/uiproxy/main_test.go b/lab/uiproxy/main_test.go
+index fa86b1f..d46b808 100644
+--- a/lab/uiproxy/main_test.go
++++ b/lab/uiproxy/main_test.go
+@@ -16,6 +16,7 @@ import (
+ 	"github.com/GrandArcher/Packeteer/internal/history"
+ 	"github.com/GrandArcher/Packeteer/internal/httpapi"
+ 	"github.com/GrandArcher/Packeteer/internal/troubleshoot"
++	"github.com/GrandArcher/Packeteer/pkg/plugin"
+ )
+ 
+ func TestProxyAddsBasicAuth(t *testing.T) {
+@@ -302,6 +303,49 @@ func TestExchangePageFixturesMatchAPI(t *testing.T) {
+ 	}
+ }
+ 
++// TestIXPMemberFixturesMatchAPI decodes the canned member page answers with
++// the API's own types (#166), so a renamed field fails here and not as an
++// empty table in the UI smoke test.
++func TestIXPMemberFixturesMatchAPI(t *testing.T) {
++	f, err := loadFixtures("../ui-fixtures/ixp-member")
++	if err != nil {
++		t.Fatal(err)
++	}
++	if len(f.Stubs) != 3 || f.Inject.Page != "" {
++		t.Fatalf("stubs = %d, inject = %q", len(f.Stubs), f.Inject.Page)
++	}
++	strict := func(body []byte, v any) {
++		t.Helper()
++		dec := json.NewDecoder(bytes.NewReader(body))
++		dec.DisallowUnknownFields()
++		if err := dec.Decode(v); err != nil {
++			t.Fatal(err)
++		}
++	}
++	var page httpapi.IXPMemberPage
++	strict(f.Stubs[0].body, &page)
++	if page.ASN != 64496 || len(page.Connections) != 1 || len(page.Fabric.Samples) != 2 || len(page.Sessions) != 1 ||
++		!strings.HasPrefix(page.ManagerLink, "https://ixp.example.invalid/admin/search?search=AS") {
++		t.Fatalf("page = %+v", page)
++	}
++	if a, b := page.Fabric.Samples[0], page.Fabric.Samples[1]; a.PastTolerance || !b.PastTolerance || b.LossPct != 40 || b.RTTMs != 310.5 {
++		t.Fatalf("samples = %+v %+v", a, b)
++	}
++	var hist struct {
++		Version     string                     `json:"version"`
++		Mode        string                     `json:"mode"`
++		Ready       bool                       `json:"ready"`
++		GeneratedAt string                     `json:"generated_at"`
++		Server      string                     `json:"server"`
++		Session     string                     `json:"session"`
++		Samples     []plugin.RouteServerSample `json:"samples"`
++	}
++	strict(f.Stubs[1].body, &hist)
++	if hist.Session != page.Sessions[0].Session || len(hist.Samples) != 2 || hist.Samples[1].Filtered != 3 {
++		t.Fatalf("history = %+v", hist)
++	}
++}
++
+ // TestMaintenanceFixturesMatchAPI decodes the canned /api/maintenance answer
+ // with the type the API returns (#177), so a renamed field fails here and
+ // not as an empty table in the UI smoke test.
+diff --git a/pkg/plugin/ixp.go b/pkg/plugin/ixp.go
+index 0fa4f4d..5460c0a 100644
+--- a/pkg/plugin/ixp.go
++++ b/pkg/plugin/ixp.go
+@@ -54,6 +54,7 @@ type MemberView struct {
+ 	Configured   bool        `json:"configured"`
+ 	URL          string      `json:"url,omitempty"`
+ 	Manager      bool        `json:"manager"`
++	ManagerURL   string      `json:"manager_url,omitempty"`
+ 	KeyID        string      `json:"key_id,omitempty"`
+ 	KeyExpires   *time.Time  `json:"key_expires,omitempty"`
+ 	Fetched      *time.Time  `json:"fetched,omitempty"`
