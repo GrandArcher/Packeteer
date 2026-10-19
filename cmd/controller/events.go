@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/GrandArcher/Packeteer/internal/eventlog"
+	"github.com/GrandArcher/Packeteer/internal/httpapi"
 	"github.com/GrandArcher/Packeteer/internal/inbound"
 	"github.com/GrandArcher/Packeteer/internal/mitigation"
 	"github.com/GrandArcher/Packeteer/internal/notify"
@@ -59,8 +60,10 @@ type eventWatch struct {
 	mode string
 
 	mu             sync.Mutex
-	providers      map[string]bool
+	providers      map[string]string
 	peers          map[netip.Addr]bool
+	waiting        map[netip.Addr]time.Time
+	stuck          map[netip.Addr]bool
 	overCommit     map[string]bool
 	commitChecked  time.Time
 	announceFailed bool
@@ -85,7 +88,8 @@ func (w *eventWatch) commitDue(now time.Time) bool {
 }
 
 func newEventWatch(out emitter, mode string) *eventWatch {
-	return &eventWatch{out: out, mode: mode, providers: map[string]bool{}, peers: map[netip.Addr]bool{}, overCommit: map[string]bool{}}
+	return &eventWatch{out: out, mode: mode, providers: map[string]string{}, peers: map[netip.Addr]bool{},
+		waiting: map[netip.Addr]time.Time{}, stuck: map[netip.Addr]bool{}, overCommit: map[string]bool{}}
 }
 
 // SetMode records the mode a reload applied. Improvement events say
@@ -179,53 +183,104 @@ func (w *eventWatch) quarantines(now time.Time, changes []policy.QuarantineChang
 	}
 }
 
-// providerStatus reports probe-source transitions. A provider first seen down
-// is reported; one first seen up is not.
-func (w *eventWatch) providerStatus(now time.Time, st []probe.ProviderStatus) {
+// providerStatus reports provider health transitions: the probe source
+// failing, and measured loss reaching probe.degraded_loss_pct or
+// probe.down_loss_pct (#347), judged as the Overview does (#343). A
+// provider first seen down or degraded is reported; one first seen up is
+// not. A provider with nothing measured yet keeps its last state.
+func (w *eventWatch) providerStatus(now time.Time, st []probe.ProviderStatus, results []probe.Result, degradedAt, downAt float64) {
 	if w == nil {
 		return
 	}
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	for _, p := range st {
-		prev, seen := w.providers[p.Name]
-		w.providers[p.Name] = p.Up
-		if seen && prev == p.Up || !seen && p.Up {
+	for i, h := range httpapi.MeasureProviders(st, results, degradedAt, downAt) {
+		if h.State == httpapi.HealthUnknown {
 			continue
 		}
-		fields := map[string]string{"provider": p.Name, "source": p.Source.String()}
-		if p.Up {
-			w.emit(now, plugin.EventProviderUp, "probe source for "+p.Name+" recovered", fields)
+		prev, seen := w.providers[h.Name]
+		w.providers[h.Name] = h.State
+		if prev == h.State || !seen && h.State == httpapi.HealthUp {
 			continue
 		}
-		fields["reason"] = p.Reason
-		w.emit(now, plugin.EventProviderDown, "probe source for "+p.Name+" is down; its improvements are withdrawn", fields)
+		fields := map[string]string{"provider": h.Name, "source": st[i].Source.String(), "state": h.State}
+		switch {
+		case h.State == httpapi.HealthUp:
+			w.emit(now, plugin.EventProviderUp, "Provider "+h.Name+" is healthy again", fields)
+		case !st[i].Up:
+			fields["reason"] = st[i].Reason
+			w.emit(now, plugin.EventProviderDown, "Provider "+h.Name+" is down: its probe source failed ("+st[i].Reason+"); improvements onto it are withdrawn", fields)
+		case h.State == httpapi.HealthDown:
+			fields["reason"], fields["loss_pct"] = h.Detail, strconv.FormatFloat(h.LossPct, 'f', 1, 64)
+			w.emit(now, plugin.EventProviderDown, "Provider "+h.Name+" is down: "+h.Detail+" on its probes", fields)
+		default:
+			fields["reason"], fields["loss_pct"] = h.Detail, strconv.FormatFloat(h.LossPct, 'f', 1, 64)
+			w.emit(now, plugin.EventProviderDegraded, "Provider "+h.Name+" is degraded: "+h.Detail+" on its probes", fields)
+		}
 	}
 }
 
-// peerStatus reports iBGP sessions reaching or leaving Established. A
-// session that never came up is not reported as down.
-func (w *eventWatch) peerStatus(now time.Time, peers []rib.PeerState) {
+// peerStatus reports iBGP sessions reaching or leaving Established, and a
+// session that has not reached Established within notEstablishedAfter of
+// the first time it was seen (#347). A session that comes up and later
+// drops is reported by bgp.session_down, not by the timer.
+func (w *eventWatch) peerStatus(now time.Time, peers []rib.PeerState, notEstablishedAfter time.Duration) {
 	if w == nil {
 		return
 	}
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	for _, p := range peers {
-		prev := w.peers[p.Address]
+		prev, known := w.peers[p.Address]
 		w.peers[p.Address] = p.Established
-		if prev == p.Established {
-			continue
-		}
 		fields := map[string]string{"neighbor": p.Address.String(), "state": p.State}
 		if p.Description != "" {
 			fields["description"] = p.Description
 		}
-		if p.Established {
-			w.emit(now, plugin.EventBGPSessionUp, "iBGP session to "+p.Address.String()+" established", fields)
-		} else {
-			w.emit(now, plugin.EventBGPSessionDown, "iBGP session to "+p.Address.String()+" is down ("+p.State+")", fields)
+		name := p.Address.String()
+		if p.Description != "" {
+			name = p.Description + " (" + name + ")"
 		}
+		switch {
+		case p.Established:
+			delete(w.waiting, p.Address)
+			delete(w.stuck, p.Address)
+			if !prev {
+				w.emit(now, plugin.EventBGPSessionUp, "iBGP session to "+name+" is established", fields)
+			}
+		case prev:
+			w.emit(now, plugin.EventBGPSessionDown, "iBGP session to "+name+" is down ("+p.State+"): Packeteer can't see its routes, so it makes no recommendations for them", fields)
+		default:
+			if !known {
+				w.waiting[p.Address] = now
+			}
+			since, waiting := w.waiting[p.Address]
+			if !waiting || w.stuck[p.Address] || notEstablishedAfter <= 0 || now.Sub(since) < notEstablishedAfter {
+				continue
+			}
+			w.stuck[p.Address] = true
+			fields["after"] = notEstablishedAfter.String()
+			w.emit(now, plugin.EventBGPSessionStuck, "iBGP session to "+name+" is still "+p.State+" after "+notEstablishedAfter.String()+": Packeteer can't see its routes, so it makes no recommendations for them", fields)
+		}
+	}
+}
+
+// stopping reports shutdown after the withdraw. When no mode announces,
+// nothing was announced and nothing was withdrawn, so a routine restart is
+// info and says so instead of warning that routes were withdrawn (#347).
+func (w *eventWatch) stopping(now time.Time, mode string, announces bool, withdrawErr error) {
+	fields := map[string]string{"mode": mode, "withdrawn": "true"}
+	if withdrawErr != nil {
+		fields["withdrawn"] = "false"
+		fields["error"] = withdrawErr.Error()
+	}
+	ev := plugin.NewEvent(plugin.EventControllerStopping, now, "Packeteer is shutting down; Packeteer routes withdrawn", fields)
+	if !announces && withdrawErr == nil {
+		ev.Severity = plugin.SeverityInfo
+		ev.Message = "Packeteer is shutting down (" + mode + " mode: it announced no routes)"
+	}
+	if w != nil && w.out != nil {
+		w.out.Emit(ev)
 	}
 }
 

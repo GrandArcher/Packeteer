@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -146,5 +147,91 @@ func TestAuditTabEndpointIsAdminOnlyAndHasNoSecrets(t *testing.T) {
 		if strings.Contains(rec.Body.String(), secretText) {
 			t.Errorf("audit answer contains a secret: %q", secretText)
 		}
+	}
+}
+
+// Every catalog group has a "What to do" link, and a doc link names a file
+// and heading that exist in the repository (#347).
+func TestEventHelpLinks(t *testing.T) {
+	groups := map[string]bool{}
+	for _, s := range plugin.EventCatalog() {
+		groups[s.Group] = true
+		u := helpURL(s.Kind)
+		if u == "" {
+			t.Errorf("%s has no help link", s.Kind)
+			continue
+		}
+		if strings.HasPrefix(u, "/") {
+			if u != "/system.html" {
+				t.Errorf("%s links the unknown page %s", s.Kind, u)
+			}
+			continue
+		}
+		path, ok := strings.CutPrefix(u, DocBase)
+		if !ok {
+			t.Errorf("%s: %s is neither an in-app path nor a doc URL", s.Kind, u)
+			continue
+		}
+		file, anchor, _ := strings.Cut(path, "#")
+		doc, err := os.ReadFile("../../" + file)
+		if err != nil {
+			t.Errorf("%s: %v", s.Kind, err)
+			continue
+		}
+		if anchor != "" && !hasHeading(string(doc), anchor) {
+			t.Errorf("%s: %s has no heading for #%s", s.Kind, file, anchor)
+		}
+	}
+	for g := range eventHelp {
+		if !groups[g] {
+			t.Errorf("eventHelp has an entry for %q, which is not a catalog group", g)
+		}
+	}
+	if helpURL("nope.nothing") != "" {
+		t.Error("an unknown kind has a help link")
+	}
+}
+
+// hasHeading reports whether a Markdown heading slugs to anchor the way
+// GitHub does: lower case, spaces to hyphens, other punctuation dropped.
+func hasHeading(doc, anchor string) bool {
+	for _, line := range strings.Split(doc, "\n") {
+		text := strings.TrimLeft(line, "#")
+		if text == line || !strings.HasPrefix(text, " ") {
+			continue
+		}
+		var b strings.Builder
+		for _, r := range strings.ToLower(strings.TrimSpace(text)) {
+			switch {
+			case r == ' ':
+				b.WriteByte('-')
+			case r == '-' || r == '_' || r >= 'a' && r <= 'z' || r >= '0' && r <= '9':
+				b.WriteRune(r)
+			}
+		}
+		if b.String() == anchor {
+			return true
+		}
+	}
+	return false
+}
+
+// The events API carries the link, and the Events page shows it.
+func TestEventsAPIHelpURL(t *testing.T) {
+	e, _ := eventsEnv(t)
+	_, body := e.do(t, "GET", "/api/events", plugin.RoleViewer, nil)
+	got := map[string]string{}
+	for _, v := range body["events"].([]any) {
+		row := v.(map[string]any)
+		u, _ := row["help_url"].(string)
+		got[row["kind"].(string)] = u
+	}
+	want := map[string]string{
+		"provider.down":      DocBase + "docs/troubleshooting.md#probes-fail",
+		"commit.exceeded":    DocBase + "docs/CONFIG.md#scorer-commit",
+		"controller.started": "/system.html",
+	}
+	if fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Errorf("help urls = %v, want %v", got, want)
 	}
 }

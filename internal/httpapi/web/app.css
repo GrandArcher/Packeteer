@@ -277,6 +277,10 @@ fieldset.form { border: 0; margin: 0; padding: 0; }
   .settings-split { grid-template-columns: 1fr; }
 }
 
+/* Setup wizard diff and confirm (#345). */
+.confirm { border: 1px solid var(--muted); border-radius: 4px; padding: 8px 12px; margin-top: 8px; }
+.diff { max-height: 20rem; overflow: auto; white-space: pre; }
+
 /* Setup wizard steps (#106). */
 .steps { display: flex; flex-wrap: wrap; gap: 8px; list-style: none; margin: 0 0 12px; padding: 0; }
 .steps li { padding: 4px 10px; border-radius: 999px; background: #e7eef5; color: var(--muted); }
@@ -382,6 +386,12 @@ fieldset.form { border: 0; margin: 0; padding: 0; }
 .usage-moves { margin: 6px 0 0; padding-left: 20px; }
 .ts-data { margin-top: 8px; }
 .ts-data summary { cursor: pointer; }
+
+/* Event rows (#347): a plain headline, then the next step and the fields. */
+.event-headline { font-weight: 600; }
+.event-fields { margin-top: 4px; }
+.event-fields summary { cursor: pointer; }
+.doc-link { margin-right: 12px; }
 
 /* Sign-in page (#176) */
 .signin { max-width: 24rem; margin: 40px auto; }

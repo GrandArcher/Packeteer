@@ -3,7 +3,8 @@
 // uiproxy adds this script to /settings.html. It walks the Commit setup:
 // picks the commit scorer, tries a community instead of a variable name,
 // adds a new SNMP host, tracks a commit on a provider that has no binding,
-// sets a group, applies, and writes what it sees into the page for
+// sets a group, renames a just-added provider after ticking its commit,
+// applies, and writes what it sees into the page for
 // lab/ui-smoke.sh to match. Nothing is stubbed: the answers are the real
 // API's, and nothing is saved.
 
@@ -73,10 +74,36 @@ var steps = [
     set(field(row, "SNMP host"), "edge2", "change");
     set(field(row, "Interface"), "ether2");
     set(field(row, "Billing day (1-28)"), "5");
+  },
+  function () {
+    var lastRow = function () {
+      var rows = byId("form-providers").querySelectorAll(".row");
+      return rows[rows.length - 1];
+    };
+    var tick = function (name) { return providerRow(name).querySelector("input[type=checkbox]"); };
+    // A named draft reaches the setup list when the page renders it again.
+    // renderCommitSetup would also reset the scorer choice made above.
+    var refresh = function () { csSync(); renderCsProviders(); };
+    byId("form-add-provider").click();
+    set(field(lastRow(), "Name"), "lab-x");
+    refresh();
+    set(tick("lab-x"), true, "change");
+    set(field(lastRow(), "Name"), "lab-y");
+    byId("cs-next-2").click();
+    refresh();
+    note("cs-renamed", "renamed: " + texts("#cs-errors li") + " | step 2 shown: " + !byId("cs-2").hidden + " | lab-y tracked: " + tick("lab-y").checked);
+    set(tick("lab-y"), false, "change");
+    lastRow().querySelector("button[title='Remove provider']").click();
+    refresh();
     byId("cs-next-2").click();
   },
   function () {
     var rows = byId("cs-groups").querySelectorAll(".row");
+    var ccD = false;
+    Array.prototype.forEach.call(rows, function (row) {
+      if (row.querySelector(".mono").textContent === "lab-d") ccD = row.querySelectorAll("input")[2].checked;
+    });
+    note("cs-case", "case: lab-c percentile " + field(providerRow("lab-c"), "Percentile").value + " | lab-d cc_disable " + ccD);
     Array.prototype.forEach.call(rows, function (row) {
       var name = row.querySelector(".mono").textContent;
       var inputs = row.querySelectorAll("input");
@@ -101,7 +128,7 @@ var steps = [
     note("cs-yaml", "yaml: commit scorer " + has("type: commit") + " | balance equal " + has("balance: equal") + " | host edge2 " + has("name: edge2") +
       " | env name " + has("community_env: PACKETEER_SNMP_COMMUNITY") + " | commit 300 " + has("commit_mbps: 300") + " | interface ether2 " + has("interface: ether2") +
       " | billing day 5 " + has("billing_day: 5") + " | precedence 200 " + has("precedence: 200") + " | group pair " + has("group: pair") +
-      " | mode observe " + has("mode: observe") + " | no community " + (!has("lab-only-community") && !has("s3cret")));
+      " | cc_disable kept " + /cc_disable: true/i.test(y) + " | mode observe " + has("mode: observe") + " | no community " + (!has("lab-only-community") && !has("s3cret")));
   },
   function () {
     note("cs-valid", "validated: " + byId("ed-status").textContent);

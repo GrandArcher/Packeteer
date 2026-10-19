@@ -269,6 +269,7 @@ scorer:
 # bgp:
 #   listen_port: 179            # optional; 0/omitted = connect out only
 #   # listen_addresses: ["192.0.2.10"]
+#   # not_established_after: 5m   # event bgp.session_not_established when a session is still down this long
 #   neighbors:
 #     - address: 192.0.2.254
 #       # port: 179             # remote port; 0/omitted = 179

@@ -332,6 +332,9 @@ func (c *Config) validateBGP(add func(string, ...any)) {
 			add("%s: passive requires bgp.listen_port", label)
 		}
 	}
+	if c.BGP.NotEstablishedAfter < 0 {
+		add("bgp.not_established_after %s must not be negative", c.BGP.NotEstablishedAfter)
+	}
 	switch c.BGP.ASPath {
 	case ASPathEmpty, ASPathNative, ASPathProvider:
 	default:

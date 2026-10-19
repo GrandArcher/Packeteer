@@ -309,3 +309,43 @@ func TestSettingsPageSections(t *testing.T) {
 		t.Fatalf("wizard can send inject:\n%s", body)
 	}
 }
+
+// The wizard over a current config returns a diff and what is lost, keeps
+// auth, and turns it off only on request (#345).
+func TestWizardAPIOverCurrentConfig(t *testing.T) {
+	e := newUI(t)
+	in := map[string]any{"asn": 64512, "router_id": "192.0.2.10", "edge": "192.0.2.254",
+		"providers": []map[string]string{{"name": "transit-a", "source_ip": "192.0.2.11", "next_hop": "192.0.2.1"}},
+		"current":   wizardSmokeYAML}
+	rec, got := e.do(t, "POST", "/api/config/wizard", plugin.RoleAdmin, in)
+	if rec.Code != http.StatusOK || got["existing"] != true {
+		t.Fatalf("wizard: %d %s", rec.Code, rec.Body)
+	}
+	cfg, err := config.Parse([]byte(got["yaml"].(string)))
+	if err != nil || !cfg.AuthEnabled() || !cfg.HTTP.ConfigEditor || cfg.Storage == nil {
+		t.Fatalf("kept blocks: %v %+v", err, cfg)
+	}
+	if rm, _ := got["removes"].([]any); len(rm) != 1 || rm[0] != "Removes 2 providers (transit-b, transit-c)" {
+		t.Fatalf("removes = %v", got["removes"])
+	}
+	if d, _ := got["diff"].(string); !strings.Contains(d, "-   - name: transit-b") {
+		t.Fatalf("diff = %q", got["diff"])
+	}
+
+	in["disable_auth"] = true
+	rec, got = e.do(t, "POST", "/api/config/wizard", plugin.RoleAdmin, in)
+	cfg, err = config.Parse([]byte(got["yaml"].(string)))
+	if rec.Code != http.StatusOK || err != nil || cfg.AuthEnabled() || !strings.Contains(rec.Body.String(), "Turns off sign-in") {
+		t.Fatalf("explicit off: %d %v %s", rec.Code, err, rec.Body)
+	}
+
+	in["current"] = "mode: [observe"
+	if rec, _ = e.do(t, "POST", "/api/config/wizard", plugin.RoleAdmin, in); rec.Code != http.StatusUnprocessableEntity || !strings.Contains(rec.Body.String(), "cannot be kept") {
+		t.Fatalf("broken current: %d %s", rec.Code, rec.Body)
+	}
+
+	// GET /api/config says the file is configured, so the page collapses.
+	if _, got = e.do(t, "GET", "/api/config", plugin.RoleAdmin, nil); got["configured"] != true {
+		t.Fatalf("configured = %v", got["configured"])
+	}
+}

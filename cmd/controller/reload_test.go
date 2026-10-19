@@ -108,6 +108,7 @@ func TestPlanReload(t *testing.T) {
 		"providers":  {strings.Replace(one, "rtt_ms: 1}", "rtt_ms: 2}", 1), "changed probers"},
 		"as_path":    {one + "  as_path: native\n", "changed bgp.as_path"},
 		"listen":     {one + "  listen_port: 1179\n", "changed bgp.listen_port"},
+		"not_est":    {one + "  not_established_after: 1m\n", "changed bgp.not_established_after"},
 		"path_check": {one + "probe: {path_check: {interval: 1m}}\n", "changed probe.path_check"},
 		"two keys":   {strings.Replace(strings.Replace(one, "local_pref: 250", "local_pref: 300", 1), "hold_time: 1m", "hold_time: 2m", 1), "changed local_pref"},
 	} {

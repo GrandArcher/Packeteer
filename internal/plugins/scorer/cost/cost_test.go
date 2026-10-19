@@ -224,3 +224,18 @@ func TestPortBooksLockedAndActiveSteers(t *testing.T) {
 		t.Fatalf("moves %+v, want the active steer kept", moves)
 	}
 }
+
+func TestPlanReasonIsASCII(t *testing.T) {
+	moves := build(t, "").Plan(plugin.PlanInput{
+		Providers: []plugin.PlanProvider{prov("a", 10), prov("b", 4)},
+		Prefixes: []plugin.PlanPrefix{
+			{Prefix: p1, Native: "a", Current: "a", Paths: []plugin.PlanPath{path("a", 0, 40), path("b", 0, 40)}},
+		},
+	})
+	if len(moves) != 1 {
+		t.Fatalf("moves %+v", moves)
+	}
+	if want := "cost: a 10->b 4 per Mbps inside floor"; moves[0].Reason != want {
+		t.Fatalf("reason = %q, want %q", moves[0].Reason, want)
+	}
+}

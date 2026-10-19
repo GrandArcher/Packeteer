@@ -193,7 +193,7 @@ need_api packeteer-a /api/providers '[.providers[] | select(.name == "x-b" and .
 echo "2. inter-DC RTT in the path cost: steer through POP B's carrier"
 want "$pfx 192.0.2.253"
 tagged "$pfx" 192.0.2.253
-need_log packeteer-a 'msg="improvement improve".*prefix=198\.51\.100\.0/24 provider=x-b native=x-a.*rtt 80ms→20ms' "steer through x-b (10ms + 10ms inter-DC) not logged"
+need_log packeteer-a 'msg="improvement improve".*prefix=198\.51\.100\.0/24 provider=x-b native=x-a.*rtt 80ms->20ms' "steer through x-b (10ms + 10ms inter-DC) not logged"
 need_api packeteer-a /api/decisions '[.decisions[] | select(.prefix == "198.51.100.0/24") | .candidates[] | select(.provider == "x-b")] | length == 1' "x-b is not a candidate"
 stay 8 "$pfx 192.0.2.253"
 

@@ -865,3 +865,23 @@ func TestProviderHealthThresholds(t *testing.T) {
 		}
 	}
 }
+
+func TestBGPNotEstablishedAfter(t *testing.T) {
+	cfg, err := Parse([]byte(minimalYAML))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.BGP.NotEstablishedAfter != DefaultBGPNotEstablishedAfter {
+		t.Fatalf("default = %s", cfg.BGP.NotEstablishedAfter)
+	}
+	cfg, err = Parse([]byte(minimalYAML + "bgp:\n  not_established_after: 90s\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.BGP.NotEstablishedAfter != 90*time.Second {
+		t.Fatalf("explicit = %s", cfg.BGP.NotEstablishedAfter)
+	}
+	if _, err := Parse([]byte(minimalYAML + "bgp:\n  not_established_after: -1s\n")); err == nil || !strings.Contains(err.Error(), "bgp.not_established_after") {
+		t.Fatalf("negative: err = %v", err)
+	}
+}

@@ -20,7 +20,7 @@ func TestEventsPageAssets(t *testing.T) {
 		`<option value="1h">`, `<option value="24h">`, `<option value="7d">`, `<option value="30d">`, `<option value="custom">`,
 		`id="tab-audit" aria-selected="false" aria-controls="panel-audit" data-min-role="admin"`,
 		`id="panel-audit" role="tabpanel" aria-labelledby="tab-audit" hidden`,
-		"Passwords and token secrets are never recorded",
+		"Passwords and token secrets are never recorded", `id="events-doc"`,
 	} {
 		if !strings.Contains(html, s) {
 			t.Errorf("events.html missing %s", s)
@@ -28,11 +28,13 @@ func TestEventsPageAssets(t *testing.T) {
 	}
 	for _, s := range []string{
 		`"/api/events?"`, `"/api/audit?limit="`, `"severity="`, `"q="`, `"from="`, `"to="`,
-		`["Time", "Source", "Severity", "Event", "Detail"]`,
+		`["Time", "Source", "Severity", "Event", "What happened"]`,
 		`["Time", "Actor", "Role", "Method", "Action", "Target", "Result", "Status"]`,
 		`shellMarkEventsSeen(data.now)`,
 		`window.location.hash === "#audit"`,
 		"Storage is off: these are the events since",
+		`el("details", "event-fields")`, `el("summary", "", "Details")`, `docLink(e.help_url, "What to do")`,
+		`data.doc_base + "docs/EVENTS.md"`,
 	} {
 		if !strings.Contains(js, s) {
 			t.Errorf("events.js missing %s", s)
@@ -52,5 +54,22 @@ func TestEventsPageAssets(t *testing.T) {
 		if !strings.Contains(shell, s) {
 			t.Errorf("shell.js missing %s", s)
 		}
+	}
+}
+
+// The Improvements empty state names a missing BGP session as the cause and
+// links to System (#347); the checklist doc is a link (#347).
+func TestImprovementsEmptyStateAssets(t *testing.T) {
+	js := mustWeb(t, "web/app.js")
+	for _, s := range []string{
+		"No BGP session, so Packeteer can't see current routes and makes no recommendations. Fix the edge session on the ",
+		`sys.href = "/system.html"`, `bgp && !bgp.established`, `code.appendChild(docLink(h.doc_url, h.doc))`,
+	} {
+		if !strings.Contains(js, s) {
+			t.Errorf("app.js missing %s", s)
+		}
+	}
+	if !strings.Contains(mustWeb(t, "web/shell.js"), "function docLink(url, text)") {
+		t.Error("shell.js has no docLink")
 	}
 }

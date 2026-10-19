@@ -21,14 +21,16 @@ The same object is the `generic` webhook body and the `exec` `notify` params.
 | Kind | Severity | Trap ID | Key fields | Fires when |
 |---|---|---|---|---|
 | `controller.started` | info | 1 | | The controller started and its plugins are running. Resolves `controller.stopping`. |
-| `controller.stopping` | warning | 2 | | Shutdown (SIGTERM, SIGINT). Sent after Packeteer routes are withdrawn; `fields.withdrawn` is `false` and `fields.error` is set when the withdraw failed. |
+| `controller.stopping` | warning | 2 | | Shutdown (SIGTERM, SIGINT). Sent after Packeteer routes are withdrawn; `fields.withdrawn` is `false` and `fields.error` is set when the withdraw failed. When no mode announces (`mode`, `inbound.mode`, and `mitigation.mode` are not `inject`) and the withdraw did not fail, nothing was announced, so the event is `info` and the message says so. |
 | `improvement.added` | info | 3 | `prefix` | A prefix was steered to a better provider. In observe and suggest the message reads "Recommends moving X from A to B (not announced, observe mode)" because the router's path did not change. Fields: `provider`, `native`, `cause` (`performance`, `commit`, `cost`), `reason`, `mode`. |
 | `improvement.switched` | info | 4 | `prefix` | An improvement moved to another provider. Adds `previous`. |
 | `improvement.removed` | info | 5 | `prefix` | An improvement was retired; `reason` says why (native recovered, stale data, RIB loss, provider down, policy, maintenance, TTL). Resolves the prefix. |
-| `provider.down` | critical | 6 | `provider` | A provider's probe source failed, or its TTL-1 path check found its probes leaving through another first hop (`reason` is `probe path mismatch`, #150). The provider is excluded and improvements onto it are withdrawn (fail closed). |
-| `provider.up` | info | 7 | `provider` | The probe source recovered, including a probe path that matches `next_hop` again. |
-| `bgp.session_down` | critical | 8 | `neighbor` | An Established iBGP session went down. A session that never came up is not reported. |
-| `bgp.session_up` | info | 9 | `neighbor` | An iBGP session reached Established. |
+| `provider.down` | critical | 6 | `provider` | A provider is down: its probe source failed, or its TTL-1 path check found its probes leaving through another first hop (`reason` is `probe path mismatch`, #150), or every probe through it got no reply or errored (`reason` is `100% loss` or `no answer`), or its mean loss is at or above `probe.down_loss_pct` (`reason` is that loss). The measured states use the Overview's rules ([CONFIG.md](CONFIG.md#probe), #343, #347). A failed probe source also excludes the provider and withdraws improvements onto it (fail closed); loss alone changes no decision. Fields: `state`, `source`, `reason`, `loss_pct` (measured cases). |
+| `provider.degraded` | warning | 61 | `provider` | A provider's mean loss is at or above `probe.degraded_loss_pct` and below `probe.down_loss_pct` (#347). Fields as for `provider.down`. Resolved by `provider.up`. |
+| `provider.up` | info | 7 | `provider` | The provider is healthy again: probe source back, probe path matching `next_hop` again, and loss below `probe.degraded_loss_pct`. Resolves `provider.down` and `provider.degraded`. |
+| `bgp.session_down` | critical | 8 | `neighbor` | An Established iBGP session went down. |
+| `bgp.session_up` | info | 9 | `neighbor` | An iBGP session reached Established. Resolves `bgp.session_down` and `bgp.session_not_established`. |
+| `bgp.session_not_established` | critical | 62 | `neighbor` | A configured iBGP session has not reached Established `bgp.not_established_after` (default 5m) after Packeteer first saw it (#347). With no session Packeteer sees no routes and makes no recommendations. Sent once per neighbor; a session that came up and then dropped is `bgp.session_down` instead. Fields: `neighbor`, `state`, `after`, `description`. |
 | `commit.exceeded` | warning | 10 | `provider` | The billable 95th percentile for the open billing period is above `commit_mbps` (telemetry plugin required). Fields: `usage_mbps`, `commit_mbps`, `percentile`. |
 | `commit.cleared` | info | 11 | `provider` | The billable 95th percentile is back at or below the commit. |
 | `announce.failed` | critical | 12 | | Syncing improvements to the announcer failed. Sent once per failure streak. |

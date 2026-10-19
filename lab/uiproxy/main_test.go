@@ -434,10 +434,17 @@ func TestCommitDriverMatchesPage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	settings, err := os.ReadFile(web + "settings.js")
+	if err != nil {
+		t.Fatal(err)
+	}
 	driver := string(f.driver)
 	ids := regexp.MustCompile(`byId\("([^"]+)"\)`).FindAllStringSubmatch(driver, -1)
 	if len(ids) == 0 {
 		t.Fatal("the driver uses no element")
+	}
+	if !strings.Contains(string(settings), `"Remove provider"`) {
+		t.Error("the driver removes a provider row by its title, which settings.js lacks")
 	}
 	for _, m := range ids {
 		if !strings.Contains(string(page), `id="`+m[1]+`"`) {
@@ -445,8 +452,8 @@ func TestCommitDriverMatchesPage(t *testing.T) {
 		}
 	}
 	for _, m := range regexp.MustCompile(`field\([^,]+, "([^"]+)"\)`).FindAllStringSubmatch(driver, -1) {
-		if !strings.Contains(string(script), `"`+m[1]+`"`) {
-			t.Errorf("driver looks for the label %q, which commitsetup.js lacks", m[1])
+		if !strings.Contains(string(script), `"`+m[1]+`"`) && !strings.Contains(string(settings), `labeled("`+m[1]+`"`) {
+			t.Errorf("driver looks for the label %q, which commitsetup.js and settings.js lack", m[1])
 		}
 	}
 }
