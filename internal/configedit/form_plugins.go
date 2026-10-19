@@ -23,10 +23,10 @@ import (
 // read into the form, never written from it, and a new key of that kind
 // must name an environment variable (a *_env key), like every plugin does.
 
-// MaxFormPlugins bounds the plugin rows of the form.
+// Bounds on the plugin rows of the form and the settings of each row.
 const (
-	MaxFormPlugins  = 128
-	MaxPluginFields = 64
+	maxFormPlugins  = 128
+	maxPluginFields = 64
 )
 
 // FormPlugin is one plugin entry. List is the config key (probers, sources,
@@ -232,8 +232,8 @@ func (f *Form) normalizePlugins() {
 }
 
 func (f Form) validatePlugins(cur Form) error {
-	if len(f.Plugins) > MaxFormPlugins {
-		return fmt.Errorf("%w: at most %d plugins in the form", ErrForm, MaxFormPlugins)
+	if len(f.Plugins) > maxFormPlugins {
+		return fmt.Errorf("%w: at most %d plugins in the form", ErrForm, maxFormPlugins)
 	}
 	old := map[string]FormPlugin{}
 	for _, p := range cur.Plugins {
@@ -292,8 +292,8 @@ func (f Form) validatePlugins(cur Form) error {
 }
 
 func validateSettings(at string, p FormPlugin) error {
-	if len(p.Settings) > MaxPluginFields {
-		return fmt.Errorf("%w: %s: at most %d settings", ErrForm, at, MaxPluginFields)
+	if len(p.Settings) > maxPluginFields {
+		return fmt.Errorf("%w: %s: at most %d settings", ErrForm, at, maxPluginFields)
 	}
 	seen := map[string]bool{}
 	for j, s := range p.Settings {
@@ -368,48 +368,86 @@ func settingTag(kind string) string {
 	return "!!str"
 }
 
+// applyPlugins settles every entry against the file's nodes before the file
+// changes, then writes each list, and the storage key, once. Adding and
+// removing in turn let the removal of the old storage entry delete the key
+// the new one had just been written to.
 func applyPlugins(root *yaml.Node, refs map[string]pluginRef, cur, next Form) error {
 	if reflect.DeepEqual(cur.Plugins, next.Plugins) {
 		return nil
 	}
-	kept := map[string]bool{}
+	kept := map[*yaml.Node]bool{}
+	added := map[string][]*yaml.Node{}
 	for _, p := range next.Plugins {
 		switch {
 		case p.Key == "" && p.Enabled:
-			addPlugin(root, p)
-		case p.Key == "":
-		case !p.Enabled:
-			// Removed below with every entry the form no longer lists.
+			added[p.List] = append(added[p.List], newPlugin(p))
+		case p.Key == "" || !p.Enabled:
 		default:
 			ref, ok := refs[p.List+"/"+p.Key]
 			if !ok {
 				return fmt.Errorf("%w: plugin %s %s is not in the file anymore; reload the form", ErrForm, p.List, p.Key)
 			}
-			kept[p.List+"/"+p.Key] = true
+			kept[ref.node] = true
 			if !reflect.DeepEqual(readPlugin(p.List, p.Key, ref.node), p) {
 				writePlugin(ref.node, p)
 			}
 		}
 	}
-	for key, ref := range refs {
-		if !kept[key] {
-			removePlugin(root, ref)
+	gone := map[*yaml.Node]bool{}
+	for _, ref := range refs {
+		if !kept[ref.node] {
+			gone[ref.node] = true
 		}
 	}
+	for _, l := range pluginLists {
+		setPluginList(root, l.key, gone, added[l.key])
+	}
+	setStorage(root, gone, added["storage"])
 	return nil
 }
 
-func addPlugin(root *yaml.Node, p FormPlugin) {
+func newPlugin(p FormPlugin) *yaml.Node {
 	node := &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
 	setOrDelete(node, "type", p.Type, "!!str")
 	writePlugin(node, p)
-	if p.List == "storage" {
-		deleteKey(root, "storage")
-		root.Content = append(root.Content, &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "storage"}, node)
+	return node
+}
+
+// setPluginList writes a list as it is now, less the removed entries, plus
+// the new ones at the end. Entries of the types other sections own stay.
+func setPluginList(root *yaml.Node, key string, gone map[*yaml.Node]bool, added []*yaml.Node) {
+	seq, ok := sequenceChild(root, key)
+	if !ok {
+		if len(added) > 0 {
+			ensureSequence(root, key).Content = added
+		}
 		return
 	}
-	seq := ensureSequence(root, p.List)
-	seq.Content = append(seq.Content, node)
+	content := slices.DeleteFunc(slices.Clone(seq.Content), func(n *yaml.Node) bool { return gone[n] })
+	if len(content) == len(seq.Content) && len(added) == 0 {
+		return
+	}
+	if content = append(content, added...); len(content) == 0 {
+		deleteKey(root, key)
+		return
+	}
+	seq.Content = content
+}
+
+// setStorage writes the storage key once. A new entry takes the key in
+// place: validatePlugins leaves at most one storage entry on, so the file's
+// entry is then removed or has no type.
+func setStorage(root *yaml.Node, gone map[*yaml.Node]bool, added []*yaml.Node) {
+	old, i := child(root, "storage")
+	switch {
+	case len(added) > 0 && old != nil:
+		root.Content[i+1] = added[0]
+	case len(added) > 0:
+		root.Content = append(root.Content, &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "storage"}, added[0])
+	case gone[old]:
+		deleteKey(root, "storage")
+	}
 }
 
 // writePlugin sets the name and the scalar settings of an entry. A scalar key
@@ -441,19 +479,4 @@ func writePlugin(node *yaml.Node, p FormPlugin) {
 		setOrDelete(ensureMapping(node, "config"), s.Key, s.Value, settingTag(settingKind(s)))
 	}
 	trimConfig(node)
-}
-
-func removePlugin(root *yaml.Node, ref pluginRef) {
-	if ref.list == "storage" {
-		deleteKey(root, "storage")
-		return
-	}
-	seq, ok := sequenceChild(root, ref.list)
-	if !ok {
-		return
-	}
-	seq.Content = slices.DeleteFunc(seq.Content, func(n *yaml.Node) bool { return n == ref.node })
-	if len(seq.Content) == 0 {
-		deleteKey(root, ref.list)
-	}
 }

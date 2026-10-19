@@ -881,7 +881,11 @@ func setOrDelete(m *yaml.Node, key, value, tag string) {
 	tag = plainTag(value, tag)
 	if n, _ := child(m, key); n != nil && n.Kind == yaml.ScalarNode {
 		if n.Value == value {
-			// Same text: keep the quotes and comments the operator wrote.
+			// Same text: keep the quotes and comments the operator wrote,
+			// unless the quotes made a number or a bool a string.
+			if n.Tag == "!!str" && tag != "!!str" {
+				n.Tag, n.Style = tag, 0
+			}
 			return
 		}
 		n.Value = value

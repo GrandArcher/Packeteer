@@ -626,6 +626,118 @@ func TestBlocksPluginsToggleAddAndRefuse(t *testing.T) {
 	}
 }
 
+// Turning the storage plugin off and adding another in one Apply leaves
+// only the new one. Removing the old entry used to delete the storage key
+// the new entry had just been written to.
+func TestBlocksPluginsReplaceStorage(t *testing.T) {
+	out, cfg := editBlocks(t, func(f *Form) {
+		for i := range f.Plugins {
+			if f.Plugins[i].List == "storage" {
+				f.Plugins[i].Enabled = false
+			}
+		}
+		f.Plugins = append(f.Plugins, FormPlugin{List: "storage", Type: "sqlite", Enabled: true, Settings: []FormSetting{{Key: "path", Value: "/data/new.db"}}})
+	})
+	if strings.Count(out, "storage:") != 1 || strings.Contains(out, "history.db") || !strings.Contains(out, "path: /data/new.db") ||
+		cfg.Storage == nil || cfg.Storage.Type != "sqlite" {
+		t.Fatalf("storage = %+v\n%s", cfg.Storage, out)
+	}
+	back := mustParse(t, out)
+	var storage []FormPlugin
+	for _, p := range back.Plugins {
+		if p.List == "storage" {
+			storage = append(storage, p)
+		}
+	}
+	if len(storage) != 1 || len(storage[0].Settings) != 1 || storage[0].Settings[0] != (FormSetting{Key: "path", Value: "/data/new.db", Kind: settingString}) {
+		t.Fatalf("storage rows = %+v", storage)
+	}
+}
+
+// One Apply that removes entries from a list and adds others, or turns on
+// two parts of the file that share a key, keeps what it adds.
+func TestFormRemoveAndAddInOneApply(t *testing.T) {
+	const telemetryYAML = observeYAML + `telemetry:
+  - type: snmp
+    config:
+      hosts:
+        - name: edge
+          address: 192.0.2.254
+          community_env: PACKETEER_SNMP_COMMUNITY
+  - type: fixed
+    name: one
+`
+	const sourcesYAML = observeYAML + `sources:
+  - type: flow
+    config:
+      listen: 192.0.2.10:2055
+  - type: traceroute
+`
+	off := func(f *Form, typ string) {
+		for i := range f.Plugins {
+			if f.Plugins[i].Type == typ {
+				f.Plugins[i].Enabled = false
+			}
+		}
+	}
+	cases := []struct {
+		name  string
+		in    string
+		edit  func(f *Form)
+		check func(cfg *config.Config) bool
+	}{
+		{"probers and notifiers", blocksYAML, func(f *Form) {
+			off(f, "tcp")
+			off(f, "webhook")
+			f.Plugins = append(f.Plugins,
+				FormPlugin{List: "probers", Type: "udp", Enabled: true},
+				FormPlugin{List: "notifiers", Type: "webhook", Name: "new", Enabled: true, Settings: []FormSetting{{Key: "url_env", Value: "PACKETEER_HOOK"}}})
+		}, func(cfg *config.Config) bool {
+			return len(cfg.Probers) == 1 && cfg.Probers[0].Type == "udp" && len(cfg.Notifiers) == 1 && cfg.Notifiers[0].Name == "new"
+		}},
+		{"sources from two sections", sourcesYAML, func(f *Form) {
+			f.Flows = []FormFlow{}
+			f.VIPs = append(f.VIPs, FormVIP{Interval: "30s", Prefixes: []FormTarget{{Prefix: "203.0.113.0/24"}}})
+			off(f, "traceroute")
+			f.Plugins = append(f.Plugins, FormPlugin{List: "sources", Type: "span", Enabled: true})
+		}, func(cfg *config.Config) bool { return slices.Equal(sourceTypes(cfg), []string{"vip", "span"}) }},
+		{"telemetry with the last snmp host gone", telemetryYAML, func(f *Form) {
+			f.Commit.Hosts = []FormCommitHost{}
+			off(f, "fixed")
+			f.Plugins = append(f.Plugins, FormPlugin{List: "telemetry", Type: "fixed", Name: "two", Enabled: true})
+		}, func(cfg *config.Config) bool {
+			return len(cfg.Telemetry) == 1 && cfg.Telemetry[0].Type == "fixed" && cfg.Telemetry[0].Name == "two"
+		}},
+		{"maintenance off and the rules policy replaced", maintenanceFirstYAML, func(f *Form) {
+			f.Blocks["maintenance"] = nil
+			f.Policies = []FormPolicy{{Rules: []FormRule{{Name: "new", Action: "ignore", Prefixes: []string{"192.0.2.0/24"}}}}}
+		}, func(cfg *config.Config) bool {
+			return len(cfg.Policies) == 1 && cfg.Policies[0].Type == "rules"
+		}},
+		{"inbound and its announcer on together", observeYAML, func(f *Form) {
+			f.Inbound = &FormInbound{Enabled: true, Mode: "observe", Prefixes: []string{"198.51.100.0/24"}, Performance: FormInboundPerformance{Enabled: true}}
+			f.Blocks["inbound_announcer"] = Values{"type": "gobgp", "config.marker": "64512:667"}
+		}, func(cfg *config.Config) bool {
+			return cfg.Inbound != nil && cfg.Inbound.Announcer != nil && cfg.Inbound.Announcer.Type == "gobgp"
+		}},
+		{"anomaly detector and rules on together", observeYAML, func(f *Form) {
+			f.Blocks["mitigation"] = Values{"mode": "observe", "allowlist": []string{"198.51.100.0/24"}}
+			f.Blocks["anomaly"] = Values{"detector.type": "baseline"}
+			f.Anomaly.Rules = []FormAnomalyRule{{Name: "flood", Prefixes: []string{"198.51.100.0/24"}, Action: "blackhole"}}
+		}, func(cfg *config.Config) bool {
+			return cfg.Anomaly != nil && len(cfg.Anomaly.Rules) == 1 && cfg.Anomaly.Rules[0].Name == "flood"
+		}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			out, cfg := applyAndLoad(t, c.in, c.edit)
+			if !c.check(cfg) {
+				t.Fatalf("merged:\n%s", out)
+			}
+		})
+	}
+}
+
 // An exec plugin in the file is shown and can be left alone, but the form
 // does not rewrite it: its command runs a program.
 func TestBlocksPluginsExecIsReadOnly(t *testing.T) {
@@ -694,6 +806,10 @@ func TestBlocksRefusals(t *testing.T) {
 		{"window both kinds", func(f *Form) {
 			f.Blocks["maintenance"]["windows"].([]Values)[0]["start"] = "2026-11-01T01:00:00Z"
 		}, "not both"},
+		{"window start, end, and duration", func(f *Form) {
+			w := f.Blocks["maintenance"]["windows"].([]Values)[0]
+			w["schedule"], w["start"], w["end"] = "", "2026-11-01T01:00:00Z", "2026-11-01T03:00:00Z"
+		}, "only for a schedule"},
 		{"window end before start", func(f *Form) {
 			w := f.Blocks["maintenance"]["windows"].([]Values)[0]
 			w["schedule"], w["duration"], w["start"], w["end"] = "", "", "2026-11-01T03:00:00Z", "2026-11-01T01:00:00Z"

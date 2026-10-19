@@ -108,6 +108,16 @@ func TestApplyUnchangedKeepsBytes(t *testing.T) {
 	}
 }
 
+// A number the file quoted is written as a number when the form writes
+// the same text, so the loader reads it; its comment stays.
+func TestApplyUnquotesANumberOfTheSameText(t *testing.T) {
+	in := observeYAML + "max_improvements: \"50\" # cap\n"
+	out, cfg := applyAndLoad(t, in, func(f *Form) { f.HoldTime = "10m" })
+	if !strings.Contains(out, "max_improvements: 50 # cap") || cfg.MaxImprovements == nil || *cfg.MaxImprovements != 50 {
+		t.Fatalf("max_improvements:\n%s", out)
+	}
+}
+
 func TestApplyEditsRowsAndKeepsTheRest(t *testing.T) {
 	f, err := ParseForm([]byte(formYAML))
 	if err != nil {

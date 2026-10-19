@@ -268,6 +268,8 @@ func checkMaintenance(v Values) error {
 			}
 		case start == "" || end == "":
 			return fieldErr(at+".start", "give a schedule with a duration, or both a start and an end")
+		case dur != "":
+			return fieldErr(at+".duration", "a duration is only for a schedule; a start and an end set the window")
 		default:
 			s, _ := time.Parse(time.RFC3339, start)
 			e, _ := time.Parse(time.RFC3339, end)
