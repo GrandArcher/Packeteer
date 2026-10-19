@@ -6,6 +6,7 @@ import (
 	"math"
 	"net/netip"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -70,7 +71,7 @@ type Field struct {
 	Max      *float64 `json:"max,omitempty"`
 	Default  string   `json:"default,omitempty"`
 	Check    string   `json:"check,omitempty"`
-	Required bool     `json:"required,omitempty"`
+	Required bool     `json:"-"`
 	Advanced bool     `json:"advanced,omitempty"`
 	// DefaultTrue is a bool the loader reads as true when the key is
 	// absent. Writing true then deletes the key.
@@ -399,7 +400,7 @@ func validateField(path string, f Field, val any) error {
 			return fieldErr(path, "%q must be a duration such as 5m%s", s, bounds(f, "s"))
 		}
 	case KindEnum:
-		if !containsStr(f.Options, s) {
+		if !slices.Contains(f.Options, s) {
 			return fieldErr(path, "%q is invalid (want %s)", s, strings.Join(f.Options, ", "))
 		}
 	case KindEnv:
@@ -433,15 +434,6 @@ func bounds(f Field, unit string) string {
 		return fmt.Sprintf(" of at most %v%s", *f.Max, unit)
 	}
 	return ""
-}
-
-func containsStr(list []string, s string) bool {
-	for _, o := range list {
-		if o == s {
-			return true
-		}
-	}
-	return false
 }
 
 func validateList(path string, f Field, list []string) error {

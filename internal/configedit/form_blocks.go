@@ -3,6 +3,7 @@ package configedit
 import (
 	"fmt"
 	"reflect"
+	"slices"
 
 	"gopkg.in/yaml.v3"
 )
@@ -109,7 +110,7 @@ func (f *Form) dropInapplicable() {
 	}
 	eff := f.effectiveScorer()
 	for _, fl := range b.Fields {
-		if len(fl.For) == 0 || containsStr(fl.For, eff) {
+		if len(fl.For) == 0 || slices.Contains(fl.For, eff) {
 			continue
 		}
 		if fl.Kind == KindBool {
@@ -123,7 +124,10 @@ func (f *Form) dropInapplicable() {
 func (f Form) validateBlocks(cur Form) error {
 	for _, b := range f.changedBlocks(cur) {
 		v := f.Blocks[b.ID]
-		if b.ID == "scorer" && !containsStr(scorerTypes, f.ScorerType) {
+		if b.ID == "inbound_announcer" && v != nil && (f.Inbound == nil || !f.Inbound.Enabled) {
+			return fieldErr("inbound.announcer", "needs the inbound block on: turn it on above, or the announcer would be the only key under inbound")
+		}
+		if b.ID == "scorer" && !slices.Contains(scorerTypes, f.ScorerType) {
 			return fmt.Errorf("%w: scorer.config: this file uses scorer type %s, which the form does not edit. Change it in the raw YAML", ErrForm, f.ScorerType)
 		}
 		if v == nil {

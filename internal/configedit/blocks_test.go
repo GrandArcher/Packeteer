@@ -477,9 +477,8 @@ func TestModeInjectIsAFormChoice(t *testing.T) {
 	if err != nil || !strings.Contains(string(out), "mode: inject") {
 		t.Fatalf("mode inject: %v\n%s", err, out)
 	}
-	cfg, err := config.Parse(out)
-	if err == nil {
-		t.Logf("loads as %s", cfg.Mode)
+	if _, err := config.Parse(out); err == nil || !strings.Contains(err.Error(), "inject") {
+		t.Fatalf("the loader accepted inject without the checklist: %v", err)
 	}
 	bare, _ := ParseForm([]byte(observeYAML))
 	bare.Mode = "inject"
@@ -601,6 +600,9 @@ func TestBlocksPluginsToggleAddAndRefuse(t *testing.T) {
 		}, "may hold a secret"},
 		{"an exec plugin", func(f *Form) { f.Plugins = append(f.Plugins, FormPlugin{List: "probers", Type: "exec", Enabled: true}) }, "raw YAML"},
 		{"a type change", func(f *Form) { f.Plugins[0].Type = "udp" }, "cannot change"},
+		{"a policy another card owns", func(f *Form) {
+			f.Plugins = append(f.Plugins, FormPlugin{List: "policies", Type: "maintenance", Enabled: true})
+		}, "edited in its own section"},
 		{"a bad key", func(f *Form) {
 			f.Plugins = append(f.Plugins, FormPlugin{List: "probers", Type: "udp", Enabled: true, Settings: []FormSetting{{Key: "Bad Key", Value: "1"}}})
 		}, "lowercase"},
@@ -620,6 +622,46 @@ func TestBlocksPluginsToggleAddAndRefuse(t *testing.T) {
 				t.Fatalf("err = %v, want %q", err, c.want)
 			}
 		})
+	}
+}
+
+// An exec plugin in the file is shown and can be left alone, but the form
+// does not rewrite it: its command runs a program.
+func TestBlocksPluginsExecIsReadOnly(t *testing.T) {
+	const withExec = `probers:
+  - type: exec
+    config:
+      command: /usr/local/bin/probe
+  - type: tcp
+    config:
+      port: 443
+`
+	text := strings.Replace(blocksYAML, "probers:\n  - type: tcp\n    config:\n      port: 443\n", withExec, 1)
+	f, err := ParseForm([]byte(text))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ApplyForm([]byte(text), f); err != nil {
+		t.Fatalf("unchanged exec: %v", err)
+	}
+	for i := range f.Plugins {
+		if f.Plugins[i].Type == "exec" {
+			f.Plugins[i].Name = "renamed"
+		}
+	}
+	if _, err := ApplyForm([]byte(text), f); err == nil || !strings.Contains(err.Error(), "raw YAML") {
+		t.Fatalf("exec edit: %v", err)
+	}
+}
+
+// The announcer publishes under inbound. Turning it on without the inbound
+// block would leave inbound holding only the announcer.
+func TestBlocksAnnouncerNeedsInbound(t *testing.T) {
+	f, _ := ParseForm([]byte(observeYAML))
+	f.Inbound = nil
+	f.Blocks["inbound_announcer"] = Values{"type": "gobgp", "config.marker": "64512:667"}
+	if _, err := ApplyForm([]byte(observeYAML), f); err == nil || !strings.Contains(err.Error(), "needs the inbound block on") {
+		t.Fatalf("announcer without inbound: %v", err)
 	}
 }
 
@@ -725,14 +767,11 @@ func checkFields(t *testing.T, where string, fields []Field) {
 			t.Errorf("%s: rows and groups carry fields, other kinds do not", at)
 		}
 		checkFields(t, at, f.Fields)
-		for _, id := range []string{"scorer"} {
-			_ = id
-		}
 	}
 }
 
-// TestBlocksEveryFieldRoundTrips writes a value into each block field in
-// turn, on a file that has the block, and reads it back unchanged.
+// TestBlocksReadWriteAgree writes a value into each block field in turn, on
+// a file that has the block, and reads it back unchanged.
 func TestBlocksReadWriteAgree(t *testing.T) {
 	for _, b := range Blocks() {
 		var doc yaml.Node

@@ -208,7 +208,11 @@ function renderBool(box, f, obj, help) {
 }
 
 function renderEnum(box, f, obj, help) {
-  var options = (f.options || []).map(function (o) {
+  // A no_inject field offers inject only when the file already has it.
+  var choices = (f.options || []).filter(function (o) {
+    return o !== "inject" || !f.no_inject || obj[f.key] === "inject";
+  });
+  var options = choices.map(function (o) {
     return [o, o === "" ? (f.default ? "(default " + f.default + ")" : "(not set)") : o];
   });
   var sel = selectInput(options, obj[f.key]);

@@ -394,7 +394,7 @@ func TestConfigPreviewAndSchema(t *testing.T) {
 		}
 	}
 	types, _ := got["plugin_types"].(map[string]any)
-	if policies, _ := types["policies"].([]any); !slices.Contains(policies, any("maintenance")) {
-		t.Fatalf("policies offer %v, want maintenance", policies)
+	if policies, _ := types["policies"].([]any); slices.Contains(policies, any("maintenance")) {
+		t.Fatalf("policies offer %v; the maintenance card owns that type", policies)
 	}
 }

@@ -9,6 +9,8 @@ import (
 	"strings"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/GrandArcher/Packeteer/pkg/plugin"
 )
 
 // The plugins section (#330) lists the plugin entries that have no card of
@@ -78,6 +80,41 @@ func PluginLists() []string {
 		out = append(out, l.key)
 	}
 	return append(out, "storage")
+}
+
+// PluginTypes is what the add-a-plugin picker offers per list: the registered
+// types, less the ones another card owns and exec, which is added in the raw
+// YAML.
+func PluginTypes() map[string][]string {
+	registered := map[string][]string{
+		"probers":   plugin.Probers.Types(),
+		"sources":   plugin.Sources.Types(),
+		"notifiers": plugin.Notifiers.Types(),
+		"telemetry": plugin.Telemetries.Types(),
+		"policies":  plugin.Policies.Types(),
+		"storage":   plugin.Storages.Types(),
+	}
+	out := map[string][]string{}
+	for list, types := range registered {
+		out[list] = []string{}
+		for _, t := range types {
+			if t != "exec" && !ownedElsewhere(list, t) {
+				out[list] = append(out[list], t)
+			}
+		}
+	}
+	return out
+}
+
+// ownedElsewhere is true for a type that another card of the settings page
+// edits, so a plugin entry of that type would be invisible to the card.
+func ownedElsewhere(list, typ string) bool {
+	for _, l := range pluginLists {
+		if l.key == list {
+			return slices.Contains(l.skip, typ)
+		}
+	}
+	return false
 }
 
 var (
@@ -232,12 +269,17 @@ func (f Form) validatePlugins(cur Form) error {
 			if o.Type != p.Type {
 				return fmt.Errorf("%w: %s.type: the type of %s cannot change; remove it and add another", ErrForm, at, o.Type)
 			}
+			if o.Type == "exec" && !reflect.DeepEqual(o, p) {
+				return fmt.Errorf("%w: %s: an exec plugin runs a program; edit it in the raw YAML", ErrForm, at)
+			}
 			if seen[p.List+"/"+p.Key] {
 				return fmt.Errorf("%w: %s: listed twice", ErrForm, at)
 			}
 			seen[p.List+"/"+p.Key] = true
 		} else if p.Type == "exec" && p.Enabled {
 			return fmt.Errorf("%w: %s.type: an exec plugin runs a program; add it in the raw YAML", ErrForm, at)
+		} else if ownedElsewhere(p.List, p.Type) {
+			return fmt.Errorf("%w: %s.type: %s is edited in its own section; add it there", ErrForm, at, p.Type)
 		}
 		if err := validateSettings(at, p); err != nil {
 			return err

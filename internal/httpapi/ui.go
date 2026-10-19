@@ -156,35 +156,13 @@ func (s *Server) handleConfigSchema(w http.ResponseWriter, _ *http.Request) {
 		Blocks:      configedit.Blocks(),
 		FlowExtras:  configedit.FlowExtras(),
 		PluginLists: configedit.PluginLists(),
-		PluginTypes: pluginTypes(),
+		PluginTypes: configedit.PluginTypes(),
 		SNMP: map[string][]string{
 			"security_levels": configedit.SNMPSecurityLevels(),
 			"auth_protocols":  configedit.SNMPAuthProtocols(),
 			"priv_protocols":  configedit.SNMPPrivProtocols(),
 		},
 	})
-}
-
-// pluginTypes lists the registered types of each list the plugins section
-// edits. An exec plugin runs a program and is added in the raw YAML.
-func pluginTypes() map[string][]string {
-	drop := func(in []string) []string {
-		out := []string{}
-		for _, t := range in {
-			if t != "exec" {
-				out = append(out, t)
-			}
-		}
-		return out
-	}
-	return map[string][]string{
-		"probers":   drop(plugin.Probers.Types()),
-		"sources":   drop(plugin.Sources.Types()),
-		"notifiers": drop(plugin.Notifiers.Types()),
-		"telemetry": drop(plugin.Telemetries.Types()),
-		"policies":  drop(plugin.Policies.Types()),
-		"storage":   drop(plugin.Storages.Types()),
-	}
 }
 
 func (s *Server) handleConfigSave(w http.ResponseWriter, r *http.Request) {

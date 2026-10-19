@@ -12,10 +12,10 @@ import (
 // loader's; the page shows them greyed and an empty field writes nothing.
 
 var (
-	mbpsMax  = 100000000.0
-	week     = (7 * 24 * time.Hour).Seconds()
-	dayHours = (24 * time.Hour).Seconds()
-	u32Max   = 4294967295.0
+	mbpsMax = 100000000.0
+	week    = (7 * 24 * time.Hour).Seconds()
+	day     = (24 * time.Hour).Seconds()
+	u32Max  = 4294967295.0
 )
 
 func field(key, label, help string, kind Kind) Field {
@@ -158,7 +158,7 @@ var blockDefs = []Block{
 			field("listen", "Listen", "host:port the routers connect to. With --network host this is a host port: allow it only from the routers.", KindString).check("ipport").dflt(":11019"),
 			field("routers", "Routers", "Router addresses allowed to connect, one per row.", KindList).check("ip").req(),
 			field("loc_rib", "Read Loc-RIB", "Read the router's selected routes when it sends them.", KindBool).dtrue().adv(),
-			field("idle_timeout", "Idle timeout", "Drop a router that sends nothing for this long. 0 is off, otherwise at least 10s.", KindDuration).rng(0, dayHours).dflt("0s").adv(),
+			field("idle_timeout", "Idle timeout", "Drop a router that sends nothing for this long. 0 is off, otherwise at least 10s.", KindDuration).rng(0, day).dflt("0s").adv(),
 		},
 	},
 	{

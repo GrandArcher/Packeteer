@@ -187,13 +187,13 @@ type Preview struct {
 // Preview checks data and diffs it against the file on disk. It writes
 // nothing and does not need the base hash: Save still does.
 func (e *Editor) Preview(data []byte) (Preview, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
 	cur, err := os.ReadFile(e.path)
 	if err != nil {
 		return Preview{}, err
 	}
-	e.mu.Lock()
 	res := e.checkLocked(data)
-	e.mu.Unlock()
 	changes := Diff(cur, data)
 	if changes == nil {
 		changes = []Change{}

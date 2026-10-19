@@ -298,17 +298,17 @@ func (h FormCommitHost) validateFields(at string) error {
 		if err := env("username_env", h.UsernameEnv, true); err != nil {
 			return err
 		}
-		if !containsStr(snmpSecurityLevels, h.SecurityLevel) {
+		if !slices.Contains(snmpSecurityLevels, h.SecurityLevel) {
 			return fmt.Errorf("%w: %s.security_level %q is invalid (want %s)", ErrForm, at, h.SecurityLevel, strings.Join(snmpSecurityLevels, ", "))
 		}
 		auth, priv := h.SecurityLevel != "noAuthNoPriv", h.SecurityLevel == "authPriv"
-		if auth && !containsStr(snmpAuthProtocols, h.AuthProtocol) {
+		if auth && !slices.Contains(snmpAuthProtocols, h.AuthProtocol) {
 			return fmt.Errorf("%w: %s.auth_protocol %q is invalid (want %s)", ErrForm, at, h.AuthProtocol, strings.Join(snmpAuthProtocols, ", "))
 		}
 		if !auth && h.AuthProtocol != "" {
 			return fmt.Errorf("%w: %s.auth_protocol does not apply to %s", ErrForm, at, h.SecurityLevel)
 		}
-		if priv && !containsStr(snmpPrivProtocols, h.PrivProtocol) {
+		if priv && !slices.Contains(snmpPrivProtocols, h.PrivProtocol) {
 			return fmt.Errorf("%w: %s.priv_protocol %q is invalid (want %s)", ErrForm, at, h.PrivProtocol, strings.Join(snmpPrivProtocols, ", "))
 		}
 		if !priv && h.PrivProtocol != "" {
