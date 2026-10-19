@@ -232,6 +232,12 @@ func (c *Config) validateHerd(add func(string, ...any)) {
 	if c.IXP != nil {
 		add("herd cannot be used with ixp: IXP mode shares nothing and sends nothing off the box")
 	}
+	if c.Storage == nil || c.Storage.Type != "sqlite" {
+		add("herd needs storage type sqlite: herd records live in its tables")
+	}
+	if len(c.BGP.Neighbors) == 0 {
+		add("herd needs bgp.neighbors: records are built from learned routes")
+	}
 	for _, p := range c.Probers {
 		if p.Type == "fixed" {
 			add("herd: the fixed prober (labs) produces nothing that may be shared; remove it or turn herd off")

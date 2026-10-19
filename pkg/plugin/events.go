@@ -97,8 +97,11 @@ const (
 	EventFabricRecovered = "ixp.fabric_recovered"
 	EventMemberDegraded  = "ixp.member_degraded"
 	EventMemberRecovered = "ixp.member_recovered"
-	EventHAStandby       = "ha.standby"
-	EventHAActive        = "ha.active"
+	// EventHerdFailed fires when a herd goroutine panics and is restarted
+	// (#260). Probing and BGP are not affected.
+	EventHerdFailed = "herd.failed"
+	EventHAStandby  = "ha.standby"
+	EventHAActive   = "ha.active"
 	// EventAudit is one audit log record (#32): a change or sign-in on
 	// the ops API, or a config reload.
 	EventAudit = "audit.recorded"
@@ -227,6 +230,8 @@ var eventCatalog = []EventSpec{
 		Summary: "The routes a route server filtered from a member for one reason (RPKI invalid, IRR prefix or origin, transit-free ASN) jumped above the recent level."},
 	{Kind: EventRSFilterSpikeCleared, Severity: SeverityInfo, Group: "ixp_rs_spike", Keys: []string{"server", "session", "reason"}, TrapID: 60, Resolves: true,
 		Summary: "The filtered count fell back below the spike threshold, or the session is gone. Resolves ixp.rs_filter_spike."},
+	{Kind: EventHerdFailed, Severity: SeverityWarning, Group: "herd", TrapID: 61,
+		Summary: "A herd goroutine (recorder or puller) panicked and was restarted with backoff. Probing, decisions, and the announcer are not affected."},
 }
 
 // EventCatalog returns a copy of every event kind the controller emits.

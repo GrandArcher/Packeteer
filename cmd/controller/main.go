@@ -25,6 +25,7 @@ import (
 	"github.com/GrandArcher/Packeteer/internal/anomaly"
 	"github.com/GrandArcher/Packeteer/internal/config"
 	"github.com/GrandArcher/Packeteer/internal/exchange"
+	"github.com/GrandArcher/Packeteer/internal/herd"
 	"github.com/GrandArcher/Packeteer/internal/httpapi"
 	"github.com/GrandArcher/Packeteer/internal/inbound"
 	"github.com/GrandArcher/Packeteer/internal/linkout"
@@ -439,6 +440,9 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 		return 1
 	}
 	fed := newFedState(cfg, plugins)
+	// Herd (#260) is built once storage is open. The probe loop hands rounds
+	// to it without waiting.
+	var herdRef atomic.Pointer[herd.Herd]
 	var haStatus func() plugin.ElectorStatus
 	if el := plugins.Elector; el != nil {
 		haStatus = func() plugin.ElectorStatus {
@@ -634,7 +638,7 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 			rec.Probe(r)
 		}
 	}
-	engine, err = newEngine(cfg, plugins, log, onRound, onProbe, pktLimiter)
+	engine, err = newEngine(cfg, plugins, log, onRound, onProbe, herdBatch(cfg, &herdRef), pktLimiter)
 	if err != nil {
 		log.Error("refusing to start", "err", err)
 		return 1
@@ -687,6 +691,15 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 		return 1
 	}
 	bootstrapAdmin(ctx, authSvc, audit, getenv, log)
+	hd, herr := startHerd(ctx, cfg, plugins, view, audit, dispatch.Emit, ha.active, log)
+	if herr != nil {
+		log.Error("refusing to start", "err", herr)
+		return 1
+	}
+	if hd != nil {
+		herdRef.Store(hd)
+		httpSrv.SetHerd(hd)
+	}
 	if rec != nil {
 		// History is optional: a store that cannot be read leaves the core
 		// loop running without reports.
@@ -881,6 +894,9 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 	// Only after the withdraw: the standby may announce once this lease
 	// is released (#31).
 	ha.shutdown(stopCtx, withdrawErr)
+	if hd != nil {
+		hd.Stop(stopCtx)
+	}
 	// Mitigation routes withdrawn above are in the feed as withdrawn;
 	// the recorder ends their rules as stopped on Close.
 	if mitChanges := mit.Changes(); len(mitChanges) > 0 {

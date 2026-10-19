@@ -8,6 +8,13 @@ import (
 
 const herdKey = "ed25519:AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8="
 
+const herdBase = minimalYAML + `
+storage: {type: sqlite}
+bgp:
+  neighbors:
+    - address: 192.0.2.254
+`
+
 const herdOn = `
 herd:
   enabled: true
@@ -33,7 +40,7 @@ func TestHerdOffByDefault(t *testing.T) {
 }
 
 func TestHerdDefaults(t *testing.T) {
-	cfg, err := Parse([]byte(minimalYAML + herdOn))
+	cfg, err := Parse([]byte(herdBase + herdOn))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -95,7 +102,7 @@ func TestHerdValidation(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := Parse([]byte(minimalYAML + tt.edit(herdOn)))
+			_, err := Parse([]byte(herdBase + tt.edit(herdOn)))
 			if err == nil || !strings.Contains(err.Error(), tt.want) {
 				t.Fatalf("err = %v, want it to contain %q", err, tt.want)
 			}
@@ -104,7 +111,7 @@ func TestHerdValidation(t *testing.T) {
 }
 
 func TestHerdPreviewOnlyNeedsNoListener(t *testing.T) {
-	y := minimalYAML + "herd:\n  enabled: true\n  preview_only: true\n  share: {classes: [measurements, paths], granularity: route, sources: [static]}\n  vantage: {country: DE}\n"
+	y := herdBase + "herd:\n  enabled: true\n  preview_only: true\n  share: {classes: [measurements, paths], granularity: route, sources: [static]}\n  vantage: {country: DE}\n"
 	cfg, err := Parse([]byte(y))
 	if err != nil {
 		t.Fatal(err)
@@ -115,12 +122,23 @@ func TestHerdPreviewOnlyNeedsNoListener(t *testing.T) {
 }
 
 func TestHerdRefusedWithIXPAndFixedProber(t *testing.T) {
-	if _, err := Parse([]byte(minimalYAML + herdOn + "ixp: {}\n")); err == nil || !strings.Contains(err.Error(), "herd cannot be used with ixp") {
+	if _, err := Parse([]byte(herdBase + herdOn + "ixp: {}\n")); err == nil || !strings.Contains(err.Error(), "herd cannot be used with ixp") {
 		t.Errorf("ixp: err = %v", err)
 	}
-	fixed := minimalYAML + herdOn + "probers:\n  - type: fixed\n"
+	fixed := herdBase + herdOn + "probers:\n  - type: fixed\n"
 	if _, err := Parse([]byte(fixed)); err == nil || !strings.Contains(err.Error(), "fixed prober") {
 		t.Errorf("fixed prober: err = %v", err)
+	}
+}
+
+func TestHerdNeedsStorageAndBGP(t *testing.T) {
+	noStore := strings.Replace(herdBase, "storage: {type: sqlite}\n", "", 1) + herdOn
+	if _, err := Parse([]byte(noStore)); err == nil || !strings.Contains(err.Error(), "herd needs storage type sqlite") {
+		t.Errorf("no storage: err = %v", err)
+	}
+	noBGP := strings.Replace(herdBase, "bgp:\n  neighbors:\n    - address: 192.0.2.254\n", "", 1) + herdOn
+	if _, err := Parse([]byte(noBGP)); err == nil || !strings.Contains(err.Error(), "herd needs bgp.neighbors") {
+		t.Errorf("no bgp: err = %v", err)
 	}
 }
 
