@@ -292,6 +292,10 @@ func run(ctx context.Context, args []string, getenv func(string) string, stdout,
 	if cfg.LeakWatching() {
 		fmt.Fprintf(stdout, "leak_watch: on sources=%d (withdraws a leaked injected route and holds it out until cleared)\n", len(plugins.LeakSources))
 	}
+	if h := cfg.Herd; cfg.HerdOn() {
+		fmt.Fprintf(stdout, "herd: on granularity=%s classes=%s sources=%s peers=%d serving=%t (shares measurements only, never announces, never feeds a decision; changes need a restart)\n",
+			h.Share.Granularity, strings.Join(h.Share.Classes, ","), strings.Join(h.Share.Sources, ","), len(h.Peers), h.Serving())
+	}
 	if el := plugins.Elector; el != nil {
 		fmt.Fprintf(stdout, "ha: %s id=%s (standby until elected; only the active instance announces)\n", el.Type, el.Plugin.Status().ID)
 	}

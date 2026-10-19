@@ -426,6 +426,36 @@ Each refresh reads `ix` for the configured ids, `netixlan` for those exchanges, 
 
 Adding, changing, or removing `lookup` needs a restart. Rollback: remove `lookup` and restart. Nothing was announced.
 
+### `herd`
+
+Opt-in sharing of probe measurements with other operators' Packeteer instances (#260, [design](design/herd.md), [herd.md](herd.md)). Off by default; with `enabled: false` or no block nothing is stored, served, or pulled. Herd never announces and no herd data reaches `Decide`. It needs `storage` type `sqlite` and `bgp.neighbors` (records are built from learned routes), cannot be combined with `ixp`, and refuses the `fixed` prober. Any change needs a restart.
+
+```yaml
+herd:
+  enabled: true
+  share:
+    granularity: origin_asn         # default; "route" names exact learned prefixes
+    classes: [measurements]         # required; "paths" adds the AS path
+    sources: [static, vip, outage]  # default; flow and span need an explicit entry and cannot be shared at route level
+    discovery: query_only           # default; "listing" lets a puller page through everything
+    exclude:
+      prefixes: [203.0.113.0/24]    # equal, inside, or covering routes are never shared
+      asns: [64501]                 # as origin or anywhere in the AS path
+  retention_days: 90                # 30 to 365
+  vantage: {country: US}            # ISO 3166-1 alpha-2, declared
+  listen: 0.0.0.0:9444              # pull API, apart from http.listen
+  key_file: /var/lib/packeteer/herd/node.key   # created (0600) on first start
+  peers:
+    - url: https://192.0.2.30:9444
+      key: ed25519:<base64 of the 32-byte public key>
+```
+
+`preview_only: true` stores records and serves the preview on `GET /api/herd/preview`, but listens and pulls nothing; it takes no `listen` or `peers`. Otherwise `listen` and 1 to 16 `peers` are required. `GET /api/herd` shows this node's `public_key` to give to the peers that pin it. Private-use and reserved ASNs are removed from shared AS paths. The operator's own and customer prefixes (the `inbound` prefixes, the `flow` source's `transit.customers` and `problems.local`, and the `span` source's `local`) are never shared.
+
+`limits` holds the local resource limits; a value outside its range is an error and 0 takes the default (default, range): `rate_per_identity` (60/min, 1 to 100000), `rate_global` (600/min), `rate_per_address` (120/min), `max_conns` (64), `max_conns_per_peer` (4), `max_handshakes` (8), `max_requests_per_conn` (100), `max_request_bytes` (4096, 512 to 65536), `page_records` (200, 1 to 5000), `response_bytes` (1 MiB), `timeout` (10s), `idle_timeout` (30s), `pull_interval` (5m, 30s to 24h), `pull_timeout` (20s), `max_pulls` (2), `pull_requests` (64 per interval), `peer_requests` (16 per peer and interval), `pull_bytes` (2 MiB), `pull_records` (500), `peer_records_per_pull` (5000), `peer_records_total` (200000), `backoff_max` (1h), `queue` (256 rounds), `local_bytes` and `pulled_bytes` (512 MiB each). The defaults are starting points; the lab ([lab/README.md](../lab/README.md)) exercises them but does not tune them. Every tripped limit is counted in `GET /api/herd` and `packeteer_herd_limit_trips_total`.
+
+Rollback: set `enabled: false` (or remove the block) and restart. The listener closes and pulling stops. The `herd_records` table stays in the storage file, unread and no longer pruned; remove it with `DROP TABLE herd_records` or by deleting the file.
+
 ### `exchanges`
 
 Internet exchanges (#27, IRP 1.2.11). Each peer listed on an exchange is a provider: it is probed from its own `source_ip`, and an improvement toward it uses its own `next_hop` on the peering LAN. Everything that applies to providers applies to peers (thresholds, hold time, cap, allowlist, policies, commit and cost scorers, per-router lists). What differs:

@@ -3,8 +3,10 @@ package probe
 import (
 	"context"
 	"net/netip"
+	"reflect"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
 )
@@ -67,5 +69,41 @@ func TestNoShareWithoutOnBatch(t *testing.T) {
 	e.RunOnce(context.Background())
 	if e.keepShare() {
 		t.Fatal("engine keeps evidence with no OnBatch")
+	}
+}
+
+// Herd (#260) only observes: the results the engine stores, which are all
+// that scorers and Decide read, are the same with and without OnBatch.
+func TestStoredResultsAreTheSameWithAndWithoutOnBatch(t *testing.T) {
+	run := func(onBatch func([]Result)) map[key]Result {
+		p := &fakeProber{fn: ok(10, 12, 11)}
+		o := opts()
+		o.OnBatch = onBatch
+		srcs := []plugin.Target{{Prefix: pfx1, Host: netip.MustParseAddr("198.51.100.9")}, {Prefix: pfx2}}
+		e, err := New([]Provider{provA}, []NamedProber{{Name: "icmp", Prober: p}}, src(srcs...), o)
+		if err != nil {
+			t.Fatal(err)
+		}
+		e.RunOnce(context.Background())
+		out := map[key]Result{}
+		for _, r := range e.Results() {
+			out[key{r.Provider, r.Prefix}] = r
+		}
+		return out
+	}
+	var seen int
+	with, without := run(func(rs []Result) { seen += len(rs) }), run(nil)
+	if seen == 0 {
+		t.Fatal("OnBatch saw nothing")
+	}
+	if len(with) != 2 || len(with) != len(without) {
+		t.Fatalf("results: %d with, %d without", len(with), len(without))
+	}
+	for k, w := range with {
+		wo := without[k]
+		w.Time, wo.Time = time.Time{}, time.Time{}
+		if !reflect.DeepEqual(w, wo) {
+			t.Errorf("%v differs:\nwith    %+v\nwithout %+v", k, w, wo)
+		}
 	}
 }

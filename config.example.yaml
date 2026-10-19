@@ -733,3 +733,22 @@ plugin_dir: /etc/packeteer/plugins
 #   hide_internal: true               # no link for RFC 1918/ULA or a private-use AS
 #   custom:
 #     - {name: internal LG, url: "https://lg.example.net/route?prefix={prefix}"}
+
+# Herd (#260, docs/herd.md). Off unless enabled. Shares probe measurements
+# (never names, host addresses, or usage) with the static peers you pin by
+# key; advisory only, never read by a decision, never announces. Needs
+# storage type sqlite and bgp.neighbors. Changes need a restart.
+# herd:
+#   enabled: true
+#   share:
+#     classes: [measurements]          # "paths" adds the AS path
+#     granularity: origin_asn          # "route" names exact learned prefixes
+#     exclude:
+#       prefixes: [203.0.113.0/24]     # equal, inside, or covering: never shared
+#       asns: [64501]                  # as origin or anywhere in the path
+#   retention_days: 90
+#   vantage: {country: US}
+#   listen: 0.0.0.0:9444
+#   peers:
+#     - url: https://192.0.2.30:9444
+#       key: ed25519:<peer public key from its GET /api/herd>
