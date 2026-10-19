@@ -121,7 +121,7 @@ notifiers:
   - type: webhook
     name: chat
     config:
-      url: https://hooks.example.test/lab
+      url: http://127.0.0.1:9/lab
       timeout: 5s
 probers:
   - type: fixed

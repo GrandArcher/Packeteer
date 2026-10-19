@@ -1393,6 +1393,8 @@ function renderFlows() {
     bindNumber(b, "Aggregate IPv6", f, "aggregate_v6", "Fold IPv6 flows up to this length, from 1 to 128.", "sources.flow.aggregate_v6", {min: 1, max: 128, integer: true, def: 48, unit: "/n", cls: "g-agg"});
   });
   if (!form.flows.length) root.appendChild(el("p", "empty", "No flow sources."));
+  // blocks.js loads after this file; an add or remove here must not drop the extras.
+  if (typeof renderFlowExtras === "function") renderFlowExtras();
 }
 
 var bmpChoices = [["", "off"], ["prefer", "prefer"], ["only", "only"]];

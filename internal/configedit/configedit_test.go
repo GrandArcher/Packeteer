@@ -340,3 +340,37 @@ func TestWriteFileKeepsOldWhenRestoreFails(t *testing.T) {
 		t.Fatalf("saved copy = %q", got)
 	}
 }
+
+func TestPreviewSplitsRestartFromOnlineAndWritesNothing(t *testing.T) {
+	e, path := editor(t, observeYAML)
+
+	next := strings.Replace(observeYAML, "asn: 64512", "asn: 64513", 1) + "bgp:\n  neighbors:\n    - address: 192.0.2.254\n"
+	p, err := e.Preview([]byte(next))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !p.Result.Valid || !reflect.DeepEqual(p.Result.Restart, []string{"asn"}) || !reflect.DeepEqual(p.Result.Online, []string{"bgp.neighbors"}) {
+		t.Fatalf("result = %+v", p.Result)
+	}
+	if !p.Result.RestartRequired || p.Result.ReloadOnline {
+		t.Fatalf("a restart key makes the whole change a restart: %+v", p.Result)
+	}
+	for _, want := range []string{"- asn: 64512", "+ asn: 64513", "+   neighbors:", "+     - address: 192.0.2.254"} {
+		if !strings.Contains(p.Diff, want) {
+			t.Fatalf("diff lacks %q:\n%s", want, p.Diff)
+		}
+	}
+	if disk, _ := os.ReadFile(path); string(disk) != observeYAML {
+		t.Fatalf("preview wrote the file: %q", disk)
+	}
+
+	same, err := e.Preview([]byte(observeYAML))
+	if err != nil || same.Diff != "" || same.Changes == nil || len(same.Changes) != 0 {
+		t.Fatalf("an unchanged candidate has no diff and an empty (not null) change list: %+v %v", same, err)
+	}
+
+	bad, err := e.Preview([]byte(observeYAML + "bogus: 1\n"))
+	if err != nil || bad.Result.Valid || !strings.Contains(bad.Diff, "+ bogus: 1") {
+		t.Fatalf("an invalid candidate is reported with its diff: %+v %v", bad, err)
+	}
+}

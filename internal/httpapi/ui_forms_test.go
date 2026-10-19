@@ -3,6 +3,7 @@ package httpapi
 import (
 	"net/http"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 
@@ -347,5 +348,53 @@ func TestWizardAPIOverCurrentConfig(t *testing.T) {
 	// GET /api/config says the file is configured, so the page collapses.
 	if _, got = e.do(t, "GET", "/api/config", plugin.RoleAdmin, nil); got["configured"] != true {
 		t.Fatalf("configured = %v", got["configured"])
+	}
+}
+
+func TestConfigPreviewAndSchema(t *testing.T) {
+	e := newUI(t)
+	admin := plugin.RoleAdmin
+	next := strings.Replace(editorYAML, "router_id: 192.0.2.10", "router_id: 192.0.2.20", 1)
+
+	rec, got := e.do(t, "POST", "/api/config/preview", admin, map[string]any{"yaml": next})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("preview: %d %s", rec.Code, rec.Body)
+	}
+	diff, _ := got["diff"].(string)
+	if !strings.Contains(diff, "- router_id: 192.0.2.10") || !strings.Contains(diff, "+ router_id: 192.0.2.20") {
+		t.Fatalf("diff = %q", diff)
+	}
+	if res, _ := got["result"].(map[string]any); res["valid"] != true {
+		t.Fatalf("result = %v", got["result"])
+	}
+	if disk, _ := os.ReadFile(e.path); string(disk) != editorYAML {
+		t.Fatal("preview wrote the file")
+	}
+
+	rec, _ = e.do(t, "POST", "/api/config/preview", plugin.RoleOperator, map[string]any{"yaml": next})
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("operator preview: %d", rec.Code)
+	}
+	rec, _ = e.do(t, "GET", "/api/config/schema", plugin.RoleOperator, nil)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("operator schema: %d", rec.Code)
+	}
+
+	rec, got = e.do(t, "GET", "/api/config/schema", admin, nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("schema: %d %s", rec.Code, rec.Body)
+	}
+	ids := map[string]bool{}
+	for _, b := range got["blocks"].([]any) {
+		ids[b.(map[string]any)["id"].(string)] = true
+	}
+	for _, id := range []string{"scorer", "bgp", "bmp", "maintenance", "inbound_announcer", "anomaly", "mitigation", "http", "inject"} {
+		if !ids[id] {
+			t.Fatalf("schema lacks block %s: %s", id, rec.Body)
+		}
+	}
+	types, _ := got["plugin_types"].(map[string]any)
+	if policies, _ := types["policies"].([]any); !slices.Contains(policies, any("maintenance")) {
+		t.Fatalf("policies offer %v, want maintenance", policies)
 	}
 }

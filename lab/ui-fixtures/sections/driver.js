@@ -93,7 +93,7 @@ var steps = [
       " | raw-yaml " + yes(!byId("raw-yaml").open && byId("raw-yaml").querySelector("summary").textContent === "Advanced: raw YAML"));
     // The URL of the webhook may hold a secret: it is named and never shown.
     note("sec-hidden", "hidden: " + yes(plugin("Notifier webhook").textContent.indexOf("Hidden: it may hold a secret") >= 0) +
-      " | url shown " + yes(document.body.textContent.indexOf("hooks.example.test") >= 0) +
+      " | url shown " + yes(document.body.textContent.indexOf("127.0.0.1:9/lab") >= 0) +
       " | community shown " + yes(document.body.textContent.indexOf("lab-only-community") >= 0));
   },
   // Apply with nothing edited changes nothing, and nothing is written.
@@ -208,7 +208,7 @@ var steps = [
       " | loss_weight " + yes(/loss_weight: 200/.test(y)) +
       " | bmp only " + yes(/bmp: only/.test(y)) +
       " | prober " + yes(/type: tcp/.test(y)) +
-      " | webhook url kept " + yes(y.indexOf("url: https://hooks.example.test/lab") >= 0) +
+      " | webhook url kept " + yes(y.indexOf("url: http://127.0.0.1:9/lab") >= 0) +
       " | mode observe " + yes(/^mode: observe$/m.test(y)));
   },
   function () { return text("pv-state").indexOf("Nothing differs from the file") >= 0; },
