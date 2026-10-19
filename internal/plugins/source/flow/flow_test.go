@@ -1081,7 +1081,13 @@ func TestPrefixCapBatchEviction(t *testing.T) {
 		a := netip.AddrFrom16([16]byte{0x20, 0x01, 0x0d, 0xb8, byte(i >> 16), byte(i >> 8), byte(i)})
 		big.add(now, netip.PrefixFrom(a, 64), netip.Addr{}, uint64(1000+i%5000), trafficUnknown)
 	}
-	if d := time.Since(start); d > 10*time.Second {
+	// The budget catches a per-prefix rescan (minutes), not CI jitter;
+	// -race runs these loops several times slower.
+	budget := 10 * time.Second
+	if raceEnabled {
+		budget = 60 * time.Second
+	}
+	if d := time.Since(start); d > budget {
 		t.Fatalf("200000 new prefixes into a full bucket took %s", d)
 	}
 	if n := big.tracked(now); n < 20000 {
