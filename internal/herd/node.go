@@ -38,10 +38,17 @@ func KeyID(pub ed25519.PublicKey) string {
 // LoadNode reads the key at path, or creates it (mode 0600, directory
 // 0700) when the file is absent. The key never leaves the node.
 func LoadNode(path string) (*Node, error) {
-	data, err := os.ReadFile(path)
+	n, err := OpenNode(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return createNode(path)
 	}
+	return n, err
+}
+
+// OpenNode reads the key at path and never creates one: the error wraps
+// os.ErrNotExist when the file is absent.
+func OpenNode(path string) (*Node, error) {
+	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("herd key_file: %w", err)
 	}
@@ -148,6 +155,12 @@ func verifyDocument(pub ed25519.PublicKey, raw []byte) error {
 // whose public key is one of keys. The handshake fails otherwise, before
 // any request is parsed.
 func pinned(keys map[string]ed25519.PublicKey) func([][]byte, [][]*x509.Certificate) error {
+	return pinnedBy(func(id string) bool { _, ok := keys[id]; return ok })
+}
+
+// pinnedBy is pinned with the key set decided by allowed, which may change
+// between handshakes.
+func pinnedBy(allowed func(id string) bool) func([][]byte, [][]*x509.Certificate) error {
 	return func(raw [][]byte, _ [][]*x509.Certificate) error {
 		if len(raw) == 0 {
 			return errors.New("no certificate")
@@ -160,7 +173,7 @@ func pinned(keys map[string]ed25519.PublicKey) func([][]byte, [][]*x509.Certific
 		if !ok {
 			return errors.New("certificate key is not Ed25519")
 		}
-		if _, ok := keys[KeyID(pub)]; !ok {
+		if !allowed(KeyID(pub)) {
 			return errors.New("key is not pinned")
 		}
 		return nil

@@ -116,6 +116,9 @@ func applyRuntimeEnv(cfg *config.Config, getenv func(string) string) error {
 }
 
 func run(ctx context.Context, args []string, getenv func(string) string, stdout, stderr io.Writer) int {
+	if len(args) > 0 && args[0] == "herd" {
+		return runHerd(args[1:], getenv, stdout, stderr)
+	}
 	fs := flag.NewFlagSet("controller", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	defaultPath := DefaultConfigPath

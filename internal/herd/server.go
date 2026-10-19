@@ -41,8 +41,10 @@ type ServerOptions struct {
 	// the view is not shared.
 	RIB   RIB
 	Rules *Rules
-	// Peers are the pinned keys, by key id. Only these connect.
+	// Peers are the pinned keys, by key id; Hub adds the hub peers' keys.
+	// Only these connect.
 	Peers map[string]ed25519.PublicKey
+	Hub   *KeySet
 	Now   func() time.Time
 	Log   *slog.Logger
 	Trips *Trips
@@ -112,7 +114,7 @@ func (s *Server) Start() error {
 		MinVersion:            tls.VersionTLS13,
 		Certificates:          []tls.Certificate{s.o.Node.cert},
 		ClientAuth:            tls.RequireAnyClientCert,
-		VerifyPeerCertificate: pinned(s.o.Peers),
+		VerifyPeerCertificate: pinnedBy(func(id string) bool { _, ok := s.o.Peers[id]; return ok || s.o.Hub.Has(id) }),
 	}}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET "+PathStatus, s.handle)

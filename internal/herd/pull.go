@@ -14,6 +14,7 @@ import (
 	mrand "math/rand/v2"
 	"net/http"
 	"net/netip"
+	"slices"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -45,10 +46,11 @@ type PullerOptions struct {
 	Jitter func() float64
 }
 
-// PeerStatus is the state of one static peer for the status API.
+// PeerStatus is the state of one peer for the status API.
 type PeerStatus struct {
 	URL         string    `json:"url"`
 	KeyID       string    `json:"key_id"`
+	Source      string    `json:"source"`
 	ASN         uint32    `json:"asn,omitempty"`
 	Country     string    `json:"country,omitempty"`
 	Granularity string    `json:"granularity,omitempty"`
@@ -66,6 +68,9 @@ type peer struct {
 	id     string
 	pub    ed25519.PublicKey
 	client *http.Client
+	// wantASN, when set, is the ASN the hub entry claims; the peer's own
+	// status must say the same.
+	wantASN uint32
 
 	mu     sync.Mutex
 	st     PeerStatus
@@ -83,7 +88,7 @@ type resume struct {
 	started time.Time
 }
 
-// Puller fetches the records of the static peers, in turn, within hard
+// Puller fetches the records of the static peers and the hub peers, in turn, within hard
 // budgets: concurrent pulls, requests per interval (overall and per
 // peer), bytes per response, records per response, per pull and in total
 // per peer, and the pulled-data disk budget. A peer that fails or answers
@@ -91,8 +96,12 @@ type resume struct {
 type Puller struct {
 	o     PullerOptions
 	lim   config.HerdLimits
-	peers []*peer
 	guard *guard
+
+	// peers is the static peers, then the hub peers; SetHub replaces the
+	// latter.
+	mu    sync.Mutex
+	peers []*peer
 
 	offset atomic.Int64
 }
@@ -128,40 +137,80 @@ func NewPuller(o PullerOptions) (*Puller, error) {
 		if err != nil {
 			return nil, fmt.Errorf("herd peer %s: %w", cp.URL, err)
 		}
-		pub := ed25519.PublicKey(raw)
-		id := KeyID(pub)
-		tr := &http.Transport{
-			TLSClientConfig: &tls.Config{
-				MinVersion:   tls.VersionTLS13,
-				Certificates: []tls.Certificate{o.Node.cert},
-				// The server's key is pinned, not chained to an issuer.
-				InsecureSkipVerify:    true,
-				VerifyPeerCertificate: pinned(map[string]ed25519.PublicKey{id: pub}),
-			},
-			// No proxy from the environment: peers are reached directly.
-			MaxIdleConnsPerHost:   1,
-			MaxConnsPerHost:       1,
-			TLSHandshakeTimeout:   p.lim.PullTimeout,
-			ResponseHeaderTimeout: p.lim.PullTimeout,
-			IdleConnTimeout:       p.lim.IdleTimeout,
-		}
-		p.peers = append(p.peers, &peer{
-			url: cp.URL, id: id, pub: pub, since: map[uint32]time.Time{}, resume: map[uint32]resume{},
-			client: &http.Client{
-				Transport:     tr,
-				Timeout:       p.lim.PullTimeout,
-				CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
-			},
-			st: PeerStatus{URL: cp.URL, KeyID: id},
-		})
+		p.peers = append(p.peers, p.newPeer(cp.URL, ed25519.PublicKey(raw), SourceConfig, 0))
 	}
 	return p, nil
 }
 
-// Peers returns the state of every peer, in config order.
+func (p *Puller) newPeer(url string, pub ed25519.PublicKey, source string, wantASN uint32) *peer {
+	id := KeyID(pub)
+	tr := &http.Transport{
+		TLSClientConfig: &tls.Config{
+			MinVersion:   tls.VersionTLS13,
+			Certificates: []tls.Certificate{p.o.Node.cert},
+			// The server's key is pinned, not chained to an issuer.
+			InsecureSkipVerify:    true,
+			VerifyPeerCertificate: pinned(map[string]ed25519.PublicKey{id: pub}),
+		},
+		// No proxy from the environment: peers are reached directly.
+		MaxIdleConnsPerHost:   1,
+		MaxConnsPerHost:       1,
+		TLSHandshakeTimeout:   p.lim.PullTimeout,
+		ResponseHeaderTimeout: p.lim.PullTimeout,
+		IdleConnTimeout:       p.lim.IdleTimeout,
+	}
+	return &peer{
+		url: url, id: id, pub: pub, wantASN: wantASN, since: map[uint32]time.Time{}, resume: map[uint32]resume{},
+		client: &http.Client{
+			Transport:     tr,
+			Timeout:       p.lim.PullTimeout,
+			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+		},
+		st: PeerStatus{URL: url, KeyID: id, Source: source},
+	}
+}
+
+// SetHub replaces the hub peers. A peer that stays keeps its state and
+// connection; one that leaves is closed.
+func (p *Puller) SetHub(hub []HubPeer) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	old := map[[3]string]*peer{}
+	next := []*peer{}
+	for _, pe := range p.peers {
+		if pe.wantASN == 0 {
+			next = append(next, pe)
+		} else {
+			old[[3]string{pe.id, pe.url, strconv.FormatUint(uint64(pe.wantASN), 10)}] = pe
+		}
+	}
+	for _, hp := range hub {
+		k := [3]string{KeyID(hp.Key), hp.URL, strconv.FormatUint(uint64(hp.ASN), 10)}
+		if pe, ok := old[k]; ok && pe.st.Source == hp.Source {
+			delete(old, k)
+			next = append(next, pe)
+		} else {
+			next = append(next, p.newPeer(hp.URL, hp.Key, hp.Source, hp.ASN))
+		}
+	}
+	for _, pe := range old {
+		pe.client.CloseIdleConnections()
+	}
+	p.peers = next
+}
+
+func (p *Puller) list() []*peer {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return slices.Clone(p.peers)
+}
+
+// Peers returns the state of every peer: static peers in config order,
+// then hub peers.
 func (p *Puller) Peers() []PeerStatus {
-	out := make([]PeerStatus, len(p.peers))
-	for i, pe := range p.peers {
+	peers := p.list()
+	out := make([]PeerStatus, len(peers))
+	for i, pe := range peers {
 		pe.mu.Lock()
 		out[i] = pe.st
 		pe.mu.Unlock()
@@ -192,7 +241,7 @@ func (p *Puller) Run(ctx context.Context) {
 
 // Close releases idle connections.
 func (p *Puller) Close() {
-	for _, pe := range p.peers {
+	for _, pe := range p.list() {
 		pe.client.CloseIdleConnections()
 	}
 }
@@ -201,14 +250,15 @@ func (p *Puller) Close() {
 // time and PullRequests requests in all. The starting peer rotates each
 // round, so a budget that runs out does not always starve the same peers.
 func (p *Puller) Round(ctx context.Context) {
-	if len(p.peers) == 0 {
+	peers := p.list()
+	if len(peers) == 0 {
 		return
 	}
 	var budget atomic.Int64
 	budget.Store(int64(p.lim.PullRequests))
 	jobs := make(chan *peer)
 	var wg sync.WaitGroup
-	for range min(p.lim.MaxPulls, len(p.peers)) {
+	for range min(p.lim.MaxPulls, len(peers)) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -217,10 +267,10 @@ func (p *Puller) Round(ctx context.Context) {
 			}
 		}()
 	}
-	start := int(p.offset.Add(1)-1) % len(p.peers)
+	start := int(p.offset.Add(1)-1) % len(peers)
 	now := p.o.Now()
-	for i := range p.peers {
-		pe := p.peers[(start+i)%len(p.peers)]
+	for i := range peers {
+		pe := peers[(start+i)%len(peers)]
 		pe.mu.Lock()
 		wait := now.Before(pe.st.RetryAt)
 		pe.mu.Unlock()
@@ -290,6 +340,9 @@ func (p *Puller) pull(ctx context.Context, pe *peer, budget *atomic.Int64) error
 	st, err := p.fetchStatus(ctx, pe)
 	if err != nil {
 		return err
+	}
+	if pe.wantASN != 0 && st.ASN != pe.wantASN {
+		return fmt.Errorf("status says asn %d, the hub entry says %d", st.ASN, pe.wantASN)
 	}
 	pe.mu.Lock()
 	pe.st.ASN, pe.st.Country, pe.st.Granularity, pe.st.Discovery = st.ASN, st.Vantage, st.Granularity, st.Discovery
