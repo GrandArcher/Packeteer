@@ -210,7 +210,9 @@ type Controller struct {
 	catalog plugin.MitigationCatalog
 	fsCat   plugin.FlowSpecCatalog
 	rib     RIB
-	log     *slog.Logger
+	// outbound reports prefixes the outbound announcer has on the wire.
+	outbound func(netip.Prefix) bool
+	log      *slog.Logger
 
 	mu    sync.Mutex
 	rules map[string]*Rule
@@ -333,6 +335,20 @@ func (c *Controller) SetRIB(rib RIB) error {
 	return nil
 }
 
+// SetOutbound gives the controller a check for prefixes the outbound
+// announcer has on the wire. Sync does not announce a new unicast route
+// for such a prefix, so one prefix never carries two Packeteer paths: the
+// rule waits until outbound has released it, which it does once the rule
+// exists (Holds). Call it before the first Sync.
+func (c *Controller) SetOutbound(injected func(netip.Prefix) bool) {
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.outbound = injected
+}
+
 // Catalog is the announcer's catalog (empty without an announcer).
 func (c *Controller) Catalog() plugin.MitigationCatalog { return c.catalog }
 
@@ -348,6 +364,9 @@ func (c *Controller) Active() int {
 	}
 	return int(c.onWire.Load())
 }
+
+// pendingOutbound is Rule.Pending while outbound still announces the prefix.
+const pendingOutbound = "waiting for outbound to release the prefix"
 
 // pendingRIB is Rule.Pending while a rule waits for its prefix in the RIB.
 const pendingRIB = "not in the learned RIB"
@@ -722,6 +741,15 @@ func (c *Controller) syncUnicastLocked(ctx context.Context) error {
 				c.log.Warn("mitigation rule waits: prefix is not in the learned RIB", "id", r.ID, "prefix", p)
 			}
 			r.Pending = pendingRIB
+			continue
+		}
+		// A rule added after this round's outbound Sync meets the outbound
+		// route here. It is announced next round, once outbound has
+		// released the prefix. The check runs under c.mu, so the outbound
+		// controller must not call into this one while Sync runs; both are
+		// driven from the one decision loop.
+		if !on && c.outbound != nil && c.outbound(p) {
+			r.Pending = pendingOutbound
 			continue
 		}
 		mr := plugin.MitigationRoute{Prefix: p, Action: r.Action, Target: r.Target, LocalPref: c.cfg.LocalPref, Community: c.cfg.Community}

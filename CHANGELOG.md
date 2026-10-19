@@ -27,6 +27,7 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 
 ### Fixed
 
+- A mitigation rule added mid-round waits until outbound has released its prefix, so one prefix never carries both an outbound and a mitigation route (#379).
 - Peer events read the neighbor set under the RIB lock, so a reload that adds or removes a neighbor during a session change no longer races and crashes the controller (#378).
 - Steer reason text (performance and cost moves) uses ASCII `->` instead of a Unicode arrow in logs, events, and the UI (#335).
 - Commit setup form reads `cc_disable: True` and `percentile: Separate` as the loader does, and keeps a new provider's Track commit across a rename (#311).
