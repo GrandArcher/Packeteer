@@ -789,7 +789,7 @@ A crashed active instance cannot resign: the standby waits until the old instanc
 
 ### Backup and restore
 
-`packeteer -backup FILE` writes a gzip'd tar with the loaded config file and, with a `storage` plugin, a consistent copy of its history (`sqlite`: `VACUUM INTO`, safe while the controller runs). It never overwrites `FILE`, opens no BGP session, and sends no probe. Secrets are environment variables, so none are in the archive. With `auth`, the history includes users with their password hashes (PBKDF2), API token hashes (SHA-256), and the audit log: keep the archive private.
+`packeteer -backup FILE` writes a gzip'd tar with the loaded config file and, with a `storage` plugin (including the `sqlite` that default sign-in adds), a consistent copy of its history (`sqlite`: `VACUUM INTO`, safe while the controller runs). It never overwrites `FILE`, opens no BGP session, and sends no probe. Secrets are environment variables, so none are in the archive. With `auth`, the history includes users with their password hashes (PBKDF2), API token hashes (SHA-256), and the audit log: keep the archive private.
 
 `packeteer -restore FILE` validates the archived config, then restores the history into that config's storage path. `-restore-config PATH` also writes the archived config to `PATH`. Existing history or config files are replaced only with `-force`. Stop the controller that uses the storage first.
 
@@ -825,7 +825,7 @@ Set these in the container. They are not keys in the YAML file. `PACKETEER_HTTP_
 | `PACKETEER_HTTP_USER` | Basic auth user. Set together with the password, or set neither. |
 | `PACKETEER_HTTP_PASSWORD` | Basic auth password. |
 | `PACKETEER_ADMIN_USER` | With `auth`: the first admin's name (default `admin`). |
-| `PACKETEER_ADMIN_PASSWORD` | With `auth`: creates that admin at start when no user has the name (12-256 characters). An existing user is not changed, so a password set through the API survives a restart. Not written to the log. Unset with no user yet, a random password is generated instead ([auth.md](auth.md#first-run)). |
+| `PACKETEER_ADMIN_PASSWORD` | With `auth`: creates that admin at start when no user has the name (12–256 characters). An existing user is not changed, so a password set through the API survives a restart. Not written to the log. |
 
 `${VAR}` expansion applies inside a webhook `url`, webhook `headers` values, and an `exec` plugin's `env` values. It is not applied to the rest of the file.
 

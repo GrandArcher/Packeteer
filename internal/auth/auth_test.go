@@ -649,13 +649,14 @@ func TestAuditor(t *testing.T) {
 
 // TestChangePassword covers the self-service change and the forced first
 // change (#328): the current password is required and counts toward the
-// lockout, an admin's reset also lifts the flag, an SSO account has no
-// local password, and the generated password is random and acceptable.
+// lockout, an admin's reset also lifts the flag, deleting the user ends
+// the generated password, an SSO account has no local password, and the
+// generated password is random and acceptable.
 func TestChangePassword(t *testing.T) {
 	var done []string
 	st := authtest.New()
 	c := &clock{t: time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)}
-	s, err := New(Options{Users: st, Now: c.now, OnPasswordSet: func(u string) { done = append(done, u) }})
+	s, err := New(Options{Users: st, Now: c.now, OnGeneratedGone: func(u string) { done = append(done, u) }})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -716,6 +717,26 @@ func TestChangePassword(t *testing.T) {
 	}
 	if len(done) != 2 || done[1] != "second" {
 		t.Fatalf("callback after reset: %v", done)
+	}
+
+	// Deleting a must-change user ends its generated password too.
+	if pending, err := s.ChangePending(ctx); pending || err != nil {
+		t.Fatalf("pending with no must-change user: %v %v", pending, err)
+	}
+	if _, err := s.createUser(ctx, "third", plugin.RoleViewer, "temporary-password", true); err != nil {
+		t.Fatal(err)
+	}
+	if pending, err := s.ChangePending(ctx); !pending || err != nil {
+		t.Fatalf("pending with a must-change user: %v %v", pending, err)
+	}
+	if err := s.DeleteUser(ctx, "third"); err != nil {
+		t.Fatal(err)
+	}
+	if len(done) != 3 || done[2] != "third" {
+		t.Fatalf("callback after delete: %v", done)
+	}
+	if err := s.DeleteUser(ctx, "second"); err != nil || len(done) != 3 {
+		t.Fatalf("delete of a user without a generated password: %v %v", err, done)
 	}
 
 	// An SSO account has nothing to change.

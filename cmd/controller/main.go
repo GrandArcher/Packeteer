@@ -115,6 +115,17 @@ func applyRuntimeEnv(cfg *config.Config, getenv func(string) string) error {
 	return nil
 }
 
+// startConfig applies the environment overrides and the sign-in default
+// (#328) the daemon starts with, so -backup and -restore archive and
+// restore the storage the controller opens.
+func startConfig(cfg *config.Config, getenv func(string) string) error {
+	if err := applyRuntimeEnv(cfg, getenv); err != nil {
+		return err
+	}
+	cfg.DefaultAuth(getenv(HTTPUserEnv) != "")
+	return nil
+}
+
 func run(ctx context.Context, args []string, getenv func(string) string, stdout, stderr io.Writer) int {
 	if len(args) > 0 && args[0] == "herd" {
 		return runHerd(args[1:], getenv, stdout, stderr)
@@ -158,7 +169,7 @@ func run(ctx context.Context, args []string, getenv func(string) string, stdout,
 		fmt.Fprintf(stderr, "packeteer: refusing to start: %v\n", err)
 		return 1
 	}
-	if err := applyRuntimeEnv(cfg, getenv); err != nil {
+	if err := startConfig(cfg, getenv); err != nil {
 		fmt.Fprintf(stderr, "packeteer: refusing to start: %v\n", err)
 		return 1
 	}

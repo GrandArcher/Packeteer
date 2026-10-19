@@ -15,10 +15,10 @@ import (
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
 )
 
-// FirstRunPasswordFile is written in the storage directory with the
+// firstRunPasswordFile is written in the storage directory with the
 // generated first-run admin password (#328). It is removed when that
-// password is changed.
-const FirstRunPasswordFile = "first-run-admin-password"
+// password no longer signs in.
+const firstRunPasswordFile = "first-run-admin-password"
 
 // firstRunPasswordPath is the file's path next to the storage file, or ""
 // when the storage plugin has no file.
@@ -30,7 +30,7 @@ func firstRunPasswordPath(plugins *pluginhost.Set) string {
 	if !ok {
 		return ""
 	}
-	return filepath.Join(filepath.Dir(f.Path()), FirstRunPasswordFile)
+	return filepath.Join(filepath.Dir(f.Path()), firstRunPasswordFile)
 }
 
 // writeFirstRunPassword writes the generated password with mode 0600.
@@ -49,6 +49,18 @@ func writeFirstRunPassword(path, user, pw string) error {
 		return err
 	}
 	return f.Close()
+}
+
+// removeFirstRunPassword deletes the file once its password no longer
+// signs in, so a dead password does not sit on the volume.
+func removeFirstRunPassword(path string, log *slog.Logger) {
+	err := os.Remove(path)
+	switch {
+	case err == nil:
+		log.Info("auth: removed the first-run password file; its password no longer signs in", "path", path)
+	case !errors.Is(err, os.ErrNotExist):
+		log.Warn("auth: remove first-run password file", "path", path, "err", err)
+	}
 }
 
 // checkAuth refuses a config whose auth cannot work (#32): auth together
@@ -112,11 +124,9 @@ func newAuthService(cfg *config.Config, plugins *pluginhost.Set, log *slog.Logge
 	users, _ := plugins.Storage.Plugin.(plugin.UserStore)
 	o := auth.Options{Users: users, SessionTTL: cfg.Auth.SessionTTL, TokenTTL: cfg.Auth.TokenTTL, Logger: log}
 	if path := firstRunPasswordPath(plugins); path != "" {
-		o.OnPasswordSet = func(user string) {
-			if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
-				log.Warn("auth: remove first-run password file", "path", path, "err", err)
-			}
-			log.Info("auth: first-run password changed", "user", user)
+		o.OnGeneratedGone = func(user string) {
+			log.Info("auth: generated password replaced or its user deleted", "user", user)
+			removeFirstRunPassword(path, log)
 		}
 	}
 	if plugins.SSO != nil {
@@ -129,7 +139,9 @@ func newAuthService(cfg *config.Config, plugins *pluginhost.Set, log *slog.Logge
 // password is PACKETEER_ADMIN_PASSWORD. With none set and no user yet (and
 // no single sign-on), it generates one, logs it once, writes it to a 0600
 // file next to the storage file, and limits the account to a password
-// change (#328). An existing user of that name is left alone.
+// change (#328). An existing user of that name is left alone. A password
+// file left by an earlier run is removed once no user still has to change
+// a generated password (the user was deleted, or the store was replaced).
 func bootstrapAdmin(ctx context.Context, svc *auth.Service, audit *auth.Auditor, plugins *pluginhost.Set, getenv func(string) string, log *slog.Logger) {
 	if svc == nil {
 		return
@@ -146,6 +158,16 @@ func bootstrapAdmin(ctx context.Context, svc *auth.Service, audit *auth.Auditor,
 			log.Error("auth: is on but the user list cannot be read; no admin was created", "err", err)
 		case !has:
 			pw, generated = auth.GeneratePassword(), true
+		}
+	}
+	if !generated {
+		if path := firstRunPasswordPath(plugins); path != "" {
+			switch pending, err := svc.ChangePending(ctx); {
+			case err != nil:
+				log.Warn("auth: cannot read the users; first-run password file not checked", "err", err)
+			case !pending:
+				removeFirstRunPassword(path, log)
+			}
 		}
 	}
 	if pw == "" {
@@ -171,6 +193,8 @@ func bootstrapAdmin(ctx context.Context, svc *auth.Service, audit *auth.Auditor,
 		log.Info("auth: created admin from the environment", "user", name)
 		audit.Record(ctx, plugin.AuditRecord{Actor: "system", Method: auth.MethodSystem, Action: "auth.bootstrap", Target: name,
 			Detail: "admin created from " + AdminPassEnv})
+	case generated:
+		log.Info("auth: admin already exists; no password generated", "user", name)
 	default:
 		log.Info("auth: admin already exists; " + AdminPassEnv + " is ignored")
 	}

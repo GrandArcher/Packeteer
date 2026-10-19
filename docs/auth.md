@@ -23,7 +23,7 @@ docker run --network host --cap-add NET_RAW --cap-add NET_ADMIN \
 
 On the first start, with no user and no `PACKETEER_ADMIN_PASSWORD`, the controller creates the admin `admin` (or `PACKETEER_ADMIN_USER`) with a random 24-character password (not with single sign-on, which has no local users). It prints the password once, in a `generated admin password` warning, and writes it to `first-run-admin-password` (mode 0600) next to the storage file, `/var/lib/packeteer` in the image. Read it with `docker logs packeteer 2>&1 | grep 'generated admin password'`. The password is in the container log (and in any log shipper that collects it) until you change it, so change it at the first sign-in.
 
-That password only buys a password change. Sign in at `/signin.html`; the page asks for a new password (12 to 256 characters) before it goes on. Until then every other request is refused with `403` and `"code": "password_change_required"`, except `GET /api/me` and `POST /api/account/password`. The call takes `{"current_password", "new_password"}` from any signed-in local user, counts a wrong current password toward the lockout below, and ends the user's other sessions. When the generated password is changed the file is removed. A restart before that creates no new password and logs nothing.
+That password only buys a password change. Sign in at `/signin.html`; the page asks for a new password (12 to 256 characters) before it goes on. Until then every other request is refused with `403` and `"code": "password_change_required"`, except `GET /api/me` and `POST /api/account/password`. The call takes `{"current_password", "new_password"}` from any signed-in local user, counts a wrong current password toward the lockout below, and ends the user's other sessions. The file is removed when the generated password is changed or its user is deleted, and at a start where no user still has to change a generated password (the storage file was replaced). A restart before the change creates no new password and logs nothing.
 
 To pick the first password yourself, set `PACKETEER_ADMIN_PASSWORD`. Nothing is generated and no change is forced:
 
@@ -44,6 +44,8 @@ auth:
 ```
 
 An explicit `false` keeps the earlier behavior: the single basic-auth account from `PACKETEER_HTTP_USER` and `PACKETEER_HTTP_PASSWORD`, or no sign-in at all when those are unset. Without them anyone who can reach `http.listen` can read the dashboard and API (every change is refused). The start logs a warning (`auth.enabled is false`) and every page shows a red banner while `/api/overview` reports `"auth": "off"`. An install that already sets `PACKETEER_HTTP_USER` keeps its basic-auth account when `auth.enabled` is unset; the two are refused together only when `auth.enabled: true` is written. To turn sign-in on there, unset those variables and add `auth: {enabled: true}`.
+
+An upgraded install with no `auth.enabled` and no `PACKETEER_HTTP_USER` gets sign-in too. A Prometheus scrape or script that sends no credentials then gets `401`: give it an [API token](#api-tokens), or write `auth.enabled: false` before the upgrade to keep the server open.
 
 ## Turn it on with options
 

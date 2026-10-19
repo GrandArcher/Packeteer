@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/GrandArcher/Packeteer/internal/auth"
+	"github.com/GrandArcher/Packeteer/internal/auth/authtest"
 	"github.com/GrandArcher/Packeteer/internal/config"
 	"github.com/GrandArcher/Packeteer/internal/pluginhost"
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
@@ -190,7 +191,7 @@ func TestFirstRunGeneratesAdminPassword(t *testing.T) {
 	if !found || u.Role != plugin.RoleAdmin || !u.MustChange {
 		t.Fatalf("generated admin: %+v %v", u, found)
 	}
-	path := filepath.Join(dir, FirstRunPasswordFile)
+	path := filepath.Join(dir, firstRunPasswordFile)
 	st, err := os.Stat(path)
 	if err != nil || st.Mode().Perm() != 0o600 {
 		t.Fatalf("password file: %v %v", st, err)
@@ -219,6 +220,9 @@ func TestFirstRunGeneratesAdminPassword(t *testing.T) {
 	if us, _ := svc.Users(ctx); len(us) != 1 {
 		t.Fatalf("restart changed the users: %+v", us)
 	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("restart before the change removed the password file: %v", err)
+	}
 
 	// The change clears the flag and removes the file.
 	req := httptest.NewRequest("POST", "/api/account/password", nil)
@@ -244,7 +248,7 @@ func TestFirstRunKeepsOperatorChoice(t *testing.T) {
 	if !found || u.MustChange {
 		t.Fatalf("env admin: %+v %v", u, found)
 	}
-	if _, err := os.Stat(filepath.Join(dir, FirstRunPasswordFile)); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(dir, firstRunPasswordFile)); !os.IsNotExist(err) {
 		t.Fatalf("password file written for an operator password: %v", err)
 	}
 }
@@ -293,5 +297,65 @@ func TestSecureByDefault(t *testing.T) {
 	warnAuthOff(cfg, "ops", log)
 	if logs.Len() != 0 {
 		t.Errorf("warning although basic auth protects the server: %q", logs.String())
+	}
+}
+
+// The password file goes away at start once no user has to change a
+// generated password: here the store does not have the file's user, as
+// when the storage file was replaced (#328).
+func TestFirstRunPasswordFileSwept(t *testing.T) {
+	var logs bytes.Buffer
+	dir, start := firstRunStore(t, &logs, envOf(map[string]string{AdminPassEnv: "operator-chosen-password"}))
+	ctx := context.Background()
+	path := filepath.Join(dir, firstRunPasswordFile)
+	if err := writeFirstRunPassword(path, "gone", "old-generated-password"); err != nil {
+		t.Fatal(err)
+	}
+	plugins, _ := start()
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("stale password file kept: %v", err)
+	}
+
+	// A must-change user still in the store keeps the file.
+	store := plugins.Storage.Plugin.(plugin.UserStore)
+	if err := store.PutUser(ctx, plugin.User{Name: "pending", Role: plugin.RoleAdmin, Source: plugin.UserLocal, PasswordHash: "x", MustChange: true}); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeFirstRunPassword(path, "pending", "generated-password-1"); err != nil {
+		t.Fatal(err)
+	}
+	_ = plugins.Stop(ctx)
+	start()
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("file removed while its user still has to change: %v", err)
+	}
+}
+
+// hiddenUsers lists no users, so a start sees an empty store while
+// another start has already created the admin.
+type hiddenUsers struct{ *authtest.Store }
+
+func (hiddenUsers) Users(context.Context) ([]plugin.User, error) { return nil, nil }
+
+// When another start created the admin first, the generated password is
+// dropped and the log does not blame PACKETEER_ADMIN_PASSWORD (#328).
+func TestFirstRunAdminCreatedConcurrently(t *testing.T) {
+	ctx := context.Background()
+	st := authtest.New()
+	if err := st.PutUser(ctx, plugin.User{Name: "admin", Role: plugin.RoleAdmin, Source: plugin.UserLocal, PasswordHash: "x"}); err != nil {
+		t.Fatal(err)
+	}
+	var logs bytes.Buffer
+	log := slog.New(slog.NewTextHandler(&logs, nil))
+	svc, err := auth.New(auth.Options{Users: hiddenUsers{st}, Logger: log})
+	if err != nil {
+		t.Fatal(err)
+	}
+	bootstrapAdmin(ctx, svc, auth.NewAuditor(nil, nil, log), nil, noEnv, log)
+	if !strings.Contains(logs.String(), "admin already exists; no password generated") || strings.Contains(logs.String(), AdminPassEnv) || strings.Contains(logs.String(), "generated admin password") {
+		t.Fatalf("log:\n%s", logs.String())
+	}
+	if u, _, _ := st.User(ctx, "admin"); u.MustChange || u.PasswordHash != "x" {
+		t.Fatalf("existing admin changed: %+v", u)
 	}
 }

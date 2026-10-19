@@ -108,9 +108,10 @@ type Options struct {
 	TokenTTL   time.Duration
 	Logger     *slog.Logger
 	Now        func() time.Time
-	// OnPasswordSet is called with the name of a user whose forced
-	// password change was just completed (#328).
-	OnPasswordSet func(user string)
+	// OnGeneratedGone is called with the name of a user whose generated
+	// password stopped signing in: the forced change is done, an admin
+	// set a password, or the user was deleted (#328).
+	OnGeneratedGone func(user string)
 }
 
 type session struct {
@@ -146,7 +147,7 @@ type Service struct {
 	log        *slog.Logger
 	now        func() time.Time
 	pepper     []byte
-	onSet      func(string)
+	onGone     func(string)
 
 	// mu serializes user and token changes (the last-admin check).
 	mu sync.Mutex
@@ -189,7 +190,7 @@ func New(o Options) (*Service, error) {
 		return nil, err
 	}
 	return &Service{
-		users: o.Users, sso: o.SSO, sessionTTL: o.SessionTTL, tokenTTL: o.TokenTTL, log: o.Logger, now: o.Now, pepper: pepper, onSet: o.OnPasswordSet,
+		users: o.Users, sso: o.SSO, sessionTTL: o.SessionTTL, tokenTTL: o.TokenTTL, log: o.Logger, now: o.Now, pepper: pepper, onGone: o.OnGeneratedGone,
 		sessions: map[string]session{}, pending: map[string]pendingLogin{}, pwCache: map[string]cached{}, fails: map[netip.Addr]*failures{},
 	}, nil
 }
@@ -659,6 +660,21 @@ func (s *Service) HasUsers(ctx context.Context) (bool, error) {
 	return len(us) > 0, err
 }
 
+// ChangePending reports whether a user still signs in with a generated
+// password that must be changed.
+func (s *Service) ChangePending(ctx context.Context) (bool, error) {
+	us, err := s.users.Users(ctx)
+	if err != nil {
+		return false, err
+	}
+	for _, u := range us {
+		if u.MustChange {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 // CreateUser adds a local user.
 func (s *Service) CreateUser(ctx context.Context, name string, role plugin.Role, password string) (UserView, error) {
 	return s.createUser(ctx, name, role, password, false)
@@ -755,15 +771,15 @@ func (s *Service) UpdateUser(ctx context.Context, name string, up UserUpdate) (U
 	if next.Disabled || up.Password != nil || next.Role != u.Role {
 		s.dropSessions(name)
 	}
-	s.passwordSet(u, next)
+	s.generatedGone(u, &next)
 	return view(next), nil
 }
 
-// passwordSet tells the owner of the generated password when the
-// forced change is done.
-func (s *Service) passwordSet(was, now plugin.User) {
-	if was.MustChange && !now.MustChange && s.onSet != nil {
-		s.onSet(now.Name)
+// generatedGone tells the owner of the generated password that it no
+// longer signs in: was is replaced by now, or deleted (now nil).
+func (s *Service) generatedGone(was plugin.User, now *plugin.User) {
+	if was.MustChange && (now == nil || !now.MustChange) && s.onGone != nil {
+		s.onGone(was.Name)
 	}
 }
 
@@ -813,7 +829,7 @@ func (s *Service) ChangePassword(w http.ResponseWriter, r *http.Request, p Princ
 			return err
 		}
 	}
-	s.passwordSet(u, updated)
+	s.generatedGone(u, &updated)
 	return nil
 }
 
@@ -835,6 +851,7 @@ func (s *Service) DeleteUser(ctx context.Context, name string) error {
 		return fmt.Errorf("%w: %v", ErrUnavailable, err)
 	}
 	s.dropSessions(name)
+	s.generatedGone(u, nil)
 	return nil
 }
 
