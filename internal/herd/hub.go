@@ -11,6 +11,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"sort"
 	"sync"
 	"time"
@@ -225,7 +226,18 @@ func NewHub(o HubOptions) *Hub {
 			},
 		}
 	}
-	return &Hub{o: o, guard: newGuard(o.Log, o.Event), st: HubStatus{URL: o.Cfg.URL}}
+	return &Hub{o: o, guard: newGuard(o.Log, o.Event), st: HubStatus{URL: statusURL(o.Cfg.URL)}}
+}
+
+// statusURL is u without userinfo, query, or fragment, which may carry a
+// token and are shown to every API viewer.
+func statusURL(u string) string {
+	p, err := url.Parse(u)
+	if err != nil {
+		return ""
+	}
+	p.User, p.RawQuery, p.Fragment = nil, "", ""
+	return p.String()
 }
 
 // Status is the hub client's state.

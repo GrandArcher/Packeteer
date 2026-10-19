@@ -120,11 +120,18 @@ func runHubCheck(args []string, now time.Time, stdout, stderr io.Writer) int {
 		return 2
 	}
 	dir := fs.Arg(0)
-	names, err := filepath.Glob(filepath.Join(dir, "*"))
+	found, err := filepath.Glob(filepath.Join(dir, "*.json"))
 	if err != nil {
 		return 1
 	}
-	slices.Sort(names)
+	slices.Sort(found)
+	// Only regular *.json files are entries; dotfiles and directories are not.
+	var names []string
+	for _, name := range found {
+		if fi, err := os.Stat(name); err == nil && fi.Mode().IsRegular() && !strings.HasPrefix(filepath.Base(name), ".") {
+			names = append(names, name)
+		}
+	}
 	var problems []string
 	owner := map[string]string{}
 	claim := func(what, name, file string) {

@@ -7,9 +7,11 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -74,6 +76,19 @@ func TestParseHubListRefusals(t *testing.T) {
 	}
 	if _, _, err := ParseHubList(snapshot, t0); err != nil {
 		t.Errorf("built-in snapshot: %v", err)
+	}
+}
+
+// TestBuiltInSnapshotIsCurrent is the release gate of make hub-snapshot: the
+// file about to ship must have no entry that is rejected or expired now. It
+// is skipped in normal runs because a committed snapshot ages.
+func TestBuiltInSnapshotIsCurrent(t *testing.T) {
+	if os.Getenv("HUB_SNAPSHOT_CHECK") == "" {
+		t.Skip("run by make hub-snapshot")
+	}
+	entries, rejected, err := ParseHubList(snapshot, time.Now())
+	if err != nil || rejected != 0 {
+		t.Fatalf("snapshot: %d entries, %d rejected, err %v", len(entries), rejected, err)
 	}
 }
 
@@ -164,7 +179,7 @@ func TestKeySet(t *testing.T) {
 	}
 }
 
-// hubServer serves body, or status when set, and counts requests.
+// hubServer serves body, or status when set.
 type hubServer struct {
 	*httptest.Server
 	mu     sync.Mutex
@@ -196,10 +211,9 @@ func (h *hubServer) set(body []byte, status int) {
 type applied struct {
 	mu    sync.Mutex
 	peers []HubPeer
-	calls int
 }
 
-func (a *applied) apply(p []HubPeer) { a.mu.Lock(); a.peers, a.calls = p, a.calls+1; a.mu.Unlock() }
+func (a *applied) apply(p []HubPeer) { a.mu.Lock(); a.peers = p; a.mu.Unlock() }
 func (a *applied) get() []HubPeer    { a.mu.Lock(); defer a.mu.Unlock(); return a.peers }
 
 func testHub(t *testing.T, srv *hubServer, snap []byte, clock *time.Time) (*Hub, *applied) {
@@ -213,6 +227,12 @@ func testHub(t *testing.T, srv *hubServer, snap []byte, clock *time.Time) (*Hub,
 		Now: func() time.Time { return *clock }, Log: slog.New(slog.NewTextHandler(io.Discard, nil)),
 	})
 	return h, ap
+}
+
+func TestStatusURLDropsWhatMayHoldASecret(t *testing.T) {
+	if got := statusURL("https://user:pw@hub.example.net:8443/herd.json?token=s3cret#frag"); got != "https://hub.example.net:8443/herd.json" {
+		t.Errorf("statusURL = %q", got)
+	}
 }
 
 func TestHubRefreshAppliesVerifiedPeers(t *testing.T) {
@@ -306,29 +326,47 @@ func TestHubRefusesBadResponses(t *testing.T) {
 }
 
 func TestHubDoesNotFollowARedirectToHTTP(t *testing.T) {
+	var plainHits atomic.Int32
 	plain := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		t.Error("plain http server was reached")
+		plainHits.Add(1)
 	}))
 	defer plain.Close()
+	var tlsHits atomic.Int32
+	var loop atomic.Bool
 	tlsSrv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		tlsHits.Add(1)
+		if loop.Load() {
+			http.Redirect(w, r, r.URL.Path+"x", http.StatusFound)
+			return
+		}
 		http.Redirect(w, r, plain.URL, http.StatusFound)
 	}))
 	defer tlsSrv.Close()
 	clock := t0
-	ap := &applied{}
+
+	// The default client does not trust the test certificate, so its redirect
+	// policy is moved onto the test server's client.
+	policy := NewHub(HubOptions{
+		Cfg: &config.HerdHub{URL: tlsSrv.URL, Refresh: time.Hour, MaxPeers: 16}, Self: "x", Skip: func(string, string) bool { return false },
+		Apply: func([]HubPeer) {}, Now: func() time.Time { return clock }, Log: slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}).o.Client.CheckRedirect
+	cli := tlsSrv.Client()
+	cli.CheckRedirect = policy
 	h := NewHub(HubOptions{
 		Cfg: &config.HerdHub{URL: tlsSrv.URL, Refresh: time.Hour, MaxPeers: 16}, Self: "x", Skip: func(string, string) bool { return false },
-		Apply: ap.apply, Now: func() time.Time { return clock }, Log: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Apply: func([]HubPeer) {}, Client: cli, Now: func() time.Time { return clock }, Log: slog.New(slog.NewTextHandler(io.Discard, nil)),
 	})
-	// The default client rejects the test server's certificate, so the
-	// redirect rule is checked on the client's policy directly.
-	req, _ := http.NewRequest(http.MethodGet, plain.URL, nil)
-	if err := h.o.Client.CheckRedirect(req, nil); err != http.ErrUseLastResponse {
-		t.Errorf("CheckRedirect(http) = %v", err)
+
+	h.Refresh(context.Background())
+	if plainHits.Load() != 0 || !strings.Contains(h.Status().LastError, "302") {
+		t.Errorf("redirect to http: plain hits %d, status %+v", plainHits.Load(), h.Status())
 	}
-	req, _ = http.NewRequest(http.MethodGet, tlsSrv.URL, nil)
-	if err := h.o.Client.CheckRedirect(req, nil); err != nil {
-		t.Errorf("CheckRedirect(https) = %v", err)
+
+	loop.Store(true)
+	tlsHits.Store(0)
+	h.Refresh(context.Background())
+	if n := tlsHits.Load(); n < 2 || n > 5 || h.Status().LastError == "" {
+		t.Errorf("redirect loop: %d requests, status %+v", n, h.Status())
 	}
 }
 
@@ -385,6 +423,26 @@ func TestHubPeersPullAndMayConnect(t *testing.T) {
 	}
 	if code, _, _ := tryGet(client(b.node, a), a.url()+PathStatus); code != 0 {
 		t.Errorf("a key removed from the hub list still connects (status %d)", code)
+	}
+}
+
+// The pin is checked at the handshake and again on each request, so a key
+// that leaves the hub list loses a connection it already holds.
+func TestHubKeyRemovedFromTheListLosesItsOpenConnection(t *testing.T) {
+	a := newMember(t, 64501, nil)
+	b := newMember(t, 64502, nil)
+	a.hub = &KeySet{}
+	a.serve()
+	a.hub.Set([]HubPeer{{Key: b.node.pub}})
+	cli := client(b.node, a)
+	cli.Transport.(*http.Transport).DisableKeepAlives = false
+
+	if code, _, _ := tryGet(cli, a.url()+PathStatus); code != http.StatusOK {
+		t.Fatalf("listed key: status %d", code)
+	}
+	a.hub.Set(nil)
+	if code, _, _ := tryGet(cli, a.url()+PathStatus); code == http.StatusOK {
+		t.Errorf("a key removed from the list was still served on its open connection")
 	}
 }
 

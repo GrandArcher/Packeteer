@@ -160,7 +160,7 @@ func TestHubCheck(t *testing.T) {
 		_, sameURL := hubEntry(t, 64504, "https://192.0.2.31:9444", time.Hour*24, time.Hour)
 		tampered := []byte(strings.Replace(string(e2), "64502", "64509", 1))
 		dir := hubDir(t, map[string][]byte{
-			"64501.json": e1, "64502.json": tampered, "64503.json": old, "64504.json": sameURL, "99999.json": e2, "notes.txt": []byte("x"),
+			"64501.json": e1, "64502.json": tampered, "64503.json": old, "64504.json": sameURL, "99999.json": e2,
 		})
 		code, _, errOut := herdCmd("hub-check", dir)
 		if code != 1 {
@@ -171,11 +171,21 @@ func TestHubCheck(t *testing.T) {
 			"64503.json: entry asn 64503: expired",
 			"64504.json: a node url is also in 64501.json",
 			"99999.json: entry for asn 64502 must be named 64502.json",
-			"notes.txt:",
 		} {
 			if !strings.Contains(errOut, want) {
 				t.Errorf("stderr missing %q:\n%s", want, errOut)
 			}
+		}
+	})
+
+	t.Run("only json files are entries", func(t *testing.T) {
+		dir := hubDir(t, map[string][]byte{"64501.json": e1, "README.md": []byte("x"), ".gitkeep": nil, ".hidden.json": []byte("x")})
+		if err := os.Mkdir(filepath.Join(dir, "docs.json"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		code, out, errOut := herdCmd("hub-check", dir)
+		if code != 0 || !strings.Contains(out, "1 entries ok") {
+			t.Errorf("code %d out %q err %q", code, out, errOut)
 		}
 	})
 

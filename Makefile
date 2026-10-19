@@ -42,4 +42,4 @@ check: test race lint vuln
 hub-snapshot: ## release step: refresh the built-in herd hub list from HUB_URL
 	@test -n "$(HUB_URL)" || { echo "set HUB_URL=https://..."; exit 1; }
 	curl -fsS --max-time 30 "$(HUB_URL)" -o internal/herd/hub_snapshot.json
-	go test ./internal/herd -run TestParseHubListRefusals
+	HUB_SNAPSHOT_CHECK=1 go test ./internal/herd -run 'TestParseHubListRefusals|TestBuiltInSnapshotIsCurrent'

@@ -114,7 +114,7 @@ func (s *Server) Start() error {
 		MinVersion:            tls.VersionTLS13,
 		Certificates:          []tls.Certificate{s.o.Node.cert},
 		ClientAuth:            tls.RequireAnyClientCert,
-		VerifyPeerCertificate: pinnedBy(func(id string) bool { _, ok := s.o.Peers[id]; return ok || s.o.Hub.Has(id) }),
+		VerifyPeerCertificate: pinnedBy(s.pinned),
 	}}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET "+PathStatus, s.handle)
@@ -312,10 +312,22 @@ func remoteIP(a net.Addr) string {
 	return h
 }
 
+// pinned reports whether id is a static peer or a current hub peer.
+func (s *Server) pinned(id string) bool {
+	_, ok := s.o.Peers[id]
+	return ok || s.o.Hub.Has(id)
+}
+
 func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
 	tc, _ := r.Context().Value(connKey{}).(*tconn)
 	if tc == nil {
 		http.Error(w, "no connection", http.StatusInternalServerError)
+		return
+	}
+	// A key that left the hub list must not keep a connection it opened earlier.
+	if !s.pinned(tc.id) {
+		w.Header().Set("Connection", "close")
+		writeError(w, http.StatusForbidden, "key is not pinned")
 		return
 	}
 	if s.o.Active != nil && !s.o.Active() {

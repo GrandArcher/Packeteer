@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"regexp"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/GrandArcher/Packeteer/internal/config"
@@ -175,15 +176,20 @@ func (e *Entry) validate(now time.Time) error {
 	return nil
 }
 
-// checkEndpoint is config.CheckHerdURL plus a refusal of IP literals no
-// peer could be at: a hostile list must not make a node probe its own
-// loopback or link-local services.
+// checkEndpoint is config.CheckHerdURL plus a refusal of the localhost
+// names and of IP literals no peer could be at: a hostile list must not
+// make a node probe its own or its operator's internal services. Other
+// host names are not resolved here.
 func checkEndpoint(s string) error {
 	if err := config.CheckHerdURL(s); err != nil {
 		return err
 	}
 	u, _ := url.Parse(s)
-	if a, err := netip.ParseAddr(u.Hostname()); err == nil && (a.IsLoopback() || a.IsUnspecified() || a.IsLinkLocalUnicast() || a.IsMulticast()) {
+	host := strings.ToLower(strings.TrimSuffix(u.Hostname(), "."))
+	if host == "localhost" || strings.HasSuffix(host, ".localhost") {
+		return errors.New("is not a routable address")
+	}
+	if a, err := netip.ParseAddr(host); err == nil && (a.IsLoopback() || a.IsUnspecified() || a.IsLinkLocalUnicast() || a.IsMulticast() || a.IsPrivate()) {
 		return errors.New("is not a routable address")
 	}
 	return nil
