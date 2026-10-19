@@ -548,22 +548,33 @@ adds nothing to the herd that could move traffic.
   jitter to the member set (the reduction of the `ixp.fabric` probes
   under #162, computed over the member set rather than per member), and
   fabric incident flags (the correlator's `ixp.fabric_degraded`, #163).
-  This matches IXP Manager's `own_graphs_only` default, where a member
-  sees only its own graphs ([ixp.md](ixp.md), member pages).
 - **Member-level data is the member's.** One member's reachability, its
   route-server filter results, or per-member fabric paths are shared only
-  if that member opts in. There is no exchange-wide switch that publishes
-  them, and a member's Can Ping opt-out still applies.
-- **Shown like any vantage.** An `ixp` vantage is listed in its own row
+  if that member opts in. A member's Can Ping opt-out still applies. There
+  is no way to opt in yet: the member does not run the instance, and no
+  member-scoped login exists ([ixp.md](ixp.md), member pages). Until one
+  does, member-level data is not shared (Open, below).
+- **Own group, never merged.** An `ixp` vantage is listed in its own row
   group, labeled with its kind, never merged with edge vantages and never
   counted as an edge. A fabric incident flag is one more vantage's claim.
-- **Same hard rules.** Herd data from an IXP vantage never moves traffic,
-  never changes member routing, and never enters Decide or the IXP
-  correlator (Hard rules).
+- **Hard rules apply, with two additions.** Herd data from an IXP vantage
+  never moves traffic and never enters Decide, a scorer, a planner, a
+  policy, or `PathStats` (Hard rules, items 1 and 2). Hard rules do not
+  name the IXP correlator or member routing yet; this proposal adds both:
+  IXP-vantage data never feeds `ixp.correlate` (#163) and never changes
+  member routing.
 
-Open: the record shape for fabric aggregates (they have no provider ASN
-or origin ASN), and whether an exchange counts as one vantage per site.
-Both belong in the issue that implements this.
+Open:
+
+- Opt-in for member-level data: which login or signed consent a member
+  uses, once one exists.
+- Record shape for fabric aggregates. They have no provider ASN, and they
+  do not come from the RIB view, so the rule that records only prefixes
+  present in the RIB view (Granularity) and the vantage tuple (Showing
+  many vantages, item 2) do not fit them as written.
+- Whether an exchange counts as one vantage per site.
+
+These belong in the issue that implements this.
 
 ## Local use
 
@@ -730,13 +741,20 @@ retain, or rate-limit. Each member pays for what it uses:
   amount per interval, not an amount that grows with its size.
 - **Probe budget** only through hints, under the global probe rate limit.
 
-The project runs at most the seed names, which hold addresses only
-(Discovery and membership). A central collector with signed submissions
-and an open dataset was considered and left out: it would put one
-operator's destination lists in one place, and the k-anonymity rule would
-have to be trusted to that one host. If the herd later wants a public
+What the project runs for herd is the hub ([herd-hub.md](../herd-hub.md),
+#261), not a collector. The hub is a public repository of signed member
+entries. Each entry holds an ASN, node keys and endpoints, retention, data
+classes, and an expiry, so it is more than addresses. A release builds in
+a snapshot of the list (`internal/herd/hub_snapshot.json`, refreshed with
+`make hub-snapshot`). The hub is trusted to decide which keys become peers
+of every node and which ASN each claims (its Trust section). Hosting it
+costs review of each entry before merge, and the check and prune workflows
+in its repository.
+
+A central collector is a non-goal (Non-goals): it would hold every
+member's destination lists in one place. If the herd later wants a public
 dataset, that is a separate decision with its own hosting, retention,
-rate limits, and license (Open questions, item 8).
+rate limits, and terms (Open questions, item 8).
 
 ## Phased plan
 
