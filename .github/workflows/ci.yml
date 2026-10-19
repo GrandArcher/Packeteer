@@ -1659,12 +1659,16 @@ jobs:
             tail -n 20 /tmp/ui330/pk.log || true
           }
           trap cleanup EXIT
-          PACKETEER_HTTP_USER=lab PACKETEER_HTTP_PASSWORD=lab-only \
+          # A fresh password per run, handed to curl through a config file,
+          # so no credential is written into this workflow.
+          pw=$(openssl rand -hex 12)
+          (umask 077; printf 'user = "lab:%s"\n' "$pw" >/tmp/ui330/curl.cfg)
+          PACKETEER_HTTP_USER=lab PACKETEER_HTTP_PASSWORD="$pw" \
             PACKETEER_SNMP_COMMUNITY=lab-only-community PACKETEER_SNMP_USER=labuser \
             PACKETEER_SNMP_AUTH=lab-auth-secret PACKETEER_SNMP_PRIV=lab-priv-secret \
             /tmp/ui330/pk -config /tmp/ui330/config.yaml >/tmp/ui330/pk.log 2>&1 &
           pk=$!
-          auth=(-u lab:lab-only)
+          auth=(-K /tmp/ui330/curl.cfg)
           ok=0
           for _ in $(seq 1 30); do
             if curl -fsS "${auth[@]}" http://127.0.0.1:18330/healthz >/dev/null 2>&1; then ok=1; break; fi
@@ -1672,7 +1676,7 @@ jobs:
           done
           test "$ok" = 1
           curl -fsS "${auth[@]}" http://127.0.0.1:18330/api/config/schema | jq -e '(.blocks | map(.id)) | contains(["scorer","bgp","bmp","maintenance","inbound_announcer","anomaly","mitigation","http"])'
-          /tmp/ui330/uiproxy -listen 127.0.0.1:18331 -upstream http://127.0.0.1:18330 -user lab -password lab-only \
+          /tmp/ui330/uiproxy -listen 127.0.0.1:18331 -upstream http://127.0.0.1:18330 -user lab -password "$pw" \
             -fixtures lab/ui-fixtures/sections >/tmp/ui330/proxy.log 2>&1 &
           proxy=$!
           for _ in $(seq 1 20); do
@@ -1690,6 +1694,7 @@ jobs:
             'unchanged: yaml-same true | writes 0' \
             'mode: inject-box true | gone again true' \
             'mapped: use a schedule with a duration, or a start with an end, not both' \
+            'required: This field is required.' \
             'bad ip: Enter an IP address.' \
             'preview: Valid | loss_weight yes | failure_pct yes | neighbor yes | peer yes | bmp only yes | port yes | context yes | prober yes | timeout yes | restart yes | writes 0' \
             'writes 1 | comment kept yes | loss_weight yes | bmp only yes | prober yes | webhook url kept yes | mode observe yes' \

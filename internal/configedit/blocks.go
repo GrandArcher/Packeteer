@@ -41,7 +41,6 @@ const (
 	KindEnum     Kind = "enum"
 	KindList     Kind = "list"
 	KindCIDRs    Kind = "cidrs"
-	KindEnv      Kind = "env"
 	KindTime     Kind = "time"
 	KindRows     Kind = "rows"
 	KindGroup    Kind = "group"
@@ -71,7 +70,7 @@ type Field struct {
 	Max      *float64 `json:"max,omitempty"`
 	Default  string   `json:"default,omitempty"`
 	Check    string   `json:"check,omitempty"`
-	Required bool     `json:"-"`
+	Required bool     `json:"required,omitempty"`
 	Advanced bool     `json:"advanced,omitempty"`
 	// DefaultTrue is a bool the loader reads as true when the key is
 	// absent. Writing true then deletes the key.
@@ -92,8 +91,6 @@ type Field struct {
 type Values map[string]any
 
 func num(v float64) *float64 { return &v }
-
-// ---- checks ----
 
 // checkers are the named per-item checks a Field may use. The page runs
 // the same names before Apply.
@@ -144,8 +141,6 @@ func splitHostPort(s string) (host, port string, err error) {
 	}
 	return s[:i], s[i+1:], nil
 }
-
-// ---- reading ----
 
 // readValues reads the fields of mapping m. A nil m reads as an empty
 // mapping, so a block that is not in the file shows its defaults.
@@ -215,8 +210,6 @@ func lookupPath(m *yaml.Node, key string) *yaml.Node {
 	}
 	return m
 }
-
-// ---- normalizing ----
 
 // normalizeValues turns a decoded request into the canonical shape
 // readValues produces, so two values compare with reflect.DeepEqual. Keys
@@ -333,8 +326,6 @@ func asValues(raw any) (Values, bool) {
 	return nil, false
 }
 
-// ---- checking ----
-
 func joinPath(path, key string) string {
 	if path == "" {
 		return key
@@ -402,10 +393,6 @@ func validateField(path string, f Field, val any) error {
 	case KindEnum:
 		if !slices.Contains(f.Options, s) {
 			return fieldErr(path, "%q is invalid (want %s)", s, strings.Join(f.Options, ", "))
-		}
-	case KindEnv:
-		if !envVarName.MatchString(s) {
-			return fieldErr(path, "%q must be the name of an environment variable, not the secret", s)
 		}
 	case KindTime:
 		if _, err := time.Parse(time.RFC3339, s); err != nil {
@@ -496,8 +483,6 @@ func validateRows(path string, f Field, rows []Values) error {
 	}
 	return nil
 }
-
-// ---- merging ----
 
 // syncValues writes next into mapping m. The current values are read from
 // m itself, so only a changed field is touched. A field whose value is the
@@ -644,8 +629,6 @@ func writeRows(m *yaml.Node, f Field, rows []Values) error {
 	seq.Content = next
 	return nil
 }
-
-// ---- block locations ----
 
 // Block is one section of the page built from Fields.
 type Block struct {

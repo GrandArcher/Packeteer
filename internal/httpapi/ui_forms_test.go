@@ -393,6 +393,25 @@ func TestConfigPreviewAndSchema(t *testing.T) {
 			t.Fatalf("schema lacks block %s: %s", id, rec.Body)
 		}
 	}
+	// The page flags an empty required field before Apply from this flag.
+	required := map[string]bool{}
+	for _, b := range got["blocks"].([]any) {
+		if b.(map[string]any)["id"] != "bgp" {
+			continue
+		}
+		for _, f := range b.(map[string]any)["fields"].([]any) {
+			if f.(map[string]any)["key"] != "neighbors" {
+				continue
+			}
+			for _, sub := range f.(map[string]any)["fields"].([]any) {
+				r, _ := sub.(map[string]any)["required"].(bool)
+				required[sub.(map[string]any)["key"].(string)] = r
+			}
+		}
+	}
+	if !required["address"] || required["description"] {
+		t.Fatalf("bgp neighbor required flags = %v, want address only", required)
+	}
 	types, _ := got["plugin_types"].(map[string]any)
 	if policies, _ := types["policies"].([]any); slices.Contains(policies, any("maintenance")) {
 		t.Fatalf("policies offer %v; the maintenance card owns that type", policies)

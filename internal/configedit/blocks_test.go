@@ -3,6 +3,7 @@ package configedit
 import (
 	"encoding/json"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -651,6 +652,15 @@ func TestBlocksPluginsExecIsReadOnly(t *testing.T) {
 	}
 	if _, err := ApplyForm([]byte(text), f); err == nil || !strings.Contains(err.Error(), "raw YAML") {
 		t.Fatalf("exec edit: %v", err)
+	}
+	f, _ = ParseForm([]byte(text))
+	f.Plugins = slices.DeleteFunc(f.Plugins, func(p FormPlugin) bool { return p.Type == "exec" })
+	if _, err := ApplyForm([]byte(text), f); err == nil || !strings.Contains(err.Error(), "exec plugin probers 0 is missing") {
+		t.Fatalf("exec left out: %v", err)
+	}
+	f.Plugins = []FormPlugin{}
+	if _, err := ApplyForm([]byte(text), f); err == nil || !strings.Contains(err.Error(), "raw YAML") {
+		t.Fatalf("every plugin left out: %v", err)
 	}
 }
 

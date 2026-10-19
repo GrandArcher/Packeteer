@@ -59,7 +59,11 @@ var jsChecks = {
 
 function checkFor(f) {
   var fn = jsChecks[f.check];
-  return fn ? function (v) { return v ? fn(v) : ""; } : null;
+  if (!fn && !f.required) return null;
+  return function (v) {
+    if (!v) return f.required ? "This field is required." : "";
+    return fn ? fn(v) : "";
+  };
 }
 
 // suggestions are names the page already knows. They fill a dropdown; any
@@ -310,8 +314,6 @@ function renderGroup(box, f, obj, at, rerender) {
   box.appendChild(card);
 }
 
-// ---- the blocks ----
-
 function scorerNow() {
   return (form.commit && form.commit.scorer) || form.scorer_type || "weighted";
 }
@@ -425,8 +427,6 @@ function renderFlowExtras() {
     card.appendChild(fold);
   });
 }
-
-// ---- plugins ----
 
 var pluginKinds = {
   probers: "Prober", sources: "Source", notifiers: "Notifier", telemetry: "Telemetry",
@@ -546,8 +546,6 @@ function renderAddPlugin(root) {
   row.appendChild(add);
   root.appendChild(row);
 }
-
-// ---- errors back to fields ----
 
 var yamlPrefix = /^settings form: /;
 

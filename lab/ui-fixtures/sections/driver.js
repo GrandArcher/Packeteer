@@ -132,6 +132,8 @@ var steps = [
   },
   function () {
     var a = ctl("bgp.neighbors[1].address");
+    fire(a, "blur");
+    note("sec-required", "required: " + at("bgp.neighbors[1].address").querySelector(".field-error").textContent);
     type(a, "999.1.1.1");
     fire(a, "blur");
     note("sec-badip", "bad ip: " + at("bgp.neighbors[1].address").querySelector(".field-error").textContent);

@@ -136,8 +136,6 @@ func isSecretKey(k, v string) bool {
 	return secretName.MatchString(k) || (urlName.MatchString(k) && !strings.Contains(v, "${"))
 }
 
-// ---- reading ----
-
 type pluginRef struct {
 	list string
 	node *yaml.Node
@@ -217,8 +215,6 @@ func readPlugin(list, key string, node *yaml.Node) FormPlugin {
 	return p
 }
 
-// ---- normalizing and checking ----
-
 func (f *Form) normalizePlugins() {
 	for i := range f.Plugins {
 		p := &f.Plugins[i]
@@ -283,6 +279,13 @@ func (f Form) validatePlugins(cur Form) error {
 		}
 		if err := validateSettings(at, p); err != nil {
 			return err
+		}
+	}
+	// applyPlugins removes every file entry the form leaves out, so an exec
+	// entry missing from the request would be deleted, not kept read-only.
+	for _, o := range cur.Plugins {
+		if o.Type == "exec" && !seen[o.List+"/"+o.Key] {
+			return fmt.Errorf("%w: plugins: the exec plugin %s %s is missing; an exec plugin runs a program, remove it in the raw YAML", ErrForm, o.List, o.Key)
 		}
 	}
 	return nil
@@ -358,8 +361,6 @@ func settingTag(kind string) string {
 	}
 	return "!!str"
 }
-
-// ---- applying ----
 
 func applyPlugins(root *yaml.Node, refs map[string]pluginRef, cur, next Form) error {
 	if reflect.DeepEqual(cur.Plugins, next.Plugins) {

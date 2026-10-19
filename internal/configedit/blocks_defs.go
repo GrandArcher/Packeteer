@@ -110,7 +110,7 @@ var blockDefs = []Block{
 		YAML: "",
 		Fields: []Field{
 			field("packeteer_community", "Route community", "Tags every injected route, as asn:value or a large community global:data1:data2. The edge's export policy matches only this.", KindString).check("community"),
-			field("local_pref", "Local preference", "On an injected route. Set it above the edge's native local preference. 0 is refused.", KindInt).rng(0, u32Max),
+			field("local_pref", "Local preference", "On an injected route. Set it above the edge's native local preference. Inject needs a value above 0.", KindInt).rng(0, u32Max),
 			field("announcer", "Announcer", "The in-process BGP announcer. It publishes on the iBGP session; nothing is announced while the mode is observe.", KindGroup).with(
 				field("type", "Type", "The only announcer is gobgp.", KindEnum).opts("gobgp").req(),
 			),

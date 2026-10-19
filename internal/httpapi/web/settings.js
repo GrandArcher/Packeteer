@@ -1006,8 +1006,6 @@ function refreshInjectConfirm() {
   byId("inject-confirm").hidden = !on && !byId("ed-inject").checked;
 }
 
-// ---- preview (#330) ----
-
 function pvState(text) {
   byId("pv-state").textContent = text || "";
 }
