@@ -71,7 +71,9 @@ func TestHerdValidation(t *testing.T) {
 		{"no listen", func(s string) string { return strings.Replace(s, "  listen: 192.0.2.10:9444\n", "", 1) }, "herd.listen"},
 		{"http peer", func(s string) string { return strings.Replace(s, "https://", "http://", 1) }, "must be https://host:port"},
 		{"bad key", func(s string) string { return strings.Replace(s, "ed25519:AAEC", "rsa:AAEC", 1) }, `must start with "ed25519:"`},
-		{"short key", func(s string) string { return strings.Replace(s, "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=", "AAEC", 1) }, "32-byte"},
+		{"short key", func(s string) string {
+			return strings.Replace(s, "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=", "AAEC", 1)
+		}, "32-byte"},
 		{"exclude prefix", func(s string) string {
 			return strings.Replace(s, "  share:", "  share:\n    exclude: {prefixes: [203.0.113.5/24]}", 1)
 		}, "host bits"},
@@ -83,7 +85,9 @@ func TestHerdValidation(t *testing.T) {
 			return strings.Replace(s, "classes:", "granularity: route\n    sources: [flow]\n    classes:", 1)
 		}, "cannot be shared at route level"},
 		{"limit range", func(s string) string { return s + "  limits: {max_conns: 0, page_records: 9999}\n" }, "page_records 9999"},
-		{"preview with listen", func(s string) string { return strings.Replace(s, "enabled: true", "enabled: true\n  preview_only: true", 1) }, "remove herd.listen and herd.peers"},
+		{"preview with listen", func(s string) string {
+			return strings.Replace(s, "enabled: true", "enabled: true\n  preview_only: true", 1)
+		}, "remove herd.listen and herd.peers"},
 		{"duplicate peer", func(s string) string {
 			i := strings.Index(s, "    - url")
 			return s + s[i:]
