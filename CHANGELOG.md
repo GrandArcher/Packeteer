@@ -10,6 +10,7 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 
 ### Added
 
+- Herd hub: `herd.hub` fetches a public list of signed member entries as seed peers and verifies each; `herd entry` prints yours, `herd hub-check` checks a hub repo; release snapshot fallback (#261).
 - Herd phase 1: opt-in `herd:` stores per-round records, serves them signed over pinned mutual TLS, and pulls static peers; `GET /api/herd`, `/api/herd/vantages`, `/api/herd/preview` (#260).
 - CI runs `go test -race ./...` on every PR as its own `race` job; `make race` runs it locally (#380).
 - Multi-site IXP health: each site publishes its fabric measurements over mTLS federation; `ixp.core` measures inter-site RTT and loss; `/ixp/sites`, `GET /api/ixp/sites` (#167).

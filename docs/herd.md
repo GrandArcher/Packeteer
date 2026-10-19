@@ -2,7 +2,9 @@
 
 Herd (#260, [design](design/herd.md)) lets a few operators share what their probes measure. Each member stores its own per-round records, serves them signed over mutual TLS pinned to per-node keys, and pulls the records of its static peers. It is off by default. It is advisory: no herd data is read by `Decide`, a scorer, a policy, or the announcer, and herd never announces. If herd fails at startup (listen address taken, key file unreadable), the controller does not start. Once running, if herd fails, is out of budget, or panics, probing and BGP run as if it were off.
 
-Not in phase 1: peer discovery, RPKI identity, the crowd threshold, probe hints, and route-visibility warnings.
+Peers come from `herd.peers` and, optionally, a public hub list ([herd-hub.md](herd-hub.md)).
+
+Not in phase 1: peer exchange, RPKI identity, the crowd threshold, probe hints, and route-visibility warnings.
 
 ## What leaves the box
 
@@ -38,4 +40,4 @@ Every limit is enforced by the node it protects (see `herd.limits` in [CONFIG.md
 
 ## Lab
 
-`lab/e2e-herd.sh` runs three members (FRR edge plus Packeteer each) on documentation prefixes and ASNs with generated keys. See [lab/README.md](../lab/README.md). Labs never talk to a real herd and no seed is configured.
+`lab/e2e-herd.sh` runs three members (FRR edge plus Packeteer each) on documentation prefixes and ASNs with generated keys. See [lab/README.md](../lab/README.md). Labs never talk to a real herd and configure no hub.

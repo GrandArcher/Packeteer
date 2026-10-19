@@ -95,6 +95,8 @@ type member struct {
 	rib   *fakeRIB
 	trips *Trips
 	srv   *Server
+	// hub, when set, is the hub peers' keys the server also accepts.
+	hub *KeySet
 
 	mu     sync.Mutex
 	now    time.Time
@@ -140,7 +142,7 @@ func (m *member) serve(peers ...*Node) {
 		keys[n.ID()] = n.pub
 	}
 	m.srv = NewServer(ServerOptions{
-		Cfg: m.cfg, ASN: m.asn, Node: m.node, Store: m.store, RIB: m.rib, Rules: m.rules, Peers: keys,
+		Cfg: m.cfg, ASN: m.asn, Node: m.node, Store: m.store, RIB: m.rib, Rules: m.rules, Peers: keys, Hub: m.hub,
 		Now: m.clock, Log: slog.New(slog.NewTextHandler(io.Discard, nil)), Trips: m.trips,
 		Active: func() bool { m.mu.Lock(); defer m.mu.Unlock(); return m.active },
 		Audit:  func(a Audit) { m.mu.Lock(); m.audits = append(m.audits, a); m.mu.Unlock() },
