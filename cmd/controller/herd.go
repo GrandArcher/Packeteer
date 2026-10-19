@@ -104,7 +104,7 @@ func newHerd(cfg *config.Config, plugins *pluginhost.Set, view herd.RIB, audit *
 		Rules:   herd.NewRules(cfg.Herd, herdOwnPrefixes(cfg)),
 		Methods: methods, FirstMethod: first, SourceTypes: types, Log: log,
 		Event: func(msg string) {
-			emit(plugin.NewEvent(plugin.EventHerdFailed, time.Now(), msg, nil))
+			emit(plugin.NewEvent(plugin.EventHerdRestarted, time.Now(), msg, nil))
 		},
 		Audit: func(a herd.Audit) {
 			audit.Record(context.Background(), plugin.AuditRecord{

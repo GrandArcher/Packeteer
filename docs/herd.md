@@ -34,7 +34,7 @@ Every limit is enforced by the node it protects (see `herd.limits` in [CONFIG.md
 - `GET /api/herd/preview` (admin): the exact signed bytes a puller would get, for any query, from the same code the pull API runs. `preview_only: true` keeps this and turns serving and pulling off.
 - `GET /api/herd/vantages?origin_asn=64510`: your records and each peer's, one row group per member, country, provider ASN, and method. They are never merged into one number.
 - Every served `records` response is written to the audit log (`GET /api/audit`) as `herd.serve` with the puller's key id, the query, and the record count.
-- `herd.failed` (see [EVENTS.md](EVENTS.md)) fires when a herd goroutine panics and restarts.
+- `herd.restarted` (see [EVENTS.md](EVENTS.md)) fires when a herd goroutine panics and restarts.
 
 ## Lab
 
