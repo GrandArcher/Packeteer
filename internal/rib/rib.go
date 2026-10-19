@@ -534,23 +534,27 @@ func (v *View) handleEvent(r *api.WatchEventResponse) {
 	changed := false
 	if pe := r.GetPeer(); pe != nil && pe.Peer != nil && pe.Peer.State != nil {
 		addr, err := netip.ParseAddr(pe.Peer.State.NeighborAddress)
-		if err == nil && v.neighbors[addr.Unmap()] {
+		if err == nil {
 			st := pe.Peer.State.SessionState
+			// The neighbor check and the peer write share one lock: a
+			// RemoveNeighbors between them would re-create a removed peer.
 			v.mu.Lock()
-			ps := v.peers[addr.Unmap()]
-			est := st == api.PeerState_ESTABLISHED
-			if ps.State != st.String() {
-				ps.State, ps.Established, ps.Since, ps.AddPath = st.String(), est, time.Now(), false
-				v.peers[addr.Unmap()] = ps
-				changed = true
-				if est && v.addPath[addr.Unmap()] {
-					v.readAddPathLocked(addr.Unmap(), ps.Since)
-				}
-				if !est {
-					// Session lost: drop that neighbor's adj-RIB-in now.
-					// Another session staying up does not keep these paths.
-					if v.forgetNeighborLocked(addr.Unmap()) {
-						changed = true
+			if v.neighbors[addr.Unmap()] {
+				ps := v.peers[addr.Unmap()]
+				est := st == api.PeerState_ESTABLISHED
+				if ps.State != st.String() {
+					ps.State, ps.Established, ps.Since, ps.AddPath = st.String(), est, time.Now(), false
+					v.peers[addr.Unmap()] = ps
+					changed = true
+					if est && v.addPath[addr.Unmap()] {
+						v.readAddPathLocked(addr.Unmap(), ps.Since)
+					}
+					if !est {
+						// Session lost: drop that neighbor's adj-RIB-in now.
+						// Another session staying up does not keep these paths.
+						if v.forgetNeighborLocked(addr.Unmap()) {
+							changed = true
+						}
 					}
 				}
 			}
