@@ -241,7 +241,7 @@ func (s *Scorer) Plan(in plugin.PlanInput) []plugin.PlanMove {
 		moves = append(moves, plugin.PlanMove{
 			Prefix: px.Prefix, Provider: best, Cause: plugin.CauseCost, Savings: savings,
 			ReliefMbps: px.VolumeMbps,
-			Reason:     fmt.Sprintf("cost: %s %.4g→%s %.4g per Mbps inside floor", px.Native, nc, best, bestCost),
+			Reason:     fmt.Sprintf("cost: %s %.4g->%s %.4g per Mbps inside floor", px.Native, nc, best, bestCost),
 		})
 	}
 	return moves
