@@ -1651,13 +1651,14 @@ jobs:
             PACKETEER_SNMP_AUTH=lab-auth-secret PACKETEER_SNMP_PRIV=lab-priv-secret \
             /tmp/ui330/pk -config /tmp/ui330/config.yaml >/tmp/ui330/pk.log 2>&1 &
           pk=$!
+          auth=(-u lab:lab-only)
           ok=0
           for _ in $(seq 1 30); do
-            if curl -fsS -u lab:lab-only http://127.0.0.1:18330/healthz >/dev/null 2>&1; then ok=1; break; fi
+            if curl -fsS "${auth[@]}" http://127.0.0.1:18330/healthz >/dev/null 2>&1; then ok=1; break; fi
             sleep 1
           done
           test "$ok" = 1
-          curl -fsS -u lab:lab-only http://127.0.0.1:18330/api/config/schema | jq -e '(.blocks | map(.id)) | contains(["scorer","bgp","bmp","maintenance","inbound_announcer","anomaly","mitigation","http"])'
+          curl -fsS "${auth[@]}" http://127.0.0.1:18330/api/config/schema | jq -e '(.blocks | map(.id)) | contains(["scorer","bgp","bmp","maintenance","inbound_announcer","anomaly","mitigation","http"])'
           /tmp/ui330/uiproxy -listen 127.0.0.1:18331 -upstream http://127.0.0.1:18330 -user lab -password lab-only \
             -fixtures lab/ui-fixtures/sections >/tmp/ui330/proxy.log 2>&1 &
           proxy=$!
