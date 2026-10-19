@@ -110,8 +110,12 @@ type Result struct {
 	Valid  bool     `json:"valid"`
 	Errors []string `json:"errors,omitempty"`
 	Mode   string   `json:"mode,omitempty"`
-	// Changed lists the keys that differ from the running config.
+	// Changed lists the keys that differ from the running config. Restart
+	// and Online split them: the first need a restart, the second apply
+	// while running (#330).
 	Changed []string `json:"changed,omitempty"`
+	Restart []string `json:"restart,omitempty"`
+	Online  []string `json:"online,omitempty"`
 	// RestartRequired is true when a key that cannot apply online changed.
 	// The new file applies on the next start.
 	RestartRequired bool `json:"restart_required"`
@@ -162,11 +166,39 @@ func (e *Editor) checkLocked(data []byte) Result {
 		restart, online := e.diff(e.running, next)
 		res.Changed = append(append([]string{}, restart...), online...)
 		slices.Sort(res.Changed)
+		res.Restart, res.Online = slices.Clone(restart), slices.Clone(online)
+		slices.Sort(res.Restart)
+		slices.Sort(res.Online)
 		res.RestartRequired = len(restart) > 0
 		res.ReloadOnline = len(online) > 0 && len(restart) == 0
 	}
 	res.EnablesInject = injectOn(next, e.diskConfig())
 	return res
+}
+
+// Preview is what Save would do with a candidate: the checks, a line diff
+// of the file on disk to the candidate, and the keys that differ.
+type Preview struct {
+	Result  Result   `json:"result"`
+	Diff    string   `json:"diff"`
+	Changes []Change `json:"changes"`
+}
+
+// Preview checks data and diffs it against the file on disk. It writes
+// nothing and does not need the base hash: Save still does.
+func (e *Editor) Preview(data []byte) (Preview, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	cur, err := os.ReadFile(e.path)
+	if err != nil {
+		return Preview{}, err
+	}
+	res := e.checkLocked(data)
+	changes := Diff(cur, data)
+	if changes == nil {
+		changes = []Change{}
+	}
+	return Preview{Result: res, Diff: lineDiff(string(cur), string(data)), Changes: changes}, nil
 }
 
 // diskConfig is the config on disk, the running config when the file does

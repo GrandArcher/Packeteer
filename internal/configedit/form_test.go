@@ -47,12 +47,15 @@ telemetry:
       hosts:
         - name: edge
           address: 192.0.2.254
+          version: 2c
           community_env: PACKETEER_SNMP_COMMUNITY
       providers:
         - name: transit-a
           host: edge
           interface: eth0
           commit_mbps: 1000
+          billing_day: 1
+          percentile: greater
 notifiers:
   - type: smtp
     config:

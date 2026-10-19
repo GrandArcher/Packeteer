@@ -35,8 +35,8 @@ const (
 // FormFlow is one `flow` source. Key is the source's position in `sources`
 // when the form was loaded; empty means a new source. Dropping a row
 // removes the source, including its problems, transit, and subranges
-// blocks. Those three blocks are kept as they are while the source stays.
-// TopN is the priority tier, MaxTargets the larger capped set, and
+// blocks. Those three are Extra (#330); a request that omits Extra keeps
+// them as they are. TopN is the priority tier, MaxTargets the larger capped set, and
 // TailInterval the interval for the rest. AggregateV4 and AggregateV6 are
 // the lengths a destination with no covering learned prefix is grouped to.
 type FormFlow struct {
@@ -52,6 +52,7 @@ type FormFlow struct {
 	AggregateV4  string   `json:"aggregate_v4"`
 	AggregateV6  string   `json:"aggregate_v6"`
 	Exclude      []string `json:"exclude"`
+	Extra        Values   `json:"extra"`
 }
 
 // FormPolicy is one `rules` policy. Key is its position in `policies`
@@ -110,7 +111,9 @@ func readSections(root *yaml.Node, f *Form) error {
 	f.Flows = []FormFlow{}
 	for _, e := range typedEntries(root, "sources", "flow") {
 		fl := FormFlow{Key: e.key, Name: scalar(e.node, "name"), Listen: []string{}, Exclude: []string{}}
-		if cfg, ok := mappingChild(e.node, "config"); ok {
+		cfg, ok := mappingChild(e.node, "config")
+		fl.Extra = readValues(cfg, flowExtras)
+		if ok {
 			fl.Listen = listOrScalar(cfg, "listen")
 			fl.Window = scalar(cfg, "window")
 			fl.TopN = scalar(cfg, "top_n")
@@ -309,6 +312,9 @@ func (f *Form) fillSections(cur Form) {
 	}
 	for i := range f.Flows {
 		fl := &f.Flows[i]
+		if fl.Extra == nil {
+			fl.Extra = cur.flowExtra(fl.Key)
+		}
 		if fl.Listen == nil {
 			fl.Listen = []string{}
 		}
@@ -336,6 +342,17 @@ func (f *Form) fillSections(cur Form) {
 			}
 		}
 	}
+}
+
+// flowExtra is the extra blocks of the flow source with this key, or the
+// empty blocks for a new source.
+func (f Form) flowExtra(key string) Values {
+	for _, fl := range f.Flows {
+		if key != "" && fl.Key == key {
+			return fl.Extra
+		}
+	}
+	return readValues(nil, flowExtras)
 }
 
 // withoutUnchangedSections drops the sections the operator did not edit,
@@ -608,7 +625,10 @@ func validateOneFlow(fl FormFlow, bound map[string]bool) error {
 	if err := numberField("flow.min_pct", fl.MinPct, 0, 100); err != nil {
 		return err
 	}
-	return validPrefixList("flow.exclude", fl.Exclude)
+	if err := validPrefixList("flow.exclude", fl.Exclude); err != nil {
+		return err
+	}
+	return validateValues("flow", flowExtras, fl.Extra)
 }
 
 var ruleActions = map[string]bool{"ignore": true, "allow": true, "deny": true, "static": true, "vip": true}
@@ -824,7 +844,7 @@ func validateOneOutage(o FormOutage) error {
 // ---- applying ----
 
 func applySections(root *yaml.Node, cur, next Form) error {
-	err := rewriteSection(root, "sources", "flow", cur.Flows, next.Flows, func(n *yaml.Node, e FormFlow) error { applyFlow(n, e); return nil })
+	err := rewriteSection(root, "sources", "flow", cur.Flows, next.Flows, applyFlow)
 	if err == nil {
 		err = rewriteSection(root, "sources", "vip", cur.VIPs, next.VIPs, func(n *yaml.Node, e FormVIP) error { applyVIP(n, e); return nil })
 	}
@@ -1050,7 +1070,7 @@ func setStringList(m *yaml.Node, key string, vals []string, tag string) {
 	}
 }
 
-func applyFlow(src *yaml.Node, fl FormFlow) {
+func applyFlow(src *yaml.Node, fl FormFlow) error {
 	setOrDelete(src, "name", fl.Name, "!!str")
 	cfg := configOf(src)
 	// One address is written as a plain string, several as a list.
@@ -1072,6 +1092,7 @@ func applyFlow(src *yaml.Node, fl FormFlow) {
 	setOrDelete(cfg, "aggregate_v4", fl.AggregateV4, "!!int")
 	setOrDelete(cfg, "aggregate_v6", fl.AggregateV6, "!!int")
 	setStringList(cfg, "exclude", fl.Exclude, "!!str")
+	return syncValues(cfg, flowExtras, fl.Extra)
 }
 
 func applyVIP(src *yaml.Node, v FormVIP) {

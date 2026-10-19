@@ -110,6 +110,8 @@ func (s *Server) routeTable() []route {
 		{"GET /api/audit", admin, s.handleAudit},
 		{"GET /api/config", admin, s.handleConfig},
 		{"POST /api/config/validate", admin, s.handleConfigValidate},
+		{"POST /api/config/preview", admin, s.handleConfigPreview},
+		{"GET /api/config/schema", admin, s.handleConfigSchema},
 		{"PUT /api/config", admin, s.handleConfigSave},
 		{"POST /api/config/wizard", admin, s.handleWizard},
 		{"POST /api/config/form", admin, s.handleConfigForm},

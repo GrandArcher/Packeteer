@@ -166,7 +166,7 @@
       <div class="controls"><button type="button" id="cs-next-1">Next</button></div>
     </div>
     <div id="cs-2" hidden>
-      <p class="tag">Tick each provider you pay a commit on. Its commit (Mbps) is the billing commit; the SNMP host and interface are where Packeteer reads its usage. A tracked provider cannot be untracked here: remove its binding in the YAML.</p>
+      <p class="tag">Tick each provider you pay a commit on. Its commit (Mbps) is the billing commit; the SNMP host and interface are where Packeteer reads its usage. Untick a provider to stop tracking it; its binding is removed on Apply and the provider stays.</p>
       <div id="cs-hosts"></div>
       <div class="controls"><button type="button" id="cs-add-host">+ SNMP host</button></div>
       <div id="cs-providers"></div>
@@ -196,8 +196,8 @@
   </section>
   <section id="editor-section">
     <h2>Settings</h2>
-    <p class="tag">The form edits providers, exchanges and their peers, probe prefixes, the allowlist, the flow, VIP, and outage sources, the <code>rules</code> policies, and the knobs that change a decision. The YAML stays beside it: anything the form does not show is kept. Apply copies the form into the YAML and does not write the file. Save runs the same checks as a start. Thresholds, hold time, the improvement cap, policies, sources, probe timing, mode, the allowlist, and <code>bgp.neighbors</code> apply on Save. Any other change waits for a restart. Turning inject on still needs the confirmation. Secrets stay in environment variables, not in the form. Needs <code>http.config_editor: true</code> and the admin role.</p>
-    <div class="settings-split">
+    <p class="tag">Everything is a form here. Save merges your changes into the file, runs the same checks as a start, and writes it; the Preview below shows the difference and which changes need a restart first. Keys the form does not know are kept exactly as they are, and a form you did not change writes nothing. Thresholds, hold time, the improvement cap, policies, sources, probe timing, mode, the allowlist, and BGP neighbors apply on Save. Any other change waits for a restart. Turning inject on needs the checklist and a confirmation. Secrets stay in environment variables: the form asks for the variable's name, never the secret. The raw YAML is the last section, for anything the forms do not show. Needs <code>http.config_editor: true</code> and the admin role.</p>
+    <div class="settings-form">
       <div>
         <h3>Decision</h3>
         <fieldset id="form-fields" class="form">
@@ -258,8 +258,22 @@
           </label>
         </fieldset>
         <p id="fm-scorer" class="tag"></p>
+        <div id="inject-box" class="card" hidden>
+          <h4>Before inject</h4>
+          <p class="tag">Inject announces routes to your edge. The file must pass this checklist when you Save; a missing item is named in the errors. Nothing is announced until you Save, confirm, and the controller applies it.</p>
+          <ul class="checklist">
+            <li>The allowlist below has at least one prefix.</li>
+            <li>A BGP neighbor is set.</li>
+            <li>A route community and a non-zero local preference are set, in Inject settings below.</li>
+            <li>The announcer is set, in Inject settings below.</li>
+            <li>Hold time is positive, and both loss and latency deltas are positive.</li>
+            <li>This is a lab. Do not point it at a public edge.</li>
+          </ul>
+          <div class="block-mount" data-block="inject"></div>
+        </div>
+        <div class="block-mount" data-block="scorer"></div>
         <h3>Providers</h3>
-        <p class="tag">Plus adds an empty row. Minus removes one. Cost is the price per Mbps. Commit is the telemetry binding's commit; the form does not ask for an SNMP community or any other secret.</p>
+        <p class="tag">Plus adds an empty row. Minus removes one. Cost is the price per Mbps. Commit is the telemetry binding's commit, set up in the Commit setup above; the form does not ask for an SNMP community or any other secret. BMP use says whether paths from the BMP station count for that provider.</p>
         <div id="form-providers"></div>
         <button type="button" id="form-add-provider">+ Provider</button>
         <h3>Suggestions from BGP</h3>
@@ -268,8 +282,10 @@
           <button type="button" id="sug-refresh">Refresh suggestions</button>
         </div>
         <div id="form-suggestions"></div>
+        <div class="block-mount" data-block="bgp"></div>
+        <div class="block-mount" data-block="bmp"></div>
         <h3>Exchanges</h3>
-        <p class="tag">Every <code>exchanges</code> entry: its peering LANs and the peers on them. A peer is a provider with its own next hop on a LAN. It is always route-checked, so the file needs <code>add_path</code> on a <code>bgp.neighbors</code> entry or <code>bmp: prefer</code> or <code>only</code> with <code>rib_sources</code>; Save checks that. The probe source of a peer is required before Save. Exclude and precedence stay in the YAML. Add one LAN per row. No session or route-server credential is asked for. Nothing is probed or announced until you save and restart.</p>
+        <p class="tag">Every exchange: its peering LANs and the peers on them. A peer is a provider with its own next hop on a LAN. It is always route-checked, so a BGP neighbor needs add-path, or BMP use must be prefer or only with a BMP station; Save checks that. The probe source of a peer is required before Save. Exclude and precedence are under each peer's Show advanced. Add one LAN per row. No session or route-server credential is asked for. Nothing is probed or announced until you save and restart.</p>
         <fieldset id="form-exchanges" class="form"></fieldset>
         <button type="button" id="form-add-exchange">+ Exchange</button>
         <h3>Discovered members</h3>
@@ -279,7 +295,7 @@
         </div>
         <div id="form-ix-discovered"></div>
         <h3>Prefixes to probe</h3>
-        <p class="tag">The first <code>static</code> source. Other sources stay in the YAML.</p>
+        <p class="tag">The first static source. Other source types are under Plugins.</p>
         <div id="form-targets"></div>
         <button type="button" id="form-add-target">+ Prefix</button>
         <h3>Allowlist</h3>
@@ -287,23 +303,24 @@
         <div id="form-allow"></div>
         <button type="button" id="form-add-allow">+ Allowlist prefix</button>
         <h3>Flow collectors</h3>
-        <p class="tag">Every <code>flow</code> source (NetFlow v5/v9, IPFIX, sFlow). It measures only. A second source needs its own name and listen address. Removing a source removes it from the YAML, including its <code>problems</code>, <code>transit</code>, and <code>subranges</code> blocks; those blocks are otherwise kept. Each listen address and each excluded prefix is its own row. Binds host UDP ports with <code>--network host</code>; do not publish them.</p>
+        <p class="tag">Every <code>flow</code> source (NetFlow v5/v9, IPFIX, sFlow). It measures only. A second source needs its own name and listen address. Removing a source removes it, including its problem, transit, and sub-range settings, which are under each source's Show advanced. Each listen address and each excluded prefix is its own row. Binds host UDP ports with <code>--network host</code>; do not publish them.</p>
         <fieldset id="form-flows" class="form"></fieldset>
         <button type="button" id="form-add-flow">+ Flow source</button>
         <h3>Policies (rules)</h3>
-        <p class="tag">Every <code>rules</code> policy, in file order. A policy only restricts or pins what the decision engine may choose: the learned-RIB check, allowlist, cap, hold time, and withdraw rules still apply. Policies and the rules in them are evaluated in the order shown. A second policy needs its own name. Providers, prefixes, ASNs, and countries are picked one at a time. A country rule needs a GeoIP database: an absolute path to a file mounted in the container; Packeteer does not fetch it. Removing a policy removes it from the YAML. Maintenance windows and other policy types stay as they are.</p>
+        <p class="tag">Every <code>rules</code> policy, in file order. A policy only restricts or pins what the decision engine may choose: the learned-RIB check, allowlist, cap, hold time, and withdraw rules still apply. Policies and the rules in them are evaluated in the order shown. A second policy needs its own name. Providers, prefixes, ASNs, and countries are picked one at a time. A country rule needs a GeoIP database: an absolute path to a file mounted in the container; Packeteer does not fetch it. Removing a policy removes it. Maintenance windows are below; other policy types are under Plugins.</p>
         <fieldset id="form-policies" class="form"></fieldset>
         <button type="button" id="form-add-policy">+ Policy</button>
+        <div class="block-mount" data-block="maintenance"></div>
         <h3>VIP</h3>
-        <p class="tag">Every <code>vip</code> source: critical prefixes and ASNs probed on their own interval. Removing a source removes it from the YAML.</p>
+        <p class="tag">Every <code>vip</code> source: critical prefixes and ASNs probed on their own interval. Removing a source removes it.</p>
         <fieldset id="form-vips" class="form"></fieldset>
         <button type="button" id="form-add-vip">+ VIP source</button>
         <h3>Outage detection</h3>
-        <p class="tag">Every <code>outage</code> source: when many prefixes fail together it re-probes them and raises an event. It never announces. Empty fields use the defaults. Removing a source removes it from the YAML.</p>
+        <p class="tag">Every <code>outage</code> source: when many prefixes fail together it re-probes them and raises an event. It never announces. Empty fields use the defaults. Removing a source removes it.</p>
         <fieldset id="form-outages" class="form"></fieldset>
         <button type="button" id="form-add-outage">+ Outage detection</button>
         <h3>Inbound optimization <span id="in-badge" class="badge mode-unknown">…</span></h3>
-        <p class="tag">The <code>inbound</code> block (docs/inbound.md). <span id="in-badge-text">Observe logs steers and announces nothing.</span> The form never turns inject on: that is a YAML edit after the inject checklist, and Save asks you to confirm it. Unchecking removes the block, announcer included. Each prefix is its own row. Each trigger you moderate is only suggested, even in inject. The announcer (<code>inbound.announcer</code>) stays in the YAML. <span id="in-announcer"></span></p>
+        <p class="tag">The <code>inbound</code> block (docs/inbound.md). <span id="in-badge-text">Observe logs steers and announces nothing.</span> The form never turns inbound inject on: do that in the raw YAML after the inject checklist, and Save asks you to confirm it. Unchecking removes the block, announcer included. Each prefix is its own row. Each trigger you moderate is only suggested, even in inject. The announcer is set below. <span id="in-announcer"></span></p>
         <fieldset id="form-inbound" class="form">
           <label class="check" title="inbound"><input id="in-enabled" type="checkbox"> Inbound optimization on</label>
           <label class="field"><span class="field-label" title="inbound.mode">Mode</span>
@@ -311,7 +328,7 @@
               <option value="observe">observe</option>
               <option value="suggest">suggest</option>
             </select>
-            <span class="field-help">Observe logs steers. Suggest recommends them. Turning inject on stays a YAML edit.</span>
+            <span class="field-help">Observe logs steers. Suggest recommends them. Inbound inject is turned on in the raw YAML.</span>
             <span class="field-error" hidden></span>
           </label>
           <div class="field"><span class="field-label" title="inbound.prefixes">Your prefixes</span><input id="in-prefixes" type="hidden"><div id="in-prefix-box" class="g-prefixes"></div><span class="field-help">Prefixes this network originates. Pick one learned with an empty AS path, or add a prefix.</span><span class="field-error" hidden></span></div>
@@ -330,31 +347,48 @@
           <label class="field"><span class="field-label" title="inbound.damping.backoff">Damping backoff</span><input id="in-damp-backoff" class="g-num" type="number" min="1" max="16" step="any" placeholder="2"><span class="field-help">Multiplier applied each time a steer flaps. Default 2.</span><span class="field-error" hidden></span></label>
           <label class="field"><span class="field-label" title="inbound.damping.max_hold">Damping max hold</span><span class="g-dur"><input id="in-damp-max-raw" type="hidden" class="g-raw"><input id="in-damp-max" class="g-num" type="number" min="0" step="any"><select id="in-damp-max-unit" class="g-unit" aria-label="Damping max hold unit"><option value="ms">ms</option><option value="s">s</option><option value="m" selected>m</option><option value="h">h</option></select></span><span class="field-help">Longest a damped steer stays. Empty uses eight times the hold time.</span><span class="field-error" hidden></span></label>
         </fieldset>
+        <div class="block-mount" data-block="inbound_announcer"></div>
+        <div class="block-mount" data-block="mitigation"></div>
+        <div class="block-mount" data-block="anomaly"></div>
         <h3>Anomaly rules <span id="an-badge" class="badge mode-unknown">…</span></h3>
-        <p class="tag">The <code>anomaly.rules</code> list (docs/anomaly.md). A rule turns a detected anomaly into a mitigation rule, and only the mitigation controller acts on it: its mode, allowlist, rule cap, and learned-RIB check apply. <span id="an-badge-text"></span> The first matching rule wins. The detector, source, and caps stay in the YAML, and the form cannot add a detector.</p>
+        <p class="tag">The anomaly rules (docs/anomaly.md). A rule turns a detected anomaly into a mitigation rule, and only the mitigation controller acts on it: its mode, allowlist, rule cap, and learned-RIB check apply. <span id="an-badge-text"></span> The first matching rule wins. Rules need the detector above to be on.</p>
         <p id="an-state" class="tag"></p>
         <div id="form-anomaly-rules"></div>
         <button type="button" id="form-add-anomaly-rule">+ Anomaly rule</button>
+        <div class="block-mount" data-block="http"></div>
+        <h3>Plugins</h3>
+        <p class="tag">Probers, notifiers, telemetry, storage, and the sources and policies that have no card above. Untick one to remove it on Save; the Preview shows what goes. Show settings lists its plain settings. A key that may hold a secret is listed by name and never shown, and a nested value is kept as it is.</p>
+        <div id="form-plugins"></div>
         <div class="controls">
           <button type="button" id="form-apply">Apply form to YAML</button>
           <button type="button" id="form-reload">Reload form from YAML</button>
         </div>
         <div id="form-status" class="tag"></div>
       </div>
-      <div>
-        <h3>YAML</h3>
-        <div class="controls">
-          <button type="button" id="ed-load">Load</button>
-          <button type="button" id="ed-check">Validate</button>
-          <label><input id="ed-inject" type="checkbox"> I confirm this turns inject on</label>
-          <button type="button" id="ed-save">Save</button>
-        </div>
-        <div id="ed-status" class="tag"></div>
-        <ul id="ed-errors" class="errors"></ul>
-        <textarea id="ed-yaml" class="editor mono" rows="30" spellcheck="false"></textarea>
-        <p class="tag">File: <span id="ed-path" class="mono">—</span> sha256 <span id="ed-sha" class="mono">—</span></p>
-      </div>
     </div>
+    <div id="preview" class="preview">
+      <h3>Preview</h3>
+      <p class="tag">What Save would do, from the form as it is now. It applies the form to the YAML text, checks the result the way a start does, and compares it with the file. Nothing is written.</p>
+      <div class="controls"><button type="button" id="pv-run">Preview changes</button></div>
+      <div id="pv-state" class="tag" role="status">Press Preview changes to compare with the file.</div>
+      <ul id="pv-errors" class="errors"></ul>
+      <p id="pv-restart" class="tag" hidden></p>
+      <p id="pv-online" class="tag" hidden></p>
+      <pre id="pv-diff" class="mono diff"></pre>
+    </div>
+    <details id="raw-yaml" class="advanced">
+      <summary>Advanced: raw YAML</summary>
+      <p class="tag">The file itself, for anything the forms above do not show. Validate runs the same checks as a start. Save writes the text as it stands, after applying any form changes. Inject needs the confirmation.</p>
+      <div class="controls">
+        <button type="button" id="ed-load">Load</button>
+        <button type="button" id="ed-check">Validate</button>
+        <button type="button" id="ed-save">Save</button>
+      </div>
+      <div id="ed-status" class="tag"></div>
+      <ul id="ed-errors" class="errors"></ul>
+      <textarea id="ed-yaml" class="editor mono" rows="30" spellcheck="false"></textarea>
+      <p class="tag">File: <span id="ed-path" class="mono">-</span> sha256 <span id="ed-sha" class="mono">-</span></p>
+    </details>
   </section>
   <section>
     <h2>Report subscriptions</h2>
@@ -385,7 +419,9 @@
 <div id="save-bar" class="savebar" data-state="clean" role="region" aria-label="Apply and save">
   <span id="unsaved" class="badge warn" hidden>Unsaved changes</span>
   <span id="bar-msg" class="tag" role="status"></span>
+  <label id="inject-confirm" class="check" hidden><input id="ed-inject" type="checkbox"> I confirm this turns inject on</label>
   <button type="button" id="bar-apply">Apply form to YAML</button>
+  <button type="button" id="bar-preview">Preview changes</button>
   <button type="button" id="bar-save">Save</button>
 </div>
 </div>
@@ -394,6 +430,7 @@
 <script src="/shell.js"></script>
 <script src="/countries.js"></script>
 <script src="/settings.js"></script>
+<script src="/blocks.js"></script>
 <script src="/commitsetup.js"></script>
 <script src="/upgrade.js"></script>
 </body>
