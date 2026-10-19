@@ -5,13 +5,18 @@
 // text, and Save is the editor's. There is no field for a secret: a new
 // SNMP host names the environment variable that holds its community.
 
-var cs = {scorer: "weighted", balance: "", precedence: "performance", tracked: {}};
+var cs = {scorer: "weighted", balance: "", precedence: "performance"};
 var CS_ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
 var CS_PERCENTILES = [["greater_separate", "greater of the in and out 95th"], ["greater", "95th of the larger direction"], ["separate", "in and out apart (out is compared)"]];
 
 function csKey(p) { return p.key || p.name; }
 
 var csRows = new WeakMap();
+
+// csTicks holds the Track commit tick per provider object, not per name: a
+// provider the form just added is renamed while it is typed, and a name key
+// would lose the tick.
+var csTicks = new WeakMap();
 
 // csRow is the commit row of a form provider. A provider the form just
 // added has none yet. The row is remembered per provider object because
@@ -33,7 +38,7 @@ function csRow(p) {
   return row;
 }
 
-function csTracked(p) { return !!(p.commit_bound || cs.tracked[csKey(p)]); }
+function csTracked(p) { return !!(p.commit_bound || csTicks.get(p)); }
 
 // csProviders are the form's providers that have a name; a draft row waits
 // for one.
@@ -193,7 +198,7 @@ function renderCsProviders() {
     tick.checked = csTracked(p);
     tick.disabled = !!p.commit_bound;
     tick.addEventListener("change", function () {
-      cs.tracked[csKey(p)] = tick.checked;
+      csTicks.set(p, tick.checked);
       if (tick.checked) {
         row.host = row.host || csHostNames()[0] || "";
         row.billing_day = row.billing_day || "1";

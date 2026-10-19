@@ -687,6 +687,7 @@ jobs:
             - name: lab-d
               source_ip: 127.0.0.4
               next_hop: 192.0.2.4
+              cc_disable: True
           storage:
             type: sqlite
           telemetry:
@@ -701,7 +702,7 @@ jobs:
                 providers:
                   - {name: lab-a, host: edge, interface: ether1, commit_mbps: 100, billing_day: 1, percentile: separate}
                   - {name: lab-b, host: edge, interface: ether1, commit_mbps: 200, billing_day: 1, percentile: separate}
-                  - {name: lab-c, host: edge, interface: ether3, commit_mbps: 50, billing_day: 1, percentile: separate}
+                  - {name: lab-c, host: edge, interface: ether3, commit_mbps: 50, billing_day: 1, percentile: Separate}
           YAML
           docker run -d --name pkui174 --network host --cap-add NET_RAW --cap-add NET_ADMIN \
             -e PACKETEER_HTTP_USER=lab -e PACKETEER_HTTP_PASSWORD=lab-only -e PACKETEER_SNMP_COMMUNITY=lab-only-community \
@@ -766,7 +767,9 @@ jobs:
           # Headless Chrome cannot click, so uiproxy adds a driver to
           # /settings.html. It walks the Commit setup: the commit scorer, a
           # community typed where a variable name goes (refused in the page),
-          # a new SNMP host, a commit and binding on lab-d, a group. Apply
+          # a new SNMP host, a commit and binding on lab-d, a provider renamed after
+          # its commit is ticked, a group. lab-c has percentile: Separate and lab-d
+          # cc_disable: True, which the form must read as the loader does. Apply
           # writes the YAML text and the editor validates it with the same
           # checks as a start. The file is mounted read-only and not saved.
           /tmp/uiproxy -listen 127.0.0.1:18176 -upstream "$base" -user lab -password lab-only \
@@ -782,8 +785,10 @@ jobs:
             'balance shown: true | precedence shown: false' \
             'refused: SNMP host edge2: enter the name of the environment variable that holds the community (letters, digits, underscore), not the community itself. | step 2 shown: true' \
             'Scorer: commit (was weighted). | Balance in a group: equal. | New SNMP host edge2 at 192.0.2.253, version 2c, community read from the environment variable PACKETEER_SNMP_COMMUNITY.' \
-            'lab-d: commit 300 Mbps on edge2 ether2, billing day 5, greater_separate; group pair; precedence 200.' \
-            'yaml: commit scorer true | balance equal true | host edge2 true | env name true | commit 300 true | interface ether2 true | billing day 5 true | precedence 200 true | group pair true | mode observe true | no community true' \
+            'case: lab-c percentile separate | lab-d cc_disable true' \
+            'renamed: Provider lab-y: enter a commit greater than zero (Mbps). | Provider lab-y: enter the interface name. | step 2 shown: true | lab-y tracked: true' \
+            'lab-d: commit 300 Mbps on edge2 ether2, billing day 5, greater_separate; group pair; precedence 200; cc_disable.' \
+            'yaml: commit scorer true | balance equal true | host edge2 true | env name true | commit 300 true | interface ether2 true | billing day 5 true | precedence 200 true | group pair true | cc_disable kept true | mode observe true | no community true' \
             'validated: Valid · mode observe · changed: providers, scorer, telemetry · restart required' \
             --absent 'Cannot reach' 'mode-inject' 'lab-only-community' 's3cret-community'
       - name: UI reports smoke (#178; range, filters, sorting, CSV and XLSX from seeded history, observe)
