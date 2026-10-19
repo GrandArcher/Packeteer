@@ -338,3 +338,51 @@ func TestCommitSetupRefusesACustomScorer(t *testing.T) {
 		t.Fatalf("err = %v", err)
 	}
 }
+
+// The loader takes cc_disable as any YAML boolean and percentile in any case,
+// so the form must read both the same way. Reading True as false would turn
+// commit control back on for that provider on the next Apply.
+func TestCommitSetupKeepsFileCase(t *testing.T) {
+	src := strings.Replace(formYAML, "    group: edge\n", "    group: edge\n    cc_disable: True\n", 1)
+	src = strings.Replace(src, "          commit_mbps: 1000\n", "          commit_mbps: 1000\n          billing_day: 3\n          percentile: Separate\n", 1)
+	if src == formYAML || !strings.Contains(src, "cc_disable: True") || !strings.Contains(src, "percentile: Separate") {
+		t.Fatal("test file does not carry the mixed-case values")
+	}
+	if _, err := config.Parse([]byte(src)); err != nil {
+		t.Fatalf("loader refuses the file: %v", err)
+	}
+	f, err := ParseForm([]byte(src))
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := commitRow(&f, "transit-a")
+	if !r.CCDisable || r.Percentile != "separate" {
+		t.Fatalf("row = %+v", r)
+	}
+
+	r.Group = "core"
+	out, err := ApplyForm([]byte(src), f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Parse(out)
+	if err != nil {
+		t.Fatalf("parse: %v\n%s", err, out)
+	}
+	if !cfg.Providers[0].CCDisable || cfg.Providers[0].Group != "core" {
+		t.Fatalf("provider = %+v\n%s", cfg.Providers[0], out)
+	}
+
+	f, _ = ParseForm([]byte(src))
+	commitRow(&f, "transit-a").Percentile = "Greater"
+	out, err = ApplyForm([]byte(src), f)
+	if err != nil {
+		t.Fatalf("mixed-case percentile from the form: %v", err)
+	}
+	if !strings.Contains(string(out), "percentile: greater") {
+		t.Fatalf("percentile not stored lower case:\n%s", out)
+	}
+	if _, err := config.Parse(out); err != nil {
+		t.Fatalf("parse: %v\n%s", err, out)
+	}
+}

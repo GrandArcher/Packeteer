@@ -86,15 +86,26 @@ func readCommit(root *yaml.Node, f *Form) {
 	if seq, ok := sequenceChild(root, "providers"); ok {
 		for _, item := range seq.Content {
 			name := scalar(item, "name")
-			row := FormCommitProvider{Name: name, Group: scalar(item, "group"), Precedence: scalar(item, "precedence"), CCDisable: scalar(item, "cc_disable") == "true"}
+			row := FormCommitProvider{Name: name, Group: scalar(item, "group"), Precedence: scalar(item, "precedence"), CCDisable: boolScalar(item, "cc_disable")}
 			if b := findBinding(root, name); b != nil {
 				row.Host, row.Interface = scalar(b, "host"), scalar(b, "interface")
-				row.BillingDay, row.Percentile = scalar(b, "billing_day"), scalar(b, "percentile")
+				row.BillingDay, row.Percentile = scalar(b, "billing_day"), strings.ToLower(strings.TrimSpace(scalar(b, "percentile")))
 			}
 			c.Providers = append(c.Providers, row)
 		}
 	}
 	f.Commit = &c
+}
+
+// boolScalar reads a YAML boolean the way the loader does, so True and TRUE
+// count. A value the loader would refuse reads as false.
+func boolScalar(m *yaml.Node, key string) bool {
+	n, _ := child(m, key)
+	var b bool
+	if n == nil || n.Kind != yaml.ScalarNode || n.Decode(&b) != nil {
+		return false
+	}
+	return b
 }
 
 // ---- normalize, fill, validate ----
@@ -122,6 +133,7 @@ func (f *Form) normalizeCommit() {
 		for _, s := range []*string{&p.Name, &p.Host, &p.Interface, &p.BillingDay, &p.Percentile, &p.Group, &p.Precedence} {
 			*s = strings.TrimSpace(*s)
 		}
+		p.Percentile = strings.ToLower(p.Percentile)
 	}
 }
 
