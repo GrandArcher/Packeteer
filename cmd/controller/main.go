@@ -25,6 +25,7 @@ import (
 	"github.com/GrandArcher/Packeteer/internal/anomaly"
 	"github.com/GrandArcher/Packeteer/internal/config"
 	"github.com/GrandArcher/Packeteer/internal/exchange"
+	"github.com/GrandArcher/Packeteer/internal/herd"
 	"github.com/GrandArcher/Packeteer/internal/httpapi"
 	"github.com/GrandArcher/Packeteer/internal/inbound"
 	"github.com/GrandArcher/Packeteer/internal/linkout"
@@ -291,6 +292,10 @@ func run(ctx context.Context, args []string, getenv func(string) string, stdout,
 	if cfg.LeakWatching() {
 		fmt.Fprintf(stdout, "leak_watch: on sources=%d (withdraws a leaked injected route and holds it out until cleared)\n", len(plugins.LeakSources))
 	}
+	if h := cfg.Herd; cfg.HerdOn() {
+		fmt.Fprintf(stdout, "herd: on granularity=%s classes=%s sources=%s peers=%d serving=%t (shares measurements only, never announces, never feeds a decision; changes need a restart)\n",
+			h.Share.Granularity, strings.Join(h.Share.Classes, ","), strings.Join(h.Share.Sources, ","), len(h.Peers), h.Serving())
+	}
 	if el := plugins.Elector; el != nil {
 		fmt.Fprintf(stdout, "ha: %s id=%s (standby until elected; only the active instance announces)\n", el.Type, el.Plugin.Status().ID)
 	}
@@ -439,6 +444,9 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 		return 1
 	}
 	fed := newFedState(cfg, plugins)
+	// Herd (#260) is built once storage is open. The probe loop hands rounds
+	// to it without waiting.
+	var herdRef atomic.Pointer[herd.Herd]
 	var haStatus func() plugin.ElectorStatus
 	if el := plugins.Elector; el != nil {
 		haStatus = func() plugin.ElectorStatus {
@@ -635,7 +643,7 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 			rec.Probe(r)
 		}
 	}
-	engine, err = newEngine(cfg, plugins, log, onRound, onProbe, pktLimiter)
+	engine, err = newEngine(cfg, plugins, log, onRound, onProbe, herdBatch(cfg, &herdRef), pktLimiter)
 	if err != nil {
 		log.Error("refusing to start", "err", err)
 		return 1
@@ -688,6 +696,15 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 		return 1
 	}
 	bootstrapAdmin(ctx, authSvc, audit, getenv, log)
+	hd, herr := startHerd(ctx, cfg, plugins, view, audit, dispatch.Emit, ha.active, log)
+	if herr != nil {
+		log.Error("refusing to start", "err", herr)
+		return 1
+	}
+	if hd != nil {
+		herdRef.Store(hd)
+		httpSrv.SetHerd(hd)
+	}
 	if rec != nil {
 		// History is optional: a store that cannot be read leaves the core
 		// loop running without reports.
@@ -882,6 +899,9 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 	// Only after the withdraw: the standby may announce once this lease
 	// is released (#31).
 	ha.shutdown(stopCtx, withdrawErr)
+	if hd != nil {
+		hd.Stop(stopCtx)
+	}
 	// Mitigation routes withdrawn above are in the feed as withdrawn;
 	// the recorder ends their rules as stopped on Close.
 	if mitChanges := mit.Changes(); len(mitChanges) > 0 {

@@ -177,6 +177,10 @@ type Target struct {
 	// pin ignores them. The engine keeps at most MaxSubranges. When two
 	// sources name the same prefix, the first one's sub-ranges are kept.
 	Subranges []Subrange
+	// Sources are the names of the target sources that listed this
+	// prefix. The probe engine sets them; a source leaves it empty.
+	// Herd (#260) reads them to share only the opted-in target origins.
+	Sources []string
 }
 
 // MaxSubranges is the most sub-ranges the probe engine measures for one

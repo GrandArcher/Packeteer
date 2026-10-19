@@ -257,7 +257,7 @@ func TestRemoteProvidersNotProbed(t *testing.T) {
 		t.Fatal(err)
 	}
 	probers := &pluginhost.Set{Probers: []pluginhost.Instance[plugin.Prober]{{Name: "p", Type: "fake", Plugin: &hungProber{allow: 1 << 30}}}}
-	engine, err := newEngine(cfg, probers, slog.Default(), nil, nil, packetLimiter(cfg))
+	engine, err := newEngine(cfg, probers, slog.Default(), nil, nil, nil, packetLimiter(cfg))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/netip"
+	"slices"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -109,6 +110,10 @@ type Options struct {
 	// all silent from each provider's source and scores that provider at
 	// its own highest stable hop (#123). Nil disables it.
 	Indirect *Indirect
+	// OnBatch, when set, receives the results a round stored, with Share
+	// filled, after OnResult. It must not block (herd hands off to a
+	// bounded queue). Results stored in the engine never carry Share.
+	OnBatch func([]Result)
 }
 
 // Result is the latest measurement of one provider toward one prefix.
@@ -135,6 +140,25 @@ type Result struct {
 	// provider's indirect trace (#124). Empty when no trace is cached.
 	// Outage detection maps them to origin ASNs. Measurement only.
 	Hops []netip.Addr `json:"hops,omitempty"`
+	// Share is the raw evidence behind Stats and the target sources that
+	// listed the prefix, kept only for Options.OnBatch (herd, #260). It is
+	// nil in stored results.
+	Share *Share `json:"-"`
+}
+
+// HostRaw is one probed host's raw outcome: packets sent and one RTT per
+// reply, in send order.
+type HostRaw struct {
+	Sent int
+	RTTs []time.Duration
+}
+
+// Share is the evidence herd builds a record from. Hosts holds the hosts
+// that defined the score, so the records recompute to Stats. It is empty
+// for a failed result, a sub-range aggregate, and an indirect trace.
+type Share struct {
+	Hosts   []HostRaw
+	Sources []string
 }
 
 // OK reports whether the result holds a measurement.
@@ -160,6 +184,9 @@ type job struct {
 	hosts    []netip.Addr
 	subs     []plugin.Subrange
 }
+
+// keepShare reports whether results carry Share.
+func (e *Engine) keepShare() bool { return e.opt.OnBatch != nil }
 
 // Engine runs probe rounds and stores the latest results.
 type Engine struct {
@@ -687,6 +714,7 @@ func (e *Engine) gatherTargets(ctx context.Context) ([]plugin.Target, bool) {
 			// spreads it. Candidates are probed first and are not the
 			// only addresses.
 			t = normalizeTarget(t)
+			t.Sources = []string{s.Name}
 			// The first explicit host stays. A later pin replaces a
 			// default or a candidate. A later candidate replaces only a
 			// default. A later source can shorten the interval. A stored
@@ -694,6 +722,9 @@ func (e *Engine) gatherTargets(ctx context.Context) ([]plugin.Target, bool) {
 			// interval does not slow a prefix that static or flow already
 			// listed.
 			if i, ok := seen[t.Prefix]; ok {
+				if !slices.Contains(out[i].Sources, s.Name) {
+					out[i].Sources = append(out[i].Sources, s.Name)
+				}
 				e.shortenInterval(&out[i], t.Interval)
 				if t.Urgent {
 					out[i].Urgent = true
@@ -1099,6 +1130,12 @@ func (e *Engine) runRound(ctx context.Context, allow func(plugin.Target) bool, m
 					return
 				}
 				r, srcDown := e.probe(roundCtx, j)
+				if e.keepShare() {
+					if r.Share == nil {
+						r.Share = &Share{}
+					}
+					r.Share.Sources = j.target.Sources
+				}
 				if e.indirectEnabled() {
 					if hops := e.traceHops(key{j.provider.Name, j.target.Prefix}); len(hops) > 0 {
 						r.Hops = hops
@@ -1197,8 +1234,10 @@ feed:
 			}
 		}
 		e.finishProberRound()
+		batch := takeShare(fresh)
 		e.commit(fresh, ran, down, keep, merge)
 		e.emitResults(fresh)
+		e.emitBatch(batch)
 		e.rememberProbes(probed)
 		e.addPrefixCommits(len(got))
 		if e.opt.OnRound != nil {
@@ -1235,8 +1274,10 @@ feed:
 		}
 	}
 	e.pruneIndirect(keep)
+	batch := takeShare(stored)
 	e.storeResults(stored, keep, ran, down)
 	e.emitResults(stored)
+	e.emitBatch(batch)
 	e.rememberProbes(committed)
 	e.addPrefixCommits(len(committed))
 	if e.opt.OnRound != nil {
@@ -1255,6 +1296,28 @@ func (e *Engine) emitResults(rs map[key]Result) {
 	}
 	for _, r := range rs {
 		e.opt.OnResult(r)
+	}
+}
+
+// takeShare removes Share from the results about to be stored and returns
+// the results that had it, so the engine keeps no raw samples.
+func takeShare(rs map[key]Result) []Result {
+	var out []Result
+	for k, r := range rs {
+		if r.Share == nil {
+			continue
+		}
+		out = append(out, r)
+		r.Share = nil
+		rs[k] = r
+	}
+	return out
+}
+
+// emitBatch hands the shared evidence of a stored round to OnBatch.
+func (e *Engine) emitBatch(batch []Result) {
+	if e.opt.OnBatch != nil && len(batch) > 0 {
+		e.opt.OnBatch(batch)
 	}
 }
 
@@ -1667,6 +1730,9 @@ func (e *Engine) runChain(ctx context.Context, res Result, p Provider, count, st
 		}
 		r := res
 		r.Prober, r.Stats, r.Time = pr.Name, Compute(raw), e.opt.Now()
+		if e.keepShare() {
+			r.Share = &Share{Hosts: []HostRaw{{Sent: raw.Sent, RTTs: slices.Clone(raw.RTTs)}}}
+		}
 		if r.Stats.Received > 0 {
 			if note != nil {
 				note(i)
@@ -1736,6 +1802,12 @@ func combineHosts(provider string, prefix netip.Prefix, hosts []netip.Addr, samp
 	answered := false
 	for i, s := range used {
 		parts[i] = s.res.Stats
+		if s.res.Share != nil {
+			if res.Share == nil {
+				res.Share = &Share{}
+			}
+			res.Share.Hosts = append(res.Share.Hosts, s.res.Share.Hosts...)
+		}
 		if !answered && s.res.Stats.Received > 0 {
 			res.Target = s.addr
 			answered = true

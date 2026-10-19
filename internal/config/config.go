@@ -205,6 +205,9 @@ type Config struct {
 	// Lookup is the read-only PeeringDB / IX-F directory (#153). Nil
 	// disables it. It never announces.
 	Lookup *PluginSpec `yaml:"lookup"`
+	// Herd is opt-in sharing of probe measurements with other operators
+	// (#260). Nil or disabled is off.
+	Herd *Herd `yaml:"herd"`
 	// IXP is exchange-operator mode (#160). Nil is an edge controller.
 	// Set, Packeteer observes only and never announces.
 	IXP *IXP `yaml:"ixp"`

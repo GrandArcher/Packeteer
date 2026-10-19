@@ -156,6 +156,9 @@ type Server struct {
 	// ixpCorrelation is the fabric incident correlator (#163). Nil until
 	// SetIXPCorrelation. Read at request time. It never announces.
 	ixpCorrelation atomic.Value
+	// herd is opt-in measurement sharing (#260). Nil until SetHerd. It
+	// never announces and never feeds a decision.
+	herd atomic.Value
 	// ixpSites is the multi-site fabric health view (#167). Nil until
 	// SetIXPSites. Read at request time. It never announces.
 	ixpSites atomic.Value
@@ -332,7 +335,7 @@ func (s *Server) handleReady(w http.ResponseWriter, _ *http.Request) {
 	})
 }
 
-func (s *Server) handleMetrics(w http.ResponseWriter, _ *http.Request) {
+func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	_, _ = w.Write(Metrics(s.snapshot()))
@@ -366,6 +369,9 @@ func (s *Server) handleMetrics(w http.ResponseWriter, _ *http.Request) {
 	}
 	if v, ok := s.ixpSitesView(); ok {
 		_, _ = w.Write(IXPSitesMetrics(v))
+	}
+	if src := s.herdSource(); src != nil {
+		_, _ = w.Write(HerdMetrics(src.Status(r.Context())))
 	}
 }
 

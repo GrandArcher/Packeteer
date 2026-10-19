@@ -5,7 +5,8 @@
 // threat mitigation rule, and per-prefix facts (origin ASN, country,
 // volume). Raw probe results are not stored. It also keeps HTTP users,
 // API token hashes, the audit log (#32), recent events (#173), and SNMP 95th-percentile
-// samples for the open billing period (#127).
+// samples for the open billing period (#127), and herd measurement records
+// (#260) in tables the retention prune leaves to herd.
 // Rows older than retention (audit records and events included) are deleted on start and once a day. The plugin
 // records history only; it never announces routes or changes decisions.
 package sqlite
@@ -244,7 +245,7 @@ func (s *Store) Start(ctx context.Context) error {
 		return err
 	}
 	db.SetMaxOpenConns(1)
-	if _, err := db.ExecContext(ctx, schema); err != nil {
+	if _, err := db.ExecContext(ctx, schema+herdSchema); err != nil {
 		_ = db.Close()
 		return fmt.Errorf("open %s: %w", s.path, err)
 	}

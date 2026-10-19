@@ -84,7 +84,7 @@ func reverseName(ctx context.Context, a netip.Addr) string {
 	return strings.TrimSuffix(names[0], ".")
 }
 
-func newEngine(cfg *config.Config, plugins *pluginhost.Set, log *slog.Logger, onRound func(), onProbe func(probe.Result), lim *rate.Limiter) (*probe.Engine, error) {
+func newEngine(cfg *config.Config, plugins *pluginhost.Set, log *slog.Logger, onRound func(), onProbe func(probe.Result), onBatch func([]probe.Result), lim *rate.Limiter) (*probe.Engine, error) {
 	var providers []probe.Provider
 	for _, p := range cfg.Providers {
 		if cfg.Remote(p) {
@@ -130,6 +130,7 @@ func newEngine(cfg *config.Config, plugins *pluginhost.Set, log *slog.Logger, on
 		Logger:               log,
 		OnResult:             onResult,
 		OnRound:              onRound,
+		OnBatch:              onBatch,
 	})
 }
 

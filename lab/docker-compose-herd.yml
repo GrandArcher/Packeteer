@@ -1,0 +1,88 @@
+# Herd lab (#260). Three members, each a Packeteer instance in observe mode,
+# behind one FRR edge that learns 192.0.2.128/26 (path "64501 64510") from a
+# simulated upstream. The upstream owns 192.0.2.130, so real ICMP probes are
+# answered. Documentation addresses (RFC 5737) and documentation or private
+# ASNs only. Brought up by lab/e2e-herd.sh, which sets PACKETEER_LAB_DIR:
+# keys/ holds each member's herd key (from lab/mkherdkeys) and a.yaml,
+# b.yaml, c.yaml the rendered configs.
+name: packeteer-e2e-herd
+x-frr: &frr
+  image: quay.io/frrouting/frr:10.2.4
+  privileged: true
+  entrypoint: ["/bin/sh", "/lab/frr-start.sh"]
+x-member: &member
+  build:
+    context: ..
+    dockerfile: Dockerfile
+    args:
+      VERSION: e2e
+  image: packeteer:e2e
+  cap_add:
+    - NET_RAW
+    - NET_ADMIN
+  depends_on:
+    - edge
+services:
+  upstream:
+    <<: *frr
+    hostname: upstream
+    entrypoint: ["/bin/sh", "-c", "ip addr add 192.0.2.130/32 dev lo && exec /bin/sh /lab/frr-start.sh"]
+    environment:
+      FRR_EXPECT: "router bgp 64501;network 192.0.2.128/26;route-map behind-origin out"
+    volumes:
+      - ./frr-herd-upstream:/etc/frr
+      - ./frr-start.sh:/lab/frr-start.sh:ro
+    networks:
+      lab:
+        ipv4_address: 192.0.2.21
+  edge:
+    <<: *frr
+    hostname: edge
+    environment:
+      FRR_EXPECT: "router bgp 64512;neighbor members peer-group;route-map from-members in"
+    volumes:
+      - ./frr-herd-edge:/etc/frr
+      - ./frr-start.sh:/lab/frr-start.sh:ro
+    networks:
+      lab:
+        ipv4_address: 192.0.2.254
+  member-a:
+    <<: *member
+    environment:
+      PACKETEER_CONFIG: /etc/packeteer/config.yaml
+      PACKETEER_LOG_LEVEL: debug
+    volumes:
+      - ${PACKETEER_LAB_DIR}/a.yaml:/etc/packeteer/config.yaml:ro
+      - ${PACKETEER_LAB_DIR}/keys:/etc/packeteer/herd:ro
+    networks:
+      lab:
+        ipv4_address: 192.0.2.10
+  member-b:
+    <<: *member
+    environment:
+      PACKETEER_CONFIG: /etc/packeteer/config.yaml
+      PACKETEER_LOG_LEVEL: debug
+    volumes:
+      - ${PACKETEER_LAB_DIR}/b.yaml:/etc/packeteer/config.yaml:ro
+      - ${PACKETEER_LAB_DIR}/keys:/etc/packeteer/herd:ro
+    networks:
+      lab:
+        ipv4_address: 192.0.2.11
+  member-c:
+    <<: *member
+    environment:
+      PACKETEER_CONFIG: /etc/packeteer/config.yaml
+      PACKETEER_LOG_LEVEL: debug
+    volumes:
+      - ${PACKETEER_LAB_DIR}/c.yaml:/etc/packeteer/config.yaml:ro
+      - ${PACKETEER_LAB_DIR}/keys:/etc/packeteer/herd:ro
+    networks:
+      lab:
+        ipv4_address: 192.0.2.12
+networks:
+  lab:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 192.0.2.0/24
+          gateway: 192.0.2.3

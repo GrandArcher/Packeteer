@@ -42,6 +42,7 @@ func (c *Config) Validate() error {
 	c.validateRPKI(add)
 	c.validateInject(add)
 	c.validateIXP(add)
+	c.validateHerd(add)
 
 	// Cause and provider overrides are optional in every mode. A set 0 is
 	// rejected the same way inject rejects a global local_pref of 0, so a
