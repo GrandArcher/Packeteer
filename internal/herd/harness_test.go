@@ -26,6 +26,10 @@ const baseYAML = `
 mode: observe
 asn: 64512
 router_id: 192.0.2.10
+storage: {type: sqlite}
+bgp:
+  neighbors:
+    - address: 192.0.2.254
 providers:
   - name: transit-a
     source_ip: 192.0.2.11
