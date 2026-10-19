@@ -3,7 +3,7 @@ GOLANGCI_LINT_VERSION ?= v2.14.0
 STATICCHECK_VERSION ?= 2026.2.1
 DEADCODE_VERSION ?= v0.52.0
 
-.PHONY: setup build vet fmt-check test lint vuln check
+.PHONY: setup build vet fmt-check test race lint vuln check
 
 setup: ## install dev tools (golangci-lint, staticcheck, deadcode, govulncheck) and the pre-commit hook
 	go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)
@@ -25,6 +25,9 @@ fmt-check:
 test: build vet fmt-check
 	go test ./...
 
+race:
+	go test -race ./...
+
 lint:
 	golangci-lint run
 	staticcheck ./...
@@ -34,4 +37,4 @@ lint:
 vuln:
 	scripts/govulncheck.sh
 
-check: test lint vuln
+check: test race lint vuln
