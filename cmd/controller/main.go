@@ -592,6 +592,7 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 		log.Error("refusing to start", "err", err)
 		return 1
 	}
+	mit.SetOutbound(ctl.Injected)
 	if view != nil {
 		if err := view.Start(ctx); err != nil {
 			log.Error("refusing to start", "err", err)
