@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -62,7 +63,7 @@ func TestPullBetweenTwoMembers(t *testing.T) {
 	if err := json.Unmarshal(rows[0].Body, &pb); err != nil {
 		t.Fatal(err)
 	}
-	if pb.Record.Vantage != "US" || pb.Signature == "" || pb.GeneratedAt.IsZero() || pb.FetchedAt != t0 {
+	if pb.Record.Vantage != "US" || pb.GeneratedAt.IsZero() || pb.FetchedAt != t0 {
 		t.Errorf("provenance = %+v", pb)
 	}
 	// Times are kept as ages against generated_at, on the local clock.
@@ -210,6 +211,9 @@ func (f *fakePeer) status(w http.ResponseWriter, discovery string) {
 // envelopeFor answers q with records, signed by the peer.
 func (f *fakePeer) envelopeFor(r *http.Request, recs []Record) Envelope {
 	q, _ := ParseQuery(r.URL.RawQuery)
+	if q.From == "" {
+		q.From = t0.Add(-90 * 24 * time.Hour).Format(time.RFC3339Nano)
+	}
 	e := Envelope{Schema: Schema, Member: f.node.ID(), ASN: 64599, GeneratedAt: t0, RetentionDays: 90,
 		Granularity: "origin_asn", Query: q, Records: recs}
 	return e
@@ -268,6 +272,11 @@ func TestPullRefusesTamperedReplayedAndWronglySignedResponses(t *testing.T) {
 		"answer to another origin": func(f *fakePeer, w http.ResponseWriter, r *http.Request) {
 			e := f.envelopeFor(r, []Record{goodRecord("a")})
 			e.Query.OriginASN = 64999
+			_, _ = w.Write(f.sign(e))
+		},
+		"answer for a later window": func(f *fakePeer, w http.ResponseWriter, r *http.Request) {
+			e := f.envelopeFor(r, []Record{goodRecord("a")})
+			e.Query.From = t0.Add(-time.Minute).Format(time.RFC3339Nano)
 			_, _ = w.Write(f.sign(e))
 		},
 		"signed for another member": func(f *fakePeer, w http.ResponseWriter, r *http.Request) {
@@ -614,5 +623,63 @@ func TestPulledDiskBudgetDropsOldestFirstAndLeavesOwnRecords(t *testing.T) {
 		if strings.HasPrefix(r.ID, "w1-") {
 			t.Errorf("oldest wave survived the budget: %s", r.ID)
 		}
+	}
+}
+
+func TestFromPlausibleBoundsTheEchoedWindow(t *testing.T) {
+	env := Envelope{GeneratedAt: t0, RetentionDays: 90}
+	floor := t0.Add(-90 * 24 * time.Hour)
+	f := func(tm time.Time) string { return tm.Format(time.RFC3339Nano) }
+	sent := t0.Add(-time.Hour)
+	for name, c := range map[string]struct {
+		echoed, sent string
+		want         bool
+	}{
+		"retention floor, none asked":      {f(floor), "", true},
+		"as asked":                         {f(sent), f(sent), true},
+		"clipped to a later floor":         {f(t0.Add(-30 * time.Minute)), f(floor), false},
+		"before the one asked":             {f(sent.Add(-time.Hour)), f(sent), false},
+		"after generated_at":               {f(t0.Add(time.Hour)), f(sent), false},
+		"later than the floor, none asked": {f(t0.Add(-time.Hour)), "", false},
+		"not a time":                       {"yesterday", "", false},
+		"empty":                            {"", f(sent), false},
+	} {
+		if got := fromPlausible(c.echoed, c.sent, env); got != c.want {
+			t.Errorf("%s: fromPlausible(%q, %q) = %v, want %v", name, c.echoed, c.sent, got, c.want)
+		}
+	}
+}
+
+// A peer holding more than one pull's worth is read to the end over
+// several pulls: each pull continues where the budget cut the last one.
+func TestPullContinuesABacklogLargerThanOnePull(t *testing.T) {
+	a := newMember(t, 64501, func(h *config.Herd) { h.Share.Discovery = config.HerdListing })
+	b := newMember(t, 64502, func(h *config.Herd) {
+		h.Limits.PullRecords = 2
+		h.Limits.PeerRequests = 4
+	})
+	a.serve(b.node)
+	a.seedN(20, 64510)
+	p := b.puller(a)
+
+	var counts []int
+	for range 5 {
+		p.Round(context.Background())
+		counts = append(counts, len(pulledRows(t, b, a.node)))
+	}
+	if want := []int{6, 12, 18, 20, 20}; !slices.Equal(counts, want) {
+		t.Errorf("pulled rows after each pull = %v, want %v", counts, want)
+	}
+
+	// Once read to the end, only what is new is asked for.
+	a.setClock(t0.Add(time.Minute))
+	a.seed(a.mkRecord("late", 64510, 64501, "198.51.100.0/24", t0.Add(30*time.Second), 10), route("198.51.100.0/24", 64501, 64500, 64510))
+	b.setClock(t0.Add(time.Minute))
+	// The overlap re-reads the last five minutes, which is more than one pull.
+	for range 3 {
+		p.Round(context.Background())
+	}
+	if n := len(pulledRows(t, b, a.node)); n != 21 {
+		t.Errorf("rows after a new record = %d, want 21", n)
 	}
 }

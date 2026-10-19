@@ -2,11 +2,14 @@ package herd
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/GrandArcher/Packeteer/internal/config"
+	"github.com/GrandArcher/Packeteer/pkg/plugin"
 )
 
 func TestVantagesAreListedSeparatelyNeverMerged(t *testing.T) {
@@ -32,7 +35,7 @@ func TestVantagesAreListedSeparatelyNeverMerged(t *testing.T) {
 	if remote.Local || remote.Member != a.node.ID() || remote.ASN != 64501 || remote.Country != "US" || remote.Records != 3 || remote.Identity != "pinned_key" {
 		t.Errorf("remote vantage = %+v", remote)
 	}
-	if remote.Latest.Signature == "" || remote.Latest.FetchedAt == nil || remote.Latest.GeneratedAt == nil {
+	if remote.Latest.FetchedAt == nil || remote.Latest.GeneratedAt == nil {
 		t.Errorf("remote row lacks provenance: %+v", remote.Latest)
 	}
 	if remote.Latest.RTTAvgMs == nil || *remote.Latest.RTTAvgMs != 11 || *local.Latest.RTTAvgMs != 85 {
@@ -100,5 +103,31 @@ func TestRecordValidationRefusesWhatDoesNotMatchItsSamples(t *testing.T) {
 	}
 	if err := good.Validate(config.HerdRoute); err == nil {
 		t.Error("a record validated against the wrong envelope granularity")
+	}
+}
+
+// Over the row cap the view keeps the newest rows, so a vantage's latest
+// is its newest record, not the last one before the cut.
+func TestVantageLatestIsTheNewestWhenTruncated(t *testing.T) {
+	m := newMember(t, 64501, nil)
+	var rows []plugin.HerdRecord
+	for i := range viewRows + 100 {
+		at := t0.Add(-time.Duration(i) * time.Second)
+		r := m.mkRecord(fmt.Sprintf("r%05d", i), 64510, 64501, "198.51.100.0/24", at, 10, 11)
+		body, _ := json.Marshal(r)
+		rows = append(rows, plugin.HerdRecord{ID: r.ID, Granularity: r.Granularity, OriginASN: 64510, ProviderASN: 64501, Time: at, Body: body})
+	}
+	if _, err := m.store.PutHerdRecords(context.Background(), rows); err != nil {
+		t.Fatal(err)
+	}
+	v, err := BuildView(context.Background(), m.store, "origin_asn=64510", 64501, nil, t0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !v.Truncated || len(v.Vantages) != 1 || v.Vantages[0].Records != viewRows {
+		t.Fatalf("view = truncated %v, vantages %d", v.Truncated, len(v.Vantages))
+	}
+	if got := v.Vantages[0].Latest.Time; !got.Equal(t0) {
+		t.Errorf("latest is at %v, want the newest record at %v", got, t0)
 	}
 }

@@ -49,7 +49,10 @@ type HerdQuery struct {
 	From, To time.Time
 	// After resumes after this row (the last row of the previous page).
 	After *HerdRecord
-	Limit int
+	// Newest orders by time, newest first, instead of by prefix. After is
+	// not used with it.
+	Newest bool
+	Limit  int
 }
 
 // HerdStats is what the herd tables hold, for budgets and the status API.

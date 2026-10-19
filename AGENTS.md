@@ -29,16 +29,6 @@ An `ixp:` block is an Internet exchange operator observing the fabric, route ser
 - IXP Manager and Birdseye are read with GET only, from the fixed endpoint allowlist in docs/design/ixp.md. The API key comes from an environment variable, never from the URL or the config file. A warning fires before it expires. The customers nagios document is the one superuser-group GET on that list. Honor IXP Manager's per-interface "Can Ping" opt-out.
 - Member data is never committed. Lab fixtures use documentation prefixes and documentation or private ASNs only.
 
-## Herd
-
-`herd:` shares probe measurements with other operators' Packeteer instances. It sends data off the box. Design: docs/design/herd.md.
-
-- Off by default. With herd off nothing is stored, served, or pulled, and no example config turns it on.
-- Advisory only. Herd data never enters `Decide`, a scorer, a policy, the announcer, or the RIB view, and herd never announces, withdraws, or moves traffic. A herd failure, overload, or panic leaves probing and BGP running as if herd were off.
-- Shares measurements only: no provider names, probed host addresses, SNMP data, usage, or config. Origin-ASN records are the default; exact routes need `granularity: route`. Excluded prefixes (equal, inside, or covering) and ASNs are filtered before storing and again when serving.
-- Peers are static, pinned by Ed25519 key over mutual TLS. Pulled data is shown per vantage, never merged and never re-served. Every limit in the design's Resource protection section is enforced locally.
-- Labs and CI use their own members with documentation prefixes and ASNs. They never talk to a real herd.
-
 ## Docker-first (non-negotiable)
 
 - The primary install is ONE container:

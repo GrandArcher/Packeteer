@@ -40,7 +40,6 @@ type VantageRow struct {
 	Failed      bool       `json:"failed,omitempty"`
 	FetchedAt   *time.Time `json:"fetched_at,omitempty"`
 	GeneratedAt *time.Time `json:"generated_at,omitempty"`
-	Signature   string     `json:"signature,omitempty"`
 }
 
 // Vantage is the records of one (member, country, provider ASN, method).
@@ -87,7 +86,7 @@ func BuildView(ctx context.Context, st plugin.HerdStore, raw string, self uint32
 			return v, fmt.Errorf("unknown parameter %q", k)
 		}
 	}
-	q := plugin.HerdQuery{AnyMember: true, From: now.Add(-24 * time.Hour), Limit: viewRows + 1}
+	q := plugin.HerdQuery{AnyMember: true, From: now.Add(-24 * time.Hour), Newest: true, Limit: viewRows + 1}
 	for _, k := range []string{"origin_asn", "provider_asn"} {
 		if s := vals.Get(k); s != "" {
 			n, err := strconv.ParseUint(s, 10, 32)
@@ -150,7 +149,7 @@ func BuildView(ctx context.Context, st plugin.HerdStore, raw string, self uint32
 				continue
 			}
 			rec, member, asn, identity = pb.Record, row.Member, peerASN, "pinned_key"
-			vr.FetchedAt, vr.GeneratedAt, vr.Signature = &pb.FetchedAt, &pb.GeneratedAt, pb.Signature
+			vr.FetchedAt, vr.GeneratedAt = &pb.FetchedAt, &pb.GeneratedAt
 		}
 		vr.ID, vr.Time, vr.AgeSeconds = rec.ID, row.Time, max(now.Sub(row.Time).Seconds(), 0)
 		vr.Prefix, vr.OriginASN, vr.Routes, vr.ASPath, vr.ASPaths = rec.Prefix, rec.OriginASN, rec.Routes, rec.ASPath, rec.ASPaths

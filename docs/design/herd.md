@@ -1,7 +1,9 @@
 # Herd: opt-in shared measurements between Packeteer instances (#87)
 
-Status: investigation. Nothing in this file is implemented, no config key
-exists, and no issue other than #87 authorizes work on it. Names and
+Status: phase 1 (local store, serve, pull among static peers) is
+implemented under #260; see docs/herd.md for the shipped behavior and
+config. Phases 2 and 3 are not implemented, their config keys do not
+exist, and no issue other than #87 authorizes work on them. Names and
 numbers below are proposals for review. None of them were measured.
 
 A herd is a set of Packeteer instances run by different operators that

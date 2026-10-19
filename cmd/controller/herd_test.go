@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/GrandArcher/Packeteer/internal/config"
 	"github.com/GrandArcher/Packeteer/internal/herd"
@@ -121,7 +122,19 @@ func TestHerdBatchIsOffWhenHerdIsOffAndNeverBlocks(t *testing.T) {
 	if fn == nil {
 		t.Fatal("no OnBatch with herd on")
 	}
-	fn([]probe.Result{{}}) // herd not built yet: the round is dropped
+	done := make(chan struct{})
+	go func() {
+		fn([]probe.Result{{}}) // herd not built yet: the round is dropped
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("OnBatch blocked while herd was not built")
+	}
+	if ref.Load() != nil {
+		t.Error("OnBatch built a herd")
+	}
 }
 
 func TestNewHerdRefusesAStoreThatCannotKeepRecords(t *testing.T) {

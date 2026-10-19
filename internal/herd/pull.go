@@ -70,7 +70,17 @@ type peer struct {
 	mu     sync.Mutex
 	st     PeerStatus
 	since  map[uint32]time.Time
+	resume map[uint32]resume
 	cursor int
+}
+
+// resume is where an unfinished sweep of one origin continues: the page
+// cursor, and when the sweep's first page was generated. The cursor is a
+// position in the store order for an unchanged from, so since stays put
+// until the sweep completes.
+type resume struct {
+	cursor  string
+	started time.Time
 }
 
 // Puller fetches the records of the static peers, in turn, within hard
@@ -136,7 +146,7 @@ func NewPuller(o PullerOptions) (*Puller, error) {
 			IdleConnTimeout:       p.lim.IdleTimeout,
 		}
 		p.peers = append(p.peers, &peer{
-			url: cp.URL, id: id, pub: pub, since: map[uint32]time.Time{},
+			url: cp.URL, id: id, pub: pub, since: map[uint32]time.Time{}, resume: map[uint32]resume{},
 			client: &http.Client{
 				Transport:     tr,
 				Timeout:       p.lim.PullTimeout,
@@ -330,6 +340,11 @@ func (p *Puller) targets(pe *peer, st Status) []uint32 {
 			delete(pe.since, a)
 		}
 	}
+	for a := range pe.resume {
+		if !keep[a] && a != 0 {
+			delete(pe.resume, a)
+		}
+	}
 	return out
 }
 
@@ -400,52 +415,61 @@ func nonce() string {
 }
 
 // pullQuery pages through one query (origin 0: no filter) and stores what
-// validates. It returns how many records were stored.
+// validates. It returns how many records were stored. A sweep cut short by
+// a budget continues from its page cursor on the next pull; since moves
+// forward only when a sweep completes, to the time its first page was
+// generated, so records stored while it ran are fetched next time.
 func (p *Puller) pullQuery(ctx context.Context, pe *peer, origin uint32, take func() error, room int) (int, error) {
 	pe.mu.Lock()
-	since := pe.since[origin]
+	since, rs := pe.since[origin], pe.resume[origin]
 	pe.mu.Unlock()
-	q := Query{OriginASN: origin, Limit: p.lim.PullRecords}
+	q := Query{OriginASN: origin, Limit: p.lim.PullRecords, Cursor: rs.cursor}
 	if !since.IsZero() {
 		q.From = since.UTC().Format(time.RFC3339Nano)
 	}
 	stored := 0
-	var last time.Time
 	complete := false
+	var err error
 	for {
-		if err := take(); err != nil {
-			return stored, err
+		if err = take(); err != nil {
+			break
 		}
 		q.Nonce = nonce()
-		raw, err := p.get(ctx, pe, PathRecords+"?"+q.Values())
-		if err != nil {
-			return stored, err
+		var raw []byte
+		if raw, err = p.get(ctx, pe, PathRecords+"?"+q.Values()); err != nil {
+			break
 		}
-		env, err := p.openEnvelope(pe, raw, q)
-		if err != nil {
-			return stored, err
+		var env Envelope
+		if env, err = p.openEnvelope(pe, raw, q); err != nil {
+			break
 		}
-		n, err := p.keep(ctx, pe, env, room-stored)
+		var n int
+		n, err = p.keep(ctx, pe, env, room-stored)
 		stored += n
 		if err != nil {
-			return stored, err
+			break
 		}
-		last = env.GeneratedAt
+		if rs.started.IsZero() {
+			rs.started = env.GeneratedAt
+		}
 		if env.NextCursor == "" {
 			complete = true
 			break
 		}
+		q.Cursor = env.NextCursor
 		if stored >= room {
 			break
 		}
-		q.Cursor = env.NextCursor
 	}
+	pe.mu.Lock()
 	if complete {
-		pe.mu.Lock()
-		pe.since[origin] = last.Add(-overlap)
-		pe.mu.Unlock()
+		pe.since[origin] = rs.started.Add(-overlap)
+		delete(pe.resume, origin)
+	} else if q.Cursor != "" {
+		pe.resume[origin] = resume{cursor: q.Cursor, started: rs.started}
 	}
-	return stored, nil
+	pe.mu.Unlock()
+	return stored, err
 }
 
 // openEnvelope checks a records response: the size and record count
@@ -472,6 +496,10 @@ func (p *Puller) openEnvelope(pe *peer, raw []byte, sent Query) (Envelope, error
 		return env, fmt.Errorf("response holds %d records, over pull_records %d", len(env.Records), p.lim.PullRecords)
 	}
 	echo := env.Query
+	if !fromPlausible(echo.From, sent.From, env) {
+		p.o.Trips.Add("replayed_response", pe.id)
+		return env, errors.New("response answers another time window than the one asked for")
+	}
 	if echo.Nonce != sent.Nonce || echo.OriginASN != sent.OriginASN || echo.Cursor != sent.Cursor || echo.Prefix != sent.Prefix || echo.Match != sent.Match || echo.To != sent.To ||
 		echo.ProviderASN != sent.ProviderASN || echo.Limit < 1 || echo.Limit > sent.Limit {
 		p.o.Trips.Add("replayed_response", pe.id)
@@ -480,13 +508,32 @@ func (p *Puller) openEnvelope(pe *peer, raw []byte, sent Query) (Envelope, error
 	return env, nil
 }
 
+// fromPlausible bounds the echoed from. The server clips from to its
+// retention, so it may differ from the one sent, but never lie before it,
+// nor after the later of it and the retention floor at generated_at.
+func fromPlausible(echoed, sent string, env Envelope) bool {
+	got, err := time.Parse(time.RFC3339Nano, echoed)
+	if err != nil {
+		return false
+	}
+	latest := env.GeneratedAt.Add(-time.Duration(env.RetentionDays) * 24 * time.Hour)
+	if s, err := time.Parse(time.RFC3339Nano, sent); err == nil {
+		if got.Before(s) {
+			return false
+		}
+		if s.After(latest) {
+			latest = s
+		}
+	}
+	return !got.After(latest.Add(time.Second))
+}
+
 // pulledBody is what a pulled record is stored as: the record as received
 // and where it came from.
 type pulledBody struct {
 	Record      Record    `json:"record"`
 	FetchedAt   time.Time `json:"fetched_at"`
 	GeneratedAt time.Time `json:"generated_at"`
-	Signature   string    `json:"signature"`
 }
 
 // keep validates the records of env and stores up to room of them. A
@@ -508,7 +555,7 @@ func (p *Puller) keep(ctx context.Context, pe *peer, env Envelope, room int) (in
 		if local.Before(floor) {
 			continue
 		}
-		body, _ := json.Marshal(pulledBody{Record: rec, FetchedAt: now, GeneratedAt: env.GeneratedAt, Signature: env.Signature})
+		body, _ := json.Marshal(pulledBody{Record: rec, FetchedAt: now, GeneratedAt: env.GeneratedAt})
 		hr := plugin.HerdRecord{
 			Member: pe.id, ID: rec.ID, Granularity: rec.Granularity, OriginASN: rec.OriginASN,
 			ProviderASN: rec.ProviderASN, Time: local.UTC().Truncate(time.Millisecond), Body: body,

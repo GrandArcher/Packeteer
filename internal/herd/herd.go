@@ -240,6 +240,3 @@ func (h *Herd) Status(ctx context.Context) NodeStatus {
 	}
 	return st
 }
-
-// Trips is the count of each limit that fired.
-func (h *Herd) Trips() []TripCount { return h.trips.Snapshot() }

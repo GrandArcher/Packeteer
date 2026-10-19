@@ -119,6 +119,23 @@ func TestHerdRecordsMatchAndPages(t *testing.T) {
 	if rs, _ := s.HerdRecords(ctx, plugin.HerdQuery{OriginASN: 64500, From: t0.Add(time.Minute), Limit: 10}); !eq(ids(rs), []string{"c"}) {
 		t.Errorf("origin and from = %v", ids(rs))
 	}
+	rs, err := s.HerdRecords(ctx, plugin.HerdQuery{Member: "", Newest: true, Limit: 3})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rs) != 3 || rs[0].Time.Before(rs[1].Time) || rs[1].Time.Before(rs[2].Time) {
+		t.Errorf("newest first = %+v", rs)
+	}
+	oldest, _ := s.HerdRecords(ctx, plugin.HerdQuery{Member: "", Limit: 100})
+	maxT := oldest[0].Time
+	for _, r := range oldest {
+		if r.Time.After(maxT) {
+			maxT = r.Time
+		}
+	}
+	if !rs[0].Time.Equal(maxT) {
+		t.Errorf("newest row is at %v, the latest stored is %v", rs[0].Time, maxT)
+	}
 }
 
 func TestHerdRetentionAndTrim(t *testing.T) {

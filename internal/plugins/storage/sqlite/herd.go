@@ -149,7 +149,11 @@ func (s *Store) HerdRecords(ctx context.Context, q plugin.HerdQuery) ([]plugin.H
 	if len(where) > 0 {
 		qs += " WHERE " + strings.Join(where, " AND ")
 	}
-	qs += " ORDER BY lo, hi, provider_asn, time_ms, member, id LIMIT ?"
+	order := "lo, hi, provider_asn, time_ms, member, id"
+	if q.Newest {
+		order = "time_ms DESC, lo, hi, provider_asn, member, id"
+	}
+	qs += " ORDER BY " + order + " LIMIT ?"
 	args = append(args, q.Limit)
 	rows, err := db.QueryContext(ctx, qs, args...)
 	if err != nil {

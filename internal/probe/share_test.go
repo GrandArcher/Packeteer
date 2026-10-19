@@ -70,6 +70,15 @@ func TestNoShareWithoutOnBatch(t *testing.T) {
 	if e.keepShare() {
 		t.Fatal("engine keeps evidence with no OnBatch")
 	}
+	rs := e.Results()
+	if len(rs) == 0 {
+		t.Fatal("no results stored")
+	}
+	for _, r := range rs {
+		if r.Share != nil {
+			t.Errorf("result %v/%v carries Share with no OnBatch", r.Provider, r.Prefix)
+		}
+	}
 }
 
 // Herd (#260) only observes: the results the engine stores, which are all
