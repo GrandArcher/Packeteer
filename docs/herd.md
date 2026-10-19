@@ -1,6 +1,6 @@
 # Herd (phase 1)
 
-Herd (#260, [design](design/herd.md)) lets a few operators share what their probes measure. Each member stores its own per-round records, serves them signed over mutual TLS pinned to per-node keys, and pulls the records of its static peers. It is off by default. It is advisory: no herd data is read by `Decide`, a scorer, a policy, or the announcer, and herd never announces. If herd fails, is out of budget, or panics, probing and BGP run as if it were off.
+Herd (#260, [design](design/herd.md)) lets a few operators share what their probes measure. Each member stores its own per-round records, serves them signed over mutual TLS pinned to per-node keys, and pulls the records of its static peers. It is off by default. It is advisory: no herd data is read by `Decide`, a scorer, a policy, or the announcer, and herd never announces. If herd fails at startup (listen address taken, key file unreadable), the controller does not start. Once running, if herd fails, is out of budget, or panics, probing and BGP run as if it were off.
 
 Not in phase 1: peer discovery, RPKI identity, the crowd threshold, probe hints, and route-visibility warnings.
 

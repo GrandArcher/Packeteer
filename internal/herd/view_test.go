@@ -85,7 +85,13 @@ func TestRecordValidationRefusesWhatDoesNotMatchItsSamples(t *testing.T) {
 		"min off":             func(r *Record) { r.RTTMinMs = f(0) },
 		"more replies":        func(r *Record) { r.Sent = 2 },
 		"negative rtt":        func(r *Record) { r.Samples[0].RTTMs = -1 },
-		"host out of order":   func(r *Record) { r.Samples[1].Host = 3 },
+		"host out of order":   func(r *Record) { r.Samples[1].Host, r.Samples[2].Host = 1, 0 },
+		"host number skipped": func(r *Record) { r.Samples[1].Host = 2 },
+		"first host not 0": func(r *Record) {
+			for i := range r.Samples {
+				r.Samples[i].Host = 1
+			}
+		},
 		"prefix at origin":    func(r *Record) { r.Prefix = "198.51.100.0/24" },
 		"bad vantage":         func(r *Record) { r.Vantage = "usa" },
 		"bad method":          func(r *Record) { r.Method = "carrier-pigeon" },

@@ -355,6 +355,7 @@ func TestStandbyNodeServesNothing(t *testing.T) {
 func TestRecordIsServedOnlyWhileItsRouteIsLearned(t *testing.T) {
 	a := newMember(t, 64501, nil)
 	b := newMember(t, 64502, nil)
+	a.rules.ASNs[64599] = true
 	a.serve(b.node)
 	rt := route("198.51.100.0/24", 64501, 64500, 64510)
 	a.seed(a.mkRecord("r1", 64510, 64501, "198.51.100.0/24", t0.Add(-time.Minute), 10), rt)
@@ -390,6 +391,10 @@ func TestRecordIsServedOnlyWhileItsRouteIsLearned(t *testing.T) {
 	set(func(r *fakeRIB) { r.ready = true; delete(r.paths, rt.Prefix) })
 	if p, g := served(); p != 0 || g != 0 {
 		t.Errorf("route left the RIB view: previewed %d, pulled %d, want none", p, g)
+	}
+	set(func(r *fakeRIB) { r.paths[rt.Prefix] = []uint32{64501, 64599, 64510} })
+	if p, g := served(); p != 0 || g != 0 {
+		t.Errorf("current path through an excluded ASN: previewed %d, pulled %d, want none", p, g)
 	}
 	set(func(r *fakeRIB) { r.paths[rt.Prefix] = rt.Path })
 	if p, g := served(); p != 1 || g != 1 {

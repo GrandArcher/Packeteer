@@ -223,9 +223,14 @@ func sentOf(res probe.Result) int {
 	return n
 }
 
-// appendSamples adds the replies of res, numbering hosts from next.
+// appendSamples adds the replies of res, numbering hosts from next. A host
+// with no replies takes no number, so numbers never skip; Validate refuses
+// a gap.
 func appendSamples(dst []Sample, next int, res probe.Result) ([]Sample, int) {
 	for _, h := range res.Share.Hosts {
+		if len(h.RTTs) == 0 {
+			continue
+		}
 		for _, d := range h.RTTs {
 			dst = append(dst, Sample{Host: next, RTTMs: float64(d) / float64(time.Millisecond)})
 		}

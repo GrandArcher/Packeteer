@@ -32,8 +32,8 @@ const (
 	statEpsilon = 1e-6
 )
 
-// Sample is one reply. Host numbers the probed host within the record,
-// from 0, in send order; no address is carried.
+// Sample is one reply. Host numbers the probed hosts that replied within
+// the record, from 0, in send order; no address is carried.
 type Sample struct {
 	Host  int     `json:"h"`
 	RTTMs float64 `json:"rtt_ms"`
@@ -182,12 +182,12 @@ func (r *Record) Validate(granularity string) error {
 	if len(r.Samples) > r.Sent || len(r.Samples) > maxSamples {
 		return errors.New("more replies than packets sent")
 	}
-	host := 0
+	host := -1
 	for i, sm := range r.Samples {
 		if math.IsNaN(sm.RTTMs) || sm.RTTMs < 0 || sm.RTTMs > maxRTTms {
 			return fmt.Errorf("sample %d rtt %v", i, sm.RTTMs)
 		}
-		if sm.Host < host || sm.Host > host+1 {
+		if sm.Host < max(host, 0) || sm.Host > host+1 {
 			return fmt.Errorf("sample %d is out of order", i)
 		}
 		host = sm.Host

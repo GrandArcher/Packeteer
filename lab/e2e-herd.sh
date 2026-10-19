@@ -14,7 +14,8 @@
 #  1. each member pulls both peers (no failures, records pulled), and
 #     nothing is announced by anyone (the edge has no route from a member);
 #  2. per-vantage view: a sees itself and b (not c), c sees a and b, each as
-#     its own vantage with its own country, never merged;
+#     its own vantage with its own country, never merged; a view that
+#     names no origin_asn or prefix gets 400;
 #  3. no prefix and no provider name appears in a preview, which is built
 #     by the same code that answers a pull, and member-c previews nothing;
 #  4. the served-response audit logs the pulls: unfiltered pages on the
@@ -133,6 +134,20 @@ need_api() {
 	exit 1
 }
 
+# need_status member path code why: the ops API answers with this HTTP
+# status. api() cannot check an error: busybox wget prints no body for one.
+# With -S it prints the status line to stderr.
+need_status() {
+	local out
+	out=$("${compose[@]}" exec -T "member-$1" wget -S -O /dev/null "http://127.0.0.1:8080$2" 2>&1 || true)
+	if ! printf '%s\n' "$out" | grep -Eq "HTTP/1\.[01] $3 "; then
+		echo "FAIL: $4 (member-$1 $2 did not answer $3)" >&2
+		printf '%s\n' "$out" >&2
+		dump
+		exit 1
+	fi
+}
+
 need_log() {
 	local svc=$1 pattern=$2 why=$3 i
 	for i in $(seq 1 30); do
@@ -165,7 +180,7 @@ echo "2. per-vantage view: one vantage per member and country, never merged"
 need_api a '/api/herd/vantages?origin_asn=64510' '(.vantages | length) == 2 and ([.vantages[].country] | sort) == ["DE","US"] and ([.vantages[] | select(.local)] | length) == 1 and all(.vantages[]; .provider_asn == 64501 and .method == "icmp")' "member-a should see itself and b, not c"
 need_api c '/api/herd/vantages?origin_asn=64510' '(.vantages | length) == 2 and ([.vantages[].country] | sort) == ["DE","US"] and ([.vantages[] | select(.local)] | length) == 0' "member-c should see a and b and have no vantage of its own (it excludes the prefix)"
 need_api b '/api/herd/vantages?origin_asn=64510' '(.vantages | length) == 2 and ([.vantages[].country] | sort) == ["DE","US"]' "member-b should see itself and a"
-need_api a '/api/herd/vantages' '.error != null' "a view without origin_asn or prefix is refused" 5
+need_status a '/api/herd/vantages' 400 "a view without origin_asn or prefix is refused"
 
 echo "3. nothing on the never-shared list reaches a response, and preview equals a pull"
 for m in a b; do

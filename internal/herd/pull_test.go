@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/netip"
 	"slices"
 	"strings"
 	"sync"
@@ -18,6 +19,7 @@ import (
 	"time"
 
 	"github.com/GrandArcher/Packeteer/internal/config"
+	"github.com/GrandArcher/Packeteer/internal/probe"
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
 )
 
@@ -716,5 +718,57 @@ func TestPerPullLimitCuttingAPageSkipsNoRecord(t *testing.T) {
 	}
 	if st := p.Peers()[0]; st.Pulled != 10 || st.Rejected != 0 {
 		t.Errorf("peer status = %+v", st)
+	}
+}
+
+// Hosts that sent no reply, inside one round and across pooled routes, must
+// not make a peer refuse the record.
+func TestRecordsWithUnansweredHostsAreAcceptedByAPeer(t *testing.T) {
+	for _, g := range []string{config.HerdOriginASN, config.HerdRoute} {
+		t.Run(g, func(t *testing.T) {
+			a := newMember(t, 64501, func(h *config.Herd) { h.Share.Granularity = g })
+			b := newMember(t, 64502, nil)
+			a.rib.paths[netip.MustParsePrefix("203.0.113.0/24")] = []uint32{64501, 64503, 64510}
+			a.rib.paths[netip.MustParsePrefix("198.51.100.0/24")] = []uint32{64501, 64502, 64510}
+			rec := NewRecorder(RecorderOptions{
+				Cfg: a.cfg, Node: a.node, Store: a.store, RIB: a.rib, Rules: a.rules,
+				Methods: map[string]string{"icmp-main": "icmp"}, FirstMethod: "icmp",
+				SourceTypes: map[string]string{"main-static": "static"},
+				Now:         a.clock, Log: slog.New(slog.NewTextHandler(io.Discard, nil)),
+			})
+			dead := probe.HostRaw{Sent: 2}
+			silent := result("203.0.113.0/24", []string{"main-static"})
+			silent.Share.Hosts = []probe.HostRaw{dead, dead}
+			mixed := result("198.51.100.0/24", []string{"main-static"})
+			mixed.Share.Hosts = []probe.HostRaw{dead, dead, {Sent: 2, RTTs: ms(10, 20)}}
+			rec.process(context.Background(), []probe.Result{silent, mixed})
+
+			a.serve(b.node)
+			p := b.puller(a, 64510)
+			p.Round(context.Background())
+
+			want := map[string]int{config.HerdOriginASN: 1, config.HerdRoute: 2}[g]
+			rows := pulledRows(t, b, a.node)
+			st := p.Peers()[0]
+			if len(rows) != want || st.Pulled != uint64(want) || st.Rejected != 0 {
+				t.Fatalf("stored %d rows, peer status %+v; want %d stored and none rejected", len(rows), st, want)
+			}
+			replied := 0
+			for _, row := range rows {
+				var pb pulledBody
+				if err := json.Unmarshal(row.Body, &pb); err != nil {
+					t.Fatal(err)
+				}
+				for _, s := range pb.Record.Samples {
+					if s.Host != 0 {
+						t.Errorf("sample %+v: the only host that replied must be host 0", s)
+					}
+					replied++
+				}
+			}
+			if replied != 2 {
+				t.Errorf("pulled %d samples, want 2", replied)
+			}
+		})
 	}
 }

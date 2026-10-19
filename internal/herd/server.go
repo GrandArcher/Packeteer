@@ -548,9 +548,9 @@ func cursorOf(r *plugin.HerdRecord) string {
 // servable decodes a stored own record and applies today's RIB view and
 // rules to it: the current granularity and data classes, and for every
 // route behind it the exact prefix with a path through its provider, the
-// exclude list, own prefixes, and source opt-in. A pooled record with even
-// one route that now fails is dropped whole, because it cannot be
-// un-pooled.
+// exclude list (against both the stored and the current path), own
+// prefixes, and source opt-in. A pooled record with even one route that
+// now fails is dropped whole, because it cannot be un-pooled.
 func (s *Server) servable(row plugin.HerdRecord) (Record, bool) {
 	var rec Record
 	if json.Unmarshal(row.Body, &rec) != nil || rec.Granularity != s.o.Cfg.Share.Granularity {
@@ -561,7 +561,10 @@ func (s *Server) servable(row plugin.HerdRecord) (Record, bool) {
 		return rec, false
 	}
 	for _, rt := range routes {
-		if _, ok := learnedPath(s.o.RIB, rt.Prefix, rt.Provider); !ok || !s.o.Rules.Allowed(rt) {
+		path, ok := learnedPath(s.o.RIB, rt.Prefix, rt.Provider)
+		cur := rt
+		cur.Path = path
+		if !ok || !s.o.Rules.Allowed(rt) || !s.o.Rules.Allowed(cur) {
 			return rec, false
 		}
 	}
