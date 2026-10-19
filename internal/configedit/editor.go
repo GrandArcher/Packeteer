@@ -177,7 +177,9 @@ func (e *Editor) checkLocked(data []byte) Result {
 }
 
 // Preview is what Save would do with a candidate: the checks, a line diff
-// of the file on disk to the candidate, and the keys that differ.
+// of the file on disk to the candidate, and the keys that differ from the
+// file. Result.Restart and Result.Online compare with the running config,
+// as Check does, so a saved change still lists there until it is running.
 type Preview struct {
 	Result  Result   `json:"result"`
 	Diff    string   `json:"diff"`

@@ -210,6 +210,26 @@ func typedEntries(root *yaml.Node, listKey, typ string) []typedEntry {
 	return out
 }
 
+// sectionLists are the top-level lists whose entries the sections address
+// by index.
+var sectionLists = []string{"sources", "policies"}
+
+// entryNodes maps "list/index" to the file's entries in sectionLists,
+// before anything is merged. A block or section that removes an entry
+// shifts the indices after it, and a form key is an index in the file as
+// it was read.
+func entryNodes(root *yaml.Node) map[string]*yaml.Node {
+	out := map[string]*yaml.Node{}
+	for _, l := range sectionLists {
+		if seq, ok := sequenceChild(root, l); ok {
+			for i, item := range seq.Content {
+				out[l+"/"+strconv.Itoa(i)] = item
+			}
+		}
+	}
+	return out
+}
+
 // listOrScalar reads a key that is one string or a list of them.
 func listOrScalar(m *yaml.Node, key string) []string {
 	if n, _ := child(m, key); n != nil && n.Kind == yaml.ScalarNode && n.Tag != "!!null" {
@@ -843,13 +863,14 @@ func validateOneOutage(o FormOutage) error {
 
 // ---- applying ----
 
-func applySections(root *yaml.Node, cur, next Form) error {
-	err := rewriteSection(root, "sources", "flow", cur.Flows, next.Flows, applyFlow)
+// applySections takes nodes from entryNodes, read before any merge.
+func applySections(root *yaml.Node, nodes map[string]*yaml.Node, cur, next Form) error {
+	err := rewriteSection(root, nodes, "sources", "flow", cur.Flows, next.Flows, applyFlow)
 	if err == nil {
-		err = rewriteSection(root, "sources", "vip", cur.VIPs, next.VIPs, func(n *yaml.Node, e FormVIP) error { applyVIP(n, e); return nil })
+		err = rewriteSection(root, nodes, "sources", "vip", cur.VIPs, next.VIPs, func(n *yaml.Node, e FormVIP) error { applyVIP(n, e); return nil })
 	}
 	if err == nil {
-		err = rewriteSection(root, "sources", "outage", cur.Outages, next.Outages, func(n *yaml.Node, e FormOutage) error { applyOutage(n, e); return nil })
+		err = rewriteSection(root, nodes, "sources", "outage", cur.Outages, next.Outages, func(n *yaml.Node, e FormOutage) error { applyOutage(n, e); return nil })
 	}
 	if err == nil {
 		err = applyExchanges(root, cur, next)
@@ -858,7 +879,7 @@ func applySections(root *yaml.Node, cur, next Form) error {
 		err = applyProtection(root, cur, next)
 	}
 	if err == nil {
-		err = rewriteSection(root, "policies", "rules", cur.Policies, next.Policies, applyRules)
+		err = rewriteSection(root, nodes, "policies", "rules", cur.Policies, next.Policies, applyRules)
 	}
 	return err
 }
@@ -874,7 +895,7 @@ func (e FormPolicy) entryKey() string { return e.Key }
 // rewriteSection applies a changed list. Entries that are the same as in
 // the file are not rewritten, so one edited source leaves its siblings
 // byte for byte alone.
-func rewriteSection[T entry](root *yaml.Node, listKey, typ string, cur, next []T, apply func(*yaml.Node, T) error) error {
+func rewriteSection[T entry](root *yaml.Node, nodes map[string]*yaml.Node, listKey, typ string, cur, next []T, apply func(*yaml.Node, T) error) error {
 	if reflect.DeepEqual(cur, next) {
 		return nil
 	}
@@ -883,7 +904,7 @@ func rewriteSection[T entry](root *yaml.Node, listKey, typ string, cur, next []T
 		keys[i] = e.entryKey()
 	}
 	var applyErr error
-	err := rewriteTyped(root, listKey, typ, keys, func(i int, n *yaml.Node, isNew bool) {
+	err := rewriteTyped(root, nodes, listKey, typ, keys, func(i int, n *yaml.Node, isNew bool) {
 		e := next[i]
 		if !isNew {
 			for _, c := range cur {
@@ -905,22 +926,20 @@ func rewriteSection[T entry](root *yaml.Node, listKey, typ string, cur, next []T
 // keepsOrder reports that the form kept the file's entries in file order
 // and put every new entry after them. Then each kept entry stays in its
 // own slot and a dropped one just leaves, so removing a policy does not
-// move the ones after it past a policy of another type.
-func keepsOrder(keys []string, slots []int) bool {
-	pos := map[string]int{}
-	for n, i := range slots {
-		pos[strconv.Itoa(i)] = n
-	}
+// move the ones after it past a policy of another type. slot is the
+// position among the type's slots of each entry already in the file.
+func keepsOrder(next []*yaml.Node, slot map[*yaml.Node]int) bool {
 	prev, newSeen := -1, false
-	for _, k := range keys {
-		if k == "" {
+	for _, n := range next {
+		p, old := slot[n]
+		if !old {
 			newSeen = true
 			continue
 		}
-		if newSeen || pos[k] <= prev {
+		if newSeen || p <= prev {
 			return false
 		}
-		prev = pos[k]
+		prev = p
 	}
 	return true
 }
@@ -978,25 +997,24 @@ func isOld(n *yaml.Node, content []*yaml.Node, slots []int) bool {
 }
 
 // rewriteTyped rewrites the entries of one plugin type in a top-level
-// list. An entry with a key is the file's entry at that index and keeps
+// list. An entry with a key is the file's entry at that index (looked up
+// in nodes, from entryNodes) and keeps
 // the keys the form does not show; an entry with no key is new. The
 // entries fill the slots the type already holds, in form order, so
 // entries of other types keep their place. Extra entries go after the
 // last slot, and entries the form dropped are removed. edit is called for
 // each entry.
-func rewriteTyped(root *yaml.Node, listKey, typ string, keys []string, edit func(i int, n *yaml.Node, isNew bool)) error {
+func rewriteTyped(root *yaml.Node, nodes map[string]*yaml.Node, listKey, typ string, keys []string, edit func(i int, n *yaml.Node, isNew bool)) error {
 	seq, has := sequenceChild(root, listKey)
 	var slots []int
+	slot := map[*yaml.Node]int{}
 	if has {
 		for i, item := range seq.Content {
 			if item.Kind == yaml.MappingNode && scalar(item, "type") == typ {
+				slot[item] = len(slots)
 				slots = append(slots, i)
 			}
 		}
-	}
-	old := map[string]*yaml.Node{}
-	for _, i := range slots {
-		old[strconv.Itoa(i)] = seq.Content[i]
 	}
 	next := make([]*yaml.Node, 0, len(keys))
 	used := map[*yaml.Node]bool{}
@@ -1007,8 +1025,8 @@ func rewriteTyped(root *yaml.Node, listKey, typ string, keys []string, edit func
 			n = &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
 			setOrDelete(n, "type", typ, "!!str")
 		} else {
-			n = old[k]
-			if n == nil {
+			n = nodes[listKey+"/"+k]
+			if _, ok := slot[n]; !ok {
 				return fmt.Errorf("%w: %s entry %s is not in the file anymore; reload the form", ErrForm, typ, k)
 			}
 			if used[n] {
@@ -1028,7 +1046,7 @@ func rewriteTyped(root *yaml.Node, listKey, typ string, keys []string, edit func
 	if len(slots) == 0 {
 		seq.Content = append(seq.Content, next...)
 	} else {
-		seq.Content = placeTyped(seq.Content, slots, next, keepsOrder(keys, slots))
+		seq.Content = placeTyped(seq.Content, slots, next, keepsOrder(next, slot))
 	}
 	if len(seq.Content) == 0 {
 		deleteKey(root, listKey)

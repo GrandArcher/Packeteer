@@ -312,7 +312,13 @@ func validateSettings(at string, p FormPlugin) error {
 			return fmt.Errorf("%w: %s.value: one line of at most %d characters", ErrForm, sat, maxBlockString)
 		}
 		if s.Value != "" && isSecretKey(s.Key, s.Value) {
-			return fmt.Errorf("%w: %s.key: %s may hold a secret. Secrets stay in environment variables: use a ${VAR} reference, or a %s_env key with the variable's name", ErrForm, sat, s.Key, s.Key)
+			// Only a URL key may take its value from ${VAR}; isSecretKey
+			// refuses that for any other secret-looking name.
+			ref := ""
+			if urlName.MatchString(s.Key) {
+				ref = "take the value from a ${VAR} reference, or "
+			}
+			return fmt.Errorf("%w: %s.key: %s may hold a secret. Secrets stay in environment variables: %suse a %s_env key with the variable's name", ErrForm, sat, s.Key, ref, s.Key)
 		}
 		switch settingKind(s) {
 		case settingInt:

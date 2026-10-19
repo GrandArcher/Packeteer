@@ -207,6 +207,7 @@ func ApplyForm(data []byte, form Form) ([]byte, error) {
 		return nil, err
 	}
 	refs := pluginRefs(root)
+	nodes := entryNodes(root)
 	if err := applyScalars(root, form); err != nil {
 		return nil, err
 	}
@@ -231,7 +232,7 @@ func ApplyForm(data []byte, form Form) ([]byte, error) {
 	if err := applyBlocks(root, cur, form); err != nil {
 		return nil, err
 	}
-	if err := applySections(root, cur, form); err != nil {
+	if err := applySections(root, nodes, cur, form); err != nil {
 		return nil, err
 	}
 	if err := applyPlugins(root, refs, cur, form); err != nil {

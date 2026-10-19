@@ -469,8 +469,8 @@ providers:
 }
 
 // TestModeInjectIsAFormChoice (#330): the mode dropdown offers inject. The
-// form merges it; Save refuses it without the confirmation and the loader
-// refuses it without the checklist.
+// form merges it and the loader refuses it without the checklist.
+// TestSaveInjectNeedsConfirmation covers Save without confirm_inject.
 func TestModeInjectIsAFormChoice(t *testing.T) {
 	f, _ := ParseForm([]byte(blocksYAML))
 	f.Mode = "inject"
@@ -595,10 +595,10 @@ func TestBlocksPluginsToggleAddAndRefuse(t *testing.T) {
 	}{
 		{"a secret value in a plain key", func(f *Form) {
 			f.Plugins = append(f.Plugins, FormPlugin{List: "notifiers", Type: "smtp", Enabled: true, Settings: []FormSetting{{Key: "password", Value: "hunter2"}}})
-		}, "may hold a secret"},
+		}, "may hold a secret. Secrets stay in environment variables: use a password_env key"},
 		{"a literal url", func(f *Form) {
 			f.Plugins = append(f.Plugins, FormPlugin{List: "notifiers", Type: "webhook", Enabled: true, Settings: []FormSetting{{Key: "url", Value: "https://hooks.example.test/x"}}})
-		}, "may hold a secret"},
+		}, "take the value from a ${VAR} reference, or use a url_env key"},
 		{"an exec plugin", func(f *Form) { f.Plugins = append(f.Plugins, FormPlugin{List: "probers", Type: "exec", Enabled: true}) }, "raw YAML"},
 		{"a type change", func(f *Form) { f.Plugins[0].Type = "udp" }, "cannot change"},
 		{"a policy another card owns", func(f *Form) {
