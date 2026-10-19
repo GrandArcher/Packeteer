@@ -9,7 +9,7 @@ import (
 )
 
 // exchangeFormYAML is an edge with one transit, an exchange of two peers
-// (peer-b has a precedence the form does not show), and the add-path
+// (peer-b has a precedence and exclude), and the add-path
 // session the route check needs. Documentation addresses and ASNs only.
 const exchangeFormYAML = `# edge
 mode: observe
@@ -64,7 +64,7 @@ func TestFormExchangesParse(t *testing.T) {
 		len(ex.LANs) != 1 || ex.LANs[0] != "203.0.113.0/24" || len(ex.Peers) != 2 {
 		t.Fatalf("exchange = %+v", ex)
 	}
-	if want := (FormExchangePeer{Key: "ix-peer-b", Name: "ix-peer-b", ASN: "64502", NextHop: "203.0.113.12", SourceIP: "192.0.2.32"}); ex.Peers[1] != want {
+	if want := (FormExchangePeer{Key: "ix-peer-b", Name: "ix-peer-b", ASN: "64502", NextHop: "203.0.113.12", SourceIP: "192.0.2.32", Exclude: true, Precedence: "50"}); ex.Peers[1] != want {
 		t.Fatalf("peer = %+v, want %+v", ex.Peers[1], want)
 	}
 	if len(f.Providers) != 1 {
@@ -113,6 +113,33 @@ func TestFormExchangesEditRoundTrip(t *testing.T) {
 	}
 	if len(cfg.Providers) != 4 {
 		t.Fatalf("providers = %d", len(cfg.Providers))
+	}
+}
+
+// TestFormExchangesPeerExcludeAndPrecedence (#330): a peer's exclude and
+// precedence are form fields. Editing one writes only that peer's keys, and
+// clearing them removes the keys.
+func TestFormExchangesPeerExcludeAndPrecedence(t *testing.T) {
+	out, cfg := applyAndLoad(t, exchangeFormYAML, func(f *Form) {
+		f.Exchanges[0].Peers[0].Exclude = true
+		f.Exchanges[0].Peers[0].Precedence = "20"
+		f.Exchanges[0].Peers[1].Exclude = false
+		f.Exchanges[0].Peers[1].Precedence = ""
+	})
+	a, b := peerByName(t, cfg, "ix-peer-a"), peerByName(t, cfg, "ix-peer-b")
+	if !a.Exclude || a.Precedence != 20 || b.Exclude || b.Precedence != 0 {
+		t.Fatalf("a = %+v b = %+v\n%s", a, b, out)
+	}
+	if strings.Contains(out, "precedence: 50") || !strings.Contains(out, "# keep me") {
+		t.Fatalf("cleared keys stayed or comments lost:\n%s", out)
+	}
+	f, err := ParseForm([]byte(exchangeFormYAML))
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.Exchanges[0].Peers[0].Precedence = "high"
+	if _, err := ApplyForm([]byte(exchangeFormYAML), f); err == nil || !strings.Contains(err.Error(), "precedence") {
+		t.Fatalf("a bad precedence was accepted: %v", err)
 	}
 }
 

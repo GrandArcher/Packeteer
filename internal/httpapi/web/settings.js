@@ -14,7 +14,7 @@ function emptyForm() {
     precedence: "", scorer_type: "", floor_max_loss_pct: "", floor_max_rtt: "",
     providers: [], targets: [], allowlist: [],
     flows: [], policies: [], vips: [], outages: [], exchanges: [],
-    inbound: emptyInbound(), anomaly: emptyAnomaly(), commit: emptyCommit()};
+    inbound: emptyInbound(), anomaly: emptyAnomaly(), commit: emptyCommit(), blocks: {}, plugins: []};
 }
 
 function emptyCommit() {
@@ -56,7 +56,7 @@ function emptyExchange() {
 }
 
 function emptyPeer() {
-  return {key: "", name: "", asn: "", next_hop: "", source_ip: "", cost: ""};
+  return {key: "", name: "", asn: "", next_hop: "", source_ip: "", cost: "", exclude: false, precedence: ""};
 }
 
 function emptyOutage() {
@@ -917,6 +917,7 @@ function refreshUnsaved() {
   byId("unsaved").hidden = !(inForm || inYaml);
   byId("unsaved").textContent = inForm ? "Unsaved form changes" : "Unsaved changes";
   byId("save-bar").dataset.state = inForm ? "form" : (inYaml ? "yaml" : "clean");
+  refreshInjectConfirm();
 }
 
 // formEdited is true when the form differs from what was last loaded or applied.
@@ -958,11 +959,11 @@ function editorOff(err) {
   var node = document.getElementById("ed-off");
   node.textContent = explain(err);
   node.hidden = !off;
-  ["ed-load", "ed-check", "ed-save", "bar-apply", "bar-save", "wz-run", "wz-next", "wz-next-2", "wz-back", "wz-back-3", "wz-add-provider", "wz-sug", "form-apply", "form-reload", "form-add-provider", "form-add-target", "form-add-allow", "sug-refresh", "form-add-flow", "form-add-policy", "form-add-vip", "form-add-outage", "form-add-exchange", "ix-refresh", "form-add-anomaly-rule", "wz-next-3", "wz-back-4", "cs-add-host", "cs-apply"].forEach(function (id) {
+  ["ed-load", "ed-check", "ed-save", "bar-apply", "bar-save", "wz-run", "wz-next", "wz-next-2", "wz-back", "wz-back-3", "wz-add-provider", "wz-sug", "form-apply", "form-reload", "form-add-provider", "form-add-target", "form-add-allow", "sug-refresh", "form-add-flow", "form-add-policy", "form-add-vip", "form-add-outage", "form-add-exchange", "ix-refresh", "form-add-anomaly-rule", "wz-next-3", "wz-back-4", "cs-add-host", "cs-apply", "pv-run", "bar-preview", "pl-new-add"].forEach(function (id) {
     var b = document.getElementById(id);
     if (b) b.disabled = off;
   });
-  ["form-fields", "form-flows", "form-policies", "form-vips", "form-outages", "form-inbound"].forEach(function (id) {
+  ["form-fields", "form-flows", "form-policies", "form-vips", "form-outages", "form-inbound", "form-plugins"].forEach(function (id) {
     var fields = document.getElementById(id);
     if (fields) fields.disabled = off;
   });
@@ -979,6 +980,7 @@ function loadConfig() {
     setWizardConfigured(!!f.configured);
     edStatus("Loaded.");
     loadForm(f.yaml);
+    if (typeof loadSchema === "function") loadSchema();
     loadSuggestions();
     loadDiscovered();
     loadGuides();
@@ -988,7 +990,74 @@ function loadConfig() {
 function checkConfig() {
   api("POST", "/api/config/validate", {yaml: document.getElementById("ed-yaml").value}).then(function (res) {
     edStatus(describe(res), res.errors);
+    if (typeof showServerErrors === "function") showServerErrors(res.errors);
   }, function (err) { edStatus(err.message); });
+}
+
+// refreshInjectBox shows the inject checklist while the mode dropdown says
+// inject, and the confirmation while the text would turn inject on.
+function refreshInjectBox() {
+  byId("inject-box").hidden = form.mode !== "inject";
+  refreshInjectConfirm();
+}
+
+function refreshInjectConfirm() {
+  var on = form.mode === "inject" || /^\s*mode:\s*inject\b/m.test(byId("ed-yaml").value);
+  byId("inject-confirm").hidden = !on && !byId("ed-inject").checked;
+}
+
+// ---- preview (#330) ----
+
+function pvState(text) {
+  byId("pv-state").textContent = text || "";
+}
+
+function pvList(id, label, keys) {
+  var node = byId(id);
+  node.hidden = !(keys && keys.length);
+  node.textContent = node.hidden ? "" : label + keys.join(", ") + ".";
+}
+
+// showPreview fills the pane from POST /api/config/preview: the checks, the
+// keys that need a restart, the keys that apply on Save, and the diff of the
+// file on disk to the text in the editor.
+function showPreview(p) {
+  var res = p.result || {};
+  var changes = p.changes || [];
+  var errs = byId("pv-errors");
+  clear(errs);
+  (res.errors || []).forEach(function (e) { errs.appendChild(el("li", "", e)); });
+  if (typeof showServerErrors === "function") showServerErrors(res.errors);
+  var head = res.valid ? "Valid" : "Invalid: Save would be refused";
+  if (res.valid) head += changes.length ? ". " + changes.length + (changes.length === 1 ? " setting differs" : " settings differ") + " from the file." : ". Nothing differs from the file.";
+  if (res.enables_inject) head += " This turns inject on: tick the confirmation to Save.";
+  pvState(head);
+  pvList("pv-restart", "Needs a restart: ", res.restart);
+  pvList("pv-online", "Applies when you Save: ", res.online);
+  byId("pv-diff").textContent = p.diff || (res.valid ? "No changes." : "");
+}
+
+// previewConfig applies the form to the YAML text when it has edits, then
+// asks the server what Save would do. It never writes the file.
+function previewConfig() {
+  var run = function () {
+    api("POST", "/api/config/preview", {yaml: byId("ed-yaml").value}).then(showPreview, function (err) {
+      pvState("Preview failed: " + explain(err));
+    });
+  };
+  if (!formEdited()) {
+    run();
+    return;
+  }
+  if (byId("ed-yaml").value !== yamlApplied) {
+    pvState("The form and the YAML text both have edits. Press Apply form to YAML (it replaces the keys the form shows), or Reload form from YAML to drop the form edits.");
+    return;
+  }
+  pvState("Applying the form changes first...");
+  applyForm().then(function (out) {
+    if (out) run();
+    else pvState("Nothing to compare: the form changes were not applied. " + byId("form-status").textContent);
+  });
 }
 
 // saveConfig never writes the file without the form edits: it applies them to
@@ -1020,9 +1089,16 @@ function putConfig() {
     document.getElementById("ed-inject").checked = false;
     edStatus(savedMessage(out));
     refreshUnsaved();
+    if (typeof showServerErrors === "function") showServerErrors([]);
+    previewConfig();
   }, function (err) {
     var res = err.data && err.data.result;
     edStatus(err.message + (res ? " - " + describe(res) : ""), res && res.errors);
+    if (typeof showServerErrors === "function") showServerErrors(res && res.errors);
+    if (/confirm_inject|confirm it explicitly/.test(err.message)) {
+      byId("inject-confirm").hidden = false;
+      byId("ed-inject").focus();
+    }
   });
 }
 
@@ -1126,7 +1202,7 @@ function fillInbound() {
   var sel = byId("in-mode");
   Array.prototype.slice.call(sel.options).forEach(function (o) { if (o.value === "inject") sel.removeChild(o); });
   if (i.mode === "inject") {
-    var o = el("option", "", "inject (set in the YAML)");
+    var o = el("option", "", "inject (set in the raw YAML)");
     o.value = "inject";
     sel.appendChild(o);
   }
@@ -1232,7 +1308,7 @@ function fillAnomalyState() {
     : "Mitigation is not in inject: a matching rule is recorded and nothing is announced.";
   byId("an-state").textContent = a.enabled
     ? "Rule prefixes must be inside the mitigation allowlist" + ((a.mitigation_allowlist || []).length ? ": " + a.mitigation_allowlist.join(", ") + "." : ".")
-    : "Anomaly detection is not configured. Add an anomaly block with a detector to the YAML first (docs/anomaly.md).";
+    : "Anomaly detection is not set up. Switch the detector on above first (docs/anomaly.md).";
   byId("form-add-anomaly-rule").disabled = !a.enabled;
 }
 
@@ -1371,6 +1447,21 @@ function renderExchanges() {
       });
       row.appendChild(labeled("Peer probe source", src, "Local address probes to this peer leave from.", "exchanges.peers.source_ip"));
       bindNumber(row, "Peer cost", p, "cost", "Price per Mbps for this peer.", "exchanges.peers.cost", {min: 0, max: 1e12, unit: "per Mbps"});
+      var fold = el("details", "advanced");
+      fold.appendChild(el("summary", "", "Show advanced"));
+      var excl = el("input");
+      excl.type = "checkbox";
+      excl.checked = !!p.exclude;
+      if (p.exclude) excl.setAttribute("checked", "checked");
+      excl.addEventListener("change", function () { markDirty(excl); p.exclude = excl.checked; });
+      var exclLabel = el("label", "check");
+      exclLabel.title = "exchanges.peers.exclude";
+      exclLabel.appendChild(excl);
+      exclLabel.appendChild(el("span", "", " Measure only, never choose this peer"));
+      fold.appendChild(exclLabel);
+      fold.appendChild(labeled("Peer precedence", numberControl(p, "precedence", {min: 0, max: 10000, integer: true, def: 100}),
+        "Commit control prefers lower numbers. Empty uses 100.", "exchanges.peers.precedence"));
+      row.appendChild(fold);
       if (p.draft) row.appendChild(el("span", "tag", "draft"));
       row.appendChild(removeButton(x.peers, j, renderExchanges, "peer"));
     });
@@ -1643,7 +1734,7 @@ function fillKnobs() {
     sel.appendChild(opt);
     sel.value = "";
     sel.disabled = true;
-    note.textContent = "These knobs belong to the cost scorer. This file uses " + scorer + ". Change the scorer in the YAML if you mean to replace it.";
+    note.textContent = "These knobs belong to the cost scorer. This file uses " + scorer + ", which the form does not replace; use the raw YAML to change it.";
   } else {
     [["", "not used (scorer is " + (scorer || "weighted") + ")"], ["performance", "performance wins"], ["cost", "cost wins"]].forEach(function (o) {
       var opt = el("option", "", o[1]);
@@ -1711,6 +1802,10 @@ function renderProviders() {
     row.appendChild(labeled("Probe source", src, "Local address probes leave from. Pick one already in use, or type an address.", "providers.source_ip"));
     row.appendChild(labeled("Next hop", hop, "Provider next hop seen on BGP or BMP, or type an address.", "providers.next_hop"));
     row.appendChild(labeled("Cost", numberControl(p, "cost", {min: 0, max: 1e12, unit: "per Mbps"}), "Price per Mbps.", "providers.cost"));
+    var bmp = selectInput(bmpChoices, p.bmp);
+    bmp.className = "g-select";
+    bmp.addEventListener("change", function () { markDirty(bmp); form.providers[i].bmp = bmp.value; });
+    row.appendChild(labeled("BMP use", bmp, "Whether paths from the BMP station count for this provider. Off uses iBGP only.", "providers.bmp"));
     row.appendChild(labeled("Commit", numberControl(p, "commit_mbps", {min: 0, max: 1e12, unit: "Mbps", positive: true}), p.commit_bound ? "Billing commit in Mbps." : "Billing commit in Mbps. This provider has no telemetry binding yet.", "providers.commit_mbps"));
     if (p.asn) row.appendChild(el("span", "tag", "AS " + p.asn + " from the session, not saved"));
     else if (p.draft) row.appendChild(el("span", "tag", "draft"));
@@ -1792,7 +1887,9 @@ function renderForm() {
   renderExchanges();
   renderAnomalyRules();
   renderSuggestions(lastSuggestions);
-  // commitsetup.js loads after this file and renders once itself.
+  refreshInjectBox();
+  // blocks.js and commitsetup.js load after this file and render here.
+  if (typeof renderBlocks === "function") renderBlocks();
   if (typeof renderCommitSetup === "function") renderCommitSetup();
 }
 
@@ -1829,6 +1926,8 @@ function loadProtectionDefaults() {
 }
 
 function loadFormDefaults() {
+  if (!form.blocks) form.blocks = {};
+  if (!form.plugins) form.plugins = [];
   form.commit = Object.assign(emptyCommit(), form.commit || {});
   form.commit.hosts = form.commit.hosts || [];
   form.commit.providers = form.commit.providers || [];
@@ -1853,6 +1952,7 @@ function loadFormDefaults() {
 }
 
 function applyForm() {
+  if (typeof clearServerErrors === "function") clearServerErrors();
   readKnobs();
   validateGuided();
   // Wizard fields sit outside the editor. An empty wizard must not block Apply.
@@ -1883,6 +1983,7 @@ function postForm(report) {
     return out;
   }, function (err) {
     report(explain(err));
+    if (typeof showServerErrors === "function") showServerErrors([err.message]);
     return null;
   });
 }
@@ -2299,6 +2400,9 @@ byId("form-add-outage").addEventListener("click", function () {
 ["fm-mode", "fm-precedence"].forEach(function (id) {
   byId(id).addEventListener("change", readKnobs);
 });
+byId("fm-mode").addEventListener("change", refreshInjectBox);
+byId("pv-run").addEventListener("click", previewConfig);
+byId("bar-preview").addEventListener("click", previewConfig);
 bindStaticChecks();
 loadConfig();
 renderSubs();

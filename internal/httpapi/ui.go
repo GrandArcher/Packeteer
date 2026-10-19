@@ -35,6 +35,7 @@ import (
 type ConfigEditor interface {
 	Read() (configedit.File, error)
 	Check(data []byte) configedit.Result
+	Preview(data []byte) (configedit.Preview, error)
 	Save(data []byte, base string, confirmInject bool) (configedit.File, configedit.Result, error)
 }
 
@@ -115,6 +116,75 @@ func (s *Server) handleConfigValidate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, s.editor.Check([]byte(req.YAML)))
+}
+
+// handleConfigPreview checks a candidate and diffs it against the file on
+// disk: what Save would change, and which keys need a restart. It writes
+// nothing.
+func (s *Server) handleConfigPreview(w http.ResponseWriter, r *http.Request) {
+	if !s.editorOn(w) {
+		return
+	}
+	var req configRequest
+	if !decodeLarge(w, r, &req, configBodyLimit) {
+		return
+	}
+	p, err := s.editor.Preview([]byte(req.YAML))
+	if err != nil {
+		s.log.Error("config editor preview", "err", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "cannot read the config file"})
+		return
+	}
+	writeJSON(w, http.StatusOK, p)
+}
+
+// configSchema describes the form blocks the page renders: each block's
+// fields, and the plugin types the add-a-plugin picker offers.
+type configSchema struct {
+	Blocks      []configedit.Block  `json:"blocks"`
+	FlowExtras  []configedit.Field  `json:"flow_extras"`
+	PluginLists []string            `json:"plugin_lists"`
+	PluginTypes map[string][]string `json:"plugin_types"`
+	SNMP        map[string][]string `json:"snmp"`
+}
+
+func (s *Server) handleConfigSchema(w http.ResponseWriter, _ *http.Request) {
+	if !s.editorOn(w) {
+		return
+	}
+	writeJSON(w, http.StatusOK, configSchema{
+		Blocks:      configedit.Blocks(),
+		FlowExtras:  configedit.FlowExtras(),
+		PluginLists: configedit.PluginLists(),
+		PluginTypes: pluginTypes(),
+		SNMP: map[string][]string{
+			"security_levels": configedit.SNMPSecurityLevels(),
+			"auth_protocols":  configedit.SNMPAuthProtocols(),
+			"priv_protocols":  configedit.SNMPPrivProtocols(),
+		},
+	})
+}
+
+// pluginTypes lists the registered types of each list the plugins section
+// edits. An exec plugin runs a program and is added in the raw YAML.
+func pluginTypes() map[string][]string {
+	drop := func(in []string) []string {
+		out := []string{}
+		for _, t := range in {
+			if t != "exec" {
+				out = append(out, t)
+			}
+		}
+		return out
+	}
+	return map[string][]string{
+		"probers":   drop(plugin.Probers.Types()),
+		"sources":   drop(plugin.Sources.Types()),
+		"notifiers": drop(plugin.Notifiers.Types()),
+		"telemetry": drop(plugin.Telemetries.Types()),
+		"policies":  drop(plugin.Policies.Types()),
+		"storage":   drop(plugin.Storages.Types()),
+	}
 }
 
 func (s *Server) handleConfigSave(w http.ResponseWriter, r *http.Request) {
