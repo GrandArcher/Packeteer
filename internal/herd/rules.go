@@ -6,14 +6,16 @@ import (
 )
 
 // Route is one learned route that went into a record: the exact prefix in
-// the RIB view, the AS path learned through the provider as the RIB holds
-// it, and the types of the target sources that listed it. A node keeps the
-// routes behind each of its own records (never served) so the exclude list
-// and the source opt-in apply to data stored earlier.
+// the RIB view, the local provider it was probed through, the AS path
+// learned through that provider as the RIB holds it, and the types of the
+// target sources that listed it. A node keeps the routes behind each of its
+// own records (never served) so the RIB check, the exclude list, and the
+// source opt-in apply to data stored earlier.
 type Route struct {
-	Prefix  netip.Prefix `json:"prefix"`
-	Path    []uint32     `json:"path,omitempty"`
-	Sources []string     `json:"sources,omitempty"`
+	Prefix   netip.Prefix `json:"prefix"`
+	Provider string       `json:"provider,omitempty"`
+	Path     []uint32     `json:"path,omitempty"`
+	Sources  []string     `json:"sources,omitempty"`
 }
 
 // neverShare is address space that no record may name: default routes,

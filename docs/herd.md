@@ -10,13 +10,13 @@ One record is one probe round through one provider toward one origin ASN (defaul
 
 A route is shared only when all of these hold; the checks run before a record is stored and again each time one is served, so a new exclude entry also covers data stored earlier:
 
-- the exact prefix is in the RIB view and a path through that provider was learned;
+- the exact prefix is in the RIB view and a path through that provider was learned (nothing is served while no BGP session is up);
 - it is not a default route or private, loopback, link-local, or multicast space;
 - no `exclude.prefixes` entry is equal to, inside, or covering it, and no `exclude.asns` entry is its origin or anywhere in its AS path;
 - it is not equal to, inside, or covering your own or your customers' prefixes (`inbound.prefixes`, the `flow` source's `transit.customers` and `problems.local`, the `span` source's `local`);
 - a target source of a type in `share.sources` listed it (default `static`, `vip`, `outage`).
 
-At origin-ASN level the routes of one origin are pooled into a record that names no prefix; a pooled record is dropped whole if any route behind it is now excluded. A prefix query matches nothing at that level.
+At origin-ASN level the routes of one origin are pooled into a record that names no prefix; a pooled record is dropped whole if any route behind it now fails a check. A prefix query matches nothing at that level.
 
 ## Pull API
 

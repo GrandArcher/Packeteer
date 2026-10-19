@@ -348,3 +348,51 @@ func TestStandbyNodeServesNothing(t *testing.T) {
 		t.Errorf("standby status = %d, want 503", code)
 	}
 }
+
+// The RIB view is checked when a record is served, not only when it is
+// stored: a record whose route has left the view, or has no path through
+// its provider any more, is neither previewed nor pulled.
+func TestRecordIsServedOnlyWhileItsRouteIsLearned(t *testing.T) {
+	a := newMember(t, 64501, nil)
+	b := newMember(t, 64502, nil)
+	a.serve(b.node)
+	rt := route("198.51.100.0/24", 64501, 64500, 64510)
+	a.seed(a.mkRecord("r1", 64510, 64501, "198.51.100.0/24", t0.Add(-time.Minute), 10), rt)
+	served := func() (previewed, pulled int) {
+		t.Helper()
+		code, body := a.srv.Preview("origin_asn=64510")
+		if code != 200 {
+			t.Fatalf("preview: %d %s", code, body)
+		}
+		gc, _, gb := get(t, client(b.node, a), a.url()+PathRecords+"?origin_asn=64510")
+		if gc != 200 {
+			t.Fatalf("pull: %d %s", gc, gb)
+		}
+		return len(envelope(t, body).Records), len(envelope(t, gb).Records)
+	}
+	set := func(f func(*fakeRIB)) {
+		a.rib.mu.Lock()
+		f(a.rib)
+		a.rib.mu.Unlock()
+	}
+	if p, g := served(); p != 1 || g != 1 {
+		t.Fatalf("route in the RIB view: previewed %d, pulled %d, want 1 and 1", p, g)
+	}
+
+	set(func(r *fakeRIB) { r.down = rt.Provider })
+	if p, g := served(); p != 0 || g != 0 {
+		t.Errorf("no path through the provider: previewed %d, pulled %d, want none", p, g)
+	}
+	set(func(r *fakeRIB) { r.down, r.ready = "", false })
+	if p, g := served(); p != 0 || g != 0 {
+		t.Errorf("RIB view not ready: previewed %d, pulled %d, want none", p, g)
+	}
+	set(func(r *fakeRIB) { r.ready = true; delete(r.paths, rt.Prefix) })
+	if p, g := served(); p != 0 || g != 0 {
+		t.Errorf("route left the RIB view: previewed %d, pulled %d, want none", p, g)
+	}
+	set(func(r *fakeRIB) { r.paths[rt.Prefix] = rt.Path })
+	if p, g := served(); p != 1 || g != 1 {
+		t.Errorf("route learned again: previewed %d, pulled %d, want 1 and 1", p, g)
+	}
+}

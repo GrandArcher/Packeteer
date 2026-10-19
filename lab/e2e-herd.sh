@@ -15,12 +15,13 @@
 #     nothing is announced by anyone (the edge has no route from a member);
 #  2. per-vantage view: a sees itself and b (not c), c sees a and b, each as
 #     its own vantage with its own country, never merged;
-#  3. no prefix and no provider name appears in any preview or pull, and
-#     the preview bytes equal what a pull receives;
-#  4. the served-response audit logs the pulls;
+#  3. no prefix and no provider name appears in a preview, which is built
+#     by the same code that answers a pull, and member-c previews nothing;
+#  4. the served-response audit logs the pulls: unfiltered pages on the
+#     listing members a and b, origin_asn queries on the query-only c;
 #  5. isolation: with member-b paused (a peer that never answers), a and c
 #     keep probing and finish rounds, and report b as failing;
-#  6. SIGTERM stops herd: the pull API closes and the members still exit.
+#  6. a member with herd on exits on SIGTERM.
 set -euo pipefail
 export LC_ALL=C
 
@@ -38,6 +39,7 @@ mkdir -p "$lab_dir/keys"
 declare -A pub
 while read -r name key; do pub[$name]=$key; done < <("$keys_bin" "$lab_dir/keys" a b c)
 chmod 755 "$lab_dir" "$lab_dir/keys"
+export PACKETEER_LAB_DIR="$lab_dir"
 
 declare -A ip=([a]=192.0.2.10 [b]=192.0.2.11 [c]=192.0.2.12)
 declare -A country=([a]=US [b]=DE [c]=JP)
@@ -185,8 +187,9 @@ prevc=$(api c '/api/herd/preview?origin_asn=64510')
 printf '%s' "$prevc" | jq -e '(.records | length) == 0' >/dev/null || { echo "FAIL: member-c serves records for an excluded prefix: $prevc" >&2; dump; exit 1; }
 
 echo "4. the served-response audit records the pulls"
-need_log member-a 'action=herd\.serve .*origin_asn=64510' "member-a logged no served pull"
-need_log member-b 'action=herd\.serve .*origin_asn=64510' "member-b logged no served pull"
+need_log member-a 'action=herd\.serve target=.*nonce=' "member-a logged no served pull"
+need_log member-b 'action=herd\.serve target=.*nonce=' "member-b logged no served pull"
+need_log member-c 'action=herd\.serve target=.*origin_asn=64510' "member-c logged no served origin_asn query"
 
 echo "5. a peer that never answers does not stop probing or the other members"
 "${compose[@]}" pause member-b
@@ -204,7 +207,7 @@ fi
 api a /readyz | jq -e '.ready == true' >/dev/null || { echo "FAIL: member-a is not ready with a paused peer" >&2; dump; exit 1; }
 "${compose[@]}" unpause member-b
 
-echo "6. SIGTERM: herd closes with the controller"
+echo "6. SIGTERM: a member with herd on exits"
 "${compose[@]}" kill -s SIGTERM member-a
 for i in $(seq 1 20); do
 	if [ "$("${compose[@]}" ps -q --status running member-a | wc -l)" -eq 0 ]; then

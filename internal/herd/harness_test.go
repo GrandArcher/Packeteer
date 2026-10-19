@@ -92,6 +92,7 @@ type member struct {
 	node  *Node
 	store plugin.HerdStore
 	rules *Rules
+	rib   *fakeRIB
 	trips *Trips
 	srv   *Server
 
@@ -127,7 +128,7 @@ func defaultRules() *Rules {
 func newMember(t *testing.T, asn uint32, edit func(*config.Herd)) *member {
 	t.Helper()
 	m := &member{t: t, asn: asn, cfg: testCfg(t, edit), node: testNode(t), store: testStore(t),
-		rules: defaultRules(), trips: &Trips{}, now: t0, active: true}
+		rules: defaultRules(), rib: &fakeRIB{ready: true, paths: map[netip.Prefix][]uint32{}}, trips: &Trips{}, now: t0, active: true}
 	return m
 }
 
@@ -139,7 +140,7 @@ func (m *member) serve(peers ...*Node) {
 		keys[n.ID()] = n.pub
 	}
 	m.srv = NewServer(ServerOptions{
-		Cfg: m.cfg, ASN: m.asn, Node: m.node, Store: m.store, Rules: m.rules, Peers: keys,
+		Cfg: m.cfg, ASN: m.asn, Node: m.node, Store: m.store, RIB: m.rib, Rules: m.rules, Peers: keys,
 		Now: m.clock, Log: slog.New(slog.NewTextHandler(io.Discard, nil)), Trips: m.trips,
 		Active: func() bool { m.mu.Lock(); defer m.mu.Unlock(); return m.active },
 		Audit:  func(a Audit) { m.mu.Lock(); m.audits = append(m.audits, a); m.mu.Unlock() },
@@ -203,9 +204,13 @@ func (m *member) mkRecord(id string, origin, provider uint32, prefix string, at 
 	return r
 }
 
-// seed stores r as one of the member's own records, behind one route.
+// seed stores r as one of the member's own records, behind one route, and
+// puts the route in the member's RIB view.
 func (m *member) seed(r Record, rt Route) {
 	m.t.Helper()
+	m.rib.mu.Lock()
+	m.rib.paths[rt.Prefix] = rt.Path
+	m.rib.mu.Unlock()
 	body, _ := json.Marshal(r)
 	meta, _ := json.Marshal([]Route{rt})
 	hr := plugin.HerdRecord{ID: r.ID, Granularity: r.Granularity, OriginASN: r.OriginASN, ProviderASN: r.ProviderASN, Time: r.Time, Body: body, Meta: meta}
@@ -218,7 +223,7 @@ func (m *member) seed(r Record, rt Route) {
 }
 
 func route(prefix string, path ...uint32) Route {
-	return Route{Prefix: netip.MustParsePrefix(prefix), Path: path, Sources: []string{"static"}}
+	return Route{Prefix: netip.MustParsePrefix(prefix), Provider: "transit-a", Path: path, Sources: []string{"static"}}
 }
 
 func (m *member) seedN(n int, origin uint32) {

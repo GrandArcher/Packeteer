@@ -37,6 +37,9 @@ type ServerOptions struct {
 	ASN   uint32
 	Node  *Node
 	Store plugin.HerdStore
+	// RIB is checked again when a record is served: a route that has left
+	// the view is not shared.
+	RIB   RIB
 	Rules *Rules
 	// Peers are the pinned keys, by key id. Only these connect.
 	Peers map[string]ed25519.PublicKey
@@ -542,22 +545,23 @@ func cursorOf(r *plugin.HerdRecord) string {
 	return encodeCursor(k)
 }
 
-// servable decodes a stored own record and applies today's rules to it: the
-// current granularity and data classes, and the exclude list, own prefixes,
-// and source opt-in against every route behind it. A pooled record with
-// even one route that is now excluded is dropped whole, because it cannot
-// be un-pooled.
+// servable decodes a stored own record and applies today's RIB view and
+// rules to it: the current granularity and data classes, and for every
+// route behind it the exact prefix with a path through its provider, the
+// exclude list, own prefixes, and source opt-in. A pooled record with even
+// one route that now fails is dropped whole, because it cannot be
+// un-pooled.
 func (s *Server) servable(row plugin.HerdRecord) (Record, bool) {
 	var rec Record
 	if json.Unmarshal(row.Body, &rec) != nil || rec.Granularity != s.o.Cfg.Share.Granularity {
 		return rec, false
 	}
 	var routes []Route
-	if json.Unmarshal(row.Meta, &routes) != nil || len(routes) == 0 {
+	if json.Unmarshal(row.Meta, &routes) != nil || len(routes) == 0 || !s.o.RIB.Ready() {
 		return rec, false
 	}
 	for _, rt := range routes {
-		if !s.o.Rules.Allowed(rt) {
+		if _, ok := learnedPath(s.o.RIB, rt.Prefix, rt.Provider); !ok || !s.o.Rules.Allowed(rt) {
 			return rec, false
 		}
 	}

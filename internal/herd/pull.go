@@ -416,8 +416,9 @@ func nonce() string {
 
 // pullQuery pages through one query (origin 0: no filter) and stores what
 // validates. It returns how many records were stored. A sweep cut short by
-// a budget continues from its page cursor on the next pull; since moves
-// forward only when a sweep completes, to the time its first page was
+// a budget continues on the next pull: from the page cursor, or, when a
+// record budget cut a page, from just after the last record kept. since
+// moves forward only when a sweep completes, to the time its first page was
 // generated, so records stored while it ran are fetched next time.
 func (p *Puller) pullQuery(ctx context.Context, pe *peer, origin uint32, take func() error, room int) (int, error) {
 	pe.mu.Lock()
@@ -443,14 +444,20 @@ func (p *Puller) pullQuery(ctx context.Context, pe *peer, origin uint32, take fu
 		if env, err = p.openEnvelope(pe, raw, q); err != nil {
 			break
 		}
-		var n int
-		n, err = p.keep(ctx, pe, env, room-stored)
+		var n, done int
+		n, done, err = p.keep(ctx, pe, env, room-stored)
 		stored += n
 		if err != nil {
 			break
 		}
 		if rs.started.IsZero() {
 			rs.started = env.GeneratedAt
+		}
+		if done < len(env.Records) {
+			if done > 0 {
+				q.Cursor = recordCursor(env.Records[done-1])
+			}
+			break
 		}
 		if env.NextCursor == "" {
 			complete = true
@@ -536,19 +543,33 @@ type pulledBody struct {
 	GeneratedAt time.Time `json:"generated_at"`
 }
 
+// recordCursor is the server's cursor for the position just after rec, a
+// record it served from its own rows.
+func recordCursor(rec Record) string {
+	r := plugin.HerdRecord{ID: rec.ID, ProviderASN: rec.ProviderASN, Time: rec.Time}
+	if rec.Prefix != "" {
+		r.Prefix = netip.MustParsePrefix(rec.Prefix)
+	}
+	return cursorOf(&r)
+}
+
 // keep validates the records of env and stores up to room of them. A
 // record is trusted only as an age relative to the envelope's generated_at,
 // converted to the local clock, so clock skew cannot make old data look
-// fresh; one dated after generated_at is dropped.
-func (p *Puller) keep(ctx context.Context, pe *peer, env Envelope, room int) (int, error) {
+// fresh; one dated after generated_at is dropped. It returns how many rows
+// were new and how many leading records of env were dealt with: fewer than
+// all when a record budget cut the page, so the caller can fetch the rest
+// again instead of skipping them.
+func (p *Puller) keep(ctx context.Context, pe *peer, env Envelope, room int) (int, int, error) {
 	now := p.o.Now()
 	floor := now.Add(-time.Duration(p.o.Cfg.RetentionDays) * 24 * time.Hour)
 	var rows []plugin.HerdRecord
-	rejected := 0
+	// at is the index in env.Records of each row; bad, of each rejected record.
+	var at, bad []int
 	for i := range env.Records {
 		rec := env.Records[i]
 		if rec.Validate(env.Granularity) != nil || rec.Time.After(env.GeneratedAt) {
-			rejected++
+			bad = append(bad, i)
 			continue
 		}
 		local := now.Add(-env.GeneratedAt.Sub(rec.Time))
@@ -564,36 +585,51 @@ func (p *Puller) keep(ctx context.Context, pe *peer, env Envelope, room int) (in
 			hr.Prefix = netip.MustParsePrefix(rec.Prefix)
 		}
 		rows = append(rows, hr)
+		at = append(at, i)
+	}
+	stats, err := p.o.Store.HerdStats(ctx)
+	if err != nil {
+		return 0, 0, err
+	}
+	keepN := min(len(rows), max(room, 0))
+	if left := p.lim.PeerRecordsTotal - stats.PerMember[pe.id]; keepN > left {
+		p.o.Trips.Add("peer_records_total", pe.id)
+		keepN = max(left, 0)
+	}
+	done := len(env.Records)
+	if keepN < len(rows) {
+		// Resume just after the last row kept. A rejected record between it
+		// and the cut is fetched again, so it is counted only then.
+		done = 0
+		if keepN > 0 {
+			done = at[keepN-1] + 1
+		}
+		rows = rows[:keepN]
+	}
+	rejected := 0
+	for _, i := range bad {
+		if i < done {
+			rejected++
+		}
 	}
 	pe.mu.Lock()
 	pe.st.Rejected += uint64(rejected)
 	pe.mu.Unlock()
-	if len(rows) > room {
-		rows = rows[:max(room, 0)]
-	}
-	stats, err := p.o.Store.HerdStats(ctx)
-	if err != nil {
-		return 0, err
-	}
-	if left := p.lim.PeerRecordsTotal - stats.PerMember[pe.id]; len(rows) > left {
-		p.o.Trips.Add("peer_records_total", pe.id)
-		rows = rows[:max(left, 0)]
-	}
 	if len(rows) == 0 {
-		return 0, nil
+		return 0, done, nil
 	}
 	n, err := p.o.Store.PutHerdRecords(ctx, rows)
 	if err != nil {
-		return 0, err
+		return 0, 0, err
 	}
 	// The oldest pulled rows go first when the pulled-data budget is hit.
 	if dropped, err := p.o.Store.TrimHerd(ctx, true, p.lim.PulledBytes); err != nil {
-		return n, err
+		return n, done, err
 	} else if dropped > 0 {
 		p.o.Trips.Add("pulled_bytes", "")
 	}
 	pe.mu.Lock()
 	pe.st.Pulled += uint64(n)
 	pe.mu.Unlock()
-	return n, nil
+	return n, done, nil
 }

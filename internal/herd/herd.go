@@ -93,7 +93,7 @@ func New(o Options) (*Herd, error) {
 		return nil, err
 	}
 	h.srv = NewServer(ServerOptions{
-		Cfg: o.Cfg, ASN: o.ASN, Node: node, Store: o.Store, Rules: o.Rules, Peers: keys, Now: o.Now,
+		Cfg: o.Cfg, ASN: o.ASN, Node: node, Store: o.Store, RIB: o.RIB, Rules: o.Rules, Peers: keys, Now: o.Now,
 		Log: o.Log, Trips: h.trips, Active: o.Active, Audit: o.Audit,
 	})
 	if o.Cfg.Serving() {

@@ -317,21 +317,27 @@ func maxReplies(res probe.Result) int {
 	return n
 }
 
+// learnedPath returns the AS path the RIB view holds for prefix through
+// provider. It fails unless the exact prefix is in the view and the
+// provider has a non-empty learned path for it.
+func learnedPath(view RIB, prefix netip.Prefix, provider string) ([]uint32, bool) {
+	if _, ok := view.Exact(prefix); !ok {
+		return nil, false
+	}
+	for _, p := range view.ProviderPaths(prefix, provider) {
+		if len(p) > 0 {
+			return p, true
+		}
+	}
+	return nil, false
+}
+
 // route returns the learned route behind a result: the exact prefix must be
 // in the RIB view, and the provider must have a learned path for it. The
 // route is then checked against the rules.
 func (r *Recorder) route(res probe.Result) (Route, []uint32, bool) {
-	if _, ok := r.o.RIB.Exact(res.Prefix); !ok {
-		return Route{}, nil, false
-	}
-	var path []uint32
-	for _, p := range r.o.RIB.ProviderPaths(res.Prefix, res.Provider) {
-		if len(p) > 0 {
-			path = p
-			break
-		}
-	}
-	if path == nil {
+	path, ok := learnedPath(r.o.RIB, res.Prefix, res.Provider)
+	if !ok {
 		return Route{}, nil, false
 	}
 	var types []string
@@ -340,7 +346,7 @@ func (r *Recorder) route(res probe.Result) (Route, []uint32, bool) {
 			types = append(types, t)
 		}
 	}
-	rt := Route{Prefix: res.Prefix, Path: path, Sources: types}
+	rt := Route{Prefix: res.Prefix, Provider: res.Provider, Path: path, Sources: types}
 	return rt, path, r.o.Rules.Allowed(rt)
 }
 

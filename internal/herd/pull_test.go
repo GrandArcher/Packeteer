@@ -683,3 +683,38 @@ func TestPullContinuesABacklogLargerThanOnePull(t *testing.T) {
 		t.Errorf("rows after a new record = %d, want 21", n)
 	}
 }
+
+// A per-pull record limit that cuts a page in the middle skips nothing:
+// the next pull resumes just after the last record kept, and the sweep is
+// not marked complete until the page is read to its end.
+func TestPerPullLimitCuttingAPageSkipsNoRecord(t *testing.T) {
+	a := newMember(t, 64501, nil)
+	b := newMember(t, 64502, func(h *config.Herd) {
+		h.Limits.PullRecords = 4
+		h.Limits.PeerRecordsPerPull = 3
+	})
+	a.serve(b.node)
+	a.seedN(10, 64510)
+	p := b.puller(a, 64510)
+
+	var counts []int
+	for range 5 {
+		p.Round(context.Background())
+		counts = append(counts, len(pulledRows(t, b, a.node)))
+	}
+	if want := []int{3, 6, 9, 10, 10}; !slices.Equal(counts, want) {
+		t.Errorf("pulled rows after each pull = %v, want %v", counts, want)
+	}
+	var want []string
+	for i := range 10 {
+		want = append(want, fmt.Sprintf("r%04d", i))
+	}
+	got := ids(pulledRows(t, b, a.node))
+	slices.Sort(got)
+	if !slices.Equal(got, want) {
+		t.Errorf("pulled ids = %v, want %v", got, want)
+	}
+	if st := p.Peers()[0]; st.Pulled != 10 || st.Rejected != 0 {
+		t.Errorf("peer status = %+v", st)
+	}
+}

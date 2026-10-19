@@ -19,22 +19,33 @@ import (
 )
 
 type fakeRIB struct {
+	mu    sync.Mutex
 	ready bool
 	// paths holds the AS path learned through each provider for a prefix.
 	paths map[netip.Prefix][]uint32
-	boom  bool
+	// down is a provider with no learned paths.
+	down string
+	boom bool
 }
 
-func (f *fakeRIB) Ready() bool { return f.ready }
+func (f *fakeRIB) Ready() bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.ready
+}
 func (f *fakeRIB) Exact(p netip.Prefix) (rib.Route, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	if f.boom {
 		panic("rib exploded")
 	}
 	_, ok := f.paths[p]
 	return rib.Route{}, ok
 }
-func (f *fakeRIB) ProviderPaths(p netip.Prefix, _ string) [][]uint32 {
-	if path, ok := f.paths[p]; ok {
+func (f *fakeRIB) ProviderPaths(p netip.Prefix, provider string) [][]uint32 {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if path, ok := f.paths[p]; ok && provider != f.down {
 		return [][]uint32{path}
 	}
 	return nil
@@ -79,7 +90,7 @@ func newRecFixture(t *testing.T, edit func(*config.Herd), rules *Rules) *recFixt
 		Now:         func() time.Time { return t0 }, Log: slog.New(slog.NewTextHandler(io.Discard, nil)),
 	})
 	f.srv = NewServer(ServerOptions{
-		Cfg: cfg, ASN: 64496, Node: node, Store: store, Rules: rules, Now: func() time.Time { return t0 },
+		Cfg: cfg, ASN: 64496, Node: node, Store: store, RIB: f.rib, Rules: rules, Now: func() time.Time { return t0 },
 		Log: slog.New(slog.NewTextHandler(io.Discard, nil)), Trips: &Trips{},
 	})
 	return f
@@ -399,7 +410,7 @@ func waitFor(t *testing.T, ok func() bool) {
 
 func TestRetentionDeletesOldRecordsAndTheLocalBudgetTrimsOldestFirst(t *testing.T) {
 	f := newRecFixture(t, func(c *config.Herd) { c.RetentionDays = 30 }, nil)
-	m := &member{t: t, cfg: f.cfg, store: f.store}
+	m := &member{t: t, cfg: f.cfg, store: f.store, rib: f.rib}
 	rt := route("198.51.100.0/24", 64501, 64500, 64510)
 	for i, age := range []time.Duration{40 * 24 * time.Hour, 31 * 24 * time.Hour, 29 * 24 * time.Hour, time.Hour} {
 		m.seed(m.mkRecord("id"+string(rune('a'+i)), 64510, 64501, "198.51.100.0/24", t0.Add(-age), 10), rt)
