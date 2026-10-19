@@ -99,6 +99,7 @@ func (s *Server) routeTable() []route {
 		{"POST /api/troubleshoot/traceroute", operator, s.handleToolTrace},
 		{"POST /api/troubleshoot/whois", operator, s.handleToolWhois},
 		{"GET /api/me", viewer, s.handleMe},
+		{"POST /api/account/password", viewer, s.handleAccountPassword},
 		{"GET /api/tokens", viewer, s.handleTokens},
 		{"POST /api/tokens", viewer, s.handleTokenCreate},
 		{"DELETE /api/tokens/{id}", viewer, s.handleTokenRevoke},
@@ -139,6 +140,11 @@ func (s *Server) routeTable() []route {
 		{"GET /", viewer, files.ServeHTTP},
 	}
 }
+
+// codePasswordChange is the error code of a request refused because the
+// account must change its password first (#328). The UI sends the user to
+// the change form on it.
+const codePasswordChange = "password_change_required"
 
 // methodNone marks the anonymous caller when neither auth nor basic
 // auth is on.
@@ -281,6 +287,19 @@ func (s *Server) authorize(w http.ResponseWriter, r *http.Request, rt route) (au
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
 		return p, false
 	}
+	if p.MustChange && rt.pattern != "GET /api/me" && rt.pattern != "POST /api/account/password" {
+		// The generated first-run password only buys a password change (#328).
+		if r.Method == http.MethodGet && cookieUsable(r) && p.Session &&
+			!strings.HasPrefix(r.URL.Path, "/api/") && r.URL.Path != "/metrics" {
+			http.Redirect(w, r, "/signin.html?change=1", http.StatusFound)
+			return p, false
+		}
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "password change required: POST /api/account/password", "code": codePasswordChange})
+		if unsafeMethod(r.Method) {
+			s.record(r, p, rt.pattern, "", "password change required", http.StatusForbidden)
+		}
+		return p, false
+	}
 	if !p.Role.Allows(rt.role) {
 		writeJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden: needs role " + string(rt.role)})
 		// Denied changes are audited; denied reads are not.
@@ -361,6 +380,8 @@ func writeAuthError(w http.ResponseWriter, err error) {
 		status = http.StatusNotFound
 	case errors.Is(err, auth.ErrForbidden):
 		status = http.StatusForbidden
+	case errors.Is(err, auth.ErrThrottled):
+		status = http.StatusTooManyRequests
 	case errors.Is(err, auth.ErrUnavailable):
 		status = http.StatusServiceUnavailable
 	}
@@ -390,6 +411,31 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 		SSO  bool   `json:"sso"`
 		auth.Principal
 	}{Auth: s.authMode(), SSO: s.auth.SSOEnabled(), Principal: p})
+}
+
+type passwordRequest struct {
+	Current string `json:"current_password"`
+	New     string `json:"new_password"`
+}
+
+// handleAccountPassword changes the caller's own password. It is the one
+// call an account may make while it must change its password (#328). The
+// passwords are never audited.
+func (s *Server) handleAccountPassword(w http.ResponseWriter, r *http.Request) {
+	if !s.needAuth(w) {
+		return
+	}
+	var req passwordRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	p := principalFrom(r.Context())
+	noteAudit(r, p.User, "password")
+	if err := s.auth.ChangePassword(w, r, p, req.Current, req.New); err != nil {
+		writeAuthError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // ---- Users (admin) ----
@@ -647,7 +693,7 @@ func (s *Server) handleSignin(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case err == nil:
 		s.record(r, p, "auth.login", p.User, "", http.StatusOK)
-		writeJSON(w, http.StatusOK, map[string]any{"user": p.User, "role": p.Role})
+		writeJSON(w, http.StatusOK, map[string]any{"user": p.User, "role": p.Role, "must_change": p.MustChange})
 	case errors.Is(err, auth.ErrThrottled):
 		writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": err.Error()})
 	case errors.Is(err, auth.ErrBadCredentials):

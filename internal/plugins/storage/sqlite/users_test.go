@@ -2,6 +2,7 @@ package sqlite
 
 import (
 	"context"
+	"database/sql"
 	"path/filepath"
 	"testing"
 	"time"
@@ -79,5 +80,45 @@ func TestUsersTokensAudit(t *testing.T) {
 	}
 	if ok, _ := s.DeleteToken(ctx, tok.ID); ok {
 		t.Fatal("deleted twice")
+	}
+}
+
+// TestUserMustChangeAndMigration keeps must_change across a restart and adds
+// the column to a users table created before #328 (#328).
+func TestUserMustChangeAndMigration(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "p.db")
+	old, err := sql.Open("sqlite", "file:"+path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := old.Exec(`CREATE TABLE users (name TEXT PRIMARY KEY, role TEXT NOT NULL, source TEXT NOT NULL, password_hash TEXT NOT NULL,
+		disabled INTEGER NOT NULL, created_ms INTEGER NOT NULL, updated_ms INTEGER NOT NULL);
+		INSERT INTO users VALUES ('legacy', 'admin', 'local', 'h', 0, 1, 1)`); err != nil {
+		t.Fatal(err)
+	}
+	_ = old.Close()
+
+	s := newStore(t, "path: "+path)
+	if err := s.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	got, ok, err := s.User(ctx, "legacy")
+	if err != nil || !ok || got.MustChange {
+		t.Fatalf("legacy user: %+v %v %v", got, ok, err)
+	}
+	now := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
+	if err := s.PutUser(ctx, plugin.User{Name: "admin", Role: plugin.RoleAdmin, Source: plugin.UserLocal, PasswordHash: "h", MustChange: true, Created: now, Updated: now}); err != nil {
+		t.Fatal(err)
+	}
+	_ = s.Stop(ctx)
+
+	s = newStore(t, "path: "+path)
+	if err := s.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	defer s.Stop(ctx)
+	if got, _, _ := s.User(ctx, "admin"); !got.MustChange {
+		t.Fatalf("must_change lost across a restart: %+v", got)
 	}
 }

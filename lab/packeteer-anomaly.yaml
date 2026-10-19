@@ -89,3 +89,7 @@ anomaly:
       min_mbps: 10
       action: flowspec_drop
       ttl: 30m
+
+# Lab only: no sign-in, so the e2e scripts can read the API (#328).
+auth:
+  enabled: false

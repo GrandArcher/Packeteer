@@ -63,6 +63,8 @@ log:
   format: text
 http:
   listen: "127.0.0.1:%d"
+auth:
+  enabled: false
 storage:
   type: sqlite
   config:

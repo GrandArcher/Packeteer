@@ -268,11 +268,11 @@ A provider opts out with `path_check: false`; an exchange peer does the same. Op
 | `allow_from` | any | Client prefixes allowed to connect (#32), e.g. `[127.0.0.0/8, 192.0.2.0/24, "2001:db8::/32"]`. Others get `403` on every path, health checks included. Works with and without `auth`. Behind a reverse proxy, the proxy's address is matched (`X-Forwarded-For` is ignored). |
 | `config_editor` | `false` | `true` lets an admin read, validate, and write this config file through `/api/config` and `/settings.html` (#34). Needs `auth` or basic auth; with neither it stays off. A write passes the same checks as a start and is read back through the loader. When every change is an [online key](#online-reconfiguration), the running controller applies it on the write (#128). Anything else applies on restart. Turning `mode: inject` on through it needs an explicit confirmation. It never runs an `exec` plugin, and refuses a file that adds or changes one or changes `plugin_dir`. `GET /api/config` returns the file unredacted, so keep secrets in environment variables. The file must be mounted writable. See [ui.md](ui.md). |
 
-The server does not announce routes. With `--network host`, this address is on the host. Basic auth is not a key in the file; see the environment variables. Users, roles, API tokens, and SSO are the `auth` block.
+The server does not announce routes. With `--network host`, this address is on the host. Basic auth is not a key in the file; see the environment variables. With neither basic auth nor an explicit `auth.enabled`, sign-in is on. Users, roles, API tokens, and SSO are the `auth` block.
 
 ### `auth`
 
-Users, roles, API tokens, the audit log, and optional OIDC single sign-on for the ops HTTP server (#32). Off by default. Guide: [auth.md](auth.md).
+Users, roles, API tokens, the audit log, and optional OIDC single sign-on for the ops HTTP server (#32). On by default since #328 when the HTTP server runs. Guide: [auth.md](auth.md).
 
 ```yaml
 storage:
@@ -293,12 +293,12 @@ auth:
 
 | Key | Default | Meaning |
 |---|---|---|
-| `enabled` | `false` | Turns auth on. Requires `storage` (a plugin that keeps users, e.g. `sqlite`) and refuses to start with `PACKETEER_HTTP_USER` set. `false`, or no `auth` block, keeps the single basic-auth account: the rollback. |
+| `enabled` | `true` | Unset, it is `true` and `storage` defaults to `sqlite` when the HTTP server runs and `PACKETEER_HTTP_USER` is not set (#328). An explicit `true` requires `storage` (a plugin that keeps users, e.g. `sqlite`) and refuses to start with `PACKETEER_HTTP_USER` set. An explicit `false` keeps the single basic-auth account, or no sign-in at all: the rollback. It logs a warning at start and the UI shows a banner. |
 | `session_ttl` | `12h` | Lifetime of a session from the sign-in page or SSO, `5m`–`168h`. Sessions are in memory; a restart signs everyone out. |
 | `token_ttl` | `2160h` | API token lifetime when the request names none, `1h`–`8760h`. A request may ask for up to `8760h`. |
 | `sso` | none | Single sign-on plugin entry (`type: oidc`). Needs `enabled: true`. |
 
-Roles: `viewer` reads everything a dashboard or API client reads (and manages its own API tokens), `operator` also opens and closes maintenance windows, adds and removes mitigation rules, and runs the troubleshooting tools, `admin` also manages users and reads the audit log. `/healthz`, `/readyz`, the sign-in page and endpoints, and the SSO endpoints are public. The first admin comes from `PACKETEER_ADMIN_USER` and `PACKETEER_ADMIN_PASSWORD`. Auth never changes what is announced: allowlist, learned-RIB check, community, NO_EXPORT, `max_improvements`, hold time, and withdraw-on-failure are the same for every role.
+Roles: `viewer` reads everything a dashboard or API client reads (and manages its own API tokens), `operator` also opens and closes maintenance windows, adds and removes mitigation rules, and runs the troubleshooting tools, `admin` also manages users and reads the audit log. `/healthz`, `/readyz`, the sign-in page and endpoints, and the SSO endpoints are public. The first admin comes from `PACKETEER_ADMIN_USER` and `PACKETEER_ADMIN_PASSWORD`; without a password, the first start generates one ([auth.md](auth.md#first-run)). Auth never changes what is announced: allowlist, learned-RIB check, community, NO_EXPORT, `max_improvements`, hold time, and withdraw-on-failure are the same for every role.
 
 ### `bgp`
 
@@ -821,7 +821,7 @@ Set these in the container. They are not keys in the YAML file. `PACKETEER_HTTP_
 | `PACKETEER_HTTP_USER` | Basic auth user. Set together with the password, or set neither. |
 | `PACKETEER_HTTP_PASSWORD` | Basic auth password. |
 | `PACKETEER_ADMIN_USER` | With `auth`: the first admin's name (default `admin`). |
-| `PACKETEER_ADMIN_PASSWORD` | With `auth`: creates that admin at start when no user has the name (12–256 characters). An existing user is not changed, so a password set through the API survives a restart. Not written to the log. |
+| `PACKETEER_ADMIN_PASSWORD` | With `auth`: creates that admin at start when no user has the name (12-256 characters). An existing user is not changed, so a password set through the API survives a restart. Not written to the log. Unset with no user yet, a random password is generated instead ([auth.md](auth.md#first-run)). |
 
 `${VAR}` expansion applies inside a webhook `url`, webhook `headers` values, and an `exec` plugin's `env` values. It is not applied to the rest of the file.
 

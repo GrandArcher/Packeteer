@@ -221,6 +221,7 @@ button.small { margin-left: 6px; padding: 3px 8px; border: 1px solid var(--line)
 .banner, .conn { padding: 10px 20px; margin: 0; border-bottom: 1px solid var(--line); }
 .banner-observe { background: #e8f1fa; color: var(--head); }
 .banner-inject { background: #fff4e0; color: var(--diff); font-weight: 600; }
+.banner-warn { background: #fdecea; color: #8a1c13; font-weight: 600; }
 .conn { background: #fdecee; color: var(--down); }
 body.stale main { opacity: 0.6; }
 .tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 10px; margin-bottom: 12px; }

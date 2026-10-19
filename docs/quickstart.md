@@ -45,8 +45,10 @@ sources:
     config:
       targets: [{prefix: 127.0.0.1/32}]
 YAML
+PW='quickstart-demo-password'
 docker run -d --name packeteer --network host \
   --cap-add NET_RAW --cap-add NET_ADMIN \
+  -e PACKETEER_ADMIN_PASSWORD="$PW" \
   -v "$PWD/hello.yaml:/etc/packeteer/config.yaml:ro" \
   "$IMAGE"
 ```
@@ -55,17 +57,19 @@ Wait for the first probe round (one interval, 5 seconds here), then read the API
 
 ```sh
 curl -fsS http://127.0.0.1:8080/readyz
-curl -fsS http://127.0.0.1:8080/api/probes
+curl -fsS -u "admin:$PW" http://127.0.0.1:8080/api/probes
 ```
 <!-- ci-retry: 60 -->
 <!-- ci-expect: "provider":"loopback" -->
 <!-- ci-expect: "ok":true -->
 
+Sign-in is on by default (#328): `/readyz` and `/healthz` are public and everything else needs a user. `PACKETEER_ADMIN_PASSWORD` sets the first admin's password for this throwaway container. Without it the first start generates one and prints it once; Section 4 shows how to read it.
+
 `/api/probes` lists one result for provider `loopback` with `"ok":true` and `loss_pct` 0. The same numbers are on the dashboard at <http://127.0.0.1:8080/> and in the log:
 
 ```sh
 docker logs packeteer 2>&1 | grep 'msg=probe '
-curl -fsS http://127.0.0.1:8080/metrics | grep '^packeteer_probe_rtt_seconds'
+curl -fsS -u "admin:$PW" http://127.0.0.1:8080/metrics | grep '^packeteer_probe_rtt_seconds'
 ```
 <!-- ci-expect: prober=icmp -->
 <!-- ci-expect: loss_pct=0 -->
@@ -136,7 +140,7 @@ curl -fsS http://127.0.0.1:8080/api/overview
 <!-- ci-expect: "status":"ok" -->
 <!-- ci-expect: "mode":"observe" -->
 
-The settings form and setup wizard on `/settings.html` need `http.config_editor: true` plus auth or basic auth ([ui.md](ui.md)); until then, edit the mounted file and restart. `/api/overview` carries the dashboard's setup checklist (`setup`): what to add next and what looks broken. The dashboard at <http://127.0.0.1:8080/> shows the same list until the instance is fully set up. `/readyz` returns 503 until startup finishes and, once `bgp.neighbors` is set, until an iBGP session is up.
+The settings form and setup wizard on `/settings.html` need `http.config_editor: true` (sign-in is on by default) ([ui.md](ui.md)); until then, edit the mounted file and restart. `/api/overview` carries the dashboard's setup checklist (`setup`): what to add next and what looks broken. The dashboard at <http://127.0.0.1:8080/> shows the same list until the instance is fully set up. `/readyz` returns 503 until startup finishes and, once `bgp.neighbors` is set, until an iBGP session is up.
 
 ```sh
 docker logs packeteer 2>&1 | grep 'packeteer running'
@@ -144,12 +148,22 @@ docker logs packeteer 2>&1 | grep 'packeteer running'
 <!-- ci-expect: mode=observe -->
 <!-- ci-expect: announce=disabled -->
 
+This run set no `PACKETEER_ADMIN_PASSWORD`, so the first start made the admin `admin` with a random password. The log shows it once, and `/var/lib/packeteer/first-run-admin-password` in the volume holds it until you change it:
+
+```sh
+docker logs packeteer 2>&1 | grep 'generated admin password'
+```
+<!-- ci-expect: generated admin password -->
+
+Open <http://127.0.0.1:8080/>. It redirects to the sign-in page, which asks for a new password after the first sign-in. [auth.md](auth.md#first-run) covers the opt-out and the other ways to set the password.
+
 ## 5. Or run it with Compose
 
 The same container as a Compose service. Use one or the other, not both: they share the container name `packeteer`.
 
 ```sh
 docker stop -t 30 packeteer && docker rm packeteer
+export PACKETEER_ADMIN_PASSWORD='quickstart-compose-password'
 curl -fsSLo docker-compose.yml https://raw.githubusercontent.com/GrandArcher/Packeteer/main/docker-compose.yml
 docker compose up -d
 docker compose ps
@@ -157,14 +171,14 @@ docker compose ps
 <!-- ci-expect: packeteer -->
 
 ```sh
-curl -fsS http://127.0.0.1:8080/api/overview
+curl -fsS -u "admin:$PACKETEER_ADMIN_PASSWORD" http://127.0.0.1:8080/api/overview
 docker compose logs packeteer
 ```
 <!-- ci-retry: 60 -->
 <!-- ci-expect: "mode":"observe" -->
 <!-- ci-expect: packeteer running -->
 
-The Compose file pins the same flags: host networking, the two capabilities, the config and plugin mounts, a data volume, and `restart: unless-stopped`. Its `image` line uses `:edge`; change it to a release tag to pin.
+The Compose file pins the same flags: host networking, the two capabilities, the config and plugin mounts, a data volume, and `restart: unless-stopped`. It passes `PACKETEER_ADMIN_PASSWORD` from your shell when set; leave it unset to get a generated password in `docker compose logs packeteer`. Its `image` line uses `:edge`; change it to a release tag to pin.
 
 ## 6. Stop
 

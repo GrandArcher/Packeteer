@@ -4,6 +4,10 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 
 ## [Unreleased]
 
+### Changed
+
+- Upgrade note: sign-in is now on by default. With no `auth.enabled` and no `PACKETEER_HTTP_USER` you get sqlite and a generated admin password; opt out with `auth.enabled: false` (#328).
+
 ### Added
 
 - Herd phase 1: opt-in `herd:` stores per-round records, serves them signed over pinned mutual TLS, and pulls static peers; `GET /api/herd`, `/api/herd/vantages`, `/api/herd/preview` (#260).

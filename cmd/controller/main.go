@@ -347,6 +347,7 @@ func run(ctx context.Context, args []string, getenv func(string) string, stdout,
 // before it starts. It starts nothing. The config editor (#34) runs it on
 // a candidate file too, with checkOnly set: no exec plugin command runs.
 func preflight(cfg *config.Config, log *slog.Logger, getenv func(string) string, httpUser string, checkOnly bool) (*pluginhost.Set, error) {
+	cfg.DefaultAuth(httpUser != "")
 	plugins, err := pluginhost.Build(cfg, pluginhost.Options{Logger: log, Getenv: getenv, PluginDir: getenv(PluginDirEnv), CheckOnly: checkOnly})
 	if err != nil {
 		return nil, fmt.Errorf("plugins: %w", err)
@@ -486,6 +487,7 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 		log.Error("refusing to start", "err", aerr)
 		return 1
 	}
+	warnAuthOff(cfg, httpUser, log)
 	// Upgrade from the UI (#196). The stop is the SIGTERM path: the
 	// shutdown below withdraws every route before the new version starts.
 	upMgr, uerr := newUpgrade(cfg, path, stopDaemon, haStatus, audit, getenv, log)
@@ -695,7 +697,7 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 		log.Error("refusing to start", "err", err)
 		return 1
 	}
-	bootstrapAdmin(ctx, authSvc, audit, getenv, log)
+	bootstrapAdmin(ctx, authSvc, audit, plugins, getenv, log)
 	hd, herr := startHerd(ctx, cfg, plugins, view, audit, dispatch.Emit, ha.active, log)
 	if herr != nil {
 		log.Error("refusing to start", "err", herr)

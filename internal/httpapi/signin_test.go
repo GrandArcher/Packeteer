@@ -39,8 +39,8 @@ func TestSigninPage(t *testing.T) {
 	// them: the favicon is requested before a session exists.
 	for path, want := range map[string]string{
 		"/signin.html": `id="signin-form"`,
-		"/signin.js":   "/auth/signin",
-		"/shell.js":    "shellRenderBanner",
+		"/signin.js":   "/api/account/password",
+		"/shell.js":    "shellRenderAuthBanner",
 		"/app.css":     ".signin-form",
 	} {
 		rec := e.do("GET", path, "", "")
@@ -49,7 +49,7 @@ func TestSigninPage(t *testing.T) {
 		}
 	}
 	page := e.do("GET", "/signin.html", "", "").Body.String()
-	for _, want := range []string{`id="banner"`, `<label>User name `, `<label>Password `, `type="password"`, `autocomplete="current-password"`, `src="/signin.js"`, `rel="icon" href="/logo.png"`, `alt="Packeteer logo"`, `src="/logo.png"`} {
+	for _, want := range []string{`id="banner"`, `<label>User name `, `<label>Password `, `type="password"`, `autocomplete="current-password"`, `src="/signin.js"`, `id="change-form"`, `autocomplete="new-password"`, `rel="icon" href="/logo.png"`, `alt="Packeteer logo"`, `src="/logo.png"`} {
 		if !strings.Contains(page, want) {
 			t.Errorf("signin.html missing %s", want)
 		}
@@ -290,5 +290,132 @@ func TestPageRedirectNeedsUsableCookie(t *testing.T) {
 		if rec.Code != http.StatusUnauthorized || !strings.Contains(rec.Header().Get("WWW-Authenticate"), "Basic") {
 			t.Errorf("%s: %d %q, want 401 with a basic-auth challenge", name, rec.Code, rec.Header().Get("WWW-Authenticate"))
 		}
+	}
+}
+
+// TestForcedPasswordChange: the generated first-run admin can sign in, but
+// until it sets its own password every call except the change (and /api/me)
+// is refused, through a session, basic auth, and a token alike. The change
+// needs the current password, ends the old sessions, and keeps the browser
+// signed in (#328).
+func TestForcedPasswordChange(t *testing.T) {
+	e := newRBAC(t, nil)
+	ctx := t.Context()
+	const generated, chosen = "generated-first-password", "my-own-long-password"
+	if ok, err := e.svc.Bootstrap(ctx, "first", generated, true); !ok || err != nil {
+		t.Fatal(ok, err)
+	}
+	rec := e.signin("first", generated)
+	old := sessionCookie(t, rec)
+	if rec.Code != http.StatusOK || old == nil || !strings.Contains(rec.Body.String(), `"must_change":true`) {
+		t.Fatalf("sign-in: %d %s", rec.Code, rec.Body)
+	}
+	in := withCookie(old)
+	basic := func(r *http.Request) { r.SetBasicAuth("first", generated) }
+
+	for name, mod := range map[string]func(*http.Request){"session": in, "basic": basic} {
+		for _, p := range []string{"/api/overview", "/api/providers", "/api/users", "/metrics"} {
+			rec := e.do("GET", p, "", "", mod)
+			if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), `"code":"password_change_required"`) {
+				t.Errorf("%s GET %s: %d %s", name, p, rec.Code, rec.Body)
+			}
+		}
+	}
+	if rec := e.do("POST", "/api/tokens", "", `{"name":"x"}`, in); rec.Code != http.StatusForbidden {
+		t.Errorf("token creation before the change: %d", rec.Code)
+	}
+	if rec := e.do("POST", "/api/users", "", `{"name":"eve","role":"admin","password":"another-long-password"}`, in); rec.Code != http.StatusForbidden {
+		t.Errorf("user creation before the change: %d", rec.Code)
+	}
+	if rec := e.do("GET", "/", "", "", in, overTLS); rec.Code != http.StatusFound || rec.Header().Get("Location") != "/signin.html?change=1" {
+		t.Errorf("page before the change: %d %s", rec.Code, rec.Header().Get("Location"))
+	}
+	if rec := e.do("GET", "/api/me", "", "", in); rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"must_change":true`) {
+		t.Errorf("me before the change: %d %s", rec.Code, rec.Body)
+	}
+
+	change := func(current, next string, mod ...func(*http.Request)) *httptest.ResponseRecorder {
+		b, _ := json.Marshal(map[string]string{"current_password": current, "new_password": next})
+		return e.do("POST", "/api/account/password", "", string(b), mod...)
+	}
+	if rec := change("not-the-password", chosen, in); rec.Code != http.StatusForbidden || strings.Contains(rec.Body.String(), "password_change_required") {
+		t.Errorf("wrong current password: %d %s", rec.Code, rec.Body)
+	}
+	if rec := change(generated, "short", in); rec.Code != http.StatusBadRequest {
+		t.Errorf("short new password: %d", rec.Code)
+	}
+	if rec := change(generated, generated, in); rec.Code != http.StatusBadRequest {
+		t.Errorf("unchanged password: %d", rec.Code)
+	}
+	if rec := e.do("GET", "/api/me", "", "", basic); rec.Code != http.StatusOK {
+		t.Fatalf("a refused change must leave the old password working: %d", rec.Code)
+	}
+
+	rec = change(generated, chosen, in)
+	fresh := sessionCookie(t, rec)
+	if rec.Code != http.StatusNoContent || fresh == nil || fresh.Value == old.Value {
+		t.Fatalf("change: %d %+v", rec.Code, fresh)
+	}
+	if rec := e.do("GET", "/api/providers", "", "", withCookie(fresh)); rec.Code != http.StatusOK {
+		t.Errorf("new session after the change: %d %s", rec.Code, rec.Body)
+	}
+	if rec := e.do("GET", "/api/me", "", "", withCookie(fresh)); strings.Contains(rec.Body.String(), "must_change") {
+		t.Errorf("me after the change: %s", rec.Body)
+	}
+	if rec := e.do("GET", "/api/providers", "", "", in); rec.Code != http.StatusUnauthorized {
+		t.Errorf("old session after the change: %d", rec.Code)
+	}
+	if rec := e.do("GET", "/api/providers", "", "", basic); rec.Code != http.StatusUnauthorized {
+		t.Errorf("generated password after the change: %d", rec.Code)
+	}
+	if rec := e.do("GET", "/api/providers", "", "", func(r *http.Request) { r.SetBasicAuth("first", chosen) }); rec.Code != http.StatusOK {
+		t.Errorf("chosen password: %d", rec.Code)
+	}
+
+	// Other users never see the gate, and the audit log holds no password.
+	if rec := e.do("GET", "/api/providers", e.tokens[plugin.RoleViewer], ""); rec.Code != http.StatusOK {
+		t.Errorf("another user: %d", rec.Code)
+	}
+	var changed, denied int
+	for _, r := range e.store.Records() {
+		b, _ := json.Marshal(r)
+		if bytes.Contains(b, []byte(generated)) || bytes.Contains(b, []byte(chosen)) {
+			t.Fatalf("audit record holds a password: %s", b)
+		}
+		switch {
+		case r.Action == "POST /api/account/password" && r.Result == auth.ResultOK && r.Actor == "first":
+			changed++
+		case r.Result == auth.ResultDenied && r.Actor == "first" && strings.Contains(r.Detail, "password change required"):
+			denied++
+		}
+	}
+	if changed != 1 || denied < 2 {
+		t.Errorf("audit: changed %d, denied %d: %+v", changed, denied, e.store.Records())
+	}
+}
+
+// TestOverviewAuthMode: the overview names the auth mode so the UI can
+// warn when sign-in is off (#328). Without auth there is no password change.
+func TestOverviewAuthMode(t *testing.T) {
+	e := newRBAC(t, nil)
+	if rec := e.do("POST", "/api/account/password", "", `{"current_password":"x","new_password":"another-long-password"}`); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("anonymous change: %d", rec.Code)
+	}
+	if rec := e.do("GET", "/api/overview", e.tokens[plugin.RoleViewer], ""); !strings.Contains(rec.Body.String(), `"auth":"rbac"`) {
+		t.Fatalf("overview with auth: %s", rec.Body)
+	}
+	srv, err := New(Options{Snapshot: func() Snapshot { return Assemble(sampleInput()) }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rr := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rr, httptest.NewRequest("GET", "/api/overview", nil))
+	if !strings.Contains(rr.Body.String(), `"auth":"off"`) {
+		t.Fatalf("overview without auth: %s", rr.Body)
+	}
+	rr = httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rr, httptest.NewRequest("POST", "/api/account/password", strings.NewReader(`{"current_password":"x","new_password":"another-long-password"}`)))
+	if rr.Code != http.StatusNotFound {
+		t.Fatalf("password change without auth: %d %s", rr.Code, rr.Body)
 	}
 }

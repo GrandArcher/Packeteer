@@ -434,18 +434,25 @@ log:
 # writes (maintenance, mitigation, tools; users and tokens with auth).
 # Empty listen disables the server. PACKETEER_HTTP_LISTEN overrides this
 # ("off" disables). With --network host, 127.0.0.1:8080 is the host loopback.
-# The image exposes port 8080. Optional basic auth (set both, or neither):
-# PACKETEER_HTTP_USER and PACKETEER_HTTP_PASSWORD.
+# The image exposes port 8080. Sign-in is on (see auth below); the single
+# basic-auth account (set both, or neither) is PACKETEER_HTTP_USER and
+# PACKETEER_HTTP_PASSWORD.
 http:
   listen: "127.0.0.1:8080"
   # allow_from: [127.0.0.0/8, 192.0.2.0/24]   # client prefixes allowed (default any)
   # config_editor: true   # admin edits this file in /settings.html (#34); needs auth or basic auth and a writable mount; applies on restart
 
-# Users, roles (viewer, operator, admin), API tokens, an audit log of every
-# change (also sent to notifiers as audit.recorded), and optional OIDC SSO.
-# Needs storage. The first admin comes from PACKETEER_ADMIN_PASSWORD
-# (PACKETEER_ADMIN_USER, default admin). Replaces PACKETEER_HTTP_USER.
-# Rollback: enabled: false. Docs: docs/auth.md. Never announces.
+# Sign-in is on by default (#328): users, roles (viewer, operator, admin),
+# API tokens, an audit log of every change (also sent to notifiers as
+# audit.recorded), and optional OIDC SSO. Needs storage (below). With no user
+# yet, the first start creates admin with a random password, prints it once to
+# the log, writes it to first-run-admin-password (0600) next to the storage
+# file (/var/lib/packeteer in the image), and requires a new password at
+# first sign-in. PACKETEER_ADMIN_PASSWORD
+# (PACKETEER_ADMIN_USER, default admin) sets it instead. Setting
+# PACKETEER_HTTP_USER and PACKETEER_HTTP_PASSWORD keeps the single basic-auth
+# account instead. Rollback: enabled: false (the server is then open; the log
+# warns and the UI shows a banner). Docs: docs/auth.md. Never announces.
 # auth:
 #   enabled: true
 #   session_ttl: 12h
@@ -465,8 +472,9 @@ http:
 # /var/lib/packeteer so it survives a restart. The same file keeps SNMP
 # 95th-percentile samples for the open billing period when telemetry is on.
 # It also keeps recent events and the audit log for the Events page.
-# Delete this block to turn history off; probing and decisions do not depend
-# on it, and the 95th window then stays in memory only. Does not announce.
+# Delete this block to turn history off (sign-in then adds this store with the
+# default path); probing and decisions do not depend on it, and the 95th
+# window then stays in memory only. Does not announce.
 storage:
   type: sqlite
   config:

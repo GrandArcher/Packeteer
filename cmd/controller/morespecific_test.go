@@ -175,6 +175,7 @@ local_pref: 250
 hold_time: 1s
 thresholds: {min_loss_delta_pct: 1, min_rtt_delta_ms: 15}
 http: {listen: "127.0.0.1:%d"}
+auth: {enabled: false}
 providers:
   - {name: transit-a, source_ip: 192.0.2.11, next_hop: 192.0.2.1}
   - {name: transit-b, source_ip: 192.0.2.12, next_hop: 192.0.2.2}

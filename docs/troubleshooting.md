@@ -10,7 +10,7 @@ The examples in [Startup errors](#startup-errors) and [Probes fail](#probes-fail
 docker ps -a --filter name=packeteer      # running, restarting, or exited?
 docker logs --tail 100 packeteer          # the reason is usually here
 docker run --rm -v "$PWD/config.yaml:/etc/packeteer/config.yaml:ro" ghcr.io/grandarcher/packeteer:edge -check
-curl -fsS http://127.0.0.1:8080/api/overview   # mode, readiness, counts, and the setup checklist
+curl -fsS -u admin:... http://127.0.0.1:8080/api/overview   # mode, readiness, counts, and the setup checklist (sign-in is on by default)
 ```
 
 More detail in the log: `-e PACKETEER_LOG_LEVEL=debug` on `docker run` (or `log.level: debug`). JSON logs: `-e PACKETEER_LOG_FORMAT=json`.
@@ -78,10 +78,10 @@ Other refusals name the key or the plugin at fault, for example an `exec` plugin
 
 ## The dashboard does not load
 
-- **Connection refused.** `http.listen` defaults to `127.0.0.1:8080`: the host's loopback, because of `--network host`. Browse from the host itself, through an SSH tunnel (`ssh -L 8080:127.0.0.1:8080 host`), or set `http.listen` to an address on the host and set `PACKETEER_HTTP_USER` and `PACKETEER_HTTP_PASSWORD` (or `auth`) before you do. `PACKETEER_HTTP_LISTEN=off` turns it off; check the environment.
+- **Connection refused.** `http.listen` defaults to `127.0.0.1:8080`: the host's loopback, because of `--network host`. Browse from the host itself, through an SSH tunnel (`ssh -L 8080:127.0.0.1:8080 host`), or set `http.listen` to an address on the host (sign-in is on by default; keep it on). `PACKETEER_HTTP_LISTEN=off` turns it off; check the environment.
 - **Docker Desktop (macOS, Windows).** Host networking there is the Docker VM's network, not your machine's. Packeteer needs a Linux host.
 - **Port in use.** The log has `http server` with `address already in use`. Something else has 8080; set `http.listen` or `PACKETEER_HTTP_LISTEN` to another port.
-- **401 or 403.** Basic auth or `auth` is on (`/api/me` says which), or `http.allow_from` does not include your address.
+- **401 or 403.** Sign-in is on by default (`/api/me` says which kind). Use the admin password: the generated one is in the first start's log (`docker logs packeteer 2>&1 | grep 'generated admin password'`) and must be changed at first sign-in; until then every call but the password change is `403` with `password_change_required`. Otherwise `http.allow_from` does not include your address.
 - **"Cannot reach the controller"** on the page: the browser lost the API. The page keeps the last data, marked stale, until it reconnects.
 
 ## Nothing to probe

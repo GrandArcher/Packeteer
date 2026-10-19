@@ -58,9 +58,12 @@ type User struct {
 	Role         Role
 	Source       string
 	PasswordHash string
-	Disabled     bool
-	Created      time.Time
-	Updated      time.Time
+	// MustChange is set on the generated first-run admin: the account may
+	// only change its password until it does (#328).
+	MustChange bool
+	Disabled   bool
+	Created    time.Time
+	Updated    time.Time
 }
 
 // APIToken is a bearer token for scripts. Hash is the hex SHA-256 of the
