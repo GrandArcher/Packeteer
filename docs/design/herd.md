@@ -534,6 +534,37 @@ per vantage.
    global reputation and nothing that suppresses a member's data for
    everyone.
 
+## IXP vantage (proposal, not implemented)
+
+An Internet exchange running Packeteer in IXP mode
+([ixp.md](ixp.md), #160) can be a herd vantage of kind `ixp`, next to
+the edge vantages above. It is observe-only and never announces, so it
+adds nothing to the herd that could move traffic.
+
+- **Identity.** The exchange or route-server ASN proves control the same
+  way an edge ASN does: one identity per ASN (Identity and Sybil
+  resistance).
+- **Shared by default: fabric aggregates only.** Per site, loss, RTT, and
+  jitter to the member set (the reduction of the `ixp.fabric` probes
+  under #162, computed over the member set rather than per member), and
+  fabric incident flags (the correlator's `ixp.fabric_degraded`, #163).
+  This matches IXP Manager's `own_graphs_only` default, where a member
+  sees only its own graphs ([ixp.md](ixp.md), member pages).
+- **Member-level data is the member's.** One member's reachability, its
+  route-server filter results, or per-member fabric paths are shared only
+  if that member opts in. There is no exchange-wide switch that publishes
+  them, and a member's Can Ping opt-out still applies.
+- **Shown like any vantage.** An `ixp` vantage is listed in its own row
+  group, labeled with its kind, never merged with edge vantages and never
+  counted as an edge. A fabric incident flag is one more vantage's claim.
+- **Same hard rules.** Herd data from an IXP vantage never moves traffic,
+  never changes member routing, and never enters Decide or the IXP
+  correlator (Hard rules).
+
+Open: the record shape for fabric aggregates (they have no provider ASN
+or origin ASN), and whether an exchange counts as one vantage per site.
+Both belong in the issue that implements this.
+
 ## Local use
 
 Everything here is advisory.
@@ -686,6 +717,26 @@ drops probes on purpose. Attestation would also need vendor trust roots
 and hardware most container deployments do not expose, against the
 one-container rule. Herd shows every member's data as that member's
 claim and leaves interpretation to the operator.
+
+## Cost
+
+There is no project-run collector, so there is no collector to host,
+retain, or rate-limit. Each member pays for what it uses:
+
+- **Disk** for its own records and the pulled ones, bounded by its
+  retention and disk budgets (Retention, Resource protection).
+- **Bandwidth and CPU** for serving and pulling, bounded by the local
+  rate, connection, and response caps. A large herd costs a bounded
+  amount per interval, not an amount that grows with its size.
+- **Probe budget** only through hints, under the global probe rate limit.
+
+The project runs at most the seed names, which hold addresses only
+(Discovery and membership). A central collector with signed submissions
+and an open dataset was considered and left out: it would put one
+operator's destination lists in one place, and the k-anonymity rule would
+have to be trusted to that one host. If the herd later wants a public
+dataset, that is a separate decision with its own hosting, retention,
+rate limits, and license (Open questions, item 8).
 
 ## Phased plan
 
