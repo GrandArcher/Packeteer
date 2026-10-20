@@ -124,7 +124,7 @@ type Config struct {
 	// Workers is how many goroutines turn decoded records into window
 	// counts (#385). The readers decode in arrival order and queue the
 	// records, so a stall in the window does not stop the socket being
-	// read. Default 4, 1 to 16. 1 does it all in the reader.
+	// read. Default 4, 1 to 16.
 	Workers      int           `yaml:"workers"`
 	MinBytes     uint64        `yaml:"min_bytes"`
 	MinPct       float64       `yaml:"min_pct"`
