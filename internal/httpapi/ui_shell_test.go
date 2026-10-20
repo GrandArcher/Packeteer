@@ -195,6 +195,65 @@ func TestUIKeyboardAccess(t *testing.T) {
 	}
 }
 
+// TestUINarrowLayout checks the phone layout of #352: every page with the
+// navigation has a Menu button that names and controls the link list and
+// starts closed, and the stylesheet and shell script carry the collapse and
+// the card layout. The widths are measured in a browser by
+// lab/ui-fixtures/mobile/driver.js.
+func TestUINarrowLayout(t *testing.T) {
+	entries, err := fs.ReadDir(webFS, "web")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pages := 0
+	for _, e := range entries {
+		if !strings.HasSuffix(e.Name(), ".html") || e.Name() == "signin.html" {
+			continue
+		}
+		pages++
+		body := mustWeb(t, "web/"+e.Name())
+		btn := `<button type="button" id="nav-toggle" class="nav-toggle" aria-expanded="false" aria-controls="nav-links">Menu</button>`
+		list := `<div id="nav-links" class="nav-links">`
+		bi, li, first := strings.Index(body, btn), strings.Index(body, list), strings.Index(body, `href="/" data-page="overview"`)
+		if bi < 0 || li < bi || first < li {
+			t.Errorf("%s: the Menu button must come before the link list that holds the first link", e.Name())
+		}
+		if strings.Count(body[strings.Index(body, list):strings.Index(body, "</nav>")], "<a ") != 16 {
+			t.Errorf("%s: the link list does not hold the 16 page links", e.Name())
+		}
+	}
+	if pages == 0 {
+		t.Fatal("no pages checked")
+	}
+	css := mustWeb(t, "web/app.css")
+	for _, s := range []string{
+		"@media (max-width: 759px) {",
+		".nav-toggle { display: none; }",
+		".nav-links { display: none;",
+		".sidenav.open .nav-links { display: block; }",
+		"table.stacked thead { position: absolute;",
+		"table.stacked td[data-label]::before { content: attr(data-label)",
+		`#providers td[data-label="Health"]`,
+	} {
+		if !strings.Contains(css, s) {
+			t.Errorf("app.css missing %q", s)
+		}
+	}
+	shell := mustWeb(t, "web/shell.js")
+	for _, s := range []string{
+		`window.matchMedia("(max-width: 759px)")`,
+		`btn.setAttribute("aria-expanded"`,
+		`ev.key !== "Escape"`,
+		`t.classList.toggle("stacked", narrow)`,
+		`!t.closest(".table-wrap")`,
+		`cells[c].setAttribute("data-label", name)`,
+	} {
+		if !strings.Contains(shell, s) {
+			t.Errorf("shell.js missing %q", s)
+		}
+	}
+}
+
 func attr(t *testing.T, body, name string) string {
 	t.Helper()
 	key := name + `="`

@@ -291,8 +291,78 @@ function shellAccount() {
   }
 }
 
+// Below 760px the nav links sit behind the Menu button (#352). Escape
+// closes the menu and returns focus to the button.
+function shellNavMenu() {
+  var btn = document.getElementById("nav-toggle");
+  var nav = document.querySelector(".sidenav");
+  if (!btn || !nav) return;
+  function set(open) {
+    nav.classList.toggle("open", open);
+    document.body.classList.toggle("nav-open", open);
+    btn.setAttribute("aria-expanded", open ? "true" : "false");
+  }
+  btn.addEventListener("click", function () { set(!nav.classList.contains("open")); });
+  document.addEventListener("keydown", function (ev) {
+    if (ev.key !== "Escape" || !nav.classList.contains("open")) return;
+    set(false);
+    btn.focus();
+  });
+}
+
+// On a phone a table row is a card (app.css), so each cell needs its
+// column name. The names are copied from the header only while the screen is
+// narrow, and removed when it is not, so a wide page keeps its plain markup.
+// A table inside .table-wrap scrolls sideways instead.
+var shellNarrow = window.matchMedia("(max-width: 759px)");
+
+function shellStackTable(t) {
+  var narrow = shellNarrow.matches && !t.closest(".table-wrap");
+  var heads = t.querySelectorAll(":scope > thead th");
+  t.classList.toggle("stacked", narrow);
+  for (var b = 0; b < t.tBodies.length; b++) {
+    for (var r = 0; r < t.tBodies[b].rows.length; r++) {
+      var cells = t.tBodies[b].rows[r].cells;
+      // A row with a spanning cell (a prefix's details) has no column names.
+      for (var c = 0; c < cells.length; c++) {
+        var name = narrow && cells.length === heads.length ? heads[c].textContent.trim() : "";
+        if (name) cells[c].setAttribute("data-label", name);
+        else cells[c].removeAttribute("data-label");
+      }
+    }
+  }
+  if (!narrow && !t.className) t.removeAttribute("class");
+}
+
+function shellStackAll(root) {
+  var tables = root.querySelectorAll("table");
+  for (var i = 0; i < tables.length; i++) shellStackTable(tables[i]);
+}
+
+function shellStackTables() {
+  var pending = new Set();
+  new MutationObserver(function (list) {
+    if (!shellNarrow.matches) return;
+    list.forEach(function (m) {
+      var own = m.target.closest && m.target.closest("table");
+      if (own) pending.add(own);
+      m.addedNodes.forEach(function (n) {
+        if (n.nodeType !== 1) return;
+        if (n.matches("table")) pending.add(n);
+        n.querySelectorAll("table").forEach(function (t) { pending.add(t); });
+      });
+    });
+    pending.forEach(shellStackTable);
+    pending.clear();
+  }).observe(document.body, {childList: true, subtree: true});
+  shellNarrow.addEventListener("change", function () { shellStackAll(document); });
+  shellStackAll(document);
+}
+
 if (document.body.getAttribute("data-page") !== "signin") {
   shellMarkCurrent();
+  shellNavMenu();
+  shellStackTables();
   shellAccount();
   var shellMeReady = shellJSON("/api/me").then(function (me) {
     shellApplyMe(me);

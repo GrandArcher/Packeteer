@@ -535,3 +535,152 @@ func TestObserveWordingFixturesMatchAPI(t *testing.T) {
 		t.Fatalf("events = %+v", events.Events)
 	}
 }
+
+// TestMobileFixturesMatchAPI decodes the canned answers behind the phone
+// width smoke test (#352) with the API's own types, and checks the cases the
+// test is about: a provider that does not answer, and a long name and an
+// IPv6 prefix that must wrap.
+func TestMobileFixturesMatchAPI(t *testing.T) {
+	f, err := loadFixtures("../ui-fixtures/mobile")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !f.Frames || f.Inject.Page != "/providers.html" || len(f.Stubs) != 5 {
+		t.Fatalf("fixtures = %+v", f)
+	}
+	decode := func(path string, v any) {
+		t.Helper()
+		for _, s := range f.Stubs {
+			if s.Path == path {
+				dec := json.NewDecoder(bytes.NewReader(s.body))
+				dec.DisallowUnknownFields()
+				if err := dec.Decode(v); err != nil {
+					t.Errorf("%s: %v", path, err)
+				}
+				return
+			}
+		}
+		t.Errorf("no stub for %s", path)
+	}
+	var ov httpapi.Overview
+	decode("/api/overview", &ov)
+	if ov.Auth == "off" || len(ov.Providers) != 3 || ov.Providers[2].Detail != "no answer" || len(ov.Problems) != 2 {
+		t.Errorf("overview = %+v", ov)
+	}
+	var provs struct {
+		Version     string             `json:"version"`
+		Mode        string             `json:"mode"`
+		Ready       bool               `json:"ready"`
+		GeneratedAt time.Time          `json:"generated_at"`
+		Providers   []httpapi.Provider `json:"providers"`
+		BGP         struct {
+			Configured, Ready bool
+			Peers             []struct{}
+		} `json:"bgp"`
+	}
+	decode("/api/providers", &provs)
+	if len(provs.Providers) != 3 || provs.Providers[2].Name != ov.Providers[2].Name || provs.Providers[2].PeerASN != 64496 {
+		t.Errorf("providers = %+v", provs.Providers)
+	}
+	var imps struct {
+		Version      string                `json:"version"`
+		Mode         string                `json:"mode"`
+		Ready        bool                  `json:"ready"`
+		GeneratedAt  time.Time             `json:"generated_at"`
+		Improvements []httpapi.Improvement `json:"improvements"`
+	}
+	decode("/api/improvements", &imps)
+	if len(imps.Improvements) != 2 || !strings.HasPrefix(imps.Improvements[0].Prefix, "2001:db8:") {
+		t.Errorf("improvements = %+v", imps.Improvements)
+	}
+	var events struct {
+		Events []struct {
+			plugin.Event
+			Source  string `json:"source"`
+			HelpURL string `json:"help_url"`
+		} `json:"events"`
+		Stored bool      `json:"stored"`
+		Since  time.Time `json:"since"`
+		Now    time.Time `json:"now"`
+	}
+	decode("/api/events", &events)
+	if len(events.Events) != 2 || events.Events[0].Severity != plugin.SeverityWarning {
+		t.Errorf("events = %+v", events.Events)
+	}
+	var page httpapi.PrefixPage
+	decode("/api/prefixes", &page)
+	if len(page.Prefixes) != 1 {
+		t.Errorf("prefixes = %+v", page.Prefixes)
+	}
+}
+
+// TestMobileDriverMatchesPage keeps the phone width driver on the markup and
+// column names it reads. A renamed id or header fails here instead of as a
+// timeout in CI.
+func TestMobileDriverMatchesPage(t *testing.T) {
+	f, err := loadFixtures("../ui-fixtures/mobile")
+	if err != nil {
+		t.Fatal(err)
+	}
+	web := "../../internal/httpapi/web/"
+	read := func(name string) string {
+		t.Helper()
+		b, err := os.ReadFile(web + name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(b)
+	}
+	providers, settings, app := read("providers.html"), read("settings.html"), read("app.js")
+	driver := string(f.driver)
+	ids := regexp.MustCompile(`getElementById\("([^"]+)"\)`).FindAllStringSubmatch(driver, -1)
+	if len(ids) == 0 {
+		t.Fatal("the driver uses no element")
+	}
+	for _, m := range ids {
+		if !strings.Contains(providers, `id="`+m[1]+`"`) && !strings.Contains(settings, `id="`+m[1]+`"`) {
+			t.Errorf("driver uses #%s, which neither providers.html nor settings.html has", m[1])
+		}
+	}
+	for _, h := range regexp.MustCompile(`data-label="([^"]+)"`).FindAllStringSubmatch(driver, -1) {
+		if !strings.Contains(app, `"`+h[1]+`"`) {
+			t.Errorf("driver reads the %q column, which app.js does not draw", h[1])
+		}
+	}
+	if !strings.Contains(driver, "window.top !== window") {
+		t.Error("the driver must skip the frames it opens, or each frame would open more")
+	}
+}
+
+// TestFixturesFramesOptIn checks the dashboard's no-framing headers are
+// relaxed to same-origin framing only for fixtures that ask for it.
+func TestFixturesFramesOptIn(t *testing.T) {
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("X-Frame-Options", "DENY")
+		w.Header().Set("Content-Security-Policy", "default-src 'self'; frame-ancestors 'none'; object-src 'none'")
+		_, _ = io.WriteString(w, "page")
+	}))
+	defer origin.Close()
+	h, err := handler(origin.URL, "lab", "lab-only")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, frames := range []bool{false, true} {
+		front := httptest.NewServer((&fixtures{Frames: frames}).wrap(h))
+		resp, err := http.Get(front.URL + "/x.html")
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, _ = io.Copy(io.Discard, resp.Body)
+		resp.Body.Close()
+		front.Close()
+		xfo, csp := resp.Header.Get("X-Frame-Options"), resp.Header.Get("Content-Security-Policy")
+		if frames {
+			if xfo != "" || csp != "default-src 'self'; frame-ancestors 'self'; object-src 'none'" {
+				t.Errorf("frames on: X-Frame-Options %q, CSP %q", xfo, csp)
+			}
+		} else if xfo != "DENY" || !strings.Contains(csp, "frame-ancestors 'none'") {
+			t.Errorf("frames off: X-Frame-Options %q, CSP %q", xfo, csp)
+		}
+	}
+}

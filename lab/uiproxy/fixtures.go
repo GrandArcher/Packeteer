@@ -31,7 +31,11 @@ type stub struct {
 }
 
 // fixtures is dir/fixtures.json: the stubs, and a script added to one page.
+// Frames lets the pages be framed by this origin, so a driver can load them
+// in an iframe of a chosen width: headless Chrome will not open a window
+// narrower than 500 px.
 type fixtures struct {
+	Frames bool    `json:"frames"`
 	Stubs  []*stub `json:"stubs"`
 	Inject struct {
 		Page   string `json:"page"`
@@ -70,8 +74,35 @@ func loadFixtures(dir string) (*fixtures, error) {
 	return &f, nil
 }
 
+// frameWriter turns the dashboard's no-framing headers into same-origin
+// framing as the response is written.
+type frameWriter struct {
+	http.ResponseWriter
+	wrote bool
+}
+
+func (w *frameWriter) WriteHeader(code int) {
+	if !w.wrote {
+		w.wrote = true
+		h := w.Header()
+		h.Del("X-Frame-Options")
+		h.Set("Content-Security-Policy", strings.Replace(h.Get("Content-Security-Policy"), "frame-ancestors 'none'", "frame-ancestors 'self'", 1))
+	}
+	w.ResponseWriter.WriteHeader(code)
+}
+
+func (w *frameWriter) Write(b []byte) (int, error) {
+	if !w.wrote {
+		w.WriteHeader(http.StatusOK)
+	}
+	return w.ResponseWriter.Write(b)
+}
+
 func (f *fixtures) wrap(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if f.Frames {
+			w = &frameWriter{ResponseWriter: w}
+		}
 		if f.Inject.Page != "" && r.URL.Path == driverPath {
 			w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
 			_, _ = w.Write(f.driver)

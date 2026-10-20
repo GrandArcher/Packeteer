@@ -551,6 +551,27 @@ jobs:
             '/settings.html yes skip first | yes main | h1 1 ; /admin.html yes skip first | yes main | h1 1 ; /signin.html yes skip first | yes main | h1 1' \
             --absent 'no skip first' 'no main' 'h1 0' 'h1 2' 'a11y-jserr'
           kill "$proxy353"
+          # Phone width (#352): uiproxy answers the provider, improvement, and
+          # event calls from lab/ui-fixtures/mobile (documentation prefixes), and
+          # its driver loads every nav page in a 390x844 frame and measures it.
+          /tmp/uiproxy -listen 127.0.0.1:18092 -upstream "$base" -user lab -password lab-only \
+            -fixtures lab/ui-fixtures/mobile >/tmp/uiproxy352.log 2>&1 &
+          proxy352=$!
+          for _ in $(seq 1 20); do
+            curl -fsS http://127.0.0.1:18092/healthz >/dev/null 2>&1 && break
+            sleep 0.2
+          done
+          curl -fsS http://127.0.0.1:18092/healthz >/dev/null
+          UI_SMOKE_ATTEMPTS=3 bash lab/ui-smoke.sh http://127.0.0.1:18092/providers.html \
+            'menu: named yes | target yes | opens yes | search yes | escape closes yes' \
+            'health: 3 rows | lab-a=up whole ; lab-b=down 100% loss whole ; lab-c-transit-long-name=down no answer whole' \
+            'pages 16: / collapsed yes | top yes' \
+            '/events.html collapsed yes | top yes | fits yes' \
+            '/improvements.html collapsed yes | top yes | fits yes' \
+            '/prefixes.html collapsed yes | top yes | fits yes' \
+            '/providers.html collapsed yes | top yes | fits yes' \
+            --absent ' collapsed no |' ' | top no |' 'clipped' 'no label' 'mobile-jserr'
+          kill "$proxy352"
       - name: UI system page smoke (#184; a failing notifier and a dead probe source show on their rows, observe)
         run: |
           set -euo pipefail
