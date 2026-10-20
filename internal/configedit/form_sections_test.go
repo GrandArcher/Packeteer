@@ -342,6 +342,81 @@ func TestFormRulesKeepOtherPolicies(t *testing.T) {
 	}
 }
 
+const maintenanceFirstYAML = observeYAML + `policies:
+  - type: maintenance
+    config:
+      windows:
+        - name: weekly
+          providers: [transit-b]
+          schedule: "0 2 * * 6"
+          duration: 2h
+  - type: rules
+    config:
+      rules:
+        - name: r1
+          action: deny
+          providers: [transit-b]
+          asns: [64500]
+`
+
+// Turning the maintenance block off removes the entry before every rules
+// policy; the form's policy keys still name the entries they were read from.
+func TestFormMaintenanceOffKeepsRulesKeys(t *testing.T) {
+	second := maintenanceFirstYAML + `  - type: rules
+    name: second
+    config:
+      rules:
+        - name: r2
+          action: ignore
+          prefixes: [192.0.2.0/24]
+`
+	out, cfg := applyAndLoad(t, second, func(f *Form) {
+		f.Blocks["maintenance"] = nil
+		f.Policies = f.Policies[:1]
+	})
+	if len(cfg.Policies) != 1 || cfg.Policies[0].Type != "rules" || cfg.Policies[0].Name == "second" ||
+		strings.Contains(out, "maintenance") || strings.Contains(out, "r2") {
+		t.Fatalf("policies = %+v\n%s", cfg.Policies, out)
+	}
+	back, _ := ParseForm([]byte(out))
+	if r := back.Policies[0].Rules; len(r) != 1 || r[0].Name != "r1" || r[0].Action != "deny" || r[0].ASNs[0] != "64500" {
+		t.Fatalf("rules = %+v\n%s", back.Policies, out)
+	}
+
+	out2, cfg2 := applyAndLoad(t, maintenanceFirstYAML, func(f *Form) {
+		f.Blocks["maintenance"] = nil
+		f.Policies[0].Rules[0].Providers = []string{"transit-a"}
+	})
+	back, _ = ParseForm([]byte(out2))
+	if len(cfg2.Policies) != 1 || strings.Contains(out2, "maintenance") ||
+		back.Policies[0].Rules[0].Name != "r1" || back.Policies[0].Rules[0].Providers[0] != "transit-a" {
+		t.Fatalf("after edit = %+v\n%s", back.Policies, out2)
+	}
+}
+
+// Dropping a flow source moves the vip source after it; the vip row's key
+// still names it.
+func TestFormFlowRemovedVIPEdited(t *testing.T) {
+	in := observeYAML + `sources:
+  - type: flow
+    config:
+      listen: 192.0.2.10:2055
+  - type: vip
+    config:
+      interval: 10s
+      prefixes:
+        - prefix: 203.0.113.0/24
+`
+	out, cfg := applyAndLoad(t, in, func(f *Form) {
+		f.Flows = []FormFlow{}
+		f.VIPs[0].Interval = "30s"
+	})
+	back, _ := ParseForm([]byte(out))
+	if got := sourceTypes(cfg); len(got) != 1 || got[0] != "vip" || len(back.VIPs) != 1 || back.VIPs[0].Interval != "30s" {
+		t.Fatalf("sources = %v\n%s", got, out)
+	}
+}
+
 func TestFormVIPRoundTrip(t *testing.T) {
 	out, cfg := applyAndLoad(t, observeYAML, func(f *Form) {
 		f.VIPs = []FormVIP{{

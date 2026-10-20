@@ -250,8 +250,8 @@ body.stale main { opacity: 0.6; }
 button:disabled { opacity: 0.5; cursor: not-allowed; }
 
 /* Settings form beside the YAML (#102). */
-.settings-split { display: grid; grid-template-columns: minmax(280px, 1fr) minmax(320px, 1.1fr); gap: 18px; align-items: start; }
-.settings-split h3 { margin: 14px 0 6px; font-size: 1rem; }
+.settings-form h3, .settings-form h4, .preview h3 { margin: 14px 0 6px; font-size: 1rem; }
+.settings-form h4 { font-size: 0.9rem; margin: 8px 0 2px; }
 fieldset.form { border: 0; margin: 0; padding: 0; }
 .card { flex-basis: 100%; border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; display: flex; flex-direction: column; gap: 8px; }
 .card-head { display: flex; align-items: center; gap: 6px; }
@@ -273,9 +273,17 @@ fieldset.form { border: 0; margin: 0; padding: 0; }
 .chip { display: inline-flex; align-items: center; gap: 4px; background: #e7eef5; border-radius: 999px; padding: 2px 8px; }
 .g-countries, .g-multi select { width: 14rem; }
 .field-note { color: var(--muted); font-size: 0.75rem; }
-@media (max-width: 900px) {
-  .settings-split { grid-template-columns: 1fr; }
-}
+/* Blocks drawn from the schema, the advanced folds, and the preview (#330). */
+.block-mount { margin-top: 6px; }
+.bfield { margin: 6px 0; }
+details.advanced { margin: 6px 0; }
+details.advanced > summary { cursor: pointer; color: var(--muted); font-size: 0.8rem; }
+#raw-yaml { margin-top: 18px; border-top: 1px solid var(--line); padding-top: 8px; }
+#raw-yaml > summary { font-weight: 600; color: var(--ink); font-size: 1rem; }
+.preview { margin-top: 18px; border-top: 1px solid var(--line); }
+.checklist { margin: 4px 0 4px 18px; padding: 0; font-size: 0.85rem; }
+.plugin-card.off { opacity: 0.6; }
+.g-strings, .g-rows { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; }
 
 /* Setup wizard diff and confirm (#345). */
 .confirm { border: 1px solid var(--muted); border-radius: 4px; padding: 8px 12px; margin-top: 8px; }

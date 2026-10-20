@@ -35,6 +35,13 @@ function providerRow(name) {
   throw new Error("no row for " + name);
 }
 
+// newHost is the card of the host added by cs-add-host; the cards of the
+// hosts already in the file carry the same field labels.
+function newHost() {
+  var cards = byId("cs-hosts").querySelectorAll(".cs-host");
+  return cards[cards.length - 1];
+}
+
 function set(node, value, type) {
   if (node.type === "checkbox") node.checked = value;
   else node.value = value;
@@ -58,14 +65,14 @@ var steps = [
   },
   function () { byId("cs-add-host").click(); },
   function () {
-    set(field("cs-hosts", "New SNMP host"), "edge2");
-    set(field("cs-hosts", "Address"), "192.0.2.253");
-    set(field("cs-hosts", "Community variable (name only)"), "s3cret-community");
+    set(field(newHost(), "New SNMP host"), "edge2");
+    set(field(newHost(), "Address"), "192.0.2.253");
+    set(field(newHost(), "Community variable (name only)"), "s3cret-community");
     byId("cs-next-2").click();
   },
   function () {
     note("cs-refused", "refused: " + texts("#cs-errors li") + " | step 2 shown: " + !byId("cs-2").hidden);
-    set(field("cs-hosts", "Community variable (name only)"), "PACKETEER_SNMP_COMMUNITY");
+    set(field(newHost(), "Community variable (name only)"), "PACKETEER_SNMP_COMMUNITY");
     set(providerRow("lab-d").querySelector("input[type=checkbox]"), true, "change");
   },
   function () {

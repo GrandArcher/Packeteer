@@ -47,12 +47,15 @@ telemetry:
       hosts:
         - name: edge
           address: 192.0.2.254
+          version: 2c
           community_env: PACKETEER_SNMP_COMMUNITY
       providers:
         - name: transit-a
           host: edge
           interface: eth0
           commit_mbps: 1000
+          billing_day: 1
+          percentile: greater
 notifiers:
   - type: smtp
     config:
@@ -102,6 +105,16 @@ func TestApplyUnchangedKeepsBytes(t *testing.T) {
 	}
 	if string(out) != formYAML {
 		t.Fatalf("unchanged form rewrote the file:\n%s", out)
+	}
+}
+
+// A number the file quoted is written as a number when the form writes
+// the same text, so the loader reads it; its comment stays.
+func TestApplyUnquotesANumberOfTheSameText(t *testing.T) {
+	in := observeYAML + "max_improvements: \"50\" # cap\n"
+	out, cfg := applyAndLoad(t, in, func(f *Form) { f.HoldTime = "10m" })
+	if !strings.Contains(out, "max_improvements: 50 # cap") || cfg.MaxImprovements == nil || *cfg.MaxImprovements != 50 {
+		t.Fatalf("max_improvements:\n%s", out)
 	}
 }
 

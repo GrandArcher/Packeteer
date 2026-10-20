@@ -187,28 +187,111 @@ func TestCommitSetupEditsExistingBindingAndLeavesHosts(t *testing.T) {
 	}
 
 	f, _ = ParseForm([]byte(formYAML))
-	for i, r := range f.Commit.Providers {
-		if r.Host != "" {
-			f.Commit.Providers[i] = FormCommitProvider{Name: r.Name}
-		}
-	}
-	if _, err := ApplyForm([]byte(formYAML), f); err == nil || !strings.Contains(err.Error(), "binding is removed") {
-		t.Fatalf("clearing a binding: %v", err)
-	}
-	f, _ = ParseForm([]byte(formYAML))
-	f.Commit.Hosts[0].Address = "192.0.2.99"
-	if _, err := ApplyForm([]byte(formYAML), f); err == nil || !strings.Contains(err.Error(), "edited in the YAML") {
-		t.Fatalf("existing host edit: %v", err)
-	}
-	f, _ = ParseForm([]byte(formYAML))
 	f.Commit.Hosts = append(f.Commit.Hosts, FormCommitHost{Name: "edge", Address: "192.0.2.98", CommunityEnv: "OTHER_ENV"})
 	if _, err := ApplyForm([]byte(formYAML), f); err == nil || !strings.Contains(err.Error(), "already in the file") {
 		t.Fatalf("duplicate host: %v", err)
 	}
 	f, _ = ParseForm([]byte(formYAML))
 	f.Commit.Hosts = []FormCommitHost{}
-	if _, err := ApplyForm([]byte(formYAML), f); err == nil || !strings.Contains(err.Error(), "removed in the YAML") {
-		t.Fatalf("dropped host: %v", err)
+	if _, err := ApplyForm([]byte(formYAML), f); err == nil || !strings.Contains(err.Error(), "still used by provider transit-a") {
+		t.Fatalf("dropped host that a binding uses: %v", err)
+	}
+}
+
+// TestCommitSetupEditsHostsAndUntracks (#330): an existing SNMP host can be
+// edited and switched to version 3, and a provider can be untracked, after
+// which its host can go. Comments and unrelated keys stay.
+func TestCommitSetupEditsHostsAndUntracks(t *testing.T) {
+	f, _ := ParseForm([]byte(formYAML))
+	h := &f.Commit.Hosts[0]
+	h.Address, h.Port = "192.0.2.99", "1161"
+	out, err := ApplyForm([]byte(formYAML), f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(out)
+	if !strings.Contains(text, "address: 192.0.2.99") || !strings.Contains(text, "port: 1161") ||
+		!strings.Contains(text, "# keep this comment") || !strings.Contains(text, "password_env: PACKETEER_SMTP_PASSWORD") {
+		t.Fatalf("host edit:\n%s", text)
+	}
+	if _, err := config.Parse(out); err != nil {
+		t.Fatalf("parse: %v\n%s", err, out)
+	}
+
+	f, _ = ParseForm([]byte(formYAML))
+	f.Commit.Hosts[0] = FormCommitHost{Key: "edge", Name: "edge", Address: "192.0.2.254", Version: "3", UsernameEnv: "PACKETEER_SNMP_USER",
+		SecurityLevel: "authPriv", AuthProtocol: "SHA256", AuthEnv: "PACKETEER_SNMP_AUTH", PrivProtocol: "AES", PrivEnv: "PACKETEER_SNMP_PRIV", ContextName: "ctx"}
+	out, err = ApplyForm([]byte(formYAML), f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text = string(out)
+	if strings.Contains(text, "community_env") || !strings.Contains(text, "version: \"3\"") && !strings.Contains(text, "version: '3'") && !strings.Contains(text, "version: 3") {
+		t.Fatalf("version switch kept the v2c key or lost the version:\n%s", text)
+	}
+	if _, err := config.Parse(out); err != nil {
+		t.Fatalf("parse: %v\n%s", err, out)
+	}
+	back, _ := ParseForm(out)
+	if got := back.Commit.Hosts[0]; got.Version != "3" || got.SecurityLevel != "authPriv" || got.AuthEnv != "PACKETEER_SNMP_AUTH" || got.ContextName != "ctx" {
+		t.Fatalf("round trip = %+v", got)
+	}
+
+	f, _ = ParseForm([]byte(formYAML))
+	row := commitRow(&f, "transit-a")
+	*row = FormCommitProvider{Name: "transit-a"}
+	f.Providers[0].CommitMbps = ""
+	f.Commit.Hosts = []FormCommitHost{}
+	out, err = ApplyForm([]byte(formYAML), f)
+	if err != nil {
+		t.Fatalf("untrack and drop the host: %v", err)
+	}
+	if strings.Contains(string(out), "telemetry:") || !strings.Contains(string(out), "name: transit-a") {
+		t.Fatalf("telemetry should be gone and the provider kept:\n%s", out)
+	}
+	if _, err := config.Parse(out); err != nil {
+		t.Fatalf("parse: %v\n%s", err, out)
+	}
+}
+
+func TestCommitSetupHostRefusals(t *testing.T) {
+	good := FormCommitHost{Key: "edge", Name: "edge", Address: "192.0.2.254", Version: "3", UsernameEnv: "U_ENV", SecurityLevel: "authPriv",
+		AuthProtocol: "SHA", AuthEnv: "A_ENV", PrivProtocol: "AES", PrivEnv: "P_ENV"}
+	cases := []struct {
+		name string
+		edit func(h *FormCommitHost)
+		want string
+	}{
+		{"auth passphrase typed in", func(h *FormCommitHost) { h.AuthEnv = "my secret pass" }, "auth_env"},
+		{"user typed in", func(h *FormCommitHost) { h.UsernameEnv = "admin user" }, "username_env"},
+		{"v3 with a community", func(h *FormCommitHost) { h.CommunityEnv = "C_ENV" }, "community_env does not apply"},
+		{"no auth, but a protocol", func(h *FormCommitHost) { h.SecurityLevel, h.PrivProtocol, h.PrivEnv = "noAuthNoPriv", "", "" }, "auth_protocol does not apply"},
+		{"authNoPriv with privacy", func(h *FormCommitHost) { h.SecurityLevel = "authNoPriv" }, "priv_protocol does not apply"},
+		{"unknown auth protocol", func(h *FormCommitHost) { h.AuthProtocol = "CRC" }, "auth_protocol"},
+		{"missing priv env", func(h *FormCommitHost) { h.PrivEnv = "" }, "priv_env"},
+		{"bad security level", func(h *FormCommitHost) { h.SecurityLevel = "auth" }, "security_level"},
+		{"v2c with a user", func(h *FormCommitHost) {
+			*h = FormCommitHost{Key: "edge", Name: "edge", Address: "192.0.2.254", Version: "2c", CommunityEnv: "C_ENV", UsernameEnv: "U_ENV"}
+		}, "username_env does not apply"},
+		{"bad version", func(h *FormCommitHost) { h.Version = "1" }, "version"},
+		{"bad port", func(h *FormCommitHost) { h.Port = "70000" }, "port"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			f, _ := ParseForm([]byte(formYAML))
+			h := good
+			c.edit(&h)
+			f.Commit.Hosts[0] = h
+			_, err := ApplyForm([]byte(formYAML), f)
+			if err == nil || !strings.Contains(err.Error(), c.want) {
+				t.Fatalf("err = %v, want %q", err, c.want)
+			}
+		})
+	}
+	f, _ := ParseForm([]byte(formYAML))
+	f.Commit.Hosts[0] = good
+	if _, err := ApplyForm([]byte(formYAML), f); err != nil {
+		t.Fatalf("a complete v3 host was refused: %v", err)
 	}
 }
 

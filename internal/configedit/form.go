@@ -2,9 +2,11 @@ package configedit
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/netip"
+	"reflect"
 	"strconv"
 	"strings"
 	"time"
@@ -67,6 +69,10 @@ type Form struct {
 	Anomaly *FormAnomaly `json:"anomaly"`
 	// #174: the commit setup, same rules.
 	Commit *FormCommit `json:"commit"`
+	// #330: the blocks of blockDefs, by id; see form_blocks.go.
+	Blocks map[string]Values `json:"blocks"`
+	// Plugins is the plugin entries no other card owns; see form_plugins.go.
+	Plugins []FormPlugin `json:"plugins"`
 }
 
 // FormProvider is one provider row. Key is the name in the file when the
@@ -80,10 +86,62 @@ type FormProvider struct {
 	SourceIP    string `json:"source_ip"`
 	NextHop     string `json:"next_hop"`
 	Cost        string `json:"cost"`
+	BMP         string `json:"bmp"`
 	CommitMbps  string `json:"commit_mbps"`
 	CommitBound bool   `json:"commit_bound"`
 	ASN         string `json:"asn,omitempty"`
 	Draft       bool   `json:"draft,omitempty"`
+	// keepBMP marks a request that left bmp out; see keepOmitted.
+	keepBMP bool
+}
+
+// UnmarshalJSON marks a request that leaves bmp out, so a client older than
+// the field keeps the file's value instead of clearing it.
+func (p *FormProvider) UnmarshalJSON(b []byte) error {
+	type plain FormProvider
+	var v struct {
+		plain
+		BMP *string `json:"bmp"`
+	}
+	if err := json.Unmarshal(b, &v); err != nil {
+		return err
+	}
+	*p = FormProvider(v.plain)
+	p.keepBMP = v.BMP == nil
+	if v.BMP != nil {
+		p.BMP = *v.BMP
+	}
+	return nil
+}
+
+// keepOmitted gives a row whose request left out bmp, exclude, or
+// precedence the file's value, matched by key, and clears the marks so the
+// rows compare equal to the parsed file.
+func (f *Form) keepOmitted(cur Form) {
+	for i := range f.Providers {
+		p := &f.Providers[i]
+		for _, c := range cur.Providers {
+			if p.keepBMP && p.Key != "" && c.Key == p.Key {
+				p.BMP = c.BMP
+			}
+		}
+		p.keepBMP = false
+	}
+	for i := range f.Exchanges {
+		ex := &f.Exchanges[i]
+		for j := range ex.Peers {
+			p := &ex.Peers[j]
+			if c := cur.exchangePeer(ex.Key, p.Key); c != nil {
+				if p.keepExclude {
+					p.Exclude = c.Exclude
+				}
+				if p.keepPrecedence {
+					p.Precedence = c.Precedence
+				}
+			}
+			p.keepExclude, p.keepPrecedence = false, false
+		}
+	}
 }
 
 // FormTarget is one static probe target. Key is the prefix in the file
@@ -146,6 +204,8 @@ func ParseForm(data []byte) (Form, error) {
 		return Form{}, err
 	}
 	readCommit(root, &f)
+	f.Blocks = readBlocks(root)
+	readPlugins(root, &f)
 	f.normalize()
 	return f, nil
 }
@@ -159,7 +219,17 @@ func ApplyForm(data []byte, form Form) ([]byte, error) {
 		return nil, err
 	}
 	form.normalize()
+	form.keepOmitted(cur)
+	if form.Plugins == nil {
+		form.Plugins = cur.Plugins
+	}
 	form.fillSections(cur)
+	form.fillBlocks(cur)
+	if err := form.normalizeBlocks(); err != nil {
+		return nil, err
+	}
+	form.dropInapplicable()
+	form.syncAnomaly(cur)
 	if err := form.checkProtectionChange(cur); err != nil {
 		return nil, err
 	}
@@ -174,6 +244,14 @@ func ApplyForm(data []byte, form Form) ([]byte, error) {
 	if err := form.withoutUnchangedSections(cur).validate(); err != nil {
 		return nil, err
 	}
+	if err := form.validateBlocks(cur); err != nil {
+		return nil, err
+	}
+	if !reflect.DeepEqual(form.Plugins, cur.Plugins) {
+		if err := form.validatePlugins(cur); err != nil {
+			return nil, err
+		}
+	}
 	if form.editable().equal(cur.editable()) {
 		return append([]byte(nil), data...), nil
 	}
@@ -181,6 +259,8 @@ func ApplyForm(data []byte, form Form) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	refs := pluginRefs(root)
+	nodes := entryNodes(root)
 	if err := applyScalars(root, form); err != nil {
 		return nil, err
 	}
@@ -202,7 +282,13 @@ func ApplyForm(data []byte, form Form) ([]byte, error) {
 	if err := applyAllowlist(root, form); err != nil {
 		return nil, err
 	}
-	if err := applySections(root, cur, form); err != nil {
+	if err := applyBlocks(root, cur, form); err != nil {
+		return nil, err
+	}
+	if err := applySections(root, nodes, cur, form); err != nil {
+		return nil, err
+	}
+	if err := applyPlugins(root, refs, cur, form); err != nil {
 		return nil, err
 	}
 	var buf bytes.Buffer
@@ -239,6 +325,7 @@ func (f *Form) normalize() {
 	}
 	f.normalizeSections()
 	f.normalizeExchanges()
+	f.normalizePlugins()
 	for i := range f.Providers {
 		p := &f.Providers[i]
 		p.Key = strings.TrimSpace(p.Key)
@@ -246,6 +333,7 @@ func (f *Form) normalize() {
 		p.SourceIP = strings.TrimSpace(p.SourceIP)
 		p.NextHop = strings.TrimSpace(p.NextHop)
 		p.Cost = strings.TrimSpace(p.Cost)
+		p.BMP = strings.TrimSpace(p.BMP)
 		p.CommitMbps = strings.TrimSpace(p.CommitMbps)
 		p.ASN = strings.TrimSpace(p.ASN)
 	}
@@ -281,7 +369,7 @@ func (f Form) equal(g Form) bool {
 		f.Precedence != g.Precedence || f.FloorLossPct != g.FloorLossPct || f.FloorRTT != g.FloorRTT {
 		return false
 	}
-	if !sectionsEqual(f, g) {
+	if !sectionsEqual(f, g) || !reflect.DeepEqual(f.Blocks, g.Blocks) || !reflect.DeepEqual(f.Plugins, g.Plugins) {
 		return false
 	}
 	if len(f.Providers) != len(g.Providers) || len(f.Targets) != len(g.Targets) || len(f.Allowlist) != len(g.Allowlist) {
@@ -290,7 +378,7 @@ func (f Form) equal(g Form) bool {
 	for i := range f.Providers {
 		a, b := f.Providers[i], g.Providers[i]
 		if a.Key != b.Key || a.Name != b.Name || a.SourceIP != b.SourceIP || a.NextHop != b.NextHop ||
-			a.Cost != b.Cost || a.CommitMbps != b.CommitMbps {
+			a.Cost != b.Cost || a.BMP != b.BMP || a.CommitMbps != b.CommitMbps {
 			return false
 		}
 	}
@@ -389,6 +477,11 @@ func (f Form) validate() error {
 				return fmt.Errorf("%w: providers[%d] (%s): cost %q must be zero or positive", ErrForm, i, p.Name, p.Cost)
 			}
 		}
+		switch p.BMP {
+		case "", config.BMPOff, config.BMPPrefer, config.BMPOnly:
+		default:
+			return fmt.Errorf("%w: providers[%d] (%s): bmp %q is invalid (want off, prefer, or only)", ErrForm, i, p.Name, p.BMP)
+		}
 		if p.CommitMbps != "" {
 			v, err := strconv.ParseFloat(p.CommitMbps, 64)
 			if err != nil || v <= 0 {
@@ -455,7 +548,7 @@ func readProviders(root *yaml.Node, f *Form) error {
 		commit, bound := bindingCommit(root, name)
 		f.Providers = append(f.Providers, FormProvider{
 			Key: name, Name: name, SourceIP: scalar(item, "source_ip"), NextHop: scalar(item, "next_hop"),
-			Cost: scalar(item, "cost"), CommitMbps: commit, CommitBound: bound,
+			Cost: scalar(item, "cost"), BMP: scalar(item, "bmp"), CommitMbps: commit, CommitBound: bound,
 		})
 	}
 	return nil
@@ -617,6 +710,7 @@ func writeProvider(m *yaml.Node, p FormProvider) {
 	} else {
 		setOrDelete(m, "cost", p.Cost, "!!float")
 	}
+	setOrDelete(m, "bmp", p.BMP, "!!str")
 	// ASN, draft, and commit are not provider keys. Commit stays on the
 	// telemetry binding. A suggestion must not become a provider field
 	// the loader would reject, and must not start a probe.
@@ -627,7 +721,22 @@ func applyCommits(root *yaml.Node, cur, next Form) error {
 	for _, p := range cur.Providers {
 		prev[p.Key] = p.CommitMbps
 	}
+	untracked := map[string]bool{}
+	if cur.Commit != nil && next.Commit != nil {
+		was := map[string]string{}
+		for _, r := range cur.Commit.Providers {
+			was[r.Name] = r.Host
+		}
+		for _, r := range next.Commit.Providers {
+			if was[r.Name] != "" && r.Host == "" {
+				untracked[r.Name] = true
+			}
+		}
+	}
 	for _, p := range next.Providers {
+		if untracked[p.Name] {
+			continue
+		}
 		was := prev[p.Key]
 		renamed := p.Key != "" && p.Key != p.Name
 		if p.CommitMbps == was && !renamed {
@@ -824,6 +933,14 @@ func setOrDelete(m *yaml.Node, key, value, tag string) {
 	}
 	tag = plainTag(value, tag)
 	if n, _ := child(m, key); n != nil && n.Kind == yaml.ScalarNode {
+		if n.Value == value {
+			// Same text: keep the quotes and comments the operator wrote,
+			// unless the quotes made a number or a bool a string.
+			if n.Tag == "!!str" && tag != "!!str" {
+				n.Tag, n.Style = tag, 0
+			}
+			return
+		}
 		n.Value = value
 		n.Tag = tag
 		n.Style = 0

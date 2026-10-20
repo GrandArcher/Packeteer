@@ -1,6 +1,7 @@
 package configedit
 
 import (
+	"encoding/json"
 	"fmt"
 	"math"
 	"net/netip"
@@ -19,7 +20,7 @@ import (
 // source, cost). Like the other sections, a nil list in a request leaves the
 // block alone and applying edits the YAML text only. Save runs the loader's
 // checks, which include the route check requirements (add_path or bmp). A
-// peer's exclude and precedence stay in the file. No session or
+// peer's exclude and precedence (#330) are fields. No session or
 // route-server credential is a field.
 
 // MaxFormPeers bounds the peers of one exchange in the form.
@@ -47,7 +48,56 @@ type FormExchangePeer struct {
 	NextHop  string `json:"next_hop"`
 	SourceIP string `json:"source_ip"`
 	Cost     string `json:"cost"`
-	Draft    bool   `json:"draft,omitempty"`
+	// Exclude keeps the peer measured but never chosen. Precedence is the
+	// commit-control preference, lower first (empty is the default).
+	Exclude    bool   `json:"exclude"`
+	Precedence string `json:"precedence"`
+	Draft      bool   `json:"draft,omitempty"`
+	// keepExclude and keepPrecedence mark a request that left the field
+	// out; see keepOmitted.
+	keepExclude, keepPrecedence bool
+}
+
+// UnmarshalJSON marks a request that leaves exclude or precedence out, so a
+// client older than the fields keeps the file's values.
+func (p *FormExchangePeer) UnmarshalJSON(b []byte) error {
+	type plain FormExchangePeer
+	var v struct {
+		plain
+		Exclude    *bool   `json:"exclude"`
+		Precedence *string `json:"precedence"`
+	}
+	if err := json.Unmarshal(b, &v); err != nil {
+		return err
+	}
+	*p = FormExchangePeer(v.plain)
+	p.keepExclude, p.keepPrecedence = v.Exclude == nil, v.Precedence == nil
+	if v.Exclude != nil {
+		p.Exclude = *v.Exclude
+	}
+	if v.Precedence != nil {
+		p.Precedence = *v.Precedence
+	}
+	return nil
+}
+
+// exchangePeer is the peer key of exchange exKey, or nil when either key is
+// empty or not in f.
+func (f Form) exchangePeer(exKey, key string) *FormExchangePeer {
+	if exKey == "" || key == "" {
+		return nil
+	}
+	for i := range f.Exchanges {
+		if f.Exchanges[i].Key != exKey {
+			continue
+		}
+		for j := range f.Exchanges[i].Peers {
+			if f.Exchanges[i].Peers[j].Key == key {
+				return &f.Exchanges[i].Peers[j]
+			}
+		}
+	}
+	return nil
 }
 
 func readExchanges(root *yaml.Node, f *Form) error {
@@ -76,7 +126,8 @@ func readExchanges(root *yaml.Node, f *Form) error {
 					return fmt.Errorf("%w: exchange %s: a peer is missing its name", ErrForm, name)
 				}
 				ex.Peers = append(ex.Peers, FormExchangePeer{Key: pn, Name: pn, ASN: scalar(p, "asn"),
-					NextHop: scalar(p, "next_hop"), SourceIP: scalar(p, "source_ip"), Cost: scalar(p, "cost")})
+					NextHop: scalar(p, "next_hop"), SourceIP: scalar(p, "source_ip"), Cost: scalar(p, "cost"),
+					Exclude: boolScalar(p, "exclude"), Precedence: scalar(p, "precedence")})
 			}
 		}
 		f.Exchanges = append(f.Exchanges, ex)
@@ -97,7 +148,7 @@ func (f *Form) normalizeExchanges() {
 		}
 		for j := range ex.Peers {
 			p := &ex.Peers[j]
-			for _, s := range []*string{&p.Key, &p.Name, &p.ASN, &p.NextHop, &p.SourceIP, &p.Cost} {
+			for _, s := range []*string{&p.Key, &p.Name, &p.ASN, &p.NextHop, &p.SourceIP, &p.Cost, &p.Precedence} {
 				*s = strings.TrimSpace(*s)
 			}
 			p.Draft = false
@@ -218,12 +269,12 @@ func validateOnePeer(label string, p FormExchangePeer, lans []netip.Prefix, take
 			return fmt.Errorf("%w: %s: cost %q must be between 0 and 1000000000", ErrForm, label, p.Cost)
 		}
 	}
-	return nil
+	return validInt(label+": precedence", p.Precedence, 0, 10000)
 }
 
 // applyExchanges rewrites the changed exchanges. An exchange the form did not
 // change keeps its text, and a kept exchange or peer keeps the keys the form
-// does not show (a peer's exclude and precedence).
+// does not show.
 func applyExchanges(root *yaml.Node, cur, next Form) error {
 	if reflect.DeepEqual(cur.Exchanges, next.Exchanges) {
 		return nil
@@ -287,6 +338,12 @@ func writeExchange(node *yaml.Node, ex FormExchange) {
 		setOrDelete(pn, "next_hop", p.NextHop, "!!str")
 		setOrDelete(pn, "source_ip", p.SourceIP, "!!str")
 		setOrDelete(pn, "cost", p.Cost, "!!float")
+		setOrDelete(pn, "precedence", p.Precedence, "!!int")
+		if p.Exclude {
+			setOrDelete(pn, "exclude", "true", "!!bool")
+		} else {
+			deleteKey(pn, "exclude")
+		}
 		next = append(next, pn)
 	}
 	peers.Content = next

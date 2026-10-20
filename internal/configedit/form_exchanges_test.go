@@ -1,6 +1,7 @@
 package configedit
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -9,7 +10,7 @@ import (
 )
 
 // exchangeFormYAML is an edge with one transit, an exchange of two peers
-// (peer-b has a precedence the form does not show), and the add-path
+// (peer-b has a precedence and exclude), and the add-path
 // session the route check needs. Documentation addresses and ASNs only.
 const exchangeFormYAML = `# edge
 mode: observe
@@ -64,7 +65,7 @@ func TestFormExchangesParse(t *testing.T) {
 		len(ex.LANs) != 1 || ex.LANs[0] != "203.0.113.0/24" || len(ex.Peers) != 2 {
 		t.Fatalf("exchange = %+v", ex)
 	}
-	if want := (FormExchangePeer{Key: "ix-peer-b", Name: "ix-peer-b", ASN: "64502", NextHop: "203.0.113.12", SourceIP: "192.0.2.32"}); ex.Peers[1] != want {
+	if want := (FormExchangePeer{Key: "ix-peer-b", Name: "ix-peer-b", ASN: "64502", NextHop: "203.0.113.12", SourceIP: "192.0.2.32", Exclude: true, Precedence: "50"}); ex.Peers[1] != want {
 		t.Fatalf("peer = %+v, want %+v", ex.Peers[1], want)
 	}
 	if len(f.Providers) != 1 {
@@ -113,6 +114,33 @@ func TestFormExchangesEditRoundTrip(t *testing.T) {
 	}
 	if len(cfg.Providers) != 4 {
 		t.Fatalf("providers = %d", len(cfg.Providers))
+	}
+}
+
+// TestFormExchangesPeerExcludeAndPrecedence (#330): a peer's exclude and
+// precedence are form fields. Editing one writes only that peer's keys, and
+// clearing them removes the keys.
+func TestFormExchangesPeerExcludeAndPrecedence(t *testing.T) {
+	out, cfg := applyAndLoad(t, exchangeFormYAML, func(f *Form) {
+		f.Exchanges[0].Peers[0].Exclude = true
+		f.Exchanges[0].Peers[0].Precedence = "20"
+		f.Exchanges[0].Peers[1].Exclude = false
+		f.Exchanges[0].Peers[1].Precedence = ""
+	})
+	a, b := peerByName(t, cfg, "ix-peer-a"), peerByName(t, cfg, "ix-peer-b")
+	if !a.Exclude || a.Precedence != 20 || b.Exclude || b.Precedence != 0 {
+		t.Fatalf("a = %+v b = %+v\n%s", a, b, out)
+	}
+	if strings.Contains(out, "precedence: 50") || !strings.Contains(out, "# keep me") {
+		t.Fatalf("cleared keys stayed or comments lost:\n%s", out)
+	}
+	f, err := ParseForm([]byte(exchangeFormYAML))
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.Exchanges[0].Peers[0].Precedence = "high"
+	if _, err := ApplyForm([]byte(exchangeFormYAML), f); err == nil || !strings.Contains(err.Error(), "precedence") {
+		t.Fatalf("a bad precedence was accepted: %v", err)
 	}
 }
 
@@ -293,5 +321,56 @@ func TestFormExchangesKeepPort(t *testing.T) {
 	pt := cfg.Exchanges[0].Port
 	if pt == nil || pt.CapacityMbps != 10000 || pt.CommitMbps != 6000 || pt.PortCost == nil || *pt.PortCost != 1500 {
 		t.Fatalf("port = %+v", pt)
+	}
+}
+
+// TestFormOmittedFieldsKeepFile (#330): a client older than the provider bmp
+// and peer exclude and precedence fields posts rows without them. The file's
+// values stay; the edit it did send is written.
+func TestFormOmittedFieldsKeepFile(t *testing.T) {
+	in := strings.Replace(exchangeFormYAML, "next_hop: 192.0.2.21\n", "next_hop: 192.0.2.21\n    bmp: prefer\n", 1) +
+		"rib_sources:\n  - type: bmp\n    config:\n      routers: [192.0.2.254]\n"
+	out, cfg := applyAndLoad(t, in, func(f *Form) {
+		f.Providers[0].Cost = "5"
+		f.Exchanges[0].Peers[1].Cost = "7"
+		b, err := json.Marshal(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var raw map[string]any
+		if err := json.Unmarshal(b, &raw); err != nil {
+			t.Fatal(err)
+		}
+		delete(raw["providers"].([]any)[0].(map[string]any), "bmp")
+		for _, p := range raw["exchanges"].([]any)[0].(map[string]any)["peers"].([]any) {
+			delete(p.(map[string]any), "exclude")
+			delete(p.(map[string]any), "precedence")
+		}
+		if b, err = json.Marshal(raw); err != nil {
+			t.Fatal(err)
+		}
+		*f = Form{}
+		if err := json.Unmarshal(b, f); err != nil {
+			t.Fatal(err)
+		}
+	})
+	a, peer := peerByName(t, cfg, "transit-a"), peerByName(t, cfg, "ix-peer-b")
+	if a.BMP != config.BMPPrefer || a.Cost == nil || *a.Cost != 5 {
+		t.Fatalf("provider = %+v\n%s", a, out)
+	}
+	if peer.Precedence != 50 || !peer.Exclude || peer.Cost == nil || *peer.Cost != 7 {
+		t.Fatalf("peer = %+v\n%s", peer, out)
+	}
+
+	// A client that sends the fields still clears them.
+	_, cfg = applyAndLoad(t, in, func(f *Form) {
+		f.Providers[0].BMP = ""
+		f.Exchanges[0].Peers[1].Exclude = false
+		f.Exchanges[0].Peers[1].Precedence = ""
+		*f = roundTripJSON(t, *f)
+	})
+	a, peer = peerByName(t, cfg, "transit-a"), peerByName(t, cfg, "ix-peer-b")
+	if (a.BMP != config.BMPOff && a.BMP != "") || peer.Exclude || peer.Precedence != 0 {
+		t.Fatalf("sent fields not cleared: provider %+v peer %+v", a, peer)
 	}
 }

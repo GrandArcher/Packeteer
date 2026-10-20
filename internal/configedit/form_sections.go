@@ -35,8 +35,8 @@ const (
 // FormFlow is one `flow` source. Key is the source's position in `sources`
 // when the form was loaded; empty means a new source. Dropping a row
 // removes the source, including its problems, transit, and subranges
-// blocks. Those three blocks are kept as they are while the source stays.
-// TopN is the priority tier, MaxTargets the larger capped set, and
+// blocks. Those three are Extra (#330); a request that omits Extra keeps
+// them as they are. TopN is the priority tier, MaxTargets the larger capped set, and
 // TailInterval the interval for the rest. AggregateV4 and AggregateV6 are
 // the lengths a destination with no covering learned prefix is grouped to.
 type FormFlow struct {
@@ -52,6 +52,7 @@ type FormFlow struct {
 	AggregateV4  string   `json:"aggregate_v4"`
 	AggregateV6  string   `json:"aggregate_v6"`
 	Exclude      []string `json:"exclude"`
+	Extra        Values   `json:"extra"`
 }
 
 // FormPolicy is one `rules` policy. Key is its position in `policies`
@@ -110,7 +111,9 @@ func readSections(root *yaml.Node, f *Form) error {
 	f.Flows = []FormFlow{}
 	for _, e := range typedEntries(root, "sources", "flow") {
 		fl := FormFlow{Key: e.key, Name: scalar(e.node, "name"), Listen: []string{}, Exclude: []string{}}
-		if cfg, ok := mappingChild(e.node, "config"); ok {
+		cfg, ok := mappingChild(e.node, "config")
+		fl.Extra = readValues(cfg, flowExtras)
+		if ok {
 			fl.Listen = listOrScalar(cfg, "listen")
 			fl.Window = scalar(cfg, "window")
 			fl.TopN = scalar(cfg, "top_n")
@@ -202,6 +205,26 @@ func typedEntries(root *yaml.Node, listKey, typ string) []typedEntry {
 	for i, item := range seq.Content {
 		if item.Kind == yaml.MappingNode && scalar(item, "type") == typ {
 			out = append(out, typedEntry{strconv.Itoa(i), item})
+		}
+	}
+	return out
+}
+
+// sectionLists are the top-level lists whose entries the sections address
+// by index.
+var sectionLists = []string{"sources", "policies"}
+
+// entryNodes maps "list/index" to the file's entries in sectionLists,
+// before anything is merged. A block or section that removes an entry
+// shifts the indices after it, and a form key is an index in the file as
+// it was read.
+func entryNodes(root *yaml.Node) map[string]*yaml.Node {
+	out := map[string]*yaml.Node{}
+	for _, l := range sectionLists {
+		if seq, ok := sequenceChild(root, l); ok {
+			for i, item := range seq.Content {
+				out[l+"/"+strconv.Itoa(i)] = item
+			}
 		}
 	}
 	return out
@@ -309,6 +332,9 @@ func (f *Form) fillSections(cur Form) {
 	}
 	for i := range f.Flows {
 		fl := &f.Flows[i]
+		if fl.Extra == nil {
+			fl.Extra = cur.flowExtra(fl.Key)
+		}
 		if fl.Listen == nil {
 			fl.Listen = []string{}
 		}
@@ -336,6 +362,17 @@ func (f *Form) fillSections(cur Form) {
 			}
 		}
 	}
+}
+
+// flowExtra is the extra blocks of the flow source with this key, or the
+// empty blocks for a new source.
+func (f Form) flowExtra(key string) Values {
+	for _, fl := range f.Flows {
+		if key != "" && fl.Key == key {
+			return fl.Extra
+		}
+	}
+	return readValues(nil, flowExtras)
 }
 
 // withoutUnchangedSections drops the sections the operator did not edit,
@@ -608,7 +645,10 @@ func validateOneFlow(fl FormFlow, bound map[string]bool) error {
 	if err := numberField("flow.min_pct", fl.MinPct, 0, 100); err != nil {
 		return err
 	}
-	return validPrefixList("flow.exclude", fl.Exclude)
+	if err := validPrefixList("flow.exclude", fl.Exclude); err != nil {
+		return err
+	}
+	return validateValues("flow", flowExtras, fl.Extra)
 }
 
 var ruleActions = map[string]bool{"ignore": true, "allow": true, "deny": true, "static": true, "vip": true}
@@ -823,13 +863,14 @@ func validateOneOutage(o FormOutage) error {
 
 // ---- applying ----
 
-func applySections(root *yaml.Node, cur, next Form) error {
-	err := rewriteSection(root, "sources", "flow", cur.Flows, next.Flows, func(n *yaml.Node, e FormFlow) error { applyFlow(n, e); return nil })
+// applySections takes nodes from entryNodes, read before any merge.
+func applySections(root *yaml.Node, nodes map[string]*yaml.Node, cur, next Form) error {
+	err := rewriteSection(root, nodes, "sources", "flow", cur.Flows, next.Flows, applyFlow)
 	if err == nil {
-		err = rewriteSection(root, "sources", "vip", cur.VIPs, next.VIPs, func(n *yaml.Node, e FormVIP) error { applyVIP(n, e); return nil })
+		err = rewriteSection(root, nodes, "sources", "vip", cur.VIPs, next.VIPs, func(n *yaml.Node, e FormVIP) error { applyVIP(n, e); return nil })
 	}
 	if err == nil {
-		err = rewriteSection(root, "sources", "outage", cur.Outages, next.Outages, func(n *yaml.Node, e FormOutage) error { applyOutage(n, e); return nil })
+		err = rewriteSection(root, nodes, "sources", "outage", cur.Outages, next.Outages, func(n *yaml.Node, e FormOutage) error { applyOutage(n, e); return nil })
 	}
 	if err == nil {
 		err = applyExchanges(root, cur, next)
@@ -838,7 +879,7 @@ func applySections(root *yaml.Node, cur, next Form) error {
 		err = applyProtection(root, cur, next)
 	}
 	if err == nil {
-		err = rewriteSection(root, "policies", "rules", cur.Policies, next.Policies, applyRules)
+		err = rewriteSection(root, nodes, "policies", "rules", cur.Policies, next.Policies, applyRules)
 	}
 	return err
 }
@@ -854,7 +895,7 @@ func (e FormPolicy) entryKey() string { return e.Key }
 // rewriteSection applies a changed list. Entries that are the same as in
 // the file are not rewritten, so one edited source leaves its siblings
 // byte for byte alone.
-func rewriteSection[T entry](root *yaml.Node, listKey, typ string, cur, next []T, apply func(*yaml.Node, T) error) error {
+func rewriteSection[T entry](root *yaml.Node, nodes map[string]*yaml.Node, listKey, typ string, cur, next []T, apply func(*yaml.Node, T) error) error {
 	if reflect.DeepEqual(cur, next) {
 		return nil
 	}
@@ -863,7 +904,7 @@ func rewriteSection[T entry](root *yaml.Node, listKey, typ string, cur, next []T
 		keys[i] = e.entryKey()
 	}
 	var applyErr error
-	err := rewriteTyped(root, listKey, typ, keys, func(i int, n *yaml.Node, isNew bool) {
+	err := rewriteTyped(root, nodes, listKey, typ, keys, func(i int, n *yaml.Node, isNew bool) {
 		e := next[i]
 		if !isNew {
 			for _, c := range cur {
@@ -885,22 +926,20 @@ func rewriteSection[T entry](root *yaml.Node, listKey, typ string, cur, next []T
 // keepsOrder reports that the form kept the file's entries in file order
 // and put every new entry after them. Then each kept entry stays in its
 // own slot and a dropped one just leaves, so removing a policy does not
-// move the ones after it past a policy of another type.
-func keepsOrder(keys []string, slots []int) bool {
-	pos := map[string]int{}
-	for n, i := range slots {
-		pos[strconv.Itoa(i)] = n
-	}
+// move the ones after it past a policy of another type. slot is the
+// position among the type's slots of each entry already in the file.
+func keepsOrder(next []*yaml.Node, slot map[*yaml.Node]int) bool {
 	prev, newSeen := -1, false
-	for _, k := range keys {
-		if k == "" {
+	for _, n := range next {
+		p, old := slot[n]
+		if !old {
 			newSeen = true
 			continue
 		}
-		if newSeen || pos[k] <= prev {
+		if newSeen || p <= prev {
 			return false
 		}
-		prev = pos[k]
+		prev = p
 	}
 	return true
 }
@@ -958,25 +997,24 @@ func isOld(n *yaml.Node, content []*yaml.Node, slots []int) bool {
 }
 
 // rewriteTyped rewrites the entries of one plugin type in a top-level
-// list. An entry with a key is the file's entry at that index and keeps
+// list. An entry with a key is the file's entry at that index (looked up
+// in nodes, from entryNodes) and keeps
 // the keys the form does not show; an entry with no key is new. The
 // entries fill the slots the type already holds, in form order, so
 // entries of other types keep their place. Extra entries go after the
 // last slot, and entries the form dropped are removed. edit is called for
 // each entry.
-func rewriteTyped(root *yaml.Node, listKey, typ string, keys []string, edit func(i int, n *yaml.Node, isNew bool)) error {
+func rewriteTyped(root *yaml.Node, nodes map[string]*yaml.Node, listKey, typ string, keys []string, edit func(i int, n *yaml.Node, isNew bool)) error {
 	seq, has := sequenceChild(root, listKey)
 	var slots []int
+	slot := map[*yaml.Node]int{}
 	if has {
 		for i, item := range seq.Content {
 			if item.Kind == yaml.MappingNode && scalar(item, "type") == typ {
+				slot[item] = len(slots)
 				slots = append(slots, i)
 			}
 		}
-	}
-	old := map[string]*yaml.Node{}
-	for _, i := range slots {
-		old[strconv.Itoa(i)] = seq.Content[i]
 	}
 	next := make([]*yaml.Node, 0, len(keys))
 	used := map[*yaml.Node]bool{}
@@ -987,8 +1025,8 @@ func rewriteTyped(root *yaml.Node, listKey, typ string, keys []string, edit func
 			n = &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
 			setOrDelete(n, "type", typ, "!!str")
 		} else {
-			n = old[k]
-			if n == nil {
+			n = nodes[listKey+"/"+k]
+			if _, ok := slot[n]; !ok {
 				return fmt.Errorf("%w: %s entry %s is not in the file anymore; reload the form", ErrForm, typ, k)
 			}
 			if used[n] {
@@ -1008,7 +1046,7 @@ func rewriteTyped(root *yaml.Node, listKey, typ string, keys []string, edit func
 	if len(slots) == 0 {
 		seq.Content = append(seq.Content, next...)
 	} else {
-		seq.Content = placeTyped(seq.Content, slots, next, keepsOrder(keys, slots))
+		seq.Content = placeTyped(seq.Content, slots, next, keepsOrder(next, slot))
 	}
 	if len(seq.Content) == 0 {
 		deleteKey(root, listKey)
@@ -1050,7 +1088,7 @@ func setStringList(m *yaml.Node, key string, vals []string, tag string) {
 	}
 }
 
-func applyFlow(src *yaml.Node, fl FormFlow) {
+func applyFlow(src *yaml.Node, fl FormFlow) error {
 	setOrDelete(src, "name", fl.Name, "!!str")
 	cfg := configOf(src)
 	// One address is written as a plain string, several as a list.
@@ -1072,6 +1110,7 @@ func applyFlow(src *yaml.Node, fl FormFlow) {
 	setOrDelete(cfg, "aggregate_v4", fl.AggregateV4, "!!int")
 	setOrDelete(cfg, "aggregate_v6", fl.AggregateV6, "!!int")
 	setStringList(cfg, "exclude", fl.Exclude, "!!str")
+	return syncValues(cfg, flowExtras, fl.Extra)
 }
 
 func applyVIP(src *yaml.Node, v FormVIP) {

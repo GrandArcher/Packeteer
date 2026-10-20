@@ -86,9 +86,12 @@ func TestCommitSetupAssets(t *testing.T) {
 		}
 	}
 	for _, s := range []string{
-		`postForm(csStatus)`,                 // the form's own Apply, role check and audit included
-		`CS_ENV_NAME.test(h.community_env`,   // a variable name, not a community
-		`"Community variable (name only)"`,   // the label says so
+		`postForm(csStatus)`,               // the form's own Apply, role check and audit included
+		`CS_ENV_NAME.test(v)`,              // a variable name, not a secret
+		`"Community variable (name only)"`, // the labels say so
+		`"User variable (name only)"`,
+		`"Authentication variable (name only)"`,
+		`"Privacy variable (name only)"`,
 		`form.commit.scorer = cs.scorer !==`, // asks for a switch only when it differs
 		`form.precedence = cs.scorer === "cost"`,
 		`checkConfig()`, // validated right after Apply
