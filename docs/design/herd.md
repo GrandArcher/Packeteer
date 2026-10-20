@@ -741,15 +741,17 @@ retain, or rate-limit. Each member pays for what it uses:
   amount per interval, not an amount that grows with its size.
 - **Probe budget** only through hints, under the global probe rate limit.
 
-What the project runs for herd is the hub ([herd-hub.md](../herd-hub.md),
-#261), not a collector. The hub is a public repository of signed member
-entries. Each entry holds an ASN, node keys and endpoints, retention, data
-classes, and an expiry, so it is more than addresses. A release builds in
-a snapshot of the list (`internal/herd/hub_snapshot.json`, refreshed with
-`make hub-snapshot`). The hub is trusted to decide which keys become peers
-of every node and which ASN each claims (its Trust section). Hosting it
-costs review of each entry before merge, and the check and prune workflows
-in its repository.
+What this design proposes for herd is a hub ([herd-hub.md](../herd-hub.md),
+#261), not a collector. The project does not run a hub today. As proposed,
+the hub would be a public repository of signed member entries. Each entry
+would hold an ASN, node keys and endpoints, retention, data classes, and an
+expiry, so it is more than addresses. A release would build in a snapshot
+of the list (`internal/herd/hub_snapshot.json`, refreshed with
+`make hub-snapshot`). The hub would be trusted to decide which keys become
+peers of every node and which ASN each claims (its Trust section). Hosting
+it would cost review of each entry before merge, and the check and prune
+workflows in its repository. Creating the hub repository is a separate
+decision for the project owner.
 
 A central collector is a non-goal (Non-goals): it would hold every
 member's destination lists in one place. If the herd later wants a public
