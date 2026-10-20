@@ -22,7 +22,13 @@ const asn = 64512
 
 func freePort(t *testing.T) int {
 	t.Helper()
-	l, err := net.Listen("tcp", "127.0.0.1:0")
+	return freePortAt(t, "127.0.0.1")
+}
+
+// freePortAt returns a TCP port that is free on addr right now.
+func freePortAt(t *testing.T, addr string) int {
+	t.Helper()
+	l, err := net.Listen("tcp", net.JoinHostPort(addr, "0"))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/netip"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -18,12 +19,22 @@ import (
 // peered with Packeteer at 127.0.0.2.
 func newRouterAt(t *testing.T, addr, rid string) *fakeRouter {
 	t.Helper()
-	r := &fakeRouter{srv: server.NewBgpServer(server.LoggerOption(&nopLogger{})), port: freePort(t)}
+	r := &fakeRouter{srv: server.NewBgpServer(server.LoggerOption(&nopLogger{}))}
 	go r.srv.Serve()
 	ctx := context.Background()
-	if err := r.srv.StartBgp(ctx, &api.StartBgpRequest{Global: &api.Global{
-		Asn: asn, RouterId: rid, ListenPort: int32(r.port), ListenAddresses: []string{addr},
-	}}); err != nil {
+	// The port is free when picked but another socket can take it before
+	// StartBgp binds it (#413), so pick a fresh one when that happens.
+	var err error
+	for range 5 {
+		r.port = freePortAt(t, addr)
+		err = r.srv.StartBgp(ctx, &api.StartBgpRequest{Global: &api.Global{
+			Asn: asn, RouterId: rid, ListenPort: int32(r.port), ListenAddresses: []string{addr},
+		}})
+		if err == nil || !strings.Contains(err.Error(), "address already in use") {
+			break
+		}
+	}
+	if err != nil {
 		t.Fatal(err)
 	}
 	if err := r.srv.AddPeer(ctx, &api.AddPeerRequest{Peer: &api.Peer{
