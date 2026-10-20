@@ -20,6 +20,8 @@ const (
 	minTimeout        = 100 * time.Millisecond
 	defaultRetries    = 1
 	maxRetries        = 5
+	defaultWorkers    = 4
+	maxWorkers        = 16
 	defaultMaxSamples = 100000
 	maxMaxSamples     = 1000000
 	maxIfIndex        = 2147483647
@@ -35,6 +37,7 @@ type Config struct {
 	Interval   time.Duration `yaml:"interval"`
 	Timeout    time.Duration `yaml:"timeout"`
 	Retries    *int          `yaml:"retries"`
+	Workers    int           `yaml:"workers"`
 	MaxSamples int           `yaml:"max_samples"`
 	Hosts      []Host        `yaml:"hosts"`
 	Providers  []Binding     `yaml:"providers"`
@@ -102,10 +105,10 @@ type bindingSpec struct {
 	mode       plugin.PercentileMode
 }
 
-func decode(c plugin.Config, getenv func(string) string, providers []string) (time.Duration, time.Duration, int, int, []hostSpec, []bindingSpec, error) {
+func decode(c plugin.Config, getenv func(string) string, providers []string) (time.Duration, time.Duration, int, int, int, []hostSpec, []bindingSpec, error) {
 	var cfg Config
 	if err := c.Decode(&cfg); err != nil {
-		return 0, 0, 0, 0, nil, nil, err
+		return 0, 0, 0, 0, 0, nil, nil, err
 	}
 	if getenv == nil {
 		getenv = func(string) string { return "" }
@@ -114,32 +117,38 @@ func decode(c plugin.Config, getenv func(string) string, providers []string) (ti
 		cfg.Interval = defaultInterval
 	}
 	if cfg.Interval < minInterval || cfg.Interval > maxInterval {
-		return 0, 0, 0, 0, nil, nil, fmt.Errorf("interval %s must be between %s and %s", cfg.Interval, minInterval, maxInterval)
+		return 0, 0, 0, 0, 0, nil, nil, fmt.Errorf("interval %s must be between %s and %s", cfg.Interval, minInterval, maxInterval)
 	}
 	if cfg.Timeout == 0 {
 		cfg.Timeout = defaultTimeout
 	}
 	if cfg.Timeout < minTimeout || cfg.Timeout >= cfg.Interval {
-		return 0, 0, 0, 0, nil, nil, fmt.Errorf("timeout %s must be at least %s and shorter than interval %s", cfg.Timeout, minTimeout, cfg.Interval)
+		return 0, 0, 0, 0, 0, nil, nil, fmt.Errorf("timeout %s must be at least %s and shorter than interval %s", cfg.Timeout, minTimeout, cfg.Interval)
 	}
 	retries := defaultRetries
 	if cfg.Retries != nil {
 		retries = *cfg.Retries
 	}
 	if retries < 0 || retries > maxRetries {
-		return 0, 0, 0, 0, nil, nil, fmt.Errorf("retries %d must be between 0 and %d", retries, maxRetries)
+		return 0, 0, 0, 0, 0, nil, nil, fmt.Errorf("retries %d must be between 0 and %d", retries, maxRetries)
+	}
+	if cfg.Workers == 0 {
+		cfg.Workers = defaultWorkers
+	}
+	if cfg.Workers < 1 || cfg.Workers > maxWorkers {
+		return 0, 0, 0, 0, 0, nil, nil, fmt.Errorf("workers %d must be between 1 and %d", cfg.Workers, maxWorkers)
 	}
 	if cfg.MaxSamples == 0 {
 		cfg.MaxSamples = defaultMaxSamples
 	}
 	if cfg.MaxSamples < 1 || cfg.MaxSamples > maxMaxSamples {
-		return 0, 0, 0, 0, nil, nil, fmt.Errorf("max_samples %d must be between 1 and %d", cfg.MaxSamples, maxMaxSamples)
+		return 0, 0, 0, 0, 0, nil, nil, fmt.Errorf("max_samples %d must be between 1 and %d", cfg.MaxSamples, maxMaxSamples)
 	}
 	if len(cfg.Hosts) == 0 {
-		return 0, 0, 0, 0, nil, nil, fmt.Errorf("hosts is required")
+		return 0, 0, 0, 0, 0, nil, nil, fmt.Errorf("hosts is required")
 	}
 	if len(cfg.Providers) == 0 {
-		return 0, 0, 0, 0, nil, nil, fmt.Errorf("providers is required")
+		return 0, 0, 0, 0, 0, nil, nil, fmt.Errorf("providers is required")
 	}
 
 	hosts := make([]hostSpec, 0, len(cfg.Hosts))
@@ -147,10 +156,10 @@ func decode(c plugin.Config, getenv func(string) string, providers []string) (ti
 	for i, h := range cfg.Hosts {
 		spec, err := compileHost(h, getenv)
 		if err != nil {
-			return 0, 0, 0, 0, nil, nil, fmt.Errorf("hosts[%d]: %w", i, err)
+			return 0, 0, 0, 0, 0, nil, nil, fmt.Errorf("hosts[%d]: %w", i, err)
 		}
 		if _, ok := byName[spec.name]; ok {
-			return 0, 0, 0, 0, nil, nil, fmt.Errorf("hosts[%d]: duplicate name %q", i, spec.name)
+			return 0, 0, 0, 0, 0, nil, nil, fmt.Errorf("hosts[%d]: duplicate name %q", i, spec.name)
 		}
 		byName[spec.name] = spec
 		hosts = append(hosts, spec)
@@ -166,21 +175,21 @@ func decode(c plugin.Config, getenv func(string) string, providers []string) (ti
 	for i, b := range cfg.Providers {
 		spec, err := compileBinding(b)
 		if err != nil {
-			return 0, 0, 0, 0, nil, nil, fmt.Errorf("providers[%d]: %w", i, err)
+			return 0, 0, 0, 0, 0, nil, nil, fmt.Errorf("providers[%d]: %w", i, err)
 		}
 		if seenProv[spec.name] {
-			return 0, 0, 0, 0, nil, nil, fmt.Errorf("providers[%d]: duplicate provider %q", i, spec.name)
+			return 0, 0, 0, 0, 0, nil, nil, fmt.Errorf("providers[%d]: duplicate provider %q", i, spec.name)
 		}
 		seenProv[spec.name] = true
 		if _, ok := byName[spec.host]; !ok {
-			return 0, 0, 0, 0, nil, nil, fmt.Errorf("providers[%d]: host %q is not in hosts", i, spec.host)
+			return 0, 0, 0, 0, 0, nil, nil, fmt.Errorf("providers[%d]: host %q is not in hosts", i, spec.host)
 		}
 		if checkProviders && !known[spec.name] {
-			return 0, 0, 0, 0, nil, nil, fmt.Errorf("providers[%d]: %q is not a configured provider", i, spec.name)
+			return 0, 0, 0, 0, 0, nil, nil, fmt.Errorf("providers[%d]: %q is not a configured provider", i, spec.name)
 		}
 		bindings = append(bindings, spec)
 	}
-	return cfg.Interval, cfg.Timeout, retries, cfg.MaxSamples, hosts, bindings, nil
+	return cfg.Interval, cfg.Timeout, retries, cfg.Workers, cfg.MaxSamples, hosts, bindings, nil
 }
 
 func compileHost(h Host, getenv func(string) string) (hostSpec, error) {

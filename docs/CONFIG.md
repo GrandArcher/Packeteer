@@ -1372,6 +1372,7 @@ Credentials are environment variables named in the config. The file must not con
 | `interval` | `5m` | `30s`-`1h`. Time between polls. |
 | `timeout` | `5s` | At least `100ms`, shorter than `interval`. Per SNMP request. |
 | `retries` | 1 | 0-5. Extra attempts after the first. `0` does not retry. |
+| `workers` | 4 | 1-16. Hosts polled at once. A slow or unreachable host holds one worker for at most its request timeouts and does not delay the other hosts. `0` uses the default. |
 | `max_samples` | 100000 | 1-1000000. Oldest samples in the open period are dropped past this, in memory and in storage. `0` uses the default. |
 | `hosts` | none | Required. One SNMP agent. Several providers can share a host. |
 | `providers` | none | Required. Each entry names a configured provider. |

@@ -94,7 +94,7 @@ Flap quarantine (#228, [CONFIG.md](CONFIG.md#flap_quarantine)) is on by default 
 | Feature | Status | Milestone | Plugin kind | Issue | Field-proven |
 |---|---|---|---|---|---|
 | SNMP interface bandwidth collection | done | v0.2 | telemetry (`snmp`) | #17 | no |
-| 95th percentile tracking (separate / greater-of modes, billing day) | done: open period reloads from storage when configured (#127); memory only without it | v0.2 | telemetry (`snmp`) | #17 | no |
+| 95th percentile tracking (separate / greater-of modes, billing day) | done: open period reloads from storage when configured (#127); memory only without it; hosts are polled by a bounded pool, `workers` (#384) | v0.2 | telemetry (`snmp`) | #17, #384 | no |
 | Outbound commit control (keep providers under commit) | done | v0.2 | scorer (`commit`) | #18 | no |
 | Provider groups and load balancing in group | done | v0.2 | scorer (`commit`) | #18 | no |
 | Provider precedence / last-resort provider | done | v0.2 | scorer (`commit`) | #18 | no |
