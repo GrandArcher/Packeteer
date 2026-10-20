@@ -1,12 +1,57 @@
 # Users, roles, tokens, audit log, and SSO
 
-Packeteer's ops HTTP server (dashboard, API, metrics) can require a user for every request (#32). Each user has a role, scripts use API tokens, every change is written to an audit log that also goes to the notifiers, and single sign-on through OpenID Connect is optional. It all runs in the stock image with a mounted config and environment variables. Auth decides who may call the API. It never changes what Packeteer announces: allowlist, learned-RIB check, `packeteer_community` + NO_EXPORT, `max_improvements`, hold time, and withdraw-on-failure are the same for every role.
+Packeteer's ops HTTP server (dashboard, API, metrics) requires a user for every request by default (#32, #328). Each user has a role, scripts use API tokens, every change is written to an audit log that also goes to the notifiers, and single sign-on through OpenID Connect is optional. It all runs in the stock image with a mounted config and environment variables. Auth decides who may call the API. It never changes what Packeteer announces: allowlist, learned-RIB check, `packeteer_community` + NO_EXPORT, `max_improvements`, hold time, and withdraw-on-failure are the same for every role.
 
-## Turn it on
+## First run
+
+Sign-in is on by default (#328). A config with no `auth.enabled` value, and no `PACKETEER_HTTP_USER`, behaves as if it said:
 
 ```yaml
 storage:
   type: sqlite          # users, token hashes, and the audit log are kept here
+auth:
+  enabled: true
+```
+
+A `storage` block you wrote is kept. With the HTTP server off (`PACKETEER_HTTP_LISTEN=off`) nothing changes.
+
+```sh
+docker run --network host --cap-add NET_RAW --cap-add NET_ADMIN \
+  -v packeteer-data:/var/lib/packeteer \
+  -v "$PWD/config.yaml:/etc/packeteer/config.yaml" ghcr.io/grandarcher/packeteer
+```
+
+On the first start, with no user and no `PACKETEER_ADMIN_PASSWORD`, the controller creates the admin `admin` (or `PACKETEER_ADMIN_USER`) with a random 24-character password (not with single sign-on, which has no local users). It prints the password once, in a `generated admin password` warning, and writes it to `first-run-admin-password` (mode 0600) next to the storage file, `/var/lib/packeteer` in the image. Read it with `docker logs packeteer 2>&1 | grep 'generated admin password'`. The password is in the container log (and in any log shipper that collects it) until you change it, so change it at the first sign-in.
+
+That password only buys a password change. Sign in at `/signin.html`; the page asks for a new password (12 to 256 characters) before it goes on. Until then every other request is refused with `403` and `"code": "password_change_required"`, except `GET /api/me` and `POST /api/account/password`. The call takes `{"current_password", "new_password"}` from any signed-in local user, counts a wrong current password toward the lockout below, and ends the user's other sessions. The file is removed when the generated password is changed or its user is deleted, and at a start where no user still has to change a generated password (the storage file was replaced). A restart before the change creates no new password and logs nothing.
+
+To pick the first password yourself, set `PACKETEER_ADMIN_PASSWORD`. Nothing is generated and no change is forced:
+
+```sh
+docker run --network host --cap-add NET_RAW --cap-add NET_ADMIN \
+  -e PACKETEER_ADMIN_PASSWORD='a-long-first-password' \
+  -v packeteer-data:/var/lib/packeteer \
+  -v "$PWD/config.yaml:/etc/packeteer/config.yaml" ghcr.io/grandarcher/packeteer
+```
+
+The environment password is used only when no user has that name. It never changes an existing user, so change the password in the UI or through the API and drop the variable. If every admin password is lost, stop the controller, delete the storage file (history, users, tokens, and the audit log go with it), and start again to generate a new password.
+
+## Opt out
+
+```yaml
+auth:
+  enabled: false
+```
+
+An explicit `false` keeps the earlier behavior: the single basic-auth account from `PACKETEER_HTTP_USER` and `PACKETEER_HTTP_PASSWORD`, or no sign-in at all when those are unset. Without them anyone who can reach `http.listen` can read the dashboard and API (every change is refused). The start logs a warning (`auth.enabled is false`) and every page shows a red banner while `/api/overview` reports `"auth": "off"`. An install that already sets `PACKETEER_HTTP_USER` keeps its basic-auth account when `auth.enabled` is unset; the two are refused together only when `auth.enabled: true` is written. To turn sign-in on there, unset those variables and add `auth: {enabled: true}`.
+
+An upgraded install with no `auth.enabled` and no `PACKETEER_HTTP_USER` gets sign-in too. A Prometheus scrape or script that sends no credentials then gets `401`: give it an [API token](#api-tokens), or write `auth.enabled: false` before the upgrade to keep the server open.
+
+## Turn it on with options
+
+```yaml
+storage:
+  type: sqlite
   config:
     path: /var/lib/packeteer/packeteer.db
 auth:
@@ -16,14 +61,7 @@ http:
   allow_from: [192.0.2.0/24]      # optional: the NOC network
 ```
 
-```sh
-docker run --network host --cap-add NET_RAW --cap-add NET_ADMIN \
-  -e PACKETEER_ADMIN_PASSWORD='a-long-first-password' \
-  -v packeteer-data:/var/lib/packeteer \
-  -v "$PWD/config.yaml:/etc/packeteer/config.yaml" ghcr.io/grandarcher/packeteer
-```
-
-At start the controller creates the admin `admin` (or `PACKETEER_ADMIN_USER`) with that password if no user has that name. It never changes an existing user, so change the password through the API and drop the variable. `auth` refuses to start together with `PACKETEER_HTTP_USER`: the single basic-auth account is replaced.
+`auth: {enabled: true}` refuses to start together with `PACKETEER_HTTP_USER`: the single basic-auth account is replaced.
 
 Passwords are 12 to 256 characters and stored as PBKDF2-HMAC-SHA256 hashes (600,000 iterations). Local users sign in on the sign-in page (below), or with HTTP basic auth from scripts. Put a TLS proxy in front, or keep `http.listen` on loopback, when the network between you and Packeteer is not trusted. Ten failed passwords or tokens from one address within five minutes block that address for the rest of the window (`429`).
 
@@ -48,11 +86,11 @@ Failed sign-ins count toward the same per-address lockout as basic auth and toke
 The Admin page (`/admin.html`) and the Tokens page (`/tokens.html`) make these calls from the browser ([ui.md](ui.md#users-and-api-tokens)).
 
 ```sh
-curl -u admin:... -H 'Content-Type: application/json' http://127.0.0.1:8080/api/users \
+curl -u "admin:$PACKETEER_PASSWORD" -H 'Content-Type: application/json' http://127.0.0.1:8080/api/users \
   -d '{"name":"noc1","role":"operator","password":"another-long-password"}'
-curl -u admin:... -X PATCH -H 'Content-Type: application/json' http://127.0.0.1:8080/api/users/noc1 -d '{"role":"viewer"}'
-curl -u admin:... -X PATCH -H 'Content-Type: application/json' http://127.0.0.1:8080/api/users/noc1 -d '{"disabled":true}'
-curl -u admin:... -X DELETE http://127.0.0.1:8080/api/users/noc1
+curl -u "admin:$PACKETEER_PASSWORD" -X PATCH -H 'Content-Type: application/json' http://127.0.0.1:8080/api/users/noc1 -d '{"role":"viewer"}'
+curl -u "admin:$PACKETEER_PASSWORD" -X PATCH -H 'Content-Type: application/json' http://127.0.0.1:8080/api/users/noc1 -d '{"disabled":true}'
+curl -u "admin:$PACKETEER_PASSWORD" -X DELETE http://127.0.0.1:8080/api/users/noc1
 ```
 
 `PATCH` takes any of `role`, `password`, `disabled`. A change that would leave no enabled admin is refused (`409`). Deleting a user deletes its tokens. Disabling, demoting, or a new password takes effect on the next request and ends the user's SSO sessions.
@@ -100,4 +138,4 @@ Each record goes to the log, to the `sqlite` store (pruned with `retention`), an
 
 ## Rollback
 
-Set `auth.enabled: false` (or delete the `auth` block) and restart. The server is back to the single basic-auth account from `PACKETEER_HTTP_USER` and `PACKETEER_HTTP_PASSWORD`, or, without them, read-only: every change is refused. Keep `http.listen` on `127.0.0.1` in that mode. Users, tokens, and the audit log stay in the store for when auth is turned on again. Nothing about announcing changes either way.
+Set `auth.enabled: false` and restart (deleting the `auth` block no longer turns auth off). The server is back to the single basic-auth account from `PACKETEER_HTTP_USER` and `PACKETEER_HTTP_PASSWORD`, or, without them, read-only: every change is refused. Keep `http.listen` on `127.0.0.1` in that mode. Users, tokens, and the audit log stay in the store for when auth is turned on again. Nothing about announcing changes either way.

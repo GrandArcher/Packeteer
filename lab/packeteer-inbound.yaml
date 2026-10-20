@@ -85,3 +85,7 @@ inbound:
           name: withhold
           withhold: true
           communities: ["64512:1209"]
+
+# Lab only: no sign-in, so the e2e scripts can read the API (#328).
+auth:
+  enabled: false

@@ -58,3 +58,7 @@ ha:
     id: pk-a
     ttl: 4s
     renew: 1s
+
+# Lab only: no sign-in, so the e2e scripts can read the API (#328).
+auth:
+  enabled: false

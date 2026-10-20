@@ -94,6 +94,9 @@ type Principal struct {
 	// Session is true when the request carried a session cookie, which
 	// the caller can end with Logout.
 	Session bool `json:"session,omitempty"`
+	// MustChange is true for the generated first-run admin until the
+	// password is changed: only the password change is allowed (#328).
+	MustChange bool `json:"must_change,omitempty"`
 }
 
 // Options configure a Service.
@@ -105,6 +108,10 @@ type Options struct {
 	TokenTTL   time.Duration
 	Logger     *slog.Logger
 	Now        func() time.Time
+	// OnGeneratedGone is called with the name of a user whose generated
+	// password stopped signing in: the forced change is done, an admin
+	// set a password, or the user was deleted (#328).
+	OnGeneratedGone func(user string)
 }
 
 type session struct {
@@ -140,6 +147,7 @@ type Service struct {
 	log        *slog.Logger
 	now        func() time.Time
 	pepper     []byte
+	onGone     func(string)
 
 	// mu serializes user and token changes (the last-admin check).
 	mu sync.Mutex
@@ -182,7 +190,7 @@ func New(o Options) (*Service, error) {
 		return nil, err
 	}
 	return &Service{
-		users: o.Users, sso: o.SSO, sessionTTL: o.SessionTTL, tokenTTL: o.TokenTTL, log: o.Logger, now: o.Now, pepper: pepper,
+		users: o.Users, sso: o.SSO, sessionTTL: o.SessionTTL, tokenTTL: o.TokenTTL, log: o.Logger, now: o.Now, pepper: pepper, onGone: o.OnGeneratedGone,
 		sessions: map[string]session{}, pending: map[string]pendingLogin{}, pwCache: map[string]cached{}, fails: map[netip.Addr]*failures{},
 	}, nil
 }
@@ -313,7 +321,7 @@ func (s *Service) password(ctx context.Context, name, pw string, now time.Time) 
 		s.pwCache[name] = cached{key: key, expires: now.Add(cacheTTL)}
 		s.smu.Unlock()
 	}
-	return Principal{User: u.Name, Role: u.Role, Method: MethodPassword}, nil
+	return Principal{User: u.Name, Role: u.Role, Method: MethodPassword, MustChange: u.MustChange}, nil
 }
 
 // cacheKey binds a verified password to the stored hash, so a password
@@ -375,7 +383,7 @@ func (s *Service) token(ctx context.Context, raw string, now time.Time) (Princip
 	if !role.Valid() {
 		return Principal{}, ErrBadCredentials
 	}
-	return Principal{User: u.Name, Role: role, Method: MethodToken, TokenID: t.ID}, nil
+	return Principal{User: u.Name, Role: role, Method: MethodToken, TokenID: t.ID, MustChange: u.MustChange}, nil
 }
 
 func (s *Service) session(ctx context.Context, id string, now time.Time) (Principal, error) {
@@ -399,7 +407,7 @@ func (s *Service) session(ctx context.Context, id string, now time.Time) (Princi
 		s.smu.Unlock()
 		return Principal{}, ErrBadCredentials
 	}
-	return Principal{User: u.Name, Role: u.Role, Method: ss.method, Session: true}, nil
+	return Principal{User: u.Name, Role: u.Role, Method: ss.method, Session: true, MustChange: u.MustChange}, nil
 }
 
 // SignIn checks a local user's password for the sign-in page and starts a
@@ -652,8 +660,27 @@ func (s *Service) HasUsers(ctx context.Context) (bool, error) {
 	return len(us) > 0, err
 }
 
+// ChangePending reports whether a user still signs in with a generated
+// password that must be changed.
+func (s *Service) ChangePending(ctx context.Context) (bool, error) {
+	us, err := s.users.Users(ctx)
+	if err != nil {
+		return false, err
+	}
+	for _, u := range us {
+		if u.MustChange {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 // CreateUser adds a local user.
 func (s *Service) CreateUser(ctx context.Context, name string, role plugin.Role, password string) (UserView, error) {
+	return s.createUser(ctx, name, role, password, false)
+}
+
+func (s *Service) createUser(ctx context.Context, name string, role plugin.Role, password string, mustChange bool) (UserView, error) {
 	if !ValidUserName(name) {
 		return UserView{}, invalid("name must be 1-64 characters of letters, digits, '.', '_', '-', '+', '@', starting with a letter or digit")
 	}
@@ -677,7 +704,7 @@ func (s *Service) CreateUser(ctx context.Context, name string, role plugin.Role,
 		return UserView{}, ErrExists
 	}
 	now := s.now().UTC()
-	u := plugin.User{Name: name, Role: role, Source: plugin.UserLocal, PasswordHash: hash, Created: now, Updated: now}
+	u := plugin.User{Name: name, Role: role, Source: plugin.UserLocal, PasswordHash: hash, MustChange: mustChange, Created: now, Updated: now}
 	if err := s.users.PutUser(ctx, u); err != nil {
 		return UserView{}, fmt.Errorf("%w: %v", ErrUnavailable, err)
 	}
@@ -729,7 +756,7 @@ func (s *Service) UpdateUser(ctx context.Context, name string, up UserUpdate) (U
 		next.Role = *up.Role
 	}
 	if up.Password != nil {
-		next.PasswordHash = hash
+		next.PasswordHash, next.MustChange = hash, false
 	}
 	if up.Disabled != nil {
 		next.Disabled = *up.Disabled
@@ -744,7 +771,66 @@ func (s *Service) UpdateUser(ctx context.Context, name string, up UserUpdate) (U
 	if next.Disabled || up.Password != nil || next.Role != u.Role {
 		s.dropSessions(name)
 	}
+	s.generatedGone(u, &next)
 	return view(next), nil
+}
+
+// generatedGone tells the owner of the generated password that it no
+// longer signs in: was is replaced by now, or deleted (now nil).
+func (s *Service) generatedGone(was plugin.User, now *plugin.User) {
+	if was.MustChange && (now == nil || !now.MustChange) && s.onGone != nil {
+		s.onGone(was.Name)
+	}
+}
+
+// ChangePassword sets p's own password after checking the current one. A
+// wrong current password counts toward the per-address lockout. It ends
+// the user's sessions and, for a session request, starts a new one, so a
+// browser stays signed in. It clears MustChange.
+func (s *Service) ChangePassword(w http.ResponseWriter, r *http.Request, p Principal, current, next string) error {
+	ip, now := RemoteIP(r), s.now()
+	if s.throttled(ip, now) {
+		return ErrThrottled
+	}
+	if err := CheckPassword(next); err != nil {
+		return invalid("%v", err)
+	}
+	if next == current {
+		return invalid("the new password must differ from the current one")
+	}
+	hash, err := HashPassword(next)
+	if err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	u, found, err := s.users.User(r.Context(), p.User)
+	if err != nil {
+		return fmt.Errorf("%w: %v", ErrUnavailable, err)
+	}
+	if !found {
+		return ErrNotFound
+	}
+	if u.Source != plugin.UserLocal || u.PasswordHash == "" {
+		return invalid("this account signs in through the identity provider and has no local password")
+	}
+	if !VerifyPassword(u.PasswordHash, current) {
+		s.fail(ip, now)
+		return fmt.Errorf("%w: the current password is wrong", ErrForbidden)
+	}
+	updated := u
+	updated.PasswordHash, updated.MustChange, updated.Updated = hash, false, now.UTC()
+	if err := s.users.PutUser(r.Context(), updated); err != nil {
+		return fmt.Errorf("%w: %v", ErrUnavailable, err)
+	}
+	s.dropSessions(u.Name)
+	if p.Session && p.Method == MethodPassword {
+		if err := s.startSession(w, u.Name, MethodPassword, now); err != nil {
+			return err
+		}
+	}
+	s.generatedGone(u, &updated)
+	return nil
 }
 
 // DeleteUser removes a user and the user's tokens.
@@ -765,6 +851,7 @@ func (s *Service) DeleteUser(ctx context.Context, name string) error {
 		return fmt.Errorf("%w: %v", ErrUnavailable, err)
 	}
 	s.dropSessions(name)
+	s.generatedGone(u, nil)
 	return nil
 }
 
@@ -788,14 +875,15 @@ func (s *Service) keepAdmin(ctx context.Context, cur plugin.User, next *plugin.U
 	return ErrLastAdmin
 }
 
-// Bootstrap creates the first admin from the environment. It does
-// nothing when a user with that name exists, so a password changed
-// through the API is not reset on restart.
-func (s *Service) Bootstrap(ctx context.Context, name, password string) (bool, error) {
+// Bootstrap creates the first admin. It does nothing when a user with
+// that name exists, so a password changed through the API is not reset on
+// restart. mustChange limits the account to a password change until it
+// has one (a generated password, #328).
+func (s *Service) Bootstrap(ctx context.Context, name, password string, mustChange bool) (bool, error) {
 	if name == "" {
 		name = "admin"
 	}
-	_, err := s.CreateUser(ctx, name, plugin.RoleAdmin, password)
+	_, err := s.createUser(ctx, name, plugin.RoleAdmin, password, mustChange)
 	switch {
 	case errors.Is(err, ErrExists):
 		return false, nil

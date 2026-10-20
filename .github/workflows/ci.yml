@@ -130,6 +130,7 @@ jobs:
           mode: observe
           asn: 64512
           router_id: 192.0.2.10
+          auth: {enabled: false}
           http:
             listen: "127.0.0.1:18080"
           providers:
@@ -172,6 +173,54 @@ jobs:
           grep -q "prober=icmp" /tmp/pk.log
           grep -q "loss_pct=0" /tmp/pk.log
           grep -q "shutting down" /tmp/pk.log
+      - name: secure by default (#328; stock example, first-run admin password, forced change, observe)
+        run: |
+          base=http://127.0.0.1:8080
+          up() {
+            for _ in $(seq 1 20); do curl -fsS "$base/healthz" >/dev/null 2>&1 && return 0; sleep 1; done
+            docker logs pksec >&2; return 1
+          }
+          code() { curl -s -o /dev/null -w '%{http_code}' "$@"; }
+          # The shipped example, mounted unchanged and with no environment,
+          # asks for sign-in and prints a generated admin password once.
+          docker run -d --name pksec --network host --cap-add NET_RAW --cap-add NET_ADMIN \
+            -v "$PWD/config.example.yaml:/etc/packeteer/config.yaml:ro" packeteer:ci
+          trap 'docker logs pksec >&2 || true; docker rm -f pksec >/dev/null 2>&1 || true' EXIT
+          up
+          test "$(code "$base/api/overview")" = 401
+          test "$(code "$base/metrics")" = 401
+          test "$(code "$base/")" = 302
+          file=/var/lib/packeteer/first-run-admin-password
+          # healthz can answer before the password file is written; wait for it.
+          for _ in $(seq 1 20); do docker exec pksec test -s "$file" && break; sleep 1; done
+          pw="$(docker exec pksec sed -n 's/^password: //p' "$file")"
+          test -n "$pw"
+          test "$(docker exec pksec stat -c %a "$file")" = 600
+          test "$(docker logs pksec 2>&1 | grep -cF -- "$pw")" = 1
+          # The generated password signs in but only buys a password change.
+          curl -fsS -H 'Content-Type: application/json' -d "{\"name\":\"admin\",\"password\":\"$pw\"}" "$base/auth/signin" | jq -e '.must_change == true'
+          test "$(code -u "admin:$pw" "$base/api/overview")" = 403
+          curl -sS -u "admin:$pw" "$base/api/overview" | jq -e '.code == "password_change_required"'
+          curl -fsS -u "admin:$pw" "$base/api/me" | jq -e '.must_change == true'
+          bash lab/ui-smoke.sh "$base/signin.html?change=1" 'id="change-current"' '<form id="change-form" class="signin-form" autocomplete="off">' \
+            'id="signin-form" class="signin-form" autocomplete="on" hidden=""' --absent 'Sign-in is off'
+          bash lab/ui-smoke.sh "$base/signin.html" 'id="signin-form" class="signin-form" autocomplete="on">' 'id="change-form" class="signin-form" autocomplete="off" hidden=""'
+          new="$(openssl rand -hex 16)"   # generated per run, never a literal
+          wrong="$(openssl rand -hex 16)"
+          test "$(code -u "admin:$pw" -H 'Content-Type: application/json' -d "{\"current_password\":\"$wrong\",\"new_password\":\"$new\"}" "$base/api/account/password")" = 403
+          test "$(code -u "admin:$pw" -H 'Content-Type: application/json' -d "{\"current_password\":\"$pw\",\"new_password\":\"$new\"}" "$base/api/account/password")" = 204
+          test "$(code -u "admin:$pw" "$base/api/overview")" = 401
+          curl -fsS -u "admin:$new" "$base/api/overview" | jq -e '.mode == "observe" and .auth == "rbac"'
+          docker exec pksec test ! -e "$file"
+          # A restart keeps the chosen password and generates nothing new.
+          docker restart -t 15 pksec
+          up
+          curl -fsS -u "admin:$new" "$base/api/me" | jq -e '.user == "admin" and (.must_change // false) == false'
+          test "$(docker logs pksec 2>&1 | grep -c 'generated admin password')" = 1
+          docker stop -t 15 pksec
+          test "$(docker inspect -f '{{.State.ExitCode}}' pksec)" = "0"
+          docker rm pksec
+          trap - EXIT
       - name: UI e2e smoke (#49; first run from the stock image, headless Chrome, observe)
         run: |
           base=http://127.0.0.1:8080
@@ -185,16 +234,19 @@ jobs:
             test "$(docker inspect -f '{{.State.ExitCode}}' pkui)" = "0"
             docker rm pkui
           }
-          # 1. The shipped example, mounted unchanged: observe, nothing to
+          # 1. The shipped example with the sign-in opt-out (#328, the stock
+          # file signs in; see the step above): observe, nothing to
           # probe yet, and the dashboard says what to add.
+          { cat config.example.yaml; printf '\nauth:\n  enabled: false\n'; } > /tmp/example-open.yaml
           docker run -d --name pkui --network host --cap-add NET_RAW --cap-add NET_ADMIN \
-            -v "$PWD/config.example.yaml:/etc/packeteer/config.yaml:ro" packeteer:ci
+            -v /tmp/example-open.yaml:/etc/packeteer/config.yaml:ro packeteer:ci
           up
           curl -fsS "$base/api/overview" | tee /tmp/ov1.json | jq -e '.mode == "observe" and .setup[0].id == "sources" and .counts.providers == 2'
           # The shell (#170): the mode banner is first, each area has its own
           # URL, and a reload of that URL is the page. Observe says it
           # announces nothing. Empty areas name their issue.
           bash lab/ui-smoke.sh "$base/" 'Observe mode: Packeteer measures and recommends. It announces nothing.' \
+            'id="auth-banner"' 'Sign-in is off (auth.enabled: false)' \
             'data-hint="sources"' 'Nothing to probe yet' 'mode-observe' 'aria-current="page"' \
             'href="/improvements.html"' 'href="/prefixes.html"' 'href="/settings.html"' 'id="search-slot"' 'id="top-search-recent"' 'id="events-slot"' 'id="account"' \
             'alt="Packeteer logo"' 'src="/logo.png"' 'rel="icon" href="/logo.png"' \
@@ -255,6 +307,7 @@ jobs:
           cat > /tmp/first.yaml <<'YAML'
           asn: 64512
           router_id: 192.0.2.10
+          auth: {enabled: false}
           providers:
             - name: lab-a
               source_ip: 127.0.0.1
@@ -305,6 +358,7 @@ jobs:
           mode: observe
           asn: 64512
           router_id: 192.0.2.10
+          auth: {enabled: false}
           http:
             listen: "127.0.0.1:18083"
           providers:
@@ -398,6 +452,7 @@ jobs:
           mode: observe
           asn: 64512
           router_id: 192.0.2.10
+          auth: {enabled: false}
           http:
             listen: "127.0.0.1:18090"
             config_editor: true
@@ -485,6 +540,7 @@ jobs:
           mode: observe
           asn: 64512
           router_id: 192.0.2.10
+          auth: {enabled: false}
           http:
             listen: "127.0.0.1:18184"
           providers:
@@ -549,6 +605,7 @@ jobs:
           mode: observe
           asn: 64512
           router_id: 192.0.2.10
+          auth: {enabled: false}
           http:
             listen: "127.0.0.1:18097"
           providers:
@@ -684,6 +741,7 @@ jobs:
           mode: observe
           asn: 64512
           router_id: 192.0.2.10
+          auth: {enabled: false}
           http:
             listen: "127.0.0.1:18174"
             config_editor: true
@@ -814,6 +872,7 @@ jobs:
           mode: observe
           asn: 64512
           router_id: 192.0.2.10
+          auth: {enabled: false}
           http:
             listen: "127.0.0.1:18207"
           providers:
@@ -930,6 +989,7 @@ jobs:
           mode: observe
           asn: 64512
           router_id: 192.0.2.10
+          auth: {enabled: false}
           http:
             listen: "127.0.0.1:18180"
           providers:
@@ -988,6 +1048,7 @@ jobs:
           mode: observe
           asn: 64512
           router_id: 192.0.2.10
+          auth: {enabled: false}
           http:
             listen: "127.0.0.1:18182"
           providers:
@@ -1043,6 +1104,7 @@ jobs:
           mode: observe
           asn: 64512
           router_id: 192.0.2.10
+          auth: {enabled: false}
           http:
             listen: "127.0.0.1:18346"
           providers:
@@ -1096,6 +1158,7 @@ jobs:
           mode: observe
           asn: 64512
           router_id: 192.0.2.10
+          auth: {enabled: false}
           http:
             listen: "127.0.0.1:18132"
             config_editor: true
@@ -1386,6 +1449,7 @@ jobs:
           mode: observe
           asn: 64512
           router_id: 192.0.2.10
+          auth: {enabled: false}
           http:
             listen: "127.0.0.1:18343"
           providers:
@@ -1451,6 +1515,7 @@ jobs:
           mode: observe
           asn: 64512
           router_id: 192.0.2.10
+          auth: {enabled: false}
           http:
             listen: "127.0.0.1:18347"
           bgp:
@@ -1522,6 +1587,7 @@ jobs:
           mode: observe
           asn: 64512
           router_id: 192.0.2.10
+          auth: {enabled: false}
           http:
             listen: "127.0.0.1:18134"
             config_editor: true
@@ -1716,6 +1782,7 @@ jobs:
           mode: observe
           asn: 64512
           router_id: 192.0.2.10
+          auth: {enabled: false}
           http:
             listen: "127.0.0.1:18177"
           providers:
@@ -1826,7 +1893,7 @@ jobs:
           auth:
             enabled: true
           YAML
-          sed '/^auth:/,$d' /tmp/auth.yaml > /tmp/noauth.yaml
+          sed 's/^  enabled: true$/  enabled: false/' /tmp/auth.yaml > /tmp/noauth.yaml
           base=http://127.0.0.1:18084
           json='Content-Type: application/json'
           code() { curl -s -o /dev/null -w '%{http_code}' "$@"; }
@@ -1940,7 +2007,7 @@ jobs:
           curl -fsS -u admin:ci-admin-password-1 "$base/api/events" | tee /tmp/events.json | jq -e '.stored == true and ([.events[] | select(.kind == "controller.started")] | length) >= 2 and ([.events[].kind] | index("controller.stopping")) != null'
           test "$(code -H "Authorization: Bearer $tok" $base/api/providers)" = 200
           stop
-          # Rollback: no auth block. Reads work, every change is refused.
+          # Rollback (#328): auth.enabled: false. Reads work, every change is refused.
           start -v /tmp/noauth.yaml:/etc/packeteer/config.yaml:ro
           test "$(code $base/api/providers)" = 200
           test "$(code -H "$json" -d '{"name":"x","role":"admin","password":"ci-viewer-password"}' $base/api/users)" = 404
@@ -1953,6 +2020,7 @@ jobs:
           mode: observe
           asn: 64512
           router_id: 192.0.2.10
+          auth: {enabled: false}
           http:
             listen: "127.0.0.1:18082"
           providers:
@@ -1996,6 +2064,7 @@ jobs:
           mode: observe
           asn: 64512
           router_id: 192.0.2.10
+          auth: {enabled: false}
           http:
             listen: "127.0.0.1:18084"
             config_editor: true
@@ -2059,6 +2128,7 @@ jobs:
           mode: observe
           asn: 64512
           router_id: 192.0.2.10
+          auth: {enabled: false}
           http:
             listen: "127.0.0.1:18083"
           providers:

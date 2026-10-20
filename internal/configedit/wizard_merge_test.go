@@ -112,12 +112,31 @@ func TestWizardOverNeverTurnsAuthOffUnlessAsked(t *testing.T) {
 			t.Fatalf("%s: removes = %v", tc.name, plan.Removes)
 		}
 	}
-	// The flag does nothing where sign-in was never on.
-	in := oneProvider()
-	in.DisableAuth = true
-	plan, cfg := parseOver(t, in, "mode: observe\nasn: 64512\nrouter_id: 192.0.2.10\nproviders:\n  - name: x\n    source_ip: 192.0.2.11\n    next_hop: 192.0.2.1\n")
+}
+
+// With no auth block sign-in is on by default (#328), so the flag writes
+// the opt-out; without the flag the file gets no auth block.
+func TestWizardOverTurnsDefaultAuthOff(t *testing.T) {
+	const noAuth = "mode: observe\nasn: 64512\nrouter_id: 192.0.2.10\nproviders:\n  - name: x\n    source_ip: 192.0.2.11\n    next_hop: 192.0.2.1\n"
+	plan, cfg := parseOver(t, oneProvider(), noAuth)
 	if cfg.Auth != nil || strings.Contains(plan.YAML, "auth") {
 		t.Fatalf("an auth block appeared:\n%s", plan.YAML)
+	}
+	in := oneProvider()
+	in.DisableAuth = true
+	for _, cur := range []string{noAuth, noAuth + "auth:\n", noAuth + "auth:\n  enabled: ~\n  session_ttl: 1h\n"} {
+		plan, cfg := parseOver(t, in, cur)
+		if !cfg.AuthOptedOut() {
+			t.Fatalf("sign-in not turned off over %q:\n%s", cur, plan.YAML)
+		}
+		if !strings.Contains(strings.Join(plan.Removes, "|"), "Turns off sign-in") {
+			t.Fatalf("over %q: removes = %v", cur, plan.Removes)
+		}
+	}
+	// Already off: nothing to report.
+	plan, cfg = parseOver(t, in, noAuth+"auth:\n  enabled: false\n")
+	if !cfg.AuthOptedOut() || strings.Contains(strings.Join(plan.Removes, "|"), "sign-in") {
+		t.Fatalf("explicit off: removes = %v\n%s", plan.Removes, plan.YAML)
 	}
 }
 
@@ -209,7 +228,7 @@ func TestWizardOverNamesDroppedFields(t *testing.T) {
 }
 
 func TestAuthOnAnyBoolSpelling(t *testing.T) {
-	for text, want := range map[string]bool{"true": true, "True": true, "TRUE": true, "false": false, "": false} {
+	for text, want := range map[string]bool{"true": true, "True": true, "TRUE": true, "false": false, "False": false, "": true, "~": true} {
 		root, err := mappingRoot([]byte("auth:\n  enabled: " + text + "\n"))
 		if err != nil {
 			t.Fatal(err)
@@ -218,6 +237,9 @@ func TestAuthOnAnyBoolSpelling(t *testing.T) {
 		if got := authOn(a); got != want {
 			t.Errorf("authOn(%q) = %v", text, got)
 		}
+	}
+	if !authOn(nil) {
+		t.Error("a missing auth block is not on")
 	}
 }
 

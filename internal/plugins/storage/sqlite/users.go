@@ -16,17 +16,17 @@ var (
 	_ plugin.AuditStore = (*Store)(nil)
 )
 
-const userCols = `name, role, source, password_hash, disabled, created_ms, updated_ms`
+const userCols = `name, role, source, password_hash, disabled, created_ms, updated_ms, must_change`
 
 func scanUser(sc interface{ Scan(...any) error }) (plugin.User, error) {
 	var u plugin.User
 	var role string
-	var disabled int
+	var disabled, mustChange int
 	var created, updated int64
-	if err := sc.Scan(&u.Name, &role, &u.Source, &u.PasswordHash, &disabled, &created, &updated); err != nil {
+	if err := sc.Scan(&u.Name, &role, &u.Source, &u.PasswordHash, &disabled, &created, &updated, &mustChange); err != nil {
 		return u, err
 	}
-	u.Role, u.Disabled, u.Created, u.Updated = plugin.Role(role), disabled != 0, fromMS(created), fromMS(updated)
+	u.Role, u.Disabled, u.Created, u.Updated, u.MustChange = plugin.Role(role), disabled != 0, fromMS(created), fromMS(updated), mustChange != 0
 	return u, nil
 }
 
@@ -71,8 +71,8 @@ func (s *Store) PutUser(ctx context.Context, u plugin.User) error {
 	if err != nil {
 		return err
 	}
-	_, err = db.ExecContext(ctx, `INSERT OR REPLACE INTO users (`+userCols+`) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		u.Name, string(u.Role), u.Source, u.PasswordHash, b2i(u.Disabled), ms(u.Created), ms(u.Updated))
+	_, err = db.ExecContext(ctx, `INSERT OR REPLACE INTO users (`+userCols+`) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		u.Name, string(u.Role), u.Source, u.PasswordHash, b2i(u.Disabled), ms(u.Created), ms(u.Updated), b2i(u.MustChange))
 	return err
 }
 

@@ -75,3 +75,7 @@ mitigation:
         redirect:
           - name: scrub-vrf
             route_target: "64512:779"
+
+# Lab only: no sign-in, so the e2e scripts can read the API (#328).
+auth:
+  enabled: false

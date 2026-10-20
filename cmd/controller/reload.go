@@ -346,12 +346,15 @@ type reloader struct {
 	mu     sync.Mutex
 	path   string
 	getenv func(string) string
-	log    *slog.Logger
-	cur    *config.Config
-	view   neighborView
-	rib    *rib.View
-	ctl    announcerCtl
-	poke   func()
+	// httpUser is the basic-auth user from the environment; it decides the
+	// sign-in default, which the running config already carries.
+	httpUser string
+	log      *slog.Logger
+	cur      *config.Config
+	view     neighborView
+	rib      *rib.View
+	ctl      announcerCtl
+	poke     func()
 	// applied, when set, is told each config the reload now runs with
 	// (the config editor diffs against it).
 	applied func(*config.Config)
@@ -403,6 +406,7 @@ func (r *reloader) reload(ctx context.Context) (applied []string, refused, fatal
 	if err != nil {
 		return nil, err, nil
 	}
+	next.DefaultAuth(r.httpUser != "")
 	restart, online := classify(r.cur, next)
 	if r.view == nil {
 		// No speaker: a restart-only key is still refused by name. A

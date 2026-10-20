@@ -74,7 +74,7 @@ func WizardOver(in WizardInput, current []byte) (WizardPlan, error) {
 		setOrDelete(ensureMapping(root, "http"), "listen", scalar(genHTTP, "listen"), "!!str")
 	}
 	if a, _ := mappingChild(root, "auth"); in.DisableAuth && authOn(a) {
-		setOrDelete(a, "enabled", "false", "!!bool")
+		setOrDelete(ensureMapping(root, "auth"), "enabled", "false", "!!bool")
 		removes = append(removes, "Turns off sign-in")
 	}
 	var buf bytes.Buffer
@@ -93,13 +93,26 @@ func WizardOver(in WizardInput, current []byte) (WizardPlan, error) {
 	if cfg.Mode != config.ModeObserve || len(cfg.Allowlist.Prefixes) != 0 {
 		return WizardPlan{}, errors.New("wizard: generated config is not observe")
 	}
-	if authWas && !cfg.AuthEnabled() && !in.DisableAuth {
+	if authWas && cfg.AuthOptedOut() && !in.DisableAuth {
 		return WizardPlan{}, errors.New("wizard: generated config would turn sign-in off")
 	}
 	return WizardPlan{YAML: buf.String(), Existing: true, Diff: lineDiff(string(current), buf.String()), Removes: removes}, nil
 }
 
-func authOn(a *yaml.Node) bool { return strings.EqualFold(scalar(a, "enabled"), "true") }
+// authOn reads auth.enabled as config does: a missing auth block or an
+// unset or null enabled is on (DefaultAuth, #328). A value that is not a
+// bool counts as on so the wizard never reports sign-in off by mistake.
+func authOn(a *yaml.Node) bool {
+	n, _ := child(a, "enabled")
+	if n == nil || n.Tag == "!!null" {
+		return true
+	}
+	var on bool
+	if err := n.Decode(&on); err != nil {
+		return true
+	}
+	return on
+}
 
 // setChild puts val under key, in the key's place when it is there and at
 // the end otherwise.

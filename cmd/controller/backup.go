@@ -218,6 +218,9 @@ func restore(ctx context.Context, archive, configOut string, force bool, getenv 
 			if err != nil {
 				return fmt.Errorf("archived config: %w", err)
 			}
+			if err := startConfig(cfg, getenv); err != nil {
+				return fmt.Errorf("archived config: %w", err)
+			}
 		case backupHistory:
 			if cfg == nil {
 				return errors.New("history before config")

@@ -73,6 +73,10 @@ function shellJSON(path) {
         var msg = (body && body.error) || res.statusText;
         var err = new Error(path + " failed: " + msg);
         err.status = res.status;
+        // The first-run password may only be changed, so go and change it (#328).
+        if (body && body.code === "password_change_required" && window.location.pathname !== "/signin.html") {
+          window.location.href = "/signin.html?change=1";
+        }
         throw err;
       }
       return body;
@@ -196,6 +200,25 @@ function shellRenderBanner(mode) {
   node.hidden = false;
 }
 
+// With sign-in off, anyone who reaches the port reads everything (#328).
+function shellRenderAuthBanner(auth) {
+  var node = document.getElementById("auth-banner");
+  if (auth !== "off") {
+    if (node) node.hidden = true;
+    return;
+  }
+  if (!node) {
+    var mode = document.getElementById("banner");
+    if (!mode) return;
+    node = shellEl("div", "banner banner-warn", "");
+    node.id = "auth-banner";
+    node.setAttribute("role", "alert");
+    mode.parentNode.insertBefore(node, mode.nextSibling);
+  }
+  node.textContent = "Sign-in is off (auth.enabled: false): anyone who can reach this page can read it. Remove that line from the config and restart to require sign-in.";
+  node.hidden = false;
+}
+
 function shellRenderStatus(ov, ready, err) {
   var node = document.getElementById("status");
   if (!node) return;
@@ -238,6 +261,7 @@ function shellRefresh() {
     if (results[1].status !== "fulfilled" && !err) err = results[1].reason;
     if (!err) shellLastOK = new Date().toISOString();
     shellRenderBanner(ov && ov.mode);
+    shellRenderAuthBanner(ov && ov.auth);
     shellRenderStatus(ov, ready, err);
     shellRenderConn(err);
   });
