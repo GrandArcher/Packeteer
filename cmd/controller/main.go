@@ -115,6 +115,17 @@ func applyRuntimeEnv(cfg *config.Config, getenv func(string) string) error {
 	return nil
 }
 
+// startConfig applies the environment overrides and the sign-in default
+// (#328) the daemon starts with, so -backup and -restore archive and
+// restore the storage the controller opens.
+func startConfig(cfg *config.Config, getenv func(string) string) error {
+	if err := applyRuntimeEnv(cfg, getenv); err != nil {
+		return err
+	}
+	cfg.DefaultAuth(getenv(HTTPUserEnv) != "")
+	return nil
+}
+
 func run(ctx context.Context, args []string, getenv func(string) string, stdout, stderr io.Writer) int {
 	if len(args) > 0 && args[0] == "herd" {
 		return runHerd(args[1:], getenv, stdout, stderr)
@@ -158,7 +169,7 @@ func run(ctx context.Context, args []string, getenv func(string) string, stdout,
 		fmt.Fprintf(stderr, "packeteer: refusing to start: %v\n", err)
 		return 1
 	}
-	if err := applyRuntimeEnv(cfg, getenv); err != nil {
+	if err := startConfig(cfg, getenv); err != nil {
 		fmt.Fprintf(stderr, "packeteer: refusing to start: %v\n", err)
 		return 1
 	}
@@ -350,6 +361,7 @@ func run(ctx context.Context, args []string, getenv func(string) string, stdout,
 // before it starts. It starts nothing. The config editor (#34) runs it on
 // a candidate file too, with checkOnly set: no exec plugin command runs.
 func preflight(cfg *config.Config, log *slog.Logger, getenv func(string) string, httpUser string, checkOnly bool) (*pluginhost.Set, error) {
+	cfg.DefaultAuth(httpUser != "")
 	plugins, err := pluginhost.Build(cfg, pluginhost.Options{Logger: log, Getenv: getenv, PluginDir: getenv(PluginDirEnv), CheckOnly: checkOnly})
 	if err != nil {
 		return nil, fmt.Errorf("plugins: %w", err)
@@ -489,6 +501,7 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 		log.Error("refusing to start", "err", aerr)
 		return 1
 	}
+	warnAuthOff(cfg, httpUser, log)
 	// Upgrade from the UI (#196). The stop is the SIGTERM path: the
 	// shutdown below withdraws every route before the new version starts.
 	upMgr, uerr := newUpgrade(cfg, path, stopDaemon, haStatus, audit, getenv, log)
@@ -698,7 +711,7 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 		log.Error("refusing to start", "err", err)
 		return 1
 	}
-	bootstrapAdmin(ctx, authSvc, audit, getenv, log)
+	bootstrapAdmin(ctx, authSvc, audit, plugins, getenv, log)
 	hd, herr := startHerd(ctx, cfg, plugins, view, audit, dispatch.Emit, ha.active, log)
 	if herr != nil {
 		log.Error("refusing to start", "err", herr)
@@ -830,7 +843,7 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 	}
 
 	rl := &reloader{
-		path: path, getenv: getenv, log: log, cur: cfg, ctl: ctl, poke: poke,
+		path: path, getenv: getenv, httpUser: httpUser, log: log, cur: cfg, ctl: ctl, poke: poke,
 		plugins: plugins, engine: engine, decider: decider, fed: fed, col: col,
 		watch: watch, live: live, dispatch: dispatch, hist: rec, inb: inb, mit: mit,
 		flowSpecUp: view != nil && mitigationFlowSpec(cfg, plugins),

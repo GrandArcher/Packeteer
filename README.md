@@ -93,9 +93,11 @@ docker run --rm -e PACKETEER_CONFIG=/etc/packeteer/config.example.yaml \
 
 The default config path inside the container is `/etc/packeteer/config.yaml` (`PACKETEER_CONFIG`, or `-config`).
 
-Without `NET_RAW`, or where ICMP is filtered, the probe falls back to TCP port 443 (the log shows `prober=tcp`). The settings form, setup wizard, and config editor in the dashboard stay off until you set `http.config_editor: true` and turn on auth or basic auth ([docs/ui.md](docs/ui.md), [docs/auth.md](docs/auth.md)). Every environment variable: [docs/ENV.md](docs/ENV.md).
+The dashboard and API require sign-in (#328). On the first start the log prints a generated admin password once (`docker logs packeteer 2>&1 | grep 'generated admin password'`; it is also in `/var/lib/packeteer/first-run-admin-password`), and the sign-in page makes you choose a new one. Set `PACKETEER_ADMIN_PASSWORD` to pick it yourself. Details and the opt-out: [docs/auth.md](docs/auth.md#first-run).
 
-The `packeteer-data` volume keeps report history (`storage: {type: sqlite}`, file `/var/lib/packeteer/packeteer.db`) across container restarts and upgrades, and the open billing period of SNMP 95th-percentile samples when telemetry is configured. Without the volume, reports and that window start empty after the container is recreated. Leave out `storage` to turn history off; the probe and decision loop does not depend on it, and the 95th window then lives in memory only.
+Without `NET_RAW`, or where ICMP is filtered, the probe falls back to TCP port 443 (the log shows `prober=tcp`). The settings form, setup wizard, and config editor in the dashboard stay off until you set `http.config_editor: true` (sign-in is on by default; [docs/ui.md](docs/ui.md), [docs/auth.md](docs/auth.md)). Every environment variable: [docs/ENV.md](docs/ENV.md).
+
+The `packeteer-data` volume keeps report history (`storage: {type: sqlite}`, file `/var/lib/packeteer/packeteer.db`) across container restarts and upgrades, and the open billing period of SNMP 95th-percentile samples when telemetry is configured. Without the volume, reports and that window start empty after the container is recreated. Leave out `storage` to turn history off; the probe and decision loop does not depend on it, and the 95th window then lives in memory only. Sign-in on by default (no `auth.enabled`, no `PACKETEER_HTTP_USER`) adds `sqlite` when `storage` is left out.
 
 [docker-compose.yml](docker-compose.yml) runs the same container with Compose: host networking, the two capabilities, the mounts, and `restart: unless-stopped` ([quickstart, step 5](docs/quickstart.md#5-or-run-it-with-compose)). Its `image` line uses `:edge`; change it to `ghcr.io/grandarcher/packeteer:0.7.0` to pin. There is no `ports:` map: with host networking, `http.listen` is already an address on the host. Stop with `docker compose stop -t 30` (see [Rollback](#rollback)).
 
@@ -226,13 +228,13 @@ docker compose stop -t 30
 The server is read-only (GET and HEAD), except on-demand maintenance windows (`POST` and `DELETE` on `/api/maintenance`), which need basic auth or an operator and can only exclude providers, threat mitigation rules (`POST` and `DELETE` on `/api/mitigations`), which need basic auth or an operator and announce only when `mitigation.mode` is `inject`, the troubleshooting tools (`POST` on `/api/troubleshoot/probe`, `traceroute`, and `whois`), which measure or look up and change nothing, and `/api/troubleshoot/optimize`, which only queues a learned prefix for measuring, with `upgrade.enabled`, an admin's confirmed upgrade or rollback of the Packeteer binary (`POST` on `/api/upgrade/check`, `apply`, and `rollback`; the controller withdraws every route first, [docs/ui.md](docs/ui.md#upgrade-from-the-ui)), and, with `auth`, users and API tokens. Every change is written to the audit log and sent to the notifiers. The dashboard loads no remote assets and refreshes every 5 seconds.
 
 Every endpoint, with its body and the role it needs, is in [docs/API.md](docs/API.md).
-Basic auth is off unless both `PACKETEER_HTTP_USER` and `PACKETEER_HTTP_PASSWORD` are set. Setting only one refuses to start. Set both when `http.listen` is not loopback. The password is not read from the config file and is not written to the log.
+Sign-in (`auth`) is on unless `auth.enabled: false` is written or both `PACKETEER_HTTP_USER` and `PACKETEER_HTTP_PASSWORD` are set; those two keep the single basic-auth account. Setting only one of them refuses to start. The password is not read from the config file and is not written to the log.
 
-For more than one person, turn on `auth` (#32): users with roles (`viewer`, `operator`, `admin`) kept in the storage plugin, API tokens for scripts and Prometheus, an audit log of every change (stored, on `/api/audit`, and sent to the notifiers as `audit.recorded`), optional OIDC single sign-on, and `http.allow_from` to restrict client addresses. The first admin comes from `PACKETEER_ADMIN_PASSWORD`. Guide: [docs/auth.md](docs/auth.md). Rollback: `auth.enabled: false` and restart.
+`auth` (#32, on by default since #328) gives users with roles (`viewer`, `operator`, `admin`) kept in the storage plugin, API tokens for scripts and Prometheus, an audit log of every change (stored, on `/api/audit`, and sent to the notifiers as `audit.recorded`), optional OIDC single sign-on, and `http.allow_from` to restrict client addresses. The first admin comes from `PACKETEER_ADMIN_PASSWORD`, or a generated password that must be changed at first sign-in. Guide: [docs/auth.md](docs/auth.md). Rollback: `auth.enabled: false` and restart; the log then warns and the UI shows a banner.
 
 The Prometheus metric names are listed in [docs/API.md](docs/API.md#metrics).
 
-Scrape `http://127.0.0.1:8080/metrics` on the host.
+Scrape `http://127.0.0.1:8080/metrics` on the host with an API token (`Authorization: Bearer`, [docs/auth.md](docs/auth.md#api-tokens)) or the basic-auth account.
 
 `PACKETEER_LOG_LEVEL=debug` adds detail. `log.format: json` or `PACKETEER_LOG_FORMAT=json` switches the log to JSON.
 

@@ -178,7 +178,8 @@ CREATE TABLE IF NOT EXISTS users (
 	password_hash TEXT NOT NULL,
 	disabled INTEGER NOT NULL,
 	created_ms INTEGER NOT NULL,
-	updated_ms INTEGER NOT NULL
+	updated_ms INTEGER NOT NULL,
+	must_change INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS api_tokens (
 	id TEXT PRIMARY KEY,
@@ -235,6 +236,16 @@ CREATE TABLE IF NOT EXISTS usage_samples (
 CREATE INDEX IF NOT EXISTS usage_samples_period_end ON usage_samples (period_end_ms);
 `
 
+// addMustChange adds users.must_change to a database created before #328.
+func addMustChange(ctx context.Context, db *sql.DB) error {
+	var n int
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM pragma_table_info('users') WHERE name = 'must_change'`).Scan(&n); err != nil || n > 0 {
+		return err
+	}
+	_, err := db.ExecContext(ctx, `ALTER TABLE users ADD COLUMN must_change INTEGER NOT NULL DEFAULT 0`)
+	return err
+}
+
 // Start opens (or creates) the database and starts the daily prune.
 func (s *Store) Start(ctx context.Context) error {
 	if err := os.MkdirAll(filepath.Dir(s.path), 0o750); err != nil {
@@ -246,6 +257,10 @@ func (s *Store) Start(ctx context.Context) error {
 	}
 	db.SetMaxOpenConns(1)
 	if _, err := db.ExecContext(ctx, schema+herdSchema); err != nil {
+		_ = db.Close()
+		return fmt.Errorf("open %s: %w", s.path, err)
+	}
+	if err := addMustChange(ctx, db); err != nil {
 		_ = db.Close()
 		return fmt.Errorf("open %s: %w", s.path, err)
 	}

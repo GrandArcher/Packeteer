@@ -31,7 +31,7 @@ func TestRunExampleConfig(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("exit code %d, stderr: %s", code, errOut.String())
 	}
-	for _, want := range []string{"mode: observe", "transit-a", "transit-b", "no BGP", "tcp", "http: 127.0.0.1:8080", "http auth: off", "log: info text"} {
+	for _, want := range []string{"mode: observe", "transit-a", "transit-b", "no BGP", "tcp", "http: 127.0.0.1:8080", "http auth: rbac", "log: info text"} {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("stdout missing %q:\n%s", want, out.String())
 		}

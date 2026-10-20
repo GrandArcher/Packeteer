@@ -659,3 +659,31 @@ http: {listen: ""}
 		t.Fatal("a refused reload changed the running config")
 	}
 }
+
+// A config with no auth block runs with the sign-in default applied. A
+// reload of the same file must see no change, not "changed auth" (#328).
+func TestReloadKeepsSignInDefault(t *testing.T) {
+	yaml := strings.NewReplacer("mode: inject", "mode: observe", `http: {listen: ""}`, `http: {listen: "127.0.0.1:8080"}`).Replace(reloadBase)
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte(yaml), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, httpUser := range []string{"", "ops"} {
+		cfg, err := config.Load(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		cfg.DefaultAuth(httpUser != "")
+		if on := cfg.Auth != nil && cfg.Auth.Enabled != nil && *cfg.Auth.Enabled; on != (httpUser == "") {
+			t.Fatalf("httpUser %q: auth default on = %v", httpUser, on)
+		}
+		rl := &reloader{path: path, getenv: noEnv, httpUser: httpUser, log: slog.New(slog.DiscardHandler), cur: cfg}
+		applied, refused, fatal := rl.reload(context.Background())
+		if refused != nil || fatal != nil || len(applied) != 0 {
+			t.Fatalf("httpUser %q: applied %v refused %v fatal %v", httpUser, applied, refused, fatal)
+		}
+		if httpUser == "" && (rl.cur == cfg || rl.cur.Storage == nil || rl.cur.Storage.Type != "sqlite") {
+			t.Fatalf("reloaded config lost the default: %+v", rl.cur.Storage)
+		}
+	}
+}

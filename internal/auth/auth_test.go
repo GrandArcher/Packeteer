@@ -260,10 +260,10 @@ func TestTokens(t *testing.T) {
 func TestUsersAndLastAdmin(t *testing.T) {
 	s, _, _ := newSvc(t, nil)
 	ctx := context.Background()
-	if ok, err := s.Bootstrap(ctx, "", "bootstrap-password"); !ok || err != nil {
+	if ok, err := s.Bootstrap(ctx, "", "bootstrap-password", false); !ok || err != nil {
 		t.Fatalf("bootstrap: %v %v", ok, err)
 	}
-	if ok, err := s.Bootstrap(ctx, "", "another-password"); ok || err != nil {
+	if ok, err := s.Bootstrap(ctx, "", "another-password", false); ok || err != nil {
 		t.Fatalf("bootstrap twice: %v %v", ok, err)
 	}
 	if _, err := s.Authenticate(req("192.0.2.5:1", basic("admin", "bootstrap-password"))); err != nil {
@@ -644,5 +644,104 @@ func TestAuditor(t *testing.T) {
 	nilA.Record(context.Background(), plugin.AuditRecord{})
 	if _, err := NewAuditor(nil, nil, nil).Query(context.Background(), plugin.AuditQuery{}); !errors.Is(err, ErrNoAuditStore) {
 		t.Fatalf("no store: %v", err)
+	}
+}
+
+// TestChangePassword covers the self-service change and the forced first
+// change (#328): the current password is required and counts toward the
+// lockout, an admin's reset also lifts the flag, deleting the user ends
+// the generated password, an SSO account has no local password, and the
+// generated password is random and acceptable.
+func TestChangePassword(t *testing.T) {
+	var done []string
+	st := authtest.New()
+	c := &clock{t: time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)}
+	s, err := New(Options{Users: st, Now: c.now, OnGeneratedGone: func(u string) { done = append(done, u) }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	gen := GeneratePassword()
+	if gen == GeneratePassword() || CheckPassword(gen) != nil {
+		t.Fatalf("generated password %q", gen)
+	}
+	if ok, err := s.Bootstrap(ctx, "first", gen, true); !ok || err != nil {
+		t.Fatal(ok, err)
+	}
+	p, err := s.Authenticate(req("192.0.2.5:1", basic("first", gen)))
+	if err != nil || !p.MustChange {
+		t.Fatalf("generated admin: %+v %v", p, err)
+	}
+	post := func(remote string) *http.Request {
+		r := httptest.NewRequest(http.MethodPost, "/api/account/password", nil)
+		r.RemoteAddr = remote
+		return r
+	}
+	w := httptest.NewRecorder()
+	if err := s.ChangePassword(w, post("192.0.2.5:1"), p, "wrong-current-pw", "a-new-long-password"); !errors.Is(err, ErrForbidden) {
+		t.Fatalf("wrong current: %v", err)
+	}
+	if err := s.ChangePassword(w, post("192.0.2.5:1"), p, gen, "a-new-long-password"); err != nil {
+		t.Fatal(err)
+	}
+	if len(done) != 1 || done[0] != "first" {
+		t.Fatalf("callback: %v", done)
+	}
+	p, err = s.Authenticate(req("192.0.2.5:1", basic("first", "a-new-long-password")))
+	if err != nil || p.MustChange {
+		t.Fatalf("after the change: %+v %v", p, err)
+	}
+	if err := s.ChangePassword(w, post("192.0.2.5:1"), p, "a-new-long-password", "another-long-password"); err != nil || len(done) != 1 {
+		t.Fatalf("a later change is not a first change: %v %v", err, done)
+	}
+
+	// Ten wrong current passwords lock the address out, like sign-in.
+	const ip = "198.51.100.7:4000"
+	for i := 0; i < failLimit; i++ {
+		_ = s.ChangePassword(w, post(ip), p, "wrong-current-pw", "yet-another-long-pw")
+	}
+	if err := s.ChangePassword(w, post(ip), p, "another-long-password", "yet-another-long-pw"); !errors.Is(err, ErrThrottled) {
+		t.Fatalf("lockout: %v", err)
+	}
+
+	// An admin setting a password for a must-change user lifts the flag too.
+	if _, err := s.createUser(ctx, "second", plugin.RoleViewer, "temporary-password", true); err != nil {
+		t.Fatal(err)
+	}
+	pw := "set-by-an-admin-pw"
+	if _, err := s.UpdateUser(ctx, "second", UserUpdate{Password: &pw}); err != nil {
+		t.Fatal(err)
+	}
+	if u, _, _ := st.User(ctx, "second"); u.MustChange {
+		t.Fatal("admin reset kept the flag")
+	}
+	if len(done) != 2 || done[1] != "second" {
+		t.Fatalf("callback after reset: %v", done)
+	}
+
+	// Deleting a must-change user ends its generated password too.
+	if pending, err := s.ChangePending(ctx); pending || err != nil {
+		t.Fatalf("pending with no must-change user: %v %v", pending, err)
+	}
+	if _, err := s.createUser(ctx, "third", plugin.RoleViewer, "temporary-password", true); err != nil {
+		t.Fatal(err)
+	}
+	if pending, err := s.ChangePending(ctx); !pending || err != nil {
+		t.Fatalf("pending with a must-change user: %v %v", pending, err)
+	}
+	if err := s.DeleteUser(ctx, "third"); err != nil {
+		t.Fatal(err)
+	}
+	if len(done) != 3 || done[2] != "third" {
+		t.Fatalf("callback after delete: %v", done)
+	}
+	if err := s.DeleteUser(ctx, "second"); err != nil || len(done) != 3 {
+		t.Fatalf("delete of a user without a generated password: %v %v", err, done)
+	}
+
+	// An SSO account has nothing to change.
+	_ = st.PutUser(ctx, plugin.User{Name: "idp", Role: plugin.RoleViewer, Source: plugin.UserSSO})
+	if err := s.ChangePassword(w, post("192.0.2.9:1"), Principal{User: "idp"}, "x", "a-new-long-password"); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("sso account: %v", err)
 	}
 }

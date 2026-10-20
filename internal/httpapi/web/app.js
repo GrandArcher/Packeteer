@@ -643,6 +643,7 @@ function renderHeadline(o) {
 
 function renderOverview(o) {
   renderBanner(o.mode);
+  if (typeof shellRenderAuthBanner === "function") shellRenderAuthBanner(o.auth);
   renderHeadline(o);
   renderTiles(o);
   renderSetup(o);

@@ -101,6 +101,8 @@ type Overview struct {
 	Setup    []Hint         `json:"setup"`
 	// System counts the System page's components by state (#184).
 	System SystemSummary `json:"system"`
+	// Auth is "rbac", "basic", or "off". The UI warns on off (#328).
+	Auth string `json:"auth"`
 }
 
 // OverviewCounts are the headline numbers.
@@ -147,6 +149,7 @@ func (s *Server) overview() Overview {
 	}
 	out := BuildOverview(snap, *s.setup.Load(), features)
 	out.System = s.system(snap).Summary
+	out.Auth = s.authMode()
 	return out
 }
 

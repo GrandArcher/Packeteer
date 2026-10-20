@@ -48,3 +48,7 @@ probers:
       file: /etc/packeteer/probes/state.yaml
 announcer:
   type: gobgp
+
+# Lab only: no sign-in, so the e2e scripts can read the API (#328).
+auth:
+  enabled: false
