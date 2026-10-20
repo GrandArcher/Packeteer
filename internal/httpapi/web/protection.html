@@ -60,7 +60,7 @@
   <section id="mitigation-section" hidden>
     <h2>Threat mitigation <span id="mit-badge" class="badge mode-unknown">…</span></h2>
     <p id="mit-badge-text" class="tag"></p>
-    <p class="tag">RTBH, redirect, and FlowSpec rules and their recent changes. A rule is added or removed through <code>/api/mitigations</code> (operator role, audited). The controller still checks the mitigation allowlist, the rule cap, the TTL, and the learned RIB. The mitigations report has the stored history.</p>
+    <p class="tag">RTBH, redirect, and FlowSpec rules and their recent changes. A rule is added or removed through <code>/api/mitigations</code> (operator role, audited). The controller still checks the mitigation allowlist, the rule cap, the TTL, the learned RIB, and the mode: only <code>inject</code> announces, and only a prefix in the learned RIB. The mitigations report has the stored history.</p>
     <form id="mit-form" class="mit-form" hidden autocomplete="off" aria-labelledby="mit-form-title">
       <h3 id="mit-form-title">Add a rule</h3>
       <p id="mit-form-note" class="tag"></p>

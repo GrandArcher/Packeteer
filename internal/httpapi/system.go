@@ -263,6 +263,9 @@ func bgpRows(snap Snapshot) []Component {
 	var rows []Component
 	for _, p := range snap.Peers {
 		label, connecting := bgpWords(p.State, p.Established)
+		if p.State != "" {
+			label += " (" + p.State + ")"
+		}
 		c := Component{Kind: KindBGP, Name: p.Address, State: StateOK, Since: ptrTime(p.Since), Detail: label}
 		if p.Description != "" {
 			c.Detail = p.Description + ", " + label
@@ -282,10 +285,11 @@ func bgpRows(snap Snapshot) []Component {
 	return rows
 }
 
-// bgpConnecting names the BGP states in which the TCP or OPEN handshake is
-// still running. Packeteer says "Connecting (Active)" for them, since
-// Active alone reads as working.
-var bgpConnecting = map[string]string{"CONNECT": "Connect", "ACTIVE": "Active", "OPENSENT": "OpenSent", "OPENCONFIRM": "OpenConfirm"}
+// bgpConnecting lists the BGP states in which the TCP or OPEN handshake is
+// still running. Packeteer says "Connecting" for them, since Active alone
+// reads as working. web/shell.js keeps the same list (BGP_CONNECTING);
+// TestBGPConnectingMatchesShell keeps the two in step.
+var bgpConnecting = map[string]bool{"CONNECT": true, "ACTIVE": true, "OPENSENT": true, "OPENCONFIRM": true}
 
 // bgpWords is the label a person reads for a session state (#351), and
 // whether the session is still connecting.
@@ -293,8 +297,8 @@ func bgpWords(state string, established bool) (label string, connecting bool) {
 	if established {
 		return "Up", false
 	}
-	if word, ok := bgpConnecting[strings.ToUpper(state)]; ok {
-		return "Connecting (" + word + ")", true
+	if bgpConnecting[strings.ToUpper(state)] {
+		return "Connecting", true
 	}
 	return "Down", false
 }

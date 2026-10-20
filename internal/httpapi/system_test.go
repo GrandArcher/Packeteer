@@ -183,15 +183,15 @@ func TestBuildSystemHAFederationAndBGP(t *testing.T) {
 		{Name: "pop-c", Error: `Get "https://pop-c.example.net/fed?token=zzz": EOF`},
 	}}
 	got := BuildSystem(snap, SystemFacts{}, ha, fed)
-	if c := find(t, got, KindBGP, "192.0.2.254"); c.State != StateDegraded || c.Detail != "Connecting (Active)" || strings.Contains(c.Error, "ACTIVE") || !strings.Contains(c.Error, "has not answered") {
+	if c := find(t, got, KindBGP, "192.0.2.254"); c.State != StateDegraded || c.Detail != "Connecting (ACTIVE)" || strings.Contains(c.Error, "ACTIVE") || !strings.Contains(c.Error, "has not answered") {
 		t.Errorf("a session in Active is connecting, not down: %+v", c)
 	}
 	snap.Peers = []Peer{{Address: "192.0.2.254", State: "IDLE"}, {Address: "192.0.2.253", State: "ESTABLISHED", Established: true}}
 	idle := BuildSystem(snap, SystemFacts{}, nil, nil)
-	if c := find(t, idle, KindBGP, "192.0.2.254"); c.State != StateDown || c.Detail != "Down" {
+	if c := find(t, idle, KindBGP, "192.0.2.254"); c.State != StateDown || c.Detail != "Down (IDLE)" {
 		t.Errorf("idle session = %+v", c)
 	}
-	if c := find(t, idle, KindBGP, "192.0.2.253"); c.State != StateOK || c.Detail != "Up" || c.Error != "" {
+	if c := find(t, idle, KindBGP, "192.0.2.253"); c.State != StateOK || c.Detail != "Up (ESTABLISHED)" || c.Error != "" {
 		t.Errorf("established session = %+v", c)
 	}
 	if c := find(t, got, KindHA, "a"); c.State != StateDegraded || c.Since == nil {

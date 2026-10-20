@@ -42,7 +42,7 @@ func TestPagesCarryOneDisclaimer(t *testing.T) {
 
 // #351: labels people read use plain words; the config key is a tooltip.
 func TestNoJargonLabels(t *testing.T) {
-	banned := []string{"Score gain", "Native exit", "(max_improvements)", "(cc_disable)", "Improvement cap",
+	banned := []string{"Score gain", "score gain", "Native exit", "(max_improvements)", "(cc_disable)", "Improvement cap",
 		"Loss threshold", "Latency threshold", "RTT threshold", "Probe source", `"in RIB"`, `"not in RIB"`}
 	entries, err := fs.ReadDir(webFS, "web")
 	if err != nil {
@@ -132,5 +132,26 @@ func TestSetupHintsPointAtSettingsAnchors(t *testing.T) {
 	}
 	if h := byID["first-round"]; h.Fix != "" {
 		t.Errorf("a hint with nothing to edit has a fix: %+v", h)
+	}
+}
+
+// #351: the server and the browser each word the BGP handshake states; the
+// two lists must name the same states.
+func TestBGPConnectingMatchesShell(t *testing.T) {
+	m := regexp.MustCompile(`var BGP_CONNECTING = \{([^}]*)\}`).FindStringSubmatch(mustWeb(t, "web/shell.js"))
+	if m == nil {
+		t.Fatal("shell.js has no BGP_CONNECTING")
+	}
+	js := map[string]bool{}
+	for _, k := range regexp.MustCompile(`(\w+):`).FindAllStringSubmatch(m[1], -1) {
+		js[strings.ToUpper(k[1])] = true
+	}
+	if len(js) != len(bgpConnecting) {
+		t.Errorf("shell.js has %v, system.go has %v", js, bgpConnecting)
+	}
+	for s := range bgpConnecting {
+		if !js[s] {
+			t.Errorf("system.go treats %s as connecting, shell.js does not", s)
+		}
 	}
 }
