@@ -90,7 +90,22 @@ Issue every instance's certificate from one CA, with the instance name as CN or 
 - a commit move driven by the other POP's usage, and its release;
 - a prefix only the other POP learned is never announced;
 - the other instance never steers back;
+- a cut federation link: the steer is withdrawn within the staleness limit, neither POP steers or flaps while cut off, and one re-steer returns after the heal;
 - SIGTERM and SIGKILL.
+
+## When sites lose contact
+
+If the federation link is cut (network partition, a dead peer, expired certificates), each instance keeps running alone:
+
+- The peer's last snapshot is used until it is older than `max_age` (default 3x `poll_interval`), then the peer is stale. `/api/federation` shows `fresh: false`, with the last error.
+- At the next decision round after that, every provider in the peer's domain is unusable. Steers onto it are retired and withdrawn, and the prefix goes back to the local exits. The withdraw is bounded by `max_age` plus one decision round, not by `improvement_ttl`.
+- The global commit is not complete, so each local provider's own commit applies, as if the instance ran standalone.
+- Each instance's own providers, probes, and local steers are not touched. A prefix is steered to the other POP only while that POP's fresh data says its own traffic for it exits there, so cutting the link cannot leave both POPs pointing at each other.
+- Nothing is announced on the strength of a stale peer, so a cut adds no new route toward the other POP.
+
+When contact returns, the peer is fresh again at its next good poll. The usual hold time and thresholds then apply, so a steer through the other POP comes back once, not as a flap. Choose `max_age` longer than a few polls so one lost poll does not retire a steer, and shorter than the time you accept traffic going to a POP that is no longer reachable. If a peer is down for good, remove it from `federation.config.peers` and its providers from `providers`.
+
+`lab/e2e-multipop.sh` proves this with both POPs running (step 6 in the list above): it blackholes the route between the two instances, then checks the withdraw time, the stale and incomplete views, 20s with no steer and nothing from the second POP, and exactly one re-steer after the heal. `TestFederationLinkCut` in `cmd/controller` runs the same cut and heal in process.
 
 ## Rollback
 
