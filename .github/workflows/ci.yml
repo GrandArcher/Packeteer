@@ -191,6 +191,8 @@ jobs:
           test "$(code "$base/metrics")" = 401
           test "$(code "$base/")" = 302
           file=/var/lib/packeteer/first-run-admin-password
+          # healthz can answer before the password file is written; wait for it.
+          for _ in $(seq 1 20); do docker exec pksec test -s "$file" && break; sleep 1; done
           pw="$(docker exec pksec sed -n 's/^password: //p' "$file")"
           test -n "$pw"
           test "$(docker exec pksec stat -c %a "$file")" = 600
