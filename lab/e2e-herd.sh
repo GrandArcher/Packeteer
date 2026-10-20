@@ -78,6 +78,8 @@ bgp:
       description: edge
 storage:
   type: sqlite
+auth:
+  enabled: false
 sources:
   - type: static
     config:

@@ -33,6 +33,10 @@ func CheckPassword(pw string) error {
 	return nil
 }
 
+// GeneratePassword returns a random password of 24 URL-safe characters
+// (144 bits).
+func GeneratePassword() string { return randomToken()[:24] }
+
 // HashPassword returns "pbkdf2-sha256$<iterations>$<salt>$<key>" with a
 // random 16-byte salt.
 func HashPassword(pw string) (string, error) {

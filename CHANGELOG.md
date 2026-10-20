@@ -4,6 +4,10 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 
 ## [Unreleased]
 
+### Changed
+
+- Sign-in is on by default, upgrades included, so `/metrics` without a token gets 401; opt out with `auth.enabled: false` (#328).
+
 ### Added
 
 - Herd hub: `herd.hub` fetches a public list of signed member entries as seed peers and verifies each; `herd entry` prints yours, `herd hub-check` checks a hub repo; release snapshot fallback (#261).

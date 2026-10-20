@@ -20,6 +20,14 @@
     <p id="signin-error" class="bad" role="alert" hidden></p>
     <button type="submit" id="signin-submit" class="primary">Sign in</button>
   </form>
+  <form id="change-form" class="signin-form" autocomplete="off" hidden>
+    <p id="change-note">This account must choose a new password before it can do anything else.</p>
+    <label>Current password <input id="change-current" name="current" type="password" autocomplete="current-password" required></label>
+    <label>New password (12 or more characters) <input id="change-new" name="new" type="password" autocomplete="new-password" minlength="12" required></label>
+    <label>New password again <input id="change-again" name="again" type="password" autocomplete="new-password" minlength="12" required></label>
+    <p id="change-error" class="bad" role="alert" hidden></p>
+    <button type="submit" id="change-submit" class="primary">Change password</button>
+  </form>
   <p id="signin-sso" hidden><a href="/auth/login">Sign in with single sign-on</a></p>
   <p class="tag">Scripts and API clients keep using basic auth or an API token.</p>
 </main>
