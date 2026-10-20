@@ -544,6 +544,11 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 			log.Warn("http.config_editor is on but neither auth nor basic auth is: the editor stays off")
 		}
 	}
+	var fedPush httpapi.FederationPusher
+	if fed != nil && editorAPI != nil {
+		fed.editor = editorAPI
+		fedPush = fed.push
+	}
 	var sysEngine atomic.Pointer[probe.Engine]
 	var httpSrv *httpapi.Server
 	if addr := cfg.HTTPListen(); addr != "" {
@@ -552,7 +557,7 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 			Addr: addr, User: httpUser, Password: httpPass, Snapshot: col.Snapshot, Logger: log,
 			Auth: authSvc, Audit: audit, Events: evlog, AllowFrom: cfg.HTTPAllowFrom(),
 			Maintenance: maint, Reports: reports, Tools: tools, Inbound: inboundStatus, Mitigation: mitAPI, Anomaly: anomAPI, Leaks: leakAPI,
-			Federation: fed.status, HA: haStatus,
+			Federation: fed.status, FederationPush: fedPush, HA: haStatus,
 			ConfigEditor: editorAPI, Dashboards: dashboardStore(plugins), Subscriptions: subsAPI,
 			Setup: setupInfo(cfg, plugins), Upgrade: upgradeAPI, Linkouts: linkout.New(cfg.Linkouts),
 			System: systemFacts(plugins, &sysEngine, health), Usage: usageReader(plugins),
@@ -860,16 +865,20 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 		rl.rib = view
 	}
 	var reloadFailed atomic.Bool
-	if httpSrv != nil {
-		httpSrv.SetOnlineApply(onlineApplier(ctx, rl.reload, func(c context.Context, applied []string, refused, fatal error) {
-			auditReload(c, audit, path, "PUT /api/config", applied, refused, fatal)
+	applyOnline := func(how string) httpapi.OnlineApplier {
+		return onlineApplier(ctx, rl.reload, func(c context.Context, applied []string, refused, fatal error) {
+			auditReload(c, audit, path, how, applied, refused, fatal)
 			if fatal != nil {
 				log.Error("config reload failed after changing the BGP speaker; stopping (Packeteer routes are withdrawn)", "err", fatal)
 				reloadFailed.Store(true)
 				stopDaemon()
 			}
-		}))
+		})
 	}
+	if httpSrv != nil {
+		httpSrv.SetOnlineApply(applyOnline("PUT /api/config"))
+	}
+	fed.acceptSettings(applyOnline("federation push"), audit)
 	go func() {
 		for {
 			select {

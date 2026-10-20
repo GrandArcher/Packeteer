@@ -7,6 +7,7 @@ import (
 
 	"github.com/GrandArcher/Packeteer/internal/config"
 	"github.com/GrandArcher/Packeteer/internal/federation"
+	"github.com/GrandArcher/Packeteer/internal/httpapi"
 	"github.com/GrandArcher/Packeteer/internal/pluginhost"
 	"github.com/GrandArcher/Packeteer/internal/policy"
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
@@ -31,6 +32,10 @@ type fedState struct {
 	// ixp builds this site's fabric health for the snapshot (#167). Nil
 	// outside IXP mode.
 	ixp func() *plugin.FederatedIXP
+
+	// editor is the config editor that settings pushes read and write
+	// (#137). Nil when http.config_editor is off.
+	editor httpapi.ConfigEditor
 
 	mu      sync.Mutex
 	local   *plugin.InstanceSnapshot

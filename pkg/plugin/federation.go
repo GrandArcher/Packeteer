@@ -1,6 +1,7 @@
 package plugin
 
 import (
+	"context"
 	"net/netip"
 	"time"
 )
@@ -122,6 +123,34 @@ type PeerState struct {
 	Snapshot InstanceSnapshot `json:"snapshot"`
 }
 
+// SettingsPush is a config push to one peer (#137): the YAML of each
+// top-level config section, keyed by section name. Empty YAML resets the
+// section to its default. The receiver decides which sections it accepts.
+type SettingsPush struct {
+	Sections map[string]string `json:"sections"`
+}
+
+// Outcomes of a settings push on the receiving instance.
+const (
+	SettingsApplied   = "applied"
+	SettingsUnchanged = "unchanged"
+	SettingsRefused   = "refused"
+	SettingsFailed    = "failed"
+)
+
+// SettingsResult is what a peer did with a push. Applied lists the config
+// keys now running. Errors say why a push was refused or failed.
+type SettingsResult struct {
+	Status  string   `json:"status"`
+	Applied []string `json:"applied,omitempty"`
+	Errors  []string `json:"errors,omitempty"`
+}
+
+// SettingsHandler validates and applies a push from the instance named
+// from, which the transport has already authenticated. It runs the same
+// checks as a local config write.
+type SettingsHandler func(ctx context.Context, from string, req SettingsPush) SettingsResult
+
 // Federation is the instance-to-instance transport. Publish must not
 // block on I/O; Peers returns a copy. A federation plugin must not
 // announce routes or change decisions.
@@ -132,6 +161,13 @@ type Federation interface {
 	// Peers returns the latest state of every configured peer, in config
 	// order, with Fresh evaluated at now.
 	Peers(now time.Time) []PeerState
+	// Push sends a settings push to the configured peer and returns its
+	// result. The error is a transport failure; a peer that declines
+	// answers with a SettingsRefused result.
+	Push(ctx context.Context, peer string, req SettingsPush) (SettingsResult, error)
+	// SetSettingsHandler installs the handler for pushes from peers. Until
+	// it is set, and for a sender not allowed to push, a push is refused.
+	SetSettingsHandler(h SettingsHandler)
 }
 
 // ShiftSnapshot converts every time in s from the peer clock to the

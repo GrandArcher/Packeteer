@@ -6,6 +6,7 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 
 ### Added
 
+- Federation: an admin pushes `thresholds` or `policies` to every peer over mTLS (`POST /api/federation/push`, dashboard POPs); each peer validates and applies them online, refuses anything else, audits both sides (#137).
 - Multi-POP: lab phase and unit test for a cut federation link (stale peer pruned after `max_age`, no steer or flapping, clean re-sync); behavior documented in docs/multi-pop.md (#308).
 
 ### Fixed
