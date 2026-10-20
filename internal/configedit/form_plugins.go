@@ -137,7 +137,6 @@ func isSecretKey(k, v string) bool {
 }
 
 type pluginRef struct {
-	list string
 	node *yaml.Node
 }
 
@@ -152,12 +151,12 @@ func pluginRefs(root *yaml.Node) map[string]pluginRef {
 		}
 		for i, item := range seq.Content {
 			if item.Kind == yaml.MappingNode && !slices.Contains(l.skip, scalar(item, "type")) {
-				refs[l.key+"/"+strconv.Itoa(i)] = pluginRef{l.key, item}
+				refs[l.key+"/"+strconv.Itoa(i)] = pluginRef{item}
 			}
 		}
 	}
 	if n, ok := mappingChild(root, "storage"); ok && scalar(n, "type") != "" {
-		refs["storage/0"] = pluginRef{"storage", n}
+		refs["storage/0"] = pluginRef{n}
 	}
 	return refs
 }
