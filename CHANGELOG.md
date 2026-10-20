@@ -4,9 +4,9 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 
 ## [Unreleased]
 
-### Changed
+## [0.8.0] - Unreleased
 
-- Sign-in is on by default, upgrades included, so `/metrics` without a token gets 401; opt out with `auth.enabled: false` (#328).
+Internet exchanges and shared measurements: IXP observe-only mode, RPKI labels, probe multiplexing, settings forms, the opt-in herd, and sign-in on by default.
 
 ### Added
 
@@ -36,6 +36,7 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 
 ### Changed
 
+- Sign-in is on by default, upgrades included, so `/metrics` without a token gets 401; opt out with `auth.enabled: false` (#328).
 - Build and dependencies: Docker build image golang 1.27-alpine, go-jose 4.1.6, maxminddb 2.8.0 (#355, #357, #358).
 
 ### Fixed
@@ -62,8 +63,9 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 
 ### Upgrade notes
 
+- Sign-in is now on for every install, upgrades included: tokenless scrapers and API clients (`/metrics`, `/api/*`) get 401 until given a token; `auth: {enabled: false}` turns it off (#328).
 - No config key was removed or renamed since 0.7.0.
-- The probe-path check is on by default (#150). Turn it off per provider with `path_check: false`, or for all with `probe.path_check.enabled: false`.
+- The probe-path check is on by default; opt out per provider with `path_check: false` or for all with `probe.path_check.enabled: false` (#150).
 - `provider.down`, `provider.degraded`, and `bgp.session_not_established` events reach every notifier that has no `events` filter (#347, #343).
 - `herd`, `ixp`, `rpki`, and `exchanges[].port` are off unless you add the block (the default stays `mode: observe`).
 
@@ -288,6 +290,7 @@ First release. An observe-first BGP path performance controller in one container
 - RouterOS, Junos, and IOS snippets are documentation. The automated BGP test is the FRR lab.
 
 [Unreleased]: https://github.com/GrandArcher/Packeteer/compare/v0.7.0...HEAD
+[0.8.0]: https://github.com/GrandArcher/Packeteer/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/GrandArcher/Packeteer/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/GrandArcher/Packeteer/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/GrandArcher/Packeteer/compare/v0.4.0...v0.5.0
