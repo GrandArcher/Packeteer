@@ -53,7 +53,7 @@ main { padding: 16px 20px 32px; max-width: 1100px; }
 
 section { margin-bottom: 28px; }
 
-h2 { font-size: 1.05rem; margin: 0 0 8px; }
+h1, h2 { font-size: 1.05rem; margin: 0 0 8px; }
 
 h3 { font-size: 1rem; margin: 0; }
 
@@ -473,3 +473,21 @@ td.num { text-align: right; }
 .savebar [hidden] { display: none; }
 .savebar #bar-msg { flex: 1; min-width: 12rem; margin: 0; }
 .savebar[data-state="form"] { border-top-color: var(--diff); }
+
+/* Keyboard focus (#353). One mid-tone blue reaches 3:1 against the dark nav
+   (#12263a), the page (#f3f5f7), and white (WCAG 1.4.11). The nav ring sits
+   inside the link so the nav edge does not clip it. */
+:focus-visible { outline: 3px solid #2f80ed; outline-offset: 2px; }
+.sidenav a:focus-visible { outline-offset: -3px; }
+main:focus { outline: none; }
+.skip-link {
+  position: absolute;
+  left: 8px;
+  top: -100px;
+  z-index: 100;
+  padding: 8px 14px;
+  background: #fff;
+  color: var(--head);
+  font-weight: 600;
+}
+.skip-link:focus { top: 8px; }

@@ -10,6 +10,7 @@
 <link rel="icon" href="/logo.png" type="image/png" sizes="128x128">
 </head>
 <body data-page="commit" data-live="app">
+<a class="skip-link" href="#main">Skip to content</a>
 <div id="banner" class="banner" role="status" hidden></div>
 <div id="conn" class="conn" role="alert" hidden></div>
 <div class="app">
@@ -48,9 +49,9 @@
   </div>
   <button type="button" id="refresh">Refresh</button>
 </header>
-<main>
+<main id="main" tabindex="-1">
   <section>
-    <h2>Commit &amp; Cost</h2>
+    <h1>Commit &amp; Cost</h1>
     <p class="tag">Billable usage against commit for each provider that has a telemetry binding: the samples, the running 95th of the billing period, the commit, and where commit control moved traffic. In observe a marker is a recommended move; only a move made in inject was announced. Read-only: nothing here announces a route. Set commit up in <a href="/settings.html#commit-setup">Settings</a>.</p>
     <div class="controls">
       <label>Range <select id="commit-days">

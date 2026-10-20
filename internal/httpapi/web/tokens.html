@@ -10,6 +10,7 @@
 <link rel="icon" href="/logo.png" type="image/png" sizes="128x128">
 </head>
 <body data-page="tokens">
+<a class="skip-link" href="#main">Skip to content</a>
 <div id="banner" class="banner" role="status" hidden></div>
 <div id="conn" class="conn" role="alert" hidden></div>
 <div class="app">
@@ -48,9 +49,9 @@
   </div>
   <button type="button" id="refresh">Refresh</button>
 </header>
-<main>
+<main id="main" tabindex="-1">
   <section>
-    <h2>API tokens</h2>
+    <h1>API tokens</h1>
     <p class="tag">Tokens are for scripts: send one as <code>Authorization: Bearer ...</code>. A token has at most the role of the user who made it and follows that user's role. It expires, and it is stored only as a hash. This page uses <code>/api/tokens</code>; the role checks and the audit record are the API's. See docs/auth.md.</p>
     <p id="tokens-off" class="empty" hidden>API tokens need <code>auth.enabled</code> and a <code>storage</code> plugin in the mounted file (docs/auth.md).</p>
     <div id="tokens-on" hidden>
