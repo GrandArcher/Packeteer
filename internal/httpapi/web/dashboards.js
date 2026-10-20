@@ -43,7 +43,7 @@ function titleFor(w) {
   if (w.type === "improvements") return improvementsTitle(dashMode);
   for (var i = 0; i < catalog.length; i++) {
     if (catalog[i].type === w.type) {
-      if (w.type === "report") return catalog[i].title + ": " + w.report;
+      if (w.type === "report") return catalog[i].title + ": " + reportTitle(w.report);
       if (w.type === "timeseries") return catalog[i].title + ": " + bucketLabel(w.bucket || "all");
       return catalog[i].title;
     }

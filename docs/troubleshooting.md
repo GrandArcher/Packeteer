@@ -144,7 +144,7 @@ A probe with high loss that succeeds is a measurement, not an error.
 
 - **Same ASN.** The session is iBGP: `asn` in the config equals the router's ASN, and the router has Packeteer's address as an internal neighbor with that ASN.
 - **Who connects.** By default Packeteer connects out to the router on TCP 179 (`bgp.listen_port: 0`). If the router is configured passive, nobody connects; remove `passive` on the router, or set `bgp.listen_port: 179` and `passive: true` on the neighbor so Packeteer waits. Listening on 179 needs root in the container (it runs as root) and a free port on the host.
-- **Reachability.** From the host: `nc -vz 192.0.2.254 179`. A firewall between them, or a router ACL on 179, keeps the session in `Active`.
+- **Reachability.** From the host: `nc -vz 192.0.2.254 179`. A firewall between them, or a router ACL on 179, keeps the session in `Active`, which the UI shows as "Connecting (Active)" in amber.
 - **Source address.** The router sees the session from the host's address toward it. If the router expects another address, set `local_address` on the neighbor.
 - **Filters do not stop the session.** They stop routes. A session that is up with nothing learned is a filter or an export problem on the router.
 

@@ -156,7 +156,7 @@ function prefixRow(row, body) {
   tr.appendChild(el("td", "num", row.gain ? row.gain.toFixed(2) : "—"));
   tr.appendChild(el("td", "num", row.exit_loss_pct == null ? "—" : fmtPct(row.exit_loss_pct)));
   tr.appendChild(el("td", "num", row.exit_rtt_ms == null ? "—" : fmtMs(row.exit_rtt_ms)));
-  tr.appendChild(el("td", "", row.in_rib ? "in RIB" : "not in RIB"));
+  tr.appendChild(el("td", "", row.in_rib ? "yes" : "no"));
   body.appendChild(tr);
   if (prefixExpanded[row.prefix]) prefixOpen(tr, row, true);
 }
@@ -207,7 +207,7 @@ function renderPrefixes(data) {
     return;
   }
   var labels = exitLabels();
-  var t = table(["More", "Prefix", labels.now, labels.pick, "Score gain", "Loss", "RTT", "RIB"]);
+  var t = table(["More", "Prefix", labels.now, labels.pick, "Expected gain", "Loss", "RTT", "On router"]);
   var keep = {};
   rows.forEach(function (row) {
     prefixRow(row, t.body);

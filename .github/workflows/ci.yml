@@ -298,7 +298,7 @@ jobs:
           bash lab/ui-smoke.sh "$base/tokens.html" 'id="tokens-off" class="empty">' 'It announces nothing.' \
             --absent 'id="tokens-on">'
           bash lab/ui-smoke.sh "$base/settings.html" 'The config editor is off' 'It announces nothing.' \
-            '>Name</span>' '>Probe source</span>' '>Next hop</span>' \
+            '>Name</span>' '>Probe address</span>' '>Next hop</span>' \
             'Version and upgrade' 'Upgrade is off.' 'id="up-check"'
           bash lab/ui-smoke.sh "$base/dashboards.html" 'Custom dashboards' 'Recommended improvements' 'It announces nothing.' \
             --absent 'Active improvements'
@@ -340,7 +340,7 @@ jobs:
             --absent 'Cannot reach' 'Active improvements'
           # The paged list (#183): the default page, a page past the end that
           # falls back to the last page, and a filter that matches nothing.
-          bash lab/ui-smoke.sh "$base/prefixes.html" 'Showing 1–1 of 1 measured prefixes.' 'Page 1 of 1' 'Score gain' --absent 'Cannot reach'
+          bash lab/ui-smoke.sh "$base/prefixes.html" 'Showing 1–1 of 1 measured prefixes.' 'Page 1 of 1' 'Expected gain' --absent 'Cannot reach'
           bash lab/ui-smoke.sh "$base/prefixes.html?page=7&size=25" '127.0.0.1/32' 'Showing 1–1 of 1 measured prefixes.' --absent 'Cannot reach'
           bash lab/ui-smoke.sh "$base/prefixes.html?asn=64500&sort=rtt" 'No prefix matches the filter.' 'Showing 0–0 of 0 matching (1 measured) prefixes.' --absent 'Cannot reach' '127.0.0.1/32'
           curl -fsS "$base/api/prefixes" | jq -e '.total == 1 and .measured == 1 and .limit == 100 and .offset == 0 and (.prefixes | length) == 1 and (.asn_map | length) == 0 and .asn_total == 0'
@@ -528,7 +528,7 @@ jobs:
             'Observe mode: Packeteer measures and recommends. It announces nothing.' \
             --absent 'mode-inject'
           bash lab/ui-smoke.sh http://127.0.0.1:18089/settings.html \
-            '>Name</span>' '>Probe source</span>' '>Next hop</span>' '>Cost</span>' '>Commit</span>' \
+            '>Name</span>' '>Probe address</span>' '>Next hop</span>' '>Cost</span>' '>Commit</span>' \
             'value="lab-a"' 'value="192.0.2.1"' 'value="127.0.0.1"' \
             --absent 'The config editor is off'
           bash lab/ui-smoke.sh http://127.0.0.1:18089/dashboards.html \
@@ -704,12 +704,12 @@ jobs:
           bash lab/ui-smoke.sh http://127.0.0.1:18098/dashboards.html 'class="ts-chart"' 'Before/after graphs: 50% or more better' \
             'Data (5 days)' 'It announces nothing.' --absent 'No before/after data' 'Cannot reach'
           # The prefix page (#179) reads the same seeded history: rollups and
-          # the improvement, worded "recommended" in observe, MED display-only,
+          # the improvement, worded "recommended" in observe, MED for reference only,
           # and a Probe now link that opens the Probe tool for the prefix.
           curl -fsS "${auth[@]}" "$base/api/prefixes/history?prefix=198.51.100.0/24&days=7" | tee /tmp/ph179.json
           jq -e '.enabled and (.days | length == 10) and (.improvements | length == 1) and .improvements[0].provider == "lab-b"' /tmp/ph179.json
           bash lab/ui-smoke.sh http://127.0.0.1:18098/prefix/198.51.100.0/24 '198.51.100.0/24' 'Recommended' 'lab-b over lab-a' \
-            'probe rollup' 'MED is display only' 'href="/troubleshooting.html?tool=probe&amp;target=198.51.100.0%2F24"' 'mode-observe' 'It announces nothing.' \
+            'probe rollup' 'MED is shown for reference' 'href="/troubleshooting.html?tool=probe&amp;target=198.51.100.0%2F24"' 'mode-observe' 'It announces nothing.' \
             --absent 'Announced' 'Cannot reach' 'mode-inject'
           bash lab/ui-smoke.sh 'http://127.0.0.1:18098/troubleshooting.html?tool=probe&target=198.51.100.0/24' 'value="198.51.100.0/24"' 'It announces nothing.'
           # Dashboard widgets (#182). A stored layout from before the width
@@ -898,7 +898,7 @@ jobs:
             'Scorer: commit (was weighted). | Balance in a group: equal. | New SNMP host edge2 at 192.0.2.253, version 2c, community read from the environment variable PACKETEER_SNMP_COMMUNITY.' \
             'case: lab-c percentile separate | lab-d cc_disable true' \
             'renamed: Provider lab-y: enter a commit greater than zero (Mbps). | Provider lab-y: enter the interface name. | step 2 shown: true | lab-y tracked: true' \
-            'lab-d: commit 300 Mbps on edge2 ether2, billing day 5, greater_separate; group pair; precedence 200; cc_disable.' \
+            'lab-d: commit 300 Mbps on edge2 ether2, billing day 5, greater_separate; group pair; precedence 200; left out of commit control.' \
             'yaml: commit scorer true | balance equal true | host edge2 true | env name true | commit 300 true | interface ether2 true | billing day 5 true | precedence 200 true | group pair true | cc_disable kept true | mode observe true | no community true' \
             'validated: Valid · mode observe · changed: providers, scorer, telemetry · restart required' \
             --absent 'Cannot reach' 'mode-inject' 'lab-only-community' 's3cret-community'
@@ -1015,12 +1015,12 @@ jobs:
             'fixture-cause: ?report=improvements&amp;days=30&amp;cause=cost&amp;sort=prefix&amp;order=desc | descending | 192.0.2.0/24 | Showing 1 of 1 rows' \
             'links: /api/reports/improvements?days=30&amp;cause=cost&amp;sort=prefix&amp;order=desc&amp;format=csv /api/reports/improvements?days=30&amp;cause=cost&amp;sort=prefix&amp;order=desc&amp;format=xlsx' \
             'range: from=2020-01-01T03:00:00Z to=2020-01-02T03:00:00Z | No rows match this range and these filters.' \
-            'add: Added improvements to dashboard a-reports.' \
+            'add: Added Improvements to dashboard a-reports.' \
             --absent 'Cannot reach' 'mode-inject'
           # The widget holds the page's query and shows the same rows.
           curl -fsS "${auth[@]}" "$base/api/dashboards" | tee /tmp/dash178.json
-          jq -e '.dashboards[] | select(.name == "a-reports") | .spec.widgets == [{"type": "report", "title": "improvements (cause cost)", "report": "improvements", "days": 30, "query": "cause=cost&sort=prefix&order=desc", "w": 12}]' /tmp/dash178.json
-          bash lab/ui-smoke.sh http://127.0.0.1:18209/dashboards.html 'improvements (cause cost)' '192.0.2.0/24' 'It announces nothing.' --absent 'Cannot reach' '198.51.100.0/24'
+          jq -e '.dashboards[] | select(.name == "a-reports") | .spec.widgets == [{"type": "report", "title": "Improvements (cause cost)", "report": "improvements", "days": 30, "query": "cause=cost&sort=prefix&order=desc", "w": 12}]' /tmp/dash178.json
+          bash lab/ui-smoke.sh http://127.0.0.1:18209/dashboards.html 'Improvements (cause cost)' '192.0.2.0/24' 'It announces nothing.' --absent 'Cannot reach' '198.51.100.0/24'
       - name: UI troubleshooting smoke (#180, #126; looking glass, traceroute, and hostname probe from canned answers, observe)
         run: |
           set -euo pipefail
@@ -1190,6 +1190,63 @@ jobs:
             'lab-a' 'lab-b' --absent 'steered' 'Steered' '>Current<' 'Cannot reach' 'mode-inject'
           bash lab/ui-smoke.sh http://127.0.0.1:18347/events.html 'Recommends moving 198.51.100.0/24 from lab-a to lab-b (not announced, observe mode)' \
             --absent 'steered' 'Cannot reach' 'mode-inject'
+      - name: UI plain language smoke (#351; a session in Active reads Connecting in amber, no jargon labels, editor link in the checklist)
+        run: |
+          set -euo pipefail
+          base=http://127.0.0.1:18351
+          cat > /tmp/ui351.yaml <<'YAML'
+          mode: observe
+          asn: 64512
+          router_id: 192.0.2.10
+          auth: {enabled: false}
+          http:
+            listen: "127.0.0.1:18351"
+          providers:
+            - name: lab-a
+              source_ip: 127.0.0.1
+              next_hop: 192.0.2.1
+          YAML
+          docker run -d --name pkui351 --network host --cap-add NET_RAW --cap-add NET_ADMIN \
+            -v /tmp/ui351.yaml:/etc/packeteer/config.yaml:ro packeteer:ci
+          proxy=""
+          cleanup() {
+            if [ -n "$proxy" ]; then kill "$proxy" 2>/dev/null || true; fi
+            docker stop -t 15 pkui351 >/dev/null || true
+            docker logs pkui351 2>&1 | tail -n 40
+            code="$(docker inspect -f '{{.State.ExitCode}}' pkui351)"
+            docker rm pkui351 >/dev/null || true
+            test "$code" = "0"
+          }
+          trap cleanup EXIT
+          ok=0
+          for _ in $(seq 1 30); do
+            if curl -fsS "$base/healthz" >/dev/null 2>&1; then ok=1; break; fi
+            sleep 1
+          done
+          test "$ok" = 1
+          # A real unreachable neighbor flips between Connect and Active, so
+          # uiproxy answers the overview, providers, prefixes, and improvements
+          # calls with one session in Active and the editor on, as the API
+          # returns them; the page scripts and the mode are the image's. The
+          # Go tests build the same shapes from the API types.
+          go build -o /tmp/uiproxy ./lab/uiproxy
+          /tmp/uiproxy -listen 127.0.0.1:18352 -upstream "$base" \
+            -user lab -password lab-only -fixtures lab/ui-fixtures/plain-language >/tmp/uiproxy351.log 2>&1 &
+          proxy=$!
+          for _ in $(seq 1 20); do
+            curl -fsS http://127.0.0.1:18352/healthz >/dev/null 2>&1 && break
+            sleep 0.2
+          done
+          curl -fsS http://127.0.0.1:18352/healthz >/dev/null
+          bash lab/ui-smoke.sh http://127.0.0.1:18352/providers.html 'mode-observe' \
+            'class="dot degraded" title="BGP state: ACTIVE">Connecting (Active)</span>' \
+            --absent '>ACTIVE<' '>Active<' 'class="dot down"' 'Cannot reach' 'mode-inject'
+          bash lab/ui-smoke.sh http://127.0.0.1:18352/ 'mode-observe' 'data-hint="bgp-down"' 'Fix in Settings' 'href="/settings.html#form-bgp"' \
+            --absent 'Edit the mounted config file' 'href="/api/overview"' 'href="/metrics"' 'probed prefixes in RIB' 'Cannot reach' 'mode-inject'
+          bash lab/ui-smoke.sh http://127.0.0.1:18352/prefixes.html 'mode-observe' 'Expected gain' 'On router' \
+            --absent 'Score gain' 'in RIB' '>RIB<' 'Cannot reach' 'mode-inject'
+          bash lab/ui-smoke.sh http://127.0.0.1:18352/improvements.html 'mode-observe' 'Default route via' 'At most 50 at a time.' \
+            --absent 'Native exit' 'max_improvements)' 'Cannot reach' 'mode-inject'
       - name: UI settings forms smoke (#130, #181, #155, #329; flow, rules, VIP, outage, exchanges, accept a discovered member, wizard flow step, guided inputs, observe)
         run: |
           set -euo pipefail
@@ -1354,7 +1411,7 @@ jobs:
             'VIP' 'value="10s"' 'value="203.0.113.1"' \
             'Outage detection' 'value="4"' 'value="30"' \
             'Exchange 1' 'value="ix-lab"' 'value="203.0.113.0/24"' 'value="ix-peer-a"' 'value="64501"' 'value="203.0.113.11"' 'value="127.0.0.3"' \
-            'value="ix-peer-b"' 'value="64502"' '>Peer name</span>' '>Peer AS</span>' '>Peer next hop</span>' '>Peer probe source</span>' '+ Peer' \
+            'value="ix-peer-b"' 'value="64502"' '>Peer name</span>' '>Peer AS</span>' '>Peer next hop</span>' '>Peer probe address</span>' '+ Peer' \
             '4. Flow (optional)' 'Collect flow records' 'Exporter setup' \
             --absent 'The config editor is off' 'mode-inject'
           # Headless Chrome cannot click, so uiproxy adds the guided-input

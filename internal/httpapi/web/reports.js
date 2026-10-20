@@ -151,7 +151,7 @@ function reportCatalog() {
     group.appendChild(el("h3", "", cat));
     reportDefs.forEach(function (d) {
       if (d.category !== cat) return;
-      var a = el("a", "", d.name);
+      var a = el("a", "", reportTitle(d.name));
       a.href = "/reports.html?report=" + encodeURIComponent(d.name);
       a.title = d.summary;
       if (reportDef && d.name === reportDef.name) a.setAttribute("aria-current", "page");
@@ -253,7 +253,7 @@ function reportSelect(name) {
   reportDefs.forEach(function (d) { if (d.name === name) reportDef = d; });
   if (!reportDef) reportDef = reportDefs[0];
   reportView.report = reportDef.name;
-  document.getElementById("report-title").textContent = reportDef.name;
+  document.getElementById("report-title").textContent = reportTitle(reportDef.name);
   document.getElementById("report-summary").textContent = reportDef.summary;
   reportCatalog();
   reportFillForm();
@@ -263,7 +263,7 @@ function reportSelect(name) {
 function reportWidgetTitle(v) {
   var parts = [];
   REPORT_FILTERS.forEach(function (f) { if (v.filters[f.name]) parts.push(f.name + " " + v.filters[f.name]); });
-  var t = v.report + (parts.length ? " (" + parts.join(", ") + ")" : "");
+  var t = reportTitle(v.report) + (parts.length ? " (" + parts.join(", ") + ")" : "");
   return new TextEncoder().encode(t).length <= 100 ? t : "";
 }
 
@@ -299,7 +299,7 @@ function reportInit() {
     e.preventDefault();
     if (reportReadForm()) reportLoad();
   });
-  dashAddInit("report", function () { return {widget: reportWidget(reportView), what: reportView.report}; });
+  dashAddInit("report", function () { return {widget: reportWidget(reportView), what: reportTitle(reportView.report)}; });
   reportFillProviders();
   getJSON("/api/reports").then(function (data) {
     reportDefs = (data && data.reports) || [];

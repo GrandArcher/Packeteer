@@ -226,7 +226,10 @@ function renderProviders(data) {
     tr.appendChild(el("td", "mono", peer.address || ""));
     tr.appendChild(el("td", "", peer.description || ""));
     var st = el("td");
-    st.appendChild(el("span", peer.established ? "dot up" : "dot down", peer.state || "down"));
+    var view = bgpState(peer.state, peer.established);
+    var pill = el("span", "dot " + view.level, view.label);
+    pill.title = view.title;
+    st.appendChild(pill);
     tr.appendChild(st);
     tr.appendChild(el("td", "", fmtTime(peer.since)));
     pb.appendChild(tr);
@@ -258,7 +261,9 @@ function prefixCard(row) {
   exits.appendChild(el("span", differs ? "v diff" : "v", row.recommended || "—"));
   head.appendChild(exits);
   if (row.action) head.appendChild(el("span", "badge", row.action));
-  head.appendChild(el("span", row.in_rib ? "badge" : "badge muted", row.in_rib ? "in RIB" : "not in RIB"));
+  var onRouter = el("span", row.in_rib ? "badge" : "badge muted", row.in_rib ? "on router" : "not on router");
+  onRouter.title = "In the RIB learned from the edge router";
+  head.appendChild(onRouter);
   if (row.heterogeneous) head.appendChild(el("span", "badge warn", "heterogeneous"));
   if (row.quarantine) head.appendChild(el("span", "badge warn", "quarantined"));
   card.appendChild(head);
@@ -448,8 +453,9 @@ function renderImprovements(data) {
   var tag = document.getElementById("improvements-tag");
   if (tag) tag.textContent = (inject ?
     "Announced to the edge with the Packeteer community and NO_EXPORT. " :
-    "Mode " + (mode || "observe") + ": these are what inject would announce. Nothing is announced. ") +
-    (cap ? "At most " + cap + " at a time (max_improvements)." : "");
+    "Recommendations only: what inject mode would announce. ") +
+    (cap ? "At most " + cap + " at a time." : "");
+  if (tag && cap) tag.title = "max_improvements";
   if (!rows.length) {
     var p = el("p", "empty");
     var bgp = lastOverview && lastOverview.bgp;
@@ -468,8 +474,10 @@ function renderImprovements(data) {
   }
   var table = el("table");
   var hr = el("tr");
-  ["Prefix", "Native exit", inject ? "Steered to" : "Recommended", "Cause", "Since", "Reason"].forEach(function (h) {
-    hr.appendChild(el("th", "", h));
+  ["Prefix", "Default route via", inject ? "Steered to" : "Recommended", "Cause", "Since", "Reason"].forEach(function (h) {
+    var th = el("th", "", h);
+    if (h === "Default route via") th.title = "The native exit: where the router sends this prefix without Packeteer";
+    hr.appendChild(th);
   });
   var thead = el("thead");
   thead.appendChild(hr);
@@ -559,7 +567,7 @@ function renderTiles(o) {
     c.recommended ? c.recommended + " prefixes differ" : ""));
   var b = o.bgp || {};
   root.appendChild(tile("BGP sessions", b.configured ? b.established + " of " + b.peers : "off",
-    b.configured ? (c.in_rib + " probed prefixes in RIB") : "no edge router", b.configured && !b.established ? "bad" : ""));
+    b.configured ? (c.in_rib + " probed prefixes known to the router") : "no edge router", b.configured && !b.established ? "bad" : ""));
   var sys = o.system || {};
   var warns = c.warnings || 0;
   var sysText = sys.down ? sys.down + " down" : (sys.degraded ? sys.degraded + " degraded" :
@@ -580,7 +588,8 @@ function renderSetup(o) {
   if (!hints.length) return;
   var box = el("div", "setup");
   box.appendChild(el("h3", "", "Setup checklist"));
-  box.appendChild(el("p", "tag", "Edit the mounted config file, then restart the container. Observe mode stays safe while you do."));
+  var editor = (o.features || []).some(function (f) { return f.name === "config_editor" && f.on; });
+  if (!editor) box.appendChild(el("p", "tag", "Edit the mounted config file, then restart the container."));
   var ul = el("ul", "hints");
   hints.forEach(function (h) {
     var li = el("li", "hint hint-" + h.level);
@@ -588,6 +597,12 @@ function renderSetup(o) {
     li.appendChild(el("span", "badge hint-level", h.level === "todo" ? "to do" : h.level));
     li.appendChild(el("strong", "", h.title));
     li.appendChild(el("span", "", " " + h.detail));
+    if (h.fix && editor && shellAdmin) {
+      li.appendChild(document.createTextNode(" "));
+      var fix = el("a", "", "Fix in Settings");
+      fix.href = h.fix;
+      li.appendChild(fix);
+    }
     if (h.doc) {
       li.appendChild(document.createTextNode(" "));
       var code = el("code", "muted");

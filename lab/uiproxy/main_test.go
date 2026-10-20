@@ -536,6 +536,61 @@ func TestObserveWordingFixturesMatchAPI(t *testing.T) {
 	}
 }
 
+// TestPlainLanguageFixturesMatchAPI decodes the canned answers behind the
+// plain-language smoke test (#351) with the API's own types: a session in
+// Active, and a checklist whose remedy links to the config editor.
+func TestPlainLanguageFixturesMatchAPI(t *testing.T) {
+	f, err := loadFixtures("../ui-fixtures/plain-language")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(f.Stubs) != 4 {
+		t.Fatalf("stubs = %d", len(f.Stubs))
+	}
+	var o httpapi.Overview
+	dec := json.NewDecoder(bytes.NewReader(f.Stubs[0].body))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&o); err != nil {
+		t.Fatal(err)
+	}
+	editor := false
+	for _, ft := range o.Features {
+		editor = editor || ft.Name == "config_editor" && ft.On
+	}
+	var fix string
+	for _, h := range o.Setup {
+		if h.ID == "bgp-down" {
+			fix = h.Fix
+		}
+	}
+	if !editor || fix != httpapi.FixBGP || o.BGP.Established != 0 {
+		t.Fatalf("overview: editor %v, bgp-down fix %q, bgp %+v", editor, fix, o.BGP)
+	}
+	var prov struct {
+		BGP struct {
+			Peers []httpapi.Peer `json:"peers"`
+		} `json:"bgp"`
+	}
+	if err := json.Unmarshal(f.Stubs[1].body, &prov); err != nil {
+		t.Fatal(err)
+	}
+	if len(prov.BGP.Peers) != 1 || prov.BGP.Peers[0].State != "ACTIVE" || prov.BGP.Peers[0].Established {
+		t.Fatalf("peers = %+v", prov.BGP.Peers)
+	}
+	var page httpapi.PrefixPage
+	dec = json.NewDecoder(bytes.NewReader(f.Stubs[2].body))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&page); err != nil || len(page.Prefixes) != 1 {
+		t.Fatalf("prefixes: %v %+v", err, page.Prefixes)
+	}
+	var imp struct {
+		Improvements []httpapi.Improvement `json:"improvements"`
+	}
+	if err := json.Unmarshal(f.Stubs[3].body, &imp); err != nil || len(imp.Improvements) != 1 || imp.Improvements[0].Native != "lab-a" {
+		t.Fatalf("improvements: %v %+v", err, imp.Improvements)
+	}
+}
+
 // TestMobileFixturesMatchAPI decodes the canned answers behind the phone
 // width smoke test (#352) with the API's own types, and checks the cases the
 // test is about: a provider that does not answer, and a long name and an

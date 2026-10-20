@@ -859,7 +859,7 @@ async function liveFresh() {
   assert(row.length >= 6, "provider row has " + row.length + " controls");
   row.forEach(function (n) { assert(n.value === "" && n.placeholder === "", "provider control " + (n.getAttribute("aria-label") || n.className) + " is not empty"); });
   var labels = document.getElementById("wz-providers").querySelectorAll(".field-label").map(function (n) { return n.textContent; });
-  ["Provider AS", "Type", "IPv6 probe source", "IPv6 next hop"].forEach(function (l) {
+  ["Provider AS", "Type", "IPv6 probe address", "IPv6 next hop"].forEach(function (l) {
     assert(labels.indexOf(l) >= 0, "provider row has no " + l + " field: " + labels.join(", "));
   });
   document.getElementById("wz-next").click();

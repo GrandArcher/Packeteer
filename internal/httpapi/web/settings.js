@@ -1250,7 +1250,7 @@ function fillInbound() {
   modeBadge("in-badge", i.enabled ? i.mode : "");
   byId("in-badge-text").textContent = i.mode === "inject"
     ? "Inject announces steer routes for allowlisted prefixes in the learned RIB."
-    : "Observe and suggest announce nothing.";
+    : "Steers are logged only.";
   byId("in-announcer").textContent = i.enabled ? (i.has_announcer ? "An announcer is configured." : "No announcer is configured, so inject could not start.") : "";
 }
 
@@ -1326,7 +1326,7 @@ function fillAnomalyState() {
   modeBadge("an-badge", a.enabled ? (a.mitigation_mode || "observe") : "");
   byId("an-badge-text").textContent = a.mitigation_mode === "inject"
     ? "Mitigation is in inject: a matching rule can announce a rule for a learned prefix."
-    : "Mitigation is not in inject: a matching rule is recorded and nothing is announced.";
+    : "Mitigation is not in inject: a matching rule is recorded only.";
   byId("an-state").textContent = a.enabled
     ? "Rule prefixes must be inside the mitigation allowlist" + ((a.mitigation_allowlist || []).length ? ": " + a.mitigation_allowlist.join(", ") + "." : ".")
     : "Anomaly detection is not set up. Switch the detector on above first (docs/anomaly.md).";
@@ -1468,7 +1468,7 @@ function renderExchanges() {
         if (!p.source_ip) return "";
         return (checkIPv4(p.source_ip) || parseV6(p.source_ip) != null) ? "" : "Enter an IP address.";
       });
-      row.appendChild(labeled("Peer probe source", src, "Local address probes to this peer leave from, for example 192.0.2.31.", "exchanges.peers.source_ip"));
+      row.appendChild(labeled("Peer probe address", src, "Local address probes to this peer leave from, for example 192.0.2.31.", "exchanges.peers.source_ip"));
       bindNumber(row, "Peer cost", p, "cost", "Price per Mbps for this peer.", "exchanges.peers.cost", {min: 0, max: 1e12, unit: "per Mbps"});
       var fold = el("details", "advanced");
       fold.appendChild(el("summary", "", "Show advanced"));
@@ -1533,7 +1533,7 @@ function renderDiscovered() {
 function acceptDiscovered(x, d) {
   x.peers.push({key: "", name: "", asn: d.asn ? String(d.asn) : "", next_hop: d.next_hop, source_ip: "", cost: "", draft: true});
   renderExchanges();
-  formStatus("Draft peer added to " + x.name + ". Name it and fill in the probe source. Cost stays empty. Nothing is saved.");
+  formStatus("Draft peer added to " + x.name + ". Name it and fill in the probe address. Cost stays empty. Nothing is saved.");
 }
 
 function loadDiscovered() {
@@ -1823,7 +1823,7 @@ function renderProviders() {
       return (checkIPv4(v) || parseV6(v) != null) ? "" : "Enter an IP address.";
     });
     row.appendChild(labeled("Name", name, "Name of this provider. It must be unique.", "providers.name"));
-    row.appendChild(labeled("Probe source", src, "Local address probes leave from. Pick one already in use, or type an address.", "providers.source_ip"));
+    row.appendChild(labeled("Probe address", src, "Local address probes leave from. Pick one already in use, or type an address.", "providers.source_ip"));
     row.appendChild(labeled("Next hop", hop, "Provider next hop seen on BGP or BMP, or type an address.", "providers.next_hop"));
     row.appendChild(labeled("Cost", numberControl(p, "cost", {min: 0, max: 1e12, unit: "per Mbps"}), "Price per Mbps.", "providers.cost"));
     var bmp = selectInput(bmpChoices, p.bmp);
@@ -2047,7 +2047,7 @@ function acceptSuggestion(s) {
   });
   renderProviders();
   renderSuggestions(lastSuggestions);
-  formStatus("Draft row added. Name it and fill in the probe source. Cost and commit stay empty until you set them. Nothing is saved.");
+  formStatus("Draft row added. Name it and fill in the probe address. Cost and commit stay empty until you set them. Nothing is saved.");
 }
 
 function loadSuggestions() {
@@ -2091,7 +2091,7 @@ function renderWzProviders() {
     src.addEventListener("input", function () { wzProviders[i].source_ip = src.value.trim(); });
     hop.addEventListener("input", function () { wzProviders[i].next_hop = hop.value.trim(); });
     row.appendChild(labeled("Name", name, "Name of this provider.", "providers.name"));
-    row.appendChild(labeled("Probe source", src, "Local address probes leave from.", "providers.source_ip"));
+    row.appendChild(labeled("Probe address", src, "Local address probes leave from.", "providers.source_ip"));
     row.appendChild(labeled("Next hop", hop, "Next hop seen on BGP or BMP, or type an address.", "providers.next_hop"));
     var asn = rowInput(p.asn);
     asn.addEventListener("input", function () { wzProviders[i].asn = asn.value.trim(); });
@@ -2103,11 +2103,11 @@ function renderWzProviders() {
     var src6 = rowInput(p.source_ip6);
     src6.addEventListener("input", function () { wzProviders[i].source_ip6 = src6.value.trim(); });
     attachCheck(src6, function () { return src6.value.trim() && parseV6(src6.value.trim()) == null ? "Enter an IPv6 address." : ""; });
-    row.appendChild(labeled("IPv6 probe source", src6, "Optional, with the IPv6 next hop. Adds a second provider named after this one with -v6, for example 2001:db8::11.", "providers.source_ip"));
+    row.appendChild(labeled("IPv6 probe address", src6, "Optional, with the IPv6 next hop. Adds a second provider named after this one with -v6, for example 2001:db8::11.", "providers.source_ip"));
     var hop6 = rowInput(p.next_hop6);
     hop6.addEventListener("input", function () { wzProviders[i].next_hop6 = hop6.value.trim(); });
     attachCheck(hop6, function () { return hop6.value.trim() && parseV6(hop6.value.trim()) == null ? "Enter an IPv6 address." : ""; });
-    row.appendChild(labeled("IPv6 next hop", hop6, "Optional, with the IPv6 probe source, for example 2001:db8::1.", "providers.next_hop"));
+    row.appendChild(labeled("IPv6 next hop", hop6, "Optional, with the IPv6 probe address, for example 2001:db8::1.", "providers.next_hop"));
     var minus = el("button", "small", "-");
     minus.type = "button";
     minus.title = "Remove provider";
@@ -2142,7 +2142,7 @@ function renderWzSuggestions() {
       wzProviders.push(newWzProvider(s.next_hop));
       renderWzProviders();
       renderWzSuggestions();
-      document.getElementById("wz-status").textContent = "Row added from the session. Name it and set the probe source. Nothing is saved.";
+      document.getElementById("wz-status").textContent = "Row added from the session. Name it and set the probe address. Nothing is saved.";
     });
     row.appendChild(b);
     root.appendChild(row);
@@ -2164,9 +2164,9 @@ function providerProblems() {
   var p = [];
   if (!wzProviders.length) p.push("Providers: add at least one row.");
   wzProviders.forEach(function (pr, i) {
-    if (!pr.name || !pr.source_ip || !pr.next_hop) p.push("Provider " + (i + 1) + ": needs a name, a probe source, and a next hop.");
+    if (!pr.name || !pr.source_ip || !pr.next_hop) p.push("Provider " + (i + 1) + ": needs a name, a probe address, and a next hop.");
     if (pr.asn && checkASN(pr.asn, null)) p.push("Provider " + (i + 1) + ": the provider AS must be a number from 1 to 4294967295, or empty.");
-    if (!!pr.source_ip6 !== !!pr.next_hop6) p.push("Provider " + (i + 1) + ": the IPv6 probe source and the IPv6 next hop go together; fill both or neither.");
+    if (!!pr.source_ip6 !== !!pr.next_hop6) p.push("Provider " + (i + 1) + ": the IPv6 probe address and the IPv6 next hop go together; fill both or neither.");
     if ((pr.source_ip6 && parseV6(pr.source_ip6) == null) || (pr.next_hop6 && parseV6(pr.next_hop6) == null)) p.push("Provider " + (i + 1) + ": the IPv6 fields need IPv6 addresses.");
   });
   return p;

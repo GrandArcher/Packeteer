@@ -40,7 +40,19 @@ type Hint struct {
 	Doc    string `json:"doc,omitempty"`
 	// DocURL is Doc under DocBase, for a link (#347).
 	DocURL string `json:"doc_url,omitempty"`
+	// Fix is the anchor on the Settings page where the config editor
+	// changes what the hint is about (#351). The page links to it only
+	// when the editor is on.
+	Fix string `json:"fix,omitempty"`
 }
+
+// Settings page anchors a Hint.Fix may name.
+const (
+	FixBGP       = "/settings.html#form-bgp"
+	FixProviders = "/settings.html#form-providers"
+	FixTargets   = "/settings.html#form-targets"
+	FixPlugins   = "/settings.html#form-plugins"
+)
 
 // Provider health states (#343), derived from what was measured.
 const (
@@ -327,8 +339,8 @@ func formatLoss(pct float64) string {
 // means the instance is measuring, has a RIB view, and keeps history.
 func setupHints(o Overview) []Hint {
 	var h []Hint
-	add := func(id, level, title, detail, doc string) {
-		hint := Hint{ID: id, Level: level, Title: title, Detail: detail, Doc: doc}
+	add := func(id, level, title, detail, doc, fix string) {
+		hint := Hint{ID: id, Level: level, Title: title, Detail: detail, Doc: doc, Fix: fix}
 		if doc != "" {
 			hint.DocURL = DocBase + doc
 		}
@@ -336,21 +348,21 @@ func setupHints(o Overview) []Hint {
 	}
 	if !o.Started {
 		add("starting", HintInfo, "Starting",
-			"The controller is still starting. This page fills in after the first probe round.", "")
+			"The controller is still starting. This page fills in after the first probe round.", "", "")
 	}
 	if len(o.Sources) == 0 {
 		add("sources", HintTodo, "Nothing to probe yet",
-			"Add a sources: entry to the mounted config file: a static list of prefixes you send traffic to, or the flow source fed by your router's NetFlow/IPFIX/sFlow. Restart the container to apply.",
-			"docs/CONFIG.md#source-static")
+			"Add a sources: entry: a static list of prefixes you send traffic to, or the flow source fed by your router's NetFlow/IPFIX/sFlow.",
+			"docs/CONFIG.md#source-static", FixTargets)
 	} else if o.Started && o.Counts.Prefixes == 0 {
 		add("first-round", HintInfo, "Waiting for the first probe round",
 			"Sources are configured but nothing has been measured yet. The first round starts at once; a flow source lists prefixes only after it has seen traffic.",
-			"docs/CONFIG.md#probe")
+			"docs/CONFIG.md#probe", "")
 	}
 	if o.Counts.Providers > 0 && o.Counts.ProvidersUp == 0 {
 		add("providers-down", HintWarn, "Every provider is down",
 			"No probe source works. Check that each providers[].source_ip is an address on this host (run the container with --network host) and that the container has --cap-add NET_RAW.",
-			"docs/policy-routing.md")
+			"docs/policy-routing.md", FixProviders)
 	}
 	for _, p := range o.Providers {
 		if p.Up && p.OK == 0 && p.Failed > 0 {
@@ -359,22 +371,22 @@ func setupHints(o Overview) []Hint {
 				detail += " Last error: " + p.LastError + "."
 			}
 			detail += " Check its source_ip and that traffic from it leaves through this provider (policy routing)."
-			add("provider-"+p.Name, HintWarn, "No answer through "+p.Name, detail, "docs/policy-routing.md")
+			add("provider-"+p.Name, HintWarn, "No answer through "+p.Name, detail, "docs/policy-routing.md", FixProviders)
 		}
 	}
 	switch {
 	case !o.BGP.Configured:
 		add("bgp", HintInfo, "No edge router session",
 			"Providers are ranked, but the current exit of each prefix is unknown and nothing could ever be injected. Add bgp.neighbors for a learn-only iBGP session to your edge router.",
-			"docs/routers.md")
+			"docs/routers.md", FixBGP)
 	case o.BGP.Established == 0:
 		add("bgp-down", HintWarn, "No iBGP session is established",
 			"bgp.neighbors is set but no session is up, so the RIB view is empty and the instance is not ready. Check the router's neighbor config, the AS number, and that TCP port 179 is reachable.",
-			"docs/routers.md")
+			"docs/routers.md", FixBGP)
 	case o.Counts.Measured > 0 && o.Counts.InRIB == 0:
 		add("rib", HintWarn, "No probed prefix is in the learned RIB",
 			"The edge router does not advertise any probed prefix exactly. Probe the exact prefixes your edge learns; only those can be compared with the current exit or ever be steered.",
-			"docs/CONFIG.md#source-static")
+			"docs/CONFIG.md#source-static", FixTargets)
 	}
 	history := false
 	for _, f := range o.Features {
@@ -385,7 +397,7 @@ func setupHints(o Overview) []Hint {
 	if !history {
 		add("history", HintInfo, "Report history is off",
 			"Add storage: {type: sqlite} and mount a volume on /var/lib/packeteer to keep reports across restarts.",
-			"docs/CONFIG.md#storage-sqlite")
+			"docs/CONFIG.md#storage-sqlite", FixPlugins)
 	}
 	order := map[string]int{HintTodo: 0, HintWarn: 1, HintInfo: 2}
 	sort.SliceStable(h, func(i, j int) bool { return order[h[i].Level] < order[h[j].Level] })

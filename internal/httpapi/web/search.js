@@ -106,14 +106,14 @@ function renderSearch(data) {
     });
   searchGroup(root, "search-now", inject ? "Current improvements" : "Current recommendations",
     "No current " + (inject ? "improvement" : "recommendation") + " matches.", data.recommendations,
-    ["Prefix", "Match", "Native exit", inject ? "Steered to" : "Recommended", "Cause", "Since", "Open"], function (r) {
+    ["Prefix", "Match", "Default route via", inject ? "Steered to" : "Recommended", "Cause", "Since", "Open"], function (r) {
       return [searchPrefixCell(r.prefix), searchCell(r.relation || "origin"), searchCell(r.native), searchCell(r.provider), searchCell(r.cause),
         searchCell(r.since ? fmtTime(r.since) : "—"), searchCell(searchLinks(r.prefix))];
     });
   var days = data.history.days || 0;
   searchGroup(root, "search-history", "Stored improvements" + (days ? ", last " + days + " days" : ""),
     data.history.enabled ? "No stored improvement matches." : "History is off.", data.improvements,
-    ["Prefix", "Match", "Origin", "Provider", "Native exit", "Cause", "Mode", "Start", "End", "Open"], function (r) {
+    ["Prefix", "Match", "Origin", "Provider", "Default route via", "Cause", "Mode", "Start", "End", "Open"], function (r) {
       return [searchPrefixCell(r.prefix), searchCell(r.relation || "origin"), searchCell(searchAS(r.origin_asn)), searchCell(r.provider), searchCell(r.native),
         searchCell(r.cause), searchCell(r.mode), searchCell(fmtTime(r.start)), searchCell(r.end ? fmtTime(r.end) : "open"), searchCell(searchLinks(r.prefix))];
     });

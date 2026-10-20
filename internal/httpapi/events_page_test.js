@@ -69,8 +69,16 @@ var shell = fs.readFileSync(path.join(web, "shell.js"), "utf8");
 var events = fs.readFileSync(path.join(web, "events.js"), "utf8");
 var app = fs.readFileSync(path.join(web, "app.js"), "utf8");
 [[shell, "shellEl"], [shell, "docLink"], [app, "el"], [app, "clear"],
-  [events, "eventDetail"], [events, "renderEvents"], [app, "renderImprovements"], [app, "renderSetup"]
+  [events, "eventDetail"], [events, "renderEvents"], [app, "renderImprovements"], [app, "renderSetup"], [shell, "bgpState"], [shell, "reportTitle"]
 ].forEach(function (p) { vm.runInContext(fn(p[0], p[1]), context); });
+// varLine returns a top-level var statement that ends on a line of its own.
+function varLine(src, name) {
+  var m = new RegExp("^var " + name + " = [^;]*;$", "m").exec(src);
+  assert(m, "var " + name + " not found");
+  return m[0];
+}
+vm.runInContext(varLine(shell, "BGP_CONNECTING") + varLine(shell, "REPORT_TITLES").replace(/\n/g, " "), context);
+context.shellAdmin = true;
 
 var DOC = "https://docs.example.invalid/blob/main/";
 
@@ -126,4 +134,37 @@ context.renderSetup({setup: [{id: "providers-down", level: "warn", title: "Every
 var doc = find(ids["setup"], "a")[0];
 assert(doc && doc.textContent === "docs/policy-routing.md" && doc.href === DOC + "docs/policy-routing.md" && doc.target === "_blank",
   "checklist doc link");
+// A session in Active is connecting (amber), not down; Idle is down; the
+// raw state is the tooltip (#351).
+[["ACTIVE", false, "Connecting (Active)", "degraded"], ["active", false, "Connecting (Active)", "degraded"],
+  ["OPENSENT", false, "Connecting (OpenSent)", "degraded"], ["CONNECT", false, "Connecting (Connect)", "degraded"],
+  ["IDLE", false, "Down", "down"], ["idle", false, "Down", "down"], ["", false, "Down", "down"],
+  ["ESTABLISHED", true, "Up", "up"], ["Established", false, "Up", "up"]
+].forEach(function (c) {
+  var v = context.bgpState(c[0], c[1]);
+  assert(v.label === c[2] && v.level === c[3], "bgpState(" + c[0] + "): " + JSON.stringify(v));
+  assert(v.title === "BGP state: " + (c[0] || "unknown"), "tooltip keeps the raw state: " + v.title);
+});
+
+// Report names read as words; an unknown name is shown as it is.
+assert(context.reportTitle("asns") === "ASNs" && context.reportTitle("timeseries") === "Time series" &&
+  context.reportTitle("probes") === "Probes" && context.reportTitle("future") === "future", "report titles");
+
+// The checklist remedy links to the editor only when it is on and the account is an admin.
+function checklist(features, admin) {
+  ids["setup"] = new Node("div");
+  context.shellAdmin = admin;
+  context.renderSetup({features: features, setup: [{id: "bgp-down", level: "warn", title: "t", detail: "d", fix: "/settings.html#form-bgp"},
+    {id: "first-round", level: "info", title: "t2", detail: "d2"}]});
+  return ids["setup"];
+}
+var box = checklist([{name: "config_editor", on: true}], true);
+var fixes = find(box, "a").filter(function (n) { return n.textContent === "Fix in Settings"; });
+assert(fixes.length === 1 && fixes[0].href === "/settings.html#form-bgp", "editor on: one Fix in Settings link");
+assert(box.textContent.indexOf("mounted config file") < 0, "editor on: no mounted-file advice: " + box.textContent);
+box = checklist([{name: "config_editor", on: false}], true);
+assert(find(box, "a").filter(function (n) { return n.textContent === "Fix in Settings"; }).length === 0, "editor off: no link");
+assert(box.textContent.indexOf("Edit the mounted config file, then restart the container.") >= 0, "editor off: mounted-file advice");
+box = checklist([{name: "config_editor", on: true}], false);
+assert(find(box, "a").filter(function (n) { return n.textContent === "Fix in Settings"; }).length === 0, "not an admin: no link");
 console.log("ok");

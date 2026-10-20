@@ -103,7 +103,7 @@ func TestCommitSetupAssets(t *testing.T) {
 	if !strings.Contains(settings, "function postForm(report)") || !strings.Contains(settings, `"/api/config/form"`) {
 		t.Error("settings.js lost the form endpoint the commit setup shares")
 	}
-	for _, s := range []string{"Observe stays the default", "nothing is saved or announced", "never typed in"} {
+	for _, s := range []string{"Nothing is saved until you Save", "never typed in"} {
 		if !strings.Contains(html, s) {
 			t.Errorf("settings.html lacks %q", s)
 		}

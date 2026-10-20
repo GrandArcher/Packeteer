@@ -94,7 +94,8 @@ function renderSessions(d) {
     return;
   }
   ixpSetBox("member-sessions", ixpTable(["Server", "Session", "State", "Received", "Accepted", "Filtered", "Reasons"], sessions.map(function (s) {
-    return [ixpCell(s.server), ixpCell(s.neighbor || s.session, "mono"), ixpCell(s.state, s.established ? "" : "bad"),
+    var view = bgpState(s.state, s.established);
+    return [ixpCell(s.server), ixpCell(s.neighbor || s.session, "mono"), ixpCell(view.label, {up: "", degraded: "diff", down: "bad"}[view.level]),
       ixpCell(s.counted ? s.received : ""), ixpCell(s.counted ? s.accepted : ""), ixpCell(s.counted ? s.filtered : ""), ixpCell(s.counted ? reasonText(s.reasons) : s.error)];
   })));
 }
@@ -111,7 +112,7 @@ function historyPanel(s, data) {
   var shown = samples.slice(0, HISTORY_ROWS);
   box.appendChild(el("p", "tag", "Latest " + shown.length + " of " + samples.length + " samples, newest first. History is in memory and a restart empties it."));
   box.appendChild(ixpTable(["At", "State", "Accepted", "Filtered", "Reasons"], shown.map(function (x) {
-    return [ixpCell(fmtTime(x.at)), ixpCell(x.established ? "Established" : "Down", x.established ? "" : "bad"),
+    return [ixpCell(fmtTime(x.at)), ixpCell(x.established ? "Up" : "Down", x.established ? "" : "bad"),
       ixpCell(x.counted ? x.accepted : ""), ixpCell(x.counted ? x.filtered : ""), ixpCell(x.counted ? reasonText(x.reasons) : "")];
   })));
   return box;
