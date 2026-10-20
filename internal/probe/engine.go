@@ -1129,9 +1129,9 @@ func (e *Engine) runRound(ctx context.Context, allow func(plugin.Target) bool, m
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			for {
+			for roundCtx.Err() == nil {
 				j, ok := disp.next()
-				if !ok || roundCtx.Err() != nil {
+				if !ok {
 					return
 				}
 				r, srcDown := e.probe(roundCtx, j)
@@ -1345,9 +1345,9 @@ func jobRank(t plugin.Target, base time.Duration) (tier int, every time.Duration
 	}
 }
 
-// storeResults merges the results of prefixes whose probes all finished,
-// under one lock, and drops prefixes that left every source. It never
-// drops a prefix the round did not finish: that one stays as it was.
+// storeResults merges the results of finished probes under one lock and
+// drops prefixes that left every source. A result missing from rs, such as
+// an unfinished probe of a timed-out round, stays as it was.
 func (e *Engine) storeResults(rs map[key]Result, keep map[netip.Prefix]bool, ran map[string]bool, down map[string]string) {
 	now := e.opt.Now()
 	e.mu.Lock()
@@ -1540,7 +1540,6 @@ func (e *Engine) probe(ctx context.Context, j job) (Result, bool) {
 	if !j.target.Pinned {
 		gw = j.provider.NextHop
 	}
-	copied := append([]netip.Addr(nil), hosts...)
 	var samples []hostSample
 	var errs []error
 	var tried []netip.Addr
@@ -1549,16 +1548,17 @@ func (e *Engine) probe(ctx context.Context, j job) (Result, bool) {
 		// A provider that is down costs the full timeout per host and holds
 		// a worker the whole time (#381). After silentHostLimit hosts with
 		// no reply and none answered, the remaining in-prefix hosts are
-		// skipped. The far-side gateway is still probed: it can score the
-		// prefix when no in-prefix host answers.
+		// skipped. A host whose probe errors counts as silent. The far-side
+		// gateway is still probed: it can score the prefix when no
+		// in-prefix host answers.
 		isGW := gw.IsValid() && h == gw
 		if silent >= silentHostLimit && !answered && !isGW {
 			continue
 		}
 		tried = append(tried, h)
 		one, down := e.probeOne(ctx, j.provider, j.target.Prefix, h, e.packets())
-		one.Targets = copied
 		if down || ctx.Err() != nil {
+			one.Targets = tried
 			return one, down
 		}
 		if one.Err != "" {
@@ -1573,12 +1573,11 @@ func (e *Engine) probe(ctx context.Context, j job) (Result, bool) {
 		}
 		samples = append(samples, hostSample{addr: h, res: one, gateway: isGW})
 	}
-	copied = tried
-	if res, down, ok := e.probeIndirect(ctx, j, copied, samples); ok {
+	if res, down, ok := e.probeIndirect(ctx, j, tried, samples); ok {
 		return res, down
 	}
 	if len(samples) == 0 {
-		res := Result{Provider: j.provider.Name, Prefix: j.target.Prefix, Targets: copied, Time: e.opt.Now()}
+		res := Result{Provider: j.provider.Name, Prefix: j.target.Prefix, Targets: tried, Time: e.opt.Now()}
 		if len(hosts) > 0 {
 			res.Target = hosts[0]
 		}
@@ -1589,7 +1588,7 @@ func (e *Engine) probe(ctx context.Context, j job) (Result, bool) {
 		}
 		return res, false
 	}
-	res := combineHosts(j.provider.Name, j.target.Prefix, copied, samples, e.hostQualifies)
+	res := combineHosts(j.provider.Name, j.target.Prefix, tried, samples, e.hostQualifies)
 	lossRetry := e.retryLoss() > 0 && res.Stats.LossPct >= e.retryLoss()
 	dispRetry := e.spreadOver(samples)
 	if e.retryPackets() < 1 || (!lossRetry && !dispRetry) {
@@ -1615,8 +1614,8 @@ func (e *Engine) probe(ctx context.Context, j job) (Result, bool) {
 			continue
 		}
 		one, down := e.probeOne(ctx, j.provider, j.target.Prefix, s.addr, e.retryPackets())
-		one.Targets = copied
 		if down || ctx.Err() != nil {
+			one.Targets = tried
 			return one, down
 		}
 		if one.Err != "" {
@@ -1633,7 +1632,7 @@ func (e *Engine) probe(ctx context.Context, j job) (Result, bool) {
 		reason = "dispersion"
 	}
 	e.log.Debug("retry probe", "provider", res.Provider, "prefix", res.Prefix, "loss_pct", res.Stats.LossPct, "packets", e.retryPackets(), "reason", reason)
-	return combineHosts(j.provider.Name, j.target.Prefix, copied, again, e.hostQualifies), false
+	return combineHosts(j.provider.Name, j.target.Prefix, tried, again, e.hostQualifies), false
 }
 
 // hostQualifies reports whether one address may define the prefix score.

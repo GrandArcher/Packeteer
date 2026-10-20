@@ -2,6 +2,7 @@ package probe
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/netip"
 	"sync"
@@ -13,7 +14,7 @@ import (
 
 func testJob(provider string, n int) job {
 	return job{provider: Provider{Name: provider}, target: plugin.Target{
-		Prefix: netip.MustParsePrefix(fmt.Sprintf("198.51.%d.0/24", n)),
+		Prefix: netip.MustParsePrefix(fmt.Sprintf("203.0.113.%d/28", n*16)),
 	}}
 }
 
@@ -86,7 +87,7 @@ func TestDispatcherDoneFreesTheShare(t *testing.T) {
 func TestDeadProviderDoesNotStarveHealthyProvider(t *testing.T) {
 	var targets []plugin.Target
 	for i := 0; i < 12; i++ {
-		pfx := netip.MustParsePrefix(fmt.Sprintf("198.51.%d.0/24", i))
+		pfx := netip.MustParsePrefix(fmt.Sprintf("203.0.113.%d/28", i*16))
 		targets = append(targets, plugin.Target{Prefix: pfx, Host: pfx.Addr().Next()})
 	}
 	p := &fakeProber{fn: func(ctx context.Context, req plugin.ProbeRequest) (plugin.ProbeResult, error) {
@@ -121,19 +122,23 @@ func TestDeadProviderDoesNotStarveHealthyProvider(t *testing.T) {
 	}
 }
 
-// silentProber records the hosts it was asked for and answers only the
-// ones in reply.
+// silentProber records the hosts it was asked for, fails the ones in fail,
+// and answers only the ones in reply.
 type silentProber struct {
 	plugin.Base
 	mu    sync.Mutex
 	asked []netip.Addr
 	reply map[netip.Addr]bool
+	fail  map[netip.Addr]error
 }
 
 func (s *silentProber) Probe(_ context.Context, req plugin.ProbeRequest) (plugin.ProbeResult, error) {
 	s.mu.Lock()
 	s.asked = append(s.asked, req.Target)
 	s.mu.Unlock()
+	if err := s.fail[req.Target]; err != nil {
+		return plugin.ProbeResult{}, err
+	}
 	if s.reply[req.Target] {
 		return plugin.ProbeResult{Sent: req.Count, RTTs: ms(7, 7, 7)}, nil
 	}
@@ -149,19 +154,26 @@ func TestJobStopsAfterSilentHosts(t *testing.T) {
 	tests := []struct {
 		name      string
 		reply     map[netip.Addr]bool
+		fail      map[netip.Addr]error
 		wantAsked []netip.Addr
-		wantLoss  float64
+		wantLoss  float64 // negative: the result carries an error instead
 	}{
-		{"all silent: skip the third host, try the gateway", nil,
+		{"all silent: skip the third host, try the gateway", nil, nil,
 			[]netip.Addr{hosts[0], hosts[1], gw}, 100},
-		{"first host answers: the third host is still probed", map[netip.Addr]bool{hosts[0]: true},
+		{"first host answers: the third host is still probed", map[netip.Addr]bool{hosts[0]: true}, nil,
 			hosts, 0},
-		{"gateway answers after two silent hosts", map[netip.Addr]bool{gw: true},
+		{"gateway answers after two silent hosts", map[netip.Addr]bool{gw: true}, nil,
 			[]netip.Addr{hosts[0], hosts[1], gw}, 0},
+		{"two hosts that error count as silent", nil,
+			map[netip.Addr]error{hosts[0]: errors.New("send failed"), hosts[1]: errors.New("send failed")},
+			[]netip.Addr{hosts[0], hosts[1], gw}, 100},
+		{"source down on the second host: targets stop there", nil,
+			map[netip.Addr]error{hosts[1]: plugin.ErrSourceUnavailable},
+			[]netip.Addr{hosts[0], hosts[1]}, -1},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			p := &silentProber{reply: tt.reply}
+			p := &silentProber{reply: tt.reply, fail: tt.fail}
 			e, err := New([]Provider{{Name: provA.Name, Source: provA.Source, NextHop: gw}},
 				[]NamedProber{{"p", p}}, src(plugin.Target{Prefix: pfx1}), opts())
 			if err != nil {
@@ -174,6 +186,12 @@ func TestJobStopsAfterSilentHosts(t *testing.T) {
 			r := e.Results()[0]
 			if fmt.Sprint(r.Targets) != fmt.Sprint(tt.wantAsked) {
 				t.Errorf("targets %v, want the hosts probed %v", r.Targets, tt.wantAsked)
+			}
+			if tt.wantLoss < 0 {
+				if r.Err == "" {
+					t.Errorf("want an error result: %+v", r)
+				}
+				return
 			}
 			if r.Stats.LossPct < tt.wantLoss-0.1 || r.Stats.LossPct > tt.wantLoss+0.1 {
 				t.Errorf("loss %.1f, want %.1f: %+v", r.Stats.LossPct, tt.wantLoss, r)

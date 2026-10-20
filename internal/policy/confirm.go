@@ -33,6 +33,15 @@ func notePerformance(st *State, in Input, cfg Config, p netip.Prefix, provider s
 	}
 	cur := st.confirm[p]
 	at, count, stale := prefixRound(in, cfg, cur, p, now)
+	// A timed-out probe round stores the providers that finished and
+	// leaves the others with their previous result (#381). Such a round
+	// may start or reset a streak but must not extend one: every provider
+	// compared has to be measured again, or a provider whose probes stopped
+	// finishing could be confirmed on its last good sample.
+	extends := count && provider != "" && cur.Provider == provider
+	if extends && !remeasured(in, cfg, cur, p, now) {
+		count = false
+	}
 	if stale || !count {
 		if !stale && provider != "" && cur.Provider == provider && cur.Streak >= rounds {
 			return true, cur.Streak
@@ -113,6 +122,23 @@ func prefixRound(in Input, cfg Config, prev confirm, p netip.Prefix, now time.Ti
 		return newest, false, false
 	}
 	return newest, true, false
+}
+
+// remeasured reports whether every fresh result for p is newer than the
+// last counted round.
+func remeasured(in Input, cfg Config, prev confirm, p netip.Prefix, now time.Time) bool {
+	for _, r := range in.Results {
+		if r.Prefix != p {
+			continue
+		}
+		if cfg.MaxResultAge > 0 && now.Sub(r.Time) > cfg.MaxResultAge {
+			continue
+		}
+		if !r.Time.After(prev.Round) {
+			return false
+		}
+	}
+	return true
 }
 
 // markPendingUrgent lists prefixes whose streak is short and whose paths
