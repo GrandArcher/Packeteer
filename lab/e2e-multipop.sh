@@ -23,7 +23,12 @@
 #     192.0.2.2), cause commit;
 #  5. POP B's usage drops to 5: the shared commit has room and the commit
 #     steer is withdrawn;
-#  6. SIGTERM packeteer-a withdraws; SIGKILL drops the route with the session.
+#  6. the federation link is cut with a blackhole route between the two
+#     instances: the steer through POP B is withdrawn within 15s, both
+#     views mark the peer stale and the global commit incomplete, neither
+#     instance steers or announces for 20s, and after the link heals
+#     exactly one re-steer returns with the same tags;
+#  7. SIGTERM packeteer-a withdraws; SIGKILL drops the route with the session.
 set -euo pipefail
 export LC_ALL=C
 
@@ -232,7 +237,59 @@ flip a state.yaml a-slow.yaml
 flip b state.yaml b-fast.yaml
 want "$pfx 192.0.2.253"
 
-echo "6. SIGTERM packeteer-a withdraws"
+echo "6. federation link cut while both POPs run (#308)"
+# steer_logs improve|retired: how many such x-b lines packeteer-a has logged.
+steer_logs() {
+	"${compose[@]}" logs --no-color packeteer-a 2>/dev/null | grep -Ec "msg=\"improvement $1\".*prefix=198\.51\.100\.0/24 provider=x-b" || true
+}
+before=$(steer_logs improve)
+retired_before=$(steer_logs retired)
+# Drop only the packets between the two Packeteer instances; each one keeps
+# its BGP session to its own edge.
+"${compose[@]}" exec -T packeteer-a ip route add blackhole 192.0.2.20/32
+"${compose[@]}" exec -T packeteer-b ip route add blackhole 192.0.2.10/32
+start=$(date +%s)
+want
+took=$(($(date +%s) - start))
+# max_age 3s, poll 1s, probe interval 2s: the steer must go within a few rounds.
+if [ "$took" -gt 15 ]; then
+	echo "FAIL: steer through POP B withdrawn ${took}s after the cut, want within 15s" >&2
+	dump
+	exit 1
+fi
+echo "steer withdrawn ${took}s after the link cut"
+if [ "$(steer_logs retired)" != "$((retired_before + 1))" ]; then
+	echo "FAIL: expected one retire of the x-b steer after the cut" >&2
+	dump
+	exit 1
+fi
+need_api packeteer-a /api/federation '.peers[0].fresh == false and (.global_commit[0].complete | not)' "pop-a still trusts pop-b"
+need_api packeteer-b /api/federation '.peers[0].fresh == false and (.global_commit[0].complete | not)' "pop-b still trusts pop-a"
+need_api packeteer-a /api/providers '[.providers[] | select(.name == "x-a")] | length == 1' "pop-a lost its own provider"
+echo "both POPs decide alone: no steer, nothing from packeteer-b, for 20s"
+stay 20
+after=$(steer_logs improve)
+if [ "$after" != "$before" ]; then
+	echo "FAIL: packeteer-a steered through x-b $((after - before)) more time(s) while cut off" >&2
+	dump
+	exit 1
+fi
+"${compose[@]}" exec -T packeteer-a ip route del blackhole 192.0.2.20/32
+"${compose[@]}" exec -T packeteer-b ip route del blackhole 192.0.2.10/32
+echo "link healed"
+want "$pfx 192.0.2.253"
+tagged "$pfx" 192.0.2.253
+need_api packeteer-a /api/federation '.peers[0].fresh and .global_commit[0].complete' "pop-a did not merge pop-b back"
+need_api packeteer-b /api/federation '.peers[0].fresh and .global_commit[0].complete' "pop-b did not merge pop-a back"
+stay 8 "$pfx 192.0.2.253"
+after=$(steer_logs improve)
+if [ "$after" != "$((before + 1))" ]; then
+	echo "FAIL: expected one re-steer after the heal, saw $((after - before))" >&2
+	dump
+	exit 1
+fi
+
+echo "7. SIGTERM packeteer-a withdraws"
 "${compose[@]}" stop -t 20 packeteer-a
 want
 text=$(vty edge-a -c "show bgp ipv4 unicast $pfx" 2>/dev/null || true)

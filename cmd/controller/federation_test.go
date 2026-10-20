@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -275,5 +276,171 @@ func TestRemoteProvidersNotProbed(t *testing.T) {
 	var nilFed *fedState
 	if st := nilFed.status(); st.Enabled {
 		t.Fatal("standalone status enabled")
+	}
+}
+
+const fedCtlPopBYAML = `
+mode: inject
+asn: 64512
+router_id: 192.0.2.20
+packeteer_community: "64512:666"
+max_improvements: 50
+hold_time: 1s
+thresholds:
+  min_loss_delta_pct: 1
+  min_rtt_delta_ms: 15
+instance: pop-b
+domain: pop-b
+inter_dc_rtt:
+  pop-a: 10ms
+providers:
+  - name: x-b
+    source_ip: 192.0.2.21
+    next_hop: 192.0.2.5
+  - name: x-a
+    domain: pop-a
+    next_hop: 192.0.2.254
+allowlist:
+  prefixes: [198.51.100.0/24]
+global_commit:
+  - name: carrier-x
+    commit_mbps: 100
+    providers: [x-a, x-b]
+federation:
+  type: mtls
+local_pref: 250
+bgp:
+  neighbors:
+    - address: 192.0.2.253
+announcer:
+  type: gobgp
+`
+
+// fedPOP is one instance of TestFederationLinkCut: the real merge, commit,
+// decision, and publish path with an in-memory transport.
+type fedPOP struct {
+	fed     *fedState
+	ff      *fakeFed
+	decider *policy.Engine
+	set     *pluginhost.Set
+	ctl     *announce.Controller
+	ann     *memAnn
+	peer    plugin.PeerState
+	results map[string]time.Duration
+	native  string
+	usage   plugin.Usage
+}
+
+func newFedPOP(t *testing.T, yaml string, results map[string]time.Duration, native string, pfx netip.Prefix, hops map[string]netip.Addr) *fedPOP {
+	t.Helper()
+	cfg, err := config.Parse([]byte(yaml))
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := &fedPOP{ff: &fakeFed{}, ann: &memAnn{}, results: results, native: native}
+	p.fed = newFedState(cfg, &pluginhost.Set{Federation: &pluginhost.Instance[plugin.Federation]{Name: "mtls", Type: "mtls", Plugin: p.ff}})
+	p.set = scorerSet(t, "commit")
+	p.decider, err = newDecider(cfg, p.set)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.ctl, err = announce.New(announce.Config{
+		Mode: "inject", LocalPref: 250, Community: cfg.PacketeerCommunity, MaxImprovements: 50,
+		Allowlist: []netip.Prefix{pfx}, NextHops: hops,
+	}, p.ann, readyRIB{pfx}, slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+// round runs one evaluation. peer is what the transport last delivered;
+// its freshness is judged against maxAge at now, as the mtls plugin does.
+func (p *fedPOP) round(t *testing.T, now time.Time, pfx netip.Prefix, maxAge time.Duration) {
+	t.Helper()
+	if p.peer.Name != "" {
+		p.peer.Fresh = now.Sub(p.peer.LastSeen) <= maxAge
+		p.ff.set([]plugin.PeerState{p.peer})
+	}
+	in := policy.Input{Usage: []plugin.Usage{p.usage}, ProviderUp: map[string]bool{}, RIBEnabled: true, RIBReady: true, Native: map[netip.Prefix]string{pfx: p.native}}
+	for name, rtt := range p.results {
+		in.Results = append(in.Results, probe.Result{Provider: name, Prefix: pfx, Time: now, Stats: probe.Stats{Sent: 4, Received: 4, RTTAvg: rtt}})
+		in.ProviderUp[name] = true
+	}
+	p.fed.merge(&in, now)
+	p.fed.commit(context.Background(), &in, p.set)
+	if _, err := runDecision(now, p.decider, in, p.ctl, slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil)), "inject", nil); err != nil {
+		t.Fatal(err)
+	}
+	p.fed.publish(now, in, p.decider.Improvements())
+}
+
+// TestFederationLinkCut: two federated instances, both deciding every
+// round, lose contact and regain it (#308). The steer through the other
+// POP is withdrawn on the first round after max_age, the peer that has
+// nothing to steer announces nothing at any point, the route is announced
+// and withdrawn exactly once each, and it returns after the link heals.
+func TestFederationLinkCut(t *testing.T) {
+	pfx := netip.MustParsePrefix("198.51.100.0/24")
+	const maxAge = 3 * time.Second
+	a := newFedPOP(t, fedCtlYAML, map[string]time.Duration{"x-a": 80 * time.Millisecond}, "x-a", pfx,
+		map[string]netip.Addr{"x-a": netip.MustParseAddr("192.0.2.1"), "x-b": netip.MustParseAddr("192.0.2.253")})
+	b := newFedPOP(t, fedCtlPopBYAML, map[string]time.Duration{"x-b": 10 * time.Millisecond}, "x-b", pfx,
+		map[string]netip.Addr{"x-b": netip.MustParseAddr("192.0.2.5"), "x-a": netip.MustParseAddr("192.0.2.254")})
+
+	a.usage = plugin.Usage{Provider: "x-a", CommitMbps: 100, Samples: 1, Single: true, UsageMbps: 20}
+	b.usage = plugin.Usage{Provider: "x-b", CommitMbps: 100, Samples: 1, Single: true, UsageMbps: 20}
+
+	const cutAt, healAt, rounds = 8, 20, 32
+	t0 := time.Now()
+	var changes []string
+	prev := false
+	for i := 0; i < rounds; i++ {
+		now := t0.Add(time.Duration(i) * time.Second)
+		a.round(t, now, pfx, maxAge)
+		b.round(t, now, pfx, maxAge)
+		_, steered := a.ann.route(pfx)
+		if steered != prev {
+			changes = append(changes, map[bool]string{true: "announce", false: "withdraw"}[steered]+"@"+strconv.Itoa(i))
+			prev = steered
+		}
+		if n := b.ann.count(); n != 0 {
+			t.Fatalf("round %d: pop-b announced %d routes; its own exit is always best", i, n)
+		}
+		if steered {
+			if rt, _ := a.ann.route(pfx); rt.Provider != "x-b" || rt.NextHop.String() != "192.0.2.253" {
+				t.Fatalf("round %d: pop-a route = %+v", i, rt)
+			}
+		}
+		linkUp := i < cutAt || i >= healAt
+		if linkUp {
+			a.peer = plugin.PeerState{Name: "pop-b", Fresh: true, LastSeen: now, Snapshot: b.ff.last()}
+			b.peer = plugin.PeerState{Name: "pop-a", Fresh: true, LastSeen: now, Snapshot: a.ff.last()}
+		}
+		if i == cutAt+2 && !steered {
+			t.Fatalf("round %d: steer withdrawn before max_age; peer data is still within the limit", i)
+		}
+		if i == cutAt+5 {
+			// 4s since the last delivery at round cutAt-1 is past the 3s limit.
+			if steered {
+				t.Fatalf("round %d: steer through a stale peer kept", i)
+			}
+			for _, st := range []*fedPOP{a, b} {
+				v := st.fed.status()
+				if len(v.Peers) != 1 || v.Peers[0].Fresh {
+					t.Fatalf("round %d: peer still fresh in the central view: %+v", i, v.Peers)
+				}
+				if len(v.GlobalCommit) != 1 || v.GlobalCommit[0].Complete {
+					t.Fatalf("round %d: global commit complete without the peer: %+v", i, v.GlobalCommit)
+				}
+			}
+		}
+	}
+	want := []string{"announce@1", "withdraw@" + strconv.Itoa(cutAt+3), "announce@" + strconv.Itoa(healAt+1)}
+	if strings.Join(changes, " ") != strings.Join(want, " ") {
+		t.Fatalf("route changes = %v, want %v", changes, want)
+	}
+	if v := a.fed.status(); !v.Peers[0].Fresh || !v.GlobalCommit[0].Complete {
+		t.Fatalf("after the heal the view is not whole: %+v", v)
 	}
 }

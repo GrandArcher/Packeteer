@@ -2234,7 +2234,7 @@ jobs:
         run: bash lab/e2e-leak-watch.sh
       - name: FRR improvement-weights lab (heavier prefix wins the cap, unlearned prefix never announced, RIB leave, no displacement, SIGTERM, restart, SIGKILL)
         run: bash lab/e2e-weights.sh
-      - name: FRR multi-POP lab (two federated instances over mTLS, inter-DC RTT, peer loss, global commit, SIGTERM, SIGKILL)
+      - name: FRR multi-POP lab (two federated instances over mTLS, inter-DC RTT, peer loss, global commit, link cut and heal, SIGTERM, SIGKILL)
         run: bash lab/e2e-multipop.sh
       - name: FRR herd lab (#260; three members, per-vantage view, exclude list, signed pulls over pinned mTLS, no prefix in a preview, audit, a paused peer, SIGTERM)
         run: bash lab/e2e-herd.sh
