@@ -180,7 +180,7 @@ A learned prefix is eligible when it is equal to an entry or more specific and i
 | `interval` | `30s` | Greater than `timeout`. Also the period of the staleness check. |
 | `timeout` | `2s` | Per packet. Must be shorter than `interval`. |
 | `packets` | 10 | 1-1000. |
-| `workers` | 8 | 1-1024 concurrent probe runs. |
+| `workers` | 8 | 1-1024 concurrent probe runs. A free worker takes the next job for the provider with the fewest jobs running, so a provider whose probes time out holds at most its share of the workers while the others have work (#381). |
 | `rate_limit_pps` | 100 | 1-100000 packets per second, global. |
 | `per_target_concurrency` | 2 | 1-64 concurrent runs toward one destination host. |
 | `retry_loss_pct` | 0 | 0-100. `0` disables loss retry. Above zero, a sample whose loss is at least this percent is probed again before it is stored. |
@@ -200,7 +200,9 @@ A host with fewer than `min_replies` replies, or with an RTT spread wider than `
 
 A measurement older than `3 * interval + packets * timeout` is stale. When a second probe can run (`retry_loss_pct` or `dispersion_ms` is set, so `retry_packets` is in use) the window is `3 * interval + (packets + retry_packets) * timeout`. `min_replies` alone does not extend it. That same duration is the deadline for one probe round. The decision loop also wakes every `interval`, so a round that never finishes still withdraws once results are stale.
 
-A completed round stores every result at once. A round that hits the deadline stores only the prefixes whose probes all finished (#125), each prefix's providers together and never one provider without the others, so one measurement round counts once toward `confirm_rounds`. A prefix with any probe still running keeps all its previous results and stays due, so staleness stays per result. A timed-out round still drops a prefix that left every source. The next pass continues with prefixes that are still due and does not wait out the interval of one that already finished.
+A completed round stores every result at once. A round that hits the deadline stores every probe that finished (#125, #381), together and only when the round ends, so one measurement round counts once toward `confirm_rounds`. A provider whose probe is still running keeps its previous result for that prefix, so a provider that never answers does not cost the others their results, and its result goes stale on its own. A prefix with no finished probe keeps all its previous results and stays due. A timed-out round still drops a prefix that left every source. The next pass continues with prefixes that are still due and does not wait out the interval of one that already finished.
+
+A job probes the hosts of one prefix on one provider in turn. After two hosts get no reply and none has answered, it skips the remaining in-prefix hosts (#381). The provider's far-side gateway is still probed, because it scores the prefix when no in-prefix host answers. `targets` on the result lists the hosts that were probed. A third host that would have answered is not tried in that round.
 
 Due prefixes are ordered urgent first (a confirm streak, or a source that marked the target), then a shorter interval than `probe.interval` (VIP), then the engine interval (flow `top_n` and ordinary targets), then a longer interval (the flow tail). Prefixes in one tier keep the order the sources returned. The decision engine runs when the round stored at least one prefix, including a round the deadline cut short. It does not run when the deadline hits before any prefix finishes; those previous results stay, and the staleness check still withdraws them once they age out. Every packet still waits on `rate_limit_pps`.
 

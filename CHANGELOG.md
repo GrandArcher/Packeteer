@@ -14,6 +14,7 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 ### Fixed
 
 - Herd stats and trimming read per-member counters kept by triggers (`herd_stats`) instead of scanning the herd table on the shared sqlite connection (#393).
+- Probe: a down provider no longer starves the others; workers are shared per provider, a job stops after two silent hosts, and finished results are stored when a round times out (#381).
 
 ## [0.8.0] - 2026-10-20
 

@@ -17,6 +17,10 @@ import (
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
 )
 
+// silentHostLimit is how many hosts of one job may get no reply before the
+// job stops trying the other in-prefix hosts (#381).
+const silentHostLimit = 2
+
 // Provider is a transit whose path is measured from Source.
 type Provider struct {
 	Name   string
@@ -71,10 +75,10 @@ type Options struct {
 	OnRound  func()       // called after each completed round (optional)
 	// RoundTimeout bounds one round, including target collection. Zero
 	// derives a bound from the interval and the per-probe deadline. A round
-	// that exceeds it stores prefixes whose probes all finished and leaves
-	// the rest as they were: a prober or target source that ignores
-	// cancellation must not refresh a prefix it did not finish, and must
-	// not discard prefixes that did finish.
+	// that exceeds it stores the probes that finished and leaves the rest
+	// as they were: a prober or target source that ignores cancellation
+	// must not refresh a result it did not finish, and must not discard
+	// results that did finish.
 	RoundTimeout time.Duration
 	// RetryLossPct, when greater than zero, re-probes a path with
 	// RetryPackets before the result is stored if loss is at least this
@@ -1039,9 +1043,9 @@ func (e *Engine) probesBusy() bool {
 
 // RunOnce performs one probe round over all providers and targets.
 // The round has an overall deadline. A complete round stores every result
-// together. If the deadline expires first, only prefixes whose provider
-// probes all finished are stored, each prefix whole, and unfinished
-// prefixes keep their previous results. If a target source does not
+// together. If the deadline expires first, the results of the probes that
+// finished are stored together and each unfinished probe keeps its
+// previous result. If a target source does not
 // return, nothing changes. OnRound is not called unless a prefix was stored.
 // RunOnce ignores per-target intervals and measures every target.
 func (e *Engine) RunOnce(ctx context.Context) {
@@ -1112,7 +1116,7 @@ func (e *Engine) runRound(ctx context.Context, allow func(plugin.Target) bool, m
 	// prefixes before a longer tail (#118, #125).
 	sortJobs(jobs, e.opt.Interval)
 
-	ch := make(chan job)
+	disp := newDispatcher(jobs)
 	type outcome struct {
 		res        Result
 		sourceDown bool
@@ -1125,11 +1129,13 @@ func (e *Engine) runRound(ctx context.Context, allow func(plugin.Target) bool, m
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			for j := range ch {
-				if roundCtx.Err() != nil {
+			for {
+				j, ok := disp.next()
+				if !ok || roundCtx.Err() != nil {
 					return
 				}
 				r, srcDown := e.probe(roundCtx, j)
+				disp.done(j)
 				if e.keepShare() {
 					if r.Share == nil {
 						r.Share = &Share{}
@@ -1150,15 +1156,6 @@ func (e *Engine) runRound(ctx context.Context, allow func(plugin.Target) bool, m
 			}
 		}()
 	}
-feed:
-	for _, j := range jobs {
-		select {
-		case ch <- j:
-		case <-roundCtx.Done():
-			break feed
-		}
-	}
-	close(ch)
 
 	finished := make(chan struct{})
 	go func() {
@@ -1167,15 +1164,10 @@ feed:
 		close(outs)
 	}()
 
-	// Results are buffered until the round ends. A prefix is stored only
-	// when every provider job for it finished, and all of its results go
-	// in under one lock. The policy dates a round by the newest result for
-	// a prefix, so a half-stored prefix would count one measurement round
-	// twice toward confirm_rounds.
-	want := map[netip.Prefix]int{}
-	for _, j := range jobs {
-		want[j.target.Prefix]++
-	}
+	// Results are buffered until the round ends and go in under one lock.
+	// The policy dates a round by the newest result for a prefix, so
+	// storing a prefix in two steps would count one measurement round twice
+	// toward confirm_rounds.
 	fresh := map[key]Result{}
 	got := map[netip.Prefix]int{}
 	downBy := map[key]string{}
@@ -1246,37 +1238,32 @@ feed:
 		return probed, true
 	}
 
-	// The deadline passed with jobs outstanding. Store prefixes whose
-	// jobs all finished; leave the others, and their schedule, alone.
+	// The deadline passed with jobs outstanding. Store every result that
+	// finished, so a provider that never answers does not cost the others
+	// theirs (#381). A job that did not finish keeps its previous result,
+	// which ages out on its own; a prefix with no finished job stays due.
 	committed := map[netip.Prefix]struct{}{}
-	for pfx, n := range got {
-		if n == want[pfx] {
-			committed[pfx] = struct{}{}
-		}
+	for pfx := range got {
+		committed[pfx] = struct{}{}
 	}
 	if len(committed) == 0 {
 		e.leaveProbes(finished, nil)
 		e.log.Warn("probe round timed out; keeping previous results")
 		return nil, false
 	}
-	e.log.Warn("probe round timed out; kept finished prefix results", "finished", len(committed), "prefixes", len(want))
-	stored := make(map[key]Result, len(fresh))
+	e.log.Warn("probe round timed out; kept finished results", "results", len(fresh), "jobs", len(jobs))
 	ran := map[string]bool{}
 	down := map[string]string{}
 	for k, r := range fresh {
-		if _, ok := committed[r.Prefix]; !ok {
-			continue
-		}
-		stored[k] = r
 		ran[r.Provider] = true
 		if reason, isDown := downBy[k]; isDown {
 			down[r.Provider] = reason
 		}
 	}
 	e.pruneIndirect(keep)
-	batch := takeShare(stored)
-	e.storeResults(stored, keep, ran, down)
-	e.emitResults(stored)
+	batch := takeShare(fresh)
+	e.storeResults(fresh, keep, ran, down)
+	e.emitResults(fresh)
 	e.emitBatch(batch)
 	e.rememberProbes(committed)
 	e.addPrefixCommits(len(committed))
@@ -1556,7 +1543,19 @@ func (e *Engine) probe(ctx context.Context, j job) (Result, bool) {
 	copied := append([]netip.Addr(nil), hosts...)
 	var samples []hostSample
 	var errs []error
+	var tried []netip.Addr
+	silent, answered := 0, false
 	for _, h := range hosts {
+		// A provider that is down costs the full timeout per host and holds
+		// a worker the whole time (#381). After silentHostLimit hosts with
+		// no reply and none answered, the remaining in-prefix hosts are
+		// skipped. The far-side gateway is still probed: it can score the
+		// prefix when no in-prefix host answers.
+		isGW := gw.IsValid() && h == gw
+		if silent >= silentHostLimit && !answered && !isGW {
+			continue
+		}
+		tried = append(tried, h)
 		one, down := e.probeOne(ctx, j.provider, j.target.Prefix, h, e.packets())
 		one.Targets = copied
 		if down || ctx.Err() != nil {
@@ -1564,11 +1563,18 @@ func (e *Engine) probe(ctx context.Context, j job) (Result, bool) {
 		}
 		if one.Err != "" {
 			errs = append(errs, errors.New(one.Err))
+			silent++
 			continue
 		}
-		samples = append(samples, hostSample{addr: h, res: one, gateway: gw.IsValid() && h == gw})
+		if one.Stats.Received > 0 {
+			answered = true
+		} else {
+			silent++
+		}
+		samples = append(samples, hostSample{addr: h, res: one, gateway: isGW})
 	}
-	if res, down, ok := e.probeIndirect(ctx, j, hosts, samples); ok {
+	copied = tried
+	if res, down, ok := e.probeIndirect(ctx, j, copied, samples); ok {
 		return res, down
 	}
 	if len(samples) == 0 {
