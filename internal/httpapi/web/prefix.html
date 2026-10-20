@@ -10,6 +10,7 @@
 <link rel="icon" href="/logo.png" type="image/png" sizes="128x128">
 </head>
 <body data-page="prefixes" data-live="app">
+<a class="skip-link" href="#main">Skip to content</a>
 <div id="banner" class="banner" role="status" hidden></div>
 <div id="conn" class="conn" role="alert" hidden></div>
 <div class="app">
@@ -48,9 +49,9 @@
   </div>
   <button type="button" id="refresh">Refresh</button>
 </header>
-<main>
+<main id="main" tabindex="-1">
   <section>
-    <h2 id="prefix-title" class="mono">Prefix</h2>
+    <h1 id="prefix-title" class="mono">Prefix</h1>
     <p class="tag">Read-only. The card is the live view; the timeline is stored history. MED is display only and does not choose the exit. Nothing here announces a route.</p>
     <p id="prefix-links" class="linkout-row"></p>
     <div id="prefix-live"><p class="empty">Loading…</p></div>

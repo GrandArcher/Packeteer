@@ -10,6 +10,7 @@
 <link rel="icon" href="/logo.png" type="image/png" sizes="128x128">
 </head>
 <body data-page="settings">
+<a class="skip-link" href="#main">Skip to content</a>
 <div id="banner" class="banner" role="status" hidden></div>
 <div id="conn" class="conn" role="alert" hidden></div>
 <div class="app">
@@ -49,7 +50,8 @@
   <button type="button" id="refresh">Refresh</button>
 </header>
 <div id="ed-off" class="conn" role="alert" hidden></div>
-<main>
+<main id="main" tabindex="-1">
+  <h1>Settings</h1>
   <section id="wizard">
     <h2>Setup wizard</h2>
     <p class="tag">Four steps, the last one optional. It always starts in observe: the edge session is learn-only, and the allowlist stays empty. A fresh file has no announcer; over an existing config, blocks the wizard does not write are kept. Inject is not a step. Secrets stay in environment variables; this wizard has no secret fields. Nothing is written until you save the YAML below.</p>
@@ -195,7 +197,7 @@
     <ul id="cs-errors" class="errors"></ul>
   </section>
   <section id="editor-section">
-    <h2>Settings</h2>
+    <h2>Settings forms</h2>
     <p class="tag">Everything is a form here. Save merges your changes into the file, runs the same checks as a start, and writes it; the Preview below shows the difference and which changes need a restart first. Keys the form does not know are kept exactly as they are, and a form you did not change writes nothing. Thresholds, hold time, the improvement cap, policies, sources, probe timing, mode, the allowlist, and BGP neighbors apply on Save. Any other change waits for a restart. Turning inject on needs the checklist and a confirmation. Secrets stay in environment variables: the form asks for the variable's name, never the secret. The raw YAML is the last section, for anything the forms do not show. Needs <code>http.config_editor: true</code> and the admin role.</p>
     <div class="settings-form">
       <div>
@@ -386,6 +388,7 @@
       </div>
       <div id="ed-status" class="tag"></div>
       <ul id="ed-errors" class="errors"></ul>
+      <label for="ed-yaml">Config file (YAML)</label>
       <textarea id="ed-yaml" class="editor mono" rows="30" spellcheck="false"></textarea>
       <p class="tag">File: <span id="ed-path" class="mono">-</span> sha256 <span id="ed-sha" class="mono">-</span></p>
     </details>

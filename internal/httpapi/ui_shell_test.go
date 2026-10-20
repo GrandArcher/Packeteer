@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"io/fs"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -146,6 +147,50 @@ func TestUIShell(t *testing.T) {
 		}
 		if !strings.Contains(rec.Body.String(), `id="banner"`) {
 			t.Errorf("%s response has no banner", path)
+		}
+	}
+}
+
+// TestUIKeyboardAccess checks every page for the keyboard and screen reader
+// rules of #353: the skip link is the first focusable element and points at
+// a focusable main, there is exactly one h1, and the YAML editor has a label.
+// Focus ring size and contrast are checked in a browser by lab/ui-smoke.sh.
+func TestUIKeyboardAccess(t *testing.T) {
+	entries, err := fs.ReadDir(webFS, "web")
+	if err != nil {
+		t.Fatal(err)
+	}
+	focusable := regexp.MustCompile(`<(?:a|button|input|select|textarea)[\s>]`)
+	pages := 0
+	for _, e := range entries {
+		if !strings.HasSuffix(e.Name(), ".html") {
+			continue
+		}
+		pages++
+		body := mustWeb(t, "web/"+e.Name())
+		after := body[strings.Index(body, "<body"):]
+		loc := focusable.FindStringIndex(after)
+		if loc == nil || !strings.HasPrefix(after[loc[0]:], `<a class="skip-link" href="#main">Skip to content</a>`) {
+			t.Errorf("%s: the first focusable element is not the skip link", e.Name())
+		}
+		if !strings.Contains(body, `<main id="main" tabindex="-1"`) {
+			t.Errorf("%s: main is not the skip link target", e.Name())
+		}
+		if n := strings.Count(body, "<h1"); n != 1 {
+			t.Errorf("%s has %d h1 elements, want 1", e.Name(), n)
+		}
+	}
+	if pages == 0 {
+		t.Fatal("no pages checked")
+	}
+	settings := mustWeb(t, "web/settings.html")
+	if !strings.Contains(settings, `<label for="ed-yaml">Config file (YAML)</label>`) {
+		t.Error("the YAML editor has no label")
+	}
+	css := mustWeb(t, "web/app.css")
+	for _, s := range []string{":focus-visible { outline: 3px solid #2f80ed;", ".skip-link:focus { top: 8px; }"} {
+		if !strings.Contains(css, s) {
+			t.Errorf("app.css missing %q", s)
 		}
 	}
 }

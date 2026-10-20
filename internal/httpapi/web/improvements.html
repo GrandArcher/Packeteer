@@ -10,6 +10,7 @@
 <link rel="icon" href="/logo.png" type="image/png" sizes="128x128">
 </head>
 <body data-page="improvements" data-live="app">
+<a class="skip-link" href="#main">Skip to content</a>
 <div id="banner" class="banner" role="status" hidden></div>
 <div id="conn" class="conn" role="alert" hidden></div>
 <div class="app">
@@ -48,9 +49,9 @@
   </div>
   <button type="button" id="refresh">Refresh</button>
 </header>
-<main>
+<main id="main" tabindex="-1">
   <section>
-    <h2 id="improvements-title">Recommended improvements</h2>
+    <h1 id="improvements-title">Recommended improvements</h1>
     <p id="improvements-tag" class="tag"></p>
     <div id="improvements"><p class="empty">Loading…</p></div>
   </section>

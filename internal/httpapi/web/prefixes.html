@@ -10,6 +10,7 @@
 <link rel="icon" href="/logo.png" type="image/png" sizes="128x128">
 </head>
 <body data-page="prefixes" data-live="app">
+<a class="skip-link" href="#main">Skip to content</a>
 <div id="banner" class="banner" role="status" hidden></div>
 <div id="conn" class="conn" role="alert" hidden></div>
 <div class="app">
@@ -48,9 +49,9 @@
   </div>
   <button type="button" id="refresh">Refresh</button>
 </header>
-<main>
+<main id="main" tabindex="-1">
   <section>
-    <h2>Prefixes</h2>
+    <h1>Prefixes</h1>
     <p class="tag">Measured prefixes, one page at a time. Traffic now (router) is the learned path; Packeteer recommends is the latest decision's pick. In inject mode the columns are Current and Recommended. Score gain is the scorer's gain of the recommended exit over the current one. Loss and RTT are those of the current exit, or of the recommended exit when the current one has no successful probe. Details opens the prefix card. MED on a learned path is shown and is not used to choose the exit. Nothing here announces a route.</p>
     <div class="controls">
       <label>Prefix <input id="prefix-filter" type="search" size="22" placeholder="198.51.100.0/24 or part"></label>

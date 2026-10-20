@@ -4,6 +4,10 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 
 ## [Unreleased]
 
+### Added
+
+- UI keyboard and screen reader access: Skip to content link on every page, 3 px focus ring, one h1 per page, labelled YAML editor; a browser smoke step checks them (#353).
+
 ## [0.8.0] - 2026-10-20
 
 Internet exchanges and shared measurements: IXP observe-only mode, RPKI labels, probe multiplexing, settings forms, the opt-in herd, and sign-in on by default.

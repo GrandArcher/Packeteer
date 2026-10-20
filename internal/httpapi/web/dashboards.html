@@ -10,6 +10,7 @@
 <link rel="icon" href="/logo.png" type="image/png" sizes="128x128">
 </head>
 <body data-page="dashboards">
+<a class="skip-link" href="#main">Skip to content</a>
 <div id="banner" class="banner" role="status" hidden></div>
 <div id="conn" class="conn" role="alert" hidden></div>
 <div class="app">
@@ -48,9 +49,9 @@
   </div>
   <button type="button" id="refresh">Refresh</button>
 </header>
-<main>
+<main id="main" tabindex="-1">
   <section>
-    <h2>Custom dashboards</h2>
+    <h1>Custom dashboards</h1>
     <p class="tag">Your own layouts of read-only widgets, kept per user in storage. Each widget reads again on its own interval (15 seconds unless you set another). Move a widget with its ⠿ grip (drag it, or focus it and press the arrow keys) and resize it with its ◢ grip (drag it, or press the arrow keys); the list under Edit does the same with buttons and menus.</p>
     <div class="controls">
       <label>Dashboard <select id="db-name"></select></label>
