@@ -2,6 +2,7 @@ package federation
 
 import (
 	"net/netip"
+	"strings"
 	"testing"
 	"time"
 
@@ -213,6 +214,59 @@ func TestDecideThroughRemotePOP(t *testing.T) {
 	e.Evaluate(in, at)
 	if imps := e.Improvements(); len(imps) != 0 {
 		t.Fatalf("improvement onto a stale peer's provider kept: %+v", imps)
+	}
+}
+
+// pop-b probes on its own schedule, so its path stays older than this
+// POP's last round. confirm_rounds compares only local results with that
+// round (#381): the streak onto x-b advances on each local round, and a
+// local provider that kept its previous result still holds it back.
+func TestConfirmRoundsWithRemotePath(t *testing.T) {
+	scorer, err := weighted.New(plugin.Config{}, plugin.Env{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	e := policy.NewEngine(policy.Config{
+		Mode: "inject", MinLossDeltaPct: 1, MinRTTDelta: 15 * time.Millisecond,
+		HoldTime: time.Minute, MaxImprovements: 50, MaxResultAge: 30 * time.Second,
+		ConfirmRounds: 3, Allowlist: []netip.Prefix{pfx},
+	}, scorer)
+	peer := peerB(t0.Add(-2 * time.Second))
+	round := func(at, yAt time.Time) string {
+		t.Helper()
+		in := baseInput(at)
+		in.Results[1].Time = yAt
+		Merge(&in, popA(), []plugin.PeerState{peer})
+		if !in.Remote["x-b"] || in.Remote["x-a"] || in.Remote["y-a"] {
+			t.Fatalf("remote providers = %v", in.Remote)
+		}
+		e.Evaluate(in, at)
+		ds, _ := e.Decisions()
+		for _, d := range ds {
+			if d.Prefix == pfx {
+				return d.Reason
+			}
+		}
+		t.Fatalf("no decision for %s", pfx)
+		return ""
+	}
+	t1, t2, t3 := t0.Add(5*time.Second), t0.Add(10*time.Second), t0.Add(15*time.Second)
+	for _, step := range []struct {
+		at, yAt time.Time
+		want    string
+	}{
+		{t0, t0, "confirming x-b (1/3)"},
+		{t1, t1, "confirming x-b (2/3)"},
+		// y-a's probe did not finish: it keeps t1's result.
+		{t2, t1, "confirming x-b (2/3)"},
+	} {
+		if got := round(step.at, step.yAt); !strings.Contains(got, step.want) || len(e.Improvements()) != 0 {
+			t.Fatalf("round at %v: reason %q, improvements %+v, want %q", step.at, got, e.Improvements(), step.want)
+		}
+	}
+	round(t3, t3)
+	if imps := e.Improvements(); len(imps) != 1 || imps[0].Provider != "x-b" {
+		t.Fatalf("third full local round did not confirm x-b: %+v", imps)
 	}
 }
 

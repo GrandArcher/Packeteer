@@ -79,7 +79,8 @@ func ownProvider(s *plugin.InstanceSnapshot, name string) (plugin.FederatedProvi
 // fresh peers measured through providers in their domain, with the
 // inter-DC RTT added. It sets each remote provider's health, and marks a
 // remote provider not routed (policy.Input.NoRoute) for a prefix whose
-// peer does not send its own traffic for that exact prefix through it.
+// peer does not send its own traffic for that exact prefix through it,
+// and lists every remote provider in policy.Input.Remote.
 // Call it after in.Results, in.ProviderUp, and in.Native are filled.
 func Merge(in *policy.Input, cfg Config, peers []plugin.PeerState) {
 	if len(cfg.Remote) == 0 {
@@ -87,6 +88,9 @@ func Merge(in *policy.Input, cfg Config, peers []plugin.PeerState) {
 	}
 	if in.ProviderUp == nil {
 		in.ProviderUp = map[string]bool{}
+	}
+	if in.Remote == nil {
+		in.Remote = map[string]bool{}
 	}
 	probed := map[netip.Prefix]bool{}
 	for _, r := range in.Results {
@@ -113,6 +117,7 @@ func Merge(in *policy.Input, cfg Config, peers []plugin.PeerState) {
 			}
 		}
 		in.ProviderUp[name] = up
+		in.Remote[name] = true
 		routes := map[netip.Prefix]plugin.FederatedRoute{}
 		if snap != nil {
 			for _, rt := range snap.Routes {

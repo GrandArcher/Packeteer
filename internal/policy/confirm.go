@@ -35,11 +35,11 @@ func notePerformance(st *State, in Input, cfg Config, p netip.Prefix, provider s
 	at, count, stale := prefixRound(in, cfg, cur, p, now)
 	// A timed-out probe round stores the providers that finished and
 	// leaves the others with their previous result (#381). Such a round
-	// may start or reset a streak but must not extend one: every provider
-	// compared has to be measured again, or a provider whose probes stopped
+	// may start or reset a streak but must not extend one: every local
+	// provider has to be measured again, or a provider whose probes stopped
 	// finishing could be confirmed on its last good sample.
-	extends := count && provider != "" && cur.Provider == provider
-	if extends && !remeasured(in, cfg, cur, p, now) {
+	local, remeasured := localRound(in, cfg, cur, p, now)
+	if count && provider != "" && cur.Provider == provider && !remeasured {
 		count = false
 	}
 	if stale || !count {
@@ -59,10 +59,11 @@ func notePerformance(st *State, in Input, cfg Config, p netip.Prefix, provider s
 		return false, 0
 	}
 	if cur.Provider != provider {
-		cur = confirm{Provider: provider, Streak: 1, Round: at}
+		cur = confirm{Provider: provider, Streak: 1, Round: at, Local: local}
 	} else {
 		cur.Streak++
 		cur.Round = at
+		cur.Local = local
 	}
 	cur.Probe = cur.Streak < rounds
 	st.confirm[p] = cur
@@ -124,21 +125,27 @@ func prefixRound(in Input, cfg Config, prev confirm, p netip.Prefix, now time.Ti
 	return newest, true, false
 }
 
-// remeasured reports whether every fresh result for p is newer than the
-// last counted round.
-func remeasured(in Input, cfg Config, prev confirm, p netip.Prefix, now time.Time) bool {
+// localRound returns the newest time among this instance's own results
+// for p, and whether every fresh one is newer than prev.Local. Results
+// from federation peers are left out: a peer probes on its own schedule,
+// so its path can be fresh and still older than the last local round.
+func localRound(in Input, cfg Config, prev confirm, p netip.Prefix, now time.Time) (newest time.Time, remeasured bool) {
+	remeasured = true
 	for _, r := range in.Results {
-		if r.Prefix != p {
+		if r.Prefix != p || in.Remote[r.Provider] {
 			continue
+		}
+		if r.Time.After(newest) {
+			newest = r.Time
 		}
 		if cfg.MaxResultAge > 0 && now.Sub(r.Time) > cfg.MaxResultAge {
 			continue
 		}
-		if !r.Time.After(prev.Round) {
-			return false
+		if !r.Time.After(prev.Local) {
+			remeasured = false
 		}
 	}
-	return true
+	return newest, remeasured
 }
 
 // markPendingUrgent lists prefixes whose streak is short and whose paths

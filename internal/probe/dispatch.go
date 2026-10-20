@@ -13,6 +13,13 @@ type dispatcher struct {
 	queued   map[string][]queuedJob // per provider, in priority order
 	inflight map[string]int
 	names    []string
+	// replied and silent count, per provider, this round's finished jobs
+	// that got a reply and those that got none (#381).
+	replied map[string]int
+	silent  map[string]int
+	// silentBefore marks providers whose last round with a finished job
+	// got no reply on any job.
+	silentBefore map[string]bool
 }
 
 type queuedJob struct {
@@ -20,8 +27,9 @@ type queuedJob struct {
 	job job
 }
 
-func newDispatcher(jobs []job) *dispatcher {
-	d := &dispatcher{queued: map[string][]queuedJob{}, inflight: map[string]int{}}
+func newDispatcher(jobs []job, silentBefore map[string]bool) *dispatcher {
+	d := &dispatcher{queued: map[string][]queuedJob{}, inflight: map[string]int{},
+		replied: map[string]int{}, silent: map[string]int{}, silentBefore: silentBefore}
 	for i, j := range jobs {
 		n := j.provider.Name
 		if _, ok := d.queued[n]; !ok {
@@ -58,8 +66,41 @@ func (d *dispatcher) next() (job, bool) {
 	return q[0].job, true
 }
 
-func (d *dispatcher) done(j job) {
+// done records that j finished; replied is whether any of its hosts
+// answered.
+func (d *dispatcher) done(j job, replied bool) {
 	d.mu.Lock()
-	d.inflight[j.provider.Name]--
+	n := j.provider.Name
+	d.inflight[n]--
+	if replied {
+		d.replied[n]++
+	} else {
+		d.silent[n]++
+	}
 	d.mu.Unlock()
+}
+
+// looksDown reports whether provider got no reply in its last round, and
+// has finished a job this round with none of its finished jobs getting a
+// reply. A healthy provider whose first jobs in a round hit silent
+// prefixes got a reply in the round before, so it does not look down.
+func (d *dispatcher) looksDown(provider string) bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.silentBefore[provider] && d.silent[provider] > 0 && d.replied[provider] == 0
+}
+
+// silentProviders returns, for each provider that finished a job this
+// round, whether none of its finished jobs got a reply.
+func (d *dispatcher) silentProviders() map[string]bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	out := map[string]bool{}
+	for n := range d.silent {
+		out[n] = true
+	}
+	for n := range d.replied {
+		out[n] = false
+	}
+	return out
 }

@@ -23,7 +23,7 @@ func TestDispatcherSharesWorkersAcrossProviders(t *testing.T) {
 	for i := 0; i < 4; i++ {
 		jobs = append(jobs, testJob("dead", i), testJob("live", i))
 	}
-	d := newDispatcher(jobs)
+	d := newDispatcher(jobs, nil)
 	// Four workers take a job each and none returns, as when the dead
 	// provider's probes hang.
 	var got []string
@@ -47,7 +47,7 @@ func TestDispatcherSharesWorkersAcrossProviders(t *testing.T) {
 }
 
 func TestDispatcherPrefersFreeProviderOverRank(t *testing.T) {
-	d := newDispatcher([]job{testJob("dead", 1), testJob("dead", 2), testJob("live", 3)})
+	d := newDispatcher([]job{testJob("dead", 1), testJob("dead", 2), testJob("live", 3)}, nil)
 	first, _ := d.next() // dead
 	second, _ := d.next()
 	if first.provider.Name != "dead" || second.provider.Name != "live" {
@@ -57,7 +57,7 @@ func TestDispatcherPrefersFreeProviderOverRank(t *testing.T) {
 }
 
 func TestDispatcherLetsLastProviderTakeEveryWorker(t *testing.T) {
-	d := newDispatcher([]job{testJob("a", 1), testJob("a", 2), testJob("a", 3)})
+	d := newDispatcher([]job{testJob("a", 1), testJob("a", 2), testJob("a", 3)}, nil)
 	for i := 0; i < 3; i++ {
 		if _, ok := d.next(); !ok {
 			t.Fatalf("worker %d got no job while one provider had work left", i)
@@ -69,15 +69,43 @@ func TestDispatcherLetsLastProviderTakeEveryWorker(t *testing.T) {
 }
 
 func TestDispatcherDoneFreesTheShare(t *testing.T) {
-	d := newDispatcher([]job{testJob("a", 1), testJob("b", 2), testJob("a", 3), testJob("b", 4)})
+	d := newDispatcher([]job{testJob("a", 1), testJob("b", 2), testJob("a", 3), testJob("b", 4)}, nil)
 	a1, _ := d.next()
 	b2, _ := d.next()
-	d.done(b2)
-	j, _ := d.next()
-	if j.provider.Name != "b" {
-		t.Fatalf("after b finished, next = %s, want b (a still has a job in flight)", j.provider.Name)
+	d.done(b2, true)
+	b4, _ := d.next()
+	if b4.provider.Name != "b" {
+		t.Fatalf("after b finished, next = %s, want b (a still has a job in flight)", b4.provider.Name)
 	}
-	d.done(a1)
+	d.done(a1, true)
+	if j, _ := d.next(); j.provider.Name != "a" {
+		t.Fatalf("after a finished, next = %s, want a (b still has a job in flight)", j.provider.Name)
+	}
+}
+
+func TestDispatcherLooksDown(t *testing.T) {
+	jobs := []job{testJob("a", 1), testJob("a", 2), testJob("b", 3), testJob("b", 4), testJob("c", 5)}
+	d := newDispatcher(jobs, map[string]bool{"a": true, "b": true, "c": false})
+	if d.looksDown("a") {
+		t.Fatal("a provider with no finished job this round looks down")
+	}
+	d.done(testJob("a", 1), false)
+	d.done(testJob("b", 3), false)
+	d.done(testJob("b", 4), true)
+	d.done(testJob("c", 5), false)
+	if !d.looksDown("a") {
+		t.Fatal("a was silent last round and its only finished job got no reply, but a does not look down")
+	}
+	if d.looksDown("b") {
+		t.Fatal("b got a reply this round but looks down")
+	}
+	if d.looksDown("c") {
+		t.Fatal("c got a reply last round but looks down")
+	}
+	want := map[string]bool{"a": true, "b": false, "c": true}
+	if got := d.silentProviders(); fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Fatalf("silentProviders = %v, want %v", got, want)
+	}
 }
 
 // With four workers and a provider whose probes never return, the other
@@ -153,37 +181,42 @@ func TestJobStopsAfterSilentHosts(t *testing.T) {
 	}
 	tests := []struct {
 		name      string
+		down      bool // the provider looks down in this round
 		reply     map[netip.Addr]bool
 		fail      map[netip.Addr]error
 		wantAsked []netip.Addr
 		wantLoss  float64 // negative: the result carries an error instead
 	}{
-		{"all silent: skip the third host, try the gateway", nil, nil,
+		{"down, all silent: skip the third host, try the gateway", true, nil, nil,
 			[]netip.Addr{hosts[0], hosts[1], gw}, 100},
-		{"first host answers: the third host is still probed", map[netip.Addr]bool{hosts[0]: true}, nil,
+		{"down, first host answers: the third host is still probed", true, map[netip.Addr]bool{hosts[0]: true}, nil,
 			hosts, 0},
-		{"gateway answers after two silent hosts", map[netip.Addr]bool{gw: true}, nil,
+		{"down, gateway answers after two silent hosts", true, map[netip.Addr]bool{gw: true}, nil,
 			[]netip.Addr{hosts[0], hosts[1], gw}, 0},
-		{"two hosts that error count as silent", nil,
+		{"down, two hosts that error count as silent", true, nil,
 			map[netip.Addr]error{hosts[0]: errors.New("send failed"), hosts[1]: errors.New("send failed")},
 			[]netip.Addr{hosts[0], hosts[1], gw}, 100},
-		{"source down on the second host: targets stop there", nil,
+		{"down, source down on the second host: targets stop there", true, nil,
 			map[netip.Addr]error{hosts[1]: plugin.ErrSourceUnavailable},
 			[]netip.Addr{hosts[0], hosts[1]}, -1},
+		{"healthy, third host answers: it is probed and scores the prefix", false, map[netip.Addr]bool{hosts[2]: true}, nil,
+			hosts, 0},
+		{"healthy, all silent: every host is probed", false, nil, nil,
+			hosts, 100},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			p := &silentProber{reply: tt.reply, fail: tt.fail}
-			e, err := New([]Provider{{Name: provA.Name, Source: provA.Source, NextHop: gw}},
-				[]NamedProber{{"p", p}}, src(plugin.Target{Prefix: pfx1}), opts())
+			prov := Provider{Name: provA.Name, Source: provA.Source, NextHop: gw}
+			e, err := New([]Provider{prov}, []NamedProber{{"p", p}}, src(plugin.Target{Prefix: pfx1}), opts())
 			if err != nil {
 				t.Fatal(err)
 			}
-			e.RunOnce(context.Background())
+			r, _ := e.probe(context.Background(), job{provider: prov, target: plugin.Target{Prefix: pfx1}, hosts: hosts},
+				func(name string) bool { return tt.down && name == prov.Name })
 			if fmt.Sprint(p.asked) != fmt.Sprint(tt.wantAsked) {
 				t.Errorf("asked %v, want %v", p.asked, tt.wantAsked)
 			}
-			r := e.Results()[0]
 			if fmt.Sprint(r.Targets) != fmt.Sprint(tt.wantAsked) {
 				t.Errorf("targets %v, want the hosts probed %v", r.Targets, tt.wantAsked)
 			}
@@ -198,4 +231,89 @@ func TestJobStopsAfterSilentHosts(t *testing.T) {
 			}
 		})
 	}
+}
+
+// The limit applies only to a provider that got no reply in its last
+// round and none yet in this one. With one worker the jobs run in target
+// order. No usable gateway: the three hosts are all inside the prefix, so
+// a skipped third host would leave the prefix with no reply.
+func TestSilentHostLimitOnlyForDownProvider(t *testing.T) {
+	inPrefix := func(p netip.Prefix) []netip.Addr {
+		hs := ProbeHosts(p, netip.Addr{}, nil, netip.Addr{}, provA.Source)
+		if len(hs) != 3 {
+			t.Fatalf("test needs three in-prefix hosts: %v", hs)
+		}
+		return hs
+	}
+	h1, h2 := inPrefix(pfx1), inPrefix(pfx2)
+	newEngine := func(t *testing.T, p *silentProber) *Engine {
+		t.Helper()
+		o := opts()
+		o.Workers = 1
+		e, err := New([]Provider{provA}, []NamedProber{{"p", p}},
+			src(plugin.Target{Prefix: pfx2}, plugin.Target{Prefix: pfx1}), o)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return e
+	}
+	// round runs one round and returns the hosts asked in each prefix.
+	round := func(e *Engine, p *silentProber, reply map[netip.Addr]bool) map[netip.Prefix][]netip.Addr {
+		p.asked, p.reply = nil, reply
+		e.RunOnce(context.Background())
+		out := map[netip.Prefix][]netip.Addr{}
+		for _, a := range p.asked {
+			for _, pfx := range []netip.Prefix{pfx1, pfx2} {
+				if pfx.Contains(a) {
+					out[pfx] = append(out[pfx], a)
+				}
+			}
+		}
+		return out
+	}
+	result := func(e *Engine, pfx netip.Prefix) Result {
+		for _, r := range e.Results() {
+			if r.Prefix == pfx {
+				return r
+			}
+		}
+		return Result{}
+	}
+
+	t.Run("healthy provider, earlier prefix silent, third host answers", func(t *testing.T) {
+		p := &silentProber{}
+		e := newEngine(t, p)
+		round(e, p, map[netip.Addr]bool{h2[0]: true})
+		for i := 0; i < 2; i++ {
+			asked := round(e, p, map[netip.Addr]bool{h1[2]: true})
+			if fmt.Sprint(asked[pfx1]) != fmt.Sprint(h1) {
+				t.Fatalf("round %d: asked %v in %s, want every host %v", i+2, asked[pfx1], pfx1, h1)
+			}
+			if r := result(e, pfx1); r.Stats.LossPct != 0 || r.Target != h1[2] {
+				t.Fatalf("round %d: third host did not score the prefix: %+v", i+2, r)
+			}
+		}
+	})
+	t.Run("down provider", func(t *testing.T) {
+		p := &silentProber{}
+		e := newEngine(t, p)
+		asked := round(e, p, nil)
+		if fmt.Sprint(asked[pfx2]) != fmt.Sprint(h2) || fmt.Sprint(asked[pfx1]) != fmt.Sprint(h1) {
+			t.Fatalf("first round asked %v, want every host: no earlier round was silent", asked)
+		}
+		asked = round(e, p, nil)
+		if fmt.Sprint(asked[pfx2]) != fmt.Sprint(h2) {
+			t.Fatalf("first job asked %v, want every host %v: nothing had finished yet", asked[pfx2], h2)
+		}
+		if fmt.Sprint(asked[pfx1]) != fmt.Sprint(h1[:2]) {
+			t.Fatalf("after a silent round and a silent job, asked %v, want %v", asked[pfx1], h1[:2])
+		}
+		if r := result(e, pfx1); r.Stats.LossPct != 100 {
+			t.Fatalf("skipped job result = %+v", r)
+		}
+		asked = round(e, p, map[netip.Addr]bool{h2[0]: true})
+		if fmt.Sprint(asked[pfx1]) != fmt.Sprint(h1) {
+			t.Fatalf("after a reply this round, asked %v, want every host %v", asked[pfx1], h1)
+		}
+	})
 }

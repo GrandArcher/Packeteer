@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"net/netip"
 	"slices"
 	"sort"
@@ -18,7 +19,8 @@ import (
 )
 
 // silentHostLimit is how many hosts of one job may get no reply before the
-// job stops trying the other in-prefix hosts (#381).
+// job stops trying the other in-prefix hosts, once its provider looks down
+// (dispatcher.looksDown, #381).
 const silentHostLimit = 2
 
 // Provider is a transit whose path is measured from Source.
@@ -248,6 +250,10 @@ type Engine struct {
 	stateMu   sync.Mutex
 	probeBusy bool
 	srcBusy   map[string]bool
+	// silentLast marks providers whose last round with a finished job got
+	// no reply on any job; only those may skip in-prefix hosts (#381).
+	// Guarded by stateMu.
+	silentLast map[string]bool
 
 	// wake is a one-slot signal. OnRound calls Wake when a detector has
 	// new prefixes so sleep returns without waiting out the interval.
@@ -1041,6 +1047,25 @@ func (e *Engine) probesBusy() bool {
 	return e.probeBusy
 }
 
+// silentProviders returns a copy of silentLast for the next round's
+// dispatcher.
+func (e *Engine) silentProviders() map[string]bool {
+	e.stateMu.Lock()
+	defer e.stateMu.Unlock()
+	return maps.Clone(e.silentLast)
+}
+
+// noteSilentProviders stores a round's silentProviders. A provider that
+// finished no job keeps its previous mark.
+func (e *Engine) noteSilentProviders(silent map[string]bool) {
+	e.stateMu.Lock()
+	defer e.stateMu.Unlock()
+	if e.silentLast == nil {
+		e.silentLast = map[string]bool{}
+	}
+	maps.Copy(e.silentLast, silent)
+}
+
 // RunOnce performs one probe round over all providers and targets.
 // The round has an overall deadline. A complete round stores every result
 // together. If the deadline expires first, the results of the probes that
@@ -1116,7 +1141,7 @@ func (e *Engine) runRound(ctx context.Context, allow func(plugin.Target) bool, m
 	// prefixes before a longer tail (#118, #125).
 	sortJobs(jobs, e.opt.Interval)
 
-	disp := newDispatcher(jobs)
+	disp := newDispatcher(jobs, e.silentProviders())
 	type outcome struct {
 		res        Result
 		sourceDown bool
@@ -1134,8 +1159,8 @@ func (e *Engine) runRound(ctx context.Context, allow func(plugin.Target) bool, m
 				if !ok {
 					return
 				}
-				r, srcDown := e.probe(roundCtx, j)
-				disp.done(j)
+				r, srcDown := e.probe(roundCtx, j, disp.looksDown)
+				disp.done(j, r.Stats.Received > 0)
 				if e.keepShare() {
 					if r.Share == nil {
 						r.Share = &Share{}
@@ -1169,7 +1194,7 @@ func (e *Engine) runRound(ctx context.Context, allow func(plugin.Target) bool, m
 	// storing a prefix in two steps would count one measurement round twice
 	// toward confirm_rounds.
 	fresh := map[key]Result{}
-	got := map[netip.Prefix]int{}
+	got := map[netip.Prefix]struct{}{}
 	downBy := map[key]string{}
 	received := 0
 	collecting := true
@@ -1181,7 +1206,7 @@ func (e *Engine) runRound(ctx context.Context, allow func(plugin.Target) bool, m
 				break
 			}
 			received++
-			got[o.res.Prefix]++
+			got[o.res.Prefix] = struct{}{}
 			fresh[key{o.res.Provider, o.res.Prefix}] = o.res
 			if o.sourceDown {
 				downBy[key{o.res.Provider, o.res.Prefix}] = o.res.Err
@@ -1201,7 +1226,7 @@ func (e *Engine) runRound(ctx context.Context, allow func(plugin.Target) bool, m
 				break
 			}
 			received++
-			got[o.res.Prefix]++
+			got[o.res.Prefix] = struct{}{}
 			fresh[key{o.res.Provider, o.res.Prefix}] = o.res
 			if o.sourceDown {
 				downBy[key{o.res.Provider, o.res.Prefix}] = o.res.Err
@@ -1210,6 +1235,7 @@ func (e *Engine) runRound(ctx context.Context, allow func(plugin.Target) bool, m
 			drain = false
 		}
 	}
+	e.noteSilentProviders(disp.silentProviders())
 	if ctx.Err() != nil {
 		// Shutdown: nothing was stored, so results stay as they were.
 		e.leaveProbes(finished, nil)
@@ -1242,11 +1268,9 @@ func (e *Engine) runRound(ctx context.Context, allow func(plugin.Target) bool, m
 	// finished, so a provider that never answers does not cost the others
 	// theirs (#381). A job that did not finish keeps its previous result,
 	// which ages out on its own; a prefix with no finished job stays due.
-	committed := map[netip.Prefix]struct{}{}
-	for pfx := range got {
-		committed[pfx] = struct{}{}
-	}
-	if len(committed) == 0 {
+	// A prefix with at least one finished job counts as probed, so its
+	// unfinished provider is tried again at the prefix's next interval.
+	if len(got) == 0 {
 		e.leaveProbes(finished, nil)
 		e.log.Warn("probe round timed out; keeping previous results")
 		return nil, false
@@ -1265,15 +1289,15 @@ func (e *Engine) runRound(ctx context.Context, allow func(plugin.Target) bool, m
 	e.storeResults(fresh, keep, ran, down)
 	e.emitResults(fresh)
 	e.emitBatch(batch)
-	e.rememberProbes(committed)
-	e.addPrefixCommits(len(committed))
+	e.rememberProbes(got)
+	e.addPrefixCommits(len(got))
 	if e.opt.OnRound != nil {
 		e.opt.OnRound()
 	}
 	// Probes still inside a prober that ignores cancellation must
 	// finish before the next round plans prober memory.
 	e.leaveProbes(finished, e.finishProberRound)
-	return committed, true
+	return got, true
 }
 
 // emitResults hands stored results to OnResult.
@@ -1526,7 +1550,10 @@ func (e *Engine) sem(a netip.Addr) chan struct{} {
 // A target with sub-ranges (#121) is measured per sub-range instead, and
 // the prefix result is their traffic-weighted aggregate. When none of
 // them could be measured, the prefix hosts are probed as above.
-func (e *Engine) probe(ctx context.Context, j job) (Result, bool) {
+//
+// looksDown reports whether a provider looks down; only then may the job
+// skip in-prefix hosts.
+func (e *Engine) probe(ctx context.Context, j job, looksDown func(string) bool) (Result, bool) {
 	if len(j.subs) > 0 {
 		if res, down, ok := e.probeSubranges(ctx, j); ok {
 			return res, down
@@ -1546,13 +1573,15 @@ func (e *Engine) probe(ctx context.Context, j job) (Result, bool) {
 	silent, answered := 0, false
 	for _, h := range hosts {
 		// A provider that is down costs the full timeout per host and holds
-		// a worker the whole time (#381). After silentHostLimit hosts with
-		// no reply and none answered, the remaining in-prefix hosts are
-		// skipped. A host whose probe errors counts as silent. The far-side
-		// gateway is still probed: it can score the prefix when no
-		// in-prefix host answers.
+		// a worker the whole time (#381). Once the provider looks down,
+		// a job skips its remaining in-prefix hosts after
+		// silentHostLimit hosts with no reply and none answered. A healthy
+		// provider still probes every host, so a later host that answers
+		// keeps the prefix measured. A host whose probe errors counts as
+		// silent. The far-side gateway is still probed: it can score the
+		// prefix when no in-prefix host answers.
 		isGW := gw.IsValid() && h == gw
-		if silent >= silentHostLimit && !answered && !isGW {
+		if silent >= silentHostLimit && !answered && !isGW && looksDown(j.provider.Name) {
 			continue
 		}
 		tried = append(tried, h)
