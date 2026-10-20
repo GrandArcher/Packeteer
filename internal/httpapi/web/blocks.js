@@ -576,12 +576,11 @@ function clearServerErrors() {
   });
 }
 
-// showServerErrors marks the field each message names. It returns the
-// messages that name no field, for the status list.
+// showServerErrors marks the field each message names. A message that
+// names no field is left to the caller's status text.
 function showServerErrors(messages) {
   var boxes = Array.prototype.slice.call(document.querySelectorAll(".bfield[data-path]"));
   clearServerErrors();
-  var rest = [];
   (messages || []).forEach(function (raw) {
     var msg = raw.replace(yamlPrefix, "");
     var best = null;
@@ -591,12 +590,11 @@ function showServerErrors(messages) {
     });
     var err = best && best.querySelector(".field-error");
     if (!err) err = legacyField(msg);
-    if (!err) { rest.push(raw); return; }
+    if (!err) return;
     err.textContent = msg.replace(/^[^:]*: /, "");
     err.hidden = false;
     err.dataset.server = "1";
   });
-  return rest;
 }
 
 // legacyField finds the row input of the older cards for a message such as
