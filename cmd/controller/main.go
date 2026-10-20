@@ -545,7 +545,9 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 		}
 	}
 	var fedPush httpapi.FederationPusher
-	if fed != nil && editorAPI != nil {
+	// The receiver writes the file too, so it needs the same gate as PUT
+	// /api/config: a certificate alone must not open a write the editor refuses.
+	if fed != nil && editorAPI != nil && (httpUser != "" || authSvc != nil) {
 		fed.editor = editorAPI
 		fedPush = fed.push
 	}

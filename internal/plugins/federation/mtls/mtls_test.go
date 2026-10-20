@@ -437,8 +437,10 @@ func TestSettingsPushRefusesBadBodies(t *testing.T) {
 		return plugin.SettingsResult{Status: plugin.SettingsApplied}
 	})
 	big := plugin.SettingsPush{Sections: map[string]string{"policies": strings.Repeat("x", maxSettingsBytes)}}
+	// The server stops reading at the limit, so the client may see the 400
+	// or a reset of the connection; either way nothing is accepted.
 	res, err := a.Push(context.Background(), "pop-b", big)
-	if err != nil || res.Status != plugin.SettingsRefused {
-		t.Fatalf("oversized body: %+v, %v", res, err)
+	if err == nil && res.Status != plugin.SettingsRefused {
+		t.Fatalf("oversized body: %+v", res)
 	}
 }

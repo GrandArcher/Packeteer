@@ -38,9 +38,8 @@ type settingsReceiver struct {
 func (r *settingsReceiver) handle(ctx context.Context, from string, req plugin.SettingsPush) plugin.SettingsResult {
 	res := r.run(ctx, req)
 	names := sectionNames(req.Sections)
-	rec := plugin.AuditRecord{Actor: from, Method: auth.MethodFederation, Role: plugin.RoleAdmin,
-		Action: "federation.settings", Target: strings.Join(names, ","), Result: auth.ResultOK}
-	rec.Detail = res.Status
+	rec := plugin.AuditRecord{Actor: from, Method: auth.MethodFederation,
+		Action: "federation.settings", Target: strings.Join(names, ","), Result: auth.ResultOK, Detail: res.Status}
 	if len(res.Applied) > 0 {
 		rec.Detail += " applied " + strings.Join(res.Applied, ",")
 	}
@@ -97,12 +96,15 @@ func (r *settingsReceiver) run(ctx context.Context, req plugin.SettingsPush) plu
 	if err != nil {
 		return plugin.SettingsResult{Status: plugin.SettingsFailed, Errors: []string{err.Error()}}
 	}
-	if maps.Equal(have, want) {
-		return plugin.SettingsResult{Status: plugin.SettingsUnchanged}
-	}
-	merged, err := configedit.ReplaceSections([]byte(file.YAML), want)
-	if err != nil {
-		return refusedWith("%v", err)
+	// Saved sections can still differ from what runs (a save that was never
+	// applied), so "same as the file" is not yet "unchanged".
+	same := maps.Equal(have, want)
+	merged := []byte(file.YAML)
+	if !same {
+		merged, err = configedit.ReplaceSections(merged, want)
+		if err != nil {
+			return refusedWith("%v", err)
+		}
 	}
 	chk := r.editor.Check(merged)
 	switch {
@@ -110,6 +112,9 @@ func (r *settingsReceiver) run(ctx context.Context, req plugin.SettingsPush) plu
 		return plugin.SettingsResult{Status: plugin.SettingsRefused, Errors: chk.Errors}
 	case chk.EnablesInject:
 		return refusedWith("a push never turns inject on")
+	}
+	if same && len(chk.Changed) == 0 {
+		return plugin.SettingsResult{Status: plugin.SettingsUnchanged}
 	}
 	for _, k := range chk.Changed {
 		if !slices.Contains(names, k) {
@@ -119,11 +124,13 @@ func (r *settingsReceiver) run(ctx context.Context, req plugin.SettingsPush) plu
 	if !chk.ReloadOnline && len(chk.Changed) > 0 {
 		return refusedWith("the change cannot be applied online")
 	}
-	if _, _, err := r.editor.Save(merged, file.SHA256, false); err != nil {
-		if errors.Is(err, configedit.ErrConflict) {
-			return refusedWith("the config file changed during the push; send it again")
+	if !same {
+		if _, _, err := r.editor.Save(merged, file.SHA256, false); err != nil {
+			if errors.Is(err, configedit.ErrConflict) {
+				return refusedWith("the config file changed during the push; send it again")
+			}
+			return plugin.SettingsResult{Status: plugin.SettingsFailed, Errors: []string{"cannot write the config file: " + err.Error()}}
 		}
-		return plugin.SettingsResult{Status: plugin.SettingsFailed, Errors: []string{"cannot write the config file: " + err.Error()}}
 	}
 	applied, refused, fatal := r.apply(ctx)
 	switch {
@@ -133,8 +140,10 @@ func (r *settingsReceiver) run(ctx context.Context, req plugin.SettingsPush) plu
 		res := refusedWith("the online apply was refused: %v", refused)
 		// The file must match what runs, or the next restart would start
 		// from a section the instance refused.
-		if _, _, err := r.editor.Save([]byte(file.YAML), configedit.Hash(merged), false); err != nil {
-			res.Errors = append(res.Errors, "the previous config file could not be restored: "+err.Error())
+		if !same {
+			if _, _, err := r.editor.Save([]byte(file.YAML), configedit.Hash(merged), false); err != nil {
+				res.Errors = append(res.Errors, "the previous config file could not be restored: "+err.Error())
+			}
 		}
 		return res
 	}
@@ -173,6 +182,11 @@ func (f *fedState) push(ctx context.Context, sections, peers []string) (federati
 	body, err := configedit.ReadSections([]byte(file.YAML), sections)
 	if err != nil {
 		return federation.PushReport{}, err
+	}
+	for _, s := range sections {
+		if body[s] == "" {
+			return federation.PushReport{}, fmt.Errorf("this instance's config file has no %s section; pushing it would reset every peer to the defaults", s)
+		}
 	}
 	out := make([]federation.PeerPush, len(peers))
 	var wg sync.WaitGroup

@@ -343,7 +343,7 @@ func TestFederationSettingsPush(t *testing.T) {
 		t.Fatalf("pop-b file:\n%s", b.file(t))
 	}
 	// Audit on both sides.
-	if recs := auditB.byAction("federation.settings"); len(recs) != 1 || recs[0].Actor != "pop-a" || recs[0].Method != auth.MethodFederation ||
+	if recs := auditB.byAction("federation.settings"); len(recs) != 1 || recs[0].Actor != "pop-a" || recs[0].Method != auth.MethodFederation || recs[0].Role != "" ||
 		recs[0].Result != auth.ResultOK || recs[0].Target != "thresholds" || !strings.Contains(recs[0].Detail, "applied") {
 		t.Fatalf("pop-b audit = %+v", auditB.recs)
 	}
@@ -363,6 +363,26 @@ func TestFederationSettingsPush(t *testing.T) {
 	_ = json.Unmarshal(rec.Body.Bytes(), &rep)
 	if got := onlyPeer(t, rep); got.Status != plugin.SettingsUnchanged || b.applyCount() != before {
 		t.Fatalf("repeat push: %+v, applies %d -> %d", got, before, b.applyCount())
+	}
+
+	// A section the sender's file does not have is not pushed: it would
+	// reset every peer's key to the default.
+	if rec := post(`{"sections":["policies"]}`); rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "no policies section") {
+		t.Fatalf("absent section: %d %s", rec.Code, rec.Body)
+	}
+
+	// pop-b's file holds a saved edit that never ran: a push of the same
+	// text is applied, not reported as unchanged.
+	savedOnly := strings.Replace(b.file(t), "min_loss_delta_pct: 3", "min_loss_delta_pct: 6", 1)
+	b.setFile(t, savedOnly)
+	before = b.applyCount()
+	res0, err := a.plug.Push(ctx, "pop-b", plugin.SettingsPush{Sections: map[string]string{"thresholds": "min_loss_delta_pct: 6\nmin_rtt_delta_ms: 15\n"}})
+	if err != nil || res0.Status != plugin.SettingsApplied || b.applyCount() != before+1 || b.runningThreshold() != 6 {
+		t.Fatalf("saved but not applied: %+v, %v, running %v", res0, err, b.runningThreshold())
+	}
+	res0, err = a.plug.Push(ctx, "pop-b", plugin.SettingsPush{Sections: map[string]string{"thresholds": "min_loss_delta_pct: 3\nmin_rtt_delta_ms: 15\n"}})
+	if err != nil || res0.Status != plugin.SettingsApplied || b.runningThreshold() != 3 {
+		t.Fatalf("back to 3: %+v, %v", res0, err)
 	}
 
 	// Refusals leave pop-b's file and running config alone.

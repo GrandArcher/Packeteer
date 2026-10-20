@@ -1,6 +1,6 @@
 # Federation: push settings to every instance (#137)
 
-Status: implemented under #137. Lab-proven only, not on a public edge. Off by default: an instance accepts nothing until `accept_settings_from` names a sender.
+Status: implemented under #137 and tested with two in-process instances; not yet run in the multi-POP lab, and not on a public edge. Off by default: an instance accepts nothing until `accept_settings_from` names a sender.
 
 Multi-POP federation ([multi-pop.md](../multi-pop.md)) was a read-only view. This adds one write: an admin on one instance sends a config section to the other instances, so a threshold or a policy is the same in every POP without editing each file.
 
@@ -13,7 +13,7 @@ Two sections only, listed in `federation.PushableSections`:
 | `thresholds` | Loss and RTT gains and `confirm_rounds`. They decide when a better path wins; every other rail still applies. |
 | `policies` | `rules` and `maintenance` policy entries. They only forbid, pin, or rank providers inside `Decide`. |
 
-An empty section resets that key to its default. The sender reads the sections from its own saved config file, so what is pushed is what that instance runs after its last save. Edit and save locally first, then push.
+A peer given an empty section resets that key to its default, so the sender refuses to push a section its own file does not have. The sender reads the sections from its own saved config file, so what is pushed is what that instance runs after its last save. Edit and save locally first, then push.
 
 Never pushed, and refused by name on the receiver: `mode`, `allowlist`, `announcer`, `bgp`, `inbound`, `mitigation`, `max_improvements`, `hold_time`, providers, `federation`, `auth`, `http`, and everything else. A peer never accepts inject or allowlist changes from another instance.
 
