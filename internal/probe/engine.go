@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"net/netip"
 	"slices"
 	"sort"
@@ -16,6 +17,11 @@ import (
 	"github.com/GrandArcher/Packeteer/internal/sockmark"
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
 )
+
+// silentHostLimit is how many hosts of one job may get no reply before the
+// job stops trying the other in-prefix hosts, once its provider looks down
+// (dispatcher.looksDown, #381).
+const silentHostLimit = 2
 
 // Provider is a transit whose path is measured from Source.
 type Provider struct {
@@ -71,10 +77,10 @@ type Options struct {
 	OnRound  func()       // called after each completed round (optional)
 	// RoundTimeout bounds one round, including target collection. Zero
 	// derives a bound from the interval and the per-probe deadline. A round
-	// that exceeds it stores prefixes whose probes all finished and leaves
-	// the rest as they were: a prober or target source that ignores
-	// cancellation must not refresh a prefix it did not finish, and must
-	// not discard prefixes that did finish.
+	// that exceeds it stores the probes that finished and leaves the rest
+	// as they were: a prober or target source that ignores cancellation
+	// must not refresh a result it did not finish, and must not discard
+	// results that did finish.
 	RoundTimeout time.Duration
 	// RetryLossPct, when greater than zero, re-probes a path with
 	// RetryPackets before the result is stored if loss is at least this
@@ -128,6 +134,11 @@ type Result struct {
 	Stats   Stats        `json:"stats"`
 	Err     string       `json:"error,omitempty"` // set when no measurement was possible
 	Time    time.Time    `json:"time"`
+	// Round is when the probe round that stored this result ended. Every
+	// result a round stores carries the same Round, so a prefix whose
+	// providers differ in Round was only partly measured by its newest
+	// round (a timed-out round, #381).
+	Round time.Time `json:"round,omitzero"`
 	// Subranges, when the target carried two or more (#121), are the
 	// per-sub-range measurements. Stats is then their traffic-weighted
 	// aggregate. Measurement only.
@@ -244,6 +255,10 @@ type Engine struct {
 	stateMu   sync.Mutex
 	probeBusy bool
 	srcBusy   map[string]bool
+	// silentLast marks providers whose last round with a finished job got
+	// no reply on any job; only those may skip in-prefix hosts (#381).
+	// Guarded by stateMu.
+	silentLast map[string]bool
 
 	// wake is a one-slot signal. OnRound calls Wake when a detector has
 	// new prefixes so sleep returns without waiting out the interval.
@@ -1037,11 +1052,30 @@ func (e *Engine) probesBusy() bool {
 	return e.probeBusy
 }
 
+// silentProviders returns a copy of silentLast for the next round's
+// dispatcher.
+func (e *Engine) silentProviders() map[string]bool {
+	e.stateMu.Lock()
+	defer e.stateMu.Unlock()
+	return maps.Clone(e.silentLast)
+}
+
+// noteSilentProviders stores a round's silentProviders. A provider that
+// finished no job keeps its previous mark.
+func (e *Engine) noteSilentProviders(silent map[string]bool) {
+	e.stateMu.Lock()
+	defer e.stateMu.Unlock()
+	if e.silentLast == nil {
+		e.silentLast = map[string]bool{}
+	}
+	maps.Copy(e.silentLast, silent)
+}
+
 // RunOnce performs one probe round over all providers and targets.
 // The round has an overall deadline. A complete round stores every result
-// together. If the deadline expires first, only prefixes whose provider
-// probes all finished are stored, each prefix whole, and unfinished
-// prefixes keep their previous results. If a target source does not
+// together. If the deadline expires first, the results of the probes that
+// finished are stored together and each unfinished probe keeps its
+// previous result. If a target source does not
 // return, nothing changes. OnRound is not called unless a prefix was stored.
 // RunOnce ignores per-target intervals and measures every target.
 func (e *Engine) RunOnce(ctx context.Context) {
@@ -1112,7 +1146,7 @@ func (e *Engine) runRound(ctx context.Context, allow func(plugin.Target) bool, m
 	// prefixes before a longer tail (#118, #125).
 	sortJobs(jobs, e.opt.Interval)
 
-	ch := make(chan job)
+	disp := newDispatcher(jobs, e.silentProviders())
 	type outcome struct {
 		res        Result
 		sourceDown bool
@@ -1125,11 +1159,13 @@ func (e *Engine) runRound(ctx context.Context, allow func(plugin.Target) bool, m
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			for j := range ch {
-				if roundCtx.Err() != nil {
+			for roundCtx.Err() == nil {
+				j, ok := disp.next()
+				if !ok {
 					return
 				}
-				r, srcDown := e.probe(roundCtx, j)
+				r, srcDown := e.probe(roundCtx, j, disp.looksDown)
+				disp.done(j, r.Stats.Received > 0)
 				if e.keepShare() {
 					if r.Share == nil {
 						r.Share = &Share{}
@@ -1150,15 +1186,6 @@ func (e *Engine) runRound(ctx context.Context, allow func(plugin.Target) bool, m
 			}
 		}()
 	}
-feed:
-	for _, j := range jobs {
-		select {
-		case ch <- j:
-		case <-roundCtx.Done():
-			break feed
-		}
-	}
-	close(ch)
 
 	finished := make(chan struct{})
 	go func() {
@@ -1167,17 +1194,12 @@ feed:
 		close(outs)
 	}()
 
-	// Results are buffered until the round ends. A prefix is stored only
-	// when every provider job for it finished, and all of its results go
-	// in under one lock. The policy dates a round by the newest result for
-	// a prefix, so a half-stored prefix would count one measurement round
-	// twice toward confirm_rounds.
-	want := map[netip.Prefix]int{}
-	for _, j := range jobs {
-		want[j.target.Prefix]++
-	}
+	// Results are buffered until the round ends and go in under one lock.
+	// The policy dates a round by the newest result for a prefix, so
+	// storing a prefix in two steps would count one measurement round twice
+	// toward confirm_rounds.
 	fresh := map[key]Result{}
-	got := map[netip.Prefix]int{}
+	got := map[netip.Prefix]struct{}{}
 	downBy := map[key]string{}
 	received := 0
 	collecting := true
@@ -1189,7 +1211,7 @@ feed:
 				break
 			}
 			received++
-			got[o.res.Prefix]++
+			got[o.res.Prefix] = struct{}{}
 			fresh[key{o.res.Provider, o.res.Prefix}] = o.res
 			if o.sourceDown {
 				downBy[key{o.res.Provider, o.res.Prefix}] = o.res.Err
@@ -1209,7 +1231,7 @@ feed:
 				break
 			}
 			received++
-			got[o.res.Prefix]++
+			got[o.res.Prefix] = struct{}{}
 			fresh[key{o.res.Provider, o.res.Prefix}] = o.res
 			if o.sourceDown {
 				downBy[key{o.res.Provider, o.res.Prefix}] = o.res.Err
@@ -1218,10 +1240,17 @@ feed:
 			drain = false
 		}
 	}
+	e.noteSilentProviders(disp.silentProviders())
 	if ctx.Err() != nil {
 		// Shutdown: nothing was stored, so results stay as they were.
 		e.leaveProbes(finished, nil)
 		return nil, false
+	}
+
+	at := e.opt.Now()
+	for k, r := range fresh {
+		r.Round = at
+		fresh[k] = r
 	}
 
 	if received == len(jobs) {
@@ -1246,47 +1275,40 @@ feed:
 		return probed, true
 	}
 
-	// The deadline passed with jobs outstanding. Store prefixes whose
-	// jobs all finished; leave the others, and their schedule, alone.
-	committed := map[netip.Prefix]struct{}{}
-	for pfx, n := range got {
-		if n == want[pfx] {
-			committed[pfx] = struct{}{}
-		}
-	}
-	if len(committed) == 0 {
+	// The deadline passed with jobs outstanding. Store every result that
+	// finished, so a provider that never answers does not cost the others
+	// theirs (#381). A job that did not finish keeps its previous result,
+	// which ages out on its own; a prefix with no finished job stays due.
+	// A prefix with at least one finished job counts as probed, so its
+	// unfinished provider is tried again at the prefix's next interval.
+	if len(got) == 0 {
 		e.leaveProbes(finished, nil)
 		e.log.Warn("probe round timed out; keeping previous results")
 		return nil, false
 	}
-	e.log.Warn("probe round timed out; kept finished prefix results", "finished", len(committed), "prefixes", len(want))
-	stored := make(map[key]Result, len(fresh))
+	e.log.Warn("probe round timed out; kept finished results", "results", len(fresh), "jobs", len(jobs))
 	ran := map[string]bool{}
 	down := map[string]string{}
 	for k, r := range fresh {
-		if _, ok := committed[r.Prefix]; !ok {
-			continue
-		}
-		stored[k] = r
 		ran[r.Provider] = true
 		if reason, isDown := downBy[k]; isDown {
 			down[r.Provider] = reason
 		}
 	}
 	e.pruneIndirect(keep)
-	batch := takeShare(stored)
-	e.storeResults(stored, keep, ran, down)
-	e.emitResults(stored)
+	batch := takeShare(fresh)
+	e.storeResults(fresh, keep, ran, down)
+	e.emitResults(fresh)
 	e.emitBatch(batch)
-	e.rememberProbes(committed)
-	e.addPrefixCommits(len(committed))
+	e.rememberProbes(got)
+	e.addPrefixCommits(len(got))
 	if e.opt.OnRound != nil {
 		e.opt.OnRound()
 	}
 	// Probes still inside a prober that ignores cancellation must
 	// finish before the next round plans prober memory.
 	e.leaveProbes(finished, e.finishProberRound)
-	return committed, true
+	return got, true
 }
 
 // emitResults hands stored results to OnResult.
@@ -1358,9 +1380,9 @@ func jobRank(t plugin.Target, base time.Duration) (tier int, every time.Duration
 	}
 }
 
-// storeResults merges the results of prefixes whose probes all finished,
-// under one lock, and drops prefixes that left every source. It never
-// drops a prefix the round did not finish: that one stays as it was.
+// storeResults merges the results of finished probes under one lock and
+// drops prefixes that left every source. A result missing from rs, such as
+// an unfinished probe of a timed-out round, stays as it was.
 func (e *Engine) storeResults(rs map[key]Result, keep map[netip.Prefix]bool, ran map[string]bool, down map[string]string) {
 	now := e.opt.Now()
 	e.mu.Lock()
@@ -1539,7 +1561,10 @@ func (e *Engine) sem(a netip.Addr) chan struct{} {
 // A target with sub-ranges (#121) is measured per sub-range instead, and
 // the prefix result is their traffic-weighted aggregate. When none of
 // them could be measured, the prefix hosts are probed as above.
-func (e *Engine) probe(ctx context.Context, j job) (Result, bool) {
+//
+// looksDown reports whether a provider looks down; only then may the job
+// skip in-prefix hosts.
+func (e *Engine) probe(ctx context.Context, j job, looksDown func(string) bool) (Result, bool) {
 	if len(j.subs) > 0 {
 		if res, down, ok := e.probeSubranges(ctx, j); ok {
 			return res, down
@@ -1553,26 +1578,51 @@ func (e *Engine) probe(ctx context.Context, j job) (Result, bool) {
 	if !j.target.Pinned {
 		gw = j.provider.NextHop
 	}
-	copied := append([]netip.Addr(nil), hosts...)
 	var samples []hostSample
 	var errs []error
+	var tried []netip.Addr
+	silent, answered, skipped := 0, false, false
 	for _, h := range hosts {
+		// A provider that is down costs the full timeout per host and holds
+		// a worker the whole time (#381). Once the provider looks down,
+		// a job skips its remaining in-prefix hosts after
+		// silentHostLimit hosts with no reply and none answered. A healthy
+		// provider still probes every host, so a later host that answers
+		// keeps the prefix measured. A host whose probe errors counts as
+		// silent. The far-side gateway is still probed: it can score the
+		// prefix when no in-prefix host answers.
+		isGW := gw.IsValid() && h == gw
+		if silent >= silentHostLimit && !answered && !isGW && looksDown(j.provider.Name) {
+			skipped = true
+			continue
+		}
+		tried = append(tried, h)
 		one, down := e.probeOne(ctx, j.provider, j.target.Prefix, h, e.packets())
-		one.Targets = copied
 		if down || ctx.Err() != nil {
+			one.Targets = tried
 			return one, down
 		}
 		if one.Err != "" {
 			errs = append(errs, errors.New(one.Err))
+			silent++
 			continue
 		}
-		samples = append(samples, hostSample{addr: h, res: one, gateway: gw.IsValid() && h == gw})
+		if one.Stats.Received > 0 {
+			answered = true
+		} else {
+			silent++
+		}
+		samples = append(samples, hostSample{addr: h, res: one, gateway: isGW})
 	}
-	if res, down, ok := e.probeIndirect(ctx, j, hosts, samples); ok {
-		return res, down
+	// A trace from a provider that looks down would find nothing and fill
+	// the trace queue and cache for it.
+	if !skipped {
+		if res, down, ok := e.probeIndirect(ctx, j, tried, samples); ok {
+			return res, down
+		}
 	}
 	if len(samples) == 0 {
-		res := Result{Provider: j.provider.Name, Prefix: j.target.Prefix, Targets: copied, Time: e.opt.Now()}
+		res := Result{Provider: j.provider.Name, Prefix: j.target.Prefix, Targets: tried, Time: e.opt.Now()}
 		if len(hosts) > 0 {
 			res.Target = hosts[0]
 		}
@@ -1583,7 +1633,7 @@ func (e *Engine) probe(ctx context.Context, j job) (Result, bool) {
 		}
 		return res, false
 	}
-	res := combineHosts(j.provider.Name, j.target.Prefix, copied, samples, e.hostQualifies)
+	res := combineHosts(j.provider.Name, j.target.Prefix, tried, samples, e.hostQualifies)
 	lossRetry := e.retryLoss() > 0 && res.Stats.LossPct >= e.retryLoss()
 	dispRetry := e.spreadOver(samples)
 	if e.retryPackets() < 1 || (!lossRetry && !dispRetry) {
@@ -1609,8 +1659,8 @@ func (e *Engine) probe(ctx context.Context, j job) (Result, bool) {
 			continue
 		}
 		one, down := e.probeOne(ctx, j.provider, j.target.Prefix, s.addr, e.retryPackets())
-		one.Targets = copied
 		if down || ctx.Err() != nil {
+			one.Targets = tried
 			return one, down
 		}
 		if one.Err != "" {
@@ -1627,7 +1677,7 @@ func (e *Engine) probe(ctx context.Context, j job) (Result, bool) {
 		reason = "dispersion"
 	}
 	e.log.Debug("retry probe", "provider", res.Provider, "prefix", res.Prefix, "loss_pct", res.Stats.LossPct, "packets", e.retryPackets(), "reason", reason)
-	return combineHosts(j.provider.Name, j.target.Prefix, copied, again, e.hostQualifies), false
+	return combineHosts(j.provider.Name, j.target.Prefix, tried, again, e.hostQualifies), false
 }
 
 // hostQualifies reports whether one address may define the prefix score.

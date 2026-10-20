@@ -1578,12 +1578,12 @@ func (p *phaseProber) Probe(_ context.Context, req plugin.ProbeRequest) (plugin.
 	return plugin.ProbeResult{Sent: req.Count, RTTs: ms(1)}, nil
 }
 
-// One measurement round must not count twice toward confirm_rounds. The
-// policy dates a round by the newest result for a prefix, so a prefix may
-// never be seen half stored: not while its second provider is still being
-// measured, and not after a round that timed out before that provider
-// finished (#125).
-func TestPartialRoundNeverHalfStoresAPrefix(t *testing.T) {
+// A provider that never finishes must not cost the others their results
+// (#381). Nothing is stored while the round runs, so one measurement round
+// still counts once toward confirm_rounds. When the deadline passes, the
+// provider that finished is stored in one step and the other keeps its
+// previous result.
+func TestPartialRoundStoresFinishedProviders(t *testing.T) {
 	p := &phaseProber{release: make(chan struct{}), aDone: make(chan struct{})}
 	defer close(p.release)
 	o := opts()
@@ -1601,17 +1601,15 @@ func TestPartialRoundNeverHalfStoresAPrefix(t *testing.T) {
 	if len(old) != 2 || rounds.Load() != 1 {
 		t.Fatalf("first round results=%+v rounds=%d", old, rounds.Load())
 	}
-	same := func(when string) {
-		t.Helper()
-		got := e.Results()
-		if len(got) != len(old) {
-			t.Fatalf("%s: results = %+v", when, got)
+	if old[0].Round.IsZero() || !old[0].Round.Equal(old[1].Round) {
+		t.Fatalf("one round stored different rounds: %s and %s", old[0].Round, old[1].Round)
+	}
+	times := func() map[string]time.Time {
+		m := map[string]time.Time{}
+		for _, r := range e.Results() {
+			m[r.Provider] = r.Time
 		}
-		for i := range got {
-			if got[i].Provider != old[i].Provider || !got[i].Time.Equal(old[i].Time) {
-				t.Fatalf("%s: %s result was refreshed: %+v, was %+v", when, got[i].Provider, got[i], old[i])
-			}
-		}
+		return m
 	}
 	time.Sleep(5 * time.Millisecond) // a new result must carry a later time
 	p.phase2.Store(true)
@@ -1626,15 +1624,39 @@ func TestPartialRoundNeverHalfStoresAPrefix(t *testing.T) {
 		t.Fatal("transit-a was not probed")
 	}
 	time.Sleep(20 * time.Millisecond)
-	same("while the round is running")
+	for _, r := range old {
+		if got := times()[r.Provider]; !got.Equal(r.Time) {
+			t.Fatalf("while the round is running: %s result was refreshed", r.Provider)
+		}
+	}
 	select {
 	case <-done:
 	case <-time.After(2 * time.Second):
 		t.Fatal("round was not bounded by the overall timeout")
 	}
-	same("after the round timed out")
-	if rounds.Load() != 1 || e.PrefixCommits() != 1 {
-		t.Fatalf("a round with no finished prefix was reported: rounds=%d commits=%d", rounds.Load(), e.PrefixCommits())
+	got := times()
+	if len(got) != 2 {
+		t.Fatalf("results after the deadline = %+v", e.Results())
+	}
+	if !got[provA.Name].After(old[0].Time) {
+		t.Errorf("transit-a finished but was not stored: %s, was %s", got[provA.Name], old[0].Time)
+	}
+	if !got[provB.Name].Equal(old[1].Time) {
+		t.Errorf("transit-b never finished but was refreshed: %s, was %s", got[provB.Name], old[1].Time)
+	}
+	// The policy sees the prefix as partly measured by its differing rounds.
+	for _, r := range e.Results() {
+		want := old[1].Round
+		if r.Provider == provA.Name {
+			if !r.Round.After(want) {
+				t.Errorf("transit-a round %s is not after the first round %s", r.Round, want)
+			}
+		} else if !r.Round.Equal(want) {
+			t.Errorf("transit-b round = %s, want the first round %s", r.Round, want)
+		}
+	}
+	if rounds.Load() != 2 || e.PrefixCommits() != 2 {
+		t.Errorf("rounds=%d commits=%d, want 2 and 2", rounds.Load(), e.PrefixCommits())
 	}
 }
 

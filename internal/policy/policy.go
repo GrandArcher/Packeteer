@@ -149,6 +149,10 @@ type Input struct {
 	// decision's candidates and, when RPKIAvoidInvalid is set, refuses a
 	// new improvement onto an invalid path. A missing entry is unknown.
 	RPKI map[netip.Prefix]map[string]plugin.RPKIValidity
+	// Remote lists providers whose results a federation peer measured
+	// (#30). Their times follow that peer's probe schedule, so they do not
+	// show whether this instance's own probe round finished. Nil is none.
+	Remote map[string]bool
 }
 
 // Improvement is an active (or, outside inject mode, recommended) steer.
@@ -190,6 +194,9 @@ type confirm struct {
 	// measurements seen again (a RIB change, or the staleness ticker)
 	// do not count twice.
 	Round time.Time
+	// Local is the newest time among this instance's own fresh results
+	// when the round counted. A remote result is not compared with it.
+	Local time.Time
 	// Probe is set only for the evaluation that compared the paths and
 	// left the streak short. The next evaluation clears it first, so a
 	// round that cannot compare does not keep the prober awake.

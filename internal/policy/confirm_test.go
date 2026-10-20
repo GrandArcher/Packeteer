@@ -1,11 +1,13 @@
 package policy
 
 import (
+	"fmt"
 	"net/netip"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/GrandArcher/Packeteer/internal/probe"
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
 )
 
@@ -203,6 +205,97 @@ func TestConfirmRoundsStaleDoesNotCount(t *testing.T) {
 	st, out = step(t, st, c, t0.Add(13*time.Minute), win)
 	if decision(t, out, pA).Action != ActionImprove || st.Improvements[pA].Provider != "b" {
 		t.Fatalf("second fresh after stale = %+v", decision(t, out, pA))
+	}
+}
+
+// A timed-out probe round stores a's new result and leaves b's last good
+// one (#381). Those rounds must not confirm a move onto b.
+func TestConfirmRoundsNeedEveryProviderRemeasured(t *testing.T) {
+	c := cfg()
+	c.ConfirmRounds = 3
+	native := map[netip.Prefix]string{pA: "a"}
+	st, _ := step(t, NewState(), c, t0, []m{{"a", 0, 90}, {"b", 0, 30}})
+	if st.confirm[pA].Streak != 1 {
+		t.Fatal(st.confirm[pA])
+	}
+	oldB := results(t0, pA, m{"b", 0, 30})
+	for i := 1; i <= 3; i++ {
+		at := t0.Add(time.Duration(i) * 30 * time.Second)
+		var out Output
+		st, out = Decide(st, in(append(results(at, pA, m{"a", 0, 90}), oldB...), native), c, scorer(t), at)
+		d := decision(t, out, pA)
+		if st.confirm[pA].Streak != 1 || len(st.Improvements) != 0 || !strings.Contains(d.Reason, "confirming b (1/3)") {
+			t.Fatalf("round %d with b not measured again: streak=%+v decision=%+v", i, st.confirm[pA], d)
+		}
+		if len(out.Urgent) != 1 || out.Urgent[0] != pA {
+			t.Fatalf("round %d did not ask for another probe: %v", i, out.Urgent)
+		}
+	}
+
+	st, _ = step(t, st, c, t0.Add(2*time.Minute), []m{{"a", 0, 90}, {"b", 0, 30}})
+	if st.confirm[pA].Streak != 2 || len(st.Improvements) != 0 {
+		t.Fatalf("both measured again: %+v", st.confirm[pA])
+	}
+	// A stale result is not compared, so it does not hold the streak back.
+	at := t0.Add(5 * time.Minute)
+	res := append(results(at, pA, m{"a", 0, 90}, m{"b", 0, 30}), results(t0, pA, m{"c", 0, 10})...)
+	st, out := Decide(st, in(res, native), c, scorer(t), at)
+	if d := decision(t, out, pA); d.Action != ActionImprove || st.Improvements[pA].Provider != "b" {
+		t.Fatalf("third full round: %+v %+v", d, st.Improvements)
+	}
+}
+
+// A timed-out probe round stored native a's new, worse result and left
+// b, whose probes stopped finishing, on its last good one (#381). That
+// round must not move the prefix onto b at any confirm_rounds, and must
+// not start a streak. A full round that still prefers b does. A stale
+// local result and a federation result from another round do not count
+// as a partial round.
+func TestPartialRoundBlocksMove(t *testing.T) {
+	native := map[netip.Prefix]string{pA: "a"}
+	stamp := func(round time.Time, rs []probe.Result) []probe.Result {
+		for i := range rs {
+			rs[i].Round = round
+		}
+		return rs
+	}
+	for _, rounds := range []int{0, 1, 3} {
+		t.Run(fmt.Sprintf("confirm_rounds=%d", rounds), func(t *testing.T) {
+			c := cfg()
+			c.ConfirmRounds = rounds
+			old := t0.Add(-5 * time.Minute)
+			at := t0.Add(30 * time.Second)
+			res := append(stamp(t0, results(t0, pA, m{"b", 0, 30})), stamp(at, results(at, pA, m{"a", 0, 90}))...)
+			st, out := Decide(NewState(), in(res, native), c, scorer(t), at)
+			if d := decision(t, out, pA); d.Action == ActionImprove || len(st.Improvements) != 0 || len(out.Changes) != 0 {
+				t.Fatalf("partial round moved the prefix: %+v %+v", d, out.Changes)
+			}
+			if st.confirm[pA].Streak != 0 {
+				t.Fatalf("partial round started a streak: %+v", st.confirm[pA])
+			}
+
+			at = t0.Add(time.Minute)
+			res = stamp(at, results(at, pA, m{"a", 0, 90}, m{"b", 0, 30}))
+			res = append(res, stamp(old, results(old, pA, m{"d", 0, 10}))...)
+			res = append(res, results(t0, pA, m{"c", 0, 200})...)
+			fed := in(res, native)
+			fed.Remote = map[string]bool{"c": true}
+			for i := 0; i < max(rounds, 1); i++ {
+				at = at.Add(30 * time.Second)
+				for j := range res {
+					switch res[j].Provider {
+					case "a", "b":
+						res[j].Time, res[j].Round = at, at
+					case "c":
+						res[j].Time = at
+					}
+				}
+				st, out = Decide(st, fed, c, scorer(t), at)
+			}
+			if d := decision(t, out, pA); d.Action != ActionImprove || st.Improvements[pA].Provider != "b" {
+				t.Fatalf("full round did not move to b: %+v %+v", d, st.Improvements)
+			}
+		})
 	}
 }
 
