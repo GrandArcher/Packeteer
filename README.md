@@ -298,18 +298,19 @@ Symptoms, log lines, and fixes: [docs/troubleshooting.md](docs/troubleshooting.m
 
 ## Features
 
-Status on main for the 0.8.0 release (not tagged yet), capabilities per milestone from [docs/FEATURES.md](docs/FEATURES.md):
+Status on main for the 0.8.0 release (not tagged yet), capability rows per milestone and how many are done, from the summary in [docs/FEATURES.md](docs/FEATURES.md#summary):
 
-| Milestone | Capabilities |
-|---|---|
-| v0.1 | 24 |
-| v0.2 | 25 |
-| v0.3 | 17 |
-| v0.4 | 13 |
-| v0.6 | 9 |
-| v0.7 | 3 |
-| v0.8 | 19 |
-| Won't do | 2 |
+| Milestone | Rows | Done |
+|---|---|---|
+| v0.1 | 24 | 23 |
+| v0.2 | 25 | 24 |
+| v0.3 | 17 | 17 |
+| v0.4 | 13 | 10 |
+| v0.6 | 9 | 7 |
+| v0.7 | 3 | 3 |
+| v0.8 | 19 | 15 |
+| Won't do | 2 | - |
+| **Total** | 112 | 99 |
 
 v0.1 is the outbound loop: probes, static and flow targets, an iBGP RIB, scoring with hysteresis, optional injection, the read-only UI and API, the container, and the FRR lab. v0.2 adds cost and commit control, SNMP, policies, alerts, and reports. v0.3 adds inbound optimization, BMP and add-path, multiple routers and IX, RTBH/FlowSpec mitigation, transit classification, and capped more-specific injection, all lab-proven. v0.4 adds multi-POP federation, active/standby HA and backup, RBAC/SSO/audit, flow-baseline anomaly detection that mitigates only on explicit rules, and the remaining UI rows. v0.5 is hardening on that matrix: dashboard clarity and a first-run checklist, CI-tested install and walkthrough docs, load and soak budgets, a MikroTik CHR lab in CI, and a scheduled router interop matrix. Field feedback from real observe-mode deployments (#54) is still open. v0.6 closes the gaps from the 2026-10-07 review of prefix selection, measurement, and the UI, adds flap quarantine, live apply, scale budgets up to multi-million path tables, upgrade from the UI, and a failure-mode e2e matrix. v0.7 adds exchange (IX) visibility for an edge network: an exchange view, IX LAN health probes, route-server vs bilateral prefix views, offload and potential-peers reports, dashboard widgets, Commit & Cost, Reports, search, System, and maintenance pages, and link-outs.
 
@@ -322,6 +323,13 @@ Pulling a newer image and recreating the container is the plain upgrade. Your co
 The Settings page can also upgrade in place (#196). It is off by default. It needs `upgrade.enabled: true`, the release public key in `upgrade.public_key` ([CONFIG.md](docs/CONFIG.md#upgrade)), an admin login (auth or basic auth), and the `packeteer-data` volume to keep the new version across restarts. The public key is printed in the [v0.6.0 release notes](https://github.com/GrandArcher/Packeteer/releases/tag/v0.6.0). Every route is withdrawn before the switch, and a release whose signature or checksum does not match is refused. Details: [docs/ui.md](docs/ui.md#upgrade-from-the-ui).
 
 ### From 0.7 to 0.8
+
+- **Sign-in is now on for every install, upgrades included (#328).** A config without an `auth` block now requires sign-in, and `storage` defaults to `sqlite` to keep users. Prometheus scrapers and API clients without a token, for example on `/metrics`, get `401` until you give them an API token ([auth.md](docs/auth.md)). On first start without `PACKETEER_ADMIN_PASSWORD`, a one-time admin password is generated ([auth.md](docs/auth.md#first-run)). To keep the old open behavior, add this to the config and restart:
+
+  ```yaml
+  auth:
+    enabled: false
+  ```
 
 - No config key was removed or renamed since 0.7. Run `docker run --rm -v "$PWD/config.yaml:/etc/packeteer/config.yaml:ro" ghcr.io/grandarcher/packeteer:edge -check` first, and use the release tag once it is published.
 - Provider health labels on the dashboard now follow measured loss: no reply or loss at `probe.down_loss_pct` is `down`, loss at `probe.degraded_loss_pct` is `degraded` (#343). They do not change a decision.

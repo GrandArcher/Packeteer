@@ -20,27 +20,27 @@ Milestones:
 
 ## Summary
 
-| Milestone | Capabilities |
-|---|---|
-| v0.1 | 24 |
-| v0.2 | 25 |
-| v0.3 | 17 |
-| v0.4 | 13 |
-| v0.6 | 9 |
-| v0.7 | 3 |
-| v0.8 | 12 |
-| won't do | 2 |
-| **total** | 105 |
+| Milestone | Rows | Done |
+|---|---|---|
+| v0.1 | 24 | 23 |
+| v0.2 | 25 | 24 |
+| v0.3 | 17 | 17 |
+| v0.4 | 13 | 10 |
+| v0.6 | 9 | 7 |
+| v0.7 | 3 | 3 |
+| v0.8 | 19 | 15 |
+| won't do | 2 | - |
+| **total** | 112 | 99 |
 
 | Status | Count |
 |---|---|
-| done | 89 |
-| partial | 10 |
+| done | 99 |
+| partial | 9 |
 | in progress | 0 |
-| planned | 3 |
+| planned | 2 |
 | won't do | 2 |
 
-Recount (2026-10-07): the earlier 79 of 82 counted 13 rows as done that cover only part of the intended behavior, and missed 6 behaviors. Those rows are now partial and the 6 are listed. The Internet exchanges row was split (#159): it stays one done row, four exchange gaps are partial, and three are planned. The counts above are taken from the table (v0.1 includes the three rows tagged v0.1, v0.5). Scale is tracked as a budget, not a row: the load test learns a 1,250,000-prefix table and measures 3,000 prefixes with a prober that sends no packets ([performance.md](performance.md)).Scale is tracked as a budget, not a row: the load test learns a 1,250,000-prefix table and measures 3,000 prefixes with a prober that sends no packets ([performance.md](performance.md)).
+Recount (2026-10-07): the earlier 79 of 82 counted 13 rows as done that cover only part of the intended behavior, and missed 6 behaviors. Those rows are now partial and the 6 are listed. The Internet exchanges row was split (#159): it stays one done row, four exchange gaps are partial, and three are planned. The counts above are taken from the table: Rows is every capability row of that milestone, Done is how many of them are done; the rest are partial or planned (v0.1 includes the three rows tagged v0.1, v0.5). Scale is tracked as a budget, not a row: the load test learns a 1,250,000-prefix table and measures 3,000 prefixes with a prober that sends no packets ([performance.md](performance.md)).
 
 Since #217 the RSS and learn-time budgets are per million prefixes, a `large` profile (5,000,000 prefixes, weekly on a runner with 32 GB, not on pull requests) tests the scaling model, flow and span `max_prefixes` is configurable, and `packeteer_truncated_total` meters what the caps turn away. #125 is that scheduler and the passive count: due prefixes are probed in priority order and each prefix whose probes all finished is stored, providers together, when the round ends or times out, so one slow round no longer discards the round.
 
@@ -188,7 +188,7 @@ The `maintenance` policy excludes providers during cron-scheduled, one-off, or o
 | Probe-path (PBR) check per provider and IX peer | done (#150: `probe.path_check` sends a TTL-1 probe from each provider's `source_ip` toward a documentation address every `interval`; a first hop that is not that provider's `next_hop`, no reply, or a send error marks the provider down with reason `probe path mismatch` and emits `provider.down`; `path_check: false` opts a provider or exchange peer out; a provider in another domain is not checked; measurement only) | v0.8 | probe engine (`traceroute`) + core | #150, #24 | no |
 | Probe multiplexing for large IXs (shared probe source with per-peer fwmark or DSCP) and PBR generator (Linux and router snippets, generation only) | done (#157: providers and exchange peers may share a `source_ip` when each sets a distinct `fwmark` or `dscp`; the probers, the traceroute paths, and the #150 path check tag their packets, and a tag that cannot be applied fails the provider closed in the built-in probers (an `exec` prober must apply the tag itself); `packeteer -pbr linux\|frr\|junos\|cisco\|mikrotik` prints the ip rule/route set or the router PBR snippet for review and never applies or sends it) | v0.8 | core (generator; never pushes to a router) | #157 | no |
 | Shared IX port: capacity, commit, and flat port cost across peers | partial: `exchanges[].port` (`capacity_mbps`, optional `commit_mbps`, flat `port_cost`) with one telemetry binding named like the exchange; the `commit` and `cost` scorers book planned moves against the port and plan none past its capacity or commit, and none onto it without a fresh reading or a volume; `port_cost` makes peers cost 0 per Mbps; `/api/exchanges` shows the port. Performance moves and pins onto a peer are not checked, nothing is moved off a port already over its commit, and the billing period is the binding's `billing_day` (#151) | v0.8 | core (`exchanges[].port`) + scorer (`commit`, `cost`) | #151 | no |
-| Improvements to exchanges report: improvements per peer with Mbps moved | done (#148: the `exchanges` report and a table on `/providers.html`; Mbps is the prefix rate a target source reports, ` - ` when none does) | v0.8 | storage (`sqlite`) + UI | #148 | no |
+| Improvements to exchanges report: improvements per peer with Mbps moved | done (#148: the `exchanges` report and a table on `/providers.html`; Mbps is the prefix rate a target source reports, a dash (an em dash) when none does) | v0.8 | storage (`sqlite`) + UI | #148 | no |
 | IX LAN health: each peer's next hop is probed from the peer's `source_ip` every probe interval (within `probe.rate_limit_pps`); per-peer reachability, RTT, and loss; `exchange.degraded` when enough peers degrade inside a window | done (#149: `exchanges[].health`, `/api/exchanges` `reach`, `packeteer_exchange_peer_*` and `packeteer_exchange_degraded`, shown on `/providers.html`; measurement only, nothing is announced, withdrawn, or steered from it) | v0.8 | probe engine + core (`internal/exchange`) + notifier events | #149, #104, #124 | no |
 | Per-member route server vs bilateral availability: prefixes seen only via the route server, only bilaterally, or both, with counts over time and a flag for a partial or filtered route server feed | done (#156: counts and flags on `/api/exchanges`, `GET /api/exchanges/member` for the prefixes and the counts kept in memory every 15 minutes, and columns on `/providers.html`; BMP Adj-RIB-In paths only, so a peer without `bmp: prefer` or `only` shows zero, and discovered members are not classified; read-only) | v0.8 | core (`internal/rib`, `internal/exchange`) + UI | #156 | no |
 | Transit-to-IX offload report: flow bytes of prefixes whose exit is a transit while a configured IX peer advertises the exact prefix, with the estimated saving at the transit's `cost` | done (#152: `GET /api/exchanges/offload` as JSON or CSV, sorted by bytes, and a table on `/providers.html`; observe only, nothing is steered; needs a target source that reports volume and, per peer, the route check) | v0.8 | core (`internal/exchange`, `internal/httpapi`) + UI | #152 | no |
