@@ -10,6 +10,7 @@
 <link rel="icon" href="/logo.png" type="image/png" sizes="128x128">
 </head>
 <body data-page="graphs" data-live="app">
+<a class="skip-link" href="#main">Skip to content</a>
 <div id="banner" class="banner" role="status" hidden></div>
 <div id="conn" class="conn" role="alert" hidden></div>
 <div class="app">
@@ -48,9 +49,9 @@
   </div>
   <button type="button" id="refresh">Refresh</button>
 </header>
-<main>
+<main id="main" tabindex="-1">
   <section>
-    <h2>Graphs</h2>
+    <h1>Graphs</h1>
     <p class="tag">Loss and latency per UTC day, before (the native provider) and after (the chosen provider), from the daily probe history. Read-only: nothing here announces a route. Days are the finest history the store keeps.</p>
     <div class="controls">
       <label>Destinations <select id="graph-bucket"></select></label>

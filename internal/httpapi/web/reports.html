@@ -10,6 +10,7 @@
 <link rel="icon" href="/logo.png" type="image/png" sizes="128x128">
 </head>
 <body data-page="reports" data-live="app">
+<a class="skip-link" href="#main">Skip to content</a>
 <div id="banner" class="banner" role="status" hidden></div>
 <div id="conn" class="conn" role="alert" hidden></div>
 <div class="app">
@@ -48,9 +49,9 @@
   </div>
   <button type="button" id="refresh">Refresh</button>
 </header>
-<main>
+<main id="main" tabindex="-1">
   <section>
-    <h2>Reports</h2>
+    <h1>Reports</h1>
     <p class="tag">History from the storage plugin, loaded on demand. Pick a range in your local time; it is sent to the server as UTC. The table, CSV, and XLSX come from the same query, so they hold the same rows. Read-only: nothing here announces a route.</p>
     <div id="report-catalog" class="catalog"></div>
   </section>

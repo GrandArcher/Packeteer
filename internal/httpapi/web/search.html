@@ -10,6 +10,7 @@
 <link rel="icon" href="/logo.png" type="image/png" sizes="128x128">
 </head>
 <body data-page="search">
+<a class="skip-link" href="#main">Skip to content</a>
 <div id="banner" class="banner" role="status" hidden></div>
 <div id="conn" class="conn" role="alert" hidden></div>
 <div class="app">
@@ -48,9 +49,9 @@
   </div>
   <button type="button" id="refresh">Refresh</button>
 </header>
-<main>
+<main id="main" tabindex="-1">
   <section>
-    <h2>Search</h2>
+    <h1>Search</h1>
     <p class="tag">Find a prefix (exact, covering, or more specific), an address, an AS number, or an AS name in live data and stored history. This page only reads; it changes nothing.</p>
     <p id="search-recent" class="tag" hidden></p>
     <p id="search-status" class="tag" role="status"></p>

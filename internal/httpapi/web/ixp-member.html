@@ -10,6 +10,7 @@
 <link rel="icon" href="/logo.png" type="image/png" sizes="128x128">
 </head>
 <body data-page="ixp-member">
+<a class="skip-link" href="#main">Skip to content</a>
 <div id="banner" class="banner" role="status" hidden></div>
 <div id="conn" class="conn" role="alert" hidden></div>
 <div class="app">
@@ -48,9 +49,9 @@
   </div>
   <button type="button" id="refresh">Refresh</button>
 </header>
-<main>
+<main id="main" tabindex="-1">
   <section>
-    <h2 id="member-title">IXP member</h2>
+    <h1 id="member-title">IXP member</h1>
     <p class="tag">This page only reads. It measures and reports the member's path across the exchange fabric and its route-server sessions. It changes no routing and announces nothing. Every Packeteer login is exchange staff; members have no login here.</p>
     <p class="tag"><a href="/ixp/sites">Site health across the fabric</a></p>
     <p id="member-status" class="tag" role="status"></p>

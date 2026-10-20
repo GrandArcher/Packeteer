@@ -10,6 +10,7 @@
 <link rel="icon" href="/logo.png" type="image/png" sizes="128x128">
 </head>
 <body data-page="protection" data-live="app">
+<a class="skip-link" href="#main">Skip to content</a>
 <div id="banner" class="banner" role="status" hidden></div>
 <div id="conn" class="conn" role="alert" hidden></div>
 <div class="app">
@@ -48,9 +49,9 @@
   </div>
   <button type="button" id="refresh">Refresh</button>
 </header>
-<main>
+<main id="main" tabindex="-1">
   <section id="protection-empty">
-    <h2>Protection</h2>
+    <h1>Protection</h1>
     <p class="empty">Threat mitigation is not configured. Add a <code>mitigation</code> block with an allowlist to the mounted file and restart (docs/mitigation.md). Inbound and anomaly rules are edited in Settings.</p>
   </section>
   <section id="mitigation-section" hidden>
