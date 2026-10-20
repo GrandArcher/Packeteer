@@ -44,6 +44,7 @@ import (
 	"net/netip"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/GrandArcher/Packeteer/internal/exchange"
@@ -73,6 +74,10 @@ const (
 	udpReadBuffer   = 4 << 20
 	udpReadTimeout  = time.Second
 	udpPayloadBytes = 65535
+
+	defaultWorkers = 4
+	maxWorkers     = 16
+	queuePerWorker = 256
 
 	defaultProblemFailurePct = 20
 	defaultProblemMinFlows   = 10
@@ -115,7 +120,12 @@ type Config struct {
 	// MaxPrefixes caps the exact prefix cells in one window bucket, and
 	// the anomaly counter keys. Default 20000. Prefixes past it are
 	// counted in packeteer_truncated_total.
-	MaxPrefixes  int           `yaml:"max_prefixes"`
+	MaxPrefixes int `yaml:"max_prefixes"`
+	// Workers is how many goroutines turn decoded records into window
+	// counts (#385). The readers decode in arrival order and queue the
+	// records, so a stall in the window does not stop the socket being
+	// read. Default 4, 1 to 16. 1 does it all in the reader.
+	Workers      int           `yaml:"workers"`
 	MinBytes     uint64        `yaml:"min_bytes"`
 	MinPct       float64       `yaml:"min_pct"`
 	TailInterval time.Duration `yaml:"tail_interval"`
@@ -221,6 +231,7 @@ type Source struct {
 	topN         int
 	maxTargets   int
 	maxPrefixes  int
+	workers      int
 	minBytes     uint64
 	minPctPPM    uint64
 	tailInterval time.Duration
@@ -249,6 +260,10 @@ type Source struct {
 	conns  []*net.UDPConn
 	gen    uint64
 	wg     sync.WaitGroup
+
+	// queueFull counts datagrams whose records the workers could not
+	// take because the queue was full.
+	queueFull atomic.Uint64
 }
 
 // New is the plugin factory. It does not open sockets.
@@ -284,6 +299,12 @@ func New(c plugin.Config, env plugin.Env) (plugin.TargetSource, error) {
 	}
 	if cfg.TopN < 1 || cfg.TopN > maxTopN {
 		return nil, fmt.Errorf("top_n %d must be between 1 and %d", cfg.TopN, maxTopN)
+	}
+	if cfg.Workers == 0 {
+		cfg.Workers = defaultWorkers
+	}
+	if cfg.Workers < 1 || cfg.Workers > maxWorkers {
+		return nil, fmt.Errorf("workers %d must be between 1 and %d", cfg.Workers, maxWorkers)
 	}
 	if cfg.MaxPrefixes == 0 {
 		cfg.MaxPrefixes = passive.DefaultMaxPrefixes
@@ -358,6 +379,7 @@ func New(c plugin.Config, env plugin.Env) (plugin.TargetSource, error) {
 		topN:         cfg.TopN,
 		maxTargets:   cfg.MaxTargets,
 		maxPrefixes:  cfg.MaxPrefixes,
+		workers:      cfg.Workers,
 		minBytes:     cfg.MinBytes,
 		minPctPPM:    ppm,
 		tailInterval: cfg.TailInterval,
@@ -635,11 +657,25 @@ func (s *Source) Start(ctx context.Context) error {
 	s.gen++
 	gen := s.gen
 	s.connMu.Unlock()
+	q := make(chan batch, s.workers*queuePerWorker)
+	for range s.workers {
+		s.wg.Add(1)
+		go s.worker(q)
+	}
+	var readers sync.WaitGroup
 	for _, c := range conns {
 		s.log.Info("flow listening", "addr", c.LocalAddr().String())
-		s.wg.Add(1)
-		go s.readLoop(ctx, c)
+		readers.Add(1)
+		go s.readLoop(ctx, c, q, &readers)
 	}
+	// The queue closes once every reader is gone, so the workers finish
+	// what is queued and exit. Stop waits for them through wg.
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
+		readers.Wait()
+		close(q)
+	}()
 	go func() {
 		<-ctx.Done()
 		s.closeGen(gen)
@@ -685,8 +721,20 @@ func closeAll(conns []*net.UDPConn) {
 	}
 }
 
-func (s *Source) readLoop(ctx context.Context, c *net.UDPConn) {
-	defer s.wg.Done()
+// batch is the records of one datagram, decoded in arrival order and
+// stamped with the time it was read.
+type batch struct {
+	at  time.Time
+	obs []observation
+}
+
+// readLoop decodes on the reader, not on the workers: NetFlow v9 and IPFIX
+// templates must be learned in the order they arrive, and only the lookup
+// and window work after that is order-free (bytes are summed). When the
+// queue is full the datagram is dropped and counted, never waited for, so
+// the socket buffer keeps draining.
+func (s *Source) readLoop(ctx context.Context, c *net.UDPConn, q chan<- batch, readers *sync.WaitGroup) {
+	defer readers.Done()
 	buf := make([]byte, udpPayloadBytes)
 	for {
 		_ = c.SetReadDeadline(time.Now().Add(udpReadTimeout))
@@ -704,9 +752,30 @@ func (s *Source) readLoop(ctx context.Context, c *net.UDPConn) {
 		if n == 0 || addr == nil {
 			continue
 		}
-		// Decode before the next read. ingest does not keep the
-		// payload, so the read buffer is reused instead of copied.
-		s.ingest(s.now(), udpAddr(addr), buf[:n])
+		at := s.now()
+		exporter := udpAddr(addr)
+		obs, err := s.dec.decode(exporter, buf[:n])
+		if err != nil {
+			s.log.Debug("flow decode", "exporter", exporter.String(), "err", err)
+		}
+		if len(obs) == 0 {
+			putObs(obs)
+			continue
+		}
+		select {
+		case q <- batch{at: at, obs: obs}:
+		default:
+			s.queueFull.Add(1)
+			putObs(obs)
+		}
+	}
+}
+
+func (s *Source) worker(q <-chan batch) {
+	defer s.wg.Done()
+	for b := range q {
+		s.apply(b.at, b.obs)
+		putObs(b.obs)
 	}
 }
 
@@ -809,12 +878,14 @@ func (s *Source) Tracked() int {
 
 // Truncated is how many prefix cells the window buckets dropped at
 // max_prefixes since start (refused or evicted), problem window included.
+// The workers entry is datagrams dropped because the worker queue was full
+// (#385).
 func (s *Source) Truncated() map[string]uint64 {
 	n := s.win.truncatedTotal()
 	if s.prob != nil {
 		n += s.prob.win.Truncated()
 	}
-	return map[string]uint64{"max_prefixes": n}
+	return map[string]uint64{"max_prefixes": n, "workers": s.queueFull.Load()}
 }
 
 // Volumes implements plugin.VolumeSource. Mbps is bytes over the configured
@@ -993,12 +1064,9 @@ func (s *Source) setSubranges(t *plugin.Target, subs []subRank, left *int) {
 	*left -= len(out)
 }
 
-func (s *Source) ingest(at time.Time, exporter netip.Addr, payload []byte) {
-	obs, err := s.dec.decode(exporter, payload)
-	defer putObs(obs)
-	if err != nil {
-		s.log.Debug("flow decode", "exporter", exporter.String(), "err", err)
-	}
+// apply counts one datagram's records. It runs on a worker; the window,
+// counters, and lookup it calls are safe for concurrent use.
+func (s *Source) apply(at time.Time, obs []observation) {
 	for _, o := range obs {
 		if s.prob != nil && o.haveFlags && !o.sampled && o.proto == 6 {
 			s.noteProblem(at, o)

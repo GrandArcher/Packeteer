@@ -13,7 +13,7 @@ import (
 
 // truncatedLimits are the caps packeteer_truncated_total reports, in the
 // order they are written. Zero when the source that owns a cap is absent.
-var truncatedLimits = []string{"max_prefixes", "max_flows"}
+var truncatedLimits = []string{"max_prefixes", "max_flows", "workers"}
 
 // Canonical BGP FSM states from the GoBGP session enum. A state outside
 // this list is emitted as well so a future name is still visible.
@@ -83,7 +83,7 @@ func Metrics(s Snapshot) []byte {
 	for _, k := range truncatedLimits {
 		trunc = append(trunc, sample{labels: []lbl{{"limit", k}}, value: float64(s.Truncated[k])})
 	}
-	writeCounter(&b, "packeteer_truncated_total", "Entries a passive-measurement cap dropped since start, by the config key that capped them: max_prefixes (prefix cells a window bucket refused or, for flow, evicted) and max_flows (span connections refused). A rising value means that cap is binding; see docs/performance.md.", trunc...)
+	writeCounter(&b, "packeteer_truncated_total", "Entries a passive-measurement cap dropped since start, by the config key that capped them: max_prefixes (prefix cells a window bucket refused or, for flow, evicted) and max_flows (span connections refused), and workers (flow datagrams dropped because the worker queue was full). A rising value means that cap is binding; see docs/performance.md.", trunc...)
 
 	counts := map[string]float64{}
 	actions := append([]string(nil), decisionActions...)
