@@ -154,7 +154,7 @@ func TestUIShell(t *testing.T) {
 // TestUIKeyboardAccess checks every page for the keyboard and screen reader
 // rules of #353: the skip link is the first focusable element and points at
 // a focusable main, there is exactly one h1, and the YAML editor has a label.
-// Focus ring size and contrast are checked in a browser by lab/ui-smoke.sh.
+// Focus ring size and contrast are checked in a browser by lab/ui-fixtures/a11y/driver.js.
 func TestUIKeyboardAccess(t *testing.T) {
 	entries, err := fs.ReadDir(webFS, "web")
 	if err != nil {

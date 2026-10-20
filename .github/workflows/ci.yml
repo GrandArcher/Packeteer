@@ -534,13 +534,7 @@ jobs:
           bash lab/ui-smoke.sh http://127.0.0.1:18089/dashboards.html \
             'Recommended improvements' 'NOC' '>lab-a<' \
             --absent 'Active improvements' "$since"
-          # Keyboard and screen reader rules (#353). Headless Chrome cannot
-          # press Tab, so uiproxy adds a driver to /settings.html that takes
-          # the first focusable element, which is where the first Tab lands.
-          # It checks the skip link is first and visible, activating it
-          # focuses main, the focus ring is 2 px or more with 3:1 contrast on
-          # the nav and the content, the YAML editor is labelled, and every
-          # nav page has a skip link, a main, and one h1.
+          # Keyboard and screen reader rules (#353); see lab/ui-fixtures/a11y/driver.js.
           /tmp/uiproxy -listen 127.0.0.1:18091 -upstream "$base" -user lab -password lab-only \
             -fixtures lab/ui-fixtures/a11y >/tmp/uiproxy353.log 2>&1 &
           proxy353=$!
@@ -1427,14 +1421,14 @@ jobs:
           done
           curl -fsS http://127.0.0.1:18138/healthz >/dev/null
           bash lab/ui-smoke.sh http://127.0.0.1:18138/ixp/member/64496 'mode-observe' 'announces nothing' \
-            '>AS64496 Example Member A</h2>' 'id="member-ixpm"' 'href="https://ixp.example.invalid/admin/search?search=AS64496"' \
+            '>AS64496 Example Member A</h1>' 'id="member-ixpm"' 'href="https://ixp.example.invalid/admin/search?search=AS64496"' \
             '<td>sw1</td>' '<td>cab-a</td>' '<td>10000 Mbit/s</td>' '<td class="mono">192.0.2.20</td>' \
             '<td>lan1-a</td>' '<td>0.00 %</td>' '<td>0.42 ms</td>' '<td>ok</td>' \
             '<td>lan1-b</td>' '<td>40.00 %</td>' '<td>310.50 ms</td>' '<td>12.25 ms</td>' '<td class="bad">past tolerance</td>' \
             '<td>rs1</td>' '<td class="mono">192.0.2.20</td>' '<td>9: 3</td>' \
             'data-history="rs1/pb_a"' 'Latest 2 of 2 samples, newest first.' \
             --absent 'mode-inject' 'is not an IXP member'
-          bash lab/ui-smoke.sh http://127.0.0.1:18138/ixp/member/ 'mode-observe' '>IXP members</h2>' \
+          bash lab/ui-smoke.sh http://127.0.0.1:18138/ixp/member/ 'mode-observe' '>IXP members</h1>' \
             'href="/ixp/member/64496"' '>AS64497</a>' '<td>Example Member B</td>' \
             --absent 'mode-inject'
           # This controller has no IXP source, so an unstubbed ASN is a 404.
@@ -1456,7 +1450,7 @@ jobs:
             sleep 0.2
           done
           curl -fsS http://127.0.0.1:18141/healthz >/dev/null
-          bash lab/ui-smoke.sh http://127.0.0.1:18141/ixp/sites 'mode-observe' 'announces nothing' '>IXP sites</h2>' \
+          bash lab/ui-smoke.sh http://127.0.0.1:18141/ixp/sites 'mode-observe' 'announces nothing' '>IXP sites</h1>' \
             '<td>site-a (this site)</td>' '<td>site-b</td>' '<td>site-c</td>' \
             '<td class="bad">degraded</td>' '<td class="bad">unreachable</td>' '<td>1 of 1</td>' '<td>1 of 2</td>' \
             '<td>a-to-b</td>' '<td>3.25 ms</td>' '<td>0.00 %</td>' '<td>ok</td>' \
