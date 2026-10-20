@@ -199,4 +199,4 @@ Stop Packeteer first (`docker stop -t 30 packeteer`), then fix the router. The e
 
 ## Reporting a problem
 
-Open an issue with `-check` output, `-version`, the relevant log lines, and what the router shows. Replace real prefixes, addresses, ASNs, and community strings with documentation values (192.0.2.0/24, 198.51.100.0/24, 203.0.113.0/24, 2001:db8::/32, AS 64496–64511 or 64512–65534) before you paste. Never paste SNMP communities, passwords, or tokens.
+Open an issue with `-check` output, `-version`, the relevant log lines, and what the router shows. Replace real prefixes, addresses, ASNs, and community strings with documentation values (192.0.2.0/24, 198.51.100.0/24, 203.0.113.0/24, 2001:db8::/32, AS 64496-64511 or 64512-65534) before you paste. Never paste SNMP communities, passwords, or tokens.

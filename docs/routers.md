@@ -1,6 +1,6 @@
 # Edge router guides
 
-Packeteer peers with the edge over **iBGP** (the router's own ASN). It learns the paths that router advertises — one best path per prefix, unless the router is set to keep sending the native path as well — and, only in `mode: inject`, advertises improvements back on that same session:
+Packeteer peers with the edge over **iBGP** (the router's own ASN). It learns the paths that router advertises - one best path per prefix, unless the router is set to keep sending the native path as well - and, only in `mode: inject`, advertises improvements back on that same session:
 
 - the exact prefix learned from the router
 - next hop = the chosen provider's `next_hop`
@@ -231,7 +231,7 @@ Packeteer's `flow` source learns probe targets from NetFlow v5/v9, IPFIX, or sFl
 
 Packeteer uses `--network host`, so `listen: "0.0.0.0:2055"` is the host's UDP/2055. Docker port publishing does not apply and is not required. Firewall that UDP port to the exporter.
 
-[pmacct](http://www.pmacct.net/) can read a capture interface and export. `pmacctd` is the exporter here; `nfacctd` is a collector and is the wrong daemon.
+[pmacct](https://github.com/pmacct/pmacct) can read a capture interface and export. `pmacctd` is the exporter here; `nfacctd` is a collector and is the wrong daemon.
 
 ```
 pcap_interface: eth0

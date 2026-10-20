@@ -8,6 +8,33 @@ Packeteer sits off to the side of the edge. It probes each upstream from that up
 
 The feature matrix is [docs/FEATURES.md](docs/FEATURES.md).
 
+## What it does
+
+- **Measure.** Probes (`icmp`, `tcp`, `udp`) from each provider's `source_ip`, targets from static lists, NetFlow, IPFIX, sFlow, a mirror port, traceroute, VIPs, and outage lists, scores loss, latency, and jitter. The per-provider path check (#150) marks a provider down when its probes do not leave through its `next_hop`. Providers and exchange peers may share one `source_ip` with a distinct `fwmark` or `dscp`, and `packeteer -pbr <format>` prints the Linux or router policy-routing config without applying it (#157).
+- **Learn.** An iBGP session, or BMP with add-path, gives the router's own exits. An opt-in `rpki` block reads an RTR server and labels each learned path `valid`, `invalid`, `notfound`, or `unknown`; `avoid_invalid` refuses a new steer onto an invalid path (#158).
+- **Recommend or steer.** `observe` and `suggest` announce nothing. `inject` advertises an allowlisted, learned prefix with your community and `no-export`. Cost and commit control, 95th-percentile telemetry over SNMP, inbound optimization, RTBH and FlowSpec mitigation, anomaly detection, flap quarantine, leak watch, HA, and multi-POP federation are listed in [docs/FEATURES.md](docs/FEATURES.md).
+- **Internet exchanges, as an edge network.** An `exchanges` block adds peers, LAN health probes, route-server vs bilateral views, transit-to-IX offload and potential-peers reports, and a shared port (`exchanges[].port`: capacity, commit, flat `port_cost`; the commit and cost scorers plan no move past it).
+- **Internet exchanges, as the operator.** An `ixp` block is observe-only. `members` imports the IX-F member list (#161), `vantages` and `fabric` measure member LAN loss, RTT, and jitter (#162), `routeservers` polls Birdseye with GET only and flags new origins, more-specific bursts, and blackhole routes (#164, #165), `correlate` separates a fabric problem from a member problem (#163), and `core` with the top-level `federation` block joins one instance per site (#167). Member pages are at `/ixp/member/{asn}` (#166). Nothing is announced.
+- **Events.** Notifier events carry a plain headline, a link to what to do, and a details fold. `provider.down`, `provider.degraded`, and `bgp.session_not_established` come from measurements (#347, [docs/EVENTS.md](docs/EVENTS.md)).
+- **Herd (opt-in).** Share what your probes measure with a few other operators ([below](#herd-opt-in)).
+- **Settings forms.** The Settings page edits every block of the config with guided inputs, a Preview diff, and the raw YAML under Advanced ([docs/ui.md](docs/ui.md#settings-form)).
+
+![Overview](docs/assets/ui-overview.png)
+
+The overview in observe mode, from the lab config with fixed probe results on documentation addresses.
+
+![Settings forms](docs/assets/ui-settings-forms.png)
+
+Settings: guided forms over the mounted file. Save merges the form into the file text, runs the start checks, and writes it. Preview shows the diff first.
+
+![Exchange view](docs/assets/ui-exchanges.png)
+
+Exchange view for an edge network's own peering, on lab fixture data (documentation prefixes and ASNs).
+
+![IXP member page](docs/assets/ui-ixp-member.png)
+
+The IXP member page for an exchange operator: fabric by vantage, route-server session, and filter history. It only reads.
+
 ## Safety model
 
 Read this before you change `mode`.
@@ -30,17 +57,17 @@ The image is `ghcr.io/grandarcher/packeteer`, linux/amd64 and linux/arm64. It ru
 
 | Tag | What it is |
 |---|---|
-| `0.7.0` | This release. Pin this. |
+| `0.8.0` | This release. Pin this. |
 | `latest` | The same release, updated when a release tag is published. |
 | `edge` | The build from `main`. The Compose file in this repo uses it. |
 
 **Step by step: [docs/quickstart.md](docs/quickstart.md).** It goes from an empty directory to a running instance in observe, with a first run on loopback, `docker run` and Compose, and the stop. CI runs every command on that page against the image built from the same commit.
 
-The short version, pinned to 0.7.0. Take the example config from the same tag as the image: the file on `main` can carry keys a release does not know yet, and unknown keys refuse startup. For `:edge`, use `main` in both places.
+The short version, pinned to 0.8.0. Take the example config from the same tag as the image: the file on `main` can carry keys a release does not know yet, and unknown keys refuse startup. For `:edge`, use `main` in both places.
 
 ```sh
-IMAGE=ghcr.io/grandarcher/packeteer:0.7.0
-curl -fsSLo config.yaml https://raw.githubusercontent.com/GrandArcher/Packeteer/v0.7.0/config.example.yaml
+IMAGE=ghcr.io/grandarcher/packeteer:0.8.0
+curl -fsSLo config.yaml https://raw.githubusercontent.com/GrandArcher/Packeteer/v0.8.0/config.example.yaml
 # Edit providers and source IPs. Leave mode: observe.
 mkdir -p plugins
 
@@ -61,7 +88,7 @@ docker run -d --name packeteer --network host \
 
 ```sh
 docker run --rm -e PACKETEER_CONFIG=/etc/packeteer/config.example.yaml \
-  ghcr.io/grandarcher/packeteer:0.7.0 -check
+  ghcr.io/grandarcher/packeteer:0.8.0 -check
 ```
 
 The default config path inside the container is `/etc/packeteer/config.yaml` (`PACKETEER_CONFIG`, or `-config`).
@@ -70,7 +97,7 @@ Without `NET_RAW`, or where ICMP is filtered, the probe falls back to TCP port 4
 
 The `packeteer-data` volume keeps report history (`storage: {type: sqlite}`, file `/var/lib/packeteer/packeteer.db`) across container restarts and upgrades, and the open billing period of SNMP 95th-percentile samples when telemetry is configured. Without the volume, reports and that window start empty after the container is recreated. Leave out `storage` to turn history off; the probe and decision loop does not depend on it, and the 95th window then lives in memory only.
 
-[docker-compose.yml](docker-compose.yml) runs the same container with Compose: host networking, the two capabilities, the mounts, and `restart: unless-stopped` ([quickstart, step 5](docs/quickstart.md#5-or-run-it-with-compose)). Its `image` line uses `:edge`; change it to `ghcr.io/grandarcher/packeteer:0.7.0` to pin. There is no `ports:` map: with host networking, `http.listen` is already an address on the host. Stop with `docker compose stop -t 30` (see [Rollback](#rollback)).
+[docker-compose.yml](docker-compose.yml) runs the same container with Compose: host networking, the two capabilities, the mounts, and `restart: unless-stopped` ([quickstart, step 5](docs/quickstart.md#5-or-run-it-with-compose)). Its `image` line uses `:edge`; change it to `ghcr.io/grandarcher/packeteer:0.8.0` to pin. There is no `ports:` map: with host networking, `http.listen` is already an address on the host. Stop with `docker compose stop -t 30` (see [Rollback](#rollback)).
 
 ## Minimum config
 
@@ -141,18 +168,18 @@ To learn current exits, peer iBGP, same ASN, between the router and Packeteer. I
 
 Leave graceful restart off on the session. Guides:
 
-- [docs/walkthrough.md](docs/walkthrough.md) — observe, suggest, inject, and roll back on a simulated FRR edge, then the same steps on a real one. CI runs every command
-- [docs/mikrotik.md](docs/mikrotik.md) — RouterOS 7 iBGP, filters, Traffic Flow, port mirroring, and SNMP
-- [docs/frr.md](docs/frr.md) — FRR; the walkthrough lab runs this configuration in CI
-- [docs/junos.md](docs/junos.md) — Juniper Junos
-- [docs/cisco.md](docs/cisco.md) — Cisco IOS and IOS-XE
-- [docs/routers.md](docs/routers.md) — what every router guide shares, what happens when the native path disappears, and exchange peers
-- [docs/route-reflector.md](docs/route-reflector.md) — several edge routers, per-router provider reachability, route reflectors, Internet exchange peers, and SIGHUP reload of neighbors, thresholds, policies, and sources
-- [docs/multi-pop.md](docs/multi-pop.md) — several POPs (routing domains) federated over mutual TLS: inter-DC RTT in the path cost, global commit across POPs, and the central view. Lab-proven only
-- [docs/leak-watch.md](docs/leak-watch.md) — how Packeteer keeps its routes inside your AS: the rails, and `leak_watch`, which withdraws and holds out a route seen outside the AS. Lab-proven only
-- [docs/precedence.md](docs/precedence.md) — which surface owns a prefix when mitigation, inbound, outbound, a leak hold, flap quarantine, and HA all want it, how the shared cap is spent, and which test proves each pair
-- [docs/policy-routing.md](docs/policy-routing.md) — probe sources behind the router
-- [docs/ui.md](docs/ui.md) — config editor and first-run wizard, custom dashboards, email report subscriptions, and improvement weights
+- [docs/walkthrough.md](docs/walkthrough.md) - observe, suggest, inject, and roll back on a simulated FRR edge, then the same steps on a real one. CI runs every command
+- [docs/mikrotik.md](docs/mikrotik.md) - RouterOS 7 iBGP, filters, Traffic Flow, port mirroring, and SNMP
+- [docs/frr.md](docs/frr.md) - FRR; the walkthrough lab runs this configuration in CI
+- [docs/junos.md](docs/junos.md) - Juniper Junos
+- [docs/cisco.md](docs/cisco.md) - Cisco IOS and IOS-XE
+- [docs/routers.md](docs/routers.md) - what every router guide shares, what happens when the native path disappears, and exchange peers
+- [docs/route-reflector.md](docs/route-reflector.md) - several edge routers, per-router provider reachability, route reflectors, Internet exchange peers, and SIGHUP reload of neighbors, thresholds, policies, and sources
+- [docs/multi-pop.md](docs/multi-pop.md) - several POPs (routing domains) federated over mutual TLS: inter-DC RTT in the path cost, global commit across POPs, and the central view. Lab-proven only
+- [docs/leak-watch.md](docs/leak-watch.md) - how Packeteer keeps its routes inside your AS: the rails, and `leak_watch`, which withdraws and holds out a route seen outside the AS. Lab-proven only
+- [docs/precedence.md](docs/precedence.md) - which surface owns a prefix when mitigation, inbound, outbound, a leak hold, flap quarantine, and HA all want it, how the shared cap is spent, and which test proves each pair
+- [docs/policy-routing.md](docs/policy-routing.md) - probe sources behind the router
+- [docs/ui.md](docs/ui.md) - config editor and first-run wizard, custom dashboards, email report subscriptions, and improvement weights
 
 A flow export (NetFlow, IPFIX, or sFlow) is optional. It only adds probe targets. It does not inject routes. With host networking the collector's UDP port is a host port; firewall it to the exporter.
 
@@ -230,6 +257,25 @@ Only the announcers and the plugins that feed route decisions can put a route on
 
 Interfaces, the exec protocol, and a shell example: [docs/PLUGINS.md](docs/PLUGINS.md). Keys: [docs/CONFIG.md](docs/CONFIG.md).
 
+## Herd (opt-in)
+
+Off by default. A `herd:` block lets a few operators share what their probes measure: each member stores its own per-round records, serves them signed over mutual TLS pinned to per-node keys, and pulls its peers' records. It is advisory. Herd never announces, and no herd data is read by `Decide`, a scorer, a policy, or the announcer. If herd fails once running, probing and BGP carry on as if it were off.
+
+A record holds the time, packets sent, reply RTTs, loss, RTT min, average, max and jitter, your declared country, the probe method, the origin ASN, and your provider's ASN. It holds no provider names, probed host addresses, SNMP or usage data, config, or free text. A prefix is shared only when it is in your learned RIB view, is not a default or private route, is not in `herd.share.exclude`, is not yours or your customers', and a target source listed in `herd.share.sources` produced it. Peers come from `herd.peers`, and optionally from a public hub list that is a seed list, not an identity check.
+
+```yaml
+herd:
+  enabled: true
+  vantage: {country: US}
+  peers:
+    - url: https://192.0.2.30:9444
+      key: ed25519:<base64 of the 32-byte public key>
+  hub:
+    url: https://hub.example.net/herd.json
+```
+
+Herd needs `storage` type `sqlite` and `bgp.neighbors`. Details: [docs/herd.md](docs/herd.md), [docs/herd-hub.md](docs/herd-hub.md), [CONFIG.md](docs/CONFIG.md#herd), and the [design](docs/design/herd.md). The hub repository `GrandArcher/packeteer-herd` is not live unless it exists when the release is tagged; the examples use `example.net` and the list built into the image is empty. Herd has no dashboard page; read it at `GET /api/herd`.
+
 ## FAQ
 
 Symptoms, log lines, and fixes: [docs/troubleshooting.md](docs/troubleshooting.md).
@@ -250,25 +296,36 @@ Symptoms, log lines, and fixes: [docs/troubleshooting.md](docs/troubleshooting.m
 
 ## Features
 
-Status as of v0.7.0, from [docs/FEATURES.md](docs/FEATURES.md):
+Status as of v0.8.0, capabilities per milestone from [docs/FEATURES.md](docs/FEATURES.md):
 
-| | Count |
+| Milestone | Capabilities |
 |---|---|
-| Done, v0.1 | 24 |
-| Done, v0.2 | 25 |
-| Done, v0.3 | 17 |
-| Done, v0.4 | 13 |
-| Done, v0.6 | 9 |
-| Done, v0.7 | 3 |
+| v0.1 | 24 |
+| v0.2 | 25 |
+| v0.3 | 17 |
+| v0.4 | 13 |
+| v0.6 | 9 |
+| v0.7 | 3 |
+| v0.8 | 12 |
 | Won't do | 2 |
 
-v0.1 is the outbound loop: probes, static and flow targets, an iBGP RIB, scoring with hysteresis, optional injection, the read-only UI and API, the container, and the FRR lab. v0.2 adds cost and commit control, SNMP, policies, alerts, and reports. v0.3 adds inbound optimization, BMP and add-path, multiple routers and IX, RTBH/FlowSpec mitigation, transit classification, and capped more-specific injection, all lab-proven. v0.4 adds multi-POP federation, active/standby HA and backup, RBAC/SSO/audit, flow-baseline anomaly detection that mitigates only on explicit rules, and the remaining UI rows. v0.5 is hardening on that matrix: dashboard clarity and a first-run checklist, CI-tested install and walkthrough docs, load and soak budgets with a flow-ingest fix, a MikroTik CHR lab in CI, and a scheduled router interop matrix. Those are lab-proven only. Field feedback from real observe-mode deployments (#54) is still open. v0.6 closes the gaps from the 2026-10-07 review of prefix selection, measurement, and the UI, adds flap quarantine, live apply, scale budgets up to multi-million path tables, upgrade from the UI, and a failure-mode e2e matrix; also lab-proven only. v0.7 (this release) adds exchange (IX) visibility: an exchange view, IX LAN health probes, route-server vs bilateral prefix views, transit-to-IX offload and potential-peers reports; plus dashboard widgets, Commit & Cost, Reports, search, System, and maintenance pages, link-outs, steering precedence tests, and a split of the largest Go files. Also lab-proven only. It does not relax the safety rules above.
+v0.1 is the outbound loop: probes, static and flow targets, an iBGP RIB, scoring with hysteresis, optional injection, the read-only UI and API, the container, and the FRR lab. v0.2 adds cost and commit control, SNMP, policies, alerts, and reports. v0.3 adds inbound optimization, BMP and add-path, multiple routers and IX, RTBH/FlowSpec mitigation, transit classification, and capped more-specific injection, all lab-proven. v0.4 adds multi-POP federation, active/standby HA and backup, RBAC/SSO/audit, flow-baseline anomaly detection that mitigates only on explicit rules, and the remaining UI rows. v0.5 is hardening on that matrix: dashboard clarity and a first-run checklist, CI-tested install and walkthrough docs, load and soak budgets, a MikroTik CHR lab in CI, and a scheduled router interop matrix. Field feedback from real observe-mode deployments (#54) is still open. v0.6 closes the gaps from the 2026-10-07 review of prefix selection, measurement, and the UI, adds flap quarantine, live apply, scale budgets up to multi-million path tables, upgrade from the UI, and a failure-mode e2e matrix. v0.7 adds exchange (IX) visibility for an edge network: an exchange view, IX LAN health probes, route-server vs bilateral prefix views, offload and potential-peers reports, dashboard widgets, Commit & Cost, Reports, search, System, and maintenance pages, and link-outs.
+
+v0.8 (this release) is about Internet exchanges and shared measurements: IXP observe-only mode with IX-F import, fabric probes, Birdseye route-server history and signals, fabric incident correlation, member pages, and multi-site health; RPKI origin labels; probe multiplexing with a PBR generator and a probe-path check; a shared IX port; PeeringDB lookup; BMP exchange peer monitoring; events from measured provider health; settings forms for every block of the config; and the opt-in herd with its hub. Some rows are partial: the shared IX port, potential peers, exchange autoconfig, and herd (phase 1 and the hub; the hub has unit and integration tests only). The rows say what is missing. Everything is lab-proven only, and none of it relaxes the safety rules above.
 
 ## Upgrades
 
 Pulling a newer image and recreating the container is the plain upgrade. Your config and the `packeteer-data` volume carry over.
 
 The Settings page can also upgrade in place (#196). It is off by default. It needs `upgrade.enabled: true`, the release public key in `upgrade.public_key` ([CONFIG.md](docs/CONFIG.md#upgrade)), an admin login (auth or basic auth), and the `packeteer-data` volume to keep the new version across restarts. The public key is printed in the [v0.6.0 release notes](https://github.com/GrandArcher/Packeteer/releases/tag/v0.6.0). Every route is withdrawn before the switch, and a release whose signature or checksum does not match is refused. Details: [docs/ui.md](docs/ui.md#upgrade-from-the-ui).
+
+### From 0.7 to 0.8
+
+- No config key was removed or renamed since 0.7. Run `docker run --rm -v "$PWD/config.yaml:/etc/packeteer/config.yaml:ro" ghcr.io/grandarcher/packeteer:0.8.0 -check` first.
+- Provider health labels on the dashboard now follow measured loss: no reply or loss at `probe.down_loss_pct` is `down`, loss at `probe.degraded_loss_pct` is `degraded` (#343). They do not change a decision.
+- The probe-path check (#150) is on by default. A provider whose probes do not leave through its `next_hop` is marked down with the reason `probe path mismatch`, for example one reached across another router. Set `path_check: false` on that provider or exchange peer, or `probe.path_check.enabled: false` for all ([CONFIG.md](docs/CONFIG.md#probepath_check)).
+- New events reach every notifier that does not filter them: `provider.down`, `provider.degraded`, and `bgp.session_not_established` (#347). Limit them with the notifier's `events` and `min_severity` ([CONFIG.md](docs/CONFIG.md#notifier-filters-every-notifier)).
+- Herd, `ixp`, and `rpki` are off unless you add the block.
 
 ## Roadmap and contributing
 

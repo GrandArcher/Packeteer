@@ -148,7 +148,7 @@ Trust). Window rollups are an open question.
 | `time` | RFC 3339 UTC | Start of the round. |
 | `sent` | int | Probe packets sent in the round, over all probed hosts (and, at origin-ASN level, all pooled routes). |
 | `samples` | []object | Evidence: one entry per reply, `{"t_ms": offset from time, "rtt_ms": value}`, in send order. Host addresses are not included. |
-| `loss_pct` | float | `100 × (sent − replies) / sent`. |
+| `loss_pct` | float | `100 * (sent - replies) / sent`. |
 | `rtt_min_ms`, `rtt_avg_ms`, `rtt_max_ms` | float | From the samples, the way `internal/probe` computes them; `rtt_avg_ms` is reply-weighted across hosts. Omitted when there were no replies. |
 | `jitter_ms` | float | Mean absolute difference between consecutive RTTs to the same host (RFC 3550 style, without the smoothing), pooled across hosts weighted by reply gaps, the same as `probe.Compute` and `combineStats`. |
 | `failed` | bool | The round produced no measurement (prober error, source down). A failed round carries no samples and no statistics. |
