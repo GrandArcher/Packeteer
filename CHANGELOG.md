@@ -4,6 +4,10 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 
 ## [Unreleased]
 
+### Added
+
+- Multi-POP: lab phase and unit test for a cut federation link (stale peer pruned after `max_age`, no steer or flapping, clean re-sync); behavior documented in docs/multi-pop.md (#308).
+
 ### Fixed
 
 - Herd stats and trimming read per-member counters kept by triggers (`herd_stats`) instead of scanning the herd table on the shared sqlite connection (#393).
