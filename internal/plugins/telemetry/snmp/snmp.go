@@ -34,6 +34,7 @@ type Collector struct {
 	interval time.Duration
 	timeout  time.Duration
 	retries  int
+	workers  int // hosts polled at once
 	hosts    []hostSpec
 	order    []string // provider names, config order
 	states   map[string]*provState
@@ -80,7 +81,7 @@ type observation struct {
 // New validates config and reads credentials. It does not open a socket.
 func New(c plugin.Config, e plugin.Env) (plugin.Telemetry, error) {
 	getenv := e.Getenv
-	interval, timeout, retries, maxSamples, hosts, bindings, err := decode(c, getenv, e.BindingNames())
+	interval, timeout, retries, workers, maxSamples, hosts, bindings, err := decode(c, getenv, e.BindingNames())
 	if err != nil {
 		return nil, err
 	}
@@ -93,6 +94,7 @@ func New(c plugin.Config, e plugin.Env) (plugin.Telemetry, error) {
 		interval: interval,
 		timeout:  timeout,
 		retries:  retries,
+		workers:  workers,
 		hosts:    hosts,
 		states:   make(map[string]*provState, len(bindings)),
 	}
@@ -216,12 +218,27 @@ func (c *Collector) poll(ctx context.Context, now time.Time) {
 		return
 	}
 	now = now.UTC()
+	// Each host owns its providers' state, so hosts contend only on c.mu.
+	// The pool keeps one slow host from delaying the rest.
+	sem := make(chan struct{}, c.workers)
+	var wg sync.WaitGroup
 	for _, h := range c.hosts {
-		if ctx.Err() != nil {
-			return
+		select {
+		case sem <- struct{}{}:
+		case <-ctx.Done():
 		}
-		c.pollHost(ctx, h, now)
+		// Both cases can be ready; a cancelled poll starts no more hosts.
+		if ctx.Err() != nil {
+			break
+		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			defer func() { <-sem }()
+			c.pollHost(ctx, h, now)
+		}()
 	}
+	wg.Wait()
 }
 
 func (c *Collector) pollHost(ctx context.Context, h hostSpec, now time.Time) {

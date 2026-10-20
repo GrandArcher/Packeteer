@@ -529,6 +529,7 @@ storage:
 #   - type: snmp
 #     config:
 #       interval: 5m
+#       workers: 4
 #       hosts:
 #         - name: edge1
 #           address: 192.0.2.254
