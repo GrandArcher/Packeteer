@@ -57,17 +57,17 @@ The image is `ghcr.io/grandarcher/packeteer`, linux/amd64 and linux/arm64. It ru
 
 | Tag | What it is |
 |---|---|
-| `0.8.0` | This release. Pin this. |
+| `0.7.0` | The last release. Pin this until v0.8.0 is tagged. |
 | `latest` | The same release, updated when a release tag is published. |
 | `edge` | The build from `main`. The Compose file in this repo uses it. |
 
 **Step by step: [docs/quickstart.md](docs/quickstart.md).** It goes from an empty directory to a running instance in observe, with a first run on loopback, `docker run` and Compose, and the stop. CI runs every command on that page against the image built from the same commit.
 
-The short version, pinned to 0.8.0. Take the example config from the same tag as the image: the file on `main` can carry keys a release does not know yet, and unknown keys refuse startup. For `:edge`, use `main` in both places.
+The short version, pinned to 0.7.0, the last release. Once v0.8.0 is tagged, pin that tag and its config. Take the example config from the same tag as the image: the file on `main` can carry keys a release does not know yet, and unknown keys refuse startup. For `:edge`, use `main` in both places.
 
 ```sh
-IMAGE=ghcr.io/grandarcher/packeteer:0.8.0
-curl -fsSLo config.yaml https://raw.githubusercontent.com/GrandArcher/Packeteer/v0.8.0/config.example.yaml
+IMAGE=ghcr.io/grandarcher/packeteer:0.7.0
+curl -fsSLo config.yaml https://raw.githubusercontent.com/GrandArcher/Packeteer/v0.7.0/config.example.yaml
 # Edit providers and source IPs. Leave mode: observe.
 mkdir -p plugins
 
@@ -88,7 +88,7 @@ docker run -d --name packeteer --network host \
 
 ```sh
 docker run --rm -e PACKETEER_CONFIG=/etc/packeteer/config.example.yaml \
-  ghcr.io/grandarcher/packeteer:0.8.0 -check
+  ghcr.io/grandarcher/packeteer:0.7.0 -check
 ```
 
 The default config path inside the container is `/etc/packeteer/config.yaml` (`PACKETEER_CONFIG`, or `-config`).
@@ -97,7 +97,7 @@ Without `NET_RAW`, or where ICMP is filtered, the probe falls back to TCP port 4
 
 The `packeteer-data` volume keeps report history (`storage: {type: sqlite}`, file `/var/lib/packeteer/packeteer.db`) across container restarts and upgrades, and the open billing period of SNMP 95th-percentile samples when telemetry is configured. Without the volume, reports and that window start empty after the container is recreated. Leave out `storage` to turn history off; the probe and decision loop does not depend on it, and the 95th window then lives in memory only.
 
-[docker-compose.yml](docker-compose.yml) runs the same container with Compose: host networking, the two capabilities, the mounts, and `restart: unless-stopped` ([quickstart, step 5](docs/quickstart.md#5-or-run-it-with-compose)). Its `image` line uses `:edge`; change it to `ghcr.io/grandarcher/packeteer:0.8.0` to pin. There is no `ports:` map: with host networking, `http.listen` is already an address on the host. Stop with `docker compose stop -t 30` (see [Rollback](#rollback)).
+[docker-compose.yml](docker-compose.yml) runs the same container with Compose: host networking, the two capabilities, the mounts, and `restart: unless-stopped` ([quickstart, step 5](docs/quickstart.md#5-or-run-it-with-compose)). Its `image` line uses `:edge`; change it to `ghcr.io/grandarcher/packeteer:0.7.0` to pin. There is no `ports:` map: with host networking, `http.listen` is already an address on the host. Stop with `docker compose stop -t 30` (see [Rollback](#rollback)).
 
 ## Minimum config
 
@@ -296,7 +296,7 @@ Symptoms, log lines, and fixes: [docs/troubleshooting.md](docs/troubleshooting.m
 
 ## Features
 
-Status as of v0.8.0, capabilities per milestone from [docs/FEATURES.md](docs/FEATURES.md):
+Status on main for the 0.8.0 release (not tagged yet), capabilities per milestone from [docs/FEATURES.md](docs/FEATURES.md):
 
 | Milestone | Capabilities |
 |---|---|
@@ -306,12 +306,12 @@ Status as of v0.8.0, capabilities per milestone from [docs/FEATURES.md](docs/FEA
 | v0.4 | 13 |
 | v0.6 | 9 |
 | v0.7 | 3 |
-| v0.8 | 12 |
+| v0.8 | 19 |
 | Won't do | 2 |
 
 v0.1 is the outbound loop: probes, static and flow targets, an iBGP RIB, scoring with hysteresis, optional injection, the read-only UI and API, the container, and the FRR lab. v0.2 adds cost and commit control, SNMP, policies, alerts, and reports. v0.3 adds inbound optimization, BMP and add-path, multiple routers and IX, RTBH/FlowSpec mitigation, transit classification, and capped more-specific injection, all lab-proven. v0.4 adds multi-POP federation, active/standby HA and backup, RBAC/SSO/audit, flow-baseline anomaly detection that mitigates only on explicit rules, and the remaining UI rows. v0.5 is hardening on that matrix: dashboard clarity and a first-run checklist, CI-tested install and walkthrough docs, load and soak budgets, a MikroTik CHR lab in CI, and a scheduled router interop matrix. Field feedback from real observe-mode deployments (#54) is still open. v0.6 closes the gaps from the 2026-10-07 review of prefix selection, measurement, and the UI, adds flap quarantine, live apply, scale budgets up to multi-million path tables, upgrade from the UI, and a failure-mode e2e matrix. v0.7 adds exchange (IX) visibility for an edge network: an exchange view, IX LAN health probes, route-server vs bilateral prefix views, offload and potential-peers reports, dashboard widgets, Commit & Cost, Reports, search, System, and maintenance pages, and link-outs.
 
-v0.8 (this release) is about Internet exchanges and shared measurements: IXP observe-only mode with IX-F import, fabric probes, Birdseye route-server history and signals, fabric incident correlation, member pages, and multi-site health; RPKI origin labels; probe multiplexing with a PBR generator and a probe-path check; a shared IX port; PeeringDB lookup; BMP exchange peer monitoring; events from measured provider health; settings forms for every block of the config; and the opt-in herd with its hub. Some rows are partial: the shared IX port, potential peers, exchange autoconfig, and herd (phase 1 and the hub; the hub has unit and integration tests only). The rows say what is missing. Everything is lab-proven only, and none of it relaxes the safety rules above.
+v0.8 (this release, not tagged yet) is about Internet exchanges and shared measurements: IXP observe-only mode with IX-F import, fabric probes, Birdseye route-server history and signals, fabric incident correlation, member pages, and multi-site health; RPKI origin labels; probe multiplexing with a PBR generator and a probe-path check; a shared IX port; PeeringDB lookup; BMP exchange peer monitoring; events from measured provider health; settings forms for most blocks of the config (the raw YAML covers the rest); and the opt-in herd with its hub. Some rows are partial: the shared IX port, potential peers, exchange autoconfig, the settings form, and herd (phase 1 and the hub; the hub has unit and integration tests only, not lab-proven). The rows say what is missing. No row is field-proven yet (#54), and none of it relaxes the safety rules above.
 
 ## Upgrades
 
@@ -321,7 +321,7 @@ The Settings page can also upgrade in place (#196). It is off by default. It nee
 
 ### From 0.7 to 0.8
 
-- No config key was removed or renamed since 0.7. Run `docker run --rm -v "$PWD/config.yaml:/etc/packeteer/config.yaml:ro" ghcr.io/grandarcher/packeteer:0.8.0 -check` first.
+- No config key was removed or renamed since 0.7. Run `docker run --rm -v "$PWD/config.yaml:/etc/packeteer/config.yaml:ro" ghcr.io/grandarcher/packeteer:edge -check` first, and use the release tag once it is published.
 - Provider health labels on the dashboard now follow measured loss: no reply or loss at `probe.down_loss_pct` is `down`, loss at `probe.degraded_loss_pct` is `degraded` (#343). They do not change a decision.
 - The probe-path check (#150) is on by default. A provider whose probes do not leave through its `next_hop` is marked down with the reason `probe path mismatch`, for example one reached across another router. Set `path_check: false` on that provider or exchange peer, or `probe.path_check.enabled: false` for all ([CONFIG.md](docs/CONFIG.md#probepath_check)).
 - New events reach every notifier that does not filter them: `provider.down`, `provider.degraded`, and `bgp.session_not_established` (#347). Limit them with the notifier's `events` and `min_severity` ([CONFIG.md](docs/CONFIG.md#notifier-filters-every-notifier)).

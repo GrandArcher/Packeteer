@@ -4,8 +4,6 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 
 ## [Unreleased]
 
-## [0.8.0] - 2026-10-19
-
 ### Added
 
 - Herd hub: `herd.hub` fetches a public list of signed member entries as seed peers and verifies each; `herd entry` prints yours, `herd hub-check` checks a hub repo; release snapshot fallback (#261).
@@ -60,10 +58,10 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 
 ### Upgrade notes
 
-- No config key was removed or renamed since 0.7.0. Run `-check` on the new image before you recreate the container.
-- The probe-path check is on by default (#150): a provider whose probes leave by another route is down with `probe path mismatch`. Set `path_check: false` there, or `probe.path_check.enabled: false`.
+- No config key was removed or renamed since 0.7.0.
+- The probe-path check is on by default (#150). Turn it off per provider with `path_check: false`, or for all with `probe.path_check.enabled: false`.
 - `provider.down`, `provider.degraded`, and `bgp.session_not_established` events reach every notifier that has no `events` filter (#347, #343).
-- `herd`, `ixp`, `rpki`, and `exchanges[].port` are off unless you add the block. The shipped default stays `mode: observe`.
+- `herd`, `ixp`, `rpki`, and `exchanges[].port` are off unless you add the block (the default stays `mode: observe`).
 
 ## [0.7.0] - 2026-10-15
 
