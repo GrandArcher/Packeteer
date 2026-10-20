@@ -151,12 +151,15 @@ func bootstrapAdmin(ctx context.Context, svc *auth.Service, audit *auth.Auditor,
 		name = "admin"
 	}
 	generated := false
-	if pw == "" && !svc.SSOEnabled() {
+	if pw == "" {
 		has, err := svc.HasUsers(ctx)
 		switch {
 		case err != nil:
 			log.Error("auth: is on but the user list cannot be read; no admin was created", "err", err)
-		case !has:
+		case has:
+		case svc.SSOEnabled():
+			log.Info("auth: no users yet; single sign-on creates them at sign-in, or set " + AdminPassEnv + " for a local admin")
+		default:
 			pw, generated = auth.GeneratePassword(), true
 		}
 	}

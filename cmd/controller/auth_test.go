@@ -359,3 +359,30 @@ func TestFirstRunAdminCreatedConcurrently(t *testing.T) {
 		t.Fatalf("existing admin changed: %+v", u)
 	}
 }
+
+type noopSSO struct{ plugin.Base }
+
+func (noopSSO) AuthURL(context.Context, string, string, string) (string, error) { return "", nil }
+func (noopSSO) Exchange(context.Context, string, string, string) (plugin.SSOIdentity, error) {
+	return plugin.SSOIdentity{}, nil
+}
+
+// With single sign-on and no users nothing is generated, and the log says
+// why nobody can sign in with a password yet (#328).
+func TestFirstRunSSONoUsers(t *testing.T) {
+	ctx := context.Background()
+	st := authtest.New()
+	var logs bytes.Buffer
+	log := slog.New(slog.NewTextHandler(&logs, nil))
+	svc, err := auth.New(auth.Options{Users: st, SSO: noopSSO{}, Logger: log})
+	if err != nil {
+		t.Fatal(err)
+	}
+	bootstrapAdmin(ctx, svc, auth.NewAuditor(nil, nil, log), nil, noEnv, log)
+	if users, _ := st.Users(ctx); len(users) != 0 {
+		t.Fatalf("users created: %+v", users)
+	}
+	if !strings.Contains(logs.String(), "no users yet; single sign-on creates them") || strings.Contains(logs.String(), "generated admin password") {
+		t.Fatalf("log:\n%s", logs.String())
+	}
+}

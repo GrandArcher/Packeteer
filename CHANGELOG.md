@@ -6,7 +6,7 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 
 ### Changed
 
-- Sign-in on by default (no `auth.enabled` or `PACKETEER_HTTP_USER`), upgrades too: sqlite added, admin password generated, `/metrics` without a token gets 401; opt out: `auth.enabled: false` (#328).
+- Sign-in is on by default, upgrades included, so `/metrics` without a token gets 401; opt out with `auth.enabled: false` (#328).
 
 ### Added
 

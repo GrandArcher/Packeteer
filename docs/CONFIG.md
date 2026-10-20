@@ -791,7 +791,7 @@ A crashed active instance cannot resign: the standby waits until the old instanc
 
 `packeteer -backup FILE` writes a gzip'd tar with the loaded config file and, with a `storage` plugin (including the `sqlite` that default sign-in adds), a consistent copy of its history (`sqlite`: `VACUUM INTO`, safe while the controller runs). It never overwrites `FILE`, opens no BGP session, and sends no probe. Secrets are environment variables, so none are in the archive. With `auth`, the history includes users with their password hashes (PBKDF2), API token hashes (SHA-256), and the audit log: keep the archive private.
 
-`packeteer -restore FILE` validates the archived config, then restores the history into that config's storage path. `-restore-config PATH` also writes the archived config to `PATH`. Existing history or config files are replaced only with `-force`. Stop the controller that uses the storage first.
+`packeteer -restore FILE` validates the archived config, then restores the history into that config's storage path. The restoring host's environment applies first (`PACKETEER_HTTP_LISTEN`, `PACKETEER_HTTP_USER`), so whether default sign-in adds `sqlite`, and so the target store, can differ from the backup host. `-restore-config PATH` also writes the archived config to `PATH`. Existing history or config files are replaced only with `-force`. Stop the controller that uses the storage first.
 
 ```sh
 # Running container: back up into the data volume.
