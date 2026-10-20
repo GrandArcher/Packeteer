@@ -4,6 +4,10 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 
 ## [Unreleased]
 
+### Fixed
+
+- Herd stats and trimming read per-member counters kept by triggers (`herd_stats`) instead of scanning the herd table on the shared sqlite connection (#393).
+
 ## [0.8.0] - 2026-10-20
 
 Internet exchanges and shared measurements: IXP observe-only mode, RPKI labels, probe multiplexing, settings forms, the opt-in herd, and sign-in on by default.

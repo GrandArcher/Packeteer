@@ -178,3 +178,209 @@ func TestHerdRetentionAndTrim(t *testing.T) {
 		t.Errorf("stats after retention = %+v", st)
 	}
 }
+
+// scanHerdStats counts herd_records the slow way, to compare with HerdStats.
+func scanHerdStats(t *testing.T, s *Store) plugin.HerdStats {
+	t.Helper()
+	out := plugin.HerdStats{PerMember: map[string]int{}}
+	rows, err := s.db.Query(`SELECT member, COUNT(*), SUM(length(body)) FROM herd_records GROUP BY member`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var m string
+		var n int
+		var b int64
+		if err := rows.Scan(&m, &n, &b); err != nil {
+			t.Fatal(err)
+		}
+		if m == "" {
+			out.LocalRecords, out.LocalBytes = n, b
+			continue
+		}
+		out.PulledRecords += n
+		out.PulledBytes += b
+		out.PerMember[m] = n
+	}
+	return out
+}
+
+func wantHerdStats(t *testing.T, s *Store, step string) plugin.HerdStats {
+	t.Helper()
+	got, err := s.HerdStats(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := scanHerdStats(t, s)
+	if got.LocalRecords != want.LocalRecords || got.LocalBytes != want.LocalBytes ||
+		got.PulledRecords != want.PulledRecords || got.PulledBytes != want.PulledBytes ||
+		len(got.PerMember) != len(want.PerMember) {
+		t.Fatalf("%s: stats = %+v, a scan of the rows gives %+v", step, got, want)
+	}
+	for m, n := range want.PerMember {
+		if got.PerMember[m] != n {
+			t.Fatalf("%s: member %s has %d rows in stats, %d stored", step, m, got.PerMember[m], n)
+		}
+	}
+	return got
+}
+
+func TestHerdStatsMatchRowsAcrossStoreTrimAndPrune(t *testing.T) {
+	ctx := context.Background()
+	s := newStore(t, "path: "+filepath.Join(t.TempDir(), "p.db"))
+	if err := s.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	defer s.Stop(ctx)
+	t0 := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
+	recs := []plugin.HerdRecord{
+		herdRec("", "o1", "198.51.100.0/24", 64501, t0, "aaaa"),
+		herdRec("", "o2", "203.0.113.0/24", 64501, t0.Add(time.Hour), "bbbbbb"),
+		herdRec("m1", "p1", "198.51.100.0/24", 64501, t0, "cc"),
+		herdRec("m1", "p2", "203.0.113.0/24", 64501, t0.Add(2*time.Hour), "dddddddd"),
+		herdRec("m2", "p3", "192.0.2.0/24", 64501, t0.Add(3*time.Hour), "eeeee"),
+	}
+	if n, err := s.PutHerdRecords(ctx, recs); err != nil || n != 5 {
+		t.Fatalf("put = %d, %v", n, err)
+	}
+	st := wantHerdStats(t, s, "after put")
+	if st.LocalRecords != 2 || st.LocalBytes != 10 || st.PulledRecords != 3 || st.PulledBytes != 15 || st.PerMember["m1"] != 2 || st.PerMember["m2"] != 1 {
+		t.Fatalf("stats after put = %+v", st)
+	}
+
+	// A row that is already stored is ignored and must not be counted.
+	dup := herdRec("m1", "p1", "198.51.100.0/24", 64501, t0, "ignored-body")
+	if n, err := s.PutHerdRecords(ctx, []plugin.HerdRecord{dup}); err != nil || n != 0 {
+		t.Fatalf("duplicate put = %d, %v", n, err)
+	}
+	wantHerdStats(t, s, "after duplicate")
+
+	// A failed batch rolls back its inserts and their counts.
+	bad := []plugin.HerdRecord{herdRec("m3", "p9", "192.0.2.0/24", 64501, t0, "zzz"), {ID: "", Body: []byte("x")}}
+	if _, err := s.PutHerdRecords(ctx, bad); err == nil {
+		t.Fatal("batch with an empty id was stored")
+	}
+	st = wantHerdStats(t, s, "after rolled-back batch")
+	if _, ok := st.PerMember["m3"]; ok {
+		t.Errorf("rolled-back member m3 is in stats: %+v", st)
+	}
+
+	// Trim the pulled class to 8 bytes: p1 (2) and p2 (8) go, oldest first
+	// by time, then p3 (5) stays only if it fits.
+	if n, err := s.TrimHerd(ctx, true, 8); err != nil || n != 2 {
+		t.Fatalf("trim = %d, %v", n, err)
+	}
+	st = wantHerdStats(t, s, "after trim")
+	if st.PulledRecords != 1 || st.PulledBytes != 5 || st.LocalRecords != 2 {
+		t.Errorf("stats after trim = %+v", st)
+	}
+	if _, ok := st.PerMember["m1"]; ok {
+		t.Errorf("member m1 has no rows left but is in stats: %+v", st)
+	}
+	// Trimming the own class leaves the pulled class alone.
+	if n, err := s.TrimHerd(ctx, false, 6); err != nil || n != 1 {
+		t.Fatalf("trim own = %d, %v", n, err)
+	}
+	st = wantHerdStats(t, s, "after own trim")
+	if st.LocalRecords != 1 || st.LocalBytes != 6 || st.PulledRecords != 1 {
+		t.Errorf("stats after own trim = %+v", st)
+	}
+	// A class that fits drops nothing.
+	if n, err := s.TrimHerd(ctx, true, 1<<20); err != nil || n != 0 {
+		t.Fatalf("trim under budget = %d, %v", n, err)
+	}
+
+	// Retention empties both classes.
+	if n, err := s.DeleteHerdBefore(ctx, t0.Add(24*time.Hour)); err != nil || n != 2 {
+		t.Fatalf("delete before = %d, %v", n, err)
+	}
+	st = wantHerdStats(t, s, "after prune")
+	if st.LocalRecords != 0 || st.LocalBytes != 0 || st.PulledRecords != 0 || st.PulledBytes != 0 || len(st.PerMember) != 0 {
+		t.Errorf("stats after prune = %+v", st)
+	}
+	var n int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM herd_stats`).Scan(&n); err != nil || n != 0 {
+		t.Errorf("herd_stats rows after everything is deleted = %d, %v", n, err)
+	}
+}
+
+// Stats and trimming read herd_stats, not the rows: a changed stats row is
+// what they report.
+func TestHerdStatsAndTrimReadTheStatsTable(t *testing.T) {
+	ctx := context.Background()
+	s := newStore(t, "path: "+filepath.Join(t.TempDir(), "p.db"))
+	if err := s.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	defer s.Stop(ctx)
+	t0 := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
+	if _, err := s.PutHerdRecords(ctx, []plugin.HerdRecord{
+		herdRec("m1", "p1", "198.51.100.0/24", 64501, t0, "abcd"),
+		herdRec("m1", "p2", "198.51.100.0/24", 64501, t0.Add(time.Hour), "abcd"),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.Exec(`UPDATE herd_stats SET records = 77, bytes = 5000 WHERE member = 'm1'`); err != nil {
+		t.Fatal(err)
+	}
+	st, err := s.HerdStats(ctx)
+	if err != nil || st.PulledRecords != 77 || st.PulledBytes != 5000 {
+		t.Fatalf("stats = %+v, %v; want the stats table values", st, err)
+	}
+	if n, err := s.TrimHerd(ctx, true, 5000); err != nil || n != 0 {
+		t.Fatalf("trim under the stats total dropped %d rows, %v", n, err)
+	}
+}
+
+// A database written before herd_stats existed is counted once on open and
+// kept right afterwards.
+func TestHerdStatsBackfillOnUpgrade(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "p.db")
+	s := newStore(t, "path: "+path)
+	if err := s.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	t0 := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
+	if _, err := s.PutHerdRecords(ctx, []plugin.HerdRecord{
+		herdRec("", "o1", "198.51.100.0/24", 64501, t0, "aaaa"),
+		herdRec("m1", "p1", "198.51.100.0/24", 64501, t0, "bbbbbb"),
+		herdRec("m1", "p2", "203.0.113.0/24", 64501, t0, "cc"),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for _, q := range []string{`DROP TRIGGER herd_stats_insert`, `DROP TRIGGER herd_stats_delete`, `DROP TABLE herd_stats`} {
+		if _, err := s.db.Exec(q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := s.Stop(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	s = newStore(t, "path: "+path)
+	if err := s.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	defer s.Stop(ctx)
+	st := wantHerdStats(t, s, "after upgrade")
+	if st.LocalRecords != 1 || st.LocalBytes != 4 || st.PulledRecords != 2 || st.PulledBytes != 8 || st.PerMember["m1"] != 2 {
+		t.Fatalf("stats after upgrade = %+v", st)
+	}
+	if _, err := s.PutHerdRecords(ctx, []plugin.HerdRecord{herdRec("m1", "p3", "192.0.2.0/24", 64501, t0, "ddd")}); err != nil {
+		t.Fatal(err)
+	}
+	wantHerdStats(t, s, "insert after upgrade")
+
+	// A second open must not count the rows again.
+	if err := s.Stop(ctx); err != nil {
+		t.Fatal(err)
+	}
+	s = newStore(t, "path: "+path)
+	if err := s.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	defer s.Stop(ctx)
+	wantHerdStats(t, s, "after reopen")
+}
