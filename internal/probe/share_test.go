@@ -88,6 +88,7 @@ func TestStoredResultsAreTheSameWithAndWithoutOnBatch(t *testing.T) {
 		p := &fakeProber{fn: ok(10, 12, 11)}
 		o := opts()
 		o.OnBatch = onBatch
+		o.Now = func() time.Time { return time.Date(2026, 10, 8, 12, 0, 0, 0, time.UTC) }
 		srcs := []plugin.Target{{Prefix: pfx1, Host: netip.MustParseAddr("198.51.100.9")}, {Prefix: pfx2}}
 		e, err := New([]Provider{provA}, []NamedProber{{Name: "icmp", Prober: p}}, src(srcs...), o)
 		if err != nil {
@@ -110,7 +111,6 @@ func TestStoredResultsAreTheSameWithAndWithoutOnBatch(t *testing.T) {
 	}
 	for k, w := range with {
 		wo := without[k]
-		w.Time, wo.Time = time.Time{}, time.Time{}
 		if !reflect.DeepEqual(w, wo) {
 			t.Errorf("%v differs:\nwith    %+v\nwithout %+v", k, w, wo)
 		}
