@@ -15,7 +15,7 @@ func TestLookupSkipsEmptyLengths(t *testing.T) {
 		t.Fatal(err)
 	}
 	pfx := netip.MustParsePrefix("198.51.100.0/24")
-	v.routes[pfx] = Route{Prefix: pfx, Provider: "transit-a"}
+	v.routes[pfx] = &Route{Prefix: pfx, Provider: "transit-a"}
 	v.routeLens[24] = 1
 	if rt, ok := v.Lookup(netip.MustParseAddr("198.51.100.9")); !ok || rt.Prefix != pfx {
 		t.Fatalf("lookup = %+v %v", rt, ok)
@@ -84,12 +84,12 @@ func TestSinglePathAdjIsCompact(t *testing.T) {
 
 func BenchmarkLookup(b *testing.B) {
 	const n = 20000
-	v := &View{routes: map[netip.Prefix]Route{}, adj: map[netip.Prefix]pathSet{}}
+	v := &View{routes: map[netip.Prefix]*Route{}, adj: map[netip.Prefix]pathSet{}}
 	addrs := make([]netip.Addr, n)
 	for i := 0; i < n; i++ {
 		a := netip.AddrFrom4([4]byte{byte(i >> 16), byte(i >> 8), byte(i), 1})
 		p := netip.PrefixFrom(netip.AddrFrom4([4]byte{byte(i >> 16), byte(i >> 8), byte(i), 0}), 24)
-		v.routes[p] = Route{Prefix: p, Provider: "transit-a"}
+		v.routes[p] = &Route{Prefix: p, Provider: "transit-a"}
 		v.routeLens[24]++
 		addrs[i] = a
 	}

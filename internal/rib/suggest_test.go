@@ -23,18 +23,23 @@ func TestSuggestNextHopsReadsOnly(t *testing.T) {
 	v.putAdj(pfx, map[adjKey]Route{
 		{neighbor: nbr}:        {Prefix: pfx, NextHop: configured, ASPath: []uint32{64496}},
 		{neighbor: nbr, id: 1}: {Prefix: pfx, NextHop: discovered, ASPath: []uint32{64500}},
+		{neighbor: nbr, id: 4}: {Prefix: pfx, NextHop: onLAN, ASPath: []uint32{64501}},
+	})
+	v.putAdj(other, map[adjKey]Route{
 		{neighbor: nbr, id: 2}: {Prefix: other, NextHop: discovered, ASPath: []uint32{64496}},
 		{neighbor: nbr, id: 3}: {Prefix: other, NextHop: discovered, ASPath: []uint32{64496}},
-		{neighbor: nbr, id: 4}: {Prefix: pfx, NextHop: onLAN, ASPath: []uint32{64501}},
 	})
 	bmpPfx := netip.MustParsePrefix("192.0.2.0/24")
 	bmpHop := netip.MustParseAddr("198.51.100.9")
 	v.bmp[bmpPfx] = map[bmpPathKey]Route{
 		{}: {Prefix: bmpPfx, NextHop: bmpHop, ASPath: []uint32{64497}},
 	}
+	for _, p := range []netip.Prefix{pfx, other, bmpPfx} {
+		v.republishLocked(p)
+	}
 	before := v.Generation()
 	got := v.SuggestNextHops([]netip.Addr{configured}, []netip.Prefix{netip.MustParsePrefix("203.0.113.0/24")})
-	if v.Generation() != before || len(v.routes) != 0 || len(v.opt.Providers) != 1 {
+	if v.Generation() != before || len(v.routes) != 3 || len(v.opt.Providers) != 1 {
 		t.Fatalf("suggest changed the view gen=%d routes=%d providers=%d", v.Generation(), len(v.routes), len(v.opt.Providers))
 	}
 	if len(got) != 2 {
@@ -68,6 +73,7 @@ func TestSuggestNextHopsCaps(t *testing.T) {
 		v.putAdj(pfx, map[adjKey]Route{
 			{neighbor: nbr, id: uint32(i)}: {Prefix: pfx, NextHop: hop, ASPath: []uint32{64496}},
 		})
+		v.republishLocked(pfx)
 	}
 	got := v.SuggestNextHops(nil, nil)
 	if len(got) != maxSuggestNextHops {
