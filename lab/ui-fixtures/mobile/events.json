@@ -1,0 +1,29 @@
+{
+ "events": [
+  {
+   "time": "2026-10-17T12:00:00Z",
+   "kind": "provider.down",
+   "severity": "warning",
+   "message": "Provider lab-c-transit-long-name is down: no answer on its probes",
+   "fields": {
+    "provider": "lab-c-transit-long-name",
+    "detail": "no answer"
+   },
+   "source": "provider",
+   "help_url": "/providers.html"
+  },
+  {
+   "time": "2026-10-17T11:59:00Z",
+   "kind": "improvement.added",
+   "severity": "info",
+   "message": "Recommends moving 2001:db8:1234:5678::/64 from lab-c-transit-long-name to lab-b (not announced, observe mode)",
+   "fields": {
+    "prefix": "2001:db8:1234:5678::/64"
+   },
+   "source": "improvement"
+  }
+ ],
+ "stored": false,
+ "since": "2026-10-17T11:00:00Z",
+ "now": "2026-10-17T12:00:05Z"
+}

@@ -1,0 +1,41 @@
+{
+ "version": "fixture",
+ "mode": "observe",
+ "ready": true,
+ "generated_at": "2026-10-17T12:00:00Z",
+ "providers": [
+  {
+   "name": "lab-a",
+   "source": "192.0.2.10",
+   "next_hop": "192.0.2.1",
+   "exclude": false,
+   "up": true,
+   "since": "2026-10-17T11:00:00Z"
+  },
+  {
+   "name": "lab-b",
+   "source": "198.51.100.10",
+   "next_hop": "198.51.100.1",
+   "exclude": false,
+   "up": false,
+   "since": "2026-10-17T11:30:00Z",
+   "reason": "100% loss"
+  },
+  {
+   "name": "lab-c-transit-long-name",
+   "source": "2001:db8::10",
+   "next_hop": "2001:db8::1",
+   "exclude": false,
+   "up": false,
+   "since": "2026-10-17T11:45:00Z",
+   "exchange": "ix-lab",
+   "peer_asn": 64496,
+   "reason": "no answer"
+  }
+ ],
+ "bgp": {
+  "configured": false,
+  "ready": false,
+  "peers": []
+ }
+}

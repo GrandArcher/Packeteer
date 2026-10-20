@@ -1,0 +1,24 @@
+{
+ "version": "fixture",
+ "mode": "observe",
+ "ready": true,
+ "generated_at": "2026-10-17T12:00:00Z",
+ "improvements": [
+  {
+   "prefix": "2001:db8:1234:5678::/64",
+   "provider": "lab-b",
+   "native": "lab-c-transit-long-name",
+   "since": "2026-10-17T11:50:00Z",
+   "cause": "performance",
+   "reason": "lab-b beats lab-c-transit-long-name on loss by 4.0 points"
+  },
+  {
+   "prefix": "198.51.100.0/24",
+   "provider": "lab-a",
+   "native": "lab-b",
+   "since": "2026-10-17T11:55:00Z",
+   "cause": "cost",
+   "reason": "lab-a is cheaper than lab-b"
+  }
+ ]
+}
