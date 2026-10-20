@@ -336,12 +336,12 @@ func run(ctx context.Context, args []string, getenv func(string) string, stdout,
 		if len(cfg.HTTP.AllowFrom) > 0 {
 			fmt.Fprintf(stdout, "http allow_from: %s\n", strings.Join(cfg.HTTP.AllowFrom, ","))
 		}
-		switch {
-		case !editorEnabled(cfg, httpUser, newFirstRun(plugins).Pending()):
-		case cfg.HTTP.ConfigEditor == nil:
-			fmt.Fprintln(stdout, "http config_editor: on until first-run setup is done (admin only; save a config or skip setup in the dashboard)")
-		default:
-			fmt.Fprintln(stdout, "http config_editor: on (admin only; writes this file after the start checks; online keys apply on save, the rest on restart)")
+		if editorEnabled(cfg, httpUser, newFirstRun(plugins).Pending()) {
+			if cfg.HTTP.ConfigEditor == nil {
+				fmt.Fprintln(stdout, "http config_editor: on until first-run setup is done (admin only; save a config or skip setup in the dashboard)")
+			} else {
+				fmt.Fprintln(stdout, "http config_editor: on (admin only; writes this file after the start checks; online keys apply on save, the rest on restart)")
+			}
 		}
 	}
 	for _, sub := range cfg.ReportSubscriptions {
@@ -537,6 +537,9 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 		subsAPI = subs
 	}
 	setup := newFirstRun(plugins)
+	if err := setup.Persist(); err != nil {
+		log.Warn("first-run setup: cannot write the pending file; setup is not kept across a restart", "err", err)
+	}
 	editor, eerr := newConfigEditor(cfg, path, getenv, httpUser, setup.Pending())
 	if eerr != nil {
 		log.Error("refusing to start", "err", eerr)

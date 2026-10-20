@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -14,13 +15,14 @@ import (
 type fakeFirstRun struct {
 	pending bool
 	calls   int
+	err     error
 }
 
 func (f *fakeFirstRun) Pending() bool { return f.pending }
 func (f *fakeFirstRun) Complete() error {
 	f.calls++
 	f.pending = false
-	return nil
+	return f.err
 }
 
 // While setup is pending an admin is told so in /api/me; a lower role is
@@ -61,6 +63,17 @@ func TestSetupSkip(t *testing.T) {
 	}
 	if _, got := e.do(t, "GET", "/api/me", plugin.RoleAdmin, nil); got["setup_pending"] != nil {
 		t.Fatalf("still pending after skip: %v", got)
+	}
+}
+
+// A skip whose state cannot be saved says so, while this run stops
+// asking.
+func TestSetupSkipSaveFails(t *testing.T) {
+	fr := &fakeFirstRun{pending: true, err: errors.New("read-only volume")}
+	e := newUIWith(t, func(o *Options) { o.FirstRun = fr })
+	rec, got := e.do(t, "POST", "/api/setup/skip", plugin.RoleAdmin, nil)
+	if rec.Code != http.StatusInternalServerError || !strings.Contains(got["error"].(string), "read-only volume") || fr.pending {
+		t.Fatalf("skip: %d %s %+v", rec.Code, rec.Body, fr)
 	}
 }
 

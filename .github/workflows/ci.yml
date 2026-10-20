@@ -225,15 +225,16 @@ jobs:
           docker logs pksec 2>&1 | grep -qF 'first-run setup is pending'
           # A restart keeps the chosen password and generates nothing new.
           # Setup is still pending: nothing was saved and nothing skipped.
+          docker exec pksec test -e /var/lib/packeteer/first-run-setup-pending
           docker restart -t 15 pksec
           up
           curl -fsS -u "admin:$new" "$base/api/me" | jq -e '.user == "admin" and (.must_change // false) == false and .setup_pending == true'
           test "$(docker logs pksec 2>&1 | grep -c 'generated admin password')" = 1
-          # Skip setup ends it: the marker is on the volume and, after a
-          # restart, the editor is off again (the old default).
+          # Skip setup ends it: the pending file is gone from the volume and,
+          # after a restart, the editor is off again (the old default).
           test "$(code -X POST -u "admin:$new" "$base/api/setup/skip")" = 200
           curl -fsS -u "admin:$new" "$base/api/me" | jq -e '(.setup_pending // false) == false'
-          docker exec pksec test -e /var/lib/packeteer/first-run-setup-done
+          docker exec pksec test ! -e /var/lib/packeteer/first-run-setup-pending
           docker restart -t 15 pksec
           up
           curl -fsS -u "admin:$new" "$base/api/me" | jq -e '(.setup_pending // false) == false'

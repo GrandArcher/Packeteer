@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -12,43 +13,69 @@ import (
 	"github.com/GrandArcher/Packeteer/internal/pluginhost"
 )
 
-// setupDoneFile marks the first-run setup as finished (#416). It sits next
-// to the storage file, like the first-run password.
-const setupDoneFile = "first-run-setup-done"
+// setupPendingFile marks the first-run setup as pending (#416). It sits next
+// to the storage file, like the first-run password, and is created on the
+// first start of a new install: one whose storage file does not exist yet.
+// An install that already has its storage, such as one upgraded from an
+// earlier release, never gets it and never becomes pending.
+const setupPendingFile = "first-run-setup-pending"
 
-// firstRun is the persisted first-run state. Setup is pending until an
-// admin saves a config through the editor or wizard, or skips setup. A
-// storage plugin with no file has nowhere to keep it, so setup is pending
-// on every start.
+// firstRun is the persisted first-run state. Setup is pending from the
+// first start of a new install until an admin saves a config through the
+// editor or wizard, or skips setup. A storage plugin with no file has
+// nowhere to keep the state, so setup is never pending there.
 type firstRun struct {
 	path string
-	done atomic.Bool
+	// fresh is set when this start is the first one for the install and the
+	// pending file is not written yet.
+	fresh bool
+	done  atomic.Bool
 }
 
+// newFirstRun reads the state and writes nothing; Persist records a new
+// install. Call it before the storage plugin opens its file.
 func newFirstRun(plugins *pluginhost.Set) *firstRun {
-	f := &firstRun{}
-	if plugins == nil || plugins.Storage == nil {
+	f := &firstRun{path: besideStorage(plugins, setupPendingFile)}
+	if f.path == "" {
+		f.done.Store(true)
 		return f
 	}
-	if p, ok := plugins.Storage.Plugin.(interface{ Path() string }); ok {
-		f.path = filepath.Join(filepath.Dir(p.Path()), setupDoneFile)
-		if _, err := os.Stat(f.path); err == nil {
-			f.done.Store(true)
-		}
+	if _, err := os.Stat(f.path); err == nil {
+		return f
 	}
+	if _, err := os.Stat(storageFile(plugins)); err == nil {
+		f.done.Store(true)
+		return f
+	}
+	f.fresh = true
 	return f
 }
 
 func (f *firstRun) Pending() bool { return !f.done.Load() }
 
+// Persist writes the pending file for a new install, so a restart before
+// the setup is done keeps it pending.
+func (f *firstRun) Persist() error {
+	if !f.fresh {
+		return nil
+	}
+	if err := os.MkdirAll(filepath.Dir(f.path), 0o750); err != nil {
+		return err
+	}
+	return os.WriteFile(f.path, nil, 0o600)
+}
+
 // Complete records the setup as finished, in memory first so the redirect
-// stops even when the marker cannot be written.
+// stops even when the pending file cannot be removed.
 func (f *firstRun) Complete() error {
 	f.done.Store(true)
 	if f.path == "" {
 		return nil
 	}
-	return os.WriteFile(f.path, nil, 0o600)
+	if err := os.Remove(f.path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	return nil
 }
 
 // editorEnabled is the config editor decision. An explicit
@@ -72,7 +99,7 @@ func (e setupEditor) Save(data []byte, base string, confirmInject bool) (confige
 	f, res, err := e.ConfigEditor.Save(data, base, confirmInject)
 	if err == nil {
 		if cerr := e.state.Complete(); cerr != nil {
-			e.log.Warn("first-run setup: cannot write the marker file; setup shows again after a restart", "err", cerr)
+			e.log.Warn("first-run setup: cannot remove the pending file; setup shows again after a restart", "err", cerr)
 		}
 	}
 	return f, res, err

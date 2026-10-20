@@ -75,43 +75,91 @@ func TestEditorEnabled(t *testing.T) {
 	}
 }
 
-// The state lives in a marker file next to the storage file, so it
-// survives a restart; storage without a file keeps nothing.
+// A new install (no storage file yet) is pending and keeps that across a
+// restart until the setup ends. An install whose storage already exists,
+// such as one upgraded from an earlier release, is never pending, and
+// neither is storage with no file.
 func TestFirstRunState(t *testing.T) {
 	dir := t.TempDir()
 	fr := newFirstRun(storageIn(dir))
 	if !fr.Pending() {
 		t.Fatal("a new install is not pending")
 	}
-	if err := fr.Complete(); err != nil || fr.Pending() {
-		t.Fatalf("complete: %v pending=%v", err, fr.Pending())
+	if _, err := os.Stat(filepath.Join(dir, setupPendingFile)); !os.IsNotExist(err) {
+		t.Fatalf("newFirstRun wrote the pending file: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(dir, setupDoneFile)); err != nil {
-		t.Fatalf("marker file: %v", err)
+	if err := fr.Persist(); err != nil {
+		t.Fatal(err)
+	}
+	// The storage plugin opens its file after the first start.
+	if err := os.WriteFile(filepath.Join(dir, "packeteer.db"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	restarted := newFirstRun(storageIn(dir))
+	if !restarted.Pending() {
+		t.Fatal("setup is not pending after a restart before it ended")
+	}
+	if err := restarted.Complete(); err != nil || restarted.Pending() {
+		t.Fatalf("complete: %v pending=%v", err, restarted.Pending())
+	}
+	if _, err := os.Stat(filepath.Join(dir, setupPendingFile)); !os.IsNotExist(err) {
+		t.Fatalf("pending file after complete: %v", err)
 	}
 	if newFirstRun(storageIn(dir)).Pending() {
 		t.Fatal("setup is pending again after a restart")
 	}
+	if err := restarted.Complete(); err != nil {
+		t.Fatalf("second complete: %v", err)
+	}
+}
 
+func TestFirstRunUpgradeIsNotPending(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "packeteer.db"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	fr := newFirstRun(storageIn(dir))
+	if fr.Pending() {
+		t.Fatal("an install with existing storage is pending")
+	}
+	if err := fr.Persist(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, setupPendingFile)); !os.IsNotExist(err) {
+		t.Fatalf("pending file written for an existing install: %v", err)
+	}
+}
+
+func TestFirstRunNoFileStorageIsNotPending(t *testing.T) {
 	for name, set := range map[string]*pluginhost.Set{"no storage": {}, "nil set": nil} {
 		fr := newFirstRun(set)
-		if !fr.Pending() {
-			t.Fatalf("%s: not pending", name)
+		if fr.Pending() {
+			t.Fatalf("%s: pending with nowhere to keep it", name)
 		}
-		if err := fr.Complete(); err != nil || fr.Pending() {
-			t.Fatalf("%s: complete: %v pending=%v", name, err, fr.Pending())
-		}
-		if !newFirstRun(set).Pending() {
-			t.Fatalf("%s: pending state survived a restart with nowhere to keep it", name)
+		if err := fr.Persist(); err != nil || fr.Complete() != nil {
+			t.Fatalf("%s: persist/complete failed", name)
 		}
 	}
 }
 
-// A failed marker write still ends the setup for this run, and says so.
-func TestFirstRunMarkerWriteFails(t *testing.T) {
-	fr := newFirstRun(storageIn(filepath.Join(t.TempDir(), "missing")))
+// A failed pending-file removal still ends the setup for this run, and says
+// so.
+func TestFirstRunCompleteFails(t *testing.T) {
+	dir := t.TempDir()
+	fr := newFirstRun(storageIn(dir))
+	if err := fr.Persist(); err != nil {
+		t.Fatal(err)
+	}
+	// A non-empty directory in the file's place cannot be removed.
+	if err := os.Remove(filepath.Join(dir, setupPendingFile)); err != nil {
+		t.Fatal(err)
+	}
+	pend := filepath.Join(dir, setupPendingFile)
+	if err := os.MkdirAll(filepath.Join(pend, "x"), 0o700); err != nil {
+		t.Fatal(err)
+	}
 	if err := fr.Complete(); err == nil {
-		t.Fatal("complete reported success without a marker file")
+		t.Fatal("complete reported success while the pending file remains")
 	}
 	if fr.Pending() {
 		t.Fatal("still pending in this run")
@@ -132,6 +180,9 @@ func TestSetupEditorSaveEndsSetup(t *testing.T) {
 	}
 	dir := t.TempDir()
 	fr := newFirstRun(storageIn(dir))
+	if err := fr.Persist(); err != nil {
+		t.Fatal(err)
+	}
 	wrapped := setupEditor{ConfigEditor: ed, state: fr, log: slog.New(slog.NewTextHandler(io.Discard, nil))}
 
 	if _, _, err := wrapped.Save([]byte(uiBase), "stale", false); !errors.Is(err, configedit.ErrConflict) {
@@ -150,8 +201,11 @@ func TestSetupEditorSaveEndsSetup(t *testing.T) {
 	if fr.Pending() {
 		t.Fatal("a saved config did not end the setup")
 	}
+	if err := os.WriteFile(filepath.Join(dir, "packeteer.db"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
 	if newFirstRun(storageIn(dir)).Pending() {
-		t.Fatal("the saved state did not reach the marker file")
+		t.Fatal("the saved state did not reach the pending file")
 	}
 }
 

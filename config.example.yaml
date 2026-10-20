@@ -445,8 +445,7 @@ log:
 http:
   listen: "127.0.0.1:8080"
   # allow_from: [127.0.0.0/8, 192.0.2.0/24]   # client prefixes allowed (default any)
-  # config_editor: true   # admin edits this file in /settings.html (#34); needs auth or basic auth and a writable mount; applies on restart
-  #                       # unset: on only until the first-run setup is saved or skipped (#416); false: always off
+  # config_editor: true   # admin edits this file in /settings.html (#34); needs auth or basic auth and a writable mount; applies on restart. Unset: on only during a new install's first-run setup (#416); false: always off
 
 # Sign-in is on by default (#328): users, roles (viewer, operator, admin),
 # API tokens, an audit log of every change (also sent to notifiers as

@@ -20,9 +20,8 @@ import (
 // password no longer signs in.
 const firstRunPasswordFile = "first-run-admin-password"
 
-// firstRunPasswordPath is the file's path next to the storage file, or ""
-// when the storage plugin has no file.
-func firstRunPasswordPath(plugins *pluginhost.Set) string {
+// storageFile is the storage plugin's file, or "" when it has none.
+func storageFile(plugins *pluginhost.Set) string {
 	if plugins == nil || plugins.Storage == nil {
 		return ""
 	}
@@ -30,7 +29,17 @@ func firstRunPasswordPath(plugins *pluginhost.Set) string {
 	if !ok {
 		return ""
 	}
-	return filepath.Join(filepath.Dir(f.Path()), firstRunPasswordFile)
+	return f.Path()
+}
+
+// besideStorage is the path of a state file next to the storage file, or ""
+// when the storage plugin has no file.
+func besideStorage(plugins *pluginhost.Set, name string) string {
+	db := storageFile(plugins)
+	if db == "" {
+		return ""
+	}
+	return filepath.Join(filepath.Dir(db), name)
 }
 
 // writeFirstRunPassword writes the generated password with mode 0600.
@@ -123,7 +132,7 @@ func newAuthService(cfg *config.Config, plugins *pluginhost.Set, log *slog.Logge
 	}
 	users, _ := plugins.Storage.Plugin.(plugin.UserStore)
 	o := auth.Options{Users: users, SessionTTL: cfg.Auth.SessionTTL, TokenTTL: cfg.Auth.TokenTTL, Logger: log}
-	if path := firstRunPasswordPath(plugins); path != "" {
+	if path := besideStorage(plugins, firstRunPasswordFile); path != "" {
 		o.OnGeneratedGone = func(user string) {
 			log.Info("auth: generated password replaced or its user deleted", "user", user)
 			removeFirstRunPassword(path, log)
@@ -164,7 +173,7 @@ func bootstrapAdmin(ctx context.Context, svc *auth.Service, audit *auth.Auditor,
 		}
 	}
 	if !generated {
-		if path := firstRunPasswordPath(plugins); path != "" {
+		if path := besideStorage(plugins, firstRunPasswordFile); path != "" {
 			switch pending, err := svc.ChangePending(ctx); {
 			case err != nil:
 				log.Warn("auth: cannot read the users; first-run password file not checked", "err", err)
@@ -181,7 +190,7 @@ func bootstrapAdmin(ctx context.Context, svc *auth.Service, audit *auth.Auditor,
 	case err != nil:
 		log.Error("auth: bootstrap admin", "user", name, "err", err)
 	case created && generated:
-		path := firstRunPasswordPath(plugins)
+		path := besideStorage(plugins, firstRunPasswordFile)
 		if path != "" {
 			if err := writeFirstRunPassword(path, name, pw); err != nil {
 				log.Warn("auth: cannot write the first-run password file", "path", path, "err", err)
