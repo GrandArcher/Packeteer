@@ -1,0 +1,16 @@
+{
+ "version": "fixture",
+ "mode": "observe",
+ "ready": true,
+ "generated_at": "2026-10-20T12:00:00Z",
+ "improvements": [
+  {
+   "prefix": "198.51.100.0/24",
+   "provider": "lab-b",
+   "native": "lab-a",
+   "since": "2026-10-20T11:50:00Z",
+   "cause": "performance",
+   "reason": "lab-b beats lab-a on loss"
+  }
+ ]
+}

@@ -335,7 +335,7 @@ function renderCsGroups() {
     cc.addEventListener("change", function () { row.cc_disable = cc.checked; });
     line.appendChild(labeled("Group", group, "Providers with the same group name share traffic."));
     line.appendChild(labeled("Precedence", prec, "Lower is preferred. Default: 100."));
-    var lab = labeled("Leave out of commit control (cc_disable)", cc);
+    var lab = labeled("Leave out of commit control", cc, "", "providers.cc_disable");
     lab.className = "field check";
     line.appendChild(lab);
     root.appendChild(line);
@@ -366,7 +366,7 @@ function renderCsReview() {
     }
     if (row.group) parts.push("group " + row.group);
     if (row.precedence) parts.push("precedence " + row.precedence);
-    if (row.cc_disable) parts.push("cc_disable");
+    if (row.cc_disable) parts.push("left out of commit control");
     if (parts.length) line(p.name + ": " + parts.join("; ") + ".");
   });
   if (cs.scorer === "commit" && !tracked) line("Warning: the commit scorer has no provider with a commit, so it will not steer.");

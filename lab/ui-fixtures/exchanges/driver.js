@@ -45,7 +45,7 @@ var steps = [
     note("fixture-after", "after: peers " + peerRows().length + " members " + rows().length +
       " draft " + (added.textContent.indexOf("draft") >= 0) +
       " name [" + peerField(added, "Peer name") + "] as [" + peerField(added, "Peer AS") + "] hop [" + peerField(added, "Peer next hop") +
-      "] source [" + peerField(added, "Peer probe source") + "] cost [" + peerField(added, "Peer cost") + "] writes " + writes);
+      "] source [" + peerField(added, "Peer probe address") + "] cost [" + peerField(added, "Peer cost") + "] writes " + writes);
   }
 ];
 

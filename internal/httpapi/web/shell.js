@@ -25,6 +25,31 @@ var SHELL_MODE_TEXT = {
 var SEARCH_RECENT_KEY = "packeteer.search.recent.";
 var SEARCH_RECENT_MAX = 5;
 var shellUser = "";
+// shellAdmin is false only for a signed-in account below the admin role.
+var shellAdmin = true;
+
+// REPORT_TITLES are the report names as people read them (#351). The API
+// keeps the lowercase ids for URLs and CSV file names.
+var REPORT_TITLES = {summary: "Summary", improvements: "Improvements", causes: "Causes", performance: "Performance",
+  timeseries: "Time series", providers: "Providers", prefixes: "Prefixes", asns: "ASNs", countries: "Countries",
+  probes: "Probes", savings: "Savings", mitigations: "Mitigations", anomalies: "Anomalies", exchanges: "Exchanges"};
+
+function reportTitle(name) {
+  return REPORT_TITLES[name] || name;
+}
+
+// bgpState words a BGP session state for people (#351). Active, Connect and
+// the Open states mean the router has not finished the handshake yet, not
+// that the session works, so they are amber. The raw state is the tooltip.
+var BGP_CONNECTING = {connect: "Connect", active: "Active", opensent: "OpenSent", openconfirm: "OpenConfirm"};
+
+function bgpState(state, established) {
+  var raw = String(state || "").toLowerCase();
+  var title = "BGP state: " + (state || "unknown");
+  if (established || raw === "established") return {label: "Up", level: "up", title: title};
+  if (BGP_CONNECTING[raw]) return {label: "Connecting (" + BGP_CONNECTING[raw] + ")", level: "degraded", title: title};
+  return {label: "Down", level: "down", title: title};
+}
 
 function shellEl(tag, className, text) {
   var n = document.createElement(tag);
@@ -100,6 +125,7 @@ function shellApplyMe(me) {
   shellUser = (me && me.user) || "";
   var rbac = me && me.auth === "rbac";
   var admin = !rbac || me.role === "admin";
+  shellAdmin = admin;
   var gated = document.querySelectorAll("[data-min-role='admin']");
   for (var i = 0; i < gated.length; i++) gated[i].hidden = !admin;
   var who = document.getElementById("account-who");

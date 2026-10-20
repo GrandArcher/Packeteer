@@ -11,7 +11,7 @@ var KIND_TITLES = [
   ["ha", "High availability"],
   ["bgp_session", "iBGP sessions"],
   ["rib_source", "RIB sources (BMP)"],
-  ["probe_source", "Probe sources"],
+  ["probe_source", "Probe addresses"],
   ["prober", "Probers"],
   ["source", "Target sources"],
   ["scorer", "Scorer"],

@@ -176,7 +176,7 @@ function renderExchange(root, ex) {
   if (!peers.length) {
     section.appendChild(el("p", "empty", "No peers in the config."));
   } else {
-    section.appendChild(exTable(["Peer", "AS", "Next hop", "Type", "Prefixes", "Probe source", "Next-hop probe", "Improvements", "Moved", "RS only", "Bilateral only", "Both", "RPKI", "RS feed", ""],
+    section.appendChild(exTable(["Peer", "AS", "Next hop", "Type", "Prefixes", "Probe address", "Next-hop probe", "Improvements", "Moved", "RS only", "Bilateral only", "Both", "RPKI", "RS feed", ""],
       peers.map(function (p) { return exPeerRow(ex.name, p); })));
   }
 

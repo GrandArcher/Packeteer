@@ -1,0 +1,29 @@
+{
+ "version": "fixture",
+ "mode": "observe",
+ "ready": false,
+ "generated_at": "2026-10-20T12:00:00Z",
+ "providers": [
+  {
+   "name": "lab-a",
+   "source": "192.0.2.11",
+   "next_hop": "192.0.2.1",
+   "exclude": false,
+   "up": true,
+   "since": "2026-10-20T12:00:00Z"
+  }
+ ],
+ "bgp": {
+  "configured": true,
+  "ready": false,
+  "peers": [
+   {
+    "address": "192.0.2.254",
+    "description": "edge",
+    "state": "ACTIVE",
+    "established": false,
+    "since": "2026-10-20T12:00:00Z"
+   }
+  ]
+ }
+}

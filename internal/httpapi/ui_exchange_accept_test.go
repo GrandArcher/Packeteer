@@ -96,6 +96,6 @@ func TestSettingsDiscoveredAssets(t *testing.T) {
 		t.Fatalf("accepting a member calls the API:\n%s", body)
 	}
 	if !strings.Contains(body, `source_ip: ""`) || !strings.Contains(body, `cost: ""`) || !strings.Contains(body, `name: ""`) {
-		t.Fatalf("a draft peer must leave name, probe source, and cost empty:\n%s", body)
+		t.Fatalf("a draft peer must leave name, probe address, and cost empty:\n%s", body)
 	}
 }

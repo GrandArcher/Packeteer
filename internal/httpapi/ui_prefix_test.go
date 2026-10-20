@@ -88,7 +88,7 @@ func TestPrefixListAssets(t *testing.T) {
 		`new URLSearchParams(window.location.search)`,
 		`td.appendChild(prefixCard(row))`, // the existing card, built when a row opens
 		`prefixExpanded = keep`,           // open rows are pruned to the visible page
-		`"Score gain"`,
+		`"Expected gain"`,
 		`if (!root) return;`,
 		`window.addEventListener("DOMContentLoaded", initPrefixList)`,
 	} {

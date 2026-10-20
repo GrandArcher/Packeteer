@@ -6,6 +6,7 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 
 ### Added
 
+- Plain language in the UI: BGP Active reads "Connecting (Active)" in amber, jargon labels become plain words with the config key as tooltip, report names in title case, API links move from Overview to System (#351).
 - Forms no longer show grey examples as values: examples move to help text, defaults read "Default: X", Reports filters start empty, wizard starts from running config and takes ASN, type, IPv6 (#350).
 - UI on phones: below 760 px the nav collapses behind a Menu button and table rows become labelled cards, health first; a 390x844 browser smoke step checks it (#352).
 - Federation: admins push `thresholds` or `policies` to every peer over mTLS (`POST /api/federation/push`); peers validate, apply online, refuse other sections, and audit (#137).

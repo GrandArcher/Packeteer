@@ -162,7 +162,7 @@ func extractFunc(t *testing.T, src, name string) string {
 func TestProviderFieldLabels(t *testing.T) {
 	js := mustWeb(t, "web/settings.js")
 	css := mustWeb(t, "web/app.css")
-	for _, label := range []string{"Name", "Probe source", "Next hop", "Cost", "Commit"} {
+	for _, label := range []string{"Name", "Probe address", "Next hop", "Cost", "Commit"} {
 		if !strings.Contains(js, `labeled("`+label+`"`) {
 			t.Errorf("settings form missing label %q", label)
 		}
@@ -174,7 +174,7 @@ func TestProviderFieldLabels(t *testing.T) {
 		t.Fatal("field label is not visibly colored")
 	}
 	// The wizard rows use the same labels for the three fields it has.
-	if strings.Count(js, `labeled("Probe source"`) < 2 || strings.Count(js, `labeled("Next hop"`) < 2 {
+	if strings.Count(js, `labeled("Probe address"`) < 2 || strings.Count(js, `labeled("Next hop"`) < 2 {
 		t.Fatal("wizard provider rows are unlabeled")
 	}
 }
