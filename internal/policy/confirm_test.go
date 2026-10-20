@@ -1,11 +1,13 @@
 package policy
 
 import (
+	"fmt"
 	"net/netip"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/GrandArcher/Packeteer/internal/probe"
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
 )
 
@@ -240,6 +242,60 @@ func TestConfirmRoundsNeedEveryProviderRemeasured(t *testing.T) {
 	st, out := Decide(st, in(res, native), c, scorer(t), at)
 	if d := decision(t, out, pA); d.Action != ActionImprove || st.Improvements[pA].Provider != "b" {
 		t.Fatalf("third full round: %+v %+v", d, st.Improvements)
+	}
+}
+
+// A timed-out probe round stored native a's new, worse result and left
+// b, whose probes stopped finishing, on its last good one (#381). That
+// round must not move the prefix onto b at any confirm_rounds, and must
+// not start a streak. A full round that still prefers b does. A stale
+// local result and a federation result from another round do not count
+// as a partial round.
+func TestPartialRoundBlocksMove(t *testing.T) {
+	native := map[netip.Prefix]string{pA: "a"}
+	stamp := func(round time.Time, rs []probe.Result) []probe.Result {
+		for i := range rs {
+			rs[i].Round = round
+		}
+		return rs
+	}
+	for _, rounds := range []int{0, 1, 3} {
+		t.Run(fmt.Sprintf("confirm_rounds=%d", rounds), func(t *testing.T) {
+			c := cfg()
+			c.ConfirmRounds = rounds
+			old := t0.Add(-5 * time.Minute)
+			at := t0.Add(30 * time.Second)
+			res := append(stamp(t0, results(t0, pA, m{"b", 0, 30})), stamp(at, results(at, pA, m{"a", 0, 90}))...)
+			st, out := Decide(NewState(), in(res, native), c, scorer(t), at)
+			if d := decision(t, out, pA); d.Action == ActionImprove || len(st.Improvements) != 0 || len(out.Changes) != 0 {
+				t.Fatalf("partial round moved the prefix: %+v %+v", d, out.Changes)
+			}
+			if st.confirm[pA].Streak != 0 {
+				t.Fatalf("partial round started a streak: %+v", st.confirm[pA])
+			}
+
+			at = t0.Add(time.Minute)
+			res = stamp(at, results(at, pA, m{"a", 0, 90}, m{"b", 0, 30}))
+			res = append(res, stamp(old, results(old, pA, m{"d", 0, 10}))...)
+			res = append(res, results(t0, pA, m{"c", 0, 200})...)
+			fed := in(res, native)
+			fed.Remote = map[string]bool{"c": true}
+			for i := 0; i < max(rounds, 1); i++ {
+				at = at.Add(30 * time.Second)
+				for j := range res {
+					switch res[j].Provider {
+					case "a", "b":
+						res[j].Time, res[j].Round = at, at
+					case "c":
+						res[j].Time = at
+					}
+				}
+				st, out = Decide(st, fed, c, scorer(t), at)
+			}
+			if d := decision(t, out, pA); d.Action != ActionImprove || st.Improvements[pA].Provider != "b" {
+				t.Fatalf("full round did not move to b: %+v %+v", d, st.Improvements)
+			}
+		})
 	}
 }
 

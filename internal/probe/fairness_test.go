@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/GrandArcher/Packeteer/internal/plugins/source/traceroute"
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
 )
 
@@ -186,29 +187,36 @@ func TestJobStopsAfterSilentHosts(t *testing.T) {
 		fail      map[netip.Addr]error
 		wantAsked []netip.Addr
 		wantLoss  float64 // negative: the result carries an error instead
+		wantTrace bool    // an indirect trace is queued for the prefix
 	}{
 		{"down, all silent: skip the third host, try the gateway", true, nil, nil,
-			[]netip.Addr{hosts[0], hosts[1], gw}, 100},
+			[]netip.Addr{hosts[0], hosts[1], gw}, 100, false},
 		{"down, first host answers: the third host is still probed", true, map[netip.Addr]bool{hosts[0]: true}, nil,
-			hosts, 0},
+			hosts, 0, false},
 		{"down, gateway answers after two silent hosts", true, map[netip.Addr]bool{gw: true}, nil,
-			[]netip.Addr{hosts[0], hosts[1], gw}, 0},
+			[]netip.Addr{hosts[0], hosts[1], gw}, 0, false},
 		{"down, two hosts that error count as silent", true, nil,
 			map[netip.Addr]error{hosts[0]: errors.New("send failed"), hosts[1]: errors.New("send failed")},
-			[]netip.Addr{hosts[0], hosts[1], gw}, 100},
+			[]netip.Addr{hosts[0], hosts[1], gw}, 100, false},
 		{"down, source down on the second host: targets stop there", true, nil,
 			map[netip.Addr]error{hosts[1]: plugin.ErrSourceUnavailable},
-			[]netip.Addr{hosts[0], hosts[1]}, -1},
+			[]netip.Addr{hosts[0], hosts[1]}, -1, false},
 		{"healthy, third host answers: it is probed and scores the prefix", false, map[netip.Addr]bool{hosts[2]: true}, nil,
-			hosts, 0},
-		{"healthy, all silent: every host is probed", false, nil, nil,
-			hosts, 100},
+			hosts, 0, false},
+		{"healthy, all silent: every host is probed and a trace queued", false, nil, nil,
+			hosts, 100, true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			p := &silentProber{reply: tt.reply, fail: tt.fail}
 			prov := Provider{Name: provA.Name, Source: provA.Source, NextHop: gw}
-			e, err := New([]Provider{prov}, []NamedProber{{"p", p}}, src(plugin.Target{Prefix: pfx1}), opts())
+			o := opts()
+			o.Indirect = &Indirect{
+				Tracer:   traceroute.Tracer{MaxHops: 8, Probes: 2, MinReplies: 2, Port: 33434, Timeout: 50 * time.Millisecond, Hop: (&fakeHopper{}).hop},
+				Budget:   time.Second,
+				CacheTTL: time.Minute,
+			}
+			e, err := New([]Provider{prov}, []NamedProber{{"p", p}}, src(plugin.Target{Prefix: pfx1}), o)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -219,6 +227,9 @@ func TestJobStopsAfterSilentHosts(t *testing.T) {
 			}
 			if fmt.Sprint(r.Targets) != fmt.Sprint(tt.wantAsked) {
 				t.Errorf("targets %v, want the hosts probed %v", r.Targets, tt.wantAsked)
+			}
+			if _, queued := e.indQueued[key{prov.Name, pfx1}]; queued != tt.wantTrace {
+				t.Errorf("trace queued = %v, want %v", queued, tt.wantTrace)
 			}
 			if tt.wantLoss < 0 {
 				if r.Err == "" {

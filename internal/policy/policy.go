@@ -194,8 +194,8 @@ type confirm struct {
 	// measurements seen again (a RIB change, or the staleness ticker)
 	// do not count twice.
 	Round time.Time
-	// Local is the newest time among this instance's own results when the
-	// round counted. A remote result is not compared with it.
+	// Local is the newest time among this instance's own fresh results
+	// when the round counted. A remote result is not compared with it.
 	Local time.Time
 	// Probe is set only for the evaluation that compared the paths and
 	// left the streak short. The next evaluation clears it first, so a

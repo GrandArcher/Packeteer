@@ -18,14 +18,23 @@ func (cfg Config) confirmRounds() int {
 
 // notePerformance records one fresh round of a performance move onto
 // provider. ready is true when the move has won enough consecutive fresh
-// rounds to be created. A stale round, and a repeat of measurements
-// already counted, leave the streak untouched. A fresh round for a
-// different provider starts that provider at 1. A short streak whose
+// rounds to be created. A stale round, a partly measured round, and a
+// repeat of measurements already counted leave the streak untouched and
+// never make a move ready, whatever confirm_rounds is. A fresh round for
+// a different provider starts that provider at 1. A short streak whose
 // paths were compared this call asks for another probe; a stale round
 // does not.
 func notePerformance(st *State, in Input, cfg Config, p netip.Prefix, provider string, now time.Time) (ready bool, streak int) {
+	// A timed-out probe round stores the providers that finished and
+	// leaves the others with their previous, still fresh result (#381). A
+	// provider whose probes stopped finishing would win on its last good
+	// sample, so no move is made until one round measures them all.
+	partial := partialRound(in, cfg, p, now)
 	rounds := cfg.confirmRounds()
 	if rounds <= 1 {
+		if partial {
+			return false, 0
+		}
 		return provider != "", 1
 	}
 	if st.confirm == nil {
@@ -33,17 +42,14 @@ func notePerformance(st *State, in Input, cfg Config, p netip.Prefix, provider s
 	}
 	cur := st.confirm[p]
 	at, count, stale := prefixRound(in, cfg, cur, p, now)
-	// A timed-out probe round stores the providers that finished and
-	// leaves the others with their previous result (#381). Such a round
-	// may start or reset a streak but must not extend one: every local
-	// provider has to be measured again, or a provider whose probes stopped
-	// finishing could be confirmed on its last good sample.
+	// Every local provider has to be measured again since the last counted
+	// round, or the streak would count one provider's sample twice.
 	local, remeasured := localRound(in, cfg, cur, p, now)
-	if count && provider != "" && cur.Provider == provider && !remeasured {
+	if partial || (count && provider != "" && cur.Provider == provider && !remeasured) {
 		count = false
 	}
 	if stale || !count {
-		if !stale && provider != "" && cur.Provider == provider && cur.Streak >= rounds {
+		if !stale && !partial && provider != "" && cur.Provider == provider && cur.Streak >= rounds {
 			return true, cur.Streak
 		}
 		// The same fresh measurements of a short streak are still a
@@ -125,27 +131,46 @@ func prefixRound(in Input, cfg Config, prev confirm, p netip.Prefix, now time.Ti
 	return newest, true, false
 }
 
-// localRound returns the newest time among this instance's own results
-// for p, and whether every fresh one is newer than prev.Local. Results
-// from federation peers are left out: a peer probes on its own schedule,
-// so its path can be fresh and still older than the last local round.
+// localRound returns the newest time among this instance's own fresh
+// results for p, and whether every one of them is newer than prev.Local.
+// Results from federation peers are left out: a peer probes on its own
+// schedule, so its path can be fresh and still older than the last local
+// round.
 func localRound(in Input, cfg Config, prev confirm, p netip.Prefix, now time.Time) (newest time.Time, remeasured bool) {
 	remeasured = true
 	for _, r := range in.Results {
-		if r.Prefix != p || in.Remote[r.Provider] {
+		if r.Prefix != p || in.Remote[r.Provider] || (cfg.MaxResultAge > 0 && now.Sub(r.Time) > cfg.MaxResultAge) {
 			continue
 		}
 		if r.Time.After(newest) {
 			newest = r.Time
-		}
-		if cfg.MaxResultAge > 0 && now.Sub(r.Time) > cfg.MaxResultAge {
-			continue
 		}
 		if !r.Time.After(prev.Local) {
 			remeasured = false
 		}
 	}
 	return newest, remeasured
+}
+
+// partialRound reports whether this instance's fresh results for p come
+// from different probe rounds, so the newest round measured only some
+// providers. Federation results are left out, as in localRound.
+func partialRound(in Input, cfg Config, p netip.Prefix, now time.Time) bool {
+	var oldest, newest time.Time
+	seen := false
+	for _, r := range in.Results {
+		if r.Prefix != p || in.Remote[r.Provider] || (cfg.MaxResultAge > 0 && now.Sub(r.Time) > cfg.MaxResultAge) {
+			continue
+		}
+		if !seen || r.Round.Before(oldest) {
+			oldest = r.Round
+		}
+		if !seen || r.Round.After(newest) {
+			newest = r.Round
+		}
+		seen = true
+	}
+	return oldest.Before(newest)
 }
 
 // markPendingUrgent lists prefixes whose streak is short and whose paths

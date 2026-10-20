@@ -134,6 +134,11 @@ type Result struct {
 	Stats   Stats        `json:"stats"`
 	Err     string       `json:"error,omitempty"` // set when no measurement was possible
 	Time    time.Time    `json:"time"`
+	// Round is when the probe round that stored this result ended. Every
+	// result a round stores carries the same Round, so a prefix whose
+	// providers differ in Round was only partly measured by its newest
+	// round (a timed-out round, #381).
+	Round time.Time `json:"round,omitzero"`
 	// Subranges, when the target carried two or more (#121), are the
 	// per-sub-range measurements. Stats is then their traffic-weighted
 	// aggregate. Measurement only.
@@ -1242,6 +1247,12 @@ func (e *Engine) runRound(ctx context.Context, allow func(plugin.Target) bool, m
 		return nil, false
 	}
 
+	at := e.opt.Now()
+	for k, r := range fresh {
+		r.Round = at
+		fresh[k] = r
+	}
+
 	if received == len(jobs) {
 		down := map[string]string{}
 		ran := map[string]bool{}
@@ -1570,7 +1581,7 @@ func (e *Engine) probe(ctx context.Context, j job, looksDown func(string) bool) 
 	var samples []hostSample
 	var errs []error
 	var tried []netip.Addr
-	silent, answered := 0, false
+	silent, answered, skipped := 0, false, false
 	for _, h := range hosts {
 		// A provider that is down costs the full timeout per host and holds
 		// a worker the whole time (#381). Once the provider looks down,
@@ -1582,6 +1593,7 @@ func (e *Engine) probe(ctx context.Context, j job, looksDown func(string) bool) 
 		// prefix when no in-prefix host answers.
 		isGW := gw.IsValid() && h == gw
 		if silent >= silentHostLimit && !answered && !isGW && looksDown(j.provider.Name) {
+			skipped = true
 			continue
 		}
 		tried = append(tried, h)
@@ -1602,8 +1614,12 @@ func (e *Engine) probe(ctx context.Context, j job, looksDown func(string) bool) 
 		}
 		samples = append(samples, hostSample{addr: h, res: one, gateway: isGW})
 	}
-	if res, down, ok := e.probeIndirect(ctx, j, tried, samples); ok {
-		return res, down
+	// A trace from a provider that looks down would find nothing and fill
+	// the trace queue and cache for it.
+	if !skipped {
+		if res, down, ok := e.probeIndirect(ctx, j, tried, samples); ok {
+			return res, down
+		}
 	}
 	if len(samples) == 0 {
 		res := Result{Provider: j.provider.Name, Prefix: j.target.Prefix, Targets: tried, Time: e.opt.Now()}

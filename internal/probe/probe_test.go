@@ -1601,6 +1601,9 @@ func TestPartialRoundStoresFinishedProviders(t *testing.T) {
 	if len(old) != 2 || rounds.Load() != 1 {
 		t.Fatalf("first round results=%+v rounds=%d", old, rounds.Load())
 	}
+	if old[0].Round.IsZero() || !old[0].Round.Equal(old[1].Round) {
+		t.Fatalf("one round stored different rounds: %s and %s", old[0].Round, old[1].Round)
+	}
 	times := func() map[string]time.Time {
 		m := map[string]time.Time{}
 		for _, r := range e.Results() {
@@ -1640,6 +1643,17 @@ func TestPartialRoundStoresFinishedProviders(t *testing.T) {
 	}
 	if !got[provB.Name].Equal(old[1].Time) {
 		t.Errorf("transit-b never finished but was refreshed: %s, was %s", got[provB.Name], old[1].Time)
+	}
+	// The policy sees the prefix as partly measured by its differing rounds.
+	for _, r := range e.Results() {
+		want := old[1].Round
+		if r.Provider == provA.Name {
+			if !r.Round.After(want) {
+				t.Errorf("transit-a round %s is not after the first round %s", r.Round, want)
+			}
+		} else if !r.Round.Equal(want) {
+			t.Errorf("transit-b round = %s, want the first round %s", r.Round, want)
+		}
 	}
 	if rounds.Load() != 2 || e.PrefixCommits() != 2 {
 		t.Errorf("rounds=%d commits=%d, want 2 and 2", rounds.Load(), e.PrefixCommits())
