@@ -44,6 +44,12 @@ func (f *fakeFed) Peers(time.Time) []plugin.PeerState {
 	return append([]plugin.PeerState(nil), f.peers...)
 }
 
+func (f *fakeFed) Push(context.Context, string, plugin.SettingsPush) (plugin.SettingsResult, error) {
+	return plugin.SettingsResult{}, nil
+}
+
+func (f *fakeFed) SetSettingsHandler(plugin.SettingsHandler) {}
+
 func (f *fakeFed) set(p []plugin.PeerState) {
 	f.mu.Lock()
 	defer f.mu.Unlock()

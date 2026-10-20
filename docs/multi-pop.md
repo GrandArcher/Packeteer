@@ -107,6 +107,23 @@ When contact returns, the peer is fresh again at its next good poll. The usual h
 
 `lab/e2e-multipop.sh` proves this with both POPs running (step 6 in the list above): it blackholes the route between the two instances, then checks the withdraw time, the stale and incomplete views, 20s with no steer and nothing from the second POP, and exactly one re-steer after the heal. `TestFederationLinkCut` in `cmd/controller` runs the same cut and heal in process.
 
+## Pushing settings
+
+An admin can send this instance's `thresholds` or `policies` to every peer ([design](design/federation-push.md)). It is off until a peer lists the sender:
+
+```yaml
+federation:
+  type: mtls
+  config:
+    accept_settings_from: [pop-a]   # certificate names allowed to push here
+http:
+  config_editor: true               # the push is written to the mounted file
+```
+
+On the sending instance, save the change in the settings page or the YAML editor first, then press Push on the dashboard's POPs section or call `POST /api/federation/push` with `{"sections": ["thresholds"]}` (optionally `"peers": ["pop-b"]`). The sender needs `http.config_editor` and an admin sign-in. Each peer validates the sections like a local `PUT /api/config` and applies them online with no restart; the reply has one row per peer: `applied`, `unchanged`, `refused` with the reasons, `failed`, or `unreachable`.
+
+Only `thresholds` and `policies` are accepted. `mode`, the allowlist, the announcer, and every other key are refused, a push never turns inject on, and a peer whose file has other unapplied edits refuses it. Both sides write an audit record. The endpoint is in [API.md](API.md).
+
 ## Rollback
 
-Remove `federation`, `global_commit`, and the providers with another `domain`, then restart. Each instance runs standalone. SIGHUP refuses these keys, so they need a restart.
+Remove `federation`, `global_commit`, and the providers with another `domain`, then restart. Each instance runs standalone. SIGHUP refuses these keys, so they need a restart. To stop only the settings push, remove `accept_settings_from` on the receivers and restart; a push already applied stays in the file like any local edit, so revert it with the editor or by editing the file.

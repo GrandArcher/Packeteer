@@ -11,6 +11,7 @@
 package mtls
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"crypto/x509"
@@ -26,6 +27,7 @@ import (
 	"regexp"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
@@ -37,11 +39,20 @@ const TypeName = "mtls"
 // SnapshotPath is where an instance serves its snapshot.
 const SnapshotPath = "/v1/snapshot"
 
+// SettingsPath is where an instance accepts a settings push (#137).
+const SettingsPath = "/v1/settings"
+
 // Defaults and limits.
 const (
 	DefaultPollInterval = 2 * time.Second
 	DefaultMaxBytes     = 16 << 20
 	maxPeers            = 64
+	// maxSettingsBytes bounds a pushed settings body. Two config sections
+	// are far smaller.
+	maxSettingsBytes = 1 << 20
+	// pushTimeout bounds one push: the peer validates and applies it
+	// before it answers.
+	pushTimeout = 30 * time.Second
 )
 
 func init() { plugin.Federations.Register(TypeName, New) }
@@ -58,6 +69,11 @@ type Config struct {
 	// AllowClients lists the certificate names (CN or DNS SAN) allowed to
 	// read this instance's snapshot. Default: the peer names.
 	AllowClients []string `yaml:"allow_clients"`
+	// AcceptSettingsFrom lists the certificate names allowed to push
+	// settings to this instance (#137). Empty (the default) refuses every
+	// push. It is separate from AllowClients: reading a snapshot does not
+	// let a peer change this instance's config.
+	AcceptSettingsFrom []string `yaml:"accept_settings_from"`
 	// PollInterval is how often each peer is fetched (default 2s).
 	PollInterval time.Duration `yaml:"poll_interval"`
 	// Timeout bounds one fetch (default: PollInterval).
@@ -86,6 +102,7 @@ var nameRE = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$`)
 type peerState struct {
 	cfg      Peer
 	url      string
+	pushURL  string
 	lastSeen time.Time
 	err      string
 	snap     plugin.InstanceSnapshot
@@ -98,6 +115,9 @@ type Federation struct {
 	cert  tls.Certificate
 	pool  *x509.CertPool
 	allow map[string]bool
+	// acceptPush holds the names allowed to push settings.
+	acceptPush map[string]bool
+	settings   atomic.Pointer[plugin.SettingsHandler]
 
 	mu    sync.Mutex
 	local []byte // published snapshot, JSON
@@ -166,7 +186,7 @@ func New(c plugin.Config, env plugin.Env) (plugin.Federation, error) {
 	if !pool.AppendCertsFromPEM(caPEM) {
 		return nil, fmt.Errorf("ca_file %s: no PEM certificates", cfg.CAFile)
 	}
-	f := &Federation{cfg: cfg, log: env.Logger, cert: cert, pool: pool, allow: map[string]bool{}}
+	f := &Federation{cfg: cfg, log: env.Logger, cert: cert, pool: pool, allow: map[string]bool{}, acceptPush: map[string]bool{}}
 	if f.log == nil {
 		f.log = slog.Default()
 	}
@@ -183,7 +203,7 @@ func New(c plugin.Config, env plugin.Env) (plugin.Federation, error) {
 		if err != nil || u.Scheme != "https" || u.Host == "" || (u.Path != "" && u.Path != "/") || u.RawQuery != "" || u.User != nil {
 			return nil, fmt.Errorf("peers[%d] (%s): url %q must be https://host:port", i, p.Name, p.URL)
 		}
-		f.peers = append(f.peers, &peerState{cfg: p, url: "https://" + u.Host + SnapshotPath})
+		f.peers = append(f.peers, &peerState{cfg: p, url: "https://" + u.Host + SnapshotPath, pushURL: "https://" + u.Host + SettingsPath})
 	}
 	allow := cfg.AllowClients
 	if len(allow) == 0 {
@@ -199,6 +219,15 @@ func New(c plugin.Config, env plugin.Env) (plugin.Federation, error) {
 	}
 	if cfg.Listen != "" && len(f.allow) == 0 {
 		return nil, errors.New("listen needs allow_clients or peers: nobody could read the snapshot")
+	}
+	for i, n := range cfg.AcceptSettingsFrom {
+		if !nameRE.MatchString(n) {
+			return nil, fmt.Errorf("accept_settings_from[%d]: %q is not a valid name", i, n)
+		}
+		f.acceptPush[n] = true
+	}
+	if len(f.acceptPush) > 0 && cfg.Listen == "" {
+		return nil, errors.New("accept_settings_from needs listen")
 	}
 	return f, nil
 }
@@ -225,6 +254,7 @@ func (f *Federation) Start(context.Context) error {
 		f.ln = ln
 		mux := http.NewServeMux()
 		mux.HandleFunc("GET "+SnapshotPath, f.serveSnapshot)
+		mux.HandleFunc("POST "+SettingsPath, f.serveSettings)
 		f.srv = &http.Server{
 			Handler:           mux,
 			ReadHeaderTimeout: 5 * time.Second,
@@ -328,29 +358,142 @@ func (f *Federation) serveSnapshot(w http.ResponseWriter, r *http.Request) {
 }
 
 func (f *Federation) allowed(c *x509.Certificate) bool {
-	if f.allow[c.Subject.CommonName] {
-		return true
-	}
-	return slices.ContainsFunc(c.DNSNames, func(n string) bool { return f.allow[n] })
+	_, ok := certName(c, f.allow)
+	return ok
 }
 
-func (f *Federation) poll(ctx context.Context, p *peerState) {
-	defer f.wg.Done()
+// certName is the certificate's CN or DNS SAN that is in names.
+func certName(c *x509.Certificate, names map[string]bool) (string, bool) {
+	if names[c.Subject.CommonName] {
+		return c.Subject.CommonName, true
+	}
+	i := slices.IndexFunc(c.DNSNames, func(n string) bool { return names[n] })
+	if i < 0 {
+		return "", false
+	}
+	return c.DNSNames[i], true
+}
+
+// SetSettingsHandler installs the handler for pushes from peers.
+func (f *Federation) SetSettingsHandler(h plugin.SettingsHandler) {
+	if h == nil {
+		f.settings.Store(nil)
+		return
+	}
+	f.settings.Store(&h)
+}
+
+func writeSettings(w http.ResponseWriter, code int, res plugin.SettingsResult) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(code)
+	_ = json.NewEncoder(w).Encode(res)
+}
+
+func refused(msg string) plugin.SettingsResult {
+	return plugin.SettingsResult{Status: plugin.SettingsRefused, Errors: []string{msg}}
+}
+
+func (f *Federation) serveSettings(w http.ResponseWriter, r *http.Request) {
+	if r.TLS == nil || len(r.TLS.PeerCertificates) == 0 {
+		writeSettings(w, http.StatusForbidden, refused("client certificate required"))
+		return
+	}
+	from, ok := certName(r.TLS.PeerCertificates[0], f.acceptPush)
+	if !ok {
+		f.log.Warn("federation settings push refused: certificate not in accept_settings_from",
+			"client", r.TLS.PeerCertificates[0].Subject.CommonName, "remote", r.RemoteAddr)
+		writeSettings(w, http.StatusForbidden, refused("this instance does not accept settings from that certificate (accept_settings_from)"))
+		return
+	}
+	h := f.settings.Load()
+	if h == nil {
+		writeSettings(w, http.StatusServiceUnavailable, refused("this instance cannot accept settings now: it is starting, or http.config_editor is off"))
+		return
+	}
+	var req plugin.SettingsPush
+	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxSettingsBytes))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&req); err != nil {
+		writeSettings(w, http.StatusBadRequest, refused("invalid body: "+err.Error()))
+		return
+	}
+	if _, err := dec.Token(); !errors.Is(err, io.EOF) {
+		writeSettings(w, http.StatusBadRequest, refused("invalid body: one JSON object expected"))
+		return
+	}
+	// The apply starts and stops plugins that must outlive this request,
+	// and a sender that hangs up must not cancel it half way.
+	res := (*h)(context.WithoutCancel(r.Context()), from, req)
+	code := http.StatusOK
+	switch res.Status {
+	case plugin.SettingsRefused:
+		code = http.StatusUnprocessableEntity
+	case plugin.SettingsApplied, plugin.SettingsUnchanged:
+	default:
+		code = http.StatusInternalServerError
+	}
+	writeSettings(w, code, res)
+}
+
+// Push sends req to the named peer. A peer that declines still answers
+// with a result; only a transport failure is an error.
+func (f *Federation) Push(ctx context.Context, peer string, req plugin.SettingsPush) (plugin.SettingsResult, error) {
+	var p *peerState
+	for _, c := range f.peers {
+		if c.cfg.Name == peer {
+			p = c
+		}
+	}
+	if p == nil {
+		return plugin.SettingsResult{}, fmt.Errorf("no federation peer %q", peer)
+	}
+	body, err := json.Marshal(req)
+	if err != nil {
+		return plugin.SettingsResult{}, err
+	}
+	hreq, err := http.NewRequestWithContext(ctx, http.MethodPost, p.pushURL, bytes.NewReader(body))
+	if err != nil {
+		return plugin.SettingsResult{}, err
+	}
+	hreq.Header.Set("Content-Type", "application/json")
+	hreq.Header.Set("Accept", "application/json")
+	client := f.newClient(p, pushTimeout)
+	defer client.CloseIdleConnections()
+	res, err := client.Do(hreq)
+	if err != nil {
+		return plugin.SettingsResult{}, err
+	}
+	defer res.Body.Close()
+	var out plugin.SettingsResult
+	if err := json.NewDecoder(io.LimitReader(res.Body, maxSettingsBytes)).Decode(&out); err != nil || out.Status == "" {
+		return plugin.SettingsResult{}, fmt.Errorf("%s: %s with no usable answer", p.pushURL, res.Status)
+	}
+	return out, nil
+}
+
+// newClient is an HTTPS client for one peer with the instance's
+// certificate and no proxy from the environment: peers are reached
+// directly.
+func (f *Federation) newClient(p *peerState, timeout time.Duration) *http.Client {
 	sn := p.cfg.ServerName
 	if sn == "" {
 		sn = p.cfg.Name
 	}
-	// No proxy from the environment: peers are reached directly.
-	tr := &http.Transport{
-		TLSClientConfig:     f.clientTLS(sn),
-		MaxIdleConnsPerHost: 1,
-		TLSHandshakeTimeout: f.cfg.Timeout,
-	}
-	client := &http.Client{
-		Timeout:       f.cfg.Timeout,
-		Transport:     tr,
+	return &http.Client{
+		Timeout: timeout,
+		Transport: &http.Transport{
+			TLSClientConfig:     f.clientTLS(sn),
+			MaxIdleConnsPerHost: 1,
+			TLSHandshakeTimeout: timeout,
+		},
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 	}
+}
+
+func (f *Federation) poll(ctx context.Context, p *peerState) {
+	defer f.wg.Done()
+	client := f.newClient(p, f.cfg.Timeout)
 	defer client.CloseIdleConnections()
 	t := time.NewTicker(f.cfg.PollInterval)
 	defer t.Stop()

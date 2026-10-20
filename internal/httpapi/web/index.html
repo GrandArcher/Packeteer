@@ -61,6 +61,12 @@
     <h2>POPs</h2>
     <p class="tag">Central view of every federated instance (multi-POP). Peer data is used for decisions only while fresh. Nothing here announces.</p>
     <div id="federation"></div>
+    <div data-min-role="admin">
+      <div id="fed-push" hidden>
+        <h3>Push settings to peers</h3>
+        <p class="tag">Sends this instance's saved config sections to every peer. Each peer checks them like a local save and applies them with no restart. A peer must list this instance in accept_settings_from. Mode, the allowlist, and the announcer are never pushed.</p>
+      </div>
+    </div>
   </section>
 </main>
 

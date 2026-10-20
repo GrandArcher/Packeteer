@@ -35,6 +35,9 @@ const (
 	// is not configured.
 	MethodBasic  = "basic"
 	MethodSystem = "system"
+	// MethodFederation is a settings push from a federation peer, which
+	// authenticated with its client certificate (#137).
+	MethodFederation = "federation"
 )
 
 // Defaults and bounds.

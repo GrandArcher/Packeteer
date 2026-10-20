@@ -313,6 +313,8 @@ func TestConfigErrors(t *testing.T) {
 		{"poll too fast", "poll_interval", "10ms", "poll_interval"},
 		{"max_age below poll", "max_age", "1s", "max_age"},
 		{"unknown key", "bogus", 1, "bogus"},
+		{"push list needs listen", "accept_settings_from", []string{"pop-b"}, "accept_settings_from needs listen"},
+		{"push list bad name", "accept_settings_from", []string{"-b"}, "accept_settings_from[0]"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -326,5 +328,119 @@ func TestConfigErrors(t *testing.T) {
 	}
 	if _, err := build(t, base()); err != nil {
 		t.Fatalf("valid config: %v", err)
+	}
+}
+
+// pushPair starts pop-b, which lists accept as the names allowed to push,
+// and returns it with a started pop-a that has pop-b as its peer.
+func pushPair(t *testing.T, accept []string) (a, b *Federation) {
+	t.Helper()
+	p := newPKI(t)
+	extra := map[string]any{"listen": "127.0.0.1:0", "allow_clients": []string{"pop-a", "pop-c"}}
+	if accept != nil {
+		extra["accept_settings_from"] = accept
+	}
+	b = instance(t, p, "pop-b", extra)
+	if err := b.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { stop(t, b) })
+	peers := []map[string]any{{"name": "pop-b", "url": "https://" + b.Addr().String(), "server_name": "pop-b"}}
+	a = instance(t, p, "pop-a", map[string]any{"peers": peers})
+	if err := a.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { stop(t, a) })
+	return a, b
+}
+
+func TestSettingsPush(t *testing.T) {
+	a, b := pushPair(t, []string{"pop-a"})
+	type call struct {
+		from string
+		req  plugin.SettingsPush
+	}
+	got := make(chan call, 4)
+	b.SetSettingsHandler(func(_ context.Context, from string, req plugin.SettingsPush) plugin.SettingsResult {
+		got <- call{from, req}
+		return plugin.SettingsResult{Status: plugin.SettingsApplied, Applied: []string{"thresholds"}}
+	})
+	req := plugin.SettingsPush{Sections: map[string]string{"thresholds": "min_loss_delta_pct: 3\n"}}
+	res, err := a.Push(context.Background(), "pop-b", req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Status != plugin.SettingsApplied || len(res.Applied) != 1 || res.Applied[0] != "thresholds" {
+		t.Fatalf("result = %+v", res)
+	}
+	c := <-got
+	if c.from != "pop-a" || c.req.Sections["thresholds"] != "min_loss_delta_pct: 3\n" {
+		t.Fatalf("handler saw %+v", c)
+	}
+
+	// A refusal and a failure come back with their status and errors.
+	for _, want := range []plugin.SettingsResult{
+		{Status: plugin.SettingsRefused, Errors: []string{"bad section"}},
+		{Status: plugin.SettingsFailed, Errors: []string{"disk"}},
+		{Status: plugin.SettingsUnchanged},
+	} {
+		b.SetSettingsHandler(func(context.Context, string, plugin.SettingsPush) plugin.SettingsResult { return want })
+		res, err := a.Push(context.Background(), "pop-b", req)
+		if err != nil || res.Status != want.Status || strings.Join(res.Errors, ",") != strings.Join(want.Errors, ",") {
+			t.Fatalf("want %+v, got %+v (%v)", want, res, err)
+		}
+	}
+
+	if _, err := a.Push(context.Background(), "pop-x", req); err == nil || !strings.Contains(err.Error(), "no federation peer") {
+		t.Fatalf("unknown peer: %v", err)
+	}
+}
+
+// TestSettingsPushNeedsItsOwnAllowList: reading the snapshot is not
+// enough, an empty accept_settings_from refuses everyone, and a handler
+// that is not installed yet refuses too.
+func TestSettingsPushNeedsItsOwnAllowList(t *testing.T) {
+	called := false
+	h := func(context.Context, string, plugin.SettingsPush) plugin.SettingsResult {
+		called = true
+		return plugin.SettingsResult{Status: plugin.SettingsApplied}
+	}
+	req := plugin.SettingsPush{Sections: map[string]string{"thresholds": "min_loss_delta_pct: 3\n"}}
+
+	// pop-a may read pop-b's snapshot (allow_clients) but is not listed.
+	a, b := pushPair(t, []string{"pop-c"})
+	b.SetSettingsHandler(h)
+	res, err := a.Push(context.Background(), "pop-b", req)
+	if err != nil || res.Status != plugin.SettingsRefused || !strings.Contains(strings.Join(res.Errors, ""), "accept_settings_from") {
+		t.Fatalf("unlisted sender: %+v, %v", res, err)
+	}
+
+	a, b = pushPair(t, nil)
+	b.SetSettingsHandler(h)
+	if res, err = a.Push(context.Background(), "pop-b", req); err != nil || res.Status != plugin.SettingsRefused {
+		t.Fatalf("default config: %+v, %v", res, err)
+	}
+
+	a, _ = pushPair(t, []string{"pop-a"})
+	if res, err = a.Push(context.Background(), "pop-b", req); err != nil || res.Status != plugin.SettingsRefused || !strings.Contains(strings.Join(res.Errors, ""), "http.config_editor") {
+		t.Fatalf("no handler: %+v, %v", res, err)
+	}
+	if called {
+		t.Fatal("the handler ran for a sender that is not allowed")
+	}
+}
+
+func TestSettingsPushRefusesBadBodies(t *testing.T) {
+	a, b := pushPair(t, []string{"pop-a"})
+	b.SetSettingsHandler(func(context.Context, string, plugin.SettingsPush) plugin.SettingsResult {
+		t.Error("handler ran for a bad body")
+		return plugin.SettingsResult{Status: plugin.SettingsApplied}
+	})
+	big := plugin.SettingsPush{Sections: map[string]string{"policies": strings.Repeat("x", maxSettingsBytes)}}
+	// The server stops reading at the limit, so the client may see the 400
+	// or a reset of the connection; either way nothing is accepted.
+	res, err := a.Push(context.Background(), "pop-b", big)
+	if err == nil && res.Status != plugin.SettingsRefused {
+		t.Fatalf("oversized body: %+v", res)
 	}
 }

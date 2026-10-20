@@ -389,6 +389,9 @@ scorer:
 #     cert_file: /etc/packeteer/certs/pop-a.crt
 #     key_file: /etc/packeteer/certs/pop-a.key
 #     ca_file: /etc/packeteer/certs/ca.crt
+#     # Let pop-a push thresholds and policies here (docs/multi-pop.md).
+#     # Needs http.config_editor: true. Mode and the allowlist are never pushed.
+#     accept_settings_from: [pop-a]
 #     peers:
 #       - name: pop-b
 #         url: https://192.0.2.20:9443
