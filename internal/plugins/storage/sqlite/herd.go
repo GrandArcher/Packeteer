@@ -2,6 +2,7 @@ package sqlite
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"net/netip"
 	"strings"
@@ -38,6 +39,50 @@ CREATE INDEX IF NOT EXISTS herd_records_order ON herd_records (lo, hi, provider_
 CREATE INDEX IF NOT EXISTS herd_records_origin ON herd_records (origin_asn, time_ms);
 CREATE INDEX IF NOT EXISTS herd_records_time ON herd_records (time_ms);
 `
+
+// herd_stats holds the row count and body bytes per member, kept by
+// triggers in the same transaction as every insert and delete. Stats and
+// trimming read it instead of scanning herd_records: the store has one
+// connection that report history shares, and a scan of up to 1 GiB of rows
+// would stall history writes.
+const herdStatsSchema = `
+CREATE TABLE herd_stats (
+	member TEXT PRIMARY KEY,
+	records INTEGER NOT NULL,
+	bytes INTEGER NOT NULL
+);
+CREATE TRIGGER IF NOT EXISTS herd_stats_insert AFTER INSERT ON herd_records BEGIN
+	INSERT INTO herd_stats (member, records, bytes) VALUES (NEW.member, 1, length(NEW.body))
+	ON CONFLICT (member) DO UPDATE SET records = records + 1, bytes = bytes + length(NEW.body);
+END;
+CREATE TRIGGER IF NOT EXISTS herd_stats_delete AFTER DELETE ON herd_records BEGIN
+	UPDATE herd_stats SET records = records - 1, bytes = bytes - length(OLD.body) WHERE member = OLD.member;
+	DELETE FROM herd_stats WHERE member = OLD.member AND records <= 0;
+END;
+`
+
+// ensureHerdStats creates herd_stats and its triggers. A database from
+// before the table existed gets one scan of herd_records, once, in the
+// same transaction.
+func ensureHerdStats(ctx context.Context, db *sql.DB) error {
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	var n int
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'herd_stats'`).Scan(&n); err != nil || n > 0 {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, herdStatsSchema); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO herd_stats (member, records, bytes)
+SELECT member, COUNT(*), SUM(length(body)) FROM herd_records GROUP BY member`); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
 
 // herdBounds is the first and last address of p. An invalid prefix has
 // none.
@@ -217,7 +262,8 @@ func (s *Store) DeleteHerdBefore(ctx context.Context, t time.Time) (int, error) 
 	return int(n), nil
 }
 
-// TrimHerd deletes the oldest rows of one class until it fits maxBytes.
+// TrimHerd deletes the oldest rows of one class until it fits maxBytes. It
+// reads the class size from herd_stats and scans rows only when over.
 func (s *Store) TrimHerd(ctx context.Context, pulled bool, maxBytes int64) (int, error) {
 	db, err := s.handle()
 	if err != nil {
@@ -228,7 +274,7 @@ func (s *Store) TrimHerd(ctx context.Context, pulled bool, maxBytes int64) (int,
 		cond = "member <> ''"
 	}
 	var total int64
-	if err := db.QueryRowContext(ctx, `SELECT COALESCE(SUM(length(body)), 0) FROM herd_records WHERE `+cond).Scan(&total); err != nil {
+	if err := db.QueryRowContext(ctx, `SELECT COALESCE(SUM(bytes), 0) FROM herd_stats WHERE `+cond).Scan(&total); err != nil {
 		return 0, err
 	}
 	dropped := 0
@@ -263,14 +309,15 @@ func (s *Store) TrimHerd(ctx context.Context, pulled bool, maxBytes int64) (int,
 	return dropped, nil
 }
 
-// HerdStats counts the stored rows.
+// HerdStats counts the stored rows from herd_stats, without scanning
+// herd_records.
 func (s *Store) HerdStats(ctx context.Context) (plugin.HerdStats, error) {
 	out := plugin.HerdStats{PerMember: map[string]int{}}
 	db, err := s.handle()
 	if err != nil {
 		return out, err
 	}
-	rows, err := db.QueryContext(ctx, `SELECT member, COUNT(*), COALESCE(SUM(length(body)), 0) FROM herd_records GROUP BY member`)
+	rows, err := db.QueryContext(ctx, `SELECT member, records, bytes FROM herd_stats`)
 	if err != nil {
 		return out, err
 	}
