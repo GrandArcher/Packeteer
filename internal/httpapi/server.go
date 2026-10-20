@@ -84,6 +84,9 @@ type Options struct {
 	// ConfigEditor is the validated config editor (#34). Nil when
 	// http.config_editor is off.
 	ConfigEditor ConfigEditor
+	// FirstRun is the persisted first-run setup state (#416). Nil unless
+	// the config editor is on only because setup is pending.
+	FirstRun FirstRun
 	// Dashboards keeps custom dashboards (#34). Nil when the storage
 	// plugin does not keep them.
 	Dashboards plugin.DashboardStore
@@ -128,6 +131,7 @@ type Server struct {
 	fedPush    FederationPusher
 	ha         func() plugin.ElectorStatus
 	editor     ConfigEditor
+	firstRun   FirstRun
 	dashboards plugin.DashboardStore
 	subs       Subscriptions
 	upgrade    UpgradeControl
@@ -206,7 +210,7 @@ func New(opt Options) (*Server, error) {
 		opt.Logger = slog.Default()
 	}
 	s := &Server{addr: opt.Addr, user: opt.User, password: opt.Password, auth: opt.Auth, audit: opt.Audit, events: opt.Events, allowFrom: opt.AllowFrom, snap: opt.Snapshot, maint: opt.Maintenance, reports: opt.Reports, tools: opt.Tools, inbound: opt.Inbound, mitigation: opt.Mitigation, anomaly: opt.Anomaly, leaks: opt.Leaks, federation: opt.Federation, fedPush: opt.FederationPush, ha: opt.HA,
-		editor: opt.ConfigEditor, dashboards: opt.Dashboards, subs: opt.Subscriptions, upgrade: opt.Upgrade, log: opt.Logger}
+		editor: opt.ConfigEditor, firstRun: opt.FirstRun, dashboards: opt.Dashboards, subs: opt.Subscriptions, upgrade: opt.Upgrade, log: opt.Logger}
 	setup := opt.Setup
 	s.setup.Store(&setup)
 	s.linkouts = opt.Linkouts

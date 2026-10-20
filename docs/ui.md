@@ -19,8 +19,8 @@ The remaining UI conveniences (#34). All of them work in the stock image with a 
 | Events and audit log (#173) | `/events.html`, `/api/events`, `/api/audit` | viewer for events, admin for the audit tab | `storage: {type: sqlite}` keeps events across a restart |
 | Users and API tokens (#175) | `/admin.html`, `/tokens.html`, `/api/users`, `/api/tokens` | admin for users, every signed-in user for tokens | `storage` + `auth.enabled` |
 | Dashboard overview and setup checklist (#49) | `/`, `/api/overview` | viewer | none |
-| Config editor and settings form (#102, inbound and anomaly rules #131, exchanges #181, guided inputs #329, every block #330) | `/settings.html`, `/api/config`, `POST /api/config/form` | admin | `http.config_editor: true` + auth or basic auth |
-| Setup wizard (#106, flow step #130, keeps an existing config #345) | `/settings.html`, `POST /api/config/wizard` | admin | `http.config_editor: true` + auth or basic auth |
+| Config editor and settings form (#102, inbound and anomaly rules #131, exchanges #181, guided inputs #329, every block #330) | `/settings.html`, `/api/config`, `POST /api/config/form` | admin | `http.config_editor: true` (or unset during first-run setup) + auth or basic auth |
+| Setup wizard (#106, flow step #130, keeps an existing config #345) | `/settings.html`, `POST /api/config/wizard` | admin | `http.config_editor: true` (or unset during first-run setup) + auth or basic auth |
 | Custom dashboards | `/dashboards.html`, `/api/dashboards` | every signed-in user, own dashboards | `storage: {type: sqlite}` + auth or basic auth |
 | Report subscriptions | `report_subscriptions`, `/api/subscriptions` | viewers see them, operators send now | `storage` + an `smtp` notifier |
 | Herd (#260) | no page; `GET /api/herd`, `/api/herd/vantages`, `/api/herd/preview` | viewer, admin for preview | `herd` ([herd.md](herd.md)) |
@@ -426,7 +426,7 @@ A policy or source only restricts, orders, or measures. The learned-RIB check, t
 
 **Exec plugins.** Checking or saving a candidate never runs a program. `exec` plugins in the candidate are validated without running their command (no `init` handshake), and a candidate that adds or changes an `exec` plugin (command, args, env, anything in its block) or changes `plugin_dir` is refused with `422`. Which programs the controller runs is set only by editing the mounted file; removing an `exec` plugin through the editor is allowed.
 
-The file is read-only in many deployments (`:ro`). Then saving fails with a clear error and nothing changes. Leave `config_editor` off if you manage the file with Git or configuration management.
+The file is read-only in many deployments (`:ro`). Then saving fails with a clear error and nothing changes. Set `config_editor: false` if you manage the file with Git or configuration management; unset, the editor is also on until the first-run setup is done or skipped.
 
 ### Exchanges view
 
@@ -511,6 +511,8 @@ The smoke step "UI settings sections smoke" in the docker job loads the page thr
 
 ## Setup wizard
 
+**First run (#416).** With `http.config_editor` unset, a fresh install needs no config edit: the editor and wizard are on for an admin while the first-run setup is pending, and only with sign-in (never with auth off). After the generated password is changed, the Overview sends the admin to `/settings.html#wizard`. Setup ends when an admin saves a config through the editor or wizard, or presses Skip setup (`POST /api/setup/skip`); the state is the file `first-run-setup-done` next to the storage file. From the next start the old default applies: the editor is off unless `http.config_editor: true`. `http.config_editor: false` keeps it off from the first start; `true` keeps it on and never redirects. With storage that has no file, setup is pending on every start. The wizard still writes `mode: observe` and inject is not a step.
+
 `/settings.html` walks four steps, the last optional (#106, #130). `POST /api/config/wizard` renders a config from them and writes nothing. The result opens in the editor for review, and you save it like any other edit.
 
 1. Edge session: ASN, an IPv4 router ID, and the edge address. The session is learn-only iBGP.
@@ -539,7 +541,7 @@ A fresh file is rendered as follows. Over an existing file, `announcer`, `http.l
 - a `static` source only when a prefix was given, and a `flow` source only when the flow step was used. Over an existing file this list replaces `sources`, so it can be empty; `removes` counts what is lost;
 - `packeteer_community` `<asn>:666` when the ASN fits in 16 bits.
 
-There is no field for a password, a community string, or any other secret. Those stay in environment variables. The page checks each step before continuing, and the server checks the whole body again with `config.Parse`. The wizard is part of the editor: it is off (`404`) unless `http.config_editor` is on. Turning inject on afterwards is a separate edit; follow the [inject checklist](CONFIG.md#inject-checklist).
+There is no field for a password, a community string, or any other secret. Those stay in environment variables. The page checks each step before continuing, and the server checks the whole body again with `config.Parse`. The wizard is part of the editor: it is off (`404`) unless `http.config_editor` is on or the first-run setup is pending. Turning inject on afterwards is a separate edit; follow the [inject checklist](CONFIG.md#inject-checklist).
 
 ## Custom dashboards
 
@@ -640,7 +642,7 @@ The graphs (#129) are read-only and need no rollback. Delete a `timeseries` widg
 
 The mitigation form and the inbound and anomaly sections (#131) are UI and API only and add no config key: revert the change to drop them, or remove the rules in the YAML (a restart withdraws every Packeteer route first, and mitigation rules are in memory, so they also go with a restart). The form sections and the wizard's flow step (#130) are UI and API only and add no config key: revert the change to drop them, or delete the `flow`, `vip`, and `outage` sources and the `rules` policies from the YAML (a restart withdraws every Packeteer route first). A file the form wrote is an ordinary config file that an older build loads unchanged.
 
-Remove `improvement_weights`, `http.config_editor`, and `report_subscriptions` and restart. The dashboard polish (#49) needs no rollback: it reads the same state, and `/api/overview` is read-only. The file config works exactly as before; the editor only ever wrote a plain YAML file. Stored dashboards stay in the database and are ignored by an older build. The display fixes (#171) are presentation only: revert that change to restore the previous chip, titles, timestamps, and unlabeled provider fields. The shell (#170) is presentation only as well: revert it to put every section back on `/`.
+Remove `improvement_weights`, `http.config_editor`, and `report_subscriptions` and restart. To undo the first-run setup state (#416), set `http.config_editor: false`, or delete `first-run-setup-done` to see the setup again. The dashboard polish (#49) needs no rollback: it reads the same state, and `/api/overview` is read-only. The file config works exactly as before; the editor only ever wrote a plain YAML file. Stored dashboards stay in the database and are ignored by an older build. The display fixes (#171) are presentation only: revert that change to restore the previous chip, titles, timestamps, and unlabeled provider fields. The shell (#170) is presentation only as well: revert it to put every section back on `/`.
 
 The System page (#184) is UI and API only and adds no config key; revert it to drop the page, the tile, and `/api/system`. The result hooks it adds (notifier delivery, storage write, BMP session) only record.
 

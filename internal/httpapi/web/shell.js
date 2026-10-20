@@ -118,6 +118,14 @@ function shellMarkCurrent() {
   }
 }
 
+// shellSetupRedirect sends an admin from the overview to the setup wizard
+// while the first-run setup is pending (#416). Other pages stay reachable.
+function shellSetupRedirect(me) {
+  if (me && me.setup_pending && document.body.getAttribute("data-page") === "overview") {
+    window.location.replace("/settings.html#wizard");
+  }
+}
+
 // Settings and Admin are admin pages. With role-based auth, a lower role
 // does not see them in the nav. A deep link to Admin shows the same 403
 // text the dashboard uses. Settings keeps its own editor message.
@@ -126,6 +134,7 @@ function shellApplyMe(me) {
   var rbac = me && me.auth === "rbac";
   var admin = !rbac || me.role === "admin";
   shellAdmin = admin;
+  shellSetupRedirect(me);
   var gated = document.querySelectorAll("[data-min-role='admin']");
   for (var i = 0; i < gated.length; i++) gated[i].hidden = !admin;
   var who = document.getElementById("account-who");

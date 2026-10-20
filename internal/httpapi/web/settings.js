@@ -2261,6 +2261,26 @@ function setWizardConfigured(on) {
   byId("wz-confirm").hidden = true;
 }
 
+// skipSetup ends the first-run setup without saving a config (#416).
+function skipSetup() {
+  var btn = byId("setup-skip-btn");
+  btn.disabled = true;
+  return api("POST", "/api/setup/skip").then(function () {
+    byId("setup-skip").hidden = true;
+    byId("wz-status").textContent = "Setup skipped. The editor turns off at the next start unless http.config_editor is true.";
+  }, function (err) {
+    btn.disabled = false;
+    byId("wz-status").textContent = explain(err);
+  });
+}
+
+function loadSetupSkip() {
+  byId("setup-skip-btn").addEventListener("click", skipSetup);
+  api("GET", "/api/me").then(function (me) {
+    byId("setup-skip").hidden = !(me && me.setup_pending);
+  }, function () {});
+}
+
 var wzPending = null;
 
 // showWizardConfirm holds the generated config back until the operator has
@@ -2455,6 +2475,7 @@ byId("fm-mode").addEventListener("change", refreshInjectBox);
 byId("pv-run").addEventListener("click", previewConfig);
 byId("bar-preview").addEventListener("click", previewConfig);
 bindStaticChecks();
+loadSetupSkip();
 loadConfig();
 renderSubs();
 

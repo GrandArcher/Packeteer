@@ -383,10 +383,11 @@ type HTTP struct {
 	// included.
 	AllowFrom []string `yaml:"allow_from"`
 	// ConfigEditor lets an admin read, validate, and write this config
-	// file through the API and the UI (#34). Default false. Writes need
-	// auth or the basic-auth account. Online keys apply on the write
-	// (#128); the rest take effect on restart.
-	ConfigEditor bool `yaml:"config_editor"`
+	// file through the API and the UI (#34). Writes need auth or the
+	// basic-auth account. Online keys apply on the write (#128); the rest
+	// take effect on restart. Nil (unset) turns it on only while the
+	// first-run setup is pending (#416); false or true is explicit.
+	ConfigEditor *bool `yaml:"config_editor"`
 }
 
 // HTTPListen is the address to bind, or "" when the server is disabled.

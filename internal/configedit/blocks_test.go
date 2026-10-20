@@ -427,7 +427,7 @@ func TestBlocksHTTP(t *testing.T) {
 		f.Blocks["http"]["allow_from"] = []string{"127.0.0.0/8", "192.0.2.0/24", "2001:db8::/32"}
 		f.Blocks["http"]["listen"] = "localhost:9090"
 	})
-	if len(cfg.HTTP.AllowFrom) != 3 || *cfg.HTTP.Listen != "localhost:9090" || !cfg.HTTP.ConfigEditor {
+	if len(cfg.HTTP.AllowFrom) != 3 || *cfg.HTTP.Listen != "localhost:9090" || cfg.HTTP.ConfigEditor == nil || !*cfg.HTTP.ConfigEditor {
 		t.Fatalf("http = %+v\n%s", cfg.HTTP, out)
 	}
 	off, _ := editBlocks(t, func(f *Form) {

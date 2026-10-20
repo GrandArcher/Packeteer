@@ -75,14 +75,15 @@ func usageReader(plugins *pluginhost.Set) httpapi.UsageReader {
 }
 
 // newConfigEditor returns the editor for the mounted file when
-// http.config_editor is on. A candidate passes the same steps as a start:
+// http.config_editor is on, or unset while the first-run setup is pending
+// (#416). A candidate passes the same steps as a start:
 // config.Parse, the runtime environment, and preflight (every plugin's
 // config and the cross-checks), with plugins built check-only: no exec
 // plugin command runs. A candidate that adds or changes an exec plugin or
 // plugin_dir is refused: which programs the controller runs is set by
 // the mounted file only, not through the API. Nothing is started.
-func newConfigEditor(cfg *config.Config, path string, getenv func(string) string, httpUser string) (*configedit.Editor, error) {
-	if !cfg.HTTP.ConfigEditor {
+func newConfigEditor(cfg *config.Config, path string, getenv func(string) string, httpUser string, setupPending bool) (*configedit.Editor, error) {
+	if !editorEnabled(cfg, httpUser, setupPending) {
 		return nil, nil
 	}
 	check := func(data []byte) (*config.Config, error) {

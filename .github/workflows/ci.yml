@@ -214,11 +214,30 @@ jobs:
           test "$(code -u "admin:$pw" "$base/api/overview")" = 401
           curl -fsS -u "admin:$new" "$base/api/overview" | jq -e '.mode == "observe" and .auth == "rbac"'
           docker exec pksec test ! -e "$file"
+          # First-run setup (#416): the stock file has providers and no
+          # http.config_editor, yet the signed-in admin is sent to the wizard
+          # and the editor is on, with no config edit.
+          curl -fsS -u "admin:$new" "$base/api/me" | jq -e '.role == "admin" and .setup_pending == true'
+          curl -fsS -u "admin:$new" "$base/api/config" | jq -e '.configured == true'
+          curl -fsS -u "admin:$new" "$base/settings.html" | grep -qF 'id="setup-skip"'
+          curl -fsS -u "admin:$new" -H 'Content-Type: application/json' -d '{"asn":64512,"router_id":"192.0.2.10","edge":"192.0.2.254","providers":[{"name":"transit-a","source_ip":"192.0.2.11","next_hop":"192.0.2.1"}]}' \
+            "$base/api/config/wizard" | jq -e '.mode == "observe"'
+          docker logs pksec 2>&1 | grep -qF 'first-run setup is pending'
           # A restart keeps the chosen password and generates nothing new.
+          # Setup is still pending: nothing was saved and nothing skipped.
           docker restart -t 15 pksec
           up
-          curl -fsS -u "admin:$new" "$base/api/me" | jq -e '.user == "admin" and (.must_change // false) == false'
+          curl -fsS -u "admin:$new" "$base/api/me" | jq -e '.user == "admin" and (.must_change // false) == false and .setup_pending == true'
           test "$(docker logs pksec 2>&1 | grep -c 'generated admin password')" = 1
+          # Skip setup ends it: the marker is on the volume and, after a
+          # restart, the editor is off again (the old default).
+          test "$(code -X POST -u "admin:$new" "$base/api/setup/skip")" = 200
+          curl -fsS -u "admin:$new" "$base/api/me" | jq -e '(.setup_pending // false) == false'
+          docker exec pksec test -e /var/lib/packeteer/first-run-setup-done
+          docker restart -t 15 pksec
+          up
+          curl -fsS -u "admin:$new" "$base/api/me" | jq -e '(.setup_pending // false) == false'
+          test "$(code -u "admin:$new" "$base/api/config")" = 404
           docker stop -t 15 pksec
           test "$(docker inspect -f '{{.State.ExitCode}}' pksec)" = "0"
           docker rm pksec

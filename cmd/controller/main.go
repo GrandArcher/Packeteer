@@ -336,7 +336,11 @@ func run(ctx context.Context, args []string, getenv func(string) string, stdout,
 		if len(cfg.HTTP.AllowFrom) > 0 {
 			fmt.Fprintf(stdout, "http allow_from: %s\n", strings.Join(cfg.HTTP.AllowFrom, ","))
 		}
-		if cfg.HTTP.ConfigEditor {
+		switch {
+		case !editorEnabled(cfg, httpUser, newFirstRun(plugins).Pending()):
+		case cfg.HTTP.ConfigEditor == nil:
+			fmt.Fprintln(stdout, "http config_editor: on until first-run setup is done (admin only; save a config or skip setup in the dashboard)")
+		default:
 			fmt.Fprintln(stdout, "http config_editor: on (admin only; writes this file after the start checks; online keys apply on save, the rest on restart)")
 		}
 	}
@@ -532,16 +536,22 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 	if subs != nil {
 		subsAPI = subs
 	}
-	editor, eerr := newConfigEditor(cfg, path, getenv, httpUser)
+	setup := newFirstRun(plugins)
+	editor, eerr := newConfigEditor(cfg, path, getenv, httpUser, setup.Pending())
 	if eerr != nil {
 		log.Error("refusing to start", "err", eerr)
 		return 1
 	}
 	var editorAPI httpapi.ConfigEditor
+	var firstRunAPI httpapi.FirstRun
 	if editor != nil {
 		editorAPI = editor
 		if httpUser == "" && authSvc == nil {
 			log.Warn("http.config_editor is on but neither auth nor basic auth is: the editor stays off")
+		}
+		if cfg.HTTP.ConfigEditor == nil {
+			editorAPI, firstRunAPI = setupEditor{ConfigEditor: editor, state: setup, log: log}, setup
+			log.Info("first-run setup is pending: the config editor and wizard are on for an admin until a config is saved or setup is skipped")
 		}
 	}
 	var fedPush httpapi.FederationPusher
@@ -560,7 +570,7 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 			Auth: authSvc, Audit: audit, Events: evlog, AllowFrom: cfg.HTTPAllowFrom(),
 			Maintenance: maint, Reports: reports, Tools: tools, Inbound: inboundStatus, Mitigation: mitAPI, Anomaly: anomAPI, Leaks: leakAPI,
 			Federation: fed.status, FederationPush: fedPush, HA: haStatus,
-			ConfigEditor: editorAPI, Dashboards: dashboardStore(plugins), Subscriptions: subsAPI,
+			ConfigEditor: editorAPI, FirstRun: firstRunAPI, Dashboards: dashboardStore(plugins), Subscriptions: subsAPI,
 			Setup: setupInfo(cfg, plugins), Upgrade: upgradeAPI, Linkouts: linkout.New(cfg.Linkouts),
 			System: systemFacts(plugins, &sysEngine, health), Usage: usageReader(plugins),
 		})

@@ -181,7 +181,7 @@ func newPushPOP(t *testing.T, p *pushPKI, name, other string, audit *memAudit) *
 		t.Fatal(err)
 	}
 	pop.running = cfg
-	pop.editor, err = newConfigEditor(cfg, pop.path, noEnv, "")
+	pop.editor, err = newConfigEditor(cfg, pop.path, noEnv, "", false)
 	if err != nil {
 		t.Fatal(err)
 	}

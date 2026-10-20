@@ -26,7 +26,7 @@ report_subscriptions:
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !cfg.HTTP.ConfigEditor {
+	if cfg.HTTP.ConfigEditor == nil || !*cfg.HTTP.ConfigEditor {
 		t.Fatal("config_editor not read")
 	}
 	s := cfg.ReportSubscriptions

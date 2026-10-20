@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/GrandArcher/Packeteer/internal/auth"
 	"github.com/GrandArcher/Packeteer/internal/commitview"
 	"github.com/GrandArcher/Packeteer/internal/configedit"
 	"github.com/GrandArcher/Packeteer/internal/history"
@@ -37,6 +38,13 @@ type ConfigEditor interface {
 	Check(data []byte) configedit.Result
 	Preview(data []byte) (configedit.Preview, error)
 	Save(data []byte, base string, confirmInject bool) (configedit.File, configedit.Result, error)
+}
+
+// FirstRun is the persisted first-run setup state (#416). Setup is pending
+// until a config is saved through the editor or Complete is called.
+type FirstRun interface {
+	Pending() bool
+	Complete() error
 }
 
 // Subscriptions is the report subscription scheduler.
@@ -86,6 +94,27 @@ func (s *Server) editorOn(w http.ResponseWriter) bool {
 		return false
 	}
 	return true
+}
+
+// setupPendingFor is true when the caller is an admin on an instance whose
+// editor is on only for the first-run setup, and setup is still pending.
+func (s *Server) setupPendingFor(p auth.Principal) bool {
+	return s.firstRun != nil && s.writesEnabled() && !p.MustChange && p.Role.Allows(plugin.RoleAdmin) && s.firstRun.Pending()
+}
+
+// handleSetupSkip ends the first-run setup without saving a config. The
+// editor stays on until the next start; a restart then applies the
+// default (off unless http.config_editor is true).
+func (s *Server) handleSetupSkip(w http.ResponseWriter, r *http.Request) {
+	if s.firstRun == nil || !s.writesEnabled() {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "first-run setup is not pending on this instance"})
+		return
+	}
+	if err := s.firstRun.Complete(); err != nil {
+		s.log.Warn("first-run setup: cannot write the marker file; setup shows again after a restart", "err", err)
+	}
+	noteAudit(r, "setup", "first-run setup skipped")
+	writeJSON(w, http.StatusOK, map[string]bool{"pending": false})
 }
 
 func (s *Server) handleConfig(w http.ResponseWriter, _ *http.Request) {
