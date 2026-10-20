@@ -22,6 +22,7 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -74,6 +75,9 @@ type Options struct {
 	// Federation is the central view of every instance (#30). Nil means
 	// the instance runs standalone.
 	Federation func() federation.Status
+	// FederationPush pushes config sections to the federation peers
+	// (#137). Nil when federation or the config editor is off.
+	FederationPush FederationPusher
 	// HA is the active/standby elector's view (#31). Nil means a single
 	// instance, always active.
 	HA func() plugin.ElectorStatus
@@ -121,6 +125,7 @@ type Server struct {
 	anomaly    func() anomaly.Status
 	leaks      LeakControl
 	federation func() federation.Status
+	fedPush    FederationPusher
 	ha         func() plugin.ElectorStatus
 	editor     ConfigEditor
 	dashboards plugin.DashboardStore
@@ -200,7 +205,7 @@ func New(opt Options) (*Server, error) {
 	if opt.Logger == nil {
 		opt.Logger = slog.Default()
 	}
-	s := &Server{addr: opt.Addr, user: opt.User, password: opt.Password, auth: opt.Auth, audit: opt.Audit, events: opt.Events, allowFrom: opt.AllowFrom, snap: opt.Snapshot, maint: opt.Maintenance, reports: opt.Reports, tools: opt.Tools, inbound: opt.Inbound, mitigation: opt.Mitigation, anomaly: opt.Anomaly, leaks: opt.Leaks, federation: opt.Federation, ha: opt.HA,
+	s := &Server{addr: opt.Addr, user: opt.User, password: opt.Password, auth: opt.Auth, audit: opt.Audit, events: opt.Events, allowFrom: opt.AllowFrom, snap: opt.Snapshot, maint: opt.Maintenance, reports: opt.Reports, tools: opt.Tools, inbound: opt.Inbound, mitigation: opt.Mitigation, anomaly: opt.Anomaly, leaks: opt.Leaks, federation: opt.Federation, fedPush: opt.FederationPush, ha: opt.HA,
 		editor: opt.ConfigEditor, dashboards: opt.Dashboards, subs: opt.Subscriptions, upgrade: opt.Upgrade, log: opt.Logger}
 	setup := opt.Setup
 	s.setup.Store(&setup)
@@ -465,7 +470,47 @@ func (s *Server) handleFederation(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, struct {
 		meta
 		federation.Status
-	}{meta: snap.meta(), Status: st})
+		// PushEnabled tells the dashboard that an admin can push settings.
+		PushEnabled bool `json:"push_enabled"`
+	}{meta: snap.meta(), Status: st, PushEnabled: s.fedPush != nil && s.writesEnabled()})
+}
+
+// FederationPusher pushes the named config sections of this instance's
+// file to the named federation peers (all peers when none are named) and
+// reports each peer's answer (#137).
+type FederationPusher func(ctx context.Context, sections, peers []string) (federation.PushReport, error)
+
+type fedPushRequest struct {
+	Sections []string `json:"sections"`
+	Peers    []string `json:"peers"`
+}
+
+// handleFederationPush sends this instance's thresholds or policies to
+// the peers. Each peer validates them like a local PUT /api/config and
+// applies them online; one that refuses reports why. It is admin only and
+// audited here and on each peer. It never pushes mode, the allowlist, or
+// the announcer, and it announces nothing.
+func (s *Server) handleFederationPush(w http.ResponseWriter, r *http.Request) {
+	if s.fedPush == nil || !s.writesEnabled() {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "settings push needs federation, http.config_editor, and auth or basic auth"})
+		return
+	}
+	var req fedPushRequest
+	if !decodeLarge(w, r, &req, 1<<14) {
+		return
+	}
+	rep, err := s.fedPush(r.Context(), req.Sections, req.Peers)
+	if err != nil {
+		noteAudit(r, "federation", "settings push refused: "+err.Error())
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	var detail []string
+	for _, p := range rep.Peers {
+		detail = append(detail, p.Peer+"="+p.Status)
+	}
+	noteAudit(r, "federation", "push "+strings.Join(rep.Sections, ",")+" to "+strings.Join(detail, " "))
+	writeJSON(w, http.StatusOK, rep)
 }
 
 // handleInbound serves inbound optimization: the steers (announced in

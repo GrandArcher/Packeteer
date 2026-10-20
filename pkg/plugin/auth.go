@@ -86,7 +86,7 @@ type AuditRecord struct {
 	Time   time.Time `json:"time"`
 	Actor  string    `json:"actor"`
 	Role   Role      `json:"role,omitempty"`
-	Method string    `json:"method"` // password, token, sso, basic, system
+	Method string    `json:"method"` // password, token, sso, basic, system, federation
 	Remote string    `json:"remote,omitempty"`
 	Action string    `json:"action"` // e.g. "POST /api/mitigations"
 	Target string    `json:"target,omitempty"`

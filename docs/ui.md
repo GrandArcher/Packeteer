@@ -35,7 +35,7 @@ Every page has the same chrome (#170). The mode banner is the first thing on the
 
 | Page | URL | What is on it |
 |---|---|---|
-| Overview | `/` | Tiles, setup checklist, optional features, and POPs when federation is on |
+| Overview | `/` | Tiles, setup checklist, optional features, and POPs when federation is on (an admin also gets Push settings to peers there, [multi-pop.md](multi-pop.md#pushing-settings)) |
 | Dashboards | `/dashboards.html` | Custom dashboards (the existing page) |
 | Improvements | `/improvements.html` | Recommended or active improvements |
 | Prefixes & ASNs | `/prefixes.html` | The measured-prefix table, one page at a time, and the ASN map ([below](#prefix-list)) |
