@@ -38,6 +38,11 @@ function load(href) {
     f.style.cssText = "position:absolute;left:-10000px;top:0;border:0;width:" + W + "px;height:" + H + "px";
     f.src = href;
     f.onload = function () {
+      // A phone's scrollbar overlays the page. Headless Chrome gives a long
+      // page a 15 px classic one, which narrows the layout to 375 px and
+      // can wrap the banner onto an extra line with the CI runner's fonts.
+      // A <style> element would be blocked by the page's style-src 'self'.
+      f.contentDocument.documentElement.style.scrollbarWidth = "none";
       var tries = 0;
       var poll = setInterval(function () {
         var d = f.contentDocument;
