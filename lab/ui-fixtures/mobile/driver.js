@@ -1,6 +1,6 @@
 "use strict";
-// Page driver for the phone-width smoke test (#352). Headless Chrome cannot
-// be told a phone width reliably, so each nav page is loaded in a 390x844
+// Page driver for the phone-width smoke test (#352). Headless Chrome will not
+// open a window narrower than 500 px, so each nav page is loaded in a 390x844
 // iframe and measured there: the iframe gets its own media queries. The
 // checks per page are that the nav links are behind the Menu button, the
 // first content (the h1, or the notice above it) starts within 150 px, and the page has no sideways
@@ -112,7 +112,7 @@ function health(f) {
     range.selectNodeContents(cell);
     var box = range.getBoundingClientRect();
     var seen = box.left >= 0 && box.right <= w.innerWidth && cell.scrollWidth <= cell.clientWidth + 1;
-    out.push(name.textContent + "=" + cell.textContent.replace(/^Health: /, "") + " " + (seen ? "whole" : "clipped"));
+    out.push(name.textContent + "=" + cell.textContent + " " + (seen ? "whole" : "clipped"));
   }
   return "health: " + rows.length + " rows | " + out.join(" ; ");
 }
