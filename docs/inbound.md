@@ -23,7 +23,7 @@ A commit steer is released once the provider's inbound 95th is at or below `rele
 Steering changes the traffic the commit trigger measures: moving inbound traffic off a provider brings its 95th under commit, releasing it brings the traffic back, and an undamped controller flips the edge every hold time. `inbound.damping` (on by default) stops that:
 
 - **confirm** (default `1m`): a trigger must hold this long before a provider is steered, so a single noisy round never changes the edge.
-- **backoff** (default `2`) and **max_hold** (default 8 × `hold_time`): a provider steered again within `max_hold` of its release is flapping. Each flap multiplies its hold time, and the cooldown after it, by `backoff`, up to `max_hold`. A provider left alone for `max_hold` starts over.
+- **backoff** (default `2`) and **max_hold** (default 8 x `hold_time`): a provider steered again within `max_hold` of its release is flapping. Each flap multiplies its hold time, and the cooldown after it, by `backoff`, up to `max_hold`. A provider left alone for `max_hold` starts over.
 - **inertia**: when a commit steer flaps, Packeteer learns how much inbound traffic came back on the release (the 95th at the new steer minus the 95th at the release; `inertia_mbps` on `/api/inbound`). The steer is then released only when the 95th plus that amount is at or below `release_pct`, that is, when demand itself has dropped. `/api/inbound` lists the steer under `blocked` with an `inertia` reason while it would otherwise have been released.
 
 The unit simulation (`internal/inbound/damping_test.go`) runs a day of one-minute rounds on a simulated network where steering moves 200 Mbps between providers: undamped it makes about 140 steer/release changes, damped it makes four (steer, release, damped steer, release when demand falls). One-minute performance noise makes about 290 undamped and none damped. The FRR lab checks the damped re-steer on the transits.
@@ -96,7 +96,7 @@ route-map to-transit-b permit 20
  set comm-list strip-to-transit-b delete
 ```
 
-Strip communities with **one standard list per transit** that names every value Packeteer and the other transits' catalogs can send. FRR keeps only the last `set comm-list … delete` in a route-map entry, so two separate delete lines strip only the second list and Packeteer's communities leak to the transit.
+Strip communities with **one standard list per transit** that names every value Packeteer and the other transits' catalogs can send. FRR keeps only the last `set comm-list ... delete` in a route-map entry, so two separate delete lines strip only the second list and Packeteer's communities leak to the transit.
 
 The edge must also advertise the prefix to Packeteer with a next hop that is not one of its own addresses (the lab rewrites it), or rewrite the next hop on import, because Packeteer re-announces the learned next hop.
 

@@ -4,9 +4,9 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 
 ## [Unreleased]
 
-### Changed
+## [0.8.0] - Unreleased
 
-- Sign-in is on by default, upgrades included, so `/metrics` without a token gets 401; opt out with `auth.enabled: false` (#328).
+Internet exchanges and shared measurements: IXP observe-only mode, RPKI labels, probe multiplexing, settings forms, the opt-in herd, and sign-in on by default.
 
 ### Added
 
@@ -32,6 +32,12 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 - RPKI origin validation: an opt-in `rpki` block reads an RTR server, labels learned paths valid/invalid/notfound/unknown, and `avoid_invalid` refuses a new steer onto an invalid path (#158).
 - Probe-path check: a TTL-1 probe from each provider's `source_ip` must leave through `next_hop`; a mismatch marks it down with reason `probe path mismatch`; `path_check: false` opts out (#150).
 - BMP exchange peer session monitor: `exchange.peer_up`/`peer_down` with the decoded reason (Cease subcode 1), Adj-RIB-In count as `adj_rib_in` and a metric, and `exchange.max_prefix` warnings (#147).
+- Herd design: an IXP vantage kind (proposal, not implemented) and the cost answer, in docs/design/herd.md (#87).
+
+### Changed
+
+- Sign-in is on by default, upgrades included, so `/metrics` without a token gets 401; opt out with `auth.enabled: false` (#328).
+- Build and dependencies: Docker build image golang 1.27-alpine, go-jose 4.1.6, maxminddb 2.8.0 (#355, #357, #358).
 
 ### Fixed
 
@@ -45,11 +51,23 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 - Provider health follows measurements: no reply or loss at `probe.down_loss_pct` is down, at `probe.degraded_loss_pct` degraded; "no reply" replaces 0.0 ms (#343).
 - BMP exchange peer monitor: a stats report no longer marks a peer up, state is kept per router and peer, and an unknown peer-down reason reads `unknown reason N` (#338).
 - Fabric probes read Can Ping from the customers document (`use` ping templates, GET /admin/api/v4/nagios/customers/{vlan}/4|6) and skip a manager export with no successful list (#162).
-- Fabric probes stop using a Can Ping list older than three intervals after failed fetches, so opted-out members are not pinged (#336).
-- IX-F import rejects an IPv4-mapped prefix on an IPv6 LAN, a percent-encoded API key in the manager URL, and a switch id from another IXP (#161).
 - RTR Serial Notify uses the client's last serial, Error Report code 2 keeps the cache and retries, and an empty RPKI source is skipped (#158).
 - RTR applies a serial delta only at End of Data and ignores Serial Notify during any response; RPKI labels a provider by all its learned paths; the System row matches cache use (#158).
+- The `TestPrefixCapBatchEviction` time budget is race-aware, so the CI `race` job no longer times out (#397).
+
+### Security
+
 - IX-F member view drops the URL query string, and fetch errors no longer include the request URL; `key_expires` and `fetched` are omitted when unset (#337).
+- Fabric probes stop using a Can Ping list older than three intervals after failed fetches, so opted-out members are not pinged (#336).
+- IX-F import rejects an IPv4-mapped prefix on an IPv6 LAN, a percent-encoded API key in the manager URL, and a switch id from another IXP (#161).
+
+### Upgrade notes
+
+- Sign-in is now on for every install, upgrades included: tokenless scrapers and API clients (`/metrics`, `/api/*`) get 401 until given a token; `auth: {enabled: false}` turns it off (#328).
+- No config key was removed or renamed since 0.7.0.
+- The probe-path check is on by default; opt out per provider with `path_check: false` or for all with `probe.path_check.enabled: false` (#150).
+- `provider.down`, `provider.degraded`, and `bgp.session_not_established` events reach every notifier that has no `events` filter (#347, #343).
+- `herd`, `ixp`, `rpki`, and `exchanges[].port` are off unless you add the block (the default stays `mode: observe`).
 
 ## [0.7.0] - 2026-10-15
 
@@ -81,7 +99,7 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 
 ## [0.6.0] - 2026-10-13
 
-Sixth release: gaps found in the 2026-10-07 review of prefix selection, measurement, and the UI (#113–#132, #145–#146, #170–#183), plus hardening (#217, #223, #226, #228, #233, #234, #240) and upgrade from the UI (#196). Probe targeting and qualification, switch thresholds with confirm rounds, scale limits up to multi-million path tables, flap quarantine, live apply for core, inbound and mitigation settings, a UI shell with pages per area and full settings forms, a manual probe, and a failure-mode e2e matrix across every injection surface. Lab-proven only, against simulated routers in CI with documentation prefixes and private ASNs, not on a public edge. Safety rules are unchanged: the default stays `mode: observe`, an announcement still needs the exact prefix in the learned RIB, the allowlist, the configured community and NO_EXPORT, the improvement cap, and hold time. The opt-in synthesized more-specific block (#122) is not part of this release.
+Sixth release: gaps found in the 2026-10-07 review of prefix selection, measurement, and the UI (#113-#132, #145-#146, #170-#183), plus hardening (#217, #223, #226, #228, #233, #234, #240) and upgrade from the UI (#196). Probe targeting and qualification, switch thresholds with confirm rounds, scale limits up to multi-million path tables, flap quarantine, live apply for core, inbound and mitigation settings, a UI shell with pages per area and full settings forms, a manual probe, and a failure-mode e2e matrix across every injection surface. Lab-proven only, against simulated routers in CI with documentation prefixes and private ASNs, not on a public edge. Safety rules are unchanged: the default stays `mode: observe`, an announcement still needs the exact prefix in the learned RIB, the allowlist, the configured community and NO_EXPORT, the improvement cap, and hold time. The opt-in synthesized more-specific block (#122) is not part of this release.
 
 ### Added
 
@@ -169,7 +187,7 @@ Sixth release: gaps found in the 2026-10-07 review of prefix selection, measurem
 
 ## [0.5.0] - 2026-10-01
 
-Fifth release: hardening and polish (#49–#53). UI/UX polish so a first run is readable (mode banner, overview tiles, setup checklist, empty and error states); install and walkthrough docs that CI runs (single-container quickstart, observe → suggest → inject on a simulated edge, troubleshooting, MikroTik/FRR/Junos/Cisco router guides); load and soak budgets under a full-table synthetic RIB, a fix for flow ingest when that window is full, and an RSS growth check that does not treat a Go heap refill as a leak; a MikroTik CHR lab in QEMU on CI runners; and a scheduled router interop matrix (FRR, BIRD 2/3, and GoBGP edges against iBGP, add-path, and BMP, plus CHR). Lab-proven only, against simulated routers in CI with documentation prefixes and private ASNs, not on a public edge. Safety rules are unchanged: the default stays `mode: observe`, an announcement still needs the exact prefix in the learned RIB, the allowlist, the configured community and NO_EXPORT, the improvement cap, and hold time, and CI still proves announce, withdraw, and crash-withdraw. Field feedback from real observe-mode deployments (#54) is still open.
+Fifth release: hardening and polish (#49-#53). UI/UX polish so a first run is readable (mode banner, overview tiles, setup checklist, empty and error states); install and walkthrough docs that CI runs (single-container quickstart, observe -> suggest -> inject on a simulated edge, troubleshooting, MikroTik/FRR/Junos/Cisco router guides); load and soak budgets under a full-table synthetic RIB, a fix for flow ingest when that window is full, and an RSS growth check that does not treat a Go heap refill as a leak; a MikroTik CHR lab in QEMU on CI runners; and a scheduled router interop matrix (FRR, BIRD 2/3, and GoBGP edges against iBGP, add-path, and BMP, plus CHR). Lab-proven only, against simulated routers in CI with documentation prefixes and private ASNs, not on a public edge. Safety rules are unchanged: the default stays `mode: observe`, an announcement still needs the exact prefix in the learned RIB, the allowlist, the configured community and NO_EXPORT, the improvement cap, and hold time, and CI still proves announce, withdraw, and crash-withdraw. Field feedback from real observe-mode deployments (#54) is still open.
 
 ### Added
 
@@ -186,7 +204,7 @@ Fifth release: hardening and polish (#49–#53). UI/UX polish so a first run is 
 
 ## [0.4.0] - 2026-09-30
 
-Fourth release: the v0.4 milestone (#30–#34). Multi-POP federation with routing domains, inter-DC RTT, global commit, and a central view; active/standby HA with a lease elector plus config and history backup/restore; user accounts, RBAC, API tokens, access restriction, an audit log, and OIDC SSO for the ops API; flow-baseline anomaly (DDoS) detection that alerts by default and mitigates only through explicit rules and the existing mitigation controller; and the remaining UI features (improvement weights, a validated config editor and first-run wizard, custom dashboards, email report subscriptions). The BGP-facing parts are lab-proven against FRR/GoBGP in CI with documentation prefixes and private ASNs, not on a public edge. The default stays `mode: observe`; every new block is off unless configured, and a remote-POP steer, an HA takeover, or a detector rule still needs the exact prefix in the learned RIB, the allowlist, the community + NO_EXPORT, the cap, and hold time. CI still proves announce, withdraw, and crash-withdraw.
+Fourth release: the v0.4 milestone (#30-#34). Multi-POP federation with routing domains, inter-DC RTT, global commit, and a central view; active/standby HA with a lease elector plus config and history backup/restore; user accounts, RBAC, API tokens, access restriction, an audit log, and OIDC SSO for the ops API; flow-baseline anomaly (DDoS) detection that alerts by default and mitigates only through explicit rules and the existing mitigation controller; and the remaining UI features (improvement weights, a validated config editor and first-run wizard, custom dashboards, email report subscriptions). The BGP-facing parts are lab-proven against FRR/GoBGP in CI with documentation prefixes and private ASNs, not on a public edge. The default stays `mode: observe`; every new block is off unless configured, and a remote-POP steer, an HA takeover, or a detector rule still needs the exact prefix in the learned RIB, the allowlist, the community + NO_EXPORT, the cap, and hold time. CI still proves announce, withdraw, and crash-withdraw.
 
 ### Added
 
@@ -198,7 +216,7 @@ Fourth release: the v0.4 milestone (#30–#34). Multi-POP federation with routin
 
 ## [0.3.0] - 2026-09-29
 
-Third release: the v0.3 milestone (#25–#29, #56). Inbound commit control and performance steering (prepends, provider TE communities, selective announcements), a BMP monitoring station and BGP add-path receive, multiple edge routers, route reflectors, and IX peers with per-peer next hop, threat mitigation (RTBH, BGP redirect, FlowSpec drop/rate-limit/redirect, country policies), transit traffic classification, and more-specific injection with a route cap. Everything here is lab-proven against FRR/GoBGP in CI with documentation prefixes and private ASNs, not on a public edge. The default stays `mode: observe`; inbound and mitigation have their own `mode` (default `observe`), and `more_specific` is off by default and only announces more-specifics learned exactly in the RIB. CI still proves announce, withdraw, and crash-withdraw.
+Third release: the v0.3 milestone (#25-#29, #56). Inbound commit control and performance steering (prepends, provider TE communities, selective announcements), a BMP monitoring station and BGP add-path receive, multiple edge routers, route reflectors, and IX peers with per-peer next hop, threat mitigation (RTBH, BGP redirect, FlowSpec drop/rate-limit/redirect, country policies), transit traffic classification, and more-specific injection with a route cap. Everything here is lab-proven against FRR/GoBGP in CI with documentation prefixes and private ASNs, not on a public edge. The default stays `mode: observe`; inbound and mitigation have their own `mode` (default `observe`), and `more_specific` is off by default and only announces more-specifics learned exactly in the RIB. CI still proves announce, withdraw, and crash-withdraw.
 
 ### Added
 
@@ -215,7 +233,7 @@ Third release: the v0.3 milestone (#25–#29, #56). Inbound commit control and p
 
 ## [0.2.0] - 2026-09-28
 
-Second release: the v0.2 milestone (#15–#24). More probing (UDP, traceroute discovery, retry, outage detection), SNMP telemetry and 95th-percentile commit control, cost-aware routing, routing policies and maintenance windows, passive problem detection, alerts, reports and history, and read-only troubleshooting tools. The default stays `mode: observe`; every new capability is off unless configured, and injection still requires the learned RIB, the allowlist, the community, the cap, and hold time. CI still proves announce, withdraw, and crash-withdraw against FRR with documentation prefixes.
+Second release: the v0.2 milestone (#15-#24). More probing (UDP, traceroute discovery, retry, outage detection), SNMP telemetry and 95th-percentile commit control, cost-aware routing, routing policies and maintenance windows, passive problem detection, alerts, reports and history, and read-only troubleshooting tools. The default stays `mode: observe`; every new capability is off unless configured, and injection still requires the learned RIB, the allowlist, the community, the cap, and hold time. CI still proves announce, withdraw, and crash-withdraw against FRR with documentation prefixes.
 
 ### Added
 
@@ -271,5 +289,11 @@ First release. An observe-first BGP path performance controller in one container
 - Communities are RFC 1997 (two 16-bit integers). `router_id` is IPv4.
 - RouterOS, Junos, and IOS snippets are documentation. The automated BGP test is the FRR lab.
 
+[Unreleased]: https://github.com/GrandArcher/Packeteer/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/GrandArcher/Packeteer/compare/v0.6.0...v0.7.0
+[0.6.0]: https://github.com/GrandArcher/Packeteer/compare/v0.5.0...v0.6.0
+[0.5.0]: https://github.com/GrandArcher/Packeteer/compare/v0.4.0...v0.5.0
+[0.4.0]: https://github.com/GrandArcher/Packeteer/compare/v0.3.0...v0.4.0
+[0.3.0]: https://github.com/GrandArcher/Packeteer/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/GrandArcher/Packeteer/releases/tag/v0.2.0
 [0.1.0]: https://github.com/GrandArcher/Packeteer/releases/tag/v0.1.0

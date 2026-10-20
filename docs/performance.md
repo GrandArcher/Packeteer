@@ -21,19 +21,19 @@ The budgets live in [lab/soak/budgets.yaml](../lab/soak/budgets.yaml) and are se
 
 | Figure | What it is | `pr` (every PR, 10 min) | `soak` (weekly, 5h30m) |
 |---|---|---|---|
-| Full table learned | Session open to `packeteer_rib_prefixes` = the profile's prefixes (72 s per million) | ≤ 90 s | ≤ 90 s |
-| Peak RSS | `VmHWM` of the process, learning included (4915.2 MiB per million on `pr`, 5324.8 on `soak`) | ≤ 6144 MiB | ≤ 6656 MiB |
-| RSS growth | Median RSS over the second half of the post-warmup soak, minus the median RSS during warmup (3 min / 15 min). Warmup is the baseline, so a later dip and refill toward that level is not growth | ≤ 384 MiB | ≤ 512 MiB |
-| RSS still rising | RSS climb at the end of the run (#112): the smaller of the Theil-Sen slope over the last third times that third, and the median of the last sixth minus the median of the middle third. Both must show a climb, so a step or a dip and refill is not read as a leak | ≤ 192 MiB | ≤ 192 MiB |
-| Average CPU | CPU seconds over wall time in the soak phase | ≤ 2.0 cores | ≤ 2.0 cores |
-| OS threads | Most seen | ≤ 64 | ≤ 64 |
-| Flow datagrams dropped | Host UDP `RcvbufErrors` over datagrams received, soak phase | ≤ 5 % | ≤ 5 % |
-| API p99 latency | `GET /metrics` and `GET /api/overview` while loaded | ≤ 1500 ms | ≤ 2000 ms |
-| Reconverge | Last churned batch back to a whole RIB view | ≤ 30 s | ≤ 30 s |
-| SIGTERM to exit | `docker stop` to process gone | ≤ 20 s | ≤ 20 s |
-| Prefixes measured | `/api/overview` `counts.measured` at the end | ≥ 2500 | ≥ 2500 |
-| Active prefixes per hour | Increase in `packeteer_probe_prefix_commits` after warmup, scaled to one hour (#125). A prefix counts once per round that stored it | ≥ 180000 | ≥ 180000 |
-| Passive prefixes tracked | Last `packeteer_flow_prefixes_tracked` (#125). HyperLogLog of the flow window, including prefixes the 20,000 exact cells did not keep | ≥ 50000 | ≥ 50000 |
+| Full table learned | Session open to `packeteer_rib_prefixes` = the profile's prefixes (72 s per million) | <= 90 s | <= 90 s |
+| Peak RSS | `VmHWM` of the process, learning included (4915.2 MiB per million on `pr`, 5324.8 on `soak`) | <= 6144 MiB | <= 6656 MiB |
+| RSS growth | Median RSS over the second half of the post-warmup soak, minus the median RSS during warmup (3 min / 15 min). Warmup is the baseline, so a later dip and refill toward that level is not growth | <= 384 MiB | <= 512 MiB |
+| RSS still rising | RSS climb at the end of the run (#112): the smaller of the Theil-Sen slope over the last third times that third, and the median of the last sixth minus the median of the middle third. Both must show a climb, so a step or a dip and refill is not read as a leak | <= 192 MiB | <= 192 MiB |
+| Average CPU | CPU seconds over wall time in the soak phase | <= 2.0 cores | <= 2.0 cores |
+| OS threads | Most seen | <= 64 | <= 64 |
+| Flow datagrams dropped | Host UDP `RcvbufErrors` over datagrams received, soak phase | <= 5 % | <= 5 % |
+| API p99 latency | `GET /metrics` and `GET /api/overview` while loaded | <= 1500 ms | <= 2000 ms |
+| Reconverge | Last churned batch back to a whole RIB view | <= 30 s | <= 30 s |
+| SIGTERM to exit | `docker stop` to process gone | <= 20 s | <= 20 s |
+| Prefixes measured | `/api/overview` `counts.measured` at the end | >= 2500 | >= 2500 |
+| Active prefixes per hour | Increase in `packeteer_probe_prefix_commits` after warmup, scaled to one hour (#125). A prefix counts once per round that stored it | >= 180000 | >= 180000 |
+| Passive prefixes tracked | Last `packeteer_flow_prefixes_tracked` (#125). HyperLogLog of the flow window, including prefixes the 20,000 exact cells did not keep | >= 50000 | >= 50000 |
 
 `rss_growth_mb_per_mprefix` is 307.2 on `pr` (384 MiB at 1.25M) and 409.6 on `soak` (512 MiB). #125 does not re-baseline it. The sketch is 4 KiB per flow bucket, about 120 KiB for the 5-minute window (30 buckets), which does not move that RSS figure. #112 stays open.
 
@@ -41,9 +41,9 @@ A run prints the table with the measured values, adds it to the GitHub job summa
 
 Measured on an 8-core development machine with the `pr` workload and a 4-minute soak: full table learned in 18 s (4.5 cores while learning), peak RSS 4530 MiB, RSS growth 0.3 MiB, 0.72 cores average, 14 threads, 1.8 % flow datagrams dropped, API p99 240 ms, reconverge 0.07 s, SIGTERM to exit 7.8 s, 3000 prefixes measured. Most of the memory is the learned table: about 1.7 KB of live heap per prefix (GoBGP's Adj-RIB-In plus the view), and the Go collector lets the heap grow to about twice that between collections.
 
-On the nine `pr` runs on GitHub-hosted `ubuntu-latest` through 2026-10-01, end RSS stayed in a 4609–4818 MiB band and peak RSS stayed between 4869 and 5353 (all under 6144). Go returns unused pages with `MADV_DONTNEED`, so RSS falls after a collection and climbs back over the next minutes. The previous growth check compared medians of the first and last tenth after warmup, about 35 seconds each, which is shorter than that cycle. Actions run 36902639588 (the push of #96 to `main`) sat in a valley for that first tenth (baseline 4476 MiB) and on the refilled heap for the last (4818), and failed at 342 MiB.
+On the nine `pr` runs on GitHub-hosted `ubuntu-latest` through 2026-10-01, end RSS stayed in a 4609-4818 MiB band and peak RSS stayed between 4869 and 5353 (all under 6144). Go returns unused pages with `MADV_DONTNEED`, so RSS falls after a collection and climbs back over the next minutes. The previous growth check compared medians of the first and last tenth after warmup, about 35 seconds each, which is shorter than that cycle. Actions run 36902639588 (the push of #96 to `main`) sat in a valley for that first tenth (baseline 4476 MiB) and on the refilled heap for the last (4818), and failed at 342 MiB.
 
-Replaying each run's per-sample RSS log (printed to the nearest MiB) with the rule above gives 97 MiB on that run (warmup median 4619, second-half median 4716) and at most 146 MiB across the nine. On 2026-10-07 the same figure on green `main` runs was 0, 176, and 191 MiB (ends 4806–4863 MiB, peaks 4954–5100). Actions run 37698413398 measured 258 MiB (warmup median 4590, second-half median 4849, peak 4967). RSS on that run fell from 4966 to 4827 over the last three minutes and stayed there, and the absolute end matched the green runs, so the extra was where the scavenger cycle sat relative to warmup.
+Replaying each run's per-sample RSS log (printed to the nearest MiB) with the rule above gives 97 MiB on that run (warmup median 4619, second-half median 4716) and at most 146 MiB across the nine. On 2026-10-07 the same figure on green `main` runs was 0, 176, and 191 MiB (ends 4806-4863 MiB, peaks 4954-5100). Actions run 37698413398 measured 258 MiB (warmup median 4590, second-half median 4849, peak 4967). RSS on that run fell from 4966 to 4827 over the last three minutes and stayed there, and the absolute end matched the green runs, so the extra was where the scavenger cycle sat relative to warmup.
 
 The `pr` budget is 384 MiB: above that sample, and still under the 400 MiB sustained rise the growth test rejects. Peak RSS is unchanged, the weekly soak budget stays 512, and the `load` job still runs this check.
 

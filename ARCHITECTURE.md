@@ -30,7 +30,7 @@ flow/SPAN/SNMP/static prefix list
   - a native exit from the RIB (exact prefix)
   - usable, fresh measurements for the native provider and the candidate
   - a gain beyond `thresholds` (loss delta, or equal-or-better loss plus an RTT delta of at least `min_rtt_delta_ms` and, when `min_rtt_delta_pct` is set, that percent of the current path's RTT), and a lower score. A new performance move, and a switch onto a better provider, also needs `thresholds.confirm_rounds` consecutive fresh wins (default 1; a stale round does not count, a miss resets the streak including a switch off a commit or cost steer, those wins count during hold time, early probes wait a quarter of the prefix interval, a round that cannot compare does not keep the prober awake, flip-back does not wait)
-  - room under `max_improvements` (biggest performance gains win, then biggest commit relief; equal relief breaks by prefix; a new performance move displaces the smallest commit steer). With the scorer's `improvement_weights` (#34), static, VIP, and performance moves inside their lane are admitted by `performance × gain + volume × Mbps` instead; weights never admit a move that failed another check and never displace an active improvement
+  - room under `max_improvements` (biggest performance gains win, then biggest commit relief; equal relief breaks by prefix; a new performance move displaces the smallest commit steer). With the scorer's `improvement_weights` (#34), static, VIP, and performance moves inside their lane are admitted by `performance x gain + volume x Mbps` instead; weights never admit a move that failed another check and never displace an active improvement
   - no active cooldown
   - in inject mode, an allowlisted prefix
 
@@ -54,22 +54,22 @@ flow/SPAN/SNMP/static prefix list
 Every component above sits behind a small interface in `pkg/plugin`, selected by `type` in config: probers, target sources, scorer, routing policies, announcer (router driver), notifiers, telemetry, and storage. Built-ins register through `init()` under `internal/plugins/<kind>/<name>`. `internal/pluginhost` builds and validates the configured set at startup and runs its Start/Stop lifecycle. Out-of-process `exec` plugins (JSON over stdin/stdout) and the `webhook` notifier extend the stock container without recompiling. Events from the catalog ([docs/EVENTS.md](docs/EVENTS.md)) go through `internal/notify`, which gives each notifier its own bounded queue, filter, and rate limit, so a slow notifier never delays probing, decisions, or withdrawals. Announcers are in-process only. Telemetry does not announce. See [docs/PLUGINS.md](docs/PLUGINS.md).
 
 ```
-config ──> pluginhost.Build ──> sources ─┐
-                                probers ─┼─> core (stats, RIB view, decisions) ─> announcer
-                                scorer  ─┤                       └──> notifiers
-                               policies ─┘
-                                telemetry ─> read-only API and metrics (no announce)
-                    probe results + decisions ─> history ─> storage ─> /api/reports (no announce)
-        peer snapshots (mTLS) ─> federation ─> merged paths + global commit ─> core (no announce)
-        shared lease ─> elector ─> active? ─> gates decisions and every announcer (no announce)
+config --> pluginhost.Build --> sources -+
+                                probers -+-> core (stats, RIB view, decisions) -> announcer
+                                scorer  -+                       +--> notifiers
+                               policies -+
+                                telemetry -> read-only API and metrics (no announce)
+                    probe results + decisions -> history -> storage -> /api/reports (no announce)
+        peer snapshots (mTLS) -> federation -> merged paths + global commit -> core (no announce)
+        shared lease -> elector -> active? -> gates decisions and every announcer (no announce)
 ```
 
 ## Modes
 
-- `observe` — probe and score, write decisions to logs, metrics, and the read-only API, announce nothing
-- `suggest` — same as observe, plus a decision feed (file/API)
-- `inject` — announce allowlisted improvements
+- `observe` - probe and score, write decisions to logs, metrics, and the read-only API, announce nothing
+- `suggest` - same as observe, plus a decision feed (file/API)
+- `inject` - announce allowlisted improvements
 
-## Out of scope for M0–M3
+## Out of scope for M0-M3
 
 FlowSpec (the second half of #28). Outbound commit control is the optional `commit` scorer.

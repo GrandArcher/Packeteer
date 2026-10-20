@@ -4,7 +4,7 @@ Herd (#260, [design](design/herd.md)) lets a few operators share what their prob
 
 Peers come from `herd.peers` and, optionally, a public hub list ([herd-hub.md](herd-hub.md)).
 
-Not in phase 1: peer exchange, RPKI identity, the crowd threshold, probe hints, and route-visibility warnings.
+Not in phase 1: peer exchange, RPKI identity, the crowd threshold, probe hints, route-visibility warnings, and the IXP vantage kind (a proposal in the [design](design/herd.md), #87).
 
 ## What leaves the box
 

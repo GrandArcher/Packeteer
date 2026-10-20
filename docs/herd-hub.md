@@ -1,6 +1,6 @@
 # Herd hub
 
-The hub (#261) is a public repository that lists herd servers. A node fetches the list over HTTPS and uses it as its seed and bootstrap source for [herd](herd.md). The hub never holds measurements. Each entry is signed with one of its own node keys and checked by the node, but the signature only shows the entry was not altered: anyone can sign an entry with a key they made. The hub is therefore trusted to decide which keys become peers of every node and which ASN each claims (see Trust).
+The hub (#261) is a public repository that lists herd servers. The repository `GrandArcher/packeteer-herd` is not live unless it exists when the release is tagged, and the list built into the image is empty, so a node has no hub peers until you set `herd.hub.url` to a hub that exists. A node fetches the list over HTTPS and uses it as its seed and bootstrap source for [herd](herd.md). The hub never holds measurements. Each entry is signed with one of its own node keys and checked by the node, but the signature only shows the entry was not altered: anyone can sign an entry with a key they made. The hub is therefore trusted to decide which keys become peers of every node and which ASN each claims (see Trust).
 
 ## Node side
 

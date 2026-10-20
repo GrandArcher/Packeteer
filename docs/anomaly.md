@@ -5,7 +5,7 @@ Lab-proven only (#33). It has not been run on a public edge.
 Packeteer can watch flow data for traffic floods and, when you tell it to, answer them with a [threat mitigation](mitigation.md) rule (RTBH, redirect, or FlowSpec).
 
 - **Baselines.** The `flow` source counts bytes per destination prefix and IP protocol. Every `anomaly.interval` (default 10s) the controller turns the counter deltas into rates and hands them to the detector plugin. The built-in `baseline` detector keeps an exponentially weighted mean and variance for each key.
-- **Detection.** A round is anomalous when the rate is at least `min_mbps`, at least `min_ratio` × the mean, and more than `sensitivity` standard deviations above the mean, once the key has learned for `warmup` rounds; or, with `max_mbps` set, when the rate reaches that ceiling. An anomaly opens after `trigger_rounds` anomalous rounds and clears after `clear_rounds` normal rounds. Anomalous rounds are not learned, so a long attack does not become the baseline.
+- **Detection.** A round is anomalous when the rate is at least `min_mbps`, at least `min_ratio` x the mean, and more than `sensitivity` standard deviations above the mean, once the key has learned for `warmup` rounds; or, with `max_mbps` set, when the rate reaches that ceiling. An anomaly opens after `trigger_rounds` anomalous rounds and clears after `clear_rounds` normal rounds. Anomalous rounds are not learned, so a long attack does not become the baseline.
 - **Alerts.** Every anomaly is logged, listed on `GET /api/anomalies` with a feed of the last 200 changes, sent to the notifiers as `anomaly.*` events ([EVENTS.md](EVENTS.md)), and stored as history with a storage plugin.
 - **Actions only by explicit rule.** An anomaly becomes a mitigation rule only when one of `anomaly.rules` matches it: the destination is inside the rule's `prefixes`, the protocol is one of its `protocols`, and the rate is at least its `min_mbps`. With no rule, or no match, nothing is announced.
 
@@ -59,7 +59,7 @@ anomaly:
       ttl: 30m
 ```
 
-Every key is in [CONFIG.md](CONFIG.md#anomaly). Tuning: raise `sensitivity` and `min_ratio` to fire less often; set `min_mbps` above your normal per-prefix peaks; `warmup` × `interval` is how long a new key learns (5 minutes by default). A key that is idle has a baseline near zero, so any rate over `min_mbps` on it fires once it has learned.
+Every key is in [CONFIG.md](CONFIG.md#anomaly). Tuning: raise `sensitivity` and `min_ratio` to fire less often; set `min_mbps` above your normal per-prefix peaks; `warmup` x `interval` is how long a new key learns (5 minutes by default). A key that is idle has a baseline near zero, so any rate over `min_mbps` on it fires once it has learned.
 
 ## API
 

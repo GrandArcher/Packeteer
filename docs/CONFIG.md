@@ -28,7 +28,7 @@ The image entrypoint is the same binary. Flags go after the image name.
 | `ixp` | absent | no | Exchange-operator mode (#160). `ixp: {}` refuses inject, announcer, mitigation, inbound, synthesize, and more_specific. Optional `members` imports an IX-F list, `routeservers` polls Birdseye, and `correlate` tells a fabric problem from a member problem; none announces (#161, #164, #163). No `bgp.neighbors` required. See [`ixp`](#ixp). |
 | `asn` | none | yes, non-zero | BGP ASN of this speaker. Neighbors are iBGP in this ASN. |
 | `router_id` | none | yes | IPv4 address. IPv6 is rejected. |
-| `packeteer_community` | empty | inject | Standard community `asn:value` (each half 0–65535) or a large community `global:data1:data2` (RFC 8092, each part 0–4294967295). Quote it in YAML (`"64512:666"`). The export policy matches only this community. A two-part value above 16 bits is rejected; write a 4-byte ASN as a large community (`"70000:1:0"`). |
+| `packeteer_community` | empty | inject | Standard community `asn:value` (each half 0-65535) or a large community `global:data1:data2` (RFC 8092, each part 0-4294967295). Quote it in YAML (`"64512:666"`). The export policy matches only this community. A two-part value above 16 bits is rejected; write a 4-byte ASN as a large community (`"70000:1:0"`). |
 | `local_pref` | 0 | inject | Local preference on an injected route when no cause or provider override is set. `0` is rejected in inject mode. Set it above the edge's native local preference. See [`local_pref_cause`](#local_pref_cause). |
 | `communities_cause` | none | no | Extra outbound communities per improvement cause (#132). Added after `packeteer_community`. See [`communities_cause`](#communities_cause). |
 | `more_specific_bits` | unset | must be absent | Any value, including `0`, is an error. Packeteer announces the exact prefix it learned from the RIB. |
@@ -36,7 +36,7 @@ The image entrypoint is the same binary. Flags go after the image name.
 | `rpki` | off | no | Shared RPKI origin validation (#158): read the operator's RTR server and label each learned path's origin valid, invalid, not found, or unknown. `avoid_invalid` refuses a new improvement onto an invalid path. Never announces and never changes the learned RIB. See [`rpki`](#rpki). Not on a public edge. |
 | `instance` | `domain` | no | This instance's name in a federation (#30). Peers expect it in its snapshot. Letters, digits, `_`, `.`, `-`, at most 64 characters. See [Multi-POP](#multi-pop-federation). |
 | `domain` | empty | with `federation` | This instance's routing domain (POP). Empty is a standalone instance. |
-| `inter_dc_rtt` | empty | per remote domain | Map of domain to round-trip time from this POP (for example `pop-b: 12ms`), 0–10s. Added to every path a peer in that domain measured. |
+| `inter_dc_rtt` | empty | per remote domain | Map of domain to round-trip time from this POP (for example `pop-b: 12ms`), 0-10s. Added to every path a peer in that domain measured. |
 | `global_commit` | empty | no | Commits shared by providers in several domains. Needs `federation`. See [Multi-POP](#multi-pop-federation). |
 | `federation` | none | no | The instance-to-instance transport plugin, one object: `type: mtls`. See [Federation `mtls`](#federation-mtls). Omitted runs the instance standalone. |
 | `ha` | none | no | Active/standby elector (#31), one object: `type: lease`. Only the active instance of the pair announces. Needs `bgp.neighbors`. See [High availability](#high-availability-ha) and [Elector `lease`](#elector-lease). Omitted runs a single instance, always active. Lab-proven only. |
@@ -97,7 +97,7 @@ local_pref_cause:
 
 Optional. Extra outbound communities per improvement cause (#132). They are added to `packeteer_community`, then a provider's `communities` are added. They do not replace it, and the export policy matches only `packeteer_community`. An improvement with an empty cause uses `performance`. An omitted cause adds none. An unknown key is rejected.
 
-Each entry is a standard community (`asn:value`, each half 0–65535) or a large community (`global:data1:data2`, RFC 8092, each part 0–4294967295). A list holds at most 16. Empty strings, duplicates (after canonical form, so `64512:0100` is `64512:100`), a value equal to `packeteer_community`, and well-known standard communities (`0:x` and `65535:x`, including NO_EXPORT and BLACKHOLE) are rejected. `packeteer_community` itself may be one of those well-known values. A two-part value above 16 bits is rejected. Leading zeros are rewritten to canonical decimal text. These keys do not change which prefix Decide announces or withdraws. A cause change on a route already on the wire replaces that route. A learned more-specific uses its improvement's community list. Changing this block requires a restart.
+Each entry is a standard community (`asn:value`, each half 0-65535) or a large community (`global:data1:data2`, RFC 8092, each part 0-4294967295). A list holds at most 16. Empty strings, duplicates (after canonical form, so `64512:0100` is `64512:100`), a value equal to `packeteer_community`, and well-known standard communities (`0:x` and `65535:x`, including NO_EXPORT and BLACKHOLE) are rejected. `packeteer_community` itself may be one of those well-known values. A two-part value above 16 bits is rejected. Leading zeros are rewritten to canonical decimal text. These keys do not change which prefix Decide announces or withdraws. A cause change on a route already on the wire replaces that route. A learned more-specific uses its improvement's community list. Changing this block requires a restart.
 
 | Key | Default |
 |---|---|
@@ -133,10 +133,10 @@ A start and an end are logged (`flap quarantine started`, `flap quarantine relea
 
 | Key | Default | Bounds |
 |---|---|---|
-| `min_loss_delta_pct` | 0 | 0–100. Inject requires a value greater than 0. |
+| `min_loss_delta_pct` | 0 | 0-100. Inject requires a value greater than 0. |
 | `min_rtt_delta_ms` | 0 | Not negative. Inject requires a value greater than 0. |
-| `min_rtt_delta_pct` | 0 | 0–100. 0 is off. Not required for inject. |
-| `confirm_rounds` | 1 | 1–100. Omitted or 0 means 1. Not required for inject. |
+| `min_rtt_delta_pct` | 0 | 0-100. 0 is off. Not required for inject. |
+| `confirm_rounds` | 1 | 1-100. Omitted or 0 means 1. Not required for inject. |
 
 A candidate wins when its score is lower and either loss improves by at least `min_loss_delta_pct`, or loss is no worse and average RTT improves by at least `min_rtt_delta_ms`. A loss win does not use `min_rtt_delta_pct`. When `min_rtt_delta_pct` is greater than 0, an RTT win must also be at least that percent of the current path's RTT; both the milliseconds and the percent have to be true. If `min_rtt_delta_ms` is 0, an RTT win never fires.
 
@@ -156,9 +156,9 @@ While the streak is short and this evaluation compared the paths, that prefix is
 | `domain` | no | Routing domain (POP) the provider exits in (#30). Empty or equal to the top-level `domain` is local. A provider in another domain is not probed here: the peer there measures it. Needs `federation` and an `inter_dc_rtt` entry for the domain; `bmp` and `add_path` do not apply. |
 | `exclude` | no | `true`: still probe, never select for an improvement. |
 | `group` | no | Load-balancing group. Empty means the provider is not in a group. Letters, digits, `_`, `.`, `-`, at most 64 characters, starting with a letter or digit. |
-| `precedence` | no | Commit-control preference. Lower is preferred. `0` or omitted means 100. 0–10000. The highest precedence among providers that can take commit traffic is the last resort. |
+| `precedence` | no | Commit-control preference. Lower is preferred. `0` or omitted means 100. 0-10000. The highest precedence among providers that can take commit traffic is the last resort. |
 | `cc_disable` | no | `true`: leave this provider out of commit control in both directions. Performance improvements can still select it. |
-| `cost` | no | Price per Mbps, 0–1000000000, in one currency across all providers. Omitted means no cost: the `cost` scorer never moves a prefix onto this provider or off it for price. Improvements between two priced providers carry `cost_delta` and `est_savings` on `/api/improvements`. |
+| `cost` | no | Price per Mbps, 0-1000000000, in one currency across all providers. Omitted means no cost: the `cost` scorer never moves a prefix onto this provider or off it for price. Improvements between two priced providers carry `cost_delta` and `est_savings` on `/api/improvements`. |
 | `bmp` | no | How this provider uses paths from `rib_sources` (BMP): `off` (default), `prefer`, or `only`. `prefer` and `only` need a `rib_sources` entry. See [RIB source `bmp`](#rib-source-bmp). |
 | `add_path` | no | `true`: apply the route check to this provider from the iBGP add-path paths. Needs a `bgp.neighbors` entry with `add_path: true`. Not allowed with `bmp: only`. See [Add-path](#add-path). |
 | `path_check` | no | First-hop probe-path check (#150). `true` or omitted checks; `false` opts out. See [`probe.path_check`](#probepath_check). |
@@ -171,7 +171,7 @@ While the streak is short and this evaluation compared the paths, that prefix is
 |---|---|
 | `prefixes` | CIDRs with no host bits. Duplicates are errors. |
 
-A learned prefix is eligible when it is equal to an entry or more specific and inside it. Packeteer still announces that learned prefix, not a prefix it invented. An entry of `198.51.100.0/24` allows `198.51.100.0/24` and `198.51.100.128/25` when the router advertised that exact prefix. It does not allow `198.51.0.0/16`. An entry that overlaps any `exchanges[].lans` prefix is a load error in every mode, including `observe`: equal to the LAN, more specific and inside it, or a supernet that contains it. Adjacent prefixes do not overlap.
+A learned prefix is eligible when it is equal to an entry or more specific and inside it. Packeteer still announces that learned prefix, not a prefix it invented. An entry of `198.51.100.0/24` allows `198.51.100.0/24` and `198.51.100.128/25` when the router advertised that exact prefix. It does not allow a shorter prefix that covers the entry. An entry that overlaps any `exchanges[].lans` prefix is a load error in every mode, including `observe`: equal to the LAN, more specific and inside it, or a supernet that contains it. Adjacent prefixes do not overlap.
 
 ### `probe`
 
@@ -179,18 +179,18 @@ A learned prefix is eligible when it is equal to an entry or more specific and i
 |---|---|---|
 | `interval` | `30s` | Greater than `timeout`. Also the period of the staleness check. |
 | `timeout` | `2s` | Per packet. Must be shorter than `interval`. |
-| `packets` | 10 | 1–1000. |
-| `workers` | 8 | 1–1024 concurrent probe runs. |
-| `rate_limit_pps` | 100 | 1–100000 packets per second, global. |
-| `per_target_concurrency` | 2 | 1–64 concurrent runs toward one destination host. |
-| `retry_loss_pct` | 0 | 0–100. `0` disables loss retry. Above zero, a sample whose loss is at least this percent is probed again before it is stored. |
-| `retry_packets` | 0 | 0–1000. Packet count of that second probe. When `retry_loss_pct` or `dispersion_ms` is set and this is `0`, it becomes three times `packets`, capped at 1000. A value set while both of those are `0` does not run a second probe and does not extend the staleness window. |
-| `min_replies` | 1 | 1–1000. `0` uses the default. A host qualifies only with at least this many replies. Fewer replies drop it from the score the way a silent host does. They do not start a retry. |
-| `dispersion_ms` | 0 | 0–600000 milliseconds. `0` disables the spread check. Otherwise a host qualifies only when its RTT spread (the slowest reply minus the fastest, not a standard deviation) is at most this. A spread equal to the limit qualifies. One reply has a spread of zero. A wider spread drops the host the way a silent host does and probes the prefix again with `retry_packets`. |
+| `packets` | 10 | 1-1000. |
+| `workers` | 8 | 1-1024 concurrent probe runs. |
+| `rate_limit_pps` | 100 | 1-100000 packets per second, global. |
+| `per_target_concurrency` | 2 | 1-64 concurrent runs toward one destination host. |
+| `retry_loss_pct` | 0 | 0-100. `0` disables loss retry. Above zero, a sample whose loss is at least this percent is probed again before it is stored. |
+| `retry_packets` | 0 | 0-1000. Packet count of that second probe. When `retry_loss_pct` or `dispersion_ms` is set and this is `0`, it becomes three times `packets`, capped at 1000. A value set while both of those are `0` does not run a second probe and does not extend the staleness window. |
+| `min_replies` | 1 | 1-1000. `0` uses the default. A host qualifies only with at least this many replies. Fewer replies drop it from the score the way a silent host does. They do not start a retry. |
+| `dispersion_ms` | 0 | 0-600000 milliseconds. `0` disables the spread check. Otherwise a host qualifies only when its RTT spread (the slowest reply minus the fastest, not a standard deviation) is at most this. A spread equal to the limit qualifies. One reply has a spread of zero. A wider spread drops the host the way a silent host does and probes the prefix again with `retry_packets`. |
 | `degraded_loss_pct` | 5 | Greater than 0, at most `down_loss_pct`. `0` uses the default. A provider whose mean loss over its measured prefixes is at least this shows `degraded` on the dashboard (#343). A probe that errored counts as 100% loss. Label only: no decision uses it. |
 | `down_loss_pct` | 50 | At most 100. `0` uses the default. At or above this mean loss a provider shows `down`; a provider that got no reply on any prefix is always `down`. |
-| `prober_recheck_rounds` | 10 | 1–10000. `0` uses the default. Probe 1, 11, 21, … of a host starts at the first prober when this is 10. `1` starts every probe at the first prober. |
-| `prober_memory` | 100000 | 1–1000000 hosts. `0` uses the default. Least recently probed hosts are dropped past the cap. |
+| `prober_recheck_rounds` | 10 | 1-10000. `0` uses the default. Probe 1, 11, 21, ... of a host starts at the first prober when this is 10. `1` starts every probe at the first prober. |
+| `prober_memory` | 100000 | 1-1000000 hosts. `0` uses the default. Least recently probed hosts are dropped past the cap. |
 | `indirect` | off | Per-provider indirect probing for silent prefixes (#123). See [`probe.indirect`](#probeindirect). |
 | `path_check` | on | First-hop probe-path check per provider (#150). See [`probe.path_check`](#probepath_check). |
 
@@ -206,7 +206,7 @@ Due prefixes are ordered urgent first (a confirm streak, or a source that marked
 
 The retry sample replaces the first one. It runs when loss is at least `retry_loss_pct`, or when any host's RTT spread is over `dispersion_ms`. Too few replies do not start it. It runs once. Both waits go through `rate_limit_pps`.
 
-The engine remembers, per destination host, the prober that got a reply and starts the next round there (#120). The chain then moves forward: a later prober runs when the remembered one errors or gets no replies. Earlier probers run when the probe number of that host modulo `prober_recheck_rounds` is 1 (the 1st, 11th, 21st, … measurement at the default of 10), so a host that begins answering ICMP is noticed. Every provider shares that memory, and the rounds compare them with one probe type. When providers in one round first get replies from different probers, the later prober in the chain is remembered.
+The engine remembers, per destination host, the prober that got a reply and starts the next round there (#120). The chain then moves forward: a later prober runs when the remembered one errors or gets no replies. Earlier probers run when the probe number of that host modulo `prober_recheck_rounds` is 1 (the 1st, 11th, 21st, ... measurement at the default of 10), so a host that begins answering ICMP is noticed. Every provider shares that memory, and the rounds compare them with one probe type. When providers in one round first get replies from different probers, the later prober in the chain is remembered.
 
 A retry (loss or dispersion) uses the same start as the sample it rechecks and does not count as another probe toward the schedule. Every prober that runs still waits on `rate_limit_pps`; a prober that is skipped sends nothing. Hosts that are no longer in the target list are dropped on the next completed round, including a round that probes nothing because nothing is due. A prefix an improvement still keeps probed keeps its host's prober. Past `prober_memory`, the least recently probed hosts are dropped and their next measurement starts at the first prober.
 
@@ -225,14 +225,14 @@ Off unless this block is present with `enabled: true`. When every address probed
 | Key | Default | Bounds |
 |---|---|---|
 | `enabled` | `false` | `true` turns it on. Omitting the block is the same as `false`. |
-| `max_hops` | 16 | 1–64. |
-| `probes` | 3 | 1–10 probes at each TTL. |
-| `min_replies` | 2 | 1–`probes`. A hop is stable when one address answers at least this many times and there is no tie. When `probes` is 1 the default is 1. |
-| `timeout` | `500ms` | `1ms`–`5s` per trace packet. |
-| `port` | 33434 | 1–65535. Destination UDP port. |
+| `max_hops` | 16 | 1-64. |
+| `probes` | 3 | 1-10 probes at each TTL. |
+| `min_replies` | 2 | 1-`probes`. A hop is stable when one address answers at least this many times and there is no tie. When `probes` is 1 the default is 1. |
+| `timeout` | `500ms` | `1ms`-`5s` per trace packet. |
+| `port` | 33434 | 1-65535. Destination UDP port. |
 | `budget` | `10s` | At least `timeout`, at most `30s`. Wall clock for one background pass across every queued trace. Each trace gets an equal share, at least `timeout`. Traces the pass did not reach stay queued. |
-| `cache_ttl` | `30m` | `1m`–`24h`. How long a hop, or a trace that found none, is reused before the prefix is traced again. |
-| `max_queue` | 1024 | 1–100000. Traces waiting for a pass. Past this, a silent prefix is asked for again on a later round. |
+| `cache_ttl` | `30m` | `1m`-`24h`. How long a hop, or a trace that found none, is reused before the prefix is traced again. |
+| `max_queue` | 1024 | 1-100000. Traces waiting for a pass. Past this, a silent prefix is asked for again on a later round. |
 
 Tracing runs in the background and never inside a probe round. A pass starts when a trace is queued, and passes are at least `probe.interval` apart. The first round that finds a prefix silent keeps the normal result (the `next_hop` or full loss); once the trace finishes, later rounds probe the cached hop with the normal prober chain and `packets`. When the hop qualifies under `min_replies` and `dispersion_ms`, it defines that provider's score, `indirect` is `true` on the probe result, `target` is the hop, and `targets` lists the silent in-prefix addresses followed by the hop. The dashboard labels that row `indirect`.
 
@@ -294,8 +294,8 @@ auth:
 | Key | Default | Meaning |
 |---|---|---|
 | `enabled` | `true` | Unset, it is `true` and `storage` defaults to `sqlite` when the HTTP server runs and `PACKETEER_HTTP_USER` is not set (#328). An explicit `true` requires `storage` (a plugin that keeps users, e.g. `sqlite`) and refuses to start with `PACKETEER_HTTP_USER` set. An explicit `false` keeps the single basic-auth account, or no sign-in at all: the rollback. It logs a warning at start and the UI shows a banner. |
-| `session_ttl` | `12h` | Lifetime of a session from the sign-in page or SSO, `5m`–`168h`. Sessions are in memory; a restart signs everyone out. |
-| `token_ttl` | `2160h` | API token lifetime when the request names none, `1h`–`8760h`. A request may ask for up to `8760h`. |
+| `session_ttl` | `12h` | Lifetime of a session from the sign-in page or SSO, `5m`-`168h`. Sessions are in memory; a restart signs everyone out. |
+| `token_ttl` | `2160h` | API token lifetime when the request names none, `1h`-`8760h`. A request may ask for up to `8760h`. |
 | `sso` | none | Single sign-on plugin entry (`type: oidc`). Needs `enabled: true`. |
 
 Roles: `viewer` reads everything a dashboard or API client reads (and manages its own API tokens), `operator` also opens and closes maintenance windows, adds and removes mitigation rules, and runs the troubleshooting tools, `admin` also manages users and reads the audit log. `/healthz`, `/readyz`, the sign-in page and endpoints, and the SSO endpoints are public. The first admin comes from `PACKETEER_ADMIN_USER` and `PACKETEER_ADMIN_PASSWORD`; without a password, the first start generates one ([auth.md](auth.md#first-run)). Auth never changes what is announced: allowlist, learned-RIB check, community, NO_EXPORT, `max_improvements`, hold time, and withdraw-on-failure are the same for every role.
@@ -304,7 +304,7 @@ Roles: `viewer` reads everything a dashboard or API client reads (and manages it
 
 | Key | Default | Meaning |
 |---|---|---|
-| `listen_port` | 0 | `0`: do not listen; Packeteer connects out. 1–65535: accept sessions. |
+| `listen_port` | 0 | `0`: do not listen; Packeteer connects out. 1-65535: accept sessions. |
 | `listen_addresses` | none | Local addresses to bind when listening. Each must be an IP address. |
 | `neighbors` | none | Edge routers, iBGP, same ASN as `asn`. Reloaded online on SIGHUP; see [Online reconfiguration](#online-reconfiguration). |
 | `as_path` | `empty` | AS path on injected routes: `empty`, `native`, or `provider`. See [AS path](#as-path). |
@@ -315,7 +315,7 @@ Each neighbor:
 | Key | Default | Meaning |
 |---|---|---|
 | `address` | required | Peer IP. Duplicates are errors. |
-| `port` | 179 | Remote TCP port. `0` means 179. 0–65535 at validation; `0` is replaced when the session is built. |
+| `port` | 179 | Remote TCP port. `0` means 179. 0-65535 at validation; `0` is replaced when the session is built. |
 | `local_address` | unset | Optional source address of the TCP session. |
 | `passive` | false | Wait for the router to connect. Requires `listen_port`. |
 | `description` | empty | Log label. |
@@ -530,11 +530,11 @@ Operator tools on the ops HTTP server (`/api/troubleshoot/...` and the dashboard
 | Key | Default | Meaning |
 |---|---|---|
 | `enabled` | `false` | Turns on the tools that send traffic or query a registry: the on-demand probe (the configured prober chain from every provider's `source_ip`) and probe and optimize, traceroute (UDP from each provider's `source_ip`, `NET_RAW` not needed), and whois. The looking glass only reads the learned RIB and is always on. |
-| `requests_per_minute` | `6` | Probe, probe and optimize, traceroute, and whois requests together, 1–600. Excess requests get `429`. Probe and optimize checks its setup (queue, learned RIB ready) first, so a refused request spends no token. |
-| `max_hops` | `30` | TTL limit for one traceroute, 1–64. One probe per hop, `probe.timeout` per hop. A trace stops early after six silent hops in a row. Each hop answer carries its `origin_as` (from the learned RIB) and, when the container's resolver has a PTR record, its `name`; the PTR lookups share a three-second limit. |
+| `requests_per_minute` | `6` | Probe, probe and optimize, traceroute, and whois requests together, 1-600. Excess requests get `429`. Probe and optimize checks its setup (queue, learned RIB ready) first, so a refused request spends no token. |
+| `max_hops` | `30` | TTL limit for one traceroute, 1-64. One probe per hop, `probe.timeout` per hop. A trace stops early after six silent hops in a row. Each hop answer carries its `origin_as` (from the learned RIB) and, when the container's resolver has a PTR record, its `name`; the PTR lookups share a three-second limit. |
 | `whois` | none | One whois plugin entry (`type: rdap`). Without it, whois answers `404`. |
 
-The probe and probe-and-optimize targets are an IP address or a hostname. A hostname is resolved through the container's resolver (five-second limit); addresses that are loopback, link-local, multicast, broadcast, or unspecified are dropped, and the first remaining address whose family a provider `source_ip` can use is probed. The answer lists every address and the one used. A provider whose probes get no reply is traced from its `source_ip` with the `probe.indirect` trace settings (the defaults when `probe.indirect` is off) and the highest stable hop is probed instead, marked `indirect`. Every indirect trace packet waits on `probe.rate_limit_pps`, the same global budget as probing, so a request that finds silent providers is paced rather than sending a burst of up to `max_hops` × `probes` packets per provider. `best` is the answering provider with the lowest score from the configured scorer; `current` is the provider of the covering learned route.
+The probe and probe-and-optimize targets are an IP address or a hostname. A hostname is resolved through the container's resolver (five-second limit); addresses that are loopback, link-local, multicast, broadcast, or unspecified are dropped, and the first remaining address whose family a provider `source_ip` can use is probed. The answer lists every address and the one used. A provider whose probes get no reply is traced from its `source_ip` with the `probe.indirect` trace settings (the defaults when `probe.indirect` is off) and the highest stable hop is probed instead, marked `indirect`. Every indirect trace packet waits on `probe.rate_limit_pps`, the same global budget as probing, so a request that finds silent providers is paced rather than sending a burst of up to `max_hops` x `probes` packets per provider. `best` is the answering provider with the lowest score from the configured scorer; `current` is the provider of the covering learned route.
 
 `POST /api/troubleshoot/optimize` takes the same target and queues the longest learned prefix that covers it (never the default route, and never a prefix the RIB view does not hold) as an urgent probe target for 10 minutes, at most 64 at once (`409` past that). The prefix is probed on the next round, then on its normal interval until the 10 minutes end; the next completed round after that drops it unless a source lists it or an improvement keeps it. Queuing changes nothing on the wire. A move still needs the decision engine's rules: exact learned prefix, allowlist (inject), `max_improvements`, thresholds, `hold_time`, and the same withdraw triggers. In `observe` the result is a recommendation. Each request is audited with the queued prefix. A prefix inside an `exchange` LAN is not probed: the request is refused with `422` (`prefix is inside an exchange LAN and is not probed`) and nothing is queued.
 
@@ -572,7 +572,7 @@ Inbound optimization (#25, lab-proven only, not on a public edge). Router setup 
 | `disabled` | `false` | `true` turns damping off: a trigger steers on the first round and every hold is `hold_time`. |
 | `confirm` | `1m` | A trigger must hold this long before the provider is steered. Not negative. |
 | `backoff` | `2` | A provider steered again within `max_hold` of its release is flapping: its hold time, and so the cooldown after it, is multiplied by this per flap. 1 to 16. |
-| `max_hold` | 8 × `hold_time` | Cap on the grown hold time, and the flap window. A provider released for longer than this starts over. Not shorter than `hold_time`. |
+| `max_hold` | 8 x `hold_time` | Cap on the grown hold time, and the flap window. A provider released for longer than this starts over. Not shorter than `hold_time`. |
 
 A commit steer that flaps also learns inertia: how much inbound traffic returned to the provider when it was released (`inertia_mbps` on `/api/inbound`). It is then released only when the inbound 95th plus that amount is at or below `release_pct`, so an unchanged demand no longer flips the edge back and forth.
 
@@ -586,9 +586,9 @@ Threat mitigation (#28, lab-proven only, not on a public edge): RTBH, BGP redire
 |---|---|---|
 | `mode` | `observe` | `observe` accepts and lists rules as a dry run and announces nothing. `inject` announces them; it also needs top-level `mode: inject`. Setting `observe` and restarting withdraws every mitigation route (rollback). |
 | `allowlist` | none | Required. The mitigation allowlist, separate from `allowlist.prefixes`: a rule's prefix must be inside one of these. A default route is rejected. A rule is announced only while the exact prefix is in the learned RIB. |
-| `max_rules` | `10` | Cap on mitigation routes held at once, announced or waiting. 1–1000. An RTBH, redirect, or FlowSpec rule counts once; a FlowSpec rule with `source_countries` counts once per source network. The announcer enforces the same cap on its routes (RTBH, redirect, and FlowSpec together). Mitigation routes do not count toward `max_improvements`. |
+| `max_rules` | `10` | Cap on mitigation routes held at once, announced or waiting. 1-1000. An RTBH, redirect, or FlowSpec rule counts once; a FlowSpec rule with `source_countries` counts once per source network. The announcer enforces the same cap on its routes (RTBH, redirect, and FlowSpec together). Mitigation routes do not count toward `max_improvements`. |
 | `default_ttl` | `1h` (or `max_ttl` when shorter) | Lifetime of a rule whose request names no `ttl`. At least 1s, at most `max_ttl`. |
-| `max_ttl` | `24h` | Longest `ttl` a request may ask for. 1s–168h. Every rule expires. |
+| `max_ttl` | `24h` | Longest `ttl` a request may ask for. 1s-168h. Every rule expires. |
 | `local_pref` | top-level `local_pref` | Local preference on mitigation routes. Keep it above the edge's native routes. |
 | `geoip_db` | none | Absolute path to a MaxMind-format country database you mount (for example `GeoLite2-Country.mmdb`). FlowSpec rules with `source_countries` need it; each country is expanded to its networks (merged where adjacent) when the rule is added. None is shipped or downloaded. Unreadable at startup: Packeteer refuses to start. |
 | `announcer` | none | `inject`: required. In-process only: `type: gobgp` (see [Mitigation announcer `gobgp`](#mitigation-announcer-gobgp)). In `observe` it is optional and only supplies the catalog (redirect targets). |
@@ -605,8 +605,8 @@ Automatic traffic anomaly (DDoS) detection (#33, lab-proven only, not on a publi
 |---|---|---|
 | `detector` | none | Required. The detector plugin, one object: `type: baseline` (see [Detector `baseline`](#detector-baseline)). In-process only. |
 | `source` | the only `flow` source | Name of the source that supplies flow counters. Required when several `flow` sources are listed. |
-| `interval` | `10s` | Detection round, `1s`–`5m`. Each round turns the flow counter deltas into rates per destination prefix and protocol. |
-| `max_actions_per_hour` | `6` | Mitigation rules the detector may add in any rolling hour, 1–1000. Past it an anomaly waits (`anomaly.held`). |
+| `interval` | `10s` | Detection round, `1s`-`5m`. Each round turns the flow counter deltas into rates per destination prefix and protocol. |
+| `max_actions_per_hour` | `6` | Mitigation rules the detector may add in any rolling hour, 1-1000. Past it an anomaly waits (`anomaly.held`). |
 | `max_active` | `4` (at most `mitigation.max_rules`) | Mitigation rules the detector holds at once, 1 to `mitigation.max_rules`. |
 | `rules` | none | Ordered; the first rule that matches an anomaly is used. No rules: detection and alerts only. At most 100. |
 
@@ -644,7 +644,7 @@ More-specific injection (#56, lab-proven only, not on a public edge). Design and
 | Key | Default | Meaning |
 |---|---|---|
 | `enabled` | `false` | `true`: an improvement on P also announces every prefix strictly inside P that a neighbor advertises exactly in the learned RIB, is inside the allowlist, and is not held by inbound steering or mitigation. Nothing is split or computed: if no neighbor advertises a more-specific inside P, only P is announced. Each route carries the improvement's provider next hop, that improvement's resolved `local_pref`, and that improvement's communities (`packeteer_community`, the cause's, the provider's) and `no-export`. |
-| `max_routes` | `100` | Cap on routes on a router: improvements, their more-specifics, and inbound steer routes. 1–1000. A new improvement is announced whole (P and all its learned more-specifics) or not at all; a more-specific learned later is added only while there is room. Nothing on the wire is withdrawn to make room. `max_improvements` still caps improvements. |
+| `max_routes` | `100` | Cap on routes on a router: improvements, their more-specifics, and inbound steer routes. 1-1000. A new improvement is announced whole (P and all its learned more-specifics) or not at all; a more-specific learned later is added only while there is room. Nothing on the wire is withdrawn to make room. `max_improvements` still caps improvements. |
 
 A more-specific is withdrawn with its improvement (flip-back, TTL, policy, P leaving the RIB), when the RIB is not ready, on shutdown, and when it really leaves the RIB: the neighbor advertised it for at least 5s while Packeteer's route was on the wire and then stopped. A shorter gap is the router hiding its own path because Packeteer's route won, and the route stays. A change needs a restart (SIGHUP refuses it). Rollback: remove the block or set `enabled: false` and restart; only improvements' own prefixes are announced again.
 
@@ -681,12 +681,12 @@ Scheduled email report subscriptions (#34). Each entry emails one stored report 
 
 | Key | Default | Meaning |
 |---|---|---|
-| `name` | none | Required, unique. 1–63 of `a-z`, `0-9`, `_`, `-`. |
+| `name` | none | Required, unique. 1-63 of `a-z`, `0-9`, `_`, `-`. |
 | `report` | none | Required. A report name from `/api/reports` (`summary`, `improvements`, `exchanges`, `causes`, `performance`, `providers`, `prefixes`, `asns`, `countries`, `probes`, `savings`, `timeseries`, `mitigations`, `anomalies`). |
 | `schedule` | none | Required. `daily`, `weekly`, or `monthly` (the 1st of the month). |
 | `at` | `06:00` | UTC time of day, `HH:MM`. |
-| `weekday` | `monday` | For `weekly` only: `monday` … `sunday`. |
-| `days` | 1, 7, or 30 | The report range, ending at the send time. 1–366. |
+| `weekday` | `monday` | For `weekly` only: `monday` ... `sunday`. |
+| `days` | 1, 7, or 30 | The report range, ending at the send time. 1-366. |
 | `notifier` | none | Required. The `name` (or `type` when unnamed) of a `notifiers` entry of type `smtp`. |
 | `to` | the notifier's `to` | Up to 50 addresses that replace the notifier's recipients for this report. |
 
@@ -825,7 +825,7 @@ Set these in the container. They are not keys in the YAML file. `PACKETEER_HTTP_
 | `PACKETEER_HTTP_USER` | Basic auth user. Set together with the password, or set neither. |
 | `PACKETEER_HTTP_PASSWORD` | Basic auth password. |
 | `PACKETEER_ADMIN_USER` | With `auth`: the first admin's name (default `admin`). |
-| `PACKETEER_ADMIN_PASSWORD` | With `auth`: creates that admin at start when no user has the name (12–256 characters). An existing user is not changed, so a password set through the API survives a restart. Not written to the log. |
+| `PACKETEER_ADMIN_PASSWORD` | With `auth`: creates that admin at start when no user has the name (12-256 characters). An existing user is not changed, so a password set through the API survives a restart. Not written to the log. |
 
 `${VAR}` expansion applies inside a webhook `url`, webhook `headers` values, and an `exec` plugin's `env` values. It is not applied to the rest of the file.
 
@@ -863,7 +863,7 @@ Built-in types are listed in [PLUGINS.md](PLUGINS.md). Their `config` keys:
 
 | Key | Default | Values |
 |---|---|---|
-| `port` | 443 | 1–65535. A SYN-ACK or a RST counts as a reply. A middlebox RST is not distinguishable from the target's RST. |
+| `port` | 443 | 1-65535. A SYN-ACK or a RST counts as a reply. A middlebox RST is not distinguishable from the target's RST. |
 | `packet_interval` | `100ms` | Not negative. |
 
 ### Prober `udp`
@@ -872,7 +872,7 @@ Not in the default chain. A UDP reply counts. An ICMP destination-unreachable co
 
 | Key | Default | Values |
 |---|---|---|
-| `port` | 33434 | 1–65535. |
+| `port` | 33434 | 1-65535. |
 | `packet_interval` | `100ms` | Not negative. |
 
 ### Prober `fixed`
@@ -892,11 +892,11 @@ Each path:
 |---|---|
 | `provider` | Required. Must match a provider `name`. Unique together with `target` and `count`. |
 | `target` | Optional IP address. Empty matches any target. Stored in canonical form. |
-| `count` | 0–1000. `0` matches any packet count. A positive value matches only a probe that asks for that many packets. |
+| `count` | 0-1000. `0` matches any packet count. A positive value matches only a probe that asks for that many packets. |
 | `sent` | Not negative. With `rtts_ms`, `0` uses the request count, then at least the number of replies. |
 | `rtt_ms` | Not negative. Not together with `rtts_ms`. |
 | `rtts_ms` | Optional reply RTTs in milliseconds, at most 1000, each not negative. One entry per reply, so a lab can set a spread. Not together with `rtt_ms` or a non-zero `loss_pct`. |
-| `loss_pct` | 0–100. |
+| `loss_pct` | 0-100. |
 | `source_down` | `true` fails that probe source closed. |
 
 At least one of `paths`, `sent` / `rtt_ms`, or `file` is required.
@@ -914,7 +914,7 @@ Each target:
 | `prefix` | Required CIDR, no host bits. Unique in the list. |
 | `host` | Optional address inside `prefix`. When set, it is the only probe target. When empty, the engine picks a few addresses in the prefix and, when it can, the provider next hop. |
 | `weight` | Optional, not negative. |
-| `mbps` | Optional, 0–100000000. Declared traffic in decimal megabits per second. The `commit` scorer reads it when this source is configured. Zero omits the prefix. |
+| `mbps` | Optional, 0-100000000. Declared traffic in decimal megabits per second. The `commit` scorer reads it when this source is configured. Zero omits the prefix. |
 
 ### Source `traceroute`
 
@@ -923,13 +923,13 @@ Off unless this source is listed. UDP traceroute toward each target. Discovery r
 | Key | Default | Bounds |
 |---|---|---|
 | `targets` | none | Required. Same shape as `static` (`prefix`, optional `host` inside it, optional `weight`). |
-| `max_hops` | 16 | 1–64. |
-| `probes` | 3 | 1–10 probes at each TTL. |
-| `min_replies` | 2 | 1–`probes`. A hop is stable when one address answers at least this many times and there is no tie. When `probes` is 1 the default is 1. |
-| `timeout` | `500ms` | Per probe, `1ns`–`5s`. Zero uses the default. |
-| `port` | 33434 | 1–65535. Destination UDP port. |
+| `max_hops` | 16 | 1-64. |
+| `probes` | 3 | 1-10 probes at each TTL. |
+| `min_replies` | 2 | 1-`probes`. A hop is stable when one address answers at least this many times and there is no tie. When `probes` is 1 the default is 1. |
+| `timeout` | `500ms` | Per probe, `1ns`-`5s`. Zero uses the default. |
+| `port` | 33434 | 1-65535. Destination UDP port. |
 | `source` | unset | Local address to bind. Empty uses the kernel's default route. Must match the targets' address family. |
-| `interval` | `5m` | `1s`–`24h`. How often discovery runs. |
+| `interval` | `5m` | `1s`-`24h`. How often discovery runs. |
 | `budget` | `10s` | At least `timeout`, at most `30s`. Wall clock for one pass across every target. Each target gets an equal share. This is under the default round deadline (about 110s). |
 
 Three silent TTLs after a stable hop stop the trace. When the configured host answers, it stays the probe host. Otherwise the stable hop with the highest TTL is used. A pass that finishes no target leaves the previous cache in place. Until the first pass finishes, the source contributes no prefixes. The socket calls are Linux-only; the container image is Linux, and other systems still compile.
@@ -943,7 +943,7 @@ Off unless this source is listed. Critical prefixes, and prefixes whose learned 
 | `interval` | none | Required, at least `1s`. Must be shorter than the staleness window (`3 * probe.interval + packets * timeout`, plus retry packets when retry is on). The controller refuses to start otherwise. Shorter than `probe.interval` is the usual setting. |
 | `prefixes` | none | CIDRs, no host bits, no default route, no duplicates. Optional `host` must sit inside the prefix. Count toward `max_targets`. |
 | `asns` | none | Non-zero ASNs, no duplicates. Matched against the learned AS path only while the RIB is ready. |
-| `max_targets` | 100 | 1–100000. Cap on configured prefixes plus ASN matches. The list is truncated and a warning is logged. The expansion is rebuilt only when the RIB changes. |
+| `max_targets` | 100 | 1-100000. Cap on configured prefixes plus ASN matches. The list is truncated and a warning is logged. The expansion is rebuilt only when the RIB changes. |
 
 At least one prefix or ASN is required. The prefix list cannot be longer than `max_targets`. A prefix that is also returned by an earlier source keeps that source's host. A later interval wins only when it is shorter than the interval already chosen, and an unset interval means `probe.interval`. Listing a transit ASN does not turn the whole table into targets.
 
@@ -963,12 +963,12 @@ The re-queue is probe targets only. An AS incident includes every learned prefix
 
 | Key | Default | Bounds |
 |---|---|---|
-| `min_prefixes` | 3 | 2–100000. Zero uses the default. One noisy prefix is not an incident. |
-| `window` | `2m` | `1s`–`24h`. Zero uses the default. |
-| `loss_pct` | 20 | 0–100. Zero uses the default of 20, so loss detection stays on. A failed probe still counts when loss is below this. |
+| `min_prefixes` | 3 | 2-100000. Zero uses the default. One noisy prefix is not an incident. |
+| `window` | `2m` | `1s`-`24h`. Zero uses the default. |
+| `loss_pct` | 20 | 0-100. Zero uses the default of 20, so loss detection stays on. A failed probe still counts when loss is below this. |
 | `rtt_ms` | 0 | Not negative. Zero disables the RTT check. A positive value also treats average RTT at or above this many milliseconds as degraded. |
-| `interval` | `5s` | `1s`–`24h`. Zero uses the default. Must be shorter than `probe.interval` and shorter than the staleness window. The controller refuses to start otherwise. |
-| `max_targets` | 100 | 1–100000. Cap on the re-queue. Truncation is logged. Degraded prefixes are kept first. |
+| `interval` | `5s` | `1s`-`24h`. Zero uses the default. Must be shorter than `probe.interval` and shorter than the staleness window. The controller refuses to start otherwise. |
+| `max_targets` | 100 | 1-100000. Cap on the re-queue. Truncation is logged. Degraded prefixes are kept first. |
 | `ignore_asns` | none | Non-zero ASNs, no duplicates. Skipped when looking for a sick ASN. |
 
 ### Source `flow`
@@ -978,22 +978,22 @@ Off unless this source is listed. NetFlow v5, NetFlow v9, IPFIX, and sFlow v5. R
 | Key | Default | Bounds |
 |---|---|---|
 | `listen` | none | Required. One `host:port` or a list. Host is an IP address or empty. Duplicate addresses are errors. |
-| `window` | `5m` | `1s`–`24h`. |
-| `top_n` | 100 | 1–100000, and at most `max_prefixes`. Priority tier, probed every `probe.interval`. |
+| `window` | `5m` | `1s`-`24h`. |
+| `top_n` | 100 | 1-100000, and at most `max_prefixes`. Priority tier, probed every `probe.interval`. |
 | `max_targets` | `top_n` | 0 matches `top_n`. Otherwise from `top_n` through 100000, and at most `max_prefixes`. Cap on the probed set. |
-| `max_prefixes` | 20000 | 1–250000 (#217). Exact prefix cells per time bucket, and anomaly counter keys. A cell the window buckets refuse or evict is counted in `packeteer_truncated_total{limit="max_prefixes"}` (counter keys are not). A cell costs about 220 bytes and a 5-minute window has 30 buckets, so the default can hold 127 MiB and 250000 about 1.5 GiB. See [performance](performance.md#limits-at-large-tables). |
+| `max_prefixes` | 20000 | 1-250000 (#217). Exact prefix cells per time bucket, and anomaly counter keys. A cell the window buckets refuse or evict is counted in `packeteer_truncated_total{limit="max_prefixes"}` (counter keys are not). A cell costs about 220 bytes and a 5-minute window has 30 buckets, so the default can hold 127 MiB and 250000 about 1.5 GiB. See [performance](performance.md#limits-at-large-tables). |
 | `min_bytes` | 0 | Absolute floor, in bytes over `window`. 0 disables this bar. |
-| `min_pct` | 0 | 0–100, in steps of 0.0001. Percent of the bytes counted in the window. 0 disables this bar. |
-| `tail_interval` | 0 | `1s`–`24h` when set. Required when `max_targets` is greater than `top_n`. Must be longer than `probe.interval` and shorter than the staleness window. |
-| `aggregate_v4` | 24 | 1–32. Used when the RIB has no covering non-default prefix. |
-| `aggregate_v6` | 48 | 1–128. |
+| `min_pct` | 0 | 0-100, in steps of 0.0001. Percent of the bytes counted in the window. 0 disables this bar. |
+| `tail_interval` | 0 | `1s`-`24h` when set. Required when `max_targets` is greater than `top_n`. Must be longer than `probe.interval` and shorter than the staleness window. |
+| `aggregate_v4` | 24 | 1-32. Used when the RIB has no covering non-default prefix. |
+| `aggregate_v6` | 48 | 1-128. |
 | `exclude` | none | CIDRs to ignore, no host bits, no duplicates. |
 
 A destination inside an `exchanges[].lans` prefix is ignored the same way as `exclude` (#145): it is not aggregated, and it is not the candidate host. That includes an address no learned route covers, which would otherwise become `aggregate_v4` or `aggregate_v6`. Those bytes are not in the window, the volume, or the anomaly counters.
 
 With `--network host`, `listen` binds host UDP ports. Do not publish them. Each time bucket keeps at most `max_prefixes` prefixes (20000 by default). Those exact cells are what become probe targets and what the commit scorer reads as volume. It also counts bytes per destination prefix and IP protocol since it started (at most `max_prefixes` keys; a key idle for an hour is forgotten), which [`anomaly`](#anomaly) reads for its baselines. Each bucket also keeps a fixed HyperLogLog (4096 registers, 4 KiB) of every prefix offered to it, including ones the exact map refused (#125). A 5-minute window is about 30 buckets, about 120 KiB.
 
-The window merges the live buckets into `packeteer_flow_prefixes_tracked`. The sketch does not add probe targets and is not the commit scorer's volume. The protocol comes from NetFlow v5, v9/IPFIX (information element 4), and sFlow (sampled IPv4/IPv6 records and the IP header; IPv6 extension headers are not followed); records without it count as protocol `any`. The commit scorer reads the busiest prefixes, up to `max_prefixes`, as a rate (bytes × 8 / window, decimal megabits per second), including prefixes the floor or the cap did not offer as probe targets. A prefix past that set is not a volume. Its bytes still count toward `min_pct`.
+The window merges the live buckets into `packeteer_flow_prefixes_tracked`. The sketch does not add probe targets and is not the commit scorer's volume. The protocol comes from NetFlow v5, v9/IPFIX (information element 4), and sFlow (sampled IPv4/IPv6 records and the IP header; IPv6 extension headers are not followed); records without it count as protocol `any`. The commit scorer reads the busiest prefixes, up to `max_prefixes`, as a rate (bytes x 8 / window, decimal megabits per second), including prefixes the floor or the cap did not offer as probe targets. A prefix past that set is not a volume. Its bytes still count toward `min_pct`.
 
 Merging the window builds a destination list only for those prefixes and for a problem prefix outside the set.
 
@@ -1012,9 +1012,9 @@ An active improvement whose prefix falls off this list (below both floors, or pa
 | Key | Default | Bounds |
 |---|---|---|
 | `problems.local` | none | Required when `problems` is set. Your own networks, CIDRs, no host bits, no default route, no duplicates. |
-| `problems.failure_pct` | 20 | 0–100. Zero uses the default. |
+| `problems.failure_pct` | 20 | 0-100. Zero uses the default. |
 | `problems.min_flows` | 10 | Zero uses the default. |
-| `problems.max_targets` | 100 | 1–100000. |
+| `problems.max_targets` | 100 | 1-100000. |
 
 `transit` (optional, off when omitted) classifies traffic as transiting or local (#29, IRP "optimization of transiting traffic"). A flow record whose source address is inside `customers` (the customer or downstream networks behind this edge, whose traffic crosses your network to the Internet) is transit; a record with any other source is local. Records without a source address (an sFlow raw header that is not IP, or a NetFlow v9/IPFIX template without IE 8 or 27) are not classified. NetFlow v5, v9, IPFIX, and sFlow (sampled IPv4/IPv6 records and raw headers) all carry the source.
 
@@ -1041,10 +1041,10 @@ A round that runs past the staleness window fails safe (stale data withdraws an 
 
 | Key | Default | Bounds |
 |---|---|---|
-| `subranges.bits_v4` | 24 | 1–32. IPv4 sub-range length. A prefix this long or longer is not split. |
-| `subranges.bits_v6` | 48 | 1–128. IPv6 sub-range length. |
-| `subranges.max_subranges` | 4 | 2–16. Busiest sub-ranges measured per prefix. |
-| `subranges.max_total` | 1000 | 2–10000. Sub-ranges across every target in one list. Each is probed per provider, so a large value lengthens a round; keep rounds inside the staleness window (see above). |
+| `subranges.bits_v4` | 24 | 1-32. IPv4 sub-range length. A prefix this long or longer is not split. |
+| `subranges.bits_v6` | 48 | 1-128. IPv6 sub-range length. |
+| `subranges.max_subranges` | 4 | 2-16. Busiest sub-ranges measured per prefix. |
+| `subranges.max_total` | 1000 | 2-10000. Sub-ranges across every target in one list. Each is probed per provider, so a large value lengthens a round; keep rounds inside the staleness window (see above). |
 
 ### Source `span`
 
@@ -1057,7 +1057,7 @@ Per connection, it counts:
 - **Resets**: a RST from the remote side. A local RST is not a path problem and is ignored.
 - **Handshake RTT**: local SYN to remote SYN-ACK, or local SYN-ACK to remote ACK, measured at the mirror. A retransmitted handshake gives no sample.
 
-A remote prefix is a problem when retransmissions / data segments ≥ `retrans_pct` (with at least `min_segments`), (timeouts + resets) / connections ≥ `failure_pct` (with at least `min_flows`), or, when `rtt_ms` is set, average handshake RTT ≥ `rtt_ms` (with at least `min_flows` samples). The score is the largest ratio of an observed value to its threshold. The list is worst first, capped at `max_targets`, and a prefix is marked urgent on the first round it appears. The source is read on every probe round. Remote addresses are mapped to the covering learned RIB prefix when the view is ready, otherwise aggregated to `aggregate_v4` or `aggregate_v6`. Private, ULA, loopback, link-local, multicast, `exclude`, and exchange peering LAN addresses are dropped before that aggregation (#145), as is traffic between two local or two remote addresses. A LAN address is not in the window. Ethernet with up to two VLAN tags, raw IP, and Linux cooked captures are decoded.
+A remote prefix is a problem when retransmissions / data segments >= `retrans_pct` (with at least `min_segments`), (timeouts + resets) / connections >= `failure_pct` (with at least `min_flows`), or, when `rtt_ms` is set, average handshake RTT >= `rtt_ms` (with at least `min_flows` samples). The score is the largest ratio of an observed value to its threshold. The list is worst first, capped at `max_targets`, and a prefix is marked urgent on the first round it appears. The source is read on every probe round. Remote addresses are mapped to the covering learned RIB prefix when the view is ready, otherwise aggregated to `aggregate_v4` or `aggregate_v6`. Private, ULA, loopback, link-local, multicast, `exclude`, and exchange peering LAN addresses are dropped before that aggregation (#145), as is traffic between two local or two remote addresses. A LAN address is not in the window. Ethernet with up to two VLAN tags, raw IP, and Linux cooked captures are decoded.
 
 | Key | Default | Bounds |
 |---|---|---|
@@ -1066,19 +1066,19 @@ A remote prefix is a problem when retransmissions / data segments ≥ `retrans_p
 | `promiscuous` | true | Interface capture only. Promiscuous mode is a socket membership: the kernel drops it when the socket closes or the process dies. |
 | `local` | none | Required. Your own networks, CIDRs, no host bits, no default route, no duplicates. |
 | `exclude` | none | Remote CIDRs to ignore, no host bits, no duplicates. |
-| `window` | `5m` | `10s`–`24h`. |
-| `retrans_pct` | 5 | 0–100. Zero uses the default. |
-| `failure_pct` | 20 | 0–100. Zero uses the default. |
-| `rtt_ms` | 0 | 0–60000. Zero disables the RTT check. |
+| `window` | `5m` | `10s`-`24h`. |
+| `retrans_pct` | 5 | 0-100. Zero uses the default. |
+| `failure_pct` | 20 | 0-100. Zero uses the default. |
+| `rtt_ms` | 0 | 0-60000. Zero disables the RTT check. |
 | `min_segments` | 100 | Zero uses the default. |
 | `min_flows` | 10 | Zero uses the default. Also the minimum RTT samples. |
-| `syn_timeout` | `3s` | `100ms`–`1m`. |
+| `syn_timeout` | `3s` | `100ms`-`1m`. |
 | `flow_idle` | `2m` | Longer than `syn_timeout`, at most `1h`. Idle connections are forgotten. |
-| `max_flows` | 100000 | 1–10000000. A new connection beyond the cap is not tracked and is counted in `packeteer_truncated_total{limit="max_flows"}`. |
-| `max_targets` | 100 | 1–100000, and at most `max_prefixes`. |
-| `max_prefixes` | 20000 | 1–250000 (#217). Prefix cells per time bucket. A new prefix past it is counted in `packeteer_truncated_total{limit="max_prefixes"}`. |
-| `aggregate_v4` | 24 | 1–32. |
-| `aggregate_v6` | 48 | 1–128. |
+| `max_flows` | 100000 | 1-10000000. A new connection beyond the cap is not tracked and is counted in `packeteer_truncated_total{limit="max_flows"}`. |
+| `max_targets` | 100 | 1-100000, and at most `max_prefixes`. |
+| `max_prefixes` | 20000 | 1-250000 (#217). Prefix cells per time bucket. A new prefix past it is counted in `packeteer_truncated_total{limit="max_prefixes"}`. |
+| `aggregate_v4` | 24 | 1-32. |
+| `aggregate_v6` | 48 | 1-128. |
 
 Interface capture fails startup when the interface is missing or `NET_RAW` is not granted. A capture error after startup is logged and the source returns what it has already counted. On loopback, outgoing copies are skipped so each frame is counted once. Rollback: remove the source and restart.
 
@@ -1130,7 +1130,7 @@ A prefix already on a performance steer, and a performance move waiting on the c
 | `jitter_weight` | 0.5 | Not negative. |
 | `loss_override` | false | `true` allows a commit move onto higher loss. |
 | `balance` | `off` | `off`, `equal`, or `proportional`. |
-| `balance_slack` | `0.10` | 0–1. Fractional imbalance that does not move traffic. `0` is explicit. |
+| `balance_slack` | `0.10` | 0-1. Fractional imbalance that does not move traffic. `0` is explicit. |
 | `max_age` | `15m` | Not negative. `0` uses the default. Telemetry older than this is ignored. |
 | `min_mbps` | 0 | Not negative. Prefixes below this volume are not moved for commit. |
 | `improvement_weights` | none | See [Improvement weights](#improvement-weights). |
@@ -1161,8 +1161,8 @@ Every improvement whose native and steered providers both have a `cost` reports 
 | `jitter_weight` | 0.5 | Not negative. |
 | `precedence` | `performance` | `performance` or `cost`. |
 | `floor` | | Block with `max_loss_pct` and `max_rtt`. |
-| `max_loss_pct` | 0 | 0–100. Loss percentage points a cost path may carry above the lowest loss. |
-| `max_rtt` | `10ms` | 0–10s. Latency a cost path may add over the lowest RTT. |
+| `max_loss_pct` | 0 | 0-100. Loss percentage points a cost path may carry above the lowest loss. |
+| `max_rtt` | `10ms` | 0-10s. Latency a cost path may add over the lowest RTT. |
 | `improvement_weights` | none | See [Improvement weights](#improvement-weights). |
 
 At least one weight must be positive.
@@ -1186,7 +1186,7 @@ At least one weight must be positive.
 | Key | Default | Meaning |
 |---|---|---|
 | `geoip_db` | none | Path of a MaxMind-format country database (for example GeoLite2-Country) mounted into the container. Required when a rule lists `countries`. Read once at startup; restart to load a new file. Packeteer does not ship one. |
-| `rules` | none | Required, 1–10000 entries. |
+| `rules` | none | Required, 1-10000 entries. |
 
 Each rule:
 
@@ -1198,7 +1198,7 @@ Each rule:
 | `prefixes` | CIDRs. A rule prefix matches itself and every more-specific probed prefix. |
 | `asns` | Origin ASNs (the last ASN of the learned AS path). Matches only while the RIB view is ready. |
 | `countries` | ISO 3166-1 alpha-2 codes. Looked up for the first address of the probed prefix, `country` first, then `registered_country`. |
-| `max_loss_pct` | Required for `static`, 0–100: the highest loss the pinned path may show. Not allowed on other actions. |
+| `max_loss_pct` | Required for `static`, 0-100: the highest loss the pinned path may show. Not allowed on other actions. |
 | `max_rtt` | Optional for `static`: the highest average RTT the pinned path may show (for example `150ms`). 0 or unset means no latency ceiling. |
 | `traffic` | Optional: `transit` or `local`. The rule then matches only prefixes of that traffic class, from a `flow` source with a `transit` block. Alone (no `prefixes`, `asns`, or `countries`) it matches every prefix of the class. A prefix no source classifies matches no traffic rule. |
 
@@ -1214,7 +1214,7 @@ While a window is open, its providers are excluded: improvements on them are ret
 |---|---|---|
 | `timezone` | `UTC` | IANA zone for `schedule`. Zone data is built into the binary. |
 | `windows` | none | Configured windows (up to 1000). May be empty when only the API is used. |
-| `max_api_duration` | `24h` | Longest on-demand window, 1m–7 days. |
+| `max_api_duration` | `24h` | Longest on-demand window, 1m-7 days. |
 
 Each window:
 
@@ -1222,8 +1222,8 @@ Each window:
 |---|---|
 | `name` | Optional, unique. The window ID is `schedule-<name>`. |
 | `providers` | Required. Configured provider names. |
-| `schedule` | Five-field cron start time: minute, hour, day of month, month, day of week (0–7, 0 and 7 are Sunday). `*`, numbers, ranges `a-b`, steps `*/n` or `a-b/n`, and comma lists. When both day fields are restricted, either one matches; as in Vixie cron, a day field that starts with `*` (such as `*/2`) counts as unrestricted, so the fields are then AND-ed. Use with `duration`. |
-| `duration` | 1m–7 days. How long each scheduled window stays open. |
+| `schedule` | Five-field cron start time: minute, hour, day of month, month, day of week (0-7, 0 and 7 are Sunday). `*`, numbers, ranges `a-b`, steps `*/n` or `a-b/n`, and comma lists. When both day fields are restricted, either one matches; as in Vixie cron, a day field that starts with `*` (such as `*/2`) counts as unrestricted, so the fields are then AND-ed. Use with `duration`. |
+| `duration` | 1m-7 days. How long each scheduled window stays open. |
 | `start`, `end` | RFC 3339 timestamps for a one-off window. Use instead of `schedule` and `duration`. |
 | `reason` | Optional text shown in the API. |
 
@@ -1280,7 +1280,7 @@ One plain-text email per event. The relay credentials are environment variables;
 | `username_env` | none | Environment variable holding the AUTH PLAIN user. Set with `password_env`, or neither. |
 | `password_env` | none | Environment variable holding the password. |
 | `from` | none | Required sender address. |
-| `to` | none | Required, 1–50 recipient addresses. |
+| `to` | none | Required, 1-50 recipient addresses. |
 | `subject_prefix` | `[packeteer]` | Put before `[SEVERITY] kind: message`. An empty string removes it. |
 | `helo` | `localhost` | EHLO name. |
 | `timeout` | `10s` | Per message, at most 2m. |
@@ -1305,7 +1305,7 @@ One SNMPv2c or SNMPv3 trap per event to one receiver. Add another entry for a se
 | `auth_env` | none | Environment variable holding the auth passphrase (at least 8 characters). |
 | `priv_protocol` | `AES` | `AES`, `AES192`, `AES256`, `AES192C`, `AES256C`, or `DES`. |
 | `priv_env` | none | Environment variable holding the privacy passphrase (at least 8 characters). |
-| `engine_id` | none | Required for `3`: Packeteer's authoritative engine ID, 5–32 bytes of hex. Configure the same ID for the user on the receiver. |
+| `engine_id` | none | Required for `3`: Packeteer's authoritative engine ID, 5-32 bytes of hex. Configure the same ID for the user on the receiver. |
 | `enterprise_oid` | `1.3.6.1.4.1.8072.9999.9999.7717` | Base OID. The default sits under NET-SNMP's experimental `netSnmpPlaypen` arc; use your own enterprise arc in production. |
 | `timeout` | `5s` | At most 1m. |
 
@@ -1338,8 +1338,8 @@ Each provider:
 |---|---|
 | `name` | Required. Must match a top-level provider `name`. Unique in the list. |
 | `commit_mbps` | Required. Greater than 0, at most 100000000. |
-| `usage_mbps` | Required. 0–100000000. Reported as the single billable figure (`greater_separate`). |
-| `in_mbps` | Optional. 0–100000000. Reported as the inbound rate and inbound 95th, which `inbound` compares with `commit_mbps`. Unset is 0. |
+| `usage_mbps` | Required. 0-100000000. Reported as the single billable figure (`greater_separate`). |
+| `in_mbps` | Optional. 0-100000000. Reported as the inbound rate and inbound 95th, which `inbound` compares with `commit_mbps`. Unset is 0. |
 
 The row's timestamp is the time of the read, so `max_age` on the commit scorer does not age it out. A file that fails to parse yields no rows for that decision.
 
@@ -1347,9 +1347,9 @@ The row's timestamp is the time of the read, so `max_age` on the commit scorer d
 
 Off unless a `telemetry` entry lists `type: snmp`. It polls IF-MIB counters and keeps 95th-percentile usage for the open billing period. It does not announce. The `commit` scorer reads the snapshot when that scorer is selected; the collector itself does not change a decision. A failed poll does not withdraw performance improvements. Samples for the open period live in memory. When `storage` is configured, each accepted sample is also written to that database, per provider binding and billing period, and the open period is loaded on start so the 95th matches after a restart. Without `storage`, a restart clears the window. A closed period is left in the database until `retention` deletes it (the period has ended, and its end is older than retention). A failed write keeps the sample in memory and does not change a decision. `Updated` on reload is the time of the last stored sample, so commit control still ignores a reading older than `max_age`.
 
-The billing period is `[start, end)` in UTC, opening at 00:00 UTC on `billing_day`. `billing_day` is 1–28 so the day exists in every month.
+The billing period is `[start, end)` in UTC, opening at 00:00 UTC on `billing_day`. `billing_day` is 1-28 so the day exists in every month.
 
-The 95th percentile is nearest rank: sort the samples ascending and take 1-based rank ceil(0.95 × N), computed as `(95×N+99)/100`. For a multiple of 20 that is the sample left after the top 5% are discarded. For N of 10 the rank is 10.
+The 95th percentile is nearest rank: sort the samples ascending and take 1-based rank ceil(0.95 x N), computed as `(95xN+99)/100`. For a multiple of 20 that is the sample left after the top 5% are discarded. For N of 10 the rank is 10.
 
 | `percentile` | Billable figure |
 |---|---|
@@ -1365,10 +1365,10 @@ Credentials are environment variables named in the config. The file must not con
 
 | Key | Default | Bounds |
 |---|---|---|
-| `interval` | `5m` | `30s`–`1h`. Time between polls. |
+| `interval` | `5m` | `30s`-`1h`. Time between polls. |
 | `timeout` | `5s` | At least `100ms`, shorter than `interval`. Per SNMP request. |
-| `retries` | 1 | 0–5. Extra attempts after the first. `0` does not retry. |
-| `max_samples` | 100000 | 1–1000000. Oldest samples in the open period are dropped past this, in memory and in storage. `0` uses the default. |
+| `retries` | 1 | 0-5. Extra attempts after the first. `0` does not retry. |
+| `max_samples` | 100000 | 1-1000000. Oldest samples in the open period are dropped past this, in memory and in storage. `0` uses the default. |
 | `hosts` | none | Required. One SNMP agent. Several providers can share a host. |
 | `providers` | none | Required. Each entry names a configured provider. |
 
@@ -1378,7 +1378,7 @@ Each host:
 |---|---|---|
 | `name` | required | Unique in `hosts`. |
 | `address` | required | IP address or hostname. It is not resolved at startup. |
-| `port` | 161 | 1–65535. |
+| `port` | 161 | 1-65535. |
 | `version` | required | `2c` or `3`. |
 | `community_env` | v2c: required | Environment variable that holds the community. v2c only. |
 | `username_env` | v3: required | Environment variable that holds the v3 user name. |
@@ -1399,7 +1399,7 @@ Each provider:
 | `host` | Required. A `hosts[].name`. |
 | `interface` | Required. `ifName`, `ifDescr`, or a decimal `ifIndex`. |
 | `commit_mbps` | Required. Greater than 0, at most 100000000. The `commit` scorer compares the billable 95th with this. The collector does not enforce it. |
-| `billing_day` | Required. 1–28. UTC. |
+| `billing_day` | Required. 1-28. UTC. |
 | `percentile` | Required. `separate`, `greater`, or `greater_separate`. |
 
 ### Storage `sqlite`
@@ -1409,7 +1409,7 @@ Off unless `storage.type` is `sqlite`. Keeps report history in an embedded SQLit
 | Key | Default | Meaning |
 |---|---|---|
 | `path` | `/var/lib/packeteer/packeteer.db` | Database file. Must be absolute. The directory is created on start. Mount a volume on it (`-v packeteer-data:/var/lib/packeteer`) so history survives a container restart. |
-| `retention` | `9600h` (400 days) | Rows older than this (audit records and events included) are deleted on start and once a day. `24h`–`87600h`. An improvement that is still active is kept. |
+| `retention` | `9600h` (400 days) | Rows older than this (audit records and events included) are deleted on start and once a day. `24h`-`87600h`. An improvement that is still active is kept. |
 
 What is stored:
 
@@ -1427,7 +1427,7 @@ Country comes from the first `rules` policy that has a `geoip_db`. With none, th
 
 Reports (`/api/reports/<name>`, JSON or `?format=csv`, and the dashboard): `summary`, `improvements`, `exchanges` (#148: one row per `exchanges` peer with improvements started, active now, prefixes, Mbps moved, and hours steered), `causes` (started per UTC day by cause), `performance` (average loss and RTT before and after, by cause), `providers` (probes, failure rate, average loss, RTT, jitter, improvements onto and off each provider, hours steered onto it), `prefixes`, `asns`, `countries` (`sort=problems`, the default, then `volume` or `loss`), `probes` (per UTC day), `timeseries` (#129: per UTC day and bucket, the native provider's average loss and RTT beside the chosen provider's, from the daily rollups; buckets `all`, `problem`, `better_20`, `better_50`; not cut by `limit`; see [ui.md](ui.md#graphs)), and `savings`.
 
-`est_savings` is `cost_delta` times volume, treated as a monthly rate; `accrued` is that rate times the hours active inside the range divided by 730. Probe figures are daily rollups, so a range that starts mid-day includes that whole UTC day; improvement figures use the exact range. Query: `days` (default 7, at most 3660), or `from` and `to` (RFC 3339 or `YYYY-MM-DD`, UTC), and `limit` (1–10000; default 20, or 100 for `improvements` and `savings`).
+`est_savings` is `cost_delta` times volume, treated as a monthly rate; `accrued` is that rate times the hours active inside the range divided by 730. Probe figures are daily rollups, so a range that starts mid-day includes that whole UTC day; improvement figures use the exact range. Query: `days` (default 7, at most 3660), or `from` and `to` (RFC 3339 or `YYYY-MM-DD`, UTC), and `limit` (1-10000; default 20, or 100 for `improvements` and `savings`).
 
 ### Whois `rdap`
 
@@ -1437,7 +1437,7 @@ Used under `troubleshoot.whois`. Asks an RDAP server (RFC 9082/9083) about an ad
 |---|---|---|
 | `base_url` | `https://rdap.org` | RDAP service. `http` or `https`, no credentials, query, or fragment. rdap.org redirects to the right registry; at most 3 redirects, and an `https` base never follows a redirect to `http`. |
 | `timeout` | `5s` | Whole request, up to `1m`. |
-| `max_bytes` | `262144` | Largest response accepted, 1024–4194304. |
+| `max_bytes` | `262144` | Largest response accepted, 1024-4194304. |
 
 ### RIB source `bmp`
 
@@ -1501,10 +1501,10 @@ The built-in instance-to-instance transport (#30). Each instance serves its snap
 | `url` | required | `https://host:port`, no path. |
 | `server_name` | peer `name` | Name checked on the peer's server certificate. |
 | `allow_clients` | peer names | Certificate names (CN or DNS SAN) allowed to read this snapshot. Others get 403. |
-| `poll_interval` | `2s` | How often each peer is fetched, 100ms–1m. |
+| `poll_interval` | `2s` | How often each peer is fetched, 100ms-1m. |
 | `timeout` | `poll_interval` | Bound on one fetch. At most `poll_interval`. |
-| `max_age` | 3 × `poll_interval` | How long a peer's last good snapshot stays usable, `poll_interval`–10m. After that the peer is stale and this instance acts standalone. |
-| `max_bytes` | 16 MiB | Cap on a fetched snapshot, 1024–1073741824. |
+| `max_age` | 3 x `poll_interval` | How long a peer's last good snapshot stays usable, `poll_interval`-10m. After that the peer is stale and this instance acts standalone. |
+| `max_bytes` | 16 MiB | Cap on a fetched snapshot, 1024-1073741824. |
 
 Times in a snapshot are converted to local time by their age at the peer, so clock skew between POPs cannot make stale data look fresh. On shutdown an instance publishes its providers down before it withdraws, so peers retire steers onto them at their next poll.
 
@@ -1521,7 +1521,7 @@ Used under `auth.sso` (#32). OpenID Connect authorization code flow with PKCE. T
 | `scopes` | `[email, profile]` | Scopes besides `openid`. Add `groups` if your provider needs it for the roles claim. |
 | `username_claim` | `email` | Claim used as the account name (`email`, `preferred_username`, `sub`, ...). With `email`, `email_verified: false` is refused. |
 | `roles_claim` | `groups` | Claim listing the user's groups (a string or a list). |
-| `role_map` | none | Group → `viewer`, `operator`, or `admin`. The highest mapped role wins. |
+| `role_map` | none | Group -> `viewer`, `operator`, or `admin`. The highest mapped role wins. |
 | `default_role` | none | Role when no group maps. Empty refuses the sign-in. `role_map` or `default_role` is required. |
 
 The role is set at every sign-in. An SSO user is stored with no password; an admin can disable it (`PATCH /api/users/<name>` `{"disabled":true}`), which ends its session and refuses later sign-ins. A local user's name cannot be taken over by SSO.
@@ -1534,7 +1534,7 @@ The built-in active/standby elector (#31): a lease file on storage both instance
 |---|---|---|
 | `path` | required | Lease file, absolute. The directory is created on start. Both instances must see the same file. |
 | `id` | `PACKETEER_HA_ID`, then the hostname | This instance's name in the pair. Letters, digits, `_`, `.`, `-`, at most 64 characters. The two instances must differ. |
-| `ttl` | `10s` | Lease time, `2s`–`5m`. The active instance stops announcing `ttl`/2 after its last successful renewal, even when its renew loop is stuck. |
+| `ttl` | `10s` | Lease time, `2s`-`5m`. The active instance stops announcing `ttl`/2 after its last successful renewal, even when its renew loop is stuck. |
 | `renew` | `ttl`/5 | Renewal and standby poll interval, at least `100ms` and at most `ttl`/4. |
 
 A standby takes a lease that is free or released at its next renewal. It takes a lease held by another instance only after the record has not changed, on its own monotonic clock, for the longer of `ttl` and `ttl`/2 + the holder's recorded BGP hold time + `renew`, so clocks need not agree. The hold time is the longest negotiated hold time of the holder's established sessions (90s when unknown), refreshed at every renewal; set a short hold timer on the edge (for example 9s) for a fast takeover after a crash. A restarted instance does not reuse its predecessor's lease. An unreadable lease file counts as held by an unknown instance.
@@ -1576,19 +1576,19 @@ Connects read-only to an RPKI-to-Router server (RFC 8210) such as the operator's
 
 ### Detector `baseline`
 
-The built-in anomaly detector (#33). For each destination prefix and IP protocol it keeps an exponentially weighted mean and variance of the rate seen each round. A round is anomalous when the rate is at least `min_mbps`, at least `min_ratio` × the mean, and more than `sensitivity` standard deviations above the mean, after `warmup` rounds of learning; or, with `max_mbps` set, when the rate reaches that ceiling whatever the baseline (this also covers a key that has no baseline yet). Anomalous rounds, and every round of an open anomaly, are not learned, so an attack does not become the baseline. Baselines live in memory only. It never announces.
+The built-in anomaly detector (#33). For each destination prefix and IP protocol it keeps an exponentially weighted mean and variance of the rate seen each round. A round is anomalous when the rate is at least `min_mbps`, at least `min_ratio` x the mean, and more than `sensitivity` standard deviations above the mean, after `warmup` rounds of learning; or, with `max_mbps` set, when the rate reaches that ceiling whatever the baseline (this also covers a key that has no baseline yet). Anomalous rounds, and every round of an open anomaly, are not learned, so an attack does not become the baseline. Baselines live in memory only. It never announces.
 
 | Key | Default | Meaning |
 |---|---|---|
 | `sensitivity` | `3` | Standard deviations above the mean. Lower is more sensitive. Above 0, at most 100. |
-| `min_ratio` | `3` | Times the mean the rate must reach. 1–1000. |
+| `min_ratio` | `3` | Times the mean the rate must reach. 1-1000. |
 | `min_mbps` | `10` | Smallest rate that can be anomalous, Mbit/s. Above 0. |
 | `max_mbps` | off | Static ceiling, Mbit/s; `0` is off. At least `min_mbps`. |
 | `alpha` | `0.05` | Weight of each new round in the mean and variance, above 0 and at most 1. |
-| `warmup` | `30` | Rounds a key learns before the baseline test applies. 1–100000. |
-| `trigger_rounds` | `2` | Anomalous rounds in a row before an anomaly opens. 1–1000. |
-| `clear_rounds` | `3` | Normal rounds in a row before it clears. 1–1000. |
-| `max_keys` | `10000` | Keys tracked; new keys past it are not tracked. 1–1000000. An idle key is forgotten once its mean decays to nothing. |
+| `warmup` | `30` | Rounds a key learns before the baseline test applies. 1-100000. |
+| `trigger_rounds` | `2` | Anomalous rounds in a row before an anomaly opens. 1-1000. |
+| `clear_rounds` | `3` | Normal rounds in a row before it clears. 1-1000. |
+| `max_keys` | `10000` | Keys tracked; new keys past it are not tracked. 1-1000000. An idle key is forgotten once its mean decays to nothing. |
 
 ### Announcer `gobgp`
 
@@ -1609,9 +1609,9 @@ Each provider:
 |---|---|
 | `provider` | Required. A top-level provider `name`. Unique in the list. |
 | `name` | Optional label, up to 64 characters. |
-| `prepend` | 0–10. How many times the edge's export policy toward this provider prepends when it sees `communities`. Informational: an iBGP route cannot carry the edge's own ASN, so the edge does the prepend. |
+| `prepend` | 0-10. How many times the edge's export policy toward this provider prepends when it sees `communities`. Informational: an iBGP route cannot carry the edge's own ASN, so the edge does the prepend. |
 | `withhold` | `true` makes the action a selective announcement: the edge's export policy does not send the prefix to this provider at all when it sees `communities`. Informational, like `prepend`, and exclusive with it. Packeteer never steers away from every provider, so the prefix stays announced through at least one other. |
-| `communities` | 1–16 `asn:value` communities: signal communities the edge maps to the prepend, and the provider's own TE communities the edge passes to that provider only. `0:x` and `65535:x` (well-known values such as `no-export`) are rejected. |
+| `communities` | 1-16 `asn:value` communities: signal communities the edge maps to the prepend, and the provider's own TE communities the edge passes to that provider only. `0:x` and `65535:x` (well-known values such as `no-export`) are rejected. |
 
 ### Mitigation announcer `gobgp`
 
@@ -1647,7 +1647,7 @@ Every next hop in the catalog must be unique, unicast, and not loopback.
 | Key | Meaning |
 |---|---|
 | `redirect` | Up to 32 FlowSpec redirect targets, each `name` (as for `redirect` above) and `route_target`. |
-| `route_target` | Required on each target. Two-octet-AS route target `asn:value` (AS 1–65535) that the edge imports into a VRF (a scrubbing VRF). Unique. A `flowspec_redirect` rule names the target. |
+| `route_target` | Required on each target. Two-octet-AS route target `asn:value` (AS 1-65535) that the edge imports into a VRF (a scrubbing VRF). Unique. A `flowspec_redirect` rule names the target. |
 
 ## Example
 

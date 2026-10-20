@@ -80,7 +80,7 @@ RouterOS offers the graceful-restart capability (`gr` under `local.capabilities`
 
 Once Packeteer's route is best, the router stops advertising the prefix to Packeteer (best path only), as described above; the improvement stays.
 
-FRR, Junos, and IOS equivalents: [frr.md](frr.md), [junos.md](junos.md), [cisco.md](cisco.md). The whole observe → suggest → inject sequence, with the checks at each step: [walkthrough.md](walkthrough.md).
+FRR, Junos, and IOS equivalents: [frr.md](frr.md), [junos.md](junos.md), [cisco.md](cisco.md). The whole observe -> suggest -> inject sequence, with the checks at each step: [walkthrough.md](walkthrough.md).
 
 ## Exchange peers
 

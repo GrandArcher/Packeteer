@@ -73,6 +73,8 @@ jobs:
           if [ -n "$dead" ]; then echo "unreachable code:"; echo "$dead"; exit 1; fi
       - name: CHANGELOG entries are one short line
         run: scripts/check-changelog.sh
+      - name: Documentation is ASCII
+        run: scripts/check-ascii.sh
 
   govulncheck:
     runs-on: ubuntu-latest
