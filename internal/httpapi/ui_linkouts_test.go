@@ -19,6 +19,7 @@ func TestLinkoutAssets(t *testing.T) {
 		`/^https:/.test(l.url)`, // only https is placed
 		`head.appendChild(linkoutSpan("asn", node.asn))`,
 		`peer.appendChild(linkoutSpan("asn", p.peer_asn))`,
+		`peer.appendChild(linkoutSpan("asn", p.asn))`,
 		`function originASN(row)`,
 	} {
 		if !strings.Contains(app, s) {

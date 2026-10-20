@@ -78,7 +78,7 @@ func newSearchEnv(t *testing.T, withHistory bool, routes fakeSearchRIB) *searchE
 	t.Helper()
 	e := &searchEnv{hist: &fakeReports{}, tools: troubleshoot.New(troubleshoot.Options{Enabled: true, Whois: nameWhois{}})}
 	snap := Assemble(searchInput())
-	snap.Providers = append(snap.Providers, Provider{Name: "ix-peer-a", Exchange: "ix-1", PeerASN: 64512})
+	snap.Providers = append(snap.Providers, Provider{Name: "ix-peer-a", Exchange: "ix-1", PeerASN: 64512}, Provider{Name: "transit-lab", ASN: 64496, Type: "transit"})
 	opt := Options{Snapshot: func() Snapshot { return snap }, Tools: e.tools}
 	if withHistory {
 		opt.Reports = e.hist
@@ -236,6 +236,14 @@ func TestSearchASNameUsesConfiguredAndLookedUpNames(t *testing.T) {
 	_, got, _ = e.get(t, "ix-peer")
 	if rows := got.ASNs.Rows; len(rows) != 1 || rows[0].ASN != 64512 || rows[0].Source != "provider" {
 		t.Errorf("provider name asns = %+v", got.ASNs)
+	}
+}
+
+func TestSearchFindsProviderASN(t *testing.T) {
+	e := newSearchEnv(t, true, testRoutes())
+	_, got, _ := e.get(t, "transit-lab")
+	if rows := got.ASNs.Rows; len(rows) != 1 || rows[0].ASN != 64496 || rows[0].Source != "provider" {
+		t.Fatalf("asns = %+v", got.ASNs)
 	}
 }
 

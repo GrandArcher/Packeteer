@@ -182,6 +182,11 @@ function renderProviders(data) {
     if (p.peer_asn) {
       peer.appendChild(el("span", "k", p.exchange + " AS" + p.peer_asn));
       peer.appendChild(linkoutSpan("asn", p.peer_asn));
+    } else if (p.asn) {
+      peer.appendChild(el("span", "k", (p.type ? p.type + " " : "") + "AS" + p.asn));
+      peer.appendChild(linkoutSpan("asn", p.asn));
+    } else if (p.type) {
+      peer.appendChild(el("span", "k", p.type));
     } else {
       peer.textContent = "—";
     }

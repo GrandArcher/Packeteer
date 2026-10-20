@@ -273,6 +273,9 @@ func (s *Server) searchASNs(term searchTerm, providers []Provider) []SearchASN {
 		if pr.PeerASN != 0 {
 			known[pr.PeerASN] = SearchASN{ASN: pr.PeerASN, Name: pr.Name, Source: "provider"}
 		}
+		if pr.ASN != 0 {
+			known[pr.ASN] = SearchASN{ASN: pr.ASN, Name: pr.Name, Source: "provider"}
+		}
 	}
 	for asn, name := range s.tools.ASNames() {
 		known[asn] = SearchASN{ASN: asn, Name: name, Source: "whois"}

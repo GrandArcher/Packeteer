@@ -6,6 +6,7 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 
 ### Added
 
+- Forms show no grey example or default as a value: examples are in help text, defaults read "Default: X", Reports filters start empty, the wizard starts from the running config; wizard providers take ASN, type, and an IPv6 pair (#350).
 - UI on phones: below 760 px the nav collapses behind a Menu button and table rows become labelled cards, health first; a 390x844 browser smoke step checks it (#352).
 - Federation: admins push `thresholds` or `policies` to every peer over mTLS (`POST /api/federation/push`); peers validate, apply online, refuse other sections, and audit (#137).
 - UI keyboard and screen reader access: Skip to content link on every page, 3 px focus ring, one h1 per page, labelled YAML editor; a browser smoke step checks them (#353).

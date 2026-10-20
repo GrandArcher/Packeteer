@@ -71,10 +71,10 @@
     </ol>
     <div id="wz-1">
       <p class="tag">The iBGP session Packeteer learns from. It does not announce.</p>
-      <div class="form">
-        <label class="field"><span class="field-label" title="asn">ASN</span><input id="wz-asn" type="number" min="1" max="4294967295" step="1" placeholder="64512"><span class="field-help">Your AS number. The learn-only session uses it.</span><span id="wz-asn-err" class="field-error" hidden></span></label>
-        <label class="field"><span class="field-label" title="router_id">Router ID</span><input id="wz-router" type="text" placeholder="192.0.2.10" spellcheck="false"><span class="field-help">IPv4 router ID, for example 192.0.2.10.</span><span id="wz-router-err" class="field-error" hidden></span></label>
-        <label class="field"><span class="field-label" title="bgp.neighbors">Edge address</span><input id="wz-edge" type="text" placeholder="192.0.2.254" spellcheck="false"><span class="field-help">Address of the router this session learns from.</span><span id="wz-edge-err" class="field-error" hidden></span></label>
+      <div class="form wz-fields">
+        <label class="field"><span class="field-label" title="asn">ASN</span><input id="wz-asn" type="number" min="1" max="4294967295" step="1"><span class="field-help">Your AS number, for example 64512. The learn-only session uses it.</span><span id="wz-asn-err" class="field-error" hidden></span></label>
+        <label class="field"><span class="field-label" title="router_id">Router ID</span><input id="wz-router" type="text" spellcheck="false"><span class="field-help">IPv4 router ID, for example 192.0.2.10.</span><span id="wz-router-err" class="field-error" hidden></span></label>
+        <label class="field"><span class="field-label" title="bgp.neighbors">Edge address</span><input id="wz-edge" type="text" spellcheck="false"><span class="field-help">Address of the router this session learns from, for example 192.0.2.254.</span><span id="wz-edge-err" class="field-error" hidden></span></label>
       </div>
       <div class="controls"><button type="button" id="wz-next">Next</button></div>
     </div>
@@ -94,8 +94,8 @@
     <div id="wz-3" hidden>
       <p class="tag">Optional. Leave both empty to add probe targets later. A prefix without a host is probed at a few addresses inside it, including the provider next hop when that address can be used. A host pins that prefix to one address.</p>
       <div class="form">
-        <label>Prefix <input id="wz-prefix" type="text" placeholder="198.51.100.0/24" spellcheck="false"></label>
-        <label>Pinned host <input id="wz-host" type="text" placeholder="198.51.100.10" spellcheck="false"></label>
+        <label>Prefix <input id="wz-prefix" type="text" spellcheck="false"><span class="field-help">For example 198.51.100.0/24.</span></label>
+        <label>Pinned host <input id="wz-host" type="text" spellcheck="false"><span class="field-help">For example 198.51.100.10.</span></label>
         <label><input id="wz-storage" type="checkbox" checked> Report history (sqlite)</label>
       </div>
       <div class="controls">
@@ -106,10 +106,10 @@
     <div id="wz-4" hidden>
       <p class="tag">Optional flow collector. Leave it off to add a flow source later. When on, Packeteer listens on this UDP address and port for NetFlow v5/v9, IPFIX, or sFlow records and probes the busiest destination prefixes. It measures only and never announces.</p>
       <p class="tag">Exporter setup: on the router, send flow records to this host and port (for example NetFlow v9 or IPFIX to the address below). With <code>--network host</code> this is a host UDP port; do not publish it, and allow it only from the router. Packeteer does not configure the router.</p>
-      <div class="form">
+      <div class="form wz-fields">
         <label class="check"><input id="wz-flow" type="checkbox"> Collect flow records</label>
-        <label class="field"><span class="field-label" title="sources.flow.listen">Listen address</span><input id="wz-flow-addr" type="text" placeholder="192.0.2.10" spellcheck="false"><span class="field-help">Address flow records arrive on. Empty listens on every address.</span><span id="wz-flow-addr-err" class="field-error" hidden></span></label>
-        <label class="field"><span class="field-label" title="sources.flow.listen">UDP port</span><input id="wz-flow-port" type="number" min="1" max="65535" step="1" placeholder="2055"><span class="field-help">UDP port for NetFlow, IPFIX, or sFlow. 1 to 65535.</span><span id="wz-flow-port-err" class="field-error" hidden></span></label>
+        <label class="field"><span class="field-label" title="sources.flow.listen">Listen address</span><input id="wz-flow-addr" type="text" spellcheck="false"><span class="field-help">Address flow records arrive on, for example 192.0.2.10. Empty listens on every address.</span><span id="wz-flow-addr-err" class="field-error" hidden></span></label>
+        <label class="field"><span class="field-label" title="sources.flow.listen">UDP port</span><input id="wz-flow-port" type="number" min="1" max="65535" step="1"><span class="field-help">UDP port for NetFlow, IPFIX, or sFlow, for example 2055. 1 to 65535. Empty uses 2055.</span><span id="wz-flow-port-err" class="field-error" hidden></span></label>
       </div>
       <div class="controls">
         <button type="button" id="wz-back-4">Back</button>
@@ -222,8 +222,8 @@
             <span class="field-error" hidden></span>
           </label>
           <label class="field"><span class="field-label" title="max_improvements">Improvement cap</span>
-            <input id="fm-cap" class="g-num" type="number" min="0" max="10000" step="1" placeholder="50"><span class="unit">prefixes</span>
-            <span class="field-help">How many improvements may be active at once. 0 retires every one. Default 50.</span>
+            <input id="fm-cap" class="g-num" type="number" min="0" max="10000" step="1"><span class="unit">prefixes</span>
+            <span class="field-help">How many improvements may be active at once. 0 retires every one. Default: 50.</span>
             <span class="field-error" hidden></span>
           </label>
           <label class="field"><span class="field-label" title="thresholds.min_loss_delta_pct">Loss threshold</span>
@@ -237,13 +237,13 @@
             <span class="field-error" hidden></span>
           </label>
           <label class="field"><span class="field-label" title="thresholds.min_rtt_delta_pct">RTT threshold</span>
-            <input id="fm-rtt-pct" class="g-num" type="number" min="0" max="100" step="any" placeholder="0"><span class="unit">%</span>
+            <input id="fm-rtt-pct" class="g-num" type="number" min="0" max="100" step="any"><span class="unit">%</span>
             <span class="field-help">Minimum latency improvement as a percent of the current path. 0 turns this check off.</span>
             <span class="field-error" hidden></span>
           </label>
           <label class="field"><span class="field-label" title="thresholds.confirm_rounds">Confirm rounds</span>
-            <input id="fm-rounds" class="g-num" type="number" min="1" max="100" step="1" placeholder="1">
-            <span class="field-help">How many probe rounds a choice must win before it is used. Default 1.</span>
+            <input id="fm-rounds" class="g-num" type="number" min="1" max="100" step="1">
+            <span class="field-help">How many probe rounds a choice must win before it is used. Default: 1.</span>
             <span class="field-error" hidden></span>
           </label>
           <label class="field"><span class="field-label" title="scorer.precedence">Cost or performance</span>
@@ -252,13 +252,13 @@
             <span class="field-error" hidden></span>
           </label>
           <label class="field"><span class="field-label" title="floor.max_loss_pct">Extra loss</span>
-            <input id="fm-floor-loss" class="g-num" type="number" min="0" max="100" step="any" placeholder="0"><span class="unit">points</span>
-            <span class="field-help">A cheaper path must stay within this many extra loss points. Default 0.</span>
+            <input id="fm-floor-loss" class="g-num" type="number" min="0" max="100" step="any"><span class="unit">points</span>
+            <span class="field-help">A cheaper path must stay within this many extra loss points. Default: 0.</span>
             <span class="field-error" hidden></span>
           </label>
           <label class="field"><span class="field-label" title="floor.max_rtt">Extra delay</span>
-            <span class="g-dur"><input id="fm-floor-rtt-raw" type="hidden" class="g-raw"><input id="fm-floor-rtt" class="g-num" type="number" min="0" step="any" placeholder="10"><select id="fm-floor-rtt-unit" class="g-unit" aria-label="Extra delay unit"><option value="ms" selected>ms</option><option value="s">s</option><option value="m">m</option><option value="h">h</option></select></span>
-            <span class="field-help">A cheaper path must stay within this extra delay. Default 10 milliseconds.</span>
+            <span class="g-dur"><input id="fm-floor-rtt-raw" type="hidden" class="g-raw"><input id="fm-floor-rtt" class="g-num" type="number" min="0" step="any"><select id="fm-floor-rtt-unit" class="g-unit" aria-label="Extra delay unit"><option value="ms" selected>ms</option><option value="s">s</option><option value="m">m</option><option value="h">h</option></select></span>
+            <span class="field-help">A cheaper path must stay within this extra delay. Default: 10 milliseconds.</span>
             <span class="field-error" hidden></span>
           </label>
         </fieldset>
@@ -337,19 +337,19 @@
             <span class="field-error" hidden></span>
           </label>
           <div class="field"><span class="field-label" title="inbound.prefixes">Your prefixes</span><input id="in-prefixes" type="hidden"><div id="in-prefix-box" class="g-prefixes"></div><span class="field-help">Prefixes this network originates. Pick one learned with an empty AS path, or add a prefix.</span><span class="field-error" hidden></span></div>
-          <label class="field"><span class="field-label" title="inbound.local_pref">Steer local pref</span><input id="in-local-pref" class="g-num" type="number" min="1" max="4294967295" step="1" placeholder="1"><span class="field-help">Local preference on a steer route. Default 1.</span><span class="field-error" hidden></span></label>
-          <label class="field"><span class="field-label" title="inbound.release_pct">Release</span><input id="in-release" class="g-pct" type="number" min="0" max="100" step="any" placeholder="90"><span class="unit">% of commit</span><span class="field-help">Release a steer when usage falls below this percent of commit. Default 90.</span><span class="field-error" hidden></span></label>
-          <label class="field"><span class="field-label" title="inbound.max_improvements">Steer cap</span><input id="in-cap" class="g-num" type="number" min="1" max="10000" step="1" placeholder="50"><span class="field-help">How many steer routes inbound may hold. Empty uses the decision cap.</span><span class="field-error" hidden></span></label>
+          <label class="field"><span class="field-label" title="inbound.local_pref">Steer local pref</span><input id="in-local-pref" class="g-num" type="number" min="1" max="4294967295" step="1"><span class="field-help">Local preference on a steer route. Default: 1.</span><span class="field-error" hidden></span></label>
+          <label class="field"><span class="field-label" title="inbound.release_pct">Release</span><input id="in-release" class="g-pct" type="number" min="0" max="100" step="any"><span class="unit">% of commit</span><span class="field-help">Release a steer when usage falls below this percent of commit. Default: 90.</span><span class="field-error" hidden></span></label>
+          <label class="field"><span class="field-label" title="inbound.max_improvements">Steer cap</span><input id="in-cap" class="g-num" type="number" min="1" max="10000" step="1"><span class="field-help">How many steer routes inbound may hold. Empty uses the decision cap.</span><span class="field-error" hidden></span></label>
           <label class="check" title="inbound.moderated"><input id="in-mod-commit" type="checkbox"> Commit steers are suggestions only</label>
           <label class="check" title="inbound.moderated"><input id="in-mod-perf" type="checkbox"> Performance steers are suggestions only</label>
           <label class="check" title="inbound.performance"><input id="in-perf" type="checkbox"> Performance trigger on</label>
-          <label class="field"><span class="field-label" title="inbound.performance.loss_pct">Loss points over best</span><span class="g-off"><input id="in-perf-loss-on" type="checkbox" checked aria-label="Loss check on"><input id="in-perf-loss" class="g-num" type="number" min="0" max="100" step="any" placeholder="5"><span class="unit">points</span></span><span class="field-help">On compares loss with the best path. Off skips this check. Default 5 points.</span><span class="field-error" hidden></span></label>
-          <label class="field"><span class="field-label" title="inbound.performance.latency_ms">Latency over best</span><span class="g-off"><input id="in-perf-latency-on" type="checkbox" checked aria-label="Latency check on"><input id="in-perf-latency" class="g-num" type="number" min="0" step="any" placeholder="50"><span class="unit">ms</span></span><span class="field-help">On compares latency with the best path. Off skips this check. Default 50 milliseconds.</span><span class="field-error" hidden></span></label>
-          <label class="field"><span class="field-label" title="inbound.performance.min_prefixes">Minimum common prefixes</span><input id="in-perf-min" class="g-num" type="number" min="1" max="10000" step="1" placeholder="3"><span class="field-help">How many prefixes must agree before a performance steer. Default 3.</span><span class="field-error" hidden></span></label>
-          <label class="field"><span class="field-label" title="inbound.performance.release_pct">Performance release</span><input id="in-perf-release" class="g-pct" type="number" min="0" max="100" step="any" placeholder="50"><span class="unit">%</span><span class="field-help">Release a performance steer below this percent. Default 50.</span><span class="field-error" hidden></span></label>
+          <label class="field"><span class="field-label" title="inbound.performance.loss_pct">Loss points over best</span><span class="g-off"><input id="in-perf-loss-on" type="checkbox" checked aria-label="Loss check on"><input id="in-perf-loss" class="g-num" type="number" min="0" max="100" step="any"><span class="unit">points</span></span><span class="field-help">On compares loss with the best path. Off skips this check. Default: 5 points.</span><span class="field-error" hidden></span></label>
+          <label class="field"><span class="field-label" title="inbound.performance.latency_ms">Latency over best</span><span class="g-off"><input id="in-perf-latency-on" type="checkbox" checked aria-label="Latency check on"><input id="in-perf-latency" class="g-num" type="number" min="0" step="any"><span class="unit">ms</span></span><span class="field-help">On compares latency with the best path. Off skips this check. Default: 50 milliseconds.</span><span class="field-error" hidden></span></label>
+          <label class="field"><span class="field-label" title="inbound.performance.min_prefixes">Minimum common prefixes</span><input id="in-perf-min" class="g-num" type="number" min="1" max="10000" step="1"><span class="field-help">How many prefixes must agree before a performance steer. Default: 3.</span><span class="field-error" hidden></span></label>
+          <label class="field"><span class="field-label" title="inbound.performance.release_pct">Performance release</span><input id="in-perf-release" class="g-pct" type="number" min="0" max="100" step="any"><span class="unit">%</span><span class="field-help">Release a performance steer below this percent. Default: 50.</span><span class="field-error" hidden></span></label>
           <label class="check" title="inbound.damping.disabled"><input id="in-damp-off" type="checkbox"> Damping off</label>
-          <label class="field"><span class="field-label" title="inbound.damping.confirm">Damping confirm</span><span class="g-dur"><input id="in-damp-confirm-raw" type="hidden" class="g-raw"><input id="in-damp-confirm" class="g-num" type="number" min="0" step="any" placeholder="1"><select id="in-damp-confirm-unit" class="g-unit" aria-label="Damping confirm unit"><option value="ms">ms</option><option value="s">s</option><option value="m" selected>m</option><option value="h">h</option></select></span><span class="field-help">How long a steer must hold before it sticks. Default 1 minute.</span><span class="field-error" hidden></span></label>
-          <label class="field"><span class="field-label" title="inbound.damping.backoff">Damping backoff</span><input id="in-damp-backoff" class="g-num" type="number" min="1" max="16" step="any" placeholder="2"><span class="field-help">Multiplier applied each time a steer flaps. Default 2.</span><span class="field-error" hidden></span></label>
+          <label class="field"><span class="field-label" title="inbound.damping.confirm">Damping confirm</span><span class="g-dur"><input id="in-damp-confirm-raw" type="hidden" class="g-raw"><input id="in-damp-confirm" class="g-num" type="number" min="0" step="any"><select id="in-damp-confirm-unit" class="g-unit" aria-label="Damping confirm unit"><option value="ms">ms</option><option value="s">s</option><option value="m" selected>m</option><option value="h">h</option></select></span><span class="field-help">How long a steer must hold before it sticks. Default: 1 minute.</span><span class="field-error" hidden></span></label>
+          <label class="field"><span class="field-label" title="inbound.damping.backoff">Damping backoff</span><input id="in-damp-backoff" class="g-num" type="number" min="1" max="16" step="any"><span class="field-help">Multiplier applied each time a steer flaps. Default: 2.</span><span class="field-error" hidden></span></label>
           <label class="field"><span class="field-label" title="inbound.damping.max_hold">Damping max hold</span><span class="g-dur"><input id="in-damp-max-raw" type="hidden" class="g-raw"><input id="in-damp-max" class="g-num" type="number" min="0" step="any"><select id="in-damp-max-unit" class="g-unit" aria-label="Damping max hold unit"><option value="ms">ms</option><option value="s">s</option><option value="m" selected>m</option><option value="h">h</option></select></span><span class="field-help">Longest a damped steer stays. Empty uses eight times the hold time.</span><span class="field-error" hidden></span></label>
         </fieldset>
         <div class="block-mount" data-block="inbound_announcer"></div>

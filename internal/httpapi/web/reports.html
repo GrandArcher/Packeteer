@@ -72,10 +72,10 @@
       </select></label>
       <label id="report-from-label" hidden>From <input id="report-from" type="datetime-local"></label>
       <label id="report-to-label" hidden>To <input id="report-to" type="datetime-local"></label>
-      <label id="rf-provider-label" hidden>Provider <input id="rf-provider" type="search" size="14" maxlength="100" placeholder="transit-a" list="rf-providers"></label>
+      <label id="rf-provider-label" hidden>Provider <input id="rf-provider" type="search" size="14" maxlength="100" list="rf-providers"><span class="field-help">Empty shows all providers.</span></label>
       <datalist id="rf-providers"></datalist>
-      <label id="rf-asn-label" hidden>Origin AS <input id="rf-asn" type="search" size="9" placeholder="64500" inputmode="numeric"></label>
-      <label id="rf-prefix-label" hidden>Prefix <input id="rf-prefix" type="search" size="18" placeholder="192.0.2.0/24"></label>
+      <label id="rf-asn-label" hidden>Origin AS <input id="rf-asn" type="search" size="9" inputmode="numeric"><span class="field-help">Empty shows all origins. For example 64500.</span></label>
+      <label id="rf-prefix-label" hidden>Prefix <input id="rf-prefix" type="search" size="18"><span class="field-help">Empty shows all prefixes. For example 192.0.2.0/24.</span></label>
       <label id="rf-cause-label" hidden>Cause <select id="rf-cause">
         <option value="">Any</option>
         <option value="performance">performance</option>
@@ -107,7 +107,7 @@
     </p>
     <form id="report-add-form" class="controls" hidden>
       <label>Dashboard <select id="report-dash"></select></label>
-      <label>New dashboard <input id="report-dash-new" type="text" size="16" maxlength="63" placeholder="name"></label>
+      <label>New dashboard <input id="report-dash-new" type="text" size="16" maxlength="63"></label>
       <button type="submit" id="report-add-go">Add</button>
     </form>
     <p id="report-status" class="tag" role="status"></p>

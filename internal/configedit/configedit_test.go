@@ -199,7 +199,7 @@ func TestSaveInPlaceWhenDirectoryIsReadOnly(t *testing.T) {
 func TestWizard(t *testing.T) {
 	in := WizardInput{
 		ASN: 64512, RouterID: "192.0.2.10", Edge: "192.0.2.254",
-		Providers: []WizardProvider{{"transit-a", "192.0.2.11", "192.0.2.1"}, {"transit-b", "192.0.2.12", "192.0.2.2"}},
+		Providers: []WizardProvider{{Name: "transit-a", SourceIP: "192.0.2.11", NextHop: "192.0.2.1"}, {Name: "transit-b", SourceIP: "192.0.2.12", NextHop: "192.0.2.2"}},
 		Prefix:    "198.51.100.0/24", Host: "198.51.100.10",
 		Storage: true,
 	}
@@ -232,7 +232,7 @@ func TestWizard(t *testing.T) {
 	// A prefix without a pin is still observe, and the host line is absent
 	// so the probe engine picks the targets.
 	bare, err := Wizard(WizardInput{ASN: 64512, RouterID: "192.0.2.10", Edge: "192.0.2.254",
-		Providers: []WizardProvider{{"transit-a", "192.0.2.11", "192.0.2.1"}}, Prefix: "198.51.100.0/24"})
+		Providers: []WizardProvider{{Name: "transit-a", SourceIP: "192.0.2.11", NextHop: "192.0.2.1"}}, Prefix: "198.51.100.0/24"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -241,7 +241,7 @@ func TestWizard(t *testing.T) {
 	}
 	// No probe prefix: still a learn-only edge, no static source, no announcer.
 	none, err := Wizard(WizardInput{ASN: 64512, RouterID: "192.0.2.10", Edge: "192.0.2.254",
-		Providers: []WizardProvider{{"transit-a", "192.0.2.11", "192.0.2.1"}}})
+		Providers: []WizardProvider{{Name: "transit-a", SourceIP: "192.0.2.11", NextHop: "192.0.2.1"}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -251,9 +251,36 @@ func TestWizard(t *testing.T) {
 	}
 }
 
+// A provider row with an ASN, a type, and an IPv6 pair becomes two providers
+// that share the ASN and type; a row without them has none of those keys.
+func TestWizardProviderASNTypeV6(t *testing.T) {
+	out, err := Wizard(WizardInput{ASN: 64512, RouterID: "192.0.2.10", Edge: "192.0.2.254",
+		Providers: []WizardProvider{
+			{Name: "transit-a", SourceIP: "192.0.2.11", NextHop: "192.0.2.1", ASN: 64496, Type: "transit", SourceIP6: "2001:db8::11", NextHop6: "2001:db8::1"},
+			{Name: "peer-b", SourceIP: "192.0.2.12", NextHop: "192.0.2.2"},
+		}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Parse(out)
+	if err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	if len(cfg.Providers) != 3 {
+		t.Fatalf("providers = %+v", cfg.Providers)
+	}
+	a, v6, b := cfg.Providers[0], cfg.Providers[1], cfg.Providers[2]
+	if a.ASN != 64496 || a.Type != "transit" || v6.Name != "transit-a-v6" || v6.SourceIP != "2001:db8::11" || v6.NextHop != "2001:db8::1" || v6.ASN != 64496 || v6.Type != "transit" {
+		t.Fatalf("dual-stack row = %+v / %+v", a, v6)
+	}
+	if b.ASN != 0 || b.Type != "" || strings.Count(string(out), "asn: 64496") != 2 || strings.Count(string(out), "type: transit") != 2 {
+		t.Fatalf("plain row or output wrong:\n%s", out)
+	}
+}
+
 func TestWizardErrors(t *testing.T) {
 	good := WizardInput{ASN: 64512, RouterID: "192.0.2.10", Edge: "192.0.2.254",
-		Providers: []WizardProvider{{"transit-a", "192.0.2.11", "192.0.2.1"}},
+		Providers: []WizardProvider{{Name: "transit-a", SourceIP: "192.0.2.11", NextHop: "192.0.2.1"}},
 		Prefix:    "198.51.100.0/24", Host: "198.51.100.1"}
 	for name, tc := range map[string]struct {
 		mut  func(*WizardInput)
@@ -271,6 +298,10 @@ func TestWizardErrors(t *testing.T) {
 		"inject":              {func(w *WizardInput) { w.Mode = "inject" }, "inject is not a step"},
 		"suggest":             {func(w *WizardInput) { w.Mode = "suggest" }, "always starts in observe"},
 		"newline in name":     {func(w *WizardInput) { w.Providers[0].Name = "a\nmode: inject" }, "one line"},
+		"bad type":            {func(w *WizardInput) { w.Providers[0].Type = "upstream" }, "type"},
+		"v6 source only":      {func(w *WizardInput) { w.Providers[0].SourceIP6 = "2001:db8::11" }, "go together"},
+		"v6 hop only":         {func(w *WizardInput) { w.Providers[0].NextHop6 = "2001:db8::1" }, "go together"},
+		"v4 in the v6 fields": {func(w *WizardInput) { w.Providers[0].SourceIP6, w.Providers[0].NextHop6 = "192.0.2.13", "192.0.2.3" }, "not an IPv6 address"},
 	} {
 		in := good
 		in.Providers = append([]WizardProvider(nil), good.Providers...)
@@ -372,5 +403,37 @@ func TestPreviewSplitsRestartFromOnlineAndWritesNothing(t *testing.T) {
 	bad, err := e.Preview([]byte(observeYAML + "bogus: 1\n"))
 	if err != nil || bad.Result.Valid || !strings.Contains(bad.Diff, "+ bogus: 1") {
 		t.Fatalf("an invalid candidate is reported with its diff: %+v %v", bad, err)
+	}
+}
+
+func TestPrefillWizard(t *testing.T) {
+	if got := PrefillWizard([]byte("mode: observe\n")); got != nil {
+		t.Fatalf("an empty setup prefilled %+v", got)
+	}
+	if got := PrefillWizard([]byte("- not a mapping\n")); got != nil {
+		t.Fatalf("a non-mapping prefilled %+v", got)
+	}
+	got := PrefillWizard([]byte(`asn: 64512
+router_id: 192.0.2.10
+bgp:
+  neighbors:
+    - address: 192.0.2.254
+    - address: 192.0.2.253
+providers:
+  - name: transit-a
+    source_ip: 192.0.2.11
+    next_hop: 192.0.2.1
+    asn: 64496
+    type: transit
+  - name: peer-b
+    source_ip: 192.0.2.12
+    next_hop: 192.0.2.2
+`))
+	want := WizardPrefill{ASN: 64512, RouterID: "192.0.2.10", Edge: "192.0.2.254", Providers: []WizardProvider{
+		{Name: "transit-a", SourceIP: "192.0.2.11", NextHop: "192.0.2.1", ASN: 64496, Type: "transit"},
+		{Name: "peer-b", SourceIP: "192.0.2.12", NextHop: "192.0.2.2"},
+	}}
+	if got == nil || !reflect.DeepEqual(*got, want) {
+		t.Fatalf("prefill = %+v, want %+v", got, want)
 	}
 }

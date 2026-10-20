@@ -537,6 +537,11 @@ type Provider struct {
 	Name     string `yaml:"name"`
 	SourceIP string `yaml:"source_ip"`
 	NextHop  string `yaml:"next_hop"`
+	// ASN is the provider's own AS and Type is transit, peer, or customer.
+	// Both are labels for the Providers page and AS search; no decision
+	// reads them. 0 and "" mean not set.
+	ASN  uint32 `yaml:"asn"`
+	Type string `yaml:"type"`
 	// LocalPref, when set, is the local preference on routes steered to
 	// this provider. It wins over local_pref_cause and the global
 	// local_pref. Nil uses those. 0 is rejected.
@@ -593,6 +598,9 @@ type Provider struct {
 	Exchange string `yaml:"-"`
 	PeerASN  uint32 `yaml:"-"`
 }
+
+// ProviderTypes are the values of a provider's type.
+var ProviderTypes = []string{"transit", "peer", "customer"}
 
 // Exchange is one Internet exchange (#27). Each peer is a provider with
 // its own next hop on the peering LAN and its own probe source. A peer

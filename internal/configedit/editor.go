@@ -86,6 +86,9 @@ type File struct {
 	// Configured is true when the file already has providers, BGP
 	// neighbors, or an ixp block, so the setup wizard starts collapsed.
 	Configured bool `json:"configured"`
+	// Setup is what the wizard fields start with. Nil on a file with no
+	// setup, so a fresh box shows empty fields.
+	Setup *WizardPrefill `json:"setup,omitempty"`
 }
 
 // Configured reports whether data has at least one provider or BGP
@@ -143,7 +146,7 @@ func (e *Editor) Read() (File, error) {
 	if err != nil {
 		return File{}, err
 	}
-	return File{Path: e.path, YAML: string(data), SHA256: Hash(data), Configured: Configured(data)}, nil
+	return File{Path: e.path, YAML: string(data), SHA256: Hash(data), Configured: Configured(data), Setup: PrefillWizard(data)}, nil
 }
 
 // Check validates a candidate without writing it.
@@ -266,7 +269,7 @@ func (e *Editor) Save(data []byte, base string, confirmInject bool) (File, Resul
 		return File{}, res, fmt.Errorf("read back %s: %w", e.path, err)
 	}
 	res.Changes = Diff(cur, data)
-	return File{Path: e.path, YAML: string(data), SHA256: Hash(data), Configured: Configured(data)}, res, nil
+	return File{Path: e.path, YAML: string(data), SHA256: Hash(data), Configured: Configured(data), Setup: PrefillWizard(data)}, res, nil
 }
 
 // writeFile replaces path with data. It first writes a temporary file

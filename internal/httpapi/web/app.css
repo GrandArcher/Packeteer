@@ -265,6 +265,9 @@ fieldset.form { border: 0; margin: 0; padding: 0; }
 .row input.wide-input { width: 14rem; }
 .row .tag { margin: 0; }
 .field-help { color: var(--muted); font-size: 0.75rem; line-height: 1.3; }
+.controls label .field-help, .form label .field-help { display: block; }
+.default { color: var(--muted); font-size: 0.75rem; margin-left: 0.4rem; white-space: nowrap; }
+.wz-fields .field input:not([type=checkbox]) { box-sizing: border-box; width: 16rem; max-width: 100%; }
 .field-error { color: var(--down); font-size: 0.75rem; }
 .field input::placeholder, .row input::placeholder { color: var(--muted); }
 .g-dur, .g-off, .g-toggle, .unit-row { display: inline-flex; flex-wrap: wrap; gap: 4px; align-items: center; }

@@ -174,8 +174,8 @@ function csHostUsers(name) {
 }
 
 // csEnvInput is a field for the name of an environment variable.
-function csEnvInput(row, h, label, key, example, help) {
-  var input = rowInput(h[key], example);
+function csEnvInput(row, h, label, key, help) {
+  var input = rowInput(h[key]);
   input.addEventListener("input", function () { markDirty(input); h[key] = input.value.trim(); });
   attachCheck(input, function () {
     var v = input.value.trim();
@@ -213,7 +213,7 @@ function renderCsHosts() {
     head.appendChild(minus);
     card.appendChild(head);
     var row = el("div", "row");
-    var name = rowInput(h.name, "edge1");
+    var name = rowInput(h.name);
     name.addEventListener("input", function () { markDirty(name); h.name = name.value.trim(); });
     var was = h.name;
     name.addEventListener("change", function () {
@@ -222,10 +222,10 @@ function renderCsHosts() {
       was = h.name;
       renderCsProviders();
     });
-    var addr = rowInput(h.address, "192.0.2.254");
+    var addr = rowInput(h.address);
     addr.addEventListener("input", function () { markDirty(addr); h.address = addr.value.trim(); });
-    row.appendChild(labeled(h.key ? "Host name" : "New SNMP host", name, "Unique name that providers refer to.", "telemetry.snmp.hosts.name"));
-    row.appendChild(labeled("Address", addr, "IP address or host name of the SNMP agent.", "telemetry.snmp.hosts.address"));
+    row.appendChild(labeled(h.key ? "Host name" : "New SNMP host", name, "Unique name that providers refer to, for example edge1.", "telemetry.snmp.hosts.name"));
+    row.appendChild(labeled("Address", addr, "IP address or host name of the SNMP agent, for example 192.0.2.254.", "telemetry.snmp.hosts.address"));
     row.appendChild(labeled("Port", numberControl(h, "port", {min: 1, max: 65535, integer: true, def: 161}), "UDP port of the agent.", "telemetry.snmp.hosts.port"));
     csSelectField(row, h, "SNMP version", "version", [["2c", "2c (community)"], ["3", "3 (user and secrets)"]], "Version 3 is safer. Credentials are environment variable names.", function () {
       if (h.version === "3") {
@@ -241,7 +241,7 @@ function renderCsHosts() {
     card.appendChild(row);
     var creds = el("div", "row");
     if (h.version === "3") {
-      csEnvInput(creds, h, "User variable (name only)", "username_env", "PACKETEER_SNMP_USER", "Environment variable that holds the SNMP user name.");
+      csEnvInput(creds, h, "User variable (name only)", "username_env", "Environment variable that holds the SNMP user name, for example PACKETEER_SNMP_USER.");
       csSelectField(creds, h, "Security level", "security_level", opts(snmp.security_levels), "What the session protects.", function () {
         if (h.security_level === "noAuthNoPriv") ["auth_protocol", "auth_env", "priv_protocol", "priv_env"].forEach(function (k) { h[k] = ""; });
         if (h.security_level === "authNoPriv") { h.priv_protocol = ""; h.priv_env = ""; }
@@ -251,17 +251,17 @@ function renderCsHosts() {
       });
       if (h.security_level !== "noAuthNoPriv") {
         csSelectField(creds, h, "Authentication", "auth_protocol", opts(snmp.auth_protocols), "Protocol of the authentication secret.");
-        csEnvInput(creds, h, "Authentication variable (name only)", "auth_env", "PACKETEER_SNMP_AUTH", "Environment variable that holds the secret (at least 8 characters).");
+        csEnvInput(creds, h, "Authentication variable (name only)", "auth_env", "Environment variable that holds the secret (at least 8 characters), for example PACKETEER_SNMP_AUTH.");
       }
       if (h.security_level === "authPriv") {
         csSelectField(creds, h, "Privacy", "priv_protocol", opts(snmp.priv_protocols), "Protocol of the privacy secret.");
-        csEnvInput(creds, h, "Privacy variable (name only)", "priv_env", "PACKETEER_SNMP_PRIV", "Environment variable that holds the secret (at least 8 characters).");
+        csEnvInput(creds, h, "Privacy variable (name only)", "priv_env", "Environment variable that holds the secret (at least 8 characters), for example PACKETEER_SNMP_PRIV.");
       }
-      var ctx = rowInput(h.context_name, "");
+      var ctx = rowInput(h.context_name);
       ctx.addEventListener("input", function () { markDirty(ctx); h.context_name = ctx.value.trim(); });
       creds.appendChild(labeled("Context", ctx, "SNMP context name. Optional, and not a credential.", "telemetry.snmp.hosts.context_name"));
     } else {
-      csEnvInput(creds, h, "Community variable (name only)", "community_env", "PACKETEER_SNMP_COMMUNITY", "Environment variable that holds the SNMP community.");
+      csEnvInput(creds, h, "Community variable (name only)", "community_env", "Environment variable that holds the SNMP community, for example PACKETEER_SNMP_COMMUNITY.");
     }
     card.appendChild(creds);
     root.appendChild(card);
@@ -295,18 +295,18 @@ function renderCsProviders() {
     lab.className = "field check";
     line.appendChild(lab);
     if (csTracked(p)) {
-      var commit = rowInput(p.commit_mbps, "1000");
+      var commit = rowInput(p.commit_mbps);
       commit.addEventListener("input", function () { p.commit_mbps = commit.value.trim(); });
       commit.addEventListener("change", renderProviders);
-      var iface = rowInput(row.interface, "ether1");
+      var iface = rowInput(row.interface);
       iface.addEventListener("input", function () { row.interface = iface.value.trim(); });
-      var day = rowInput(row.billing_day, "1");
+      var day = rowInput(row.billing_day);
       day.addEventListener("input", function () { row.billing_day = day.value.trim(); });
       var hosts = [["", "choose a host"]].concat(csHostNames().map(function (n) { return [n, n]; }));
-      line.appendChild(labeled("Commit (Mbps)", commit));
+      line.appendChild(labeled("Commit (Mbps)", commit, "Contracted rate in Mbps, for example 1000."));
       line.appendChild(labeled("SNMP host", csSelect(hosts, row.host, function (v) { row.host = v; })));
-      line.appendChild(labeled("Interface", iface));
-      line.appendChild(labeled("Billing day (1-28)", day));
+      line.appendChild(labeled("Interface", iface, "Interface name on the SNMP host, for example ether1."));
+      line.appendChild(labeled("Billing day (1-28)", day, "Day of the month the bill cycle starts."));
       line.appendChild(labeled("Percentile", csSelect(CS_PERCENTILES, row.percentile || "greater_separate", function (v) { row.percentile = v; })));
       if (!row.percentile) row.percentile = "greater_separate";
     } else {
@@ -325,16 +325,16 @@ function renderCsGroups() {
     var row = csRow(p);
     var line = el("div", "row");
     line.appendChild(el("span", "mono", p.name));
-    var group = rowInput(row.group, "edge");
-    var prec = rowInput(row.precedence, "100");
+    var group = rowInput(row.group);
+    var prec = rowInput(row.precedence);
     var cc = el("input");
     cc.type = "checkbox";
     cc.checked = !!row.cc_disable;
     group.addEventListener("input", function () { row.group = group.value.trim(); });
     prec.addEventListener("input", function () { row.precedence = prec.value.trim(); });
     cc.addEventListener("change", function () { row.cc_disable = cc.checked; });
-    line.appendChild(labeled("Group", group));
-    line.appendChild(labeled("Precedence", prec));
+    line.appendChild(labeled("Group", group, "Providers with the same group name share traffic."));
+    line.appendChild(labeled("Precedence", prec, "Lower is preferred. Default: 100."));
     var lab = labeled("Leave out of commit control (cc_disable)", cc);
     lab.className = "field check";
     line.appendChild(lab);

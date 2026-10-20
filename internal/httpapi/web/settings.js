@@ -413,8 +413,8 @@ function block(parent, label, node, help, key) {
   return box;
 }
 
-function comboInput(value, options, placeholder, wide) {
-  var input = rowInput(value, placeholder || "", wide);
+function comboInput(value, options, wide) {
+  var input = rowInput(value, wide);
   input.className = (input.className ? input.className + " " : "") + "g-combo";
   var opts = options || [];
   if (!opts.length) return input;
@@ -440,7 +440,6 @@ function numberInput(raw, spec) {
   if (spec.min != null) input.min = String(spec.min);
   if (spec.max != null) input.max = String(spec.max);
   input.step = spec.integer ? "1" : "any";
-  if (spec.def != null) input.placeholder = String(spec.def);
   input.spellcheck = false;
   writeNumOn(input, raw || "");
   return input;
@@ -475,14 +474,21 @@ function numberControl(obj, key, spec) {
   });
   wrap.appendChild(input);
   if (spec.unit) wrap.appendChild(el("span", "unit", spec.unit));
+  if (spec.def != null) wrap.appendChild(defaultNote(spec.def, spec.unit));
   return wrap;
 }
+// defaultNote shows a built-in default beside its field as text, so a grey
+// value in the box can never be mistaken for one that is set (#350).
+function defaultNote(def, unit) {
+  return el("span", "default", "Default: " + def + (unit ? " " + unit : ""));
+}
+
 function bindNumber(parent, label, obj, key, help, configKey, spec) {
   parent.appendChild(labeled(label, numberControl(obj, key, spec), help, configKey));
 }
 
-function bindText(parent, label, obj, key, placeholder, help, configKey, wide, check) {
-  var input = rowInput(obj[key], placeholder, wide);
+function bindText(parent, label, obj, key, help, configKey, wide, check) {
+  var input = rowInput(obj[key], wide);
   input.dataset.raw = obj[key] || "";
   input.addEventListener("input", function () { markDirty(input); obj[key] = input.value.trim(); });
   if (check) attachCheck(input, function () { return check(input.value.trim()); });
@@ -561,7 +567,7 @@ function bindCIDRs(parent, label, obj, key, help, configKey, rerender) {
   var box = el("div", "g-cidr");
   list.forEach(function (p, i) {
     var row = el("div", "row");
-    var input = rowInput(p, "192.0.2.0/24", true);
+    var input = rowInput(p, true);
     input.className = (input.className ? input.className + " " : "") + "g-cidr-input";
     input.addEventListener("input", function () { markDirty(input); list[i] = input.value.trim(); });
     attachCheck(input, function () { return checkCIDR(input.value.trim(), true, list, i); });
@@ -576,7 +582,7 @@ function bindCIDRs(parent, label, obj, key, help, configKey, rerender) {
   add.type = "button";
   add.addEventListener("click", function () { list.push(""); rerender(); });
   box.appendChild(add);
-  block(parent, label, box, help, configKey);
+  block(parent, label, box, (help ? help + " " : "") + "For example 192.0.2.0/24.", configKey);
 }
 
 function splitHostPort(s) {
@@ -597,7 +603,7 @@ function bindListens(parent, label, obj, key, help, configKey, rerender) {
     hidden.className = "g-raw";
     if (addr) { hidden.value = addr; hidden.setAttribute("value", addr); }
     var parts = splitHostPort(addr);
-    var host = comboInput(parts.host, sources, "every address", true);
+    var host = comboInput(parts.host, sources, true);
     host.className += " g-host";
     var port = el("input");
     port.type = "number";
@@ -605,7 +611,6 @@ function bindListens(parent, label, obj, key, help, configKey, rerender) {
     port.max = "65535";
     port.step = "1";
     port.className = "g-port";
-    port.placeholder = "2055";
     port.value = parts.port;
     if (parts.port) port.setAttribute("value", parts.port);
     port.dataset.raw = parts.port;
@@ -661,7 +666,8 @@ function bindChips(parent, label, obj, key, help, configKey, rerender) {
     var name = asnName(a);
     return [a, name ? "AS " + a + " " + name : "AS " + a];
   });
-  var add = comboInput("", opts, "AS number or name");
+  var add = comboInput("", opts);
+  add.setAttribute("aria-label", "Add " + label + " (AS number or name)");
   add.addEventListener("change", function () { commitASN(add, list, rerender); });
   var err = el("span", "field-error", "");
   err.hidden = true;
@@ -699,7 +705,7 @@ function commitASN(input, list, rerender) {
   rerender();
 }
 
-function bindNames(parent, label, obj, key, help, configKey, placeholder, rerender) {
+function bindNames(parent, label, obj, key, help, configKey, rerender) {
   var list = obj[key] || [];
   obj[key] = list;
   var box = el("div", "g-multi");
@@ -709,7 +715,8 @@ function bindNames(parent, label, obj, key, help, configKey, placeholder, rerend
     chip.appendChild(removeButton(list, i, rerender, "name"));
     box.appendChild(chip);
   });
-  var add = rowInput("", placeholder || "name");
+  var add = rowInput("");
+  add.setAttribute("aria-label", "Add " + label);
   function commit() {
     var v = add.value.trim();
     if (!v) return;
@@ -727,7 +734,7 @@ function bindMulti(parent, label, obj, key, help, configKey, options) {
   var list = obj[key] || [];
   obj[key] = list;
   if (!options.length) {
-    bindNames(parent, label, obj, key, help, configKey, "name", function () { renderPolicies(); });
+    bindNames(parent, label, obj, key, help, configKey, function () { renderPolicies(); });
     return;
   }
   var box = el("div", "g-multi");
@@ -808,7 +815,7 @@ function bindGroup(parent, obj) {
   on.setAttribute("aria-label", "In a group");
   if (obj.group) { on.checked = true; on.setAttribute("checked", "checked"); }
   var names = knownGroups().map(function (g) { return [g, g]; });
-  var combo = comboInput(obj.group, names, "group name");
+  var combo = comboInput(obj.group, names);
   combo.disabled = !obj.group;
   on.addEventListener("change", function () {
     markDirty(on);
@@ -825,7 +832,7 @@ function bindGroup(parent, obj) {
 }
 
 function bindGeo(parent, obj) {
-  var input = rowInput(obj.geoip_db, "/etc/packeteer/country.mmdb", true);
+  var input = rowInput(obj.geoip_db, true);
   input.dataset.raw = obj.geoip_db || "";
   var note = el("span", "field-note", "");
   input.addEventListener("input", function () { markDirty(input); obj.geoip_db = input.value.trim(); note.textContent = ""; });
@@ -846,7 +853,7 @@ function bindGeo(parent, obj) {
       note.textContent = line || "The file could not be opened.";
     }, function () { if (input.value.trim() === v) note.textContent = "Could not check the file."; });
   });
-  var lab = labeled("GeoIP database", input, "Absolute path of a country database file mounted in the container.", "policies.geoip_db");
+  var lab = labeled("GeoIP database", input, "Absolute path of a country database file mounted in the container, for example /etc/packeteer/country.mmdb.", "policies.geoip_db");
   lab.appendChild(note);
   parent.appendChild(lab);
 }
@@ -969,6 +976,21 @@ function editorOff(err) {
   });
 }
 
+// prefillWizard puts the running setup in the wizard fields. A box with no
+// setup keeps them empty.
+function prefillWizard(setup) {
+  if (!setup) return;
+  byId("wz-asn").value = setup.asn ? String(setup.asn) : "";
+  byId("wz-router").value = setup.router_id || "";
+  byId("wz-edge").value = setup.edge || "";
+  if ((setup.providers || []).length) {
+    wzProviders = setup.providers.map(function (p) {
+      return Object.assign(newWzProvider(), p, {asn: p.asn ? String(p.asn) : ""});
+    });
+    renderWzProviders();
+  }
+}
+
 function loadConfig() {
   api("GET", "/api/config").then(function (f) {
     base = f.sha256;
@@ -978,6 +1000,7 @@ function loadConfig() {
     document.getElementById("ed-sha").textContent = f.sha256.slice(0, 12);
     document.getElementById("ed-off").hidden = true;
     setWizardConfigured(!!f.configured);
+    prefillWizard(f.setup);
     edStatus("Loaded.");
     loadForm(f.yaml);
     if (typeof loadSchema === "function") loadSchema();
@@ -1256,7 +1279,7 @@ function paintInboundPrefixes() {
   list.forEach(function (p) {
     if (known[p]) return;
     var row = el("div", "row");
-    var input = rowInput(p, "203.0.113.0/24", true);
+    var input = rowInput(p, true);
     input.className = "wide-input g-cidr-input";
     input.addEventListener("input", function () { markDirty(input); syncInboundPrefixes(box); });
     attachCheck(input, function () { return checkCIDR(input.value.trim(), true, form.inbound.prefixes, form.inbound.prefixes.indexOf(input.value.trim())); });
@@ -1378,7 +1401,7 @@ function renderFlows() {
     var card = entryCard(root, "Flow source", form.flows, i, renderFlows, "flow source", false);
     var a = entryRow(card), b = entryRow(card);
     var n = i + 1;
-    bindText(a, "Name (flow " + n + ")", f, "name", "flow", "Name of this collector. A second one needs its own name.", "sources.flow.name");
+    bindText(a, "Name (flow " + n + ")", f, "name", "Name of this collector. A second one needs its own name.", "sources.flow.name");
     bindListens(a, "Listen (flow " + n + ")", f, "listen", "Host and UDP port for NetFlow, IPFIX, or sFlow. One row per address.", "sources.flow.listen", renderFlows);
     bindCIDRs(a, "Exclude (flow " + n + ")", f, "exclude", "Prefixes this collector ignores. One per row.", "sources.flow.exclude", renderFlows);
     bindDuration(b, "Window", f, "window", "How long one flow sample covers.", "sources.flow.window", "m", false, 1000, 86400000);
@@ -1403,7 +1426,7 @@ function renderExchanges() {
   form.exchanges.forEach(function (x, i) {
     var card = entryCard(root, "Exchange", form.exchanges, i, renderExchanges, "exchange", false);
     var a = entryRow(card);
-    bindText(a, "Name (exchange " + (i + 1) + ")", x, "name", "ix-lab", "Name of this exchange. It must be unique.", "exchanges.name");
+    bindText(a, "Name (exchange " + (i + 1) + ")", x, "name", "Name of this exchange. It must be unique.", "exchanges.name");
     bindCIDRs(a, "Peering LANs (exchange " + (i + 1) + ")", x, "lans", "Peering LAN prefixes. One per row.", "exchanges.lans", renderExchanges);
     bindGroup(a, x);
     var bmp = selectInput(bmpChoices, x.bmp);
@@ -1419,15 +1442,15 @@ function renderExchanges() {
     });
     x.peers.forEach(function (p, j) {
       var row = entryRow(card);
-      bindText(row, "Peer name", p, "name", "ix-peer-a", "Name of this peer. It must be unique.", "exchanges.peers.name");
-      var asn = comboInput(p.asn, memberASNs.map(function (a) { return [a, asnName(a) ? "AS " + a + " " + asnName(a) : "AS " + a]; }), "64501");
+      bindText(row, "Peer name", p, "name", "Name of this peer. It must be unique.", "exchanges.peers.name");
+      var asn = comboInput(p.asn, memberASNs.map(function (a) { return [a, asnName(a) ? "AS " + a + " " + asnName(a) : "AS " + a]; }));
       asn.addEventListener("input", function () { markDirty(asn); p.asn = readPeerASN(asn.value); });
       attachCheck(asn, function () {
         p.asn = readPeerASN(asn.value);
         return p.asn ? checkASN(p.asn, null) : "";
       });
-      row.appendChild(labeled("Peer AS", asn, "Peer AS. Pick a discovered member, or type the number.", "exchanges.peers.asn"));
-      var hop = comboInput(p.next_hop, memberHops.map(function (h) { return [h, h]; }), "203.0.113.11");
+      row.appendChild(labeled("Peer AS", asn, "Peer AS, for example 64501. Pick a discovered member, or type the number.", "exchanges.peers.asn"));
+      var hop = comboInput(p.next_hop, memberHops.map(function (h) { return [h, h]; }));
       hop.addEventListener("input", function () { markDirty(hop); p.next_hop = hop.value.trim(); });
       attachCheck(hop, function () {
         if (!p.next_hop) return "";
@@ -1438,14 +1461,14 @@ function renderExchanges() {
         if (addr && lans.length && !lans.some(function (lan) { return prefixInside(addr, lan); })) return "That next hop is not on a peering LAN of this exchange.";
         return "";
       });
-      row.appendChild(labeled("Peer next hop", hop, "Next hop on a peering LAN. Pick a discovered member, or type it.", "exchanges.peers.next_hop"));
-      var src = comboInput(p.source_ip, guide.sources.map(function (s) { return [s, s]; }), "192.0.2.31");
+      row.appendChild(labeled("Peer next hop", hop, "Next hop on a peering LAN, for example 203.0.113.11. Pick a discovered member, or type it.", "exchanges.peers.next_hop"));
+      var src = comboInput(p.source_ip, guide.sources.map(function (s) { return [s, s]; }));
       src.addEventListener("input", function () { markDirty(src); p.source_ip = src.value.trim(); });
       attachCheck(src, function () {
         if (!p.source_ip) return "";
         return (checkIPv4(p.source_ip) || parseV6(p.source_ip) != null) ? "" : "Enter an IP address.";
       });
-      row.appendChild(labeled("Peer probe source", src, "Local address probes to this peer leave from.", "exchanges.peers.source_ip"));
+      row.appendChild(labeled("Peer probe source", src, "Local address probes to this peer leave from, for example 192.0.2.31.", "exchanges.peers.source_ip"));
       bindNumber(row, "Peer cost", p, "cost", "Price per Mbps for this peer.", "exchanges.peers.cost", {min: 0, max: 1e12, unit: "per Mbps"});
       var fold = el("details", "advanced");
       fold.appendChild(el("summary", "", "Show advanced"));
@@ -1528,7 +1551,7 @@ function renderOutages() {
   form.outages.forEach(function (o, i) {
     var card = entryCard(root, "Outage detection", form.outages, i, renderOutages, "outage detection", false);
     var a = entryRow(card);
-    bindText(a, "Name (outage " + (i + 1) + ")", o, "name", "outage", "Name of this detector.", "sources.outage.name");
+    bindText(a, "Name (outage " + (i + 1) + ")", o, "name", "Name of this detector.", "sources.outage.name");
     bindNumber(a, "Min prefixes", o, "min_prefixes", "How many prefixes must fail together. 1 is refused.", "sources.outage.min_prefixes", {min: 0, max: 100000, integer: true, def: 3, refuse: "1"});
     bindDuration(a, "Window", o, "window", "How far back the detector looks.", "sources.outage.window", "m", false, 0, 86400000);
     bindNumber(a, "Loss", o, "loss_pct", "Loss percent that counts as a failure.", "sources.outage.loss_pct", {min: 0, max: 100, unit: "%", def: 20, cls: "g-pct"});
@@ -1546,18 +1569,18 @@ function renderVIPs() {
   form.vips.forEach(function (v, i) {
     var card = entryCard(root, "VIP source", form.vips, i, renderVIPs, "VIP source", false);
     var a = entryRow(card);
-    bindText(a, "Name (VIP " + (i + 1) + ")", v, "name", "vip", "Name of this VIP source.", "sources.vip.name");
+    bindText(a, "Name (VIP " + (i + 1) + ")", v, "name", "Name of this VIP source.", "sources.vip.name");
     bindDuration(a, "Interval", v, "interval", "How often these prefixes are probed.", "sources.vip.interval", "s", false, 1000, 86400000);
     bindNumber(a, "Max targets", v, "max_targets", "Cap on prefixes this source probes. At least 1; empty uses 100.", "sources.vip.max_targets", {min: 1, max: 100000, integer: true, def: 100});
     bindChips(a, "VIP ASNs", v, "asns", "Origin AS numbers probed on this interval.", "sources.vip.asns", renderVIPs);
     v.prefixes.forEach(function (t, j) {
       var row = entryRow(card);
-      var prefix = rowInput(t.prefix, "203.0.113.0/24", true);
+      var prefix = rowInput(t.prefix, true);
       prefix.className = "wide-input g-cidr-input";
       prefix.addEventListener("input", function () { markDirty(prefix); t.prefix = prefix.value.trim(); });
       attachCheck(prefix, function () { return checkCIDR(prefix.value.trim(), true, v.prefixes.map(function (x) { return x.prefix; }), j); });
-      row.appendChild(labeled("VIP prefix", prefix, "Prefix probed on the VIP interval.", "sources.vip.prefixes"));
-      var host = rowInput(t.host, "203.0.113.1");
+      row.appendChild(labeled("VIP prefix", prefix, "Prefix probed on the VIP interval, for example 203.0.113.0/24.", "sources.vip.prefixes"));
+      var host = rowInput(t.host);
       host.addEventListener("input", function () { markDirty(host); t.host = host.value.trim(); });
       attachCheck(host, function () {
         if (!t.host) return "";
@@ -1567,7 +1590,7 @@ function renderVIPs() {
         if (p && addr && !prefixInside(addr, p)) return "That host is outside the prefix.";
         return "";
       });
-      row.appendChild(labeled("Pinned host", host, "Optional address inside the prefix.", "sources.vip.host"));
+      row.appendChild(labeled("Pinned host", host, "Optional address inside the prefix, for example 203.0.113.1.", "sources.vip.host"));
       row.appendChild(removeButton(v.prefixes, j, renderVIPs, "VIP prefix"));
     });
     var add = el("button", "small", "+ VIP prefix");
@@ -1584,7 +1607,7 @@ function ruleRow(card, p, r, j) {
   var traffic = selectInput([["", "any traffic"], ["transit", "transit"], ["local", "local"]], r.traffic);
   action.addEventListener("change", function () { r.action = action.value; });
   traffic.addEventListener("change", function () { r.traffic = traffic.value; });
-  bindText(row, "Rule name", r, "name", "name", "Name of this rule.", "policies.rules.name");
+  bindText(row, "Rule name", r, "name", "Name of this rule.", "policies.rules.name");
   action.className = "g-select";
   row.appendChild(labeled("Action", action, "What the rule does when it matches.", "policies.rules.action"));
   var provOpts = (form.providers || []).map(function (p) { return p.name ? [p.name, p.name] : null; }).filter(Boolean);
@@ -1608,7 +1631,7 @@ function renderPolicies() {
   form.policies.forEach(function (p, i) {
     var card = entryCard(root, "Policy", form.policies, i, renderPolicies, "policy", true);
     var head = entryRow(card);
-    bindText(head, "Name (policy " + (i + 1) + ")", p, "name", "rules", "Name of this policy. A second one needs its own name.", "policies.name");
+    bindText(head, "Name (policy " + (i + 1) + ")", p, "name", "Name of this policy. A second one needs its own name.", "policies.name");
     bindGeo(head, p);
     p.rules.forEach(function (r, j) { ruleRow(card, p, r, j); });
     var add = el("button", "small", "+ Rule");
@@ -1628,7 +1651,7 @@ function renderAnomalyRules() {
   var allow = form.anomaly.mitigation_allowlist || [];
   form.anomaly.rules.forEach(function (r, i) {
     var row = el("div", "row");
-    bindText(row, "Anomaly rule name", r, "name", "udp-flood", "Name of this rule. The first match wins.", "anomaly.rules.name");
+    bindText(row, "Anomaly rule name", r, "name", "Name of this rule. The first match wins.", "anomaly.rules.name");
     if (allow.length) anomalyPrefixPicks(row, r, allow);
     else bindCIDRs(row, "Anomaly rule prefixes", r, "prefixes", "Prefixes this rule matches. One per row.", "anomaly.rules.prefixes", renderAnomalyRules);
     var protoOpts = protoNames.map(function (n) { return [n, n]; });
@@ -1638,9 +1661,9 @@ function renderAnomalyRules() {
     action.className = "g-select";
     action.addEventListener("change", function () { r.action = action.value; });
     row.appendChild(labeled("Anomaly rule action", action, "What the mitigation controller is asked to do.", "anomaly.rules.action"));
-    var target = comboInput(r.target, guide.targets.map(function (t) { return [t, t]; }), "scrubber");
+    var target = comboInput(r.target, guide.targets.map(function (t) { return [t, t]; }));
     target.addEventListener("input", function () { markDirty(target); r.target = target.value.trim(); });
-    row.appendChild(labeled("Anomaly rule target", target, "Redirect target. Type a name when none is known yet.", "anomaly.rules.target"));
+    row.appendChild(labeled("Anomaly rule target", target, "Redirect target, for example scrubber. Type a name when none is known yet.", "anomaly.rules.target"));
     bindNumber(row, "Anomaly rule rate Mbit/s", r, "rate_mbps", "Rate cap for a rate-limit action.", "anomaly.rules.rate_mbps", {min: 0, max: 1e12, unit: "Mbps"});
     bindDuration(row, "Anomaly rule TTL", r, "ttl", "How long the mitigation rule stays. Empty uses the mitigation default.", "anomaly.rules.ttl", "m", false, 0, 86400000 * 30);
     var minus = el("button", "small", "-");
@@ -1747,12 +1770,13 @@ function fillKnobs() {
   }
 }
 
-function rowInput(value, placeholder, wide) {
+// rowInput never sets a placeholder: an example in the box reads as a value
+// that is set (#350). Examples go in the help line.
+function rowInput(value, wide) {
   var input = el("input");
   input.type = "text";
   input.value = value || "";
   if (value) input.setAttribute("value", value);
-  input.placeholder = placeholder;
   input.spellcheck = false;
   if (wide) input.className = "wide-input";
   return input;
@@ -1782,9 +1806,9 @@ function renderProviders() {
   var sources = guide.sources.map(function (s) { return [s, s]; });
   form.providers.forEach(function (p, i) {
     var row = el("div", "row");
-    var name = rowInput(p.name, "name");
-    var src = comboInput(p.source_ip, sources, "probe source");
-    var hop = comboInput(p.next_hop, hops, "next hop");
+    var name = rowInput(p.name);
+    var src = comboInput(p.source_ip, sources);
+    var hop = comboInput(p.next_hop, hops);
     name.addEventListener("input", function () { markDirty(name); form.providers[i].name = name.value.trim(); });
     src.addEventListener("input", function () { markDirty(src); form.providers[i].source_ip = src.value.trim(); });
     hop.addEventListener("input", function () { markDirty(hop); form.providers[i].next_hop = hop.value.trim(); });
@@ -1828,9 +1852,9 @@ function renderTargets() {
   clear(root);
   form.targets.forEach(function (t, i) {
     var row = el("div", "row");
-    var prefix = rowInput(t.prefix, "192.0.2.0/24", true);
+    var prefix = rowInput(t.prefix, true);
     prefix.className = "wide-input g-cidr-input";
-    var host = rowInput(t.host, "192.0.2.10");
+    var host = rowInput(t.host);
     prefix.addEventListener("input", function () { markDirty(prefix); form.targets[i].prefix = prefix.value.trim(); });
     host.addEventListener("input", function () { markDirty(host); form.targets[i].host = host.value.trim(); });
     attachCheck(prefix, function () { return checkCIDR(prefix.value.trim(), true, form.targets.map(function (x) { return x.prefix; }), i); });
@@ -1843,8 +1867,8 @@ function renderTargets() {
       if (p && addr && !prefixInside(addr, p)) return "That host is outside the prefix.";
       return "";
     });
-    row.appendChild(labeled("Prefix", prefix, "Prefix to probe.", "sources.static.prefix"));
-    row.appendChild(labeled("Host", host, "Optional address inside the prefix. Empty probes a few addresses inside it.", "sources.static.host"));
+    row.appendChild(labeled("Prefix", prefix, "Prefix to probe, for example 192.0.2.0/24.", "sources.static.prefix"));
+    row.appendChild(labeled("Host", host, "Optional address inside the prefix, for example 192.0.2.10. Empty probes a few addresses inside it.", "sources.static.host"));
     var minus = el("button", "small", "-");
     minus.type = "button";
     minus.title = "Remove prefix";
@@ -1860,11 +1884,11 @@ function renderAllow() {
   clear(root);
   form.allowlist.forEach(function (prefix, i) {
     var row = el("div", "row");
-    var input = rowInput(prefix, "192.0.2.0/24", true);
+    var input = rowInput(prefix, true);
     input.className = "wide-input g-cidr-input";
     input.addEventListener("input", function () { markDirty(input); form.allowlist[i] = input.value.trim(); });
     attachCheck(input, function () { return checkCIDR(input.value.trim(), true, form.allowlist, i); });
-    row.appendChild(labeled("Prefix", input, "Prefix that may be injected.", "allowlist"));
+    row.appendChild(labeled("Prefix", input, "Prefix that may be injected, for example 192.0.2.0/24.", "allowlist"));
     var minus = el("button", "small", "-");
     minus.type = "button";
     minus.title = "Remove allowlist prefix";
@@ -2040,7 +2064,11 @@ function loadSuggestions() {
 
 // The setup wizard (#106) is three steps. It always posts mode observe.
 // Inject is not a step, and there is no field for a secret.
-var wzProviders = [{name: "", source_ip: "", next_hop: ""}];
+function newWzProvider(hop) {
+  return {name: "", source_ip: "", next_hop: hop || "", asn: "", type: "", source_ip6: "", next_hop6: ""};
+}
+var wzProviders = [newWzProvider()];
+var wzTypes = [["", "Not set"], ["transit", "Transit"], ["peer", "Peer"], ["customer", "Customer"]];
 var wzSuggestions = [];
 
 function showWizardStep(n) {
@@ -2056,15 +2084,30 @@ function renderWzProviders() {
   clear(root);
   wzProviders.forEach(function (p, i) {
     var row = el("div", "row");
-    var name = rowInput(p.name, "name");
-    var src = comboInput(p.source_ip, guide.sources.map(function (s) { return [s, s]; }), "probe source");
-    var hop = comboInput(p.next_hop, hopOptions().map(function (h) { return [h, h]; }), "next hop");
+    var name = rowInput(p.name);
+    var src = comboInput(p.source_ip, guide.sources.map(function (s) { return [s, s]; }));
+    var hop = comboInput(p.next_hop, hopOptions().map(function (h) { return [h, h]; }));
     name.addEventListener("input", function () { wzProviders[i].name = name.value.trim(); });
     src.addEventListener("input", function () { wzProviders[i].source_ip = src.value.trim(); });
     hop.addEventListener("input", function () { wzProviders[i].next_hop = hop.value.trim(); });
     row.appendChild(labeled("Name", name, "Name of this provider.", "providers.name"));
     row.appendChild(labeled("Probe source", src, "Local address probes leave from.", "providers.source_ip"));
     row.appendChild(labeled("Next hop", hop, "Next hop seen on BGP or BMP, or type an address.", "providers.next_hop"));
+    var asn = rowInput(p.asn);
+    asn.addEventListener("input", function () { wzProviders[i].asn = asn.value.trim(); });
+    attachCheck(asn, function () { return asn.value.trim() ? checkASN(asn.value.trim(), null) : ""; });
+    row.appendChild(labeled("Provider AS", asn, "Optional. The provider's AS number, for example 64496.", "providers.asn"));
+    var type = selectInput(wzTypes, p.type);
+    type.addEventListener("change", function () { wzProviders[i].type = type.value; });
+    row.appendChild(labeled("Type", type, "Optional. Shown on the Providers page.", "providers.type"));
+    var src6 = rowInput(p.source_ip6);
+    src6.addEventListener("input", function () { wzProviders[i].source_ip6 = src6.value.trim(); });
+    attachCheck(src6, function () { return src6.value.trim() && parseV6(src6.value.trim()) == null ? "Enter an IPv6 address." : ""; });
+    row.appendChild(labeled("IPv6 probe source", src6, "Optional, with the IPv6 next hop. Adds a second provider named after this one with -v6, for example 2001:db8::11.", "providers.source_ip"));
+    var hop6 = rowInput(p.next_hop6);
+    hop6.addEventListener("input", function () { wzProviders[i].next_hop6 = hop6.value.trim(); });
+    attachCheck(hop6, function () { return hop6.value.trim() && parseV6(hop6.value.trim()) == null ? "Enter an IPv6 address." : ""; });
+    row.appendChild(labeled("IPv6 next hop", hop6, "Optional, with the IPv6 probe source, for example 2001:db8::1.", "providers.next_hop"));
     var minus = el("button", "small", "-");
     minus.type = "button";
     minus.title = "Remove provider";
@@ -2096,7 +2139,7 @@ function renderWzSuggestions() {
     var b = el("button", "small", "Add row");
     b.type = "button";
     b.addEventListener("click", function () {
-      wzProviders.push({name: "", source_ip: "", next_hop: s.next_hop || ""});
+      wzProviders.push(newWzProvider(s.next_hop));
       renderWzProviders();
       renderWzSuggestions();
       document.getElementById("wz-status").textContent = "Row added from the session. Name it and set the probe source. Nothing is saved.";
@@ -2122,6 +2165,9 @@ function providerProblems() {
   if (!wzProviders.length) p.push("Providers: add at least one row.");
   wzProviders.forEach(function (pr, i) {
     if (!pr.name || !pr.source_ip || !pr.next_hop) p.push("Provider " + (i + 1) + ": needs a name, a probe source, and a next hop.");
+    if (pr.asn && checkASN(pr.asn, null)) p.push("Provider " + (i + 1) + ": the provider AS must be a number from 1 to 4294967295, or empty.");
+    if (!!pr.source_ip6 !== !!pr.next_hop6) p.push("Provider " + (i + 1) + ": the IPv6 probe source and the IPv6 next hop go together; fill both or neither.");
+    if ((pr.source_ip6 && parseV6(pr.source_ip6) == null) || (pr.next_hop6 && parseV6(pr.next_hop6) == null)) p.push("Provider " + (i + 1) + ": the IPv6 fields need IPv6 addresses.");
   });
   return p;
 }
@@ -2164,7 +2210,12 @@ function runWizard() {
   var host = document.getElementById("wz-host").value.trim();
   var body = {asn: Number(document.getElementById("wz-asn").value) || 0, router_id: document.getElementById("wz-router").value.trim(),
     edge: document.getElementById("wz-edge").value.trim(), providers: wzProviders.map(function (p) {
-      return {name: p.name, source_ip: p.source_ip, next_hop: p.next_hop};
+      var out = {name: p.name, source_ip: p.source_ip, next_hop: p.next_hop};
+      if (p.asn) out.asn = Number(p.asn);
+      if (p.type) out.type = p.type;
+      if (p.source_ip6) out.source_ip6 = p.source_ip6;
+      if (p.next_hop6) out.next_hop6 = p.next_hop6;
+      return out;
     }), storage: document.getElementById("wz-storage").checked};
   if (prefix) body.prefix = prefix;
   if (host) body.host = host;
@@ -2316,7 +2367,7 @@ document.getElementById("wz-next-3").addEventListener("click", function () {
 });
 document.getElementById("wz-back-4").addEventListener("click", function () { showWizardStep(3); });
 document.getElementById("wz-add-provider").addEventListener("click", function () {
-  wzProviders.push({name: "", source_ip: "", next_hop: ""});
+  wzProviders.push(newWzProvider());
   renderWzProviders();
 });
 document.getElementById("wz-sug").addEventListener("click", function () {

@@ -172,6 +172,9 @@ func (c *Config) validateProviders(add func(string, ...any)) {
 		} else if src.IsValid() && src.Is4() != nh.Is4() {
 			add("%s: source_ip and next_hop must be the same address family", label)
 		}
+		if !slices.Contains(ProviderTypes, p.Type) && p.Type != "" {
+			add("%s: type %q is invalid (want transit, peer, or customer)", label, p.Type)
+		}
 		if !validProviderGroup(p.Group) {
 			add("%s: group %q must be 1-64 characters of letters, digits, '_', '.' or '-', starting with a letter or digit", label, p.Group)
 		}
