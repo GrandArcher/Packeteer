@@ -102,7 +102,7 @@ function suggestFor(key) {
 
 function withDefault(f) {
   var help = f.help || "";
-  if (f.default && f.kind !== "int" && f.kind !== "float" && f.kind !== "bool") help += " Default " + f.default + ".";
+  if (f.default && f.kind !== "int" && f.kind !== "float" && f.kind !== "bool") help += " Default: " + f.default + ".";
   return help;
 }
 
@@ -195,7 +195,7 @@ function renderField(parent, f, obj, path, rerender) {
 
 function renderText(box, f, obj, help, check) {
   var options = suggestFor(f.key);
-  var input = options.length ? comboInput(obj[f.key], options, f.default || "", true) : rowInput(obj[f.key], f.default || "", true);
+  var input = options.length ? comboInput(obj[f.key], options, true) : rowInput(obj[f.key], true);
   input.dataset.raw = obj[f.key] || "";
   input.addEventListener("input", function () { markDirty(input); obj[f.key] = input.value.trim(); });
   if (check) attachCheck(input, function () { return check(input.value.trim()); });
@@ -250,7 +250,7 @@ function renderStrings(box, f, obj, help, check, rerender) {
   var wrap = el("div", "g-strings");
   list.forEach(function (v, i) {
     var row = el("div", "row");
-    var input = options.length ? comboInput(v, options, "", true) : rowInput(v, "", true);
+    var input = options.length ? comboInput(v, options, true) : rowInput(v, true);
     input.className += " g-string-input";
     input.addEventListener("input", function () { markDirty(input); list[i] = input.value.trim(); });
     attachCheck(input, function () {
@@ -466,7 +466,7 @@ function renderPlugins() {
       head.appendChild(minus);
     }
     card.appendChild(head);
-    var name = rowInput(p.name, "", true);
+    var name = rowInput(p.name, true);
     name.addEventListener("input", function () { markDirty(name); p.name = name.value.trim(); });
     attachCheck(name, function () { return name.value.trim() ? jsChecks.name(name.value.trim()) : ""; });
     card.appendChild(labeled("Name", name, "Optional label. It defaults to the type.", "name"));
@@ -498,7 +498,7 @@ function renderSettings(card, p, at, locked) {
       control = selectInput([["true", "true"], ["false", "false"]], s.value);
       control.addEventListener("change", function () { markDirty(control); s.value = control.value; });
     } else {
-      control = rowInput(s.value, "", true);
+      control = rowInput(s.value, true);
       control.dataset.raw = s.value || "";
       control.addEventListener("input", function () { markDirty(control); s.value = control.value.trim(); });
       if (s.kind === "int") attachCheck(control, function () { return control.value.trim() && !/^-?\d+$/.test(control.value.trim()) ? "Enter a whole number." : ""; });
@@ -511,8 +511,10 @@ function renderSettings(card, p, at, locked) {
     card.appendChild(fold);
     return;
   }
-  var key = rowInput("", "setting name", false);
-  var value = rowInput("", "value", false);
+  var key = rowInput("");
+  key.setAttribute("aria-label", "New setting name");
+  var value = rowInput("");
+  value.setAttribute("aria-label", "New setting value");
   var add = el("button", "small", "+ Setting");
   add.type = "button";
   add.addEventListener("click", function () {

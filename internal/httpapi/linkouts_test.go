@@ -123,6 +123,20 @@ linkouts:
 	}
 }
 
+func TestProviderCarriesASNAndType(t *testing.T) {
+	rows := assembleProviders(Input{Providers: []config.Provider{
+		{Name: "transit-a", SourceIP: "192.0.2.1", NextHop: "192.0.2.2", ASN: 64496, Type: "transit"},
+		{Name: "transit-b", SourceIP: "192.0.2.3", NextHop: "192.0.2.4"},
+	}})
+	if rows[0].ASN != 64496 || rows[0].Type != "transit" {
+		t.Fatalf("rows[0] = %+v", rows[0])
+	}
+	raw, _ := json.Marshal(rows[1])
+	if strings.Contains(string(raw), `"asn"`) || strings.Contains(string(raw), `"type"`) {
+		t.Errorf("a provider with no labels carries them: %s", raw)
+	}
+}
+
 func TestProviderCarriesExchangePeer(t *testing.T) {
 	in := Input{Providers: []config.Provider{
 		{Name: "ix-a", SourceIP: "192.0.2.1", NextHop: "192.0.2.2", Exchange: "ix-lab", PeerASN: 64496},

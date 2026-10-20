@@ -65,7 +65,7 @@ storage:
 
 // TestWizardUISmoke (#345) drives the real settings page in Node against the
 // real handler: a three-provider config with sign-in on, the wizard run with
-// one provider. The page must collapse the wizard, show the diff and the
+// one provider with an ASN, a type, and an IPv6 pair. The page must collapse the wizard, show the diff and the
 // loss, leave the editor alone until the operator confirms, and keep auth
 // on afterwards.
 func TestWizardUISmoke(t *testing.T) {
@@ -90,13 +90,31 @@ func TestWizardUISmoke(t *testing.T) {
 	if err != nil {
 		t.Fatalf("editor text after the wizard: %v\n%s", err, got)
 	}
-	if !cfg.AuthEnabled() || len(cfg.Providers) != 1 || cfg.Mode != config.ModeObserve {
-		t.Fatalf("after the wizard: auth=%v providers=%d mode=%s", cfg.AuthEnabled(), len(cfg.Providers), cfg.Mode)
+	if !cfg.AuthEnabled() || len(cfg.Providers) != 2 || cfg.Providers[0].ASN != 64496 || cfg.Providers[0].Type != "transit" || cfg.Providers[1].Name != "transit-a-v6" || cfg.Mode != config.ModeObserve {
+		t.Fatalf("after the wizard: auth=%v providers=%+v mode=%s", cfg.AuthEnabled(), cfg.Providers, cfg.Mode)
 	}
 	if res := e.srv.editor.Check(got); !res.Valid {
 		t.Fatalf("the editor refuses the result: %v", res.Errors)
 	}
 	if disk, _ := os.ReadFile(e.path); strings.TrimSpace(string(disk)) != strings.TrimSpace(wizardSmokeYAML) {
 		t.Fatal("the wizard wrote the file")
+	}
+}
+
+// TestWizardFreshUISmoke (#350) drives the real settings page against a
+// config with no setup: the wizard is open, its fields and the provider row
+// are empty with no placeholder, and the examples are in the help lines.
+func TestWizardFreshUISmoke(t *testing.T) {
+	node := nodeOrSkip(t)
+	e := newUI(t)
+	if err := os.WriteFile(e.path, []byte("mode: observe\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(e.h)
+	defer srv.Close()
+	cmd := exec.Command(node, "settings_form_test.js")
+	cmd.Env = append(os.Environ(), "PACKETEER_URL="+srv.URL, "PACKETEER_TOKEN="+e.tokens[plugin.RoleAdmin], "PACKETEER_CASE=fresh")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("fresh wizard smoke: %v\n%s", err, out)
 	}
 }

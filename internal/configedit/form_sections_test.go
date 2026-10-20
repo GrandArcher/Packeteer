@@ -669,7 +669,7 @@ func TestFormTargetCapsAtLimit(t *testing.T) {
 func TestWizardFlowStep(t *testing.T) {
 	in := WizardInput{
 		ASN: 64512, RouterID: "192.0.2.10", Edge: "192.0.2.254",
-		Providers: []WizardProvider{{"transit-a", "192.0.2.11", "192.0.2.1"}},
+		Providers: []WizardProvider{{Name: "transit-a", SourceIP: "192.0.2.11", NextHop: "192.0.2.1"}},
 		Prefix:    "198.51.100.0/24",
 		Flow:      &WizardFlow{Listen: "192.0.2.10:2055"},
 	}
@@ -728,7 +728,7 @@ func TestWizardFlowStep(t *testing.T) {
 func TestWizardFlowErrors(t *testing.T) {
 	good := WizardInput{
 		ASN: 64512, RouterID: "192.0.2.10", Edge: "192.0.2.254",
-		Providers: []WizardProvider{{"transit-a", "192.0.2.11", "192.0.2.1"}},
+		Providers: []WizardProvider{{Name: "transit-a", SourceIP: "192.0.2.11", NextHop: "192.0.2.1"}},
 	}
 	for listen, want := range map[string]string{
 		"":                  "host:port",

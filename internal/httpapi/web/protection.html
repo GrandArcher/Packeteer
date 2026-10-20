@@ -66,7 +66,7 @@
       <p id="mit-form-note" class="tag"></p>
       <div class="form">
         <label>Prefix (learned, inside the allowlist)
-          <input id="mf-prefix" type="text" list="mf-prefix-list" placeholder="203.0.113.0/24" spellcheck="false" autocomplete="off">
+          <input id="mf-prefix" type="text" list="mf-prefix-list" spellcheck="false" autocomplete="off"><span class="field-help">For example 203.0.113.0/24.</span>
         </label>
         <datalist id="mf-prefix-list"></datalist>
         <label>Action
@@ -75,17 +75,17 @@
         <label id="mf-target-wrap">Target
           <select id="mf-target"></select>
         </label>
-        <label>TTL <input id="mf-ttl" type="text" placeholder="1h" spellcheck="false"></label>
+        <label>TTL <input id="mf-ttl" type="text" spellcheck="false"><span class="field-help">For example 1h. Empty uses the default.</span></label>
         <label>Reason <input id="mf-reason" type="text" maxlength="256" spellcheck="false"></label>
       </div>
       <fieldset id="mf-flowspec" class="form" hidden>
         <legend>FlowSpec match</legend>
-        <label>Source network <input id="mf-source" type="text" placeholder="192.0.2.0/25" spellcheck="false"></label>
-        <label>Protocols <input id="mf-protocols" type="text" placeholder="udp, tcp" spellcheck="false"></label>
-        <label>Destination ports <input id="mf-dports" type="text" placeholder="53, 1000-2000" spellcheck="false"></label>
-        <label>Source ports <input id="mf-sports" type="text" placeholder="123" spellcheck="false"></label>
-        <label id="mf-rate-wrap">Rate (Mbit/s) <input id="mf-rate" type="text" inputmode="decimal" placeholder="100" spellcheck="false"></label>
-        <label id="mf-countries-wrap">Source countries <input id="mf-countries" type="text" placeholder="XX, YY" spellcheck="false"></label>
+        <label>Source network <input id="mf-source" type="text" spellcheck="false"><span class="field-help">For example 192.0.2.0/25.</span></label>
+        <label>Protocols <input id="mf-protocols" type="text" spellcheck="false"><span class="field-help">For example udp, tcp.</span></label>
+        <label>Destination ports <input id="mf-dports" type="text" spellcheck="false"><span class="field-help">For example 53, 1000-2000.</span></label>
+        <label>Source ports <input id="mf-sports" type="text" spellcheck="false"><span class="field-help">For example 123.</span></label>
+        <label id="mf-rate-wrap">Rate (Mbit/s) <input id="mf-rate" type="text" inputmode="decimal" spellcheck="false"><span class="field-help">For example 100.</span></label>
+        <label id="mf-countries-wrap">Source countries <input id="mf-countries" type="text" spellcheck="false"><span class="field-help">Two-letter country codes, separated by commas.</span></label>
       </fieldset>
       <div class="controls">
         <button type="submit" id="mf-add">Add rule</button>

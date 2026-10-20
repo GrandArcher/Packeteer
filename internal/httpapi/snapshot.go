@@ -108,6 +108,8 @@ type Provider struct {
 	Name       string `json:"name"`
 	Source     string `json:"source,omitempty"`
 	NextHop    string `json:"next_hop,omitempty"`
+	ASN        uint32 `json:"asn,omitempty"`
+	Type       string `json:"type,omitempty"`
 	Exclude    bool   `json:"exclude"`
 	Group      string `json:"group,omitempty"`
 	Precedence int    `json:"precedence,omitempty"`
@@ -417,7 +419,7 @@ func assembleProviders(in Input) []Provider {
 	}
 	for _, p := range in.Providers {
 		row := Provider{
-			Name: p.Name, Source: p.SourceIP, NextHop: p.NextHop, Exclude: p.Exclude,
+			Name: p.Name, Source: p.SourceIP, NextHop: p.NextHop, ASN: p.ASN, Type: p.Type, Exclude: p.Exclude,
 			Group: p.Group, Precedence: p.Precedence, CCDisable: p.CCDisable, Domain: p.Domain,
 			Exchange: p.Exchange, PeerASN: p.PeerASN,
 		}

@@ -94,6 +94,8 @@ providers:
   - name: transit-a
     source_ip: 192.0.2.11
     next_hop: 192.0.2.1
+    # asn: 64496              # the provider's AS, shown on Providers and found by search. Labels only
+    # type: transit           # transit, peer, or customer. A label only
   - name: transit-b
     source_ip: 192.0.2.12
     next_hop: 192.0.2.2

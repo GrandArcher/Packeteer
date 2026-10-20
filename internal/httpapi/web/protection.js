@@ -215,8 +215,6 @@ function protBuildForm(data) {
   }
   protFillTargets(data);
   var note = document.getElementById("mit-form-note");
-  var ttl = document.getElementById("mf-ttl");
-  ttl.placeholder = "default";
   note.textContent = "Mode " + (data.mitigation_mode || "observe") + ". " +
     (data.mitigation_mode === "inject" ? "A rule is announced only while its prefix is in the learned RIB view." : "Nothing is announced.") +
     " Allowlist: " + (data.allowlist || []).join(", ") + ". Rules held: " + data.routes_held + " of " + data.max_rules + ".";

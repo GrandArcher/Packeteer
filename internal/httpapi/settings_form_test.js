@@ -518,7 +518,8 @@ function posts() {
 
 async function main() {
   if (live) {
-    await liveWizard();
+    if (process.env.PACKETEER_CASE === "fresh") await liveFresh();
+    else await liveWizard();
     return;
   }
   await flush();
@@ -668,7 +669,7 @@ async function main() {
   writeNum("fm-loss", "2.5");
   assert(document.getElementById("fm-loss").type === "number", "a decimal number did not get a number box");
 
-  var vipAdd = document.getElementById("form-vips").querySelectorAll("input").filter(function (n) { return n.placeholder === "AS number or name"; })[0];
+  var vipAdd = document.getElementById("form-vips").querySelectorAll("input").filter(function (n) { return n.getAttribute("aria-label") === "Add VIP ASNs (AS number or name)"; })[0];
   assert(vipAdd, "VIP AS picker missing");
   searchRows = [{asn: 64501, name: "Lab Transit"}, {asn: 64502, name: "Lab Transit East"}];
   vipAdd.value = "lab";
@@ -822,6 +823,52 @@ function isAscii(text) {
 function yamlBox() { return document.getElementById("ed-yaml"); }
 function shown(id) { return !document.getElementById(id).hidden; }
 
+// noExampleValues fails on any input in the page whose placeholder is not a
+// short search hint: a grey example reads as a value that is set (#350).
+function noExampleValues() {
+  var hints = ["Prefix, AS, or name", "Search countries"];
+  document.querySelectorAll("input").forEach(function (n) {
+    var ph = n.getAttribute("placeholder");
+    assert(!ph || hints.indexOf(ph) >= 0, "input " + (n.getAttribute("id") || n.getAttribute("aria-label") || n.className) + " shows the placeholder " + ph);
+  });
+}
+
+// helpText is the help line of the field that holds input.
+function helpText(input) {
+  var help = input.parentNode.querySelector(".field-help");
+  return help ? help.textContent : "";
+}
+
+// liveFresh (#350): the server holds a config with no setup. Every wizard
+// field is empty with no placeholder, and the examples are in the help line.
+async function liveFresh() {
+  var wait = async function (cond, what) {
+    for (var i = 0; i < 200 && !cond(); i++) await new Promise(function (r) { setTimeout(r, 10); });
+    assert(cond(), "timed out waiting for " + what);
+  };
+  await wait(function () { return yamlBox().value !== "" && typeof form === "object" && form.providers; }, "the config to load");
+  assert(!shown("wz-again") && shown("wz-body"), "the wizard is not open on a fresh box");
+  ["wz-asn", "wz-router", "wz-edge", "wz-prefix", "wz-host", "wz-flow-addr", "wz-flow-port"].forEach(function (id) {
+    var n = document.getElementById(id);
+    assert(n.value === "" && n.placeholder === "", id + " is not empty: value " + n.value + " placeholder " + n.placeholder);
+  });
+  assert(helpText(document.getElementById("wz-asn")).indexOf("64512") >= 0, "ASN help: " + helpText(document.getElementById("wz-asn")));
+  assert(helpText(document.getElementById("wz-router")).indexOf("192.0.2.10") >= 0, "router help: " + helpText(document.getElementById("wz-router")));
+  assert(helpText(document.getElementById("wz-edge")).indexOf("192.0.2.254") >= 0, "edge help: " + helpText(document.getElementById("wz-edge")));
+  var row = document.getElementById("wz-providers").querySelectorAll("input,select");
+  assert(row.length >= 6, "provider row has " + row.length + " controls");
+  row.forEach(function (n) { assert(n.value === "" && n.placeholder === "", "provider control " + (n.getAttribute("aria-label") || n.className) + " is not empty"); });
+  var labels = document.getElementById("wz-providers").querySelectorAll(".field-label").map(function (n) { return n.textContent; });
+  ["Provider AS", "Type", "IPv6 probe source", "IPv6 next hop"].forEach(function (l) {
+    assert(labels.indexOf(l) >= 0, "provider row has no " + l + " field: " + labels.join(", "));
+  });
+  document.getElementById("wz-next").click();
+  assert(document.getElementById("wz-status").textContent !== "" && !shown("wz-2"), "Next went on with empty fields");
+  assert(document.getElementById("wz-asn").value === "", "Next filled the ASN");
+  noExampleValues();
+  assert(document.getElementById("fm-cap").placeholder === "" && helpText(document.getElementById("fm-cap")).indexOf("Default: 50") >= 0, "the cap default is not shown as text: " + helpText(document.getElementById("fm-cap")));
+}
+
 // liveWizard (#345): the server holds a working config with three providers
 // and sign-in on. The wizard starts collapsed, a one-provider run shows a diff
 // and what is lost without touching the editor, and after the operator
@@ -840,12 +887,16 @@ async function liveWizard() {
   assert(document.getElementById("wz-run").textContent.indexOf("replaces your config") >= 0, "generate button says " + document.getElementById("wz-run").textContent);
   document.getElementById("wz-reopen").click();
   assert(shown("wz-body") && !shown("wz-again"), "Run setup again did not open the wizard");
+  assert(document.getElementById("wz-asn").value === "64512" && document.getElementById("wz-router").value === "192.0.2.10" && document.getElementById("wz-edge").value === "192.0.2.254",
+    "the wizard did not start from the running config: " + document.getElementById("wz-asn").value + " " + document.getElementById("wz-router").value + " " + document.getElementById("wz-edge").value);
+  assert(wzProviders.length === 3 && wzProviders[2].name === "transit-c" && wzProviders[2].next_hop === "192.0.2.3", "providers were not prefilled: " + JSON.stringify(wzProviders));
+  noExampleValues();
   assert(shown("wz-auth-row") && !document.getElementById("wz-auth-off").checked, "the sign-in checkbox is missing or ticked");
 
   document.getElementById("wz-asn").value = "64512";
   document.getElementById("wz-router").value = "192.0.2.10";
   document.getElementById("wz-edge").value = "192.0.2.254";
-  wzProviders = [{name: "transit-a", source_ip: "192.0.2.11", next_hop: "192.0.2.1"}];
+  wzProviders = [{name: "transit-a", source_ip: "192.0.2.11", next_hop: "192.0.2.1", asn: "64496", type: "transit", source_ip6: "2001:db8::11", next_hop6: "2001:db8::1"}];
   renderWzProviders();
 
   document.getElementById("wz-run").click();
@@ -868,6 +919,7 @@ async function liveWizard() {
   assert(/auth:\n\s+enabled: true/.test(out), "sign-in is gone after the wizard:\n" + out);
   assert(/config_editor: true/.test(out) && /path: \/data\/history\.db/.test(out), "http or storage lost:\n" + out);
   assert(out.indexOf("transit-b") < 0 && out.indexOf("name: transit-a") >= 0, "providers after the wizard:\n" + out);
+  assert(/name: transit-a-v6\n\s+source_ip: 2001:db8::11\n\s+next_hop: 2001:db8::1\n\s+asn: 64496\n\s+type: transit/.test(out), "the IPv6 twin, ASN, or type is missing:\n" + out);
   fs.writeFileSync(process.env.PACKETEER_OUT, out);
 }
 
