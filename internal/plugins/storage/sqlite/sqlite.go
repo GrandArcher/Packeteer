@@ -260,6 +260,10 @@ func (s *Store) Start(ctx context.Context) error {
 		_ = db.Close()
 		return fmt.Errorf("open %s: %w", s.path, err)
 	}
+	if err := ensureHerdStats(ctx, db); err != nil {
+		_ = db.Close()
+		return fmt.Errorf("open %s: %w", s.path, err)
+	}
 	if err := addMustChange(ctx, db); err != nil {
 		_ = db.Close()
 		return fmt.Errorf("open %s: %w", s.path, err)
