@@ -204,7 +204,7 @@ type View struct {
 	stopping bool // under mu; set by Stop before it waits on wg
 
 	mu        sync.RWMutex
-	routes    map[netip.Prefix]Route                // selected learned path per prefix
+	routes    map[netip.Prefix]*Route               // selected learned path per prefix; a stored Route is never modified
 	routeLens [129]uint32                           // selected routes at each prefix length; Lookup skips the rest
 	adj       map[netip.Prefix]pathSet              // prefix -> iBGP paths (inline when there is one)
 	bmp       map[netip.Prefix]map[bmpPathKey]Route // prefix -> router peer path -> BMP path
@@ -216,6 +216,12 @@ type View struct {
 	addPath   map[netip.Addr]bool // neighbors configured to receive add-path
 	onChange  []func()
 	gen       uint64 // increments on each notify; 0 before the first change
+
+	// Full-table reads use a sorted snapshot of routes (snapshot.go).
+	snapMu  sync.Mutex // one refresh at a time; taken before mu
+	dirtyMu sync.Mutex // guards snap and dirty; taken after mu
+	snap    []*Route
+	dirty   map[netip.Prefix]struct{} // prefixes changed since snap; nil when snap is invalid
 }
 
 // New validates options and creates a stopped view.
@@ -236,7 +242,7 @@ func New(opt Options) (*View, error) {
 		}
 	}
 	opt.LANs = lans
-	v := &View{opt: opt, log: opt.Logger, routes: map[netip.Prefix]Route{},
+	v := &View{opt: opt, log: opt.Logger, routes: map[netip.Prefix]*Route{},
 		adj: map[netip.Prefix]pathSet{}, bmp: map[netip.Prefix]map[bmpPathKey]Route{},
 		bmpPeers: map[bmpKey]bool{}, provNH: map[string]netip.Addr{},
 		peers: map[netip.Addr]PeerState{}, neighbors: map[netip.Addr]bool{}, addPath: map[netip.Addr]bool{}}
@@ -527,7 +533,8 @@ func (v *View) Stop(context.Context) error {
 	v.wg.Wait()
 	v.stopServer()
 	v.mu.Lock()
-	v.routes = map[netip.Prefix]Route{}
+	v.routes = map[netip.Prefix]*Route{}
+	v.dropSnapshot()
 	v.routeLens = [129]uint32{}
 	v.adj = map[netip.Prefix]pathSet{}
 	v.bmp = map[netip.Prefix]map[bmpPathKey]Route{}
@@ -769,16 +776,18 @@ func (v *View) republishLocked(p netip.Prefix) bool {
 		}
 		delete(v.routes, p)
 		v.dropRouteLen(p)
+		v.markDirtyLocked(p)
 		return true
 	}
-	_, exists := v.routes[p]
-	if exists && sameRoute(v.routes[p], best) {
+	old, exists := v.routes[p]
+	if exists && sameRoute(*old, best) {
 		return false
 	}
 	if !exists {
 		v.addRouteLen(p)
 	}
-	v.routes[p] = best
+	v.routes[p] = &best
+	v.markDirtyLocked(p)
 	return true
 }
 
@@ -1408,20 +1417,23 @@ func availClass(bits uint8) string {
 
 // MemberPrefixes lists, sorted, up to limit prefixes of one availability
 // class through next hop nh, and how many there are in all. It walks the
-// BMP paths, so it is for an on-demand read, not a hot path.
+// BMP paths of the snapshot's prefixes in runs, so it is for an on-demand
+// read, not a hot path.
 func (v *View) MemberPrefixes(nh netip.Addr, class string, limit int) ([]netip.Prefix, int) {
 	nh = nh.Unmap()
 	bits := map[netip.Prefix]uint8{}
-	v.mu.RLock()
-	for p, paths := range v.bmp {
-		for _, rt := range paths {
-			if rt.LocRIB || rt.NextHop.Unmap() != nh {
-				continue
+	for chunk := range slices.Chunk(v.snapshot(), readChunk) {
+		v.mu.RLock()
+		for _, r := range chunk {
+			for _, rt := range v.bmp[r.Prefix] {
+				if rt.LocRIB || rt.NextHop.Unmap() != nh {
+					continue
+				}
+				bits[r.Prefix] |= viaBit(rt.Via)
 			}
-			bits[p] |= viaBit(rt.Via)
 		}
+		v.mu.RUnlock()
 	}
-	v.mu.RUnlock()
 	var out []netip.Prefix
 	for p, b := range bits {
 		if availClass(b) == class {
@@ -1524,11 +1536,10 @@ func (v *View) SuggestNextHops(configured []netip.Addr, lans []netip.Prefix) []N
 }
 
 func (v *View) countNextHops(keep func(netip.Addr) bool, validate func(netip.Prefix, uint32) plugin.RPKIValidity) []NextHopCount {
-	// Copy the paths that count under the RIB lock, then aggregate and,
-	// when validate is set, look up origin validity after it is released.
-	// A full-table RPKI lookup must not hold the RIB lock while BGP is
-	// still updating it. Without validate the path is folded in place, so
-	// no copy is made.
+	// Copy the paths that count out of the RIB in runs of prefixes, then
+	// aggregate and, when validate is set, look up origin validity after
+	// each run's lock is released. A full-table RPKI lookup must not hold
+	// the RIB lock while BGP is still updating it.
 	type hopPath struct {
 		nh     netip.Addr
 		prefix netip.Prefix
@@ -1589,28 +1600,26 @@ func (v *View) countNextHops(keep func(netip.Addr) bool, validate func(netip.Pre
 			p.hasAS = true
 			p.first, p.origin = rt.ASPath[0], rt.ASPath[len(rt.ASPath)-1]
 		}
-		if validate == nil {
-			aggregate(p)
-			return
-		}
 		recs = append(recs, p)
 	}
-	v.mu.RLock()
-	for _, s := range v.adj {
-		s.each(func(_ adjKey, rt Route) {
-			if v.usableLocked(rt) {
-				collect(rt, false)
+	for chunk := range slices.Chunk(v.snapshot(), readChunk) {
+		v.mu.RLock()
+		for _, r := range chunk {
+			s := v.adj[r.Prefix]
+			s.each(func(_ adjKey, rt Route) {
+				if v.usableLocked(rt) {
+					collect(rt, false)
+				}
+			})
+			for _, rt := range v.bmp[r.Prefix] {
+				collect(rt, !rt.LocRIB)
 			}
-		})
-	}
-	for _, ps := range v.bmp {
-		for _, rt := range ps {
-			collect(rt, !rt.LocRIB)
 		}
-	}
-	v.mu.RUnlock()
-	for _, p := range recs {
-		aggregate(p)
+		v.mu.RUnlock()
+		for _, p := range recs {
+			aggregate(p)
+		}
+		recs = recs[:0]
 	}
 	out := make([]NextHopCount, 0, len(hops))
 	for nh, a := range hops {
@@ -1857,7 +1866,10 @@ func (v *View) Exact(p netip.Prefix) (Route, bool) {
 	v.mu.RLock()
 	defer v.mu.RUnlock()
 	r, ok := v.routes[p.Masked()]
-	return r, ok
+	if !ok {
+		return Route{}, false
+	}
+	return *r, true
 }
 
 // Lookup returns the longest-prefix-match route covering addr.
@@ -1894,7 +1906,7 @@ func (v *View) lookupLocked(addr netip.Addr, maxBits int) (Route, bool) {
 			continue
 		}
 		if r, ok := v.routes[p]; ok && r.Prefix.Contains(addr) {
-			return r, true
+			return *r, true
 		}
 	}
 	return Route{}, false
@@ -1903,7 +1915,7 @@ func (v *View) lookupLocked(addr netip.Addr, maxBits int) (Route, bool) {
 // MoreSpecifics returns the learned prefixes strictly inside any of
 // parents, sorted, each once. More-specific injection (#56) announces only
 // prefixes from this list, and only while Exact still has them. It walks
-// the table once and, per learned prefix, looks up only the parent lengths
+// a snapshot once and, per learned prefix, looks up only the parent lengths
 // in use.
 func (v *View) MoreSpecifics(parents []netip.Prefix) []netip.Prefix {
 	if len(parents) == 0 {
@@ -1918,9 +1930,9 @@ func (v *View) MoreSpecifics(parents []netip.Prefix) []netip.Prefix {
 			lens = append(lens, p.Bits())
 		}
 	}
-	v.mu.RLock()
 	var out []netip.Prefix
-	for q := range v.routes {
+	for _, r := range v.snapshot() {
+		q := r.Prefix
 		for _, n := range lens {
 			if n >= q.Bits() {
 				continue
@@ -1931,26 +1943,13 @@ func (v *View) MoreSpecifics(parents []netip.Prefix) []netip.Prefix {
 			}
 		}
 	}
-	v.mu.RUnlock()
-	sort.Slice(out, func(i, j int) bool {
-		if c := out[i].Addr().Compare(out[j].Addr()); c != 0 {
-			return c < 0
-		}
-		return out[i].Bits() < out[j].Bits()
-	})
 	return out
 }
-
-// maxWithinScan bounds how many matches LearnedWithin collects before it
-// sorts. A request this large names an allowlist that covers most of the
-// table; the caller sees truncated.
-const maxWithinScan = 50000
 
 // LearnedWithin returns the learned prefixes that equal or sit inside any
 // of parents (a default route is never returned), for which keep is true
 // (nil keeps all), sorted, at most limit of them. truncated reports that
-// more matched. It only reads, and it holds the read lock for one walk of
-// the table.
+// more matched. It reads a snapshot and holds no lock.
 func (v *View) LearnedWithin(parents []netip.Prefix, keep func(netip.Prefix) bool, limit int) (out []netip.Prefix, truncated bool) {
 	if len(parents) == 0 || limit <= 0 {
 		return nil, false
@@ -1964,8 +1963,8 @@ func (v *View) LearnedWithin(parents []netip.Prefix, keep func(netip.Prefix) boo
 			lens = append(lens, p.Bits())
 		}
 	}
-	v.mu.RLock()
-	for q := range v.routes {
+	for _, r := range v.snapshot() {
+		q := r.Prefix
 		if q.Bits() == 0 {
 			continue
 		}
@@ -1977,44 +1976,39 @@ func (v *View) LearnedWithin(parents []netip.Prefix, keep func(netip.Prefix) boo
 				continue
 			}
 			if keep == nil || keep(q) {
-				if len(out) >= maxWithinScan {
-					truncated = true
-				} else {
-					out = append(out, q)
+				if len(out) == limit {
+					return out, true
 				}
+				out = append(out, q)
 			}
 			break
 		}
 	}
-	v.mu.RUnlock()
-	sort.Slice(out, func(i, j int) bool {
-		if c := out[i].Addr().Compare(out[j].Addr()); c != 0 {
-			return c < 0
-		}
-		return out[i].Bits() < out[j].Bits()
-	})
-	if len(out) > limit {
-		out, truncated = out[:limit], true
-	}
-	return out, truncated
+	return out, false
 }
 
-// Routes returns all learned routes sorted by prefix.
+// Routes returns all learned routes sorted by prefix. It copies out of a
+// snapshot and holds no lock while it does.
 func (v *View) Routes() []Route {
-	v.mu.RLock()
-	defer v.mu.RUnlock()
-	return v.routesLocked()
+	return copyRoutes(v.snapshot())
+}
+
+func copyRoutes(snap []*Route) []Route {
+	out := make([]Route, len(snap))
+	for i, r := range snap {
+		out[i] = *r
+	}
+	return out
 }
 
 // Find returns the first limit selected routes for which keep is true,
 // in the order before gives, and the number of routes that matched. It
-// holds the read lock for one pass over the table and keeps no more than
-// limit routes, so a search does not copy a full table. before must be a
-// strict order. AS paths alias the view as in Routes.
+// walks a snapshot with no lock held and keeps no more than limit routes,
+// so a search does not copy a full table. before must be a strict order.
+// AS paths alias the view as in Routes.
 func (v *View) Find(keep func(Route) bool, before func(a, b Route) bool, limit int) (routes []Route, matched int) {
-	v.mu.RLock()
-	defer v.mu.RUnlock()
-	for _, r := range v.routes {
+	for _, p := range v.snapshot() {
+		r := *p
 		if !keep(r) {
 			continue
 		}
@@ -2041,71 +2035,61 @@ type AltPath struct {
 }
 
 // RouteSnapshot returns the selected routes (the same set and order as
-// Routes) and every other learned provider path, under one lock. A
-// provider is omitted when it is the selected route's provider and the
-// AS path is equal. Default routes contribute no provider paths. An iBGP
-// path is preferred over BMP. A BMP path counts only on a router that
-// reports the provider's peer up, and an exchange peer's path must start
-// with its AS, as in ProviderPath. The route AS paths alias the view the
-// same way Routes does; AltPath.ASPath is a copy.
+// Routes) and every other learned provider path. The paths are read in
+// runs of prefixes, each under one read lock, so a run is consistent and
+// BGP updates apply between runs. A provider is omitted when it is the
+// selected route's provider and the AS path is equal. Default routes
+// contribute no provider paths. An iBGP path is preferred over BMP. A BMP
+// path counts only on a router that reports the provider's peer up, and an
+// exchange peer's path must start with its AS, as in ProviderPath. The
+// route AS paths alias the view the same way Routes does; AltPath.ASPath
+// is a copy.
 func (v *View) RouteSnapshot() (routes []Route, paths []AltPath) {
-	v.mu.RLock()
-	defer v.mu.RUnlock()
-	routes = v.routesLocked()
-	cover := map[string]map[netip.Addr]bool{}
-	up := func(provider string, router netip.Addr) bool {
-		on, ok := cover[provider]
-		if !ok {
-			on = v.coveringRoutersLocked(provider)
-			cover[provider] = on
+	snap := v.snapshot()
+	for chunk := range slices.Chunk(snap, readChunk) {
+		v.mu.RLock()
+		cover := map[string]map[netip.Addr]bool{}
+		up := func(provider string, router netip.Addr) bool {
+			on, ok := cover[provider]
+			if !ok {
+				on = v.coveringRoutersLocked(provider)
+				cover[provider] = on
+			}
+			return on[router]
 		}
-		return on[router]
+		for _, rt := range chunk {
+			if !rt.Prefix.IsValid() || rt.Prefix.Bits() == 0 {
+				continue
+			}
+			seen := map[string]struct{}{}
+			for _, pth := range v.pathsLocked(rt.Prefix) {
+				if pth.Provider == "" {
+					continue
+				}
+				if _, ok := seen[pth.Provider]; ok {
+					continue
+				}
+				if pth.Source == SourceBMP && !up(pth.Provider, pth.Router) {
+					continue
+				}
+				asn, peer := v.opt.PeerASN[pth.Provider]
+				if peer && (len(pth.ASPath) == 0 || pth.ASPath[0] != asn) {
+					continue
+				}
+				seen[pth.Provider] = struct{}{}
+				if pth.Provider == rt.Provider && slices.Equal(pth.ASPath, rt.ASPath) {
+					continue
+				}
+				paths = append(paths, AltPath{
+					Prefix:   rt.Prefix,
+					Provider: pth.Provider,
+					ASPath:   slices.Clone(pth.ASPath),
+				})
+			}
+		}
+		v.mu.RUnlock()
 	}
-	for _, rt := range routes {
-		if !rt.Prefix.IsValid() || rt.Prefix.Bits() == 0 {
-			continue
-		}
-		seen := map[string]struct{}{}
-		for _, pth := range v.pathsLocked(rt.Prefix) {
-			if pth.Provider == "" {
-				continue
-			}
-			if _, ok := seen[pth.Provider]; ok {
-				continue
-			}
-			if pth.Source == SourceBMP && !up(pth.Provider, pth.Router) {
-				continue
-			}
-			asn, peer := v.opt.PeerASN[pth.Provider]
-			if peer && (len(pth.ASPath) == 0 || pth.ASPath[0] != asn) {
-				continue
-			}
-			seen[pth.Provider] = struct{}{}
-			if pth.Provider == rt.Provider && slices.Equal(pth.ASPath, rt.ASPath) {
-				continue
-			}
-			paths = append(paths, AltPath{
-				Prefix:   rt.Prefix,
-				Provider: pth.Provider,
-				ASPath:   slices.Clone(pth.ASPath),
-			})
-		}
-	}
-	return routes, paths
-}
-
-func (v *View) routesLocked() []Route {
-	out := make([]Route, 0, len(v.routes))
-	for _, r := range v.routes {
-		out = append(out, r)
-	}
-	sort.Slice(out, func(i, j int) bool {
-		if c := out[i].Prefix.Addr().Compare(out[j].Prefix.Addr()); c != 0 {
-			return c < 0
-		}
-		return out[i].Prefix.Bits() < out[j].Prefix.Bits()
-	})
-	return out
+	return copyRoutes(snap), paths
 }
 
 // Len returns the number of learned prefixes.
