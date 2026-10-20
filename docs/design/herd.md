@@ -534,6 +534,48 @@ per vantage.
    global reputation and nothing that suppresses a member's data for
    everyone.
 
+## IXP vantage (proposal, not implemented)
+
+An Internet exchange running Packeteer in IXP mode
+([ixp.md](ixp.md), #160) can be a herd vantage of kind `ixp`, next to
+the edge vantages above. It is observe-only and never announces, so it
+adds nothing to the herd that could move traffic.
+
+- **Identity.** The exchange or route-server ASN proves control the same
+  way an edge ASN does: one identity per ASN (Identity and Sybil
+  resistance).
+- **Shared by default: fabric aggregates only.** Per site, loss, RTT, and
+  jitter to the member set (the reduction of the `ixp.fabric` probes
+  under #162, computed over the member set rather than per member), and
+  fabric incident flags (the correlator's `ixp.fabric_degraded`, #163).
+- **Member-level data is the member's.** One member's reachability, its
+  route-server filter results, or per-member fabric paths are shared only
+  if that member opts in. A member's Can Ping opt-out still applies. There
+  is no way to opt in yet: the member does not run the instance, and no
+  member-scoped login exists ([ixp.md](ixp.md), member pages). Until one
+  does, member-level data is not shared (Open, below).
+- **Own group, never merged.** An `ixp` vantage is listed in its own row
+  group, labeled with its kind, never merged with edge vantages and never
+  counted as an edge. A fabric incident flag is one more vantage's claim.
+- **Hard rules apply, with two additions.** Herd data from an IXP vantage
+  never moves traffic and never enters Decide, a scorer, a planner, a
+  policy, or `PathStats` (Hard rules, items 1 and 2). Hard rules do not
+  name the IXP correlator or member routing yet; this proposal adds both:
+  IXP-vantage data never feeds `ixp.correlate` (#163) and never changes
+  member routing.
+
+Open:
+
+- Opt-in for member-level data: which login or signed consent a member
+  uses, once one exists.
+- Record shape for fabric aggregates. They have no provider ASN, and they
+  do not come from the RIB view, so the rule that records only prefixes
+  present in the RIB view (Granularity) and the vantage tuple (Showing
+  many vantages, item 2) do not fit them as written.
+- Whether an exchange counts as one vantage per site.
+
+These belong in the issue that implements this.
+
 ## Local use
 
 Everything here is advisory.
@@ -686,6 +728,35 @@ drops probes on purpose. Attestation would also need vendor trust roots
 and hardware most container deployments do not expose, against the
 one-container rule. Herd shows every member's data as that member's
 claim and leaves interpretation to the operator.
+
+## Cost
+
+There is no project-run collector, so there is no collector to host,
+retain, or rate-limit. Each member pays for what it uses:
+
+- **Disk** for its own records and the pulled ones, bounded by its
+  retention and disk budgets (Retention, Resource protection).
+- **Bandwidth and CPU** for serving and pulling, bounded by the local
+  rate, connection, and response caps. A large herd costs a bounded
+  amount per interval, not an amount that grows with its size.
+- **Probe budget** only through hints, under the global probe rate limit.
+
+What this design proposes for herd is a hub ([herd-hub.md](../herd-hub.md),
+#261), not a collector. The project does not run a hub today. As proposed,
+the hub would be a public repository of signed member entries. Each entry
+would hold an ASN, node keys and endpoints, retention, data classes, and an
+expiry, so it is more than addresses. A release would build in a snapshot
+of the list (`internal/herd/hub_snapshot.json`, refreshed with
+`make hub-snapshot`). The hub would be trusted to decide which keys become
+peers of every node and which ASN each claims (its Trust section). Hosting
+it would cost review of each entry before merge, and the check and prune
+workflows in its repository. Creating the hub repository is a separate
+decision for the project owner.
+
+A central collector is a non-goal (Non-goals): it would hold every
+member's destination lists in one place. If the herd later wants a public
+dataset, that is a separate decision with its own hosting, retention,
+rate limits, and terms (Open questions, item 8).
 
 ## Phased plan
 
