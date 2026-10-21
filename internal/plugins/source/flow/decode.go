@@ -94,8 +94,8 @@ type decoder struct {
 }
 
 // obsPool reuses the observation slice for one datagram. Observations
-// hold no pointers into the packet, and ingest finishes with the slice
-// before the next datagram. A slice bigger than a jumbo packet is dropped
+// hold no pointers into the packet, so the slice can travel through the
+// queue to a worker while the reader reuses its read buffer. A slice bigger than a jumbo packet is dropped
 // so a pathological exporter cannot pin it.
 var obsPool = sync.Pool{New: func() any {
 	s := make([]observation, 0, 64)

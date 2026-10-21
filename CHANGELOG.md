@@ -15,6 +15,7 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 
 ### Fixed
 
+- Flow: readers decode and queue records for `workers` (default 4) counting goroutines, so a window stall no longer overflows the socket buffer; a full queue is counted (`limit="workers"`) (#385).
 - SNMP: hosts are polled by a bounded pool (`workers`, default 4, max 16), so one slow or unreachable host no longer delays the rest (#384).
 - Herd stats and trimming read per-member counters kept by triggers (`herd_stats`) instead of scanning the herd table on the shared sqlite connection (#393).
 - RIB: full-table reads (routes, search, next-hop counts) use a sorted snapshot and work in short lock runs, so a UI or API read no longer delays BGP updates (#382).
