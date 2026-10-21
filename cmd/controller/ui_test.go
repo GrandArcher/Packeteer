@@ -34,7 +34,7 @@ func editorFor(t *testing.T, content string) (*configedit.Editor, string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ed, err := newConfigEditor(cfg, path, func(string) string { return "" }, "ops")
+	ed, err := newConfigEditor(cfg, path, func(string) string { return "" }, "ops", false)
 	if err != nil || ed == nil {
 		t.Fatalf("editor: %v %v", ed, err)
 	}
@@ -91,12 +91,12 @@ report_subscriptions:
 	}
 }
 
-func TestConfigEditorOffByDefault(t *testing.T) {
+func TestConfigEditorExplicitFalse(t *testing.T) {
 	cfg, err := config.Parse([]byte(strings.Replace(uiBase, "  config_editor: true\n", "  config_editor: false\n", 1)))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if ed, err := newConfigEditor(cfg, "/nonexistent", nil, ""); ed != nil || err != nil {
+	if ed, err := newConfigEditor(cfg, "/nonexistent", nil, "", true); ed != nil || err != nil {
 		t.Fatalf("editor built while off: %v %v", ed, err)
 	}
 }

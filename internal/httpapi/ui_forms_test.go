@@ -323,7 +323,7 @@ func TestWizardAPIOverCurrentConfig(t *testing.T) {
 		t.Fatalf("wizard: %d %s", rec.Code, rec.Body)
 	}
 	cfg, err := config.Parse([]byte(got["yaml"].(string)))
-	if err != nil || !cfg.AuthEnabled() || !cfg.HTTP.ConfigEditor || cfg.Storage == nil {
+	if err != nil || !cfg.AuthEnabled() || cfg.HTTP.ConfigEditor == nil || !*cfg.HTTP.ConfigEditor || cfg.Storage == nil {
 		t.Fatalf("kept blocks: %v %+v", err, cfg)
 	}
 	if rm, _ := got["removes"].([]any); len(rm) != 1 || rm[0] != "Removes 2 providers (transit-b, transit-c)" {

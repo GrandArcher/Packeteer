@@ -142,7 +142,7 @@ curl -fsS -u "admin:$PACKETEER_PASSWORD" http://127.0.0.1:8080/api/overview
 <!-- ci-expect: "status":"ok" -->
 <!-- ci-expect: "mode":"observe" -->
 
-The settings form and setup wizard on `/settings.html` need `http.config_editor: true` (sign-in is on by default) ([ui.md](ui.md)); until then, edit the mounted file and restart. `/api/overview` carries the dashboard's setup checklist (`setup`): what to add next and what looks broken. The dashboard at <http://127.0.0.1:8080/> shows the same list until the instance is fully set up. `/readyz` returns 503 until startup finishes and, once `bgp.neighbors` is set, until an iBGP session is up.
+With the example config the admin is sent to the setup wizard on `/settings.html` after the password change; the settings form and wizard are on until a config is saved or setup is skipped (and until the next restart), then need `http.config_editor: true`. A config with a real provider needs it from the start, and `false` keeps them off (sign-in is on by default) ([ui.md](ui.md)). Without them, edit the mounted file and restart. `/api/overview` carries the dashboard's setup checklist (`setup`): what to add next and what looks broken. The dashboard at <http://127.0.0.1:8080/> shows the same list until the instance is fully set up. `/readyz` returns 503 until startup finishes and, once `bgp.neighbors` is set, until an iBGP session is up.
 
 ```sh
 docker logs packeteer 2>&1 | grep 'packeteer running'

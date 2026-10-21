@@ -58,6 +58,10 @@
   <section id="wizard">
     <h2>Setup wizard</h2>
     <p class="tag">Four steps, the last one optional. It starts in observe with an empty allowlist; inject is not a step. Blocks the wizard does not write are kept. Nothing is written until you save the YAML below.</p>
+    <div id="setup-skip" hidden>
+      <p class="tag">First-run setup is pending. Saving a config here ends it. Skip setup if the file is already what you want; the editor then turns off at the next start unless http.config_editor is true.</p>
+      <button type="button" id="setup-skip-btn">Skip setup</button>
+    </div>
     <div id="wz-again" hidden>
       <p class="tag">This config already has providers, BGP neighbors, or an ixp block. Running setup again replaces its providers, BGP neighbors, sources, allowlist, scorer, and decision settings. Every other block is kept. You see a diff and confirm first.</p>
       <button type="button" id="wz-reopen">Run setup again (replaces your config)</button>

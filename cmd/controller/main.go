@@ -336,8 +336,12 @@ func run(ctx context.Context, args []string, getenv func(string) string, stdout,
 		if len(cfg.HTTP.AllowFrom) > 0 {
 			fmt.Fprintf(stdout, "http allow_from: %s\n", strings.Join(cfg.HTTP.AllowFrom, ","))
 		}
-		if cfg.HTTP.ConfigEditor {
-			fmt.Fprintln(stdout, "http config_editor: on (admin only; writes this file after the start checks; online keys apply on save, the rest on restart)")
+		if editorEnabled(cfg, httpUser, newFirstRun(cfg, plugins).Pending()) {
+			if cfg.HTTP.ConfigEditor == nil {
+				fmt.Fprintln(stdout, "http config_editor: on until first-run setup is done (admin only; save a config or skip setup in the dashboard)")
+			} else {
+				fmt.Fprintln(stdout, "http config_editor: on (admin only; writes this file after the start checks; online keys apply on save, the rest on restart)")
+			}
 		}
 	}
 	for _, sub := range cfg.ReportSubscriptions {
@@ -532,23 +536,33 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 	if subs != nil {
 		subsAPI = subs
 	}
-	editor, eerr := newConfigEditor(cfg, path, getenv, httpUser)
+	setup := newFirstRun(cfg, plugins)
+	if err := setup.Persist(); err != nil {
+		log.Warn("first-run setup: cannot write the pending file; setup is not kept across a restart", "err", err)
+	}
+	editor, eerr := newConfigEditor(cfg, path, getenv, httpUser, setup.Pending())
 	if eerr != nil {
 		log.Error("refusing to start", "err", eerr)
 		return 1
 	}
 	var editorAPI httpapi.ConfigEditor
+	var firstRunAPI httpapi.FirstRun
 	if editor != nil {
 		editorAPI = editor
 		if httpUser == "" && authSvc == nil {
 			log.Warn("http.config_editor is on but neither auth nor basic auth is: the editor stays off")
 		}
+		if setup.Pending() {
+			editorAPI = setupEditor{ConfigEditor: editor, state: setup, log: log}
+		}
+		if cfg.HTTP.ConfigEditor == nil {
+			firstRunAPI = setup
+			log.Info("first-run setup is pending: the config editor and wizard are on for an admin until a config is saved or setup is skipped")
+		}
 	}
 	var fedPush httpapi.FederationPusher
-	// The receiver writes the file too, so it needs the same gate as PUT
-	// /api/config: a certificate alone must not open a write the editor refuses.
-	if fed != nil && editorAPI != nil && (httpUser != "" || authSvc != nil) {
-		fed.editor = editorAPI
+	if pushEditor := settingsPushEditor(cfg, editorAPI, httpUser != "" || authSvc != nil); fed != nil && pushEditor != nil {
+		fed.editor = pushEditor
 		fedPush = fed.push
 	}
 	var sysEngine atomic.Pointer[probe.Engine]
@@ -560,7 +574,7 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 			Auth: authSvc, Audit: audit, Events: evlog, AllowFrom: cfg.HTTPAllowFrom(),
 			Maintenance: maint, Reports: reports, Tools: tools, Inbound: inboundStatus, Mitigation: mitAPI, Anomaly: anomAPI, Leaks: leakAPI,
 			Federation: fed.status, FederationPush: fedPush, HA: haStatus,
-			ConfigEditor: editorAPI, Dashboards: dashboardStore(plugins), Subscriptions: subsAPI,
+			ConfigEditor: editorAPI, FirstRun: firstRunAPI, Dashboards: dashboardStore(plugins), Subscriptions: subsAPI,
 			Setup: setupInfo(cfg, plugins), Upgrade: upgradeAPI, Linkouts: linkout.New(cfg.Linkouts),
 			System: systemFacts(plugins, &sysEngine, health), Usage: usageReader(plugins),
 		})

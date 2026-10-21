@@ -74,7 +74,7 @@ func TestWizardOverKeepsAuthHTTPStorageAndUnknown(t *testing.T) {
 	if !cfg.AuthEnabled() || cfg.Auth.SessionTTL.Hours() != 6 {
 		t.Fatalf("auth after the wizard: %+v", cfg.Auth)
 	}
-	if cfg.HTTP.Listen == nil || *cfg.HTTP.Listen != "127.0.0.1:9090" || !cfg.HTTP.ConfigEditor {
+	if cfg.HTTP.Listen == nil || *cfg.HTTP.Listen != "127.0.0.1:9090" || cfg.HTTP.ConfigEditor == nil || !*cfg.HTTP.ConfigEditor {
 		t.Fatalf("http after the wizard: %+v", cfg.HTTP)
 	}
 	if cfg.Storage == nil || cfg.Storage.Type != "sqlite" {

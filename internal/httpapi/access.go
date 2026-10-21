@@ -116,6 +116,7 @@ func (s *Server) routeTable() []route {
 		{"GET /api/config/schema", admin, s.handleConfigSchema},
 		{"PUT /api/config", admin, s.handleConfigSave},
 		{"POST /api/config/wizard", admin, s.handleWizard},
+		{"POST /api/setup/skip", admin, s.handleSetupSkip},
 		{"POST /api/config/form", admin, s.handleConfigForm},
 		{"GET /api/config/suggestions", admin, s.handleSuggestions},
 		{"GET /api/upgrade", admin, s.handleUpgrade},
@@ -412,8 +413,10 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, struct {
 		Auth string `json:"auth"`
 		SSO  bool   `json:"sso"`
+		// SetupPending sends an admin to the wizard (#416).
+		SetupPending bool `json:"setup_pending,omitempty"`
 		auth.Principal
-	}{Auth: s.authMode(), SSO: s.auth.SSOEnabled(), Principal: p})
+	}{Auth: s.authMode(), SSO: s.auth.SSOEnabled(), SetupPending: s.setupPendingFor(p), Principal: p})
 }
 
 type passwordRequest struct {
