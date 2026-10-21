@@ -16,7 +16,7 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 
 ### Fixed
 
-- API server sets a write timeout (150 s), so a client that stops reading cannot hold a connection; Decide no longer rescans all results per prefix (45 s to 0.4 s at 100k x 4); benchmarks added (#387).
+- API server sets a write timeout (150 s) so a stalled client cannot hold a connection; Decide no longer rescans all results per prefix (45 s to 0.4 s at 100k x 4); benchmarks added (#387).
 - Flow: readers decode and queue records for `workers` (default 4) counting goroutines, so a window stall no longer overflows the socket buffer; a full queue is counted (`limit="workers"`) (#385).
 - SNMP: hosts are polled by a bounded pool (`workers`, default 4, max 16), so one slow or unreachable host no longer delays the rest (#384).
 - Herd stats and trimming read per-member counters kept by triggers (`herd_stats`) instead of scanning the herd table on the shared sqlite connection (#393).
