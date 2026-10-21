@@ -67,7 +67,9 @@ func Decide(prev State, in Input, cfg Config, scorer plugin.Scorer, now time.Tim
 	// Group usable measurements by prefix.
 	byPrefix := map[netip.Prefix][]Candidate{}
 	subs := map[netip.Prefix]map[netip.Prefix]*SubrangeDecision{}
-	for _, r := range in.Results {
+	in.byPrefix = make(map[netip.Prefix][]int, len(in.Native))
+	for i, r := range in.Results {
+		in.byPrefix[r.Prefix] = append(in.byPrefix[r.Prefix], i)
 		c := Candidate{Provider: r.Provider, LossPct: r.Stats.LossPct, RTTAvg: r.Stats.RTTAvg, Jitter: r.Stats.Jitter, Usable: true,
 			RPKI: in.RPKI[r.Prefix][r.Provider]}
 		switch {

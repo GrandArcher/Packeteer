@@ -508,6 +508,56 @@ func TestStartAndShutdown(t *testing.T) {
 	}
 }
 
+func TestWriteTimeoutDefault(t *testing.T) {
+	s, err := New(Options{Addr: "127.0.0.1:0", Snapshot: func() Snapshot { return Snapshot{} }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer s.Shutdown(context.Background())
+	if got := s.http.WriteTimeout; got <= toolTimeout {
+		t.Fatalf("WriteTimeout %v must outlast toolTimeout %v", got, toolTimeout)
+	}
+}
+
+// A handler still writing after WriteTimeout loses its connection; one that
+// answers in time does not.
+func TestWriteTimeoutClosesSlowResponse(t *testing.T) {
+	s, err := New(Options{Addr: "127.0.0.1:0", Snapshot: func() Snapshot { return Snapshot{} }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.writeTimeout = 200 * time.Millisecond
+	mux := http.NewServeMux()
+	mux.HandleFunc("/fast", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("ok")) })
+	mux.HandleFunc("/slow", func(w http.ResponseWriter, _ *http.Request) {
+		time.Sleep(500 * time.Millisecond)
+		_, _ = w.Write([]byte("late"))
+	})
+	s.handler = mux
+	if err := s.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer s.Shutdown(context.Background())
+	c := &http.Client{Transport: &http.Transport{DisableKeepAlives: true}}
+	resp, err := c.Get("http://" + s.Addr() + "/fast")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if string(body) != "ok" {
+		t.Fatalf("fast body %q", body)
+	}
+	if resp, err := c.Get("http://" + s.Addr() + "/slow"); err == nil {
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		t.Fatalf("slow response was delivered: %d %q", resp.StatusCode, body)
+	}
+}
+
 func TestListenInUse(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {

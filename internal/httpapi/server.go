@@ -187,6 +187,10 @@ type Server struct {
 	handler http.Handler
 	http    *http.Server
 	ln      net.Listener
+
+	// writeTimeout bounds a request from the end of its headers to the last
+	// byte written, so a client that stops reading cannot hold a connection.
+	writeTimeout time.Duration
 }
 
 // SetSetup replaces the facts the overview's setup checklist reads. An
@@ -219,6 +223,7 @@ func New(opt Options) (*Server, error) {
 	if s.linkouts == nil {
 		s.linkouts = linkout.New(linkout.Config{})
 	}
+	s.writeTimeout = writeTimeout
 	s.handler = s.routes()
 	return s, nil
 }
@@ -261,6 +266,11 @@ func (s *Server) SetQuarantine(c QuarantineControl) {
 	s.quarantine.Store(c)
 }
 
+// writeTimeout outlasts the slowest handler, an on-demand tool bounded by
+// toolTimeout, plus time to send its output. No endpoint streams a
+// response.
+const writeTimeout = toolTimeout + 30*time.Second
+
 // Handler is the read-only API and dashboard.
 func (s *Server) Handler() http.Handler { return s.handler }
 
@@ -278,6 +288,7 @@ func (s *Server) Start() error {
 	s.http = &http.Server{
 		Handler:           s.handler,
 		ReadHeaderTimeout: 5 * time.Second,
+		WriteTimeout:      s.writeTimeout,
 		IdleTimeout:       2 * time.Minute,
 		ErrorLog:          slog.NewLogLogger(s.log.Handler(), slog.LevelWarn),
 	}
