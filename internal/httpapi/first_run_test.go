@@ -66,6 +66,27 @@ func TestSetupSkip(t *testing.T) {
 	}
 }
 
+// Once setup has ended, a second skip is a 404 and adds no audit entry.
+func TestSetupSkipAfterSetupEnded(t *testing.T) {
+	fr := &fakeFirstRun{pending: true}
+	e := newUIWith(t, func(o *Options) { o.FirstRun = fr })
+	if rec, _ := e.do(t, "POST", "/api/setup/skip", plugin.RoleAdmin, nil); rec.Code != http.StatusOK {
+		t.Fatalf("first skip: %d %s", rec.Code, rec.Body)
+	}
+	if rec, _ := e.do(t, "POST", "/api/setup/skip", plugin.RoleAdmin, nil); rec.Code != http.StatusNotFound {
+		t.Fatalf("second skip: %d %s", rec.Code, rec.Body)
+	}
+	n := 0
+	for _, r := range e.store.Records() {
+		if r.Detail == "first-run setup skipped" {
+			n++
+		}
+	}
+	if n != 1 || fr.calls != 1 {
+		t.Fatalf("skipped audit entries = %d, Complete calls = %d; want 1 and 1", n, fr.calls)
+	}
+}
+
 // A skip whose state cannot be saved says so, while this run stops
 // asking.
 func TestSetupSkipSaveFails(t *testing.T) {
@@ -74,6 +95,11 @@ func TestSetupSkipSaveFails(t *testing.T) {
 	rec, got := e.do(t, "POST", "/api/setup/skip", plugin.RoleAdmin, nil)
 	if rec.Code != http.StatusInternalServerError || !strings.Contains(got["error"].(string), "read-only volume") || fr.pending {
 		t.Fatalf("skip: %d %s %+v", rec.Code, rec.Body, fr)
+	}
+	for _, r := range e.store.Records() {
+		if r.Detail == "first-run setup skipped" {
+			t.Fatalf("a failed skip is audited as skipped: %+v", r)
+		}
 	}
 }
 

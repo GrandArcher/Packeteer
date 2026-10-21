@@ -3,6 +3,7 @@ package main
 import (
 	"errors"
 	"log/slog"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"sync/atomic"
@@ -15,15 +16,34 @@ import (
 
 // setupPendingFile marks the first-run setup as pending (#416). It sits next
 // to the storage file, like the first-run password, and is created on the
-// first start of a new install: one whose storage file does not exist yet.
-// An install that already has its storage, such as one upgraded from an
-// earlier release, never gets it and never becomes pending.
+// first start of a new install.
 const setupPendingFile = "first-run-setup-pending"
 
-// firstRun is the persisted first-run state. Setup is pending from the
-// first start of a new install until an admin saves a config through the
-// editor or wizard, or skips setup. A storage plugin with no file has
-// nowhere to keep the state, so setup is never pending there.
+// placeholderNet is the range of the provider source_ip values in
+// config.example.yaml. A config whose providers all sit in it has not been
+// set up for a real edge yet.
+var placeholderNet = netip.MustParsePrefix("192.0.2.0/24")
+
+// placeholderProviders reports whether the config still has only the
+// shipped example providers.
+func placeholderProviders(cfg *config.Config) bool {
+	if len(cfg.Providers) == 0 {
+		return false
+	}
+	for _, p := range cfg.Providers {
+		ip, err := netip.ParseAddr(p.SourceIP)
+		if err != nil || !placeholderNet.Contains(ip) {
+			return false
+		}
+	}
+	return true
+}
+
+// firstRun is the first-run state. Setup is pending on a start with no
+// persisted state and only the shipped placeholder providers, until an
+// admin saves a config through the editor or wizard, or skips setup. A
+// config with a real provider is never pending, so a container re-created
+// without the storage volume does not reopen the editor.
 type firstRun struct {
 	path string
 	// fresh is set when this start is the first one for the install and the
@@ -33,21 +53,25 @@ type firstRun struct {
 }
 
 // newFirstRun reads the state and writes nothing; Persist records a new
-// install. Call it before the storage plugin opens its file.
-func newFirstRun(plugins *pluginhost.Set) *firstRun {
+// install. Call it before the storage plugin opens its file. A storage
+// plugin with no file has nowhere to keep the state, so there the
+// placeholder check alone decides.
+func newFirstRun(cfg *config.Config, plugins *pluginhost.Set) *firstRun {
 	f := &firstRun{path: besideStorage(plugins, setupPendingFile)}
-	if f.path == "" {
+	if f.path != "" {
+		if _, err := os.Stat(f.path); err == nil {
+			return f
+		}
+		if _, err := os.Stat(storageFile(plugins)); err == nil {
+			f.done.Store(true)
+			return f
+		}
+	}
+	if !placeholderProviders(cfg) {
 		f.done.Store(true)
 		return f
 	}
-	if _, err := os.Stat(f.path); err == nil {
-		return f
-	}
-	if _, err := os.Stat(storageFile(plugins)); err == nil {
-		f.done.Store(true)
-		return f
-	}
-	f.fresh = true
+	f.fresh = f.path != ""
 	return f
 }
 
@@ -88,7 +112,21 @@ func editorEnabled(cfg *config.Config, httpUser string, setupPending bool) bool 
 	return setupPending && (cfg.AuthEnabled() || httpUser != "")
 }
 
-// setupEditor ends the first-run setup when a config is saved.
+// settingsPushEditor is the editor the federation settings-push receiver
+// and sender write through, or nil when they stay closed. They write the
+// file too, so they need the same gate as PUT /api/config, and more: a
+// certificate alone must not open a write the operator has not turned on.
+// Only an explicit http.config_editor: true counts, never the default that
+// the pending first-run setup turns on.
+func settingsPushEditor(cfg *config.Config, editor httpapi.ConfigEditor, signedIn bool) httpapi.ConfigEditor {
+	if editor == nil || !signedIn || cfg.HTTP.ConfigEditor == nil || !*cfg.HTTP.ConfigEditor {
+		return nil
+	}
+	return editor
+}
+
+// setupEditor ends the first-run setup when a config is saved, by the
+// editor, the wizard, or an accepted federation push.
 type setupEditor struct {
 	httpapi.ConfigEditor
 	state *firstRun

@@ -91,7 +91,7 @@ report_subscriptions:
 	}
 }
 
-func TestConfigEditorOffByDefault(t *testing.T) {
+func TestConfigEditorExplicitFalse(t *testing.T) {
 	cfg, err := config.Parse([]byte(strings.Replace(uiBase, "  config_editor: true\n", "  config_editor: false\n", 1)))
 	if err != nil {
 		t.Fatal(err)

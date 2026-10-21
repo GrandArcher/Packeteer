@@ -11,6 +11,8 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"io"
+	"log/slog"
 	"math/big"
 	"net"
 	"net/http"
@@ -127,11 +129,14 @@ func (p *pushPKI) issue(t *testing.T, name string) {
 // transport, and a stand-in for the online reload that loads the file and
 // makes it the running config.
 type pushPOP struct {
-	name    string
-	path    string
-	fed     *fedState
-	plug    plugin.Federation
-	editor  *configedit.Editor
+	name   string
+	path   string
+	fed    *fedState
+	plug   plugin.Federation
+	editor *configedit.Editor
+	// api is what the daemon hands the push receiver; newPushPOP sets the
+	// bare editor.
+	api     httpapi.ConfigEditor
 	audit   *memAudit
 	auditor *auth.Auditor
 
@@ -185,6 +190,7 @@ func newPushPOP(t *testing.T, p *pushPKI, name, other string, audit *memAudit) *
 	if err != nil {
 		t.Fatal(err)
 	}
+	pop.api = pop.editor
 	pop.auditor = auth.NewAuditor(audit, nil, nil)
 	return pop
 }
@@ -230,7 +236,7 @@ func peerName(n string) string {
 func (pop *pushPOP) wire(t *testing.T) {
 	t.Helper()
 	pop.fed = &fedState{fed: pop.plug}
-	pop.fed.editor = pop.editor
+	pop.fed.editor = settingsPushEditor(pop.running, pop.api, true)
 	pop.fed.acceptSettings(func(context.Context) ([]string, error, error) {
 		pop.mu.Lock()
 		defer pop.mu.Unlock()
@@ -475,5 +481,75 @@ func TestFederationSettingsPush(t *testing.T) {
 	}
 	if rec := post(`{"sections":["thresholds"],"peers":["pop-z"]}`); rec.Code != http.StatusBadRequest {
 		t.Fatalf("unknown peer: %d %s", rec.Code, rec.Body)
+	}
+}
+
+// A certificate alone never opens a write. With http.config_editor unset,
+// the pending first-run setup turns the editor on for an admin, but the
+// settings-push receiver stays closed; only an explicit true opens it, and
+// an accepted push then ends the setup like a save.
+func TestSettingsPushNeedsExplicitEditor(t *testing.T) {
+	on, off := true, false
+	ed := setupEditor{}
+	for name, tc := range map[string]struct {
+		flag     *bool
+		editor   httpapi.ConfigEditor
+		signedIn bool
+		open     bool
+	}{
+		"unset while setup is pending": {nil, ed, true, false},
+		"explicit false":               {&off, ed, true, false},
+		"explicit true":                {&on, ed, true, true},
+		"explicit true without editor": {&on, nil, true, false},
+		"explicit true without signin": {&on, ed, false, false},
+	} {
+		cfg := &config.Config{HTTP: config.HTTP{ConfigEditor: tc.flag}}
+		if got := settingsPushEditor(cfg, tc.editor, tc.signedIn) != nil; got != tc.open {
+			t.Errorf("%s: open = %v, want %v", name, got, tc.open)
+		}
+	}
+
+	pki := newPushPKI(t)
+	sender := newPushPOP(t, pki, "pop-a", "pop-b", &memAudit{})
+	closed := newPushPOP(t, pki, "pop-b", "pop-a", &memAudit{})
+	closed.running.HTTP.ConfigEditor = nil
+	closed.start(t, pki, nil)
+	sender.start(t, pki, closed)
+	sender.wire(t)
+	closed.wire(t)
+	before := closed.file(t)
+	push := plugin.SettingsPush{Sections: map[string]string{"thresholds": "min_loss_delta_pct: 3\nmin_rtt_delta_ms: 15\n"}}
+	if closed.fed.editor != nil {
+		t.Fatal("the push receiver is open with http.config_editor unset")
+	}
+	if res, err := sender.plug.Push(context.Background(), "pop-b", push); err == nil && res.Status == plugin.SettingsApplied {
+		t.Fatalf("a push was applied by a receiver with no explicit config_editor: %+v", res)
+	}
+	if closed.file(t) != before || closed.applyCount() != 0 {
+		t.Fatalf("a closed receiver changed its file:\n%s", closed.file(t))
+	}
+
+	open := newPushPOP(t, pki, "pop-b", "pop-a", &memAudit{})
+	open.start(t, pki, nil)
+	sender.start(t, pki, open)
+	state := newFirstRun(placeholderCfg(t), storageIn(t.TempDir()))
+	if err := state.Persist(); err != nil {
+		t.Fatal(err)
+	}
+	open.api = setupEditor{ConfigEditor: open.editor, state: state, log: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	sender.wire(t)
+	open.wire(t)
+	if !state.Pending() {
+		t.Fatal("setup ended before the push")
+	}
+	res, err := sender.plug.Push(context.Background(), "pop-b", push)
+	if err != nil || res.Status != plugin.SettingsApplied {
+		t.Fatalf("push to an explicit receiver: %+v, %v", res, err)
+	}
+	if state.Pending() {
+		t.Fatal("an accepted push did not end the first-run setup")
+	}
+	if !strings.Contains(open.file(t), "min_loss_delta_pct: 3") {
+		t.Fatalf("pushed value missing:\n%s", open.file(t))
 	}
 }

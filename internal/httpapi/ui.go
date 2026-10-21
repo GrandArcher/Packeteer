@@ -106,17 +106,16 @@ func (s *Server) setupPendingFor(p auth.Principal) bool {
 // editor stays on until the next start; a restart then applies the
 // default (off unless http.config_editor is true).
 func (s *Server) handleSetupSkip(w http.ResponseWriter, r *http.Request) {
-	if s.firstRun == nil || !s.writesEnabled() {
+	if s.firstRun == nil || !s.writesEnabled() || !s.firstRun.Pending() {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "first-run setup is not pending on this instance"})
 		return
 	}
-	err := s.firstRun.Complete()
-	noteAudit(r, "setup", "first-run setup skipped")
-	if err != nil {
+	if err := s.firstRun.Complete(); err != nil {
 		s.log.Warn("first-run setup: cannot remove the pending file; setup shows again after a restart", "err", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "setup is skipped for now, but the pending file cannot be removed, so it shows again after a restart: " + err.Error()})
 		return
 	}
+	noteAudit(r, "setup", "first-run setup skipped")
 	writeJSON(w, http.StatusOK, map[string]bool{"pending": false})
 }
 

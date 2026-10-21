@@ -39,6 +39,22 @@ func setupConfig(t *testing.T, httpExtra, authBlock string) *config.Config {
 	return cfg
 }
 
+func placeholderCfg(t *testing.T) *config.Config {
+	t.Helper()
+	return setupConfig(t, "", "")
+}
+
+// realCfg has providers outside the shipped 192.0.2.0/24 placeholders.
+func realCfg(t *testing.T) *config.Config {
+	t.Helper()
+	text := strings.NewReplacer("source_ip: 192.0.2.11", "source_ip: 198.51.100.11", "source_ip: 192.0.2.12", "source_ip: 198.51.100.12").Replace(uiBase)
+	cfg, err := config.Parse([]byte(text))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return cfg
+}
+
 // The editor decision for an unset http.config_editor follows the
 // first-run state; an explicit value always wins; sign-in is required.
 func TestEditorEnabled(t *testing.T) {
@@ -75,13 +91,12 @@ func TestEditorEnabled(t *testing.T) {
 	}
 }
 
-// A new install (no storage file yet) is pending and keeps that across a
-// restart until the setup ends. An install whose storage already exists,
-// such as one upgraded from an earlier release, is never pending, and
-// neither is storage with no file.
+// A start with no persisted state and the placeholder providers is pending
+// and keeps that across a restart until the setup ends. Existing storage
+// without a pending file means setup is completed.
 func TestFirstRunState(t *testing.T) {
 	dir := t.TempDir()
-	fr := newFirstRun(storageIn(dir))
+	fr := newFirstRun(placeholderCfg(t), storageIn(dir))
 	if !fr.Pending() {
 		t.Fatal("a new install is not pending")
 	}
@@ -95,7 +110,7 @@ func TestFirstRunState(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "packeteer.db"), nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	restarted := newFirstRun(storageIn(dir))
+	restarted := newFirstRun(placeholderCfg(t), storageIn(dir))
 	if !restarted.Pending() {
 		t.Fatal("setup is not pending after a restart before it ended")
 	}
@@ -105,7 +120,7 @@ func TestFirstRunState(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(dir, setupPendingFile)); !os.IsNotExist(err) {
 		t.Fatalf("pending file after complete: %v", err)
 	}
-	if newFirstRun(storageIn(dir)).Pending() {
+	if newFirstRun(placeholderCfg(t), storageIn(dir)).Pending() {
 		t.Fatal("setup is pending again after a restart")
 	}
 	if err := restarted.Complete(); err != nil {
@@ -113,12 +128,12 @@ func TestFirstRunState(t *testing.T) {
 	}
 }
 
-func TestFirstRunUpgradeIsNotPending(t *testing.T) {
+func TestFirstRunCompletedStateIsNotPending(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "packeteer.db"), nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	fr := newFirstRun(storageIn(dir))
+	fr := newFirstRun(placeholderCfg(t), storageIn(dir))
 	if fr.Pending() {
 		t.Fatal("an install with existing storage is pending")
 	}
@@ -130,14 +145,56 @@ func TestFirstRunUpgradeIsNotPending(t *testing.T) {
 	}
 }
 
-func TestFirstRunNoFileStorageIsNotPending(t *testing.T) {
-	for name, set := range map[string]*pluginhost.Set{"no storage": {}, "nil set": nil} {
-		fr := newFirstRun(set)
+// A config with a real provider is never pending, whatever the storage
+// holds: a container re-created without its volume must not reopen the
+// editor. That covers a missing file, memory storage, and a new volume.
+func TestFirstRunRealConfigIsNotPending(t *testing.T) {
+	dir := t.TempDir()
+	for name, set := range map[string]*pluginhost.Set{"new volume": storageIn(dir), "no storage": {}, "nil set": nil} {
+		fr := newFirstRun(realCfg(t), set)
 		if fr.Pending() {
-			t.Fatalf("%s: pending with nowhere to keep it", name)
+			t.Fatalf("%s: a real config is pending", name)
 		}
 		if err := fr.Persist(); err != nil || fr.Complete() != nil {
 			t.Fatalf("%s: persist/complete failed", name)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(dir, setupPendingFile)); !os.IsNotExist(err) {
+		t.Fatalf("pending file written for a real config: %v", err)
+	}
+}
+
+// With nowhere to keep the state (memory storage), the shipped placeholder
+// config is pending for this run and ending it works without a file.
+func TestFirstRunPlaceholderWithoutFileIsPending(t *testing.T) {
+	for name, set := range map[string]*pluginhost.Set{"no storage": {}, "nil set": nil} {
+		fr := newFirstRun(placeholderCfg(t), set)
+		if !fr.Pending() {
+			t.Fatalf("%s: the placeholder config is not pending", name)
+		}
+		if err := fr.Persist(); err != nil {
+			t.Fatalf("%s: persist: %v", name, err)
+		}
+		if err := fr.Complete(); err != nil || fr.Pending() {
+			t.Fatalf("%s: complete: %v pending=%v", name, err, fr.Pending())
+		}
+	}
+}
+
+// A provider list that mixes a placeholder with a real address, or lists
+// none, is not the shipped example.
+func TestPlaceholderProviders(t *testing.T) {
+	mixed := strings.Replace(uiBase, "source_ip: 192.0.2.12", "source_ip: 198.51.100.12", 1)
+	cfg, err := config.Parse([]byte(mixed))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, tc := range map[string]struct {
+		cfg  *config.Config
+		want bool
+	}{"placeholders": {placeholderCfg(t), true}, "real": {realCfg(t), false}, "mixed": {cfg, false}, "none": {&config.Config{}, false}} {
+		if got := placeholderProviders(tc.cfg); got != tc.want {
+			t.Errorf("%s: placeholderProviders = %v, want %v", name, got, tc.want)
 		}
 	}
 }
@@ -146,7 +203,7 @@ func TestFirstRunNoFileStorageIsNotPending(t *testing.T) {
 // so.
 func TestFirstRunCompleteFails(t *testing.T) {
 	dir := t.TempDir()
-	fr := newFirstRun(storageIn(dir))
+	fr := newFirstRun(placeholderCfg(t), storageIn(dir))
 	if err := fr.Persist(); err != nil {
 		t.Fatal(err)
 	}
@@ -179,7 +236,7 @@ func TestSetupEditorSaveEndsSetup(t *testing.T) {
 		t.Fatalf("editor: %v %v", ed, err)
 	}
 	dir := t.TempDir()
-	fr := newFirstRun(storageIn(dir))
+	fr := newFirstRun(placeholderCfg(t), storageIn(dir))
 	if err := fr.Persist(); err != nil {
 		t.Fatal(err)
 	}
@@ -204,7 +261,7 @@ func TestSetupEditorSaveEndsSetup(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "packeteer.db"), nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if newFirstRun(storageIn(dir)).Pending() {
+	if newFirstRun(placeholderCfg(t), storageIn(dir)).Pending() {
 		t.Fatal("the saved state did not reach the pending file")
 	}
 }

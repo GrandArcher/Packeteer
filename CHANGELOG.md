@@ -6,7 +6,7 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 
 ### Added
 
-- First run of a new install opens the setup wizard without a config edit: with `http.config_editor` unset, an admin gets the editor and wizard until a config is saved or setup is skipped; upgrades and `false` keep them off (#416).
+- First run with only the example providers opens the setup wizard with no config edit; a real config keeps the editor off, and settings push needs an explicit `http.config_editor: true` (#416).
 - Plain language in the UI: BGP Active reads "Connecting (Active)" in amber, plain labels with the config key as tooltip, title-case report names, no API footer on Overview (#351).
 - Forms no longer show grey examples as values: examples move to help text, defaults read "Default: X", Reports filters start empty, wizard starts from running config and takes ASN, type, IPv6 (#350).
 - UI on phones: below 760 px the nav collapses behind a Menu button and table rows become labelled cards, health first; a 390x844 browser smoke step checks it (#352).
