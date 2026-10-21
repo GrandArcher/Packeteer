@@ -19,7 +19,7 @@ var (
 	allU = map[string]bool{"a": true, "b": true, "c": true}
 )
 
-func scorer(t *testing.T) plugin.Scorer {
+func scorer(t testing.TB) plugin.Scorer {
 	t.Helper()
 	s, err := weighted.New(plugin.Config{}, plugin.Env{})
 	if err != nil {

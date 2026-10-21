@@ -153,6 +153,10 @@ type Input struct {
 	// (#30). Their times follow that peer's probe schedule, so they do not
 	// show whether this instance's own probe round finished. Nil is none.
 	Remote map[string]bool
+
+	// byPrefix indexes Results by prefix. Decide fills it, so the
+	// per-prefix confirmation checks do not scan every result.
+	byPrefix map[netip.Prefix][]int
 }
 
 // Improvement is an active (or, outside inject mode, recommended) steer.

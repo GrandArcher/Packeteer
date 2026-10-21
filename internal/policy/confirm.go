@@ -105,10 +105,8 @@ func freshLoss(prev confirm, in Input, cfg Config, p netip.Prefix, now time.Time
 func prefixRound(in Input, cfg Config, prev confirm, p netip.Prefix, now time.Time) (at time.Time, count, stale bool) {
 	var newest time.Time
 	var n, fresh int
-	for _, r := range in.Results {
-		if r.Prefix != p {
-			continue
-		}
+	for _, i := range in.byPrefix[p] {
+		r := in.Results[i]
 		n++
 		if r.Time.After(newest) {
 			newest = r.Time
@@ -138,8 +136,9 @@ func prefixRound(in Input, cfg Config, prev confirm, p netip.Prefix, now time.Ti
 // round.
 func localRound(in Input, cfg Config, prev confirm, p netip.Prefix, now time.Time) (newest time.Time, remeasured bool) {
 	remeasured = true
-	for _, r := range in.Results {
-		if r.Prefix != p || in.Remote[r.Provider] || (cfg.MaxResultAge > 0 && now.Sub(r.Time) > cfg.MaxResultAge) {
+	for _, i := range in.byPrefix[p] {
+		r := in.Results[i]
+		if in.Remote[r.Provider] || (cfg.MaxResultAge > 0 && now.Sub(r.Time) > cfg.MaxResultAge) {
 			continue
 		}
 		if r.Time.After(newest) {
@@ -158,8 +157,9 @@ func localRound(in Input, cfg Config, prev confirm, p netip.Prefix, now time.Tim
 func partialRound(in Input, cfg Config, p netip.Prefix, now time.Time) bool {
 	var oldest, newest time.Time
 	seen := false
-	for _, r := range in.Results {
-		if r.Prefix != p || in.Remote[r.Provider] || (cfg.MaxResultAge > 0 && now.Sub(r.Time) > cfg.MaxResultAge) {
+	for _, i := range in.byPrefix[p] {
+		r := in.Results[i]
+		if in.Remote[r.Provider] || (cfg.MaxResultAge > 0 && now.Sub(r.Time) > cfg.MaxResultAge) {
 			continue
 		}
 		if !seen || r.Round.Before(oldest) {

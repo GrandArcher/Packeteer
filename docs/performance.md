@@ -88,6 +88,17 @@ The first full-table run dropped 78.8 % of flow datagrams at 20,000 records a se
 
 Flow datagrams were also lost to short window stalls (a large read of the window, a collector pause), because each reader decoded and counted inline, so the 4 MiB socket buffer (capped by `net.core.rmem_max`, often 208 KiB in a container) was the only slack. Since #385 the reader only reads and decodes; `workers` goroutines count the records from a queue of 256 datagrams each. A separate measurement, not part of the soak run, on a development machine with a loopback exporter at 20,000 records a second (667 datagrams of 30 records) and the window locked for 1.5 s: before, 816 of 4,002 datagrams (20.4 %) were dropped by the kernel; after, none were lost. A stall longer than the queue holds (about 1,000 datagrams at the default, 1.5 s at this rate) drops the rest and counts it in `packeteer_truncated_total{limit="workers"}`. The window mutex still serializes the counting itself, so more `workers` does not raise the steady rate. One exporter is one UDP flow, so `SO_REUSEPORT` would not have spread it and is not used.
 
+## Benchmarks
+
+Two Go benchmarks size the per-round work at 100,000 targets and 4 providers (400,000 results), so a regression shows before a soak. Each fails if its result count is wrong.
+
+```sh
+go test ./internal/policy -run xxx -bench Decide100k -benchmem
+go test ./internal/probe -run xxx -bench ProbeRound100k -benchmem
+```
+
+On an 8-core development machine one `Decide` takes about 0.4 s and allocates about 170 MB, and one probe round against a prober that answers at once takes about 2.2 s and allocates about 2.5 GB, which the garbage collector frees. Before #387 `Decide` took 45 s here: the confirmation checks scanned every result for each prefix with a better path. `Decide` and announce/withdraw stay single-threaded to keep per-prefix order.
+
 ## Run it yourself
 
 Docker and Go on a Linux host; the full profile needs about 6 GB free.
