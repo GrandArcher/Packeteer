@@ -119,6 +119,26 @@ func (e *Engine) SetConfig(cfg Config) {
 	e.mu.Unlock()
 }
 
+// Thresholds are the configured limits a move must clear, for display.
+type Thresholds struct {
+	MinLossDeltaPct float64
+	MinRTTDelta     time.Duration
+	MinRTTDeltaPct  float64
+	HoldTime        time.Duration
+}
+
+// Thresholds returns the limits the next Evaluate uses.
+func (e *Engine) Thresholds() Thresholds {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	return Thresholds{
+		MinLossDeltaPct: e.cfg.MinLossDeltaPct,
+		MinRTTDelta:     e.cfg.MinRTTDelta,
+		MinRTTDeltaPct:  e.cfg.MinRTTDeltaPct,
+		HoldTime:        e.cfg.HoldTime,
+	}
+}
+
 // Mode returns the configured mode.
 func (e *Engine) Mode() string {
 	if e == nil {

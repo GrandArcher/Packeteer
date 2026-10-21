@@ -50,6 +50,10 @@ button {
 }
 
 main { padding: 16px 20px 32px; max-width: 1100px; }
+/* Eleven columns and a sentence need the whole width of a wide screen. */
+body[data-page="improvements"] main { max-width: none; }
+td.why { min-width: 18rem; }
+@media (max-width: 759px) { td.why { min-width: 0; } }
 
 section { margin-bottom: 28px; }
 

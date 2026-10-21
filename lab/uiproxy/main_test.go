@@ -739,3 +739,56 @@ func TestFixturesFramesOptIn(t *testing.T) {
 		}
 	}
 }
+
+// TestExplainFixturesMatchAPI decodes the canned answers behind the
+// improvement explanation smoke test (#348) with the API's own types, and
+// checks the driver reads the columns and cells the page draws.
+func TestExplainFixturesMatchAPI(t *testing.T) {
+	f, err := loadFixtures("../ui-fixtures/explain")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !f.Frames || f.Inject.Page != "/improvements.html" || len(f.Stubs) != 2 {
+		t.Fatalf("fixtures = %+v", f)
+	}
+	var imps struct {
+		Mode         string                `json:"mode"`
+		Version      string                `json:"version"`
+		Ready        bool                  `json:"ready"`
+		GeneratedAt  time.Time             `json:"generated_at"`
+		Improvements []httpapi.Improvement `json:"improvements"`
+	}
+	for _, s := range f.Stubs {
+		if s.Path != "/api/improvements" {
+			continue
+		}
+		dec := json.NewDecoder(bytes.NewReader(s.body))
+		dec.DisallowUnknownFields()
+		if err := dec.Decode(&imps); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(imps.Improvements) != 2 || imps.Mode != "observe" {
+		t.Fatalf("improvements = %+v", imps)
+	}
+	first, second := imps.Improvements[0], imps.Improvements[1]
+	if first.ASN != 64496 || first.VolumeMbps != 12.5 || first.HoldLeftS != 130 || !strings.Contains(first.Explain, "Threshold 15 ms.") {
+		t.Errorf("first = %+v", first)
+	}
+	if second.VolumeMbps != 0 || !strings.HasPrefix(second.Prefix, "2001:db8:") || second.ASName != "" {
+		t.Errorf("second must have no flow data and no AS name: %+v", second)
+	}
+	app, err := os.ReadFile("../../internal/httpapi/web/app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	driver := string(f.driver)
+	for _, h := range regexp.MustCompile(`"([A-Za-z ]+)"`).FindAllStringSubmatch(regexp.MustCompile(`var HEADS = \[[^\]]*\]`).FindString(driver), -1) {
+		if !strings.Contains(string(app), `["`+h[1]+`"`) && !strings.Contains(string(app), `[inject ? "Steered to" : "`+h[1]+`"]`) {
+			t.Errorf("driver expects the %q column, which app.js does not draw", h[1])
+		}
+	}
+	if !strings.Contains(driver, "window.top !== window") {
+		t.Error("the driver must skip the frames it opens")
+	}
+}

@@ -1,0 +1,131 @@
+{
+ "version": "fixture",
+ "mode": "observe",
+ "ready": true,
+ "generated_at": "2026-10-17T12:00:00Z",
+ "started": true,
+ "sources": [
+  "static"
+ ],
+ "providers": [
+  {
+   "name": "lab-a",
+   "up": true,
+   "state": "up",
+   "loss_pct": 0,
+   "ok": 3,
+   "failed": 0
+  },
+  {
+   "name": "lab-b",
+   "up": false,
+   "state": "down",
+   "loss_pct": 100,
+   "ok": 0,
+   "failed": 3,
+   "detail": "100% loss"
+  },
+  {
+   "name": "lab-c-transit-long-name",
+   "up": false,
+   "state": "down",
+   "ok": 0,
+   "failed": 3,
+   "detail": "no answer"
+  }
+ ],
+ "problems": [
+  {
+   "provider": "lab-b",
+   "detail": "100% loss",
+   "state": "down"
+  },
+  {
+   "provider": "lab-c-transit-long-name",
+   "detail": "no answer",
+   "state": "down"
+  }
+ ],
+ "counts": {
+  "providers_up": 1,
+  "providers_healthy": 1,
+  "providers": 3,
+  "warnings": 2,
+  "prefixes": 1,
+  "measured": 1,
+  "in_rib": 0,
+  "recommended": 0,
+  "improvements": 0,
+  "max_improvements": 50
+ },
+ "bgp": {
+  "configured": false,
+  "ready": false,
+  "established": 0,
+  "peers": 0
+ },
+ "features": [
+  {
+   "name": "history",
+   "on": false
+  },
+  {
+   "name": "troubleshoot",
+   "on": false
+  },
+  {
+   "name": "config_editor",
+   "on": false
+  },
+  {
+   "name": "dashboards",
+   "on": false
+  },
+  {
+   "name": "inbound",
+   "on": false
+  },
+  {
+   "name": "mitigation",
+   "on": false
+  },
+  {
+   "name": "anomaly",
+   "on": false
+  },
+  {
+   "name": "federation",
+   "on": false
+  },
+  {
+   "name": "ha",
+   "on": false
+  }
+ ],
+ "setup": [
+  {
+   "id": "bgp",
+   "level": "info",
+   "title": "No edge router session",
+   "detail": "Providers are ranked, but the current exit of each prefix is unknown and nothing could ever be injected. Add bgp.neighbors for a learn-only iBGP session to your edge router.",
+   "doc": "docs/routers.md",
+   "doc_url": "https://github.com/GrandArcher/Packeteer/blob/main/docs/routers.md"
+  },
+  {
+   "id": "history",
+   "level": "info",
+   "title": "Report history is off",
+   "detail": "Add storage: {type: sqlite} and mount a volume on /var/lib/packeteer to keep reports across restarts.",
+   "doc": "docs/CONFIG.md#storage-sqlite",
+   "doc_url": "https://github.com/GrandArcher/Packeteer/blob/main/docs/CONFIG.md#storage-sqlite"
+  }
+ ],
+ "system": {
+  "total": 10,
+  "ok": 6,
+  "degraded": 0,
+  "down": 0,
+  "idle": 4
+ },
+ "auth": "rbac"
+}

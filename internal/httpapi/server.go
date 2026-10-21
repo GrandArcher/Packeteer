@@ -421,10 +421,31 @@ func (s *Server) handleDecisions(w http.ResponseWriter, _ *http.Request) {
 
 func (s *Server) handleImprovements(w http.ResponseWriter, _ *http.Request) {
 	snap := s.snapshot()
+	imps := withASNames(snap.Improvements, snap.Providers, s.tools.ASNames())
 	writeJSON(w, http.StatusOK, struct {
 		meta
 		Improvements []Improvement `json:"improvements"`
-	}{meta: snap.meta(), Improvements: nz(snap.Improvements)})
+	}{meta: snap.meta(), Improvements: imps})
+}
+
+// withASNames returns a copy of imps with each origin AS named: a name an
+// earlier whois lookup returned, else the provider that uses that AS.
+func withASNames(imps []Improvement, providers []Provider, whois map[uint32]string) []Improvement {
+	out := make([]Improvement, len(imps))
+	copy(out, imps)
+	for i := range out {
+		if name := whois[out[i].ASN]; name != "" {
+			out[i].ASName = name
+			continue
+		}
+		for _, pr := range providers {
+			if out[i].ASN != 0 && (pr.ASN == out[i].ASN || pr.PeerASN == out[i].ASN) {
+				out[i].ASName = pr.Name
+				break
+			}
+		}
+	}
+	return out
 }
 
 func (s *Server) handleTelemetry(w http.ResponseWriter, _ *http.Request) {
