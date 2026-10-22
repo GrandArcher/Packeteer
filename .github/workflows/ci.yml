@@ -2541,7 +2541,7 @@ jobs:
           trap cleanup EXIT
           ok=0
           for _ in $(seq 1 30); do
-            if curl -fsS "$base/healthz" >/dev/null 2>&1; then ok=1; break; fi
+            if curl -fsS -u lab:lab-only "$base/healthz" >/dev/null 2>&1; then ok=1; break; fi
             sleep 1
           done
           test "$ok" = 1
