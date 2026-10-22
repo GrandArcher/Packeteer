@@ -750,6 +750,16 @@ plugin_dir: /etc/packeteer/plugins
 #   custom:
 #     - {name: internal LG, url: "https://lg.example.net/route?prefix={prefix}"}
 
+# NLNOG RING panel (#283). Off by default: nothing calls RING. On, the prefix
+# page asks the public looking-glass API for that prefix, at most
+# requests_per_minute calls in any minute, cached for cache_ttl. Display only.
+# NLNOG RING services may be unavailable.
+# ring_lg:
+#   enabled: true
+#   requests_per_minute: 6
+#   cache_ttl: 10m
+#   timeout: 10s
+
 # Herd (#260, docs/herd.md). Off unless enabled. Shares probe measurements
 # (never names, host addresses, or usage) with the static peers you pin by
 # key; advisory only, never read by a decision, never announces. Needs

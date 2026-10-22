@@ -16,6 +16,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/GrandArcher/Packeteer/internal/linkout"
+	"github.com/GrandArcher/Packeteer/internal/ringlg"
 )
 
 // Operating modes.
@@ -202,6 +203,9 @@ type Config struct {
 	// Linkouts picks the "open in" links on the prefix, ASN, and provider
 	// pages (#211). Display only; Packeteer requests none of those sites.
 	Linkouts linkout.Config `yaml:"linkouts"`
+	// RingLG is the opt-in "Seen from NLNOG RING" panel on the prefix page
+	// (#283). Off by default; display only.
+	RingLG ringlg.Config `yaml:"ring_lg"`
 	// Lookup is the read-only PeeringDB / IX-F directory (#153). Nil
 	// disables it. It never announces.
 	Lookup *PluginSpec `yaml:"lookup"`

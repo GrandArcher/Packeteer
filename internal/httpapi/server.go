@@ -33,6 +33,7 @@ import (
 	"github.com/GrandArcher/Packeteer/internal/federation"
 	"github.com/GrandArcher/Packeteer/internal/inbound"
 	"github.com/GrandArcher/Packeteer/internal/linkout"
+	"github.com/GrandArcher/Packeteer/internal/ringlg"
 	"github.com/GrandArcher/Packeteer/internal/troubleshoot"
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
 )
@@ -101,6 +102,8 @@ type Options struct {
 	Upgrade UpgradeControl
 	// Linkouts builds the "open in" links (#211). Nil uses the defaults.
 	Linkouts *linkout.Set
+	// RingLG answers the NLNOG RING panel (#283). Nil or disabled is off.
+	RingLG *ringlg.Client
 	// Usage reads the persisted 95th-percentile samples for the Commit &
 	// Cost page (#174). Nil when the storage plugin keeps none.
 	Usage UsageReader
@@ -136,6 +139,7 @@ type Server struct {
 	subs       Subscriptions
 	upgrade    UpgradeControl
 	linkouts   *linkout.Set
+	ringLG     *ringlg.Client
 	sysFacts   func() SystemFacts
 	usage      UsageReader
 	setup      atomic.Pointer[Setup]
@@ -224,6 +228,7 @@ func New(opt Options) (*Server, error) {
 	setup := opt.Setup
 	s.setup.Store(&setup)
 	s.linkouts = opt.Linkouts
+	s.ringLG = opt.RingLG
 	s.sysFacts = opt.System
 	s.usage = opt.Usage
 	if s.linkouts == nil {

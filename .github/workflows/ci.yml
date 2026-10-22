@@ -292,6 +292,10 @@ jobs:
             --absent 'ring.nlnog.net' 'Cannot reach'
           bash lab/ui-smoke.sh "$base/prefix/10.1.0.0%2F16" 'id="prefix-links"' --absent 'bgp.he.net' 'Open in'
           bash lab/ui-smoke.sh "$base/prefixes.html?asn=65000" 'id="prefix-asn-links"' --absent 'bgp.he.net' 'Open in'
+          # NLNOG RING panel (#283): off by default, so the panel stays hidden and
+          # the API answers "off" without a request to RING.
+          bash lab/ui-smoke.sh "$base/prefix/2001:db8::%2F32" 'id="ring-panel" hidden=""' --absent 'Unavailable.' 'Cannot reach'
+          curl -fsS "$base/api/ring_lg?prefix=2001:db8::/32" | jq -e '.state == "off"'
           # Graphs (#129) with history on but nothing recorded: an empty state, no chart.
           bash lab/ui-smoke.sh "$base/graphs.html" 'No before/after data in this range' 'It announces nothing.' \
             'id="graph-bucket"' --absent 'class="ts-chart"' 'Cannot reach'
@@ -1197,6 +1201,63 @@ jobs:
             '>current<' '>best<' 'indirect: nothing in the target answered' '>Probe and optimize<' \
             'Queued 198.51.100.0/24 for probing until' 'the prefix page' \
             --absent 'rate limited; try again shortly' 'Cannot reach' 'mode-inject'
+      - name: UI NLNOG RING panel smoke (#283; opt-in panel from canned answers, no request to RING)
+        run: |
+          set -euo pipefail
+          base=http://127.0.0.1:18283
+          cat > /tmp/ui283.yaml <<'YAML'
+          mode: observe
+          asn: 64512
+          router_id: 192.0.2.10
+          auth: {enabled: false}
+          http:
+            listen: "127.0.0.1:18283"
+          ring_lg: {enabled: true}
+          providers:
+            - name: lab-a
+              source_ip: 127.0.0.1
+              next_hop: 192.0.2.1
+          YAML
+          docker run -d --name pkui283 --network host --cap-add NET_RAW --cap-add NET_ADMIN \
+            -v /tmp/ui283.yaml:/etc/packeteer/config.yaml:ro packeteer:ci
+          proxy=""
+          cleanup() {
+            if [ -n "$proxy" ]; then kill "$proxy" 2>/dev/null || true; fi
+            docker stop -t 15 pkui283 >/dev/null || true
+            docker logs pkui283 2>&1 | tail -n 40
+            code="$(docker inspect -f '{{.State.ExitCode}}' pkui283)"
+            docker rm pkui283 >/dev/null || true
+            test "$code" = "0"
+          }
+          trap cleanup EXIT
+          ok=0
+          for _ in $(seq 1 30); do
+            if curl -fsS "$base/healthz" >/dev/null 2>&1; then ok=1; break; fi
+            sleep 1
+          done
+          test "$ok" = 1
+          # A private prefix is refused by the image itself before any request
+          # leaves it. Every other prefix below is answered by uiproxy from
+          # lab/ui-fixtures/ring-lg, so CI never calls NLNOG RING.
+          curl -fsS "$base/api/ring_lg?prefix=10.1.0.0/16" | jq -e '.state == "unavailable" and (.message | contains("never sent"))'
+          bash lab/ui-smoke.sh "$base/prefix/10.1.0.0%2F16" 'Unavailable. Private and local prefixes are never sent to NLNOG RING.' \
+            --absent 'id="ring-panel" hidden=""' 'Cannot reach'
+          go build -o /tmp/uiproxy ./lab/uiproxy
+          /tmp/uiproxy -listen 127.0.0.1:18284 -upstream "$base" -user lab -password lab-only \
+            -fixtures lab/ui-fixtures/ring-lg >/tmp/uiproxy283.log 2>&1 &
+          proxy=$!
+          for _ in $(seq 1 20); do
+            curl -fsS http://127.0.0.1:18284/healthz >/dev/null 2>&1 && break
+            sleep 0.2
+          done
+          curl -fsS http://127.0.0.1:18284/healthz >/dev/null
+          bash lab/ui-smoke.sh "http://127.0.0.1:18284/prefix/198.51.100.0%2F24" 'Seen from NLNOG RING' 'NLNOG RING services may be unavailable.' \
+            'peer-one (AS64496)' 'peer-two (AS64497)' '64497 64501 64500' '>Valid<' '>NotFound<' 'NLNOG RING: Not showing more specific routes' '(cached).' \
+            'It announces nothing.' --absent 'id="ring-panel" hidden=""' 'Unavailable.' 'Cannot reach'
+          bash lab/ui-smoke.sh "http://127.0.0.1:18284/prefix/203.0.113.0%2F24" 'Unavailable. NLNOG RING did not answer: HTTP 503.' \
+            --absent 'id="ring-panel" hidden=""' 'peer-one' 'Cannot reach'
+          bash lab/ui-smoke.sh "http://127.0.0.1:18284/prefix/192.0.2.0%2F24" 'NLNOG RING shows no route for exactly this prefix.' \
+            --absent 'id="ring-panel" hidden=""' 'Unavailable.' 'Cannot reach'
       - name: UI prefix list smoke (#183; a 100000-prefix list from canned pages, observe)
         run: |
           set -euo pipefail

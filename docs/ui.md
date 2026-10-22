@@ -12,6 +12,7 @@ The remaining UI conveniences (#34). All of them work in the stock image with a 
 | Prefix detail and history (#179) | `/prefix/<prefix>`, `/api/prefixes/history` | viewer | `storage: {type: sqlite}` for the timeline |
 | Maintenance windows (#177) | `/policies.html`, `GET`/`POST /api/maintenance`, `DELETE /api/maintenance/{id}` | viewer reads, operator opens and closes | a `maintenance` policy; opening needs auth or basic auth |
 | Link-outs (#211) | `/prefix/<prefix>`, `/prefixes.html`, `/providers.html`, `GET /api/linkouts` | viewer | `linkouts` (optional) |
+| NLNOG RING panel (#283) | `/prefix/<prefix>`, `GET /api/ring_lg` | viewer | `ring_lg.enabled` (off by default) |
 | Global search (#172) | the top bar on every page, `/search.html`, `GET /api/search` | viewer | `storage: {type: sqlite}` for history |
 | IXP site health (#167) | `/ixp/sites`, `GET /api/ixp/sites` | viewer | `ixp` and `federation` ([design/ixp.md](design/ixp.md#multi-site-fabric-health)) |
 | IXP member pages (#166) | `/ixp/member/<asn>`, `/ixp/member/`, `GET /api/ixp/members/{asn}` | viewer | `ixp` ([design/ixp.md](design/ixp.md#member-pages)) |
@@ -214,11 +215,28 @@ Built-in sites (names for `linkouts.enabled`; defaults marked):
 | `irr_explorer` (default) | IRR Explorer | `irrexplorer.nlnog.net/prefix/<prefix>` | - |
 | `nlnog_ring` (off) | NLNOG RING looking glass | `lg.ring.nlnog.net/prefix?q=<prefix>` | - |
 
-The RING link is a page the operator opens by hand. Packeteer does not call RING's API, log in to RING, or run commands on any RING node. PeeringDB is linked per AS: its AS page lists the exchanges the AS is on, and the exchange name in `exchanges` is a local label, not a PeeringDB object.
+The RING link is a page the operator opens by hand and makes no request. The separate, opt-in [NLNOG RING panel](#nlnog-ring-panel) reads the public API. PeeringDB is linked per AS: its AS page lists the exchanges the AS is on, and the exchange name in `exchanges` is a local label, not a PeeringDB object.
 
 The server builds every URL, so the browser never assembles one. `GET /api/linkouts?prefix=<cidr>&asn=<n>` (viewer; both repeatable, at most 300 values; a bad value is a `400`) returns `{"prefix": {<cidr>: [{"name", "url"}]}, "asn": {<n>: [...]}}`. A prefix is masked and written as CIDR with `/` and `:` left readable; an AS is decimal digits. With `linkouts.hide_internal` on (default) an RFC 1918, ULA, loopback, or link-local prefix and a private-use AS (RFC 6996: 64512-65534, 4200000000-4294967294) get an empty list, so the page shows no link for it. Documentation prefixes and ASNs are not internal. Settings and the `linkouts` keys are in [CONFIG.md](CONFIG.md#linkouts); a change needs a restart.
 
 The `ui-smoke` steps of the docker job load `/prefix/2001:db8::%2F32` and `/prefixes.html?asn=64496` in headless Chrome and check the rendered `href`s, `target`, and `rel`, that NLNOG RING is absent, and that an RFC 1918 prefix and a private-use AS render no link. `internal/linkout`, `internal/config`, and `internal/httpapi` tests cover the URLs, the template checks, and the page wiring.
+
+## NLNOG RING panel
+
+With `ring_lg.enabled: true` the prefix page (`/prefix/<prefix>`) shows "Seen from NLNOG RING" (#283): the routes the public [NLNOG RING looking glass](https://lg.ring.nlnog.net/) shows for exactly that prefix (peer, AS path, origin AS, RING's own RPKI state, last update). It is off by default, and while it is off nothing calls RING and the panel is hidden. The answer is display only. It never reaches `Decide`, scoring, or steering, and nothing in it announces.
+
+RING is run by volunteers, so use is small and fair:
+
+- One `GET https://lg.ring.nlnog.net/api/prefix?q=<prefix>&match=exact` per prefix page view that misses the cache. No background polling, no batch or all-peer queries, and redirects are not followed.
+- A cap on upstream calls across all prefixes and viewers: `ring_lg.requests_per_minute` in any 60 seconds (default 6). Over the cap the panel says it was not asked.
+- A per-prefix cache for `ring_lg.cache_ttl` (default 10m, at least 1m), held in memory for at most 256 prefixes. A repeat view inside the TTL makes no call.
+- A failure (timeout after `ring_lg.timeout`, HTTP 5xx or 429, an unreadable answer) shows "Unavailable" with the reason and is remembered for one minute, so a struggling service is not asked again on every view. A RING failure affects nothing else.
+- Every request sends `User-Agent: Packeteer/<version> (+https://github.com/GrandArcher/Packeteer)`.
+- Private, loopback, and link-local prefixes (the set `linkouts.hide_internal` hides) are never sent, whatever `hide_internal` says.
+
+NLNOG RING services may be unavailable. Packeteer never uses SSH or any other interactive access to RING nodes, never logs in, never runs a command on a member's node, and keeps no credentials: the public API needs none. The keys are in [CONFIG.md](CONFIG.md#ring_lg); a change needs a restart.
+
+`GET /api/ring_lg?prefix=<cidr>` (viewer) returns `state` (`off`, `ok`, or `unavailable`), `routes` (up to 200), `warnings`, `message`, `cached`, and `fetched_at`. `internal/ringlg` tests use an `httptest` server with synthetic documentation-prefix answers and cover the cap, the cache, the User-Agent, timeouts, 5xx and 429, and that an off panel makes no request. The `ui-smoke` steps load the prefix page with the panel off (hidden) and with it on against canned answers from `lab/ui-fixtures/ring-lg`, so CI never calls RING.
 
 ## Global search
 

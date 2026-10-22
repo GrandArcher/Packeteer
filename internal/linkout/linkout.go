@@ -37,8 +37,8 @@ type site struct {
 }
 
 // builtin is every site Packeteer knows. NLNOG RING is a public looking
-// glass page the operator opens by hand: Packeteer neither calls its API
-// nor logs in to or runs commands on RING nodes, so it is off by default.
+// glass page the operator opens by hand; this link makes no request (the
+// opt-in panel in internal/ringlg does), so it is off by default.
 var builtin = []site{
 	{"he", "HE BGP Toolkit", "https://bgp.he.net/net/{prefix}", "https://bgp.he.net/AS{asn}"},
 	{"he_lg", "HE looking glass", "https://lg.he.net/", ""},
@@ -232,7 +232,7 @@ func New(c Config) *Set {
 // hide_internal is on.
 func (s *Set) Prefix(p netip.Prefix) []Link {
 	p = p.Masked()
-	if s.hide && internalAddr(p.Addr()) {
+	if s.hide && InternalAddr(p.Addr()) {
 		return []Link{}
 	}
 	// "/" and ":" are legal in a path and a query, so a CIDR stays readable.
@@ -257,7 +257,9 @@ func fill(es []entry, placeholder, value string) []Link {
 	return out
 }
 
-func internalAddr(a netip.Addr) bool {
+// InternalAddr reports a private, loopback, link-local, or unspecified
+// address.
+func InternalAddr(a netip.Addr) bool {
 	a = a.Unmap()
 	return a.IsPrivate() || a.IsLoopback() || a.IsLinkLocalUnicast() || a.IsUnspecified()
 }

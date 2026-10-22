@@ -38,6 +38,7 @@ The dashboard, JSON API, and Prometheus metrics share one listener, `http.listen
 | `/api/prefixes/history` | Viewer. `?prefix=<cidr>&days=7` (or `from` and `to`): daily probe counts and averages per provider and the improvement rows for exactly that prefix. Needs `storage` ([ui.md](ui.md#prefix-detail-and-history)). |
 | `/api/inbound` | Viewer. Inbound optimization state and, in `suggest`, the suggested steers ([inbound.md](inbound.md)). |
 | `/api/linkouts` | Viewer. `?prefix=<cidr>&asn=<n>` (repeatable): the link-out URLs the server builds for each value ([ui.md](ui.md#link-outs)). |
+| `/api/ring_lg` | Viewer. `?prefix=<cidr>`: the NLNOG RING looking-glass view of that prefix, `state` `off` (the default, no request), `ok`, or `unavailable`. Rate limited and cached ([ui.md](ui.md#nlnog-ring-panel)). |
 | `/api/events` | Viewer. `severity` (floor), `q`, `from`, `to`, `limit` (1-1000, default 200): `events` with `time`, `source`, `severity`, `kind`, `message`, `fields`, `help_url` ([EVENTS.md](EVENTS.md)). |
 | `/api/anomalies` | Viewer. The flow anomaly detector, open anomalies, and the feed of recent changes ([anomaly.md](anomaly.md)). |
 | `/api/quarantine` | Viewer. Prefixes parked on their native path by flap quarantine. `POST /api/quarantine/release` (operator) releases one ([CONFIG.md](CONFIG.md#flap_quarantine)). |
