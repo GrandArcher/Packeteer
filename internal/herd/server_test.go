@@ -257,7 +257,15 @@ func TestConnectionCaps(t *testing.T) {
 		ne, ok := err.(net.Error)
 		return err != nil && !(ok && ne.Timeout())
 	}
+	// Server handshakes run concurrently and a TLS 1.3 client returns before
+	// the server finishes, so wait until c1 and c2 are counted; otherwise c3
+	// can win the race and one of them is the connection closed.
 	c1, c2 := open(a), open(a)
+	waitFor(t, func() bool {
+		srv.srv.mu.Lock()
+		defer srv.srv.mu.Unlock()
+		return srv.srv.perID[KeyID(a.pub)] == 2
+	})
 	c3 := open(a) // over the per-peer cap: accepted by TLS 1.3 client, then closed
 	if !closed(c3) {
 		t.Error("third connection of one peer stayed open")
