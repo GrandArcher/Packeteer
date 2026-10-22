@@ -6,6 +6,7 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 
 ### Added
 
+- Soak table follows a real full table's shape (prefix lengths, AS path length, communities, MED, attribute sets) from a counts-only RIS file, documentation space only; rebuild tool in lab/soak/shape (#341).
 - First run with only the example providers opens the setup wizard with no config edit; a real config keeps the editor off, and settings push needs an explicit `http.config_editor: true` (#416).
 - Plain language in the UI: BGP Active reads "Connecting (Active)" in amber, plain labels with the config key as tooltip, title-case report names, no API footer on Overview (#351).
 - Forms no longer show grey examples as values: examples move to help text, defaults read "Default: X", Reports filters start empty, wizard starts from running config and takes ASN, type, IPv6 (#350).

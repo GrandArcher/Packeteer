@@ -282,9 +282,28 @@ func (r *router) message(i, j int, withdraw bool) *bgp.BGPMessage {
 }
 
 func (r *router) attrs(i int) []bgp.PathAttributeInterface {
-	return []bgp.PathAttributeInterface{
-		bgp.NewPathAttributeOrigin(0),
-		bgp.NewPathAttributeAsPath([]bgp.AsPathParamInterface{bgp.NewAs4PathParam(bgp.BGP_ASPATH_ATTR_TYPE_SEQ, r.tbl.asPath(i))}),
+	a := r.tbl.attrs(i)
+	var path []bgp.AsPathParamInterface
+	if len(a.path) > 0 {
+		path = []bgp.AsPathParamInterface{bgp.NewAs4PathParam(bgp.BGP_ASPATH_ATTR_TYPE_SEQ, a.path)}
+	}
+	out := []bgp.PathAttributeInterface{
+		bgp.NewPathAttributeOrigin(a.origin),
+		bgp.NewPathAttributeAsPath(path),
 		bgp.NewPathAttributeLocalPref(100),
 	}
+	if a.hasMED {
+		out = append(out, bgp.NewPathAttributeMultiExitDisc(a.med))
+	}
+	if len(a.comms) > 0 {
+		out = append(out, bgp.NewPathAttributeCommunities(a.comms))
+	}
+	if len(a.large) > 0 {
+		lc := make([]*bgp.LargeCommunity, len(a.large))
+		for k, v := range a.large {
+			lc[k] = bgp.NewLargeCommunity(v[0], v[1], v[2])
+		}
+		out = append(out, bgp.NewPathAttributeLargeCommunities(lc))
+	}
+	return out
 }
