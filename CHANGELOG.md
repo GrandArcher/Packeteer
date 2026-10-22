@@ -6,6 +6,7 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 
 ### Added
 
+- Docs: adopting.md maps common route-optimizer concepts to config with an observe-first cut-over plan; roi.md is a worksheet for cost, commit relief, and gain (#205).
 - Opt-in `ring_lg` panel "Seen from NLNOG RING" on the prefix page: public looking-glass API, rate capped, cached, best-effort, off by default (#283).
 - Onboarding: install.sh starts observe; Settings runs blocking preflight checks with a fix each and metrics; guided inject step; -snippet router config for six vendors; -pbr linux -apply (#221).
 - Opt-in lab replay of a real RIPE RIS or RouteViews table (`lab/realtable.sh`, manual workflow), observe only, 1-4 sessions; the dump is never committed and logs hold counts only (#342).

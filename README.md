@@ -171,6 +171,8 @@ To learn current exits, peer iBGP, same ASN, between the router and Packeteer. I
 
 Leave graceful restart off on the session. Guides:
 
+- [docs/adopting.md](docs/adopting.md) - moving from or alongside an existing route optimizer: concepts mapped to config and an observe-first cut-over plan
+- [docs/roi.md](docs/roi.md) - worksheet to estimate the return: transit cost, commit relief, and measured gain
 - [docs/walkthrough.md](docs/walkthrough.md) - observe, suggest, inject, and roll back on a simulated FRR edge, then the same steps on a real one. CI runs every command
 - [docs/mikrotik.md](docs/mikrotik.md) - RouterOS 7 iBGP, filters, Traffic Flow, port mirroring, and SNMP
 - [docs/frr.md](docs/frr.md) - FRR; the walkthrough lab runs this configuration in CI
