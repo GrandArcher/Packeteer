@@ -94,7 +94,7 @@ for _ in $(seq 1 90); do
 		grep -qF 'neighbor 192.0.2.10 timers 10 30' "$work/frr-running.txt" && break
 	sleep 1
 done
-for want in 'bgp community-list standard packeteer permit 64512:666' 'route-map packeteer-in deny 100' 'route-map ebgp-out deny 10' \
+for want in 'bgp community-list standard packeteer seq 5 permit 64512:666' 'route-map packeteer-in deny 100' 'route-map ebgp-out deny 10' \
 	' match community packeteer' 'neighbor 192.0.2.10 remote-as 64512' 'neighbor 192.0.2.10 route-map packeteer-in in'; do
 	grep -qF -- "$want" "$work/frr-running.txt" || { echo "FRR running-config lacks: $want" >&2; cat "$work/frr-running.txt" >&2; exit 1; }
 done
