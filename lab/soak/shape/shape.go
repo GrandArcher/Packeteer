@@ -24,9 +24,9 @@ const (
 	MaxLargeCommunities = 16
 )
 
-// Shape is one peer's view of a full table. Every map is a histogram from a
-// small integer (a prefix length, a hop count, a number of communities) to
-// the number of routes with that value.
+// Shape describes a full table, pooled over the peers that passed the
+// filter. Every map is a histogram from a small integer (a prefix length, a
+// hop count, a number of communities) to the number of routes with that value.
 type Shape struct {
 	Source    string `json:"source"`
 	Collected string `json:"collected"`

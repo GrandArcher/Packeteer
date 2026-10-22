@@ -41,7 +41,7 @@ The budgets live in [lab/soak/budgets.yaml](../lab/soak/budgets.yaml) and are se
 
 `lab/soak/shape/shape.json` holds counts only, taken from a public RIPE RIS dump (rrc00, 2026-10-21, three full-feed peers pooled): the prefix length histogram per family, AS path length, communities and large communities per route, origin, MED routes, and distinct attribute sets per route. It has no prefix and no AS number; `TestShapeFileHasNoPrefixOrASN` fails if one appears. `go run ./lab/soak/shape/build -source LABEL -date YYYY-MM-DD DUMP > lab/soak/shape/shape.json` rebuilds it from an MRT TABLE_DUMP_V2 file (plain or gzip).
 
-The generator follows it. Entries are documentation space only. The IPv6 lengths keep the dump's mix, moved longer by the same number of bits (19 at 1,250,000 prefixes, 21 at 3 million and up) so every length class fits inside `2001:db8::/32`; no entry nests in another. The shape gives about 6 prefixes per attribute set, where the old table had 64. Wire figures for the 1,250,000-prefix table, measured by encoding every UPDATE:
+The generator follows it. Entries are documentation space only. The IPv6 lengths keep the dump's mix, moved longer by the same number of bits (19 at 1,250,000 prefixes, 21 for the 3 million and 5 million profiles) so every length class fits inside `2001:db8::/32`; no entry nests in another. The shape gives about 6 prefixes per attribute set, where the old table had 64. Wire figures for the 1,250,000-prefix table, measured by encoding every UPDATE:
 
 | | Before | After |
 |---|---|---|
@@ -50,11 +50,11 @@ The generator follows it. Entries are documentation space only. The IPv6 lengths
 | Bytes on the wire | 11.4 MB | 30.3 MB |
 | Bytes per prefix | 9.2 | 24.3 |
 
-The `load` job figures on the shaped table are in the PR that introduced it. Budgets are unchanged; a miss is a finding, not a reason to raise one.
+Budgets are unchanged; a miss is a finding, not a reason to raise one.
 
 A run prints the table with the measured values, adds it to the GitHub job summary, and uploads the JSON result as an artifact (`load-result`, `soak-result`).
 
-Measured on an 8-core development machine with the `pr` workload and a 4-minute soak: full table learned in 18 s (4.5 cores while learning), peak RSS 4530 MiB, RSS growth 0.3 MiB, 0.72 cores average, 14 threads, 1.8 % flow datagrams dropped, API p99 240 ms, reconverge 0.07 s, SIGTERM to exit 7.8 s, 3000 prefixes measured. Most of the memory is the learned table: about 1.7 KB of live heap per prefix (GoBGP's Adj-RIB-In plus the view), and the Go collector lets the heap grow to about twice that between collections.
+Measured before #341 (64 prefixes per attribute set) on an 8-core development machine with the `pr` workload and a 4-minute soak: full table learned in 18 s (4.5 cores while learning), peak RSS 4530 MiB, RSS growth 0.3 MiB, 0.72 cores average, 14 threads, 1.8 % flow datagrams dropped, API p99 240 ms, reconverge 0.07 s, SIGTERM to exit 7.8 s, 3000 prefixes measured. Most of the memory is the learned table: about 1.7 KB of live heap per prefix (GoBGP's Adj-RIB-In plus the view), and the Go collector lets the heap grow to about twice that between collections.
 
 On the nine `pr` runs on GitHub-hosted `ubuntu-latest` through 2026-10-01, end RSS stayed in a 4609-4818 MiB band and peak RSS stayed between 4869 and 5353 (all under 6144). Go returns unused pages with `MADV_DONTNEED`, so RSS falls after a collection and climbs back over the next minutes. The previous growth check compared medians of the first and last tenth after warmup, about 35 seconds each, which is shorter than that cycle. Actions run 36902639588 (the push of #96 to `main`) sat in a valley for that first tenth (baseline 4476 MiB) and on the refilled heap for the last (4818), and failed at 342 MiB.
 

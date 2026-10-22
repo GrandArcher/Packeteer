@@ -62,7 +62,6 @@ func TestRunPoolsFullFeedsAndWritesCountsOnly(t *testing.T) {
 		t.Fatal(err)
 	}
 	var out bytes.Buffer
-	// A stub peer has 1 of 3 routes, under the 90 percent line.
 	if err := run(path, "test dump", "2026-01-02", &out); err != nil {
 		t.Fatal(err)
 	}
