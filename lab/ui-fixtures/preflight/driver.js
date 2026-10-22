@@ -9,7 +9,10 @@ var writes = 0;
 var realFetch = window.fetch;
 window.fetch = function (url, opts) {
   var method = (opts && opts.method) || "GET";
-  if (method !== "GET" && String(url).indexOf("/api/preflight/run") < 0) writes++;
+  var u = String(url);
+  // POST /api/config/form without apply only previews the form; it writes nothing.
+  var preview = u.indexOf("/api/config/form") >= 0 && !/"apply"\s*:\s*true/.test(String((opts && opts.body) || ""));
+  if (method !== "GET" && u.indexOf("/api/preflight/run") < 0 && !preview) writes++;
   return realFetch.apply(window, arguments);
 };
 
