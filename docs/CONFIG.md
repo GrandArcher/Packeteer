@@ -69,6 +69,7 @@ The image entrypoint is the same binary. Flags go after the image name.
 | `leak_watch` | none | no | Watches for Packeteer's routes outside the AS and withdraws a leaked route (one prefix, never in bulk), holding it out until an operator clears it. Off unless `enabled: true`. See [`leak_watch`](#leak_watch) and [leak-watch.md](leak-watch.md). Lab-proven only. |
 | `linkouts` | defaults | no | Which "open in" links the prefix, ASN, and provider pages show, custom URL templates, and `hide_internal` (#211). Display only; Packeteer requests none of those sites. See [`linkouts`](#linkouts). |
 | `report_subscriptions` | none | no | Stored reports emailed as CSV on a daily, weekly, or monthly UTC schedule through an `smtp` notifier (#34). Needs `storage`. See [`report_subscriptions`](#report_subscriptions). Does not announce. |
+| `ring_lg` | off | no | Opt-in "Seen from NLNOG RING" panel on the prefix page, rate limited and cached (#283). Display only. See [`ring_lg`](#ring_lg). |
 | `troubleshoot` | looking glass only | no | Read-only operator tools: looking glass, on-demand probe, traceroute, whois. Does not announce. See [`troubleshoot`](#troubleshoot). |
 
 `mode: observe` and `mode: suggest` use the same decision path and announce nothing. `suggest` is the checkpoint: read the log, the dashboard, and `/api/decisions` before you change `mode`. The allowlist is enforced only in `inject`.
@@ -677,6 +678,24 @@ linkouts:
   enabled: [he, ripestat, bgptools, nlnog_ring]
   custom:
     - {name: internal LG, url: "https://lg.example.net/route?prefix={prefix}"}
+```
+
+### `ring_lg`
+
+The opt-in "Seen from NLNOG RING" panel on the prefix page (#283). With `enabled: false` (the default) nothing calls RING. Display only: the answer never feeds a decision. Every key is checked at load, and unknown keys are errors. A change needs a restart. Limits, the availability note, and the no-SSH rule are in [ui.md](ui.md#nlnog-ring-panel).
+
+| Key | Default | Meaning |
+|---|---|---|
+| `enabled` | `false` | `true` lets the prefix page ask the public NLNOG RING looking glass API. |
+| `requests_per_minute` | `6` | Most upstream calls in any 60 seconds, across all prefixes and viewers. 1 to 30. |
+| `cache_ttl` | `10m` | How long an answer for a prefix is reused. 1m to 24h. |
+| `timeout` | `10s` | Bound on one call. Up to 30s. |
+
+```yaml
+ring_lg:
+  enabled: true
+  requests_per_minute: 6
+  cache_ttl: 10m
 ```
 
 ### `report_subscriptions`

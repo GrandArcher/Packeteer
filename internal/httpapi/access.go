@@ -74,6 +74,7 @@ func (s *Server) routeTable() []route {
 		{"GET /api/ixp/correlation", viewer, s.handleIXPCorrelation},
 		{"GET /api/ixp/sites", viewer, s.handleIXPSites},
 		{"GET /api/linkouts", viewer, s.handleLinkouts},
+		{"GET /api/ring_lg", viewer, s.handleRingLG},
 		{"GET /api/federation", viewer, s.handleFederation},
 		{"POST /api/federation/push", admin, s.handleFederationPush},
 		{"GET /api/herd", viewer, s.handleHerd},

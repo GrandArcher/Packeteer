@@ -17,6 +17,7 @@ import (
 	"github.com/GrandArcher/Packeteer/internal/federation"
 	"github.com/GrandArcher/Packeteer/internal/history"
 	"github.com/GrandArcher/Packeteer/internal/httpapi"
+	"github.com/GrandArcher/Packeteer/internal/ringlg"
 	"github.com/GrandArcher/Packeteer/internal/troubleshoot"
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
 )
@@ -814,5 +815,37 @@ func TestExplainFixturesMatchAPI(t *testing.T) {
 	}
 	if !strings.Contains(driver, "window.top !== window") {
 		t.Error("the driver must skip the frames it opens")
+	}
+}
+
+// TestRingLGFixturesMatchAPI decodes the canned /api/ring_lg answers with
+// the type the API returns (#283), so a renamed field fails here and not as
+// an empty panel in the UI smoke test.
+func TestRingLGFixturesMatchAPI(t *testing.T) {
+	f, err := loadFixtures("../ui-fixtures/ring-lg")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]struct {
+		state  string
+		routes int
+	}{"ok.json": {ringlg.StateOK, 2}, "unavailable.json": {ringlg.StateUnavailable, 0}, "empty.json": {ringlg.StateOK, 0}}
+	if len(f.Stubs) != len(want) {
+		t.Fatalf("stubs = %d", len(f.Stubs))
+	}
+	for _, s := range f.Stubs {
+		var r ringlg.Result
+		dec := json.NewDecoder(bytes.NewReader(s.body))
+		dec.DisallowUnknownFields()
+		if err := dec.Decode(&r); err != nil {
+			t.Errorf("%s: %v", s.File, err)
+			continue
+		}
+		if w := want[s.File]; r.State != w.state || len(r.Routes) != w.routes {
+			t.Errorf("%s: state %q routes %d", s.File, r.State, len(r.Routes))
+		}
+		if r.State == ringlg.StateUnavailable && !strings.Contains(r.Message, "NLNOG RING services may be unavailable.") {
+			t.Errorf("%s: message %q", s.File, r.Message)
+		}
 	}
 }

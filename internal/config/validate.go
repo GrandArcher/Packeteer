@@ -56,6 +56,7 @@ func (c *Config) Validate() error {
 	c.validateSubscriptions(add)
 	c.validateUpgrade(add)
 	c.Linkouts.Validate(add)
+	c.RingLG.Validate(add)
 
 	return errors.Join(errs...)
 }

@@ -120,6 +120,51 @@ function loadTimeline() {
   });
 }
 
+// renderRing draws the opt-in NLNOG RING panel (#283). The server answers
+// state "off" without any request while ring_lg is off, and the panel stays
+// hidden. loadRing runs once per page view: the server caches the answer.
+function renderRing(data) {
+  var panel = document.getElementById("ring-panel");
+  var root = document.getElementById("ring-body");
+  clear(root);
+  if (data.state === "off") return;
+  panel.hidden = false;
+  if (data.state !== "ok") {
+    root.appendChild(el("p", "empty", "Unavailable. " + (data.message || "NLNOG RING services may be unavailable.")));
+    return;
+  }
+  var routes = data.routes || [];
+  if (!routes.length) {
+    root.appendChild(el("p", "empty", "NLNOG RING shows no route for exactly this prefix."));
+  } else {
+    var t = table(["Peer", "Prefix", "AS path", "Origin AS", "RPKI (RING)", "Last update"]);
+    routes.forEach(function (r) {
+      var tr = el("tr");
+      tr.appendChild(el("td", "", r.peer));
+      tr.appendChild(el("td", "mono", r.prefix));
+      tr.appendChild(el("td", "mono", (r.as_path || []).join(" ")));
+      tr.appendChild(el("td", "", r.origin || "-"));
+      tr.appendChild(el("td", "", r.rpki || "-"));
+      tr.appendChild(el("td", "", r.last_update || "-"));
+      t.body.appendChild(tr);
+    });
+    root.appendChild(t.table);
+  }
+  if (data.truncated) root.appendChild(el("p", "tag", "Showing the first " + routes.length + " rows."));
+  (data.warnings || []).forEach(function (w) { root.appendChild(el("p", "tag", "NLNOG RING: " + w)); });
+  root.appendChild(el("p", "tag", "Fetched " + fmtTime(data.fetched_at) + (data.cached ? " (cached)." : ".")));
+}
+
+function loadRing() {
+  var root = document.getElementById("ring-body");
+  if (!root || !thisPrefix) return;
+  getJSON("/api/ring_lg?prefix=" + encodeURIComponent(thisPrefix)).then(renderRing, function (err) {
+    document.getElementById("ring-panel").hidden = false;
+    clear(root);
+    root.appendChild(el("p", "empty", "Unavailable. " + err.message + " NLNOG RING services may be unavailable."));
+  });
+}
+
 function initPrefixPage() {
   var title = document.getElementById("prefix-title");
   if (!title) return;
@@ -130,6 +175,7 @@ function initPrefixPage() {
   document.getElementById("prefix-load").addEventListener("click", loadTimeline);
   document.getElementById("prefix-days").addEventListener("change", loadTimeline);
   loadTimeline();
+  loadRing();
 }
 
 window.addEventListener("DOMContentLoaded", initPrefixPage);
