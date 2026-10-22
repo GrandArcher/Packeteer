@@ -1,0 +1,11 @@
+{
+  "frames": true,
+  "inject": {
+    "page": "/improvements.html",
+    "script": "driver.js"
+  },
+  "stubs": [
+    {"method": "GET", "path": "/api/overview", "file": "overview.json"},
+    {"method": "GET", "path": "/api/improvements", "file": "improvements.json"}
+  ]
+}

@@ -474,9 +474,14 @@ function renderImprovements(data) {
   }
   var table = el("table");
   var hr = el("tr");
-  ["Prefix", "Default route via", inject ? "Steered to" : "Recommended", "Cause", "Since", "Reason"].forEach(function (h) {
-    var th = el("th", "", h);
-    if (h === "Default route via") th.title = "The native exit: where the router sends this prefix without Packeteer";
+  var heads = [["Prefix"], ["Default route via", "The native exit: where the router sends this prefix without Packeteer"],
+    [inject ? "Steered to" : "Recommended"], ["Cause"],
+    ["Latency", "Native -> recommended, from the latest probe round"], ["Loss", "Native -> recommended, from the latest probe round"],
+    ["Gain", "Latency saved, and loss saved when there is some"], ["Mbps", "Observed traffic of the prefix, from the flow source"],
+    ["ASN", "Origin AS of the learned path"], ["AS name"], ["Why"]];
+  heads.forEach(function (h) {
+    var th = el("th", "", h[0]);
+    if (h[1]) th.title = h[1];
     hr.appendChild(th);
   });
   var thead = el("thead");
@@ -489,12 +494,48 @@ function renderImprovements(data) {
     tr.appendChild(el("td", "", im.native || "—"));
     tr.appendChild(el("td", "", im.provider || "—"));
     tr.appendChild(el("td", "", im.cause || "—"));
-    tr.appendChild(el("td", "", fmtTime(im.since)));
-    tr.appendChild(el("td", "", im.reason || ""));
+    tr.appendChild(el("td", "", beforeAfter(im.native_rtt_ms, im.rtt_ms, " ms")));
+    tr.appendChild(el("td", "", beforeAfter(im.native_loss_pct, im.loss_pct, "%")));
+    tr.appendChild(el("td", "", gainText(im)));
+    tr.appendChild(el("td", "", im.volume_mbps ? fmtNum(im.volume_mbps) : "no flow data"));
+    tr.appendChild(el("td", "", im.asn ? "AS" + im.asn : "-"));
+    tr.appendChild(el("td", "", im.as_name || "-"));
+    tr.appendChild(el("td", "why", whyText(im, inject)));
     tb.appendChild(tr);
   });
   table.appendChild(tb);
   root.appendChild(table);
+}
+
+function fmtNum(v) {
+  return String(Math.round(v * 10) / 10);
+}
+
+function beforeAfter(before, after, unit) {
+  if (before == null || after == null) return "-";
+  return fmtNum(before) + " -> " + fmtNum(after) + unit;
+}
+
+function gainText(im) {
+  if (im.gain_ms == null) return "-";
+  var parts = [];
+  if (im.gain_ms > 0) parts.push(fmtNum(im.gain_ms) + " ms" + (im.gain_pct != null ? " (" + Math.round(im.gain_pct) + "%)" : ""));
+  if (im.loss_gain_pct != null) parts.push(fmtNum(im.loss_gain_pct) + " pt less loss");
+  return parts.length ? parts.join(", ") : "none now";
+}
+
+// whyText is the plain sentence, the time it started, and, while hold_time
+// has not elapsed, how long until the move can change.
+function whyText(im, inject) {
+  var s = im.explain || im.reason || "";
+  if (im.since) s += " " + (inject ? "Active" : "Recommended") + " since " + fmtTime(im.since) + ".";
+  if (im.hold_left_s) s += " Hold time: " + fmtDuration(im.hold_left_s) + " left before it can change.";
+  return s;
+}
+
+function fmtDuration(sec) {
+  var m = Math.floor(sec / 60), r = sec % 60;
+  return m ? m + "m " + r + "s" : r + "s";
 }
 
 // modeBadge is the header chip. The class carries the contrast colors;

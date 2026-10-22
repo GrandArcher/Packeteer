@@ -1210,7 +1210,7 @@ jobs:
             'lab-a' 'lab-b' --absent 'steered' 'Steered' '>Current<' 'Cannot reach' 'mode-inject'
           bash lab/ui-smoke.sh http://127.0.0.1:18347/events.html 'Recommends moving 198.51.100.0/24 from lab-a to lab-b (not announced, observe mode)' \
             --absent 'steered' 'Cannot reach' 'mode-inject'
-      - name: UI plain language smoke (#351; a session in Active reads Connecting in amber, no jargon labels, editor link in the checklist)
+      - name: UI plain language smoke (#351, #348 improvement explanations; a session in Active reads Connecting in amber, no jargon labels, editor link in the checklist)
         run: |
           set -euo pipefail
           base=http://127.0.0.1:18351
@@ -1267,6 +1267,23 @@ jobs:
             --absent 'Score gain' 'in RIB' '>RIB<' 'Cannot reach' 'mode-inject'
           bash lab/ui-smoke.sh http://127.0.0.1:18352/improvements.html 'mode-observe' 'Default route via' 'At most 50 at a time.' \
             --absent 'Native exit' 'max_improvements)' 'Cannot reach' 'mode-inject'
+          # Improvement explanations (#348): uiproxy answers /api/improvements
+          # with two recommendations (documentation prefixes and ASNs) as the
+          # API returns them; the driver loads the page in 1440 px and 390 px
+          # frames and checks the sentence, the columns, fit, and text size.
+          /tmp/uiproxy -listen 127.0.0.1:18353 -upstream "$base" -user lab -password lab-only \
+            -fixtures lab/ui-fixtures/explain >/tmp/uiproxy348.log 2>&1 &
+          proxy348=$!
+          for _ in $(seq 1 20); do
+            curl -fsS http://127.0.0.1:18353/healthz >/dev/null 2>&1 && break
+            sleep 0.2
+          done
+          curl -fsS http://127.0.0.1:18353/healthz >/dev/null
+          UI_SMOKE_ATTEMPTS=3 bash lab/ui-smoke.sh http://127.0.0.1:18353/improvements.html \
+            '1440: rows 2 | sentence yes | flow yes | asn yes | columns yes | fits yes | readable yes' \
+            '390: rows 2 | sentence yes | flow yes | asn yes | columns yes | fits yes | readable yes' \
+            --absent ' no |' 'explain-jserr'
+          kill "$proxy348"
       - name: UI settings forms smoke (#130, #181, #155, #329; flow, rules, VIP, outage, exchanges, accept a discovered member, wizard flow step, guided inputs, observe)
         run: |
           set -euo pipefail
