@@ -28,14 +28,15 @@ Milestones:
 | v0.4 | 13 | 10 |
 | v0.6 | 9 | 7 |
 | v0.7 | 3 | 3 |
-| v0.8 | 19 | 15 |
+| v0.8 | 20 | 16 |
+| v0.9 | 3 | 2 |
 | won't do | 2 | - |
-| **total** | 112 | 99 |
+| **total** | 116 | 102 |
 
 | Status | Count |
 |---|---|
-| done | 99 |
-| partial | 9 |
+| done | 102 |
+| partial | 10 |
 | in progress | 0 |
 | planned | 2 |
 | won't do | 2 |
@@ -387,6 +388,7 @@ Troubleshooting tools (#24) live on the ops HTTP server. The looking glass reads
 | Failure-mode matrix: outbound steering, more-specific, inbound, mitigation (RTBH and FlowSpec), and HA takeover each run SIGKILL, BGP session loss, missing measurements, a source going away, a reload to observe, and a lowered cap against simulated FRR routers, asserted on the routers; one CI matrix job, a new surface adds its row, and a deliberately broken withdraw path fails it ([lab/README.md](../lab/README.md#failure-mode-matrix-234)) | done (lab-proven) | v0.6 | - | #234 | no (lab-proven) |
 | Steering precedence: one owner per prefix across mitigation, inbound, outbound, leak hold, flap quarantine, and HA, with pairwise tests on a simulated edge ([precedence.md](precedence.md)) | done (lab-proven): the table and tests describe today's behavior; the decision engine still ranks prefixes that inbound or a rule owns, so at the cap one can take a decision slot (pinned by a test) | v0.7 | core (docs and tests) | #235 | no (lab-proven) |
 | Upgrade from the UI: version check, one-click upgrade, and rollback in Settings ([ui.md](ui.md#upgrade-from-the-ui)). Opt-in (`upgrade.enabled` + `upgrade.public_key`); a check never upgrades; an upgrade needs confirmation, a verified Ed25519-signed `SHA256SUMS` and binary checksum, and a start check of the new binary against the mounted config; then the SIGTERM shutdown path withdraws every route before the new version starts in the configured mode and re-learns the RIB; the previous version stays for one-click rollback; HA: standby first; container and binary installs; every check, upgrade, and rollback is audited. Lab-proven against a simulated edge | done (lab-proven) | v0.6 | - | #196 | no (lab-proven) |
+| Adoption guide and ROI worksheet: common optimizer concepts mapped to config, an observe-first cut-over plan, and a cost, commit, and gain estimate ([adopting.md](adopting.md), [roi.md](roi.md)) | done | v0.9 | - (docs) | #205 | no |
 | Software management / upgrades via package manager | won't do (Replaced by container images and tags, and the Settings upgrade above; there are no distro packages.) | - | - | - | - |
 
 ## Maintaining this file
