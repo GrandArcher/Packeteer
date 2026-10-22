@@ -2127,6 +2127,60 @@ func (v *View) RouteHold(ctx context.Context) time.Duration {
 	return hold
 }
 
+// SessionTimers is what one established iBGP session negotiated, read by
+// the preflight checks (#221).
+type SessionTimers struct {
+	Address netip.Addr
+	// HoldTime is the negotiated hold time. Zero means the timer is off.
+	HoldTime time.Duration
+	// LocalGR is true when Packeteer's own OPEN carried the graceful restart
+	// capability. It never should: with it a router keeps Packeteer's routes
+	// as stale after a crash.
+	LocalGR bool
+	// RouterGR is true when the router offered graceful restart. Without
+	// the capability from Packeteer it has no effect on Packeteer's routes.
+	RouterGR bool
+}
+
+// SessionTimers reads the negotiated timers and graceful restart
+// capabilities of every established session, sorted by address. It reads
+// the speaker and changes nothing.
+func (v *View) SessionTimers(ctx context.Context) ([]SessionTimers, error) {
+	if v == nil || v.srv == nil {
+		return nil, nil
+	}
+	var out []SessionTimers
+	err := v.srv.ListPeer(ctx, &api.ListPeerRequest{}, func(p *api.Peer) {
+		if p.GetState().GetSessionState() != api.PeerState_ESTABLISHED {
+			return
+		}
+		addr, err := netip.ParseAddr(p.GetConf().GetNeighborAddress())
+		if err != nil {
+			return
+		}
+		out = append(out, SessionTimers{
+			Address:  addr.Unmap(),
+			HoldTime: time.Duration(p.GetTimers().GetState().GetNegotiatedHoldTime()) * time.Second,
+			LocalGR:  hasGracefulRestart(p.GetState().GetLocalCap()),
+			RouterGR: hasGracefulRestart(p.GetState().GetRemoteCap()),
+		})
+	})
+	if err != nil {
+		return nil, err
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Address.Less(out[j].Address) })
+	return out, nil
+}
+
+func hasGracefulRestart(caps []*anypb.Any) bool {
+	for _, c := range caps {
+		if c.MessageIs(&api.GracefulRestartCapability{}) {
+			return true
+		}
+	}
+	return false
+}
+
 // Peers returns session states sorted by address.
 func (v *View) Peers() []PeerState {
 	v.mu.RLock()

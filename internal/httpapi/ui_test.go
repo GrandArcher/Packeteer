@@ -582,7 +582,7 @@ func TestUIPages(t *testing.T) {
 	for page, wants := range map[string][]string{
 		"/settings.html":   {`src="/ui.js"`, `src="/settings.js"`, `id="ed-yaml"`, `id="wz-run"`, `id="wz-edge"`, `id="wz-add-provider"`, `id="wz-host"`, `id="subs"`, `id="form-apply"`, `id="form-providers"`, `id="sug-refresh"`, `id="fm-rtt-pct"`, `id="fm-rounds"`},
 		"/dashboards.html": {`src="/ui.js"`, `src="/charts.js"`, `src="/dashboards.js"`, `id="db-grid"`, `id="db-bucket"`, `id="db-live"`, `id="db-favorite"`, `id="db-width"`},
-		"/settings.js":     {"/api/config/validate", "/api/config/wizard", "/api/config/form", "/api/config/suggestions", "confirm_inject", "/api/subscriptions/", "function acceptSuggestion", "inject is not a step", "function renderWzProviders", "min_rtt_delta_pct", "confirm_rounds"},
+		"/settings.js":     {"/api/config/validate", "/api/config/wizard", "/api/config/form", "/api/config/suggestions", "confirm_inject", "/api/subscriptions/", "function acceptSuggestion", "inject is not a step", "function renderWzProviders", "min_rtt_delta_pct", "confirm_rounds", "/api/preflight", "/api/preflight/confirm", "/api/config/inject", "/api/snippets"},
 		"/dashboards.js":   {"/api/dashboards", "widget_types", "renderTimeSeries", "renderCauses", "renderCommitGraphs"},
 		"/graphs.html":     {`src="/charts.js"`, `src="/adddash.js"`, `src="/graphs.js"`, `id="graph"`, `id="graph-add"`, `id="graph-add-form"`, `id="graph-dash"`, `id="graph-dash-new"`, `id="graph-status"`},
 		"/graphs.js":       {"/api/reports/timeseries", "renderTimeSeries", `dashAddInit("graph"`},

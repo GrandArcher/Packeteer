@@ -1,0 +1,29 @@
+# Packeteer on RouterOS 7. Generated for review: nothing is applied. Check the
+# commands against your RouterOS release first.
+# This router: AS {{.ASN}}, {{.Router}}. Packeteer: {{.Packeteer}}.
+# Skip the instance line when the router already has a BGP instance, and
+# use its name below.
+/routing bgp instance add name=edge as={{.ASN}} router-id={{.Router}}
+/routing bgp connection add name=packeteer instance=edge \
+    local.address={{.Router}} local.role=ibgp \
+    remote.address={{.Packeteer}} remote.as={{.ASN}} \
+    output.redistribute=bgp output.default-originate=never \
+    hold-time=30s \
+    input.filter=packeteer-in
+
+# From Packeteer: accept only routes that carry the Packeteer community.
+/routing filter rule add chain=packeteer-in \
+    rule="if ({{if .Large}}bgp-large-communities{{else}}bgp-communities{{end}} includes {{.Community}}) { accept }"
+/routing filter rule add chain=packeteer-in rule="reject"
+
+# Toward every eBGP peer, customers included: never export that community.
+# Add this rule at the top of the output chain each transit, peer, and IX
+# connection already uses (rename ebgp-out to it); place-before=0 keeps your
+# existing rules after it, and no connection is changed.
+/routing filter rule add chain=ebgp-out place-before=0 \
+    rule="if ({{if .Large}}bgp-large-communities{{else}}bgp-communities{{end}} includes {{.Community}}) { reject }"
+# Packeteer never offers graceful restart. Leave it off for this connection.
+{{- if .AddPath}}
+# add_path is set for this neighbor in Packeteer's config: also make the
+# router send every path if your RouterOS release can.
+{{- end}}

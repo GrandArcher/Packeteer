@@ -2308,6 +2308,136 @@ function useWizardYaml(out) {
   document.getElementById("editor-section").scrollIntoView();
 }
 
+// ---- Preflight checks and router config (#221) ----
+
+var pfLabels = {pass: "Passed", warn: "Warning", fail: "Failed", unverified: "Needs confirmation"};
+var pfBadge = {pass: "sys-ok", warn: "sys-degraded", fail: "sys-down", unverified: "sys-idle"};
+
+function pfSummary(rep) {
+  var blocking = rep.results.filter(function (r) { return r.status === "fail" || r.status === "unverified"; }).length;
+  if (!blocking) return "Every check passed. Injection can be turned on below.";
+  return "Injection stays off: " + blocking + (blocking === 1 ? " check needs" : " checks need") + " attention.";
+}
+
+function pfItem(r) {
+  var li = el("li", "pf-item pf-" + r.status);
+  li.dataset.check = r.id;
+  var head = el("div", "pf-head");
+  head.appendChild(el("span", "badge " + (pfBadge[r.status] || "muted"), pfLabels[r.status] || r.status));
+  head.appendChild(el("strong", "", r.title));
+  li.appendChild(head);
+  li.appendChild(el("p", "pf-detail", r.detail));
+  if (r.fix) {
+    var fix = el("p", "pf-fix");
+    fix.appendChild(el("strong", "", "What to do: "));
+    fix.appendChild(document.createTextNode(r.fix));
+    li.appendChild(fix);
+  }
+  if (r.confirmable && r.status === "unverified") {
+    var btn = el("button", "", "Confirm");
+    btn.type = "button";
+    btn.setAttribute("aria-label", "Confirm: " + r.title);
+    btn.addEventListener("click", function () { confirmCheck(r.id, btn); });
+    li.appendChild(btn);
+  }
+  return li;
+}
+
+function renderPreflight(rep) {
+  var list = byId("pf-list");
+  clear(list);
+  rep.results.forEach(function (r) { list.appendChild(pfItem(r)); });
+  byId("pf-when").textContent = pfSummary(rep) + " Last run " + rep.ran_at + ".";
+  byId("pf-inject").hidden = !rep.ready;
+}
+
+function loadPreflight() {
+  return api("GET", "/api/preflight").then(function (data) {
+    var sel = byId("pf-vendor");
+    if (!data.available) {
+      byId("pf-when").textContent = "The preflight checks are not available on this instance.";
+      byId("pf-run").disabled = true;
+      return;
+    }
+    clear(sel);
+    (data.vendors || []).forEach(function (v) { sel.appendChild(el("option", "", v)).value = v; });
+    if (data.report) renderPreflight(data.report);
+    else byId("pf-when").textContent = "The checks have not run yet.";
+  }, function (err) { byId("pf-when").textContent = explain(err); });
+}
+
+function runPreflight() {
+  var btn = byId("pf-run");
+  btn.disabled = true;
+  byId("pf-when").textContent = "Running the checks...";
+  return api("POST", "/api/preflight/run").then(function (rep) {
+    btn.disabled = false;
+    renderPreflight(rep);
+  }, function (err) {
+    btn.disabled = false;
+    byId("pf-when").textContent = explain(err);
+  });
+}
+
+function confirmCheck(id, btn) {
+  btn.disabled = true;
+  return api("POST", "/api/preflight/confirm", {id: id}).then(renderPreflight, function (err) {
+    btn.disabled = false;
+    byId("pf-when").textContent = explain(err);
+  });
+}
+
+function showSnippet() {
+  var vendor = byId("pf-vendor").value;
+  byId("pf-snippet-status").textContent = "";
+  return api("GET", "/api/snippets?vendor=" + encodeURIComponent(vendor)).then(function (out) {
+    var pre = byId("pf-snippet");
+    pre.textContent = out.text;
+    pre.hidden = false;
+  }, function (err) {
+    byId("pf-snippet").hidden = true;
+    byId("pf-snippet-status").textContent = explain(err);
+  });
+}
+
+function copySnippet() {
+  var text = byId("pf-snippet").textContent;
+  if (!text) { byId("pf-snippet-status").textContent = "Show the router config first."; return; }
+  if (!navigator.clipboard) { byId("pf-snippet-status").textContent = "Copy is not available here; select the text instead."; return; }
+  navigator.clipboard.writeText(text).then(function () {
+    byId("pf-snippet-status").textContent = "Copied.";
+  }, function () { byId("pf-snippet-status").textContent = "Copy was refused; select the text instead."; });
+}
+
+function planInject() {
+  var prefixes = splitList(byId("pf-allow").value);
+  var err = byId("pf-allow-err");
+  err.hidden = prefixes.length > 0;
+  err.textContent = prefixes.length ? "" : "List at least one prefix.";
+  if (!prefixes.length) return Promise.resolve();
+  var body = {current: byId("ed-yaml").value, allowlist: prefixes};
+  var cap = byId("pf-cap").value.trim();
+  if (cap) body.max_improvements = Number(cap);
+  var status = byId("pf-inject-status");
+  var list = byId("pf-explain");
+  clear(list);
+  return api("POST", "/api/config/inject", body).then(function (out) {
+    byId("ed-yaml").value = out.yaml;
+    loadForm(out.yaml);
+    checkConfig();
+    out.explain.forEach(function (line) { list.appendChild(el("li", "", line)); });
+    var text = "The editor now holds the inject config. Read the list, tick the confirmation, and Save.";
+    if (out.not_learned && out.not_learned.length) {
+      text += " Your router does not advertise " + out.not_learned.join(", ") + " to Packeteer now, so " + (out.not_learned.length === 1 ? "it" : "they") + " would not be announced.";
+    }
+    status.textContent = text;
+    byId("editor-section").scrollIntoView();
+  }, function (e) {
+    status.textContent = e.data && e.data.code === "preflight_required" ? "A check no longer passes. " + pfSummary(e.data.preflight) : explain(e);
+    if (e.data && e.data.preflight) renderPreflight(e.data.preflight);
+  });
+}
+
 function renderSubs() {
   var root = document.getElementById("subs");
   api("GET", "/api/subscriptions").then(function (data) {
@@ -2474,7 +2604,12 @@ byId("form-add-outage").addEventListener("click", function () {
 byId("fm-mode").addEventListener("change", refreshInjectBox);
 byId("pv-run").addEventListener("click", previewConfig);
 byId("bar-preview").addEventListener("click", previewConfig);
+byId("pf-run").addEventListener("click", runPreflight);
+byId("pf-snippet-show").addEventListener("click", showSnippet);
+byId("pf-snippet-copy").addEventListener("click", copySnippet);
+byId("pf-inject-plan").addEventListener("click", planInject);
 bindStaticChecks();
+loadPreflight();
 loadSetupSkip();
 loadConfig();
 renderSubs();

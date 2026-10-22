@@ -283,7 +283,7 @@ func writeFile(path string, data, old []byte) error {
 	if st, err := os.Stat(path); err == nil {
 		mode = st.Mode().Perm()
 	}
-	if err := renameInto(path, data, mode); err == nil {
+	if err := WriteFileAtomic(path, data, mode); err == nil {
 		return nil
 	}
 	werr := overwrite(path, data)
@@ -324,7 +324,9 @@ var overwrite = func(path string, data []byte) error {
 	return werr
 }
 
-func renameInto(path string, data []byte, mode os.FileMode) error {
+// WriteFileAtomic replaces path with data in one rename, so a reader sees
+// the old file or the new one and never a partial write.
+func WriteFileAtomic(path string, data []byte, mode os.FileMode) error {
 	tmp, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".edit-*")
 	if err != nil {
 		return err

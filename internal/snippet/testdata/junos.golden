@@ -1,0 +1,48 @@
+/* Packeteer on Junos. Generated for review: nothing is applied. Load it with
+   "load merge terminal", then run "commit check" and "commit confirmed".
+   This router: AS 64512, 192.0.2.254. Packeteer: 192.0.2.10. */
+policy-options {
+    community packeteer members 64512:666;
+    /* From Packeteer: only routes that carry the Packeteer community. */
+    policy-statement packeteer-in {
+        term tagged {
+            from community packeteer;
+            then accept;
+        }
+        term rest {
+            then reject;
+        }
+    }
+    /* Toward every eBGP neighbor, customers and peers included: never a
+       route with the Packeteer community. Put it first in each eBGP export,
+       for example: export [ no-packeteer-out your-export-policy ]. A route
+       it does not match falls through to the next policy. */
+    policy-statement no-packeteer-out {
+        term no-packeteer {
+            from community packeteer;
+            then reject;
+        }
+    }
+}
+protocols {
+    bgp {
+        group packeteer {
+            type internal;
+            local-address 192.0.2.254;
+            /* Hold time 30s: a crashed Packeteer's routes go within 30s. */
+            hold-time 30;
+            import packeteer-in;
+            /* Packeteer never offers graceful restart; keep it off here too. */
+            graceful-restart {
+                disable;
+            }
+            neighbor 192.0.2.10 {
+                description packeteer;
+                peer-as 64512;
+            }
+        }
+    }
+}
+routing-options {
+    autonomous-system 64512;
+}

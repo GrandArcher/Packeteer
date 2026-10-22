@@ -1,0 +1,37 @@
+# Packeteer on BIRD 2 and 3. Generated for review: nothing is applied.
+# Merge it into your bird.conf, then run: birdc configure check
+# This router: AS 64512, 192.0.2.254. Packeteer: 192.0.2.10.
+
+# From Packeteer: only routes that carry the Packeteer community.
+filter packeteer_in {
+	if (64512, 666) ~ bgp_community then accept;
+	reject;
+}
+
+# Toward every eBGP neighbor, customers and peers included: never a route
+# with the Packeteer community. Use this as the export filter of each eBGP
+# protocol, or copy its first line to the top of the filter you use; your
+# existing terms replace the final accept.
+filter ebgp_out {
+	if (64512, 666) ~ bgp_community then reject;
+	accept;
+}
+
+protocol bgp packeteer {
+	description "packeteer";
+	local 192.0.2.254 as 64512;
+	neighbor 192.0.2.10 as 64512;
+	# Resolves next hops on the connected LAN without an IGP table. Remove
+	# it when an IGP carries them.
+	direct;
+	# Keepalive 10s, hold time 30s: a crashed Packeteer's routes go within 30s.
+	hold time 30;
+	keepalive time 10;
+	# Packeteer never offers graceful restart; keep it off here too.
+	graceful restart off;
+	long lived graceful restart off;
+	ipv4 {
+		import filter packeteer_in;
+		export where source = RTS_BGP;
+	};
+}

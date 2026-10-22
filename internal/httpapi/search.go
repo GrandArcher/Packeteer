@@ -44,6 +44,7 @@ const (
 // implements it.
 type SearchRIB interface {
 	Find(keep func(rib.Route) bool, before func(a, b rib.Route) bool, limit int) ([]rib.Route, int)
+	Exact(p netip.Prefix) (rib.Route, bool)
 }
 
 // SetSearchRIB attaches the learned RIB view the search reads. It may be

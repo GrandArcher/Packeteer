@@ -41,6 +41,15 @@ func searchInput() Input {
 // fakeSearchRIB holds routes and finds them the way rib.View does.
 type fakeSearchRIB []rib.Route
 
+func (f fakeSearchRIB) Exact(p netip.Prefix) (rib.Route, bool) {
+	for _, r := range f {
+		if r.Prefix == p {
+			return r, true
+		}
+	}
+	return rib.Route{}, false
+}
+
 func (f fakeSearchRIB) Find(keep func(rib.Route) bool, before func(a, b rib.Route) bool, limit int) ([]rib.Route, int) {
 	var out []rib.Route
 	for _, r := range f {

@@ -6,6 +6,7 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 
 ### Added
 
+- Onboarding: install.sh starts observe; Settings runs blocking preflight checks with a fix each and metrics; guided inject step; -snippet router config for six vendors; -pbr linux -apply (#221).
 - Opt-in lab replay of a real RIPE RIS or RouteViews table (`lab/realtable.sh`, manual workflow), observe only, 1-4 sessions; the dump is never committed and logs hold counts only (#342).
 - Providers show latency, loss, jitter (15 min, 24 h), a trend and Mbps; Overview leads with latency and improvement charts and drops the Mode tile (#349).
 - Multi-session inject soak: 2-4 routers x 1M routes, flaps, a slow peer, outage and vip on; reports withdraw latency, lock wait (`packeteer_go_mutex_wait_seconds_total`), loop gaps (#383).
