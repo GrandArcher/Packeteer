@@ -440,8 +440,7 @@ func (r *router) attrs(i int) []bgp.PathAttributeInterface {
 // advertised is the entries the harness has withdrawn on every session:
 // the churn batch that is out and the prefix the withdraw-latency check
 // holds out. A router that opens again leaves them out of its table, so
-// every session carries the same routes. A nil advertised withdraws
-// nothing.
+// every session carries the same routes.
 type advertised struct {
 	mu  sync.Mutex
 	out map[int]bool
@@ -450,9 +449,6 @@ type advertised struct {
 func newAdvertised() *advertised { return &advertised{out: map[int]bool{}} }
 
 func (a *advertised) withdrawn(i int) bool {
-	if a == nil {
-		return false
-	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	return a.out[i]
@@ -478,8 +474,8 @@ type fleet struct {
 }
 
 // withdraw takes entries [from, to) off every session. A router without a
-// session gets the change with its next table; a write that fails ends
-// that session, which the router counts as a drop.
+// session gets the change with its next table. A failed write is not
+// handled here: the session is counted as a drop once its read fails.
 func (f *fleet) withdraw(from, to int) {
 	f.adv.mark(from, to, true)
 	for _, r := range f.routers {
@@ -506,9 +502,10 @@ func (f *fleet) anyUp() bool {
 }
 
 // adjOut is the routes Packeteer has on one session, checked as they
-// arrive: each must be a table prefix (so it was in the learned view) and
-// carry packeteer_community and NO_EXPORT, and the session may hold no
-// more than max_improvements of them.
+// arrive: each must be a table prefix and carry packeteer_community and
+// NO_EXPORT, and the session may hold no more than max_improvements of
+// them. A table prefix the harness has withdrawn is not rejected here; the
+// withdraw check's one-minute stale test covers the prefix it holds out.
 type adjOut struct {
 	mu      sync.Mutex
 	held    map[netip.Prefix]time.Time // announced, by first announce

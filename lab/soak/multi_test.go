@@ -35,7 +35,7 @@ func TestTableIndexInvertsPrefix(t *testing.T) {
 	}
 	// An entry past the table's end is not in it.
 	small, big := newTable(v4Count+100), newTable(v4Count+5000)
-	if _, ok := small.index(big.prefix(v4Count + 4000)); ok && small.prefix(v4Count+4000) != big.prefix(v4Count+4000) {
+	if _, ok := small.index(big.prefix(v4Count + 4000)); ok {
 		t.Fatal("prefix of a larger table found in a smaller one")
 	}
 }
@@ -51,23 +51,35 @@ type fakeSpeaker struct {
 
 func dialRouter(t *testing.T, rt *router) *fakeSpeaker {
 	t.Helper()
-	d := net.Dialer{LocalAddr: &net.TCPAddr{IP: net.ParseIP(peerAddr)}, Timeout: 5 * time.Second}
-	c, err := d.Dial("tcp", rt.ln.Addr().String())
+	s, err := tryDial(rt)
 	if err != nil {
 		t.Fatal(err)
 	}
+	return s
+}
+
+// tryDial is dialRouter for goroutines, which may not call t.Fatal.
+func tryDial(rt *router) (*fakeSpeaker, error) {
+	d := net.Dialer{LocalAddr: &net.TCPAddr{IP: net.ParseIP(peerAddr)}, Timeout: 5 * time.Second}
+	c, err := d.Dial("tcp", rt.ln.Addr().String())
+	if err != nil {
+		return nil, err
+	}
 	caps := []bgp.ParameterCapabilityInterface{bgp.NewCapMultiProtocol(bgp.RF_IPv4_UC), bgp.NewCapMultiProtocol(bgp.RF_IPv6_UC)}
 	if err := writeMsg(c, bgp.NewBGPOpenMessage(labASN, 90, "192.0.2.10", []bgp.OptionParameterInterface{bgp.NewOptionParameterCapability(caps)})); err != nil {
-		t.Fatal(err)
+		c.Close()
+		return nil, err
 	}
 	for _, want := range []uint8{bgp.BGP_MSG_OPEN, bgp.BGP_MSG_KEEPALIVE} {
 		m, err := readMsg(c)
 		if err != nil || m.Header.Type != want {
-			t.Fatalf("handshake: %v %v", m, err)
+			c.Close()
+			return nil, fmt.Errorf("handshake: %v %v", m, err)
 		}
 	}
 	if err := writeMsg(c, bgp.NewBGPKeepAliveMessage()); err != nil {
-		t.Fatal(err)
+		c.Close()
+		return nil, err
 	}
 	s := &fakeSpeaker{c: c, end: make(chan struct{})}
 	go func() {
@@ -88,7 +100,7 @@ func dialRouter(t *testing.T, rt *router) *fakeSpeaker {
 			s.mu.Unlock()
 		}
 	}()
-	return s
+	return s, nil
 }
 
 func isEoR(u *bgp.BGPUpdate) bool {
@@ -421,6 +433,7 @@ func TestFlapperSkipsSlowSession(t *testing.T) {
 	f := &fleet{adv: newAdvertised()}
 	var mu sync.Mutex
 	opened := map[int]int{}
+	redialErr := make(chan error, 3)
 	for id := range 3 {
 		rt := newTestRouter(t, ctx, id, tbl, f.adv)
 		f.routers = append(f.routers, rt)
@@ -435,7 +448,15 @@ func TestFlapperSkipsSlowSession(t *testing.T) {
 					return
 				case <-s.end:
 				}
-				s = dialRouter(t, rt)
+				if ctx.Err() != nil {
+					return
+				}
+				ns, err := tryDial(rt)
+				if err != nil {
+					redialErr <- err
+					return
+				}
+				s = ns
 				mu.Lock()
 				opened[rt.id]++
 				mu.Unlock()
@@ -447,6 +468,11 @@ func TestFlapperSkipsSlowSession(t *testing.T) {
 	fctx, stop := context.WithTimeout(ctx, 1200*time.Millisecond)
 	defer stop()
 	flapper(fctx, f, 200*time.Millisecond, 2, &st, func(format string, a ...any) { fails = append(fails, fmt.Sprintf(format, a...)) })
+	select {
+	case err := <-redialErr:
+		t.Fatalf("reconnect: %v", err)
+	default:
+	}
 	mu.Lock()
 	defer mu.Unlock()
 	if len(fails) != 0 || st.flaps < 2 || opened[0] < 2 || opened[1] < 2 || opened[2] != 1 {
