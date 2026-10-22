@@ -234,6 +234,17 @@ CREATE TABLE IF NOT EXISTS usage_samples (
 	PRIMARY KEY (provider, host, iface, at_ms)
 );
 CREATE INDEX IF NOT EXISTS usage_samples_period_end ON usage_samples (period_end_ms);
+CREATE TABLE IF NOT EXISTS provider_samples (
+	provider TEXT NOT NULL,
+	slot_ms INTEGER NOT NULL,
+	probes INTEGER NOT NULL,
+	failed INTEGER NOT NULL,
+	measured INTEGER NOT NULL,
+	loss_sum REAL NOT NULL,
+	rtt_sum_ms REAL NOT NULL,
+	jitter_sum_ms REAL NOT NULL,
+	PRIMARY KEY (provider, slot_ms)
+);
 `
 
 // addMustChange adds users.must_change to a database created before #328.
@@ -350,6 +361,9 @@ func (s *Store) prune(ctx context.Context) error {
 	// Closed billing periods only. The open period's end is still ahead,
 	// so a short retention cannot punch a hole in the live 95th (#127).
 	if _, err := db.ExecContext(ctx, `DELETE FROM usage_samples WHERE period_end_ms != 0 AND period_end_ms <= ?`, cutoff.UnixMilli()); err != nil {
+		return err
+	}
+	if _, err := db.ExecContext(ctx, `DELETE FROM provider_samples WHERE slot_ms < ?`, cutoff.UnixMilli()); err != nil {
 		return err
 	}
 	_, err = db.ExecContext(ctx, `DELETE FROM prefixes WHERE updated_ms < ?`, cutoff.UnixMilli())

@@ -34,6 +34,7 @@ import (
 	"github.com/GrandArcher/Packeteer/internal/pluginhost"
 	_ "github.com/GrandArcher/Packeteer/internal/plugins/all"
 	"github.com/GrandArcher/Packeteer/internal/probe"
+	"github.com/GrandArcher/Packeteer/internal/provseries"
 	"github.com/GrandArcher/Packeteer/internal/rib"
 	"github.com/GrandArcher/Packeteer/internal/subscribe"
 	"github.com/GrandArcher/Packeteer/internal/syshealth"
@@ -423,7 +424,8 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 	// through this variable once it is set.
 	var view *rib.View
 	health := syshealth.New(nil)
-	rec := newRecorder(cfg, plugins, log, func() *rib.View { return view }, health)
+	series := provseries.New(nil)
+	rec := newRecorder(cfg, plugins, log, func() *rib.View { return view }, health, series)
 	var reports httpapi.ReportSource
 	if rec != nil {
 		reports = rec
@@ -676,6 +678,7 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 	// rec is read here, not captured by value: a recorder that fails to
 	// start below is dropped before the first probe.
 	onProbe := func(r probe.Result) {
+		series.Add(r)
 		if rec != nil {
 			rec.Probe(r)
 		}
@@ -708,6 +711,7 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 	}
 	httpSrv.SetQuarantine(quarantineControl{decider: decider, out: dispatch, poke: poke, now: time.Now})
 	wireExchanges(ctx, cfg, col, httpSrv, view, plugins, decider, rpkiSet)
+	wireProviderStats(httpSrv, series, plugins, view, decider)
 	hopTargets, ixHealth := exchangeHealth(cfg)
 	col.SetExchangeHealth(ixHealth)
 	wireSuggestions(cfg, httpSrv, view)

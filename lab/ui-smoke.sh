@@ -8,7 +8,8 @@
 # Every TEXT must appear in the rendered DOM; every TEXT after --absent
 # must not. The page is retried until it matches (the first probe round
 # may still be running) or the attempts run out. Read-only: it only loads
-# pages. Set CHROME to pick the browser binary.
+# pages. Set CHROME to pick the browser binary and UI_SMOKE_WINDOW (for
+# example 1440,900) to set the window size.
 set -euo pipefail
 
 url="${1:?usage: ui-smoke.sh URL TEXT... [--absent TEXT...]}"
@@ -109,6 +110,7 @@ check_assets() {
 for attempt in $(seq 1 "${UI_SMOKE_ATTEMPTS:-10}"); do
   timeout 60 "$chrome" --headless=new --no-sandbox --disable-gpu --disable-extensions \
     --no-first-run --user-data-dir="$profile" --virtual-time-budget=8000 \
+    ${UI_SMOKE_WINDOW:+--window-size="$UI_SMOKE_WINDOW"} \
     --dump-dom "$url" >"$dom" 2>/dev/null || true
   if check && check_assets; then
     echo "ui-smoke: ok: $url (attempt $attempt)"

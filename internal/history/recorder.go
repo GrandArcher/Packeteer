@@ -18,6 +18,7 @@ import (
 
 	"github.com/GrandArcher/Packeteer/internal/policy"
 	"github.com/GrandArcher/Packeteer/internal/probe"
+	"github.com/GrandArcher/Packeteer/internal/provseries"
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
 )
 
@@ -53,6 +54,10 @@ type Options struct {
 	// for the exchanges report. Nil when no exchange is configured.
 	Exchanges map[string]string
 	Now       func() time.Time
+	// Series, when set, is the per-provider five-minute series. The recorder
+	// restores it on Start and flushes it with the rest, when the store
+	// keeps provider samples. The controller feeds it, not the recorder.
+	Series *provseries.Series
 	// OnWrite, when set, is told the result of each store write the
 	// flush attempts. The System page shows it as the storage state.
 	OnWrite func(error)
@@ -157,10 +162,25 @@ func (r *Recorder) Start(ctx context.Context) error {
 		}
 		r.log.Info("history: closed anomalies left open by the previous run", "count", len(h.Anomalies))
 	}
+	if store, ok := r.providerStore(); ok {
+		if err := r.opt.Series.Restore(ctx, store); err != nil {
+			r.log.Warn("history: read provider samples", "err", err)
+		}
+	}
 	loopCtx, cancel := context.WithCancel(context.Background())
 	r.cancel, r.done = cancel, make(chan struct{})
 	go r.loop(loopCtx)
 	return nil
+}
+
+// providerStore is the store's provider-sample side, when there is a series
+// to keep and the store has one.
+func (r *Recorder) providerStore() (plugin.ProviderSampleStore, bool) {
+	if r.opt.Series == nil {
+		return nil, false
+	}
+	store, ok := r.opt.Store.(plugin.ProviderSampleStore)
+	return store, ok
 }
 
 func (r *Recorder) loop(ctx context.Context) {
@@ -441,6 +461,11 @@ func (r *Recorder) requeue(b plugin.HistoryBatch, ps []netip.Prefix) {
 func (r *Recorder) Flush(ctx context.Context) error {
 	r.flushMu.Lock()
 	defer r.flushMu.Unlock()
+	if store, ok := r.providerStore(); ok {
+		if err := r.opt.Series.Flush(ctx, store); err != nil {
+			r.log.Warn("history: write provider samples", "err", err)
+		}
+	}
 	b, ps := r.take()
 	if len(ps) > 0 && (r.opt.Describe != nil || r.opt.Volumes != nil) {
 		var vols map[netip.Prefix]float64

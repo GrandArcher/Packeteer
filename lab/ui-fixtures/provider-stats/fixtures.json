@@ -1,0 +1,8 @@
+{
+  "frames": true,
+  "inject": {
+    "page": "/providers.html",
+    "script": "driver.js"
+  },
+  "stubs": []
+}

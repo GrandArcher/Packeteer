@@ -147,6 +147,9 @@ type Server struct {
 	// until SetSearchRIB.
 	searchRIB atomic.Pointer[SearchRIB]
 	searches  searchLimiters
+	// provStats is the per-provider measurement read (GET
+	// /api/providers/stats). Nil until SetProviderStats. It never announces.
+	provStats atomic.Pointer[ProviderStats]
 	// exMembers is the member comparison of the exchange view (#156). Nil
 	// until SetExchangeMembers.
 	exMembers atomic.Pointer[ExchangeMembers]

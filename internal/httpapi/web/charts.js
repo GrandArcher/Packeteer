@@ -396,3 +396,165 @@ function renderCauses(root, data) {
   det.appendChild(table);
   root.appendChild(det);
 }
+
+// ---- Provider latency and improvement counts (#349): the two Overview
+// charts, and the sparkline in the Providers table. ----
+
+var SERIES_N = 6;
+var HOUR_MS = 3600000;
+var OV_W = 640, OV_H = 260, OV_L = 56, OV_R = 20, OV_T = 14, OV_B = 48;
+// An hour with no point breaks the line, so a provider that went silent
+// is not drawn as steady.
+var OV_GAP_MS = 90 * 60 * 1000;
+
+function clockLabel(ms) {
+  return new Date(ms).toLocaleTimeString([], {hour: "2-digit", minute: "2-digit"});
+}
+
+// lineChart draws series over [from, to] (ms). Each series is
+// {name, cls, points: [{t, v}]}. Both axes carry a title; the series are
+// told apart by the legend the caller adds and by their dash pattern, not
+// by color alone.
+function lineChart(label, xTitle, yTitle, unit, series, from, to) {
+  var max = 0;
+  series.forEach(function (s) { s.points.forEach(function (p) { max = Math.max(max, p.v); }); });
+  var ticks = tsTicks(max);
+  var top = ticks[ticks.length - 1] || 1;
+  function x(t) { return OV_L + (Math.max(t, from) - from) * (OV_W - OV_L - OV_R) / (to - from); }
+  function y(v) { return OV_T + (OV_H - OV_T - OV_B) * (1 - v / top); }
+
+  var svg = svgEl("svg", {"class": "ts-chart ov-chart", viewBox: "0 0 " + OV_W + " " + OV_H, role: "img", "aria-label": label});
+  svg.appendChild(svgEl("title", {}, label));
+  ticks.forEach(function (v) {
+    svg.appendChild(svgEl("line", {"class": "ts-grid", x1: OV_L, x2: OV_W - OV_R, y1: y(v), y2: y(v)}));
+    svg.appendChild(svgEl("text", {"class": "ts-tick", x: OV_L - 6, y: y(v) + 4, "text-anchor": "end"}, v));
+  });
+  [0, 1, 2, 3, 4].forEach(function (i) {
+    var t = from + (to - from) * i / 4;
+    svg.appendChild(svgEl("text", {"class": "ts-tick", x: x(t), y: OV_H - 24, "text-anchor": i === 0 ? "start" : (i === 4 ? "end" : "middle")}, clockLabel(t)));
+  });
+  svg.appendChild(svgEl("text", {"class": "ts-axis", x: (OV_L + OV_W - OV_R) / 2, y: OV_H - 4, "text-anchor": "middle"}, xTitle));
+  svg.appendChild(svgEl("text", {"class": "ts-axis", transform: "rotate(-90)", x: -(OV_T + (OV_H - OV_B)) / 2, y: 14, "text-anchor": "middle"}, yTitle));
+  series.forEach(function (s) {
+    var run = [], prev = null;
+    function flush() {
+      if (run.length > 1) svg.appendChild(svgEl("polyline", {"class": "ts-line " + s.cls, points: run.join(" "), fill: "none"}));
+      run = [];
+    }
+    s.points.forEach(function (p) {
+      if (prev != null && p.t - prev > OV_GAP_MS) flush();
+      run.push(x(p.t) + "," + y(p.v));
+      prev = p.t;
+    });
+    flush();
+    s.points.forEach(function (p) {
+      var c = svgEl("circle", {"class": "ts-dot " + s.cls, cx: x(p.t), cy: y(p.v), r: 3});
+      c.appendChild(svgEl("title", {}, clockLabel(p.t) + " " + s.name + ": " + (Math.round(p.v * 10) / 10) + " " + unit));
+      svg.appendChild(c);
+    });
+  });
+  return svg;
+}
+
+function seriesClass(i) { return "series-" + (i % SERIES_N); }
+
+// latencyFigure is the "Latency by provider, last 24 h" chart. stats is
+// the /api/providers/stats answer and names the configured providers, in
+// order: a provider reconfigured away has no line. A provider that never
+// answered is named in the legend, since a missing line would look like
+// missing data.
+function renderProviderLatency(root, stats, names) {
+  clear(root);
+  var by = {};
+  ((stats && stats.providers) || []).forEach(function (st) { by[st.provider] = st; });
+  var now = Date.now(), from = now - 24 * HOUR_MS;
+  var series = [], silent = [];
+  names.forEach(function (name) {
+    var st = by[name];
+    if (!st) return;
+    var pts = (st.points || []).filter(function (p) { return p.rtt_ms != null; })
+      .map(function (p) { return {t: Date.parse(p.t), v: p.rtt_ms}; });
+    if (pts.length) series.push({name: name, cls: seriesClass(series.length), points: pts, st: st});
+    else if (st.last_24h && st.last_24h.slots) silent.push(name);
+  });
+  var fig = el("figure", "ts-fig");
+  fig.appendChild(el("figcaption", "", "Latency by provider, last 24 h"));
+  if (!series.length) {
+    fig.appendChild(el("p", "empty ts-empty", "No provider has answered a probe in the last 24 hours, so there is no latency to draw."));
+  } else {
+    fig.appendChild(lineChart("Latency by provider over the last 24 hours, in milliseconds", "Time of day (last 24 hours)", "Round-trip time (ms)", "ms", series, from, now));
+    var legend = el("p", "ts-legend tag");
+    series.forEach(function (s) {
+      var med = s.st.last_24h && s.st.last_24h.rtt_ms;
+      legend.appendChild(el("span", "ts-key " + s.cls, s.name + (med == null ? "" : ": median " + fmtMs(med))));
+    });
+    fig.appendChild(legend);
+  }
+  if (silent.length) fig.appendChild(el("p", "tag ts-silent", "No reply from " + silent.join(", ") + ": nothing came back, so there is no latency line."));
+  fig.appendChild(el("p", "tag", "Each point is one hour of replies, as the mean round-trip time. The Providers page has the median over 15 minutes and 24 hours."));
+  root.appendChild(fig);
+}
+
+// improvementCounts counts, for each whole hour from `from` to `to`, the
+// improvements in rows that were open then: recommended in observe or
+// suggest, active in inject.
+function improvementCounts(rows, from, to) {
+  var rec = [], act = [];
+  for (var t = from; t <= to; t += HOUR_MS) {
+    var r = 0, a = 0;
+    rows.forEach(function (row) {
+      var start = Date.parse(row.start), end = row.end ? Date.parse(row.end) : Infinity;
+      if (!(start <= t && t < end)) return;
+      if (row.mode === "inject") a++;
+      else r++;
+    });
+    rec.push({t: t, v: r});
+    act.push({t: t, v: a});
+  }
+  return {recommended: rec, active: act};
+}
+
+// renderImprovementCounts is the "Recommended / active improvements,
+// last 24 h" chart from the improvements report (days=1).
+function renderImprovementCounts(root, rows, truncated) {
+  clear(root);
+  var fig = el("figure", "ts-fig");
+  fig.appendChild(el("figcaption", "", "Recommended / active improvements, last 24 h"));
+  root.appendChild(fig);
+  if (!rows.length) {
+    fig.appendChild(el("p", "empty ts-empty", "No improvement was recommended or active in the last 24 hours."));
+    return;
+  }
+  var now = Date.now(), from = now - 24 * HOUR_MS;
+  var counts = improvementCounts(rows, from, now);
+  var series = [
+    {name: "Recommended", cls: "series-0", points: counts.recommended},
+    {name: "Active", cls: "series-1", points: counts.active}
+  ];
+  fig.appendChild(lineChart("Recommended and active improvements over the last 24 hours, by hour", "Time of day (last 24 hours)", "Improvements open", "improvements", series, from, now));
+  var legend = el("p", "ts-legend tag");
+  legend.appendChild(el("span", "ts-key series-0", "Recommended (observe or suggest): " + counts.recommended[counts.recommended.length - 1].v + " now"));
+  legend.appendChild(el("span", "ts-key series-1", "Active (inject, announced): " + counts.active[counts.active.length - 1].v + " now"));
+  fig.appendChild(legend);
+  if (truncated) fig.appendChild(el("p", "tag", "The last day holds more improvements than one report returns, so the counts are a floor."));
+}
+
+// sparkline is a provider's hourly latency over the last 24 hours, small
+// enough for a table cell. It has no axes; the table says the figures.
+function sparkline(points) {
+  var pts = (points || []).filter(function (p) { return p.rtt_ms != null; });
+  if (!pts.length) return el("span", "muted", "no data");
+  var W = 120, H = 28, now = Date.now(), from = now - 24 * HOUR_MS;
+  var max = 0, min = Infinity;
+  pts.forEach(function (p) { max = Math.max(max, p.rtt_ms); min = Math.min(min, p.rtt_ms); });
+  function x(t) { return 2 + (Math.max(Date.parse(t), from) - from) * (W - 4) / (now - from); }
+  function y(v) { return H - 3 - (H - 6) * v / (max || 1); }
+  var text = "Latency over the last 24 hours, hourly: lowest " + fmtMs(min) + ", highest " + fmtMs(max);
+  var svg = svgEl("svg", {"class": "spark", viewBox: "0 0 " + W + " " + H, role: "img", "aria-label": text});
+  svg.appendChild(svgEl("title", {}, text));
+  var line = pts.map(function (p) { return x(p.t) + "," + y(p.rtt_ms); });
+  if (line.length > 1) svg.appendChild(svgEl("polyline", {"class": "spark-line", points: line.join(" "), fill: "none"}));
+  var last = pts[pts.length - 1];
+  svg.appendChild(svgEl("circle", {"class": "spark-dot", cx: x(last.t), cy: y(last.rtt_ms), r: 2.5}));
+  return svg;
+}

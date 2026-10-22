@@ -209,6 +209,33 @@ type SampleStore interface {
 	TrimUsageSamples(ctx context.Context, provider, host, iface string, periodStart, periodEnd, oldestKept time.Time) error
 }
 
+// ProviderSample is one provider's probe measurements in one five-minute
+// slot, over every prefix probed through it. Slot is the slot start (UTC).
+// Sums are over the Measured probes (at least one reply); Failed counts
+// probes with an error or no reply, which the UI reads as full loss.
+type ProviderSample struct {
+	Provider  string
+	Slot      time.Time
+	Probes    int
+	Failed    int
+	Measured  int
+	LossSum   float64
+	RTTSumMs  float64
+	JitterSum float64 // milliseconds
+}
+
+// ProviderSampleStore is optional on a storage plugin. It keeps the last
+// day of per-provider samples so the Providers page and the Overview chart
+// survive a restart. It does not announce and does not change a decision.
+type ProviderSampleStore interface {
+	// PutProviderSamples inserts samples. A row with the same provider and
+	// Slot replaces the earlier one.
+	PutProviderSamples(ctx context.Context, samples []ProviderSample) error
+	// ProviderSamples returns the rows whose Slot is in [from, to), oldest
+	// first.
+	ProviderSamples(ctx context.Context, from, to time.Time) ([]ProviderSample, error)
+}
+
 // CountryLookup is optional on a policy plugin that has a GeoIP database.
 // Reports use it for country statistics. It returns "" when unknown.
 type CountryLookup interface {

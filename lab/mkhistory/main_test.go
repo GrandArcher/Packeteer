@@ -1,12 +1,14 @@
 package main
 
 import (
+	"context"
 	"slices"
 	"testing"
 	"time"
 
 	"github.com/GrandArcher/Packeteer/internal/commitview"
 	"github.com/GrandArcher/Packeteer/internal/history"
+	"github.com/GrandArcher/Packeteer/internal/provseries"
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
 )
 
@@ -117,4 +119,55 @@ func rates(in []plugin.RateSample) []float64 {
 		out[i] = r.Out
 	}
 	return out
+}
+
+type sampleStore []plugin.ProviderSample
+
+func (s *sampleStore) PutProviderSamples(context.Context, []plugin.ProviderSample) error { return nil }
+
+func (s *sampleStore) ProviderSamples(_ context.Context, from, to time.Time) ([]plugin.ProviderSample, error) {
+	var out []plugin.ProviderSample
+	for _, sm := range *s {
+		if !sm.Slot.Before(from) && sm.Slot.Before(to) {
+			out = append(out, sm)
+		}
+	}
+	return out, nil
+}
+
+// The provider seed fills the 24 hours up to the current slot for both
+// providers, and the series the controller builds from it gives the 15-minute
+// figures the smoke test asserts: lab-a 120 ms, 8% loss, 12 ms jitter and
+// lab-b 40 ms, no loss, 4 ms jitter.
+func TestProviderSeedGivesTheSmokeFigures(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, 10, 10, 13, 2, 0, 0, time.UTC)
+	rows := providerSeed(now)
+	if want := (24*12 + 1) * 2; len(rows) != want {
+		t.Fatalf("%d samples, want %d", len(rows), want)
+	}
+	for _, r := range rows {
+		if r.Slot.After(now) || !r.Slot.Equal(r.Slot.Truncate(5*time.Minute)) {
+			t.Fatalf("sample slot %s is in the future or off the grid", r.Slot)
+		}
+	}
+	series := provseries.New(func() time.Time { return now })
+	store := sampleStore(rows)
+	if err := series.Restore(ctx, &store); err != nil {
+		t.Fatal(err)
+	}
+	want := map[string][3]float64{"lab-a": {120, 8, 12}, "lab-b": {40, 0, 4}}
+	stats := series.Stats()
+	if len(stats) != 2 {
+		t.Fatalf("stats = %+v", stats)
+	}
+	for _, st := range stats {
+		w := want[st.Provider]
+		if got := st.Last15m; !got.HasRTT || got.RTTMs != w[0] || got.LossPct != w[1] || got.JitterMs != w[2] {
+			t.Errorf("%s 15 min = %+v, want %v", st.Provider, got, w)
+		}
+		if st.Last24h.Slots != 288+1 || len(st.Points) < 24 {
+			t.Errorf("%s 24 h = %+v with %d points", st.Provider, st.Last24h, len(st.Points))
+		}
+	}
 }
