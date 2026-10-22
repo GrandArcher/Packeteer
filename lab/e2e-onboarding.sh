@@ -3,8 +3,8 @@
 # CI just built, simulated FRR and BIRD. It proves, in order:
 #   1. scripts/install.sh brings the stock image up in observe mode.
 #   2. On that fresh install every preflight check that cannot pass yet is
-#      blocking and carries its fix text, and the guided inject step and an
-#      editor save that turns inject on are refused until the checks pass.
+#      blocking and carries its fix text, and the guided inject step is
+#      refused until the checks pass.
 #   3. The FRR and BIRD router config that `-snippet` prints for the interop
 #      lab's Packeteer config is accepted by real FRR and BIRD daemons.
 #   4. `-pbr linux -apply` shows a diff, changes nothing without -yes, applies
@@ -30,7 +30,8 @@ cleanup() {
 	docker rm -f packeteer pk-snip-frr pk-snip-bird pk-pbr >/dev/null 2>&1 || true
 	docker volume rm packeteer-data >/dev/null 2>&1 || true
 	docker network rm pk-pbr-net >/dev/null 2>&1 || true
-	rm -rf "$work"
+	# FRR chowns the files it mounted, so the runner user cannot always delete them.
+	rm -rf "$work" 2>/dev/null || sudo rm -rf "$work"
 	exit "$rc"
 }
 trap cleanup EXIT

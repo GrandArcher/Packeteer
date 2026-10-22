@@ -70,7 +70,7 @@ func (p *preflightSource) facts(ctx context.Context) checks.Facts {
 	}
 	for _, n := range cfg.BGP.Neighbors {
 		addr, _ := netip.ParseAddr(n.Address)
-		f.Neighbors = append(f.Neighbors, checks.Neighbor{Address: n.Address, Description: n.Description, Established: up[addr.Unmap()]})
+		f.Neighbors = append(f.Neighbors, checks.Neighbor{Address: n.Address, Established: up[addr.Unmap()]})
 	}
 	f.Providers = p.providers(ctx, cfg)
 	return f

@@ -79,7 +79,6 @@ func (r Report) Blocking() []string {
 // Neighbor is one configured iBGP neighbor.
 type Neighbor struct {
 	Address     string
-	Description string
 	Established bool
 }
 
