@@ -24,14 +24,13 @@ const (
 	atlasRows = 25
 )
 
-// AtlasOptions configures Atlas. BaseURL and Client exist so tests can
-// point it at a local server.
+// AtlasOptions configures Atlas. BaseURL exists so tests can point it at a
+// local server.
 type AtlasOptions struct {
 	BaseURL      string
 	Measurements []int
 	Probes       []int
 	Refresh      time.Duration
-	Client       *http.Client
 	Log          *slog.Logger
 	Now          func() time.Time
 }
@@ -39,7 +38,8 @@ type AtlasOptions struct {
 // Atlas reads public RIPE Atlas ping results and hosted probe status. Run
 // refreshes it; Section only returns what the last refresh kept.
 type Atlas struct {
-	o AtlasOptions
+	o      AtlasOptions
+	client *http.Client
 
 	mu      sync.Mutex
 	fetched time.Time
@@ -53,16 +53,13 @@ func NewAtlas(o AtlasOptions) *Atlas {
 	if o.BaseURL == "" {
 		o.BaseURL = DefaultAtlasURL
 	}
-	if o.Client == nil {
-		o.Client = &http.Client{Timeout: atlasTimeout, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
-	}
 	if o.Log == nil {
 		o.Log = slog.Default()
 	}
 	if o.Now == nil {
 		o.Now = time.Now
 	}
-	return &Atlas{o: o}
+	return &Atlas{o: o, client: &http.Client{Timeout: atlasTimeout, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}
 }
 
 // ID implements Source.
@@ -112,7 +109,7 @@ func (a *Atlas) get(ctx context.Context, path string, into any) error {
 	}
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("User-Agent", "packeteer-herd-dashboard")
-	res, err := a.o.Client.Do(req)
+	res, err := a.client.Do(req)
 	if err != nil {
 		return err
 	}

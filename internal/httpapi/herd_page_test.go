@@ -53,10 +53,10 @@ func (fixtureHerd) Events(context.Context, string) (herd.Events, error) {
 	c := herd.EventVantage{VantageRef: pageRef("key-c", 64504, "BR", 64521), LossPct: 1, RTTAvgMs: f64(80), AgeSeconds: 300}
 	route := herd.EventVantage{VantageRef: pageRef("key-a", 64502, "DE", 64520), LossPct: 50, RTTAvgMs: f64(70), AgeSeconds: 120, Degraded: true}
 	return herd.Events{Enabled: true, AsOf: pageNow, WindowSeconds: 900, LossPct: 5, Basis: herd.Basis, Targets: 3, Events: []herd.EventRow{
-		{Target: herd.Target{Kind: "origin_asn", Value: "64510", Query: "origin_asn=64510"}, Reporting: 4, Degraded: 3,
+		{Target: herd.Target{Kind: "origin_asn", Value: "64510"}, Reporting: 4, Degraded: 3,
 			ByProvider: []herd.ProviderCount{{ProviderASN: 64520, Reporting: 3, Degraded: 2}, {ProviderASN: 64521, Reporting: 2, Degraded: 1}},
 			Vantages:   []herd.EventVantage{local, a, b, c}},
-		{Target: herd.Target{Kind: "prefix", Value: "198.51.100.0/24", Query: "prefix=198.51.100.0%2F24"}, Reporting: 2, Degraded: 1, Origins: []uint32{64512},
+		{Target: herd.Target{Kind: "prefix", Value: "198.51.100.0/24"}, Reporting: 2, Degraded: 1, Origins: []uint32{64512},
 			ByProvider: []herd.ProviderCount{{ProviderASN: 64520, Reporting: 1, Degraded: 1}}, Vantages: []herd.EventVantage{route}},
 	}}, nil
 }
@@ -83,7 +83,7 @@ func (fixtureHerd) Map(context.Context, string) (herd.Map, error) {
 }
 
 func (fixtureHerd) Monitor(context.Context, string) (herd.Monitor, error) {
-	target := herd.Target{Kind: "origin_asn", Value: "64510", Query: "origin_asn=64510"}
+	target := herd.Target{Kind: "origin_asn", Value: "64510"}
 	pt := func(min int, loss, rtt float64) herd.Point {
 		return herd.Point{Time: pageNow.Add(time.Duration(min) * time.Minute), LossPct: f64(loss), RTTAvgMs: f64(rtt)}
 	}

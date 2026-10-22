@@ -103,7 +103,7 @@ func TestEventsCountMembersNotRecords(t *testing.T) {
 		t.Fatalf("events = %+v, want AS64510 and the 198.51.100.0/24 route", ev.Events)
 	}
 	e := ev.Events[0]
-	if e.Kind != "origin_asn" || e.Value != "64510" || e.Query != "origin_asn=64510" {
+	if e.Kind != "origin_asn" || e.Value != "64510" {
 		t.Fatalf("first event = %+v", e.Target)
 	}
 	// Local, A, B, and C measure AS64510. B and C went through two providers;
@@ -123,7 +123,7 @@ func TestEventsCountMembersNotRecords(t *testing.T) {
 	if len(r.Origins) != 1 || r.Origins[0] != 64512 {
 		t.Errorf("origins = %v, want the one origin members report", r.Origins)
 	}
-	if r.Kind != "prefix" || r.Value != "198.51.100.0/24" || r.Reporting != 2 || r.Degraded != 1 || !strings.Contains(r.Query, "prefix=198.51.100.0%2F24") {
+	if r.Kind != "prefix" || r.Value != "198.51.100.0/24" || r.Reporting != 2 || r.Degraded != 1 {
 		t.Errorf("route event = %+v", r)
 	}
 	if ev.Targets != 3 {
@@ -450,5 +450,38 @@ func TestOverviewListsMembersAndFreshness(t *testing.T) {
 	}
 	if by["key-gone"].Member != "" {
 		t.Error("a removed member is listed")
+	}
+}
+
+// queryStore records the last query so a test can see what the board asked
+// the store for.
+type queryStore struct {
+	plugin.HerdStore
+	last plugin.HerdQuery
+}
+
+func (q *queryStore) HerdRecords(ctx context.Context, hq plugin.HerdQuery) ([]plugin.HerdRecord, error) {
+	q.last = hq
+	return q.HerdStore.HerdRecords(ctx, hq)
+}
+
+func TestSearchSelectsAKeyIDInTheStore(t *testing.T) {
+	f := newFleet(t)
+	f.seed()
+	qs := &queryStore{HerdStore: f.store}
+	b := f.board()
+	b.Store = qs
+
+	for raw, want := range map[string]plugin.HerdQuery{
+		"member=" + peerA: {Member: peerA},
+		"member=local":    {},
+		"member=64504":    {AnyMember: true},
+	} {
+		if _, err := b.Search(context.Background(), raw); err != nil {
+			t.Fatalf("%s: %v", raw, err)
+		}
+		if qs.last.Member != want.Member || qs.last.AnyMember != want.AnyMember {
+			t.Errorf("%s: store query member=%q any=%v, want member=%q any=%v", raw, qs.last.Member, qs.last.AnyMember, want.Member, want.AnyMember)
+		}
 	}
 }

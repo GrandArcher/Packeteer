@@ -156,6 +156,7 @@ var HERD_CONDITION_TILE = {degraded: "bad", ok: "good", no_data: "muted"};
 
 function renderHerdMap(root, d) {
   clear(root);
+  if (d.truncated) root.appendChild(el("p", "tag", "More records than one view reads; the vantages per country are a floor."));
   if (!(d.countries || []).length) {
     root.appendChild(el("p", "empty", "No vantage has reported in the last 24 hours."));
     return;

@@ -93,9 +93,10 @@ func TestHerdBoardPassesTheQueryAndMapsErrors(t *testing.T) {
 	if code != http.StatusOK || h.raw != "window=1h&loss=10" || body["basis"] != "pinned_key" || len(events) != 1 {
 		t.Errorf("events = %d %v (query %q)", code, body, h.raw)
 	}
-	for _, p := range boardPaths {
-		if code, _ := getJSON(t, s, p+"?x=1"); code != http.StatusOK {
-			t.Errorf("%s = %d", p, code)
+	for _, p := range boardPaths[1:] {
+		h.raw = ""
+		if code, _ := getJSON(t, s, p+"?window=2h"); code != http.StatusOK || h.raw != "window=2h" {
+			t.Errorf("%s = %d (query %q), want 200 with the query passed through", p, code, h.raw)
 		}
 	}
 	if _, body := getJSON(t, s, "/api/herd/map"); body["enabled"] != true {

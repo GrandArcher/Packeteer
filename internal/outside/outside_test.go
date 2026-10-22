@@ -74,6 +74,13 @@ func TestRPKISection(t *testing.T) {
 	if len(asked) != 1 {
 		t.Errorf("validated %v, want only the complete target", asked)
 	}
+
+	r.Updated = func() time.Time { return time.Time{} }
+	r.Validate = func(netip.Prefix, uint32) plugin.RPKIValidity { return plugin.RPKIUnknown }
+	sec = r.Section(Target{Prefix: p, ASN: 64511}, now)
+	if sec.AsOf != nil || sec.Rows[0][2] != "unknown" || !strings.Contains(sec.Note, "fresh cache") {
+		t.Errorf("stale section = %+v, want a note that the cache is not fresh", sec)
+	}
 }
 
 func TestLinksSection(t *testing.T) {

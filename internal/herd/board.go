@@ -46,8 +46,6 @@ func bad(format string, args ...any) error { return QueryError{fmt.Sprintf(forma
 type Target struct {
 	Kind  string `json:"kind"`
 	Value string `json:"value"`
-	// Query is the /api/herd/vantages query for this target.
-	Query string `json:"query"`
 }
 
 const (
@@ -58,10 +56,10 @@ const (
 func targetOf(r Record) (Target, bool) {
 	switch {
 	case r.Prefix != "":
-		return Target{Kind: kindPrefix, Value: r.Prefix, Query: "prefix=" + url.QueryEscape(r.Prefix)}, true
+		return Target{Kind: kindPrefix, Value: r.Prefix}, true
 	case r.OriginASN != 0:
 		v := strconv.FormatUint(uint64(r.OriginASN), 10)
-		return Target{Kind: kindOrigin, Value: v, Query: "origin_asn=" + v}, true
+		return Target{Kind: kindOrigin, Value: v}, true
 	}
 	return Target{}, false
 }
@@ -793,6 +791,15 @@ func (b Board) Search(ctx context.Context, raw string) (Search, error) {
 	member := bq.vals.Get("member")
 	if bq.q.OriginASN == 0 && bq.q.ProviderASN == 0 && !bq.q.Prefix.IsValid() && member == "" {
 		return s, bad("name an origin_asn, provider_asn, prefix, or member")
+	}
+	// A key id (or "local") is selected in the store, so an older member's
+	// rows are not pushed out of the newest-rows window by other members.
+	// An ASN can name several key ids and is matched after decoding.
+	if _, err := strconv.ParseUint(member, 10, 32); member != "" && err != nil {
+		bq.q.AnyMember = false
+		if member != "local" {
+			bq.q.Member = member
+		}
 	}
 	all, trunc, err := b.load(ctx, bq, b.Retention)
 	if err != nil {

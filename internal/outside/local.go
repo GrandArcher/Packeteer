@@ -84,6 +84,9 @@ func (r RPKI) Section(t Target, now time.Time) Section {
 	}
 	sec.Columns = []string{"Prefix", "Origin", "State"}
 	sec.Rows = [][]string{{t.Prefix.String(), "AS" + strconv.FormatUint(uint64(t.ASN), 10), string(r.Validate(t.Prefix, t.ASN))}}
+	if sec.AsOf == nil {
+		sec.Note = "No RPKI source has a fresh cache, so the state is unknown, not a verdict."
+	}
 	return sec
 }
 
