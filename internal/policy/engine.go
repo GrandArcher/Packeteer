@@ -119,6 +119,45 @@ func (e *Engine) SetConfig(cfg Config) {
 	e.mu.Unlock()
 }
 
+// Thresholds are the configured limits a move must clear, for display.
+type Thresholds struct {
+	MinLossDeltaPct float64
+	MinRTTDelta     time.Duration
+	MinRTTDeltaPct  float64
+	HoldTime        time.Duration
+}
+
+// LossWins reports whether to beats from on loss by the thresholds, the
+// same rule a performance move uses, ignoring the score.
+func (t Thresholds) LossWins(to, from Candidate) bool {
+	return lossWins(to, from, t.config())
+}
+
+// RTTWins reports whether to beats from on latency by the thresholds, the
+// same rule a performance move uses, ignoring the score.
+func (t Thresholds) RTTWins(to, from Candidate) bool {
+	return rttWins(to, from, t.config())
+}
+
+func (t Thresholds) config() Config {
+	return Config{MinLossDeltaPct: t.MinLossDeltaPct, MinRTTDelta: t.MinRTTDelta, MinRTTDeltaPct: t.MinRTTDeltaPct}
+}
+
+// Thresholds returns the limits the next Evaluate uses.
+func (e *Engine) Thresholds() Thresholds {
+	if e == nil {
+		return Thresholds{}
+	}
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	return Thresholds{
+		MinLossDeltaPct: e.cfg.MinLossDeltaPct,
+		MinRTTDelta:     e.cfg.MinRTTDelta,
+		MinRTTDeltaPct:  e.cfg.MinRTTDeltaPct,
+		HoldTime:        e.cfg.HoldTime,
+	}
+}
+
 // Mode returns the configured mode.
 func (e *Engine) Mode() string {
 	if e == nil {

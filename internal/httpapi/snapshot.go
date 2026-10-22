@@ -31,6 +31,9 @@ type Input struct {
 	DecidedAt    time.Time
 	Improvements []policy.Improvement
 	Quarantined  []policy.Quarantine
+	// Thresholds are the limits a move clears, quoted in each
+	// improvement's explanation.
+	Thresholds policy.Thresholds
 
 	BGPConfigured bool
 	RIBReady      bool
@@ -285,6 +288,26 @@ type Improvement struct {
 	// VolumeMbps is the prefix's observed rate, the traffic the improvement
 	// moves. Omitted when no target source reports volume.
 	VolumeMbps float64 `json:"volume_mbps,omitempty"`
+	// ASN is the origin AS of the learned path; ASName is a name Packeteer
+	// knows for it (a provider, or an earlier whois lookup). Display only.
+	ASN    uint32 `json:"asn,omitempty"`
+	ASName string `json:"as_name,omitempty"`
+	// The native and steered providers' latest measurements, set only when
+	// both have a usable one. GainMs and GainPct are the latency saved;
+	// LossGainPct is the points of loss saved, omitted when loss reads equal.
+	NativeLossPct *float64 `json:"native_loss_pct,omitempty"`
+	LossPct       *float64 `json:"loss_pct,omitempty"`
+	NativeRTTMs   *float64 `json:"native_rtt_ms,omitempty"`
+	RTTMs         *float64 `json:"rtt_ms,omitempty"`
+	GainMs        *float64 `json:"gain_ms,omitempty"`
+	GainPct       *float64 `json:"gain_pct,omitempty"`
+	LossGainPct   *float64 `json:"loss_gain_pct,omitempty"`
+	// Explain is the reason in plain words with the threshold it cleared.
+	// Reason stays the short record kept in history and notifications.
+	Explain string `json:"explain,omitempty"`
+	// HoldLeftS is the seconds of hold_time left before the move can be
+	// changed or taken back. Omitted once it has elapsed.
+	HoldLeftS int `json:"hold_left_s,omitempty"`
 }
 
 // Telemetry is one provider's interface usage for the open billing period.
@@ -355,7 +378,7 @@ func Assemble(in Input) Snapshot {
 		Probes:             assembleProbes(in.Results),
 		Prefixes:           assemblePrefixes(in),
 		Decisions:          assembleDecisions(in.Mode, in.Decisions),
-		Improvements:       assembleImprovements(in.Improvements),
+		Improvements:       assembleImprovements(in),
 		Quarantined:        assembleQuarantine(in.Quarantined),
 		Peers:              assemblePeers(in.Peers),
 		Telemetry:          assembleTelemetry(in.Telemetry),
@@ -366,6 +389,7 @@ func Assemble(in Input) Snapshot {
 		Truncated:          in.Truncated,
 	}
 	snap.ASNMap = assembleASNMap(snap.Prefixes)
+	snap.Improvements = withOrigins(snap.Improvements, snap.Prefixes)
 	snap.zeroNil()
 	return snap
 }
@@ -534,13 +558,17 @@ func assembleDecisions(mode string, in []policy.Decision) []Decision {
 	return out
 }
 
-func assembleImprovements(in []policy.Improvement) []Improvement {
-	out := make([]Improvement, 0, len(in))
-	for _, im := range in {
+func assembleImprovements(in Input) []Improvement {
+	cands := map[netip.Prefix][]policy.Candidate{}
+	for _, d := range in.Decisions {
+		cands[d.Prefix] = d.Candidates
+	}
+	out := make([]Improvement, 0, len(in.Improvements))
+	for _, im := range in.Improvements {
 		if !im.Prefix.IsValid() {
 			continue
 		}
-		out = append(out, Improvement{
+		row := Improvement{
 			Prefix:     im.Prefix.String(),
 			Provider:   im.Provider,
 			Native:     im.Native,
@@ -550,10 +578,30 @@ func assembleImprovements(in []policy.Improvement) []Improvement {
 			CostDelta:  im.CostDelta,
 			EstSavings: im.EstSavings,
 			VolumeMbps: jsonFloat(im.VolumeMbps),
-		})
+		}
+		explainImprovement(&row, cands[im.Prefix], in.Thresholds)
+		if left := im.Since.Add(in.Thresholds.HoldTime).Sub(in.At); left > 0 && !im.Since.IsZero() {
+			row.HoldLeftS = int(math.Ceil(left.Seconds()))
+		}
+		out = append(out, row)
 	}
 	sort.Slice(out, func(i, j int) bool { return lessPrefix(out[i].Prefix, out[j].Prefix) < 0 })
 	return out
+}
+
+// withOrigins sets each improvement's origin AS from its prefix row's
+// learned paths.
+func withOrigins(imps []Improvement, rows []Prefix) []Improvement {
+	byPrefix := make(map[string]*Prefix, len(rows))
+	for i := range rows {
+		byPrefix[rows[i].Prefix] = &rows[i]
+	}
+	for i := range imps {
+		if row := byPrefix[imps[i].Prefix]; row != nil {
+			imps[i].ASN = originASN(row)
+		}
+	}
+	return imps
 }
 
 func assembleTelemetry(in []plugin.Usage) []Telemetry {
