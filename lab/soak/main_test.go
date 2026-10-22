@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"math"
 	"net"
@@ -13,8 +14,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/osrg/gobgp/v3/pkg/packet/bgp"
+
 	"github.com/GrandArcher/Packeteer/internal/config"
 	"github.com/GrandArcher/Packeteer/internal/plugins/source/flow"
+	"github.com/GrandArcher/Packeteer/lab/soak/shape"
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
 )
 
@@ -48,22 +52,41 @@ func TestTableIsDocumentationSpaceAndUnique(t *testing.T) {
 			if h := tbl.host(i); !p.Contains(h) || !h.IsGlobalUnicast() {
 				t.Fatalf("entry %d: host %v not a usable address in %v", i, h, p)
 			}
-			for _, a := range tbl.asPath(i) {
-				if !(a >= 64496 && a <= 64511) && !(a >= 65536 && a <= 65551) {
-					t.Fatalf("entry %d: AS %d is not a documentation ASN", i, a)
-				}
+			if i%tbl.setLen == 0 {
+				checkDocASNs(t, i, tbl.attrs(i))
 			}
+		}
+	}
+}
+
+func isDocASN(a uint32) bool { return a >= 64496 && a <= 64511 || a >= 65536 && a <= 65551 }
+
+func checkDocASNs(t *testing.T, i int, a attrSet) {
+	t.Helper()
+	for _, as := range a.path {
+		if !isDocASN(as) {
+			t.Fatalf("entry %d: path AS %d is not a documentation ASN", i, as)
+		}
+	}
+	for _, c := range a.comms {
+		if !isDocASN(c >> 16) {
+			t.Fatalf("entry %d: community %d:%d is not a documentation ASN", i, c>>16, c&0xffff)
+		}
+	}
+	for _, l := range a.large {
+		if !isDocASN(l[0]) {
+			t.Fatalf("entry %d: large community AS %d is not a documentation ASN", i, l[0])
 		}
 	}
 }
 
 func TestTableFullSize(t *testing.T) {
 	tbl := newTable(1250000)
-	if tbl.v6Bits != 53 {
-		t.Fatalf("v6 length /%d, want /53", tbl.v6Bits)
+	if !tbl.valid() {
+		t.Fatal("1.25M table is not valid")
 	}
 	last := tbl.prefix(tbl.n - 1)
-	if !docV6.Contains(last.Addr()) || last.Bits() != 53 {
+	if !docV6.Contains(last.Addr()) {
 		t.Fatalf("last entry %v", last)
 	}
 	if tbl.prefix(v4Count) == tbl.prefix(v4Count+1) {
@@ -248,11 +271,11 @@ func TestBudgetFileProfilesAndGeneratedConfig(t *testing.T) {
 			}
 			wantBudget(t, name, "peak", p.Budgets.RSSPeakMB, 3*4915.2)
 			tbl := newTable(p.Prefixes)
-			if !tbl.valid() || tbl.v6Bits != 54 {
-				t.Fatalf("routes3m table %+v, want a valid /54 IPv6 half", tbl)
+			if !tbl.valid() {
+				t.Fatalf("routes3m table %+v, want a valid table", tbl)
 			}
 			last := tbl.prefix(p.Prefixes - 1)
-			if !docV6.Contains(last.Addr()) || last.Bits() != 54 {
+			if !docV6.Contains(last.Addr()) {
 				t.Fatalf("routes3m last prefix %v", last)
 			}
 		case "large":
@@ -262,8 +285,8 @@ func TestBudgetFileProfilesAndGeneratedConfig(t *testing.T) {
 			}
 			tbl := newTable(p.Prefixes)
 			last := tbl.prefix(p.Prefixes - 1)
-			if !tbl.valid() || tbl.v6Bits != 55 || !docV6.Contains(last.Addr()) || last.Bits() != 55 {
-				t.Fatalf("large table %+v, last prefix %v, want a /55 IPv6 half inside the documentation block", tbl, last)
+			if !tbl.valid() || !docV6.Contains(last.Addr()) {
+				t.Fatalf("large table %+v, last prefix %v, want a valid table inside the documentation block", tbl, last)
 			}
 			wantBudget(t, name, "learn", p.Budgets.LearnSeconds, 360)
 			wantBudget(t, name, "peak", p.Budgets.RSSPeakMB, 24576)
@@ -588,5 +611,155 @@ func TestNegativeBudgetRejected(t *testing.T) {
 	}
 	if _, err := loadProfile(path, "x"); err == nil {
 		t.Fatal("a flat rss_peak_mb key was accepted")
+	}
+}
+
+// The IPv6 half keeps the shape file's length mix: every length class of
+// the shape holds its share of the entries once moved by the layout's shift.
+func TestTableFollowsShapeLengthMix(t *testing.T) {
+	sh := shape.Default()
+	n := 300000
+	tbl := newTable(n)
+	if !tbl.valid() {
+		t.Fatal("table not valid")
+	}
+	m := n - v4Count
+	want := map[int]float64{}
+	for l, c := range sh.IPv6.Length {
+		want[min(64, max(32, l+tbl.v6.shift))] += float64(c) / float64(sh.IPv6.Prefixes)
+	}
+	got := map[int]int{}
+	seen := make(map[netip.Prefix]bool, m)
+	for i := v4Count; i < n; i++ {
+		p := tbl.prefix(i)
+		if seen[p] {
+			t.Fatalf("entry %d: %v repeated", i, p)
+		}
+		seen[p] = true
+		got[p.Bits()]++
+	}
+	all := make([]netip.Prefix, 0, m)
+	for p := range seen {
+		all = append(all, p)
+	}
+	slices.SortFunc(all, func(a, b netip.Prefix) int { return a.Addr().Compare(b.Addr()) })
+	for k := 1; k < len(all); k++ {
+		if all[k-1].Overlaps(all[k]) {
+			t.Fatalf("%v and %v overlap", all[k-1], all[k])
+		}
+	}
+	for d, w := range want {
+		if diff := math.Abs(float64(got[d])/float64(m) - w); diff > 0.002 {
+			t.Errorf("/%d holds %.4f of the IPv6 entries, shape says %.4f", d, float64(got[d])/float64(m), w)
+		}
+	}
+}
+
+func TestLayoutRefusesMoreThanTheBlockHolds(t *testing.T) {
+	if layoutV6(shape.Default().IPv6.Length, maxV6+1) != nil {
+		t.Fatal("a table past 2001:db8::/32 must not lay out")
+	}
+	if newTable(v4Count + maxV6 + 1).valid() {
+		t.Fatal("table past the block reports valid")
+	}
+}
+
+// Attribute sets are drawn from the shape: path length, origin, communities
+// and large communities follow the dump's counts, and sets are distinct.
+func TestAttributesFollowShape(t *testing.T) {
+	sh := shape.Default()
+	tbl := newTable(1250000)
+	if per := 1e6 / sh.SetsPerMillion(); math.Abs(float64(tbl.setLen)-per) > 0.5 || tbl.setLen >= 64 {
+		t.Fatalf("%d prefixes per attribute set, shape says %.2f (the table used 64 before #341)", tbl.setLen, per)
+	}
+	mean := func(h map[int]int) float64 {
+		sum, tot := 0, 0
+		for k, v := range h {
+			sum += k * v
+			tot += v
+		}
+		return float64(sum) / float64(tot)
+	}
+	const groups = 100000
+	var hops, comms, large, incomplete float64
+	distinct := map[string]bool{}
+	for g := range groups {
+		a := tbl.attrs(g * tbl.setLen)
+		checkDocASNs(t, g, a)
+		hops += float64(len(a.path))
+		comms += float64(len(a.comms))
+		large += float64(len(a.large))
+		if a.origin == 2 {
+			incomplete++
+		}
+		distinct[fmt.Sprint(a)] = true
+	}
+	near := func(name string, got, want float64) {
+		t.Helper()
+		if math.Abs(got-want) > 0.03*want {
+			t.Errorf("%s mean %.3f, shape says %.3f", name, got, want)
+		}
+	}
+	near("AS path length", hops/groups, mean(sh.ASPathLength))
+	near("communities", comms/groups, mean(sh.Communities))
+	near("large communities", large/groups, mean(sh.LargeCommunities))
+	near("incomplete origin share", incomplete/groups, float64(sh.Origin[2])/float64(sh.Routes))
+	if len(distinct) < groups*95/100 {
+		t.Errorf("%d distinct attribute sets in %d groups", len(distinct), groups)
+	}
+	if a, b := tbl.attrs(777), tbl.attrs(777); fmt.Sprint(a) != fmt.Sprint(b) {
+		t.Fatal("attribute set is not a function of the entry")
+	}
+}
+
+// Every UPDATE the router builds parses back with the attributes the table
+// asked for, and fits the 4096-byte limit.
+func TestRouterMessagesCarryShapeAttributes(t *testing.T) {
+	tbl := newTable(v4Count + 200000)
+	r := &router{tbl: tbl}
+	sawComm, sawLarge := false, false
+	for _, i := range []int{0, 3, 6, v4Count, v4Count + 3, v4Count + 90000} {
+		for g := range 2000 {
+			start := i + g*tbl.setLen*7
+			if i < v4Count {
+				start = i
+			}
+			end := start + tbl.setLen
+			if start < v4Count && end > v4Count || end > tbl.n {
+				continue
+			}
+			b, err := r.message(start, end, false).Serialize()
+			if err != nil || len(b) > 4096 {
+				t.Fatalf("entry %d: %d bytes, %v", start, len(b), err)
+			}
+			m, err := bgp.ParseBGPMessage(b)
+			if err != nil {
+				t.Fatalf("entry %d: %v", start, err)
+			}
+			want := tbl.attrs(start)
+			var gotPath []uint32
+			var comms []uint32
+			large := 0
+			for _, a := range m.Body.(*bgp.BGPUpdate).PathAttributes {
+				switch v := a.(type) {
+				case *bgp.PathAttributeAsPath:
+					for _, p := range v.Value {
+						gotPath = append(gotPath, p.GetAS()...)
+					}
+				case *bgp.PathAttributeCommunities:
+					comms = v.Value
+				case *bgp.PathAttributeLargeCommunities:
+					large = len(v.Values)
+				}
+			}
+			if !slices.Equal(gotPath, want.path) || !slices.Equal(comms, want.comms) || large != len(want.large) {
+				t.Fatalf("entry %d: path %v comms %v large %d, want %+v", start, gotPath, comms, large, want)
+			}
+			sawComm = sawComm || len(comms) > 0
+			sawLarge = sawLarge || large > 0
+		}
+	}
+	if !sawComm || !sawLarge {
+		t.Fatalf("communities seen %v, large communities seen %v", sawComm, sawLarge)
 	}
 }

@@ -6,6 +6,7 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 
 ### Added
 
+- Soak table follows a real full table's shape (lengths, AS path, communities, MED, attribute sets) from a counts-only RIS file, documentation space only (#341).
 - Improvements explain each move in a plain sentence and show latency, loss, gain, Mbps, ASN, AS name and hold time (#348).
 - First run with only the example providers opens the setup wizard with no config edit; a real config keeps the editor off, and settings push needs an explicit `http.config_editor: true` (#416).
 - Plain language in the UI: BGP Active reads "Connecting (Active)" in amber, plain labels with the config key as tooltip, title-case report names, no API footer on Overview (#351).
