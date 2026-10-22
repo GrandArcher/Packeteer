@@ -140,7 +140,7 @@
   </section>
   <section id="preflight">
     <h2>Preflight checks</h2>
-    <p class="tag">Injection stays off until every check here passes. Each check says what it found and how to fix it, and the same checks run again any time. Running them reads the BGP sessions and sends one TTL-limited probe per provider toward a documentation address. The results are also in <code>/metrics</code> as <code>packeteer_preflight_check</code>.</p>
+    <p class="tag">Settings and the API refuse to turn injection on until every check here passes. Each check says what it found and how to fix it, and the same checks run again any time. Running them reads the BGP sessions and sends one TTL-limited probe per provider toward a documentation address. The results are also in <code>/metrics</code> as <code>packeteer_preflight_check</code>.</p>
     <div class="controls">
       <button type="button" id="pf-run">Run checks</button>
       <span id="pf-when" class="tag" role="status"></span>

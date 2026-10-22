@@ -23,11 +23,11 @@ Settings has a Preflight checks panel with a Run checks button. `GET /api/prefli
 | `import_filter` | the leak watch holds a prefix. Otherwise it is unverified until an administrator confirms (see below). |
 | `probe_egress` | a provider's probe leaves through an address other than its `next_hop`, or gets no answer. A provider that cannot be checked (loopback source, `path_check: false`) is a warning. |
 | `timers` | the negotiated hold time is zero or graceful restart is on for the Packeteer session. A hold time over 180 s is a warning. |
-| `withdrawal` | no announcer is configured, or a session would keep Packeteer's routes after a crash (the `timers` failures). |
+| `withdrawal` | no announcer is configured, or a session would keep Packeteer's routes after a crash: hold time zero or over 180 s, or graceful restart on. |
 
 Observe mode announces nothing, so Packeteer cannot test the router's filters itself. `import_filter` therefore asks an administrator to read the router (the import policy from Packeteer accepts only `packeteer_community`, and every eBGP neighbor's outbound policy rejects it) and press Confirm (`POST /api/preflight/confirm {"id":"import_filter"}`, admin, audited). The confirmation is tied to the AS number, the community, and the neighbors, and ends when one of them changes. A leak seen by the leak watch fails the check whatever was confirmed. `withdrawal` checks configuration and the negotiated hold time: a stopped Packeteer withdraws at once, and a crash drops its routes within the hold time. It does not inject a test route, which would announce in observe mode.
 
-Failing and unverified checks block injection. A warning does not.
+Failing and unverified checks block turning inject on through Settings or the API (the guided step and `PUT /api/config`). A warning does not. Editing the mounted file by hand and restarting skips the checks.
 
 ## Turning injection on
 

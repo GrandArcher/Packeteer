@@ -313,7 +313,7 @@ func withdrawal(f Facts) Result {
 		if t.Hold > MaxHoldTime || t.Hold == 0 || t.LocalGR {
 			r.Status = Fail
 			r.Detail = "Session " + t.Address + " would keep Packeteer's routes after a crash (see the timers check)."
-			r.Fix = "Fix the timers check first."
+			r.Fix = "Set a hold time between 1 and 180 s and turn graceful restart off for this session on both sides."
 			return r
 		}
 	}

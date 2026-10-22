@@ -44,13 +44,12 @@ func (s *Server) handlePreflight(w http.ResponseWriter, _ *http.Request) {
 	body := struct {
 		meta
 		Available bool `json:"available"`
-		Writable  bool `json:"writable"`
 		// Report is absent until the checks have run once.
 		Report  *preflight.Report `json:"report,omitempty"`
 		Vendors []string          `json:"vendors"`
 	}{meta: s.snapshot().meta(), Vendors: snippet.Vendors}
 	if p := s.preflightControl(); p != nil {
-		body.Available, body.Writable = true, s.writesEnabled()
+		body.Available = true
 		if rep, ok := p.Latest(); ok {
 			body.Report = &rep
 		}

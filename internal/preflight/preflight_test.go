@@ -178,8 +178,13 @@ func TestWithdrawalNeedsAnnouncerAndBoundedHold(t *testing.T) {
 	}
 	f = good()
 	f.Timers[0].Hold = 0
-	if r := result(t, f, CheckWithdrawal); r.Status != Fail || !strings.Contains(r.Fix, "timers check") {
+	if r := result(t, f, CheckWithdrawal); r.Status != Fail || !strings.Contains(r.Fix, "between 1 and 180 s") {
 		t.Fatalf("no hold timer = %+v", r)
+	}
+	f = good()
+	f.Timers[0].Hold = MaxHoldTime + 1
+	if r := result(t, f, CheckWithdrawal); r.Status != Fail {
+		t.Fatalf("long hold timer = %+v", r)
 	}
 	f = good()
 	f.Timers = nil
