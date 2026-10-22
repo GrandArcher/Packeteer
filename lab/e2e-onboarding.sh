@@ -98,7 +98,8 @@ for want in 'bgp community-list standard packeteer seq 5 permit 64512:666' 'rout
 	' match community packeteer' 'neighbor 192.0.2.10 remote-as 64512' 'neighbor 192.0.2.10 route-map packeteer-in in'; do
 	grep -qF -- "$want" "$work/frr-running.txt" || { echo "FRR running-config lacks: $want" >&2; cat "$work/frr-running.txt" >&2; exit 1; }
 done
-docker exec pk-snip-frr vtysh -c 'show route-map packeteer-in' | grep -qF 'community packeteer'
+rm_out=$(docker exec pk-snip-frr vtysh -c 'show route-map packeteer-in')
+grep -qF 'community packeteer' <<<"$rm_out" || { echo "FRR route-map packeteer-in lacks the community match" >&2; echo "$rm_out" >&2; exit 1; }
 docker rm -f pk-snip-frr >/dev/null
 
 for bird in bird2 bird3; do
@@ -116,7 +117,8 @@ for bird in bird2 bird3; do
 		sleep 1
 	done
 	grep -q '^packeteer ' "$work/bird-protocols.txt" || { echo "$bird: protocol packeteer not loaded" >&2; cat "$work/bird-protocols.txt" >&2; docker logs pk-snip-bird >&2; exit 1; }
-	docker exec pk-snip-bird birdc -s /run/bird/bird.ctl show symbols | grep -qE 'packeteer_in +filter'
+	syms=$(docker exec pk-snip-bird birdc -s /run/bird/bird.ctl show symbols)
+	grep -qE 'packeteer_in[[:space:]]+filter' <<<"$syms" || { echo "$bird: filter packeteer_in not loaded" >&2; echo "$syms" >&2; exit 1; }
 	docker rm -f pk-snip-bird >/dev/null
 done
 
