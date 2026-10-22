@@ -39,7 +39,9 @@ fi
 
 mkdir -p "$dir/plugins"
 dir=$(cd "$dir" && pwd)
+kept=0
 if [ -e "$dir/config.yaml" ]; then
+	kept=1
 	echo "install: keeping the existing $dir/config.yaml"
 else
 	curl -fsSLo "$dir/config.yaml" "$raw/config.example.yaml" || die "cannot download $raw/config.example.yaml"
@@ -68,7 +70,11 @@ until curl -fsS "$url/healthz" >/dev/null 2>&1; do
 done
 
 echo
-echo "Packeteer is running in observe mode. It announces nothing."
+if [ "$kept" = 1 ]; then
+	echo "Packeteer is running with your existing config. Check its mode: it announces routes only when it says mode: inject."
+else
+	echo "Packeteer is running in observe mode. It announces nothing."
+fi
 echo "Open:     $url/settings.html#wizard"
 if [ -n "${PACKETEER_ADMIN_PASSWORD:-}" ]; then
 	echo "Sign in:  admin, with the password you set in PACKETEER_ADMIN_PASSWORD."

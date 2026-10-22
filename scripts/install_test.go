@@ -149,12 +149,16 @@ func TestInstallKeepsAnExistingConfig(t *testing.T) {
 	if err := os.MkdirAll(e.dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	mine := "mode: observe\n# mine\n"
+	mine := "mode: inject\n# mine\n"
 	if err := os.WriteFile(filepath.Join(e.dir, "config.yaml"), []byte(mine), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, errOut, err := e.run(t); err != nil {
+	out, errOut, err := e.run(t)
+	if err != nil {
 		t.Fatalf("install: %v\n%s", err, errOut)
+	}
+	if strings.Contains(out, "announces nothing") || !strings.Contains(out, "your existing config") {
+		t.Errorf("claims observe mode for a kept config:\n%s", out)
 	}
 	if got, _ := os.ReadFile(filepath.Join(e.dir, "config.yaml")); string(got) != mine {
 		t.Fatalf("config.yaml was replaced:\n%s", got)

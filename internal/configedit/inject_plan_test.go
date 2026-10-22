@@ -36,7 +36,8 @@ storage:
 `
 
 func TestEnableInjectBuildsASmallInjectConfig(t *testing.T) {
-	plan, err := EnableInject(InjectInput{Allowlist: []string{"198.51.100.0/24", " 203.0.113.7/24 ", "198.51.100.0/24"}}, []byte(observeWizardYAML))
+	cur := strings.Replace(observeWizardYAML, "max_improvements: 50\n", "max_improvements: 50\nannouncer:\n  type: gobgp\n", 1)
+	plan, err := EnableInject(InjectInput{Allowlist: []string{"198.51.100.0/24", " 203.0.113.7/24 ", "198.51.100.0/24"}}, []byte(cur))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -57,7 +58,7 @@ func TestEnableInjectBuildsASmallInjectConfig(t *testing.T) {
 		t.Errorf("diff:\n%s", plan.Diff)
 	}
 	text := strings.Join(plan.Explain, "\n")
-	for _, want := range []string{"from observe to inject", "198.51.100.0/24, 203.0.113.0/24", "At most 5 routes", "64512:666 and NO_EXPORT", "withdrawn when Packeteer stops", "local_pref 250 is added", "announcer of type gobgp is added"} {
+	for _, want := range []string{"from observe to inject", "198.51.100.0/24, 203.0.113.0/24", "At most 5 routes", "64512:666 and NO_EXPORT", "withdrawn when Packeteer stops", "local_pref 250 is added"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("explanation lacks %q:\n%s", want, text)
 		}
@@ -93,6 +94,7 @@ func TestEnableInjectRefusals(t *testing.T) {
 		{"cap too big", InjectInput{Allowlist: []string{"198.51.100.0/24"}, MaxImprovements: 51}, observeWizardYAML, "1 to 50"},
 		{"no community", InjectInput{Allowlist: []string{"198.51.100.0/24"}}, strings.Replace(observeWizardYAML, "packeteer_community: 64512:666\n", "", 1), "packeteer_community"},
 		{"no neighbor", InjectInput{Allowlist: []string{"198.51.100.0/24"}}, strings.Replace(observeWizardYAML, "bgp:\n  neighbors:\n    - address: 192.0.2.254\n", "", 1), "bgp.neighbors"},
+		{"no announcer", InjectInput{Allowlist: []string{"198.51.100.0/24"}}, observeWizardYAML, "announcer"},
 		{"not yaml", InjectInput{Allowlist: []string{"198.51.100.0/24"}}, "mode: [", "does not load"},
 	}
 	for _, c := range cases {

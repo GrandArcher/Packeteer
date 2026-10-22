@@ -206,7 +206,7 @@ func (s *Server) handleConfigSave(w http.ResponseWriter, r *http.Request) {
 	}
 	next := configedit.Hash([]byte(req.YAML))
 	noteAudit(r, "config", "base="+short(req.Base)+" new="+short(next))
-	if !s.preflightGate(w, r, s.editor.Check([]byte(req.YAML)).EnablesInject) {
+	if !s.preflightGate(w, r, s.editor.Check([]byte(req.YAML)).EnablesInject, []byte(req.YAML)) {
 		return
 	}
 	f, res, err := s.editor.Save([]byte(req.YAML), req.Base, req.ConfirmInject)

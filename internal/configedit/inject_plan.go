@@ -41,8 +41,9 @@ type InjectPlan struct {
 
 // EnableInject turns an observe or suggest config into an inject config for
 // a small allowlist. It changes mode, allowlist.prefixes, and
-// max_improvements, adds local_pref and the announcer when they are missing,
-// and keeps every other key. The result must pass config.Parse, which holds
+// max_improvements, adds local_pref when it is missing, and keeps every
+// other key. The config must already name an announcer: the withdrawal
+// preflight check refuses without one. The result must pass config.Parse, which holds
 // the inject checklist.
 func EnableInject(in InjectInput, current []byte) (InjectPlan, error) {
 	prefixes, err := injectPrefixes(in.Allowlist)
@@ -80,11 +81,6 @@ func EnableInject(in InjectInput, current []byte) (InjectPlan, error) {
 	if scalar(root, "local_pref") == "" {
 		setOrDelete(root, "local_pref", strconv.Itoa(DefaultInjectLocalPref), "!!int")
 		added = append(added, fmt.Sprintf("local_pref %d is added. Routes Packeteer announces win over your transits' own routes only if this is higher than their local preference (often 100); change it if yours differs.", DefaultInjectLocalPref))
-	}
-	if _, ok := mappingChild(root, "announcer"); !ok {
-		ann := ensureMapping(root, "announcer")
-		setOrDelete(ann, "type", "gobgp", "!!str")
-		added = append(added, "An announcer of type gobgp is added. It publishes on the iBGP session you already have.")
 	}
 	var buf bytes.Buffer
 	enc := yaml.NewEncoder(&buf)

@@ -9,7 +9,6 @@ import (
 
 	"github.com/GrandArcher/Packeteer/internal/configedit"
 	"github.com/GrandArcher/Packeteer/internal/preflight"
-	"github.com/GrandArcher/Packeteer/internal/rib"
 	"github.com/GrandArcher/Packeteer/internal/snippet"
 )
 
@@ -20,7 +19,7 @@ type PreflightControl interface {
 	Run(ctx context.Context) preflight.Report
 	Latest() (preflight.Report, bool)
 	Confirm(ctx context.Context, id, by string) (preflight.Report, error)
-	Gate(ctx context.Context) error
+	Gate(ctx context.Context, candidate []byte) error
 	Snippet(vendor string) (string, error)
 }
 
@@ -123,8 +122,7 @@ func (s *Server) handleSnippets(w http.ResponseWriter, r *http.Request) {
 	vendor := r.URL.Query().Get("vendor")
 	text, err := p.Snippet(vendor)
 	if err != nil {
-		status := http.StatusUnprocessableEntity
-		writeJSON(w, status, map[string]string{"error": err.Error()})
+		writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"error": err.Error()})
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"vendor": vendor, "text": text})
@@ -148,7 +146,7 @@ func (s *Server) handleInjectPlan(w http.ResponseWriter, r *http.Request) {
 	if !decodeLarge(w, r, &req, configBodyLimit) {
 		return
 	}
-	if !s.preflightGate(w, r, true) {
+	if !s.preflightGate(w, r, true, []byte(req.Current)) {
 		return
 	}
 	plan, err := configedit.EnableInject(req.InjectInput, []byte(req.Current))
@@ -172,45 +170,39 @@ func (s *Server) notLearned(requested []string) (missing []string, ok bool) {
 	if rv == nil {
 		return nil, false
 	}
-	want := map[netip.Prefix]bool{}
 	for _, text := range requested {
 		if p, err := netip.ParsePrefix(strings.TrimSpace(text)); err == nil {
-			want[p.Masked()] = true
-		}
-	}
-	found := map[netip.Prefix]bool{}
-	(*rv).Find(func(rt rib.Route) bool {
-		if want[rt.Prefix] {
-			found[rt.Prefix] = true
-		}
-		return false
-	}, func(a, b rib.Route) bool { return false }, 0)
-	for _, text := range requested {
-		if p, err := netip.ParsePrefix(strings.TrimSpace(text)); err == nil && !found[p.Masked()] {
-			missing = append(missing, p.Masked().String())
+			if _, found := (*rv).Exact(p); !found {
+				missing = append(missing, p.Masked().String())
+			}
 		}
 	}
 	return missing, true
 }
 
 // preflightGate refuses a config save that turns inject on while a check
-// blocks it. It reports whether the save may go on.
-func (s *Server) preflightGate(w http.ResponseWriter, r *http.Request, enablesInject bool) bool {
+// blocks it, or that changes the setup the checks describe. candidate is the
+// YAML about to be saved. It reports whether the save may go on.
+func (s *Server) preflightGate(w http.ResponseWriter, r *http.Request, enablesInject bool, candidate []byte) bool {
 	p := s.preflightControl()
 	if p == nil || !enablesInject {
 		return true
 	}
-	err := p.Gate(r.Context())
+	err := p.Gate(r.Context(), candidate)
 	var nr *preflight.NotReadyError
-	if !errors.As(err, &nr) {
-		if err != nil {
-			s.log.Error("preflight gate", "err", err)
-		}
-		return err == nil
+	switch {
+	case err == nil:
+		return true
+	case errors.Is(err, preflight.ErrSetupChanged):
+		writeJSON(w, http.StatusPreconditionFailed, map[string]any{"error": err.Error(), "code": "setup_changed"})
+	case errors.As(err, &nr):
+		writeJSON(w, http.StatusPreconditionFailed, map[string]any{
+			"error": nr.Error(), "code": "preflight_required", "preflight": nr.Report,
+		})
+	default:
+		s.log.Error("preflight gate", "err", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "the preflight gate failed: " + err.Error()})
 	}
-	writeJSON(w, http.StatusPreconditionFailed, map[string]any{
-		"error": nr.Error(), "code": "preflight_required", "preflight": nr.Report,
-	})
 	return false
 }
 

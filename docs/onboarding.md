@@ -31,7 +31,7 @@ Failing and unverified checks block injection. A warning does not.
 
 ## Turning injection on
 
-While any check blocks, the wizard's inject step is hidden, `POST /api/config/inject` answers `412` with code `preflight_required` and the report, and a save through `PUT /api/config` that changes the mode to `inject` is refused the same way. Once the checks pass, the step takes a small allowlist (up to 10 prefixes) and an improvement cap (default 5, at most 50), and `POST /api/config/inject` returns the YAML, a diff, and a plain list of what changes. Nothing is written: the YAML opens in the editor and the save asks for the usual inject confirmation ([CONFIG.md](CONFIG.md#inject-checklist)). A listed prefix that the learned RIB does not hold is flagged and is never announced.
+While any check blocks, the wizard's inject step is hidden, `POST /api/config/inject` answers `412` with code `preflight_required` and the report, and a save through `PUT /api/config` that changes the mode to `inject` is refused the same way. A save that changes the AS number, the community, or the neighbors and turns inject on in the same edit is refused with code `setup_changed`: the checks and the confirmation describe the running setup. Once the checks pass, the step takes a small allowlist (up to 10 prefixes) and an improvement cap (default 5, at most 50), and `POST /api/config/inject` returns the YAML, a diff, and a plain list of what changes. It adds `local_pref` when missing and needs the `announcer` to be in the config already. Nothing is written: the YAML opens in the editor and the save asks for the usual inject confirmation ([CONFIG.md](CONFIG.md#inject-checklist)). A listed prefix that the learned RIB does not hold is flagged and is never announced.
 
 An instance whose config has an `ixp` block has no preflight: IXP mode never announces.
 
@@ -53,4 +53,4 @@ Reading the router's filters and timers over its own management API (RouterOS, N
 
 ## Rollback
 
-The install script, `-snippet`, `-pbr -apply`, and the preflight add no config key and change no router. Remove the container (`docker stop -t 30 packeteer && docker rm packeteer`) to undo the install. Undo an applied host policy routing with `ip rule del` and `ip route flush table <n>` for the lines `-apply` printed, or remove the provider and run `-pbr linux -apply -yes` again.
+The install script, `-snippet`, `-pbr -apply`, and the preflight add no config key and change no router. Remove the container (`docker stop -t 30 packeteer && docker rm packeteer`) to undo the install. Undo an applied host policy routing with `ip rule del` and `ip route flush table <n>` for the lines `-apply` printed, or remove the provider from the config while another provider stays measured from this instance, and run `-pbr linux -apply -yes` again: it removes the rules and routes of the provider that is gone.

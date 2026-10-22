@@ -183,8 +183,7 @@ func desired(entries []Entry) (rules map[bool][]rule, routes map[bool]map[int]st
 		six := e.Source.Is6()
 		table := tableBase + e.N
 		routes[six][table] = e.NextHop.String()
-		mark := e.FwMark
-		rules[six] = append(rules[six], rule{prio: prioBase + e.N, from: e.Source.String(), mark: mark, table: table})
+		rules[six] = append(rules[six], rule{prio: prioBase + e.N, from: e.Source.String(), mark: e.FwMark, table: table})
 	}
 	return rules, routes
 }

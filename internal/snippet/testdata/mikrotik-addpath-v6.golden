@@ -17,11 +17,11 @@
 /routing filter rule add chain=packeteer-in rule="reject"
 
 # Toward every eBGP peer, customers included: never export that community.
-# Attach ebgp-out to each transit, peer, and IX connection.
-/routing filter rule add chain=ebgp-out \
+# Add this rule at the top of the output chain each transit, peer, and IX
+# connection already uses (rename ebgp-out to it); place-before=0 keeps your
+# existing rules after it, and no connection is changed.
+/routing filter rule add chain=ebgp-out place-before=0 \
     rule="if (bgp-communities includes 64512:666) { reject }"
-/routing filter rule add chain=ebgp-out rule="accept"
-/routing bgp connection set [find where local.role~"^ebgp"] output.filter-chain=ebgp-out
 # Packeteer never offers graceful restart. Leave it off for this connection.
 # add_path is set for this neighbor in Packeteer's config: also make the
 # router send every path if your RouterOS release can.

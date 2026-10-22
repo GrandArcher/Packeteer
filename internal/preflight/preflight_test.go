@@ -268,7 +268,7 @@ func TestGateRefusesUntilReady(t *testing.T) {
 	f := good()
 	f.Learned = 0
 	r := NewRunner(source(&f), mustStore(t, ""), func() time.Time { return t0 })
-	err := r.Gate(context.Background())
+	err := r.Gate(context.Background(), f.Fingerprint)
 	var nr *NotReadyError
 	if !errors.As(err, &nr) || !strings.Contains(err.Error(), CheckSession) || nr.Report.Ready {
 		t.Fatalf("gate = %v", err)
@@ -276,14 +276,29 @@ func TestGateRefusesUntilReady(t *testing.T) {
 	f.Learned = 900000
 	f.Confirmed = nil
 	// The store, not the facts, supplies confirmations: confirm first.
-	if err := r.Gate(context.Background()); err == nil || !strings.Contains(err.Error(), CheckFilters) {
+	if err := r.Gate(context.Background(), f.Fingerprint); err == nil || !strings.Contains(err.Error(), CheckFilters) {
 		t.Fatalf("gate before confirm = %v", err)
 	}
 	if _, err := r.Confirm(context.Background(), CheckFilters, "admin"); err != nil {
 		t.Fatal(err)
 	}
-	if err := r.Gate(context.Background()); err != nil {
+	if err := r.Gate(context.Background(), f.Fingerprint); err != nil {
 		t.Fatalf("gate after confirm = %v", err)
+	}
+}
+
+func TestGateRefusesACandidateThatChangesTheSetup(t *testing.T) {
+	f := good()
+	f.Fingerprint = "running"
+	r := NewRunner(source(&f), mustStore(t, ""), func() time.Time { return t0 })
+	if _, err := r.Confirm(context.Background(), CheckFilters, "admin"); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Gate(context.Background(), "running"); err != nil {
+		t.Fatalf("same setup: %v", err)
+	}
+	if err := r.Gate(context.Background(), "other"); !errors.Is(err, ErrSetupChanged) {
+		t.Fatalf("changed setup: %v", err)
 	}
 }
 

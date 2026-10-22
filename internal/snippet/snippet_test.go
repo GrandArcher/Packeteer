@@ -97,6 +97,21 @@ func TestEverySnippetCarriesTheFilters(t *testing.T) {
 	}
 }
 
+// The snippet is pasted onto a live edge. It must add a deny in front of the
+// export policy the operator already has and never replace that policy.
+func TestMikroTikSnippetKeepsTheExistingExportChain(t *testing.T) {
+	got, err := Generate(MikroTik, std())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(got, "output.filter-chain") || strings.Contains(got, "connection set") || strings.Contains(got, `rule="accept"`) {
+		t.Errorf("the snippet rewires or replaces eBGP export policy:\n%s", got)
+	}
+	if !strings.Contains(got, "chain=ebgp-out place-before=0") {
+		t.Errorf("the deny is not placed first in the chain:\n%s", got)
+	}
+}
+
 func TestLargeCommunityIsMatchedAsLarge(t *testing.T) {
 	want := map[string]string{
 		FRR:      "bgp large-community-list standard packeteer permit 64512:1:666",

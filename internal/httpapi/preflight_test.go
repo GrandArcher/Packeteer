@@ -13,13 +13,22 @@ import (
 	"github.com/GrandArcher/Packeteer/internal/auth"
 	"github.com/GrandArcher/Packeteer/internal/configedit"
 	"github.com/GrandArcher/Packeteer/internal/preflight"
-	"github.com/GrandArcher/Packeteer/internal/rib"
 	"github.com/GrandArcher/Packeteer/internal/snippet"
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
 )
 
 type fakePreflight struct {
 	*preflight.Runner
+}
+
+// Gate stands in for the controller's fingerprint of the candidate: a
+// candidate with another AS number is a different setup.
+func (f fakePreflight) Gate(ctx context.Context, candidate []byte) error {
+	fp := "fp"
+	if strings.Contains(string(candidate), "asn: 64999") {
+		fp = "other"
+	}
+	return f.Runner.Gate(ctx, fp)
 }
 
 func (fakePreflight) Snippet(vendor string) (string, error) {
@@ -163,6 +172,18 @@ func TestSaveThatTurnsInjectOnWaitsForPreflight(t *testing.T) {
 		t.Fatal("the file changed although inject was refused")
 	}
 
+	// Changing the AS in the same save is refused, even when the checks pass.
+	if rec, _ := e.do(t, "POST", "/api/preflight/confirm", plugin.RoleAdmin, map[string]string{"id": "import_filter"}); rec.Code != http.StatusOK {
+		t.Fatalf("confirm = %d", rec.Code)
+	}
+	moved := map[string]any{"yaml": strings.Replace(editorInjectYAML, "asn: 64512", "asn: 64999", 1), "base": base, "confirm_inject": true}
+	if rec, got := e.do(t, "PUT", "/api/config", plugin.RoleAdmin, moved); rec.Code != http.StatusPreconditionFailed || got["code"] != "setup_changed" {
+		t.Fatalf("inject with a new AS: %d %s", rec.Code, rec.Body)
+	}
+	if disk, _ := os.ReadFile(e.path); string(disk) != editorYAML {
+		t.Fatal("the file changed although the setup changed")
+	}
+
 	// A harmless edit is not held back.
 	harmless := strings.Replace(editorYAML, "router_id: 192.0.2.10", "router_id: 192.0.2.20", 1)
 	if rec, _ := e.do(t, "PUT", "/api/config", plugin.RoleAdmin, map[string]any{"yaml": harmless, "base": base}); rec.Code != http.StatusOK {
@@ -245,16 +266,9 @@ allowlist:
 bgp:
   neighbors:
     - address: 192.0.2.254
+announcer:
+  type: gobgp
 `
-
-type learnedPrefixes []netip.Prefix
-
-func (l learnedPrefixes) Find(keep func(rib.Route) bool, _ func(a, b rib.Route) bool, _ int) ([]rib.Route, int) {
-	for _, p := range l {
-		keep(rib.Route{Prefix: p})
-	}
-	return nil, 0
-}
 
 func TestInjectPlanWaitsForPreflightAndWarnsAboutUnlearnedPrefixes(t *testing.T) {
 	f := goodFacts()
@@ -277,7 +291,7 @@ func TestInjectPlanWaitsForPreflightAndWarnsAboutUnlearnedPrefixes(t *testing.T)
 		t.Fatalf("not_learned without a RIB: %v", got["not_learned"])
 	}
 
-	var rv SearchRIB = learnedPrefixes{netip.MustParsePrefix("198.51.100.0/24")}
+	rv := fakeSearchRIB{{Prefix: netip.MustParsePrefix("198.51.100.0/24")}}
 	e.srv.SetSearchRIB(rv)
 	_, got = e.do(t, "POST", "/api/config/inject", plugin.RoleAdmin, body)
 	missing, _ := got["not_learned"].([]any)

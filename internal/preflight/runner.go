@@ -6,11 +6,12 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/GrandArcher/Packeteer/internal/configedit"
 )
 
 // Source gathers the facts for one run. It reads the running process and
@@ -39,6 +40,12 @@ func NewRunner(source Source, store *Store, now func() time.Time) *Runner {
 
 // Run gathers the facts, evaluates every check, and keeps the report.
 func (r *Runner) Run(ctx context.Context) Report {
+	rep, _ := r.run(ctx)
+	return rep
+}
+
+// run is Run that also returns the fingerprint of the running setup.
+func (r *Runner) run(ctx context.Context) (Report, string) {
 	f := r.source(ctx)
 	if r.store != nil {
 		f.Confirmed = r.store.Active(f.Fingerprint)
@@ -47,7 +54,7 @@ func (r *Runner) Run(ctx context.Context) Report {
 	r.mu.Lock()
 	r.last = &rep
 	r.mu.Unlock()
-	return rep
+	return rep, f.Fingerprint
 }
 
 // Latest is the report of the last run, if any.
@@ -95,10 +102,21 @@ func (e *NotReadyError) Error() string {
 	return "the preflight checks have not passed (" + strings.Join(e.Report.Blocking(), ", ") + "); run them from Settings and fix what they name"
 }
 
+// ErrSetupChanged is returned by Gate when the candidate config changes the
+// AS, the community, or the neighbors: the checks and the confirmations
+// describe the running setup, not the candidate.
+var ErrSetupChanged = errors.New("this save changes the AS number, the community, or the BGP neighbors and turns inject on in the same step; save that change first, apply it, run the preflight checks again, then turn inject on")
+
 // Gate runs the checks and returns a *NotReadyError unless every one is
-// ready. The editor calls it before it saves a config that turns inject on.
-func (r *Runner) Gate(ctx context.Context) error {
-	if rep := r.Run(ctx); !rep.Ready {
+// ready. candidate is the fingerprint of the config about to be saved; when
+// it differs from the running setup's, Gate returns ErrSetupChanged. The
+// editor calls it before it saves a config that turns inject on.
+func (r *Runner) Gate(ctx context.Context, candidate string) error {
+	rep, running := r.run(ctx)
+	switch {
+	case candidate != running:
+		return ErrSetupChanged
+	case !rep.Ready:
 		return &NotReadyError{Report: rep}
 	}
 	return nil
@@ -174,31 +192,10 @@ func (s *Store) Set(fingerprint, id string, c Confirmation) error {
 		if err != nil {
 			return err
 		}
-		if err := writeAtomic(s.path, data); err != nil {
+		if err := configedit.WriteFileAtomic(s.path, data, 0o600); err != nil {
 			return err
 		}
 	}
 	s.fingerprint, s.confirmed = fingerprint, next
-	return nil
-}
-
-func writeAtomic(path string, data []byte) error {
-	tmp, err := os.CreateTemp(filepath.Dir(path), ".preflight-*")
-	if err != nil {
-		return err
-	}
-	name := tmp.Name()
-	_, werr := tmp.Write(data)
-	if cerr := tmp.Close(); werr == nil {
-		werr = cerr
-	}
-	if werr != nil {
-		_ = os.Remove(name)
-		return werr
-	}
-	if err := os.Rename(name, path); err != nil {
-		_ = os.Remove(name)
-		return err
-	}
 	return nil
 }

@@ -160,6 +160,16 @@ type preflightAPI struct {
 
 func (p preflightAPI) Snippet(vendor string) (string, error) { return snippetFor(p.live, vendor) }
 
+// Gate checks that the candidate keeps the setup the confirmations were made
+// for, then runs the checks.
+func (p preflightAPI) Gate(ctx context.Context, candidate []byte) error {
+	next, err := config.Parse(candidate)
+	if err != nil {
+		return fmt.Errorf("the candidate config does not load: %w", err)
+	}
+	return p.Runner.Gate(ctx, preflightFingerprint(next))
+}
+
 // newPreflight builds the onboarding checks. A confirmations file that cannot
 // be read is not fatal: the filters stay unverified until confirmed again.
 func newPreflight(live *liveConfig, view *rib.View, lw *leakwatch.Watcher, plugins *pluginhost.Set, limiter *rate.Limiter, log *slog.Logger) preflightAPI {

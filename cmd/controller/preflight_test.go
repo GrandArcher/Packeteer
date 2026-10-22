@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"net/netip"
 	"runtime"
 	"strings"
@@ -128,6 +129,41 @@ func TestPreflightFingerprintFollowsASNCommunityAndRouters(t *testing.T) {
 	other.Providers = nil
 	if preflightFingerprint(&other) != base {
 		t.Error("providers must not void a filter confirmation")
+	}
+}
+
+const gateCandidate = `mode: observe
+asn: 64512
+router_id: 192.0.2.10
+packeteer_community: "64512:666"
+providers:
+  - {name: a, source_ip: 192.0.2.11, next_hop: 192.0.2.1}
+bgp:
+  neighbors:
+    - address: 127.0.0.1
+`
+
+func TestPreflightGateComparesTheCandidateWithTheRunningSetup(t *testing.T) {
+	cfg := preflightConfig(t, "  - {name: a, source_ip: 192.0.2.11, next_hop: 192.0.2.1}")
+	live := &liveConfig{cfg: cfg}
+	src := func(context.Context) checks.Facts { return checks.Facts{Fingerprint: preflightFingerprint(cfg)} }
+	api := preflightAPI{Runner: checks.NewRunner(src, nil, nil), live: live}
+
+	var notReady *checks.NotReadyError
+	if err := api.Gate(context.Background(), []byte(gateCandidate)); !errors.As(err, &notReady) {
+		t.Fatalf("same setup: %v, want the checks to decide", err)
+	}
+	for name, change := range map[string]func(string) string{
+		"asn":       func(y string) string { return strings.Replace(y, "asn: 64512", "asn: 64513", 1) },
+		"community": func(y string) string { return strings.Replace(y, "64512:666", "64512:667", 1) },
+		"neighbor":  func(y string) string { return strings.Replace(y, "127.0.0.1", "127.0.0.2", 1) },
+	} {
+		if err := api.Gate(context.Background(), []byte(change(gateCandidate))); !errors.Is(err, checks.ErrSetupChanged) {
+			t.Errorf("%s: %v, want ErrSetupChanged", name, err)
+		}
+	}
+	if err := api.Gate(context.Background(), []byte("mode: [")); err == nil || errors.Is(err, checks.ErrSetupChanged) {
+		t.Errorf("unparsable candidate: %v", err)
 	}
 }
 
