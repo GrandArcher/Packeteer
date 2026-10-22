@@ -99,10 +99,10 @@ func TestUIShell(t *testing.T) {
 		}
 	}
 	want := map[string][]string{
-		"index.html":           {`<body data-page="overview" data-live="app">`, `id="tiles"`, `id="setup"`, `id="federation-section" hidden`, "POPs"},
+		"index.html":           {`<body data-page="overview" data-live="app">`, `id="tiles"`, `id="chart-latency"`, `id="chart-improvements"`, `src="/charts.js"`, `src="/overview.js"`, `id="setup"`, `id="federation-section" hidden`, "POPs"},
 		"improvements.html":    {`<body data-page="improvements" data-live="app">`, `id="improvements"`, `id="improvements-title">Recommended improvements`},
 		"prefixes.html":        {`<body data-page="prefixes" data-live="app">`, `id="prefixes"`, `id="asn-map"`, "ASN map", "Expected gain"},
-		"providers.html":       {`<body data-page="providers" data-live="app">`, `id="providers"`, `id="exchanges"`, `id="exchange-report"`, `src="/exchanges.js"`, "Per exchange"},
+		"providers.html":       {`<body data-page="providers" data-live="app">`, `id="providers"`, `id="exchanges"`, `id="exchange-report"`, `src="/charts.js"`, `src="/exchanges.js"`, "Per exchange"},
 		"reports.html":         {`<body data-page="reports" data-live="app">`, `id="report-catalog"`, `id="report-range"`, `id="report-csv"`, `id="report-xlsx"`, `id="report-add"`, `src="/reports.js"`},
 		"troubleshooting.html": {`<body data-page="troubleshooting" data-live="app">`, `id="tool-run"`, `id="tool-results"`, `id="tool-empty"`, `src="/tools.js"`, "Looking glass"},
 		"protection.html":      {`<body data-page="protection" data-live="app">`, `id="mitigation-section" hidden`, `id="mitigation"`, `id="protection-empty"`, `id="mit-form"`, `id="mf-prefix"`, `src="/protection.js"`, `id="mit-badge"`},

@@ -786,6 +786,103 @@ jobs:
             -d '{"widgets":[{"type":"status","x":2}]}' "$base/api/dashboards/over")" = 400
           test "$(curl -s -o /dev/null -w '%{http_code}' "${auth[@]}" -X PUT -H 'Content-Type: application/json' \
             -d '{"widgets":[{"type":"status","w":13}]}' "$base/api/dashboards/over")" = 400
+      - name: UI provider figures smoke (#349; latency, loss, jitter, trend on Providers and two charts on Overview from seeded history, 1440 px and 390 px, observe)
+        run: |
+          set -euo pipefail
+          base=http://127.0.0.1:18420
+          # Five-minute provider samples for the last 24 hours, written by
+          # the same sqlite plugin the image uses: lab-a 120 ms with 8% loss,
+          # lab-b 40 ms with none (swinging a little, but not in the last
+          # hour), and three improvements on documentation prefixes.
+          mkdir -p /tmp/pkprov
+          go run ./lab/mkhistory -o /tmp/pkprov/packeteer.db
+          cat > /tmp/ui349.yaml <<'YAML'
+          mode: observe
+          asn: 64512
+          router_id: 192.0.2.10
+          auth: {enabled: false}
+          http:
+            listen: "127.0.0.1:18420"
+          providers:
+            - name: lab-a
+              source_ip: 127.0.0.1
+              next_hop: 192.0.2.1
+            - name: lab-b
+              source_ip: 127.0.0.2
+              next_hop: 192.0.2.2
+          storage:
+            type: sqlite
+          YAML
+          docker run -d --name pkui349 --network host --cap-add NET_RAW --cap-add NET_ADMIN \
+            -e PACKETEER_HTTP_USER=lab -e PACKETEER_HTTP_PASSWORD=lab-only \
+            -v /tmp/ui349.yaml:/etc/packeteer/config.yaml:ro -v /tmp/pkprov:/var/lib/packeteer packeteer:ci
+          proxy=""
+          cleanup() {
+            if [ -n "$proxy" ]; then kill "$proxy" 2>/dev/null || true; fi
+            docker stop -t 15 pkui349 >/dev/null || true
+            docker logs pkui349 2>&1 | tail -n 40
+            code="$(docker inspect -f '{{.State.ExitCode}}' pkui349)"
+            docker rm pkui349 >/dev/null || true
+            test "$code" = "0"
+          }
+          trap cleanup EXIT
+          auth=(-u lab:lab-only)
+          ok=0
+          for _ in $(seq 1 30); do
+            if curl -fsS "${auth[@]}" "$base/readyz" >/dev/null 2>&1; then ok=1; break; fi
+            sleep 1
+          done
+          test "$ok" = 1
+          # The API: the seeded 15-minute figures are exactly the base, the
+          # 24-hour window holds the whole day, there is no flow source, so
+          # no Mbps, and the points are hourly.
+          curl -fsS "${auth[@]}" "$base/api/providers/stats" | tee /tmp/ps349.json
+          jq -e '.flow == false and (.providers | length == 2)' /tmp/ps349.json
+          jq -e '.providers[] | select(.provider == "lab-a") | .last_15m.rtt_ms == 120 and .last_15m.loss_pct == 8 and .last_15m.jitter_ms == 12 and .last_24h.slots >= 288 and (.points | length >= 24) and (has("mbps") | not)' /tmp/ps349.json
+          jq -e '.providers[] | select(.provider == "lab-b") | .last_15m.rtt_ms == 40 and .last_15m.loss_pct == 0 and .last_15m.jitter_ms == 4 and .last_24h.slots >= 288' /tmp/ps349.json
+          test "$(curl -s -o /dev/null -w '%{http_code}' "${auth[@]}" -X POST "$base/api/providers/stats")" = 405
+          test "$(curl -s -o /dev/null -w '%{http_code}' "$base/api/providers/stats")" = 401
+          go build -o /tmp/uiproxy ./lab/uiproxy
+          /tmp/uiproxy -listen 127.0.0.1:18421 -upstream "$base" -user lab -password lab-only >/tmp/uiproxy349.log 2>&1 &
+          proxy=$!
+          for _ in $(seq 1 20); do
+            curl -fsS http://127.0.0.1:18421/healthz >/dev/null 2>&1 && break
+            sleep 0.2
+          done
+          curl -fsS http://127.0.0.1:18421/healthz >/dev/null
+          # 1440 px: the Providers table has the columns, both windows, the
+          # sparkline, and "no flow data" (no flow source in this lab).
+          UI_SMOKE_WINDOW=1440,900 bash lab/ui-smoke.sh http://127.0.0.1:18421/providers.html \
+            '>Latency</th>' '>Loss</th>' '>Jitter</th>' '>Trend, 24 h</th>' '>Mbps</th>' 'no flow data' \
+            'class="spark"' 'Latency over the last 24 hours, hourly' '<span class="stat-k">15 min</span>' '<span class="stat-k">24 h</span>' \
+            '120.0 ms' '8.0%' '12.0 ms' '40.0 ms' '0.0%' '4.0 ms' 'mode-observe' \
+            --absent 'Cannot reach' 'mode-inject' 'no reply'
+          # 1440 px: Overview has both charts with labelled axes and a legend in
+          # words, Providers is the first tile, and there is no Mode tile.
+          UI_SMOKE_WINDOW=1440,1100 bash lab/ui-smoke.sh http://127.0.0.1:18421/ \
+            'Latency by provider, last 24 h' 'Recommended / active improvements, last 24 h' \
+            'Round-trip time (ms)' 'Improvements open' 'Time of day (last 24 hours)' \
+            'lab-a: median 120.0 ms' 'lab-b: median 40.0 ms' \
+            'Recommended (observe or suggest): ' 'Active (inject, announced): 0 now' \
+            'class="ts-chart ov-chart"' 'ts-line series-0' 'ts-line series-1' 'class="k">Providers</span>' 'mode-observe' 'It announces nothing.' \
+            --absent 'class="k">Mode</span>' 'No provider has answered' 'No improvement was recommended' 'History is off' 'Cannot reach' 'mode-inject'
+          kill "$proxy"
+          # 390 px: the same two pages in a phone-width frame, from the real
+          # API (headless Chrome will not open a window under 500 px).
+          /tmp/uiproxy -listen 127.0.0.1:18422 -upstream "$base" -user lab -password lab-only \
+            -fixtures lab/ui-fixtures/provider-stats >/tmp/uiproxy349b.log 2>&1 &
+          proxy=$!
+          for _ in $(seq 1 20); do
+            curl -fsS http://127.0.0.1:18422/healthz >/dev/null 2>&1 && break
+            sleep 0.2
+          done
+          curl -fsS http://127.0.0.1:18422/healthz >/dev/null
+          UI_SMOKE_ATTEMPTS=3 bash lab/ui-smoke.sh http://127.0.0.1:18422/providers.html \
+            'overview: latency chart yes | latency points many | improvements chart yes | improvement points many | no sideways scroll yes | first tile Providers | mode tile no' \
+            'latency legend: lab-a: median 120.0 ms ; lab-b: median 40.0 ms' \
+            'providers 2 | no sideways scroll yes | lab-a: Latency whole, Loss whole, Jitter whole, Trend, 24 h whole, Mbps whole, spark yes' \
+            'lab-b: Latency whole, Loss whole, Jitter whole, Trend, 24 h whole, Mbps whole, spark yes' \
+            'stats-done' --absent 'clipped' ' missing' 'stats-jserr'
       - name: UI commit smoke (#174; 95th vs commit graph from seeded samples, commit setup flow, observe)
         run: |
           set -euo pipefail

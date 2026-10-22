@@ -4,8 +4,10 @@
 //	mkhistory -o /tmp/pk/packeteer.db
 //
 // The days are the last few UTC days, so the default 7-day graph has
-// points. With -commit it writes instead the 95th-percentile samples and
-// commit improvements for the Commit & Cost page smoke test (#174).
+// points, plus the last 24 hours of per-provider probe samples for the
+// Providers table and the Overview chart (#349). With -commit it writes
+// instead the 95th-percentile samples and commit improvements for the
+// Commit & Cost page smoke test (#174).
 // Documentation prefixes and made-up provider names only; it reads and
 // announces nothing.
 package main
@@ -24,6 +26,30 @@ import (
 )
 
 const days = 5
+
+// providerSeed is the last 24 hours of five-minute provider samples up to
+// the current slot (#349), for the Providers table and the Overview latency
+// chart. lab-a runs at 120 ms with 8% loss and lab-b at 40 ms with none. Both
+// swing a little through the day so the lines are not flat, except in the
+// last hour, so the 15-minute figures are exactly the base.
+func providerSeed(now time.Time) []plugin.ProviderSample {
+	last := now.UTC().Truncate(5 * time.Minute)
+	var out []plugin.ProviderSample
+	for at := last.Add(-24 * time.Hour); !at.After(last); at = at.Add(5 * time.Minute) {
+		swing := math.Sin(2 * math.Pi * float64(at.Hour()*60+at.Minute()) / (24 * 60))
+		if last.Sub(at) < time.Hour {
+			swing = 0
+		}
+		for _, p := range []struct {
+			name      string
+			rtt, loss float64
+		}{{"lab-a", 120 + 10*swing, 8}, {"lab-b", 40 + 4*swing, 0}} {
+			out = append(out, plugin.ProviderSample{Provider: p.name, Slot: at, Probes: 20, Measured: 20,
+				LossSum: p.loss * 20, RTTSumMs: p.rtt * 20, JitterSum: p.rtt / 10 * 20})
+		}
+	}
+	return out
+}
 
 // seed is `days` days ending today. lab-a is the native provider and lab-b
 // the chosen one:
@@ -141,6 +167,12 @@ func main() {
 	if err := s.Write(ctx, batch); err != nil {
 		fmt.Fprintln(os.Stderr, "mkhistory:", err)
 		os.Exit(1)
+	}
+	if !*commit {
+		if err := s.PutProviderSamples(ctx, providerSeed(time.Now())); err != nil {
+			fmt.Fprintln(os.Stderr, "mkhistory:", err)
+			os.Exit(1)
+		}
 	}
 	if err := s.Stop(ctx); err != nil {
 		fmt.Fprintln(os.Stderr, "mkhistory:", err)

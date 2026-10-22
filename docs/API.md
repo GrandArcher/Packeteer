@@ -14,6 +14,7 @@ The dashboard, JSON API, and Prometheus metrics share one listener, `http.listen
 | `/readyz` | Readiness. 503 until startup finishes, and until an iBGP session is up when neighbors are configured. |
 | `/metrics` | Prometheus text. |
 | `/api/providers` | Providers, probe-source health, and BGP sessions. |
+| `/api/providers/stats` | Viewer. Per provider, the median latency, loss, and jitter over the last 15 minutes and 24 hours, hourly `points`, and `mbps` when `flow` is true (a flow source reports volume) (#349). See [ui.md](ui.md#provider-figures-and-overview-charts). |
 | `/api/probes` | Latest probe per provider and prefix. |
 | `/api/prefixes` | Probed prefixes with measurements, current exit (the learned path in observe and suggest, the engine's choice in inject), and recommended exit, one page at a time (`limit` up to 500, default 100; `offset`, `prefix`, `asn`, `provider`, `differs`, `sort`; [ui.md](ui.md#prefix-list)). Each learned path carries `rpki` (`valid`, `invalid`, `notfound`, `unknown`) when the `rpki` block is on (#158). Prefixes that are only in the RIB are not listed. |
 | `/api/decisions` | Latest per-prefix decision. Each `candidates` entry carries `rpki` (`valid`, `invalid`, `notfound`, `unknown`) when the `rpki` block is on (#158). |

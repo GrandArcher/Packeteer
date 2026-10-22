@@ -4,6 +4,7 @@ var REFRESH_MS = 5000;
 var refreshing = false;
 var refreshAgain = false;
 var lastProviders = null;
+var lastProviderStats = null;
 var lastPrefixes = null;
 var lastImprovements = null;
 var lastReady = null;
@@ -147,6 +148,32 @@ function originASN(row) {
   return 0;
 }
 
+// statCell shows one measured figure over the last 15 minutes and the last
+// 24 hours. A path that never answered has loss but no latency, so it reads
+// "no reply", not 0.0 ms (#343).
+function statCell(st, key, fmt) {
+  var td = el("td", "stat");
+  [["15 min", st && st.last_15m], ["24 h", st && st.last_24h]].forEach(function (w) {
+    var line = el("div", "stat-line");
+    line.appendChild(el("span", "stat-k", w[0]));
+    var win = w[1];
+    var text;
+    if (!win || !win.slots) text = "no data";
+    else if (win[key] == null) text = NO_REPLY;
+    else text = fmt(win[key]);
+    line.appendChild(el("span", win && win.slots && win[key] != null ? "stat-v" : "stat-v muted", text));
+    td.appendChild(line);
+  });
+  return td;
+}
+
+// mbpsText is the provider's current rate. Without a flow source there is
+// no rate to show.
+function mbpsText(st, all) {
+  if (!all || !all.flow) return "no flow data";
+  return st && st.mbps != null ? (Math.round(st.mbps * 10) / 10).toFixed(1) : "0.0";
+}
+
 function renderProviders(data) {
   var root = document.getElementById("providers");
   if (!root) return;
@@ -160,7 +187,9 @@ function renderProviders(data) {
   var head = el("tr");
   var health = {};
   ((lastOverview && lastOverview.providers) || []).forEach(function (h) { health[h.name] = h; });
-  ["Provider", "Source", "Next hop", "Open in", "Health", "Probes", "Since", "Detail"].forEach(function (h) {
+  var stats = {};
+  ((lastProviderStats && lastProviderStats.providers) || []).forEach(function (st) { stats[st.provider] = st; });
+  ["Provider", "Source", "Next hop", "Open in", "Health", "Latency", "Loss", "Jitter", "Trend, 24 h", "Mbps", "Probes", "Since", "Detail"].forEach(function (h) {
     head.appendChild(el("th", "", h));
   });
   var thead = el("thead");
@@ -196,6 +225,14 @@ function renderProviders(data) {
     cell.appendChild(h ? healthPill(h.state) : el("span", p.up ? "dot up" : "dot down", p.up ? "up" : "down"));
     if (h && h.detail) cell.appendChild(el("span", "muted", " " + h.detail));
     tr.appendChild(cell);
+    var st = stats[p.name];
+    tr.appendChild(statCell(st, "rtt_ms", fmtMs));
+    tr.appendChild(statCell(st, "loss_pct", fmtPct));
+    tr.appendChild(statCell(st, "jitter_ms", fmtMs));
+    var trend = el("td", "trend");
+    trend.appendChild(sparkline(st && st.points));
+    tr.appendChild(trend);
+    tr.appendChild(el("td", "mbps", mbpsText(st, lastProviderStats)));
     tr.appendChild(el("td", "", h ? probeCount(h) : "—"));
     tr.appendChild(el("td", "", fmtTime(p.since)));
     tr.appendChild(el("td", "", p.reason || ""));
@@ -594,14 +631,13 @@ function renderTiles(o) {
   clear(root);
   var c = o.counts || {};
   var inject = o.mode === "inject";
-  root.appendChild(tile("Mode", o.mode || "—", inject ? "announces" : "announces nothing", inject ? "warn" : ""));
-  root.appendChild(tile("Status", o.ready ? "ready" : (o.started ? "not ready" : "starting"),
-    o.bgp && o.bgp.configured && !o.bgp.ready ? "no iBGP session" : "", o.ready ? "good" : "bad"));
   var problems = o.problems || [];
   var worst = problems.some(function (p) { return p.state === "down"; }) ? "bad" : (problems.length ? "warn" : "");
   var unmeasured = (o.providers || []).filter(function (p) { return p.state === "unknown"; }).length;
   root.appendChild(tile("Providers", c.providers_healthy + " of " + c.providers + " healthy",
     unmeasured ? unmeasured + " not measured yet" : "", worst));
+  root.appendChild(tile("Status", o.ready ? "ready" : (o.started ? "not ready" : "starting"),
+    o.bgp && o.bgp.configured && !o.bgp.ready ? "no iBGP session" : "", o.ready ? "good" : "bad"));
   root.appendChild(tile("Prefixes measured", c.measured + " of " + c.prefixes,
     (o.sources || []).length ? "sources: " + o.sources.join(", ") : "no sources", c.prefixes ? "" : "muted"));
   root.appendChild(tile(inject ? "Improvements" : "Recommended", c.improvements + (c.max_improvements ? " of " + c.max_improvements : ""),
@@ -941,6 +977,14 @@ function fetchPrefixes() {
   return getJSON("/api/prefixes?" + prefixListQuery());
 }
 
+// fetchProviderStats reads the per-provider figures for the pages that draw
+// them: Providers and Overview.
+function fetchProviderStats() {
+  var page = document.body.getAttribute("data-page");
+  if (page !== "providers" && page !== "overview") return Promise.resolve(null);
+  return getJSON("/api/providers/stats");
+}
+
 function refresh() {
   if (refreshing) {
     refreshAgain = true;
@@ -957,7 +1001,8 @@ function refresh() {
     readyReq,
     getJSON("/api/mitigations"),
     getJSON("/api/federation"),
-    getJSON("/api/overview")
+    getJSON("/api/overview"),
+    fetchProviderStats()
   ]).then(function (results) {
     var err = null;
     if (results[6].status === "fulfilled") {
@@ -972,8 +1017,11 @@ function refresh() {
     else if (!err) err = results[2].reason;
     if (results[3].status === "fulfilled") lastReady = results[3].value;
     else if (!err) err = results[3].reason;
+    // The figures are optional: without them the cells say there is no data.
+    if (results[7].status === "fulfilled" && results[7].value) lastProviderStats = results[7].value;
     if (!err) lastOK = new Date().toISOString();
     if (lastProviders) renderProviders(lastProviders);
+    if (typeof renderOverviewCharts === "function") renderOverviewCharts(lastProviderStats, lastOverview);
     if (lastPrefixes) {
       if (typeof renderPrefixes === "function") renderPrefixes(lastPrefixes);
       renderASNMap(lastPrefixes);

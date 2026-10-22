@@ -14,6 +14,7 @@ import (
 	"github.com/GrandArcher/Packeteer/internal/plugins/storage/sqlite"
 	"github.com/GrandArcher/Packeteer/internal/policy"
 	"github.com/GrandArcher/Packeteer/internal/probe"
+	"github.com/GrandArcher/Packeteer/internal/provseries"
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
 )
 
@@ -477,5 +478,61 @@ func TestRecorderExchangeReport(t *testing.T) {
 	if len(rows) != 2 || rows[0].Peer != "ix-peer-a" || rows[0].Exchange != "ix-lab" || rows[0].VolumeMbps != 30 || rows[0].Active != 1 ||
 		rows[1].Peer != "ix-peer-b" || rows[1].Improvements != 0 {
 		t.Fatalf("rows = %+v", rows)
+	}
+}
+
+// TestRecorderKeepsProviderSeriesAcrossRestart feeds the provider series,
+// closes the recorder, and reads the series back in a fresh one on the same
+// sqlite file. A store without provider samples is left alone.
+func TestRecorderKeepsProviderSeriesAcrossRestart(t *testing.T) {
+	ctx := context.Background()
+	cfg, err := plugin.ConfigFromYAML("path: " + filepath.Join(t.TempDir(), "packeteer.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	open := func() *sqlite.Store {
+		s, err := sqlite.New(cfg, plugin.Env{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := s.Start(ctx); err != nil {
+			t.Fatal(err)
+		}
+		return s
+	}
+	run := func(series *provseries.Series) {
+		store := open()
+		defer store.Stop(ctx)
+		rec := New(Options{Store: store, Series: series, Now: func() time.Time { return t0 }})
+		if err := rec.Start(ctx); err != nil {
+			t.Fatal(err)
+		}
+		series.Add(result(pfxA, "transit-a", 10, 40*time.Millisecond, t0))
+		if err := rec.Close(ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
+	first := provseries.New(func() time.Time { return t0 })
+	run(first)
+	second := provseries.New(func() time.Time { return t0 })
+	run(second)
+	stats := second.Stats()
+	if len(stats) != 1 || stats[0].Provider != "transit-a" || stats[0].Last24h.Slots != 1 || stats[0].Last24h.RTTMs != 40 {
+		t.Fatalf("restored stats = %+v", stats)
+	}
+	// Two runs each added one probe to the same slot; the second held the first's.
+	check := open()
+	defer check.Stop(ctx)
+	if got, err := check.ProviderSamples(ctx, t0.Add(-time.Hour), t0.Add(time.Hour)); err != nil || len(got) != 1 || got[0].Probes != 2 {
+		t.Fatalf("slot after two runs = %+v, %v", got, err)
+	}
+
+	mem := &memStore{}
+	rec := New(Options{Store: mem, Series: first, Now: func() time.Time { return t0 }})
+	if err := rec.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := rec.Close(ctx); err != nil {
+		t.Fatalf("a store without provider samples broke Close: %v", err)
 	}
 }

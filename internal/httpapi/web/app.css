@@ -528,3 +528,41 @@ main:focus { outline: none; }
   font-weight: 600;
 }
 .skip-link:focus { top: 8px; }
+
+/* Provider figures and Overview charts (#349) */
+#providers { overflow-x: auto; }
+.stat, td.mbps { white-space: nowrap; font-variant-numeric: tabular-nums; }
+.stat-line { display: flex; gap: 6px; }
+.stat-k { color: var(--muted); font-size: 0.75rem; min-width: 3.2em; }
+.spark { width: 120px; height: 28px; display: block; }
+.spark-line { stroke: var(--series-0); stroke-width: 1.5; }
+.spark-dot { fill: var(--series-0); }
+.ts-axis { fill: var(--ink); font-size: 14px; }
+#overview-charts { margin-bottom: 12px; }
+:root {
+  --series-0: #1f5fa8;
+  --series-1: #b34a00;
+  --series-2: #0b6e4f;
+  --series-3: #7a3fa0;
+  --series-4: #9d1c2a;
+  --series-5: #4a5560;
+}
+.ts-line.series-0 { stroke: var(--series-0); }
+.ts-line.series-1 { stroke: var(--series-1); stroke-dasharray: 8 4; }
+.ts-line.series-2 { stroke: var(--series-2); stroke-dasharray: 2 3; }
+.ts-line.series-3 { stroke: var(--series-3); stroke-dasharray: 8 3 2 3; }
+.ts-line.series-4 { stroke: var(--series-4); stroke-dasharray: 12 4; }
+.ts-line.series-5 { stroke: var(--series-5); stroke-dasharray: 4 2; }
+.ts-dot.series-0 { fill: var(--series-0); }
+.ts-dot.series-1 { fill: var(--series-1); }
+.ts-dot.series-2 { fill: var(--series-2); }
+.ts-dot.series-3 { fill: var(--series-3); }
+.ts-dot.series-4 { fill: var(--series-4); }
+.ts-dot.series-5 { fill: var(--series-5); }
+.ts-key.series-0, .ts-key.series-1, .ts-key.series-2, .ts-key.series-3, .ts-key.series-4, .ts-key.series-5 { border-bottom: 3px solid; padding-bottom: 1px; }
+.ts-key.series-0 { color: var(--series-0); border-bottom-style: solid; }
+.ts-key.series-1 { color: var(--series-1); border-bottom-style: dashed; }
+.ts-key.series-2 { color: var(--series-2); border-bottom-style: dotted; }
+.ts-key.series-3 { color: var(--series-3); border-bottom-style: double; }
+.ts-key.series-4 { color: var(--series-4); border-bottom-style: dashed; }
+.ts-key.series-5 { color: var(--series-5); border-bottom-style: dotted; }
