@@ -144,9 +144,9 @@ test -z "$(docker exec pk-pbr ip rule show | grep 2001: || true)"
 pk -pbr linux -apply -yes | tee "$work/pbr-apply.txt"
 grep -qF 'Applied 4 changes.' "$work/pbr-apply.txt"
 grep -qF 'leave through its next hop' "$work/pbr-apply.txt"
-docker exec pk-pbr ip route get 203.0.113.254 from 192.0.2.11 | grep -q 'via 192.0.2.3'
-docker exec pk-pbr ip route get 203.0.113.254 from 192.0.2.12 | grep -q 'via 192.0.2.4'
-pk -pbr linux -apply | grep -qF 'already has the policy routing'
+docker exec pk-pbr ip route get 203.0.113.254 from 192.0.2.11 | grep 'via 192.0.2.3' >/dev/null
+docker exec pk-pbr ip route get 203.0.113.254 from 192.0.2.12 | grep 'via 192.0.2.4' >/dev/null
+pk -pbr linux -apply | grep -F 'already has the policy routing' >/dev/null
 # A provider leaves the config: its rule and route go, the other stays. The
 # file is rewritten in place, since the container's mount follows the inode.
 grep -v transit-b "$work/pbr.yaml" >"$work/pbr-one.yaml"
@@ -154,5 +154,5 @@ cat "$work/pbr-one.yaml" >"$work/pbr.yaml"
 pk -pbr linux -apply -yes | tee "$work/pbr-clean.txt"
 grep -qF -- '- ip rule del from 192.0.2.12 lookup 1002 priority 2002' "$work/pbr-clean.txt"
 test -z "$(docker exec pk-pbr ip rule show | grep 2002: || true)"
-docker exec pk-pbr ip rule show | grep -q 2001:
+docker exec pk-pbr ip rule show | grep 2001: >/dev/null
 echo "onboarding lab: ok"
