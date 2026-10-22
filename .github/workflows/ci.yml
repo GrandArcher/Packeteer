@@ -2422,6 +2422,8 @@ jobs:
         run: bash lab/e2e.sh
       - name: FRR flap quarantine lab (oscillating latency withdraws after max_flips, native path while parked, cool-down release, SIGTERM)
         run: bash lab/e2e-flap.sh
+      - name: FRR make-before-break lab (#386; provider move is one replacing UPDATE, one Packeteer path, no withdraw, flip-back withdraw seen, SIGTERM)
+        run: bash lab/e2e-move.sh
       - name: FRR commit-control lab
         run: bash lab/e2e-commit.sh
       - name: FRR cost-mode lab

@@ -64,11 +64,17 @@ type Announcer struct {
 	mu        sync.Mutex
 	srv       *server.BgpServer
 	community string
-	paths     map[netip.Prefix][]byte // announced prefix -> AddPath UUID
+	paths     map[netip.Prefix]announced
 	// routers is the installed per-router export policy (#27): its name
 	// ("" when none), its neighbor sets, and how many times it was
 	// replaced. SetRouters installs a new one before it drops the old.
 	routers routerPolicy
+}
+
+// announced is one route on the speaker: its AddPath UUID and next hop.
+type announced struct {
+	uuid    []byte
+	nextHop netip.Addr
 }
 
 // routerPolicy is one installed per-router export policy.
@@ -76,6 +82,26 @@ type routerPolicy struct {
 	name string
 	sets []string
 	gen  int
+	// blocked holds each router's rejected next hops, unmapped.
+	blocked [][]netip.Addr
+}
+
+// blocksMove reports whether some router accepts a route via next hop
+// from and rejects it via to. An implicit replace would leave the old
+// route on that router: GoBGP decides whether to withdraw the old path
+// from a router by evaluating it with the new path's next hop
+// (PolicyOptions.OldNextHop), so the reject matches and no withdraw goes
+// out.
+func (rp routerPolicy) blocksMove(from, to netip.Addr) bool {
+	if from == to {
+		return false
+	}
+	for _, b := range rp.blocked {
+		if slices.Contains(b, to) && !slices.Contains(b, from) {
+			return true
+		}
+	}
+	return false
 }
 
 // New is the plugin factory. It does not open a BGP session.
@@ -88,7 +114,7 @@ func New(c plugin.Config, env plugin.Env) (plugin.Announcer, error) {
 	if log == nil {
 		log = slog.Default()
 	}
-	return &Announcer{log: log, paths: map[netip.Prefix][]byte{}}, nil
+	return &Announcer{log: log, paths: map[netip.Prefix]announced{}}, nil
 }
 
 // Bind attaches the announcer to the RIB view's speaker and installs an
@@ -179,8 +205,8 @@ func (a *Announcer) SetRouters(ctx context.Context, routers []plugin.RouterExpor
 	}
 	// Only this announcer's paths: the inbound announcer's steer routes
 	// share the speaker and are not affected by the table.
-	for p, uuid := range a.paths {
-		if err := a.srv.DeletePath(ctx, &api.DeletePathRequest{Uuid: uuid, Family: familyOf(p)}); err != nil {
+	for p, on := range a.paths {
+		if err := a.srv.DeletePath(ctx, &api.DeletePathRequest{Uuid: on.uuid, Family: familyOf(p)}); err != nil {
 			return fmt.Errorf("gobgp announcer: withdraw %s before the table swap: %w", p, err)
 		}
 		delete(a.paths, p)
@@ -225,6 +251,15 @@ func (a *Announcer) SetRouters(ctx context.Context, routers []plugin.RouterExpor
 // Announce advertises r. It replaces any route already announced for the
 // same prefix. The route must carry the bound community and a non-zero
 // local preference; NO_EXPORT is always added.
+//
+// A replace is make-before-break (#386): the old path is not deleted
+// first. GoBGP takes a local path with the same prefix and path identifier
+// as an implicit withdraw of the one before it and re-keys the UUID, so
+// the edge gets one UPDATE with the new next hop and never a gap. When
+// AddPath fails the old route stays on the wire and in paths. The one
+// exception is a move onto a next hop that a router blocks while it took
+// the old one (blocksMove): that move withdraws first, so the router
+// loses the route instead of keeping the old one.
 func (a *Announcer) Announce(ctx context.Context, r plugin.Route) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -238,8 +273,9 @@ func (a *Announcer) Announce(ctx context.Context, r plugin.Route) error {
 	if err != nil {
 		return err
 	}
-	if uuid, ok := a.paths[r.Prefix]; ok {
-		if err := a.srv.DeletePath(ctx, &api.DeletePathRequest{Uuid: uuid, Family: familyOf(r.Prefix)}); err != nil {
+	nh := r.NextHop.Unmap()
+	if old, ok := a.paths[r.Prefix]; ok && a.routers.blocksMove(old.nextHop, nh) {
+		if err := a.srv.DeletePath(ctx, &api.DeletePathRequest{Uuid: old.uuid, Family: familyOf(r.Prefix)}); err != nil {
 			return fmt.Errorf("gobgp announcer: replace %s: %w", r.Prefix, err)
 		}
 		delete(a.paths, r.Prefix)
@@ -248,7 +284,7 @@ func (a *Announcer) Announce(ctx context.Context, r plugin.Route) error {
 	if err != nil {
 		return fmt.Errorf("gobgp announcer: announce %s: %w", r.Prefix, err)
 	}
-	a.paths[r.Prefix] = resp.GetUuid()
+	a.paths[r.Prefix] = announced{uuid: resp.GetUuid(), nextHop: nh}
 	a.log.Info("announced", "prefix", r.Prefix, "next_hop", r.NextHop, "local_pref", r.LocalPref, "provider", r.Provider, "as_path", asPathString(r.ASPath))
 	return nil
 }
@@ -262,11 +298,11 @@ func (a *Announcer) Withdraw(ctx context.Context, p netip.Prefix) error {
 		return errors.New("gobgp announcer: not bound to the iBGP speaker")
 	}
 	p = p.Masked()
-	uuid, ok := a.paths[p]
+	on, ok := a.paths[p]
 	if !ok {
 		return nil
 	}
-	if err := a.srv.DeletePath(ctx, &api.DeletePathRequest{Uuid: uuid, Family: familyOf(p)}); err != nil {
+	if err := a.srv.DeletePath(ctx, &api.DeletePathRequest{Uuid: on.uuid, Family: familyOf(p)}); err != nil {
 		return fmt.Errorf("gobgp announcer: withdraw %s: %w", p, err)
 	}
 	delete(a.paths, p)
@@ -296,7 +332,7 @@ func (a *Announcer) withdrawAllLocked(ctx context.Context) error {
 		return fmt.Errorf("gobgp announcer: withdraw all: %w", err)
 	}
 	n := len(a.paths)
-	a.paths = map[netip.Prefix][]byte{}
+	a.paths = map[netip.Prefix]announced{}
 	a.log.Info("withdrew all", "prefixes", n)
 	return nil
 }
@@ -590,6 +626,11 @@ func installRouterPolicy(ctx context.Context, srv *server.BgpServer, routers []p
 			return rp, fmt.Errorf("gobgp announcer: neighbor set %s: %w", n, err)
 		}
 		rp.sets = append(rp.sets, nset)
+		blocked := make([]netip.Addr, 0, len(r.Blocked))
+		for _, nh := range r.Blocked {
+			blocked = append(blocked, nh.Unmap())
+		}
+		rp.blocked = append(rp.blocked, blocked)
 		cond := func(nhs ...netip.Addr) *api.Conditions {
 			list := make([]string, 0, len(nhs))
 			for _, nh := range nhs {
