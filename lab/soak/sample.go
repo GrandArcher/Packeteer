@@ -154,6 +154,7 @@ type metrics struct {
 	RIBPrefixes         int
 	ProbePrefixCommits  float64
 	FlowPrefixesTracked float64
+	MutexWaitSeconds    float64
 }
 
 func parseMetrics(r io.Reader) (metrics, error) {
@@ -183,6 +184,8 @@ func parseMetrics(r io.Reader) (metrics, error) {
 			m.ProbePrefixCommits = v
 		case name == "packeteer_flow_prefixes_tracked":
 			m.FlowPrefixesTracked = v
+		case name == "packeteer_go_mutex_wait_seconds_total":
+			m.MutexWaitSeconds = v
 		case strings.HasPrefix(name, "packeteer_bgp_session_up{"):
 			m.SessionUp = m.SessionUp || v == 1
 		}
@@ -249,4 +252,80 @@ func (a *opsAPI) overview(ctx context.Context) (overview, time.Duration, error) 
 		return json.NewDecoder(r).Decode(&o)
 	})
 	return o, d, err
+}
+
+// decided is decided_at from /api/decisions: when the decide loop last
+// evaluated. Zero before the first evaluation.
+func (a *opsAPI) decided(ctx context.Context) (time.Time, error) {
+	var body struct {
+		DecidedAt time.Time `json:"decided_at"`
+	}
+	_, err := a.get(ctx, "/api/decisions", func(r io.Reader) error {
+		return json.NewDecoder(r).Decode(&body)
+	})
+	return body.DecidedAt, err
+}
+
+// outageIncidents counts outage.as and outage.circuit events in the event
+// log.
+func (a *opsAPI) outageIncidents(ctx context.Context) (int, error) {
+	var body struct {
+		Events []struct {
+			Kind string `json:"kind"`
+		} `json:"events"`
+	}
+	_, err := a.get(ctx, "/api/events?q=outage&limit=500", func(r io.Reader) error {
+		return json.NewDecoder(r).Decode(&body)
+	})
+	n := 0
+	for _, e := range body.Events {
+		if e.Kind == "outage.as" || e.Kind == "outage.circuit" {
+			n++
+		}
+	}
+	return n, err
+}
+
+// loopWatch follows the decide and probe loops and lock wait over the
+// samples of a soak (#383). A loop that stops shows as a gap that keeps
+// growing until it moves again.
+type loopWatch struct {
+	started   bool
+	commits   float64
+	commitAt  time.Time // last sample that saw commits rise
+	probeGap  float64   // seconds
+	decideGap float64   // seconds
+
+	wait0, wait     float64 // mutex wait seconds: first and latest sample
+	waitAt0, waitAt time.Time
+	waitMax         float64 // worst wait per second between two samples
+}
+
+func (w *loopWatch) sample(now time.Time, commits, mutexWait float64, decided time.Time) {
+	if !decided.IsZero() {
+		w.decideGap = max(w.decideGap, now.Sub(decided).Seconds())
+	}
+	if !w.started {
+		w.started = true
+		w.commits, w.commitAt = commits, now
+		w.wait0, w.waitAt0, w.wait, w.waitAt = mutexWait, now, mutexWait, now
+		return
+	}
+	w.probeGap = max(w.probeGap, now.Sub(w.commitAt).Seconds())
+	if commits > w.commits {
+		w.commits, w.commitAt = commits, now
+	}
+	if dt := now.Sub(w.waitAt).Seconds(); dt > 0 {
+		w.waitMax = max(w.waitMax, (mutexWait-w.wait)/dt)
+	}
+	w.wait, w.waitAt = mutexWait, now
+}
+
+// waitRate is mutex wait seconds per second over the samples.
+func (w *loopWatch) waitRate() float64 {
+	dt := w.waitAt.Sub(w.waitAt0).Seconds()
+	if dt <= 0 {
+		return 0
+	}
+	return max(0, (w.wait-w.wait0)/dt)
 }

@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Load and soak test (#51) against the stock image with a mounted config.
-# Lab only: documentation prefixes and ASNs, observe mode, a simulated edge
-# router inside lab/soak, synthetic IPFIX, the fixed prober (no probe
+# Lab only: documentation prefixes and ASNs, observe mode (inject inside the
+# documentation allowlist on the multi-session profiles, #383), simulated
+# edge routers inside lab/soak, synthetic IPFIX, the fixed prober (no probe
 # packets leave the host).
 #
 #   lab/soak.sh IMAGE [PROFILE] [DURATION]

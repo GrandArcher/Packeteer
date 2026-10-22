@@ -7,6 +7,7 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 ### Added
 
 - Providers show latency, loss, jitter (15 min, 24 h), a trend and Mbps; Overview leads with latency and improvement charts and drops the Mode tile (#349).
+- Multi-session inject soak: 2-4 routers x 1M routes, flaps, a slow peer, outage and vip on; reports withdraw latency, lock wait (`packeteer_go_mutex_wait_seconds_total`), loop gaps (#383).
 - Soak table follows a real full table's shape (lengths, AS path, communities, MED, attribute sets) from a counts-only RIS file, documentation space only (#341).
 - Improvements explain each move in a plain sentence and show latency, loss, gain, Mbps, ASN, AS name and hold time (#348).
 - First run with only the example providers opens the setup wizard with no config edit; a real config keeps the editor off, and settings push needs an explicit `http.config_editor: true` (#416).
