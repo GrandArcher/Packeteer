@@ -6,7 +6,7 @@ Packeteer's resource budgets, how CI measures them, and how to run the same test
 
 `lab/soak.sh IMAGE [PROFILE] [DURATION]` starts the stock image with a mounted config, the same `docker run --network host --cap-add NET_RAW --cap-add NET_ADMIN -v config.yaml:/etc/packeteer/config.yaml` an operator uses. The harness (`lab/soak`, Go) then:
 
-1. **Plays the edge router.** A minimal BGP speaker on `127.0.0.1:11179` (iBGP, AS 64512, hold time 9s). Packeteer connects from `127.0.0.2` and gets a full-table dump: 1,250,000 prefixes on the `pr` and `soak` profiles, about a 2026 IPv4 plus IPv6 table. The first 1,533 are every prefix from /24 to /32 inside the three RFC 5737 blocks; the rest split `2001:db8::/32` into /53s (a 3,000,000-prefix table uses /54). Runs of 64 prefixes share a next hop (two IPv4 and two IPv6 providers) and a documentation-ASN AS path of one to four hops, so UPDATEs pack the way a real table does. The speaker encodes UPDATEs from the generator and keeps no table, so the memory measured is Packeteer's.
+1. **Plays the edge router.** A minimal BGP speaker on `127.0.0.1:11179` (iBGP, AS 64512, hold time 9s). Packeteer connects from `127.0.0.2` and gets a full-table dump: 1,250,000 prefixes on the `pr` and `soak` profiles, about a 2026 IPv4 plus IPv6 table. The first 1,533 are every prefix from /24 to /32 inside the three RFC 5737 blocks (the blocks hold no more IPv4, so the IPv4 share is far below a real table's); the rest are `2001:db8::/32` (RFC 3849) carved by the length mix in `lab/soak/shape/shape.json` (see "Table shape" below). Consecutive prefixes share one attribute set (a next hop from two IPv4 and two IPv6 providers, a documentation-ASN AS path, origin, MED, communities and large communities drawn from the shape), so UPDATEs pack the way a real table does. The speaker encodes UPDATEs from the generator and keeps no table, so the memory measured is Packeteer's.
 2. **Exports flows.** IPFIX at 20,000 records per second to Packeteer's `flow` source. Half the records go to 5,000 hot prefixes and half are spread over the whole table, so the busiest prefixes stay stable while nearly every other record is a prefix the window has not seen.
 3. **Churns the table.** 6,000 prefixes a minute are withdrawn and announced again (100 a second).
 4. **Probes many targets.** 1,000 static targets plus the flow source's top 2,000, through four providers, with the `fixed` prober (no packets leave the host). transit-b is faster, so about half the measured prefixes get a recommendation that observe never announces.
@@ -37,9 +37,24 @@ The budgets live in [lab/soak/budgets.yaml](../lab/soak/budgets.yaml) and are se
 
 `rss_growth_mb_per_mprefix` is 307.2 on `pr` (384 MiB at 1.25M) and 409.6 on `soak` (512 MiB). #125 does not re-baseline it. The sketch is 4 KiB per flow bucket, about 120 KiB for the 5-minute window (30 buckets), which does not move that RSS figure. #112 stays open.
 
+### Table shape (#341)
+
+`lab/soak/shape/shape.json` holds counts only, taken from a public RIPE RIS dump (rrc00, 2026-10-21, three full-feed peers pooled): the prefix length histogram per family, AS path length, communities and large communities per route, origin, MED routes, and distinct attribute sets per route. It has no prefix and no AS number; `TestShapeFileHasNoPrefixOrASN` fails if one appears. `go run ./lab/soak/shape/build -source LABEL -date YYYY-MM-DD DUMP > lab/soak/shape/shape.json` rebuilds it from an MRT TABLE_DUMP_V2 file (plain or gzip).
+
+The generator follows it. Entries are documentation space only. The IPv6 lengths keep the dump's mix, moved longer by the same number of bits (19 at 1,250,000 prefixes, 21 for the 3 million and 5 million profiles) so every length class fits inside `2001:db8::/32`; no entry nests in another. The shape gives about 6 prefixes per attribute set, where the old table had 64. Wire figures for the 1,250,000-prefix table, measured by encoding every UPDATE:
+
+| | Before | After |
+|---|---|---|
+| UPDATE messages | 19,533 | 208,335 |
+| Prefixes per UPDATE | 64.0 | 6.0 |
+| Bytes on the wire | 11.4 MB | 30.3 MB |
+| Bytes per prefix | 9.2 | 24.3 |
+
+Budgets are unchanged; a miss is a finding, not a reason to raise one.
+
 A run prints the table with the measured values, adds it to the GitHub job summary, and uploads the JSON result as an artifact (`load-result`, `soak-result`).
 
-Measured on an 8-core development machine with the `pr` workload and a 4-minute soak: full table learned in 18 s (4.5 cores while learning), peak RSS 4530 MiB, RSS growth 0.3 MiB, 0.72 cores average, 14 threads, 1.8 % flow datagrams dropped, API p99 240 ms, reconverge 0.07 s, SIGTERM to exit 7.8 s, 3000 prefixes measured. Most of the memory is the learned table: about 1.7 KB of live heap per prefix (GoBGP's Adj-RIB-In plus the view), and the Go collector lets the heap grow to about twice that between collections.
+Measured before #341 (64 prefixes per attribute set) on an 8-core development machine with the `pr` workload and a 4-minute soak: full table learned in 18 s (4.5 cores while learning), peak RSS 4530 MiB, RSS growth 0.3 MiB, 0.72 cores average, 14 threads, 1.8 % flow datagrams dropped, API p99 240 ms, reconverge 0.07 s, SIGTERM to exit 7.8 s, 3000 prefixes measured. Most of the memory is the learned table: about 1.7 KB of live heap per prefix (GoBGP's Adj-RIB-In plus the view), and the Go collector lets the heap grow to about twice that between collections.
 
 On the nine `pr` runs on GitHub-hosted `ubuntu-latest` through 2026-10-01, end RSS stayed in a 4609-4818 MiB band and peak RSS stayed between 4869 and 5353 (all under 6144). Go returns unused pages with `MADV_DONTNEED`, so RSS falls after a collection and climbs back over the next minutes. The previous growth check compared medians of the first and last tenth after warmup, about 35 seconds each, which is shorter than that cycle. Actions run 36902639588 (the push of #96 to `main`) sat in a valley for that first tenth (baseline 4476 MiB) and on the refilled heap for the last (4818), and failed at 342 MiB.
 

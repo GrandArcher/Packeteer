@@ -195,7 +195,7 @@ func run(ctx context.Context, o runOpts) (Result, error) {
 	}
 	before, _ := readP()
 	t0 := time.Now()
-	log.Printf("session up; sending %d prefixes (/%d IPv6)", p.Prefixes, tbl.v6Bits)
+	log.Printf("session up; sending %d prefixes (%d per attribute set)", p.Prefixes, tbl.setLen)
 	if err := rt.load(ctx, 0, p.Prefixes); err != nil {
 		return r, err
 	}
