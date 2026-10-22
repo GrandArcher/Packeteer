@@ -126,6 +126,30 @@ Measured on an 8-core development machine with the controller built from source 
 
 `Decide` and announce/withdraw stay single-threaded to keep per-prefix order; this soak measures them and does not change that.
 
+## Real table replay (#342)
+
+An opt-in lab job replays one peer's full view from a public RIPE RIS or RouteViews dump, to test learn time, memory and RIB correctness against real attributes. It is the one place a real prefix is allowed, and only in memory:
+
+- **Opt-in.** `bash lab/realtable.sh IMAGE [MULTIPLY]` or the manual `realtable` workflow (`workflow_dispatch` only). Nothing else runs it: not a pull request, not a push, not a schedule. Never point it at a public edge.
+- **Isolated and observe only.** The harness is the same loopback BGP speaker as above (`127.0.0.1` and up), Packeteer runs in `observe` with no announcer, and every next hop is rewritten to the lab provider addresses (`192.0.2.1`, `192.0.2.2`, `2001:db8:ffff::1`, `2001:db8:ffff::2`). The profile refuses inject, flows, churn and probe targets. A route Packeteer sends back fails the run.
+- **Nothing kept.** The script downloads the dump (default: the latest rrc00 bview; `REALTABLE_URL` may name another file on `data.ris.ripe.net` or `archive.routeviews.org`) into a temporary directory and deletes it on exit. It is not committed or uploaded. The log, the job summary and the result JSON hold counts and timings only; a failed run's Packeteer log is printed with addresses masked.
+- **The table.** `lab/soak/real.go` reads a TABLE_DUMP_V2 file (plain, gzip, or bzip2 for RouteViews), counts routes per peer, and keeps the peer with the most. It keeps ORIGIN, AS_PATH, MED, ATOMIC_AGGREGATE, AGGREGATOR, communities, extended communities and large communities as the peer sent them, rebuilds the AS path and aggregator in four-octet form, and adds LOCAL_PREF 100 for the iBGP session. Routes are ordered by attribute set (IPv4 first), so an UPDATE carries a set the way a router that groups its table dump does.
+- **`MULTIPLY`** (`-multiply N` on `soak config` and `soak run`, 1 to 4) plays the table on N sessions, so Packeteer holds N paths per prefix. The per-million budgets of the profile apply to paths: prefixes times sessions.
+
+The `realtable` profile in [budgets.yaml](../lab/soak/budgets.yaml) uses the `pr` per-million learn time and RSS budgets, CPU, threads and API latency; nothing was raised. SIGTERM to exit is reported and not checked (see below).
+
+Measured on an 8-core development machine on 2026-10-22, with the controller built from source (not the container), soaks of 2 to 3 minutes, and the rrc00 bview of that day. The largest of its 109 peers has 1,082,951 IPv4 and 251,784 IPv6 routes (1,334,735) in 206,294 attribute sets, 6.5 prefixes per set:
+
+| | Learned | Learn CPU | Peak RSS | Peak per path | SIGTERM to exit |
+|---|---|---|---|---|---|
+| 1x (1 session) | 19.7 s | 4.3 cores | 3521 MiB | 2.7 KiB | 6.0 s |
+| 2x | 33.8 s | 4.2 cores | 6883 MiB | 2.6 KiB | 19.1 s |
+| 3x | 56.4 s | 4.3 cores | 9387 MiB | 2.4 KiB | 26.7 s |
+
+RSS growth was 0 MiB and CPU 0.04 cores once learned, as nothing churns. Against the shaped synthetic table (the `pr` profile, same machine and build, 1,250,000 prefixes, 3-minute soak with flows, churn and probes): learned in 22.7 s (4.9 cores), peak RSS 3500 MiB. Per prefix that is 14.8 s per million for the real table against 18.2, and 2.7 KiB of peak against 2.9 KiB; the `pr` peak also holds the flow window and probe state, so the two are not exact. The table before #341 (64 prefixes per attribute set, measured with an older build) learned in 18 s and peaked at 4530 MiB. A real peer's 6.5 prefixes per set sit close to the shaped table's 6, as the shape file was taken from the same kind of dump, and Packeteer holds the real table in about the memory the shaped one needs.
+
+SIGTERM to exit grows with the paths held: 6.0 s, 19.1 s, 26.7 s for 1, 2 and 3 sessions, against the 20 s budget of the single-session profiles. `lab/realtable.sh` gives `docker stop` 120 s so a slower runner is not killed at 30 s. This is a finding for a follow-up, not a budget change.
+
 ## Findings fixed with this test
 
 The first full-table run dropped 78.8 % of flow datagrams at 20,000 records a second, where a 20,000-prefix table dropped none. Each window bucket of the `flow` source holds at most 20,000 prefixes. Once full, every new prefix rescanned all of them for the smallest, and with a full table nearly every record is a new prefix. A full bucket now frees a sixteenth of its smallest prefixes in one pass (never one larger than the newcomer), and the anomaly counters prune idle keys at most once a minute while at their cap. Drops fell to 1.8 % and soak CPU from 1.2 to 0.72 cores. Which prefixes are kept is unchanged: the busiest stay, and a smaller prefix never displaces a larger one. Merging those buckets for probe targets and commit volume keeps a destination list only for the busiest 20,000 prefixes, plus a problem prefix outside that set. The percent floor still uses every byte in the window. `rss_growth_mb` is unchanged.
@@ -158,6 +182,7 @@ bash lab/soak.sh packeteer:local rate            # opt-in 100 pps, 20k prefixes;
 bash lab/soak.sh packeteer:local multi-smoke     # inject, 2 sessions x 20k, 4 minutes
 bash lab/soak.sh packeteer:local multi2          # inject, 2 sessions x 1M; about 8 GB of RAM
 bash lab/soak.sh packeteer:local multi4          # inject, 4 sessions x 1M; a large host
+bash lab/realtable.sh packeteer:local 3          # opt-in: a real RIS table on 3 sessions; downloads about 400 MB; not CI
 ```
 
 `routes3m` (#103) is the same observe workload as `pr` with a 3 million prefix table. Nothing selects it unless a human passes that name. It uses the `pr` per-million budgets (#217), 14.4 GiB of peak RSS at 3 million, so do not start it on a host with less than 18 GiB free. Those limits are a scale from the measured `pr` run, not a 3 million measurement.
@@ -173,4 +198,5 @@ The ports are on the host loopback (`11179` BGP, `12055` IPFIX, `18081` ops API)
 - The `load` job in `ci.yml` runs the `pr` profile (1,250,000 prefixes, the budgets above) on every pull request and push to `main`. It does not run `routes3m` or `rate`.
 - `load-large.yml` (#217) runs the `large` profile weekly (Wednesday 04:41 UTC) and on demand, on the runner named by the repository variable `LARGE_RUNNER` or the `runner` input. It needs at least 32 GB of RAM; GitHub-hosted `ubuntu-latest` has 16 GB. With neither set the job is skipped. It is not a pull request check.
 - The `load-multi` job in `ci.yml` runs `multi-smoke` on every pull request. `load-multi.yml` (#383) runs `multi2` weekly (Saturday 05:29 UTC) and on demand on `ubuntu-latest`, and `multi4` on the runner named by `LARGE_RUNNER` or the `runner` input; it is not a pull request check.
+- `realtable.yml` (#342) is `workflow_dispatch` only: a real RIS table at the chosen number of sessions. No pull request, push or schedule runs it.
 - `soak.yml` runs the `soak` profile weekly (Sunday 03:17 UTC) and on demand. A GitHub-hosted job stops at 6 hours, so the scheduled soak phase is 5h30m. For 24 hours, start it by hand with `duration: 24h` and `runner:` set to a self-hosted runner label. That workflow does not run `routes3m` or `rate` either.

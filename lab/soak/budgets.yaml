@@ -271,3 +271,26 @@ profiles:
     outage_targets: 8
     budgets:
       loop_gap_seconds: 90
+
+  # Opt-in (#342). Not the `load` job and not soak.yml: lab/realtable.sh and
+  # .github/workflows/realtable.yml, started by a human. The table is one
+  # peer's full view from a public RIPE RIS or RouteViews dump, read at run
+  # time and never stored in the repository, so `prefixes` comes from the
+  # dump. It is observe only, with no flows, churn or probe targets. The
+  # per-million figures are the `pr` numbers, applied to paths (prefixes
+  # times sessions, so -multiply 3 holds three paths per prefix); nothing was
+  # raised. Shutdown and reconverge are reported and not checked: SIGTERM to
+  # exit grew with the paths held (docs/performance.md), and nothing churns.
+  realtable:
+    real: true
+    duration: 10m
+    warmup: 3m
+    sample: 5s
+    budgets:
+      learn_seconds_per_mprefix: 72
+      rss_peak_mb_per_mprefix: 4915.2
+      rss_growth_mb_per_mprefix: 307.2
+      rss_slope_mb_per_mprefix: 153.6
+      cpu_avg_cores: 2.0
+      threads: 64
+      api_p99_ms: 1500

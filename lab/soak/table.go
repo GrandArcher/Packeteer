@@ -46,6 +46,8 @@ type table struct {
 
 	setLen int // consecutive prefixes that share one attribute set
 
+	real *realTable // a dump's view (#342); nil for the synthetic table
+
 	pathLen, comms, large, origin shape.Dist
 	medRoutes, routes             uint64
 }
@@ -66,6 +68,19 @@ func newTable(n int) table {
 		t.v6 = layoutV6(sh.IPv6.Length, n-v4Count)
 	}
 	return t
+}
+
+// newRealTable plays a dump's view. setLen is the average run, for logs.
+func newRealTable(r *realTable) table {
+	return table{n: len(r.entries), real: r, setLen: max(1, len(r.entries)/max(1, len(r.sets)))}
+}
+
+// v4n is how many entries are IPv4; the rest are IPv6.
+func (t table) v4n() int {
+	if t.real != nil {
+		return t.real.v4
+	}
+	return v4Count
 }
 
 func (t table) valid() bool { return t.n > 0 && (t.n <= v4Count || t.v6 != nil) }
@@ -199,6 +214,9 @@ const maxV6 = 1<<32 - patternLen
 
 // prefix returns entry i.
 func (t table) prefix(i int) netip.Prefix {
+	if t.real != nil {
+		return t.real.entries[i].prefix
+	}
 	if i < v4Count {
 		block := docV4[i/511]
 		j := i % 511               // 0: the /24, 1-2: /25s, 3-6: /26s, ...
@@ -227,7 +245,12 @@ func (t table) host(i int) netip.Addr {
 // group is the run of consecutive entries that share attributes, the way a
 // real table has runs of prefixes with one attribute set. The router packs
 // a group into one UPDATE.
-func (t table) group(i int) int { return i / t.setLen }
+func (t table) group(i int) int {
+	if t.real != nil {
+		return int(t.real.entries[i].set)
+	}
+	return i / t.setLen
+}
 
 // provider is the index (0 or 1) of the provider entry i is native on.
 func (t table) provider(i int) int { return t.group(i) & 1 }
@@ -269,6 +292,9 @@ func (t table) attrs(i int) attrSet {
 // index is the entry whose prefix is p, the inverse of prefix. ok is false
 // when p is not in the table.
 func (t table) index(p netip.Prefix) (i int, ok bool) {
+	if t.real != nil {
+		return 0, false
+	}
 	if p.Addr().Is4() {
 		for b, block := range docV4 {
 			if !block.Contains(p.Addr()) || p.Bits() < 24 {
