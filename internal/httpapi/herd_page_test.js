@@ -46,7 +46,7 @@ function rowsOf(root) {
 
 var context = {
   document: { createElement: function (t) { return new Node(t); } },
-  fmtTime: function (s) { return s ? "T(" + s + ")" : "—"; },
+  fmtTime: function (s) { return s ? "T(" + s + ")" : "-"; },
   shellAdmin: true,
   charts: [],
   seriesClass: function (i) { return "series-" + i; },
@@ -96,7 +96,7 @@ assert(find(sharing, "a").some(function (a) { return a.href === "/api/herd/previ
 var rows = rowsOf(members);
 assert(rows.length === 4 && rows[0][0] === "this node" && rows[0][3] === "no", "member rows: " + JSON.stringify(rows));
 assert(rows.every(function (r) { return r[3] === "no"; }), "no member is shown verified");
-assert(rows[2][10].indexOf("stale: timeout") === 0 && rows[3][8] === "—" && rows[3][9] === "never", "stale and never-pulled peers: " + JSON.stringify(rows));
+assert(rows[2][10].indexOf("stale: timeout") === 0 && rows[3][8] === "-" && rows[3][9] === "never", "stale and never-pulled peers: " + JSON.stringify(rows));
 assert(members.textContent.indexOf("RPKI identity proof is not implemented") >= 0, "the verified column is explained");
 context.shellAdmin = false;
 sharing = box();
@@ -126,7 +126,7 @@ var mesh = box();
 context.renderHerdMesh(mesh, load("mesh"));
 assert(texts(mesh, "th").join("|") === "Vantage|AS64510|AS64511|198.51.100.0/24", "mesh columns: " + texts(mesh, "th"));
 rows = rowsOf(mesh);
-assert(rows.length === 3 && rows[0][1] === "40.0 %, 90.0 ms" && rows[0][3] === "—", "mesh cells: " + JSON.stringify(rows));
+assert(rows.length === 3 && rows[0][1] === "40.0 %, 90.0 ms" && rows[0][3] === "\u2014", "mesh cells: " + JSON.stringify(rows));
 assert(rows[1][3] === "50.0 %, 70.0 ms", "a second vantage keeps its own cell: " + JSON.stringify(rows[1]));
 
 // Map: condition is words, not only color; a silent country is muted.

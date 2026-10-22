@@ -17,15 +17,15 @@ var HERD_CHART_SERIES = 6;
 var herdTarget = null;
 
 function herdAge(sec) {
-  if (typeof sec !== "number") return "—";
+  if (typeof sec !== "number") return "-";
   if (sec < 90) return Math.round(sec) + " s";
   if (sec < 5400) return Math.round(sec / 60) + " min";
   if (sec < 129600) return Math.round(sec / 3600) + " h";
   return Math.round(sec / 86400) + " d";
 }
 
-function herdPct(v) { return typeof v === "number" ? v.toFixed(1) + " %" : "—"; }
-function herdMs(v) { return typeof v === "number" ? v.toFixed(1) + " ms" : "—"; }
+function herdPct(v) { return typeof v === "number" ? v.toFixed(1) + " %" : "-"; }
+function herdMs(v) { return typeof v === "number" ? v.toFixed(1) + " ms" : "-"; }
 function herdAS(n) { return n ? "AS" + n : "unknown"; }
 
 function herdTargetLabel(t) { return t.kind === "origin_asn" ? "AS" + t.value : t.value; }
