@@ -204,8 +204,8 @@ func TestParseProc(t *testing.T) {
 	if m.ProbePrefixCommits != 0 || m.FlowPrefixesTracked != 0 {
 		t.Fatalf("missing optional gauges must stay zero: %+v", m)
 	}
-	m, err = parseMetrics(strings.NewReader("packeteer_ready 1\npacketeer_rib_prefixes 10\npacketeer_probe_prefix_commits 12\npacketeer_flow_prefixes_tracked 50000\n"))
-	if err != nil || m.ProbePrefixCommits != 12 || m.FlowPrefixesTracked != 50000 {
+	m, err = parseMetrics(strings.NewReader("packeteer_ready 1\npacketeer_rib_prefixes 10\npacketeer_probe_prefix_commits 12\npacketeer_flow_prefixes_tracked 50000\npacketeer_go_mutex_wait_seconds_total 3.5\n"))
+	if err != nil || m.ProbePrefixCommits != 12 || m.FlowPrefixesTracked != 50000 || m.MutexWaitSeconds != 3.5 {
 		t.Fatalf("%+v %v", m, err)
 	}
 	if _, err := parseMetrics(strings.NewReader("packeteer_ready 1\n")); err == nil {

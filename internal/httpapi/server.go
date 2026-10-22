@@ -362,6 +362,7 @@ func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	_, _ = w.Write(Metrics(s.snapshot()))
+	_, _ = w.Write(RuntimeMetrics())
 	if s.mitigation != nil {
 		_, _ = w.Write(MitigationMetrics(s.mitigation.Status()))
 	}

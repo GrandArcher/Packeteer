@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"runtime/metrics"
 	"slices"
 	"sort"
 	"strconv"
@@ -227,6 +228,25 @@ func Metrics(s Snapshot) []byte {
 	writeGauge(&b, "packeteer_exchange_lan_targets_dropped", "Probe targets omitted because the prefix or the pinned host is inside an exchange peering LAN. Cumulative omissions per collection, not per packet.",
 		sample{value: float64(s.ExchangeLANDrops)})
 
+	return []byte(b.String())
+}
+
+// mutexWaitMetric is the Go runtime's approximate total time goroutines
+// spent blocked on a sync.Mutex, a sync.RWMutex, or a runtime lock.
+const mutexWaitMetric = "/sync/mutex/wait/total:seconds"
+
+// RuntimeMetrics renders lock wait from the Go runtime (#383). The load
+// test reads its rate while BGP sessions, the RIB view, Decide, and the
+// API share locks.
+func RuntimeMetrics() []byte {
+	rs := []metrics.Sample{{Name: mutexWaitMetric}}
+	metrics.Read(rs)
+	if rs[0].Value.Kind() != metrics.KindFloat64 {
+		return nil
+	}
+	var b strings.Builder
+	writeCounter(&b, "packeteer_go_mutex_wait_seconds_total", "Approximate time goroutines spent blocked on a mutex since start (Go runtime "+mutexWaitMetric+"). Can grow faster than wall time when many goroutines wait at once.",
+		sample{value: rs[0].Value.Float64()})
 	return []byte(b.String())
 }
 

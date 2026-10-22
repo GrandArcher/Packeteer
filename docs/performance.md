@@ -1,6 +1,6 @@
 # Load and soak testing
 
-Packeteer's resource budgets, how CI measures them, and how to run the same test yourself. Lab only: the router, the table, and the flows are synthetic, built from documentation prefixes (RFC 5737, RFC 3849) and documentation ASNs. Nothing here touches a real network, and Packeteer runs in `observe`.
+Packeteer's resource budgets, how CI measures them, and how to run the same test yourself. Lab only: the router, the table, and the flows are synthetic, built from documentation prefixes (RFC 5737, RFC 3849) and documentation ASNs. Nothing here touches a real network. Packeteer runs in `observe`, except on the multi-session profiles below, which inject inside an allowlist of the documentation blocks toward the harness's own routers.
 
 ## What runs
 
@@ -97,6 +97,35 @@ Passive measurement keeps bounded tables. Each cap, its default at 5M paths, and
 
 `packeteer_truncated_total{limit}` counts cap events since start, not distinct prefixes: `max_prefixes` is cells a full flow or span window bucket refused (flow also counts the cells it evicts for a larger prefix; counter keys are not counted); `max_flows` is span connections not tracked; `workers` is flow datagrams dropped because the worker queue was full (#385). A reload that replaces a source restarts its count. A value that stays at 0 means the cap is not binding.
 
+## Multi-session inject soak (#383)
+
+The `multi-smoke`, `multi2` and `multi4` profiles run the same harness with several edge routers and Packeteer in `inject`. Lab only: documentation prefixes and ASNs, the stock image, a mounted config, no packets leave the host.
+
+- **Sessions.** The harness plays 2 to 4 routers (`sessions`) on `127.0.0.1`, `127.0.0.3`, `127.0.0.4` and `127.0.0.5`, port 11179. Each sends the whole table, so Packeteer holds one path per session for every prefix. Churn withdraws and announces on every session.
+- **Inject.** `mode: inject`, `max_improvements` from the profile's `inject` (1000), `hold_time: 1m`, `local_pref: 250`, the `gobgp` announcer, and an allowlist of the four documentation blocks the table uses. 128 IPv4 entries are added as static targets.
+- **Sources.** `vip` with the first documentation ASN and `max_targets` from `vip_targets`, and `outage`; the fixed prober drops every packet on transit-a for the first `outage_targets` static targets, so the outage source has an incident to find.
+- **Flaps.** Every `flap_every` one session, taking turns and never the slow one, is closed with a Cease. When Packeteer reconnects the router sends its whole table again.
+- **Slow peer.** The last session reads Packeteer's messages at `slow_peer_bps` (2048 bytes a second) through a 4 KiB receive buffer.
+- **Withdraw check.** Every 10 s one IPv4 prefix that every fast session has held from Packeteer for at least 15 s (past the 5 s in which a withdraw is read as the router hiding its own path) is withdrawn on every session. The time to Packeteer's withdraw on each session is the update latency through the RIB view, `Decide` and the announcer. The prefix is then announced again. Churn walks only IPv6, so it never touches these.
+
+Each router checks every route Packeteer sends it. A run fails when a route is not a table prefix or lacks `packeteer_community` and NO_EXPORT, a session holds more than `max_improvements`, a fast session still holds a route a minute after its prefix left every session, the fast sessions do not hold the same routes after the soak, a session ends without a flap, the outage source raised no incident, a fast session still holds routes when it closes after SIGTERM, or the decide or probe loop gap is over `loop_gap_seconds` (90 s, three probe intervals). The decide loop gap is the longest age of `decided_at` (`GET /api/decisions`) at a sample; the probe loop gap is the longest time `packeteer_probe_prefix_commits` did not rise. Lock wait is the rise of `packeteer_go_mutex_wait_seconds_total` (the Go runtime's `/sync/mutex/wait/total:seconds`) per second, on average and between the two samples where it rose fastest. Lock wait, withdraw latency, and memory are reported on every multi-session run without a budget until a run on the target runner has measured them; the loop gaps and lock wait are also reported on the observe profiles.
+
+| Profile | Table | Sessions | Soak | Where |
+|---|---|---|---|---|
+| `multi-smoke` | 20,000 | 2 | 4 min | `load-multi` job in `ci.yml`, every pull request |
+| `multi2` | 1,000,000 | 2 | 30 min | `load-multi.yml`, weekly, `ubuntu-latest` |
+| `multi4` | 1,000,000 | 4 | 30 min | `load-multi.yml`, weekly, only on the `LARGE_RUNNER` runner |
+
+`multi2` and `multi4` flap every 5 minutes; `multi-smoke` every 75 s.
+
+Measured on an 8-core development machine with the controller built from source (not the container), not on a hosted runner:
+
+- `multi-smoke`, 4 minutes: 3 flaps, each session back in 6.4 to 6.8 s; 19 withdraw checks, fast sessions p50 9.6 ms and max 45.7 ms, slow session max 7.2 s; peak RSS 327 MiB; 0.25 cores; lock wait 0.03 s/s; decide loop gap 0.12 s, probe loop gap 4 s; one outage incident. On SIGTERM the fast sessions held no Packeteer route when they closed and the slow session still held 224: Packeteer withdraws before it closes the sessions, and the slow reader had not read the withdraws yet. Without graceful restart those routes leave with the session.
+- `multi2`: the whole table learned in 54.6 s (4.5 cores); RSS 6.6 to 7.4 GiB over the first 8 minutes of the soak; one flap back in 17.5 s. The run was cut by a pause of the host after that, so it has no end-of-run figures.
+- 2 sessions of 300,000 prefixes for 2 minutes, with and without the `vip` and `outage` sources: soak CPU 2.3 against 0.79 cores, lock wait 0.37 against 0.20 s/s. With them, probe rounds end every few seconds instead of every 30 s, and each source copies the learned table again whenever the view changed since its last read (`outageSnap` and `learnedSnap` in `cmd/controller/sources.go`); churn changes the view every second. This is a finding for a follow-up, not a budget.
+
+`Decide` and announce/withdraw stay single-threaded to keep per-prefix order; this soak measures them and does not change that.
+
 ## Findings fixed with this test
 
 The first full-table run dropped 78.8 % of flow datagrams at 20,000 records a second, where a 20,000-prefix table dropped none. Each window bucket of the `flow` source holds at most 20,000 prefixes. Once full, every new prefix rescanned all of them for the smallest, and with a full table nearly every record is a new prefix. A full bucket now frees a sixteenth of its smallest prefixes in one pass (never one larger than the newcomer), and the anomaly counters prune idle keys at most once a minute while at their cap. Drops fell to 1.8 % and soak CPU from 1.2 to 0.72 cores. Which prefixes are kept is unchanged: the busiest stay, and a smaller prefix never displaces a larger one. Merging those buckets for probe targets and commit volume keeps a destination list only for the busiest 20,000 prefixes, plus a problem prefix outside that set. The percent floor still uses every byte in the window. `rss_growth_mb` is unchanged.
@@ -126,6 +155,9 @@ bash lab/soak.sh packeteer:local soak 24h        # a 24-hour soak
 bash lab/soak.sh packeteer:local routes3m        # opt-in 3,000,000 prefixes; not CI
 bash lab/soak.sh packeteer:local large           # about 5,000,000 paths; needs 32 GB of RAM; not CI
 bash lab/soak.sh packeteer:local rate            # opt-in 100 pps, 20k prefixes; not CI
+bash lab/soak.sh packeteer:local multi-smoke     # inject, 2 sessions x 20k, 4 minutes
+bash lab/soak.sh packeteer:local multi2          # inject, 2 sessions x 1M; about 8 GB of RAM
+bash lab/soak.sh packeteer:local multi4          # inject, 4 sessions x 1M; a large host
 ```
 
 `routes3m` (#103) is the same observe workload as `pr` with a 3 million prefix table. Nothing selects it unless a human passes that name. It uses the `pr` per-million budgets (#217), 14.4 GiB of peak RSS at 3 million, so do not start it on a host with less than 18 GiB free. Those limits are a scale from the measured `pr` run, not a 3 million measurement.
@@ -140,4 +172,5 @@ The ports are on the host loopback (`11179` BGP, `12055` IPFIX, `18081` ops API)
 
 - The `load` job in `ci.yml` runs the `pr` profile (1,250,000 prefixes, the budgets above) on every pull request and push to `main`. It does not run `routes3m` or `rate`.
 - `load-large.yml` (#217) runs the `large` profile weekly (Wednesday 04:41 UTC) and on demand, on the runner named by the repository variable `LARGE_RUNNER` or the `runner` input. It needs at least 32 GB of RAM; GitHub-hosted `ubuntu-latest` has 16 GB. With neither set the job is skipped. It is not a pull request check.
+- The `load-multi` job in `ci.yml` runs `multi-smoke` on every pull request. `load-multi.yml` (#383) runs `multi2` weekly (Saturday 05:29 UTC) and on demand on `ubuntu-latest`, and `multi4` on the runner named by `LARGE_RUNNER` or the `runner` input; it is not a pull request check.
 - `soak.yml` runs the `soak` profile weekly (Sunday 03:17 UTC) and on demand. A GitHub-hosted job stops at 6 hours, so the scheduled soak phase is 5h30m. For 24 hours, start it by hand with `duration: 24h` and `runner:` set to a self-hosted runner label. That workflow does not run `routes3m` or `rate` either.

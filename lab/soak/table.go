@@ -265,3 +265,63 @@ func (t table) attrs(i int) attrSet {
 	}
 	return a
 }
+
+// index is the entry whose prefix is p, the inverse of prefix. ok is false
+// when p is not in the table.
+func (t table) index(p netip.Prefix) (i int, ok bool) {
+	if p.Addr().Is4() {
+		for b, block := range docV4 {
+			if !block.Contains(p.Addr()) || p.Bits() < 24 {
+				continue
+			}
+			l := p.Bits() - 23
+			k := int(p.Addr().As4()[3]) >> (32 - p.Bits())
+			i = b*511 + 1<<(l-1) - 1 + k
+			return i, i < t.n && t.prefix(i) == p
+		}
+		return 0, false
+	}
+	if t.v6 == nil || !docV6.Contains(p.Addr()) {
+		return 0, false
+	}
+	j, ok := t.v6.index(p)
+	if !ok || v4Count+j >= t.n {
+		return 0, false
+	}
+	return v4Count + j, true
+}
+
+// index is the IPv6 entry (counted from the first IPv6 entry) whose prefix
+// is p.
+func (l *v6Layout) index(p netip.Prefix) (int, bool) {
+	a := p.Addr().As16()
+	off := binary.BigEndian.Uint64(a[:8]) & (1<<32 - 1)
+	for c, cl := range l.classes {
+		if cl.bits != p.Bits() || off < cl.base {
+			continue
+		}
+		k := (off - cl.base) >> (64 - cl.bits)
+		cycle, rank := k/uint64(cl.perCycle), k%uint64(cl.perCycle)
+		pos, ok := l.slot(uint8(c), uint16(rank))
+		if !ok {
+			return 0, false
+		}
+		j := cycle*patternLen + uint64(pos)
+		if j > uint64(maxV6) || l.prefix(int(j)) != p {
+			return 0, false
+		}
+		return int(j), true
+	}
+	return 0, false
+}
+
+// slot is the pattern position of the rank-th entry of class c. A scan
+// of the 4096 positions is cheap at the rate Packeteer sends routes.
+func (l *v6Layout) slot(c uint8, rank uint16) (int, bool) {
+	for pos := range patternLen {
+		if l.pattern[pos] == c && l.rank[pos] == rank {
+			return pos, true
+		}
+	}
+	return 0, false
+}

@@ -37,9 +37,32 @@ type Profile struct {
 	// Zero uses the load-test default of 100000, which lets the fixed
 	// prober finish the pr profile's targets. The opt-in rate profile
 	// sets the operator default of 100 (#125).
-	RateLimitPPS int     `yaml:"rate_limit_pps"`
-	Budgets      Budgets `yaml:"budgets"`
+	RateLimitPPS int `yaml:"rate_limit_pps"`
+	// Sessions is how many edge routers the harness plays (#383), each
+	// sending the whole table. Zero is one.
+	Sessions int `yaml:"sessions"`
+	// Inject runs Packeteer in inject mode with this max_improvements.
+	// Zero runs observe.
+	Inject int `yaml:"inject"`
+	// FlapEvery closes one session this often, taking turns and never the
+	// slow one; the router sends the whole table again when Packeteer
+	// comes back. Zero does not flap.
+	FlapEvery time.Duration `yaml:"flap_every"`
+	// SlowPeerBPS makes the last session read Packeteer's messages at
+	// this many bytes a second. Zero has no slow peer.
+	SlowPeerBPS int `yaml:"slow_peer_bps"`
+	// VIPTargets is the vip source's max_targets: prefixes whose AS path
+	// holds a documentation ASN. Zero has no vip source.
+	VIPTargets int `yaml:"vip_targets"`
+	// OutageTargets is how many static targets lose every packet on
+	// transit-a, so the outage source has an incident to find. Zero has
+	// no outage source.
+	OutageTargets int     `yaml:"outage_targets"`
+	Budgets       Budgets `yaml:"budgets"`
 }
+
+// sessions is the number of routers, at least one.
+func (p Profile) sessions() int { return max(1, p.Sessions) }
 
 // Budgets are the limits. Zero leaves a figure reported but unchecked.
 //
@@ -67,6 +90,9 @@ type Budgets struct {
 	MinMeasured       int     `yaml:"min_measured"`
 	MinActivePerHour  int     `yaml:"min_active_per_hour"`
 	MinPassiveTracked int     `yaml:"min_passive_tracked"`
+	// LoopGapSecs bounds the longest the decide loop went without an
+	// evaluation and the probe loop without storing a prefix (#383).
+	LoopGapSecs float64 `yaml:"loop_gap_seconds"`
 }
 
 // scaled fills the flat limits from the per-million ones for a table of n
@@ -128,6 +154,26 @@ func (p Profile) validate() error {
 	if p.Churn/60 > p.Prefixes/2 {
 		errs = append(errs, errors.New("churn too large for the table"))
 	}
+	if p.Sessions < 0 || p.Sessions > maxSessions {
+		errs = append(errs, fmt.Errorf("sessions %d: want 1 to %d", p.Sessions, maxSessions))
+	}
+	// One session flapping, or only a slow one, would take the whole view
+	// down or leave no fast session to compare with.
+	if (p.FlapEvery != 0 || p.SlowPeerBPS != 0) && p.Sessions < 2 {
+		errs = append(errs, errors.New("flap_every and slow_peer_bps need at least 2 sessions"))
+	}
+	if p.FlapEvery < 0 || p.SlowPeerBPS < 0 || p.Inject < 0 || p.VIPTargets < 0 || p.OutageTargets < 0 || p.Budgets.LoopGapSecs < 0 {
+		errs = append(errs, errors.New("flap_every, slow_peer_bps, inject, vip_targets, outage_targets and loop_gap_seconds must not be negative"))
+	}
+	if p.SlowPeerBPS > 0 && p.SlowPeerBPS < 512 {
+		errs = append(errs, errors.New("slow_peer_bps below 512 cannot read a full UPDATE inside the hold time"))
+	}
+	if p.Inject > 10000 || p.VIPTargets > 100000 {
+		errs = append(errs, errors.New("inject is at most 10000 (max_improvements) and vip_targets at most 100000"))
+	}
+	if p.OutageTargets > p.StaticTargets || (p.OutageTargets > 0 && p.OutageTargets < 3) {
+		errs = append(errs, errors.New("outage_targets must be 3 (the outage source's min_prefixes) to static_targets"))
+	}
 	return errors.Join(errs...)
 }
 
@@ -139,24 +185,48 @@ type Result struct {
 	FlowRecords     uint64  `json:"flow_records"`
 	ChurnUpdates    uint64  `json:"churn_updates"`
 
-	LearnSeconds    float64  `json:"learn_seconds"`
-	LearnCPUCores   float64  `json:"learn_cpu_cores"`
-	RSSPeakMB       float64  `json:"rss_peak_mb"`
-	RSSBaselineMB   float64  `json:"rss_baseline_mb"`
-	RSSEndMB        float64  `json:"rss_end_mb"`
-	RSSGrowthMB     float64  `json:"rss_growth_mb"`
-	RSSSlopeMB      float64  `json:"rss_slope_mb"`
-	CPUAvgCores     float64  `json:"cpu_avg_cores"`
-	Threads         int      `json:"threads"`
-	UDPDropPct      float64  `json:"udp_drop_pct"`
-	APIP99Ms        float64  `json:"api_p99_ms"`
-	ReconvergeSecs  float64  `json:"reconverge_seconds"`
-	ShutdownSeconds float64  `json:"shutdown_seconds"`
-	Measured        int      `json:"measured"`
-	ActivePerHour   float64  `json:"active_per_hour"`
-	PassiveTracked  int      `json:"passive_tracked"`
-	PacketeerRoutes int      `json:"packeteer_routes"`
-	Failures        []string `json:"failures"`
+	LearnSeconds    float64 `json:"learn_seconds"`
+	LearnCPUCores   float64 `json:"learn_cpu_cores"`
+	RSSPeakMB       float64 `json:"rss_peak_mb"`
+	RSSBaselineMB   float64 `json:"rss_baseline_mb"`
+	RSSEndMB        float64 `json:"rss_end_mb"`
+	RSSGrowthMB     float64 `json:"rss_growth_mb"`
+	RSSSlopeMB      float64 `json:"rss_slope_mb"`
+	CPUAvgCores     float64 `json:"cpu_avg_cores"`
+	Threads         int     `json:"threads"`
+	UDPDropPct      float64 `json:"udp_drop_pct"`
+	APIP99Ms        float64 `json:"api_p99_ms"`
+	ReconvergeSecs  float64 `json:"reconverge_seconds"`
+	ShutdownSeconds float64 `json:"shutdown_seconds"`
+	Measured        int     `json:"measured"`
+	ActivePerHour   float64 `json:"active_per_hour"`
+	PassiveTracked  int     `json:"passive_tracked"`
+	PacketeerRoutes int     `json:"packeteer_routes"`
+
+	// Multi-session and inject figures (#383).
+	Mode              string  `json:"mode"`
+	Sessions          int     `json:"sessions"`
+	DecideMaxGapSecs  float64 `json:"decide_max_gap_seconds"`
+	ProbeMaxGapSecs   float64 `json:"probe_max_gap_seconds"`
+	LockWaitPerSec    float64 `json:"lock_wait_per_second"`
+	LockWaitMaxPerSec float64 `json:"lock_wait_max_per_second"`
+	Flaps             int     `json:"flaps"`
+	ReconnectMaxSecs  float64 `json:"reconnect_max_seconds"`
+	SessionDrops      int     `json:"session_drops"`
+	MaxSilenceMs      float64 `json:"max_silence_ms"`
+	WithdrawChecks    int     `json:"withdraw_checks"`
+	WithdrawP50Ms     float64 `json:"withdraw_p50_ms"`
+	WithdrawP99Ms     float64 `json:"withdraw_p99_ms"`
+	WithdrawMaxMs     float64 `json:"withdraw_max_ms"`
+	SlowWithdrawMaxMs float64 `json:"slow_withdraw_max_ms"`
+	SlowWithdrawLate  int     `json:"slow_withdraw_late"`
+	InjectedPeak      int     `json:"injected_peak"`
+	InjectedEnd       int     `json:"injected_end"`
+	RoutesAtClose     int     `json:"routes_at_close"`
+	SlowAtClose       int     `json:"slow_routes_at_close"`
+	OutageEvents      int     `json:"outage_events"`
+
+	Failures []string `json:"failures"`
 }
 
 // Check is one budget line.
@@ -180,9 +250,10 @@ func (c Check) Pass() bool {
 	return c.Value <= c.Limit
 }
 
-// checks pairs every measured figure with its budget.
+// checks pairs every measured figure with its budget. The inject and
+// multi-session rows appear only on runs that have them.
 func checks(r Result, b Budgets) []Check {
-	return []Check{
+	cs := []Check{
 		{Name: "full table learned", Value: r.LearnSeconds, Limit: b.LearnSeconds, Unit: "s"},
 		{Name: "peak RSS", Value: r.RSSPeakMB, Limit: b.RSSPeakMB, Unit: "MiB"},
 		{Name: "RSS growth after warmup", Value: r.RSSGrowthMB, Limit: b.RSSGrowthMB, Unit: "MiB"},
@@ -196,7 +267,24 @@ func checks(r Result, b Budgets) []Check {
 		{Name: "prefixes measured", Value: float64(r.Measured), Limit: float64(b.MinMeasured), Min: true},
 		{Name: "active prefixes measured per hour", Value: r.ActivePerHour, Limit: float64(b.MinActivePerHour), Min: true},
 		{Name: "passive prefixes tracked", Value: float64(r.PassiveTracked), Limit: float64(b.MinPassiveTracked), Min: true},
+		{Name: "decide loop, longest gap", Value: r.DecideMaxGapSecs, Limit: b.LoopGapSecs, Unit: "s"},
+		{Name: "probe loop, longest gap", Value: r.ProbeMaxGapSecs, Limit: b.LoopGapSecs, Unit: "s"},
+		{Name: "lock wait, average", Value: r.LockWaitPerSec, Unit: "s/s"},
+		{Name: "lock wait, worst sample", Value: r.LockWaitMaxPerSec, Unit: "s/s"},
 	}
+	if r.Sessions > 1 {
+		cs = append(cs,
+			Check{Name: "longest silence on a fast session", Value: r.MaxSilenceMs, Unit: "ms"},
+			Check{Name: "flap to session back, longest", Value: r.ReconnectMaxSecs, Unit: "s"})
+	}
+	if r.Mode == "inject" {
+		cs = append(cs,
+			Check{Name: "withdraw latency p50, fast sessions", Value: r.WithdrawP50Ms, Unit: "ms"},
+			Check{Name: "withdraw latency p99, fast sessions", Value: r.WithdrawP99Ms, Unit: "ms"},
+			Check{Name: "withdraw latency max, fast sessions", Value: r.WithdrawMaxMs, Unit: "ms"},
+			Check{Name: "withdraw latency max, slow session", Value: r.SlowWithdrawMaxMs, Unit: "ms"})
+	}
+	return cs
 }
 
 // report renders the result as a Markdown table and says whether every
@@ -205,8 +293,8 @@ func report(r Result, b Budgets) (string, bool) {
 	ok := len(r.Failures) == 0
 	var s strings.Builder
 	fmt.Fprintf(&s, "### Load and soak: profile `%s`\n\n", r.Profile)
-	fmt.Fprintf(&s, "%d prefixes, %s soak, %d flow records, %d churn updates. Observe mode, stock image, mounted config.\n\n",
-		r.Prefixes, time.Duration(r.DurationSeconds*float64(time.Second)).Round(time.Second), r.FlowRecords, r.ChurnUpdates)
+	fmt.Fprintf(&s, "%d prefixes on %d session(s), %s soak, %d flow records, %d churn updates. %s mode, stock image, mounted config.\n\n",
+		r.Prefixes, max(1, r.Sessions), time.Duration(r.DurationSeconds*float64(time.Second)).Round(time.Second), r.FlowRecords, r.ChurnUpdates, modeName(r.Mode))
 	s.WriteString("| Check | Measured | Budget | |\n|---|---|---|---|\n")
 	for _, c := range checks(r, b) {
 		limit, mark := "-", "report"
@@ -224,8 +312,15 @@ func report(r Result, b Budgets) (string, bool) {
 		}
 		fmt.Fprintf(&s, "| %s | %s%s | %s | %s |\n", c.Name, num(c.Value), unit(c.Unit), limit, mark)
 	}
-	fmt.Fprintf(&s, "\nLearn-phase CPU %s cores; RSS baseline %s MiB, end %s MiB; routes Packeteer sent the router: %d.\n",
+	fmt.Fprintf(&s, "\nLearn-phase CPU %s cores; RSS baseline %s MiB, end %s MiB; routes Packeteer sent the routers: %d.\n",
 		num(r.LearnCPUCores), num(r.RSSBaselineMB), num(r.RSSEndMB), r.PacketeerRoutes)
+	if r.Sessions > 1 {
+		fmt.Fprintf(&s, "Flaps %d; sessions dropped without a flap %d.\n", r.Flaps, r.SessionDrops)
+	}
+	if r.Mode == "inject" {
+		fmt.Fprintf(&s, "Withdraw checks %d (slow session late %d); most routes on one session %d, %d at the end; still held when the sessions closed on SIGTERM: %d on fast sessions, %d on the slow one; outage incidents %d.\n",
+			r.WithdrawChecks, r.SlowWithdrawLate, r.InjectedPeak, r.InjectedEnd, r.RoutesAtClose, r.SlowAtClose, r.OutageEvents)
+	}
 	for _, f := range r.Failures {
 		fmt.Fprintf(&s, "\n- **FAIL**: %s", f)
 	}
@@ -233,6 +328,13 @@ func report(r Result, b Budgets) (string, bool) {
 		s.WriteString("\n")
 	}
 	return s.String(), ok
+}
+
+func modeName(m string) string {
+	if m == "inject" {
+		return "Inject"
+	}
+	return "Observe"
 }
 
 func unit(u string) string {
