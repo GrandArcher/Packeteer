@@ -480,15 +480,29 @@ func TestRPKISourcesBuiltOnlyWhenEnabled(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(set.RPKISources) != 1 || set.RPKISources[0].Type != "rtr" {
-		t.Fatalf("rpki sources %+v", set.RPKISources)
+	if len(set.RPKISources) != 1 || set.RPKISources[0].Type != "rtr" || set.RPKIDisplay != nil {
+		t.Fatalf("rpki sources %+v display %+v", set.RPKISources, set.RPKIDisplay)
+	}
+	set, err = Build(load(t, "rpki:\n  enabled: true\n  sources:\n    - type: json\n      config: {url: \"http://192.0.2.20:8323/json\"}\n  display_fallback: {type: ripestat}\n"), Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(set.RPKISources) != 1 || set.RPKISources[0].Type != "json" || set.RPKIDisplay == nil || set.RPKIDisplay.Type != "ripestat" {
+		t.Fatalf("rpki sources %+v display %+v", set.RPKISources, set.RPKIDisplay)
+	}
+	found := false
+	for _, lc := range set.all() {
+		found = found || lc.lc == set.RPKIDisplay.Plugin
+	}
+	if !found {
+		t.Fatal("the display fallback is not started and stopped with the set")
 	}
 	set, err = Build(load(t, "rpki:\n  enabled: false\n"), Options{})
 	if err != nil || len(set.RPKISources) != 0 {
 		t.Fatalf("a disabled rpki built sources: %v %+v", err, set)
 	}
 	_, err = Build(load(t, "rpki:\n  enabled: true\n  sources: [{type: nope}]\n"), Options{})
-	if err == nil || !strings.Contains(err.Error(), `rpki.sources[0] (nope): unknown rpki type "nope" (available: rtr)`) {
+	if err == nil || !strings.Contains(err.Error(), `rpki.sources[0] (nope): unknown rpki type "nope" (available: json, ripestat, rtr)`) {
 		t.Fatalf("err %v", err)
 	}
 }

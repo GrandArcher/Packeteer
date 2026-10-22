@@ -85,6 +85,15 @@ function rollupEntry(d) {
   return {time: new Date(d.day + "T00:00:00Z"), when: d.day + " (UTC day)", kind: "probe rollup", text: text};
 }
 
+// rpkiEntry is one learned path's origin-validation state over a span
+// (#200).
+function rpkiEntry(r) {
+  var text = r.provider + " path from AS" + r.origin_asn + ": " + r.state;
+  text += r.source ? " (source " + r.source + ")" : " (no source had fresh data)";
+  text += ", last seen " + fmtTime(r.last);
+  return {time: new Date(r.first), when: fmtTime(r.first), kind: "rpki", text: text};
+}
+
 function renderTimeline(data) {
   var root = document.getElementById("prefix-timeline");
   clear(root);
@@ -95,6 +104,7 @@ function renderTimeline(data) {
   var entries = [];
   (data.days || []).forEach(function (d) { entries.push(rollupEntry(d)); });
   (data.improvements || []).forEach(function (im) { entries = entries.concat(improvementEntries(im)); });
+  (data.rpki || []).forEach(function (r) { entries.push(rpkiEntry(r)); });
   if (!entries.length) {
     root.appendChild(el("p", "empty", "No stored history for this prefix in this range."));
     return;

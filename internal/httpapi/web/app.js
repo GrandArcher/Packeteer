@@ -395,7 +395,7 @@ function prefixCard(row) {
       tr.appendChild(el("td", "mono", path.next_hop || "—"));
       tr.appendChild(el("td", "mono", fmtAS(path.as_path)));
       tr.appendChild(el("td", "", fmtVia(path.via)));
-      tr.appendChild(el("td", path.rpki === "invalid" ? "badge warn" : "", path.rpki || "-"));
+      tr.appendChild(rpkiCell(path.rpki, path.rpki_source, path.rpki_updated));
       tr.appendChild(el("td", "num", path.med === undefined || path.med === null ? "—" : String(path.med)));
       tr.appendChild(el("td", "", path.med_from || "—"));
       pb.appendChild(tr);
@@ -423,6 +423,19 @@ function prefixCell(prefix) {
 function fmtAS(path) {
   if (!path || !path.length) return "—";
   return path.join(" ");
+}
+
+// rpkiCell is a validity with the source that answered and the age of its
+// data (#200), so a stale cache or the display fallback is visible.
+function rpkiCell(state, source, updated) {
+  var td = el("td", state === "invalid" ? "badge warn" : "", state || "-");
+  if (source) {
+    var text = " via " + source;
+    var at = updated ? new Date(updated).getTime() : NaN;
+    if (!Number.isNaN(at)) text += ", " + fmtDuration(Math.max(0, Math.round((Date.now() - at) / 1000))) + " old";
+    td.appendChild(el("span", "muted", text));
+  }
+  return td;
 }
 
 function fmtVia(v) {

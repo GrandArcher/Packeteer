@@ -16,12 +16,13 @@ import (
 
 // #158: the RPKI validity is rendered on the prefix paths, the decision
 // candidates, the exchange peers, and the System page, and none of the
-// viewers writes.
+// viewers writes. #200: a path also shows the source that answered and the
+// age of its data, and the prefix timeline lists the stored states.
 func TestRPKIDisplayAssets(t *testing.T) {
 	app := mustWeb(t, "web/app.js")
 	exchanges := mustWeb(t, "web/exchanges.js")
 	system := mustWeb(t, "web/system.js")
-	for _, s := range []string{`path.rpki`, `"Via", "RPKI"`} {
+	for _, s := range []string{`rpkiCell(path.rpki, path.rpki_source, path.rpki_updated)`, `"Via", "RPKI"`, `" via " + source`} {
 		if !strings.Contains(app, s) {
 			t.Errorf("app.js missing %s", s)
 		}
@@ -30,6 +31,9 @@ func TestRPKIDisplayAssets(t *testing.T) {
 		if !strings.Contains(exchanges, s) {
 			t.Errorf("exchanges.js missing %s", s)
 		}
+	}
+	if prefix := mustWeb(t, "web/prefix.js"); !strings.Contains(prefix, `(data.rpki || []).forEach(function (r) { entries.push(rpkiEntry(r)); })`) {
+		t.Error("prefix.js does not list the stored RPKI states")
 	}
 	if !strings.Contains(system, `["rpki", "RPKI"]`) {
 		t.Error("system.js missing the rpki kind title")
@@ -52,13 +56,15 @@ func rpkiSampleInput() Input {
 		}},
 		Decisions: []policy.Decision{{
 			Prefix: p, Native: "transit-a", Current: "transit-a", Action: policy.ActionNone, Reason: "native path is best",
-			Candidates: []policy.Candidate{{Provider: "transit-a", Usable: true, RPKI: plugin.RPKIInvalid}},
+			Candidates: []policy.Candidate{{Provider: "transit-a", Usable: true, RPKI: plugin.RPKIInvalid, RPKISource: "routinator", RPKIUpdated: at.Add(-time.Minute)}},
 		}},
 		Paths: map[netip.Prefix][]rib.Route{p: {{
 			Prefix: p, NextHop: netip.MustParseAddr("192.0.2.1"), Provider: "transit-a",
 			ASPath: []uint32{64500, 64511},
 		}}},
-		RPKI: func(netip.Prefix, uint32) plugin.RPKIValidity { return plugin.RPKIValid },
+		RPKI: func(netip.Prefix, uint32) plugin.RPKIAnswer {
+			return plugin.RPKIAnswer{State: plugin.RPKIValid, Source: "ripestat", Updated: at.Add(-2 * time.Minute)}
+		},
 		Exchanges: []exchange.Stats{{
 			Name: "ix-lab", Peers: []exchange.PeerStats{{
 				Name: "ix-peer-a", NextHop: "203.0.113.11", Prefixes: 3,
@@ -75,11 +81,11 @@ func TestRPKIDisplaySmoke(t *testing.T) {
 	viewer := plugin.RoleViewer
 
 	rec, _ := e.do(t, "GET", "/api/decisions", viewer, nil)
-	if rec.Code != 200 || !strings.Contains(rec.Body.String(), `"rpki":"invalid"`) {
+	if rec.Code != 200 || !strings.Contains(rec.Body.String(), `"rpki":"invalid","rpki_source":"routinator","rpki_updated":"2026-01-02T03:03:05Z"`) {
 		t.Fatalf("decisions = %d %s", rec.Code, rec.Body.String())
 	}
 	rec, _ = e.do(t, "GET", "/api/prefixes", viewer, nil)
-	if rec.Code != 200 || !strings.Contains(rec.Body.String(), `"rpki":"valid"`) {
+	if rec.Code != 200 || !strings.Contains(rec.Body.String(), `"rpki":"valid","rpki_source":"ripestat","rpki_updated":"2026-01-02T03:02:05Z"`) {
 		t.Fatalf("prefixes = %d %s", rec.Code, rec.Body.String())
 	}
 	rec, _ = e.do(t, "GET", "/api/exchanges", viewer, nil)
@@ -151,4 +157,35 @@ func (s factSource) Validate(netip.Prefix, uint32) plugin.RPKIValidity {
 }
 func (s factSource) Status() plugin.RPKIStatus {
 	return plugin.RPKIStatus{Source: s.f.Name, Up: s.f.Up, Stale: s.f.Stale, VRPs: s.f.VRPs, Updated: s.f.Updated, Error: s.f.Err}
+}
+
+// #200: /metrics carries each source's session state, VRP count, and
+// cache age; a source that never fetched has no age sample.
+func TestRPKIMetrics(t *testing.T) {
+	now := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	got := string(RPKIMetrics([]plugin.RPKIStatus{
+		{Source: "routinator", Up: true, VRPs: 1234, Updated: now.Add(-90 * time.Second)},
+		{Source: "backup", Stale: true},
+	}, now))
+	for _, want := range []string{
+		`packeteer_rpki_source_up{source="routinator"} 1`,
+		`packeteer_rpki_source_up{source="backup"} 0`,
+		`packeteer_rpki_vrps{source="routinator"} 1234`,
+		`packeteer_rpki_cache_age_seconds{source="routinator"} 90`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("metrics missing %s:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, `packeteer_rpki_cache_age_seconds{source="backup"}`) {
+		t.Errorf("never-fetched source has an age:\n%s", got)
+	}
+	e := newUIWith(t, func(o *Options) {
+		o.Snapshot = func() Snapshot { return Assemble(rpkiSampleInput()) }
+	})
+	e.srv.SetRPKIStatus(func() []plugin.RPKIStatus { return []plugin.RPKIStatus{{Source: "routinator", Up: true, VRPs: 3}} })
+	rec, _ := e.do(t, "GET", "/metrics", plugin.RoleViewer, nil)
+	if rec.Code != 200 || !strings.Contains(rec.Body.String(), `packeteer_rpki_vrps{source="routinator"} 3`) {
+		t.Fatalf("/metrics = %d, missing the RPKI gauges", rec.Code)
+	}
 }

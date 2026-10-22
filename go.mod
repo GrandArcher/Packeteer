@@ -8,6 +8,7 @@ require (
 	github.com/gosnmp/gosnmp v1.45.0
 	github.com/oschwald/maxminddb-golang/v2 v2.8.0
 	github.com/osrg/gobgp/v3 v3.37.0
+	golang.org/x/crypto v0.58.0
 	golang.org/x/net v0.61.0
 	golang.org/x/oauth2 v0.37.0
 	golang.org/x/sys v0.49.0

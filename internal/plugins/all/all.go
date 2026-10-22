@@ -25,7 +25,9 @@ import (
 	_ "github.com/GrandArcher/Packeteer/internal/plugins/prober/tcp"              // tcp prober
 	_ "github.com/GrandArcher/Packeteer/internal/plugins/prober/udp"              // udp prober
 	_ "github.com/GrandArcher/Packeteer/internal/plugins/ribsource/bmp"           // BMP monitoring station (RIB source, leak source)
+	_ "github.com/GrandArcher/Packeteer/internal/plugins/rpki/ripestat"           // RIPEstat RPKI lookup, display only
 	_ "github.com/GrandArcher/Packeteer/internal/plugins/rpki/rtr"                // RTR RPKI origin validation source
+	_ "github.com/GrandArcher/Packeteer/internal/plugins/rpki/vrpjson"            // HTTP JSON VRP origin validation source
 	_ "github.com/GrandArcher/Packeteer/internal/plugins/scorer/commit"           // commit scorer
 	_ "github.com/GrandArcher/Packeteer/internal/plugins/scorer/cost"             // cost scorer
 	_ "github.com/GrandArcher/Packeteer/internal/plugins/scorer/weighted"         // weighted scorer

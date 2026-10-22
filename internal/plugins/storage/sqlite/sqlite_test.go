@@ -249,3 +249,45 @@ func TestMitigationRecords(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// #200: RPKI route records replace by prefix, provider, origin, and
+// first round; a read returns those overlapping the range; prune drops
+// records last seen before retention.
+func TestRPKIRouteRecords(t *testing.T) {
+	ctx := context.Background()
+	s := newStore(t, "path: "+filepath.Join(t.TempDir(), "r.db")+"\nretention: 48h")
+	now := day.Add(10 * 24 * time.Hour)
+	s.now = func() time.Time { return now }
+	if err := s.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	defer s.Stop(ctx)
+	valid := plugin.RPKIRouteRecord{Prefix: pfxA, Provider: "transit-a", Origin: 64496, State: plugin.RPKIValid, Source: "routinator",
+		First: now.Add(-time.Hour), Last: now.Add(-30 * time.Minute)}
+	old := plugin.RPKIRouteRecord{Prefix: pfxA, Provider: "transit-b", Origin: 64511, State: plugin.RPKIInvalid, Source: "routinator",
+		First: day, Last: day.Add(time.Hour)}
+	if err := s.Write(ctx, plugin.HistoryBatch{RPKIRoutes: []plugin.RPKIRouteRecord{valid, old}}); err != nil {
+		t.Fatal(err)
+	}
+	valid.Last = now
+	if err := s.Write(ctx, plugin.HistoryBatch{RPKIRoutes: []plugin.RPKIRouteRecord{valid}}); err != nil {
+		t.Fatal(err)
+	}
+	h, err := s.Read(ctx, plugin.HistoryQuery{From: now.Add(-2 * time.Hour), To: now.Add(time.Hour)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(h.RPKIRoutes) != 1 || h.RPKIRoutes[0] != valid {
+		t.Fatalf("range read = %+v, want the updated valid record only", h.RPKIRoutes)
+	}
+	if err := s.prune(ctx); err != nil {
+		t.Fatal(err)
+	}
+	h, err = s.Read(ctx, plugin.HistoryQuery{From: time.Unix(0, 0), To: now.Add(time.Hour)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(h.RPKIRoutes) != 1 || h.RPKIRoutes[0].Origin != 64496 {
+		t.Fatalf("after prune = %+v, want the old record gone", h.RPKIRoutes)
+	}
+}

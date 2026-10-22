@@ -1,0 +1,41 @@
+{
+ "version": "fixture",
+ "mode": "observe",
+ "ready": true,
+ "generated_at": "2026-10-22T12:00:00Z",
+ "total": 1,
+ "measured": 1,
+ "offset": 0,
+ "limit": 1,
+ "asn_map": [],
+ "asn_total": 0,
+ "prefixes": [
+  {
+   "prefix": "203.0.113.0/25",
+   "native": "lab-a",
+   "current": "lab-a",
+   "recommended": "lab-c",
+   "action": "improve",
+   "in_rib": true,
+   "next_hop": "192.0.2.1",
+   "rib_provider": "lab-a",
+   "probes": [
+    {"provider": "lab-a", "prefix": "203.0.113.0/25", "prober": "icmp", "ok": true, "loss_pct": 0, "rtt_min_ms": 80, "rtt_avg_ms": 90, "rtt_max_ms": 95, "jitter_ms": 1, "sent": 4, "received": 4},
+    {"provider": "lab-b", "prefix": "203.0.113.0/25", "prober": "icmp", "ok": true, "loss_pct": 0, "rtt_min_ms": 8, "rtt_avg_ms": 10, "rtt_max_ms": 12, "jitter_ms": 1, "sent": 4, "received": 4},
+    {"provider": "lab-c", "prefix": "203.0.113.0/25", "prober": "icmp", "ok": true, "loss_pct": 0, "rtt_min_ms": 38, "rtt_avg_ms": 40, "rtt_max_ms": 42, "jitter_ms": 1, "sent": 4, "received": 4}
+   ],
+   "exit_loss_pct": 0,
+   "exit_rtt_ms": 90,
+   "paths": [
+    {"provider": "lab-a", "next_hop": "192.0.2.1", "as_path": [64501, 64497], "selected": true, "via": "bilateral",
+     "rpki": "valid", "rpki_source": "routinator", "rpki_updated": "2026-10-22T11:58:00Z"},
+    {"provider": "lab-b", "next_hop": "192.0.2.2", "as_path": [64502, 64511], "via": "bilateral",
+     "rpki": "invalid", "rpki_source": "routinator", "rpki_updated": "2026-10-22T11:58:00Z"},
+    {"provider": "lab-c", "next_hop": "192.0.2.3", "as_path": [64503, 64499], "via": "bilateral",
+     "rpki": "notfound", "rpki_source": "ripestat", "rpki_updated": "2026-10-22T11:30:00Z"}
+   ],
+   "gain": 50,
+   "reason": "lab-c beats lab-a on RTT; lab-b is RPKI invalid"
+  }
+ ]
+}

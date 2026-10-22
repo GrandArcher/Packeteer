@@ -109,14 +109,31 @@ type AnomalyRecord struct {
 	EndReason    string
 }
 
+// RPKIRouteRecord is one learned path's origin-validation state over a
+// span of decision rounds (#200): a provider's path toward a probed
+// prefix, keyed by its origin AS. A change of state or of the source that
+// answered starts a new record; Last is the last round that saw it.
+type RPKIRouteRecord struct {
+	Prefix   netip.Prefix
+	Provider string
+	Origin   uint32
+	State    RPKIValidity
+	Source   string
+	First    time.Time
+	Last     time.Time
+}
+
 // HistoryBatch is one write. Improvements and mitigations replace earlier
-// rows with the same ID; buckets are added; prefixes replace.
+// rows with the same ID; buckets are added; prefixes replace; RPKI route
+// records replace the row with the same prefix, provider, origin, and
+// First.
 type HistoryBatch struct {
 	Buckets      []ProbeBucket
 	Improvements []ImprovementRecord
 	Prefixes     []PrefixInfo
 	Mitigations  []MitigationRecord
 	Anomalies    []AnomalyRecord
+	RPKIRoutes   []RPKIRouteRecord
 }
 
 // HistoryQuery selects rows. Buckets are those whose Day is in [From, To)
@@ -124,7 +141,9 @@ type HistoryBatch struct {
 // includes that whole day (rollups are daily).
 // Improvements, mitigations, and anomalies are those that overlap
 // [From, To): started (created) before To and still open or ended at or
-// after From. OpenOnly returns only those with no End, and no buckets.
+// after From. RPKI route records overlap the same way, by First and Last.
+// OpenOnly returns only those with no End, and no buckets or RPKI route
+// records.
 // Prefixes are always all rows.
 type HistoryQuery struct {
 	From     time.Time
@@ -139,6 +158,7 @@ type History struct {
 	Prefixes     []PrefixInfo
 	Mitigations  []MitigationRecord
 	Anomalies    []AnomalyRecord
+	RPKIRoutes   []RPKIRouteRecord
 }
 
 // Storage persists history for reports. It records what the controller

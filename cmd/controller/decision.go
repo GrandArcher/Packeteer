@@ -10,6 +10,7 @@ import (
 
 	"github.com/GrandArcher/Packeteer/internal/announce"
 	"github.com/GrandArcher/Packeteer/internal/config"
+	"github.com/GrandArcher/Packeteer/internal/history"
 	"github.com/GrandArcher/Packeteer/internal/inbound"
 	"github.com/GrandArcher/Packeteer/internal/mitigation"
 	"github.com/GrandArcher/Packeteer/internal/pluginhost"
@@ -167,8 +168,8 @@ func newDecider(cfg *config.Config, plugins *pluginhost.Set) (*policy.Engine, er
 	return policy.NewEngine(pc, plugins.Scorer.Plugin), nil
 }
 
-// newRPKISet wraps the configured origin-validation sources in order. An
-// empty set is RPKI off.
+// newRPKISet wraps the configured origin-validation sources in order and
+// the display-only fallback (#200). An empty set is RPKI off.
 func newRPKISet(plugins *pluginhost.Set) *rpki.Set {
 	if plugins == nil {
 		return rpki.NewSet(nil)
@@ -177,7 +178,25 @@ func newRPKISet(plugins *pluginhost.Set) *rpki.Set {
 	for _, s := range plugins.RPKISources {
 		out = append(out, s.Plugin)
 	}
-	return rpki.NewSet(out)
+	set := rpki.NewSet(out)
+	if d := plugins.RPKIDisplay; d != nil {
+		if a, ok := d.Plugin.(rpki.Answerer); ok {
+			set.SetDisplay(a)
+		}
+	}
+	return set
+}
+
+// rpkiStatuses is the health of every rpki.sources entry, in order.
+func rpkiStatuses(plugins *pluginhost.Set) []plugin.RPKIStatus {
+	if plugins == nil {
+		return nil
+	}
+	out := make([]plugin.RPKIStatus, 0, len(plugins.RPKISources))
+	for _, s := range plugins.RPKISources {
+		out = append(out, s.Plugin.Status())
+	}
+	return out
 }
 
 // decisionInput snapshots probe results, provider health, the RIB view,
@@ -198,7 +217,7 @@ func decisionInput(ctx context.Context, now time.Time, engine *probe.Engine, vie
 			}
 		}
 		fillRouteChecks(&in, view)
-		fillRPKI(&in, view, origins)
+		fillRPKI(&in, rpkiRoutes(view, in.Results, origins))
 		in.EgressDown = view.EgressDown()
 	}
 	fed.merge(&in, now)
@@ -251,38 +270,59 @@ var rpkiRank = map[plugin.RPKIValidity]int{
 	plugin.RPKIInvalid:  3,
 }
 
-// fillRPKI records, per probed prefix and provider, the RFC 6811
-// origin-validation state of that provider's learned paths (#158). The
-// origin is the last AS in a path. A provider with several paths (add-path,
-// or BMP from several routers) gets the worst state among them: Decide
-// cannot tell which one the provider forwards on, so one invalid path makes
-// the provider invalid for rpki.avoid_invalid. It is display-only input to
-// Decide unless avoid_invalid is set; it never changes the learned RIB.
-func fillRPKI(in *policy.Input, view providerPaths, origins *rpki.Set) {
-	if in == nil || view == nil || !origins.Enabled() {
-		return
+// rpkiRoutes validates the origin (the last AS) of every learned path of
+// each probed prefix and provider, once per distinct origin (#200). It
+// uses the decision sources only, never the display fallback. Nil when
+// RPKI is off.
+func rpkiRoutes(view providerPaths, results []probe.Result, origins *rpki.Set) []history.RPKIRoute {
+	if view == nil || !origins.Enabled() {
+		return nil
 	}
-	for _, r := range in.Results {
-		var state plugin.RPKIValidity
+	type pair struct {
+		prefix   netip.Prefix
+		provider string
+	}
+	done := map[pair]bool{}
+	var out []history.RPKIRoute
+	for _, r := range results {
+		k := pair{r.Prefix, r.Provider}
+		if done[k] {
+			continue
+		}
+		done[k] = true
+		seen := map[uint32]bool{}
 		for _, path := range view.ProviderPaths(r.Prefix, r.Provider) {
-			if len(path) == 0 {
+			if len(path) == 0 || seen[path[len(path)-1]] {
 				continue
 			}
-			v := origins.Validate(r.Prefix, path[len(path)-1])
-			if state == "" || rpkiRank[v] > rpkiRank[state] {
-				state = v
-			}
+			origin := path[len(path)-1]
+			seen[origin] = true
+			out = append(out, history.RPKIRoute{Prefix: r.Prefix, Provider: r.Provider, Origin: origin, Answer: origins.Lookup(r.Prefix, origin)})
 		}
-		if state == "" {
+	}
+	return out
+}
+
+// fillRPKI labels each probed prefix and provider with the RFC 6811 state
+// of that provider's learned paths (#158) and the source that answered. A
+// provider with several paths (add-path, or BMP from several routers) gets
+// the worst state among them: Decide cannot tell which one the provider
+// forwards on, so one invalid path makes the provider invalid for
+// rpki.avoid_invalid. It is display-only input to Decide unless
+// avoid_invalid is set; it never changes the learned RIB.
+func fillRPKI(in *policy.Input, routes []history.RPKIRoute) {
+	for _, rt := range routes {
+		cur, ok := in.RPKI[rt.Prefix][rt.Provider]
+		if ok && rpkiRank[rt.Answer.State] <= rpkiRank[cur.State] {
 			continue
 		}
 		if in.RPKI == nil {
-			in.RPKI = map[netip.Prefix]map[string]plugin.RPKIValidity{}
+			in.RPKI = map[netip.Prefix]map[string]plugin.RPKIAnswer{}
 		}
-		if in.RPKI[r.Prefix] == nil {
-			in.RPKI[r.Prefix] = map[string]plugin.RPKIValidity{}
+		if in.RPKI[rt.Prefix] == nil {
+			in.RPKI[rt.Prefix] = map[string]plugin.RPKIAnswer{}
 		}
-		in.RPKI[r.Prefix][r.Provider] = state
+		in.RPKI[rt.Prefix][rt.Provider] = rt.Answer
 	}
 }
 

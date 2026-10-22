@@ -45,6 +45,17 @@ type RPKIStatus struct {
 	Error string
 }
 
+// RPKIAnswer is one origin-validation state and the data behind it, so a
+// caller can show which source answered and how old its data was.
+type RPKIAnswer struct {
+	State RPKIValidity
+	// Source is the instance name of the source that answered; empty when
+	// none had usable data.
+	Source string
+	// Updated is when that source last completed a fetch.
+	Updated time.Time
+}
+
 // RPKI validates the origin AS of a prefix. It is read-only and in-process.
 // An implementation returns RPKIUnknown when it has no fresh data, so a
 // caller can fall back to another source and fail open.

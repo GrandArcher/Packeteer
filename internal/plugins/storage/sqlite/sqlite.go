@@ -164,6 +164,17 @@ CREATE TABLE IF NOT EXISTS anomalies (
 );
 CREATE INDEX IF NOT EXISTS anomalies_start ON anomalies (start_ms);
 CREATE INDEX IF NOT EXISTS anomalies_end ON anomalies (end_ms);
+CREATE TABLE IF NOT EXISTS rpki_routes (
+	prefix TEXT NOT NULL,
+	provider TEXT NOT NULL,
+	origin INTEGER NOT NULL,
+	state TEXT NOT NULL,
+	source TEXT NOT NULL,
+	first_ms INTEGER NOT NULL,
+	last_ms INTEGER NOT NULL,
+	PRIMARY KEY (prefix, provider, origin, first_ms)
+);
+CREATE INDEX IF NOT EXISTS rpki_routes_last ON rpki_routes (last_ms);
 CREATE TABLE IF NOT EXISTS prefixes (
 	prefix TEXT PRIMARY KEY,
 	origin_asn INTEGER NOT NULL,
@@ -352,6 +363,9 @@ func (s *Store) prune(ctx context.Context) error {
 	if _, err := db.ExecContext(ctx, `DELETE FROM anomalies WHERE end_ms != 0 AND end_ms < ?`, cutoff.UnixMilli()); err != nil {
 		return err
 	}
+	if _, err := db.ExecContext(ctx, `DELETE FROM rpki_routes WHERE last_ms < ?`, cutoff.UnixMilli()); err != nil {
+		return err
+	}
 	if _, err := db.ExecContext(ctx, `DELETE FROM audit WHERE time_ms < ?`, cutoff.UnixMilli()); err != nil {
 		return err
 	}
@@ -460,6 +474,16 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			return err
 		}
 	}
+	for _, r := range b.RPKIRoutes {
+		if !r.Prefix.IsValid() || r.Provider == "" || r.First.IsZero() {
+			continue
+		}
+		_, err := tx.ExecContext(ctx, `INSERT OR REPLACE INTO rpki_routes (prefix, provider, origin, state, source, first_ms, last_ms) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+			r.Prefix.String(), r.Provider, int64(r.Origin), string(r.State), r.Source, ms(r.First), ms(r.Last))
+		if err != nil {
+			return err
+		}
+	}
 	for _, p := range b.Prefixes {
 		if !p.Prefix.IsValid() {
 			continue
@@ -552,6 +576,10 @@ FROM probe_daily WHERE day >= ? AND day < ? ORDER BY day, prefix, provider`, q.F
 	}
 	rows.Close()
 
+	if out.RPKIRoutes, err = readRPKIRoutes(ctx, db, q); err != nil {
+		return out, err
+	}
+
 	pr, err := db.QueryContext(ctx, `SELECT prefix, origin_asn, country, volume_mbps, updated_ms FROM prefixes ORDER BY prefix`)
 	if err != nil {
 		return out, err
@@ -638,6 +666,31 @@ func readAnomalies(ctx context.Context, db *sql.DB, q plugin.HistoryQuery) ([]pl
 		}
 		a.Prefix, a.Start, a.End = p, fromMS(start), fromMS(end)
 		out = append(out, a)
+	}
+	return out, rows.Err()
+}
+
+func readRPKIRoutes(ctx context.Context, db *sql.DB, q plugin.HistoryQuery) ([]plugin.RPKIRouteRecord, error) {
+	rows, err := db.QueryContext(ctx, `SELECT prefix, provider, origin, state, source, first_ms, last_ms FROM rpki_routes
+WHERE first_ms < ? AND last_ms >= ? ORDER BY first_ms, prefix, provider, origin`, q.To.UnixMilli(), q.From.UnixMilli())
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []plugin.RPKIRouteRecord
+	for rows.Next() {
+		var r plugin.RPKIRouteRecord
+		var prefix, state string
+		var origin, first, last int64
+		if err := rows.Scan(&prefix, &r.Provider, &origin, &state, &r.Source, &first, &last); err != nil {
+			return nil, err
+		}
+		p, err := netip.ParsePrefix(prefix)
+		if err != nil {
+			continue
+		}
+		r.Prefix, r.Origin, r.State, r.First, r.Last = p, uint32(origin), plugin.RPKIValidity(state), fromMS(first), fromMS(last)
+		out = append(out, r)
 	}
 	return out, rows.Err()
 }

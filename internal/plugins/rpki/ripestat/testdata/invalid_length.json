@@ -1,0 +1,30 @@
+{
+  "messages": [],
+  "see_also": [],
+  "version": "0.3",
+  "data_call_name": "rpki-validation",
+  "data_call_status": "supported",
+  "cached": false,
+  "query_id": "20261022201942-37e5fa03-3c9c-4219-a222-10c8cb324401",
+  "process_time": 67,
+  "server_id": "app189",
+  "build_version": "v0.12.1-2026.10.21",
+  "pipeline": "1474833",
+  "status": "ok",
+  "status_code": 200,
+  "time": "2026-10-22T20:19:42.404187",
+  "data": {
+    "resource": "64496",
+    "prefix": "203.0.113.0/25",
+    "validating_roas": [
+      {
+        "origin": "64496",
+        "prefix": "203.0.113.0/24",
+        "validity": "invalid_length",
+        "max_length": 24
+      }
+    ],
+    "status": "invalid_length",
+    "validator": "routinator"
+  }
+}

@@ -536,3 +536,71 @@ func TestRecorderKeepsProviderSeriesAcrossRestart(t *testing.T) {
 		t.Fatalf("a store without provider samples broke Close: %v", err)
 	}
 }
+
+// #200: every learned path's validity is recorded per provider and origin,
+// not only the chosen path. A state or source change starts a new record;
+// an unchanged one extends Last. Unflushed records show in the prefix
+// history, and the records survive the store.
+func TestRecorderRPKIRoutes(t *testing.T) {
+	ctx := context.Background()
+	cfg, err := plugin.ConfigFromYAML("path: " + filepath.Join(t.TempDir(), "packeteer.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := sqlite.New(cfg, plugin.Env{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	defer store.Stop(ctx)
+	clock := t0
+	rec := newRecorder(store, &clock)
+	if err := rec.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	fetched := t0.Add(-time.Minute)
+	valid := plugin.RPKIAnswer{State: plugin.RPKIValid, Source: "routinator", Updated: fetched}
+	invalid := plugin.RPKIAnswer{State: plugin.RPKIInvalid, Source: "routinator", Updated: fetched}
+	round := []RPKIRoute{
+		{Prefix: pfxA, Provider: "transit-a", Origin: 64496, Answer: valid},
+		{Prefix: pfxA, Provider: "transit-b", Origin: 64511, Answer: invalid},
+		{Prefix: pfxA, Provider: "transit-b", Origin: 64496, Answer: valid},
+		{Prefix: pfxB, Provider: "transit-a", Origin: 64497, Answer: valid},
+	}
+	rec.RPKI(t0, round)
+	rec.RPKI(t0.Add(time.Minute), round)
+	round[0].Answer = plugin.RPKIAnswer{State: plugin.RPKIUnknown}
+	rec.RPKI(t0.Add(2*time.Minute), round)
+
+	want := []RPKIRow{
+		{Provider: "transit-a", Origin: 64496, State: plugin.RPKIUnknown, First: t0.Add(2 * time.Minute), Last: t0.Add(2 * time.Minute)},
+		{Provider: "transit-a", Origin: 64496, State: plugin.RPKIValid, Source: "routinator", First: t0, Last: t0.Add(time.Minute)},
+		{Provider: "transit-b", Origin: 64496, State: plugin.RPKIValid, Source: "routinator", First: t0, Last: t0.Add(2 * time.Minute)},
+		{Provider: "transit-b", Origin: 64511, State: plugin.RPKIInvalid, Source: "routinator", First: t0, Last: t0.Add(2 * time.Minute)},
+	}
+	q := Query{From: t0.Add(-time.Hour), To: t0.Add(time.Hour)}
+	for _, stage := range []string{"before flush", "after flush"} {
+		h, err := rec.Prefix(ctx, pfxA, q)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !slices.Equal(h.RPKI, want) {
+			t.Fatalf("%s: rpki = %+v, want %+v", stage, h.RPKI, want)
+		}
+		if err := rec.Flush(ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
+	stored, err := store.Read(ctx, plugin.HistoryQuery{From: q.From, To: q.To})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stored.RPKIRoutes) != 5 {
+		t.Fatalf("stored = %+v, want 5 records", stored.RPKIRoutes)
+	}
+	if err := rec.Close(ctx); err != nil {
+		t.Fatal(err)
+	}
+}

@@ -440,3 +440,32 @@ func TestRunNotifyTest(t *testing.T) {
 		t.Fatalf("exit %d: %s", code, out.String())
 	}
 }
+
+// #200: a source that was answering and goes stale (or empty) raises
+// rpki.stale once, with its error, and rpki.fresh when it answers again.
+// A source that never had data raises nothing.
+func TestRPKIEvents(t *testing.T) {
+	out := &sink{}
+	w := newEventWatch(out, "observe")
+	now := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	fresh := plugin.RPKIStatus{Source: "routinator", Up: true, VRPs: 3, Updated: now}
+	never := plugin.RPKIStatus{Source: "backup", Stale: true}
+	w.rpki(now, []plugin.RPKIStatus{fresh, never})
+	if got := out.take(); len(got) != 0 {
+		t.Fatalf("startup events = %+v, want none", got)
+	}
+	stale := plugin.RPKIStatus{Source: "routinator", Stale: true, VRPs: 3, Updated: now, Error: "connection refused"}
+	for range 2 {
+		w.rpki(now.Add(2*time.Hour), []plugin.RPKIStatus{stale, never})
+	}
+	got := out.take()
+	if len(got) != 1 || got[0].Kind != plugin.EventRPKIStale || got[0].Severity != plugin.SeverityWarning ||
+		got[0].Fields["source"] != "routinator" || got[0].Fields["error"] != "connection refused" || got[0].Fields["updated"] != "2026-01-02T03:04:05Z" {
+		t.Fatalf("stale events = %+v", got)
+	}
+	w.rpki(now.Add(3*time.Hour), []plugin.RPKIStatus{fresh, never})
+	got = out.take()
+	if len(got) != 1 || got[0].Kind != plugin.EventRPKIFresh || !got[0].Resolves() || got[0].DedupKey() != "packeteer/rpki/source=routinator" {
+		t.Fatalf("fresh events = %+v", got)
+	}
+}

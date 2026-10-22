@@ -1,0 +1,11 @@
+{
+  "metadata": {
+    "generated": 1792699888,
+    "generatedTime": "2026-10-22T20:11:28Z"
+  },
+  "roas": [
+    { "asn": "AS64496", "prefix": "192.0.2.0/24", "maxLength": 24, "ta": "N/A" },
+    { "asn": "AS64497", "prefix": "203.0.113.0/24", "maxLength": 25, "ta": "N/A" },
+    { "asn": "AS64498", "prefix": "2001:db8::/32", "maxLength": 48, "ta": "N/A" }
+  ]
+}

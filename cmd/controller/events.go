@@ -65,6 +65,7 @@ type eventWatch struct {
 	waiting        map[netip.Addr]time.Time
 	stuck          map[netip.Addr]bool
 	overCommit     map[string]bool
+	rpkiUsable     map[string]bool
 	commitChecked  time.Time
 	announceFailed bool
 }
@@ -89,7 +90,7 @@ func (w *eventWatch) commitDue(now time.Time) bool {
 
 func newEventWatch(out emitter, mode string) *eventWatch {
 	return &eventWatch{out: out, mode: mode, providers: map[string]string{}, peers: map[netip.Addr]bool{},
-		waiting: map[netip.Addr]time.Time{}, stuck: map[netip.Addr]bool{}, overCommit: map[string]bool{}}
+		waiting: map[netip.Addr]time.Time{}, stuck: map[netip.Addr]bool{}, overCommit: map[string]bool{}, rpkiUsable: map[string]bool{}}
 }
 
 // SetMode records the mode a reload applied. Improvement events say
@@ -261,6 +262,39 @@ func (w *eventWatch) peerStatus(now time.Time, peers []rib.PeerState, notEstabli
 			w.stuck[p.Address] = true
 			fields["after"] = notEstablishedAfter.String()
 			w.emit(now, plugin.EventBGPSessionStuck, "iBGP session to "+name+" is still "+p.State+" after "+notEstablishedAfter.String()+": Packeteer can't see its routes, so it makes no recommendations for them", fields)
+		}
+	}
+}
+
+// rpki reports an RPKI source whose cache stopped answering lookups
+// (stale or empty, as rpki.Set skips it) and its recovery (#200). A source
+// that has never had data raises nothing; the System page shows it down.
+// Its lookups are unknown meanwhile, which fails open: decisions continue
+// and no withdraw waits on it.
+func (w *eventWatch) rpki(now time.Time, sources []plugin.RPKIStatus) {
+	if w == nil {
+		return
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	for _, st := range sources {
+		usable := !st.Stale && st.VRPs > 0
+		prev, known := w.rpkiUsable[st.Source]
+		w.rpkiUsable[st.Source] = usable
+		fields := map[string]string{"source": st.Source, "vrps": strconv.Itoa(st.VRPs)}
+		if !st.Updated.IsZero() {
+			fields["updated"] = st.Updated.UTC().Format(time.RFC3339)
+		}
+		switch {
+		case usable && known && !prev:
+			w.emit(now, plugin.EventRPKIFresh, "RPKI source "+st.Source+" has fresh data again", fields)
+		case !usable && prev:
+			msg := "RPKI source " + st.Source + " has no fresh data: its lookups are unknown until it recovers or the next source answers"
+			if st.Error != "" {
+				fields["error"] = st.Error
+				msg += " (" + st.Error + ")"
+			}
+			w.emit(now, plugin.EventRPKIStale, msg, fields)
 		}
 	}
 }
