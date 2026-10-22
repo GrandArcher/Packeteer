@@ -57,7 +57,7 @@
   <h1>Settings</h1>
   <section id="wizard">
     <h2>Setup wizard</h2>
-    <p class="tag">Four steps, the last one optional. It starts in observe with an empty allowlist; inject is not a step. Blocks the wizard does not write are kept. Nothing is written until you save the YAML below.</p>
+    <p class="tag">Four steps, the last one optional. It starts in observe with an empty allowlist; inject is not a step. Once the config is saved, the preflight checks below decide when injection can be offered. Blocks the wizard does not write are kept. Nothing is written until you save the YAML below.</p>
     <div id="setup-skip" hidden>
       <p class="tag">First-run setup is pending. Saving a config here ends it. Skip setup if the file is already what you want; the editor then turns off at the next start unless http.config_editor is true.</p>
       <button type="button" id="setup-skip-btn">Skip setup</button>
@@ -136,6 +136,37 @@
         <button type="button" id="wz-confirm-yes">Replace the editor text</button>
         <button type="button" id="wz-confirm-no">Cancel</button>
       </div>
+    </div>
+  </section>
+  <section id="preflight">
+    <h2>Preflight checks</h2>
+    <p class="tag">Injection stays off until every check here passes. Each check says what it found and how to fix it, and the same checks run again any time. Running them reads the BGP sessions and sends one TTL-limited probe per provider toward a documentation address. The results are also in <code>/metrics</code> as <code>packeteer_preflight_check</code>.</p>
+    <div class="controls">
+      <button type="button" id="pf-run">Run checks</button>
+      <span id="pf-when" class="tag" role="status"></span>
+    </div>
+    <ul id="pf-list" class="pf-list"></ul>
+    <h3>Router config</h3>
+    <p class="tag">The session to Packeteer and the two filters, written from your answers above for the router you pick. It is text to review: Packeteer never connects to your router or applies it. Check it against your software release first.</p>
+    <div class="form">
+      <label class="field"><span class="field-label">Router</span><select id="pf-vendor"></select><span class="field-help">FRR, BIRD, Junos, IOS-XR, Arista EOS, or RouterOS 7.</span></label>
+    </div>
+    <div class="controls">
+      <button type="button" id="pf-snippet-show">Show router config</button>
+      <button type="button" id="pf-snippet-copy">Copy</button>
+      <span id="pf-snippet-status" class="tag" role="status"></span>
+    </div>
+    <pre id="pf-snippet" class="mono" aria-label="Router config" hidden></pre>
+    <div id="pf-inject" hidden>
+      <h3>Turn on injection</h3>
+      <p class="tag">Every check passed. Start with a few prefixes. This fills the YAML editor below with an inject config and shows what will change; nothing is written until you tick the confirmation and Save, and Save runs the checks again.</p>
+      <div class="form">
+        <label class="field"><span class="field-label" title="allowlist.prefixes">Prefixes to steer</span><textarea id="pf-allow" rows="3" spellcheck="false"></textarea><span class="field-help">One prefix per line, for example 198.51.100.0/24, at most 10. A prefix is announced only while your router advertises that exact prefix to Packeteer.</span><span id="pf-allow-err" class="field-error" hidden></span></label>
+        <label class="field"><span class="field-label" title="max_improvements">Most routes at once</span><input id="pf-cap" type="number" min="1" max="50" step="1"><span class="field-help">Empty uses 5.</span></label>
+      </div>
+      <div class="controls"><button type="button" id="pf-inject-plan">Show what will change</button></div>
+      <div id="pf-inject-status" class="tag" role="status"></div>
+      <ul id="pf-explain"></ul>
     </div>
   </section>
   <section id="commit-setup">

@@ -1,0 +1,32 @@
+! Packeteer on Arista EOS. Generated for review: nothing is applied. Paste it
+! into configure mode, or use "configure session" and "commit timer".
+! This router: AS 64512, 192.0.2.254. Packeteer: 192.0.2.10.
+!
+ip community-list packeteer permit 64512:666
+!
+! From Packeteer: only routes that carry the Packeteer community.
+route-map packeteer-in permit 10
+   match community packeteer
+route-map packeteer-in deny 100
+!
+! Toward every eBGP neighbor, customers and peers included: never a route
+! with the Packeteer community. Put this deny first in the outbound
+! route-map each eBGP neighbor already uses (rename ebgp-out to it); your
+! existing terms follow.
+route-map ebgp-out deny 10
+   match community packeteer
+!
+router bgp 64512
+   neighbor 192.0.2.10 remote-as 64512
+   neighbor 192.0.2.10 description packeteer
+   ! Keepalive 10s, hold time 30s: a crashed Packeteer's routes go within 30s.
+   neighbor 192.0.2.10 timers 10 30
+   neighbor 192.0.2.10 route-map packeteer-in in
+   ! Packeteer never offers graceful restart. Leave "graceful-restart" off.
+   address-family ipv4
+      neighbor 192.0.2.10 activate
+   address-family ipv6
+      neighbor 192.0.2.10 activate
+   ! add_path is set for this neighbor in Packeteer's config: also enable
+   ! add-path send toward 192.0.2.10 in each address family.
+!

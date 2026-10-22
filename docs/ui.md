@@ -522,6 +522,8 @@ The smoke step "UI settings sections smoke" in the docker job loads the page thr
 
 ## Setup wizard
 
+After the wizard, the Preflight checks panel on the same page decides when injection can be turned on ([onboarding.md](onboarding.md)).
+
 **First run (#416).** With `http.config_editor` unset and the example providers (every `source_ip` in 192.0.2.0/24) still in the config, a start with no saved setup state needs no config edit: the editor and wizard are on for an admin while the first-run setup is pending, and only with sign-in (never with auth off). A config with a real provider is never pending, so an upgrade or a container re-created without its volume keeps the editor off. After the generated password is changed, the Overview sends the admin to `/settings.html#wizard`. Setup ends when an admin saves a config through the editor or wizard, or presses Skip setup (`POST /api/setup/skip`); the state is the file `first-run-setup-pending` next to the storage file. The editor stays on until the next restart; from then on the old default applies: it is off unless `http.config_editor: true`. `http.config_editor: false` keeps it off from the first start; `true` keeps it on and never redirects. With storage that has no file (memory), nothing is saved, so the example providers decide on each start. A federation settings push needs an explicit `true` whatever the setup state, and an accepted push ends a pending setup ([multi-pop.md](multi-pop.md)). The wizard still writes `mode: observe` and inject is not a step.
 
 `/settings.html` walks four steps, the last optional (#106, #130). `POST /api/config/wizard` renders a config from them and writes nothing. The result opens in the editor for review, and you save it like any other edit.

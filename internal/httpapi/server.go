@@ -150,6 +150,9 @@ type Server struct {
 	// provStats is the per-provider measurement read (GET
 	// /api/providers/stats). Nil until SetProviderStats. It never announces.
 	provStats atomic.Pointer[ProviderStats]
+	// preflight is the onboarding checks (#221). Nil until SetPreflight.
+	// Running them sends TTL-limited probes only; they never announce.
+	preflight atomic.Pointer[PreflightControl]
 	// exMembers is the member comparison of the exchange view (#156). Nil
 	// until SetExchangeMembers.
 	exMembers atomic.Pointer[ExchangeMembers]
@@ -373,6 +376,11 @@ func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	}
 	if s.ha != nil {
 		_, _ = w.Write(HAMetrics(s.ha()))
+	}
+	if p := s.preflightControl(); p != nil {
+		if rep, ok := p.Latest(); ok {
+			_, _ = w.Write(PreflightMetrics(rep))
+		}
 	}
 	if v, ok := s.lookupView(); ok && v.Configured {
 		_, _ = w.Write(LookupMetrics(v, time.Now()))

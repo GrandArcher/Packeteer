@@ -138,14 +138,26 @@ func (c *pathChecker) round(ctx context.Context) int {
 	return checked
 }
 
-// one probes a single target. ok is false when no status change should be
-// made: the context ended, or the source_ip could not be bound (the
-// normal probes already fail that provider closed). Every other outcome,
-// including no reply, is a verdict, so a mis-routed source is not missed.
-func (c *pathChecker) one(ctx context.Context, t pathTarget) (mismatch, ok bool) {
+// pathResult is the outcome of one check. ok is false when no status change
+// should be made: the context ended, or the source_ip could not be bound
+// (the normal probes already fail that provider closed). Every other
+// outcome, including no reply, is a verdict, so a mis-routed source is not
+// missed.
+type pathResult struct {
+	ok       bool
+	mismatch bool
+	// from is the address that answered, when one did.
+	from netip.Addr
+	// why says in words what went wrong: the send error, no answer, the
+	// wrong first hop, or that the source address is not on this host.
+	why string
+}
+
+// check probes a single target once.
+func (c *pathChecker) check(ctx context.Context, t pathTarget) pathResult {
 	if c.limiter != nil {
 		if err := c.limiter.WaitN(ctx, 1); err != nil {
-			return false, false
+			return pathResult{}
 		}
 	}
 	dst := pathSink4
@@ -154,20 +166,29 @@ func (c *pathChecker) one(ctx context.Context, t pathTarget) (mismatch, ok bool)
 	}
 	from, _, err := c.hop(sockmark.WithContext(ctx, t.Marking), t.Source, dst, firstHopTTL, pathCheckPort, c.timeout)
 	if err != nil {
-		if ctx.Err() != nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) ||
-			errors.Is(err, plugin.ErrSourceUnavailable) {
-			return false, false
+		if errors.Is(err, plugin.ErrSourceUnavailable) {
+			return pathResult{why: "the source address is not configured on this host"}
 		}
-		c.log.Warn("probe path check failed", "provider", t.Name, "source", t.Source, "next_hop", t.NextHop, "err", err)
-		return true, true
+		if ctx.Err() != nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return pathResult{}
+		}
+		return pathResult{ok: true, mismatch: true, why: "the probe could not be sent: " + err.Error()}
 	}
 	if !from.IsValid() {
-		c.log.Warn("probe path mismatch: no first hop answered", "provider", t.Name, "source", t.Source, "next_hop", t.NextHop)
-		return true, true
+		return pathResult{ok: true, mismatch: true, why: "no first hop answered"}
 	}
-	if from.Unmap() != t.NextHop {
-		c.log.Warn("probe path mismatch", "provider", t.Name, "source", t.Source, "next_hop", t.NextHop, "first_hop", from.Unmap())
-		return true, true
+	from = from.Unmap()
+	if from != t.NextHop {
+		return pathResult{ok: true, mismatch: true, from: from, why: "the first hop is " + from.String()}
 	}
-	return false, true
+	return pathResult{ok: true, from: from}
+}
+
+// one probes a single target and logs a mismatch.
+func (c *pathChecker) one(ctx context.Context, t pathTarget) (mismatch, ok bool) {
+	r := c.check(ctx, t)
+	if r.mismatch {
+		c.log.Warn("probe path mismatch: "+r.why, "provider", t.Name, "source", t.Source, "next_hop", t.NextHop)
+	}
+	return r.mismatch, r.ok
 }

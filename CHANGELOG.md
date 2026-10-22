@@ -6,6 +6,7 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 
 ### Added
 
+- Onboarding: install.sh starts observe; Settings runs blocking preflight checks with a fix each and metrics; guided inject step; -snippet router config for six vendors; -pbr linux -apply (#221).
 - Providers show latency, loss, jitter (15 min, 24 h), a trend and Mbps; Overview leads with latency and improvement charts and drops the Mode tile (#349).
 - Soak table follows a real full table's shape (lengths, AS path, communities, MED, attribute sets) from a counts-only RIS file, documentation space only (#341).
 - Improvements explain each move in a plain sentence and show latency, loss, gain, Mbps, ASN, AS name and hold time (#348).

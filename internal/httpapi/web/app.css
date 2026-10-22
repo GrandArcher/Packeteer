@@ -566,3 +566,13 @@ main:focus { outline: none; }
 .ts-key.series-3 { color: var(--series-3); border-bottom-style: double; }
 .ts-key.series-4 { color: var(--series-4); border-bottom-style: dashed; }
 .ts-key.series-5 { color: var(--series-5); border-bottom-style: dotted; }
+
+.pf-list { list-style: none; padding: 0; margin: 8px 0; }
+.pf-item { border: 1px solid var(--muted); border-left-width: 4px; border-radius: 4px; padding: 8px 12px; margin-bottom: 8px; }
+.pf-item.pf-pass { border-left-color: #0b5a3a; }
+.pf-item.pf-warn { border-left-color: var(--diff); }
+.pf-item.pf-fail { border-left-color: var(--down); }
+.pf-item.pf-unverified { border-left-color: var(--muted); }
+.pf-head { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.pf-detail, .pf-fix { margin: 4px 0; white-space: pre-line; }
+#pf-snippet { overflow-x: auto; padding: 8px 12px; border: 1px solid var(--muted); border-radius: 4px; }

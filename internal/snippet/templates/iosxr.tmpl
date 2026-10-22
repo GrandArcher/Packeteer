@@ -1,0 +1,52 @@
+! Packeteer on Cisco IOS-XR. Generated for review: nothing is applied. Load it
+! with "load" in configuration mode, then "commit confirmed".
+! This router: AS {{.ASN}}, {{.Router}}. Packeteer: {{.Packeteer}}.
+{{if .Large}}large-community-set packeteer
+  {{.Community}}
+end-set{{else}}community-set packeteer
+  {{.Community}}
+end-set{{end}}
+!
+! From Packeteer: only routes that carry the Packeteer community.
+route-policy packeteer-in
+  if {{if .Large}}large-community{{else}}community{{end}} matches-any packeteer then
+    pass
+  else
+    drop
+  endif
+end-policy
+!
+! Toward every eBGP neighbor, customers and peers included: never a route
+! with the Packeteer community. Put the first "if" at the top of the
+! outbound route-policy each eBGP neighbor already uses (rename ebgp-out to
+! it); your existing terms replace the final pass.
+route-policy ebgp-out
+  if {{if .Large}}large-community{{else}}community{{end}} matches-any packeteer then
+    drop
+  endif
+  pass
+end-policy
+!
+router bgp {{.ASN}}
+ neighbor {{.Packeteer}}
+  remote-as {{.ASN}}
+  description packeteer
+  ! Keepalive 10s, hold time 30s: a crashed Packeteer's routes go within 30s.
+  timers 10 30
+  ! Packeteer never offers graceful restart. Leave "graceful-restart" off
+  ! for this neighbor.
+  address-family ipv4 unicast
+   route-policy packeteer-in in
+  !
+{{- if .IPv6}}
+  address-family ipv6 unicast
+   route-policy packeteer-in in
+  !
+{{- end}}
+ !
+!
+{{- if .AddPath}}
+! add_path is set for this neighbor in Packeteer's config: also enable
+! add-path send toward {{.Packeteer}} ("additional-paths send" in each
+! address family, with an "additional-paths selection" policy).
+{{- end}}

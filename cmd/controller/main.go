@@ -36,6 +36,7 @@ import (
 	"github.com/GrandArcher/Packeteer/internal/probe"
 	"github.com/GrandArcher/Packeteer/internal/provseries"
 	"github.com/GrandArcher/Packeteer/internal/rib"
+	"github.com/GrandArcher/Packeteer/internal/snippet"
 	"github.com/GrandArcher/Packeteer/internal/subscribe"
 	"github.com/GrandArcher/Packeteer/internal/syshealth"
 	"github.com/GrandArcher/Packeteer/internal/upgrade"
@@ -145,6 +146,9 @@ func run(ctx context.Context, args []string, getenv func(string) string, stdout,
 	restoreFrom := fs.String("restore", "", "restore stored history from this archive into its config's storage and exit (stop the controller first)")
 	restoreConfig := fs.String("restore-config", "", "with -restore, also write the archived config to this path")
 	pbrFormat := fs.String("pbr", "", "print the probe policy routing for the configured providers ("+strings.Join(pbr.Formats, ", ")+") and exit; generation only, nothing is applied or sent to a router")
+	apply := fs.Bool("apply", false, "with -pbr linux, show what would change in this host's ip rules and routes; add -yes to apply it")
+	yes := fs.Bool("yes", false, "with -pbr linux -apply, apply the shown changes")
+	snippetVendor := fs.String("snippet", "", "print the router config for the configured edge ("+strings.Join(snippet.Vendors, ", ")+") and exit; generation only, nothing is sent to a router")
 	force := fs.Bool("force", false, "with -restore, replace existing history and config files")
 	if err := fs.Parse(args); err != nil {
 		return 2
@@ -173,6 +177,20 @@ func run(ctx context.Context, args []string, getenv func(string) string, stdout,
 	if err := startConfig(cfg, getenv); err != nil {
 		fmt.Fprintf(stderr, "packeteer: refusing to start: %v\n", err)
 		return 1
+	}
+	if (*apply || *yes) && *pbrFormat != pbr.Linux {
+		fmt.Fprintln(stderr, "packeteer: -apply and -yes need -pbr linux")
+		return 2
+	}
+	if *yes && !*apply {
+		fmt.Fprintln(stderr, "packeteer: -yes needs -apply")
+		return 2
+	}
+	if *snippetVendor != "" {
+		return runSnippet(*snippetVendor, cfg, stdout, stderr)
+	}
+	if *apply {
+		return runPBRApply(ctx, cfg, *yes, hostIP, stdout, stderr)
 	}
 	if *pbrFormat != "" {
 		text, err := pbr.Generate(*pbrFormat, pbr.Entries(cfg))
@@ -775,6 +793,9 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 	loopCtx, loopCancel := context.WithCancel(ctx)
 	var loopWG sync.WaitGroup
 	live := &liveConfig{cfg: cfg}
+	if httpSrv != nil && cfg.IXP == nil {
+		httpSrv.SetPreflight(newPreflight(live, view, lw, plugins, pktLimiter, log))
+	}
 	loopWG.Add(1)
 	go func() {
 		defer loopWG.Done()

@@ -2490,6 +2490,79 @@ jobs:
           fi
           grep -q 'Packeteer routes still on the router' broken.log
 
+  onboarding:
+    # Onboarding (#221). Lab only: documentation prefixes and ASNs, simulated
+    # FRR and BIRD, the image built from this commit.
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: docker/setup-buildx-action@v4
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - name: build image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          load: true
+          tags: packeteer:ci
+          build-args: VERSION=ci-${{ github.sha }}
+      - name: onboarding lab (#221; one-command install in observe, blocking preflight checks with fixes, refused inject step, FRR and BIRD accept the router config, policy routing diff/apply/verify/clean)
+        run: bash lab/e2e-onboarding.sh packeteer:ci
+      - name: UI preflight smoke (#221; Run checks shows each check with its status and fix, router config for FRR, inject step hidden, no config write, observe)
+        run: |
+          cat > /tmp/ui221.yaml <<'YAML'
+          mode: observe
+          asn: 64512
+          router_id: 192.0.2.10
+          packeteer_community: "64512:666"
+          providers:
+            - {name: lab-a, source_ip: 127.0.0.1, next_hop: 192.0.2.1}
+          bgp:
+            neighbors:
+              - address: 192.0.2.254
+          announcer:
+            type: gobgp
+          http:
+            config_editor: true
+          YAML
+          base=http://127.0.0.1:8080
+          docker run -d --name pkpf221 --network host --cap-add NET_RAW --cap-add NET_ADMIN \
+            -e PACKETEER_HTTP_USER=lab -e PACKETEER_HTTP_PASSWORD=lab-only \
+            -v /tmp/ui221.yaml:/etc/packeteer/config.yaml:ro packeteer:ci
+          proxy=""
+          cleanup() {
+            if [ -n "$proxy" ]; then kill "$proxy" 2>/dev/null || true; fi
+            docker stop -t 15 pkpf221 >/dev/null || true
+            docker logs pkpf221 2>&1 | tail -n 40
+            docker rm pkpf221 >/dev/null || true
+          }
+          trap cleanup EXIT
+          ok=0
+          for _ in $(seq 1 30); do
+            if curl -fsS "$base/healthz" >/dev/null 2>&1; then ok=1; break; fi
+            sleep 1
+          done
+          test "$ok" = 1
+          go build -o /tmp/uiproxy ./lab/uiproxy
+          /tmp/uiproxy -listen 127.0.0.1:18221 -upstream "$base" -user lab -password lab-only \
+            -fixtures lab/ui-fixtures/preflight >/tmp/uiproxy221.log 2>&1 &
+          proxy=$!
+          for _ in $(seq 1 20); do
+            curl -fsS http://127.0.0.1:18221/healthz >/dev/null 2>&1 && break
+            sleep 0.2
+          done
+          curl -fsS http://127.0.0.1:18221/healthz >/dev/null
+          bash lab/ui-smoke.sh http://127.0.0.1:18221/settings.html 'mode-observe' \
+            'Preflight checks' 'Run checks' \
+            'checks: bgp_session=Failed import_filter=Needs confirmation probe_egress=Warning timers=Failed withdrawal=Failed' \
+            'inject step hidden: true' 'confirm button: Confirm' \
+            'Injection stays off: 4 checks need attention.' 'Not established: 192.0.2.254.' \
+            'What to do: ' 'neighbor 192.0.2.10 remote-as 64512' \
+            'snippet: ! Packeteer on FRR. Generated for review: nothing is applied.' 'writes: 0' \
+            --absent 'mode-inject' 'Cannot reach'
+
   chr:
     # MikroTik RouterOS CHR in QEMU (#52). The free CHR image is fetched
     # from MikroTik at run time (checksum pinned in lab/e2e-chr.sh) and runs
