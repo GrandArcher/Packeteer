@@ -12,57 +12,45 @@
    "name": "lab-a",
    "up": true,
    "state": "up",
-   "loss_pct": 0,
+   "loss_pct": 2,
    "ok": 3,
    "failed": 0
   },
   {
    "name": "lab-b",
-   "up": false,
-   "state": "down",
-   "loss_pct": 100,
-   "ok": 0,
-   "failed": 3,
-   "detail": "100% loss"
+   "up": true,
+   "state": "up",
+   "loss_pct": 0,
+   "ok": 3,
+   "failed": 0
   },
   {
    "name": "lab-c-transit-long-name",
-   "up": false,
-   "state": "down",
-   "ok": 0,
-   "failed": 3,
-   "detail": "no answer"
+   "up": true,
+   "state": "up",
+   "loss_pct": 0.25,
+   "ok": 3,
+   "failed": 0
   }
  ],
- "problems": [
-  {
-   "provider": "lab-b",
-   "detail": "100% loss",
-   "state": "down"
-  },
-  {
-   "provider": "lab-c-transit-long-name",
-   "detail": "no answer",
-   "state": "down"
-  }
- ],
+ "problems": [],
  "counts": {
-  "providers_up": 1,
-  "providers_healthy": 1,
+  "providers_up": 3,
+  "providers_healthy": 3,
   "providers": 3,
-  "warnings": 2,
-  "prefixes": 1,
-  "measured": 1,
-  "in_rib": 0,
-  "recommended": 0,
-  "improvements": 0,
+  "warnings": 0,
+  "prefixes": 2,
+  "measured": 2,
+  "in_rib": 2,
+  "recommended": 2,
+  "improvements": 2,
   "max_improvements": 50
  },
  "bgp": {
-  "configured": false,
-  "ready": false,
-  "established": 0,
-  "peers": 0
+  "configured": true,
+  "ready": true,
+  "established": 1,
+  "peers": 1
  },
  "features": [
   {
@@ -103,14 +91,6 @@
   }
  ],
  "setup": [
-  {
-   "id": "bgp",
-   "level": "info",
-   "title": "No edge router session",
-   "detail": "Providers are ranked, but the current exit of each prefix is unknown and nothing could ever be injected. Add bgp.neighbors for a learn-only iBGP session to your edge router.",
-   "doc": "docs/routers.md",
-   "doc_url": "https://github.com/GrandArcher/Packeteer/blob/main/docs/routers.md"
-  },
   {
    "id": "history",
    "level": "info",

@@ -758,25 +758,49 @@ func TestExplainFixturesMatchAPI(t *testing.T) {
 		GeneratedAt  time.Time             `json:"generated_at"`
 		Improvements []httpapi.Improvement `json:"improvements"`
 	}
+	var ov httpapi.Overview
 	for _, s := range f.Stubs {
-		if s.Path != "/api/improvements" {
+		var v any
+		switch s.Path {
+		case "/api/improvements":
+			v = &imps
+		case "/api/overview":
+			v = &ov
+		default:
 			continue
 		}
 		dec := json.NewDecoder(bytes.NewReader(s.body))
 		dec.DisallowUnknownFields()
-		if err := dec.Decode(&imps); err != nil {
-			t.Fatal(err)
+		if err := dec.Decode(v); err != nil {
+			t.Fatal(s.Path, err)
 		}
 	}
 	if len(imps.Improvements) != 2 || imps.Mode != "observe" {
 		t.Fatalf("improvements = %+v", imps)
 	}
 	first, second := imps.Improvements[0], imps.Improvements[1]
-	if first.ASN != 64496 || first.VolumeMbps != 12.5 || first.HoldLeftS != 130 || !strings.Contains(first.Explain, "Threshold 15 ms.") {
+	if first.ASN != 64496 || first.VolumeMbps != 12.5 || first.HoldLeftS != 130 || first.LossGainPct != nil || !strings.Contains(first.Explain, "Threshold 15 ms.") {
 		t.Errorf("first = %+v", first)
 	}
 	if second.VolumeMbps != 0 || !strings.HasPrefix(second.Prefix, "2001:db8:") || second.ASName != "" {
 		t.Errorf("second must have no flow data and no AS name: %+v", second)
+	}
+	if second.LossGainPct == nil || *second.LossGainPct != 3.5 {
+		t.Errorf("second loss gain = %v, want 3.5", second.LossGainPct)
+	}
+	// The overview must describe the same state: a BGP session, the two
+	// rows counted, and every recommended provider up.
+	if !ov.BGP.Configured || ov.BGP.Established == 0 || ov.Counts.Improvements != 2 || ov.Counts.Recommended != 2 || ov.Mode != imps.Mode {
+		t.Errorf("overview disagrees with the improvements: %+v %+v", ov.Counts, ov.BGP)
+	}
+	up := map[string]bool{}
+	for _, p := range ov.Providers {
+		up[p.Name] = p.State == "up"
+	}
+	for _, im := range imps.Improvements {
+		if !up[im.Provider] || !up[im.Native] {
+			t.Errorf("%s: %s or %s is not up in the overview", im.Prefix, im.Native, im.Provider)
+		}
 	}
 	app, err := os.ReadFile("../../internal/httpapi/web/app.js")
 	if err != nil {

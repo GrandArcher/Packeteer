@@ -293,13 +293,15 @@ type Improvement struct {
 	ASN    uint32 `json:"asn,omitempty"`
 	ASName string `json:"as_name,omitempty"`
 	// The native and steered providers' latest measurements, set only when
-	// both have a usable one. GainMs and GainPct are the latency saved.
+	// both have a usable one. GainMs and GainPct are the latency saved;
+	// LossGainPct is the points of loss saved, omitted when loss reads equal.
 	NativeLossPct *float64 `json:"native_loss_pct,omitempty"`
 	LossPct       *float64 `json:"loss_pct,omitempty"`
 	NativeRTTMs   *float64 `json:"native_rtt_ms,omitempty"`
 	RTTMs         *float64 `json:"rtt_ms,omitempty"`
 	GainMs        *float64 `json:"gain_ms,omitempty"`
 	GainPct       *float64 `json:"gain_pct,omitempty"`
+	LossGainPct   *float64 `json:"loss_gain_pct,omitempty"`
 	// Explain is the reason in plain words with the threshold it cleared.
 	// Reason stays the short record kept in history and notifications.
 	Explain string `json:"explain,omitempty"`

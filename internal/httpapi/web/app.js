@@ -491,9 +491,9 @@ function renderImprovements(data) {
   rows.forEach(function (im) {
     var tr = el("tr");
     tr.appendChild(prefixCell(im.prefix));
-    tr.appendChild(el("td", "", im.native || "-"));
-    tr.appendChild(el("td", "", im.provider || "-"));
-    tr.appendChild(el("td", "", im.cause || "-"));
+    tr.appendChild(el("td", "", im.native || "—"));
+    tr.appendChild(el("td", "", im.provider || "—"));
+    tr.appendChild(el("td", "", im.cause || "—"));
     tr.appendChild(el("td", "", beforeAfter(im.native_rtt_ms, im.rtt_ms, " ms")));
     tr.appendChild(el("td", "", beforeAfter(im.native_loss_pct, im.loss_pct, "%")));
     tr.appendChild(el("td", "", gainText(im)));
@@ -520,8 +520,7 @@ function gainText(im) {
   if (im.gain_ms == null) return "-";
   var parts = [];
   if (im.gain_ms > 0) parts.push(fmtNum(im.gain_ms) + " ms" + (im.gain_pct != null ? " (" + Math.round(im.gain_pct) + "%)" : ""));
-  var lossGain = im.native_loss_pct - im.loss_pct;
-  if (lossGain >= 0.05) parts.push(fmtNum(lossGain) + " pt less loss");
+  if (im.loss_gain_pct != null) parts.push(fmtNum(im.loss_gain_pct) + " pt less loss");
   return parts.length ? parts.join(", ") : "none now";
 }
 

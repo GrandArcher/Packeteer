@@ -17,10 +17,12 @@ func better(a, b Candidate, cfg Config) bool {
 	if a.Score >= b.Score {
 		return false
 	}
-	if cfg.MinLossDeltaPct > 0 && b.LossPct-a.LossPct >= cfg.MinLossDeltaPct {
-		return true
-	}
-	return rttWins(a, b, cfg)
+	return lossWins(a, b, cfg) || rttWins(a, b, cfg)
+}
+
+// lossWins reports a loss win: a's loss is at least MinLossDeltaPct below b's.
+func lossWins(a, b Candidate, cfg Config) bool {
+	return cfg.MinLossDeltaPct > 0 && b.LossPct-a.LossPct >= cfg.MinLossDeltaPct
 }
 
 // rttWins reports an RTT-only win: loss is no worse, the absolute delta

@@ -127,8 +127,27 @@ type Thresholds struct {
 	HoldTime        time.Duration
 }
 
+// LossWins reports whether to beats from on loss by the thresholds, the
+// same rule a performance move uses, ignoring the score.
+func (t Thresholds) LossWins(to, from Candidate) bool {
+	return lossWins(to, from, t.config())
+}
+
+// RTTWins reports whether to beats from on latency by the thresholds, the
+// same rule a performance move uses, ignoring the score.
+func (t Thresholds) RTTWins(to, from Candidate) bool {
+	return rttWins(to, from, t.config())
+}
+
+func (t Thresholds) config() Config {
+	return Config{MinLossDeltaPct: t.MinLossDeltaPct, MinRTTDelta: t.MinRTTDelta, MinRTTDeltaPct: t.MinRTTDeltaPct}
+}
+
 // Thresholds returns the limits the next Evaluate uses.
 func (e *Engine) Thresholds() Thresholds {
+	if e == nil {
+		return Thresholds{}
+	}
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 	return Thresholds{

@@ -71,9 +71,45 @@ func TestImprovementExplainsLossWin(t *testing.T) {
 	}
 }
 
+// A kept move whose gain shrank below the thresholds must not claim it
+// beat them.
+func TestImprovementBelowThresholdQuotesNone(t *testing.T) {
+	for name, tc := range map[string]struct {
+		natRTT, toRTT time.Duration
+		pct           float64
+	}{
+		"under min_rtt_delta":     {25 * time.Millisecond, 20 * time.Millisecond, 0},
+		"under min_rtt_delta_pct": {200 * time.Millisecond, 180 * time.Millisecond, 15},
+	} {
+		in := explainInput(plugin.CausePerformance, 0, 0, tc.natRTT, tc.toRTT)
+		in.Thresholds.MinRTTDeltaPct = tc.pct
+		im := Assemble(in).Improvements[0]
+		if strings.Contains(im.Explain, "Threshold") || strings.Contains(im.Explain, "faster") {
+			t.Errorf("%s: explain = %q quotes a threshold the move does not beat", name, im.Explain)
+		}
+		if !strings.HasSuffix(im.Explain, "under the thresholds now. It cleared them when chosen.") {
+			t.Errorf("%s: explain = %q", name, im.Explain)
+		}
+		if im.GainMs == nil || *im.GainMs <= 0 || im.LossGainPct != nil {
+			t.Errorf("%s: gain columns = %+v", name, im)
+		}
+	}
+}
+
+func TestImprovementLossGainOnlyWhenNotEqual(t *testing.T) {
+	im := Assemble(explainInput(plugin.CausePerformance, 4, 0.5, 30*time.Millisecond, 32*time.Millisecond)).Improvements[0]
+	if im.LossGainPct == nil || *im.LossGainPct != 3.5 {
+		t.Fatalf("loss gain = %v, want 3.5", im.LossGainPct)
+	}
+	im = Assemble(explainInput(plugin.CausePerformance, 0.53, 0.5, 60*time.Millisecond, 20*time.Millisecond)).Improvements[0]
+	if im.LossGainPct != nil || !strings.Contains(im.Explain, "loss equal") {
+		t.Fatalf("loss gain = %v, explain = %q, want loss equal", im.LossGainPct, im.Explain)
+	}
+}
+
 func TestImprovementExplainsOtherCause(t *testing.T) {
 	got := Assemble(explainInput(plugin.CauseCommit, 0, 0, 60*time.Millisecond, 20*time.Millisecond)).Improvements[0].Explain
-	if !strings.HasPrefix(got, "Commit control: ") || !strings.Contains(got, "lab-b measures rtt 60 -> 20 ms, loss 0 -> 0%.") {
+	if !strings.HasPrefix(got, "Commit control: ") || !strings.Contains(got, "lab-b measures rtt 60 -> 20 ms, loss 0% -> 0%.") {
 		t.Fatalf("explain = %q", got)
 	}
 }

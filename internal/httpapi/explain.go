@@ -44,19 +44,24 @@ func explainImprovement(im *Improvement, cands []policy.Candidate, th policy.Thr
 		im.GainPct = &pct
 	}
 	lossGain := from.LossPct - to.LossPct
-	lossWin := th.MinLossDeltaPct > 0 && lossGain >= th.MinLossDeltaPct
+	if lossGain >= lossEqualPct {
+		im.LossGainPct = &lossGain
+	}
+	// A kept move can sit below the thresholds until the native path is
+	// clearly better again, so a threshold is quoted only when the current
+	// measurements beat it.
 	switch {
 	case im.Cause != "" && im.Cause != plugin.CausePerformance:
-		im.Explain = fmt.Sprintf("%s%s. %s measures rtt %s -> %s ms, loss %s -> %s%%.",
+		im.Explain = fmt.Sprintf("%s%s. %s measures rtt %s -> %s ms, loss %s%% -> %s%%.",
 			causeLabel(im.Cause), strings.TrimSuffix(im.Reason, "."), im.Provider, num(fromMs), num(toMs), num(from.LossPct), num(to.LossPct))
-	case lossWin:
+	case th.LossWins(*to, *from):
 		im.Explain = fmt.Sprintf("%s has %s pt less loss (%s%% -> %s%%), rtt %s -> %s ms. Threshold %s pt of loss.",
 			im.Provider, num(lossGain), num(from.LossPct), num(to.LossPct), num(fromMs), num(toMs), num(th.MinLossDeltaPct))
-	case gainMs > 0 && to.LossPct <= from.LossPct:
+	case th.RTTWins(*to, *from):
 		im.Explain = fmt.Sprintf("%s is %s ms faster (%s -> %s ms, %.0f%%), %s. Threshold %s.",
 			im.Provider, num(gainMs), num(fromMs), num(toMs), *im.GainPct, lossClause(from.LossPct, to.LossPct), rttThreshold(th))
 	default:
-		im.Explain = fmt.Sprintf("%s measures rtt %s -> %s ms, loss %s%% -> %s%% against %s. It cleared the thresholds when chosen.",
+		im.Explain = fmt.Sprintf("%s measures rtt %s -> %s ms, loss %s%% -> %s%% against %s, under the thresholds now. It cleared them when chosen.",
 			im.Provider, num(fromMs), num(toMs), num(from.LossPct), num(to.LossPct), im.Native)
 	}
 }

@@ -37,6 +37,7 @@
    "rtt_ms": 32,
    "gain_ms": -2,
    "gain_pct": -6.7,
+   "loss_gain_pct": 3.5,
    "explain": "lab-c-transit-long-name has 3.5 pt less loss (4% -> 0.5%), rtt 30 -> 32 ms. Threshold 1 pt of loss."
   }
  ]
