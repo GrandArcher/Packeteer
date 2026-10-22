@@ -19,15 +19,15 @@ Set `cost` on at least two providers, add a `flow` source (or `mbps` on static t
 
 | Figure | Where |
 |---|---|
-| `est_savings`: the price difference times the prefix volume, per month, for a recommended move between two priced providers | `GET /api/improvements`, and the `savings` and `improvements` reports |
+| `cost_delta`: the native price minus the steered price, per Mbps, for a move between two priced providers. `est_savings`: `cost_delta` times the prefix volume, per month | `GET /api/improvements`, and the `savings` and `improvements` reports |
 | Accrued savings: `est_savings` times the hours the move was active in the range, divided by 730 | `savings` report (`accrued`), `summary` report (`est_savings_accrued`) |
 | Billable 95th against the commit, per provider | `/commit.html`, `GET /api/commit` |
-| Loss and latency before and after each move | `summary` report (`before_loss_pct`, `after_loss_pct`, `before_rtt_ms`, `after_rtt_ms`) |
+| Loss and latency before and after each move | `improvements` report, one row per move (`before_loss_pct`, `after_loss_pct`, `before_rtt_ms`, `after_rtt_ms`) |
 
 Two limits to keep in mind:
 
 - In observe and suggest these are recommendations. Nothing moved, so the figures are what Packeteer would have saved, not what you saved.
-- `est_savings` multiplies by volume only when a source reports one. Without a volume the figure is the price difference per Mbps alone, and you multiply by the traffic yourself.
+- `est_savings` multiplies by volume only when a source reports one. Without a volume `est_savings` is absent and `cost_delta` holds the per-Mbps price difference; multiply it by the traffic yourself.
 
 ## 3. The three lines
 

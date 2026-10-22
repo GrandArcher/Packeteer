@@ -114,7 +114,7 @@ Leave the current optimizer in charge. Packeteer observes the router's chosen ex
 Collect at least one billing period if you want a commit comparison, and a few days if you only want a performance comparison. Use:
 
 - `/api/improvements` and the dashboard for the recommended exit against the current exit, with the reason sentence;
-- the `summary`, `improvements`, and `savings` reports for before and after loss and latency and for estimated savings;
+- the `summary`, `improvements`, and `savings` reports for before and after loss and latency and for estimated savings (`est_savings`, or `cost_delta` per Mbps when no `flow` source gives a volume);
 - `/commit.html` for the 95th percentile against the commit, when telemetry is configured;
 - the VIP and outage events, to compare with what the other optimizer reported.
 
