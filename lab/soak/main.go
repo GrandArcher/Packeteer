@@ -6,7 +6,9 @@
 // API while that runs. It then stops Packeteer and compares what it
 // measured with the budgets in lab/soak/budgets.yaml. Any budget over, or
 // any broken invariant (session or readiness lost, a route sent by
-// observe mode, an unclean stop), exits 1.
+// observe mode, an unclean stop), exits 1. The multi-session profiles
+// (#383) play several routers and run Packeteer in inject mode; see
+// multi.go.
 //
 //	soak config -profile pr -out /tmp/soak.yaml
 //	soak run -profile pr -pid "$(docker inspect -f '{{.State.Pid}}' pksoak)" \
@@ -22,9 +24,12 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net"
 	"os"
 	"os/exec"
 	"os/signal"
+	"strings"
+	"sync"
 	"syscall"
 	"time"
 )
@@ -59,9 +64,10 @@ func usage() {
 	os.Exit(2)
 }
 
-func commonFlags(fs *flag.FlagSet) (budgets, profile *string, pt *ports) {
+func commonFlags(fs *flag.FlagSet) (budgets, profile *string, multiply *int, pt *ports) {
 	budgets = fs.String("budgets", "lab/soak/budgets.yaml", "budget file")
 	profile = fs.String("profile", "pr", "profile name in the budget file")
+	multiply = fs.Int("multiply", 0, "play the table on this many sessions, so Packeteer holds that many paths per prefix (1 to 4; default the profile's)")
 	pt = &ports{}
 	fs.IntVar(&pt.BGP, "bgp-port", 11179, "router port on 127.0.0.1")
 	fs.IntVar(&pt.Flow, "flow-port", 12055, "Packeteer IPFIX port on 127.0.0.1")
@@ -71,11 +77,14 @@ func commonFlags(fs *flag.FlagSet) (budgets, profile *string, pt *ports) {
 
 func cmdConfig(args []string) error {
 	fs := flag.NewFlagSet("config", flag.ExitOnError)
-	budgets, profile, pt := commonFlags(fs)
+	budgets, profile, multiply, pt := commonFlags(fs)
 	out := fs.String("out", "", "write the Packeteer config here (default stdout)")
 	data := fs.String("data", "/var/lib/packeteer", "storage directory as Packeteer sees it")
 	_ = fs.Parse(args)
 	p, err := loadProfile(*budgets, *profile)
+	if err == nil {
+		err = p.multiply(*multiply)
+	}
 	if err != nil {
 		return err
 	}
@@ -91,6 +100,7 @@ type runOpts struct {
 	name     string
 	prof     Profile
 	pt       ports
+	real     *realTable // the dump's view when prof.Real
 	pid      int
 	stop     string
 	procRoot string
@@ -99,7 +109,8 @@ type runOpts struct {
 
 func cmdRun(args []string) (bool, error) {
 	fs := flag.NewFlagSet("run", flag.ExitOnError)
-	budgets, profile, pt := commonFlags(fs)
+	budgets, profile, multiply, pt := commonFlags(fs)
+	mrtPath := fs.String("mrt", "", "MRT TABLE_DUMP_V2 dump (gzip, bzip2 or plain) to replay; required by, and only for, a profile with real: true")
 	pid := fs.Int("pid", 0, "Packeteer's PID as the host sees it")
 	stop := fs.String("stop", "", "shell command that stops Packeteer with SIGTERM (default: signal -pid)")
 	duration := fs.Duration("duration", 0, "override the profile's soak duration")
@@ -107,8 +118,23 @@ func cmdRun(args []string) (bool, error) {
 	procRoot := fs.String("proc", "/proc", "procfs root")
 	_ = fs.Parse(args)
 	p, err := loadProfile(*budgets, *profile)
+	if err == nil {
+		err = p.multiply(*multiply)
+	}
 	if err != nil {
 		return false, err
+	}
+	if p.Real != (*mrtPath != "") {
+		return false, errors.New("-mrt goes with a profile that has real: true, and that profile needs it")
+	}
+	var rt *realTable
+	if p.Real {
+		if rt, err = loadReal(*mrtPath); err != nil {
+			return false, fmt.Errorf("read the dump: %w", err)
+		}
+		p.useReal(rt)
+		t := rt.info()
+		log.Printf("dump: %d peers; the largest has %d IPv4 and %d IPv6 routes in %d attribute sets, %d skipped", t.Peers, t.IPv4, t.IPv6, t.Sets, t.Skipped)
 	}
 	if *duration > 0 {
 		p.Duration = *duration
@@ -121,7 +147,7 @@ func cmdRun(args []string) (bool, error) {
 	}
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
-	o := runOpts{name: *profile, prof: p, pt: *pt, pid: *pid, stop: *stop, procRoot: *procRoot, snmp: *procRoot + "/net/snmp"}
+	o := runOpts{name: *profile, prof: p, real: rt, pt: *pt, pid: *pid, stop: *stop, procRoot: *procRoot, snmp: *procRoot + "/net/snmp"}
 	r, err := run(ctx, o)
 	if err != nil {
 		return false, err
@@ -160,20 +186,42 @@ func waitFor(ctx context.Context, timeout time.Duration, cond func() bool) bool 
 func run(ctx context.Context, o runOpts) (Result, error) {
 	p := o.prof
 	tbl := newTable(p.Prefixes)
-	r := Result{Profile: o.name, Prefixes: p.Prefixes, Failures: []string{}}
+	if o.real != nil {
+		tbl = newRealTable(o.real)
+	}
+	mode := "observe"
+	if p.Inject > 0 {
+		mode = "inject"
+	}
+	slow := slowID(p)
+	r := Result{Profile: o.name, Prefixes: p.Prefixes, Mode: mode, Sessions: p.sessions(), Failures: []string{}}
+	if o.real != nil {
+		r.Table = o.real.info()
+	}
+	var failMu sync.Mutex
 	fail := func(format string, a ...any) {
 		msg := fmt.Sprintf(format, a...)
 		log.Print("FAIL: ", msg)
+		failMu.Lock()
 		r.Failures = append(r.Failures, msg)
+		failMu.Unlock()
 	}
 	papi := newAPI(fmt.Sprintf("http://127.0.0.1:%d", o.pt.HTTP))
 	readP := func() (proc, error) { return readProc(o.procRoot, o.pid) }
 
-	rt, err := startRouter(ctx, o.pt.BGP, tbl)
-	if err != nil {
-		return r, err
+	f := &fleet{adv: newAdvertised()}
+	for k := range p.sessions() {
+		rt, err := startRouter(ctx, k, o.pt.BGP, tbl, f.adv)
+		if err != nil {
+			return r, err
+		}
+		defer rt.stop()
+		rt.cap = p.Inject
+		if k == slow {
+			rt.slow = p.SlowPeerBPS
+		}
+		f.routers = append(f.routers, rt)
 	}
-	defer rt.stop()
 
 	if !waitFor(ctx, 2*time.Minute, func() bool { _, _, err := papi.metrics(ctx); return err == nil }) {
 		return r, errors.New("ops API did not come up")
@@ -181,28 +229,31 @@ func run(ctx context.Context, o runOpts) (Result, error) {
 	if _, err := readP(); err != nil {
 		return r, fmt.Errorf("read Packeteer process %d: %w", o.pid, err)
 	}
-	if ov, _, err := papi.overview(ctx); err != nil || ov.Mode != "observe" {
-		return r, fmt.Errorf("controller must run in observe mode (got %q, %v)", ov.Mode, err)
+	if ov, _, err := papi.overview(ctx); err != nil || ov.Mode != mode {
+		return r, fmt.Errorf("controller must run in %s mode (got %q, %v)", mode, ov.Mode, err)
 	}
 
-	// Learn: Packeteer connects and the session opens with a full-table
-	// dump, as on a real edge.
-	actx, acancel := context.WithTimeout(ctx, 2*time.Minute)
-	err = rt.accept(actx)
-	acancel()
-	if err != nil {
+	// Learn: Packeteer connects to every router and each session opens
+	// with a full-table dump, as on a real edge.
+	if err := acceptAll(f, 2*time.Minute); err != nil {
 		return r, err
 	}
 	before, _ := readP()
 	t0 := time.Now()
-	log.Printf("session up; sending %d prefixes (%d per attribute set)", p.Prefixes, tbl.setLen)
-	if err := rt.load(ctx, 0, p.Prefixes); err != nil {
-		return r, err
+	log.Printf("%d session(s) up; sending %d prefixes on each (%d per attribute set)", len(f.routers), p.Prefixes, tbl.setLen)
+	firsts := make([]chan struct{}, len(f.routers))
+	for k, rt := range f.routers {
+		firsts[k] = make(chan struct{})
+		go rt.serve(ctx, firsts[k])
 	}
-	if err := rt.endOfRIB(); err != nil {
-		return r, err
+	for _, first := range firsts {
+		select {
+		case <-first:
+		case <-ctx.Done():
+			return r, ctx.Err()
+		}
 	}
-	log.Printf("table sent in %s", time.Since(t0).Round(time.Millisecond))
+	log.Printf("tables sent in %s", time.Since(t0).Round(time.Millisecond))
 	learnTimeout := 30 * time.Minute
 	if p.Budgets.LearnSeconds > 0 {
 		learnTimeout = time.Duration(2*p.Budgets.LearnSeconds+60) * time.Second
@@ -223,9 +274,10 @@ func run(ctx context.Context, o runOpts) (Result, error) {
 	r.LearnCPUCores = (after.CPU - before.CPU) / r.LearnSeconds
 	log.Printf("learned %d prefixes in %.1fs (%.2f cores)", p.Prefixes, r.LearnSeconds, r.LearnCPUCores)
 
-	// Soak: flows, churn, and sampling.
+	// Soak: flows, churn, flaps, the withdraw check, and sampling.
 	udp0, udpErr := readUDP(o.snmp)
 	cpu0, _ := readP()
+	drops0 := f.drops()
 	soakCtx, stopSoak := context.WithCancel(ctx)
 	exp := newExporter(tbl, p.FlowHot)
 	expDone := make(chan error, 1)
@@ -237,11 +289,19 @@ func run(ctx context.Context, o runOpts) (Result, error) {
 		expDone <- exp.run(soakCtx, fmt.Sprintf("127.0.0.1:%d", o.pt.Flow), p.FlowRate)
 	}()
 	churnDone := make(chan int, 1) // first entry still withdrawn, or -1
-	go func() { churnDone <- churn(soakCtx, rt, tbl, p.Churn, &r.ChurnUpdates, fail) }()
+	go func() { churnDone <- churn(soakCtx, f, tbl, p.Churn, &r.ChurnUpdates) }()
+	var flaps flapStats
+	var lat latencies
+	var bg sync.WaitGroup
+	bg.Go(func() { flapper(soakCtx, f, p.FlapEvery, slow, &flaps, fail) })
+	if p.Inject > 0 {
+		bg.Go(func() { withdrawCheck(soakCtx, f, tbl, slow, &lat, fail) })
+	}
 
 	soakStart := time.Now()
-	var warmRSS, postRSS, allRSS, lat []float64
+	var warmRSS, postRSS, allRSS, apiLat []float64
 	var pace probePace
+	var loops loopWatch
 	notReady, sessionDown, sampleErrs := 0, 0, 0
 	tick := time.NewTicker(p.Sample)
 loop:
@@ -268,11 +328,12 @@ loop:
 		}
 		m, d1, err1 := papi.metrics(ctx)
 		_, d2, err2 := papi.overview(ctx)
-		if err1 != nil || err2 != nil {
+		decided, err3 := papi.decided(ctx)
+		if err1 != nil || err2 != nil || err3 != nil {
 			sampleErrs++
-			log.Printf("api: %v %v", err1, err2)
+			log.Printf("api: %v %v %v", err1, err2, err3)
 		} else {
-			lat = append(lat, float64(d1.Milliseconds()), float64(d2.Milliseconds()))
+			apiLat = append(apiLat, float64(d1.Milliseconds()), float64(d2.Milliseconds()))
 			if !m.Ready {
 				notReady++
 			}
@@ -280,10 +341,11 @@ loop:
 				sessionDown++
 			}
 			pace.sample(el, p.Warmup, m.ProbePrefixCommits, m.FlowPrefixesTracked)
+			loops.sample(time.Now(), m.ProbePrefixCommits, m.MutexWaitSeconds, decided)
 		}
-		log.Printf("t=%s rss=%.0fMiB cpu=%.1fs threads=%d rib=%d flows=%d commits=%.0f tracked=%.0f",
+		log.Printf("t=%s rss=%.0fMiB cpu=%.1fs threads=%d rib=%d flows=%d commits=%.0f tracked=%.0f sessions=%d",
 			el.Round(time.Second), float64(pr.RSS)/(1<<20), pr.CPU, pr.Threads, m.RIBPrefixes, exp.sent.Load(),
-			m.ProbePrefixCommits, m.FlowPrefixesTracked)
+			m.ProbePrefixCommits, m.FlowPrefixesTracked, f.up())
 		if el >= p.Duration {
 			break
 		}
@@ -294,6 +356,7 @@ loop:
 		fail("flow exporter: %v", err)
 	}
 	pending := <-churnDone
+	bg.Wait()
 	soakEnd := time.Now()
 	r.DurationSeconds = soakEnd.Sub(soakStart).Seconds()
 	r.FlowRecords = exp.sent.Load()
@@ -318,7 +381,19 @@ loop:
 	r.RSSBaselineMB, r.RSSEndMB = growth(warmRSS, postRSS)
 	r.RSSGrowthMB = max(0, r.RSSEndMB-r.RSSBaselineMB)
 	r.RSSSlopeMB = riseLastThird(allRSS)
-	r.APIP99Ms = percentile(lat, 99)
+	r.APIP99Ms = percentile(apiLat, 99)
+	r.DecideMaxGapSecs, r.ProbeMaxGapSecs = loops.decideGap, loops.probeGap
+	r.LockWaitPerSec, r.LockWaitMaxPerSec = loops.waitRate(), loops.waitMax
+	r.Flaps, r.ReconnectMaxSecs = flaps.flaps, flaps.reconnect
+	r.SessionDrops = int(f.drops() - drops0)
+	for _, rt := range f.routers {
+		if rt.id != slow {
+			r.MaxSilenceMs = max(r.MaxSilenceMs, float64(rt.silence.Load())/1e6)
+		}
+	}
+	r.WithdrawChecks, r.SlowWithdrawLate = lat.checks, lat.slowLate
+	r.WithdrawP50Ms, r.WithdrawP99Ms = percentile(lat.fast, 50), percentile(lat.fast, 99)
+	r.WithdrawMaxMs, r.SlowWithdrawMaxMs = percentile(lat.fast, 100), percentile(lat.slow, 100)
 	if udp1, err := readUDP(o.snmp); err == nil && udpErr == nil && p.FlowRate > 0 {
 		in, drop := udp1.In-udp0.In, udp1.RcvbufErrors-udp0.RcvbufErrors
 		if in+drop > 0 {
@@ -329,18 +404,23 @@ loop:
 		fail("packeteer_ready was 0 in %d samples during the soak", notReady)
 	}
 	if sessionDown > 0 {
-		fail("the iBGP session was down in %d samples during the soak", sessionDown)
+		fail("no iBGP session was up in %d samples during the soak", sessionDown)
 	}
-	if sampleErrs > len(lat)/20 {
+	if r.SessionDrops > 0 {
+		fail("%d session(s) ended during the soak without a flap", r.SessionDrops)
+	}
+	if sampleErrs > len(apiLat)/20 {
 		fail("%d API samples failed", sampleErrs)
 	}
 
-	// Reconverge: the last churned batch comes back and the view is whole.
+	// Reconverge: every session is back, the last churned batch comes
+	// back, and the view is whole.
+	if !waitFor(ctx, reconnectWait, f.allUp) {
+		fail("%d of %d sessions up %s after the soak", f.up(), len(f.routers), reconnectWait)
+	}
 	t1 := time.Now()
 	if pending >= 0 {
-		if err := rt.load(ctx, pending, min(pending+churnBatch(p.Churn), p.Prefixes)); err != nil {
-			return r, err
-		}
+		f.announce(pending, min(pending+churnBatch(p.Churn), p.Prefixes))
 	}
 	whole := waitFor(ctx, 5*time.Minute, func() bool {
 		m, _, err := papi.metrics(ctx)
@@ -359,13 +439,42 @@ loop:
 		fail("overview: %v", err)
 	}
 
-	// Observe announces nothing, under any load.
-	r.PacketeerRoutes = rt.adjIn(ctx)
-	if r.PacketeerRoutes != 0 {
-		fail("observe mode sent %d routes to the router", r.PacketeerRoutes)
+	for _, rt := range f.routers {
+		r.PacketeerRoutes += int(rt.recvd.Load())
+		rt.out.mu.Lock()
+		r.InjectedPeak = max(r.InjectedPeak, rt.out.peak)
+		if rt.out.nbad > 0 {
+			fail("session %d: %d routes from Packeteer broke a rule, first: %s", rt.id, rt.out.nbad, strings.Join(rt.out.bad, "; "))
+		}
+		rt.out.mu.Unlock()
+	}
+	if p.Inject == 0 {
+		// Observe announces nothing, under any load.
+		if r.PacketeerRoutes != 0 {
+			fail("observe mode sent %d routes to the routers", r.PacketeerRoutes)
+		}
+	} else {
+		n, err := sameRoutes(ctx, f, slow, time.Minute)
+		r.InjectedEnd = n
+		if err != nil {
+			fail("after the soak, %v", err)
+		}
+		if r.InjectedPeak == 0 {
+			fail("inject mode announced nothing to the routers")
+		}
+		if r.WithdrawChecks == 0 {
+			fail("no injected IPv4 prefix was held long enough to time a withdraw")
+		}
+		if p.OutageTargets > 0 {
+			n, err := papi.outageIncidents(ctx)
+			r.OutageEvents = n
+			if err != nil || n == 0 {
+				fail("the outage source raised no incident (%v)", err)
+			}
+		}
 	}
 
-	// Stop: SIGTERM, a clean exit, and the session closes.
+	// Stop: SIGTERM, a clean exit, and every session closes.
 	t2 := time.Now()
 	if o.stop != "" {
 		cmd := exec.CommandContext(ctx, "sh", "-c", o.stop)
@@ -381,10 +490,44 @@ loop:
 	if !gone {
 		fail("Packeteer still running %s after SIGTERM", time.Since(t2).Round(time.Second))
 	}
-	if !waitFor(ctx, 15*time.Second, func() bool { return !rt.established(ctx) }) {
-		fail("router session still established after Packeteer stopped")
+	if !waitFor(ctx, 15*time.Second, func() bool { return !f.anyUp() }) {
+		fail("a router session still established after Packeteer stopped")
+	}
+	for _, rt := range f.routers {
+		rt.out.mu.Lock()
+		if rt.id == slow {
+			r.SlowAtClose = rt.out.atClose
+		} else {
+			r.RoutesAtClose += rt.out.atClose
+		}
+		rt.out.mu.Unlock()
+	}
+	// Packeteer withdraws while its sessions are up and only then closes
+	// them. A session that reads at once has every withdraw by the Cease;
+	// the slow one may not, and its routes go with the session.
+	if r.RoutesAtClose > 0 {
+		fail("%d Packeteer routes still on fast sessions when they closed after SIGTERM", r.RoutesAtClose)
 	}
 	return r, nil
+}
+
+// acceptAll waits for Packeteer to open a session to every router.
+func acceptAll(f *fleet, timeout time.Duration) error {
+	errs := make(chan error, len(f.routers))
+	for _, rt := range f.routers {
+		go func() {
+			if tl, ok := rt.ln.(*net.TCPListener); ok {
+				_ = tl.SetDeadline(time.Now().Add(timeout))
+				defer func() { _ = tl.SetDeadline(time.Time{}) }()
+			}
+			errs <- rt.accept()
+		}()
+	}
+	var all []error
+	for range f.routers {
+		all = append(all, <-errs)
+	}
+	return errors.Join(all...)
 }
 
 // churnBatch is the prefixes withdrawn per second for churn per minute.
@@ -395,10 +538,10 @@ func churnBatch(perMinute int) int {
 	return max(1, perMinute/60)
 }
 
-// churn withdraws one batch of IPv6 entries a second and announces the
-// previous batch again, walking the table. It returns the first entry of
-// the batch still withdrawn when ctx ends, or -1.
-func churn(ctx context.Context, rt *router, tbl table, perMinute int, updates *uint64, fail func(string, ...any)) int {
+// churn withdraws one batch of IPv6 entries a second on every session and
+// announces the previous batch again, walking the table. It returns the
+// first entry of the batch still withdrawn when ctx ends, or -1.
+func churn(ctx context.Context, f *fleet, tbl table, perMinute int, updates *uint64) int {
 	b := churnBatch(perMinute)
 	if b == 0 {
 		return -1
@@ -407,7 +550,6 @@ func churn(ctx context.Context, rt *router, tbl table, perMinute int, updates *u
 	off, pending := 0, -1
 	t := time.NewTicker(time.Second)
 	defer t.Stop()
-	bg := context.Background() // finish a batch after ctx ends
 	for {
 		select {
 		case <-ctx.Done():
@@ -416,15 +558,9 @@ func churn(ctx context.Context, rt *router, tbl table, perMinute int, updates *u
 		}
 		from := v4Count + off
 		to := min(from+b, tbl.n)
-		if err := rt.withdraw(bg, from, to); err != nil {
-			fail("churn withdraw: %v", err)
-			return pending
-		}
+		f.withdraw(from, to)
 		if pending >= 0 {
-			if err := rt.load(bg, pending, min(pending+b, tbl.n)); err != nil {
-				fail("churn announce: %v", err)
-				return from
-			}
+			f.announce(pending, min(pending+b, tbl.n))
 		}
 		*updates += uint64(2 * (to - from))
 		pending = from

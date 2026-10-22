@@ -195,3 +195,102 @@ profiles:
       # held longer, so the per-hour rate and the window estimate match.
       min_active_per_hour: 180000
       min_passive_tracked: 50000
+
+  # Multi-session inject soak (#383). The harness plays several edge
+  # routers, each sending the whole table, so Packeteer holds one path per
+  # session for every prefix. Packeteer runs in inject mode with an
+  # allowlist of the documentation blocks; the outage and vip sources are
+  # on; one session flaps on a timer (the router sends its table again when
+  # Packeteer comes back) and the last session reads Packeteer's messages
+  # slowly. The run fails on a broken rule (a route outside the table or
+  # without packeteer_community and NO_EXPORT, more routes than
+  # max_improvements, a fast session still holding a route a minute after
+  # its prefix left every session, fast sessions that disagree at the end),
+  # a session that drops without a flap, or a decide or probe loop gap over
+  # loop_gap_seconds (three probe intervals). Withdraw latency, lock wait
+  # and memory are reported; no budget is set for them until a run on the
+  # target runner has measured them.
+  #
+  # A short local try: 20,000 prefixes on 2 sessions.
+  multi-smoke:
+    prefixes: 20000
+    duration: 4m
+    warmup: 1m
+    sample: 2s
+    flow_rate: 5000
+    flow_hot: 2000
+    flow_top_n: 500
+    static_targets: 200
+    churn: 600
+    sessions: 2
+    inject: 1000
+    flap_every: 75s
+    slow_peer_bps: 2048
+    vip_targets: 200
+    outage_targets: 8
+    budgets:
+      loop_gap_seconds: 90
+
+  # 2 sessions of 1,000,000 prefixes. Weekly in load-multi.yml.
+  multi2:
+    prefixes: 1000000
+    duration: 30m
+    warmup: 10m
+    sample: 10s
+    flow_rate: 20000
+    flow_hot: 5000
+    flow_top_n: 2000
+    static_targets: 1000
+    churn: 6000
+    sessions: 2
+    inject: 1000
+    flap_every: 5m
+    slow_peer_bps: 2048
+    vip_targets: 500
+    outage_targets: 8
+    budgets:
+      loop_gap_seconds: 90
+
+  # 4 sessions of 1,000,000 prefixes: 4 million paths. Weekly in
+  # load-multi.yml on the LARGE_RUNNER runner only.
+  multi4:
+    prefixes: 1000000
+    duration: 30m
+    warmup: 10m
+    sample: 10s
+    flow_rate: 20000
+    flow_hot: 5000
+    flow_top_n: 2000
+    static_targets: 1000
+    churn: 6000
+    sessions: 4
+    inject: 1000
+    flap_every: 5m
+    slow_peer_bps: 2048
+    vip_targets: 500
+    outage_targets: 8
+    budgets:
+      loop_gap_seconds: 90
+
+  # Opt-in (#342). Not the `load` job and not soak.yml: lab/realtable.sh and
+  # .github/workflows/realtable.yml, started by a human. The table is one
+  # peer's full view from a public RIPE RIS or RouteViews dump, read at run
+  # time and never stored in the repository, so `prefixes` comes from the
+  # dump. It is observe only, with no flows, churn or probe targets. The
+  # per-million figures are the `pr` numbers, applied to paths (prefixes
+  # times sessions, so -multiply 3 holds three paths per prefix); nothing was
+  # raised. Shutdown and reconverge are reported and not checked: SIGTERM to
+  # exit grew with the paths held (docs/performance.md), and nothing churns.
+  realtable:
+    real: true
+    duration: 10m
+    warmup: 3m
+    sample: 5s
+    budgets:
+      learn_seconds_per_mprefix: 72
+      rss_peak_mb_per_mprefix: 4915.2
+      rss_growth_mb_per_mprefix: 307.2
+      rss_slope_mb_per_mprefix: 153.6
+      cpu_avg_cores: 2.0
+      threads: 64
+      api_p99_ms: 1500

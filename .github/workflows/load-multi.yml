@@ -1,0 +1,76 @@
+name: load-multi
+
+# Multi-session inject soak (#383): the multi2 and multi4 profiles in
+# lab/soak/budgets.yaml. Lab only: the stock image with a mounted inject
+# config against lab/soak's simulated edge routers, documentation prefixes
+# and ASNs, and an allowlist of the documentation blocks. multi2 (2 sessions
+# of 1,000,000 prefixes) runs on ubuntu-latest. multi4 (4 sessions, 4
+# million paths) runs only on the runner named by the LARGE_RUNNER
+# repository variable or the runner input. Not a pull request check.
+on:
+  schedule:
+    - cron: "29 5 * * 6" # weekly, Saturday 05:29 UTC
+  workflow_dispatch:
+    inputs:
+      runner:
+        description: Runner label for multi4 (default is the LARGE_RUNNER variable)
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  multi2:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v7
+      - uses: docker/setup-buildx-action@v4
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - name: build image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          load: true
+          tags: packeteer:multi
+          build-args: VERSION=multi-${{ github.sha }}
+      - name: 2 sessions x 1M, inject, flaps, slow peer, outage and vip (lab/soak/budgets.yaml, profile multi2)
+        env:
+          SOAK_OUT: multi2-result.json
+        run: bash lab/soak.sh packeteer:multi multi2
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: multi2-result
+          path: multi2-result.json
+          if-no-files-found: ignore
+
+  multi4:
+    if: ${{ inputs.runner != '' || vars.LARGE_RUNNER != '' }}
+    runs-on: ${{ inputs.runner || vars.LARGE_RUNNER }}
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v7
+      - uses: docker/setup-buildx-action@v4
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - name: build image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          load: true
+          tags: packeteer:multi
+          build-args: VERSION=multi-${{ github.sha }}
+      - name: 4 sessions x 1M, inject, flaps, slow peer, outage and vip (lab/soak/budgets.yaml, profile multi4)
+        env:
+          SOAK_OUT: multi4-result.json
+        run: bash lab/soak.sh packeteer:multi multi4
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: multi4-result
+          path: multi4-result.json
+          if-no-files-found: ignore

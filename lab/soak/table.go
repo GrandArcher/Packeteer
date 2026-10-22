@@ -46,6 +46,8 @@ type table struct {
 
 	setLen int // consecutive prefixes that share one attribute set
 
+	real *realTable // a dump's view (#342); nil for the synthetic table
+
 	pathLen, comms, large, origin shape.Dist
 	medRoutes, routes             uint64
 }
@@ -66,6 +68,19 @@ func newTable(n int) table {
 		t.v6 = layoutV6(sh.IPv6.Length, n-v4Count)
 	}
 	return t
+}
+
+// newRealTable plays a dump's view. setLen is the average run, for logs.
+func newRealTable(r *realTable) table {
+	return table{n: len(r.entries), real: r, setLen: max(1, len(r.entries)/max(1, len(r.sets)))}
+}
+
+// v4n is how many entries are IPv4; the rest are IPv6.
+func (t table) v4n() int {
+	if t.real != nil {
+		return t.real.v4
+	}
+	return v4Count
 }
 
 func (t table) valid() bool { return t.n > 0 && (t.n <= v4Count || t.v6 != nil) }
@@ -199,6 +214,9 @@ const maxV6 = 1<<32 - patternLen
 
 // prefix returns entry i.
 func (t table) prefix(i int) netip.Prefix {
+	if t.real != nil {
+		return t.real.entries[i].prefix
+	}
 	if i < v4Count {
 		block := docV4[i/511]
 		j := i % 511               // 0: the /24, 1-2: /25s, 3-6: /26s, ...
@@ -227,7 +245,12 @@ func (t table) host(i int) netip.Addr {
 // group is the run of consecutive entries that share attributes, the way a
 // real table has runs of prefixes with one attribute set. The router packs
 // a group into one UPDATE.
-func (t table) group(i int) int { return i / t.setLen }
+func (t table) group(i int) int {
+	if t.real != nil {
+		return int(t.real.entries[i].set)
+	}
+	return i / t.setLen
+}
 
 // provider is the index (0 or 1) of the provider entry i is native on.
 func (t table) provider(i int) int { return t.group(i) & 1 }
@@ -264,4 +287,67 @@ func (t table) attrs(i int) attrSet {
 		a.large = append(a.large, [3]uint32{docASNs[rng.IntN(len(docASNs))], uint32(rng.IntN(1000)), uint32(rng.IntN(1000))})
 	}
 	return a
+}
+
+// index is the entry whose prefix is p, the inverse of prefix. ok is false
+// when p is not in the table.
+func (t table) index(p netip.Prefix) (i int, ok bool) {
+	if t.real != nil {
+		return 0, false
+	}
+	if p.Addr().Is4() {
+		for b, block := range docV4 {
+			if !block.Contains(p.Addr()) || p.Bits() < 24 {
+				continue
+			}
+			l := p.Bits() - 23
+			k := int(p.Addr().As4()[3]) >> (32 - p.Bits())
+			i = b*511 + 1<<(l-1) - 1 + k
+			return i, i < t.n && t.prefix(i) == p
+		}
+		return 0, false
+	}
+	if t.v6 == nil || !docV6.Contains(p.Addr()) {
+		return 0, false
+	}
+	j, ok := t.v6.index(p)
+	if !ok || v4Count+j >= t.n {
+		return 0, false
+	}
+	return v4Count + j, true
+}
+
+// index is the IPv6 entry (counted from the first IPv6 entry) whose prefix
+// is p.
+func (l *v6Layout) index(p netip.Prefix) (int, bool) {
+	a := p.Addr().As16()
+	off := binary.BigEndian.Uint64(a[:8]) & (1<<32 - 1)
+	for c, cl := range l.classes {
+		if cl.bits != p.Bits() || off < cl.base {
+			continue
+		}
+		k := (off - cl.base) >> (64 - cl.bits)
+		cycle, rank := k/uint64(cl.perCycle), k%uint64(cl.perCycle)
+		pos, ok := l.slot(uint8(c), uint16(rank))
+		if !ok {
+			return 0, false
+		}
+		j := cycle*patternLen + uint64(pos)
+		if j > uint64(maxV6) || l.prefix(int(j)) != p {
+			return 0, false
+		}
+		return int(j), true
+	}
+	return 0, false
+}
+
+// slot is the pattern position of the rank-th entry of class c. A scan
+// of the 4096 positions is cheap at the rate Packeteer sends routes.
+func (l *v6Layout) slot(c uint8, rank uint16) (int, bool) {
+	for pos := range patternLen {
+		if l.pattern[pos] == c && l.rank[pos] == rank {
+			return pos, true
+		}
+	}
+	return 0, false
 }
