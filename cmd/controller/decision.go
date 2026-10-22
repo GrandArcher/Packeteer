@@ -204,11 +204,14 @@ func rpkiStatuses(plugins *pluginhost.Set) []plugin.RPKIStatus {
 // A weighted scorer does not implement planning, so those reads are skipped.
 // With federation (#30), fresh peers' paths through providers in other
 // domains are merged in and global commits are applied to the usage.
-func decisionInput(ctx context.Context, now time.Time, engine *probe.Engine, view *rib.View, plugins *pluginhost.Set, fed *fedState, origins *rpki.Set) policy.Input {
+// The RPKI answers the round used are returned too, so history records
+// what Decide saw.
+func decisionInput(ctx context.Context, now time.Time, engine *probe.Engine, view *rib.View, plugins *pluginhost.Set, fed *fedState, origins *rpki.Set) (policy.Input, []history.RPKIRoute) {
 	in := policy.Input{Results: engine.Results(), ProviderUp: map[string]bool{}, Native: map[netip.Prefix]string{}}
 	for _, p := range engine.Providers() {
 		in.ProviderUp[p.Name] = p.Up
 	}
+	var routes []history.RPKIRoute
 	if view != nil {
 		in.RIBEnabled, in.RIBReady = true, view.Ready()
 		for _, r := range in.Results {
@@ -217,18 +220,19 @@ func decisionInput(ctx context.Context, now time.Time, engine *probe.Engine, vie
 			}
 		}
 		fillRouteChecks(&in, view)
-		fillRPKI(&in, rpkiRoutes(view, in.Results, origins))
+		routes = rpkiRoutes(view, in.Results, origins)
+		fillRPKI(&in, routes)
 		in.EgressDown = view.EgressDown()
 	}
 	fed.merge(&in, now)
-	var routes routeLookup
+	var lookup routeLookup
 	if view != nil {
-		routes = view
+		lookup = view
 	}
-	applyPolicies(&in, now, routes, plugins, collectTraffic(ctx, plugins))
+	applyPolicies(&in, now, lookup, plugins, collectTraffic(ctx, plugins))
 	fillPlannerInputs(ctx, &in, plugins)
 	fed.commit(ctx, &in, plugins)
-	return in
+	return in, routes
 }
 
 // routeChecker is the RIB surface the route check (BMP or add-path) reads. *rib.View

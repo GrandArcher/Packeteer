@@ -840,14 +840,14 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 				return
 			}
 			leading = true
-			in := decisionInput(loopCtx, now, engine, view, plugins, fed, rpkiSet)
+			in, rpkiRounds := decisionInput(loopCtx, now, engine, view, plugins, fed, rpkiSet)
 			in.Held = lw.Held
 			changes, err := runDecision(now, decider, in, ctl, log, snap.Mode, engine)
 			fed.publish(now, in, decider.Improvements())
 			if rec != nil {
 				rec.Decision(now, changes, in.Results)
 				if view != nil {
-					rec.RPKI(now, rpkiRoutes(view, in.Results, rpkiSet))
+					rec.RPKI(now, rpkiRounds)
 				}
 			}
 			inChanges, inErr := runInbound(loopCtx, now, inb, plugins, log, snap.InboundMode(), in)

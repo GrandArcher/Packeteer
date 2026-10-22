@@ -132,14 +132,22 @@ func (t transport) dial(ctx context.Context) (io.ReadWriteCloser, error) {
 
 // sshRTR is the rpki-rtr subsystem's stdin and stdout on one SSH client.
 type sshRTR struct {
-	client *ssh.Client
-	in     io.WriteCloser
+	client io.Closer
+	in     io.Writer
 	out    io.Reader
 }
 
-func (s *sshRTR) Read(p []byte) (int, error)  { return s.out.Read(p) }
-func (s *sshRTR) Write(p []byte) (int, error) { return s.in.Write(p) }
-func (s *sshRTR) Close() error                { return s.client.Close() }
+func (s *sshRTR) Read(p []byte) (int, error) { return s.out.Read(p) }
+func (s *sshRTR) Close() error               { return s.client.Close() }
+
+// Write closes the client when the peer stalls with a full window: an SSH
+// channel has no write deadline, and a blocked write would hold the session
+// loop past its own timers.
+func (s *sshRTR) Write(p []byte) (int, error) {
+	t := time.AfterFunc(writeTimeout, func() { _ = s.client.Close() })
+	defer t.Stop()
+	return s.in.Write(p)
+}
 
 func sshStream(conn net.Conn, addr string, cfg *ssh.ClientConfig, timeout time.Duration) (*sshRTR, error) {
 	// The deadline bounds the handshake only. It is cleared before the

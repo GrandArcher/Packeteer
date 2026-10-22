@@ -947,3 +947,41 @@ func TestSplitPDUsRejectsBadLength(t *testing.T) {
 		t.Fatal("splitPDUs accepted a length below the header")
 	}
 }
+
+// stalledSSH models an SSH channel with a full window: Write blocks until
+// the client is closed.
+type stalledSSH struct{ closed chan struct{} }
+
+func (s *stalledSSH) Write([]byte) (int, error) {
+	<-s.closed
+	return 0, io.ErrClosedPipe
+}
+
+func (s *stalledSSH) Close() error {
+	close(s.closed)
+	return nil
+}
+
+func TestSSHWriteStallClosesClient(t *testing.T) {
+	old := writeTimeout
+	writeTimeout = 50 * time.Millisecond
+	defer func() { writeTimeout = old }()
+
+	st := &stalledSSH{closed: make(chan struct{})}
+	conn := &sshRTR{client: st, in: st}
+	done := make(chan error, 1)
+	go func() { done <- writePDU(conn, resetQuery()) }()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("stalled write returned no error")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("a stalled SSH write was never cut off")
+	}
+	select {
+	case <-st.closed:
+	default:
+		t.Fatal("the client was not closed")
+	}
+}

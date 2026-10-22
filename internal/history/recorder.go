@@ -328,6 +328,11 @@ func (r *Recorder) Probe(res probe.Result) {
 
 func ms(d time.Duration) float64 { return float64(d) / float64(time.Millisecond) }
 
+// rpkiGap is how long a path may be missing from the rounds before its
+// span ends. A shorter gap (a prefix skipped for one round) continues the
+// span instead of splitting it.
+const rpkiGap = 5 * time.Minute
+
 // RPKI records the origin-validation state of every learned path of the
 // probed prefixes in one decision round (#200). A path whose state or
 // answering source changed starts a new record; one no longer learned
@@ -354,8 +359,8 @@ func (r *Recorder) RPKI(now time.Time, routes []RPKIRoute) {
 		}
 		r.rpkiDirty[rk] = rec
 	}
-	for k := range r.rpkiOpen {
-		if !seen[k] {
+	for k, rec := range r.rpkiOpen {
+		if !seen[k] && now.Sub(rec.Last) > rpkiGap {
 			delete(r.rpkiOpen, k)
 		}
 	}

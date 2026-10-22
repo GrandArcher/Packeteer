@@ -42,7 +42,7 @@ var eventHelp = map[string]string{
 	"exchange_peer":   "docs/CONFIG.md#exchanges",
 	"exchange_prefix": "docs/CONFIG.md#exchanges",
 	"herd":            "docs/herd.md",
-	"rpki":            "/system.html",
+	"rpki":            "docs/CONFIG.md#rpki",
 
 	"ixp_api_key":         "docs/design/ixp.md",
 	"ixp_fabric":          "docs/design/ixp.md",

@@ -604,3 +604,46 @@ func TestRecorderRPKIRoutes(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// A path missing from one round continues its span; one gone longer than
+// rpkiGap starts a new span when it returns (#200).
+func TestRecorderRPKIMissedRound(t *testing.T) {
+	ctx := context.Background()
+	cfg, err := plugin.ConfigFromYAML("path: " + filepath.Join(t.TempDir(), "packeteer.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := sqlite.New(cfg, plugin.Env{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	defer store.Stop(ctx)
+	clock := t0
+	rec := newRecorder(store, &clock)
+	if err := rec.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	valid := plugin.RPKIAnswer{State: plugin.RPKIValid, Source: "routinator"}
+	a := RPKIRoute{Prefix: pfxA, Provider: "transit-a", Origin: 64496, Answer: valid}
+	b := RPKIRoute{Prefix: pfxB, Provider: "transit-a", Origin: 64497, Answer: valid}
+	rec.RPKI(t0, []RPKIRoute{a, b})
+	rec.RPKI(t0.Add(time.Minute), []RPKIRoute{b})
+	rec.RPKI(t0.Add(2*time.Minute), []RPKIRoute{a, b})
+	rec.RPKI(t0.Add(10*time.Minute), []RPKIRoute{b})
+	rec.RPKI(t0.Add(20*time.Minute), []RPKIRoute{a, b})
+
+	h, err := rec.Prefix(ctx, pfxA, Query{From: t0.Add(-time.Hour), To: t0.Add(time.Hour)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []RPKIRow{
+		{Provider: "transit-a", Origin: 64496, State: plugin.RPKIValid, Source: "routinator", First: t0.Add(20 * time.Minute), Last: t0.Add(20 * time.Minute)},
+		{Provider: "transit-a", Origin: 64496, State: plugin.RPKIValid, Source: "routinator", First: t0, Last: t0.Add(2 * time.Minute)},
+	}
+	if !slices.Equal(h.RPKI, want) {
+		t.Fatalf("rpki = %+v, want %+v", h.RPKI, want)
+	}
+}

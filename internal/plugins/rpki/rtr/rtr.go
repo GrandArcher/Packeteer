@@ -47,6 +47,9 @@ const protocolVersion = 1
 
 const maxBackoff = time.Minute
 
+// writeTimeout bounds one PDU write; a variable so a test can shorten it.
+var writeTimeout = 10 * time.Second
+
 func init() { plugin.RPKIs.Register(TypeName, New) }
 
 // Config is the plugin's config block. address is one server; an ordered
@@ -494,7 +497,7 @@ func serialQuery(sessionID uint16, serial uint32) []byte {
 
 func writePDU(conn io.Writer, pdu []byte) error {
 	if d, ok := conn.(interface{ SetWriteDeadline(time.Time) error }); ok {
-		_ = d.SetWriteDeadline(time.Now().Add(10 * time.Second))
+		_ = d.SetWriteDeadline(time.Now().Add(writeTimeout))
 	}
 	_, err := conn.Write(pdu)
 	return err
