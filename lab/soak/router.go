@@ -366,7 +366,7 @@ func (r *router) update(from, to int, withdraw bool) error {
 				continue
 			}
 			j := i + 1
-			for j < to && j-i < maxNLRI && r.tbl.group(j) == r.tbl.group(i) && (j < v4Count) == (i < v4Count) && !skip(j) {
+			for j < to && j-i < maxNLRI && r.tbl.group(j) == r.tbl.group(i) && (j < r.tbl.v4n()) == (i < r.tbl.v4n()) && !skip(j) {
 				j++
 			}
 			batch = append(batch, r.message(i, j, withdraw))
@@ -388,7 +388,7 @@ func (r *router) update(from, to int, withdraw bool) error {
 
 // message is one UPDATE for entries [i, j), which share family and group.
 func (r *router) message(i, j int, withdraw bool) *bgp.BGPMessage {
-	if i < v4Count {
+	if i < r.tbl.v4n() {
 		nlri := make([]*bgp.IPAddrPrefix, 0, j-i)
 		for k := i; k < j; k++ {
 			p := r.tbl.prefix(k)
@@ -411,6 +411,9 @@ func (r *router) message(i, j int, withdraw bool) *bgp.BGPMessage {
 }
 
 func (r *router) attrs(i int) []bgp.PathAttributeInterface {
+	if r.tbl.real != nil {
+		return r.tbl.real.attrs(i)
+	}
 	a := r.tbl.attrs(i)
 	var path []bgp.AsPathParamInterface
 	if len(a.path) > 0 {
@@ -573,6 +576,11 @@ func (a *adjOut) apply(u *bgp.BGPUpdate, now time.Time, tbl table, limit int) in
 func routeFault(p netip.Prefix, comms []uint32, tbl table) string {
 	if !p.IsValid() {
 		return "unparsable prefix"
+	}
+	if tbl.real != nil {
+		// A real-table run is observe-only, so any route is a fault. The
+		// message names no prefix: logs and artifacts carry counts only.
+		return "Packeteer announced a route during a real-table run"
 	}
 	if _, ok := tbl.index(p); !ok {
 		return fmt.Sprintf("%s is not a prefix the routers advertised", p)

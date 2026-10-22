@@ -15,8 +15,13 @@ import (
 
 // Profile is one workload and the budgets it must stay inside.
 type Profile struct {
-	// Prefixes is the synthetic table size.
+	// Prefixes is the synthetic table size. A real profile leaves it out:
+	// the table is the dump's.
 	Prefixes int `yaml:"prefixes"`
+	// Real plays one peer's full view from a RIPE RIS or RouteViews MRT
+	// dump given with -mrt, instead of the synthetic table (#342). It is
+	// observe only, with no flows, churn or probe targets.
+	Real bool `yaml:"real"`
 	// Duration is the soak phase, after the table is learned.
 	Duration time.Duration `yaml:"duration"`
 	// Warmup is the start of the soak left out of the growth baseline.
@@ -130,13 +135,36 @@ func loadProfile(path, name string) (Profile, error) {
 		slices.Sort(names)
 		return Profile{}, fmt.Errorf("%s: no profile %q (have %s)", path, name, strings.Join(names, ", "))
 	}
-	p.Budgets = p.Budgets.scaled(p.Prefixes)
+	p.Budgets = p.Budgets.scaled(p.Prefixes * p.sessions())
 	return p, p.validate()
+}
+
+// multiply plays the table on n sessions (0 keeps the profile's), so
+// Packeteer holds n paths per prefix, and rescales the budgets to the
+// paths.
+func (p *Profile) multiply(n int) error {
+	if n == 0 {
+		return nil
+	}
+	p.Sessions = n
+	p.Budgets = p.Budgets.scaled(p.Prefixes * p.sessions())
+	return p.validate()
+}
+
+// useReal sets the table size from a dump and rescales the budgets.
+func (p *Profile) useReal(t *realTable) {
+	p.Prefixes = len(t.entries)
+	p.Budgets = p.Budgets.scaled(p.Prefixes * p.sessions())
 }
 
 func (p Profile) validate() error {
 	var errs []error
-	if !newTable(p.Prefixes).valid() || p.Prefixes < v4Count+2 {
+	switch {
+	case p.Real:
+		if p.Prefixes != 0 || p.Inject != 0 || p.StaticTargets != 0 || p.VIPTargets != 0 || p.OutageTargets != 0 || p.Churn != 0 || p.FlowRate != 0 {
+			errs = append(errs, errors.New("real: prefixes come from the dump, and inject, static_targets, vip_targets, outage_targets, churn and flow_rate must be 0 (observe only)"))
+		}
+	case !newTable(p.Prefixes).valid() || p.Prefixes < v4Count+2:
 		errs = append(errs, fmt.Errorf("prefixes %d: want %d to %d", p.Prefixes, v4Count+2, v4Count+maxV6))
 	}
 	if p.Duration <= 0 || p.Sample <= 0 || p.Warmup < 0 || p.Warmup >= p.Duration {
@@ -148,10 +176,10 @@ func (p Profile) validate() error {
 	if b := p.Budgets; b.LearnSecondsPerM < 0 || b.RSSPeakMBPerM < 0 || b.RSSGrowthMBPerM < 0 || b.RSSSlopeMBPerM < 0 {
 		errs = append(errs, errors.New("per-million budgets must not be negative"))
 	}
-	if p.StaticTargets > p.Prefixes {
+	if !p.Real && p.StaticTargets > p.Prefixes {
 		errs = append(errs, errors.New("static_targets exceeds prefixes"))
 	}
-	if p.Churn/60 > p.Prefixes/2 {
+	if !p.Real && p.Churn/60 > p.Prefixes/2 {
 		errs = append(errs, errors.New("churn too large for the table"))
 	}
 	if p.Sessions < 0 || p.Sessions > maxSessions {
@@ -226,7 +254,20 @@ type Result struct {
 	SlowAtClose       int     `json:"slow_routes_at_close"`
 	OutageEvents      int     `json:"outage_events"`
 
+	// Table describes a real table (#342), counts only. Nil on synthetic
+	// runs.
+	Table *TableInfo `json:"table,omitempty"`
+
 	Failures []string `json:"failures"`
+}
+
+// TableInfo is what a real dump held: counts, never a prefix or an AS.
+type TableInfo struct {
+	Peers   int `json:"peers"` // peers in the dump with routes
+	IPv4    int `json:"ipv4"`  // routes of the chosen peer
+	IPv6    int `json:"ipv6"`
+	Sets    int `json:"sets"`    // distinct attribute sets
+	Skipped int `json:"skipped"` // routes left out: malformed
 }
 
 // Check is one budget line.
@@ -320,6 +361,10 @@ func report(r Result, b Budgets) (string, bool) {
 	if r.Mode == "inject" {
 		fmt.Fprintf(&s, "Withdraw checks %d (slow session late %d); most routes on one session %d, %d at the end; still held when the sessions closed on SIGTERM: %d on fast sessions, %d on the slow one; outage incidents %d.\n",
 			r.WithdrawChecks, r.SlowWithdrawLate, r.InjectedPeak, r.InjectedEnd, r.RoutesAtClose, r.SlowAtClose, r.OutageEvents)
+	}
+	if t := r.Table; t != nil {
+		fmt.Fprintf(&s, "Real table: the largest of %d peers in the dump, %d IPv4 and %d IPv6 routes in %d attribute sets (%.1f prefixes per set), %d skipped.\n",
+			t.Peers, t.IPv4, t.IPv6, t.Sets, float64(t.IPv4+t.IPv6)/float64(max(1, t.Sets)), t.Skipped)
 	}
 	for _, f := range r.Failures {
 		fmt.Fprintf(&s, "\n- **FAIL**: %s", f)

@@ -1,0 +1,56 @@
+name: realtable
+
+# Opt-in replay of a real public full table (#342). Manual only: it never
+# runs on pull requests, pushes or a schedule, and no other workflow calls
+# it. Lab only: lab/realtable.sh downloads the latest RIPE RIS bview at run
+# time, plays one peer's view to the stock image over loopback with next
+# hops rewritten to documentation addresses, and Packeteer runs in observe
+# mode. The dump is never committed or uploaded; the job log and the result
+# artifact hold counts and timings only.
+#
+# Peak RSS measured on an 8-core development machine (2026-10-22, current
+# rrc00 bview): 3.4 GiB at 1x, 6.7 GiB at 2x, 9.2 GiB at 3x. 3x fits
+# ubuntu-latest (16 GB); 4x may not, so name a larger runner label.
+on:
+  workflow_dispatch:
+    inputs:
+      multiply:
+        description: Sessions, so Packeteer holds this many paths per prefix
+        type: choice
+        options: ["1", "2", "3", "4"]
+        default: "1"
+      runner:
+        description: Runner label (default ubuntu-latest)
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  realtable:
+    runs-on: ${{ inputs.runner || 'ubuntu-latest' }}
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v7
+      - uses: docker/setup-buildx-action@v4
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - name: build image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          load: true
+          tags: packeteer:realtable
+          build-args: VERSION=realtable-${{ github.sha }}
+      - name: real table, observe only (lab/soak/budgets.yaml, profile realtable)
+        env:
+          SOAK_OUT: realtable-result.json
+          MULTIPLY: ${{ inputs.multiply }}
+        run: bash lab/realtable.sh packeteer:realtable "$MULTIPLY"
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: realtable-result-${{ inputs.multiply }}x
+          path: realtable-result.json
+          if-no-files-found: ignore

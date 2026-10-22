@@ -64,9 +64,10 @@ func usage() {
 	os.Exit(2)
 }
 
-func commonFlags(fs *flag.FlagSet) (budgets, profile *string, pt *ports) {
+func commonFlags(fs *flag.FlagSet) (budgets, profile *string, multiply *int, pt *ports) {
 	budgets = fs.String("budgets", "lab/soak/budgets.yaml", "budget file")
 	profile = fs.String("profile", "pr", "profile name in the budget file")
+	multiply = fs.Int("multiply", 0, "play the table on this many sessions, so Packeteer holds that many paths per prefix (1 to 4; default the profile's)")
 	pt = &ports{}
 	fs.IntVar(&pt.BGP, "bgp-port", 11179, "router port on 127.0.0.1")
 	fs.IntVar(&pt.Flow, "flow-port", 12055, "Packeteer IPFIX port on 127.0.0.1")
@@ -76,11 +77,14 @@ func commonFlags(fs *flag.FlagSet) (budgets, profile *string, pt *ports) {
 
 func cmdConfig(args []string) error {
 	fs := flag.NewFlagSet("config", flag.ExitOnError)
-	budgets, profile, pt := commonFlags(fs)
+	budgets, profile, multiply, pt := commonFlags(fs)
 	out := fs.String("out", "", "write the Packeteer config here (default stdout)")
 	data := fs.String("data", "/var/lib/packeteer", "storage directory as Packeteer sees it")
 	_ = fs.Parse(args)
 	p, err := loadProfile(*budgets, *profile)
+	if err == nil {
+		err = p.multiply(*multiply)
+	}
 	if err != nil {
 		return err
 	}
@@ -96,6 +100,7 @@ type runOpts struct {
 	name     string
 	prof     Profile
 	pt       ports
+	real     *realTable // the dump's view when prof.Real
 	pid      int
 	stop     string
 	procRoot string
@@ -104,7 +109,8 @@ type runOpts struct {
 
 func cmdRun(args []string) (bool, error) {
 	fs := flag.NewFlagSet("run", flag.ExitOnError)
-	budgets, profile, pt := commonFlags(fs)
+	budgets, profile, multiply, pt := commonFlags(fs)
+	mrtPath := fs.String("mrt", "", "MRT TABLE_DUMP_V2 dump (gzip, bzip2 or plain) to replay; required by, and only for, a profile with real: true")
 	pid := fs.Int("pid", 0, "Packeteer's PID as the host sees it")
 	stop := fs.String("stop", "", "shell command that stops Packeteer with SIGTERM (default: signal -pid)")
 	duration := fs.Duration("duration", 0, "override the profile's soak duration")
@@ -112,8 +118,23 @@ func cmdRun(args []string) (bool, error) {
 	procRoot := fs.String("proc", "/proc", "procfs root")
 	_ = fs.Parse(args)
 	p, err := loadProfile(*budgets, *profile)
+	if err == nil {
+		err = p.multiply(*multiply)
+	}
 	if err != nil {
 		return false, err
+	}
+	if p.Real != (*mrtPath != "") {
+		return false, errors.New("-mrt goes with a profile that has real: true, and that profile needs it")
+	}
+	var rt *realTable
+	if p.Real {
+		if rt, err = loadReal(*mrtPath); err != nil {
+			return false, fmt.Errorf("read the dump: %w", err)
+		}
+		p.useReal(rt)
+		t := rt.info()
+		log.Printf("dump: %d peers; the largest has %d IPv4 and %d IPv6 routes in %d attribute sets, %d skipped", t.Peers, t.IPv4, t.IPv6, t.Sets, t.Skipped)
 	}
 	if *duration > 0 {
 		p.Duration = *duration
@@ -126,7 +147,7 @@ func cmdRun(args []string) (bool, error) {
 	}
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
-	o := runOpts{name: *profile, prof: p, pt: *pt, pid: *pid, stop: *stop, procRoot: *procRoot, snmp: *procRoot + "/net/snmp"}
+	o := runOpts{name: *profile, prof: p, real: rt, pt: *pt, pid: *pid, stop: *stop, procRoot: *procRoot, snmp: *procRoot + "/net/snmp"}
 	r, err := run(ctx, o)
 	if err != nil {
 		return false, err
@@ -165,12 +186,18 @@ func waitFor(ctx context.Context, timeout time.Duration, cond func() bool) bool 
 func run(ctx context.Context, o runOpts) (Result, error) {
 	p := o.prof
 	tbl := newTable(p.Prefixes)
+	if o.real != nil {
+		tbl = newRealTable(o.real)
+	}
 	mode := "observe"
 	if p.Inject > 0 {
 		mode = "inject"
 	}
 	slow := slowID(p)
 	r := Result{Profile: o.name, Prefixes: p.Prefixes, Mode: mode, Sessions: p.sessions(), Failures: []string{}}
+	if o.real != nil {
+		r.Table = o.real.info()
+	}
 	var failMu sync.Mutex
 	fail := func(format string, a ...any) {
 		msg := fmt.Sprintf(format, a...)
