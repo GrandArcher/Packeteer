@@ -190,3 +190,75 @@ func TestHerdHubNeedsAListener(t *testing.T) {
 		t.Errorf("err = %v, want herd.listen", err)
 	}
 }
+
+const herdRPKI = "rpki:\n  enabled: true\n  sources:\n    - {type: rtr, config: {address: 192.0.2.20:3323}}\n"
+
+const herdLeak = "packeteer_community: \"64512:100\"\nleak_watch:\n  enabled: true\n  sources:\n    - type: rislive\n"
+
+func TestHerdOutsideOffByDefault(t *testing.T) {
+	cfg, err := Parse([]byte(herdBase + herdOn))
+	if err != nil {
+		t.Fatal(err)
+	}
+	o := cfg.Herd.Outside
+	if o.Atlas.Enabled || o.RIS || o.RPKI || o.Links || o.Atlas.Refresh != 0 {
+		t.Fatalf("outside sources are on by default: %+v", o)
+	}
+}
+
+func TestHerdOutsideSourcesToggleIndependently(t *testing.T) {
+	atlas := "  outside:\n    atlas: {enabled: true, measurements: [1001], probes: [6001]}\n"
+	for name, tc := range map[string]struct {
+		extra, outside string
+		check          func(HerdOutside) bool
+	}{
+		"atlas": {"", atlas, func(o HerdOutside) bool {
+			return o.Atlas.Enabled && !o.RIS && !o.RPKI && !o.Links && o.Atlas.Refresh == DefaultHerdAtlasRefresh
+		}},
+		"ris":    {herdLeak, "  outside: {ris: true}\n", func(o HerdOutside) bool { return o.RIS && !o.Atlas.Enabled && !o.RPKI && !o.Links }},
+		"rpki":   {herdRPKI, "  outside: {rpki: true}\n", func(o HerdOutside) bool { return o.RPKI && !o.Atlas.Enabled && !o.RIS && !o.Links }},
+		"links":  {"", "  outside: {links: true}\n", func(o HerdOutside) bool { return o.Links && !o.Atlas.Enabled && !o.RIS && !o.RPKI }},
+		"all on": {herdRPKI + herdLeak, atlas + "    ris: true\n    rpki: true\n    links: true\n", func(o HerdOutside) bool { return o.Atlas.Enabled && o.RIS && o.RPKI && o.Links }},
+	} {
+		t.Run(name, func(t *testing.T) {
+			cfg, err := Parse([]byte(herdBase + tc.extra + herdOn + tc.outside))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !tc.check(cfg.Herd.Outside) {
+				t.Fatalf("outside = %+v", cfg.Herd.Outside)
+			}
+		})
+	}
+}
+
+func TestHerdOutsideValidation(t *testing.T) {
+	tests := []struct {
+		name, extra, outside, want string
+	}{
+		{"ris without leak watch", "", "  outside: {ris: true}\n", "herd.outside.ris needs leak_watch"},
+		{"ris without a rislive source", strings.Replace(herdLeak, "rislive", "exec", 1), "  outside: {ris: true}\n", "herd.outside.ris needs leak_watch"},
+		{"rpki without rpki", "", "  outside: {rpki: true}\n", "herd.outside.rpki needs rpki enabled"},
+		{"atlas without ids", "", "  outside: {atlas: {enabled: true}}\n", "name at least one measurement or probe"},
+		{"atlas settings while off", "", "  outside: {atlas: {measurements: [1001]}}\n", "set enabled: true"},
+		{"atlas bad id", "", "  outside: {atlas: {enabled: true, probes: [0]}}\n", "probes[0]: 0 is not an id"},
+		{"atlas too many", "", "  outside: {atlas: {enabled: true, measurements: [1, 2, 3, 4, 5]}}\n", "measurements: at most 4"},
+		{"atlas refresh low", "", "  outside: {atlas: {enabled: true, measurements: [1], refresh: 1m}}\n", "refresh 1m0s must be between"},
+		{"unknown key", "", "  outside: {bgp_tools: true}\n", "bgp_tools"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := Parse([]byte(herdBase + tt.extra + herdOn + tt.outside))
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("err = %v, want it to contain %q", err, tt.want)
+			}
+		})
+	}
+}
+
+func TestHerdOutsideIsCheckedInPreviewOnlyToo(t *testing.T) {
+	y := herdBase + "herd:\n  enabled: true\n  preview_only: true\n  share: {classes: [measurements]}\n  vantage: {country: US}\n  outside: {rpki: true}\n"
+	if _, err := Parse([]byte(y)); err == nil || !strings.Contains(err.Error(), "herd.outside.rpki") {
+		t.Fatalf("err = %v", err)
+	}
+}

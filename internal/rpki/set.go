@@ -2,6 +2,7 @@ package rpki
 
 import (
 	"net/netip"
+	"time"
 
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
 )
@@ -46,21 +47,36 @@ func (s *Set) Version() uint64 {
 	return h
 }
 
+// active is the first fresh, non-empty source. An empty cache has nothing
+// to apply: skipping it lets the next source answer, and a zero-VRP End of
+// Data must not hide one.
+func (s *Set) active() (plugin.RPKI, plugin.RPKIStatus, bool) {
+	if s == nil {
+		return nil, plugin.RPKIStatus{}, false
+	}
+	for _, src := range s.sources {
+		st := src.Status()
+		if !st.Stale && st.VRPs != 0 {
+			return src, st, true
+		}
+	}
+	return nil, plugin.RPKIStatus{}, false
+}
+
 // Validate applies the first fresh, non-empty source. Without one it
 // returns RPKIUnknown, which is the fail-open state: it never blocks a
 // withdraw.
 func (s *Set) Validate(prefix netip.Prefix, origin uint32) plugin.RPKIValidity {
-	if s == nil {
+	src, _, ok := s.active()
+	if !ok {
 		return plugin.RPKIUnknown
 	}
-	for _, src := range s.sources {
-		st := src.Status()
-		// An empty cache has nothing to apply. Skipping it lets the next
-		// source answer; a zero-VRP End of Data must not hide one.
-		if st.Stale || st.VRPs == 0 {
-			continue
-		}
-		return src.Validate(prefix, origin)
-	}
-	return plugin.RPKIUnknown
+	return src.Validate(prefix, origin)
+}
+
+// Updated is when the source Validate uses last completed a fetch. It is
+// zero while no source is fresh.
+func (s *Set) Updated() time.Time {
+	_, st, _ := s.active()
+	return st.Updated
 }

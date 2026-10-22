@@ -38,6 +38,40 @@ type Herd struct {
 	// means no hub: only the static peers are used.
 	Hub    *HerdHub   `yaml:"hub"`
 	Limits HerdLimits `yaml:"limits"`
+	// Outside is the opt-in outside intelligence on the herd dashboard
+	// (#296). Each source is off until chosen. It is shown apart from herd
+	// data, never counted as a vantage, and never read by Decide.
+	Outside HerdOutside `yaml:"outside"`
+}
+
+// HerdOutside chooses the outside sources shown on the herd dashboard.
+type HerdOutside struct {
+	// Atlas reads public RIPE Atlas results and the status of the
+	// operator's own hosted probes.
+	Atlas HerdAtlas `yaml:"atlas"`
+	// RIS shows the routes the leak watch's rislive sources saw outside
+	// this AS (#199). It needs leak_watch with a rislive source.
+	RIS bool `yaml:"ris"`
+	// RPKI shows the origin validation of a route from the configured rpki
+	// source (#158). It needs rpki.
+	RPKI bool `yaml:"rpki"`
+	// Links shows link-outs (RIPEstat, Cloudflare Radar, and the rest of
+	// the linkouts sites) for the selected prefix or ASN. It makes no
+	// request.
+	Links bool `yaml:"links"`
+}
+
+// HerdAtlas reads RIPE Atlas without an API key: public measurements and
+// public probe pages only.
+type HerdAtlas struct {
+	Enabled bool `yaml:"enabled"`
+	// Measurements are public measurement ids, for example an anchor mesh
+	// ping. Only ping results are shown.
+	Measurements []int `yaml:"measurements"`
+	// Probes are the operator's own hosted probe ids.
+	Probes []int `yaml:"probes"`
+	// Refresh is how often Atlas is read again (default 15m).
+	Refresh time.Duration `yaml:"refresh"`
 }
 
 // HerdHub is the hub list a node fetches over HTTPS to find seed peers.
@@ -135,6 +169,10 @@ const (
 	MaxHerdHubRefresh        = 7 * 24 * time.Hour
 	DefaultHerdHubPeers      = 16
 	MaxHerdHubPeers          = 64
+	DefaultHerdAtlasRefresh  = 15 * time.Minute
+	MinHerdAtlasRefresh      = 5 * time.Minute
+	MaxHerdAtlasRefresh      = 24 * time.Hour
+	MaxHerdAtlasIDs          = 4
 )
 
 // Herd values.
@@ -224,6 +262,9 @@ func (c *Config) defaultHerd() {
 		}
 	}
 	h.Limits.applyDefaults()
+	if h.Outside.Atlas.Enabled && h.Outside.Atlas.Refresh == 0 {
+		h.Outside.Atlas.Refresh = DefaultHerdAtlasRefresh
+	}
 }
 
 // CheckHerdURL checks a herd endpoint address: https://host:port, nothing
@@ -339,6 +380,7 @@ func (c *Config) validateHerd(add func(string, ...any)) {
 			add("herd.limits.%s %d must be between %d and %d", name, n, min, max)
 		}
 	})
+	c.validateHerdOutside(add)
 	if h.PreviewOnly {
 		if h.Listen != "" || len(h.Peers) > 0 || h.Hub != nil {
 			add("herd.preview_only serves and pulls nothing: remove herd.listen, herd.peers, and herd.hub")
@@ -381,5 +423,46 @@ func (b *HerdHub) validate(add func(string, ...any)) {
 	}
 	if b.MaxPeers < 1 || b.MaxPeers > MaxHerdHubPeers {
 		add("herd.hub.max_peers %d must be between 1 and %d", b.MaxPeers, MaxHerdHubPeers)
+	}
+}
+
+func (c *Config) validateHerdOutside(add func(string, ...any)) {
+	o := c.Herd.Outside
+	if o.RIS {
+		rislive := false
+		if c.LeakWatching() {
+			for _, src := range c.LeakWatch.Sources {
+				rislive = rislive || src.Type == "rislive"
+			}
+		}
+		if !rislive {
+			add("herd.outside.ris needs leak_watch enabled with a rislive source")
+		}
+	}
+	if o.RPKI && !c.RPKIOn() {
+		add("herd.outside.rpki needs rpki enabled")
+	}
+	a := o.Atlas
+	if !a.Enabled {
+		if len(a.Measurements) > 0 || len(a.Probes) > 0 || a.Refresh != 0 {
+			add("herd.outside.atlas: set enabled: true to use measurements, probes, or refresh")
+		}
+		return
+	}
+	if len(a.Measurements)+len(a.Probes) == 0 {
+		add("herd.outside.atlas: name at least one measurement or probe")
+	}
+	for name, ids := range map[string][]int{"measurements": a.Measurements, "probes": a.Probes} {
+		if len(ids) > MaxHerdAtlasIDs {
+			add("herd.outside.atlas.%s: at most %d", name, MaxHerdAtlasIDs)
+		}
+		for i, id := range ids {
+			if id <= 0 {
+				add("herd.outside.atlas.%s[%d]: %d is not an id", name, i, id)
+			}
+		}
+	}
+	if a.Refresh < MinHerdAtlasRefresh || a.Refresh > MaxHerdAtlasRefresh {
+		add("herd.outside.atlas.refresh %s must be between %s and %s", a.Refresh, MinHerdAtlasRefresh, MaxHerdAtlasRefresh)
 	}
 }

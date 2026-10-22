@@ -42,9 +42,9 @@ type VantageRow struct {
 	GeneratedAt *time.Time `json:"generated_at,omitempty"`
 }
 
-// Vantage is the records of one (member, country, provider ASN, method).
-// Vantages are never merged: each lists its own numbers next to the others.
-type Vantage struct {
+// VantageRef names a vantage: the member, the country it declares, the
+// provider ASN the probes went through, and the probe method.
+type VantageRef struct {
 	// Member is the signing node's key id, or "local" for this node.
 	Member      string `json:"member"`
 	Local       bool   `json:"local"`
@@ -53,7 +53,13 @@ type Vantage struct {
 	Country     string `json:"country"`
 	ProviderASN uint32 `json:"provider_asn,omitempty"`
 	Method      string `json:"method"`
-	Records     int    `json:"records"`
+}
+
+// Vantage is the records of one (member, country, provider ASN, method).
+// Vantages are never merged: each lists its own numbers next to the others.
+type Vantage struct {
+	VantageRef
+	Records int `json:"records"`
 	// Latest is the newest record; History is the newest first, up to 20.
 	Latest  VantageRow   `json:"latest"`
 	History []VantageRow `json:"history"`
@@ -67,9 +73,115 @@ type VantageView struct {
 	Truncated bool      `json:"truncated,omitempty"`
 }
 
+// applyFilters reads origin_asn, provider_asn, and prefix with match from
+// vals into q.
+func applyFilters(vals url.Values, q *plugin.HerdQuery) error {
+	for _, k := range []string{"origin_asn", "provider_asn"} {
+		if s := vals.Get(k); s != "" {
+			n, err := strconv.ParseUint(s, 10, 32)
+			if err != nil || n == 0 {
+				return fmt.Errorf("%s %q is not an ASN", k, s)
+			}
+			if k == "origin_asn" {
+				q.OriginASN = uint32(n)
+			} else {
+				q.ProviderASN = uint32(n)
+			}
+		}
+	}
+	if s := vals.Get("prefix"); s != "" {
+		p, err := netip.ParsePrefix(s)
+		if err != nil || p != p.Masked() {
+			return fmt.Errorf("prefix %q", s)
+		}
+		q.Prefix, q.Match = p, vals.Get("match")
+		if q.Match == "" {
+			q.Match = MatchExact
+		}
+		if !slices.Contains([]string{MatchExact, MatchCovering, MatchCovered}, q.Match) {
+			return fmt.Errorf("match %q", q.Match)
+		}
+	}
+	return nil
+}
+
 type vkey struct {
 	member, country, method string
 	provider                uint32
+}
+
+// obs is one stored record with the member that signed it.
+type obs struct {
+	rec Record
+	// member is the signing node's key id, or "local".
+	member   string
+	asn      uint32
+	identity string
+	time     time.Time
+	// fetched and generated are set for a pulled record only.
+	fetched, generated *time.Time
+}
+
+func (o obs) vkey() vkey { return vkey{o.member, o.rec.Vantage, o.rec.Method, o.rec.ProviderASN} }
+
+func (o obs) ref() VantageRef {
+	return VantageRef{Member: o.member, Local: o.member == "local", ASN: o.asn, Identity: o.identity, Country: o.rec.Vantage, ProviderASN: o.rec.ProviderASN, Method: o.rec.Method}
+}
+
+// lessRef orders vantages: this node first, then by member, country,
+// provider ASN, and method.
+func lessRef(a, b VantageRef) bool {
+	if a.Local != b.Local {
+		return a.Local
+	}
+	if a.Member != b.Member {
+		return a.Member < b.Member
+	}
+	if a.Country != b.Country {
+		return a.Country < b.Country
+	}
+	if a.ProviderASN != b.ProviderASN {
+		return a.ProviderASN < b.ProviderASN
+	}
+	return a.Method < b.Method
+}
+
+func (o obs) row(now time.Time) VantageRow {
+	r := o.rec
+	return VantageRow{
+		ID: r.ID, Time: o.time, AgeSeconds: max(now.Sub(o.time).Seconds(), 0),
+		Prefix: r.Prefix, OriginASN: r.OriginASN, Routes: r.Routes, ASPath: r.ASPath, ASPaths: r.ASPaths,
+		Sent: r.Sent, LossPct: r.LossPct, RTTMinMs: r.RTTMinMs, RTTAvgMs: r.RTTAvgMs, RTTMaxMs: r.RTTMaxMs,
+		JitterMs: r.JitterMs, Failed: r.Failed, FetchedAt: o.fetched, GeneratedAt: o.generated,
+	}
+}
+
+// decodeRows reads the stored rows. self is this node's ASN; peers maps key
+// id to the peer's claimed ASN. Rows that do not decode, and rows from a
+// member that is not a configured peer (a removed one), are left out.
+func decodeRows(rows []plugin.HerdRecord, self uint32, peers map[string]uint32) []obs {
+	out := make([]obs, 0, len(rows))
+	for _, row := range rows {
+		o := obs{member: "local", asn: self, identity: "local", time: row.Time}
+		if row.Member == "" {
+			if json.Unmarshal(row.Body, &o.rec) != nil {
+				continue
+			}
+		} else {
+			peerASN, ok := peers[row.Member]
+			if !ok {
+				continue
+			}
+			var pb pulledBody
+			if json.Unmarshal(row.Body, &pb) != nil {
+				continue
+			}
+			o.rec, o.member, o.asn, o.identity = pb.Record, row.Member, peerASN, "pinned_key"
+			o.fetched, o.generated = &pb.FetchedAt, &pb.GeneratedAt
+		}
+		out = append(out, o)
+	}
+	return out
 }
 
 // BuildView groups the stored records that match raw by vantage. self is
@@ -87,31 +199,8 @@ func BuildView(ctx context.Context, st plugin.HerdStore, raw string, self uint32
 		}
 	}
 	q := plugin.HerdQuery{AnyMember: true, From: now.Add(-24 * time.Hour), Newest: true, Limit: viewRows + 1}
-	for _, k := range []string{"origin_asn", "provider_asn"} {
-		if s := vals.Get(k); s != "" {
-			n, err := strconv.ParseUint(s, 10, 32)
-			if err != nil || n == 0 {
-				return v, fmt.Errorf("%s %q is not an ASN", k, s)
-			}
-			if k == "origin_asn" {
-				q.OriginASN = uint32(n)
-			} else {
-				q.ProviderASN = uint32(n)
-			}
-		}
-	}
-	if s := vals.Get("prefix"); s != "" {
-		p, err := netip.ParsePrefix(s)
-		if err != nil || p != p.Masked() {
-			return v, fmt.Errorf("prefix %q", s)
-		}
-		q.Prefix, q.Match = p, vals.Get("match")
-		if q.Match == "" {
-			q.Match = MatchExact
-		}
-		if !slices.Contains([]string{MatchExact, MatchCovering, MatchCovered}, q.Match) {
-			return v, fmt.Errorf("match %q", q.Match)
-		}
+	if err := applyFilters(vals, &q); err != nil {
+		return v, err
 	}
 	if s := vals.Get("from"); s != "" {
 		t, err := time.Parse(time.RFC3339Nano, s)
@@ -131,34 +220,12 @@ func BuildView(ctx context.Context, st plugin.HerdStore, raw string, self uint32
 		rows, v.Truncated = rows[:viewRows], true
 	}
 	groups := map[vkey]*Vantage{}
-	for _, row := range rows {
-		var rec Record
-		var vr VantageRow
-		member, asn, identity := "local", self, "local"
-		if row.Member == "" {
-			if json.Unmarshal(row.Body, &rec) != nil {
-				continue
-			}
-		} else {
-			peerASN, ok := peers[row.Member]
-			if !ok {
-				continue
-			}
-			var pb pulledBody
-			if json.Unmarshal(row.Body, &pb) != nil {
-				continue
-			}
-			rec, member, asn, identity = pb.Record, row.Member, peerASN, "pinned_key"
-			vr.FetchedAt, vr.GeneratedAt = &pb.FetchedAt, &pb.GeneratedAt
-		}
-		vr.ID, vr.Time, vr.AgeSeconds = rec.ID, row.Time, max(now.Sub(row.Time).Seconds(), 0)
-		vr.Prefix, vr.OriginASN, vr.Routes, vr.ASPath, vr.ASPaths = rec.Prefix, rec.OriginASN, rec.Routes, rec.ASPath, rec.ASPaths
-		vr.Sent, vr.LossPct, vr.RTTMinMs, vr.RTTAvgMs, vr.RTTMaxMs, vr.JitterMs, vr.Failed =
-			rec.Sent, rec.LossPct, rec.RTTMinMs, rec.RTTAvgMs, rec.RTTMaxMs, rec.JitterMs, rec.Failed
-		k := vkey{member, rec.Vantage, rec.Method, rec.ProviderASN}
+	for _, o := range decodeRows(rows, self, peers) {
+		vr := o.row(now)
+		k := o.vkey()
 		g := groups[k]
 		if g == nil {
-			g = &Vantage{Member: member, Local: member == "local", ASN: asn, Identity: identity, Country: rec.Vantage, ProviderASN: rec.ProviderASN, Method: rec.Method}
+			g = &Vantage{VantageRef: o.ref()}
 			groups[k] = g
 		}
 		g.Records++
@@ -170,21 +237,6 @@ func BuildView(ctx context.Context, st plugin.HerdStore, raw string, self uint32
 		g.History = g.History[:min(len(g.History), viewHistory)]
 		v.Vantages = append(v.Vantages, *g)
 	}
-	sort.Slice(v.Vantages, func(i, j int) bool {
-		a, b := v.Vantages[i], v.Vantages[j]
-		if a.Local != b.Local {
-			return a.Local
-		}
-		if a.Member != b.Member {
-			return a.Member < b.Member
-		}
-		if a.Country != b.Country {
-			return a.Country < b.Country
-		}
-		if a.ProviderASN != b.ProviderASN {
-			return a.ProviderASN < b.ProviderASN
-		}
-		return a.Method < b.Method
-	})
+	sort.Slice(v.Vantages, func(i, j int) bool { return lessRef(v.Vantages[i].VantageRef, v.Vantages[j].VantageRef) })
 	return v, nil
 }

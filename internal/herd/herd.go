@@ -192,15 +192,51 @@ func (h *Herd) PreviewStatus() []byte {
 	return b
 }
 
-// Vantages is the per-vantage view of own and pulled records.
-func (h *Herd) Vantages(ctx context.Context, raw string) (VantageView, error) {
+// board is the dashboard reader over this node's store.
+func (h *Herd) board() Board {
 	peers := map[string]uint32{}
 	if h.pull != nil {
 		for _, p := range h.pull.Peers() {
 			peers[p.KeyID] = p.ASN
 		}
 	}
-	return BuildView(ctx, h.o.Store, raw, h.o.ASN, peers, h.o.Now())
+	return Board{Store: h.o.Store, Self: h.o.ASN, Peers: peers, Retention: time.Duration(h.o.Cfg.RetentionDays) * 24 * time.Hour, Now: h.o.Now()}
+}
+
+// Vantages is the per-vantage view of own and pulled records.
+func (h *Herd) Vantages(ctx context.Context, raw string) (VantageView, error) {
+	b := h.board()
+	return BuildView(ctx, b.Store, raw, b.Self, b.Peers, b.Now)
+}
+
+// Overview is the dashboard's member list and own sharing status.
+func (h *Herd) Overview(ctx context.Context) (Overview, error) {
+	return h.board().Overview(ctx, h.Status(ctx))
+}
+
+// Events is the dashboard's world view.
+func (h *Herd) Events(ctx context.Context, raw string) (Events, error) {
+	return h.board().Events(ctx, raw)
+}
+
+// Mesh is the dashboard's vantage by target grid.
+func (h *Herd) Mesh(ctx context.Context, raw string) (Mesh, error) {
+	return h.board().Mesh(ctx, raw)
+}
+
+// Monitor is the dashboard's latency and AS path series for one target.
+func (h *Herd) Monitor(ctx context.Context, raw string) (Monitor, error) {
+	return h.board().Monitor(ctx, raw)
+}
+
+// Map is the dashboard's vantages by country.
+func (h *Herd) Map(ctx context.Context, raw string) (Map, error) {
+	return h.board().Map(ctx, raw)
+}
+
+// Search is the dashboard's search within retention.
+func (h *Herd) Search(ctx context.Context, raw string) (Search, error) {
+	return h.board().Search(ctx, raw)
 }
 
 // NodeStatus is what the status API reports.
