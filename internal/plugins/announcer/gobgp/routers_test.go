@@ -376,3 +376,25 @@ func TestSetRoutersNeedsBind(t *testing.T) {
 		t.Fatal("SetRouters on an unbound announcer accepted")
 	}
 }
+
+func TestBlocksMove(t *testing.T) {
+	nhA, nhB, nhC := netip.MustParseAddr("192.0.2.1"), netip.MustParseAddr("192.0.2.2"), netip.MustParseAddr("192.0.2.4")
+	rp := routerPolicy{blocked: [][]netip.Addr{{nhC}, {nhA, nhC}}}
+	for _, tc := range []struct {
+		from, to netip.Addr
+		want     bool
+	}{
+		{nhB, nhA, true},  // the second router took nhB and rejects nhA
+		{nhA, nhB, false}, // nothing rejects nhB
+		{nhB, nhC, true},
+		{nhA, nhC, true},  // the first router took nhA and rejects nhC
+		{nhA, nhA, false}, // same next hop: attributes change only
+	} {
+		if got := rp.blocksMove(tc.from, tc.to); got != tc.want {
+			t.Errorf("blocksMove(%s, %s) = %v, want %v", tc.from, tc.to, got, tc.want)
+		}
+	}
+	if (routerPolicy{}).blocksMove(nhB, nhA) {
+		t.Error("no router table blocks a move")
+	}
+}

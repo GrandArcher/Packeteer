@@ -1,0 +1,9 @@
+# lab/e2e-move.sh: transit-b is clearly faster than native transit-a.
+sent: 4
+paths:
+  - provider: transit-a
+    rtt_ms: 80
+  - provider: transit-b
+    rtt_ms: 40
+  - provider: transit-c
+    rtt_ms: 90

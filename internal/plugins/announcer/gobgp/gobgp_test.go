@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"net"
 	"net/netip"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -387,5 +389,118 @@ func TestConfigRejectsUnknown(t *testing.T) {
 	}
 	if _, err := New(c, plugin.Env{}); err == nil {
 		t.Fatal("want unknown field error")
+	}
+}
+
+// update is one UPDATE entry the router received from Packeteer.
+type update struct {
+	prefix   string
+	nextHop  string
+	withdraw bool
+}
+
+// watchFromUs records every path the router receives from Packeteer,
+// withdraws included, in arrival order.
+func watchFromUs(t *testing.T, r *fakeRouter) func() []update {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	var mu sync.Mutex
+	var got []update
+	err := r.srv.WatchEvent(ctx, &api.WatchEventRequest{Table: &api.WatchEventRequest_Table{
+		Filters: []*api.WatchEventRequest_Table_Filter{{Type: api.WatchEventRequest_Table_Filter_ADJIN, PeerAddress: "127.0.0.2"}},
+	}}, func(ev *api.WatchEventResponse) {
+		mu.Lock()
+		defer mu.Unlock()
+		for _, p := range ev.GetTable().GetPaths() {
+			u := update{withdraw: p.IsWithdraw}
+			if pref, ok := decodePrefix(p.Nlri); ok {
+				u.prefix = pref.String()
+			}
+			u.nextHop, _, _, _ = decodeAttrs(p.Pattrs)
+			got = append(got, u)
+		}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return func() []update {
+		mu.Lock()
+		defer mu.Unlock()
+		return slices.Clone(got)
+	}
+}
+
+func TestMoveBetweenProvidersIsMakeBeforeBreak(t *testing.T) {
+	ctx := context.Background()
+	r := newRouter(t)
+	v := newView(t, r)
+	eventually(t, "session", v.Ready)
+	a := mustAnnouncer(t)
+	if err := a.Bind(v.Server(), "64512:666"); err != nil {
+		t.Fatal(err)
+	}
+	updates := watchFromUs(t, r)
+
+	for _, tc := range []struct {
+		prefix   string
+		fam      *api.Family
+		from, to string
+	}{
+		{"198.51.100.0/24", v4Family, "192.0.2.2", "192.0.2.4"},
+		{"2001:db8:1::/48", v6Family, "2001:db8::2", "2001:db8::4"},
+	} {
+		route := func(nh string) plugin.Route {
+			return plugin.Route{Prefix: netip.MustParsePrefix(tc.prefix), NextHop: netip.MustParseAddr(nh),
+				LocalPref: 250, Communities: []string{"64512:666"}}
+		}
+		onlyVia := func(nh string) func() bool {
+			return func() bool {
+				var ours []seen
+				for _, p := range collect(t, r.srv, tc.fam) {
+					if p.fromUs && p.prefix == tc.prefix {
+						ours = append(ours, p)
+					}
+				}
+				return len(ours) == 1 && ours[0].nextHop == nh
+			}
+		}
+		if err := a.Announce(ctx, route(tc.from)); err != nil {
+			t.Fatal(err)
+		}
+		eventually(t, tc.prefix+" on the first provider", onlyVia(tc.from))
+		before := len(updates())
+
+		if err := a.Announce(ctx, route(tc.to)); err != nil {
+			t.Fatal(err)
+		}
+		eventually(t, tc.prefix+" moved", onlyVia(tc.to))
+		var moved []update
+		eventually(t, tc.prefix+" move update seen", func() bool {
+			moved = updates()[before:]
+			return slices.Contains(moved, update{prefix: tc.prefix, nextHop: tc.to})
+		})
+		for _, u := range moved {
+			if u.prefix == tc.prefix && u.withdraw {
+				t.Fatalf("%s: router saw a withdraw during the move: %+v", tc.prefix, moved)
+			}
+		}
+
+		// The new UUID is the one kept: a withdraw must remove the moved
+		// route, and the watch must see it, so the check above can fail.
+		if err := a.Withdraw(ctx, netip.MustParsePrefix(tc.prefix)); err != nil {
+			t.Fatal(err)
+		}
+		eventually(t, tc.prefix+" withdraw seen", func() bool {
+			for _, u := range updates()[before:] {
+				if u.prefix == tc.prefix && u.withdraw {
+					return true
+				}
+			}
+			return false
+		})
+		if _, ok := fromUs(collect(t, r.srv, tc.fam), tc.prefix); ok {
+			t.Fatalf("%s still on the router after withdraw", tc.prefix)
+		}
 	}
 }
