@@ -18,6 +18,14 @@ type HerdSource interface {
 	Preview(rawQuery string) (int, []byte)
 	// PreviewStatus is the signed status document a puller would get.
 	PreviewStatus() []byte
+	// The dashboard views (#296). A herd.QueryError is a request the caller
+	// can fix.
+	Overview(ctx context.Context) (herd.Overview, error)
+	Events(ctx context.Context, rawQuery string) (herd.Events, error)
+	Mesh(ctx context.Context, rawQuery string) (herd.Mesh, error)
+	Monitor(ctx context.Context, rawQuery string) (herd.Monitor, error)
+	Map(ctx context.Context, rawQuery string) (herd.Map, error)
+	Search(ctx context.Context, rawQuery string) (herd.Search, error)
 }
 
 type herdHolder struct{ src HerdSource }
