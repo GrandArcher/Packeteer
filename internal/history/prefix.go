@@ -2,6 +2,7 @@ package history
 
 import (
 	"cmp"
+	"encoding/json"
 	"net/netip"
 	"slices"
 	"time"
@@ -81,7 +82,11 @@ func BuildPrefix(h plugin.History, p netip.Prefix, q Query) PrefixHistory {
 		return cmp.Or(y.Start.Compare(x.Start), cmp.Compare(x.ID, y.ID))
 	})
 	for _, r := range imps {
-		out.Improvements = append(out.Improvements, improvementRow(r, a.hours(r)))
+		row := improvementRow(r, a.hours(r))
+		if json.Valid([]byte(r.Explain)) {
+			row.Explain = json.RawMessage(r.Explain)
+		}
+		out.Improvements = append(out.Improvements, row)
 	}
 	for _, r := range h.RPKIRoutes {
 		if r.Prefix == p {

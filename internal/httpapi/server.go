@@ -184,6 +184,9 @@ type Server struct {
 	// ixpSites is the multi-site fabric health view (#167). Nil until
 	// SetIXPSites. Read at request time. It never announces.
 	ixpSites atomic.Value
+	// explainer is the decision explanations (#201). Nil until
+	// SetExplainer.
+	explainer atomic.Value
 	// quarantine releases a flap-quarantined prefix (#228). Nil until
 	// SetQuarantine.
 	quarantine atomic.Value

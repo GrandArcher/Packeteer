@@ -1,0 +1,36 @@
+{
+ "version": "fixture",
+ "mode": "observe",
+ "ready": true,
+ "generated_at": "2026-10-22T12:00:00Z",
+ "decided_at": "2026-10-22T11:59:50Z",
+ "prefix": "198.51.100.0/24",
+ "native": "lab-a",
+ "current": "lab-a",
+ "recommended": "lab-b",
+ "action": "none",
+ "reason": "native path is best (within thresholds)",
+ "candidates": [],
+ "explain": {
+  "outcome": "held",
+  "blocked_by": "thresholds",
+  "reason": "native path is best (within thresholds)",
+  "gates": [
+   {"gate": "rib", "status": "pass", "value": "native lab-a"},
+   {"gate": "freshness", "status": "pass", "value": "oldest result 12s", "limit": "max_result_age 2m0s"},
+   {"gate": "thresholds", "status": "fail", "value": "lab-b vs lab-a: loss gain 0 pt, rtt gain 10 ms (20%)", "limit": "loss gain >= 1 pt, or rtt gain >= 15 ms with loss no higher, and a lower score", "detail": "neither threshold is met"},
+   {"gate": "confirm_rounds", "status": "skip", "detail": "not reached: no better path passed the thresholds"},
+   {"gate": "hold_time", "status": "skip", "detail": "not reached: no better path passed the thresholds"},
+   {"gate": "cap", "status": "skip", "detail": "not reached: no better path passed the thresholds"},
+   {"gate": "policy", "status": "pass", "value": "no routing policy matched"},
+   {"gate": "allowlist", "status": "skip", "detail": "mode observe: nothing is announced"},
+   {"gate": "route_check", "status": "pass", "value": "no provider lacks a route for this prefix"},
+   {"gate": "rpki", "status": "skip", "detail": "RPKI is off"}
+  ],
+  "samples": [
+   {"provider": "lab-a", "role": "current", "loss_pct": 0, "rtt_ms": 50, "jitter_ms": 1, "score": 50, "usable": true},
+   {"provider": "lab-b", "role": "challenger", "loss_pct": 0, "rtt_ms": 40, "jitter_ms": 1, "score": 40, "usable": true}
+  ],
+  "counterfactual": "would move to lab-b if its RTT delta reached >= 15 ms (now 10 ms) with loss no higher than 0%, or its loss were >= 1 pt lower (now 0 pt)"
+ }
+}

@@ -3,6 +3,7 @@ package history
 import (
 	"cmp"
 	"encoding/csv"
+	"encoding/json"
 	"io"
 	"math"
 	"net/netip"
@@ -366,6 +367,9 @@ type ImprovementRow struct {
 	VolumeMbps    float64   `json:"volume_mbps,omitempty"`
 	CostDelta     float64   `json:"cost_delta,omitempty"`
 	EstSavings    float64   `json:"est_savings,omitempty"`
+	// Explain is the gate list of the decision that started the
+	// improvement (#201). Only the prefix history carries it.
+	Explain json.RawMessage `json:"explain,omitempty"`
 }
 
 func opt(ok bool, v float64) *float64 {

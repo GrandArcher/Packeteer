@@ -6,6 +6,7 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 
 ### Added
 
+- Every decision lists its checks in order with the value, limit, blocking gate, and a counterfactual: `GET /api/decisions/<prefix>`, a Why? panel on the prefix page, stored with history (#201).
 - Herd page (`/herd.html`): members, world view, mesh, country map, latency and AS path monitors, search, and opt-in outside sources (Atlas, RIS Live, RPKI, link-outs), display only (#296).
 - Docs: adopting.md maps common route-optimizer concepts to config with an observe-first cut-over plan; roi.md is a worksheet for cost, commit relief, and gain (#205).
 - Opt-in `ring_lg` panel "Seen from NLNOG RING" on the prefix page: public looking-glass API, rate capped, cached, best-effort, off by default (#283).

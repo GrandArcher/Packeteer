@@ -647,3 +647,28 @@ func TestRecorderRPKIMissedRound(t *testing.T) {
 		t.Fatalf("rpki = %+v, want %+v", h.RPKI, want)
 	}
 }
+
+// A change carries the gate list of the decision that made it, and the
+// record keeps it as JSON for the prefix page (#201).
+func TestRecorderStoresExplain(t *testing.T) {
+	ctx := context.Background()
+	clock := t0
+	store := &memStore{}
+	rec := newRecorder(store, &clock)
+	imp := policy.Improvement{Prefix: pfxA, Provider: "transit-b", Native: "transit-a", Reason: "rtt"}
+	ex := &policy.Explain{Outcome: policy.OutcomeMoved, Reason: "rtt", Gates: []policy.Gate{{Name: policy.GateThresholds, Status: policy.GatePass, Value: "40 ms"}}}
+	rec.Decision(t0, []policy.Change{{Action: policy.ActionImprove, New: imp, Explain: ex}}, nil)
+	other := policy.Improvement{Prefix: pfxC, Provider: "transit-b", Native: "transit-a"}
+	rec.Decision(t0, []policy.Change{{Action: policy.ActionImprove, New: other}}, nil)
+	if err := rec.Flush(ctx); err != nil {
+		t.Fatal(err)
+	}
+	got := map[netip.Prefix]string{}
+	for _, r := range store.h.Improvements {
+		got[r.Prefix] = r.Explain
+	}
+	want := `{"outcome":"moved","reason":"rtt","gates":[{"gate":"thresholds","status":"pass","value":"40 ms"}],"samples":null}`
+	if got[pfxA] != want || got[pfxC] != "" {
+		t.Fatalf("stored explains = %q", got)
+	}
+}

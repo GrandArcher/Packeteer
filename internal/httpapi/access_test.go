@@ -88,7 +88,7 @@ func overTLS(r *http.Request) { r.TLS = &tls.ConnectionState{} }
 
 func routePath(pattern string) (method, path string) {
 	method, path, _ = strings.Cut(pattern, " ")
-	path = strings.NewReplacer("{id}", "x", "{name}", "nobody").Replace(path)
+	path = strings.NewReplacer("{id}", "x", "{name}", "nobody", "{prefix...}", "198.51.100.0/24").Replace(path)
 	if path == "/api/troubleshoot/lookingglass" {
 		path += "?prefix=198.51.100.0/24"
 	}

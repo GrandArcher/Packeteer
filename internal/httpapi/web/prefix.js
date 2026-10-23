@@ -25,6 +25,7 @@ function prefixListQuery() {
 function prefixPageUpdate(data) {
   var root = document.getElementById("prefix-live");
   if (!root) return;
+  loadWhy();
   clear(root);
   var row = ((data && data.prefixes) || []).filter(function (r) { return r.prefix === thisPrefix; })[0];
   if (!row) {
@@ -53,6 +54,84 @@ function quarantineNote(q) {
     fmtTime(q.until) + ". An operator can release it with POST /api/quarantine/release.");
 }
 
+// The "Why?" panel (#201): the gate list of the latest decision from
+// /api/decisions/<prefix>, the measurements behind it, and what would have
+// to change for a held move to happen.
+var GATE_LABELS = {
+  rib: "Learned RIB", freshness: "Fresh measurements", thresholds: "Thresholds", confirm_rounds: "Confirm rounds",
+  hold_time: "Hold time", cap: "Max simultaneous moves", policy: "Routing policy", allowlist: "Allowlist",
+  route_check: "Route check", rpki: "RPKI"
+};
+var GATE_RESULTS = {pass: "Passed", fail: "Held it back", skip: "Not checked"};
+var OUTCOMES = {moved: "Moved", kept: "Kept", retired: "Retired", held: "Held"};
+
+function gateLabel(name) { return GATE_LABELS[name] || name; }
+
+function whyHeadline(ex) {
+  var text = (OUTCOMES[ex.outcome] || ex.outcome) + ": " + (ex.reason || "no reason recorded") + ".";
+  if (ex.blocked_by) text += " Held back by: " + gateLabel(ex.blocked_by) + ".";
+  return text;
+}
+
+function gateRow(g) {
+  var tr = el("tr");
+  tr.appendChild(el("td", "", gateLabel(g.gate)));
+  var result = el("td");
+  result.appendChild(g.status === "pass" ? el("span", "dot up", GATE_RESULTS.pass) :
+    g.status === "fail" ? el("span", "dot down", GATE_RESULTS.fail) : el("span", "badge muted", GATE_RESULTS.skip));
+  tr.appendChild(result);
+  tr.appendChild(el("td", "", g.value || "—"));
+  tr.appendChild(el("td", "", g.limit || "—"));
+  tr.appendChild(el("td", "", g.detail || ""));
+  return tr;
+}
+
+function sampleRow(s) {
+  var tr = el("tr");
+  tr.appendChild(el("td", "", s.provider));
+  tr.appendChild(el("td", "", s.role || "—"));
+  tr.appendChild(el("td", "", fmtPct(s.loss_pct)));
+  tr.appendChild(el("td", "", fmtMs(s.rtt_ms)));
+  tr.appendChild(el("td", "", fmtMs(s.jitter_ms)));
+  tr.appendChild(el("td", "", s.usable ? String(Math.round(s.score * 10) / 10) : "—"));
+  tr.appendChild(el("td", "", s.usable ? "usable" : "not usable: " + (s.why || "no reason")));
+  return tr;
+}
+
+function renderWhy(data) {
+  var root = document.getElementById("why-body");
+  clear(root);
+  var ex = data.explain;
+  root.appendChild(el("p", "reason", whyHeadline(ex)));
+  var gates = table(["Check", "Result", "Value", "Limit", "Detail"]);
+  (ex.gates || []).forEach(function (g) { gates.body.appendChild(gateRow(g)); });
+  root.appendChild(gates.table);
+  if (ex.counterfactual) root.appendChild(el("p", "reason", "What would change it: " + ex.counterfactual + "."));
+  root.appendChild(el("h3", "", "Measurements behind it"));
+  var samples = table(["Provider", "Role", "Loss", "RTT", "Jitter", "Score", "State"]);
+  (ex.samples || []).forEach(function (s) { samples.body.appendChild(sampleRow(s)); });
+  root.appendChild(samples.table);
+  root.appendChild(el("p", "tag", "Decided " + fmtTime(data.decided_at) + "."));
+}
+
+function loadWhy() {
+  var root = document.getElementById("why-body");
+  if (!root || !thisPrefix) return;
+  getJSON("/api/decisions/" + encodeURIComponent(thisPrefix)).then(renderWhy, function (err) {
+    clear(root);
+    root.appendChild(el("p", "empty", err.status === 404 ?
+      "Packeteer has no decision for this prefix now, so there is nothing to explain. The timeline shows what was stored." : err.message));
+  });
+}
+
+// whyStored is the one-line checks of a stored decision, for the timeline.
+function whyStored(ex) {
+  var parts = (ex.gates || []).filter(function (g) { return g.status !== "skip"; }).map(function (g) {
+    return gateLabel(g.gate) + " " + (g.status === "pass" ? "passed" : "held it back") + (g.value ? " (" + g.value + ")" : "");
+  });
+  return parts.join("; ");
+}
+
 // verb never says "announced" for a record made outside inject.
 function timelineVerb(mode) {
   return mode === "inject" ? "Announced" : "Recommended";
@@ -66,6 +145,7 @@ function improvementEntries(im) {
   var verb = timelineVerb(im.mode);
   var what = verb + " " + (im.provider || "—") + " over " + (im.native || "—") + ", cause " + (im.cause || "—");
   if (im.reason) what += " (" + im.reason + ")";
+  if (im.explain) what += ". Checks at the time: " + whyStored(im.explain);
   if (im.before_loss_pct != null || im.after_loss_pct != null) {
     what += ". Before (native): " + measure(im.before_loss_pct, im.before_rtt_ms) +
       ". After (chosen): " + measure(im.after_loss_pct, im.after_rtt_ms) + ".";

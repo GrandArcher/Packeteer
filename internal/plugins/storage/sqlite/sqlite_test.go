@@ -2,6 +2,7 @@ package sqlite
 
 import (
 	"context"
+	"database/sql"
 	"net/netip"
 	"path/filepath"
 	"strings"
@@ -289,5 +290,55 @@ func TestRPKIRouteRecords(t *testing.T) {
 	}
 	if len(h.RPKIRoutes) != 1 || h.RPKIRoutes[0].Origin != 64496 {
 		t.Fatalf("after prune = %+v, want the old record gone", h.RPKIRoutes)
+	}
+}
+
+// TestImprovementExplainMigration keeps the gate list of an improvement
+// across a restart and adds the column to an improvements table created
+// before #201, whose rows read back with no explanation (#201).
+func TestImprovementExplainMigration(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "p.db")
+	old, err := sql.Open("sqlite", "file:"+path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := old.Exec(`CREATE TABLE improvements (id TEXT PRIMARY KEY, prefix TEXT NOT NULL, provider TEXT NOT NULL, native TEXT NOT NULL,
+		cause TEXT NOT NULL, reason TEXT NOT NULL, mode TEXT NOT NULL, start_ms INTEGER NOT NULL, end_ms INTEGER NOT NULL, end_reason TEXT NOT NULL,
+		has_before INTEGER NOT NULL, before_loss REAL NOT NULL, before_rtt_ms REAL NOT NULL, has_after INTEGER NOT NULL, after_loss REAL NOT NULL,
+		after_rtt_ms REAL NOT NULL, cost_delta REAL NOT NULL, est_savings REAL NOT NULL, volume_mbps REAL NOT NULL, origin_asn INTEGER NOT NULL, country TEXT NOT NULL);
+		INSERT INTO improvements VALUES ('legacy', '192.0.2.0/24', 'transit-b', 'transit-a', 'performance', 'loss', 'observe', 1000, 0, '', 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, '')`); err != nil {
+		t.Fatal(err)
+	}
+	_ = old.Close()
+
+	s := newStore(t, "path: "+path)
+	if err := s.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	explain := `{"outcome":"moved","gates":[{"gate":"rib","status":"pass"}]}`
+	err = s.Write(ctx, plugin.HistoryBatch{Improvements: []plugin.ImprovementRecord{
+		{ID: "new", Prefix: pfxB, Provider: "transit-a", Native: "transit-b", Start: day, Explain: explain},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = s.Stop(ctx)
+
+	s = newStore(t, "path: "+path)
+	if err := s.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	defer s.Stop(ctx)
+	h, err := s.Read(ctx, plugin.HistoryQuery{OpenOnly: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]string{}
+	for _, r := range h.Improvements {
+		got[r.ID] = r.Explain
+	}
+	if len(got) != 2 || got["legacy"] != "" || got["new"] != explain {
+		t.Fatalf("explains = %+v", got)
 	}
 }

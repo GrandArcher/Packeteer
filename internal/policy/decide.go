@@ -117,6 +117,7 @@ func Decide(prev State, in Input, cfg Config, scorer plugin.Scorer, now time.Tim
 	}
 	netpfx.Sort(prefixes)
 	decisions := make([]Decision, len(prefixes))
+	facts := make([]explainFacts, len(prefixes))
 
 	for i, p := range prefixes {
 		// A streak only asks for an early probe when this evaluation
@@ -156,6 +157,7 @@ func Decide(prev State, in Input, cfg Config, scorer plugin.Scorer, now time.Tim
 		if haveBest {
 			d.Recommended = best.Provider
 		}
+		facts[i] = factsOf(&st, in, cfg, p, cands, imp, active, ignore, now)
 
 		if active {
 			d.Native, d.Current = imp.Native, imp.Provider
@@ -495,7 +497,11 @@ func Decide(prev State, in Input, cfg Config, scorer plugin.Scorer, now time.Tim
 	annotateCost(st, &out, cfg, in.VolumeMbps)
 	for i := range decisions {
 		attachSubranges(&decisions[i], subs[decisions[i].Prefix], cfg.Excluded)
+		if c, ok := st.confirm[prefixes[i]]; ok && c.Provider == facts[i].challenger {
+			facts[i].streak = c.Streak
+		}
 	}
-	out.Decisions = decisions
+	out.Decisions, out.facts = decisions, facts
+	explainChanges(&out, cfg, len(st.Improvements))
 	return st, out
 }

@@ -57,6 +57,7 @@ func (s *Server) routeTable() []route {
 		{"GET /api/prefixes", viewer, s.handlePrefixes},
 		{"GET /api/prefixes/history", viewer, s.handlePrefixHistory},
 		{"GET /api/decisions", viewer, s.handleDecisions},
+		{"GET /api/decisions/{prefix...}", viewer, s.handleDecisionExplain},
 		{"GET /api/improvements", viewer, s.handleImprovements},
 		{"GET /api/telemetry", viewer, s.handleTelemetry},
 		{"GET /api/commit", viewer, s.handleCommit},
