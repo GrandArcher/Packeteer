@@ -1,0 +1,10 @@
+aut-num:        AS64496
+as-name:        EXAMPLE-NET-AS
+descr:          Example network
+org:            ORG-EXAMPLE1-RIPE
+remarks:
+remarks:        ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+remarks:        | We advertise only routes from AS-EXAMPLE |
+remarks:        ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+mnt-by:         MAINT-EXAMPLE
+source:         RIPE

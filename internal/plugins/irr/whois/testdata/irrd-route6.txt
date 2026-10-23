@@ -1,0 +1,10 @@
+route6:         2001:db8::/32
+descr:          EXAMPLE-NET
+origin:         AS64496
+mnt-lower:      MAINT-EXAMPLE
+mnt-routes:     MAINT-EXAMPLE
+mnt-by:         MAINT-EXAMPLE
+created:        2020-01-01T00:00:00Z
+last-modified:  2020-01-01T00:00:00Z
+source:         RIPE
+rpki-ov-state:  valid

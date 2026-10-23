@@ -1,0 +1,12 @@
+% This is the RIPE Database query service.
+
+% Information related to 'AS-EXAMPLE'
+
+as-set:         AS-EXAMPLE
+descr:          Example customers
+members:        AS64500, AS64501
+members:        AS64500:AS-CUSTOMERS
+remarks:        AS64500 is the main AS
+mnt-by:         MAINT-EXAMPLE
+source:         RIPE # Filtered
+
