@@ -4,7 +4,7 @@ This takes a Linux host with Docker to a verified first injection without hand-w
 
 ## One-command install
 
-`scripts/install.sh` needs Linux, Docker, and curl. It downloads `config.example.yaml` (observe) into `./packeteer`, runs `-check` on it, starts the stock image with host networking and `NET_RAW` and `NET_ADMIN`, waits for `/healthz`, and prints where to sign in.
+`scripts/install.sh` needs Linux, Docker, and curl. It downloads `config.example.yaml` (observe) into `./packeteer`, runs `-check` on it, starts the stock image with host networking and `NET_RAW` and `NET_ADMIN`, waits for `/healthz` and for the first admin to be bootstrapped (HTTP can answer before sign-in is ready, #328), and prints where to sign in.
 
 ```
 sh scripts/install.sh
