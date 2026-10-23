@@ -80,8 +80,8 @@ function gateRow(g) {
   result.appendChild(g.status === "pass" ? el("span", "dot up", GATE_RESULTS.pass) :
     g.status === "fail" ? el("span", "dot down", GATE_RESULTS.fail) : el("span", "badge muted", GATE_RESULTS.skip));
   tr.appendChild(result);
-  tr.appendChild(el("td", "", g.value || "—"));
-  tr.appendChild(el("td", "", g.limit || "—"));
+  tr.appendChild(el("td", "", g.value || "-"));
+  tr.appendChild(el("td", "", g.limit || "-"));
   tr.appendChild(el("td", "", g.detail || ""));
   return tr;
 }
@@ -89,11 +89,11 @@ function gateRow(g) {
 function sampleRow(s) {
   var tr = el("tr");
   tr.appendChild(el("td", "", s.provider));
-  tr.appendChild(el("td", "", s.role || "—"));
+  tr.appendChild(el("td", "", s.role || "-"));
   tr.appendChild(el("td", "", fmtPct(s.loss_pct)));
   tr.appendChild(el("td", "", fmtMs(s.rtt_ms)));
   tr.appendChild(el("td", "", fmtMs(s.jitter_ms)));
-  tr.appendChild(el("td", "", s.usable ? String(Math.round(s.score * 10) / 10) : "—"));
+  tr.appendChild(el("td", "", s.usable ? String(Math.round(s.score * 10) / 10) : "-"));
   tr.appendChild(el("td", "", s.usable ? "usable" : "not usable: " + (s.why || "no reason")));
   return tr;
 }

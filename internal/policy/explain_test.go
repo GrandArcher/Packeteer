@@ -105,7 +105,7 @@ func TestExplainRIBGate(t *testing.T) {
 	input := in(results(t0, pA, m{"a", 0, 90}, m{"b", 0, 30}), natA())
 	input.RIBEnabled = false
 	ex := explainRound(t, cfg(), input)
-	wantGate(t, ex, GateRIB, GateSkip, "ranked only")
+	wantGate(t, ex, GateRIB, GateFail, "ranked only")
 	if ex.BlockedBy != GateRIB || !strings.Contains(ex.Counterfactual, "bgp.neighbors") {
 		t.Fatalf("no-RIB explain = %+v", ex)
 	}
@@ -172,6 +172,15 @@ func TestExplainThresholdsGate(t *testing.T) {
 		wantGate(t, ex, GateThresholds, GateFail, "score is not lower")
 		if !strings.Contains(ex.Counterfactual, "if its score were lower than a") {
 			t.Fatalf("counterfactual = %q", ex.Counterfactual)
+		}
+	})
+	t.Run("no threshold configured", func(t *testing.T) {
+		c := cfg()
+		c.MinLossDeltaPct, c.MinRTTDelta = 0, 0
+		ex := explainRound(t, c, in(results(t0, pA, m{"a", 0, 90}, m{"b", 0, 30}), natA()))
+		g := wantGate(t, ex, GateThresholds, GateFail, "no threshold is configured")
+		if g.Limit != "no threshold configured" || ex.Counterfactual != "would move to b once thresholds.min_loss_delta_pct or thresholds.min_rtt_delta_ms is set" {
+			t.Fatalf("thresholds = %+v counterfactual = %q", g, ex.Counterfactual)
 		}
 	})
 	t.Run("no second provider", func(t *testing.T) {

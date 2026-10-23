@@ -248,9 +248,6 @@ func factsOf(st *State, in Input, cfg Config, p netip.Prefix, cands []Candidate,
 // explainChanges attaches the gate list of the deciding evaluation to each
 // improve and switch, for history. A retire is recorded with its reason.
 func explainChanges(out *Output, cfg Config, capUsed int) {
-	if len(out.Changes) == 0 {
-		return
-	}
 	for i := range out.Changes {
 		c := &out.Changes[i]
 		if c.Action == ActionRetire {
@@ -356,7 +353,8 @@ func ribGate(d Decision, f explainFacts) Gate {
 	g := Gate{Name: GateRIB}
 	switch f.rib {
 	case ribOff:
-		g.Status, g.Detail = GateSkip, "no BGP neighbors configured: providers are ranked only"
+		g.Status, g.Value, g.Limit = GateFail, "no BGP neighbors configured", "bgp.neighbors set"
+		g.Detail = "providers are ranked only: no native exit is known"
 	case ribAbsent:
 		g.Status, g.Value, g.Limit = GateFail, "prefix not in the learned RIB", "a neighbor advertises the exact prefix"
 	case ribNoProvider:
@@ -416,6 +414,8 @@ func thresholdsGate(cur, ch Candidate, haveCur, haveCh bool, cfg Config) Gate {
 		g.Status = GatePass
 	case wouldWin(ch, cur, cfg):
 		g.Status, g.Detail = GateFail, fmt.Sprintf("thresholds met but the score is not lower (%s vs %s)", fnum(ch.Score), fnum(cur.Score))
+	case cfg.MinLossDeltaPct <= 0 && cfg.MinRTTDelta <= 0:
+		g.Status, g.Detail = GateFail, "no threshold is configured, so no move qualifies"
 	default:
 		g.Status, g.Detail = GateFail, "neither threshold is met"
 	}
@@ -579,7 +579,7 @@ func blockedBy(g map[string]Gate, f explainFacts, d Decision, pairBetter, usable
 		return ""
 	}
 	switch {
-	case g[GateRIB].Status == GateFail || f.rib == ribOff:
+	case g[GateRIB].Status == GateFail:
 		return GateRIB
 	case f.ignore || (d.Cause == plugin.CauseStatic && g[GatePolicy].Status == GateFail):
 		return GatePolicy
@@ -648,6 +648,9 @@ func thresholdCounterfactual(cur, ch Candidate, cfg Config) string {
 	}
 	if cfg.MinLossDeltaPct > 0 {
 		parts = append(parts, fmt.Sprintf("its loss were >= %s pt lower (now %s pt)", fnum(cfg.MinLossDeltaPct), fnum(cur.LossPct-ch.LossPct)))
+	}
+	if len(parts) == 0 {
+		return "would move to " + ch.Provider + " once thresholds.min_loss_delta_pct or thresholds.min_rtt_delta_ms is set"
 	}
 	return "would move to " + ch.Provider + " if " + strings.Join(parts, ", or ")
 }
