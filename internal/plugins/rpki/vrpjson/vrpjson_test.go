@@ -180,9 +180,9 @@ func TestStalenessCoversPublisherCycle(t *testing.T) {
 // once per episode, so an operator sees a publisher slower than staleness
 // allows instead of only rpki.stale/rpki.fresh flaps.
 func TestLateDocumentWarnsOnce(t *testing.T) {
-	var at atomic.Int64
+	var body atomic.Value
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = w.Write([]byte(dated(t, "rpki-client.json", time.Unix(at.Load(), 0))))
+		_, _ = w.Write([]byte(body.Load().(string)))
 	}))
 	defer srv.Close()
 	cfg, err := plugin.ConfigFromYAML("url: " + srv.URL + "\n")
@@ -206,7 +206,7 @@ func TestLateDocumentWarnsOnce(t *testing.T) {
 		{time.Minute, 1},
 		{time.Hour + 58*time.Minute, 2},
 	} {
-		at.Store(time.Now().Add(-step.age).Unix())
+		body.Store(dated(t, "rpki-client.json", time.Now().Add(-step.age)))
 		c.poll(t.Context())
 		if st := c.Status(); !st.Up || st.Stale {
 			t.Fatalf("age %s: status = %+v, want up and fresh", step.age, st)
