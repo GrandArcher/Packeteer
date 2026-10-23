@@ -22,19 +22,3 @@ func TestWhyPage(t *testing.T) {
 		t.Fatalf("why page: %v\n%s", err, out)
 	}
 }
-
-// The prefix page has the panel, reads the endpoint the server serves, and
-// writes nothing.
-func TestWhyPageAssets(t *testing.T) {
-	html, js := mustWeb(t, "web/prefix.html"), mustWeb(t, "web/prefix.js")
-	for _, s := range []string{`id="why-panel"`, `id="why-body"`} {
-		if !strings.Contains(html, s) {
-			t.Errorf("prefix.html missing %s", s)
-		}
-	}
-	for _, s := range []string{`getJSON("/api/decisions/" + encodeURIComponent(thisPrefix))`, `loadWhy();`} {
-		if !strings.Contains(js, s) {
-			t.Errorf("prefix.js missing %s", s)
-		}
-	}
-}

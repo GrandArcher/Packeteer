@@ -68,7 +68,8 @@ type Sample struct {
 
 // Explain says which check let a decision move or held it back (#201).
 // BlockedBy is the gate that stopped a held or kept decision; it is empty
-// when the decision moved or retired. Counterfactual is one sentence on
+// when the decision moved or retired, and also for a kept static pin or a
+// planned commit or cost keep, which no gate stopped. Counterfactual is one sentence on
 // what would have to change for the blocked move to happen.
 type Explain struct {
 	Outcome        string   `json:"outcome"`
@@ -96,8 +97,9 @@ const (
 )
 
 // explainFacts is what Decide saw for one prefix that the final Decision
-// does not carry and an Explain needs. It is plain values so that keeping it
-// for every prefix of a large table costs no allocation.
+// does not carry and an Explain needs. It is plain values: keeping it costs one
+// slice of these per evaluation (about 100 bytes per prefix), and a string
+// join per prefix that has two or more barred providers.
 type explainFacts struct {
 	// current is the provider whose path is compared: the improvement's
 	// provider when one is active, else the native provider.
@@ -105,8 +107,8 @@ type explainFacts struct {
 	// challenger is the best other usable provider the current path is
 	// compared with; empty when there is none.
 	challenger string
-	// barred lists excluded providers (exclude, maintenance, commit control) that
-	// would otherwise beat the current path.
+	// barred lists excluded providers (provider exclude or an open maintenance
+	// window) that would otherwise beat the current path.
 	barred string
 	// oldest is the age of the oldest probe result of the prefix.
 	oldest time.Duration
@@ -262,7 +264,8 @@ func explainChanges(out *Output, cfg Config, capUsed int) {
 
 // buildExplain derives the gate list of d. capUsed is the number of active
 // improvements after the evaluation. cfg is the config the evaluation ran
-// with, maintenance exclusions included.
+// with; Engine.Explain passes the engine config, without the maintenance
+// exclusions, so buildExplain must not read cfg.Excluded.
 func buildExplain(d Decision, f explainFacts, cfg Config, capUsed int) Explain {
 	ex := Explain{Reason: d.Reason, Samples: samplesOf(d, f)}
 	cur, haveCur := findCandidate(d.Candidates, f.current)
@@ -505,7 +508,7 @@ func policyGate(d Decision, f explainFacts, cur Candidate, haveCur bool, cfg Con
 	case staticHeld:
 		g.Status, g.Detail = GateFail, d.Reason
 	case f.barred != "":
-		g.Status, g.Detail = GateFail, f.barred+" would win but is excluded (provider exclude, maintenance, or commit control)"
+		g.Status, g.Detail = GateFail, f.barred+" would win but is excluded (provider exclude or maintenance)"
 	case haveCur:
 		if names := removedBy(d.Candidates, GatePolicy, cur, cfg); len(names) > 0 {
 			g.Status, g.Detail = GateFail, strings.Join(names, ", ")+" would win but the policy does not allow it"
@@ -661,14 +664,16 @@ func findDecision(ds []Decision, p netip.Prefix) (int, bool) {
 	return i, i < len(ds) && ds[i].Prefix == p
 }
 
-// Explain returns the gate list of the latest decision for p, and false
-// when p has none.
-func (e *Engine) Explain(p netip.Prefix) (Explain, bool) {
+// Explain returns the latest decision for p, its gate list, and when the
+// evaluation ran, all from the same round. It reports false when p has no
+// decision.
+func (e *Engine) Explain(p netip.Prefix) (Decision, Explain, time.Time, bool) {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 	i, ok := findDecision(e.last.Decisions, p)
 	if !ok {
-		return Explain{}, false
+		return Decision{}, Explain{}, time.Time{}, false
 	}
-	return buildExplain(e.last.Decisions[i], e.last.facts[i], e.lastCfg, len(e.state.Improvements)), true
+	d := e.last.Decisions[i]
+	return d, buildExplain(d, e.last.facts[i], e.lastCfg, len(e.state.Improvements)), e.at, true
 }

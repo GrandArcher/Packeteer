@@ -8,10 +8,10 @@ import (
 	"github.com/GrandArcher/Packeteer/internal/policy"
 )
 
-// Explainer returns the gate list of the latest decision for a prefix
-// (#201). *policy.Engine implements it.
+// Explainer returns the latest decision for a prefix with its gate list and
+// when it was made, from one evaluation (#201). *policy.Engine implements it.
 type Explainer interface {
-	Explain(netip.Prefix) (policy.Explain, bool)
+	Explain(netip.Prefix) (policy.Decision, policy.Explain, time.Time, bool)
 }
 
 // SetExplainer installs the decision explanations behind
@@ -38,16 +38,9 @@ func (s *Server) handleDecisionExplain(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "no decision engine is running"})
 		return
 	}
-	why, ok := ex.Explain(p)
-	var row Decision
-	found := false
-	for _, d := range snap.Decisions {
-		if d.Prefix == p.String() {
-			row, found = d, true
-			break
-		}
-	}
-	if !ok || !found {
+	d, why, decidedAt, ok := ex.Explain(p)
+	rows := assembleDecisions(snap.Mode, []policy.Decision{d})
+	if !ok || len(rows) == 0 {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "no decision for " + p.String() + ": Packeteer is not measuring it now"})
 		return
 	}
@@ -56,9 +49,9 @@ func (s *Server) handleDecisionExplain(w http.ResponseWriter, r *http.Request) {
 		DecidedAt *time.Time `json:"decided_at,omitempty"`
 		Decision
 		Explain policy.Explain `json:"explain"`
-	}{meta: snap.meta(), Decision: row, Explain: why}
-	if !snap.DecidedAt.IsZero() {
-		t := snap.DecidedAt.UTC()
+	}{meta: snap.meta(), Decision: rows[0], Explain: why}
+	if !decidedAt.IsZero() {
+		t := decidedAt.UTC()
 		body.DecidedAt = &t
 	}
 	writeJSON(w, http.StatusOK, body)

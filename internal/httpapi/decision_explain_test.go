@@ -16,8 +16,8 @@ import (
 
 // explainServer runs the real decision engine over one held-back prefix
 // (198.51.100.0/24, 10 ms faster via lab-b, under the 15 ms threshold) and
-// one that moves (203.0.113.0/24), and serves its decisions.
-func explainServer(t *testing.T) http.Handler {
+// one that moves (203.0.113.0/24).
+func explainEngine(t *testing.T) (*policy.Engine, time.Time) {
 	t.Helper()
 	sc, err := weighted.New(plugin.Config{}, plugin.Env{})
 	if err != nil {
@@ -39,6 +39,13 @@ func explainServer(t *testing.T) http.Handler {
 		RIBEnabled: true, RIBReady: true,
 		Native: map[netip.Prefix]string{held: "lab-a", moved: "lab-a"},
 	}, at)
+	return e, at
+}
+
+// explainServer serves the decisions of explainEngine.
+func explainServer(t *testing.T) http.Handler {
+	t.Helper()
+	e, at := explainEngine(t)
 	s, err := New(Options{User: "ops", Password: "secret", Snapshot: func() Snapshot {
 		decisions, decidedAt := e.Decisions()
 		return Assemble(Input{Mode: "observe", At: at, Decisions: decisions, DecidedAt: decidedAt})
@@ -138,5 +145,33 @@ func TestDecisionExplainAPIErrors(t *testing.T) {
 	}
 	if rec := mdo(s.Handler(), http.MethodGet, "/api/decisions/198.51.100.0/24", "", "", true); rec.Code != http.StatusNotFound {
 		t.Errorf("no engine: status %d", rec.Code)
+	}
+}
+
+// The row and the explanation both come from the engine's latest round, not
+// from the published snapshot, which may be one round behind.
+func TestDecisionExplainIgnoresSnapshotRound(t *testing.T) {
+	e, _ := explainEngine(t)
+	s, err := New(Options{User: "ops", Password: "secret", Snapshot: func() Snapshot { return Snapshot{Mode: "observe"} }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.SetExplainer(e)
+	rec := mdo(s.Handler(), http.MethodGet, "/api/decisions/203.0.113.0/24", "", "", true)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d: %s", rec.Code, rec.Body)
+	}
+	var body struct {
+		DecidedAt string `json:"decided_at"`
+		Action    string `json:"action"`
+		Explain   struct {
+			Outcome string `json:"outcome"`
+		} `json:"explain"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.Action != policy.ActionImprove || body.Explain.Outcome != "moved" || body.DecidedAt != "2026-10-17T12:00:00Z" {
+		t.Fatalf("body = %s", rec.Body)
 	}
 }

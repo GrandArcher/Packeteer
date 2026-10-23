@@ -25,7 +25,7 @@ func explainRound(t *testing.T, c Config, input Input) Explain {
 	t.Helper()
 	e := NewEngine(c, scorer(t))
 	e.Evaluate(input, t0)
-	ex, ok := e.Explain(pA)
+	_, ex, _, ok := e.Explain(pA)
 	if !ok {
 		t.Fatal("no explanation for pA")
 	}
@@ -58,7 +58,7 @@ func TestExplainGateOrder(t *testing.T) {
 func TestExplainMoved(t *testing.T) {
 	e := NewEngine(cfg(), scorer(t))
 	changes := e.Evaluate(in(results(t0, pA, m{"a", 0, 50}, m{"b", 0, 30}), natA()), t0)
-	ex, _ := e.Explain(pA)
+	_, ex, _, _ := e.Explain(pA)
 	if ex.Outcome != OutcomeMoved || ex.BlockedBy != "" || ex.Counterfactual != "" {
 		t.Fatalf("explain = %+v", ex)
 	}
@@ -197,7 +197,7 @@ func TestExplainConfirmGate(t *testing.T) {
 	c.ConfirmRounds = 3
 	e := NewEngine(c, scorer(t))
 	e.Evaluate(in(results(t0, pA, m{"a", 0, 90}, m{"b", 0, 30}), natA()), t0)
-	ex, _ := e.Explain(pA)
+	_, ex, _, _ := e.Explain(pA)
 	g := wantGate(t, ex, GateConfirm, GateFail, "1 of 3")
 	if g.Limit != "3 fresh round(s) in a row" || ex.BlockedBy != GateConfirm || ex.Outcome != OutcomeHeld {
 		t.Fatalf("confirm = %+v explain = %+v", g, ex)
@@ -206,7 +206,7 @@ func TestExplainConfirmGate(t *testing.T) {
 		t.Fatalf("counterfactual = %q", ex.Counterfactual)
 	}
 	e.Evaluate(in(results(t0.Add(time.Second), pA, m{"a", 0, 90}, m{"b", 0, 30}), natA()), t0.Add(time.Second))
-	ex, _ = e.Explain(pA)
+	_, ex, _, _ = e.Explain(pA)
 	wantGate(t, ex, GateConfirm, GateFail, "2 of 3")
 }
 
@@ -216,7 +216,7 @@ func TestExplainHoldTimeGate(t *testing.T) {
 		e.Evaluate(in(results(t0, pA, m{"a", 0, 90}, m{"b", 0, 30}), natA()), t0)
 		at := t0.Add(5 * time.Minute)
 		e.Evaluate(in(results(at, pA, m{"a", 0, 20}, m{"b", 0, 90}), natA()), at)
-		ex, _ := e.Explain(pA)
+		_, ex, _, _ := e.Explain(pA)
 		g := wantGate(t, ex, GateHoldTime, GateFail, "held 5m0s")
 		if g.Limit != "hold_time 15m0s" || ex.Outcome != OutcomeKept || ex.BlockedBy != GateHoldTime {
 			t.Fatalf("hold = %+v explain = %+v", g, ex)
@@ -234,7 +234,7 @@ func TestExplainHoldTimeGate(t *testing.T) {
 		if len(changes) != 1 || changes[0].Action != ActionRetire || changes[0].Explain != nil {
 			t.Fatalf("changes = %+v", changes)
 		}
-		ex, _ := e.Explain(pA)
+		_, ex, _, _ := e.Explain(pA)
 		if ex.Outcome != OutcomeRetired || ex.BlockedBy != "" || ex.Reason != "native path better again" {
 			t.Fatalf("explain = %+v", ex)
 		}
@@ -248,7 +248,7 @@ func TestExplainHoldTimeGate(t *testing.T) {
 		e.Evaluate(in(results(flip, pA, m{"a", 0, 20}, m{"b", 0, 90}), natA()), flip)
 		again := flip.Add(time.Minute)
 		e.Evaluate(in(results(again, pA, m{"a", 0, 90}, m{"b", 0, 30}), natA()), again)
-		ex, _ := e.Explain(pA)
+		_, ex, _, _ := e.Explain(pA)
 		g := wantGate(t, ex, GateHoldTime, GateFail, "14m0s left")
 		if g.Limit != "cooldown after a flip-back (hold_time)" || ex.BlockedBy != GateHoldTime || ex.Outcome != OutcomeHeld {
 			t.Fatalf("hold = %+v explain = %+v", g, ex)
@@ -260,7 +260,7 @@ func TestExplainHoldTimeGate(t *testing.T) {
 		e := NewEngine(c, scorer(t))
 		e.state.quarantine[pA] = Quarantine{Prefix: pA, Since: t0, Until: t0.Add(30 * time.Minute), Flips: 4, Strikes: 1}
 		e.Evaluate(in(results(t0, pA, m{"a", 0, 90}, m{"b", 0, 30}), natA()), t0)
-		ex, _ := e.Explain(pA)
+		_, ex, _, _ := e.Explain(pA)
 		g := wantGate(t, ex, GateHoldTime, GateFail, "30m0s left")
 		if g.Limit != "flap quarantine" || ex.BlockedBy != GateHoldTime {
 			t.Fatalf("hold = %+v explain = %+v", g, ex)
@@ -274,8 +274,8 @@ func TestExplainCapGate(t *testing.T) {
 	e := NewEngine(c, scorer(t))
 	res := append(results(t0, pA, m{"a", 0, 90}, m{"b", 0, 30}), results(t0, pB, m{"a", 0, 90}, m{"b", 0, 40})...)
 	e.Evaluate(in(res, map[netip.Prefix]string{pA: "a", pB: "a"}), t0)
-	moved, _ := e.Explain(pA)
-	capped, _ := e.Explain(pB)
+	_, moved, _, _ := e.Explain(pA)
+	_, capped, _, _ := e.Explain(pB)
 	if moved.Outcome != OutcomeMoved || gateOf(t, moved, GateCap).Value != "1 in use" {
 		t.Fatalf("moved = %+v", moved)
 	}
@@ -389,7 +389,7 @@ func TestExplainStaticPinSkipsThresholds(t *testing.T) {
 func TestExplainUnknownPrefix(t *testing.T) {
 	e := NewEngine(cfg(), scorer(t))
 	e.Evaluate(in(results(t0, pA, m{"a", 0, 90}, m{"b", 0, 30}), natA()), t0)
-	if _, ok := e.Explain(pB); ok {
+	if _, _, _, ok := e.Explain(pB); ok {
 		t.Fatal("explanation for a prefix with no decision")
 	}
 }
@@ -409,7 +409,7 @@ func TestExplainAgreesWithDecision(t *testing.T) {
 		at := t0.Add(time.Duration(i) * time.Minute)
 		e.Evaluate(in(results(at, pA, ms...), natA()), at)
 		ds, _ := e.Decisions()
-		ex, _ := e.Explain(pA)
+		_, ex, _, _ := e.Explain(pA)
 		switch ds[0].Action {
 		case ActionImprove, ActionSwitch:
 			if ex.Outcome != OutcomeMoved || ex.BlockedBy != "" {
