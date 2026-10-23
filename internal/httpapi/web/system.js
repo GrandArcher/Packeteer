@@ -20,6 +20,7 @@ var KIND_TITLES = [
   ["notifier", "Notifiers"],
   ["telemetry", "Telemetry"],
   ["rpki", "RPKI"],
+  ["irr", "IRR"],
   ["federation_peer", "Federation peers"]
 ];
 

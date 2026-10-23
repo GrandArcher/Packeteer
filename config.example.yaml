@@ -380,6 +380,33 @@ scorer:
 #   display_fallback:
 #     type: ripestat
 
+# IRR origin check (off by default; docs/CONFIG.md#irr). Labels each learned
+# path registered, not registered, or unknown from route/route6 objects for
+# exactly the prefix, beside RPKI. sources are asked in order and cached;
+# answers older than staleness are unknown. as_sets shows whether a
+# provider's path origin is in that as-set. prefer_registered only refuses a
+# new improvement onto a not registered path; unknown never blocks. A whois
+# source sends each looked-up prefix, as-set, and AS number to that server.
+# irr:
+#   enabled: false
+#   prefer_registered: false
+#   refresh: 6h
+#   staleness: 24h
+#   as_sets:
+#     transit-a: AS-EXAMPLE
+#   sources:
+#     - type: file
+#       name: local
+#       config:
+#         path: /etc/packeteer/irr/routes.db
+#         format: rpsl
+#     - type: whois
+#       name: ntt
+#       config:
+#         address: rr.ntt.net:43
+#         dialect: irrd
+#         databases: [RIPE, ARIN, APNIC, AFRINIC, LACNIC, RADB, NTTCOM, ALTDB, LEVEL3]
+
 # Multi-POP (off by default; docs/multi-pop.md). One instance per POP,
 # joined over mutual TLS. A provider in another domain is measured by the
 # peer there; its path is that measurement plus inter_dc_rtt. It is used

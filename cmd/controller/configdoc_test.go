@@ -12,6 +12,8 @@ import (
 	"github.com/GrandArcher/Packeteer/internal/plugins/elector/lease"
 	"github.com/GrandArcher/Packeteer/internal/plugins/exec"
 	"github.com/GrandArcher/Packeteer/internal/plugins/federation/mtls"
+	irrfile "github.com/GrandArcher/Packeteer/internal/plugins/irr/file"
+	irrwhois "github.com/GrandArcher/Packeteer/internal/plugins/irr/whois"
 	coreicmp "github.com/GrandArcher/Packeteer/internal/plugins/ixpcore/icmp"
 	"github.com/GrandArcher/Packeteer/internal/plugins/ixpcorrelate/topology"
 	fabricicmp "github.com/GrandArcher/Packeteer/internal/plugins/ixpfabric/icmp"
@@ -105,6 +107,8 @@ func TestConfigDocCoversStructs(t *testing.T) {
 		oidc.Config{},
 		baseline.Config{},
 		rtr.Config{},
+		irrwhois.Config{},
+		irrfile.Config{},
 		fabricicmp.Config{},
 		birdseye.Config{},
 		birdseye.ServerConfig{},

@@ -12,6 +12,7 @@ import (
 	"github.com/GrandArcher/Packeteer/internal/config"
 	"github.com/GrandArcher/Packeteer/internal/history"
 	"github.com/GrandArcher/Packeteer/internal/inbound"
+	"github.com/GrandArcher/Packeteer/internal/irr"
 	"github.com/GrandArcher/Packeteer/internal/mitigation"
 	"github.com/GrandArcher/Packeteer/internal/pluginhost"
 	_ "github.com/GrandArcher/Packeteer/internal/plugins/all"
@@ -115,9 +116,10 @@ func policyConfig(cfg *config.Config) (policy.Config, error) {
 		MaxImprovements: max,
 		// A result older than ~3 rounds is stale. The decision loop
 		// re-checks this on a ticker even when no round completes.
-		MaxResultAge:     maxResultAge(cfg),
-		Excluded:         map[string]bool{},
-		RPKIAvoidInvalid: cfg.RPKIOn() && cfg.RPKI.AvoidInvalid,
+		MaxResultAge:        maxResultAge(cfg),
+		Excluded:            map[string]bool{},
+		RPKIAvoidInvalid:    cfg.RPKIOn() && cfg.RPKI.AvoidInvalid,
+		IRRPreferRegistered: cfg.IRROn() && cfg.IRR.PreferRegistered,
 	}
 	if cfg.ImprovementTTL > 0 {
 		pc.ImprovementTTL = cfg.ImprovementTTL
@@ -187,6 +189,20 @@ func newRPKISet(plugins *pluginhost.Set) *rpki.Set {
 	return set
 }
 
+// newIRRChecker wraps the irr.sources in order with the cache timers and
+// the per-provider as-sets (#214). With irr off it has no sources and
+// every lookup is unknown.
+func newIRRChecker(cfg *config.Config, plugins *pluginhost.Set) *irr.Checker {
+	if plugins == nil || !cfg.IRROn() {
+		return irr.NewChecker(nil, irr.Options{})
+	}
+	srcs := make([]irr.Source, 0, len(plugins.IRRSources))
+	for _, s := range plugins.IRRSources {
+		srcs = append(srcs, irr.Source{Name: s.Name, Type: s.Type, IRR: s.Plugin})
+	}
+	return irr.NewChecker(srcs, irr.Options{Refresh: cfg.IRR.Refresh, Staleness: cfg.IRR.Staleness, ASSets: cfg.IRR.ASSets})
+}
+
 // rpkiStatuses is the health of every rpki.sources entry, in order.
 func rpkiStatuses(plugins *pluginhost.Set) []plugin.RPKIStatus {
 	if plugins == nil {
@@ -206,7 +222,7 @@ func rpkiStatuses(plugins *pluginhost.Set) []plugin.RPKIStatus {
 // domains are merged in and global commits are applied to the usage.
 // The RPKI answers the round used are returned too, so history records
 // what Decide saw.
-func decisionInput(ctx context.Context, now time.Time, engine *probe.Engine, view *rib.View, plugins *pluginhost.Set, fed *fedState, origins *rpki.Set) (policy.Input, []history.RPKIRoute) {
+func decisionInput(ctx context.Context, now time.Time, engine *probe.Engine, view *rib.View, plugins *pluginhost.Set, fed *fedState, origins *rpki.Set, registry *irr.Checker) (policy.Input, []history.RPKIRoute) {
 	in := policy.Input{Results: engine.Results(), ProviderUp: map[string]bool{}, Native: map[netip.Prefix]string{}}
 	for _, p := range engine.Providers() {
 		in.ProviderUp[p.Name] = p.Up
@@ -222,6 +238,7 @@ func decisionInput(ctx context.Context, now time.Time, engine *probe.Engine, vie
 		fillRouteChecks(&in, view)
 		routes = rpkiRoutes(view, in.Results, origins)
 		fillRPKI(&in, routes)
+		fillIRR(&in, view, registry)
 		in.EgressDown = view.EgressDown()
 	}
 	fed.merge(&in, now)
@@ -274,20 +291,14 @@ var rpkiRank = map[plugin.RPKIValidity]int{
 	plugin.RPKIInvalid:  3,
 }
 
-// rpkiRoutes validates the origin (the last AS) of every learned path of
-// each probed prefix and provider, once per distinct origin (#200). It
-// uses the decision sources only, never the display fallback. Nil when
-// RPKI is off.
-func rpkiRoutes(view providerPaths, results []probe.Result, origins *rpki.Set) []history.RPKIRoute {
-	if view == nil || !origins.Enabled() {
-		return nil
-	}
+// eachPathOrigin calls fn once per probed prefix, provider, and distinct
+// origin (the last AS) of that provider's learned paths.
+func eachPathOrigin(view providerPaths, results []probe.Result, fn func(prefix netip.Prefix, provider string, origin uint32)) {
 	type pair struct {
 		prefix   netip.Prefix
 		provider string
 	}
 	done := map[pair]bool{}
-	var out []history.RPKIRoute
 	for _, r := range results {
 		k := pair{r.Prefix, r.Provider}
 		if done[k] {
@@ -301,9 +312,22 @@ func rpkiRoutes(view providerPaths, results []probe.Result, origins *rpki.Set) [
 			}
 			origin := path[len(path)-1]
 			seen[origin] = true
-			out = append(out, history.RPKIRoute{Prefix: r.Prefix, Provider: r.Provider, Origin: origin, Answer: origins.Lookup(r.Prefix, origin)})
+			fn(r.Prefix, r.Provider, origin)
 		}
 	}
+}
+
+// rpkiRoutes validates the origin of every learned path of each probed
+// prefix and provider, once per distinct origin (#200). It uses the
+// decision sources only, never the display fallback. Nil when RPKI is off.
+func rpkiRoutes(view providerPaths, results []probe.Result, origins *rpki.Set) []history.RPKIRoute {
+	if view == nil || !origins.Enabled() {
+		return nil
+	}
+	var out []history.RPKIRoute
+	eachPathOrigin(view, results, func(prefix netip.Prefix, provider string, origin uint32) {
+		out = append(out, history.RPKIRoute{Prefix: prefix, Provider: provider, Origin: origin, Answer: origins.Lookup(prefix, origin)})
+	})
 	return out
 }
 
@@ -328,6 +352,38 @@ func fillRPKI(in *policy.Input, routes []history.RPKIRoute) {
 		}
 		in.RPKI[rt.Prefix][rt.Provider] = rt.Answer
 	}
+}
+
+// irrRank orders IRR states from best to worst for a provider with several
+// learned paths.
+var irrRank = map[plugin.IRRState]int{
+	plugin.IRRRegistered:    0,
+	plugin.IRRUnknown:       1,
+	plugin.IRRNotRegistered: 2,
+}
+
+// fillIRR labels each probed prefix and provider with the IRR state of
+// that provider's learned paths (#214), the worst among several, as
+// fillRPKI does. It is display-only input to Decide unless
+// irr.prefer_registered is set. Nothing when IRR is off.
+func fillIRR(in *policy.Input, view providerPaths, registry *irr.Checker) {
+	if view == nil || !registry.Enabled() {
+		return
+	}
+	eachPathOrigin(view, in.Results, func(prefix netip.Prefix, provider string, origin uint32) {
+		a := registry.Lookup(prefix, origin, provider)
+		cur, ok := in.IRR[prefix][provider]
+		if ok && irrRank[a.State] <= irrRank[cur.State] {
+			return
+		}
+		if in.IRR == nil {
+			in.IRR = map[netip.Prefix]map[string]plugin.IRRAnswer{}
+		}
+		if in.IRR[prefix] == nil {
+			in.IRR[prefix] = map[string]plugin.IRRAnswer{}
+		}
+		in.IRR[prefix][provider] = a
+	})
 }
 
 // routeLookup is the RIB surface policies read. *rib.View implements it.

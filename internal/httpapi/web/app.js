@@ -380,7 +380,7 @@ function prefixCard(row) {
     card.appendChild(el("p", "reason", "Learned paths. MED is display only and does not choose the exit. Via is route server, bilateral, or unknown."));
     var pt = el("table");
     var phr = el("tr");
-    ["State", "Provider", "Next hop", "AS path", "Via", "RPKI", "MED", "Whose MED"].forEach(function (h) {
+    ["State", "Provider", "Next hop", "AS path", "Via", "RPKI", "IRR", "MED", "Whose MED"].forEach(function (h) {
       phr.appendChild(el("th", "", h));
     });
     var phead = el("thead");
@@ -396,6 +396,7 @@ function prefixCard(row) {
       tr.appendChild(el("td", "mono", fmtAS(path.as_path)));
       tr.appendChild(el("td", "", fmtVia(path.via)));
       tr.appendChild(rpkiCell(path.rpki, path.rpki_source, path.rpki_updated));
+      tr.appendChild(irrCell(path));
       tr.appendChild(el("td", "num", path.med === undefined || path.med === null ? "—" : String(path.med)));
       tr.appendChild(el("td", "", path.med_from || "—"));
       pb.appendChild(tr);
@@ -429,12 +430,31 @@ function fmtAS(path) {
 // data (#200), so a stale cache or the display fallback is visible.
 function rpkiCell(state, source, updated) {
   var td = el("td", state === "invalid" ? "badge warn" : "", state || "-");
-  if (source) {
-    var text = " via " + source;
-    var at = updated ? new Date(updated).getTime() : NaN;
-    if (!Number.isNaN(at)) text += ", " + fmtDuration(Math.max(0, Math.round((Date.now() - at) / 1000))) + " old";
-    td.appendChild(el("span", "muted", text));
-  }
+  if (source) td.appendChild(el("span", "muted", " via " + source + ageText(updated)));
+  return td;
+}
+
+// ageText is ", <age> old" for a data time, empty without one.
+function ageText(updated) {
+  var at = updated ? new Date(updated).getTime() : NaN;
+  if (Number.isNaN(at)) return "";
+  return ", " + fmtDuration(Math.max(0, Math.round((Date.now() - at) / 1000))) + " old";
+}
+
+var irrSetText = {registered: "member", not_registered: "not a member", unknown: "unknown"};
+
+// irrCell is a path's IRR registration (#214) with the source, database,
+// and age of the answer, the origins registered for the prefix, the
+// provider's as-set membership, and the origin's as-name.
+function irrCell(path) {
+  var state = path.irr;
+  var td = el("td", state === "not_registered" ? "badge warn" : "", state ? state.replace("_", " ") : "-");
+  var parts = [];
+  if (path.irr_source) parts.push("via " + path.irr_source + (path.irr_database ? " (" + path.irr_database + ")" : "") + ageText(path.irr_updated));
+  if (path.irr_origins && path.irr_origins.length) parts.push("registered: AS" + path.irr_origins.join(", AS"));
+  if (path.irr_as_set) parts.push(path.irr_as_set + ": " + (irrSetText[path.irr_as_set_state] || "unknown"));
+  if (path.irr_origin_as_name) parts.push("origin " + path.irr_origin_as_name);
+  if (parts.length) td.appendChild(el("span", "muted", " " + parts.join("; ")));
   return td;
 }
 

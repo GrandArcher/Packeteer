@@ -1,0 +1,10 @@
+% This is the RIPE Database query service.
+
+% Information related to 'AS64500'
+
+aut-num:        AS64500
+as-name:        EXAMPLE-AS
+descr:          Example network
+mnt-by:         MAINT-EXAMPLE
+source:         RIPE # Filtered
+
