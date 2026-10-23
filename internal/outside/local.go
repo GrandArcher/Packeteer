@@ -67,7 +67,7 @@ func asPath(p []uint32) string {
 // configured rpki source (#158).
 type RPKI struct {
 	Validate func(netip.Prefix, uint32) plugin.RPKIValidity
-	// Updated is when the validation cache last completed a fetch.
+	// Updated is the validation cache's data time (see rpki.Set.Updated).
 	Updated func() time.Time
 }
 
