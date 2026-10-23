@@ -104,7 +104,11 @@ func TestExplainRIBGate(t *testing.T) {
 	}
 	input := in(results(t0, pA, m{"a", 0, 90}, m{"b", 0, 30}), natA())
 	input.RIBEnabled = false
-	wantGate(t, explainRound(t, cfg(), input), GateRIB, GateSkip, "ranked only")
+	ex := explainRound(t, cfg(), input)
+	wantGate(t, ex, GateRIB, GateSkip, "ranked only")
+	if ex.BlockedBy != GateRIB || !strings.Contains(ex.Counterfactual, "bgp.neighbors") {
+		t.Fatalf("no-RIB explain = %+v", ex)
+	}
 }
 
 func TestExplainFreshnessGate(t *testing.T) {
@@ -213,20 +217,20 @@ func TestExplainHoldTimeGate(t *testing.T) {
 		}
 		wantGate(t, ex, GateConfirm, GatePass, "flip-back")
 	})
-	t.Run("flip-back retire carries its checks to history", func(t *testing.T) {
+	t.Run("flip-back retire passes the hold time", func(t *testing.T) {
 		e := NewEngine(cfg(), scorer(t))
 		e.Evaluate(in(results(t0, pA, m{"a", 0, 90}, m{"b", 0, 30}), natA()), t0)
 		flip := t0.Add(20 * time.Minute)
 		changes := e.Evaluate(in(results(flip, pA, m{"a", 0, 20}, m{"b", 0, 90}), natA()), flip)
-		if len(changes) != 1 || changes[0].Action != ActionRetire || changes[0].Explain == nil {
+		if len(changes) != 1 || changes[0].Action != ActionRetire || changes[0].Explain != nil {
 			t.Fatalf("changes = %+v", changes)
 		}
-		ex := changes[0].Explain
+		ex, _ := e.Explain(pA)
 		if ex.Outcome != OutcomeRetired || ex.BlockedBy != "" || ex.Reason != "native path better again" {
 			t.Fatalf("explain = %+v", ex)
 		}
-		wantGate(t, *ex, GateThresholds, GatePass, "a vs b")
-		wantGate(t, *ex, GateHoldTime, GatePass, "held 20m0s")
+		wantGate(t, ex, GateThresholds, GatePass, "a vs b")
+		wantGate(t, ex, GateHoldTime, GatePass, "held 20m0s")
 	})
 	t.Run("cooldown after a flip-back", func(t *testing.T) {
 		e := NewEngine(cfg(), scorer(t))

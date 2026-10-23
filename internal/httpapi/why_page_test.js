@@ -118,7 +118,7 @@ var entries = context.improvementEntries({start: "2026-10-17T12:00:00Z", mode: "
   reason: "lab-b: loss 0%", explain: held.explain});
 var line = entries[0].text;
 assert(line.indexOf("Checks at the time: Learned RIB passed (native lab-a); Thresholds held it back (lab-b vs lab-a") >= 0, "timeline: " + line);
-assert(line.indexOf("Improvement cap") < 0 && line.indexOf("RPKI") < 0, "skipped gates are not listed");
+assert(line.indexOf("Max simultaneous moves") < 0 && line.indexOf("RPKI") < 0, "skipped gates are not listed");
 assert(context.improvementEntries({start: "2026-10-17T12:00:00Z", mode: "observe", provider: "lab-b"})[0].text.indexOf("Checks at the time") < 0, "no stored checks, no line");
 
 // A prefix with no decision gets a sentence, not an error.

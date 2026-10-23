@@ -17,7 +17,7 @@ import (
 // explainServer runs the real decision engine over one held-back prefix
 // (198.51.100.0/24, 10 ms faster via lab-b, under the 15 ms threshold) and
 // one that moves (203.0.113.0/24), and serves its decisions.
-func explainServer(t *testing.T) (http.Handler, *policy.Engine) {
+func explainServer(t *testing.T) http.Handler {
 	t.Helper()
 	sc, err := weighted.New(plugin.Config{}, plugin.Env{})
 	if err != nil {
@@ -47,11 +47,11 @@ func explainServer(t *testing.T) (http.Handler, *policy.Engine) {
 		t.Fatal(err)
 	}
 	s.SetExplainer(e)
-	return s.Handler(), e
+	return s.Handler()
 }
 
 func TestDecisionExplainAPI(t *testing.T) {
-	h, _ := explainServer(t)
+	h := explainServer(t)
 	var body struct {
 		Prefix  string `json:"prefix"`
 		Action  string `json:"action"`
@@ -117,7 +117,7 @@ func TestDecisionExplainAPI(t *testing.T) {
 }
 
 func TestDecisionExplainAPIErrors(t *testing.T) {
-	h, _ := explainServer(t)
+	h := explainServer(t)
 	for path, want := range map[string]int{
 		"/api/decisions/not-a-prefix":      http.StatusBadRequest,
 		"/api/decisions/198.51.100.7/24":   http.StatusBadRequest,

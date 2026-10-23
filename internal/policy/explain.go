@@ -246,18 +246,17 @@ func factsOf(st *State, in Input, cfg Config, p netip.Prefix, cands []Candidate,
 }
 
 // explainChanges attaches the gate list of the deciding evaluation to each
-// change, for history.
+// improve and switch, for history. A retire is recorded with its reason.
 func explainChanges(out *Output, cfg Config, capUsed int) {
 	if len(out.Changes) == 0 {
 		return
 	}
 	for i := range out.Changes {
 		c := &out.Changes[i]
-		p := c.New.Prefix
 		if c.Action == ActionRetire {
-			p = c.Old.Prefix
+			continue
 		}
-		if j, ok := findDecision(out.Decisions, p); ok {
+		if j, ok := findDecision(out.Decisions, c.New.Prefix); ok {
 			ex := buildExplain(out.Decisions[j], out.facts[j], cfg, capUsed)
 			c.Explain = &ex
 		}
@@ -580,7 +579,7 @@ func blockedBy(g map[string]Gate, f explainFacts, d Decision, pairBetter, usable
 		return ""
 	}
 	switch {
-	case g[GateRIB].Status == GateFail:
+	case g[GateRIB].Status == GateFail || f.rib == ribOff:
 		return GateRIB
 	case f.ignore || (d.Cause == plugin.CauseStatic && g[GatePolicy].Status == GateFail):
 		return GatePolicy
@@ -602,6 +601,9 @@ func blockedBy(g map[string]Gate, f explainFacts, d Decision, pairBetter, usable
 func counterfactual(blocked string, d Decision, f explainFacts, cfg Config, cur, ch Candidate, haveCur, haveCh bool, capUsed int) string {
 	switch blocked {
 	case GateRIB:
+		if f.rib == ribOff {
+			return "would be decided once bgp.neighbors is configured, so the native exit is known"
+		}
 		return "would be decided once a neighbor advertises " + d.Prefix.String() + " with a next hop of a configured provider"
 	case GateFreshness:
 		return "would be compared once every provider has a result within " + dur(cfg.MaxResultAge) + " and the current path is usable"
