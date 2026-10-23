@@ -216,7 +216,7 @@ took=$(($(date +%s) - start))
 echo "pk-b announces ${took}s after SIGKILL"
 attributes 192.0.2.20
 role packeteer-b active pk-b
-if ! "${compose[@]}" logs --no-color packeteer-b | grep -q 'lease expired (held by pk-a)'; then
+if ! grep -q 'lease expired (held by pk-a)' <<<"$("${compose[@]}" logs --no-color packeteer-b)"; then
 	echo "FAIL: pk-b did not take over an expired lease" >&2
 	dump
 	exit 1
@@ -296,6 +296,9 @@ only none 20
 echo "9. restore the backup into pk-b's stopped volume with the stock image"
 "${compose[@]}" run --rm --no-deps -T packeteer-b \
 	-restore /var/lib/packeteer/ha/backup.tgz -restore-config /var/lib/packeteer/ha/restored.yaml -force
-"${compose[@]}" run --rm --no-deps -T packeteer-b -check -config /var/lib/packeteer/ha/restored.yaml | grep -q 'ha: lease id=pk-a'
+# Capture before matching: grep -q exits on the first match, and under
+# pipefail the writer's broken pipe would fail a passing check.
+check=$("${compose[@]}" run --rm --no-deps -T packeteer-b -check -config /var/lib/packeteer/ha/restored.yaml)
+grep -q 'ha: lease id=pk-a' <<<"$check"
 
 echo "e2e-ha ok"

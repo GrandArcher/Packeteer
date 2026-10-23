@@ -40,7 +40,7 @@ Every limit is enforced by the node it protects (see `herd.limits` in [CONFIG.md
 
 ## Dashboard
 
-`/herd.html` (#296) reads the same records and shows them in six views. It only reads: nothing on it feeds `Decide`, a scorer, a planner, or the announcer, and it announces and withdraws nothing. When herd is off the page says so. Every view keeps each vantage's own numbers; nothing is merged.
+`/herd.html` (#296) reads the same records and shows them in six views. It only reads: nothing on it feeds `Decide`, a scorer, a planner, or the announcer, and it announces and withdraws nothing. When herd is off the page says so. Every view keeps each vantage's own numbers; nothing is merged. A vantage is one member key, country, provider ASN, and method, so two nodes of one ASN are two vantages; [design/herd.md](design/herd.md) counts them as one per verified identity, which needs the identity proof that is not implemented.
 
 - **Members**: this node and each peer, with its sharing status, freshness, and last pull. `verified` is `no` for every member, because identity is a pinned key and RPKI identity proof is not implemented.
 - **World view** (`/api/herd/events`): targets where a member sees loss at or above a threshold now. "3 of 4 members" counts members, one per ASN, however many nodes or records they have; because nobody is RPKI-verified, the count is of pinned peers (`basis: pinned_key`), not of verified members as [design/herd.md](design/herd.md) plans. Origin-ASN targets and route targets are listed apart, and each event lists every vantage's row. It is not limited to routes in your RIB: the records come from what members shared.

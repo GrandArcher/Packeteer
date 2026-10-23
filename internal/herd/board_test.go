@@ -85,7 +85,7 @@ func (f *fleet) seed() {
 	f.put(peerA, "DE", 64520, 64511, "", min, 0, 11)
 	f.put(peerA, "DE", 64520, 64512, "198.51.100.0/24", 2*min, 50, 70, []uint32{64520, 64512})
 	f.put(peerC, "BR", 64521, 64512, "198.51.100.0/24", 3*min, 0, 60, []uint32{64521, 64512})
-	// Old record from a removed member: never shown.
+	// A record from a member no longer in the peer list: never shown.
 	f.put("key-gone", "FR", 64520, 64510, "", min, 90, 10)
 }
 
@@ -161,20 +161,19 @@ func TestBoardQueryIsStrict(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		call func() error
-		raw  string
 		want string
 	}{
-		{"events unknown", func() error { _, err := b.Events(ctx, "bogus=1"); return err }, "", `unknown parameter "bogus"`},
-		{"events repeated", func() error { _, err := b.Events(ctx, "loss=5&loss=6"); return err }, "", "repeated"},
-		{"events window", func() error { _, err := b.Events(ctx, "window=1s"); return err }, "", "window"},
-		{"events window long", func() error { _, err := b.Events(ctx, "window=48h"); return err }, "", "window"},
-		{"events loss", func() error { _, err := b.Events(ctx, "loss=0"); return err }, "", "loss"},
-		{"mesh loss", func() error { _, err := b.Mesh(ctx, "loss=101"); return err }, "", "loss"},
-		{"monitor needs target", func() error { _, err := b.Monitor(ctx, "window=1h"); return err }, "", "name an origin_asn or a prefix"},
-		{"monitor prefix", func() error { _, err := b.Monitor(ctx, "prefix=198.51.100.7/24"); return err }, "", "prefix"},
-		{"search needs filter", func() error { _, err := b.Search(ctx, ""); return err }, "", "name an origin_asn"},
-		{"search window", func() error { _, err := b.Search(ctx, "origin_asn=64510&window=1h"); return err }, "", "unknown parameter"},
-		{"map asn", func() error { _, err := b.Map(ctx, "origin_asn=64510"); return err }, "", "unknown parameter"},
+		{"events unknown", func() error { _, err := b.Events(ctx, "bogus=1"); return err }, `unknown parameter "bogus"`},
+		{"events repeated", func() error { _, err := b.Events(ctx, "loss=5&loss=6"); return err }, "repeated"},
+		{"events window", func() error { _, err := b.Events(ctx, "window=1s"); return err }, "window"},
+		{"events window long", func() error { _, err := b.Events(ctx, "window=48h"); return err }, "window"},
+		{"events loss", func() error { _, err := b.Events(ctx, "loss=0"); return err }, "loss"},
+		{"mesh loss", func() error { _, err := b.Mesh(ctx, "loss=101"); return err }, "loss"},
+		{"monitor needs target", func() error { _, err := b.Monitor(ctx, "window=1h"); return err }, "name an origin_asn or a prefix"},
+		{"monitor prefix", func() error { _, err := b.Monitor(ctx, "prefix=198.51.100.7/24"); return err }, "prefix"},
+		{"search needs filter", func() error { _, err := b.Search(ctx, ""); return err }, "name an origin_asn"},
+		{"search window", func() error { _, err := b.Search(ctx, "origin_asn=64510&window=1h"); return err }, "unknown parameter"},
+		{"map asn", func() error { _, err := b.Map(ctx, "origin_asn=64510"); return err }, "unknown parameter"},
 	} {
 		err := tc.call()
 		var qe QueryError
