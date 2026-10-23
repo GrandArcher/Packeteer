@@ -170,7 +170,7 @@ const (
 	DefaultHerdHubPeers      = 16
 	MaxHerdHubPeers          = 64
 	DefaultHerdAtlasRefresh  = 15 * time.Minute
-	MinHerdAtlasRefresh      = 5 * time.Minute
+	MinHerdAtlasRefresh      = 15 * time.Minute
 	MaxHerdAtlasRefresh      = 24 * time.Hour
 	MaxHerdAtlasIDs          = 4
 )

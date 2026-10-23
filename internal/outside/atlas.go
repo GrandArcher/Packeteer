@@ -82,7 +82,6 @@ func (a *Atlas) Run(ctx context.Context) {
 
 type atlasResult struct {
 	Type      string  `json:"type"`
-	MsmID     int     `json:"msm_id"`
 	ProbeID   int     `json:"prb_id"`
 	Sent      int     `json:"sent"`
 	Rcvd      int     `json:"rcvd"`
@@ -91,7 +90,6 @@ type atlasResult struct {
 }
 
 type atlasProbe struct {
-	ID          int    `json:"id"`
 	CountryCode string `json:"country_code"`
 	IsAnchor    bool   `json:"is_anchor"`
 	Status      struct {

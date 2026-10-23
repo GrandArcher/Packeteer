@@ -267,7 +267,7 @@ function renderHerdHits(root, d) {
       {text: "Open", href: herdOpenHref(h.kind, h.value, h.origins)}];
   });
   root.appendChild(ixpTable(["Target", "Level", "Members", "Vantages", "Records", "Providers", "First seen", "Last seen", "Monitors"], rows));
-  if (d.truncated) root.appendChild(el("p", "tag", "Only the first " + d.hits.length + " matches are shown. Narrow the search."));
+  if (d.truncated) root.appendChild(el("p", "tag", "Some matches may be missing: the search reads a limited number of records and lists at most 100 targets. Narrow the search."));
 }
 
 // ---- Outside intelligence ----

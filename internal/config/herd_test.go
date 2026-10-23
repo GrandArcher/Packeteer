@@ -243,7 +243,7 @@ func TestHerdOutsideValidation(t *testing.T) {
 		{"atlas settings while off", "", "  outside: {atlas: {measurements: [1001]}}\n", "set enabled: true"},
 		{"atlas bad id", "", "  outside: {atlas: {enabled: true, probes: [0]}}\n", "probes[0]: 0 is not an id"},
 		{"atlas too many", "", "  outside: {atlas: {enabled: true, measurements: [1, 2, 3, 4, 5]}}\n", "measurements: at most 4"},
-		{"atlas refresh low", "", "  outside: {atlas: {enabled: true, measurements: [1], refresh: 1m}}\n", "refresh 1m0s must be between"},
+		{"atlas refresh low", "", "  outside: {atlas: {enabled: true, measurements: [1], refresh: 14m}}\n", "refresh 14m0s must be between 15m0s and 24h0m0s"},
 		{"unknown key", "", "  outside: {bgp_tools: true}\n", "bgp_tools"},
 	}
 	for _, tt := range tests {

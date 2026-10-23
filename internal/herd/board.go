@@ -332,7 +332,7 @@ type EventVantage struct {
 
 // EventRow is one target where at least one member sees loss at or above
 // the threshold. Reporting and Degraded count members (one per ASN), not
-// records: "5 of 7 vantages".
+// records or vantages: "3 of 4 members".
 type EventRow struct {
 	Target
 	Reporting int `json:"reporting"`
@@ -344,7 +344,7 @@ type EventRow struct {
 	Vantages   []EventVantage  `json:"vantages"`
 }
 
-// Events is the world view: where several members see degradation now.
+// Events is the world view: where any member sees degradation now.
 type Events struct {
 	Enabled       bool       `json:"enabled"`
 	AsOf          time.Time  `json:"as_of"`

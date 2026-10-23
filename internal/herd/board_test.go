@@ -69,7 +69,7 @@ func (f *fleet) put(member, country string, provider, origin uint32, prefix stri
 	}
 }
 
-// seed fills the fleet: AS64510 is degraded for four of five members, two of
+// seed fills the fleet: AS64510 is degraded for three of four members, two of
 // them through provider AS64520; AS64511 is fine everywhere; one route is
 // measured by two members at route level.
 func (f *fleet) seed() {
