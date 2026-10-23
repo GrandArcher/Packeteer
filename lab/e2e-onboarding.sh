@@ -46,6 +46,8 @@ grep -qF 'observe mode. It announces nothing.' "$work/install.txt"
 grep -qF "$base/settings.html#wizard" "$work/install.txt"
 test "$(docker inspect -f '{{.State.Running}}' packeteer)" = true
 grep -q '^mode: observe' "$work/pk/config.yaml"
+# install.sh already waits for bootstrap; one more /api/me check before overview.
+api "$base/api/me" | jq -e '.user == "admin"'
 api "$base/api/overview" | jq -e '.mode == "observe"'
 docker logs packeteer 2>&1 | grep -qF 'announce=disabled'
 

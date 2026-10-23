@@ -112,6 +112,7 @@ func TestInstallBringsUpObserveAndPointsAtTheWizard(t *testing.T) {
 		"curl -fsSLo " + e.dir + "/config.yaml https://raw.githubusercontent.com/GrandArcher/Packeteer/main/config.example.yaml",
 		"-v " + e.dir + "/config.yaml:/etc/packeteer/config.yaml -v ", // writable: the wizard saves
 		"-v packeteer-data:/var/lib/packeteer ghcr.io/grandarcher/packeteer:edge",
+		"docker logs packeteer",
 	} {
 		if !strings.Contains(calls, want) {
 			t.Errorf("calls lack %q:\n%s", want, calls)

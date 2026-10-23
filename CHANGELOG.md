@@ -24,6 +24,7 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 
 ### Fixed
 
+- install.sh waits for the first admin after /healthz so a follow-on API call is not 401 (HTTP listens before bootstrap, #328; unblocks onboarding lab #221).
 - gobgp announcer: a provider move replaces the route in one UPDATE (make-before-break), so the edge sees no withdraw gap and a failed announce keeps the old route; lab `lab/e2e-move.sh` (#386).
 - API server sets a write timeout (150 s) so a stalled client cannot hold a connection; Decide no longer rescans all results per prefix (45 s to 0.4 s at 100k x 4); benchmarks added (#387).
 - Flow: readers decode and queue records for `workers` (default 4) counting goroutines, so a window stall no longer overflows the socket buffer; a full queue is counted (`limit="workers"`) (#385).
