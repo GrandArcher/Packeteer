@@ -268,9 +268,10 @@ func (w *eventWatch) peerStatus(now time.Time, peers []rib.PeerState, notEstabli
 
 // rpki reports an RPKI source whose cache stopped answering lookups
 // (stale or empty, as rpki.Set skips it) and its recovery (#200). A source
-// that has never had data raises nothing; the System page shows it down.
-// Its lookups are unknown meanwhile, which fails open: decisions continue
-// and no withdraw waits on it.
+// is tracked only once it has been usable, so one still loading at boot
+// raises neither event and rpki.fresh always follows an rpki.stale; the
+// System page shows it down meanwhile. Its lookups are unknown while it is
+// unusable, which fails open: decisions continue and no withdraw waits on it.
 func (w *eventWatch) rpki(now time.Time, sources []plugin.RPKIStatus) {
 	if w == nil {
 		return
@@ -280,6 +281,9 @@ func (w *eventWatch) rpki(now time.Time, sources []plugin.RPKIStatus) {
 	for _, st := range sources {
 		usable := !st.Stale && st.VRPs > 0
 		prev, known := w.rpkiUsable[st.Source]
+		if !usable && !known {
+			continue
+		}
 		w.rpkiUsable[st.Source] = usable
 		fields := map[string]string{"source": st.Source, "vrps": strconv.Itoa(st.VRPs)}
 		if !st.Updated.IsZero() {

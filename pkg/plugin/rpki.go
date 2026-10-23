@@ -39,7 +39,8 @@ type RPKIStatus struct {
 	Stale bool
 	// VRPs is the number of validated ROA payloads in the cache.
 	VRPs int
-	// Updated is when the cache last completed a fetch.
+	// Updated is the data time: when the cache last completed a fetch, or
+	// when a fetched document says it was generated.
 	Updated time.Time
 	// Error is the last fetch error, empty when healthy.
 	Error string
@@ -52,7 +53,7 @@ type RPKIAnswer struct {
 	// Source is the instance name of the source that answered; empty when
 	// none had usable data.
 	Source string
-	// Updated is when that source last completed a fetch.
+	// Updated is that source's data time, as in RPKIStatus.
 	Updated time.Time
 }
 

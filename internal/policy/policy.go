@@ -272,7 +272,7 @@ type Candidate struct {
 	// Config.RPKIAvoidInvalid makes an invalid path unusable.
 	RPKI plugin.RPKIValidity `json:"rpki,omitempty"`
 	// RPKISource is the rpki.sources entry that answered and RPKIUpdated
-	// when its data was fetched (#200). Empty when no source had data.
+	// its data time (#200). Empty when no source had data.
 	RPKISource  string    `json:"rpki_source,omitempty"`
 	RPKIUpdated time.Time `json:"rpki_updated,omitzero"`
 }

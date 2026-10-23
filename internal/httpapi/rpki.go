@@ -31,6 +31,6 @@ func RPKIMetrics(sources []plugin.RPKIStatus, now time.Time) []byte {
 	var b strings.Builder
 	writeGauge(&b, "packeteer_rpki_source_up", "1 while the RPKI source's session or last fetch is up.", up...)
 	writeGauge(&b, "packeteer_rpki_vrps", "Validated ROA payloads in the RPKI source's cache.", vrps...)
-	writeGauge(&b, "packeteer_rpki_cache_age_seconds", "Seconds since the RPKI source's data was fetched. Lookups are unknown past its staleness.", age...)
+	writeGauge(&b, "packeteer_rpki_cache_age_seconds", "Age of the RPKI source's data: since the last RTR sync or fetch, or a json document's generated time. Lookups are unknown past its staleness.", age...)
 	return []byte(b.String())
 }

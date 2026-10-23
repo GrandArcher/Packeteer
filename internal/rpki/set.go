@@ -59,7 +59,7 @@ func (s *Set) Version() uint64 {
 }
 
 // Lookup applies the first fresh, non-empty source and says which one
-// answered and when its data was fetched. Without one it returns
+// answered and its data time. Without one it returns
 // RPKIUnknown, which is the fail-open state: it never blocks a withdraw.
 // It never asks the display fallback.
 func (s *Set) Lookup(prefix netip.Prefix, origin uint32) plugin.RPKIAnswer {

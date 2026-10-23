@@ -208,7 +208,7 @@ type LearnedPath struct {
 	// AS (#158). Empty when RPKI is off. Display only.
 	RPKI string `json:"rpki,omitempty"`
 	// RPKISource is the source that answered, which may be the display
-	// fallback, and RPKIUpdated when its data was fetched (#200). Empty
+	// fallback, and RPKIUpdated its data time (#200). Empty
 	// when no source had data.
 	RPKISource  string     `json:"rpki_source,omitempty"`
 	RPKIUpdated *time.Time `json:"rpki_updated,omitempty"`
@@ -247,7 +247,7 @@ type Candidate struct {
 	// learned path for the prefix (#158). Empty when RPKI is off.
 	RPKI string `json:"rpki,omitempty"`
 	// RPKISource is the rpki.sources entry that answered and RPKIUpdated
-	// when its data was fetched (#200). Empty when no source had data.
+	// its data time (#200). Empty when no source had data.
 	RPKISource  string     `json:"rpki_source,omitempty"`
 	RPKIUpdated *time.Time `json:"rpki_updated,omitempty"`
 }

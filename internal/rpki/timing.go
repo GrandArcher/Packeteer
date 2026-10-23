@@ -24,8 +24,9 @@ const (
 type Timing struct {
 	// Refresh is how often a healthy source is polled (default 5m).
 	Refresh time.Duration `yaml:"refresh"`
-	// Staleness is how long data is served after it was fetched; older
-	// or missing data is unknown (default 1h).
+	// Staleness is how long data is served past its data time (see
+	// plugin.RPKIStatus.Updated); older or missing data is unknown
+	// (default 1h).
 	Staleness time.Duration `yaml:"staleness"`
 	// Timeout bounds one dial, handshake, fetch, or read wait (default
 	// 30s).
@@ -56,8 +57,8 @@ func (t *Timing) Normalize() error {
 	return nil
 }
 
-// Stale reports whether data fetched at updated is too old to use at now.
-// Never fetched is stale.
+// Stale reports whether data with data time updated is too old to use at
+// now. No data yet is stale.
 func (t Timing) Stale(updated, now time.Time) bool {
 	return updated.IsZero() || now.Sub(updated) > t.Staleness
 }

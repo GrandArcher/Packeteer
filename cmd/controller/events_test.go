@@ -443,16 +443,19 @@ func TestRunNotifyTest(t *testing.T) {
 
 // #200: a source that was answering and goes stale (or empty) raises
 // rpki.stale once, with its error, and rpki.fresh when it answers again.
-// A source that never had data raises nothing.
+// A source that never had data, or loads after the first round, raises
+// nothing, so rpki.fresh never comes without an rpki.stale.
 func TestRPKIEvents(t *testing.T) {
 	out := &sink{}
 	w := newEventWatch(out, "observe")
 	now := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
 	fresh := plugin.RPKIStatus{Source: "routinator", Up: true, VRPs: 3, Updated: now}
 	never := plugin.RPKIStatus{Source: "backup", Stale: true}
-	w.rpki(now, []plugin.RPKIStatus{fresh, never})
+	loading := plugin.RPKIStatus{Source: "routinator", Error: "connection refused"}
+	w.rpki(now, []plugin.RPKIStatus{loading, never})
+	w.rpki(now.Add(time.Minute), []plugin.RPKIStatus{fresh, never})
 	if got := out.take(); len(got) != 0 {
-		t.Fatalf("startup events = %+v, want none", got)
+		t.Fatalf("startup events = %+v, want none: a source that loads late was never stale", got)
 	}
 	stale := plugin.RPKIStatus{Source: "routinator", Stale: true, VRPs: 3, Updated: now, Error: "connection refused"}
 	for range 2 {
@@ -467,5 +470,9 @@ func TestRPKIEvents(t *testing.T) {
 	got = out.take()
 	if len(got) != 1 || got[0].Kind != plugin.EventRPKIFresh || !got[0].Resolves() || got[0].DedupKey() != "packeteer/rpki/source=routinator" {
 		t.Fatalf("fresh events = %+v", got)
+	}
+	w.rpki(now.Add(5*time.Hour), []plugin.RPKIStatus{stale, never})
+	if got := out.take(); len(got) != 1 || got[0].Kind != plugin.EventRPKIStale {
+		t.Fatalf("second stale events = %+v", got)
 	}
 }
