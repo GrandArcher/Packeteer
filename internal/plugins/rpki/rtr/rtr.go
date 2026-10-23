@@ -97,7 +97,7 @@ func New(c plugin.Config, env plugin.Env) (plugin.RPKI, error) {
 		return nil, err
 	}
 	cfg.Address = addr
-	if err := cfg.Normalize(); err != nil {
+	if err := cfg.Normalize(0); err != nil {
 		return nil, err
 	}
 	tr, err := newTransport(cfg)

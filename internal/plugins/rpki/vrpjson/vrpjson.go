@@ -1,9 +1,8 @@
 // Package vrpjson is the built-in HTTP JSON origin-validation plugin
 // (#200). It fetches the validated ROA payloads an RPKI cache publishes as
-// JSON (Routinator's /json, rpki-client's -j output, the file StayRTR
-// reads) and answers RFC 6811 origin-validation queries from its own
-// cache. It only reads: it never announces and never changes the learned
-// RIB.
+// JSON (Routinator's /json, rpki-client's -j output) and answers RFC 6811
+// origin-validation queries from its own cache. It only reads: it never
+// announces and never changes the learned RIB.
 package vrpjson
 
 import (
@@ -12,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/netip"
 	"net/url"
@@ -30,6 +30,12 @@ const TypeName = "json"
 // maxBody bounds one download. The public table as JSON is well under it.
 const maxBody = 512 << 20
 
+// publisherLag is how far the document's own time can trail a fetch: the
+// publisher's regeneration cycle, 10m for Routinator's default refresh and
+// 1h for rpki-client run hourly from cron. Staleness must cover it on top
+// of refresh, or fresh data reads as stale between polls.
+const publisherLag = time.Hour
+
 func init() { plugin.RPKIs.Register(TypeName, New) }
 
 // Config is the plugin's config block.
@@ -46,12 +52,16 @@ type Client struct {
 	name string
 	cfg  Config
 	http *http.Client
+	log  *slog.Logger
 
 	mu      sync.Mutex
 	cache   *rpki.VRPs
 	up      bool
 	updated time.Time
 	lastErr string
+	// lagWarned is set while fetched documents are too old for staleness,
+	// so the warning is logged once per episode, not on every poll.
+	lagWarned bool
 
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
@@ -71,10 +81,13 @@ func New(c plugin.Config, env plugin.Env) (plugin.RPKI, error) {
 		return nil, errors.New("url must not carry credentials")
 	}
 	cfg.URL = u.String()
-	if err := cfg.Normalize(); err != nil {
+	if err := cfg.Normalize(publisherLag); err != nil {
 		return nil, err
 	}
-	return &Client{name: env.Name, cfg: cfg, http: &http.Client{Timeout: cfg.Timeout}, cache: rpki.NewVRPs()}, nil
+	if env.Logger == nil {
+		env.Logger = slog.Default()
+	}
+	return &Client{name: env.Name, cfg: cfg, http: &http.Client{Timeout: cfg.Timeout}, log: env.Logger, cache: rpki.NewVRPs()}, nil
 }
 
 // Start begins polling. It does not block.
@@ -162,6 +175,15 @@ func (c *Client) poll(ctx context.Context) {
 		generated = now
 	}
 	c.cache, c.updated, c.up, c.lastErr = table, generated, true, ""
+	// A publisher slower than publisherLag can still outrun staleness:
+	// this document would read as stale before the next poll.
+	age := now.Sub(generated)
+	late := age+c.cfg.Refresh > c.cfg.Staleness
+	if late && !c.lagWarned {
+		c.log.Warn("rpki json document goes stale before the next poll: the publisher is not regenerating it, or staleness is not above its regeneration cycle plus refresh",
+			"source", c.name, "age", age.Round(time.Second), "refresh", c.cfg.Refresh, "staleness", c.cfg.Staleness)
+	}
+	c.lagWarned = late
 }
 
 func (c *Client) fetch(ctx context.Context) (*rpki.VRPs, time.Time, error) {

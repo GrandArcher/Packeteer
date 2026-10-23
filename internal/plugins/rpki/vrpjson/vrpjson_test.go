@@ -1,6 +1,7 @@
 package vrpjson
 
 import (
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
@@ -84,7 +85,7 @@ func TestRecordedDocuments(t *testing.T) {
 // A cache that keeps serving an old document is stale even though every
 // fetch succeeds: lookups are unknown (fail open).
 func TestOldDocumentIsStale(t *testing.T) {
-	body := dated(t, "routinator.json", time.Now().Add(-2*time.Hour))
+	body := dated(t, "routinator.json", time.Now().Add(-3*time.Hour))
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte(body))
 	}))
@@ -135,6 +136,10 @@ func TestConfigValidation(t *testing.T) {
 		{"url: rsync://192.0.2.1/json\n", "must be an http or https URL"},
 		{"url: http://user:secret@192.0.2.1:8323/json\n", "credentials"},
 		{"url: http://192.0.2.1:8323/json\nrefresh: 10m\nstaleness: 1m\n", "staleness"},
+		// The data time is the publisher's, so staleness equal to refresh
+		// reads a Routinator document (10m cycle) as stale on every fetch.
+		{"url: http://192.0.2.1:8323/json\nrefresh: 5m\nstaleness: 5m\n", "at least 1h5m0s"},
+		{"url: http://192.0.2.1:8323/json\nrefresh: 5m\nstaleness: 1h\n", "at least 1h5m0s"},
 	} {
 		cfg, err := plugin.ConfigFromYAML(tc.yaml)
 		if err != nil {
@@ -143,6 +148,75 @@ func TestConfigValidation(t *testing.T) {
 		if _, err := New(cfg, plugin.Env{}); err == nil || !strings.Contains(err.Error(), tc.want) {
 			t.Errorf("%q: err = %v, want %q", tc.yaml, err, tc.want)
 		}
+	}
+}
+
+// The default staleness covers an hourly publisher on top of refresh, and
+// the floor is refresh plus that cycle.
+func TestStalenessCoversPublisherCycle(t *testing.T) {
+	for _, tc := range []struct {
+		yaml string
+		want time.Duration
+	}{
+		{"", 2 * time.Hour},
+		{"refresh: 2h\n", 3 * time.Hour},
+		{"refresh: 5m\nstaleness: 1h5m\n", time.Hour + 5*time.Minute},
+	} {
+		cfg, err := plugin.ConfigFromYAML("url: http://192.0.2.1:8323/json\n" + tc.yaml)
+		if err != nil {
+			t.Fatal(err)
+		}
+		p, err := New(cfg, plugin.Env{})
+		if err != nil {
+			t.Fatalf("%q: %v", tc.yaml, err)
+		}
+		if got := p.(*Client).cfg.Staleness; got != tc.want {
+			t.Errorf("%q: staleness = %s, want %s", tc.yaml, got, tc.want)
+		}
+	}
+}
+
+// A fetched document that will be stale before the next poll is logged
+// once per episode, so an operator sees a publisher slower than staleness
+// allows instead of only rpki.stale/rpki.fresh flaps.
+func TestLateDocumentWarnsOnce(t *testing.T) {
+	var at atomic.Int64
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(dated(t, "rpki-client.json", time.Unix(at.Load(), 0))))
+	}))
+	defer srv.Close()
+	cfg, err := plugin.ConfigFromYAML("url: " + srv.URL + "\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var logs strings.Builder
+	p, err := New(cfg, plugin.Env{Name: "rpki-client", Logger: slog.New(slog.NewTextHandler(&logs, nil))})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := p.(*Client)
+	warnings := func() int { return strings.Count(logs.String(), "goes stale before the next poll") }
+	for _, step := range []struct {
+		age  time.Duration
+		want int
+	}{
+		{time.Hour + 50*time.Minute, 0}, // 1h50m + 5m refresh is inside 2h
+		{time.Hour + 58*time.Minute, 1},
+		{time.Hour + 59*time.Minute, 1},
+		{time.Minute, 1},
+		{time.Hour + 58*time.Minute, 2},
+	} {
+		at.Store(time.Now().Add(-step.age).Unix())
+		c.poll(t.Context())
+		if st := c.Status(); !st.Up || st.Stale {
+			t.Fatalf("age %s: status = %+v, want up and fresh", step.age, st)
+		}
+		if got := warnings(); got != step.want {
+			t.Fatalf("age %s: %d warnings, want %d\n%s", step.age, got, step.want, logs.String())
+		}
+	}
+	if !strings.Contains(logs.String(), "source=rpki-client") || !strings.Contains(logs.String(), "staleness=2h0m0s") {
+		t.Fatalf("warning lacks the source or staleness: %s", logs.String())
 	}
 }
 

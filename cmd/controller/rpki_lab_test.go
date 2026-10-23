@@ -128,9 +128,10 @@ func (s *rtrStub) stop() {
 // Routinator /json is the second source. The edge's paths are valid,
 // invalid, and not found, and the API shows each with the source and its
 // data time. Stopping the RTR server moves the answers to the second
-// source and raises rpki.stale; stopping that one too ages the cache out
-// to unknown while decisions continue and the injected route stays on the
-// wire. Shutdown still withdraws it.
+// source and raises rpki.stale; when that one then serves a document
+// generated before its staleness, the answers go unknown while decisions
+// continue and the injected route stays on the wire. Shutdown still
+// withdraws it.
 func TestDaemonRPKIPerProvider(t *testing.T) {
 	edge := newMSEdge(t)
 	// The ROAs: 203.0.113.0/24-25 AS64497, 192.0.2.0/24-24 AS64496,
@@ -144,13 +145,13 @@ func TestDaemonRPKIPerProvider(t *testing.T) {
 		t.Fatal(err)
 	}
 	generated := regexp.MustCompile(`"generated": \d+`)
-	var jsonDown atomic.Bool
+	var jsonOld atomic.Bool
 	backup := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		if jsonDown.Load() {
-			http.Error(w, "stopped", http.StatusServiceUnavailable)
-			return
+		at := time.Now()
+		if jsonOld.Load() {
+			at = at.Add(-3 * time.Hour)
 		}
-		_, _ = w.Write(generated.ReplaceAll(doc, []byte(`"generated": `+strconv.FormatInt(time.Now().Unix(), 10))))
+		_, _ = w.Write(generated.ReplaceAll(doc, []byte(`"generated": `+strconv.FormatInt(at.Unix(), 10))))
 	}))
 	defer backup.Close()
 
@@ -187,7 +188,7 @@ rpki:
       config: {address: "%s", refresh: 1s, staleness: 2s, timeout: 1s}
     - type: json
       name: routinator-json
-      config: {url: "%s/json", refresh: 1s, staleness: 2s, timeout: 1s}
+      config: {url: "%s/json", refresh: 1s, timeout: 1s}
 `, httpPort, edge.port, rtr.addr(), backup.URL)
 	path := filepath.Join(t.TempDir(), "c.yaml")
 	if err := os.WriteFile(path, []byte(cfg), 0o600); err != nil {
@@ -325,8 +326,10 @@ rpki:
 	waitLabels("primary down", " routinator-json", "valid", "invalid", "notfound")
 	waitEvent("rpki.stale", "routinator")
 
-	jsonDown.Store(true)
-	waitLabels("both sources down", " ", "unknown", "unknown", "unknown")
+	// The json source's staleness is the 2h default: the publisher's own
+	// time, not the fetch, takes it there.
+	jsonOld.Store(true)
+	waitLabels("both sources stale", " ", "unknown", "unknown", "unknown")
 	waitEvent("rpki.stale", "routinator-json")
 	// Fail open: the decision rounds go on and the route RPKI no longer
 	// knows about stays on the wire.

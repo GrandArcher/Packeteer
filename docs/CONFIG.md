@@ -1609,13 +1609,15 @@ The tests replay the RTR answers recorded from Routinator 0.15.1, StayRTR 0.6.4,
 
 ### RPKI source `json`
 
-Polls a VRP set published as JSON over HTTP: Routinator's `/json` endpoint, the `json` file rpki-client writes with `-j` (served by any web server), or the file StayRTR reads. ASNs may be `"AS64496"` or `64496`. It validates origins from its own cache (RFC 6811), so a lookup never waits on the network. The data time is the document's `metadata.generated` (Routinator) or `metadata.buildtime` (rpki-client), else the fetch time, so a cache that keeps serving an old file goes stale. A failed fetch or a document that does not parse keeps the last good cache until `staleness`. At most 2,000,000 payloads and 512 MiB per document.
+Polls a VRP set published as JSON over HTTP: Routinator's `/json` endpoint or the `json` file rpki-client writes with `-j` (served by any web server). ASNs may be `"AS64496"` or `64496`. It validates origins from its own cache (RFC 6811), so a lookup never waits on the network. The data time is the document's `metadata.generated` (Routinator) or `metadata.buildtime` (rpki-client), else the fetch time, so a cache that keeps serving an old file goes stale. A failed fetch or a document that does not parse keeps the last good cache until `staleness`. At most 2,000,000 payloads and 512 MiB per document.
+
+Because the data time is the publisher's, a document is already up to one publisher cycle old when fetched, and up to that plus `refresh` just before the next poll. `staleness` must be well above the publisher's regeneration cycle plus `refresh`, not merely at least `refresh`: Routinator regenerates every 10m by default, and rpki-client is usually run hourly from cron, so its `buildtime` advances about once an hour plus the run time. A lower `staleness` makes every lookup `unknown` or flaps `rpki.stale`/`rpki.fresh` each cycle. The controller refuses a `staleness` below `refresh` plus 1h, and logs a warning when a fetched document would go stale before the next poll.
 
 | Key | Default | Meaning |
 |---|---|---|
 | `url` | none | Required. `http` or `https`, without credentials (for example `http://routinator.example.net:8323/json`). |
 | `refresh` | `5m` | Poll interval. 1s-24h. |
-| `staleness` | `1h` | How long data is served after the document's time. At least `refresh`, at most 24h. |
+| `staleness` | `2h` (`refresh` plus 1h when that is longer) | How long data is served after the document's time. At least `refresh` plus 1h, at most 24h. See above. |
 | `timeout` | `30s` | One fetch. 1s-5m. |
 
 ### RPKI display fallback `ripestat`
