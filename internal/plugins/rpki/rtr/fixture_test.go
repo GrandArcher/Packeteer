@@ -6,6 +6,7 @@ import (
 	"crypto/ed25519"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/binary"
@@ -19,8 +20,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"crypto/tls"
 
 	"golang.org/x/crypto/ssh"
 

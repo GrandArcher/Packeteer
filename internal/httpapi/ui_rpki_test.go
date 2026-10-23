@@ -1,7 +1,9 @@
 package httpapi
 
 import (
+	"fmt"
 	"net/netip"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -63,7 +65,7 @@ func rpkiSampleInput() Input {
 			ASPath: []uint32{64500, 64511},
 		}}},
 		RPKI: func(netip.Prefix, uint32) plugin.RPKIAnswer {
-			return plugin.RPKIAnswer{State: plugin.RPKIValid, Source: "ripestat", Updated: at.Add(-2 * time.Minute)}
+			return plugin.RPKIAnswer{State: plugin.RPKIValid, Source: "routinator", Updated: at.Add(-2 * time.Minute)}
 		},
 		Exchanges: []exchange.Stats{{
 			Name: "ix-lab", Peers: []exchange.PeerStats{{
@@ -85,7 +87,7 @@ func TestRPKIDisplaySmoke(t *testing.T) {
 		t.Fatalf("decisions = %d %s", rec.Code, rec.Body.String())
 	}
 	rec, _ = e.do(t, "GET", "/api/prefixes", viewer, nil)
-	if rec.Code != 200 || !strings.Contains(rec.Body.String(), `"rpki":"valid","rpki_source":"ripestat","rpki_updated":"2026-01-02T03:02:05Z"`) {
+	if rec.Code != 200 || !strings.Contains(rec.Body.String(), `"rpki":"valid","rpki_source":"routinator","rpki_updated":"2026-01-02T03:02:05Z"`) {
 		t.Fatalf("prefixes = %d %s", rec.Code, rec.Body.String())
 	}
 	rec, _ = e.do(t, "GET", "/api/exchanges", viewer, nil)
@@ -95,6 +97,42 @@ func TestRPKIDisplaySmoke(t *testing.T) {
 	rec, _ = e.do(t, "GET", "/providers.html", viewer, nil)
 	if rec.Code != 200 || !strings.Contains(rec.Body.String(), `<script src="/exchanges.js">`) {
 		t.Fatalf("providers page = %d", rec.Code)
+	}
+}
+
+// #200: the display fallback sends prefixes to an outside service, so only
+// /api/prefixes (the prefix list and card) asks it, only for paths the
+// sources left unknown, and the snapshot other handlers share keeps the
+// sources' label.
+func TestRPKIDisplayFallbackOnlyOnPrefixes(t *testing.T) {
+	at := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	in := rpkiSampleInput()
+	in.RPKI = func(netip.Prefix, uint32) plugin.RPKIAnswer { return plugin.RPKIAnswer{State: plugin.RPKIUnknown} }
+	snap := Assemble(in)
+	var asked []string
+	e := newUIWith(t, func(o *Options) { o.Snapshot = func() Snapshot { return snap } })
+	e.srv.SetRPKIDisplay(func(p netip.Prefix, origin uint32) plugin.RPKIAnswer {
+		asked = append(asked, fmt.Sprintf("%s AS%d", p, origin))
+		return plugin.RPKIAnswer{State: plugin.RPKIValid, Source: "ripestat", Updated: at}
+	})
+	viewer := plugin.RoleViewer
+	for _, path := range []string{"/metrics", "/api/overview", "/api/system", "/api/decisions", "/api/search?q=198.51.100.0/24", "/api/exchanges"} {
+		if rec, _ := e.do(t, "GET", path, viewer, nil); rec.Code != 200 {
+			t.Fatalf("%s = %d", path, rec.Code)
+		}
+	}
+	if len(asked) != 0 {
+		t.Fatalf("display fallback asked outside /api/prefixes: %v", asked)
+	}
+	rec, _ := e.do(t, "GET", "/api/prefixes?prefix=198.51.100.0/24", viewer, nil)
+	if rec.Code != 200 || !strings.Contains(rec.Body.String(), `"rpki":"valid","rpki_source":"ripestat","rpki_updated":"2026-01-02T03:04:05Z"`) {
+		t.Fatalf("prefixes = %d %s", rec.Code, rec.Body.String())
+	}
+	if want := []string{"198.51.100.0/24 AS64511"}; !slices.Equal(asked, want) {
+		t.Fatalf("asked = %v, want %v", asked, want)
+	}
+	if got := snap.Prefixes[0].Paths[0]; got.RPKI != string(plugin.RPKIUnknown) || got.RPKISource != "" {
+		t.Fatalf("shared snapshot path relabeled: %+v", got)
 	}
 }
 

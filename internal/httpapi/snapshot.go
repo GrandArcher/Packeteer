@@ -207,8 +207,8 @@ type LearnedPath struct {
 	// RPKI is the RFC 6811 origin-validation state of this path's origin
 	// AS (#158). Empty when RPKI is off. Display only.
 	RPKI string `json:"rpki,omitempty"`
-	// RPKISource is the source that answered, which may be the display
-	// fallback, and RPKIUpdated its data time (#200). Empty
+	// RPKISource is the source that answered, which on /api/prefixes may
+	// be the display fallback, and RPKIUpdated its data time (#200). Empty
 	// when no source had data.
 	RPKISource  string     `json:"rpki_source,omitempty"`
 	RPKIUpdated *time.Time `json:"rpki_updated,omitempty"`

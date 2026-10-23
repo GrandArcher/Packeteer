@@ -352,7 +352,7 @@ func (r *Recorder) RPKI(now time.Time, routes []RPKIRoute) {
 		}
 		rec.Last = now
 		r.rpkiOpen[k] = rec
-		rk := rpkiRowKey{rpkiKey: k, first: rec.First.UnixMilli()}
+		rk := rpkiRow(rec)
 		if _, pending := r.rpkiDirty[rk]; !pending && len(r.rpkiDirty) >= maxPending {
 			r.rpkiDropped++
 			continue
@@ -485,7 +485,7 @@ func (r *Recorder) take() (plugin.HistoryBatch, []netip.Prefix) {
 		r.dropped = 0
 	}
 	if r.rpkiDropped > 0 {
-		r.log.Warn("history: dropped RPKI route records while the store was failing", "count", r.rpkiDropped)
+		r.log.Warn("history: dropped RPKI route records over the pending cap", "count", r.rpkiDropped)
 		r.rpkiDropped = 0
 	}
 	return b, ps

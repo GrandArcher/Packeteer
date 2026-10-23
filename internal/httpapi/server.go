@@ -189,6 +189,9 @@ type Server struct {
 	// rpkiStatus is the health of the rpki.sources (#200). Nil until
 	// SetRPKIStatus.
 	rpkiStatus atomic.Value
+	// rpkiDisplay is the learned-path lookup with the display fallback
+	// (#200). Nil until SetRPKIDisplay.
+	rpkiDisplay atomic.Value
 	// apply, when set, applies a file that was just written and whose
 	// every change can run online (#128). Nil leaves the file for a
 	// restart or SIGHUP. It may be stored after New, once the reloader

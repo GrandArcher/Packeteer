@@ -115,8 +115,9 @@ func (c *Collector) SetPeerPrefixes(fn func() map[string]int) {
 
 // SetRPKI installs the origin-validation lookup for learned paths (#158).
 // Nil leaves every path without a validity label. The function is
-// read-only and may run while Snapshot is called. The labels are display
-// only, so it may include the display fallback (#200).
+// read-only and may run while Snapshot is called. Every snapshot labels
+// every probed prefix's paths, so it must not ask the display fallback
+// (#200); SetRPKIDisplay does that for /api/prefixes.
 func (c *Collector) SetRPKI(fn func(netip.Prefix, uint32) plugin.RPKIAnswer) {
 	c.mu.Lock()
 	c.rpki = fn

@@ -726,7 +726,10 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 	col.SetTruncated(func() map[string]uint64 { return truncated(plugins) })
 	col.Attach(engine, decider, view)
 	if rpkiSet.Enabled() {
-		col.SetRPKI(rpkiSet.LookupDisplay)
+		col.SetRPKI(rpkiSet.Lookup)
+		if plugins.RPKIDisplay != nil {
+			httpSrv.SetRPKIDisplay(rpkiSet.LookupDisplay)
+		}
 		httpSrv.SetRPKIStatus(func() []plugin.RPKIStatus { return rpkiStatuses(plugins) })
 	}
 	httpSrv.SetQuarantine(quarantineControl{decider: decider, out: dispatch, poke: poke, now: time.Now})

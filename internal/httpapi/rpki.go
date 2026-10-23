@@ -1,9 +1,12 @@
 package httpapi
 
 import (
+	"net/netip"
+	"slices"
 	"strings"
 	"time"
 
+	"github.com/GrandArcher/Packeteer/internal/netpfx"
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
 )
 
@@ -14,6 +17,45 @@ func (s *Server) SetRPKIStatus(fn func() []plugin.RPKIStatus) {
 		return
 	}
 	s.rpkiStatus.Store(fn)
+}
+
+// SetRPKIDisplay installs the lookup that may ask rpki.display_fallback
+// (#200). Only /api/prefixes, which the prefix card reads, uses it, and only
+// for the paths on the page it returns, so /metrics and the rest of the API
+// never send a prefix to the fallback's outside service.
+func (s *Server) SetRPKIDisplay(fn func(netip.Prefix, uint32) plugin.RPKIAnswer) {
+	if s == nil || fn == nil {
+		return
+	}
+	s.rpkiDisplay.Store(fn)
+}
+
+// labelDisplay asks the display lookup for each learned path in rows that
+// the sources left unknown. The rows share their paths with the snapshot,
+// so each row gets its own copy before a label changes.
+func (s *Server) labelDisplay(rows []Prefix) {
+	fn, _ := s.rpkiDisplay.Load().(func(netip.Prefix, uint32) plugin.RPKIAnswer)
+	if fn == nil {
+		return
+	}
+	for i := range rows {
+		p, err := netip.ParsePrefix(rows[i].Prefix)
+		if err != nil {
+			continue
+		}
+		paths := slices.Clone(rows[i].Paths)
+		for j := range paths {
+			lp := &paths[j]
+			origin := netpfx.LastAS(lp.ASPath)
+			if lp.RPKI != string(plugin.RPKIUnknown) || origin == 0 {
+				continue
+			}
+			if a := fn(p.Masked(), origin); a.State != plugin.RPKIUnknown {
+				lp.RPKI, lp.RPKISource, lp.RPKIUpdated = string(a.State), a.Source, ptrTime(a.Updated)
+			}
+		}
+		rows[i].Paths = paths
+	}
 }
 
 // RPKIMetrics renders the RPKI source gauges. A source that never

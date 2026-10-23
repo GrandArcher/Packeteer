@@ -21,6 +21,7 @@ import (
 
 	"golang.org/x/time/rate"
 
+	"github.com/GrandArcher/Packeteer/internal/rpki"
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
 )
 
@@ -46,6 +47,10 @@ const (
 const defaultBase = "https://stat.ripe.net"
 
 func init() { plugin.RPKIs.Register(TypeName, New) }
+
+// The controller asks rpki.display_fallback only through rpki.Answerer and
+// skips a plugin without it.
+var _ rpki.Answerer = (*Client)(nil)
 
 // Config is the plugin's config block.
 type Config struct {
