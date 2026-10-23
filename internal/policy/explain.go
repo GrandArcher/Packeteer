@@ -105,7 +105,7 @@ type explainFacts struct {
 	// challenger is the best other usable provider the current path is
 	// compared with; empty when there is none.
 	challenger string
-	// barred lists excluded providers (maintenance, commit control) that
+	// barred lists excluded providers (exclude, maintenance, commit control) that
 	// would otherwise beat the current path.
 	barred string
 	// oldest is the age of the oldest probe result of the prefix.
@@ -506,7 +506,7 @@ func policyGate(d Decision, f explainFacts, cur Candidate, haveCur bool, cfg Con
 	case staticHeld:
 		g.Status, g.Detail = GateFail, d.Reason
 	case f.barred != "":
-		g.Status, g.Detail = GateFail, f.barred+" would win but is excluded (maintenance or commit control)"
+		g.Status, g.Detail = GateFail, f.barred+" would win but is excluded (provider exclude, maintenance, or commit control)"
 	case haveCur:
 		if names := removedBy(d.Candidates, GatePolicy, cur, cfg); len(names) > 0 {
 			g.Status, g.Detail = GateFail, strings.Join(names, ", ")+" would win but the policy does not allow it"
