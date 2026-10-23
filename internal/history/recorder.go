@@ -63,6 +63,27 @@ type Options struct {
 	OnWrite func(error)
 }
 
+type rpkiKey struct {
+	prefix   netip.Prefix
+	provider string
+	origin   uint32
+}
+
+// rpkiRowKey is the stored row: one path's record from its first round.
+type rpkiRowKey struct {
+	rpkiKey
+	first int64
+}
+
+// RPKIRoute is one learned path's origin-validation answer in a decision
+// round (#200): a provider's path toward a probed prefix, by origin AS.
+type RPKIRoute struct {
+	Prefix   netip.Prefix
+	Provider string
+	Origin   uint32
+	Answer   plugin.RPKIAnswer
+}
+
 type bucketKey struct {
 	day      int64
 	prefix   netip.Prefix
@@ -87,8 +108,13 @@ type Recorder struct {
 	anoms     map[string]plugin.AnomalyRecord
 	openAnoms map[string]plugin.AnomalyRecord
 	prefixes  map[netip.Prefix]bool
-	seq       uint64
-	dropped   int
+	// rpkiOpen is the current record of each learned path's validity;
+	// rpkiDirty holds the records not yet flushed (#200).
+	rpkiOpen    map[rpkiKey]plugin.RPKIRouteRecord
+	rpkiDirty   map[rpkiRowKey]plugin.RPKIRouteRecord
+	seq         uint64
+	dropped     int
+	rpkiDropped int
 
 	flushMu sync.Mutex
 	cancel  context.CancelFunc
@@ -117,6 +143,8 @@ func New(opt Options) *Recorder {
 
 		anoms:     map[string]plugin.AnomalyRecord{},
 		openAnoms: map[string]plugin.AnomalyRecord{},
+		rpkiOpen:  map[rpkiKey]plugin.RPKIRouteRecord{},
+		rpkiDirty: map[rpkiRowKey]plugin.RPKIRouteRecord{},
 	}
 }
 
@@ -300,6 +328,48 @@ func (r *Recorder) Probe(res probe.Result) {
 
 func ms(d time.Duration) float64 { return float64(d) / float64(time.Millisecond) }
 
+// rpkiGap is how long a path may be missing from the rounds before its
+// span ends. A shorter gap (a prefix skipped for one round) continues the
+// span instead of splitting it.
+const rpkiGap = 5 * time.Minute
+
+// RPKI records the origin-validation state of every learned path of the
+// probed prefixes in one decision round (#200). A path whose state or
+// answering source changed starts a new record; one no longer learned
+// keeps its last record. Safe for concurrent use.
+func (r *Recorder) RPKI(now time.Time, routes []RPKIRoute) {
+	now = now.UTC()
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	seen := make(map[rpkiKey]bool, len(routes))
+	for _, rt := range routes {
+		k := rpkiKey{prefix: rt.Prefix, provider: rt.Provider, origin: rt.Origin}
+		seen[k] = true
+		rec, ok := r.rpkiOpen[k]
+		if !ok || rec.State != rt.Answer.State || rec.Source != rt.Answer.Source {
+			rec = plugin.RPKIRouteRecord{Prefix: rt.Prefix, Provider: rt.Provider, Origin: rt.Origin,
+				State: rt.Answer.State, Source: rt.Answer.Source, First: now}
+		}
+		rec.Last = now
+		r.rpkiOpen[k] = rec
+		rk := rpkiRow(rec)
+		if _, pending := r.rpkiDirty[rk]; !pending && len(r.rpkiDirty) >= maxPending {
+			r.rpkiDropped++
+			continue
+		}
+		r.rpkiDirty[rk] = rec
+	}
+	for k, rec := range r.rpkiOpen {
+		if !seen[k] && now.Sub(rec.Last) > rpkiGap {
+			delete(r.rpkiOpen, k)
+		}
+	}
+}
+
+func rpkiRow(rec plugin.RPKIRouteRecord) rpkiRowKey {
+	return rpkiRowKey{rpkiKey: rpkiKey{prefix: rec.Prefix, provider: rec.Provider, origin: rec.Origin}, first: rec.First.UnixMilli()}
+}
+
 // Decision records the improvement changes of one evaluation. results are
 // the measurements the evaluation used; they give the before (native) and
 // after (chosen provider) numbers.
@@ -397,6 +467,9 @@ func (r *Recorder) take() (plugin.HistoryBatch, []netip.Prefix) {
 	for _, a := range r.anoms {
 		b.Anomalies = append(b.Anomalies, a)
 	}
+	for _, rec := range r.rpkiDirty {
+		b.RPKIRoutes = append(b.RPKIRoutes, rec)
+	}
 	var ps []netip.Prefix
 	for p := range r.prefixes {
 		ps = append(ps, p)
@@ -405,10 +478,15 @@ func (r *Recorder) take() (plugin.HistoryBatch, []netip.Prefix) {
 	r.dirty = map[string]plugin.ImprovementRecord{}
 	r.mits = map[string]plugin.MitigationRecord{}
 	r.anoms = map[string]plugin.AnomalyRecord{}
+	r.rpkiDirty = map[rpkiRowKey]plugin.RPKIRouteRecord{}
 	r.prefixes = map[netip.Prefix]bool{}
 	if r.dropped > 0 {
 		r.log.Warn("history: dropped probe rollups while the store was failing", "count", r.dropped)
 		r.dropped = 0
+	}
+	if r.rpkiDropped > 0 {
+		r.log.Warn("history: dropped RPKI route records over the pending cap", "count", r.rpkiDropped)
+		r.rpkiDropped = 0
 	}
 	return b, ps
 }
@@ -452,6 +530,12 @@ func (r *Recorder) requeue(b plugin.HistoryBatch, ps []netip.Prefix) {
 			r.anoms[a.ID] = a
 		}
 	}
+	for _, rec := range b.RPKIRoutes {
+		k := rpkiRow(rec)
+		if _, newer := r.rpkiDirty[k]; !newer && len(r.rpkiDirty) < maxPending {
+			r.rpkiDirty[k] = rec
+		}
+	}
 	for _, p := range ps {
 		r.prefixes[p] = true
 	}
@@ -481,7 +565,7 @@ func (r *Recorder) Flush(ctx context.Context) error {
 			b.Prefixes = append(b.Prefixes, info)
 		}
 	}
-	if len(b.Buckets) == 0 && len(b.Improvements) == 0 && len(b.Prefixes) == 0 && len(b.Mitigations) == 0 && len(b.Anomalies) == 0 {
+	if len(b.Buckets) == 0 && len(b.Improvements) == 0 && len(b.Prefixes) == 0 && len(b.Mitigations) == 0 && len(b.Anomalies) == 0 && len(b.RPKIRoutes) == 0 {
 		return nil
 	}
 	err := r.opt.Store.Write(ctx, b)
@@ -568,6 +652,17 @@ func (r *Recorder) History(ctx context.Context, from, to time.Time) (plugin.Hist
 			h.Anomalies[i] = a
 		} else {
 			h.Anomalies = append(h.Anomalies, a)
+		}
+	}
+	rpkiIdx := map[rpkiRowKey]int{}
+	for i, rec := range h.RPKIRoutes {
+		rpkiIdx[rpkiRow(rec)] = i
+	}
+	for k, rec := range r.rpkiDirty {
+		if i, ok := rpkiIdx[k]; ok {
+			h.RPKIRoutes[i] = rec
+		} else if rec.First.Before(to) && !rec.Last.Before(from) {
+			h.RPKIRoutes = append(h.RPKIRoutes, rec)
 		}
 	}
 	return h, nil

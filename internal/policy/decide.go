@@ -70,8 +70,9 @@ func Decide(prev State, in Input, cfg Config, scorer plugin.Scorer, now time.Tim
 	in.byPrefix = make(map[netip.Prefix][]int, len(in.Native))
 	for i, r := range in.Results {
 		in.byPrefix[r.Prefix] = append(in.byPrefix[r.Prefix], i)
+		ans := in.RPKI[r.Prefix][r.Provider]
 		c := Candidate{Provider: r.Provider, LossPct: r.Stats.LossPct, RTTAvg: r.Stats.RTTAvg, Jitter: r.Stats.Jitter, Usable: true,
-			RPKI: in.RPKI[r.Prefix][r.Provider]}
+			RPKI: ans.State, RPKISource: ans.Source, RPKIUpdated: ans.Updated}
 		switch {
 		case !r.OK():
 			c.Usable, c.Why = false, "probe error"

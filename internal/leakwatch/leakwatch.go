@@ -72,6 +72,11 @@ type Config struct {
 	Withdraw func(context.Context, netip.Prefix) error
 	Emit     func(plugin.Event)
 	Log      *slog.Logger
+	// RPKI, when set, labels a leak with the origin-validation state of
+	// the leaked route's origin AS (#200), so an operator sees a leaked
+	// route that would be RPKI-invalid. It is asked after the withdraw
+	// and changes nothing that is withdrawn or held.
+	RPKI func(netip.Prefix, uint32) plugin.RPKIAnswer
 }
 
 // Leak is one route held out because it was seen outside the AS.
@@ -85,6 +90,10 @@ type Leak struct {
 	Since     time.Time    `json:"since"`
 	LastSeen  time.Time    `json:"last_seen"`
 	Sightings int          `json:"sightings"`
+	// RPKI is the origin-validation state of the route's origin AS and
+	// RPKISource the source that answered (#200). Empty when RPKI is off.
+	RPKI       plugin.RPKIValidity `json:"rpki,omitempty"`
+	RPKISource string              `json:"rpki_source,omitempty"`
 }
 
 // SourceStatus is a source's feed state. Unhealthy means unknown: the
@@ -241,15 +250,23 @@ func (w *Watcher) handle(ctx context.Context, sg sighting) {
 		action = ActionWithdrawFailed
 		w.cfg.Log.Error("leaked route not withdrawn; the next sync retries", "prefix", s.Prefix, "err", werr)
 	}
+	var ans plugin.RPKIAnswer
+	if w.cfg.RPKI != nil && len(s.ASPath) > 0 {
+		ans = w.cfg.RPKI(s.Prefix, s.ASPath[len(s.ASPath)-1])
+	}
 	w.mu.Lock()
-	l.Action = action
+	l.Action, l.RPKI, l.RPKISource = action, ans.State, ans.Source
 	snap := *l
 	w.mu.Unlock()
 	w.cfg.Log.Warn("route seen outside the AS; held out until cleared", "prefix", snap.Prefix, "reason", reason, "action", action, "source", snap.Source, "seen", snap.Seen, "as_path", fmt.Sprint(snap.ASPath))
-	w.emit(plugin.EventLeakDetected, now, fmt.Sprintf("%s seen outside the AS (%s); %s and held out until cleared", snap.Prefix, reason, strings.ReplaceAll(action, "_", " ")), map[string]string{
+	fields := map[string]string{
 		"prefix": snap.Prefix.String(), "reason": reason, "action": action, "source": snap.Source,
 		"seen": snap.Seen, "as_path": joinASNs(snap.ASPath),
-	})
+	}
+	if snap.RPKI != "" {
+		fields["rpki"] = string(snap.RPKI)
+	}
+	w.emit(plugin.EventLeakDetected, now, fmt.Sprintf("%s seen outside the AS (%s); %s and held out until cleared", snap.Prefix, reason, strings.ReplaceAll(action, "_", " ")), fields)
 }
 
 func (w *Watcher) emit(kind string, now time.Time, msg string, fields map[string]string) {

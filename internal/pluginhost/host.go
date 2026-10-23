@@ -78,6 +78,9 @@ type Set struct {
 	// RPKISources validate path origins (rpki.sources, #158). They are an
 	// ordered fallback list and never announce.
 	RPKISources []Instance[plugin.RPKI]
+	// RPKIDisplay is the display-only lookup (rpki.display_fallback,
+	// #200). Nil when not configured. It never feeds a decision.
+	RPKIDisplay *Instance[plugin.RPKI]
 
 	mu      sync.RWMutex
 	started []namedLifecycle
@@ -180,6 +183,11 @@ func Build(cfg *config.Config, opts Options) (*Set, error) {
 	}
 	if cfg.RPKIOn() {
 		s.RPKISources = build(plugin.RPKIs, "rpki.sources", cfg.RPKI.Sources, base, &errs)
+		if f := cfg.RPKI.DisplayFallback; f != nil {
+			if b := build(plugin.RPKIs, "rpki.display_fallback", []config.PluginSpec{*f}, base, &errs); len(b) == 1 {
+				s.RPKIDisplay = &b[0]
+			}
+		}
 	}
 	if cfg.Troubleshoot.Whois != nil {
 		if b := build(plugin.Whoises, "troubleshoot.whois", []config.PluginSpec{*cfg.Troubleshoot.Whois}, base, &errs); len(b) == 1 {
@@ -268,6 +276,9 @@ func (s *Set) all() []namedLifecycle {
 	}
 	for _, p := range s.RPKISources {
 		add(plugin.KindRPKI, p.Name, p.Plugin)
+	}
+	if s.RPKIDisplay != nil {
+		add(plugin.KindRPKI, s.RPKIDisplay.Name, s.RPKIDisplay.Plugin)
 	}
 	for _, p := range s.Probers {
 		add(plugin.KindProber, p.Name, p.Plugin)

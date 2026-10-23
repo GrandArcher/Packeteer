@@ -510,9 +510,10 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 	// which is assigned once the RIB view exists. Held and Injected are
 	// nil-safe until then.
 	var ctl *announce.Controller
+	rpkiSet := newRPKISet(plugins)
 	lw, lerr := newLeakWatch(cfg, plugins, dispatch,
 		func(p netip.Prefix) bool { return ctl.Injected(p) },
-		func(ctx context.Context, p netip.Prefix) error { return ctl.WithdrawPrefix(ctx, p) }, log)
+		func(ctx context.Context, p netip.Prefix) error { return ctl.WithdrawPrefix(ctx, p) }, rpkiSet, log)
 	if lerr != nil {
 		log.Error("refusing to start", "err", lerr)
 		return 1
@@ -632,7 +633,6 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 		log.Error("refusing to start", "err", err)
 		return 1
 	}
-	rpkiSet := newRPKISet(plugins)
 	// The two controllers share max_improvements, so each reads the other's
 	// count. ctl is assigned right below; Active is nil-safe until then.
 	if err := setMitigationRIB(mit, view); err != nil {
@@ -726,7 +726,11 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 	col.SetTruncated(func() map[string]uint64 { return truncated(plugins) })
 	col.Attach(engine, decider, view)
 	if rpkiSet.Enabled() {
-		col.SetRPKI(rpkiSet.Validate)
+		col.SetRPKI(rpkiSet.Lookup)
+		if plugins.RPKIDisplay != nil {
+			httpSrv.SetRPKIDisplay(rpkiSet.LookupDisplay)
+		}
+		httpSrv.SetRPKIStatus(func() []plugin.RPKIStatus { return rpkiStatuses(plugins) })
 	}
 	httpSrv.SetQuarantine(quarantineControl{decider: decider, out: dispatch, poke: poke, now: time.Now})
 	wireExchanges(ctx, cfg, col, httpSrv, view, plugins, decider, rpkiSet)
@@ -844,12 +848,15 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 				return
 			}
 			leading = true
-			in := decisionInput(loopCtx, now, engine, view, plugins, fed, rpkiSet)
+			in, rpkiRounds := decisionInput(loopCtx, now, engine, view, plugins, fed, rpkiSet)
 			in.Held = lw.Held
 			changes, err := runDecision(now, decider, in, ctl, log, snap.Mode, engine)
 			fed.publish(now, in, decider.Improvements())
 			if rec != nil {
 				rec.Decision(now, changes, in.Results)
+				if view != nil {
+					rec.RPKI(now, rpkiRounds)
+				}
 			}
 			inChanges, inErr := runInbound(loopCtx, now, inb, plugins, log, snap.InboundMode(), in)
 			mitChanges, mitErr := runMitigation(now, mit, log)
@@ -870,6 +877,7 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 			if view != nil {
 				watch.peerStatus(now, view.Peers(), snap.BGP.NotEstablishedAfter)
 			}
+			watch.rpki(now, rpkiStatuses(plugins))
 			if len(plugins.Telemetry) > 0 && watch.commitDue(now) {
 				watch.commit(now, exchange.WithPortCommit(collectTelemetry(loopCtx, plugins), portCommits))
 			}

@@ -9,6 +9,7 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 - Herd page (`/herd.html`): members, world view, mesh, country map, latency and AS path monitors, search, and opt-in outside sources (Atlas, RIS Live, RPKI, link-outs), display only (#296).
 - Docs: adopting.md maps common route-optimizer concepts to config with an observe-first cut-over plan; roi.md is a worksheet for cost, commit relief, and gain (#205).
 - Opt-in `ring_lg` panel "Seen from NLNOG RING" on the prefix page: public looking-glass API, rate capped, cached, best-effort, off by default (#283).
+- RPKI per provider path: `rtr` over TLS/SSH, `json` (Routinator, rpki-client), source and data age shown, per-path history, display-only RIPEstat fallback, `rpki.stale` events, metrics (#200).
 - Onboarding: install.sh starts observe; Settings runs blocking preflight checks with a fix each and metrics; guided inject step; -snippet router config for six vendors; -pbr linux -apply (#221).
 - Opt-in lab replay of a real RIPE RIS or RouteViews table (`lab/realtable.sh`, manual workflow), observe only, 1-4 sessions; the dump is never committed and logs hold counts only (#342).
 - Providers show latency, loss, jitter (15 min, 24 h), a trend and Mbps; Overview leads with latency and improvement charts and drops the Mode tile (#349).

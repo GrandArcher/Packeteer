@@ -225,6 +225,7 @@ func (s *Server) handlePrefixes(w http.ResponseWriter, r *http.Request) {
 	}
 	snap := s.snapshot()
 	rows, total := q.page(snap.Prefixes)
+	s.labelDisplay(rows)
 	nodes, asnTotal := boundASNMap(snap.ASNMap, q.asn)
 	writeJSON(w, http.StatusOK, PrefixPage{
 		meta: snap.meta(), Prefixes: rows, Total: total, Measured: len(snap.Prefixes),

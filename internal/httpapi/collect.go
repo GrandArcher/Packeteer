@@ -33,7 +33,7 @@ type Collector struct {
 	hops        func() []rib.NextHopCount
 	health      *exchange.Health
 	peerPrefix  func() map[string]int
-	rpki        func(netip.Prefix, uint32) plugin.RPKIValidity
+	rpki        func(netip.Prefix, uint32) plugin.RPKIAnswer
 	portMaxAge  time.Duration
 }
 
@@ -115,8 +115,10 @@ func (c *Collector) SetPeerPrefixes(fn func() map[string]int) {
 
 // SetRPKI installs the origin-validation lookup for learned paths (#158).
 // Nil leaves every path without a validity label. The function is
-// read-only and may run while Snapshot is called.
-func (c *Collector) SetRPKI(fn func(netip.Prefix, uint32) plugin.RPKIValidity) {
+// read-only and may run while Snapshot is called. Every snapshot labels
+// every probed prefix's paths, so it must not ask the display fallback
+// (#200); SetRPKIDisplay does that for /api/prefixes.
+func (c *Collector) SetRPKI(fn func(netip.Prefix, uint32) plugin.RPKIAnswer) {
 	c.mu.Lock()
 	c.rpki = fn
 	c.mu.Unlock()

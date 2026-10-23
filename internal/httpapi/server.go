@@ -189,6 +189,12 @@ type Server struct {
 	quarantine atomic.Value
 	// candidates is the Protection form's prefix picker (#131).
 	candidates atomic.Value
+	// rpkiStatus is the health of the rpki.sources (#200). Nil until
+	// SetRPKIStatus.
+	rpkiStatus atomic.Value
+	// rpkiDisplay is the learned-path lookup with the display fallback
+	// (#200). Nil until SetRPKIDisplay.
+	rpkiDisplay atomic.Value
 	// apply, when set, applies a file that was just written and whose
 	// every change can run online (#128). Nil leaves the file for a
 	// restart or SIGHUP. It may be stored after New, once the reloader
@@ -382,6 +388,9 @@ func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	}
 	if s.leaks != nil {
 		_, _ = w.Write(LeakMetrics(s.leaks.Status()))
+	}
+	if fn, _ := s.rpkiStatus.Load().(func() []plugin.RPKIStatus); fn != nil {
+		_, _ = w.Write(RPKIMetrics(fn(), time.Now()))
 	}
 	if s.ha != nil {
 		_, _ = w.Write(HAMetrics(s.ha()))

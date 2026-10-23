@@ -257,7 +257,7 @@ func TestClientRedialsSilentReset(t *testing.T) {
 // A serial update re-sent after a lost End of Data must not store a
 // second copy, so one withdrawal retires the payload.
 func TestHandleReplayedAnnounce(t *testing.T) {
-	c := &Client{cfg: Config{Staleness: time.Hour}, cache: rpki.NewVRPs()}
+	c := &Client{cfg: Config{Timing: rpki.Timing{Staleness: time.Hour}}, cache: rpki.NewVRPs()}
 	c.setUp(1, 1)
 	pdu := ipv4PDU(t, "198.51.100.0/24", 24, 64500, true)
 	serial := func(pdus ...[]byte) {
@@ -290,7 +290,7 @@ func TestHandleReplayedAnnounce(t *testing.T) {
 // partway through leaves the last complete cache, and a prefix PDU with no
 // query outstanding is refused rather than applied.
 func TestHandleAbandonedDeltaKeepsCache(t *testing.T) {
-	c := &Client{cfg: Config{Staleness: time.Hour}, cache: rpki.NewVRPs()}
+	c := &Client{cfg: Config{Timing: rpki.Timing{Staleness: time.Hour}}, cache: rpki.NewVRPs()}
 	c.cache.Apply([]rpki.Change{{Prefix: mustPrefix(t, "198.51.100.0/24"), MaxLen: 24, ASN: 64500}})
 	c.setUp(10, 7)
 	if _, _, err := c.handle(ipv4PDU(t, "198.51.100.0/24", 24, 64500, false), nil); err == nil {
@@ -553,7 +553,7 @@ func TestConfigValidation(t *testing.T) {
 		t.Fatal(err)
 	}
 	c := p.(*Client)
-	if c.cfg.Refresh != DefaultRefresh || c.cfg.Staleness != DefaultStaleness || c.cfg.Timeout != DefaultTimeout {
+	if c.cfg.Refresh != rpki.DefaultRefresh || c.cfg.Staleness != rpki.DefaultStaleness || c.cfg.Timeout != rpki.DefaultTimeout {
 		t.Fatalf("defaults = %+v", c.cfg)
 	}
 }
@@ -730,7 +730,7 @@ func TestClientSerialNotifyAppliesDelta(t *testing.T) {
 // response is in flight. A different session starts a reset whose End of
 // Data replaces the cache instead of merging into it.
 func TestHandleSerialNotify(t *testing.T) {
-	c := &Client{cfg: Config{Staleness: time.Hour}, cache: rpki.NewVRPs()}
+	c := &Client{cfg: Config{Timing: rpki.Timing{Staleness: time.Hour}}, cache: rpki.NewVRPs()}
 	if resp, reply, err := c.handle(serialNotifyPDU(7, 99), nil); err != nil || reply != nil || resp != nil {
 		t.Fatalf("unsynced notify reply=%v resp=%v err=%v", reply, resp, err)
 	}
@@ -945,5 +945,43 @@ func TestSplitPDUsRejectsBadLength(t *testing.T) {
 	binary.BigEndian.PutUint32(buf[4:8], 3)
 	if _, _, err := splitPDUs(buf); err == nil {
 		t.Fatal("splitPDUs accepted a length below the header")
+	}
+}
+
+// stalledSSH models an SSH channel with a full window: Write blocks until
+// the client is closed.
+type stalledSSH struct{ closed chan struct{} }
+
+func (s *stalledSSH) Write([]byte) (int, error) {
+	<-s.closed
+	return 0, io.ErrClosedPipe
+}
+
+func (s *stalledSSH) Close() error {
+	close(s.closed)
+	return nil
+}
+
+func TestSSHWriteStallClosesClient(t *testing.T) {
+	old := writeTimeout
+	writeTimeout = 50 * time.Millisecond
+	defer func() { writeTimeout = old }()
+
+	st := &stalledSSH{closed: make(chan struct{})}
+	conn := &sshRTR{client: st, in: st}
+	done := make(chan error, 1)
+	go func() { done <- writePDU(conn, resetQuery()) }()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("stalled write returned no error")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("a stalled SSH write was never cut off")
+	}
+	select {
+	case <-st.closed:
+	default:
+		t.Fatal("the client was not closed")
 	}
 }

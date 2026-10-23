@@ -33,7 +33,7 @@ The image entrypoint is the same binary. Flags go after the image name.
 | `communities_cause` | none | no | Extra outbound communities per improvement cause (#132). Added after `packeteer_community`. See [`communities_cause`](#communities_cause). |
 | `more_specific_bits` | unset | must be absent | Any value, including `0`, is an error. Packeteer announces the exact prefix it learned from the RIB. |
 | `more_specific` | off | no | More-specific injection: with each improvement, also announce the more-specifics inside its prefix that a neighbor advertises in the learned RIB, under a route cap. Never a prefix that is not learned. See [`more_specific`](#more_specific). Lab-proven only. |
-| `rpki` | off | no | Shared RPKI origin validation (#158): read the operator's RTR server and label each learned path's origin valid, invalid, not found, or unknown. `avoid_invalid` refuses a new improvement onto an invalid path. Never announces and never changes the learned RIB. See [`rpki`](#rpki). Not on a public edge. |
+| `rpki` | off | no | Shared RPKI origin validation (#158, #200): read the operator's RPKI cache over RTR or VRP JSON and label each learned path's origin valid, invalid, not found, or unknown, with the source and its data age. `avoid_invalid` refuses a new improvement onto an invalid path. Never announces and never changes the learned RIB. See [`rpki`](#rpki). Not on a public edge. |
 | `instance` | `domain` | no | This instance's name in a federation (#30). Peers expect it in its snapshot. Letters, digits, `_`, `.`, `-`, at most 64 characters. See [Multi-POP](#multi-pop-federation). |
 | `domain` | empty | with `federation` | This instance's routing domain (POP). Empty is a standalone instance. |
 | `inter_dc_rtt` | empty | per remote domain | Map of domain to round-trip time from this POP (for example `pop-b: 12ms`), 0-10s. Added to every path a peer in that domain measured. |
@@ -662,13 +662,16 @@ A more-specific is withdrawn with its improvement (flip-back, TTL, policy, P lea
 
 ### `rpki`
 
-Shared RPKI origin validation (#158, not on a public edge). Off by default. A source connects read-only to the operator's RPKI-to-Router server and labels each learned path's origin: `valid`, `invalid`, `notfound`, or `unknown`. The learned RIB is never changed and nothing is announced. Validity is shown on `/api/decisions` candidates, the prefix card's learned paths, the exchange peers, and the System page. `avoid_invalid` only refuses a new improvement; it never blocks a withdraw, and the learned-RIB rule, allowlist, cap, community + NO_EXPORT, hold time, and withdraw rules are unchanged. MED stays display-only.
+Shared RPKI origin validation (#158, #200, not on a public edge). Off by default. A source reads the operator's RPKI cache (Routinator, rpki-client, StayRTR, FORT) over RTR or as VRP JSON and labels each learned path's origin: `valid`, `invalid`, `notfound`, or `unknown`. The learned RIB is never changed and nothing is announced. Validity is shown on `/api/decisions` candidates and the prefix card's learned paths, each with the source that answered and its data time, and on leak watch entries with the source. The exchange peers show validity counts only. Every learned path of a probed prefix is recorded per provider and origin AS in history (`storage`), shown on the prefix timeline. `avoid_invalid` only refuses a new improvement; it never blocks a withdraw, and the learned-RIB rule, allowlist, cap, community + NO_EXPORT, hold time, and withdraw rules are unchanged. MED stays display-only.
+
+A source that was answering and goes stale or empty emits `rpki.stale` (warning) and `rpki.fresh` when it recovers ([EVENTS.md](EVENTS.md)); its lookups are `unknown` meanwhile, so decisions continue and withdraws never wait. `/metrics` has `packeteer_rpki_source_up`, `packeteer_rpki_vrps`, and `packeteer_rpki_cache_age_seconds` per source.
 
 | Key | Default | Meaning |
 |---|---|---|
 | `enabled` | `false` | `true` turns the source on. A block that is not enabled is ignored, sources included. |
-| `sources` | none | Origin-validation plugins, tried in order. The first with a fresh, non-empty cache answers, including one whose server is unreachable but whose last fetch is inside `staleness`; a stale or empty source is skipped, so a second server takes over. Each is a plugin entry (`type`, optional `name`, `config`); only `rtr` exists ([RPKI source `rtr`](#rpki-source-rtr)). At least one is required when enabled. |
+| `sources` | none | Origin-validation plugins, tried in order. The first with a fresh, non-empty cache answers, including one whose server is unreachable but whose data time (`rpki_updated`) is inside `staleness`; a stale or empty source is skipped, so a second server takes over. Each is a plugin entry (`type`, optional `name`, `config`): `rtr` ([RPKI source `rtr`](#rpki-source-rtr)) or `json` ([RPKI source `json`](#rpki-source-json)). At least one is required when enabled. `ripestat` is refused here. |
 | `avoid_invalid` | `false` | `true` refuses a new improvement onto a provider with an `invalid` learned path for the prefix. With several paths from one provider (add-path, or BMP from several routers), the decision candidate carries the worst state, so one invalid path is enough. An active improvement on a path that becomes invalid is retired through the normal path. Off changes nothing. |
+| `display_fallback` | none | A plugin entry asked only for the learned paths on `/api/prefixes` and the prefix card, and only when no source has fresh data. Only `ripestat` is accepted ([RPKI display fallback `ripestat`](#rpki-display-fallback-ripestat)). Its answers never reach decisions, `avoid_invalid`, leak watch, or the exchange counts. |
 
 ### `linkouts`
 
@@ -1605,7 +1608,33 @@ Connects read-only to an RPKI-to-Router server (RFC 8210) such as the operator's
 | `address` | none | Required. The server as `host:port` (for example `routinator.example.net:3323`). An IPv6 host needs brackets. |
 | `refresh` | `5m` | How often a healthy session is polled for changes. 1s-24h. |
 | `staleness` | `1h` | How long the cache is served after the last complete fetch. At least `refresh`, at most 24h. Older or missing data is `unknown`. |
-| `timeout` | `30s` | Dial and read wait. 1s-5m. |
+| `timeout` | `30s` | Dial, TLS or SSH handshake, and read wait. 1s-5m. |
+| `tls` | off | RTR over TLS (RFC 8210 section 9.2). `ca_file`: PEM CAs that sign the server certificate (empty: the system roots). `server_name`: the name checked in the certificate (empty: the `address` host). `tls: {}` uses both defaults. |
+| `ssh` | off | RTR over SSH (RFC 8210 section 9.1), subsystem `rpki-rtr`. `user`, `key_file` (an unencrypted private key), and `known_hosts` (an OpenSSH known_hosts file with the server's key) are all required; a host key not in it is refused. Mount the files; not with `tls`. |
+
+The tests replay the RTR answers recorded from Routinator 0.15.1, StayRTR 0.6.4, and FORT 1.6.8 (`internal/plugins/rpki/rtr/testdata`); TLS and SSH are tested against in-process servers.
+
+### RPKI source `json`
+
+Polls a VRP set published as JSON over HTTP: Routinator's `/json` endpoint or the `json` file rpki-client writes with `-j` (served by any web server). ASNs may be `"AS64496"` or `64496`. It validates origins from its own cache (RFC 6811), so a lookup never waits on the network. The data time is the document's `metadata.generated` (Routinator) or `metadata.buildtime` (rpki-client), else the fetch time, so a cache that keeps serving an old file goes stale. A failed fetch or a document that does not parse keeps the last good cache until `staleness`. At most 2,000,000 payloads and 512 MiB per document.
+
+Because the data time is the publisher's, a document is already up to one publisher cycle old when fetched, and up to that plus `refresh` just before the next poll. `staleness` must be well above the publisher's regeneration cycle plus `refresh`, not merely at least `refresh`: Routinator regenerates every 10m by default, and rpki-client is usually run hourly from cron, so its `buildtime` advances about once an hour plus the run time. A lower `staleness` makes every lookup `unknown` or flaps `rpki.stale`/`rpki.fresh` each cycle. The controller refuses a `staleness` below `refresh` plus 1h, and logs a warning when a fetched document would go stale before the next poll.
+
+| Key | Default | Meaning |
+|---|---|---|
+| `url` | none | Required. `http` or `https`, without credentials (for example `http://routinator.example.net:8323/json`). |
+| `refresh` | `5m` | Poll interval. 1s-24h. |
+| `staleness` | `2h` (`refresh` plus 1h when that is longer) | How long data is served after the document's time. At least `refresh` plus 1h, at most 24h. See above. |
+| `timeout` | `30s` | One fetch. 1s-5m. |
+
+### RPKI display fallback `ripestat`
+
+Display-only last resort (#200). When no `rpki.sources` entry has fresh data, the learned paths on `/api/prefixes` and the prefix card are looked up with the public RIPEstat `rpki-validation` data call, by prefix and origin AS. Each lookup sends that prefix and origin AS to RIPE NCC. A miss shows `unknown` and is queued; lookups wait on `rate_per_minute`, a full queue drops the request until the card asks again, and answers are cached for `ttl` (at most 10,000). RIPEstat's `unknown` is `notfound`; `invalid_asn` and `invalid_length` are `invalid`. The answer is labeled with this entry's name and its lookup time. It is never used by decisions, `avoid_invalid`, leak watch, or the exchange counts.
+
+| Key | Default | Meaning |
+|---|---|---|
+| `rate_per_minute` | `10` | Lookups sent per minute. 1-60. |
+| `ttl` | `1h` | How long an answer is shown before it is looked up again. 1m-24h. |
 
 ### Detector `baseline`
 

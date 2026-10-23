@@ -353,20 +353,32 @@ scorer:
 #   enabled: false
 #   max_routes: 100
 #
-# RPKI origin validation (off by default; docs/CONFIG.md#rpki). One or more
-# read-only RTR sources (RFC 8210) label each learned path's origin valid,
-# invalid, not found, or unknown. It never announces and never changes the
-# learned RIB. sources are tried in order; the first fresh non-empty cache
-# answers. avoid_invalid only refuses a new improvement onto an invalid path.
+# RPKI origin validation (off by default; docs/CONFIG.md#rpki). Read-only
+# sources (rtr: RFC 8210 over TCP, tls, or ssh; json: Routinator /json or
+# rpki-client -j) label each learned path's origin valid, invalid, not found,
+# or unknown, with the source and its data age. It never announces and never
+# changes the learned RIB. sources are tried in order; the first fresh
+# non-empty cache answers. avoid_invalid only refuses a new improvement onto
+# an invalid path. display_fallback (ripestat) labels the prefix card only,
+# when no source is fresh, and sends each looked-up prefix to RIPE NCC.
 # rpki:
 #   enabled: false
 #   avoid_invalid: false
 #   sources:
 #     - type: rtr
+#       name: routinator
 #       config:
 #         address: 192.0.2.20:3323
 #         refresh: 5m
 #         staleness: 1h
+#     - type: json
+#       name: routinator-json
+#       config:
+#         url: http://192.0.2.20:8323/json
+#         # staleness defaults to 2h and must be at least refresh + 1h: the
+#         # data time is the publisher's, so keep it well above its cycle.
+#   display_fallback:
+#     type: ripestat
 
 # Multi-POP (off by default; docs/multi-pop.md). One instance per POP,
 # joined over mutual TLS. A provider in another domain is measured by the

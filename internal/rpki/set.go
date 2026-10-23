@@ -13,10 +13,22 @@ import (
 // announces and never changes the learned RIB.
 type Set struct {
 	sources []plugin.RPKI
+	// display is asked by LookupDisplay only, after the sources.
+	display Answerer
+}
+
+// Answerer is a display-only lookup whose answers each carry their own
+// age (rpki.display_fallback). The ripestat plugin implements it.
+type Answerer interface {
+	Answer(prefix netip.Prefix, origin uint32) plugin.RPKIAnswer
 }
 
 // NewSet wraps the configured sources in order.
 func NewSet(sources []plugin.RPKI) *Set { return &Set{sources: sources} }
+
+// SetDisplay installs the display-only fallback. Call it before the set
+// is used.
+func (s *Set) SetDisplay(a Answerer) { s.display = a }
 
 // Enabled reports whether any source is configured. An empty set returns
 // unknown for every lookup and is treated as RPKI off by the controller.
@@ -63,20 +75,40 @@ func (s *Set) active() (plugin.RPKI, plugin.RPKIStatus, bool) {
 	return nil, plugin.RPKIStatus{}, false
 }
 
-// Validate applies the first fresh, non-empty source. Without one it
-// returns RPKIUnknown, which is the fail-open state: it never blocks a
-// withdraw.
-func (s *Set) Validate(prefix netip.Prefix, origin uint32) plugin.RPKIValidity {
-	src, _, ok := s.active()
+// Lookup applies the first fresh, non-empty source and says which one
+// answered and its data time. Without one it returns
+// RPKIUnknown, which is the fail-open state: it never blocks a withdraw.
+// It never asks the display fallback.
+func (s *Set) Lookup(prefix netip.Prefix, origin uint32) plugin.RPKIAnswer {
+	src, st, ok := s.active()
 	if !ok {
-		return plugin.RPKIUnknown
+		return plugin.RPKIAnswer{State: plugin.RPKIUnknown}
 	}
-	return src.Validate(prefix, origin)
+	return plugin.RPKIAnswer{State: src.Validate(prefix, origin), Source: st.Source, Updated: st.Updated}
 }
 
-// Updated is when the source Validate uses last completed a fetch. It is
-// zero while no source is fresh.
+// Validate is Lookup's state.
+func (s *Set) Validate(prefix netip.Prefix, origin uint32) plugin.RPKIValidity {
+	return s.Lookup(prefix, origin).State
+}
+
+// Updated is the data time of the source Validate uses. It is zero while
+// no source is fresh.
 func (s *Set) Updated() time.Time {
 	_, st, _ := s.active()
 	return st.Updated
+}
+
+// LookupDisplay is Lookup, then the display fallback when no source has
+// usable data. Only a display may use it: Decide, avoid_invalid, leak
+// watch, and the exchange counts use Lookup.
+func (s *Set) LookupDisplay(prefix netip.Prefix, origin uint32) plugin.RPKIAnswer {
+	a := s.Lookup(prefix, origin)
+	if a.State != plugin.RPKIUnknown || s == nil || s.display == nil {
+		return a
+	}
+	if d := s.display.Answer(prefix, origin); d.State != plugin.RPKIUnknown {
+		return d
+	}
+	return a
 }

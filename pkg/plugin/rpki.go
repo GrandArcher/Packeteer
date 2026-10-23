@@ -39,10 +39,22 @@ type RPKIStatus struct {
 	Stale bool
 	// VRPs is the number of validated ROA payloads in the cache.
 	VRPs int
-	// Updated is when the cache last completed a fetch.
+	// Updated is the data time: when the cache last completed a fetch, or
+	// when a fetched document says it was generated.
 	Updated time.Time
 	// Error is the last fetch error, empty when healthy.
 	Error string
+}
+
+// RPKIAnswer is one origin-validation state and the data behind it, so a
+// caller can show which source answered and how old its data was.
+type RPKIAnswer struct {
+	State RPKIValidity
+	// Source is the instance name of the source that answered; empty when
+	// none had usable data.
+	Source string
+	// Updated is that source's data time, as in RPKIStatus.
+	Updated time.Time
 }
 
 // RPKI validates the origin AS of a prefix. It is read-only and in-process.

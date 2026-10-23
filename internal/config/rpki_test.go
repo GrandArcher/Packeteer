@@ -31,6 +31,13 @@ func TestRPKIParses(t *testing.T) {
 	if !cfg.RPKIOn() {
 		t.Fatal("RPKIOn = false for an enabled block")
 	}
+	cfg, err = Parse([]byte(minimalYAML + "rpki:\n  enabled: true\n  sources: [{type: json, config: {url: \"http://192.0.2.20:8323/json\"}}]\n  display_fallback: {type: \" ripestat \"}\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if f := cfg.RPKI.DisplayFallback; f == nil || f.Type != "ripestat" || cfg.RPKI.Sources[0].Type != "json" {
+		t.Fatalf("rpki = %+v", cfg.RPKI)
+	}
 }
 
 func TestRPKIValidation(t *testing.T) {
@@ -41,7 +48,10 @@ func TestRPKIValidation(t *testing.T) {
 	}{
 		{"enabled without sources", minimalYAML + "rpki: {enabled: true}\n", "rpki.sources: at least one source is required when rpki.enabled"},
 		{"source without type", minimalYAML + "rpki:\n  enabled: true\n  sources:\n    - {}\n", "rpki.sources[0]: type is required"},
-		{"disabled with sources", minimalYAML + "rpki:\n  avoid_invalid: true\n", "rpki.enabled is false but rpki.sources or rpki.avoid_invalid is set"},
+		{"disabled with sources", minimalYAML + "rpki:\n  avoid_invalid: true\n", "rpki.enabled is false but rpki.sources, rpki.avoid_invalid, or rpki.display_fallback is set"},
+		{"disabled with display fallback", minimalYAML + "rpki:\n  display_fallback: {type: ripestat}\n", "rpki.enabled is false but rpki.sources, rpki.avoid_invalid, or rpki.display_fallback is set"},
+		{"ripestat as a source", minimalYAML + "rpki:\n  enabled: true\n  sources:\n    - {type: rtr}\n    - {type: ripestat}\n", "rpki.sources[1]: ripestat is display only; set it as rpki.display_fallback"},
+		{"rtr as display fallback", minimalYAML + "rpki:\n  enabled: true\n  sources: [{type: rtr}]\n  display_fallback: {type: rtr}\n", "rpki.display_fallback: type must be ripestat"},
 		{"unknown key", minimalYAML + "rpki: {enabled: true, bogus: 1}\n", "field bogus not found"},
 	}
 	for _, tt := range tests {

@@ -374,3 +374,29 @@ func TestHandleDoesNotDeadlockWithSync(t *testing.T) {
 		t.Fatal("prefix not held after the sighting")
 	}
 }
+
+// #200: with RPKI on, a leak carries the origin-validation state of the
+// leaked route's origin AS and the source that answered, in the status
+// and the event. The withdraw and the hold are the same as without it.
+func TestLeakLabeledWithRPKI(t *testing.T) {
+	r := newRig(t, "203.0.113.0/24")
+	var asked []uint32
+	r.w.cfg.RPKI = func(_ netip.Prefix, origin uint32) plugin.RPKIAnswer {
+		asked = append(asked, origin)
+		return plugin.RPKIAnswer{State: plugin.RPKIInvalid, Source: "routinator"}
+	}
+	r.feed(sight("203.0.113.0/24", []uint32{64511, 64500, 64510}, community))
+	if !slices.Equal(r.withdraw, []netip.Prefix{netip.MustParsePrefix("203.0.113.0/24")}) || !r.w.Held(netip.MustParsePrefix("203.0.113.0/24")) {
+		t.Fatalf("withdrawn %v held %v", r.withdraw, r.w.Held(netip.MustParsePrefix("203.0.113.0/24")))
+	}
+	if !slices.Equal(asked, []uint32{64510}) {
+		t.Fatalf("asked origins %v, want the last AS only", asked)
+	}
+	leaks := r.w.Status().Leaks
+	if len(leaks) != 1 || leaks[0].RPKI != plugin.RPKIInvalid || leaks[0].RPKISource != "routinator" || leaks[0].Action != ActionWithdrawn {
+		t.Fatalf("leaks %+v", leaks)
+	}
+	if len(r.events) != 1 || r.events[0].Fields["rpki"] != "invalid" {
+		t.Fatalf("events %+v", r.events)
+	}
+}

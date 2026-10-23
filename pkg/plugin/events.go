@@ -104,6 +104,11 @@ const (
 	EventHerdRestarted = "herd.restarted"
 	EventHAStandby     = "ha.standby"
 	EventHAActive      = "ha.active"
+	// EventRPKIStale fires when an RPKI source that was answering goes
+	// stale or empty, so its lookups are unknown (#200).
+	EventRPKIStale = "rpki.stale"
+	// EventRPKIFresh resolves EventRPKIStale.
+	EventRPKIFresh = "rpki.fresh"
 	// EventAudit is one audit log record (#32): a change or sign-in on
 	// the ops API, or a config reload.
 	EventAudit = "audit.recorded"
@@ -238,6 +243,10 @@ var eventCatalog = []EventSpec{
 		Summary: "The filtered count fell back below the spike threshold, or the session is gone. Resolves ixp.rs_filter_spike."},
 	{Kind: EventHerdRestarted, Severity: SeverityInfo, Group: "herd", TrapID: 63,
 		Summary: "A herd goroutine (recorder or puller) panicked and was restarted with backoff. Probing, decisions, and the announcer are not affected."},
+	{Kind: EventRPKIStale, Severity: SeverityWarning, Group: "rpki", Keys: []string{"source"}, TrapID: 64,
+		Summary: "An RPKI source that was answering has no fresh data (stale past its staleness, or empty). Its lookups are unknown, which fails open: decisions continue and withdraws never wait on RPKI."},
+	{Kind: EventRPKIFresh, Severity: SeverityInfo, Group: "rpki", Keys: []string{"source"}, TrapID: 65, Resolves: true,
+		Summary: "The RPKI source has fresh data again. Resolves rpki.stale."},
 }
 
 // EventCatalog returns a copy of every event kind the controller emits.

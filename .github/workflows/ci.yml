@@ -1315,6 +1315,60 @@ jobs:
             'filtered: ?asn=AS64500&amp;sort=gain&amp;size=25 first 2001:db8:1::/48 rows 3' \
             'Showing 1–3 of 3 matching (100000 measured) prefixes.' 'Page 1 of 1' \
             --absent 'Cannot reach' 'mode-inject'
+      - name: UI RPKI labels smoke (#200; per-path validity with source and age, stored RPKI timeline, observe)
+        run: |
+          set -euo pipefail
+          base=http://127.0.0.1:18200
+          cat > /tmp/ui200.yaml <<'YAML'
+          mode: observe
+          asn: 64512
+          router_id: 192.0.2.10
+          auth: {enabled: false}
+          http:
+            listen: "127.0.0.1:18200"
+          providers:
+            - name: lab-a
+              source_ip: 127.0.0.1
+              next_hop: 192.0.2.1
+          YAML
+          docker run -d --name pkui200 --network host --cap-add NET_RAW --cap-add NET_ADMIN \
+            -v /tmp/ui200.yaml:/etc/packeteer/config.yaml:ro packeteer:ci
+          proxy=""
+          cleanup() {
+            if [ -n "$proxy" ]; then kill "$proxy" 2>/dev/null || true; fi
+            docker stop -t 15 pkui200 >/dev/null || true
+            docker logs pkui200 2>&1 | tail -n 40
+            code="$(docker inspect -f '{{.State.ExitCode}}' pkui200)"
+            docker rm pkui200 >/dev/null || true
+            test "$code" = "0"
+          }
+          trap cleanup EXIT
+          ok=0
+          for _ in $(seq 1 30); do
+            if curl -fsS "$base/healthz" >/dev/null 2>&1; then ok=1; break; fi
+            sleep 1
+          done
+          test "$ok" = 1
+          # uiproxy answers the prefix and its history from
+          # lab/ui-fixtures/rpki (documentation prefixes and ASNs): paths
+          # labeled valid and invalid by an RTR source and not found by the
+          # RIPEstat display fallback, and a stored invalid-then-unknown
+          # span. The labels themselves are checked against the real API in
+          # the Go tests (TestDaemonRPKIPerProvider).
+          go build -o /tmp/uiproxy ./lab/uiproxy
+          /tmp/uiproxy -listen 127.0.0.1:18201 -upstream "$base" -user lab -password lab-only \
+            -fixtures lab/ui-fixtures/rpki >/tmp/uiproxy200.log 2>&1 &
+          proxy=$!
+          for _ in $(seq 1 20); do
+            curl -fsS http://127.0.0.1:18201/healthz >/dev/null 2>&1 && break
+            sleep 0.2
+          done
+          curl -fsS http://127.0.0.1:18201/healthz >/dev/null
+          bash lab/ui-smoke.sh 'http://127.0.0.1:18201/prefix/203.0.113.0%2F25' 'mode-observe' 'It announces nothing.' \
+            '>valid<span class="muted"> via routinator, ' '>invalid<span class="muted"> via routinator, ' \
+            '>notfound<span class="muted"> via ripestat, ' ' old</span>' \
+            'lab-b path from AS64511: invalid (source routinator)' 'lab-b path from AS64511: unknown (no source had fresh data)' \
+            --absent 'Cannot reach' 'mode-inject'
       - name: UI observe wording smoke (#346; a pending recommendation in observe, Traffic now vs Packeteer recommends)
         run: |
           set -euo pipefail

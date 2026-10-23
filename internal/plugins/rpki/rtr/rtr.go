@@ -10,6 +10,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/netip"
 	"strings"
@@ -23,23 +24,9 @@ import (
 // TypeName is the config type.
 const TypeName = "rtr"
 
-// Defaults and bounds.
-const (
-	DefaultRefresh   = 5 * time.Minute
-	DefaultStaleness = time.Hour
-	DefaultTimeout   = 30 * time.Second
-	MinRefresh       = time.Second
-	MaxRefresh       = 24 * time.Hour
-	MinTimeout       = time.Second
-	MaxTimeout       = 5 * time.Minute
-	// maxVRPs bounds the cache a single server can grow, so a broken or
-	// hostile server cannot exhaust memory. It is well above the public
-	// RPKI table.
-	maxVRPs = 2_000_000
-	// maxPDU bounds one decoded PDU. Prefix PDUs are small; the bound only
-	// stops a bad length field from allocating arbitrarily.
-	maxPDU = 1 << 20
-)
+// maxPDU bounds one decoded PDU. Prefix PDUs are small; the bound only
+// stops a bad length field from allocating arbitrarily.
+const maxPDU = 1 << 20
 
 // RTR PDU types (RFC 8210 section 5).
 const (
@@ -60,20 +47,22 @@ const protocolVersion = 1
 
 const maxBackoff = time.Minute
 
+// writeTimeout bounds one PDU write; a variable so a test can shorten it.
+var writeTimeout = 10 * time.Second
+
 func init() { plugin.RPKIs.Register(TypeName, New) }
 
 // Config is the plugin's config block. address is one server; an ordered
-// rpki.sources list of rtr sources gives fallback.
+// rpki.sources list of rtr sources gives fallback. Plain TCP unless tls or
+// ssh is set.
 type Config struct {
 	// Address is the RTR server, host:port.
-	Address string `yaml:"address"`
-	// Refresh is how often a healthy session is polled (default 5m).
-	Refresh time.Duration `yaml:"refresh"`
-	// Staleness is how long a cache is served after the last fetch; older
-	// or missing data is unknown (default 1h).
-	Staleness time.Duration `yaml:"staleness"`
-	// Timeout bounds dial and one read wait (default 30s).
-	Timeout time.Duration `yaml:"timeout"`
+	Address     string `yaml:"address"`
+	rpki.Timing `yaml:",inline"`
+	// TLS turns on RTR over TLS.
+	TLS *TLSConfig `yaml:"tls"`
+	// SSH turns on RTR over SSH.
+	SSH *SSHConfig `yaml:"ssh"`
 }
 
 // Client is one RTR connection and its VRP cache.
@@ -82,6 +71,7 @@ type Client struct {
 
 	name  string
 	cfg   Config
+	tr    transport
 	cache *rpki.VRPs
 
 	mu      sync.Mutex
@@ -107,28 +97,14 @@ func New(c plugin.Config, env plugin.Env) (plugin.RPKI, error) {
 		return nil, err
 	}
 	cfg.Address = addr
-	if cfg.Refresh == 0 {
-		cfg.Refresh = DefaultRefresh
+	if err := cfg.Normalize(0); err != nil {
+		return nil, err
 	}
-	if cfg.Refresh < MinRefresh || cfg.Refresh > MaxRefresh {
-		return nil, fmt.Errorf("refresh %s must be between %s and %s", cfg.Refresh, MinRefresh, MaxRefresh)
+	tr, err := newTransport(cfg)
+	if err != nil {
+		return nil, err
 	}
-	if cfg.Staleness == 0 {
-		cfg.Staleness = DefaultStaleness
-		if cfg.Staleness < cfg.Refresh {
-			cfg.Staleness = cfg.Refresh
-		}
-	}
-	if cfg.Staleness < cfg.Refresh || cfg.Staleness > MaxRefresh {
-		return nil, fmt.Errorf("staleness %s must be between refresh (%s) and %s", cfg.Staleness, cfg.Refresh, MaxRefresh)
-	}
-	if cfg.Timeout == 0 {
-		cfg.Timeout = DefaultTimeout
-	}
-	if cfg.Timeout < MinTimeout || cfg.Timeout > MaxTimeout {
-		return nil, fmt.Errorf("timeout %s must be between %s and %s", cfg.Timeout, MinTimeout, MaxTimeout)
-	}
-	return &Client{name: env.Name, cfg: cfg, cache: rpki.NewVRPs()}, nil
+	return &Client{name: env.Name, cfg: cfg, tr: tr, cache: rpki.NewVRPs()}, nil
 }
 
 // parseAddress requires an explicit host:port, so a bare host cannot
@@ -176,7 +152,7 @@ func (c *Client) Stop(ctx context.Context) error {
 // unknown (fail open).
 func (c *Client) Validate(prefix netip.Prefix, origin uint32) plugin.RPKIValidity {
 	c.mu.Lock()
-	stale := c.updated.IsZero() || time.Since(c.updated) > c.cfg.Staleness
+	stale := c.cfg.Stale(c.updated, time.Now())
 	cache := c.cache
 	c.mu.Unlock()
 	if stale {
@@ -192,7 +168,7 @@ func (c *Client) Status() plugin.RPKIStatus {
 	return plugin.RPKIStatus{
 		Source:  c.name,
 		Up:      c.up,
-		Stale:   c.updated.IsZero() || time.Since(c.updated) > c.cfg.Staleness,
+		Stale:   c.cfg.Stale(c.updated, time.Now()),
 		VRPs:    c.cache.Len(),
 		Updated: c.updated,
 		Error:   c.lastErr,
@@ -225,16 +201,42 @@ func (c *Client) run(ctx context.Context) {
 	}
 }
 
+// chunk is one read from the connection.
+type chunk struct {
+	b   []byte
+	err error
+}
+
 // session dials the server and runs one connection until it fails.
 func (c *Client) session(ctx context.Context) error {
-	d := net.Dialer{Timeout: c.cfg.Timeout}
-	conn, err := d.DialContext(ctx, "tcp", c.cfg.Address)
+	conn, err := c.tr.dial(ctx)
 	if err != nil {
 		return err
 	}
 	defer conn.Close()
 	stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
 	defer stop()
+
+	// Reads run in their own goroutine and the loop times them, because an
+	// SSH channel has no read deadline. Closing conn ends the reader.
+	reads := make(chan chunk)
+	done := make(chan struct{})
+	defer close(done)
+	go func() {
+		tmp := make([]byte, 64<<10)
+		for {
+			n, err := conn.Read(tmp)
+			ch := chunk{b: append([]byte(nil), tmp[:n]...), err: err}
+			select {
+			case reads <- ch:
+			case <-done:
+				return
+			}
+			if err != nil {
+				return
+			}
+		}
+	}()
 
 	// resp is the response in flight, nil while idle. While it is set the
 	// read wait is the timeout, so a silent server is dropped and redialed
@@ -244,42 +246,19 @@ func (c *Client) session(ctx context.Context) error {
 		return err
 	}
 	var buf []byte
-	tmp := make([]byte, 64<<10)
+	timer := time.NewTimer(c.cfg.Timeout)
+	defer timer.Stop()
 	for {
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
 		wait := c.cfg.Refresh
 		if resp != nil {
 			wait = c.cfg.Timeout
 		}
-		_ = conn.SetReadDeadline(time.Now().Add(wait))
-		n, rerr := conn.Read(tmp)
-		if n > 0 {
-			buf = append(buf, tmp[:n]...)
-			var pdus [][]byte
-			pdus, buf, err = splitPDUs(buf)
-			if err != nil {
-				return err
-			}
-			for _, pdu := range pdus {
-				var reply []byte
-				resp, reply, err = c.handle(pdu, resp)
-				if err != nil {
-					return err
-				}
-				if reply != nil {
-					if err := writePDU(conn, reply); err != nil {
-						return err
-					}
-				}
-			}
-		}
-		if rerr == nil {
-			continue
-		}
-		var ne net.Error
-		if errors.As(rerr, &ne) && ne.Timeout() && ctx.Err() == nil {
+		// Go 1.23 timers: Reset discards a pending expiry, so no drain.
+		timer.Reset(wait)
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-timer.C:
 			if resp != nil {
 				return errors.New("rtr: timed out waiting for the server")
 			}
@@ -288,9 +267,34 @@ func (c *Client) session(ctx context.Context) error {
 			if err := writePDU(conn, q); err != nil {
 				return err
 			}
-			continue
+		case ch := <-reads:
+			if len(ch.b) > 0 {
+				buf = append(buf, ch.b...)
+				var pdus [][]byte
+				pdus, buf, err = splitPDUs(buf)
+				if err != nil {
+					return err
+				}
+				for _, pdu := range pdus {
+					var reply []byte
+					resp, reply, err = c.handle(pdu, resp)
+					if err != nil {
+						return err
+					}
+					if reply != nil {
+						if err := writePDU(conn, reply); err != nil {
+							return err
+						}
+					}
+				}
+			}
+			if ch.err != nil {
+				if ctx.Err() != nil {
+					return ctx.Err()
+				}
+				return ch.err
+			}
 		}
-		return rerr
 	}
 }
 
@@ -337,14 +341,14 @@ func (c *Client) handle(pdu []byte, resp *response) (*response, []byte, error) {
 		}
 		ch := rpki.Change{Prefix: prefix, MaxLen: maxLen, ASN: asn, Withdraw: !announce}
 		if resp.table != nil {
-			if announce && resp.table.Len() >= maxVRPs {
-				return resp, nil, fmt.Errorf("rtr: VRP cache exceeds %d payloads", maxVRPs)
+			if announce && resp.table.Len() >= rpki.MaxVRPs {
+				return resp, nil, fmt.Errorf("rtr: VRP cache exceeds %d payloads", rpki.MaxVRPs)
 			}
 			resp.table.Apply([]rpki.Change{ch})
 			return resp, nil, nil
 		}
-		if len(resp.delta) >= maxVRPs {
-			return resp, nil, fmt.Errorf("rtr: serial delta exceeds %d payloads", maxVRPs)
+		if len(resp.delta) >= rpki.MaxVRPs {
+			return resp, nil, fmt.Errorf("rtr: serial delta exceeds %d payloads", rpki.MaxVRPs)
 		}
 		resp.delta = append(resp.delta, ch)
 		if announce {
@@ -365,8 +369,8 @@ func (c *Client) handle(pdu []byte, resp *response) (*response, []byte, error) {
 			c.mu.Unlock()
 		} else {
 			live := c.liveCache()
-			if live.Len()+resp.adds > maxVRPs {
-				return resp, nil, fmt.Errorf("rtr: VRP cache exceeds %d payloads", maxVRPs)
+			if live.Len()+resp.adds > rpki.MaxVRPs {
+				return resp, nil, fmt.Errorf("rtr: VRP cache exceeds %d payloads", rpki.MaxVRPs)
 			}
 			live.Apply(resp.delta)
 		}
@@ -491,8 +495,10 @@ func serialQuery(sessionID uint16, serial uint32) []byte {
 	return b
 }
 
-func writePDU(conn net.Conn, pdu []byte) error {
-	_ = conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
+func writePDU(conn io.Writer, pdu []byte) error {
+	if d, ok := conn.(interface{ SetWriteDeadline(time.Time) error }); ok {
+		_ = d.SetWriteDeadline(time.Now().Add(writeTimeout))
+	}
 	_, err := conn.Write(pdu)
 	return err
 }

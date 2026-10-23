@@ -25,7 +25,7 @@ On a leak Packeteer, for that one prefix only:
 
 1. withdraws the outbound route (and the learned more-specifics announced with it), at once and without waiting for a decision round. An inbound steer is only held: it is removed at the next inbound sync, and the leak shows `action: held`;
 2. holds the prefix out of outbound improvements and inbound steers, so no later round announces it again;
-3. emits the `leak.detected` event (critical) and lists the prefix on `GET /api/leaks`.
+3. emits the `leak.detected` event (critical) and lists the prefix on `GET /api/leaks`. With the `rpki` block on, the entry and the event carry the RPKI validity of the leaked route's origin from `rpki.sources` (never the display fallback), so a leak that would be RPKI-invalid elsewhere is visible (#200). The label changes nothing that is withdrawn or held.
 
 It never withdraws anything in bulk. The hold lasts until an operator clears it with `POST /api/leaks/clear {"prefix": "..."}` (operator role, auth required) after fixing the filter, which emits `leak.cleared`. If the route is still visible outside, the next sighting holds it again. Holds are in memory: a restart clears them, and a route that is still leaking is held again at its next sighting.
 

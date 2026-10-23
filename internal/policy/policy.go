@@ -145,10 +145,11 @@ type Input struct {
 	// provider is never marked.
 	EgressDown map[string]bool
 	// RPKI maps a prefix and provider to the RFC 6811 origin-validation
-	// state of that provider's learned path (#158). It is shown on the
-	// decision's candidates and, when RPKIAvoidInvalid is set, refuses a
-	// new improvement onto an invalid path. A missing entry is unknown.
-	RPKI map[netip.Prefix]map[string]plugin.RPKIValidity
+	// state of that provider's learned path (#158) and the source that
+	// answered (#200). It is shown on the decision's candidates and, when
+	// RPKIAvoidInvalid is set, refuses a new improvement onto an invalid
+	// path. A missing entry is unknown.
+	RPKI map[netip.Prefix]map[string]plugin.RPKIAnswer
 	// Remote lists providers whose results a federation peer measured
 	// (#30). Their times follow that peer's probe schedule, so they do not
 	// show whether this instance's own probe round finished. Nil is none.
@@ -270,6 +271,10 @@ type Candidate struct {
 	// learned path for the prefix (#158). Display only unless
 	// Config.RPKIAvoidInvalid makes an invalid path unusable.
 	RPKI plugin.RPKIValidity `json:"rpki,omitempty"`
+	// RPKISource is the rpki.sources entry that answered and RPKIUpdated
+	// its data time (#200). Empty when no source had data.
+	RPKISource  string    `json:"rpki_source,omitempty"`
+	RPKIUpdated time.Time `json:"rpki_updated,omitzero"`
 }
 
 // Decision explains what happened to one prefix in one evaluation.

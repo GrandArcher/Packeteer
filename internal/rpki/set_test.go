@@ -96,3 +96,51 @@ func TestSetVersionChanges(t *testing.T) {
 		t.Fatal("nil set Version is not 0")
 	}
 }
+
+type fakeAnswerer struct {
+	answer plugin.RPKIAnswer
+	asked  int
+}
+
+func (f *fakeAnswerer) Answer(netip.Prefix, uint32) plugin.RPKIAnswer {
+	f.asked++
+	return f.answer
+}
+
+// #200: Lookup names the source that answered and its fetch time; with the
+// primary stale the second source answers. The display fallback is asked
+// only by LookupDisplay and only when no source has usable data, so it can
+// never reach a decision.
+func TestSetLookupAndDisplay(t *testing.T) {
+	prefix := netip.MustParsePrefix("198.51.100.0/24")
+	at := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	primary := &fakeSource{validity: plugin.RPKIInvalid, status: plugin.RPKIStatus{Source: "routinator", Up: true, VRPs: 4, Updated: at}}
+	backup := &fakeSource{validity: plugin.RPKIValid, status: plugin.RPKIStatus{Source: "backup", Up: true, VRPs: 4, Updated: at.Add(time.Minute)}}
+	display := &fakeAnswerer{answer: plugin.RPKIAnswer{State: plugin.RPKINotFound, Source: "ripestat", Updated: at.Add(time.Hour)}}
+	s := NewSet([]plugin.RPKI{primary, backup})
+	s.SetDisplay(display)
+	if got := s.Lookup(prefix, 64500); got != (plugin.RPKIAnswer{State: plugin.RPKIInvalid, Source: "routinator", Updated: at}) {
+		t.Fatalf("Lookup = %+v, want the primary's answer", got)
+	}
+	if got := s.LookupDisplay(prefix, 64500); got.Source != "routinator" || display.asked != 0 {
+		t.Fatalf("LookupDisplay = %+v asked %d, want the primary and no fallback", got, display.asked)
+	}
+	primary.status.Stale = true
+	if got := s.Lookup(prefix, 64500); got.State != plugin.RPKIValid || got.Source != "backup" || !got.Updated.Equal(at.Add(time.Minute)) {
+		t.Fatalf("Lookup = %+v, want the backup's answer", got)
+	}
+	backup.status.Stale = true
+	if got := s.Lookup(prefix, 64500); got != (plugin.RPKIAnswer{State: plugin.RPKIUnknown}) {
+		t.Fatalf("Lookup = %+v, want unknown with no fallback", got)
+	}
+	if display.asked != 0 {
+		t.Fatal("Lookup asked the display fallback")
+	}
+	if got := s.LookupDisplay(prefix, 64500); got != display.answer {
+		t.Fatalf("LookupDisplay = %+v, want the fallback's answer", got)
+	}
+	display.answer = plugin.RPKIAnswer{State: plugin.RPKIUnknown}
+	if got := s.LookupDisplay(prefix, 64500); got.State != plugin.RPKIUnknown || got.Source != "" {
+		t.Fatalf("LookupDisplay = %+v, want unknown", got)
+	}
+}

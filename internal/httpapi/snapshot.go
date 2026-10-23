@@ -44,8 +44,9 @@ type Input struct {
 	// inactive add-path and BMP paths. Assemble does not walk the RIB.
 	Paths map[netip.Prefix][]rib.Route
 	// RPKI, when set, labels each learned path with the origin-validation
-	// state of its origin AS (#158). Nil leaves the label empty.
-	RPKI func(netip.Prefix, uint32) plugin.RPKIValidity
+	// state of its origin AS (#158) and the source that answered (#200).
+	// Nil leaves the label empty.
+	RPKI func(netip.Prefix, uint32) plugin.RPKIAnswer
 
 	// Telemetry is interface usage. It is not a routing decision.
 	Telemetry []plugin.Usage
@@ -206,6 +207,11 @@ type LearnedPath struct {
 	// RPKI is the RFC 6811 origin-validation state of this path's origin
 	// AS (#158). Empty when RPKI is off. Display only.
 	RPKI string `json:"rpki,omitempty"`
+	// RPKISource is the source that answered, which on /api/prefixes may
+	// be the display fallback, and RPKIUpdated its data time (#200). Empty
+	// when no source had data.
+	RPKISource  string     `json:"rpki_source,omitempty"`
+	RPKIUpdated *time.Time `json:"rpki_updated,omitempty"`
 }
 
 // ASNNode is one origin ASN on the map of measured prefixes.
@@ -240,6 +246,10 @@ type Candidate struct {
 	// RPKI is the RFC 6811 origin-validation state of this provider's
 	// learned path for the prefix (#158). Empty when RPKI is off.
 	RPKI string `json:"rpki,omitempty"`
+	// RPKISource is the rpki.sources entry that answered and RPKIUpdated
+	// its data time (#200). Empty when no source had data.
+	RPKISource  string     `json:"rpki_source,omitempty"`
+	RPKIUpdated *time.Time `json:"rpki_updated,omitempty"`
 }
 
 // Decision is the latest evaluation of one prefix.
@@ -498,14 +508,16 @@ func candidatesFrom(in []policy.Candidate) []Candidate {
 	out := make([]Candidate, 0, len(in))
 	for _, c := range in {
 		out = append(out, Candidate{
-			Provider: c.Provider,
-			Score:    jsonFloat(c.Score),
-			LossPct:  jsonFloat(c.LossPct),
-			RTTAvgMs: millis(c.RTTAvg),
-			JitterMs: millis(c.Jitter),
-			Usable:   c.Usable,
-			Why:      c.Why,
-			RPKI:     string(c.RPKI),
+			Provider:    c.Provider,
+			Score:       jsonFloat(c.Score),
+			LossPct:     jsonFloat(c.LossPct),
+			RTTAvgMs:    millis(c.RTTAvg),
+			JitterMs:    millis(c.Jitter),
+			Usable:      c.Usable,
+			Why:         c.Why,
+			RPKI:        string(c.RPKI),
+			RPKISource:  c.RPKISource,
+			RPKIUpdated: ptrTime(c.RPKIUpdated),
 		})
 	}
 	return out
@@ -883,7 +895,7 @@ func lessPrefix(a, b string) int {
 	return pa.Bits() - pb.Bits()
 }
 
-func learnedPaths(best rib.Route, have bool, paths []rib.Route, rpki func(netip.Prefix, uint32) plugin.RPKIValidity) []LearnedPath {
+func learnedPaths(best rib.Route, have bool, paths []rib.Route, rpki func(netip.Prefix, uint32) plugin.RPKIAnswer) []LearnedPath {
 	if len(paths) == 0 {
 		return nil
 	}
@@ -900,7 +912,8 @@ func learnedPaths(best rib.Route, have bool, paths []rib.Route, rpki func(netip.
 			Via:      rt.Via,
 		}
 		if rpki != nil && len(rt.ASPath) > 0 {
-			lp.RPKI = string(rpki(rt.Prefix, rt.ASPath[len(rt.ASPath)-1]))
+			a := rpki(rt.Prefix, rt.ASPath[len(rt.ASPath)-1])
+			lp.RPKI, lp.RPKISource, lp.RPKIUpdated = string(a.State), a.Source, ptrTime(a.Updated)
 		}
 		if rt.NextHop.IsValid() {
 			lp.NextHop = rt.NextHop.String()
