@@ -61,7 +61,10 @@ type Config struct {
 	// Databases are the IRR databases to query, in priority order (IRRd
 	// !s, RIPE -s). Empty uses the server's default.
 	Databases []string `yaml:"databases"`
-	// Timeout bounds one lookup: dial, query, and answer.
+	// Timeout bounds one TCP connection: the dial, then the query and
+	// answer (so up to about 2x Timeout of wall time per connection). A
+	// ripe-dialect as-set expansion opens one connection per set, each with
+	// its own Timeout and rate slot.
 	Timeout time.Duration `yaml:"timeout"`
 	// RatePerMinute caps the connections opened to the server.
 	RatePerMinute int `yaml:"rate_per_minute"`
@@ -325,9 +328,10 @@ func (c *Client) ripeObjects(ctx context.Context, query string) ([]irr.Object, e
 	return parse(strings.NewReader(string(body)))
 }
 
-// open waits on the rate limit and dials. The timeout covers the whole
-// lookup, and ending ctx closes the connection so shutdown does not wait
-// on a slow server. done closes it.
+// open waits on the rate limit and dials. The timeout bounds the dial and
+// then, separately, the query and answer on this one connection; ending
+// ctx closes the connection so shutdown does not wait on a slow server.
+// done closes it.
 func (c *Client) open(ctx context.Context) (net.Conn, *bufio.Reader, func(), error) {
 	if err := c.limit.Wait(ctx); err != nil {
 		return nil, nil, nil, err

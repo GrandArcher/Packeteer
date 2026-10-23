@@ -1651,7 +1651,7 @@ Display-only last resort (#200). When no `rpki.sources` entry has fresh data, th
 
 ### IRR source `whois`
 
-Queries one whois server on TCP (port 43) per lookup: route/route6 objects for exactly the prefix, as-set members, and the aut-num `as-name`. Each lookup sends the prefix, as-set name, or AS number to that server. Connections wait on `rate_per_minute`; `timeout` covers one whole lookup. A server error, a refused database, or a timeout is a failed lookup (the source did not answer); nothing found is an answer.
+Queries one whois server on TCP (port 43) per lookup: route/route6 objects for exactly the prefix, as-set members, and the aut-num `as-name`. Each lookup sends the prefix, as-set name, or AS number to that server. Every connection waits on a `rate_per_minute` slot, and `timeout` bounds one TCP connection: the dial, then the query and answer, so one connection can take up to about twice `timeout` of wall time. With `dialect: irrd` a lookup is one connection. With `dialect: ripe` an as-set lookup opens one connection per set it expands (bounded, see below), each with its own `timeout` and rate slot. A server error, a refused database, or a timeout is a failed lookup (the source did not answer); nothing found is an answer.
 
 `dialect: irrd` uses the IRRd commands (`!!`, `!s`, `!r`, `!i<set>,1`, `!maut-num`), for any IRRd v4 instance, including an operator's own, and mirrors such as `rr.ntt.net`, which through `!s` serves RADB, RIPE, ARIN, APNIC, AFRINIC, LACNIC, NTTCOM, ALTDB, LEVEL3, and the other databases it lists for `!s-lc`. `dialect: ripe` uses RIPE database flags (`-r -s <databases> -x -T route,route6`, `-T as-set`, `-T aut-num`), for `whois.ripe.net`, `whois.apnic.net`, and `whois.afrinic.net`; as-sets are expanded set by set (at most 1,000 sets, 8 levels deep). `%ERROR:101` (no entries) is nothing found; any other `%ERROR` fails the lookup.
 
@@ -1660,7 +1660,7 @@ Queries one whois server on TCP (port 43) per lookup: route/route6 objects for e
 | `address` | none | Required. `host:port`, for example `rr.ntt.net:43`. |
 | `dialect` | `irrd` | `irrd` or `ripe`. |
 | `databases` | server default | IRR databases to query, in priority order (sent as `!s` or `-s`; upper-cased, at most 32). Objects are listed in this order, so the first database named is the one shown. List them explicitly: some mirrors include the `RPKI` pseudo-source by default, whose objects are skipped. |
-| `timeout` | `10s` | One lookup: dial, query, and answer. 1s-1m. |
+| `timeout` | `10s` | One TCP connection: the dial, then the query and answer (up to about twice this in wall time). Each connection of a `ripe` as-set expansion gets its own. 1s-1m. |
 | `rate_per_minute` | `60` | Connections opened per minute. 1-600. |
 
 The tests replay answers in the shape seen from rr.ntt.net (IRRd 4) and the RIPE database (`internal/plugins/irr/whois/testdata`) against in-process servers; no test queries a live IRR.
