@@ -23,6 +23,7 @@ else
 fi
 raw=${PACKETEER_RAW_BASE:-https://raw.githubusercontent.com/GrandArcher/Packeteer/$ref}
 url=http://127.0.0.1:8080
+admin=${PACKETEER_ADMIN_USER:-admin}
 
 die() {
 	echo "install: $*" >&2
@@ -59,6 +60,9 @@ set -- docker run -d --name packeteer --network host \
 if [ -n "${PACKETEER_ADMIN_PASSWORD:-}" ]; then
 	set -- "$@" -e PACKETEER_ADMIN_PASSWORD
 fi
+if [ -n "${PACKETEER_ADMIN_USER:-}" ]; then
+	set -- "$@" -e PACKETEER_ADMIN_USER
+fi
 "$@" "$image" >/dev/null || die "docker run failed."
 
 echo "install: waiting for Packeteer"
@@ -66,6 +70,18 @@ i=0
 until curl -fsS "$url/healthz" >/dev/null 2>&1; do
 	i=$((i + 1))
 	[ "$i" -le 60 ] || die "Packeteer did not answer on $url. See: docker logs packeteer"
+	sleep 1
+done
+
+# HTTP can answer /healthz before sqlite opens and the first admin is
+# bootstrapped (#328). Wait for that log line so a follow-on API call is not
+# 401 (onboarding lab and anyone scripting install.sh). Same race the CI
+# authup loop covers.
+echo "install: waiting for sign-in"
+i=0
+until docker logs packeteer 2>&1 | grep -qE 'auth: created admin from the environment|auth: first run: generated admin password|auth: admin already exists'; do
+	i=$((i + 1))
+	[ "$i" -le 60 ] || die "Packeteer answered but sign-in is not ready. See: docker logs packeteer"
 	sleep 1
 done
 
@@ -77,9 +93,9 @@ else
 fi
 echo "Open:     $url/settings.html#wizard"
 if [ -n "${PACKETEER_ADMIN_PASSWORD:-}" ]; then
-	echo "Sign in:  admin, with the password you set in PACKETEER_ADMIN_PASSWORD."
+	echo "Sign in:  $admin, with the password you set in PACKETEER_ADMIN_PASSWORD."
 else
-	echo "Sign in:  admin, with the generated password below (you choose a new one at first sign-in)."
+	echo "Sign in:  $admin, with the generated password below (you choose a new one at first sign-in)."
 	docker logs packeteer 2>&1 | grep 'generated admin password' || true
 fi
 echo "Next:     the wizard asks for your AS number, router, and providers; the preflight checks"
