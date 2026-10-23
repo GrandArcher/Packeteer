@@ -589,8 +589,9 @@ jobs:
           UI_SMOKE_ATTEMPTS=3 bash lab/ui-smoke.sh http://127.0.0.1:18092/providers.html \
             'menu: named yes | target yes | opens yes | search yes | escape closes yes' \
             'health: 3 rows | lab-a=up whole ; lab-b=down 100% loss whole ; lab-c-transit-long-name=down no answer whole' \
-            'pages 16: / collapsed yes | top yes' \
+            'pages 17: / collapsed yes | top yes' \
             '/events.html collapsed yes | top yes | fits yes' \
+            '/herd.html collapsed yes | top yes | fits yes' \
             '/improvements.html collapsed yes | top yes | fits yes' \
             '/prefixes.html collapsed yes | top yes | fits yes' \
             '/providers.html collapsed yes | top yes | fits yes' \

@@ -178,6 +178,9 @@ type Server struct {
 	// herd is opt-in measurement sharing (#260). Nil until SetHerd. It
 	// never announces and never feeds a decision.
 	herd atomic.Value
+	// outside is the herd dashboard's outside sources (#296). Nil until
+	// SetHerdOutside.
+	outside atomic.Value
 	// ixpSites is the multi-site fabric health view (#167). Nil until
 	// SetIXPSites. Read at request time. It never announces.
 	ixpSites atomic.Value

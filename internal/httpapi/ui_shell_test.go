@@ -87,6 +87,7 @@ func TestUIShell(t *testing.T) {
 		`href="/commit.html" data-page="commit">Commit &amp; Cost`,
 		`href="/policies.html" data-page="policies"`,
 		`href="/protection.html" data-page="protection"`,
+		`href="/herd.html" data-page="herd"`,
 		`href="/troubleshooting.html" data-page="troubleshooting"`,
 		`href="/events.html" data-page="events"`,
 		`href="/system.html" data-page="system"`,
@@ -114,6 +115,7 @@ func TestUIShell(t *testing.T) {
 		"search.html":          {`<body data-page="search">`, `id="search-results"`, `id="search-status"`, `id="search-recent"`, `src="/search.js"`, "only reads"},
 		"ixp-member.html":      {`<body data-page="ixp-member">`, `id="member-title"`, `id="member-links"`, `id="member-list"`, `id="member-connections"`, `id="member-fabric"`, `id="member-sessions"`, `id="member-history"`, `src="/ixp-member.js"`, "This page only reads"},
 		"ixp-sites.html":       {`<body data-page="ixp-sites">`, `id="sites-incidents"`, `id="sites-list"`, `id="sites-links"`, `id="sites-members"`, `src="/ixp-sites.js"`, "This page only reads"},
+		"herd.html":            {`<body data-page="herd">`, `id="herd-sharing"`, `id="herd-members"`, `id="herd-events"`, `id="herd-mesh"`, `id="herd-map"`, `id="herd-latency"`, `id="herd-paths"`, `id="herd-hits"`, `id="herd-outside"`, `src="/herd.js"`, "This page only reads"},
 		"system.html":          {`<body data-page="system">`, `id="system"`, `id="system-summary"`, `src="/system.js"`, "same data as JSON"},
 		"admin.html":           {`<body data-page="admin">`, `id="page-denied"`, `id="admin-body"`, `id="user-form"`, `id="uf-name"`, `id="uf-role"`, `id="uf-password" type="password"`, `id="users-off" class="empty" hidden`, `id="users-on" hidden`, `src="/admin.js"`},
 		"tokens.html":          {`<body data-page="tokens">`, `id="tokens-off" class="empty" hidden`, `id="tokens-on" hidden`, `id="token-secret" class="secret" role="alert" hidden`, `id="token-form"`, `id="tf-name"`, `id="tf-role"`, `id="tf-ttl"`, `src="/tokens.js"`},
@@ -218,8 +220,8 @@ func TestUINarrowLayout(t *testing.T) {
 		if bi < 0 || li < bi || first < li {
 			t.Errorf("%s: the Menu button must come before the link list that holds the first link", e.Name())
 		}
-		if strings.Count(body[strings.Index(body, list):strings.Index(body, "</nav>")], "<a ") != 16 {
-			t.Errorf("%s: the link list does not hold the 16 page links", e.Name())
+		if strings.Count(body[strings.Index(body, list):strings.Index(body, "</nav>")], "<a ") != 17 {
+			t.Errorf("%s: the link list does not hold the 17 page links", e.Name())
 		}
 	}
 	if pages == 0 {

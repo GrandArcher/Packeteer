@@ -793,3 +793,6 @@ plugin_dir: /etc/packeteer/plugins
 #   hub:                               # optional list of herd servers, docs/herd-hub.md
 #     url: https://hub.example.net/herd.json
 #     refresh: 6h
+#   outside:                           # optional dashboard extras, each off until chosen
+#     atlas: {enabled: true, measurements: [1001], probes: [6001]}
+#     links: true                      # needs no other block; ris needs leak_watch, rpki needs rpki

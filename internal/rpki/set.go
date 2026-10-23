@@ -2,6 +2,7 @@ package rpki
 
 import (
 	"net/netip"
+	"time"
 
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
 )
@@ -58,29 +59,44 @@ func (s *Set) Version() uint64 {
 	return h
 }
 
+// active is the first fresh, non-empty source. An empty cache has nothing
+// to apply: skipping it lets the next source answer, and a zero-VRP End of
+// Data must not hide one.
+func (s *Set) active() (plugin.RPKI, plugin.RPKIStatus, bool) {
+	if s == nil {
+		return nil, plugin.RPKIStatus{}, false
+	}
+	for _, src := range s.sources {
+		st := src.Status()
+		if !st.Stale && st.VRPs != 0 {
+			return src, st, true
+		}
+	}
+	return nil, plugin.RPKIStatus{}, false
+}
+
 // Lookup applies the first fresh, non-empty source and says which one
 // answered and its data time. Without one it returns
 // RPKIUnknown, which is the fail-open state: it never blocks a withdraw.
 // It never asks the display fallback.
 func (s *Set) Lookup(prefix netip.Prefix, origin uint32) plugin.RPKIAnswer {
-	if s == nil {
+	src, st, ok := s.active()
+	if !ok {
 		return plugin.RPKIAnswer{State: plugin.RPKIUnknown}
 	}
-	for _, src := range s.sources {
-		st := src.Status()
-		// An empty cache has nothing to apply. Skipping it lets the next
-		// source answer; a zero-VRP End of Data must not hide one.
-		if st.Stale || st.VRPs == 0 {
-			continue
-		}
-		return plugin.RPKIAnswer{State: src.Validate(prefix, origin), Source: st.Source, Updated: st.Updated}
-	}
-	return plugin.RPKIAnswer{State: plugin.RPKIUnknown}
+	return plugin.RPKIAnswer{State: src.Validate(prefix, origin), Source: st.Source, Updated: st.Updated}
 }
 
 // Validate is Lookup's state.
 func (s *Set) Validate(prefix netip.Prefix, origin uint32) plugin.RPKIValidity {
 	return s.Lookup(prefix, origin).State
+}
+
+// Updated is the data time of the source Validate uses. It is zero while
+// no source is fresh.
+func (s *Set) Updated() time.Time {
+	_, st, _ := s.active()
+	return st.Updated
 }
 
 // LookupDisplay is Lookup, then the display fallback when no source has

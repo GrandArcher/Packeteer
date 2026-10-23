@@ -38,6 +38,19 @@ Every limit is enforced by the node it protects (see `herd.limits` in [CONFIG.md
 - Every served `records` response is written to the audit log (`GET /api/audit`) as `herd.serve` with the puller's key id, the query, and the record count.
 - `herd.restarted` (see [EVENTS.md](EVENTS.md)) fires when a herd goroutine panics and restarts.
 
+## Dashboard
+
+`/herd.html` (#296) reads the same records and shows them in six views. It only reads: nothing on it feeds `Decide`, a scorer, a planner, or the announcer, and it announces and withdraws nothing. When herd is off the page says so. Every view keeps each vantage's own numbers; nothing is merged. A vantage is one member key, country, provider ASN, and method, so two nodes of one ASN are two vantages; [design/herd.md](design/herd.md) counts them as one per verified identity, which needs the identity proof that is not implemented.
+
+- **Members**: this node and each peer, with its sharing status, freshness, and last pull. `verified` is `no` for every member, because identity is a pinned key and RPKI identity proof is not implemented.
+- **World view** (`/api/herd/events`): targets where a member sees loss at or above a threshold now. "3 of 4 members" counts members, one per ASN, however many nodes or records they have; because nobody is RPKI-verified, the count is of pinned peers (`basis: pinned_key`), not of verified members as [design/herd.md](design/herd.md) plans. Origin-ASN targets and route targets are listed apart, and each event lists every vantage's row. It is not limited to routes in your RIB: the records come from what members shared.
+- **Mesh**: vantages against targets, each cell one vantage's latest round.
+- **Map**: vantages by the country each member declares, with the condition in words. No finer location exists.
+- **Monitors**: per-vantage latency over time for one target, the AS paths each vantage saw (only for members that share the `paths` class), and the per-vantage records.
+- **Search**: by prefix, origin ASN, provider ASN, or member, across your retention. A view reads at most 5000 rows, search lists at most 100 targets, and the page says when either was cut.
+
+Outside intelligence is a separate panel, opt-in per source under `herd.outside` ([CONFIG.md](CONFIG.md#herd)): public RIPE Atlas results and the status of your hosted probes (`atlas`), routes of your AS that RIPE RIS Live reported outside it through `leak_watch` (`ris`), the origin validation of a route from `rpki`, and the `linkouts` sites (RIPEstat, Cloudflare Radar, and the rest) for the chosen prefix or ASN (`links`). Each item names its source and age. Outside items are never counted as vantages and are not mixed into any herd view. Atlas is read with no API key, at most 4 measurements and 4 probes per refresh (15 minutes or longer), one request at a time, and its addresses are not shown. With all of them off the page shows herd data only. Not included: Atlas credits and your own measurements (#213), IRR checks (#214), and RouteViews or bgp.tools data beyond their link-outs.
+
 ## Lab
 
 `lab/e2e-herd.sh` runs three members (FRR edge plus Packeteer each) on documentation prefixes and ASNs with generated keys. See [lab/README.md](../lab/README.md). Labs never talk to a real herd and configure no hub.

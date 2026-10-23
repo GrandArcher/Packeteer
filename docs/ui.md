@@ -24,7 +24,7 @@ The remaining UI conveniences (#34). All of them work in the stock image with a 
 | Setup wizard (#106, flow step #130, keeps an existing config #345) | `/settings.html`, `POST /api/config/wizard` | admin | `http.config_editor: true` (or unset during first-run setup) + auth or basic auth |
 | Custom dashboards | `/dashboards.html`, `/api/dashboards` | every signed-in user, own dashboards | `storage: {type: sqlite}` + auth or basic auth |
 | Report subscriptions | `report_subscriptions`, `/api/subscriptions` | viewers see them, operators send now | `storage` + an `smtp` notifier |
-| Herd (#260) | no page; `GET /api/herd`, `/api/herd/vantages`, `/api/herd/preview` | viewer, admin for preview | `herd` ([herd.md](herd.md)) |
+| Herd (#260, page #296) | `/herd.html`, `GET /api/herd`, `/api/herd/{overview,events,mesh,monitor,map,search,vantages,outside}`, `/api/herd/preview` | viewer, admin for preview | `herd` ([herd.md](herd.md#dashboard)) |
 | Version check, upgrade, and rollback (#196) | `/settings.html`, `GET /api/upgrade`, `POST /api/upgrade/{check,apply,rollback}` | admin | `upgrade.enabled: true` + `upgrade.public_key` + auth or basic auth |
 | Improvement weights | `scorer.config.improvement_weights`, `/api/decisions` | - | `weighted`, `commit`, or `cost` scorer |
 

@@ -768,6 +768,11 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 	if hd != nil {
 		herdRef.Store(hd)
 		httpSrv.SetHerd(hd)
+		set, atlas := newHerdOutside(cfg, lw, rpkiSet, linkout.New(cfg.Linkouts), log)
+		httpSrv.SetHerdOutside(set)
+		if atlas != nil {
+			go atlas.Run(ctx)
+		}
 	}
 	if rec != nil {
 		// History is optional: a store that cannot be read leaves the core
