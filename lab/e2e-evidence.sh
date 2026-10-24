@@ -75,7 +75,7 @@ tmp=$(mktemp "$lab_dir/.cfg.XXXXXX")
 grep -v '^  require_evidence: true$' "$lab_dir/config.yaml" >"$tmp"
 cat "$tmp" >"$lab_dir/config.yaml"
 rm -f "$tmp"
-grep -q require_evidence "$lab_dir/config.yaml" && fail "config still has require_evidence"
+grep -q '^  require_evidence:' "$lab_dir/config.yaml" && fail "config still has require_evidence"
 cid=$("${compose[@]}" ps -q packeteer)
 [ -n "$cid" ] || fail "no packeteer container"
 docker kill -s HUP "$cid" >/dev/null
