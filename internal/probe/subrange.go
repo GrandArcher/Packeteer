@@ -6,7 +6,6 @@ import (
 	"net/netip"
 	"time"
 
-	"github.com/GrandArcher/Packeteer/internal/exchange"
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
 )
 
@@ -63,14 +62,15 @@ func cleanSubranges(prefix netip.Prefix, in []plugin.Subrange) []plugin.Subrange
 }
 
 // jobSubranges is the sub-range list for one provider: none for a pin,
-// and none whose host sits on a peering LAN. Fewer than two left is none.
-func jobSubranges(t plugin.Target, lans []netip.Prefix) []plugin.Subrange {
+// and none whose host avoid rules out (a peering LAN or probe.exclude).
+// Fewer than two left is none.
+func jobSubranges(t plugin.Target, avoid func(netip.Addr) bool) []plugin.Subrange {
 	if t.Pinned || len(t.Subranges) < 2 {
 		return nil
 	}
 	out := make([]plugin.Subrange, 0, len(t.Subranges))
 	for _, s := range t.Subranges {
-		if len(lans) > 0 && exchange.ContainsAddr(lans, s.Host) {
+		if avoid(s.Host) {
 			continue
 		}
 		out = append(out, s)

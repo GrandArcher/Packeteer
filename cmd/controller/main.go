@@ -478,7 +478,7 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 		anomAPI = anom.Status
 	}
 	pktLimiter := packetLimiter(cfg)
-	tools, terr := newTools(cfg, plugins, pktLimiter)
+	tools, terr := newTools(cfg, plugins, pktLimiter, func() *rib.View { return view })
 	if terr != nil {
 		log.Error("refusing to start", "err", terr)
 		return 1
@@ -703,7 +703,7 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 			rec.Probe(r)
 		}
 	}
-	engine, err = newEngine(cfg, plugins, log, onRound, onProbe, herdBatch(cfg, &herdRef), pktLimiter)
+	engine, err = newEngine(cfg, plugins, log, onRound, onProbe, herdBatch(cfg, &herdRef), pktLimiter, func() *rib.View { return view })
 	if err != nil {
 		log.Error("refusing to start", "err", err)
 		return 1
@@ -720,6 +720,7 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 	}
 	wirePrefixLookup(plugins, view)
 	wireExchangeLANs(cfg, plugins)
+	wireProbeExclusion(cfg, plugins, view)
 	wireLearnedRoutes(plugins, view)
 	wireOutage(plugins, engine, view, dispatch)
 	col.SetTelemetry(func() []plugin.Usage { return collectTelemetry(context.Background(), plugins) })

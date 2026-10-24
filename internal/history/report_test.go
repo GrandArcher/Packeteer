@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"net/netip"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -203,6 +204,34 @@ func TestProbesPerDay(t *testing.T) {
 	}
 	if len(rows) != 2 || rows[0] != want[0] || rows[1] != want[1] {
 		t.Fatalf("probes = %+v", rows)
+	}
+}
+
+func TestProbesByASNPerDay(t *testing.T) {
+	rows := build(t, ReportProbeASNs).Rows.([]ProbeASNRow)
+	want := []ProbeASNRow{
+		{Day: "2026-09-02", OriginASN: 64500, Prefixes: 1, Probes: 6},
+		{Day: "2026-09-02", OriginASN: 64501, Prefixes: 1, Probes: 4},
+		{Day: "2026-09-01", OriginASN: 64500, Prefixes: 1, Probes: 20, Failed: 2},
+	}
+	if !slices.Equal(rows, want) {
+		t.Fatalf("probe_asns = %+v, want %+v", rows, want)
+	}
+	only := build(t, ReportProbeASNs, func(q *Query) { q.ASN = 64501 }).Rows.([]ProbeASNRow)
+	if len(only) != 1 || only[0] != want[1] {
+		t.Fatalf("asn filter = %+v", only)
+	}
+	rep := build(t, ReportProbeASNs, func(q *Query) { q.Sort = "probes"; q.Order = OrderDesc; q.Limit = 1 })
+	cut := rep.Rows.([]ProbeASNRow)
+	if rep.Total != 3 || len(cut) != 1 || cut[0] != want[2] {
+		t.Fatalf("sorted and cut = %+v total %d", cut, rep.Total)
+	}
+	var buf bytes.Buffer
+	if err := build(t, ReportProbeASNs).CSV(&buf); err != nil {
+		t.Fatal(err)
+	}
+	if lines := strings.Split(strings.TrimSpace(buf.String()), "\n"); len(lines) != 4 || lines[0] != "day,origin_asn,prefixes,probes,failed" || lines[3] != "2026-09-01,64500,1,20,2" {
+		t.Fatalf("csv = %q", buf.String())
 	}
 }
 

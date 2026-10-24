@@ -692,6 +692,14 @@ type Probe struct {
 	Workers int `yaml:"workers"`
 	// RateLimitPPS caps the global probe packet rate (packets per second).
 	RateLimitPPS int `yaml:"rate_limit_pps"`
+	// PerASNPPS caps the probe packets per second toward one destination
+	// origin ASN, inside RateLimitPPS (#203). Zero is no per-ASN cap.
+	PerASNPPS int `yaml:"per_asn_pps"`
+	// Exclude lists destinations no target source may probe (#203): a
+	// prefix excludes every target equal to or inside it and every probe
+	// address inside it; an ASN excludes every destination whose longest
+	// learned covering route it originates.
+	Exclude ExcludeList `yaml:"exclude"`
 	// PerTargetConcurrency caps concurrent probe runs toward one host.
 	PerTargetConcurrency int `yaml:"per_target_concurrency"`
 	// RetryLossPct, when greater than zero, re-probes a path with

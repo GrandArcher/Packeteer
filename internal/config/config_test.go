@@ -473,6 +473,11 @@ func TestParseErrors(t *testing.T) {
 		{"negative pps", edit(t, validYAML, "packets: 10", "packets: 10\n  rate_limit_pps: -5"), "probe.rate_limit_pps -5"},
 		{"too high pps", edit(t, validYAML, "packets: 10", "packets: 10\n  rate_limit_pps: 200000"), "probe.rate_limit_pps 200000"},
 		{"bad per-target", edit(t, validYAML, "packets: 10", "packets: 10\n  per_target_concurrency: 65"), "probe.per_target_concurrency 65"},
+		{"negative per-asn pps", edit(t, validYAML, "packets: 10", "packets: 10\n  per_asn_pps: -1"), "probe.per_asn_pps -1 must be between 0 and probe.rate_limit_pps 100"},
+		{"per-asn pps over global", edit(t, validYAML, "packets: 10", "packets: 10\n  rate_limit_pps: 50\n  per_asn_pps: 51"), "probe.per_asn_pps 51 must be between 0 and probe.rate_limit_pps 50"},
+		{"exclude bad prefix", edit(t, validYAML, "packets: 10", "packets: 10\n  exclude:\n    prefixes: [nope]"), `probe.exclude.prefixes[0]: "nope" is not a prefix`},
+		{"exclude host bits", edit(t, validYAML, "packets: 10", "packets: 10\n  exclude:\n    prefixes: [203.0.113.5/24]"), `probe.exclude.prefixes[0]: "203.0.113.5/24" has host bits set`},
+		{"exclude zero asn", edit(t, validYAML, "packets: 10", "packets: 10\n  exclude:\n    asns: [64496, 0]"), "probe.exclude.asns[1]: 0 is not an ASN"},
 		{"bgp bad listen port", minimalYAML + "bgp: {listen_port: 70000}\n", "bgp.listen_port 70000"},
 		{"bgp bad listen address", minimalYAML + "bgp: {listen_addresses: [nope]}\n", `bgp.listen_addresses[0]: "nope"`},
 		{"bgp bad neighbor", minimalYAML + "bgp:\n  neighbors:\n    - address: router1\n", `bgp.neighbors[0]: address "router1"`},
@@ -900,5 +905,29 @@ func TestBGPNotEstablishedAfter(t *testing.T) {
 	}
 	if _, err := Parse([]byte(minimalYAML + "bgp:\n  not_established_after: -1s\n")); err == nil || !strings.Contains(err.Error(), "bgp.not_established_after") {
 		t.Fatalf("negative: err = %v", err)
+	}
+}
+
+func TestProbeExcludeAndPerASNCap(t *testing.T) {
+	cfg, err := Parse([]byte(edit(t, validYAML, "packets: 10", "packets: 10\n  per_asn_pps: 20\n  exclude:\n    prefixes: [203.0.113.0/24, \"2001:db8:1::/48\"]\n    asns: [64496]")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Probe.PerASNPPS != 20 {
+		t.Fatalf("per_asn_pps = %d", cfg.Probe.PerASNPPS)
+	}
+	got := cfg.Probe.Exclude.PrefixList()
+	if len(got) != 2 || got[0].String() != "203.0.113.0/24" || got[1].String() != "2001:db8:1::/48" {
+		t.Fatalf("exclude prefixes = %v", got)
+	}
+	if len(cfg.Probe.Exclude.ASNs) != 1 || cfg.Probe.Exclude.ASNs[0] != 64496 || cfg.Probe.Exclude.Empty() {
+		t.Fatalf("exclude asns = %v", cfg.Probe.Exclude.ASNs)
+	}
+	plain, err := Parse([]byte(validYAML))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plain.Probe.PerASNPPS != 0 || !plain.Probe.Exclude.Empty() {
+		t.Fatalf("defaults: per_asn_pps=%d exclude=%+v", plain.Probe.PerASNPPS, plain.Probe.Exclude)
 	}
 }

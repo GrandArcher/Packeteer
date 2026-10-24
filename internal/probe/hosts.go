@@ -2,8 +2,6 @@ package probe
 
 import (
 	"net/netip"
-
-	"github.com/GrandArcher/Packeteer/internal/exchange"
 )
 
 // maxProbeHosts caps how many addresses one provider probes for one
@@ -97,11 +95,11 @@ func ProbeHosts(prefix netip.Prefix, pin netip.Addr, candidates []netip.Addr, ga
 	return append(hosts, gateway)
 }
 
-// omitLANHosts removes addresses that sit on an exchange peering LAN.
-// gateway is kept: it is the provider's far-side next hop, probed on
-// purpose, not an IX service. An empty lans list returns hosts unchanged.
-func omitLANHosts(hosts []netip.Addr, gateway netip.Addr, lans []netip.Prefix) []netip.Addr {
-	if len(lans) == 0 || len(hosts) == 0 {
+// omitHosts removes addresses that avoid says not to probe: an exchange
+// peering LAN or probe.exclude. gateway is kept: it is the provider's
+// far-side next hop, probed on purpose, not a destination.
+func omitHosts(hosts []netip.Addr, gateway netip.Addr, avoid func(netip.Addr) bool) []netip.Addr {
+	if len(hosts) == 0 {
 		return hosts
 	}
 	var gw netip.Addr
@@ -110,7 +108,7 @@ func omitLANHosts(hosts []netip.Addr, gateway netip.Addr, lans []netip.Prefix) [
 	}
 	out := make([]netip.Addr, 0, len(hosts))
 	for _, h := range hosts {
-		if h.IsValid() && h.Unmap() != gw && exchange.ContainsAddr(lans, h) {
+		if h.IsValid() && h.Unmap() != gw && avoid(h) {
 			continue
 		}
 		out = append(out, h)

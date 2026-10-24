@@ -57,6 +57,9 @@ func providerSeed(now time.Time) []plugin.ProviderSample {
 //	198.51.100.0/24 performance: 8% loss, 120 ms -> 0%, 40 ms (50% better)
 //	203.0.113.0/24  performance: 0% loss, 100 ms -> 0%, 80 ms (20% better)
 //	192.0.2.0/24    cost: 50 ms -> 49 ms (in "all" only)
+//
+// The first two are originated by AS64496 and the third by AS64497, so the
+// probes-by-ASN report (#203) has two rows a day: 400 and 200 probes.
 func seed(now time.Time) plugin.HistoryBatch {
 	today := now.UTC().Truncate(24 * time.Hour)
 	pa := netip.MustParsePrefix("198.51.100.0/24")
@@ -75,6 +78,11 @@ func seed(now time.Time) plugin.HistoryBatch {
 		bucket(day, pb, "lab-b", 0, 80)
 		bucket(day, pc, "lab-a", 0, 50)
 		bucket(day, pc, "lab-b", 0, 49)
+	}
+	b.Prefixes = []plugin.PrefixInfo{
+		{Prefix: pa, OriginASN: 64496, Updated: now},
+		{Prefix: pb, OriginASN: 64496, Updated: now},
+		{Prefix: pc, OriginASN: 64497, Updated: now},
 	}
 	start := today.Add(-(days - 1) * 24 * time.Hour)
 	end := today.Add(12 * time.Hour)

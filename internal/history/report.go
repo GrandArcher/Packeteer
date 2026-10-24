@@ -28,6 +28,7 @@ const (
 	ReportASNs         = "asns"
 	ReportCountries    = "countries"
 	ReportProbes       = "probes"
+	ReportProbeASNs    = "probe_asns"
 	ReportSavings      = "savings"
 	ReportMitigations  = "mitigations"
 	ReportAnomalies    = "anomalies"
@@ -148,6 +149,8 @@ func Build(h plugin.History, q Query) (Report, error) {
 		a.groups(&rep, "country")
 	case ReportProbes:
 		a.probes(&rep)
+	case ReportProbeASNs:
+		a.probeASNs(&rep)
 	case ReportSavings:
 		a.savings(&rep)
 	case ReportExchanges:
@@ -815,6 +818,62 @@ func (a *agg) probes(rep *Report) {
 	rep.Rows = rows
 	for _, r := range rows {
 		rep.lines = append(rep.lines, []string{r.Day, strconv.Itoa(r.Probes), strconv.Itoa(r.Failed), strconv.Itoa(r.Prefixes), f(r.AvgLossPct), f(r.AvgRTTMs)})
+	}
+}
+
+// ProbeASNRow is probe volume toward one origin ASN on one UTC day (#203).
+type ProbeASNRow struct {
+	Day       string `json:"day"`
+	OriginASN uint32 `json:"origin_asn"`
+	Prefixes  int    `json:"prefixes"`
+	Probes    int    `json:"probes"`
+	Failed    int    `json:"failed"`
+}
+
+// probeASNs counts probes per destination origin ASN per day. A prefix
+// with no learned origin is left out, as in the asns report; the probes
+// report has the totals. Newest day first, then the most probed ASN.
+func (a *agg) probeASNs(rep *Report) {
+	type dayASN struct {
+		day string
+		asn uint32
+	}
+	type acc struct {
+		probes, failed int
+		prefixes       map[netip.Prefix]bool
+	}
+	m := map[dayASN]*acc{}
+	for _, b := range a.buckets {
+		asn := a.info[b.Prefix].OriginASN
+		if asn == 0 {
+			continue
+		}
+		k := dayASN{b.Day.UTC().Format(time.DateOnly), asn}
+		x := m[k]
+		if x == nil {
+			x = &acc{prefixes: map[netip.Prefix]bool{}}
+			m[k] = x
+		}
+		x.probes += b.Probes
+		x.failed += b.Failed
+		x.prefixes[b.Prefix] = true
+	}
+	rows := make([]ProbeASNRow, 0, len(m))
+	for k, x := range m {
+		rows = append(rows, ProbeASNRow{Day: k.day, OriginASN: k.asn, Prefixes: len(x.prefixes), Probes: x.probes, Failed: x.failed})
+	}
+	slices.SortFunc(rows, func(x, y ProbeASNRow) int {
+		if c := cmp.Compare(y.Day, x.Day); c != 0 {
+			return c
+		}
+		if c := cmp.Compare(y.Probes, x.Probes); c != 0 {
+			return c
+		}
+		return cmp.Compare(x.OriginASN, y.OriginASN)
+	})
+	rep.Rows = rows
+	for _, r := range rows {
+		rep.lines = append(rep.lines, []string{r.Day, strconv.FormatUint(uint64(r.OriginASN), 10), strconv.Itoa(r.Prefixes), strconv.Itoa(r.Probes), strconv.Itoa(r.Failed)})
 	}
 }
 

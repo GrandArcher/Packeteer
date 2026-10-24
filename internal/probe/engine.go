@@ -119,6 +119,16 @@ type Options struct {
 	// all silent from each provider's source and scores that provider at
 	// its own highest stable hop (#123). Nil disables it.
 	Indirect *Indirect
+	// Exclude is probe.exclude (#203). Nil or empty leaves every target
+	// alone. An excluded prefix, address, or origin ASN gets no packet
+	// from any source, retained improvement, or manual queue entry.
+	Exclude *Exclusion
+	// PerASNPPS caps packets per second toward one destination origin ASN
+	// (#203), waited on before Limiter. Zero is off. It needs Origin.
+	PerASNPPS int
+	// Origin is the origin ASN of the longest learned route covering a
+	// prefix (a host is its own /32 or /128), or 0 when none is known.
+	Origin func(netip.Prefix) uint32
 	// OnBatch, when set, receives the results a round stored, with Share
 	// filled, after OnResult. It must not block (herd hands off to a
 	// bounded queue). Results stored in the engine never carry Share.
@@ -213,6 +223,8 @@ type Engine struct {
 	probers   []NamedProber
 	sources   []NamedSource
 	opt       Options
+	// asnLim is the probe.per_asn_pps bucket set; nil when it is off.
+	asnLim *asnLimits
 	// sched overrides interval, timeout, packets, and loss-retry timing
 	// after a reload (#128). Nil keeps Options, which tests mutate directly.
 	sched atomic.Pointer[Timing]
@@ -376,6 +388,15 @@ func New(providers []Provider, probers []NamedProber, sources []NamedSource, opt
 	if err := validIndirect(opt.Indirect); err != nil {
 		return nil, err
 	}
+	if opt.PerASNPPS < 0 {
+		return nil, errors.New("probe: per-ASN packet rate must not be negative")
+	}
+	if opt.PerASNPPS > 0 && opt.Origin == nil {
+		return nil, errors.New("probe: per-ASN packet rate needs an origin lookup")
+	}
+	if opt.Exclude != nil && len(opt.Exclude.ASNs) > 0 && opt.Exclude.Origin == nil {
+		return nil, errors.New("probe: excluded ASNs need an origin lookup")
+	}
 	if opt.Workers < 1 {
 		opt.Workers = 1
 	}
@@ -396,6 +417,9 @@ func New(providers []Provider, probers []NamedProber, sources []NamedSource, opt
 		srcDown: map[string]string{}, pathDown: map[string]string{},
 		wake: make(chan struct{}, 1), indCache: map[key]indirectHop{}, indQueued: map[key]indirectReq{},
 		indWake: make(chan struct{}, 1)}
+	if opt.PerASNPPS > 0 {
+		e.asnLim = newASNLimits(opt.PerASNPPS, max(opt.Packets, opt.RetryPackets), opt.Origin)
+	}
 	now := opt.Now()
 	for _, p := range providers {
 		e.status[p.Name] = ProviderStatus{Name: p.Name, Source: p.Source, Up: true, Since: now}
@@ -781,8 +805,31 @@ func (e *Engine) gatherTargets(ctx context.Context) ([]plugin.Target, bool) {
 		e.applyUrgent(&out)
 		e.applyManual(&out)
 		e.dropExchangeLANs(&out)
+		e.dropExcluded(&out)
 	}
 	return out, incomplete
+}
+
+// dropExcluded removes probe.exclude targets (#203) after keepImproved,
+// applyUrgent, and applyManual, so neither a retained improvement nor the
+// operator's queue can bring one back.
+func (e *Engine) dropExcluded(out *[]plugin.Target) {
+	x := e.opt.Exclude
+	if out == nil || x.Empty() || len(*out) == 0 {
+		return
+	}
+	next, dropped := exchange.DropNormalized(*out, x.Prefix, x.Addr)
+	if dropped == 0 {
+		return
+	}
+	e.log.Debug("dropped probe targets listed in probe.exclude", "dropped", dropped, "kept", len(next))
+	*out = next
+}
+
+// avoidAddr reports whether a probe address sits on an exchange peering
+// LAN (#145) or in probe.exclude (#203).
+func (e *Engine) avoidAddr(a netip.Addr) bool {
+	return exchange.ContainsAddr(e.opt.ExchangeLANs, a) || e.opt.Exclude.Addr(a)
 }
 
 // dropExchangeLANs removes prefixes and pinned hosts that sit on a peering
@@ -1129,11 +1176,11 @@ func (e *Engine) runRound(ctx context.Context, allow func(plugin.Target) bool, m
 				continue // provider cannot reach this address family
 			}
 			pin, candidates := targetProbeAddrs(t)
-			hosts := omitLANHosts(ProbeHosts(t.Prefix, pin, candidates, p.NextHop, p.Source), p.NextHop, e.opt.ExchangeLANs)
+			hosts := omitHosts(ProbeHosts(t.Prefix, pin, candidates, p.NextHop, p.Source), p.NextHop, e.avoidAddr)
 			if len(hosts) == 0 {
 				continue
 			}
-			jobs = append(jobs, job{provider: p, target: t, hosts: hosts, subs: jobSubranges(t, e.opt.ExchangeLANs)})
+			jobs = append(jobs, job{provider: p, target: t, hosts: hosts, subs: jobSubranges(t, e.avoidAddr)})
 		}
 	}
 	// Targets exist but none are due. Keep stored results and let the
@@ -1759,6 +1806,12 @@ func (e *Engine) probeOne(ctx context.Context, p Provider, prefix netip.Prefix, 
 		res.Err, res.Time = "no packets", e.opt.Now()
 		return res, false
 	}
+	// The target list already left these out; this catches an indirect
+	// hop and an origin the RIB changed since the round began (#203).
+	if e.opt.Exclude.Addr(host) {
+		res.Err, res.Time = "excluded by probe.exclude", e.opt.Now()
+		return res, false
+	}
 	sem := e.sem(host)
 	select {
 	case sem <- struct{}{}:
@@ -1780,6 +1833,10 @@ func (e *Engine) runChain(ctx context.Context, res Result, p Provider, count, st
 	var fallback *Result
 	for i := start; i < len(e.probers); i++ {
 		pr := e.probers[i]
+		if err := e.asnLim.wait(ctx, host, count); err != nil {
+			errs = append(errs, fmt.Errorf("rate limit: %w", err))
+			break
+		}
 		if e.opt.Limiter != nil {
 			if err := e.opt.Limiter.WaitN(ctx, count); err != nil {
 				errs = append(errs, fmt.Errorf("rate limit: %w", err))

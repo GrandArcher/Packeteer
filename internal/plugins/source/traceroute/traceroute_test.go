@@ -449,3 +449,45 @@ func TestConfigErrors(t *testing.T) {
 		}
 	}
 }
+
+// probe.exclude (#203): a target whose prefix or configured host is
+// excluded is not traced, and an excluded hop is not adopted.
+func TestDiscoverSkipsExcluded(t *testing.T) {
+	s := must(t, `
+timeout: 1ms
+probes: 3
+min_replies: 2
+max_hops: 8
+interval: 1s
+targets:
+  - {prefix: 198.51.100.0/24, host: 198.51.100.1}
+  - {prefix: 203.0.113.128/25, host: 203.0.113.130}
+  - {prefix: 192.0.2.0/24, host: 192.0.2.7}
+`)
+	excluded := netip.MustParsePrefix("203.0.113.0/24")
+	badHop := netip.MustParseAddr("192.0.2.200")
+	s.SetExcluded(func(p netip.Prefix, host netip.Addr) bool {
+		return p.IsValid() && excluded.Contains(p.Addr()) || host == badHop || host == netip.MustParseAddr("192.0.2.7")
+	})
+	s.now = func() time.Time { return time.Unix(1000, 0) }
+	fake := &perTTL{hops: map[int][]hopReply{2: replies("192.0.2.200", "192.0.2.200", "192.0.2.200")}}
+	s.hop = fake
+	before := exchange.LANDrops()
+	s.discover(context.Background())
+	ts, err := s.Targets(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The excluded hop is not adopted, so the customer prefix falls back to
+	// its configured host. The excluded prefix and the excluded host are
+	// not traced at all, and they are not LAN drops.
+	if len(ts) != 1 || ts[0].Prefix.String() != "198.51.100.0/24" || ts[0].Host.String() != "198.51.100.1" {
+		t.Fatalf("targets = %+v", ts)
+	}
+	if fake.calls.Load() == 0 {
+		t.Fatal("customer prefix was not traced")
+	}
+	if got := exchange.LANDrops() - before; got != 0 {
+		t.Fatalf("LAN drops = %d, want 0", got)
+	}
+}

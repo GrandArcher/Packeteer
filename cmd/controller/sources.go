@@ -425,6 +425,31 @@ func wireExchangeLANs(cfg *config.Config, plugins *pluginhost.Set) {
 	}
 }
 
+// probeExcludeSetter is implemented by target sources that send packets of
+// their own and must honor probe.exclude (#203).
+type probeExcludeSetter interface {
+	SetExcluded(func(prefix netip.Prefix, host netip.Addr) bool)
+}
+
+// wireProbeExclusion hands probe.exclude to the sources that trace on their
+// own, before they start. The probe engine filters every source's targets
+// itself; this keeps the discovery packets off excluded destinations too.
+func wireProbeExclusion(cfg *config.Config, plugins *pluginhost.Set, view *rib.View) {
+	if cfg == nil || plugins == nil {
+		return
+	}
+	x := probeExclusion(cfg, func() *rib.View { return view })
+	if x == nil {
+		return
+	}
+	fn := func(p netip.Prefix, host netip.Addr) bool { return x.Prefix(p) || x.Addr(host) }
+	for _, src := range plugins.SourcesSnapshot() {
+		if s, ok := src.Plugin.(probeExcludeSetter); ok {
+			s.SetExcluded(fn)
+		}
+	}
+}
+
 func exchangeLANPrefixes(cfg *config.Config) []netip.Prefix {
 	if cfg == nil {
 		return nil
