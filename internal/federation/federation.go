@@ -136,7 +136,7 @@ func Merge(in *policy.Input, cfg Config, peers []plugin.PeerState) {
 					Time: p.Time,
 				}
 				// A peer shares one RTT per path, not its prober type, so
-				// its sample is never evidence beyond ICMP.
+				// its sample alone is not evidence beyond ICMP.
 				r.Confidence = probe.RateConfidence(r, ProberName, 0)
 				added = append(added, r)
 			}
