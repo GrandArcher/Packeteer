@@ -62,7 +62,11 @@ type Config struct {
 	// learned path for the prefix is RPKI-invalid (#158). It is off by
 	// default and never changes the learned RIB.
 	RPKIAvoidInvalid bool
-	Allowlist        []netip.Prefix // inject mode: only these (or more-specifics of them)
+	// IRRPreferRegistered refuses a new improvement onto a provider whose
+	// learned path for the prefix is not registered in the IRR (#214). It
+	// is off by default; unknown never blocks.
+	IRRPreferRegistered bool
+	Allowlist           []netip.Prefix // inject mode: only these (or more-specifics of them)
 	// Providers carries group, precedence, and cc_disable. Empty means
 	// commit control has no provider policy (the weighted scorer ignores it).
 	Providers []ProviderPolicy
@@ -150,6 +154,11 @@ type Input struct {
 	// RPKIAvoidInvalid is set, refuses a new improvement onto an invalid
 	// path. A missing entry is unknown.
 	RPKI map[netip.Prefix]map[string]plugin.RPKIAnswer
+	// IRR maps a prefix and provider to the IRR state of that provider's
+	// learned path (#214). It is shown on the decision's candidates and,
+	// when IRRPreferRegistered is set, refuses a new improvement onto a
+	// path that is not registered. A missing entry is unknown.
+	IRR map[netip.Prefix]map[string]plugin.IRRAnswer
 	// Remote lists providers whose results a federation peer measured
 	// (#30). Their times follow that peer's probe schedule, so they do not
 	// show whether this instance's own probe round finished. Nil is none.
@@ -275,6 +284,13 @@ type Candidate struct {
 	// its data time (#200). Empty when no source had data.
 	RPKISource  string    `json:"rpki_source,omitempty"`
 	RPKIUpdated time.Time `json:"rpki_updated,omitzero"`
+	// IRR is whether this provider's learned path's origin is registered
+	// in the IRR for the prefix (#214), IRRSource the irr.sources entry
+	// that answered, and IRRUpdated its data time. Display only unless
+	// Config.IRRPreferRegistered makes a not registered path unusable.
+	IRR        plugin.IRRState `json:"irr,omitempty"`
+	IRRSource  string          `json:"irr_source,omitempty"`
+	IRRUpdated time.Time       `json:"irr_updated,omitzero"`
 }
 
 // Decision explains what happened to one prefix in one evaluation.

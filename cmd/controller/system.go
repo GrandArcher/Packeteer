@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/GrandArcher/Packeteer/internal/httpapi"
+	"github.com/GrandArcher/Packeteer/internal/irr"
 	"github.com/GrandArcher/Packeteer/internal/pluginhost"
 	"github.com/GrandArcher/Packeteer/internal/probe"
 	"github.com/GrandArcher/Packeteer/internal/syshealth"
@@ -42,7 +43,7 @@ func storageOutcome(health *syshealth.Tracker) *syshealth.Outcome {
 // GET /api/system. The engine is created after the HTTP server, so it is
 // read through an atomic pointer. Only state is read: the Snapshot of a
 // telemetry plugin is the call the dashboard already makes.
-func systemFacts(plugins *pluginhost.Set, engine *atomic.Pointer[probe.Engine], health *syshealth.Tracker) func() httpapi.SystemFacts {
+func systemFacts(plugins *pluginhost.Set, engine *atomic.Pointer[probe.Engine], health *syshealth.Tracker, registry *irr.Checker) func() httpapi.SystemFacts {
 	return func() httpapi.SystemFacts {
 		var f httpapi.SystemFacts
 		if plugins == nil {
@@ -90,6 +91,12 @@ func systemFacts(plugins *pluginhost.Set, engine *atomic.Pointer[probe.Engine], 
 			f.RPKI = append(f.RPKI, httpapi.RPKIFact{
 				PluginFact: httpapi.PluginFact{Name: r.Name, Type: r.Type},
 				Up:         st.Up, Stale: st.Stale, VRPs: st.VRPs, Updated: st.Updated, Err: st.Error,
+			})
+		}
+		for _, st := range registry.Statuses() {
+			f.IRR = append(f.IRR, httpapi.IRRFact{
+				PluginFact: httpapi.PluginFact{Name: st.Source, Type: st.Type},
+				Up:         st.Up, Updated: st.Updated, Err: st.Error,
 			})
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)

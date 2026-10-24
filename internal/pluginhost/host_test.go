@@ -507,6 +507,39 @@ func TestRPKISourcesBuiltOnlyWhenEnabled(t *testing.T) {
 	}
 }
 
+// #214: irr.sources are built in order only when irr is enabled, and
+// started and stopped with the set.
+func TestIRRSourcesBuiltOnlyWhenEnabled(t *testing.T) {
+	set, err := Build(load(t, "irr:\n  enabled: true\n  sources:\n    - type: file\n      config: {path: /etc/packeteer/irr.db}\n    - type: whois\n      name: radb\n      config: {address: \"whois.example.net:43\", databases: [radb, ripe]}\n"), Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(set.IRRSources) != 2 || set.IRRSources[0].Type != "file" || set.IRRSources[1].Name != "radb" {
+		t.Fatalf("irr sources %+v", set.IRRSources)
+	}
+	started := 0
+	for _, lc := range set.all() {
+		if lc.kind == plugin.KindIRR {
+			started++
+		}
+	}
+	if started != 2 {
+		t.Fatalf("%d irr sources in the lifecycle, want 2", started)
+	}
+	set, err = Build(load(t, "irr:\n  enabled: false\n"), Options{})
+	if err != nil || len(set.IRRSources) != 0 {
+		t.Fatalf("a disabled irr built sources: %v %+v", err, set)
+	}
+	_, err = Build(load(t, "irr:\n  enabled: true\n  sources:\n    - type: whois\n      config: {address: whois.example.net, databases: [radb]}\n"), Options{})
+	if err == nil || !strings.Contains(err.Error(), `irr.sources[0] (whois): address "whois.example.net" must be host:port`) {
+		t.Fatalf("err %v", err)
+	}
+	_, err = Build(load(t, "irr:\n  enabled: true\n  sources: [{type: nope}]\n"), Options{})
+	if err == nil || !strings.Contains(err.Error(), `irr.sources[0] (nope): unknown irr type "nope" (available: file, whois)`) {
+		t.Fatalf("err %v", err)
+	}
+}
+
 func TestLookupIsNotARIBSource(t *testing.T) {
 	cfg := load(t, `
 lookup:

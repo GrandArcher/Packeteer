@@ -170,7 +170,7 @@ Open `/prefix/<prefix>` and read the Why? panel, or call `GET /api/decisions/<pr
 - `confirm_rounds`: `thresholds.confirm_rounds` is greater than 1 and the streak is still short. A stale round does not count. A round that cannot compare keeps the streak and does not ask for an early probe. Early probes wait a quarter of the probe interval.
 - `hold_time`: an improvement is inside `hold_time`, the prefix is in the cooldown after a flip-back, or it is in a flap quarantine.
 - `cap`: `max_improvements` is full.
-- `policy`: a routing policy (`rules`, `maintenance`, commit control) leaves the prefix on native routing or excludes the provider.
+- `policy`: a `rules` policy leaves the prefix on native routing or pins it to a provider, or the better provider is excluded by a provider `exclude` or an open `maintenance` window. Commit and cost steers do not fail this check.
 - `allowlist`: in inject, the prefix is not covered by `allowlist.prefixes`.
 - `route_check`, `rpki`: the better provider has no path for the exact prefix, or its path is RPKI invalid with `rpki.avoid_invalid` on.
 

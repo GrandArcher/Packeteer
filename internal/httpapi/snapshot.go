@@ -47,6 +47,10 @@ type Input struct {
 	// state of its origin AS (#158) and the source that answered (#200).
 	// Nil leaves the label empty.
 	RPKI func(netip.Prefix, uint32) plugin.RPKIAnswer
+	// IRR, when set, labels each learned path with the IRR registration of
+	// its origin AS for the prefix and the provider's as-set (#214). Nil
+	// leaves the label empty.
+	IRR func(netip.Prefix, uint32, string) plugin.IRRAnswer
 
 	// Telemetry is interface usage. It is not a routing decision.
 	Telemetry []plugin.Usage
@@ -212,6 +216,20 @@ type LearnedPath struct {
 	// when no source had data.
 	RPKISource  string     `json:"rpki_source,omitempty"`
 	RPKIUpdated *time.Time `json:"rpki_updated,omitempty"`
+	// IRR is registered, not_registered, or unknown for this path's origin
+	// AS and exactly this prefix (#214), with the irr.sources entry that
+	// answered, the IRR database of the matching object, its data time,
+	// every origin registered for the prefix, the provider's as-set and
+	// whether the origin is in it, and the origin's aut-num as-name.
+	// Empty when IRR is off. Display only.
+	IRR           string     `json:"irr,omitempty"`
+	IRRSource     string     `json:"irr_source,omitempty"`
+	IRRDatabase   string     `json:"irr_database,omitempty"`
+	IRRUpdated    *time.Time `json:"irr_updated,omitempty"`
+	IRROrigins    []uint32   `json:"irr_origins,omitempty"`
+	IRRASSet      string     `json:"irr_as_set,omitempty"`
+	IRRASSetState string     `json:"irr_as_set_state,omitempty"`
+	IRROriginName string     `json:"irr_origin_as_name,omitempty"`
 }
 
 // ASNNode is one origin ASN on the map of measured prefixes.
@@ -250,6 +268,12 @@ type Candidate struct {
 	// its data time (#200). Empty when no source had data.
 	RPKISource  string     `json:"rpki_source,omitempty"`
 	RPKIUpdated *time.Time `json:"rpki_updated,omitempty"`
+	// IRR is the IRR state of this provider's learned path (#214), with the
+	// irr.sources entry that answered and its data time. Empty when IRR is
+	// off.
+	IRR        string     `json:"irr,omitempty"`
+	IRRSource  string     `json:"irr_source,omitempty"`
+	IRRUpdated *time.Time `json:"irr_updated,omitempty"`
 }
 
 // Decision is the latest evaluation of one prefix.
@@ -518,6 +542,9 @@ func candidatesFrom(in []policy.Candidate) []Candidate {
 			RPKI:        string(c.RPKI),
 			RPKISource:  c.RPKISource,
 			RPKIUpdated: ptrTime(c.RPKIUpdated),
+			IRR:         string(c.IRR),
+			IRRSource:   c.IRRSource,
+			IRRUpdated:  ptrTime(c.IRRUpdated),
 		})
 	}
 	return out
@@ -783,7 +810,7 @@ func assemblePrefixes(in Input) []Prefix {
 				best, have = rt, true
 			}
 		}
-		row.Paths = learnedPaths(best, have, paths, in.RPKI)
+		row.Paths = learnedPaths(best, have, paths, in.RPKI, in.IRR)
 	}
 	sort.Slice(order, func(i, j int) bool { return lessPrefix(order[i], order[j]) < 0 })
 	out := make([]Prefix, 0, len(order))
@@ -895,7 +922,7 @@ func lessPrefix(a, b string) int {
 	return pa.Bits() - pb.Bits()
 }
 
-func learnedPaths(best rib.Route, have bool, paths []rib.Route, rpki func(netip.Prefix, uint32) plugin.RPKIAnswer) []LearnedPath {
+func learnedPaths(best rib.Route, have bool, paths []rib.Route, rpki func(netip.Prefix, uint32) plugin.RPKIAnswer, registry func(netip.Prefix, uint32, string) plugin.IRRAnswer) []LearnedPath {
 	if len(paths) == 0 {
 		return nil
 	}
@@ -914,6 +941,11 @@ func learnedPaths(best rib.Route, have bool, paths []rib.Route, rpki func(netip.
 		if rpki != nil && len(rt.ASPath) > 0 {
 			a := rpki(rt.Prefix, rt.ASPath[len(rt.ASPath)-1])
 			lp.RPKI, lp.RPKISource, lp.RPKIUpdated = string(a.State), a.Source, ptrTime(a.Updated)
+		}
+		if registry != nil && len(rt.ASPath) > 0 {
+			a := registry(rt.Prefix, rt.ASPath[len(rt.ASPath)-1], rt.Provider)
+			lp.IRR, lp.IRRSource, lp.IRRDatabase, lp.IRRUpdated = string(a.State), a.Source, a.Database, ptrTime(a.Updated)
+			lp.IRROrigins, lp.IRRASSet, lp.IRRASSetState, lp.IRROriginName = a.Origins, a.ASSet, string(a.ASSetState), a.OriginName
 		}
 		if rt.NextHop.IsValid() {
 			lp.NextHop = rt.NextHop.String()

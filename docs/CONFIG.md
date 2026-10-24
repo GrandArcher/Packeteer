@@ -673,6 +673,19 @@ A source that was answering and goes stale or empty emits `rpki.stale` (warning)
 | `avoid_invalid` | `false` | `true` refuses a new improvement onto a provider with an `invalid` learned path for the prefix. With several paths from one provider (add-path, or BMP from several routers), the decision candidate carries the worst state, so one invalid path is enough. An active improvement on a path that becomes invalid is retired through the normal path. Off changes nothing. |
 | `display_fallback` | none | A plugin entry asked only for the learned paths on `/api/prefixes` and the prefix card, and only when no source has fresh data. Only `ripestat` is accepted ([RPKI display fallback `ripestat`](#rpki-display-fallback-ripestat)). Its answers never reach decisions, `avoid_invalid`, leak watch, or the exchange counts. |
 
+### `irr`
+
+IRR origin check per provider path (#214, not on a public edge). Off by default. Each learned path of a probed prefix is labelled `registered` (a route or route6 object for exactly the prefix names the path's origin AS), `not_registered` (every source answered and none does), or `unknown` (no source answered, or the answer is older than `staleness`). It is shown beside RPKI on the prefix card and `/api/prefixes` (with the source, the IRR database of the matching object, the data time, every origin registered for the prefix, the provider's as-set membership, and the origin's aut-num `as-name`), and on `/api/decisions` candidates. The System page has one row per source. Lookups answer from a cache and never wait on the network: a miss is `unknown` until a background lookup asks every source in order, one lookup at a time. A source that fails keeps its last answers until `staleness` and is asked again after a minute. Each cache holds at most 100,000 keys. Objects of IRRd's `RPKI` pseudo-source (built from ROAs) are not counted. Nothing is announced and the learned RIB is unchanged; with `prefer_registered` off it changes no decision. The learned-RIB rule, allowlist, cap, community + NO_EXPORT, hold time, and withdraw rules are unchanged. A change needs a restart.
+
+| Key | Default | Meaning |
+|---|---|---|
+| `enabled` | `false` | `true` turns the check on. A block that is not enabled must not set any other key. |
+| `sources` | none | IRR plugins, in order: `whois` ([IRR source `whois`](#irr-source-whois)) or `file` ([IRR source `file`](#irr-source-file)). A path is `registered` when any source has a matching object; the first such source is named. At least one is required when enabled; instance names must differ. |
+| `refresh` | `6h` | How old a cached answer gets before it is looked up again in the background. It is served meanwhile. 1m-720h. |
+| `staleness` | `24h` (`refresh` when longer) | How long an answer is used after its data time (the lookup time for `whois`, the file's modification time for `file`). Older is `unknown`. At least `refresh`, at most 720h. |
+| `as_sets` | none | Provider name to as-set (for example `transit-a: AS-EXAMPLE` or `AS64500:AS-CUSTOMERS`). Each path of that provider shows whether its origin is in the set, expanded recursively. Display only. The provider must be configured. |
+| `prefer_registered` | `false` | `true` refuses a new improvement onto a provider whose learned path for the prefix is `not_registered` (candidate `why` "IRR not registered"). With several paths from one provider the worst state counts. `unknown` never blocks, and the native path is never refused. An active improvement whose path becomes not registered is retired through the normal path. |
+
 ### `linkouts`
 
 The "open in" links on the prefix, ASN, and exchange-peer views (#211). Display only: the controller makes no request to any listed site. Every key is checked at load, and unknown keys are errors. A change needs a restart. See [ui.md](ui.md#link-outs).
@@ -1635,6 +1648,33 @@ Display-only last resort (#200). When no `rpki.sources` entry has fresh data, th
 |---|---|---|
 | `rate_per_minute` | `10` | Lookups sent per minute. 1-60. |
 | `ttl` | `1h` | How long an answer is shown before it is looked up again. 1m-24h. |
+
+### IRR source `whois`
+
+Queries one whois server on TCP (port 43) per lookup: route/route6 objects for exactly the prefix, as-set members, and the aut-num `as-name`. Each lookup sends the prefix, as-set name, or AS number to that server. Every connection waits on a `rate_per_minute` slot, and `timeout` bounds one TCP connection: the dial, then the query and answer, so one connection can take up to about twice `timeout` of wall time. With `dialect: irrd` a lookup is one connection. With `dialect: ripe` an as-set lookup opens one connection per set it expands (bounded, see below), each with its own `timeout` and rate slot. A server error, a refused database, or a timeout is a failed lookup (the source did not answer); nothing found is an answer.
+
+`dialect: irrd` uses the IRRd commands (`!!`, `!s`, `!r`, `!i<set>,1`, `!maut-num`), for any IRRd v4 instance, including an operator's own, and mirrors such as `rr.ntt.net`, which through `!s` serves RADB, RIPE, ARIN, APNIC, AFRINIC, LACNIC, NTTCOM, ALTDB, LEVEL3, and the other databases it lists for `!s-lc`. `dialect: ripe` uses RIPE database flags (`-r -s <databases> -x -T route,route6`, `-T as-set`, `-T aut-num`), for `whois.ripe.net`, `whois.apnic.net`, and `whois.afrinic.net`; as-sets are expanded set by set (at most 1,000 sets, 8 levels deep). `%ERROR:101` (no entries) is nothing found; any other `%ERROR` fails the lookup.
+
+| Key | Default | Meaning |
+|---|---|---|
+| `address` | none | Required. `host:port`, for example `rr.ntt.net:43`. |
+| `dialect` | `irrd` | `irrd` or `ripe`. |
+| `databases` | server default | IRR databases to query, in priority order (sent as `!s` or `-s`; upper-cased, at most 32). Objects are listed in this order, so the first database named is the one shown. List them explicitly: some mirrors include the `RPKI` pseudo-source by default, whose objects are skipped. |
+| `timeout` | `10s` | One TCP connection: the dial, then the query and answer (up to about twice this in wall time). Each connection of a `ripe` as-set expansion gets its own. 1s-1m. |
+| `rate_per_minute` | `60` | Connections opened per minute. 1-600. |
+
+The tests replay answers in the shape seen from rr.ntt.net (IRRd 4) and the RIPE database (`internal/plugins/irr/whois/testdata`) against in-process servers; no test queries a live IRR.
+
+### IRR source `file`
+
+Reads a mounted file and answers from memory. It is read again when its size or modification time changes; a file that does not parse keeps the last good data (with its old data time, so it ages out at `irr.staleness`). A missing file is logged at start and fails lookups until it appears. At most 4 GiB and 10,000,000 routes.
+
+`format: rpsl` is RPSL objects as in an IRR database dump: route and route6 (exact prefix), as-set (expanded recursively), and aut-num (`as-name`). `format: bgpq4` is one or more concatenated `bgpq4 -j` documents whose list is named after the origin AS, for example `bgpq4 -j -l AS64500 AS64500`; an entry with `greater-equal`/`less-equal` covers those lengths. bgpq4 output has no as-sets or aut-nums, so those lookups are left to the next source.
+
+| Key | Default | Meaning |
+|---|---|---|
+| `path` | none | Required. The file inside the container, for example `/etc/packeteer/irr/routes.db`. |
+| `format` | `rpsl` | `rpsl` or `bgpq4`. |
 
 ### Detector `baseline`
 

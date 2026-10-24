@@ -81,6 +81,9 @@ type Set struct {
 	// RPKIDisplay is the display-only lookup (rpki.display_fallback,
 	// #200). Nil when not configured. It never feeds a decision.
 	RPKIDisplay *Instance[plugin.RPKI]
+	// IRRSources answer IRR lookups (irr.sources, #214). They are asked in
+	// order and never announce.
+	IRRSources []Instance[plugin.IRR]
 
 	mu      sync.RWMutex
 	started []namedLifecycle
@@ -189,6 +192,9 @@ func Build(cfg *config.Config, opts Options) (*Set, error) {
 			}
 		}
 	}
+	if cfg.IRROn() {
+		s.IRRSources = build(plugin.IRRs, "irr.sources", cfg.IRR.Sources, base, &errs)
+	}
 	if cfg.Troubleshoot.Whois != nil {
 		if b := build(plugin.Whoises, "troubleshoot.whois", []config.PluginSpec{*cfg.Troubleshoot.Whois}, base, &errs); len(b) == 1 {
 			s.Whois = &b[0]
@@ -279,6 +285,9 @@ func (s *Set) all() []namedLifecycle {
 	}
 	if s.RPKIDisplay != nil {
 		add(plugin.KindRPKI, s.RPKIDisplay.Name, s.RPKIDisplay.Plugin)
+	}
+	for _, p := range s.IRRSources {
+		add(plugin.KindIRR, p.Name, p.Plugin)
 	}
 	for _, p := range s.Probers {
 		add(plugin.KindProber, p.Name, p.Plugin)

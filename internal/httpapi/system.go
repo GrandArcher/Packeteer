@@ -41,6 +41,7 @@ const (
 	KindTelemetry   = "telemetry"
 	KindFederation  = "federation_peer"
 	KindRPKI        = "rpki"
+	KindIRR         = "irr"
 )
 
 // Component is one row of the System page. Since is when the state last
@@ -128,6 +129,15 @@ type RPKIFact struct {
 	Err     string
 }
 
+// IRRFact is one IRR source and its last lookup (#214). Updated is the
+// newest data time it answered with.
+type IRRFact struct {
+	PluginFact
+	Up      bool
+	Updated time.Time
+	Err     string
+}
+
 // SystemFacts is what the controller knows about its configured plugins
 // and their latest results. Everything else on the page comes from the
 // snapshot, the elector, and the federation view. It holds no secrets and
@@ -142,6 +152,7 @@ type SystemFacts struct {
 	Telemetry  []TelemetryFact
 	RIBSources []RIBSourceFact
 	RPKI       []RPKIFact
+	IRR        []IRRFact
 }
 
 func (s *Server) handleSystem(w http.ResponseWriter, _ *http.Request) {
@@ -182,6 +193,9 @@ func BuildSystem(snap Snapshot, facts SystemFacts, ha *plugin.ElectorStatus, fed
 	}
 	for _, r := range facts.RPKI {
 		add(rpkiRow(r))
+	}
+	for _, r := range facts.IRR {
+		add(irrRow(r))
 	}
 	for _, p := range snap.Providers {
 		add(probeSourceRow(p))
@@ -361,6 +375,28 @@ func rpkiRow(f RPKIFact) Component {
 	default:
 		c.State = StateDown
 		c.Detail = "no data"
+	}
+	return c
+}
+
+// irrRow judges one IRR source from its last lookup (#214). A failed
+// lookup after earlier answers is degraded: the cached answers are used
+// until irr.staleness, then read unknown, which fails open.
+func irrRow(f IRRFact) Component {
+	c := Component{Kind: KindIRR, Name: f.Name, Type: f.Type, Since: ptrTime(f.Updated), Error: f.Err}
+	switch {
+	case f.Up:
+		c.State = StateOK
+		c.Detail = "answering, data time " + f.Updated.UTC().Format(time.RFC3339)
+	case f.Err != "" && !f.Updated.IsZero():
+		c.State = StateDegraded
+		c.Detail = "last lookup failed; cached answers are used until irr.staleness"
+	case f.Err != "":
+		c.State = StateDown
+		c.Detail = "no answer yet"
+	default:
+		c.State = StateIdle
+		c.Detail = "no lookup yet"
 	}
 	return c
 }

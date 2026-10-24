@@ -34,6 +34,7 @@ type Collector struct {
 	health      *exchange.Health
 	peerPrefix  func() map[string]int
 	rpki        func(netip.Prefix, uint32) plugin.RPKIAnswer
+	irr         func(netip.Prefix, uint32, string) plugin.IRRAnswer
 	portMaxAge  time.Duration
 }
 
@@ -124,6 +125,15 @@ func (c *Collector) SetRPKI(fn func(netip.Prefix, uint32) plugin.RPKIAnswer) {
 	c.mu.Unlock()
 }
 
+// SetIRR installs the IRR lookup for learned paths (#214). Nil leaves
+// every path without an IRR label. The lookup answers from its cache and
+// never waits on the network, so every snapshot may call it.
+func (c *Collector) SetIRR(fn func(netip.Prefix, uint32, string) plugin.IRRAnswer) {
+	c.mu.Lock()
+	c.irr = fn
+	c.mu.Unlock()
+}
+
 // SetMode updates the mode Snapshot reports. A reload that changes mode
 // calls it so the dashboard matches the running config.
 func (c *Collector) SetMode(mode string) {
@@ -150,7 +160,7 @@ func (c *Collector) Snapshot() Snapshot {
 	mode := c.mode
 	started, engine, decider, view, telemetry := c.started, c.engine, c.decider, c.view, c.telemetry
 	exs, hops, flowTracked, truncated := c.exchanges, c.hops, c.flowTracked, c.truncated
-	health, peerPrefix, rpki, portMaxAge := c.health, c.peerPrefix, c.rpki, c.portMaxAge
+	health, peerPrefix, rpki, registry, portMaxAge := c.health, c.peerPrefix, c.rpki, c.irr, c.portMaxAge
 	c.mu.RUnlock()
 
 	in := Input{
@@ -160,6 +170,7 @@ func (c *Collector) Snapshot() Snapshot {
 		At:        time.Now().UTC(),
 		Providers: c.providers,
 		RPKI:      rpki,
+		IRR:       registry,
 	}
 	if telemetry != nil {
 		in.Telemetry = telemetry()

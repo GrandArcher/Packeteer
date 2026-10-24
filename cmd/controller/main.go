@@ -511,6 +511,7 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 	// nil-safe until then.
 	var ctl *announce.Controller
 	rpkiSet := newRPKISet(plugins)
+	irrChecker := newIRRChecker(cfg, plugins)
 	lw, lerr := newLeakWatch(cfg, plugins, dispatch,
 		func(p netip.Prefix) bool { return ctl.Injected(p) },
 		func(ctx context.Context, p netip.Prefix) error { return ctl.WithdrawPrefix(ctx, p) }, rpkiSet, log)
@@ -598,7 +599,7 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 			Federation: fed.status, FederationPush: fedPush, HA: haStatus,
 			ConfigEditor: editorAPI, FirstRun: firstRunAPI, Dashboards: dashboardStore(plugins), Subscriptions: subsAPI,
 			Setup: setupInfo(cfg, plugins), Upgrade: upgradeAPI, Linkouts: linkout.New(cfg.Linkouts), RingLG: ringlg.New(cfg.RingLG, version),
-			System: systemFacts(plugins, &sysEngine, health), Usage: usageReader(plugins),
+			System: systemFacts(plugins, &sysEngine, health, irrChecker), Usage: usageReader(plugins),
 		})
 		if err != nil {
 			log.Error("refusing to start", "err", err)
@@ -732,6 +733,9 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 		}
 		httpSrv.SetRPKIStatus(func() []plugin.RPKIStatus { return rpkiStatuses(plugins) })
 	}
+	if irrChecker.Enabled() {
+		col.SetIRR(irrChecker.Lookup)
+	}
 	httpSrv.SetExplainer(decider)
 	httpSrv.SetQuarantine(quarantineControl{decider: decider, out: dispatch, poke: poke, now: time.Now})
 	wireExchanges(ctx, cfg, col, httpSrv, view, plugins, decider, rpkiSet)
@@ -807,6 +811,13 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 	if httpSrv != nil && cfg.IXP == nil {
 		httpSrv.SetPreflight(newPreflight(live, view, lw, plugins, pktLimiter, log))
 	}
+	if irrChecker.Enabled() {
+		loopWG.Add(1)
+		go func() {
+			defer loopWG.Done()
+			irrChecker.Run(loopCtx)
+		}()
+	}
 	loopWG.Add(1)
 	go func() {
 		defer loopWG.Done()
@@ -849,7 +860,7 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 				return
 			}
 			leading = true
-			in, rpkiRounds := decisionInput(loopCtx, now, engine, view, plugins, fed, rpkiSet)
+			in, rpkiRounds := decisionInput(loopCtx, now, engine, view, plugins, fed, rpkiSet, irrChecker)
 			in.Held = lw.Held
 			changes, err := runDecision(now, decider, in, ctl, log, snap.Mode, engine)
 			fed.publish(now, in, decider.Improvements())

@@ -71,8 +71,10 @@ func Decide(prev State, in Input, cfg Config, scorer plugin.Scorer, now time.Tim
 	for i, r := range in.Results {
 		in.byPrefix[r.Prefix] = append(in.byPrefix[r.Prefix], i)
 		ans := in.RPKI[r.Prefix][r.Provider]
+		reg := in.IRR[r.Prefix][r.Provider]
 		c := Candidate{Provider: r.Provider, LossPct: r.Stats.LossPct, RTTAvg: r.Stats.RTTAvg, Jitter: r.Stats.Jitter, Usable: true,
-			RPKI: ans.State, RPKISource: ans.Source, RPKIUpdated: ans.Updated}
+			RPKI: ans.State, RPKISource: ans.Source, RPKIUpdated: ans.Updated,
+			IRR: reg.State, IRRSource: reg.Source, IRRUpdated: reg.Updated}
 		switch {
 		case !r.OK():
 			c.Usable, c.Why = false, "probe error"
@@ -88,6 +90,8 @@ func Decide(prev State, in Input, cfg Config, scorer plugin.Scorer, now time.Tim
 			c.Usable, c.Why = false, "egress router down"
 		case cfg.RPKIAvoidInvalid && c.RPKI == plugin.RPKIInvalid && r.Provider != nativeOf(st, in, r.Prefix):
 			c.Usable, c.Why = false, "RPKI invalid"
+		case cfg.IRRPreferRegistered && c.IRR == plugin.IRRNotRegistered && r.Provider != nativeOf(st, in, r.Prefix):
+			c.Usable, c.Why = false, "IRR not registered"
 		}
 		if c.Usable {
 			c.Score = scorer.Score(plugin.PathStats{Provider: r.Provider, LossPct: c.LossPct, RTTAvg: c.RTTAvg, Jitter: c.Jitter})

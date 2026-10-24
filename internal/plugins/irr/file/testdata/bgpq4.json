@@ -1,0 +1,8 @@
+{ "AS64496": [
+ { "prefix": "198.51.100.0\/24", "exact": true },
+ { "prefix": "2001:db8::\/32", "exact": false,
+ "greater-equal": 32, "less-equal": 48 }
+] }
+{ "AS64497": [
+ { "prefix": "203.0.113.0\/24", "exact": false, "less-equal": 25 }
+] }

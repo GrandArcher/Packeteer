@@ -175,6 +175,9 @@ type Config struct {
 	// RPKI is the shared RPKI origin-validation source (#158). Nil or
 	// disabled is off.
 	RPKI *RPKI `yaml:"rpki"`
+	// IRR is the IRR origin check per learned path (#214). Nil or disabled
+	// is off.
+	IRR *IRR `yaml:"irr"`
 
 	// Instance and Domain name this instance and its routing domain (POP)
 	// for multi-POP federation (#30). Instance defaults to Domain.
