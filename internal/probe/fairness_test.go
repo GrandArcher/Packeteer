@@ -129,7 +129,7 @@ func TestDeadProviderDoesNotStarveHealthyProvider(t *testing.T) {
 	o := opts()
 	o.Workers = 4
 	o.RoundTimeout = 300 * time.Millisecond
-	e, err := New([]Provider{provB, provA}, []NamedProber{{"p", p}}, src(targets...), o)
+	e, err := New([]Provider{provB, provA}, []NamedProber{{Name: "p", Prober: p}}, src(targets...), o)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -216,7 +216,7 @@ func TestJobStopsAfterSilentHosts(t *testing.T) {
 				Budget:   time.Second,
 				CacheTTL: time.Minute,
 			}
-			e, err := New([]Provider{prov}, []NamedProber{{"p", p}}, src(plugin.Target{Prefix: pfx1}), o)
+			e, err := New([]Provider{prov}, []NamedProber{{Name: "p", Prober: p}}, src(plugin.Target{Prefix: pfx1}), o)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -261,7 +261,7 @@ func TestSilentHostLimitOnlyForDownProvider(t *testing.T) {
 		t.Helper()
 		o := opts()
 		o.Workers = 1
-		e, err := New([]Provider{provA}, []NamedProber{{"p", p}},
+		e, err := New([]Provider{provA}, []NamedProber{{Name: "p", Prober: p}},
 			src(plugin.Target{Prefix: pfx2}, plugin.Target{Prefix: pfx1}), o)
 		if err != nil {
 			t.Fatal(err)

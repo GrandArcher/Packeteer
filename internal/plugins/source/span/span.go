@@ -493,6 +493,14 @@ func (s *Source) Problems() []passive.Problem {
 	return s.win.Problems(now, s.th, s.maxTargets)
 }
 
+// PassiveSignals is each observed prefix's problem state (#202), for the
+// confidence of probe samples. It announces nothing.
+func (s *Source) PassiveSignals() map[netip.Prefix]bool {
+	now := s.now()
+	s.trk.sweep(now)
+	return s.win.Signals(now, s.th)
+}
+
 // Targets returns the problem prefixes, worst first, capped at
 // max_targets. Weight is the problem score. A prefix is urgent on the
 // first call that returns it. Quiet traffic returns an empty list.

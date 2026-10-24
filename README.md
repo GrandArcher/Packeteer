@@ -291,7 +291,7 @@ Symptoms, log lines, and fixes: [docs/troubleshooting.md](docs/troubleshooting.m
 
 **`/readyz` stays 503.** Neighbors are configured and no session is established. Check ASN, reachability, and whether Packeteer should connect out (`listen_port` 0) or wait (`passive` plus `listen_port`). Filters do not stop the session from coming up; they stop routes.
 
-**Nothing is recommended.** Thresholds are still `0`, the prefix is not in the RIB, the RIB next hop matches no provider, the gain is inside the thresholds (including `min_rtt_delta_pct` when it is set), `confirm_rounds` has not been met (`confirming` in `/api/decisions`; the default 1 does not wait), or the provider is excluded.
+**Nothing is recommended.** Thresholds are still `0`, the prefix is not in the RIB, the RIB next hop matches no provider, the gain is inside the thresholds (including `min_rtt_delta_pct` when it is set), `confirm_rounds` has not been met (`confirming` in `/api/decisions`; the default 1 does not wait), `thresholds.require_evidence` is on and the current or the better path has no evidence beyond ICMP (`require_evidence:` in the reason), or the provider is excluded.
 
 **Inject is on and the router shows no route.** The prefix is not in the learned RIB, it is outside the allowlist, the cap is full, or the router rejected the community. Packeteer will not announce a prefix it has not learned.
 

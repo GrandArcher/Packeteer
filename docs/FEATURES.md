@@ -29,13 +29,13 @@ Milestones:
 | v0.6 | 9 | 7 |
 | v0.7 | 3 | 3 |
 | v0.8 | 20 | 16 |
-| v0.9 | 6 | 5 |
+| v0.9 | 7 | 6 |
 | won't do | 2 | - |
-| **total** | 119 | 105 |
+| **total** | 120 | 106 |
 
 | Status | Count |
 |---|---|
-| done | 105 |
+| done | 106 |
 | partial | 10 |
 | in progress | 0 |
 | planned | 2 |
@@ -71,6 +71,7 @@ The flow window keeps 20,000 exact cells by default, and a fixed HyperLogLog per
 | Max improvements cap | done | v0.1 | core | #7 | no |
 | Improvement retirement / periodic re-probe of improvements (including a staleness timer when a probe round never finishes) | done (#116): an active improvement keeps its prefix on the last host and interval after its source drops it (for example flow `top_n`), until flip-back, `improvement_ttl`, the provider is unusable, a RIB leave, policy, or the allowlist | v0.1 | core | #7, #46, #116 | no |
 | Host qualification and probe consistency (enough consistent replies, RTT dispersion limit; fast probe escalating to a full probe) | done (#119): a host qualifies with at least `probe.min_replies` replies (default 1) and, when `probe.dispersion_ms` is set, an RTT spread (maximum minus minimum) no wider than that limit. An unqualified host drops out of the score the way a silent host does. A spread over the limit escalates to the retry probe. Defaults keep the previous rule. Flow prefixes offer up to three of the busiest destinations as candidates, probed first; automatic addresses fill in only when fewer than three were named. An operator pin stays the only target | v0.6 | core (probe engine) | #119 | no |
+| Measurement confidence per sample and an opt-in rule that a performance move needs evidence beyond ICMP | done (#202: every probe result and decision candidate carries `confidence` (level and score from the prober type, reply count, traceroute hop, RTT spread, and agreement with the `span` or `flow` source's passive TCP view of the path that carries the traffic), shown on `/api/probes`, `/api/decisions`, the prefix card, and the Why? panel's `evidence` gate; `thresholds.require_evidence` (off by default) refuses a new performance move or switch unless both compared samples rest on a `tcp` or `udp` reply or passive agreement; it is checked after the cooldown, the allowlist, and cost precedence, so cost precedence is unchanged; flip-back, static pins, and commit or cost moves do not use it, a refused switch off a commit or cost steer leaves the steer to its planner, and the `evidence` gate fails only on a move it refused; FRR lab `lab/e2e-evidence.sh`. Real-traffic alternate-path sampling is a later issue) | v0.9 | core (`internal/probe`, `internal/policy`, `internal/passive`) + source (`span`, `flow`) + API + UI | #202 | no |
 | Self-learning probe type (stick with the ICMP/UDP/TCP prober a host answers) | done (#120): per host, the engine starts later rounds at the prober that got a reply and moves forward from there; every `probe.prober_recheck_rounds` measurement (default 10) starts at the first prober again; `probe.prober_memory` (default 100000) caps the set and hosts that leave the probe set are dropped | v0.6 | core (probe engine) | #120 | no |
 | Current exit learned from flow agents (exporter address + interface index per provider) | won't do (the exit comes from the iBGP/BMP RIB, which is authoritative; without a BGP session Packeteer ranks paths and does not recommend) | - | - | - | - |
 

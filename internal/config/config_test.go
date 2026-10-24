@@ -106,6 +106,23 @@ func TestParseValid(t *testing.T) {
 	}
 }
 
+func TestRequireEvidence(t *testing.T) {
+	cfg, err := Parse([]byte(validYAML))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Thresholds.RequireEvidence {
+		t.Fatal("require_evidence is on by default")
+	}
+	cfg, err = Parse([]byte(edit(t, validYAML, "min_rtt_delta_ms: 15", "min_rtt_delta_ms: 15\n  require_evidence: true")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.Thresholds.RequireEvidence {
+		t.Fatal("require_evidence: true not read")
+	}
+}
+
 func TestRTTPercentAndConfirmRounds(t *testing.T) {
 	cfg, err := Parse([]byte(edit(t, validYAML, "min_rtt_delta_ms: 15", "min_rtt_delta_ms: 15\n  min_rtt_delta_pct: 20\n  confirm_rounds: 3")))
 	if err != nil {

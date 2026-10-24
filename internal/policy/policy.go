@@ -66,7 +66,16 @@ type Config struct {
 	// learned path for the prefix is not registered in the IRR (#214). It
 	// is off by default; unknown never blocks.
 	IRRPreferRegistered bool
-	Allowlist           []netip.Prefix // inject mode: only these (or more-specifics of them)
+	// RequireEvidence refuses a new performance move or performance switch
+	// whose two compared samples do not both rest on more than ICMP: a
+	// tcp or udp reply, or passive TCP evidence that agrees with the
+	// sample (#202), including a performance switch off a commit or cost
+	// steer, which then stays with its planner. It is off by default.
+	// Decide checks it after the cooldown, the allowlist, and cost
+	// precedence, so cost precedence is unchanged; flip-back, static pins,
+	// and commit or cost moves do not use it.
+	RequireEvidence bool
+	Allowlist       []netip.Prefix // inject mode: only these (or more-specifics of them)
 	// Providers carries group, precedence, and cc_disable. Empty means
 	// commit control has no provider policy (the weighted scorer ignores it).
 	Providers []ProviderPolicy
@@ -163,6 +172,12 @@ type Input struct {
 	// (#30). Their times follow that peer's probe schedule, so they do not
 	// show whether this instance's own probe round finished. Nil is none.
 	Remote map[string]bool
+	// Passive is the span and flow sources' view of each prefix with TCP
+	// traffic in their window (#202): true when that traffic is over the
+	// source's problem thresholds. It rates the confidence of the sample
+	// on the provider that carries the traffic; a prefix missing here has
+	// no passive evidence.
+	Passive map[netip.Prefix]bool
 
 	// byPrefix indexes Results by prefix. Decide fills it, so the
 	// per-prefix confirmation checks do not scan every result.
@@ -291,6 +306,10 @@ type Candidate struct {
 	IRR        plugin.IRRState `json:"irr,omitempty"`
 	IRRSource  string          `json:"irr_source,omitempty"`
 	IRRUpdated time.Time       `json:"irr_updated,omitzero"`
+	// Confidence is the sample's evidence rating (#202), with passive
+	// agreement applied for the provider that carries the traffic. Display
+	// only unless Config.RequireEvidence is set.
+	Confidence probe.Confidence `json:"confidence"`
 }
 
 // Decision explains what happened to one prefix in one evaluation.

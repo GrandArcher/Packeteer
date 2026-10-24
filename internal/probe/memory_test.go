@@ -178,7 +178,7 @@ func TestSemaphorePrune(t *testing.T) {
 		{Prefix: pfx1, Host: h1},
 		{Prefix: pfx2, Host: h2},
 	}}
-	e, err := New([]Provider{provA}, []NamedProber{{"icmp", &fakeProber{fn: allReplies}}},
+	e, err := New([]Provider{provA}, []NamedProber{{Name: "icmp", Prober: &fakeProber{fn: allReplies}}},
 		[]NamedSource{{Name: "static", Source: src}}, opts())
 	if err != nil {
 		t.Fatal(err)
@@ -222,7 +222,7 @@ func TestProberMemoryDropsHostNoLongerProbed(t *testing.T) {
 	tcp := &fakeProber{fn: allReplies}
 	o := opts()
 	o.Workers = 1
-	e, err := New([]Provider{provA}, []NamedProber{{"icmp", icmp}, {"tcp", tcp}},
+	e, err := New([]Provider{provA}, []NamedProber{{Name: "icmp", Prober: icmp}, {Name: "tcp", Prober: tcp}},
 		[]NamedSource{{Name: "static", Source: src}}, o)
 	if err != nil {
 		t.Fatal(err)
@@ -294,7 +294,7 @@ func TestProberMemorySharedAcrossProviders(t *testing.T) {
 	o := opts()
 	o.Workers = 2
 	host := netip.MustParseAddr("198.51.100.1")
-	e, err := New([]Provider{provA, provB}, []NamedProber{{"icmp", icmp}, {"tcp", tcp}},
+	e, err := New([]Provider{provA, provB}, []NamedProber{{Name: "icmp", Prober: icmp}, {Name: "tcp", Prober: tcp}},
 		src(plugin.Target{Prefix: pfx1, Host: host}), o)
 	if err != nil {
 		t.Fatal(err)
@@ -333,7 +333,7 @@ func TestProberMemoryMovesForward(t *testing.T) {
 	udp := &fakeProber{fn: allReplies}
 	o := opts()
 	o.Workers = 1
-	e, err := New([]Provider{provA}, []NamedProber{{"icmp", icmp}, {"tcp", tcp}, {"udp", udp}},
+	e, err := New([]Provider{provA}, []NamedProber{{Name: "icmp", Prober: icmp}, {Name: "tcp", Prober: tcp}, {Name: "udp", Prober: udp}},
 		src(plugin.Target{Prefix: pfx1, Host: netip.MustParseAddr("198.51.100.1")}), o)
 	if err != nil {
 		t.Fatal(err)
@@ -442,7 +442,7 @@ func TestProberRecheckEveryRoundStartsAtHead(t *testing.T) {
 }
 
 func TestProberMemoryOptionBounds(t *testing.T) {
-	probers := []NamedProber{{"icmp", &fakeProber{fn: allReplies}}}
+	probers := []NamedProber{{Name: "icmp", Prober: &fakeProber{fn: allReplies}}}
 	sources := src(plugin.Target{Prefix: pfx1, Host: netip.MustParseAddr("198.51.100.1")})
 	e, err := New([]Provider{provA}, probers, sources, opts())
 	if err != nil {
@@ -465,7 +465,7 @@ func TestProberMemoryOptionBounds(t *testing.T) {
 
 func newChain(t *testing.T, o Options, icmp, tcp plugin.Prober, targets ...plugin.Target) *Engine {
 	t.Helper()
-	e, err := New([]Provider{provA}, []NamedProber{{"icmp", icmp}, {"tcp", tcp}}, src(targets...), o)
+	e, err := New([]Provider{provA}, []NamedProber{{Name: "icmp", Prober: icmp}, {Name: "tcp", Prober: tcp}}, src(targets...), o)
 	if err != nil {
 		t.Fatal(err)
 	}

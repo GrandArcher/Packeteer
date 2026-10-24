@@ -100,7 +100,7 @@ func TestDecisionExplainAPI(t *testing.T) {
 			t.Fatalf("thresholds gate = %+v", g)
 		}
 	}
-	if got := strings.Join(names, " "); got != "rib freshness thresholds confirm_rounds hold_time cap policy allowlist route_check rpki irr" {
+	if got := strings.Join(names, " "); got != "rib freshness thresholds evidence confirm_rounds hold_time cap policy allowlist route_check rpki irr" {
 		t.Fatalf("gates = %s", got)
 	}
 	if len(ex.Samples) != 2 || ex.Samples[0].Role != "current" || ex.Samples[1].Role != "challenger" || ex.Samples[1].RTTMs != 40 {

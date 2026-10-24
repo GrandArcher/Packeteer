@@ -139,7 +139,7 @@ func indirectEngine(t *testing.T, hop *fakeHopper, pr *hopProber, lim Limiter, t
 	if len(targets) == 0 {
 		targets = []plugin.Target{{Prefix: pfx1}}
 	}
-	e, err := New([]Provider{provA, provB}, []NamedProber{{"fake", &fakeProber{fn: pr.fn}}}, src(targets...), o)
+	e, err := New([]Provider{provA, provB}, []NamedProber{{Name: "fake", Prober: &fakeProber{fn: pr.fn}}}, src(targets...), o)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -364,7 +364,7 @@ func TestIndirectSkipsOutsidePin(t *testing.T) {
 // TestIndirectOffByDefault: without Options.Indirect nothing is queued
 // and nothing is traced.
 func TestIndirectOffByDefault(t *testing.T) {
-	e, err := New([]Provider{provA}, []NamedProber{{"fake", &fakeProber{fn: (&hopProber{}).fn}}}, src(plugin.Target{Prefix: pfx1}), opts())
+	e, err := New([]Provider{provA}, []NamedProber{{Name: "fake", Prober: &fakeProber{fn: (&hopProber{}).fn}}}, src(plugin.Target{Prefix: pfx1}), opts())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -374,7 +374,7 @@ func TestIndirectOffByDefault(t *testing.T) {
 	}
 	o := opts()
 	o.Indirect = &Indirect{Budget: time.Second, CacheTTL: time.Minute}
-	if _, err := New([]Provider{provA}, []NamedProber{{"fake", &fakeProber{fn: ok(1)}}}, nil, o); err == nil {
+	if _, err := New([]Provider{provA}, []NamedProber{{Name: "fake", Prober: &fakeProber{fn: ok(1)}}}, nil, o); err == nil {
 		t.Fatal("indirect without a tracer must be rejected")
 	}
 }

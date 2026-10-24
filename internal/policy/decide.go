@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/netip"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/GrandArcher/Packeteer/internal/netpfx"
@@ -17,6 +18,42 @@ func nativeOf(st State, in Input, p netip.Prefix) string {
 		return imp.Native
 	}
 	return in.Native[p]
+}
+
+// carrierOf is the provider the prefix's traffic leaves through now: the
+// improvement's provider while one is active in inject mode, else the
+// native provider. Passive TCP evidence describes that path only.
+func carrierOf(st State, in Input, cfg Config, p netip.Prefix) string {
+	if imp, ok := st.Improvements[p]; ok {
+		if cfg.Mode == "inject" {
+			return imp.Provider
+		}
+		return imp.Native
+	}
+	return in.Native[p]
+}
+
+// evidenceRefused starts the reason of every decision the evidence rule
+// refused; the explanation reads it to tell that the rule was reached.
+const evidenceRefused = "require_evidence: "
+
+// evidenceLacking is the reason thresholds.require_evidence refuses the
+// performance move from cur to alt, empty when the rule is off or both
+// samples rest on more than ICMP (#202).
+func evidenceLacking(cfg Config, cur, alt Candidate) string {
+	if !cfg.RequireEvidence {
+		return ""
+	}
+	var names []string
+	for _, c := range []Candidate{cur, alt} {
+		if !c.Confidence.BeyondICMP() {
+			names = append(names, c.Provider+" ("+c.Confidence.String()+")")
+		}
+	}
+	if len(names) == 0 {
+		return ""
+	}
+	return evidenceRefused + "no evidence beyond ICMP for " + strings.Join(names, " and ")
 }
 
 // Decide runs one evaluation.
@@ -74,7 +111,10 @@ func Decide(prev State, in Input, cfg Config, scorer plugin.Scorer, now time.Tim
 		reg := in.IRR[r.Prefix][r.Provider]
 		c := Candidate{Provider: r.Provider, LossPct: r.Stats.LossPct, RTTAvg: r.Stats.RTTAvg, Jitter: r.Stats.Jitter, Usable: true,
 			RPKI: ans.State, RPKISource: ans.Source, RPKIUpdated: ans.Updated,
-			IRR: reg.State, IRRSource: reg.Source, IRRUpdated: reg.Updated}
+			IRR: reg.State, IRRSource: reg.Source, IRRUpdated: reg.Updated, Confidence: r.Confidence}
+		if problem, seen := in.Passive[r.Prefix]; seen && r.OK() && r.Provider == carrierOf(st, in, cfg, r.Prefix) {
+			c.Confidence = r.Confidence.WithPassive(problem == (r.Stats.LossPct > 0))
+		}
 		switch {
 		case !r.OK():
 			c.Usable, c.Why = false, "probe error"
@@ -308,6 +348,12 @@ func Decide(prev State, in Input, cfg Config, scorer plugin.Scorer, now time.Tim
 			// waits for confirm_rounds consecutive fresh wins. Hold time
 			// still has to elapse before the switch is created.
 			if alt, ok := bestCandidate(cands, cfg.Excluded, imp.Native); ok && alt.Provider != imp.Provider && better(alt, cur, cfg) {
+				if lacking := evidenceLacking(cfg, cur, alt); lacking != "" {
+					delete(st.confirm, p)
+					d.Recommended = alt.Provider
+					d.Action, d.Reason = ActionKeep, lacking
+					continue
+				}
 				ready, n := notePerformance(&st, in, cfg, p, alt.Provider, now)
 				if !ready {
 					d.Recommended = alt.Provider
@@ -423,6 +469,13 @@ func Decide(prev State, in Input, cfg Config, scorer plugin.Scorer, now time.Tim
 				d.Recommended, d.Reason, d.Cause = d.Native, "native path inside performance floor (cost precedence)", plugin.CauseCost
 				continue
 			}
+		}
+		// After the cost branch, so a refused performance move still
+		// leaves the prefix to the cost planner (commitOK above).
+		if lacking := evidenceLacking(cfg, natC, alt); lacking != "" {
+			delete(st.confirm, p)
+			d.Recommended, d.Reason = alt.Provider, lacking
+			continue
 		}
 		ready, n := notePerformance(&st, in, cfg, p, alt.Provider, now)
 		if !ready {

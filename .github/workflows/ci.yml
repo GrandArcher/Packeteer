@@ -1352,9 +1352,11 @@ jobs:
           # uiproxy answers the prefix and its history from
           # lab/ui-fixtures/rpki (documentation prefixes and ASNs): paths
           # labeled valid and invalid by an RTR source and not found by the
-          # RIPEstat display fallback, and a stored invalid-then-unknown
-          # span. The labels themselves are checked against the real API in
-          # the Go tests (TestDaemonRPKIPerProvider).
+          # RIPEstat display fallback, a stored invalid-then-unknown span,
+          # and a confidence per probe row (#202: an icmp sample and a
+          # one-reply tcp sample at a traceroute hop). The labels themselves
+          # are checked against the real API in the Go tests
+          # (TestDaemonRPKIPerProvider, TestConfidenceOnAPI).
           go build -o /tmp/uiproxy ./lab/uiproxy
           /tmp/uiproxy -listen 127.0.0.1:18201 -upstream "$base" -user lab -password lab-only \
             -fixtures lab/ui-fixtures/rpki >/tmp/uiproxy200.log 2>&1 &
@@ -1367,6 +1369,8 @@ jobs:
           bash lab/ui-smoke.sh 'http://127.0.0.1:18201/prefix/203.0.113.0%2F25' 'mode-observe' 'It announces nothing.' \
             '>valid<span class="muted"> via routinator, ' '>invalid<span class="muted"> via routinator, ' \
             '>notfound<span class="muted"> via ripestat, ' ' old</span>' \
+            'title="icmp, 4/4 replies">medium</span><span class="muted"> icmp, 4/4 replies</span>' \
+            'title="tcp, 1/4 replies, traceroute hop">low</span><span class="muted"> tcp, 1/4 replies, traceroute hop</span>' \
             'lab-b path from AS64511: invalid (source routinator)' 'lab-b path from AS64511: unknown (no source had fresh data)' \
             --absent 'Cannot reach' 'mode-inject'
       - name: UI Why panel smoke (#201; the gate table for one decision, the stored checks on the timeline, a prefix with no decision)
@@ -1422,6 +1426,8 @@ jobs:
             'id="why-panel"' 'Held: native path is best (within thresholds). Held back by: Thresholds.' \
             'What would change it: would move to lab-b if its RTT delta reached' \
             'Fresh measurements' 'Held it back' 'Measurements behind it' \
+            'Measurement evidence' 'lab-a: icmp, 10/10 replies; lab-b: tcp, 10/10 replies' \
+            'title="icmp, 10/10 replies">medium</span>' 'title="tcp, 10/10 replies">high</span>' \
             'Checks at the time: Learned RIB passed (native lab-a); Thresholds passed (lab-b vs lab-a' \
             --absent 'Cannot reach' 'mode-inject' 'Packeteer has no decision for this prefix'
           bash lab/ui-smoke.sh "$base/prefix/192.0.2.0%2F24" 'id="why-panel"' \
@@ -2597,6 +2603,8 @@ jobs:
         run: bash lab/e2e-flap.sh
       - name: FRR make-before-break lab (#386; provider move is one replacing UPDATE, one Packeteer path, no withdraw, flip-back withdraw seen, SIGTERM)
         run: bash lab/e2e-move.sh
+      - name: FRR evidence lab (#202; require_evidence refuses a win measured by a prober that is not tcp or udp, confidence on every decision sample, SIGHUP drops the rule and announces, SIGTERM)
+        run: bash lab/e2e-evidence.sh
       - name: FRR commit-control lab
         run: bash lab/e2e-commit.sh
       - name: FRR cost-mode lab

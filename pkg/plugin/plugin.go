@@ -259,6 +259,16 @@ type VolumeSource interface {
 	Volumes(ctx context.Context) ([]PrefixVolume, error)
 }
 
+// PassiveObserver is optional on a target source that scores prefixes from
+// observed TCP traffic (span, and flow with a problems block). Signals
+// lists every prefix with enough traffic in the source's window to judge,
+// true when that traffic is over the source's problem thresholds. The
+// decision engine uses it only to rate the confidence of a probe sample
+// (#202). It must not announce.
+type PassiveObserver interface {
+	PassiveSignals() map[netip.Prefix]bool
+}
+
 // ---- Announcer ----
 
 // Route is a route Packeteer wants the edge router to use.

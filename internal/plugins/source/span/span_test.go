@@ -496,3 +496,26 @@ func (t *tracker) size() int {
 	defer t.mu.Unlock()
 	return len(t.flows)
 }
+
+// TestPassiveSignals checks the view the decision engine rates probe
+// confidence against (#202): every problem prefix is true, every other
+// observed prefix with enough flows is false.
+func TestPassiveSignals(t *testing.T) {
+	s := mustSource(t, baseYAML)
+	start := time.Unix(1_800_000_000, 0)
+	replayFixture(t, s, start)
+	pin(s, start.Add(10*time.Second))
+	problems := map[netip.Prefix]bool{}
+	for _, p := range s.Problems() {
+		problems[p.Prefix] = true
+	}
+	got := s.PassiveSignals()
+	if len(problems) == 0 || len(got) <= len(problems) {
+		t.Fatalf("signals = %v, problems = %v", got, problems)
+	}
+	for p, problem := range got {
+		if problem != problems[p] {
+			t.Fatalf("%s: signal %v, problem %v", p, problem, problems[p])
+		}
+	}
+}

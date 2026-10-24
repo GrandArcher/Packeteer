@@ -144,17 +144,21 @@ type Probe struct {
 	Prober  string   `json:"prober,omitempty"`
 	// Indirect is true when every in-prefix address was silent and
 	// Target is this provider's traceroute hop toward the prefix (#123).
-	Indirect bool      `json:"indirect,omitempty"`
-	OK       bool      `json:"ok"`
-	LossPct  float64   `json:"loss_pct"`
-	RTTMinMs float64   `json:"rtt_min_ms"`
-	RTTAvgMs float64   `json:"rtt_avg_ms"`
-	RTTMaxMs float64   `json:"rtt_max_ms"`
-	JitterMs float64   `json:"jitter_ms"`
-	Sent     int       `json:"sent"`
-	Received int       `json:"received"`
-	Error    string    `json:"error,omitempty"`
-	Time     time.Time `json:"time,omitempty"`
+	Indirect bool `json:"indirect,omitempty"`
+	// Confidence rates the sample's evidence (#202); Evidence is the same
+	// facts in words.
+	Confidence probe.Confidence `json:"confidence"`
+	Evidence   string           `json:"evidence"`
+	OK         bool             `json:"ok"`
+	LossPct    float64          `json:"loss_pct"`
+	RTTMinMs   float64          `json:"rtt_min_ms"`
+	RTTAvgMs   float64          `json:"rtt_avg_ms"`
+	RTTMaxMs   float64          `json:"rtt_max_ms"`
+	JitterMs   float64          `json:"jitter_ms"`
+	Sent       int              `json:"sent"`
+	Received   int              `json:"received"`
+	Error      string           `json:"error,omitempty"`
+	Time       time.Time        `json:"time,omitempty"`
 }
 
 // Prefix joins probe rows with the latest decision and, when the prefix
@@ -274,6 +278,11 @@ type Candidate struct {
 	IRR        string     `json:"irr,omitempty"`
 	IRRSource  string     `json:"irr_source,omitempty"`
 	IRRUpdated *time.Time `json:"irr_updated,omitempty"`
+	// Confidence rates the sample's evidence (#202): level, score, prober
+	// type, replies, traceroute hop, RTT spread, and passive agreement.
+	// Evidence is the same facts in words.
+	Confidence probe.Confidence `json:"confidence"`
+	Evidence   string           `json:"evidence"`
 }
 
 // Decision is the latest evaluation of one prefix.
@@ -545,6 +554,8 @@ func candidatesFrom(in []policy.Candidate) []Candidate {
 			IRR:         string(c.IRR),
 			IRRSource:   c.IRRSource,
 			IRRUpdated:  ptrTime(c.IRRUpdated),
+			Confidence:  c.Confidence,
+			Evidence:    c.Confidence.String(),
 		})
 	}
 	return out
@@ -857,19 +868,21 @@ func (p *Prefix) setExit() {
 
 func probeFrom(r probe.Result) Probe {
 	p := Probe{
-		Provider: r.Provider,
-		Prober:   r.Prober,
-		Indirect: r.Indirect,
-		OK:       r.OK(),
-		LossPct:  jsonFloat(r.Stats.LossPct),
-		RTTMinMs: millis(r.Stats.RTTMin),
-		RTTAvgMs: millis(r.Stats.RTTAvg),
-		RTTMaxMs: millis(r.Stats.RTTMax),
-		JitterMs: millis(r.Stats.Jitter),
-		Sent:     r.Stats.Sent,
-		Received: r.Stats.Received,
-		Error:    r.Err,
-		Time:     r.Time,
+		Provider:   r.Provider,
+		Prober:     r.Prober,
+		Indirect:   r.Indirect,
+		OK:         r.OK(),
+		Confidence: r.Confidence,
+		Evidence:   r.Confidence.String(),
+		LossPct:    jsonFloat(r.Stats.LossPct),
+		RTTMinMs:   millis(r.Stats.RTTMin),
+		RTTAvgMs:   millis(r.Stats.RTTAvg),
+		RTTMaxMs:   millis(r.Stats.RTTMax),
+		JitterMs:   millis(r.Stats.Jitter),
+		Sent:       r.Stats.Sent,
+		Received:   r.Stats.Received,
+		Error:      r.Err,
+		Time:       r.Time,
 	}
 	if r.Prefix.IsValid() {
 		p.Prefix = r.Prefix.String()

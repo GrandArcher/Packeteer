@@ -47,6 +47,9 @@ func (p Provider) Request(target netip.Addr, count int, timeout time.Duration) p
 type NamedProber struct {
 	Name   string
 	Prober plugin.Prober
+	// Type is the plugin type (icmp, tcp, udp, exec, ...). It is the
+	// Protocol on each sample's Confidence (#202).
+	Type string
 }
 
 // NamedSource is one configured target source.
@@ -151,6 +154,11 @@ type Result struct {
 	// provider's indirect trace (#124). Empty when no trace is cached.
 	// Outage detection maps them to origin ASNs. Measurement only.
 	Hops []netip.Addr `json:"hops,omitempty"`
+	// Confidence rates how far Stats can be trusted (#202): the prober
+	// type, the reply count, a traceroute hop, and the RTT spread. The
+	// decision engine adds passive agreement for the path that carries the
+	// traffic. Measurement only unless thresholds.require_evidence is on.
+	Confidence Confidence `json:"confidence"`
 	// Share is the raw evidence behind Stats and the target sources that
 	// listed the prefix, kept only for Options.OnBatch (herd, #260). It is
 	// nil in stored results.
@@ -1177,6 +1185,7 @@ func (e *Engine) runRound(ctx context.Context, allow func(plugin.Target) bool, m
 						r.Hops = hops
 					}
 				}
+				r.Confidence = RateConfidence(r, e.proberType(r.Prober), e.opt.Dispersion)
 				// A probe that the deadline cancelled must not refresh the
 				// stored result. Staleness stays on the previous time.
 				if roundCtx.Err() != nil {
@@ -1678,6 +1687,16 @@ func (e *Engine) probe(ctx context.Context, j job, looksDown func(string) bool) 
 	}
 	e.log.Debug("retry probe", "provider", res.Provider, "prefix", res.Prefix, "loss_pct", res.Stats.LossPct, "packets", e.retryPackets(), "reason", reason)
 	return combineHosts(j.provider.Name, j.target.Prefix, tried, again, e.hostQualifies), false
+}
+
+// proberType is the plugin type of the named prober, empty when unknown.
+func (e *Engine) proberType(name string) string {
+	for _, p := range e.probers {
+		if p.Name == name {
+			return p.Type
+		}
+	}
+	return ""
 }
 
 // hostQualifies reports whether one address may define the prefix score.

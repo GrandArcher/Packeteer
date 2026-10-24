@@ -13,7 +13,7 @@ import (
 
 func TestSetPathMismatchMarksAndClears(t *testing.T) {
 	p := &fakeProber{fn: ok(5, 5, 5)}
-	e, _ := New([]Provider{provA}, []NamedProber{{"p", p}},
+	e, _ := New([]Provider{provA}, []NamedProber{{Name: "p", Prober: p}},
 		src(plugin.Target{Prefix: pfx1, Host: netip.MustParseAddr("198.51.100.1")}), opts())
 
 	e.SetPathMismatch("transit-a", true)
@@ -29,7 +29,7 @@ func TestSetPathMismatchMarksAndClears(t *testing.T) {
 
 func TestSetPathMismatchSurvivesGoodRound(t *testing.T) {
 	p := &fakeProber{fn: ok(5, 5, 5)}
-	e, _ := New([]Provider{provA}, []NamedProber{{"p", p}},
+	e, _ := New([]Provider{provA}, []NamedProber{{Name: "p", Prober: p}},
 		src(plugin.Target{Prefix: pfx1, Host: netip.MustParseAddr("198.51.100.1")}), opts())
 
 	e.SetPathMismatch("transit-a", true)
@@ -44,7 +44,7 @@ func TestSetPathMismatchKeepsSourceReason(t *testing.T) {
 	p := &fakeProber{fn: func(context.Context, plugin.ProbeRequest) (plugin.ProbeResult, error) {
 		return plugin.ProbeResult{}, fmt.Errorf("%w: 192.0.2.11", plugin.ErrSourceUnavailable)
 	}}
-	e, _ := New([]Provider{provA}, []NamedProber{{"p", p}},
+	e, _ := New([]Provider{provA}, []NamedProber{{Name: "p", Prober: p}},
 		src(plugin.Target{Prefix: pfx1, Host: netip.MustParseAddr("198.51.100.1")}), opts())
 
 	e.RunOnce(context.Background())
@@ -57,7 +57,7 @@ func TestSetPathMismatchKeepsSourceReason(t *testing.T) {
 
 func TestSetPathMismatchUnknownProvider(t *testing.T) {
 	p := &fakeProber{fn: ok(5, 5, 5)}
-	e, _ := New([]Provider{provA}, []NamedProber{{"p", p}}, src(plugin.Target{Prefix: pfx1}), opts())
+	e, _ := New([]Provider{provA}, []NamedProber{{Name: "p", Prober: p}}, src(plugin.Target{Prefix: pfx1}), opts())
 
 	e.SetPathMismatch("transit-z", true)
 	if st := e.Providers()[0]; !st.Up || st.Reason != "" {
@@ -82,7 +82,7 @@ func TestProbeRequestsCarryProviderMarking(t *testing.T) {
 		{Name: "ix-b", Source: shared, Marking: sockmark.Marking{DSCP: 12}},
 		{Name: "plain", Source: netip.MustParseAddr("192.0.2.12")},
 	}
-	e, err := New(provs, []NamedProber{{"p", p}},
+	e, err := New(provs, []NamedProber{{Name: "p", Prober: p}},
 		src(plugin.Target{Prefix: pfx1, Host: netip.MustParseAddr("198.51.100.1")}), opts())
 	if err != nil {
 		t.Fatal(err)

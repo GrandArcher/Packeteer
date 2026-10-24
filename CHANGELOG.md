@@ -6,6 +6,7 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 
 ### Added
 
+- Confidence on every probe sample and decision candidate (prober type, replies, hop, spread, passive agreement); opt-in `thresholds.require_evidence` refuses an ICMP-only performance move (#202).
 - Every decision lists its checks in order with value, limit, blocking gate, and a counterfactual: `GET /api/decisions/<prefix>`, a Why? panel on the prefix page, stored with each improvement (#201).
 - Opt-in IRR origin check per provider path beside RPKI: `whois` (IRRd or RIPE style) and `file` (RPSL, bgpq4) sources, cache, as-set and aut-num lookups, `prefer_registered` (#214).
 - Herd page (`/herd.html`): members, world view, mesh, country map, latency and AS path monitors, search, and opt-in outside sources (Atlas, RIS Live, RPKI, link-outs), display only (#296).

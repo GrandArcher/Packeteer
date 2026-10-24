@@ -122,7 +122,7 @@ func TestRunOnceBasic(t *testing.T) {
 	var seen atomic.Int32
 	o := opts()
 	o.OnResult = func(Result) { seen.Add(1) }
-	e, err := New([]Provider{provA, provB, prov6}, []NamedProber{{"fake", p}},
+	e, err := New([]Provider{provA, provB, prov6}, []NamedProber{{Name: "fake", Prober: p}},
 		src(plugin.Target{Prefix: pfx1}, plugin.Target{Prefix: pfx2, Host: netip.MustParseAddr("203.0.113.9")}), o)
 	if err != nil {
 		t.Fatal(err)
@@ -148,7 +148,7 @@ func TestRunOnceBasic(t *testing.T) {
 }
 
 func TestTargetsDedupAndSourceFailure(t *testing.T) {
-	e, _ := New([]Provider{provA}, []NamedProber{{"fake", &fakeProber{fn: ok(1)}}}, []NamedSource{
+	e, _ := New([]Provider{provA}, []NamedProber{{Name: "fake", Prober: &fakeProber{fn: ok(1)}}}, []NamedSource{
 		{Name: "broken", Source: &fakeSource{err: errors.New("boom")}},
 		{Name: "a", Source: &fakeSource{targets: []plugin.Target{{Prefix: pfx1}}}},
 		{Name: "b", Source: &fakeSource{targets: []plugin.Target{{Prefix: pfx1, Host: netip.MustParseAddr("198.51.100.50")}, {Prefix: pfx2}}}},
@@ -190,7 +190,7 @@ func TestFallbackChain(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			p1, p2 := &fakeProber{fn: tt.first}, &fakeProber{fn: tt.second}
-			e, _ := New([]Provider{provA}, []NamedProber{{"icmp", p1}, {"tcp", p2}}, src(plugin.Target{Prefix: pfx1, Host: netip.MustParseAddr("198.51.100.1")}), opts())
+			e, _ := New([]Provider{provA}, []NamedProber{{Name: "icmp", Prober: p1}, {Name: "tcp", Prober: p2}}, src(plugin.Target{Prefix: pfx1, Host: netip.MustParseAddr("198.51.100.1")}), opts())
 			e.RunOnce(context.Background())
 			rs := e.Results()
 			if len(rs) != 1 {
@@ -224,7 +224,7 @@ func TestProviderRecovers(t *testing.T) {
 		}
 		return plugin.ProbeResult{Sent: req.Count, RTTs: ms(1, 1, 1)}, nil
 	}}
-	e, _ := New([]Provider{provA, provB}, []NamedProber{{"p", p}}, src(plugin.Target{Prefix: pfx1, Host: netip.MustParseAddr("198.51.100.1")}), opts())
+	e, _ := New([]Provider{provA, provB}, []NamedProber{{Name: "p", Prober: p}}, src(plugin.Target{Prefix: pfx1, Host: netip.MustParseAddr("198.51.100.1")}), opts())
 	e.RunOnce(context.Background())
 	if e.Providers()[0].Up || e.Providers()[1].Up {
 		t.Fatal("providers should be down")
@@ -253,7 +253,7 @@ func TestRateLimiter(t *testing.T) {
 	lim := &countingLimiter{}
 	o := opts()
 	o.Limiter = lim
-	e, _ := New([]Provider{provA, provB}, []NamedProber{{"p", &fakeProber{fn: ok(1, 1, 1)}}},
+	e, _ := New([]Provider{provA, provB}, []NamedProber{{Name: "p", Prober: &fakeProber{fn: ok(1, 1, 1)}}},
 		src(plugin.Target{Prefix: pfx1, Host: netip.MustParseAddr("198.51.100.1")}, plugin.Target{Prefix: pfx2, Host: netip.MustParseAddr("203.0.113.1")}), o)
 	e.RunOnce(context.Background())
 	if lim.total != 4*o.Packets {
@@ -263,7 +263,7 @@ func TestRateLimiter(t *testing.T) {
 	lim2 := &countingLimiter{err: errors.New("would exceed")}
 	o.Limiter = lim2
 	p := &fakeProber{fn: ok(1)}
-	e, _ = New([]Provider{provA}, []NamedProber{{"p", p}}, src(plugin.Target{Prefix: pfx1, Host: netip.MustParseAddr("198.51.100.1")}), o)
+	e, _ = New([]Provider{provA}, []NamedProber{{Name: "p", Prober: p}}, src(plugin.Target{Prefix: pfx1, Host: netip.MustParseAddr("198.51.100.1")}), o)
 	e.RunOnce(context.Background())
 	if p.calls.Load() != 0 || e.Results()[0].OK() {
 		t.Errorf("prober must not run when the limiter refuses: calls=%d res=%+v", p.calls.Load(), e.Results())
@@ -275,7 +275,7 @@ func TestRealLimiterTiming(t *testing.T) {
 	// at least (12-3)/20 = 450ms.
 	o := opts()
 	o.Limiter = newTokenLimiterForTest(20, 3)
-	e, _ := New([]Provider{provA, provB}, []NamedProber{{"p", &fakeProber{fn: ok(1, 1, 1)}}},
+	e, _ := New([]Provider{provA, provB}, []NamedProber{{Name: "p", Prober: &fakeProber{fn: ok(1, 1, 1)}}},
 		src(plugin.Target{Prefix: pfx1, Host: netip.MustParseAddr("198.51.100.1")}, plugin.Target{Prefix: pfx2, Host: netip.MustParseAddr("203.0.113.1")}), o)
 	start := time.Now()
 	e.RunOnce(context.Background())
@@ -304,7 +304,7 @@ func TestPerTargetConcurrency(t *testing.T) {
 	}
 	o := opts()
 	o.Workers, o.PerTargetConcurrency = 6, 2
-	e, _ := New(provs, []NamedProber{{"p", p}}, src(plugin.Target{Prefix: pfx1, Host: netip.MustParseAddr("198.51.100.1")}), o)
+	e, _ := New(provs, []NamedProber{{Name: "p", Prober: p}}, src(plugin.Target{Prefix: pfx1, Host: netip.MustParseAddr("198.51.100.1")}), o)
 	e.RunOnce(context.Background())
 	if peak.Load() != 2 {
 		t.Errorf("peak concurrency toward one target = %d, want 2", peak.Load())
@@ -321,7 +321,7 @@ func TestProbeTimeout(t *testing.T) {
 	}}
 	o := opts()
 	o.Packets, o.Timeout = 1, 10*time.Millisecond // job deadline = 1*10ms + 1s
-	e, _ := New([]Provider{provA}, []NamedProber{{"stuck", p}}, src(plugin.Target{Prefix: pfx1, Host: netip.MustParseAddr("198.51.100.1")}), o)
+	e, _ := New([]Provider{provA}, []NamedProber{{Name: "stuck", Prober: p}}, src(plugin.Target{Prefix: pfx1, Host: netip.MustParseAddr("198.51.100.1")}), o)
 	start := time.Now()
 	e.RunOnce(context.Background())
 	if el := time.Since(start); el > 3*time.Second {
@@ -336,7 +336,7 @@ func TestRunStopsOnCancel(t *testing.T) {
 	p := &fakeProber{fn: ok(1)}
 	o := opts()
 	o.Interval = 20 * time.Millisecond
-	e, _ := New([]Provider{provA}, []NamedProber{{"p", p}}, src(plugin.Target{Prefix: pfx1, Host: netip.MustParseAddr("198.51.100.1")}), o)
+	e, _ := New([]Provider{provA}, []NamedProber{{Name: "p", Prober: p}}, src(plugin.Target{Prefix: pfx1, Host: netip.MustParseAddr("198.51.100.1")}), o)
 	ctx, cancel := context.WithTimeout(context.Background(), 110*time.Millisecond)
 	defer cancel()
 	if err := e.Run(ctx); !errors.Is(err, context.DeadlineExceeded) {
@@ -348,7 +348,7 @@ func TestRunStopsOnCancel(t *testing.T) {
 }
 
 func TestNewValidation(t *testing.T) {
-	p := []NamedProber{{"p", &fakeProber{fn: ok()}}}
+	p := []NamedProber{{Name: "p", Prober: &fakeProber{fn: ok()}}}
 	if _, err := New(nil, p, nil, opts()); err == nil {
 		t.Error("want error for no providers")
 	}
@@ -426,7 +426,7 @@ func TestRunOnceHungProberKeepsResults(t *testing.T) {
 	o.Workers = 1
 	var rounds atomic.Int32
 	o.OnRound = func() { rounds.Add(1) }
-	e, err := New([]Provider{provA}, []NamedProber{{"hung", p}}, src(plugin.Target{Prefix: pfx1, Host: netip.MustParseAddr("198.51.100.1")}), o)
+	e, err := New([]Provider{provA}, []NamedProber{{Name: "hung", Prober: p}}, src(plugin.Target{Prefix: pfx1, Host: netip.MustParseAddr("198.51.100.1")}), o)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -457,7 +457,7 @@ func TestRunOnceHungTargetSourceKeepsResults(t *testing.T) {
 	o.RoundTimeout = 80 * time.Millisecond
 	var rounds atomic.Int32
 	o.OnRound = func() { rounds.Add(1) }
-	e, err := New([]Provider{provA}, []NamedProber{{"p", &fakeProber{fn: ok(1, 1, 1)}}},
+	e, err := New([]Provider{provA}, []NamedProber{{Name: "p", Prober: &fakeProber{fn: ok(1, 1, 1)}}},
 		[]NamedSource{{Name: "slow", Source: &blockAfterSource{release: release}}}, o)
 	if err != nil {
 		t.Fatal(err)
@@ -492,7 +492,7 @@ func TestRetryReplacesHighLoss(t *testing.T) {
 	o.RetryLossPct = 50
 	o.RetryPackets = 4
 	o.Limiter = lim
-	e, err := New([]Provider{provA}, []NamedProber{{"udp", p}}, src(plugin.Target{Prefix: pfx1, Host: netip.MustParseAddr("198.51.100.1")}), o)
+	e, err := New([]Provider{provA}, []NamedProber{{Name: "udp", Prober: p}}, src(plugin.Target{Prefix: pfx1, Host: netip.MustParseAddr("198.51.100.1")}), o)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -521,7 +521,7 @@ func TestRetrySkippedBelowThreshold(t *testing.T) {
 	o.Packets = 4
 	o.RetryLossPct = 80
 	o.RetryPackets = 8
-	e, _ := New([]Provider{provA}, []NamedProber{{"p", p}}, src(plugin.Target{Prefix: pfx1, Host: netip.MustParseAddr("198.51.100.1")}), o)
+	e, _ := New([]Provider{provA}, []NamedProber{{Name: "p", Prober: p}}, src(plugin.Target{Prefix: pfx1, Host: netip.MustParseAddr("198.51.100.1")}), o)
 	e.RunOnce(context.Background())
 	if p.calls.Load() != 1 {
 		t.Fatalf("calls = %d, want 1", p.calls.Load())
@@ -531,7 +531,7 @@ func TestRetrySkippedBelowThreshold(t *testing.T) {
 		return plugin.ProbeResult{Sent: req.Count}, nil
 	}}
 	o.RetryLossPct = 0
-	e, _ = New([]Provider{provA}, []NamedProber{{"p", off}}, src(plugin.Target{Prefix: pfx1, Host: netip.MustParseAddr("198.51.100.1")}), o)
+	e, _ = New([]Provider{provA}, []NamedProber{{Name: "p", Prober: off}}, src(plugin.Target{Prefix: pfx1, Host: netip.MustParseAddr("198.51.100.1")}), o)
 	e.RunOnce(context.Background())
 	if off.calls.Load() != 1 {
 		t.Fatalf("disabled retry calls = %d", off.calls.Load())
@@ -549,7 +549,7 @@ func TestRetrySourceDownFailsClosed(t *testing.T) {
 	o := opts()
 	o.RetryLossPct = 1
 	o.RetryPackets = 3
-	e, _ := New([]Provider{provA}, []NamedProber{{"p", p}}, src(plugin.Target{Prefix: pfx1, Host: netip.MustParseAddr("198.51.100.1")}), o)
+	e, _ := New([]Provider{provA}, []NamedProber{{Name: "p", Prober: p}}, src(plugin.Target{Prefix: pfx1, Host: netip.MustParseAddr("198.51.100.1")}), o)
 	e.RunOnce(context.Background())
 	r := e.Results()[0]
 	if r.OK() || !strings.Contains(r.Err, "probe source address unavailable") {
@@ -582,7 +582,7 @@ func TestVIPIntervalAndRateLimit(t *testing.T) {
 	}}
 	vipTarget := plugin.Target{Prefix: pfx1, Host: netip.MustParseAddr("198.51.100.10"), Interval: 20 * time.Millisecond}
 	normal := plugin.Target{Prefix: pfx2, Host: netip.MustParseAddr("203.0.113.10")}
-	e, err := New([]Provider{provA}, []NamedProber{{"p", p}}, src(vipTarget, normal), o)
+	e, err := New([]Provider{provA}, []NamedProber{{Name: "p", Prober: p}}, src(vipTarget, normal), o)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -632,7 +632,7 @@ func TestVIPIntervalAndRateLimit(t *testing.T) {
 func TestShorterIntervalWins(t *testing.T) {
 	o := opts()
 	o.Interval = 30 * time.Second
-	e, _ := New([]Provider{provA}, []NamedProber{{"p", &fakeProber{fn: ok(1)}}}, []NamedSource{
+	e, _ := New([]Provider{provA}, []NamedProber{{Name: "p", Prober: &fakeProber{fn: ok(1)}}}, []NamedSource{
 		{Name: "static", Source: &fakeSource{targets: []plugin.Target{{Prefix: pfx1, Host: netip.MustParseAddr("198.51.100.9")}}}},
 		{Name: "vip", Source: &fakeSource{targets: []plugin.Target{{Prefix: pfx1, Interval: 5 * time.Second}, {Prefix: pfx2, Interval: 5 * time.Second}}}},
 	}, o)
@@ -651,7 +651,7 @@ func TestShorterIntervalWins(t *testing.T) {
 func TestLongerVIPIntervalDoesNotSlowPrefix(t *testing.T) {
 	o := opts()
 	o.Interval = 30 * time.Second
-	e, _ := New([]Provider{provA}, []NamedProber{{"p", &fakeProber{fn: ok(1)}}}, []NamedSource{
+	e, _ := New([]Provider{provA}, []NamedProber{{Name: "p", Prober: &fakeProber{fn: ok(1)}}}, []NamedSource{
 		{Name: "static", Source: &fakeSource{targets: []plugin.Target{{Prefix: pfx1, Host: netip.MustParseAddr("198.51.100.9")}}}},
 		{Name: "vip", Source: &fakeSource{targets: []plugin.Target{{Prefix: pfx1, Interval: 5 * time.Minute}, {Prefix: pfx2, Interval: 5 * time.Minute}}}},
 	}, o)
@@ -668,7 +668,7 @@ func TestLongerVIPIntervalDoesNotSlowPrefix(t *testing.T) {
 
 	// VIP listed first still cannot keep a cadence slower than the engine
 	// once a later source names the same prefix.
-	e, _ = New([]Provider{provA}, []NamedProber{{"p", &fakeProber{fn: ok(1)}}}, []NamedSource{
+	e, _ = New([]Provider{provA}, []NamedProber{{Name: "p", Prober: &fakeProber{fn: ok(1)}}}, []NamedSource{
 		{Name: "vip", Source: &fakeSource{targets: []plugin.Target{{Prefix: pfx1, Host: netip.MustParseAddr("198.51.100.8"), Interval: 5 * time.Minute}}}},
 		{Name: "static", Source: &fakeSource{targets: []plugin.Target{{Prefix: pfx1, Host: netip.MustParseAddr("198.51.100.9")}}}},
 	}, o)
@@ -709,7 +709,7 @@ func TestNonVIPSourceCachedAcrossShortWake(t *testing.T) {
 	o.Interval = 30 * time.Second
 	static := &countingSource{targets: []plugin.Target{{Prefix: pfx2, Host: netip.MustParseAddr("203.0.113.10")}}}
 	vip := &countingSource{targets: []plugin.Target{{Prefix: pfx1, Host: netip.MustParseAddr("198.51.100.10"), Interval: time.Second}}}
-	e, err := New([]Provider{provA}, []NamedProber{{"p", &fakeProber{fn: ok(1)}}}, []NamedSource{
+	e, err := New([]Provider{provA}, []NamedProber{{Name: "p", Prober: &fakeProber{fn: ok(1)}}}, []NamedSource{
 		{Name: "static", Source: static},
 		{Name: "vip", Source: vip},
 	}, o)
@@ -748,7 +748,7 @@ func TestRemovedPrefixDroppedWhenNothingDue(t *testing.T) {
 		{Prefix: pfx1, Host: netip.MustParseAddr("198.51.100.1")},
 		{Prefix: pfx2, Host: netip.MustParseAddr("203.0.113.1")},
 	}}
-	e, err := New([]Provider{provA}, []NamedProber{{"p", &fakeProber{fn: ok(1)}}},
+	e, err := New([]Provider{provA}, []NamedProber{{Name: "p", Prober: &fakeProber{fn: ok(1)}}},
 		[]NamedSource{{Name: "static", Source: src}}, o)
 	if err != nil {
 		t.Fatal(err)
@@ -786,7 +786,7 @@ func TestRunSchedulesVIPAheadOfEngineInterval(t *testing.T) {
 		mu.Unlock()
 		return plugin.ProbeResult{Sent: req.Count, RTTs: ms(1)}, nil
 	}}
-	e, err := New([]Provider{provA}, []NamedProber{{"p", p}}, []NamedSource{{Name: "s", Source: &fakeSource{targets: []plugin.Target{
+	e, err := New([]Provider{provA}, []NamedProber{{Name: "p", Prober: p}}, []NamedSource{{Name: "s", Source: &fakeSource{targets: []plugin.Target{
 		{Prefix: pfx1, Host: netip.MustParseAddr("198.51.100.10"), Interval: 20 * time.Millisecond},
 		{Prefix: pfx2, Host: netip.MustParseAddr("203.0.113.10")},
 	}}}}, o)
@@ -826,7 +826,7 @@ func TestFreshSourceReadOnShortWake(t *testing.T) {
 	o.Interval = 30 * time.Second
 	static := &countingSource{targets: []plugin.Target{{Prefix: pfx2, Host: netip.MustParseAddr("203.0.113.10")}}}
 	fresh := &countingSource{fresh: true, targets: []plugin.Target{{Prefix: pfx1, Host: netip.MustParseAddr("198.51.100.10")}}}
-	e, err := New([]Provider{provA}, []NamedProber{{"p", &fakeProber{fn: ok(1)}}}, []NamedSource{
+	e, err := New([]Provider{provA}, []NamedProber{{Name: "p", Prober: &fakeProber{fn: ok(1)}}}, []NamedSource{
 		{Name: "static", Source: static},
 		{Name: "outage", Source: fresh},
 	}, o)
@@ -859,7 +859,7 @@ func TestUrgentProbesBeforeInterval(t *testing.T) {
 	}}
 	o.Packets = 1
 	src := &countingSource{fresh: true, targets: []plugin.Target{{Prefix: pfx1, Host: netip.MustParseAddr("198.51.100.10"), Urgent: true, Interval: 5 * time.Second}}}
-	e, err := New([]Provider{provA}, []NamedProber{{"p", p}}, []NamedSource{{Name: "outage", Source: src}}, o)
+	e, err := New([]Provider{provA}, []NamedProber{{Name: "p", Prober: p}}, []NamedSource{{Name: "outage", Source: src}}, o)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -893,7 +893,7 @@ func TestSetUrgentProbesBeforeInterval(t *testing.T) {
 		return plugin.ProbeResult{Sent: 1, RTTs: ms(1)}, nil
 	}}
 	src := &fakeSource{targets: []plugin.Target{{Prefix: pfx1, Host: netip.MustParseAddr("198.51.100.10"), Interval: time.Minute}}}
-	e, err := New([]Provider{provA}, []NamedProber{{"p", p}}, []NamedSource{{Name: "static", Source: src}}, o)
+	e, err := New([]Provider{provA}, []NamedProber{{Name: "p", Prober: p}}, []NamedSource{{Name: "static", Source: src}}, o)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -948,10 +948,12 @@ func TestDecisionUrgentWaitsQuarterInterval(t *testing.T) {
 	defer cancel()
 	src := &countingSource{fresh: true, targets: []plugin.Target{{Prefix: pfx1, Host: netip.MustParseAddr("198.51.100.1")}}}
 	var probes atomic.Int32
-	eng, err := New([]Provider{provA}, []NamedProber{{"p", &fakeProber{fn: func(context.Context, plugin.ProbeRequest) (plugin.ProbeResult, error) {
+	eng, err := New([]Provider{provA}, []NamedProber{{Name: "p", Prober: &fakeProber{fn: func(context.Context, plugin.ProbeRequest) (plugin.ProbeResult, error) {
 		probes.Add(1)
 		return plugin.ProbeResult{Sent: 1, RTTs: ms(1)}, nil
-	}}}}, []NamedSource{{Name: "s", Source: src}}, o)
+	}}}},
+
+		[]NamedSource{{Name: "s", Source: src}}, o)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -985,7 +987,7 @@ func TestDecisionUrgentWaitsQuarterInterval(t *testing.T) {
 func TestUrgentFromLaterSource(t *testing.T) {
 	o := opts()
 	o.Interval = 30 * time.Second
-	e, err := New([]Provider{provA}, []NamedProber{{"p", &fakeProber{fn: ok(1)}}}, []NamedSource{
+	e, err := New([]Provider{provA}, []NamedProber{{Name: "p", Prober: &fakeProber{fn: ok(1)}}}, []NamedSource{
 		{Name: "static", Source: &fakeSource{targets: []plugin.Target{{Prefix: pfx1, Host: netip.MustParseAddr("198.51.100.9")}}}},
 		{Name: "outage", Source: &fakeSource{targets: []plugin.Target{{Prefix: pfx1, Urgent: true, Interval: 5 * time.Second}}}},
 	}, o)
@@ -1018,10 +1020,12 @@ func TestWakeSkipsRemainderOfInterval(t *testing.T) {
 	defer cancel()
 	src := &countingSource{fresh: true, targets: []plugin.Target{{Prefix: pfx1, Host: netip.MustParseAddr("198.51.100.1")}}}
 	var probes atomic.Int32
-	eng, err := New([]Provider{provA}, []NamedProber{{"p", &fakeProber{fn: func(context.Context, plugin.ProbeRequest) (plugin.ProbeResult, error) {
+	eng, err := New([]Provider{provA}, []NamedProber{{Name: "p", Prober: &fakeProber{fn: func(context.Context, plugin.ProbeRequest) (plugin.ProbeResult, error) {
 		probes.Add(1)
 		return plugin.ProbeResult{Sent: 1, RTTs: ms(1)}, nil
-	}}}}, []NamedSource{{Name: "s", Source: src}}, o)
+	}}}},
+
+		[]NamedSource{{Name: "s", Source: src}}, o)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1053,7 +1057,7 @@ func TestRoundBudgetIncludesDispersionRetry(t *testing.T) {
 	o.Interval = 30 * time.Second
 	o.Timeout = 2 * time.Second
 	o.Packets = 10
-	e, err := New([]Provider{provA}, []NamedProber{{"p", &fakeProber{fn: ok(1)}}},
+	e, err := New([]Provider{provA}, []NamedProber{{Name: "p", Prober: &fakeProber{fn: ok(1)}}},
 		src(plugin.Target{Prefix: pfx1, Host: netip.MustParseAddr("198.51.100.1")}), o)
 	if err != nil {
 		t.Fatal(err)
@@ -1061,7 +1065,7 @@ func TestRoundBudgetIncludesDispersionRetry(t *testing.T) {
 	base := e.roundBudget()
 	o.Dispersion = 20 * time.Millisecond
 	o.RetryPackets = 30
-	e, err = New([]Provider{provA}, []NamedProber{{"p", &fakeProber{fn: ok(1)}}},
+	e, err = New([]Provider{provA}, []NamedProber{{Name: "p", Prober: &fakeProber{fn: ok(1)}}},
 		src(plugin.Target{Prefix: pfx1, Host: netip.MustParseAddr("198.51.100.1")}), o)
 	if err != nil {
 		t.Fatal(err)
@@ -1085,7 +1089,7 @@ func TestThreeFlowCandidatesSkipAutomatic(t *testing.T) {
 	}}
 	gw := netip.MustParseAddr("192.0.2.21")
 	e, err := New([]Provider{{Name: "transit-a", Source: provA.Source, NextHop: gw}},
-		[]NamedProber{{"p", p}}, []NamedSource{{
+		[]NamedProber{{Name: "p", Prober: p}}, []NamedSource{{
 			Name: "flow",
 			Source: &fakeSource{targets: []plugin.Target{{
 				Prefix: pfx1,
@@ -1122,7 +1126,7 @@ func TestOnRoundAfterCommit(t *testing.T) {
 	var e *Engine
 	got := -1
 	o.OnRound = func() { got = len(e.Results()) } // must not deadlock and must see fresh results
-	e, _ = New([]Provider{provA}, []NamedProber{{"p", &fakeProber{fn: ok(1)}}}, src(plugin.Target{Prefix: pfx1, Host: netip.MustParseAddr("198.51.100.1")}), o)
+	e, _ = New([]Provider{provA}, []NamedProber{{Name: "p", Prober: &fakeProber{fn: ok(1)}}}, src(plugin.Target{Prefix: pfx1, Host: netip.MustParseAddr("198.51.100.1")}), o)
 	e.RunOnce(context.Background())
 	if got != 1 {
 		t.Fatalf("OnRound saw %d results", got)
@@ -1152,7 +1156,7 @@ func TestAutomaticTargets(t *testing.T) {
 	}}
 	gw := netip.MustParseAddr("192.0.2.21")
 	e, err := New([]Provider{{Name: "transit-a", Source: provA.Source, NextHop: gw}},
-		[]NamedProber{{"fake", p}}, src(plugin.Target{Prefix: pfx1}), opts())
+		[]NamedProber{{Name: "fake", Prober: p}}, src(plugin.Target{Prefix: pfx1}), opts())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1198,7 +1202,7 @@ func TestAutomaticTargets(t *testing.T) {
 		return plugin.ProbeResult{Sent: req.Count, RTTs: ms(8, 8, 8)}, nil
 	}
 	e, err = New([]Provider{{Name: "transit-a", Source: provA.Source, NextHop: gw}},
-		[]NamedProber{{"fake", p}}, src(plugin.Target{Prefix: pfx1, Host: pin}), opts())
+		[]NamedProber{{Name: "fake", Prober: p}}, src(plugin.Target{Prefix: pfx1, Host: pin}), opts())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1210,7 +1214,7 @@ func TestAutomaticTargets(t *testing.T) {
 }
 
 func TestLaterPinReplacesDefaultHost(t *testing.T) {
-	e, _ := New([]Provider{provA}, []NamedProber{{"p", &fakeProber{fn: ok(1)}}}, []NamedSource{
+	e, _ := New([]Provider{provA}, []NamedProber{{Name: "p", Prober: &fakeProber{fn: ok(1)}}}, []NamedSource{
 		{Name: "static", Source: &fakeSource{targets: []plugin.Target{{Prefix: pfx1}}}},
 		{Name: "vip", Source: &fakeSource{targets: []plugin.Target{{Prefix: pfx1, Host: netip.MustParseAddr("198.51.100.9")}}}},
 	}, opts())
@@ -1240,7 +1244,7 @@ func TestFlowCandidateWhenBusiestIsSilent(t *testing.T) {
 	e, err := New([]Provider{
 		{Name: "transit-a", Source: provA.Source, NextHop: gwA},
 		{Name: "transit-b", Source: provB.Source, NextHop: gwB},
-	}, []NamedProber{{"p", p}}, []NamedSource{{
+	}, []NamedProber{{Name: "p", Prober: p}}, []NamedSource{{
 		Name: "flow",
 		Source: &fakeSource{targets: []plugin.Target{{
 			Prefix: pfx1, Host: busy, Candidate: true, Weight: 1000,
@@ -1299,7 +1303,7 @@ func TestFlowCandidateGatewayFallback(t *testing.T) {
 		return plugin.ProbeResult{Sent: req.Count}, nil
 	}}
 	e, err := New([]Provider{{Name: "transit-a", Source: provA.Source, NextHop: gw}},
-		[]NamedProber{{"p", p}}, []NamedSource{{
+		[]NamedProber{{Name: "p", Prober: p}}, []NamedSource{{
 			Name: "flow",
 			Source: &fakeSource{targets: []plugin.Target{{
 				Prefix: pfx1, Host: busy, Candidate: true,
@@ -1325,7 +1329,7 @@ func TestStaticHostStaysPin(t *testing.T) {
 		return plugin.ProbeResult{Sent: req.Count, RTTs: ms(8, 8, 8)}, nil
 	}}
 	e, err := New([]Provider{{Name: "transit-a", Source: provA.Source, NextHop: gw}},
-		[]NamedProber{{"p", p}}, src(plugin.Target{Prefix: pfx1, Host: host}), opts())
+		[]NamedProber{{Name: "p", Prober: p}}, src(plugin.Target{Prefix: pfx1, Host: host}), opts())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1352,7 +1356,7 @@ func TestPinBeatsFlowCandidate(t *testing.T) {
 			{Name: "flow", Source: &fakeSource{targets: []plugin.Target{flow}}}},
 	}
 	for _, sources := range orders {
-		e, err := New([]Provider{provA}, []NamedProber{{"p", &fakeProber{fn: ok(1)}}}, sources, opts())
+		e, err := New([]Provider{provA}, []NamedProber{{Name: "p", Prober: &fakeProber{fn: ok(1)}}}, sources, opts())
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1362,7 +1366,7 @@ func TestPinBeatsFlowCandidate(t *testing.T) {
 		}
 	}
 	// A candidate replaces a default host from an earlier source.
-	e, err := New([]Provider{provA}, []NamedProber{{"p", &fakeProber{fn: ok(1)}}}, []NamedSource{
+	e, err := New([]Provider{provA}, []NamedProber{{Name: "p", Prober: &fakeProber{fn: ok(1)}}}, []NamedSource{
 		{Name: "static", Source: &fakeSource{targets: []plugin.Target{{Prefix: pfx1}}}},
 		{Name: "flow", Source: &fakeSource{targets: []plugin.Target{flow}}},
 	}, opts())
@@ -1388,7 +1392,7 @@ func TestExchangeLANTargetsDropped(t *testing.T) {
 		{Prefix: netip.MustParsePrefix("198.51.100.0/25"), Host: netip.MustParseAddr("203.0.113.8"), Candidate: true},
 	}}
 	before := exchange.LANDrops()
-	e, err := New([]Provider{provA}, []NamedProber{{"p", &fakeProber{fn: ok(1)}}}, []NamedSource{{Name: "static", Source: src}}, o)
+	e, err := New([]Provider{provA}, []NamedProber{{Name: "p", Prober: &fakeProber{fn: ok(1)}}}, []NamedSource{{Name: "static", Source: src}}, o)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1421,7 +1425,7 @@ func TestExchangeLANTargetsDropped(t *testing.T) {
 	// A retained improvement cannot bring the LAN prefix back. The source
 	// no longer lists it; memory still has the last host, as keepImproved
 	// would after the source dropped it.
-	e2, err := New([]Provider{provA}, []NamedProber{{"p", &fakeProber{fn: ok(1)}}}, []NamedSource{{
+	e2, err := New([]Provider{provA}, []NamedProber{{Name: "p", Prober: &fakeProber{fn: ok(1)}}}, []NamedSource{{
 		Name: "static", Source: &fakeSource{targets: []plugin.Target{{Prefix: keep, Host: netip.MustParseAddr("198.51.100.9")}}},
 	}}, o)
 	if err != nil {
@@ -1466,7 +1470,7 @@ func TestJobOrderIsUrgentThenShorterInterval(t *testing.T) {
 	}}
 	o := opts()
 	o.Workers = 1
-	e, err := New([]Provider{provA}, []NamedProber{{"p", p}}, src(
+	e, err := New([]Provider{provA}, []NamedProber{{Name: "p", Prober: p}}, src(
 		plugin.Target{Prefix: tail, Host: netip.MustParseAddr("192.0.2.129"), Interval: 2 * time.Second},
 		plugin.Target{Prefix: vip, Host: netip.MustParseAddr("198.51.100.9"), Interval: 200 * time.Millisecond},
 		plugin.Target{Prefix: urgent, Host: netip.MustParseAddr("203.0.113.9"), Urgent: true},
@@ -1503,7 +1507,7 @@ func TestPartialRoundKeepsFinishedPrefixes(t *testing.T) {
 	o.RoundTimeout = 150 * time.Millisecond
 	var rounds atomic.Int32
 	o.OnRound = func() { rounds.Add(1) }
-	e, err := New([]Provider{provA}, []NamedProber{{"p", p}}, src(
+	e, err := New([]Provider{provA}, []NamedProber{{Name: "p", Prober: p}}, src(
 		plugin.Target{Prefix: pfx1, Host: netip.MustParseAddr("198.51.100.1")},
 		plugin.Target{Prefix: pfx2, Host: netip.MustParseAddr("203.0.113.1")},
 	), o)
@@ -1591,7 +1595,7 @@ func TestPartialRoundStoresFinishedProviders(t *testing.T) {
 	o.RoundTimeout = 200 * time.Millisecond
 	var rounds atomic.Int32
 	o.OnRound = func() { rounds.Add(1) }
-	e, err := New([]Provider{provA, provB}, []NamedProber{{"p", p}},
+	e, err := New([]Provider{provA, provB}, []NamedProber{{Name: "p", Prober: p}},
 		src(plugin.Target{Prefix: pfx1, Host: netip.MustParseAddr("198.51.100.1")}), o)
 	if err != nil {
 		t.Fatal(err)
@@ -1676,7 +1680,7 @@ func TestPartialRoundDropsPrefixesThatLeftEverySource(t *testing.T) {
 	o.Workers = 1
 	o.Interval = 20 * time.Millisecond // the target list is cached for one interval
 	o.RoundTimeout = 150 * time.Millisecond
-	e, err := New([]Provider{provA}, []NamedProber{{"p", p}}, []NamedSource{{Name: "static", Source: fs}}, o)
+	e, err := New([]Provider{provA}, []NamedProber{{Name: "p", Prober: p}}, []NamedSource{{Name: "static", Source: fs}}, o)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1712,7 +1716,7 @@ func TestShutdownMidRoundStoresNothing(t *testing.T) {
 	o.Workers = 2
 	var rounds atomic.Int32
 	o.OnRound = func() { rounds.Add(1) }
-	e, err := New([]Provider{provA}, []NamedProber{{"p", p}}, src(
+	e, err := New([]Provider{provA}, []NamedProber{{Name: "p", Prober: p}}, src(
 		plugin.Target{Prefix: pfx1, Host: netip.MustParseAddr("198.51.100.1")},
 		plugin.Target{Prefix: pfx2, Host: netip.MustParseAddr("203.0.113.1")},
 	), o)
@@ -1745,7 +1749,7 @@ func TestSourceStatusSinceMovesOnlyWhenFailureFlips(t *testing.T) {
 	o := opts()
 	o.Now = func() time.Time { return now }
 	good := &fakeSource{targets: []plugin.Target{{Prefix: pfx1}}}
-	e, err := New([]Provider{provA}, []NamedProber{{"p", &fakeProber{fn: ok(1)}}}, []NamedSource{{Name: "static", Source: good}}, o)
+	e, err := New([]Provider{provA}, []NamedProber{{Name: "p", Prober: &fakeProber{fn: ok(1)}}}, []NamedSource{{Name: "static", Source: good}}, o)
 	if err != nil {
 		t.Fatal(err)
 	}

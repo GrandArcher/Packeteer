@@ -120,6 +120,7 @@ func policyConfig(cfg *config.Config) (policy.Config, error) {
 		Excluded:            map[string]bool{},
 		RPKIAvoidInvalid:    cfg.RPKIOn() && cfg.RPKI.AvoidInvalid,
 		IRRPreferRegistered: cfg.IRROn() && cfg.IRR.PreferRegistered,
+		RequireEvidence:     cfg.Thresholds.RequireEvidence,
 	}
 	if cfg.ImprovementTTL > 0 {
 		pc.ImprovementTTL = cfg.ImprovementTTL
@@ -242,6 +243,7 @@ func decisionInput(ctx context.Context, now time.Time, engine *probe.Engine, vie
 		in.EgressDown = view.EgressDown()
 	}
 	fed.merge(&in, now)
+	in.Passive = collectPassive(plugins)
 	var lookup routeLookup
 	if view != nil {
 		lookup = view
@@ -523,6 +525,31 @@ func collectTraffic(ctx context.Context, plugins *pluginhost.Set) map[netip.Pref
 			if _, done := out[row.Prefix]; !done {
 				out[row.Prefix] = row.Class
 			}
+		}
+	}
+	return out
+}
+
+// collectPassive reads the span and flow sources' passive view of the
+// prefixes with TCP traffic in their window (#202): true when that traffic
+// is over the source's problem thresholds. A problem in any source counts.
+// Decide uses it to rate the confidence of the sample on the path that
+// carries the traffic. This does not announce.
+func collectPassive(plugins *pluginhost.Set) map[netip.Prefix]bool {
+	if plugins == nil {
+		return nil
+	}
+	var out map[netip.Prefix]bool
+	for _, src := range plugins.SourcesSnapshot() {
+		po, ok := src.Plugin.(plugin.PassiveObserver)
+		if !ok {
+			continue
+		}
+		for p, problem := range po.PassiveSignals() {
+			if out == nil {
+				out = map[netip.Prefix]bool{}
+			}
+			out[p] = out[p] || problem
 		}
 	}
 	return out
