@@ -29,13 +29,13 @@ Milestones:
 | v0.6 | 9 | 7 |
 | v0.7 | 3 | 3 |
 | v0.8 | 20 | 16 |
-| v0.9 | 5 | 4 |
+| v0.9 | 6 | 5 |
 | won't do | 2 | - |
-| **total** | 118 | 104 |
+| **total** | 119 | 105 |
 
 | Status | Count |
 |---|---|
-| done | 104 |
+| done | 105 |
 | partial | 10 |
 | in progress | 0 |
 | planned | 2 |

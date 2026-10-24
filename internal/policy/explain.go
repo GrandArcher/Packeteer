@@ -625,12 +625,12 @@ func blockedBy(g map[string]Gate, f explainFacts, d Decision, pairBetter, pinSto
 	switch {
 	case g[GateRIB].Status == GateFail:
 		return GateRIB
+	case pinStopped:
+		return failed(GateHoldTime, GateAllowlist, GateCap)
 	case f.ignore || (d.Cause == plugin.CauseStatic && g[GatePolicy].Status == GateFail):
 		return GatePolicy
 	case f.waitKind == waitQuarantine:
 		return GateHoldTime
-	case pinStopped:
-		return failed(GateHoldTime, GateAllowlist, GateCap)
 	case !usableCur:
 		return failed(GateFreshness)
 	case !pairBetter:

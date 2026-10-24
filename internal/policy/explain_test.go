@@ -441,6 +441,16 @@ func TestExplainStaticPinStopped(t *testing.T) {
 			t.Fatalf("counterfactual = %q, want %q", ex.Counterfactual, want)
 		}
 	})
+	t.Run("not allowlisted with another provider in maintenance", func(t *testing.T) {
+		c, input := pin(cfg())
+		c.Allowlist = []netip.Prefix{pB}
+		input.Maintenance = []string{"b"}
+		ex := explainRound(t, c, input)
+		if ex.BlockedBy != GateAllowlist {
+			t.Fatalf("explain = %+v", ex)
+		}
+		wantGate(t, ex, GatePolicy, GateFail, "b would win but is excluded")
+	})
 	t.Run("cooldown", func(t *testing.T) {
 		c, input := pin(cfg())
 		e := NewEngine(c, scorer(t))
