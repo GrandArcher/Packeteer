@@ -129,12 +129,16 @@ func Merge(in *policy.Input, cfg Config, peers []plugin.PeerState) {
 				}
 				rtt := p.RTT + cfg.InterDCRTT[domain]
 				recv := int(math.Round(float64(p.Sent) * (100 - p.LossPct) / 100))
-				added = append(added, probe.Result{
+				r := probe.Result{
 					Provider: name, Prefix: p.Prefix, Prober: ProberName + ":" + snap.Instance,
 					Stats: probe.Stats{Sent: p.Sent, Received: recv, LossPct: p.LossPct,
 						RTTMin: rtt, RTTAvg: rtt, RTTMax: rtt, Jitter: p.Jitter},
 					Time: p.Time,
-				})
+				}
+				// A peer shares one RTT per path, not its prober type, so
+				// its sample is never evidence beyond ICMP.
+				r.Confidence = probe.RateConfidence(r, ProberName, 0)
+				added = append(added, r)
 			}
 		}
 		for p := range probed {

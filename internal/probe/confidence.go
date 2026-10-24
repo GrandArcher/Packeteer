@@ -33,7 +33,9 @@ type Confidence struct {
 	Level string  `json:"level"`
 	Score float64 `json:"score"`
 	// Protocol is the type of the prober that produced the sample: icmp,
-	// tcp, udp, or another configured type. Empty for a failed sample.
+	// tcp, udp, another configured type, or federation for a path a peer
+	// POP measured with a prober of unknown type. Empty for a failed
+	// sample.
 	Protocol string `json:"protocol,omitempty"`
 	Replies  int    `json:"replies"`
 	Sent     int    `json:"sent"`
@@ -58,9 +60,10 @@ const (
 	weakFactor          = 0.5
 )
 
-// rateConfidence builds the Confidence of a stored result. dispersion is
-// probe.dispersion_ms (0 when off).
-func rateConfidence(r Result, protocol string, dispersion time.Duration) Confidence {
+// RateConfidence builds the Confidence of a stored result. protocol is the
+// type of the prober that produced it; dispersion is probe.dispersion_ms
+// (0 when off).
+func RateConfidence(r Result, protocol string, dispersion time.Duration) Confidence {
 	if !r.OK() {
 		return Confidence{Level: ConfidenceNone}
 	}

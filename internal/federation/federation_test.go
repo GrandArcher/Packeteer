@@ -95,6 +95,10 @@ func TestMergeAddsInterDCRTT(t *testing.T) {
 	if got.Prober != "federation:pop-b" {
 		t.Errorf("prober = %q", got.Prober)
 	}
+	c := got.Confidence
+	if c.Level != probe.ConfidenceMedium || c.Protocol != ProberName || c.Replies != 10 || c.Sent != 10 || c.BeyondICMP() {
+		t.Errorf("confidence = %+v, want medium, federation, 10/10 replies, not beyond ICMP", c)
+	}
 	if in.NoRoute[pfx]["x-b"] {
 		t.Error("x-b marked no-route although pop-b exits there")
 	}

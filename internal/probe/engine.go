@@ -1185,7 +1185,7 @@ func (e *Engine) runRound(ctx context.Context, allow func(plugin.Target) bool, m
 						r.Hops = hops
 					}
 				}
-				r.Confidence = rateConfidence(r, e.proberType(r.Prober), e.opt.Dispersion)
+				r.Confidence = RateConfidence(r, e.proberType(r.Prober), e.opt.Dispersion)
 				// A probe that the deadline cancelled must not refresh the
 				// stored result. Staleness stays on the previous time.
 				if roundCtx.Err() != nil {

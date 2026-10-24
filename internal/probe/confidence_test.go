@@ -47,7 +47,7 @@ func TestRateConfidence(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			c := rateConfidence(tt.res, tt.protocol, tt.dispersion)
+			c := RateConfidence(tt.res, tt.protocol, tt.dispersion)
 			if c.Level != tt.level || c.Score != tt.score || c.BeyondICMP() != tt.beyond || c.String() != tt.text {
 				t.Fatalf("got %+v (beyond %v, %q), want %s %v beyond %v %q", c, c.BeyondICMP(), c, tt.level, tt.score, tt.beyond, tt.text)
 			}
@@ -56,7 +56,7 @@ func TestRateConfidence(t *testing.T) {
 }
 
 func TestConfidenceWithPassive(t *testing.T) {
-	icmp := rateConfidence(Result{Stats: stats(10, 10, 20, 21, 22)}, "icmp", 0)
+	icmp := RateConfidence(Result{Stats: stats(10, 10, 20, 21, 22)}, "icmp", 0)
 	agree := icmp.WithPassive(true)
 	if agree.Level != ConfidenceHigh || agree.Score != 1 || !agree.BeyondICMP() || agree.String() != "icmp, 10/10 replies, passive agrees" {
 		t.Fatalf("agree = %+v %q", agree, agree)
@@ -67,11 +67,11 @@ func TestConfidenceWithPassive(t *testing.T) {
 	}
 	// Disagreement weakens a TCP sample too: 10/10 TCP replies that
 	// contradict the observed traffic are medium, not high.
-	tcp := rateConfidence(Result{Stats: stats(10, 10, 20, 21, 22)}, "tcp", 0).WithPassive(false)
+	tcp := RateConfidence(Result{Stats: stats(10, 10, 20, 21, 22)}, "tcp", 0).WithPassive(false)
 	if tcp.Level != ConfidenceMedium || tcp.Score != 0.5 || !tcp.BeyondICMP() {
 		t.Fatalf("tcp disagree = %+v", tcp)
 	}
-	none := rateConfidence(Result{Err: "boom"}, "tcp", 0).WithPassive(true)
+	none := RateConfidence(Result{Err: "boom"}, "tcp", 0).WithPassive(true)
 	if none.Level != ConfidenceNone || none.Passive != "" {
 		t.Fatalf("failed sample took a passive state: %+v", none)
 	}
