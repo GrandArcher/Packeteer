@@ -625,6 +625,11 @@ func blockedBy(g map[string]Gate, f explainFacts, d Decision, pairBetter, pinSto
 	switch {
 	case g[GateRIB].Status == GateFail:
 		return GateRIB
+	case d.Action == ActionKeep && (d.Cause == plugin.CauseStatic || d.Cause == plugin.CauseCommit || d.Cause == plugin.CauseCost):
+		// A kept static pin or planned commit or cost keep is where it
+		// should be; no gate stopped it, even when an excluded or removed
+		// provider would otherwise win.
+		return ""
 	case pinStopped:
 		return failed(GateHoldTime, GateAllowlist, GateCap)
 	case f.ignore || (d.Cause == plugin.CauseStatic && g[GatePolicy].Status == GateFail):

@@ -544,3 +544,33 @@ func TestExplainAgreesWithDecision(t *testing.T) {
 		}
 	}
 }
+
+// A kept static pin or planned decision names no blocking gate, even when a
+// faster provider is barred by maintenance.
+func TestExplainKeptOnPurposeNotBlocked(t *testing.T) {
+	t.Run("kept static pin with faster provider in maintenance", func(t *testing.T) {
+		c := cfg()
+		c.Mode, c.Allowlist = "inject", []netip.Prefix{pA}
+		e := NewEngine(c, scorer(t))
+		input := withPolicy(in(results(t0, pA, m{"a", 0, 90}, m{"b", 0, 30}, m{"c", 0, 50}), natA()), pA, verdict(plugin.PolicyStatic, "c"))
+		e.Evaluate(input, t0)
+		input = withPolicy(in(results(t0.Add(time.Minute), pA, m{"a", 0, 90}, m{"b", 0, 10}, m{"c", 0, 50}), natA()), pA, verdict(plugin.PolicyStatic, "c"))
+		input.Maintenance = []string{"b"}
+		e.Evaluate(input, t0.Add(time.Minute))
+		_, ex, _, ok := e.Explain(pA)
+		if !ok || ex.Outcome != OutcomeKept || ex.BlockedBy != "" || ex.Counterfactual != "" {
+			t.Fatalf("explain = %+v", ex)
+		}
+	})
+	for _, cause := range []string{plugin.CauseCommit, plugin.CauseCost} {
+		t.Run("kept planned "+cause, func(t *testing.T) {
+			d := Decision{Prefix: pA, Action: ActionKeep, Cause: cause, Native: "a", Current: "c", Recommended: "c",
+				Candidates: []Candidate{{Provider: "a", Usable: true}, {Provider: "b", Usable: true}, {Provider: "c", Usable: true}}}
+			f := explainFacts{current: "c", challenger: "b", barred: "b", active: true, rib: ribOK}
+			ex := buildExplain(d, f, cfg(), 0)
+			if ex.Outcome != OutcomeKept || ex.BlockedBy != "" || ex.Counterfactual != "" {
+				t.Fatalf("explain = %+v", ex)
+			}
+		})
+	}
+}
