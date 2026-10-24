@@ -30,7 +30,7 @@ func TestConfidenceOnAPI(t *testing.T) {
 				},
 				Decisions: []policy.Decision{{
 					Prefix: p, Native: "transit-a", Current: "transit-a", Recommended: "transit-b", Action: policy.ActionNone,
-					Reason: "require_evidence: ICMP-only measurement for transit-a (icmp, 4/4 replies, passive disagrees)",
+					Reason: "require_evidence: no evidence beyond ICMP for transit-a (icmp, 4/4 replies, passive disagrees)",
 					Candidates: []policy.Candidate{
 						{Provider: "transit-a", Usable: true, Confidence: icmp},
 						{Provider: "transit-b", Usable: true, Confidence: tcp},

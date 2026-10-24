@@ -69,8 +69,9 @@ type Config struct {
 	// RequireEvidence refuses a new performance move or performance switch
 	// whose two compared samples do not both rest on more than ICMP: a
 	// tcp or udp reply, or passive TCP evidence that agrees with the
-	// sample (#202). It is off by default. Flip-back, static pins, and
-	// commit or cost moves do not use it.
+	// sample (#202). It is off by default. Decide checks it after the
+	// cooldown, the allowlist, and cost precedence, so flip-back, static
+	// pins, and commit or cost moves do not use it.
 	RequireEvidence bool
 	Allowlist       []netip.Prefix // inject mode: only these (or more-specifics of them)
 	// Providers carries group, precedence, and cc_disable. Empty means

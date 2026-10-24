@@ -60,7 +60,7 @@ decisions() {
 echo "rule on: the faster transit-b is measured by the fixed prober only, so it is refused"
 decisions '.decisions[] | select(.prefix == "198.51.100.0/24")
   | .action == "none" and .recommended == "transit-b"
-  and (.reason | startswith("require_evidence: ICMP-only measurement for transit-a (fixed, 4/4 replies) and transit-b (fixed, 4/4 replies)"))
+  and (.reason | startswith("require_evidence: no evidence beyond ICMP for transit-a (fixed, 4/4 replies) and transit-b (fixed, 4/4 replies)"))
   and ([.candidates[] | .confidence.level == "medium" and .confidence.protocol == "fixed" and .confidence.replies == 4] | all)'
 echo "the edge must hold no Packeteer path while the rule refuses the move"
 for _ in $(seq 1 10); do

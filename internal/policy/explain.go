@@ -323,12 +323,12 @@ func buildExplain(d Decision, f explainFacts, cfg Config, capUsed int) Explain {
 		g[GateEvidence] = Gate{Name: GateEvidence, Status: GateSkip, Detail: "decided by the " + d.Cause + " planner, not the evidence rule"}
 	default:
 		g[GateThresholds] = thresholdsGate(cur, ch, haveCur, haveCh, cfg)
-		g[GateEvidence] = evidenceGate(cur, ch, haveCur, haveCh, cfg)
+		g[GateEvidence] = evidenceGate(d, f, cur, ch, haveCur, haveCh, pairBetter, cfg)
 	}
 	retired := d.Action == ActionRetire
-	// Decide checks the evidence rule right after the thresholds, so a
-	// move it refused never reached confirm_rounds, hold_time, or the cap.
-	evidenceStopped := g[GateEvidence].Status == GateFail && !moved
+	// The evidence gate fails only on a move the rule refused, which never
+	// reached confirm_rounds or the cap.
+	evidenceStopped := g[GateEvidence].Status == GateFail
 	reached := moved || (pairBetter && !static && !plan && !evidenceStopped)
 	notReached := func(name string) Gate {
 		switch {
@@ -476,10 +476,11 @@ func thresholdsGate(cur, ch Candidate, haveCur, haveCh bool, cfg Config) Gate {
 	return g
 }
 
-// evidenceGate shows what each compared sample rests on (#202). With
-// thresholds.require_evidence on, a current or challenger sample that is
-// ICMP only fails it.
-func evidenceGate(cur, ch Candidate, haveCur, haveCh bool, cfg Config) Gate {
+// evidenceGate shows what each compared sample rests on (#202). It fails
+// only when Decide refused the move on thresholds.require_evidence: a
+// flip-back, or a move stopped earlier (thresholds, cooldown, allowlist),
+// never reached the rule even when a sample is ICMP only.
+func evidenceGate(d Decision, f explainFacts, cur, ch Candidate, haveCur, haveCh, pairBetter bool, cfg Config) Gate {
 	g := Gate{Name: GateEvidence, Limit: "display only"}
 	if cfg.RequireEvidence {
 		g.Limit = "require_evidence: a tcp or udp reply, or passive agreement, on both paths"
@@ -493,9 +494,18 @@ func evidenceGate(cur, ch Candidate, haveCur, haveCh bool, cfg Config) Gate {
 		return g
 	}
 	g.Value = cur.Provider + ": " + cur.Confidence.String() + "; " + ch.Provider + ": " + ch.Confidence.String()
-	g.Status = GatePass
-	if lacking := evidenceLacking(cfg, cur, ch); lacking != "" {
-		g.Status, g.Detail = GateFail, strings.TrimPrefix(lacking, "require_evidence: ")
+	lacking := evidenceLacking(cfg, cur, ch)
+	switch {
+	case lacking == "":
+		g.Status = GatePass
+	case strings.HasPrefix(d.Reason, evidenceRefused):
+		g.Status, g.Detail = GateFail, strings.TrimPrefix(d.Reason, evidenceRefused)
+	case !pairBetter:
+		g.Status, g.Detail = GateSkip, "not reached: no better path passed the thresholds"
+	case f.active && ch.Provider == d.Native:
+		g.Status, g.Detail = GateSkip, "not used: a flip-back to the native path does not wait for evidence"
+	default:
+		g.Status, g.Detail = GateSkip, "not reached: "+d.Reason
 	}
 	return g
 }

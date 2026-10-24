@@ -64,10 +64,10 @@ func TestRequireEvidenceRefusesICMPOnlyWin(t *testing.T) {
 		action    string
 		reason    string
 	}{
-		{"both icmp", []string{"icmp", "icmp"}, ActionNone, "require_evidence: ICMP-only measurement for a (icmp, 10/10 replies) and b (icmp, 10/10 replies)"},
-		{"challenger tcp, native icmp", []string{"icmp", "tcp"}, ActionNone, "require_evidence: ICMP-only measurement for a (icmp, 10/10 replies)"},
-		{"native udp, challenger icmp", []string{"udp", "icmp"}, ActionNone, "require_evidence: ICMP-only measurement for b (icmp, 10/10 replies)"},
-		{"exec prober is not beyond icmp", []string{"exec", "tcp"}, ActionNone, "require_evidence: ICMP-only measurement for a (exec, 10/10 replies)"},
+		{"both icmp", []string{"icmp", "icmp"}, ActionNone, "require_evidence: no evidence beyond ICMP for a (icmp, 10/10 replies) and b (icmp, 10/10 replies)"},
+		{"challenger tcp, native icmp", []string{"icmp", "tcp"}, ActionNone, "require_evidence: no evidence beyond ICMP for a (icmp, 10/10 replies)"},
+		{"native udp, challenger icmp", []string{"udp", "icmp"}, ActionNone, "require_evidence: no evidence beyond ICMP for b (icmp, 10/10 replies)"},
+		{"exec prober is not beyond icmp", []string{"exec", "tcp"}, ActionNone, "require_evidence: no evidence beyond ICMP for a (exec, 10/10 replies)"},
 		{"both tcp", []string{"tcp", "tcp"}, ActionNone, "confirming b (1/2)"},
 		{"tcp and udp", []string{"udp", "tcp"}, ActionNone, "confirming b (1/2)"},
 	}
@@ -199,7 +199,7 @@ func TestRequireEvidenceOnPerformanceSwitch(t *testing.T) {
 	res := measured(t0, pA, []string{"icmp", "tcp", "icmp"}, m{"a", 0, 90}, m{"b", 0, 50}, m{"c", 0, 20})
 	st, out := Decide(active(), in(res, native), c, scorer(t), t0)
 	d := decision(t, out, pA)
-	if d.Action != ActionKeep || d.Reason != "require_evidence: ICMP-only measurement for c (icmp, 10/10 replies)" || d.Recommended != "c" || len(out.Changes) != 0 || st.Improvements[pA].Provider != "b" {
+	if d.Action != ActionKeep || d.Reason != "require_evidence: no evidence beyond ICMP for c (icmp, 10/10 replies)" || d.Recommended != "c" || len(out.Changes) != 0 || st.Improvements[pA].Provider != "b" {
 		t.Fatalf("switch onto an icmp-only path = %+v changes = %+v", d, out.Changes)
 	}
 
@@ -236,7 +236,7 @@ func TestExplainEvidenceGate(t *testing.T) {
 	c := cfg()
 	c.RequireEvidence = true
 	ex = explainRound(t, c, input)
-	g = wantGate(t, ex, GateEvidence, GateFail, "ICMP-only measurement for a (icmp, 10/10 replies)")
+	g = wantGate(t, ex, GateEvidence, GateFail, "no evidence beyond ICMP for a (icmp, 10/10 replies)")
 	if g.Limit != "require_evidence: a tcp or udp reply, or passive agreement, on both paths" || ex.BlockedBy != GateEvidence || ex.Outcome != OutcomeHeld {
 		t.Fatalf("evidence = %+v explain = %+v", g, ex)
 	}
@@ -268,4 +268,82 @@ func TestExplainEvidenceGate(t *testing.T) {
 	if ex.Outcome != OutcomeMoved {
 		t.Fatalf("static pin with the rule on = %+v", ex)
 	}
+}
+
+func TestRequireEvidenceLeavesCostAndCooldown(t *testing.T) {
+	c := costCfg()
+	c.RequireEvidence = true
+	icmp := []string{"icmp", "icmp", "icmp"}
+
+	// Cost precedence: the performance move to b is refused, and the cost
+	// planner still steers to the cheapest path inside the floor.
+	input := in(measured(t0, pA, icmp, m{"a", 0, 90}, m{"b", 0, 30}, m{"c", 0, 35}), natA())
+	st, out := Decide(NewState(), input, c, costScorer(t, "precedence: cost"), t0)
+	if imp := st.Improvements[pA]; imp.Provider != "c" || imp.Cause != plugin.CauseCost {
+		t.Fatalf("cost steer with the rule on = %+v (decision %+v)", imp, decision(t, out, pA))
+	}
+
+	// A cheap native path inside the floor keeps its cost reason.
+	for i, cost := range []float64{1, 5, 8} {
+		c.Providers[i].Cost = cost
+	}
+	input = in(measured(t0, pA, icmp, m{"a", 0, 50}, m{"b", 0, 30}, m{"c", 0, 60}), natA())
+	st, out = Decide(NewState(), input, c, costScorer(t, "precedence: cost\nfloor: {max_rtt: 25ms}"), t0)
+	if d := decision(t, out, pA); d.Reason != "native path inside performance floor (cost precedence)" || d.Cause != plugin.CauseCost || len(st.Improvements) != 0 {
+		t.Fatalf("cheap native inside the floor = %+v", d)
+	}
+
+	// A cooldown after flip-back is named, not the rule.
+	c = cfg()
+	c.RequireEvidence = true
+	st = NewState()
+	st.Cooldown[pA] = t0.Add(10 * time.Minute)
+	_, out = Decide(st, in(measured(t0, pA, icmp, m{"a", 0, 50}, m{"b", 0, 30}), natA()), c, scorer(t), t0)
+	if d := decision(t, out, pA); !strings.HasPrefix(d.Reason, "cooldown after flip-back until ") {
+		t.Fatalf("cooldown with the rule on = %+v", d)
+	}
+}
+
+func TestExplainEvidenceOnlyWhenRefused(t *testing.T) {
+	c := cfg()
+	c.RequireEvidence = true
+
+	// Flip-back inside hold_time: the native path is ICMP only, but
+	// flip-back does not use the rule, so hold_time holds it.
+	e := NewEngine(c, scorer(t))
+	e.Evaluate(in(measured(t0, pA, []string{"tcp", "tcp"}, m{"a", 0, 90}, m{"b", 0, 30}), natA()), t0)
+	at := t0.Add(5 * time.Minute)
+	e.Evaluate(in(measured(at, pA, []string{"icmp", "icmp"}, m{"a", 0, 20}, m{"b", 0, 90}), natA()), at)
+	_, ex, _, _ := e.Explain(pA)
+	if ex.Reason != "native better but hold_time not elapsed" || ex.BlockedBy != GateHoldTime || ex.Counterfactual != "would be eligible in 10m0s" {
+		t.Fatalf("flip-back in hold_time = %+v", ex)
+	}
+	wantGate(t, ex, GateEvidence, GateSkip, "not used: a flip-back to the native path does not wait for evidence")
+	wantGate(t, ex, GateHoldTime, GateFail, "held 5m0s")
+
+	// Thresholds not met: the rule was never reached.
+	c.MinRTTDelta = 30 * time.Millisecond
+	ex = explainRound(t, c, in(measured(t0, pA, []string{"icmp", "icmp"}, m{"a", 0, 50}, m{"b", 0, 30}), natA()))
+	if ex.BlockedBy != GateThresholds {
+		t.Fatalf("thresholds not met = %+v", ex)
+	}
+	wantGate(t, ex, GateEvidence, GateSkip, "not reached: no better path passed the thresholds")
+	for _, n := range []string{GateConfirm, GateHoldTime, GateCap} {
+		wantGate(t, ex, n, GateSkip, "not reached: no better path passed the thresholds")
+	}
+
+	// A cooldown stops the move before the rule.
+	c = cfg()
+	c.RequireEvidence = true
+	e = NewEngine(c, scorer(t))
+	e.Evaluate(in(measured(t0, pA, []string{"tcp", "tcp"}, m{"a", 0, 90}, m{"b", 0, 30}), natA()), t0)
+	flip := t0.Add(20 * time.Minute)
+	e.Evaluate(in(measured(flip, pA, []string{"tcp", "tcp"}, m{"a", 0, 20}, m{"b", 0, 90}), natA()), flip)
+	again := flip.Add(time.Minute)
+	e.Evaluate(in(measured(again, pA, []string{"icmp", "icmp"}, m{"a", 0, 90}, m{"b", 0, 30}), natA()), again)
+	_, ex, _, _ = e.Explain(pA)
+	if !strings.HasPrefix(ex.Reason, "cooldown after flip-back until ") || ex.BlockedBy != GateHoldTime {
+		t.Fatalf("cooldown = %+v", ex)
+	}
+	wantGate(t, ex, GateEvidence, GateSkip, "not reached: cooldown after flip-back until ")
 }

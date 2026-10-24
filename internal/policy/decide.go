@@ -33,6 +33,10 @@ func carrierOf(st State, in Input, cfg Config, p netip.Prefix) string {
 	return in.Native[p]
 }
 
+// evidenceRefused starts the reason of every decision the evidence rule
+// refused; the explanation reads it to tell that the rule was reached.
+const evidenceRefused = "require_evidence: "
+
 // evidenceLacking is the reason thresholds.require_evidence refuses the
 // performance move from cur to alt, empty when the rule is off or both
 // samples rest on more than ICMP (#202).
@@ -49,7 +53,7 @@ func evidenceLacking(cfg Config, cur, alt Candidate) string {
 	if len(names) == 0 {
 		return ""
 	}
-	return "require_evidence: ICMP-only measurement for " + strings.Join(names, " and ")
+	return evidenceRefused + "no evidence beyond ICMP for " + strings.Join(names, " and ")
 }
 
 // Decide runs one evaluation.
@@ -448,11 +452,6 @@ func Decide(prev State, in Input, cfg Config, scorer plugin.Scorer, now time.Tim
 			commitOK[p] = true
 			continue
 		}
-		if lacking := evidenceLacking(cfg, natC, alt); lacking != "" {
-			delete(st.confirm, p)
-			d.Recommended, d.Reason = alt.Provider, lacking
-			continue
-		}
 		if until, cool := st.Cooldown[p]; cool {
 			d.Reason = "cooldown after flip-back until " + until.Format(time.RFC3339)
 			continue
@@ -470,6 +469,13 @@ func Decide(prev State, in Input, cfg Config, scorer plugin.Scorer, now time.Tim
 				d.Recommended, d.Reason, d.Cause = d.Native, "native path inside performance floor (cost precedence)", plugin.CauseCost
 				continue
 			}
+		}
+		// After the cost branch, so a refused performance move still
+		// leaves the prefix to the cost planner (commitOK above).
+		if lacking := evidenceLacking(cfg, natC, alt); lacking != "" {
+			delete(st.confirm, p)
+			d.Recommended, d.Reason = alt.Provider, lacking
+			continue
 		}
 		ready, n := notePerformance(&st, in, cfg, p, alt.Provider, now)
 		if !ready {
