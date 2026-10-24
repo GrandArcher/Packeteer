@@ -39,8 +39,12 @@ func (s *Server) handleDecisionExplain(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	d, why, decidedAt, ok := ex.Explain(p)
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "no decision for " + p.String() + ": Packeteer is not measuring it now"})
+		return
+	}
 	rows := assembleDecisions(snap.Mode, []policy.Decision{d})
-	if !ok || len(rows) == 0 {
+	if len(rows) == 0 {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "no decision for " + p.String() + ": Packeteer is not measuring it now"})
 		return
 	}

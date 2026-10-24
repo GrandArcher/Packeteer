@@ -97,9 +97,7 @@ const (
 )
 
 // explainFacts is what Decide saw for one prefix that the final Decision
-// does not carry and an Explain needs. It is plain values: keeping it costs one
-// slice of these per evaluation (about 100 bytes per prefix), and a string
-// join per prefix that has two or more barred providers.
+// does not carry and an Explain needs.
 type explainFacts struct {
 	// current is the provider whose path is compared: the improvement's
 	// provider when one is active, else the native provider.
