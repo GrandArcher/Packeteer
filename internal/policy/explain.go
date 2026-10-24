@@ -68,10 +68,11 @@ type Sample struct {
 }
 
 // Explain says which check let a decision move or held it back (#201).
-// BlockedBy is the gate that stopped a held or kept decision; it is empty
-// when the decision moved or retired, and also for a static pin or a
-// planned commit or cost keep already on its provider. Counterfactual is one
-// sentence on what would have to change for the blocked move to happen.
+// BlockedBy is the gate that stopped a held or kept decision. It is empty
+// when the decision moved or retired, for a static pin on its provider or on
+// the native provider, and for a planned commit or cost keep that waits for
+// no switch or release. Counterfactual is one sentence on what would have to
+// change for the blocked move to happen.
 type Explain struct {
 	Outcome        string   `json:"outcome"`
 	BlockedBy      string   `json:"blocked_by,omitempty"`
@@ -95,6 +96,15 @@ const (
 	waitNone uint8 = iota
 	waitCooldown
 	waitQuarantine
+)
+
+// What a planned commit or cost keep waits for; integrateCommit sets it.
+const (
+	planSettled uint8 = iota
+	// planHold: a planner move or a release waiting on hold_time.
+	planHold
+	// planSwitch: a performance switch confirming or waiting on hold_time.
+	planSwitch
 )
 
 // explainFacts is what Decide saw for one prefix that the final Decision
@@ -123,6 +133,10 @@ type explainFacts struct {
 	// pinOK is set when a static pin passed the policy's own checks (usable,
 	// inside its ceilings) and Decide recommended it.
 	pinOK bool
+	// pinNative is set when the static pin is the native provider, so there
+	// is nothing to move.
+	pinNative bool
+	planWait  uint8
 }
 
 // challengerOf picks the provider the current path is compared with. For
@@ -274,13 +288,16 @@ func buildExplain(d Decision, f explainFacts, cfg Config, capUsed int) Explain {
 	ex := Explain{Reason: d.Reason, Samples: samplesOf(d, f)}
 	cur, haveCur := findCandidate(d.Candidates, f.current)
 	ch, haveCh := findCandidate(d.Candidates, f.challenger)
-	planned := d.Cause == plugin.CauseCommit || d.Cause == plugin.CauseCost
+	plan := planned(d.Cause)
 	static := d.Cause == plugin.CauseStatic
 	moved := d.Action == ActionImprove || d.Action == ActionSwitch
 	pairBetter := haveCur && haveCh && cur.Usable && ch.Usable && better(ch, cur, cfg)
+	// A static pin or planned keep is decided by its own rules, not by the
+	// comparison with the challenger.
+	steerKeep := d.Action == ActionKeep && (static || plan)
 	// A recommended static pin that did not move was stopped by the
 	// cooldown, the allowlist, or the cap, not by the policy.
-	pinHeld := static && !moved && d.Action != ActionKeep
+	pinHeld := static && !moved && d.Action != ActionKeep && !f.pinNative
 	pinStopped := pinHeld && f.pinOK
 
 	g := map[string]Gate{}
@@ -295,13 +312,13 @@ func buildExplain(d Decision, f explainFacts, cfg Config, capUsed int) Explain {
 	switch {
 	case static:
 		g[GateThresholds] = Gate{Name: GateThresholds, Status: GateSkip, Detail: "a static policy pin does not use the thresholds"}
-	case planned:
+	case plan:
 		g[GateThresholds] = Gate{Name: GateThresholds, Status: GateSkip, Detail: "decided by the " + d.Cause + " planner, not the thresholds"}
 	default:
 		g[GateThresholds] = thresholdsGate(cur, ch, haveCur, haveCh, cfg)
 	}
 	retired := d.Action == ActionRetire
-	reached := moved || (pairBetter && !static && !planned)
+	reached := moved || (pairBetter && !static && !plan)
 	notReached := func(name string) Gate {
 		if retired {
 			return Gate{Name: name, Status: GateSkip, Detail: "not applicable: the improvement ended"}
@@ -315,15 +332,19 @@ func buildExplain(d Decision, f explainFacts, cfg Config, capUsed int) Explain {
 			g[GateCap] = capGate(d, f, cfg, capUsed)
 		}
 	}
-	if static || planned {
+	switch {
+	case steerKeep && f.planWait == planSwitch:
+		g[GateConfirm] = confirmGate(d, f, cfg, false)
+	case static || plan:
 		g[GateConfirm] = Gate{Name: GateConfirm, Status: GateSkip, Detail: "a " + d.Cause + " move does not wait for confirm_rounds"}
 	}
 	if pinStopped {
 		g[GateCap] = capGate(d, f, cfg, capUsed)
 	}
-	// A static pin or planned keep that wants another provider can be
-	// waiting on hold_time.
-	waiting := (static || planned) && d.Action == ActionKeep && d.Recommended != "" && d.Recommended != d.Current
+	// A static re-pin and a planned switch, move, or release wait out
+	// hold_time. d.Recommended of a planned keep can be the best provider
+	// Decide saw, so only planWait says whether it waits.
+	waiting := steerKeep && ((static && d.Recommended != d.Current) || (plan && f.planWait != planSettled))
 	if reached || pinStopped || waiting || f.waitKind == waitQuarantine {
 		g[GateHoldTime] = holdGate(d, f, cfg)
 	}
@@ -344,7 +365,7 @@ func buildExplain(d Decision, f explainFacts, cfg Config, capUsed int) Explain {
 		ex.Outcome = OutcomeHeld
 	}
 	if ex.Outcome == OutcomeHeld || ex.Outcome == OutcomeKept {
-		ex.BlockedBy = blockedBy(g, f, d, pairBetter, pinStopped, haveCur && cur.Usable)
+		ex.BlockedBy = blockedBy(g, f, d, pairBetter, pinStopped, steerKeep, haveCur && cur.Usable)
 	}
 	ex.Counterfactual = counterfactual(ex.BlockedBy, d, f, cfg, cur, ch, haveCur, haveCh, capUsed)
 	return ex
@@ -615,8 +636,9 @@ func allowlistGate(d Decision, cfg Config) Gate {
 // checks them: the RIB and the policy first, then a quarantine, then the
 // current path's measurement, then the comparison and what a gate removed
 // from it, then the move's own gates. A recommended static pin skips the
-// comparison and stops only at the cooldown, the allowlist, or the cap.
-func blockedBy(g map[string]Gate, f explainFacts, d Decision, pairBetter, pinStopped, usableCur bool) string {
+// comparison and stops only at the cooldown, the allowlist, or the cap; a
+// static pin or planned keep stops only at confirm_rounds or hold_time.
+func blockedBy(g map[string]Gate, f explainFacts, d Decision, pairBetter, pinStopped, steerKeep, usableCur bool) string {
 	failed := func(names ...string) string {
 		for _, n := range names {
 			if g[n].Status == GateFail {
@@ -628,16 +650,12 @@ func blockedBy(g map[string]Gate, f explainFacts, d Decision, pairBetter, pinSto
 	switch {
 	case g[GateRIB].Status == GateFail:
 		return GateRIB
-	case d.Action == ActionKeep && (d.Cause == plugin.CauseStatic || d.Cause == plugin.CauseCommit || d.Cause == plugin.CauseCost) &&
-		(d.Recommended == "" || d.Recommended == d.Current):
-		// A static pin or planned commit or cost keep already on its
-		// provider is where it should be, even when an excluded or removed
-		// provider would otherwise win. A keep still waiting to switch
-		// falls through to the gates.
+	case f.pinNative:
 		return ""
-	case d.Action == ActionKeep && (d.Cause == plugin.CauseStatic || d.Cause == plugin.CauseCommit || d.Cause == plugin.CauseCost) &&
-		g[GateHoldTime].Status == GateFail:
-		return GateHoldTime
+	case steerKeep:
+		// An excluded or removed provider that would otherwise win does
+		// not hold back a pin or a planned steer that stays where it is.
+		return failed(GateConfirm, GateHoldTime)
 	case pinStopped:
 		return failed(GateHoldTime, GateAllowlist, GateCap)
 	case f.ignore || (d.Cause == plugin.CauseStatic && g[GatePolicy].Status == GateFail):

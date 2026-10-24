@@ -15,6 +15,7 @@ import (
 type commitHold struct {
 	imp  Improvement
 	d    *Decision
+	f    *explainFacts
 	held bool
 }
 
@@ -112,6 +113,7 @@ func integrateCommit(
 			alt, altOK := bestCandidate(cands, cfg.Excluded, h.imp.Native)
 			if altOK && alt.Provider != h.imp.Provider && better(alt, nat, cfg) {
 				ready, got := notePerformance(&st, in, cfg, p, alt.Provider, now)
+				h.f.planWait, h.f.challenger, h.f.streak = planSwitch, alt.Provider, got
 				if !ready {
 					setDecision(d, ActionKeep, fmt.Sprintf("confirming switch to %s (%d/%d)", alt.Provider, got, cfg.confirmRounds()), h.imp.Provider, alt.Provider, cause)
 					continue
@@ -160,6 +162,7 @@ func integrateCommit(
 		}
 		if wanted && mv.Provider != h.imp.Provider {
 			if h.held {
+				h.f.planWait = planHold
 				setDecision(d, ActionKeep, cause+" move but hold_time not elapsed", h.imp.Provider, mv.Provider, cause)
 				continue
 			}
@@ -178,6 +181,7 @@ func integrateCommit(
 			release = "cost steer no longer cheapest"
 		}
 		if h.held {
+			h.f.planWait = planHold
 			setDecision(d, ActionKeep, release+" but hold_time not elapsed", h.imp.Provider, "", cause)
 			continue
 		}

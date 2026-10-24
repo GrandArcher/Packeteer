@@ -545,8 +545,8 @@ func TestExplainAgreesWithDecision(t *testing.T) {
 	}
 }
 
-// A kept static pin or planned decision names no blocking gate, even when a
-// faster provider is barred by maintenance.
+// A static pin where the policy wants it names no blocking gate, even when a
+// faster provider is barred by maintenance; a re-pin waits on hold_time.
 func TestExplainKeptOnPurposeNotBlocked(t *testing.T) {
 	t.Run("kept static pin with faster provider in maintenance", func(t *testing.T) {
 		c := cfg()
@@ -562,17 +562,13 @@ func TestExplainKeptOnPurposeNotBlocked(t *testing.T) {
 			t.Fatalf("explain = %+v", ex)
 		}
 	})
-	for _, cause := range []string{plugin.CauseCommit, plugin.CauseCost} {
-		t.Run("kept planned "+cause, func(t *testing.T) {
-			d := Decision{Prefix: pA, Action: ActionKeep, Cause: cause, Native: "a", Current: "c", Recommended: "c",
-				Candidates: []Candidate{{Provider: "a", Usable: true}, {Provider: "b", Usable: true}, {Provider: "c", Usable: true}}}
-			f := explainFacts{current: "c", challenger: "b", barred: "b", active: true, rib: ribOK}
-			ex := buildExplain(d, f, cfg(), 0)
-			if ex.Outcome != OutcomeKept || ex.BlockedBy != "" || ex.Counterfactual != "" {
-				t.Fatalf("explain = %+v", ex)
-			}
-		})
-	}
+	t.Run("static pin on the native provider", func(t *testing.T) {
+		ex := explainRound(t, cfg(), withPolicy(routingInput(), pA, verdict(plugin.PolicyStatic, "a")))
+		if ex.Outcome != OutcomeHeld || ex.BlockedBy != "" || ex.Counterfactual != "" {
+			t.Fatalf("explain = %+v", ex)
+		}
+		wantGate(t, ex, GatePolicy, GatePass, "static")
+	})
 	t.Run("static re-pin inside hold_time still names a gate", func(t *testing.T) {
 		c := cfg()
 		c.Mode, c.Allowlist, c.HoldTime = "inject", []netip.Prefix{pA}, time.Hour
@@ -585,4 +581,73 @@ func TestExplainKeptOnPurposeNotBlocked(t *testing.T) {
 			t.Fatalf("explain = %+v", ex)
 		}
 	})
+}
+
+// planRound steers pA from a onto c with a commit or cost move at t0, then
+// evaluates ms at the given time with the planner's moves set to moves.
+func planRound(t *testing.T, c Config, cause string, at time.Time, moves []plugin.PlanMove, ms ...m) (Decision, Explain) {
+	t.Helper()
+	c.Providers = []ProviderPolicy{{Name: "a", Cost: 10, HasCost: true}, {Name: "b", Cost: 5, HasCost: true}, {Name: "c", Cost: 2, HasCost: true}}
+	r := &rogueCost{rogue{moves: []plugin.PlanMove{{Prefix: pA, Provider: "c", Cause: cause, Reason: "plan c", ReliefMbps: 60, Savings: 1}}}}
+	e := NewEngine(c, r)
+	e.Evaluate(in(results(t0, pA, m{"a", 0, 40}, m{"b", 0, 50}, m{"c", 0, 45}), natA()), t0)
+	if imps := e.Improvements(); len(imps) != 1 || imps[0].Provider != "c" || imps[0].Cause != cause {
+		t.Fatalf("no %s steer: %+v", cause, imps)
+	}
+	r.moves = moves
+	e.Evaluate(in(results(at, pA, ms...), natA()), at)
+	d, ex, _, ok := e.Explain(pA)
+	if !ok {
+		t.Fatal("no explanation for pA")
+	}
+	return d, ex
+}
+
+// A planned keep names the gate commit.go waits on, if any.
+func TestExplainPlannedKeep(t *testing.T) {
+	at := t0.Add(time.Minute)
+	for _, cause := range []string{plugin.CauseCommit, plugin.CauseCost} {
+		stay := []plugin.PlanMove{{Prefix: pA, Provider: "c", Cause: cause, Reason: "plan c", ReliefMbps: 60, Savings: 1}}
+		t.Run(cause+" kept on its provider", func(t *testing.T) {
+			d, ex := planRound(t, cfg(), cause, at, stay, m{"a", 0, 40}, m{"b", 0, 50}, m{"c", 0, 45})
+			if d.Action != ActionKeep || d.Current != "c" || ex.Outcome != OutcomeKept || ex.BlockedBy != "" || ex.Counterfactual != "" {
+				t.Fatalf("decision %+v explain %+v", d, ex)
+			}
+		})
+		t.Run(cause+" release inside hold_time", func(t *testing.T) {
+			// c is also the best path, so d.Recommended is the current provider.
+			d, ex := planRound(t, cfg(), cause, at, nil, m{"a", 0, 40}, m{"b", 0, 50}, m{"c", 0, 35})
+			if d.Action != ActionKeep || !strings.Contains(d.Reason, "but hold_time not elapsed") {
+				t.Fatalf("decision %+v", d)
+			}
+			if ex.BlockedBy != GateHoldTime || ex.Counterfactual != "would be eligible in 14m0s" {
+				t.Fatalf("explain = %+v", ex)
+			}
+			wantGate(t, ex, GateHoldTime, GateFail, "held 1m0s")
+		})
+		t.Run(cause+" confirming a performance switch", func(t *testing.T) {
+			c := cfg()
+			c.ConfirmRounds = 3
+			for _, when := range []time.Time{at, t0.Add(time.Hour)} {
+				d, ex := planRound(t, c, cause, when, stay, m{"a", 0, 90}, m{"b", 0, 30}, m{"c", 0, 35})
+				if d.Action != ActionKeep || d.Reason != "confirming switch to b (1/3)" {
+					t.Fatalf("decision %+v", d)
+				}
+				if ex.BlockedBy != GateConfirm || ex.Counterfactual != "would move to b after 2 more fresh winning round(s)" {
+					t.Fatalf("at %s: explain = %+v", when.Sub(t0), ex)
+				}
+				wantGate(t, ex, GateConfirm, GateFail, "1 of 3")
+			}
+		})
+		t.Run(cause+" confirmed switch inside hold_time", func(t *testing.T) {
+			d, ex := planRound(t, cfg(), cause, at, stay, m{"a", 0, 90}, m{"b", 0, 30}, m{"c", 0, 35})
+			if d.Action != ActionKeep || d.Reason != "performance gain but hold_time not elapsed" {
+				t.Fatalf("decision %+v", d)
+			}
+			if ex.BlockedBy != GateHoldTime {
+				t.Fatalf("explain = %+v", ex)
+			}
+			wantGate(t, ex, GateConfirm, GatePass, "1 of 1")
+		})
+	}
 }

@@ -283,7 +283,7 @@ func Decide(prev State, in Input, cfg Config, scorer plugin.Scorer, now time.Tim
 					d.Action, d.Reason, d.Current, d.Cause = ActionRetire, "provider excluded from commit control", imp.Native, plugin.CauseCommit
 					continue
 				}
-				holds = append(holds, commitHold{imp: imp, d: d, held: now.Sub(imp.Since) < cfg.HoldTime})
+				holds = append(holds, commitHold{imp: imp, d: d, f: &facts[i], held: now.Sub(imp.Since) < cfg.HoldTime})
 				continue
 			}
 			held := now.Sub(imp.Since) < cfg.HoldTime
@@ -369,7 +369,7 @@ func Decide(prev State, in Input, cfg Config, scorer plugin.Scorer, now time.Tim
 			pin, usable := get(static)
 			switch {
 			case static == d.Native:
-				d.Recommended, d.Reason = static, "policy static: native is the pinned provider"
+				d.Recommended, d.Reason, facts[i].pinNative = static, "policy static: native is the pinned provider", true
 				continue
 			case !usable || cfg.Excluded[static]:
 				d.Reason = "policy static: " + static + " not usable (" + staticWhy(cands, cfg, static) + ")"
