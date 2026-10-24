@@ -69,8 +69,8 @@ type Sample struct {
 
 // Explain says which check let a decision move or held it back (#201).
 // BlockedBy is the gate that stopped a held or kept decision; it is empty
-// when the decision moved or retired, and also for a kept static pin or a
-// planned commit or cost keep, which no gate stopped. Counterfactual is one
+// when the decision moved or retired, and also for a static pin or a
+// planned commit or cost keep already on its provider. Counterfactual is one
 // sentence on what would have to change for the blocked move to happen.
 type Explain struct {
 	Outcome        string   `json:"outcome"`
@@ -321,7 +321,10 @@ func buildExplain(d Decision, f explainFacts, cfg Config, capUsed int) Explain {
 	if pinStopped {
 		g[GateCap] = capGate(d, f, cfg, capUsed)
 	}
-	if reached || pinStopped || f.waitKind == waitQuarantine {
+	// A static pin or planned keep that wants another provider can be
+	// waiting on hold_time.
+	waiting := (static || planned) && d.Action == ActionKeep && d.Recommended != "" && d.Recommended != d.Current
+	if reached || pinStopped || waiting || f.waitKind == waitQuarantine {
 		g[GateHoldTime] = holdGate(d, f, cfg)
 	}
 
@@ -625,11 +628,16 @@ func blockedBy(g map[string]Gate, f explainFacts, d Decision, pairBetter, pinSto
 	switch {
 	case g[GateRIB].Status == GateFail:
 		return GateRIB
-	case d.Action == ActionKeep && (d.Cause == plugin.CauseStatic || d.Cause == plugin.CauseCommit || d.Cause == plugin.CauseCost):
-		// A kept static pin or planned commit or cost keep is where it
-		// should be; no gate stopped it, even when an excluded or removed
-		// provider would otherwise win.
+	case d.Action == ActionKeep && (d.Cause == plugin.CauseStatic || d.Cause == plugin.CauseCommit || d.Cause == plugin.CauseCost) &&
+		(d.Recommended == "" || d.Recommended == d.Current):
+		// A static pin or planned commit or cost keep already on its
+		// provider is where it should be, even when an excluded or removed
+		// provider would otherwise win. A keep still waiting to switch
+		// falls through to the gates.
 		return ""
+	case d.Action == ActionKeep && (d.Cause == plugin.CauseStatic || d.Cause == plugin.CauseCommit || d.Cause == plugin.CauseCost) &&
+		g[GateHoldTime].Status == GateFail:
+		return GateHoldTime
 	case pinStopped:
 		return failed(GateHoldTime, GateAllowlist, GateCap)
 	case f.ignore || (d.Cause == plugin.CauseStatic && g[GatePolicy].Status == GateFail):

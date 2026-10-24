@@ -573,4 +573,16 @@ func TestExplainKeptOnPurposeNotBlocked(t *testing.T) {
 			}
 		})
 	}
+	t.Run("static re-pin inside hold_time still names a gate", func(t *testing.T) {
+		c := cfg()
+		c.Mode, c.Allowlist, c.HoldTime = "inject", []netip.Prefix{pA}, time.Hour
+		e := NewEngine(c, scorer(t))
+		e.Evaluate(withPolicy(in(results(t0, pA, m{"a", 0, 90}, m{"b", 0, 30}, m{"c", 0, 50}), natA()), pA, verdict(plugin.PolicyStatic, "c")), t0)
+		at := t0.Add(time.Minute)
+		e.Evaluate(withPolicy(in(results(at, pA, m{"a", 0, 90}, m{"b", 0, 30}, m{"c", 0, 50}), natA()), pA, verdict(plugin.PolicyStatic, "b")), at)
+		_, ex, _, _ := e.Explain(pA)
+		if ex.Outcome != OutcomeKept || ex.BlockedBy != GateHoldTime {
+			t.Fatalf("explain = %+v", ex)
+		}
+	})
 }

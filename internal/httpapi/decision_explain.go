@@ -36,7 +36,7 @@ func (s *Server) handleDecisionExplain(w http.ResponseWriter, r *http.Request) {
 	ex, _ := s.explainer.Load().(Explainer)
 	if ex == nil {
 		// Reachable: the HTTP server starts before main calls SetExplainer, so
-		// early requests land here. (Commit 8b9ce98 removed a different, dead branch.)
+		// early requests land here.
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "no decision engine is running"})
 		return
 	}
