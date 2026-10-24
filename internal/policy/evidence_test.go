@@ -347,3 +347,34 @@ func TestExplainEvidenceOnlyWhenRefused(t *testing.T) {
 	}
 	wantGate(t, ex, GateEvidence, GateSkip, "not reached: cooldown after flip-back until ")
 }
+
+func TestRequireEvidenceOnSwitchOffPlannedSteer(t *testing.T) {
+	at := t0.Add(time.Hour)
+	for _, cause := range []string{plugin.CauseCommit, plugin.CauseCost} {
+		t.Run(cause, func(t *testing.T) {
+			c := cfg()
+			c.RequireEvidence = true
+			c.Providers = []ProviderPolicy{{Name: "a", Cost: 10, HasCost: true}, {Name: "b", Cost: 5, HasCost: true}, {Name: "c", Cost: 2, HasCost: true}}
+			stay := []plugin.PlanMove{{Prefix: pA, Provider: "c", Cause: cause, Reason: "plan c", ReliefMbps: 60, Savings: 1}}
+			r := &rogueCost{rogue{moves: stay}}
+			e := NewEngine(c, r)
+			tcp := []string{"tcp", "tcp", "tcp"}
+			e.Evaluate(in(measured(t0, pA, tcp, m{"a", 0, 40}, m{"b", 0, 50}, m{"c", 0, 45}), natA()), t0)
+
+			// b beats the native path, but a and b are ICMP only: no
+			// performance switch, and the planner keeps its steer on c.
+			e.Evaluate(in(measured(at, pA, []string{"icmp", "icmp", "tcp"}, m{"a", 0, 90}, m{"b", 0, 30}, m{"c", 0, 35}), natA()), at)
+			d, ex, _, _ := e.Explain(pA)
+			if d.Action != ActionKeep || d.Current != "c" || d.Cause != cause || d.Reason != "plan c" {
+				t.Fatalf("refused switch = %+v", d)
+			}
+			wantGate(t, ex, GateEvidence, GateSkip, "refused a performance switch: no evidence beyond ICMP for a (icmp, 10/10 replies) and b (icmp, 10/10 replies)")
+
+			// Measured by TCP, the same win switches to b.
+			e.Evaluate(in(measured(at.Add(time.Minute), pA, tcp, m{"a", 0, 90}, m{"b", 0, 30}, m{"c", 0, 35}), natA()), at.Add(time.Minute))
+			if d, _, _, _ := e.Explain(pA); d.Action != ActionSwitch || d.Current != "b" || d.Cause != plugin.CausePerformance {
+				t.Fatalf("switch with evidence = %+v", d)
+			}
+		})
+	}
+}

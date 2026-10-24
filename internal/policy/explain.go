@@ -142,6 +142,10 @@ type explainFacts struct {
 	// is nothing to move.
 	pinNative bool
 	planWait  uint8
+	// evidence is the reason thresholds.require_evidence refused a
+	// performance switch off a commit or cost steer, which then stayed
+	// with its planner.
+	evidence string
 }
 
 // challengerOf picks the provider the current path is compared with. For
@@ -321,6 +325,10 @@ func buildExplain(d Decision, f explainFacts, cfg Config, capUsed int) Explain {
 	case plan:
 		g[GateThresholds] = Gate{Name: GateThresholds, Status: GateSkip, Detail: "decided by the " + d.Cause + " planner, not the thresholds"}
 		g[GateEvidence] = Gate{Name: GateEvidence, Status: GateSkip, Detail: "decided by the " + d.Cause + " planner, not the evidence rule"}
+		if f.evidence != "" {
+			g[GateEvidence] = Gate{Name: GateEvidence, Status: GateSkip,
+				Detail: "decided by the " + d.Cause + " planner after thresholds.require_evidence refused a performance switch: " + strings.TrimPrefix(f.evidence, evidenceRefused)}
+		}
 	default:
 		g[GateThresholds] = thresholdsGate(cur, ch, haveCur, haveCh, cfg)
 		g[GateEvidence] = evidenceGate(d, f, cur, ch, haveCur, haveCh, pairBetter, cfg)

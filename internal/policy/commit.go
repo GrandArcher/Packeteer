@@ -111,7 +111,13 @@ func integrateCommit(
 			// hold_time, a fresh miss resets the streak, and the switch
 			// is created only after hold_time.
 			alt, altOK := bestCandidate(cands, cfg.Excluded, h.imp.Native)
-			if altOK && alt.Provider != h.imp.Provider && better(alt, nat, cfg) {
+			win := altOK && alt.Provider != h.imp.Provider && better(alt, nat, cfg)
+			if lacking := evidenceLacking(cfg, nat, alt); win && lacking != "" {
+				// Refused like a new performance move (#202). The steer
+				// stays with its planner, as when there is no win.
+				delete(st.confirm, p)
+				h.f.evidence = lacking
+			} else if win {
 				ready, got := notePerformance(&st, in, cfg, p, alt.Provider, now)
 				h.f.planWait, h.f.challenger, h.f.streak = planSwitch, alt.Provider, got
 				if !ready {
