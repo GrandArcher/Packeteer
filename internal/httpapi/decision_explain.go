@@ -43,11 +43,9 @@ func (s *Server) handleDecisionExplain(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "no decision for " + p.String() + ": Packeteer is not measuring it now"})
 		return
 	}
+	// assembleDecisions drops only a decision with an invalid prefix, and
+	// d.Prefix is the parsed p.
 	rows := assembleDecisions(snap.Mode, []policy.Decision{d})
-	if len(rows) == 0 {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "no decision for " + p.String() + ": Packeteer is not measuring it now"})
-		return
-	}
 	body := struct {
 		meta
 		DecidedAt *time.Time `json:"decided_at,omitempty"`

@@ -14,7 +14,7 @@ import (
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
 )
 
-// explainServer runs the real decision engine over one held-back prefix
+// explainEngine runs the real decision engine over one held-back prefix
 // (198.51.100.0/24, 10 ms faster via lab-b, under the 15 ms threshold) and
 // one that moves (203.0.113.0/24).
 func explainEngine(t *testing.T) (*policy.Engine, time.Time) {
@@ -100,7 +100,7 @@ func TestDecisionExplainAPI(t *testing.T) {
 			t.Fatalf("thresholds gate = %+v", g)
 		}
 	}
-	if got := strings.Join(names, " "); got != "rib freshness thresholds confirm_rounds hold_time cap policy allowlist route_check rpki" {
+	if got := strings.Join(names, " "); got != "rib freshness thresholds confirm_rounds hold_time cap policy allowlist route_check rpki irr" {
 		t.Fatalf("gates = %s", got)
 	}
 	if len(ex.Samples) != 2 || ex.Samples[0].Role != "current" || ex.Samples[1].Role != "challenger" || ex.Samples[1].RTTMs != 40 {

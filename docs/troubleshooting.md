@@ -162,7 +162,7 @@ Router-side show commands are in each guide: [mikrotik.md](mikrotik.md), [frr.md
 
 `/api/improvements` is empty while one provider is clearly better.
 
-Open `/prefix/<prefix>` and read the Why? panel, or call `GET /api/decisions/<prefix>`. It lists every check in order (`rib`, `freshness`, `thresholds`, `confirm_rounds`, `hold_time`, `cap`, `policy`, `allowlist`, `route_check`, `rpki`) with the value compared and the limit, names the one that stopped the move in `blocked_by`, and says in `counterfactual` what would change it. The usual causes by gate:
+Open `/prefix/<prefix>` and read the Why? panel, or call `GET /api/decisions/<prefix>`. It lists every check in order (`rib`, `freshness`, `thresholds`, `confirm_rounds`, `hold_time`, `cap`, `policy`, `allowlist`, `route_check`, `rpki`, `irr`) with the value compared and the limit, names the one that stopped the move in `blocked_by`, and says in `counterfactual` what would change it. The usual causes by gate:
 
 - `rib`: the prefix is not in the learned RIB, or its next hop matches no provider (previous section).
 - `freshness`: the native provider or the better candidate has no fresh measurement, or its source is down.
@@ -171,8 +171,8 @@ Open `/prefix/<prefix>` and read the Why? panel, or call `GET /api/decisions/<pr
 - `hold_time`: an improvement is inside `hold_time`, the prefix is in the cooldown after a flip-back, or it is in a flap quarantine.
 - `cap`: `max_improvements` is full.
 - `policy`: a `rules` policy leaves the prefix on native routing or pins it to a provider, or the better provider is excluded by a provider `exclude` or an open `maintenance` window. Commit and cost steers do not fail this check.
-- `allowlist`: in inject, the prefix is not covered by `allowlist.prefixes`.
-- `route_check`, `rpki`: the better provider has no path for the exact prefix, or its path is RPKI invalid with `rpki.avoid_invalid` on.
+- `allowlist`: in inject, the prefix is not covered by `allowlist.prefixes`. A static pin on such a prefix is held here, not by `policy`.
+- `route_check`, `rpki`, `irr`: the better provider has no path for the exact prefix, its path is RPKI invalid with `rpki.avoid_invalid` on, or its path is not registered in the IRR with `irr.prefer_registered` on.
 
 `/api/decisions` gives the action and the reason for every probed prefix, with each candidate's score and why it is or is not usable.
 

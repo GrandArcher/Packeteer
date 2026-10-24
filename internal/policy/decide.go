@@ -379,7 +379,7 @@ func Decide(prev State, in Input, cfg Config, scorer plugin.Scorer, now time.Tim
 				d.Reason = "policy static: " + static + " " + fault
 				continue
 			}
-			d.Recommended = static
+			d.Recommended, facts[i].pinOK = static, true
 			if until, cool := st.Cooldown[p]; cool {
 				d.Reason = "cooldown until " + until.Format(time.RFC3339)
 				continue

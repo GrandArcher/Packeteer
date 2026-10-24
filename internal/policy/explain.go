@@ -24,6 +24,7 @@ const (
 	GateAllowlist  = "allowlist"
 	GateRouteCheck = "route_check"
 	GateRPKI       = "rpki"
+	GateIRR        = "irr"
 )
 
 // Gate results. A skipped gate was not reached or does not apply.
@@ -69,8 +70,8 @@ type Sample struct {
 // Explain says which check let a decision move or held it back (#201).
 // BlockedBy is the gate that stopped a held or kept decision; it is empty
 // when the decision moved or retired, and also for a kept static pin or a
-// planned commit or cost keep, which no gate stopped. Counterfactual is one sentence on
-// what would have to change for the blocked move to happen.
+// planned commit or cost keep, which no gate stopped. Counterfactual is one
+// sentence on what would have to change for the blocked move to happen.
 type Explain struct {
 	Outcome        string   `json:"outcome"`
 	BlockedBy      string   `json:"blocked_by,omitempty"`
@@ -119,6 +120,9 @@ type explainFacts struct {
 	rib      ribState
 	active   bool
 	ignore   bool
+	// pinOK is set when a static pin passed the policy's own checks (usable,
+	// inside its ceilings) and Decide recommended it.
+	pinOK bool
 }
 
 // challengerOf picks the provider the current path is compared with. For
@@ -170,6 +174,8 @@ func whyGate(why string) string {
 		return GateRouteCheck
 	case why == "RPKI invalid":
 		return GateRPKI
+	case why == "IRR not registered":
+		return GateIRR
 	case strings.HasPrefix(why, "policy "):
 		return GatePolicy
 	}
@@ -272,13 +278,18 @@ func buildExplain(d Decision, f explainFacts, cfg Config, capUsed int) Explain {
 	static := d.Cause == plugin.CauseStatic
 	moved := d.Action == ActionImprove || d.Action == ActionSwitch
 	pairBetter := haveCur && haveCh && cur.Usable && ch.Usable && better(ch, cur, cfg)
+	// A recommended static pin that did not move was stopped by the
+	// cooldown, the allowlist, or the cap, not by the policy.
+	pinHeld := static && !moved && d.Action != ActionKeep
+	pinStopped := pinHeld && f.pinOK
 
 	g := map[string]Gate{}
 	g[GateRIB] = ribGate(d, f)
 	g[GateFreshness] = freshnessGate(d, f, cur, haveCur, cfg)
-	g[GatePolicy] = policyGate(d, f, cur, haveCur, cfg, static && !moved && d.Action != ActionKeep)
+	g[GatePolicy] = policyGate(d, f, cur, haveCur, cfg, pinHeld && !pinStopped)
 	g[GateRouteCheck] = removedGate(GateRouteCheck, d, cur, haveCur, cfg, "no provider lacks a route for this prefix", "route check")
 	g[GateRPKI] = rpkiGate(d, cur, haveCur, cfg)
+	g[GateIRR] = irrGate(d, cur, haveCur, cfg)
 	g[GateAllowlist] = allowlistGate(d, cfg)
 
 	switch {
@@ -307,11 +318,14 @@ func buildExplain(d Decision, f explainFacts, cfg Config, capUsed int) Explain {
 	if static || planned {
 		g[GateConfirm] = Gate{Name: GateConfirm, Status: GateSkip, Detail: "a " + d.Cause + " move does not wait for confirm_rounds"}
 	}
-	if reached || f.waitKind == waitQuarantine {
+	if pinStopped {
+		g[GateCap] = capGate(d, f, cfg, capUsed)
+	}
+	if reached || pinStopped || f.waitKind == waitQuarantine {
 		g[GateHoldTime] = holdGate(d, f, cfg)
 	}
 
-	order := []string{GateRIB, GateFreshness, GateThresholds, GateConfirm, GateHoldTime, GateCap, GatePolicy, GateAllowlist, GateRouteCheck, GateRPKI}
+	order := []string{GateRIB, GateFreshness, GateThresholds, GateConfirm, GateHoldTime, GateCap, GatePolicy, GateAllowlist, GateRouteCheck, GateRPKI, GateIRR}
 	for _, n := range order {
 		ex.Gates = append(ex.Gates, g[n])
 	}
@@ -327,7 +341,7 @@ func buildExplain(d Decision, f explainFacts, cfg Config, capUsed int) Explain {
 		ex.Outcome = OutcomeHeld
 	}
 	if ex.Outcome == OutcomeHeld || ex.Outcome == OutcomeKept {
-		ex.BlockedBy = blockedBy(g, f, d, pairBetter, haveCur && cur.Usable)
+		ex.BlockedBy = blockedBy(g, f, d, pairBetter, pinStopped, haveCur && cur.Usable)
 	}
 	ex.Counterfactual = counterfactual(ex.BlockedBy, d, f, cfg, cur, ch, haveCur, haveCh, capUsed)
 	return ex
@@ -551,6 +565,34 @@ func rpkiGate(d Decision, cur Candidate, haveCur bool, cfg Config) Gate {
 	return g
 }
 
+// irrGate mirrors rpkiGate for the IRR origin check (#214): the states are
+// shown whenever a source answered, and irr.prefer_registered makes a not
+// registered path fail the gate.
+func irrGate(d Decision, cur Candidate, haveCur bool, cfg Config) Gate {
+	g := Gate{Name: GateIRR}
+	var states []string
+	for _, c := range d.Candidates {
+		if c.IRR != "" {
+			states = append(states, c.Provider+" "+string(c.IRR))
+		}
+	}
+	if len(states) == 0 && !cfg.IRRPreferRegistered {
+		g.Status, g.Detail = GateSkip, "IRR is off"
+		return g
+	}
+	g.Status, g.Value = GatePass, strings.Join(states, ", ")
+	g.Limit = "display only"
+	if cfg.IRRPreferRegistered {
+		g.Limit = "prefer_registered: no move onto a not registered path"
+		if haveCur {
+			if names := removedBy(d.Candidates, GateIRR, cur, cfg); len(names) > 0 {
+				g.Status, g.Detail = GateFail, strings.Join(names, ", ")+" would win but its path is not registered in the IRR"
+			}
+		}
+	}
+	return g
+}
+
 func allowlistGate(d Decision, cfg Config) Gate {
 	g := Gate{Name: GateAllowlist}
 	if cfg.Mode != "inject" {
@@ -569,8 +611,9 @@ func allowlistGate(d Decision, cfg Config) Gate {
 // blockedBy names the gate that stopped the decision, in the order Decide
 // checks them: the RIB and the policy first, then a quarantine, then the
 // current path's measurement, then the comparison and what a gate removed
-// from it, then the move's own gates.
-func blockedBy(g map[string]Gate, f explainFacts, d Decision, pairBetter, usableCur bool) string {
+// from it, then the move's own gates. A recommended static pin skips the
+// comparison and stops only at the cooldown, the allowlist, or the cap.
+func blockedBy(g map[string]Gate, f explainFacts, d Decision, pairBetter, pinStopped, usableCur bool) string {
 	failed := func(names ...string) string {
 		for _, n := range names {
 			if g[n].Status == GateFail {
@@ -586,10 +629,12 @@ func blockedBy(g map[string]Gate, f explainFacts, d Decision, pairBetter, usable
 		return GatePolicy
 	case f.waitKind == waitQuarantine:
 		return GateHoldTime
+	case pinStopped:
+		return failed(GateHoldTime, GateAllowlist, GateCap)
 	case !usableCur:
 		return failed(GateFreshness)
 	case !pairBetter:
-		if n := failed(GateRouteCheck, GateRPKI, GatePolicy, GateFreshness); n != "" {
+		if n := failed(GateRouteCheck, GateRPKI, GateIRR, GatePolicy, GateFreshness); n != "" {
 			return n
 		}
 		return failed(GateThresholds)
@@ -600,6 +645,11 @@ func blockedBy(g map[string]Gate, f explainFacts, d Decision, pairBetter, usable
 }
 
 func counterfactual(blocked string, d Decision, f explainFacts, cfg Config, cur, ch Candidate, haveCur, haveCh bool, capUsed int) string {
+	// A static pin moves to the pinned provider, not to the challenger.
+	to := f.challenger
+	if d.Cause == plugin.CauseStatic {
+		to = d.Recommended
+	}
 	switch blocked {
 	case GateRIB:
 		if f.rib == ribOff {
@@ -607,13 +657,19 @@ func counterfactual(blocked string, d Decision, f explainFacts, cfg Config, cur,
 		}
 		return "would be decided once a neighbor advertises " + d.Prefix.String() + " with a next hop of a configured provider"
 	case GateFreshness:
-		return "would be compared once every provider has a result within " + dur(cfg.MaxResultAge) + " and the current path is usable"
+		fresh := "a fresh result"
+		if cfg.MaxResultAge > 0 {
+			fresh = "a result within " + dur(cfg.MaxResultAge)
+		}
+		return "would be compared once every provider has " + fresh + " and the current path is usable"
 	case GatePolicy:
 		return "would be decided again if the routing policy no longer applied"
 	case GateRouteCheck:
 		return "would move once the provider has a path for the exact prefix"
 	case GateRPKI:
 		return "would move if the provider's path were not RPKI invalid"
+	case GateIRR:
+		return "would move if the provider's path were registered in the IRR, or with irr.prefer_registered off"
 	case GateConfirm:
 		return fmt.Sprintf("would move to %s after %d more fresh winning round(s)", f.challenger, max(cfg.confirmRounds()-f.streak, 1))
 	case GateHoldTime:
@@ -623,9 +679,9 @@ func counterfactual(blocked string, d Decision, f explainFacts, cfg Config, cur,
 		}
 		return "would be eligible in " + dur(left)
 	case GateAllowlist:
-		return "would move to " + f.challenger + " if allowlist.prefixes covered " + d.Prefix.String()
+		return "would move to " + to + " if allowlist.prefixes covered " + d.Prefix.String()
 	case GateCap:
-		return fmt.Sprintf("would move to %s when an improvement ends or max_improvements is above %d (%d in use)", f.challenger, cfg.MaxImprovements, capUsed)
+		return fmt.Sprintf("would move to %s when an improvement ends or max_improvements is above %d (%d in use)", to, cfg.MaxImprovements, capUsed)
 	case GateThresholds:
 		if !haveCur || !haveCh {
 			return "would move once a second provider has a usable measurement"

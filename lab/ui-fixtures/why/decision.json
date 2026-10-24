@@ -25,7 +25,8 @@
    {"gate": "policy", "status": "pass", "value": "no routing policy matched"},
    {"gate": "allowlist", "status": "skip", "detail": "mode observe: nothing is announced"},
    {"gate": "route_check", "status": "pass", "value": "no provider lacks a route for this prefix"},
-   {"gate": "rpki", "status": "skip", "detail": "RPKI is off"}
+   {"gate": "rpki", "status": "skip", "detail": "RPKI is off"},
+   {"gate": "irr", "status": "skip", "detail": "IRR is off"}
   ],
   "samples": [
    {"provider": "lab-a", "role": "current", "loss_pct": 0, "rtt_ms": 50, "jitter_ms": 1, "score": 50, "usable": true},

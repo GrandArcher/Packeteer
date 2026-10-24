@@ -60,7 +60,7 @@ function quarantineNote(q) {
 var GATE_LABELS = {
   rib: "Learned RIB", freshness: "Fresh measurements", thresholds: "Thresholds", confirm_rounds: "Confirm rounds",
   hold_time: "Hold time", cap: "Max simultaneous moves", policy: "Routing policy", allowlist: "Allowlist",
-  route_check: "Route check", rpki: "RPKI"
+  route_check: "Route check", rpki: "RPKI", irr: "IRR"
 };
 var GATE_RESULTS = {pass: "Passed", fail: "Held it back", skip: "Not checked"};
 var OUTCOMES = {moved: "Moved", kept: "Kept", retired: "Retired", held: "Held"};

@@ -49,7 +49,7 @@ func TestExplainGateOrder(t *testing.T) {
 	for _, g := range ex.Gates {
 		names = append(names, g.Name)
 	}
-	want := "rib freshness thresholds confirm_rounds hold_time cap policy allowlist route_check rpki"
+	want := "rib freshness thresholds confirm_rounds hold_time cap policy allowlist route_check rpki irr"
 	if strings.Join(names, " ") != want {
 		t.Fatalf("gates = %v, want %s", names, want)
 	}
@@ -135,6 +135,20 @@ func TestExplainFreshnessGate(t *testing.T) {
 		input := in(results(t0, pA, m{"a", 0, 90}, m{"b", 0, 30}), natA())
 		input.Results[0].Err = "boom"
 		wantGate(t, explainRound(t, cfg(), input), GateFreshness, GateFail, "a: probe error")
+	})
+	t.Run("max_result_age unset", func(t *testing.T) {
+		c := cfg()
+		c.MaxResultAge = 0
+		input := in(results(t0, pA, m{"a", 0, 90}, m{"b", 0, 30}), natA())
+		input.ProviderUp = map[string]bool{"a": false, "b": true}
+		ex := explainRound(t, c, input)
+		g := wantGate(t, ex, GateFreshness, GateFail, "a: provider down")
+		if g.Limit != "" || ex.BlockedBy != GateFreshness {
+			t.Fatalf("freshness = %+v explain = %+v", g, ex)
+		}
+		if want := "would be compared once every provider has a fresh result and the current path is usable"; ex.Counterfactual != want {
+			t.Fatalf("counterfactual = %q, want %q", ex.Counterfactual, want)
+		}
 	})
 }
 
@@ -371,6 +385,101 @@ func TestExplainRPKIGate(t *testing.T) {
 	if ex.BlockedBy != GateRPKI || ex.Outcome != OutcomeHeld {
 		t.Fatalf("explain = %+v", ex)
 	}
+}
+
+// #214: a faster provider whose path is not registered in the IRR is
+// refused by irr.prefer_registered, and the explanation names the IRR
+// gate, not the thresholds the provider would have passed.
+func TestExplainIRRGate(t *testing.T) {
+	input := in(results(t0, pA, m{"a", 0, 90}, m{"b", 0, 30}), natA())
+	wantGate(t, explainRound(t, cfg(), input), GateIRR, GateSkip, "IRR is off")
+
+	input.IRR = map[netip.Prefix]map[string]plugin.IRRAnswer{pA: {"b": {State: plugin.IRRNotRegistered, Source: "radb"}}}
+	ex := explainRound(t, cfg(), input)
+	g := wantGate(t, ex, GateIRR, GatePass, "b not_registered")
+	if g.Limit != "display only" || ex.Outcome != OutcomeMoved {
+		t.Fatalf("display-only irr = %+v explain = %+v", g, ex)
+	}
+
+	c := cfg()
+	c.IRRPreferRegistered = true
+	ex = explainRound(t, c, input)
+	g = wantGate(t, ex, GateIRR, GateFail, "b would win but its path is not registered in the IRR")
+	if g.Limit != "prefer_registered: no move onto a not registered path" || ex.BlockedBy != GateIRR || ex.Outcome != OutcomeHeld {
+		t.Fatalf("irr = %+v explain = %+v", g, ex)
+	}
+	if want := "would move if the provider's path were registered in the IRR, or with irr.prefer_registered off"; ex.Counterfactual != want {
+		t.Fatalf("counterfactual = %q, want %q", ex.Counterfactual, want)
+	}
+	wantGate(t, ex, GateThresholds, GateFail, "no other provider has a usable measurement")
+	for _, s := range ex.Samples {
+		if s.Provider == "b" && (s.Usable || s.Why != "IRR not registered") {
+			t.Fatalf("sample b = %+v", s)
+		}
+	}
+}
+
+// A static pin Decide recommended but could not apply was stopped by the
+// allowlist or the cooldown, not by the policy that pinned it.
+func TestExplainStaticPinStopped(t *testing.T) {
+	pin := func(c Config) (Config, Input) {
+		input := withPolicy(in(results(t0, pA, m{"a", 0, 90}, m{"b", 0, 30}, m{"c", 0, 50}), natA()), pA, verdict(plugin.PolicyStatic, "c"))
+		c.Mode, c.Allowlist = "inject", []netip.Prefix{pA}
+		return c, input
+	}
+	t.Run("not allowlisted", func(t *testing.T) {
+		c, input := pin(cfg())
+		c.Allowlist = []netip.Prefix{pB}
+		ex := explainRound(t, c, input)
+		if ex.Outcome != OutcomeHeld || ex.BlockedBy != GateAllowlist || ex.Reason != "policy static but prefix not allowlisted" {
+			t.Fatalf("explain = %+v", ex)
+		}
+		wantGate(t, ex, GatePolicy, GatePass, "r1")
+		wantGate(t, ex, GateAllowlist, GateFail, "not covered")
+		wantGate(t, ex, GateHoldTime, GatePass, "no cooldown")
+		if want := "would move to c if allowlist.prefixes covered 198.51.100.0/24"; ex.Counterfactual != want {
+			t.Fatalf("counterfactual = %q, want %q", ex.Counterfactual, want)
+		}
+	})
+	t.Run("cooldown", func(t *testing.T) {
+		c, input := pin(cfg())
+		e := NewEngine(c, scorer(t))
+		e.state.Cooldown[pA] = t0.Add(10 * time.Minute)
+		e.Evaluate(input, t0)
+		_, ex, _, _ := e.Explain(pA)
+		if ex.BlockedBy != GateHoldTime || !strings.HasPrefix(ex.Reason, "cooldown until") || ex.Counterfactual != "would be eligible in 10m0s" {
+			t.Fatalf("explain = %+v", ex)
+		}
+		wantGate(t, ex, GatePolicy, GatePass, "r1")
+		wantGate(t, ex, GateHoldTime, GateFail, "10m0s left")
+	})
+	t.Run("capped", func(t *testing.T) {
+		c, input := pin(cfg())
+		c.MaxImprovements, c.Allowlist = 1, []netip.Prefix{pA, pB}
+		input.Results = append(input.Results, results(t0, pB, m{"a", 0, 90}, m{"b", 0, 30})...)
+		input.Native[pB] = "a"
+		e := NewEngine(c, scorer(t))
+		e.Evaluate(in(results(t0, pB, m{"a", 0, 90}, m{"b", 0, 30}), map[netip.Prefix]string{pB: "a"}), t0)
+		e.Evaluate(input, t0.Add(time.Minute))
+		_, ex, _, _ := e.Explain(pA)
+		if ex.BlockedBy != GateCap || ex.Outcome != OutcomeHeld {
+			t.Fatalf("explain = %+v", ex)
+		}
+		wantGate(t, ex, GatePolicy, GatePass, "r1")
+		wantGate(t, ex, GateCap, GateFail, "1 in use")
+		if want := "would move to c when an improvement ends or max_improvements is above 1 (1 in use)"; ex.Counterfactual != want {
+			t.Fatalf("counterfactual = %q, want %q", ex.Counterfactual, want)
+		}
+	})
+	t.Run("pin not usable stays a policy hold", func(t *testing.T) {
+		c, input := pin(cfg())
+		input.ProviderUp = map[string]bool{"a": true, "b": true}
+		ex := explainRound(t, c, input)
+		if ex.BlockedBy != GatePolicy {
+			t.Fatalf("explain = %+v", ex)
+		}
+		wantGate(t, ex, GatePolicy, GateFail, "c not usable (provider down)")
+	})
 }
 
 // A static pin or a planned move does not use the thresholds or
