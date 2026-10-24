@@ -51,6 +51,9 @@ type ImprovementRecord struct {
 	VolumeMbps float64
 	OriginASN  uint32
 	Country    string
+	// Explain is the JSON gate list of the decision that started the
+	// improvement (#201). Empty for a record made before it existed.
+	Explain string
 }
 
 // PrefixInfo is what reports know about a prefix: the origin ASN from the

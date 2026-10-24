@@ -332,6 +332,9 @@ type Change struct {
 	Action string      `json:"action"` // improve, switch, retire
 	Old    Improvement `json:"old,omitempty"`
 	New    Improvement `json:"new,omitempty"`
+	// Explain is the gate list of the decision that made this change
+	// (#201), for history.
+	Explain *Explain `json:"-"`
 }
 
 // pending is a new improvement waiting on the max_improvements cap.
@@ -359,7 +362,10 @@ const (
 // Output of one evaluation.
 type Output struct {
 	Decisions []Decision
-	Changes   []Change
+	// facts is what Explain needs besides the decision, one per Decisions
+	// entry.
+	facts   []explainFacts
+	Changes []Change
 	// Urgent are prefixes whose performance move compared this evaluation
 	// and is still short of confirm_rounds. The probe engine measures
 	// them after a quarter of their interval. A round that cannot

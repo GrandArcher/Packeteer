@@ -125,7 +125,8 @@ CREATE TABLE IF NOT EXISTS improvements (
 	est_savings REAL NOT NULL,
 	volume_mbps REAL NOT NULL,
 	origin_asn INTEGER NOT NULL,
-	country TEXT NOT NULL
+	country TEXT NOT NULL,
+	explain TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS improvements_start ON improvements (start_ms);
 CREATE INDEX IF NOT EXISTS improvements_end ON improvements (end_ms);
@@ -268,6 +269,17 @@ func addMustChange(ctx context.Context, db *sql.DB) error {
 	return err
 }
 
+// addImprovementExplain adds improvements.explain to a database created
+// before #201.
+func addImprovementExplain(ctx context.Context, db *sql.DB) error {
+	var n int
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM pragma_table_info('improvements') WHERE name = 'explain'`).Scan(&n); err != nil || n > 0 {
+		return err
+	}
+	_, err := db.ExecContext(ctx, `ALTER TABLE improvements ADD COLUMN explain TEXT NOT NULL DEFAULT ''`)
+	return err
+}
+
 // Start opens (or creates) the database and starts the daily prune.
 func (s *Store) Start(ctx context.Context) error {
 	if err := os.MkdirAll(filepath.Dir(s.path), 0o750); err != nil {
@@ -287,6 +299,10 @@ func (s *Store) Start(ctx context.Context) error {
 		return fmt.Errorf("open %s: %w", s.path, err)
 	}
 	if err := addMustChange(ctx, db); err != nil {
+		_ = db.Close()
+		return fmt.Errorf("open %s: %w", s.path, err)
+	}
+	if err := addImprovementExplain(ctx, db); err != nil {
 		_ = db.Close()
 		return fmt.Errorf("open %s: %w", s.path, err)
 	}
@@ -439,11 +455,11 @@ ON CONFLICT (day, prefix, provider) DO UPDATE SET
 			continue
 		}
 		_, err := tx.ExecContext(ctx, `INSERT OR REPLACE INTO improvements (id, prefix, provider, native, cause, reason, mode, start_ms, end_ms, end_reason,
-	has_before, before_loss, before_rtt_ms, has_after, after_loss, after_rtt_ms, cost_delta, est_savings, volume_mbps, origin_asn, country)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+	has_before, before_loss, before_rtt_ms, has_after, after_loss, after_rtt_ms, cost_delta, est_savings, volume_mbps, origin_asn, country, explain)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			r.ID, r.Prefix.String(), r.Provider, r.Native, r.Cause, r.Reason, r.Mode, ms(r.Start), ms(r.End), r.EndReason,
 			b2i(r.HasBefore), r.BeforeLoss, r.BeforeRTT, b2i(r.HasAfter), r.AfterLoss, r.AfterRTT,
-			r.CostDelta, r.EstSavings, r.VolumeMbps, int64(r.OriginASN), r.Country)
+			r.CostDelta, r.EstSavings, r.VolumeMbps, int64(r.OriginASN), r.Country, r.Explain)
 		if err != nil {
 			return err
 		}
@@ -507,11 +523,11 @@ func (s *Store) Read(ctx context.Context, q plugin.HistoryQuery) (plugin.History
 	var imps *sql.Rows
 	if q.OpenOnly {
 		imps, err = db.QueryContext(ctx, `SELECT id, prefix, provider, native, cause, reason, mode, start_ms, end_ms, end_reason,
-	has_before, before_loss, before_rtt_ms, has_after, after_loss, after_rtt_ms, cost_delta, est_savings, volume_mbps, origin_asn, country
+	has_before, before_loss, before_rtt_ms, has_after, after_loss, after_rtt_ms, cost_delta, est_savings, volume_mbps, origin_asn, country, explain
 FROM improvements WHERE end_ms = 0 ORDER BY start_ms, id`)
 	} else {
 		imps, err = db.QueryContext(ctx, `SELECT id, prefix, provider, native, cause, reason, mode, start_ms, end_ms, end_reason,
-	has_before, before_loss, before_rtt_ms, has_after, after_loss, after_rtt_ms, cost_delta, est_savings, volume_mbps, origin_asn, country
+	has_before, before_loss, before_rtt_ms, has_after, after_loss, after_rtt_ms, cost_delta, est_savings, volume_mbps, origin_asn, country, explain
 FROM improvements WHERE start_ms < ? AND (end_ms = 0 OR end_ms >= ?) ORDER BY start_ms, id`, q.To.UnixMilli(), q.From.UnixMilli())
 	}
 	if err != nil {
@@ -523,7 +539,7 @@ FROM improvements WHERE start_ms < ? AND (end_ms = 0 OR end_ms >= ?) ORDER BY st
 		var start, end, asn int64
 		var hb, ha int
 		if err := imps.Scan(&r.ID, &prefix, &r.Provider, &r.Native, &r.Cause, &r.Reason, &r.Mode, &start, &end, &r.EndReason,
-			&hb, &r.BeforeLoss, &r.BeforeRTT, &ha, &r.AfterLoss, &r.AfterRTT, &r.CostDelta, &r.EstSavings, &r.VolumeMbps, &asn, &r.Country); err != nil {
+			&hb, &r.BeforeLoss, &r.BeforeRTT, &ha, &r.AfterLoss, &r.AfterRTT, &r.CostDelta, &r.EstSavings, &r.VolumeMbps, &asn, &r.Country, &r.Explain); err != nil {
 			imps.Close()
 			return out, err
 		}

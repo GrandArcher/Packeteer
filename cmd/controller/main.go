@@ -736,6 +736,7 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 	if irrChecker.Enabled() {
 		col.SetIRR(irrChecker.Lookup)
 	}
+	httpSrv.SetExplainer(decider)
 	httpSrv.SetQuarantine(quarantineControl{decider: decider, out: dispatch, poke: poke, now: time.Now})
 	wireExchanges(ctx, cfg, col, httpSrv, view, plugins, decider, rpkiSet)
 	wireProviderStats(httpSrv, series, plugins, view, decider)

@@ -121,6 +121,7 @@ func Decide(prev State, in Input, cfg Config, scorer plugin.Scorer, now time.Tim
 	}
 	netpfx.Sort(prefixes)
 	decisions := make([]Decision, len(prefixes))
+	facts := make([]explainFacts, len(prefixes))
 
 	for i, p := range prefixes {
 		// A streak only asks for an early probe when this evaluation
@@ -160,6 +161,7 @@ func Decide(prev State, in Input, cfg Config, scorer plugin.Scorer, now time.Tim
 		if haveBest {
 			d.Recommended = best.Provider
 		}
+		facts[i] = factsOf(&st, in, cfg, p, cands, imp, active, ignore, now)
 
 		if active {
 			d.Native, d.Current = imp.Native, imp.Provider
@@ -281,7 +283,7 @@ func Decide(prev State, in Input, cfg Config, scorer plugin.Scorer, now time.Tim
 					d.Action, d.Reason, d.Current, d.Cause = ActionRetire, "provider excluded from commit control", imp.Native, plugin.CauseCommit
 					continue
 				}
-				holds = append(holds, commitHold{imp: imp, d: d, held: now.Sub(imp.Since) < cfg.HoldTime})
+				holds = append(holds, commitHold{imp: imp, d: d, f: &facts[i], held: now.Sub(imp.Since) < cfg.HoldTime})
 				continue
 			}
 			held := now.Sub(imp.Since) < cfg.HoldTime
@@ -367,7 +369,7 @@ func Decide(prev State, in Input, cfg Config, scorer plugin.Scorer, now time.Tim
 			pin, usable := get(static)
 			switch {
 			case static == d.Native:
-				d.Recommended, d.Reason = static, "policy static: native is the pinned provider"
+				d.Recommended, d.Reason, facts[i].pinNative = static, "policy static: native is the pinned provider", true
 				continue
 			case !usable || cfg.Excluded[static]:
 				d.Reason = "policy static: " + static + " not usable (" + staticWhy(cands, cfg, static) + ")"
@@ -377,7 +379,7 @@ func Decide(prev State, in Input, cfg Config, scorer plugin.Scorer, now time.Tim
 				d.Reason = "policy static: " + static + " " + fault
 				continue
 			}
-			d.Recommended = static
+			d.Recommended, facts[i].pinOK = static, true
 			if until, cool := st.Cooldown[p]; cool {
 				d.Reason = "cooldown until " + until.Format(time.RFC3339)
 				continue
@@ -499,7 +501,11 @@ func Decide(prev State, in Input, cfg Config, scorer plugin.Scorer, now time.Tim
 	annotateCost(st, &out, cfg, in.VolumeMbps)
 	for i := range decisions {
 		attachSubranges(&decisions[i], subs[decisions[i].Prefix], cfg.Excluded)
+		if c, ok := st.confirm[prefixes[i]]; ok && c.Provider == facts[i].challenger {
+			facts[i].streak = c.Streak
+		}
 	}
-	out.Decisions = decisions
+	out.Decisions, out.facts = decisions, facts
+	explainChanges(&out, cfg, len(st.Improvements))
 	return st, out
 }

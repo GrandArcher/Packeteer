@@ -9,6 +9,7 @@ package history
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -435,6 +436,11 @@ func (r *Recorder) Decision(now time.Time, changes []policy.Change, results []pr
 			}
 			if rec.Cause == "" {
 				rec.Cause = plugin.CausePerformance
+			}
+			if c.Explain != nil {
+				if b, err := json.Marshal(c.Explain); err == nil {
+					rec.Explain = string(b)
+				}
 			}
 			rec.HasBefore, rec.BeforeLoss, rec.BeforeRTT = measure(imp.Prefix, imp.Native)
 			rec.HasAfter, rec.AfterLoss, rec.AfterRTT = measure(imp.Prefix, imp.Provider)

@@ -73,3 +73,40 @@ func TestBuildPrefixIsExactAndEmpty(t *testing.T) {
 		}
 	}
 }
+
+// The gate list the recorder stored with an improvement comes back on the
+// prefix history, and a record without one (or with damaged JSON) has none
+// (#201).
+func TestBuildPrefixCarriesExplain(t *testing.T) {
+	h := seed()
+	good := `{"outcome":"moved","gates":[{"gate":"thresholds","status":"pass"}]}`
+	for i := range h.Improvements {
+		if h.Improvements[i].Prefix != pfxA {
+			continue
+		}
+		h.Improvements[i].Explain = good
+		break
+	}
+	h.Improvements = append(h.Improvements, plugin.ImprovementRecord{ID: "bad", Prefix: pfxA, Provider: "transit-b", Native: "transit-a",
+		Start: from.Add(time.Hour), Explain: "{not json"})
+	got := BuildPrefix(h, pfxA, Query{From: from, To: to, Now: now}).Improvements
+	var withExplain, without int
+	for _, im := range got {
+		switch string(im.Explain) {
+		case good:
+			withExplain++
+		case "":
+			without++
+		default:
+			t.Fatalf("explain = %q", im.Explain)
+		}
+	}
+	if withExplain != 1 || without != len(got)-1 {
+		t.Fatalf("explain on %d of %d improvements", withExplain, len(got))
+	}
+	// Reports share the row type and never carry the gate list.
+	rep := improvementRow(h.Improvements[0], 1)
+	if rep.Explain != nil {
+		t.Fatalf("report row has an explain: %s", rep.Explain)
+	}
+}

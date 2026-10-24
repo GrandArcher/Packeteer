@@ -18,7 +18,10 @@ type Engine struct {
 	scorer plugin.Scorer
 	state  State
 	last   Output
-	at     time.Time
+	// lastCfg is the config the latest evaluation ran with, so an
+	// explanation matches the decision it explains after a reload.
+	lastCfg Config
+	at      time.Time
 }
 
 // NewEngine returns an engine with empty state.
@@ -31,7 +34,7 @@ func (e *Engine) Evaluate(in Input, now time.Time) []Change {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	st, out := Decide(e.state, in, e.cfg, e.scorer, now)
-	e.state, e.last, e.at = st, out, now
+	e.state, e.last, e.lastCfg, e.at = st, out, e.cfg, now
 	return out.Changes
 }
 

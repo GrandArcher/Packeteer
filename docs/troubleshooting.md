@@ -162,12 +162,17 @@ Router-side show commands are in each guide: [mikrotik.md](mikrotik.md), [frr.md
 
 `/api/improvements` is empty while one provider is clearly better.
 
-- Both `thresholds.min_loss_delta_pct` and `thresholds.min_rtt_delta_ms` are 0 (the minimum config omits them). Set them; the example config uses 1% and 15 ms.
-- The gain is inside the thresholds. When `thresholds.min_rtt_delta_pct` is set, an RTT win also has to be that percent of the current path's RTT. A loss win does not use the percent.
-- `thresholds.confirm_rounds` is greater than 1 and the streak is still short. `/api/decisions` says `confirming` with the count. The default is 1, which announces on the first fresh win. A stale round does not count. A round that cannot compare keeps the streak and does not ask for an early probe. Early probes wait a quarter of the probe interval.
-- The prefix is not in the learned RIB, or its current exit is unknown (previous section).
-- The native provider or the candidate has no fresh measurement, or the candidate's source is down.
-- A policy excludes the provider (`rules`, `maintenance`, commit control), or `max_improvements` is full (`capped` in `/api/decisions`).
+Open `/prefix/<prefix>` and read the Why? panel, or call `GET /api/decisions/<prefix>`. It lists every check in order (`rib`, `freshness`, `thresholds`, `confirm_rounds`, `hold_time`, `cap`, `policy`, `allowlist`, `route_check`, `rpki`, `irr`) with the value compared and the limit, names the one that stopped the move in `blocked_by`, and says in `counterfactual` what would change it. The usual causes by gate:
+
+- `rib`: the prefix is not in the learned RIB, or its next hop matches no provider (previous section).
+- `freshness`: the native provider or the better candidate has no fresh measurement, or its source is down.
+- `thresholds`: the gain is inside `thresholds.min_loss_delta_pct` and `thresholds.min_rtt_delta_ms` (both 0 in the minimum config, which sets neither; the example config uses 1% and 15 ms), or inside `thresholds.min_rtt_delta_pct` when set. A loss win does not use the percent.
+- `confirm_rounds`: `thresholds.confirm_rounds` is greater than 1 and the streak is still short. A stale round does not count. A round that cannot compare keeps the streak and does not ask for an early probe. Early probes wait a quarter of the probe interval.
+- `hold_time`: an improvement is inside `hold_time`, the prefix is in the cooldown after a flip-back, or it is in a flap quarantine.
+- `cap`: `max_improvements` is full.
+- `policy`: a `rules` policy leaves the prefix on native routing or pins it to a provider, or the better provider is excluded by a provider `exclude` or an open `maintenance` window. Commit and cost steers do not fail this check.
+- `allowlist`: in inject, the prefix is not covered by `allowlist.prefixes`. A static pin on such a prefix is held here, not by `policy`.
+- `route_check`, `rpki`, `irr`: the better provider has no path for the exact prefix, its path is RPKI invalid with `rpki.avoid_invalid` on, or its path is not registered in the IRR with `irr.prefer_registered` on.
 
 `/api/decisions` gives the action and the reason for every probed prefix, with each candidate's score and why it is or is not usable.
 

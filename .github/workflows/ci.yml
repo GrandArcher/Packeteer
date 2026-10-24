@@ -1369,6 +1369,63 @@ jobs:
             '>notfound<span class="muted"> via ripestat, ' ' old</span>' \
             'lab-b path from AS64511: invalid (source routinator)' 'lab-b path from AS64511: unknown (no source had fresh data)' \
             --absent 'Cannot reach' 'mode-inject'
+      - name: UI Why panel smoke (#201; the gate table for one decision, the stored checks on the timeline, a prefix with no decision)
+        run: |
+          set -euo pipefail
+          base=http://127.0.0.1:18301
+          cat > /tmp/ui201.yaml <<'YAML'
+          mode: observe
+          asn: 64512
+          router_id: 192.0.2.10
+          auth: {enabled: false}
+          http:
+            listen: "127.0.0.1:18301"
+          providers:
+            - name: lab-a
+              source_ip: 127.0.0.1
+              next_hop: 192.0.2.1
+          YAML
+          docker run -d --name pkui201 --network host --cap-add NET_RAW --cap-add NET_ADMIN \
+            -v /tmp/ui201.yaml:/etc/packeteer/config.yaml:ro packeteer:ci
+          proxy=""
+          cleanup() {
+            if [ -n "$proxy" ]; then kill "$proxy" 2>/dev/null || true; fi
+            docker stop -t 15 pkui201 >/dev/null || true
+            docker logs pkui201 2>&1 | tail -n 40
+            code="$(docker inspect -f '{{.State.ExitCode}}' pkui201)"
+            docker rm pkui201 >/dev/null || true
+            test "$code" = "0"
+          }
+          trap cleanup EXIT
+          ok=0
+          for _ in $(seq 1 30); do
+            if curl -fsS "$base/healthz" >/dev/null 2>&1; then ok=1; break; fi
+            sleep 1
+          done
+          test "$ok" = 1
+          # The page asks for one prefix. uiproxy answers the decision and the
+          # stored history from lab/ui-fixtures/why (documentation prefix):
+          # a decision held back by the thresholds and an earlier move with its
+          # stored checks. The gate list itself is checked against the real
+          # engine in the Go tests (TestDecisionExplainAPI). 192.0.2.0/24 has
+          # no fixture, so the image answers it with a 404.
+          go build -o /tmp/uiproxy ./lab/uiproxy
+          /tmp/uiproxy -listen 127.0.0.1:18302 -upstream "$base" -user lab -password lab-only \
+            -fixtures lab/ui-fixtures/why >/tmp/uiproxy201.log 2>&1 &
+          proxy=$!
+          for _ in $(seq 1 20); do
+            curl -fsS http://127.0.0.1:18302/healthz >/dev/null 2>&1 && break
+            sleep 0.2
+          done
+          curl -fsS http://127.0.0.1:18302/healthz >/dev/null
+          bash lab/ui-smoke.sh 'http://127.0.0.1:18302/prefix/198.51.100.0%2F24' 'mode-observe' 'It announces nothing.' \
+            'id="why-panel"' 'Held: native path is best (within thresholds). Held back by: Thresholds.' \
+            'What would change it: would move to lab-b if its RTT delta reached' \
+            'Fresh measurements' 'Held it back' 'Measurements behind it' \
+            'Checks at the time: Learned RIB passed (native lab-a); Thresholds passed (lab-b vs lab-a' \
+            --absent 'Cannot reach' 'mode-inject' 'Packeteer has no decision for this prefix'
+          bash lab/ui-smoke.sh "$base/prefix/192.0.2.0%2F24" 'id="why-panel"' \
+            'Packeteer has no decision for this prefix now' --absent 'Cannot reach' 'Held it back'
       - name: UI observe wording smoke (#346; a pending recommendation in observe, Traffic now vs Packeteer recommends)
         run: |
           set -euo pipefail
