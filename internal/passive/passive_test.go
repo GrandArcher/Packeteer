@@ -138,3 +138,28 @@ func TestFreshAndHelpers(t *testing.T) {
 		}
 	}
 }
+
+func TestSignals(t *testing.T) {
+	th := Thresholds{RetransPct: 5, FailurePct: 20, MinSegments: 100, MinFlows: 10}
+	w := NewWindow(time.Minute, 100)
+	now := time.Unix(1_700_000_000, 0)
+	pC := netip.MustParsePrefix("192.0.2.0/24")
+	w.Add(now, pA, hA, Counts{Flows: 10, Timeouts: 5})          // failure 50%: problem
+	w.Add(now, pB, netip.Addr{}, Counts{Flows: 10, Resets: 1})  // failure 10%: judged, clean
+	w.Add(now, pC, netip.Addr{}, Counts{Flows: 3, Timeouts: 3}) // too few flows to judge
+	got := w.Signals(now, th)
+	if len(got) != 2 || !got[pA] || got[pB] {
+		t.Fatalf("signals = %v", got)
+	}
+	if _, judged := got[pC]; judged {
+		t.Fatal("a prefix under min_flows was judged")
+	}
+	// Segments alone judge a prefix for the retransmission check.
+	w.Add(now, pC, netip.Addr{}, Counts{Segments: 100, Retrans: 1})
+	if got := w.Signals(now, th); len(got) != 3 || got[pC] {
+		t.Fatalf("signals with segments = %v", got)
+	}
+	if got := w.Signals(now.Add(2*time.Minute), th); len(got) != 0 {
+		t.Fatalf("signals after the window = %v", got)
+	}
+}

@@ -20,9 +20,12 @@
    "next_hop": "192.0.2.1",
    "rib_provider": "lab-a",
    "probes": [
-    {"provider": "lab-a", "prefix": "203.0.113.0/25", "prober": "icmp", "ok": true, "loss_pct": 0, "rtt_min_ms": 80, "rtt_avg_ms": 90, "rtt_max_ms": 95, "jitter_ms": 1, "sent": 4, "received": 4},
-    {"provider": "lab-b", "prefix": "203.0.113.0/25", "prober": "icmp", "ok": true, "loss_pct": 0, "rtt_min_ms": 8, "rtt_avg_ms": 10, "rtt_max_ms": 12, "jitter_ms": 1, "sent": 4, "received": 4},
-    {"provider": "lab-c", "prefix": "203.0.113.0/25", "prober": "icmp", "ok": true, "loss_pct": 0, "rtt_min_ms": 38, "rtt_avg_ms": 40, "rtt_max_ms": 42, "jitter_ms": 1, "sent": 4, "received": 4}
+    {"provider": "lab-a", "prefix": "203.0.113.0/25", "prober": "icmp", "ok": true, "loss_pct": 0, "rtt_min_ms": 80, "rtt_avg_ms": 90, "rtt_max_ms": 95, "jitter_ms": 1, "sent": 4, "received": 4,
+     "confidence": {"level": "medium", "score": 0.5, "protocol": "icmp", "replies": 4, "sent": 4}, "evidence": "icmp, 4/4 replies"},
+    {"provider": "lab-b", "prefix": "203.0.113.0/25", "prober": "tcp", "indirect": true, "ok": true, "loss_pct": 75, "rtt_min_ms": 10, "rtt_avg_ms": 10, "rtt_max_ms": 10, "jitter_ms": 0, "sent": 4, "received": 1,
+     "confidence": {"level": "low", "score": 0.25, "protocol": "tcp", "replies": 1, "sent": 4, "indirect": true}, "evidence": "tcp, 1/4 replies, traceroute hop"},
+    {"provider": "lab-c", "prefix": "203.0.113.0/25", "prober": "icmp", "ok": true, "loss_pct": 0, "rtt_min_ms": 38, "rtt_avg_ms": 40, "rtt_max_ms": 42, "jitter_ms": 1, "sent": 4, "received": 4,
+     "confidence": {"level": "medium", "score": 0.5, "protocol": "icmp", "replies": 4, "sent": 4}, "evidence": "icmp, 4/4 replies"}
    ],
    "exit_loss_pct": 0,
    "exit_rtt_ms": 90,

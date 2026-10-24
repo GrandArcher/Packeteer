@@ -99,7 +99,7 @@ func newEngine(cfg *config.Config, plugins *pluginhost.Set, log *slog.Logger, on
 	}
 	var probers []probe.NamedProber
 	for _, p := range plugins.Probers {
-		probers = append(probers, probe.NamedProber{Name: p.Name, Prober: p.Plugin})
+		probers = append(probers, probe.NamedProber{Name: p.Name, Prober: p.Plugin, Type: p.Type})
 	}
 	var sources []probe.NamedSource
 	for _, s := range plugins.Sources {

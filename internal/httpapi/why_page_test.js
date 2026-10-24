@@ -41,6 +41,7 @@ var body = new Node("div");
 var context = {
   document: {
     createElement: function (t) { return new Node(t); },
+    createTextNode: function (t) { var n = new Node("#text"); n.text = String(t); return n; },
     getElementById: function (id) { return id === "why-body" ? body : null; }
   },
   Date: Date, Math: Math, Number: Number, String: String, Promise: Promise, encodeURIComponent: encodeURIComponent
@@ -67,7 +68,7 @@ var web = path.join(__dirname, "web");
 var app = fs.readFileSync(path.join(web, "app.js"), "utf8");
 var page = fs.readFileSync(path.join(web, "prefix.js"), "utf8");
 ["GATE_LABELS", "GATE_RESULTS", "OUTCOMES"].forEach(function (n) { vm.runInContext(varBlock(page, n), context); });
-[[app, "el"], [app, "clear"], [app, "fmtMs"], [app, "fmtPct"], [app, "fmtTime"], [app, "table"],
+[[app, "el"], [app, "clear"], [app, "fmtMs"], [app, "fmtPct"], [app, "fmtTime"], [app, "table"], [app, "confidenceCell"],
   [page, "gateLabel"], [page, "whyHeadline"], [page, "gateRow"], [page, "sampleRow"], [page, "renderWhy"], [page, "loadWhy"],
   [page, "whyStored"], [page, "timelineVerb"], [page, "measure"], [page, "improvementEntries"]
 ].forEach(function (p) { vm.runInContext(fn(p[0], p[1]), context); });
@@ -81,13 +82,14 @@ var held = {
     gates: [
       {gate: "rib", status: "pass", value: "native lab-a"},
       {gate: "thresholds", status: "fail", value: "lab-b vs lab-a: loss gain 0 pt, rtt gain 10 ms (20%)", limit: "loss gain >= 1 pt, or rtt gain >= 15 ms with loss no higher, and a lower score", detail: "neither threshold is met"},
+      {gate: "evidence", status: "pass", value: "lab-a: icmp, 10/10 replies; lab-b: tcp, 10/10 replies", limit: "display only"},
       {gate: "cap", status: "skip", detail: "not reached: no better path passed the thresholds"},
       {gate: "rpki", status: "skip", detail: "RPKI is off"}
     ],
     samples: [
-      {provider: "lab-a", role: "current", loss_pct: 0, rtt_ms: 50, jitter_ms: 1, score: 50, usable: true},
-      {provider: "lab-b", role: "challenger", loss_pct: 0, rtt_ms: 40, jitter_ms: 1, score: 40, usable: true},
-      {provider: "lab-c", loss_pct: 100, rtt_ms: 0, jitter_ms: 0, score: 0, usable: false, why: "stale"}
+      {provider: "lab-a", role: "current", loss_pct: 0, rtt_ms: 50, jitter_ms: 1, score: 50, usable: true, confidence: "medium", evidence: "icmp, 10/10 replies"},
+      {provider: "lab-b", role: "challenger", loss_pct: 0, rtt_ms: 40, jitter_ms: 1, score: 40, usable: true, confidence: "low", evidence: "tcp, 1/10 replies"},
+      {provider: "lab-c", loss_pct: 100, rtt_ms: 0, jitter_ms: 0, score: 0, usable: false, why: "stale", confidence: "none", evidence: "no measurement"}
     ]
   }
 };
@@ -97,11 +99,15 @@ var text = body.textContent;
 assert(text.indexOf("Held: native path is best (within thresholds). Held back by: Thresholds.") >= 0, "headline: " + text);
 assert(text.indexOf("What would change it: would move to lab-b if its RTT delta reached >= 15 ms (now 10 ms)") >= 0, "counterfactual");
 var rows = walk(body).filter(function (n) { return n.tag === "tr"; });
-// two header rows, four gates, three samples
-assert(rows.length === 2 + 4 + 3, "row count " + rows.length);
+// two header rows, five gates, three samples
+assert(rows.length === 2 + 5 + 3, "row count " + rows.length);
 assert(withClass(body, "dot down").length === 1 && withClass(body, "dot down")[0].textContent === "Held it back", "one gate held it back");
-assert(withClass(body, "dot up").length === 1 && withClass(body, "dot up")[0].textContent === "Passed", "one gate passed");
+assert(withClass(body, "dot up").length === 2 && withClass(body, "dot up")[0].textContent === "Passed", "two gates passed");
 assert(withClass(body, "badge muted").length === 2, "two skipped gates");
+// Confidence (#202): a level pill with the evidence beside it; low is amber; a failed sample shows a dash.
+assert(text.indexOf("Measurement evidence") >= 0 && text.indexOf("medium icmp, 10/10 replies") >= 0, "confidence column: " + text);
+assert(withClass(body, "badge warn").length === 1 && withClass(body, "badge warn")[0].textContent === "low" && withClass(body, "badge warn")[0].title === "tcp, 1/10 replies", "low confidence is amber");
+assert(text.indexOf("no measurement") < 0, "a failed sample shows no evidence text");
 assert(text.indexOf("Max simultaneous moves") >= 0 && text.indexOf("Learned RIB") >= 0, "gate labels are plain words");
 assert(text.indexOf("not usable: stale") >= 0 && text.indexOf("challenger") >= 0, "samples: " + text);
 

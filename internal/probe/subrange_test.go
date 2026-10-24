@@ -103,7 +103,7 @@ func TestEngineSubranges(t *testing.T) {
 		p := &hostProber{rtt: map[netip.Addr]float64{host1: 10, host2: 30}}
 		o := opts()
 		o.Packets = 1
-		e, err := New([]Provider{provA}, []NamedProber{{"h", p}},
+		e, err := New([]Provider{provA}, []NamedProber{{Name: "h", Prober: p}},
 			src(plugin.Target{Prefix: wide, Host: host1, Candidate: true, Subranges: twoSubranges(1, 1)}), o)
 		if err != nil {
 			t.Fatal(err)
@@ -121,7 +121,7 @@ func TestEngineSubranges(t *testing.T) {
 	t.Run("pin ignores sub-ranges", func(t *testing.T) {
 		p := &hostProber{}
 		pinHost := netip.MustParseAddr("198.51.100.129")
-		e, err := New([]Provider{provA}, []NamedProber{{"h", p}},
+		e, err := New([]Provider{provA}, []NamedProber{{Name: "h", Prober: p}},
 			src(plugin.Target{Prefix: wide, Host: pinHost, Subranges: twoSubranges(1, 1)}), opts())
 		if err != nil {
 			t.Fatal(err)
@@ -135,7 +135,7 @@ func TestEngineSubranges(t *testing.T) {
 
 	t.Run("no sub-range measured falls back to hosts", func(t *testing.T) {
 		p := &hostProber{dead: map[netip.Addr]bool{host1: true, host2: true}}
-		e, err := New([]Provider{provA}, []NamedProber{{"h", p}},
+		e, err := New([]Provider{provA}, []NamedProber{{Name: "h", Prober: p}},
 			src(plugin.Target{Prefix: wide, Subranges: twoSubranges(1, 1)}), opts())
 		if err != nil {
 			t.Fatal(err)
@@ -149,7 +149,7 @@ func TestEngineSubranges(t *testing.T) {
 
 	t.Run("dead probe source fails closed", func(t *testing.T) {
 		p := &hostProber{down: true}
-		e, err := New([]Provider{provA}, []NamedProber{{"h", p}},
+		e, err := New([]Provider{provA}, []NamedProber{{Name: "h", Prober: p}},
 			src(plugin.Target{Prefix: wide, Subranges: twoSubranges(1, 1)}), opts())
 		if err != nil {
 			t.Fatal(err)
@@ -168,7 +168,7 @@ func TestEngineSubranges(t *testing.T) {
 		o := opts()
 		o.ExchangeLANs = []netip.Prefix{sub2}
 		subs := append(twoSubranges(1, 1), plugin.Subrange{Prefix: netip.MustParsePrefix("198.51.100.64/26"), Host: netip.MustParseAddr("198.51.100.65"), Weight: 1})
-		e, err := New([]Provider{provA}, []NamedProber{{"h", p}},
+		e, err := New([]Provider{provA}, []NamedProber{{Name: "h", Prober: p}},
 			src(plugin.Target{Prefix: wide, Subranges: subs}), o)
 		if err != nil {
 			t.Fatal(err)

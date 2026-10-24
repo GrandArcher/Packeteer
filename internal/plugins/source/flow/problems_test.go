@@ -75,6 +75,12 @@ func TestFlowProblemsFromNetFlowV5(t *testing.T) {
 	if b.Flows != 10 || b.Timeouts != 6 || b.Resets != 1 || g.Flows != 10 || g.Timeouts != 0 || g.Resets != 1 {
 		t.Fatalf("counts bad %+v good %+v", b, g)
 	}
+	// The decision engine's passive view (#202): the failing prefix is a
+	// problem, the clean one is observed and not; the local prefix only
+	// saw inbound records and is not judged.
+	if sig := s.PassiveSignals(); len(sig) != 2 || !sig[netip.MustParsePrefix("203.0.113.0/24")] || sig[netip.MustParsePrefix("198.51.100.0/24")] {
+		t.Fatalf("passive signals = %v", sig)
+	}
 	// The inbound records also count as volume toward 192.0.2.0/24; the
 	// volume list does not read problems.local (use exclude for that).
 	ts := targetsOf(t, s)

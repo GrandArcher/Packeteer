@@ -17,6 +17,7 @@ const (
 	GateRIB        = "rib"
 	GateFreshness  = "freshness"
 	GateThresholds = "thresholds"
+	GateEvidence   = "evidence"
 	GateConfirm    = "confirm_rounds"
 	GateHoldTime   = "hold_time"
 	GateCap        = "cap"
@@ -65,6 +66,10 @@ type Sample struct {
 	Score    float64 `json:"score"`
 	Usable   bool    `json:"usable"`
 	Why      string  `json:"why,omitempty"`
+	// Confidence is the sample's evidence level (#202) and Evidence the
+	// facts behind it in words.
+	Confidence string `json:"confidence"`
+	Evidence   string `json:"evidence"`
 }
 
 // Explain says which check let a decision move or held it back (#201).
@@ -312,16 +317,25 @@ func buildExplain(d Decision, f explainFacts, cfg Config, capUsed int) Explain {
 	switch {
 	case static:
 		g[GateThresholds] = Gate{Name: GateThresholds, Status: GateSkip, Detail: "a static policy pin does not use the thresholds"}
+		g[GateEvidence] = Gate{Name: GateEvidence, Status: GateSkip, Detail: "a static policy pin does not use the evidence rule"}
 	case plan:
 		g[GateThresholds] = Gate{Name: GateThresholds, Status: GateSkip, Detail: "decided by the " + d.Cause + " planner, not the thresholds"}
+		g[GateEvidence] = Gate{Name: GateEvidence, Status: GateSkip, Detail: "decided by the " + d.Cause + " planner, not the evidence rule"}
 	default:
 		g[GateThresholds] = thresholdsGate(cur, ch, haveCur, haveCh, cfg)
+		g[GateEvidence] = evidenceGate(cur, ch, haveCur, haveCh, cfg)
 	}
 	retired := d.Action == ActionRetire
-	reached := moved || (pairBetter && !static && !plan)
+	// Decide checks the evidence rule right after the thresholds, so a
+	// move it refused never reached confirm_rounds, hold_time, or the cap.
+	evidenceStopped := g[GateEvidence].Status == GateFail && !moved
+	reached := moved || (pairBetter && !static && !plan && !evidenceStopped)
 	notReached := func(name string) Gate {
-		if retired {
+		switch {
+		case retired:
 			return Gate{Name: name, Status: GateSkip, Detail: "not applicable: the improvement ended"}
+		case evidenceStopped:
+			return Gate{Name: name, Status: GateSkip, Detail: "not reached: thresholds.require_evidence refused the move"}
 		}
 		return Gate{Name: name, Status: GateSkip, Detail: "not reached: no better path passed the thresholds"}
 	}
@@ -349,7 +363,7 @@ func buildExplain(d Decision, f explainFacts, cfg Config, capUsed int) Explain {
 		g[GateHoldTime] = holdGate(d, f, cfg)
 	}
 
-	order := []string{GateRIB, GateFreshness, GateThresholds, GateConfirm, GateHoldTime, GateCap, GatePolicy, GateAllowlist, GateRouteCheck, GateRPKI, GateIRR}
+	order := []string{GateRIB, GateFreshness, GateThresholds, GateEvidence, GateConfirm, GateHoldTime, GateCap, GatePolicy, GateAllowlist, GateRouteCheck, GateRPKI, GateIRR}
 	for _, n := range order {
 		ex.Gates = append(ex.Gates, g[n])
 	}
@@ -374,7 +388,8 @@ func buildExplain(d Decision, f explainFacts, cfg Config, capUsed int) Explain {
 func samplesOf(d Decision, f explainFacts) []Sample {
 	out := make([]Sample, 0, len(d.Candidates))
 	for _, c := range d.Candidates {
-		s := Sample{Provider: c.Provider, LossPct: c.LossPct, RTTMs: ms(c.RTTAvg), JitterMs: ms(c.Jitter), Score: c.Score, Usable: c.Usable, Why: c.Why}
+		s := Sample{Provider: c.Provider, LossPct: c.LossPct, RTTMs: ms(c.RTTAvg), JitterMs: ms(c.Jitter), Score: c.Score, Usable: c.Usable, Why: c.Why,
+			Confidence: c.Confidence.Level, Evidence: c.Confidence.String()}
 		switch {
 		case c.Provider == f.current:
 			s.Role = "current"
@@ -457,6 +472,30 @@ func thresholdsGate(cur, ch Candidate, haveCur, haveCh bool, cfg Config) Gate {
 		g.Status, g.Detail = GateFail, "no threshold is configured, so no move qualifies"
 	default:
 		g.Status, g.Detail = GateFail, "neither threshold is met"
+	}
+	return g
+}
+
+// evidenceGate shows what each compared sample rests on (#202). With
+// thresholds.require_evidence on, a current or challenger sample that is
+// ICMP only fails it.
+func evidenceGate(cur, ch Candidate, haveCur, haveCh bool, cfg Config) Gate {
+	g := Gate{Name: GateEvidence, Limit: "display only"}
+	if cfg.RequireEvidence {
+		g.Limit = "require_evidence: a tcp or udp reply, or passive agreement, on both paths"
+	}
+	if !haveCur || !cur.Usable {
+		g.Status, g.Detail = GateSkip, "not reached: the current path has no usable measurement"
+		return g
+	}
+	if !haveCh {
+		g.Status, g.Value, g.Detail = GateSkip, cur.Provider+": "+cur.Confidence.String(), "not reached: no other provider has a usable measurement"
+		return g
+	}
+	g.Value = cur.Provider + ": " + cur.Confidence.String() + "; " + ch.Provider + ": " + ch.Confidence.String()
+	g.Status = GatePass
+	if lacking := evidenceLacking(cfg, cur, ch); lacking != "" {
+		g.Status, g.Detail = GateFail, strings.TrimPrefix(lacking, "require_evidence: ")
 	}
 	return g
 }
@@ -670,9 +709,9 @@ func blockedBy(g map[string]Gate, f explainFacts, d Decision, pairBetter, pinSto
 		}
 		return failed(GateThresholds)
 	case f.active:
-		return failed(GateConfirm, GateHoldTime, GateAllowlist, GateCap)
+		return failed(GateEvidence, GateConfirm, GateHoldTime, GateAllowlist, GateCap)
 	}
-	return failed(GateHoldTime, GateAllowlist, GateConfirm, GateCap)
+	return failed(GateEvidence, GateHoldTime, GateAllowlist, GateConfirm, GateCap)
 }
 
 func counterfactual(blocked string, d Decision, f explainFacts, cfg Config, cur, ch Candidate, haveCur, haveCh bool, capUsed int) string {
@@ -701,6 +740,14 @@ func counterfactual(blocked string, d Decision, f explainFacts, cfg Config, cur,
 		return "would move if the provider's path were not RPKI invalid"
 	case GateIRR:
 		return "would move if the provider's path were registered in the IRR, or with irr.prefer_registered off"
+	case GateEvidence:
+		var weak []string
+		for _, c := range []Candidate{cur, ch} {
+			if !c.Confidence.BeyondICMP() {
+				weak = append(weak, c.Provider)
+			}
+		}
+		return "would move to " + to + " once " + strings.Join(weak, " and ") + " is measured by a tcp or udp reply or agrees with passive TCP evidence, or with thresholds.require_evidence off"
 	case GateConfirm:
 		return fmt.Sprintf("would move to %s after %d more fresh winning round(s)", f.challenger, max(cfg.confirmRounds()-f.streak, 1))
 	case GateHoldTime:

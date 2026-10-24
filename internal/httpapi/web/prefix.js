@@ -58,7 +58,7 @@ function quarantineNote(q) {
 // /api/decisions/<prefix>, the measurements behind it, and what would have
 // to change for a held move to happen.
 var GATE_LABELS = {
-  rib: "Learned RIB", freshness: "Fresh measurements", thresholds: "Thresholds", confirm_rounds: "Confirm rounds",
+  rib: "Learned RIB", freshness: "Fresh measurements", thresholds: "Thresholds", evidence: "Measurement evidence", confirm_rounds: "Confirm rounds",
   hold_time: "Hold time", cap: "Max simultaneous moves", policy: "Routing policy", allowlist: "Allowlist",
   route_check: "Route check", rpki: "RPKI", irr: "IRR"
 };
@@ -94,6 +94,7 @@ function sampleRow(s) {
   tr.appendChild(el("td", "", fmtMs(s.rtt_ms)));
   tr.appendChild(el("td", "", fmtMs(s.jitter_ms)));
   tr.appendChild(el("td", "", s.usable ? String(Math.round(s.score * 10) / 10) : "-"));
+  tr.appendChild(confidenceCell(s.confidence, s.evidence));
   tr.appendChild(el("td", "", s.usable ? "usable" : "not usable: " + (s.why || "no reason")));
   return tr;
 }
@@ -108,7 +109,7 @@ function renderWhy(data) {
   root.appendChild(gates.table);
   if (ex.counterfactual) root.appendChild(el("p", "reason", "What would change it: " + ex.counterfactual + "."));
   root.appendChild(el("h3", "", "Measurements behind it"));
-  var samples = table(["Provider", "Role", "Loss", "RTT", "Jitter", "Score", "State"]);
+  var samples = table(["Provider", "Role", "Loss", "RTT", "Jitter", "Score", "Confidence", "State"]);
   (ex.samples || []).forEach(function (s) { samples.body.appendChild(sampleRow(s)); });
   root.appendChild(samples.table);
   root.appendChild(el("p", "tag", "Decided " + fmtTime(data.decided_at) + "."));

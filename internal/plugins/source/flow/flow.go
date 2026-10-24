@@ -937,6 +937,16 @@ func (s *Source) TrafficMix(ctx context.Context) ([]plugin.TrafficMix, error) {
 	return out, nil
 }
 
+// PassiveSignals is each observed prefix's problem state from the problems
+// block (#202), for the confidence of probe samples. Nil without that
+// block. It announces nothing.
+func (s *Source) PassiveSignals() map[netip.Prefix]bool {
+	if s.prob == nil {
+		return nil
+	}
+	return s.prob.win.Signals(s.now(), s.prob.th)
+}
+
 // Targets returns the current top prefixes. With a problems block, problem
 // prefixes come first (weight is the problem score, capped at
 // problems.max_targets), then the busiest prefixes not already listed. An

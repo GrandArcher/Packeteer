@@ -304,6 +304,27 @@ func (w *Window) Problems(now time.Time, t Thresholds, max int) []Problem {
 	return out
 }
 
+// Signals is, per prefix with enough traffic in the window for t to judge
+// it (the same minimums Score applies), whether that prefix is a problem.
+// The decision engine rates a probe sample against it (#202).
+func (w *Window) Signals(now time.Time, t Thresholds) map[netip.Prefix]bool {
+	out := map[netip.Prefix]bool{}
+	for p, pr := range w.Totals(now) {
+		if !t.judged(pr.Counts) {
+			continue
+		}
+		s, _ := t.Score(pr.Counts)
+		out[p] = s >= 1
+	}
+	return out
+}
+
+// judged reports whether c has enough flows or segments for Score to
+// apply any check to it.
+func (t Thresholds) judged(c Counts) bool {
+	return c.Flows >= max(t.MinFlows, 1) || c.Segments >= max(t.MinSegments, 1)
+}
+
 // Fresh reports which problems are new since the previous call. A prefix
 // that leaves the problem list and returns later is new again. The span
 // source marks new problems urgent for one probe round.

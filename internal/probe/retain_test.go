@@ -20,7 +20,7 @@ func TestRetainedPrefixKeepsHostAndInterval(t *testing.T) {
 		{Prefix: pfx2, Host: pinHost},
 		{Prefix: auto},
 	}}
-	e, err := New([]Provider{provA}, []NamedProber{{"p", &fakeProber{fn: ok(1)}}},
+	e, err := New([]Provider{provA}, []NamedProber{{Name: "p", Prober: &fakeProber{fn: ok(1)}}},
 		[]NamedSource{{Name: "flow", Source: src}}, opts())
 	if err != nil {
 		t.Fatal(err)
@@ -89,7 +89,7 @@ func TestRetainedFlowHostsStay(t *testing.T) {
 		Prefix: pfx1, Host: netip.MustParseAddr("198.51.100.50"),
 		Hosts: []netip.Addr{second, third}, Candidate: true,
 	}}}
-	e, err := New([]Provider{provA}, []NamedProber{{"p", &fakeProber{fn: ok(1)}}},
+	e, err := New([]Provider{provA}, []NamedProber{{Name: "p", Prober: &fakeProber{fn: ok(1)}}},
 		[]NamedSource{{Name: "flow", Source: src}}, opts())
 	if err != nil {
 		t.Fatal(err)
@@ -119,7 +119,7 @@ func TestRetainedIntervalStaysDue(t *testing.T) {
 		{Prefix: pfx1, Host: netip.MustParseAddr("198.51.100.50"), Candidate: true, Interval: every},
 		{Prefix: pfx2, Host: netip.MustParseAddr("203.0.113.9")},
 	}}
-	e, err := New([]Provider{provA}, []NamedProber{{"p", &fakeProber{fn: ok(1)}}},
+	e, err := New([]Provider{provA}, []NamedProber{{Name: "p", Prober: &fakeProber{fn: ok(1)}}},
 		[]NamedSource{{Name: "flow", Source: src}}, o)
 	if err != nil {
 		t.Fatal(err)

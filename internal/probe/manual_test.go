@@ -16,7 +16,7 @@ func TestQueueManualProbesNextRoundThenExpires(t *testing.T) {
 	o.Now = func() time.Time { return now }
 	o.Interval = time.Hour
 	pin := netip.MustParseAddr("203.0.113.9")
-	e, err := New([]Provider{provA}, []NamedProber{{"p", &fakeProber{fn: ok(1)}}},
+	e, err := New([]Provider{provA}, []NamedProber{{Name: "p", Prober: &fakeProber{fn: ok(1)}}},
 		src(plugin.Target{Prefix: pfx2, Host: pin}), o)
 	if err != nil {
 		t.Fatal(err)
@@ -77,7 +77,7 @@ func TestQueueManualProbesNextRoundThenExpires(t *testing.T) {
 
 func TestQueueManualKeepsSourceHost(t *testing.T) {
 	pin := netip.MustParseAddr("203.0.113.9")
-	e, err := New([]Provider{provA}, []NamedProber{{"p", &fakeProber{fn: ok(1)}}},
+	e, err := New([]Provider{provA}, []NamedProber{{Name: "p", Prober: &fakeProber{fn: ok(1)}}},
 		src(plugin.Target{Prefix: pfx2, Host: pin}), opts())
 	if err != nil {
 		t.Fatal(err)
@@ -92,7 +92,7 @@ func TestQueueManualKeepsSourceHost(t *testing.T) {
 }
 
 func TestQueueManualUnlistedPrefixUsesDefaultHost(t *testing.T) {
-	e, err := New([]Provider{provA}, []NamedProber{{"p", &fakeProber{fn: ok(1)}}}, nil, opts())
+	e, err := New([]Provider{provA}, []NamedProber{{Name: "p", Prober: &fakeProber{fn: ok(1)}}}, nil, opts())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -107,7 +107,7 @@ func TestQueueManualUnlistedPrefixUsesDefaultHost(t *testing.T) {
 }
 
 func TestQueueManualBounds(t *testing.T) {
-	e, err := New([]Provider{provA}, []NamedProber{{"p", &fakeProber{fn: ok(1)}}}, nil, opts())
+	e, err := New([]Provider{provA}, []NamedProber{{Name: "p", Prober: &fakeProber{fn: ok(1)}}}, nil, opts())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -138,7 +138,7 @@ func TestQueueManualBounds(t *testing.T) {
 func TestQueueManualInsideExchangeLANIsDropped(t *testing.T) {
 	o := opts()
 	o.ExchangeLANs = []netip.Prefix{netip.MustParsePrefix("198.51.100.0/24")}
-	e, err := New([]Provider{provA}, []NamedProber{{"p", &fakeProber{fn: ok(1)}}}, nil, o)
+	e, err := New([]Provider{provA}, []NamedProber{{Name: "p", Prober: &fakeProber{fn: ok(1)}}}, nil, o)
 	if err != nil {
 		t.Fatal(err)
 	}

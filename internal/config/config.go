@@ -496,6 +496,11 @@ type Thresholds struct {
 	// ConfirmRounds is how many consecutive fresh probe rounds a new
 	// performance move or a performance switch must win. 0 means 1.
 	ConfirmRounds int `yaml:"confirm_rounds"`
+	// RequireEvidence refuses a new performance move or performance
+	// switch unless both compared samples rest on more than ICMP: a tcp
+	// or udp prober reply, or passive TCP evidence that agrees (#202).
+	// Off by default.
+	RequireEvidence bool `yaml:"require_evidence"`
 }
 
 // Flap quarantine defaults (#228).

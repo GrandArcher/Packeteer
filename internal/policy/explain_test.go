@@ -49,7 +49,7 @@ func TestExplainGateOrder(t *testing.T) {
 	for _, g := range ex.Gates {
 		names = append(names, g.Name)
 	}
-	want := "rib freshness thresholds confirm_rounds hold_time cap policy allowlist route_check rpki irr"
+	want := "rib freshness thresholds evidence confirm_rounds hold_time cap policy allowlist route_check rpki irr"
 	if strings.Join(names, " ") != want {
 		t.Fatalf("gates = %v, want %s", names, want)
 	}

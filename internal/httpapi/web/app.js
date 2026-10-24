@@ -307,7 +307,7 @@ function prefixCard(row) {
   if (row.reason) card.appendChild(el("p", "reason", row.reason));
   var table = el("table");
   var hr = el("tr");
-  ["Provider", "Loss", "RTT", "Jitter", "Probe"].forEach(function (h) {
+  ["Provider", "Loss", "RTT", "Jitter", "Probe", "Confidence"].forEach(function (h) {
     hr.appendChild(el("th", "", h));
   });
   var thead = el("thead");
@@ -332,6 +332,7 @@ function prefixCard(row) {
       tr.appendChild(el("td", "bad", NO_REPLY));
       tr.appendChild(el("td", "", "—"));
       tr.appendChild(el("td", "bad", pr.error || "failed"));
+      tr.appendChild(el("td", "", "\u2014"));
     } else {
       var silent = !pr.received;
       tr.appendChild(el("td", silent ? "num bad" : "num", fmtPct(pr.loss_pct)));
@@ -345,6 +346,7 @@ function prefixCard(row) {
         probeCell.appendChild(tag);
       }
       tr.appendChild(probeCell);
+      tr.appendChild(confidenceCell(pr.confidence && pr.confidence.level, pr.evidence));
     }
     tb.appendChild(tr);
   });
@@ -424,6 +426,21 @@ function prefixCell(prefix) {
 function fmtAS(path) {
   if (!path || !path.length) return "—";
   return path.join(" ");
+}
+
+// confidenceCell is a level pill with the evidence behind it (#202). Low
+// is amber, so an ICMP-only or one-reply sample stands out.
+function confidenceCell(level, text) {
+  var td = el("td");
+  if (!level || level === "none") {
+    td.appendChild(document.createTextNode("\u2014"));
+    return td;
+  }
+  var pill = el("span", level === "low" ? "badge warn" : "badge", level);
+  if (text) pill.title = text;
+  td.appendChild(pill);
+  if (text) td.appendChild(el("span", "muted", " " + text));
+  return td;
 }
 
 // rpkiCell is a validity with the source that answered and the age of its

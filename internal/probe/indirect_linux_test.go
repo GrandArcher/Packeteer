@@ -35,7 +35,7 @@ func TestIndirectLoopback(t *testing.T) {
 		return plugin.ProbeResult{Sent: req.Count}, nil
 	}
 	pfx := netip.MustParsePrefix("127.0.0.3/32")
-	e, err := New([]Provider{a, b, gone}, []NamedProber{{"silent", &fakeProber{fn: silent}}}, src(plugin.Target{Prefix: pfx}), o)
+	e, err := New([]Provider{a, b, gone}, []NamedProber{{Name: "silent", Prober: &fakeProber{fn: silent}}}, src(plugin.Target{Prefix: pfx}), o)
 	if err != nil {
 		t.Fatal(err)
 	}
