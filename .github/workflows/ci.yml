@@ -2615,6 +2615,8 @@ jobs:
         run: bash lab/e2e-evidence.sh
       - name: Reordering lab (#224; netem reorder on one ECMP member of transit-b, TWAMP-Light reflector, fixed 5-tuple trains with per-flow rotation, ICMP estimate, Providers page column, SIGTERM)
         run: bash lab/e2e-reorder.sh
+      - name: Reflector interop (#224; nokia/twampy TWAMP-Light sender against packeteer-reflector, 0.0% loss in every direction)
+        run: bash lab/twamp-interop.sh
       - name: FRR commit-control lab
         run: bash lab/e2e-commit.sh
       - name: FRR cost-mode lab

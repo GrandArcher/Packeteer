@@ -425,7 +425,9 @@ func (t *Tools) resolve(ctx context.Context, h hostInput) (target netip.Addr, ad
 }
 
 // best is the answering provider with the lowest score. Equal scores keep
-// the earlier provider.
+// the earlier provider. The score uses loss and latency only: a one-off
+// probe has no reordering reading, so with reorder_weight above 0 Decide can
+// pick differently.
 func (t *Tools) best(rs []probe.Result) string {
 	if t.opt.Scorer == nil {
 		return ""

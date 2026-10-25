@@ -14,8 +14,8 @@ import (
 )
 
 // Responder types (#224). A twamp responder is a TWAMP-Light reflector the
-// operator runs, so its replies come back in the order the forward path
-// delivered them. An icmp responder is any host that answers echo: the
+// operator runs, so the order its replies come back in is the order the
+// round trip (forward and return path) delivered them. An icmp responder is any host that answers echo: the
 // far end and ICMP rate limiting can reorder replies, so its reading is
 // an estimate and never an input to Decide.
 const (
@@ -47,7 +47,7 @@ type ReorderOptions struct {
 	Timeout time.Duration
 	// Interval is the time between measurements of the whole set.
 	Interval time.Duration
-	// Flows is how many trains, each from a new source port, are sent per
+	// Flows is how many trains, each on a new socket (the kernel picks the source port), are sent per
 	// provider and twamp responder, so a bundle's members are sampled. An
 	// icmp responder gets one train: echo has no port to rotate.
 	Flows int
@@ -335,9 +335,9 @@ func (m *ReorderMonitor) Results() []ReorderResult {
 }
 
 // Scored is the reordered ratio Decide uses per provider: the worst flow
-// of its freshest controlled (twamp) readings no older than maxAge. A
-// provider with only estimates, failed trains, or stale readings is
-// absent. Estimates never steer.
+// of its controlled (twamp) readings no older than maxAge, taking the
+// highest across responders. A provider with only estimates, failed
+// trains, or stale readings is absent. Estimates never steer.
 func (m *ReorderMonitor) Scored(now time.Time, maxAge time.Duration) map[string]float64 {
 	out := map[string]float64{}
 	for _, r := range m.Results() {

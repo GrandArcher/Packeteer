@@ -103,9 +103,9 @@ func TestReorderAPI(t *testing.T) {
 	if off.ReorderConfigured || len(off.Reorder) != 0 || off.Providers[0].Reorder != nil {
 		t.Fatalf("off: %+v", off.Reorder)
 	}
-	_, _, body = do(t, http.MethodGet, newTestServer(t, off, "", "").URL+"/api/reorder", "", "")
-	if string(body) != "" && !strings.Contains(string(body), `"configured":false,"reorder":[]`) {
-		t.Fatalf("off body %s", body)
+	status, _, body := do(t, http.MethodGet, newTestServer(t, off, "", "").URL+"/api/reorder", "", "")
+	if status != http.StatusOK || !strings.Contains(string(body), `"configured":false,"reorder":[]`) {
+		t.Fatalf("off: status %d body %s", status, body)
 	}
 }
 

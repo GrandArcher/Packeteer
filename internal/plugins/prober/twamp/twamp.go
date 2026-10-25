@@ -3,7 +3,7 @@
 // UDP test packets from the provider's source address to a
 // Session-Reflector and reads the reflected packets. Every packet of one
 // run leaves one socket, so the train keeps one 5-tuple and one ECMP
-// member; a new run gets a new source port. The result carries the arrival
+// member; a new run gets a new socket. The result carries the arrival
 // order, which the reordering monitor (#224) turns into RFC 4737 metrics.
 // It needs a reflector the operator runs (packeteer-reflector), so it is
 // not part of the default prober chain.
