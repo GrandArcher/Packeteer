@@ -8,6 +8,8 @@ A `udp` prober is an optional fallback after ICMP and TCP. It counts a reply fro
 
 Set `probe.retry_loss_pct` to re-measure a lossy sample, or `probe.dispersion_ms` to leave out a host whose RTT spread (slowest reply minus fastest) is wider than that limit and re-measure it, before the sample is stored. `probe.min_replies` (default 1) is how many replies a host needs before it defines the score. Both checks default off. A flow prefix offers up to three of its busiest destinations as candidates. The engine remembers which prober got a reply from a host and starts the next round there. Every `probe.prober_recheck_rounds` (default 10) it starts at the first prober again, so a host that begins answering ICMP is noticed.
 
+`probe.reorder` measures packet reordering per provider path (RFC 4737) with trains toward a TWAMP-Light reflector you run or, as an estimate, any echo host ([reordering.md](reordering.md), #224); off by default, and never a score input until a scorer's `reorder_weight` is set.
+
 `probe.exclude` lists prefixes and origin ASNs that no source may probe, and `probe.per_asn_pps` caps the probe and trace packets per second toward one destination ASN (#203, [CONFIG.md](CONFIG.md#probeexclude)). The `probe_asns` report on `/reports.html` shows the probes per destination ASN per day, so a complaint can be checked against what was sent. Give each `source_ip` a reverse DNS name that says what it is, and a TXT record at that name with a contact, so a network that sees the packets can find you before it files an abuse report. For example, with `192.0.2.11` as a probe source:
 
 ```

@@ -140,6 +140,14 @@ probe:
   #   enabled: true           # and score each provider at its own highest stable hop. Measurement only.
   #   budget: 10s             # wall clock for one background pass; passes are at least interval apart
   #   cache_ttl: 30m          # reuse a hop this long, or until an address inside the prefix answers
+  # reorder:                  # off by default. Packet reordering per provider path, RFC 4737 (#224):
+  #   packets: 20             # trains of sequence-numbered packets from every provider to each responder.
+  #   spacing: 20ms           # Each train keeps one 5-tuple; flows trains rotate the source port so an
+  #   flows: 4                # ECMP bundle's members are sampled, and the worst flow is the reading.
+  #   responders:             # docs/reordering.md. Measurement only; scored only via reorder_weight.
+  #     - address: 203.0.113.9        # a TWAMP-Light reflector you run (packeteer-reflector), port 862
+  #     - address: 198.51.100.1       # any host that answers echo: an estimate, never scored
+  #       type: icmp
   # path_check:               # on by default (#150). A TTL-1 probe from each source_ip must
   #   enabled: true           # leave through that provider's next_hop; otherwise the provider is
   #   interval: 5m            # marked down (reason "probe path mismatch"). Measurement only.
@@ -164,6 +172,9 @@ probers:
 scorer:
   type: weighted
   config: {loss_weight: 100, rtt_weight: 1, jitter_weight: 0.5}
+  # reorder_weight: 0 (default) leaves the probe.reorder reading out of the
+  # score; a positive value adds that many points per percent reordered on
+  # the provider path, from twamp responders only (#224).
   # Improvement weights (#34; also on commit and cost): which new
   # improvements take the last max_improvements slots. weight =
   # performance * score gain + volume * Mbps (flow window or static mbps).

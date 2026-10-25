@@ -1,0 +1,45 @@
+# Lab only (lab/e2e-reorder.sh). Observe mode, no BGP: the reordering
+# monitor (#224) sends TWAMP-Light trains from each provider's source to the
+# lab reflector, twelve flows per measurement so both members of transit-b's
+# ECMP bundle are sampled, plus one ICMP echo train as the estimate.
+# Documentation prefixes only.
+mode: observe
+asn: 64512
+router_id: 192.0.2.10
+providers:
+  - name: transit-a
+    source_ip: 192.0.2.11
+    next_hop: 192.0.2.1
+  - name: transit-b
+    source_ip: 192.0.2.12
+    next_hop: 192.0.2.2
+probe:
+  interval: 5s
+  timeout: 1s
+  packets: 3
+  rate_limit_pps: 400
+  reorder:
+    packets: 20
+    spacing: 20ms
+    timeout: 300ms
+    interval: 5s
+    flows: 12
+    responders:
+      - address: 203.0.113.9
+      - address: 203.0.113.9
+        type: icmp
+sources:
+  - type: static
+    config:
+      targets:
+        - prefix: 203.0.113.0/24
+          host: 203.0.113.9
+probers:
+  - type: icmp
+
+# Lab only: the API is published to the host for the UI smoke test, with
+# no sign-in so the e2e script can read it (#328).
+http:
+  listen: 0.0.0.0:8080
+auth:
+  enabled: false

@@ -110,7 +110,7 @@ func Decide(prev State, in Input, cfg Config, scorer plugin.Scorer, now time.Tim
 		ans := in.RPKI[r.Prefix][r.Provider]
 		reg := in.IRR[r.Prefix][r.Provider]
 		c := Candidate{Provider: r.Provider, LossPct: r.Stats.LossPct, RTTAvg: r.Stats.RTTAvg, Jitter: r.Stats.Jitter, Usable: true,
-			RPKI: ans.State, RPKISource: ans.Source, RPKIUpdated: ans.Updated,
+			ReorderPct: in.Reorder[r.Provider], RPKI: ans.State, RPKISource: ans.Source, RPKIUpdated: ans.Updated,
 			IRR: reg.State, IRRSource: reg.Source, IRRUpdated: reg.Updated, Confidence: r.Confidence}
 		if problem, seen := in.Passive[r.Prefix]; seen && r.OK() && r.Provider == carrierOf(st, in, cfg, r.Prefix) {
 			c.Confidence = r.Confidence.WithPassive(problem == (r.Stats.LossPct > 0))
@@ -134,7 +134,7 @@ func Decide(prev State, in Input, cfg Config, scorer plugin.Scorer, now time.Tim
 			c.Usable, c.Why = false, "IRR not registered"
 		}
 		if c.Usable {
-			c.Score = scorer.Score(plugin.PathStats{Provider: r.Provider, LossPct: c.LossPct, RTTAvg: c.RTTAvg, Jitter: c.Jitter})
+			c.Score = scorer.Score(plugin.PathStats{Provider: r.Provider, LossPct: c.LossPct, RTTAvg: c.RTTAvg, Jitter: c.Jitter, ReorderPct: c.ReorderPct})
 		}
 		byPrefix[r.Prefix] = append(byPrefix[r.Prefix], c)
 		noteSubranges(subs, r, c, scorer)

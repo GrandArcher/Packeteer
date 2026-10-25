@@ -25,6 +25,7 @@ import (
 	_ "github.com/GrandArcher/Packeteer/internal/plugins/prober/fixed"            // fixed (lab) prober
 	_ "github.com/GrandArcher/Packeteer/internal/plugins/prober/icmp"             // icmp prober
 	_ "github.com/GrandArcher/Packeteer/internal/plugins/prober/tcp"              // tcp prober
+	_ "github.com/GrandArcher/Packeteer/internal/plugins/prober/twamp"            // twamp prober (TWAMP-Light sender, reordering)
 	_ "github.com/GrandArcher/Packeteer/internal/plugins/prober/udp"              // udp prober
 	_ "github.com/GrandArcher/Packeteer/internal/plugins/ribsource/bmp"           // BMP monitoring station (RIB source, leak source)
 	_ "github.com/GrandArcher/Packeteer/internal/plugins/rpki/ripestat"           // RIPEstat RPKI lookup, display only

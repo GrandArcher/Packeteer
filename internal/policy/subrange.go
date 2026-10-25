@@ -31,7 +31,8 @@ func noteSubranges(subs map[netip.Prefix]map[netip.Prefix]*SubrangeDecision, r p
 		if sr.Weight > d.Weight {
 			d.Weight = sr.Weight
 		}
-		c := Candidate{Provider: r.Provider, LossPct: sr.Stats.LossPct, RTTAvg: sr.Stats.RTTAvg, Jitter: sr.Stats.Jitter, Usable: pc.Usable, Why: pc.Why}
+		c := Candidate{Provider: r.Provider, LossPct: sr.Stats.LossPct, RTTAvg: sr.Stats.RTTAvg, Jitter: sr.Stats.Jitter,
+			ReorderPct: pc.ReorderPct, Usable: pc.Usable, Why: pc.Why}
 		switch {
 		case !c.Usable:
 		case !sr.OK():
@@ -40,7 +41,7 @@ func noteSubranges(subs map[netip.Prefix]map[netip.Prefix]*SubrangeDecision, r p
 			c.Usable, c.Why = false, "no packets sent"
 		}
 		if c.Usable {
-			c.Score = scorer.Score(plugin.PathStats{Provider: r.Provider, LossPct: c.LossPct, RTTAvg: c.RTTAvg, Jitter: c.Jitter})
+			c.Score = scorer.Score(plugin.PathStats{Provider: r.Provider, LossPct: c.LossPct, RTTAvg: c.RTTAvg, Jitter: c.Jitter, ReorderPct: c.ReorderPct})
 		}
 		d.Candidates = append(d.Candidates, c)
 	}

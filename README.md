@@ -184,6 +184,7 @@ Leave graceful restart off on the session. Guides:
 - [docs/leak-watch.md](docs/leak-watch.md) - how Packeteer keeps its routes inside your AS: the rails, and `leak_watch`, which withdraws and holds out a route seen outside the AS. Lab-proven only
 - [docs/precedence.md](docs/precedence.md) - which surface owns a prefix when mitigation, inbound, outbound, a leak hold, flap quarantine, and HA all want it, how the shared cap is spent, and which test proves each pair
 - [docs/policy-routing.md](docs/policy-routing.md) - probe sources behind the router
+- [docs/reordering.md](docs/reordering.md) - packet reordering per provider path (RFC 4737) with the shipped TWAMP-Light reflector, the ICMP estimate and its caveat, and the optional score weight
 - [docs/ui.md](docs/ui.md) - config editor and first-run wizard, custom dashboards, email report subscriptions, and improvement weights
 
 A flow export (NetFlow, IPFIX, or sFlow) is optional. It only adds probe targets. It does not inject routes. With host networking the collector's UDP port is a host port; firewall it to the exporter.

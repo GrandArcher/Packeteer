@@ -27,6 +27,7 @@ type Collector struct {
 	decider     *policy.Engine
 	view        *rib.View
 	telemetry   func() []plugin.Usage
+	reorder     func() []probe.ReorderResult
 	flowTracked func() int
 	truncated   func() map[string]uint64
 	exchanges   []exchange.Exchange
@@ -68,6 +69,14 @@ func (c *Collector) SetFlowTracked(fn func() int) {
 func (c *Collector) SetTruncated(fn func() map[string]uint64) {
 	c.mu.Lock()
 	c.truncated = fn
+	c.mu.Unlock()
+}
+
+// SetReorder installs the read of the reordering monitor's results
+// (#224). Nil means probe.reorder is off.
+func (c *Collector) SetReorder(fn func() []probe.ReorderResult) {
+	c.mu.Lock()
+	c.reorder = fn
 	c.mu.Unlock()
 }
 
@@ -159,6 +168,7 @@ func (c *Collector) Snapshot() Snapshot {
 	c.mu.RLock()
 	mode := c.mode
 	started, engine, decider, view, telemetry := c.started, c.engine, c.decider, c.view, c.telemetry
+	reorder := c.reorder
 	exs, hops, flowTracked, truncated := c.exchanges, c.hops, c.flowTracked, c.truncated
 	health, peerPrefix, rpki, registry, portMaxAge := c.health, c.peerPrefix, c.rpki, c.irr, c.portMaxAge
 	c.mu.RUnlock()
@@ -174,6 +184,9 @@ func (c *Collector) Snapshot() Snapshot {
 	}
 	if telemetry != nil {
 		in.Telemetry = telemetry()
+	}
+	if reorder != nil {
+		in.Reorder, in.ReorderConfigured = reorder(), true
 	}
 	if engine != nil {
 		in.Status = engine.Providers()

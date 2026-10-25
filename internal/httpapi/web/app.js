@@ -174,6 +174,27 @@ function mbpsText(st, all) {
   return st && st.mbps != null ? (Math.round(st.mbps * 10) / 10).toFixed(1) : "0.0";
 }
 
+// reorderCell is the provider path's RFC 4737 reordered ratio (#224) from
+// /api/providers: the worst flow toward a responder the operator runs, or,
+// marked "est.", toward an echo host whose replies the far end may
+// reorder. A dash until a responder answered.
+function reorderCell(r) {
+  var td = el("td", "reorder");
+  if (!r) {
+    td.textContent = "\u2014";
+    return td;
+  }
+  td.appendChild(el("span", r.ratio_pct > 0 ? "num warn" : "num", fmtPct(r.ratio_pct)));
+  if (r.estimate) {
+    var est = el("span", "badge muted", "est.");
+    est.title = "Estimate: measured with ICMP echo toward " + r.responder + ". The far end and ICMP rate limiting can reorder replies. Never used for a decision.";
+    td.appendChild(document.createTextNode(" "));
+    td.appendChild(est);
+  }
+  td.title = "RFC 4737 reordered ratio of the worst flow toward " + r.responder + "; extent " + r.extent + ", n-reordering " + r.n_reordering;
+  return td;
+}
+
 function renderProviders(data) {
   var root = document.getElementById("providers");
   if (!root) return;
@@ -189,7 +210,7 @@ function renderProviders(data) {
   ((lastOverview && lastOverview.providers) || []).forEach(function (h) { health[h.name] = h; });
   var stats = {};
   ((lastProviderStats && lastProviderStats.providers) || []).forEach(function (st) { stats[st.provider] = st; });
-  ["Provider", "Source", "Next hop", "Open in", "Health", "Latency", "Loss", "Jitter", "Trend, 24 h", "Mbps", "Probes", "Since", "Detail"].forEach(function (h) {
+  ["Provider", "Source", "Next hop", "Open in", "Health", "Latency", "Loss", "Jitter", "Reordering", "Trend, 24 h", "Mbps", "Probes", "Since", "Detail"].forEach(function (h) {
     head.appendChild(el("th", "", h));
   });
   var thead = el("thead");
@@ -229,6 +250,7 @@ function renderProviders(data) {
     tr.appendChild(statCell(st, "rtt_ms", fmtMs));
     tr.appendChild(statCell(st, "loss_pct", fmtPct));
     tr.appendChild(statCell(st, "jitter_ms", fmtMs));
+    tr.appendChild(reorderCell(p.reorder));
     var trend = el("td", "trend");
     trend.appendChild(sparkline(st && st.points));
     tr.appendChild(trend);

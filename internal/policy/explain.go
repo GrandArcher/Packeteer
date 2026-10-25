@@ -63,9 +63,11 @@ type Sample struct {
 	LossPct  float64 `json:"loss_pct"`
 	RTTMs    float64 `json:"rtt_ms"`
 	JitterMs float64 `json:"jitter_ms"`
-	Score    float64 `json:"score"`
-	Usable   bool    `json:"usable"`
-	Why      string  `json:"why,omitempty"`
+	// ReorderPct is the provider path's reordered ratio (#224).
+	ReorderPct float64 `json:"reorder_pct"`
+	Score      float64 `json:"score"`
+	Usable     bool    `json:"usable"`
+	Why        string  `json:"why,omitempty"`
 	// Confidence is the sample's evidence level (#202) and Evidence the
 	// facts behind it in words.
 	Confidence string `json:"confidence"`
@@ -396,7 +398,7 @@ func buildExplain(d Decision, f explainFacts, cfg Config, capUsed int) Explain {
 func samplesOf(d Decision, f explainFacts) []Sample {
 	out := make([]Sample, 0, len(d.Candidates))
 	for _, c := range d.Candidates {
-		s := Sample{Provider: c.Provider, LossPct: c.LossPct, RTTMs: ms(c.RTTAvg), JitterMs: ms(c.Jitter), Score: c.Score, Usable: c.Usable, Why: c.Why,
+		s := Sample{Provider: c.Provider, LossPct: c.LossPct, RTTMs: ms(c.RTTAvg), JitterMs: ms(c.Jitter), ReorderPct: c.ReorderPct, Score: c.Score, Usable: c.Usable, Why: c.Why,
 			Confidence: c.Confidence.Level, Evidence: c.Confidence.String()}
 		switch {
 		case c.Provider == f.current:

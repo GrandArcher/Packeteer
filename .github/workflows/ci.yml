@@ -2613,6 +2613,8 @@ jobs:
         run: bash lab/e2e-move.sh
       - name: FRR evidence lab (#202; require_evidence refuses a win measured by a prober that is not tcp or udp, confidence on every decision sample, SIGHUP drops the rule and announces, SIGTERM)
         run: bash lab/e2e-evidence.sh
+      - name: Reordering lab (#224; netem reorder on one ECMP member of transit-b, TWAMP-Light reflector, fixed 5-tuple trains with per-flow rotation, ICMP estimate, Providers page column, SIGTERM)
+        run: bash lab/e2e-reorder.sh
       - name: FRR commit-control lab
         run: bash lab/e2e-commit.sh
       - name: FRR cost-mode lab

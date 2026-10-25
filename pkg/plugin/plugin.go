@@ -117,14 +117,28 @@ type ProbeRequest struct {
 	// non-zero tag must return ErrSourceUnavailable, not probe untagged.
 	Mark uint32
 	DSCP uint8
+	// Spacing is the gap between the packets of one run. Zero uses the
+	// prober's configured packet_interval. The reordering monitor (#224)
+	// sets it so a train is close enough in time to see reordering.
+	Spacing time.Duration
+	// Port is the destination port for a prober that uses one. Zero uses
+	// the prober's configured port. The prober chain leaves it zero; the
+	// reordering monitor sets it per responder.
+	Port uint16
 }
 
 // ProbeResult is the raw outcome of one probe run. The core computes loss,
-// RTT statistics, and jitter from it so every prober is measured the same way.
+// RTT statistics, jitter, and reordering from it so every prober is
+// measured the same way.
 type ProbeResult struct {
 	Sent int
 	// RTTs holds one entry per reply received, in send order.
 	RTTs []time.Duration
+	// Order holds the send index (0-based) of each reply in arrival order,
+	// when the prober can tell which request a reply answers. Its length
+	// equals len(RTTs). Empty means the order was not observed, and the
+	// core computes no reordering metric.
+	Order []int
 }
 
 // Prober measures reachability and latency from a source to a target.
@@ -211,6 +225,11 @@ type PathStats struct {
 	LossPct  float64
 	RTTAvg   time.Duration
 	Jitter   time.Duration
+	// ReorderPct is the RFC 4737 reordered ratio, in percent, of the
+	// provider path measured by trains toward a responder the operator
+	// controls (#224). Zero when no fresh reordering reading exists.
+	// Estimates from ICMP responders are never put here.
+	ReorderPct float64
 }
 
 // Scorer turns path statistics into a comparable score; lower is better.

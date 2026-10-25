@@ -154,7 +154,16 @@ func tag(c *xicmp.PacketConn, v6 bool, m sockmark.Marking) error {
 	return sockmark.ApplyConn(rc, v6, m)
 }
 
-// Probe implements plugin.Prober.
+type reply struct {
+	seq int
+	at  time.Time
+}
+
+// Probe implements plugin.Prober. Echo requests go out at the request's
+// Spacing (or packet_interval) without waiting for the reply, so a run is
+// one train; replies are matched by sequence number as they arrive and
+// the run ends Timeout after the last send. RTTs are in send order and
+// Order is the send index of each reply in arrival order (#224).
 func (p *Prober) Probe(ctx context.Context, req plugin.ProbeRequest) (plugin.ProbeResult, error) {
 	if req.Source.Is4() != req.Target.Is4() {
 		return plugin.ProbeResult{}, fmt.Errorf("source %s and target %s differ in address family", req.Source, req.Target)
@@ -164,6 +173,8 @@ func (p *Prober) Probe(ctx context.Context, req plugin.ProbeRequest) (plugin.Pro
 		return plugin.ProbeResult{}, err
 	}
 	defer c.c.Close()
+	stop := context.AfterFunc(ctx, func() { _ = c.c.SetReadDeadline(time.Now()) })
+	defer stop()
 
 	var token [8]byte
 	if _, err := rand.Read(token[:]); err != nil {
@@ -178,54 +189,93 @@ func (p *Prober) Probe(ctx context.Context, req plugin.ProbeRequest) (plugin.Pro
 	if c.proto == 58 {
 		reqType, replyType = ipv6.ICMPTypeEchoRequest, ipv6.ICMPTypeEchoReply
 	}
+	spacing := p.interval
+	if req.Spacing > 0 {
+		spacing = req.Spacing
+	}
+
+	count := req.Count
+	replies := make(chan reply, count)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		readReplies(c, req.Target, replyType, id, token, count, replies)
+	}()
 
 	res := plugin.ProbeResult{}
-	buf := make([]byte, 1500)
-	for seq := 1; seq <= req.Count; seq++ {
-		if err := ctx.Err(); err != nil {
-			return res, err
+	sentAt := make([]time.Time, count)
+	start := time.Now()
+	finish := func() {
+		_ = c.c.SetReadDeadline(time.Now())
+		<-done
+	}
+	for seq := 1; seq <= count; seq++ {
+		if seq > 1 {
+			if err := sleepUntil(ctx, start.Add(time.Duration(seq-1)*spacing)); err != nil {
+				finish()
+				return res, err
+			}
 		}
-		payload := append(token[:], byte(seq>>8), byte(seq))
-		msg := xicmp.Message{Type: reqType, Body: &xicmp.Echo{ID: id, Seq: seq, Data: payload}}
+		msg := xicmp.Message{Type: reqType, Body: &xicmp.Echo{ID: id, Seq: seq, Data: payloadFor(token, seq)}}
 		wb, err := msg.Marshal(nil)
 		if err != nil {
+			finish()
 			return res, err
 		}
-		start := time.Now()
+		sentAt[seq-1] = time.Now()
 		res.Sent++
-		if _, err := c.c.WriteTo(wb, dst); err != nil {
-			if isSourceErr(err) {
-				return res, fmt.Errorf("%w: %v", plugin.ErrSourceUnavailable, err)
-			}
-			// Unreachable etc.: count as loss.
-		} else if rtt, ok := waitReply(ctx, c, buf, start.Add(req.Timeout), start, req.Target, replyType, id, seq, payload); ok {
-			res.RTTs = append(res.RTTs, rtt)
+		if _, err := c.c.WriteTo(wb, dst); err != nil && isSourceErr(err) {
+			finish()
+			return res, fmt.Errorf("%w: %v", plugin.ErrSourceUnavailable, err)
 		}
-		if seq < req.Count {
-			if wait := p.interval - time.Since(start); wait > 0 {
-				select {
-				case <-time.After(wait):
-				case <-ctx.Done():
-					return res, ctx.Err()
-				}
-			}
+		// Any other write error (unreachable, ...) is loss.
+	}
+	if count < 1 {
+		finish()
+		return res, nil
+	}
+	deadline := sentAt[count-1].Add(req.Timeout)
+	if d, ok := ctx.Deadline(); ok && d.Before(deadline) {
+		deadline = d
+	}
+	_ = c.c.SetReadDeadline(deadline)
+	<-done
+	close(replies)
+
+	rtts := make([]time.Duration, count)
+	got := make([]bool, count)
+	for r := range replies {
+		got[r.seq] = true
+		rtts[r.seq] = r.at.Sub(sentAt[r.seq])
+		res.Order = append(res.Order, r.seq)
+	}
+	for seq := range count {
+		if got[seq] {
+			res.RTTs = append(res.RTTs, rtts[seq])
 		}
 	}
 	return res, nil
 }
 
-func waitReply(ctx context.Context, c *conn, buf []byte, deadline, start time.Time, target netip.Addr,
-	replyType xicmp.Type, id, seq int, payload []byte) (time.Duration, bool) {
-	if d, ok := ctx.Deadline(); ok && d.Before(deadline) {
-		deadline = d
-	}
-	_ = c.c.SetReadDeadline(deadline)
+// payloadFor is the echo data: the run's random token and the sequence
+// number, so a reply to another run or another host is not matched.
+func payloadFor(token [8]byte, seq int) []byte {
+	return append(token[:], byte(seq>>8), byte(seq))
+}
+
+// readReplies reads echo replies from the target until the read deadline
+// passes and reports each matched sequence once, as a 0-based index, in
+// arrival order. The id is checked on a raw socket only: the kernel
+// rewrites it on an unprivileged datagram socket.
+func readReplies(c *conn, target netip.Addr, replyType xicmp.Type, id int, token [8]byte, count int, out chan<- reply) {
+	buf := make([]byte, 1500)
+	seen := make([]bool, count+1)
 	for {
 		n, peer, err := c.c.ReadFrom(buf)
 		if err != nil {
-			return 0, false
+			return
 		}
-		rtt := time.Since(start)
+		at := time.Now()
 		var pip net.IP
 		switch a := peer.(type) {
 		case *net.IPAddr:
@@ -242,9 +292,26 @@ func waitReply(ctx context.Context, c *conn, buf []byte, deadline, start time.Ti
 			continue
 		}
 		echo, ok := m.Body.(*xicmp.Echo)
-		if !ok || echo.Seq != seq || (!c.udp && echo.ID != id) || !bytes.Equal(echo.Data, payload) {
+		if !ok || echo.Seq < 1 || echo.Seq > count || seen[echo.Seq] || (!c.udp && echo.ID != id) ||
+			!bytes.Equal(echo.Data, payloadFor(token, echo.Seq)) {
 			continue
 		}
-		return rtt, true
+		seen[echo.Seq] = true
+		out <- reply{seq: echo.Seq - 1, at: at}
+	}
+}
+
+func sleepUntil(ctx context.Context, at time.Time) error {
+	wait := time.Until(at)
+	if wait <= 0 {
+		return ctx.Err()
+	}
+	t := time.NewTimer(wait)
+	defer t.Stop()
+	select {
+	case <-t.C:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
 	}
 }

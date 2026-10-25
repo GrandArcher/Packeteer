@@ -270,6 +270,7 @@ func probeKeys(a, b config.Probe) (restart, online []string) {
 	pair("prober_recheck_rounds", a.ProberRecheckRounds, b.ProberRecheckRounds, false)
 	pair("prober_memory", a.ProberMemory, b.ProberMemory, false)
 	pair("indirect", a.Indirect, b.Indirect, false)
+	pair("reorder", a.Reorder, b.Reorder, false)
 	pair("path_check", a.PathCheck, b.PathCheck, false)
 	return restart, online
 }

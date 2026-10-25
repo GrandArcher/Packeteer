@@ -54,6 +54,10 @@ type Input struct {
 
 	// Telemetry is interface usage. It is not a routing decision.
 	Telemetry []plugin.Usage
+	// Reorder is the reordering monitor's latest results (#224) and
+	// ReorderConfigured whether probe.reorder is set. Measurement only.
+	Reorder           []probe.ReorderResult
+	ReorderConfigured bool
 
 	// Exchanges are Internet exchange statistics (#27), already built.
 	Exchanges []exchange.Stats
@@ -96,6 +100,10 @@ type Snapshot struct {
 	Peers       []Peer
 	Telemetry   []Telemetry
 	Exchanges   []exchange.Stats
+	// Reorder is per provider path and responder (#224); ReorderConfigured
+	// is whether probe.reorder is set.
+	Reorder           []Reorder
+	ReorderConfigured bool
 	// ExchangeLANDrops is packeteer_exchange_lan_targets_dropped. It is
 	// not part of the JSON API.
 	ExchangeLANDrops uint64 `json:"-"`
@@ -130,6 +138,9 @@ type Provider struct {
 	Up     bool      `json:"up"`
 	Reason string    `json:"reason,omitempty"`
 	Since  time.Time `json:"since,omitempty"`
+	// Reorder is the provider path's headline reordering reading (#224),
+	// absent until a responder answered.
+	Reorder *ProviderReorder `json:"reorder,omitempty"`
 }
 
 // Probe is the latest measurement of one provider toward one prefix.
@@ -263,8 +274,11 @@ type Candidate struct {
 	LossPct  float64 `json:"loss_pct"`
 	RTTAvgMs float64 `json:"rtt_avg_ms"`
 	JitterMs float64 `json:"jitter_ms"`
-	Usable   bool    `json:"usable"`
-	Why      string  `json:"why,omitempty"`
+	// ReorderPct is the provider path's RFC 4737 reordered ratio (#224),
+	// from the reordering monitor's controlled responders; zero without one.
+	ReorderPct float64 `json:"reorder_pct"`
+	Usable     bool    `json:"usable"`
+	Why        string  `json:"why,omitempty"`
 	// RPKI is the RFC 6811 origin-validation state of this provider's
 	// learned path for the prefix (#158). Empty when RPKI is off.
 	RPKI string `json:"rpki,omitempty"`
@@ -426,6 +440,8 @@ func Assemble(in Input) Snapshot {
 		Peers:              assemblePeers(in.Peers),
 		Telemetry:          assembleTelemetry(in.Telemetry),
 		Exchanges:          in.Exchanges,
+		Reorder:            assembleReorder(in.Reorder),
+		ReorderConfigured:  in.ReorderConfigured,
 		ExchangeLANDrops:   in.ExchangeLANDrops,
 		ProbePrefixCommits: in.ProbePrefixCommits,
 		FlowTracked:        in.FlowTracked,
@@ -433,6 +449,10 @@ func Assemble(in Input) Snapshot {
 	}
 	snap.ASNMap = assembleASNMap(snap.Prefixes)
 	snap.Improvements = withOrigins(snap.Improvements, snap.Prefixes)
+	headline := providerReorder(snap.Reorder)
+	for i := range snap.Providers {
+		snap.Providers[i].Reorder = headline[snap.Providers[i].Name]
+	}
 	snap.zeroNil()
 	return snap
 }
@@ -447,6 +467,7 @@ func (s *Snapshot) zeroNil() {
 	s.Peers = nz(s.Peers)
 	s.Telemetry = nz(s.Telemetry)
 	s.Exchanges = nz(s.Exchanges)
+	s.Reorder = nz(s.Reorder)
 	for i := range s.Decisions {
 		s.Decisions[i].Candidates = nz(s.Decisions[i].Candidates)
 	}
@@ -546,6 +567,7 @@ func candidatesFrom(in []policy.Candidate) []Candidate {
 			LossPct:     jsonFloat(c.LossPct),
 			RTTAvgMs:    millis(c.RTTAvg),
 			JitterMs:    millis(c.Jitter),
+			ReorderPct:  jsonFloat(c.ReorderPct),
 			Usable:      c.Usable,
 			Why:         c.Why,
 			RPKI:        string(c.RPKI),

@@ -55,6 +55,7 @@ func (c *Config) applyDefaults() {
 		c.Probe.DownLossPct = DefaultProbeDownLossPct
 	}
 	c.defaultIndirect()
+	c.defaultReorder()
 	c.defaultPathCheck()
 	c.defaultExchangeHealth()
 	c.defaultExchangeMaxPrefix()

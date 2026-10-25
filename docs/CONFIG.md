@@ -198,6 +198,7 @@ A learned prefix is eligible when it is equal to an entry or more specific and i
 | `prober_recheck_rounds` | 10 | 1-10000. `0` uses the default. Probe 1, 11, 21, ... of a host starts at the first prober when this is 10. `1` starts every probe at the first prober. |
 | `prober_memory` | 100000 | 1-1000000 hosts. `0` uses the default. Least recently probed hosts are dropped past the cap. |
 | `indirect` | off | Per-provider indirect probing for silent prefixes (#123). See [`probe.indirect`](#probeindirect). |
+| `reorder` | off | Packet reordering per provider path (RFC 4737, #224). See [`probe.reorder`](#probereorder). |
 | `path_check` | on | First-hop probe-path check per provider (#150). See [`probe.path_check`](#probepath_check). |
 | `exclude` | none | `prefixes` (CIDR, no host bits) and `asns` (non-zero) that no target source may probe (#203). See [`probe.exclude`](#probeexclude). |
 | `per_asn_pps` | 0 | 0-`rate_limit_pps`. Probe and trace packets per second toward one destination origin ASN. `0` is no per-ASN cap. See [`probe.exclude`](#probeexclude). |
@@ -259,6 +260,21 @@ A hop that stops answering is not scored as 100% loss: the entry is dropped, the
 Indirect results skip the loss and dispersion retry.
 
 The stable hop addresses, in TTL order, stay in the cache and are copied onto the probe result (`hops`) while the trace is fresh, including when the best hop is not adopted as an indirect host. The `outage` source maps those addresses to origin ASNs. Dropping the cache drops the hop list. Every trace packet waits on `probe.rate_limit_pps`, as does every probe of an indirect hop. The trace shape matches the `traceroute` source (three silent TTLs after a stable hop end it). The socket calls are Linux-only; the container image is Linux. Measurement only: nothing is announced for a hop, and the learned-RIB check, allowlist, `max_improvements`, community and NO_EXPORT, hold time, and withdraw rules are unchanged.
+
+#### `probe.reorder`
+
+Off unless this block is present. Trains of sequence-numbered packets go from every provider's `source_ip` to each responder, and the arrival order of the replies gives the RFC 4737 reordered ratio, reordering extent, and n-reordering per train ([reordering.md](reordering.md)). Every packet of a train leaves one socket, so a train keeps one 5-tuple and stays on one ECMP member; `flows` trains per responder, each from a new source port, sample the members, and the provider's reading is the worst flow. A `twamp` responder is a TWAMP-Light reflector you run (`packeteer-reflector`), and its reading is a measurement. An `icmp` responder is any host that answers echo; its reading is an estimate, labelled as such everywhere, sent as one train, and never an input to a decision. Measurement only: nothing is announced, and a reading enters the score only through a scorer's `reorder_weight`.
+
+| Key | Default | Bounds |
+|---|---|---|
+| `packets` | 20 | 2-200. Packets per train. |
+| `spacing` | `20ms` | `1ms`-`1s`. Gap between the packets of a train. Reordering closer than this is not visible. |
+| `timeout` | `probe.timeout` | `1ms`-`30s`. How long the last packet's reply is waited for. |
+| `interval` | `probe.interval` | `1s` to three times `probe.interval`, so a reading is not stale before the next one. Time between measurements. |
+| `flows` | 4 | 1-16. Trains per `twamp` responder and provider, each from a new source port. An `icmp` responder gets one. |
+| `responders` | required | 1-64 entries: `address` (an IP), `type` (`twamp`, the default, or `icmp`), and for `twamp` a `port` (default 862). An `icmp` entry takes no port. No duplicates, and no address inside a `probe.exclude` prefix. |
+
+Every train waits on `per_asn_pps` and `rate_limit_pps` for its packets, and `packets` may exceed `rate_limit_pps` (one train is one wait). A responder whose origin ASN is in `probe.exclude` gets no packet and reports `excluded by probe.exclude`. A provider in another `domain` is not measured here. The block is restart-only.
 
 #### `probe.path_check`
 
@@ -934,6 +950,16 @@ Not in the default chain. A UDP reply counts. An ICMP destination-unreachable co
 | `port` | 33434 | 1-65535. |
 | `packet_interval` | `100ms` | Not negative. |
 
+### Prober `twamp`
+
+Not in the default chain: it needs a TWAMP-Light Session-Reflector (RFC 5357, unauthenticated mode) at the target, such as `packeteer-reflector`. It is the sender behind `probe.reorder` `twamp` responders, which set the port and spacing per request. Every packet of a run leaves one UDP socket, so a run keeps one 5-tuple. The result carries the arrival order of the replies. A closed port (ICMP port unreachable on the connected socket) is an error, not loss.
+
+| Key | Default | Values |
+|---|---|---|
+| `port` | 862 | 1-65535. |
+| `packet_interval` | `20ms` | Not negative. |
+| `padding` | 27 | 27-1400 octets after the 14-octet header, so the 41-octet reflected packet is not truncated (RFC 5357 section 4.2.1). |
+
 ### Prober `fixed`
 
 Labs and tests only. Sends no packets.
@@ -1144,13 +1170,14 @@ Interface capture fails startup when the interface is missing or `NET_RAW` is no
 
 ### Scorer `weighted`
 
-`score = loss_pct * loss_weight + rtt_ms * rtt_weight + jitter_ms * jitter_weight`.
+`score = loss_pct * loss_weight + rtt_ms * rtt_weight + jitter_ms * jitter_weight + reorder_pct * reorder_weight`.
 
 | Key | Default | Bounds |
 |---|---|---|
 | `loss_weight` | 100 | Not negative. |
 | `rtt_weight` | 1 | Not negative. |
 | `jitter_weight` | 0.5 | Not negative. |
+| `reorder_weight` | 0 | Not negative. Points per percent of the provider path's RFC 4737 reordered ratio from `probe.reorder` `twamp` responders (#224). `0` leaves reordering out of the score. An `icmp` estimate is never scored. |
 
 | `improvement_weights` | none | Optional block; see [Improvement weights](#improvement-weights). Also on `commit` and `cost`. |
 
@@ -1188,6 +1215,7 @@ A prefix already on a performance steer, and a performance move waiting on the c
 | `loss_weight` | 100 | Not negative. Same meaning as `weighted`. |
 | `rtt_weight` | 1 | Not negative. |
 | `jitter_weight` | 0.5 | Not negative. |
+| `reorder_weight` | 0 | Not negative. As on `weighted`. |
 | `loss_override` | false | `true` allows a commit move onto higher loss. |
 | `balance` | `off` | `off`, `equal`, or `proportional`. |
 | `balance_slack` | `0.10` | 0-1. Fractional imbalance that does not move traffic. `0` is explicit. |
@@ -1219,6 +1247,7 @@ Every improvement whose native and steered providers both have a `cost` reports 
 | `loss_weight` | 100 | Not negative. Same meaning as `weighted`. |
 | `rtt_weight` | 1 | Not negative. |
 | `jitter_weight` | 0.5 | Not negative. |
+| `reorder_weight` | 0 | Not negative. As on `weighted`. |
 | `precedence` | `performance` | `performance` or `cost`. |
 | `floor` | | Block with `max_loss_pct` and `max_rtt`. |
 | `max_loss_pct` | 0 | 0-100. Loss percentage points a cost path may carry above the lowest loss. |

@@ -6,6 +6,7 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 
 ### Added
 
+- Packet reordering per provider path (RFC 4737) from TWAMP-Light trains to the shipped `packeteer-reflector`, or ICMP estimates: `probe.reorder`, `/api/reorder`, metrics, UI, `reorder_weight` (#224).
 - `probe.exclude` (prefixes and origin ASNs no source probes), `probe.per_asn_pps` (probe and trace packet cap per destination ASN), and the `probe_asns` report (#203).
 - Confidence on every probe sample and decision candidate (prober type, replies, hop, spread, passive agreement); opt-in `thresholds.require_evidence` refuses an ICMP-only performance move (#202).
 - Every decision lists its checks in order with value, limit, blocking gate, and a counterfactual: `GET /api/decisions/<prefix>`, a Why? panel on the prefix page, stored with each improvement (#201).
