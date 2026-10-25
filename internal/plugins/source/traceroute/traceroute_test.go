@@ -3,6 +3,7 @@ package traceroute
 import (
 	"context"
 	"errors"
+	"maps"
 	"net/netip"
 	"strings"
 	"sync/atomic"
@@ -492,9 +493,21 @@ targets:
 	}
 }
 
+// ttlHopper answers every packet with 192.0.2.<ttl> and counts packets
+// per destination.
+type ttlHopper struct{ sent map[netip.Addr]int }
+
+func (h *ttlHopper) Probe(_ context.Context, _, dst netip.Addr, ttl, _ int, _ time.Duration) (netip.Addr, bool, error) {
+	h.sent[dst]++
+	return netip.AddrFrom4([4]byte{192, 0, 2, byte(ttl)}), false, nil
+}
+
 // probe.per_asn_pps (#203): every discovery packet waits with the traced
-// destination before it is sent, and a wait error ends that trace.
-func TestDiscoverWaitsPerDestination(t *testing.T) {
+// destination. A busy ASN that runs a target out of its share costs only
+// that target: hops already collected are kept, a target with none keeps
+// its previous host, later targets are still traced, and no packet is sent
+// past the cap.
+func TestDiscoverBusyASNSkipsOnlyThatTarget(t *testing.T) {
 	s := must(t, `
 timeout: 1ms
 probes: 2
@@ -502,27 +515,43 @@ min_replies: 2
 max_hops: 4
 interval: 1s
 targets:
+  - {prefix: 203.0.113.0/25, host: 203.0.113.1}
+  - {prefix: 203.0.113.128/25, host: 203.0.113.129}
   - {prefix: 198.51.100.0/24, host: 198.51.100.1}
-  - {prefix: 203.0.113.0/24, host: 203.0.113.1}
 `)
 	s.now = func() time.Time { return time.Unix(1000, 0) }
-	fake := &perTTL{}
-	s.hop = fake
-	waits := map[netip.Addr]int{}
+	busy := netip.MustParsePrefix("203.0.113.0/24")
+	s.cached = []plugin.Target{{Prefix: netip.MustParsePrefix("203.0.113.128/25"), Host: a("203.0.113.140")}}
+	s.have = true
+	hop := &ttlHopper{sent: map[netip.Addr]int{}}
+	s.hop = hop
+	left := 2
+	// A wait that cannot fit in the target's share fails the way the
+	// limiter does, without a packet.
 	s.SetPacketWait(func(_ context.Context, dest netip.Addr) error {
-		waits[dest]++
-		if dest == a("203.0.113.1") {
-			return context.DeadlineExceeded
+		if !busy.Contains(dest) {
+			return nil
 		}
-		return nil
+		if left > 0 {
+			left--
+			return nil
+		}
+		return context.DeadlineExceeded
 	})
 	s.discover(context.Background())
-	// The first destination is walked to max_hops (4 TTLs, 2 probes each);
-	// the second is refused before its first packet.
-	if waits[a("198.51.100.1")] != 8 || waits[a("203.0.113.1")] != 1 || len(waits) != 2 {
-		t.Fatalf("waits = %v", waits)
+	ts, err := s.Targets(context.Background())
+	if err != nil {
+		t.Fatal(err)
 	}
-	if got := fake.calls.Load(); got != 8 {
-		t.Fatalf("packets sent = %d, want 8", got)
+	got := map[string]string{}
+	for _, tg := range ts {
+		got[tg.Prefix.String()] = tg.Host.String()
+	}
+	want := map[string]string{"203.0.113.0/25": "192.0.2.1", "203.0.113.128/25": "203.0.113.140", "198.51.100.0/24": "192.0.2.4"}
+	if !maps.Equal(got, want) {
+		t.Fatalf("targets = %v, want %v", got, want)
+	}
+	if hop.sent[a("203.0.113.1")]+hop.sent[a("203.0.113.129")] != 2 || hop.sent[a("198.51.100.1")] != 8 {
+		t.Fatalf("packets sent = %v, want 2 into the busy ASN and 8 to 198.51.100.1", hop.sent)
 	}
 }

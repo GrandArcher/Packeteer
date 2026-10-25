@@ -55,10 +55,10 @@ func originIn(blocks map[string]uint32) func(netip.Prefix) uint32 {
 }
 
 func TestExcludedDestinationsGetNoPackets(t *testing.T) {
-	byPrefix := netip.MustParsePrefix("203.0.113.0/24")
+	byPrefix := netip.MustParsePrefix("203.0.113.0/25")
 	byASN := netip.MustParsePrefix("192.0.2.0/24")
 	allowed := netip.MustParsePrefix("198.51.100.0/24")
-	covering := netip.MustParsePrefix("203.0.112.0/23")
+	covering := netip.MustParsePrefix("203.0.113.0/24")
 	x := &Exclusion{Prefixes: []netip.Prefix{byPrefix}, ASNs: map[uint32]bool{64500: true},
 		Origin: originIn(map[string]uint32{"192.0.2.0/24": 64500, "198.51.100.0/24": 64501})}
 	o := opts()
@@ -75,7 +75,7 @@ func TestExcludedDestinationsGetNoPackets(t *testing.T) {
 	flow := &fakeSource{targets: []plugin.Target{
 		{Prefix: byPrefix, Host: netip.MustParseAddr("203.0.113.20"), Candidate: true, Hosts: []netip.Addr{netip.MustParseAddr("203.0.113.21")}},
 		{Prefix: covering, Host: netip.MustParseAddr("203.0.113.30"), Candidate: true,
-			Hosts: []netip.Addr{netip.MustParseAddr("203.0.113.31"), netip.MustParseAddr("203.0.112.31")}},
+			Hosts: []netip.Addr{netip.MustParseAddr("203.0.113.31"), netip.MustParseAddr("203.0.113.131")}},
 	}}
 	vip := &fakeSource{targets: []plugin.Target{{Prefix: byPrefix, Interval: 200 * time.Millisecond, Urgent: true}}}
 	e, err := New([]Provider{provA}, []NamedProber{{Name: "p", Prober: pr}},
@@ -153,7 +153,7 @@ func TestExclusionRules(t *testing.T) {
 		p    string
 		want bool
 	}{
-		{"203.0.113.0/24", true}, {"203.0.113.128/25", true}, {"203.0.112.0/23", false},
+		{"203.0.113.0/24", true}, {"203.0.113.128/25", true}, {"2001:db8::/32", false},
 		{"2001:db8:1:2::/64", true}, {"2001:db8:2::/48", false},
 		{"192.0.2.0/25", true}, {"198.51.100.0/24", false},
 	}

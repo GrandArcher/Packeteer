@@ -418,7 +418,10 @@ func (s *Source) discover(ctx context.Context) {
 				s.noteUnavailable(err)
 				return
 			}
-			break
+			// Only this target ran out of its share, usually waiting on a
+			// busy ASN under probe.per_asn_pps. It keeps its previous host
+			// and the rest of the pass still runs.
+			continue
 		}
 		done = append(done, t.Prefix)
 		if !ok {
