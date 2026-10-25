@@ -43,9 +43,6 @@ func TestReorderDefaults(t *testing.T) {
 			t.Fatalf("responder %d = %+v, want %+v", i, r.Responders[i], w)
 		}
 	}
-	if r.Responders[0].Estimate() || !r.Responders[2].Estimate() {
-		t.Fatal("estimate flags wrong")
-	}
 }
 
 func TestReorderValidation(t *testing.T) {

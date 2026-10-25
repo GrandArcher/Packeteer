@@ -173,6 +173,9 @@ func NewReorderMonitor(opt ReorderOptions) (*ReorderMonitor, error) {
 		if r.Prober == nil || !r.Address.IsValid() {
 			return nil, fmt.Errorf("reorder: responder %s has no prober", r.Address)
 		}
+		if r.Type != ResponderTWAMP && r.Type != ResponderICMP {
+			return nil, fmt.Errorf("reorder: responder %s has type %q (want twamp or icmp)", r.Address, r.Type)
+		}
 	}
 	if opt.Logger == nil {
 		opt.Logger = slog.New(slog.DiscardHandler)

@@ -57,9 +57,6 @@ type ReorderResponder struct {
 	Type    string `yaml:"type"`
 }
 
-// Estimate reports whether this responder's reading is an estimate.
-func (r ReorderResponder) Estimate() bool { return r.Type != ReorderResponderTWAMP }
-
 func (c *Config) defaultReorder() {
 	r := c.Probe.Reorder
 	if r == nil {

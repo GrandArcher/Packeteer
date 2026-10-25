@@ -285,4 +285,8 @@ func TestNewReorderMonitorRejects(t *testing.T) {
 	if _, err := NewReorderMonitor(bad); err == nil {
 		t.Fatal("responder without prober accepted")
 	}
+	bad.Responders = []Responder{{Address: reflectorAddr, Type: "udp", Prober: &trainProber{}}}
+	if _, err := NewReorderMonitor(bad); err == nil || !strings.Contains(err.Error(), `type "udp"`) {
+		t.Fatalf("unknown responder type: %v", err)
+	}
 }
