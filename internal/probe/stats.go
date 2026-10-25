@@ -23,6 +23,11 @@ type Stats struct {
 	// Jitter is the mean absolute difference between consecutive RTTs
 	// (RFC 3550 style, without the exponential smoothing).
 	Jitter time.Duration `json:"jitter"`
+	// Mean connect, TLS handshake, and time to first byte of the replies
+	// of an https prober (#306). Zero for the other probers.
+	Connect   time.Duration `json:"connect_avg,omitempty"`
+	Handshake time.Duration `json:"handshake_avg,omitempty"`
+	TTFB      time.Duration `json:"ttfb_avg,omitempty"`
 }
 
 // Compute derives Stats from a raw probe result.
@@ -50,6 +55,15 @@ func Compute(r plugin.ProbeResult) Stats {
 		}
 	}
 	s.RTTAvg = sum / time.Duration(s.Received)
+	if len(r.Phases) == s.Received {
+		for _, p := range r.Phases {
+			s.Connect += p.Connect
+			s.Handshake += p.Handshake
+			s.TTFB += p.TTFB
+		}
+		n := time.Duration(s.Received)
+		s.Connect, s.Handshake, s.TTFB = s.Connect/n, s.Handshake/n, s.TTFB/n
+	}
 	if s.Received > 1 {
 		var diff time.Duration
 		for i := 1; i < len(r.RTTs); i++ {

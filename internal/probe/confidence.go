@@ -130,10 +130,10 @@ func (c Confidence) WithPassive(agree bool) Confidence {
 }
 
 // BeyondICMP reports whether the sample rests on more than ICMP: a reply to
-// the tcp or udp prober, or passive TCP evidence that agrees with it. An
+// the tcp, udp, or https prober, or passive TCP evidence that agrees with it. An
 // exec or other prober type is not known to be more than ICMP.
 func (c Confidence) BeyondICMP() bool {
-	return c.Protocol == "tcp" || c.Protocol == "udp" || c.Passive == PassiveAgree
+	return c.Protocol == "tcp" || c.Protocol == "udp" || c.Protocol == "https" || c.Passive == PassiveAgree
 }
 
 // String is the evidence in words, for decision explanations.

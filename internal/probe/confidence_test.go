@@ -29,6 +29,7 @@ func TestRateConfidence(t *testing.T) {
 	}{
 		{"tcp, full replies, tight", Result{Stats: stats(10, 10, 20, 21, 22)}, "tcp", 0, ConfidenceHigh, 1, true, "tcp, 10/10 replies"},
 		{"udp counts as beyond icmp", Result{Stats: stats(10, 10, 20, 21, 22)}, "udp", 0, ConfidenceHigh, 1, true, "udp, 10/10 replies"},
+		{"https counts as beyond icmp", Result{Stats: stats(10, 10, 20, 21, 22)}, "https", 0, ConfidenceHigh, 1, true, "https, 10/10 replies"},
 		{"icmp alone is medium", Result{Stats: stats(10, 10, 20, 21, 22)}, "icmp", 0, ConfidenceMedium, 0.5, false, "icmp, 10/10 replies"},
 		{"exec is not known to be beyond icmp", Result{Stats: stats(10, 10, 20, 21, 22)}, "exec", 0, ConfidenceMedium, 0.5, false, "exec, 10/10 replies"},
 		{"one reply", Result{Stats: stats(10, 1, 20)}, "tcp", 0, ConfidenceMedium, 0.5, true, "tcp, 1/10 replies"},
@@ -112,5 +113,31 @@ func TestRoundResultsCarryConfidence(t *testing.T) {
 	b := got[provB.Name]
 	if b.Prober != "ping" || b.Confidence.Protocol != "icmp" || b.Confidence.Level != ConfidenceLow || b.Confidence.Replies != 0 || b.Confidence.BeyondICMP() {
 		t.Fatalf("transit-b = %+v", b)
+	}
+}
+
+// An https prober's phase timings reach the stored result, and the sample
+// counts as evidence beyond ICMP (#306).
+func TestRoundResultsCarryHTTPSPhases(t *testing.T) {
+	https := &fakeProber{fn: func(_ context.Context, req plugin.ProbeRequest) (plugin.ProbeResult, error) {
+		ph := plugin.Phases{Connect: 10 * time.Millisecond, Handshake: 20 * time.Millisecond, TTFB: 30 * time.Millisecond}
+		return plugin.ProbeResult{Sent: req.Count, RTTs: ms(60, 60, 60), Phases: []plugin.Phases{ph, ph, ph}}, nil
+	}}
+	e, err := New([]Provider{provA}, []NamedProber{{Name: "web", Prober: https, Type: "https"}},
+		src(plugin.Target{Prefix: pfx1, Host: pfx1.Addr().Next()}), opts())
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.RunOnce(context.Background())
+	rs := e.Results()
+	if len(rs) != 1 {
+		t.Fatalf("results = %+v", rs)
+	}
+	r := rs[0]
+	if r.Stats.Connect != 10*time.Millisecond || r.Stats.Handshake != 20*time.Millisecond || r.Stats.TTFB != 30*time.Millisecond {
+		t.Fatalf("stats = %+v", r.Stats)
+	}
+	if r.Confidence.Protocol != "https" || !r.Confidence.BeyondICMP() {
+		t.Fatalf("confidence = %+v", r.Confidence)
 	}
 }

@@ -166,10 +166,15 @@ type Probe struct {
 	RTTAvgMs   float64          `json:"rtt_avg_ms"`
 	RTTMaxMs   float64          `json:"rtt_max_ms"`
 	JitterMs   float64          `json:"jitter_ms"`
-	Sent       int              `json:"sent"`
-	Received   int              `json:"received"`
-	Error      string           `json:"error,omitempty"`
-	Time       time.Time        `json:"time,omitempty"`
+	// Mean connect, TLS handshake, and time to first byte of an https
+	// prober's replies (#306); absent for the other probers.
+	ConnectMs   float64   `json:"connect_ms,omitempty"`
+	HandshakeMs float64   `json:"handshake_ms,omitempty"`
+	TTFBMs      float64   `json:"ttfb_ms,omitempty"`
+	Sent        int       `json:"sent"`
+	Received    int       `json:"received"`
+	Error       string    `json:"error,omitempty"`
+	Time        time.Time `json:"time,omitempty"`
 }
 
 // Prefix joins probe rows with the latest decision and, when the prefix
@@ -890,21 +895,24 @@ func (p *Prefix) setExit() {
 
 func probeFrom(r probe.Result) Probe {
 	p := Probe{
-		Provider:   r.Provider,
-		Prober:     r.Prober,
-		Indirect:   r.Indirect,
-		OK:         r.OK(),
-		Confidence: r.Confidence,
-		Evidence:   r.Confidence.String(),
-		LossPct:    jsonFloat(r.Stats.LossPct),
-		RTTMinMs:   millis(r.Stats.RTTMin),
-		RTTAvgMs:   millis(r.Stats.RTTAvg),
-		RTTMaxMs:   millis(r.Stats.RTTMax),
-		JitterMs:   millis(r.Stats.Jitter),
-		Sent:       r.Stats.Sent,
-		Received:   r.Stats.Received,
-		Error:      r.Err,
-		Time:       r.Time,
+		Provider:    r.Provider,
+		Prober:      r.Prober,
+		Indirect:    r.Indirect,
+		OK:          r.OK(),
+		Confidence:  r.Confidence,
+		Evidence:    r.Confidence.String(),
+		LossPct:     jsonFloat(r.Stats.LossPct),
+		RTTMinMs:    millis(r.Stats.RTTMin),
+		RTTAvgMs:    millis(r.Stats.RTTAvg),
+		RTTMaxMs:    millis(r.Stats.RTTMax),
+		JitterMs:    millis(r.Stats.Jitter),
+		ConnectMs:   millis(r.Stats.Connect),
+		HandshakeMs: millis(r.Stats.Handshake),
+		TTFBMs:      millis(r.Stats.TTFB),
+		Sent:        r.Stats.Sent,
+		Received:    r.Stats.Received,
+		Error:       r.Err,
+		Time:        r.Time,
 	}
 	if r.Prefix.IsValid() {
 		p.Prefix = r.Prefix.String()

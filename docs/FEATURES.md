@@ -29,13 +29,13 @@ Milestones:
 | v0.6 | 9 | 7 |
 | v0.7 | 3 | 3 |
 | v0.8 | 20 | 16 |
-| v0.9 | 8 | 7 |
+| v0.9 | 9 | 8 |
 | won't do | 2 | - |
-| **total** | 121 | 107 |
+| **total** | 122 | 108 |
 
 | Status | Count |
 |---|---|
-| done | 107 |
+| done | 108 |
 | partial | 10 |
 | in progress | 0 |
 | planned | 2 |
@@ -54,6 +54,7 @@ The flow window keeps 20,000 exact cells by default, and a fixed HyperLogLog per
 | Active probing per provider: ICMP | done | v0.1 | prober (`icmp`) | #2 | no |
 | Active probing per provider: TCP | done | v0.1 | prober (`tcp`) | #2 | no |
 | Active probing per provider: UDP | done | v0.2 | prober (`udp`) | #15 | no |
+| Active probing per provider: HTTPS | done (#306: a GET or HEAD over TLS from the provider source to the probe host, timed as TCP connect, TLS handshake, and time to first byte, which the reply RTT sums; a status outside `status_min`-`status_max` (default 200-399) is loss; TLS verification is on, with `ca_file` for a private CA and `insecure_skip_verify` only per `targets` entry; the three means show on `/api/probes` and the prefix card; a reply counts as evidence beyond ICMP; not in the default chain, meant for pinned hosts that serve HTTPS) | v0.9 | prober (`https`) | #306 | no |
 | Traceroute-based probe target discovery | done: the `traceroute` source pins its own targets; `probe.indirect` (opt-in) traces any silent prefix from each provider's source and scores each provider at its own highest stable hop, marked indirect (#123) | v0.2 | source (`traceroute`) + probe engine (`probe.indirect`) | #15, #123 | no |
 | Loss / latency / jitter measurement and scoring | done | v0.1 | prober + scorer (`weighted`) | #2, #7 | no |
 | Throughput-aware scoring (prefix volume weighting) | done (lab-proven) | v0.4 | scorer (`commit` uses flow volume, #18; `improvement_weights` rank performance moves for the cap by gain and volume, #34) | #18, #34 | no (lab-proven) |
