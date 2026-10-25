@@ -21,6 +21,7 @@ import (
 	"golang.org/x/net/ipv4"
 	"golang.org/x/net/ipv6"
 
+	"github.com/GrandArcher/Packeteer/internal/plugins/prober/train"
 	"github.com/GrandArcher/Packeteer/internal/sockmark"
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
 )
@@ -154,11 +155,6 @@ func tag(c *xicmp.PacketConn, v6 bool, m sockmark.Marking) error {
 	return sockmark.ApplyConn(rc, v6, m)
 }
 
-type reply struct {
-	seq int
-	at  time.Time
-}
-
 // Probe implements plugin.Prober. Echo requests go out at the request's
 // Spacing (or packet_interval) without waiting for the reply, so a run is
 // one train; replies are matched by sequence number as they arrive and
@@ -195,7 +191,7 @@ func (p *Prober) Probe(ctx context.Context, req plugin.ProbeRequest) (plugin.Pro
 	}
 
 	count := req.Count
-	replies := make(chan reply, count)
+	replies := make(chan train.Reply, count)
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
@@ -211,7 +207,7 @@ func (p *Prober) Probe(ctx context.Context, req plugin.ProbeRequest) (plugin.Pro
 	}
 	for seq := 1; seq <= count; seq++ {
 		if seq > 1 {
-			if err := sleepUntil(ctx, start.Add(time.Duration(seq-1)*spacing)); err != nil {
+			if err := train.SleepUntil(ctx, start.Add(time.Duration(seq-1)*spacing)); err != nil {
 				finish()
 				return res, err
 			}
@@ -241,19 +237,7 @@ func (p *Prober) Probe(ctx context.Context, req plugin.ProbeRequest) (plugin.Pro
 	_ = c.c.SetReadDeadline(deadline)
 	<-done
 	close(replies)
-
-	rtts := make([]time.Duration, count)
-	got := make([]bool, count)
-	for r := range replies {
-		got[r.seq] = true
-		rtts[r.seq] = r.at.Sub(sentAt[r.seq])
-		res.Order = append(res.Order, r.seq)
-	}
-	for seq := range count {
-		if got[seq] {
-			res.RTTs = append(res.RTTs, rtts[seq])
-		}
-	}
+	res.RTTs, res.Order = train.Collect(sentAt, replies)
 	return res, nil
 }
 
@@ -267,7 +251,7 @@ func payloadFor(token [8]byte, seq int) []byte {
 // passes and reports each matched sequence once, as a 0-based index, in
 // arrival order. The id is checked on a raw socket only: the kernel
 // rewrites it on an unprivileged datagram socket.
-func readReplies(c *conn, target netip.Addr, replyType xicmp.Type, id int, token [8]byte, count int, out chan<- reply) {
+func readReplies(c *conn, target netip.Addr, replyType xicmp.Type, id int, token [8]byte, count int, out chan<- train.Reply) {
 	buf := make([]byte, 1500)
 	seen := make([]bool, count+1)
 	for {
@@ -297,21 +281,6 @@ func readReplies(c *conn, target netip.Addr, replyType xicmp.Type, id int, token
 			continue
 		}
 		seen[echo.Seq] = true
-		out <- reply{seq: echo.Seq - 1, at: at}
-	}
-}
-
-func sleepUntil(ctx context.Context, at time.Time) error {
-	wait := time.Until(at)
-	if wait <= 0 {
-		return ctx.Err()
-	}
-	t := time.NewTimer(wait)
-	defer t.Stop()
-	select {
-	case <-t.C:
-		return nil
-	case <-ctx.Done():
-		return ctx.Err()
+		out <- train.Reply{Seq: echo.Seq - 1, At: at}
 	}
 }

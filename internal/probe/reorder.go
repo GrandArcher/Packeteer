@@ -65,9 +65,9 @@ type ReorderOptions struct {
 // ReorderStats are the RFC 4737 metrics of one train. Reordered is the
 // count of packets that arrived after a packet sent later (section 3.3).
 // RatioPct is Reordered over Received (section 4.1), in percent. Extent is
-// the largest reordering extent (section 4.3): how many arrivals a
+// the largest reordering extent (section 4.2): how many arrivals a
 // reordered packet came after the first later-sent packet. NReordering is
-// the largest n for which a packet is n-reordered (section 5.1): it
+// the largest n for which a packet is n-reordered (section 5.3): it
 // arrived after n later-sent packets in a row.
 type ReorderStats struct {
 	Sent        int     `json:"sent"`

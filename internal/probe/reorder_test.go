@@ -28,7 +28,7 @@ func TestComputeReorder(t *testing.T) {
 		// The first packet arrives last: three later-sent packets before it.
 		{"first last", 4, []int{1, 2, 3, 0}, ReorderStats{Sent: 4, Received: 4, Reordered: 1, RatioPct: 25, Extent: 3, NReordering: 3}},
 		// Extent counts from the earliest later-sent arrival; n-reordering
-		// only the later-sent run right before the packet (RFC 4737 5.1).
+		// only the later-sent run right before the packet (RFC 4737 section 5.3).
 		{"extent beyond n", 5, []int{2, 0, 3, 1, 4}, ReorderStats{Sent: 5, Received: 5, Reordered: 2, RatioPct: 40, Extent: 3, NReordering: 1}},
 		{"two swaps", 4, []int{1, 0, 3, 2}, ReorderStats{Sent: 4, Received: 4, Reordered: 2, RatioPct: 50, Extent: 1, NReordering: 1}},
 	}

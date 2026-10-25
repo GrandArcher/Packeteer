@@ -18,6 +18,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/GrandArcher/Packeteer/internal/plugins/prober/train"
 	"github.com/GrandArcher/Packeteer/internal/sockmark"
 	"github.com/GrandArcher/Packeteer/internal/twamp"
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
@@ -76,11 +77,6 @@ func New(c plugin.Config, _ plugin.Env) (plugin.Prober, error) {
 	return &Prober{port: cfg.Port, interval: cfg.PacketInterval, padding: cfg.Padding}, nil
 }
 
-type reply struct {
-	seq int
-	at  time.Time
-}
-
 // Probe implements plugin.Prober. Packets go out at the request's Spacing
 // (or packet_interval) without waiting for replies; the run ends Timeout
 // after the last send. RTTs are in send order and Order is the send
@@ -118,7 +114,7 @@ func (p *Prober) Probe(ctx context.Context, req plugin.ProbeRequest) (plugin.Pro
 	defer stop()
 
 	count := req.Count
-	replies := make(chan reply, count)
+	replies := make(chan train.Reply, count)
 	refused := make(chan struct{}, 1)
 	done := make(chan struct{})
 	go func() {
@@ -142,7 +138,7 @@ func (p *Prober) Probe(ctx context.Context, req plugin.ProbeRequest) (plugin.Pro
 				continue
 			}
 			seen[rp.SenderSeq] = true
-			replies <- reply{seq: int(rp.SenderSeq), at: time.Now()}
+			replies <- train.Reply{Seq: int(rp.SenderSeq), At: time.Now()}
 		}
 	}()
 
@@ -151,7 +147,7 @@ func (p *Prober) Probe(ctx context.Context, req plugin.ProbeRequest) (plugin.Pro
 	start := time.Now()
 	for seq := 0; seq < count; seq++ {
 		if seq > 0 {
-			if err := sleepUntil(ctx, start.Add(time.Duration(seq)*spacing)); err != nil {
+			if err := train.SleepUntil(ctx, start.Add(time.Duration(seq)*spacing)); err != nil {
 				_ = uc.SetReadDeadline(time.Now())
 				<-done
 				return res, err
@@ -169,6 +165,11 @@ func (p *Prober) Probe(ctx context.Context, req plugin.ProbeRequest) (plugin.Pro
 			// Unreachable and refused: the packet is lost.
 		}
 	}
+	if count < 1 {
+		_ = uc.SetReadDeadline(time.Now())
+		<-done
+		return res, nil
+	}
 	deadline := sentAt[count-1].Add(req.Timeout)
 	if d, ok := ctx.Deadline(); ok && d.Before(deadline) {
 		deadline = d
@@ -176,19 +177,7 @@ func (p *Prober) Probe(ctx context.Context, req plugin.ProbeRequest) (plugin.Pro
 	_ = uc.SetReadDeadline(deadline)
 	<-done
 	close(replies)
-
-	rtts := make([]time.Duration, count)
-	got := make([]bool, count)
-	for r := range replies {
-		got[r.seq] = true
-		rtts[r.seq] = r.at.Sub(sentAt[r.seq])
-		res.Order = append(res.Order, r.seq)
-	}
-	for seq := 0; seq < count; seq++ {
-		if got[seq] {
-			res.RTTs = append(res.RTTs, rtts[seq])
-		}
-	}
+	res.RTTs, res.Order = train.Collect(sentAt, replies)
 	if len(res.RTTs) == 0 {
 		select {
 		case <-refused:
@@ -197,19 +186,4 @@ func (p *Prober) Probe(ctx context.Context, req plugin.ProbeRequest) (plugin.Pro
 		}
 	}
 	return res, nil
-}
-
-func sleepUntil(ctx context.Context, at time.Time) error {
-	wait := time.Until(at)
-	if wait <= 0 {
-		return ctx.Err()
-	}
-	t := time.NewTimer(wait)
-	defer t.Stop()
-	select {
-	case <-t.C:
-		return nil
-	case <-ctx.Done():
-		return ctx.Err()
-	}
 }

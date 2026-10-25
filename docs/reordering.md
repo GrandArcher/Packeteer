@@ -11,8 +11,8 @@ To cover a bundle, `flows` trains (default 4) are sent to each responder per mea
 Metrics follow RFC 4737 and are computed per train from the arrival order of the replies:
 
 - `ratio_pct`: the reordered ratio (section 4.1) in percent. A packet is reordered when it arrives after a packet that was sent later (section 3.3). The ratio is reordered packets over received packets, so loss does not count as reordering.
-- `extent`: the largest reordering extent in the train (section 4.3): how many arrival positions a reordered packet came after the first later-sent packet. A pair swap is 1.
-- `n_reordering`: the largest degree of n-reordering (section 5.1): the packet arrived after n later-sent packets in a row. A pair swap is 1; a packet that arrived last after three later ones is 3.
+- `extent`: the largest reordering extent in the train (section 4.2): how many arrival positions a reordered packet came after the first later-sent packet. A pair swap is 1.
+- `n_reordering`: the largest degree of n-reordering (section 5.3): the packet arrived after n later-sent packets in a row. A pair swap is 1; a packet that arrived last after three later ones is 3.
 
 `reordered`, `sent`, and `received` are reported too. A train with no reply is an error for that flow; a responder that answers no train is an error for the measurement.
 

@@ -4,6 +4,8 @@ import (
 	"net/netip"
 	"strings"
 	"time"
+
+	"github.com/GrandArcher/Packeteer/internal/twamp"
 )
 
 // Reordering measurement defaults and bounds (#224).
@@ -18,7 +20,6 @@ const (
 	DefaultReorderFlows   = 4
 	MaxReorderFlows       = 16
 	MaxReorderResponders  = 64
-	DefaultReorderPort    = 862
 	ReorderResponderTWAMP = "twamp"
 	ReorderResponderICMP  = "icmp"
 )
@@ -84,7 +85,7 @@ func (c *Config) defaultReorder() {
 			rr.Type = ReorderResponderTWAMP
 		}
 		if rr.Type == ReorderResponderTWAMP && rr.Port == 0 {
-			rr.Port = DefaultReorderPort
+			rr.Port = twamp.DefaultPort
 		}
 	}
 }

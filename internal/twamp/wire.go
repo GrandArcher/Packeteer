@@ -19,17 +19,18 @@ const (
 	// ReflectorMinLen is the fixed part of a Session-Reflector packet
 	// (RFC 5357 section 4.2.1).
 	ReflectorMinLen = 41
-	// MinSenderPadding is what a sender adds so the reflected packet,
-	// whose fixed part is 27 octets longer, is the same size as the
-	// sender's (RFC 5357 section 4.2.1).
+	// MinSenderPadding is the padding a sender must add (RFC 5357 section
+	// 4.1.2) so the reflector's truncation (section 4.2.1) leaves the
+	// reflected packet's fixed part intact at the sender's size.
 	MinSenderPadding = ReflectorMinLen - SenderMinLen
-	// DefaultPort is the TWAMP port (RFC 5357 section 3.1).
+	// DefaultPort is the port IANA registered for TWAMP (RFC 5357 section
+	// 8.4), which TWAMP-Light senders and reflectors use by convention.
 	DefaultPort = 862
 	// UnsyncedErrorEstimate is an error estimate with S = 0 (clock not
 	// synchronized), scale 0, and the smallest non-zero multiplier.
 	UnsyncedErrorEstimate uint16 = 0x0001
 	// UnknownTTL is the Sender TTL a reflector puts in its reply when it
-	// cannot read the TTL of the received packet (RFC 5357 section 4.2.1).
+	// cannot read the TTL of the received packet (RFC 5357 section 4.2).
 	UnknownTTL uint8 = 255
 )
 

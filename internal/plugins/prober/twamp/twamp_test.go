@@ -174,3 +174,13 @@ func TestConfig(t *testing.T) {
 		t.Fatalf("configured %+v", p)
 	}
 }
+
+// A zero-packet request sends nothing and reports nothing.
+func TestZeroCount(t *testing.T) {
+	port := reflector(t)
+	p := newProber(t, "")
+	res, err := p.Probe(context.Background(), plugin.ProbeRequest{Source: lo, Target: lo, Port: port, Count: 0, Timeout: time.Second})
+	if err != nil || res.Sent != 0 || len(res.RTTs) != 0 || len(res.Order) != 0 {
+		t.Fatalf("res = %+v, err = %v", res, err)
+	}
+}
