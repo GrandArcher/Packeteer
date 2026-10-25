@@ -37,7 +37,7 @@ probe:
 		if err != nil {
 			t.Fatal(err)
 		}
-		if indirectOptions(cfg) != nil {
+		if indirectOptions(cfg, nil) != nil {
 			t.Fatalf("indirect on for %q", extra)
 		}
 	}
@@ -45,7 +45,7 @@ probe:
 	if err != nil {
 		t.Fatal(err)
 	}
-	in := indirectOptions(cfg)
+	in := indirectOptions(cfg, nil)
 	if in == nil || in.Budget != 5*time.Second || in.CacheTTL != 10*time.Minute || in.MaxQueue != 50 || in.MinShare != 500*time.Millisecond {
 		t.Fatalf("indirect = %+v", in)
 	}

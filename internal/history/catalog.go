@@ -145,6 +145,11 @@ var Reports = []Def{
 			txt("day", "Day (UTC)"), num("probes", "Probes", ""), num("failed", "Failed", ""), num("prefixes", "Prefixes", ""),
 			num("avg_loss_pct", "Avg loss", "%"), num("avg_rtt_ms", "Avg RTT", "ms"),
 		}},
+	{Name: ReportProbeASNs, Category: CategoryPerformance, Filters: noCause, Limited: true,
+		Summary: "Probes per destination origin ASN per UTC day, newest day and most probed ASN first. Prefixes with no learned origin are left out.",
+		Columns: []Column{
+			txt("day", "Day (UTC)"), num("origin_asn", "Origin AS", ""), num("prefixes", "Prefixes", ""), num("probes", "Probes", ""), num("failed", "Failed", ""),
+		}},
 	{Name: ReportPrefixes, Category: CategoryTraffic, Filters: noCause, Limited: true,
 		Summary: "Top prefixes by problems, volume, or loss.",
 		Columns: []Column{

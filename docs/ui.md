@@ -163,12 +163,12 @@ CI loads the page twice in the graphs step of the docker job (`lab/ui-smoke.sh`)
 
 ## Reports
 
-`/reports.html` (#178) lists the stored reports by category: Overview (`summary`), Improvements (`improvements`, `exchanges`, `causes`), Performance (`performance`, `timeseries`, `providers`, `probes`), Traffic (`prefixes`, `asns`, `countries`), Cost (`savings`), and Protection (`mitigations`, `anomalies`). It needs `storage: {type: sqlite}` and says so when history is off. It is read-only and announces nothing; the mode banner is on top in every mode.
+`/reports.html` (#178) lists the stored reports by category: Overview (`summary`), Improvements (`improvements`, `exchanges`, `causes`), Performance (`performance`, `timeseries`, `providers`, `probes`, `probe_asns`), Traffic (`prefixes`, `asns`, `countries`), Cost (`savings`), and Protection (`mitigations`, `anomalies`). It needs `storage: {type: sqlite}` and says so when history is off. It is read-only and announces nothing; the mode banner is on top in every mode.
 
 - **Range.** Last 1, 7, 30, 90, or 365 days, or a custom From and To typed in the browser's local time. The page sends a custom range as UTC (`from` and `to` as RFC 3339), and the count line shows the range back in local time. A range is at most 3660 days.
 - **Filters.** Only the filters the report takes are shown. A filter that matches nothing gives an empty table, not an error.
 - **Columns.** Each column has a label and, for numbers, a unit (`Avg loss (%)`, `Active (h)`). Click a header to sort by it; click again to reverse. Numbers and times sort largest or latest first, text and prefixes A to Z. Prefixes sort by address, not as text. An empty cell sorts last in either direction. Prefix cells link to the [prefix page](#prefix-detail-and-history) and origin AS cells to `/prefixes.html?asn=<number>`.
-- **Rows.** `improvements`, `savings`, `prefixes`, `asns`, `countries`, `mitigations`, and `anomalies` are cut to a row limit (the Rows menu; default 100 for `improvements`, `savings`, `mitigations`, and `anomalies`, 20 for the others, at most 10000). The sort happens before the cut, so sorting by Active (h) shows the longest improvements, not the longest of the newest 100. "Showing 20 of 140 rows" says when the table is cut. The other reports have one row per day, provider, or cause and are never cut.
+- **Rows.** `improvements`, `savings`, `prefixes`, `asns`, `countries`, `probe_asns`, `mitigations`, and `anomalies` are cut to a row limit (the Rows menu; default 100 for `improvements`, `savings`, `mitigations`, and `anomalies`, 20 for the others, at most 10000). The sort happens before the cut, so sorting by Active (h) shows the longest improvements, not the longest of the newest 100. "Showing 20 of 140 rows" says when the table is cut. The other reports have one row per day, provider, or cause and are never cut.
 - **Export.** CSV and XLSX download the same query as the table: same range, filters, sort, and row limit. The CSV header names are unchanged. XLSX has one sheet named after the report, a bold header row of the labels with units, numbers as numeric cells, and everything else as text, so text that starts with `=` is never evaluated.
 - **Add to dashboard.** Saves the current view as a `report` widget on one of the user's [dashboards](#custom-dashboards) (or a new one) with the same filters, sort, and limit. It uses `PUT /api/dashboards/<name>`, so it needs `storage`, auth or basic auth, and the dashboard limits apply. A range from the preset menu is saved as `days` and keeps following the present; a custom range is saved as that fixed range.
 - **URL.** The view is in the query string using the API's parameters (`/reports.html?report=improvements&days=30&provider=transit-a&sort=hours&order=desc`), so a link opens the same view. A link with `report=improvements` and no range opens 90 days, as the search page links always did.
@@ -178,7 +178,7 @@ Filters by report. All filters are optional and combine with AND.
 | Report | Filters |
 |---|---|
 | `improvements`, `exchanges`, `causes`, `performance`, `savings` | `provider`, `asn`, `prefix`, `cause`, `ip_version` |
-| `summary`, `providers`, `probes`, `prefixes`, `asns`, `countries` | `provider`, `asn`, `prefix`, `ip_version` |
+| `summary`, `providers`, `probes`, `probe_asns`, `prefixes`, `asns`, `countries` | `provider`, `asn`, `prefix`, `ip_version` |
 | `timeseries` | `asn`, `prefix`, `cause`, `ip_version` |
 | `mitigations`, `anomalies` | `prefix`, `ip_version` |
 

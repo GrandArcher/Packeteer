@@ -5,7 +5,6 @@ import (
 	"encoding/base64"
 	"errors"
 	"net"
-	"net/netip"
 	"net/url"
 	"path/filepath"
 	"reflect"
@@ -96,16 +95,11 @@ type HerdShare struct {
 	// static, vip, outage (default), flow, span.
 	Sources []string `yaml:"sources"`
 	// Discovery is query_only (default) or listing.
-	Discovery string      `yaml:"discovery"`
-	Exclude   HerdExclude `yaml:"exclude"`
-}
-
-// HerdExclude lists what is never shared. A prefix excludes every route
-// equal to, inside, or covering it. An ASN excludes every route whose
-// origin is that ASN or whose AS path contains it.
-type HerdExclude struct {
-	Prefixes []string `yaml:"prefixes"`
-	ASNs     []uint32 `yaml:"asns"`
+	Discovery string `yaml:"discovery"`
+	// Exclude is what is never shared. A prefix excludes every route
+	// equal to, inside, or covering it. An ASN excludes every route whose
+	// origin is that ASN or whose AS path contains it.
+	Exclude ExcludeList `yaml:"exclude"`
 }
 
 // HerdVantage is where this node declares it measures from.
@@ -293,18 +287,6 @@ func ParseHerdKey(s string) ([]byte, error) {
 	return k, nil
 }
 
-// PrefixList is the exclude prefixes, parsed. Validate has already
-// checked them.
-func (e HerdExclude) PrefixList() []netip.Prefix {
-	out := make([]netip.Prefix, 0, len(e.Prefixes))
-	for _, s := range e.Prefixes {
-		if p, err := netip.ParsePrefix(s); err == nil {
-			out = append(out, p.Masked())
-		}
-	}
-	return out
-}
-
 func (c *Config) validateHerd(add func(string, ...any)) {
 	h := c.Herd
 	if h == nil || !h.Enabled {
@@ -353,19 +335,7 @@ func (c *Config) validateHerd(add func(string, ...any)) {
 			add("herd.share.sources[%d]: %s targets come from user traffic and cannot be shared at route level yet (needs the crowd threshold)", i, s)
 		}
 	}
-	for i, s := range h.Share.Exclude.Prefixes {
-		p, err := netip.ParsePrefix(s)
-		if err != nil {
-			add("herd.share.exclude.prefixes[%d]: %q is not a prefix", i, s)
-		} else if p != p.Masked() {
-			add("herd.share.exclude.prefixes[%d]: %q has host bits set", i, s)
-		}
-	}
-	for i, a := range h.Share.Exclude.ASNs {
-		if a == 0 {
-			add("herd.share.exclude.asns[%d]: 0 is not an ASN", i)
-		}
-	}
+	h.Share.Exclude.validate(add, "herd.share.exclude")
 	if h.RetentionDays < MinHerdRetentionDays || h.RetentionDays > MaxHerdRetentionDays {
 		add("herd.retention_days %d must be between %d and %d", h.RetentionDays, MinHerdRetentionDays, MaxHerdRetentionDays)
 	}

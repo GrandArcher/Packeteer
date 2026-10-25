@@ -122,6 +122,11 @@ probe:
   packets: 10
   workers: 8                  # concurrent probe runs
   rate_limit_pps: 100         # global cap on probe packets per second
+  # per_asn_pps: 20           # 0 (default) is off. Probe and trace packets per second toward one
+  #                           #   destination origin ASN (#203)
+  # exclude:                  # never probed by any source (#203): a prefix (and every address inside it)
+  #   prefixes: [203.0.113.0/24]
+  #   asns: [64496]           #   or every destination whose learned covering route this ASN originates
   per_target_concurrency: 2   # concurrent runs toward one destination host
   prober_recheck_rounds: 10   # every Nth probe of a host starts at the first prober again
   prober_memory: 100000       # hosts that remember which prober answered; oldest are dropped past this

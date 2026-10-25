@@ -260,6 +260,8 @@ func probeKeys(a, b config.Probe) (restart, online []string) {
 	pair("retry_packets", a.RetryPackets, b.RetryPackets, true)
 	pair("workers", a.Workers, b.Workers, false)
 	pair("rate_limit_pps", a.RateLimitPPS, b.RateLimitPPS, false)
+	pair("per_asn_pps", a.PerASNPPS, b.PerASNPPS, false)
+	pair("exclude", a.Exclude, b.Exclude, false)
 	pair("per_target_concurrency", a.PerTargetConcurrency, b.PerTargetConcurrency, false)
 	pair("min_replies", a.MinReplies, b.MinReplies, false)
 	pair("dispersion_ms", a.DispersionMS, b.DispersionMS, false)
@@ -369,8 +371,11 @@ type reloader struct {
 	mit        *mitigation.Controller
 	flowSpecUp bool
 
-	plugins  *pluginhost.Set
-	engine   *probe.Engine
+	plugins *pluginhost.Set
+	engine  *probe.Engine
+	// perASN is the probe.per_asn_pps set the engine was built with; new
+	// traceroute sources share it.
+	perASN   *probe.ASNLimits
 	decider  *policy.Engine
 	fed      *fedState
 	col      *httpapi.Collector
@@ -552,6 +557,8 @@ func (r *reloader) applyOnline(ctx context.Context, next *config.Config, online 
 			}
 			wirePrefixLookup(r.plugins, r.rib)
 			wireExchangeLANs(next, r.plugins)
+			wireProbeExclusion(next, r.plugins, r.rib)
+			wirePacketWait(r.plugins, r.perASN)
 			wireLearnedRoutes(r.plugins, r.rib)
 			wireOutage(r.plugins, r.engine, r.rib, r.dispatch)
 		}

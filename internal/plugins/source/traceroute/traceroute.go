@@ -108,6 +108,8 @@ type Source struct {
 
 	mu       sync.Mutex
 	lans     []netip.Prefix
+	excluded func(netip.Prefix, netip.Addr) bool
+	wait     func(context.Context, netip.Addr) error
 	cached   []plugin.Target
 	cachedAt time.Time
 	have     bool
@@ -295,14 +297,34 @@ func (s *Source) SetExchangeLANs(lans []netip.Prefix) {
 	s.mu.Unlock()
 }
 
-func (s *Source) lanSkip(a netip.Addr) bool {
+// SetExcluded installs probe.exclude (#203). A target whose prefix or
+// configured host it names is not traced, and a hop it names is not
+// adopted. The controller calls this before Start.
+func (s *Source) SetExcluded(fn func(prefix netip.Prefix, host netip.Addr) bool) {
+	s.mu.Lock()
+	s.excluded = fn
+	s.mu.Unlock()
+}
+
+// SetPacketWait installs probe.per_asn_pps (#203): wait runs before every
+// discovery packet with the traced destination. The controller calls this
+// before Start.
+func (s *Source) SetPacketWait(wait func(ctx context.Context, dest netip.Addr) error) {
+	s.mu.Lock()
+	s.wait = wait
+	s.mu.Unlock()
+}
+
+// skip reports whether a hop may not become the probe host: a peering LAN
+// address or an excluded one.
+func (s *Source) skip(a netip.Addr) bool {
 	if !a.IsValid() {
 		return false
 	}
 	s.mu.Lock()
-	lans := s.lans
+	lans, excluded := s.lans, s.excluded
 	s.mu.Unlock()
-	return exchange.ContainsAddr(lans, a)
+	return exchange.ContainsAddr(lans, a) || excluded != nil && excluded(netip.Prefix{}, a)
 }
 
 // Targets implements plugin.TargetSource. It returns the last discovery
@@ -367,6 +389,7 @@ func (s *Source) discover(ctx context.Context) {
 	}
 	s.mu.Lock()
 	lans := append([]netip.Prefix(nil), s.lans...)
+	excluded := s.excluded
 	s.mu.Unlock()
 	var found []plugin.Target
 	var done []netip.Prefix
@@ -381,6 +404,11 @@ func (s *Source) discover(ctx context.Context) {
 			s.log.Info("traceroute target inside an exchange LAN", "prefix", t.Prefix, "host", t.Host)
 			continue
 		}
+		if excluded != nil && excluded(t.Prefix, t.Host) {
+			done = append(done, t.Prefix)
+			s.log.Debug("traceroute target listed in probe.exclude", "prefix", t.Prefix, "host", t.Host)
+			continue
+		}
 		tctx, tcancel := context.WithTimeout(bctx, share)
 		host, ok, err := s.trace(tctx, hop, t.Host)
 		tcancel()
@@ -390,7 +418,10 @@ func (s *Source) discover(ctx context.Context) {
 				s.noteUnavailable(err)
 				return
 			}
-			break
+			// Only this target ran out of its share, usually waiting on a
+			// busy ASN under probe.per_asn_pps. It keeps its previous host
+			// and the rest of the pass still runs.
+			continue
 		}
 		done = append(done, t.Prefix)
 		if !ok {
@@ -459,8 +490,15 @@ func cloneTargets(in []plugin.Target) []plugin.Target {
 // hop, or max_hops is reached.
 func (s *Source) trace(ctx context.Context, hop hopper, dest netip.Addr) (netip.Addr, bool, error) {
 	t := Tracer{MaxHops: s.maxHops, Probes: s.probes, MinReplies: s.minReplies, Port: s.port,
-		Timeout: s.timeout, Hop: hop.Probe, Skip: s.lanSkip}
-	return t.Trace(ctx, s.src, dest, nil)
+		Timeout: s.timeout, Hop: hop.Probe, Skip: s.skip}
+	s.mu.Lock()
+	wait := s.wait
+	s.mu.Unlock()
+	var each func(context.Context) error
+	if wait != nil {
+		each = func(c context.Context) error { return wait(c, dest) }
+	}
+	return t.Trace(ctx, s.src, dest, each)
 }
 
 // HopFunc sends one TTL-limited probe. reached means the reply is
@@ -478,7 +516,8 @@ type Tracer struct {
 	Timeout    time.Duration
 	// Hop sends one probe. Nil uses the built-in Linux traceroute.
 	Hop HopFunc
-	// Skip, when non-nil, ignores a hop (an exchange peering LAN).
+	// Skip, when non-nil, ignores a hop (an exchange peering LAN or
+	// probe.exclude).
 	Skip func(netip.Addr) bool
 }
 

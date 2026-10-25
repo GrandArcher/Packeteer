@@ -17,6 +17,7 @@ import (
 	"github.com/GrandArcher/Packeteer/internal/plugins/source/traceroute"
 	"github.com/GrandArcher/Packeteer/internal/policy"
 	"github.com/GrandArcher/Packeteer/internal/probe"
+	"github.com/GrandArcher/Packeteer/internal/rib"
 	"github.com/GrandArcher/Packeteer/internal/sockmark"
 	"github.com/GrandArcher/Packeteer/internal/troubleshoot"
 )
@@ -25,7 +26,7 @@ import (
 // sources and prober chain with the engine. On-demand results go back to
 // the HTTP caller only. Optimize is the one write: it adds a learned prefix
 // to the engine's probe targets (wired through SetQueue).
-func newTools(cfg *config.Config, plugins *pluginhost.Set, lim *rate.Limiter) (*troubleshoot.Tools, error) {
+func newTools(cfg *config.Config, plugins *pluginhost.Set, lim *rate.Limiter, perASN *probe.ASNLimits, view func() *rib.View) (*troubleshoot.Tools, error) {
 	var providers []probe.Provider
 	for _, p := range cfg.Providers {
 		if cfg.Remote(p) {
@@ -59,10 +60,11 @@ func newTools(cfg *config.Config, plugins *pluginhost.Set, lim *rate.Limiter) (*
 		MaxHops:   cfg.Troubleshoot.MaxHops,
 		Hop:       traceroute.Hop,
 		Reverse:   reverseName,
-		Indirect:  indirectTracer(cfg),
+		Indirect:  indirectTracer(cfg, probeExclusion(cfg, view)),
 		Limiter:   rate.NewLimiter(rate.Every(time.Minute/time.Duration(rpm)), min(rpm, 3)),
-		// The indirect fallback trace packets share the engine's budget.
+		// The indirect fallback trace packets share the engine's budgets.
 		PacketLimiter: lim,
+		PerASN:        perASN,
 		ExchangeLANs:  exchangeLANPrefixes(cfg),
 	}
 	if plugins.Whois != nil {
@@ -84,7 +86,7 @@ func reverseName(ctx context.Context, a netip.Addr) string {
 	return strings.TrimSuffix(names[0], ".")
 }
 
-func newEngine(cfg *config.Config, plugins *pluginhost.Set, log *slog.Logger, onRound func(), onProbe func(probe.Result), onBatch func([]probe.Result), lim *rate.Limiter) (*probe.Engine, error) {
+func newEngine(cfg *config.Config, plugins *pluginhost.Set, log *slog.Logger, onRound func(), onProbe func(probe.Result), onBatch func([]probe.Result), lim *rate.Limiter, perASN *probe.ASNLimits, view func() *rib.View) (*probe.Engine, error) {
 	var providers []probe.Provider
 	for _, p := range cfg.Providers {
 		if cfg.Remote(p) {
@@ -111,6 +113,7 @@ func newEngine(cfg *config.Config, plugins *pluginhost.Set, log *slog.Logger, on
 			onProbe(r)
 		}
 	}
+	excl := probeExclusion(cfg, view)
 	return probe.New(providers, probers, sources, probe.Options{
 		Interval:             cfg.Probe.Interval,
 		Timeout:              cfg.Probe.Timeout,
@@ -125,7 +128,9 @@ func newEngine(cfg *config.Config, plugins *pluginhost.Set, log *slog.Logger, on
 		ProberRecheckRounds:  cfg.Probe.ProberRecheckRounds,
 		ProberMemory:         cfg.Probe.ProberMemory,
 		ExchangeLANs:         exchangeLANPrefixes(cfg),
-		Indirect:             indirectOptions(cfg),
+		Indirect:             indirectOptions(cfg, excl),
+		Exclude:              excl,
+		PerASN:               perASN,
 		Limiter:              lim,
 		Logger:               log,
 		OnResult:             onResult,
@@ -148,12 +153,55 @@ func packetLimiter(cfg *config.Config) *rate.Limiter {
 	return rate.NewLimiter(rate.Limit(cfg.Probe.RateLimitPPS), burst)
 }
 
+// perASNLimits is probe.per_asn_pps (#203). The probe engine, the
+// troubleshooting indirect fallback, and the traceroute sources share it,
+// so their packets toward one origin ASN add up under one cap. Nil when off.
+func perASNLimits(cfg *config.Config, view func() *rib.View) *probe.ASNLimits {
+	return probe.NewASNLimits(cfg.Probe.PerASNPPS, max(cfg.Probe.Packets, cfg.Probe.RetryPackets), originLookup(view))
+}
+
+// originLookup is the origin ASN of the longest learned route covering a
+// prefix, or 0 before the RIB view is ready or when it has none. view may
+// be nil (tests). probe.exclude ASNs and probe.per_asn_pps read it.
+func originLookup(view func() *rib.View) func(netip.Prefix) uint32 {
+	return func(p netip.Prefix) uint32 {
+		if view == nil {
+			return 0
+		}
+		v := view()
+		if v == nil || !v.Ready() {
+			return 0
+		}
+		rt, ok := v.Covering(p)
+		if !ok || len(rt.ASPath) == 0 {
+			return 0
+		}
+		return rt.ASPath[len(rt.ASPath)-1]
+	}
+}
+
+// probeExclusion is probe.exclude (#203) over the learned RIB view. Nil
+// when nothing is listed.
+func probeExclusion(cfg *config.Config, view func() *rib.View) *probe.Exclusion {
+	if cfg.Probe.Exclude.Empty() {
+		return nil
+	}
+	x := &probe.Exclusion{Prefixes: cfg.Probe.Exclude.PrefixList(), Origin: originLookup(view)}
+	if len(cfg.Probe.Exclude.ASNs) > 0 {
+		x.ASNs = make(map[uint32]bool, len(cfg.Probe.Exclude.ASNs))
+		for _, a := range cfg.Probe.Exclude.ASNs {
+			x.ASNs[a] = true
+		}
+	}
+	return x
+}
+
 // indirectTracer walks TTL from a provider's source with the built-in Linux
 // traceroute. It uses the probe.indirect settings when they are enabled and
 // the same defaults otherwise, so an on-demand probe's indirect fallback
 // (#126) does not need background indirect probing on. Hops on an exchange
-// LAN are not adopted.
-func indirectTracer(cfg *config.Config) traceroute.Tracer {
+// LAN or in probe.exclude are not adopted.
+func indirectTracer(cfg *config.Config, excl *probe.Exclusion) traceroute.Tracer {
 	in := cfg.Probe.Indirect
 	if in == nil || !in.Enabled {
 		in = &config.ProbeIndirect{MaxHops: config.DefaultIndirectMaxHops, Probes: config.DefaultIndirectProbes,
@@ -167,20 +215,20 @@ func indirectTracer(cfg *config.Config) traceroute.Tracer {
 		Port:       in.Port,
 		Timeout:    in.Timeout,
 		Hop:        traceroute.Hop,
-		Skip:       func(a netip.Addr) bool { return exchange.ContainsAddr(lans, a) },
+		Skip:       func(a netip.Addr) bool { return exchange.ContainsAddr(lans, a) || excl.Addr(a) },
 	}
 }
 
 // indirectOptions turns probe.indirect into engine options (#123). Nil
 // when it is omitted or disabled. Traces use indirectTracer; every packet
 // waits on the engine's rate limit.
-func indirectOptions(cfg *config.Config) *probe.Indirect {
+func indirectOptions(cfg *config.Config, excl *probe.Exclusion) *probe.Indirect {
 	in := cfg.Probe.Indirect
 	if in == nil || !in.Enabled {
 		return nil
 	}
 	return &probe.Indirect{
-		Tracer:   indirectTracer(cfg),
+		Tracer:   indirectTracer(cfg, excl),
 		Budget:   in.Budget,
 		MinShare: in.Timeout,
 		CacheTTL: in.CacheTTL,

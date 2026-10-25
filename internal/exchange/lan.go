@@ -139,33 +139,43 @@ func FilterNormalized(lans []netip.Prefix, in []plugin.Target) []plugin.Target {
 	if len(lans) == 0 || len(in) == 0 {
 		return in
 	}
+	out, dropped := DropNormalized(in,
+		func(p netip.Prefix) bool { return PrefixInside(lans, p) },
+		func(a netip.Addr) bool { return ContainsAddr(lans, a) })
+	if dropped > 0 {
+		NoteDrops(dropped)
+	}
+	return out
+}
+
+// DropNormalized is the FilterNormalized rule for any pair of predicates:
+// a target whose prefix matches prefixOut is dropped, a pinned host that
+// matches addrOut drops its target, and a candidate that matches is
+// unmarked. probe.exclude (#203) shares it with the LAN filter. dropped
+// counts those three; in is returned as is when it is zero.
+func DropNormalized(in []plugin.Target, prefixOut func(netip.Prefix) bool, addrOut func(netip.Addr) bool) ([]plugin.Target, int) {
 	out := make([]plugin.Target, 0, len(in))
 	dropped := 0
-	changed := false
 	for _, t := range in {
 		t.Prefix = t.Prefix.Masked()
-		if PrefixInside(lans, t.Prefix) {
+		if prefixOut(t.Prefix) {
 			dropped++
-			changed = true
 			continue
 		}
-		if t.Host.IsValid() && ContainsAddr(lans, t.Host) {
+		if t.Host.IsValid() && addrOut(t.Host) {
 			if t.Pinned {
 				dropped++
-				changed = true
 				continue
 			}
 			if t.Candidate {
 				t.Candidate = false
 				dropped++
-				changed = true
 			}
 		}
 		out = append(out, t)
 	}
-	if !changed {
-		return in
+	if dropped == 0 {
+		return in, 0
 	}
-	NoteDrops(dropped)
-	return out
+	return out, dropped
 }

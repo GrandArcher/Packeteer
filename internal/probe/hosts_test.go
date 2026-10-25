@@ -3,6 +3,8 @@ package probe
 import (
 	"net/netip"
 	"testing"
+
+	"github.com/GrandArcher/Packeteer/internal/exchange"
 )
 
 func TestProbeHostsPinWins(t *testing.T) {
@@ -101,7 +103,9 @@ func TestOmitLANHostsKeepsGateway(t *testing.T) {
 	gw := netip.MustParseAddr("203.0.112.11")
 	src := netip.MustParseAddr("192.0.2.11")
 	hosts := ProbeHosts(p, netip.Addr{}, nil, gw, src)
-	got := omitLANHosts(hosts, gw, []netip.Prefix{lan})
+	onLAN := func(a netip.Addr) bool { return exchange.ContainsAddr([]netip.Prefix{lan}, a) }
+	none := func(netip.Addr) bool { return false }
+	got := omitHosts(hosts, gw, onLAN, none)
 	want := []string{"203.0.113.0", "203.0.112.11"}
 	if len(got) != len(want) {
 		t.Fatalf("hosts %v -> %v", hosts, got)
@@ -111,8 +115,14 @@ func TestOmitLANHostsKeepsGateway(t *testing.T) {
 			t.Fatalf("hosts %v -> %v", hosts, got)
 		}
 	}
+	// probe.exclude has no gateway exemption: an excluded next hop gets no
+	// packet, and the other hosts stay.
+	excl := func(a netip.Addr) bool { return a == gw }
+	if got := omitHosts(hosts, gw, onLAN, excl); len(got) != 1 || got[0].String() != "203.0.113.0" {
+		t.Fatalf("excluded gateway: %v -> %v", hosts, got)
+	}
 	// No LANs: the list is unchanged.
-	if same := omitLANHosts(hosts, gw, nil); len(same) != len(hosts) {
+	if same := omitHosts(hosts, gw, none, none); len(same) != len(hosts) {
 		t.Fatalf("nil lans = %v", same)
 	}
 }

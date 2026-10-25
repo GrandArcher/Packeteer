@@ -3,6 +3,7 @@ package traceroute
 import (
 	"context"
 	"errors"
+	"maps"
 	"net/netip"
 	"strings"
 	"sync/atomic"
@@ -447,5 +448,110 @@ func TestConfigErrors(t *testing.T) {
 		if err == nil || !strings.Contains(err.Error(), want) {
 			t.Errorf("%q: err = %v, want %q", y, err, want)
 		}
+	}
+}
+
+// probe.exclude (#203): a target whose prefix or configured host is
+// excluded is not traced, and an excluded hop is not adopted.
+func TestDiscoverSkipsExcluded(t *testing.T) {
+	s := must(t, `
+timeout: 1ms
+probes: 3
+min_replies: 2
+max_hops: 8
+interval: 1s
+targets:
+  - {prefix: 198.51.100.0/24, host: 198.51.100.1}
+  - {prefix: 203.0.113.128/25, host: 203.0.113.130}
+  - {prefix: 192.0.2.0/24, host: 192.0.2.7}
+`)
+	excluded := netip.MustParsePrefix("203.0.113.0/24")
+	badHop := netip.MustParseAddr("192.0.2.200")
+	s.SetExcluded(func(p netip.Prefix, host netip.Addr) bool {
+		return p.IsValid() && excluded.Contains(p.Addr()) || host == badHop || host == netip.MustParseAddr("192.0.2.7")
+	})
+	s.now = func() time.Time { return time.Unix(1000, 0) }
+	fake := &perTTL{hops: map[int][]hopReply{2: replies("192.0.2.200", "192.0.2.200", "192.0.2.200")}}
+	s.hop = fake
+	before := exchange.LANDrops()
+	s.discover(context.Background())
+	ts, err := s.Targets(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The excluded hop is not adopted, so the customer prefix falls back to
+	// its configured host. The excluded prefix and the excluded host are
+	// not traced at all, and they are not LAN drops.
+	if len(ts) != 1 || ts[0].Prefix.String() != "198.51.100.0/24" || ts[0].Host.String() != "198.51.100.1" {
+		t.Fatalf("targets = %+v", ts)
+	}
+	if fake.calls.Load() == 0 {
+		t.Fatal("customer prefix was not traced")
+	}
+	if got := exchange.LANDrops() - before; got != 0 {
+		t.Fatalf("LAN drops = %d, want 0", got)
+	}
+}
+
+// ttlHopper answers every packet with 192.0.2.<ttl> and counts packets
+// per destination.
+type ttlHopper struct{ sent map[netip.Addr]int }
+
+func (h *ttlHopper) Probe(_ context.Context, _, dst netip.Addr, ttl, _ int, _ time.Duration) (netip.Addr, bool, error) {
+	h.sent[dst]++
+	return netip.AddrFrom4([4]byte{192, 0, 2, byte(ttl)}), false, nil
+}
+
+// probe.per_asn_pps (#203): every discovery packet waits with the traced
+// destination. A busy ASN that runs a target out of its share costs only
+// that target: hops already collected are kept, a target with none keeps
+// its previous host, later targets are still traced, and no packet is sent
+// past the cap.
+func TestDiscoverBusyASNSkipsOnlyThatTarget(t *testing.T) {
+	s := must(t, `
+timeout: 1ms
+probes: 2
+min_replies: 2
+max_hops: 4
+interval: 1s
+targets:
+  - {prefix: 203.0.113.0/25, host: 203.0.113.1}
+  - {prefix: 203.0.113.128/25, host: 203.0.113.129}
+  - {prefix: 198.51.100.0/24, host: 198.51.100.1}
+`)
+	s.now = func() time.Time { return time.Unix(1000, 0) }
+	busy := netip.MustParsePrefix("203.0.113.0/24")
+	s.cached = []plugin.Target{{Prefix: netip.MustParsePrefix("203.0.113.128/25"), Host: a("203.0.113.140")}}
+	s.have = true
+	hop := &ttlHopper{sent: map[netip.Addr]int{}}
+	s.hop = hop
+	left := 2
+	// A wait that cannot fit in the target's share fails the way the
+	// limiter does, without a packet.
+	s.SetPacketWait(func(_ context.Context, dest netip.Addr) error {
+		if !busy.Contains(dest) {
+			return nil
+		}
+		if left > 0 {
+			left--
+			return nil
+		}
+		return context.DeadlineExceeded
+	})
+	s.discover(context.Background())
+	ts, err := s.Targets(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]string{}
+	for _, tg := range ts {
+		got[tg.Prefix.String()] = tg.Host.String()
+	}
+	want := map[string]string{"203.0.113.0/25": "192.0.2.1", "203.0.113.128/25": "203.0.113.140", "198.51.100.0/24": "192.0.2.4"}
+	if !maps.Equal(got, want) {
+		t.Fatalf("targets = %v, want %v", got, want)
+	}
+	if hop.sent[a("203.0.113.1")]+hop.sent[a("203.0.113.129")] != 2 || hop.sent[a("198.51.100.1")] != 8 {
+		t.Fatalf("packets sent = %v, want 2 into the busy ASN and 8 to 198.51.100.1", hop.sent)
 	}
 }

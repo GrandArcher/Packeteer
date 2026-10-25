@@ -8,6 +8,16 @@ A `udp` prober is an optional fallback after ICMP and TCP. It counts a reply fro
 
 Set `probe.retry_loss_pct` to re-measure a lossy sample, or `probe.dispersion_ms` to leave out a host whose RTT spread (slowest reply minus fastest) is wider than that limit and re-measure it, before the sample is stored. `probe.min_replies` (default 1) is how many replies a host needs before it defines the score. Both checks default off. A flow prefix offers up to three of its busiest destinations as candidates. The engine remembers which prober got a reply from a host and starts the next round there. Every `probe.prober_recheck_rounds` (default 10) it starts at the first prober again, so a host that begins answering ICMP is noticed.
 
+`probe.exclude` lists prefixes and origin ASNs that no source may probe, and `probe.per_asn_pps` caps the probe and trace packets per second toward one destination ASN (#203, [CONFIG.md](CONFIG.md#probeexclude)). The `probe_asns` report on `/reports.html` shows the probes per destination ASN per day, so a complaint can be checked against what was sent. Give each `source_ip` a reverse DNS name that says what it is, and a TXT record at that name with a contact, so a network that sees the packets can find you before it files an abuse report. For example, with `192.0.2.11` as a probe source:
+
+```
+11.2.0.192.in-addr.arpa.  PTR  probe-1.packeteer.example.net.
+probe-1.packeteer.example.net.  A    192.0.2.11
+probe-1.packeteer.example.net.  TXT  "Packeteer route performance probes (ICMP, TCP SYN, UDP), a few packets per prefix per minute. Contact noc@example.net to opt out."
+```
+
+Keep the names and the contact current, and add the network that asks to `probe.exclude`.
+
 The memory is capped, and a host that leaves the probe set is forgotten. Nothing is announced. An `outage` source watches completed rounds. When several prefixes that share an ASN (native path, another provider's learned path, or a traceroute hop's origin in the learned RIB), or that fail on one provider only, degrade together, it re-queues them and emits `outage.as` or `outage.circuit` to the configured notifiers. One noisy prefix does not. The re-queue is capped and is not an announcement. None of these announce a route. The global packet rate limit still applies. Details are in [docs/PLUGINS.md](PLUGINS.md).
 
 ## Suggest, then inject

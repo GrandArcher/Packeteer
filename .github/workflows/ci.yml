@@ -1077,6 +1077,12 @@ jobs:
           rep 'improvements?days=30&ip_version=6' | jq -e '.total == 0 and (.rows | length) == 0'
           rep 'improvements?days=30&sort=prefix&limit=1' | jq -e '.total == 3 and (.rows | length) == 1 and .rows[0].prefix == "192.0.2.0/24"'
           rep 'providers?days=30&provider=lab-b' | jq -e '(.rows | length) == 1 and .rows[0].provider == "lab-b"'
+          # Probes per destination ASN per day (#203): the seed has AS64496 on
+          # two prefixes (400 probes a day) and AS64497 on one (200), five days.
+          rep 'probe_asns?days=30' | jq -e '.total == 10 and (.rows | length) == 10 and .rows[0].origin_asn == 64496 and .rows[0].prefixes == 2 and .rows[0].probes == 400 and .rows[1].origin_asn == 64497 and .rows[1].probes == 200'
+          rep 'probe_asns?days=30&asn=AS64497' | jq -e '.total == 5 and ([.rows[].probes] | unique) == [200]'
+          rep 'probe_asns?days=30&format=csv' | head -n 1 | grep -qx 'day,origin_asn,prefixes,probes,failed'
+          test "$(code 'probe_asns?cause=cost')" = 400
           # Unknown parameters, filters a report does not take, and bad values are refused.
           for q in 'improvements?colour=red' 'summary?cause=cost' 'timeseries?provider=lab-a' 'improvements?cause=nope' 'improvements?ip_version=5' \
             'improvements?sort=nope' 'improvements?order=desc' 'improvements?days=7&from=2026-01-01' 'improvements?format=pdf'; do
@@ -1115,6 +1121,8 @@ jobs:
             --absent 'href="/prefix/198.51.100.0/24"' 'Cannot reach'
           bash lab/ui-smoke.sh 'http://127.0.0.1:18208/reports.html?report=summary&days=7' 'id="rf-provider-label"' 'id="rf-cause-label" hidden=""' 'Showing 1 of 1 rows' --absent 'Cannot reach' 'id="rf-provider-label" hidden=""'
           bash lab/ui-smoke.sh 'http://127.0.0.1:18208/reports.html?report=summary&cause=cost' 'the summary report has no cause filter' --absent 'Cannot reach' 'Showing'
+          bash lab/ui-smoke.sh 'http://127.0.0.1:18208/reports.html?report=probe_asns&days=30' '>Probes by ASN<' 'Showing 10 of 10 rows' 'href="/prefixes.html?asn=64496"' \
+            'href="/prefixes.html?asn=64497"' 'id="rf-cause-label" hidden=""' --absent 'Cannot reach' 'History is off'
           kill "$proxy"
           # Headless Chrome cannot click, so uiproxy adds a driver to
           # /reports.html. It sorts the Prefix column twice, filters by cause,

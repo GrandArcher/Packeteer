@@ -119,6 +119,13 @@ type Options struct {
 	// all silent from each provider's source and scores that provider at
 	// its own highest stable hop (#123). Nil disables it.
 	Indirect *Indirect
+	// Exclude is probe.exclude (#203). Nil or empty leaves every target
+	// alone. An excluded prefix, address, or origin ASN gets no packet
+	// from any source, retained improvement, or manual queue entry.
+	Exclude *Exclusion
+	// PerASN is probe.per_asn_pps (#203), waited on before Limiter by the
+	// prober chain and indirect traces. Nil is no per-ASN cap.
+	PerASN *ASNLimits
 	// OnBatch, when set, receives the results a round stored, with Share
 	// filled, after OnResult. It must not block (herd hands off to a
 	// bounded queue). Results stored in the engine never carry Share.
@@ -375,6 +382,9 @@ func New(providers []Provider, probers []NamedProber, sources []NamedSource, opt
 	}
 	if err := validIndirect(opt.Indirect); err != nil {
 		return nil, err
+	}
+	if opt.Exclude != nil && len(opt.Exclude.ASNs) > 0 && opt.Exclude.Origin == nil {
+		return nil, errors.New("probe: excluded ASNs need an origin lookup")
 	}
 	if opt.Workers < 1 {
 		opt.Workers = 1
@@ -782,7 +792,38 @@ func (e *Engine) gatherTargets(ctx context.Context) ([]plugin.Target, bool) {
 		e.applyManual(&out)
 		e.dropExchangeLANs(&out)
 	}
+	// Exclusion is not a judgment about which prefixes exist, so a partial
+	// list is filtered too.
+	e.dropExcluded(&out)
 	return out, incomplete
+}
+
+// dropExcluded removes probe.exclude targets (#203) after keepImproved,
+// applyUrgent, and applyManual, so neither a retained improvement nor the
+// operator's queue can bring one back.
+func (e *Engine) dropExcluded(out *[]plugin.Target) {
+	x := e.opt.Exclude
+	if out == nil || x.Empty() || len(*out) == 0 {
+		return
+	}
+	next, dropped := exchange.DropNormalized(*out, x.Prefix, x.Addr)
+	if dropped == 0 {
+		return
+	}
+	e.log.Debug("dropped probe targets listed in probe.exclude", "dropped", dropped, "kept", len(next))
+	*out = next
+}
+
+// onLAN reports whether a probe address sits on an exchange peering LAN
+// (#145).
+func (e *Engine) onLAN(a netip.Addr) bool {
+	return exchange.ContainsAddr(e.opt.ExchangeLANs, a)
+}
+
+// avoidAddr reports whether a probe address sits on a peering LAN or in
+// probe.exclude (#203).
+func (e *Engine) avoidAddr(a netip.Addr) bool {
+	return e.onLAN(a) || e.opt.Exclude.Addr(a)
 }
 
 // dropExchangeLANs removes prefixes and pinned hosts that sit on a peering
@@ -1129,11 +1170,11 @@ func (e *Engine) runRound(ctx context.Context, allow func(plugin.Target) bool, m
 				continue // provider cannot reach this address family
 			}
 			pin, candidates := targetProbeAddrs(t)
-			hosts := omitLANHosts(ProbeHosts(t.Prefix, pin, candidates, p.NextHop, p.Source), p.NextHop, e.opt.ExchangeLANs)
+			hosts := omitHosts(ProbeHosts(t.Prefix, pin, candidates, p.NextHop, p.Source), p.NextHop, e.onLAN, e.opt.Exclude.Addr)
 			if len(hosts) == 0 {
 				continue
 			}
-			jobs = append(jobs, job{provider: p, target: t, hosts: hosts, subs: jobSubranges(t, e.opt.ExchangeLANs)})
+			jobs = append(jobs, job{provider: p, target: t, hosts: hosts, subs: jobSubranges(t, e.avoidAddr)})
 		}
 	}
 	// Targets exist but none are due. Keep stored results and let the
@@ -1759,6 +1800,12 @@ func (e *Engine) probeOne(ctx context.Context, p Provider, prefix netip.Prefix, 
 		res.Err, res.Time = "no packets", e.opt.Now()
 		return res, false
 	}
+	// The target list already left these out; this catches an indirect
+	// hop and an origin the RIB changed since the round began (#203).
+	if e.opt.Exclude.Addr(host) {
+		res.Err, res.Time = "excluded by probe.exclude", e.opt.Now()
+		return res, false
+	}
 	sem := e.sem(host)
 	select {
 	case sem <- struct{}{}:
@@ -1780,6 +1827,10 @@ func (e *Engine) runChain(ctx context.Context, res Result, p Provider, count, st
 	var fallback *Result
 	for i := start; i < len(e.probers); i++ {
 		pr := e.probers[i]
+		if err := e.opt.PerASN.Wait(ctx, host, count); err != nil {
+			errs = append(errs, fmt.Errorf("rate limit: %w", err))
+			break
+		}
 		if e.opt.Limiter != nil {
 			if err := e.opt.Limiter.WaitN(ctx, count); err != nil {
 				errs = append(errs, fmt.Errorf("rate limit: %w", err))

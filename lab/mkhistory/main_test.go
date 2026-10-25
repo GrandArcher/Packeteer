@@ -34,7 +34,22 @@ func TestSeedFillsEveryBucket(t *testing.T) {
 }
 
 func historyFrom(b plugin.HistoryBatch) plugin.History {
-	return plugin.History{Buckets: b.Buckets, Improvements: b.Improvements}
+	return plugin.History{Buckets: b.Buckets, Improvements: b.Improvements, Prefixes: b.Prefixes}
+}
+
+// The probes-by-ASN smoke step (#203) reads two rows a day: AS64496 with
+// two prefixes and 400 probes, AS64497 with one and 200.
+func TestSeedGivesProbesByASN(t *testing.T) {
+	now := time.Date(2026, 10, 10, 13, 0, 0, 0, time.UTC)
+	rep, err := history.Build(historyFrom(seed(now)), history.Query{Name: history.ReportProbeASNs, From: now.Add(-30 * 24 * time.Hour), To: now.Add(time.Hour), Now: now, Limit: 100})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows := rep.Rows.([]history.ProbeASNRow)
+	if len(rows) != 2*days || rows[0].Day != "2026-10-10" || rows[0].OriginASN != 64496 || rows[0].Prefixes != 2 || rows[0].Probes != 400 ||
+		rows[1].OriginASN != 64497 || rows[1].Prefixes != 1 || rows[1].Probes != 200 {
+		t.Fatalf("probe_asns = %+v", rows)
+	}
 }
 
 // The commit seed covers the longest range of the page with samples for

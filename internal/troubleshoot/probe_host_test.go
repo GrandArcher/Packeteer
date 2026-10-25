@@ -266,13 +266,28 @@ func TestProbeIndirectTracePacketsWaitOnThePacketBudget(t *testing.T) {
 	target := addr("203.0.113.9")
 	pace := &pacer{}
 	tr := &pacedTracer{packets: 3}
+	// probe.per_asn_pps (#203): every trace packet is counted toward the
+	// target's origin ASN. The cap is high so nothing sleeps.
+	var mu sync.Mutex
+	asked := map[netip.Addr]int{}
+	perASN := probe.NewASNLimits(1000, 1000, func(p netip.Prefix) uint32 {
+		mu.Lock()
+		asked[p.Addr()]++
+		mu.Unlock()
+		return 64500
+	})
 	tl := New(Options{Enabled: true, Providers: provs, Probers: []probe.NamedProber{{Name: "fake", Prober: &replyFrom{}}},
-		Packets: 2, Timeout: 10 * time.Millisecond, Indirect: tr, PacketLimiter: pace})
+		Packets: 2, Timeout: 10 * time.Millisecond, Indirect: tr, PacketLimiter: pace, PerASN: perASN})
 	if _, err := tl.Probe(context.Background(), target.String()); err != nil {
 		t.Fatal(err)
 	}
 	if tr.calls.Load() != int64(len(provs)) || pace.n.Load() != int64(len(provs)*tr.packets) {
 		t.Fatalf("traces %d, paced packets %d: want one trace per silent provider and one wait per packet", tr.calls.Load(), pace.n.Load())
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(asked) != 1 || asked[target] != len(provs)*tr.packets {
+		t.Fatalf("per-ASN waits = %v, want %d toward %s", asked, len(provs)*tr.packets, target)
 	}
 }
 
