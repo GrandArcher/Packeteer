@@ -2,8 +2,10 @@ package probe
 
 import (
 	"context"
+	"fmt"
 	"net/netip"
 	"sync"
+	"time"
 
 	"golang.org/x/time/rate"
 
@@ -58,13 +60,18 @@ func (x *Exclusion) asnOut(p netip.Prefix) bool {
 // is probed next.
 const maxASNLimiters = 4096
 
-// asnLimits is probe.per_asn_pps: one token bucket per destination origin
-// ASN, waited on before the global limiter so a capped ASN never holds a
-// global token while it waits. A destination with no learned origin is
-// not capped here; the global limit still applies to it.
-type asnLimits struct {
+// ASNLimits is probe.per_asn_pps (#203): one token bucket per destination
+// origin ASN. Every sender of packets toward a destination waits on it
+// before the global limiter, so a capped ASN never holds a global token
+// while it waits: the prober chain, probe.indirect traces, the traceroute
+// source, and the troubleshooting indirect fallback share one set. A
+// destination with no learned origin is not capped here; the global limit
+// still applies to it. A nil ASNLimits waits for nothing.
+type ASNLimits struct {
 	pps, burst int
 	origin     func(netip.Prefix) uint32
+	now        func() time.Time
+	sleep      func(context.Context, time.Duration) error
 
 	mu   sync.Mutex
 	tick uint64
@@ -76,13 +83,20 @@ type asnLimiter struct {
 	used uint64
 }
 
-func newASNLimits(pps, burst int, origin func(netip.Prefix) uint32) *asnLimits {
-	return &asnLimits{pps: pps, burst: max(burst, pps), origin: origin, m: map[uint32]*asnLimiter{}}
+// NewASNLimits caps each origin ASN at pps packets per second with a burst
+// of at least pps. burst is the most packets one wait asks for. Nil when
+// pps is not positive (no per-ASN cap).
+func NewASNLimits(pps, burst int, origin func(netip.Prefix) uint32) *ASNLimits {
+	if pps <= 0 {
+		return nil
+	}
+	return &ASNLimits{pps: pps, burst: max(burst, pps), origin: origin, now: time.Now, sleep: sleepCtx,
+		m: map[uint32]*asnLimiter{}}
 }
 
-// wait blocks until count packets toward host fit that ASN's cap.
-func (l *asnLimits) wait(ctx context.Context, host netip.Addr, count int) error {
-	if l == nil || !host.IsValid() {
+// Wait blocks until count packets toward host fit that ASN's cap.
+func (l *ASNLimits) Wait(ctx context.Context, host netip.Addr, count int) error {
+	if l == nil || !host.IsValid() || l.origin == nil {
 		return nil
 	}
 	host = host.Unmap()
@@ -90,10 +104,34 @@ func (l *asnLimits) wait(ctx context.Context, host netip.Addr, count int) error 
 	if asn == 0 {
 		return nil
 	}
-	return l.limiter(asn).WaitN(ctx, count)
+	now := l.now()
+	r := l.limiter(asn).ReserveN(now, count)
+	if !r.OK() {
+		return fmt.Errorf("%d packets exceed the per-ASN burst %d", count, l.burst)
+	}
+	d := r.DelayFrom(now)
+	if d <= 0 {
+		return nil
+	}
+	if err := l.sleep(ctx, d); err != nil {
+		r.CancelAt(l.now())
+		return err
+	}
+	return nil
 }
 
-func (l *asnLimits) limiter(asn uint32) *rate.Limiter {
+func sleepCtx(ctx context.Context, d time.Duration) error {
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-t.C:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (l *ASNLimits) limiter(asn uint32) *rate.Limiter {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.tick++

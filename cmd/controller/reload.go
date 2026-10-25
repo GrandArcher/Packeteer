@@ -371,8 +371,11 @@ type reloader struct {
 	mit        *mitigation.Controller
 	flowSpecUp bool
 
-	plugins  *pluginhost.Set
-	engine   *probe.Engine
+	plugins *pluginhost.Set
+	engine  *probe.Engine
+	// perASN is the probe.per_asn_pps set the engine was built with; new
+	// traceroute sources share it.
+	perASN   *probe.ASNLimits
 	decider  *policy.Engine
 	fed      *fedState
 	col      *httpapi.Collector
@@ -555,6 +558,7 @@ func (r *reloader) applyOnline(ctx context.Context, next *config.Config, online 
 			wirePrefixLookup(r.plugins, r.rib)
 			wireExchangeLANs(next, r.plugins)
 			wireProbeExclusion(next, r.plugins, r.rib)
+			wirePacketWait(r.plugins, r.perASN)
 			wireLearnedRoutes(r.plugins, r.rib)
 			wireOutage(r.plugins, r.engine, r.rib, r.dispatch)
 		}

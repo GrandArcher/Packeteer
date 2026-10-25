@@ -123,12 +123,9 @@ type Options struct {
 	// alone. An excluded prefix, address, or origin ASN gets no packet
 	// from any source, retained improvement, or manual queue entry.
 	Exclude *Exclusion
-	// PerASNPPS caps packets per second toward one destination origin ASN
-	// (#203), waited on before Limiter. Zero is off. It needs Origin.
-	PerASNPPS int
-	// Origin is the origin ASN of the longest learned route covering a
-	// prefix (a host is its own /32 or /128), or 0 when none is known.
-	Origin func(netip.Prefix) uint32
+	// PerASN is probe.per_asn_pps (#203), waited on before Limiter by the
+	// prober chain and indirect traces. Nil is no per-ASN cap.
+	PerASN *ASNLimits
 	// OnBatch, when set, receives the results a round stored, with Share
 	// filled, after OnResult. It must not block (herd hands off to a
 	// bounded queue). Results stored in the engine never carry Share.
@@ -223,8 +220,6 @@ type Engine struct {
 	probers   []NamedProber
 	sources   []NamedSource
 	opt       Options
-	// asnLim is the probe.per_asn_pps bucket set; nil when it is off.
-	asnLim *asnLimits
 	// sched overrides interval, timeout, packets, and loss-retry timing
 	// after a reload (#128). Nil keeps Options, which tests mutate directly.
 	sched atomic.Pointer[Timing]
@@ -388,12 +383,6 @@ func New(providers []Provider, probers []NamedProber, sources []NamedSource, opt
 	if err := validIndirect(opt.Indirect); err != nil {
 		return nil, err
 	}
-	if opt.PerASNPPS < 0 {
-		return nil, errors.New("probe: per-ASN packet rate must not be negative")
-	}
-	if opt.PerASNPPS > 0 && opt.Origin == nil {
-		return nil, errors.New("probe: per-ASN packet rate needs an origin lookup")
-	}
 	if opt.Exclude != nil && len(opt.Exclude.ASNs) > 0 && opt.Exclude.Origin == nil {
 		return nil, errors.New("probe: excluded ASNs need an origin lookup")
 	}
@@ -417,9 +406,6 @@ func New(providers []Provider, probers []NamedProber, sources []NamedSource, opt
 		srcDown: map[string]string{}, pathDown: map[string]string{},
 		wake: make(chan struct{}, 1), indCache: map[key]indirectHop{}, indQueued: map[key]indirectReq{},
 		indWake: make(chan struct{}, 1)}
-	if opt.PerASNPPS > 0 {
-		e.asnLim = newASNLimits(opt.PerASNPPS, max(opt.Packets, opt.RetryPackets), opt.Origin)
-	}
 	now := opt.Now()
 	for _, p := range providers {
 		e.status[p.Name] = ProviderStatus{Name: p.Name, Source: p.Source, Up: true, Since: now}
@@ -805,8 +791,10 @@ func (e *Engine) gatherTargets(ctx context.Context) ([]plugin.Target, bool) {
 		e.applyUrgent(&out)
 		e.applyManual(&out)
 		e.dropExchangeLANs(&out)
-		e.dropExcluded(&out)
 	}
+	// Exclusion is not a judgment about which prefixes exist, so a partial
+	// list is filtered too.
+	e.dropExcluded(&out)
 	return out, incomplete
 }
 
@@ -826,10 +814,16 @@ func (e *Engine) dropExcluded(out *[]plugin.Target) {
 	*out = next
 }
 
-// avoidAddr reports whether a probe address sits on an exchange peering
-// LAN (#145) or in probe.exclude (#203).
+// onLAN reports whether a probe address sits on an exchange peering LAN
+// (#145).
+func (e *Engine) onLAN(a netip.Addr) bool {
+	return exchange.ContainsAddr(e.opt.ExchangeLANs, a)
+}
+
+// avoidAddr reports whether a probe address sits on a peering LAN or in
+// probe.exclude (#203).
 func (e *Engine) avoidAddr(a netip.Addr) bool {
-	return exchange.ContainsAddr(e.opt.ExchangeLANs, a) || e.opt.Exclude.Addr(a)
+	return e.onLAN(a) || e.opt.Exclude.Addr(a)
 }
 
 // dropExchangeLANs removes prefixes and pinned hosts that sit on a peering
@@ -1176,7 +1170,7 @@ func (e *Engine) runRound(ctx context.Context, allow func(plugin.Target) bool, m
 				continue // provider cannot reach this address family
 			}
 			pin, candidates := targetProbeAddrs(t)
-			hosts := omitHosts(ProbeHosts(t.Prefix, pin, candidates, p.NextHop, p.Source), p.NextHop, e.avoidAddr)
+			hosts := omitHosts(ProbeHosts(t.Prefix, pin, candidates, p.NextHop, p.Source), p.NextHop, e.onLAN, e.opt.Exclude.Addr)
 			if len(hosts) == 0 {
 				continue
 			}
@@ -1833,7 +1827,7 @@ func (e *Engine) runChain(ctx context.Context, res Result, p Provider, count, st
 	var fallback *Result
 	for i := start; i < len(e.probers); i++ {
 		pr := e.probers[i]
-		if err := e.asnLim.wait(ctx, host, count); err != nil {
+		if err := e.opt.PerASN.Wait(ctx, host, count); err != nil {
 			errs = append(errs, fmt.Errorf("rate limit: %w", err))
 			break
 		}

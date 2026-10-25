@@ -26,7 +26,7 @@ import (
 // sources and prober chain with the engine. On-demand results go back to
 // the HTTP caller only. Optimize is the one write: it adds a learned prefix
 // to the engine's probe targets (wired through SetQueue).
-func newTools(cfg *config.Config, plugins *pluginhost.Set, lim *rate.Limiter, view func() *rib.View) (*troubleshoot.Tools, error) {
+func newTools(cfg *config.Config, plugins *pluginhost.Set, lim *rate.Limiter, perASN *probe.ASNLimits, view func() *rib.View) (*troubleshoot.Tools, error) {
 	var providers []probe.Provider
 	for _, p := range cfg.Providers {
 		if cfg.Remote(p) {
@@ -62,8 +62,9 @@ func newTools(cfg *config.Config, plugins *pluginhost.Set, lim *rate.Limiter, vi
 		Reverse:   reverseName,
 		Indirect:  indirectTracer(cfg, probeExclusion(cfg, view)),
 		Limiter:   rate.NewLimiter(rate.Every(time.Minute/time.Duration(rpm)), min(rpm, 3)),
-		// The indirect fallback trace packets share the engine's budget.
+		// The indirect fallback trace packets share the engine's budgets.
 		PacketLimiter: lim,
+		PerASN:        perASN,
 		ExchangeLANs:  exchangeLANPrefixes(cfg),
 	}
 	if plugins.Whois != nil {
@@ -85,7 +86,7 @@ func reverseName(ctx context.Context, a netip.Addr) string {
 	return strings.TrimSuffix(names[0], ".")
 }
 
-func newEngine(cfg *config.Config, plugins *pluginhost.Set, log *slog.Logger, onRound func(), onProbe func(probe.Result), onBatch func([]probe.Result), lim *rate.Limiter, view func() *rib.View) (*probe.Engine, error) {
+func newEngine(cfg *config.Config, plugins *pluginhost.Set, log *slog.Logger, onRound func(), onProbe func(probe.Result), onBatch func([]probe.Result), lim *rate.Limiter, perASN *probe.ASNLimits, view func() *rib.View) (*probe.Engine, error) {
 	var providers []probe.Provider
 	for _, p := range cfg.Providers {
 		if cfg.Remote(p) {
@@ -129,8 +130,7 @@ func newEngine(cfg *config.Config, plugins *pluginhost.Set, log *slog.Logger, on
 		ExchangeLANs:         exchangeLANPrefixes(cfg),
 		Indirect:             indirectOptions(cfg, excl),
 		Exclude:              excl,
-		PerASNPPS:            cfg.Probe.PerASNPPS,
-		Origin:               originLookup(view),
+		PerASN:               perASN,
 		Limiter:              lim,
 		Logger:               log,
 		OnResult:             onResult,
@@ -151,6 +151,13 @@ func packetLimiter(cfg *config.Config) *rate.Limiter {
 		burst = need
 	}
 	return rate.NewLimiter(rate.Limit(cfg.Probe.RateLimitPPS), burst)
+}
+
+// perASNLimits is probe.per_asn_pps (#203). The probe engine, the
+// troubleshooting indirect fallback, and the traceroute sources share it,
+// so their packets toward one origin ASN add up under one cap. Nil when off.
+func perASNLimits(cfg *config.Config, view func() *rib.View) *probe.ASNLimits {
+	return probe.NewASNLimits(cfg.Probe.PerASNPPS, max(cfg.Probe.Packets, cfg.Probe.RetryPackets), originLookup(view))
 }
 
 // originLookup is the origin ASN of the longest learned route covering a

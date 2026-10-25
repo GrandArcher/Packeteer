@@ -450,6 +450,27 @@ func wireProbeExclusion(cfg *config.Config, plugins *pluginhost.Set, view *rib.V
 	}
 }
 
+// packetWaitSetter is implemented by target sources that send packets of
+// their own toward a destination and must count them against
+// probe.per_asn_pps (#203).
+type packetWaitSetter interface {
+	SetPacketWait(func(ctx context.Context, dest netip.Addr) error)
+}
+
+// wirePacketWait hands the engine's per-ASN cap to the sources that trace
+// on their own, before they start.
+func wirePacketWait(plugins *pluginhost.Set, perASN *probe.ASNLimits) {
+	if plugins == nil || perASN == nil {
+		return
+	}
+	wait := func(ctx context.Context, dest netip.Addr) error { return perASN.Wait(ctx, dest, 1) }
+	for _, src := range plugins.SourcesSnapshot() {
+		if s, ok := src.Plugin.(packetWaitSetter); ok {
+			s.SetPacketWait(wait)
+		}
+	}
+}
+
 func exchangeLANPrefixes(cfg *config.Config) []netip.Prefix {
 	if cfg == nil {
 		return nil

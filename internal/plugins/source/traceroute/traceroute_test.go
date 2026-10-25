@@ -491,3 +491,38 @@ targets:
 		t.Fatalf("LAN drops = %d, want 0", got)
 	}
 }
+
+// probe.per_asn_pps (#203): every discovery packet waits with the traced
+// destination before it is sent, and a wait error ends that trace.
+func TestDiscoverWaitsPerDestination(t *testing.T) {
+	s := must(t, `
+timeout: 1ms
+probes: 2
+min_replies: 2
+max_hops: 4
+interval: 1s
+targets:
+  - {prefix: 198.51.100.0/24, host: 198.51.100.1}
+  - {prefix: 203.0.113.0/24, host: 203.0.113.1}
+`)
+	s.now = func() time.Time { return time.Unix(1000, 0) }
+	fake := &perTTL{}
+	s.hop = fake
+	waits := map[netip.Addr]int{}
+	s.SetPacketWait(func(_ context.Context, dest netip.Addr) error {
+		waits[dest]++
+		if dest == a("203.0.113.1") {
+			return context.DeadlineExceeded
+		}
+		return nil
+	})
+	s.discover(context.Background())
+	// The first destination is walked to max_hops (4 TTLs, 2 probes each);
+	// the second is refused before its first packet.
+	if waits[a("198.51.100.1")] != 8 || waits[a("203.0.113.1")] != 1 || len(waits) != 2 {
+		t.Fatalf("waits = %v", waits)
+	}
+	if got := fake.calls.Load(); got != 8 {
+		t.Fatalf("packets sent = %d, want 8", got)
+	}
+}

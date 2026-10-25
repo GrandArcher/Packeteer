@@ -1,13 +1,34 @@
 package main
 
 import (
+	"context"
 	"net/netip"
 	"slices"
 	"strings"
 	"testing"
 
 	"github.com/GrandArcher/Packeteer/internal/config"
+	"github.com/GrandArcher/Packeteer/internal/pluginhost"
+	"github.com/GrandArcher/Packeteer/internal/plugins/source/traceroute"
 	"github.com/GrandArcher/Packeteer/internal/rib"
+	"github.com/GrandArcher/Packeteer/pkg/plugin"
+)
+
+// waitSource is a target source that sends packets of its own.
+type waitSource struct {
+	plugin.Base
+	wait func(context.Context, netip.Addr) error
+}
+
+func (*waitSource) Targets(context.Context) ([]plugin.Target, error) { return nil, nil }
+
+func (w *waitSource) SetPacketWait(fn func(context.Context, netip.Addr) error) { w.wait = fn }
+
+// The traceroute source sends discovery packets of its own, so the wiring
+// must reach it for both probe.exclude and probe.per_asn_pps.
+var (
+	_ probeExcludeSetter = (*traceroute.Source)(nil)
+	_ packetWaitSetter   = (*traceroute.Source)(nil)
 )
 
 const excludeYAML = `
@@ -71,6 +92,25 @@ func TestProbeExclusionWiring(t *testing.T) {
 	}
 	if probeExclusion(plain, nil) != nil {
 		t.Fatal("exclusion built from an empty list")
+	}
+	perASN := perASNLimits(cfg, nil)
+	if perASN == nil || perASNLimits(plain, nil) != nil {
+		t.Fatal("per-ASN limiter not built from probe.per_asn_pps alone")
+	}
+	// Self-tracing sources get the shared cap; nothing is installed when
+	// it is off.
+	tracer := &waitSource{}
+	set := &pluginhost.Set{Sources: []pluginhost.Instance[plugin.TargetSource]{{Name: "tr", Type: "traceroute", Plugin: tracer}}}
+	wirePacketWait(set, nil)
+	if tracer.wait != nil {
+		t.Fatal("packet wait installed with no per-ASN cap")
+	}
+	wirePacketWait(set, perASN)
+	if tracer.wait == nil {
+		t.Fatal("packet wait not installed")
+	}
+	if err := tracer.wait(context.Background(), netip.MustParseAddr("198.51.100.1")); err != nil {
+		t.Fatal(err)
 	}
 	restart, online := classify(plain, cfg)
 	if !slices.Contains(restart, "probe.per_asn_pps") || !slices.Contains(restart, "probe.exclude") || len(online) != 0 {

@@ -109,6 +109,7 @@ type Source struct {
 	mu       sync.Mutex
 	lans     []netip.Prefix
 	excluded func(netip.Prefix, netip.Addr) bool
+	wait     func(context.Context, netip.Addr) error
 	cached   []plugin.Target
 	cachedAt time.Time
 	have     bool
@@ -305,6 +306,15 @@ func (s *Source) SetExcluded(fn func(prefix netip.Prefix, host netip.Addr) bool)
 	s.mu.Unlock()
 }
 
+// SetPacketWait installs probe.per_asn_pps (#203): wait runs before every
+// discovery packet with the traced destination. The controller calls this
+// before Start.
+func (s *Source) SetPacketWait(wait func(ctx context.Context, dest netip.Addr) error) {
+	s.mu.Lock()
+	s.wait = wait
+	s.mu.Unlock()
+}
+
 // skip reports whether a hop may not become the probe host: a peering LAN
 // address or an excluded one.
 func (s *Source) skip(a netip.Addr) bool {
@@ -478,7 +488,14 @@ func cloneTargets(in []plugin.Target) []plugin.Target {
 func (s *Source) trace(ctx context.Context, hop hopper, dest netip.Addr) (netip.Addr, bool, error) {
 	t := Tracer{MaxHops: s.maxHops, Probes: s.probes, MinReplies: s.minReplies, Port: s.port,
 		Timeout: s.timeout, Hop: hop.Probe, Skip: s.skip}
-	return t.Trace(ctx, s.src, dest, nil)
+	s.mu.Lock()
+	wait := s.wait
+	s.mu.Unlock()
+	var each func(context.Context) error
+	if wait != nil {
+		each = func(c context.Context) error { return wait(c, dest) }
+	}
+	return t.Trace(ctx, s.src, dest, each)
 }
 
 // HopFunc sends one TTL-limited probe. reached means the reply is
@@ -496,7 +513,8 @@ type Tracer struct {
 	Timeout    time.Duration
 	// Hop sends one probe. Nil uses the built-in Linux traceroute.
 	Hop HopFunc
-	// Skip, when non-nil, ignores a hop (an exchange peering LAN).
+	// Skip, when non-nil, ignores a hop (an exchange peering LAN or
+	// probe.exclude).
 	Skip func(netip.Addr) bool
 }
 

@@ -22,7 +22,7 @@ func TestTroubleshootWiring(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	tools, err := newTools(cfg, set, packetLimiter(cfg), nil)
+	tools, err := newTools(cfg, set, packetLimiter(cfg), nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -43,7 +43,7 @@ func TestTroubleshootWiring(t *testing.T) {
 	if set.Whois == nil || set.Whois.Type != "rdap" {
 		t.Fatalf("whois plugin not built: %+v", set.Whois)
 	}
-	tools, err = newTools(cfg, set, packetLimiter(cfg), nil)
+	tools, err = newTools(cfg, set, packetLimiter(cfg), nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

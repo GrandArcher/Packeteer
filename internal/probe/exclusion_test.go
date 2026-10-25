@@ -2,6 +2,7 @@ package probe
 
 import (
 	"context"
+	"maps"
 	"net/netip"
 	"slices"
 	"sort"
@@ -17,13 +18,11 @@ type recordingProber struct {
 	plugin.Base
 	mu      sync.Mutex
 	targets []netip.Addr
-	times   []time.Time
 }
 
 func (r *recordingProber) Probe(_ context.Context, req plugin.ProbeRequest) (plugin.ProbeResult, error) {
 	r.mu.Lock()
 	r.targets = append(r.targets, req.Target)
-	r.times = append(r.times, time.Now())
 	r.mu.Unlock()
 	return plugin.ProbeResult{Sent: req.Count, RTTs: ms(1)}, nil
 }
@@ -173,50 +172,71 @@ func TestExclusionRules(t *testing.T) {
 	}
 }
 
-func TestNewValidationExclusionAndCap(t *testing.T) {
+func TestNewRefusesExcludedASNsWithoutOrigin(t *testing.T) {
 	pr := []NamedProber{{Name: "p", Prober: &fakeProber{fn: ok(1)}}}
 	o := opts()
-	o.PerASNPPS = -1
-	if _, err := New([]Provider{provA}, pr, nil, o); err == nil {
-		t.Fatal("negative per-ASN rate accepted")
-	}
-	o = opts()
-	o.PerASNPPS = 10
-	if _, err := New([]Provider{provA}, pr, nil, o); err == nil {
-		t.Fatal("per-ASN rate without origin lookup accepted")
-	}
-	o = opts()
 	o.Exclude = &Exclusion{ASNs: map[uint32]bool{64500: true}}
 	if _, err := New([]Provider{provA}, pr, nil, o); err == nil {
 		t.Fatal("excluded ASNs without origin lookup accepted")
 	}
-	o = opts()
-	o.PerASNPPS = 10
-	o.Origin = func(netip.Prefix) uint32 { return 0 }
+	o.Exclude.Origin = func(netip.Prefix) uint32 { return 0 }
 	if _, err := New([]Provider{provA}, pr, nil, o); err != nil {
 		t.Fatal(err)
 	}
 }
 
+// frozenWaits records what a frozenASNLimits was asked.
+type frozenWaits struct {
+	mu     sync.Mutex
+	asked  map[netip.Addr]int
+	delays []time.Duration
+}
+
+func (f *frozenWaits) snapshot() (map[netip.Addr]int, []time.Duration) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return maps.Clone(f.asked), slices.Clone(f.delays)
+}
+
+// frozenASNLimits is an ASNLimits whose clock never moves. A wait does not
+// sleep; it records the delay its bucket asked for, so the schedule every
+// packet would keep is exact however the workers interleave.
+func frozenASNLimits(pps, burst int, origin func(netip.Prefix) uint32) (*ASNLimits, *frozenWaits) {
+	f := &frozenWaits{asked: map[netip.Addr]int{}}
+	t0 := time.Date(2026, 10, 25, 12, 0, 0, 0, time.UTC)
+	l := NewASNLimits(pps, burst, func(p netip.Prefix) uint32 {
+		f.mu.Lock()
+		f.asked[p.Addr()]++
+		f.mu.Unlock()
+		return origin(p)
+	})
+	l.now = func() time.Time { return t0 }
+	l.sleep = func(_ context.Context, d time.Duration) error {
+		f.mu.Lock()
+		f.delays = append(f.delays, d.Round(time.Millisecond))
+		f.mu.Unlock()
+		return nil
+	}
+	return l, f
+}
+
 // TestPerASNCapHoldsUnderLoad runs sixteen workers over three groups of
-// pinned hosts: two origin ASNs under a 20 pps cap and one with no learned
-// origin. No one-second window toward a capped ASN may hold more than the
-// burst plus one second of refill, the uncapped group finishes at once,
-// and every packet still passes the global limiter.
+// sixty pinned hosts: two origin ASNs under a 20 pps cap and one with no
+// learned origin. Each capped ASN lets its burst of 20 go at once and
+// spaces the other 40 at 50 ms, the uncapped group never waits, and every
+// packet still passes the global limiter.
 func TestPerASNCapHoldsUnderLoad(t *testing.T) {
 	const pps, perGroup = 20, 60
 	o := opts()
 	o.Packets = 1
 	o.Workers = 16
 	o.PerTargetConcurrency = 4
-	o.Interval = 10 * time.Second
-	o.PerASNPPS = pps
-	o.Origin = originIn(map[string]uint32{"198.51.100.0/24": 64500, "203.0.113.0/24": 64501})
+	perASN, waits := frozenASNLimits(pps, o.Packets, originIn(map[string]uint32{"198.51.100.0/24": 64500, "203.0.113.0/24": 64501}))
+	o.PerASN = perASN
 	global := &countingLimiter{}
 	o.Limiter = global
-	groups := map[string]uint32{"198.51.100.0/24": 64500, "203.0.113.0/24": 64501, "192.0.2.0/24": 0}
 	var targets []plugin.Target
-	for s := range groups {
+	for _, s := range []string{"198.51.100.0/24", "203.0.113.0/24", "192.0.2.0/24"} {
 		base := netip.MustParsePrefix(s).Addr().As4()
 		for i := 1; i <= perGroup; i++ {
 			base[3] = byte(i)
@@ -229,53 +249,132 @@ func TestPerASNCapHoldsUnderLoad(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	start := time.Now()
 	e.RunOnce(context.Background())
-	pr.mu.Lock()
-	defer pr.mu.Unlock()
-	if len(pr.targets) != 3*perGroup || global.total != 3*perGroup {
-		t.Fatalf("packets = %d, global tokens = %d, want %d", len(pr.targets), global.total, 3*perGroup)
+	if got := len(pr.seen()); got != 3*perGroup || global.total != 3*perGroup {
+		t.Fatalf("packets = %d, global tokens = %d, want %d", got, global.total, 3*perGroup)
 	}
-	byGroup := map[string][]time.Time{}
-	for i, a := range pr.targets {
-		for s := range groups {
-			if netip.MustParsePrefix(s).Contains(a) {
-				byGroup[s] = append(byGroup[s], pr.times[i])
-			}
+	asked, delays := waits.snapshot()
+	if len(asked) != 3*perGroup {
+		t.Fatalf("per-ASN waits named %d hosts, want every one of %d", len(asked), 3*perGroup)
+	}
+	var want []time.Duration
+	for k := 1; k <= perGroup-pps; k++ {
+		d := time.Duration(k) * time.Second / pps
+		want = append(want, d, d) // one per capped ASN
+	}
+	slices.Sort(delays)
+	if !slices.Equal(delays, want) {
+		t.Fatalf("waits = %v, want %v", delays, want)
+	}
+}
+
+// probe.indirect traces count every TTL packet against the destination's
+// origin ASN before the global limit (#203).
+func TestIndirectTracesWaitPerASN(t *testing.T) {
+	hop := twoPaths()
+	global := &countingLimiter{}
+	e, _ := indirectEngine(t, hop, &hopProber{}, global)
+	ctx := context.Background()
+	e.RunOnce(ctx)
+	// Attached after the round, so only trace packets reach it.
+	perASN, waits := frozenASNLimits(1, 1, originIn(map[string]uint32{"198.51.100.0/24": 64500}))
+	e.opt.PerASN = perASN
+	before := global.total
+	if n := e.IndirectPass(ctx); n != 2 {
+		t.Fatalf("pass finished %d traces, want 2", n)
+	}
+	sent := hop.total()
+	asked, delays := waits.snapshot()
+	if sent == 0 || asked[silentIn] != sent || len(asked) != 1 || global.total-before != sent {
+		t.Fatalf("trace packets %d, per-ASN waits %v, global tokens %d", sent, asked, global.total-before)
+	}
+	// One bucket at 1 pps with burst 1: every packet after the first waits
+	// one second longer than the one before it.
+	if len(delays) != sent-1 || delays[len(delays)-1] != time.Duration(sent-1)*time.Second {
+		t.Fatalf("delays = %v for %d packets", delays, sent)
+	}
+}
+
+func TestASNLimitsWait(t *testing.T) {
+	if NewASNLimits(0, 10, func(netip.Prefix) uint32 { return 64500 }) != nil {
+		t.Fatal("a zero cap built a limiter")
+	}
+	var off *ASNLimits
+	if err := off.Wait(context.Background(), netip.MustParseAddr("192.0.2.1"), 5); err != nil {
+		t.Fatal(err)
+	}
+	l, waits := frozenASNLimits(2, 2, func(netip.Prefix) uint32 { return 64500 })
+	host := netip.MustParseAddr("192.0.2.1")
+	if err := l.Wait(context.Background(), host, 3); err == nil {
+		t.Fatal("a wait larger than the burst passed")
+	}
+	if err := l.Wait(context.Background(), host, 2); err != nil {
+		t.Fatal(err)
+	}
+	// A cancelled wait gives its tokens back: the next one asks for the
+	// same delay instead of a longer one.
+	l.sleep = func(ctx context.Context, d time.Duration) error {
+		waits.mu.Lock()
+		waits.delays = append(waits.delays, d)
+		waits.mu.Unlock()
+		return context.Canceled
+	}
+	for range 2 {
+		if err := l.Wait(context.Background(), host, 1); err == nil {
+			t.Fatal("cancelled wait returned nil")
 		}
 	}
-	for s, asn := range groups {
-		ts := byGroup[s]
-		sort.Slice(ts, func(i, j int) bool { return ts[i].Before(ts[j]) })
-		span := ts[len(ts)-1].Sub(ts[0])
-		if asn == 0 {
-			if span > 500*time.Millisecond {
-				t.Fatalf("uncapped group %s took %s", s, span)
-			}
-			continue
-		}
-		// 60 packets at burst 20 and 20 per second need two seconds.
-		if span < 1500*time.Millisecond {
-			t.Fatalf("capped group %s (AS%d) finished in %s", s, asn, span)
-		}
-		for i := range ts {
-			n := 0
-			for j := i; j < len(ts) && ts[j].Sub(ts[i]) < time.Second; j++ {
-				n++
-			}
-			if n > 2*pps+1 {
-				t.Fatalf("AS%d: %d packets inside one second, cap %d burst %d", asn, n, pps, pps)
-			}
+	if _, d := waits.snapshot(); len(d) != 2 || d[0] != d[1] || d[0] != 500*time.Millisecond {
+		t.Fatalf("delays after cancel = %v", d)
+	}
+}
+
+// probe.exclude has no next_hop exemption (#203): a provider next hop in an
+// excluded origin ASN gets no packet, the target's own hosts are still
+// probed, and no sample is stored as refused.
+func TestExcludedNextHopNotProbed(t *testing.T) {
+	gw := netip.MustParseAddr("192.0.2.1")
+	p := provA
+	p.NextHop = gw
+	o := opts()
+	o.Exclude = &Exclusion{ASNs: map[uint32]bool{64500: true}, Origin: originIn(map[string]uint32{"192.0.2.0/24": 64500})}
+	pr := &recordingProber{}
+	e, err := New([]Provider{p}, []NamedProber{{Name: "p", Prober: pr}}, src(plugin.Target{Prefix: pfx1}), o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.RunOnce(context.Background())
+	seen := pr.seen()
+	if len(seen) == 0 || slices.Contains(seen, gw) {
+		t.Fatalf("probed %v; want the prefix hosts and not the excluded next hop %s", seen, gw)
+	}
+	for _, r := range e.Results() {
+		if r.Err != "" || !r.OK() {
+			t.Fatalf("result %+v", r)
 		}
 	}
-	// Two seconds of cap plus slack, well inside the ten-second round budget.
-	if took := time.Since(start); took > 9*time.Second {
-		t.Fatalf("round took %s", took)
+}
+
+// A round where a source timed out still drops probe.exclude targets from
+// the partial list (#203).
+func TestIncompleteRoundStillDropsExcluded(t *testing.T) {
+	o := opts()
+	o.Exclude = &Exclusion{Prefixes: []netip.Prefix{pfx2}}
+	static := &fakeSource{targets: []plugin.Target{{Prefix: pfx1}, {Prefix: pfx2}}}
+	slow := &fakeSource{err: context.DeadlineExceeded}
+	e, err := New([]Provider{provA}, []NamedProber{{Name: "p", Prober: &fakeProber{fn: ok(1)}}},
+		[]NamedSource{{Name: "static", Source: static}, {Name: "slow", Source: slow}}, o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ts, incomplete := e.gatherTargets(context.Background())
+	if !incomplete || len(ts) != 1 || ts[0].Prefix != pfx1 {
+		t.Fatalf("incomplete=%v targets=%+v", incomplete, ts)
 	}
 }
 
 func TestASNLimitsEvictLeastRecentlyUsed(t *testing.T) {
-	l := newASNLimits(5, 3, func(netip.Prefix) uint32 { return 0 })
+	l := NewASNLimits(5, 3, func(netip.Prefix) uint32 { return 0 })
 	if l.burst != 5 {
 		t.Fatalf("burst = %d, want the rate when it is larger than the packet count", l.burst)
 	}
@@ -294,7 +393,7 @@ func TestASNLimitsEvictLeastRecentlyUsed(t *testing.T) {
 		t.Fatal("least recently used ASN kept")
 	}
 	// No learned origin: nothing to wait on.
-	if err := l.wait(context.Background(), netip.MustParseAddr("192.0.2.1"), 100); err != nil {
+	if err := l.Wait(context.Background(), netip.MustParseAddr("192.0.2.1"), 100); err != nil {
 		t.Fatal(err)
 	}
 }

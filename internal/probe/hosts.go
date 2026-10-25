@@ -95,10 +95,11 @@ func ProbeHosts(prefix netip.Prefix, pin netip.Addr, candidates []netip.Addr, ga
 	return append(hosts, gateway)
 }
 
-// omitHosts removes addresses that avoid says not to probe: an exchange
-// peering LAN or probe.exclude. gateway is kept: it is the provider's
-// far-side next hop, probed on purpose, not a destination.
-func omitHosts(hosts []netip.Addr, gateway netip.Addr, avoid func(netip.Addr) bool) []netip.Addr {
+// omitHosts removes addresses on an exchange peering LAN (onLAN) or in
+// probe.exclude (excluded). gateway is exempt from onLAN only: it is the
+// provider's far-side next hop, probed on purpose, not an IX service.
+// probe.exclude means no packets at all, so an excluded gateway goes too.
+func omitHosts(hosts []netip.Addr, gateway netip.Addr, onLAN, excluded func(netip.Addr) bool) []netip.Addr {
 	if len(hosts) == 0 {
 		return hosts
 	}
@@ -108,7 +109,7 @@ func omitHosts(hosts []netip.Addr, gateway netip.Addr, avoid func(netip.Addr) bo
 	}
 	out := make([]netip.Addr, 0, len(hosts))
 	for _, h := range hosts {
-		if h.IsValid() && h.Unmap() != gw && avoid(h) {
+		if h.IsValid() && (h.Unmap() != gw && onLAN(h) || excluded(h)) {
 			continue
 		}
 		out = append(out, h)

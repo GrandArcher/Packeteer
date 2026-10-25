@@ -321,8 +321,8 @@ func (e *Engine) runIndirect(ctx context.Context) {
 // IndirectPass runs one background pass over the queued traces under
 // Indirect.Budget and returns how many traces finished. Each trace runs
 // from its provider's source address and every packet waits on the
-// global rate limit. Traces the budget did not reach stay queued. Run
-// calls it in the background; tests call it directly.
+// per-ASN cap and the global rate limit. Traces the budget did not reach
+// stay queued. Run calls it in the background; tests call it directly.
 func (e *Engine) IndirectPass(ctx context.Context) int {
 	if !e.indirectEnabled() {
 		return 0
@@ -338,14 +338,21 @@ func (e *Engine) IndirectPass(ctx context.Context) int {
 	if share < in.MinShare {
 		share = in.MinShare
 	}
-	var wait func(context.Context) error
-	if e.opt.Limiter != nil {
-		wait = func(c context.Context) error { return e.opt.Limiter.WaitN(c, 1) }
-	}
 	done := 0
 	for _, r := range reqs {
 		if bctx.Err() != nil {
 			break
+		}
+		// Every TTL packet heads for r.dst, so it counts against that
+		// destination's per-ASN cap as well as the global limit.
+		wait := func(c context.Context) error {
+			if err := e.opt.PerASN.Wait(c, r.dst, 1); err != nil {
+				return err
+			}
+			if e.opt.Limiter == nil {
+				return nil
+			}
+			return e.opt.Limiter.WaitN(c, 1)
 		}
 		tctx, tcancel := context.WithTimeout(sockmark.WithContext(bctx, r.provider.Marking), share)
 		var hops []netip.Addr
