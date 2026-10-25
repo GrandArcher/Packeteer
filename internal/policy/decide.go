@@ -101,6 +101,16 @@ func Decide(prev State, in Input, cfg Config, scorer plugin.Scorer, now time.Tim
 		return st, out
 	}
 
+	// A reordering reading counts for a prefix only when every provider
+	// measured for it has one (#224). A missing or stale reading is
+	// unknown; scoring it as zero would favour the path known least.
+	unread := map[netip.Prefix]bool{}
+	for _, r := range in.Results {
+		if _, ok := in.Reorder[r.Provider]; !ok {
+			unread[r.Prefix] = true
+		}
+	}
+
 	// Group usable measurements by prefix.
 	byPrefix := map[netip.Prefix][]Candidate{}
 	subs := map[netip.Prefix]map[netip.Prefix]*SubrangeDecision{}
@@ -112,6 +122,9 @@ func Decide(prev State, in Input, cfg Config, scorer plugin.Scorer, now time.Tim
 		c := Candidate{Provider: r.Provider, LossPct: r.Stats.LossPct, RTTAvg: r.Stats.RTTAvg, Jitter: r.Stats.Jitter, Usable: true,
 			RPKI: ans.State, RPKISource: ans.Source, RPKIUpdated: ans.Updated,
 			IRR: reg.State, IRRSource: reg.Source, IRRUpdated: reg.Updated, Confidence: r.Confidence}
+		if !unread[r.Prefix] {
+			c.ReorderPct = in.Reorder[r.Provider]
+		}
 		if problem, seen := in.Passive[r.Prefix]; seen && r.OK() && r.Provider == carrierOf(st, in, cfg, r.Prefix) {
 			c.Confidence = r.Confidence.WithPassive(problem == (r.Stats.LossPct > 0))
 		}
@@ -134,7 +147,7 @@ func Decide(prev State, in Input, cfg Config, scorer plugin.Scorer, now time.Tim
 			c.Usable, c.Why = false, "IRR not registered"
 		}
 		if c.Usable {
-			c.Score = scorer.Score(plugin.PathStats{Provider: r.Provider, LossPct: c.LossPct, RTTAvg: c.RTTAvg, Jitter: c.Jitter})
+			c.Score = scorer.Score(plugin.PathStats{Provider: r.Provider, LossPct: c.LossPct, RTTAvg: c.RTTAvg, Jitter: c.Jitter, ReorderPct: c.ReorderPct})
 		}
 		byPrefix[r.Prefix] = append(byPrefix[r.Prefix], c)
 		noteSubranges(subs, r, c, scorer)

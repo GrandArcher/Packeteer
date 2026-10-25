@@ -6,6 +6,7 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 
 ### Added
 
+- Packet reordering per provider path (RFC 4737) from TWAMP-Light trains to the shipped `packeteer-reflector`, or ICMP estimates: `probe.reorder`, `/api/reorder`, metrics, UI, `reorder_weight` (#224).
 - `probe.exclude` (prefixes and origin ASNs no source probes), `probe.per_asn_pps` (probe and trace packet cap per destination ASN), and the `probe_asns` report (#203).
 - Confidence on every probe sample and decision candidate (prober type, replies, hop, spread, passive agreement); opt-in `thresholds.require_evidence` refuses an ICMP-only performance move (#202).
 - Every decision lists its checks in order with value, limit, blocking gate, and a counterfactual: `GET /api/decisions/<prefix>`, a Why? panel on the prefix page, stored with each improvement (#201).
@@ -27,6 +28,10 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 - Federation: admins push `thresholds` or `policies` to every peer over mTLS (`POST /api/federation/push`); peers validate, apply online, refuse other sections, and audit (#137).
 - UI keyboard and screen reader access: Skip to content link on every page, 3 px focus ring, one h1 per page, labelled YAML editor; a browser smoke step checks them (#353).
 - Multi-POP: lab phase and unit test for a cut federation link (stale peer pruned after `max_age`, no steer or flapping, clean re-sync); behavior documented in docs/multi-pop.md (#308).
+
+### Changed
+
+- The `icmp` prober sends each run as one train at `packet_interval` without waiting for each reply; a reply counts until `timeout` after the last send (#224).
 
 ### Fixed
 

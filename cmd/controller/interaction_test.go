@@ -101,8 +101,8 @@ type ixDaemon struct {
 // community, hold_time 1s, one-second rounds) followed by body.
 func startIX(t *testing.T, edge *msEdge, body string) *ixDaemon {
 	t.Helper()
-	d := &ixDaemon{t: t, edge: edge, http: freePort(t), logs: &syncBuf{}, done: make(chan int, 1)}
-	cfg := fmt.Sprintf(`mode: inject
+	httpPort := freePort(t)
+	return runIX(t, edge, httpPort, fmt.Sprintf(`mode: inject
 asn: 64512
 router_id: 192.0.2.10
 packeteer_community: "64512:666"
@@ -117,7 +117,13 @@ bgp:
   neighbors:
     - {address: 127.0.0.1, port: %d, local_address: 127.0.0.2}
 announcer: {type: gobgp}
-`, d.http, edge.port) + body
+`, httpPort, edge.port)+body)
+}
+
+// runIX runs the controller on cfg, whose API listens on httpPort.
+func runIX(t *testing.T, edge *msEdge, httpPort int, cfg string) *ixDaemon {
+	t.Helper()
+	d := &ixDaemon{t: t, edge: edge, http: httpPort, logs: &syncBuf{}, done: make(chan int, 1)}
 	path := filepath.Join(t.TempDir(), "c.yaml")
 	if err := os.WriteFile(path, []byte(cfg), 0o600); err != nil {
 		t.Fatal(err)

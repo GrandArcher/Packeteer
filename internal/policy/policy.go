@@ -172,6 +172,12 @@ type Input struct {
 	// (#30). Their times follow that peer's probe schedule, so they do not
 	// show whether this instance's own probe round finished. Nil is none.
 	Remote map[string]bool
+	// Reorder is each provider path's RFC 4737 reordered ratio, in
+	// percent, from the reordering monitor's controlled responders (#224).
+	// A provider absent here has no fresh reading, and then no candidate
+	// of a prefix that provider was measured for carries a reading. ICMP
+	// estimates are never put here.
+	Reorder map[string]float64
 	// Passive is the span and flow sources' view of each prefix with TCP
 	// traffic in their window (#202): true when that traffic is over the
 	// source's problem thresholds. It rates the confidence of the sample
@@ -289,8 +295,12 @@ type Candidate struct {
 	LossPct  float64       `json:"loss_pct"`
 	RTTAvg   time.Duration `json:"rtt_avg"`
 	Jitter   time.Duration `json:"jitter"`
-	Usable   bool          `json:"usable"`
-	Why      string        `json:"why,omitempty"` // why not usable
+	// ReorderPct is the provider path's reordered ratio (#224), an input
+	// to the score only through the scorer's reorder_weight. Zero on every
+	// candidate when one of them has no fresh reading.
+	ReorderPct float64 `json:"reorder_pct"`
+	Usable     bool    `json:"usable"`
+	Why        string  `json:"why,omitempty"` // why not usable
 	// RPKI is the RFC 6811 origin-validation state of this provider's
 	// learned path for the prefix (#158). Display only unless
 	// Config.RPKIAvoidInvalid makes an invalid path unusable.

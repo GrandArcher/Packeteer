@@ -142,14 +142,8 @@ func newEngine(cfg *config.Config, plugins *pluginhost.Set, log *slog.Logger, on
 // packetLimiter is the global probe.rate_limit_pps budget. The probe engine
 // and the troubleshooting tools' indirect fallback trace packets share it.
 func packetLimiter(cfg *config.Config) *rate.Limiter {
-	burst := cfg.Probe.RateLimitPPS
-	need := cfg.Probe.Packets
-	if cfg.Probe.RetryPackets > need {
-		need = cfg.Probe.RetryPackets
-	}
-	if burst < need {
-		burst = need
-	}
+	// One wait must fit the burst: a reordering train (#224) is one wait.
+	burst := max(cfg.Probe.RateLimitPPS, cfg.Probe.Packets, cfg.Probe.RetryPackets, reorderPackets(cfg))
 	return rate.NewLimiter(rate.Limit(cfg.Probe.RateLimitPPS), burst)
 }
 
@@ -157,7 +151,7 @@ func packetLimiter(cfg *config.Config) *rate.Limiter {
 // troubleshooting indirect fallback, and the traceroute sources share it,
 // so their packets toward one origin ASN add up under one cap. Nil when off.
 func perASNLimits(cfg *config.Config, view func() *rib.View) *probe.ASNLimits {
-	return probe.NewASNLimits(cfg.Probe.PerASNPPS, max(cfg.Probe.Packets, cfg.Probe.RetryPackets), originLookup(view))
+	return probe.NewASNLimits(cfg.Probe.PerASNPPS, max(cfg.Probe.Packets, cfg.Probe.RetryPackets, reorderPackets(cfg)), originLookup(view))
 }
 
 // originLookup is the origin ASN of the longest learned route covering a

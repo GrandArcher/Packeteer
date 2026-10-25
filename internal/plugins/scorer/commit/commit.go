@@ -40,6 +40,9 @@ const (
 	defaultLossWeight   = 100
 	defaultRTTWeight    = 1
 	defaultJitterWeight = 0.5
+	// defaultReorderWeight is zero: reordering (#224) enters the score only when the
+	// operator sets reorder_weight.
+	defaultReorderWeight = 0
 
 	// defaultPrecedence is used when a provider omits precedence. Lower is
 	// preferred, so an explicit last-resort provider sets a higher number.
@@ -62,6 +65,9 @@ type Config struct {
 	LossWeight   *float64 `yaml:"loss_weight"`
 	RTTWeight    *float64 `yaml:"rtt_weight"`
 	JitterWeight *float64 `yaml:"jitter_weight"`
+	// ReorderWeight is the cost of one percent of reordered packets on the
+	// provider path (#224). Default 0: off.
+	ReorderWeight *float64 `yaml:"reorder_weight"`
 	// ImprovementWeights orders new improvements for the
 	// max_improvements cap (#34). Nil ranks by score gain.
 	ImprovementWeights *weights.Config `yaml:"improvement_weights"`
@@ -88,12 +94,12 @@ type Config struct {
 type Scorer struct {
 	plugin.Base
 	weights.Weights
-	loss, rtt, jitter float64
-	lossOverride      bool
-	balance           string
-	slack             float64
-	maxAge            time.Duration
-	minMbps           float64
+	loss, rtt, jitter, reorder float64
+	lossOverride               bool
+	balance                    string
+	slack                      float64
+	maxAge                     time.Duration
+	minMbps                    float64
 }
 
 // New is the plugin factory. It does no I/O.
@@ -103,13 +109,13 @@ func New(c plugin.Config, _ plugin.Env) (plugin.Scorer, error) {
 		return nil, err
 	}
 	s := &Scorer{
-		loss: defaultLossWeight, rtt: defaultRTTWeight, jitter: defaultJitterWeight,
+		loss: defaultLossWeight, rtt: defaultRTTWeight, jitter: defaultJitterWeight, reorder: defaultReorderWeight,
 		balance: balanceOff, slack: defaultSlack, maxAge: defaultMaxAge,
 	}
 	for name, pair := range map[string]struct {
 		in  *float64
 		out *float64
-	}{"loss_weight": {cfg.LossWeight, &s.loss}, "rtt_weight": {cfg.RTTWeight, &s.rtt}, "jitter_weight": {cfg.JitterWeight, &s.jitter}} {
+	}{"loss_weight": {cfg.LossWeight, &s.loss}, "rtt_weight": {cfg.RTTWeight, &s.rtt}, "jitter_weight": {cfg.JitterWeight, &s.jitter}, "reorder_weight": {cfg.ReorderWeight, &s.reorder}} {
 		if pair.in == nil {
 			continue
 		}
@@ -118,7 +124,7 @@ func New(c plugin.Config, _ plugin.Env) (plugin.Scorer, error) {
 		}
 		*pair.out = *pair.in
 	}
-	if s.loss == 0 && s.rtt == 0 && s.jitter == 0 {
+	if s.loss == 0 && s.rtt == 0 && s.jitter == 0 && s.reorder == 0 {
 		return nil, fmt.Errorf("at least one weight must be positive")
 	}
 	w, err := weights.New(cfg.ImprovementWeights)
@@ -157,7 +163,7 @@ func New(c plugin.Config, _ plugin.Env) (plugin.Scorer, error) {
 // Score implements plugin.Scorer. Lower is better.
 func (s *Scorer) Score(p plugin.PathStats) float64 {
 	ms := func(d time.Duration) float64 { return float64(d) / float64(time.Millisecond) }
-	return p.LossPct*s.loss + ms(p.RTTAvg)*s.rtt + ms(p.Jitter)*s.jitter
+	return p.LossPct*s.loss + ms(p.RTTAvg)*s.rtt + ms(p.Jitter)*s.jitter + p.ReorderPct*s.reorder
 }
 
 // AllowLoss implements plugin.LossOverride.

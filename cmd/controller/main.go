@@ -711,6 +711,14 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 	}
 	tools.SetQueue(engine)
 	sysEngine.Store(engine)
+	reorderMon, err := newReorderMonitor(cfg, log, pktLimiter, asnLimiter, probeExclusion(cfg, func() *rib.View { return view }))
+	if err != nil {
+		log.Error("refusing to start", "err", err)
+		return 1
+	}
+	if reorderMon != nil {
+		col.SetReorder(reorderMon.Results)
+	}
 	watch := newEventWatch(dispatch, cfg.Mode)
 	portCommits := exchange.PortCommits(exchangesFromConfig(cfg))
 	peerMon := exchangePeerMonitor(cfg)
@@ -821,6 +829,13 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 			irrChecker.Run(loopCtx)
 		}()
 	}
+	if reorderMon != nil {
+		loopWG.Add(1)
+		go func() {
+			defer loopWG.Done()
+			_ = reorderMon.Run(loopCtx)
+		}()
+	}
 	loopWG.Add(1)
 	go func() {
 		defer loopWG.Done()
@@ -865,6 +880,9 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 			leading = true
 			in, rpkiRounds := decisionInput(loopCtx, now, engine, view, plugins, fed, rpkiSet, irrChecker)
 			in.Held = lw.Held
+			if reorderMon != nil {
+				in.Reorder = reorderMon.Scored(now, maxResultAge(cfg))
+			}
 			changes, err := runDecision(now, decider, in, ctl, log, snap.Mode, engine)
 			fed.publish(now, in, decider.Improvements())
 			if rec != nil {

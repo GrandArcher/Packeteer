@@ -110,6 +110,7 @@ func TestPlanReload(t *testing.T) {
 		"listen":     {one + "  listen_port: 1179\n", "changed bgp.listen_port"},
 		"not_est":    {one + "  not_established_after: 1m\n", "changed bgp.not_established_after"},
 		"path_check": {one + "probe: {path_check: {interval: 1m}}\n", "changed probe.path_check"},
+		"reorder":    {one + "probe: {reorder: {responders: [{address: 203.0.113.9}]}}\n", "changed probe.reorder"},
 		"two keys":   {strings.Replace(strings.Replace(one, "local_pref: 250", "local_pref: 300", 1), "hold_time: 1m", "hold_time: 2m", 1), "changed local_pref"},
 	} {
 		if _, err := planReload(cur, mustParse(t, tc.yaml), nil); err == nil || !strings.Contains(err.Error(), tc.want) {

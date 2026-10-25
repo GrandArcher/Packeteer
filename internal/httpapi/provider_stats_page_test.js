@@ -73,7 +73,7 @@ var app = fs.readFileSync(path.join(web, "app.js"), "utf8");
 var charts = fs.readFileSync(path.join(web, "charts.js"), "utf8");
 ["SVG_NS", "SERIES_N", "HOUR_MS", "OV_W", "OV_GAP_MS"].forEach(function (n) { vm.runInContext(varLine(charts, n), context); });
 vm.runInContext(varLine(app, "NO_REPLY"), context);
-[[app, "el"], [app, "clear"], [app, "fmtMs"], [app, "fmtPct"], [app, "statCell"], [app, "mbpsText"],
+[[app, "el"], [app, "clear"], [app, "fmtMs"], [app, "fmtPct"], [app, "statCell"], [app, "mbpsText"], [app, "reorderCell"],
   [charts, "svgEl"], [charts, "tsTicks"], [charts, "clockLabel"], [charts, "lineChart"], [charts, "seriesClass"],
   [charts, "renderProviderLatency"], [charts, "improvementCounts"], [charts, "renderImprovementCounts"], [charts, "sparkline"]
 ].forEach(function (p) { vm.runInContext(fn(p[0], p[1]), context); });
@@ -101,6 +101,19 @@ assert(withClass(context.statCell(silent, "rtt_ms", context.fmtMs), "muted").len
 // No probes at all in a window: no data.
 assert(context.statCell(undefined, "rtt_ms", context.fmtMs).textContent === "15 minno data24 hno data", "no stats");
 assert(context.statCell({last_15m: {slots: 0}, last_24h: {slots: 0}}, "loss_pct", context.fmtPct).textContent === "15 minno data24 hno data", "empty windows");
+
+// ---- reordering (#224) ----
+var noRe = context.reorderCell(undefined);
+assert(classOf(noRe) === "reorder" && noRe.textContent === "\u2014", "no responder answered yet: a dash");
+var re = context.reorderCell({ratio_pct: 20, extent: 1, n_reordering: 1, estimate: false, responder: "203.0.113.9"});
+assert(re.textContent === "20.0%", "controlled reading: " + re.textContent);
+assert(withClass(re, "warn").length === 1 && withClass(re, "badge").length === 0, "a reordering path is flagged and not an estimate");
+assert(re.title === "RFC 4737 reordered ratio of the worst flow toward 203.0.113.9; extent 1, n-reordering 1", "title: " + re.title);
+var clean = context.reorderCell({ratio_pct: 0, extent: 0, n_reordering: 0, estimate: false, responder: "203.0.113.9"});
+assert(clean.textContent === "0.0%" && withClass(clean, "warn").length === 0, "a clean path is not flagged");
+var est = context.reorderCell({ratio_pct: 10.5, extent: 2, n_reordering: 1, estimate: true, responder: "198.51.100.1"});
+assert(est.textContent === "10.5% est.", "estimate is marked: " + est.textContent);
+assert(withClass(est, "badge")[0].title.indexOf("Estimate: measured with ICMP echo toward 198.51.100.1") === 0, "estimate explains itself");
 
 // ---- Mbps ----
 assert(context.mbpsText(st, {flow: false}) === "no flow data", "no flow source");

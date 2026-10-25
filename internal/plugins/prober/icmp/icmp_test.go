@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/netip"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -44,6 +45,40 @@ func TestLoopbackEcho(t *testing.T) {
 	}
 	if res.Sent != 3 || len(res.RTTs) != 3 {
 		t.Fatalf("res = %+v", res)
+	}
+	// The loopback delivers the train in order, and the prober says so (#224).
+	if !slices.Equal(res.Order, []int{0, 1, 2}) {
+		t.Fatalf("order = %v", res.Order)
+	}
+}
+
+// A request spacing overrides packet_interval: three echoes 40ms apart
+// take at least 80ms, and the run still ends soon after the last reply.
+func TestRequestSpacing(t *testing.T) {
+	lo := netip.MustParseAddr("127.0.0.1")
+	p := newProber(t, "packet_interval: 1ms")
+	start := time.Now()
+	res, err := p.Probe(context.Background(), plugin.ProbeRequest{Source: lo, Target: lo, Count: 3, Spacing: 40 * time.Millisecond, Timeout: time.Second})
+	skipIfNoSocket(t, err)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if took := time.Since(start); took < 80*time.Millisecond || took > 900*time.Millisecond || len(res.RTTs) != 3 {
+		t.Fatalf("took %s, res %+v", took, res)
+	}
+}
+
+// A run cut short by its context keeps the replies already matched: the
+// probe engine scores it as the loss of the packets not answered.
+func TestCancelKeepsReplies(t *testing.T) {
+	lo := netip.MustParseAddr("127.0.0.1")
+	p := newProber(t, "packet_interval: 1ms")
+	ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
+	defer cancel()
+	res, err := p.Probe(ctx, plugin.ProbeRequest{Source: lo, Target: lo, Count: 5, Spacing: 100 * time.Millisecond, Timeout: time.Second})
+	skipIfNoSocket(t, err)
+	if !errors.Is(err, context.DeadlineExceeded) || res.Sent < 2 || res.Sent > 4 || len(res.RTTs) < res.Sent-1 || len(res.Order) != len(res.RTTs) {
+		t.Fatalf("res = %+v, err = %v", res, err)
 	}
 }
 

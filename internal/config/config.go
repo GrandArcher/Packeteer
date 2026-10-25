@@ -736,6 +736,9 @@ type Probe struct {
 	ProberMemory int `yaml:"prober_memory"`
 	// Indirect traces silent prefixes per provider (#123). Nil is off.
 	Indirect *ProbeIndirect `yaml:"indirect"`
+	// Reorder measures packet reordering per provider path with trains
+	// toward named responders (#224). Nil is off.
+	Reorder *ProbeReorder `yaml:"reorder"`
 	// PathCheck verifies that probes from each provider's source_ip leave
 	// through that provider's next_hop (#150).
 	PathCheck ProbePathCheck `yaml:"path_check"`

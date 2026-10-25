@@ -11,7 +11,10 @@ RUN go mod download
 COPY . .
 RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
     go build -trimpath -ldflags "-s -w -X main.version=${VERSION}" \
-    -o /out/packeteer ./cmd/controller
+    -o /out/packeteer ./cmd/controller \
+ && CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
+    go build -trimpath -ldflags "-s -w -X main.version=${VERSION}" \
+    -o /out/packeteer-reflector ./cmd/reflector
 
 # ---- runtime stage ----
 # Alpine (not distroless) so exec plugins written as shell scripts work in the
@@ -20,6 +23,9 @@ FROM alpine:3.24
 RUN apk add --no-cache ca-certificates \
  && mkdir -p /etc/packeteer/plugins /var/lib/packeteer
 COPY --from=build /out/packeteer /usr/local/bin/packeteer
+# TWAMP-Light reflector for the reordering measurement (#224). Run it on a
+# responder host: docker run ... --entrypoint packeteer-reflector IMAGE
+COPY --from=build /out/packeteer-reflector /usr/local/bin/packeteer-reflector
 COPY config.example.yaml /etc/packeteer/config.example.yaml
 
 # Runs as root inside the container: raw ICMP sockets and BGP port 179 need
