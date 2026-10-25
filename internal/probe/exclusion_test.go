@@ -7,9 +7,11 @@ import (
 	"slices"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/GrandArcher/Packeteer/internal/plugins/source/traceroute"
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
 )
 
@@ -198,6 +200,14 @@ func (f *frozenWaits) snapshot() (map[netip.Addr]int, []time.Duration) {
 	return maps.Clone(f.asked), slices.Clone(f.delays)
 }
 
+// cancelSleep records the delay and fails the wait as cancelled.
+func (f *frozenWaits) cancelSleep(_ context.Context, d time.Duration) error {
+	f.mu.Lock()
+	f.delays = append(f.delays, d)
+	f.mu.Unlock()
+	return context.Canceled
+}
+
 // frozenASNLimits is an ASNLimits whose clock never moves. A wait does not
 // sleep; it records the delay its bucket asked for, so the schedule every
 // packet would keep is exact however the workers interleave.
@@ -305,20 +315,12 @@ func TestASNLimitsWait(t *testing.T) {
 	}
 	l, waits := frozenASNLimits(2, 2, func(netip.Prefix) uint32 { return 64500 })
 	host := netip.MustParseAddr("192.0.2.1")
-	if err := l.Wait(context.Background(), host, 3); err == nil {
-		t.Fatal("a wait larger than the burst passed")
-	}
 	if err := l.Wait(context.Background(), host, 2); err != nil {
 		t.Fatal(err)
 	}
 	// A cancelled wait gives its tokens back: the next one asks for the
 	// same delay instead of a longer one.
-	l.sleep = func(ctx context.Context, d time.Duration) error {
-		waits.mu.Lock()
-		waits.delays = append(waits.delays, d)
-		waits.mu.Unlock()
-		return context.Canceled
-	}
+	l.sleep = waits.cancelSleep
 	for range 2 {
 		if err := l.Wait(context.Background(), host, 1); err == nil {
 			t.Fatal("cancelled wait returned nil")
@@ -326,6 +328,101 @@ func TestASNLimitsWait(t *testing.T) {
 	}
 	if _, d := waits.snapshot(); len(d) != 2 || d[0] != d[1] || d[0] != 500*time.Millisecond {
 		t.Fatalf("delays after cancel = %v", d)
+	}
+}
+
+// A live reload can raise probe.packets past the per-ASN burst built at
+// start (#203). The probe still runs, paced over several bursts, and a
+// cancelled wait gives every part back.
+func TestASNLimitsPaceWaitPastBurst(t *testing.T) {
+	const pps, startPackets, reloaded = 20, 10, 50
+	o := opts()
+	o.Packets = startPackets
+	perASN, waits := frozenASNLimits(pps, startPackets, originIn(map[string]uint32{"198.51.100.0/24": 64500}))
+	o.PerASN = perASN
+	host := netip.MustParseAddr("198.51.100.7")
+	var count atomic.Int32
+	pr := &fakeProber{fn: func(_ context.Context, req plugin.ProbeRequest) (plugin.ProbeResult, error) {
+		count.Store(int32(req.Count))
+		return plugin.ProbeResult{Sent: req.Count, RTTs: ms(1)}, nil
+	}}
+	e, err := New([]Provider{provA}, []NamedProber{{Name: "p", Prober: pr}},
+		src(plugin.Target{Prefix: netip.PrefixFrom(host, 32), Host: host}), o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tm := e.TimingNow()
+	tm.Packets = reloaded
+	e.SetTiming(tm)
+	e.RunOnce(context.Background())
+	rs := e.Results()
+	if len(rs) != 1 || !rs[0].OK() || count.Load() != reloaded {
+		t.Fatalf("results %+v, packets sent %d, want one result of %d packets", rs, count.Load(), reloaded)
+	}
+	// Parts of 20, 20, and 10 at 20 pps: the last starts 1.5 s out.
+	if _, d := waits.snapshot(); !slices.Equal(d, []time.Duration{1500 * time.Millisecond}) {
+		t.Fatalf("delays = %v", d)
+	}
+
+	l, cancelled := frozenASNLimits(2, 2, func(netip.Prefix) uint32 { return 64500 })
+	l.sleep = cancelled.cancelSleep
+	for range 2 {
+		if err := l.Wait(context.Background(), host, 5); err == nil {
+			t.Fatal("cancelled wait returned nil")
+		}
+	}
+	if _, d := cancelled.snapshot(); !slices.Equal(d, []time.Duration{1500 * time.Millisecond, 1500 * time.Millisecond}) {
+		t.Fatalf("delays after cancel = %v", d)
+	}
+}
+
+// An origin that moves into an excluded ASN mid-round (#203) keeps
+// indirect traces off the host: a host probeOne refused is never a trace
+// destination, and a trace queued before the move sends nothing.
+func TestIndirectTracesSkipExcludedHosts(t *testing.T) {
+	hop := twoPaths()
+	pr := &hopProber{}
+	e, _ := indirectEngine(t, hop, pr, nil)
+	var mu sync.Mutex
+	var dsts []netip.Addr
+	tr := e.opt.Indirect.Tracer.(traceroute.Tracer)
+	tr.Hop = func(ctx context.Context, src, dst netip.Addr, ttl, port int, timeout time.Duration) (netip.Addr, bool, error) {
+		mu.Lock()
+		dsts = append(dsts, dst)
+		mu.Unlock()
+		return hop.hop(ctx, src, dst, ttl, port, timeout)
+	}
+	e.opt.Indirect.Tracer = tr
+	moved := map[netip.Addr]bool{}
+	e.opt.Exclude = &Exclusion{ASNs: map[uint32]bool{64500: true}, Origin: func(p netip.Prefix) uint32 {
+		if moved[p.Addr()] {
+			return 64500
+		}
+		return 0
+	}}
+	ctx := context.Background()
+	other := netip.MustParseAddr("198.51.100.2")
+	moved[silentIn] = true
+	j := job{provider: provA, target: plugin.Target{Prefix: pfx1}, hosts: []netip.Addr{silentIn, other}}
+	e.probe(ctx, j, func(string) bool { return false })
+	q := e.pendingIndirect()
+	if len(q) != 1 || q[0].dst != other || pr.seen[silentIn] != 0 {
+		t.Fatalf("queued %+v, probes of the excluded host %d", q, pr.seen[silentIn])
+	}
+
+	moved[other] = true
+	if n := e.IndirectPass(ctx); n != 0 || hop.total() != 0 || len(dsts) != 0 || len(e.pendingIndirect()) != 0 {
+		t.Fatalf("pass finished %d, sent %d packets toward %v, queue %v", n, hop.total(), dsts, e.pendingIndirect())
+	}
+	e.probe(ctx, j, func(string) bool { return false })
+	if q := e.pendingIndirect(); len(q) != 0 || pr.seen[other] != 1 {
+		t.Fatalf("every host excluded: queued %+v, probes %v", q, pr.seen)
+	}
+
+	delete(moved, other)
+	e.probe(ctx, j, func(string) bool { return false })
+	if e.IndirectPass(ctx) != 1 || hop.total() == 0 || slices.ContainsFunc(dsts, func(a netip.Addr) bool { return a != other }) {
+		t.Fatalf("trace destinations %v", dsts)
 	}
 }
 

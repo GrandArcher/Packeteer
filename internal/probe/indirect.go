@@ -82,8 +82,10 @@ func (e *Engine) indirectEnabled() bool { return e.opt.Indirect != nil }
 // inPrefixSilent reports whether at least one probed address sits inside
 // the prefix and none of those got a reply. dst is the first of them, the
 // destination a trace walks toward. A pin outside the prefix (a
-// traceroute hop) is not an in-prefix address.
-func inPrefixSilent(prefix netip.Prefix, hosts []netip.Addr, samples []hostSample) (dst netip.Addr, silent bool) {
+// traceroute hop) is not an in-prefix address, and neither is one skip
+// reports (probe.exclude, #203): probeOne refused it, so a trace must not
+// head for it either.
+func inPrefixSilent(prefix netip.Prefix, hosts []netip.Addr, samples []hostSample, skip func(netip.Addr) bool) (dst netip.Addr, silent bool) {
 	replied := map[netip.Addr]bool{}
 	for _, s := range samples {
 		if s.res.OK() && s.res.Stats.Received > 0 {
@@ -91,7 +93,7 @@ func inPrefixSilent(prefix netip.Prefix, hosts []netip.Addr, samples []hostSampl
 		}
 	}
 	for _, h := range hosts {
-		if !prefix.Contains(h) {
+		if !prefix.Contains(h) || skip(h) {
 			continue
 		}
 		if replied[h] {
@@ -116,7 +118,7 @@ func (e *Engine) probeIndirect(ctx context.Context, j job, hosts []netip.Addr, s
 		return Result{}, false, false
 	}
 	k := key{j.provider.Name, j.target.Prefix}
-	dst, silent := inPrefixSilent(j.target.Prefix, hosts, samples)
+	dst, silent := inPrefixSilent(j.target.Prefix, hosts, samples, e.opt.Exclude.Addr)
 	if !silent {
 		e.forgetIndirect(k)
 		return Result{}, false, false
@@ -342,6 +344,12 @@ func (e *Engine) IndirectPass(ctx context.Context) int {
 	for _, r := range reqs {
 		if bctx.Err() != nil {
 			break
+		}
+		// The origin of r.dst can move into an excluded ASN after the
+		// trace was queued.
+		if e.opt.Exclude.Addr(r.dst) {
+			e.forgetIndirect(r.key)
+			continue
 		}
 		// Every TTL packet heads for r.dst, so it counts against that
 		// destination's per-ASN cap as well as the global limit.

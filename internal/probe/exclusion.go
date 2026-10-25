@@ -2,8 +2,8 @@ package probe
 
 import (
 	"context"
-	"fmt"
 	"net/netip"
+	"slices"
 	"sync"
 	"time"
 
@@ -84,8 +84,9 @@ type asnLimiter struct {
 }
 
 // NewASNLimits caps each origin ASN at pps packets per second with a burst
-// of at least pps. burst is the most packets one wait asks for. Nil when
-// pps is not positive (no per-ASN cap).
+// of at least pps. burst is the most packets one wait asks for at start;
+// a larger wait is paced over several bursts. Nil when pps is not
+// positive (no per-ASN cap).
 func NewASNLimits(pps, burst int, origin func(netip.Prefix) uint32) *ASNLimits {
 	if pps <= 0 {
 		return nil
@@ -105,16 +106,25 @@ func (l *ASNLimits) Wait(ctx context.Context, host netip.Addr, count int) error 
 		return nil
 	}
 	now := l.now()
-	r := l.limiter(asn).ReserveN(now, count)
-	if !r.OK() {
-		return fmt.Errorf("%d packets exceed the per-ASN burst %d", count, l.burst)
+	lim := l.limiter(asn)
+	// A live reload can raise probe.packets past the burst fixed at start;
+	// reserving in burst-sized parts paces such a wait instead of refusing
+	// it, and a part no larger than the burst is always granted.
+	var rs []*rate.Reservation
+	var d time.Duration
+	for left := count; left > 0; left -= l.burst {
+		r := lim.ReserveN(now, min(left, l.burst))
+		rs = append(rs, r)
+		d = r.DelayFrom(now)
 	}
-	d := r.DelayFrom(now)
 	if d <= 0 {
 		return nil
 	}
 	if err := l.sleep(ctx, d); err != nil {
-		r.CancelAt(l.now())
+		at := l.now()
+		for _, r := range slices.Backward(rs) {
+			r.CancelAt(at)
+		}
 		return err
 	}
 	return nil
