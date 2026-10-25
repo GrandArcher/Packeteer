@@ -78,9 +78,9 @@ func New(c plugin.Config, _ plugin.Env) (plugin.Prober, error) {
 }
 
 // Probe implements plugin.Prober. Packets go out at the request's Spacing
-// (or packet_interval) without waiting for replies; the run ends Timeout
-// after the last send. RTTs are in send order and Order is the send
-// index of each reply in arrival order.
+// (or packet_interval) without waiting for replies. The run ends when
+// every packet is answered, or Timeout after the last send. RTTs are in
+// send order and Order is the send index of each reply in arrival order.
 func (p *Prober) Probe(ctx context.Context, req plugin.ProbeRequest) (plugin.ProbeResult, error) {
 	if req.Source.Is4() != req.Target.Is4() {
 		return plugin.ProbeResult{}, fmt.Errorf("source %s and target %s differ in address family", req.Source, req.Target)
@@ -121,7 +121,7 @@ func (p *Prober) Probe(ctx context.Context, req plugin.ProbeRequest) (plugin.Pro
 		defer close(done)
 		seen := make([]bool, count)
 		buf := make([]byte, 1500)
-		for {
+		for matched := 0; matched < count; {
 			n, err := uc.Read(buf)
 			if err != nil {
 				if errors.Is(err, syscall.ECONNREFUSED) {
@@ -138,6 +138,7 @@ func (p *Prober) Probe(ctx context.Context, req plugin.ProbeRequest) (plugin.Pro
 				continue
 			}
 			seen[rp.SenderSeq] = true
+			matched++
 			replies <- train.Reply{Seq: int(rp.SenderSeq), At: time.Now()}
 		}
 	}()
@@ -170,11 +171,7 @@ func (p *Prober) Probe(ctx context.Context, req plugin.ProbeRequest) (plugin.Pro
 		<-done
 		return res, nil
 	}
-	deadline := sentAt[count-1].Add(req.Timeout)
-	if d, ok := ctx.Deadline(); ok && d.Before(deadline) {
-		deadline = d
-	}
-	_ = uc.SetReadDeadline(deadline)
+	train.EndReads(ctx, uc.SetReadDeadline, sentAt[count-1].Add(req.Timeout))
 	<-done
 	close(replies)
 	res.RTTs, res.Order = train.Collect(sentAt, replies)

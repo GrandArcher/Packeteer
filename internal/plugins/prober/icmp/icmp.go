@@ -157,9 +157,10 @@ func tag(c *xicmp.PacketConn, v6 bool, m sockmark.Marking) error {
 
 // Probe implements plugin.Prober. Echo requests go out at the request's
 // Spacing (or packet_interval) without waiting for the reply, so a run is
-// one train; replies are matched by sequence number as they arrive and
-// the run ends Timeout after the last send. RTTs are in send order and
-// Order is the send index of each reply in arrival order (#224).
+// one train; replies are matched by sequence number as they arrive. The
+// run ends when every echo is answered, or Timeout after the last send.
+// RTTs are in send order and Order is the send index of each reply in
+// arrival order (#224).
 func (p *Prober) Probe(ctx context.Context, req plugin.ProbeRequest) (plugin.ProbeResult, error) {
 	if req.Source.Is4() != req.Target.Is4() {
 		return plugin.ProbeResult{}, fmt.Errorf("source %s and target %s differ in address family", req.Source, req.Target)
@@ -230,11 +231,7 @@ func (p *Prober) Probe(ctx context.Context, req plugin.ProbeRequest) (plugin.Pro
 		finish()
 		return res, nil
 	}
-	deadline := sentAt[count-1].Add(req.Timeout)
-	if d, ok := ctx.Deadline(); ok && d.Before(deadline) {
-		deadline = d
-	}
-	_ = c.c.SetReadDeadline(deadline)
+	train.EndReads(ctx, c.c.SetReadDeadline, sentAt[count-1].Add(req.Timeout))
 	<-done
 	close(replies)
 	res.RTTs, res.Order = train.Collect(sentAt, replies)
@@ -247,14 +244,14 @@ func payloadFor(token [8]byte, seq int) []byte {
 	return append(token[:], byte(seq>>8), byte(seq))
 }
 
-// readReplies reads echo replies from the target until the read deadline
-// passes and reports each matched sequence once, as a 0-based index, in
-// arrival order. The id is checked on a raw socket only: the kernel
-// rewrites it on an unprivileged datagram socket.
+// readReplies reads echo replies from the target until all count are
+// matched or the read deadline passes, and reports each matched sequence
+// once, as a 0-based index, in arrival order. The id is checked on a raw
+// socket only: the kernel rewrites it on an unprivileged datagram socket.
 func readReplies(c *conn, target netip.Addr, replyType xicmp.Type, id int, token [8]byte, count int, out chan<- train.Reply) {
 	buf := make([]byte, 1500)
 	seen := make([]bool, count+1)
-	for {
+	for matched := 0; matched < count; {
 		n, peer, err := c.c.ReadFrom(buf)
 		if err != nil {
 			return
@@ -281,6 +278,7 @@ func readReplies(c *conn, target netip.Addr, replyType xicmp.Type, id int, token
 			continue
 		}
 		seen[echo.Seq] = true
+		matched++
 		out <- train.Reply{Seq: echo.Seq - 1, At: at}
 	}
 }

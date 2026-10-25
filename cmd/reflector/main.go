@@ -105,6 +105,8 @@ func listenAll(addr string) ([]*net.UDPConn, error) {
 		return nil, err
 	}
 	conns := []*net.UDPConn{c4}
+	// Port 0 picks one port, so both families answer on the same one.
+	p = c4.LocalAddr().(*net.UDPAddr).Port
 	c6, err := net.ListenUDP("udp6", &net.UDPAddr{IP: net.IPv6unspecified, Port: p})
 	if err == nil {
 		conns = append(conns, c6)

@@ -15,9 +15,10 @@ import (
 
 // Responder types (#224). A twamp responder is a TWAMP-Light reflector the
 // operator runs, so the order its replies come back in is the order the
-// round trip (forward and return path) delivered them. An icmp responder is any host that answers echo: the
-// far end and ICMP rate limiting can reorder replies, so its reading is
-// an estimate and never an input to Decide.
+// round trip (forward and return path) delivered them. An icmp responder
+// is any host that answers echo: the far end and ICMP rate limiting can
+// reorder replies, so its reading is an estimate and never an input to
+// Decide.
 const (
 	ResponderTWAMP = "twamp"
 	ResponderICMP  = "icmp"
@@ -47,9 +48,10 @@ type ReorderOptions struct {
 	Timeout time.Duration
 	// Interval is the time between measurements of the whole set.
 	Interval time.Duration
-	// Flows is how many trains, each on a new socket (the kernel picks the source port), are sent per
-	// provider and twamp responder, so a bundle's members are sampled. An
-	// icmp responder gets one train: echo has no port to rotate.
+	// Flows is how many trains, each on a new socket (the kernel picks the
+	// source port), are sent per provider and twamp responder, so a
+	// bundle's members are sampled. An icmp responder gets one train: echo
+	// has no port to rotate.
 	Flows int
 	// Limiter, PerASN, and Exclude are the probe engine's (#203): every
 	// train waits on the same budgets, and an excluded responder gets no
@@ -162,8 +164,9 @@ type ReorderMonitor struct {
 	results map[reorderKey]ReorderResult
 }
 
-// NewReorderMonitor builds a monitor. Packets, Spacing, Timeout, Interval,
-// and Flows must be positive; config validation guarantees that.
+// NewReorderMonitor builds a monitor. Packets must be at least 2 and
+// Spacing, Timeout, Interval, and Flows positive; config validation
+// guarantees that.
 func NewReorderMonitor(opt ReorderOptions) (*ReorderMonitor, error) {
 	if opt.Packets < 2 || opt.Spacing <= 0 || opt.Timeout <= 0 || opt.Interval <= 0 || opt.Flows < 1 {
 		return nil, fmt.Errorf("reorder: packets %d, spacing %s, timeout %s, interval %s, flows %d must all be set",
@@ -250,7 +253,7 @@ func (m *ReorderMonitor) measure(ctx context.Context, p Provider, r Responder) R
 		fl := FlowReorder{Flow: f}
 		raw, err := m.train(ctx, p, r)
 		switch {
-		case err != nil && errors.Is(err, plugin.ErrSourceUnavailable):
+		case errors.Is(err, plugin.ErrSourceUnavailable):
 			res.Err, res.Time = err.Error(), m.opt.Now()
 			return res
 		case err != nil:

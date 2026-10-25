@@ -98,3 +98,23 @@ func TestListenAllWildcard(t *testing.T) {
 		t.Fatalf("second socket is not IPv6: %v", conns[1].LocalAddr())
 	}
 }
+
+// Port 0 gives the IPv4 and IPv6 sockets the same port.
+func TestListenAllAnyPort(t *testing.T) {
+	conns, err := listenAll(":0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		for _, c := range conns {
+			c.Close()
+		}
+	}()
+	if len(conns) < 2 {
+		t.Skip("no IPv6 socket here")
+	}
+	p4, p6 := conns[0].LocalAddr().(*net.UDPAddr).Port, conns[1].LocalAddr().(*net.UDPAddr).Port
+	if p4 == 0 || p4 != p6 {
+		t.Fatalf("ports %d and %d", p4, p6)
+	}
+}

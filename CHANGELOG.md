@@ -29,6 +29,10 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 - UI keyboard and screen reader access: Skip to content link on every page, 3 px focus ring, one h1 per page, labelled YAML editor; a browser smoke step checks them (#353).
 - Multi-POP: lab phase and unit test for a cut federation link (stale peer pruned after `max_age`, no steer or flapping, clean re-sync); behavior documented in docs/multi-pop.md (#308).
 
+### Changed
+
+- The `icmp` prober sends each run as one train at `packet_interval` without waiting for each reply; a reply counts until `timeout` after the last send (#224).
+
 ### Fixed
 
 - install.sh waits for the first admin after /healthz so a follow-on API call is not 401 (HTTP listens before bootstrap, #328; unblocks onboarding lab #221).

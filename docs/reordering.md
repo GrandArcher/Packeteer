@@ -47,4 +47,4 @@ The ratio depends on the train: a tighter `spacing` sees finer reordering, a lon
 
 ## Rollback
 
-Remove the `probe.reorder` block and restart; set `reorder_weight` back to 0 (or omit it) to take reordering out of the score at the next reload. Nothing is announced by this feature, so there is nothing to withdraw.
+Remove the `probe.reorder` block and restart; set `reorder_weight` back to 0 (or omit it) and restart to take reordering out of the score (a reload refuses a scorer change). Nothing is announced by this feature, so there is nothing to withdraw.

@@ -107,7 +107,11 @@ func (r *Reflector) evict(now time.Time) {
 
 // Serve answers every Session-Sender packet on conn until ctx ends, then
 // closes conn. The sender's TTL is read from the socket so the reply can
-// carry it; a socket that does not deliver it gets UnknownTTL.
+// carry it; a socket that does not deliver it gets UnknownTTL. Each reply
+// leaves from the address the test packet was sent to: on a wildcard
+// listen the kernel would otherwise pick the outgoing interface's
+// address, and a sender's connected socket drops a reply from any
+// address but the one it sent to.
 func Serve(ctx context.Context, conn *net.UDPConn, r *Reflector, log *slog.Logger) error {
 	if log == nil {
 		log = slog.New(slog.DiscardHandler)
@@ -123,10 +127,16 @@ func Serve(ctx context.Context, conn *net.UDPConn, r *Reflector, log *slog.Logge
 		if err := pc6.SetControlMessage(ipv6.FlagHopLimit, true); err != nil {
 			log.Warn("hop limit not readable, replies carry 255", "err", err)
 		}
+		if err := pc6.SetControlMessage(ipv6.FlagDst, true); err != nil {
+			log.Warn("destination not readable, replies leave from the kernel's source", "err", err)
+		}
 	} else {
 		pc4 = ipv4.NewPacketConn(conn)
 		if err := pc4.SetControlMessage(ipv4.FlagTTL, true); err != nil {
 			log.Warn("ttl not readable, replies carry 255", "err", err)
+		}
+		if err := pc4.SetControlMessage(ipv4.FlagDst, true); err != nil {
+			log.Warn("destination not readable, replies leave from the kernel's source", "err", err)
 		}
 	}
 	stop := context.AfterFunc(ctx, func() { conn.Close() })
@@ -136,20 +146,27 @@ func Serve(ctx context.Context, conn *net.UDPConn, r *Reflector, log *slog.Logge
 		var (
 			n    int
 			ttl  = UnknownTTL
+			dst  net.IP
 			peer net.Addr
 			err  error
 		)
 		if v6 {
 			var cm *ipv6.ControlMessage
 			n, cm, peer, err = pc6.ReadFrom(buf)
-			if cm != nil && cm.HopLimit > 0 {
-				ttl = uint8(cm.HopLimit)
+			if cm != nil {
+				dst = cm.Dst
+				if cm.HopLimit > 0 {
+					ttl = uint8(cm.HopLimit)
+				}
 			}
 		} else {
 			var cm *ipv4.ControlMessage
 			n, cm, peer, err = pc4.ReadFrom(buf)
-			if cm != nil && cm.TTL > 0 {
-				ttl = uint8(cm.TTL)
+			if cm != nil {
+				dst = cm.Dst
+				if cm.TTL > 0 {
+					ttl = uint8(cm.TTL)
+				}
 			}
 		}
 		if err != nil {
@@ -172,9 +189,17 @@ func Serve(ctx context.Context, conn *net.UDPConn, r *Reflector, log *slog.Logge
 		}
 		var werr error
 		if v6 {
-			_, werr = pc6.WriteTo(out, nil, peer)
+			var cm *ipv6.ControlMessage
+			if dst != nil {
+				cm = &ipv6.ControlMessage{Src: dst}
+			}
+			_, werr = pc6.WriteTo(out, cm, peer)
 		} else {
-			_, werr = pc4.WriteTo(out, nil, peer)
+			var cm *ipv4.ControlMessage
+			if dst != nil {
+				cm = &ipv4.ControlMessage{Src: dst}
+			}
+			_, werr = pc4.WriteTo(out, cm, peer)
 		}
 		if werr != nil && ctx.Err() == nil {
 			log.Debug("reply not sent", "to", from, "err", werr)

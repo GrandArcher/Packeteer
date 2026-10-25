@@ -55,3 +55,33 @@ func TestSleepUntil(t *testing.T) {
 		t.Fatalf("cancelled, past time: %v", err)
 	}
 }
+
+func TestEndReads(t *testing.T) {
+	var set []time.Time
+	record := func(at time.Time) error { set = append(set, at); return nil }
+	at := time.Now().Add(time.Hour)
+	EndReads(context.Background(), record, at)
+	if len(set) != 1 || !set[0].Equal(at) {
+		t.Fatalf("set %v, want only %s", set, at)
+	}
+
+	// The context's earlier deadline wins.
+	set = nil
+	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(time.Minute))
+	defer cancel()
+	want, _ := ctx.Deadline()
+	EndReads(ctx, record, at)
+	if len(set) != 1 || !set[0].Equal(want) {
+		t.Fatalf("set %v, want only %s", set, want)
+	}
+
+	// Already cancelled: the reads end now, after the set that would
+	// otherwise have overwritten the cancel's deadline.
+	set = nil
+	cancel()
+	before := time.Now()
+	EndReads(ctx, record, at)
+	if len(set) != 2 || set[1].Before(before) || set[1].After(time.Now()) {
+		t.Fatalf("set %v, want the deadline then now", set)
+	}
+}

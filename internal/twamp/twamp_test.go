@@ -203,3 +203,42 @@ func TestServeLoopback(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// On a wildcard listen the reply leaves from the address the test packet
+// was sent to, not the one the kernel would pick: a connected sender
+// drops a reply from any other address (lab/docker-compose-reorder.yml
+// sends to a loopback address and replies leave via another interface).
+func TestServeWildcardRepliesFromDestination(t *testing.T) {
+	conn, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4zero})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- Serve(ctx, conn, NewReflector(0), slog.New(slog.DiscardHandler)) }()
+	defer func() {
+		cancel()
+		if err := <-done; err != nil {
+			t.Fatal(err)
+		}
+	}()
+
+	port := conn.LocalAddr().(*net.UDPAddr).Port
+	c, err := net.DialUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)}, &net.UDPAddr{IP: net.IPv4(127, 0, 0, 2), Port: port})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	if _, err := c.Write(SenderPacket{Seq: 3, Timestamp: time.Now(), ErrorEstimate: UnsyncedErrorEstimate, Padding: MinSenderPadding}.Marshal()); err != nil {
+		t.Fatal(err)
+	}
+	buf := make([]byte, 1500)
+	_ = c.SetReadDeadline(time.Now().Add(2 * time.Second))
+	n, err := c.Read(buf)
+	if err != nil {
+		t.Fatalf("no reply from 127.0.0.2: %v", err)
+	}
+	if rp, err := ParseReflector(buf[:n]); err != nil || rp.SenderSeq != 3 {
+		t.Fatalf("reply %+v, err %v", rp, err)
+	}
+}

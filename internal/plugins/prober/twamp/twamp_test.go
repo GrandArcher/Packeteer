@@ -48,12 +48,18 @@ func reflector(t *testing.T) uint16 {
 	return uint16(conn.LocalAddr().(*net.UDPAddr).Port)
 }
 
+// Every packet answered ends the run at the last reply, not Timeout after
+// the last send.
 func TestTrainInOrder(t *testing.T) {
 	port := reflector(t)
 	p := newProber(t, "")
-	res, err := p.Probe(context.Background(), plugin.ProbeRequest{Source: lo, Target: lo, Port: port, Count: 5, Spacing: 2 * time.Millisecond, Timeout: time.Second})
+	start := time.Now()
+	res, err := p.Probe(context.Background(), plugin.ProbeRequest{Source: lo, Target: lo, Port: port, Count: 5, Spacing: 2 * time.Millisecond, Timeout: 5 * time.Second})
 	if err != nil {
 		t.Fatal(err)
+	}
+	if took := time.Since(start); took > 2*time.Second {
+		t.Fatalf("took %s with every reply in", took)
 	}
 	if res.Sent != 5 || len(res.RTTs) != 5 || !slices.Equal(res.Order, []int{0, 1, 2, 3, 4}) {
 		t.Fatalf("res = %+v", res)

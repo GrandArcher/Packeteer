@@ -33,6 +33,21 @@ func SleepUntil(ctx context.Context, at time.Time) error {
 	}
 }
 
+// EndReads sets the read deadline that ends a run's reads: deadline, or
+// the context's deadline when that is earlier. The cancel check comes
+// after the set: a cancel that already fired the caller's AfterFunc set
+// the deadline to now, and the set here would push it back out to
+// deadline.
+func EndReads(ctx context.Context, setReadDeadline func(time.Time) error, deadline time.Time) {
+	if d, ok := ctx.Deadline(); ok && d.Before(deadline) {
+		deadline = d
+	}
+	_ = setReadDeadline(deadline)
+	if ctx.Err() != nil {
+		_ = setReadDeadline(time.Now())
+	}
+}
+
 // Collect drains replies (closed by the caller once the reads are done)
 // and returns one RTT per reply in send order and the send index of each
 // reply in arrival order. sentAt holds each packet's send time by index;
