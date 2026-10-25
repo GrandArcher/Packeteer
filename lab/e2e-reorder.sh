@@ -36,12 +36,19 @@ member_dev() {
 	"${compose[@]}" exec -T transit-b sh -c 'ip -o -4 addr show | awk "\$4 ~ /^198\\.51\\.100\\.129\\// {print \$2}"'
 }
 
+# tc_ready: transit-b's apk add has installed iproute2 (busybox has no tc);
+# the packeteer health check can pass first.
+tc_ready() {
+	"${compose[@]}" exec -T transit-b sh -c 'command -v tc' >/dev/null 2>&1
+}
+
 for _ in $(seq 1 60); do
-	if [ -n "$(member_dev)" ] && curl -fsS "$base/healthz" >/dev/null 2>&1; then break; fi
+	if [ -n "$(member_dev)" ] && tc_ready && curl -fsS "$base/healthz" >/dev/null 2>&1; then break; fi
 	sleep 1
 done
 dev=$(member_dev)
 [ -n "$dev" ] || fail "transit-b has no interface on 198.51.100.128/26"
+tc_ready || fail "transit-b has no tc after 60s (apk add iproute2)"
 echo "netem reorder on transit-b member $dev"
 "${compose[@]}" exec -T transit-b tc qdisc add dev "$dev" root netem delay 30ms reorder 100% gap 5
 "${compose[@]}" exec -T transit-b tc qdisc show dev "$dev" | grep -q netem || fail "netem qdisc not installed"
