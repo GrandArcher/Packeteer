@@ -14,10 +14,15 @@ services:
       args:
         VERSION: e2e
     image: packeteer:e2e
+    # The first train must not run before both paths to the reflector
+    # are up, or it reads their setup as loss.
     depends_on:
-      - transit-a
-      - transit-b
-      - reflector
+      transit-a:
+        condition: service_healthy
+      transit-b:
+        condition: service_healthy
+      reflector:
+        condition: service_healthy
     cap_add:
       - NET_RAW
       - NET_ADMIN
@@ -59,6 +64,10 @@ services:
         apk add --no-cache iproute2 >/dev/null &&
         ip route add 203.0.113.9/32 via 198.51.100.9 &&
         sleep infinity
+    healthcheck:
+      test: ["CMD-SHELL", "ip route | grep -q '^203.0.113.9 via 198.51.100.9 '"]
+      interval: 1s
+      retries: 120
     networks:
       lab:
         ipv4_address: 192.0.2.1
@@ -80,6 +89,11 @@ services:
         apk add --no-cache iproute2 >/dev/null &&
         ip route add 203.0.113.9/32 nexthop via 198.51.100.73 nexthop via 198.51.100.137 &&
         sleep infinity
+    # tc comes with iproute2; busybox has none.
+    healthcheck:
+      test: ["CMD-SHELL", "command -v tc && ip route | grep -q 'nexthop via 198.51.100.137 '"]
+      interval: 1s
+      retries: 120
     networks:
       lab:
         ipv4_address: 192.0.2.2
@@ -107,6 +121,10 @@ services:
         ip route add 192.0.2.11/32 via 198.51.100.1 &&
         ip route add 192.0.2.12/32 via 198.51.100.65 &&
         exec /usr/local/bin/packeteer-reflector -listen 0.0.0.0:862
+    healthcheck:
+      test: ["CMD-SHELL", "ip route | grep -q '^192.0.2.12 via 198.51.100.65 '"]
+      interval: 1s
+      retries: 60
     networks:
       far-a:
         ipv4_address: 198.51.100.9

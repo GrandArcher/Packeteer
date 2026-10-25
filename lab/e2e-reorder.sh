@@ -21,7 +21,10 @@ trap 'rc=$?; if [ "$rc" -ne 0 ]; then echo "---- lab logs ----"; "${compose[@]}"
 
 echo "building lab"
 "${compose[@]}" build
-"${compose[@]}" up -d
+# The paths come up first (their health checks: routes in place, tc in
+# transit-b) and get the qdisc before Packeteer starts, so every train is
+# sent over the finished lab.
+"${compose[@]}" up -d --wait --wait-timeout 180 transit-a transit-b reflector
 
 api() { curl -fsS "$base$1" 2>/dev/null || true; }
 fail() {
@@ -36,34 +39,30 @@ member_dev() {
 	"${compose[@]}" exec -T transit-b sh -c 'ip -o -4 addr show | awk "\$4 ~ /^198\\.51\\.100\\.129\\// {print \$2}"'
 }
 
-# tc_ready: transit-b's apk add has installed iproute2 (busybox has no tc);
-# the packeteer health check can pass first.
-tc_ready() {
-	"${compose[@]}" exec -T transit-b sh -c 'command -v tc' >/dev/null 2>&1
-}
-
-for _ in $(seq 1 60); do
-	if [ -n "$(member_dev)" ] && tc_ready && curl -fsS "$base/healthz" >/dev/null 2>&1; then break; fi
-	sleep 1
-done
 dev=$(member_dev)
 [ -n "$dev" ] || fail "transit-b has no interface on 198.51.100.128/26"
-tc_ready || fail "transit-b has no tc after 60s (apk add iproute2)"
 echo "netem reorder on transit-b member $dev"
 "${compose[@]}" exec -T transit-b tc qdisc add dev "$dev" root netem delay 30ms reorder 100% gap 5
 "${compose[@]}" exec -T transit-b tc qdisc show dev "$dev" | grep -q netem || fail "netem qdisc not installed"
 
-# wait_reorder <jq filter>: wait until /api/reorder matches it.
-wait_reorder() {
+"${compose[@]}" up -d packeteer
+for _ in $(seq 1 60); do
+	if curl -fsS "$base/healthz" >/dev/null 2>&1; then break; fi
+	sleep 1
+done
+
+# wait_api <path> <jq filter>: wait until the API at path matches it.
+wait_api() {
 	local i
 	for i in $(seq 1 90); do
-		if api /api/reorder | jq -e "$1" >/dev/null 2>&1; then
+		if api "$1" | jq -e "$2" >/dev/null 2>&1; then
 			return 0
 		fi
 		sleep 2
 	done
-	fail "/api/reorder never matched: $1"
+	fail "$1 never matched: $2"
 }
+wait_reorder() { wait_api /api/reorder "$1"; }
 
 echo "waiting for a measurement of every provider and responder"
 wait_reorder '.configured and ([.reorder[] | select(.ok)] | length) == 4'
@@ -93,8 +92,9 @@ echo "providers carry the controlled reading, decisions carry it per candidate, 
 prov=$(api /api/providers)
 echo "$prov" | jq -e '[.providers[] | select(.name == "transit-b")][0].reorder | .estimate == false and .ratio_pct >= 12 and .responder == "203.0.113.9"' >/dev/null || fail "transit-b headline reading is wrong: $prov"
 echo "$prov" | jq -e '[.providers[] | select(.name == "transit-a")][0].reorder | .estimate == false and .ratio_pct < 3' >/dev/null || fail "transit-a headline reading is wrong: $prov"
-dec=$(api /api/decisions)
-echo "$dec" | jq -e '[.decisions[] | select(.prefix == "203.0.113.0/24")][0].candidates | map(select(.provider == "transit-b"))[0].reorder_pct >= 12' >/dev/null || fail "decision candidate lacks reorder_pct: $dec"
+# A decision round runs every probe.interval and takes the readings that
+# exist then.
+wait_api /api/decisions '[.decisions[] | select(.prefix == "203.0.113.0/24")][0].candidates | map(select(.provider == "transit-b"))[0].reorder_pct >= 12'
 metrics=$(api /metrics)
 echo "$metrics" | grep -q '^packeteer_reorder_ratio{provider="transit-b",responder="203.0.113.9",type="twamp",estimate="false",flow="1"} ' || fail "no reorder ratio metric"
 echo "$metrics" | grep -q '^packeteer_reorder_success{provider="transit-a",responder="203.0.113.9",type="icmp",estimate="true"} 1' || fail "no estimate success metric"

@@ -14,7 +14,9 @@ providers:
     source_ip: 192.0.2.12
     next_hop: 192.0.2.2
 probe:
-  interval: 5s
+  # One measurement is 26 trains (two providers, twelve flows and one
+  # echo train each) of up to 700ms: 15s keeps a reading fresh (#224).
+  interval: 15s
   timeout: 1s
   packets: 3
   rate_limit_pps: 400
