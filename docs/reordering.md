@@ -1,6 +1,6 @@
 # Packet reordering per provider path
 
-Packeteer measures packet reordering on each provider path (#224) beside loss, latency, and jitter. Reordering hurts TCP (spurious retransmissions, a smaller window) and real-time traffic (late packets dropped by the jitter buffer) while loss and RTT look fine, so it is a path-quality metric of its own. It is off until `probe.reorder` is set, and it never announces anything.
+Packeteer measures packet reordering on each provider path (#224) beside loss, latency, and jitter. Reordering hurts TCP (spurious retransmissions, a smaller window) and real-time traffic (late packets dropped by the jitter buffer) while loss and RTT look fine, so it is a path-quality metric of its own. It is off until `probe.reorder` is set. With the default `reorder_weight: 0` it only measures; above 0 the reading enters the score, so it can change which provider an improvement is announced through (still only inside the RIB check, allowlist, cap and hold rules).
 
 ## How it is measured
 
@@ -47,4 +47,4 @@ The ratio depends on the train: a tighter `spacing` sees finer reordering, a lon
 
 ## Rollback
 
-Remove the `probe.reorder` block and restart; set `reorder_weight` back to 0 (or omit it) and restart to take reordering out of the score (a reload refuses a scorer change). Nothing is announced by this feature, so there is nothing to withdraw.
+Remove the `probe.reorder` block and restart; set `reorder_weight` back to 0 (or omit it) and restart to take reordering out of the score (a reload refuses a scorer change). With `reorder_weight` above 0 this is an announce-path change: on restart the decision is made again without the weight, and any improvement that was chosen because of reordering and is no longer chosen is withdrawn through the normal withdraw path.
