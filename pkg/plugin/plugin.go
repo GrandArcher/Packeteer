@@ -128,8 +128,9 @@ type ProbeRequest struct {
 }
 
 // ProbeResult is the raw outcome of one probe run. The core computes loss,
-// RTT statistics, jitter, and reordering from it so every prober is
-// measured the same way.
+// RTT statistics, and jitter from it so every prober is measured the same
+// way. Only the reordering monitor (#224) computes reordering, from Order,
+// and only for its own twamp and icmp probers.
 type ProbeResult struct {
 	Sent int
 	// RTTs holds one entry per reply received, in send order.
@@ -137,7 +138,7 @@ type ProbeResult struct {
 	// Order holds the send index (0-based) of each reply in arrival order,
 	// when the prober can tell which request a reply answers. Its length
 	// equals len(RTTs). Empty means the order was not observed, and the
-	// core computes no reordering metric.
+	// reordering monitor computes no reordering metric.
 	Order []int
 }
 
