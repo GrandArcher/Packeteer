@@ -23,8 +23,9 @@ const (
 	// 4.1.2) so the reflector's truncation (section 4.2.1) leaves the
 	// reflected packet's fixed part intact at the sender's size.
 	MinSenderPadding = ReflectorMinLen - SenderMinLen
-	// DefaultPort is the port IANA registered for TWAMP (RFC 5357 section
-	// 8.4), which TWAMP-Light senders and reflectors use by convention.
+	// DefaultPort is the port IANA registered as twamp-control (RFC 5357
+	// section 8), which TWAMP-Light senders and reflectors use by
+	// convention.
 	DefaultPort = 862
 	// UnsyncedErrorEstimate is an error estimate with S = 0 (clock not
 	// synchronized), scale 0, and the smallest non-zero multiplier.

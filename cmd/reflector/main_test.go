@@ -41,7 +41,7 @@ func TestReflects(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
-		done <- run(ctx, []string{"-listen", net.JoinHostPort("127.0.0.1", itoa(port))}, &bytes.Buffer{}, slog.New(slog.DiscardHandler))
+		done <- run(ctx, []string{"-listen", net.JoinHostPort("127.0.0.1", strconv.Itoa(port))}, &bytes.Buffer{}, slog.New(slog.DiscardHandler))
 	}()
 	c, err := net.DialUDP("udp4", nil, &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: port})
 	if err != nil {
@@ -59,6 +59,8 @@ func TestReflects(t *testing.T) {
 		if n, err = c.Read(buf); err == nil {
 			break
 		}
+		// Before the port is bound the read fails at once with refused.
+		time.Sleep(10 * time.Millisecond)
 	}
 	if err != nil {
 		t.Fatalf("no reply: %v", err)
@@ -80,7 +82,7 @@ func TestListenAllWildcard(t *testing.T) {
 	}
 	port := probe.LocalAddr().(*net.UDPAddr).Port
 	probe.Close()
-	conns, err := listenAll(":" + itoa(port))
+	conns, err := listenAll(":" + strconv.Itoa(port))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -96,5 +98,3 @@ func TestListenAllWildcard(t *testing.T) {
 		t.Fatalf("second socket is not IPv6: %v", conns[1].LocalAddr())
 	}
 }
-
-func itoa(n int) string { return strconv.Itoa(n) }

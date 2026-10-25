@@ -105,13 +105,6 @@ func (r *Reflector) evict(now time.Time) {
 	}
 }
 
-// Sessions is the number of senders with a sequence counter.
-func (r *Reflector) Sessions() int {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return len(r.sessions)
-}
-
 // Serve answers every Session-Sender packet on conn until ctx ends, then
 // closes conn. The sender's TTL is read from the socket so the reply can
 // carry it; a socket that does not deliver it gets UnknownTTL.

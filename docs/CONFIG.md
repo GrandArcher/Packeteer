@@ -274,7 +274,7 @@ Off unless this block is present. Trains of sequence-numbered packets go from ev
 | `flows` | 4 | 1-16. Trains per `twamp` responder and provider, each from a new source port. An `icmp` responder gets one. |
 | `responders` | required | 1-64 entries: `address` (an IP), `type` (`twamp`, the default, or `icmp`), and for `twamp` a `port` (default 862). An `icmp` entry takes no port. No duplicates, and no address inside a `probe.exclude` prefix. |
 
-Every train waits on `per_asn_pps` and `rate_limit_pps` for its packets, and `packets` may exceed `rate_limit_pps` (one train is one wait). A responder whose origin ASN is in `probe.exclude` gets no packet and reports `excluded by probe.exclude`. A provider in another `domain` is not measured here. The block is restart-only.
+Every train waits on `per_asn_pps` and `rate_limit_pps` for its packets, and `packets` may exceed `rate_limit_pps` (one train is one wait). The monitor builds its own `twamp` and `icmp` probers with their defaults; the options of a `probers` entry do not apply to the trains. A responder whose origin ASN is in `probe.exclude` gets no packet and reports `excluded by probe.exclude`. A provider in another `domain` is not measured here. The block is restart-only.
 
 #### `probe.path_check`
 

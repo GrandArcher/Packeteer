@@ -126,6 +126,12 @@ func TestReflectorInterop(t *testing.T) {
 	}
 }
 
+func sessions(r *Reflector) int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return len(r.sessions)
+}
+
 func TestReflectorSessionsBounded(t *testing.T) {
 	r := NewReflector(3)
 	now := time.Now()
@@ -133,14 +139,14 @@ func TestReflectorSessionsBounded(t *testing.T) {
 	for i := 1; i <= 3; i++ {
 		r.Reply(netip.AddrPortFrom(netip.MustParseAddr("192.0.2.1"), uint16(i)), 1, in, now.Add(time.Duration(i)*time.Second))
 	}
-	if r.Sessions() != 3 {
-		t.Fatalf("sessions = %d", r.Sessions())
+	if sessions(r) != 3 {
+		t.Fatalf("sessions = %d", sessions(r))
 	}
 	// A fourth sender evicts the least recently seen one (port 1), whose
 	// counter then restarts at zero.
 	r.Reply(netip.MustParseAddrPort("192.0.2.1:4"), 1, in, now.Add(4*time.Second))
-	if r.Sessions() != 3 {
-		t.Fatalf("sessions after eviction = %d", r.Sessions())
+	if sessions(r) != 3 {
+		t.Fatalf("sessions after eviction = %d", sessions(r))
 	}
 	out, _ := r.Reply(netip.MustParseAddrPort("192.0.2.1:1"), 1, in, now.Add(5*time.Second))
 	if seq := binary.BigEndian.Uint32(out[0:4]); seq != 0 {
@@ -148,7 +154,7 @@ func TestReflectorSessionsBounded(t *testing.T) {
 	}
 	// Idle sessions go first once the table is full again.
 	r.Reply(netip.MustParseAddrPort("192.0.2.1:9"), 1, in, now.Add(20*time.Minute))
-	if n := r.Sessions(); n != 1 {
+	if n := sessions(r); n != 1 {
 		t.Fatalf("sessions after idle eviction = %d, want 1", n)
 	}
 }

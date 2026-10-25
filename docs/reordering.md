@@ -35,7 +35,7 @@ Every train waits on `probe.rate_limit_pps` and `probe.per_asn_pps` like any oth
 
 ## Scoring
 
-By default reordering changes no decision: `reorder_weight` is 0 on the `weighted`, `commit`, and `cost` scorers. With `reorder_weight: W`, a provider path's controlled reordered ratio adds `W` points per percent to every candidate on that provider, the way `jitter_weight` adds points per millisecond of jitter. Only a fresh twamp reading counts, the worst flow across the provider's twamp responders; a reading older than the staleness window (`3 * probe.interval + packets * timeout`) is dropped, and an estimate is never scored. Everything else is unchanged: the learned-RIB check, allowlist, thresholds, `confirm_rounds`, hold time, cap, community, NO_EXPORT, and withdraw rules.
+By default reordering changes no decision: `reorder_weight` is 0 on the `weighted`, `commit`, and `cost` scorers. With `reorder_weight: W`, a provider path's controlled reordered ratio adds `W` points per percent to every candidate on that provider, the way `jitter_weight` adds points per millisecond of jitter. Only a fresh twamp reading counts, the worst flow across the provider's twamp responders; a reading older than the probe staleness window ([CONFIG.md](CONFIG.md#probe)) is dropped, and an estimate is never scored. Everything else is unchanged: the learned-RIB check, allowlist, thresholds, `confirm_rounds`, hold time, cap, community, NO_EXPORT, and withdraw rules.
 
 ## Reading the numbers
 
