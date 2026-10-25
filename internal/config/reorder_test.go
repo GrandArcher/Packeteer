@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -72,5 +73,39 @@ func TestReorderValidation(t *testing.T) {
 	// Two responders on one host with different ports or types are distinct.
 	if _, err := Parse([]byte(indirectBase + "  reorder: {responders: [{address: 203.0.113.9}, {address: 203.0.113.9, port: 8620}, {address: 203.0.113.9, type: icmp}]}\n")); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// A config whose measurement cannot finish before its readings go stale is
+// refused: ten silent twamp responders at four flows are 40 trains of
+// 20*20ms plus the 2s timeout, plus 800 packets at 100 pps.
+func TestReorderCycleValidation(t *testing.T) {
+	var many strings.Builder
+	for i := 1; i <= 10; i++ {
+		fmt.Fprintf(&many, "{address: 203.0.113.%d}, ", i)
+	}
+	_, err := Parse([]byte(indirectBase + "  reorder: {responders: [" + many.String() + "]}\n"))
+	if want := "can take 1m44s, so a reading can wait 3m28s to be replaced, more than three times probe.interval (1m30s)"; err == nil || !strings.Contains(err.Error(), want) {
+		t.Fatalf("err = %v, want %q", err, want)
+	}
+	if _, err := Parse([]byte(indirectBase + "  reorder: {responders: [{address: 203.0.113.9}, {address: 203.0.113.9, type: icmp}]}\n")); err != nil {
+		t.Fatal(err)
+	}
+	// per_asn_pps paces every train as if the responders shared an ASN.
+	_, err = Parse([]byte(indirectBase + "  per_asn_pps: 1\n  reorder: {timeout: 1s, responders: [{address: 203.0.113.9}]}\n"))
+	if want := "can take 1m25.6s"; err == nil || !strings.Contains(err.Error(), want) {
+		t.Fatalf("err = %v, want %q", err, want)
+	}
+}
+
+// Only providers probed here count, and an icmp responder is one train.
+func TestReorderCycle(t *testing.T) {
+	c := &Config{Domain: "pop-a", Providers: []Provider{{Name: "a"}, {Name: "b"}, {Name: "far", Domain: "pop-b"}}}
+	c.Probe.RateLimitPPS = 100
+	c.Probe.Reorder = &ProbeReorder{Packets: 10, Spacing: 10 * time.Millisecond, Timeout: time.Second, Flows: 3,
+		Responders: []ReorderResponder{{Type: "twamp"}, {Type: "icmp"}}}
+	// 2 providers * (3 + 1) trains * (100ms + 1s) + 80 packets at 100 pps.
+	if got, want := c.reorderCycle(), 8*1100*time.Millisecond+800*time.Millisecond; got != want {
+		t.Fatalf("cycle %s, want %s", got, want)
 	}
 }

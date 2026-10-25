@@ -29,13 +29,13 @@ Every train waits on `probe.rate_limit_pps` and `probe.per_asn_pps` like any oth
 
 - `GET /api/reorder`: every provider and responder with the worst flow and each flow ([API.md](API.md)).
 - `GET /api/providers`: each provider's headline `reorder` reading (its controlled responders' worst flow; only with no controlled responder the worst estimate, marked `estimate: true`).
-- `GET /api/decisions`: every candidate carries `reorder_pct`, the provider path's controlled reading, zero without one.
+- `GET /api/decisions`: every candidate carries `reorder_pct`, the provider path's controlled reading. It is zero on every candidate of a prefix when one of them has no fresh reading.
 - `/metrics`: `packeteer_reorder_success` per provider and responder, and `packeteer_reorder_ratio` (0 to 1), `packeteer_reorder_extent`, and `packeteer_reorder_n` per flow, each with `provider`, `responder`, `type`, `estimate`, and `flow` labels.
 - The Providers page shows the headline reading in a Reordering column, with an `est.` badge on an estimate.
 
 ## Scoring
 
-By default reordering changes no decision: `reorder_weight` is 0 on the `weighted`, `commit`, and `cost` scorers. With `reorder_weight: W`, a provider path's controlled reordered ratio adds `W` points per percent to every candidate on that provider, the way `jitter_weight` adds points per millisecond of jitter. Only a fresh twamp reading counts, the worst flow across the provider's twamp responders; a reading older than the probe staleness window ([CONFIG.md](CONFIG.md#probe)) is dropped, and an estimate is never scored. Everything else is unchanged: the learned-RIB check, allowlist, thresholds, `confirm_rounds`, hold time, cap, community, NO_EXPORT, and withdraw rules.
+By default reordering changes no decision: `reorder_weight` is 0 on the `weighted`, `commit`, and `cost` scorers. With `reorder_weight: W`, a provider path's controlled reordered ratio adds `W` points per percent to every candidate on that provider, the way `jitter_weight` adds points per millisecond of jitter. Only a fresh twamp reading counts, the worst flow across the provider's twamp responders; a reading older than the probe staleness window ([CONFIG.md](CONFIG.md#probe)) is dropped, and an estimate is never scored. A provider without a fresh reading is unknown, not clean: when any provider measured for a prefix has none, reordering is left out of every candidate's score for that prefix, as with weight 0. A provider in another `domain` is never measured here, so reordering does not score its prefixes. Everything else is unchanged: the learned-RIB check, allowlist, thresholds, `confirm_rounds`, hold time, cap, community, NO_EXPORT, and withdraw rules.
 
 ## Reading the numbers
 

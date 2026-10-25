@@ -50,6 +50,7 @@ for _ in $(seq 1 60); do
 	if curl -fsS "$base/healthz" >/dev/null 2>&1; then break; fi
 	sleep 1
 done
+curl -fsS "$base/healthz" >/dev/null 2>&1 || fail "packeteer not healthy after 60s"
 
 # wait_api <path> <jq filter>: wait until the API at path matches it.
 wait_api() {

@@ -146,11 +146,20 @@ func (p *Prober) Probe(ctx context.Context, req plugin.ProbeRequest) (plugin.Pro
 	res := plugin.ProbeResult{}
 	sentAt := make([]time.Time, count)
 	start := time.Now()
+	// A run cut short keeps the replies already matched.
+	collect := func() {
+		<-done
+		close(replies)
+		res.RTTs, res.Order = train.Collect(sentAt, replies)
+	}
+	finish := func() {
+		_ = uc.SetReadDeadline(time.Now())
+		collect()
+	}
 	for seq := 0; seq < count; seq++ {
 		if seq > 0 {
 			if err := train.SleepUntil(ctx, start.Add(time.Duration(seq)*spacing)); err != nil {
-				_ = uc.SetReadDeadline(time.Now())
-				<-done
+				finish()
 				return res, err
 			}
 		}
@@ -159,22 +168,18 @@ func (p *Prober) Probe(ctx context.Context, req plugin.ProbeRequest) (plugin.Pro
 		res.Sent++
 		if _, err := uc.Write(pkt.Marshal()); err != nil {
 			if errors.Is(err, syscall.EADDRNOTAVAIL) {
-				_ = uc.SetReadDeadline(time.Now())
-				<-done
+				finish()
 				return res, fmt.Errorf("%w: %v", plugin.ErrSourceUnavailable, err)
 			}
 			// Unreachable and refused: the packet is lost.
 		}
 	}
 	if count < 1 {
-		_ = uc.SetReadDeadline(time.Now())
-		<-done
+		finish()
 		return res, nil
 	}
 	train.EndReads(ctx, uc.SetReadDeadline, sentAt[count-1].Add(req.Timeout))
-	<-done
-	close(replies)
-	res.RTTs, res.Order = train.Collect(sentAt, replies)
+	collect()
 	if len(res.RTTs) == 0 {
 		select {
 		case <-refused:

@@ -72,12 +72,12 @@ type ReorderOptions struct {
 // the largest n for which a packet is n-reordered (section 5.3): it
 // arrived after n later-sent packets in a row.
 type ReorderStats struct {
-	Sent        int     `json:"sent"`
-	Received    int     `json:"received"`
-	Reordered   int     `json:"reordered"`
-	RatioPct    float64 `json:"ratio_pct"`
-	Extent      int     `json:"extent"`
-	NReordering int     `json:"n_reordering"`
+	Sent        int
+	Received    int
+	Reordered   int
+	RatioPct    float64
+	Extent      int
+	NReordering int
 }
 
 // ComputeReorder derives the RFC 4737 metrics from a train's arrival
@@ -120,31 +120,31 @@ func ComputeReorder(sent int, order []int) ReorderStats {
 
 // FlowReorder is one train: a fixed 5-tuple, so one ECMP member.
 type FlowReorder struct {
-	Flow int `json:"flow"`
+	Flow int
 	ReorderStats
-	Err string `json:"error,omitempty"`
+	Err string
 }
 
 // ReorderResult is the latest reordering measurement of one provider path
 // toward one responder (#224). Measurement only.
 type ReorderResult struct {
-	Provider  string     `json:"provider"`
-	Responder netip.Addr `json:"responder"`
-	Port      uint16     `json:"port,omitempty"`
-	Type      string     `json:"type"`
+	Provider  string
+	Responder netip.Addr
+	Port      uint16
+	Type      string
 	// Estimate is set for an icmp responder. Estimates are shown, and
 	// never scored.
-	Estimate bool          `json:"estimate"`
-	Flows    []FlowReorder `json:"flows"`
+	Estimate bool
+	Flows    []FlowReorder
 	// Worst is the flow with the highest reordered ratio, the bundle
 	// member that reorders most; WorstFlow is its number. Zero when no
 	// train got a reply.
-	Worst     ReorderStats `json:"worst"`
-	WorstFlow int          `json:"worst_flow,omitempty"`
+	Worst     ReorderStats
+	WorstFlow int
 	// Err is set when no train got a reply, the responder is excluded, or
 	// the source address cannot be used.
-	Err  string    `json:"error,omitempty"`
-	Time time.Time `json:"time"`
+	Err  string
+	Time time.Time
 }
 
 // OK reports whether the result holds a measurement.

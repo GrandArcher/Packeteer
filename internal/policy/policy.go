@@ -174,8 +174,9 @@ type Input struct {
 	Remote map[string]bool
 	// Reorder is each provider path's RFC 4737 reordered ratio, in
 	// percent, from the reordering monitor's controlled responders (#224).
-	// A provider absent here has no fresh reading and scores as zero.
-	// ICMP estimates are never put here.
+	// A provider absent here has no fresh reading, and then no candidate
+	// of a prefix that provider was measured for carries a reading. ICMP
+	// estimates are never put here.
 	Reorder map[string]float64
 	// Passive is the span and flow sources' view of each prefix with TCP
 	// traffic in their window (#202): true when that traffic is over the
@@ -295,7 +296,8 @@ type Candidate struct {
 	RTTAvg   time.Duration `json:"rtt_avg"`
 	Jitter   time.Duration `json:"jitter"`
 	// ReorderPct is the provider path's reordered ratio (#224), an input
-	// to the score only through the scorer's reorder_weight.
+	// to the score only through the scorer's reorder_weight. Zero on every
+	// candidate when one of them has no fresh reading.
 	ReorderPct float64 `json:"reorder_pct"`
 	Usable     bool    `json:"usable"`
 	Why        string  `json:"why,omitempty"` // why not usable

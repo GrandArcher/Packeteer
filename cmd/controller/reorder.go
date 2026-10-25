@@ -32,19 +32,14 @@ func newReorderMonitor(cfg *config.Config, log *slog.Logger, lim probe.Limiter, 
 		}
 		providers = append(providers, probe.Provider{Name: p.Name, Source: src, Marking: markingOf(p)})
 	}
-	// The config type names the prober plugin; the monitor's type decides
-	// whether the reading is an estimate.
-	types := map[string]string{config.ReorderResponderTWAMP: probe.ResponderTWAMP, config.ReorderResponderICMP: probe.ResponderICMP}
+	// A responder type is also the name of the prober plugin that sends
+	// its trains; config validation and the monitor check the type.
 	probers := map[string]plugin.Prober{}
 	var responders []probe.Responder
 	for _, r := range rc.Responders {
 		addr, err := netip.ParseAddr(r.Address)
 		if err != nil {
 			return nil, fmt.Errorf("probe.reorder responder %q: %w", r.Address, err)
-		}
-		typ, ok := types[r.Type]
-		if !ok {
-			return nil, fmt.Errorf("probe.reorder responder %s: unknown type %q", r.Address, r.Type)
 		}
 		pr, ok := probers[r.Type]
 		if !ok {
@@ -55,7 +50,7 @@ func newReorderMonitor(cfg *config.Config, log *slog.Logger, lim probe.Limiter, 
 			}
 			probers[r.Type] = pr
 		}
-		responders = append(responders, probe.Responder{Address: addr, Port: uint16(r.Port), Type: typ, Prober: pr})
+		responders = append(responders, probe.Responder{Address: addr, Port: uint16(r.Port), Type: r.Type, Prober: pr})
 	}
 	return probe.NewReorderMonitor(probe.ReorderOptions{
 		Providers:  providers,

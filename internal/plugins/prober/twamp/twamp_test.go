@@ -190,3 +190,55 @@ func TestZeroCount(t *testing.T) {
 		t.Fatalf("res = %+v, err = %v", res, err)
 	}
 }
+
+// A run cut short by its context keeps the replies already matched.
+func TestCancelKeepsReplies(t *testing.T) {
+	port := reflector(t)
+	p := newProber(t, "")
+	ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
+	defer cancel()
+	res, err := p.Probe(ctx, plugin.ProbeRequest{Source: lo, Target: lo, Port: port, Count: 5, Spacing: 100 * time.Millisecond, Timeout: time.Second})
+	if !errors.Is(err, context.DeadlineExceeded) || res.Sent < 2 || res.Sent > 4 || len(res.RTTs) < res.Sent-1 || len(res.Order) != len(res.RTTs) {
+		t.Fatalf("res = %+v, err = %v", res, err)
+	}
+}
+
+// A reflector that drops the second packet: that packet is loss, the
+// others keep their RTTs and order, and the run waits Timeout after the
+// last send for the missing reply.
+func TestTrainLoss(t *testing.T) {
+	conn, err := net.ListenUDP("udp4", &net.UDPAddr{IP: lo.AsSlice()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	go func() {
+		r := twamp.NewReflector(0)
+		buf := make([]byte, 1500)
+		for i := 0; ; i++ {
+			n, addr, err := conn.ReadFromUDP(buf)
+			if err != nil {
+				return
+			}
+			if i == 1 {
+				continue
+			}
+			src, _ := netip.ParseAddrPort(addr.String())
+			out, _ := r.Reply(src, 64, buf[:n], time.Now())
+			_, _ = conn.WriteToUDP(out, addr)
+		}
+	}()
+	p := newProber(t, "")
+	start := time.Now()
+	res, err := p.Probe(context.Background(), plugin.ProbeRequest{Source: lo, Target: lo, Port: uint16(conn.LocalAddr().(*net.UDPAddr).Port),
+		Count: 4, Spacing: time.Millisecond, Timeout: 200 * time.Millisecond})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Sent != 4 || len(res.RTTs) != 3 || !slices.Equal(res.Order, []int{0, 2, 3}) {
+		t.Fatalf("res = %+v", res)
+	}
+	if took := time.Since(start); took < 200*time.Millisecond {
+		t.Fatalf("took %s, want the 200ms timeout after the last send", took)
+	}
+}

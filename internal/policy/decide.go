@@ -101,6 +101,16 @@ func Decide(prev State, in Input, cfg Config, scorer plugin.Scorer, now time.Tim
 		return st, out
 	}
 
+	// A reordering reading counts for a prefix only when every provider
+	// measured for it has one (#224). A missing or stale reading is
+	// unknown; scoring it as zero would favour the path known least.
+	unread := map[netip.Prefix]bool{}
+	for _, r := range in.Results {
+		if _, ok := in.Reorder[r.Provider]; !ok {
+			unread[r.Prefix] = true
+		}
+	}
+
 	// Group usable measurements by prefix.
 	byPrefix := map[netip.Prefix][]Candidate{}
 	subs := map[netip.Prefix]map[netip.Prefix]*SubrangeDecision{}
@@ -110,8 +120,11 @@ func Decide(prev State, in Input, cfg Config, scorer plugin.Scorer, now time.Tim
 		ans := in.RPKI[r.Prefix][r.Provider]
 		reg := in.IRR[r.Prefix][r.Provider]
 		c := Candidate{Provider: r.Provider, LossPct: r.Stats.LossPct, RTTAvg: r.Stats.RTTAvg, Jitter: r.Stats.Jitter, Usable: true,
-			ReorderPct: in.Reorder[r.Provider], RPKI: ans.State, RPKISource: ans.Source, RPKIUpdated: ans.Updated,
+			RPKI: ans.State, RPKISource: ans.Source, RPKIUpdated: ans.Updated,
 			IRR: reg.State, IRRSource: reg.Source, IRRUpdated: reg.Updated, Confidence: r.Confidence}
+		if !unread[r.Prefix] {
+			c.ReorderPct = in.Reorder[r.Provider]
+		}
 		if problem, seen := in.Passive[r.Prefix]; seen && r.OK() && r.Provider == carrierOf(st, in, cfg, r.Prefix) {
 			c.Confidence = r.Confidence.WithPassive(problem == (r.Stats.LossPct > 0))
 		}

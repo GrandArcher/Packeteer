@@ -228,8 +228,9 @@ type PathStats struct {
 	Jitter   time.Duration
 	// ReorderPct is the RFC 4737 reordered ratio, in percent, of the
 	// provider path measured by trains toward a responder the operator
-	// controls (#224). Zero when no fresh reordering reading exists.
-	// Estimates from ICMP responders are never put here.
+	// controls (#224). Zero for every provider of a prefix when one of
+	// them has no fresh reading. Estimates from ICMP responders are never
+	// put here.
 	ReorderPct float64
 }
 

@@ -15,7 +15,8 @@ providers:
     next_hop: 192.0.2.2
 probe:
   # One measurement is 26 trains (two providers, twelve flows and one
-  # echo train each) of up to 700ms: 15s keeps a reading fresh (#224).
+  # echo train each) of about 750ms with the packet budget: 15s keeps a
+  # reading fresh (#224).
   interval: 15s
   timeout: 1s
   packets: 3

@@ -202,9 +202,16 @@ func (p *Prober) Probe(ctx context.Context, req plugin.ProbeRequest) (plugin.Pro
 	res := plugin.ProbeResult{}
 	sentAt := make([]time.Time, count)
 	start := time.Now()
+	// A run cut short keeps the replies already matched, as the loss of a
+	// partial run.
+	collect := func() {
+		<-done
+		close(replies)
+		res.RTTs, res.Order = train.Collect(sentAt, replies)
+	}
 	finish := func() {
 		_ = c.c.SetReadDeadline(time.Now())
-		<-done
+		collect()
 	}
 	for seq := 1; seq <= count; seq++ {
 		if seq > 1 {
@@ -232,9 +239,7 @@ func (p *Prober) Probe(ctx context.Context, req plugin.ProbeRequest) (plugin.Pro
 		return res, nil
 	}
 	train.EndReads(ctx, c.c.SetReadDeadline, sentAt[count-1].Add(req.Timeout))
-	<-done
-	close(replies)
-	res.RTTs, res.Order = train.Collect(sentAt, replies)
+	collect()
 	return res, nil
 }
 

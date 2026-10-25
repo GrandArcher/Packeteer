@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/GrandArcher/Packeteer/internal/probe"
 	"github.com/GrandArcher/Packeteer/internal/twamp"
 )
 
@@ -20,8 +21,6 @@ const (
 	DefaultReorderFlows   = 4
 	MaxReorderFlows       = 16
 	MaxReorderResponders  = 64
-	ReorderResponderTWAMP = "twamp"
-	ReorderResponderICMP  = "icmp"
 )
 
 // ProbeReorder measures packet reordering per provider path (RFC 4737)
@@ -38,8 +37,9 @@ type ProbeReorder struct {
 	// uses probe.timeout.
 	Timeout time.Duration `yaml:"timeout"`
 	// Interval is the time between measurements. Zero uses
-	// probe.interval. It must stay inside the staleness window, or the
-	// reading is stale before the next one.
+	// probe.interval. The longest gap between two readings of one
+	// provider and responder (see reorderCycle) must fit in three times
+	// probe.interval, inside the window after which a reading is stale.
 	Interval time.Duration `yaml:"interval"`
 	// Flows is how many trains, each from its own source port, go to a
 	// twamp responder per measurement, so an ECMP bundle's members are
@@ -82,9 +82,9 @@ func (c *Config) defaultReorder() {
 		rr := &r.Responders[i]
 		rr.Type = strings.ToLower(strings.TrimSpace(rr.Type))
 		if rr.Type == "" {
-			rr.Type = ReorderResponderTWAMP
+			rr.Type = probe.ResponderTWAMP
 		}
-		if rr.Type == ReorderResponderTWAMP && rr.Port == 0 {
+		if rr.Type == probe.ResponderTWAMP && rr.Port == 0 {
 			rr.Port = twamp.DefaultPort
 		}
 	}
@@ -110,6 +110,13 @@ func (c *Config) validateReorder(add func(string, ...any)) {
 	if r.Flows < 1 || r.Flows > MaxReorderFlows {
 		add("probe.reorder.flows %d must be between 1 and %d", r.Flows, MaxReorderFlows)
 	}
+	// A measurement starts every interval, or when the last one ends if
+	// that is later, and a reading may come early in one and late in the
+	// next.
+	if window, cycle := 3*c.Probe.Interval, c.reorderCycle(); window > 0 && max(r.Interval, cycle)+cycle > window {
+		add("probe.reorder: one measurement of every provider and responder can take %s, so a reading can wait %s to be replaced, more than three times probe.interval (%s); lower flows, packets, timeout, or responders, or raise probe.interval",
+			cycle, max(r.Interval, cycle)+cycle, window)
+	}
 	if len(r.Responders) == 0 {
 		add("probe.reorder.responders must list at least one responder")
 	}
@@ -128,11 +135,11 @@ func (c *Config) validateReorder(add func(string, ...any)) {
 			continue
 		}
 		switch rr.Type {
-		case ReorderResponderTWAMP:
+		case probe.ResponderTWAMP:
 			if rr.Port < 1 || rr.Port > 65535 {
 				key("port %d must be between 1 and 65535", rr.Port)
 			}
-		case ReorderResponderICMP:
+		case probe.ResponderICMP:
 			if rr.Port != 0 {
 				key("port is not used by an icmp responder")
 			}
@@ -150,4 +157,37 @@ func (c *Config) validateReorder(add func(string, ...any)) {
 		}
 		seen[rr] = true
 	}
+}
+
+// reorderCycle is the longest one measurement of every local provider and
+// responder takes when no reply comes back: the trains run one after
+// another, each packets*spacing plus timeout, and their packets wait on
+// rate_limit_pps, or on per_asn_pps when set (at most rate_limit_pps; as
+// if every responder had one origin ASN). Probe engine packets on the same
+// budget can still delay it.
+func (c *Config) reorderCycle() time.Duration {
+	r := c.Probe.Reorder
+	perProvider := 0
+	for _, rr := range r.Responders {
+		if rr.Type == probe.ResponderICMP {
+			perProvider++
+		} else {
+			perProvider += r.Flows
+		}
+	}
+	trains := 0
+	for _, p := range c.Providers {
+		if !c.Remote(p) {
+			trains += perProvider
+		}
+	}
+	cycle := time.Duration(trains) * (time.Duration(r.Packets)*r.Spacing + r.Timeout)
+	pps := c.Probe.RateLimitPPS
+	if c.Probe.PerASNPPS > 0 {
+		pps = c.Probe.PerASNPPS
+	}
+	if pps > 0 {
+		cycle += time.Duration(trains*r.Packets) * time.Second / time.Duration(pps)
+	}
+	return cycle
 }
