@@ -9,7 +9,9 @@ package verify
 
 import (
 	"fmt"
+	"maps"
 	"net/netip"
+	"slices"
 	"sort"
 	"sync"
 	"time"
@@ -74,11 +76,15 @@ type Claim struct {
 	Path *Path
 }
 
-func (c Claim) key() string {
-	if c.Kind == Outbound {
-		return c.Prefix.String()
+func (c Claim) key() string { return target(c.Kind, c.Prefix, c.Provider) }
+
+// target is what a steer is keyed by: the prefix (outbound) or the provider
+// inbound traffic is steered away from.
+func target(k Kind, p netip.Prefix, provider string) string {
+	if k == Outbound {
+		return p.String()
 	}
-	return c.Provider
+	return provider
 }
 
 // Observation is what the host reads each round.
@@ -116,12 +122,7 @@ type Result struct {
 
 // Target names what was steered: the prefix (outbound) or the provider
 // inbound traffic is steered away from.
-func (r Result) Target() string {
-	if r.Kind == Outbound {
-		return r.Prefix.String()
-	}
-	return r.Provider
-}
+func (r Result) Target() string { return target(r.Kind, r.Prefix, r.Provider) }
 
 type open struct {
 	claim   Claim
@@ -181,6 +182,20 @@ func (t *Tracker) Cancel(kind Kind, key string) {
 	delete(t.open, mapKey(kind, key))
 }
 
+// Keep drops every open verification whose steer is no longer on the wire,
+// as keep reports. A route that went away for another reason (a mode
+// change, an allowlist change, a failed sync) must not be judged on traffic
+// that has gone back to the native path.
+func (t *Tracker) Keep(keep func(kind Kind, key string) bool) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	for k, o := range t.open {
+		if !keep(o.claim.Kind, o.claim.key()) {
+			delete(t.open, k)
+		}
+	}
+}
+
 // Reset drops every open verification, as a step-down from active does:
 // the next term starts with no steer to judge.
 func (t *Tracker) Reset() {
@@ -201,7 +216,7 @@ func (t *Tracker) Observe(now time.Time, obs Observation) []Result {
 		}
 	}
 	var out []Result
-	for _, k := range sortedKeys(t.open) {
+	for _, k := range slices.Sorted(maps.Keys(t.open)) {
 		o := t.open[k]
 		if now.Before(o.due) {
 			continue
@@ -223,7 +238,7 @@ func (t *Tracker) List() []Result {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	var out []Result
-	for _, k := range sortedKeys(t.open) {
+	for _, k := range slices.Sorted(maps.Keys(t.open)) {
 		o := t.open[k]
 		out = append(out, Result{Kind: o.claim.Kind, Prefix: o.claim.Prefix, Provider: o.claim.Provider, From: o.claim.From,
 			Status: Pending, Started: o.started, Due: o.due, ExpectedMbps: o.claim.Expected,
@@ -353,13 +368,4 @@ func (t *Tracker) judge(now time.Time, o *open, obs Observation) (Result, bool) 
 		}
 	}
 	return r, false
-}
-
-func sortedKeys[V any](m map[string]V) []string {
-	out := make([]string, 0, len(m))
-	for k := range m {
-		out = append(out, k)
-	}
-	sort.Strings(out)
-	return out
 }

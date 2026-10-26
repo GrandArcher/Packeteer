@@ -53,7 +53,7 @@ telemetry:
       file: /etc/packeteer/probes/usage.yaml
 verify:
   enabled: true
-  outbound_window: 10s
+  outbound_window: 20s
 announcer:
   type: gobgp
 

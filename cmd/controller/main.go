@@ -461,9 +461,10 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 	// The verifier needs both controllers, built below; the API reads it
 	// through this variable.
 	var verifier *steerVerifier
+	var verifierRef atomic.Pointer[steerVerifier]
 	var verificationStatus func() []verify.Result
 	if cfg.Verify.Enabled {
-		verificationStatus = func() []verify.Result { return verifier.results() }
+		verificationStatus = func() []verify.Result { return verifierRef.Load().results() }
 	}
 	// Threat mitigation (#28) is built before the HTTP server, which adds
 	// and removes its rules. It needs the RIB view only to sync.
@@ -664,6 +665,7 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 	}
 	mit.SetOutbound(ctl.Injected)
 	verifier = newSteerVerifier(cfg, decider, inb, plugins, log)
+	verifierRef.Store(verifier)
 	if view != nil {
 		if err := view.Start(ctx); err != nil {
 			log.Error("refusing to start", "err", err)
@@ -896,7 +898,7 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 			if reorderMon != nil {
 				in.Reorder = reorderMon.Scored(now, maxResultAge(cfg))
 			}
-			verified, backedOut, revertedIn := verifier.check(loopCtx, now, in.Results)
+			verified, backedOut, revertedIn := verifier.check(loopCtx, now, ctl.Injected, in.Results)
 			changes, err := runDecision(now, decider, in, ctl, log, snap.Mode, engine)
 			changes = append(backedOut, changes...)
 			atlasAfterMoves(atl, ctl.Injected, changes, in.Results)

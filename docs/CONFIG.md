@@ -134,7 +134,7 @@ A start and an end are logged (`flap quarantine started`, `flap quarantine relea
 
 ### `verify`
 
-Steer verification (#305). Off by default. After Packeteer announces an outbound improvement or an inbound steer, it waits one window and then reads the interface counters of the providers involved (a `telemetry` plugin: `snmp`, or `fixed` for a lab). It reports the steer as `verified`, `partial`, `not_moved`, or `unknown`. A steer that is `partial` or `not_moved` is a routing anomaly: a `steer.unverified` event ([EVENTS.md](EVENTS.md)). Only a steer that was actually announced is checked: not observe or suggest, not a moderated inbound steer. Unknown keys are errors, and a change needs a restart.
+Steer verification (#305). Off by default. After Packeteer announces an outbound improvement or an inbound steer, it waits one window and then reads the interface counters of the providers involved (a `telemetry` plugin: `snmp`, or `fixed` for a lab). It reports the steer as `verified`, `partial`, `not_moved`, or `unknown`. A steer that is `partial` or `not_moved` is a routing anomaly: a `steer.unverified` event ([EVENTS.md](EVENTS.md)). Only a steer that was actually announced is checked: not observe or suggest, not a moderated inbound steer. A check is dropped, not judged, if its route leaves the wire first (a mode change, an allowlist change, a failed sync, a release or retire). Unknown keys are errors, and a change needs a restart.
 
 | Key | Default | Meaning |
 |---|---|---|

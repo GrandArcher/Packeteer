@@ -220,6 +220,26 @@ func TestCancelDropsAnOpenClaim(t *testing.T) {
 	}
 }
 
+func TestKeepDropsSteersThatLeftTheWire(t *testing.T) {
+	tr := New(Config{}, nil)
+	a := outClaim(40, rates(t0, nil, map[string]float64{"transit-a": 100, "transit-b": 10}))
+	b := a
+	b.Prefix = netip.MustParsePrefix("203.0.113.0/24")
+	in := Claim{Kind: Inbound, Provider: "transit-a", Rates: rates(t0, map[string]float64{"transit-a": 150, "transit-b": 30}, nil)}
+	tr.Begin(t0, a)
+	tr.Begin(t0, b)
+	tr.Begin(t0, in)
+	tr.Keep(func(k Kind, key string) bool { return k == Outbound && key == b.Prefix.String() })
+	l := tr.List()
+	if len(l) != 1 || l[0].Prefix != b.Prefix {
+		t.Fatalf("list = %+v, want only %s", l, b.Prefix)
+	}
+	at := t0.Add(time.Hour)
+	if got := tr.Observe(at, Observation{Rates: rates(at, nil, nil)}); len(got) != 1 || got[0].Prefix != b.Prefix {
+		t.Fatalf("a dropped claim was judged: %+v", got)
+	}
+}
+
 func TestDegradedPathIsReported(t *testing.T) {
 	worse := func(before, after Path) bool { return after.LossPct-before.LossPct >= 5 }
 	tr := New(Config{}, worse)
@@ -245,7 +265,7 @@ func TestDegradedPathIsReported(t *testing.T) {
 func TestFinishedResultsAreBounded(t *testing.T) {
 	tr := New(Config{}, nil)
 	for i := 0; i < maxDone+50; i++ {
-		p := netip.PrefixFrom(netip.AddrFrom4([4]byte{10, byte(i >> 8), byte(i), 0}), 24)
+		p := netip.PrefixFrom(netip.AddrFrom16([16]byte{0x20, 0x01, 0x0d, 0xb8, byte(i >> 8), byte(i)}), 48)
 		c := outClaim(40, rates(t0, nil, map[string]float64{"transit-a": 100, "transit-b": 10}))
 		c.Prefix = p
 		tr.Begin(t0, c)

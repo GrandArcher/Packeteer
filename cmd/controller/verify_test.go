@@ -130,13 +130,21 @@ func (r *verifyRig) injected(p netip.Prefix) bool { return r.inj[p] }
 
 func (r *verifyRig) improve(t *testing.T, now time.Time, mbps float64) []policy.Change {
 	t.Helper()
+	return r.improveWith(t, now, mbps, mbps)
+}
+
+// improveWith is improve with the volume the decision input carries
+// (inputMbps) apart from the one the change must come out with (wantMbps):
+// under the weighted scorer the input carries none.
+func (r *verifyRig) improveWith(t *testing.T, now time.Time, inputMbps, wantMbps float64) []policy.Change {
+	t.Helper()
 	res := func(provider string, loss, rtt float64) probe.Result {
 		return probe.Result{Provider: provider, Prefix: verifyPrefix, Time: now, Stats: probe.Stats{Sent: 10, Received: 10, LossPct: loss, RTTAvg: time.Duration(rtt * float64(time.Millisecond))}}
 	}
 	in := policy.Input{Results: []probe.Result{res("transit-a", 0, 90), res("transit-b", 0, 30)}, ProviderUp: map[string]bool{"transit-a": true, "transit-b": true},
-		RIBEnabled: true, RIBReady: true, Native: map[netip.Prefix]string{verifyPrefix: "transit-a"}, VolumeMbps: map[netip.Prefix]float64{verifyPrefix: mbps}}
+		RIBEnabled: true, RIBReady: true, Native: map[netip.Prefix]string{verifyPrefix: "transit-a"}, VolumeMbps: map[netip.Prefix]float64{verifyPrefix: inputMbps}}
 	ch := r.dec.Evaluate(in, now)
-	if len(ch) != 1 || ch[0].Action != policy.ActionImprove || ch[0].New.VolumeMbps != mbps {
+	if len(ch) != 1 || ch[0].Action != policy.ActionImprove || ch[0].New.VolumeMbps != wantMbps {
 		t.Fatalf("improve: %+v", ch)
 	}
 	return ch
@@ -165,7 +173,7 @@ func TestVerifyOutboundVerifiedLeavesTheImprovement(t *testing.T) {
 	}
 	at := verifyT0.Add(verify.DefaultOutboundWindow)
 	r.tel.set(at, nil, map[string]float64{"transit-a": 62, "transit-b": 48})
-	done, pol, in := r.v.check(context.Background(), at, nil)
+	done, pol, in := r.v.check(context.Background(), at, r.injected, nil)
 	if len(done) != 1 || done[0].Status != verify.Verified || len(pol) != 0 || len(in) != 0 || len(r.dec.Improvements()) != 1 {
 		t.Fatalf("done %+v pol %+v in %+v improvements %+v", done, pol, in, r.dec.Improvements())
 	}
@@ -183,7 +191,7 @@ func TestVerifyOutboundNotMovedBacksOutOnlyWhenConfigured(t *testing.T) {
 			r.v.begin(context.Background(), verifyT0, r.injected, config.ModeInject, r.improve(t, verifyT0, 40), nil, nil)
 			at := verifyT0.Add(verify.DefaultOutboundWindow)
 			r.tel.set(at, nil, map[string]float64{"transit-a": 100, "transit-b": 10})
-			done, pol, _ := r.v.check(context.Background(), at, nil)
+			done, pol, _ := r.v.check(context.Background(), at, r.injected, nil)
 			if len(done) != 1 || done[0].Status != verify.NotMoved || done[0].BackedOut != tc.gone {
 				t.Fatalf("done %+v", done)
 			}
@@ -231,7 +239,7 @@ func TestVerifyInboundVerifiedKeepsTheSteer(t *testing.T) {
 	r.v.begin(context.Background(), verifyT0, r.injected, config.ModeInject, nil, r.steerInbound(t, verifyT0), nil)
 	at := verifyT0.Add(verify.DefaultInboundWindow)
 	r.tel.set(at, map[string]float64{"transit-a": 40, "transit-b": 140}, nil)
-	done, _, in := r.v.check(context.Background(), at, nil)
+	done, _, in := r.v.check(context.Background(), at, r.injected, nil)
 	if len(done) != 1 || done[0].Status != verify.Verified || len(in) != 0 || r.ann.count() != 1 || len(r.inb.Status().Steers) != 1 {
 		t.Fatalf("done %+v in %+v routes %d", done, in, r.ann.count())
 	}
@@ -243,7 +251,7 @@ func TestVerifyInboundNotMovedRevertsAndWithdraws(t *testing.T) {
 	r.v.begin(context.Background(), verifyT0, r.injected, config.ModeInject, nil, r.steerInbound(t, verifyT0), nil)
 	at := verifyT0.Add(verify.DefaultInboundWindow)
 	r.tel.set(at, map[string]float64{"transit-a": 150, "transit-b": 30}, nil)
-	done, _, in := r.v.check(context.Background(), at, nil)
+	done, _, in := r.v.check(context.Background(), at, r.injected, nil)
 	if len(done) != 1 || done[0].Status != verify.NotMoved || !done[0].BackedOut || len(in) != 1 || in[0].Action != inbound.ActionRelease {
 		t.Fatalf("done %+v in %+v", done, in)
 	}
@@ -268,7 +276,7 @@ func TestVerifyOffIsNil(t *testing.T) {
 	var v *steerVerifier
 	v.begin(context.Background(), verifyT0, nil, "", nil, nil, nil)
 	v.reset()
-	if done, pol, in := v.check(context.Background(), verifyT0, nil); done != nil || pol != nil || in != nil || v.results() != nil {
+	if done, pol, in := v.check(context.Background(), verifyT0, nil, nil); done != nil || pol != nil || in != nil || v.results() != nil {
 		t.Fatal("a nil verifier did something")
 	}
 }
@@ -283,5 +291,59 @@ func TestVerifyDegradedUsesThePerformanceThresholds(t *testing.T) {
 	}
 	if r.v.degraded(verify.Path{LossPct: 0, RTTMs: 30}, verify.Path{LossPct: 0, RTTMs: 35}) {
 		t.Fatal("5 ms more RTT is inside the threshold")
+	}
+}
+
+// volumeSource reports a fixed volume, as the static source does with mbps.
+type volumeSource struct {
+	plugin.Base
+	mbps float64
+}
+
+func (volumeSource) Targets(context.Context) ([]plugin.Target, error) { return nil, nil }
+
+func (v volumeSource) Volumes(context.Context) ([]plugin.PrefixVolume, error) {
+	return []plugin.PrefixVolume{{Prefix: verifyPrefix, Bytes: uint64(v.mbps * 1e6 / 8), Window: time.Second}}, nil
+}
+
+func TestVerifyReadsTheFlowVolumeWhenTheImprovementHasNone(t *testing.T) {
+	r := newVerifyRig(t, verify.Config{})
+	r.v.plugins.Sources = []pluginhost.Instance[plugin.TargetSource]{{Name: "volumes", Plugin: volumeSource{mbps: 40}}}
+	r.tel.set(verifyT0, nil, map[string]float64{"transit-a": 100, "transit-b": 10})
+	// The weighted scorer plans nothing by volume, so the change carries none.
+	changes := r.improveWith(t, verifyT0, 0, 0)
+	r.v.begin(context.Background(), verifyT0, r.injected, config.ModeInject, changes, nil, nil)
+	if l := r.v.results(); len(l) != 1 || l[0].ExpectedMbps != 40 {
+		t.Fatalf("results = %+v, want 40 Mbps expected from the volume source", l)
+	}
+	at := verifyT0.Add(verify.DefaultOutboundWindow)
+	r.tel.set(at, nil, map[string]float64{"transit-a": 62, "transit-b": 48})
+	if done, _, _ := r.v.check(context.Background(), at, r.injected, nil); len(done) != 1 || done[0].Status != verify.Verified {
+		t.Fatalf("done = %+v", done)
+	}
+}
+
+func TestVerifyDropsSteersThatLeftTheWire(t *testing.T) {
+	r := newVerifyRig(t, verify.Config{Backout: []string{"inbound", "outbound"}})
+	r.tel.set(verifyT0, map[string]float64{"transit-a": 150, "transit-b": 30}, map[string]float64{"transit-a": 100, "transit-b": 10})
+	r.v.begin(context.Background(), verifyT0, r.injected, config.ModeInject, r.improve(t, verifyT0, 40), r.steerInbound(t, verifyT0), nil)
+	if l := r.v.results(); len(l) != 2 {
+		t.Fatalf("results = %+v", l)
+	}
+	// A mode change or a failed sync took both routes off the wire while the
+	// controllers still hold the steers. Unchanged usage must not read as
+	// a steer that moved nothing, and must not back anything out.
+	r.inj[verifyPrefix] = false
+	if err := r.inb.WithdrawAll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	at := verifyT0.Add(verify.DefaultInboundWindow)
+	r.tel.set(at, map[string]float64{"transit-a": 150, "transit-b": 30}, map[string]float64{"transit-a": 100, "transit-b": 10})
+	done, pol, in := r.v.check(context.Background(), at, r.injected, nil)
+	if len(done) != 0 || len(pol) != 0 || len(in) != 0 || len(r.v.results()) != 0 {
+		t.Fatalf("judged steers that were not announced: done %+v pol %+v in %+v results %+v", done, pol, in, r.v.results())
+	}
+	if len(r.dec.Improvements()) != 1 || len(r.inb.Status().Steers) != 1 {
+		t.Fatal("verification touched steers it did not judge")
 	}
 }

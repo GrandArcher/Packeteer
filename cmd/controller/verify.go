@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"net/netip"
+	"slices"
 	"time"
 
 	"github.com/GrandArcher/Packeteer/internal/config"
@@ -70,14 +71,31 @@ func resultPath(results []probe.Result, p netip.Prefix, provider string) (verify
 	return verify.Path{}, false
 }
 
+// onWire reports whether a steer is still announced: an outbound route the
+// announcer holds, or an inbound steer that is injected and not moderated
+// with a route on the wire.
+func (v *steerVerifier) onWire(injected func(netip.Prefix) bool, kind verify.Kind, key string) bool {
+	if kind == verify.Outbound {
+		p, err := netip.ParsePrefix(key)
+		return err == nil && injected(p)
+	}
+	st := v.inb.Status()
+	if st.Mode != config.ModeInject || len(st.Announced) == 0 {
+		return false
+	}
+	return slices.ContainsFunc(st.Steers, func(s inbound.Steer) bool { return s.Provider == key && !s.Moderated })
+}
+
 // check judges the steers whose window has passed and backs out the ones
 // that moved nothing where the config says to. It runs before the round's
 // decision, so the withdraw goes out in the same round. The changes are
-// the retire and release it made, for events and history.
-func (v *steerVerifier) check(ctx context.Context, now time.Time, results []probe.Result) (done []verify.Result, pol []policy.Change, in []inbound.Change) {
+// the retire and release it made, for events and history. A steer that is
+// no longer on the wire is dropped, not judged.
+func (v *steerVerifier) check(ctx context.Context, now time.Time, injected func(netip.Prefix) bool, results []probe.Result) (done []verify.Result, pol []policy.Change, in []inbound.Change) {
 	if v == nil {
 		return nil, nil, nil
 	}
+	v.tr.Keep(func(kind verify.Kind, key string) bool { return v.onWire(injected, kind, key) })
 	done = v.tr.Observe(now, verify.Observation{
 		Rates: v.rates(ctx, now),
 		Path:  func(p netip.Prefix, provider string) (verify.Path, bool) { return resultPath(results, p, provider) },
@@ -114,6 +132,7 @@ func (v *steerVerifier) begin(ctx context.Context, now time.Time, injected func(
 		return
 	}
 	rates := v.rates(ctx, now)
+	var volumes map[netip.Prefix]float64
 	for _, ch := range changes {
 		switch ch.Action {
 		case policy.ActionRetire:
@@ -128,7 +147,16 @@ func (v *steerVerifier) begin(ctx context.Context, now time.Time, injected func(
 			if ch.Action == policy.ActionSwitch {
 				from = ch.Old.Provider
 			}
-			c := verify.Claim{Kind: verify.Outbound, Prefix: p, Provider: ch.New.Provider, From: from, Expected: ch.New.VolumeMbps, Rates: rates}
+			// The improvement carries a volume only under a scorer that
+			// plans by it; the flow or static volume is read otherwise.
+			expected := ch.New.VolumeMbps
+			if expected == 0 {
+				if volumes == nil {
+					volumes = collectVolumes(ctx, v.plugins)
+				}
+				expected = volumes[p]
+			}
+			c := verify.Claim{Kind: verify.Outbound, Prefix: p, Provider: ch.New.Provider, From: from, Expected: expected, Rates: rates}
 			if path, ok := resultPath(results, p, ch.New.Provider); ok {
 				c.Path = &path
 			}
