@@ -306,6 +306,10 @@ func buildExplain(d Decision, f explainFacts, cfg Config, capUsed int) Explain {
 	// A static pin or planned keep is decided by its own rules, not by the
 	// comparison with the challenger.
 	steerKeep := d.Action == ActionKeep && (static || plan)
+	// switching: a planned steer is kept while a performance switch off it
+	// confirms or waits out hold_time (commit.go sets planWait only then).
+	switching := steerKeep && plan && f.planWait == planSwitch
+	confirming := switching && confirmGate(d, f, cfg, false).Status == GateFail
 	// A recommended static pin that did not move was stopped by the
 	// cooldown, the allowlist, or the cap, not by the policy.
 	pinHeld := static && !moved && d.Action != ActionKeep && !f.pinNative
@@ -324,6 +328,9 @@ func buildExplain(d Decision, f explainFacts, cfg Config, capUsed int) Explain {
 	case static:
 		g[GateThresholds] = Gate{Name: GateThresholds, Status: GateSkip, Detail: "a static policy pin does not use the thresholds"}
 		g[GateEvidence] = Gate{Name: GateEvidence, Status: GateSkip, Detail: "a static policy pin does not use the evidence rule"}
+	case switching:
+		g[GateThresholds] = Gate{Name: GateThresholds, Status: GateSkip, Detail: f.challenger + " beat the native path on the thresholds; the " + d.Cause + " steer stays until the switch is confirmed"}
+		g[GateEvidence] = Gate{Name: GateEvidence, Status: GateSkip, Detail: "the evidence rule allows the switch to " + f.challenger}
 	case plan:
 		g[GateThresholds] = Gate{Name: GateThresholds, Status: GateSkip, Detail: "decided by the " + d.Cause + " planner, not the thresholds"}
 		g[GateEvidence] = Gate{Name: GateEvidence, Status: GateSkip, Detail: "decided by the " + d.Cause + " planner, not the evidence rule"}
@@ -346,6 +353,10 @@ func buildExplain(d Decision, f explainFacts, cfg Config, capUsed int) Explain {
 			return Gate{Name: name, Status: GateSkip, Detail: "not applicable: the improvement ended"}
 		case evidenceStopped:
 			return Gate{Name: name, Status: GateSkip, Detail: "not reached: thresholds.require_evidence refused the move"}
+		case confirming:
+			return Gate{Name: name, Status: GateSkip, Detail: "not reached: the switch to " + f.challenger + " is still confirming"}
+		case switching:
+			return Gate{Name: name, Status: GateSkip, Detail: "not reached: the switch to " + f.challenger + " waits for hold_time"}
 		}
 		return Gate{Name: name, Status: GateSkip, Detail: "not reached: no better path passed the thresholds"}
 	}

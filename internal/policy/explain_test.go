@@ -637,6 +637,11 @@ func TestExplainPlannedKeep(t *testing.T) {
 					t.Fatalf("at %s: explain = %+v", when.Sub(t0), ex)
 				}
 				wantGate(t, ex, GateConfirm, GateFail, "1 of 3")
+				// Nothing but the confirmation step held the steer: the rows
+				// must not read as if the planner or the cap decided it.
+				wantGate(t, ex, GateThresholds, GateSkip, "b beat the native path on the thresholds; the "+cause+" steer stays until the switch is confirmed")
+				wantGate(t, ex, GateEvidence, GateSkip, "the evidence rule allows the switch to b")
+				wantGate(t, ex, GateCap, GateSkip, "not reached: the switch to b is still confirming")
 			}
 		})
 		t.Run(cause+" confirmed switch inside hold_time", func(t *testing.T) {
@@ -648,6 +653,7 @@ func TestExplainPlannedKeep(t *testing.T) {
 				t.Fatalf("explain = %+v", ex)
 			}
 			wantGate(t, ex, GateConfirm, GatePass, "1 of 1")
+			wantGate(t, ex, GateCap, GateSkip, "not reached: the switch to b waits for hold_time")
 		})
 	}
 }
