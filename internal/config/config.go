@@ -15,6 +15,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	"github.com/GrandArcher/Packeteer/internal/atlas"
 	"github.com/GrandArcher/Packeteer/internal/linkout"
 	"github.com/GrandArcher/Packeteer/internal/ringlg"
 )
@@ -209,6 +210,9 @@ type Config struct {
 	// RingLG is the opt-in "Seen from NLNOG RING" panel on the prefix page
 	// (#283). Off by default; display only.
 	RingLG ringlg.Config `yaml:"ring_lg"`
+	// Atlas is the opt-in RIPE Atlas measurements with the operator's own
+	// key and credits (#213). Off by default; display only.
+	Atlas atlas.Config `yaml:"atlas"`
 	// Lookup is the read-only PeeringDB / IX-F directory (#153). Nil
 	// disables it. It never announces.
 	Lookup *PluginSpec `yaml:"lookup"`

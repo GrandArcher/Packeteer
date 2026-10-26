@@ -32,5 +32,38 @@ services:
       PACKETEER_ADMIN_PASSWORD: ${PACKETEER_ADMIN_PASSWORD:-}
     restart: unless-stopped
 
+  # Optional RIPE Atlas software probe (#213, docs/atlas.md). Off unless you
+  # start it: docker compose --profile atlas up -d atlas-probe
+  # RIPE NCC publishes the probe as packages, not as an image, so this is the
+  # community image jamesits/ripe-atlas (the unmodified RIPE probe), pinned to
+  # the probe release it was built from. It runs in its own container on the
+  # default network (IPv4 only), with no access to config.yaml, the
+  # packeteer-data volume, or the BGP sessions.
+  atlas-probe:
+    profiles: ["atlas"]
+    image: jamesits/ripe-atlas:5130-probe
+    container_name: packeteer-atlas-probe
+    volumes:
+      # The probe key pair (probe_key.pub is what you register with RIPE).
+      - atlas-probe-key:/etc/ripe-atlas
+      - atlas-probe-spool:/var/spool/ripe-atlas
+    tmpfs:
+      - /run/ripe-atlas
+    # The capabilities and mem_limit are the image's documented set; cpus and
+    # pids_limit are Packeteer's, so the probe's measurements for other Atlas
+    # users stay small beside Packeteer's own probing.
+    cap_drop: [ALL]
+    cap_add: [NET_RAW, KILL, SETUID, SETGID, CHOWN, FOWNER, DAC_OVERRIDE]
+    mem_limit: 64m
+    cpus: 0.5
+    pids_limit: 64
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+
 volumes:
   packeteer-data:
+  atlas-probe-key:
+  atlas-probe-spool:

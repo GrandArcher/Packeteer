@@ -296,6 +296,9 @@ jobs:
           # the API answers "off" without a request to RING.
           bash lab/ui-smoke.sh "$base/prefix/2001:db8::%2F32" 'id="ring-panel" hidden=""' --absent 'Unavailable.' 'Cannot reach'
           curl -fsS "$base/api/ring_lg?prefix=2001:db8::/32" | jq -e '.state == "off"'
+          # RIPE Atlas panel (#213): off by default, hidden, and no request to Atlas.
+          bash lab/ui-smoke.sh "$base/prefix/2001:db8::%2F32" 'id="atlas-panel" hidden=""' --absent 'Measure with ping' 'Cannot reach'
+          curl -fsS "$base/api/atlas?prefix=2001:db8::/32" | jq -e '.state == "off" and (has("status") | not)'
           # Graphs (#129) with history on but nothing recorded: an empty state, no chart.
           bash lab/ui-smoke.sh "$base/graphs.html" 'No before/after data in this range' 'It announces nothing.' \
             'id="graph-bucket"' --absent 'class="ts-chart"' 'Cannot reach'
@@ -1267,6 +1270,60 @@ jobs:
             --absent 'id="ring-panel" hidden=""' 'peer-one' 'Cannot reach'
           bash lab/ui-smoke.sh "http://127.0.0.1:18284/prefix/192.0.2.0%2F24" 'NLNOG RING shows no route for exactly this prefix.' \
             --absent 'id="ring-panel" hidden=""' 'Unavailable.' 'Cannot reach'
+      - name: UI RIPE Atlas panel smoke (#213; opt-in panel with no key, then from canned answers, no request to Atlas)
+        run: |
+          set -euo pipefail
+          base=http://127.0.0.1:18213
+          cat > /tmp/ui213.yaml <<'YAML'
+          mode: observe
+          asn: 64512
+          router_id: 192.0.2.10
+          auth: {enabled: false}
+          http:
+            listen: "127.0.0.1:18213"
+          atlas: {enabled: true, state_file: /tmp/atlas-ui213.json}
+          providers:
+            - name: lab-a
+              source_ip: 127.0.0.1
+              next_hop: 192.0.2.1
+          YAML
+          docker run -d --name pkui213 --network host --cap-add NET_RAW --cap-add NET_ADMIN \
+            -v /tmp/ui213.yaml:/etc/packeteer/config.yaml:ro packeteer:ci
+          proxy=""
+          cleanup() {
+            if [ -n "$proxy" ]; then kill "$proxy" 2>/dev/null || true; fi
+            docker stop -t 15 pkui213 >/dev/null || true
+            docker logs pkui213 2>&1 | tail -n 40
+            code="$(docker inspect -f '{{.State.ExitCode}}' pkui213)"
+            docker rm pkui213 >/dev/null || true
+            test "$code" = "0"
+          }
+          trap cleanup EXIT
+          ok=0
+          for _ in $(seq 1 30); do
+            if curl -fsS "$base/healthz" >/dev/null 2>&1; then ok=1; break; fi
+            sleep 1
+          done
+          test "$ok" = 1
+          # Enabled with no PACKETEER_ATLAS_API_KEY: the panel says so, nothing
+          # is requested, and the System page lists the missing key.
+          curl -fsS "$base/api/atlas?prefix=198.51.100.0/24" | jq -e '.state == "no_key" and .can_measure == false'
+          bash lab/ui-smoke.sh "$base/prefix/198.51.100.0%2F24" 'Seen from RIPE Atlas' 'PACKETEER_ATLAS_API_KEY is not set' \
+            --absent 'id="atlas-panel" hidden=""' 'Measure with ping' 'Cannot reach'
+          curl -fsS "$base/api/system" | jq -e '[.components[] | select(.kind == "atlas")] | length == 1 and .[0].state == "idle"'
+          go build -o /tmp/uiproxy ./lab/uiproxy
+          /tmp/uiproxy -listen 127.0.0.1:18214 -upstream "$base" -user lab -password lab-only \
+            -fixtures lab/ui-fixtures/atlas >/tmp/uiproxy213.log 2>&1 &
+          proxy=$!
+          for _ in $(seq 1 20); do
+            curl -fsS http://127.0.0.1:18214/healthz >/dev/null 2>&1 && break
+            sleep 0.2
+          done
+          curl -fsS http://127.0.0.1:18214/healthz >/dev/null
+          bash lab/ui-smoke.sh "http://127.0.0.1:18214/prefix/198.51.100.0%2F24" 'Seen from RIPE Atlas' 'Local measurements (test address 198.51.100.7)' \
+            'transit-a' 'transit-b' '12.5 ms' 'ping, on demand' 'ping, after move to transit-b' '2 of 3 reached' '4 of 4 reached' \
+            '24.5 ms' '11.2 ms' '33 %' 'Credits used today: 42 of 500' 'Balance: 777 credits.' 'Measure with ping' 'Measure with traceroute' \
+            'They do not change any decision or confidence.' --absent 'id="atlas-panel" hidden=""' 'PACKETEER_ATLAS_API_KEY' 'Cannot reach'
       - name: UI prefix list smoke (#183; a 100000-prefix list from canned pages, observe)
         run: |
           set -euo pipefail

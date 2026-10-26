@@ -1,0 +1,18 @@
+{
+  "state": "ok",
+  "target": "198.51.100.7",
+  "local": [
+    {"provider": "transit-a", "target": "198.51.100.7", "ok": true, "loss_pct": 0, "rtt_avg_ms": 12.5, "confidence": "high"},
+    {"provider": "transit-b", "target": "198.51.100.7", "ok": true, "loss_pct": 1, "rtt_avg_ms": 9.5, "confidence": "medium"}
+  ],
+  "measurements": [
+    {"id": 1002, "prefix": "198.51.100.0/24", "target": "198.51.100.7", "type": "ping", "trigger": "after_move", "provider": "transit-b",
+     "created": "2026-01-02T11:30:00Z", "credits": 24, "requested": 4, "state": "done",
+     "summary": {"answered": 4, "reached": 4, "median_rtt_ms": 11.2, "loss_pct": 0}},
+    {"id": 1001, "prefix": "198.51.100.0/24", "target": "198.51.100.7", "type": "ping", "trigger": "manual",
+     "created": "2026-01-02T11:00:00Z", "credits": 18, "requested": 3, "state": "done",
+     "summary": {"answered": 3, "reached": 2, "median_rtt_ms": 24.5, "loss_pct": 33.3}}
+  ],
+  "status": {"state": "ok", "balance": 777, "credits_today": 42, "max_credits_per_day": 500, "measurements_last_hour": 2, "max_measurements_per_hour": 4},
+  "can_measure": true
+}

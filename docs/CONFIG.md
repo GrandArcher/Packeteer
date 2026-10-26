@@ -70,6 +70,7 @@ The image entrypoint is the same binary. Flags go after the image name.
 | `linkouts` | defaults | no | Which "open in" links the prefix, ASN, and provider pages show, custom URL templates, and `hide_internal` (#211). Display only; Packeteer requests none of those sites. See [`linkouts`](#linkouts). |
 | `report_subscriptions` | none | no | Stored reports emailed as CSV on a daily, weekly, or monthly UTC schedule through an `smtp` notifier (#34). Needs `storage`. See [`report_subscriptions`](#report_subscriptions). Does not announce. |
 | `ring_lg` | off | no | Opt-in "Seen from NLNOG RING" panel on the prefix page, rate limited and cached (#283). Display only. See [`ring_lg`](#ring_lg). |
+| `atlas` | off | no | Opt-in RIPE Atlas measurements of a prefix's test address with your own key and credits, on demand or once after a move, shown on the prefix page (#213). Hard credit and rate caps. Display only. See [`atlas`](#atlas) and [atlas.md](atlas.md). |
 | `troubleshoot` | looking glass only | no | Read-only operator tools: looking glass, on-demand probe, traceroute, whois. Does not announce. See [`troubleshoot`](#troubleshoot). |
 
 `mode: observe` and `mode: suggest` use the same decision path and announce nothing. `suggest` is the checkpoint: read the log, the dashboard, and `/api/decisions` before you change `mode`. The allowlist is enforced only in `inject`.
@@ -750,6 +751,33 @@ ring_lg:
   cache_ttl: 10m
 ```
 
+### `atlas`
+
+The opt-in RIPE Atlas integration (#213). With `enabled: false` (the default), or with `PACKETEER_ATLAS_API_KEY` unset, nothing calls Atlas. The key comes only from that environment variable, is sent only in the `Authorization` header, and is never logged or returned by the API. Atlas results are display only: they never feed a decision, a scorer, or an announcer, and nothing here moves a route. Every key is checked at load, and unknown keys are errors. A change needs a restart. Credit costs, the panel, and hosting your own probe are in [atlas.md](atlas.md).
+
+| Key | Default | Meaning |
+|---|---|---|
+| `enabled` | `false` | `true` allows measurements, status reads, and the prefix page panel. Other keys need it. |
+| `probe_id` | none | Your own hosted probe. Its status shows on the System page (the credit balance shows whenever the integration is on), and while it is connected it joins every measurement. |
+| `source` | `{type: area, value: WW}` | Which probes the measurement runs from. `type` is `area`, `country`, or `asn`. `value` is an Atlas area (`WW`, `West`, `North-Central`, `South-Central`, `North-East`, `South-East`), an upper-case two-letter country code, or an AS number. |
+| `probes` | `3` | How many probes `source` picks per measurement. 1 to 10. |
+| `after_move` | `false` | `true` also runs one ping once after Packeteer announces a move for a prefix (`mode: inject` only). |
+| `after_move_delay` | `3m` | How long to wait after the move so the route has propagated. 1m to 1h. |
+| `max_credits_per_day` | `500` | Hard cap on the estimated credits booked in any 24 hours. Up to 100000. |
+| `max_measurements_per_hour` | `4` | Hard cap on measurements created in any hour. Up to 60. |
+| `state_file` | `/var/lib/packeteer/atlas.json` | The spend ledger and recent results, so a restart does not reset the caps. Mount a volume on `/var/lib/packeteer` to keep it. |
+
+```yaml
+atlas:
+  enabled: true
+  probe_id: 6001
+  source: {type: area, value: WW}
+  probes: 3
+  after_move: true
+  max_credits_per_day: 500
+  max_measurements_per_hour: 4
+```
+
 ### `report_subscriptions`
 
 Scheduled email report subscriptions (#34). Each entry emails one stored report (the same one `/api/reports/<report>` serves) as a CSV attachment. Needs `storage` (reports come from stored history) and a notifier of type `smtp`. Times are UTC. A failed send is logged, shown on `/api/subscriptions`, and tried again at the next scheduled time; sends missed while the controller was down are not replayed. Operators can send one at once with `POST /api/subscriptions/<name>/send`. Recipients come only from this file. Does not announce. See [ui.md](ui.md).
@@ -900,6 +928,7 @@ Set these in the container. They are not keys in the YAML file. `PACKETEER_HTTP_
 | `PACKETEER_HTTP_USER` | Basic auth user. Set together with the password, or set neither. |
 | `PACKETEER_HTTP_PASSWORD` | Basic auth password. |
 | `PACKETEER_ADMIN_USER` | With `auth`: the first admin's name (default `admin`). |
+| `PACKETEER_ATLAS_API_KEY` | Your RIPE Atlas API key for the [`atlas`](#atlas) block (#213). Sent only in the `Authorization` header to the Atlas API, never logged or returned. Unset: the integration makes no request. |
 | `PACKETEER_ADMIN_PASSWORD` | With `auth`: creates that admin at start when no user has the name (12-256 characters). An existing user is not changed, so a password set through the API survives a restart. Not written to the log. |
 
 `${VAR}` expansion applies inside a webhook `url`, webhook `headers` values, and an `exec` plugin's `env` values. It is not applied to the rest of the file.

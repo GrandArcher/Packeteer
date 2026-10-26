@@ -59,6 +59,7 @@ func (c *Config) Validate() error {
 	c.validateUpgrade(add)
 	c.Linkouts.Validate(add)
 	c.RingLG.Validate(add)
+	c.Atlas.Validate(add)
 
 	return errors.Join(errs...)
 }

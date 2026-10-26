@@ -5,6 +5,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/GrandArcher/Packeteer/internal/atlas"
 	"github.com/GrandArcher/Packeteer/internal/httpapi"
 	"github.com/GrandArcher/Packeteer/internal/irr"
 	"github.com/GrandArcher/Packeteer/internal/pluginhost"
@@ -43,9 +44,12 @@ func storageOutcome(health *syshealth.Tracker) *syshealth.Outcome {
 // GET /api/system. The engine is created after the HTTP server, so it is
 // read through an atomic pointer. Only state is read: the Snapshot of a
 // telemetry plugin is the call the dashboard already makes.
-func systemFacts(plugins *pluginhost.Set, engine *atomic.Pointer[probe.Engine], health *syshealth.Tracker, registry *irr.Checker) func() httpapi.SystemFacts {
+func systemFacts(plugins *pluginhost.Set, engine *atomic.Pointer[probe.Engine], health *syshealth.Tracker, registry *irr.Checker, atl *atlas.Client) func() httpapi.SystemFacts {
 	return func() httpapi.SystemFacts {
 		var f httpapi.SystemFacts
+		if st := atl.Status(); st.State != atlas.StateOff {
+			f.Atlas = &st
+		}
 		if plugins == nil {
 			return f
 		}

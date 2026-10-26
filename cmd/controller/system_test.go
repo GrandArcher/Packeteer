@@ -118,7 +118,7 @@ func TestSystemFactsShowInjectedFailures(t *testing.T) {
 	e.RunOnce(context.Background())
 	eng.Store(e)
 
-	facts := systemFacts(set, &eng, health, nil)()
+	facts := systemFacts(set, &eng, health, nil, nil)()
 	if len(facts.Sources) != 1 || !facts.Sources[0].Seen || facts.Sources[0].Err != "feed unreachable" {
 		t.Errorf("source facts = %+v", facts.Sources)
 	}

@@ -822,6 +822,21 @@ plugin_dir: /etc/packeteer/plugins
 #   cache_ttl: 10m
 #   timeout: 10s
 
+# RIPE Atlas (#213, docs/atlas.md). Off unless enabled, and idle until the
+# PACKETEER_ATLAS_API_KEY environment variable holds your own API key (never
+# put it in this file). Creates ping or traceroute measurements of a prefix's
+# test address from Atlas probes, on demand and, with after_move, once after a
+# move. Hard caps on credits and measurements. Display only: results never
+# change a decision.
+# atlas:
+#   enabled: true
+#   probe_id: 6001            # your own hosted probe (optional)
+#   source: {type: area, value: WW}
+#   probes: 3
+#   after_move: false
+#   max_credits_per_day: 500
+#   max_measurements_per_hour: 4
+
 # Herd (#260, docs/herd.md). Off unless enabled. Shares probe measurements
 # (never names, host addresses, or usage) with the static peers you pin by
 # key; advisory only, never read by a decision, never announces. Needs

@@ -14,6 +14,7 @@ The remaining UI conveniences (#34). All of them work in the stock image with a 
 | Maintenance windows (#177) | `/policies.html`, `GET`/`POST /api/maintenance`, `DELETE /api/maintenance/{id}` | viewer reads, operator opens and closes | a `maintenance` policy; opening needs auth or basic auth |
 | Link-outs (#211) | `/prefix/<prefix>`, `/prefixes.html`, `/providers.html`, `GET /api/linkouts` | viewer | `linkouts` (optional) |
 | NLNOG RING panel (#283) | `/prefix/<prefix>`, `GET /api/ring_lg` | viewer | `ring_lg.enabled` (off by default) |
+| RIPE Atlas panel (#213) | `/prefix/<prefix>`, `GET /api/atlas`, `POST /api/atlas/measure`, the System page | viewer reads, operator measures | `atlas.enabled` and `PACKETEER_ATLAS_API_KEY` (off by default) |
 | Global search (#172) | the top bar on every page, `/search.html`, `GET /api/search` | viewer | `storage: {type: sqlite}` for history |
 | IXP site health (#167) | `/ixp/sites`, `GET /api/ixp/sites` | viewer | `ixp` and `federation` ([design/ixp.md](design/ixp.md#multi-site-fabric-health)) |
 | IXP member pages (#166) | `/ixp/member/<asn>`, `/ixp/member/`, `GET /api/ixp/members/{asn}` | viewer | `ixp` ([design/ixp.md](design/ixp.md#member-pages)) |
@@ -239,6 +240,12 @@ RING is run by volunteers, so use is small and fair:
 NLNOG RING services may be unavailable. Packeteer never uses SSH or any other interactive access to RING nodes, never logs in, never runs a command on a member's node, and keeps no credentials: the public API needs none. The keys are in [CONFIG.md](CONFIG.md#ring_lg); a change needs a restart.
 
 `GET /api/ring_lg?prefix=<cidr>` (viewer) returns `state` (`off`, `ok`, or `unavailable`), `routes` (up to 200), `warnings`, `message`, `cached`, and `fetched_at`. `internal/ringlg` tests use an `httptest` server with synthetic documentation-prefix answers and cover the cap, the cache, the User-Agent, timeouts, 5xx and 429, and that an off panel makes no request. The `ui-smoke` steps load the prefix page with the panel off (hidden) and with it on against canned answers from `lab/ui-fixtures/ring-lg`, so CI never calls RING.
+
+## RIPE Atlas panel
+
+With `atlas.enabled: true` the prefix page shows "Seen from RIPE Atlas" (#213): Packeteer's own local measurements of the prefix (provider, average RTT, loss, confidence level) and, beside them, the Atlas measurements of the same test address, each with its trigger (on demand, or after a move to a provider), probes that reached it, median RTT, and loss. It is the outside evidence beside the #202 confidence level: shown next to the local numbers, never mixed into them. It is off by default and hidden while off. Operators see "Measure with ping" and "Measure with traceroute" buttons when the server has a key and auth. The System page lists RIPE Atlas with your own probe's status, the credit balance, the cap use, and a link to the probe's page on atlas.ripe.net. Credits, caps, and probe hosting are in [atlas.md](atlas.md); the keys are in [CONFIG.md](CONFIG.md#atlas).
+
+The `ui-smoke` steps load the prefix page with atlas off (hidden), with it on and no key (the note), and with canned answers from `lab/ui-fixtures/atlas`, so CI never calls Atlas.
 
 ## Global search
 
