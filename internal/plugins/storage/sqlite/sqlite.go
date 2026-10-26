@@ -88,6 +88,11 @@ func New(c plugin.Config, env plugin.Env) (*Store, error) {
 	return &Store{path: filepath.Clean(cfg.Path), retention: cfg.Retention, env: env, now: time.Now}, nil
 }
 
+// SetClock replaces the clock the retention prune measures against. Call it
+// before Start. Tests that write rows at a fixed time use it so the prune
+// does not delete their rows once the real clock moves on.
+func (s *Store) SetClock(now func() time.Time) { s.now = now }
+
 // Path is the database file.
 func (s *Store) Path() string { return s.path }
 
