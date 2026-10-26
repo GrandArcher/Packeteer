@@ -112,6 +112,19 @@ func TestAtlasOffByDefault(t *testing.T) {
 	}
 }
 
+// With writes disabled (no auth, no basic auth) an off integration still
+// answers the documented 404, not the write gate's 403.
+func TestAtlasOffWithWritesDisabled(t *testing.T) {
+	for name, c := range map[string]*atlas.Client{"unset": nil, "disabled": atlas.New(atlas.Config{}, atlasTestKey, "test", nil)} {
+		base := atlasServer(t, c, atlasSnap("198.51.100.7"), "")
+		for _, body := range []string{`{"prefix":"198.51.100.0/24","type":"ping"}`, `{"prefix":"not-a-prefix"}`} {
+			if code, resp := postAtlas(t, base, body, ""); code != http.StatusNotFound || !strings.Contains(resp, "not enabled") {
+				t.Errorf("%s %s: %d %s", name, body, code, resp)
+			}
+		}
+	}
+}
+
 func TestAtlasNoKey(t *testing.T) {
 	c := atlas.New(atlas.Config{Enabled: true, StateFile: t.TempDir() + "/a.json"}, "", "test", nil)
 	base := atlasServer(t, c, atlasSnap("198.51.100.7"), "op")
