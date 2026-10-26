@@ -80,8 +80,10 @@ func Decide(prev State, in Input, cfg Config, scorer plugin.Scorer, now time.Tim
 	}
 	st.expireFlap(now, cfg.Flap, &out)
 
+	var gate *loadGate
 	retire := func(p netip.Prefix, reason string, cooldown bool) {
 		old := st.Improvements[p]
+		gate.release(old)
 		delete(st.Improvements, p)
 		delete(st.confirm, p)
 		if cooldown && cfg.HoldTime > 0 {
@@ -164,7 +166,7 @@ func Decide(prev State, in Input, cfg Config, scorer plugin.Scorer, now time.Tim
 		}
 	}
 
-	gate := newLoadGate(st, in, cfg, now)
+	gate = newLoadGate(st, in, cfg, now)
 	var wants []pending
 	commitOK := map[netip.Prefix]bool{}
 	decIdx := map[netip.Prefix]*Decision{}
@@ -388,6 +390,7 @@ func Decide(prev State, in Input, cfg Config, scorer plugin.Scorer, now time.Tim
 						continue
 					}
 					st.noteFlip(p, now, cfg.Flap)
+					gate.release(imp)
 					gate.book(alt.Provider, p)
 					delete(st.confirm, p)
 					sw := Improvement{Prefix: p, Provider: alt.Provider, Native: imp.Native, Since: now,

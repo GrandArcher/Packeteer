@@ -58,7 +58,7 @@ var app = fs.readFileSync(path.join(web, "app.js"), "utf8");
 var charts = fs.readFileSync(path.join(web, "charts.js"), "utf8");
 var commit = fs.readFileSync(path.join(web, "commit.js"), "utf8");
 ["el", "clear", "fmtTime"].forEach(function (n) { vm.runInContext(fn(app, n), context); });
-["mbps", "plural", "loadText", "commitPercent", "renderCommitGraphs"].forEach(function (n) { vm.runInContext(fn(charts, n), context); });
+["mbps", "plural", "loadText", "loadPct", "limitText", "commitPercent", "renderCommitGraphs"].forEach(function (n) { vm.runInContext(fn(charts, n), context); });
 vm.runInContext(fn(commit, "renderCommitSummary"), context);
 
 function base(extra) {
@@ -86,7 +86,7 @@ function bad(i) { return rows[i].children.map(function (c) { return c.className 
 assert(cells(1)[0] === "transit-a" && cells(1)[1] === "1000" && cells(1)[4] === "2000" && cells(1)[5] === "20%", "transit-a: " + cells(1));
 assert(!bad(1).some(Boolean), "transit-a is flagged");
 // No commit: "none", no billable figure, and past its limit the load is flagged.
-assert(cells(2)[1] === "none" && cells(2)[2] === "—" && cells(2)[3] === "—" && cells(2)[5] === "91.3% (limit 85%)", "transit-b: " + cells(2));
+assert(cells(2)[1] === "none" && cells(2)[2] === "\u2014" && cells(2)[3] === "\u2014" && cells(2)[5] === "91.3% (limit 85%)", "transit-b: " + cells(2));
 assert(bad(2)[5] && !bad(2)[3], "transit-b load is not the only flagged cell: " + bad(2));
 // Inside the limit: shown with the limit, not flagged.
 assert(cells(3)[5] === "40% (limit 85%)" && !bad(3).some(Boolean), "transit-c: " + cells(3) + " " + bad(3));

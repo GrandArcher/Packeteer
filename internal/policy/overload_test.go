@@ -225,12 +225,70 @@ func TestOverloadCountsSteersTheSampleDoesNotHold(t *testing.T) {
 	if got == nil || got.Action != OverloadRefused || got.UsedPct != 82 {
 		t.Fatalf("overloads = %+v, want pB refused with pA's 60 Mbps counted (82%% used)", out.Overloads)
 	}
-	// Observe mode moves no traffic, so the recommendation adds nothing.
+	// Observe moves no traffic, so no sample holds a recommendation: it is
+	// counted whatever its age, and the recommendation is judged as an
+	// announced steer would be.
 	c := ovCfg()
 	c.Mode = "observe"
+	input.Load["b"] = Load{CapacityMbps: 1000, OutMbps: 760, Updated: now}
 	_, out = Decide(st, input, c, scorer(t), now)
-	if len(out.Overloads) != 0 {
-		t.Fatalf("observe counted a steer that is not on the wire: %+v", out.Overloads)
+	got = nil
+	for i := range out.Overloads {
+		if out.Overloads[i].Prefix == pB {
+			got = &out.Overloads[i]
+		}
+	}
+	if got == nil || got.Action != OverloadRefused || got.UsedPct != 82 {
+		t.Fatalf("observe overloads = %+v, want pB refused at 82%% used", out.Overloads)
+	}
+}
+
+func TestOverloadWithoutASampleTimeTakesNoSteer(t *testing.T) {
+	input := ovInput(t0, 10, 10)
+	input.Load["b"] = Load{CapacityMbps: 1000, OutMbps: 10}
+	st, out := Decide(NewState(), input, ovCfg(), scorer(t), t0)
+	if len(st.Improvements) != 0 || len(out.Overloads) != 2 || !strings.Contains(out.Overloads[0].Reason, "no interface sample yet") {
+		t.Fatalf("improvements %+v overloads %+v", st.Improvements, out.Overloads)
+	}
+}
+
+func TestOverloadSampleStampedAfterTheDecisionIsStillOneSample(t *testing.T) {
+	// Telemetry is read after the decision clock, so a sample can carry a
+	// time later than now. The shed is remembered with the sample's time,
+	// not now, or the same sample would look new next round.
+	st := steered(t)
+	shedAt := t0.Add(2 * time.Minute)
+	input := ovInput(shedAt, 900, 60)
+	input.Load["b"] = Load{CapacityMbps: 1000, OutMbps: 900, Updated: shedAt.Add(time.Second)}
+	st, out := Decide(st, input, ovCfg(), scorer(t), shedAt)
+	if sheds(out) != 1 || len(st.Improvements) != 1 {
+		t.Fatalf("first look: overloads = %+v improvements = %+v", out.Overloads, st.Improvements)
+	}
+	later := shedAt.Add(2 * time.Minute)
+	input = ovInput(later, 900, 60)
+	input.Load["b"] = Load{CapacityMbps: 1000, OutMbps: 900, Updated: shedAt.Add(time.Second)}
+	st, out = Decide(st, input, ovCfg(), scorer(t), later)
+	if sheds(out) != 0 || len(st.Improvements) != 1 {
+		t.Fatalf("the same sample shed again: overloads = %+v improvements = %+v", out.Overloads, st.Improvements)
+	}
+}
+
+func TestOverloadDoesNotShedForASteerRetiredInTheSameRound(t *testing.T) {
+	st := steered(t)
+	// b is at 900 Mbps, which holds both steers. pB's native path a is now
+	// clearly better, so it flips back this round: 840 Mbps is inside the
+	// limit and pA must stay.
+	later := t0.Add(2 * time.Minute)
+	res := append(results(later, pA, m{"a", 0, 100}, m{"b", 0, 40}), results(later, pB, m{"a", 0, 20}, m{"b", 0, 60})...)
+	input := in(res, map[netip.Prefix]string{pA: "a", pB: "a"})
+	input.Load = map[string]Load{"b": {CapacityMbps: 1000, OutMbps: 900, Updated: later}}
+	input.WeightVolumeMbps = map[netip.Prefix]float64{pA: 60, pB: 60}
+	next, out := Decide(st, input, ovCfg(), scorer(t), later)
+	if _, ok := next.Improvements[pB]; ok {
+		t.Fatalf("setup: pB was not flipped back: %+v", next.Improvements)
+	}
+	if _, ok := next.Improvements[pA]; !ok || sheds(out) != 0 {
+		t.Fatalf("improvements %+v overloads %+v, want pA kept", next.Improvements, out.Overloads)
 	}
 }
 

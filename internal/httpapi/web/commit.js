@@ -16,8 +16,7 @@ function renderCommitSummary(root, data) {
   data.providers.forEach(function (p) {
     var pct = commitPercent(p);
     var tr = el("tr");
-    var load = p.utilization_pct == null ? "—" : (Math.round(p.utilization_pct * 10) / 10) + "%" +
-      (p.capacity_threshold_pct > 0 ? " (limit " + p.capacity_threshold_pct + "%)" : "");
+    var load = p.utilization_pct == null ? "\u2014" : loadPct(p) + limitText(p);
     var cells = [p.provider, p.commit_mbps > 0 ? mbps(p.commit_mbps) : "none", mbps(p.billable_mbps), pct == null ? "—" : pct + "%",
       mbps(p.capacity_mbps), load, p.samples,
       p.period_start.slice(0, 10) + " to " + p.period_end.slice(0, 10), fmtTime(p.updated), p.error || ""];

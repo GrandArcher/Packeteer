@@ -262,8 +262,15 @@ function commitDataTable(pts) {
 // "" when the capacity is unknown.
 function loadText(p) {
   if (p.utilization_pct == null || p.capacity_mbps == null) return "";
-  return "outbound " + (Math.round(p.utilization_pct * 10) / 10) + "% of " + mbps(p.capacity_mbps) + " Mbps" +
-    (p.capacity_threshold_pct > 0 ? " (limit " + p.capacity_threshold_pct + "%)" : "");
+  return "outbound " + loadPct(p) + " of " + mbps(p.capacity_mbps) + " Mbps" + limitText(p);
+}
+
+function loadPct(p) {
+  return (Math.round(p.utilization_pct * 10) / 10) + "%";
+}
+
+function limitText(p) {
+  return p.capacity_threshold_pct > 0 ? " (limit " + p.capacity_threshold_pct + "%)" : "";
 }
 
 function commitPercent(p) {

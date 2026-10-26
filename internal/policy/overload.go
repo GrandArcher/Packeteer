@@ -47,6 +47,31 @@ type Overload struct {
 	Reason       string
 }
 
+// Unreadable says why the reading cannot be judged at now, or "" when it
+// can: the capacity is unknown, no sample has been taken, or the sample is
+// older than portload.DefaultMaxAge.
+func (l Load) Unreadable(now time.Time) string {
+	switch {
+	case l.CapacityMbps <= 0:
+		return "interface capacity unknown"
+	case l.Updated.IsZero():
+		return "no interface sample yet"
+	case !portload.Fresh(l.Updated, now, portload.DefaultMaxAge):
+		return "interface reading is stale"
+	}
+	return ""
+}
+
+// LimitMbps is the outbound rate at limitPct percent of the capacity.
+func (l Load) LimitMbps(limitPct float64) float64 { return l.CapacityMbps * limitPct / 100 }
+
+// shedMark is the last shed off a provider: the sample it was judged on and
+// when it happened.
+type shedMark struct {
+	sample time.Time
+	at     time.Time
+}
+
 // providerLoad is one limited provider's load for this evaluation.
 type providerLoad struct {
 	limitPct float64
@@ -57,11 +82,13 @@ type providerLoad struct {
 	capacity float64
 	updated  time.Time
 	// used is the outbound rate plus the volume of steers the sample does
-	// not hold yet, plus steers admitted in this evaluation.
+	// not hold yet (all of them outside inject mode, where nothing is on
+	// the wire), plus steers admitted in this evaluation, less steers
+	// retired in it.
 	used float64
 }
 
-func (l *providerLoad) limit() float64 { return l.capacity * l.limitPct / 100 }
+func (l *providerLoad) limit() float64 { return Load{CapacityMbps: l.capacity}.LimitMbps(l.limitPct) }
 
 func (l *providerLoad) pct(mbps float64) float64 {
 	if l.capacity <= 0 {
@@ -79,8 +106,9 @@ type loadGate struct {
 }
 
 // newLoadGate reads the limited providers' load. A steer created after the
-// sample was taken is not in its rate, so its volume is added; that only
-// applies in inject mode, where traffic actually moves.
+// sample was taken is not in its rate, so its volume is added. Outside
+// inject mode no steer moves traffic, so every steer on the provider is
+// added: observe judges the recommendations as inject would judge them.
 func newLoadGate(st State, in Input, cfg Config, now time.Time) *loadGate {
 	var g *loadGate
 	for _, pp := range cfg.Providers {
@@ -93,20 +121,15 @@ func newLoadGate(st State, in Input, cfg Config, now time.Time) *loadGate {
 		l := &providerLoad{limitPct: pp.CapacityThresholdPct}
 		g.byProv[pp.Name] = l
 		row, have := in.Load[pp.Name]
-		switch {
+		switch why := row.Unreadable(now); {
 		case !have:
 			l.why = "no interface reading"
-		case row.CapacityMbps <= 0:
-			l.why = "interface capacity unknown"
-		case !portload.Fresh(row.Updated, now, portload.DefaultMaxAge):
-			l.why = "interface reading is stale"
+		case why != "":
+			l.why = why
 		default:
 			l.ok, l.capacity, l.updated, l.used = true, row.CapacityMbps, row.Updated, row.OutMbps
-			if cfg.Mode != "inject" {
-				break
-			}
 			for _, imp := range st.Improvements {
-				if imp.Provider == pp.Name && imp.Since.After(row.Updated) {
+				if imp.Provider == pp.Name && (cfg.Mode != "inject" || imp.Since.After(row.Updated)) {
 					l.used += g.vols[imp.Prefix]
 				}
 			}
@@ -156,6 +179,17 @@ func (g *loadGate) book(provider string, p netip.Prefix) {
 	}
 }
 
+// release takes a retired or switched-away steer's volume off its provider:
+// the rate the evaluation judged still holds it.
+func (g *loadGate) release(imp Improvement) {
+	if g == nil {
+		return
+	}
+	if l := g.byProv[imp.Provider]; l != nil && l.ok {
+		l.used = max(l.used-g.vols[imp.Prefix], 0)
+	}
+}
+
 type shedCandidate struct {
 	imp  Improvement
 	gain float64
@@ -167,7 +201,8 @@ type shedCandidate struct {
 // younger than hold_time stays. A provider is shed once per sample: the
 // rate it was judged on does not yet hold the effect of an earlier shed,
 // so shedding again before a newer sample, or inside hold_time, would
-// unwind steers that are no longer needed. The shed prefix waits out
+// unwind steers that are no longer needed. retire takes a shed steer's
+// volume off the provider through release. The shed prefix waits out
 // hold_time before it can be steered again, and the limit refuses any
 // steer back onto the provider meanwhile.
 func (g *loadGate) shed(st *State, out *Output, decIdx map[netip.Prefix]*Decision, byPrefix map[netip.Prefix][]Candidate,
@@ -185,7 +220,7 @@ func (g *loadGate) shed(st *State, out *Output, decIdx map[netip.Prefix]*Decisio
 		if !l.ok || l.used <= l.limit()+overloadEps {
 			continue
 		}
-		if last, shedBefore := st.shedAt[name]; shedBefore && (!l.updated.After(last) || now.Sub(last) < cfg.HoldTime) {
+		if last, shedBefore := st.shedAt[name]; shedBefore && (!l.updated.After(last.sample) || now.Sub(last.at) < cfg.HoldTime) {
 			continue
 		}
 		var cands []shedCandidate
@@ -214,8 +249,7 @@ func (g *loadGate) shed(st *State, out *Output, decIdx map[netip.Prefix]*Decisio
 				d.Action, d.Reason, d.Current, d.Cause = ActionRetire, note.Reason, c.imp.Native, c.imp.Cause
 			}
 			out.Overloads = append(out.Overloads, note)
-			st.shedAt[name] = now
-			l.used = max(l.used-c.vol, 0)
+			st.shedAt[name] = shedMark{sample: l.updated, at: now}
 			// A steer with no known volume frees an unknown amount: wait for
 			// the next sample before shedding more.
 			if l.used <= l.limit()+overloadEps || c.vol <= 0 {

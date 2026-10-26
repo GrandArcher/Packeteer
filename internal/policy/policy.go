@@ -261,7 +261,7 @@ type State struct {
 	offenses   map[netip.Prefix]offense
 	// shedAt is when the capacity limit last shed a steer off each provider
 	// (#307).
-	shedAt map[string]time.Time
+	shedAt map[string]shedMark
 }
 
 // NewState returns an empty state.
@@ -273,7 +273,7 @@ func NewState() State {
 		flips:        map[netip.Prefix][]time.Time{},
 		quarantine:   map[netip.Prefix]Quarantine{},
 		offenses:     map[netip.Prefix]offense{},
-		shedAt:       map[string]time.Time{},
+		shedAt:       map[string]shedMark{},
 	}
 }
 

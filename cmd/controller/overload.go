@@ -9,7 +9,6 @@ import (
 	"github.com/GrandArcher/Packeteer/internal/config"
 	"github.com/GrandArcher/Packeteer/internal/pluginhost"
 	"github.com/GrandArcher/Packeteer/internal/policy"
-	"github.com/GrandArcher/Packeteer/internal/portload"
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
 )
 
@@ -50,16 +49,16 @@ func loadsOf(rows []plugin.Usage) map[string]policy.Load {
 	return out
 }
 
-// underLimit lists the limited providers whose fresh reading is at or below
-// their limit.
+// underLimit lists the limited providers with a readable interface reading
+// and whether it is at or below their limit.
 func underLimit(cfg *config.Config, loads map[string]policy.Load, now time.Time) map[string]bool {
 	out := map[string]bool{}
 	for _, p := range cfg.Providers {
 		l, ok := loads[p.Name]
-		if p.InterfaceCapacityThresholdPct <= 0 || !ok || l.CapacityMbps <= 0 || !portload.Fresh(l.Updated, now, portload.DefaultMaxAge) {
+		if p.InterfaceCapacityThresholdPct <= 0 || !ok || l.Unreadable(now) != "" {
 			continue
 		}
-		out[p.Name] = l.OutMbps <= l.CapacityMbps*p.InterfaceCapacityThresholdPct/100
+		out[p.Name] = l.OutMbps <= l.LimitMbps(p.InterfaceCapacityThresholdPct)
 	}
 	return out
 }
@@ -93,8 +92,8 @@ func (w *eventWatch) overloads(now time.Time, notes []policy.Overload, under map
 		}
 		w.out.Emit(plugin.NewEvent(kind, now, msg, map[string]string{
 			"provider": n.Provider, "prefix": n.Prefix.String(), "action": n.Action,
-			"used_pct": pct1(n.UsedPct), "projected_pct": pct1(n.ProjectedPct), "limit_pct": pct1(n.LimitPct),
-			"volume_mbps": strconv.FormatFloat(n.VolumeMbps, 'f', 1, 64),
+			"used_pct": num1(n.UsedPct), "projected_pct": num1(n.ProjectedPct), "limit_pct": num1(n.LimitPct),
+			"volume_mbps": num1(n.VolumeMbps),
 		}))
 	}
 	for key := range w.refused {
@@ -111,4 +110,4 @@ func (w *eventWatch) overloads(now time.Time, notes []policy.Overload, under map
 	}
 }
 
-func pct1(v float64) string { return strconv.FormatFloat(v, 'f', 1, 64) }
+func num1(v float64) string { return strconv.FormatFloat(v, 'f', 1, 64) }

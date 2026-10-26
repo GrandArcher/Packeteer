@@ -102,6 +102,7 @@ func TestUnderLimit(t *testing.T) {
 		{"over", policy.Load{CapacityMbps: 1000, OutMbps: 851, Updated: now}, map[string]bool{"transit-b": false}},
 		{"stale", policy.Load{CapacityMbps: 1000, OutMbps: 10, Updated: now.Add(-time.Hour)}, map[string]bool{}},
 		{"no capacity", policy.Load{OutMbps: 10, Updated: now}, map[string]bool{}},
+		{"no sample yet", policy.Load{CapacityMbps: 1000, OutMbps: 10}, map[string]bool{}},
 	} {
 		got := underLimit(cfg, map[string]policy.Load{"transit-b": tc.load, "transit-a": {CapacityMbps: 1000, Updated: now}}, now)
 		if len(got) != len(tc.want) || got["transit-b"] != tc.want["transit-b"] {
