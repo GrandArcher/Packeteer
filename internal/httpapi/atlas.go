@@ -94,6 +94,12 @@ type atlasMeasureRequest struct {
 // address Packeteer already measures for the prefix, never one the caller
 // names.
 func (s *Server) handleAtlasMeasure(w http.ResponseWriter, r *http.Request) {
+	// Off is answered before the write gate so the documented 404 holds
+	// with API writes disabled too.
+	if s.atlas.State() == atlas.StateOff {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": atlas.ErrOff.Error()})
+		return
+	}
 	if !s.writesEnabled() {
 		writeJSON(w, http.StatusForbidden, map[string]string{"error": "Atlas measurements spend credits and require auth (auth.enabled) or PACKETEER_HTTP_USER and PACKETEER_HTTP_PASSWORD"})
 		return
@@ -108,11 +114,7 @@ func (s *Server) handleAtlasMeasure(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p = p.Masked()
-	switch s.atlas.State() {
-	case atlas.StateOff:
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": atlas.ErrOff.Error()})
-		return
-	case atlas.StateNoKey:
+	if s.atlas.State() == atlas.StateNoKey {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": atlas.ErrNoKey.Error()})
 		return
 	}
