@@ -1324,6 +1324,56 @@ jobs:
             'transit-a' 'transit-b' '12.5 ms' 'ping, on demand' 'ping, after move to transit-b' '2 of 3 reached' '4 of 4 reached' \
             '24.5 ms' '11.2 ms' '33 %' 'Credits used today: 42 of 500' 'Balance: 777 credits.' 'Measure with ping' 'Measure with traceroute' \
             'They do not change any decision or confidence.' --absent 'id="atlas-panel" hidden=""' 'PACKETEER_ATLAS_API_KEY' 'Cannot reach'
+      - name: UI steer verification smoke (#305; hidden with verify off, then every status from canned answers, observe)
+        run: |
+          set -euo pipefail
+          base=http://127.0.0.1:18305
+          cat > /tmp/ui305.yaml <<'YAML'
+          mode: observe
+          asn: 64512
+          router_id: 192.0.2.10
+          auth: {enabled: false}
+          http:
+            listen: "127.0.0.1:18305"
+          providers:
+            - name: lab-a
+              source_ip: 127.0.0.1
+              next_hop: 192.0.2.1
+          YAML
+          docker run -d --name pkui305 --network host --cap-add NET_RAW --cap-add NET_ADMIN \
+            -v /tmp/ui305.yaml:/etc/packeteer/config.yaml:ro packeteer:ci
+          proxy=""
+          cleanup() {
+            if [ -n "$proxy" ]; then kill "$proxy" 2>/dev/null || true; fi
+            docker stop -t 15 pkui305 >/dev/null || true
+            docker logs pkui305 2>&1 | tail -n 40
+            code="$(docker inspect -f '{{.State.ExitCode}}' pkui305)"
+            docker rm pkui305 >/dev/null || true
+            test "$code" = "0"
+          }
+          trap cleanup EXIT
+          ok=0
+          for _ in $(seq 1 30); do
+            if curl -fsS "$base/healthz" >/dev/null 2>&1; then ok=1; break; fi
+            sleep 1
+          done
+          test "$ok" = 1
+          # verify is off by default: no results, and the section stays hidden.
+          curl -fsS "$base/api/verification" | jq -e '.enabled == false and (.results | length) == 0'
+          bash lab/ui-smoke.sh "$base/improvements.html" 'Recommended improvements' 'id="verification-section" hidden=""' \
+            --absent 'No steer has been checked yet.' 'Cannot reach'
+          go build -o /tmp/uiproxy ./lab/uiproxy
+          /tmp/uiproxy -listen 127.0.0.1:18306 -upstream "$base" -user lab -password lab-only \
+            -fixtures lab/ui-fixtures/verification >/tmp/uiproxy305.log 2>&1 &
+          proxy=$!
+          for _ in $(seq 1 20); do
+            curl -fsS http://127.0.0.1:18306/healthz >/dev/null 2>&1 && break
+            sleep 0.2
+          done
+          curl -fsS http://127.0.0.1:18306/healthz >/dev/null
+          bash lab/ui-smoke.sh "http://127.0.0.1:18306/improvements.html" 'Steer verification' 'Verified' 'Partial' 'Not moved' 'Pending' 'Unknown' \
+            'backed out' 'to transit-b' 'away from transit-a' '38 Mbps (95%)' '12 Mbps (30%)' '198.51.100.0/24' 'held off 30m0s' \
+            --absent 'id="verification-section" hidden=""' 'No steer has been checked yet.' 'Cannot reach'
       - name: UI prefix list smoke (#183; a 100000-prefix list from canned pages, observe)
         run: |
           set -euo pipefail
@@ -2680,6 +2730,10 @@ jobs:
         run: bash lab/e2e-cost.sh
       - name: FRR inbound lab (commit, performance, damping, withhold)
         run: bash lab/e2e-inbound.sh
+      - name: FRR steer verification lab, inbound (#305; traffic moves and the steer is verified, traffic does not move and the steer is reverted and held off)
+        run: bash lab/e2e-verify-inbound.sh
+      - name: FRR steer verification lab, outbound (#305; traffic moves and the improvement is verified, traffic does not move and the improvement is reported, SIGTERM)
+        run: bash lab/e2e-verify-outbound.sh
       - name: FRR BMP lab (inactive path, route check, BMP loss)
         run: bash lab/e2e-bmp.sh
       - name: FRR add-path lab (inactive path over iBGP add-path, route check, SIGTERM, SIGKILL)

@@ -73,6 +73,24 @@ func (e *Engine) Release(p netip.Prefix, now time.Time) (Quarantine, bool) {
 	return q, ok
 }
 
+// Backout retires p's improvement because verification found it did not
+// move traffic (#305) and keeps the prefix from being improved again until
+// until. The announcer withdraws the route on the next sync. It reports
+// false when p has no improvement.
+func (e *Engine) Backout(p netip.Prefix, until time.Time, reason string) (Change, bool) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	old, ok := e.state.Improvements[p]
+	if !ok {
+		return Change{}, false
+	}
+	delete(e.state.Improvements, p)
+	delete(e.state.confirm, p)
+	e.state.Cooldown[p] = until
+	old.Reason = reason
+	return Change{Action: ActionRetire, Old: old}, true
+}
+
 // Decisions returns the latest per-prefix decisions and when they were made.
 func (e *Engine) Decisions() ([]Decision, time.Time) {
 	e.mu.RLock()

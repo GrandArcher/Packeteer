@@ -18,6 +18,7 @@ import (
 	"github.com/GrandArcher/Packeteer/internal/atlas"
 	"github.com/GrandArcher/Packeteer/internal/linkout"
 	"github.com/GrandArcher/Packeteer/internal/ringlg"
+	"github.com/GrandArcher/Packeteer/internal/verify"
 )
 
 // Operating modes.
@@ -213,6 +214,9 @@ type Config struct {
 	// Atlas is the opt-in RIPE Atlas measurements with the operator's own
 	// key and credits (#213). Off by default; display only.
 	Atlas atlas.Config `yaml:"atlas"`
+	// Verify checks that an outbound or inbound steer moved traffic and
+	// reports the result (#305). Off by default.
+	Verify verify.Config `yaml:"verify"`
 	// Lookup is the read-only PeeringDB / IX-F directory (#153). Nil
 	// disables it. It never announces.
 	Lookup *PluginSpec `yaml:"lookup"`

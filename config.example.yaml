@@ -837,6 +837,22 @@ plugin_dir: /etc/packeteer/plugins
 #   max_credits_per_day: 500
 #   max_measurements_per_hour: 4
 
+# Steer verification (#305, docs/CONFIG.md#verify). Off unless enabled. After an
+# outbound improvement or an inbound steer is announced, the interface counters
+# (a telemetry plugin) must show the traffic moved: verified, partial, or not
+# moved, in the UI, /api/verification and events. backout lists the directions
+# whose steer is undone when it did not move; [] only reports. Needs a restart.
+# verify:
+#   enabled: true
+#   outbound_window: 5m
+#   inbound_window: 10m
+#   verified_pct: 50
+#   moved_pct: 10
+#   min_mbps: 1
+#   backout: [inbound]
+#   backoff: 30m
+#   max_backoff: 4h
+
 # Herd (#260, docs/herd.md). Off unless enabled. Shares probe measurements
 # (never names, host addresses, or usage) with the static peers you pin by
 # key; advisory only, never read by a decision, never announces. Needs

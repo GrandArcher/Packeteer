@@ -22,6 +22,7 @@ import (
 	"github.com/GrandArcher/Packeteer/internal/probe"
 	"github.com/GrandArcher/Packeteer/internal/rib"
 	"github.com/GrandArcher/Packeteer/internal/syshealth"
+	"github.com/GrandArcher/Packeteer/internal/verify"
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
 )
 
@@ -398,6 +399,37 @@ func (w *eventWatch) inbound(now time.Time, mode string, changes []inbound.Chang
 		}
 		fields["communities"] = strings.Join(s.Action.Communities, " ")
 		w.emit(now, plugin.EventInboundSteered, "steering inbound traffic away from "+s.Provider+" ("+c.Reason+")"+suffix, fields)
+	}
+}
+
+// verification reports the steers that were checked (#305). Verified
+// resolves an earlier steer.unverified for the same target; partial and
+// not moved are the routing anomaly. Unknown is only logged: no data is
+// not a finding.
+func (w *eventWatch) verification(now time.Time, results []verify.Result) {
+	if w == nil {
+		return
+	}
+	for _, r := range results {
+		target := r.Target()
+		fields := map[string]string{
+			"kind": string(r.Kind), "target": target, "provider": r.Provider, "status": string(r.Status),
+			"expected_mbps": strconv.FormatFloat(r.ExpectedMbps, 'f', 1, 64),
+			"moved_mbps":    strconv.FormatFloat(r.MovedMbps, 'f', 1, 64),
+			"moved_pct":     strconv.FormatFloat(r.MovedPct, 'f', 0, 64),
+			"backed_out":    strconv.FormatBool(r.BackedOut),
+			"detail":        r.Detail,
+		}
+		if r.Kind == verify.Outbound {
+			fields["prefix"] = r.Prefix.String()
+			fields["path_degraded"] = strconv.FormatBool(r.PathDegraded)
+		}
+		switch {
+		case r.Status == verify.Verified:
+			w.emit(now, plugin.EventSteerVerified, fmt.Sprintf("%s steer of %s verified: %s", r.Kind, target, r.Detail), fields)
+		case r.Status.Unverified():
+			w.emit(now, plugin.EventSteerUnverified, fmt.Sprintf("%s steer of %s is %s: %s", r.Kind, target, strings.ReplaceAll(string(r.Status), "_", " "), r.Detail), fields)
+		}
 	}
 }
 

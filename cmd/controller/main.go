@@ -42,6 +42,7 @@ import (
 	"github.com/GrandArcher/Packeteer/internal/subscribe"
 	"github.com/GrandArcher/Packeteer/internal/syshealth"
 	"github.com/GrandArcher/Packeteer/internal/upgrade"
+	"github.com/GrandArcher/Packeteer/internal/verify"
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
 )
 
@@ -457,6 +458,14 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 	if cfg.Inbound != nil {
 		inboundStatus = func() inbound.Status { return inb.Status() }
 	}
+	// The verifier needs both controllers, built below; the API reads it
+	// through this variable.
+	var verifier *steerVerifier
+	var verifierRef atomic.Pointer[steerVerifier]
+	var verificationStatus func() []verify.Result
+	if cfg.Verify.Enabled {
+		verificationStatus = func() []verify.Result { return verifierRef.Load().results() }
+	}
 	// Threat mitigation (#28) is built before the HTTP server, which adds
 	// and removes its rules. It needs the RIB view only to sync.
 	mit, merr := newMitigation(cfg, plugins, log)
@@ -598,7 +607,7 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 		httpSrv, err = httpapi.New(httpapi.Options{
 			Addr: addr, User: httpUser, Password: httpPass, Snapshot: col.Snapshot, Logger: log,
 			Auth: authSvc, Audit: audit, Events: evlog, AllowFrom: cfg.HTTPAllowFrom(),
-			Maintenance: maint, Reports: reports, Tools: tools, Inbound: inboundStatus, Mitigation: mitAPI, Anomaly: anomAPI, Leaks: leakAPI,
+			Maintenance: maint, Reports: reports, Tools: tools, Inbound: inboundStatus, Verification: verificationStatus, Mitigation: mitAPI, Anomaly: anomAPI, Leaks: leakAPI,
 			Federation: fed.status, FederationPush: fedPush, HA: haStatus,
 			ConfigEditor: editorAPI, FirstRun: firstRunAPI, Dashboards: dashboardStore(plugins), Subscriptions: subsAPI,
 			Setup: setupInfo(cfg, plugins), Upgrade: upgradeAPI, Linkouts: linkout.New(cfg.Linkouts), RingLG: ringlg.New(cfg.RingLG, version), Atlas: atl,
@@ -655,6 +664,8 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 		return 1
 	}
 	mit.SetOutbound(ctl.Injected)
+	verifier = newSteerVerifier(cfg, decider, inb, plugins, log)
+	verifierRef.Store(verifier)
 	if view != nil {
 		if err := view.Start(ctx); err != nil {
 			log.Error("refusing to start", "err", err)
@@ -863,6 +874,7 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 					// Stepped down: no intent survives into a later
 					// takeover. Drop the retained probe targets with it.
 					decider.Reset()
+					verifier.reset()
 					retainImprovedPrefixes(engine, nil)
 					if engine != nil {
 						engine.SetUrgent(nil)
@@ -886,7 +898,9 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 			if reorderMon != nil {
 				in.Reorder = reorderMon.Scored(now, maxResultAge(cfg))
 			}
+			verified, backedOut, revertedIn := verifier.check(loopCtx, now, ctl.Injected, in.Results)
 			changes, err := runDecision(now, decider, in, ctl, log, snap.Mode, engine)
+			changes = append(backedOut, changes...)
 			atlasAfterMoves(atl, ctl.Injected, changes, in.Results)
 			fed.publish(now, in, decider.Improvements())
 			if rec != nil {
@@ -896,6 +910,8 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 				}
 			}
 			inChanges, inErr := runInbound(loopCtx, now, inb, plugins, log, snap.InboundMode(), in)
+			inChanges = append(revertedIn, inChanges...)
+			verifier.begin(loopCtx, now, ctl.Injected, snap.InboundMode(), changes, inChanges, in.Results)
 			mitChanges, mitErr := runMitigation(now, mit, log)
 			anomChanges := anom.Changes()
 			if rec != nil {
@@ -909,6 +925,7 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 			watch.quarantines(now, qc)
 			auditQuarantines(audit, qc)
 			watch.inbound(now, snap.InboundMode(), inChanges)
+			watch.verification(now, verified)
 			watch.announce(now, errors.Join(err, inErr, mitErr))
 			watch.providerStatus(now, engine.Providers(), in.Results, snap.Probe.DegradedLossPct, snap.Probe.DownLossPct)
 			if view != nil {

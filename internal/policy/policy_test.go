@@ -474,3 +474,51 @@ func TestEngineResetDropsIntent(t *testing.T) {
 		t.Fatalf("after Reset: improvements %+v decisions %+v at %s", e.Improvements(), d, at)
 	}
 }
+
+// TestBackoutHoldsThePrefixOff: verification (#305) retires an improvement
+// that moved no traffic, and the prefix is not improved again before the
+// back-off ends even though the performance win is still there.
+func TestBackoutHoldsThePrefixOff(t *testing.T) {
+	e := NewEngine(cfg(), scorer(t))
+	input := in(results(t0, pA, m{"a", 0, 90}, m{"b", 0, 30}), map[netip.Prefix]string{pA: "a"})
+	if ch := e.Evaluate(input, t0); len(ch) != 1 || ch[0].Action != ActionImprove {
+		t.Fatalf("improve: %+v", ch)
+	}
+	until := t0.Add(time.Hour)
+	ch, ok := e.Backout(pA, until, "did not move traffic")
+	if !ok || ch.Action != ActionRetire || ch.Old.Reason != "did not move traffic" || len(e.Improvements()) != 0 {
+		t.Fatalf("backout = %+v %v, improvements %+v", ch, ok, e.Improvements())
+	}
+	if _, ok := e.Backout(pA, until, "again"); ok {
+		t.Fatal("backed out a prefix with no improvement")
+	}
+	mid := t0.Add(30 * time.Minute)
+	if ch := e.Evaluate(in(results(mid, pA, m{"a", 0, 90}, m{"b", 0, 30}), map[netip.Prefix]string{pA: "a"}), mid); len(ch) != 0 {
+		t.Fatalf("improved again inside the back-off: %+v", ch)
+	}
+	end := until.Add(time.Second)
+	if ch := e.Evaluate(in(results(end, pA, m{"a", 0, 90}, m{"b", 0, 30}), map[netip.Prefix]string{pA: "a"}), end); len(ch) != 1 || ch[0].Action != ActionImprove {
+		t.Fatalf("no improvement after the back-off: %+v", ch)
+	}
+}
+
+// TestDegradedImprovedPathLeavesUnderHoldTime: an improved path that gets
+// worse under the moved traffic is withdrawn by the existing rules, and
+// only after hold_time.
+func TestDegradedImprovedPathLeavesUnderHoldTime(t *testing.T) {
+	e := NewEngine(cfg(), scorer(t))
+	native := map[netip.Prefix]string{pA: "a"}
+	e.Evaluate(in(results(t0, pA, m{"a", 0, 90}, m{"b", 0, 30}), native), t0)
+	if len(e.Improvements()) != 1 {
+		t.Fatalf("improvements = %+v", e.Improvements())
+	}
+	early := t0.Add(5 * time.Minute)
+	if ch := e.Evaluate(in(results(early, pA, m{"a", 0, 90}, m{"b", 15, 200}), native), early); len(ch) != 0 || len(e.Improvements()) != 1 {
+		t.Fatalf("withdrawn inside hold_time: %+v", ch)
+	}
+	late := t0.Add(16 * time.Minute)
+	ch := e.Evaluate(in(results(late, pA, m{"a", 0, 90}, m{"b", 15, 200}), native), late)
+	if len(ch) != 1 || ch[0].Action != ActionRetire || ch[0].Old.Reason != "native path better again" {
+		t.Fatalf("after hold_time: %+v", ch)
+	}
+}

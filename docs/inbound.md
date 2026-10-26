@@ -100,6 +100,10 @@ Strip communities with **one standard list per transit** that names every value 
 
 The edge must also advertise the prefix to Packeteer with a next hop that is not one of its own addresses (the lab rewrites it), or rewrite the next hop on import, because Packeteer re-announces the learned next hop.
 
+## Verification
+
+With `verify.enabled` ([CONFIG.md](CONFIG.md#verify), #305), an announced steer (not suggest, observe, or a moderated one) is checked after `verify.inbound_window` (default 10m, longer than outbound because inbound telemetry lags). The steered-away provider's inbound rate must have fallen, and the other providers' risen, by at least `verified_pct` (default 50) of what it carried at the steer: `verified`. Between `moved_pct` (10) and that is `partial`; below it `not_moved`. Partial and not moved send `steer.unverified` (a routing anomaly). A `not_moved` steer is reverted by default (`verify.backout` defaults to `[inbound]`): the route is withdrawn and the provider is not steered again for `backoff` (30m, doubling on each repeat up to `max_backoff`), even while its trigger is still on, so an edge that ignores the signal is not churned for nothing. `/api/inbound` lists it under `blocked` with a `verification` reason. The FRR lab (`lab/e2e-verify-inbound.sh`) checks a verified steer, and a steer that did not move traffic being reverted and held off.
+
 ## Config
 
 ```yaml

@@ -62,6 +62,8 @@ On every sample the script reads the edge's table with `lab/checkms` and fails o
 
 `lab/e2e-flap.sh` is the flap quarantine (#228) on the main lab topology with `lab/packeteer-flap.yaml` (`max_flips: 3`, 45s cool-down): three provider changes are allowed, the fourth withdraws Packeteer's route and logs `flap quarantine started`, the edge stays on its native path for 20s while transit-b measures better, the cool-down ends with `flap quarantine released` and the route returns, and SIGTERM withdraws.
 
+`lab/e2e-verify-inbound.sh` and `lab/e2e-verify-outbound.sh` are steer verification (#305), on the inbound topology (`lab/packeteer-verify-inbound.yaml`) and the main topology (`lab/packeteer-verify-outbound.yaml`). The `fixed` telemetry file is rewritten to move the traffic or not. Inbound: the steer away from transit-a is verified when the usage shows the traffic arriving on transit-b and stays on the transits; after a restart, with the usage unchanged, it is reverted (transit-a gets the plain path again) and not made again during the back-off. Outbound: the improvement to transit-b is verified (log, `/api/verification`, `steer.verified`), a move to transit-c with no change in usage is reported (`steer.unverified`) and left in place, and SIGTERM withdraws.
+
 `lab/e2e-move.sh` is make-before-break (#386) on the main lab topology with `lab/packeteer-move.yaml` (a third provider, transit-c, next hop `192.0.2.4`). The improvement moves from transit-b to transit-c while the edge logs every UPDATE it receives (`debug bgp updates in`). Sampled every 0.2s, the edge holds exactly one Packeteer path for the prefix until it reads `192.0.2.4`, and the update log has the move's UPDATE and no withdraw. A flip-back withdraw must then appear in the same log, and SIGTERM withdraws.
 
 `lab/e2e-leak-watch.sh` is the leak watch (#199) on its own topology (`lab/docker-compose-leak-watch.yml`): one FRR edge (`lab/frr-leak-edge`), a router outside the AS (`lab/frr-leak-ext`, AS 64511) that streams BMP to Packeteer's leak source on `192.0.2.10:11020`, and Packeteer (`lab/packeteer-leak-watch.yaml`). The edge originates `198.51.100.0/24` and `203.0.113.0/24` (both injected) and `192.0.2.64/26`, and exports only the last to ext. The script checks: (1) both /24s are injected and tagged. (2) A clean 40s run: ext holds only `192.0.2.64/26`, `/api/leaks` is empty and `watching`.
@@ -97,6 +99,8 @@ bash lab/e2e.sh
 bash lab/e2e-commit.sh
 bash lab/e2e-cost.sh
 bash lab/e2e-inbound.sh
+bash lab/e2e-verify-inbound.sh
+bash lab/e2e-verify-outbound.sh
 bash lab/e2e-mitigation.sh
 bash lab/e2e-bmp.sh
 bash lab/e2e-addpath.sh
