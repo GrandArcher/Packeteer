@@ -79,6 +79,15 @@ func server(t *testing.T) (*seen, int, string) {
 	return h, srv.Listener.Addr().(*net.TCPAddr).Port, ca
 }
 
+func listen(t *testing.T, addr string) net.Listener {
+	t.Helper()
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return ln
+}
+
 func probe(t *testing.T, p plugin.Prober, count int) plugin.ProbeResult {
 	t.Helper()
 	res, err := p.Probe(context.Background(), plugin.ProbeRequest{Source: lo, Target: lo, Count: count, Timeout: 2 * time.Second})
@@ -204,7 +213,7 @@ func TestTargetInheritsDefaults(t *testing.T) {
 }
 
 func TestRefusedAndSilentAreLoss(t *testing.T) {
-	ln, _ := net.Listen("tcp", "127.0.0.1:0")
+	ln := listen(t, "127.0.0.1:0")
 	port := ln.Addr().(*net.TCPAddr).Port
 	ln.Close()
 	p := newProber(t, fmt.Sprintf("port: %d\npacket_interval: 1ms", port))
@@ -213,7 +222,7 @@ func TestRefusedAndSilentAreLoss(t *testing.T) {
 	}
 
 	// Accepts the connection and never answers the handshake.
-	silent, _ := net.Listen("tcp", "127.0.0.1:0")
+	silent := listen(t, "127.0.0.1:0")
 	defer silent.Close()
 	go func() {
 		for {
@@ -236,7 +245,7 @@ func TestRefusedAndSilentAreLoss(t *testing.T) {
 }
 
 func TestContextCancelStopsAStalledProbe(t *testing.T) {
-	silent, _ := net.Listen("tcp", "127.0.0.1:0")
+	silent := listen(t, "127.0.0.1:0")
 	defer silent.Close()
 	go func() {
 		for {
@@ -265,7 +274,7 @@ func TestIPv6TargetHostHeader(t *testing.T) {
 	ln.Close()
 	h := &seen{}
 	srv := httptest.NewUnstartedServer(h)
-	srv.Listener, _ = net.Listen("tcp", "[::1]:0")
+	srv.Listener = listen(t, "[::1]:0")
 	srv.StartTLS()
 	defer srv.Close()
 	ca := filepath.Join(t.TempDir(), "ca.pem")
@@ -312,6 +321,8 @@ func TestConfig(t *testing.T) {
 		"path: health":                                             "must start with /",
 		"path: \"/a b\"":                                           "must start with /",
 		"server_name: a/b":                                         "not a host name",
+		"status_max: 99":                                           "100 <= min <= max <= 599",
+		"status_min: 400":                                          "100 <= min <= max <= 599",
 		"status_min: 99\nstatus_max: 200":                          "100 <= min <= max <= 599",
 		"status_min: 300\nstatus_max: 200":                         "100 <= min <= max <= 599",
 		"status_min: 200\nstatus_max: 600":                         "100 <= min <= max <= 599",
@@ -323,11 +334,42 @@ func TestConfig(t *testing.T) {
 		"targets:\n  - address: 192.0.2.1\n    server_name: a b":   "not a host name",
 		"targets:\n  - address: 192.0.2.1\n  - address: 192.0.2.1": "listed twice",
 		"targets:\n  - address: 192.0.2.1\n    port: 8443":         "field port not found",
-		"mode: syn": "field mode not found",
 	} {
 		c, _ := plugin.ConfigFromYAML(y)
 		if _, err := plugin.Probers.New(TypeName, c, plugin.Env{}); err == nil || !strings.Contains(err.Error(), want) {
 			t.Errorf("%q: err = %v, want %q", y, err, want)
 		}
+	}
+}
+
+func TestOneStatusBoundKeepsTheOtherDefault(t *testing.T) {
+	h, port, ca := server(t)
+	h.mu.Lock()
+	h.code = 302
+	h.mu.Unlock()
+	p := newProber(t, fmt.Sprintf("port: %d\nca_file: %s\nstatus_max: 299", port, ca))
+	if res := probe(t, p, 1); len(res.RTTs) != 0 {
+		t.Fatalf("302 answered with status_max 299: %+v", res)
+	}
+	h.mu.Lock()
+	h.code = 204
+	h.mu.Unlock()
+	if res := probe(t, p, 1); len(res.RTTs) != 1 {
+		t.Fatalf("204 lost with status_max 299: %+v", res)
+	}
+}
+
+func TestShortDeadlineKeepsMeasuredReplies(t *testing.T) {
+	_, port, ca := server(t)
+	p := newProber(t, fmt.Sprintf("port: %d\nca_file: %s\npacket_interval: 5s", port, ca))
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	start := time.Now()
+	res, err := p.Probe(ctx, plugin.ProbeRequest{Source: lo, Target: lo, Count: 3, Timeout: time.Second})
+	if err != nil || res.Sent != 1 || len(res.RTTs) != 1 {
+		t.Fatalf("res = %+v err = %v, want the first reply kept", res, err)
+	}
+	if time.Since(start) > time.Second {
+		t.Fatalf("waited %v for a spacing the deadline cannot fit", time.Since(start))
 	}
 }

@@ -10,7 +10,7 @@ The feature matrix is [docs/FEATURES.md](docs/FEATURES.md).
 
 ## What it does
 
-- **Measure.** Probes (`icmp`, `tcp`, `udp`) from each provider's `source_ip`, targets from static lists, NetFlow, IPFIX, sFlow, a mirror port, traceroute, VIPs, and outage lists, scores loss, latency, and jitter. The per-provider path check (#150) marks a provider down when its probes do not leave through its `next_hop`. Providers and exchange peers may share one `source_ip` with a distinct `fwmark` or `dscp`, and `packeteer -pbr <format>` prints the Linux or router policy-routing config without applying it (#157).
+- **Measure.** Probes (`icmp`, `tcp`, `udp`, `https`) from each provider's `source_ip`, targets from static lists, NetFlow, IPFIX, sFlow, a mirror port, traceroute, VIPs, and outage lists, scores loss, latency, and jitter. The per-provider path check (#150) marks a provider down when its probes do not leave through its `next_hop`. Providers and exchange peers may share one `source_ip` with a distinct `fwmark` or `dscp`, and `packeteer -pbr <format>` prints the Linux or router policy-routing config without applying it (#157).
 - **Learn.** An iBGP session, or BMP with add-path, gives the router's own exits. An opt-in `rpki` block reads an RTR server and labels each learned path `valid`, `invalid`, `notfound`, or `unknown`; `avoid_invalid` refuses a new steer onto an invalid path (#158).
 - **Recommend or steer.** `observe` and `suggest` announce nothing. `inject` advertises an allowlisted, learned prefix with your community and `no-export`. Cost and commit control, 95th-percentile telemetry over SNMP, inbound optimization, RTBH and FlowSpec mitigation, anomaly detection, flap quarantine, leak watch, HA, and multi-POP federation are listed in [docs/FEATURES.md](docs/FEATURES.md).
 - **Internet exchanges, as an edge network.** An `exchanges` block adds peers, LAN health probes, route-server vs bilateral views, transit-to-IX offload and potential-peers reports, and a shared port (`exchanges[].port`: capacity, commit, flat `port_cost`; the commit and cost scorers plan no move past it).
@@ -246,7 +246,7 @@ Scrape `http://127.0.0.1:8080/metrics` on the host with an API token (`Authoriza
 
 Almost every part of Packeteer is a plugin selected by `type` in the config. Unknown types and unknown keys inside a plugin `config` block refuse startup. The built-ins, by kind:
 
-- **Probers:** `icmp`, `tcp`, `udp`, `fixed` (labs only).
+- **Probers:** `icmp`, `tcp`, `udp`, `https`, `fixed` (labs only).
 - **Target sources:** `static`, `flow` (NetFlow, IPFIX, sFlow), `traceroute`, `vip`, `outage`, `span` (mirror port or pcap; needs `NET_RAW`).
 - **Route feeds:** rib_source `bmp` (BMP and add-path from the routers).
 - **Scorers:** `weighted` (default), `commit`, `cost`.

@@ -68,7 +68,7 @@ type Config struct {
 	IRRPreferRegistered bool
 	// RequireEvidence refuses a new performance move or performance switch
 	// whose two compared samples do not both rest on more than ICMP: a
-	// tcp or udp reply, or passive TCP evidence that agrees with the
+	// tcp, udp, or https reply, or passive TCP evidence that agrees with the
 	// sample (#202), including a performance switch off a commit or cost
 	// steer, which then stays with its planner. It is off by default.
 	// Decide checks it after the cooldown, the allowlist, and cost

@@ -943,7 +943,7 @@ Built-in types are listed in [PLUGINS.md](PLUGINS.md). Their `config` keys:
 
 ### Prober `https`
 
-Not in the default chain: it sends a full HTTPS request per packet, so use it for pinned hosts (`static` or `vip` with `host`) that serve HTTPS, after `icmp` or `tcp` in `probers`. The connection goes to the probe address on the provider's source address; redirects are not followed. The reply RTT is connect, TLS handshake, and time from the request to the first response byte added together, and the three means are `connect_ms`, `handshake_ms`, and `ttfb_ms` on `/api/probes`. A connect or handshake failure, a certificate error, a timeout, or a status outside `status_min`-`status_max` is loss. A reply counts as evidence beyond ICMP for `require_evidence`.
+Not in the default chain: it sends a full HTTPS request per packet, so use it for pinned hosts (`static` or `vip` with `host`) that serve HTTPS. The chain tries the next prober when one gets no replies, so a host whose every request fails the status check is then measured by the next prober, and a prober listed before `https` that answers means `https` never runs. For the status check to count as loss, list `https` last, or alone, in `probers` for those targets. The connection goes to the probe address on the provider's source address; redirects are not followed. The reply RTT is connect, TLS handshake, and time from the request to the first response byte added together, and the three means are `connect_ms`, `handshake_ms`, and `ttfb_ms` on `/api/probes`. A connect or handshake failure, a certificate error, a timeout, or a status outside `status_min`-`status_max` is loss. A reply counts as evidence beyond ICMP for `require_evidence`.
 
 | Key | Default | Values |
 |---|---|---|
@@ -951,7 +951,7 @@ Not in the default chain: it sends a full HTTPS request per packet, so use it fo
 | `method` | `GET` | `GET` or `HEAD`. |
 | `path` | `/` | Request path and query, starts with `/`. |
 | `server_name` | the probe address | SNI, certificate name to verify, and `Host` header. |
-| `status_min`, `status_max` | 200, 399 | 100-599, `status_min` not above `status_max`. |
+| `status_min`, `status_max` | 200, 399 | Each defaults on its own. 100-599, `status_min` not above `status_max`. |
 | `ca_file` | system roots | PEM file with the CA certificates to trust, for a private CA. |
 | `packet_interval` | `500ms` | Not negative. Gap between the requests of one run. |
 | `targets` | none | Per probe address: `address` (an IP, listed once), and optional `server_name`, `path` (both default to the values above), and `insecure_skip_verify` (default false). Skipping verification is possible only here, for the named address, and logs a warning at start. |

@@ -18,6 +18,7 @@ import (
 	"crypto/x509"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/netip"
@@ -83,6 +84,7 @@ type Prober struct {
 	roots     *x509.CertPool
 	def       request
 	targets   map[netip.Addr]request
+	log       *slog.Logger
 }
 
 // New is the plugin factory.
@@ -114,8 +116,11 @@ func New(c plugin.Config, env plugin.Env) (plugin.Prober, error) {
 	if err := checkServerName(cfg.ServerName); err != nil {
 		return nil, err
 	}
-	if cfg.StatusMin == 0 && cfg.StatusMax == 0 {
-		cfg.StatusMin, cfg.StatusMax = DefaultStatusMin, DefaultStatusMax
+	if cfg.StatusMin == 0 {
+		cfg.StatusMin = DefaultStatusMin
+	}
+	if cfg.StatusMax == 0 {
+		cfg.StatusMax = DefaultStatusMax
 	}
 	if cfg.StatusMin < 100 || cfg.StatusMax > 599 || cfg.StatusMin > cfg.StatusMax {
 		return nil, fmt.Errorf("status_min %d and status_max %d must satisfy 100 <= min <= max <= 599", cfg.StatusMin, cfg.StatusMax)
@@ -131,6 +136,7 @@ func New(c plugin.Config, env plugin.Env) (plugin.Prober, error) {
 		statusMin: cfg.StatusMin, statusMax: cfg.StatusMax,
 		def:     request{serverName: cfg.ServerName, path: cfg.Path},
 		targets: make(map[netip.Addr]request, len(cfg.Targets)),
+		log:     env.Logger,
 	}
 	if cfg.CAFile != "" {
 		pem, err := os.ReadFile(cfg.CAFile)
@@ -219,9 +225,18 @@ func (p *Prober) Probe(ctx context.Context, req plugin.ProbeRequest) (plugin.Pro
 			return res, fmt.Errorf("%w: %s: %v", plugin.ErrSourceUnavailable, req.Source, err)
 		case ctx.Err() != nil:
 			return res, ctx.Err()
+		default:
+			if p.log != nil {
+				p.log.Debug("https probe lost", "provider", req.Provider, "target", req.Target, "err", err)
+			}
 		}
 		if i < req.Count-1 {
 			if wait := p.interval - time.Since(start); wait > 0 {
+				// The engine's deadline is count*timeout; a long spacing must
+				// not turn the replies already measured into an error.
+				if dl, ok := ctx.Deadline(); ok && time.Until(dl) < wait+req.Timeout {
+					return res, nil
+				}
 				select {
 				case <-time.After(wait):
 				case <-ctx.Done():

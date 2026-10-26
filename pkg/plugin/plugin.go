@@ -150,7 +150,7 @@ type ProbeResult struct {
 type Phases struct {
 	Connect   time.Duration // TCP connect
 	Handshake time.Duration // TLS handshake
-	TTFB      time.Duration // request written to first response byte
+	TTFB      time.Duration // start of the request write to first response byte
 }
 
 // Prober measures reachability and latency from a source to a target.

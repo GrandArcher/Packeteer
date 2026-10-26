@@ -161,8 +161,10 @@ probers:
   - type: tcp
     config:
       port: 443
-  # - type: https             # optional: GET over TLS to a pinned probe host, timed as connect,
-  #   config:                 # handshake, and first byte. A status outside 200-399 is loss.
+  # - type: https             # optional, for pinned hosts that serve HTTPS: GET over TLS timed as
+  #   config:                 # connect, handshake, first byte. A status outside 200-399 is loss.
+  #                           # It runs only when the probers above it get no reply; to measure
+  #                           # HTTPS, use it as the only entry in probers.
   #     server_name: www.example.com
   #     path: /
   # - type: udp               # optional fallback. A reply or ICMP port-unreachable counts.
