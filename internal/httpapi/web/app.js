@@ -1061,6 +1061,62 @@ function fetchProviderStats() {
   return getJSON("/api/providers/stats");
 }
 
+// fetchVerification reads the steer checks (#305) for the Improvements page.
+function fetchVerification() {
+  if (document.body.getAttribute("data-page") !== "improvements") return Promise.resolve(null);
+  return getJSON("/api/verification");
+}
+
+var VERIFY_LABEL = {verified: "Verified", partial: "Partial", not_moved: "Not moved", pending: "Pending", unknown: "Unknown"};
+
+function verifyBadge(status) {
+  var label = VERIFY_LABEL[status] || status;
+  if (status === "verified") return el("span", "dot up", label);
+  if (status === "partial") return el("span", "dot degraded", label);
+  if (status === "not_moved") return el("span", "dot down", label);
+  return el("span", "badge muted", label);
+}
+
+// renderVerification lists each outbound and inbound steer as verified,
+// partial, not moved, pending, or unknown. With verify off the section stays hidden.
+function renderVerification(data) {
+  var sec = document.getElementById("verification-section");
+  var root = document.getElementById("verification");
+  if (!sec || !root) return;
+  sec.hidden = !(data && data.enabled);
+  if (sec.hidden) return;
+  clear(root);
+  var rows = data.results || [];
+  if (!rows.length) {
+    root.appendChild(el("p", "empty", "No steer has been checked yet."));
+    return;
+  }
+  var table = el("table");
+  var hr = el("tr");
+  ["Direction", "Target", "Provider", "Result", "Moved", "Expected", "Checked", "Detail"].forEach(function (h) { hr.appendChild(el("th", "", h)); });
+  var thead = el("thead");
+  thead.appendChild(hr);
+  table.appendChild(thead);
+  var tb = el("tbody");
+  rows.forEach(function (r) {
+    var tr = el("tr");
+    tr.appendChild(el("td", "", r.kind));
+    tr.appendChild(el("td", "", r.kind === "outbound" ? r.prefix : r.provider));
+    tr.appendChild(el("td", "", r.kind === "outbound" ? "to " + r.provider : "away from " + r.provider));
+    var st = el("td");
+    st.appendChild(verifyBadge(r.status));
+    if (r.backed_out) st.appendChild(el("span", "badge muted", "backed out"));
+    tr.appendChild(st);
+    tr.appendChild(el("td", "", r.status === "pending" || r.status === "unknown" ? "-" : fmtNum(r.moved_mbps) + " Mbps (" + Math.round(r.moved_pct) + "%)"));
+    tr.appendChild(el("td", "", r.expected_mbps ? fmtNum(r.expected_mbps) + " Mbps" : "-"));
+    tr.appendChild(el("td", "", r.status === "pending" ? "due " + fmtTime(r.due) : fmtTime(r.checked)));
+    tr.appendChild(el("td", "why", r.detail));
+    tb.appendChild(tr);
+  });
+  table.appendChild(tb);
+  root.appendChild(table);
+}
+
 function refresh() {
   if (refreshing) {
     refreshAgain = true;
@@ -1078,7 +1134,8 @@ function refresh() {
     getJSON("/api/mitigations"),
     getJSON("/api/federation"),
     getJSON("/api/overview"),
-    fetchProviderStats()
+    fetchProviderStats(),
+    fetchVerification()
   ]).then(function (results) {
     var err = null;
     if (results[6].status === "fulfilled") {
@@ -1104,6 +1161,8 @@ function refresh() {
       if (typeof prefixPageUpdate === "function") prefixPageUpdate(lastPrefixes);
     }
     if (lastImprovements) renderImprovements(lastImprovements);
+    // Verification is optional: a failed read leaves the section as it was.
+    if (results[8].status === "fulfilled" && results[8].value) renderVerification(results[8].value);
     // Mitigation is optional; its failure does not mark the page stale.
     if (results[4].status === "fulfilled") lastMitigation = results[4].value;
     if (lastMitigation) renderMitigation(lastMitigation);

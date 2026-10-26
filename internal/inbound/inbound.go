@@ -232,9 +232,11 @@ type Controller struct {
 	rib RIB
 	log *slog.Logger
 
-	mu        sync.Mutex
-	steers    map[string]Steer
-	cooldown  map[string]time.Time
+	mu       sync.Mutex
+	steers   map[string]Steer
+	cooldown map[string]time.Time
+	// backedOff marks a cooldown set by Revert, for the blocked reason.
+	backedOff map[string]bool
 	blocked   []Blocked
 	evaluated time.Time
 	active    map[netip.Prefix]Route
@@ -277,7 +279,7 @@ func New(cfg Config, ann plugin.InboundAnnouncer, rib RIB, log *slog.Logger) (*C
 	cfg.Prefixes = prefixes
 	return &Controller{
 		cfg: cfg, ann: ann, rib: rib, log: log,
-		steers: map[string]Steer{}, cooldown: map[string]time.Time{}, active: map[netip.Prefix]Route{},
+		steers: map[string]Steer{}, cooldown: map[string]time.Time{}, backedOff: map[string]bool{}, active: map[netip.Prefix]Route{},
 		pending: map[string]time.Time{}, damp: map[string]*damping{},
 	}, nil
 }
@@ -420,12 +422,7 @@ func (c *Controller) Plan(now time.Time, in Input) []Change {
 		if cool && s.Hold > 0 {
 			c.cooldown[s.Provider] = now.Add(s.Hold)
 		}
-		d := c.damp[s.Provider]
-		if d == nil {
-			d = &damping{}
-			c.damp[s.Provider] = d
-		}
-		d.released, d.releaseIn95, d.trigger = now, s.InMbps95, s.Trigger
+		c.noteRelease(now, s)
 		changes = append(changes, Change{Action: ActionRelease, Steer: s, Reason: reason})
 	}
 	for _, p := range sortedKeys(c.steers) {
@@ -521,10 +518,15 @@ func (c *Controller) Plan(now time.Time, in Input) []Change {
 			continue
 		}
 		if until, ok := c.cooldown[p]; ok && now.Before(until) {
-			c.blocked = append(c.blocked, Blocked{Provider: p, Reason: "released recently; waiting hold_time"})
+			why := "released recently; waiting hold_time"
+			if c.backedOff[p] {
+				why = "verification: the last steer did not move traffic; backing off until " + until.Format(time.RFC3339)
+			}
+			c.blocked = append(c.blocked, Blocked{Provider: p, Reason: why})
 			continue
 		}
 		delete(c.cooldown, p)
+		delete(c.backedOff, p)
 		act, ok := c.action(p)
 		if !ok {
 			c.blocked = append(c.blocked, Blocked{Provider: p, Reason: "no catalog action for this provider"})
@@ -554,6 +556,39 @@ func (c *Controller) Plan(now time.Time, in Input) []Change {
 		}
 	}
 	return changes
+}
+
+// noteRelease records a release for damping: a steer that comes back
+// inside the flap window is a flap.
+func (c *Controller) noteRelease(now time.Time, s Steer) {
+	delete(c.backedOff, s.Provider)
+	d := c.damp[s.Provider]
+	if d == nil {
+		d = &damping{}
+		c.damp[s.Provider] = d
+	}
+	d.released, d.releaseIn95, d.trigger = now, s.InMbps95, s.Trigger
+}
+
+// Revert ends the steer away from provider because verification found it
+// did not move traffic (#305), and blocks a new one for backoff. The route
+// is withdrawn by the next Sync. It reports false when provider has no
+// steer.
+func (c *Controller) Revert(now time.Time, provider, reason string, backoff time.Duration) (Change, bool) {
+	if c == nil {
+		return Change{}, false
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	s, ok := c.steers[provider]
+	if !ok {
+		return Change{}, false
+	}
+	delete(c.steers, provider)
+	c.cooldown[provider] = now.Add(backoff)
+	c.noteRelease(now, s)
+	c.backedOff[provider] = true
+	return Change{Action: ActionRelease, Steer: s, Reason: reason}, true
 }
 
 // damped sets the hold time of a new steer. A provider steered again

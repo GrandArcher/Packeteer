@@ -36,6 +36,7 @@ import (
 	"github.com/GrandArcher/Packeteer/internal/linkout"
 	"github.com/GrandArcher/Packeteer/internal/ringlg"
 	"github.com/GrandArcher/Packeteer/internal/troubleshoot"
+	"github.com/GrandArcher/Packeteer/internal/verify"
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
 )
 
@@ -66,6 +67,8 @@ type Options struct {
 	Tools *troubleshoot.Tools
 	// Inbound reads inbound commit control. Nil means it is not configured.
 	Inbound func() inbound.Status
+	// Verification lists the steer checks (#305). Nil means verify is off.
+	Verification func() []verify.Result
 	// Mitigation is threat mitigation (#28). Nil means it is not
 	// configured.
 	Mitigation MitigationControl
@@ -119,35 +122,36 @@ type Options struct {
 // Server is an HTTP server. Handler serves the routes without listening,
 // which is what tests use. Start binds Addr.
 type Server struct {
-	addr       string
-	user       string
-	password   string
-	auth       *auth.Service
-	audit      *auth.Auditor
-	events     *eventlog.Log
-	allowFrom  []netip.Prefix
-	snap       func() Snapshot
-	maint      MaintenanceControl
-	reports    ReportSource
-	tools      *troubleshoot.Tools
-	inbound    func() inbound.Status
-	mitigation MitigationControl
-	anomaly    func() anomaly.Status
-	leaks      LeakControl
-	federation func() federation.Status
-	fedPush    FederationPusher
-	ha         func() plugin.ElectorStatus
-	editor     ConfigEditor
-	firstRun   FirstRun
-	dashboards plugin.DashboardStore
-	subs       Subscriptions
-	upgrade    UpgradeControl
-	linkouts   *linkout.Set
-	ringLG     *ringlg.Client
-	atlas      *atlas.Client
-	sysFacts   func() SystemFacts
-	usage      UsageReader
-	setup      atomic.Pointer[Setup]
+	addr         string
+	user         string
+	password     string
+	auth         *auth.Service
+	audit        *auth.Auditor
+	events       *eventlog.Log
+	allowFrom    []netip.Prefix
+	snap         func() Snapshot
+	maint        MaintenanceControl
+	reports      ReportSource
+	tools        *troubleshoot.Tools
+	inbound      func() inbound.Status
+	verification func() []verify.Result
+	mitigation   MitigationControl
+	anomaly      func() anomaly.Status
+	leaks        LeakControl
+	federation   func() federation.Status
+	fedPush      FederationPusher
+	ha           func() plugin.ElectorStatus
+	editor       ConfigEditor
+	firstRun     FirstRun
+	dashboards   plugin.DashboardStore
+	subs         Subscriptions
+	upgrade      UpgradeControl
+	linkouts     *linkout.Set
+	ringLG       *ringlg.Client
+	atlas        *atlas.Client
+	sysFacts     func() SystemFacts
+	usage        UsageReader
+	setup        atomic.Pointer[Setup]
 	// suggest lists next hops the operator may accept as a draft provider
 	// row (#102). Nil means there is nothing to suggest. It must not write
 	// config or announce.
@@ -240,7 +244,7 @@ func New(opt Options) (*Server, error) {
 	if opt.Logger == nil {
 		opt.Logger = slog.Default()
 	}
-	s := &Server{addr: opt.Addr, user: opt.User, password: opt.Password, auth: opt.Auth, audit: opt.Audit, events: opt.Events, allowFrom: opt.AllowFrom, snap: opt.Snapshot, maint: opt.Maintenance, reports: opt.Reports, tools: opt.Tools, inbound: opt.Inbound, mitigation: opt.Mitigation, anomaly: opt.Anomaly, leaks: opt.Leaks, federation: opt.Federation, fedPush: opt.FederationPush, ha: opt.HA,
+	s := &Server{addr: opt.Addr, user: opt.User, password: opt.Password, auth: opt.Auth, audit: opt.Audit, events: opt.Events, allowFrom: opt.AllowFrom, snap: opt.Snapshot, maint: opt.Maintenance, reports: opt.Reports, tools: opt.Tools, inbound: opt.Inbound, verification: opt.Verification, mitigation: opt.Mitigation, anomaly: opt.Anomaly, leaks: opt.Leaks, federation: opt.Federation, fedPush: opt.FederationPush, ha: opt.HA,
 		editor: opt.ConfigEditor, firstRun: opt.FirstRun, dashboards: opt.Dashboards, subs: opt.Subscriptions, upgrade: opt.Upgrade, log: opt.Logger}
 	setup := opt.Setup
 	s.setup.Store(&setup)

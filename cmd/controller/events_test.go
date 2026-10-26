@@ -19,6 +19,7 @@ import (
 	"github.com/GrandArcher/Packeteer/internal/policy"
 	"github.com/GrandArcher/Packeteer/internal/probe"
 	"github.com/GrandArcher/Packeteer/internal/rib"
+	"github.com/GrandArcher/Packeteer/internal/verify"
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
 )
 
@@ -474,5 +475,32 @@ func TestRPKIEvents(t *testing.T) {
 	w.rpki(now.Add(5*time.Hour), []plugin.RPKIStatus{stale, never})
 	if got := out.take(); len(got) != 1 || got[0].Kind != plugin.EventRPKIStale {
 		t.Fatalf("second stale events = %+v", got)
+	}
+}
+
+func TestEventWatchVerification(t *testing.T) {
+	s := &sink{}
+	w := newEventWatch(s, "inject")
+	p := netip.MustParsePrefix("198.51.100.0/24")
+	now := time.Unix(10, 0)
+	w.verification(now, []verify.Result{
+		{Kind: verify.Outbound, Prefix: p, Provider: "transit-b", Status: verify.NotMoved, ExpectedMbps: 40, MovedMbps: 1, MovedPct: 2.5, Detail: "1.0 of 40.0 Mbps moved (3%)"},
+		{Kind: verify.Inbound, Provider: "transit-a", Status: verify.Partial, ExpectedMbps: 150, MovedMbps: 30, MovedPct: 20, BackedOut: false},
+		{Kind: verify.Inbound, Provider: "transit-a", Status: verify.Verified, ExpectedMbps: 150, MovedMbps: 120, MovedPct: 80},
+		{Kind: verify.Outbound, Prefix: p, Provider: "transit-b", Status: verify.Unknown},
+	})
+	got := s.take()
+	if kinds(got) != "steer.unverified,steer.unverified,steer.verified" {
+		t.Fatalf("kinds %s", kinds(got))
+	}
+	if got[0].Fields["target"] != p.String() || got[0].Fields["status"] != "not_moved" || got[0].Fields["path_degraded"] != "false" ||
+		!strings.Contains(got[0].Message, "outbound steer of 198.51.100.0/24 is not moved") {
+		t.Fatalf("outbound anomaly %+v", got[0])
+	}
+	if got[1].Fields["target"] != "transit-a" || got[1].Fields["moved_pct"] != "20" || got[1].Severity != plugin.SeverityWarning {
+		t.Fatalf("inbound anomaly %+v", got[1])
+	}
+	if got[1].DedupKey() != got[2].DedupKey() || !got[2].Resolves() {
+		t.Fatalf("verified must resolve the anomaly: %q vs %q", got[1].DedupKey(), got[2].DedupKey())
 	}
 }

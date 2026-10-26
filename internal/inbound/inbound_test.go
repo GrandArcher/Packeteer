@@ -561,3 +561,43 @@ func TestRuntimeHoldTTLAndAllowlist(t *testing.T) {
 		t.Fatalf("a prefix outside the allowlist stayed on the wire: %v", ann.routes)
 	}
 }
+
+func TestRevertWithdrawsAndBacksOff(t *testing.T) {
+	ann := newFakeAnn("transit-a", "transit-b")
+	cfg := baseConfig(config.ModeInject)
+	c := mustNew(t, cfg, ann, readyRIB())
+	over := usage(start, map[string]float64{"transit-a": 150, "transit-b": 20})
+	if ch := c.Evaluate(start, over); len(ch) != 1 || ch[0].Action != ActionSteer {
+		t.Fatalf("steer: %+v", ch)
+	}
+	if err := c.Sync(context.Background()); err != nil || len(ann.routes) != 1 {
+		t.Fatalf("announce: %v routes=%d", err, len(ann.routes))
+	}
+
+	if _, ok := c.Revert(start, "transit-b", "x", time.Hour); ok {
+		t.Fatal("reverted a provider that has no steer")
+	}
+	at := start.Add(10 * time.Minute)
+	ch, ok := c.Revert(at, "transit-a", "did not move", time.Hour)
+	if !ok || ch.Action != ActionRelease || ch.Steer.Provider != "transit-a" || ch.Reason != "did not move" {
+		t.Fatalf("revert = %+v %v", ch, ok)
+	}
+	if err := c.Sync(context.Background()); err != nil || len(ann.routes) != 0 {
+		t.Fatalf("revert must withdraw the route: %v routes=%d", err, len(ann.routes))
+	}
+
+	// The trigger is still on, but the steer waits out the back-off, not
+	// just the hold time.
+	mid := at.Add(30 * time.Minute)
+	if ch := c.Evaluate(mid, usage(mid, map[string]float64{"transit-a": 150, "transit-b": 20})); len(ch) != 0 {
+		t.Fatalf("steered again inside the back-off: %+v", ch)
+	}
+	st := c.Status()
+	if len(st.Blocked) != 1 || !strings.Contains(st.Blocked[0].Reason, "verification") {
+		t.Fatalf("blocked = %+v, want the verification back-off reason", st.Blocked)
+	}
+	after := at.Add(61 * time.Minute)
+	if ch := c.Evaluate(after, usage(after, map[string]float64{"transit-a": 150, "transit-b": 20})); len(ch) != 1 || ch[0].Action != ActionSteer {
+		t.Fatalf("no steer after the back-off: %+v", ch)
+	}
+}

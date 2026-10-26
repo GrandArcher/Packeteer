@@ -1,0 +1,14 @@
+# Outbound rates before the steer: transit-a carries the prefix's 40 Mbps.
+providers:
+  - name: transit-a
+    commit_mbps: 1000
+    usage_mbps: 100
+    out_mbps: 100
+  - name: transit-b
+    commit_mbps: 1000
+    usage_mbps: 10
+    out_mbps: 10
+  - name: transit-c
+    commit_mbps: 1000
+    usage_mbps: 10
+    out_mbps: 10

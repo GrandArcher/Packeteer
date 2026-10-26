@@ -63,6 +63,8 @@ const (
 	EventAnomalyCleared     = "anomaly.cleared"
 	EventLeakDetected       = "leak.detected"
 	EventLeakCleared        = "leak.cleared"
+	EventSteerUnverified    = "steer.unverified"
+	EventSteerVerified      = "steer.verified"
 	EventFlapQuarantined    = "flap.quarantined"
 	EventFlapReleased       = "flap.released"
 	EventExchangeDegraded   = "exchange.degraded"
@@ -241,6 +243,10 @@ var eventCatalog = []EventSpec{
 		Summary: "The routes a route server filtered from a member for one reason (RPKI invalid, IRR prefix or origin, transit-free ASN) jumped above the recent level."},
 	{Kind: EventRSFilterSpikeCleared, Severity: SeverityInfo, Group: "ixp_rs_spike", Keys: []string{"server", "session", "reason"}, TrapID: 60, Resolves: true,
 		Summary: "The filtered count fell back below the spike threshold, or the session is gone. Resolves ixp.rs_filter_spike."},
+	{Kind: EventSteerUnverified, Severity: SeverityWarning, Group: "steer", Keys: []string{"kind", "target"}, TrapID: 66,
+		Summary: "Routing anomaly: after an outbound improvement or an inbound steer, the interface counters show less than verified_pct of the expected traffic moved (partial or not moved, #305). Fields say whether the steer was backed out."},
+	{Kind: EventSteerVerified, Severity: SeverityInfo, Group: "steer", Keys: []string{"kind", "target"}, TrapID: 67, Resolves: true,
+		Summary: "Verification found the traffic moved after a steer (outbound improvement or inbound steer). Resolves steer.unverified for the same target."},
 	{Kind: EventHerdRestarted, Severity: SeverityInfo, Group: "herd", TrapID: 63,
 		Summary: "A herd goroutine (recorder or puller) panicked and was restarted with backoff. Probing, decisions, and the announcer are not affected."},
 	{Kind: EventRPKIStale, Severity: SeverityWarning, Group: "rpki", Keys: []string{"source"}, TrapID: 64,

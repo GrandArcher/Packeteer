@@ -44,6 +44,7 @@ The image entrypoint is the same binary. Flags go after the image name.
 | `hold_time` | 0 | inject: positive | Minimum life of an improvement, and the cooldown after a flip-back or a confirmed RIB leave. `0` is legal in observe and suggest (a flip can happen on the next evaluation). Negative is an error. |
 | `improvement_ttl` | `1h` | no | Retire an improvement after this long so the native path is measured again. A negative duration disables the TTL. `0` selects the default `1h`. While it is active the prefix stays a probe target after its source drops it. |
 | `flap_quarantine` | on | no | Parks a prefix that keeps changing its chosen provider (#228). See [`flap_quarantine`](#flap_quarantine). |
+| `verify` | off | no | Checks that an outbound improvement or an inbound steer moved traffic, and can back it out (#305). See [`verify`](#verify). |
 | `thresholds` | zeros | inject: both positive | See below. With both deltas at `0`, the decision engine records no improvement in any mode. |
 | `providers` | none | at least one | Probe sources and injection next hops. |
 | `exchanges` | none | no | Internet exchanges: each listed peer is a provider with its own next hop on the peering LAN, always route-checked. See [`exchanges`](#exchanges). Lab-proven only. |
@@ -130,6 +131,38 @@ communities_cause:
 A change is a new improvement (any cause), a performance switch to another provider, or a flip-back to the native path. The change that would pass `max_flips` is not made: the improvement is withdrawn (or never announced) and the prefix stays on the router's native path until the cool-down ends, even while another provider keeps measuring better. Each repeat offense doubles the cool-down, up to `max_cooldown`. It only withdraws and blocks; it never announces, and `hold_time`, `confirm_rounds`, the cap, the allowlist, and the route check apply as before. The quarantine is in memory: a restart or an HA handover clears it.
 
 A start and an end are logged (`flap quarantine started`, `flap quarantine released`), emitted as `flap.quarantined` and `flap.released` ([EVENTS.md](EVENTS.md)), and written to the audit log as the `system` actor (`flap.quarantine`, `flap.release`). `GET /api/quarantine` lists the parked prefixes (`prefix`, `since`, `until`, `flips`, `strikes`); `/api/prefixes` rows and the prefix page carry the same `quarantine` object. `POST /api/quarantine/release` with `{"prefix": "..."}` (operator role, auth required) ends one early and is audited; a prefix that flips again is parked again for longer. Metrics: `packeteer_flap_quarantined` (count) and `packeteer_flap_quarantine{prefix,strikes}`. `flap_quarantine` applies on a SIGHUP reload without a restart.
+
+### `verify`
+
+Steer verification (#305). Off by default. After Packeteer announces an outbound improvement or an inbound steer, it waits one window and then reads the interface counters of the providers involved (a `telemetry` plugin: `snmp`, or `fixed` for a lab). It reports the steer as `verified`, `partial`, `not_moved`, or `unknown`. A steer that is `partial` or `not_moved` is a routing anomaly: a `steer.unverified` event ([EVENTS.md](EVENTS.md)). Only a steer that was actually announced is checked: not observe or suggest, not a moderated inbound steer. Unknown keys are errors, and a change needs a restart.
+
+| Key | Default | Meaning |
+|---|---|---|
+| `enabled` | `false` | `true` turns verification on. Other keys need it. |
+| `outbound_window` | `5m` | How long after an outbound improvement the traffic must show on the new provider. 10s to 1h. |
+| `inbound_window` | `10m` | The same for an inbound steer. Longer, because inbound telemetry lags more. 10s to 1h. |
+| `verified_pct` | `50` | The share of the expected traffic that must have moved for `verified`. Above 0, at most 100. |
+| `moved_pct` | `10` | Below this share nothing moved (`not_moved`); between the two it is `partial`. Above 0 and below `verified_pct`. |
+| `min_mbps` | `1` | The least expected traffic worth judging. With less (or no flow volume for the prefix) the steer is `unknown`, because counter noise would decide it. |
+| `backout` | `[inbound]` | Directions whose steer is undone when it is `not_moved`: `inbound`, `outbound`, both, or `[]` for report only. Outbound is only reported by default. |
+| `backoff` | `30m` | How long a backed-out steer is held off. It doubles for each consecutive back-out of the same target (the prefix, or the provider), up to `max_backoff`, and starts over after a verified steer. |
+| `max_backoff` | `4h` | Not shorter than `backoff`. |
+
+What is compared:
+
+- **Outbound.** The expected traffic is the prefix's volume at the steer (the `flow` window, or `mbps` on a `static` target). What moved is the smaller of the fall in the old provider's outbound rate and the rise in the new provider's, so demand falling or an unrelated flow does not pass for a move. With only one of the two providers on telemetry, that side alone is used and the detail says so. The new path's loss and RTT before and after are compared with the `thresholds` rule read backwards: a path that got worse under the new load sets `path_degraded` and is named in the detail. The withdraw of a degraded path is the existing decision rule (the native path is better again, after `hold_time`); verification does not add a second one.
+- **Inbound.** The expected traffic is the steered-away provider's inbound rate at the steer. What moved is the smaller of its fall and the rise on the other providers.
+- A counter must have been read after half the window, or the check waits one more window and is then `unknown`. An `unknown` steer sends no event and undoes nothing.
+
+A back-out goes through the controller that made the steer. An inbound back-out releases the steer (the route is withdrawn on the same round) and blocks it for the back-off, shown under `blocked` on `/api/inbound` with a `verification` reason. An outbound back-out retires the improvement and keeps the prefix from being improved again until the back-off ends. Both are logged (`steer backed out`) and emitted (`improvement.removed`, `inbound.released`). Nothing here announces: verification only judges, and the safety rules (allowlist, community, NO_EXPORT, `max_improvements`, `hold_time`, withdraw on shutdown) are unchanged. The results are `GET /api/verification` and the Improvements page ([ui.md](ui.md)). Rollback: remove the block and restart.
+
+```yaml
+verify:
+  enabled: true
+  outbound_window: 5m
+  inbound_window: 10m
+  backout: [inbound]
+```
 
 ### `thresholds`
 
@@ -1473,6 +1506,7 @@ Each provider:
 | `commit_mbps` | Required. Greater than 0, at most 100000000. |
 | `usage_mbps` | Required. 0-100000000. Reported as the single billable figure (`greater_separate`). |
 | `in_mbps` | Optional. 0-100000000. Reported as the inbound rate and inbound 95th, which `inbound` compares with `commit_mbps`. Unset is 0. |
+| `out_mbps` | Optional. 0-100000000. Reported as the latest outbound rate, which [`verify`](#verify) reads. Unset is 0. |
 
 The row's timestamp is the time of the read, so `max_age` on the commit scorer does not age it out. A file that fails to parse yields no rows for that decision.
 

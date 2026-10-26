@@ -6,6 +6,7 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 
 ### Added
 
+- Opt-in steer verification: counters show an announced outbound or inbound steer verified, partial, or not moved (API, UI, events); an unmoved inbound steer is reverted and backed off (#305).
 - Opt-in RIPE Atlas ping/traceroute of a prefix's test address with your own key, on demand and after a move; credit and hourly caps; results, own probe and balance shown, display only (#213).
 - `https` prober: GET or HEAD over TLS timed as connect, handshake, and first byte, status assertion counts as loss, per-target `insecure_skip_verify`, timings on `/api/probes` (#306).
 - Packet reordering per provider path (RFC 4737) from TWAMP-Light trains to the shipped `packeteer-reflector`, or ICMP estimates: `probe.reorder`, `/api/reorder`, metrics, UI, `reorder_weight` (#224).
