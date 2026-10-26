@@ -1,6 +1,7 @@
 package snmp
 
 import (
+	"context"
 	"io"
 	"log/slog"
 	"strings"
@@ -94,7 +95,8 @@ func TestConfigRejects(t *testing.T) {
 		{"community in the value position", strings.Replace(baseYAML, "PACKETEER_SNMP_COMMUNITY", secret, 1), env, "must be an environment variable name"},
 		{"bad percentile", strings.Replace(baseYAML, "greater_separate", "average", 1), env, "percentile"},
 		{"billing day", strings.Replace(baseYAML, "billing_day: 1", "billing_day: 31", 1), env, "billing_day"},
-		{"commit", strings.Replace(baseYAML, "commit_mbps: 1000", "commit_mbps: 0", 1), env, "commit_mbps"},
+		{"commit", strings.Replace(baseYAML, "commit_mbps: 1000", "commit_mbps: -1", 1), env, "commit_mbps"},
+		{"capacity", strings.Replace(baseYAML, "commit_mbps: 1000", "commit_mbps: 1000\n    capacity_mbps: -5", 1), env, "capacity_mbps"},
 		{"unknown provider", strings.Replace(baseYAML, "transit-a", "transit-z", 1), env, "not a configured provider"},
 		{"unknown host", strings.Replace(baseYAML, "host: edge", "host: missing", 1), env, "not in hosts"},
 		{"interval", strings.Replace(baseYAML, "interval: 30s", "interval: 1s", 1), env, "interval"},
@@ -212,5 +214,35 @@ func TestBindingMayBeAnExchangePort(t *testing.T) {
 	env.Ports = []string{"ix-lab"}
 	if _, err := New(c, env); err != nil {
 		t.Fatalf("binding named like an exchange port: %v", err)
+	}
+}
+
+// A binding with no commit_mbps (#307) needs no billing_day or percentile:
+// the row has rates and capacity but no billable figure.
+func TestConfigNoCommitBinding(t *testing.T) {
+	c := mustNew(t, `
+interval: 30s
+timeout: 1s
+retries: 0
+hosts:
+  - name: edge
+    address: 192.0.2.254
+    version: 2c
+    community_env: PACKETEER_SNMP_COMMUNITY
+providers:
+  - name: transit-a
+    host: edge
+    interface: ether1
+    capacity_mbps: 400
+`, map[string]string{"PACKETEER_SNMP_COMMUNITY": "lab-community-value"})
+	rows, err := c.Snapshot(context.Background())
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("rows = %v, err = %v", rows, err)
+	}
+	if rows[0].CommitMbps != 0 || rows[0].CapacityMbps != 400 || rows[0].BillingDay != 1 || rows[0].Mode != plugin.PercentileSeparate {
+		t.Fatalf("row = %+v", rows[0])
+	}
+	if _, ok := rows[0].BillableMbps(); ok {
+		t.Fatal("a row with no commit has a billable figure")
 	}
 }

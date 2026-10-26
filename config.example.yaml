@@ -105,6 +105,9 @@ providers:
     # precedence: 100         # lower is preferred; 0 or omitted means 100
     # cc_disable: false       # true: leave this provider out of commit control
     # cost: 5                 # price per Mbps; the cost scorer only moves between priced providers
+    # interface_capacity_threshold_pct: 85  # overload protection (#307), 1-100: refuse a performance steer that would push
+    #                         #   this provider's interface past this share of its capacity, and shed steers already there.
+    #                         #   Works without a commit. Needs a telemetry binding (below) for its interface.
     # local_pref: 350         # optional. Wins over local_pref_cause and the global local_pref. 0 is rejected. Set it above the edge's native local preference.
     # communities: ["64512:200", "64512:1:50"]  # optional extras, added after the cause's. The export policy does not match them. At most 16. No 0:x or 65535:x, no duplicate of packeteer_community.
     # bmp: prefer             # off (default), prefer, or only: use this provider's BMP paths (rib_sources)
@@ -605,6 +608,13 @@ storage:
 #           commit_mbps: 1000
 #           billing_day: 1
 #           percentile: greater_separate
+#         # A provider with no commit still reports rates and capacity for
+#         # interface_capacity_threshold_pct (#307). capacity_mbps is optional:
+#         # without it the agent's ifHighSpeed is the capacity.
+#         - name: transit-b
+#           host: edge1
+#           interface: ether2
+#           capacity_mbps: 1000
 
 # Routing policies and maintenance windows. Off unless listed. The chain is
 # asked in order and the first policy that matches a prefix decides it.

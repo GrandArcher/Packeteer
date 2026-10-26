@@ -8,7 +8,7 @@ function renderCommitSummary(root, data) {
   if (!data.providers.length) return;
   var t = el("table");
   var hr = el("tr");
-  ["Provider", "Commit (Mbps)", "Billable 95th (Mbps)", "Of commit", "Samples", "Period (UTC)", "Last sample", "Poll error"].forEach(function (h) { hr.appendChild(el("th", "", h)); });
+  ["Provider", "Commit (Mbps)", "Billable 95th (Mbps)", "Of commit", "Capacity (Mbps)", "Outbound of capacity", "Samples", "Period (UTC)", "Last sample", "Poll error"].forEach(function (h) { hr.appendChild(el("th", "", h)); });
   var thead = el("thead");
   thead.appendChild(hr);
   t.appendChild(thead);
@@ -16,11 +16,14 @@ function renderCommitSummary(root, data) {
   data.providers.forEach(function (p) {
     var pct = commitPercent(p);
     var tr = el("tr");
-    var cells = [p.provider, mbps(p.commit_mbps), mbps(p.billable_mbps), pct == null ? "—" : pct + "%", p.samples,
+    var load = p.utilization_pct == null ? "—" : (Math.round(p.utilization_pct * 10) / 10) + "%" +
+      (p.capacity_threshold_pct > 0 ? " (limit " + p.capacity_threshold_pct + "%)" : "");
+    var cells = [p.provider, p.commit_mbps > 0 ? mbps(p.commit_mbps) : "none", mbps(p.billable_mbps), pct == null ? "—" : pct + "%",
+      mbps(p.capacity_mbps), load, p.samples,
       p.period_start.slice(0, 10) + " to " + p.period_end.slice(0, 10), fmtTime(p.updated), p.error || ""];
     cells.forEach(function (v, i) {
-      var td = el("td", i === 3 && pct != null && pct >= 100 ? "bad" : "", v);
-      tr.appendChild(td);
+      var bad = (i === 3 && pct != null && pct >= 100) || (i === 5 && p.overloaded);
+      tr.appendChild(el("td", bad ? "bad" : "", v));
     });
     tb.appendChild(tr);
   });

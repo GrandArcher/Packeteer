@@ -76,7 +76,8 @@ func TestFileReread(t *testing.T) {
 func TestRejects(t *testing.T) {
 	cases := []struct{ y, want string }{
 		{"", "set providers or file"},
-		{"providers:\n  - {name: transit-a, commit_mbps: 0, usage_mbps: 1}", "commit_mbps"},
+		{"providers:\n  - {name: transit-a, commit_mbps: -1, usage_mbps: 1}", "commit_mbps"},
+		{"providers:\n  - {name: transit-a, capacity_mbps: -1, out_mbps: 1}", "capacity_mbps"},
 		{"providers:\n  - {name: transit-a, commit_mbps: 10, usage_mbps: -1}", "usage_mbps"},
 		{"providers:\n  - {name: transit-a, commit_mbps: 10, usage_mbps: 1, in_mbps: -1}", "in_mbps"},
 		{"providers:\n  - {name: transit-a, commit_mbps: 10, usage_mbps: 1, out_mbps: -1}", "out_mbps"},
@@ -102,5 +103,21 @@ func TestCancelledSnapshot(t *testing.T) {
 	cancel()
 	if _, err := s.Snapshot(ctx); err == nil {
 		t.Fatal("cancelled context returned rows")
+	}
+}
+
+// A row with no commit (#307) reports its rates and capacity and has no
+// billable figure.
+func TestNoCommitRow(t *testing.T) {
+	s := build(t, "providers:\n  - {name: transit-a, capacity_mbps: 1000, out_mbps: 800}\n", []string{"transit-a"})
+	rows, err := s.Snapshot(context.Background())
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("rows = %v, err = %v", rows, err)
+	}
+	if rows[0].CapacityMbps != 1000 || rows[0].OutMbps != 800 || rows[0].CommitMbps != 0 {
+		t.Fatalf("row = %+v", rows[0])
+	}
+	if _, ok := rows[0].BillableMbps(); ok {
+		t.Fatal("a row with no commit has a billable figure")
 	}
 }

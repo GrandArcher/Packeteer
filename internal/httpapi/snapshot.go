@@ -377,24 +377,34 @@ type Improvement struct {
 // percentile mode keeps inbound and outbound apart, and when no sample
 // has been stored yet.
 type Telemetry struct {
-	Provider    string     `json:"provider"`
-	Host        string     `json:"host,omitempty"`
-	Interface   string     `json:"interface,omitempty"`
-	IfIndex     int        `json:"if_index,omitempty"`
-	CommitMbps  float64    `json:"commit_mbps"`
-	BillingDay  int        `json:"billing_day"`
-	Percentile  string     `json:"percentile"`
-	PeriodStart time.Time  `json:"period_start"`
-	PeriodEnd   time.Time  `json:"period_end"`
-	Samples     int        `json:"samples"`
-	InMbps      float64    `json:"in_mbps"`
-	OutMbps     float64    `json:"out_mbps"`
-	InMbps95    float64    `json:"in_mbps_95"`
-	OutMbps95   float64    `json:"out_mbps_95"`
-	UsageMbps   *float64   `json:"usage_mbps,omitempty"`
-	Updated     *time.Time `json:"updated,omitempty"`
-	Polled      *time.Time `json:"polled,omitempty"`
-	Error       string     `json:"error,omitempty"`
+	Provider   string  `json:"provider"`
+	Host       string  `json:"host,omitempty"`
+	Interface  string  `json:"interface,omitempty"`
+	IfIndex    int     `json:"if_index,omitempty"`
+	CommitMbps float64 `json:"commit_mbps"`
+	BillingDay int     `json:"billing_day"`
+	Percentile string  `json:"percentile"`
+	// CapacityMbps is the interface speed overload protection judges the
+	// outbound rate against (#307), omitted when unknown. ThresholdPct is
+	// the provider's interface_capacity_threshold_pct, omitted when off.
+	// UtilizationPct is OutMbps over the capacity, omitted without a
+	// capacity or a sample. Overloaded is set when it is past the
+	// threshold.
+	CapacityMbps   *float64   `json:"capacity_mbps,omitempty"`
+	ThresholdPct   float64    `json:"capacity_threshold_pct,omitempty"`
+	UtilizationPct *float64   `json:"utilization_pct,omitempty"`
+	Overloaded     bool       `json:"overloaded,omitempty"`
+	PeriodStart    time.Time  `json:"period_start"`
+	PeriodEnd      time.Time  `json:"period_end"`
+	Samples        int        `json:"samples"`
+	InMbps         float64    `json:"in_mbps"`
+	OutMbps        float64    `json:"out_mbps"`
+	InMbps95       float64    `json:"in_mbps_95"`
+	OutMbps95      float64    `json:"out_mbps_95"`
+	UsageMbps      *float64   `json:"usage_mbps,omitempty"`
+	Updated        *time.Time `json:"updated,omitempty"`
+	Polled         *time.Time `json:"polled,omitempty"`
+	Error          string     `json:"error,omitempty"`
 }
 
 // Peer is one iBGP session.
@@ -443,7 +453,7 @@ func Assemble(in Input) Snapshot {
 		Improvements:       assembleImprovements(in),
 		Quarantined:        assembleQuarantine(in.Quarantined),
 		Peers:              assemblePeers(in.Peers),
-		Telemetry:          assembleTelemetry(in.Telemetry),
+		Telemetry:          assembleTelemetry(in.Telemetry, in.Providers),
 		Exchanges:          in.Exchanges,
 		Reorder:            assembleReorder(in.Reorder),
 		ReorderConfigured:  in.ReorderConfigured,
@@ -681,7 +691,11 @@ func withOrigins(imps []Improvement, rows []Prefix) []Improvement {
 	return imps
 }
 
-func assembleTelemetry(in []plugin.Usage) []Telemetry {
+func assembleTelemetry(in []plugin.Usage, providers []config.Provider) []Telemetry {
+	limits := map[string]float64{}
+	for _, p := range providers {
+		limits[p.Name] = p.InterfaceCapacityThresholdPct
+	}
 	out := make([]Telemetry, 0, len(in))
 	for _, u := range in {
 		if u.Provider == "" {
@@ -707,6 +721,16 @@ func assembleTelemetry(in []plugin.Usage) []Telemetry {
 		if u.Single && u.Samples > 0 {
 			v := jsonFloat(u.UsageMbps)
 			row.UsageMbps = &v
+		}
+		row.ThresholdPct = limits[u.Provider]
+		if u.CapacityMbps > 0 {
+			c := jsonFloat(u.CapacityMbps)
+			row.CapacityMbps = &c
+			if !u.Updated.IsZero() {
+				v := jsonFloat(u.OutMbps / u.CapacityMbps * 100)
+				row.UtilizationPct = &v
+				row.Overloaded = row.ThresholdPct > 0 && v > row.ThresholdPct
+			}
 		}
 		if !u.Updated.IsZero() {
 			t := u.Updated.UTC()

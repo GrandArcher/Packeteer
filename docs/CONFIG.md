@@ -199,11 +199,24 @@ While the streak is short and this evaluation compared the paths, that prefix is
 | `precedence` | no | Commit-control preference. Lower is preferred. `0` or omitted means 100. 0-10000. The highest precedence among providers that can take commit traffic is the last resort. |
 | `cc_disable` | no | `true`: leave this provider out of commit control in both directions. Performance improvements can still select it. |
 | `cost` | no | Price per Mbps, 0-1000000000, in one currency across all providers. Omitted means no cost: the `cost` scorer never moves a prefix onto this provider or off it for price. Improvements between two priced providers carry `cost_delta` and `est_savings` on `/api/improvements`. |
+| `interface_capacity_threshold_pct` | no | Overload protection (#307), 1-100. See [Interface capacity limit](#interface-capacity-limit). `0` or omitted is off. Needs a `telemetry` entry that binds the provider to an interface. |
 | `bmp` | no | How this provider uses paths from `rib_sources` (BMP): `off` (default), `prefer`, or `only`. `prefer` and `only` need a `rib_sources` entry. See [RIB source `bmp`](#rib-source-bmp). |
 | `add_path` | no | `true`: apply the route check to this provider from the iBGP add-path paths. Needs a `bgp.neighbors` entry with `add_path: true`. Not allowed with `bmp: only`. See [Add-path](#add-path). |
 | `path_check` | no | First-hop probe-path check (#150). `true` or omitted checks; `false` opts out. See [`probe.path_check`](#probepath_check). |
 | `fwmark` | no | Linux fwmark set on this provider's probe sockets (#157), so providers can share a `source_ip`. 0 or omitted: no mark. Needs `--cap-add NET_ADMIN`; without it the provider is down. Unique per `source_ip`. |
 | `dscp` | no | DSCP, 1-63, set on this provider's probe packets (#157). 0 or omitted: none. Unique per `source_ip`. Must be empty for a provider in another `domain`, like `fwmark`. See [policy-routing.md](policy-routing.md#many-providers-on-one-source_ip). |
+
+### Interface capacity limit
+
+Commit control only moves traffic off a provider that is over its commit. A provider with no commit can still be overloaded by performance steers piling onto it. `providers[].interface_capacity_threshold_pct` (for example `85`, #307) limits the share of the provider's interface capacity its outbound rate may reach, whether or not it has a commit.
+
+- **Reading.** The provider's [telemetry](#telemetry-snmp) row gives the latest outbound rate and the capacity: `capacity_mbps` on the binding, else the speed the agent reports (`ifHighSpeed`, else `ifSpeed`). A binding needs no `commit_mbps`, `billing_day`, or `percentile` for this. A reading older than 15 minutes counts as missing, so keep the SNMP `interval` below that.
+- **Refusal.** A new performance steer (including a switch) onto the provider is refused when the rate plus the steer's flow volume would pass the limit. A steer made after the latest sample and announced is added to that sample's rate, and so is each steer allowed earlier in the same round. A prefix with no known volume is judged on the current rate alone. A missing, stale, or capacity-less reading refuses every new steer onto the provider, because its headroom is unknown. Static policy pins and commit or cost steers are not refused.
+- **Shedding.** While the rate is past the limit, performance steers onto the provider are withdrawn, lowest gain first (the score difference to the native path; larger volume first on a tie), until the rate less their volume is back inside the limit. A steer younger than `hold_time` stays. A shed prefix waits `hold_time` before it can be steered again. A provider is shed once per telemetry sample, and not again until `hold_time` has passed since the last shed, because the sample does not hold the effect of a shed yet. Set `hold_time` at least as long as the telemetry `interval`.
+- **Observe.** The decision is the same, and an observed recommendation is refused or shed like an announced steer, so observe shows what inject would do. No route is announced.
+- **Reporting.** A refused decision says `overload: ...` in its reason, shows a failed `overload` gate on the Why? panel, and is listed with `overload.refused`; a shed sends `overload.shed`; `overload.cleared` follows when the provider is back inside the limit ([EVENTS.md](EVENTS.md)). `/api/telemetry` and the Commit & Cost page show `capacity_mbps`, `utilization_pct`, `capacity_threshold_pct`, and `overloaded`.
+
+The flow volume is read like commit control reads it (a source with traffic data, such as `flow`). The key needs a restart to change, like the other `providers` keys.
 
 ### `allowlist`
 
@@ -1503,7 +1516,8 @@ Each provider:
 | Key | Meaning |
 |---|---|
 | `name` | Required. Must match a top-level provider `name`. Unique in the list. |
-| `commit_mbps` | Required. Greater than 0, at most 100000000. |
+| `commit_mbps` | Optional. 0-100000000. Omitted or `0`: no commit, so no billable figure (see [Interface capacity limit](#interface-capacity-limit)). |
+| `capacity_mbps` | Optional. 0-100000000. The interface speed `providers[].interface_capacity_threshold_pct` judges `out_mbps` against. Unset is unknown. |
 | `usage_mbps` | Required. 0-100000000. Reported as the single billable figure (`greater_separate`). |
 | `in_mbps` | Optional. 0-100000000. Reported as the inbound rate and inbound 95th, which `inbound` compares with `commit_mbps`. Unset is 0. |
 | `out_mbps` | Optional. 0-100000000. Reported as the latest outbound rate, which [`verify`](#verify) reads. Unset is 0. |
@@ -1566,9 +1580,10 @@ Each provider:
 | `name` | Required. Must match a top-level provider `name`. Unique in this plugin. |
 | `host` | Required. A `hosts[].name`. |
 | `interface` | Required. `ifName`, `ifDescr`, or a decimal `ifIndex`. |
-| `commit_mbps` | Required. Greater than 0, at most 100000000. The `commit` scorer compares the billable 95th with this. The collector does not enforce it. |
-| `billing_day` | Required. 1-28. UTC. |
-| `percentile` | Required. `separate`, `greater`, or `greater_separate`. |
+| `commit_mbps` | Optional, at most 100000000. The `commit` scorer compares the billable 95th with this. The collector does not enforce it. Omitted or `0`: no commit, so no billable figure; the rates and capacity are still reported. |
+| `capacity_mbps` | Optional, at most 100000000. The interface speed `providers[].interface_capacity_threshold_pct` judges the outbound rate against. Omitted or `0` uses the agent's `ifHighSpeed`, else `ifSpeed`. |
+| `billing_day` | Required with `commit_mbps`. 1-28. UTC. Defaults to 1 without a commit. |
+| `percentile` | Required with `commit_mbps`. `separate`, `greater`, or `greater_separate`. Defaults to `separate` without a commit. |
 
 ### Storage `sqlite`
 

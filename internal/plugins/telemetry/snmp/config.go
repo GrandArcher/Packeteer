@@ -61,12 +61,19 @@ type Host struct {
 
 // Binding attaches one Packeteer provider to an interface on a host.
 type Binding struct {
-	Name       string  `yaml:"name"`
-	Host       string  `yaml:"host"`
-	Interface  string  `yaml:"interface"`
+	Name      string `yaml:"name"`
+	Host      string `yaml:"host"`
+	Interface string `yaml:"interface"`
+	// CommitMbps is optional. A binding without it keeps no billable
+	// figure and needs no billing_day or percentile; its rates and
+	// capacity are still reported.
 	CommitMbps float64 `yaml:"commit_mbps"`
-	BillingDay int     `yaml:"billing_day"`
-	Percentile string  `yaml:"percentile"`
+	// CapacityMbps is the interface speed overload protection (#307)
+	// judges the outbound rate against. 0 uses the speed the agent
+	// reports (ifHighSpeed, else ifSpeed).
+	CapacityMbps float64 `yaml:"capacity_mbps"`
+	BillingDay   int     `yaml:"billing_day"`
+	Percentile   string  `yaml:"percentile"`
 }
 
 var envName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
@@ -97,12 +104,13 @@ func (h hostSpec) secrets() []string {
 }
 
 type bindingSpec struct {
-	name       string
-	host       string
-	iface      string
-	commitMbps float64
-	billingDay int
-	mode       plugin.PercentileMode
+	name         string
+	host         string
+	iface        string
+	commitMbps   float64
+	capacityMbps float64
+	billingDay   int
+	mode         plugin.PercentileMode
 }
 
 func decode(c plugin.Config, getenv func(string) string, providers []string) (time.Duration, time.Duration, int, int, int, []hostSpec, []bindingSpec, error) {
@@ -295,8 +303,20 @@ func compileBinding(b Binding) (bindingSpec, error) {
 	if len(iface) > 255 {
 		return bindingSpec{}, fmt.Errorf("interface is longer than 255 characters")
 	}
-	if b.CommitMbps <= 0 || math.IsNaN(b.CommitMbps) || math.IsInf(b.CommitMbps, 0) || b.CommitMbps > 1e8 {
-		return bindingSpec{}, fmt.Errorf("commit_mbps must be greater than 0 and at most 100000000")
+	if b.CommitMbps < 0 || math.IsNaN(b.CommitMbps) || math.IsInf(b.CommitMbps, 0) || b.CommitMbps > 1e8 {
+		return bindingSpec{}, fmt.Errorf("commit_mbps must be at most 100000000 and not negative")
+	}
+	if b.CapacityMbps < 0 || math.IsNaN(b.CapacityMbps) || math.IsInf(b.CapacityMbps, 0) || b.CapacityMbps > 1e8 {
+		return bindingSpec{}, fmt.Errorf("capacity_mbps must be at most 100000000 and not negative")
+	}
+	if b.CommitMbps == 0 {
+		// Nothing is billed, so the window settings carry no meaning.
+		if b.BillingDay == 0 {
+			b.BillingDay = 1
+		}
+		if strings.TrimSpace(b.Percentile) == "" {
+			b.Percentile = string(plugin.PercentileSeparate)
+		}
 	}
 	if b.BillingDay < 1 || b.BillingDay > 28 {
 		return bindingSpec{}, fmt.Errorf("billing_day %d must be between 1 and 28", b.BillingDay)
@@ -305,7 +325,7 @@ func compileBinding(b Binding) (bindingSpec, error) {
 	if err != nil {
 		return bindingSpec{}, err
 	}
-	return bindingSpec{name: name, host: host, iface: iface, commitMbps: b.CommitMbps, billingDay: b.BillingDay, mode: mode}, nil
+	return bindingSpec{name: name, host: host, iface: iface, commitMbps: b.CommitMbps, capacityMbps: b.CapacityMbps, billingDay: b.BillingDay, mode: mode}, nil
 }
 
 func parseMode(s string) (plugin.PercentileMode, error) {

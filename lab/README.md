@@ -62,6 +62,8 @@ On every sample the script reads the edge's table with `lab/checkms` and fails o
 
 `lab/e2e-flap.sh` is the flap quarantine (#228) on the main lab topology with `lab/packeteer-flap.yaml` (`max_flips: 3`, 45s cool-down): three provider changes are allowed, the fourth withdraws Packeteer's route and logs `flap quarantine started`, the edge stays on its native path for 20s while transit-b measures better, the cool-down ends with `flap quarantine released` and the route returns, and SIGTERM withdraws.
 
+`lab/e2e-overload.sh` is overload protection for a provider with no commit (#307), on the main topology (`lab/packeteer-overload.yaml`). transit-b has `interface_capacity_threshold_pct: 85` on a 1000 Mbps interface and the prefix carries 60 Mbps. With transit-b at 800 Mbps the steer is refused (`overload.refused`, the decision says why, no route); at 700 Mbps it is announced (`overload.cleared`); at 900 Mbps it is shed after `hold_time` (`overload.shed`, the route leaves the edge) and refused again; SIGTERM withdraws.
+
 `lab/e2e-verify-inbound.sh` and `lab/e2e-verify-outbound.sh` are steer verification (#305), on the inbound topology (`lab/packeteer-verify-inbound.yaml`) and the main topology (`lab/packeteer-verify-outbound.yaml`). The `fixed` telemetry file is rewritten to move the traffic or not. Inbound: the steer away from transit-a is verified when the usage shows the traffic arriving on transit-b and stays on the transits; after a restart, with the usage unchanged, it is reverted (transit-a gets the plain path again) and not made again during the back-off. Outbound: the improvement to transit-b is verified (log, `/api/verification`, `steer.verified`), a move to transit-c with no change in usage is reported (`steer.unverified`) and left in place, and SIGTERM withdraws.
 
 `lab/e2e-move.sh` is make-before-break (#386) on the main lab topology with `lab/packeteer-move.yaml` (a third provider, transit-c, next hop `192.0.2.4`). The improvement moves from transit-b to transit-c while the edge logs every UPDATE it receives (`debug bgp updates in`). Sampled every 0.2s, the edge holds exactly one Packeteer path for the prefix until it reads `192.0.2.4`, and the update log has the move's UPDATE and no withdraw. A flip-back withdraw must then appear in the same log, and SIGTERM withdraws.
@@ -99,6 +101,7 @@ bash lab/e2e.sh
 bash lab/e2e-commit.sh
 bash lab/e2e-cost.sh
 bash lab/e2e-inbound.sh
+bash lab/e2e-overload.sh
 bash lab/e2e-verify-inbound.sh
 bash lab/e2e-verify-outbound.sh
 bash lab/e2e-mitigation.sh

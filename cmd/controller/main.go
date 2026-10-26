@@ -895,6 +895,7 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 			leading = true
 			in, rpkiRounds := decisionInput(loopCtx, now, engine, view, plugins, fed, rpkiSet, irrChecker)
 			in.Held = lw.Held
+			fillOverloadInputs(loopCtx, &in, snap, plugins)
 			if reorderMon != nil {
 				in.Reorder = reorderMon.Scored(now, maxResultAge(cfg))
 			}
@@ -924,6 +925,7 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 			qc := decider.QuarantineChanges()
 			watch.quarantines(now, qc)
 			auditQuarantines(audit, qc)
+			watch.overloads(now, decider.OverloadChanges(), underLimit(snap, in.Load, now))
 			watch.inbound(now, snap.InboundMode(), inChanges)
 			watch.verification(now, verified)
 			watch.announce(now, errors.Join(err, inErr, mitErr))
