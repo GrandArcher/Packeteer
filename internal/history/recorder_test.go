@@ -222,7 +222,7 @@ func TestRecorderSurvivesRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	open := func() *sqlite.Store {
-		s, err := sqlite.New(cfg, plugin.Env{})
+		s, err := newSQLite(cfg)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -291,7 +291,7 @@ func TestRecorderMitigations(t *testing.T) {
 		t.Fatal(err)
 	}
 	open := func() *sqlite.Store {
-		s, err := sqlite.New(cfg, plugin.Env{})
+		s, err := newSQLite(cfg)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -367,7 +367,7 @@ func TestRecorderAnomalies(t *testing.T) {
 		t.Fatal(err)
 	}
 	open := func() *sqlite.Store {
-		s, err := sqlite.New(cfg, plugin.Env{})
+		s, err := newSQLite(cfg)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -491,7 +491,7 @@ func TestRecorderKeepsProviderSeriesAcrossRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	open := func() *sqlite.Store {
-		s, err := sqlite.New(cfg, plugin.Env{})
+		s, err := newSQLite(cfg)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -547,7 +547,7 @@ func TestRecorderRPKIRoutes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	store, err := sqlite.New(cfg, plugin.Env{})
+	store, err := newSQLite(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -613,7 +613,7 @@ func TestRecorderRPKIMissedRound(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	store, err := sqlite.New(cfg, plugin.Env{})
+	store, err := newSQLite(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -671,4 +671,15 @@ func TestRecorderStoresExplain(t *testing.T) {
 	if got[pfxA] != want || got[pfxC] != "" {
 		t.Fatalf("stored explains = %q", got)
 	}
+}
+
+// newSQLite opens the sqlite plugin with its retention prune on the test's
+// fixed clock, so rows written at t0 survive a restart whatever the real
+// date is (#444).
+func newSQLite(cfg plugin.Config) (*sqlite.Store, error) {
+	s, err := sqlite.New(cfg, plugin.Env{})
+	if err == nil {
+		s.SetClock(func() time.Time { return t0.Add(24 * time.Hour) })
+	}
+	return s, err
 }
