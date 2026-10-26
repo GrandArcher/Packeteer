@@ -213,11 +213,15 @@ func TestHourlyCapAndItReleases(t *testing.T) {
 func TestLostAnswerStillCountsAgainstTheCaps(t *testing.T) {
 	r := newRig(t)
 	c := r.client(Config{MaxMeasurementsPerHour: 1, MaxCreditsPerDay: 1000}, testKey)
+	r.api.mu.Lock()
 	r.api.dropAnswer = true
+	r.api.mu.Unlock()
 	if _, err := c.Measure(context.Background(), manual()); err == nil {
 		t.Fatal("a cut connection must be an error")
 	}
+	r.api.mu.Lock()
 	r.api.dropAnswer = false
+	r.api.mu.Unlock()
 	if _, err := c.Measure(context.Background(), manual()); !errors.Is(err, ErrCapHour) {
 		t.Fatalf("after the lost answer: %v", err)
 	}
