@@ -1943,6 +1943,7 @@ func combineStats(parts []Stats) Stats {
 	var s Stats
 	var rttSum time.Duration
 	var jitSum time.Duration
+	var connSum, hsSum, ttfbSum time.Duration
 	jitWeight := 0
 	seenRTT := false
 	for _, p := range parts {
@@ -1952,6 +1953,9 @@ func combineStats(parts []Stats) Stats {
 			continue
 		}
 		rttSum += p.RTTAvg * time.Duration(p.Received)
+		connSum += p.Connect * time.Duration(p.Received)
+		hsSum += p.Handshake * time.Duration(p.Received)
+		ttfbSum += p.TTFB * time.Duration(p.Received)
 		if !seenRTT || p.RTTMin < s.RTTMin {
 			s.RTTMin = p.RTTMin
 		}
@@ -1972,7 +1976,9 @@ func combineStats(parts []Stats) Stats {
 		s.LossPct = 100 * float64(lost) / float64(s.Sent)
 	}
 	if s.Received > 0 {
-		s.RTTAvg = rttSum / time.Duration(s.Received)
+		n := time.Duration(s.Received)
+		s.RTTAvg = rttSum / n
+		s.Connect, s.Handshake, s.TTFB = connSum/n, hsSum/n, ttfbSum/n
 	}
 	if jitWeight > 0 {
 		s.Jitter = jitSum / time.Duration(jitWeight)

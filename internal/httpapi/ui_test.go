@@ -14,6 +14,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/GrandArcher/Packeteer/internal/auth"
 	"github.com/GrandArcher/Packeteer/internal/auth/authtest"
@@ -759,6 +760,37 @@ func TestIndirectProbeInSnapshot(t *testing.T) {
 	}
 	if !strings.Contains(string(js), "pr.indirect") || !strings.Contains(string(js), `"indirect"`) {
 		t.Fatal("app.js does not label indirect probes")
+	}
+}
+
+// TestHTTPSPhasesInSnapshot checks the #306 connect, handshake, and first
+// byte timings reach the probe rows only for a prober that measured them,
+// and that the prefix card shows them.
+func TestHTTPSPhasesInSnapshot(t *testing.T) {
+	ms := time.Millisecond
+	r := probe.Result{Provider: "a", Prefix: netip.MustParsePrefix("198.51.100.0/24"),
+		Stats: probe.Stats{Sent: 3, Received: 3, RTTAvg: 60 * ms, Connect: 10 * ms, Handshake: 20 * ms, TTFB: 30 * ms}}
+	got := probeFrom(r)
+	if got.ConnectMs != 10 || got.HandshakeMs != 20 || got.TTFBMs != 30 {
+		t.Fatalf("probe = %+v", got)
+	}
+	raw, _ := json.Marshal(got)
+	for _, k := range []string{`"connect_ms":10`, `"handshake_ms":20`, `"ttfb_ms":30`} {
+		if !strings.Contains(string(raw), k) {
+			t.Fatalf("probe json = %s, missing %s", raw, k)
+		}
+	}
+	r.Stats.Connect, r.Stats.Handshake, r.Stats.TTFB = 0, 0, 0
+	raw, _ = json.Marshal(probeFrom(r))
+	if strings.Contains(string(raw), "ttfb_ms") {
+		t.Fatalf("icmp-style probe json = %s", raw)
+	}
+	js, err := fs.ReadFile(webFS, "web/app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(js), "pr.ttfb_ms") || !strings.Contains(string(js), "pr.handshake_ms") {
+		t.Fatal("app.js does not show https timings")
 	}
 }
 

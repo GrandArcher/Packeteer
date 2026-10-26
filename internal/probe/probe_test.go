@@ -1773,3 +1773,35 @@ func TestSourceStatusSinceMovesOnlyWhenFailureFlips(t *testing.T) {
 		t.Fatalf("failing source = %+v, want since %v", st, failedAt)
 	}
 }
+
+func TestComputePhases(t *testing.T) {
+	raw := plugin.ProbeResult{Sent: 3, RTTs: ms(60, 90), Phases: []plugin.Phases{
+		{Connect: 10 * time.Millisecond, Handshake: 20 * time.Millisecond, TTFB: 30 * time.Millisecond},
+		{Connect: 20 * time.Millisecond, Handshake: 30 * time.Millisecond, TTFB: 40 * time.Millisecond},
+	}}
+	got := Compute(raw)
+	if got.Connect != 15*time.Millisecond || got.Handshake != 25*time.Millisecond || got.TTFB != 35*time.Millisecond {
+		t.Fatalf("phases = %v %v %v", got.Connect, got.Handshake, got.TTFB)
+	}
+	if got.RTTAvg != 75*time.Millisecond {
+		t.Fatalf("RTTAvg = %v", got.RTTAvg)
+	}
+	// Phases that do not line up with the replies are ignored.
+	raw.Phases = raw.Phases[:1]
+	if got := Compute(raw); got.Connect != 0 || got.TTFB != 0 {
+		t.Fatalf("misaligned phases used: %+v", got)
+	}
+}
+
+func TestCombineStatsPhases(t *testing.T) {
+	ten, thirty := 10*time.Millisecond, 30*time.Millisecond
+	got := combineStats([]Stats{
+		{Sent: 1, Received: 1, RTTAvg: ten, RTTMin: ten, RTTMax: ten, Connect: ten, Handshake: ten, TTFB: ten},
+		{Sent: 3, Received: 3, RTTAvg: thirty, RTTMin: thirty, RTTMax: thirty, Connect: thirty, Handshake: thirty, TTFB: thirty},
+		{Sent: 2},
+	})
+	want := 25 * time.Millisecond // (1*10 + 3*30) / 4
+	if got.Connect != want || got.Handshake != want || got.TTFB != want {
+		t.Fatalf("pooled phases = %v %v %v, want %v", got.Connect, got.Handshake, got.TTFB, want)
+	}
+}

@@ -493,7 +493,7 @@ func thresholdsGate(cur, ch Candidate, haveCur, haveCh bool, cfg Config) Gate {
 func evidenceGate(d Decision, f explainFacts, cur, ch Candidate, haveCur, haveCh, pairBetter bool, cfg Config) Gate {
 	g := Gate{Name: GateEvidence, Limit: "display only"}
 	if cfg.RequireEvidence {
-		g.Limit = "require_evidence: a tcp or udp reply, or passive agreement, on both paths"
+		g.Limit = "require_evidence: a tcp, udp, or https reply, or passive agreement, on both paths"
 	}
 	if !haveCur || !cur.Usable {
 		g.Status, g.Detail = GateSkip, "not reached: the current path has no usable measurement"
@@ -767,7 +767,7 @@ func counterfactual(blocked string, d Decision, f explainFacts, cfg Config, cur,
 				weak = append(weak, c.Provider)
 			}
 		}
-		return "would move to " + to + " once " + strings.Join(weak, " and ") + " is measured by a tcp or udp reply or agrees with passive TCP evidence, or with thresholds.require_evidence off"
+		return "would move to " + to + " once " + strings.Join(weak, " and ") + " is measured by a tcp, udp, or https reply or agrees with passive TCP evidence, or with thresholds.require_evidence off"
 	case GateConfirm:
 		return fmt.Sprintf("would move to %s after %d more fresh winning round(s)", f.challenger, max(cfg.confirmRounds()-f.streak, 1))
 	case GateHoldTime:

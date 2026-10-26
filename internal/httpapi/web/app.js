@@ -358,7 +358,11 @@ function prefixCard(row) {
     } else {
       var silent = !pr.received;
       tr.appendChild(el("td", silent ? "num bad" : "num", fmtPct(pr.loss_pct)));
-      tr.appendChild(silent ? el("td", "bad", NO_REPLY) : el("td", "num", fmtMs(pr.rtt_avg_ms)));
+      var rttCell = silent ? el("td", "bad", NO_REPLY) : el("td", "num", fmtMs(pr.rtt_avg_ms));
+      if (!silent && pr.ttfb_ms) {
+        rttCell.title = "connect " + fmtMs(pr.connect_ms) + ", TLS handshake " + fmtMs(pr.handshake_ms) + ", first byte " + fmtMs(pr.ttfb_ms);
+      }
+      tr.appendChild(rttCell);
       tr.appendChild(silent ? el("td", "", "\u2014") : el("td", "num", fmtMs(pr.jitter_ms)));
       var probeCell = el("td", "", pr.prober || (silent ? "\u2014" : "ok"));
       if (pr.indirect) {

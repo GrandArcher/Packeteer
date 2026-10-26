@@ -23,10 +23,10 @@ const (
 
 // Confidence rates how far one sample's loss and RTT can be trusted (#202).
 // Routers rate-limit and deprioritize ICMP, so a ping reply is weaker
-// evidence than a TCP or UDP reply, a traceroute hop is weaker than the
+// evidence than a TCP, UDP, or HTTPS reply, a traceroute hop is weaker than the
 // destination, few replies are weaker than many, and a wide RTT spread is
 // weaker than a tight one. Passive TCP evidence from a span or flow source
-// that agrees with the sample stands in for a TCP or UDP reply. It is
+// that agrees with the sample stands in for a TCP, UDP, or HTTPS reply. It is
 // derived from the sample; it changes no decision unless
 // thresholds.require_evidence is on.
 type Confidence struct {
@@ -130,10 +130,10 @@ func (c Confidence) WithPassive(agree bool) Confidence {
 }
 
 // BeyondICMP reports whether the sample rests on more than ICMP: a reply to
-// the tcp or udp prober, or passive TCP evidence that agrees with it. An
+// the tcp, udp, or https prober, or passive TCP evidence that agrees with it. An
 // exec or other prober type is not known to be more than ICMP.
 func (c Confidence) BeyondICMP() bool {
-	return c.Protocol == "tcp" || c.Protocol == "udp" || c.Passive == PassiveAgree
+	return c.Protocol == "tcp" || c.Protocol == "udp" || c.Protocol == "https" || c.Passive == PassiveAgree
 }
 
 // String is the evidence in words, for decision explanations.

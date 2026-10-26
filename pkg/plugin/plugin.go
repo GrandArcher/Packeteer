@@ -140,6 +140,17 @@ type ProbeResult struct {
 	// equals len(RTTs). Empty means the order was not observed, and the
 	// reordering monitor computes no reordering metric.
 	Order []int
+	// Phases, when set, holds one entry per reply in RTTs (same index): the
+	// stages of an application-level reply. Only the https prober fills it.
+	Phases []Phases
+}
+
+// Phases times the stages of one https probe reply. The reply's RTT is
+// their sum.
+type Phases struct {
+	Connect   time.Duration // TCP connect
+	Handshake time.Duration // TLS handshake
+	TTFB      time.Duration // start of the request write to first response byte
 }
 
 // Prober measures reachability and latency from a source to a target.

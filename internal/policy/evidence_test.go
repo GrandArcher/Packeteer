@@ -237,10 +237,10 @@ func TestExplainEvidenceGate(t *testing.T) {
 	c.RequireEvidence = true
 	ex = explainRound(t, c, input)
 	g = wantGate(t, ex, GateEvidence, GateFail, "no evidence beyond ICMP for a (icmp, 10/10 replies)")
-	if g.Limit != "require_evidence: a tcp or udp reply, or passive agreement, on both paths" || ex.BlockedBy != GateEvidence || ex.Outcome != OutcomeHeld {
+	if g.Limit != "require_evidence: a tcp, udp, or https reply, or passive agreement, on both paths" || ex.BlockedBy != GateEvidence || ex.Outcome != OutcomeHeld {
 		t.Fatalf("evidence = %+v explain = %+v", g, ex)
 	}
-	if want := "would move to b once a is measured by a tcp or udp reply or agrees with passive TCP evidence, or with thresholds.require_evidence off"; ex.Counterfactual != want {
+	if want := "would move to b once a is measured by a tcp, udp, or https reply or agrees with passive TCP evidence, or with thresholds.require_evidence off"; ex.Counterfactual != want {
 		t.Fatalf("counterfactual = %q", ex.Counterfactual)
 	}
 	wantGate(t, ex, GateThresholds, GatePass, "b vs a")
