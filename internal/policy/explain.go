@@ -368,7 +368,7 @@ func buildExplain(d Decision, f explainFacts, cfg Config, capUsed int) Explain {
 		}
 	}
 	switch {
-	case steerKeep && f.planWait == planSwitch:
+	case switching:
 		g[GateConfirm] = confirmGate(d, f, cfg, false)
 	case static || plan:
 		g[GateConfirm] = Gate{Name: GateConfirm, Status: GateSkip, Detail: "a " + d.Cause + " move does not wait for confirm_rounds"}
