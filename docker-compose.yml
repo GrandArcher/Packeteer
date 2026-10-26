@@ -49,9 +49,10 @@ services:
       - atlas-probe-spool:/var/spool/ripe-atlas
     tmpfs:
       - /run/ripe-atlas
-    # The capabilities and mem_limit are the image's documented set; cpus and
-    # pids_limit are Packeteer's, so the probe's measurements for other Atlas
-    # users stay small beside Packeteer's own probing.
+    # The capabilities and mem_limit are those of the upstream compose
+    # example; cpus and pids_limit are Packeteer's, so the probe's
+    # measurements for other Atlas users stay small beside Packeteer's own
+    # probing.
     cap_drop: [ALL]
     cap_add: [NET_RAW, KILL, SETUID, SETGID, CHOWN, FOWNER, DAC_OVERRIDE]
     mem_limit: 64m

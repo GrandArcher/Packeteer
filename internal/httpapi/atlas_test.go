@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"net/url"
 	"strings"
 	"sync/atomic"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/GrandArcher/Packeteer/internal/atlas"
 	"github.com/GrandArcher/Packeteer/internal/probe"
+	"github.com/GrandArcher/Packeteer/pkg/plugin"
 )
 
 const atlasTestKey = "k3y-1111-fake-test-value"
@@ -39,8 +41,8 @@ func atlasFake(t *testing.T, creates *atomic.Int32) string {
 
 func atlasSnap(target string) Snapshot {
 	return Snapshot{Probes: []Probe{
-		{Provider: "transit-a", Prefix: "198.51.100.0/24", Target: target, OK: true, RTTAvgMs: 12.5, LossPct: 0, Confidence: probe.Confidence{Level: "high"}},
-		{Provider: "transit-b", Prefix: "198.51.100.0/24", Target: target, OK: true, RTTAvgMs: 9.5, LossPct: 1, Confidence: probe.Confidence{Level: "medium"}},
+		{Provider: "transit-a", Prefix: "198.51.100.0/24", Target: target, OK: true, Received: 3, RTTAvgMs: 12.5, LossPct: 0, Confidence: probe.Confidence{Level: "high"}},
+		{Provider: "transit-b", Prefix: "198.51.100.0/24", Target: target, OK: true, Received: 3, RTTAvgMs: 9.5, LossPct: 1, Confidence: probe.Confidence{Level: "medium"}},
 	}}
 }
 
@@ -264,5 +266,35 @@ func TestAtlasPanelWiring(t *testing.T) {
 	}
 	if prefix := mustWeb(t, "web/prefix.js"); strings.Contains(prefix, "atlas") || strings.Contains(prefix, "postJSON") {
 		t.Error("prefix.js must stay read-only; the Atlas panel lives in atlas.js")
+	}
+}
+
+// A viewer may read the panel but is not offered the buttons that spend
+// credits; an operator is.
+func TestAtlasCanMeasureNeedsOperator(t *testing.T) {
+	var creates atomic.Int32
+	c := atlasClient(t, atlasFake(t, &creates), atlas.Config{})
+	e := newUIWith(t, func(o *Options) {
+		o.Atlas = c
+		o.Snapshot = func() Snapshot { return atlasSnap("198.51.100.7") }
+	})
+	for role, want := range map[plugin.Role]bool{plugin.RoleViewer: false, plugin.RoleOperator: true, plugin.RoleAdmin: true} {
+		rec, body := e.do(t, http.MethodGet, "/api/atlas?prefix=198.51.100.0/24", role, nil)
+		if rec.Code != http.StatusOK || body["state"] != "ok" || body["can_measure"] != want {
+			t.Errorf("%s: %d can_measure=%v, want %v: %s", role, rec.Code, body["can_measure"], want, rec.Body)
+		}
+	}
+}
+
+// The panel picks the test address by the same rule as the after-move
+// ping: a row that received replies, else the first row with a target.
+func TestAtlasTargetPrefersAnsweredRow(t *testing.T) {
+	prefix := netip.MustParsePrefix("198.51.100.0/24")
+	snap := Snapshot{Probes: []Probe{
+		{Provider: "transit-a", Prefix: prefix.String(), Target: "198.51.100.1", OK: false, Sent: 3, Received: 0},
+		{Provider: "transit-b", Prefix: prefix.String(), Target: "198.51.100.9", OK: true, Sent: 3, Received: 3},
+	}}
+	if addr, _ := atlasTarget(snap, prefix); addr.String() != "198.51.100.9" {
+		t.Errorf("target = %s, want the answered row's 198.51.100.9", addr)
 	}
 }

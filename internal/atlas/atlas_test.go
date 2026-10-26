@@ -329,7 +329,11 @@ func TestNoKeyMakesNoRequestAndWarnsOnce(t *testing.T) {
 	r := newRig(t)
 	c := r.client(Config{AfterMove: true}, "")
 	c.AfterMove(pfx, target, "transit-b")
+	// Run must return at once; with a key it would loop until cancelled.
 	c.Run(context.Background())
+	if _, err := c.Measure(context.Background(), manual()); !errors.Is(err, ErrNoKey) {
+		t.Errorf("Measure with no key: %v, want ErrNoKey", err)
+	}
 	if len(r.api.auth) != 0 {
 		t.Errorf("%d requests with no key", len(r.api.auth))
 	}
@@ -470,6 +474,33 @@ func TestOwnProbeJoinsOnlyWhenConnected(t *testing.T) {
 	}
 }
 
+// A probe last seen connected is dropped when the next status read fails.
+func TestOwnProbeDroppedWhenStatusReadFails(t *testing.T) {
+	r := newRig(t)
+	c := r.client(Config{ProbeID: 6001, MaxCreditsPerDay: 1000, MaxMeasurementsPerHour: 10}, testKey)
+	c.tick(context.Background())
+	if st := c.Status(); st.Probe == nil || st.Probe.Status != "Connected" {
+		t.Fatalf("status = %+v", st)
+	}
+	r.api.mu.Lock()
+	r.api.failWith = http.StatusInternalServerError
+	r.api.mu.Unlock()
+	r.clk.add(10 * time.Minute)
+	c.tick(context.Background())
+	if st := c.Status(); st.Probe != nil || st.Error == "" {
+		t.Errorf("status after a failed read = %+v, want no probe and an error", st)
+	}
+	r.api.mu.Lock()
+	r.api.failWith = 0
+	r.api.mu.Unlock()
+	if _, err := c.Measure(context.Background(), manual()); err != nil {
+		t.Fatal(err)
+	}
+	if n := len(r.api.creates[0]["probes"].([]any)); n != 1 {
+		t.Errorf("probes = %d, want 1 (the own probe is not current)", n)
+	}
+}
+
 func TestLowBalanceRefuses(t *testing.T) {
 	r := newRig(t)
 	r.api.balance = `{"current_balance": 10}`
@@ -592,6 +623,7 @@ func TestValidate(t *testing.T) {
 		want string
 	}{
 		{Config{Probes: 3}, "set enabled: true"},
+		{Config{StateFile: "/tmp/atlas.json"}, "state_file"},
 		{Config{Enabled: true, Probes: 11}, "atlas.probes"},
 		{Config{Enabled: true, ProbeID: -1}, "atlas.probe_id"},
 		{Config{Enabled: true, AfterMoveDelay: time.Second}, "atlas.after_move_delay"},

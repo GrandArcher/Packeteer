@@ -54,7 +54,7 @@ docker compose exec atlas-probe cat /etc/ripe-atlas/probe_key.pub
 
 Register that public key at atlas.ripe.net/apply/swprobe/. Registration is manual on RIPE's side; the probe then appears in your account and you copy its id to `atlas.probe_id`. The key pair lives in the `atlas-probe-key` volume. Keep the volume when you recreate the container, or the probe needs a new registration.
 
-The probe is isolated from Packeteer. It runs in its own container on the default network, mounts only its own volumes (not `config.yaml`, not `packeteer-data`), has all capabilities dropped except those the image needs (`NET_RAW`, `KILL`, `SETUID`, `SETGID`, `CHOWN`, `FOWNER`, `DAC_OVERRIDE`), and has no access to the BGP sessions. It has IPv4 only. Its limits are `mem_limit: 64m` (the image's own), `cpus: 0.5`, and `pids_limit: 64`, so the measurements it runs for other Atlas users do not compete with Packeteer's own probing.
+The probe is isolated from Packeteer. It runs in its own container on the default network, mounts only its own volumes (not `config.yaml`, not `packeteer-data`), has all capabilities dropped except those the image needs (`NET_RAW`, `KILL`, `SETUID`, `SETGID`, `CHOWN`, `FOWNER`, `DAC_OVERRIDE`), and has no access to the BGP sessions. It has IPv4 only. Its limits are `mem_limit: 64m` (the upstream compose example's), `cpus: 0.5`, and `pids_limit: 64`, so the measurements it runs for other Atlas users do not compete with Packeteer's own probing.
 
 ## API and tests
 

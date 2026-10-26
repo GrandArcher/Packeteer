@@ -7,6 +7,7 @@ import (
 	"strconv"
 
 	"github.com/GrandArcher/Packeteer/internal/atlas"
+	"github.com/GrandArcher/Packeteer/pkg/plugin"
 )
 
 // AtlasLocal is one provider's local measurement of the prefix, shown
@@ -31,7 +32,7 @@ type AtlasView struct {
 	Measurements []atlas.Record `json:"measurements"`
 	// CanMeasure is true when POST /api/atlas/measure is open: the
 	// integration has a key, the prefix has a test address, and the server
-	// has auth.
+	// has auth and the caller is an operator.
 	CanMeasure bool `json:"can_measure"`
 }
 
@@ -46,7 +47,7 @@ func atlasTarget(snap Snapshot, p netip.Prefix) (netip.Addr, []AtlasLocal) {
 		}
 		local = append(local, AtlasLocal{Provider: pr.Provider, Target: pr.Target, OK: pr.OK, LossPct: pr.LossPct, RTTAvgMs: pr.RTTAvgMs, Confidence: pr.Confidence.Level})
 		a, _ := netip.ParseAddr(pr.Target)
-		rows = append(rows, atlas.LocalRow{Provider: pr.Provider, Target: a, Answered: pr.OK && pr.RTTAvgMs > 0})
+		rows = append(rows, atlas.LocalRow{Provider: pr.Provider, Target: a, Answered: pr.Received > 0})
 	}
 	addr, _ := atlas.TestAddr(rows, "")
 	return addr, local
@@ -54,7 +55,7 @@ func atlasTarget(snap Snapshot, p netip.Prefix) (netip.Addr, []AtlasLocal) {
 
 // handleAtlas answers the RIPE Atlas panel on the prefix page (#213). It
 // reads stored results and makes no request to Atlas. With the integration
-// off it answers state "off" and nothing else.
+// off it answers state "off" with no data.
 func (s *Server) handleAtlas(w http.ResponseWriter, r *http.Request) {
 	st := s.atlas.State()
 	if st == atlas.StateOff {
@@ -77,7 +78,8 @@ func (s *Server) handleAtlas(w http.ResponseWriter, r *http.Request) {
 	if addr.IsValid() {
 		out.Target = addr.String()
 	}
-	out.CanMeasure = s.atlas.Active() && atlas.PublicTarget(addr) && s.writesEnabled()
+	out.CanMeasure = s.atlas.Active() && atlas.PublicTarget(addr) && s.writesEnabled() &&
+		principalFrom(r.Context()).Role.Allows(plugin.RoleOperator)
 	writeJSON(w, http.StatusOK, out)
 }
 

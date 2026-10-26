@@ -675,9 +675,9 @@ func (c *Client) refreshStatus(ctx context.Context) {
 		c.nextTry = c.now().Add(time.Minute)
 		c.log.Warn("atlas: status read failed", "err", c.statErr)
 	}
-	if probe != nil {
-		c.probe = probe
-	}
+	// A failed read clears the probe: a status that is not current must
+	// not keep adding the probe to measurements.
+	c.probe = probe
 	if cr.Balance != nil {
 		c.balance = cr.Balance
 	}

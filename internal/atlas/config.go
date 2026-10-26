@@ -109,7 +109,7 @@ var (
 func (c Config) Validate(add func(string, ...any)) {
 	if !c.Enabled {
 		if c != (Config{}) {
-			add("atlas: set enabled: true to use probe_id, source, probes, after_move, or the caps")
+			add("atlas: set enabled: true to use probe_id, source, probes, after_move, state_file, or the caps")
 		}
 		return
 	}
