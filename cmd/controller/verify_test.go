@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"net/netip"
@@ -52,6 +53,7 @@ type steerAnnouncer struct {
 	plugin.Base
 	mu     sync.Mutex
 	routes map[netip.Prefix]bool
+	fail   bool
 }
 
 func (a *steerAnnouncer) Action(p string) (plugin.InboundAction, bool) {
@@ -61,6 +63,9 @@ func (a *steerAnnouncer) Action(p string) (plugin.InboundAction, bool) {
 func (a *steerAnnouncer) Announce(_ context.Context, r plugin.InboundRoute) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	if a.fail {
+		return errors.New("announce refused")
+	}
 	a.routes[r.Prefix] = true
 	return nil
 }
@@ -85,10 +90,10 @@ func (a *steerAnnouncer) count() int {
 	return len(a.routes)
 }
 
-type verifyRIB struct{}
+type verifyRIB struct{ down bool }
 
-func (verifyRIB) Ready() bool { return true }
-func (verifyRIB) NextHop(netip.Prefix) (netip.Addr, bool) {
+func (r *verifyRIB) Ready() bool { return !r.down }
+func (*verifyRIB) NextHop(netip.Prefix) (netip.Addr, bool) {
 	return netip.MustParseAddr("192.0.2.1"), true
 }
 
@@ -98,6 +103,7 @@ type verifyRig struct {
 	dec *policy.Engine
 	inb *inbound.Controller
 	ann *steerAnnouncer
+	rib *verifyRIB
 	inj map[netip.Prefix]bool
 }
 
@@ -110,11 +116,12 @@ func newVerifyRig(t *testing.T, vc verify.Config) *verifyRig {
 	dec := policy.NewEngine(policy.Config{Mode: config.ModeObserve, MinLossDeltaPct: 1, MinRTTDelta: 15 * time.Millisecond,
 		HoldTime: 15 * time.Minute, MaxImprovements: 50, MaxResultAge: 2 * time.Minute}, sc)
 	ann := &steerAnnouncer{routes: map[netip.Prefix]bool{}}
+	rib := &verifyRIB{}
 	inb, err := inbound.New(inbound.Config{
 		Mode: config.ModeInject, Prefixes: []netip.Prefix{verifyOwn}, Allowlist: []netip.Prefix{verifyOwn},
 		Community: "64512:666", LocalPref: 1, MaxImprovements: 50, SharedCap: 50, HoldTime: time.Minute, TTL: time.Hour,
-		ReleasePct: 90, MaxAge: time.Hour, Providers: []string{"transit-a", "transit-b"},
-	}, ann, verifyRIB{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+		ReleasePct: 90, MaxAge: time.Hour, Providers: []string{"transit-a", "transit-b", "transit-c"},
+	}, ann, rib, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -123,7 +130,7 @@ func newVerifyRig(t *testing.T, vc verify.Config) *verifyRig {
 	cfg := &config.Config{Verify: vc}
 	set := &pluginhost.Set{Telemetry: []pluginhost.Instance[plugin.Telemetry]{{Name: "rates", Plugin: tel}}}
 	return &verifyRig{v: newSteerVerifier(cfg, dec, inb, set, slog.New(slog.NewTextHandler(io.Discard, nil))),
-		tel: tel, dec: dec, inb: inb, ann: ann, inj: map[netip.Prefix]bool{verifyPrefix: true}}
+		tel: tel, dec: dec, inb: inb, ann: ann, rib: rib, inj: map[netip.Prefix]bool{verifyPrefix: true}}
 }
 
 func (r *verifyRig) injected(p netip.Prefix) bool { return r.inj[p] }
@@ -152,14 +159,22 @@ func (r *verifyRig) improveWith(t *testing.T, now time.Time, inputMbps, wantMbps
 
 func (r *verifyRig) steerInbound(t *testing.T, now time.Time) []inbound.Change {
 	t.Helper()
+	ch := r.decideInbound(t, now)
+	if err := r.inb.Sync(context.Background()); err != nil || r.ann.count() != 1 {
+		t.Fatalf("announce: %v routes=%d", err, r.ann.count())
+	}
+	return ch
+}
+
+// decideInbound is steerInbound without the sync: the steer is decided but
+// the route is not announced.
+func (r *verifyRig) decideInbound(t *testing.T, now time.Time) []inbound.Change {
+	t.Helper()
 	ch := r.inb.Plan(now, inbound.Input{Usage: []plugin.Usage{
 		{Provider: "transit-a", CommitMbps: 100, Samples: 10, InMbps95: 150, Updated: now},
 		{Provider: "transit-b", CommitMbps: 100, Samples: 10, InMbps95: 30, Updated: now}}})
 	if len(ch) != 1 || ch[0].Action != inbound.ActionSteer {
 		t.Fatalf("steer: %+v", ch)
-	}
-	if err := r.inb.Sync(context.Background()); err != nil || r.ann.count() != 1 {
-		t.Fatalf("announce: %v routes=%d", err, r.ann.count())
 	}
 	return ch
 }
@@ -242,6 +257,129 @@ func TestVerifyInboundVerifiedKeepsTheSteer(t *testing.T) {
 	done, _, in := r.v.check(context.Background(), at, r.injected, nil)
 	if len(done) != 1 || done[0].Status != verify.Verified || len(in) != 0 || r.ann.count() != 1 || len(r.inb.Status().Steers) != 1 {
 		t.Fatalf("done %+v in %+v routes %d", done, in, r.ann.count())
+	}
+}
+
+// The steer is decided while the RIB is not ready, so it is announced rounds
+// later with no new change. The window must start when the route goes out:
+// the traffic that moved after that is what is judged.
+func TestVerifyInboundStartsWhenTheRouteGoesOut(t *testing.T) {
+	r := newVerifyRig(t, verify.Config{})
+	ctx := context.Background()
+	r.rib.down = true
+	r.tel.set(verifyT0, map[string]float64{"transit-a": 40, "transit-b": 140}, nil)
+	inCh := r.decideInbound(t, verifyT0)
+	_ = r.inb.Sync(ctx)
+	r.v.begin(ctx, verifyT0, r.injected, config.ModeInject, nil, inCh, nil)
+	if l := r.v.results(); len(l) != 0 {
+		t.Fatalf("verifying a steer that is not on the wire: %+v", l)
+	}
+	if done, _, _ := r.v.check(ctx, verifyT0.Add(time.Second), r.injected, nil); len(done) != 0 {
+		t.Fatalf("done = %+v", done)
+	}
+
+	out := verifyT0.Add(5 * time.Second)
+	r.rib.down = false
+	if err := r.inb.Sync(ctx); err != nil || r.ann.count() != 1 {
+		t.Fatalf("announce: %v routes=%d", err, r.ann.count())
+	}
+	r.tel.set(out, map[string]float64{"transit-a": 150, "transit-b": 30}, nil)
+	r.v.begin(ctx, out, r.injected, config.ModeInject, nil, nil, nil)
+	l := r.v.results()
+	if len(l) != 1 || l[0].Status != verify.Pending || !l[0].Started.Equal(out) {
+		t.Fatalf("results = %+v", l)
+	}
+
+	at := out.Add(verify.DefaultInboundWindow)
+	r.tel.set(at, map[string]float64{"transit-a": 40, "transit-b": 140}, nil)
+	done, _, in := r.v.check(ctx, at, r.injected, nil)
+	if len(done) != 1 || done[0].Status != verify.Verified || len(in) != 0 {
+		t.Fatalf("done %+v in %+v", done, in)
+	}
+}
+
+// A second steer whose announce failed leaves the first route on the wire:
+// that route steers away from the first provider only, so the second one is
+// not verified until a route that steers away from it goes out.
+func TestVerifyInboundNeedsARouteAwayFromTheProvider(t *testing.T) {
+	r := newVerifyRig(t, verify.Config{})
+	ctx := context.Background()
+	r.tel.set(verifyT0, map[string]float64{"transit-a": 150, "transit-b": 30}, nil)
+	r.v.begin(ctx, verifyT0, r.injected, config.ModeInject, nil, r.steerInbound(t, verifyT0), nil)
+
+	later := verifyT0.Add(time.Minute)
+	r.ann.fail = true
+	ch := r.inb.Plan(later, inbound.Input{Usage: []plugin.Usage{
+		{Provider: "transit-a", CommitMbps: 100, Samples: 10, InMbps95: 150, Updated: later},
+		{Provider: "transit-b", CommitMbps: 100, Samples: 10, InMbps95: 150, Updated: later},
+		{Provider: "transit-c", CommitMbps: 100, Samples: 10, InMbps95: 30, Updated: later}}})
+	if len(ch) != 1 || ch[0].Action != inbound.ActionSteer || ch[0].Steer.Provider != "transit-b" {
+		t.Fatalf("second steer: %+v", ch)
+	}
+	if err := r.inb.Sync(ctx); err == nil {
+		t.Fatal("the refused announce must fail the sync")
+	}
+	r.v.begin(ctx, later, r.injected, config.ModeInject, nil, ch, nil)
+	if l := r.v.results(); len(l) != 1 || l[0].Provider != "transit-a" {
+		t.Fatalf("verifying a steer that is not on the wire: %+v", l)
+	}
+
+	out := later.Add(2 * time.Second)
+	r.ann.fail = false
+	if err := r.inb.Sync(ctx); err != nil {
+		t.Fatal(err)
+	}
+	r.v.begin(ctx, out, r.injected, config.ModeInject, nil, nil, nil)
+	l := r.v.results()
+	if len(l) != 2 || l[0].Provider != "transit-a" || l[1].Provider != "transit-b" || !l[1].Started.Equal(out) {
+		t.Fatalf("results = %+v", l)
+	}
+}
+
+// A RIB flap withdraws the route and drops the open check; the route goes
+// out again with no new change, and the window starts over from then.
+func TestVerifyInboundRestartsAfterARIBFlap(t *testing.T) {
+	r := newVerifyRig(t, verify.Config{})
+	ctx := context.Background()
+	r.tel.set(verifyT0, map[string]float64{"transit-a": 150, "transit-b": 30}, nil)
+	r.v.begin(ctx, verifyT0, r.injected, config.ModeInject, nil, r.steerInbound(t, verifyT0), nil)
+
+	r.rib.down = true
+	_ = r.inb.Sync(ctx)
+	down := verifyT0.Add(time.Minute)
+	if done, _, _ := r.v.check(ctx, down, r.injected, nil); len(done) != 0 || len(r.v.results()) != 0 {
+		t.Fatalf("a withdrawn steer is still verified: %+v", r.v.results())
+	}
+
+	up := down.Add(5 * time.Second)
+	r.rib.down = false
+	if err := r.inb.Sync(ctx); err != nil || r.ann.count() != 1 {
+		t.Fatalf("announce: %v routes=%d", err, r.ann.count())
+	}
+	r.tel.set(up, map[string]float64{"transit-a": 150, "transit-b": 30}, nil)
+	r.v.begin(ctx, up, r.injected, config.ModeInject, nil, nil, nil)
+	if l := r.v.results(); len(l) != 1 || l[0].Status != verify.Pending || !l[0].Started.Equal(up) {
+		t.Fatalf("results = %+v", l)
+	}
+}
+
+// A steer that is released before its route went out is never verified.
+func TestVerifyInboundAwaitingEndsWithTheSteer(t *testing.T) {
+	r := newVerifyRig(t, verify.Config{})
+	ctx := context.Background()
+	r.rib.down = true
+	r.tel.set(verifyT0, map[string]float64{"transit-a": 150, "transit-b": 30}, nil)
+	inCh := r.decideInbound(t, verifyT0)
+	r.v.begin(ctx, verifyT0, r.injected, config.ModeInject, nil, inCh, nil)
+	inCh[0].Action = inbound.ActionRelease
+	r.v.begin(ctx, verifyT0, r.injected, config.ModeInject, nil, inCh, nil)
+	r.rib.down = false
+	if err := r.inb.Sync(ctx); err != nil || r.ann.count() != 1 {
+		t.Fatalf("announce: %v routes=%d", err, r.ann.count())
+	}
+	r.v.begin(ctx, verifyT0, r.injected, config.ModeInject, nil, nil, nil)
+	if l := r.v.results(); len(l) != 0 || len(r.v.awaiting) != 0 {
+		t.Fatalf("results %+v awaiting %v", l, r.v.awaiting)
 	}
 }
 

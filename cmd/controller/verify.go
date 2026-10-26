@@ -26,6 +26,11 @@ type steerVerifier struct {
 	inb     *inbound.Controller
 	plugins *pluginhost.Set
 	log     *slog.Logger
+	// awaiting holds the providers of inbound steers that are decided but
+	// not on the wire: the RIB was not ready or the announce failed, and
+	// Sync retries each round, as it does after a RIB flap. Their window
+	// starts when a route steering away from them goes out.
+	awaiting map[string]struct{}
 }
 
 // newSteerVerifier returns nil when verify is off.
@@ -33,7 +38,7 @@ func newSteerVerifier(cfg *config.Config, decider *policy.Engine, inb *inbound.C
 	if !cfg.Verify.Enabled {
 		return nil
 	}
-	v := &steerVerifier{decider: decider, inb: inb, plugins: plugins, log: log.With("component", "verify")}
+	v := &steerVerifier{decider: decider, inb: inb, plugins: plugins, log: log.With("component", "verify"), awaiting: map[string]struct{}{}}
 	v.tr = verify.New(cfg.Verify, v.degraded)
 	return v
 }
@@ -73,17 +78,20 @@ func resultPath(results []probe.Result, p netip.Prefix, provider string) (verify
 
 // onWire reports whether a steer is still announced: an outbound route the
 // announcer holds, or an inbound steer that is injected and not moderated
-// with a route on the wire.
+// whose route on the wire steers away from that provider.
 func (v *steerVerifier) onWire(injected func(netip.Prefix) bool, kind verify.Kind, key string) bool {
 	if kind == verify.Outbound {
 		p, err := netip.ParsePrefix(key)
 		return err == nil && injected(p)
 	}
 	st := v.inb.Status()
-	if st.Mode != config.ModeInject || len(st.Announced) == 0 {
-		return false
-	}
-	return slices.ContainsFunc(st.Steers, func(s inbound.Steer) bool { return s.Provider == key && !s.Moderated })
+	return st.Mode == config.ModeInject && steeredAway(st, key) &&
+		slices.ContainsFunc(st.Announced, func(r inbound.Route) bool { return slices.Contains(r.Away, key) })
+}
+
+// steeredAway reports an unmoderated steer away from provider.
+func steeredAway(st inbound.Status, provider string) bool {
+	return slices.ContainsFunc(st.Steers, func(s inbound.Steer) bool { return s.Provider == provider && !s.Moderated })
 }
 
 // check judges the steers whose window has passed and backs out the ones
@@ -95,7 +103,17 @@ func (v *steerVerifier) check(ctx context.Context, now time.Time, injected func(
 	if v == nil {
 		return nil, nil, nil
 	}
-	v.tr.Keep(func(kind verify.Kind, key string) bool { return v.onWire(injected, kind, key) })
+	v.tr.Keep(func(kind verify.Kind, key string) bool {
+		if v.onWire(injected, kind, key) {
+			return true
+		}
+		// A steer the controller still holds is announced again when the
+		// RIB is back, with no new change: verify it from then.
+		if kind == verify.Inbound && steeredAway(v.inb.Status(), key) {
+			v.awaiting[key] = struct{}{}
+		}
+		return false
+	})
 	done = v.tr.Observe(now, verify.Observation{
 		Rates: v.rates(ctx, now),
 		Path:  func(p netip.Prefix, provider string) (verify.Path, bool) { return resultPath(results, p, provider) },
@@ -126,7 +144,8 @@ func (v *steerVerifier) check(ctx context.Context, now time.Time, injected func(
 // begin starts verifying the steers this round put on the wire and drops
 // the ones it ended. A prefix the announcer refused (not injected), and an
 // inbound steer that is moderated or not injected, announced nothing and
-// is not verified.
+// is not verified. An inbound steer whose route is not out yet is verified
+// from the round it goes out.
 func (v *steerVerifier) begin(ctx context.Context, now time.Time, injected func(netip.Prefix) bool, inboundMode string, changes []policy.Change, inChanges []inbound.Change, results []probe.Result) {
 	if v == nil {
 		return
@@ -166,9 +185,16 @@ func (v *steerVerifier) begin(ctx context.Context, now time.Time, injected func(
 	for _, ch := range inChanges {
 		switch {
 		case ch.Action == inbound.ActionRelease:
+			delete(v.awaiting, ch.Steer.Provider)
 			v.tr.Cancel(verify.Inbound, ch.Steer.Provider)
 		case ch.Action == inbound.ActionSteer && inboundMode == config.ModeInject && !ch.Steer.Moderated:
-			v.tr.Begin(now, verify.Claim{Kind: verify.Inbound, Provider: ch.Steer.Provider, Rates: rates})
+			v.awaiting[ch.Steer.Provider] = struct{}{}
+		}
+	}
+	for provider := range v.awaiting {
+		if v.onWire(injected, verify.Inbound, provider) {
+			delete(v.awaiting, provider)
+			v.tr.Begin(now, verify.Claim{Kind: verify.Inbound, Provider: provider, Rates: rates})
 		}
 	}
 }
@@ -177,6 +203,7 @@ func (v *steerVerifier) begin(ctx context.Context, now time.Time, injected func(
 func (v *steerVerifier) reset() {
 	if v != nil {
 		v.tr.Reset()
+		clear(v.awaiting)
 	}
 }
 
