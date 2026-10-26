@@ -256,8 +256,11 @@ func (c *Client) load() {
 		c.log.Warn("atlas: state file is not valid, starting with an empty ledger", "path", c.cfg.StateFile, "err", err)
 		return
 	}
+	// No prune here: New runs before a caller can set c.now, so pruning
+	// against the wall clock could drop a ledger that is current on the
+	// client's own clock. usage prunes on every cap check, and save writes
+	// what is left.
 	c.spends, c.records = st.Spends, st.Records
-	c.pruneSpends()
 }
 
 // save writes the ledger and records. Callers hold c.mu.
