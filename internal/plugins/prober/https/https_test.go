@@ -1,10 +1,12 @@
 package https
 
 import (
+	"bytes"
 	"context"
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -371,5 +373,25 @@ func TestShortDeadlineKeepsMeasuredReplies(t *testing.T) {
 	}
 	if time.Since(start) > time.Second {
 		t.Fatalf("waited %v for a spacing the deadline cannot fit", time.Since(start))
+	}
+}
+
+func TestLostRequestIsLogged(t *testing.T) {
+	h, port, ca := server(t)
+	h.mu.Lock()
+	h.code = 404
+	h.mu.Unlock()
+	var buf bytes.Buffer
+	c, _ := plugin.ConfigFromYAML(fmt.Sprintf("port: %d\nca_file: %s", port, ca))
+	env := plugin.Env{Logger: slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))}
+	p, err := plugin.Probers.New(TypeName, c, env)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res := probe(t, p, 1); len(res.RTTs) != 0 {
+		t.Fatalf("404 answered: %+v", res)
+	}
+	if out := buf.String(); !strings.Contains(out, "https probe lost") || !strings.Contains(out, "status 404") {
+		t.Fatalf("log = %q", out)
 	}
 }

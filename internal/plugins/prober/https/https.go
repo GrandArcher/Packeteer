@@ -232,7 +232,7 @@ func (p *Prober) Probe(ctx context.Context, req plugin.ProbeRequest) (plugin.Pro
 		}
 		if i < req.Count-1 {
 			if wait := p.interval - time.Since(start); wait > 0 {
-				// The engine's deadline is count*timeout; a long spacing must
+				// The engine's deadline is about count*timeout; a long spacing must
 				// not turn the replies already measured into an error.
 				if dl, ok := ctx.Deadline(); ok && time.Until(dl) < wait+req.Timeout {
 					return res, nil
