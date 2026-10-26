@@ -16,6 +16,7 @@ Set these on the container (`-e NAME`). Secrets belong here, never in the config
 | `PACKETEER_HA_ID` | Instance id for the `lease` elector. See [ha.md](ha.md). |
 | `PACKETEER_PEERINGDB_API_KEY` | Optional PeeringDB API key for `lookup` type `peeringdb` (#153). Sent only as an `Authorization` header to `base_url`, never in a URL, and never in `GET /api/lookup`, a log line, or an error. Unset means anonymous, which PeeringDB rate-limits. |
 | `PACKETEER_IXP_MANAGER_API_KEY` | IXP Manager API key for `ixp.members` type `ixf` (#161) and, when that import is the manager export, for the fabric prober's Can Ping GET (#162). Sent only as the `X-IXP-Manager-API-Key` header, never in the URL. The log records the key identifier; the secret is never logged. |
+| `PACKETEER_ATLAS_API_KEY` | Your RIPE Atlas API key for the `atlas` block (#213). Sent only in the `Authorization` header to the Atlas API, never logged, never in the URL, and never in `GET /api/atlas`, the System page, or an error. Unset means the integration makes no request. |
 
 ## Referenced from config
 

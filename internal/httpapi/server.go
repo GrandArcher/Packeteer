@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"github.com/GrandArcher/Packeteer/internal/anomaly"
+	"github.com/GrandArcher/Packeteer/internal/atlas"
 	"github.com/GrandArcher/Packeteer/internal/auth"
 	"github.com/GrandArcher/Packeteer/internal/eventlog"
 	"github.com/GrandArcher/Packeteer/internal/exchange"
@@ -104,6 +105,9 @@ type Options struct {
 	Linkouts *linkout.Set
 	// RingLG answers the NLNOG RING panel (#283). Nil or disabled is off.
 	RingLG *ringlg.Client
+	// Atlas answers the RIPE Atlas panel and on-demand measurements
+	// (#213). Nil or disabled is off.
+	Atlas *atlas.Client
 	// Usage reads the persisted 95th-percentile samples for the Commit &
 	// Cost page (#174). Nil when the storage plugin keeps none.
 	Usage UsageReader
@@ -140,6 +144,7 @@ type Server struct {
 	upgrade    UpgradeControl
 	linkouts   *linkout.Set
 	ringLG     *ringlg.Client
+	atlas      *atlas.Client
 	sysFacts   func() SystemFacts
 	usage      UsageReader
 	setup      atomic.Pointer[Setup]
@@ -241,6 +246,7 @@ func New(opt Options) (*Server, error) {
 	s.setup.Store(&setup)
 	s.linkouts = opt.Linkouts
 	s.ringLG = opt.RingLG
+	s.atlas = opt.Atlas
 	s.sysFacts = opt.System
 	s.usage = opt.Usage
 	if s.linkouts == nil {

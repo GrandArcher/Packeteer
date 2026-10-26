@@ -7,9 +7,11 @@ import (
 	"net/url"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
+	"github.com/GrandArcher/Packeteer/internal/atlas"
 	"github.com/GrandArcher/Packeteer/internal/federation"
 	"github.com/GrandArcher/Packeteer/internal/syshealth"
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
@@ -42,6 +44,7 @@ const (
 	KindFederation  = "federation_peer"
 	KindRPKI        = "rpki"
 	KindIRR         = "irr"
+	KindAtlas       = "atlas"
 )
 
 // Component is one row of the System page. Since is when the state last
@@ -54,6 +57,8 @@ type Component struct {
 	Since  *time.Time `json:"since,omitempty"`
 	Error  string     `json:"error,omitempty"`
 	Detail string     `json:"detail,omitempty"`
+	// Link opens the component's page elsewhere, such as an Atlas probe.
+	Link string `json:"link,omitempty"`
 }
 
 // SystemSummary counts components by state. The overview tile shows it.
@@ -153,6 +158,8 @@ type SystemFacts struct {
 	RIBSources []RIBSourceFact
 	RPKI       []RPKIFact
 	IRR        []IRRFact
+	// Atlas is the RIPE Atlas integration (#213); nil or off adds no row.
+	Atlas *atlas.Status
 }
 
 func (s *Server) handleSystem(w http.ResponseWriter, _ *http.Request) {
@@ -196,6 +203,9 @@ func BuildSystem(snap Snapshot, facts SystemFacts, ha *plugin.ElectorStatus, fed
 	}
 	for _, r := range facts.IRR {
 		add(irrRow(r))
+	}
+	if r, ok := atlasRow(facts.Atlas); ok {
+		add(r)
 	}
 	for _, p := range snap.Providers {
 		add(probeSourceRow(p))
@@ -399,6 +409,48 @@ func irrRow(f IRRFact) Component {
 		c.Detail = "no lookup yet"
 	}
 	return c
+}
+
+// atlasRow shows the own probe's status, the credit balance, and the cap
+// use (#213). A failed read or a probe that is not connected is degraded:
+// measurements still work, only the own probe is missing from them.
+func atlasRow(st *atlas.Status) (Component, bool) {
+	if st == nil || st.State == atlas.StateOff {
+		return Component{}, false
+	}
+	c := Component{Kind: KindAtlas, Name: "ripe-atlas", Type: "api", Link: st.ProbeURL}
+	if st.State == atlas.StateNoKey {
+		c.State, c.Detail = StateIdle, "set "+atlas.KeyEnv+" to use RIPE Atlas"
+		return c, true
+	}
+	c.Error = st.Error
+	c.Since = ptrTime(st.Checked)
+	var parts []string
+	if st.ProbeID > 0 {
+		p := "own probe " + strconv.Itoa(st.ProbeID) + " not read yet"
+		if st.Probe != nil {
+			p = "own probe " + strconv.Itoa(st.ProbeID) + " " + st.Probe.Status
+			if !st.Probe.Since.IsZero() {
+				p += " since " + st.Probe.Since.UTC().Format(time.RFC3339)
+			}
+		}
+		parts = append(parts, p)
+	}
+	if st.Balance != nil {
+		parts = append(parts, strconv.Itoa(*st.Balance)+" credits")
+	}
+	parts = append(parts, fmt.Sprintf("today %d of %d credits", st.CreditsToday, st.MaxCreditsPerDay),
+		fmt.Sprintf("%d of %d measurements in the last hour", st.MeasurementsLastHour, st.MaxMeasurementsPerHour))
+	c.Detail = strings.Join(parts, ", ")
+	switch {
+	case st.Checked.IsZero():
+		c.State = StateIdle
+	case st.Error != "" || st.ProbeID > 0 && (st.Probe == nil || st.Probe.Status != "Connected"):
+		c.State = StateDegraded
+	default:
+		c.State = StateOK
+	}
+	return c, true
 }
 
 func probeSourceRow(p Provider) Component {

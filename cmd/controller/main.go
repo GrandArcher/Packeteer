@@ -23,6 +23,7 @@ import (
 
 	"github.com/GrandArcher/Packeteer/internal/announce"
 	"github.com/GrandArcher/Packeteer/internal/anomaly"
+	"github.com/GrandArcher/Packeteer/internal/atlas"
 	"github.com/GrandArcher/Packeteer/internal/config"
 	"github.com/GrandArcher/Packeteer/internal/exchange"
 	"github.com/GrandArcher/Packeteer/internal/herd"
@@ -590,6 +591,7 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 		fedPush = fed.push
 	}
 	var sysEngine atomic.Pointer[probe.Engine]
+	atl := atlas.New(cfg.Atlas, getenv(atlas.KeyEnv), version, log)
 	var httpSrv *httpapi.Server
 	if addr := cfg.HTTPListen(); addr != "" {
 		var err error
@@ -599,8 +601,8 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 			Maintenance: maint, Reports: reports, Tools: tools, Inbound: inboundStatus, Mitigation: mitAPI, Anomaly: anomAPI, Leaks: leakAPI,
 			Federation: fed.status, FederationPush: fedPush, HA: haStatus,
 			ConfigEditor: editorAPI, FirstRun: firstRunAPI, Dashboards: dashboardStore(plugins), Subscriptions: subsAPI,
-			Setup: setupInfo(cfg, plugins), Upgrade: upgradeAPI, Linkouts: linkout.New(cfg.Linkouts), RingLG: ringlg.New(cfg.RingLG, version),
-			System: systemFacts(plugins, &sysEngine, health, irrChecker), Usage: usageReader(plugins),
+			Setup: setupInfo(cfg, plugins), Upgrade: upgradeAPI, Linkouts: linkout.New(cfg.Linkouts), RingLG: ringlg.New(cfg.RingLG, version), Atlas: atl,
+			System: systemFacts(plugins, &sysEngine, health, irrChecker, atl), Usage: usageReader(plugins),
 		})
 		if err != nil {
 			log.Error("refusing to start", "err", err)
@@ -790,6 +792,7 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 			go atlas.Run(ctx)
 		}
 	}
+	go atl.Run(ctx)
 	if rec != nil {
 		// History is optional: a store that cannot be read leaves the core
 		// loop running without reports.
@@ -884,6 +887,7 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 				in.Reorder = reorderMon.Scored(now, maxResultAge(cfg))
 			}
 			changes, err := runDecision(now, decider, in, ctl, log, snap.Mode, engine)
+			atlasAfterMoves(atl, ctl.Injected, changes, in.Results)
 			fed.publish(now, in, decider.Improvements())
 			if rec != nil {
 				rec.Decision(now, changes, in.Results)

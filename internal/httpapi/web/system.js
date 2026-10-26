@@ -21,6 +21,7 @@ var KIND_TITLES = [
   ["telemetry", "Telemetry"],
   ["rpki", "RPKI"],
   ["irr", "IRR"],
+  ["atlas", "RIPE Atlas"],
   ["federation_peer", "Federation peers"]
 ];
 
@@ -35,7 +36,16 @@ function systemRow(c) {
   tr.appendChild(st);
   tr.appendChild(el("td", "", c.since ? fmtTime(c.since) : "—"));
   tr.appendChild(el("td", c.error ? "bad" : "", c.error || "—"));
-  tr.appendChild(el("td", "", c.detail || ""));
+  var detail = el("td", "", c.detail || "");
+  if (c.link) {
+    var a = el("a", "", "Probe page on atlas.ripe.net");
+    a.href = c.link;
+    a.target = "_blank";
+    a.rel = "noopener noreferrer";
+    detail.appendChild(document.createTextNode(" "));
+    detail.appendChild(a);
+  }
+  tr.appendChild(detail);
   return tr;
 }
 
