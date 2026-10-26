@@ -80,8 +80,10 @@ func Decide(prev State, in Input, cfg Config, scorer plugin.Scorer, now time.Tim
 	}
 	st.expireFlap(now, cfg.Flap, &out)
 
+	var gate *loadGate
 	retire := func(p netip.Prefix, reason string, cooldown bool) {
 		old := st.Improvements[p]
+		gate.release(old)
 		delete(st.Improvements, p)
 		delete(st.confirm, p)
 		if cooldown && cfg.HoldTime > 0 {
@@ -164,6 +166,7 @@ func Decide(prev State, in Input, cfg Config, scorer plugin.Scorer, now time.Tim
 		}
 	}
 
+	gate = newLoadGate(st, in, cfg, now)
 	var wants []pending
 	commitOK := map[netip.Prefix]bool{}
 	decIdx := map[netip.Prefix]*Decision{}
@@ -374,6 +377,12 @@ func Decide(prev State, in Input, cfg Config, scorer plugin.Scorer, now time.Tim
 					continue
 				}
 				if !held {
+					if note, refused := gate.refuse(alt.Provider, p); refused {
+						d.Recommended = alt.Provider
+						d.Action, d.Reason = ActionKeep, note.Reason
+						out.Overloads = append(out.Overloads, note)
+						continue
+					}
 					if st.flapNext(p, now, cfg.Flap) {
 						q := st.quarantinePrefix(p, now, cfg.Flap, &out)
 						retire(p, flapReason(q), false)
@@ -381,6 +390,8 @@ func Decide(prev State, in Input, cfg Config, scorer plugin.Scorer, now time.Tim
 						continue
 					}
 					st.noteFlip(p, now, cfg.Flap)
+					gate.release(imp)
+					gate.book(alt.Provider, p)
 					delete(st.confirm, p)
 					sw := Improvement{Prefix: p, Provider: alt.Provider, Native: imp.Native, Since: now,
 						Reason: reasonText(alt, cur), Cause: plugin.CausePerformance, nativeSeen: imp.nativeSeen, nativeHeld: imp.nativeHeld}
@@ -511,11 +522,9 @@ func Decide(prev State, in Input, cfg Config, scorer plugin.Scorer, now time.Tim
 	// Survivors keep their slots; new wants below only fill what is left.
 	trimToCap(st, decIdx, byPrefix, in.Policies, cfg, retire)
 
-	weightVolume := in.VolumeMbps
-	if in.WeightVolumeMbps != nil {
-		weightVolume = in.WeightVolumeMbps
-	}
-	weighWants(wants, scorer, weightVolume)
+	gate.shed(&st, &out, decIdx, byPrefix, cfg, now, retire)
+
+	weighWants(wants, scorer, in.volumes())
 
 	// Static pins take the cap first, then VIP and other performance
 	// moves. A commit steer already in the
@@ -537,6 +546,13 @@ func Decide(prev State, in Input, cfg Config, scorer plugin.Scorer, now time.Tim
 	})
 	for _, w := range wants {
 		w.d.Cause = w.imp.Cause
+		if w.imp.Cause == plugin.CausePerformance {
+			if note, refused := gate.refuse(w.imp.Provider, w.imp.Prefix); refused {
+				w.d.Reason, w.d.Recommended = note.Reason, w.imp.Provider
+				out.Overloads = append(out.Overloads, note)
+				continue
+			}
+		}
 		if st.flapNext(w.imp.Prefix, now, cfg.Flap) {
 			q := st.quarantinePrefix(w.imp.Prefix, now, cfg.Flap, &out)
 			w.d.Reason, w.d.Recommended = flapReason(q), w.imp.Provider
@@ -553,6 +569,7 @@ func Decide(prev State, in Input, cfg Config, scorer plugin.Scorer, now time.Tim
 			continue
 		}
 		st.noteFlip(w.imp.Prefix, now, cfg.Flap)
+		gate.book(w.imp.Provider, w.imp.Prefix)
 		delete(st.confirm, w.imp.Prefix)
 		st.Improvements[w.imp.Prefix] = w.imp
 		out.Changes = append(out.Changes, Change{Action: ActionImprove, New: w.imp})

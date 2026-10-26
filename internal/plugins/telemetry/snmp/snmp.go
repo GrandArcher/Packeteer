@@ -187,26 +187,31 @@ func (c *Collector) Snapshot(context.Context) ([]plugin.Usage, error) {
 	for _, name := range c.order {
 		st := c.states[name]
 		sum, start, end := st.win.summary(now)
+		capacity := st.spec.capacityMbps
+		if capacity == 0 {
+			capacity = st.speedMbps
+		}
 		row := plugin.Usage{
-			Provider:    st.spec.name,
-			Host:        st.spec.host,
-			Interface:   st.spec.iface,
-			IfIndex:     st.ifIndex,
-			CommitMbps:  st.spec.commitMbps,
-			BillingDay:  st.spec.billingDay,
-			Mode:        st.spec.mode,
-			PeriodStart: start,
-			PeriodEnd:   end,
-			Samples:     sum.Samples,
-			InMbps:      st.lastIn,
-			OutMbps:     st.lastOut,
-			InMbps95:    sum.In95,
-			OutMbps95:   sum.Out95,
-			UsageMbps:   sum.Usage,
-			Single:      sum.Single,
-			Updated:     st.updated,
-			Polled:      st.polled,
-			Error:       st.err,
+			Provider:     st.spec.name,
+			Host:         st.spec.host,
+			Interface:    st.spec.iface,
+			IfIndex:      st.ifIndex,
+			CommitMbps:   st.spec.commitMbps,
+			CapacityMbps: capacity,
+			BillingDay:   st.spec.billingDay,
+			Mode:         st.spec.mode,
+			PeriodStart:  start,
+			PeriodEnd:    end,
+			Samples:      sum.Samples,
+			InMbps:       st.lastIn,
+			OutMbps:      st.lastOut,
+			InMbps95:     sum.In95,
+			OutMbps95:    sum.Out95,
+			UsageMbps:    sum.Usage,
+			Single:       sum.Single,
+			Updated:      st.updated,
+			Polled:       st.polled,
+			Error:        st.err,
 		}
 		out = append(out, row)
 	}

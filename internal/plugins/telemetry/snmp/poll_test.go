@@ -85,6 +85,10 @@ func TestPollRates95thAndReset(t *testing.T) {
 	if rows[0].Samples != 1 || math.Abs(rows[0].InMbps-1) > 0.01 || math.Abs(rows[0].OutMbps-2) > 0.01 {
 		t.Fatalf("rate = %+v", rows[0])
 	}
+	// No capacity_mbps is set, so the capacity is the agent's ifHighSpeed.
+	if rows[0].CapacityMbps != 1000 {
+		t.Fatalf("capacity = %v, want the agent's 1000", rows[0].CapacityMbps)
+	}
 	if !rows[0].Single || math.Abs(rows[0].UsageMbps-2) > 0.01 || rows[0].Mode != plugin.PercentileGreaterSeparate {
 		t.Fatalf("95th = %+v", rows[0])
 	}

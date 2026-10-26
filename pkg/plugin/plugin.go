@@ -427,16 +427,22 @@ type PercentileSummary struct {
 // Rates are decimal megabits per second (bits/1e6, not 1024^2). A telemetry
 // plugin reports usage. It must not announce routes.
 type Usage struct {
-	Provider    string
-	Host        string
-	Interface   string
-	IfIndex     int
-	CommitMbps  float64
-	BillingDay  int
-	Mode        PercentileMode
-	PeriodStart time.Time
-	PeriodEnd   time.Time
-	Samples     int
+	Provider  string
+	Host      string
+	Interface string
+	IfIndex   int
+	// CommitMbps is 0 for an interface with no commit: it has no billable
+	// figure, but its rates and capacity are still reported.
+	CommitMbps float64
+	// CapacityMbps is the interface speed overload protection judges the
+	// outbound rate against (#307): the configured capacity, else the speed
+	// the agent reports. 0 when unknown.
+	CapacityMbps float64
+	BillingDay   int
+	Mode         PercentileMode
+	PeriodStart  time.Time
+	PeriodEnd    time.Time
+	Samples      int
 	// InMbps and OutMbps are the latest accepted sample. They stay set
 	// after the billing period rolls until the next sample, so a reader
 	// can see PeriodStart and Updated together.

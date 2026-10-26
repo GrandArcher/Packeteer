@@ -98,6 +98,11 @@ type ProviderPolicy struct {
 	HasCost    bool
 	// Port names the exchange port this provider's peer shares (#151).
 	Port string
+	// CapacityThresholdPct, when greater than 0, is the share of the
+	// provider's interface capacity its outbound rate may reach (#307). A
+	// performance steer that would pass it is refused and steers already
+	// there are shed. 0 is no limit.
+	CapacityThresholdPct float64
 }
 
 // PortPolicy is one exchange port. Its telemetry row is the one whose
@@ -133,13 +138,16 @@ type Input struct {
 	// Usage is the latest telemetry snapshot. Commit control reads it only
 	// when the scorer implements plugin.Planner.
 	Usage []plugin.Usage
+	// Load is each provider's interface reading for the capacity limit
+	// (#307). A limited provider missing here takes no new steer.
+	Load map[string]Load
 	// VolumeMbps is observed traffic per prefix, decimal megabits per second.
 	// A missing or zero entry is not moved for commit or balance.
 	VolumeMbps map[netip.Prefix]float64
 	// WeightVolumeMbps is per-prefix volume read only for improvement
-	// weights (#34) when the scorer is not a planner. It feeds nothing
-	// else: not commit control, not cost annotations. Nil means use
-	// VolumeMbps.
+	// weights (#34) and the interface capacity limit (#307) when the
+	// scorer is not a planner. It feeds nothing else: not commit control,
+	// not cost annotations. Nil means use VolumeMbps.
 	WeightVolumeMbps map[netip.Prefix]float64
 	// Policies is the routing-policy verdict per probed prefix, from the
 	// configured policy chain. A missing entry means no policy matched.
@@ -251,6 +259,9 @@ type State struct {
 	// quarantine holds the prefixes parked on their native path (#228).
 	quarantine map[netip.Prefix]Quarantine
 	offenses   map[netip.Prefix]offense
+	// shedAt is when the capacity limit last shed a steer off each provider
+	// (#307).
+	shedAt map[string]shedMark
 }
 
 // NewState returns an empty state.
@@ -262,6 +273,7 @@ func NewState() State {
 		flips:        map[netip.Prefix][]time.Time{},
 		quarantine:   map[netip.Prefix]Quarantine{},
 		offenses:     map[netip.Prefix]offense{},
+		shedAt:       map[string]shedMark{},
 	}
 }
 
@@ -284,6 +296,9 @@ func (s State) clone() State {
 	}
 	for k, v := range s.offenses {
 		n.offenses[k] = v
+	}
+	for k, v := range s.shedAt {
+		n.shedAt[k] = v
 	}
 	return n
 }
@@ -403,6 +418,9 @@ type Output struct {
 	// Quarantines are the flap quarantines that started or ended in this
 	// evaluation (#228).
 	Quarantines []QuarantineChange
+	// Overloads are the performance steers the interface capacity limit
+	// refused or shed in this evaluation (#307).
+	Overloads []Overload
 }
 
 func sortedKeys(m map[netip.Prefix]Improvement) []netip.Prefix {

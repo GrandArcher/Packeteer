@@ -41,9 +41,14 @@ type Config struct {
 
 // Provider is one configured usage row.
 type Provider struct {
-	Name       string  `yaml:"name"`
+	Name string `yaml:"name"`
+	// CommitMbps is optional. Without it the row has no billable figure,
+	// like an interface with no commit.
 	CommitMbps float64 `yaml:"commit_mbps"`
-	UsageMbps  float64 `yaml:"usage_mbps"`
+	// CapacityMbps is the interface speed overload protection (#307)
+	// judges OutMbps against. 0 is unknown.
+	CapacityMbps float64 `yaml:"capacity_mbps"`
+	UsageMbps    float64 `yaml:"usage_mbps"`
 	// InMbps is the inbound 95th percentile, read by inbound commit
 	// control. Zero (unset) never exceeds a commit.
 	InMbps float64 `yaml:"in_mbps"`
@@ -132,7 +137,7 @@ func (c *Collector) Snapshot(ctx context.Context) ([]plugin.Usage, error) {
 	out := make([]plugin.Usage, 0, len(rows))
 	for _, p := range rows {
 		out = append(out, plugin.Usage{
-			Provider: p.Name, CommitMbps: p.CommitMbps, Samples: 1, Single: true,
+			Provider: p.Name, CommitMbps: p.CommitMbps, CapacityMbps: p.CapacityMbps, Samples: 1, Single: true,
 			UsageMbps: p.UsageMbps, Mode: plugin.PercentileGreaterSeparate,
 			InMbps: p.InMbps, InMbps95: p.InMbps, OutMbps: p.OutMbps,
 			Updated: now, Polled: now,
@@ -154,8 +159,11 @@ func validate(rows []Provider, known []string) error {
 		if known != nil && !listed(known, p.Name) {
 			return fmt.Errorf("providers[%d]: provider %q is not configured", i, p.Name)
 		}
-		if math.IsNaN(p.CommitMbps) || math.IsInf(p.CommitMbps, 0) || p.CommitMbps <= 0 || p.CommitMbps > maxMbps {
-			return fmt.Errorf("providers[%d]: commit_mbps must be greater than 0 and at most 100000000", i)
+		if math.IsNaN(p.CommitMbps) || math.IsInf(p.CommitMbps, 0) || p.CommitMbps < 0 || p.CommitMbps > maxMbps {
+			return fmt.Errorf("providers[%d]: commit_mbps must be between 0 and 100000000", i)
+		}
+		if math.IsNaN(p.CapacityMbps) || math.IsInf(p.CapacityMbps, 0) || p.CapacityMbps < 0 || p.CapacityMbps > maxMbps {
+			return fmt.Errorf("providers[%d]: capacity_mbps must be between 0 and 100000000", i)
 		}
 		if math.IsNaN(p.UsageMbps) || math.IsInf(p.UsageMbps, 0) || p.UsageMbps < 0 || p.UsageMbps > maxMbps {
 			return fmt.Errorf("providers[%d]: usage_mbps must be between 0 and 100000000", i)

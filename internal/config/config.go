@@ -588,6 +588,13 @@ type Provider struct {
 	// every provider uses the same one. Nil means no cost: the cost scorer
 	// never moves traffic onto this provider or off it for price.
 	Cost *float64 `yaml:"cost"`
+	// InterfaceCapacityThresholdPct is overload protection (#307): the
+	// share of the provider's interface capacity, from its telemetry
+	// binding, that its outbound rate may reach. A performance steer that
+	// would pass it is refused and performance steers already there are
+	// shed. It works with or without a commit. 0 or omitted is off; 1-100
+	// otherwise.
+	InterfaceCapacityThresholdPct float64 `yaml:"interface_capacity_threshold_pct"`
 	// BMP is how this provider uses paths from rib_sources (BMP, #26):
 	// off (default), prefer, or only.
 	BMP string `yaml:"bmp"`

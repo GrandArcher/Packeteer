@@ -189,6 +189,11 @@ func (c *Config) validateProviders(add func(string, ...any)) {
 		if p.Cost != nil && (math.IsNaN(*p.Cost) || *p.Cost < 0 || *p.Cost > 1e9) {
 			add("%s: cost %v must be between 0 and 1000000000", label, *p.Cost)
 		}
+		if pct := p.InterfaceCapacityThresholdPct; math.IsNaN(pct) || pct < 0 || pct > 100 {
+			add("%s: interface_capacity_threshold_pct %v must be between 0 and 100 (0 is off)", label, pct)
+		} else if pct > 0 && len(c.Telemetry) == 0 {
+			add("%s: interface_capacity_threshold_pct requires a telemetry plugin (a provider with no interface reading takes no new performance steer)", label)
+		}
 		switch p.BMP {
 		case "", BMPOff:
 		case BMPPrefer, BMPOnly:

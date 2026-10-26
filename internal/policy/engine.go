@@ -59,6 +59,14 @@ func (e *Engine) QuarantineChanges() []QuarantineChange {
 	return append([]QuarantineChange(nil), e.last.Quarantines...)
 }
 
+// OverloadChanges are the performance steers the interface capacity limit
+// refused or shed in the latest evaluation (#307).
+func (e *Engine) OverloadChanges() []Overload {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	return append([]Overload(nil), e.last.Overloads...)
+}
+
 // Release ends a prefix's quarantine at an operator's request. It reports
 // false when the prefix is not quarantined. It announces nothing: the next
 // evaluation decides the prefix as usual, and a prefix that flips again is

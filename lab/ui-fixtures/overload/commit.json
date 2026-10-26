@@ -1,0 +1,22 @@
+{
+  "version": "ci",
+  "mode": "observe",
+  "ready": true,
+  "generated_at": "2026-10-26T12:20:00Z",
+  "days": 7,
+  "from": "2026-10-19T12:20:00Z",
+  "to": "2026-10-26T12:20:00Z",
+  "step_seconds": 1800,
+  "samples_stored": true,
+  "moves_recorded": true,
+  "providers": [
+    {"provider": "transit-a", "host": "edge", "interface": "ether1", "commit_mbps": 1000, "billing_day": 1, "percentile": "separate",
+     "period_start": "2026-10-01T00:00:00Z", "period_end": "2026-11-01T00:00:00Z", "samples": 40,
+     "in_mbps": 100, "out_mbps": 400, "in_mbps_95": 120, "out_mbps_95": 400, "updated": "2026-10-26T12:15:00Z",
+     "capacity_mbps": 2000, "utilization_pct": 20, "billable_mbps": 400, "points": [], "moves": []},
+    {"provider": "transit-b", "host": "edge", "interface": "ether2", "commit_mbps": 0, "billing_day": 1, "percentile": "separate",
+     "period_start": "2026-10-01T00:00:00Z", "period_end": "2026-11-01T00:00:00Z", "samples": 40,
+     "in_mbps": 100, "out_mbps": 912.5, "in_mbps_95": 120, "out_mbps_95": 900, "updated": "2026-10-26T12:15:00Z",
+     "capacity_mbps": 1000, "capacity_threshold_pct": 85, "utilization_pct": 91.25, "overloaded": true, "points": [], "moves": []}
+  ]
+}

@@ -141,6 +141,7 @@ func policyConfig(cfg *config.Config) (policy.Config, error) {
 		}
 		pp := policy.ProviderPolicy{
 			Name: p.Name, Group: p.Group, Precedence: p.Precedence, CCDisable: p.CCDisable,
+			CapacityThresholdPct: p.InterfaceCapacityThresholdPct,
 		}
 		if ported[p.Exchange] {
 			pp.Port = p.Exchange

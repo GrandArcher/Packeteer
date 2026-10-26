@@ -66,6 +66,8 @@ type eventWatch struct {
 	waiting        map[netip.Addr]time.Time
 	stuck          map[netip.Addr]bool
 	overCommit     map[string]bool
+	overloaded     map[string]bool
+	refused        map[string]bool
 	rpkiUsable     map[string]bool
 	commitChecked  time.Time
 	announceFailed bool
@@ -91,7 +93,8 @@ func (w *eventWatch) commitDue(now time.Time) bool {
 
 func newEventWatch(out emitter, mode string) *eventWatch {
 	return &eventWatch{out: out, mode: mode, providers: map[string]string{}, peers: map[netip.Addr]bool{},
-		waiting: map[netip.Addr]time.Time{}, stuck: map[netip.Addr]bool{}, overCommit: map[string]bool{}, rpkiUsable: map[string]bool{}}
+		waiting: map[netip.Addr]time.Time{}, stuck: map[netip.Addr]bool{}, overCommit: map[string]bool{},
+		overloaded: map[string]bool{}, refused: map[string]bool{}, rpkiUsable: map[string]bool{}}
 }
 
 // SetMode records the mode a reload applied. Improvement events say

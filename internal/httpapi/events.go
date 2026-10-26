@@ -39,6 +39,7 @@ var eventHelp = map[string]string{
 	"audit":           "docs/auth.md#audit-log",
 	"flap":            "docs/CONFIG.md#flap_quarantine",
 	"steer":           "docs/CONFIG.md#verify",
+	"overload":        "docs/CONFIG.md#providers",
 	"exchange":        "docs/CONFIG.md#exchanges",
 	"exchange_peer":   "docs/CONFIG.md#exchanges",
 	"exchange_prefix": "docs/CONFIG.md#exchanges",

@@ -1374,6 +1374,53 @@ jobs:
           bash lab/ui-smoke.sh "http://127.0.0.1:18306/improvements.html" 'Steer verification' 'Verified' 'Partial' 'Not moved' 'Pending' 'Unknown' \
             'backed out' 'to transit-b' 'away from transit-a' '38 Mbps (95%)' '12 Mbps (30%)' '198.51.100.0/24' 'held off 30m0s' \
             --absent 'id="verification-section" hidden=""' 'No steer has been checked yet.' 'Cannot reach'
+      - name: UI interface capacity smoke (#307; a provider with no commit past its limit, from a canned /api/commit, observe)
+        run: |
+          set -euo pipefail
+          base=http://127.0.0.1:18307
+          cat > /tmp/ui307.yaml <<'YAML'
+          mode: observe
+          asn: 64512
+          router_id: 192.0.2.10
+          auth: {enabled: false}
+          http:
+            listen: "127.0.0.1:18307"
+          providers:
+            - name: lab-a
+              source_ip: 127.0.0.1
+              next_hop: 192.0.2.1
+          YAML
+          docker run -d --name pkui307 --network host --cap-add NET_RAW --cap-add NET_ADMIN \
+            -v /tmp/ui307.yaml:/etc/packeteer/config.yaml:ro packeteer:ci
+          proxy=""
+          cleanup() {
+            if [ -n "$proxy" ]; then kill "$proxy" 2>/dev/null || true; fi
+            docker stop -t 15 pkui307 >/dev/null || true
+            docker logs pkui307 2>&1 | tail -n 40
+            code="$(docker inspect -f '{{.State.ExitCode}}' pkui307)"
+            docker rm pkui307 >/dev/null || true
+            test "$code" = "0"
+          }
+          trap cleanup EXIT
+          ok=0
+          for _ in $(seq 1 30); do
+            if curl -fsS "$base/healthz" >/dev/null 2>&1; then ok=1; break; fi
+            sleep 1
+          done
+          test "$ok" = 1
+          go build -o /tmp/uiproxy ./lab/uiproxy
+          /tmp/uiproxy -listen 127.0.0.1:18308 -upstream "$base" -user lab -password lab-only \
+            -fixtures lab/ui-fixtures/overload >/tmp/uiproxy307.log 2>&1 &
+          proxy=$!
+          for _ in $(seq 1 20); do
+            curl -fsS http://127.0.0.1:18308/healthz >/dev/null 2>&1 && break
+            sleep 0.2
+          done
+          curl -fsS http://127.0.0.1:18308/healthz >/dev/null
+          bash lab/ui-smoke.sh "http://127.0.0.1:18308/commit.html" 'Outbound of capacity' 'Capacity (Mbps)' \
+            '91.3% (limit 85%)' '20%' 'transit-b: no commit set; outbound 91.3% of 1000 Mbps (limit 85%)' \
+            'transit-a: billable 95th 400 of 1000 Mbps commit (40%); outbound 20% of 2000 Mbps' \
+            --absent 'Cannot reach' 'No provider has a telemetry binding'
       - name: UI prefix list smoke (#183; a 100000-prefix list from canned pages, observe)
         run: |
           set -euo pipefail
@@ -2734,6 +2781,8 @@ jobs:
         run: bash lab/e2e-verify-inbound.sh
       - name: FRR steer verification lab, outbound (#305; traffic moves and the improvement is verified, traffic does not move and the improvement is reported, SIGTERM)
         run: bash lab/e2e-verify-outbound.sh
+      - name: FRR overload protection lab (#307; a steer refused at the interface limit, admitted when it fits, shed when the provider passes the limit, SIGTERM)
+        run: bash lab/e2e-overload.sh
       - name: FRR BMP lab (inactive path, route check, BMP loss)
         run: bash lab/e2e-bmp.sh
       - name: FRR add-path lab (inactive path over iBGP add-path, route check, SIGTERM, SIGKILL)

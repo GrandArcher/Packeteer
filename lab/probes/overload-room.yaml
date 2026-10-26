@@ -1,0 +1,5 @@
+# Outbound rates for lab/e2e-overload.sh (#307). transit-b is at 70%: the steer fits.
+providers:
+  - name: transit-b
+    capacity_mbps: 1000
+    out_mbps: 700

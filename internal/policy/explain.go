@@ -21,6 +21,7 @@ const (
 	GateConfirm    = "confirm_rounds"
 	GateHoldTime   = "hold_time"
 	GateCap        = "cap"
+	GateOverload   = "overload"
 	GatePolicy     = "policy"
 	GateAllowlist  = "allowlist"
 	GateRouteCheck = "route_check"
@@ -346,7 +347,11 @@ func buildExplain(d Decision, f explainFacts, cfg Config, capUsed int) Explain {
 	// The evidence gate fails only on a move the rule refused, which never
 	// reached confirm_rounds or the cap.
 	evidenceStopped := g[GateEvidence].Status == GateFail
+	overloadStopped := !retired && strings.HasPrefix(d.Reason, overloadRefused)
 	reached := moved || (pairBetter && !static && !plan && !evidenceStopped)
+	if overloadStopped {
+		g[GateOverload] = Gate{Name: GateOverload, Status: GateFail, Limit: "providers[].interface_capacity_threshold_pct", Detail: strings.TrimPrefix(d.Reason, overloadRefused)}
+	}
 	notReached := func(name string) Gate {
 		switch {
 		case retired:
@@ -367,6 +372,9 @@ func buildExplain(d Decision, f explainFacts, cfg Config, capUsed int) Explain {
 			g[GateCap] = capGate(d, f, cfg, capUsed)
 		}
 	}
+	if overloadStopped {
+		g[GateCap] = Gate{Name: GateCap, Status: GateSkip, Detail: "not reached: the interface capacity limit refused the move"}
+	}
 	switch {
 	case switching:
 		g[GateConfirm] = confirmGate(d, f, cfg, false)
@@ -384,9 +392,12 @@ func buildExplain(d Decision, f explainFacts, cfg Config, capUsed int) Explain {
 		g[GateHoldTime] = holdGate(d, f, cfg)
 	}
 
-	order := []string{GateRIB, GateFreshness, GateThresholds, GateEvidence, GateConfirm, GateHoldTime, GateCap, GatePolicy, GateAllowlist, GateRouteCheck, GateRPKI, GateIRR}
+	order := []string{GateRIB, GateFreshness, GateThresholds, GateEvidence, GateConfirm, GateHoldTime, GateOverload, GateCap, GatePolicy, GateAllowlist, GateRouteCheck, GateRPKI, GateIRR}
 	for _, n := range order {
-		ex.Gates = append(ex.Gates, g[n])
+		// The overload gate is listed only when it refused the move.
+		if gate, ok := g[n]; ok || n != GateOverload {
+			ex.Gates = append(ex.Gates, gate)
+		}
 	}
 
 	switch d.Action {
@@ -740,9 +751,9 @@ func blockedBy(g map[string]Gate, f explainFacts, d Decision, pairBetter, pinSto
 		}
 		return failed(GateThresholds)
 	case f.active:
-		return failed(GateEvidence, GateConfirm, GateHoldTime, GateAllowlist, GateCap)
+		return failed(GateEvidence, GateConfirm, GateHoldTime, GateOverload, GateAllowlist, GateCap)
 	}
-	return failed(GateEvidence, GateHoldTime, GateAllowlist, GateConfirm, GateCap)
+	return failed(GateEvidence, GateHoldTime, GateAllowlist, GateConfirm, GateOverload, GateCap)
 }
 
 func counterfactual(blocked string, d Decision, f explainFacts, cfg Config, cur, ch Candidate, haveCur, haveCh bool, capUsed int) string {
@@ -779,6 +790,8 @@ func counterfactual(blocked string, d Decision, f explainFacts, cfg Config, cur,
 			}
 		}
 		return "would move to " + to + " once " + strings.Join(weak, " and ") + " is measured by a tcp, udp, or https reply or agrees with passive TCP evidence, or with thresholds.require_evidence off"
+	case GateOverload:
+		return "would move to " + d.Recommended + " once its interface is back under providers[].interface_capacity_threshold_pct, or with room for this prefix's volume"
 	case GateConfirm:
 		return fmt.Sprintf("would move to %s after %d more fresh winning round(s)", f.challenger, max(cfg.confirmRounds()-f.streak, 1))
 	case GateHoldTime:

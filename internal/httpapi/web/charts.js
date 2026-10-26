@@ -258,6 +258,21 @@ function commitDataTable(pts) {
   return det;
 }
 
+// loadText is the outbound rate against the interface capacity (#307), or
+// "" when the capacity is unknown.
+function loadText(p) {
+  if (p.utilization_pct == null || p.capacity_mbps == null) return "";
+  return "outbound " + loadPct(p) + " of " + mbps(p.capacity_mbps) + " Mbps" + limitText(p);
+}
+
+function loadPct(p) {
+  return (Math.round(p.utilization_pct * 10) / 10) + "%";
+}
+
+function limitText(p) {
+  return p.capacity_threshold_pct > 0 ? " (limit " + p.capacity_threshold_pct + "%)" : "";
+}
+
 function commitPercent(p) {
   if (p.billable_mbps == null || !(p.commit_mbps > 0)) return null;
   return Math.round(p.billable_mbps * 1000 / p.commit_mbps) / 10;
@@ -284,7 +299,11 @@ function renderCommitGraphs(root, data) {
     var pts = p.points || [];
     var fig = el("figure", "ts-fig usage-fig");
     var pct = commitPercent(p);
-    fig.appendChild(el("figcaption", "", p.provider + ": billable 95th " + mbps(p.billable_mbps) + " of " + mbps(p.commit_mbps) + " Mbps commit" + (pct == null ? "" : " (" + pct + "%)")));
+    var caption = p.commit_mbps > 0 ?
+      p.provider + ": billable 95th " + mbps(p.billable_mbps) + " of " + mbps(p.commit_mbps) + " Mbps commit" + (pct == null ? "" : " (" + pct + "%)") :
+      p.provider + ": no commit set";
+    var load = loadText(p);
+    fig.appendChild(el("figcaption", "", caption + (load ? "; " + load : "")));
     if (!pts.length) {
       fig.appendChild(el("p", "empty usage-empty", data.samples_stored ? "No stored samples for " + p.provider + " in this range." : "No stored samples."));
     } else {

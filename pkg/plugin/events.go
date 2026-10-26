@@ -65,6 +65,9 @@ const (
 	EventLeakCleared        = "leak.cleared"
 	EventSteerUnverified    = "steer.unverified"
 	EventSteerVerified      = "steer.verified"
+	EventOverloadRefused    = "overload.refused"
+	EventOverloadShed       = "overload.shed"
+	EventOverloadCleared    = "overload.cleared"
 	EventFlapQuarantined    = "flap.quarantined"
 	EventFlapReleased       = "flap.released"
 	EventExchangeDegraded   = "exchange.degraded"
@@ -247,6 +250,12 @@ var eventCatalog = []EventSpec{
 		Summary: "Routing anomaly: after an outbound improvement or an inbound steer, the interface counters show less than verified_pct of the expected traffic moved (partial or not moved, #305). Fields say whether the steer was backed out."},
 	{Kind: EventSteerVerified, Severity: SeverityInfo, Group: "steer", Keys: []string{"kind", "target"}, TrapID: 67, Resolves: true,
 		Summary: "Verification found the traffic moved after a steer (outbound improvement or inbound steer). Resolves steer.unverified for the same target."},
+	{Kind: EventOverloadRefused, Severity: SeverityWarning, Group: "overload", Keys: []string{"provider"}, TrapID: 68,
+		Summary: "A performance steer onto a provider was refused because it would push the provider's interface past interface_capacity_threshold_pct, or the interface reading is missing (#307). Sent once per prefix and provider until the steer is allowed."},
+	{Kind: EventOverloadShed, Severity: SeverityWarning, Group: "overload", Keys: []string{"provider"}, TrapID: 69,
+		Summary: "A provider's interface is past interface_capacity_threshold_pct, so a performance steer onto it was withdrawn, lowest gain first (#307)."},
+	{Kind: EventOverloadCleared, Severity: SeverityInfo, Group: "overload", Keys: []string{"provider"}, TrapID: 70, Resolves: true,
+		Summary: "A provider that refused or shed steers is back under interface_capacity_threshold_pct (#307). Resolves overload.refused and overload.shed."},
 	{Kind: EventHerdRestarted, Severity: SeverityInfo, Group: "herd", TrapID: 63,
 		Summary: "A herd goroutine (recorder or puller) panicked and was restarted with backoff. Probing, decisions, and the announcer are not affected."},
 	{Kind: EventRPKIStale, Severity: SeverityWarning, Group: "rpki", Keys: []string{"source"}, TrapID: 64,
