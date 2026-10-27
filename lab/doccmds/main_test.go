@@ -171,46 +171,30 @@ func TestQuickstartRunsEveryCommandInObserve(t *testing.T) {
 	}
 }
 
-// The FRR guide shows the lab edge's file verbatim, so CI runs the guide.
-func TestFRRGuideIsTheLabConfig(t *testing.T) {
-	doc := repoFile(t, "docs/frr.md")
-	const marker = "<!-- lab-file: lab/frr-walkthrough/frr.conf -->\n```\n"
-	i := strings.Index(doc, marker)
-	if i < 0 {
-		t.Fatal("docs/frr.md has no lab-file block")
-	}
-	rest := doc[i+len(marker):]
-	j := strings.Index(rest, "```\n")
-	if j < 0 {
-		t.Fatal("unterminated lab-file block")
-	}
-	if got, want := rest[:j], repoFile(t, "lab/frr-walkthrough/frr.conf"); got != want {
-		t.Fatalf("docs/frr.md differs from lab/frr-walkthrough/frr.conf:\n--- guide\n%s\n--- lab\n%s", got, want)
-	}
-	compose := repoFile(t, "lab/docker-compose-walkthrough.yml")
-	if !strings.Contains(compose, "./frr-walkthrough:/etc/frr") {
-		t.Fatal("the walkthrough lab does not mount lab/frr-walkthrough")
-	}
-}
-
-// The VRF guide shows the VRF lab edge's file verbatim (#206).
-func TestVRFGuideIsTheLabConfig(t *testing.T) {
-	doc := repoFile(t, "docs/vrf.md")
-	const marker = "<!-- lab-file: lab/frr-vrf/frr.conf -->\n```\n"
-	i := strings.Index(doc, marker)
-	if i < 0 {
-		t.Fatal("docs/vrf.md has no lab-file block")
-	}
-	rest := doc[i+len(marker):]
-	j := strings.Index(rest, "```\n")
-	if j < 0 {
-		t.Fatal("unterminated lab-file block")
-	}
-	if got, want := rest[:j], repoFile(t, "lab/frr-vrf/frr.conf"); got != want {
-		t.Fatalf("docs/vrf.md differs from lab/frr-vrf/frr.conf:\n--- guide\n%s\n--- lab\n%s", got, want)
-	}
-	if !strings.Contains(repoFile(t, "lab/docker-compose-vrf.yml"), "./frr-vrf:/etc/frr") {
-		t.Fatal("the VRF lab does not mount lab/frr-vrf")
+// The FRR guides show their lab edge's file verbatim, so CI runs the
+// guide: the walkthrough edge, and the VRF edge (#206).
+func TestFRRGuidesAreTheLabConfig(t *testing.T) {
+	for _, tc := range []struct{ doc, lab, compose, mount string }{
+		{"docs/frr.md", "lab/frr-walkthrough/frr.conf", "lab/docker-compose-walkthrough.yml", "./frr-walkthrough:/etc/frr"},
+		{"docs/vrf.md", "lab/frr-vrf/frr.conf", "lab/docker-compose-vrf.yml", "./frr-vrf:/etc/frr"},
+	} {
+		doc := repoFile(t, tc.doc)
+		marker := "<!-- lab-file: " + tc.lab + " -->\n```\n"
+		i := strings.Index(doc, marker)
+		if i < 0 {
+			t.Fatalf("%s has no lab-file block", tc.doc)
+		}
+		rest := doc[i+len(marker):]
+		j := strings.Index(rest, "```\n")
+		if j < 0 {
+			t.Fatalf("%s: unterminated lab-file block", tc.doc)
+		}
+		if got, want := rest[:j], repoFile(t, tc.lab); got != want {
+			t.Fatalf("%s differs from %s:\n--- guide\n%s\n--- lab\n%s", tc.doc, tc.lab, got, want)
+		}
+		if !strings.Contains(repoFile(t, tc.compose), tc.mount) {
+			t.Fatalf("%s does not mount %s", tc.compose, tc.mount)
+		}
 	}
 }
 

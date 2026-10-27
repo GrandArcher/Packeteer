@@ -7,14 +7,14 @@ This guide covers two edge layouts (#206): the transit sessions live in a VRF (a
 Packeteer speaks IPv4 and IPv6 unicast iBGP. It does not speak the VPNv4 or VPNv6 families (RFC 4364), so it never sees route distinguishers or route targets. Put its session inside the internet VRF on the router, next to the transit sessions. From Packeteer's side it is an ordinary iBGP session, and nothing in its config names the VRF:
 
 - It learns the VRF's best paths, and each provider's `next_hop` is the transit's address as the VRF sees it.
-- An injected route lands in the VRF's table only. Routes in the default VRF or another VRF are not touched.
+- An injected route lands in the VRF's table. It stays on this router only while the VRF neither exports it (a route target toward other PEs) nor leaks it into another VRF: NO_EXPORT does not stop it inside your AS, and over VPNv4 another PE would see it with Packeteer's local preference. Deny `packeteer_community` in the VRF's export and leak policies, as `ebgp-out` does toward the transits.
 - The rules do not change: allowlist, learned prefixes only, `max_improvements`, `packeteer_community` plus `no-export`, hold time, no graceful restart, and withdraw on SIGTERM, on stale data, and with the session on SIGKILL.
 
 Peer every session of one Packeteer instance into the same VRF. The learned view and the announcer do not tell VRFs apart: a second VRF's routes would mix with the first, and a steer would be sent into both.
 
 ### FRR
 
-The edge is AS 64512. Its interface toward Packeteer (`192.0.2.10`) and both transits is in the Linux VRF `internet`. transit-a (AS 64496, `192.0.2.21`) sends a partial table and a default route; transit-b (AS 64497, `192.0.2.22`) sends a default route only. The lab creates the VRF before FRR starts (`ip link add internet type vrf table 10`, then `ip link set <interface> master internet`; see `lab/frr-vrf-start.sh`).
+The edge is AS 64512. Its interface toward Packeteer (`192.0.2.10`) and both transits is in the Linux VRF `internet`. transit-a (AS 64496, `192.0.2.21`) sends a partial table and a default route; transit-b (AS 64497, `192.0.2.22`) sends a default route only. The lab creates the VRF before FRR starts (`ip link add internet type vrf table 10`, `ip link set internet up`, then `ip link set <interface> master internet`; see `lab/frr-vrf-start.sh`).
 
 <!-- lab-file: lab/frr-vrf/frr.conf -->
 ```
@@ -77,7 +77,7 @@ router bgp 64512 vrf internet
 !
 ```
 
-The filters are the ones in [frr.md](frr.md), applied to the neighbors under `router bgp 64512 vrf internet`. Check with `show bgp vrf internet summary` and `show bgp vrf internet ipv4 unicast 198.51.100.0/24`; the kernel route is in `ip route show vrf internet`.
+The filters are the standard-community part of the ones in [frr.md](frr.md), applied to the neighbors under `router bgp 64512 vrf internet`. Check with `show bgp vrf internet summary` and `show bgp vrf internet ipv4 unicast 198.51.100.0/24`; the kernel route is in `ip route show vrf internet`.
 
 ### Other routers
 

@@ -524,8 +524,8 @@ func TestStandbyAnnouncesNothing(t *testing.T) {
 // nor are the learned prefixes inside it as its more-specifics.
 func TestDefaultRouteIsNeverAnnounced(t *testing.T) {
 	ctx := context.Background()
-	v4, v6, learned := pfx("0.0.0.0/0"), pfx("::/0"), pfx("198.51.100.0/24")
-	rib := memRIB{ready: true, has: map[netip.Prefix]bool{v4: true, v6: true, learned: true}}
+	v4, v6, learned, inside := pfx("0.0.0.0/0"), pfx("::/0"), pfx("198.51.100.0/24"), pfx("203.0.113.0/24")
+	rib := memRIB{ready: true, has: map[netip.Prefix]bool{v4: true, v6: true, learned: true, inside: true}}
 	cfg := testCfg()
 	cfg.Allowlist = []netip.Prefix{v4, v6}
 	cfg.MoreSpecific, cfg.MaxRoutes = true, 50
@@ -543,5 +543,8 @@ func TestDefaultRouteIsNeverAnnounced(t *testing.T) {
 	}
 	if _, ok := ann.routes[learned]; !ok {
 		t.Fatalf("learned prefix not announced: %v", ann.routes)
+	}
+	if _, ok := ann.routes[inside]; ok {
+		t.Fatalf("%s announced as a more-specific of the default route", inside)
 	}
 }

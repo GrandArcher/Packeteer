@@ -1,5 +1,4 @@
-# Lab only. zebra and staticd are required so the blackhole routes exist;
-# bgpd is the simulated edge.
+# Lab only. Simulated transit: bgpd only.
 zebra=yes
 bgpd=yes
 staticd=yes
