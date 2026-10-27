@@ -1,6 +1,7 @@
 package blast
 
 import (
+	"encoding/json"
 	"net/netip"
 	"slices"
 	"strings"
@@ -191,6 +192,35 @@ func TestBuildNoSaturationWarningWhenTrafficLeaves(t *testing.T) {
 	for _, s := range rep.Providers {
 		if s.Provider == "b" && s.ProjectedMbps != 100 {
 			t.Fatalf("b projected = %v, want 100", s.ProjectedMbps)
+		}
+	}
+}
+
+func TestShiftZeroMbpsInJSON(t *testing.T) {
+	// The Settings page reads current_mbps and projected_mbps whenever
+	// capacity_mbps is set, so a zero must be sent, not dropped: b is an
+	// idle backup taking pA, and all of a's traffic moves off.
+	usage := []plugin.Usage{{Provider: "a", OutMbps: 20, CapacityMbps: 1000}, {Provider: "b", CapacityMbps: 1000}}
+	rep := Build(Params{Now: now, Cfg: inject(pA), What: what(imp(pA, "a", "b")), Usage: usage,
+		Volumes: map[netip.Prefix]float64{pA: 20}})
+	raw, err := json.Marshal(rep.Providers)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []map[string]any
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatal(err)
+	}
+	want := map[string][2]float64{"a": {20, 0}, "b": {0, 20}}
+	if len(got) != len(want) {
+		t.Fatalf("providers = %s", raw)
+	}
+	for _, s := range got {
+		w := want[s["provider"].(string)]
+		cur, okC := s["current_mbps"].(float64)
+		proj, okP := s["projected_mbps"].(float64)
+		if !okC || !okP || cur != w[0] || proj != w[1] {
+			t.Fatalf("providers = %s, want %s current %v projected %v present", raw, s["provider"], w[0], w[1])
 		}
 	}
 }

@@ -90,6 +90,18 @@ assert(body.indexOf("2 announced routes stay") >= 0, "kept routes counted: " + b
 assert(body.indexOf("transit-b: +12.5 Mbps in, -0.0 Mbps out (at least; 1 without a volume). Now 80.0, after 92.5 of 100.0 Mbps capacity") >= 0, "provider shift: " + body);
 assert(body.indexOf("Warnings (2)") >= 0 && body.indexOf("over its limit of 90.0 Mbps") >= 0 && body.indexOf("192.0.2.0/24 and more") >= 0, "warnings: " + body);
 
+// An idle backup taking traffic and a provider that all traffic leaves:
+// a zero rate must render, and a missing rate renders as 0.
+var idle = JSON.parse(JSON.stringify(report));
+idle.providers = [
+  {provider: "transit-c", in_mbps: 25, out_mbps: 0, unknown: 0, current_mbps: 0, projected_mbps: 25, capacity_mbps: 1000},
+  {provider: "transit-a", in_mbps: 0, out_mbps: 40, unknown: 0, current_mbps: 40, capacity_mbps: 1000}
+];
+context.renderBlast(idle);
+body = text(els["bl-body"]);
+assert(body.indexOf("transit-c: +25.0 Mbps in, -0.0 Mbps out. Now 0.0, after 25.0 of 1000.0 Mbps capacity") >= 0, "idle provider: " + body);
+assert(body.indexOf("transit-a: +0.0 Mbps in, -40.0 Mbps out. Now 40.0, after 0.0 of 1000.0 Mbps capacity") >= 0, "drained provider: " + body);
+
 var observe = JSON.parse(JSON.stringify(report));
 observe.announces = false;
 context.renderBlast(observe);

@@ -61,8 +61,8 @@ type Shift struct {
 	InMbps        float64 `json:"in_mbps"`
 	OutMbps       float64 `json:"out_mbps"`
 	Unknown       int     `json:"unknown"`
-	CurrentMbps   float64 `json:"current_mbps,omitempty"`
-	ProjectedMbps float64 `json:"projected_mbps,omitempty"`
+	CurrentMbps   float64 `json:"current_mbps"`
+	ProjectedMbps float64 `json:"projected_mbps"`
 	CapacityMbps  float64 `json:"capacity_mbps,omitempty"`
 	LimitMbps     float64 `json:"limit_mbps,omitempty"`
 	CommitMbps    float64 `json:"commit_mbps,omitempty"`
@@ -107,7 +107,8 @@ type Params struct {
 	// What is the Decide outcome under Cfg.
 	What policy.WhatIf
 	// Refuse returns why the announcer would refuse a prefix the decision
-	// kept (leak-watch hold, inbound or mitigation reservation), or "".
+	// kept (leak-watch hold, inbound or mitigation reservation, not in the
+	// learned RIB), or "".
 	Refuse func(netip.Prefix) string
 	// Volumes is observed Mbps per prefix; nil when no flow source is
 	// configured.

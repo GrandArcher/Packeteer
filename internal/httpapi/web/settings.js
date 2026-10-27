@@ -2433,7 +2433,7 @@ function blastRoute(r) {
 function blastShift(s) {
   var text = s.provider + ": +" + s.in_mbps.toFixed(1) + " Mbps in, -" + s.out_mbps.toFixed(1) + " Mbps out";
   if (s.unknown) text += " (at least; " + s.unknown + " without a volume)";
-  if (s.capacity_mbps) text += ". Now " + s.current_mbps.toFixed(1) + ", after " + s.projected_mbps.toFixed(1) + " of " + s.capacity_mbps.toFixed(1) + " Mbps capacity";
+  if (s.capacity_mbps) text += ". Now " + (s.current_mbps || 0).toFixed(1) + ", after " + (s.projected_mbps || 0).toFixed(1) + " of " + s.capacity_mbps.toFixed(1) + " Mbps capacity";
   return text;
 }
 
