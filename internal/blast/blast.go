@@ -348,7 +348,7 @@ func measurementWarnings(p Params) []Warning {
 	for _, a := range p.Cfg.Allowlist {
 		covered := false
 		for pfx := range newest {
-			if a.Bits() <= pfx.Bits() && a.Contains(pfx.Addr()) {
+			if netpfx.CoveredBy([]netip.Prefix{a}, pfx) {
 				covered = true
 				break
 			}

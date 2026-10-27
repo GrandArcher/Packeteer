@@ -82,7 +82,7 @@ func (s *Server) blastReply(w http.ResponseWriter, err error) bool {
 // is saved only with that token, from the same revision of the file.
 func (s *Server) configGate(w http.ResponseWriter, r *http.Request, req configRequest, res configedit.Result) bool {
 	b := s.blastControl()
-	dry := req.DryRun != nil && *req.DryRun
+	dry := req.DryRun
 	switch {
 	case dry && b == nil:
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "the blast-radius preview is not available on this instance"})

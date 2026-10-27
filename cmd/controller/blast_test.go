@@ -159,7 +159,7 @@ func TestBlastPreviewMatchesInject(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := []netip.Prefix{cand.Add[0].Prefix, cand.Add[1].Prefix}; len(cand.Add) != 2 || !slices.Equal(got, []netip.Prefix{other, target}) {
+	if len(cand.Add) != 2 || cand.Add[0].Prefix != other || cand.Add[1].Prefix != target {
 		t.Fatalf("candidate add = %+v, want both prefixes", cand.Add)
 	}
 

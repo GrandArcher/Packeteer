@@ -139,7 +139,7 @@ type configRequest struct {
 	// DryRun true answers with the blast-radius preview and writes nothing.
 	// A change that can alter announcements is saved only with DryRun false
 	// and the PreviewToken that dry run returned (#227).
-	DryRun       *bool  `json:"dry_run"`
+	DryRun       bool   `json:"dry_run"`
 	PreviewToken string `json:"preview_token"`
 }
 
