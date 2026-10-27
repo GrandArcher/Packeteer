@@ -181,8 +181,8 @@ func TestConfigSavePreviewTokenExpires(t *testing.T) {
 		t.Fatal("an expired token saved the file")
 	}
 
-	// The stamp is signed: an expired token re-stamped to now, or to the
-	// future, does not open the save.
+	// The stamp is signed: an expired token re-stamped to now (inside the
+	// window) does not open the save; a future stamp is refused on time.
 	_, sig, _ := strings.Cut(token, ".")
 	for _, at := range []time.Time{clock, clock.Add(time.Minute)} {
 		forged := strconv.FormatInt(at.Unix(), 10) + "." + sig
