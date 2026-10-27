@@ -342,7 +342,7 @@ func measurementWarnings(p Params) []Warning {
 	var out []Warning
 	if len(stale) > 0 {
 		out = append(out, Warning{Code: WarnStale, Count: len(stale), Prefixes: head(stale),
-			Message: fmt.Sprintf("%d allowlisted prefixes lack recent measurements and would stay on their native path", len(stale))})
+			Message: fmt.Sprintf("%d allowlisted prefixes lack a recent successful measurement and would stay on their native path", len(stale))})
 	}
 	var bare []string
 	for _, a := range p.Cfg.Allowlist {

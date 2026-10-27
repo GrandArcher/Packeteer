@@ -148,7 +148,6 @@ func TestBlastPreviewMatchesInject(t *testing.T) {
 	}
 
 	// Previewing announced nothing and changed no state.
-	time.Sleep(300 * time.Millisecond)
 	if _, _, ok := packeteerPath(t, edge, target.String()); ok || ctl.Active() != 0 || len(decider.Improvements()) != 2 {
 		t.Fatalf("the preview changed state: on edge %v, active %d", ok, ctl.Active())
 	}

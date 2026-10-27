@@ -78,7 +78,7 @@ var report = {
   withdraw: [],
   providers: [{provider: "transit-b", in_mbps: 12.5, out_mbps: 0, unknown: 1, current_mbps: 80, projected_mbps: 92.5, capacity_mbps: 100}],
   warnings: [{code: "capacity", message: "transit-b would carry about 92.5 Mbps out, over its limit of 90.0 Mbps"},
-    {code: "stale", message: "3 allowlisted prefixes lack recent measurements", prefixes: ["192.0.2.0/24"], count: 3}]
+    {code: "stale", message: "3 allowlisted prefixes lack a recent successful measurement", prefixes: ["192.0.2.0/24"], count: 3}]
 };
 
 context.renderBlast(report);

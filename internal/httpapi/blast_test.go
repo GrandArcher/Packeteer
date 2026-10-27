@@ -6,8 +6,10 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/GrandArcher/Packeteer/internal/blast"
 	"github.com/GrandArcher/Packeteer/internal/config"
@@ -81,13 +83,16 @@ func onDisk(t *testing.T, path string) string {
 
 func TestBlastEndpoint(t *testing.T) {
 	e := newUI(t)
-	rec, got := e.do(t, "GET", "/api/blast", plugin.RoleViewer, nil)
+	rec, got := e.do(t, "GET", "/api/blast", plugin.RoleOperator, nil)
 	if rec.Code != http.StatusOK || got["available"] != false || got["report"] != nil {
 		t.Fatalf("without a source: %d %s", rec.Code, rec.Body)
 	}
 
 	e, fb := blastUI(t)
-	rec, got = e.do(t, "GET", "/api/blast", plugin.RoleViewer, nil)
+	if rec, _ = e.do(t, "GET", "/api/blast", plugin.RoleViewer, nil); rec.Code != http.StatusForbidden {
+		t.Fatalf("a viewer previewed: %d", rec.Code)
+	}
+	rec, got = e.do(t, "GET", "/api/blast", plugin.RoleOperator, nil)
 	rep, _ := got["report"].(map[string]any)
 	if rec.Code != http.StatusOK || got["available"] != true || rep["announces"] != true || len(rep["add"].([]any)) != 1 {
 		t.Fatalf("get: %d %s", rec.Code, rec.Body)
@@ -97,7 +102,7 @@ func TestBlastEndpoint(t *testing.T) {
 	}
 
 	fb.err = blast.ErrNoRound
-	rec, got = e.do(t, "GET", "/api/blast", plugin.RoleViewer, nil)
+	rec, got = e.do(t, "GET", "/api/blast", plugin.RoleOperator, nil)
 	if rec.Code != http.StatusConflict || got["code"] != "no_round" {
 		t.Fatalf("no round: %d %s", rec.Code, rec.Body)
 	}
@@ -154,6 +159,39 @@ func TestConfigSaveNeedsPreviewForAnnouncingChange(t *testing.T) {
 	}
 	if onDisk(t, e.path) != yaml {
 		t.Fatal("the confirmed save did not write the file")
+	}
+}
+
+func TestConfigSavePreviewTokenExpires(t *testing.T) {
+	e, _ := blastUI(t)
+	admin := plugin.RoleAdmin
+	base := configedit.Hash([]byte(editorYAML))
+	yaml := editorYAML + widerThresholds
+	clock := time.Now()
+	e.srv.blastNow = func() time.Time { return clock }
+
+	_, got := e.do(t, "PUT", "/api/config", admin, map[string]any{"yaml": yaml, "base": base, "dry_run": true})
+	token, _ := got["preview_token"].(string)
+	clock = clock.Add(previewTokenTTL + time.Second)
+	rec, got := e.do(t, "PUT", "/api/config", admin, map[string]any{"yaml": yaml, "base": base, "dry_run": false, "preview_token": token})
+	if rec.Code != http.StatusPreconditionRequired || got["code"] != "preview_required" {
+		t.Fatalf("expired token: %d %s", rec.Code, rec.Body)
+	}
+	if onDisk(t, e.path) != editorYAML {
+		t.Fatal("an expired token saved the file")
+	}
+
+	// A fresh preview at the new time opens it; a stamp edited to look
+	// newer does not.
+	_, got = e.do(t, "PUT", "/api/config", admin, map[string]any{"yaml": yaml, "base": base, "dry_run": true})
+	token, _ = got["preview_token"].(string)
+	_, sig, _ := strings.Cut(token, ".")
+	forged := strconv.FormatInt(clock.Add(time.Minute).Unix(), 10) + "." + sig
+	if rec, _ = e.do(t, "PUT", "/api/config", admin, map[string]any{"yaml": yaml, "base": base, "dry_run": false, "preview_token": forged}); rec.Code != http.StatusPreconditionRequired {
+		t.Fatalf("forged stamp: %d %s", rec.Code, rec.Body)
+	}
+	if rec, _ = e.do(t, "PUT", "/api/config", admin, map[string]any{"yaml": yaml, "base": base, "dry_run": false, "preview_token": token}); rec.Code != http.StatusOK {
+		t.Fatalf("fresh token: %d %s", rec.Code, rec.Body)
 	}
 }
 

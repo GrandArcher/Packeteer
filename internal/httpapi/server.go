@@ -171,6 +171,7 @@ type Server struct {
 	blast atomic.Pointer[BlastControl]
 	// blastKey signs preview tokens; a restart invalidates them.
 	blastKey [32]byte
+	blastNow func() time.Time
 	// exMembers is the member comparison of the exchange view (#156). Nil
 	// until SetExchangeMembers.
 	exMembers atomic.Pointer[ExchangeMembers]
@@ -254,6 +255,7 @@ func New(opt Options) (*Server, error) {
 	setup := opt.Setup
 	s.setup.Store(&setup)
 	_, _ = rand.Read(s.blastKey[:])
+	s.blastNow = time.Now
 	s.linkouts = opt.Linkouts
 	s.ringLG = opt.RingLG
 	s.atlas = opt.Atlas

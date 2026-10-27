@@ -7,6 +7,9 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strconv"
+	"strings"
+	"time"
 
 	"github.com/GrandArcher/Packeteer/internal/blast"
 	"github.com/GrandArcher/Packeteer/internal/configedit"
@@ -35,16 +38,39 @@ func (s *Server) blastControl() BlastControl {
 	return nil
 }
 
+// previewTokenTTL bounds how long a preview stays good: the wire and the
+// latest round move on, so an old preview no longer shows the blast radius.
+const previewTokenTTL = 10 * time.Minute
+
 // previewToken proves that a preview was made for this candidate against
 // this revision of the file (base is the hash of the file the editor
-// loaded). Save refuses a changed base, so a token cannot outlive its
-// revision.
-func (s *Server) previewToken(base string, candidate []byte) string {
+// loaded), at the time in the token. Save refuses a changed base, so a
+// token cannot outlive its revision, and an old time.
+func (s *Server) previewToken(base string, candidate []byte, at time.Time) string {
+	stamp := strconv.FormatInt(at.Unix(), 10)
 	m := hmac.New(sha256.New, s.blastKey[:])
+	m.Write([]byte(stamp))
+	m.Write([]byte{0})
 	m.Write([]byte(base))
 	m.Write([]byte{0})
 	m.Write([]byte(configedit.Hash(candidate)))
-	return hex.EncodeToString(m.Sum(nil))
+	return stamp + "." + hex.EncodeToString(m.Sum(nil))
+}
+
+// previewTokenValid reports whether token was issued by previewToken for
+// this base and candidate within previewTokenTTL.
+func (s *Server) previewTokenValid(token, base string, candidate []byte) bool {
+	stamp, _, ok := strings.Cut(token, ".")
+	secs, err := strconv.ParseInt(stamp, 10, 64)
+	if !ok || err != nil {
+		return false
+	}
+	at := time.Unix(secs, 0)
+	now := s.blastNow()
+	if at.After(now) || now.Sub(at) > previewTokenTTL {
+		return false
+	}
+	return hmac.Equal([]byte(token), []byte(s.previewToken(base, candidate, at)))
 }
 
 // handleBlast previews the running config under inject. It is read-only.
@@ -95,7 +121,7 @@ func (s *Server) configGate(w http.ResponseWriter, r *http.Request, req configRe
 	}
 	gated := res.ReloadOnline && blast.Gated(res.Online)
 	if !dry {
-		if !gated || hmac.Equal([]byte(req.PreviewToken), []byte(s.previewToken(req.Base, []byte(req.YAML)))) {
+		if !gated || s.previewTokenValid(req.PreviewToken, req.Base, []byte(req.YAML)) {
 			return true
 		}
 		writeJSON(w, http.StatusPreconditionRequired, map[string]any{"error": "this change can alter what is announced: preview it with dry_run=true, then send the preview_token with dry_run=false", "code": "preview_required", "result": res})
@@ -108,7 +134,7 @@ func (s *Server) configGate(w http.ResponseWriter, r *http.Request, req configRe
 	noteAudit(r, "config", fmt.Sprintf("blast preview add=%d move=%d withdraw=%d", len(rep.Add), len(rep.Move), len(rep.Withdraw)))
 	body := map[string]any{"dry_run": true, "result": res, "blast": rep, "required": gated}
 	if gated {
-		body["preview_token"] = s.previewToken(req.Base, []byte(req.YAML))
+		body["preview_token"] = s.previewToken(req.Base, []byte(req.YAML), s.blastNow())
 	}
 	writeJSON(w, http.StatusOK, body)
 	return false
