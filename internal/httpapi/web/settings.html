@@ -160,7 +160,7 @@
     <pre id="pf-snippet" class="mono" aria-label="Router config" hidden></pre>
     <div id="pf-inject" hidden>
       <h3>Turn on injection</h3>
-      <p class="tag">Every check passed. Start with a few prefixes. This fills the YAML editor below with an inject config and shows what will change; nothing is written until you tick the confirmation and Save, and Save runs the checks again.</p>
+      <p class="tag">Every check passed. Start with a few prefixes. This fills the YAML editor below with an inject config, shows what will change, and previews the routes inject would send under Blast radius; nothing is written until you tick the confirmation and Save, and Save runs the checks again.</p>
       <div class="form">
         <label class="field"><span class="field-label" title="allowlist.prefixes">Prefixes to steer</span><textarea id="pf-allow" rows="3" spellcheck="false"></textarea><span class="field-help">One prefix per line, for example 198.51.100.0/24, at most 10. A prefix is announced only while your router advertises that exact prefix to Packeteer.</span><span id="pf-allow-err" class="field-error" hidden></span></label>
         <label class="field"><span class="field-label" title="max_improvements">Most routes at once</span><input id="pf-cap" type="number" min="1" max="50" step="1"><span class="field-help">Empty uses 5.</span></label>
@@ -168,6 +168,18 @@
       <div class="controls"><button type="button" id="pf-inject-plan">Show what will change</button></div>
       <div id="pf-inject-status" class="tag" role="status"></div>
       <ul id="pf-explain"></ul>
+    </div>
+  </section>
+  <section id="blast">
+    <h2>Blast radius</h2>
+    <p class="tag">What inject would put on the wire now, from the latest probe round and the learned routes, compared with what is on the wire today. It decides the latest round again on a copy of the state, so the live decisions and routes are not touched. Traffic comes from flow data when a flow source is on; a route without it is counted as unknown.</p>
+    <div class="controls">
+      <button type="button" id="bl-run">Preview inject now</button>
+      <span id="bl-status" class="tag" role="status"></span>
+    </div>
+    <div id="bl-body"></div>
+    <div id="bl-confirm" class="controls" hidden>
+      <button type="button" id="bl-apply">Apply this change</button>
     </div>
   </section>
   <section id="commit-setup">

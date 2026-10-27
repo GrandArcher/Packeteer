@@ -48,6 +48,7 @@ var calls = [];
 var reply = null;
 var loaded = [];
 var checked = 0;
+var previews = [];
 var context = {
   document: {createElement: node, createTextNode: function (t) { var n = node("#text"); n.textContent = t; return n; }},
   byId: function (id) { return els[id]; },
@@ -55,6 +56,7 @@ var context = {
   splitList: function (t) { return t.split(/[\s,]+/).filter(Boolean); },
   loadForm: function (y) { loaded.push(y); },
   checkConfig: function () { checked++; },
+  previewCandidate: function (confirm) { previews.push(confirm); },
   Number: Number,
   encodeURIComponent: encodeURIComponent,
   Promise: Promise,
@@ -126,6 +128,7 @@ reply.then(function () {
   assert(c.body.current === "mode: observe\n" && c.body.allowlist.join() === "198.51.100.0/24,203.0.113.0/24" && c.body.max_improvements === 3, "plan body: " + JSON.stringify(c.body));
   assert(els["ed-yaml"].value === "mode: inject\n" && loaded[0] === "mode: inject\n" && checked === 1, "the editor holds the plan");
   assert(els["pf-explain"].children.length === 2, "the explanation is listed");
+  assert(previews.length === 1 && previews[0] === false, "the plan previews its blast radius without a confirm button: " + JSON.stringify(previews));
   assert(els["pf-inject-status"].textContent.indexOf("203.0.113.0/24") >= 0 && els["pf-inject-status"].textContent.indexOf("would not be announced") >= 0, "unlearned prefix warning: " + els["pf-inject-status"].textContent);
 
   // A check that stopped passing in the meantime is shown again.

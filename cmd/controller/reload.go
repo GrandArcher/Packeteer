@@ -13,6 +13,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	"github.com/GrandArcher/Packeteer/internal/blast"
 	"github.com/GrandArcher/Packeteer/internal/config"
 	"github.com/GrandArcher/Packeteer/internal/history"
 	"github.com/GrandArcher/Packeteer/internal/httpapi"
@@ -376,12 +377,15 @@ type reloader struct {
 	engine  *probe.Engine
 	// perASN is the probe.per_asn_pps set the engine was built with; new
 	// traceroute sources share it.
-	perASN   *probe.ASNLimits
-	decider  *policy.Engine
-	fed      *fedState
-	col      *httpapi.Collector
-	watch    *eventWatch
-	live     *liveConfig
+	perASN  *probe.ASNLimits
+	decider *policy.Engine
+	fed     *fedState
+	col     *httpapi.Collector
+	watch   *eventWatch
+	live    *liveConfig
+	// preview, when set, is the blast-radius dry run (#227) logged before a
+	// reload applies keys that can change what is announced.
+	preview  func(next *config.Config, online []string) (blast.Report, error)
 	dispatch emitter
 	hist     *history.Recorder
 	opts     pluginhost.Options
@@ -428,6 +432,7 @@ func (r *reloader) reload(ctx context.Context) (applied []string, refused, fatal
 			r.setCur(next)
 			return nil, nil, nil
 		}
+		r.logPreview(next, online)
 		if err := r.applyOnline(ctx, next, online); err != nil {
 			return nil, err, nil
 		}
@@ -451,6 +456,7 @@ func (r *reloader) reload(ctx context.Context) (applied []string, refused, fatal
 		r.setCur(next)
 		return nil, nil, nil
 	}
+	r.logPreview(next, plan.online)
 	if err := r.applyOnline(ctx, next, plan.online); err != nil {
 		if errors.Is(err, errPartialApply) {
 			return nil, nil, err
@@ -493,6 +499,25 @@ func (r *reloader) reload(ctx context.Context) (applied []string, refused, fatal
 		r.poke()
 	}
 	return plan.online, nil, nil
+}
+
+// logPreview logs what the reload is about to do to the announced routes: a
+// SIGHUP or a settings push has no one to confirm it, so the diff goes to
+// the log before it applies (#227).
+func (r *reloader) logPreview(next *config.Config, online []string) {
+	if r.preview == nil || !blast.Gated(online) {
+		return
+	}
+	rep, err := r.preview(next, online)
+	if err != nil {
+		r.log.Warn("config reload: blast-radius preview unavailable", "err", err)
+		return
+	}
+	codes := make([]string, 0, len(rep.Warnings))
+	for _, w := range rep.Warnings {
+		codes = append(codes, w.Code)
+	}
+	r.log.Warn("config reload: blast radius", "add", len(rep.Add), "move", len(rep.Move), "withdraw", len(rep.Withdraw), "warnings", strings.Join(codes, ","))
 }
 
 // applyOnline installs every online key except BGP sessions. A failure

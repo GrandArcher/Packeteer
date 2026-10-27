@@ -1103,7 +1103,13 @@ function saveConfig() {
 function putConfig() {
   var body = {yaml: document.getElementById("ed-yaml").value, base: base,
     confirm_inject: document.getElementById("ed-inject").checked};
+  if (blastToken) {
+    body.dry_run = false;
+    body.preview_token = blastToken;
+  }
   api("PUT", "/api/config", body).then(function (out) {
+    blastToken = "";
+    byId("bl-confirm").hidden = true;
     base = out.file.sha256;
     yamlSaved = body.yaml;
     document.getElementById("ed-sha").textContent = base.slice(0, 12);
@@ -1113,6 +1119,12 @@ function putConfig() {
     if (typeof showServerErrors === "function") showServerErrors([]);
     previewConfig();
   }, function (err) {
+    if (err.data && err.data.code === "preview_required") {
+      blastToken = "";
+      edStatus("This change can alter what is announced. Read the preview under Blast radius, then press Apply this change.");
+      previewCandidate(true);
+      return;
+    }
     var res = err.data && err.data.result;
     edStatus(err.message + (res ? " - " + describe(res) : ""), res && res.errors);
     if (typeof showServerErrors === "function") showServerErrors(res && res.errors);
@@ -2409,6 +2421,84 @@ function copySnippet() {
   }, function () { byId("pf-snippet-status").textContent = "Copy was refused; select the text instead."; });
 }
 
+// ---- Blast radius (#227) ----
+
+var blastToken = "";
+
+function blastRoute(r) {
+  var vol = r.volume_mbps == null ? "volume unknown" : r.volume_mbps.toFixed(1) + " Mbps";
+  return r.prefix + ": " + r.from + " -> " + r.to + " (" + vol + ")";
+}
+
+function blastShift(s) {
+  var text = s.provider + ": +" + s.in_mbps.toFixed(1) + " Mbps in, -" + s.out_mbps.toFixed(1) + " Mbps out";
+  if (s.unknown) text += " (at least; " + s.unknown + " without a volume)";
+  if (s.capacity_mbps) text += ". Now " + (s.current_mbps || 0).toFixed(1) + ", after " + (s.projected_mbps || 0).toFixed(1) + " of " + s.capacity_mbps.toFixed(1) + " Mbps capacity";
+  return text;
+}
+
+function renderBlast(rep) {
+  var root = byId("bl-body");
+  clear(root);
+  if (!rep.announces) root.appendChild(el("p", "tag", "This config does not announce, so every route announced now would be withdrawn."));
+  [["Would be announced", rep.add], ["Would move", rep.move], ["Would be withdrawn", rep.withdraw]].forEach(function (g) {
+    root.appendChild(el("h3", "", g[0] + " (" + g[1].length + ")"));
+    if (!g[1].length) {
+      root.appendChild(el("p", "empty", "None."));
+      return;
+    }
+    var ul = el("ul");
+    g[1].forEach(function (r) { ul.appendChild(el("li", "", blastRoute(r))); });
+    root.appendChild(ul);
+  });
+  if (rep.keep) root.appendChild(el("p", "tag", rep.keep + " announced routes stay as they are."));
+  if (rep.providers.length) {
+    root.appendChild(el("h3", "", "Traffic by provider"));
+    var pl = el("ul");
+    rep.providers.forEach(function (s) { pl.appendChild(el("li", "", blastShift(s))); });
+    root.appendChild(pl);
+  }
+  root.appendChild(el("h3", "", "Warnings (" + rep.warnings.length + ")"));
+  if (!rep.warnings.length) {
+    root.appendChild(el("p", "empty", "None."));
+    return;
+  }
+  var wl = el("ul", "warnings");
+  rep.warnings.forEach(function (w) {
+    wl.appendChild(el("li", "", w.message + (w.prefixes && w.prefixes.length ? ": " + w.prefixes.join(", ") + (w.count > w.prefixes.length ? " and more" : "") : "")));
+  });
+  root.appendChild(wl);
+}
+
+function loadBlast() {
+  byId("bl-status").textContent = "Deciding the latest round again...";
+  return api("GET", "/api/blast").then(function (data) {
+    if (!data.available) {
+      byId("bl-status").textContent = "The preview is not available on this instance.";
+      return;
+    }
+    byId("bl-status").textContent = "As of " + data.report.at + ".";
+    renderBlast(data.report);
+  }, function (err) { byId("bl-status").textContent = explain(err); });
+}
+
+// previewCandidate previews the editor text without saving it. With confirm
+// set, the Apply button saves it with the token the preview returned.
+function previewCandidate(confirm) {
+  var body = {yaml: byId("ed-yaml").value, base: base, dry_run: true};
+  return api("PUT", "/api/config", body).then(function (out) {
+    renderBlast(out.blast);
+    blastToken = out.preview_token || "";
+    byId("bl-confirm").hidden = !(confirm && blastToken);
+    byId("bl-status").textContent = confirm ? "Preview of the change in the editor. Nothing is saved yet." : "Preview of the config in the editor.";
+    byId("blast").scrollIntoView();
+  }, function (err) {
+    blastToken = "";
+    byId("bl-confirm").hidden = true;
+    byId("bl-status").textContent = explain(err);
+  });
+}
+
 function planInject() {
   var prefixes = splitList(byId("pf-allow").value);
   var err = byId("pf-allow-err");
@@ -2431,7 +2521,7 @@ function planInject() {
       text += " Your router does not advertise " + out.not_learned.join(", ") + " to Packeteer now, so " + (out.not_learned.length === 1 ? "it" : "they") + " would not be announced.";
     }
     status.textContent = text;
-    byId("editor-section").scrollIntoView();
+    previewCandidate(false);
   }, function (e) {
     status.textContent = e.data && e.data.code === "preflight_required" ? "A check no longer passes. " + pfSummary(e.data.preflight) : explain(e);
     if (e.data && e.data.preflight) renderPreflight(e.data.preflight);
@@ -2608,6 +2698,8 @@ byId("pf-run").addEventListener("click", runPreflight);
 byId("pf-snippet-show").addEventListener("click", showSnippet);
 byId("pf-snippet-copy").addEventListener("click", copySnippet);
 byId("pf-inject-plan").addEventListener("click", planInject);
+byId("bl-run").addEventListener("click", loadBlast);
+byId("bl-apply").addEventListener("click", putConfig);
 bindStaticChecks();
 loadPreflight();
 loadSetupSkip();
