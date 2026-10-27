@@ -9,8 +9,8 @@ import (
 )
 
 // Session type comes from the path (#146). An exchange peer is not a
-// route server just because it has an AS. MED stays display-only: it
-// does not move the exit, and the route check still keys off the first AS.
+// route server just because it has an AS. The route check still keys off
+// the first AS; MED feeds only the decision's tie break (#303).
 func TestSessionTypeIsNotEveryExchangePeer(t *testing.T) {
 	nbr := "192.0.2.254"
 	edge := netip.MustParseAddr(nbr)

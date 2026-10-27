@@ -1,6 +1,6 @@
 # Inbound optimization
 
-Status: **lab-proven only** (#25): inbound commit control, inbound performance optimization, AS-path prepends, provider TE communities, selective announcements, inertia damping, and automated vs moderated steers. Do not run it with `inbound.mode: inject` on a public edge; the CI lab is the only place it has been proven.
+Status: **lab-proven only** (#25): inbound commit control, inbound performance optimization, AS-path prepends, provider TE communities, selective announcements, MED across links to one provider (#303), inertia damping, and automated vs moderated steers. Do not run it with `inbound.mode: inject` on a public edge; the CI lab is the only place it has been proven.
 
 ## What it does
 
@@ -14,7 +14,11 @@ Two triggers steer inbound traffic away from a provider:
 To steer, Packeteer:
 
 1. It re-announces each of your `inbound.prefixes` to the edge over the same iBGP session, with the exact learned prefix and next hop, `inbound.local_pref`, `packeteer_community`, the inbound announcer's `marker`, the catalog communities of every provider it is steering away from, and `no-export`.
-2. The edge's import policy recognises the marker and prefers that route. Its export policy toward each provider turns a signal community into a prepend on that session only (or, for a `withhold` action, does not send the prefix to that provider at all: a selective announcement), passes the provider's own TE communities to that provider only, and strips Packeteer's communities.
+2. The edge's import policy recognises the marker and prefers that route. Its export policy toward each provider turns a signal community into a prepend on that session only (or, for a `withhold` action, does not send the prefix to that provider at all: a selective announcement; for a `med` action, sets a higher MED on that session), passes the provider's own TE communities to that provider only, and strips Packeteer's communities.
+
+### MED across links to one provider
+
+When the edge has several sessions to the same transit, each session is its own provider in `providers` with the same `asn`. A catalog entry with `med: N` steers inbound traffic between those links: the edge sets MED `N` on the steered link's session and a lower MED (the lab uses 0) on the others, and the transit, comparing MEDs from one neighbor AS (RFC 4271 9.1.2.2), prefers another link. Nothing changes for other ASes. `med` excludes `prepend` and `withhold`. A provider with a `med` action needs another non-excluded provider with the same `asn`; the config is refused otherwise. A MED steer is not made while every other link to that AS is steered (`/api/inbound` lists it under `blocked` with a `med` reason), since equal MEDs would move nothing. Triggers, damping, modes, verification, and the safety rules below are the same as for the other actions.
 
 A commit steer is released once the provider's inbound 95th is at or below `release_pct` (default 90) of the commit; a performance steer once both gaps are at or below `performance.release_pct` (default 50) of their thresholds. Either way the steer must first have been held for its hold time (`hold_time`, grown by damping). A released provider waits that hold time before it can be steered again. Packeteer never steers away from every non-excluded provider, so a withheld prefix is always still announced through another.
 
@@ -96,6 +100,38 @@ route-map to-transit-b permit 20
  set comm-list strip-to-transit-b delete
 ```
 
+A MED action, as in the MED lab ([lab/frr-inbound-med/frr.conf](../lab/frr-inbound-med/frr.conf)): two sessions to AS 64496, `64512:1301` sets MED 100 on link 1 and `64512:1302` on link 2. Every other route goes out with MED 0, so the MEDs are always comparable:
+
+```
+bgp community-list standard steer-link1-med permit 64512:1301
+!
+route-map to-link-1 permit 10
+ match community steer-link1-med
+ set metric 100
+ set comm-list strip-to-transit delete
+route-map to-link-1 permit 20
+ set metric 0
+ set comm-list strip-to-transit delete
+```
+
+BIRD 2, in the export filter of the link 1 session:
+
+```
+filter to_link_1 {
+  if (64512, 1301) ~ bgp_community then bgp_med = 100; else bgp_med = 0;
+  bgp_community.delete([(64512, *)]);
+  accept;
+}
+```
+
+MikroTik RouterOS 7, as the output chain of the link 1 connection (strip Packeteer's communities as in [routers.md](routers.md)):
+
+```
+/routing filter rule add chain=to-link-1 \
+    rule="if (bgp-communities includes 64512:1301) { set bgp-med 100; accept }"
+/routing filter rule add chain=to-link-1 rule="set bgp-med 0; accept"
+```
+
 Strip communities with **one standard list per transit** that names every value Packeteer and the other transits' catalogs can send. FRR keeps only the last `set comm-list ... delete` in a route-map entry, so two separate delete lines strip only the second list and Packeteer's communities leak to the transit.
 
 The edge must also advertise the prefix to Packeteer with a next hop that is not one of its own addresses (the lab rewrites it), or rewrite the next hop on import, because Packeteer re-announces the learned next hop.
@@ -129,6 +165,10 @@ inbound:
           name: withhold
           withhold: true                          # edge does not export to transit-b
           communities: ["64512:1209"]
+        # - provider: transit-a-link-2            # a second session to transit-a (same asn)
+        #   name: med-100
+        #   med: 100                              # edge sets MED 100 on that session only
+        #   communities: ["64512:1302"]
 ```
 
 Keys are in [CONFIG.md](CONFIG.md#inbound).
@@ -143,6 +183,8 @@ Keys are in [CONFIG.md](CONFIG.md#inbound).
 4. After a restart, transit-a's probes are 240 ms slower: a performance steer on transit-a; equal probes release it.
 5. transit-b slowest: the selective announcement removes the prefix from transit-b while transit-a keeps the plain path; equal probes give it back.
 6. transit-a slow again, then SIGKILL: both plain after the 9s hold timer.
+
+`lab/e2e-inbound-med.sh` (CI `e2e` job, #303) runs an FRR edge with two sessions to one simulated transit (AS 64496). With link-1 over commit the transit sees MED 100 on link 1 and MED 0 on link 2 and picks link 2. Release, SIGTERM, and SIGKILL (within the 9s hold timer) each put MED 0 back on link 1.
 
 ## Rollback
 

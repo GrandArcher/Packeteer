@@ -108,7 +108,7 @@ func TestUIShell(t *testing.T) {
 		"troubleshooting.html": {`<body data-page="troubleshooting" data-live="app">`, `id="tool-run"`, `id="tool-results"`, `id="tool-empty"`, `src="/tools.js"`, "Looking glass"},
 		"protection.html":      {`<body data-page="protection" data-live="app">`, `id="mitigation-section" hidden`, `id="mitigation"`, `id="protection-empty"`, `id="mit-form"`, `id="mf-prefix"`, `src="/protection.js"`, `id="mit-badge"`},
 		"graphs.html":          {`<body data-page="graphs" data-live="app">`, `id="graph"`, `id="graph-bucket"`, `id="graph-days"`, `id="graph-csv"`, `src="/charts.js"`, `src="/graphs.js"`, "Loss and latency per UTC day"},
-		"prefix.html":          {`<body data-page="prefixes" data-live="app">`, `id="prefix-title"`, `id="prefix-live"`, `id="prefix-probe"`, `id="prefix-timeline"`, `id="prefix-days"`, `src="/prefix.js"`, "MED is shown for reference"},
+		"prefix.html":          {`<body data-page="prefixes" data-live="app">`, `id="prefix-title"`, `id="prefix-live"`, `id="prefix-probe"`, `id="prefix-timeline"`, `id="prefix-days"`, `src="/prefix.js"`, "MED breaks ties between exits to one neighbor AS"},
 		"commit.html":          {`<body data-page="commit" data-live="app">`, `id="commit-days"`, `id="commit-summary"`, `id="commit-graphs"`, `src="/charts.js"`, `src="/commit.js"`, "Billable usage against commit"},
 		"policies.html":        {`<body data-page="policies" data-live="app">`, "#130", `id="maint-section" hidden`, `id="maint-form" hidden`, `src="/maintenance.js"`},
 		"events.html":          {`<body data-page="events">`, `id="events"`, `id="audit"`, `id="tab-audit"`, `data-min-role="admin">Audit`, `id="ev-severity"`, `id="ev-q"`, `id="ev-range"`, `src="/events.js"`},

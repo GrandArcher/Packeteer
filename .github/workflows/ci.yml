@@ -732,12 +732,12 @@ jobs:
           bash lab/ui-smoke.sh http://127.0.0.1:18098/dashboards.html 'class="ts-chart"' 'Before/after graphs: 50% or more better' \
             'Data (5 days)' 'It announces nothing.' --absent 'No before/after data' 'Cannot reach'
           # The prefix page (#179) reads the same seeded history: rollups and
-          # the improvement, worded "recommended" in observe, MED for reference only,
+          # the improvement, worded "recommended" in observe, the MED tie break label,
           # and a Probe now link that opens the Probe tool for the prefix.
           curl -fsS "${auth[@]}" "$base/api/prefixes/history?prefix=198.51.100.0/24&days=7" | tee /tmp/ph179.json
           jq -e '.enabled and (.days | length == 10) and (.improvements | length == 1) and .improvements[0].provider == "lab-b"' /tmp/ph179.json
           bash lab/ui-smoke.sh http://127.0.0.1:18098/prefix/198.51.100.0/24 '198.51.100.0/24' 'Recommended' 'lab-b over lab-a' \
-            'probe rollup' 'MED is shown for reference' 'href="/troubleshooting.html?tool=probe&amp;target=198.51.100.0%2F24"' 'mode-observe' 'It announces nothing.' \
+            'probe rollup' 'MED breaks ties between exits to one neighbor AS' 'href="/troubleshooting.html?tool=probe&amp;target=198.51.100.0%2F24"' 'mode-observe' 'It announces nothing.' \
             --absent 'Announced' 'Cannot reach' 'mode-inject'
           bash lab/ui-smoke.sh 'http://127.0.0.1:18098/troubleshooting.html?tool=probe&target=198.51.100.0/24' 'value="198.51.100.0/24"' 'It announces nothing.'
           # Dashboard widgets (#182). A stored layout from before the width
@@ -1202,7 +1202,7 @@ jobs:
           done
           curl -fsS http://127.0.0.1:18181/healthz >/dev/null
           bash lab/ui-smoke.sh http://127.0.0.1:18181/troubleshooting.html 'mode-observe' 'It announces nothing.' \
-            'Learned paths for 198.51.100.0/24' '>selected<' '>inactive<' 'route server' 'bilateral' 'Display only. MED does not choose the exit.' \
+            'Learned paths for 198.51.100.0/24' '>selected<' '>inactive<' 'route server' 'bilateral' 'Breaks ties between exits to one neighbor AS (thresholds.med_tie_break).' \
             'More-specific routes (1)' 'Covering route' 'No route is learned for exactly 198.51.100.64/26.' \
             'class="hop-diagram"' 'gw.transit-a.example.net' '>AS64496<' '>AS64500<' 'target reached' 'target not reached' \
             'send: network is unreachable' 'error: bind: source address unavailable' '>100%<' 'Raw JSON' \
@@ -1421,7 +1421,7 @@ jobs:
             '91.3% (limit 85%)' '20%' 'transit-b: no commit set; outbound 91.3% of 1000 Mbps (limit 85%)' \
             'transit-a: billable 95th 400 of 1000 Mbps commit (40%); outbound 20% of 2000 Mbps' \
             --absent 'Cannot reach' 'No provider has a telemetry binding'
-      - name: UI prefix list smoke (#183; a 100000-prefix list from canned pages, observe)
+      - name: UI prefix list smoke (#183; a 100000-prefix list from canned pages, MED override #303, observe)
         run: |
           set -euo pipefail
           base=http://127.0.0.1:18182
@@ -1471,7 +1471,7 @@ jobs:
           done
           curl -fsS http://127.0.0.1:18184/healthz >/dev/null
           bash lab/ui-smoke.sh 'http://127.0.0.1:18184/prefixes.html?size=25' 'mode-observe' 'It announces nothing.' \
-            'card: open with MED display only, rows 25' \
+            'card: open with MED tie break and MED override with badge, rows 25' \
             'asn map: bounded, counts kept, links 1' \
             'page 2: ?size=25&amp;page=2 first 2001:db8:1a::/48 cards 0' \
             'filtered: ?asn=AS64500&amp;sort=gain&amp;size=25 first 2001:db8:1::/48 rows 3' \
@@ -2777,6 +2777,8 @@ jobs:
         run: bash lab/e2e-cost.sh
       - name: FRR inbound lab (commit, performance, damping, withhold)
         run: bash lab/e2e-inbound.sh
+      - name: FRR inbound MED lab (#303; two sessions to one transit, MED 100 on the steered link moves the transit to the other, release, SIGTERM, SIGKILL)
+        run: bash lab/e2e-inbound-med.sh
       - name: FRR steer verification lab, inbound (#305; traffic moves and the steer is verified, traffic does not move and the steer is reverted and held off)
         run: bash lab/e2e-verify-inbound.sh
       - name: FRR steer verification lab, outbound (#305; traffic moves and the improvement is verified, traffic does not move and the improvement is reported, SIGTERM)

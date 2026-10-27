@@ -121,6 +121,8 @@ func policyConfig(cfg *config.Config) (policy.Config, error) {
 		RPKIAvoidInvalid:    cfg.RPKIOn() && cfg.RPKI.AvoidInvalid,
 		IRRPreferRegistered: cfg.IRROn() && cfg.IRR.PreferRegistered,
 		RequireEvidence:     cfg.Thresholds.RequireEvidence,
+		MEDTieBreak:         cfg.Thresholds.MEDOn(),
+		MEDMargin:           cfg.Thresholds.MEDMarginOrDefault(),
 	}
 	if cfg.ImprovementTTL > 0 {
 		pc.ImprovementTTL = cfg.ImprovementTTL
@@ -241,6 +243,7 @@ func decisionInput(ctx context.Context, now time.Time, engine *probe.Engine, vie
 		routes = rpkiRoutes(view, in.Results, origins)
 		fillRPKI(&in, routes)
 		fillIRR(&in, view, registry)
+		fillMED(&in, view)
 		in.EgressDown = view.EgressDown()
 	}
 	fed.merge(&in, now)
@@ -277,6 +280,29 @@ func fillRouteChecks(in *policy.Input, view routeChecker) {
 			in.NoRoute[r.Prefix] = map[string]bool{}
 		}
 		in.NoRoute[r.Prefix][r.Provider] = true
+	}
+}
+
+// providerMEDs is the RIB surface fillMED reads. *rib.View implements it.
+type providerMEDs interface {
+	ProviderMED(netip.Prefix, string) (asn, med uint32, ok bool)
+}
+
+// fillMED gives Decide the MED and neighbor AS of each probed prefix and
+// provider for the MED tie break (#303).
+func fillMED(in *policy.Input, view providerMEDs) {
+	for _, r := range in.Results {
+		asn, med, ok := view.ProviderMED(r.Prefix, r.Provider)
+		if !ok {
+			continue
+		}
+		if in.MED == nil {
+			in.MED = map[netip.Prefix]map[string]policy.NeighborMED{}
+		}
+		if in.MED[r.Prefix] == nil {
+			in.MED[r.Prefix] = map[string]policy.NeighborMED{}
+		}
+		in.MED[r.Prefix][r.Provider] = policy.NeighborMED{ASN: asn, MED: med}
 	}
 }
 

@@ -136,6 +136,8 @@ context.getJSON = function (p) {
   return Promise.reject(err);
 };
 context.loadWhy();
+assert(context.gateLabel("med") === "Neighbor MED", "med gate label: " + context.gateLabel("med"));
+
 setTimeout(function () {
   assert(failed[0] === "/api/decisions/198.51.100.0%2F24", "request path " + failed[0]);
   assert(body.textContent.indexOf("Packeteer has no decision for this prefix now") === 0, "404 text: " + body.textContent);

@@ -158,8 +158,8 @@ type Route struct {
 	PathID uint32 `json:"path_id,omitempty"`
 	// MED is MULTI_EXIT_DISC when the path carried one. Nil means the
 	// attribute was absent; a pointer to zero is a real MED of zero.
-	// Display only: path selection and the decision engine never read it.
-	// Exit choice stays probes plus cost and commit.
+	// Path selection never reads it; the decision engine reads it through
+	// ProviderMED as a tie break between exits to one neighbor AS (#303).
 	MED *uint32 `json:"med,omitempty"`
 	// MEDFrom names who advertised this MED. A route server's MED is that
 	// server's value, so the label names the BMP neighbor on the exchange
@@ -1322,12 +1322,21 @@ func (v *View) ProviderPath(p netip.Prefix, provider string) ([]uint32, bool) {
 // routers, a provider can have more than one, and the first may be an
 // inactive path.
 func (v *View) ProviderPaths(p netip.Prefix, provider string) [][]uint32 {
-	p = p.Masked()
 	v.mu.RLock()
 	defer v.mu.RUnlock()
+	var out [][]uint32
+	for _, rt := range v.providerRoutesLocked(p.Masked(), provider) {
+		out = append(out, slices.Clone(rt.ASPath))
+	}
+	return out
+}
+
+// providerRoutesLocked is every learned path of provider for exactly p
+// that ProviderPaths reads.
+func (v *View) providerRoutesLocked(p netip.Prefix, provider string) []Route {
 	on := v.coveringRoutersLocked(provider)
 	asn, peer := v.opt.PeerASN[provider]
-	var out [][]uint32
+	var out []Route
 	for _, rt := range v.pathsLocked(p) {
 		if rt.Provider != provider || (rt.Source == SourceBMP && !on[rt.Router]) {
 			continue
@@ -1335,9 +1344,29 @@ func (v *View) ProviderPaths(p netip.Prefix, provider string) [][]uint32 {
 		if peer && (len(rt.ASPath) == 0 || rt.ASPath[0] != asn) {
 			continue
 		}
-		out = append(out, slices.Clone(rt.ASPath))
+		out = append(out, rt)
 	}
 	return out
+}
+
+// ProviderMED returns the MED of provider's learned paths for exactly p
+// and the neighbor AS that sent it, the first AS of the path (#303). A
+// route server that passes a member's MED on is read the same way. ok is
+// false when there is no path, a path has no MED or no AS path, or the
+// paths disagree: the MED tie break then leaves the provider out.
+func (v *View) ProviderMED(p netip.Prefix, provider string) (asn, med uint32, ok bool) {
+	v.mu.RLock()
+	defer v.mu.RUnlock()
+	for i, rt := range v.providerRoutesLocked(p.Masked(), provider) {
+		if rt.MED == nil || len(rt.ASPath) == 0 {
+			return 0, 0, false
+		}
+		if i > 0 && (rt.ASPath[0] != asn || *rt.MED != med) {
+			return 0, 0, false
+		}
+		asn, med, ok = rt.ASPath[0], *rt.MED, true
+	}
+	return asn, med, ok
 }
 
 // NextHopCount is how many learned prefixes use one next hop.

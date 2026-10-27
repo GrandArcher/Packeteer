@@ -1,5 +1,5 @@
 // Command checkpath checks the best path of one prefix in FRR's
-// `show bgp ipv4 unicast <prefix> json` output. lab/e2e-inbound.sh runs it
+// `show bgp ipv4 unicast <prefix> json` output. lab/e2e-inbound.sh and lab/e2e-inbound-med.sh run it
 // against the simulated transits to see which session got the prepend and
 // the TE communities.
 //
@@ -9,7 +9,9 @@
 // such as Packeteer's injected route on the edge, has an empty AS path).
 // -has needs an exact community; well-known ones match by number or by the
 // name FRR prints (65535:666 is blackhole). -lacks rejects any community that starts
-// with the value. -nexthop requires that next hop on the best path. -absent instead passes only when the prefix has no path
+// with the value. -nexthop requires that next hop on the best path. -med requires that MED (a path without one reads
+// as 0). -from checks the path received from that peer instead of the best path, so the MED on a session that lost
+// best-path selection can be read (#303). -absent instead passes only when the prefix has no path
 // (a selective announcement withheld it from this session). The exit status is 0 when the best path matches, 1 when it
 // does not (the reason goes to stderr), and 2 on bad usage.
 package main
@@ -35,8 +37,11 @@ type Want struct {
 	Absent  bool
 	ASPath  string
 	NextHop string
-	Has     []string
-	Lacks   []string
+	From    string
+	// MED is the MED the path must carry; nil is not checked.
+	MED   *int64
+	Has   []string
+	Lacks []string
 }
 
 func main() {
@@ -46,10 +51,16 @@ func main() {
 	fs.BoolVar(&w.Absent, "absent", false, "the prefix must have no path")
 	fs.StringVar(&w.ASPath, "aspath", "", "exact AS path string of the best path")
 	fs.StringVar(&w.NextHop, "nexthop", "", "next hop the best path must use")
+	fs.StringVar(&w.From, "from", "", "check the path from this peer instead of the best path")
+	med := fs.Int64("med", -1, "MED the path must carry")
 	fs.Var(&has, "has", "community the best path must carry (repeatable)")
 	fs.Var(&lacks, "lacks", "community prefix the best path must not carry (repeatable)")
-	if err := fs.Parse(os.Args[1:]); err != nil || (w.ASPath == "" && len(has) == 0) == !w.Absent {
-		fmt.Fprintln(os.Stderr, "usage: checkpath [-aspath PATH] [-has C]... [-lacks PREFIX]... [-nexthop IP] | checkpath -absent")
+	err := fs.Parse(os.Args[1:])
+	if *med >= 0 {
+		w.MED = med
+	}
+	if err != nil || (w.ASPath == "" && len(has) == 0 && w.NextHop == "" && w.MED == nil) == !w.Absent {
+		fmt.Fprintln(os.Stderr, "usage: checkpath [-from PEER] [-aspath PATH] [-has C]... [-lacks PREFIX]... [-nexthop IP] [-med N] | checkpath -absent")
 		os.Exit(2)
 	}
 	w.Has, w.Lacks = has, lacks
@@ -78,6 +89,10 @@ type path struct {
 	Nexthops []struct {
 		IP string `json:"ip"`
 	} `json:"nexthops"`
+	Peer *struct {
+		PeerID string `json:"peerId"`
+	} `json:"peer"`
+	Metric *int64 `json:"metric"`
 }
 
 // Check reports why the best path in raw does not match w, or nil.
@@ -117,18 +132,37 @@ func Check(raw string, w Want) error {
 	}
 	best := -1
 	for i, p := range doc.Paths {
+		if w.From != "" {
+			if p.Peer != nil && p.Peer.PeerID == w.From {
+				best = i
+				break
+			}
+			continue
+		}
 		if p.Bestpath != nil && p.Bestpath.Overall {
 			best = i
 			break
 		}
 	}
 	if best < 0 {
+		if w.From != "" {
+			return fmt.Errorf("no path from %s", w.From)
+		}
 		if len(doc.Paths) != 1 {
 			return errors.New("no best path")
 		}
 		best = 0
 	}
 	p := doc.Paths[best]
+	if w.MED != nil {
+		var got int64
+		if p.Metric != nil {
+			got = *p.Metric
+		}
+		if got != *w.MED {
+			return fmt.Errorf("med %d, want %d", got, *w.MED)
+		}
+	}
 	if got := strings.TrimSpace(p.ASPath.String); w.ASPath != "" && got != w.ASPath {
 		return fmt.Errorf("as path %q, want %q", got, w.ASPath)
 	}

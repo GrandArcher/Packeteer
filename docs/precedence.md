@@ -45,6 +45,10 @@ A mitigation route, an inbound steer, and an outbound route for one prefix share
 | HA over everything | Standby | Outbound, inbound, and mitigation check the elector under their locks before every sync | `ha standby; withdrawing ...` | `TestStandbyAnnouncesNothing`, `TestStandbyWithdrawsSteers`, `TestStandbyWithdrawsRules` |
 | Federation | Local rails | Peer providers join the input only while the peer is fresh, RIB-ready, and exits that prefix through the provider; a stale peer retires the steer. Ownership above applies unchanged | `improvement retired` | `TestFederatedSteerAnnounceAndWithdraw` |
 
+## MED (#303)
+
+The MED adds no surface. An inbound `med` action is one of the inbound catalog actions and follows the inbound rules above. The outbound MED tie break runs inside the decision, after the thresholds: it can keep a prefix on a native exit its neighbor AS prefers, or pick that AS's lower-MED exit among exits within `thresholds.med_margin`. It never moves a prefix the thresholds would not, and ownership, the cap, flap quarantine, and HA apply unchanged. Tests: `TestMEDKeepsNativeTheNeighborPrefersWithinMargin`, `TestMEDBreaksTiesBetweenExitsOfOneNeighbor`, `TestMEDSteerMovesInboundToTheOtherLink`.
+
 Overlapping prefixes are not conflicts. A rule for a /25 inside an improved /24 is a different NLRI; the router's longest match applies. Only a learned more-specific of an improvement is skipped when a rule or steer owns it.
 
 ## The cap

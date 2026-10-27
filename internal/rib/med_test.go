@@ -30,7 +30,8 @@ func medPath(t *testing.T, id uint32, neighbor, prefix, nexthop string, as []uin
 	return p
 }
 
-func TestMEDIsDisplayOnly(t *testing.T) {
+// The RIB view's own path selection never reads the MED.
+func TestMEDDoesNotSelectThePath(t *testing.T) {
 	nbr := "192.0.2.254"
 	v, err := New(Options{
 		ASN: asn, RouterID: netip.MustParseAddr("192.0.2.10"),
@@ -116,5 +117,65 @@ func TestMEDIsDisplayOnly(t *testing.T) {
 	got, ok := v.Exact(netip.MustParsePrefix("203.0.113.0/24"))
 	if !ok || got.MED != nil || got.MEDFrom != "" || got.Via != ViaUnknown {
 		t.Fatalf("absent MED = %+v %q via %q", got.MED, got.MEDFrom, got.Via)
+	}
+}
+
+// ProviderMED reads the MED and neighbor AS of one provider's paths for
+// the decision's tie break (#303), and nothing when it is missing or the
+// provider's paths disagree.
+func TestProviderMED(t *testing.T) {
+	nbr := "192.0.2.254"
+	v, err := New(Options{
+		ASN: asn, RouterID: netip.MustParseAddr("192.0.2.10"),
+		Neighbors: []Neighbor{{Address: netip.MustParseAddr(nbr)}},
+		Providers: map[netip.Addr]string{
+			netip.MustParseAddr("192.0.2.1"):    "link-1",
+			netip.MustParseAddr("192.0.2.5"):    "link-2",
+			netip.MustParseAddr("192.0.2.9"):    "transit-b",
+			netip.MustParseAddr("203.0.113.11"): "ix-member",
+		},
+		PeerASN: map[string]uint32{"ix-member": 64501},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pfx := "198.51.100.0/24"
+	p := netip.MustParsePrefix(pfx)
+	ten, fifty := uint32(10), uint32(50)
+	v.mu.Lock()
+	v.applyPath(medPath(t, 1, nbr, pfx, "192.0.2.1", []uint32{64496, 64500}, 100, &ten))
+	v.applyPath(medPath(t, 2, nbr, pfx, "192.0.2.5", []uint32{64496, 64500}, 100, &fifty))
+	v.applyPath(medPath(t, 3, nbr, pfx, "192.0.2.9", []uint32{64497, 64500}, 100, nil))
+	v.mu.Unlock()
+
+	if asn, med, ok := v.ProviderMED(p, "link-1"); !ok || asn != 64496 || med != 10 {
+		t.Fatalf("link-1 = %d %d %v", asn, med, ok)
+	}
+	if asn, med, ok := v.ProviderMED(p, "link-2"); !ok || asn != 64496 || med != 50 {
+		t.Fatalf("link-2 = %d %d %v", asn, med, ok)
+	}
+	if _, _, ok := v.ProviderMED(p, "transit-b"); ok {
+		t.Fatal("a path without a MED was read as one")
+	}
+	// An exchange member's path with the MED its route server passed on
+	// is read like any other. A path via the member's next hop that
+	// another AS originated is not the member's.
+	forty := uint32(40)
+	v.mu.Lock()
+	v.applyPath(medPath(t, 5, nbr, pfx, "203.0.113.11", []uint32{64501, 64500}, 100, &forty))
+	v.applyPath(medPath(t, 6, nbr, pfx, "203.0.113.11", []uint32{64499, 64500}, 100, &ten))
+	v.mu.Unlock()
+	if asn, med, ok := v.ProviderMED(p, "ix-member"); !ok || asn != 64501 || med != 40 {
+		t.Fatalf("ix-member = %d %d %v", asn, med, ok)
+	}
+	if _, _, ok := v.ProviderMED(netip.MustParsePrefix("203.0.113.0/24"), "link-1"); ok {
+		t.Fatal("a prefix with no path has a MED")
+	}
+	// A second link-1 path with another MED: the paths disagree.
+	v.mu.Lock()
+	v.applyPath(medPath(t, 4, nbr, pfx, "192.0.2.1", []uint32{64496, 64511}, 100, &fifty))
+	v.mu.Unlock()
+	if _, _, ok := v.ProviderMED(p, "link-1"); ok {
+		t.Fatal("disagreeing paths were read as one MED")
 	}
 }

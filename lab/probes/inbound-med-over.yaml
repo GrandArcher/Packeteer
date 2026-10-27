@@ -1,0 +1,10 @@
+# link-1's inbound 95th (150) is over its 100 Mbps commit; link-2 has room.
+providers:
+  - name: link-1
+    commit_mbps: 100
+    usage_mbps: 20
+    in_mbps: 150
+  - name: link-2
+    commit_mbps: 100
+    usage_mbps: 20
+    in_mbps: 30

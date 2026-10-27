@@ -24,6 +24,8 @@ The script checks the transits' own tables with `lab/checkpath`: transit-a must 
 
 After a restart it rewrites the `fixed` prober file: transit-a slowest gives a performance steer, equal probes release it, transit-b slowest withholds the prefix from transit-b (`checkpath -absent`, selective announcement), and finally it SIGKILLs Packeteer with transit-a steered. Each stop must return both transits to the plain path, the SIGKILL case within the 9s hold timer.
 
+`lab/e2e-inbound-med.sh` is the inbound MED action (#303) on its own topology (`lab/docker-compose-inbound-med.yml`): the FRR edge (`lab/frr-inbound-med`) has two sessions to one simulated transit, transit-m (AS 64496, `lab/frr-transit-m`), link 1 on `192.0.2.0/24` and link 2 on `198.51.100.0/24`. With link-1's inbound 95th over commit, the edge sets MED 100 on link 1 only and the transit's best path moves to link 2 (`checkpath -from` reads each session's MED). Release, SIGTERM, and SIGKILL within the 9s hold timer must each put MED 0 back on link 1.
+
 `lab/e2e-bmp.sh` is the BMP monitoring station (#26) on its own topology (`lab/docker-compose-bmp.yml`). The FRR edge (`lab/frr-bmp`, bgpd with `-M bmp`) peers with Packeteer over iBGP and with two simulated eBGP transits (`lab/frr-bmp-transit-a`, `lab/frr-bmp-transit-b`). It streams post-policy Adj-RIB-In and Loc-RIB to Packeteer's station on `192.0.2.10:11019` (`lab/packeteer-bmp.yaml`). Both transits send `198.51.100.0/24`. transit-b prepends, so its path is inactive on the edge and never reaches Packeteer over iBGP. Only BMP shows it. transit-b (`bmp: only`) is the faster probed path.
 
 The script checks: (1) Packeteer steers onto transit-b's inactive path. (2) transit-b withdraws the prefix: the route check retires the improvement within seconds, inside the 5m `hold_time`, even though the edge still has Packeteer's own route as best and reports it back over BMP. Packeteer does not re-inject while transit-b has no path. (3) transit-b re-announces and the steer comes back. (4) The edge removes its BMP target: the improvement retires, and nothing is injected onto the `only` provider without a feed. (5) BMP returns and the steer comes back; SIGTERM withdraws it.
@@ -101,6 +103,7 @@ bash lab/e2e.sh
 bash lab/e2e-commit.sh
 bash lab/e2e-cost.sh
 bash lab/e2e-inbound.sh
+bash lab/e2e-inbound-med.sh
 bash lab/e2e-overload.sh
 bash lab/e2e-verify-inbound.sh
 bash lab/e2e-verify-outbound.sh

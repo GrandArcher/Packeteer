@@ -2,7 +2,7 @@
 // inbound traffic for the operator's own prefixes away from a provider, and
 // in inject mode it re-announces those prefixes to the edge through an
 // in-process inbound announcer that adds the provider's catalog prepend,
-// withhold (selective announcement), and TE communities.
+// withhold (selective announcement), MED, and TE communities.
 //
 // Two triggers steer a provider. commit: its inbound 95th percentile is
 // above its commit; released once it is at or below release_pct of the
@@ -81,6 +81,10 @@ type Config struct {
 	MaxAge time.Duration
 	// Providers are the configured, non-excluded provider names.
 	Providers []string
+	// ASN is each provider's providers[].asn. A catalog MED action (#303)
+	// moves traffic between links to one AS, so it is steered only while
+	// another provider with the same ASN is not.
+	ASN map[string]uint32
 	// Performance enables the performance trigger. Nil disables it.
 	Performance *PerfConfig
 	// PerfMaxAge is how old a probe result may be. Older results are left
@@ -282,6 +286,22 @@ func New(cfg Config, ann plugin.InboundAnnouncer, rib RIB, log *slog.Logger) (*C
 		steers: map[string]Steer{}, cooldown: map[string]time.Time{}, backedOff: map[string]bool{}, active: map[netip.Prefix]Route{},
 		pending: map[string]time.Time{}, damp: map[string]*damping{},
 	}, nil
+}
+
+// medSiblings are the other providers with p's ASN: the links a MED
+// steer away from p moves inbound traffic to.
+func medSiblings(cfg Config, p string) []string {
+	asn := cfg.ASN[p]
+	if asn == 0 {
+		return nil
+	}
+	var out []string
+	for _, o := range cfg.Providers {
+		if o != p && cfg.ASN[o] == asn {
+			out = append(out, o)
+		}
+	}
+	return out
 }
 
 // checkInject is what inject mode needs, at start and when a reload enters
@@ -534,6 +554,10 @@ func (c *Controller) Plan(now time.Time, in Input) []Change {
 		}
 		if len(c.steers)+1 >= len(c.cfg.Providers) {
 			c.blocked = append(c.blocked, Blocked{Provider: p, Reason: "would steer away from every provider"})
+			continue
+		}
+		if act.MED != 0 && !slices.ContainsFunc(medSiblings(c.cfg, p), func(o string) bool { _, on := c.steers[o]; return !on }) {
+			c.blocked = append(c.blocked, Blocked{Provider: p, Reason: fmt.Sprintf("med: every other link to AS%d is steered, so a MED would move nothing", c.cfg.ASN[p])})
 			continue
 		}
 		s := Steer{Provider: p, Trigger: cd.trigger, Since: now, InMbps95: cd.in95, CommitMbps: cd.u.CommitMbps, Action: act,

@@ -84,6 +84,13 @@ type Config struct {
 	Ports []PortPolicy
 	// Flap parks prefixes whose chosen provider keeps changing (#228).
 	Flap FlapConfig
+	// MEDTieBreak makes the MED a neighbor AS sends a tie break between
+	// its exits (#303): a performance move takes the exit with the lower
+	// MED when the scores are within MEDMargin, and keeps the prefix on
+	// a native exit the neighbor prefers by MED within it. A move past
+	// the margin records the MED it overrides.
+	MEDTieBreak bool
+	MEDMargin   float64
 }
 
 // ProviderPolicy is the commit-control and cost configuration of one
@@ -192,6 +199,10 @@ type Input struct {
 	// on the provider that carries the traffic; a prefix missing here has
 	// no passive evidence.
 	Passive map[netip.Prefix]bool
+	// MED is, per prefix and provider, the MED and neighbor AS of the
+	// provider's learned paths (#303). A missing entry has no MED, or
+	// paths that disagree, and never takes part in the tie break.
+	MED map[netip.Prefix]map[string]NeighborMED
 
 	// byPrefix indexes Results by prefix. Decide fills it, so the
 	// per-prefix confirmation checks do not scan every result.
@@ -219,6 +230,9 @@ type Improvement struct {
 	// traffic this improvement moves. Zero when no source reports volume.
 	// Display only: it does not change a decision.
 	VolumeMbps float64 `json:"volume_mbps,omitempty"`
+	// MEDOverride is set when this performance move goes against the
+	// neighbor AS's MED preference (#303).
+	MEDOverride *MEDOverride `json:"med_override,omitempty"`
 
 	// nativeSeen is the first decision, after this improvement already
 	// existed, that still saw the prefix in the RIB. nativeHeld is that
@@ -335,6 +349,10 @@ type Candidate struct {
 	// agreement applied for the provider that carries the traffic. Display
 	// only unless Config.RequireEvidence is set.
 	Confidence probe.Confidence `json:"confidence"`
+	// MED is the MULTI_EXIT_DISC of this provider's learned path and
+	// MEDASN the neighbor AS that sent it (#303). Nil when unknown.
+	MED    *uint32 `json:"med,omitempty"`
+	MEDASN uint32  `json:"med_asn,omitempty"`
 }
 
 // Decision explains what happened to one prefix in one evaluation.
@@ -352,6 +370,9 @@ type Decision struct {
 	// improvement_weights are on (#34). It orders new moves for the cap.
 	Weight     float64     `json:"weight,omitempty"`
 	Candidates []Candidate `json:"candidates"`
+	// MEDOverride is the neighbor MED preference the improvement on
+	// Current overrides (#303).
+	MEDOverride *MEDOverride `json:"med_override,omitempty"`
 	// Subranges are the measured parts of the prefix (#121), busiest
 	// first. The candidates above are their traffic-weighted aggregate.
 	// Heterogeneous is set when two of them have a different best

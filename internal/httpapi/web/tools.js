@@ -51,7 +51,7 @@ function pathRow(r, state, withPrefix) {
   return tr;
 }
 
-var PATH_COLUMNS = ["Provider", "Next hop", "AS path", "Via", {text: "MED", title: "Display only. MED does not choose the exit."}];
+var PATH_COLUMNS = ["Provider", "Next hop", "AS path", "Via", {text: "MED", title: "Breaks ties between exits to one neighbor AS (thresholds.med_tie_break)."}];
 
 function glassSection(title, note, headers, rows) {
   var sec = el("div", "tool-section");

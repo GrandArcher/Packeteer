@@ -22,6 +22,7 @@ const (
 	GateHoldTime   = "hold_time"
 	GateCap        = "cap"
 	GateOverload   = "overload"
+	GateMED        = "med"
 	GatePolicy     = "policy"
 	GateAllowlist  = "allowlist"
 	GateRouteCheck = "route_check"
@@ -166,11 +167,21 @@ func challengerOf(cands []Candidate, cfg Config, native, current string, active 
 		if nat, ok := findCandidate(cands, native); ok && nat.Usable && better(nat, cur, cfg) {
 			return native
 		}
-		if alt, ok := bestCandidate(cands, cfg.Excluded, native); ok && alt.Provider != current {
-			return alt.Provider
+		if alt, ok := bestCandidate(cands, cfg.Excluded, native); ok {
+			if pref, med := medPreferred(cands, alt, cfg, native, native); med {
+				alt = pref
+			}
+			if alt.Provider != current {
+				return alt.Provider
+			}
 		}
 	}
 	if alt, ok := bestCandidate(cands, cfg.Excluded, current); ok {
+		// As Decide does: the neighbor's MED picks among exits within the
+		// margin when its pick still beats the current path.
+		if pref, med := medPreferred(cands, alt, cfg, current, ""); med && pref.Provider != current && better(alt, cur, cfg) && better(pref, cur, cfg) {
+			alt = pref
+		}
 		return alt.Provider
 	}
 	return ""
@@ -348,9 +359,13 @@ func buildExplain(d Decision, f explainFacts, cfg Config, capUsed int) Explain {
 	// reached confirm_rounds or the cap.
 	evidenceStopped := g[GateEvidence].Status == GateFail
 	overloadStopped := !retired && strings.HasPrefix(d.Reason, overloadRefused)
-	reached := moved || (pairBetter && !static && !plan && !evidenceStopped)
+	medStopped := strings.HasPrefix(d.Reason, medRefused)
+	reached := moved || (pairBetter && !static && !plan && !evidenceStopped && !medStopped)
 	if overloadStopped {
 		g[GateOverload] = Gate{Name: GateOverload, Status: GateFail, Limit: "providers[].interface_capacity_threshold_pct", Detail: strings.TrimPrefix(d.Reason, overloadRefused)}
+	}
+	if medStopped {
+		g[GateMED] = Gate{Name: GateMED, Status: GateFail, Limit: "thresholds.med_margin " + fnum(cfg.MEDMargin), Detail: strings.TrimPrefix(d.Reason, medRefused)}
 	}
 	notReached := func(name string) Gate {
 		switch {
@@ -358,6 +373,8 @@ func buildExplain(d Decision, f explainFacts, cfg Config, capUsed int) Explain {
 			return Gate{Name: name, Status: GateSkip, Detail: "not applicable: the improvement ended"}
 		case evidenceStopped:
 			return Gate{Name: name, Status: GateSkip, Detail: "not reached: thresholds.require_evidence refused the move"}
+		case medStopped:
+			return Gate{Name: name, Status: GateSkip, Detail: "not reached: the neighbor's MED kept the native path"}
 		case confirming:
 			return Gate{Name: name, Status: GateSkip, Detail: "not reached: the switch to " + f.challenger + " is still confirming"}
 		case switching:
@@ -392,10 +409,11 @@ func buildExplain(d Decision, f explainFacts, cfg Config, capUsed int) Explain {
 		g[GateHoldTime] = holdGate(d, f, cfg)
 	}
 
-	order := []string{GateRIB, GateFreshness, GateThresholds, GateEvidence, GateConfirm, GateHoldTime, GateOverload, GateCap, GatePolicy, GateAllowlist, GateRouteCheck, GateRPKI, GateIRR}
+	order := []string{GateRIB, GateFreshness, GateThresholds, GateMED, GateEvidence, GateConfirm, GateHoldTime, GateOverload, GateCap, GatePolicy, GateAllowlist, GateRouteCheck, GateRPKI, GateIRR}
 	for _, n := range order {
-		// The overload gate is listed only when it refused the move.
-		if gate, ok := g[n]; ok || n != GateOverload {
+		// The MED and overload gates are listed only when they held the
+		// move back.
+		if gate, ok := g[n]; ok || (n != GateOverload && n != GateMED) {
 			ex.Gates = append(ex.Gates, gate)
 		}
 	}
@@ -753,7 +771,7 @@ func blockedBy(g map[string]Gate, f explainFacts, d Decision, pairBetter, pinSto
 	case f.active:
 		return failed(GateEvidence, GateConfirm, GateHoldTime, GateOverload, GateAllowlist, GateCap)
 	}
-	return failed(GateEvidence, GateHoldTime, GateAllowlist, GateConfirm, GateOverload, GateCap)
+	return failed(GateMED, GateEvidence, GateHoldTime, GateAllowlist, GateConfirm, GateOverload, GateCap)
 }
 
 func counterfactual(blocked string, d Decision, f explainFacts, cfg Config, cur, ch Candidate, haveCur, haveCh bool, capUsed int) string {
@@ -790,6 +808,8 @@ func counterfactual(blocked string, d Decision, f explainFacts, cfg Config, cur,
 			}
 		}
 		return "would move to " + to + " once " + strings.Join(weak, " and ") + " is measured by a tcp, udp, or https reply or agrees with passive TCP evidence, or with thresholds.require_evidence off"
+	case GateMED:
+		return fmt.Sprintf("would move to %s if it scored more than thresholds.med_margin %s better than the exit the neighbor prefers by MED, or with thresholds.med_tie_break off", to, fnum(cfg.MEDMargin))
 	case GateOverload:
 		return "would move to " + d.Recommended + " once its interface is back under providers[].interface_capacity_threshold_pct, or with room for this prefix's volume"
 	case GateConfirm:

@@ -128,6 +128,9 @@ func (c *Config) validateCore(add func(string, ...any)) {
 	if c.Thresholds.MinRTTDeltaPct < 0 || c.Thresholds.MinRTTDeltaPct > 100 {
 		add("thresholds.min_rtt_delta_pct %v must be between 0 and 100", c.Thresholds.MinRTTDeltaPct)
 	}
+	if m := c.Thresholds.MEDMargin; m != nil && (*m < 0 || math.IsNaN(*m) || math.IsInf(*m, 0)) {
+		add("thresholds.med_margin %v must be zero or positive", *m)
+	}
 	if c.Thresholds.ConfirmRounds < 1 || c.Thresholds.ConfirmRounds > MaxConfirmRounds {
 		add("thresholds.confirm_rounds %d must be between 1 and %d", c.Thresholds.ConfirmRounds, MaxConfirmRounds)
 	}

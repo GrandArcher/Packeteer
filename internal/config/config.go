@@ -509,6 +509,27 @@ type Thresholds struct {
 	// or udp prober reply, or passive TCP evidence that agrees (#202).
 	// Off by default.
 	RequireEvidence bool `yaml:"require_evidence"`
+	// MEDTieBreak makes the MED a neighbor AS sends a tie break between
+	// its exits for performance moves (#303). Nil is on.
+	MEDTieBreak *bool `yaml:"med_tie_break"`
+	// MEDMargin is the score difference inside which the MED decides and
+	// a move never overrides it. Nil is DefaultMEDMargin.
+	MEDMargin *float64 `yaml:"med_margin"`
+}
+
+// DefaultMEDMargin is thresholds.med_margin: 20 ms of RTT, or 0.2 points
+// of loss, with the weighted scorer's default weights.
+const DefaultMEDMargin = 20.0
+
+// MEDOn reports whether thresholds.med_tie_break is on.
+func (t Thresholds) MEDOn() bool { return t.MEDTieBreak == nil || *t.MEDTieBreak }
+
+// MEDMarginOrDefault is thresholds.med_margin with its default.
+func (t Thresholds) MEDMarginOrDefault() float64 {
+	if t.MEDMargin == nil {
+		return DefaultMEDMargin
+	}
+	return *t.MEDMargin
 }
 
 // Flap quarantine defaults (#228).
