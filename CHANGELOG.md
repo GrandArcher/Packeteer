@@ -6,6 +6,7 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 
 ### Added
 
+- MED: an inbound `med` action steers between links to one transit; a neighbor's MED breaks ties between its exits within `thresholds.med_margin`, and overrides are shown and evented (#303).
 - Opt-in `interface_capacity_threshold_pct` per provider: a performance steer that would overload a provider's interface is refused and steers already there are shed, with or without a commit (#307).
 - Opt-in steer verification: counters show an announced outbound or inbound steer verified, partial, or not moved (API, UI, events); an unmoved inbound steer is reverted and backed off (#305).
 - Opt-in RIPE Atlas ping/traceroute of a prefix's test address with your own key, on demand and after a move; credit and hourly caps; results, own probe and balance shown, display only (#213).

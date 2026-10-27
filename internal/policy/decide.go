@@ -127,6 +127,9 @@ func Decide(prev State, in Input, cfg Config, scorer plugin.Scorer, now time.Tim
 		if !unread[r.Prefix] {
 			c.ReorderPct = in.Reorder[r.Provider]
 		}
+		if m, ok := in.MED[r.Prefix][r.Provider]; ok {
+			c.MED, c.MEDASN = &m.MED, m.ASN
+		}
 		if problem, seen := in.Passive[r.Prefix]; seen && r.OK() && r.Provider == carrierOf(st, in, cfg, r.Prefix) {
 			c.Confidence = r.Confidence.WithPassive(problem == (r.Stats.LossPct > 0))
 		}
@@ -363,7 +366,11 @@ func Decide(prev State, in Input, cfg Config, scorer plugin.Scorer, now time.Tim
 			// Move to a clearly better alternative. A performance switch
 			// waits for confirm_rounds consecutive fresh wins. Hold time
 			// still has to elapse before the switch is created.
-			if alt, ok := bestCandidate(cands, cfg.Excluded, imp.Native); ok && alt.Provider != imp.Provider && better(alt, cur, cfg) {
+			alt, ok := bestCandidate(cands, cfg.Excluded, imp.Native)
+			if pref, med := medPreferred(cands, alt, cfg, imp.Native, imp.Native); ok && med {
+				alt = pref
+			}
+			if ok && alt.Provider != imp.Provider && better(alt, cur, cfg) {
 				if lacking := evidenceLacking(cfg, cur, alt); lacking != "" {
 					delete(st.confirm, p)
 					d.Recommended = alt.Provider
@@ -394,7 +401,8 @@ func Decide(prev State, in Input, cfg Config, scorer plugin.Scorer, now time.Tim
 					gate.book(alt.Provider, p)
 					delete(st.confirm, p)
 					sw := Improvement{Prefix: p, Provider: alt.Provider, Native: imp.Native, Since: now,
-						Reason: reasonText(alt, cur), Cause: plugin.CausePerformance, nativeSeen: imp.nativeSeen, nativeHeld: imp.nativeHeld}
+						Reason: reasonText(alt, cur), Cause: plugin.CausePerformance, MEDOverride: medOverride(cands, alt, cfg),
+						nativeSeen: imp.nativeSeen, nativeHeld: imp.nativeHeld}
 					st.Improvements[p] = sw
 					out.Changes = append(out.Changes, Change{Action: ActionSwitch, Old: imp, New: sw})
 					d.Action, d.Reason, d.Current, d.Cause = ActionSwitch, sw.Reason, sw.Provider, plugin.CausePerformance
@@ -468,11 +476,26 @@ func Decide(prev State, in Input, cfg Config, scorer plugin.Scorer, now time.Tim
 			continue
 		}
 		alt, ok := bestCandidate(cands, cfg.Excluded, d.Native)
-		if !ok || !better(alt, natC, cfg) {
+		medKeep := ""
+		if ok && better(alt, natC, cfg) {
+			// The neighbor's MED picks among exits within the margin. One
+			// that does not beat native on the thresholds keeps native.
+			if pref, med := medPreferred(cands, alt, cfg, d.Native, ""); med {
+				if pref.Provider == d.Native || !better(pref, natC, cfg) {
+					medKeep = medKeepReason(pref, alt, cfg)
+				} else {
+					alt = pref
+				}
+			}
+		}
+		if !ok || medKeep != "" || !better(alt, natC, cfg) {
 			if lost, _ := freshLoss(st.confirm[p], in, cfg, p, now); lost {
 				delete(st.confirm, p)
 			}
 			d.Reason = "native path is best (within thresholds)"
+			if medKeep != "" {
+				d.Reason = medKeep
+			}
 			commitOK[p] = true
 			continue
 		}
@@ -512,7 +535,8 @@ func Decide(prev State, in Input, cfg Config, scorer plugin.Scorer, now time.Tim
 			rank = rankVIP
 		}
 		wants = append(wants, pending{d: d, gain: natC.Score - alt.Score, rank: rank,
-			imp: Improvement{Prefix: p, Provider: alt.Provider, Native: d.Native, Since: now, Reason: reasonText(alt, natC), Cause: plugin.CausePerformance}})
+			imp: Improvement{Prefix: p, Provider: alt.Provider, Native: d.Native, Since: now, Reason: reasonText(alt, natC), Cause: plugin.CausePerformance,
+				MEDOverride: medOverride(cands, alt, cfg)}})
 	}
 
 	integrateCommit(st, &out, decIdx, holds, commitOK, byPrefix, &wants, cfg, scorer, in, now, retire)
@@ -584,6 +608,9 @@ func Decide(prev State, in Input, cfg Config, scorer plugin.Scorer, now time.Tim
 	annotateCost(st, &out, cfg, in.VolumeMbps)
 	for i := range decisions {
 		attachSubranges(&decisions[i], subs[decisions[i].Prefix], cfg.Excluded)
+		if imp, ok := st.Improvements[prefixes[i]]; ok && decisions[i].Current == imp.Provider {
+			decisions[i].MEDOverride = imp.MEDOverride
+		}
 		if c, ok := st.confirm[prefixes[i]]; ok && c.Provider == facts[i].challenger {
 			facts[i].streak = c.Streak
 		}

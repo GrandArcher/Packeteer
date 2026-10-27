@@ -409,6 +409,9 @@ func preflight(cfg *config.Config, log *slog.Logger, getenv func(string) string,
 	if err := checkTelemetryProviders(plugins); err != nil {
 		return nil, err
 	}
+	if err := checkInboundMED(cfg, plugins); err != nil {
+		return nil, err
+	}
 	if err := checkAuth(cfg, plugins, httpUser, getenv); err != nil {
 		return nil, err
 	}

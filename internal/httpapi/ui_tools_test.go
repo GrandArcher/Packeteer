@@ -50,7 +50,7 @@ func TestTroubleshootingPageAssets(t *testing.T) {
 		`"/api/troubleshoot/whois"`,
 		`"Learned paths for "`,
 		`sameRoute(r, g.exact) ? "selected" : "inactive"`,
-		`"Display only. MED does not choose the exit."`,
+		`"Breaks ties between exits to one neighbor AS (thresholds.med_tie_break)."`,
 		`"hop-diagram"`,
 		`"Origin AS"`,
 		`"Reverse name"`,

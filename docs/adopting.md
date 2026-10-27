@@ -10,7 +10,7 @@ Packeteer does not read another product's configuration. You copy the intent by 
 - A move is made per prefix through the decision engine, never in bulk. The prefix must be in the RIB Packeteer learned from your router, and in inject it must be in `allowlist.prefixes`.
 - Steering uses the exact learned prefix. The opt-in `synthesize` and `more_specific` blocks are the only exceptions and are not part of this plan.
 - Every injected route carries `packeteer_community` and `no-export`. `max_improvements`, `hold_time`, the thresholds, and the withdraw on shutdown, probe-source loss, stale data, and RIB session loss stay as documented in the [README](../README.md#safety-model).
-- MED is display only. Every probe packet still waits on `probe.rate_limit_pps`.
+- MED is only a tie break between exits to one neighbor AS (`thresholds.med_tie_break`, #303); it never outranks the thresholds by more than `med_margin`. Every probe packet still waits on `probe.rate_limit_pps`.
 
 ## Concepts and where they live
 

@@ -90,6 +90,8 @@ thresholds:
   # min_rtt_delta_pct: 0   # 0 (default) is off. When set, an RTT win also needs this percent of the current path's RTT.
   # confirm_rounds: 1      # consecutive fresh rounds before a new performance move or switch. 1 is today. Early probes wait a quarter of the interval. Flip-back does not wait.
   # require_evidence: false # true: a performance move needs a tcp, udp, or https reply, or passive agreement from a span or flow source, on both compared paths; ICMP alone does not move traffic.
+  # med_tie_break: true     # the MED a neighbor AS sends breaks ties between its exits (#303). false: MED is ignored.
+  # med_margin: 20          # score margin inside which the MED decides; a move past it that goes against the MED is reported.
 
 providers:
   - name: transit-a
@@ -796,6 +798,10 @@ plugin_dir: /etc/packeteer/plugins
 #           name: withhold
 #           withhold: true              # edge does not export to transit-b
 #           communities: ["64512:1209"]
+#         - provider: transit-a-link-2  # a second session to transit-a (same providers[].asn)
+#           name: med-100
+#           med: 100                    # edge sets MED 100 on that session only
+#           communities: ["64512:1302"]
 
 # Leak watch (#199, lab-proven only; see docs/leak-watch.md). Off unless
 # enabled. Needs packeteer_community. A route that carries the community, or

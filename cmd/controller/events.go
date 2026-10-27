@@ -155,6 +155,13 @@ func (w *eventWatch) improvements(now time.Time, changes []policy.Change) {
 		}
 		msg := improvementMessage(inject, mode, c, imp)
 		w.emit(now, kind, msg, fields)
+		if o := imp.MEDOverride; o != nil && c.Action != policy.ActionRetire {
+			w.emit(now, plugin.EventMEDOverridden, imp.Prefix.String()+" "+o.String(), map[string]string{
+				"prefix": imp.Prefix.String(), "asn": strconv.FormatUint(uint64(o.ASN), 10), "provider": o.Chosen,
+				"med": strconv.FormatUint(uint64(o.ChosenMED), 10), "preferred": o.Preferred,
+				"preferred_med": strconv.FormatUint(uint64(o.PreferredMED), 10), "score_gap": strconv.FormatFloat(o.ScoreGap, 'f', 1, 64), "mode": mode,
+			})
+		}
 	}
 }
 
@@ -399,6 +406,9 @@ func (w *eventWatch) inbound(now time.Time, mode string, changes []inbound.Chang
 		fields["prepend"] = strconv.Itoa(s.Action.Prepend)
 		if s.Action.Withhold {
 			fields["withhold"] = "true"
+		}
+		if s.Action.MED != 0 {
+			fields["med"] = strconv.FormatUint(uint64(s.Action.MED), 10)
 		}
 		fields["communities"] = strings.Join(s.Action.Communities, " ")
 		w.emit(now, plugin.EventInboundSteered, "steering inbound traffic away from "+s.Provider+" ("+c.Reason+")"+suffix, fields)

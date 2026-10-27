@@ -58,7 +58,15 @@
     }
    ],
    "gain": 29.0,
-   "reason": "lab-b beats lab-a on loss"
+   "reason": "lab-b beats lab-a on loss",
+   "med_override": {
+    "asn": 64496,
+    "preferred": "lab-a",
+    "preferred_med": 100,
+    "chosen": "lab-b",
+    "chosen_med": 200,
+    "score_gap": 29
+   }
   },
   {
    "prefix": "2001:db8:2::/48",

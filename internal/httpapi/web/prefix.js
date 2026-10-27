@@ -58,7 +58,7 @@ function quarantineNote(q) {
 // /api/decisions/<prefix>, the measurements behind it, and what would have
 // to change for a held move to happen.
 var GATE_LABELS = {
-  rib: "Learned RIB", freshness: "Fresh measurements", thresholds: "Thresholds", evidence: "Measurement evidence", confirm_rounds: "Confirm rounds",
+  rib: "Learned RIB", freshness: "Fresh measurements", thresholds: "Thresholds", med: "Neighbor MED", evidence: "Measurement evidence", confirm_rounds: "Confirm rounds",
   hold_time: "Hold time", cap: "Max simultaneous moves", policy: "Routing policy", allowlist: "Allowlist",
   route_check: "Route check", rpki: "RPKI", irr: "IRR"
 };

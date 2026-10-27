@@ -325,8 +325,18 @@ function prefixCard(row) {
   head.appendChild(onRouter);
   if (row.heterogeneous) head.appendChild(el("span", "badge warn", "heterogeneous"));
   if (row.quarantine) head.appendChild(el("span", "badge warn", "quarantined"));
+  var mo = row.med_override;
+  if (mo) {
+    var medBadge = el("span", "badge warn", "overrides MED");
+    medBadge.title = "The neighbor AS prefers another of its exits by MED; the measurements beat it by more than thresholds.med_margin";
+    head.appendChild(medBadge);
+  }
   card.appendChild(head);
   if (row.reason) card.appendChild(el("p", "reason", row.reason));
+  if (mo) {
+    card.appendChild(el("p", "reason", "Overrides AS" + mo.asn + "'s MED: " + mo.chosen + " (MED " + mo.chosen_med + ") is chosen over " +
+      mo.preferred + " (MED " + mo.preferred_med + "), the exit the neighbor prefers, because it scores " + fmtNum(mo.score_gap) + " better."));
+  }
   var table = el("table");
   var hr = el("tr");
   ["Provider", "Loss", "RTT", "Jitter", "Probe", "Confidence"].forEach(function (h) {
@@ -405,7 +415,7 @@ function prefixCard(row) {
   }
   var paths = row.paths || [];
   if (paths.length) {
-    card.appendChild(el("p", "reason", "Learned paths. MED is display only and does not choose the exit. Via is route server, bilateral, or unknown."));
+    card.appendChild(el("p", "reason", "Learned paths. MED breaks ties between exits to one neighbor AS (thresholds.med_tie_break). Via is route server, bilateral, or unknown."));
     var pt = el("table");
     var phr = el("tr");
     ["State", "Provider", "Next hop", "AS path", "Via", "RPKI", "IRR", "MED", "Whose MED"].forEach(function (h) {

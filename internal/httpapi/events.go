@@ -40,6 +40,7 @@ var eventHelp = map[string]string{
 	"flap":            "docs/CONFIG.md#flap_quarantine",
 	"steer":           "docs/CONFIG.md#verify",
 	"overload":        "docs/CONFIG.md#providers",
+	"med":             "docs/CONFIG.md#thresholds",
 	"exchange":        "docs/CONFIG.md#exchanges",
 	"exchange_peer":   "docs/CONFIG.md#exchanges",
 	"exchange_prefix": "docs/CONFIG.md#exchanges",

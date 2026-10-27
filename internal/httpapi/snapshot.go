@@ -204,8 +204,11 @@ type Prefix struct {
 	ExitLossPct *float64 `json:"exit_loss_pct,omitempty"`
 	ExitRTTMs   *float64 `json:"exit_rtt_ms,omitempty"`
 	// Paths are the learned paths for this prefix, including inactive
-	// add-path and BMP paths. MED on a path is display only.
+	// add-path and BMP paths.
 	Paths []LearnedPath `json:"paths,omitempty"`
+	// MEDOverride is set when the recommended exit goes against the
+	// neighbor AS's MED preference (#303).
+	MEDOverride *policy.MEDOverride `json:"med_override,omitempty"`
 	// Quarantine is set while the flap quarantine holds the prefix on its
 	// native path (#228).
 	Quarantine *Quarantine `json:"quarantine,omitempty"`
@@ -213,7 +216,8 @@ type Prefix struct {
 
 // LearnedPath is one path the edge advertised for a measured prefix.
 // Selected is the path the RIB view published. The others are inactive
-// (add-path or BMP). MED is not an input to the exit.
+// (add-path or BMP). MED is an input to the exit only through the MED tie
+// break (#303).
 type LearnedPath struct {
 	Provider string   `json:"provider,omitempty"`
 	NextHop  string   `json:"next_hop,omitempty"`
@@ -302,6 +306,10 @@ type Candidate struct {
 	// Evidence is the same facts in words.
 	Confidence probe.Confidence `json:"confidence"`
 	Evidence   string           `json:"evidence"`
+	// MED and MEDASN are the MED of this provider's learned path and the
+	// neighbor AS that sent it, read by the MED tie break (#303).
+	MED    *uint32 `json:"med,omitempty"`
+	MEDASN uint32  `json:"med_asn,omitempty"`
 }
 
 // Decision is the latest evaluation of one prefix.
@@ -324,6 +332,8 @@ type Decision struct {
 	// for a sub-range.
 	Heterogeneous bool       `json:"heterogeneous,omitempty"`
 	Subranges     []Subrange `json:"subranges,omitempty"`
+	// MEDOverride is the neighbor MED preference the move overrides (#303).
+	MEDOverride *policy.MEDOverride `json:"med_override,omitempty"`
 }
 
 // Subrange is one measured sub-range of a decided prefix (#121).
@@ -350,6 +360,8 @@ type Improvement struct {
 	// VolumeMbps is the prefix's observed rate, the traffic the improvement
 	// moves. Omitted when no target source reports volume.
 	VolumeMbps float64 `json:"volume_mbps,omitempty"`
+	// MEDOverride is the neighbor MED preference the move overrides (#303).
+	MEDOverride *policy.MEDOverride `json:"med_override,omitempty"`
 	// ASN is the origin AS of the learned path; ASName is a name Packeteer
 	// knows for it (a provider, or an earlier whois lookup). Display only.
 	ASN    uint32 `json:"asn,omitempty"`
@@ -593,6 +605,8 @@ func candidatesFrom(in []policy.Candidate) []Candidate {
 			IRRUpdated:  ptrTime(c.IRRUpdated),
 			Confidence:  c.Confidence,
 			Evidence:    c.Confidence.String(),
+			MED:         c.MED,
+			MEDASN:      c.MEDASN,
 		})
 	}
 	return out
@@ -638,6 +652,7 @@ func assembleDecisions(mode string, in []policy.Decision) []Decision {
 			Candidates:    candidatesFrom(d.Candidates),
 			Heterogeneous: d.Heterogeneous,
 			Subranges:     subrangesFrom(d.Subranges),
+			MEDOverride:   d.MEDOverride,
 		}
 		out = append(out, row)
 	}
@@ -656,15 +671,16 @@ func assembleImprovements(in Input) []Improvement {
 			continue
 		}
 		row := Improvement{
-			Prefix:     im.Prefix.String(),
-			Provider:   im.Provider,
-			Native:     im.Native,
-			Since:      im.Since,
-			Reason:     im.Reason,
-			Cause:      im.Cause,
-			CostDelta:  im.CostDelta,
-			EstSavings: im.EstSavings,
-			VolumeMbps: jsonFloat(im.VolumeMbps),
+			Prefix:      im.Prefix.String(),
+			Provider:    im.Provider,
+			Native:      im.Native,
+			Since:       im.Since,
+			Reason:      im.Reason,
+			Cause:       im.Cause,
+			CostDelta:   im.CostDelta,
+			EstSavings:  im.EstSavings,
+			VolumeMbps:  jsonFloat(im.VolumeMbps),
+			MEDOverride: im.MEDOverride,
 		}
 		explainImprovement(&row, cands[im.Prefix], in.Thresholds)
 		if left := im.Since.Add(in.Thresholds.HoldTime).Sub(in.At); left > 0 && !im.Since.IsZero() {
@@ -796,6 +812,7 @@ func assemblePrefixes(in Input) []Prefix {
 		row.Native, row.Current, row.Recommended = d.Native, d.Current, d.Recommended
 		row.Action, row.Reason = d.Action, d.Reason
 		row.Heterogeneous, row.Subranges = d.Heterogeneous, subrangesFrom(d.Subranges)
+		row.MEDOverride = d.MEDOverride
 		row.Gain = scoreGain(d)
 	}
 	for _, im := range in.Improvements {

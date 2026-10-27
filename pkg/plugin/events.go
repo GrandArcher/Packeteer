@@ -68,6 +68,7 @@ const (
 	EventOverloadRefused    = "overload.refused"
 	EventOverloadShed       = "overload.shed"
 	EventOverloadCleared    = "overload.cleared"
+	EventMEDOverridden      = "med.overridden"
 	EventFlapQuarantined    = "flap.quarantined"
 	EventFlapReleased       = "flap.released"
 	EventExchangeDegraded   = "exchange.degraded"
@@ -256,6 +257,8 @@ var eventCatalog = []EventSpec{
 		Summary: "A provider's interface is past interface_capacity_threshold_pct, so a performance steer onto it was withdrawn, lowest gain first (#307)."},
 	{Kind: EventOverloadCleared, Severity: SeverityInfo, Group: "overload", Keys: []string{"provider"}, TrapID: 70, Resolves: true,
 		Summary: "A provider that refused or shed steers is back under interface_capacity_threshold_pct (#307). Resolves overload.refused and overload.shed."},
+	{Kind: EventMEDOverridden, Severity: SeverityInfo, Group: "med", Keys: []string{"prefix"}, TrapID: 71,
+		Summary: "A performance move took an exit its neighbor AS ranks below another by MED, because the measurements beat that exit by more than thresholds.med_margin (#303)."},
 	{Kind: EventHerdRestarted, Severity: SeverityInfo, Group: "herd", TrapID: 63,
 		Summary: "A herd goroutine (recorder or puller) panicked and was restarted with backoff. Probing, decisions, and the announcer are not affected."},
 	{Kind: EventRPKIStale, Severity: SeverityWarning, Group: "rpki", Keys: []string{"source"}, TrapID: 64,

@@ -48,6 +48,9 @@ func TestInboundConfigValidation(t *testing.T) {
 		"bad community":     "marker: \"64512:667\"\nproviders: [{provider: transit-a, communities: [\"64512\"]}]",
 		"unknown field":     "marker: \"64512:667\"\nlocal_pref: 5\nproviders: [{provider: transit-a, communities: [\"64512:1\"]}]",
 		"withhold+prepend":  "marker: \"64512:667\"\nproviders: [{provider: transit-a, prepend: 1, withhold: true, communities: [\"64512:1\"]}]",
+		"med+prepend":       "marker: \"64512:667\"\nproviders: [{provider: transit-a, prepend: 1, med: 100, communities: [\"64512:1\"]}]",
+		"med+withhold":      "marker: \"64512:667\"\nproviders: [{provider: transit-a, withhold: true, med: 100, communities: [\"64512:1\"]}]",
+		"negative med":      "marker: \"64512:667\"\nproviders: [{provider: transit-a, med: -1, communities: [\"64512:1\"]}]",
 	}
 	for name, y := range bad {
 		c, err := plugin.ConfigFromYAML(y)
@@ -73,6 +76,10 @@ func TestInboundConfigValidation(t *testing.T) {
 	w := mustInbound(t, "marker: \"64512:667\"\nproviders: [{provider: transit-b, name: withhold, withhold: true, communities: [\"64512:1209\"]}]")
 	if act, ok := w.Action("transit-b"); !ok || !act.Withhold || act.Prepend != 0 {
 		t.Fatalf("withhold action = %+v %v", act, ok)
+	}
+	m := mustInbound(t, "marker: \"64512:667\"\nproviders: [{provider: transit-a, name: med-100, med: 100, communities: [\"64512:1301\"]}]")
+	if act, ok := m.Action("transit-a"); !ok || act.MED != 100 || act.Prepend != 0 || act.Withhold {
+		t.Fatalf("med action = %+v %v", act, ok)
 	}
 }
 

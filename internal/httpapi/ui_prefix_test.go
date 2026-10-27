@@ -17,11 +17,12 @@ func TestPrefixPageAssets(t *testing.T) {
 	dash := mustWeb(t, "web/dashboards.js")
 
 	for _, s := range []string{
-		`tr.appendChild(prefixCell(im.prefix));`,           // live improvements table
-		`return "/prefix/" + encodeURI(prefix);`,           // shareable URL
-		`prefixPageUpdate(lastPrefixes)`,                   // live card refresh
-		`function prefixCard(row)`,                         // the existing card, shared
-		`"Learned paths. MED is display only and does not`, // MED label inside the card
+		`tr.appendChild(prefixCell(im.prefix));`,        // live improvements table
+		`return "/prefix/" + encodeURI(prefix);`,        // shareable URL
+		`prefixPageUpdate(lastPrefixes)`,                // live card refresh
+		`function prefixCard(row)`,                      // the existing card, shared
+		`"Learned paths. MED breaks ties between exits`, // MED label inside the card
+		`el("span", "badge warn", "overrides MED")`,     // MED override (#303)
 	} {
 		if !strings.Contains(app, s) {
 			t.Errorf("app.js missing %s", s)

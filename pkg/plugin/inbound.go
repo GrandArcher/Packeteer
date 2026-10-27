@@ -26,6 +26,14 @@ type InboundAction struct {
 	// Prepend is zero then. The core never steers away from every
 	// provider, so the prefix always stays announced somewhere.
 	Withhold bool `json:"withhold,omitempty"`
+	// MED is the MULTI_EXIT_DISC the edge's export policy sets on the
+	// session to Provider when it sees Communities (#303). Provider is one
+	// of several links to the same neighbor AS, and that AS then prefers
+	// its other links into this network. Like a prepend, the edge sets it,
+	// not Packeteer. Zero means no MED; Prepend is zero and Withhold false
+	// when it is set. The core steers with it only while another link to
+	// the same AS is not steered.
+	MED uint32 `json:"med,omitempty"`
 	// Communities are standard communities ("asn:value") attached to the
 	// steer route: signal communities the edge maps to a prepend, and the
 	// provider's own traffic-engineering communities the edge passes on to

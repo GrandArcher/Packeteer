@@ -1,0 +1,10 @@
+# Both links under release_pct (90) of their commit.
+providers:
+  - name: link-1
+    commit_mbps: 100
+    usage_mbps: 20
+    in_mbps: 50
+  - name: link-2
+    commit_mbps: 100
+    usage_mbps: 20
+    in_mbps: 30

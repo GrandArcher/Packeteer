@@ -30,7 +30,9 @@ var steps = [
   function () { press("Details", document.querySelector(".prefix-row")); },
   function () {
     var d = document.querySelector(".prefix-detail");
-    note("fixture-card", "card: " + (d ? "open" : "closed") + (d && d.textContent.indexOf("MED is display only and does not choose the exit") >= 0 ? " with MED display only" : "") +
+    var t = d ? d.textContent : "";
+    note("fixture-card", "card: " + (d ? "open" : "closed") + (t.indexOf("MED breaks ties between exits to one neighbor AS") >= 0 ? " with MED tie break" : "") +
+      (t.indexOf("Overrides AS64496's MED: lab-b (MED 200) is chosen over lab-a (MED 100)") >= 0 ? " and MED override" : "") +
       ", rows " + document.querySelectorAll(".prefix-row").length);
   },
   function () {

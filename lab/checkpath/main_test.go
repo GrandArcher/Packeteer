@@ -113,3 +113,52 @@ func TestCheckWellKnownCommunities(t *testing.T) {
 		t.Fatal("lacks 65535:666 matched a blackhole path")
 	}
 }
+
+// Shape of FRR 10.2 on a transit with two sessions to one edge (#303):
+// the MED on link 1 moved best-path selection to link 2.
+const twoLinks = `{
+  "prefix":"203.0.113.0/24",
+  "paths":[
+    {
+      "aspath":{"string":"64512","length":1},
+      "metric":100,
+      "valid":true,
+      "nexthops":[{"ip":"192.0.2.254","afi":"ipv4","used":true}],
+      "peer":{"peerId":"192.0.2.254","routerId":"192.0.2.254","type":"external"}
+    },
+    {
+      "aspath":{"string":"64512","length":1},
+      "valid":true,
+      "bestpath":{"overall":true,"selectionReason":"MED"},
+      "nexthops":[{"ip":"198.51.100.254","afi":"ipv4","used":true}],
+      "peer":{"peerId":"198.51.100.254","routerId":"192.0.2.254","type":"external"}
+    }
+  ]
+}`
+
+func TestCheckMEDAndFrom(t *testing.T) {
+	med := func(v int64) *int64 { return &v }
+	ok := []Want{
+		{NextHop: "198.51.100.254", MED: med(0)},
+		{From: "192.0.2.254", ASPath: "64512", MED: med(100)},
+		{From: "198.51.100.254", MED: med(0)},
+	}
+	for _, w := range ok {
+		if err := Check(twoLinks, w); err != nil {
+			t.Errorf("%+v: %v", w, err)
+		}
+	}
+	bad := map[string]struct {
+		want Want
+		msg  string
+	}{
+		"steered link plain": {Want{From: "192.0.2.254", MED: med(0)}, "med 100, want 0"},
+		"best on link 1":     {Want{NextHop: "192.0.2.254"}, "next hop"},
+		"unknown peer":       {Want{From: "192.0.2.99", MED: med(0)}, "no path from 192.0.2.99"},
+	}
+	for name, tc := range bad {
+		if err := Check(twoLinks, tc.want); err == nil || !strings.Contains(err.Error(), tc.msg) {
+			t.Errorf("%s: err = %v, want %q", name, err, tc.msg)
+		}
+	}
+}

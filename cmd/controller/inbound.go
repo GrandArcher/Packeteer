@@ -69,9 +69,11 @@ func newInbound(cfg *config.Config, plugins *pluginhost.Set, view *rib.View, oth
 	for _, t := range in.Moderated {
 		ic.Moderated[t] = true
 	}
+	ic.ASN = map[string]uint32{}
 	for _, p := range cfg.Providers {
 		if !p.Exclude {
 			ic.Providers = append(ic.Providers, p.Name)
+			ic.ASN[p.Name] = p.ASN
 		}
 	}
 	for _, s := range in.Prefixes {
@@ -93,6 +95,31 @@ func newInbound(cfg *config.Config, plugins *pluginhost.Set, view *rib.View, oth
 		gate = ribGate{view}
 	}
 	return inbound.New(ic, ann, gate, log.With("component", "inbound"))
+}
+
+// checkInboundMED refuses a catalog MED action (#303) on a provider that
+// no other non-excluded provider shares an asn with: the MED moves inbound
+// traffic between links to one AS, so it needs a second link.
+func checkInboundMED(cfg *config.Config, plugins *pluginhost.Set) error {
+	if cfg.Inbound == nil || plugins.Inbound == nil {
+		return nil
+	}
+	links := map[uint32]int{}
+	for _, p := range cfg.Providers {
+		if !p.Exclude && p.ASN != 0 {
+			links[p.ASN]++
+		}
+	}
+	for _, p := range cfg.Providers {
+		act, ok := plugins.Inbound.Plugin.Action(p.Name)
+		if !ok || act.MED == 0 {
+			continue
+		}
+		if p.Exclude || links[p.ASN] < 2 {
+			return fmt.Errorf("inbound: provider %q has a med action but no other provider shares its asn (set providers[].asn on each link to that AS)", p.Name)
+		}
+	}
+	return nil
 }
 
 // bindInbound attaches the inbound announcer to the speaker when inbound
@@ -134,7 +161,7 @@ func runInbound(ctx context.Context, now time.Time, inb *inbound.Controller, plu
 		log.Info("inbound "+c.Action, "mode", mode, "trigger", c.Steer.Trigger, "moderated", c.Steer.Moderated,
 			"provider", c.Steer.Provider, "in_mbps_95", c.Steer.InMbps95, "commit_mbps", c.Steer.CommitMbps,
 			"hold", c.Steer.Hold, "flaps", c.Steer.Flaps, "inertia_mbps", c.Steer.Shift,
-			"action", act.Name, "prepend", act.Prepend, "withhold", act.Withhold, "communities", strings.Join(act.Communities, " "), "reason", c.Reason)
+			"action", act.Name, "prepend", act.Prepend, "withhold", act.Withhold, "med", act.MED, "communities", strings.Join(act.Communities, " "), "reason", c.Reason)
 	}
 	actx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
