@@ -111,6 +111,10 @@ docker run --rm -v "$PWD/config.yaml:/etc/packeteer/config.yaml" ghcr.io/grandar
 
 Provider names are reduced to letters, digits, `_`, `.` and `-` in the output. Check each snippet against your platform release before use.
 
+## Transits in a VRF
+
+When the transit sessions are in a VRF on the router, the per-provider rules there set each `next_hop` in that VRF: [vrf.md](vrf.md#probe-source-routing-per-vrf).
+
 ## Internet exchange peers
 
 Each exchange peer (`exchanges[].peers[]`, #27) is measured from its own `source_ip`, so it needs its own table: a route via the peer's LAN address, and a rule from the source to that table. The peering LAN itself is not a probe target (#145): packets to customer prefixes still leave via that peer's `source_ip` and `next_hop`. On Linux, with the probe box on the peering LAN or behind the IX router:

@@ -174,6 +174,8 @@ If the native path is already hidden and the provider then withdraws it, a singl
 
 Several edges, or a route reflector in front of them: see [route-reflector.md](route-reflector.md).
 
+Transit sessions in an internet VRF, or providers that send a partial table or only a default route: see [vrf.md](vrf.md).
+
 ## Internet exchange peers
 
 With `exchanges` (#27) each IX member you list is a provider whose `next_hop` is its address on the peering LAN. Packeteer steers a prefix to a member only when it sees that member's own path for the exact prefix, so the router must show Packeteer every path: FRR `neighbor <packeteer> addpath-tx-all-paths` in the address family (with `add_path: true` on the neighbor), or BMP post-policy monitoring (`rib_sources`, `bmp: prefer`). A route server is transparent, so the member's AS is the first AS on its paths.

@@ -518,3 +518,33 @@ func TestStandbyAnnouncesNothing(t *testing.T) {
 		t.Fatalf("standby touched the announcer: all=%d announces=%d", ann.all, ann.announces)
 	}
 }
+
+// A partial-table or default-only provider puts a default route in the RIB
+// (#206). It is learned and allowlisted here, and still never announced,
+// nor are the learned prefixes inside it as its more-specifics.
+func TestDefaultRouteIsNeverAnnounced(t *testing.T) {
+	ctx := context.Background()
+	v4, v6, learned, inside := pfx("0.0.0.0/0"), pfx("::/0"), pfx("198.51.100.0/24"), pfx("203.0.113.0/24")
+	rib := memRIB{ready: true, has: map[netip.Prefix]bool{v4: true, v6: true, learned: true, inside: true}}
+	cfg := testCfg()
+	cfg.Allowlist = []netip.Prefix{v4, v6}
+	cfg.MoreSpecific, cfg.MaxRoutes = true, 50
+	ann := &fakeAnn{}
+	c, err := New(cfg, ann, &rib, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = c.Sync(ctx, []policy.Improvement{imp(v4.String(), "b"), imp(v6.String(), "c"), imp(learned.String(), "b")})
+	if err == nil || strings.Count(err.Error(), "is a default route and is never steered") != 2 {
+		t.Fatalf("err = %v", err)
+	}
+	if ann.count() != 1 || ann.announces != 1 {
+		t.Fatalf("routes = %v, want only %s", ann.routes, learned)
+	}
+	if _, ok := ann.routes[learned]; !ok {
+		t.Fatalf("learned prefix not announced: %v", ann.routes)
+	}
+	if _, ok := ann.routes[inside]; ok {
+		t.Fatalf("%s announced as a more-specific of the default route", inside)
+	}
+}
