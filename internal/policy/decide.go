@@ -401,7 +401,7 @@ func Decide(prev State, in Input, cfg Config, scorer plugin.Scorer, now time.Tim
 					gate.book(alt.Provider, p)
 					delete(st.confirm, p)
 					sw := Improvement{Prefix: p, Provider: alt.Provider, Native: imp.Native, Since: now,
-						Reason: reasonText(alt, cur), Cause: plugin.CausePerformance, MEDOverride: medOverride(cands, alt, cfg),
+						Reason: reasonText(alt, cur), Cause: plugin.CausePerformance, MEDOverride: medOverride(cands, alt, cfg, imp.Native),
 						nativeSeen: imp.nativeSeen, nativeHeld: imp.nativeHeld}
 					st.Improvements[p] = sw
 					out.Changes = append(out.Changes, Change{Action: ActionSwitch, Old: imp, New: sw})
@@ -536,7 +536,7 @@ func Decide(prev State, in Input, cfg Config, scorer plugin.Scorer, now time.Tim
 		}
 		wants = append(wants, pending{d: d, gain: natC.Score - alt.Score, rank: rank,
 			imp: Improvement{Prefix: p, Provider: alt.Provider, Native: d.Native, Since: now, Reason: reasonText(alt, natC), Cause: plugin.CausePerformance,
-				MEDOverride: medOverride(cands, alt, cfg)}})
+				MEDOverride: medOverride(cands, alt, cfg, d.Native)}})
 	}
 
 	integrateCommit(st, &out, decIdx, holds, commitOK, byPrefix, &wants, cfg, scorer, in, now, retire)

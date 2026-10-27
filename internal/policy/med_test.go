@@ -137,3 +137,38 @@ func TestMEDOnPerformanceSwitch(t *testing.T) {
 		t.Fatalf("switch = %+v, want a overriding b", imp)
 	}
 }
+
+func TestMEDPickIsTheChallengerWhileConfirming(t *testing.T) {
+	c := medCfg()
+	c.ConfirmRounds = 3
+	meds := map[string]NeighborMED{"a": {ASN: 64496, MED: 50}, "b": {ASN: 64496, MED: 10}, "c": {ASN: 64497, MED: 0}}
+	input := medIn("c", meds, m{"a", 0, 30}, m{"b", 0, 40}, m{"c", 0, 80})
+	e := NewEngine(c, scorer(t))
+	e.Evaluate(input, t0)
+	d, ex, _, ok := e.Explain(pA)
+	if !ok || d.Recommended != "b" || d.Reason != "confirming b (1/3)" {
+		t.Fatalf("decision = %+v", d)
+	}
+	var challenger string
+	for _, s := range ex.Samples {
+		if s.Role == "challenger" {
+			challenger = s.Provider
+		}
+	}
+	if challenger != "b" || !strings.Contains(ex.Counterfactual, "would move to b after 2 more") {
+		t.Fatalf("challenger %q, counterfactual %q", challenger, ex.Counterfactual)
+	}
+	wantGate(t, ex, GateConfirm, GateFail, "1 of 3")
+}
+
+func TestMEDOverrideIgnoresAnExcludedExit(t *testing.T) {
+	// c is excluded: Packeteer could never pick it, so its lower MED is
+	// not a preference the move to b overrides.
+	meds := map[string]NeighborMED{"a": {ASN: 64497, MED: 0}, "b": {ASN: 64496, MED: 50}, "c": {ASN: 64496, MED: 10}}
+	cf := medCfg()
+	cf.Excluded = map[string]bool{"c": true}
+	st, _ := Decide(NewState(), medIn("a", meds, m{"a", 0, 80}, m{"b", 0, 30}, m{"c", 0, 30}), cf, scorer(t), t0)
+	if imp := st.Improvements[pA]; imp.Provider != "b" || imp.MEDOverride != nil {
+		t.Fatalf("improvement = %+v, want b with no override", imp)
+	}
+}

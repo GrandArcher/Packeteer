@@ -65,9 +65,10 @@ func medPreferred(cands []Candidate, c Candidate, cfg Config, native, skip strin
 }
 
 // medOverride reports the neighbor preference a move onto c overrides:
-// the lowest-MED usable exit of c's neighbor AS, when its MED is below
-// c's. Nil when the tie break is off or the move follows the MED.
-func medOverride(cands []Candidate, c Candidate, cfg Config) *MEDOverride {
+// the lowest-MED usable exit of c's neighbor AS that medPreferred could
+// pick, when its MED is below c's. Nil when the tie break is off or the
+// move follows the MED.
+func medOverride(cands []Candidate, c Candidate, cfg Config, native string) *MEDOverride {
 	if !cfg.MEDTieBreak {
 		return nil
 	}
@@ -78,7 +79,7 @@ func medOverride(cands []Candidate, c Candidate, cfg Config) *MEDOverride {
 	var o *MEDOverride
 	for _, x := range cands {
 		xm, ok := medOf(x)
-		if !x.Usable || x.Provider == c.Provider || !ok || xm.ASN != m.ASN || xm.MED >= m.MED {
+		if !x.Usable || x.Provider == c.Provider || (cfg.Excluded[x.Provider] && x.Provider != native) || !ok || xm.ASN != m.ASN || xm.MED >= m.MED {
 			continue
 		}
 		if o == nil || xm.MED < o.PreferredMED || (xm.MED == o.PreferredMED && x.Provider < o.Preferred) {

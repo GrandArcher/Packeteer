@@ -177,6 +177,11 @@ func challengerOf(cands []Candidate, cfg Config, native, current string, active 
 		}
 	}
 	if alt, ok := bestCandidate(cands, cfg.Excluded, current); ok {
+		// As Decide does: the neighbor's MED picks among exits within the
+		// margin when its pick still beats the current path.
+		if pref, med := medPreferred(cands, alt, cfg, current, ""); med && pref.Provider != current && better(alt, cur, cfg) && better(pref, cur, cfg) {
+			alt = pref
+		}
 		return alt.Provider
 	}
 	return ""

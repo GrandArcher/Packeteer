@@ -1202,7 +1202,7 @@ jobs:
           done
           curl -fsS http://127.0.0.1:18181/healthz >/dev/null
           bash lab/ui-smoke.sh http://127.0.0.1:18181/troubleshooting.html 'mode-observe' 'It announces nothing.' \
-            'Learned paths for 198.51.100.0/24' '>selected<' '>inactive<' 'route server' 'bilateral' 'Display only. MED does not choose the exit.' \
+            'Learned paths for 198.51.100.0/24' '>selected<' '>inactive<' 'route server' 'bilateral' 'Breaks ties between exits to one neighbor AS (thresholds.med_tie_break).' \
             'More-specific routes (1)' 'Covering route' 'No route is learned for exactly 198.51.100.64/26.' \
             'class="hop-diagram"' 'gw.transit-a.example.net' '>AS64496<' '>AS64500<' 'target reached' 'target not reached' \
             'send: network is unreachable' 'error: bind: source address unavailable' '>100%<' 'Raw JSON' \

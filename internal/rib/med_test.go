@@ -129,10 +129,12 @@ func TestProviderMED(t *testing.T) {
 		ASN: asn, RouterID: netip.MustParseAddr("192.0.2.10"),
 		Neighbors: []Neighbor{{Address: netip.MustParseAddr(nbr)}},
 		Providers: map[netip.Addr]string{
-			netip.MustParseAddr("192.0.2.1"): "link-1",
-			netip.MustParseAddr("192.0.2.5"): "link-2",
-			netip.MustParseAddr("192.0.2.9"): "transit-b",
+			netip.MustParseAddr("192.0.2.1"):    "link-1",
+			netip.MustParseAddr("192.0.2.5"):    "link-2",
+			netip.MustParseAddr("192.0.2.9"):    "transit-b",
+			netip.MustParseAddr("203.0.113.11"): "ix-member",
 		},
+		PeerASN: map[string]uint32{"ix-member": 64501},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -154,6 +156,17 @@ func TestProviderMED(t *testing.T) {
 	}
 	if _, _, ok := v.ProviderMED(p, "transit-b"); ok {
 		t.Fatal("a path without a MED was read as one")
+	}
+	// An exchange member's path with the MED its route server passed on
+	// is read like any other. A path via the member's next hop that
+	// another AS originated is not the member's.
+	forty := uint32(40)
+	v.mu.Lock()
+	v.applyPath(medPath(t, 5, nbr, pfx, "203.0.113.11", []uint32{64501, 64500}, 100, &forty))
+	v.applyPath(medPath(t, 6, nbr, pfx, "203.0.113.11", []uint32{64499, 64500}, 100, &ten))
+	v.mu.Unlock()
+	if asn, med, ok := v.ProviderMED(p, "ix-member"); !ok || asn != 64501 || med != 40 {
+		t.Fatalf("ix-member = %d %d %v", asn, med, ok)
 	}
 	if _, _, ok := v.ProviderMED(netip.MustParsePrefix("203.0.113.0/24"), "link-1"); ok {
 		t.Fatal("a prefix with no path has a MED")
