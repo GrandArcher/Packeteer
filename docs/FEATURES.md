@@ -29,13 +29,13 @@ Milestones:
 | v0.6 | 9 | 7 |
 | v0.7 | 3 | 3 |
 | v0.8 | 20 | 16 |
-| v0.9 | 9 | 8 |
+| v0.9 | 10 | 9 |
 | won't do | 2 | - |
-| **total** | 122 | 108 |
+| **total** | 123 | 109 |
 
 | Status | Count |
 |---|---|
-| done | 108 |
+| done | 109 |
 | partial | 10 |
 | in progress | 0 |
 | planned | 2 |
@@ -184,6 +184,7 @@ The `maintenance` policy excludes providers during cron-scheduled, one-off, or o
 | BGP additional paths (add-path) on the iBGP session (receive, incl. inactive/IX paths, per-provider `add_path` route check) and in BMP (path-ID decoding) | done (lab-proven) | v0.3 | core (`internal/rib`) + RIB source (`bmp`) | #26 | no (lab-proven) |
 | BMP monitoring (post-policy Adj-RIB-In and Loc-RIB, incl. inactive IX paths), per-provider `bmp` usage (off/prefer/only), route check before injecting | done (lab-proven) | v0.3 | RIB source (`bmp`) | #26 | no (lab-proven) |
 | Multiple edge routers (N iBGP sessions, per-router provider reachability and next hop, egress-router loss retires) | done (lab-proven) | v0.3 | announcer (`gobgp`) + core | #27 | no (lab-proven) |
+| Internet VRF and partial-table providers (Packeteer's iBGP session inside the VRF on the router, probe routing per VRF documented, no full-table provider needed; the default route is never steered) | done (lab-proven; #206: [vrf.md](vrf.md); `lab/e2e-vrf.sh` learns, steers, and withdraws on SIGTERM and SIGKILL inside an FRR VRF with one partial-table and one default-only transit; VPNv4/VPNv6 sessions are not supported) | v0.9 | core (`internal/policy`, `internal/announce`) + docs | #206 | no (lab-proven) |
 | Centralized route reflector support (Packeteer as a reflector client, deployment guide) | done (lab-proven) | v0.3 | announcer (`gobgp`) | #27 | no (lab-proven) |
 | Internet exchanges / many peers with per-peer next-hop (peers as route-checked providers, exchange statistics, discovered members) | done (lab-proven) | v0.3 | core (`exchanges`, `internal/rib`, `internal/exchange`, `/api/exchanges`) + announcer | #27, #145, #146 | no (lab-proven) |
 | Exchange autoconfig: accept a discovered LAN member as a draft peer (ASN, next hop) | partial: the settings form offers each discovered member of a running exchange as a draft peer with its AS and next hop, and nothing is saved, probed, or announced (#155); the name from PeeringDB is on `GET /api/lookup` (#153) and the form does not read it | v0.8 | core (`exchanges`) + UI | #155 | no |

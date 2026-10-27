@@ -428,6 +428,14 @@ func Decide(prev State, in Input, cfg Config, scorer plugin.Scorer, now time.Tim
 				d.Reason = "RIB next-hop matches no provider"
 				continue
 			}
+			if p.Bits() == 0 {
+				// A partial-table or default-only provider sends a default
+				// route (#206). Steering it would move every destination
+				// without a more specific route at once.
+				delete(st.confirm, p)
+				d.Reason = "default route is never steered"
+				continue
+			}
 		} else {
 			d.Reason = "no RIB configured: ranking only"
 			continue

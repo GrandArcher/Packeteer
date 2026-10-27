@@ -97,6 +97,7 @@ const (
 	ribOff ribState = iota
 	ribAbsent
 	ribNoProvider
+	ribDefault
 	ribHidden
 	ribOK
 )
@@ -261,6 +262,8 @@ func factsOf(st *State, in Input, cfg Config, p netip.Prefix, cands []Candidate,
 		f.rib = ribAbsent
 	case native == "":
 		f.rib = ribNoProvider
+	case p.Bits() == 0:
+		f.rib = ribDefault
 	default:
 		f.rib, f.current = ribOK, native
 	}
@@ -463,6 +466,8 @@ func ribGate(d Decision, f explainFacts) Gate {
 		g.Status, g.Value, g.Limit = GateFail, "prefix not in the learned RIB", "a neighbor advertises the exact prefix"
 	case ribNoProvider:
 		g.Status, g.Value, g.Limit = GateFail, "next hop matches no provider", "next hop of a configured provider"
+	case ribDefault:
+		g.Status, g.Value, g.Limit = GateFail, "default route", "a learned prefix longer than /0"
 	case ribHidden:
 		g.Status, g.Value, g.Detail = GatePass, "native "+d.Native, "the native path is not advertised now; the improvement's own route can hide it"
 	default:
@@ -782,8 +787,11 @@ func counterfactual(blocked string, d Decision, f explainFacts, cfg Config, cur,
 	}
 	switch blocked {
 	case GateRIB:
-		if f.rib == ribOff {
+		switch f.rib {
+		case ribOff:
 			return "would be decided once bgp.neighbors is configured, so the native exit is known"
+		case ribDefault:
+			return "is never steered; a learned prefix inside it is decided on its own"
 		}
 		return "would be decided once a neighbor advertises " + d.Prefix.String() + " with a next hop of a configured provider"
 	case GateFreshness:

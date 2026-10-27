@@ -164,7 +164,7 @@ Router-side show commands are in each guide: [mikrotik.md](mikrotik.md), [frr.md
 
 Open `/prefix/<prefix>` and read the Why? panel, or call `GET /api/decisions/<prefix>`. It lists every check in order (`rib`, `freshness`, `thresholds`, `confirm_rounds`, `hold_time`, `cap`, `policy`, `allowlist`, `route_check`, `rpki`, `irr`) with the value compared and the limit, names the one that stopped the move in `blocked_by`, and says in `counterfactual` what would change it. The usual causes by gate:
 
-- `rib`: the prefix is not in the learned RIB, or its next hop matches no provider (previous section).
+- `rib`: the prefix is not in the learned RIB, or its next hop matches no provider (previous section), or it is a default route, which is never steered ([vrf.md](vrf.md#partial-table-and-default-only-providers)).
 - `freshness`: the native provider or the better candidate has no fresh measurement, or its source is down.
 - `thresholds`: the gain is inside `thresholds.min_loss_delta_pct` and `thresholds.min_rtt_delta_ms` (both 0 in the minimum config, which sets neither; the example config uses 1% and 15 ms), or inside `thresholds.min_rtt_delta_pct` when set. A loss win does not use the percent.
 - `confirm_rounds`: `thresholds.confirm_rounds` is greater than 1 and the streak is still short. A stale round does not count. A round that cannot compare keeps the streak and does not ask for an early probe. Early probes wait a quarter of the probe interval.

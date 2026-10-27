@@ -193,6 +193,27 @@ func TestFRRGuideIsTheLabConfig(t *testing.T) {
 	}
 }
 
+// The VRF guide shows the VRF lab edge's file verbatim (#206).
+func TestVRFGuideIsTheLabConfig(t *testing.T) {
+	doc := repoFile(t, "docs/vrf.md")
+	const marker = "<!-- lab-file: lab/frr-vrf/frr.conf -->\n```\n"
+	i := strings.Index(doc, marker)
+	if i < 0 {
+		t.Fatal("docs/vrf.md has no lab-file block")
+	}
+	rest := doc[i+len(marker):]
+	j := strings.Index(rest, "```\n")
+	if j < 0 {
+		t.Fatal("unterminated lab-file block")
+	}
+	if got, want := rest[:j], repoFile(t, "lab/frr-vrf/frr.conf"); got != want {
+		t.Fatalf("docs/vrf.md differs from lab/frr-vrf/frr.conf:\n--- guide\n%s\n--- lab\n%s", got, want)
+	}
+	if !strings.Contains(repoFile(t, "lab/docker-compose-vrf.yml"), "./frr-vrf:/etc/frr") {
+		t.Fatal("the VRF lab does not mount lab/frr-vrf")
+	}
+}
+
 // The MikroTik guide's iBGP block is what the CHR lab (#52) applies.
 func TestMikroTikGuideIsTheCHRLabConfig(t *testing.T) {
 	doc := repoFile(t, "docs/mikrotik.md")
@@ -258,6 +279,8 @@ func TestGuidesUseDocumentationNumbers(t *testing.T) {
 		"docs/frr.md", "docs/junos.md", "docs/cisco.md", "docs/routers.md", "docs/mikrotik.md",
 		"lab/frr-walkthrough/frr.conf", "lab/packeteer-walkthrough.yaml", "lab/docker-compose-walkthrough.yml",
 		"lab/chr/edge.rsc", "lab/chr/packeteer.yaml", "lab/e2e-chr.sh",
+		"docs/vrf.md", "lab/frr-vrf/frr.conf", "lab/frr-vrf-transit-a/frr.conf", "lab/frr-vrf-transit-b/frr.conf",
+		"lab/packeteer-vrf.yaml", "lab/docker-compose-vrf.yml", "lab/e2e-vrf.sh", "lab/frr-vrf-start.sh",
 	}
 	for _, f := range files {
 		sc := bufio.NewScanner(strings.NewReader(repoFile(t, f)))

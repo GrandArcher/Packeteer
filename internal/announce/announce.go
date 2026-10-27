@@ -520,6 +520,11 @@ func (c *Controller) Sync(ctx context.Context, imps []policy.Improvement) error 
 // of them fit under MaxRoutes.
 func (c *Controller) syncImprovementLocked(ctx context.Context, im policy.Improvement, learned []netip.Prefix) error {
 	p := im.Prefix.Masked()
+	if p.Bits() == 0 {
+		// Decide never steers a default route (#206). Only this function
+		// adds an improvement to active, so a refused one is never on.
+		return fmt.Errorf("announce: %s is a default route and is never steered", p)
+	}
 	s, on := c.active[p]
 	if c.cfg.Held != nil && c.cfg.Held(p) {
 		if on {
