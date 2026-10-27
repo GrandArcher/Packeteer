@@ -1471,7 +1471,7 @@ jobs:
           done
           curl -fsS http://127.0.0.1:18184/healthz >/dev/null
           bash lab/ui-smoke.sh 'http://127.0.0.1:18184/prefixes.html?size=25' 'mode-observe' 'It announces nothing.' \
-            'card: open with MED tie break and MED override, rows 25' 'overrides MED' \
+            'card: open with MED tie break and MED override with badge, rows 25' \
             'asn map: bounded, counts kept, links 1' \
             'page 2: ?size=25&amp;page=2 first 2001:db8:1a::/48 cards 0' \
             'filtered: ?asn=AS64500&amp;sort=gain&amp;size=25 first 2001:db8:1::/48 rows 3' \

@@ -33,6 +33,7 @@ var steps = [
     var t = d ? d.textContent : "";
     note("fixture-card", "card: " + (d ? "open" : "closed") + (t.indexOf("MED breaks ties between exits to one neighbor AS") >= 0 ? " with MED tie break" : "") +
       (t.indexOf("Overrides AS64496's MED: lab-b (MED 200) is chosen over lab-a (MED 100)") >= 0 ? " and MED override" : "") +
+      (d && Array.prototype.some.call(d.querySelectorAll(".badge.warn"), function (b) { return b.textContent === "overrides MED"; }) ? " with badge" : "") +
       ", rows " + document.querySelectorAll(".prefix-row").length);
   },
   function () {
