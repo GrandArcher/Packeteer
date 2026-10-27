@@ -86,7 +86,16 @@ func newConfigEditor(cfg *config.Config, path string, getenv func(string) string
 	if !editorEnabled(cfg, httpUser, setupPending) {
 		return nil, nil
 	}
-	check := func(data []byte) (*config.Config, error) {
+	diff := func(running, next *config.Config) ([]string, []string) {
+		return classify(running, next)
+	}
+	return configedit.New(path, cfg, candidateChecker(cfg, getenv, httpUser), diff)
+}
+
+// candidateChecker is the start-time validation of a candidate config
+// (see newConfigEditor), shared with the blast-radius preview.
+func candidateChecker(cfg *config.Config, getenv func(string) string, httpUser string) func([]byte) (*config.Config, error) {
+	return func(data []byte) (*config.Config, error) {
 		next, err := config.Parse(data)
 		if err != nil {
 			return nil, err
@@ -103,10 +112,6 @@ func newConfigEditor(cfg *config.Config, path string, getenv func(string) string
 		}
 		return next, nil
 	}
-	diff := func(running, next *config.Config) ([]string, []string) {
-		return classify(running, next)
-	}
-	return configedit.New(path, cfg, check, diff)
 }
 
 // checkExecUnchanged refuses a candidate whose exec plugins or plugin_dir

@@ -6,6 +6,7 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 
 ### Added
 
+- Blast-radius preview: `GET /api/blast`, a Settings panel, and a dry run with a preview token before a change that can alter announcements applies; SIGHUP logs the diff (#227).
 - Internet VRF and partial-table providers: FRR lab steers and withdraws inside a VRF with no full-table transit; a learned default route is never steered or announced; docs/vrf.md (#206).
 - MED: an inbound `med` action steers between links to one transit; a neighbor's MED breaks ties between its exits within `thresholds.med_margin`, and overrides are shown and evented (#303).
 - Opt-in `interface_capacity_threshold_pct` per provider: a performance steer that would overload a provider's interface is refused and steers already there are shed, with or without a commit (#307).

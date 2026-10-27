@@ -136,6 +136,11 @@ type configRequest struct {
 	YAML          string `json:"yaml"`
 	Base          string `json:"base"`
 	ConfirmInject bool   `json:"confirm_inject"`
+	// DryRun true answers with the blast-radius preview and writes nothing.
+	// A change that can alter announcements is saved only with DryRun false
+	// and the PreviewToken that dry run returned (#227).
+	DryRun       *bool  `json:"dry_run"`
+	PreviewToken string `json:"preview_token"`
 }
 
 func (s *Server) handleConfigValidate(w http.ResponseWriter, r *http.Request) {
@@ -206,7 +211,11 @@ func (s *Server) handleConfigSave(w http.ResponseWriter, r *http.Request) {
 	}
 	next := configedit.Hash([]byte(req.YAML))
 	noteAudit(r, "config", "base="+short(req.Base)+" new="+short(next))
-	if !s.preflightGate(w, r, s.editor.Check([]byte(req.YAML)).EnablesInject, []byte(req.YAML)) {
+	check := s.editor.Check([]byte(req.YAML))
+	if !s.configGate(w, r, req, check) {
+		return
+	}
+	if !s.preflightGate(w, r, check.EnablesInject, []byte(req.YAML)) {
 		return
 	}
 	f, res, err := s.editor.Save([]byte(req.YAML), req.Base, req.ConfirmInject)

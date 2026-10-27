@@ -35,6 +35,14 @@ While any check blocks, the wizard's inject step is hidden, `POST /api/config/in
 
 An instance whose config has an `ixp` block has no preflight: IXP mode never announces.
 
+## Blast-radius preview
+
+Settings has a Blast radius panel, and `GET /api/blast` returns the same report. It decides the latest probe round again under `inject` on a copy of the decision state (`Engine.WhatIf`), so it uses the real `Decide` path with your allowlist, cap, hold time, and thresholds. It lists the routes inject would add, move, and withdraw compared with what is on the wire now, the traffic each provider gains and loses (from a flow source when one is configured, otherwise the route is counted as unknown), and warnings: a provider over its interface capacity limit or its commit, `max_improvements` reached, better paths outside the allowlist, an empty allowlist, allowlist prefixes with stale or no measurements, and decided routes the announcer would refuse (leak-watch hold, inbound or mitigation reservation, not in the learned RIB). It announces nothing, changes no state, and works in observe mode. The guided inject step shows it for the inject config before you save.
+
+A change that applies online and can alter announcements (`mode`, `thresholds`, `hold_time`, `improvement_ttl`, `flap_quarantine`, `max_improvements`, `allowlist`, `policies`, `sources`) is previewed first. `PUT /api/config` with `dry_run: true` writes nothing and returns the preview and a `preview_token`; the save needs `dry_run: false` and that token, from the same file revision and YAML, or it answers `428` (`preview_required`). Settings does this for you and shows an Apply button. Other changes skip it. A reload from SIGHUP or a settings push cannot ask, so it logs the add, move, and withdraw counts and warning codes before it applies. The preview keeps the current policy and source results, so a change to `policies` or `sources` shows its effect after the next round (a warning says so). Inbound and mitigation steers are not in the preview. Before the first decision round the preview answers `409` and a gated save cannot be confirmed. Preview tokens are signed with a key made at start, so a restart invalidates them. Nothing here enables inject.
+
+Rollback: the preview adds no config key; remove the panel's use and nothing changes. A save that was confirmed is reverted like any config edit.
+
 ## Router config
 
 `packeteer -snippet <vendor>` prints the session and filter config for the configured edge and exits. The vendors are `frr`, `bird`, `junos`, `iosxr`, `arista`, and `mikrotik`. The Settings panel shows the same text (`GET /api/snippets?vendor=frr`, admin). The text is generated from the templates in `internal/snippet/templates` and the `asn`, `router_id`, `packeteer_community`, and neighbors in the config; it is never sent to a router. The FRR and BIRD output is loaded by real FRR and BIRD daemons in the `onboarding` CI job.

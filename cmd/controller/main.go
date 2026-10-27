@@ -836,8 +836,12 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 	loopCtx, loopCancel := context.WithCancel(ctx)
 	var loopWG sync.WaitGroup
 	live := &liveConfig{cfg: cfg}
+	preview := blastSource{live: live, decider: decider, ctl: ctl, view: view, plugins: plugins,
+		check: candidateChecker(cfg, getenv, httpUser), held: lw.Held,
+		reserved: func(p netip.Prefix) bool { return inb.Reserved(p) || mit.Holds(p) }}
 	if httpSrv != nil && cfg.IXP == nil {
 		httpSrv.SetPreflight(newPreflight(live, view, lw, plugins, pktLimiter, log))
+		httpSrv.SetBlast(preview)
 	}
 	if irrChecker.Enabled() {
 		loopWG.Add(1)
@@ -964,7 +968,7 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 	rl := &reloader{
 		path: path, getenv: getenv, httpUser: httpUser, log: log, cur: cfg, ctl: ctl, poke: poke,
 		plugins: plugins, engine: engine, perASN: asnLimiter, decider: decider, fed: fed, col: col,
-		watch: watch, live: live, dispatch: dispatch, hist: rec, inb: inb, mit: mit,
+		watch: watch, live: live, preview: preview.PreviewConfig, dispatch: dispatch, hist: rec, inb: inb, mit: mit,
 		flowSpecUp: view != nil && mitigationFlowSpec(cfg, plugins),
 		opts:       pluginhost.Options{Logger: log, Getenv: getenv, PluginDir: getenv(PluginDirEnv)},
 	}

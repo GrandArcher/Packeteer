@@ -18,6 +18,9 @@ type Engine struct {
 	scorer plugin.Scorer
 	state  State
 	last   Output
+	// lastIn is the input of the latest evaluation, kept for WhatIf.
+	lastIn Input
+	hasIn  bool
 	// lastCfg is the config the latest evaluation ran with, so an
 	// explanation matches the decision it explains after a reload.
 	lastCfg Config
@@ -35,7 +38,36 @@ func (e *Engine) Evaluate(in Input, now time.Time) []Change {
 	defer e.mu.Unlock()
 	st, out := Decide(e.state, in, e.cfg, e.scorer, now)
 	e.state, e.last, e.lastCfg, e.at = st, out, e.cfg, now
+	e.lastIn, e.hasIn = in, true
 	return out.Changes
+}
+
+// WhatIf is the outcome of Decide run again on a copy of the live state.
+// Before is the engine's improvements as they stand, Input the round that
+// was decided.
+type WhatIf struct {
+	Before []Improvement
+	Input  Input
+	State  State
+	Output Output
+}
+
+// WhatIf runs Decide on the latest evaluation's input with cfg and a copy
+// of the live state (#227). Nothing in the engine changes, so the live
+// state, decisions, and announcements are untouched. ok is false until a
+// round has been evaluated (and after Reset): there is no input to decide.
+func (e *Engine) WhatIf(cfg Config, now time.Time) (WhatIf, bool) {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	if !e.hasIn {
+		return WhatIf{}, false
+	}
+	st, out := Decide(e.state, e.lastIn, cfg, e.scorer, now)
+	before := make([]Improvement, 0, len(e.state.Improvements))
+	for _, p := range sortedKeys(e.state.Improvements) {
+		before = append(before, e.state.Improvements[p])
+	}
+	return WhatIf{Before: before, Input: e.lastIn, State: st, Output: out}, true
 }
 
 // Quarantined returns the prefixes parked by the flap quarantine, sorted
@@ -133,6 +165,7 @@ func (e *Engine) Reset() {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.state, e.last, e.at = NewState(), Output{}, time.Time{}
+	e.lastIn, e.hasIn = Input{}, false
 }
 
 // SetConfig replaces the config the next Evaluate uses. The caller passes

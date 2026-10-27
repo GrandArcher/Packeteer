@@ -12,6 +12,7 @@ package httpapi
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/json"
@@ -166,6 +167,10 @@ type Server struct {
 	// preflight is the onboarding checks (#221). Nil until SetPreflight.
 	// Running them sends TTL-limited probes only; they never announce.
 	preflight atomic.Pointer[PreflightControl]
+	// blast is the blast-radius preview (#227). Nil until SetBlast.
+	blast atomic.Pointer[BlastControl]
+	// blastKey signs preview tokens; a restart invalidates them.
+	blastKey [32]byte
 	// exMembers is the member comparison of the exchange view (#156). Nil
 	// until SetExchangeMembers.
 	exMembers atomic.Pointer[ExchangeMembers]
@@ -248,6 +253,7 @@ func New(opt Options) (*Server, error) {
 		editor: opt.ConfigEditor, firstRun: opt.FirstRun, dashboards: opt.Dashboards, subs: opt.Subscriptions, upgrade: opt.Upgrade, log: opt.Logger}
 	setup := opt.Setup
 	s.setup.Store(&setup)
+	_, _ = rand.Read(s.blastKey[:])
 	s.linkouts = opt.Linkouts
 	s.ringLG = opt.RingLG
 	s.atlas = opt.Atlas
