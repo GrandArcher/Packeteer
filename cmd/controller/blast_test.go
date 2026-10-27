@@ -148,8 +148,8 @@ func TestBlastPreviewMatchesInject(t *testing.T) {
 	}
 
 	// Previewing announced nothing and changed no state.
-	if _, _, ok := packeteerPath(t, edge, target.String()); ok || ctl.Active() != 0 || len(decider.Improvements()) != 2 {
-		t.Fatalf("the preview changed state: on edge %v, active %d", ok, ctl.Active())
+	if ctl.Injected(target) || ctl.Active() != 0 || len(decider.Improvements()) != 2 {
+		t.Fatalf("the preview changed state: active %d", ctl.Active())
 	}
 
 	// A candidate: observe withdraws nothing from an empty wire; a wider

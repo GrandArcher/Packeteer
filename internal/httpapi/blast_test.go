@@ -181,15 +181,19 @@ func TestConfigSavePreviewTokenExpires(t *testing.T) {
 		t.Fatal("an expired token saved the file")
 	}
 
-	// A fresh preview at the new time opens it; a stamp edited to look
-	// newer does not.
+	// The stamp is signed: an expired token re-stamped to now, or to the
+	// future, does not open the save.
+	_, sig, _ := strings.Cut(token, ".")
+	for _, at := range []time.Time{clock, clock.Add(time.Minute)} {
+		forged := strconv.FormatInt(at.Unix(), 10) + "." + sig
+		if rec, _ = e.do(t, "PUT", "/api/config", admin, map[string]any{"yaml": yaml, "base": base, "dry_run": false, "preview_token": forged}); rec.Code != http.StatusPreconditionRequired {
+			t.Fatalf("forged stamp %v: %d %s", at, rec.Code, rec.Body)
+		}
+	}
+
+	// A fresh preview at the new time opens it.
 	_, got = e.do(t, "PUT", "/api/config", admin, map[string]any{"yaml": yaml, "base": base, "dry_run": true})
 	token, _ = got["preview_token"].(string)
-	_, sig, _ := strings.Cut(token, ".")
-	forged := strconv.FormatInt(clock.Add(time.Minute).Unix(), 10) + "." + sig
-	if rec, _ = e.do(t, "PUT", "/api/config", admin, map[string]any{"yaml": yaml, "base": base, "dry_run": false, "preview_token": forged}); rec.Code != http.StatusPreconditionRequired {
-		t.Fatalf("forged stamp: %d %s", rec.Code, rec.Body)
-	}
 	if rec, _ = e.do(t, "PUT", "/api/config", admin, map[string]any{"yaml": yaml, "base": base, "dry_run": false, "preview_token": token}); rec.Code != http.StatusOK {
 		t.Fatalf("fresh token: %d %s", rec.Code, rec.Body)
 	}
