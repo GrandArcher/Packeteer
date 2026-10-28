@@ -83,4 +83,16 @@ card = context.prefixCard(row);
 text = card.textContent;
 assert(text.indexOf("overrides MED") < 0 && text.indexOf("Overrides AS") < 0, "override shown without med_override: " + text);
 assert(text.indexOf("Learned paths. MED breaks ties between exits to one neighbor AS (thresholds.med_tie_break).") >= 0, "paths label: " + text);
+// A synthesized sub-range (#122) carries a badge and the warning line.
+delete row.paths;
+row.prefix = "198.51.100.0/25";
+row.covering = "198.51.100.0/24";
+card = context.prefixCard(row);
+text = card.textContent;
+badges = walk(card).filter(function (n) { return n.className === "badge warn" && n.text === "synthesized"; });
+assert(badges.length === 1, "one synthesized badge, got " + badges.length);
+assert(text.indexOf("WARNING: synthesized more-specific inside 198.51.100.0/24. It is NOT in the learned RIB and can cause hijack-like effects, RPKI-invalid announcements, and route leaks if misused.") >= 0, "synthesize warning: " + text);
+delete row.covering;
+text = context.prefixCard(row).textContent;
+assert(text.indexOf("synthesized") < 0, "synthesize warning without covering: " + text);
 console.log("ok");

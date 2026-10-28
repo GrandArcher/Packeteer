@@ -60,7 +60,7 @@ announcer:
   type: gobgp
 ```
 
-`local_pref` and `announcer` are used only when `mode: inject`. An injected route is the exact prefix learned from this session. `more_specific_bits` is not a setting; a config that includes it is rejected. Inject also requires a non-empty allowlist, at least one BGP neighbor, a positive hold time, and positive loss and latency thresholds.
+`local_pref` and `announcer` are used only when `mode: inject`. An injected route is the exact prefix learned from this session, unless the opt-in `synthesize` block is on (see [CONFIG.md](CONFIG.md#synthesize) and the marker filter in [routers.md](routers.md#synthesized-routes)). `more_specific_bits` is not a setting; a config that includes it is rejected. Inject also requires a non-empty allowlist, at least one BGP neighbor, a positive hold time, and positive loss and latency thresholds.
 
 RouterOS 7 syntax changes between minor releases, so check these commands against your version. CI runs them on a free MikroTik CHR (RouterOS 7.23.7 long-term) in QEMU: see [Tested in CI](#tested-in-ci-chr-in-qemu).
 

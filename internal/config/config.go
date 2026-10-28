@@ -174,6 +174,10 @@ type Config struct {
 	// inside its prefix that a neighbor advertises in the learned RIB
 	// (#56, docs/design/more-specific.md). Nil or disabled is off.
 	MoreSpecific *MoreSpecific `yaml:"more_specific"`
+	// Synthesize announces measured sub-ranges that are not in the learned
+	// RIB (#122). Opt-in, inject only, under the rails in
+	// docs/design/more-specific.md. Nil or disabled is off.
+	Synthesize *Synthesize `yaml:"synthesize"`
 	// RPKI is the shared RPKI origin-validation source (#158). Nil or
 	// disabled is off.
 	RPKI *RPKI `yaml:"rpki"`
@@ -795,10 +799,6 @@ func Load(path string) (*Config, error) {
 
 // Parse decodes YAML bytes strictly, applies defaults, and validates.
 func Parse(data []byte) (*Config, error) {
-	if err := ixpForbidsSynthesize(data); err != nil {
-		return nil, err
-	}
-
 	dec := yaml.NewDecoder(bytes.NewReader(data))
 	dec.KnownFields(true)
 

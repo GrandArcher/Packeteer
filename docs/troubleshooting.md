@@ -74,7 +74,7 @@ docker run --rm -e PACKETEER_HTTP_USER=ops \
 <!-- ci-fails -->
 <!-- ci-expect: set both PACKETEER_HTTP_USER and PACKETEER_HTTP_PASSWORD, or neither -->
 
-Other refusals name the key or the plugin at fault, for example an `exec` plugin that is missing from `/etc/packeteer/plugins`, or `more_specific_bits` (not a setting: Packeteer never invents a more-specific).
+Other refusals name the key or the plugin at fault, for example an `exec` plugin that is missing from `/etc/packeteer/plugins`, or `more_specific_bits` (not a setting; the opt-in `synthesize` block is the only way to announce a sub-range, and it needs `leak_watch` and `marker_community`).
 
 ## The dashboard does not load
 

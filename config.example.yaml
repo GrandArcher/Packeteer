@@ -381,6 +381,18 @@ scorer:
 #   enabled: false
 #   max_routes: 100
 #
+# WARNING: synthesize (#122) announces measured sub-ranges that are NOT in
+# the learned RIB. Misused, they can cause hijack-like effects, RPKI-invalid
+# announcements, and route leaks. Off by default, inject only, lab-proven
+# only. Needs leak_watch. See docs/CONFIG.md#synthesize before enabling.
+# synthesize:
+#   enabled: false
+#   covering_prefixes: [198.51.100.0/24]   # inside allowlist.prefixes
+#   max_bits: 1
+#   max_prefix_len: {v4: 24, v6: 48}
+#   marker_community: "64512:667"
+#   no_advertise: false
+#
 # RPKI origin validation (off by default; docs/CONFIG.md#rpki). Read-only
 # sources (rtr: RFC 8210 over TCP, tls, or ssh; json: Routinator /json or
 # rpki-client -j) label each learned path's origin valid, invalid, not found,

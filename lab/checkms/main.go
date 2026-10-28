@@ -1,11 +1,13 @@
 // Command checkms lists the prefixes Packeteer has on an FRR edge, for
-// the more-specific lab (lab/e2e-more-specific.sh, #56). It reads
+// the more-specific lab (lab/e2e-more-specific.sh, #56) and the synthesize
+// lab (lab/e2e-synthesize.sh, #122). It reads
 // `show bgp ipv4 unicast json` on stdin and prints, sorted and once each,
 // every prefix with a path from Packeteer: peer 192.0.2.10, or next hop
 // 192.0.2.2 (transit-b) with local preference 250. It exits 2 when the
 // input is not that JSON, so an empty list always means a real table.
 //
-// Constants match lab/packeteer-more-specific.yaml.
+// Constants match lab/packeteer-more-specific.yaml and
+// lab/packeteer-synthesize.yaml.
 package main
 
 import (

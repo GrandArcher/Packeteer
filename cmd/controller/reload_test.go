@@ -261,7 +261,7 @@ func TestReloadNeighborsOnline(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctl, err := newController(cfg, plugins, view, nil, nil, nil, log)
+	ctl, err := newController(cfg, plugins, view, nil, nil, nil, nil, log)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -395,7 +395,7 @@ func TestReloadCoreOnline(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctl, err := newController(cfg, plugins, view, nil, nil, nil, log)
+	ctl, err := newController(cfg, plugins, view, nil, nil, nil, nil, log)
 	if err != nil {
 		t.Fatal(err)
 	}

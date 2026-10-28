@@ -125,8 +125,8 @@ func TestBuildNotInjectWithdrawsEverything(t *testing.T) {
 
 func TestBuildRefusedRoutesAreNotAnnounced(t *testing.T) {
 	w := what(imp(pA, "a", "b"), imp(pB, "a", "b"))
-	refuse := func(p netip.Prefix) string {
-		if p == pA {
+	refuse := func(im policy.Improvement) string {
+		if im.Prefix == pA {
 			return "held out by the leak watch"
 		}
 		return ""
@@ -305,5 +305,43 @@ func TestGatedAndInputsFixed(t *testing.T) {
 	}
 	if has(Build(Params{Now: now, Cfg: inject(pA), What: what(), Changed: []string{"thresholds"}}), WarnInputs) != nil {
 		t.Fatal("thresholds alone must not warn that inputs are fixed")
+	}
+}
+
+// A synthesized sub-range (#122) is listed with its covering prefix and
+// raises the synthesize warning; a refused one is listed as refused.
+func TestBuildShowsSynthesizedRoutes(t *testing.T) {
+	sub := netip.MustParsePrefix("198.51.100.0/25")
+	other := netip.MustParsePrefix("198.51.100.128/25")
+	s1, s2 := imp(sub, "a", "b"), imp(other, "a", "b")
+	s1.Covering, s2.Covering = pA, pA
+	refuse := func(im policy.Improvement) string {
+		if im.Prefix == other {
+			return "covering prefix 198.51.100.0/24 is not in the learned RIB"
+		}
+		return ""
+	}
+	rep := Build(Params{Now: now, Cfg: inject(pA), What: what(s1, s2, imp(pA, "a", "c")), Refuse: refuse})
+	if len(rep.Add) != 2 || rep.Add[0].Prefix != pA || rep.Add[0].Covering.IsValid() || rep.Add[1].Prefix != sub || rep.Add[1].Covering != pA {
+		t.Fatalf("add = %+v", rep.Add)
+	}
+	w := has(rep, WarnSynthesized)
+	if w == nil || w.Count != 1 || w.Prefixes[0] != "198.51.100.0/25 inside 198.51.100.0/24" || !strings.Contains(w.Message, "NOT in the learned RIB") {
+		t.Fatalf("synthesized warning = %+v", w)
+	}
+	if r := has(rep, WarnRefused); r == nil || r.Count != 1 || !strings.Contains(r.Prefixes[0], "198.51.100.128/25") {
+		t.Fatalf("refused warning = %+v", r)
+	}
+	body, err := json.Marshal(rep.Add[1])
+	if err != nil || !strings.Contains(string(body), `"covering":"198.51.100.0/24"`) {
+		t.Fatalf("json = %s %v", body, err)
+	}
+	if body, _ := json.Marshal(rep.Add[0]); strings.Contains(string(body), "covering") {
+		t.Fatalf("exact route json = %s", body)
+	}
+	cfg := inject(pA)
+	cfg.Mode = "observe"
+	if has(Build(Params{Now: now, Cfg: cfg, What: what(s1), Refuse: refuse}), WarnSynthesized) != nil {
+		t.Fatal("observe preview warns about routes it would not announce")
 	}
 }

@@ -194,7 +194,10 @@ type Prefix struct {
 	// (#121) for the dashboard card.
 	Heterogeneous bool       `json:"heterogeneous,omitempty"`
 	Subranges     []Subrange `json:"subranges,omitempty"`
-	Probes        []Probe    `json:"probes"`
+	// Covering is set when the prefix is a synthesized sub-range (#122):
+	// the learned prefix it lies inside.
+	Covering string  `json:"covering,omitempty"`
+	Probes   []Probe `json:"probes"`
 	// Gain is the scorer's gain (current score minus recommended score,
 	// lower score is better) when the recommended exit differs from the
 	// current one and both were usable. ExitLossPct and ExitRTTMs are the
@@ -328,12 +331,15 @@ type Decision struct {
 	Candidates []Candidate `json:"candidates"`
 	// Heterogeneous is set when measured sub-ranges of the prefix
 	// disagree on the best provider (#121). Subranges are those
-	// sub-ranges, busiest first. Information only: nothing is announced
-	// for a sub-range.
+	// sub-ranges, busiest first. Information only: the decision steers
+	// only Prefix.
 	Heterogeneous bool       `json:"heterogeneous,omitempty"`
 	Subranges     []Subrange `json:"subranges,omitempty"`
 	// MEDOverride is the neighbor MED preference the move overrides (#303).
 	MEDOverride *policy.MEDOverride `json:"med_override,omitempty"`
+	// Covering is set when Prefix is a synthesized sub-range (#122): the
+	// learned prefix it lies inside. Outside inject it is a would-be route.
+	Covering string `json:"covering,omitempty"`
 }
 
 // Subrange is one measured sub-range of a decided prefix (#121).
@@ -362,6 +368,8 @@ type Improvement struct {
 	VolumeMbps float64 `json:"volume_mbps,omitempty"`
 	// MEDOverride is the neighbor MED preference the move overrides (#303).
 	MEDOverride *policy.MEDOverride `json:"med_override,omitempty"`
+	// Covering is set on a synthesized sub-range (#122).
+	Covering string `json:"covering,omitempty"`
 	// ASN is the origin AS of the learned path; ASName is a name Packeteer
 	// knows for it (a provider, or an earlier whois lookup). Display only.
 	ASN    uint32 `json:"asn,omitempty"`
@@ -633,6 +641,15 @@ func exitNow(mode string, d policy.Decision) string {
 	return d.Native
 }
 
+// coveringText is a synthesized sub-range's covering prefix (#122), or ""
+// for any other prefix.
+func coveringText(p netip.Prefix) string {
+	if !p.IsValid() {
+		return ""
+	}
+	return p.String()
+}
+
 func assembleDecisions(mode string, in []policy.Decision) []Decision {
 	out := make([]Decision, 0, len(in))
 	for _, d := range in {
@@ -653,6 +670,7 @@ func assembleDecisions(mode string, in []policy.Decision) []Decision {
 			Heterogeneous: d.Heterogeneous,
 			Subranges:     subrangesFrom(d.Subranges),
 			MEDOverride:   d.MEDOverride,
+			Covering:      coveringText(d.Covering),
 		}
 		out = append(out, row)
 	}
@@ -681,6 +699,7 @@ func assembleImprovements(in Input) []Improvement {
 			EstSavings:  im.EstSavings,
 			VolumeMbps:  jsonFloat(im.VolumeMbps),
 			MEDOverride: im.MEDOverride,
+			Covering:    coveringText(im.Covering),
 		}
 		explainImprovement(&row, cands[im.Prefix], in.Thresholds)
 		if left := im.Since.Add(in.Thresholds.HoldTime).Sub(in.At); left > 0 && !im.Since.IsZero() {
@@ -813,6 +832,7 @@ func assemblePrefixes(in Input) []Prefix {
 		row.Action, row.Reason = d.Action, d.Reason
 		row.Heterogeneous, row.Subranges = d.Heterogeneous, subrangesFrom(d.Subranges)
 		row.MEDOverride = d.MEDOverride
+		row.Covering = coveringText(d.Covering)
 		row.Gain = scoreGain(d)
 	}
 	for _, im := range in.Improvements {

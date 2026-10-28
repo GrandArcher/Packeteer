@@ -16,6 +16,18 @@ Two filters are required on the router:
 
 Leave BGP graceful restart **off** on the Packeteer session. Packeteer never enables it, withdraws on shutdown, and the session drop is the backstop. If Packeteer disappears, the edge falls back to the paths it learned from its providers.
 
+## Synthesized routes
+
+With the opt-in `synthesize` block (#122, off by default, [CONFIG.md](CONFIG.md#synthesize)), Packeteer also announces sub-ranges that are NOT in the learned RIB. Each carries `packeteer_community`, `no-export`, and `synthesize.marker_community` (plus `no-advertise` with `no_advertise: true`). To accept Packeteer's exact-prefix routes and refuse every synthesized one, deny the marker before the accept term of the import filter from Packeteer. FRR, with marker `64512:667`:
+
+```
+bgp community-list standard packeteer-synth permit 64512:667
+route-map from-packeteer deny 5
+ match community packeteer-synth
+```
+
+The eBGP export filter above already refuses them: they carry `packeteer_community`.
+
 ## Export filters on every eBGP session
 
 Customers, peers, and transits are all eBGP sessions, and a customer can re-export what it hears ([leak-watch.md](leak-watch.md) has the 2019 case). NO_EXPORT keeps an injected route from eBGP neighbors only while the router honors it, and a policy that strips communities undoes it. So put the deny first in the outbound policy of every eBGP neighbor, customers included, for both forms of `packeteer_community`. A deny for a community you do not configure matches nothing, so keep both.

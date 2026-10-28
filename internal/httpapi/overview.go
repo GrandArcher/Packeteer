@@ -21,6 +21,9 @@ type Setup struct {
 	// probe.down_loss_pct (#343).
 	DegradedLossPct float64
 	DownLossPct     float64
+	// SynthesizeWarning is config.SynthesizeWarning while synthesize is
+	// on (#122), else empty.
+	SynthesizeWarning string
 }
 
 // Hint levels: todo is a step the operator still has to take before the
@@ -115,6 +118,9 @@ type Overview struct {
 	System SystemSummary `json:"system"`
 	// Auth is "rbac", "basic", or "off". The UI warns on off (#328).
 	Auth string `json:"auth"`
+	// SynthesizeWarning is set while synthesize is on (#122); every page
+	// shows it.
+	SynthesizeWarning string `json:"synthesize_warning,omitempty"`
 }
 
 // OverviewCounts are the headline numbers.
@@ -175,6 +181,8 @@ func BuildOverview(snap Snapshot, setup Setup, features []Feature) Overview {
 		Sources:  nz(append([]string(nil), setup.Sources...)),
 		Features: nz(features),
 		BGP:      OverviewBGP{Configured: snap.BGPConfigured, Ready: snap.RIBReady, Peers: len(snap.Peers)},
+
+		SynthesizeWarning: setup.SynthesizeWarning,
 	}
 	for _, p := range snap.Peers {
 		if p.Established {

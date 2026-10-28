@@ -33,6 +33,7 @@ The image entrypoint is the same binary. Flags go after the image name.
 | `communities_cause` | none | no | Extra outbound communities per improvement cause (#132). Added after `packeteer_community`. See [`communities_cause`](#communities_cause). |
 | `more_specific_bits` | unset | must be absent | Any value, including `0`, is an error. Packeteer announces the exact prefix it learned from the RIB. |
 | `more_specific` | off | no | More-specific injection: with each improvement, also announce the more-specifics inside its prefix that a neighbor advertises in the learned RIB, under a route cap. Never a prefix that is not learned. See [`more_specific`](#more_specific). Lab-proven only. |
+| `synthesize` | off | no | Opt-in synthesized more-specific injection (#122): announce a measured sub-range of a learned prefix, which is itself NOT in the learned RIB. Read the WARNING in [`synthesize`](#synthesize) first. Lab-proven only. |
 | `rpki` | off | no | Shared RPKI origin validation (#158, #200): read the operator's RPKI cache over RTR or VRP JSON and label each learned path's origin valid, invalid, not found, or unknown, with the source and its data age. `avoid_invalid` refuses a new improvement onto an invalid path. Never announces and never changes the learned RIB. See [`rpki`](#rpki). Not on a public edge. |
 | `instance` | `domain` | no | This instance's name in a federation (#30). Peers expect it in its snapshot. Letters, digits, `_`, `.`, `-`, at most 64 characters. See [Multi-POP](#multi-pop-federation). |
 | `domain` | empty | with `federation` | This instance's routing domain (POP). Empty is a standalone instance. |
@@ -746,6 +747,32 @@ More-specific injection (#56, lab-proven only, not on a public edge). Design and
 
 A more-specific is withdrawn with its improvement (flip-back, TTL, policy, P leaving the RIB), when the RIB is not ready, on shutdown, and when it really leaves the RIB: the neighbor advertised it for at least 5s while Packeteer's route was on the wire and then stopped. A shorter gap is the router hiding its own path because Packeteer's route won, and the route stays. A change needs a restart (SIGHUP refuses it). Rollback: remove the block or set `enabled: false` and restart; only improvements' own prefixes are announced again.
 
+### `synthesize`
+
+> **WARNING: synthesized more-specifics are NOT in the learned RIB.** Misused, they can cause hijack-like effects, RPKI-invalid announcements, and route leaks. Turn this on only for address space you operate or are authorised to steer, on an edge that honours NO_EXPORT and filters the marker community. Lab-proven only (`lab/e2e-synthesize.sh`), not on a public edge. Never in a shipped example.
+
+Synthesized more-specific injection (#122). Design and rails: [design/more-specific.md](design/more-specific.md#synthesized-sub-ranges-synthesize-opt-in). With it on, a sub-range measured by a flow source's [`subranges`](#source-flow) block becomes a decision of its own when a neighbor advertises its covering prefix exactly in the learned RIB. It is moved under the same `thresholds` (including `confirm_rounds`), `hold_time`, flip-back cooldown, and `max_improvements` as a performance move, with the covering prefix's native provider. In `mode: inject` the route is announced. In `observe` and `suggest` nothing is announced: `/api/decisions` and the prefix card list it with `covering` set as a would-be route, and the blast-radius preview lists it as synthesized. A WARN line is logged at start, and every page of the UI shows the warning while it is on.
+
+| Key | Default | Meaning |
+|---|---|---|
+| `enabled` | `false` | `true` turns synthesize on. Requires `leak_watch` enabled, `covering_prefixes`, and `marker_community`. |
+| `covering_prefixes` | none | Prefixes whose learned sub-prefixes may be split. Each must be inside `allowlist.prefixes`; anything else is rejected at load. No host bits, no default route, no duplicates. A covering prefix C must be inside one of them and advertised exactly by a neighbor. |
+| `max_bits` | `1` | How far past C's length a sub-range may go. 1-8. |
+| `max_prefix_len` | `{v4: 24, v6: 48}` | Longest synthesized route per family. `v4` 1-32, `v6` 1-128. A /25 inside a /24 needs `v4: 25`. |
+| `marker_community` | none | Added to every synthesized route, after `packeteer_community` and the cause's and provider's communities, so the edge can accept exact-prefix routes and refuse synthesized ones ([routers.md](routers.md)). Required when enabled. Standard or large; not `packeteer_community`, not `0:x` or `65535:x`. |
+| `no_advertise` | `false` | `true` also adds NO_ADVERTISE, so the edge does not pass the route to any peer. NO_EXPORT is always attached. |
+
+A sub-range S of C is never announced when:
+
+- C is not inside `covering_prefixes` or the allowlist, S is not strictly inside C, or S is past `max_bits` or `max_prefix_len`;
+- a neighbor advertises a prefix inside C that overlaps S (that one is [`more_specific`](#more_specific)'s), or S is held by inbound steering, a mitigation rule, or the leak watch;
+- with [`rpki`](#rpki) on, S would be `invalid` with the origin AS of any learned path of C (for example a ROA whose max length stops short of S);
+- C is under a `static` or `ignore` policy, or a source lists S as a target of its own.
+
+Synthesized routes count toward `more_specific.max_routes` (100 when the `more_specific` block is absent), which then caps every outbound and inbound route on a router, `more_specific.enabled: false` included. A new one waits while the cap is full. Each carries the provider's next hop, the resolved `local_pref`, `packeteer_community`, the cause's and provider's communities, the marker, NO_EXPORT, and NO_ADVERTISE when chosen. With `bgp.as_path` set it carries C's path.
+
+A synthesized route is withdrawn with its decision (flip-back, TTL), when C really leaves the learned RIB (C was seen for 5s while S was on the wire, then stopped), when S stops being measured or a rail above fails, when the RIB is not ready (session loss), on SIGTERM, on an HA standby, and when the leak watch sees it outside the AS. A SIGKILL or crash drops the session and the router removes it; graceful restart stays off. While Packeteer steers C itself, the router stops sending C to Packeteer, which reads as C leaving, so S is withdrawn. The block is restart-only. Rollback: `synthesize.enabled: false` and restart.
+
 ### `rpki`
 
 Shared RPKI origin validation (#158, #200, not on a public edge). Off by default. A source reads the operator's RPKI cache (Routinator, rpki-client, StayRTR, FORT) over RTR or as VRP JSON and labels each learned path's origin: `valid`, `invalid`, `notfound`, or `unknown`. The learned RIB is never changed and nothing is announced. Validity is shown on `/api/decisions` candidates and the prefix card's learned paths, each with the source that answered and its data time, and on leak watch entries with the source. The exchange peers show validity counts only. Every learned path of a probed prefix is recorded per provider and origin AS in history (`storage`), shown on the prefix timeline. `avoid_invalid` only refuses a new improvement; it never blocks a withdraw, and the learned-RIB rule, allowlist, cap, community + NO_EXPORT, hold time, and withdraw rules are unchanged.
@@ -1001,7 +1028,7 @@ Set these in the container. They are not keys in the YAML file. `PACKETEER_HTTP_
 - `announcer` is set (`type: gobgp`)
 - `hold_time` is positive
 - both threshold deltas are positive
-- `more_specific_bits` is absent (`more_specific` is the replacement; it is off by default)
+- `more_specific_bits` is absent (`more_specific` is the replacement; it is off by default). `synthesize` does not change this
 - `ixp` is absent (`ixp` refuses `mode: inject`)
 
 The `gobgp` announcer has no `config` keys. A config block with any key is an error. Each announced route carries the provider `next_hop`, the resolved `local_pref` (the provider's, else the cause's, else the global value), `packeteer_community`, the cause's extra communities, the provider's extra communities, and `no-export`. The export policy accepts only routes Packeteer originated that carry `packeteer_community`. An extra community alone does not match.

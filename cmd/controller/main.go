@@ -295,6 +295,10 @@ func run(ctx context.Context, args []string, getenv func(string) string, stdout,
 		if ms := cfg.MoreSpecific; ms != nil && ms.Enabled {
 			fmt.Fprintf(stdout, "announce more_specific: learned more-specifics only, max_routes=%d\n", ms.MaxRoutes)
 		}
+		if sy := cfg.Synthesize; cfg.Synthesizing() {
+			fmt.Fprintf(stdout, "announce synthesize: covering_prefixes=%s max_bits=%d max_prefix_len=/%d,/%d max_routes=%d\n%s\n",
+				strings.Join(sy.CoveringPrefixes, ","), sy.MaxBits, sy.MaxPrefixLen.V4, sy.MaxPrefixLen.V6, cfg.RouteCap(), config.SynthesizeWarning)
+		}
 	case plugins.Announcer != nil:
 		fmt.Fprintln(stdout, "announce: configured but inactive (mode is not inject)")
 	default:
@@ -661,7 +665,7 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 		log.Error("refusing to start", "err", err)
 		return 1
 	}
-	ctl, err = newController(cfg, plugins, view, inb, mit, lw.Held, log)
+	ctl, err = newController(cfg, plugins, view, inb, mit, lw.Held, rpkiSet, log)
 	if err != nil {
 		log.Error("refusing to start", "err", err)
 		return 1
@@ -902,6 +906,7 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 			leading = true
 			in, rpkiRounds := decisionInput(loopCtx, now, engine, view, plugins, fed, rpkiSet, irrChecker)
 			in.Held = lw.Held
+			in.Synthesize = ctl.Synthesizable(in.Results)
 			fillOverloadInputs(loopCtx, &in, snap, plugins)
 			if reorderMon != nil {
 				in.Reorder = reorderMon.Scored(now, maxResultAge(cfg))
@@ -1023,6 +1028,10 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 		announcing = plugins.Announcer.Type
 	}
 	log.Info("packeteer running", "version", version, "mode", cfg.Mode, "bgp_neighbors", len(cfg.BGP.Neighbors), "announce", announcing)
+	if cfg.Synthesizing() {
+		log.Warn(config.SynthesizeWarning, "mode", cfg.Mode, "covering_prefixes", strings.Join(cfg.Synthesize.CoveringPrefixes, ","),
+			"max_bits", cfg.Synthesize.MaxBits, "marker_community", cfg.Synthesize.MarkerCommunity)
+	}
 	_ = engine.Run(ctx)
 
 	log.Info("shutting down")

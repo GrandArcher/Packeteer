@@ -197,5 +197,8 @@ func setupInfo(cfg *config.Config, plugins *pluginhost.Set) httpapi.Setup {
 	for _, s := range plugins.SourcesSnapshot() {
 		st.Sources = append(st.Sources, s.Type)
 	}
+	if cfg.Synthesizing() {
+		st.SynthesizeWarning = config.SynthesizeWarning
+	}
 	return st
 }

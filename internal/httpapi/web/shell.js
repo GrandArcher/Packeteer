@@ -235,6 +235,26 @@ function shellRenderBanner(mode) {
   node.hidden = false;
 }
 
+// Synthesize announces routes that are not in the learned RIB (#122). The
+// text is the server's warning.
+function shellRenderSynthBanner(text) {
+  var node = document.getElementById("synth-banner");
+  if (!text) {
+    if (node) node.hidden = true;
+    return;
+  }
+  if (!node) {
+    var mode = document.getElementById("banner");
+    if (!mode) return;
+    node = shellEl("div", "banner banner-warn", "");
+    node.id = "synth-banner";
+    node.setAttribute("role", "alert");
+    mode.parentNode.insertBefore(node, mode.nextSibling);
+  }
+  node.textContent = text;
+  node.hidden = false;
+}
+
 // With sign-in off, anyone who reaches the port reads everything (#328).
 function shellRenderAuthBanner(auth) {
   var node = document.getElementById("auth-banner");
@@ -297,6 +317,7 @@ function shellRefresh() {
     if (!err) shellLastOK = new Date().toISOString();
     shellRenderBanner(ov && ov.mode);
     shellRenderAuthBanner(ov && ov.auth);
+    shellRenderSynthBanner(ov && ov.synthesize_warning);
     shellRenderStatus(ov, ready, err);
     shellRenderConn(err);
   });

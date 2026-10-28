@@ -418,3 +418,19 @@ func TestChecklistDocURL(t *testing.T) {
 		t.Errorf("providers-down hint with its doc link missing: %+v", o.Setup)
 	}
 }
+
+// With synthesize on (#122) the overview carries the warning every page
+// shows; off, it carries none.
+func TestOverviewSynthesizeWarning(t *testing.T) {
+	if o := BuildOverview(Assemble(firstRun()), Setup{}, nil); o.SynthesizeWarning != "" {
+		t.Fatalf("warning with synthesize off: %q", o.SynthesizeWarning)
+	}
+	o := BuildOverview(Assemble(firstRun()), Setup{SynthesizeWarning: "WARNING: synthesize is on."}, nil)
+	if o.SynthesizeWarning != "WARNING: synthesize is on." {
+		t.Fatalf("warning = %q", o.SynthesizeWarning)
+	}
+	body, err := json.Marshal(o)
+	if err != nil || !strings.Contains(string(body), `"synthesize_warning":"WARNING: synthesize is on."`) {
+		t.Fatalf("json = %s %v", body, err)
+	}
+}

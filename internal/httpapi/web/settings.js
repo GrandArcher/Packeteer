@@ -949,6 +949,7 @@ function describe(res) {
   if (res.restart_required) parts.push("restart required");
   else if (res.reload_online) parts.push("applies online");
   if (res.enables_inject) parts.push("turns inject on");
+  if (res.synthesize_warning) parts.push(res.synthesize_warning);
   return parts.join(" · ");
 }
 
@@ -1052,6 +1053,7 @@ function showPreview(p) {
   var head = res.valid ? "Valid" : "Invalid: Save would be refused";
   if (res.valid) head += changes.length ? ". " + changes.length + (changes.length === 1 ? " setting differs" : " settings differ") + " from the file." : ". Nothing differs from the file.";
   if (res.enables_inject) head += " This turns inject on: tick the confirmation to Save.";
+  if (res.synthesize_warning) head += " " + res.synthesize_warning;
   pvState(head);
   pvList("pv-restart", "Needs a restart: ", res.restart);
   pvList("pv-online", "Applies when you Save: ", res.online);
@@ -2427,7 +2429,9 @@ var blastToken = "";
 
 function blastRoute(r) {
   var vol = r.volume_mbps == null ? "volume unknown" : r.volume_mbps.toFixed(1) + " Mbps";
-  return r.prefix + ": " + r.from + " -> " + r.to + " (" + vol + ")";
+  var text = r.prefix + ": " + r.from + " -> " + r.to + " (" + vol + ")";
+  if (r.covering) text += " SYNTHESIZED inside " + r.covering + ", not in the learned RIB";
+  return text;
 }
 
 function blastShift(s) {

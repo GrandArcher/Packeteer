@@ -18,6 +18,9 @@ func (c *Config) applyDefaults() {
 	if c.MoreSpecific != nil && c.MoreSpecific.MaxRoutes == 0 {
 		c.MoreSpecific.MaxRoutes = DefaultMoreSpecificMaxRoutes
 	}
+	if c.Synthesize != nil {
+		c.Synthesize.applyDefaults()
+	}
 	if c.Probe.Interval == 0 {
 		c.Probe.Interval = DefaultProbeInterval
 	}

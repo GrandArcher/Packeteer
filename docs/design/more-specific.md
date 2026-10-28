@@ -134,8 +134,10 @@ Lab-proven only, not on a public edge.
 
 ## Synthesized sub-ranges (`synthesize`, opt-in)
 
-Status: charter only (#114). The feature is #122 and is not implemented.
-Until it merges, nothing outside the learned RIB is announced.
+Status: built (#122), lab-proven only (`lab/e2e-synthesize.sh`), off by
+default. Config: [CONFIG.md](../CONFIG.md#synthesize). Rail 4's route cap
+is `more_specific.max_routes`, 100 when that block is absent. Enabling it
+also requires `leak_watch` and `marker_community`.
 
 Synthesizing lets Packeteer disaggregate a large prefix and announce the
 more-specific it measured, so a bad part of a /16 can be steered as a /24. No attribute on

@@ -437,3 +437,24 @@ providers:
 		t.Fatalf("prefill = %+v, want %+v", got, want)
 	}
 }
+
+// A candidate that turns synthesize on carries the warning (#122); one
+// without it does not.
+func TestCheckWarnsWhenSynthesizeIsOn(t *testing.T) {
+	e, _ := editor(t, observeYAML)
+	if res := e.Check([]byte(injectYAML)); !res.Valid || res.SynthesizeWarning != "" {
+		t.Fatalf("plain inject = %+v", res)
+	}
+	synth := injectYAML + `leak_watch:
+  enabled: true
+  sources: [{type: rislive}]
+synthesize:
+  enabled: true
+  covering_prefixes: [198.51.100.0/24]
+  marker_community: "64512:667"
+`
+	res := e.Check([]byte(synth))
+	if !res.Valid || res.SynthesizeWarning != config.SynthesizeWarning || !strings.Contains(res.SynthesizeWarning, "NOT in the learned RIB") {
+		t.Fatalf("synthesize = %+v", res)
+	}
+}
