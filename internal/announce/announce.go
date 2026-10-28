@@ -153,10 +153,12 @@ type Synthesize struct {
 	// NO_ADVERTISE as well; the announcer always adds NO_EXPORT.
 	Marker      string
 	NoAdvertise bool
+	// LocalASN is the origin the edge sees on a route sent with an empty
+	// AS path (bgp.as_path empty, the default).
+	LocalASN uint32
 	// Invalid reports a sub-range whose RPKI state would be invalid with
-	// the origin of the covering prefix's learned paths (#200). Nil is no
-	// RPKI source.
-	Invalid func(sub, cover netip.Prefix) bool
+	// origin (#200). Nil is no RPKI source.
+	Invalid func(sub netip.Prefix, origin uint32) bool
 }
 
 // noAdvertise is the NO_ADVERTISE well-known community (RFC 1997).
@@ -603,7 +605,7 @@ func (c *Controller) syncImprovementLocked(ctx context.Context, im policy.Improv
 		s, on = slot{}, false
 	}
 	if im.Covering.IsValid() {
-		if why := c.synthRefusal(p, im.Covering); why != "" {
+		if why := c.synthRefusal(p, im.Covering, im.Provider); why != "" {
 			var err error
 			if on {
 				err = c.withdrawLocked(ctx, p)
@@ -645,12 +647,14 @@ func (c *Controller) syncImprovementLocked(ctx context.Context, im policy.Improv
 }
 
 // synthRefusal is why the sub-range sub may not be synthesized inside
-// cover, or "" when every rail that does not depend on cover being in the
-// RIB holds: synthesize on, cover inside covering_prefixes, sub strictly
-// inside cover, max_bits, max_prefix_len, the allowlist, no learned prefix
-// inside cover that overlaps sub (that is more_specific's), and an RPKI
-// state that would not be invalid. Caller holds mu.
-func (c *Controller) synthRefusal(sub, cover netip.Prefix) string {
+// cover toward provider, or "" when every rail that does not depend on
+// cover being in the RIB holds: synthesize on, cover inside
+// covering_prefixes, sub strictly inside cover, max_bits, max_prefix_len,
+// the allowlist, no learned prefix inside cover that overlaps sub (that is
+// more_specific's), and an RPKI state that would not be invalid for the
+// origin the route would carry: the last AS of its path, or LocalASN for
+// an empty path. Caller holds mu.
+func (c *Controller) synthRefusal(sub, cover netip.Prefix, provider string) string {
 	sy := c.cfg.Synthesize
 	if sy == nil {
 		return "synthesize is off"
@@ -680,16 +684,23 @@ func (c *Controller) synthRefusal(sub, cover netip.Prefix) string {
 			return "a neighbor advertises " + m.Masked().String() + ", which overlaps it"
 		}
 	}
-	if sy.Invalid != nil && sy.Invalid(sub, cover) {
-		return "its RPKI state would be invalid"
+	if sy.Invalid != nil {
+		origin := sy.LocalASN
+		if path := c.routePath(sub, cover, provider); len(path) > 0 {
+			origin = path[len(path)-1]
+		}
+		if sy.Invalid(sub, origin) {
+			return fmt.Sprintf("its RPKI state would be invalid with origin AS%d", origin)
+		}
 	}
 	return ""
 }
 
 // Synthesizable maps every measured sub-range in results that passes
-// synthRefusal to the covering prefix of its result, for the decision
-// input (policy.Input.Synthesize). Whether the covering prefix is in the
-// RIB is the decision engine's check. Nil when synthesize is off.
+// synthRefusal toward every provider measured for it to the covering
+// prefix of its result, for the decision input (policy.Input.Synthesize).
+// Whether the covering prefix is in the RIB is the decision engine's
+// check. Nil when synthesize is off.
 func (c *Controller) Synthesizable(results []probe.Result) map[netip.Prefix]netip.Prefix {
 	if c == nil {
 		return nil
@@ -700,25 +711,29 @@ func (c *Controller) Synthesizable(results []probe.Result) map[netip.Prefix]neti
 		return nil
 	}
 	out := map[netip.Prefix]netip.Prefix{}
+	refused := map[netip.Prefix]bool{}
 	for _, r := range results {
 		for _, sr := range r.Subranges {
 			sub := sr.Prefix.Masked()
-			if _, done := out[sub]; done {
+			if refused[sub] {
 				continue
 			}
-			if c.synthRefusal(sub, r.Prefix.Masked()) == "" {
-				out[sub] = r.Prefix.Masked()
+			if c.synthRefusal(sub, r.Prefix.Masked(), r.Provider) != "" {
+				refused[sub] = true
+				delete(out, sub)
+				continue
 			}
+			out[sub] = r.Prefix.Masked()
 		}
 	}
 	return out
 }
 
 // SynthesizeRefusal is why Sync would not put the synthesized sub-range
-// sub inside cover on the wire now, or "", for the blast-radius preview.
-// A route already on the wire is not checked against the RIB, as Sync
-// does not.
-func (c *Controller) SynthesizeRefusal(sub, cover netip.Prefix) string {
+// sub inside cover on the wire toward provider now, or "", for the
+// blast-radius preview. A route already on the wire is not checked
+// against the RIB, as Sync does not.
+func (c *Controller) SynthesizeRefusal(sub, cover netip.Prefix, provider string) string {
 	if c == nil {
 		return "synthesize is off"
 	}
@@ -727,7 +742,7 @@ func (c *Controller) SynthesizeRefusal(sub, cover netip.Prefix) string {
 	if c.rib == nil {
 		return "no RIB view"
 	}
-	if why := c.synthRefusal(sub, cover); why != "" {
+	if why := c.synthRefusal(sub, cover, provider); why != "" {
 		return why
 	}
 	if s, on := c.active[sub]; !(on && s.cover == cover) && !c.rib.Contains(cover) {
@@ -1014,7 +1029,7 @@ func (c *Controller) announceLocked(ctx context.Context, imp policy.Improvement)
 	if _, on := c.active[p]; !on {
 		learned := c.rib.Contains(p)
 		if imp.Covering.IsValid() {
-			learned = c.synthRefusal(p, imp.Covering) == "" && c.rib.Contains(imp.Covering)
+			learned = c.synthRefusal(p, imp.Covering, imp.Provider) == "" && c.rib.Contains(imp.Covering)
 		}
 		if !learned {
 			return fmt.Errorf("announce: %s is not in the RIB", p)

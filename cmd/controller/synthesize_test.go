@@ -16,6 +16,7 @@ import (
 	"github.com/GrandArcher/Packeteer/internal/plugins/scorer/weighted"
 	"github.com/GrandArcher/Packeteer/internal/policy"
 	"github.com/GrandArcher/Packeteer/internal/probe"
+	"github.com/GrandArcher/Packeteer/internal/rpki"
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
 )
 
@@ -169,5 +170,40 @@ func TestSynthesizeIsRestartOnly(t *testing.T) {
 	restart, online := classify(run, next)
 	if !slices.Contains(restart, "synthesize") || len(online) != 0 {
 		t.Fatalf("restart %v online %v", restart, online)
+	}
+}
+
+// vrpSource is an RPKI source backed by a real VRP table.
+type vrpSource struct {
+	plugin.Base
+	*rpki.VRPs
+}
+
+func (vrpSource) Status() plugin.RPKIStatus {
+	return plugin.RPKIStatus{Up: true, VRPs: 1, Source: "vrps"}
+}
+
+// synthInvalid refuses a sub-range past a ROA's max length for the origin
+// it is announced with, and is nil with RPKI off (#122, #200).
+func TestSynthInvalidUsesTheROAMaxLength(t *testing.T) {
+	if synthInvalid(rpki.NewSet(nil)) != nil {
+		t.Fatal("RPKI off still checks")
+	}
+	sub := netip.MustParsePrefix("198.51.100.0/25")
+	for _, tc := range []struct {
+		maxLen  uint8
+		origin  uint32
+		invalid bool
+	}{
+		{24, 64500, true},  // max length stops short of the /25
+		{25, 64500, false}, // the ROA covers the /25
+		{25, 64512, true},  // another origin, such as the local AS on an empty path
+	} {
+		vrps := rpki.NewVRPs()
+		vrps.Apply([]rpki.Change{{Prefix: netip.MustParsePrefix("198.51.100.0/24"), MaxLen: tc.maxLen, ASN: 64500}})
+		invalid := synthInvalid(rpki.NewSet([]plugin.RPKI{vrpSource{VRPs: vrps}}))
+		if got := invalid(sub, tc.origin); got != tc.invalid {
+			t.Errorf("max length /%d origin AS%d: invalid = %v, want %v", tc.maxLen, tc.origin, got, tc.invalid)
+		}
 	}
 }

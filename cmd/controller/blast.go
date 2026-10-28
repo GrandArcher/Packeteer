@@ -94,7 +94,7 @@ func (b blastSource) refusal(im policy.Improvement) string {
 	case b.reserved != nil && b.reserved(p):
 		return "reserved for inbound steering or threat mitigation"
 	case im.Covering.IsValid():
-		return b.ctl.SynthesizeRefusal(p, im.Covering)
+		return b.ctl.SynthesizeRefusal(p, im.Covering, im.Provider)
 	case !b.ctl.Injected(p) && !(ribGate{b.view}).Contains(p):
 		return "not in the learned RIB"
 	}

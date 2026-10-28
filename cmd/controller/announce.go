@@ -180,7 +180,7 @@ func newController(cfg *config.Config, plugins *pluginhost.Set, view *rib.View, 
 	if sy := cfg.Synthesize; cfg.Synthesizing() {
 		ac.MaxRoutes = cfg.RouteCap()
 		ac.Synthesize = &announce.Synthesize{MaxBits: sy.MaxBits, MaxLenV4: sy.MaxPrefixLen.V4, MaxLenV6: sy.MaxPrefixLen.V6,
-			Marker: sy.MarkerCommunity, NoAdvertise: sy.NoAdvertise, Invalid: synthInvalid(view, origins, cfg.Providers)}
+			Marker: sy.MarkerCommunity, NoAdvertise: sy.NoAdvertise, LocalASN: cfg.ASN, Invalid: synthInvalid(origins)}
 		for _, s := range sy.CoveringPrefixes {
 			p, err := netip.ParsePrefix(s)
 			if err != nil {
@@ -218,29 +218,16 @@ func newController(cfg *config.Config, plugins *pluginhost.Set, view *rib.View, 
 	return announce.New(ac, ann, ribGate{view}, log)
 }
 
-// synthInvalid reports a synthesized sub-range whose RPKI state would be
-// invalid (#122, #200): checked against the origin of the covering
-// prefix's best learned path and of every provider's learned paths, so a
-// ROA whose max length stops short of the sub-range refuses it. Nil when
-// RPKI is off or there is no RIB view; then nothing is refused for RPKI.
-func synthInvalid(view *rib.View, origins *rpki.Set, providers []config.Provider) func(sub, cover netip.Prefix) bool {
-	if view == nil || !origins.Enabled() {
+// synthInvalid reports a synthesized sub-range that would be RPKI-invalid
+// with the origin it is announced with (#122, #200), for example under a
+// ROA whose max length stops short of it. Nil when RPKI is off; then
+// nothing is refused for RPKI.
+func synthInvalid(origins *rpki.Set) func(netip.Prefix, uint32) bool {
+	if !origins.Enabled() {
 		return nil
 	}
-	return func(sub, cover netip.Prefix) bool {
-		var paths [][]uint32
-		if rt, ok := view.Exact(cover); ok {
-			paths = append(paths, rt.ASPath)
-		}
-		for _, p := range providers {
-			paths = append(paths, view.ProviderPaths(cover, p.Name)...)
-		}
-		for _, path := range paths {
-			if len(path) > 0 && origins.Lookup(sub, path[len(path)-1]).State == plugin.RPKIInvalid {
-				return true
-			}
-		}
-		return false
+	return func(sub netip.Prefix, origin uint32) bool {
+		return origins.Lookup(sub, origin).State == plugin.RPKIInvalid
 	}
 }
 

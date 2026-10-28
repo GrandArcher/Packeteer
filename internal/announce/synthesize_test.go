@@ -21,7 +21,7 @@ func synCfg(maxRoutes int) Config {
 	cfg.Synthesize = &Synthesize{
 		Covering: []netip.Prefix{pfx("198.51.100.0/24"), pfx("2001:db8::/32")},
 		MaxBits:  1, MaxLenV4: 25, MaxLenV6: 48,
-		Marker: "64512:667",
+		Marker: "64512:667", LocalASN: 64512,
 	}
 	return cfg
 }
@@ -193,11 +193,12 @@ func TestSynthesizeRails(t *testing.T) {
 		{"v6 past max_prefix_len", synImp("2001:db8::/33", "2001:db8::/32", "c"), func(c *Config) { c.Synthesize.MaxLenV6 = 32 }, "synthesize.max_prefix_len (/32)", nil},
 		{"outside allowlist", synImp("198.51.100.0/25", "198.51.100.0/24", "b"), func(c *Config) { c.Allowlist = []netip.Prefix{pfx("203.0.113.0/24")} }, "not allowlisted", nil},
 		{"covering not learned", synImp("198.51.100.0/25", "198.51.100.0/24", "b"), nil, "covering prefix 198.51.100.0/24 is not in the RIB", &memRIB{ready: true, has: map[netip.Prefix]bool{pfx("203.0.113.0/24"): true}}},
+		// An empty AS path is the local AS's route on the edge.
 		{"rpki invalid", synImp("198.51.100.0/25", "198.51.100.0/24", "b"), func(c *Config) {
-			c.Synthesize.Invalid = func(sub, cover netip.Prefix) bool {
-				return sub == pfx("198.51.100.0/25") && cover == pfx("198.51.100.0/24")
+			c.Synthesize.Invalid = func(sub netip.Prefix, origin uint32) bool {
+				return sub == pfx("198.51.100.0/25") && origin == 64512
 			}
-		}, "RPKI state would be invalid", nil},
+		}, "RPKI state would be invalid with origin AS64512", nil},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -250,7 +251,7 @@ func TestSynthesizeNeverOverlapsALearnedMoreSpecific(t *testing.T) {
 
 // A synthesized route on the wire is not checked against the covering
 // prefix in the RIB: the decision engine retires it on a confirmed leave.
-// The rails and the leak-watch hold and reservations still withdraw it.
+// The leak-watch hold still withdraws it.
 func TestSynthesizeOnWireFollowsTheDecision(t *testing.T) {
 	ctx := context.Background()
 	ann := &fakeAnn{}
@@ -269,10 +270,10 @@ func TestSynthesizeOnWireFollowsTheDecision(t *testing.T) {
 	if err := c.Sync(ctx, imps); err != nil || ann.count() != 1 {
 		t.Fatalf("hidden covering prefix withdrew: err=%v routes=%d", err, ann.count())
 	}
-	if why := c.SynthesizeRefusal(pfx("198.51.100.0/25"), pfx("198.51.100.0/24")); why != "" {
+	if why := c.SynthesizeRefusal(pfx("198.51.100.0/25"), pfx("198.51.100.0/24"), "b"); why != "" {
 		t.Fatalf("on-wire refusal = %q", why)
 	}
-	if why := c.SynthesizeRefusal(pfx("198.51.100.128/25"), pfx("198.51.100.0/24")); !strings.Contains(why, "is not in the learned RIB") {
+	if why := c.SynthesizeRefusal(pfx("198.51.100.128/25"), pfx("198.51.100.0/24"), "b"); !strings.Contains(why, "is not in the learned RIB") {
 		t.Fatalf("new refusal = %q", why)
 	}
 	held[pfx("198.51.100.0/25")] = true
@@ -351,5 +352,60 @@ func TestSynthesizableAppliesTheRails(t *testing.T) {
 	}
 	if got := o.Synthesizable([]probe.Result{subResult("198.51.100.0/24", "198.51.100.0/25")}); len(got) != 1 {
 		t.Fatalf("observe synthesizable = %v", got)
+	}
+}
+
+// With bgp.as_path native the route carries the covering prefix's path, so
+// RPKI is checked for that path's origin, not the local AS.
+func TestSynthesizeRPKIChecksTheAnnouncedOrigin(t *testing.T) {
+	ctx := context.Background()
+	var asked []uint32
+	cfg := synCfg(10)
+	cfg.ASPath = "native"
+	cfg.Synthesize.Invalid = func(_ netip.Prefix, origin uint32) bool {
+		asked = append(asked, origin)
+		return origin == 64501
+	}
+	rib := &pathRIB{memRIB: learned("198.51.100.0/24"), native: map[netip.Prefix][]uint32{pfx("198.51.100.0/24"): {64500, 64501}}}
+	ann := &fakeAnn{}
+	c, err := New(cfg, ann, rib, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = c.Sync(ctx, []policy.Improvement{synImp("198.51.100.0/25", "198.51.100.0/24", "b")})
+	if err == nil || !strings.Contains(err.Error(), "invalid with origin AS64501") || ann.count() != 0 {
+		t.Fatalf("err = %v, routes %d", err, ann.count())
+	}
+	if len(asked) == 0 || slices.Contains(asked, 64512) {
+		t.Fatalf("origins checked: %v", asked)
+	}
+	if got := c.Synthesizable([]probe.Result{subResult("198.51.100.0/24", "198.51.100.0/25")}); len(got) != 0 {
+		t.Fatalf("synthesizable = %v", got)
+	}
+}
+
+// A sub-range reserved for inbound steering or a mitigation rule is never
+// synthesized, and one reserved while on the wire is withdrawn.
+func TestSynthesizeReservedPrefix(t *testing.T) {
+	ctx := context.Background()
+	reserved := map[netip.Prefix]bool{pfx("198.51.100.0/25"): true}
+	cfg := synCfg(10)
+	cfg.Reserved = func(p netip.Prefix) bool { return reserved[p] }
+	ann := &fakeAnn{}
+	c, err := New(cfg, ann, learned("198.51.100.0/24"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	imps := []policy.Improvement{synImp("198.51.100.0/25", "198.51.100.0/24", "b")}
+	if err := c.Sync(ctx, imps); err == nil || !strings.Contains(err.Error(), "reserved") || ann.count() != 0 {
+		t.Fatalf("reserved announced: err=%v routes=%d", err, ann.count())
+	}
+	delete(reserved, pfx("198.51.100.0/25"))
+	if err := c.Sync(ctx, imps); err != nil || ann.count() != 1 {
+		t.Fatalf("err=%v routes=%d", err, ann.count())
+	}
+	reserved[pfx("198.51.100.0/25")] = true
+	if err := c.Sync(ctx, imps); err == nil || !strings.Contains(err.Error(), "reserved") || ann.count() != 0 {
+		t.Fatalf("reserved on the wire kept: err=%v routes=%d", err, ann.count())
 	}
 }
