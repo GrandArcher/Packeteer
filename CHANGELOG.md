@@ -6,6 +6,7 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 
 ### Added
 
+- Replay history: `packeteer whatif`, `POST /api/whatif`, and a Settings panel decide stored rounds again under new settings, read-only; needs `storage.round_retention` (#204).
 - Opt-in `synthesize`, lab only: announce a measured sub-range NOT in the learned RIB inside a learned covering prefix, under rails, a marker community, the route cap, and warnings (#122).
 - Blast-radius preview: `GET /api/blast`, a Settings panel, and a dry-run token gating online changes that can alter announcements; SIGHUP logs add/move/withdraw counts and warning codes (#227).
 - Internet VRF and partial-table providers: FRR lab steers and withdraws inside a VRF with no full-table transit; a learned default route is never steered or announced; docs/vrf.md (#206).

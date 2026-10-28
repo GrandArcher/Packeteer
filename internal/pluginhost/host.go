@@ -479,6 +479,20 @@ func optionsEnv(cfg *config.Config, opts Options) plugin.Env {
 	return plugin.Env{Logger: opts.Logger, PluginDir: dir, Getenv: opts.Getenv, Providers: providerNames(cfg), Ports: portNames(cfg), ASN: asn, CheckOnly: opts.CheckOnly}
 }
 
+// BuildScorer constructs the scorer cfg names. It is not started. The
+// what-if replay (#204) builds one per config it decides under.
+func BuildScorer(cfg *config.Config, opts Options) (plugin.Scorer, error) {
+	if cfg.Scorer == nil {
+		return nil, errors.New("no scorer configured")
+	}
+	var errs []error
+	out := build(plugin.Scorers, "scorer", []config.PluginSpec{*cfg.Scorer}, optionsEnv(cfg, opts), &errs)
+	if len(errs) > 0 {
+		return nil, errors.Join(errs...)
+	}
+	return out[0].Plugin, nil
+}
+
 // BuildSources constructs the named target sources. They are not started.
 func BuildSources(cfg *config.Config, specs []config.PluginSpec, opts Options) ([]Instance[plugin.TargetSource], error) {
 	var errs []error

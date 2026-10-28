@@ -259,6 +259,29 @@ type ProviderSampleStore interface {
 	ProviderSamples(ctx context.Context, from, to time.Time) ([]ProviderSample, error)
 }
 
+// RoundRecord is one decision round's input, as the replay package encodes
+// it (#204). At is the time Decide ran. Input is opaque to the store.
+type RoundRecord struct {
+	At    time.Time
+	Input []byte
+}
+
+// RoundStore is optional on a storage plugin (#204). It keeps the input of
+// each decision round for a bounded time so `packeteer whatif` and
+// /api/whatif can run Decide again under other settings. It is read-only for
+// everything else: it does not announce and does not change a decision.
+type RoundStore interface {
+	// RoundRetention is how long rounds are kept. Zero means the store does
+	// not keep them and PutRounds is not called.
+	RoundRetention() time.Duration
+	// PutRounds inserts rounds. A round with the same At replaces the
+	// earlier one.
+	PutRounds(ctx context.Context, rounds []RoundRecord) error
+	// Rounds returns at most limit rounds whose At is in [from, to),
+	// oldest first.
+	Rounds(ctx context.Context, from, to time.Time, limit int) ([]RoundRecord, error)
+}
+
 // CountryLookup is optional on a policy plugin that has a GeoIP database.
 // Reports use it for country statistics. It returns "" when unknown.
 type CountryLookup interface {

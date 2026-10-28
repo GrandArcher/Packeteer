@@ -1,9 +1,10 @@
 // Package sqlite is the default storage plugin: an embedded SQLite file
 // (pure Go, no cgo) that keeps report history on a mounted volume.
 //
-// It stores daily probe rollups, one row per improvement, one row per
-// threat mitigation rule, and per-prefix facts (origin ASN, country,
-// volume). Raw probe results are not stored. It also keeps HTTP users,
+// With round_retention set it also keeps each decision round's input for
+// replay (#204). It stores daily probe rollups, one row per improvement,
+// one row per threat mitigation rule, and per-prefix facts (origin ASN,
+// country, volume). Raw probe results are not stored. It also keeps HTTP users,
 // API token hashes, the audit log (#32), recent events (#173), and SNMP 95th-percentile
 // samples for the open billing period (#127), and herd measurement records
 // (#260) in tables the retention prune leaves to herd.
@@ -37,6 +38,9 @@ const (
 	MinRetention     = 24 * time.Hour
 	MaxRetention     = 10 * 365 * 24 * time.Hour
 	pruneEvery       = 24 * time.Hour
+	// MinRoundRetention and MaxRoundRetention bound round_retention (#204).
+	MinRoundRetention = time.Hour
+	MaxRoundRetention = 30 * 24 * time.Hour
 )
 
 // Config is the plugin config block.
@@ -46,14 +50,19 @@ type Config struct {
 	Path string `yaml:"path"`
 	// Retention deletes rows older than this (default 400 days).
 	Retention time.Duration `yaml:"retention"`
+	// RoundRetention keeps each decision round's input this long so
+	// `packeteer whatif` can replay it (#204). 0 (the default) keeps none.
+	RoundRetention time.Duration `yaml:"round_retention"`
 }
 
 // Store is the SQLite storage plugin.
 type Store struct {
 	path      string
 	retention time.Duration
-	env       plugin.Env
-	now       func() time.Time
+	// roundRetention is zero when decision rounds are not kept (#204).
+	roundRetention time.Duration
+	env            plugin.Env
+	now            func() time.Time
 
 	mu     sync.Mutex
 	db     *sql.DB
@@ -85,7 +94,10 @@ func New(c plugin.Config, env plugin.Env) (*Store, error) {
 	if cfg.Retention < MinRetention || cfg.Retention > MaxRetention {
 		return nil, fmt.Errorf("retention %s must be between %s and %s", cfg.Retention, MinRetention, MaxRetention)
 	}
-	return &Store{path: filepath.Clean(cfg.Path), retention: cfg.Retention, env: env, now: time.Now}, nil
+	if cfg.RoundRetention != 0 && (cfg.RoundRetention < MinRoundRetention || cfg.RoundRetention > MaxRoundRetention) {
+		return nil, fmt.Errorf("round_retention %s must be 0 (off) or between %s and %s", cfg.RoundRetention, MinRoundRetention, MaxRoundRetention)
+	}
+	return &Store{path: filepath.Clean(cfg.Path), retention: cfg.Retention, roundRetention: cfg.RoundRetention, env: env, now: time.Now}, nil
 }
 
 // SetClock replaces the clock the retention prune measures against. Call it
@@ -251,6 +263,10 @@ CREATE TABLE IF NOT EXISTS usage_samples (
 	PRIMARY KEY (provider, host, iface, at_ms)
 );
 CREATE INDEX IF NOT EXISTS usage_samples_period_end ON usage_samples (period_end_ms);
+CREATE TABLE IF NOT EXISTS decision_rounds (
+	at_ms INTEGER PRIMARY KEY,
+	input BLOB NOT NULL
+);
 CREATE TABLE IF NOT EXISTS provider_samples (
 	provider TEXT NOT NULL,
 	slot_ms INTEGER NOT NULL,
@@ -399,6 +415,9 @@ func (s *Store) prune(ctx context.Context) error {
 		return err
 	}
 	if _, err := db.ExecContext(ctx, `DELETE FROM provider_samples WHERE slot_ms < ?`, cutoff.UnixMilli()); err != nil {
+		return err
+	}
+	if err := s.pruneRounds(ctx, db); err != nil {
 		return err
 	}
 	_, err = db.ExecContext(ctx, `DELETE FROM prefixes WHERE updated_ms < ?`, cutoff.UnixMilli())

@@ -43,6 +43,24 @@ A change that applies online and can alter announcements (`mode`, `thresholds`, 
 
 Rollback: the preview adds no config key and changes no announcement. To drop the confirmation step, revert the `configGate` call in `PUT /api/config` (`internal/httpapi/ui.go`); until then, API clients that save an announcing change must send `dry_run` first. A save that was confirmed is reverted like any config edit.
 
+## Replay history
+
+Observe mode shows what it would do, but not what a different setting would have done. `packeteer whatif` decides stored decision rounds again with the real `Decide`, under the running config and, with `-config`, a second config, and prints what differs:
+
+```
+docker exec packeteer packeteer whatif -base /etc/packeteer/config.yaml -config /tmp/new.yaml -from 24h
+```
+
+It needs `storage: {type: sqlite, config: {round_retention: 24h}}` ([CONFIG.md](CONFIG.md#storage-sqlite)); rounds from before that was set are not kept. `-from` and `-to` are RFC 3339 times or durations ago (default the last 24 hours up to now); `-json` prints the result as JSON. `-base` defaults to `PACKETEER_CONFIG`.
+
+Each config's report lists the moves it makes (new, switched, retired), the loss and RTT change per move weighted by the prefix volume when a flow source reported one (the mean per move otherwise, and moves without a volume are counted), traffic moved, commit relief (the volume of the moves made for a commit), flaps, flap quarantines, and how many prefixes and rounds `max_improvements` held back. With two configs it also lists each prefix the two steer differently. Replaying the running config over rounds recorded under it reproduces the live decisions when the window starts with no improvements standing, no reload falls inside it, no round was dropped (the log warns when the store is failing), and the leak watch did not change between the decision and the recording of a round. Every probe round and every evaluation that made a change is kept, so `confirm_rounds` counts the same rounds. A RIB change or a federation result that arrives between probe rounds and makes no change is kept at most twice per `probe.interval`, so a move that depended on it can be confirmed up to one probe round later in the replay.
+
+Settings has a Replay history panel that sends the YAML in the editor and a window to `POST /api/whatif` (admin, needs auth; one replay runs at a time, at most two minutes). It works from observe-mode history and is read-only: the CLI opens the database read-only, and the replay has no announcer, so nothing is announced, withdrawn, or saved. It is an estimate:
+
+- Every window starts with no improvements standing, so the first `hold_time` is decided without what was standing before it. A restart, a failover, or a reload inside the window is not modelled: the whole window runs under one config.
+- Loss and RTT are those the probes measured on the chosen and native paths at the round of the move; the replay does not predict what the path will do after traffic moves.
+- Synthesized sub-ranges, inbound steers, and mitigation rules are not replayed, and neither are an operator releasing a flap quarantine or verification backing out a move (#305): the replay decides every round itself.
+
 ## Router config
 
 `packeteer -snippet <vendor>` prints the session and filter config for the configured edge and exits. The vendors are `frr`, `bird`, `junos`, `iosxr`, `arista`, and `mikrotik`. The Settings panel shows the same text (`GET /api/snippets?vendor=frr`, admin). The text is generated from the templates in `internal/snippet/templates` and the `asn`, `router_id`, `packeteer_community`, and neighbors in the config; it is never sent to a router. The FRR and BIRD output is loaded by real FRR and BIRD daemons in the `onboarding` CI job.
@@ -60,5 +78,7 @@ Rollback: the preview adds no config key and changes no announcement. To drop th
 Reading the router's filters and timers over its own management API (RouterOS, NETCONF, vtysh, birdc) is not built. The checks above read Packeteer's own view and one administrator confirmation.
 
 ## Rollback
+
+Replay history (#204) changes no announcement. Set `round_retention` back to `0` and restart to stop storing rounds. Rounds already stored stay in the database file until you delete the database or set a non-zero `round_retention` short enough for them to age out. Revert the change to drop `whatif`, `/api/whatif`, and the Settings panel.
 
 The install script, `-snippet`, `-pbr -apply`, and the preflight add no config key and change no router. Remove the container (`docker stop -t 30 packeteer && docker rm packeteer`) to undo the install. Undo an applied host policy routing with `ip rule del` and `ip route flush table <n>` for the lines `-apply` printed, or remove the provider from the config while another provider stays measured from this instance, and run `-pbr linux -apply -yes` again: it removes the rules and routes of the provider that is gone.

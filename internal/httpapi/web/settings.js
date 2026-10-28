@@ -2486,6 +2486,64 @@ function loadBlast() {
   }, function (err) { byId("bl-status").textContent = explain(err); });
 }
 
+// ---- Replay history (#204) ----
+
+function signed(v, digits) {
+  return (v > 0 ? "+" : "") + v.toFixed(digits);
+}
+
+function whatIfSummary(r) {
+  var s = r.summary;
+  var basis = s.weighted ? "weighted by traffic" + (s.unknown_volume ? ", " + s.unknown_volume + " moves without a volume left out" : "") : "mean per move";
+  return [
+    s.improves + " new, " + s.switches + " switched, " + s.retires + " retired; " + s.prefixes + " prefixes steered, " + s.active + " active at the end (peak " + s.peak_active + ", cap " + s.max_improvements + ")",
+    "Expected change (" + basis + ", positive is better): loss " + signed(s.loss_delta_pct, 2) + " points, RTT " + signed(s.rtt_delta_ms, 1) + " ms",
+    "Traffic moved " + s.moved_mbps.toFixed(1) + " Mbps; commit relief " + s.commit_relief_mbps.toFixed(1) + " Mbps in " + s.commit_moves + " moves",
+    "Flaps " + s.flaps + ", quarantines " + s.quarantines + "; held back by the cap: " + s.capped_prefixes + " prefixes in " + s.capped_rounds + " rounds"
+  ];
+}
+
+function whatIfSteps(list) {
+  return list && list.length ? list.join(" > ") : "no move";
+}
+
+function renderWhatIf(res) {
+  var root = byId("wi-body");
+  clear(root);
+  res.sides.forEach(function (r) {
+    root.appendChild(el("h3", "", r.name));
+    var ul = el("ul");
+    whatIfSummary(r).forEach(function (line) { ul.appendChild(el("li", "", line)); });
+    root.appendChild(ul);
+  });
+  if (res.sides.length < 2) return;
+  var n = (res.diff || []).length + (res.diff_omitted || 0);
+  root.appendChild(el("h3", "", "Prefixes steered differently (" + n + ")"));
+  if (!n) {
+    root.appendChild(el("p", "empty", "None: the editor YAML makes the same moves as the running config."));
+    return;
+  }
+  var dl = el("ul");
+  res.diff.forEach(function (d) {
+    dl.appendChild(el("li", "", d.prefix + ": running " + whatIfSteps(d.base) + "; editor " + whatIfSteps(d.new)));
+  });
+  if (res.diff_omitted) dl.appendChild(el("li", "", "and " + res.diff_omitted + " more"));
+  root.appendChild(dl);
+}
+
+function runWhatIf() {
+  var status = byId("wi-status");
+  status.textContent = "Replaying...";
+  var body = {yaml: byId("ed-yaml").value, from: byId("wi-window").value};
+  return api("POST", "/api/whatif", body).then(function (res) {
+    status.textContent = "Replayed " + res.rounds + " rounds from " + res.from + " to " + res.to + ". Nothing was announced.";
+    renderWhatIf(res);
+  }, function (err) {
+    clear(byId("wi-body"));
+    status.textContent = explain(err);
+  });
+}
+
 // previewCandidate previews the editor text without saving it. With confirm
 // set, the Apply button saves it with the token the preview returned.
 function previewCandidate(confirm) {
@@ -2703,6 +2761,7 @@ byId("pf-snippet-show").addEventListener("click", showSnippet);
 byId("pf-snippet-copy").addEventListener("click", copySnippet);
 byId("pf-inject-plan").addEventListener("click", planInject);
 byId("bl-run").addEventListener("click", loadBlast);
+byId("wi-run").addEventListener("click", runWhatIf);
 byId("bl-apply").addEventListener("click", putConfig);
 bindStaticChecks();
 loadPreflight();

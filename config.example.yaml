@@ -565,6 +565,7 @@ storage:
   config:
     path: /var/lib/packeteer/packeteer.db
     retention: 9600h            # 400 days
+    # round_retention: 24h      # keep each decision round's input so `packeteer whatif` can replay it under new settings (docs/onboarding.md). Off at 0. About 65 KB per round per 1000 prefixes, at least one round per probe round (docs/CONFIG.md).
 
 # Troubleshooting tools on the ops server (/api/troubleshoot, dashboard).
 # The looking glass (learned RIB) is always on. enabled: true adds an
