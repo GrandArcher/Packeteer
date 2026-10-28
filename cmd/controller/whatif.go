@@ -88,7 +88,11 @@ func (w *whatIfSource) Replay(ctx context.Context, candidate []byte, from, to st
 	defer w.busy.Store(false)
 	ctx, cancel := context.WithTimeout(ctx, whatIfTimeout)
 	defer cancel()
-	return replayConfigs(ctx, w.store, run, next, f, t, w.log, w.getenv)
+	res, err := replayConfigs(ctx, w.store, run, next, f, t, w.log, w.getenv)
+	if errors.Is(err, context.DeadlineExceeded) {
+		return replay.Result{}, fmt.Errorf("%w: the replay took longer than %s; use a shorter window", httpapi.ErrWhatIfInput, whatIfTimeout)
+	}
+	return res, err
 }
 
 // roundStoreOf is the storage plugin's round side, when it keeps rounds.

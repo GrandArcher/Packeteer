@@ -331,6 +331,29 @@ func TestFormat(t *testing.T) {
 	}
 }
 
+// The size the docs give for round_retention: about 60 KB for 1000
+// prefixes measured through three providers.
+func TestEncodedRoundSize(t *testing.T) {
+	in := policy.Input{ProviderUp: map[string]bool{"a": true, "b": true, "c": true}, Native: map[netip.Prefix]string{}, RIBEnabled: true, RIBReady: true}
+	for i := 0; i < 1000; i++ {
+		p := netip.PrefixFrom(netip.AddrFrom4([4]byte{10, byte(i >> 8), byte(i), 0}), 24)
+		in.Native[p] = "a"
+		for j, prov := range []string{"a", "b", "c"} {
+			in.Results = append(in.Results, probe.Result{Provider: prov, Prefix: p, Target: netip.AddrFrom4([4]byte{10, byte(i >> 8), byte(i), 1}), Prober: "icmp",
+				Time: t0.Add(time.Duration(i*j) * time.Millisecond), Round: t0,
+				Stats: probe.Stats{Sent: 10, Received: 10, LossPct: float64(i % 7), RTTMin: 20*time.Millisecond + time.Duration(i*1234),
+					RTTAvg: 25*time.Millisecond + time.Duration(i*4321+j*777), RTTMax: 40 * time.Millisecond, Jitter: 2*time.Millisecond + time.Duration(i*91)}})
+		}
+	}
+	data, err := Encode(t0, in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(data) > 80<<10 {
+		t.Fatalf("a round of 1000 prefixes and 3 providers is %d bytes; docs/CONFIG.md says about 60 KB", len(data))
+	}
+}
+
 func TestParseWindow(t *testing.T) {
 	now := time.Date(2026, 10, 2, 0, 0, 0, 0, time.UTC)
 	f, to, err := ParseWindow("", "", now)

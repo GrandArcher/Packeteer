@@ -2,9 +2,9 @@
 // (pure Go, no cgo) that keeps report history on a mounted volume.
 //
 // With round_retention set it also keeps each decision round's input for
-// replay (#204). It stores daily probe rollups, one row per improvement, one row per
-// threat mitigation rule, and per-prefix facts (origin ASN, country,
-// volume). Raw probe results are not stored. It also keeps HTTP users,
+// replay (#204). It stores daily probe rollups, one row per improvement,
+// one row per threat mitigation rule, and per-prefix facts (origin ASN,
+// country, volume). Raw probe results are not stored. It also keeps HTTP users,
 // API token hashes, the audit log (#32), recent events (#173), and SNMP 95th-percentile
 // samples for the open billing period (#127), and herd measurement records
 // (#260) in tables the retention prune leaves to herd.

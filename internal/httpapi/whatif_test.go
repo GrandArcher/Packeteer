@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/netip"
+	"strings"
 	"testing"
 
 	"github.com/GrandArcher/Packeteer/internal/replay"
@@ -26,7 +27,7 @@ func (f *fakeWhatIf) Replay(_ context.Context, candidate []byte, from, to string
 func TestWhatIfEndpoint(t *testing.T) {
 	e := newUI(t)
 	body := map[string]any{"yaml": "mode: observe\n", "from": "6h"}
-	if rec, _ := e.do(t, "POST", "/api/whatif", plugin.RoleOperator, body); rec.Code != http.StatusNotFound {
+	if rec, _ := e.do(t, "POST", "/api/whatif", plugin.RoleOperator, body); rec.Code != http.StatusNotFound || !strings.Contains(rec.Body.String(), "round_retention") {
 		t.Fatalf("without a source: %d %s", rec.Code, rec.Body)
 	}
 

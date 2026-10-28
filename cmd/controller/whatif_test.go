@@ -189,6 +189,11 @@ func TestWhatIfSource(t *testing.T) {
 	if _, err = src.Replay(context.Background(), cand, "300h", "200h"); !errors.Is(err, replay.ErrNoRounds) {
 		t.Fatalf("empty window: %v", err)
 	}
+	late, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	defer cancel()
+	if _, err = src.Replay(late, cand, "3h", ""); !errors.Is(err, httpapi.ErrWhatIfInput) || !strings.Contains(err.Error(), "shorter window") {
+		t.Fatalf("deadline: %v", err)
+	}
 	src.busy.Store(true)
 	if _, err = src.Replay(context.Background(), cand, "3h", ""); !errors.Is(err, httpapi.ErrWhatIfBusy) {
 		t.Fatalf("busy: %v", err)

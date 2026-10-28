@@ -59,7 +59,7 @@ Settings has a Replay history panel that sends the YAML in the editor and a wind
 
 - Every window starts with no improvements standing, so the first `hold_time` is decided without what was standing before it. A restart, a failover, or a reload inside the window is not modelled: the whole window runs under one config.
 - Loss and RTT are those the probes measured on the chosen and native paths at the round of the move; the replay does not predict what the path will do after traffic moves.
-- Synthesized sub-ranges, inbound steers, and mitigation rules are not replayed.
+- Synthesized sub-ranges, inbound steers, and mitigation rules are not replayed, and neither are an operator releasing a flap quarantine or verification backing out a move (#305): the replay decides every round itself.
 
 ## Router config
 

@@ -1630,8 +1630,7 @@ Off unless `storage.type` is `sqlite`. Keeps report history in an embedded SQLit
 |---|---|---|
 | `path` | `/var/lib/packeteer/packeteer.db` | Database file. Must be absolute. The directory is created on start. Mount a volume on it (`-v packeteer-data:/var/lib/packeteer`) so history survives a container restart. |
 | `retention` | `9600h` (400 days) | Rows older than this (audit records and events included) are deleted on start and once a day. `24h`-`87600h`. An improvement that is still active is kept. |
-
-| `round_retention` | `0` (off) | Keeps the input of every decision round this long so `packeteer whatif` and `POST /api/whatif` can replay it (#204; [onboarding.md](onboarding.md#replay-history)). `0` or `1h`-`720h`. Rounds are pruned on each write. Each evaluation stores one round, about 60 KB per 1000 prefixes with three providers (gzip, measured on synthetic data), and there are one to two evaluations per `probe.interval`, so at 30s that is up to 350 MB a day for 1000 prefixes. Size it to the window you want to replay. Backup copies the rounds with the rest of the file. |
+| `round_retention` | `0` (off) | Keeps the input of every decision round this long so `packeteer whatif` and `POST /api/whatif` can replay it (#204; [onboarding.md](onboarding.md#replay-history)). `0` or `1h`-`720h`. Rounds are pruned on each write. Each evaluation stores one round, about 60 KB per 1000 prefixes with three providers (gzip, checked by a test on synthetic data), and there are one to two evaluations per `probe.interval`, so at 30s that is up to 350 MB a day for 1000 prefixes. Size it to the window you want to replay. Backup copies the rounds with the rest of the file. |
 
 What is stored:
 
