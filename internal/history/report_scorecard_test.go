@@ -69,8 +69,6 @@ func scorecard(t *testing.T, mod ...func(*Query)) Report {
 	return r
 }
 
-func fv(v float64) *float64 { return &v }
-
 func eq(a, b *float64) bool { return a == nil && b == nil || a != nil && b != nil && *a == *b }
 
 func TestScorecardPercentilesWeightedByVolume(t *testing.T) {
@@ -80,19 +78,19 @@ func TestScorecardPercentilesWeightedByVolume(t *testing.T) {
 	}
 	want := []ScorecardRow{
 		{Provider: "transit-b", OriginASN: 64500, Rank: 1, Prefixes: 2, Probes: 40, VolumeMbps: 400, Weighting: WeightFlow,
-			LossP50Pct: fv(0), LossP95Pct: fv(0), RTTP50Ms: fv(25), RTTP95Ms: fv(25), JitP50Ms: fv(1), JitP95Ms: fv(1)},
+			LossP50Pct: ptr(0), LossP95Pct: ptr(0), RTTP50Ms: ptr(25), RTTP95Ms: ptr(25), JitP50Ms: ptr(1), JitP95Ms: ptr(1)},
 		// The RTT samples are 20 and 30 ms at 100 Mbps and 40 ms twice at
 		// 300 Mbps: the weighted median is 40 ms where an unweighted one
 		// is 30 ms. The one lossy day (10%) is the 95th percentile only.
 		{Provider: "transit-a", OriginASN: 64500, Rank: 2, Prefixes: 2, Probes: 40, VolumeMbps: 400, Weighting: WeightFlow,
-			LossP50Pct: fv(0), LossP95Pct: fv(10), RTTP50Ms: fv(40), RTTP95Ms: fv(40), JitP50Ms: fv(3), JitP95Ms: fv(3)},
+			LossP50Pct: ptr(0), LossP95Pct: ptr(10), RTTP50Ms: ptr(40), RTTP95Ms: ptr(40), JitP50Ms: ptr(3), JitP95Ms: ptr(3)},
 		{Provider: "transit-c", OriginASN: 64500, Rank: 3, Prefixes: 1, Probes: 10, FailedPct: 100, VolumeMbps: 100, Weighting: WeightFlow,
-			LossP50Pct: fv(100), LossP95Pct: fv(100)},
+			LossP50Pct: ptr(100), LossP95Pct: ptr(100)},
 		// Tied on every ranked figure: the same rank.
 		{Provider: "transit-a", OriginASN: 64501, Rank: 1, Prefixes: 1, Probes: 10, Weighting: WeightEqual,
-			LossP50Pct: fv(0), LossP95Pct: fv(0), RTTP50Ms: fv(20), RTTP95Ms: fv(20), JitP50Ms: fv(1), JitP95Ms: fv(1)},
+			LossP50Pct: ptr(0), LossP95Pct: ptr(0), RTTP50Ms: ptr(20), RTTP95Ms: ptr(20), JitP50Ms: ptr(1), JitP95Ms: ptr(1)},
 		{Provider: "transit-b", OriginASN: 64501, Rank: 1, Prefixes: 1, Probes: 10, Weighting: WeightEqual,
-			LossP50Pct: fv(0), LossP95Pct: fv(0), RTTP50Ms: fv(20), RTTP95Ms: fv(20), JitP50Ms: fv(1), JitP95Ms: fv(1)},
+			LossP50Pct: ptr(0), LossP95Pct: ptr(0), RTTP50Ms: ptr(20), RTTP95Ms: ptr(20), JitP50Ms: ptr(1), JitP95Ms: ptr(1)},
 	}
 	for i, w := range want {
 		g := rows[i]
@@ -157,5 +155,36 @@ func TestScorecardCSVLeavesAbsentFiguresEmpty(t *testing.T) {
 	}
 	if lines[1] != "transit-b,64500,1,2,40,0,400,flow,0,0,25,25,1,1" || lines[3] != "transit-c,64500,3,1,10,100,100,flow,100,100,,,," {
 		t.Fatalf("csv rows = %q", lines)
+	}
+}
+
+// One ASN has one weighting for every provider, so providers ranked against
+// each other are weighted alike. A prefix with no volume weighs 0 in a flow
+// ASN: a provider that measured only that prefix has no percentiles and
+// ranks last.
+func TestScorecardWeightingIsPerASN(t *testing.T) {
+	bk := func(p netip.Prefix, provider string, loss float64) plugin.ProbeBucket {
+		return plugin.ProbeBucket{Day: scDay1, Prefix: p, Provider: provider, Probes: 10, Measured: 10, LossSum: loss * 10, RTTSumMs: 200}
+	}
+	h := plugin.History{
+		Buckets: []plugin.ProbeBucket{bk(scPfx1, "transit-a", 5), bk(scPfx2, "transit-b", 0)},
+		Prefixes: []plugin.PrefixInfo{
+			{Prefix: scPfx1, OriginASN: 64502, VolumeMbps: 10},
+			{Prefix: scPfx2, OriginASN: 64502},
+		},
+	}
+	rep, err := Build(h, Query{Name: ReportScorecard, From: scDay1, To: scDay1.Add(24 * time.Hour)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows := rep.Rows.([]ScorecardRow)
+	if len(rows) != 2 || rows[0].Provider != "transit-a" || rows[0].Rank != 1 || rows[1].Provider != "transit-b" || rows[1].Rank != 2 {
+		t.Fatalf("rows = %+v", rows)
+	}
+	if rows[0].Weighting != WeightFlow || rows[1].Weighting != WeightFlow {
+		t.Fatalf("weighting = %s, %s; both must be flow", rows[0].Weighting, rows[1].Weighting)
+	}
+	if rows[1].LossP50Pct != nil || rows[1].RTTP50Ms != nil || rows[1].Probes != 10 || rows[1].Prefixes != 1 {
+		t.Fatalf("zero-weight row = %+v", rows[1])
 	}
 }

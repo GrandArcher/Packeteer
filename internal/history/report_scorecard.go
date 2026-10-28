@@ -28,8 +28,10 @@ type ScorecardRow struct {
 	// FailedPct is the share of probes that got no reply.
 	FailedPct  float64 `json:"failed_pct"`
 	VolumeMbps float64 `json:"volume_mbps"`
-	// Weighting is "flow" when any of the prefixes has a known volume and
-	// "equal" when none has, so every daily mean counts the same.
+	// Weighting is "flow" when any prefix of the ASN has a known volume and
+	// "equal" when none of the ASN's prefixes has, so every daily mean
+	// counts the same. In a "flow" row a prefix with no known volume
+	// carries no weight.
 	Weighting  string   `json:"weighting"`
 	LossP50Pct *float64 `json:"loss_p50_pct,omitempty"`
 	LossP95Pct *float64 `json:"loss_p95_pct,omitempty"`
@@ -115,14 +117,22 @@ func (a *agg) scorecard(rep *Report) {
 			x.jitter = append(x.jitter, sample{v: b.JitterSum / meas, pfx: b.Prefix})
 		}
 	}
+	asnVolume := map[uint32]float64{}
+	for asn, ps := range asnPrefixes {
+		for p := range ps {
+			asnVolume[asn] += a.info[p].VolumeMbps
+		}
+	}
 	rows := make([]ScorecardRow, 0, len(m))
 	for k, x := range m {
 		var volume float64
 		for p := range x.prefixes {
 			volume += a.info[p].VolumeMbps
 		}
+		// One basis per ASN, so the providers ranked against each other
+		// are weighted alike. A prefix with no known volume then weighs 0.
 		weighting := WeightEqual
-		if volume > 0 {
+		if asnVolume[k.asn] > 0 {
 			weighting = WeightFlow
 		}
 		for _, s := range [][]sample{x.loss, x.rtt, x.jitter} {
@@ -142,12 +152,6 @@ func (a *agg) scorecard(rep *Report) {
 		})
 	}
 	rankScorecard(rows)
-	asnVolume := map[uint32]float64{}
-	for asn, ps := range asnPrefixes {
-		for p := range ps {
-			asnVolume[asn] += a.info[p].VolumeMbps
-		}
-	}
 	slices.SortFunc(rows, func(x, y ScorecardRow) int {
 		if c := cmp.Compare(asnVolume[y.OriginASN], asnVolume[x.OriginASN]); c != 0 {
 			return c
@@ -164,16 +168,8 @@ func (a *agg) scorecard(rep *Report) {
 	for _, r := range rows {
 		rep.lines = append(rep.lines, []string{r.Provider, strconv.FormatUint(uint64(r.OriginASN), 10), strconv.Itoa(r.Rank),
 			strconv.Itoa(r.Prefixes), strconv.Itoa(r.Probes), f(r.FailedPct), f(r.VolumeMbps), r.Weighting,
-			fp(r.LossP50Pct), fp(r.LossP95Pct), fp(r.RTTP50Ms), fp(r.RTTP95Ms), fp(r.JitP50Ms), fp(r.JitP95Ms)})
+			optS(r.LossP50Pct), optS(r.LossP95Pct), optS(r.RTTP50Ms), optS(r.RTTP95Ms), optS(r.JitP50Ms), optS(r.JitP95Ms)})
 	}
-}
-
-// fp is an optional figure; an absent one is an empty cell.
-func fp(v *float64) string {
-	if v == nil {
-		return ""
-	}
-	return f(*v)
 }
 
 // worse is a figure that is absent counting as the worst.

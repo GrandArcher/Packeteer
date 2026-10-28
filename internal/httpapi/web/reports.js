@@ -22,13 +22,13 @@ var reportView = null;
 // reportViewFromURL reads the page URL, which uses the API's own
 // parameters: days, or from and to (UTC), then the filters, sort, order,
 // and limit. A link from the search page names only the report and a
-// prefix or origin AS; it gets the 90 days it always had. The scorecard opens 30.
+// prefix or origin AS; it gets the 90 days it always had. A report with
+// a default_days in the catalog opens that many (reportSelect).
 function reportViewFromURL() {
   var q = new URLSearchParams(window.location.search);
   var v = {report: q.get("report") || "", days: q.get("days") || "", from: q.get("from") || "", to: q.get("to") || "",
     sort: q.get("sort") || "", order: q.get("order") || "", limit: q.get("limit") || "", filters: {}};
   REPORT_FILTERS.forEach(function (f) { v.filters[f.name] = q.get(f.name) || ""; });
-  if (!v.days && !v.from && !v.to) v.days = {improvements: "90", scorecard: "30"}[v.report] || "7";
   return v;
 }
 
@@ -253,6 +253,9 @@ function reportSelect(name) {
   reportDefs.forEach(function (d) { if (d.name === name) reportDef = d; });
   if (!reportDef) reportDef = reportDefs[0];
   reportView.report = reportDef.name;
+  if (!reportView.days && !reportView.from && !reportView.to) {
+    reportView.days = String(reportDef.default_days || (reportDef.name === "improvements" ? 90 : 7));
+  }
   document.getElementById("report-title").textContent = reportTitle(reportDef.name);
   document.getElementById("report-summary").textContent = reportDef.summary;
   reportCatalog();

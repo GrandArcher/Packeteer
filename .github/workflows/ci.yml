@@ -1134,7 +1134,7 @@ jobs:
           bash lab/ui-smoke.sh 'http://127.0.0.1:18208/reports.html?report=probe_asns&days=30' '>Probes by ASN<' 'Showing 10 of 10 rows' 'href="/prefixes.html?asn=64496"' \
             'href="/prefixes.html?asn=64497"' 'id="rf-cause-label" hidden=""' --absent 'Cannot reach' 'History is off'
           bash lab/ui-smoke.sh 'http://127.0.0.1:18208/reports.html?report=scorecard' '>Provider scorecard<' 'Showing 4 of 4 rows' 'Loss p95 (%)' 'RTT p50 (ms)' \
-            'href="/prefixes.html?asn=64496"' 'id="rf-provider-label" hidden=""' 'id="rf-asn-label"' 'format=csv' --absent 'Cannot reach' 'History is off'
+            'href="/prefixes.html?asn=64496"' 'id="rf-provider-label" hidden=""' 'id="rf-asn-label"' 'days=30&amp;format=csv' --absent 'Cannot reach' 'History is off'
           kill "$proxy"
           # Headless Chrome cannot click, so uiproxy adds a driver to
           # /reports.html. It sorts the Prefix column twice, filters by cause,
