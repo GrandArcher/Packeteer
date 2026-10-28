@@ -184,7 +184,7 @@
   </section>
   <section id="whatif">
     <h2>Replay history</h2>
-    <p class="tag">Decides the stored probe rounds again under the YAML in the editor and compares it with the running config: the moves it would make, the loss and RTT change weighted by traffic, commit relief, flaps, and how often max_improvements held a move back. It reads history only and announces nothing, so it works in observe mode. It needs <code>round_retention</code> on the storage plugin, and a replay starts each window with no improvements standing.</p>
+    <p class="tag">Decides the stored probe rounds again under the YAML in the editor and compares the result with the running config: moves, loss and RTT change weighted by traffic, commit relief, flaps, and cap pressure. It works from observe-mode history and needs <code>round_retention</code> on the storage plugin. Each window starts with no improvements standing.</p>
     <div class="controls">
       <label>Window
         <select id="wi-window">
