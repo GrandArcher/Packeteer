@@ -67,9 +67,8 @@ type Options struct {
 	// OnWrite, when set, is told the result of each store write the
 	// flush attempts. The System page shows it as the storage state.
 	OnWrite func(error)
-	// RoundEvery is the least time between two kept decision rounds.
-	// Evaluations also run on every RIB change, so without it the rate of
-	// rounds follows route churn. Zero keeps every round.
+	// RoundEvery is the least time between two kept decision rounds that
+	// carry no new probe round and no change. Zero keeps every round.
 	RoundEvery time.Duration
 }
 
@@ -129,6 +128,8 @@ type Recorder struct {
 	rounds        []plugin.RoundRecord
 	roundsDropped int
 	lastRound     time.Time
+	// lastProbeRound is the newest probe round in a round already kept.
+	lastProbeRound time.Time
 
 	flushMu sync.Mutex
 	cancel  context.CancelFunc
@@ -272,25 +273,41 @@ func (r *Recorder) Close(ctx context.Context) error {
 	return r.Flush(ctx)
 }
 
-// KeepsRounds reports whether the store keeps decision rounds for replay
+// keepsRounds reports whether the store keeps decision rounds for replay
 // (#204).
-func (r *Recorder) KeepsRounds() bool {
+func (r *Recorder) keepsRounds() bool {
 	rs, ok := r.opt.Store.(plugin.RoundStore)
 	return ok && rs.RoundRetention() > 0
 }
 
-// Round queues the input of the decision made at now for replay. It does
-// nothing unless the store keeps rounds. Safe for concurrent use.
-func (r *Recorder) Round(now time.Time, in policy.Input) {
-	if !r.KeepsRounds() {
+// Round queues the input of the decision made at now for replay, or does
+// nothing unless the store keeps rounds. A round is kept when it carries
+// probe results from a probe round not yet kept (so confirm_rounds counts
+// the same rounds in a replay), when the decision made changes (changed),
+// and otherwise at most once per RoundEvery: evaluations also run on every
+// RIB change, which would make the rate follow route churn. Safe for
+// concurrent use.
+func (r *Recorder) Round(now time.Time, in policy.Input, changed bool) {
+	if !r.keepsRounds() {
 		return
+	}
+	var newest time.Time
+	for i := range in.Results {
+		if in.Results[i].Round.After(newest) {
+			newest = in.Results[i].Round
+		}
 	}
 	r.mu.Lock()
-	tooSoon := !r.lastRound.IsZero() && now.Sub(r.lastRound) < r.opt.RoundEvery
-	r.mu.Unlock()
-	if tooSoon {
+	fresh := newest.After(r.lastProbeRound)
+	if !fresh && !changed && !r.lastRound.IsZero() && now.Sub(r.lastRound) < r.opt.RoundEvery {
+		r.mu.Unlock()
 		return
 	}
+	r.lastRound = now
+	if fresh {
+		r.lastProbeRound = newest
+	}
+	r.mu.Unlock()
 	data, err := replay.Encode(now, in)
 	if err != nil {
 		r.log.Warn("history: encode decision round", "err", err)
@@ -298,7 +315,6 @@ func (r *Recorder) Round(now time.Time, in policy.Input) {
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.lastRound = now
 	if len(r.rounds) >= maxPendingRounds {
 		r.roundsDropped++
 		return

@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/GrandArcher/Packeteer/internal/plugins/scorer/weighted"
 	"github.com/GrandArcher/Packeteer/internal/plugins/storage/sqlite"
 	"github.com/GrandArcher/Packeteer/internal/policy"
 	"github.com/GrandArcher/Packeteer/internal/probe"
@@ -49,20 +50,20 @@ func TestRoundsAreKeptOnlyWhenTheStoreKeepsThem(t *testing.T) {
 	ctx := context.Background()
 	off := &roundStore{memStore: &memStore{}}
 	r := New(Options{Store: off})
-	r.Round(time.Now(), roundInput())
-	if r.KeepsRounds() || len(r.rounds) != 0 {
+	r.Round(time.Now(), roundInput(), false)
+	if r.keepsRounds() || len(r.rounds) != 0 {
 		t.Fatal("a store with round retention 0 queued a round")
 	}
 	plain := New(Options{Store: &memStore{}})
-	plain.Round(time.Now(), roundInput())
-	if plain.KeepsRounds() || len(plain.rounds) != 0 {
+	plain.Round(time.Now(), roundInput(), false)
+	if plain.keepsRounds() || len(plain.rounds) != 0 {
 		t.Fatal("a store without rounds queued one")
 	}
 
 	on := &roundStore{memStore: &memStore{}, retention: time.Hour}
 	r = New(Options{Store: on})
 	now := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
-	r.Round(now, roundInput())
+	r.Round(now, roundInput(), false)
 	if err := r.Flush(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -75,26 +76,115 @@ func TestRoundsAreKeptOnlyWhenTheStoreKeepsThem(t *testing.T) {
 	}
 }
 
-// RIB changes trigger evaluations between probe rounds; only one round per
-// RoundEvery is kept.
+// RIB changes trigger evaluations between probe rounds. Those are kept at
+// most once per RoundEvery, unless they changed something; a new probe
+// round is always kept.
 func TestRoundsAreSpacedByRoundEvery(t *testing.T) {
 	st := &roundStore{memStore: &memStore{}, retention: time.Hour}
 	r := New(Options{Store: st, RoundEvery: 15 * time.Second})
 	now := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
-	for _, off := range []time.Duration{0, time.Second, 5 * time.Second, 14 * time.Second, 15 * time.Second, 16 * time.Second, 31 * time.Second} {
-		r.Round(now.Add(off), roundInput())
+	sec := func(n int) time.Duration { return time.Duration(n) * time.Second }
+	for _, c := range []struct {
+		at, probeRound time.Duration
+		changed        bool
+		kept           bool
+	}{
+		{sec(0), sec(0), false, true},
+		{sec(1), sec(0), false, false},
+		{sec(5), sec(0), false, false},
+		{sec(6), sec(0), true, true},
+		{sec(7), sec(0), false, false},
+		{sec(8), sec(8), false, true},
+		{sec(24), sec(8), false, true},
+		{sec(25), sec(25), false, true},
+	} {
+		in := roundInput()
+		in.Results[0].Round = now.Add(c.probeRound)
+		before := len(r.rounds)
+		r.Round(now.Add(c.at), in, c.changed)
+		if kept := len(r.rounds) > before; kept != c.kept {
+			t.Errorf("round at +%s (probe round +%s, changed %v): kept %v, want %v", c.at, c.probeRound, c.changed, kept, c.kept)
+		}
 	}
-	var at []time.Duration
-	for _, rr := range r.rounds {
-		at = append(at, rr.At.Sub(now))
+}
+
+// The recorder keeps what a replay needs to make the live decisions: with
+// confirm_rounds 3 and a prefix probed early every 7s, a time-only gap of
+// RoundEvery would drop probe rounds and confirm the move later.
+func TestRecordedRoundsReplayTheLiveDecisions(t *testing.T) {
+	ctx := context.Background()
+	c, err := plugin.ConfigFromYAML("path: " + filepath.Join(t.TempDir(), "h.db") + "\nround_retention: 24h")
+	if err != nil {
+		t.Fatal(err)
 	}
-	want := []time.Duration{0, 15 * time.Second, 31 * time.Second}
-	if len(at) != len(want) {
-		t.Fatalf("kept rounds at %v, want %v", at, want)
+	st, err := sqlite.New(c, plugin.Env{})
+	if err != nil {
+		t.Fatal(err)
 	}
-	for i := range want {
-		if at[i] != want[i] {
-			t.Fatalf("kept rounds at %v, want %v", at, want)
+	if err := st.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	defer st.Stop(ctx)
+	sc, err := weighted.New(plugin.Config{}, plugin.Env{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := policy.Config{Mode: "observe", MinLossDeltaPct: 1, MinRTTDelta: 15 * time.Millisecond, HoldTime: time.Minute,
+		MaxImprovements: 50, MaxResultAge: 2 * time.Minute, ConfirmRounds: 3}
+	eng := policy.NewEngine(cfg, sc)
+	rec := New(Options{Store: st, RoundEvery: 15 * time.Second})
+
+	start := time.Now().UTC().Truncate(time.Second).Add(-10 * time.Minute)
+	var live []string
+	evals, probeRounds := 0, 0
+	for i := 0; i < 60; i++ {
+		now := start.Add(time.Duration(i) * 3500 * time.Millisecond)
+		in := roundInput()
+		// A probe round ends every other evaluation; the ones between are
+		// RIB-change evaluations on the same results.
+		pr := start.Add(time.Duration(i/2) * 7 * time.Second)
+		if i%2 == 0 {
+			probeRounds++
+		}
+		in.Results = []probe.Result{
+			{Provider: "a", Prefix: pfxA, Time: pr, Round: pr, Stats: probe.Stats{Sent: 10, Received: 7, LossPct: 30, RTTAvg: 40 * time.Millisecond}},
+			{Provider: "b", Prefix: pfxA, Time: pr, Round: pr, Stats: probe.Stats{Sent: 10, Received: 10, RTTAvg: 40 * time.Millisecond}},
+		}
+		in.ProviderUp = map[string]bool{"a": true, "b": true}
+		changes := eng.Evaluate(in, now)
+		for _, ch := range changes {
+			live = append(live, ch.Action+" "+ch.New.Prefix.String()+" "+ch.New.Provider+" "+now.Format(time.RFC3339Nano))
+		}
+		rec.Round(now, in, len(changes) > 0)
+		evals++
+	}
+	if len(live) == 0 {
+		t.Fatal("the scenario made no decision")
+	}
+	if err := rec.Flush(ctx); err != nil {
+		t.Fatal(err)
+	}
+	stored, err := st.Rounds(ctx, start.Add(-time.Minute), start.Add(time.Hour), 1000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stored) != probeRounds || len(stored) >= evals {
+		t.Fatalf("stored %d rounds of %d evaluations and %d probe rounds, want one per probe round", len(stored), evals, probeRounds)
+	}
+	res, err := replay.Run(ctx, st, start.Add(-time.Minute), start.Add(time.Hour), []replay.Side{{Name: "running", Cfg: cfg, Scorer: sc}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var have []string
+	for _, m := range res.Sides[0].Moves {
+		have = append(have, m.Action+" "+m.Prefix.String()+" "+m.To+" "+m.At.Format(time.RFC3339Nano))
+	}
+	if len(have) != len(live) {
+		t.Fatalf("live %v\nreplay %v", live, have)
+	}
+	for i := range live {
+		if live[i] != have[i] {
+			t.Fatalf("live %v\nreplay %v", live, have)
 		}
 	}
 }
@@ -105,7 +195,7 @@ func TestFailedRoundWriteIsRetriedAndBounded(t *testing.T) {
 	r := New(Options{Store: st})
 	now := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
 	for i := 0; i < maxPendingRounds+3; i++ {
-		r.Round(now.Add(time.Duration(i)*time.Second), roundInput())
+		r.Round(now.Add(time.Duration(i)*time.Second), roundInput(), false)
 	}
 	if len(r.rounds) != maxPendingRounds || r.roundsDropped != 3 {
 		t.Fatalf("pending %d dropped %d", len(r.rounds), r.roundsDropped)
@@ -142,7 +232,7 @@ func TestRoundsReachSQLite(t *testing.T) {
 	defer st.Stop(ctx)
 	r := New(Options{Store: st})
 	now := time.Now().UTC().Truncate(time.Millisecond)
-	r.Round(now, roundInput())
+	r.Round(now, roundInput(), false)
 	if err := r.Flush(ctx); err != nil {
 		t.Fatal(err)
 	}

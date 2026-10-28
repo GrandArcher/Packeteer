@@ -923,7 +923,7 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 			atlasAfterMoves(atl, ctl.Injected, changes, in.Results)
 			fed.publish(now, in, decider.Improvements())
 			if rec != nil {
-				rec.Round(now, in)
+				rec.Round(now, in, len(changes) > 0)
 				rec.Decision(now, changes, in.Results)
 				if view != nil {
 					rec.RPKI(now, rpkiRounds)
