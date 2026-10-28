@@ -138,6 +138,7 @@ func (s *Server) routeTable() []route {
 		{"POST /api/preflight/run", operator, s.handlePreflightRun},
 		{"POST /api/preflight/confirm", admin, s.handlePreflightConfirm},
 		{"GET /api/blast", operator, s.handleBlast},
+		{"POST /api/whatif", operator, s.handleWhatIf},
 		{"GET /api/snippets", admin, s.handleSnippets},
 		{"GET /api/upgrade", admin, s.handleUpgrade},
 		{"POST /api/upgrade/check", admin, s.handleUpgradeCheck},

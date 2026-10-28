@@ -40,6 +40,8 @@ func TestConfig(t *testing.T) {
 		"path: relative.db",
 		"retention: 1h",
 		"retention: 100000h",
+		"round_retention: 30m",
+		"round_retention: 1000h",
 		"nope: 1",
 	} {
 		c, _ := plugin.ConfigFromYAML(bad)

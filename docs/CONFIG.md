@@ -1631,8 +1631,11 @@ Off unless `storage.type` is `sqlite`. Keeps report history in an embedded SQLit
 | `path` | `/var/lib/packeteer/packeteer.db` | Database file. Must be absolute. The directory is created on start. Mount a volume on it (`-v packeteer-data:/var/lib/packeteer`) so history survives a container restart. |
 | `retention` | `9600h` (400 days) | Rows older than this (audit records and events included) are deleted on start and once a day. `24h`-`87600h`. An improvement that is still active is kept. |
 
+| `round_retention` | `0` (off) | Keeps the input of every decision round this long so `packeteer whatif` and `POST /api/whatif` can replay it (#204; [onboarding.md](onboarding.md#replay-history)). `0` or `1h`-`720h`. Rounds are pruned on each write. Each evaluation stores one round, about 60 KB per 1000 prefixes with three providers (gzip, measured on synthetic data), and there are one to two evaluations per `probe.interval`, so at 30s that is up to 350 MB a day for 1000 prefixes. Size it to the window you want to replay. Backup copies the rounds with the rest of the file. |
+
 What is stored:
 
+- With `round_retention`, one row per decision round: its time and the gzip'd JSON input Decide saw (probe results, provider health, learned native providers, volumes, telemetry, policy verdicts, leak-watch holds). Synthesized sub-ranges (#122) are not stored.
 - Daily probe rollups per prefix and provider (UTC day): probes, failed probes, and sums of loss, RTT, and jitter. Raw probe results are not stored.
 - One row per improvement, from start to end. A switch to another provider ends the row and starts a new one. Each row has the cause, reason, mode, the native provider's loss and RTT and the chosen provider's loss and RTT at the decision that started it, `cost_delta`, `est_savings`, the prefix volume when known, the origin ASN (last AS in the learned path), and the country. In observe and suggest these are recommendations; in inject they were announced.
 - Per prefix: origin ASN, country, and latest volume.

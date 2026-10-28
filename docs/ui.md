@@ -677,6 +677,10 @@ Issue #196. The Settings page has a Version and upgrade section (admin). It alwa
 
 **Tests.** `internal/upgrade` (signature, checksum, bad signature, bad checksum, unsigned release, failed start check, all abort with no change; staging, rollback, HA order, the launcher's attempt limit and tamper check), `internal/httpapi` (roles, audit, errors), and `cmd/controller`: `TestDaemonUpgradeWithdrawsRelearnsAndRollsBack` runs the controller in inject against a simulated GoBGP edge with an injected route present. The edge sees the route withdrawn before the new binary is started; the new version, with the edge no longer advertising the prefix, announces nothing; when the edge advertises it again the route returns; rollback repeats the withdraw; the config file is byte-identical throughout. `lab/e2e-upgrade.sh` (CI jobs `test`, binary, and `docker`, stock image) runs the real binary against `lab/fakerelease`: bad signature and bad checksum refused, an unconfirmed upgrade refused, a confirmed upgrade in the same process (same PID, same container, not restarted), rollback, the Settings page in headless Chrome, and a clean SIGTERM exit.
 
+## Replay history
+
+Settings has a Replay history panel (#204). Pick a window and press Replay with the editor YAML: it posts the editor text to `POST /api/whatif` and lists, for the running config and the editor config, the moves, the expected loss and RTT change, traffic moved, commit relief, flaps, and cap pressure, then the prefixes the two steer differently. It reads stored rounds only and needs `round_retention` on `storage` ([onboarding.md](onboarding.md#replay-history)). Without it the panel shows the API's message.
+
 ## Rollback
 
 The upgrade section (#196) is rolled back by removing the `upgrade` block (or `enabled: false`) and restarting; the installed binary then runs. To leave a staged version: use the Roll back button, or stop the controller and delete `state.json` in `upgrade.dir`. It adds no write to the config file.

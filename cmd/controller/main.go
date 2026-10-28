@@ -135,6 +135,9 @@ func run(ctx context.Context, args []string, getenv func(string) string, stdout,
 	if len(args) > 0 && args[0] == "herd" {
 		return runHerd(args[1:], getenv, stdout, stderr)
 	}
+	if len(args) > 0 && args[0] == "whatif" {
+		return runWhatIf(ctx, args[1:], getenv, time.Now(), stdout, stderr)
+	}
 	fs := flag.NewFlagSet("controller", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	defaultPath := DefaultConfigPath
@@ -846,6 +849,9 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 	if httpSrv != nil && cfg.IXP == nil {
 		httpSrv.SetPreflight(newPreflight(live, view, lw, plugins, pktLimiter, log))
 		httpSrv.SetBlast(preview)
+		if rs, ok := roundStoreOf(plugins); ok {
+			httpSrv.SetWhatIf(&whatIfSource{live: live, store: rs, check: preview.check, log: log, getenv: getenv})
+		}
 	}
 	if irrChecker.Enabled() {
 		loopWG.Add(1)
@@ -917,6 +923,7 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 			atlasAfterMoves(atl, ctl.Injected, changes, in.Results)
 			fed.publish(now, in, decider.Improvements())
 			if rec != nil {
+				rec.Round(now, in)
 				rec.Decision(now, changes, in.Results)
 				if view != nil {
 					rec.RPKI(now, rpkiRounds)

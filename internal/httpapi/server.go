@@ -172,6 +172,8 @@ type Server struct {
 	// blastKey signs preview tokens; a restart invalidates them.
 	blastKey [32]byte
 	blastNow func() time.Time
+	// whatIf replays stored decision rounds (#204). Nil until SetWhatIf.
+	whatIf atomic.Pointer[WhatIfControl]
 	// exMembers is the member comparison of the exchange view (#156). Nil
 	// until SetExchangeMembers.
 	exMembers atomic.Pointer[ExchangeMembers]

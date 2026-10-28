@@ -20,6 +20,7 @@ import (
 	"github.com/GrandArcher/Packeteer/internal/policy"
 	"github.com/GrandArcher/Packeteer/internal/probe"
 	"github.com/GrandArcher/Packeteer/internal/provseries"
+	"github.com/GrandArcher/Packeteer/internal/replay"
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
 )
 
@@ -30,6 +31,10 @@ const DefaultFlushEvery = time.Minute
 // a dead disk cannot grow memory without bound. Extra probes are dropped
 // from history (never from decisions).
 const maxPending = 200000
+
+// maxPendingRounds caps unflushed decision rounds (#204) while the store
+// keeps failing. Each is the whole round's input, so the cap is small.
+const maxPendingRounds = 600
 
 // End reasons written by the recorder itself.
 const (
@@ -116,6 +121,9 @@ type Recorder struct {
 	seq         uint64
 	dropped     int
 	rpkiDropped int
+	// rounds are encoded decision rounds not yet flushed (#204).
+	rounds        []plugin.RoundRecord
+	roundsDropped int
 
 	flushMu sync.Mutex
 	cancel  context.CancelFunc
@@ -257,6 +265,64 @@ func (r *Recorder) Close(ctx context.Context) error {
 	}
 	r.mu.Unlock()
 	return r.Flush(ctx)
+}
+
+// KeepsRounds reports whether the store keeps decision rounds for replay
+// (#204).
+func (r *Recorder) KeepsRounds() bool {
+	rs, ok := r.opt.Store.(plugin.RoundStore)
+	return ok && rs.RoundRetention() > 0
+}
+
+// Round queues the input of the decision made at now for replay. It does
+// nothing unless the store keeps rounds. Safe for concurrent use.
+func (r *Recorder) Round(now time.Time, in policy.Input) {
+	if !r.KeepsRounds() {
+		return
+	}
+	data, err := replay.Encode(now, in)
+	if err != nil {
+		r.log.Warn("history: encode decision round", "err", err)
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if len(r.rounds) >= maxPendingRounds {
+		r.roundsDropped++
+		return
+	}
+	r.rounds = append(r.rounds, plugin.RoundRecord{At: now, Input: data})
+}
+
+// flushRounds writes the queued decision rounds. On error they are kept
+// for the next flush, up to the cap.
+func (r *Recorder) flushRounds(ctx context.Context) error {
+	r.mu.Lock()
+	rounds, dropped := r.rounds, r.roundsDropped
+	r.rounds, r.roundsDropped = nil, 0
+	r.mu.Unlock()
+	if dropped > 0 {
+		r.log.Warn("history: dropped decision rounds while the store was failing", "count", dropped)
+	}
+	if len(rounds) == 0 {
+		return nil
+	}
+	rs, ok := r.opt.Store.(plugin.RoundStore)
+	if !ok {
+		return nil
+	}
+	if err := rs.PutRounds(ctx, rounds); err != nil {
+		r.mu.Lock()
+		room := maxPendingRounds - len(r.rounds)
+		if room > len(rounds) {
+			room = len(rounds)
+		}
+		r.roundsDropped += len(rounds) - room
+		r.rounds = append(rounds[len(rounds)-room:], r.rounds...)
+		r.mu.Unlock()
+		return err
+	}
+	return nil
 }
 
 // Mitigation records the latest state of a threat mitigation rule. A
@@ -556,6 +622,7 @@ func (r *Recorder) Flush(ctx context.Context) error {
 			r.log.Warn("history: write provider samples", "err", err)
 		}
 	}
+	roundsErr := r.flushRounds(ctx)
 	b, ps := r.take()
 	if len(ps) > 0 && (r.opt.Describe != nil || r.opt.Volumes != nil) {
 		var vols map[netip.Prefix]float64
@@ -572,7 +639,7 @@ func (r *Recorder) Flush(ctx context.Context) error {
 		}
 	}
 	if len(b.Buckets) == 0 && len(b.Improvements) == 0 && len(b.Prefixes) == 0 && len(b.Mitigations) == 0 && len(b.Anomalies) == 0 && len(b.RPKIRoutes) == 0 {
-		return nil
+		return roundsErr
 	}
 	err := r.opt.Store.Write(ctx, b)
 	if r.opt.OnWrite != nil {
@@ -580,9 +647,9 @@ func (r *Recorder) Flush(ctx context.Context) error {
 	}
 	if err != nil {
 		r.requeue(b, ps)
-		return err
+		return errors.Join(err, roundsErr)
 	}
-	return nil
+	return roundsErr
 }
 
 // History reads the store for [from, to) and merges rows not yet flushed,
