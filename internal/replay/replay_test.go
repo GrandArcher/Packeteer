@@ -349,7 +349,7 @@ func TestEncodedRoundSize(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(data) > 80<<10 {
+	if len(data) > 60<<10 {
 		t.Fatalf("a round of 1000 prefixes and 3 providers is %d bytes; docs/CONFIG.md says about 60 KB", len(data))
 	}
 }

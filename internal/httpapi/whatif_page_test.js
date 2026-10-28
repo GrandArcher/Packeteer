@@ -58,7 +58,7 @@ vm.createContext(context);
 var ui = fs.readFileSync(path.join(__dirname, "web", "ui.js"), "utf8");
 var settings = fs.readFileSync(path.join(__dirname, "web", "settings.js"), "utf8");
 ["el", "clear"].forEach(function (n) { vm.runInContext(fn(ui, n), context); });
-["whatIfSummary", "whatIfSteps", "renderWhatIf", "runWhatIf"].forEach(function (n) {
+["signed", "whatIfSummary", "whatIfSteps", "renderWhatIf", "runWhatIf"].forEach(function (n) {
   vm.runInContext(fn(settings, n), context);
 });
 
@@ -80,8 +80,8 @@ context.renderWhatIf(result);
 var body = text(els["wi-body"]);
 assert(body.indexOf("running config") >= 0 && body.indexOf("candidate config") >= 0, "both sides are named: " + body);
 assert(body.indexOf("2 new, 1 switched, 1 retired; 2 prefixes steered, 1 active at the end (peak 2, cap 50)") >= 0, "move counts: " + body);
-assert(body.indexOf("Expected change (weighted by traffic): loss 16.67 points better, RTT -0.8 ms better") >= 0, "weighted change: " + body);
-assert(body.indexOf("Expected change (mean per move)") >= 0, "an unweighted side says so: " + body);
+assert(body.indexOf("Expected change (weighted by traffic, positive is better): loss +16.67 points, RTT -0.8 ms") >= 0, "weighted change: " + body);
+assert(body.indexOf("Expected change (mean per move, positive is better)") >= 0, "an unweighted side says so: " + body);
 assert(body.indexOf("commit relief 20.0 Mbps in 1 moves") >= 0 && body.indexOf("held back by the cap: 1 prefixes in 3 rounds") >= 0, "commit relief and cap pressure: " + body);
 assert(body.indexOf("Prefixes steered differently (3)") >= 0, "diff count includes the omitted: " + body);
 assert(body.indexOf("203.0.113.0/24: running transit-b > native; editor no move") >= 0 && body.indexOf("and 2 more") >= 0, "diff entry: " + body);

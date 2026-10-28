@@ -57,5 +57,8 @@ func newRecorder(cfg *config.Config, plugins *pluginhost.Set, log *slog.Logger, 
 		Exchanges: peers,
 		Series:    series,
 		OnWrite:   func(err error) { health.Record(historyKey, err) },
+		// At most two rounds per probe interval, however often the RIB
+		// changes.
+		RoundEvery: cfg.Probe.Interval / 2,
 	})
 }

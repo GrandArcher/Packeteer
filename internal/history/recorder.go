@@ -67,6 +67,10 @@ type Options struct {
 	// OnWrite, when set, is told the result of each store write the
 	// flush attempts. The System page shows it as the storage state.
 	OnWrite func(error)
+	// RoundEvery is the least time between two kept decision rounds.
+	// Evaluations also run on every RIB change, so without it the rate of
+	// rounds follows route churn. Zero keeps every round.
+	RoundEvery time.Duration
 }
 
 type rpkiKey struct {
@@ -124,6 +128,7 @@ type Recorder struct {
 	// rounds are encoded decision rounds not yet flushed (#204).
 	rounds        []plugin.RoundRecord
 	roundsDropped int
+	lastRound     time.Time
 
 	flushMu sync.Mutex
 	cancel  context.CancelFunc
@@ -280,6 +285,12 @@ func (r *Recorder) Round(now time.Time, in policy.Input) {
 	if !r.KeepsRounds() {
 		return
 	}
+	r.mu.Lock()
+	tooSoon := !r.lastRound.IsZero() && now.Sub(r.lastRound) < r.opt.RoundEvery
+	r.mu.Unlock()
+	if tooSoon {
+		return
+	}
 	data, err := replay.Encode(now, in)
 	if err != nil {
 		r.log.Warn("history: encode decision round", "err", err)
@@ -287,6 +298,7 @@ func (r *Recorder) Round(now time.Time, in policy.Input) {
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	r.lastRound = now
 	if len(r.rounds) >= maxPendingRounds {
 		r.roundsDropped++
 		return

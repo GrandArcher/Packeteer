@@ -66,6 +66,8 @@ func (s *Server) handleWhatIf(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"error": err.Error(), "code": "invalid"})
 	case errors.Is(err, ErrWhatIfBusy):
 		writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": err.Error(), "code": "busy"})
+	case errors.Is(err, context.Canceled):
+		// The caller went away; there is nobody to answer and nothing failed.
 	case errors.Is(err, replay.ErrNoRounds):
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error(), "code": "no_rounds"})
 	default:

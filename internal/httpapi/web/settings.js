@@ -2488,12 +2488,16 @@ function loadBlast() {
 
 // ---- Replay history (#204) ----
 
+function signed(v, digits) {
+  return (v > 0 ? "+" : "") + v.toFixed(digits);
+}
+
 function whatIfSummary(r) {
   var s = r.summary;
   var basis = s.weighted ? "weighted by traffic" + (s.unknown_volume ? ", " + s.unknown_volume + " moves without a volume left out" : "") : "mean per move";
   return [
     s.improves + " new, " + s.switches + " switched, " + s.retires + " retired; " + s.prefixes + " prefixes steered, " + s.active + " active at the end (peak " + s.peak_active + ", cap " + s.max_improvements + ")",
-    "Expected change (" + basis + "): loss " + s.loss_delta_pct.toFixed(2) + " points better, RTT " + s.rtt_delta_ms.toFixed(1) + " ms better",
+    "Expected change (" + basis + ", positive is better): loss " + signed(s.loss_delta_pct, 2) + " points, RTT " + signed(s.rtt_delta_ms, 1) + " ms",
     "Traffic moved " + s.moved_mbps.toFixed(1) + " Mbps; commit relief " + s.commit_relief_mbps.toFixed(1) + " Mbps in " + s.commit_moves + " moves",
     "Flaps " + s.flaps + ", quarantines " + s.quarantines + "; held back by the cap: " + s.capped_prefixes + " prefixes in " + s.capped_rounds + " rounds"
   ];

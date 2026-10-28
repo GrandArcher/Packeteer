@@ -65,7 +65,8 @@ type Summary struct {
 	// least one move, CappedPrefixes the distinct prefixes held back.
 	CappedRounds   int `json:"capped_rounds"`
 	CappedPrefixes int `json:"capped_prefixes"`
-	// Flaps counts switches plus prefixes steered again after a retire;
+	// Flaps counts switches plus new improvements on a prefix that was
+	// retired earlier in the window (events, not distinct prefixes);
 	// Quarantines the flap quarantines that started.
 	Flaps       int `json:"flaps"`
 	Quarantines int `json:"quarantines"`
@@ -277,6 +278,9 @@ func Run(ctx context.Context, store plugin.RoundStore, from, to time.Time, sides
 			return Result{}, err
 		}
 		for _, r := range page {
+			if err := ctx.Err(); err != nil {
+				return Result{}, err
+			}
 			now, in, err := Decode(r.Input)
 			if err != nil {
 				return Result{}, fmt.Errorf("round at %s: %w", r.At.UTC().Format(time.RFC3339), err)

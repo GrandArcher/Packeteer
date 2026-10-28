@@ -22,7 +22,7 @@ func Format(w io.Writer, res Result) {
 				weight += fmt.Sprintf(", %d moves without a volume left out", s.UnknownVolume)
 			}
 		}
-		fmt.Fprintf(w, "  expected change (%s): loss %+.2f points better, RTT %+.1f ms better\n", weight, s.LossDeltaPct, s.RTTDeltaMs)
+		fmt.Fprintf(w, "  expected change (%s, positive is better): loss %+.2f points, RTT %+.1f ms\n", weight, s.LossDeltaPct, s.RTTDeltaMs)
 		fmt.Fprintf(w, "  traffic moved: %.1f Mbps; commit relief: %.1f Mbps in %d moves\n", s.MovedMbps, s.CommitReliefMbps, s.CommitMoves)
 		fmt.Fprintf(w, "  flaps: %d; quarantines: %d; held back by the cap: %d prefixes in %d rounds\n", s.Flaps, s.Quarantines, s.CappedPrefixes, s.CappedRounds)
 	}

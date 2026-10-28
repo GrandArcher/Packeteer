@@ -75,6 +75,30 @@ func TestRoundsAreKeptOnlyWhenTheStoreKeepsThem(t *testing.T) {
 	}
 }
 
+// RIB changes trigger evaluations between probe rounds; only one round per
+// RoundEvery is kept.
+func TestRoundsAreSpacedByRoundEvery(t *testing.T) {
+	st := &roundStore{memStore: &memStore{}, retention: time.Hour}
+	r := New(Options{Store: st, RoundEvery: 15 * time.Second})
+	now := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	for _, off := range []time.Duration{0, time.Second, 5 * time.Second, 14 * time.Second, 15 * time.Second, 16 * time.Second, 31 * time.Second} {
+		r.Round(now.Add(off), roundInput())
+	}
+	var at []time.Duration
+	for _, rr := range r.rounds {
+		at = append(at, rr.At.Sub(now))
+	}
+	want := []time.Duration{0, 15 * time.Second, 31 * time.Second}
+	if len(at) != len(want) {
+		t.Fatalf("kept rounds at %v, want %v", at, want)
+	}
+	for i := range want {
+		if at[i] != want[i] {
+			t.Fatalf("kept rounds at %v, want %v", at, want)
+		}
+	}
+}
+
 func TestFailedRoundWriteIsRetriedAndBounded(t *testing.T) {
 	ctx := context.Background()
 	st := &roundStore{memStore: &memStore{}, retention: time.Hour, failPut: errors.New("disk full")}
