@@ -73,7 +73,7 @@ func weightedPercentile(s []sample, p float64) *float64 {
 }
 
 // scorecard builds one row per provider and origin ASN. A prefix with no
-// learned origin is left out, as in the asns report. Providers are ranked
+// learned origin is left out, as in the probe_asns report. Providers are ranked
 // against each other within an ASN by median loss, then 95th percentile
 // loss, then median RTT; rows that tie on all three share a rank. Rows are
 // ordered by the ASN's volume, then ASN, then rank.

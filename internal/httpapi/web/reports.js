@@ -21,9 +21,7 @@ var reportView = null;
 
 // reportViewFromURL reads the page URL, which uses the API's own
 // parameters: days, or from and to (UTC), then the filters, sort, order,
-// and limit. A link from the search page names only the report and a
-// prefix or origin AS; it gets the 90 days it always had. A report with
-// a default_days in the catalog opens that many (reportSelect).
+// and limit.
 function reportViewFromURL() {
   var q = new URLSearchParams(window.location.search);
   var v = {report: q.get("report") || "", days: q.get("days") || "", from: q.get("from") || "", to: q.get("to") || "",
@@ -248,6 +246,9 @@ function reportLoad() {
   });
 }
 
+// reportSelect picks the report and, when the URL names no range, its
+// default: the catalog's default_days, 90 for improvements (a link from the
+// search page names only the report and a prefix or origin AS), else 7.
 function reportSelect(name) {
   reportDef = null;
   reportDefs.forEach(function (d) { if (d.name === name) reportDef = d; });
