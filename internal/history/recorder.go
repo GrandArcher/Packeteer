@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/netip"
+	"slices"
 	"sync"
 	"time"
 
@@ -32,9 +33,13 @@ const DefaultFlushEvery = time.Minute
 // from history (never from decisions).
 const maxPending = 200000
 
-// maxPendingRounds caps unflushed decision rounds (#204) while the store
-// keeps failing. Each is the whole round's input, so the cap is small.
+// maxPendingRounds and maxPendingRoundBytes cap unflushed decision rounds
+// (#204) while the store keeps failing; the oldest are dropped. Each is the
+// whole round's input, about 65 KB per 1000 prefixes, so on a large table
+// the byte cap binds first. A var so a test can lower it.
 const maxPendingRounds = 600
+
+var maxPendingRoundBytes = 64 << 20
 
 // End reasons written by the recorder itself.
 const (
@@ -64,8 +69,9 @@ type Options struct {
 	// restores it on Start and flushes it with the rest, when the store
 	// keeps provider samples. The controller feeds it, not the recorder.
 	Series *provseries.Series
-	// OnWrite, when set, is told the result of each store write the
-	// flush attempts. The System page shows it as the storage state.
+	// OnWrite, when set, is told the result of each flush that writes to
+	// the store, history and decision rounds together. The System page
+	// shows it as the storage state.
 	OnWrite func(error)
 	// RoundEvery is the least time between two kept decision rounds that
 	// carry no new probe round and no change. Zero keeps every round.
@@ -126,6 +132,7 @@ type Recorder struct {
 	rpkiDropped int
 	// rounds are encoded decision rounds not yet flushed (#204).
 	rounds        []plugin.RoundRecord
+	roundBytes    int
 	roundsDropped int
 	lastRound     time.Time
 	// lastProbeRound is the newest probe round in a round already kept.
@@ -315,42 +322,48 @@ func (r *Recorder) Round(now time.Time, in policy.Input, changed bool) {
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if len(r.rounds) >= maxPendingRounds {
-		r.roundsDropped++
-		return
-	}
 	r.rounds = append(r.rounds, plugin.RoundRecord{At: now, Input: data})
+	r.roundBytes += len(data)
+	r.trimRounds()
 }
 
-// flushRounds writes the queued decision rounds. On error they are kept
-// for the next flush, up to the cap.
-func (r *Recorder) flushRounds(ctx context.Context) error {
+// trimRounds drops the oldest queued rounds over either cap. r.mu is held.
+func (r *Recorder) trimRounds() {
+	n := 0
+	for len(r.rounds)-n > maxPendingRounds || r.roundBytes > maxPendingRoundBytes {
+		r.roundBytes -= len(r.rounds[n].Input)
+		n++
+	}
+	r.roundsDropped += n
+	r.rounds = slices.Delete(r.rounds, 0, n)
+}
+
+// flushRounds writes the queued decision rounds and reports whether it
+// tried. On error they are kept for the next flush, up to the caps.
+func (r *Recorder) flushRounds(ctx context.Context) (bool, error) {
 	r.mu.Lock()
-	rounds, dropped := r.rounds, r.roundsDropped
-	r.rounds, r.roundsDropped = nil, 0
+	rounds, size, dropped := r.rounds, r.roundBytes, r.roundsDropped
+	r.rounds, r.roundBytes, r.roundsDropped = nil, 0, 0
 	r.mu.Unlock()
 	if dropped > 0 {
 		r.log.Warn("history: dropped decision rounds while the store was failing", "count", dropped)
 	}
 	if len(rounds) == 0 {
-		return nil
+		return false, nil
 	}
 	rs, ok := r.opt.Store.(plugin.RoundStore)
 	if !ok {
-		return nil
+		return false, nil
 	}
 	if err := rs.PutRounds(ctx, rounds); err != nil {
 		r.mu.Lock()
-		room := maxPendingRounds - len(r.rounds)
-		if room > len(rounds) {
-			room = len(rounds)
-		}
-		r.roundsDropped += len(rounds) - room
-		r.rounds = append(rounds[len(rounds)-room:], r.rounds...)
+		r.rounds = append(rounds, r.rounds...)
+		r.roundBytes += size
+		r.trimRounds()
 		r.mu.Unlock()
-		return err
+		return true, err
 	}
-	return nil
+	return true, nil
 }
 
 // Mitigation records the latest state of a threat mitigation rule. A
@@ -650,7 +663,7 @@ func (r *Recorder) Flush(ctx context.Context) error {
 			r.log.Warn("history: write provider samples", "err", err)
 		}
 	}
-	roundsErr := r.flushRounds(ctx)
+	roundsTried, roundsErr := r.flushRounds(ctx)
 	b, ps := r.take()
 	if len(ps) > 0 && (r.opt.Describe != nil || r.opt.Volumes != nil) {
 		var vols map[netip.Prefix]float64
@@ -667,17 +680,22 @@ func (r *Recorder) Flush(ctx context.Context) error {
 		}
 	}
 	if len(b.Buckets) == 0 && len(b.Improvements) == 0 && len(b.Prefixes) == 0 && len(b.Mitigations) == 0 && len(b.Anomalies) == 0 && len(b.RPKIRoutes) == 0 {
+		if roundsTried && r.opt.OnWrite != nil {
+			r.opt.OnWrite(roundsErr)
+		}
 		return roundsErr
 	}
 	err := r.opt.Store.Write(ctx, b)
+	if err != nil {
+		r.requeue(b, ps)
+	}
+	// One report per flush, so a good history write does not hide a
+	// failing round write on the System page.
+	err = errors.Join(err, roundsErr)
 	if r.opt.OnWrite != nil {
 		r.opt.OnWrite(err)
 	}
-	if err != nil {
-		r.requeue(b, ps)
-		return errors.Join(err, roundsErr)
-	}
-	return roundsErr
+	return err
 }
 
 // History reads the store for [from, to) and merges rows not yet flushed,

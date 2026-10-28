@@ -300,11 +300,11 @@ func TestRunPages(t *testing.T) {
 
 func TestMovesAreBounded(t *testing.T) {
 	tr := newTracker(Side{Name: "x", Cfg: cfg(), Scorer: scorer(t)})
-	for i := 0; i < MaxListed+5; i++ {
+	for i := 0; i < maxListed+5; i++ {
 		tr.add(Move{Action: policy.ActionImprove})
 	}
 	r := tr.report()
-	if len(r.Moves) != MaxListed || r.MovesOmitted != 5 {
+	if len(r.Moves) != maxListed || r.MovesOmitted != 5 {
 		t.Fatalf("listed %d, omitted %d", len(r.Moves), r.MovesOmitted)
 	}
 }
@@ -331,15 +331,18 @@ func TestFormat(t *testing.T) {
 	}
 }
 
-// The size the docs give for round_retention: about 60 KB for 1000
-// prefixes measured through three providers.
+// The size the docs give for round_retention: about 65 KB for 1000
+// prefixes measured through three providers (66650 bytes with Go 1.26,
+// 61035 with Go 1.27); the bound leaves room for encoder changes.
 func TestEncodedRoundSize(t *testing.T) {
 	in := policy.Input{ProviderUp: map[string]bool{"a": true, "b": true, "c": true}, Native: map[netip.Prefix]string{}, RIBEnabled: true, RIBReady: true}
 	for i := 0; i < 1000; i++ {
-		p := netip.PrefixFrom(netip.AddrFrom4([4]byte{10, byte(i >> 8), byte(i), 0}), 24)
+		a := [16]byte{0x20, 0x01, 0x0d, 0xb8, byte(i >> 8), byte(i)}
+		p := netip.PrefixFrom(netip.AddrFrom16(a), 48)
+		a[15] = 1
 		in.Native[p] = "a"
 		for j, prov := range []string{"a", "b", "c"} {
-			in.Results = append(in.Results, probe.Result{Provider: prov, Prefix: p, Target: netip.AddrFrom4([4]byte{10, byte(i >> 8), byte(i), 1}), Prober: "icmp",
+			in.Results = append(in.Results, probe.Result{Provider: prov, Prefix: p, Target: netip.AddrFrom16(a), Prober: "icmp",
 				Time: t0.Add(time.Duration(i*j) * time.Millisecond), Round: t0,
 				Stats: probe.Stats{Sent: 10, Received: 10, LossPct: float64(i % 7), RTTMin: 20*time.Millisecond + time.Duration(i*1234),
 					RTTAvg: 25*time.Millisecond + time.Duration(i*4321+j*777), RTTMax: 40 * time.Millisecond, Jitter: 2*time.Millisecond + time.Duration(i*91)}})
@@ -349,8 +352,8 @@ func TestEncodedRoundSize(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(data) > 60<<10 {
-		t.Fatalf("a round of 1000 prefixes and 3 providers is %d bytes; docs/CONFIG.md says about 60 KB", len(data))
+	if len(data) > 80<<10 {
+		t.Fatalf("a round of 1000 prefixes and 3 providers is %d bytes; docs/CONFIG.md says about 65 KB", len(data))
 	}
 }
 

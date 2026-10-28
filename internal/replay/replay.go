@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/netip"
+	"slices"
 	"sort"
 	"time"
 
@@ -19,8 +20,8 @@ var ErrNoRounds = errors.New("no decision rounds are stored for that window; set
 
 const (
 	pageSize = 200
-	// MaxListed bounds the moves and prefix differences a result lists.
-	MaxListed = 200
+	// maxListed bounds the moves and prefix differences a result lists.
+	maxListed = 200
 )
 
 // Side is one configuration to replay. Its Decide state starts empty.
@@ -109,7 +110,7 @@ type Result struct {
 	To     time.Time `json:"to"`
 	Sides  []Report  `json:"sides"`
 	// Diff lists the prefixes the first two sides steered differently, in
-	// prefix order. DiffOmitted counts those past MaxListed.
+	// prefix order. DiffOmitted counts those past maxListed.
 	Diff        []PrefixDiff `json:"diff"`
 	DiffOmitted int          `json:"diff_omitted,omitempty"`
 }
@@ -232,7 +233,7 @@ func (t *tracker) accumulate(m Move) {
 }
 
 func (t *tracker) add(m Move) {
-	if len(t.moves) >= MaxListed {
+	if len(t.moves) >= maxListed {
 		t.omitted++
 		return
 	}
@@ -327,10 +328,10 @@ func diff(a, b *tracker) ([]PrefixDiff, int) {
 	omitted := 0
 	for _, p := range ps {
 		x, y := a.steps[p], b.steps[p]
-		if equal(x, y) {
+		if slices.Equal(x, y) {
 			continue
 		}
-		if len(out) >= MaxListed {
+		if len(out) >= maxListed {
 			omitted++
 			continue
 		}
@@ -339,41 +340,27 @@ func diff(a, b *tracker) ([]PrefixDiff, int) {
 	return out, omitted
 }
 
-func equal(a, b []string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
-}
-
-// DefaultWindow is the span replayed when no start is given.
-const DefaultWindow = 24 * time.Hour
+// defaultWindow is the span replayed when no start is given.
+const defaultWindow = 24 * time.Hour
 
 // ParseWindow reads a replay window. from and to are RFC 3339 times or Go
-// durations meaning that long before now. An empty from is DefaultWindow
+// durations meaning that long before now. An empty from is defaultWindow
 // ago and an empty to is now.
 func ParseWindow(from, to string, now time.Time) (time.Time, time.Time, error) {
 	at := func(name, v string, def time.Duration) (time.Time, error) {
-		switch {
-		case v == "":
+		if v == "" {
 			return now.Add(-def), nil
-		default:
-			if t, err := time.Parse(time.RFC3339, v); err == nil {
-				return t, nil
-			}
-			d, err := time.ParseDuration(v)
-			if err != nil || d < 0 {
-				return time.Time{}, fmt.Errorf("%s %q is neither an RFC 3339 time nor a duration such as 6h", name, v)
-			}
-			return now.Add(-d), nil
 		}
+		if t, err := time.Parse(time.RFC3339, v); err == nil {
+			return t, nil
+		}
+		d, err := time.ParseDuration(v)
+		if err != nil || d < 0 {
+			return time.Time{}, fmt.Errorf("%s %q is neither an RFC 3339 time nor a duration such as 6h", name, v)
+		}
+		return now.Add(-d), nil
 	}
-	f, err := at("from", from, DefaultWindow)
+	f, err := at("from", from, defaultWindow)
 	if err != nil {
 		return time.Time{}, time.Time{}, err
 	}

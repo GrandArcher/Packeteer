@@ -215,6 +215,71 @@ func TestFailedRoundWriteIsRetriedAndBounded(t *testing.T) {
 	}
 }
 
+// The byte cap binds before the count cap on a large table, and the
+// oldest rounds go first.
+func TestPendingRoundsAreBoundedByBytes(t *testing.T) {
+	st := &roundStore{memStore: &memStore{}, retention: time.Hour, failPut: errors.New("disk full")}
+	r := New(Options{Store: st})
+	now := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	r.Round(now, roundInput(), false)
+	size := len(r.rounds[0].Input)
+	defer func(old int) { maxPendingRoundBytes = old }(maxPendingRoundBytes)
+	maxPendingRoundBytes = 3*size + size/2
+	for i := 1; i < 5; i++ {
+		r.Round(now.Add(time.Duration(i)*time.Second), roundInput(), false)
+	}
+	pending := func() int {
+		n := 0
+		for _, rd := range r.rounds {
+			n += len(rd.Input)
+		}
+		return n
+	}
+	if len(r.rounds) != 3 || r.roundsDropped != 2 || r.roundBytes != pending() || r.roundBytes > maxPendingRoundBytes {
+		t.Fatalf("pending %d (%d bytes, counted %d) dropped %d, want 3 rounds of about %d bytes and 2 dropped", len(r.rounds), pending(), r.roundBytes, r.roundsDropped, size)
+	}
+	if !r.rounds[0].At.Equal(now.Add(2 * time.Second)) {
+		t.Fatalf("oldest pending round is %v, want the oldest dropped", r.rounds[0].At)
+	}
+	if err := r.Flush(context.Background()); err == nil {
+		t.Fatal("a failed round write was not reported")
+	}
+	if len(r.rounds) != 3 || r.roundBytes != pending() {
+		t.Fatalf("after a failed flush: pending %d (%d bytes, counted %d)", len(r.rounds), pending(), r.roundBytes)
+	}
+}
+
+// A failing round write reaches the storage health even when the history
+// write succeeds, and a later good flush clears it.
+func TestRoundWriteFailureReachesOnWrite(t *testing.T) {
+	ctx := context.Background()
+	st := &roundStore{memStore: &memStore{}, retention: time.Hour, failPut: errors.New("disk full")}
+	var results []error
+	r := New(Options{Store: st, OnWrite: func(err error) { results = append(results, err) }})
+	now := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	r.Round(now, roundInput(), false)
+	if err := r.Flush(ctx); err == nil {
+		t.Fatal("rounds only: a failed round write was not reported")
+	}
+	r.Probe(result(pfxA, "lab-a", 0, 5*time.Millisecond, now))
+	if err := r.Flush(ctx); err == nil {
+		t.Fatal("rounds and history: a failed round write was not reported")
+	}
+	st.failPut = nil
+	if err := r.Flush(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Flush(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 3 || results[0] == nil || results[1] == nil || results[1].Error() != "disk full" || results[2] != nil {
+		t.Fatalf("OnWrite results = %v, want two failures then one success", results)
+	}
+	if len(st.rounds) != 1 || len(st.h.Buckets) == 0 {
+		t.Fatalf("stored %d rounds, %d buckets", len(st.rounds), len(st.h.Buckets))
+	}
+}
+
 // The recorder writes the rounds a replay reads back from sqlite.
 func TestRoundsReachSQLite(t *testing.T) {
 	ctx := context.Background()

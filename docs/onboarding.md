@@ -79,6 +79,6 @@ Reading the router's filters and timers over its own management API (RouterOS, N
 
 ## Rollback
 
-Replay history (#204) changes no announcement. Set `round_retention` back to `0` and restart to stop storing rounds (stored rounds age out, or are deleted with the database). Revert the change to drop `whatif`, `/api/whatif`, and the Settings panel.
+Replay history (#204) changes no announcement. Set `round_retention` back to `0` and restart to stop storing rounds. Rounds already stored stay in the database file until you delete the database or set a non-zero `round_retention` short enough for them to age out. Revert the change to drop `whatif`, `/api/whatif`, and the Settings panel.
 
 The install script, `-snippet`, `-pbr -apply`, and the preflight add no config key and change no router. Remove the container (`docker stop -t 30 packeteer && docker rm packeteer`) to undo the install. Undo an applied host policy routing with `ip rule del` and `ip route flush table <n>` for the lines `-apply` printed, or remove the provider from the config while another provider stays measured from this instance, and run `-pbr linux -apply -yes` again: it removes the rules and routes of the provider that is gone.
