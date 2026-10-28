@@ -64,7 +64,7 @@ func (e *Engine) WhatIf(cfg Config, now time.Time) (WhatIf, bool) {
 	}
 	st, out := Decide(e.state, e.lastIn, cfg, e.scorer, now)
 	before := make([]Improvement, 0, len(e.state.Improvements))
-	for _, p := range sortedKeys(e.state.Improvements) {
+	for _, p := range netpfx.SortedKeys(e.state.Improvements) {
 		before = append(before, e.state.Improvements[p])
 	}
 	return WhatIf{Before: before, Input: e.lastIn, State: st, Output: out}, true
@@ -152,7 +152,7 @@ func (e *Engine) Improvements() []Improvement {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 	out := make([]Improvement, 0, len(e.state.Improvements))
-	for _, p := range sortedKeys(e.state.Improvements) {
+	for _, p := range netpfx.SortedKeys(e.state.Improvements) {
 		out = append(out, e.state.Improvements[p])
 	}
 	return out

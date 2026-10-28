@@ -41,6 +41,16 @@ func Sort(ps []netip.Prefix) {
 	sort.Slice(ps, func(i, j int) bool { return Less(ps[i], ps[j]) })
 }
 
+// SortedKeys returns the keys of m sorted by Less.
+func SortedKeys[V any](m map[netip.Prefix]V) []netip.Prefix {
+	out := make([]netip.Prefix, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	Sort(out)
+	return out
+}
+
 // CoveredBy reports whether p equals or falls inside a prefix in list.
 func CoveredBy(list []netip.Prefix, p netip.Prefix) bool {
 	for _, a := range list {

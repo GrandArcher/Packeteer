@@ -97,7 +97,7 @@ func Decide(prev State, in Input, cfg Config, scorer plugin.Scorer, now time.Tim
 	// move does not survive the session loss either.
 	if in.RIBEnabled && !in.RIBReady {
 		st.confirm = map[netip.Prefix]confirm{}
-		for _, p := range sortedKeys(st.Improvements) {
+		for _, p := range netpfx.SortedKeys(st.Improvements) {
 			retire(p, "rib not ready (bgp session down)", false)
 		}
 		return st, out
@@ -163,7 +163,7 @@ func Decide(prev State, in Input, cfg Config, scorer plugin.Scorer, now time.Tim
 	// probe engine keeps an active improvement's prefix in the target
 	// set, so its results stay until the improvement retires. This is
 	// the backstop when that prefix produced no result at all.
-	for _, p := range sortedKeys(st.Improvements) {
+	for _, p := range netpfx.SortedKeys(st.Improvements) {
 		if _, ok := byPrefix[p]; !ok {
 			retire(p, "prefix no longer probed", false)
 		}
