@@ -22,13 +22,13 @@ var reportView = null;
 // reportViewFromURL reads the page URL, which uses the API's own
 // parameters: days, or from and to (UTC), then the filters, sort, order,
 // and limit. A link from the search page names only the report and a
-// prefix or origin AS; it gets the 90 days it always had.
+// prefix or origin AS; it gets the 90 days it always had. The scorecard opens 30.
 function reportViewFromURL() {
   var q = new URLSearchParams(window.location.search);
   var v = {report: q.get("report") || "", days: q.get("days") || "", from: q.get("from") || "", to: q.get("to") || "",
     sort: q.get("sort") || "", order: q.get("order") || "", limit: q.get("limit") || "", filters: {}};
   REPORT_FILTERS.forEach(function (f) { v.filters[f.name] = q.get(f.name) || ""; });
-  if (!v.days && !v.from && !v.to) v.days = v.report === "improvements" ? "90" : "7";
+  if (!v.days && !v.from && !v.to) v.days = {improvements: "90", scorecard: "30"}[v.report] || "7";
   return v;
 }
 

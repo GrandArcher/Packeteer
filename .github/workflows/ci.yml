@@ -1086,6 +1086,13 @@ jobs:
           rep 'probe_asns?days=30&asn=AS64497' | jq -e '.total == 5 and ([.rows[].probes] | unique) == [200]'
           rep 'probe_asns?days=30&format=csv' | head -n 1 | grep -qx 'day,origin_asn,prefixes,probes,failed'
           test "$(code 'probe_asns?cause=cost')" = 400
+          # Provider scorecard (#209): four rows (AS64496 and AS64497, two providers
+          # each), ranked per ASN; 30 days without a range; no provider filter.
+          rep 'scorecard' | jq -e '.total == 4 and ([.rows[] | "\(.origin_asn)/\(.provider)/\(.rank)"] == ["64496/lab-b/1", "64496/lab-a/2", "64497/lab-b/1", "64497/lab-a/2"]) and .rows[1].loss_p95_pct == 8 and .rows[0].rtt_p50_ms == 40'
+          rep 'scorecard?sort=rtt_p50_ms&order=desc' | jq -e '.rows[0].provider == "lab-a" and .rows[0].origin_asn == 64496'
+          rep 'scorecard?asn=64497&format=csv' | head -n 1 | grep -qx 'provider,origin_asn,rank,prefixes,probes,failed_pct,volume_mbps,weighting,loss_p50_pct,loss_p95_pct,rtt_p50_ms,rtt_p95_ms,jitter_p50_ms,jitter_p95_ms'
+          test "$(rep 'scorecard?asn=64497&format=csv' | wc -l)" = 3
+          test "$(code 'scorecard?provider=lab-a')" = 400
           # Unknown parameters, filters a report does not take, and bad values are refused.
           for q in 'improvements?colour=red' 'summary?cause=cost' 'timeseries?provider=lab-a' 'improvements?cause=nope' 'improvements?ip_version=5' \
             'improvements?sort=nope' 'improvements?order=desc' 'improvements?days=7&from=2026-01-01' 'improvements?format=pdf'; do
@@ -1126,6 +1133,8 @@ jobs:
           bash lab/ui-smoke.sh 'http://127.0.0.1:18208/reports.html?report=summary&cause=cost' 'the summary report has no cause filter' --absent 'Cannot reach' 'Showing'
           bash lab/ui-smoke.sh 'http://127.0.0.1:18208/reports.html?report=probe_asns&days=30' '>Probes by ASN<' 'Showing 10 of 10 rows' 'href="/prefixes.html?asn=64496"' \
             'href="/prefixes.html?asn=64497"' 'id="rf-cause-label" hidden=""' --absent 'Cannot reach' 'History is off'
+          bash lab/ui-smoke.sh 'http://127.0.0.1:18208/reports.html?report=scorecard' '>Provider scorecard<' 'Showing 4 of 4 rows' 'Loss p95 (%)' 'RTT p50 (ms)' \
+            'href="/prefixes.html?asn=64496"' 'id="rf-provider-label" hidden=""' 'id="rf-asn-label"' 'format=csv' --absent 'Cannot reach' 'History is off'
           kill "$proxy"
           # Headless Chrome cannot click, so uiproxy adds a driver to
           # /reports.html. It sorts the Prefix column twice, filters by cause,

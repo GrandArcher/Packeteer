@@ -461,3 +461,26 @@ func TestWidgetQueryIsCheckedLikeTheEndpoint(t *testing.T) {
 		}
 	}
 }
+
+// The scorecard (#209) covers 30 days unless the request says otherwise,
+// and refuses a provider filter, which would rank a subset.
+func TestScorecardReportDefaultsTo30Days(t *testing.T) {
+	src := &fakeReports{}
+	ts := reportServer(t, src, "", "")
+	for name, days := range map[string]time.Duration{"scorecard": 30, "summary": 7} {
+		if code, _, body := do(t, http.MethodGet, ts.URL+"/api/reports/"+name, "", ""); code != http.StatusOK {
+			t.Fatalf("%s: %d %s", name, code, body)
+		}
+		if d := src.last.To.Sub(src.last.From); d != days*24*time.Hour {
+			t.Errorf("%s default range = %s, want %d days", name, d, days)
+		}
+	}
+	if code, _, _ := do(t, http.MethodGet, ts.URL+"/api/reports/scorecard?days=3", "", ""); code != http.StatusOK || src.last.To.Sub(src.last.From) != 72*time.Hour {
+		t.Errorf("explicit days: %d, range %s", code, src.last.To.Sub(src.last.From))
+	}
+	for _, qs := range []string{"?provider=transit-a", "?cause=cost"} {
+		if code, _, _ := do(t, http.MethodGet, ts.URL+"/api/reports/scorecard"+qs, "", ""); code != http.StatusBadRequest {
+			t.Errorf("scorecard%s: %d, want 400", qs, code)
+		}
+	}
+}

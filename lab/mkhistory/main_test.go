@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"slices"
 	"testing"
 	"time"
@@ -49,6 +50,26 @@ func TestSeedGivesProbesByASN(t *testing.T) {
 	if len(rows) != 2*days || rows[0].Day != "2026-10-10" || rows[0].OriginASN != 64496 || rows[0].Prefixes != 2 || rows[0].Probes != 400 ||
 		rows[1].OriginASN != 64497 || rows[1].Prefixes != 1 || rows[1].Probes != 200 {
 		t.Fatalf("probe_asns = %+v", rows)
+	}
+}
+
+// The scorecard smoke step (#209) reads four rows from the seed: on AS64496
+// lab-b (no loss, 40 and 80 ms) outranks lab-a (8% loss on one prefix),
+// and on AS64497 lab-b is ahead by 1 ms. No volume is seeded, so the
+// weights are equal.
+func TestSeedGivesScorecard(t *testing.T) {
+	now := time.Date(2026, 10, 10, 13, 0, 0, 0, time.UTC)
+	rep, err := history.Build(historyFrom(seed(now)), history.Query{Name: history.ReportScorecard, From: now.Add(-30 * 24 * time.Hour), To: now.Add(time.Hour), Now: now})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, r := range rep.Rows.([]history.ScorecardRow) {
+		got = append(got, fmt.Sprintf("%d/%s/%d/%v/%v/%v", r.OriginASN, r.Provider, r.Rank, *r.LossP95Pct, *r.RTTP50Ms, r.Weighting))
+	}
+	want := []string{"64496/lab-b/1/0/40/equal", "64496/lab-a/2/8/100/equal", "64497/lab-b/1/0/49/equal", "64497/lab-a/2/0/50/equal"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("scorecard = %v, want %v", got, want)
 	}
 }
 

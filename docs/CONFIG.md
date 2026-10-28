@@ -868,7 +868,7 @@ Scheduled email report subscriptions (#34). Each entry emails one stored report 
 | Key | Default | Meaning |
 |---|---|---|
 | `name` | none | Required, unique. 1-63 of `a-z`, `0-9`, `_`, `-`. |
-| `report` | none | Required. A report name from `/api/reports` (`summary`, `improvements`, `exchanges`, `causes`, `performance`, `providers`, `prefixes`, `asns`, `countries`, `probes`, `probe_asns`, `savings`, `timeseries`, `mitigations`, `anomalies`). |
+| `report` | none | Required. A report name from `/api/reports` (`summary`, `improvements`, `exchanges`, `causes`, `performance`, `providers`, `prefixes`, `asns`, `countries`, `probes`, `probe_asns`, `scorecard`, `savings`, `timeseries`, `mitigations`, `anomalies`). |
 | `schedule` | none | Required. `daily`, `weekly`, or `monthly` (the 1st of the month). |
 | `at` | `06:00` | UTC time of day, `HH:MM`. |
 | `weekday` | `monday` | For `weekly` only: `monday` ... `sunday`. |

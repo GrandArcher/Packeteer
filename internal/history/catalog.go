@@ -64,6 +64,8 @@ type Def struct {
 	Summary  string   `json:"summary"`
 	Filters  []string `json:"filters"`
 	Columns  []Column `json:"columns"`
+	// DefaultDays is the range when a request names none; 0 means 7.
+	DefaultDays int `json:"default_days,omitempty"`
 	// Limited reports are cut to the row limit after sorting; the others
 	// have one row per day, provider, or cause and are never cut.
 	Limited bool `json:"limited"`
@@ -83,6 +85,9 @@ var (
 	noCause      = []string{FilterProvider, FilterASN, FilterPrefix, FilterIPVersion}
 	noProvider   = []string{FilterASN, FilterPrefix, FilterCause, FilterIPVersion}
 	prefixFilter = []string{FilterPrefix, FilterIPVersion}
+	// The scorecard ranks providers against each other, so a provider
+	// filter would rank a subset.
+	noProviderOrCause = []string{FilterASN, FilterPrefix, FilterIPVersion}
 )
 
 // Reports lists every report in catalog order.
@@ -149,6 +154,14 @@ var Reports = []Def{
 		Summary: "Probes per destination origin ASN per UTC day, newest day and most probed ASN first. Prefixes with no learned origin are left out.",
 		Columns: []Column{
 			txt("day", "Day (UTC)"), num("origin_asn", "Origin AS", ""), num("prefixes", "Prefixes", ""), num("probes", "Probes", ""), num("failed", "Failed", ""),
+		}},
+	{Name: ReportScorecard, Category: CategoryPerformance, Filters: noProviderOrCause, Limited: true, DefaultDays: 30,
+		Summary: "Provider scorecard: loss, latency, and jitter percentiles per provider and destination origin ASN, weighted by flow volume, with the providers ranked per ASN.",
+		Columns: []Column{
+			txt("provider", "Provider"), num("origin_asn", "Origin AS", ""), num("rank", "Rank", ""), num("prefixes", "Prefixes", ""), num("probes", "Probes", ""),
+			num("failed_pct", "Failed", "%"), num("volume_mbps", "Volume", "Mbps"), txt("weighting", "Weighting"),
+			num("loss_p50_pct", "Loss p50", "%"), num("loss_p95_pct", "Loss p95", "%"), num("rtt_p50_ms", "RTT p50", "ms"), num("rtt_p95_ms", "RTT p95", "ms"),
+			num("jitter_p50_ms", "Jitter p50", "ms"), num("jitter_p95_ms", "Jitter p95", "ms"),
 		}},
 	{Name: ReportPrefixes, Category: CategoryTraffic, Filters: noCause, Limited: true,
 		Summary: "Top prefixes by problems, volume, or loss.",

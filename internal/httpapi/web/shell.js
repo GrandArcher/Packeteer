@@ -32,7 +32,7 @@ var shellAdmin = true;
 // keeps the lowercase ids for URLs and CSV file names.
 var REPORT_TITLES = {summary: "Summary", improvements: "Improvements", causes: "Causes", performance: "Performance",
   timeseries: "Time series", providers: "Providers", prefixes: "Prefixes", asns: "ASNs", countries: "Countries",
-  probes: "Probes", probe_asns: "Probes by ASN", savings: "Savings", mitigations: "Mitigations", anomalies: "Anomalies", exchanges: "Exchanges"};
+  probes: "Probes", probe_asns: "Probes by ASN", savings: "Savings", mitigations: "Mitigations", anomalies: "Anomalies", exchanges: "Exchanges", scorecard: "Provider scorecard"};
 
 function reportTitle(name) {
   return REPORT_TITLES[name] || name;
