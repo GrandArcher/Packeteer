@@ -766,7 +766,7 @@ A sub-range S of C is never announced when:
 
 - C is not inside `covering_prefixes` or the allowlist, S is not strictly inside C, or S is past `max_bits` or `max_prefix_len`;
 - a neighbor advertises a prefix inside C that overlaps S (that one is [`more_specific`](#more_specific)'s), or S is held by inbound steering, a mitigation rule, or the leak watch;
-- with [`rpki`](#rpki) on, S would be `invalid` with the origin it is announced with: the last AS of its path, or `asn` when `bgp.as_path` is empty (the default). A ROA whose max length stops short of S refuses it, and so does any ROA for another AS: with an empty path, a covering prefix that has a ROA is synthesized only with `bgp.as_path: native` or `provider`;
+- with [`rpki`](#rpki) on, S would be `invalid` with the origin it is announced with: the last AS of its path, or `asn` when `bgp.as_path` is empty (the default). A ROA whose max length stops short of S refuses it, and so does a ROA for another AS when no ROA covers S for that origin: with an empty path, a covering prefix whose ROAs name only other ASes is synthesized only with `bgp.as_path: native` or `provider`;
 - C is under a `static` or `ignore` policy, or a source lists S as a target of its own.
 
 Synthesized routes count toward `more_specific.max_routes` (100 when the `more_specific` block is absent), which then caps every outbound and inbound route on a router, `more_specific.enabled: false` included. A new one waits while the cap is full. Each carries the provider's next hop, the resolved `local_pref`, `packeteer_community`, the cause's and provider's communities, the marker, NO_EXPORT, and NO_ADVERTISE when chosen. With `bgp.as_path` set it carries C's path.

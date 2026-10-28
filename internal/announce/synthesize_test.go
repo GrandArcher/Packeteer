@@ -409,3 +409,27 @@ func TestSynthesizeReservedPrefix(t *testing.T) {
 		t.Fatalf("reserved on the wire kept: err=%v routes=%d", err, ann.count())
 	}
 }
+
+// With bgp.as_path provider the origin depends on the provider: a
+// sub-range refused toward any measured provider is not synthesizable.
+func TestSynthesizableRefusesWhenAnyProviderIsRefused(t *testing.T) {
+	cfg := synCfg(10)
+	cfg.ASPath = "provider"
+	cfg.Synthesize.Invalid = func(_ netip.Prefix, origin uint32) bool { return origin == 64503 }
+	rib := &pathRIB{memRIB: learned("198.51.100.0/24"), provider: map[string][]uint32{"b": {64502}, "c": {64503}}}
+	c, err := New(cfg, &fakeAnn{}, rib, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	viaB := subResult("198.51.100.0/24", "198.51.100.0/25")
+	viaC := viaB
+	viaC.Provider = "c"
+	if got := c.Synthesizable([]probe.Result{viaB}); len(got) != 1 {
+		t.Fatalf("one clean provider: %v", got)
+	}
+	for _, order := range [][]probe.Result{{viaB, viaC}, {viaC, viaB}} {
+		if got := c.Synthesizable(order); len(got) != 0 {
+			t.Fatalf("refused provider ignored: %v", got)
+		}
+	}
+}
