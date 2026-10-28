@@ -324,6 +324,11 @@ function prefixCard(row) {
   onRouter.title = "In the RIB learned from the edge router";
   head.appendChild(onRouter);
   if (row.heterogeneous) head.appendChild(el("span", "badge warn", "heterogeneous"));
+  if (row.covering) {
+    var synth = el("span", "badge warn", "synthesized");
+    synth.title = "Synthesized more-specific inside " + row.covering + ": not in the learned RIB";
+    head.appendChild(synth);
+  }
   if (row.quarantine) head.appendChild(el("span", "badge warn", "quarantined"));
   var mo = row.med_override;
   if (mo) {
@@ -332,6 +337,10 @@ function prefixCard(row) {
     head.appendChild(medBadge);
   }
   card.appendChild(head);
+  if (row.covering) {
+    card.appendChild(el("p", "reason bad", "WARNING: synthesized more-specific inside " + row.covering +
+      ". It is NOT in the learned RIB and can cause hijack-like effects, RPKI-invalid announcements, and route leaks if misused. Outside inject it is only listed."));
+  }
   if (row.reason) card.appendChild(el("p", "reason", row.reason));
   if (mo) {
     card.appendChild(el("p", "reason", "Overrides AS" + mo.asn + "'s MED: " + mo.chosen + " (MED " + mo.chosen_med + ") is chosen over " +
@@ -827,6 +836,7 @@ function renderHeadline(o) {
 function renderOverview(o) {
   renderBanner(o.mode);
   if (typeof shellRenderAuthBanner === "function") shellRenderAuthBanner(o.auth);
+  if (typeof shellRenderSynthBanner === "function") shellRenderSynthBanner(o.synthesize_warning);
   renderHeadline(o);
   renderTiles(o);
   renderSetup(o);

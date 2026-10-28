@@ -129,6 +129,9 @@ type Result struct {
 	// EnablesInject is true when the candidate is mode inject and the
 	// file on disk is not.
 	EnablesInject bool `json:"enables_inject"`
+	// SynthesizeWarning is config.SynthesizeWarning when the candidate
+	// turns synthesize on (#122), else empty.
+	SynthesizeWarning string `json:"synthesize_warning,omitempty"`
 	// Changes lists the scalar keys Save changed in the file, old and new
 	// value. Only Save sets it.
 	Changes []Change `json:"changes,omitempty"`
@@ -176,6 +179,9 @@ func (e *Editor) checkLocked(data []byte) Result {
 		res.ReloadOnline = len(online) > 0 && len(restart) == 0
 	}
 	res.EnablesInject = injectOn(next, e.diskConfig())
+	if next.Synthesizing() {
+		res.SynthesizeWarning = config.SynthesizeWarning
+	}
 	return res
 }
 

@@ -203,6 +203,12 @@ type Input struct {
 	// provider's learned paths (#303). A missing entry has no MED, or
 	// paths that disagree, and never takes part in the tie break.
 	MED map[netip.Prefix]map[string]NeighborMED
+	// Synthesize maps each measured sub-range that may be synthesized
+	// (#122) to the covering prefix whose result carries it. The
+	// controller fills it only with synthesize on, from the rails the
+	// announcer enforces again. Decide measures each as a prefix of its
+	// own (withSynthesized). Nil is off.
+	Synthesize map[netip.Prefix]netip.Prefix
 
 	// byPrefix indexes Results by prefix. Decide fills it, so the
 	// per-prefix confirmation checks do not scan every result.
@@ -233,6 +239,9 @@ type Improvement struct {
 	// MEDOverride is set when this performance move goes against the
 	// neighbor AS's MED preference (#303).
 	MEDOverride *MEDOverride `json:"med_override,omitempty"`
+	// Covering is set on a synthesized sub-range (#122): the learned
+	// prefix it lies inside. Prefix itself is not in the learned RIB.
+	Covering netip.Prefix `json:"covering,omitzero"`
 
 	// nativeSeen is the first decision, after this improvement already
 	// existed, that still saw the prefix in the RIB. nativeHeld is that
@@ -376,10 +385,15 @@ type Decision struct {
 	// Subranges are the measured parts of the prefix (#121), busiest
 	// first. The candidates above are their traffic-weighted aggregate.
 	// Heterogeneous is set when two of them have a different best
-	// provider. Both are information only: nothing is announced for a
-	// sub-range, and the decision steers only Prefix.
+	// provider. Both are information only: the decision steers only
+	// Prefix. A sub-range is announced only by synthesize (#122), as a
+	// decision of its own.
 	Subranges     []SubrangeDecision `json:"subranges,omitempty"`
 	Heterogeneous bool               `json:"heterogeneous,omitempty"`
+	// Covering is set when Prefix is a synthesized sub-range (#122):
+	// the learned prefix it lies inside. Outside inject the decision is
+	// only a would-be route.
+	Covering netip.Prefix `json:"covering,omitzero"`
 }
 
 // SubrangeDecision is one measured sub-range of a decided prefix (#121):

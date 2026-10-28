@@ -103,6 +103,8 @@ func Decide(prev State, in Input, cfg Config, scorer plugin.Scorer, now time.Tim
 		return st, out
 	}
 
+	in, cover := withSynthesized(in)
+
 	// A reordering reading counts for a prefix only when every provider
 	// measured for it has one (#224). A missing or stale reading is
 	// unknown; scoring it as zero would favour the path known least.
@@ -165,7 +167,12 @@ func Decide(prev State, in Input, cfg Config, scorer plugin.Scorer, now time.Tim
 	// the backstop when that prefix produced no result at all.
 	for _, p := range sortedKeys(st.Improvements) {
 		if _, ok := byPrefix[p]; !ok {
-			retire(p, "prefix no longer probed", false)
+			reason := "prefix no longer probed"
+			if st.Improvements[p].Covering.IsValid() {
+				// Its sub-range result, or a synthesize rail, is gone.
+				reason = "sub-range no longer measured or no longer eligible to synthesize"
+			}
+			retire(p, reason, false)
 		}
 	}
 
@@ -191,7 +198,7 @@ func Decide(prev State, in Input, cfg Config, scorer plugin.Scorer, now time.Tim
 		cands := byPrefix[p]
 		sort.Slice(cands, func(a, b int) bool { return cands[a].Provider < cands[b].Provider })
 		d := &decisions[i]
-		*d = Decision{Prefix: p, Candidates: cands, Action: ActionNone}
+		*d = Decision{Prefix: p, Candidates: cands, Action: ActionNone, Covering: cover[p]}
 		decIdx[p] = d
 		imp, active := st.Improvements[p]
 		verdict, hasPolicy := in.Policies[p]
@@ -232,6 +239,7 @@ func Decide(prev State, in Input, cfg Config, scorer plugin.Scorer, now time.Tim
 			}
 			if in.RIBEnabled {
 				_, inRIB := in.Native[p]
+				_, coverOwn := st.Improvements[imp.Covering]
 				switch {
 				case inRIB && in.Held != nil && in.Held(p):
 					imp.nativeSeen = time.Time{}
@@ -243,7 +251,17 @@ func Decide(prev State, in Input, cfg Config, scorer plugin.Scorer, now time.Tim
 					}
 					imp.nativeHeld = true
 					st.Improvements[p] = imp
-				case imp.nativeHeld && !imp.nativeSeen.IsZero() && now.Sub(imp.nativeSeen) >= nativePathConfirm:
+				case imp.Covering.IsValid() && !coverOwn:
+					// A sub-range is a different prefix and never hides
+					// its covering prefix from the router, so a covering
+					// prefix missing from the RIB has left, however
+					// recently. Only Packeteer's own route for the
+					// covering prefix can hide it, and then the covering
+					// prefix's own rule decides.
+					retire(p, "covering prefix no longer in RIB", true)
+					d.Action, d.Reason, d.Current = ActionRetire, "covering prefix no longer in RIB", imp.Native
+					continue
+				case imp.nativeHeld && !imp.Covering.IsValid() && !imp.nativeSeen.IsZero() && now.Sub(imp.nativeSeen) >= nativePathConfirm:
 					// The neighbor kept sending this prefix after the
 					// improvement was active, then stopped. That is a real
 					// withdraw. Cooldown stops a mis-read from being
@@ -402,7 +420,7 @@ func Decide(prev State, in Input, cfg Config, scorer plugin.Scorer, now time.Tim
 					delete(st.confirm, p)
 					sw := Improvement{Prefix: p, Provider: alt.Provider, Native: imp.Native, Since: now,
 						Reason: reasonText(alt, cur), Cause: plugin.CausePerformance, MEDOverride: medOverride(cands, alt, cfg, imp.Native),
-						nativeSeen: imp.nativeSeen, nativeHeld: imp.nativeHeld}
+						Covering: imp.Covering, nativeSeen: imp.nativeSeen, nativeHeld: imp.nativeHeld}
 					st.Improvements[p] = sw
 					out.Changes = append(out.Changes, Change{Action: ActionSwitch, Old: imp, New: sw})
 					d.Action, d.Reason, d.Current, d.Cause = ActionSwitch, sw.Reason, sw.Provider, plugin.CausePerformance
@@ -421,6 +439,9 @@ func Decide(prev State, in Input, cfg Config, scorer plugin.Scorer, now time.Tim
 			if !inRIB {
 				delete(st.confirm, p)
 				d.Reason = "prefix not in RIB"
+				if c, ok := cover[p]; ok {
+					d.Reason = "covering prefix " + c.String() + " not in RIB"
+				}
 				continue
 			}
 			d.Native, d.Current = nat, nat
@@ -544,7 +565,7 @@ func Decide(prev State, in Input, cfg Config, scorer plugin.Scorer, now time.Tim
 		}
 		wants = append(wants, pending{d: d, gain: natC.Score - alt.Score, rank: rank,
 			imp: Improvement{Prefix: p, Provider: alt.Provider, Native: d.Native, Since: now, Reason: reasonText(alt, natC), Cause: plugin.CausePerformance,
-				MEDOverride: medOverride(cands, alt, cfg, d.Native)}})
+				MEDOverride: medOverride(cands, alt, cfg, d.Native), Covering: cover[p]}})
 	}
 
 	integrateCommit(st, &out, decIdx, holds, commitOK, byPrefix, &wants, cfg, scorer, in, now, retire)

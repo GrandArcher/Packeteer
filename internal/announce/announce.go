@@ -3,8 +3,8 @@
 // It runs only in inject mode. Observe and suggest never touch the
 // announcer. A route is published only when the decided prefix is allowlisted
 // and present in the RIB, the provider has a next hop, and the improvement
-// cap has room. The announced prefix is that exact prefix. Packeteer does
-// not synthesize more-specifics. Every Sync re-checks prefixes already on
+// cap has room. The announced prefix is that exact prefix, except a
+// synthesized sub-range (below). Every Sync re-checks prefixes already on
 // the wire, including provider switches. A route already on the wire stays
 // while the decision engine still wants it, even if the neighbor stopped
 // advertising the prefix: that is what the router does once Packeteer's
@@ -24,6 +24,14 @@
 // neighbor advertises in the learned RIB: each an exact learned prefix,
 // never one Packeteer computed. MaxRoutes caps every route on the wire, and
 // a new improvement is announced whole or not at all.
+//
+// With synthesize on (#122), an improvement whose Covering is set announces
+// a measured sub-range that is not in the learned RIB, only under the
+// rails in synthRefusal and only while a neighbor advertises the covering
+// prefix exactly when it is first announced. It carries the marker
+// community, and NO_ADVERTISE when chosen, on top of the usual tags, and
+// counts toward MaxRoutes. It is the one route this package announces
+// outside the learned RIB.
 package announce
 
 import (
@@ -41,6 +49,7 @@ import (
 	"github.com/GrandArcher/Packeteer/internal/config"
 	"github.com/GrandArcher/Packeteer/internal/netpfx"
 	"github.com/GrandArcher/Packeteer/internal/policy"
+	"github.com/GrandArcher/Packeteer/internal/probe"
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
 )
 
@@ -117,6 +126,11 @@ type Config struct {
 	// is false.
 	MoreSpecific bool
 	MaxRoutes    int
+	// Synthesize, when set, lets an improvement with Covering put its
+	// sub-range on the wire (#122). The RIB must implement
+	// MoreSpecificRIB, and MaxRoutes caps every route. Nil refuses every
+	// prefix that is not in the RIB.
+	Synthesize *Synthesize
 	// Now is the clock for the more-specific leave check. Nil is time.Now.
 	Now func() time.Time
 	// Leader reports whether this instance is the active one of an HA
@@ -125,6 +139,30 @@ type Config struct {
 	// checked under the controller's lock on every Sync.
 	Leader func() bool
 }
+
+// Synthesize is the rails of synthesized sub-ranges (#122,
+// docs/design/more-specific.md).
+type Synthesize struct {
+	// Covering are synthesize.covering_prefixes: a covering prefix must be
+	// inside one of them.
+	Covering []netip.Prefix
+	// MaxBits is how far past the covering prefix a sub-range may go;
+	// MaxLenV4 and MaxLenV6 are the longest sub-range per family.
+	MaxBits, MaxLenV4, MaxLenV6 int
+	// Marker is added to every synthesized route. NoAdvertise adds
+	// NO_ADVERTISE as well; the announcer always adds NO_EXPORT.
+	Marker      string
+	NoAdvertise bool
+	// LocalASN is the origin the edge sees on a route sent with an empty
+	// AS path (bgp.as_path empty, the default).
+	LocalASN uint32
+	// Invalid reports a sub-range whose RPKI state would be invalid with
+	// origin (#200). Nil is no RPKI source.
+	Invalid func(sub netip.Prefix, origin uint32) bool
+}
+
+// noAdvertise is the NO_ADVERTISE well-known community (RFC 1997).
+const noAdvertise = "65535:65282"
 
 // Controller applies decision changes to an announcer.
 type Controller struct {
@@ -172,6 +210,9 @@ type slot struct {
 	// parent is the improvement that owns a learned more-specific (#56).
 	// It is the zero prefix on an improvement's own route.
 	parent netip.Prefix
+	// cover is the covering prefix of a synthesized sub-range (#122), the
+	// zero prefix on any other route.
+	cover netip.Prefix
 	// seen and held track a more-specific in the RIB the way the decision
 	// engine tracks an improvement's prefix (policy.NativePathConfirm).
 	seen time.Time
@@ -272,13 +313,28 @@ func validateInject(cfg Config, ann plugin.Announcer, rib RIB) (Config, error) {
 	default:
 		return cfg, fmt.Errorf("announce: as_path %q is invalid", cfg.ASPath)
 	}
-	if cfg.MoreSpecific {
+	if cfg.MoreSpecific || cfg.Synthesize != nil {
 		if cfg.MaxRoutes < 1 {
 			return cfg, errors.New("announce: more_specific.max_routes must be positive")
 		}
 		if _, ok := rib.(MoreSpecificRIB); !ok {
-			return cfg, errors.New("announce: more_specific needs the learned more-specifics from the RIB")
+			return cfg, errors.New("announce: more_specific and synthesize need the learned more-specifics from the RIB")
 		}
+	}
+	if sy := cfg.Synthesize; sy != nil {
+		if len(sy.Covering) == 0 {
+			return cfg, errors.New("announce: synthesize needs covering_prefixes")
+		}
+		if sy.MaxBits < 1 || sy.MaxLenV4 < 1 || sy.MaxLenV6 < 1 {
+			return cfg, errors.New("announce: synthesize needs max_bits and max_prefix_len")
+		}
+		marker, err := config.ExtraCommunityText(sy.Marker, cfg.Community)
+		if err != nil {
+			return cfg, fmt.Errorf("announce: synthesize marker_community: %w", err)
+		}
+		next := *sy
+		next.Marker = marker
+		cfg.Synthesize = &next
 	}
 	return cfg, nil
 }
@@ -362,7 +418,7 @@ func (c *Controller) enterInjectLocked(max int) error {
 	if err != nil {
 		return err
 	}
-	c.cfg.Community = checked.Community
+	c.cfg.Community, c.cfg.Synthesize = checked.Community, checked.Synthesize
 	return c.bindLocked()
 }
 
@@ -540,14 +596,37 @@ func (c *Controller) syncImprovementLocked(ctx context.Context, im policy.Improv
 		}
 		return errors.Join(err, fmt.Errorf("announce: %s is reserved for inbound steering or threat mitigation", p))
 	}
-	if !on && !c.rib.Contains(p) {
+	if on && s.cover != im.Covering {
+		// A synthesized route is never kept as an exact prefix or under
+		// another covering prefix, nor the other way round.
+		if err := c.withdrawLocked(ctx, p); err != nil {
+			return err
+		}
+		s, on = slot{}, false
+	}
+	if im.Covering.IsValid() {
+		if why := c.synthRefusal(p, im.Covering, im.Provider); why != "" {
+			var err error
+			if on {
+				err = c.withdrawLocked(ctx, p)
+			}
+			return errors.Join(err, fmt.Errorf("announce: %s is not synthesized inside %s: %s", p, im.Covering, why))
+		}
+		if c.coverMissing(im.Covering, on) {
+			var err error
+			if on {
+				err = c.withdrawLocked(ctx, p)
+			}
+			return errors.Join(err, fmt.Errorf("announce: %s is not synthesized: covering prefix %s is not in the RIB", p, im.Covering))
+		}
+	} else if !on && !c.rib.Contains(p) {
 		return fmt.Errorf("announce: %s is not in the RIB", p)
 	}
 	// A cause change can keep the provider and the AS path and still need a
 	// new local preference or a new community list on the wire.
 	lp := c.localPref(im.Provider, im.Cause)
-	comms := c.communities(im.Provider, im.Cause)
-	if on && !s.moreSpecific() && s.provider == im.Provider && s.localPref == lp && slices.Equal(s.communities, comms) && slices.Equal(s.asPath, c.asPath(p, im.Provider)) {
+	comms := c.routeCommunities(im)
+	if on && !s.moreSpecific() && s.provider == im.Provider && s.localPref == lp && slices.Equal(s.communities, comms) && slices.Equal(s.asPath, c.routePath(p, im.Covering, im.Provider)) {
 		return nil
 	}
 	if !netpfx.CoveredBy(c.cfg.Allowlist, p) {
@@ -557,7 +636,7 @@ func (c *Controller) syncImprovementLocked(ctx context.Context, im policy.Improv
 		}
 		return errors.Join(err, fmt.Errorf("announce: %s is not allowlisted", p))
 	}
-	if c.cfg.MoreSpecific && !on {
+	if (c.cfg.MoreSpecific || c.cfg.Synthesize != nil) && !on {
 		need := 1
 		for _, m := range learned {
 			if _, ok := c.active[m]; !ok {
@@ -569,6 +648,124 @@ func (c *Controller) syncImprovementLocked(ctx context.Context, im policy.Improv
 		}
 	}
 	return c.announceLocked(ctx, im)
+}
+
+// coverMissing reports that the covering prefix of a synthesized sub-range
+// is not in the learned RIB, so the sub-range is not announced or, when on
+// is set because it is on the wire, is withdrawn. The exception is a
+// covering prefix Packeteer steers itself: the router then stops sending it
+// to Packeteer, and the decision engine ends the sub-range with it. Caller
+// holds mu.
+func (c *Controller) coverMissing(cover netip.Prefix, on bool) bool {
+	if c.rib.Contains(cover) {
+		return false
+	}
+	_, steered := c.active[cover]
+	return !(on && steered)
+}
+
+// synthRefusal is why the sub-range sub may not be synthesized inside
+// cover toward provider, or "" when every rail that does not depend on
+// cover being in the RIB holds: synthesize on, cover inside
+// covering_prefixes, sub strictly inside cover, max_bits, max_prefix_len,
+// the allowlist, no learned prefix inside cover that overlaps sub (that is
+// more_specific's), and an RPKI state that would not be invalid for the
+// origin the route would carry: the last AS of its path, or LocalASN for
+// an empty path. Caller holds mu.
+func (c *Controller) synthRefusal(sub, cover netip.Prefix, provider string) string {
+	sy := c.cfg.Synthesize
+	if sy == nil {
+		return "synthesize is off"
+	}
+	maxLen := sy.MaxLenV4
+	if sub.Addr().Is6() {
+		maxLen = sy.MaxLenV6
+	}
+	switch {
+	case !netpfx.CoveredBy(sy.Covering, cover):
+		return "covering prefix is not inside synthesize.covering_prefixes"
+	case sub.Addr().Is4() != cover.Addr().Is4() || sub.Bits() <= cover.Bits() || !cover.Contains(sub.Addr()):
+		return "not strictly inside the covering prefix"
+	case sub.Bits()-cover.Bits() > sy.MaxBits:
+		return fmt.Sprintf("more than synthesize.max_bits (%d) past the covering prefix", sy.MaxBits)
+	case sub.Bits() > maxLen:
+		return fmt.Sprintf("longer than synthesize.max_prefix_len (/%d)", maxLen)
+	case !netpfx.CoveredBy(c.cfg.Allowlist, sub):
+		return "not allowlisted"
+	}
+	ms, ok := c.rib.(MoreSpecificRIB)
+	if !ok {
+		return "no learned more-specifics to check for overlap"
+	}
+	for _, m := range ms.MoreSpecifics([]netip.Prefix{cover}) {
+		if m.Masked().Overlaps(sub) {
+			return "a neighbor advertises " + m.Masked().String() + ", which overlaps it"
+		}
+	}
+	if sy.Invalid != nil {
+		origin := sy.LocalASN
+		if path := c.routePath(sub, cover, provider); len(path) > 0 {
+			origin = path[len(path)-1]
+		}
+		if sy.Invalid(sub, origin) {
+			return fmt.Sprintf("its RPKI state would be invalid with origin AS%d", origin)
+		}
+	}
+	return ""
+}
+
+// Synthesizable maps every measured sub-range in results that passes
+// synthRefusal toward every provider measured for it to the covering
+// prefix of its result, for the decision input (policy.Input.Synthesize).
+// Whether the covering prefix is in the RIB is the decision engine's
+// check. Nil when synthesize is off.
+func (c *Controller) Synthesizable(results []probe.Result) map[netip.Prefix]netip.Prefix {
+	if c == nil {
+		return nil
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.cfg.Synthesize == nil || c.rib == nil {
+		return nil
+	}
+	out := map[netip.Prefix]netip.Prefix{}
+	refused := map[netip.Prefix]bool{}
+	for _, r := range results {
+		for _, sr := range r.Subranges {
+			sub := sr.Prefix.Masked()
+			if refused[sub] {
+				continue
+			}
+			if c.synthRefusal(sub, r.Prefix.Masked(), r.Provider) != "" {
+				refused[sub] = true
+				delete(out, sub)
+				continue
+			}
+			out[sub] = r.Prefix.Masked()
+		}
+	}
+	return out
+}
+
+// SynthesizeRefusal is why Sync would not put the synthesized sub-range
+// sub inside cover on the wire toward provider now, or "", for the
+// blast-radius preview.
+func (c *Controller) SynthesizeRefusal(sub, cover netip.Prefix, provider string) string {
+	if c == nil {
+		return "synthesize is off"
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.rib == nil {
+		return "no RIB view"
+	}
+	if why := c.synthRefusal(sub, cover, provider); why != "" {
+		return why
+	}
+	if _, on := c.active[sub]; c.coverMissing(cover, on) {
+		return "covering prefix " + cover.String() + " is not in the learned RIB"
+	}
+	return ""
 }
 
 // barred reports a prefix no more-specific may use: reserved for inbound
@@ -846,8 +1043,14 @@ func (c *Controller) announceLocked(ctx context.Context, imp policy.Improvement)
 	if !netpfx.CoveredBy(c.cfg.Allowlist, p) {
 		return fmt.Errorf("announce: %s is not allowlisted", p)
 	}
-	if _, on := c.active[p]; !on && !c.rib.Contains(p) {
-		return fmt.Errorf("announce: %s is not in the RIB", p)
+	if _, on := c.active[p]; !on {
+		learned := c.rib.Contains(p)
+		if imp.Covering.IsValid() {
+			learned = c.synthRefusal(p, imp.Covering, imp.Provider) == "" && c.rib.Contains(imp.Covering)
+		}
+		if !learned {
+			return fmt.Errorf("announce: %s is not in the RIB", p)
+		}
 	}
 	nh, ok := c.cfg.NextHops[imp.Provider]
 	if !ok || !nh.IsValid() {
@@ -864,19 +1067,23 @@ func (c *Controller) announceLocked(ctx context.Context, imp policy.Improvement)
 		return fmt.Errorf("announce: max_improvements (%d) reached", c.cfg.MaxImprovements)
 	}
 	lp := c.localPref(imp.Provider, imp.Cause)
-	comms := c.communities(imp.Provider, imp.Cause)
+	comms := c.routeCommunities(imp)
 	rt := plugin.Route{
 		Prefix:      p,
 		NextHop:     nh,
 		Provider:    imp.Provider,
 		LocalPref:   lp,
 		Communities: comms,
-		ASPath:      c.asPath(p, imp.Provider),
+		ASPath:      c.routePath(p, imp.Covering, imp.Provider),
 	}
 	if err := c.ann.Announce(ctx, rt); err != nil {
 		return err
 	}
-	c.active[p] = slot{provider: imp.Provider, asPath: rt.ASPath, localPref: lp, communities: comms}
+	c.active[p] = slot{provider: imp.Provider, asPath: rt.ASPath, localPref: lp, communities: comms, cover: imp.Covering}
+	if imp.Covering.IsValid() {
+		c.log.Warn("injected synthesized more-specific; it is not in the learned RIB", "prefix", p, "covering", imp.Covering, "provider", imp.Provider, "next_hop", nh, "local_pref", lp, "as_path", fmt.Sprint(rt.ASPath), "communities", strings.Join(comms, ","))
+		return nil
+	}
 	// cause stays after local_pref so the walkthrough's fixed substring
 	// (provider, next_hop, local_pref) still matches. Communities follow.
 	c.log.Info("injected", "prefix", p, "provider", imp.Provider, "next_hop", nh, "local_pref", lp, "as_path", fmt.Sprint(rt.ASPath), "cause", imp.Cause, "communities", strings.Join(comms, ","))
@@ -920,6 +1127,30 @@ func (c *Controller) communities(provider, cause string) []string {
 	add(c.cfg.CauseCommunities[cause])
 	add(c.cfg.ProviderCommunities[provider])
 	return out
+}
+
+// routeCommunities is communities for the improvement's route, then, on a
+// synthesized sub-range, the marker and NO_ADVERTISE when chosen. Caller
+// holds mu.
+func (c *Controller) routeCommunities(imp policy.Improvement) []string {
+	out := c.communities(imp.Provider, imp.Cause)
+	if sy := c.cfg.Synthesize; imp.Covering.IsValid() && sy != nil {
+		out = append(out, sy.Marker)
+		if sy.NoAdvertise {
+			out = append(out, noAdvertise)
+		}
+	}
+	return out
+}
+
+// routePath is the AS path for the route on p. A synthesized sub-range
+// carries its covering prefix's path, the route it lies inside. Caller
+// holds mu.
+func (c *Controller) routePath(p, cover netip.Prefix, provider string) []uint32 {
+	if cover.IsValid() {
+		return c.asPath(cover, provider)
+	}
+	return c.asPath(p, provider)
 }
 
 // checkExtraCommunities rejects a list the config loader would reject.

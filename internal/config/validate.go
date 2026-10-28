@@ -40,6 +40,7 @@ func (c *Config) Validate() error {
 	c.validateProbeBudget(add)
 	c.validateLogHTTP(add)
 	c.validateMoreSpecific(add)
+	c.validateSynthesize(add)
 	c.validateRPKI(add)
 	c.validateIRR(add)
 	c.validateInject(add)

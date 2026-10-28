@@ -15,6 +15,7 @@ import (
 	"github.com/GrandArcher/Packeteer/internal/pluginhost"
 	_ "github.com/GrandArcher/Packeteer/internal/plugins/all"
 	"github.com/GrandArcher/Packeteer/internal/rib"
+	"github.com/GrandArcher/Packeteer/internal/rpki"
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
 )
 
@@ -153,7 +154,7 @@ func formatCommunityOverrides(cfg *config.Config) string {
 	return b.String()
 }
 
-func newController(cfg *config.Config, plugins *pluginhost.Set, view *rib.View, inb *inbound.Controller, mit *mitigation.Controller, held func(netip.Prefix) bool, log *slog.Logger) (*announce.Controller, error) {
+func newController(cfg *config.Config, plugins *pluginhost.Set, view *rib.View, inb *inbound.Controller, mit *mitigation.Controller, held func(netip.Prefix) bool, origins *rpki.Set, log *slog.Logger) (*announce.Controller, error) {
 	var ann plugin.Announcer
 	if plugins.Announcer != nil {
 		ann = plugins.Announcer.Plugin
@@ -175,6 +176,18 @@ func newController(cfg *config.Config, plugins *pluginhost.Set, view *rib.View, 
 	}
 	if ms := cfg.MoreSpecific; ms != nil && ms.Enabled {
 		ac.MoreSpecific, ac.MaxRoutes = true, ms.MaxRoutes
+	}
+	if sy := cfg.Synthesize; cfg.Synthesizing() {
+		ac.MaxRoutes = cfg.RouteCap()
+		ac.Synthesize = &announce.Synthesize{MaxBits: sy.MaxBits, MaxLenV4: sy.MaxPrefixLen.V4, MaxLenV6: sy.MaxPrefixLen.V6,
+			Marker: sy.MarkerCommunity, NoAdvertise: sy.NoAdvertise, LocalASN: cfg.ASN, Invalid: synthInvalid(origins)}
+		for _, s := range sy.CoveringPrefixes {
+			p, err := netip.ParsePrefix(s)
+			if err != nil {
+				return nil, err
+			}
+			ac.Synthesize.Covering = append(ac.Synthesize.Covering, p)
+		}
 	}
 	if inb != nil {
 		ac.Others = inb.Active
@@ -203,6 +216,19 @@ func newController(cfg *config.Config, plugins *pluginhost.Set, view *rib.View, 
 	}
 	ac.Routers = routers
 	return announce.New(ac, ann, ribGate{view}, log)
+}
+
+// synthInvalid reports a synthesized sub-range that would be RPKI-invalid
+// with the origin it is announced with (#122, #200), for example under a
+// ROA whose max length stops short of it. Nil when RPKI is off; then
+// nothing is refused for RPKI.
+func synthInvalid(origins *rpki.Set) func(netip.Prefix, uint32) bool {
+	if !origins.Enabled() {
+		return nil
+	}
+	return func(sub netip.Prefix, origin uint32) bool {
+		return origins.Lookup(sub, origin).State == plugin.RPKIInvalid
+	}
 }
 
 // routerSummary is a neighbor's provider reachability for -check, or ""

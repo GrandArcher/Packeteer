@@ -238,9 +238,14 @@ func retainImprovedPrefixes(engine *probe.Engine, imps []policy.Improvement) {
 	if engine == nil {
 		return
 	}
-	ps := make([]netip.Prefix, len(imps))
-	for i, imp := range imps {
-		ps[i] = imp.Prefix
+	ps := make([]netip.Prefix, 0, len(imps))
+	for _, imp := range imps {
+		// A synthesized sub-range is measured only inside its covering
+		// prefix's result (#122); probing it as a target of its own would
+		// not be that measurement.
+		if !imp.Covering.IsValid() {
+			ps = append(ps, imp.Prefix)
+		}
 	}
 	engine.SetRetained(ps)
 }

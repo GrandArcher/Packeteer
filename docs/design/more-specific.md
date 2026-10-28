@@ -134,8 +134,10 @@ Lab-proven only, not on a public edge.
 
 ## Synthesized sub-ranges (`synthesize`, opt-in)
 
-Status: charter only (#114). The feature is #122 and is not implemented.
-Until it merges, nothing outside the learned RIB is announced.
+Status: built (#122), lab-proven only (`lab/e2e-synthesize.sh`), off by
+default. Config: [CONFIG.md](../CONFIG.md#synthesize). Rail 4's route cap
+is `more_specific.max_routes`, 100 when that block is absent. Enabling it
+also requires `leak_watch` and `marker_community`.
 
 Synthesizing lets Packeteer disaggregate a large prefix and announce the
 more-specific it measured, so a bad part of a /16 can be steered as a /24. No attribute on
@@ -148,8 +150,8 @@ longer route does. `synthesize` is that longer route, under these rails:
    would-be routes on `/api/decisions` and announce nothing. No shipped
    example turns it on.
 2. **Covering-prefix allowlist.** `synthesize.covering_prefixes` lists the
-   prefixes that may be split. Each entry must be inside
-   `allowlist.prefixes`.
+   containers a learned covering prefix C must sit inside; S is not a learned
+   prefix. Each entry must be inside `allowlist.prefixes`.
 3. **Only sub-ranges of a prefix a neighbor already advertises.** A
    sub-range S is eligible only while a configured neighbor advertises a
    covering prefix C exactly in the learned RIB view (the same `Exact`
@@ -170,8 +172,10 @@ longer route does. `synthesize` is that longer route, under these rails:
 7. **Measured on its own.** S is announced only from its own sub-range
    measurement (#121), under the same thresholds, confirmation, hold time,
    cooldown, and `max_improvements` as a performance move.
-8. **Withdrawn.** With its improvement; when C really leaves the RIB (the
-   `policy.NativePathConfirm` rule above); when S becomes reserved or leaves
+8. **Withdrawn.** With its improvement; as soon as C is missing from the RIB
+   (S never hides C from the router, so there is no
+   `policy.NativePathConfirm` window; if Packeteer steers C itself, C's own
+   rule decides); when S becomes reserved or leaves
    the allowlists; when the RIB is not ready, probe sources fail, or data
    goes stale; on SIGTERM (`WithdrawAll`); on SIGKILL or a crash (the
    session drops, graceful restart stays off); and on an HA standby, which

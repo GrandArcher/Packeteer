@@ -90,6 +90,13 @@ assert(body.indexOf("2 announced routes stay") >= 0, "kept routes counted: " + b
 assert(body.indexOf("transit-b: +12.5 Mbps in, -0.0 Mbps out (at least; 1 without a volume). Now 80.0, after 92.5 of 100.0 Mbps capacity") >= 0, "provider shift: " + body);
 assert(body.indexOf("Warnings (2)") >= 0 && body.indexOf("over its limit of 90.0 Mbps") >= 0 && body.indexOf("192.0.2.0/24 and more") >= 0, "warnings: " + body);
 
+// A synthesized sub-range (#122) says it is not in the learned RIB.
+var synth = JSON.parse(JSON.stringify(report));
+synth.add = [{prefix: "198.51.100.0/25", from: "transit-a", to: "transit-b", covering: "198.51.100.0/24"}];
+context.renderBlast(synth);
+body = text(els["bl-body"]);
+assert(body.indexOf("198.51.100.0/25: transit-a -> transit-b (volume unknown) SYNTHESIZED inside 198.51.100.0/24, not in the learned RIB") >= 0, "synthesized route: " + body);
+
 // An idle backup taking traffic and a provider that all traffic leaves:
 // a zero rate must render, and a missing rate renders as 0.
 var idle = JSON.parse(JSON.stringify(report));

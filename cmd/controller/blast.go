@@ -83,13 +83,18 @@ func (b blastSource) report(cfg *config.Config, changed []string) (blast.Report,
 
 // refusal is why the announcer would not put a decided route on the wire.
 // A route already on the wire is not checked against the RIB: the router
-// prefers it, so the native path it replaced may no longer be learned.
-func (b blastSource) refusal(p netip.Prefix) string {
+// prefers it, so the native path it replaced may no longer be learned. A
+// synthesized sub-range (#122) gets the announcer's synthesize rails
+// instead of the RIB check.
+func (b blastSource) refusal(im policy.Improvement) string {
+	p := im.Prefix
 	switch {
 	case b.held != nil && b.held(p):
 		return "held out by the leak watch"
 	case b.reserved != nil && b.reserved(p):
 		return "reserved for inbound steering or threat mitigation"
+	case im.Covering.IsValid():
+		return b.ctl.SynthesizeRefusal(p, im.Covering, im.Provider)
 	case !b.ctl.Injected(p) && !(ribGate{b.view}).Contains(p):
 		return "not in the learned RIB"
 	}

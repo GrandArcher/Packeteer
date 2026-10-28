@@ -31,6 +31,7 @@ const (
 	WarnRefused     = "refused"
 	WarnVolume      = "volume_unknown"
 	WarnInputs      = "inputs_fixed"
+	WarnSynthesized = "synthesized"
 )
 
 // ErrNoRound is returned by a preview source before the first decision round
@@ -50,6 +51,9 @@ type Route struct {
 	Cause      string       `json:"cause,omitempty"`
 	Reason     string       `json:"reason,omitempty"`
 	VolumeMbps *float64     `json:"volume_mbps,omitempty"`
+	// Covering is set on a synthesized sub-range (#122): the learned
+	// prefix it lies inside. Prefix is not in the learned RIB.
+	Covering netip.Prefix `json:"covering,omitzero"`
 }
 
 // Shift is the estimated traffic change on one provider. Unknown counts the
@@ -106,10 +110,10 @@ type Params struct {
 	OnWire []policy.Improvement
 	// What is the Decide outcome under Cfg.
 	What policy.WhatIf
-	// Refuse returns why the announcer would refuse a prefix the decision
-	// kept (leak-watch hold, inbound or mitigation reservation, not in the
-	// learned RIB), or "".
-	Refuse func(netip.Prefix) string
+	// Refuse returns why the announcer would refuse an improvement the
+	// decision kept (leak-watch hold, inbound or mitigation reservation,
+	// not in the learned RIB, a synthesize rail), or "".
+	Refuse func(policy.Improvement) string
 	// Volumes is observed Mbps per prefix; nil when no flow source is
 	// configured.
 	Volumes map[netip.Prefix]float64
@@ -150,7 +154,7 @@ func Build(p Params) Report {
 	var refused []string
 	if rep.Announces {
 		for _, im := range p.What.State.Improvements {
-			if why := refusal(p.Refuse, im.Prefix); why != "" {
+			if why := refusal(p.Refuse, im); why != "" {
 				refused = append(refused, im.Prefix.String()+" ("+why+")")
 				continue
 			}
@@ -168,9 +172,9 @@ func Build(p Params) Report {
 		old, on := wire[pfx]
 		switch {
 		case !on:
-			rep.Add = append(rep.Add, Route{Prefix: pfx, From: im.Native, To: im.Provider, Cause: im.Cause, Reason: im.Reason, VolumeMbps: vol(pfx)})
+			rep.Add = append(rep.Add, Route{Prefix: pfx, From: im.Native, To: im.Provider, Cause: im.Cause, Reason: im.Reason, VolumeMbps: vol(pfx), Covering: im.Covering})
 		case old.Provider != im.Provider:
-			rep.Move = append(rep.Move, Route{Prefix: pfx, From: old.Provider, To: im.Provider, Cause: im.Cause, Reason: im.Reason, VolumeMbps: vol(pfx)})
+			rep.Move = append(rep.Move, Route{Prefix: pfx, From: old.Provider, To: im.Provider, Cause: im.Cause, Reason: im.Reason, VolumeMbps: vol(pfx), Covering: im.Covering})
 		default:
 			rep.Keep++
 		}
@@ -180,7 +184,7 @@ func Build(p Params) Report {
 			continue
 		}
 		old := wire[pfx]
-		rep.Withdraw = append(rep.Withdraw, Route{Prefix: pfx, From: old.Provider, To: old.Native, Cause: old.Cause, VolumeMbps: vol(pfx)})
+		rep.Withdraw = append(rep.Withdraw, Route{Prefix: pfx, From: old.Provider, To: old.Native, Cause: old.Cause, VolumeMbps: vol(pfx), Covering: old.Covering})
 	}
 	rep.Changes = len(rep.Add)+len(rep.Move)+len(rep.Withdraw) > 0
 	rep.Providers = shifts(rep, p)
@@ -192,11 +196,11 @@ func Build(p Params) Report {
 	return rep
 }
 
-func refusal(f func(netip.Prefix) string, pfx netip.Prefix) string {
+func refusal(f func(policy.Improvement) string, im policy.Improvement) string {
 	if f == nil {
 		return ""
 	}
-	return f(pfx)
+	return f(im)
 }
 
 func sortedPrefixes[V any](m map[netip.Prefix]V) []netip.Prefix {
@@ -258,6 +262,18 @@ func shifts(rep Report, p Params) []Shift {
 
 func warnings(rep Report, p Params, refused []string) []Warning {
 	var out []Warning
+	var synth []string
+	for _, list := range [][]Route{rep.Add, rep.Move} {
+		for _, r := range list {
+			if r.Covering.IsValid() {
+				synth = append(synth, r.Prefix.String()+" inside "+r.Covering.String())
+			}
+		}
+	}
+	if len(synth) > 0 {
+		out = append(out, Warning{Code: WarnSynthesized, Count: len(synth), Prefixes: head(synth),
+			Message: fmt.Sprintf("%d synthesized more-specifics would be announced. They are NOT in the learned RIB and can cause hijack-like effects, RPKI-invalid announcements, and route leaks if misused", len(synth))})
+	}
 	if len(refused) > 0 {
 		out = append(out, Warning{Code: WarnRefused, Count: len(refused), Prefixes: head(refused),
 			Message: fmt.Sprintf("%d decided routes would be refused by the announcer", len(refused))})

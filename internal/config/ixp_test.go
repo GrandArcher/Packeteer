@@ -117,10 +117,10 @@ func TestIXPModeRefusesSynthesize(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "ixp forbids synthesize") {
 		t.Fatalf("err = %v", err)
 	}
-	// Without ixp, synthesize stays an unknown key. It is not accepted.
-	_, err = Parse([]byte(minimalYAML + "synthesize: {enabled: true}\n"))
-	if err == nil || !strings.Contains(err.Error(), "field synthesize not found") {
-		t.Fatalf("err = %v", err)
+	// A disabled block is refused too, like more_specific.
+	_, err = Parse([]byte(minimalYAML + "ixp: {}\nsynthesize: {enabled: false}\n"))
+	if err == nil || !strings.Contains(err.Error(), "ixp forbids synthesize") {
+		t.Fatalf("disabled: err = %v", err)
 	}
 }
 
