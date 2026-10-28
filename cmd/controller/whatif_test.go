@@ -144,7 +144,7 @@ func TestWhatIfCommandRefusals(t *testing.T) {
 	}{
 		{"empty window", []string{"-base", e.base, "-from", "300h", "-to", "200h"}, "no decision rounds"},
 		{"bad window", []string{"-base", e.base, "-from", "soon"}, "neither an RFC 3339 time"},
-		{"no storage", []string{"-base", noStorage}, "no storage"},
+		{"no storage", []string{"-base", noStorage}, "config: {round_retention: 24h}"},
 		{"missing candidate", []string{"-base", e.base, "-config", filepath.Join(e.dir, "none.yaml")}, "none.yaml"},
 		{"missing base", []string{"-base", filepath.Join(e.dir, "none.yaml")}, "none.yaml"},
 	} {

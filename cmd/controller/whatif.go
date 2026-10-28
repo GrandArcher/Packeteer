@@ -113,7 +113,7 @@ type readOnlyOpener interface {
 // so the CLI can run beside a controller that writes to the same file.
 func openRoundStore(ctx context.Context, cfg *config.Config, log *slog.Logger, getenv func(string) string) (plugin.RoundStore, func(), error) {
 	if cfg.Storage == nil {
-		return nil, nil, errors.New("the config has no storage: replay needs stored rounds (storage: {type: sqlite, round_retention: 24h})")
+		return nil, nil, errors.New("the config has no storage: replay needs stored rounds (storage: {type: sqlite, config: {round_retention: 24h}})")
 	}
 	sp := *cfg.Storage
 	node := sp.Config
