@@ -239,6 +239,7 @@ func Decide(prev State, in Input, cfg Config, scorer plugin.Scorer, now time.Tim
 			}
 			if in.RIBEnabled {
 				_, inRIB := in.Native[p]
+				_, coverOwn := st.Improvements[imp.Covering]
 				switch {
 				case inRIB && in.Held != nil && in.Held(p):
 					imp.nativeSeen = time.Time{}
@@ -250,7 +251,17 @@ func Decide(prev State, in Input, cfg Config, scorer plugin.Scorer, now time.Tim
 					}
 					imp.nativeHeld = true
 					st.Improvements[p] = imp
-				case imp.nativeHeld && !imp.nativeSeen.IsZero() && now.Sub(imp.nativeSeen) >= nativePathConfirm:
+				case imp.Covering.IsValid() && !coverOwn:
+					// A sub-range is a different prefix and never hides
+					// its covering prefix from the router, so a covering
+					// prefix missing from the RIB has left, however
+					// recently. Only Packeteer's own route for the
+					// covering prefix can hide it, and then the covering
+					// prefix's own rule decides.
+					retire(p, "covering prefix no longer in RIB", true)
+					d.Action, d.Reason, d.Current = ActionRetire, "covering prefix no longer in RIB", imp.Native
+					continue
+				case imp.nativeHeld && !imp.Covering.IsValid() && !imp.nativeSeen.IsZero() && now.Sub(imp.nativeSeen) >= nativePathConfirm:
 					// The neighbor kept sending this prefix after the
 					// improvement was active, then stopped. That is a real
 					// withdraw. Cooldown stops a mis-read from being

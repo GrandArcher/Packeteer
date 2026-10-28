@@ -107,27 +107,21 @@ func TestSynthesizeNeedsTheCoveringPrefixInRIB(t *testing.T) {
 	}
 }
 
-// The covering prefix leaving the RIB retires the sub-range by the
-// NativePathConfirm rule, with the cooldown a real leave gets.
+// The covering prefix missing from the RIB retires the sub-range at once,
+// with the cooldown a real leave gets: a sub-range never hides its covering
+// prefix from the router, so there is no confirm window.
 func TestSynthesizeRetiresWhenCoveringPrefixLeaves(t *testing.T) {
 	c := cfg()
 	native := map[netip.Prefix]string{pA: "a"}
 	st, _ := Decide(NewState(), synthInput(t0, native), c, scorer(t), t0)
 	t1 := t0.Add(time.Second)
 	st, _ = Decide(st, synthInput(t1, native), c, scorer(t), t1)
-	// Gone briefly before confirmation: kept.
+	if _, ok := st.Improvements[synLo]; !ok {
+		t.Fatal("sub-range not improved before the leave")
+	}
 	t2 := t1.Add(time.Second)
 	st, out := Decide(st, synthInput(t2, map[netip.Prefix]string{}), c, scorer(t), t2)
-	if d := decision(t, out, synLo); d.Action != ActionKeep {
-		t.Fatalf("brief gap = %+v", d)
-	}
-	t3 := t2.Add(time.Second)
-	st, _ = Decide(st, synthInput(t3, native), c, scorer(t), t3)
-	t4 := t3.Add(NativePathConfirm + time.Second)
-	st, _ = Decide(st, synthInput(t4, native), c, scorer(t), t4)
-	t5 := t4.Add(time.Second)
-	st, out = Decide(st, synthInput(t5, map[netip.Prefix]string{}), c, scorer(t), t5)
-	if d := decision(t, out, synLo); d.Action != ActionRetire || d.Reason != "prefix no longer in RIB" {
+	if d := decision(t, out, synLo); d.Action != ActionRetire || d.Reason != "covering prefix no longer in RIB" {
 		t.Fatalf("leave = %+v", d)
 	}
 	if _, ok := st.Improvements[synLo]; ok {
@@ -135,6 +129,29 @@ func TestSynthesizeRetiresWhenCoveringPrefixLeaves(t *testing.T) {
 	}
 	if _, cool := st.Cooldown[synLo]; !cool {
 		t.Fatal("no cooldown after a real leave")
+	}
+}
+
+// A covering prefix Packeteer steers itself is hidden from Packeteer by the
+// router, so its absence from the RIB is not a leave for the sub-range.
+func TestSynthesizeKeepsSubrangeWhileCoveringPrefixIsSteered(t *testing.T) {
+	c := cfg()
+	native := map[netip.Prefix]string{pA: "a"}
+	st, _ := Decide(NewState(), synthInput(t0, native), c, scorer(t), t0)
+	t1 := t0.Add(time.Second)
+	st, _ = Decide(st, synthInput(t1, native), c, scorer(t), t1)
+	// C stays visible longer than the confirm window, so S's own
+	// nativeSeen is old when Packeteer starts steering C.
+	t2 := t1.Add(NativePathConfirm + time.Second)
+	st, _ = Decide(st, synthInput(t2, native), c, scorer(t), t2)
+	st.Improvements[pA] = Improvement{Prefix: pA, Provider: "b", Native: "a", Since: t0}
+	t2 = t2.Add(time.Second)
+	st, out := Decide(st, synthInput(t2, map[netip.Prefix]string{}), c, scorer(t), t2)
+	if d := decision(t, out, synLo); d.Action != ActionKeep {
+		t.Fatalf("steered covering prefix = %+v", d)
+	}
+	if _, ok := st.Improvements[synLo]; !ok {
+		t.Fatal("sub-range retired while its covering prefix is steered")
 	}
 }
 

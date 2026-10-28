@@ -24,8 +24,9 @@ const SynthesizeWarning = "WARNING: synthesize is on. Synthesized more-specifics
 // is itself not in the learned RIB. Nil or disabled is off.
 type Synthesize struct {
 	Enabled bool `yaml:"enabled"`
-	// CoveringPrefixes are the prefixes whose learned sub-prefixes may be
-	// split. Each must be inside allowlist.prefixes.
+	// CoveringPrefixes are the containers a learned covering prefix must
+	// sit inside; its sub-ranges are not learned. Each must be inside
+	// allowlist.prefixes.
 	CoveringPrefixes []string `yaml:"covering_prefixes"`
 	// MaxBits is how far past the covering prefix's length a synthesized
 	// route may go. Zero is DefaultSynthesizeMaxBits.

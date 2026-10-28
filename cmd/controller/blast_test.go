@@ -220,7 +220,7 @@ func TestBlastRefusalReasons(t *testing.T) {
 		{policy.Improvement{Prefix: reserved}, "inbound steering or threat mitigation"},
 		{policy.Improvement{Prefix: netip.MustParsePrefix("192.0.2.0/24")}, "not in the learned RIB"},
 		// A synthesized sub-range gets the synthesize rails (#122).
-		{policy.Improvement{Prefix: netip.MustParsePrefix("198.51.100.0/25"), Covering: held}, "synthesize is off"},
+		{policy.Improvement{Prefix: netip.MustParsePrefix("192.0.2.0/25"), Covering: netip.MustParsePrefix("192.0.2.0/24")}, "synthesize is off"},
 	} {
 		if got := src.refusal(tc.im); !strings.Contains(got, tc.want) {
 			t.Errorf("refusal(%s) = %q, want %q", tc.im.Prefix, got, tc.want)

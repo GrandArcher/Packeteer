@@ -13,9 +13,10 @@ import (
 // sub-range listed in in.Synthesize (#122), so a sub-range is decided like
 // any other prefix: thresholds, confirm_rounds, hold time, cooldown, and
 // max_improvements. Its native provider is its covering prefix's, and it
-// is in the RIB only while the covering prefix is: a covering prefix that
-// really leaves retires the sub-range by the policy.NativePathConfirm
-// rule. A covering prefix under a static or ignore policy is not split,
+// is in the RIB only while the covering prefix is: a covering prefix
+// missing from the RIB retires the sub-range at once, with no
+// NativePathConfirm window, unless Packeteer steers the covering prefix
+// itself. A covering prefix under a static or ignore policy is not split,
 // and the sub-range takes no policy of its own. A sub-range some source
 // also lists as a target is left to that target. cover maps each added
 // sub-range to its covering prefix. The caller's slices and maps are not

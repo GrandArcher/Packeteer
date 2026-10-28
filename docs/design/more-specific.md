@@ -150,8 +150,8 @@ longer route does. `synthesize` is that longer route, under these rails:
    would-be routes on `/api/decisions` and announce nothing. No shipped
    example turns it on.
 2. **Covering-prefix allowlist.** `synthesize.covering_prefixes` lists the
-   prefixes that may be split. Each entry must be inside
-   `allowlist.prefixes`.
+   containers a learned covering prefix C must sit inside; S is not a learned
+   prefix. Each entry must be inside `allowlist.prefixes`.
 3. **Only sub-ranges of a prefix a neighbor already advertises.** A
    sub-range S is eligible only while a configured neighbor advertises a
    covering prefix C exactly in the learned RIB view (the same `Exact`
@@ -172,8 +172,10 @@ longer route does. `synthesize` is that longer route, under these rails:
 7. **Measured on its own.** S is announced only from its own sub-range
    measurement (#121), under the same thresholds, confirmation, hold time,
    cooldown, and `max_improvements` as a performance move.
-8. **Withdrawn.** With its improvement; when C really leaves the RIB (the
-   `policy.NativePathConfirm` rule above); when S becomes reserved or leaves
+8. **Withdrawn.** With its improvement; as soon as C is missing from the RIB
+   (S never hides C from the router, so there is no
+   `policy.NativePathConfirm` window; if Packeteer steers C itself, C's own
+   rule decides); when S becomes reserved or leaves
    the allowlists; when the RIB is not ready, probe sources fail, or data
    goes stale; on SIGTERM (`WithdrawAll`); on SIGKILL or a crash (the
    session drops, graceful restart stays off); and on an HA standby, which

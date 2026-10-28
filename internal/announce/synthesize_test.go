@@ -249,10 +249,10 @@ func TestSynthesizeNeverOverlapsALearnedMoreSpecific(t *testing.T) {
 	}
 }
 
-// A synthesized route on the wire is not checked against the covering
-// prefix in the RIB: the decision engine retires it on a confirmed leave.
-// The leak-watch hold still withdraws it.
-func TestSynthesizeOnWireFollowsTheDecision(t *testing.T) {
+// A synthesized route on the wire is withdrawn the round its covering
+// prefix is missing from the RIB, before any confirm window. The leak-watch
+// hold also withdraws it.
+func TestSynthesizeOnWireWithdrawsWhenCoveringPrefixMissing(t *testing.T) {
 	ctx := context.Background()
 	ann := &fakeAnn{}
 	held := map[netip.Prefix]bool{}
@@ -267,14 +267,18 @@ func TestSynthesizeOnWireFollowsTheDecision(t *testing.T) {
 		t.Fatal(err)
 	}
 	c.rib = learned()
-	if err := c.Sync(ctx, imps); err != nil || ann.count() != 1 {
-		t.Fatalf("hidden covering prefix withdrew: err=%v routes=%d", err, ann.count())
-	}
-	if why := c.SynthesizeRefusal(pfx("198.51.100.0/25"), pfx("198.51.100.0/24"), "b"); why != "" {
+	if why := c.SynthesizeRefusal(pfx("198.51.100.0/25"), pfx("198.51.100.0/24"), "b"); !strings.Contains(why, "is not in the learned RIB") {
 		t.Fatalf("on-wire refusal = %q", why)
 	}
-	if why := c.SynthesizeRefusal(pfx("198.51.100.128/25"), pfx("198.51.100.0/24"), "b"); !strings.Contains(why, "is not in the learned RIB") {
-		t.Fatalf("new refusal = %q", why)
+	if err := c.Sync(ctx, imps); err == nil || !strings.Contains(err.Error(), "covering prefix 198.51.100.0/24 is not in the RIB") || ann.count() != 0 {
+		t.Fatalf("covering prefix left but the route stayed: err=%v routes=%d", err, ann.count())
+	}
+	c.rib = learned("198.51.100.0/24")
+	if err := c.Sync(ctx, imps); err != nil || ann.count() != 1 {
+		t.Fatalf("back: err=%v routes=%d", err, ann.count())
+	}
+	if why := c.SynthesizeRefusal(pfx("198.51.100.0/25"), pfx("198.51.100.0/24"), "b"); why != "" {
+		t.Fatalf("refusal = %q", why)
 	}
 	held[pfx("198.51.100.0/25")] = true
 	if err := c.Sync(ctx, imps); err != nil || ann.count() != 0 {
@@ -289,6 +293,31 @@ func TestSynthesizeOnWireFollowsTheDecision(t *testing.T) {
 	}
 	if err := c.Sync(ctx, []policy.Improvement{imp("198.51.100.0/25", "b")}); err == nil || ann.count() != 0 {
 		t.Fatalf("exact improvement kept a synthesized route: err=%v routes=%d", err, ann.count())
+	}
+}
+
+// A covering prefix Packeteer steers itself is hidden from Packeteer by the
+// router, which is not a leave: the sub-range stays until the decision
+// engine retires it.
+func TestSynthesizeKeepsOnWireWhileCoveringPrefixIsSteered(t *testing.T) {
+	ctx := context.Background()
+	ann := &fakeAnn{}
+	c, err := New(synCfg(10), ann, learned("198.51.100.0/24"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	imps := []policy.Improvement{imp("198.51.100.0/24", "b"), synImp("198.51.100.0/25", "198.51.100.0/24", "b")}
+	if err := c.Sync(ctx, imps); err != nil {
+		t.Fatal(err)
+	}
+	wantWire(t, ann, "198.51.100.0/24", "198.51.100.0/25")
+	c.rib = learned()
+	if err := c.Sync(ctx, imps); err != nil {
+		t.Fatal(err)
+	}
+	wantWire(t, ann, "198.51.100.0/24", "198.51.100.0/25")
+	if err := c.Sync(ctx, imps[1:]); err == nil || ann.count() != 0 {
+		t.Fatalf("sub-range stayed after the steered covering prefix went: err=%v routes=%d", err, ann.count())
 	}
 }
 

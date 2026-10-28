@@ -756,7 +756,7 @@ Synthesized more-specific injection (#122). Design and rails: [design/more-speci
 | Key | Default | Meaning |
 |---|---|---|
 | `enabled` | `false` | `true` turns synthesize on. Requires `leak_watch` enabled, `covering_prefixes`, and `marker_community`. |
-| `covering_prefixes` | none | Prefixes whose learned sub-prefixes may be split. Each must be inside `allowlist.prefixes`; anything else is rejected at load. No host bits, no default route, no duplicates. A covering prefix C must be inside one of them and advertised exactly by a neighbor. |
+| `covering_prefixes` | none | Containers for covering prefixes. Each must be inside `allowlist.prefixes`; anything else is rejected at load. No host bits, no default route, no duplicates. A covering prefix C that a neighbor advertises exactly must sit inside one of them; the sub-ranges split from C are not learned prefixes. |
 | `max_bits` | `1` | How far past C's length a sub-range may go. 1-8. |
 | `max_prefix_len` | `{v4: 24, v6: 48}` | Longest synthesized route per family. `v4` 1-32, `v6` 1-128. A /25 inside a /24 needs `v4: 25`. |
 | `marker_community` | none | Added to every synthesized route, after `packeteer_community` and the cause's and provider's communities, so the edge can accept exact-prefix routes and refuse synthesized ones ([routers.md](routers.md)). Required when enabled. Standard or large; not `packeteer_community`, not `0:x` or `65535:x`. |
@@ -771,7 +771,7 @@ A sub-range S of C is never announced when:
 
 Synthesized routes count toward `more_specific.max_routes` (100 when the `more_specific` block is absent), which then caps every outbound and inbound route on a router, `more_specific.enabled: false` included. A new one waits while the cap is full. Each carries the provider's next hop, the resolved `local_pref`, `packeteer_community`, the cause's and provider's communities, the marker, NO_EXPORT, and NO_ADVERTISE when chosen. With `bgp.as_path` set it carries C's path.
 
-A synthesized route is withdrawn with its decision (flip-back, TTL), when C really leaves the learned RIB (C was seen for 5s while S was on the wire, then stopped), when S stops being measured or a rail above fails, when the RIB is not ready (session loss), on SIGTERM, on an HA standby, and when the leak watch sees it outside the AS. A SIGKILL or crash drops the session and the router removes it; graceful restart stays off. While Packeteer steers C itself, the router stops sending C to Packeteer, which reads as C leaving, so S is withdrawn. The block is restart-only. Rollback: `synthesize.enabled: false` and restart.
+A synthesized route is withdrawn with its decision (flip-back, TTL), the round C is missing from the learned RIB (no 5s confirm window: S never hides C from the router), when S stops being measured or a rail above fails, when the RIB is not ready (session loss), on SIGTERM, on an HA standby, and when the leak watch sees it outside the AS. A SIGKILL or crash drops the session and the router removes it; graceful restart stays off. While Packeteer steers C itself, the router stops sending C to Packeteer, so C missing is not read as a leave; S then goes with C's own decision (retire, TTL, or the same leave rule). The block is restart-only. Rollback: `synthesize.enabled: false` and restart.
 
 ### `rpki`
 

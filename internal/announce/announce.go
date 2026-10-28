@@ -612,8 +612,12 @@ func (c *Controller) syncImprovementLocked(ctx context.Context, im policy.Improv
 			}
 			return errors.Join(err, fmt.Errorf("announce: %s is not synthesized inside %s: %s", p, im.Covering, why))
 		}
-		if !on && !c.rib.Contains(im.Covering) {
-			return fmt.Errorf("announce: %s is not synthesized: covering prefix %s is not in the RIB", p, im.Covering)
+		if c.coverMissing(im.Covering, on) {
+			var err error
+			if on {
+				err = c.withdrawLocked(ctx, p)
+			}
+			return errors.Join(err, fmt.Errorf("announce: %s is not synthesized: covering prefix %s is not in the RIB", p, im.Covering))
 		}
 	} else if !on && !c.rib.Contains(p) {
 		return fmt.Errorf("announce: %s is not in the RIB", p)
@@ -644,6 +648,20 @@ func (c *Controller) syncImprovementLocked(ctx context.Context, im policy.Improv
 		}
 	}
 	return c.announceLocked(ctx, im)
+}
+
+// coverMissing reports that the covering prefix of a synthesized sub-range
+// is not in the learned RIB, so the sub-range is not announced or, when on
+// is set because it is on the wire, is withdrawn. The exception is a
+// covering prefix Packeteer steers itself: the router then stops sending it
+// to Packeteer, and the decision engine ends the sub-range with it. Caller
+// holds mu.
+func (c *Controller) coverMissing(cover netip.Prefix, on bool) bool {
+	if c.rib.Contains(cover) {
+		return false
+	}
+	_, steered := c.active[cover]
+	return !(on && steered)
 }
 
 // synthRefusal is why the sub-range sub may not be synthesized inside
@@ -731,8 +749,7 @@ func (c *Controller) Synthesizable(results []probe.Result) map[netip.Prefix]neti
 
 // SynthesizeRefusal is why Sync would not put the synthesized sub-range
 // sub inside cover on the wire toward provider now, or "", for the
-// blast-radius preview. A route already on the wire is not checked
-// against the RIB, as Sync does not.
+// blast-radius preview.
 func (c *Controller) SynthesizeRefusal(sub, cover netip.Prefix, provider string) string {
 	if c == nil {
 		return "synthesize is off"
@@ -745,7 +762,7 @@ func (c *Controller) SynthesizeRefusal(sub, cover netip.Prefix, provider string)
 	if why := c.synthRefusal(sub, cover, provider); why != "" {
 		return why
 	}
-	if s, on := c.active[sub]; !(on && s.cover == cover) && !c.rib.Contains(cover) {
+	if _, on := c.active[sub]; c.coverMissing(cover, on) {
 		return "covering prefix " + cover.String() + " is not in the learned RIB"
 	}
 	return ""

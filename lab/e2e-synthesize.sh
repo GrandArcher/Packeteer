@@ -15,8 +15,9 @@
 #     64512:666, the marker 64512:667, and no-export; the /24 is not;
 #     /api/decisions lists it with its covering prefix;
 #  2. traffic to 203.0.113.0/24 starts: 203.0.113.0/25 waits at the cap;
-#  3. "no network 198.51.100.0/24" on the edge: after the confirm window
-#     the synthesized /25 is withdrawn, and the waiting one takes the room;
+#  3. "no network 198.51.100.0/24" on the edge: the synthesized /25 is
+#     withdrawn the round the /24 is missing, and the waiting one takes
+#     the room;
 #  4. SIGTERM withdraws every route; a restart announces the same one;
 #  5. SIGKILL: every route drops with the session within the hold timer.
 set -euo pipefail
@@ -201,15 +202,14 @@ fi
 echo "2. the second synthesized /25 waits at the route cap"
 set_rates "198.51.100.10 udp 1" "198.51.100.200 udp 1" "203.0.113.10 udp 1" "203.0.113.200 udp 1"
 need_log 'max_routes \(1\) reached: 203.0.113.0/25 needs 1 routes, 1 in use' "second synthesized route was not held at the cap"
-# Longer than policy.NativePathConfirm (5s) and the 2s probe interval, so
-# the covering prefix's leave below is a confirmed one.
-stay_set 12 198.51.100.0/25
+# Short: there is no confirm window to wait out.
+stay_set 2 198.51.100.0/25
 
-echo "3. the covering prefix leaves the RIB: withdrawn, and the waiting one fits"
+echo "3. the covering prefix leaves the RIB at once: withdrawn, and the waiting one fits"
 edge -c 'configure terminal' -c 'router bgp 64512' -c 'address-family ipv4 unicast' -c 'no network 198.51.100.0/24' -c 'end'
 want_set 203.0.113.0/25
 tagged 203.0.113.0/25
-need_log 'improvement retired.*prefix=198.51.100.0/25.*reason="prefix no longer in RIB"' "covering leave not logged"
+need_log 'improvement retired.*prefix=198.51.100.0/25.*reason="covering prefix no longer in RIB"' "covering leave not logged"
 stay_set 8 203.0.113.0/25
 
 echo "4. SIGTERM withdraws every route"
