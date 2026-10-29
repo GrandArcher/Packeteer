@@ -265,6 +265,6 @@ Keys are in [CONFIG.md](CONFIG.md#notifier-prober-or-source-grpc). Like `exec`, 
 | `Targets` | `{}` | `{"targets":[{"prefix","host","weight"}]}` as for `exec` |
 | `Notify` | an event: `{"time","kind","severity","message","fields"}` | `{}` |
 
-A call that returns an error status fails with `plugin error: <message>`. A plugin refuses an `Init` for a kind it does not implement, and for any kind beyond the three.
+A call that returns an error status fails with `plugin error: <message>`. A plugin must not return the gRPC code `Unavailable` for its own errors: Packeteer reads it as a dead process and restarts the plugin. A plugin refuses an `Init` for a kind it does not implement, and for any kind beyond the three.
 
 **Writing one in Go.** Implement `rpc.Plugin` (`Init`, which should decode `config` with `req.DecodeConfig` so unknown fields are errors) plus `rpc.Prober`, `rpc.Source`, or `rpc.Notifier` from [pkg/plugin/rpc](../pkg/plugin/rpc), and call `rpc.Serve` from `main`. Build it static (`CGO_ENABLED=0`) so it runs in the stock alpine image. A plugin that cannot bind to `req.Source` or tag packets as asked must return an error, not a 100% loss result. [examples/plugins/grpc-example](../examples/plugins/grpc-example/main.go) is one binary that runs as all three kinds.

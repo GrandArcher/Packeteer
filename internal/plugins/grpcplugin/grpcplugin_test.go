@@ -318,7 +318,8 @@ func TestCrashRestart(t *testing.T) {
 	}
 }
 
-// A process that dies with no call in flight is found by the health check.
+// A process that dies with no call in flight is found by the health loop:
+// nothing calls the plugin until a new process has taken over.
 func TestHealthCheckRestart(t *testing.T) {
 	dir := t.TempDir()
 	marker, pidfile := filepath.Join(dir, "died"), filepath.Join(dir, "pid")
@@ -330,13 +331,17 @@ func TestHealthCheckRestart(t *testing.T) {
 	start(t, p)
 	first := readPID(t, pidfile)
 	until(t, "a new process after the first one died", func() bool {
-		pid := readPID(t, pidfile)
-		_, err := p.Probe(context.Background(), probeReq())
-		return pid != first && err == nil
+		b, err := os.ReadFile(pidfile) // may be mid-write
+		pid, aerr := strconv.Atoi(string(b))
+		return err == nil && aerr == nil && pid != first
 	})
 	if alive(first) {
 		t.Fatalf("the dead plugin process %d was not reaped", first)
 	}
+	until(t, "the new process to answer", func() bool {
+		_, err := p.Probe(context.Background(), probeReq())
+		return err == nil
+	})
 }
 
 func TestRetryDelayDoublesToACap(t *testing.T) {
