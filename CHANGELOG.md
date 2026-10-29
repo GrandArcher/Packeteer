@@ -6,6 +6,7 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 
 ### Added
 
+- Opt-in read-only SNMP agent (`snmpagent` exporter, v2c and v3) with a published MIB, SNMP informs, and a `syslog` (RFC 5424) notifier; lab-checked with snmpwalk and snmptrapd (#212).
 - Plugin author guide (`docs/PLUGIN_AUTHORING.md`), tested exec and Go skeletons in `examples/plugins`, and a community plugin list checked by a test (#288).
 - `grpc` plugin type: long-running prober, source, and notifier programs over gRPC (go-plugin) with health checks, restart with backoff, and a clean stop; never an announcer; example plugin (#286).
 - `influxdb` exporter, OTLP logs and metrics, and an opt-in `metrics` export stream of the `/metrics` series every 30 s; tested against InfluxDB 2 and an OTel collector (#287).

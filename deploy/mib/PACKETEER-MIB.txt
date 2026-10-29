@@ -1,0 +1,1070 @@
+-- Packeteer MIB. Read-only status of a Packeteer controller and the SNMP
+-- notifications it sends for its events.
+--
+-- The agent is the snmpagent exporter and the notifications come from the
+-- snmptrap notifier (docs/monitoring.md). Both place this module under
+-- the enterprise_oid they are configured with. The default is the
+-- NET-SNMP experimental arc below; Packeteer has no enterprise number of its
+-- own, so for production change the one assignment of "packeteer" to an arc
+-- you own and set enterprise_oid to match.
+
+PACKETEER-MIB DEFINITIONS ::= BEGIN
+
+IMPORTS
+    MODULE-IDENTITY, OBJECT-TYPE, NOTIFICATION-TYPE, Gauge32, Integer32,
+    enterprises
+        FROM SNMPv2-SMI
+    DisplayString, TruthValue
+        FROM SNMPv2-TC
+    MODULE-COMPLIANCE, OBJECT-GROUP, NOTIFICATION-GROUP
+        FROM SNMPv2-CONF;
+
+packeteer MODULE-IDENTITY
+    LAST-UPDATED "202610290000Z"
+    ORGANIZATION "Packeteer project"
+    CONTACT-INFO
+        "https://github.com/GrandArcher/Packeteer"
+    DESCRIPTION
+        "Status and notifications of a Packeteer BGP performance
+         controller. Nothing in this module is writable."
+    REVISION "202610290000Z"
+    DESCRIPTION
+        "First version."
+    ::= { enterprises 8072 9999 9999 7717 }
+
+pktrNotifications OBJECT IDENTIFIER ::= { packeteer 0 }
+pktrEvent         OBJECT IDENTIFIER ::= { packeteer 1 }
+pktrStatus        OBJECT IDENTIFIER ::= { packeteer 2 }
+pktrConformance   OBJECT IDENTIFIER ::= { packeteer 4 }
+
+-- Objects carried by every notification.
+
+pktrEventKind OBJECT-TYPE
+    SYNTAX      DisplayString (SIZE (0..1024))
+    MAX-ACCESS  accessible-for-notify
+    STATUS      current
+    DESCRIPTION
+        "The event kind, for example provider.down."
+    ::= { pktrEvent 1 }
+
+pktrEventSeverity OBJECT-TYPE
+    SYNTAX      DisplayString (SIZE (0..1024))
+    MAX-ACCESS  accessible-for-notify
+    STATUS      current
+    DESCRIPTION
+        "info, warning, or critical."
+    ::= { pktrEvent 2 }
+
+pktrEventMessage OBJECT-TYPE
+    SYNTAX      DisplayString (SIZE (0..1024))
+    MAX-ACCESS  accessible-for-notify
+    STATUS      current
+    DESCRIPTION
+        "A one-line description of what happened."
+    ::= { pktrEvent 3 }
+
+pktrEventTime OBJECT-TYPE
+    SYNTAX      DisplayString (SIZE (0..1024))
+    MAX-ACCESS  accessible-for-notify
+    STATUS      current
+    DESCRIPTION
+        "When it happened, in UTC, as RFC 3339 text."
+    ::= { pktrEvent 4 }
+
+pktrEventFields OBJECT-TYPE
+    SYNTAX      DisplayString (SIZE (0..1024))
+    MAX-ACCESS  accessible-for-notify
+    STATUS      current
+    DESCRIPTION
+        "The event's fields as sorted key=value pairs separated by
+         semicolons, for example provider=transit-a."
+    ::= { pktrEvent 5 }
+
+pktrEventDedupKey OBJECT-TYPE
+    SYNTAX      DisplayString (SIZE (0..1024))
+    MAX-ACCESS  accessible-for-notify
+    STATUS      current
+    DESCRIPTION
+        "Names one incident. A problem and the event that resolves it carry
+         the same key, so an NMS can close the alert it opened."
+    ::= { pktrEvent 6 }
+
+-- Status. The agent serves the newest 30-second metrics snapshot.
+
+pktrVersion OBJECT-TYPE
+    SYNTAX      DisplayString (SIZE (0..255))
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "The Packeteer version."
+    ::= { pktrStatus 1 }
+
+pktrMode OBJECT-TYPE
+    SYNTAX      DisplayString (SIZE (0..32))
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "The controller mode: observe, suggest, or inject."
+    ::= { pktrStatus 2 }
+
+pktrReady OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "True once the controller is ready: started and, when BGP is
+         configured, its RIB view is ready."
+    ::= { pktrStatus 3 }
+
+pktrHaRole OBJECT-TYPE
+    SYNTAX      INTEGER { standalone(1), active(2), standby(3) }
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "The role in an HA pair. Only the active instance may announce.
+         standalone when HA is not configured."
+    ::= { pktrStatus 4 }
+
+pktrImprovementsActive OBJECT-TYPE
+    SYNTAX      Gauge32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Active improvements. In observe and suggest these are
+         recommendations, and nothing is announced."
+    ::= { pktrStatus 5 }
+
+pktrRibPrefixes OBJECT-TYPE
+    SYNTAX      Gauge32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Prefixes in the learned RIB view. Absent when BGP is not
+         configured."
+    ::= { pktrStatus 6 }
+
+pktrProbeRate OBJECT-TYPE
+    SYNTAX      Gauge32
+    UNITS       "probe results per minute"
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Prefix measurements the probe engine stored per minute between the
+         last two snapshots. Absent until there are two."
+    ::= { pktrStatus 7 }
+
+pktrDataAge OBJECT-TYPE
+    SYNTAX      Gauge32
+    UNITS       "seconds"
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Seconds since the snapshot every other object here was taken. A
+         value above 90 means the controller stopped sending snapshots."
+    ::= { pktrStatus 8 }
+
+-- Providers. A row is one configured provider. Rows are numbered by
+-- sorted provider name, so an index changes when a provider is added or
+-- removed. Read pktrProviderName to find a provider.
+
+pktrProviderTable OBJECT-TYPE
+    SYNTAX      SEQUENCE OF PktrProviderEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION
+        "The configured providers."
+    ::= { packeteer 3 }
+
+pktrProviderEntry OBJECT-TYPE
+    SYNTAX      PktrProviderEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION
+        "One provider."
+    INDEX       { pktrProviderIndex }
+    ::= { pktrProviderTable 1 }
+
+PktrProviderEntry ::= SEQUENCE {
+    pktrProviderIndex         Integer32,
+    pktrProviderName          DisplayString,
+    pktrProviderProbeUp            TruthValue,
+    pktrProviderLossPermille  Gauge32,
+    pktrProviderRttMicros     Gauge32,
+    pktrProviderJitterMicros  Gauge32,
+    pktrProviderTelemetryUp   TruthValue,
+    pktrProviderInKbps        Gauge32,
+    pktrProviderOutKbps       Gauge32,
+    pktrProviderIn95Kbps      Gauge32,
+    pktrProviderOut95Kbps     Gauge32,
+    pktrProviderUsageKbps     Gauge32,
+    pktrProviderCommitKbps    Gauge32
+}
+
+pktrProviderIndex OBJECT-TYPE
+    SYNTAX      Integer32 (1..2147483647)
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION
+        "Position of the provider in the sorted list of names."
+    ::= { pktrProviderEntry 1 }
+
+pktrProviderName OBJECT-TYPE
+    SYNTAX      DisplayString (SIZE (0..255))
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "The provider name from the Packeteer config."
+    ::= { pktrProviderEntry 2 }
+
+pktrProviderProbeUp OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "True while the provider's probe source is up."
+    ::= { pktrProviderEntry 3 }
+
+pktrProviderLossPermille OBJECT-TYPE
+    SYNTAX      Gauge32 (0..1000)
+    UNITS       "tenths of a percent"
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Packet loss through the provider: the mean over the destinations
+         last probed. Absent while no probe has returned."
+    ::= { pktrProviderEntry 4 }
+
+pktrProviderRttMicros OBJECT-TYPE
+    SYNTAX      Gauge32
+    UNITS       "microseconds"
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Round-trip time through the provider: the mean over the
+         destinations last probed. Absent while no probe has returned."
+    ::= { pktrProviderEntry 5 }
+
+pktrProviderJitterMicros OBJECT-TYPE
+    SYNTAX      Gauge32
+    UNITS       "microseconds"
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Jitter through the provider: the mean over the destinations last
+         probed. Absent while no probe has returned."
+    ::= { pktrProviderEntry 6 }
+
+pktrProviderTelemetryUp OBJECT-TYPE
+    SYNTAX      TruthValue
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "True when the last SNMP poll of the provider's interface worked.
+         Absent when the provider has no telemetry binding. With several
+         bindings the columns below are those of the first by interface
+         name. The rate columns are absent while this is false."
+    ::= { pktrProviderEntry 7 }
+
+pktrProviderInKbps OBJECT-TYPE
+    SYNTAX      Gauge32
+    UNITS       "kilobits per second"
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Latest inbound interface rate. Rates above 4294967295 are
+         reported as that value."
+    ::= { pktrProviderEntry 8 }
+
+pktrProviderOutKbps OBJECT-TYPE
+    SYNTAX      Gauge32
+    UNITS       "kilobits per second"
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Latest outbound interface rate."
+    ::= { pktrProviderEntry 9 }
+
+pktrProviderIn95Kbps OBJECT-TYPE
+    SYNTAX      Gauge32
+    UNITS       "kilobits per second"
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "95th percentile inbound rate of the open billing period."
+    ::= { pktrProviderEntry 10 }
+
+pktrProviderOut95Kbps OBJECT-TYPE
+    SYNTAX      Gauge32
+    UNITS       "kilobits per second"
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "95th percentile outbound rate of the open billing period."
+    ::= { pktrProviderEntry 11 }
+
+pktrProviderUsageKbps OBJECT-TYPE
+    SYNTAX      Gauge32
+    UNITS       "kilobits per second"
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "The billable 95th percentile, for the percentile modes that give
+         one figure. Absent for the separate mode."
+    ::= { pktrProviderEntry 12 }
+
+pktrProviderCommitKbps OBJECT-TYPE
+    SYNTAX      Gauge32
+    UNITS       "kilobits per second"
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "The configured commit. Absent when the provider has none."
+    ::= { pktrProviderEntry 13 }
+
+-- Notifications. The number is the event's trap_id; docs/EVENTS.md lists
+-- them. A number is never reused.
+
+pktrControllerStarted NOTIFICATION-TYPE
+    OBJECTS { pktrEventKind, pktrEventSeverity, pktrEventMessage,
+              pktrEventTime, pktrEventFields, pktrEventDedupKey }
+    STATUS current
+    DESCRIPTION
+        "Event controller.started. The controller started and its plugins are
+         running."
+    ::= { pktrNotifications 1 }
+
+pktrControllerStopping NOTIFICATION-TYPE
+    OBJECTS { pktrEventKind, pktrEventSeverity, pktrEventMessage,
+              pktrEventTime, pktrEventFields, pktrEventDedupKey }
+    STATUS current
+    DESCRIPTION
+        "Event controller.stopping. The controller is shutting down and has
+         withdrawn its routes."
+    ::= { pktrNotifications 2 }
+
+pktrImprovementAdded NOTIFICATION-TYPE
+    OBJECTS { pktrEventKind, pktrEventSeverity, pktrEventMessage,
+              pktrEventTime, pktrEventFields, pktrEventDedupKey }
+    STATUS current
+    DESCRIPTION
+        "Event improvement.added. A prefix was steered to a better provider
+         (announced in inject; in observe and suggest a recommendation that
+         is logged only)."
+    ::= { pktrNotifications 3 }
+
+pktrImprovementSwitched NOTIFICATION-TYPE
+    OBJECTS { pktrEventKind, pktrEventSeverity, pktrEventMessage,
+              pktrEventTime, pktrEventFields, pktrEventDedupKey }
+    STATUS current
+    DESCRIPTION
+        "Event improvement.switched. An existing improvement moved to another
+         provider."
+    ::= { pktrNotifications 4 }
+
+pktrImprovementRemoved NOTIFICATION-TYPE
+    OBJECTS { pktrEventKind, pktrEventSeverity, pktrEventMessage,
+              pktrEventTime, pktrEventFields, pktrEventDedupKey }
+    STATUS current
+    DESCRIPTION
+        "Event improvement.removed. An improvement was retired: native path
+         recovered, stale data, RIB loss, policy, maintenance, or TTL."
+    ::= { pktrNotifications 5 }
+
+pktrProviderDown NOTIFICATION-TYPE
+    OBJECTS { pktrEventKind, pktrEventSeverity, pktrEventMessage,
+              pktrEventTime, pktrEventFields, pktrEventDedupKey }
+    STATUS current
+    DESCRIPTION
+        "Event provider.down. A provider is down: its probe source failed,
+         every probe through it got no reply, or its mean loss is at or above
+         probe.down_loss_pct."
+    ::= { pktrNotifications 6 }
+
+pktrProviderUp NOTIFICATION-TYPE
+    OBJECTS { pktrEventKind, pktrEventSeverity, pktrEventMessage,
+              pktrEventTime, pktrEventFields, pktrEventDedupKey }
+    STATUS current
+    DESCRIPTION
+        "Event provider.up. A provider is healthy again. Resolves
+         provider.down and provider.degraded."
+    ::= { pktrNotifications 7 }
+
+pktrBgpSessionDown NOTIFICATION-TYPE
+    OBJECTS { pktrEventKind, pktrEventSeverity, pktrEventMessage,
+              pktrEventTime, pktrEventFields, pktrEventDedupKey }
+    STATUS current
+    DESCRIPTION
+        "Event bgp.session_down. An established iBGP session to an edge
+         router went down."
+    ::= { pktrNotifications 8 }
+
+pktrBgpSessionUp NOTIFICATION-TYPE
+    OBJECTS { pktrEventKind, pktrEventSeverity, pktrEventMessage,
+              pktrEventTime, pktrEventFields, pktrEventDedupKey }
+    STATUS current
+    DESCRIPTION
+        "Event bgp.session_up. An iBGP session to an edge router reached
+         Established. Resolves bgp.session_down and
+         bgp.session_not_established."
+    ::= { pktrNotifications 9 }
+
+pktrCommitExceeded NOTIFICATION-TYPE
+    OBJECTS { pktrEventKind, pktrEventSeverity, pktrEventMessage,
+              pktrEventTime, pktrEventFields, pktrEventDedupKey }
+    STATUS current
+    DESCRIPTION
+        "Event commit.exceeded. A provider's billable 95th percentile for the
+         open period is above its commit."
+    ::= { pktrNotifications 10 }
+
+pktrCommitCleared NOTIFICATION-TYPE
+    OBJECTS { pktrEventKind, pktrEventSeverity, pktrEventMessage,
+              pktrEventTime, pktrEventFields, pktrEventDedupKey }
+    STATUS current
+    DESCRIPTION
+        "Event commit.cleared. A provider's billable 95th percentile is back
+         at or below its commit."
+    ::= { pktrNotifications 11 }
+
+pktrAnnounceFailed NOTIFICATION-TYPE
+    OBJECTS { pktrEventKind, pktrEventSeverity, pktrEventMessage,
+              pktrEventTime, pktrEventFields, pktrEventDedupKey }
+    STATUS current
+    DESCRIPTION
+        "Event announce.failed. Syncing improvements to the announcer failed."
+    ::= { pktrNotifications 12 }
+
+pktrAnnounceRecovered NOTIFICATION-TYPE
+    OBJECTS { pktrEventKind, pktrEventSeverity, pktrEventMessage,
+              pktrEventTime, pktrEventFields, pktrEventDedupKey }
+    STATUS current
+    DESCRIPTION
+        "Event announce.recovered. Syncing improvements to the announcer
+         succeeded after a failure."
+    ::= { pktrNotifications 13 }
+
+pktrOutageAs NOTIFICATION-TYPE
+    OBJECTS { pktrEventKind, pktrEventSeverity, pktrEventMessage,
+              pktrEventTime, pktrEventFields, pktrEventDedupKey }
+    STATUS current
+    DESCRIPTION
+        "Event outage.as. The outage source found several prefixes degraded
+         behind one ASN on every provider."
+    ::= { pktrNotifications 14 }
+
+pktrOutageCircuit NOTIFICATION-TYPE
+    OBJECTS { pktrEventKind, pktrEventSeverity, pktrEventMessage,
+              pktrEventTime, pktrEventFields, pktrEventDedupKey }
+    STATUS current
+    DESCRIPTION
+        "Event outage.circuit. The outage source found several prefixes
+         degraded on one provider only."
+    ::= { pktrNotifications 15 }
+
+pktrOutageCleared NOTIFICATION-TYPE
+    OBJECTS { pktrEventKind, pktrEventSeverity, pktrEventMessage,
+              pktrEventTime, pktrEventFields, pktrEventDedupKey }
+    STATUS current
+    DESCRIPTION
+        "Event outage.cleared. An AS or circuit incident recovered."
+    ::= { pktrNotifications 16 }
+
+pktrNotifierTest NOTIFICATION-TYPE
+    OBJECTS { pktrEventKind, pktrEventSeverity, pktrEventMessage,
+              pktrEventTime, pktrEventFields, pktrEventDedupKey }
+    STATUS current
+    DESCRIPTION
+        "Event notifier.test. A test event, sent only by -notify-test."
+    ::= { pktrNotifications 17 }
+
+pktrInboundSteered NOTIFICATION-TYPE
+    OBJECTS { pktrEventKind, pktrEventSeverity, pktrEventMessage,
+              pktrEventTime, pktrEventFields, pktrEventDedupKey }
+    STATUS current
+    DESCRIPTION
+        "Event inbound.steered. Inbound commit control is steering inbound
+         traffic away from a provider (announced in inject, suggested only in
+         observe and suggest)."
+    ::= { pktrNotifications 18 }
+
+pktrInboundReleased NOTIFICATION-TYPE
+    OBJECTS { pktrEventKind, pktrEventSeverity, pktrEventMessage,
+              pktrEventTime, pktrEventFields, pktrEventDedupKey }
+    STATUS current
+    DESCRIPTION
+        "Event inbound.released. An inbound steer was released: back under
+         commit, stale telemetry, or TTL."
+    ::= { pktrNotifications 19 }
+
+pktrMitigationAdded NOTIFICATION-TYPE
+    OBJECTS { pktrEventKind, pktrEventSeverity, pktrEventMessage,
+              pktrEventTime, pktrEventFields, pktrEventDedupKey }
+    STATUS current
+    DESCRIPTION
+        "Event mitigation.added. A threat mitigation rule (RTBH, redirect, or
+         FlowSpec) was added or replaced (a dry run in observe)."
+    ::= { pktrNotifications 20 }
+
+pktrMitigationAnnounced NOTIFICATION-TYPE
+    OBJECTS { pktrEventKind, pktrEventSeverity, pktrEventMessage,
+              pktrEventTime, pktrEventFields, pktrEventDedupKey }
+    STATUS current
+    DESCRIPTION
+        "Event mitigation.announced. Every route of a threat mitigation rule
+         is on the wire."
+    ::= { pktrNotifications 21 }
+
+pktrMitigationWithdrawn NOTIFICATION-TYPE
+    OBJECTS { pktrEventKind, pktrEventSeverity, pktrEventMessage,
+              pktrEventTime, pktrEventFields, pktrEventDedupKey }
+    STATUS current
+    DESCRIPTION
+        "Event mitigation.withdrawn. A threat mitigation rule's routes were
+         withdrawn while the rule is still held (RIB loss, shutdown, announce
+         failure)."
+    ::= { pktrNotifications 22 }
+
+pktrMitigationEnded NOTIFICATION-TYPE
+    OBJECTS { pktrEventKind, pktrEventSeverity, pktrEventMessage,
+              pktrEventTime, pktrEventFields, pktrEventDedupKey }
+    STATUS current
+    DESCRIPTION
+        "Event mitigation.ended. A threat mitigation rule ended: expired,
+         removed, or replaced. Its routes are withdrawn."
+    ::= { pktrNotifications 23 }
+
+pktrHaStandby NOTIFICATION-TYPE
+    OBJECTS { pktrEventKind, pktrEventSeverity, pktrEventMessage,
+              pktrEventTime, pktrEventFields, pktrEventDedupKey }
+    STATUS current
+    DESCRIPTION
+        "Event ha.standby. This instance stopped being the active one of its
+         HA pair and withdrew its routes (lease lost or not renewed, RIB not
+         ready, or shutdown)."
+    ::= { pktrNotifications 24 }
+
+pktrHaActive NOTIFICATION-TYPE
+    OBJECTS { pktrEventKind, pktrEventSeverity, pktrEventMessage,
+              pktrEventTime, pktrEventFields, pktrEventDedupKey }
+    STATUS current
+    DESCRIPTION
+        "Event ha.active. This instance became the active one of its HA pair
+         and may announce."
+    ::= { pktrNotifications 25 }
+
+pktrAuditRecorded NOTIFICATION-TYPE
+    OBJECTS { pktrEventKind, pktrEventSeverity, pktrEventMessage,
+              pktrEventTime, pktrEventFields, pktrEventDedupKey }
+    STATUS current
+    DESCRIPTION
+        "Event audit.recorded. An audit log record: a change, denied change,
+         or sign-in on the ops API, or a config reload."
+    ::= { pktrNotifications 26 }
+
+pktrAnomalyDetected NOTIFICATION-TYPE
+    OBJECTS { pktrEventKind, pktrEventSeverity, pktrEventMessage,
+              pktrEventTime, pktrEventFields, pktrEventDedupKey }
+    STATUS current
+    DESCRIPTION
+        "Event anomaly.detected. Traffic toward a prefix and protocol is far
+         above its learned baseline (a possible DDoS)."
+    ::= { pktrNotifications 27 }
+
+pktrAnomalyMitigated NOTIFICATION-TYPE
+    OBJECTS { pktrEventKind, pktrEventSeverity, pktrEventMessage,
+              pktrEventTime, pktrEventFields, pktrEventDedupKey }
+    STATUS current
+    DESCRIPTION
+        "Event anomaly.mitigated. An anomaly rule matched and the detector
+         added a mitigation rule (a dry run when mitigation.mode is observe)."
+    ::= { pktrNotifications 28 }
+
+pktrAnomalyHeld NOTIFICATION-TYPE
+    OBJECTS { pktrEventKind, pktrEventSeverity, pktrEventMessage,
+              pktrEventTime, pktrEventFields, pktrEventDedupKey }
+    STATUS current
+    DESCRIPTION
+        "Event anomaly.held. An anomaly rule matched but no mitigation rule
+         was added, or it ended early: not an exact learned prefix, HA
+         standby, max_active, max_actions_per_hour, max_rules, or refused."
+    ::= { pktrNotifications 29 }
+
+pktrAnomalyCleared NOTIFICATION-TYPE
+    OBJECTS { pktrEventKind, pktrEventSeverity, pktrEventMessage,
+              pktrEventTime, pktrEventFields, pktrEventDedupKey }
+    STATUS current
+    DESCRIPTION
+        "Event anomaly.cleared. An anomaly ended (traffic back within its
+         baseline, or flow data unavailable); the mitigation rule it added is
+         removed."
+    ::= { pktrNotifications 30 }
+
+pktrLeakDetected NOTIFICATION-TYPE
+    OBJECTS { pktrEventKind, pktrEventSeverity, pktrEventMessage,
+              pktrEventTime, pktrEventFields, pktrEventDedupKey }
+    STATUS current
+    DESCRIPTION
+        "Event leak.detected. A route carrying packeteer_community, or an
+         injected prefix with the local ASN in its path, was seen outside the
+         AS. The route is withdrawn and held out until an operator clears it."
+    ::= { pktrNotifications 31 }
+
+pktrLeakCleared NOTIFICATION-TYPE
+    OBJECTS { pktrEventKind, pktrEventSeverity, pktrEventMessage,
+              pktrEventTime, pktrEventFields, pktrEventDedupKey }
+    STATUS current
+    DESCRIPTION
+        "Event leak.cleared. An operator cleared the hold on a leaked prefix;
+         it may be announced again."
+    ::= { pktrNotifications 32 }
+
+pktrFlapQuarantined NOTIFICATION-TYPE
+    OBJECTS { pktrEventKind, pktrEventSeverity, pktrEventMessage,
+              pktrEventTime, pktrEventFields, pktrEventDedupKey }
+    STATUS current
+    DESCRIPTION
+        "Event flap.quarantined. A prefix changed its chosen provider too
+         often. Its route is withdrawn and it stays on the native path until
+         the cool-down ends or an operator releases it."
+    ::= { pktrNotifications 33 }
+
+pktrFlapReleased NOTIFICATION-TYPE
+    OBJECTS { pktrEventKind, pktrEventSeverity, pktrEventMessage,
+              pktrEventTime, pktrEventFields, pktrEventDedupKey }
+    STATUS current
+    DESCRIPTION
+        "Event flap.released. A flap quarantine ended: the cool-down elapsed,
+         an operator released the prefix, or the feature was turned off."
+    ::= { pktrNotifications 34 }
+
+pktrExchangeDegraded NOTIFICATION-TYPE
+    OBJECTS { pktrEventKind, pktrEventSeverity, pktrEventMessage,
+              pktrEventTime, pktrEventFields, pktrEventDedupKey }
+    STATUS current
+    DESCRIPTION
+        "Event exchange.degraded. Enough peers on one exchange fail their
+         next-hop probe inside the window to point at the exchange or our
+         port, not one member. Measurement only."
+    ::= { pktrNotifications 35 }
+
+pktrExchangeRecovered NOTIFICATION-TYPE
+    OBJECTS { pktrEventKind, pktrEventSeverity, pktrEventMessage,
+              pktrEventTime, pktrEventFields, pktrEventDedupKey }
+    STATUS current
+    DESCRIPTION
+        "Event exchange.recovered. Too few peers on the exchange are degraded
+         for the alert to hold."
+    ::= { pktrNotifications 36 }
+
+pktrExchangePeerDown NOTIFICATION-TYPE
+    OBJECTS { pktrEventKind, pktrEventSeverity, pktrEventMessage,
+              pktrEventTime, pktrEventFields, pktrEventDedupKey }
+    STATUS current
+    DESCRIPTION
+        "Event exchange.peer_down. A monitored router reported an exchange
+         peer's BGP session down; the reason is decoded from BMP (including
+         Cease subcode 1, maximum prefixes)."
+    ::= { pktrNotifications 37 }
+
+pktrExchangePeerUp NOTIFICATION-TYPE
+    OBJECTS { pktrEventKind, pktrEventSeverity, pktrEventMessage,
+              pktrEventTime, pktrEventFields, pktrEventDedupKey }
+    STATUS current
+    DESCRIPTION
+        "Event exchange.peer_up. A monitored router reported the exchange
+         peer's BGP session up."
+    ::= { pktrNotifications 38 }
+
+pktrExchangeMaxPrefix NOTIFICATION-TYPE
+    OBJECTS { pktrEventKind, pktrEventSeverity, pktrEventMessage,
+              pktrEventTime, pktrEventFields, pktrEventDedupKey }
+    STATUS current
+    DESCRIPTION
+        "Event exchange.max_prefix. An exchange peer's Adj-RIB-In reached the
+         configured share of its max_prefix
+         (exchanges[].max_prefix_warn_pct)."
+    ::= { pktrNotifications 39 }
+
+pktrExchangeMaxPrefixCleared NOTIFICATION-TYPE
+    OBJECTS { pktrEventKind, pktrEventSeverity, pktrEventMessage,
+              pktrEventTime, pktrEventFields, pktrEventDedupKey }
+    STATUS current
+    DESCRIPTION
+        "Event exchange.max_prefix_cleared. The exchange peer's Adj-RIB-In
+         fell back below the max-prefix warning share."
+    ::= { pktrNotifications 40 }
+
+pktrIxpApiKeyExpiring NOTIFICATION-TYPE
+    OBJECTS { pktrEventKind, pktrEventSeverity, pktrEventMessage,
+              pktrEventTime, pktrEventFields, pktrEventDedupKey }
+    STATUS current
+    DESCRIPTION
+        "Event ixp.api_key_expiring. The IXP Manager API key expires within
+         14 days, or has already expired. The field identifier is the key id;
+         the secret is not included."
+    ::= { pktrNotifications 41 }
+
+pktrIxpApiKeyOk NOTIFICATION-TYPE
+    OBJECTS { pktrEventKind, pktrEventSeverity, pktrEventMessage,
+              pktrEventTime, pktrEventFields, pktrEventDedupKey }
+    STATUS current
+    DESCRIPTION
+        "Event ixp.api_key_ok. The IXP Manager API key has more than 14 days
+         left. Resolves ixp.api_key_expiring."
+    ::= { pktrNotifications 42 }
+
+pktrIxpRsUnreachable NOTIFICATION-TYPE
+    OBJECTS { pktrEventKind, pktrEventSeverity, pktrEventMessage,
+              pktrEventTime, pktrEventFields, pktrEventDedupKey }
+    STATUS current
+    DESCRIPTION
+        "Event ixp.rs_unreachable. Birdseye on a route server failed two
+         polls in a row. Its sessions keep their last state until the data is
+         stale."
+    ::= { pktrNotifications 43 }
+
+pktrIxpRsReachable NOTIFICATION-TYPE
+    OBJECTS { pktrEventKind, pktrEventSeverity, pktrEventMessage,
+              pktrEventTime, pktrEventFields, pktrEventDedupKey }
+    STATUS current
+    DESCRIPTION
+        "Event ixp.rs_reachable. Birdseye on the route server answered again.
+         Resolves ixp.rs_unreachable."
+    ::= { pktrNotifications 44 }
+
+pktrIxpRsSessionDown NOTIFICATION-TYPE
+    OBJECTS { pktrEventKind, pktrEventSeverity, pktrEventMessage,
+              pktrEventTime, pktrEventFields, pktrEventDedupKey }
+    STATUS current
+    DESCRIPTION
+        "Event ixp.rs_session_down. A member session on a route server is not
+         Established."
+    ::= { pktrNotifications 45 }
+
+pktrIxpRsSessionUp NOTIFICATION-TYPE
+    OBJECTS { pktrEventKind, pktrEventSeverity, pktrEventMessage,
+              pktrEventTime, pktrEventFields, pktrEventDedupKey }
+    STATUS current
+    DESCRIPTION
+        "Event ixp.rs_session_up. The member session is Established again, or
+         is no longer on the route server. Resolves ixp.rs_session_down."
+    ::= { pktrNotifications 46 }
+
+pktrIxpRsMaxPrefix NOTIFICATION-TYPE
+    OBJECTS { pktrEventKind, pktrEventSeverity, pktrEventMessage,
+              pktrEventTime, pktrEventFields, pktrEventDedupKey }
+    STATUS current
+    DESCRIPTION
+        "Event ixp.rs_max_prefix. Accepted routes from a member session
+         reached the warning share of its max_prefix."
+    ::= { pktrNotifications 47 }
+
+pktrIxpRsMaxPrefixCleared NOTIFICATION-TYPE
+    OBJECTS { pktrEventKind, pktrEventSeverity, pktrEventMessage,
+              pktrEventTime, pktrEventFields, pktrEventDedupKey }
+    STATUS current
+    DESCRIPTION
+        "Event ixp.rs_max_prefix_cleared. Accepted routes fell back below the
+         warning share, or the session is gone. Resolves ixp.rs_max_prefix."
+    ::= { pktrNotifications 48 }
+
+pktrIxpRsFiltered NOTIFICATION-TYPE
+    OBJECTS { pktrEventKind, pktrEventSeverity, pktrEventMessage,
+              pktrEventTime, pktrEventFields, pktrEventDedupKey }
+    STATUS current
+    DESCRIPTION
+        "Event ixp.rs_filtered. A member session has at least the warning
+         share of its routes tagged rs-asn:1101:x (filtered by the route
+         server)."
+    ::= { pktrNotifications 49 }
+
+pktrIxpRsFilteredCleared NOTIFICATION-TYPE
+    OBJECTS { pktrEventKind, pktrEventSeverity, pktrEventMessage,
+              pktrEventTime, pktrEventFields, pktrEventDedupKey }
+    STATUS current
+    DESCRIPTION
+        "Event ixp.rs_filtered_cleared. The filtered share fell back below
+         the warning share, or the session is gone. Resolves ixp.rs_filtered."
+    ::= { pktrNotifications 50 }
+
+pktrIxpFabricDegraded NOTIFICATION-TYPE
+    OBJECTS { pktrEventKind, pktrEventSeverity, pktrEventMessage,
+              pktrEventTime, pktrEventFields, pktrEventDedupKey }
+    STATUS current
+    DESCRIPTION
+        "Event ixp.fabric_degraded. Many members behind one switch, colo, or
+         core bundle are past the ping tolerance together: a fabric problem,
+         not a member problem."
+    ::= { pktrNotifications 51 }
+
+pktrIxpFabricRecovered NOTIFICATION-TYPE
+    OBJECTS { pktrEventKind, pktrEventSeverity, pktrEventMessage,
+              pktrEventTime, pktrEventFields, pktrEventDedupKey }
+    STATUS current
+    DESCRIPTION
+        "Event ixp.fabric_recovered. The group is below the thresholds, has
+         no measured members, or the fabric data went stale. Resolves
+         ixp.fabric_degraded."
+    ::= { pktrNotifications 52 }
+
+pktrIxpMemberDegraded NOTIFICATION-TYPE
+    OBJECTS { pktrEventKind, pktrEventSeverity, pktrEventMessage,
+              pktrEventTime, pktrEventFields, pktrEventDedupKey }
+    STATUS current
+    DESCRIPTION
+        "Event ixp.member_degraded. One member is past the ping tolerance on
+         every measured address while the groups behind it are not degraded:
+         a member problem."
+    ::= { pktrNotifications 53 }
+
+pktrIxpMemberRecovered NOTIFICATION-TYPE
+    OBJECTS { pktrEventKind, pktrEventSeverity, pktrEventMessage,
+              pktrEventTime, pktrEventFields, pktrEventDedupKey }
+    STATUS current
+    DESCRIPTION
+        "Event ixp.member_recovered. The member is back within tolerance, is
+         part of a degraded group, or the fabric data went stale. Resolves
+         ixp.member_degraded."
+    ::= { pktrNotifications 54 }
+
+pktrIxpRsOriginChange NOTIFICATION-TYPE
+    OBJECTS { pktrEventKind, pktrEventSeverity, pktrEventMessage,
+              pktrEventTime, pktrEventFields, pktrEventDedupKey }
+    STATUS current
+    DESCRIPTION
+        "Event ixp.rs_origin_change. A member session announces a prefix with
+         an origin AS that no other member's accepted route for the same
+         prefix has: a possible hijack or leak."
+    ::= { pktrNotifications 55 }
+
+pktrIxpRsOriginChangeCleared NOTIFICATION-TYPE
+    OBJECTS { pktrEventKind, pktrEventSeverity, pktrEventMessage,
+              pktrEventTime, pktrEventFields, pktrEventDedupKey }
+    STATUS current
+    DESCRIPTION
+        "Event ixp.rs_origin_change_cleared. The conflicting routes are gone,
+         or the session is gone. Resolves ixp.rs_origin_change."
+    ::= { pktrNotifications 56 }
+
+pktrIxpRsMorespecificBurst NOTIFICATION-TYPE
+    OBJECTS { pktrEventKind, pktrEventSeverity, pktrEventMessage,
+              pktrEventTime, pktrEventFields, pktrEventDedupKey }
+    STATUS current
+    DESCRIPTION
+        "Event ixp.rs_morespecific_burst. A member session announced a burst
+         of more-specifics of prefixes another member's route covers, with a
+         different origin AS."
+    ::= { pktrNotifications 57 }
+
+pktrIxpRsMorespecificBurstCleared NOTIFICATION-TYPE
+    OBJECTS { pktrEventKind, pktrEventSeverity, pktrEventMessage,
+              pktrEventTime, pktrEventFields, pktrEventDedupKey }
+    STATUS current
+    DESCRIPTION
+        "Event ixp.rs_morespecific_burst_cleared. The burst's more-specifics
+         are gone, or the session is gone. Resolves
+         ixp.rs_morespecific_burst."
+    ::= { pktrNotifications 58 }
+
+pktrIxpRsFilterSpike NOTIFICATION-TYPE
+    OBJECTS { pktrEventKind, pktrEventSeverity, pktrEventMessage,
+              pktrEventTime, pktrEventFields, pktrEventDedupKey }
+    STATUS current
+    DESCRIPTION
+        "Event ixp.rs_filter_spike. The routes a route server filtered from a
+         member for one reason (RPKI invalid, IRR prefix or origin,
+         transit-free ASN) jumped above the recent level."
+    ::= { pktrNotifications 59 }
+
+pktrIxpRsFilterSpikeCleared NOTIFICATION-TYPE
+    OBJECTS { pktrEventKind, pktrEventSeverity, pktrEventMessage,
+              pktrEventTime, pktrEventFields, pktrEventDedupKey }
+    STATUS current
+    DESCRIPTION
+        "Event ixp.rs_filter_spike_cleared. The filtered count fell back
+         below the spike threshold, or the session is gone. Resolves
+         ixp.rs_filter_spike."
+    ::= { pktrNotifications 60 }
+
+pktrProviderDegraded NOTIFICATION-TYPE
+    OBJECTS { pktrEventKind, pktrEventSeverity, pktrEventMessage,
+              pktrEventTime, pktrEventFields, pktrEventDedupKey }
+    STATUS current
+    DESCRIPTION
+        "Event provider.degraded. A provider's mean loss is at or above
+         probe.degraded_loss_pct but below probe.down_loss_pct."
+    ::= { pktrNotifications 61 }
+
+pktrBgpSessionNotEstablished NOTIFICATION-TYPE
+    OBJECTS { pktrEventKind, pktrEventSeverity, pktrEventMessage,
+              pktrEventTime, pktrEventFields, pktrEventDedupKey }
+    STATUS current
+    DESCRIPTION
+        "Event bgp.session_not_established. An iBGP session has not reached
+         Established within bgp.not_established_after of the start."
+    ::= { pktrNotifications 62 }
+
+pktrHerdRestarted NOTIFICATION-TYPE
+    OBJECTS { pktrEventKind, pktrEventSeverity, pktrEventMessage,
+              pktrEventTime, pktrEventFields, pktrEventDedupKey }
+    STATUS current
+    DESCRIPTION
+        "Event herd.restarted. A herd goroutine (recorder or puller) panicked
+         and was restarted with backoff. Probing, decisions, and the
+         announcer are not affected."
+    ::= { pktrNotifications 63 }
+
+pktrRpkiStale NOTIFICATION-TYPE
+    OBJECTS { pktrEventKind, pktrEventSeverity, pktrEventMessage,
+              pktrEventTime, pktrEventFields, pktrEventDedupKey }
+    STATUS current
+    DESCRIPTION
+        "Event rpki.stale. An RPKI source that was answering has no fresh
+         data (stale past its staleness, or empty). Its lookups are unknown,
+         which fails open: decisions continue and withdraws never wait on
+         RPKI."
+    ::= { pktrNotifications 64 }
+
+pktrRpkiFresh NOTIFICATION-TYPE
+    OBJECTS { pktrEventKind, pktrEventSeverity, pktrEventMessage,
+              pktrEventTime, pktrEventFields, pktrEventDedupKey }
+    STATUS current
+    DESCRIPTION
+        "Event rpki.fresh. The RPKI source has fresh data again. Resolves
+         rpki.stale."
+    ::= { pktrNotifications 65 }
+
+pktrSteerUnverified NOTIFICATION-TYPE
+    OBJECTS { pktrEventKind, pktrEventSeverity, pktrEventMessage,
+              pktrEventTime, pktrEventFields, pktrEventDedupKey }
+    STATUS current
+    DESCRIPTION
+        "Event steer.unverified. Routing anomaly: after an outbound
+         improvement or an inbound steer, the interface counters show less
+         than verified_pct of the expected traffic moved (partial or not
+         moved, #305). Fields say whether the steer was backed out."
+    ::= { pktrNotifications 66 }
+
+pktrSteerVerified NOTIFICATION-TYPE
+    OBJECTS { pktrEventKind, pktrEventSeverity, pktrEventMessage,
+              pktrEventTime, pktrEventFields, pktrEventDedupKey }
+    STATUS current
+    DESCRIPTION
+        "Event steer.verified. Verification found the traffic moved after a
+         steer (outbound improvement or inbound steer). Resolves
+         steer.unverified for the same target."
+    ::= { pktrNotifications 67 }
+
+pktrOverloadRefused NOTIFICATION-TYPE
+    OBJECTS { pktrEventKind, pktrEventSeverity, pktrEventMessage,
+              pktrEventTime, pktrEventFields, pktrEventDedupKey }
+    STATUS current
+    DESCRIPTION
+        "Event overload.refused. A performance steer onto a provider was
+         refused because it would push the provider's interface past
+         interface_capacity_threshold_pct, or the interface reading is
+         missing (#307). Sent once per prefix and provider until the steer is
+         allowed."
+    ::= { pktrNotifications 68 }
+
+pktrOverloadShed NOTIFICATION-TYPE
+    OBJECTS { pktrEventKind, pktrEventSeverity, pktrEventMessage,
+              pktrEventTime, pktrEventFields, pktrEventDedupKey }
+    STATUS current
+    DESCRIPTION
+        "Event overload.shed. A provider's interface is past
+         interface_capacity_threshold_pct, so a performance steer onto it was
+         withdrawn, lowest gain first (#307)."
+    ::= { pktrNotifications 69 }
+
+pktrOverloadCleared NOTIFICATION-TYPE
+    OBJECTS { pktrEventKind, pktrEventSeverity, pktrEventMessage,
+              pktrEventTime, pktrEventFields, pktrEventDedupKey }
+    STATUS current
+    DESCRIPTION
+        "Event overload.cleared. A provider that refused or shed steers is
+         back under interface_capacity_threshold_pct (#307). Resolves
+         overload.refused and overload.shed."
+    ::= { pktrNotifications 70 }
+
+pktrMedOverridden NOTIFICATION-TYPE
+    OBJECTS { pktrEventKind, pktrEventSeverity, pktrEventMessage,
+              pktrEventTime, pktrEventFields, pktrEventDedupKey }
+    STATUS current
+    DESCRIPTION
+        "Event med.overridden. A performance move took an exit its neighbor
+         AS ranks below another by MED, because the measurements beat that
+         exit by more than thresholds.med_margin (#303)."
+    ::= { pktrNotifications 71 }
+-- Conformance.
+
+pktrCompliances OBJECT IDENTIFIER ::= { pktrConformance 1 }
+pktrGroups      OBJECT IDENTIFIER ::= { pktrConformance 2 }
+
+pktrCompliance MODULE-COMPLIANCE
+    STATUS current
+    DESCRIPTION
+        "An agent that serves the Packeteer status objects."
+    MODULE
+        MANDATORY-GROUPS { pktrStatusGroup }
+    ::= { pktrCompliances 1 }
+
+pktrStatusGroup OBJECT-GROUP
+    OBJECTS { pktrVersion, pktrMode, pktrReady, pktrHaRole,
+              pktrImprovementsActive, pktrRibPrefixes, pktrProbeRate,
+              pktrDataAge, pktrProviderName, pktrProviderProbeUp,
+              pktrProviderLossPermille, pktrProviderRttMicros,
+              pktrProviderJitterMicros, pktrProviderTelemetryUp,
+              pktrProviderInKbps, pktrProviderOutKbps, pktrProviderIn95Kbps,
+              pktrProviderOut95Kbps, pktrProviderUsageKbps,
+              pktrProviderCommitKbps }
+    STATUS current
+    DESCRIPTION
+        "Controller and provider status."
+    ::= { pktrGroups 1 }
+
+pktrEventObjectsGroup OBJECT-GROUP
+    OBJECTS { pktrEventKind, pktrEventSeverity, pktrEventMessage,
+              pktrEventTime, pktrEventFields, pktrEventDedupKey }
+    STATUS current
+    DESCRIPTION
+        "Objects carried by the notifications."
+    ::= { pktrGroups 2 }
+
+pktrNotificationsGroup NOTIFICATION-GROUP
+    NOTIFICATIONS {
+        pktrControllerStarted, pktrControllerStopping,
+        pktrImprovementAdded, pktrImprovementSwitched,
+        pktrImprovementRemoved, pktrProviderDown, pktrProviderUp,
+        pktrBgpSessionDown, pktrBgpSessionUp, pktrCommitExceeded,
+        pktrCommitCleared, pktrAnnounceFailed, pktrAnnounceRecovered,
+        pktrOutageAs, pktrOutageCircuit, pktrOutageCleared,
+        pktrNotifierTest, pktrInboundSteered, pktrInboundReleased,
+        pktrMitigationAdded, pktrMitigationAnnounced,
+        pktrMitigationWithdrawn, pktrMitigationEnded, pktrHaStandby,
+        pktrHaActive, pktrAuditRecorded, pktrAnomalyDetected,
+        pktrAnomalyMitigated, pktrAnomalyHeld, pktrAnomalyCleared,
+        pktrLeakDetected, pktrLeakCleared, pktrFlapQuarantined,
+        pktrFlapReleased, pktrExchangeDegraded, pktrExchangeRecovered,
+        pktrExchangePeerDown, pktrExchangePeerUp, pktrExchangeMaxPrefix,
+        pktrExchangeMaxPrefixCleared, pktrIxpApiKeyExpiring,
+        pktrIxpApiKeyOk, pktrIxpRsUnreachable, pktrIxpRsReachable,
+        pktrIxpRsSessionDown, pktrIxpRsSessionUp, pktrIxpRsMaxPrefix,
+        pktrIxpRsMaxPrefixCleared, pktrIxpRsFiltered,
+        pktrIxpRsFilteredCleared, pktrIxpFabricDegraded,
+        pktrIxpFabricRecovered, pktrIxpMemberDegraded,
+        pktrIxpMemberRecovered, pktrIxpRsOriginChange,
+        pktrIxpRsOriginChangeCleared, pktrIxpRsMorespecificBurst,
+        pktrIxpRsMorespecificBurstCleared, pktrIxpRsFilterSpike,
+        pktrIxpRsFilterSpikeCleared, pktrProviderDegraded,
+        pktrBgpSessionNotEstablished, pktrHerdRestarted, pktrRpkiStale,
+        pktrRpkiFresh, pktrSteerUnverified, pktrSteerVerified,
+        pktrOverloadRefused, pktrOverloadShed, pktrOverloadCleared,
+        pktrMedOverridden
+    }
+    STATUS current
+    DESCRIPTION
+        "Every event the controller can send."
+    ::= { pktrGroups 3 }
+
+END

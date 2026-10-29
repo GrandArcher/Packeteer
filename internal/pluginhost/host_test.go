@@ -728,7 +728,7 @@ func TestExportersOffByDefaultAndStrict(t *testing.T) {
 		t.Fatal("want error")
 	}
 	for _, want := range []string{
-		`exporters[0] (nope): unknown exporter type "nope" (available: influxdb, ipfix, kafka, nats, otlp)`,
+		`exporters[0] (nope): unknown exporter type "nope" (available: influxdb, ipfix, kafka, nats, otlp, snmpagent)`,
 		"exporters[1] (kafka): config: ",
 		"exporters[2] (otlp): endpoint must be an absolute http(s) URL",
 	} {

@@ -30,7 +30,7 @@ Packeteer does not read another product's configuration. You copy the intent by 
 | Circuit or upstream outage detection | `outage` source: re-probes when several prefixes degrade together, and emits `outage.as` or `outage.circuit`. The probe-path check marks a provider down when its probes do not leave through its `next_hop`. | [CONFIG.md](CONFIG.md#source-outage), [EVENTS.md](EVENTS.md) |
 | Probe targets from traffic | `flow` source (NetFlow, IPFIX, sFlow), `span`, `traceroute`, and `static` sources. | [CONFIG.md](CONFIG.md#source-flow) |
 | Reports, before and after, savings | `storage: {type: sqlite}` and the reports `summary`, `improvements`, `timeseries`, `savings`. | [ui.md](ui.md#reports) |
-| Alerts | `notifiers`: `webhook`, `smtp`, `snmptrap`. | [EVENTS.md](EVENTS.md) |
+| Alerts | `notifiers`: `webhook`, `smtp`, `snmptrap`, `syslog`; `exporters`: `snmpagent` for an SNMP NMS ([monitoring.md](monitoring.md)). | [EVENTS.md](EVENTS.md) |
 | Monitoring only, no changes to routing | `mode: observe` (the default). | [README](../README.md#safety-model) |
 
 ## Cut-over plan

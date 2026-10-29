@@ -10,6 +10,7 @@ import (
 
 	"github.com/gosnmp/gosnmp"
 
+	"github.com/GrandArcher/Packeteer/internal/plugins/snmpcfg"
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
 )
 
@@ -78,7 +79,7 @@ func TestV2cTrap(t *testing.T) {
 		t.Fatalf("packet version=%v community=%q pdu=%v", p.Version, p.Community, p.PDUType)
 	}
 	vb := varbinds(p)
-	base := DefaultEnterpriseOID
+	base := snmpcfg.DefaultEnterpriseOID
 	want := map[string]any{
 		oidSnmpTrapOID:  "." + base + ".0.6",
 		base + ".1.1.0": "provider.down",
@@ -187,5 +188,98 @@ func TestConfigValidation(t *testing.T) {
 		if _, err := newNotifier(t, ok, env); err != nil {
 			t.Errorf("%q: %v", ok, err)
 		}
+	}
+}
+
+// received is what the inform receiver saw. The listener rewrites the packet
+// into the acknowledgement after the handler returns, so the handler copies.
+type received struct {
+	pdu gosnmp.PDUType
+	vb  map[string]any
+}
+
+// listen starts a gosnmp inform receiver on a loopback port. Each packet it
+// accepts is sent on the returned channel; the listener acknowledges informs.
+func listen(t *testing.T, params *gosnmp.GoSNMP) (int, <-chan received) {
+	t.Helper()
+	probe, port := receiver(t)
+	probe.Close()
+	got := make(chan received, 4)
+	params.Logger = gosnmp.NewLogger(nil)
+	tl := gosnmp.NewTrapListener()
+	tl.Params = params
+	tl.OnNewTrap = func(p *gosnmp.SnmpPacket, _ *net.UDPAddr) { got <- received{p.PDUType, varbinds(p)} }
+	go func() { _ = tl.Listen("127.0.0.1:" + strconv.Itoa(port)) }()
+	select {
+	case <-tl.Listening():
+	case <-time.After(5 * time.Second):
+		t.Fatal("trap listener did not start")
+	}
+	t.Cleanup(tl.Close)
+	return port, got
+}
+
+func TestV2cInformIsAcknowledged(t *testing.T) {
+	port, got := listen(t, &gosnmp.GoSNMP{Version: gosnmp.Version2c})
+	n, err := newNotifier(t, "address: 127.0.0.1\nport: "+strconv.Itoa(port)+"\ncommunity_env: C\ninform: true", map[string]string{"C": "x"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := n.Notify(context.Background(), ev); err != nil {
+		t.Fatalf("acknowledged inform failed: %v", err)
+	}
+	p := <-got
+	if p.pdu != gosnmp.InformRequest || p.vb[oidSnmpTrapOID] != "."+snmpcfg.DefaultEnterpriseOID+".0.6" {
+		t.Fatalf("pdu %v varbinds %v", p.pdu, p.vb)
+	}
+}
+
+func TestInformWithoutAnswerFails(t *testing.T) {
+	_, port := receiver(t)
+	n, err := newNotifier(t, "address: 127.0.0.1\nport: "+strconv.Itoa(port)+"\ncommunity_env: C\ninform: true\ntimeout: 300ms", map[string]string{"C": "x"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := n.Notify(context.Background(), ev); err == nil {
+		t.Fatal("an inform nobody acknowledged must fail")
+	}
+}
+
+func TestV3InformDiscoversTheReceiverEngine(t *testing.T) {
+	usm := func() *gosnmp.UsmSecurityParameters {
+		return &gosnmp.UsmSecurityParameters{
+			UserName: "packeteer", AuthoritativeEngineID: string([]byte{0x80, 0, 0, 0, 9, 8, 7, 6}),
+			AuthenticationProtocol: gosnmp.SHA256, AuthenticationPassphrase: "auth-pass-123",
+			PrivacyProtocol: gosnmp.AES, PrivacyPassphrase: "priv-pass-456",
+			Logger: gosnmp.NewLogger(nil),
+		}
+	}
+	port, got := listen(t, &gosnmp.GoSNMP{Version: gosnmp.Version3, SecurityModel: gosnmp.UserSecurityModel,
+		MsgFlags: gosnmp.AuthPriv, SecurityParameters: usm()})
+	env := map[string]string{"U": "packeteer", "A": "auth-pass-123", "P": "priv-pass-456"}
+	y := "address: 127.0.0.1\nport: " + strconv.Itoa(port) + "\nversion: 3\nusername_env: U\nauth_env: A\nauth_protocol: SHA256\npriv_env: P\ninform: true"
+	n, err := newNotifier(t, y, env)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := n.Notify(context.Background(), ev); err != nil {
+		t.Fatalf("v3 inform failed: %v", err)
+	}
+	if p := <-got; p.pdu != gosnmp.InformRequest || p.vb[snmpcfg.DefaultEnterpriseOID+".1.1.0"] != "provider.down" {
+		t.Fatalf("pdu %v varbinds %v", p.pdu, p.vb)
+	}
+}
+
+func TestInformEngineIDRules(t *testing.T) {
+	env := map[string]string{"U": "user", "A": "long-enough", "P": "long-enough"}
+	base := "address: 192.0.2.1\nversion: 3\nusername_env: U\nauth_env: A\npriv_env: P\n"
+	if _, err := newNotifier(t, base+"inform: true\nengine_id: '8000000001'", env); err == nil || !strings.Contains(err.Error(), "engine_id is not used with inform") {
+		t.Fatalf("err = %v", err)
+	}
+	if _, err := newNotifier(t, base+"inform: true", env); err != nil {
+		t.Fatalf("v3 inform without engine_id: %v", err)
+	}
+	if _, err := newNotifier(t, base, env); err == nil || !strings.Contains(err.Error(), "engine_id") {
+		t.Fatalf("v3 trap without engine_id: %v", err)
 	}
 }

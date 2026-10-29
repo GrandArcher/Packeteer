@@ -11,6 +11,7 @@ import (
 	"github.com/GrandArcher/Packeteer/internal/plugins/detector/baseline"
 	"github.com/GrandArcher/Packeteer/internal/plugins/elector/lease"
 	"github.com/GrandArcher/Packeteer/internal/plugins/exec"
+	"github.com/GrandArcher/Packeteer/internal/plugins/exporter/snmpagent"
 	"github.com/GrandArcher/Packeteer/internal/plugins/federation/mtls"
 	"github.com/GrandArcher/Packeteer/internal/plugins/grpcplugin"
 	irrfile "github.com/GrandArcher/Packeteer/internal/plugins/irr/file"
@@ -23,6 +24,7 @@ import (
 	"github.com/GrandArcher/Packeteer/internal/plugins/lookup/peeringdb"
 	"github.com/GrandArcher/Packeteer/internal/plugins/notifier/smtp"
 	"github.com/GrandArcher/Packeteer/internal/plugins/notifier/snmptrap"
+	"github.com/GrandArcher/Packeteer/internal/plugins/notifier/syslog"
 	"github.com/GrandArcher/Packeteer/internal/plugins/notifier/webhook"
 	"github.com/GrandArcher/Packeteer/internal/plugins/policy/maintenance"
 	"github.com/GrandArcher/Packeteer/internal/plugins/policy/rules"
@@ -86,6 +88,8 @@ func TestConfigDocCoversStructs(t *testing.T) {
 		webhook.Config{},
 		smtp.Config{},
 		snmptrap.Config{},
+		syslog.Config{},
+		snmpagent.Config{},
 		exec.Config{},
 		grpcplugin.Config{},
 		gobgp.Config{},
