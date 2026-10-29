@@ -18,10 +18,10 @@ import (
 const DefaultEnterpriseOID = "1.3.6.1.4.1.8072.9999.9999.7717"
 
 const (
-	// MinPassphrase is the shortest USM passphrase (RFC 3414 section 11.2).
-	MinPassphrase = 8
-	// MaxUser is the longest USM user name (RFC 3414).
-	MaxUser = 32
+	// minPassphrase is the shortest USM passphrase (RFC 3414 section 11.2).
+	minPassphrase = 8
+	// maxUser is the longest USM user name (RFC 3414).
+	maxUser = 32
 )
 
 var (
@@ -85,8 +85,8 @@ func (v V3) USM(getenv func(string) string) (*gosnmp.UsmSecurityParameters, gosn
 	if usm.UserName, err = Secret(getenv, "username_env", v.UsernameEnv, 1); err != nil {
 		return nil, 0, err
 	}
-	if len(usm.UserName) > MaxUser {
-		return nil, 0, fmt.Errorf("username_env: longer than %d characters", MaxUser)
+	if len(usm.UserName) > maxUser {
+		return nil, 0, fmt.Errorf("username_env: longer than %d characters", maxUser)
 	}
 	level := v.SecurityLevel
 	if level == "" {
@@ -113,7 +113,7 @@ func (v V3) USM(getenv func(string) string) (*gosnmp.UsmSecurityParameters, gosn
 		if usm.AuthenticationProtocol, err = authProto(v.AuthProtocol); err != nil {
 			return nil, 0, err
 		}
-		if usm.AuthenticationPassphrase, err = Secret(getenv, "auth_env", v.AuthEnv, MinPassphrase); err != nil {
+		if usm.AuthenticationPassphrase, err = Secret(getenv, "auth_env", v.AuthEnv, minPassphrase); err != nil {
 			return nil, 0, err
 		}
 	}
@@ -121,7 +121,7 @@ func (v V3) USM(getenv func(string) string) (*gosnmp.UsmSecurityParameters, gosn
 		if usm.PrivacyProtocol, err = privProto(v.PrivProtocol); err != nil {
 			return nil, 0, err
 		}
-		if usm.PrivacyPassphrase, err = Secret(getenv, "priv_env", v.PrivEnv, MinPassphrase); err != nil {
+		if usm.PrivacyPassphrase, err = Secret(getenv, "priv_env", v.PrivEnv, minPassphrase); err != nil {
 			return nil, 0, err
 		}
 	}

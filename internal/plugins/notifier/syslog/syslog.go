@@ -317,7 +317,9 @@ func (n *Notifier) Notify(ctx context.Context, e plugin.Event) error {
 // alive reports whether the collector has left the connection open. A
 // collector never sends, so a read that finds the connection closed or
 // reset is the only way to see that before a write, which TCP accepts and
-// loses after the peer has closed.
+// loses after the peer has closed. A collector that does send data is
+// treated as closed too: the notifier reconnects before the next event,
+// which still delivers.
 func alive(c net.Conn) bool {
 	// A deadline already past fails the read before it looks at the socket.
 	_ = c.SetReadDeadline(time.Now().Add(time.Millisecond))

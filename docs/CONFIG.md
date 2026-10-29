@@ -1574,7 +1574,7 @@ One RFC 5424 message per event to one collector. The message ID is the event kin
 |---|---|---|
 | `address` | none | Required collector hostname or IP address. |
 | `port` | `514`; `6514` for `tls` | |
-| `transport` | `udp` | `udp` (RFC 5426, at most 2048 bytes per message, the free text is cut to fit), `tcp` (octet-counting frames, RFC 6587), or `tls` (RFC 5425; the collector's certificate is verified against `address`). |
+| `transport` | `udp` | `udp` (RFC 5426, the free text is cut to fit 2048 bytes; each structured data value is cut at 512 bytes, so many long fields can still pass 2048), `tcp` (octet-counting frames, RFC 6587), or `tls` (RFC 5425; the collector's certificate is verified against `address`). |
 | `ca_file` | system roots | Absolute PEM path for a private CA. `tls` only. |
 | `facility` | `local0` | `user`, `daemon`, `auth`, `authpriv`, or `local0` to `local7`. |
 | `app_name` | `packeteer` | At most 48 printable ASCII characters. |

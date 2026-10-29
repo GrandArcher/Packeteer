@@ -57,7 +57,7 @@ func TestUSMReadsTheEnvironmentAndKeepsLevelsApart(t *testing.T) {
 			t.Errorf("%s accepted", name)
 		}
 	}
-	env["U"] = strings.Repeat("u", MaxUser+1)
+	env["U"] = strings.Repeat("u", maxUser+1)
 	if _, _, err := (V3{UsernameEnv: "U", AuthEnv: "A", PrivEnv: "P"}).USM(get); err == nil {
 		t.Error("a user name over 32 characters accepted")
 	}
