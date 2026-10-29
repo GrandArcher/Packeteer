@@ -133,7 +133,7 @@ func TestFlowTapTagsProviderAndImprovement(t *testing.T) {
 		return plugin.FlowObservation{At: at, Src: netip.MustParseAddr("203.0.113.9"), Dst: netip.MustParseAddr(dst), Proto: 6, Bytes: 100, Prefix: p}
 	}
 	src.tap(obs("192.0.2.7", steered)) // before any decision round: native
-	on := func(netip.Prefix) bool { return true }
+	on := func(netip.Prefix) (string, bool) { return "transit-b", true }
 	tags.set("inject", []policy.Improvement{imp}, on)
 	src.tap(obs("192.0.2.7", steered))
 	src.tap(obs("198.51.100.5", netip.MustParsePrefix("198.51.100.0/24")))
@@ -141,11 +141,13 @@ func TestFlowTapTagsProviderAndImprovement(t *testing.T) {
 	src.tap(obs("192.0.2.7", steered))
 	tags.set("inject", nil, on)
 	src.tap(obs("192.0.2.7", steered))
-	tags.set("inject", []policy.Improvement{imp}, func(netip.Prefix) bool { return false })
+	tags.set("inject", []policy.Improvement{imp}, func(netip.Prefix) (string, bool) { return "", false })
+	src.tap(obs("192.0.2.7", steered))
+	tags.set("inject", []policy.Improvement{imp}, func(netip.Prefix) (string, bool) { return "transit-c", true })
 	src.tap(obs("192.0.2.7", steered))
 
 	got := s.drain(t, d)
-	if len(got) != 6 {
+	if len(got) != 7 {
 		t.Fatalf("records = %d", len(got))
 	}
 	f := func(i int) plugin.FlowRecord { return *got[i].Flow }
@@ -166,6 +168,9 @@ func TestFlowTapTagsProviderAndImprovement(t *testing.T) {
 	}
 	if r := f(5); r.ImprovementID != "" || r.Provider != "" {
 		t.Fatalf("an improvement the announcer did not install must not tag the flow: %+v", r)
+	}
+	if r := f(6); r.ImprovementID != "" || r.Provider != "" {
+		t.Fatalf("a route still on the wire for another provider must not tag the flow: %+v", r)
 	}
 }
 

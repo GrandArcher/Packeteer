@@ -82,3 +82,36 @@ func TestHeldMoreSpecificIsNotAnnounced(t *testing.T) {
 	}
 	wantWire(t, ann, "203.0.113.0/24", "203.0.113.128/25")
 }
+
+func TestOnWireProviderIsTheRouteOnTheWire(t *testing.T) {
+	rib := learned("198.51.100.0/24", "203.0.113.0/24", "203.0.113.0/25")
+	ann := &fakeAnn{}
+	c, err := New(msCfg(10, nil), ann, rib, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := c.OnWireProvider(pfx("198.51.100.0/24")); ok {
+		t.Fatal("nothing is on the wire yet")
+	}
+	if err := c.Sync(context.Background(), []policy.Improvement{imp("198.51.100.0/24", "b"), imp("203.0.113.0/24", "b")}); err != nil {
+		t.Fatal(err)
+	}
+	if p, ok := c.OnWireProvider(pfx("198.51.100.0/24")); !ok || p != "b" {
+		t.Fatalf("improvement route = %q, %v", p, ok)
+	}
+	if _, ok := c.OnWireProvider(pfx("203.0.113.0/25")); ok {
+		t.Fatal("a learned more-specific is not the improvement's route")
+	}
+	// A switch to a provider with no next hop fails; the old route stays.
+	err = c.Sync(context.Background(), []policy.Improvement{imp("198.51.100.0/24", "nohop"), imp("203.0.113.0/24", "b")})
+	if err == nil {
+		t.Fatal("a switch to a provider without a next hop must fail")
+	}
+	if p, ok := c.OnWireProvider(pfx("198.51.100.0/24")); !ok || p != "b" {
+		t.Fatalf("after the failed switch the wire still carries b, got %q, %v", p, ok)
+	}
+	var nilCtl *Controller
+	if _, ok := nilCtl.OnWireProvider(pfx("198.51.100.0/24")); ok {
+		t.Fatal("a nil controller has nothing on the wire")
+	}
+}

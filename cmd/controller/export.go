@@ -93,12 +93,13 @@ type exportTags struct {
 // set takes the improvements of the round. Only inject mode moves traffic;
 // in observe and suggest an improvement is a recommendation, so flows keep
 // their native provider and no improvement ID. An improvement whose route
-// the announcer did not install (a failed or skipped sync) is not tagged.
-func (t *exportTags) set(mode string, imps []policy.Improvement, injected func(netip.Prefix) bool) {
+// the announcer did not install, or installed for another provider (a failed
+// or skipped sync), is not tagged.
+func (t *exportTags) set(mode string, imps []policy.Improvement, onWire func(netip.Prefix) (string, bool)) {
 	m := make(map[netip.Prefix]improvementTag, len(imps))
 	if mode == config.ModeInject {
 		for _, imp := range imps {
-			if !injected(imp.Prefix) {
+			if p, ok := onWire(imp.Prefix); !ok || p != imp.Provider {
 				continue
 			}
 			m[imp.Prefix] = improvementTag{imp.Provider, imp.ID()}
