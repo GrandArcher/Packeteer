@@ -348,12 +348,9 @@ func (l *liveConfig) set(cfg *config.Config) {
 
 // reloader applies SIGHUP and PUT reloads. SIGHUP and PUT share mu.
 type reloader struct {
-	mu sync.Mutex
-	// exp and flowTags feed the flow tap of a source added online (#207).
-	exp      *export.Dispatcher
-	flowTags *exportTags
-	path     string
-	getenv   func(string) string
+	mu     sync.Mutex
+	path   string
+	getenv func(string) string
 	// httpUser is the basic-auth user from the environment; it decides the
 	// sign-in default, which the running config already carries.
 	httpUser string
@@ -393,6 +390,9 @@ type reloader struct {
 	dispatch emitter
 	hist     *history.Recorder
 	opts     pluginhost.Options
+	// exp and flowTags feed the flow tap of a source added online (#207).
+	exp      *export.Dispatcher
+	flowTags *exportTags
 }
 
 func (r *reloader) setCur(next *config.Config) {

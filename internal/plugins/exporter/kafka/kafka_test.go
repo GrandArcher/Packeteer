@@ -145,3 +145,38 @@ func TestDownBrokerFailsExportNotStart(t *testing.T) {
 		t.Fatal("export to a dead broker must fail")
 	}
 }
+
+type idleProducer struct{}
+
+func (idleProducer) ProduceSync(_ context.Context, rs ...*kgo.Record) kgo.ProduceResults {
+	return make(kgo.ProduceResults, len(rs))
+}
+func (idleProducer) Close() {}
+
+// Export runs on the worker while Start and Stop run on the main goroutine;
+// -race fails this test if the client field is unguarded.
+func TestExportRacesStartAndStopSafely(t *testing.T) {
+	x, err := build(t, "brokers: [a:9092]\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	x.(*Exporter).dial = func(...kgo.Opt) (producer, error) { return idleProducer{}, nil }
+	batch := []plugin.ExportRecord{{Stream: plugin.StreamEvents, Event: &plugin.Event{Kind: "improvement.added"}}}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := 0; i < 200; i++ {
+			_ = x.Export(context.Background(), batch)
+		}
+	}()
+	for i := 0; i < 50; i++ {
+		if err := x.Start(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		_ = x.Stop(context.Background())
+	}
+	<-done
+	if err := x.Export(context.Background(), batch); err == nil {
+		t.Fatal("export after Stop must fail")
+	}
+}

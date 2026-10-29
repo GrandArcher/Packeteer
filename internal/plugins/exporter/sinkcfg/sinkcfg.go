@@ -51,17 +51,17 @@ func Credentials(getenv func(string) string, userEnv, passEnv string) (user, pas
 	if userEnv == "" || passEnv == "" {
 		return "", "", fmt.Errorf("username_env and password_env are set together")
 	}
-	if user, err = Secret(getenv, "username_env", userEnv); err != nil {
+	if user, err = secret(getenv, "username_env", userEnv); err != nil {
 		return "", "", err
 	}
-	if pass, err = Secret(getenv, "password_env", passEnv); err != nil {
+	if pass, err = secret(getenv, "password_env", passEnv); err != nil {
 		return "", "", err
 	}
 	return user, pass, nil
 }
 
-// Secret reads one environment variable named by the config key field.
-func Secret(getenv func(string) string, field, name string) (string, error) {
+// secret reads one environment variable named by the config key field.
+func secret(getenv func(string) string, field, name string) (string, error) {
 	if !envName.MatchString(name) {
 		return "", fmt.Errorf("%s %q is not an environment variable name", field, name)
 	}

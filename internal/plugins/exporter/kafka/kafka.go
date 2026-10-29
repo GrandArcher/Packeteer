@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/twmb/franz-go/pkg/kgo"
@@ -62,7 +63,10 @@ type Exporter struct {
 
 	// dial builds the client; tests replace it.
 	dial func(opts ...kgo.Opt) (producer, error)
-	p    producer
+	// mu guards p: Start and Stop run on the main goroutine, Export on the
+	// export worker, which can run before Start.
+	mu sync.Mutex
+	p  producer
 }
 
 // New is the plugin factory. It opens no connection.
@@ -159,22 +163,30 @@ func (x *Exporter) Start(context.Context) error {
 	if err != nil {
 		return fmt.Errorf("kafka client: %w", err)
 	}
+	x.mu.Lock()
 	x.p = p
+	x.mu.Unlock()
 	return nil
 }
 
 // Stop closes the client.
 func (x *Exporter) Stop(context.Context) error {
-	if x.p != nil {
-		x.p.Close()
-		x.p = nil
+	x.mu.Lock()
+	p := x.p
+	x.p = nil
+	x.mu.Unlock()
+	if p != nil {
+		p.Close()
 	}
 	return nil
 }
 
 // Export produces the batch and waits for the broker's acknowledgement.
 func (x *Exporter) Export(ctx context.Context, batch []plugin.ExportRecord) error {
-	if x.p == nil {
+	x.mu.Lock()
+	p := x.p
+	x.mu.Unlock()
+	if p == nil {
 		return errors.New("kafka exporter is not started")
 	}
 	recs := make([]*kgo.Record, 0, len(batch))
@@ -185,7 +197,7 @@ func (x *Exporter) Export(ctx context.Context, batch []plugin.ExportRecord) erro
 		}
 		recs = append(recs, &kgo.Record{Topic: x.prefix + "." + r.Stream, Key: []byte(key), Value: body, Timestamp: stamp(r)})
 	}
-	return x.p.ProduceSync(ctx, recs...).FirstErr()
+	return p.ProduceSync(ctx, recs...).FirstErr()
 }
 
 func stamp(r plugin.ExportRecord) time.Time {

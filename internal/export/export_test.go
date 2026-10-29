@@ -98,7 +98,7 @@ func TestFailureIsCountedPerRecord(t *testing.T) {
 
 func TestFullQueueDropsWithoutBlocking(t *testing.T) {
 	f := &fake{streams: []string{plugin.StreamFlows}, block: make(chan struct{})}
-	d := New([]Target{{"slow", f}}, Options{Queue: 2, Timeout: time.Minute})
+	d := New([]Target{{"slow", f}}, Options{queue: 2, timeout: time.Minute})
 	done := make(chan struct{})
 	go func() {
 		for i := 0; i < 50; i++ {
@@ -120,7 +120,7 @@ func TestFullQueueDropsWithoutBlocking(t *testing.T) {
 
 func TestCloseCancelsStuckDeliveryAndDropsLateRecords(t *testing.T) {
 	f := &fake{streams: []string{plugin.StreamEvents}, block: make(chan struct{})}
-	d := New([]Target{{"slow", f}}, Options{Timeout: time.Minute})
+	d := New([]Target{{"slow", f}}, Options{timeout: time.Minute})
 	d.Event(plugin.Event{Kind: "a"})
 	time.Sleep(20 * time.Millisecond)
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
@@ -136,7 +136,7 @@ func TestCloseCancelsStuckDeliveryAndDropsLateRecords(t *testing.T) {
 
 func TestBatchesQueuedRecords(t *testing.T) {
 	f := &fake{streams: []string{plugin.StreamFlows}, block: make(chan struct{})}
-	d := New([]Target{{"b", f}}, Options{Queue: 100, Timeout: time.Minute})
+	d := New([]Target{{"b", f}}, Options{queue: 100, timeout: time.Minute})
 	for i := 0; i < 10; i++ {
 		d.Flow(plugin.FlowRecord{Bytes: uint64(i)})
 	}

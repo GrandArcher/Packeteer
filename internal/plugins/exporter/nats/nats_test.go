@@ -121,3 +121,37 @@ func TestStartDoesNotNeedAServer(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+type idleConn struct{}
+
+func (idleConn) Publish(string, []byte) error           { return nil }
+func (idleConn) FlushWithContext(context.Context) error { return nil }
+func (idleConn) Close()                                 {}
+
+// Export runs on the worker while Start and Stop run on the main goroutine;
+// -race fails this test if the connection field is unguarded.
+func TestExportRacesStartAndStopSafely(t *testing.T) {
+	x, err := build(t, "urls: [\"nats://a:4222\"]\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	x.(*Exporter).dial = func(string, ...natsgo.Option) (conn, error) { return idleConn{}, nil }
+	batch := []plugin.ExportRecord{{Stream: plugin.StreamEvents, Event: &plugin.Event{Kind: "improvement.added"}}}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := 0; i < 200; i++ {
+			_ = x.Export(context.Background(), batch)
+		}
+	}()
+	for i := 0; i < 50; i++ {
+		if err := x.Start(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		_ = x.Stop(context.Background())
+	}
+	<-done
+	if err := x.Export(context.Background(), batch); err == nil {
+		t.Fatal("export after Stop must fail")
+	}
+}

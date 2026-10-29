@@ -45,10 +45,11 @@ type Target struct {
 	Exporter plugin.Exporter
 }
 
-// Options tune the dispatcher. Zero values use the defaults.
+// Options tune the dispatcher. The unexported fields are set by tests; zero
+// values use the defaults.
 type Options struct {
-	Queue   int
-	Timeout time.Duration
+	queue   int
+	timeout time.Duration
 	Logger  *slog.Logger
 }
 
@@ -89,22 +90,22 @@ type Dispatcher struct {
 // New starts one worker per target. No targets yields a dispatcher whose
 // calls do nothing.
 func New(targets []Target, o Options) *Dispatcher {
-	if o.Queue <= 0 {
-		o.Queue = DefaultQueue
+	if o.queue <= 0 {
+		o.queue = DefaultQueue
 	}
-	if o.Timeout <= 0 {
-		o.Timeout = DefaultTimeout
+	if o.timeout <= 0 {
+		o.timeout = DefaultTimeout
 	}
 	if o.Logger == nil {
 		o.Logger = slog.New(slog.DiscardHandler)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	d := &Dispatcher{timeout: o.Timeout, log: o.Logger, ctx: ctx, cancel: cancel}
+	d := &Dispatcher{timeout: o.timeout, log: o.Logger, ctx: ctx, cancel: cancel}
 	for _, t := range targets {
 		if t.Exporter == nil {
 			continue
 		}
-		w := &worker{name: t.Name, x: t.Exporter, q: make(chan plugin.ExportRecord, o.Queue)}
+		w := &worker{name: t.Name, x: t.Exporter, q: make(chan plugin.ExportRecord, o.queue)}
 		for _, s := range t.Exporter.Streams() {
 			if i := streamIndex(s); i >= 0 {
 				w.takes[i] = true

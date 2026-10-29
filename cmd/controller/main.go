@@ -912,7 +912,7 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 				watch.anomaly(anomChanges)
 				watch.mitigation(mitChanges)
 				watch.announce(now, err)
-				exportFlowTags.set("", nil)
+				exportFlowTags.set("", nil, nil)
 				return
 			}
 			leading = true
@@ -949,7 +949,7 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 			watch.improvements(now, changes)
 			exportDecisions(exp, now, snap.Mode, changes)
 			if exp.Wants(plugin.StreamFlows) {
-				exportFlowTags.set(snap.Mode, decider.Improvements())
+				exportFlowTags.set(snap.Mode, decider.Improvements(), ctl.Injected)
 			}
 			qc := decider.QuarantineChanges()
 			watch.quarantines(now, qc)
@@ -1105,8 +1105,12 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 	}
 	notifyCtx, notifyCancel := context.WithTimeout(stopCtx, 5*time.Second)
 	_ = dispatch.Close(notifyCtx)
-	_ = exp.Close(notifyCtx)
 	notifyCancel()
+	// Its own bound, like evlog: a slow notifier must not cancel the
+	// exporters' final delivery of controller.stopping.
+	expCtx, expCancel := context.WithTimeout(stopCtx, 5*time.Second)
+	_ = exp.Close(expCtx)
+	expCancel()
 	// Its own bound: a slow notifier must not leave controller.stopping
 	// unwritten when the store closes.
 	evCtx, evCancel := context.WithTimeout(stopCtx, 5*time.Second)

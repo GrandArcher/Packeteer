@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	natsgo "github.com/nats-io/nats.go"
@@ -59,7 +60,10 @@ type Exporter struct {
 
 	// dial opens the connection; tests replace it.
 	dial func(urls string, opts ...natsgo.Option) (conn, error)
-	c    conn
+	// mu guards c: Start and Stop run on the main goroutine, Export on the
+	// export worker, which can run before Start.
+	mu sync.Mutex
+	c  conn
 }
 
 // New is the plugin factory. It opens no connection.
@@ -149,15 +153,20 @@ func (x *Exporter) Start(context.Context) error {
 	if err != nil {
 		return fmt.Errorf("nats connect: %w", err)
 	}
+	x.mu.Lock()
 	x.c = c
+	x.mu.Unlock()
 	return nil
 }
 
 // Stop closes the connection.
 func (x *Exporter) Stop(context.Context) error {
-	if x.c != nil {
-		x.c.Close()
-		x.c = nil
+	x.mu.Lock()
+	c := x.c
+	x.c = nil
+	x.mu.Unlock()
+	if c != nil {
+		c.Close()
 	}
 	return nil
 }
@@ -165,7 +174,10 @@ func (x *Exporter) Stop(context.Context) error {
 // Export publishes the batch and flushes, so a delivered count means the
 // server has the messages. Subjects are prefix.stream.
 func (x *Exporter) Export(ctx context.Context, batch []plugin.ExportRecord) error {
-	if x.c == nil {
+	x.mu.Lock()
+	c := x.c
+	x.mu.Unlock()
+	if c == nil {
 		return errors.New("nats exporter is not started")
 	}
 	for _, r := range batch {
@@ -173,9 +185,9 @@ func (x *Exporter) Export(ctx context.Context, batch []plugin.ExportRecord) erro
 		if err != nil {
 			return err
 		}
-		if err := x.c.Publish(x.prefix+"."+r.Stream, body); err != nil {
+		if err := c.Publish(x.prefix+"."+r.Stream, body); err != nil {
 			return err
 		}
 	}
-	return x.c.FlushWithContext(ctx)
+	return c.FlushWithContext(ctx)
 }
