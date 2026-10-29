@@ -3,7 +3,9 @@
 # Lab only: documentation prefixes and ASNs, observe mode (inject inside the
 # documentation allowlist on the multi-session profiles, #383), simulated
 # edge routers inside lab/soak, synthetic IPFIX, the fixed prober (no probe
-# packets leave the host).
+# packets leave the host). The simulated real-table profile (#103) uses the
+# sim prober instead: also no probe packets, and the run fails if the host's
+# ICMP echo counter moves.
 #
 #   lab/soak.sh IMAGE [PROFILE] [DURATION]
 #
@@ -50,7 +52,12 @@ shared=(-profile "$profile")
 if [ -n "${SOAK_MULTIPLY:-}" ]; then
 	shared+=(-multiply "$SOAK_MULTIPLY")
 fi
-"$work/soak" config "${shared[@]}" -out "$work/config.yaml"
+config_args=("${shared[@]}" -out "$work/config.yaml")
+if [ -n "$mrt" ]; then
+	# A simulated real-table profile names the vip ASNs from the dump.
+	config_args+=(-mrt "$mrt")
+fi
+"$work/soak" config "${config_args[@]}"
 
 docker rm -f "$name" >/dev/null 2>&1 || true
 # Probe logs are at info level, as in the example config; rotate them so a

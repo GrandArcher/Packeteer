@@ -294,3 +294,38 @@ profiles:
       cpu_avg_cores: 2.0
       threads: 64
       api_p99_ms: 1500
+
+  # Opt-in (#103). Not the `load` job and not soak.yml: lab/realtable.sh
+  # with REALTABLE_PROFILE=realtable3m, or the manual `realtable` workflow.
+  # The learned table is a real RIS or RouteViews dump (#342): the three
+  # largest peers' views, one session and one provider next hop each, so
+  # Packeteer holds the three real AS paths a prefix has there. The table is
+  # grown to 3 million prefixes with more-specifics of the dump's own
+  # prefixes (scale_to), keeping the parent's attributes. It is learned
+  # only: nothing is announced, and the sessions, next hops, and providers
+  # use documentation addresses and private ASNs. Probe results are
+  # SIMULATED (the sim prober, a seeded delay and loss model per provider,
+  # no packet sent) for the targets the vip source names, at most 100,000
+  # because the engine bounds its target set; the report labels every such
+  # figure. The per-million budgets are the `pr` numbers applied to paths
+  # (prefixes times views); nothing was raised and nothing has measured this
+  # profile yet, so a miss is a finding. Reconverge and shutdown are not
+  # checked, as on `realtable`.
+  realtable3m:
+    real: true
+    peers: 3
+    scale_to: 3000000
+    simulate: true
+    vip_targets: 100000
+    duration: 10m
+    warmup: 3m
+    sample: 5s
+    budgets:
+      learn_seconds_per_mprefix: 72
+      rss_peak_mb_per_mprefix: 4915.2
+      rss_growth_mb_per_mprefix: 307.2
+      rss_slope_mb_per_mprefix: 153.6
+      cpu_avg_cores: 2.0
+      threads: 64
+      api_p99_ms: 1500
+      min_measured: 2500

@@ -129,6 +129,10 @@ func TestHerdRefusedWithIXPAndFixedProber(t *testing.T) {
 	if _, err := Parse([]byte(fixed)); err == nil || !strings.Contains(err.Error(), "fixed prober") {
 		t.Errorf("fixed prober: err = %v", err)
 	}
+	sim := herdBase + herdOn + "probers:\n  - type: sim\n    config: {routes: [{provider: transit-a, rtt_ms: 10}]}\n"
+	if _, err := Parse([]byte(sim)); err == nil || !strings.Contains(err.Error(), "sim prober") {
+		t.Errorf("sim prober: err = %v", err)
+	}
 }
 
 func TestHerdNeedsStorageAndBGP(t *testing.T) {

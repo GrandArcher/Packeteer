@@ -31,6 +31,7 @@ import (
 	_ "github.com/GrandArcher/Packeteer/internal/plugins/prober/fixed"            // fixed (lab) prober
 	_ "github.com/GrandArcher/Packeteer/internal/plugins/prober/https"            // https prober (connect, TLS handshake, first byte)
 	_ "github.com/GrandArcher/Packeteer/internal/plugins/prober/icmp"             // icmp prober
+	_ "github.com/GrandArcher/Packeteer/internal/plugins/prober/sim"              // sim (lab) prober, seeded model, no packets
 	_ "github.com/GrandArcher/Packeteer/internal/plugins/prober/tcp"              // tcp prober
 	_ "github.com/GrandArcher/Packeteer/internal/plugins/prober/twamp"            // twamp prober (TWAMP-Light sender, reordering)
 	_ "github.com/GrandArcher/Packeteer/internal/plugins/prober/udp"              // udp prober

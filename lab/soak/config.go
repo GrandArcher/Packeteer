@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"net/netip"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -53,14 +54,10 @@ thresholds:
   min_loss_delta_pct: 1.0
   min_rtt_delta_ms: 15
 providers:
-  - {name: transit-a, source_ip: 192.0.2.11, next_hop: %s}
-  - {name: transit-b, source_ip: 192.0.2.12, next_hop: %s}
-  - {name: transit-a6, source_ip: "2001:db8:ffff::11", next_hop: "%s"}
-  - {name: transit-b6, source_ip: "2001:db8:ffff::12", next_hop: "%s"}
-allowlist:
+%sallowlist:
 %sbgp:
   neighbors:
-`, mode, labASN, lp, maxImp, hold, nextHopsV4[0], nextHopsV4[1], nextHopsV6[0], nextHopsV6[1], allow)
+`, mode, labASN, lp, maxImp, hold, providerLines(p), allow)
 	for k := range p.sessions() {
 		desc := "soak-router"
 		if k > 0 {
@@ -77,24 +74,27 @@ allowlist:
   packets: 4
   workers: 8
   rate_limit_pps: %d
-probers:
-  - type: fixed
-    config:
-      paths:
 `, probeInterval, rateLimit(p))
 	targets := staticTargets(p, tbl)
-	for _, i := range targets[:p.OutageTargets] {
-		prov := "transit-a"
-		if i >= v4Count {
-			prov = "transit-a6"
+	if p.Simulate {
+		b.WriteString(simProber())
+		b.WriteString(simTelemetry())
+	} else {
+		b.WriteString("probers:\n  - type: fixed\n    config:\n      paths:\n")
+		for _, i := range targets[:p.OutageTargets] {
+			prov := "transit-a"
+			if i >= v4Count {
+				prov = "transit-a6"
+			}
+			fmt.Fprintf(&b, "        - {provider: %s, target: \"%s\", rtt_ms: 40, loss_pct: 100}\n", prov, tbl.host(i))
 		}
-		fmt.Fprintf(&b, "        - {provider: %s, target: \"%s\", rtt_ms: 40, loss_pct: 100}\n", prov, tbl.host(i))
-	}
-	fmt.Fprintf(&b, `        - {provider: transit-a, rtt_ms: 40}
+		b.WriteString(`        - {provider: transit-a, rtt_ms: 40}
         - {provider: transit-b, rtt_ms: 10}
         - {provider: transit-a6, rtt_ms: 40}
         - {provider: transit-b6, rtt_ms: 10}
-log:
+`)
+	}
+	fmt.Fprintf(&b, `log:
   level: info
   format: text
 http:
@@ -121,7 +121,11 @@ sources:
 	if p.VIPTargets > 0 {
 		// The first documentation ASN is in about a fifth of the AS paths,
 		// so the expansion reaches max_targets.
-		fmt.Fprintf(&b, "  - type: vip\n    config:\n      interval: 10s\n      asns: [%d]\n      max_targets: %d\n", docASNs[0], p.VIPTargets)
+		asns := []uint32{docASNs[0]}
+		if p.Simulate {
+			asns = p.vipASNs
+		}
+		fmt.Fprintf(&b, "  - type: vip\n    config:\n      interval: 10s\n      asns: %s\n      max_targets: %d\n", intList(asns), p.VIPTargets)
 	}
 	if p.OutageTargets > 0 {
 		b.WriteString("  - type: outage\n    config:\n      min_prefixes: 3\n      interval: 5s\n")
@@ -160,4 +164,33 @@ func rateLimit(p Profile) int {
 		return p.RateLimitPPS
 	}
 	return 100000
+}
+
+// providerLines is the providers block. The synthetic and plain real
+// profiles have two providers per family. A simulated real-table run has
+// one per view, as lab providers with a type, an ASN, and a cost (#103).
+func providerLines(p Profile) string {
+	if !p.Simulate {
+		return fmt.Sprintf(`  - {name: transit-a, source_ip: 192.0.2.11, next_hop: %s}
+  - {name: transit-b, source_ip: 192.0.2.12, next_hop: %s}
+  - {name: transit-a6, source_ip: "2001:db8:ffff::11", next_hop: "%s"}
+  - {name: transit-b6, source_ip: "2001:db8:ffff::12", next_hop: "%s"}
+`, nextHopsV4[0], nextHopsV4[1], nextHopsV6[0], nextHopsV6[1])
+	}
+	var b strings.Builder
+	for k, r := range simRoutes[:p.sessions()] {
+		fmt.Fprintf(&b, "  - {name: %s, source_ip: 192.0.2.%d, next_hop: %s, type: %s, asn: %d, cost: %v}\n",
+			r.name, 11+k, nextHopsV4[k], r.kind, r.asn, r.cost)
+		fmt.Fprintf(&b, "  - {name: %s6, source_ip: \"2001:db8:ffff::%x\", next_hop: \"%s\", type: %s, asn: %d, cost: %v}\n",
+			r.name, 0x11+k, nextHopsV6[k], r.kind, r.asn, r.cost)
+	}
+	return b.String()
+}
+
+func intList(a []uint32) string {
+	s := make([]string, len(a))
+	for i, n := range a {
+		s[i] = strconv.FormatUint(uint64(n), 10)
+	}
+	return "[" + strings.Join(s, ", ") + "]"
 }

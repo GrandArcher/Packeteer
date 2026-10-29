@@ -38,11 +38,17 @@ const maxSessions = len(routerAddrs)
 // packeteerComm is packeteer_community in the generated config (64512:666).
 const packeteerComm = labASN<<16 | 666
 
-// Provider next hops, one per family, by table.provider index.
+// Provider next hops, one per family, by table.provider index. The first
+// two serve every profile; the third is the third view of a real-table run
+// that plays three providers (#103).
 var (
-	nextHopsV4 = [2]string{"192.0.2.1", "192.0.2.2"}
-	nextHopsV6 = [2]string{"2001:db8:ffff::1", "2001:db8:ffff::2"}
+	nextHopsV4 = [3]string{"192.0.2.1", "192.0.2.2", "192.0.2.3"}
+	nextHopsV6 = [3]string{"2001:db8:ffff::1", "2001:db8:ffff::2", "2001:db8:ffff::3"}
 )
+
+// maxViews is how many peers' views a real-table run can play, one per
+// provider next hop.
+const maxViews = len(nextHopsV4)
 
 var errNoSession = errors.New("router: no session")
 

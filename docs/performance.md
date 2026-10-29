@@ -150,6 +150,26 @@ RSS growth was 0 MiB and CPU 0.04 cores once learned, as nothing churns. Against
 
 SIGTERM to exit grows with the paths held: 6.0 s, 19.1 s, 26.7 s for 1, 2 and 3 sessions, against the 20 s budget of the single-session profiles. `lab/realtable.sh` gives `docker stop` 120 s so a slower runner is not killed at 30 s. This is a finding for a follow-up, not a budget change.
 
+## Three-million real table with simulated probes (#103)
+
+`REALTABLE_PROFILE=realtable3m bash lab/realtable.sh IMAGE` (or the `profile` input of the manual `realtable` workflow) learns a real public table at 3 million prefixes, on three sessions, and gives it simulated probe results. Opt-in, lab only, observe only, same isolation as the real table replay above.
+
+- **Three routes.** The three peers of the dump with the most routes are played on three sessions, one provider next hop each (`192.0.2.1` to `192.0.2.3`, `2001:db8:ffff::1` to `::3`), so Packeteer holds the three AS paths those peers have for a prefix. A prefix a peer lacks is missing from its session. The dump is one collector's file; paths from other collectors would need further dumps, which the job does not take.
+- **Scaled to 3 million.** `scale_to` grows the table from the dump's size. Each step splits a prefix into its two halves, in a fixed pseudo-random order, until the count is reached. A half is not added if the dump already has it. IPv4 stops at /24 and IPv6 at /48, and a dump that cannot reach the target fails the run. A new prefix carries its parent's attributes in every view that has the parent. The log and the report give counts only.
+- **Simulated probes.** The `sim` prober ([CONFIG.md](CONFIG.md#prober-sim)) answers from a seeded model per provider, with no socket and no packet. Every figure from it is labeled SIMULATED in the report and the UI. The model, with seed 103:
+
+| Provider | Type | RTT (ms) | Spread (%) | Jitter (ms) | Loss (%) |
+|---|---|---|---|---|---|
+| `transit-a` (and `transit-a6`) | transit, cost 4, commit 2000 Mbps | 38 | 60 | 2 | 0.4 |
+| `transit-b` (and `transit-b6`) | transit, cost 6, commit 1000 Mbps | 30 | 60 | 2 | 0.8 |
+| `ix-peer` (and `ix-peer6`) | peer, cost 0.5 | 22 | 70 | 3 | 1.5 |
+
+- **What is probed.** The model answers for any address, but Packeteer's target set is bounded (the `vip` source stops at `max_targets`, at most 100,000), so up to 100,000 of the 3 million prefixes get a probe result each round, spread over many origin ASNs, and the rest are learned and not measured. The engine does not probe the whole table; the profile says so rather than hide it.
+- **No packet leaves.** The responders are the model inside the `sim` prober, not network namespaces, because nothing is sent. Three checks hold that: a test fails if `sim.go` imports a network, process, or syscall package; a test fails if the generated config has any prober but `sim` or a source but `flow` and `vip`; and the run reads the host's ICMP echo counter (`/proc/net/snmp` and `snmp6`) before and after and fails if it moved. The counter sees echo requests the kernel counts, so it is an extra check on an idle lab host, not the proof.
+- **Budgets.** The `pr` per-million numbers applied to paths (the three views' routes, about 8 million), nothing raised. Learn time, peak and growth RSS, CPU, threads, API p99, and the floor of 2,500 measured prefixes are checked. The expected peak is about 20 to 25 GiB (2.4 to 2.7 KiB a path above); the budget allows 41 GiB. Use a host with 32 GB or more.
+
+Not yet run at 3 million: the job needs a large host. A 20,000-prefix, three-peer run on a development machine (2026-10-29, controller built from source, a synthetic dump of documentation prefixes) learned the table in 0.6 s with 5,000 prefixes measured (SIMULATED), API p99 212 ms, and an unchanged echo counter. That checks the wiring, not the scale.
+
 ## Findings fixed with this test
 
 The first full-table run dropped 78.8 % of flow datagrams at 20,000 records a second, where a 20,000-prefix table dropped none. Each window bucket of the `flow` source holds at most 20,000 prefixes. Once full, every new prefix rescanned all of them for the smallest, and with a full table nearly every record is a new prefix. A full bucket now frees a sixteenth of its smallest prefixes in one pass (never one larger than the newcomer), and the anomaly counters prune idle keys at most once a minute while at their cap. Drops fell to 1.8 % and soak CPU from 1.2 to 0.72 cores. Which prefixes are kept is unchanged: the busiest stay, and a smaller prefix never displaces a larger one. Merging those buckets for probe targets and commit volume keeps a destination list only for the busiest 20,000 prefixes, plus a problem prefix outside that set. The percent floor still uses every byte in the window. `rss_growth_mb` is unchanged.
@@ -198,5 +218,5 @@ The ports are on the host loopback (`11179` BGP, `12055` IPFIX, `18081` ops API)
 - The `load` job in `ci.yml` runs the `pr` profile (1,250,000 prefixes, the budgets above) on every pull request and push to `main`. It does not run `routes3m` or `rate`.
 - `load-large.yml` (#217) runs the `large` profile weekly (Wednesday 04:41 UTC) and on demand, on the runner named by the repository variable `LARGE_RUNNER` or the `runner` input. It needs at least 32 GB of RAM; GitHub-hosted `ubuntu-latest` has 16 GB. With neither set the job is skipped. It is not a pull request check.
 - The `load-multi` job in `ci.yml` runs `multi-smoke` on every pull request. `load-multi.yml` (#383) runs `multi2` weekly (Saturday 05:29 UTC) and on demand on `ubuntu-latest`, and `multi4` on the runner named by `LARGE_RUNNER` or the `runner` input; it is not a pull request check.
-- `realtable.yml` (#342) is `workflow_dispatch` only: a real RIS table at the chosen number of sessions. No pull request, push or schedule runs it.
+- `realtable.yml` (#342, #103) is `workflow_dispatch` only: a real RIS table at the chosen number of sessions, or the `realtable3m` profile. No pull request, push or schedule runs it.
 - `soak.yml` runs the `soak` profile weekly (Sunday 03:17 UTC) and on demand. A GitHub-hosted job stops at 6 hours, so the scheduled soak phase is 5h30m. For 24 hours, start it by hand with `duration: 24h` and `runner:` set to a self-hosted runner label. That workflow does not run `routes3m` or `rate` either.

@@ -302,8 +302,8 @@ func (c *Config) validateHerd(add func(string, ...any)) {
 		add("herd needs bgp.neighbors: records are built from learned routes")
 	}
 	for _, p := range c.Probers {
-		if p.Type == "fixed" {
-			add("herd: the fixed prober (labs) produces nothing that may be shared; remove it or turn herd off")
+		if p.Type == "fixed" || p.Type == "sim" {
+			add("herd: the %s prober (labs) produces nothing that may be shared; remove it or turn herd off", p.Type)
 		}
 	}
 	switch h.Share.Granularity {

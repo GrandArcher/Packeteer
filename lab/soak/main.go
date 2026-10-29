@@ -80,6 +80,7 @@ func cmdConfig(args []string) error {
 	budgets, profile, multiply, pt := commonFlags(fs)
 	out := fs.String("out", "", "write the Packeteer config here (default stdout)")
 	data := fs.String("data", "/var/lib/packeteer", "storage directory as Packeteer sees it")
+	mrtPath := fs.String("mrt", "", "MRT dump; a profile with simulate: true reads it to name the vip ASNs")
 	_ = fs.Parse(args)
 	p, err := loadProfile(*budgets, *profile)
 	if err == nil {
@@ -87,6 +88,14 @@ func cmdConfig(args []string) error {
 	}
 	if err != nil {
 		return err
+	}
+	if p.Simulate {
+		if *mrtPath == "" {
+			return errors.New("-mrt is required: a simulated profile names the vip ASNs from the dump")
+		}
+		if _, err := loadRealFor(&p, *mrtPath); err != nil {
+			return err
+		}
 	}
 	cfg := packeteerConfig(p, *pt, *data)
 	if *out == "" {
@@ -96,11 +105,27 @@ func cmdConfig(args []string) error {
 	return os.WriteFile(*out, []byte(cfg), 0o644)
 }
 
+// loadRealFor reads the dump for a real profile and sets the profile's table
+// size, budgets, and vip ASNs from it. The log has counts only.
+func loadRealFor(p *Profile, path string) (*realSet, error) {
+	rt, err := loadReal(path, realOpts{peers: max(1, p.Peers), scaleTo: p.ScaleTo})
+	if err != nil {
+		return nil, fmt.Errorf("read the dump: %w", err)
+	}
+	if err := p.useReal(rt); err != nil {
+		return nil, err
+	}
+	t := rt.info()
+	log.Printf("dump: %d peers, %d played; %d IPv4 and %d IPv6 prefixes (%d added by scale_to) in %d attribute sets, %d paths, %d skipped",
+		t.Peers, t.Views, t.IPv4, t.IPv6, t.Derived, t.Sets, t.Paths, t.Skipped)
+	return rt, nil
+}
+
 type runOpts struct {
 	name     string
 	prof     Profile
 	pt       ports
-	real     *realTable // the dump's view when prof.Real
+	real     *realSet // the dump's views when prof.Real
 	pid      int
 	stop     string
 	procRoot string
@@ -127,14 +152,11 @@ func cmdRun(args []string) (bool, error) {
 	if p.Real != (*mrtPath != "") {
 		return false, errors.New("-mrt goes with a profile that has real: true, and that profile needs it")
 	}
-	var rt *realTable
+	var rt *realSet
 	if p.Real {
-		if rt, err = loadReal(*mrtPath); err != nil {
-			return false, fmt.Errorf("read the dump: %w", err)
+		if rt, err = loadRealFor(&p, *mrtPath); err != nil {
+			return false, err
 		}
-		p.useReal(rt)
-		t := rt.info()
-		log.Printf("dump: %d peers; the largest has %d IPv4 and %d IPv6 routes in %d attribute sets, %d skipped", t.Peers, t.IPv4, t.IPv6, t.Sets, t.Skipped)
 	}
 	if *duration > 0 {
 		p.Duration = *duration
@@ -187,14 +209,14 @@ func run(ctx context.Context, o runOpts) (Result, error) {
 	p := o.prof
 	tbl := newTable(p.Prefixes)
 	if o.real != nil {
-		tbl = newRealTable(o.real)
+		tbl = newRealTable(o.real.views[0])
 	}
 	mode := "observe"
 	if p.Inject > 0 {
 		mode = "inject"
 	}
 	slow := slowID(p)
-	r := Result{Profile: o.name, Prefixes: p.Prefixes, Mode: mode, Sessions: p.sessions(), Failures: []string{}}
+	r := Result{Profile: o.name, Prefixes: p.Prefixes, Mode: mode, Sessions: p.sessions(), Simulated: p.Simulate, Failures: []string{}}
 	if o.real != nil {
 		r.Table = o.real.info()
 	}
@@ -211,7 +233,11 @@ func run(ctx context.Context, o runOpts) (Result, error) {
 
 	f := &fleet{adv: newAdvertised()}
 	for k := range p.sessions() {
-		rt, err := startRouter(ctx, k, o.pt.BGP, tbl, f.adv)
+		view := tbl
+		if o.real != nil {
+			view = newRealTable(o.real.views[k%len(o.real.views)])
+		}
+		rt, err := startRouter(ctx, k, o.pt.BGP, view, f.adv)
 		if err != nil {
 			return r, err
 		}
@@ -231,6 +257,11 @@ func run(ctx context.Context, o runOpts) (Result, error) {
 	}
 	if ov, _, err := papi.overview(ctx); err != nil || ov.Mode != mode {
 		return r, fmt.Errorf("controller must run in %s mode (got %q, %v)", mode, ov.Mode, err)
+	}
+
+	echo0, echoErr := echoesSent(o.procRoot)
+	if p.Simulate && echoErr != nil {
+		return r, fmt.Errorf("a simulated run checks that no ICMP echo leaves the host, and cannot read the counter: %w", echoErr)
 	}
 
 	// Learn: Packeteer connects to every router and each session opens
@@ -398,6 +429,13 @@ loop:
 		in, drop := udp1.In-udp0.In, udp1.RcvbufErrors-udp0.RcvbufErrors
 		if in+drop > 0 {
 			r.UDPDropPct = 100 * float64(drop) / float64(in+drop)
+		}
+	}
+	if p.Simulate {
+		// The sim prober opens no socket, so the host's echo counter must
+		// not move; a move means a real probe left the lab.
+		if why := echoFault(o.procRoot, echo0); why != "" {
+			fail("%s", why)
 		}
 	}
 	if notReady > 0 {

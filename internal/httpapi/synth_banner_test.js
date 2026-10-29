@@ -1,7 +1,8 @@
 "use strict";
-// Runs the synthesize banner (#122) from the real shell.js against a small
-// DOM stand-in: the server's warning shows under the mode banner as an
-// alert, and it hides again when synthesize is off. Run by
+// Runs the page warning banners (the synthesize warning, #122, and the
+// simulated probes notice, #103) from the real shell.js against a small DOM
+// stand-in: the server's text shows under the mode banner as an alert, and
+// it hides again when the server stops sending it. Run by
 // TestSynthesizeBanner.
 
 var fs = require("fs");
@@ -38,20 +39,29 @@ var context = {
 };
 vm.createContext(context);
 var shell = fs.readFileSync(path.join(__dirname, "web", "shell.js"), "utf8");
-vm.runInContext(fn(shell, "shellRenderSynthBanner"), context);
-assert(shell.indexOf("shellRenderSynthBanner(ov && ov.synthesize_warning)") >= 0, "shellRefresh does not render the banner");
+vm.runInContext(fn(shell, "shellRenderNotice"), context);
+assert(shell.indexOf('shellRenderNotice("synth-banner", ov && ov.synthesize_warning)') >= 0 && shell.indexOf('shellRenderNotice("sim-banner", ov && ov.simulated_probes)') >= 0, "shellRefresh does not render the banners");
 var app = fs.readFileSync(path.join(__dirname, "web", "app.js"), "utf8");
-assert(app.indexOf("shellRenderSynthBanner(o.synthesize_warning)") >= 0, "the dashboard does not render the banner");
+assert(app.indexOf('shellRenderNotice("synth-banner", o.synthesize_warning)') >= 0 && app.indexOf('shellRenderNotice("sim-banner", o.simulated_probes)') >= 0, "the dashboard does not render the banners");
 
-context.shellRenderSynthBanner("");
+context.shellRenderNotice("synth-banner", "");
 assert(inserted.length === 0, "banner added with synthesize off");
 var warning = "WARNING: synthesize is on. Synthesized more-specifics are NOT in the learned RIB.";
-context.shellRenderSynthBanner(warning);
+context.shellRenderNotice("synth-banner", warning);
 var node = byID["synth-banner"];
 assert(node && !node.hidden && node.textContent === warning, "banner text: " + JSON.stringify(node));
 assert(node.className === "banner banner-warn" && node.attrs.role === "alert", "banner is not a warning alert: " + node.className);
-context.shellRenderSynthBanner(warning);
+context.shellRenderNotice("synth-banner", warning);
 assert(inserted.length === 1, "banner added twice");
-context.shellRenderSynthBanner(undefined);
+context.shellRenderNotice("synth-banner", undefined);
 assert(node.hidden, "banner stays after synthesize is off");
+
+var simText = "SIMULATED PROBES: every probe number here is simulated, not measured.";
+context.shellRenderNotice("sim-banner", simText);
+var sim = byID["sim-banner"];
+assert(sim && sim !== node && !sim.hidden && sim.textContent === simText, "sim banner text: " + JSON.stringify(sim));
+assert(sim.className === "banner banner-warn" && sim.attrs.role === "alert", "sim banner is not a warning alert");
+assert(node.hidden, "the synthesize banner came back with the sim banner");
+context.shellRenderNotice("sim-banner", "");
+assert(sim.hidden, "sim banner stays after the notice is gone");
 console.log("ok");

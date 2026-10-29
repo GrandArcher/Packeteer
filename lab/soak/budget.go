@@ -22,6 +22,21 @@ type Profile struct {
 	// dump given with -mrt, instead of the synthetic table (#342). It is
 	// observe only, with no flows, churn or probe targets.
 	Real bool `yaml:"real"`
+	// Peers, on a real profile, plays that many peers' views of the dump
+	// (the ones with the most routes), each on its own session and as its
+	// own provider's next hop, so Packeteer holds that many different
+	// paths per prefix (#103). Zero plays the largest peer once, or as
+	// many times as sessions says.
+	Peers int `yaml:"peers"`
+	// ScaleTo, on a real profile, grows the dump's table to this many
+	// prefixes with more-specifics of its own prefixes (#103). Zero keeps
+	// the dump's size.
+	ScaleTo int `yaml:"scale_to"`
+	// Simulate, on a real profile, gives the learned table probe results
+	// from the sim prober instead of none: a seeded delay and loss model
+	// per provider, over the vip source's targets (#103). No packet is
+	// sent, and every figure from it is simulated.
+	Simulate bool `yaml:"simulate"`
 	// Duration is the soak phase, after the table is learned.
 	Duration time.Duration `yaml:"duration"`
 	// Warmup is the start of the soak left out of the growth baseline.
@@ -64,10 +79,13 @@ type Profile struct {
 	// no outage source.
 	OutageTargets int     `yaml:"outage_targets"`
 	Budgets       Budgets `yaml:"budgets"`
+
+	realPaths int      // set by useReal
+	vipASNs   []uint32 // set by useReal on a simulated run
 }
 
 // sessions is the number of routers, at least one.
-func (p Profile) sessions() int { return max(1, p.Sessions) }
+func (p Profile) sessions() int { return max(1, p.Sessions, p.Peers) }
 
 // Budgets are the limits. Zero leaves a figure reported but unchecked.
 //
@@ -135,7 +153,7 @@ func loadProfile(path, name string) (Profile, error) {
 		slices.Sort(names)
 		return Profile{}, fmt.Errorf("%s: no profile %q (have %s)", path, name, strings.Join(names, ", "))
 	}
-	p.Budgets = p.Budgets.scaled(p.Prefixes * p.sessions())
+	p.Budgets = p.Budgets.scaled(p.paths())
 	return p, p.validate()
 }
 
@@ -147,23 +165,55 @@ func (p *Profile) multiply(n int) error {
 		return nil
 	}
 	p.Sessions = n
-	p.Budgets = p.Budgets.scaled(p.Prefixes * p.sessions())
+	p.Budgets = p.Budgets.scaled(p.paths())
 	return p.validate()
 }
 
-// useReal sets the table size from a dump and rescales the budgets.
-func (p *Profile) useReal(t *realTable) {
-	p.Prefixes = len(t.entries)
-	p.Budgets = p.Budgets.scaled(p.Prefixes * p.sessions())
+// paths is the routes Packeteer holds: the dump's, once read, else the
+// table size times the sessions.
+func (p Profile) paths() int {
+	if p.realPaths > 0 {
+		return p.realPaths
+	}
+	return p.Prefixes * p.sessions()
+}
+
+// useReal sets the table size from a dump and rescales the budgets to the
+// paths its views hold.
+func (p *Profile) useReal(t *realSet) error {
+	p.Prefixes = t.prefixes
+	if len(t.views) == 1 {
+		p.realPaths = t.prefixes * p.sessions()
+	} else {
+		p.realPaths = t.paths
+	}
+	p.Budgets = p.Budgets.scaled(p.paths())
+	if !p.Simulate {
+		return nil
+	}
+	var err error
+	p.vipASNs, err = vipASNs(t, p.VIPTargets)
+	return err
 }
 
 func (p Profile) validate() error {
 	var errs []error
 	switch {
 	case p.Real:
-		if p.Prefixes != 0 || p.Inject != 0 || p.StaticTargets != 0 || p.VIPTargets != 0 || p.OutageTargets != 0 || p.Churn != 0 || p.FlowRate != 0 {
-			errs = append(errs, errors.New("real: prefixes come from the dump, and inject, static_targets, vip_targets, outage_targets, churn and flow_rate must be 0 (observe only)"))
+		if p.Prefixes != 0 || p.Inject != 0 || p.StaticTargets != 0 || p.OutageTargets != 0 || p.Churn != 0 || p.FlowRate != 0 || (p.VIPTargets != 0 && !p.Simulate) {
+			errs = append(errs, errors.New("real: prefixes come from the dump, and inject, static_targets, outage_targets, churn and flow_rate must be 0, and so must vip_targets without simulate (observe only)"))
 		}
+		if p.Simulate && p.VIPTargets == 0 {
+			errs = append(errs, errors.New("simulate needs vip_targets: the sim prober answers for the targets the vip source names"))
+		}
+		if p.Peers < 0 || p.Peers > maxViews || (p.Peers > 0 && p.Sessions > 0) {
+			errs = append(errs, fmt.Errorf("peers %d: want 0 to %d, and not together with sessions", p.Peers, maxViews))
+		}
+		if p.ScaleTo < 0 {
+			errs = append(errs, errors.New("scale_to must not be negative"))
+		}
+	case p.Peers != 0 || p.ScaleTo != 0 || p.Simulate:
+		errs = append(errs, errors.New("peers, scale_to and simulate go with a real profile"))
 	case !newTable(p.Prefixes).valid() || p.Prefixes < v4Count+2:
 		errs = append(errs, fmt.Errorf("prefixes %d: want %d to %d", p.Prefixes, v4Count+2, v4Count+maxV6))
 	}
@@ -254,6 +304,10 @@ type Result struct {
 	SlowAtClose       int     `json:"slow_routes_at_close"`
 	OutageEvents      int     `json:"outage_events"`
 
+	// Simulated is set when the probe results are the sim prober's model
+	// and not measurements (#103).
+	Simulated bool `json:"simulated"`
+
 	// Table describes a real table (#342), counts only. Nil on synthetic
 	// runs.
 	Table *TableInfo `json:"table,omitempty"`
@@ -263,11 +317,14 @@ type Result struct {
 
 // TableInfo is what a real dump held: counts, never a prefix or an AS.
 type TableInfo struct {
-	Peers   int `json:"peers"` // peers in the dump with routes
-	IPv4    int `json:"ipv4"`  // routes of the chosen peer
-	IPv6    int `json:"ipv6"`
+	Peers   int `json:"peers"`   // peers in the dump with routes
+	Views   int `json:"views"`   // peers played, one session each
+	IPv4    int `json:"ipv4"`    // distinct prefixes over the views
+	IPv6    int `json:"ipv6"`    //
 	Sets    int `json:"sets"`    // distinct attribute sets
 	Skipped int `json:"skipped"` // routes left out: malformed
+	Derived int `json:"derived"` // prefixes added by scale_to
+	Paths   int `json:"paths"`   // routes over the views
 }
 
 // Check is one budget line.
@@ -305,8 +362,8 @@ func checks(r Result, b Budgets) []Check {
 		{Name: "API p99 latency", Value: r.APIP99Ms, Limit: b.APIP99Ms, Unit: "ms"},
 		{Name: "reconverge after churn", Value: r.ReconvergeSecs, Limit: b.ReconvergeSecs, Unit: "s"},
 		{Name: "SIGTERM to exit", Value: r.ShutdownSeconds, Limit: b.ShutdownSeconds, Unit: "s"},
-		{Name: "prefixes measured", Value: float64(r.Measured), Limit: float64(b.MinMeasured), Min: true},
-		{Name: "active prefixes measured per hour", Value: r.ActivePerHour, Limit: float64(b.MinActivePerHour), Min: true},
+		{Name: simulated(r, "prefixes measured"), Value: float64(r.Measured), Limit: float64(b.MinMeasured), Min: true},
+		{Name: simulated(r, "active prefixes measured per hour"), Value: r.ActivePerHour, Limit: float64(b.MinActivePerHour), Min: true},
 		{Name: "passive prefixes tracked", Value: float64(r.PassiveTracked), Limit: float64(b.MinPassiveTracked), Min: true},
 		{Name: "decide loop, longest gap", Value: r.DecideMaxGapSecs, Limit: b.LoopGapSecs, Unit: "s"},
 		{Name: "probe loop, longest gap", Value: r.ProbeMaxGapSecs, Limit: b.LoopGapSecs, Unit: "s"},
@@ -328,6 +385,15 @@ func checks(r Result, b Budgets) []Check {
 	return cs
 }
 
+// simulated marks a figure that comes from probe results, so a simulated
+// run never shows one as measured (#103).
+func simulated(r Result, name string) string {
+	if r.Simulated {
+		return name + " (SIMULATED)"
+	}
+	return name
+}
+
 // report renders the result as a Markdown table and says whether every
 // budget and invariant held.
 func report(r Result, b Budgets) (string, bool) {
@@ -336,6 +402,9 @@ func report(r Result, b Budgets) (string, bool) {
 	fmt.Fprintf(&s, "### Load and soak: profile `%s`\n\n", r.Profile)
 	fmt.Fprintf(&s, "%d prefixes on %d session(s), %s soak, %d flow records, %d churn updates. %s mode, stock image, mounted config.\n\n",
 		r.Prefixes, max(1, r.Sessions), time.Duration(r.DurationSeconds*float64(time.Second)).Round(time.Second), r.FlowRecords, r.ChurnUpdates, modeName(r.Mode))
+	if r.Simulated {
+		s.WriteString("**Probe results are SIMULATED**: the sim prober answers from a seeded delay and loss model per provider, sends no packet, and no real address is probed. Rows marked SIMULATED are not measurements of any network. The learned table, memory, CPU, and API figures are measured.\n\n")
+	}
 	s.WriteString("| Check | Measured | Budget | |\n|---|---|---|---|\n")
 	for _, c := range checks(r, b) {
 		limit, mark := "-", "report"
@@ -363,8 +432,8 @@ func report(r Result, b Budgets) (string, bool) {
 			r.WithdrawChecks, r.SlowWithdrawLate, r.InjectedPeak, r.InjectedEnd, r.RoutesAtClose, r.SlowAtClose, r.OutageEvents)
 	}
 	if t := r.Table; t != nil {
-		fmt.Fprintf(&s, "Real table: the largest of %d peers in the dump, %d IPv4 and %d IPv6 routes in %d attribute sets (%.1f prefixes per set), %d skipped.\n",
-			t.Peers, t.IPv4, t.IPv6, t.Sets, float64(t.IPv4+t.IPv6)/float64(max(1, t.Sets)), t.Skipped)
+		fmt.Fprintf(&s, "Real table: %d of the dump's %d peers played, %d IPv4 and %d IPv6 prefixes in %d attribute sets (%.1f prefixes per set), %d paths, %d prefixes added by scale_to, %d skipped.\n",
+			max(1, t.Views), t.Peers, t.IPv4, t.IPv6, t.Sets, float64(t.IPv4+t.IPv6)/float64(max(1, t.Sets)), t.Paths, t.Derived, t.Skipped)
 	}
 	for _, f := range r.Failures {
 		fmt.Fprintf(&s, "\n- **FAIL**: %s", f)
