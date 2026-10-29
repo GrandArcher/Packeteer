@@ -18,6 +18,9 @@ formatter:
     - name: provider
       index: 1002
       type: string
+  # interfaceName is a string; without this GoFlow2 renders it as hex.
+  render:
+    provider: string
 ipfix:
   mapping:
     - field: 148

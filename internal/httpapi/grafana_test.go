@@ -51,7 +51,7 @@ func series(t *testing.T, text []byte) map[string]map[string]bool {
 		if line == "" || line[0] == '#' {
 			continue
 		}
-		name := line
+		var name string
 		labels := map[string]bool{}
 		if i := strings.IndexByte(line, '{'); i >= 0 {
 			name = line[:i]
