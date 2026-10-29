@@ -33,6 +33,7 @@ const (
 	ReportMitigations  = "mitigations"
 	ReportAnomalies    = "anomalies"
 	ReportExchanges    = "exchanges"
+	ReportScorecard    = "scorecard"
 )
 
 // HoursPerMonth converts a monthly price per Mbps into an hourly accrual.
@@ -118,7 +119,7 @@ func Build(h plugin.History, q Query) (Report, error) {
 	limit := q.Limit
 	if limit <= 0 {
 		limit = DefaultLimit
-		if q.Name == ReportImprovements || q.Name == ReportSavings || q.Name == ReportMitigations || q.Name == ReportAnomalies {
+		if q.Name == ReportImprovements || q.Name == ReportSavings || q.Name == ReportMitigations || q.Name == ReportAnomalies || q.Name == ReportScorecard {
 			limit = 100
 		}
 	}
@@ -151,6 +152,8 @@ func Build(h plugin.History, q Query) (Report, error) {
 		a.probes(&rep)
 	case ReportProbeASNs:
 		a.probeASNs(&rep)
+	case ReportScorecard:
+		a.scorecard(&rep)
 	case ReportSavings:
 		a.savings(&rep)
 	case ReportExchanges:

@@ -54,8 +54,9 @@ func parseTime(v string) (time.Time, error) {
 var reportParams = []string{"days", "from", "to", "limit", "sort", "order", "format"}
 
 // reportQuery reads the range, limit, sort, and filters. The default range
-// is the last DefaultReportDays days. An unknown parameter is an error, so a
-// misspelled filter cannot return unfiltered rows.
+// is the last DefaultReportDays days, or the report's own default. An
+// unknown parameter is an error, so a misspelled filter cannot return
+// unfiltered rows.
 func reportQuery(r *http.Request, name string, now time.Time) (history.Query, error) {
 	return reportQueryValues(r.URL.Query(), name, now)
 }
@@ -77,6 +78,9 @@ func reportQueryValues(v url.Values, name string, now time.Time) (history.Query,
 		q.To = t
 	}
 	days := DefaultReportDays
+	if d, ok := history.Lookup(name); ok && d.DefaultDays > 0 {
+		days = d.DefaultDays
+	}
 	if s := v.Get("days"); s != "" {
 		n, err := strconv.Atoi(s)
 		if err != nil || n < 1 || n > MaxReportDays {
