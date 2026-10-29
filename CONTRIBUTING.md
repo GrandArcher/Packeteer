@@ -25,5 +25,6 @@ Go 1.26 is required (see `go.mod`). Docker is not needed for unit tests; the con
 - Add tests for the behavior you change. BGP tests use simulated routers and documentation prefixes and ASNs only.
 - Keep `config.example.yaml` in `mode: observe`. Do not commit secrets, real prefixes, or live RIBs.
 - New capabilities are plugins behind the interfaces in `pkg/plugin` (see [docs/PLUGINS.md](docs/PLUGINS.md)).
+- Writing a plugin, in this repository or in your own: [docs/PLUGIN_AUTHORING.md](docs/PLUGIN_AUTHORING.md). To list one that lives elsewhere, add a row to [docs/COMMUNITY_PLUGINS.md](docs/COMMUNITY_PLUGINS.md).
 
 Environment variables are listed in [docs/ENV.md](docs/ENV.md). Vulnerabilities: see [SECURITY.md](SECURITY.md).

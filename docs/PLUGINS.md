@@ -172,7 +172,7 @@ func init() {
 }
 ```
 
-Built-ins live under `internal/plugins/<kind>/<name>` and are linked through `internal/plugins/all`. A third-party build blank-imports its package the same way.
+Built-ins live under `internal/plugins/<kind>/<name>` and are linked through `internal/plugins/all`. A fork adds its package to `internal/plugins/all` the same way ([PLUGIN_AUTHORING.md](PLUGIN_AUTHORING.md#compiled-in)). To write a plugin, start at [PLUGIN_AUTHORING.md](PLUGIN_AUTHORING.md).
 
 ## `exec` plugins (work with the stock image)
 
