@@ -695,7 +695,7 @@ plugin_dir: /etc/packeteer/plugins
 #       address: "collector.example.net:2055"
 #   - type: snmpagent                 # read-only SNMP agent, docs/monitoring.md
 #     config:
-#       listen: 127.0.0.1:161         # needs http.listen
+#       listen: 192.0.2.10:161        # an address on this host; needs http.listen
 #       username_env: PACKETEER_SNMP_USER   # v3 authPriv (recommended)
 #       auth_env: PACKETEER_SNMP_AUTH
 #       priv_env: PACKETEER_SNMP_PRIV

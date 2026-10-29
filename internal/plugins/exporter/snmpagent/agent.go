@@ -9,8 +9,10 @@
 package snmpagent
 
 import (
+	"bytes"
 	"context"
 	"crypto/subtle"
+	"errors"
 	"fmt"
 	"net"
 	"net/netip"
@@ -32,6 +34,8 @@ const (
 	// maxVarbinds is the most variable bindings the agent reads from, or
 	// puts in, one message.
 	maxVarbinds = 64
+	// oidUnknownEngineIDs is usmStatsUnknownEngineIDs.0 (RFC 3414).
+	oidUnknownEngineIDs = ".1.3.6.1.6.3.15.1.1.4.0"
 	// bootsEpoch makes the engine boots counter the seconds since
 	// 2020-01-01, so it grows across restarts without a state file
 	// (RFC 3414 wants a counter that does). It fits the 31 bits RFC 3411
@@ -81,8 +85,13 @@ type Agent struct {
 	prevAt      time.Time
 	prevCommits float64
 
-	mu sync.Mutex
-	tl *gosnmp.TrapListener
+	// ours decodes with the agent's user, open with no keys.
+	ours, open     *gosnmp.GoSNMP
+	unknownEngines atomic.Uint32
+
+	mu   sync.Mutex
+	conn net.PacketConn
+	done chan struct{}
 }
 
 // New is the plugin factory. It opens no socket.
@@ -131,6 +140,9 @@ func New(c plugin.Config, e plugin.Env) (plugin.Exporter, error) {
 		if a.usm, a.flags, err = v3.USM(getenv); err != nil {
 			return nil, err
 		}
+		if a.usm.PrivacyProtocol == gosnmp.DES {
+			return nil, fmt.Errorf("priv_protocol DES is not supported by the agent; use AES")
+		}
 		id := cfg.EngineID
 		if id == "" {
 			id = defaultEngineID
@@ -152,6 +164,14 @@ func New(c plugin.Config, e plugin.Env) (plugin.Exporter, error) {
 			p = netip.PrefixFrom(ip, ip.BitLen())
 		}
 		a.allow = append(a.allow, p.Masked())
+	}
+	quiet := gosnmp.NewLogger(nil)
+	a.ours = &gosnmp.GoSNMP{Version: gosnmp.Version3, Logger: quiet}
+	if a.usm != nil {
+		a.usm.Logger = quiet
+		a.ours.SecurityModel, a.ours.MsgFlags, a.ours.SecurityParameters = gosnmp.UserSecurityModel, a.flags, a.usm.Copy()
+		a.open = &gosnmp.GoSNMP{Version: gosnmp.Version3, Logger: quiet, SecurityModel: gosnmp.UserSecurityModel, MsgFlags: gosnmp.NoAuthNoPriv,
+			SecurityParameters: &gosnmp.UsmSecurityParameters{AuthenticationProtocol: gosnmp.NoAuth, PrivacyProtocol: gosnmp.NoPriv, Logger: quiet}}
 	}
 	return a, nil
 }
@@ -185,39 +205,51 @@ func (a *Agent) Export(_ context.Context, batch []plugin.ExportRecord) error {
 
 // Start opens the UDP socket.
 func (a *Agent) Start(context.Context) error {
-	tl := gosnmp.NewTrapListener()
-	tl.Params = &gosnmp.GoSNMP{Version: gosnmp.Version3, Logger: gosnmp.NewLogger(nil)}
-	if a.usm != nil {
-		tl.Params.SecurityModel = gosnmp.UserSecurityModel
-		tl.Params.MsgFlags = a.flags
-		tl.Params.SecurityParameters = a.usm.Copy()
-	}
-	tl.OnNewTrap = func(p *gosnmp.SnmpPacket, from *net.UDPAddr) { a.handle(tl, p, from) }
-	failed := make(chan error, 1)
-	go func() { failed <- tl.Listen(a.listen) }()
-	select {
-	case <-tl.Listening():
-	case err := <-failed:
+	conn, err := net.ListenPacket("udp", a.listen)
+	if err != nil {
 		return fmt.Errorf("snmpagent: %w", err)
-	case <-time.After(5 * time.Second):
-		return fmt.Errorf("snmpagent: listening on %s took too long", a.listen)
 	}
+	done := make(chan struct{})
 	a.mu.Lock()
-	a.tl = tl
+	a.conn, a.done = conn, done
 	a.mu.Unlock()
+	go a.serve(conn, done)
 	return nil
 }
 
-// Stop closes the socket.
+// Stop closes the socket and waits for the reader.
 func (a *Agent) Stop(context.Context) error {
 	a.mu.Lock()
-	tl := a.tl
-	a.tl = nil
+	conn, done := a.conn, a.done
+	a.conn, a.done = nil, nil
 	a.mu.Unlock()
-	if tl != nil {
-		tl.Close()
+	if conn != nil {
+		conn.Close()
+		<-done
 	}
 	return nil
+}
+
+// serve answers datagrams one at a time. A source outside allow_from is
+// dropped before anything is parsed, because parsing a v3 message derives
+// keys and runs the decoder on bytes nobody has authenticated.
+func (a *Agent) serve(conn net.PacketConn, done chan<- struct{}) {
+	defer close(done)
+	buf := make([]byte, 65535)
+	for {
+		n, from, err := conn.ReadFrom(buf)
+		if err != nil {
+			if errors.Is(err, net.ErrClosed) {
+				return
+			}
+			continue
+		}
+		if ua, ok := from.(*net.UDPAddr); ok && a.allowed(ua.IP) {
+			if out := a.reply(buf[:n]); out != nil {
+				_, _ = conn.WriteTo(out, from)
+			}
+		}
+	}
 }
 
 func (a *Agent) allowed(ip net.IP) bool {
@@ -237,9 +269,130 @@ func (a *Agent) allowed(ip net.IP) bool {
 	return false
 }
 
-// authentic reports whether the request is one the agent answers. A request
-// that fails is dropped without an answer, as RFC 3584 and RFC 3414 allow:
-// a probe learns nothing from a wrong community or user.
+// msgVersion reads the version of an SNMP message, SEQUENCE { INTEGER, ... },
+// without decoding the rest.
+func msgVersion(b []byte) (gosnmp.SnmpVersion, bool) {
+	if len(b) < 5 || b[0] != 0x30 {
+		return 0, false
+	}
+	i := 2
+	if b[1]&0x80 != 0 {
+		i += int(b[1] & 0x7f)
+	}
+	if i+3 > len(b) || b[i] != 0x02 || b[i+1] != 0x01 {
+		return 0, false
+	}
+	return gosnmp.SnmpVersion(b[i+2]), true
+}
+
+// reply is the response to one datagram, or nil to stay silent. A request
+// that fails authentication is dropped without an answer, as RFC 3414 and
+// RFC 3584 allow: a probe learns nothing from a wrong community or user.
+// Only requests are answered. An inform is never acknowledged.
+func (a *Agent) reply(msg []byte) (out []byte) {
+	// The decoder runs on unauthenticated input; whatever it trips on must
+	// not take the controller down.
+	defer func() {
+		if recover() != nil {
+			out = nil
+		}
+	}()
+	ver, ok := msgVersion(msg)
+	if !ok {
+		return nil
+	}
+	codec := a.ours
+	switch ver {
+	case gosnmp.Version2c:
+		if a.community == "" {
+			return nil
+		}
+	case gosnmp.Version3:
+		if a.usm == nil {
+			return nil
+		}
+		// Keys are derived for the agent's engine ID only. Any other
+		// message is read with no keys, which is all that discovery needs.
+		if !bytes.Contains(msg, []byte(a.engine)) {
+			codec = a.open
+		}
+	default:
+		return nil
+	}
+	p, err := codec.UnmarshalTrap(msg, false)
+	if err != nil {
+		return nil
+	}
+	now := a.now()
+	if codec == a.open {
+		return a.discovery(p, now)
+	}
+	switch p.PDUType {
+	case gosnmp.GetRequest, gosnmp.GetNextRequest, gosnmp.GetBulkRequest, gosnmp.SetRequest:
+	default:
+		return nil
+	}
+	if !a.authentic(p) {
+		return nil
+	}
+	switch {
+	case len(p.Variables) > maxVarbinds:
+		p.Variables, p.Error, p.ErrorIndex = nil, gosnmp.TooBig, 0
+	case p.PDUType == gosnmp.SetRequest:
+		// No object is writable. The bindings go back as received.
+		p.Error, p.ErrorIndex = gosnmp.NotWritable, 1
+	default:
+		p.Variables = a.answer(p, now)
+		p.Error, p.ErrorIndex = gosnmp.NoError, 0
+	}
+	p.PDUType = gosnmp.GetResponse
+	p.MsgFlags &^= gosnmp.Reportable
+	if p.Version == gosnmp.Version3 {
+		a.stamp(p, now)
+		// A fresh salt for every response: the request's would repeat the
+		// cipher's IV under the same key (RFC 3826 section 3.1.2.1).
+		if err := a.usm.InitPacket(p); err != nil {
+			return nil
+		}
+	}
+	out, err = p.MarshalMsg()
+	if err != nil {
+		return nil
+	}
+	return out
+}
+
+// stamp sets the engine fields of a v3 response.
+func (a *Agent) stamp(p *gosnmp.SnmpPacket, now time.Time) {
+	sp := p.SecurityParameters.(*gosnmp.UsmSecurityParameters)
+	sp.AuthoritativeEngineID = a.engine
+	sp.AuthoritativeEngineBoots = a.boots
+	sp.AuthoritativeEngineTime = uint32(max(0, now.Sub(a.started)/time.Second))
+	p.ContextEngineID = a.engine
+}
+
+// discovery answers a v3 engine discovery request, a message with no engine
+// ID and no security, with a Report carrying the engine ID, boots, and time
+// (RFC 3414 section 4). Anything else read without keys is dropped.
+func (a *Agent) discovery(p *gosnmp.SnmpPacket, now time.Time) []byte {
+	sp, ok := p.SecurityParameters.(*gosnmp.UsmSecurityParameters)
+	if !ok || p.Version != gosnmp.Version3 || p.SecurityModel != gosnmp.UserSecurityModel || p.PDUType != gosnmp.GetRequest ||
+		p.MsgFlags&gosnmp.AuthPriv != 0 || sp.AuthoritativeEngineID != "" {
+		return nil
+	}
+	a.stamp(p, now)
+	p.PDUType = gosnmp.Report
+	p.MsgFlags = gosnmp.NoAuthNoPriv
+	p.Error, p.ErrorIndex = gosnmp.NoError, 0
+	p.Variables = []gosnmp.SnmpPDU{{Name: oidUnknownEngineIDs, Type: gosnmp.Counter32, Value: a.unknownEngines.Add(1)}}
+	out, err := p.MarshalMsg()
+	if err != nil {
+		return nil
+	}
+	return out
+}
+
+// authentic reports whether a decoded request is one the agent answers.
 func (a *Agent) authentic(p *gosnmp.SnmpPacket) bool {
 	switch p.Version {
 	case gosnmp.Version2c:
@@ -256,36 +409,6 @@ func (a *Agent) authentic(p *gosnmp.SnmpPacket) bool {
 			(p.ContextEngineID == "" || p.ContextEngineID == a.engine)
 	}
 	return false
-}
-
-func (a *Agent) handle(tl *gosnmp.TrapListener, p *gosnmp.SnmpPacket, from *net.UDPAddr) {
-	switch p.PDUType {
-	case gosnmp.GetRequest, gosnmp.GetNextRequest, gosnmp.GetBulkRequest, gosnmp.SetRequest:
-	default:
-		return
-	}
-	if !a.allowed(from.IP) || !a.authentic(p) {
-		return
-	}
-	now := a.now()
-	switch {
-	case len(p.Variables) > maxVarbinds:
-		p.Variables, p.Error, p.ErrorIndex = nil, gosnmp.TooBig, 0
-	case p.PDUType == gosnmp.SetRequest:
-		// No object is writable. The bindings go back as received.
-		p.Error, p.ErrorIndex = gosnmp.NotWritable, 1
-	default:
-		p.Variables = a.answer(p, now)
-		p.Error, p.ErrorIndex = gosnmp.NoError, 0
-	}
-	p.PDUType = gosnmp.GetResponse
-	p.MsgFlags &^= gosnmp.Reportable
-	if sp, ok := p.SecurityParameters.(*gosnmp.UsmSecurityParameters); ok && p.Version == gosnmp.Version3 {
-		sp.AuthoritativeEngineBoots = a.boots
-		sp.AuthoritativeEngineTime = uint32(max(0, now.Sub(a.started)/time.Second))
-		p.ContextEngineID = a.engine
-	}
-	_ = tl.SendUDP(p, from)
 }
 
 // answer is the variable bindings of the response.

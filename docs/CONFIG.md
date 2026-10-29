@@ -1488,8 +1488,8 @@ curl -u "$USER:$PASS" -X DELETE http://127.0.0.1:8080/api/maintenance/api-1
 | `snmpagent` | `listen` | required | UDP `ip:port` of the read-only SNMP agent, for example `127.0.0.1:161`. Takes the `metrics` stream only, so it needs `http.listen`. See [monitoring.md](monitoring.md). |
 | | `community_env` | none | Turns on v2c: the environment variable holding the community. |
 | | `username_env` | none | Turns on v3: the environment variable holding the USM user. At least one of `community_env` and `username_env` is required. |
-| | `security_level`, `auth_protocol`, `auth_env`, `priv_protocol`, `priv_env` | `authPriv`, `SHA`, none, `AES`, none | v3 keys, as for the [`snmptrap` notifier](#notifier-snmptrap). Passphrases are at least 8 characters. A request that asks for a lower level than `security_level` is not answered. |
-| | `engine_id` | derived | v3 only: the agent's engine ID, 5-32 bytes of hex. The default is fixed (`0x80007ed90470...`); set your own when an NMS polls several Packeteer agents. |
+| | `security_level`, `auth_protocol`, `auth_env`, `priv_protocol`, `priv_env` | `authPriv`, `SHA`, none, `AES`, none | v3 keys, as for the [`snmptrap` notifier](#notifier-snmptrap), except that `priv_protocol: DES` is refused. Passphrases are at least 8 characters. A request that asks for a lower level than `security_level` is not answered. |
+| | `engine_id` | fixed | v3 only: the agent's engine ID, 5-32 bytes of hex. The default is the same on every install (`0x80007ed904` and `packeteer`), so set a different one on each instance an NMS polls, an HA pair included. |
 | | `enterprise_oid` | `1.3.6.1.4.1.8072.9999.9999.7717` | Base OID, as for `snmptrap`. Change it together with the `packeteer` assignment in the MIB. |
 | | `allow_from` | any | Addresses or prefixes that are answered. |
 | `ipfix` | `address` | required | Collector `host:port`, UDP. Takes `flows` only. |

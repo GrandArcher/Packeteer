@@ -61,8 +61,9 @@ snmpwalk -v3 -l authPriv -u nms -a SHA -A ... -x AES -X ... -M +deploy/mib -m +P
 - Set `community_env` for v2c, `username_env` for v3, or both on the one UDP port. One of them is required: the agent is never open to anyone. Prefer v3 `authPriv`: v2c sends the community and the data in clear text. `allow_from` limits who is answered.
 - It serves the newest snapshot of [`GET /metrics`](API.md#metrics), taken every 30 seconds, so it needs `http.listen`, and it has no data for the first 30 seconds after start (every object answers noSuchObject). Poll no faster than every 30 seconds. `pktrDataAge` above 90 means the snapshots stopped.
 - Port 161 is privileged. The image runs as root; run elsewhere with a port above 1023 or the capability to bind it.
+- Each v3 agent needs its own `engine_id` when one NMS polls several (an HA pair included); the default is the same everywhere. DES privacy is refused; use AES.
 - The v3 engine boots counter is the number of seconds since 2020-01-01 at start, so it grows across restarts without a state file. Time windows are not enforced, so a captured request can be replayed and gets the same read-only answer; `allow_from` and a firewall are the control.
-- A failure to bind the port is a startup error. A failing agent never changes a decision or a withdraw.
+- A failure to bind the port is a startup error. The agent reads each datagram only after `allow_from`, never acknowledges an inform, and a malformed packet is dropped; a failing agent never changes a decision or a withdraw.
 
 ## Traps and informs
 

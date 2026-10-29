@@ -40,7 +40,7 @@ pktrConformance   OBJECT IDENTIFIER ::= { packeteer 4 }
 -- Objects carried by every notification.
 
 pktrEventKind OBJECT-TYPE
-    SYNTAX      DisplayString (SIZE (0..1024))
+    SYNTAX      OCTET STRING (SIZE (0..1024))
     MAX-ACCESS  accessible-for-notify
     STATUS      current
     DESCRIPTION
@@ -48,7 +48,7 @@ pktrEventKind OBJECT-TYPE
     ::= { pktrEvent 1 }
 
 pktrEventSeverity OBJECT-TYPE
-    SYNTAX      DisplayString (SIZE (0..1024))
+    SYNTAX      OCTET STRING (SIZE (0..1024))
     MAX-ACCESS  accessible-for-notify
     STATUS      current
     DESCRIPTION
@@ -56,7 +56,7 @@ pktrEventSeverity OBJECT-TYPE
     ::= { pktrEvent 2 }
 
 pktrEventMessage OBJECT-TYPE
-    SYNTAX      DisplayString (SIZE (0..1024))
+    SYNTAX      OCTET STRING (SIZE (0..1024))
     MAX-ACCESS  accessible-for-notify
     STATUS      current
     DESCRIPTION
@@ -64,7 +64,7 @@ pktrEventMessage OBJECT-TYPE
     ::= { pktrEvent 3 }
 
 pktrEventTime OBJECT-TYPE
-    SYNTAX      DisplayString (SIZE (0..1024))
+    SYNTAX      OCTET STRING (SIZE (0..1024))
     MAX-ACCESS  accessible-for-notify
     STATUS      current
     DESCRIPTION
@@ -72,7 +72,7 @@ pktrEventTime OBJECT-TYPE
     ::= { pktrEvent 4 }
 
 pktrEventFields OBJECT-TYPE
-    SYNTAX      DisplayString (SIZE (0..1024))
+    SYNTAX      OCTET STRING (SIZE (0..1024))
     MAX-ACCESS  accessible-for-notify
     STATUS      current
     DESCRIPTION
@@ -81,7 +81,7 @@ pktrEventFields OBJECT-TYPE
     ::= { pktrEvent 5 }
 
 pktrEventDedupKey OBJECT-TYPE
-    SYNTAX      DisplayString (SIZE (0..1024))
+    SYNTAX      OCTET STRING (SIZE (0..1024))
     MAX-ACCESS  accessible-for-notify
     STATUS      current
     DESCRIPTION
@@ -1007,6 +1007,12 @@ pktrCompliance MODULE-COMPLIANCE
         "An agent that serves the Packeteer status objects."
     MODULE
         MANDATORY-GROUPS { pktrStatusGroup }
+        GROUP pktrEventObjectsGroup
+        DESCRIPTION
+            "Needed by an agent that also sends the notifications."
+        GROUP pktrNotificationsGroup
+        DESCRIPTION
+            "Needed by an agent that also sends the notifications."
     ::= { pktrCompliances 1 }
 
 pktrStatusGroup OBJECT-GROUP

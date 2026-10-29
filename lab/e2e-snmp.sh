@@ -16,10 +16,9 @@ cleanup() {
   rm -rf "$work"
 }
 trap cleanup EXIT
-fail() { echo "e2e-snmp: FAIL: $*" >&2; for f in pk.log traps.log syslog-tcp.log syslog-udp.log; do echo "== $f" >&2; tail -30 "$work/$f" >&2 2>/dev/null || true; done; exit 1; }
+fail() { echo "e2e-snmp: FAIL: $*" >&2; for f in pk.log trap-v2c.log inform-v2c.log trap-v3.log inform-v3.log syslog-tcp.log syslog-udp.log; do echo "== $f" >&2; tail -30 "$work/$f" >&2 2>/dev/null || true; done; exit 1; }
 
 AGENT=127.0.0.1:11161
-TRAPD=127.0.0.1:11162
 BASE=.1.3.6.1.4.1.8072.9999.9999.7717
 # Lab-only values.
 export SNMP_COMMUNITY=lab-only-community SNMP_USER=nms SNMP_AUTH=lab-only-auth-pass SNMP_PRIV=lab-only-priv-pass
@@ -35,10 +34,16 @@ mib=(-M "+$PWD/deploy/mib" -m +PACKETEER-MIB)
 conf="$work/snmptrapd.conf"
 sed -e "s/CHANGE-ME-community/$TRAP_COMMUNITY/" -e "s/CHANGE-ME-auth/$TRAP_AUTH/g" -e "s/CHANGE-ME-priv/$TRAP_PRIV/g" \
   examples/monitoring/snmptrapd.conf >"$conf"
-snmptrapd -f -C -c "$conf" -On -Lf "$work/traps.log" "udp:$TRAPD" >"$work/snmptrapd.out" 2>&1 &
-pids+=($!)
+# One snmptrapd per notifier, so each one's delivery is checked on its own.
+ports=(11162 11163 11164 11165)
+names=(trap-v2c inform-v2c trap-v3 inform-v3)
+for i in 0 1 2 3; do
+  snmptrapd -f -C -c "$conf" -On -Lf "$work/${names[$i]}.log" "udp:127.0.0.1:${ports[$i]}" >"$work/snmptrapd-${names[$i]}.out" 2>&1 &
+  pids+=($!)
+done
 nc -l 127.0.0.1 15514 >"$work/syslog-tcp.log" &
 pids+=($!)
+# netcat locks onto the first sender, which is enough: controller.started is the first event.
 nc -u -l 127.0.0.1 15515 >"$work/syslog-udp.log" &
 pids+=($!)
 sleep 1
@@ -83,13 +88,13 @@ notifiers:
     config: {address: 127.0.0.1, port: 11162, community_env: TRAP_COMMUNITY}
   - type: snmptrap
     name: inform-v2c
-    config: {address: 127.0.0.1, port: 11162, community_env: TRAP_COMMUNITY, inform: true}
+    config: {address: 127.0.0.1, port: 11163, community_env: TRAP_COMMUNITY, inform: true}
   - type: snmptrap
     name: trap-v3
-    config: {address: 127.0.0.1, port: 11162, version: 3, username_env: TRAP_USER_TRAP, auth_env: TRAP_AUTH, priv_env: TRAP_PRIV, engine_id: "0x8000000001020304"}
+    config: {address: 127.0.0.1, port: 11164, version: 3, username_env: TRAP_USER_TRAP, auth_env: TRAP_AUTH, priv_env: TRAP_PRIV, engine_id: "0x8000000001020304"}
   - type: snmptrap
     name: inform-v3
-    config: {address: 127.0.0.1, port: 11162, version: 3, username_env: TRAP_USER_INFORM, auth_env: TRAP_AUTH, priv_env: TRAP_PRIV, inform: true}
+    config: {address: 127.0.0.1, port: 11165, version: 3, username_env: TRAP_USER_INFORM, auth_env: TRAP_AUTH, priv_env: TRAP_PRIV, inform: true}
   - type: syslog
     name: syslog-tcp
     config: {address: 127.0.0.1, port: 15514, transport: tcp}
@@ -104,15 +109,15 @@ CGO_ENABLED=0 go build -o "$work/packeteer" ./cmd/controller
 pk=$!
 pids+=($pk)
 
-# The start events reach every receiver. controller.started is trap 1.
-started="$BASE.0.1"
-for _ in $(seq 1 30); do
-  [ "$(grep -c "$started" "$work/traps.log" 2>/dev/null || true)" -ge 4 ] && break
-  sleep 1
+# The start event reaches every receiver. controller.started is trap 1.
+for name in "${names[@]}"; do
+  for _ in $(seq 1 30); do
+    grep -Eq "7717\.0\.1([^0-9]|$)" "$work/$name.log" 2>/dev/null && break
+    sleep 1
+  done
+  grep -Eq "7717\.0\.1([^0-9]|$)" "$work/$name.log" || fail "$name: controller.started never reached snmptrapd"
+  grep -q "$BASE.1.1.0.*controller.started" "$work/$name.log" || fail "$name: the notification carries no event kind varbind"
 done
-n="$(grep -c "$started" "$work/traps.log" || true)"
-[ "$n" -ge 4 ] || fail "controller.started reached snmptrapd $n times, want 4 (v2c trap, v2c inform, v3 trap, v3 inform)"
-grep -q "$BASE.1.1.0.*controller.started" "$work/traps.log" || fail "the trap carries no event kind varbind"
 for _ in $(seq 1 10); do grep -q 'kind="controller.started"' "$work/syslog-tcp.log" && break; sleep 1; done
 grep -q 'kind="controller.started"' "$work/syslog-tcp.log" || fail "no RFC 5424 message over tcp"
 grep -Eq '^[0-9]+ <134>1 [0-9T:.-]+Z [^ ]+ packeteer - controller.started \[packeteer@32473 kind="controller.started" severity="info"' "$work/syslog-tcp.log" || fail "the tcp message is not octet-counted RFC 5424"
@@ -143,8 +148,8 @@ done
 v3=(snmpget -v3 -u "$SNMP_USER" -l authPriv -a SHA -A "$SNMP_AUTH" -x AES -X "$SNMP_PRIV" -t 3 -r 0 "${mib[@]}" "$AGENT")
 "${v3[@]}" PACKETEER-MIB::pktrMode.0 | grep -q 'observe' || fail "v3 authPriv get failed"
 # A client that asks for less than authPriv, or has the wrong key, gets nothing.
-snmpget -v3 -u "$SNMP_USER" -l authNoPriv -a SHA -A "$SNMP_AUTH" -t 2 -r 0 "${mib[@]}" "$AGENT" PACKETEER-MIB::pktrMode.0 >/dev/null 2>&1 && fail "v3 authNoPriv was answered"
-snmpget -v3 -u "$SNMP_USER" -l authPriv -a SHA -A wrong-pass-123 -x AES -X "$SNMP_PRIV" -t 2 -r 0 "$AGENT" PACKETEER-MIB::pktrMode.0 >/dev/null 2>&1 && fail "v3 with a wrong key was answered"
+snmpget -v3 -u "$SNMP_USER" -l authNoPriv -a SHA -A "$SNMP_AUTH" -t 2 -r 0 "$AGENT" "$BASE.2.2.0" >/dev/null 2>&1 && fail "v3 authNoPriv was answered"
+snmpget -v3 -u "$SNMP_USER" -l authPriv -a SHA -A wrong-pass-123 -x AES -X "$SNMP_PRIV" -t 2 -r 0 "$AGENT" "$BASE.2.2.0" >/dev/null 2>&1 && fail "v3 with a wrong key was answered"
 snmpget -v2c -c public -t 2 -r 0 "$AGENT" "$BASE.2.2.0" >/dev/null 2>&1 && fail "a wrong community was answered"
 # Nothing is writable.
 set +e
@@ -157,5 +162,7 @@ echo "$sets" | grep -qi 'notWritable' || fail "snmpset: $sets"
 kill -TERM "$pk"
 wait "$pk" || fail "the controller exited non-zero on SIGTERM"
 pids=("${pids[@]/$pk}")
-grep -q "$BASE.0.2" "$work/traps.log" || fail "no controller.stopping trap"
+for name in "${names[@]}"; do
+  grep -Eq "7717\.0\.2([^0-9]|$)" "$work/$name.log" || fail "$name: no controller.stopping notification"
+done
 echo "e2e-snmp: ok"

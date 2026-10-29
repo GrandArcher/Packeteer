@@ -34,8 +34,6 @@ const (
 	DefaultTimeout = 5 * time.Second
 	MaxTimeout     = time.Minute
 	maxValue       = 1024
-	minPassphrase  = 8
-	maxUser        = 32
 
 	// informRetries is how often an unacknowledged inform is sent again.
 	// The notifier timeout covers all attempts.
