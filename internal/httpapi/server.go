@@ -11,6 +11,7 @@
 package httpapi
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
@@ -406,6 +407,17 @@ func (s *Server) handleReady(w http.ResponseWriter, _ *http.Request) {
 func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
+	_, _ = w.Write(s.metricsText(r.Context()))
+}
+
+// MetricSamples is every series GET /metrics renders now, for the metrics
+// export stream (#287).
+func (s *Server) MetricSamples(ctx context.Context) []plugin.MetricSample {
+	return parseMetrics(s.metricsText(ctx))
+}
+
+func (s *Server) metricsText(ctx context.Context) []byte {
+	var w bytes.Buffer
 	_, _ = w.Write(Metrics(s.snapshot()))
 	_, _ = w.Write(RuntimeMetrics())
 	if s.mitigation != nil {
@@ -451,8 +463,9 @@ func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write(IXPSitesMetrics(v))
 	}
 	if src := s.herdSource(); src != nil {
-		_, _ = w.Write(HerdMetrics(src.Status(r.Context())))
+		_, _ = w.Write(HerdMetrics(src.Status(ctx)))
 	}
+	return w.Bytes()
 }
 
 func (s *Server) handleProviders(w http.ResponseWriter, _ *http.Request) {

@@ -28,7 +28,7 @@ const (
 )
 
 // Streams in the order Stats reports them.
-var streams = []string{plugin.StreamEvents, plugin.StreamDecisions, plugin.StreamFlows}
+var streams = []string{plugin.StreamEvents, plugin.StreamDecisions, plugin.StreamFlows, plugin.StreamMetrics}
 
 func streamIndex(s string) int {
 	for i, n := range streams {
@@ -69,9 +69,9 @@ type worker struct {
 	name string
 	x    plugin.Exporter
 	// takes[i] is true when the exporter takes streams[i].
-	takes [3]bool
+	takes [4]bool
 	q     chan plugin.ExportRecord
-	n     [3]counts
+	n     [4]counts
 }
 
 // Dispatcher delivers records asynchronously.
@@ -149,6 +149,12 @@ func (d *Dispatcher) Decision(r plugin.DecisionRecord) {
 // Flow queues one tagged flow record.
 func (d *Dispatcher) Flow(r plugin.FlowRecord) {
 	d.send(plugin.ExportRecord{Stream: plugin.StreamFlows, Flow: &r})
+}
+
+// Metrics queues one snapshot of the /metrics series. The sample slice is
+// shared by every exporter and must not be changed afterwards.
+func (d *Dispatcher) Metrics(r plugin.MetricsRecord) {
+	d.send(plugin.ExportRecord{Stream: plugin.StreamMetrics, Metrics: &r})
 }
 
 func (d *Dispatcher) send(r plugin.ExportRecord) {

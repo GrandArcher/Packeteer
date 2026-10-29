@@ -642,7 +642,14 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 				log.Error("http shutdown", "err", err)
 			}
 		}()
+		if exp.Wants(plugin.StreamMetrics) {
+			go pumpMetrics(ctx, exp, httpSrv.MetricSamples, plugin.MetricsInterval)
+		}
 	} else {
+		if exp.Wants(plugin.StreamMetrics) {
+			log.Error("refusing to start: an exporter takes the metrics stream, which reads the HTTP server's /metrics; set http.listen")
+			return 1
+		}
 		log.Info("http disabled")
 	}
 

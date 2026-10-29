@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"net/netip"
 	"sync/atomic"
 	"time"
@@ -14,8 +15,8 @@ import (
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
 )
 
-// Exporters (#207) push events, decision changes, and flow records tagged
-// with the chosen provider to external pipelines. They are off unless
+// Exporters (#207) push events, decision changes, flow records tagged
+// with the chosen provider, and metric snapshots (#287) to external pipelines. They are off unless
 // `exporters` is set, they only read, and a slow sink drops its own records
 // without delaying a decision or a withdraw.
 
@@ -137,6 +138,22 @@ func wireFlowExport(plugins *pluginhost.Set, out *export.Dispatcher, native func
 	for _, src := range plugins.SourcesSnapshot() {
 		if s, ok := src.Plugin.(flowTapper); ok {
 			s.SetFlowTap(tap)
+		}
+	}
+}
+
+// pumpMetrics hands the exporters a snapshot of the /metrics series every
+// interval until ctx ends. It reads what a scrape reads and does nothing
+// else, so a slow sink costs one dropped snapshot.
+func pumpMetrics(ctx context.Context, out *export.Dispatcher, samples func(context.Context) []plugin.MetricSample, every time.Duration) {
+	t := time.NewTicker(every)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case now := <-t.C:
+			out.Metrics(plugin.MetricsRecord{Time: now, Samples: samples(ctx)})
 		}
 	}
 }

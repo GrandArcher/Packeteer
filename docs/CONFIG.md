@@ -61,7 +61,7 @@ The image entrypoint is the same binary. Flags go after the image name.
 | `scorer` | `weighted` | no | One scorer. Lower score is better. |
 | `announcer` | none | inject | In-process only. `type: gobgp` publishes on the RIB session. |
 | `notifiers` | none | no | Events. A failure here does not withdraw routes by itself. |
-| `exporters` | none | no | Push events, decisions, and flow records to Kafka, NATS, OTLP, or IPFIX (#207). Off when empty. See [Exporters](#exporters). |
+| `exporters` | none | no | Push events, decisions, flow records, and metric snapshots to Kafka, NATS, OTLP, InfluxDB, or IPFIX (#207, #287). Off when empty. See [Exporters](#exporters). |
 | `telemetry` | none | no | Interface counters and 95th-percentile usage. Off unless listed. Does not announce. |
 | `policies` | none | no | Routing policies and maintenance windows, asked in order before each decision. Off unless listed. Does not announce. See [Policies](#policies). |
 | `storage` | none | no | One storage plugin for report history (`type: sqlite`). Off unless set. Does not announce. See [Storage `sqlite`](#storage-sqlite). |
@@ -1475,10 +1475,16 @@ curl -u "$USER:$PASS" -X DELETE http://127.0.0.1:8080/api/maintenance/api-1
 | | `streams` | `events`, `decisions` | As for `kafka`. |
 | | `tls`, `ca_file` | off | As for `kafka`; a `tls://` URL needs `tls: true`. |
 | | `username_env`, `password_env` | none | Both or neither; need `tls: true`. |
-| `otlp` | `endpoint` | required | OTLP/HTTP base URL, for example `http://collector.example.net:4318`; `/v1/traces` is added. |
+| `otlp` | `endpoint` | required | OTLP/HTTP base URL, for example `http://collector.example.net:4318`; `/v1/traces`, `/v1/logs`, and `/v1/metrics` are added. |
+| | `streams` | `decisions` | Any of `decisions` (spans), `events` (log records), `metrics`. |
 | | `headers` | none | Request headers; values may use `${VAR}`, and an unset variable is an error. |
 | | `ca_file` | system roots | PEM for an `https` endpoint. |
 | | `service_name` | `packeteer` | The `service.name` resource attribute. |
+| `influxdb` | `url` | required | Server base URL, for example `http://influxdb.example.net:8086`; points go to `/api/v2/write`. |
+| | `org`, `bucket` | required | Where points are written. |
+| | `token_env` | required | Environment variable holding an API token with write access to the bucket. |
+| | `ca_file` | system roots | PEM for an `https` URL. |
+| | `streams` | `events`, `decisions` | Any of `events`, `decisions`, `metrics`. |
 | `ipfix` | `address` | required | Collector `host:port`, UDP. Takes `flows` only. |
 | | `observation_domain` | `1` | Sent in every message. |
 | | `template_interval` | `1m` | How often templates are sent again. |

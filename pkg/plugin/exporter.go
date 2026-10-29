@@ -7,9 +7,9 @@ import (
 	"time"
 )
 
-// KindExporter is the extension point that pushes decisions, events, and
-// enriched flow records to an external pipeline (#207). An exporter only
-// reads: it never announces and never feeds Decide.
+// KindExporter is the extension point that pushes decisions, events,
+// enriched flow records, and metric samples to an external pipeline (#207,
+// #287). An exporter only reads: it never announces and never feeds Decide.
 const KindExporter Kind = "exporter"
 
 // Export streams. An exporter lists the ones it takes in its config.
@@ -17,6 +17,7 @@ const (
 	StreamEvents    = "events"
 	StreamDecisions = "decisions"
 	StreamFlows     = "flows"
+	StreamMetrics   = "metrics"
 )
 
 // Exporters is the registry of exporter types.
@@ -62,6 +63,25 @@ type FlowRecord struct {
 	ImprovementID string `json:"improvement_id,omitempty"`
 }
 
+// MetricSample is one series of GET /metrics at the time of a snapshot.
+type MetricSample struct {
+	Name string
+	// Counter is true for a monotonic counter and false for a gauge.
+	Counter bool
+	Labels  map[string]string
+	Value   float64
+}
+
+// MetricsRecord is one snapshot of every series GET /metrics renders, taken
+// at Time. The controller takes one every MetricsInterval.
+type MetricsRecord struct {
+	Time    time.Time
+	Samples []MetricSample
+}
+
+// MetricsInterval is how often the metrics stream takes a snapshot.
+const MetricsInterval = 30 * time.Second
+
 // ExportRecord carries one value of Stream. Exactly one of the pointers is
 // set.
 type ExportRecord struct {
@@ -69,10 +89,11 @@ type ExportRecord struct {
 	Event    *Event
 	Decision *DecisionRecord
 	Flow     *FlowRecord
+	Metrics  *MetricsRecord
 }
 
 // Exporter delivers records to an external system (Kafka, NATS, an OTLP
-// collector, an IPFIX collector). The host batches records per exporter
+// collector, an IPFIX collector, InfluxDB). The host batches records per exporter
 // on a bounded queue, so a slow sink never delays probing, decisions, or
 // withdrawals; Export may block until ctx expires.
 type Exporter interface {

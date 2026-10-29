@@ -197,3 +197,33 @@ func TestExportStats(t *testing.T) {
 		t.Fatal("a configured exporter must report")
 	}
 }
+
+func TestPumpMetricsSnapshotsUntilStopped(t *testing.T) {
+	s, d := newExportSink(plugin.StreamMetrics)
+	ctx, cancel := context.WithCancel(context.Background())
+	var mu sync.Mutex
+	taken := 0
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		pumpMetrics(ctx, d, func(context.Context) []plugin.MetricSample {
+			mu.Lock()
+			defer mu.Unlock()
+			taken++
+			if taken == 2 {
+				cancel()
+			}
+			return []plugin.MetricSample{{Name: "packeteer_up", Value: float64(taken)}}
+		}, time.Millisecond)
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the pump did not stop with its context")
+	}
+	got := s.drain(t, d)
+	if len(got) < 2 || got[0].Stream != plugin.StreamMetrics || got[0].Metrics.Time.IsZero() ||
+		got[0].Metrics.Samples[0].Name != "packeteer_up" || got[0].Metrics.Samples[0].Value != 1 {
+		t.Fatalf("records = %+v", got)
+	}
+}
