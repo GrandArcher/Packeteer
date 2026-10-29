@@ -667,7 +667,7 @@ storage:
 
 # Plugins (docs/PLUGINS.md). Out-of-process plugins live in plugin_dir.
 plugin_dir: /etc/packeteer/plugins
-# Exporters (docs/export.md) push events, decisions, and flow records to
+# Exporters (docs/export.md) push events, decisions, flow records, and metrics to
 # Kafka, NATS, an OpenTelemetry collector, InfluxDB, or an IPFIX collector.
 # Off unless listed; read-only.
 # exporters:

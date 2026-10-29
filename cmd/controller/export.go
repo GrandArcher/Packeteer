@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"net/netip"
+	"slices"
 	"sync/atomic"
 	"time"
 
@@ -140,6 +142,20 @@ func wireFlowExport(plugins *pluginhost.Set, out *export.Dispatcher, native func
 			s.SetFlowTap(tap)
 		}
 	}
+}
+
+// checkMetricsExport refuses a metrics-stream exporter without the HTTP
+// server: the snapshot is the server's /metrics.
+func checkMetricsExport(cfg *config.Config, plugins *pluginhost.Set) error {
+	if cfg.HTTPListen() != "" || plugins == nil {
+		return nil
+	}
+	for _, x := range plugins.Exporters {
+		if slices.Contains(x.Plugin.Streams(), plugin.StreamMetrics) {
+			return fmt.Errorf("exporters: %s takes the metrics stream, which reads the HTTP server's /metrics; set http.listen", x.Name)
+		}
+	}
+	return nil
 }
 
 // pumpMetrics hands the exporters a snapshot of the /metrics series every

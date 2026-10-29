@@ -426,6 +426,9 @@ func preflight(cfg *config.Config, log *slog.Logger, getenv func(string) string,
 	if err := checkSubscriptions(cfg, plugins); err != nil {
 		return nil, err
 	}
+	if err := checkMetricsExport(cfg, plugins); err != nil {
+		return nil, err
+	}
 	return plugins, nil
 }
 
@@ -646,10 +649,6 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 			go pumpMetrics(ctx, exp, httpSrv.MetricSamples, plugin.MetricsInterval)
 		}
 	} else {
-		if exp.Wants(plugin.StreamMetrics) {
-			log.Error("refusing to start: an exporter takes the metrics stream, which reads the HTTP server's /metrics; set http.listen")
-			return 1
-		}
 		log.Info("http disabled")
 	}
 

@@ -271,7 +271,7 @@ type (
 // aggregationCumulative is OTLP's AGGREGATION_TEMPORALITY_CUMULATIVE.
 const aggregationCumulative = 2
 
-// OTLP severity numbers: WARN and ERROR.
+// OTLP severity numbers: INFO, WARN, and ERROR.
 const (
 	sevInfo    = 9
 	sevWarning = 13
