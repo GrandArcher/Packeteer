@@ -5,9 +5,9 @@ Plugins written and maintained outside this repository. The Packeteer maintainer
 To add a plugin, open a PR that adds one row to the table. Keep the rows in alphabetical order by name. A row needs:
 
 1. **Name** and **Link**: an `https://` link to a public repository.
-2. **Kind**: `prober`, `source`, `notifier`, or another kind from [PLUGINS.md](PLUGINS.md#extension-points-pkgplugin).
+2. **Kind**: one of the kinds in [PLUGINS.md](PLUGINS.md#extension-points-pkgplugin), written as `prober`, `source`, `rib_source`, and so on.
 3. **Delivery**: `exec`, `grpc`, or `compiled-in` (a fork or a patch that adds the package to `internal/plugins/all`).
-4. **Affects routing**: `no` or `yes`. An `exec` or `grpc` plugin is a prober, source, or notifier and cannot announce, so it is always `no`. `yes` is for compiled-in announcers, RIB sources, and the other in-process kinds, and the plugin's README must say how it keeps the safety rules in [AGENTS.md](../AGENTS.md).
+4. **Affects routing**: `no` or `yes`. An `exec` or `grpc` plugin is a prober, source, or notifier and cannot announce, so it is always `no`. A compiled-in announcer, RIB source, leak source, RPKI or IRR source, detector, elector, federation, scorer, or policy is `yes`, and its README must say how it keeps the safety rules in [AGENTS.md](../AGENTS.md). The other kinds are `no`.
 5. **License**: an SPDX identifier (for example `Apache-2.0`).
 
 The repository you link to must also have:

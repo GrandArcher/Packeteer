@@ -10,6 +10,16 @@ import (
 	"testing"
 )
 
+// kinds maps each extension point in docs/PLUGINS.md to whether a compiled-in
+// plugin of that kind can add, end, or choose a route.
+var kinds = map[string]bool{
+	"announcer": true, "rib_source": true, "leak_source": true, "rpki": true, "irr": true,
+	"detector": true, "elector": true, "federation": true, "scorer": true, "policy": true,
+	"prober": false, "source": false, "notifier": false, "exporter": false, "telemetry": false,
+	"storage": false, "sso": false, "whois": false, "lookup": false, "ixp_member": false,
+	"ixp_routeserver": false, "ixp_correlate": false, "ixp_core": false, "ixp_fabric": false,
+}
+
 var spdx = regexp.MustCompile(`^[A-Za-z0-9.+-]+( (AND|OR|WITH) [A-Za-z0-9.+-]+)*$`)
 
 // checkRow applies the checklist at the top of docs/COMMUNITY_PLUGINS.md to
@@ -19,8 +29,12 @@ func checkRow(c []string) error {
 		return fmt.Errorf("%d columns, want 6", len(c))
 	}
 	name, kind, delivery, routing, license, link := c[0], c[1], c[2], c[3], c[4], c[5]
-	if name == "" || kind == "" {
-		return fmt.Errorf("name and kind are required")
+	if name == "" {
+		return fmt.Errorf("name is required")
+	}
+	affects, known := kinds[kind]
+	if !known {
+		return fmt.Errorf("kind %q is not an extension point in PLUGINS.md", kind)
 	}
 	if !slices.Contains([]string{"exec", "grpc", "compiled-in"}, delivery) {
 		return fmt.Errorf("delivery %q is not exec, grpc, or compiled-in", delivery)
@@ -28,13 +42,11 @@ func checkRow(c []string) error {
 	if routing != "yes" && routing != "no" {
 		return fmt.Errorf("affects routing %q is not yes or no", routing)
 	}
-	if delivery != "compiled-in" {
-		if !slices.Contains([]string{"prober", "source", "notifier"}, kind) {
-			return fmt.Errorf("an %s plugin cannot be a %s", delivery, kind)
-		}
-		if routing != "no" {
-			return fmt.Errorf("an %s plugin cannot affect routing", delivery)
-		}
+	if delivery != "compiled-in" && !slices.Contains([]string{"prober", "source", "notifier"}, kind) {
+		return fmt.Errorf("an %s plugin cannot be a %s", delivery, kind)
+	}
+	if affects != (routing == "yes") {
+		return fmt.Errorf("a %s plugin has affects routing %q, want %t", kind, routing, affects)
 	}
 	if !spdx.MatchString(license) {
 		return fmt.Errorf("license %q is not an SPDX identifier", license)
@@ -96,6 +108,8 @@ func TestCheckRow(t *testing.T) {
 		c[i] = v
 		return c
 	}
+	grpcRouting := with(2, "grpc")
+	grpcRouting[3] = "yes"
 	for name, tc := range map[string]struct {
 		row  []string
 		want string
@@ -104,8 +118,10 @@ func TestCheckRow(t *testing.T) {
 		"bad delivery":        {with(2, "plugin"), "delivery"},
 		"bad routing":         {with(3, "maybe"), "yes or no"},
 		"exec announcer":      {with(1, "announcer"), "cannot be a announcer"},
-		"exec affects routes": {with(3, "yes"), "cannot affect routing"},
-		"grpc affects routes": {append(with(2, "grpc")[:3:3], "yes", "MIT", good[5]), "cannot affect routing"},
+		"exec affects routes": {with(3, "yes"), "want false"},
+		"grpc affects routes": {grpcRouting, "want false"},
+		"unknown kind":        {with(1, "widget"), "not an extension point"},
+		"no name":             {with(0, ""), "name is required"},
 		"no license":          {with(4, ""), "SPDX"},
 		"http link":           {with(5, "http://example.invalid/x"), "https"},
 	} {
@@ -116,5 +132,9 @@ func TestCheckRow(t *testing.T) {
 	fork := []string{"my-announcer", "announcer", "compiled-in", "yes", "MIT", "https://example.invalid/x"}
 	if err := checkRow(fork); err != nil {
 		t.Errorf("compiled-in announcer: %v", err)
+	}
+	fork[3] = "no"
+	if err := checkRow(fork); err == nil || !strings.Contains(err.Error(), "want true") {
+		t.Errorf("compiled-in announcer marked no: err = %v, want a refusal", err)
 	}
 }

@@ -51,7 +51,7 @@ func TestDefaultRTT(t *testing.T) {
 		t.Fatal(err)
 	}
 	res, err := p.Probe(context.Background(), request())
-	if err != nil || res.RTTs[0] != 10*time.Millisecond {
+	if err != nil || len(res.RTTs) != 3 || res.RTTs[0] != 10*time.Millisecond {
 		t.Fatalf("res=%+v err=%v, want a 10ms default", res, err)
 	}
 }

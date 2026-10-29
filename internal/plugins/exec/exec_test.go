@@ -260,7 +260,10 @@ func TestExampleProberScript(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	c, _ := plugin.ConfigFromYAML("command: exec-prober.sh")
+	c, err := plugin.ConfigFromYAML("command: exec-prober.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
 	e := env()
 	e.PluginDir = dir
 	p, err := plugin.Probers.New(TypeName, c, e)

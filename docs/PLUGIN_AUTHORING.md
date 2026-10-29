@@ -31,11 +31,11 @@ Rules that hold for every plugin:
 - A prober binds to `ProbeRequest.Source`. If it cannot use the source, or cannot apply a non-zero `Mark` or `DSCP`, it returns an error (`plugin.ErrSourceUnavailable` in Go), never a 100% loss result. The core then treats the probe source as down and withdraws.
 - A source only names what to measure. It does not decide what is announced: the core still requires the prefix in the learned RIB view and in the allowlist.
 - A notifier is told about events and cannot change the controller. Do not block in `Notify`; the core gives each notifier its own bounded queue, and a full queue drops events for that notifier only.
-- Secrets arrive through the `env` mapping in the plugin's config (`${VAR}` is expanded from Packeteer's environment). Never put one in `config`, a log line, or an error message.
+- Secrets: an `exec` or `grpc` plugin gets them through the `env` mapping in its config (`${VAR}` is expanded from Packeteer's environment). A compiled-in plugin names an environment variable in a `*_env` config key and reads it with `env.Getenv`. Never put a secret in `config`, a log line, or an error message.
 
 ## Lifecycle
 
-1. **Init.** The factory decodes and validates `config` strictly: an unknown key is an error. It does no network I/O. Packeteer refuses to start when it fails, and says which entry (`probers[1] (fast): ...`). For `exec`, the same check is the `init` call; for `grpc`, `Init`. The config editor and `-check` runs do not start your program.
+1. **Init.** The factory decodes and validates `config` strictly: an unknown key is an error. It does no network I/O. Packeteer refuses to start when it fails, and says which entry (`probers[1] (fast): ...`). For `exec`, the same check is the `init` call; for `grpc`, `Init`. The config editor never starts your program. `-check` runs the `exec` `init` call and starts a `grpc` program once for `Init`, then stops it; it sends no probes and opens no BGP session.
 2. **Start.** Begin background work in goroutines and return.
 3. **Calls.** Probe, Targets, or Notify, each with a context that carries the timeout.
 4. **Stop.** Release everything before the context expires.
@@ -95,7 +95,7 @@ Packages under `internal/` cannot be imported from another module, so a compiled
 - Test the plugin through the real framing: run the script with the `exec` plugin (copy `TestExampleProberScript`), or build the binary and start it with the `grpc` plugin (copy `TestExamplePlugin`).
 - Test the failure paths: an unusable source, a tagged request you cannot honor, a context that is already canceled, and a timeout.
 - Use documentation prefixes and ASNs only: 192.0.2.0/24, 198.51.100.0/24, 203.0.113.0/24, 2001:db8::/32, and ASNs 64496-64511 or 65536-65551. Never commit real prefixes, next hops, or secrets.
-- Run the image with `-check` on a config that selects your plugin ([README.md](../README.md#install)). It validates every plugin config and starts no program.
+- Run the image with `-check` on a config that selects your plugin ([README.md](../README.md#install)). It validates every plugin config (see Init above for what that runs).
 - A compiled-in plugin that is sent upstream also needs the checks in [CONTRIBUTING.md](../CONTRIBUTING.md).
 
 ## Safety rules
