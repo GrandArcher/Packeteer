@@ -28,10 +28,10 @@ All kinds are in [pkg/plugin](../pkg/plugin). The three out-of-process kinds are
 
 Rules that hold for every plugin:
 
-- A prober binds to `ProbeRequest.Source`. If it cannot use the source, or cannot apply a non-zero `Mark` or `DSCP`, it returns an error (`plugin.ErrSourceUnavailable` in Go), never a 100% loss result. The core then treats the probe source as down and withdraws.
+- A prober binds to `ProbeRequest.Source`. If it cannot use the source, or cannot apply a non-zero `Mark` or `DSCP`, it returns an error (`plugin.ErrSourceUnavailable` in Go), never a 100% loss result. For a compiled-in prober, `ErrSourceUnavailable` makes the core treat the probe source as down and withdraw. An error from an `exec` or `grpc` prober is a failed probe: the core tries the next prober in the chain, and if none answers, that provider is not measured that round.
 - A source only names what to measure. It does not decide what is announced: the core still requires the prefix in the learned RIB view and in the allowlist.
 - A notifier is told about events and cannot change the controller. Do not block in `Notify`; the core gives each notifier its own bounded queue, and a full queue drops events for that notifier only.
-- Secrets: an `exec` or `grpc` plugin gets them through the `env` mapping in its config (`${VAR}` is expanded from Packeteer's environment). A compiled-in plugin names an environment variable in a `*_env` config key and reads it with `env.Getenv`. Never put a secret in `config`, a log line, or an error message.
+- Secrets: an `exec` or `grpc` plugin gets them through the `env` mapping in its config (`${VAR}` is expanded from Packeteer's environment). A compiled-in plugin names an environment variable in a `*_env` config key and reads it with `env.Getenv`. Never write a secret's value in the config file, a log line, or an error message; reference it as `${VAR}`.
 
 ## Lifecycle
 

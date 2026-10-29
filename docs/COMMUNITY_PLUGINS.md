@@ -7,7 +7,7 @@ To add a plugin, open a PR that adds one row to the table. Keep the rows in alph
 1. **Name** and **Link**: an `https://` link to a public repository.
 2. **Kind**: one of the kinds in [PLUGINS.md](PLUGINS.md#extension-points-pkgplugin), written as `prober`, `source`, `rib_source`, and so on.
 3. **Delivery**: `exec`, `grpc`, or `compiled-in` (a fork or a patch that adds the package to `internal/plugins/all`).
-4. **Affects routing**: `no` or `yes`. An `exec` or `grpc` plugin is a prober, source, or notifier and cannot announce, so it is always `no`. A compiled-in announcer, RIB source, leak source, RPKI or IRR source, detector, elector, federation, scorer, or policy is `yes`, and its README must say how it keeps the safety rules in [AGENTS.md](../AGENTS.md). The other kinds are `no`.
+4. **Affects routing**: `no` or `yes`; `yes` means the plugin can announce, withdraw, or block a route in-process. Prober, source, and telemetry data still feed which allowlisted path a move picks, within the cap, hold time, and thresholds, so `no` does not mean harmless. An `exec` or `grpc` plugin is a prober, source, or notifier and cannot announce, so it is always `no`. A compiled-in announcer, RIB source, leak source, RPKI or IRR source, detector, elector, federation, scorer, or policy is `yes`, and its README must say how it keeps the safety rules in [AGENTS.md](../AGENTS.md). The other kinds are `no`.
 5. **License**: an SPDX identifier (for example `Apache-2.0`).
 
 The repository you link to must also have:
