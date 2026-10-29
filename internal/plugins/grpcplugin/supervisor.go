@@ -39,11 +39,10 @@ type supervisor struct {
 	nextTry time.Time
 	lastErr error
 	// dead holds processes whose client the loop has not stopped yet.
-	dead    []*launched
-	started bool
-	cancel  context.CancelFunc
-	done    chan struct{}
-	wake    chan struct{}
+	dead   []*launched
+	cancel context.CancelFunc // nil unless the loop was started and not stopped
+	done   chan struct{}
+	wake   chan struct{}
 }
 
 func newSupervisorFrom(kind plugin.Kind, name string, spec oop.Spec, health, backoff time.Duration, log *slog.Logger) *supervisor {
@@ -135,9 +134,19 @@ func (s *supervisor) Start(ctx context.Context) error {
 		return errors.New("plugin was built for a config check and does not run")
 	}
 	s.mu.Lock()
-	if s.started {
+	if s.cancel != nil {
 		s.mu.Unlock()
 		return errors.New("already started")
+	}
+	// A Stop that timed out leaves the old loop still ending; two loops
+	// must not supervise one plugin.
+	if s.done != nil {
+		select {
+		case <-s.done:
+		default:
+			s.mu.Unlock()
+			return errors.New("the previous run is still stopping")
+		}
 	}
 	s.mu.Unlock()
 	lctx, cancel := context.WithTimeout(ctx, s.spec.Timeout)
@@ -148,8 +157,8 @@ func (s *supervisor) Start(ctx context.Context) error {
 	}
 	loopCtx, stop := context.WithCancel(context.Background())
 	s.mu.Lock()
-	s.started = true
 	s.cur, s.upSince, s.cancel, s.done = l, time.Now(), stop, make(chan struct{})
+	s.backoff, s.nextTry, s.lastErr = s.backoff0, time.Time{}, nil
 	s.mu.Unlock()
 	go s.loop(loopCtx)
 	return nil

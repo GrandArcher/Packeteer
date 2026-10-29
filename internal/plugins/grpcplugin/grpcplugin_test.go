@@ -560,3 +560,32 @@ func TestExamplePlugin(t *testing.T) {
 		t.Fatalf("negative rtt: %v", err)
 	}
 }
+
+// A reload that is refused stops sources and starts them again.
+func TestStartAfterStop(t *testing.T) {
+	pidfile := filepath.Join(t.TempDir(), "pid")
+	p := newProber(t, "prober", "timeout: 5s\n", "PIDFILE="+pidfile)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	if err := p.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	first := readPID(t, pidfile)
+	if err := p.Start(ctx); err == nil {
+		t.Fatal("second Start while running succeeded")
+	}
+	if err := p.Stop(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.Start(ctx); err != nil {
+		t.Fatalf("restart after Stop: %v", err)
+	}
+	defer p.Stop(ctx)
+	second := readPID(t, pidfile)
+	if second == first || !alive(second) {
+		t.Fatalf("pids first %d second %d (alive %v)", first, second, alive(second))
+	}
+	if _, err := p.Probe(ctx, probeReq()); err != nil {
+		t.Fatalf("probe after restart: %v", err)
+	}
+}

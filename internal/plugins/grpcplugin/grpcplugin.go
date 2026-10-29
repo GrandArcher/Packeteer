@@ -62,7 +62,8 @@ type Config struct {
 	// plugin.
 	HealthInterval time.Duration `yaml:"health_interval"`
 	// RestartBackoff is the delay before the first restart of a plugin
-	// that died. It doubles after each failed start, up to 60 times this.
+	// that died. It doubles after each failed start and after a start that dies soon,
+	// up to 60 times this.
 	RestartBackoff time.Duration `yaml:"restart_backoff"`
 
 	// EventFilter (events, min_severity, rate_limit, rate_window) is
