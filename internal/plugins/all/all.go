@@ -13,6 +13,7 @@ import (
 	_ "github.com/GrandArcher/Packeteer/internal/plugins/exporter/nats"           // NATS events, decisions, flows
 	_ "github.com/GrandArcher/Packeteer/internal/plugins/exporter/otlp"           // OpenTelemetry spans, logs, and metrics
 	_ "github.com/GrandArcher/Packeteer/internal/plugins/federation/mtls"         // mTLS multi-POP federation
+	_ "github.com/GrandArcher/Packeteer/internal/plugins/grpcplugin"              // grpc prober/source/notifier (long-running)
 	_ "github.com/GrandArcher/Packeteer/internal/plugins/irr/file"                // local IRR file source (RPSL or bgpq4)
 	_ "github.com/GrandArcher/Packeteer/internal/plugins/irr/whois"               // IRR whois source (IRRd or RIPE style)
 	_ "github.com/GrandArcher/Packeteer/internal/plugins/ixpcore/icmp"            // IX inter-site core prober (observe-only)

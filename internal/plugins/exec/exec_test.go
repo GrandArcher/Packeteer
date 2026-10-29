@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/GrandArcher/Packeteer/internal/plugins/oop"
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
 )
 
@@ -42,7 +43,7 @@ func helper(mode string) int {
 	case "init-fail":
 		fmt.Println(`{"error":"missing api key"}`)
 	case "prober":
-		var p probeParams
+		var p oop.ProbeParams
 		b, _ := json.Marshal(req.Params)
 		_ = json.Unmarshal(b, &p)
 		if p.Source != "192.0.2.11" || p.Target != "198.51.100.1" || p.Count != 3 {
@@ -220,29 +221,6 @@ func TestConfigErrors(t *testing.T) {
 				t.Fatalf("err = %v, want %q", err, tt.wantErr)
 			}
 		})
-	}
-}
-
-func TestResolveCommand(t *testing.T) {
-	tests := []struct{ dir, cmd, want, wantErr string }{
-		{"/etc/packeteer/plugins", "a.sh", "/etc/packeteer/plugins/a.sh", ""},
-		{"/etc/packeteer/plugins", "sub/../a.sh", "/etc/packeteer/plugins/a.sh", ""},
-		{"/etc/packeteer/plugins", "/opt/x", "/opt/x", ""},
-		{"/etc/packeteer/plugins", "../x", "", "escapes"},
-		{"", "a.sh", "", "no plugin dir"},
-		{"/p", "", "", "required"},
-	}
-	for _, tt := range tests {
-		got, err := ResolveCommand(tt.dir, tt.cmd)
-		if tt.wantErr != "" {
-			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
-				t.Errorf("%q: err = %v", tt.cmd, err)
-			}
-			continue
-		}
-		if err != nil || got != tt.want {
-			t.Errorf("%q: got %q, %v", tt.cmd, got, err)
-		}
 	}
 }
 

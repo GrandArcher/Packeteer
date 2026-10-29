@@ -168,6 +168,29 @@ func TestConfigEditorNeverRunsExec(t *testing.T) {
 	}
 }
 
+// A grpc plugin is a program too: the editor refuses to add or change one and
+// builds the running one check-only, so no process starts (#286).
+func TestConfigEditorNeverRunsGRPC(t *testing.T) {
+	script, marker := execMarkerScript(t)
+	running := uiBase + "probers:\n  - type: grpc\n    name: ext\n    config: {command: " + script + "}\n"
+	ed, _ := editorFor(t, running)
+	for name, tc := range map[string]string{
+		"new grpc notifier": running + "notifiers:\n  - type: grpc\n    config: {command: " + script + "}\n",
+		"changed args":      strings.Replace(running, "{command: "+script+"}", "{command: "+script+", args: [x]}", 1),
+	} {
+		res := ed.Check([]byte(tc))
+		if res.Valid || !strings.Contains(strings.Join(res.Errors, "\n"), "grpc plugins cannot be added or changed") {
+			t.Errorf("%s: %+v", name, res)
+		}
+	}
+	if res := ed.Check([]byte(running + "hold_time: 20m\n")); !res.Valid {
+		t.Fatalf("unchanged grpc plugin refused: %+v", res)
+	}
+	if _, err := os.Stat(marker); err == nil {
+		t.Fatal("the editor started a grpc plugin")
+	}
+}
+
 // After a SIGHUP reload applies new bgp.neighbors, the editor diffs
 // against them, not against the config from start.
 func TestConfigEditorFollowsReload(t *testing.T) {

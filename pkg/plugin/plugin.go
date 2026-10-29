@@ -18,7 +18,8 @@
 //
 // This package is public so that external Go code can implement plugins
 // and compile them into a custom build. Plugins that must work with the stock
-// container image use the out-of-process "exec" type instead (docs/PLUGINS.md).
+// container image use the out-of-process "exec" or "grpc" types instead
+// (docs/PLUGINS.md).
 package plugin
 
 import (

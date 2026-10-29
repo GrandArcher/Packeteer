@@ -738,37 +738,36 @@ func TestFormRemoveAndAddInOneApply(t *testing.T) {
 	}
 }
 
-// An exec plugin in the file is shown and can be left alone, but the form
-// does not rewrite it: its command runs a program.
-func TestBlocksPluginsExecIsReadOnly(t *testing.T) {
-	const withExec = `probers:
-  - type: exec
-    config:
-      command: /usr/local/bin/probe
-  - type: tcp
-    config:
-      port: 443
-`
-	text := strings.Replace(blocksYAML, "probers:\n  - type: tcp\n    config:\n      port: 443\n", withExec, 1)
+// An exec or grpc plugin in the file is shown and can be left alone, but the
+// form does not rewrite it: its command runs a program.
+func TestBlocksPluginsProgramIsReadOnly(t *testing.T) {
+	for _, typ := range []string{"exec", "grpc"} {
+		t.Run(typ, func(t *testing.T) { programIsReadOnly(t, typ) })
+	}
+}
+
+func programIsReadOnly(t *testing.T, typ string) {
+	withProgram := "probers:\n  - type: " + typ + "\n    config:\n      command: /usr/local/bin/probe\n  - type: tcp\n    config:\n      port: 443\n"
+	text := strings.Replace(blocksYAML, "probers:\n  - type: tcp\n    config:\n      port: 443\n", withProgram, 1)
 	f, err := ParseForm([]byte(text))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err := ApplyForm([]byte(text), f); err != nil {
-		t.Fatalf("unchanged exec: %v", err)
+		t.Fatalf("unchanged %s: %v", typ, err)
 	}
 	for i := range f.Plugins {
-		if f.Plugins[i].Type == "exec" {
+		if f.Plugins[i].Type == typ {
 			f.Plugins[i].Name = "renamed"
 		}
 	}
 	if _, err := ApplyForm([]byte(text), f); err == nil || !strings.Contains(err.Error(), "raw YAML") {
-		t.Fatalf("exec edit: %v", err)
+		t.Fatalf("%s edit: %v", typ, err)
 	}
 	f, _ = ParseForm([]byte(text))
-	f.Plugins = slices.DeleteFunc(f.Plugins, func(p FormPlugin) bool { return p.Type == "exec" })
-	if _, err := ApplyForm([]byte(text), f); err == nil || !strings.Contains(err.Error(), "exec plugin probers 0 is missing") {
-		t.Fatalf("exec left out: %v", err)
+	f.Plugins = slices.DeleteFunc(f.Plugins, func(p FormPlugin) bool { return p.Type == typ })
+	if _, err := ApplyForm([]byte(text), f); err == nil || !strings.Contains(err.Error(), "the "+typ+" plugin probers 0 is missing") {
+		t.Fatalf("%s left out: %v", typ, err)
 	}
 	f.Plugins = []FormPlugin{}
 	if _, err := ApplyForm([]byte(text), f); err == nil || !strings.Contains(err.Error(), "raw YAML") {

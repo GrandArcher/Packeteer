@@ -175,6 +175,11 @@ probers:
   # - type: udp               # optional fallback. A reply or ICMP port-unreachable counts.
   #   config:
   #     port: 33434
+  # - type: grpc              # optional: a long-running program in plugin_dir that probes
+  #   name: fast              # (docs/PLUGINS.md). It never announces.
+  #   config:
+  #     command: my-prober
+  #     env: {API_TOKEN: "${PROBE_TOKEN}"}
 
 # Path scoring (lower is better): loss dominates, then latency, then jitter.
 # `weighted` is the default and does not steer for commit. `commit` uses the

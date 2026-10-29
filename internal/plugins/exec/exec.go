@@ -18,24 +18,19 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"net/netip"
-	"os"
 	osexec "os/exec"
-	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/GrandArcher/Packeteer/internal/plugins/oop"
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
 )
 
 // TypeName is the plugin type used in config.
-const TypeName = "exec"
+const TypeName = oop.ExecType
 
 // Protocol is the protocol identifier sent with every request.
 const Protocol = "packeteer-exec/v1"
-
-// DefaultTimeout bounds a single plugin call.
-const DefaultTimeout = 30 * time.Second
 
 const maxOutput = 1 << 20 // 1 MiB of stdout/stderr per call
 
@@ -65,16 +60,7 @@ func init() {
 
 // Config is the exec plugin's config block.
 type Config struct {
-	// Command is an absolute path, or a path relative to the plugin dir.
-	Command string        `yaml:"command"`
-	Args    []string      `yaml:"args"`
-	Timeout time.Duration `yaml:"timeout"`
-	// Env is passed to the process; values may reference ${VAR} from
-	// Packeteer's environment. The rest of Packeteer's environment is not
-	// inherited (only PATH).
-	Env map[string]string `yaml:"env"`
-	// Config is forwarded verbatim to the plugin in every request.
-	Config any `yaml:"config"`
+	oop.Launch `yaml:",inline"`
 
 	// EventFilter (events, min_severity, rate_limit, rate_window) is
 	// accepted only for notifiers.
@@ -96,37 +82,13 @@ type response struct {
 }
 
 type runner struct {
-	kind    plugin.Kind
-	name    string
-	path    string
-	args    []string
-	env     []string
-	timeout time.Duration
-	config  any
-	gate    *plugin.EventGate
-	log     *slog.Logger
+	kind plugin.Kind
+	name string
+	oop.Spec
+	log *slog.Logger
 	// checkOnly runners were built by a config check; they never run
 	// the command.
 	checkOnly bool
-}
-
-// ResolveCommand maps a configured command to an executable path. Relative
-// paths must stay inside dir.
-func ResolveCommand(dir, cmd string) (string, error) {
-	if cmd == "" {
-		return "", errors.New("command is required")
-	}
-	if filepath.IsAbs(cmd) {
-		return filepath.Clean(cmd), nil
-	}
-	clean := filepath.Clean(cmd)
-	if clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
-		return "", fmt.Errorf("command %q escapes the plugin dir", cmd)
-	}
-	if dir == "" {
-		return "", fmt.Errorf("command %q is relative but no plugin dir is set", cmd)
-	}
-	return filepath.Join(dir, clean), nil
 }
 
 func newRunner(kind plugin.Kind, c plugin.Config, e plugin.Env) (*runner, error) {
@@ -134,49 +96,15 @@ func newRunner(kind plugin.Kind, c plugin.Config, e plugin.Env) (*runner, error)
 	if err := c.Decode(&cfg); err != nil {
 		return nil, err
 	}
-	path, err := ResolveCommand(e.PluginDir, cfg.Command)
+	spec, err := oop.NewSpec(kind, e, cfg.Launch, cfg.EventFilter)
 	if err != nil {
 		return nil, err
-	}
-	st, err := os.Stat(path)
-	if err != nil {
-		return nil, fmt.Errorf("command: %w", err)
-	}
-	if st.IsDir() || st.Mode()&0o111 == 0 {
-		return nil, fmt.Errorf("command %s is not an executable file", path)
-	}
-	if cfg.Timeout < 0 {
-		return nil, fmt.Errorf("timeout %s must not be negative", cfg.Timeout)
-	}
-	if cfg.Timeout == 0 {
-		cfg.Timeout = DefaultTimeout
-	}
-	var gate *plugin.EventGate
-	f := cfg.EventFilter
-	if kind == plugin.KindNotifier {
-		if gate, err = plugin.NewEventGate(f); err != nil {
-			return nil, err
-		}
-	} else if len(f.Events) > 0 || f.MinSeverity != "" || f.RateLimit != 0 || f.RateWindow != 0 {
-		return nil, fmt.Errorf("events, min_severity, rate_limit, and rate_window are only for notifiers")
-	}
-	getenv := e.Getenv
-	if getenv == nil {
-		getenv = func(string) string { return "" }
-	}
-	env := []string{"PATH=" + firstNonEmpty(getenv("PATH"), "/usr/local/bin:/usr/bin:/bin"), "PACKETEER_PLUGIN_KIND=" + string(kind)}
-	for k, v := range cfg.Env {
-		if k == "" || strings.ContainsAny(k, "=\x00") {
-			return nil, fmt.Errorf("env: invalid variable name %q", k)
-		}
-		env = append(env, k+"="+os.Expand(v, getenv))
 	}
 	logger := e.Logger
 	if logger == nil {
 		logger = slog.Default()
 	}
-	r := &runner{kind: kind, name: e.Name, path: path, args: cfg.Args, env: env,
-		timeout: cfg.Timeout, config: cfg.Config, gate: gate, log: logger, checkOnly: e.CheckOnly}
+	r := &runner{kind: kind, name: e.Name, Spec: spec, log: logger, checkOnly: e.CheckOnly}
 	if e.CheckOnly {
 		// A config check (the config editor) never runs the command:
 		// the candidate file is untrusted until it is the mounted file.
@@ -184,19 +112,12 @@ func newRunner(kind plugin.Kind, c plugin.Config, e plugin.Env) (*runner, error)
 	}
 
 	// Init handshake: lets the plugin validate its own config at load time.
-	ctx, cancel := context.WithTimeout(context.Background(), r.timeout)
+	ctx, cancel := context.WithTimeout(context.Background(), r.Timeout)
 	defer cancel()
 	if err := r.call(ctx, "init", nil, nil); err != nil {
 		return nil, fmt.Errorf("init: %w", err)
 	}
 	return r, nil
-}
-
-func firstNonEmpty(a, b string) string {
-	if a != "" {
-		return a
-	}
-	return b
 }
 
 type limitedBuffer struct {
@@ -220,15 +141,15 @@ func (r *runner) call(ctx context.Context, method string, params, out any) error
 	if r.checkOnly {
 		return fmt.Errorf("%s: plugin was built for a config check and does not run", method)
 	}
-	ctx, cancel := context.WithTimeout(ctx, r.timeout)
+	ctx, cancel := context.WithTimeout(ctx, r.Timeout)
 	defer cancel()
 	in, err := json.Marshal(request{Protocol: Protocol, Kind: string(r.kind), Method: method,
-		Name: r.name, Config: r.config, Params: params})
+		Name: r.name, Config: r.Config, Params: params})
 	if err != nil {
 		return err
 	}
-	cmd := osexec.CommandContext(ctx, r.path, r.args...)
-	cmd.Env = r.env
+	cmd := osexec.CommandContext(ctx, r.Path, r.Args...)
+	cmd.Env = r.Env
 	cmd.Stdin = bytes.NewReader(in)
 	var stdout, stderr limitedBuffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
@@ -238,7 +159,7 @@ func (r *runner) call(ctx context.Context, method string, params, out any) error
 		r.log.Debug("exec plugin stderr", "method", method, "stderr", s)
 	}
 	if ctx.Err() != nil {
-		return fmt.Errorf("%s: timed out after %s", method, r.timeout)
+		return fmt.Errorf("%s: timed out after %s", method, r.Timeout)
 	}
 	if runErr != nil {
 		return fmt.Errorf("%s: %v: %s", method, runErr, tail(stderr.String()))
@@ -284,42 +205,13 @@ type Prober struct {
 	r *runner
 }
 
-type probeParams struct {
-	Provider  string `json:"provider"`
-	Source    string `json:"source"`
-	Target    string `json:"target"`
-	Count     int    `json:"count"`
-	TimeoutMs int64  `json:"timeout_ms"`
-	// Mark and DSCP are set only for a provider that shares its source
-	// (#157); the plugin must tag its packets or fail the probe.
-	Mark uint32 `json:"mark,omitempty"`
-	DSCP uint8  `json:"dscp,omitempty"`
-}
-
-type probeResult struct {
-	Sent   int       `json:"sent"`
-	RTTsMs []float64 `json:"rtts_ms"`
-}
-
 // Probe implements plugin.Prober.
 func (p *Prober) Probe(ctx context.Context, req plugin.ProbeRequest) (plugin.ProbeResult, error) {
-	var res probeResult
-	err := p.r.call(ctx, "probe", probeParams{Provider: req.Provider, Source: req.Source.String(),
-		Target: req.Target.String(), Count: req.Count, TimeoutMs: req.Timeout.Milliseconds(), Mark: req.Mark, DSCP: req.DSCP}, &res)
-	if err != nil {
+	var res oop.ProbeResult
+	if err := p.r.call(ctx, "probe", oop.NewProbeParams(req), &res); err != nil {
 		return plugin.ProbeResult{}, err
 	}
-	if res.Sent < 0 || len(res.RTTsMs) > res.Sent {
-		return plugin.ProbeResult{}, fmt.Errorf("probe: inconsistent result: sent=%d replies=%d", res.Sent, len(res.RTTsMs))
-	}
-	out := plugin.ProbeResult{Sent: res.Sent}
-	for _, ms := range res.RTTsMs {
-		if ms < 0 {
-			return plugin.ProbeResult{}, fmt.Errorf("probe: negative rtt %v", ms)
-		}
-		out.RTTs = append(out.RTTs, time.Duration(ms*float64(time.Millisecond)))
-	}
-	return out, nil
+	return res.Result()
 }
 
 // ---- Target source ----
@@ -330,37 +222,13 @@ type Source struct {
 	r *runner
 }
 
-type targetsResult struct {
-	Targets []struct {
-		Prefix string  `json:"prefix"`
-		Host   string  `json:"host"`
-		Weight float64 `json:"weight"`
-	} `json:"targets"`
-}
-
 // Targets implements plugin.TargetSource.
 func (s *Source) Targets(ctx context.Context) ([]plugin.Target, error) {
-	var res targetsResult
+	var res oop.TargetsResult
 	if err := s.r.call(ctx, "targets", nil, &res); err != nil {
 		return nil, err
 	}
-	out := make([]plugin.Target, 0, len(res.Targets))
-	for i, t := range res.Targets {
-		p, err := netip.ParsePrefix(t.Prefix)
-		if err != nil {
-			return nil, fmt.Errorf("targets[%d]: bad prefix %q", i, t.Prefix)
-		}
-		tg := plugin.Target{Prefix: p.Masked(), Weight: t.Weight}
-		if t.Host != "" {
-			h, err := netip.ParseAddr(t.Host)
-			if err != nil || !p.Contains(h) {
-				return nil, fmt.Errorf("targets[%d]: host %q is not an address inside %s", i, t.Host, p)
-			}
-			tg.Host = h
-		}
-		out = append(out, tg)
-	}
-	return out, nil
+	return res.Parse()
 }
 
 // ---- Notifier ----
@@ -372,11 +240,11 @@ type Notifier struct {
 }
 
 // EventGate implements plugin.Gated.
-func (n *Notifier) EventGate() *plugin.EventGate { return n.r.gate }
+func (n *Notifier) EventGate() *plugin.EventGate { return n.r.Gate }
 
 // Notify implements plugin.Notifier.
 func (n *Notifier) Notify(ctx context.Context, e plugin.Event) error {
-	if !n.r.gate.Match(e) {
+	if !n.r.Gate.Match(e) {
 		return nil
 	}
 	return n.r.call(ctx, "notify", e, nil)

@@ -261,7 +261,7 @@ Almost every part of Packeteer is a plugin selected by `type` in the config. Unk
 - **Clusters:** elector `lease` (active/standby, [ha.md](docs/ha.md)) and federation `mtls` (several POPs, [multi-pop.md](docs/multi-pop.md)).
 - **Sign-in and lookups:** sso `oidc` ([auth.md](docs/auth.md)) and whois `rdap` (troubleshooting).
 
-Only the announcers and the plugins that feed route decisions can put a route on the session, and those are compiled in only. An `exec` plugin is any executable you mount at `/etc/packeteer/plugins`; it works in the stock image as a prober, a target source, or a notifier, speaking one JSON request and one JSON reply.
+Only the announcers and the plugins that feed route decisions can put a route on the session, and those are compiled in only. An `exec` plugin is any executable you mount at `/etc/packeteer/plugins`; it works in the stock image as a prober, a target source, or a notifier, speaking one JSON request and one JSON reply per call. A `grpc` plugin is the same kind of program kept running over gRPC, for probers that hold state.
 
 Interfaces, the exec protocol, and a shell example: [docs/PLUGINS.md](docs/PLUGINS.md). Keys: [docs/CONFIG.md](docs/CONFIG.md).
 
@@ -349,7 +349,7 @@ Questions, ideas, or just want to talk routing? Join the [Packeteer Discord](htt
 
 - What is done, partial, and planned: [docs/FEATURES.md](docs/FEATURES.md) and the [milestones](https://github.com/GrandArcher/Packeteer/milestones).
 - How to send a change: [CONTRIBUTING.md](CONTRIBUTING.md). Safety and doc rules for every change: [AGENTS.md](AGENTS.md).
-- Plugin roadmap: out-of-process plugins with state ([#286](https://github.com/GrandArcher/Packeteer/issues/286)), a plugin author guide and community plugin list ([#288](https://github.com/GrandArcher/Packeteer/issues/288)), and PeeringDB and IRR record checks ([#289](https://github.com/GrandArcher/Packeteer/issues/289)).
+- Plugin roadmap: a plugin author guide and community plugin list ([#288](https://github.com/GrandArcher/Packeteer/issues/288)), and PeeringDB and IRR record checks ([#289](https://github.com/GrandArcher/Packeteer/issues/289)).
 
 Bug reports and field reports from observe-mode deployments (#54) are the most useful contribution right now.
 
