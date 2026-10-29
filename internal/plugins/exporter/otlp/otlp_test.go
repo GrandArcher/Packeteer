@@ -43,7 +43,7 @@ func TestConfigValidation(t *testing.T) {
 		"ca on http":       "endpoint: http://c:4318\nca_file: /x.pem\n",
 		"bad header":       "endpoint: http://c:4318\nheaders: {\"a b\": x}\n",
 		"unset header env": "endpoint: http://c:4318\nheaders: {authorization: \"Bearer ${NOPE}\"}\n",
-		"negative timeout": "endpoint: http://c:4318\ntimeout: -1s\n",
+		"timeout is fixed": "endpoint: http://c:4318\ntimeout: 5s\n",
 		"unknown field":    "endpoint: http://c:4318\nstreams: [events]\n",
 	} {
 		if _, err := build(t, y); err == nil {
@@ -168,7 +168,7 @@ func TestExportSpansPerDecision(t *testing.T) {
 func TestExportErrors(t *testing.T) {
 	status := http.StatusServiceUnavailable
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(status) }))
-	x, err := build(t, "endpoint: "+srv.URL+"/otlp/v1/traces\ntimeout: 1s\n")
+	x, err := build(t, "endpoint: "+srv.URL+"/otlp/v1/traces\n")
 	if err != nil {
 		t.Fatal(err)
 	}

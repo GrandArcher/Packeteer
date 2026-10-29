@@ -38,7 +38,7 @@ func TestConfigValidation(t *testing.T) {
 		"wildcard prefix":  "urls: [\"nats://a:4222\"]\nsubject_prefix: \"a.*\"\n",
 		"empty token":      "urls: [\"nats://a:4222\"]\nsubject_prefix: \"a..b\"\n",
 		"bad stream":       "urls: [\"nats://a:4222\"]\nstreams: [traces]\n",
-		"negative timeout": "urls: [\"nats://a:4222\"]\ntimeout: -1s\n",
+		"timeout is fixed": "urls: [\"nats://a:4222\"]\ntimeout: 5s\n",
 		"user without tls": "urls: [\"nats://a:4222\"]\nusername_env: NUSER\npassword_env: NPASS\n",
 		"only username":    "urls: [\"tls://a:4222\"]\ntls: true\nusername_env: NUSER\n",
 		"unknown field":    "urls: [\"nats://a:4222\"]\ntoken: x\n",
@@ -110,7 +110,7 @@ func TestExportPublishesJSONPerStream(t *testing.T) {
 // A server that is down at startup must not stop Packeteer: the connect
 // options retry in the background.
 func TestStartDoesNotNeedAServer(t *testing.T) {
-	x, err := build(t, "urls: [\"nats://127.0.0.1:1\"]\ntimeout: 200ms\n")
+	x, err := build(t, "urls: [\"nats://127.0.0.1:1\"]\n")
 	if err != nil {
 		t.Fatal(err)
 	}

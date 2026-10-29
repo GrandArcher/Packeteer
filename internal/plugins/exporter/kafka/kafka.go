@@ -24,8 +24,8 @@ import (
 // TypeName is the plugin type used in config.
 const TypeName = "kafka"
 
-// DefaultTimeout bounds one batch.
-const DefaultTimeout = 10 * time.Second
+// timeout bounds one batch; the dispatcher gives the same deadline.
+const timeout = 10 * time.Second
 
 // DefaultTopicPrefix gives the topics packeteer.events, packeteer.decisions,
 // and packeteer.flows.
@@ -43,12 +43,10 @@ type Config struct {
 	Streams []string `yaml:"streams"`
 	TLS     bool     `yaml:"tls"`
 	CAFile  string   `yaml:"ca_file"`
-	// SASL is plain, scram-sha-256, or scram-sha-512. It needs TLS unless
-	// the broker is a trusted local one, so plain without tls is refused.
-	SASL        string        `yaml:"sasl"`
-	UsernameEnv string        `yaml:"username_env"`
-	PasswordEnv string        `yaml:"password_env"`
-	Timeout     time.Duration `yaml:"timeout"`
+	// SASL is plain, scram-sha-256, or scram-sha-512. It always needs TLS.
+	SASL        string `yaml:"sasl"`
+	UsernameEnv string `yaml:"username_env"`
+	PasswordEnv string `yaml:"password_env"`
 }
 
 type producer interface {
@@ -61,7 +59,6 @@ type Exporter struct {
 	streams []string
 	prefix  string
 	opts    []kgo.Opt
-	timeout time.Duration
 
 	// dial builds the client; tests replace it.
 	dial func(opts ...kgo.Opt) (producer, error)
@@ -94,12 +91,6 @@ func New(c plugin.Config, e plugin.Env) (plugin.Exporter, error) {
 	if err != nil {
 		return nil, err
 	}
-	if cfg.Timeout == 0 {
-		cfg.Timeout = DefaultTimeout
-	}
-	if cfg.Timeout < time.Second {
-		return nil, fmt.Errorf("timeout %s must be at least 1s", cfg.Timeout)
-	}
 	tlsConf, err := sinkcfg.TLS(cfg.TLS, cfg.CAFile)
 	if err != nil {
 		return nil, err
@@ -107,8 +98,8 @@ func New(c plugin.Config, e plugin.Env) (plugin.Exporter, error) {
 	opts := []kgo.Opt{
 		kgo.SeedBrokers(cfg.Brokers...),
 		kgo.AllowAutoTopicCreation(),
-		kgo.RecordDeliveryTimeout(cfg.Timeout),
-		kgo.ProduceRequestTimeout(cfg.Timeout),
+		kgo.RecordDeliveryTimeout(timeout),
+		kgo.ProduceRequestTimeout(timeout),
 	}
 	if tlsConf != nil {
 		opts = append(opts, kgo.DialTLSConfig(tlsConf))
@@ -133,7 +124,7 @@ func New(c plugin.Config, e plugin.Env) (plugin.Exporter, error) {
 		}
 		opts = append(opts, kgo.SASL(mech))
 	}
-	return &Exporter{streams: streams, prefix: cfg.TopicPrefix, opts: opts, timeout: cfg.Timeout,
+	return &Exporter{streams: streams, prefix: cfg.TopicPrefix, opts: opts,
 		dial: func(o ...kgo.Opt) (producer, error) { return kgo.NewClient(o...) }}, nil
 }
 

@@ -22,8 +22,8 @@ import (
 // TypeName is the plugin type used in config.
 const TypeName = "nats"
 
-// DefaultTimeout bounds one batch.
-const DefaultTimeout = 10 * time.Second
+// timeout is the connect timeout; a flush is bounded by the dispatcher.
+const timeout = 10 * time.Second
 
 // DefaultSubjectPrefix gives the subjects packeteer.events,
 // packeteer.decisions, and packeteer.flows.
@@ -37,12 +37,11 @@ type Config struct {
 	URLs          []string `yaml:"urls"`
 	SubjectPrefix string   `yaml:"subject_prefix"`
 	// Streams defaults to events and decisions. Flows are opt-in.
-	Streams     []string      `yaml:"streams"`
-	TLS         bool          `yaml:"tls"`
-	CAFile      string        `yaml:"ca_file"`
-	UsernameEnv string        `yaml:"username_env"`
-	PasswordEnv string        `yaml:"password_env"`
-	Timeout     time.Duration `yaml:"timeout"`
+	Streams     []string `yaml:"streams"`
+	TLS         bool     `yaml:"tls"`
+	CAFile      string   `yaml:"ca_file"`
+	UsernameEnv string   `yaml:"username_env"`
+	PasswordEnv string   `yaml:"password_env"`
 }
 
 type conn interface {
@@ -96,12 +95,6 @@ func New(c plugin.Config, e plugin.Env) (plugin.Exporter, error) {
 	if err != nil {
 		return nil, err
 	}
-	if cfg.Timeout < 0 {
-		return nil, fmt.Errorf("timeout %s must not be negative", cfg.Timeout)
-	}
-	if cfg.Timeout == 0 {
-		cfg.Timeout = DefaultTimeout
-	}
 	tlsConf, err := sinkcfg.TLS(cfg.TLS, cfg.CAFile)
 	if err != nil {
 		return nil, err
@@ -115,7 +108,7 @@ func New(c plugin.Config, e plugin.Env) (plugin.Exporter, error) {
 	}
 	opts := []natsgo.Option{
 		natsgo.Name("packeteer"),
-		natsgo.Timeout(cfg.Timeout),
+		natsgo.Timeout(timeout),
 		// A server that is down at startup must not stop Packeteer.
 		natsgo.RetryOnFailedConnect(true),
 		natsgo.MaxReconnects(-1),

@@ -133,14 +133,16 @@ func TestFlowTapTagsProviderAndImprovement(t *testing.T) {
 		return plugin.FlowObservation{At: at, Src: netip.MustParseAddr("203.0.113.9"), Dst: netip.MustParseAddr(dst), Proto: 6, Bytes: 100, Prefix: p}
 	}
 	src.tap(obs("192.0.2.7", steered)) // before any decision round: native
-	tags.set([]policy.Improvement{imp})
+	tags.set("inject", []policy.Improvement{imp})
 	src.tap(obs("192.0.2.7", steered))
 	src.tap(obs("198.51.100.5", netip.MustParsePrefix("198.51.100.0/24")))
-	tags.set(nil)
+	tags.set("observe", []policy.Improvement{imp})
+	src.tap(obs("192.0.2.7", steered))
+	tags.set("inject", nil)
 	src.tap(obs("192.0.2.7", steered))
 
 	got := s.drain(t, d)
-	if len(got) != 4 {
+	if len(got) != 5 {
 		t.Fatalf("records = %d", len(got))
 	}
 	f := func(i int) plugin.FlowRecord { return *got[i].Flow }
@@ -154,6 +156,9 @@ func TestFlowTapTagsProviderAndImprovement(t *testing.T) {
 		t.Fatalf("native flow must carry the RIB's provider and no improvement ID: %+v", r)
 	}
 	if r := f(3); r.ImprovementID != "" || r.Provider != "" {
+		t.Fatalf("a recommendation in observe must not tag the flow as moved: %+v", r)
+	}
+	if r := f(4); r.ImprovementID != "" || r.Provider != "" {
 		t.Fatalf("a retired improvement must stop tagging: %+v", r)
 	}
 }

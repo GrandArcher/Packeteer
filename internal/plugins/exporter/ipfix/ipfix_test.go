@@ -266,3 +266,27 @@ func TestProviderNameIsTruncatedAndExportBeforeStartFails(t *testing.T) {
 		t.Fatalf("provider length byte = %d, want 254", rec[len(rec)-255])
 	}
 }
+
+// A collector name that does not resolve at boot must not stop Packeteer:
+// Start succeeds and the export fails and is counted.
+func TestUnresolvedCollectorFailsExportNotStart(t *testing.T) {
+	// A 64-byte label is rejected by the resolver without a DNS query.
+	x, err := build(t, "address: "+strings.Repeat("a", 64)+".example.net:2055\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := x.Start(context.Background()); err != nil {
+		t.Fatalf("start with an unresolvable collector: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := x.Export(ctx, []plugin.ExportRecord{flow("192.0.2.10", 1, "p", "")}); err == nil {
+		t.Fatal("export to an unresolvable collector must fail")
+	}
+	if err := x.Stop(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := x.Export(ctx, []plugin.ExportRecord{flow("192.0.2.10", 1, "p", "")}); err == nil {
+		t.Fatal("export after Stop must fail")
+	}
+}

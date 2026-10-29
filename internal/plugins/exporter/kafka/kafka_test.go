@@ -41,8 +41,7 @@ func TestConfigValidation(t *testing.T) {
 		"bad stream":       "brokers: [a:9092]\nstreams: [traces]\n",
 		"dup stream":       "brokers: [a:9092]\nstreams: [events, events]\n",
 		"bad topic prefix": "brokers: [a:9092]\ntopic_prefix: \"a b\"\n",
-		"short timeout":    "brokers: [a:9092]\ntimeout: 500ms\n",
-		"negative timeout": "brokers: [a:9092]\ntimeout: -1s\n",
+		"timeout is fixed": "brokers: [a:9092]\ntimeout: 5s\n",
 		"unknown field":    "brokers: [a:9092]\nacks: all\n",
 		"ca without tls":   "brokers: [a:9092]\nca_file: /x.pem\n",
 		"sasl no creds":    "brokers: [a:9092]\ntls: true\nsasl: plain\n",
@@ -132,7 +131,7 @@ func TestExportProducesJSONToTopicPerStream(t *testing.T) {
 // A broker that is down at startup must not stop Packeteer; the export
 // fails and is counted instead.
 func TestDownBrokerFailsExportNotStart(t *testing.T) {
-	x, err := build(t, "brokers: [\"127.0.0.1:1\"]\ntimeout: 1s\n")
+	x, err := build(t, "brokers: [\"127.0.0.1:1\"]\n")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -47,7 +47,9 @@ type DecisionRecord struct {
 }
 
 // FlowRecord is one flow observation for a learned prefix, tagged with the
-// provider traffic to that prefix uses and the improvement that moved it.
+// provider traffic to that prefix uses. In inject mode a steered prefix
+// carries the improvement that moved it; in observe and suggest nothing has
+// moved, so the tag is the native provider.
 type FlowRecord struct {
 	Time     time.Time  `json:"time"`
 	Src      netip.Addr `json:"src"`

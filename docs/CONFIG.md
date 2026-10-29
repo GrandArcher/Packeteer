@@ -1470,18 +1470,15 @@ curl -u "$USER:$PASS" -X DELETE http://127.0.0.1:8080/api/maintenance/api-1
 | | `streams` | `events`, `decisions` | Any of `events`, `decisions`, `flows`. |
 | | `tls`, `ca_file` | off | TLS to the brokers; `ca_file` is an absolute PEM path and needs `tls`. |
 | | `sasl` | none | `plain`, `scram-sha-256`, or `scram-sha-512`. Needs `tls: true`, `username_env`, and `password_env`. |
-| | `timeout` | `10s` | At least `1s`. Bounds one batch. |
 | `nats` | `urls` | required | `nats://` or `tls://` server URLs, no credentials in them. |
 | | `subject_prefix` | `packeteer` | Subjects are `<prefix>.events`, `.decisions`, `.flows`. |
 | | `streams` | `events`, `decisions` | As for `kafka`. |
 | | `tls`, `ca_file` | off | As for `kafka`; a `tls://` URL needs `tls: true`. |
 | | `username_env`, `password_env` | none | Both or neither; need `tls: true`. |
-| | `timeout` | `10s` | Connect and flush bound. |
 | `otlp` | `endpoint` | required | OTLP/HTTP base URL, for example `http://collector.example.net:4318`; `/v1/traces` is added. |
 | | `headers` | none | Request headers; values may use `${VAR}`, and an unset variable is an error. |
 | | `ca_file` | system roots | PEM for an `https` endpoint. |
 | | `service_name` | `packeteer` | The `service.name` resource attribute. |
-| | `timeout` | `10s` | One request. |
 | `ipfix` | `address` | required | Collector `host:port`, UDP. Takes `flows` only. |
 | | `observation_domain` | `1` | Sent in every message. |
 | | `template_interval` | `1m` | How often templates are sent again. |

@@ -18,7 +18,6 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/GrandArcher/Packeteer/internal/plugins/exporter/sinkcfg"
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
@@ -26,9 +25,6 @@ import (
 
 // TypeName is the plugin type used in config.
 const TypeName = "otlp"
-
-// DefaultTimeout bounds one request.
-const DefaultTimeout = 10 * time.Second
 
 // DefaultServiceName is the service.name resource attribute.
 const DefaultServiceName = "packeteer"
@@ -47,7 +43,6 @@ type Config struct {
 	Headers     map[string]string `yaml:"headers"`
 	CAFile      string            `yaml:"ca_file"`
 	ServiceName string            `yaml:"service_name"`
-	Timeout     time.Duration     `yaml:"timeout"`
 }
 
 // Exporter sends spans to an OTLP/HTTP collector.
@@ -73,18 +68,9 @@ func New(c plugin.Config, e plugin.Env) (plugin.Exporter, error) {
 	if !strings.HasSuffix(u.Path, tracesPath) {
 		u.Path = strings.TrimSuffix(u.Path, "/") + tracesPath
 	}
-	if cfg.CAFile != "" && u.Scheme != "https" {
-		return nil, errors.New("ca_file needs an https endpoint")
-	}
 	tlsConf, err := sinkcfg.TLS(u.Scheme == "https", cfg.CAFile)
 	if err != nil {
 		return nil, err
-	}
-	if cfg.Timeout < 0 {
-		return nil, fmt.Errorf("timeout %s must not be negative", cfg.Timeout)
-	}
-	if cfg.Timeout == 0 {
-		cfg.Timeout = DefaultTimeout
 	}
 	if cfg.ServiceName == "" {
 		cfg.ServiceName = DefaultServiceName
@@ -112,7 +98,7 @@ func New(c plugin.Config, e plugin.Env) (plugin.Exporter, error) {
 		hdr.Set(k, val)
 	}
 	return &Exporter{url: u.String(), headers: hdr, service: cfg.ServiceName,
-		client: &http.Client{Timeout: cfg.Timeout, Transport: &http.Transport{TLSClientConfig: tlsConf}}}, nil
+		client: &http.Client{Transport: &http.Transport{TLSClientConfig: tlsConf}}}, nil
 }
 
 // Streams implements plugin.Exporter. Traces carry decisions only.

@@ -72,6 +72,7 @@ type Exporter struct {
 	now      func() time.Time
 
 	mu           sync.Mutex
+	running      bool
 	conn         net.Conn
 	seq          uint32
 	templateSent time.Time
@@ -105,15 +106,12 @@ func New(c plugin.Config, _ plugin.Env) (plugin.Exporter, error) {
 // Streams implements plugin.Exporter. IPFIX carries flows only.
 func (x *Exporter) Streams() []string { return []string{plugin.StreamFlows} }
 
-// Start opens the UDP socket.
-func (x *Exporter) Start(ctx context.Context) error {
-	var d net.Dialer
-	c, err := d.DialContext(ctx, "udp", x.addr)
-	if err != nil {
-		return fmt.Errorf("ipfix dial: %w", err)
-	}
+// Start allows exports. The socket is opened by the first export and again
+// after a write error, so a collector name that does not resolve at boot
+// fails exports, not startup.
+func (x *Exporter) Start(context.Context) error {
 	x.mu.Lock()
-	x.conn = c
+	x.running = true
 	x.mu.Unlock()
 	return nil
 }
@@ -122,6 +120,7 @@ func (x *Exporter) Start(ctx context.Context) error {
 func (x *Exporter) Stop(context.Context) error {
 	x.mu.Lock()
 	defer x.mu.Unlock()
+	x.running = false
 	if x.conn != nil {
 		err := x.conn.Close()
 		x.conn = nil
@@ -132,11 +131,21 @@ func (x *Exporter) Stop(context.Context) error {
 
 // Export packs the batch into messages of at most maxMessage bytes. IPv4
 // and IPv6 records go in separate data sets.
-func (x *Exporter) Export(_ context.Context, batch []plugin.ExportRecord) error {
+func (x *Exporter) Export(ctx context.Context, batch []plugin.ExportRecord) error {
 	x.mu.Lock()
 	defer x.mu.Unlock()
-	if x.conn == nil {
+	if !x.running {
 		return errors.New("ipfix exporter is not started")
+	}
+	if x.conn == nil {
+		var d net.Dialer
+		c, err := d.DialContext(ctx, "udp", x.addr)
+		if err != nil {
+			return fmt.Errorf("ipfix dial: %w", err)
+		}
+		x.conn = c
+		// A new collector socket has not seen the templates.
+		x.templateSent = time.Time{}
 	}
 	var v4, v6 [][]byte
 	for _, r := range batch {
@@ -159,20 +168,12 @@ func (x *Exporter) Export(_ context.Context, batch []plugin.ExportRecord) error 
 		n := 0
 		v4, n = m.data(templateV4, v4, n)
 		v6, n = m.data(templateV6, v6, n)
-		if n == 0 {
-			// A record bigger than a message cannot be sent; drop it
-			// rather than loop.
-			if len(v4) > 0 {
-				v4 = v4[1:]
-			} else {
-				v6 = v6[1:]
-			}
-			continue
-		}
 		if m.hasTemplates {
 			x.templateSent = now
 		}
 		if _, err := x.conn.Write(m.bytes()); err != nil {
+			_ = x.conn.Close()
+			x.conn = nil
 			return err
 		}
 		x.seq += uint32(n)

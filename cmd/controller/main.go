@@ -912,7 +912,7 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 				watch.anomaly(anomChanges)
 				watch.mitigation(mitChanges)
 				watch.announce(now, err)
-				exportFlowTags.set(nil)
+				exportFlowTags.set("", nil)
 				return
 			}
 			leading = true
@@ -948,7 +948,9 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 			watch.mitigation(mitChanges)
 			watch.improvements(now, changes)
 			exportDecisions(exp, now, snap.Mode, changes)
-			exportFlowTags.set(decider.Improvements())
+			if exp.Wants(plugin.StreamFlows) {
+				exportFlowTags.set(snap.Mode, decider.Improvements())
+			}
 			qc := decider.QuarantineChanges()
 			watch.quarantines(now, qc)
 			auditQuarantines(audit, qc)

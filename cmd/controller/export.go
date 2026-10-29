@@ -5,6 +5,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/GrandArcher/Packeteer/internal/config"
 	"github.com/GrandArcher/Packeteer/internal/export"
 	"github.com/GrandArcher/Packeteer/internal/notify"
 	"github.com/GrandArcher/Packeteer/internal/pluginhost"
@@ -83,16 +84,21 @@ func nativeProvider(view *rib.View) func(netip.Addr) string {
 // improvementTag is what a flow toward a steered prefix is tagged with.
 type improvementTag struct{ provider, id string }
 
-// exportTags is the active improvements by prefix, replaced after each
+// exportTags is the steered improvements by prefix, replaced after each
 // decision round. The flow tap reads it without a lock.
 type exportTags struct {
 	m atomic.Pointer[map[netip.Prefix]improvementTag]
 }
 
-func (t *exportTags) set(imps []policy.Improvement) {
+// set takes the improvements of the round. Only inject mode moves traffic;
+// in observe and suggest an improvement is a recommendation, so flows keep
+// their native provider and no improvement ID.
+func (t *exportTags) set(mode string, imps []policy.Improvement) {
 	m := make(map[netip.Prefix]improvementTag, len(imps))
-	for _, imp := range imps {
-		m[imp.Prefix] = improvementTag{imp.Provider, imp.ID()}
+	if mode == config.ModeInject {
+		for _, imp := range imps {
+			m[imp.Prefix] = improvementTag{imp.Provider, imp.ID()}
+		}
 	}
 	t.m.Store(&m)
 }
@@ -104,9 +110,9 @@ type flowTapper interface {
 }
 
 // wireFlowExport installs the flow tap when an exporter takes flows. The
-// provider tag is the improvement's provider when the prefix is steered and
-// the RIB's native provider otherwise; the improvement ID is set only for a
-// steered prefix.
+// provider tag is the improvement's provider when the prefix is steered by
+// an injected route and the RIB's native provider otherwise; the improvement
+// ID is set only for a steered prefix.
 func wireFlowExport(plugins *pluginhost.Set, out *export.Dispatcher, native func(netip.Addr) string, tags *exportTags) {
 	if plugins == nil || !out.Wants(plugin.StreamFlows) {
 		return
