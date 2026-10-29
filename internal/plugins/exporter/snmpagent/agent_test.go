@@ -538,3 +538,54 @@ func TestV3ResponsesUseFreshSalts(t *testing.T) {
 		t.Fatalf("decoded %d encrypted exchanges, want 3", n)
 	}
 }
+
+// raw v3 request with the given engine ID in msgAuthoritativeEngineID and the
+// given user name.
+func v3Message(t *testing.T, engine, user string) []byte {
+	t.Helper()
+	p := &gosnmp.SnmpPacket{Version: gosnmp.Version3, MsgFlags: gosnmp.NoAuthNoPriv, SecurityModel: gosnmp.UserSecurityModel,
+		SecurityParameters: &gosnmp.UsmSecurityParameters{AuthoritativeEngineID: engine, UserName: user,
+			AuthenticationProtocol: gosnmp.NoAuth, PrivacyProtocol: gosnmp.NoPriv, Logger: gosnmp.NewLogger(nil)},
+		ContextEngineID: user, PDUType: gosnmp.GetRequest, MsgID: 7, RequestID: 7, MsgMaxSize: 65000,
+		Variables: []gosnmp.SnmpPDU{{Name: "1.3.6.1.2.1.1.1.0", Type: gosnmp.Null}}}
+	raw, err := p.MarshalMsg()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return raw
+}
+
+// Only the msgAuthoritativeEngineID field picks the keyed decoder. The agent's
+// engine ID is public, so a sender can put it anywhere else in the message.
+func TestEngineIDMustBeTheAuthoritativeField(t *testing.T) {
+	a, _ := newAgent(t, bothYAML)
+	ver, id, ok := msgHeader(v3Message(t, a.engine, "x"))
+	if !ok || ver != gosnmp.Version3 || string(id) != a.engine {
+		t.Fatalf("own engine: %v %x %v", ver, id, ok)
+	}
+	decoy := v3Message(t, "foreign-engine-0", a.engine)
+	if !strings.Contains(string(decoy), a.engine) {
+		t.Fatal("the decoy does not carry the agent's engine ID")
+	}
+	if _, id, ok := msgHeader(decoy); !ok || string(id) != "foreign-engine-0" {
+		t.Fatalf("decoy engine: %q %v", id, ok)
+	}
+	if _, id, _ := msgHeader(decoy); a.codecFor(id) != a.open {
+		t.Fatal("a message that only mentions the agent's engine ID is decoded under its keys")
+	}
+	if _, id, _ := msgHeader(v3Message(t, a.engine, "x")); a.codecFor(id) != a.ours {
+		t.Fatal("a message for the agent's engine ID is not decoded under its keys")
+	}
+	if out := a.reply(decoy); out != nil {
+		t.Fatalf("a message for another engine was answered: %x", out)
+	}
+	// Discovery is the one message read without the keys that is answered.
+	if out := a.reply(v3Message(t, "", "")); out == nil {
+		t.Fatal("discovery was not answered")
+	}
+	for _, bad := range [][]byte{nil, {0x30}, {0x30, 0x03, 0x02, 0x01, 0x03}, {0x30, 0x84, 0xff, 0xff, 0xff, 0xff, 0x02}} {
+		if _, _, ok := msgHeader(bad); ok && len(bad) < 6 {
+			t.Errorf("%x parsed", bad)
+		}
+	}
+}

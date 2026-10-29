@@ -9,9 +9,10 @@
 package snmpagent
 
 import (
-	"bytes"
 	"context"
+	"crypto/rand"
 	"crypto/subtle"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"net"
@@ -170,6 +171,7 @@ func New(c plugin.Config, e plugin.Env) (plugin.Exporter, error) {
 	if a.usm != nil {
 		a.usm.Logger = quiet
 		a.ours.SecurityModel, a.ours.MsgFlags, a.ours.SecurityParameters = gosnmp.UserSecurityModel, a.flags, a.usm.Copy()
+		a.seedSalt()
 		a.open = &gosnmp.GoSNMP{Version: gosnmp.Version3, Logger: quiet, SecurityModel: gosnmp.UserSecurityModel, MsgFlags: gosnmp.NoAuthNoPriv,
 			SecurityParameters: &gosnmp.UsmSecurityParameters{AuthenticationProtocol: gosnmp.NoAuth, PrivacyProtocol: gosnmp.NoPriv, Logger: quiet}}
 	}
@@ -269,20 +271,74 @@ func (a *Agent) allowed(ip net.IP) bool {
 	return false
 }
 
-// msgVersion reads the version of an SNMP message, SEQUENCE { INTEGER, ... },
-// without decoding the rest.
-func msgVersion(b []byte) (gosnmp.SnmpVersion, bool) {
-	if len(b) < 5 || b[0] != 0x30 {
-		return 0, false
+// tlv reads one BER element: its tag, its content, and what follows it.
+func tlv(b []byte) (tag byte, content, rest []byte, ok bool) {
+	if len(b) < 2 {
+		return 0, nil, nil, false
 	}
-	i := 2
+	size, i := int(b[1]), 2
 	if b[1]&0x80 != 0 {
-		i += int(b[1] & 0x7f)
+		n := int(b[1] & 0x7f)
+		if n == 0 || n > 3 || len(b) < 2+n {
+			return 0, nil, nil, false
+		}
+		size = 0
+		for _, c := range b[2 : 2+n] {
+			size = size<<8 | int(c)
+		}
+		i = 2 + n
 	}
-	if i+3 > len(b) || b[i] != 0x02 || b[i+1] != 0x01 {
-		return 0, false
+	if len(b)-i < size {
+		return 0, nil, nil, false
 	}
-	return gosnmp.SnmpVersion(b[i+2]), true
+	return b[0], b[i : i+size], b[i+size:], true
+}
+
+// msgHeader reads the version of an SNMP message, SEQUENCE { INTEGER, ... },
+// and for v3 the msgAuthoritativeEngineID inside msgSecurityParameters,
+// without decoding anything else. The engine ID is the sender's claim and
+// decides how much work the message gets (see reply).
+func msgHeader(b []byte) (ver gosnmp.SnmpVersion, engine []byte, ok bool) {
+	tag, msg, _, ok := tlv(b)
+	if !ok || tag != 0x30 {
+		return 0, nil, false
+	}
+	tag, v, rest, ok := tlv(msg)
+	if !ok || tag != 0x02 || len(v) != 1 {
+		return 0, nil, false
+	}
+	ver = gosnmp.SnmpVersion(v[0])
+	if ver != gosnmp.Version3 {
+		return ver, nil, true
+	}
+	// msgGlobalData, then msgSecurityParameters: an OCTET STRING holding
+	// SEQUENCE { OCTET STRING msgAuthoritativeEngineID, ... }.
+	if tag, _, rest, ok = tlv(rest); !ok || tag != 0x30 {
+		return 0, nil, false
+	}
+	tag, params, _, ok := tlv(rest)
+	if !ok || tag != 0x04 {
+		return 0, nil, false
+	}
+	if tag, params, _, ok = tlv(params); !ok || tag != 0x30 {
+		return 0, nil, false
+	}
+	if tag, engine, _, ok = tlv(params); !ok || tag != 0x04 {
+		return 0, nil, false
+	}
+	return ver, engine, true
+}
+
+// codecFor picks the decoder for a v3 message by the engine ID it claims.
+// Decoding under the agent's keys re-derives them when the engine ID
+// differs, a megabyte of hashing that is then cached for good. So only a
+// message that names the agent's own engine ID is read with the keys. Any
+// other is read with none, which is all discovery needs.
+func (a *Agent) codecFor(engine []byte) *gosnmp.GoSNMP {
+	if string(engine) == a.engine {
+		return a.ours
+	}
+	return a.open
 }
 
 // reply is the response to one datagram, or nil to stay silent. A request
@@ -297,7 +353,7 @@ func (a *Agent) reply(msg []byte) (out []byte) {
 			out = nil
 		}
 	}()
-	ver, ok := msgVersion(msg)
+	ver, engine, ok := msgHeader(msg)
 	if !ok {
 		return nil
 	}
@@ -311,11 +367,7 @@ func (a *Agent) reply(msg []byte) (out []byte) {
 		if a.usm == nil {
 			return nil
 		}
-		// Keys are derived for the agent's engine ID only. Any other
-		// message is read with no keys, which is all that discovery needs.
-		if !bytes.Contains(msg, []byte(a.engine)) {
-			codec = a.open
-		}
+		codec = a.codecFor(engine)
 	default:
 		return nil
 	}
@@ -470,4 +522,18 @@ func (a *Agent) answer(p *gosnmp.SnmpPacket, now time.Time) []gosnmp.SnmpPDU {
 		out = out[:min(len(out), maxVarbinds)]
 	}
 	return out
+}
+
+// seedSalt moves the AES salt counter, which gosnmp starts at zero, to a
+// random point. The IV is boots, time, and that counter, so two starts in the
+// same second would otherwise encrypt under the same IV and key.
+func (a *Agent) seedSalt() {
+	var r [2]byte
+	if _, err := rand.Read(r[:]); err != nil {
+		return
+	}
+	dummy := &gosnmp.SnmpPacket{MsgFlags: gosnmp.AuthPriv, SecurityParameters: a.usm.Copy()}
+	for i := 0; i < int(binary.BigEndian.Uint16(r[:])); i++ {
+		_ = a.usm.InitPacket(dummy)
+	}
 }
