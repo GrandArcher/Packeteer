@@ -6,7 +6,7 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 
 ### Added
 
-- Provider scorecard: the `scorecard` report ranks providers per destination origin ASN by p50 and p95 loss, RTT, and jitter, weighted by flow volume; API, CSV, UI, works in observe (#209).
+- Provider scorecard report: loss, RTT, jitter p50/p95 per provider and destination ASN, flow-weighted, ranked by loss then RTT; API, CSV, UI, works in observe (#209).
 - Replay history: `packeteer whatif`, `POST /api/whatif`, and a Settings panel decide stored rounds again under new settings, read-only; needs `storage.round_retention` (#204).
 - Opt-in `synthesize`, lab only: announce a measured sub-range NOT in the learned RIB inside a learned covering prefix, under rails, a marker community, the route cap, and warnings (#122).
 - Blast-radius preview: `GET /api/blast`, a Settings panel, and a dry-run token gating online changes that can alter announcements; SIGHUP logs add/move/withdraw counts and warning codes (#227).
