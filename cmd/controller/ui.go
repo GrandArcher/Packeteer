@@ -14,7 +14,7 @@ import (
 	"github.com/GrandArcher/Packeteer/internal/configedit"
 	"github.com/GrandArcher/Packeteer/internal/httpapi"
 	"github.com/GrandArcher/Packeteer/internal/pluginhost"
-	execplugin "github.com/GrandArcher/Packeteer/internal/plugins/exec"
+	"github.com/GrandArcher/Packeteer/internal/plugins/oop"
 	"github.com/GrandArcher/Packeteer/internal/subscribe"
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
 )
@@ -79,8 +79,8 @@ func usageReader(plugins *pluginhost.Set) httpapi.UsageReader {
 // (#416). A candidate passes the same steps as a start:
 // config.Parse, the runtime environment, and preflight (every plugin's
 // config and the cross-checks), with plugins built check-only: no exec
-// plugin command runs. A candidate that adds or changes an exec plugin or
-// plugin_dir is refused: which programs the controller runs is set by
+// or grpc plugin command runs. A candidate that adds or changes such a
+// plugin, or plugin_dir, is refused: which programs the controller runs is set by
 // the mounted file only, not through the API. Nothing is started.
 func newConfigEditor(cfg *config.Config, path string, getenv func(string) string, httpUser string, setupPending bool) (*configedit.Editor, error) {
 	if !editorEnabled(cfg, httpUser, setupPending) {
@@ -103,7 +103,7 @@ func candidateChecker(cfg *config.Config, getenv func(string) string, httpUser s
 		if err := applyRuntimeEnv(next, getenv); err != nil {
 			return nil, err
 		}
-		if err := checkExecUnchanged(cfg, next); err != nil {
+		if err := checkProgramsUnchanged(cfg, next); err != nil {
 			return nil, err
 		}
 		quiet := slog.New(slog.NewTextHandler(io.Discard, nil))
@@ -114,19 +114,19 @@ func candidateChecker(cfg *config.Config, getenv func(string) string, httpUser s
 	}
 }
 
-// checkExecUnchanged refuses a candidate whose exec plugins or plugin_dir
-// differ from the running config. Removing an exec plugin is allowed.
-func checkExecUnchanged(running, next *config.Config) error {
+// checkProgramsUnchanged refuses a candidate whose exec or grpc plugins or
+// plugin_dir differ from the running config. Removing one is allowed.
+func checkProgramsUnchanged(running, next *config.Config) error {
 	var errs []error
 	if next.PluginDir != running.PluginDir {
 		errs = append(errs, errors.New("plugin_dir: cannot be changed through the config editor; edit the mounted file"))
 	}
-	have := execSpecs(running)
-	for _, sp := range execSpecs(next) {
-		i := slices.IndexFunc(have, func(h execSpec) bool { return h.field == sp.field && sameYAML(h.spec, sp.spec) })
+	have := programSpecs(running)
+	for _, sp := range programSpecs(next) {
+		i := slices.IndexFunc(have, func(h programSpec) bool { return h.field == sp.field && sameYAML(h.spec, sp.spec) })
 		if i < 0 {
-			errs = append(errs, fmt.Errorf("%s (%s): exec plugins cannot be added or changed through the config editor; edit the mounted file",
-				sp.field, sp.spec.InstanceName()))
+			errs = append(errs, fmt.Errorf("%s (%s): %s plugins cannot be added or changed through the config editor; edit the mounted file",
+				sp.field, sp.spec.InstanceName(), sp.spec.Type))
 			continue
 		}
 		have = slices.Delete(have, i, i+1)
@@ -134,14 +134,14 @@ func checkExecUnchanged(running, next *config.Config) error {
 	return errors.Join(errs...)
 }
 
-type execSpec struct {
+type programSpec struct {
 	field string // yaml path without list indexes, e.g. "probers"
 	spec  config.PluginSpec
 }
 
-// execSpecs lists every plugin spec of type exec anywhere in cfg.
-func execSpecs(cfg *config.Config) []execSpec {
-	var out []execSpec
+// programSpecs lists every exec or grpc plugin spec anywhere in cfg.
+func programSpecs(cfg *config.Config) []programSpec {
+	var out []programSpec
 	specType := reflect.TypeFor[config.PluginSpec]()
 	var walk func(v reflect.Value, field string)
 	walk = func(v reflect.Value, field string) {
@@ -160,8 +160,8 @@ func execSpecs(cfg *config.Config) []execSpec {
 			}
 		case reflect.Struct:
 			if v.Type() == specType {
-				if sp := v.Interface().(config.PluginSpec); sp.Type == execplugin.TypeName {
-					out = append(out, execSpec{field: field, spec: sp})
+				if sp := v.Interface().(config.PluginSpec); oop.RunsProgram(sp.Type) {
+					out = append(out, programSpec{field: field, spec: sp})
 				}
 				return
 			}

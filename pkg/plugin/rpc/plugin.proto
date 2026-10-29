@@ -1,0 +1,25 @@
+// Wire contract of the long-running "grpc" plugin type (docs/PLUGINS.md).
+// The Go package that serves it is pkg/plugin/rpc. Every message is a JSON
+// object carried in a google.protobuf.Struct; the fields are listed in
+// docs/PLUGINS.md. A host also calls the standard grpc.health.v1 Health
+// service under the name "plugin", which go-plugin registers.
+syntax = "proto3";
+
+package packeteer.plugin.v1;
+
+import "google/protobuf/struct.proto";
+
+option go_package = "github.com/GrandArcher/Packeteer/pkg/plugin/rpc";
+
+service Plugin {
+  // Init gets {kind, name, config} once per process start and validates it.
+  rpc Init(google.protobuf.Struct) returns (google.protobuf.Struct);
+  // Probe (prober): {provider, source, target, count, timeout_ms, mark, dscp}
+  // returns {sent, rtts_ms}.
+  rpc Probe(google.protobuf.Struct) returns (google.protobuf.Struct);
+  // Targets (source): {} returns {targets: [{prefix, host, weight}]}.
+  rpc Targets(google.protobuf.Struct) returns (google.protobuf.Struct);
+  // Notify (notifier): an event {time, kind, severity, message, fields}
+  // returns {}.
+  rpc Notify(google.protobuf.Struct) returns (google.protobuf.Struct);
+}

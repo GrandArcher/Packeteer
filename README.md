@@ -261,7 +261,7 @@ Almost every part of Packeteer is a plugin selected by `type` in the config. Unk
 - **Clusters:** elector `lease` (active/standby, [ha.md](docs/ha.md)) and federation `mtls` (several POPs, [multi-pop.md](docs/multi-pop.md)).
 - **Sign-in and lookups:** sso `oidc` ([auth.md](docs/auth.md)) and whois `rdap` (troubleshooting).
 
-Only the announcers and the plugins that feed route decisions can put a route on the session, and those are compiled in only. An `exec` plugin is any executable you mount at `/etc/packeteer/plugins`; it works in the stock image as a prober, a target source, or a notifier, speaking one JSON request and one JSON reply.
+Only the announcers and the plugins that feed route decisions can put a route on the session, and those are compiled in only. An `exec` plugin is any executable you mount at `/etc/packeteer/plugins`; it works in the stock image as a prober, a target source, or a notifier, speaking one JSON request and one JSON reply per call. A `grpc` plugin is the same kind of program kept running over gRPC, for probers that hold state.
 
 Interfaces, the exec protocol, and a shell example: [docs/PLUGINS.md](docs/PLUGINS.md). Keys: [docs/CONFIG.md](docs/CONFIG.md).
 

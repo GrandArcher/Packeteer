@@ -1015,7 +1015,7 @@ Set these in the container. They are not keys in the YAML file. `PACKETEER_HTTP_
 | `PACKETEER_ATLAS_API_KEY` | Your RIPE Atlas API key for the [`atlas`](#atlas) block (#213). Sent only in the `Authorization` header to the Atlas API, never logged or returned. Unset: the integration makes no request. |
 | `PACKETEER_ADMIN_PASSWORD` | With `auth`: creates that admin at start when no user has the name (12-256 characters). An existing user is not changed, so a password set through the API survives a restart. Not written to the log. |
 
-`${VAR}` expansion applies inside a webhook `url`, webhook `headers` values, and an `exec` plugin's `env` values. It is not applied to the rest of the file.
+`${VAR}` expansion applies inside a webhook `url`, webhook `headers` values, and an `exec` or `grpc` plugin's `env` values. It is not applied to the rest of the file.
 
 ## Inject checklist
 
@@ -1491,7 +1491,7 @@ curl -u "$USER:$PASS" -X DELETE http://127.0.0.1:8080/api/maintenance/api-1
 
 ### Notifier filters (every notifier)
 
-Every notifier, including `exec`, accepts these keys next to its own. The controller applies them before `Notify`, and each notifier has its own queue, so a slow relay does not delay the others or the probe and decision loops. See [EVENTS.md](EVENTS.md) for the event kinds.
+Every notifier, including `exec` and `grpc`, accepts these keys next to its own. The controller applies them before `Notify`, and each notifier has its own queue, so a slow relay does not delay the others or the probe and decision loops. See [EVENTS.md](EVENTS.md) for the event kinds.
 
 | Key | Default | Meaning |
 |---|---|---|
@@ -1569,6 +1569,17 @@ Plus the [filter keys](#notifier-filters-every-notifier). The trap OID is `<ente
 | `config` | none | Forwarded verbatim in every JSON request. |
 
 As a notifier, `exec` also takes the [filter keys](#notifier-filters-every-notifier). A prober or source rejects them.
+
+### Notifier, prober, or source `grpc`
+
+A long-running plugin over gRPC ([PLUGINS.md](PLUGINS.md#grpc-plugins-long-running)). It takes the same `command`, `args`, `timeout`, `env`, and `config` keys as `exec`, with the same meaning, except that `timeout` also bounds starting the process and `config` is sent once in `Init`. Plus:
+
+| Key | Default | Meaning |
+|---|---|---|
+| `health_interval` | `10s` | Time between health checks of the running process. Not negative. |
+| `restart_backoff` | `1s` | Delay before restarting a plugin that died. It doubles after each failed or short-lived start, up to 60 times this. Not negative. |
+
+As a notifier, `grpc` also takes the [filter keys](#notifier-filters-every-notifier). A prober or source rejects them.
 
 ### Telemetry `fixed`
 

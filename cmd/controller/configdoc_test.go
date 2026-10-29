@@ -12,6 +12,7 @@ import (
 	"github.com/GrandArcher/Packeteer/internal/plugins/elector/lease"
 	"github.com/GrandArcher/Packeteer/internal/plugins/exec"
 	"github.com/GrandArcher/Packeteer/internal/plugins/federation/mtls"
+	"github.com/GrandArcher/Packeteer/internal/plugins/grpcplugin"
 	irrfile "github.com/GrandArcher/Packeteer/internal/plugins/irr/file"
 	irrwhois "github.com/GrandArcher/Packeteer/internal/plugins/irr/whois"
 	coreicmp "github.com/GrandArcher/Packeteer/internal/plugins/ixpcore/icmp"
@@ -86,6 +87,7 @@ func TestConfigDocCoversStructs(t *testing.T) {
 		smtp.Config{},
 		snmptrap.Config{},
 		exec.Config{},
+		grpcplugin.Config{},
 		gobgp.Config{},
 		gobgp.InboundConfig{},
 		gobgp.InboundProvider{},

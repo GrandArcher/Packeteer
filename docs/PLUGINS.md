@@ -47,14 +47,14 @@ Each entry has `type` (required), an optional `name` (defaults to the type and m
 
 | Kind | Interface | Built-ins | Out-of-process |
 |---|---|---|---|
-| `prober` | `Probe(ctx, ProbeRequest) (ProbeResult, error)` | `icmp`, `tcp`, `udp`, `https`, `twamp` (TWAMP-Light sender for `probe.reorder`), `fixed` (labs) | `exec` |
-| `source` | `Targets(ctx) ([]Target, error)` | `static`, `flow`, `traceroute`, `vip`, `outage`, `span` | `exec` |
+| `prober` | `Probe(ctx, ProbeRequest) (ProbeResult, error)` | `icmp`, `tcp`, `udp`, `https`, `twamp` (TWAMP-Light sender for `probe.reorder`), `fixed` (labs) | `exec`, `grpc` |
+| `source` | `Targets(ctx) ([]Target, error)` | `static`, `flow`, `traceroute`, `vip`, `outage`, `span` | `exec`, `grpc` |
 | `scorer` | `Score(PathStats) float64` (lower is better). `commit` also plans commit and group moves; `cost` plans moves to the cheapest provider inside a performance floor. Optional `plugin.ImprovementWeigher` (`ImprovementWeights()`, `ImprovementWeight(WeightInput)`) orders new moves for the `max_improvements` cap (#34); all three built-ins take `improvement_weights` | `weighted`, `commit`, `cost` | none |
 | `announcer` | `Announce`, `Withdraw`, `WithdrawAll`; `BindRouters(srv, community, []RouterExport)` (`plugin.RouterAnnouncer`) is required when `bgp.neighbors` set `providers`/`next_hops` (#27); `SetRouters(ctx, []RouterExport)` (`plugin.RouterReloader`) lets a SIGHUP replace that table; `Route.ASPath` carries `bgp.as_path` | `gobgp` | **never** |
 | `announcer` (inbound) | `Action(provider)`, `Announce(InboundRoute)`, `Withdraw`, `WithdrawAll`. One instance under `inbound.announcer:`; registry `plugin.InboundAnnouncers` | `gobgp` (marker + per-provider prepend/withhold/MED/TE community catalog) | **never** |
 | `announcer` (mitigation) | `Catalog()`, `Announce(MitigationRoute)`, `Withdraw`, `WithdrawAll`; optionally `plugin.FlowSpecAnnouncer` (`FlowSpecCatalog()`, `AnnounceFlowSpec(FlowSpecRoute)`, `WithdrawFlowSpec(key)`). One instance under `mitigation.announcer:`; registry `plugin.MitigationAnnouncers`. Bound with its own allowlist and rule cap, which it enforces on every announce, FlowSpec included (#28) | `gobgp` (marker + blackhole next hop/communities + redirect targets + FlowSpec) | **never** |
 | `detector` | `Observe(now, []TrafficSample) []Anomaly`, `Tracked()`, `Reset()`. Traffic anomaly detection (#33); one instance under `anomaly.detector:`; registry `plugin.Detectors`. Fed per-prefix, per-protocol rates from a source that implements `plugin.FlowCounterSource` (`flow`). Reports anomalies only: the core turns one into a mitigation rule for an explicit `anomaly.rules` entry, through the mitigation controller | `baseline` (EWMA mean/variance per key) | **never** |
-| `notifier` | `Notify(ctx, Event) error`, optional `EventGate()` (filters and rate limit), optional `plugin.ReportSender` (`SendReport(ctx, ReportMail)`: sends `report_subscriptions`, #34) | `webhook` (generic, `slack`, `teams`, `pagerduty`, templates), `smtp` (also sends reports), `snmptrap` | `exec` |
+| `notifier` | `Notify(ctx, Event) error`, optional `EventGate()` (filters and rate limit), optional `plugin.ReportSender` (`SendReport(ctx, ReportMail)`: sends `report_subscriptions`, #34) | `webhook` (generic, `slack`, `teams`, `pagerduty`, templates), `smtp` (also sends reports), `snmptrap` | `exec`, `grpc` |
 | `exporter` | `Streams() []string`, `Export(ctx, []ExportRecord) error`. Pushes events, decision changes, tagged flow records, and metric snapshots to an external pipeline (#207, #287); list under `exporters:`, off when empty. The host batches per exporter on a bounded queue. Read-only; see [export.md](export.md) | `kafka`, `nats`, `otlp` (spans, logs, metrics), `influxdb` (line protocol), `ipfix` (flow re-export) | none |
 | `telemetry` | `Snapshot(ctx) ([]Usage, error)` | `snmp` | none |
 | `policy` | `Match(PolicySubject) (PolicyVerdict, bool)`, optional `Maintenance.Active(now)`. The filter chain in front of the scorer | `rules`, `maintenance` | none |
@@ -123,11 +123,11 @@ Embed `plugin.Base` for no-op `Start`/`Stop`.
 - `cost`: performance score with the same weights, plus cost optimization. Moves a prefix to the cheapest provider (`providers[].cost`, per Mbps) whose path is inside `floor` (`max_loss_pct`, default 0, and `max_rtt`, default 10ms, above the best loss and best RTT). `precedence` is `performance` (default: performance moves win) or `cost` (a native path inside the floor stays; otherwise the cheapest path inside the floor that is cheaper than native wins). The plugin implements `plugin.Planner` and `plugin.CostPolicy`; Decide re-checks the floor and the price, withdraws a cost steer at once when it leaves the floor, and applies the allowlist, RIB, cap, and cooldown. Improvements are tagged `cost`. The scorer does not announce. See [CONFIG.md](CONFIG.md).
 - `rules` (policy): routing policies by prefix, origin ASN, country (GeoIP, from a MaxMind-format database you mount; none ships with Packeteer), or traffic class (`traffic: transit|local`, from the `flow` source's `transit` block; `PolicySubject.Traffic`). Actions `ignore`, `allow`, `deny`, `static`, and `vip`. A prefix match beats an ASN match, which beats a country match, which beats a traffic-only rule; the longest rule prefix wins; ties go to the rule listed first. The first policy in `policies` that matches a prefix decides it. Decide applies the verdict and still enforces the RIB, allowlist, cap, and withdraw rules. It does not announce. See [CONFIG.md](CONFIG.md#policies).
 - `maintenance` (policy): windows during which providers carry no improvements. Recurring (five-field cron `schedule` plus `duration`, in `timezone`), one-off (`start`/`end`), or opened on demand through `POST /api/maintenance` (basic auth required, in memory only). Matches no prefixes. It does not announce.
-- `exec`: see below.
+- `exec`: see below. `grpc`: see [`grpc` plugins](#grpc-plugins-long-running).
 - `webhook`: `url`, `timeout`, `headers`, `preset` (`generic`, `slack`, `teams`, `pagerduty` with `routing_key_env`), or `template` and `content_type` for SMS and other gateways. See [CONFIG.md](CONFIG.md#notifier-webhook).
 - `smtp`: one plain-text email per event. `host`, `port`, `tls` (`starttls` by default and required; `tls`; or `none` for a trusted local relay without credentials), `ca_file`, `username_env` and `password_env`, `from`, `to`, `subject_prefix`, `helo`, `timeout`. See [CONFIG.md](CONFIG.md#notifier-smtp).
 - `snmptrap`: one SNMPv2c or SNMPv3 trap per event. `address`, `port` (162), `version`, `community_env` or the v3 USM keys and `engine_id`, `enterprise_oid`, `timeout`. See [CONFIG.md](CONFIG.md#notifier-snmptrap).
-- Every notifier, `exec` included, takes `events`, `min_severity`, `rate_limit`, and `rate_window`. The controller applies them in `internal/notify`, which gives each notifier its own bounded queue so a slow one never blocks probing, decisions, withdrawals, or other notifiers. Event kinds, severities, trap IDs, and dedup keys are in [EVENTS.md](EVENTS.md). Notifiers never announce.
+- Every notifier, `exec` and `grpc` included, takes `events`, `min_severity`, `rate_limit`, and `rate_window`. The controller applies them in `internal/notify`, which gives each notifier its own bounded queue so a slow one never blocks probing, decisions, withdrawals, or other notifiers. Event kinds, severities, trap IDs, and dedup keys are in [EVENTS.md](EVENTS.md). Notifiers never announce.
 - `gobgp`: no plugin config block. It publishes on the iBGP speaker the RIB view already opened. `local_pref` (optional `local_pref_cause` and `providers[].local_pref` override it) and `packeteer_community` are top-level controller settings. Optional `communities_cause` and `providers[].communities` add extra communities (standard or large, RFC 8092) after `packeteer_community`. The announcer stamps the local preference and the community list it is given, and adds NO_EXPORT. Each route is the exact prefix learned from the RIB; a config that sets `more_specific_bits` is rejected. With the top-level `more_specific` block on, the controller also sends it the learned more-specifics inside each improvement (exact RIB prefixes, capped by `more_specific.max_routes`); the announcer applies the same community list, NO_EXPORT, and export policy to them. The export policy accepts only Packeteer's own routes that carry `packeteer_community` (standard or large). An extra community alone does not match. Moving a prefix to another provider replaces its route in place (make-before-break, #386): the edge gets one UPDATE and no withdraw, and a failed announce leaves the old route up. A move onto a provider that a router cannot reach (not in its `bgp.neighbors[].providers` or `next_hops`) withdraws first, so that router drops the route. `Stop` withdraws them. Graceful restart is never turned on. Required, along with `local_pref`, when `mode: inject`.
 - `gobgp` (mitigation, #28): under `mitigation.announcer`. `marker` (required), `blackhole` (`next_hop`, optional `next_hop_v6`, `communities`, default `65535:666`), `redirect` targets (`name`, `next_hop`, `communities`), and `flowspec` (drop and rate-limit; `redirect` targets by `name` and `route_target`); at least one of the three. Publishes RTBH, redirect, and FlowSpec (RFC 8955) routes on the same speaker, after the `gobgp` announcer's export policy is installed. Each route is the exact learned prefix with the action's next hop and communities (FlowSpec: the prefix as the destination component and the action as an extended community), the packeteer community, the marker, and NO_EXPORT. It refuses a prefix outside the mitigation allowlist and a new route past `max_rules` (RTBH, redirect, and FlowSpec together) itself. `Stop` withdraws only its own routes. Lab-proven only. See [mitigation.md](mitigation.md).
 - `baseline` (detector, #33): under `anomaly.detector`. Per destination prefix and IP protocol, an exponentially weighted mean and variance (`alpha`, default 0.05). A round is anomalous at or above `min_mbps` (10), `min_ratio` (3) x the mean, and `sensitivity` (3) standard deviations above it after `warmup` (30) rounds, or at `max_mbps` (off) whatever the baseline. `trigger_rounds` (2) and `clear_rounds` (3) are the hysteresis; anomalous rounds are not learned. `max_keys` (10000) bounds memory. In memory only. It never announces. Lab-proven only. See [anomaly.md](anomaly.md).
@@ -224,7 +224,47 @@ docker run ... -v "$PWD/plugins:/etc/packeteer/plugins:ro" ghcr.io/grandarcher/p
 - Relative commands cannot leave the plugin dir (`../` is rejected).
 - Mount the plugin dir read-only. Treat plugins like any code you run as root in the container.
 - Secrets reach plugins only through the explicit `env` mapping.
+- `exec` and `grpc` plugins run programs, so the config editor never adds or changes one ([ui.md](ui.md)).
 
-## Roadmap
+## `grpc` plugins (long-running)
 
-- Long-running out-of-process plugins over gRPC ([hashicorp/go-plugin](https://github.com/hashicorp/go-plugin)), for probers that keep state or run at high rates.
+A `grpc` plugin is a program that Packeteer starts once and keeps running, for probers that keep state or run at high rates. It uses [hashicorp/go-plugin](https://github.com/hashicorp/go-plugin) over gRPC and the same three kinds as `exec`: `prober`, `source`, `notifier`. Announcers, RIB and leak sources, detectors, electors, and federation stay in-process; `grpc` is not registered for them, so a config that names it there is refused at start. A plugin never injects routes.
+
+```yaml
+probers:
+  - type: grpc
+    name: fast
+    config:
+      command: my-prober          # relative = inside plugin_dir; absolute paths allowed
+      timeout: 5s                 # per call, and to start the process (default 30s)
+      health_interval: 10s        # default 10s
+      restart_backoff: 1s         # default 1s
+      env:                        # only PATH and these are passed; ${VAR} expands from Packeteer's env
+        API_TOKEN: ${PROBE_TOKEN}
+      config:                     # sent to the plugin in Init
+        pool: 8
+```
+
+Keys are in [CONFIG.md](CONFIG.md#notifier-prober-or-source-grpc). Like `exec`, the program gets `PATH`, `PACKETEER_PLUGIN_KIND`, and the configured `env` and nothing else from Packeteer's environment, so secrets reach it only through that mapping.
+
+**Lifecycle.**
+
+- At config load Packeteer starts the program once, sends `Init`, and stops it again. A plugin that rejects its config, cannot start, or speaks another protocol version refuses the start of the controller. A config check (the config editor, [ui.md](ui.md)) never starts the program.
+- `Start` launches the long-running process. The plugin answers the standard gRPC health service; Packeteer checks it every `health_interval`. A failed check, an exited process, or a dropped connection takes the plugin out of service, and its calls fail with `plugin is not running` until the new process has passed `Init`.
+- A dead plugin is restarted after `restart_backoff`. The delay doubles after each failed or short-lived start, up to 60 times `restart_backoff`, and goes back to the base after a plugin has run for 60 times `restart_backoff`.
+- A call that exceeds `timeout` fails with `timed out`. A plugin that stops answering the health check is restarted.
+- On `Stop` (SIGTERM, shutdown, a reload that removes the plugin) Packeteer asks the process to exit and kills it after two seconds.
+- A crash of Packeteer itself can leave a plugin process running, since the plugin is a separate process. In a container it ends with the container.
+
+**Protocol version.** The go-plugin handshake carries `ProtocolVersion` 1 and a fixed magic cookie (`PACKETEER_PLUGIN_COOKIE`). A plugin built for another version fails to start with `incompatible API version`. The contract is [pkg/plugin/rpc/plugin.proto](../pkg/plugin/rpc/plugin.proto): a gRPC service `packeteer.plugin.v1.Plugin` whose messages are all JSON objects in a `google.protobuf.Struct`.
+
+| RPC | Request | Response |
+|---|---|---|
+| `Init` | `{"kind","name","config"}`, once per process start | `{}`, or an error if the config is unacceptable |
+| `Probe` | as the `exec` `probe` params: `{"provider","source","target","count","timeout_ms"}`, plus `"mark"` and `"dscp"` when the provider shares its source | `{"sent","rtts_ms"}` as for `exec` |
+| `Targets` | `{}` | `{"targets":[{"prefix","host","weight"}]}` as for `exec` |
+| `Notify` | an event: `{"time","kind","severity","message","fields"}` | `{}` |
+
+A call that returns an error status fails with `plugin error: <message>`. A plugin refuses an `Init` for a kind it does not implement, and for any kind beyond the three.
+
+**Writing one in Go.** Implement `rpc.Plugin` (`Init`, which should decode `config` with `req.DecodeConfig` so unknown fields are errors) plus `rpc.Prober`, `rpc.Source`, or `rpc.Notifier` from [pkg/plugin/rpc](../pkg/plugin/rpc), and call `rpc.Serve` from `main`. Build it static (`CGO_ENABLED=0`) so it runs in the stock alpine image. A plugin that cannot bind to `req.Source` or tag packets as asked must return an error, not a 100% loss result. [examples/plugins/grpc-example](../examples/plugins/grpc-example/main.go) is one binary that runs as all three kinds.

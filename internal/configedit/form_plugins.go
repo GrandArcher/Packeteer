@@ -10,6 +10,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	"github.com/GrandArcher/Packeteer/internal/plugins/oop"
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
 )
 
@@ -83,8 +84,8 @@ func PluginLists() []string {
 }
 
 // PluginTypes is what the add-a-plugin picker offers per list: the registered
-// types, less the ones another card owns and exec, which is added in the raw
-// YAML.
+// types, less the ones another card owns and the ones that run a program
+// (exec, grpc), which are added in the raw YAML.
 func PluginTypes() map[string][]string {
 	registered := map[string][]string{
 		"probers":   plugin.Probers.Types(),
@@ -98,7 +99,7 @@ func PluginTypes() map[string][]string {
 	for list, types := range registered {
 		out[list] = []string{}
 		for _, t := range types {
-			if t != "exec" && !ownedElsewhere(list, t) {
+			if !oop.RunsProgram(t) && !ownedElsewhere(list, t) {
 				out[list] = append(out[list], t)
 			}
 		}
@@ -264,15 +265,15 @@ func (f Form) validatePlugins(cur Form) error {
 			if o.Type != p.Type {
 				return fmt.Errorf("%w: %s.type: the type of %s cannot change; remove it and add another", ErrForm, at, o.Type)
 			}
-			if o.Type == "exec" && !reflect.DeepEqual(o, p) {
-				return fmt.Errorf("%w: %s: an exec plugin runs a program; edit it in the raw YAML", ErrForm, at)
+			if oop.RunsProgram(o.Type) && !reflect.DeepEqual(o, p) {
+				return fmt.Errorf("%w: %s: an %s plugin runs a program; edit it in the raw YAML", ErrForm, at, o.Type)
 			}
 			if seen[p.List+"/"+p.Key] {
 				return fmt.Errorf("%w: %s: listed twice", ErrForm, at)
 			}
 			seen[p.List+"/"+p.Key] = true
-		} else if p.Type == "exec" && p.Enabled {
-			return fmt.Errorf("%w: %s.type: an exec plugin runs a program; add it in the raw YAML", ErrForm, at)
+		} else if oop.RunsProgram(p.Type) && p.Enabled {
+			return fmt.Errorf("%w: %s.type: an %s plugin runs a program; add it in the raw YAML", ErrForm, at, p.Type)
 		} else if ownedElsewhere(p.List, p.Type) {
 			return fmt.Errorf("%w: %s.type: %s is edited in its own section; add it there", ErrForm, at, p.Type)
 		}
@@ -281,10 +282,11 @@ func (f Form) validatePlugins(cur Form) error {
 		}
 	}
 	// applyPlugins removes every file entry the form leaves out, so an exec
-	// entry missing from the request would be deleted, not kept read-only.
+	// or grpc entry missing from the request would be deleted, not kept
+	// read-only.
 	for _, o := range cur.Plugins {
-		if o.Type == "exec" && !seen[o.List+"/"+o.Key] {
-			return fmt.Errorf("%w: plugins: the exec plugin %s %s is missing; an exec plugin runs a program, remove it in the raw YAML", ErrForm, o.List, o.Key)
+		if oop.RunsProgram(o.Type) && !seen[o.List+"/"+o.Key] {
+			return fmt.Errorf("%w: plugins: the %s plugin %s %s is missing; it runs a program, remove it in the raw YAML", ErrForm, o.Type, o.List, o.Key)
 		}
 	}
 	return nil
