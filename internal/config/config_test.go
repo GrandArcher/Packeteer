@@ -571,6 +571,8 @@ announcer:
 	tests := []struct{ name, yaml, wantErr string }{
 		{"missing type", minimalYAML + "probers:\n  - name: x\n", "probers[0]: type is required"},
 		{"duplicate instance", minimalYAML + "notifiers:\n  - type: webhook\n  - type: webhook\n", `notifiers[1]: duplicate instance name "webhook"`},
+		{"exporter missing type", minimalYAML + "exporters:\n  - name: x\n", "exporters[0]: type is required"},
+		{"duplicate exporter", minimalYAML + "exporters:\n  - type: kafka\n  - type: kafka\n", `exporters[1]: duplicate instance name "kafka"`},
 		{"unknown spec field", minimalYAML + "sources:\n  - type: static\n    prefixes: []\n", "field prefixes not found"},
 		{"scorer missing type", minimalYAML + "scorer: {name: x}\n", "scorer: type is required"},
 		{"cost scorer without costs", minimalYAML + "scorer: {type: cost}\n", "needs a cost on at least two non-excluded providers"},

@@ -35,9 +35,12 @@ type Set struct {
 	// Nil when mitigation is off or has no announcer.
 	Mitigation *Instance[plugin.MitigationAnnouncer]
 	Notifiers  []Instance[plugin.Notifier]
-	Telemetry  []Instance[plugin.Telemetry]
-	Policies   []Instance[plugin.Policy]
-	Storage    *Instance[plugin.Storage]
+	// Exporters push decisions, events, and flow records out (#207). They
+	// only read and never announce.
+	Exporters []Instance[plugin.Exporter]
+	Telemetry []Instance[plugin.Telemetry]
+	Policies  []Instance[plugin.Policy]
+	Storage   *Instance[plugin.Storage]
 	// Whois serves the troubleshooting API only. It never announces.
 	Whois *Instance[plugin.Whois]
 	// Lookup is the read-only PeeringDB / IX-F directory (#153). It never
@@ -131,6 +134,7 @@ func Build(cfg *config.Config, opts Options) (*Set, error) {
 		Probers:   build(plugin.Probers, "probers", cfg.Probers, base, &errs),
 		Sources:   build(plugin.Sources, "sources", cfg.Sources, base, &errs),
 		Notifiers: build(plugin.Notifiers, "notifiers", cfg.Notifiers, base, &errs),
+		Exporters: build(plugin.Exporters, "exporters", cfg.Exporters, base, &errs),
 		Telemetry: build(plugin.Telemetries, "telemetry", cfg.Telemetry, base, &errs),
 		Policies:  build(plugin.Policies, "policies", cfg.Policies, base, &errs),
 
@@ -303,6 +307,9 @@ func (s *Set) all() []namedLifecycle {
 	}
 	for _, p := range s.Notifiers {
 		add(plugin.KindNotifier, p.Name, p.Plugin)
+	}
+	for _, p := range s.Exporters {
+		add(plugin.KindExporter, p.Name, p.Plugin)
 	}
 	if s.Federation != nil {
 		add(plugin.KindFederation, s.Federation.Name, s.Federation.Plugin)

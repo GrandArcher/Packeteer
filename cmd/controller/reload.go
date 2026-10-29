@@ -15,6 +15,7 @@ import (
 
 	"github.com/GrandArcher/Packeteer/internal/blast"
 	"github.com/GrandArcher/Packeteer/internal/config"
+	"github.com/GrandArcher/Packeteer/internal/export"
 	"github.com/GrandArcher/Packeteer/internal/history"
 	"github.com/GrandArcher/Packeteer/internal/httpapi"
 	"github.com/GrandArcher/Packeteer/internal/inbound"
@@ -347,9 +348,12 @@ func (l *liveConfig) set(cfg *config.Config) {
 
 // reloader applies SIGHUP and PUT reloads. SIGHUP and PUT share mu.
 type reloader struct {
-	mu     sync.Mutex
-	path   string
-	getenv func(string) string
+	mu sync.Mutex
+	// exp and flowTags feed the flow tap of a source added online (#207).
+	exp      *export.Dispatcher
+	flowTags *exportTags
+	path     string
+	getenv   func(string) string
 	// httpUser is the basic-auth user from the environment; it decides the
 	// sign-in default, which the running config already carries.
 	httpUser string
@@ -582,6 +586,7 @@ func (r *reloader) applyOnline(ctx context.Context, next *config.Config, online 
 				r.engine.SetSources(ns)
 			}
 			wirePrefixLookup(r.plugins, r.rib)
+			wireFlowExport(r.plugins, r.exp, nativeProvider(r.rib), r.flowTags)
 			wireExchangeLANs(next, r.plugins)
 			wireProbeExclusion(next, r.plugins, r.rib)
 			wirePacketWait(r.plugins, r.perASN)

@@ -1,0 +1,26 @@
+# Sink for the ipfix exporter test: GoFlow2 writes the standard fields and,
+# with this mapping, the two IEs Packeteer adds (flowId 148 carries the
+# improvement ID, interfaceName 82 carries the provider).
+formatter:
+  fields:
+    - type
+    - bytes
+    - proto
+    - src_addr
+    - dst_addr
+    - dst_net
+    - improvement_id
+    - provider
+  protobuf:
+    - name: improvement_id
+      index: 1001
+      type: varint
+    - name: provider
+      index: 1002
+      type: string
+ipfix:
+  mapping:
+    - field: 148
+      destination: improvement_id
+    - field: 82
+      destination: provider

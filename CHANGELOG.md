@@ -6,6 +6,7 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 
 ### Added
 
+- Opt-in `exporters` (Kafka, NATS, OTLP spans, IPFIX) push events, decisions, and flows tagged with provider and improvement ID; Grafana dashboards; tested against sink containers (#207).
 - Provider scorecard report: loss, RTT, jitter p50/p95 per provider and destination ASN, flow-weighted, ranked by loss then RTT; API, CSV, UI, works in observe (#209).
 - Replay history: `packeteer whatif`, `POST /api/whatif`, and a Settings panel decide stored rounds again under new settings, read-only; needs `storage.round_retention` (#204).
 - Opt-in `synthesize`, lab only: announce a measured sub-range NOT in the learned RIB inside a learned covering prefix, under rails, a marker community, the route cap, and warnings (#122).

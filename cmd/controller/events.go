@@ -145,7 +145,7 @@ func (w *eventWatch) improvements(now time.Time, changes []policy.Change) {
 		}
 		fields := map[string]string{
 			"prefix": imp.Prefix.String(), "provider": imp.Provider, "native": imp.Native,
-			"mode": mode, "reason": imp.Reason,
+			"mode": mode, "reason": imp.Reason, "improvement_id": imp.ID(),
 		}
 		if imp.Cause != "" {
 			fields["cause"] = imp.Cause

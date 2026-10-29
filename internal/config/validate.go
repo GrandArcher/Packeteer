@@ -378,6 +378,7 @@ func (c *Config) validatePlugins(add func(string, ...any)) {
 	validateSpecs("probers", c.Probers)
 	validateSpecs("sources", c.Sources)
 	validateSpecs("notifiers", c.Notifiers)
+	validateSpecs("exporters", c.Exporters)
 	validateSpecs("telemetry", c.Telemetry)
 	validateSpecs("policies", c.Policies)
 	validateSpecs("rib_sources", c.RIBSources)

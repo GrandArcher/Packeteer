@@ -6,8 +6,11 @@
 package policy
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"net/netip"
 	"slices"
+	"strconv"
 	"time"
 
 	"github.com/GrandArcher/Packeteer/internal/probe"
@@ -248,6 +251,15 @@ type Improvement struct {
 	// sighting that created the improvement does not count.
 	nativeSeen time.Time
 	nativeHeld bool
+}
+
+// ID names this improvement in exports (#207): 16 hex digits hashed from
+// the prefix, the chosen provider, and the start time. A move to another
+// provider starts a new improvement with a new ID; the retire change of an
+// improvement carries the ID its add change had.
+func (i Improvement) ID() string {
+	h := sha256.Sum256([]byte(i.Prefix.String() + "|" + i.Provider + "|" + strconv.FormatInt(i.Since.UnixNano(), 10)))
+	return hex.EncodeToString(h[:8])
 }
 
 // confirm is a performance move that has won on fresh rounds but has not

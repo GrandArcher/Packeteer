@@ -697,3 +697,43 @@ ixp:
 		t.Fatalf("bad interval: %v", err)
 	}
 }
+
+// Exporters are off unless listed (#207), are built and validated with the
+// other plugins, and start after the notifiers and stop before them.
+func TestExportersOffByDefaultAndStrict(t *testing.T) {
+	s, err := Build(load(t, "sources:\n  - type: test-source\n    name: s1\n"), Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(s.Exporters) != 0 {
+		t.Fatalf("exporters = %d without an exporters block", len(s.Exporters))
+	}
+
+	cfg := load(t, "sources:\n  - type: test-source\n    name: s1\nnotifiers:\n  - type: test-notifier\nexporters:\n"+
+		"  - type: nats\n    name: bus\n    config: {urls: [\"nats://127.0.0.1:1\"]}\n"+
+		"  - type: ipfix\n    config: {address: \"127.0.0.1:9\"}\n")
+	s, err = Build(cfg, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(s.Summary(), ";"); !strings.HasSuffix(got, "notifier test-notifier;exporter bus;exporter ipfix") {
+		t.Errorf("Summary = %s", got)
+	}
+	if len(s.Exporters) != 2 || s.Exporters[0].Name != "bus" || s.Exporters[0].Type != "nats" {
+		t.Fatalf("exporters = %+v", s.Exporters)
+	}
+
+	_, err = Build(load(t, "exporters:\n  - type: nope\n  - type: kafka\n    config: {brokers: [\"a:9092\"], acks: all}\n  - type: otlp\n    config: {endpoint: \"ftp://x\"}\n"), Options{})
+	if err == nil {
+		t.Fatal("want error")
+	}
+	for _, want := range []string{
+		`exporters[0] (nope): unknown exporter type "nope" (available: ipfix, kafka, nats, otlp)`,
+		"exporters[1] (kafka): config: ",
+		"exporters[2] (otlp): endpoint must be an absolute http(s) URL",
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error missing %q:\n%v", want, err)
+		}
+	}
+}
