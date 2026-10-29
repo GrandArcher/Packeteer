@@ -54,7 +54,7 @@ func closeIn(t *testing.T, d *Dispatcher) {
 }
 
 func TestRoutesRecordsByStream(t *testing.T) {
-	all := &fake{streams: []string{plugin.StreamEvents, plugin.StreamDecisions, plugin.StreamFlows}}
+	all := &fake{streams: []string{plugin.StreamEvents, plugin.StreamDecisions, plugin.StreamFlows, plugin.StreamMetrics}}
 	dec := &fake{streams: []string{plugin.StreamDecisions}}
 	d := New([]Target{{"all", all}, {"dec", dec}}, Options{})
 	if !d.Wants(plugin.StreamFlows) || !d.Wants(plugin.StreamDecisions) || d.Wants("nope") {
@@ -63,9 +63,10 @@ func TestRoutesRecordsByStream(t *testing.T) {
 	d.Event(plugin.Event{Kind: "improvement.added"})
 	d.Decision(plugin.DecisionRecord{ID: "abc", Prefix: "192.0.2.0/24"})
 	d.Flow(plugin.FlowRecord{Prefix: "192.0.2.0/24", Bytes: 9})
+	d.Metrics(plugin.MetricsRecord{Samples: []plugin.MetricSample{{Name: "packeteer_up", Value: 1}}})
 	closeIn(t, d)
 
-	if n := len(all.records()); n != 3 {
+	if n := len(all.records()); n != 4 {
 		t.Fatalf("exporter with all streams got %d records", n)
 	}
 	got := dec.records()
@@ -76,7 +77,7 @@ func TestRoutesRecordsByStream(t *testing.T) {
 	for _, s := range d.Stats() {
 		stats[s.Exporter+"/"+s.Stream] = s
 	}
-	if len(stats) != 4 || stats["all/flows"].Sent != 1 || stats["dec/decisions"].Sent != 1 {
+	if len(stats) != 5 || stats["all/flows"].Sent != 1 || stats["all/metrics"].Sent != 1 || stats["dec/decisions"].Sent != 1 {
 		t.Fatalf("stats = %+v", stats)
 	}
 	if _, ok := stats["dec/events"]; ok {

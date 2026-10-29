@@ -254,7 +254,7 @@ Almost every part of Packeteer is a plugin selected by `type` in the config. Unk
 - **Policies:** `rules` (ignore, allow, deny, static, or VIP by prefix, origin ASN, or country) and `maintenance`.
 - **Announcers:** `gobgp` for outbound, plus the `gobgp` inbound and mitigation announcers ([inbound.md](docs/inbound.md), [mitigation.md](docs/mitigation.md)).
 - **Notifiers:** `webhook` (JSON, Slack, Teams, PagerDuty, templates), `smtp`, `snmptrap` ([EVENTS.md](docs/EVENTS.md)).
-- **Exporters:** `kafka`, `nats`, `otlp`, `ipfix` (events, decisions, and flows tagged with the chosen provider, [docs/export.md](docs/export.md)).
+- **Exporters:** `kafka`, `nats`, `otlp`, `influxdb`, `ipfix` (events, decisions, flows tagged with the chosen provider, and metric snapshots, [docs/export.md](docs/export.md)).
 - **Telemetry:** `snmp` and `fixed` (labs only).
 - **Storage:** `sqlite` (report history, users, audit log, dashboards).
 - **Detection and safety:** detector `baseline` (flow anomaly detection, [anomaly.md](docs/anomaly.md)) and leak_source `bmp` and `rislive` ([leak-watch.md](docs/leak-watch.md)).
@@ -349,7 +349,7 @@ Questions, ideas, or just want to talk routing? Join the [Packeteer Discord](htt
 
 - What is done, partial, and planned: [docs/FEATURES.md](docs/FEATURES.md) and the [milestones](https://github.com/GrandArcher/Packeteer/milestones).
 - How to send a change: [CONTRIBUTING.md](CONTRIBUTING.md). Safety and doc rules for every change: [AGENTS.md](AGENTS.md).
-- Plugin roadmap: out-of-process plugins with state ([#286](https://github.com/GrandArcher/Packeteer/issues/286)), an InfluxDB exporter ([#287](https://github.com/GrandArcher/Packeteer/issues/287)), a plugin author guide and community plugin list ([#288](https://github.com/GrandArcher/Packeteer/issues/288)), and PeeringDB and IRR record checks ([#289](https://github.com/GrandArcher/Packeteer/issues/289)).
+- Plugin roadmap: out-of-process plugins with state ([#286](https://github.com/GrandArcher/Packeteer/issues/286)), a plugin author guide and community plugin list ([#288](https://github.com/GrandArcher/Packeteer/issues/288)), and PeeringDB and IRR record checks ([#289](https://github.com/GrandArcher/Packeteer/issues/289)).
 
 Bug reports and field reports from observe-mode deployments (#54) are the most useful contribution right now.
 

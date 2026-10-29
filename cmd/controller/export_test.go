@@ -1,8 +1,12 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"net/netip"
+	"os"
+	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -195,5 +199,74 @@ func TestExportStats(t *testing.T) {
 	defer d.Close(context.Background())
 	if fn := exportStats(d); fn == nil || len(fn()) != 1 {
 		t.Fatal("a configured exporter must report")
+	}
+}
+
+func TestPumpMetricsSnapshotsUntilStopped(t *testing.T) {
+	s, d := newExportSink(plugin.StreamMetrics)
+	ctx, cancel := context.WithCancel(context.Background())
+	var mu sync.Mutex
+	taken := 0
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		pumpMetrics(ctx, d, func(context.Context) []plugin.MetricSample {
+			mu.Lock()
+			defer mu.Unlock()
+			taken++
+			if taken == 2 {
+				cancel()
+			}
+			return []plugin.MetricSample{{Name: "packeteer_up", Value: float64(taken)}}
+		}, time.Millisecond)
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the pump did not stop with its context")
+	}
+	got := s.drain(t, d)
+	if len(got) < 2 || got[0].Stream != plugin.StreamMetrics || got[0].Metrics.Time.IsZero() ||
+		got[0].Metrics.Samples[0].Name != "packeteer_up" || got[0].Metrics.Samples[0].Value != 1 {
+		t.Fatalf("records = %+v", got)
+	}
+}
+
+func TestCheckRefusesMetricsExportWithoutHTTP(t *testing.T) {
+	cfgFor := func(listen, streams string) string {
+		return `mode: observe
+asn: 64512
+router_id: 192.0.2.10
+http: {listen: ` + listen + `}
+providers:
+  - {name: a, source_ip: 192.0.2.11, next_hop: 192.0.2.1}
+exporters:
+  - type: influxdb
+    name: tsdb
+    config: {url: "http://influxdb.example.net:8086", org: ops, bucket: packeteer, token_env: INFLUX_TOKEN, streams: ` + streams + `}
+`
+	}
+	env := func(k string) string {
+		if k == "INFLUX_TOKEN" {
+			return "tok"
+		}
+		return ""
+	}
+	check := func(body string) (int, string) {
+		path := filepath.Join(t.TempDir(), "c.yaml")
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		var out, errOut bytes.Buffer
+		return run(context.Background(), []string{"-check", "-config", path}, env, &out, &errOut), errOut.String()
+	}
+	if code, msg := check(cfgFor(`""`, "[metrics]")); code != 1 || !strings.Contains(msg, "tsdb") || !strings.Contains(msg, "http.listen") {
+		t.Fatalf("metrics stream, http off: code %d stderr %q", code, msg)
+	}
+	if code, msg := check(cfgFor(`""`, "[events]")); code != 0 {
+		t.Fatalf("events only, http off: code %d stderr %q", code, msg)
+	}
+	if code, msg := check(cfgFor(`"127.0.0.1:8080"`, "[metrics]")); code != 0 {
+		t.Fatalf("metrics stream, http on: code %d stderr %q", code, msg)
 	}
 }

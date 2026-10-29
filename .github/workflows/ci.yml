@@ -2934,10 +2934,10 @@ jobs:
             --absent 'mode-inject' 'Cannot reach'
 
   exporters:
-    # Each exporter against a real sink container (#207): Kafka (Redpanda),
-    # NATS, an OpenTelemetry collector, and GoFlow2 for IPFIX, and the
-    # Grafana dashboards imported into Grafana. The tests
-    # carry the build tag `sink` and read the records back from the sink.
+    # Each exporter against a real sink container (#207, #287): Kafka
+    # (Redpanda), NATS, an OpenTelemetry collector, GoFlow2 for IPFIX, and
+    # InfluxDB 2, and the Grafana dashboards imported into Grafana. The
+    # tests carry the build tag `sink` and read the records back from the sink.
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -2960,7 +2960,12 @@ jobs:
             -v "$PWD/lab/exporters/goflow2-mapping.yaml:/mapping.yaml:ro" -v /tmp/sink/goflow:/out \
             netsampler/goflow2:v2.2.7 -listen netflow://127.0.0.1:2055 -mapping /mapping.yaml \
             -format json -transport file -transport.file /out/flows.json
-          for port in 9092 4222 4318; do
+          docker run -d --name influxdb --network host \
+            -e DOCKER_INFLUXDB_INIT_MODE=setup -e DOCKER_INFLUXDB_INIT_USERNAME=lab-admin \
+            -e DOCKER_INFLUXDB_INIT_PASSWORD=lab-only-not-a-secret -e DOCKER_INFLUXDB_INIT_ORG=packeteer \
+            -e DOCKER_INFLUXDB_INIT_BUCKET=packeteer -e DOCKER_INFLUXDB_INIT_ADMIN_TOKEN=lab-only-influx-token \
+            influxdb:2.7
+          for port in 9092 4222 4318 8086; do
             for i in $(seq 60); do
               (echo > /dev/tcp/127.0.0.1/$port) 2>/dev/null && break
               sleep 1
@@ -2972,6 +2977,8 @@ jobs:
           PACKETEER_SINK_NATS: nats://127.0.0.1:4222
           PACKETEER_SINK_OTLP: http://127.0.0.1:4318
           PACKETEER_SINK_OTLP_FILE: /tmp/sink/otel/traces.json
+          PACKETEER_SINK_INFLUXDB: http://127.0.0.1:8086
+          PACKETEER_SINK_INFLUXDB_TOKEN: lab-only-influx-token
           PACKETEER_SINK_IPFIX: 127.0.0.1:2055
           PACKETEER_SINK_IPFIX_FILE: /tmp/sink/goflow/flows.json
         run: go test -tags sink -count=1 -run Sink -v ./internal/plugins/exporter/...

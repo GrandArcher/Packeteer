@@ -6,6 +6,7 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 
 ### Added
 
+- `influxdb` exporter, OTLP logs and metrics, and an opt-in `metrics` export stream of the `/metrics` series every 30 s; tested against InfluxDB 2 and an OTel collector (#287).
 - Opt-in `exporters` (Kafka, NATS, OTLP spans, IPFIX) push events, decisions, and flows tagged with provider and improvement ID; Grafana dashboards; tested against sink containers (#207).
 - Provider scorecard report: loss, RTT, jitter p50/p95 per provider and destination ASN, flow-weighted, ranked by loss then RTT; API, CSV, UI, works in observe (#209).
 - Replay history: `packeteer whatif`, `POST /api/whatif`, and a Settings panel decide stored rounds again under new settings, read-only; needs `storage.round_retention` (#204).

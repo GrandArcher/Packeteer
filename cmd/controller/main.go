@@ -426,6 +426,9 @@ func preflight(cfg *config.Config, log *slog.Logger, getenv func(string) string,
 	if err := checkSubscriptions(cfg, plugins); err != nil {
 		return nil, err
 	}
+	if err := checkMetricsExport(cfg, plugins); err != nil {
+		return nil, err
+	}
 	return plugins, nil
 }
 
@@ -642,6 +645,9 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 				log.Error("http shutdown", "err", err)
 			}
 		}()
+		if exp.Wants(plugin.StreamMetrics) {
+			go pumpMetrics(ctx, exp, httpSrv.MetricSamples, plugin.MetricsInterval)
+		}
 	} else {
 		log.Info("http disabled")
 	}

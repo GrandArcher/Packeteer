@@ -1,7 +1,10 @@
 package main
 
 import (
+	"context"
+	"fmt"
 	"net/netip"
+	"slices"
 	"sync/atomic"
 	"time"
 
@@ -14,10 +17,10 @@ import (
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
 )
 
-// Exporters (#207) push events, decision changes, and flow records tagged
-// with the chosen provider to external pipelines. They are off unless
-// `exporters` is set, they only read, and a slow sink drops its own records
-// without delaying a decision or a withdraw.
+// Exporters (#207) push events, decision changes, flow records tagged
+// with the chosen provider, and metric snapshots (#287) to external
+// pipelines. They are off unless `exporters` is set, they only read, and a
+// slow sink drops its own records without delaying a decision or a withdraw.
 
 // newExporter builds the export dispatcher; with no exporters it is inert.
 func newExporter(plugins *pluginhost.Set, opt export.Options) *export.Dispatcher {
@@ -137,6 +140,36 @@ func wireFlowExport(plugins *pluginhost.Set, out *export.Dispatcher, native func
 	for _, src := range plugins.SourcesSnapshot() {
 		if s, ok := src.Plugin.(flowTapper); ok {
 			s.SetFlowTap(tap)
+		}
+	}
+}
+
+// checkMetricsExport refuses a metrics-stream exporter without the HTTP
+// server: the snapshot is the server's /metrics.
+func checkMetricsExport(cfg *config.Config, plugins *pluginhost.Set) error {
+	if cfg.HTTPListen() != "" || plugins == nil {
+		return nil
+	}
+	for _, x := range plugins.Exporters {
+		if slices.Contains(x.Plugin.Streams(), plugin.StreamMetrics) {
+			return fmt.Errorf("exporters: %s takes the metrics stream, which reads the HTTP server's /metrics; set http.listen", x.Name)
+		}
+	}
+	return nil
+}
+
+// pumpMetrics hands the exporters a snapshot of the /metrics series every
+// interval until ctx ends. It reads what a scrape reads and does nothing
+// else, so a slow sink costs one dropped snapshot.
+func pumpMetrics(ctx context.Context, out *export.Dispatcher, samples func(context.Context) []plugin.MetricSample, every time.Duration) {
+	t := time.NewTicker(every)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case now := <-t.C:
+			out.Metrics(plugin.MetricsRecord{Time: now, Samples: samples(ctx)})
 		}
 	}
 }
