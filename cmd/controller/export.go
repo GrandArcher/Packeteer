@@ -18,9 +18,9 @@ import (
 )
 
 // Exporters (#207) push events, decision changes, flow records tagged
-// with the chosen provider, and metric snapshots (#287) to external pipelines. They are off unless
-// `exporters` is set, they only read, and a slow sink drops its own records
-// without delaying a decision or a withdraw.
+// with the chosen provider, and metric snapshots (#287) to external
+// pipelines. They are off unless `exporters` is set, they only read, and a
+// slow sink drops its own records without delaying a decision or a withdraw.
 
 // newExporter builds the export dispatcher; with no exporters it is inert.
 func newExporter(plugins *pluginhost.Set, opt export.Options) *export.Dispatcher {

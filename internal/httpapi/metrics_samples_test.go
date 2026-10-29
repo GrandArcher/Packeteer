@@ -1,7 +1,6 @@
 package httpapi
 
 import (
-	"math"
 	"strings"
 	"testing"
 
@@ -61,7 +60,7 @@ func TestParseMetricsLabelEscapesAndBadLines(t *testing.T) {
 	if v := got[0].Labels["a"]; v != `q"u\o`+"\nte}, {x=\"y\"}" || got[0].Labels["b"] != "plain" || got[0].Value != 2.5 {
 		t.Fatalf("labels did not round trip: %+v", got[0])
 	}
-	if got[1].Name != "packeteer_ok" || got[1].Value != 3 || math.IsNaN(got[1].Value) {
+	if got[1].Name != "packeteer_ok" || got[1].Value != 3 {
 		t.Fatalf("got %+v", got[1])
 	}
 }

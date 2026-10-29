@@ -7,8 +7,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
 	"net/url"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -117,12 +119,7 @@ func (x *Exporter) Export(ctx context.Context, batch []plugin.ExportRecord) erro
 
 func eventLine(b *strings.Builder, e plugin.Event) {
 	f := []kv{{"message", quote(e.Message)}}
-	keys := make([]string, 0, len(e.Fields))
-	for k := range e.Fields {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	for _, k := range keys {
+	for _, k := range slices.Sorted(maps.Keys(e.Fields)) {
 		f = append(f, kv{"field_" + k, quote(e.Fields[k])})
 	}
 	line(b, "packeteer_event", []kv{{"kind", e.Kind}, {"severity", string(e.Severity)}}, f, e.Time)
@@ -146,14 +143,9 @@ func decisionLine(b *strings.Builder, d plugin.DecisionRecord) {
 // as tags and the reading in the field value.
 func metricLines(b *strings.Builder, m plugin.MetricsRecord) {
 	for _, s := range m.Samples {
-		keys := make([]string, 0, len(s.Labels))
-		for k := range s.Labels {
-			keys = append(keys, k)
-		}
-		sort.Strings(keys)
-		tags := make([]kv, 0, len(keys))
-		for _, k := range keys {
-			tags = append(tags, kv{k, s.Labels[k]})
+		tags := make([]kv, 0, len(s.Labels))
+		for k, v := range s.Labels {
+			tags = append(tags, kv{k, v})
 		}
 		line(b, s.Name, tags, []kv{{"value", strconv.FormatFloat(s.Value, 'g', -1, 64)}}, m.Time)
 	}

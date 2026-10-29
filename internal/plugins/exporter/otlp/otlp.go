@@ -11,11 +11,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
 	"net/url"
 	"os"
 	"regexp"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -288,12 +289,7 @@ func logOf(e plugin.Event) logRecord {
 	}
 	l := logRecord{Time: strconv.FormatInt(e.Time.UnixNano(), 10), SeverityNum: n, SeverityText: string(e.Severity),
 		Body: value{String: e.Message}, Attributes: []attr{str("event.name", e.Kind)}}
-	keys := make([]string, 0, len(e.Fields))
-	for k := range e.Fields {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	for _, k := range keys {
+	for _, k := range slices.Sorted(maps.Keys(e.Fields)) {
 		l.Attributes = append(l.Attributes, str("packeteer.field."+k, e.Fields[k]))
 	}
 	return l
@@ -320,12 +316,7 @@ func metricsOf(r plugin.MetricsRecord, start time.Time) []metric {
 			out = append(out, m)
 		}
 		dp := dataPoint{Time: at, AsDouble: s.Value}
-		keys := make([]string, 0, len(s.Labels))
-		for k := range s.Labels {
-			keys = append(keys, k)
-		}
-		sort.Strings(keys)
-		for _, k := range keys {
+		for _, k := range slices.Sorted(maps.Keys(s.Labels)) {
 			dp.Attributes = append(dp.Attributes, str(k, s.Labels[k]))
 		}
 		if m := &out[i]; m.Sum != nil {

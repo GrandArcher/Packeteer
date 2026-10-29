@@ -189,7 +189,7 @@ func TestExportErrors(t *testing.T) {
 	}
 }
 
-// collect records every request by path, with the decoded JSON body.
+// collector records every request by path, with the decoded JSON body.
 type collector struct {
 	mu   sync.Mutex
 	reqs map[string][]map[string]any
