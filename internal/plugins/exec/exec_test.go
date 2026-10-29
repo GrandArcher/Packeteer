@@ -250,6 +250,38 @@ func TestExampleScript(t *testing.T) {
 	}
 }
 
+// TestExampleProberScript runs examples/plugins/exec-prober.sh, including
+// the rule that a prober which cannot tag packets errors out.
+func TestExampleProberScript(t *testing.T) {
+	if _, err := os.Stat("/bin/sh"); err != nil {
+		t.Skip("no /bin/sh")
+	}
+	dir, err := filepath.Abs(filepath.Join("..", "..", "..", "examples", "plugins"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, _ := plugin.ConfigFromYAML("command: exec-prober.sh")
+	e := env()
+	e.PluginDir = dir
+	p, err := plugin.Probers.New(TypeName, c, e)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := plugin.ProbeRequest{Provider: "a", Source: netip.MustParseAddr("192.0.2.11"),
+		Target: netip.MustParseAddr("198.51.100.1"), Count: 4, Timeout: time.Second}
+	res, err := p.Probe(context.Background(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Sent != 4 || len(res.RTTs) != 4 || res.RTTs[3] != 10*time.Millisecond {
+		t.Fatalf("res = %+v", res)
+	}
+	req.DSCP = 46
+	if _, err := p.Probe(context.Background(), req); err == nil || !strings.Contains(err.Error(), "cannot tag packets") {
+		t.Fatalf("tagged probe err = %v, want cannot tag packets", err)
+	}
+}
+
 func TestNotifierFilter(t *testing.T) {
 	n, err := plugin.Notifiers.New(TypeName, helperConfig(t, "notifier", "config:\n  channel: ops\nevents: [\"provider.*\"]\nrate_limit: 3\n"), env())
 	if err != nil {

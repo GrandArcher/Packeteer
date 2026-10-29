@@ -6,6 +6,7 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 
 ### Added
 
+- Plugin author guide (`docs/PLUGIN_AUTHORING.md`), tested exec and Go skeletons in `examples/plugins`, and a community plugin list checked by a test (#288).
 - `grpc` plugin type: long-running prober, source, and notifier programs over gRPC (go-plugin) with health checks, restart with backoff, and a clean stop; never an announcer; example plugin (#286).
 - `influxdb` exporter, OTLP logs and metrics, and an opt-in `metrics` export stream of the `/metrics` series every 30 s; tested against InfluxDB 2 and an OTel collector (#287).
 - Opt-in `exporters` (Kafka, NATS, OTLP spans, IPFIX) push events, decisions, and flows tagged with provider and improvement ID; Grafana dashboards; tested against sink containers (#207).
