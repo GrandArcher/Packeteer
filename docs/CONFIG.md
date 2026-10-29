@@ -61,6 +61,7 @@ The image entrypoint is the same binary. Flags go after the image name.
 | `scorer` | `weighted` | no | One scorer. Lower score is better. |
 | `announcer` | none | inject | In-process only. `type: gobgp` publishes on the RIB session. |
 | `notifiers` | none | no | Events. A failure here does not withdraw routes by itself. |
+| `exporters` | none | no | Push events, decisions, and flow records to Kafka, NATS, OTLP, or IPFIX (#207). Off when empty. See [Exporters](#exporters). |
 | `telemetry` | none | no | Interface counters and 95th-percentile usage. Off unless listed. Does not announce. |
 | `policies` | none | no | Routing policies and maintenance windows, asked in order before each decision. Off unless listed. Does not announce. See [Policies](#policies). |
 | `storage` | none | no | One storage plugin for report history (`type: sqlite`). Off unless set. Does not announce. See [Storage `sqlite`](#storage-sqlite). |
@@ -1457,6 +1458,30 @@ curl -u "$USER:$PASS" -X DELETE http://127.0.0.1:8080/api/maintenance/api-1
 ```
 
 `GET /api/maintenance` lists `windows` open now from every maintenance policy, `upcoming` windows (configured one-off and on demand), and `finished` ones (configured one-off, and on-demand ones for 24 hours; at most 50). A recurring window is listed only while it is open. `POST` opens a window on the first `maintenance` entry (JSON only; at most 100 open or upcoming at a time). Give `duration` (a window from now) or both `start` and `end` (RFC 3339); the length is 1 minute to `max_api_duration`, `end` must be ahead, and `start` at most 7 days ahead. A window that has not started excludes nothing. `DELETE /api/maintenance/<id>` closes an on-demand window; configured windows cannot be closed from the API.
+
+### Exporters
+
+`exporters` is a list like `notifiers`: `type`, optional `name`, `config`. Unknown keys are errors, and a failing sink never stops Packeteer. Streams, records, and rollback: [export.md](export.md). Secrets are environment variable names, never values.
+
+| Type | Key | Default | Meaning |
+|---|---|---|---|
+| `kafka` | `brokers` | required | Seed brokers, `host:port`. |
+| | `topic_prefix` | `packeteer` | Topics are `<prefix>.events`, `.decisions`, `.flows`. Letters, digits, `.`, `_`, `-`. |
+| | `streams` | `events`, `decisions` | Any of `events`, `decisions`, `flows`. |
+| | `tls`, `ca_file` | off | TLS to the brokers; `ca_file` is an absolute PEM path and needs `tls`. |
+| | `sasl` | none | `plain`, `scram-sha-256`, or `scram-sha-512`. Needs `tls: true`, `username_env`, and `password_env`. |
+| `nats` | `urls` | required | `nats://` or `tls://` server URLs, no credentials in them. |
+| | `subject_prefix` | `packeteer` | Subjects are `<prefix>.events`, `.decisions`, `.flows`. |
+| | `streams` | `events`, `decisions` | As for `kafka`. |
+| | `tls`, `ca_file` | off | As for `kafka`; a `tls://` URL needs `tls: true`. |
+| | `username_env`, `password_env` | none | Both or neither; need `tls: true`. |
+| `otlp` | `endpoint` | required | OTLP/HTTP base URL, for example `http://collector.example.net:4318`; `/v1/traces` is added. |
+| | `headers` | none | Request headers; values may use `${VAR}`, and an unset variable is an error. |
+| | `ca_file` | system roots | PEM for an `https` endpoint. |
+| | `service_name` | `packeteer` | The `service.name` resource attribute. |
+| `ipfix` | `address` | required | Collector `host:port`, UDP. Takes `flows` only. |
+| | `observation_domain` | `1` | Sent in every message. |
+| | `template_interval` | `1m` | How often templates are sent again. |
 
 ### Notifier filters (every notifier)
 

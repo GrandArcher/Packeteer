@@ -667,6 +667,20 @@ storage:
 
 # Plugins (docs/PLUGINS.md). Out-of-process plugins live in plugin_dir.
 plugin_dir: /etc/packeteer/plugins
+# Exporters (docs/export.md) push events, decisions, and flow records to
+# Kafka, NATS, an OpenTelemetry collector, or an IPFIX collector. Off unless
+# listed; read-only.
+# exporters:
+#   - type: kafka
+#     config:
+#       brokers: ["kafka.example.net:9092"]
+#       streams: [events, decisions]
+#   - type: otlp
+#     config:
+#       endpoint: http://collector.example.net:4318
+#   - type: ipfix                     # needs the flow source
+#     config:
+#       address: "collector.example.net:2055"
 # Notifiers (docs/EVENTS.md). Each has its own events filter, min_severity,
 # and rate_limit. Secrets come from the container environment.
 # notifiers:

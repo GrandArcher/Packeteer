@@ -26,6 +26,7 @@ import (
 	"github.com/GrandArcher/Packeteer/internal/atlas"
 	"github.com/GrandArcher/Packeteer/internal/config"
 	"github.com/GrandArcher/Packeteer/internal/exchange"
+	"github.com/GrandArcher/Packeteer/internal/export"
 	"github.com/GrandArcher/Packeteer/internal/herd"
 	"github.com/GrandArcher/Packeteer/internal/httpapi"
 	"github.com/GrandArcher/Packeteer/internal/inbound"
@@ -518,12 +519,15 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 	}
 	// Built before the HTTP server: the audit log goes to the notifiers.
 	evlog := newEventLog(plugins, log, health)
-	dispatch := newDispatcher(plugins, notify.Options{Logger: log, Recorder: evlog,
+	exp := newExporter(plugins, export.Options{Logger: log})
+	exportFlowTags := &exportTags{}
+	dispatch := newDispatcher(plugins, notify.Options{Logger: log, Recorder: eventTee{evlog, exp},
 		Result: func(name string, err error) { health.Record(notifierKey(name), err) }})
 	defer func() {
 		closeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		_ = dispatch.Close(closeCtx)
+		_ = exp.Close(closeCtx)
 		_ = evlog.Close(closeCtx)
 	}()
 	audit := newAuditor(plugins, dispatch, log)
@@ -618,7 +622,7 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 			Addr: addr, User: httpUser, Password: httpPass, Snapshot: col.Snapshot, Logger: log,
 			Auth: authSvc, Audit: audit, Events: evlog, AllowFrom: cfg.HTTPAllowFrom(),
 			Maintenance: maint, Reports: reports, Tools: tools, Inbound: inboundStatus, Verification: verificationStatus, Mitigation: mitAPI, Anomaly: anomAPI, Leaks: leakAPI,
-			Federation: fed.status, FederationPush: fedPush, HA: haStatus,
+			Federation: fed.status, FederationPush: fedPush, HA: haStatus, Export: exportStats(exp),
 			ConfigEditor: editorAPI, FirstRun: firstRunAPI, Dashboards: dashboardStore(plugins), Subscriptions: subsAPI,
 			Setup: setupInfo(cfg, plugins), Upgrade: upgradeAPI, Linkouts: linkout.New(cfg.Linkouts), RingLG: ringlg.New(cfg.RingLG, version), Atlas: atl,
 			System: systemFacts(plugins, &sysEngine, health, irrChecker, atl), Usage: usageReader(plugins),
@@ -751,6 +755,7 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 		return 1
 	}
 	wirePrefixLookup(plugins, view)
+	wireFlowExport(plugins, exp, nativeProvider(view), exportFlowTags)
 	wireExchangeLANs(cfg, plugins)
 	wireProbeExclusion(cfg, plugins, view)
 	wirePacketWait(plugins, asnLimiter)
@@ -907,6 +912,7 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 				watch.anomaly(anomChanges)
 				watch.mitigation(mitChanges)
 				watch.announce(now, err)
+				exportFlowTags.set("", nil, nil)
 				return
 			}
 			leading = true
@@ -941,6 +947,10 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 			watch.anomaly(anomChanges)
 			watch.mitigation(mitChanges)
 			watch.improvements(now, changes)
+			exportDecisions(exp, now, snap.Mode, changes)
+			if exp.Wants(plugin.StreamFlows) {
+				exportFlowTags.set(snap.Mode, decider.Improvements(), ctl.OnWireProvider)
+			}
 			qc := decider.QuarantineChanges()
 			watch.quarantines(now, qc)
 			auditQuarantines(audit, qc)
@@ -979,6 +989,7 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 
 	rl := &reloader{
 		path: path, getenv: getenv, httpUser: httpUser, log: log, cur: cfg, ctl: ctl, poke: poke,
+		exp: exp, flowTags: exportFlowTags,
 		plugins: plugins, engine: engine, perASN: asnLimiter, decider: decider, fed: fed, col: col,
 		watch: watch, live: live, preview: preview.PreviewConfig, dispatch: dispatch, hist: rec, inb: inb, mit: mit,
 		flowSpecUp: view != nil && mitigationFlowSpec(cfg, plugins),
@@ -1052,6 +1063,7 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 	// withdraws again) and finally drop the session. Graceful restart is never
 	// enabled, so a missed withdraw still disappears with the session.
 	withdrawErr := errors.Join(mit.WithdrawAll(stopCtx), inb.WithdrawAll(stopCtx), ctl.WithdrawAll(stopCtx))
+	exportFlowTags.set("", nil, nil)
 	if withdrawErr != nil {
 		log.Error("withdraw on shutdown", "err", withdrawErr)
 	}
@@ -1095,6 +1107,11 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 	notifyCtx, notifyCancel := context.WithTimeout(stopCtx, 5*time.Second)
 	_ = dispatch.Close(notifyCtx)
 	notifyCancel()
+	// A separate 5s bound, like evlog: a slow notifier must not cancel the
+	// exporters' final delivery of controller.stopping.
+	expCtx, expCancel := context.WithTimeout(stopCtx, 5*time.Second)
+	_ = exp.Close(expCtx)
+	expCancel()
 	// Its own bound: a slow notifier must not leave controller.stopping
 	// unwritten when the store closes.
 	evCtx, evCancel := context.WithTimeout(stopCtx, 5*time.Second)

@@ -15,6 +15,7 @@ import (
 
 	"github.com/GrandArcher/Packeteer/internal/blast"
 	"github.com/GrandArcher/Packeteer/internal/config"
+	"github.com/GrandArcher/Packeteer/internal/export"
 	"github.com/GrandArcher/Packeteer/internal/history"
 	"github.com/GrandArcher/Packeteer/internal/httpapi"
 	"github.com/GrandArcher/Packeteer/internal/inbound"
@@ -389,6 +390,9 @@ type reloader struct {
 	dispatch emitter
 	hist     *history.Recorder
 	opts     pluginhost.Options
+	// exp and flowTags feed the flow tap of a source added online (#207).
+	exp      *export.Dispatcher
+	flowTags *exportTags
 }
 
 func (r *reloader) setCur(next *config.Config) {
@@ -582,6 +586,7 @@ func (r *reloader) applyOnline(ctx context.Context, next *config.Config, online 
 				r.engine.SetSources(ns)
 			}
 			wirePrefixLookup(r.plugins, r.rib)
+			wireFlowExport(r.plugins, r.exp, nativeProvider(r.rib), r.flowTags)
 			wireExchangeLANs(next, r.plugins)
 			wireProbeExclusion(next, r.plugins, r.rib)
 			wirePacketWait(r.plugins, r.perASN)

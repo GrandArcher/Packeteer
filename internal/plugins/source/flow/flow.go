@@ -242,7 +242,10 @@ type Source struct {
 
 	mu     sync.RWMutex
 	lookup func(netip.Addr) (netip.Prefix, bool)
-	lans   []netip.Prefix
+	// tap, when set, is called with each observation counted under a
+	// prefix (#207). Workers call it concurrently.
+	tap  atomic.Pointer[func(plugin.FlowObservation)]
+	lans []netip.Prefix
 
 	dropMu  sync.Mutex
 	dropped map[netip.Prefix]struct{}
@@ -617,6 +620,17 @@ func (s *Source) SetPrefixLookup(fn func(netip.Addr) (netip.Prefix, bool)) {
 	s.mu.Lock()
 	s.lookup = fn
 	s.mu.Unlock()
+}
+
+// SetFlowTap hands each observation counted under a prefix to fn, for
+// export (#207). fn must be safe for concurrent use and must not block.
+// nil removes it.
+func (s *Source) SetFlowTap(fn func(plugin.FlowObservation)) {
+	if fn == nil {
+		s.tap.Store(nil)
+		return
+	}
+	s.tap.Store(&fn)
 }
 
 // Start binds every listen address. The factory does not bind, so -check
@@ -1091,6 +1105,9 @@ func (s *Source) apply(at time.Time, obs []observation) {
 		}
 		s.win.addSub(at, p, s.sub.of(p, dst), dst, o.bytes, s.tr.classify(o.src))
 		s.ctr.add(at, p, o.proto, o.bytes)
+		if tap := s.tap.Load(); tap != nil {
+			(*tap)(plugin.FlowObservation{At: at, Src: o.src.Unmap(), Dst: dst, Proto: o.proto, Bytes: o.bytes, Prefix: p})
+		}
 	}
 }
 

@@ -148,6 +148,10 @@ type Config struct {
 	Scorer    *PluginSpec  `yaml:"scorer"`
 	Announcer *PluginSpec  `yaml:"announcer"`
 	Notifiers []PluginSpec `yaml:"notifiers"`
+	// Exporters push decisions, events, and tagged flow records to Kafka,
+	// NATS, an OTLP collector, or an IPFIX collector (#207). Empty is off.
+	// They only read; they never announce.
+	Exporters []PluginSpec `yaml:"exporters"`
 	// Telemetry collects per-provider interface usage. It does not announce.
 	Telemetry []PluginSpec `yaml:"telemetry"`
 	// Policies is the routing-policy chain (rules, maintenance windows),

@@ -786,6 +786,22 @@ func (c *Controller) Injected(p netip.Prefix) bool {
 	return on
 }
 
+// OnWireProvider is the provider of the improvement route on the wire for p.
+// It reports false when p has no route or only a learned more-specific, so a
+// failed switch still shows the provider the old route steers to.
+func (c *Controller) OnWireProvider(p netip.Prefix) (string, bool) {
+	if c == nil {
+		return "", false
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	s, on := c.active[p.Masked()]
+	if !on || s.moreSpecific() {
+		return "", false
+	}
+	return s.provider, true
+}
+
 // WithdrawPrefix withdraws the route for p and, when p is an improvement,
 // its learned more-specifics, and nothing else. The leak watch calls it
 // the moment a leak is seen; Held keeps Sync from announcing it again.

@@ -32,6 +32,7 @@ import (
 	"github.com/GrandArcher/Packeteer/internal/auth"
 	"github.com/GrandArcher/Packeteer/internal/eventlog"
 	"github.com/GrandArcher/Packeteer/internal/exchange"
+	"github.com/GrandArcher/Packeteer/internal/export"
 	"github.com/GrandArcher/Packeteer/internal/federation"
 	"github.com/GrandArcher/Packeteer/internal/inbound"
 	"github.com/GrandArcher/Packeteer/internal/linkout"
@@ -87,6 +88,9 @@ type Options struct {
 	// HA is the active/standby elector's view (#31). Nil means a single
 	// instance, always active.
 	HA func() plugin.ElectorStatus
+	// Export reports exporter delivery counts (#207). Nil means no
+	// exporter is configured and /metrics has no packeteer_export_* series.
+	Export func() []export.Stat
 	// ConfigEditor is the validated config editor (#34). Nil when
 	// http.config_editor is off.
 	ConfigEditor ConfigEditor
@@ -142,6 +146,7 @@ type Server struct {
 	federation   func() federation.Status
 	fedPush      FederationPusher
 	ha           func() plugin.ElectorStatus
+	export       func() []export.Stat
 	editor       ConfigEditor
 	firstRun     FirstRun
 	dashboards   plugin.DashboardStore
@@ -252,7 +257,7 @@ func New(opt Options) (*Server, error) {
 	if opt.Logger == nil {
 		opt.Logger = slog.Default()
 	}
-	s := &Server{addr: opt.Addr, user: opt.User, password: opt.Password, auth: opt.Auth, audit: opt.Audit, events: opt.Events, allowFrom: opt.AllowFrom, snap: opt.Snapshot, maint: opt.Maintenance, reports: opt.Reports, tools: opt.Tools, inbound: opt.Inbound, verification: opt.Verification, mitigation: opt.Mitigation, anomaly: opt.Anomaly, leaks: opt.Leaks, federation: opt.Federation, fedPush: opt.FederationPush, ha: opt.HA,
+	s := &Server{addr: opt.Addr, user: opt.User, password: opt.Password, auth: opt.Auth, audit: opt.Audit, events: opt.Events, allowFrom: opt.AllowFrom, snap: opt.Snapshot, maint: opt.Maintenance, reports: opt.Reports, tools: opt.Tools, inbound: opt.Inbound, verification: opt.Verification, mitigation: opt.Mitigation, anomaly: opt.Anomaly, leaks: opt.Leaks, federation: opt.Federation, fedPush: opt.FederationPush, ha: opt.HA, export: opt.Export,
 		editor: opt.ConfigEditor, firstRun: opt.FirstRun, dashboards: opt.Dashboards, subs: opt.Subscriptions, upgrade: opt.Upgrade, log: opt.Logger}
 	setup := opt.Setup
 	s.setup.Store(&setup)
@@ -417,6 +422,9 @@ func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	}
 	if s.ha != nil {
 		_, _ = w.Write(HAMetrics(s.ha()))
+	}
+	if s.export != nil {
+		_, _ = w.Write(ExportMetrics(s.export()))
 	}
 	if p := s.preflightControl(); p != nil {
 		if rep, ok := p.Latest(); ok {

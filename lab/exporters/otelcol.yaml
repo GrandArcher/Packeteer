@@ -1,0 +1,16 @@
+# Sink for the otlp exporter test: an OpenTelemetry collector that accepts
+# OTLP/HTTP and appends each trace request as one JSON line to a file.
+receivers:
+  otlp:
+    protocols:
+      http:
+        endpoint: 127.0.0.1:4318
+exporters:
+  file:
+    path: /out/traces.json
+    flush_interval: 1s
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      exporters: [file]

@@ -7,6 +7,10 @@ import (
 	_ "github.com/GrandArcher/Packeteer/internal/plugins/detector/baseline"       // baseline anomaly detector
 	_ "github.com/GrandArcher/Packeteer/internal/plugins/elector/lease"           // lease-file HA elector
 	_ "github.com/GrandArcher/Packeteer/internal/plugins/exec"                    // exec prober/source/notifier
+	_ "github.com/GrandArcher/Packeteer/internal/plugins/exporter/ipfix"          // IPFIX flow re-export
+	_ "github.com/GrandArcher/Packeteer/internal/plugins/exporter/kafka"          // Kafka events, decisions, flows
+	_ "github.com/GrandArcher/Packeteer/internal/plugins/exporter/nats"           // NATS events, decisions, flows
+	_ "github.com/GrandArcher/Packeteer/internal/plugins/exporter/otlp"           // OpenTelemetry trace per decision
 	_ "github.com/GrandArcher/Packeteer/internal/plugins/federation/mtls"         // mTLS multi-POP federation
 	_ "github.com/GrandArcher/Packeteer/internal/plugins/irr/file"                // local IRR file source (RPSL or bgpq4)
 	_ "github.com/GrandArcher/Packeteer/internal/plugins/irr/whois"               // IRR whois source (IRRd or RIPE style)

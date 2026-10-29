@@ -55,6 +55,7 @@ Each entry has `type` (required), an optional `name` (defaults to the type and m
 | `announcer` (mitigation) | `Catalog()`, `Announce(MitigationRoute)`, `Withdraw`, `WithdrawAll`; optionally `plugin.FlowSpecAnnouncer` (`FlowSpecCatalog()`, `AnnounceFlowSpec(FlowSpecRoute)`, `WithdrawFlowSpec(key)`). One instance under `mitigation.announcer:`; registry `plugin.MitigationAnnouncers`. Bound with its own allowlist and rule cap, which it enforces on every announce, FlowSpec included (#28) | `gobgp` (marker + blackhole next hop/communities + redirect targets + FlowSpec) | **never** |
 | `detector` | `Observe(now, []TrafficSample) []Anomaly`, `Tracked()`, `Reset()`. Traffic anomaly detection (#33); one instance under `anomaly.detector:`; registry `plugin.Detectors`. Fed per-prefix, per-protocol rates from a source that implements `plugin.FlowCounterSource` (`flow`). Reports anomalies only: the core turns one into a mitigation rule for an explicit `anomaly.rules` entry, through the mitigation controller | `baseline` (EWMA mean/variance per key) | **never** |
 | `notifier` | `Notify(ctx, Event) error`, optional `EventGate()` (filters and rate limit), optional `plugin.ReportSender` (`SendReport(ctx, ReportMail)`: sends `report_subscriptions`, #34) | `webhook` (generic, `slack`, `teams`, `pagerduty`, templates), `smtp` (also sends reports), `snmptrap` | `exec` |
+| `exporter` | `Streams() []string`, `Export(ctx, []ExportRecord) error`. Pushes events, decision changes, and tagged flow records to an external pipeline (#207); list under `exporters:`, off when empty. The host batches per exporter on a bounded queue. Read-only; see [export.md](export.md) | `kafka`, `nats`, `otlp` (a span per decision), `ipfix` (flow re-export) | none |
 | `telemetry` | `Snapshot(ctx) ([]Usage, error)` | `snmp` | none |
 | `policy` | `Match(PolicySubject) (PolicyVerdict, bool)`, optional `Maintenance.Active(now)`. The filter chain in front of the scorer | `rules`, `maintenance` | none |
 | `storage` | `Write(ctx, HistoryBatch)`, `Read(ctx, HistoryQuery)`, optional `Backup`/`Restore` (`plugin.StorageBackup`, used by `-backup`/`-restore`). Report history; one instance under `storage:`. Optional `plugin.UserStore` and `plugin.AuditStore` keep HTTP users, API token hashes, and the audit log (#32); `auth` requires them. Optional `plugin.DashboardStore` keeps each user's custom dashboards (#34). Optional `plugin.RoundStore` keeps decision-round inputs for `whatif` replay (#204) | `sqlite` | none |
@@ -87,7 +88,7 @@ An RPKI source only reads. It reports a path's origin validation state (`valid`,
 
 A federation plugin never announces and never decides. What it hands the core (peer snapshots) can only make a provider in another POP usable for a prefix the local RIB and allowlist already accept; the core still applies the community, NO_EXPORT, cap, hold time, and withdraw rules. It is in-process only, because peer data feeds decisions. Built-in `mtls`: see [CONFIG.md](CONFIG.md#federation-mtls) and [multi-pop.md](multi-pop.md).
 
-Push exporters (Prometheus remote-write, OTLP) are not built; Prometheus metrics are built into the ops surface (#9) for scraping, and report history is the `storage` plugin (#23). Interface usage from the `snmp` telemetry plugin is on `/api/telemetry` and in `packeteer_telemetry_*` gauges. The `commit` scorer reads that snapshot and per-prefix flow volume. The telemetry plugin does not announce.
+Prometheus remote-write is not built; Prometheus metrics are built into the ops surface (#9) for scraping, and the `exporter` kind (#207, [export.md](export.md)) pushes events, decisions, and flows out, and report history is the `storage` plugin (#23). Interface usage from the `snmp` telemetry plugin is on `/api/telemetry` and in `packeteer_telemetry_*` gauges. The `commit` scorer reads that snapshot and per-prefix flow volume. The telemetry plugin does not announce.
 
 The probe engine remembers which prober got a reply from each host and starts the next round there. Every `probe.prober_recheck_rounds` (default 10) that host is measured from the first prober again. See [CONFIG.md](CONFIG.md#probe).
 
@@ -227,4 +228,4 @@ docker run ... -v "$PWD/plugins:/etc/packeteer/plugins:ro" ghcr.io/grandarcher/p
 ## Roadmap
 
 - Long-running out-of-process plugins over gRPC ([hashicorp/go-plugin](https://github.com/hashicorp/go-plugin)), for probers that keep state or run at high rates.
-- Exporter plugins (InfluxDB, OTLP).
+- An InfluxDB exporter.

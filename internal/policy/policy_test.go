@@ -1,6 +1,7 @@
 package policy
 
 import (
+	"encoding/hex"
 	"net/netip"
 	"strings"
 	"testing"
@@ -520,5 +521,32 @@ func TestDegradedImprovedPathLeavesUnderHoldTime(t *testing.T) {
 	ch := e.Evaluate(in(results(late, pA, m{"a", 0, 90}, m{"b", 15, 200}), native), late)
 	if len(ch) != 1 || ch[0].Action != ActionRetire || ch[0].Old.Reason != "native path better again" {
 		t.Fatalf("after hold_time: %+v", ch)
+	}
+}
+
+func TestImprovementIDIsStablePerMove(t *testing.T) {
+	at := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	a := Improvement{Prefix: netip.MustParsePrefix("192.0.2.0/24"), Provider: "transit-b", Since: at}
+	if _, err := hex.DecodeString(a.ID()); err != nil || len(a.ID()) != 16 {
+		t.Fatalf("ID = %q, want 16 hex digits", a.ID())
+	}
+	if again := a; again.ID() != a.ID() {
+		t.Fatal("the ID must not change between calls")
+	}
+	retired := a
+	retired.Reason = "native recovered"
+	if retired.ID() != a.ID() {
+		t.Fatal("the retire change must carry the ID the add change had")
+	}
+	moved := a
+	moved.Provider = "transit-c"
+	later := a
+	later.Since = at.Add(time.Second)
+	other := a
+	other.Prefix = netip.MustParsePrefix("198.51.100.0/24")
+	for name, imp := range map[string]Improvement{"provider": moved, "since": later, "prefix": other} {
+		if imp.ID() == a.ID() {
+			t.Errorf("a different %s must give a different ID", name)
+		}
 	}
 }

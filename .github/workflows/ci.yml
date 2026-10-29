@@ -2933,6 +2933,74 @@ jobs:
             'snippet: ! Packeteer on FRR. Generated for review: nothing is applied.' 'writes: 0' \
             --absent 'mode-inject' 'Cannot reach'
 
+  exporters:
+    # Each exporter against a real sink container (#207): Kafka (Redpanda),
+    # NATS, an OpenTelemetry collector, and GoFlow2 for IPFIX, and the
+    # Grafana dashboards imported into Grafana. The tests
+    # carry the build tag `sink` and read the records back from the sink.
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - name: start the sinks
+        run: |
+          mkdir -p /tmp/sink/otel /tmp/sink/goflow
+          chmod 777 /tmp/sink/otel /tmp/sink/goflow
+          docker run -d --name redpanda --network host redpandadata/redpanda:v24.2.27 \
+            redpanda start --mode dev-container --smp 1 --memory 1G --reserve-memory 0M \
+            --kafka-addr 127.0.0.1:9092 --advertise-kafka-addr 127.0.0.1:9092
+          docker run -d --name nats --network host nats:2.10 -a 127.0.0.1 -p 4222
+          docker run -d --name otelcol --network host --user 0 \
+            -v "$PWD/lab/exporters/otelcol.yaml:/etc/otelcol.yaml:ro" -v /tmp/sink/otel:/out \
+            otel/opentelemetry-collector-contrib:0.119.0 --config /etc/otelcol.yaml
+          docker run -d --name goflow2 --network host --user 0 \
+            -v "$PWD/lab/exporters/goflow2-mapping.yaml:/mapping.yaml:ro" -v /tmp/sink/goflow:/out \
+            netsampler/goflow2:v2.2.7 -listen netflow://127.0.0.1:2055 -mapping /mapping.yaml \
+            -format json -transport file -transport.file /out/flows.json
+          for port in 9092 4222 4318; do
+            for i in $(seq 60); do
+              (echo > /dev/tcp/127.0.0.1/$port) 2>/dev/null && break
+              sleep 1
+            done
+          done
+      - name: exporters reach their sinks
+        env:
+          PACKETEER_SINK_KAFKA: 127.0.0.1:9092
+          PACKETEER_SINK_NATS: nats://127.0.0.1:4222
+          PACKETEER_SINK_OTLP: http://127.0.0.1:4318
+          PACKETEER_SINK_OTLP_FILE: /tmp/sink/otel/traces.json
+          PACKETEER_SINK_IPFIX: 127.0.0.1:2055
+          PACKETEER_SINK_IPFIX_FILE: /tmp/sink/goflow/flows.json
+        run: go test -tags sink -count=1 -run Sink -v ./internal/plugins/exporter/...
+      - name: grafana imports the dashboards
+        # Import each shipped dashboard through the Grafana API with a
+        # Prometheus data source filling DS_PROMETHEUS.
+        run: |
+          docker run -d --name grafana --network host \
+            -e GF_AUTH_ANONYMOUS_ENABLED=true -e GF_AUTH_ANONYMOUS_ORG_ROLE=Admin \
+            grafana/grafana:11.4.0
+          for i in $(seq 60); do
+            curl -fsS http://127.0.0.1:3000/api/health >/dev/null 2>&1 && break
+            sleep 1
+          done
+          curl -fsS -H 'Content-Type: application/json' \
+            -d '{"name":"prom","type":"prometheus","url":"http://127.0.0.1:9090","access":"proxy","uid":"prom"}' \
+            http://127.0.0.1:3000/api/datasources
+          for f in deploy/grafana/*.json; do
+            jq '{dashboard: ., overwrite: true, inputs: [{name: "DS_PROMETHEUS", type: "datasource", pluginId: "prometheus", value: "prom"}]}' "$f" > /tmp/import.json
+            uid=$(jq -r .uid "$f")
+            curl -fsS -H 'Content-Type: application/json' -d @/tmp/import.json \
+              http://127.0.0.1:3000/api/dashboards/import
+            curl -fsS "http://127.0.0.1:3000/api/dashboards/uid/$uid" | jq -e '.dashboard.panels | length > 0'
+          done
+      - name: sink logs
+        if: failure()
+        run: |
+          for c in redpanda nats otelcol goflow2 grafana; do echo "== $c"; docker logs --tail 40 $c 2>&1; done
+
   chr:
     # MikroTik RouterOS CHR in QEMU (#52). The free CHR image is fetched
     # from MikroTik at run time (checksum pinned in lab/e2e-chr.sh) and runs

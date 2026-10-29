@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/GrandArcher/Packeteer/internal/exchange"
+	"github.com/GrandArcher/Packeteer/internal/export"
 	"github.com/GrandArcher/Packeteer/internal/mitigation"
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
 )
@@ -248,6 +249,23 @@ func RuntimeMetrics() []byte {
 	var b strings.Builder
 	writeCounter(&b, "packeteer_go_mutex_wait_seconds_total", "Approximate time goroutines spent blocked on a mutex since start (Go runtime "+mutexWaitMetric+"). Can grow faster than wall time when many goroutines wait at once.",
 		sample{value: rs[0].Value.Float64()})
+	return []byte(b.String())
+}
+
+// ExportMetrics renders exporter delivery counts (#207). A rising failed or
+// dropped count means the sink is down or slower than the record rate.
+func ExportMetrics(stats []export.Stat) []byte {
+	var b strings.Builder
+	var recs []sample
+	for _, st := range stats {
+		for _, r := range []struct {
+			result string
+			n      uint64
+		}{{"sent", st.Sent}, {"failed", st.Failed}, {"dropped", st.Dropped}} {
+			recs = append(recs, sample{labels: []lbl{{"exporter", st.Exporter}, {"stream", st.Stream}, {"result", r.result}}, value: float64(r.n)})
+		}
+	}
+	writeCounter(&b, "packeteer_export_records_total", "Records handed to an exporter since start, by stream and result: sent (the sink acknowledged the batch), failed (the sink refused or timed out), dropped (the exporter's queue was full).", recs...)
 	return []byte(b.String())
 }
 
