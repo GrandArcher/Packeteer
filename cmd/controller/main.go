@@ -1063,6 +1063,7 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 	// withdraws again) and finally drop the session. Graceful restart is never
 	// enabled, so a missed withdraw still disappears with the session.
 	withdrawErr := errors.Join(mit.WithdrawAll(stopCtx), inb.WithdrawAll(stopCtx), ctl.WithdrawAll(stopCtx))
+	exportFlowTags.set("", nil, nil)
 	if withdrawErr != nil {
 		log.Error("withdraw on shutdown", "err", withdrawErr)
 	}
