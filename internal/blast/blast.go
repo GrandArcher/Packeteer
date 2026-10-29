@@ -167,7 +167,7 @@ func Build(p Params) Report {
 		}
 		return nil
 	}
-	for _, pfx := range sortedPrefixes(want) {
+	for _, pfx := range netpfx.SortedKeys(want) {
 		im := want[pfx]
 		old, on := wire[pfx]
 		switch {
@@ -179,7 +179,7 @@ func Build(p Params) Report {
 			rep.Keep++
 		}
 	}
-	for _, pfx := range sortedPrefixes(wire) {
+	for _, pfx := range netpfx.SortedKeys(wire) {
 		if _, ok := want[pfx]; ok {
 			continue
 		}
@@ -201,15 +201,6 @@ func refusal(f func(policy.Improvement) string, im policy.Improvement) string {
 		return ""
 	}
 	return f(im)
-}
-
-func sortedPrefixes[V any](m map[netip.Prefix]V) []netip.Prefix {
-	out := make([]netip.Prefix, 0, len(m))
-	for k := range m {
-		out = append(out, k)
-	}
-	netpfx.Sort(out)
-	return out
 }
 
 // shifts totals the traffic each provider gains and loses, and judges it
@@ -348,7 +339,7 @@ func measurementWarnings(p Params) []Warning {
 		}
 	}
 	var stale []string
-	for _, pfx := range sortedPrefixes(newest) {
+	for _, pfx := range netpfx.SortedKeys(newest) {
 		if !netpfx.CoveredBy(p.Cfg.Allowlist, pfx) {
 			continue
 		}

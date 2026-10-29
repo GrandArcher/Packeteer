@@ -24,6 +24,26 @@ func TestSort(t *testing.T) {
 	}
 }
 
+func TestSortedKeys(t *testing.T) {
+	m := map[netip.Prefix]int{
+		netip.MustParsePrefix("2001:db8::/32"):   1,
+		netip.MustParsePrefix("198.51.100.0/24"): 2,
+		netip.MustParsePrefix("192.0.2.0/25"):    3,
+		netip.MustParsePrefix("192.0.2.0/24"):    4,
+	}
+	want := []string{"192.0.2.0/24", "192.0.2.0/25", "198.51.100.0/24", "2001:db8::/32"}
+	var got []string
+	for _, p := range SortedKeys(m) {
+		got = append(got, p.String())
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("SortedKeys = %v, want %v", got, want)
+	}
+	if n := len(SortedKeys(map[netip.Prefix]bool(nil))); n != 0 {
+		t.Fatalf("SortedKeys(nil) has %d keys", n)
+	}
+}
+
 func TestCoveredBy(t *testing.T) {
 	list := []netip.Prefix{netip.MustParsePrefix("192.0.2.0/24")}
 	for _, c := range []struct {

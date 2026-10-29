@@ -10,7 +10,6 @@ import (
 	"slices"
 	"time"
 
-	"github.com/GrandArcher/Packeteer/internal/netpfx"
 	"github.com/GrandArcher/Packeteer/internal/probe"
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
 )
@@ -456,13 +455,4 @@ type Output struct {
 	// Overloads are the performance steers the interface capacity limit
 	// refused or shed in this evaluation (#307).
 	Overloads []Overload
-}
-
-func sortedKeys(m map[netip.Prefix]Improvement) []netip.Prefix {
-	out := make([]netip.Prefix, 0, len(m))
-	for k := range m {
-		out = append(out, k)
-	}
-	netpfx.Sort(out)
-	return out
 }
