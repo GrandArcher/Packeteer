@@ -114,8 +114,17 @@ type Finding struct {
 	Pushable bool `json:"pushable"`
 	// Digest identifies the exact change shown. A push must quote it.
 	Digest string `json:"digest,omitempty"`
-	// Pushed is when a confirmed push of this finding succeeded.
+	// Pushed is when a confirmed push of this exact change succeeded.
 	Pushed *time.Time `json:"pushed,omitempty"`
+	// Note says why a change is not offered yet.
+	Note string `json:"note,omitempty"`
+}
+
+// pushRecord remembers what was pushed. A later scan that needs a
+// different change for the same drift is not "already pushed".
+type pushRecord struct {
+	at     time.Time
+	digest string
 }
 
 // Section is the outcome of one part of a scan.
@@ -142,7 +151,7 @@ type Service struct {
 
 	mu     sync.Mutex
 	report Report
-	pushed map[string]time.Time
+	pushed map[string]pushRecord
 
 	// pushMu serializes pushes: one registry write at a time.
 	pushMu sync.Mutex
@@ -160,7 +169,7 @@ func New(cfg Config, deps Deps) *Service {
 		cfg.Interval = DefaultInterval
 	}
 	cfg.IRRSource = strings.ToUpper(cfg.IRRSource)
-	s := &Service{cfg: cfg, deps: deps, asns: map[uint32]bool{}, pushed: map[string]time.Time{}}
+	s := &Service{cfg: cfg, deps: deps, asns: map[uint32]bool{}, pushed: map[string]pushRecord{}}
 	for _, a := range cfg.ASNs {
 		s.asns[a] = true
 	}
@@ -192,7 +201,8 @@ func (s *Service) Report() Report {
 	r.Sections = slices.Clone(r.Sections)
 	r.Findings = slices.Clone(r.Findings)
 	for i := range r.Findings {
-		if t, ok := s.pushed[r.Findings[i].ID]; ok {
+		if rec, ok := s.pushed[r.Findings[i].ID]; ok && rec.digest == r.Findings[i].Digest {
+			t := rec.at
 			r.Findings[i].Pushed = &t
 		}
 	}
@@ -239,15 +249,21 @@ func (s *Service) Scan(ctx context.Context) {
 		found = found[:maxFindings]
 	}
 	r := Report{Scanned: s.deps.Now().UTC(), PushEnabled: s.cfg.PushEnabled, Sections: secs, Findings: make([]Finding, 0, len(found))}
+	s.mu.Lock()
+	seen := map[string]bool{}
+	for _, f := range s.report.Findings {
+		seen[f.ID] = true
+	}
+	s.mu.Unlock()
 	for _, f := range found {
-		r.Findings = append(r.Findings, s.finish(f))
+		r.Findings = append(r.Findings, s.finish(f, seen))
 	}
 	s.mu.Lock()
 	s.report = r
-	keep := map[string]time.Time{}
+	keep := map[string]pushRecord{}
 	for _, f := range r.Findings {
-		if t, ok := s.pushed[f.ID]; ok {
-			keep[f.ID] = t
+		if rec, ok := s.pushed[f.ID]; ok {
+			keep[f.ID] = rec
 		}
 	}
 	s.pushed = keep
@@ -282,16 +298,23 @@ func (s *Service) facts(obs Observed) plugin.RegistryFacts {
 
 // finish gives a finding its ID and, when a push could apply it, the digest
 // that confirms it. A change nothing can apply is dropped: the diff stays.
-func (s *Service) finish(f plugin.RegistryFinding) Finding {
+// A delete is offered only when the previous scan showed the same finding:
+// the learned RIB is ready once one session is up, so a scan right after a
+// session flap sees a partial table and would call live objects stale.
+func (s *Service) finish(f plugin.RegistryFinding, seen map[string]bool) Finding {
 	f.ID = findingID(f)
 	out := Finding{RegistryFinding: f}
 	if f.Change == nil {
 		return out
 	}
-	if s.cfg.PushEnabled && s.checker(f.Change.Registry) != nil {
-		out.Pushable, out.Digest = true, changeDigest(*f.Change)
-	} else {
+	switch {
+	case !s.cfg.PushEnabled || s.checker(f.Change.Registry) == nil:
 		out.Change = nil
+	case f.Change.Op == "delete_object" && !seen[f.ID]:
+		out.Change = nil
+		out.Note = "A delete is offered once the next scan shows it again."
+	default:
+		out.Pushable, out.Digest = true, changeDigest(*f.Change)
 	}
 	return out
 }
@@ -349,7 +372,7 @@ func (s *Service) Push(ctx context.Context, id, digest string) (plugin.RegistryC
 		return *f.Change, fmt.Errorf("%s: %w", c.Name, err)
 	}
 	s.mu.Lock()
-	s.pushed[id] = s.deps.Now().UTC()
+	s.pushed[id] = pushRecord{at: s.deps.Now().UTC(), digest: f.Digest}
 	s.mu.Unlock()
 	s.deps.Log.Info("registry change pushed", "registry", c.Name, "finding", f.Kind, "subject", f.Subject)
 	return *f.Change, nil

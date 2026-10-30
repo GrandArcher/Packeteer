@@ -2,9 +2,10 @@
 // The Registry page (#289): the last registry hygiene scan from
 // GET /api/registry, each finding with its severity and the exact change.
 // A finding with a change a plugin can apply gets a push control, shown to
-// admins only and only when the server has pushing on; the push shows the
-// diff again, needs a second click, and quotes the digest of the diff that
-// was shown. The server checks the role, the digest, and the audit record.
+// admins only and only when the server has pushing on; the push names the
+// registry, operation, and key, needs a second click, and quotes the digest
+// of the diff in the row. The server checks the role, the digest, and the
+// audit record.
 // Nothing here announces a route. Uses el, clear, api, fmtTime, ixpTable,
 // ixpCell from ui.js and shellAdmin from shell.js. Cells are built with
 // textContent only. No inline script: the CSP allows scripts from this
@@ -39,6 +40,10 @@ function registryActions(f, rep, onPush) {
   var td = el("td");
   if (f.pushed) {
     td.appendChild(el("span", "tag", "Pushed " + fmtTime(f.pushed) + ". The next scan shows the result."));
+    return td;
+  }
+  if (f.note) {
+    td.appendChild(el("span", "tag", f.note));
     return td;
   }
   if (!f.diff) return td;

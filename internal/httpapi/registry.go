@@ -86,7 +86,7 @@ func (s *Server) handleRegistryPush(w http.ResponseWriter, r *http.Request) {
 			code = http.StatusForbidden
 		case errors.Is(err, registry.ErrNotFound):
 			code = http.StatusNotFound
-		case errors.Is(err, registry.ErrNotPushable), errors.Is(err, registry.ErrDigestChanged), errors.Is(err, registry.ErrAlreadyPushed):
+		case errors.Is(err, registry.ErrNotPushable), errors.Is(err, registry.ErrDigestChanged), errors.Is(err, registry.ErrAlreadyPushed), errors.Is(err, plugin.ErrRegistryNoPush):
 			code = http.StatusConflict
 		}
 		writeJSON(w, code, map[string]string{"error": err.Error()})

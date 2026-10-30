@@ -173,6 +173,14 @@ func TestRegistryPushOffAndFailure(t *testing.T) {
 		t.Fatal("a failed push is shown as done")
 	}
 
+	e, stub, rep = registryEnv(t, true)
+	stub.err = plugin.ErrRegistryNoPush
+	f = findingOf(t, rep, "pdb_maxprefix")
+	rec = e.do("POST", "/api/registry/push", e.tokens[plugin.RoleAdmin], `{"id":"`+f.ID+`","digest":"`+f.Digest+`"}`)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("a change the plugin does not apply: %d %s", rec.Code, rec.Body)
+	}
+
 	none := newRBAC(t, nil)
 	if rec := none.do("POST", "/api/registry/push", none.tokens[plugin.RoleAdmin], `{"id":"a","digest":"b"}`); rec.Code != http.StatusNotFound {
 		t.Fatalf("no registry: %d", rec.Code)

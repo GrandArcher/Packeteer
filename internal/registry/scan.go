@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"net/netip"
 	"slices"
 	"strings"
@@ -63,7 +64,7 @@ func (s *Service) scanIRR(ctx context.Context, obs Observed) ([]plugin.RegistryF
 			Subject: fmt.Sprintf("%s AS%d", p, origin),
 			Message: fmt.Sprintf("%s is announced with origin AS%d and no route object registers it", p, origin),
 			Diff:    "+ " + strings.ReplaceAll(strings.TrimSpace(routeObject(p, origin, s.sourceName(), s.cfg.MntBy)), "\n", "\n+ "),
-			Change:  s.irrChange("create_object", p, origin, routeObject(p, origin, s.sourceName(), s.cfg.MntBy)),
+			Change:  irrChange("create_object", s.sourceName(), p, origin, routeObject(p, origin, s.sourceName(), s.cfg.MntBy)),
 		})
 	}
 	var stale []registration
@@ -101,10 +102,10 @@ func (s *Service) sourceName() string {
 	return s.cfg.IRRSource
 }
 
-// irrChange is a push for an object in the RIPE database; objects in any
-// other registry are text to submit by hand.
-func (s *Service) irrChange(op string, p netip.Prefix, origin uint32, object string) *plugin.RegistryChange {
-	if s.sourceName() != "RIPE" {
+// irrChange is a push for an object in the RIPE database (or its TEST
+// database); objects in any other registry are text to submit by hand.
+func irrChange(op, db string, p netip.Prefix, origin uint32, object string) *plugin.RegistryChange {
+	if db != "RIPE" && db != "TEST" {
 		return nil
 	}
 	class := "route"
@@ -137,9 +138,7 @@ func (s *Service) staleFindings(ctx context.Context, r registration) []plugin.Re
 				Message: fmt.Sprintf("%s holds a route object for %s AS%d, which no learned route has", db, r.prefix, r.origin),
 				Diff:    "- " + strings.ReplaceAll(strings.TrimSpace(obj), "\n", "\n- "),
 			}
-			if db == "RIPE" {
-				f.Change = s.irrChange("delete_object", r.prefix, r.origin, obj)
-			}
+			f.Change = irrChange("delete_object", db, r.prefix, r.origin, obj)
 			out = append(out, f)
 		}
 	}
@@ -175,21 +174,23 @@ func (s *Service) conflictFindings(ctx context.Context, p netip.Prefix, origin u
 			}
 		}
 	}
-	if len(ours) > 1 && s.cfg.IRRSource != "" {
-		for _, db := range sortedKeys(ours) {
-			if strings.EqualFold(db, s.cfg.IRRSource) {
+	// Only a copy beside the object in the configured home database is a
+	// leftover; with no object there, deleting the others would delete every
+	// registration of a live prefix.
+	home := s.sourceName()
+	if len(ours) > 1 && ours[home] {
+		for _, db := range slices.Sorted(maps.Keys(ours)) {
+			if db == home {
 				continue
 			}
 			obj := routeObject(p, origin, db, s.cfg.MntBy)
 			f := plugin.RegistryFinding{
 				Kind: "irr_duplicate", Severity: plugin.RegistryInfo, Registry: "irr",
 				Subject: fmt.Sprintf("%s AS%d %s", p, origin, db),
-				Message: fmt.Sprintf("%s AS%d is registered in %s and in %s (registry.irr.source); the copy in %s may be left over from a move", p, origin, db, s.cfg.IRRSource, db),
+				Message: fmt.Sprintf("%s AS%d is registered in %s and in %s (registry.irr.source); the copy in %s may be left over from a move", p, origin, db, home, db),
 				Diff:    "- " + strings.ReplaceAll(strings.TrimSpace(obj), "\n", "\n- "),
 			}
-			if db == "RIPE" {
-				f.Change = s.irrChange("delete_object", p, origin, obj)
-			}
+			f.Change = irrChange("delete_object", db, p, origin, obj)
 			out = append(out, f)
 		}
 	}
@@ -201,15 +202,6 @@ func dbName(rt plugin.IRRRoute, source string) string {
 		return strings.ToUpper(rt.Database)
 	}
 	return strings.ToUpper(source)
-}
-
-func sortedKeys(m map[string]bool) []string {
-	out := make([]string, 0, len(m))
-	for k := range m {
-		out = append(out, k)
-	}
-	slices.Sort(out)
-	return out
 }
 
 // scanRPKI reads the ROA state of every announced prefix from the RPKI
@@ -295,7 +287,7 @@ func (s *Service) scanASSet(ctx context.Context, obs Observed) ([]plugin.Registr
 		return nil, Section{Name: "as-set", Status: "skipped", Detail: "no irr source serves as-set objects"}
 	}
 	var out []plugin.RegistryFinding
-	for _, asn := range sortedASNs(obs.Downstream) {
+	for _, asn := range slices.Sorted(maps.Keys(obs.Downstream)) {
 		if members[asn] || s.asns[asn] {
 			continue
 		}
@@ -306,7 +298,7 @@ func (s *Service) scanASSet(ctx context.Context, obs Observed) ([]plugin.Registr
 			Diff:    asSetMember(s.cfg.ASSet, asn, true),
 		})
 	}
-	for _, asn := range sortedASNs(members) {
+	for _, asn := range slices.Sorted(maps.Keys(members)) {
 		if obs.Downstream[asn] || s.asns[asn] {
 			continue
 		}
@@ -318,15 +310,6 @@ func (s *Service) scanASSet(ctx context.Context, obs Observed) ([]plugin.Registr
 		})
 	}
 	return capKinds(out), Section{Name: "as-set", Status: "ok"}
-}
-
-func sortedASNs(m map[uint32]bool) []uint32 {
-	out := make([]uint32, 0, len(m))
-	for a := range m {
-		out = append(out, a)
-	}
-	slices.Sort(out)
-	return out
 }
 
 // capKinds keeps the first maxPerKind findings of each kind, so one

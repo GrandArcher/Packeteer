@@ -337,7 +337,7 @@ The Events page (#173) lists what the controller reports to notifiers ([EVENTS.m
 
 The Registry page (`/registry.html`, #289) shows the last registry hygiene scan from `GET /api/registry` ([registry.md](registry.md)): the scan parts with their status (an unreachable registry shows as an error, never as clean) and each finding with its severity (Error, Warning, Info), registry, subject, message, and the exact diff. It refreshes every minute and with Refresh. It only reads unless an admin pushes.
 
-- **Suggest only.** A finding with no pushable change says to submit the diff to that registry yourself. ROAs are always like this.
+- **Suggest only.** A finding with no pushable change says to submit the diff to that registry yourself. ROAs are always like this. A delete shows a note instead of a button until the next scan shows the same finding again.
 - **Push.** With `registry.push_enabled` on, an admin sees Review and push on a finding a plugin can apply. It asks once more, naming the registry, operation, and key, and Confirm push sends the finding id and the digest of the diff on screen. A refusal (the scan changed, already pushed, a registry error) is shown and the page reloads. Other roles see the diff and no button. Every push is in the audit log.
 
 ## Dashboard and first run

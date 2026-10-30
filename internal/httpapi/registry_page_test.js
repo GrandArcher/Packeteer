@@ -80,7 +80,12 @@ var web = path.join(__dirname, "web");
 var ui = fs.readFileSync(path.join(web, "ui.js"), "utf8");
 var page = fs.readFileSync(path.join(web, "registry.js"), "utf8");
 ["el", "clear", "ixpTable", "ixpCell"].forEach(function (n) { vm.runInContext(fn(ui, n), context); });
-vm.runInContext("var registryOpen = \"\"; var registryReport = null; var REGISTRY_SEVERITY = {error: \"Error\", warning: \"Warning\", info: \"Info\"};", context);
+["REGISTRY_SEVERITY"].forEach(function (v) {
+  var m = new RegExp("^var " + v + " = [^;]*;$", "m").exec(page);
+  assert(m, "var " + v);
+  vm.runInContext(m[0], context);
+});
+vm.runInContext("var registryOpen = \"\"; var registryReport = null;", context);
 page.match(/^function (\w+)\(/gm).map(function (m) { return m.slice(9, -1); }).forEach(function (n) {
   if (n !== "startRegistryPage") vm.runInContext(fn(page, n), context);
 });
@@ -123,6 +128,18 @@ function table() { return ids["registry-findings"]; }
   await settle();
   assert(status() === "Push refused or failed: " + pushError, "refusal: " + status());
   assert(buttons(table(), "Confirm push").length === 0, "the box closed after a refusal");
+
+  // A pushed finding says so, and a finding with a note shows the note and no button.
+  var done = JSON.parse(JSON.stringify(report));
+  done.findings.filter(function (x) { return x.pushable; })[0].pushed = "2026-10-30T10:00:00Z";
+  context.renderRegistry(done, context.onRegistryPush);
+  assert(table().textContent.indexOf("Pushed T(2026-10-30T10:00:00Z). The next scan shows the result.") >= 0 && buttons(table(), "Review and push").length === 0, "pushed: " + table().textContent);
+  var noted = JSON.parse(JSON.stringify(report));
+  var n = noted.findings.filter(function (x) { return x.pushable; })[0];
+  n.pushable = false;
+  n.note = "A delete is offered once the next scan shows it again.";
+  context.renderRegistry(noted, context.onRegistryPush);
+  assert(table().textContent.indexOf(n.note) >= 0 && buttons(table(), "Review and push").length === 0, "note: " + table().textContent);
 
   // A non-admin sees the finding and the diff, no button.
   context.shellAdmin = false;

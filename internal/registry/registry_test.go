@@ -156,8 +156,16 @@ func TestScanIRR(t *testing.T) {
 	}
 
 	stale := got["irr_stale"]
-	if len(stale) != 1 || stale[0].Subject != "192.0.2.0/24 AS64496 RIPE" || stale[0].Change == nil || stale[0].Change.Op != "delete_object" {
+	if len(stale) != 1 || stale[0].Subject != "192.0.2.0/24 AS64496 RIPE" || stale[0].Diff == "" {
 		t.Fatalf("irr_stale = %+v", stale)
+	}
+	if stale[0].Change != nil || stale[0].Pushable || stale[0].Note == "" {
+		t.Fatalf("a delete seen once must not be offered: %+v", stale[0])
+	}
+	svc.Scan(context.Background())
+	stale = byKind(svc.Report())["irr_stale"]
+	if len(stale) != 1 || !stale[0].Pushable || stale[0].Change == nil || stale[0].Change.Op != "delete_object" || stale[0].Change.Key != "192.0.2.0/24AS64496" {
+		t.Fatalf("a delete seen in two scans is offered: %+v", stale)
 	}
 	conf := got["irr_conflict"]
 	if len(conf) != 1 || conf[0].Subject != "198.51.100.0/24 AS64499 RADB" || conf[0].Change != nil {
@@ -389,5 +397,62 @@ func TestPushNotPushable(t *testing.T) {
 	f := svc.Report().Findings[0]
 	if _, err := svc.Push(context.Background(), f.ID, f.Digest); !errors.Is(err, ErrNotPushable) {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+// #289: a copy of our object is "left over" only beside the object in the
+// configured home database. With objects in RADB and ARIN and home RIPE,
+// following both delete diffs would remove every registration.
+func TestDuplicateNeedsHomeObject(t *testing.T) {
+	p := pfx("198.51.100.0/24")
+	src := &fakeIRR{
+		byOrigin: map[uint32][]netip.Prefix{64496: {p, pfx("203.0.113.0/24"), pfx("2001:db8::/32")}},
+		routes: map[netip.Prefix][]plugin.IRRRoute{p: {
+			{Prefix: p, Origin: 64496, Database: "RADB"}, {Prefix: p, Origin: 64496, Database: "ARIN"},
+		}},
+	}
+	svc := newService(Config{IRRSource: "RIPE"}, Deps{IRR: []IRRSource{{Name: "x", Plugin: src}}})
+	svc.Scan(context.Background())
+	if dup := byKind(svc.Report())["irr_duplicate"]; len(dup) != 0 {
+		t.Fatalf("duplicates without an object in the home database: %+v", dup)
+	}
+	src.routes[p] = append(src.routes[p], plugin.IRRRoute{Prefix: p, Origin: 64496, Database: "RIPE"})
+	svc.Scan(context.Background())
+	if dup := byKind(svc.Report())["irr_duplicate"]; len(dup) != 2 {
+		t.Fatalf("duplicates beside the home object = %+v", dup)
+	}
+}
+
+// #289: registry.irr.source TEST makes a pushable object for the ripe
+// plugin's TEST database; any other non-RIPE source is text only.
+func TestTestDatabaseChange(t *testing.T) {
+	src := &fakeIRR{byOrigin: map[uint32][]netip.Prefix{64496: {pfx("198.51.100.0/24"), pfx("2001:db8::/32")}}}
+	svc := newService(Config{IRRSource: "test", MntBy: "EXAMPLE-MNT", PushEnabled: true}, Deps{
+		IRR: []IRRSource{{Name: "x", Plugin: src}}, Checkers: []Checker{{Name: "ripe", Type: "ripe", Plugin: &fakeChecker{}}},
+	})
+	svc.Scan(context.Background())
+	miss := byKind(svc.Report())["irr_missing"]
+	if len(miss) != 1 || !miss[0].Pushable || miss[0].Change.Registry != "ripe" || !strings.Contains(miss[0].Change.Object, "source:         TEST") {
+		t.Fatalf("irr_missing = %+v", miss)
+	}
+}
+
+// #289: a push is remembered for the change that was pushed. When the
+// next scan needs a different value for the same drift, the finding is open
+// again instead of showing the old push.
+func TestPushedMarkFollowsTheChange(t *testing.T) {
+	svc, chk, id := pushService(t, true)
+	f := svc.Report().Findings[0]
+	if _, err := svc.Push(context.Background(), id, f.Digest); err != nil {
+		t.Fatal(err)
+	}
+	chk.findings[0].Change = &plugin.RegistryChange{Registry: "peeringdb", Op: "update_field", Class: "net", Key: "42", Field: "info_prefixes4", Old: "3", New: "9"}
+	svc.Scan(context.Background())
+	g := svc.Report().Findings[0]
+	if g.ID != id || g.Pushed != nil || g.Digest == f.Digest {
+		t.Fatalf("finding after the value moved = %+v", g)
+	}
+	if _, err := svc.Push(context.Background(), id, g.Digest); err != nil || len(chk.pushed) != 2 {
+		t.Fatalf("second change: %v, pushed %v", err, chk.pushed)
 	}
 }
