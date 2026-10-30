@@ -1,0 +1,50 @@
+# NetBox inventory lab (#208): a real NetBox with its PostgreSQL and Redis,
+# read by `packeteer config plan|diff|apply` from lab/e2e-netbox.sh. Observe
+# mode; nothing announces and there is no BGP session. Documentation
+# addresses (RFC 5737) and documentation ASNs only. Every secret below is a
+# lab-only placeholder.
+name: packeteer-e2e-netbox
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: netbox
+      POSTGRES_USER: netbox
+      POSTGRES_PASSWORD: lab-only-db
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U netbox -d netbox"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--requirepass", "lab-only-redis"]
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a lab-only-redis ping | grep -q PONG"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+  netbox:
+    image: netboxcommunity/netbox:v4.2
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      DB_HOST: postgres
+      DB_NAME: netbox
+      DB_USER: netbox
+      DB_PASSWORD: lab-only-db
+      REDIS_HOST: redis
+      REDIS_PASSWORD: lab-only-redis
+      REDIS_CACHE_HOST: redis
+      REDIS_CACHE_PASSWORD: lab-only-redis
+      SECRET_KEY: lab-only-secret-key-lab-only-secret-key-lab-only-secret-key
+      SUPERUSER_NAME: admin
+      SUPERUSER_EMAIL: admin@example.invalid
+      SUPERUSER_PASSWORD: lab-only-admin
+      SUPERUSER_API_TOKEN: labonlynetboxtoken0000000000000000000000
+      DB_WAIT_DEBUG: "1"
+    ports:
+      - "127.0.0.1:18208:8080"

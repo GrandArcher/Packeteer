@@ -609,6 +609,19 @@ storage:
 #     timeout: 30s
 #     max_bytes: 8388608
 
+# Providers, next hops, and provider communities from NetBox or Peering
+# Manager (docs/inventory.md). Read only by `packeteer config plan`, `diff`,
+# and `apply`, never by the running controller; nothing is announced. Only
+# records with this tag are read. The API token is
+# PACKETEER_NETBOX_TOKEN (netbox) or PACKETEER_PEERING_MANAGER_TOKEN
+# (peeringmanager), never this file.
+# inventory:
+#   type: netbox
+#   config:
+#     base_url: https://netbox.example.invalid
+#     tag: packeteer
+#     timeout: 30s
+
 # Interface counters and 95th-percentile usage. Off unless listed.
 # The community and v3 passphrases are environment variables named here,
 # never values in this file. Samples stay in memory. With storage above,

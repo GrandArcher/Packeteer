@@ -14,6 +14,9 @@ import (
 	"github.com/GrandArcher/Packeteer/internal/plugins/exporter/snmpagent"
 	"github.com/GrandArcher/Packeteer/internal/plugins/federation/mtls"
 	"github.com/GrandArcher/Packeteer/internal/plugins/grpcplugin"
+	"github.com/GrandArcher/Packeteer/internal/plugins/inventory/invcommon"
+	"github.com/GrandArcher/Packeteer/internal/plugins/inventory/netbox"
+	"github.com/GrandArcher/Packeteer/internal/plugins/inventory/peeringmanager"
 	irrfile "github.com/GrandArcher/Packeteer/internal/plugins/irr/file"
 	irrwhois "github.com/GrandArcher/Packeteer/internal/plugins/irr/whois"
 	coreicmp "github.com/GrandArcher/Packeteer/internal/plugins/ixpcore/icmp"
@@ -123,13 +126,14 @@ func TestConfigDocCoversStructs(t *testing.T) {
 		coreicmp.Config{},
 		config.CoreLink{},
 		peeringdb.Config{},
+		invcommon.Common{},
 	) {
 		if !strings.Contains(text, "`"+key+"`") {
 			missing = append(missing, key)
 		}
 	}
 	for _, env := range []string{
-		ConfigEnv, PluginDirEnv, LogLevelEnv, LogFormatEnv, HTTPListenEnv, HTTPUserEnv, HTTPPassEnv, lease.IDEnv, peeringdb.APIKeyEnv, AdminUserEnv, AdminPassEnv,
+		ConfigEnv, PluginDirEnv, LogLevelEnv, LogFormatEnv, HTTPListenEnv, HTTPUserEnv, HTTPPassEnv, lease.IDEnv, peeringdb.APIKeyEnv, netbox.TokenEnv, peeringmanager.TokenEnv, AdminUserEnv, AdminPassEnv,
 	} {
 		if !strings.Contains(text, "`"+env+"`") {
 			missing = append(missing, env)

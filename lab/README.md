@@ -189,6 +189,8 @@ Surfaces are the files in `lab/failure-matrix/`. A new surface adds its file, wh
 
 `MATRIX_BREAK=reload-observe` skips the config edit of that case, as a controller whose withdraw path is broken would: the SIGHUP changes nothing and the routes stay. The CI job runs that and requires the matrix to fail on the routes left on the router.
 
+`lab/e2e-netbox.sh` is the NetBox inventory (#208, `lab/docker-compose-netbox.yml`): a NetBox container with PostgreSQL and Redis, seeded over its REST API with two tagged providers and one untagged. The script runs `packeteer config plan`, `diff`, and `apply -plan ID -git` against it, and checks that the plan names the tagged providers only, that the git commit holds the same changed lines as `diff`, that `packeteer -check` accepts the written file, and that a second plan is empty. Observe mode; nothing announces.
+
 ## Running demo
 
 The running demo is a separate checkout, not a compose file in this repo. It has two transit providers, one customer, and one IX peer. Telling those sessions apart (peer vs customer vs transit) and suggesting the role is still open (#103). A suggestion must not write itself into the running config.

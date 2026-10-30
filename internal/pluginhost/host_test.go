@@ -582,6 +582,36 @@ lookup:
 	}
 }
 
+func TestInventoryIsCheckedAtLoadAndIsNoRIBSource(t *testing.T) {
+	cfg := load(t, "inventory:\n  type: netbox\n  config:\n    base_url: http://127.0.0.1:8000\n    tag: packeteer\n")
+	env := func(k string) string {
+		if k == "PACKETEER_NETBOX_TOKEN" {
+			return "lab-token"
+		}
+		return ""
+	}
+	s, err := Build(cfg, Options{Getenv: env})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(s.RIBSources) != 0 || s.Announcer != nil {
+		t.Fatalf("rib %d announcer %v", len(s.RIBSources), s.Announcer)
+	}
+	if _, err := BuildInventory(cfg, Options{Getenv: env}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Build(cfg, Options{}); err == nil || !strings.Contains(err.Error(), "inventory (netbox)") || !strings.Contains(err.Error(), "PACKETEER_NETBOX_TOKEN") {
+		t.Fatalf("missing token: %v", err)
+	}
+	cfg = load(t, "inventory:\n  type: nosuch\n")
+	if _, err := Build(cfg, Options{}); err == nil || !strings.Contains(err.Error(), `unknown inventory type "nosuch"`) {
+		t.Fatalf("unknown type: %v", err)
+	}
+	if _, err := BuildInventory(load(t, ""), Options{}); err == nil {
+		t.Fatal("BuildInventory without a block succeeded")
+	}
+}
+
 const portExchange = `
 exchanges:
   - name: ix-lab

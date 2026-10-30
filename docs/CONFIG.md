@@ -25,6 +25,7 @@ The image entrypoint is the same binary. Flags go after the image name.
 |---|---|---|---|
 | `mode` | `observe` | no | `observe`, `suggest`, or `inject`. A file without `mode` (or with an empty one) observes. `inject` is never a default: it needs `mode: inject` and the [inject checklist](#inject-checklist). An [`ixp`](#ixp) block refuses `inject`. |
 | `lookup` | absent | no | Read-only PeeringDB / IX-F directory (#153). One plugin, `type: peeringdb`. Announces nothing. See [`lookup`](#lookup). |
+| `inventory` | absent | no | Read-only NetBox or Peering Manager source that `packeteer config plan`, `diff`, and `apply` read providers from (#208). Announces nothing and is not read by the running controller. See [`inventory`](#inventory). |
 | `ixp` | absent | no | Exchange-operator mode (#160). `ixp: {}` refuses inject, announcer, mitigation, inbound, synthesize, and more_specific. Optional `members` imports an IX-F list, `routeservers` polls Birdseye, and `correlate` tells a fabric problem from a member problem; none announces (#161, #164, #163). No `bgp.neighbors` required. See [`ixp`](#ixp). |
 | `asn` | none | yes, non-zero | BGP ASN of this speaker. Neighbors are iBGP in this ASN. |
 | `router_id` | none | yes | IPv4 address. IPv6 is rejected. |
@@ -501,6 +502,22 @@ Signals (#165). `ixp.rs_filter_spike` fires when the routes tagged `asn:1101:x` 
 Multi-site fabric health (#167). Run one IXP-mode instance per site and join them with the top-level [`federation`](#multi-pop-federation) block (each instance needs its own `domain`; `instance` names the site). Each site then publishes, over the same mutual-TLS snapshot, its latest fabric round reduced to one path per member, VLAN, vantage, and address family (the worst address), its vantages, the correlator's groups, how many route servers do not answer, and its core links. The site view pushes nothing. `core` is one plugin (`type: icmp`; `interval` default 1m, 10s to 1h; `timeout` default 1s, 100ms to 5s; `packets` default 5, 1 to 20) that pings, from this site, the address of each other site in `core_links` (at most 64) and records loss, RTT, and jitter. It needs `core_links` and `federation`; it sends nothing else and announces nothing. Each link has `name` (as for a vantage), `peer` (the other site's federation instance name; not this instance), `address` (an address at the other site, reached across the core), optional `source` (the local address to ping from; omitted lets the kernel choose), `max_loss_pct` (default 10; the link is degraded above it), and optional `max_rtt` (0 or omitted is no RTT limit; at most 10s). A link with no reply, or one that cannot be probed, is degraded. `GET /api/ixp/sites` and `/ixp/sites` list each site's health, the core links, and the incidents, with the site each is at. The snapshot grows with members x vantages x families, so raise the federation `poll_interval` (for example 15s) on a large exchange. Rollback: remove `core` and `core_links`, or `federation`, and restart.
 
 Adding or removing `ixp`, including `members`, `vantages`, `fabric`, `routeservers`, `correlate`, and `core`, needs a restart. Rollback: remove `core` and `core_links`, or `correlate`, or `routeservers`, or `vantages` and `fabric`, or the `ixp` block, and restart. Nothing was announced.
+
+### `inventory`
+
+A read-only source of providers (#208, [inventory.md](inventory.md)). It is read only by `packeteer config plan`, `diff`, and `apply`; the running controller does not read it, it announces nothing, and it is not an input to Decide. It works in an edge controller.
+
+```yaml
+inventory:
+  type: netbox            # or peeringmanager
+  config:
+    base_url: https://netbox.example.invalid
+    tag: packeteer
+```
+
+`base_url` (required, an http or https URL with a host and no userinfo, query, or fragment; https is required unless the host is a loopback address, and a URL that holds the token is refused). `tag` (required, 1-64 characters of letters, digits, `.`, `_`, or `-`): only records with this tag are read. `timeout` (default 30s, 1s-2m). The API token is `PACKETEER_NETBOX_TOKEN` (`type: netbox`) or `PACKETEER_PEERING_MANAGER_TOKEN` (`type: peeringmanager`), required, sent only as an `Authorization` header to `base_url`. Redirects are not followed. A response over 8 MiB, or a list of more than 100 pages of 200, is refused.
+
+The type and config are checked at load time, so `-check` finds a missing token. `packeteer config plan|diff [-config FILE]` prints the change to the providers; `config apply -plan ID [-git]` writes it. Adding, changing, or removing `inventory` needs a restart, and so does using the providers `apply` wrote (`providers` is restart-only). Rollback: remove `inventory`. Nothing was announced.
 
 ### `lookup`
 

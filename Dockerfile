@@ -20,7 +20,7 @@ RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
 # Alpine (not distroless) so exec plugins written as shell scripts work in the
 # stock image. The image ships only the documentation-prefix example config.
 FROM alpine:3.24
-RUN apk add --no-cache ca-certificates \
+RUN apk add --no-cache ca-certificates git \
  && mkdir -p /etc/packeteer/plugins /var/lib/packeteer
 COPY --from=build /out/packeteer /usr/local/bin/packeteer
 # TWAMP-Light reflector for the reordering measurement (#224). Run it on a

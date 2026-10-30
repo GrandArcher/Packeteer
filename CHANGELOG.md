@@ -6,6 +6,7 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 
 ### Added
 
+- Providers, next hops, and communities read from NetBox or Peering Manager (`inventory`), with `packeteer config plan`, `diff`, and `apply -plan ID [-git]` and an audit entry; lab-checked (#208).
 - Opt-in read-only SNMP agent (`snmpagent` exporter, v2c and v3) with a published MIB, SNMP informs, and a `syslog` (RFC 5424) notifier; lab-checked with snmpwalk and snmptrapd (#212).
 - Opt-in `realtable3m` lab profile: a real RIS/RouteViews table on three sessions grown to 3M prefixes, probed by a new `sim` prober (seeded model, no packets, labeled simulated) (#103).
 - Plugin author guide (`docs/PLUGIN_AUTHORING.md`), tested exec and Go skeletons in `examples/plugins`, and a community plugin list checked by a test (#288).

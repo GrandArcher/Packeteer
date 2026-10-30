@@ -260,7 +260,7 @@ func (e *Editor) Save(data []byte, base string, confirmInject bool) (File, Resul
 	if res.EnablesInject && !confirmInject {
 		return File{}, res, ErrConfirmInject
 	}
-	if err := writeFile(e.path, data, cur); err != nil {
+	if err := WriteFile(e.path, data, cur); err != nil {
 		return File{}, res, fmt.Errorf("write %s: %w", e.path, err)
 	}
 	// Round trip: what is on disk must be what was checked.
@@ -278,13 +278,13 @@ func (e *Editor) Save(data []byte, base string, confirmInject bool) (File, Resul
 	return File{Path: e.path, YAML: string(data), SHA256: Hash(data), Configured: Configured(data), Setup: PrefillWizard(data)}, res, nil
 }
 
-// writeFile replaces path with data. It first writes a temporary file
+// WriteFile replaces path with data. It first writes a temporary file
 // next to it and renames it into place (atomic). A single-file bind
 // mount cannot be renamed over, and its directory may be read-only; then
 // the file is rewritten in place, and restored to old if that fails. If
 // the restore fails too, old is saved to a temporary file named in the
 // error, so the last good config is never lost.
-func writeFile(path string, data, old []byte) error {
+func WriteFile(path string, data, old []byte) error {
 	mode := os.FileMode(0o644)
 	if st, err := os.Stat(path); err == nil {
 		mode = st.Mode().Perm()

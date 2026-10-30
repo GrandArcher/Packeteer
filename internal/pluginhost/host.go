@@ -209,6 +209,13 @@ func Build(cfg *config.Config, opts Options) (*Set, error) {
 			s.Lookup = &b[0]
 		}
 	}
+	if cfg.Inventory != nil {
+		// Built to check the type and config at load time; only the
+		// config subcommands read it.
+		if _, err := BuildInventory(cfg, opts); err != nil {
+			errs = append(errs, err)
+		}
+	}
 	if cfg.IXP != nil && cfg.IXP.Members != nil {
 		if b := build(plugin.MemberSources, "ixp.members", []config.PluginSpec{*cfg.IXP.Members}, base, &errs); len(b) == 1 {
 			s.IXPMembers = &b[0]
@@ -498,6 +505,23 @@ func BuildScorer(cfg *config.Config, opts Options) (plugin.Scorer, error) {
 		return nil, errors.Join(errs...)
 	}
 	return out[0].Plugin, nil
+}
+
+// BuildInventory constructs the inventory cfg names. It does not fetch.
+func BuildInventory(cfg *config.Config, opts Options) (plugin.Inventory, error) {
+	if cfg.Inventory == nil {
+		return nil, errors.New("no inventory configured")
+	}
+	env := optionsEnv(cfg, opts)
+	sp := cfg.Inventory
+	env.Name = sp.InstanceName()
+	env.Logger = env.Logger.With("plugin", string(plugin.KindInventory), "name", env.Name, "type", sp.Type)
+	node := sp.Config
+	inv, err := plugin.Inventories.New(sp.Type, plugin.NewConfig(&node), env)
+	if err != nil {
+		return nil, fmt.Errorf("inventory (%s): %w", env.Name, err)
+	}
+	return inv, nil
 }
 
 // BuildSources constructs the named target sources. They are not started.
