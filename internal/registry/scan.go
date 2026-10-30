@@ -335,7 +335,7 @@ func (s *Service) scanASSet(ctx context.Context, obs Observed) ([]plugin.Registr
 		out = append(out, plugin.RegistryFinding{
 			Kind: "asset_missing", Severity: plugin.RegistryWarning, Registry: "as-set",
 			Subject: fmt.Sprintf("%s AS%d", s.cfg.ASSet, asn),
-			Message: fmt.Sprintf("AS%d follows a registry.asns AS on learned paths and is not in %s", asn, s.cfg.ASSet),
+			Message: fmt.Sprintf("AS%d is downstream of registry.asns on learned paths (customer cone) and is not in %s", asn, s.cfg.ASSet),
 			Diff:    asSetMember(s.cfg.ASSet, asn, true),
 		})
 	}

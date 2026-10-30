@@ -466,7 +466,7 @@ scorer:
 # the Registry page. It announces nothing. Pushing a change is off unless
 # push_enabled, needs an admin to confirm each diff, and reads credentials
 # only from PACKETEER_PEERINGDB_API_KEY, PACKETEER_RIPE_USER, and
-# PACKETEER_RIPE_PASSWORD.
+# PACKETEER_RIPE_PASSWORD. as_set and the IRR checks need irr enabled.
 # registry:
 #   enabled: false
 #   asns: [64496]

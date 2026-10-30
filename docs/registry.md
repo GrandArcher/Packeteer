@@ -39,9 +39,12 @@ Each push is `POST /api/registry/push` with the finding `id` and the `digest` of
 
 ## Configure
 
-See [CONFIG.md](CONFIG.md#registry) and `config.example.yaml`. Read-only needs no credentials:
+See [CONFIG.md](CONFIG.md#registry) and `config.example.yaml`. Read-only needs no credentials. The as-set and IRR checks read the `irr` sources, so `as_set` needs `irr.enabled`:
 
 ```yaml
+irr:
+  enabled: true
+  sources: [{type: whois, config: {address: "whois.example.net:43"}}]
 registry:
   enabled: true
   asns: [64496]
