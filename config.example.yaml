@@ -175,6 +175,11 @@ probers:
   # - type: udp               # optional fallback. A reply or ICMP port-unreachable counts.
   #   config:
   #     port: 33434
+  # - type: sim               # lab only, sends no packet: answers from a seeded delay and loss
+  #   config:                 # model per provider. Every probe number is then simulated and the
+  #     seed: 1               # UI says so on every page. Never for measuring a real network.
+  #     routes:
+  #       - {provider: transit-a, rtt_ms: 40, spread_pct: 50, jitter_ms: 2, loss_pct: 0.5}
   # - type: grpc              # optional: a long-running program in plugin_dir that probes
   #   name: fast              # (docs/PLUGINS.md). It never announces.
   #   config:

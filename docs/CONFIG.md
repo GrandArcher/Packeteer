@@ -522,7 +522,7 @@ Adding, changing, or removing `lookup` needs a restart. Rollback: remove `lookup
 
 ### `herd`
 
-Opt-in sharing of probe measurements with other operators' Packeteer instances (#260, [design](design/herd.md), [herd.md](herd.md)). Off by default; with `enabled: false` or no block nothing is stored, served, or pulled. Herd never announces and no herd data reaches `Decide`. It needs `storage` type `sqlite` and `bgp.neighbors` (records are built from learned routes), cannot be combined with `ixp`, and refuses the `fixed` prober. Any change needs a restart.
+Opt-in sharing of probe measurements with other operators' Packeteer instances (#260, [design](design/herd.md), [herd.md](herd.md)). Off by default; with `enabled: false` or no block nothing is stored, served, or pulled. Herd never announces and no herd data reaches `Decide`. It needs `storage` type `sqlite` and `bgp.neighbors` (records are built from learned routes), cannot be combined with `ixp`, and refuses the `fixed` and `sim` probers. Any change needs a restart.
 
 ```yaml
 herd:
@@ -1087,6 +1087,25 @@ Not in the default chain: it needs a TWAMP-Light Session-Reflector (RFC 5357, un
 | `port` | 862 | 1-65535. |
 | `packet_interval` | `20ms` | Not negative. |
 | `padding` | 27 | 27-1400 octets after the 14-octet header, so the 41-octet reflected packet is not truncated (RFC 5357 section 4.2.1). |
+
+### Prober `sim`
+
+Labs and tests only. Sends no packet and opens no socket: it answers from a seeded model, so a lab can give a large learned table probe results without probing any address (#103). While a `sim` prober is configured, the start log warns and every UI page shows a banner that probe numbers are simulated (`simulated_probes` in `GET /api/overview`). `herd` refuses it, as it refuses `fixed`. Unknown keys are errors.
+
+| Key | Meaning |
+|---|---|
+| `seed` | Fixes every answer. The same seed and config give the same results on every round and every run. |
+| `routes` | Required. One model per provider; a provider with no route fails its probes. |
+
+Each route:
+
+| Key | Meaning |
+|---|---|
+| `provider` | Required. Must match a provider `name`. Unique. |
+| `rtt_ms` | Required, above 0. The round trip a destination at the middle of the spread sees. |
+| `spread_pct` | 0-100. Each destination's RTT moves by up to this percent of `rtt_ms` either way, fixed per destination, so routes win on different prefixes. |
+| `jitter_ms` | Not negative. Each reply moves by up to this many milliseconds either way. |
+| `loss_pct` | 0-100. The chance, per packet, that no reply comes. |
 
 ### Prober `fixed`
 

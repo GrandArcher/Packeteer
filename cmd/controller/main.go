@@ -1056,6 +1056,9 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 		log.Warn(config.SynthesizeWarning, "mode", cfg.Mode, "covering_prefixes", strings.Join(cfg.Synthesize.CoveringPrefixes, ","),
 			"max_bits", cfg.Synthesize.MaxBits, "marker_community", cfg.Synthesize.MarkerCommunity)
 	}
+	if cfg.SimulatedProbes() {
+		log.Warn(config.SimulatedProbesNotice)
+	}
 	_ = engine.Run(ctx)
 
 	log.Info("shutting down")

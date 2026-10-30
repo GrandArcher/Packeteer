@@ -18,6 +18,20 @@ const (
 // written in the docs wherever synthesize is on.
 const SynthesizeWarning = "WARNING: synthesize is on. Synthesized more-specifics are NOT in the learned RIB and can cause hijack-like effects, RPKI-invalid announcements, and route leaks if misused."
 
+// SimulatedProbesNotice is shown in the UI and logged at start while a
+// sim prober is configured (#103).
+const SimulatedProbesNotice = "SIMULATED PROBES: the sim prober answers from a seeded model and sends no packets. Every probe number here is simulated, not measured."
+
+// SimulatedProbes reports whether a sim prober is configured.
+func (c *Config) SimulatedProbes() bool {
+	for _, p := range c.Probers {
+		if p.Type == "sim" {
+			return true
+		}
+	}
+	return false
+}
+
 // Synthesize is the opt-in synthesized more-specific injection (#122,
 // docs/design/more-specific.md). It may announce a measured sub-range of a
 // covering prefix a neighbor advertises exactly in the learned RIB, which

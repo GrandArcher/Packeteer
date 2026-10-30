@@ -434,3 +434,16 @@ func TestOverviewSynthesizeWarning(t *testing.T) {
 		t.Fatalf("json = %s %v", body, err)
 	}
 }
+
+// While a sim prober is configured (#103) the overview carries the notice
+// every page shows; without one it carries none.
+func TestOverviewSimulatedProbes(t *testing.T) {
+	if o := BuildOverview(Assemble(firstRun()), Setup{}, nil); o.SimulatedProbes != "" {
+		t.Fatalf("notice without a sim prober: %q", o.SimulatedProbes)
+	}
+	o := BuildOverview(Assemble(firstRun()), Setup{SimulatedProbes: "SIMULATED PROBES"}, nil)
+	body, err := json.Marshal(o)
+	if err != nil || !strings.Contains(string(body), `"simulated_probes":"SIMULATED PROBES"`) {
+		t.Fatalf("json = %s %v", body, err)
+	}
+}

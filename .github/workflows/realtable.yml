@@ -11,9 +11,20 @@ name: realtable
 # Peak RSS measured on an 8-core development machine (2026-10-22, current
 # rrc00 bview): 3.4 GiB at 1x, 6.7 GiB at 2x, 9.2 GiB at 3x. 3x fits
 # ubuntu-latest (16 GB); 4x may not, so name a larger runner label.
+#
+# Profile realtable3m (#103) plays three peers' views of the dump, grows the
+# table to 3 million prefixes, and gives it simulated probe results (a model;
+# no packet is sent). It holds 8 to 9 million paths. The realtable runs above
+# peaked at 2.4 to 2.7 KiB a path, so expect 18 to 23 GiB; name a runner with
+# at least 32 GB. Nothing has measured this profile yet.
 on:
   workflow_dispatch:
     inputs:
+      profile:
+        description: realtable (one peer, N sessions) or realtable3m (three peers, 3 million prefixes, simulated probes)
+        type: choice
+        options: ["realtable", "realtable3m"]
+        default: "realtable"
       multiply:
         description: Sessions, so Packeteer holds this many paths per prefix
         type: choice
@@ -43,14 +54,15 @@ jobs:
           load: true
           tags: packeteer:realtable
           build-args: VERSION=realtable-${{ github.sha }}
-      - name: real table, observe only (lab/soak/budgets.yaml, profile realtable)
+      - name: real table, observe only (lab/soak/budgets.yaml, profile from the input)
         env:
           SOAK_OUT: realtable-result.json
           MULTIPLY: ${{ inputs.multiply }}
+          REALTABLE_PROFILE: ${{ inputs.profile }}
         run: bash lab/realtable.sh packeteer:realtable "$MULTIPLY"
       - uses: actions/upload-artifact@v7
         if: always()
         with:
-          name: realtable-result-${{ inputs.multiply }}x
+          name: ${{ inputs.profile }}-result-${{ inputs.multiply }}x
           path: realtable-result.json
           if-no-files-found: ignore
