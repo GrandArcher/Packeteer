@@ -144,3 +144,29 @@ func TestSetLookupAndDisplay(t *testing.T) {
 		t.Fatalf("LookupDisplay = %+v, want unknown", got)
 	}
 }
+
+type coveringSource struct {
+	fakeSource
+	vrps []plugin.RPKIVRP
+}
+
+func (c *coveringSource) Covering(netip.Prefix) []plugin.RPKIVRP { return c.vrps }
+
+// #289: Covering asks the source Validate would use, and is nil when that
+// source cannot list payloads or has no fresh data.
+func TestSetCovering(t *testing.T) {
+	prefix := netip.MustParsePrefix("198.51.100.0/24")
+	vrp := plugin.RPKIVRP{Prefix: netip.MustParsePrefix("198.51.100.0/22"), MaxLen: 24, ASN: 64500}
+	fresh := plugin.RPKIStatus{Up: true, VRPs: 1}
+	with := &coveringSource{fakeSource: fakeSource{status: fresh}, vrps: []plugin.RPKIVRP{vrp}}
+	if got := NewSet([]plugin.RPKI{with}).Covering(prefix); len(got) != 1 || got[0] != vrp {
+		t.Fatalf("Covering = %+v", got)
+	}
+	if got := NewSet([]plugin.RPKI{&fakeSource{status: fresh}}).Covering(prefix); got != nil {
+		t.Fatalf("a source without Covering answered %+v", got)
+	}
+	stale := &coveringSource{fakeSource: fakeSource{status: plugin.RPKIStatus{Stale: true, VRPs: 1}}, vrps: []plugin.RPKIVRP{vrp}}
+	if got := NewSet([]plugin.RPKI{stale}).Covering(prefix); got != nil {
+		t.Fatalf("a stale source answered %+v", got)
+	}
+}

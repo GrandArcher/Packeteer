@@ -53,6 +53,9 @@ type IRR interface {
 	// ASSetMembers returns the AS numbers in an as-set, expanded
 	// recursively.
 	ASSetMembers(ctx context.Context, name string) ([]uint32, time.Time, error)
+	// OriginPrefixes returns the prefixes of the route and route6 objects
+	// naming asn as origin (registry hygiene, #289).
+	OriginPrefixes(ctx context.Context, asn uint32) ([]netip.Prefix, time.Time, error)
 	// ASName returns the as-name of the aut-num object for asn, empty
 	// when there is none.
 	ASName(ctx context.Context, asn uint32) (string, time.Time, error)

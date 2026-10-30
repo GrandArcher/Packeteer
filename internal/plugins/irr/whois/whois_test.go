@@ -336,3 +336,38 @@ func TestConfigValidation(t *testing.T) {
 		t.Fatalf("defaults = %+v", c.cfg)
 	}
 }
+
+// #289: the origin's prefixes come from !g and !6 for irrd (both sent,
+// sorted, duplicates dropped) and from an inverse origin query for ripe,
+// which keeps only objects naming the origin.
+func TestOriginPrefixes(t *testing.T) {
+	ctx := context.Background()
+	srv := newIRRd(t, map[string]string{
+		"!gAS64496": "203.0.113.0/24 198.51.100.0/24 198.51.100.0/24",
+		"!6AS64496": "2001:db8::/32",
+		"!gAS64511": "D",
+		"!6AS64511": "D",
+	})
+	c := newClient(t, "{address: \""+srv.ln.Addr().String()+"\", rate_per_minute: 600}")
+	got, _, err := c.OriginPrefixes(ctx, 64496)
+	want := []netip.Prefix{netip.MustParsePrefix("198.51.100.0/24"), netip.MustParsePrefix("203.0.113.0/24"), netip.MustParsePrefix("2001:db8::/32")}
+	if err != nil || !slices.Equal(got, want) {
+		t.Fatalf("irrd = %v %v, want %v", got, err, want)
+	}
+	if got, _, err = c.OriginPrefixes(ctx, 64511); err != nil || len(got) != 0 {
+		t.Fatalf("irrd none = %v %v", got, err)
+	}
+
+	addr, _ := ripeServer(t, map[string]string{
+		"-r -s RIPE -i origin -T route,route6 AS64500": fixture(t, "ripe-route.txt"),
+		"-r -s RIPE -i origin -T route,route6 AS64501": fixture(t, "ripe-no-entries.txt"),
+	})
+	rc := newClient(t, "{address: \""+addr+"\", dialect: ripe, databases: [RIPE], rate_per_minute: 600}")
+	got, _, err = rc.OriginPrefixes(ctx, 64500)
+	if err != nil || !slices.Equal(got, []netip.Prefix{netip.MustParsePrefix("203.0.113.0/24")}) {
+		t.Fatalf("ripe = %v %v", got, err)
+	}
+	if got, _, err = rc.OriginPrefixes(ctx, 64501); err != nil || len(got) != 0 {
+		t.Fatalf("ripe none = %v %v", got, err)
+	}
+}

@@ -188,6 +188,10 @@ type Config struct {
 	// IRR is the IRR origin check per learned path (#214). Nil or disabled
 	// is off.
 	IRR *IRR `yaml:"irr"`
+	// Registry is registry hygiene (#289): a scheduled, read-only scan of
+	// IRR, RPKI, as-set, and PeeringDB drift. Nil or disabled is off. It
+	// never announces.
+	Registry *Registry `yaml:"registry"`
 
 	// Instance and Domain name this instance and its routing domain (POP)
 	// for multi-POP federation (#30). Instance defaults to Domain.

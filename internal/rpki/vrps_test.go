@@ -139,3 +139,25 @@ func TestVRPsEmpty(t *testing.T) {
 		t.Fatalf("nil table = %q, want unknown", got)
 	}
 }
+
+// #289: Covering lists every payload whose prefix covers the query,
+// shortest first, with its max length and origin.
+func TestVRPsCovering(t *testing.T) {
+	table := NewVRPs()
+	table.Apply([]Change{
+		{Prefix: p(t, "198.51.100.0/22"), MaxLen: 24, ASN: 64500},
+		{Prefix: p(t, "198.51.100.0/24"), MaxLen: 24, ASN: 64501},
+		{Prefix: p(t, "203.0.113.0/24"), MaxLen: 24, ASN: 64502},
+	})
+	got := table.Covering(p(t, "198.51.100.0/24"))
+	want := []plugin.RPKIVRP{
+		{Prefix: p(t, "198.51.100.0/22"), MaxLen: 24, ASN: 64500},
+		{Prefix: p(t, "198.51.100.0/24"), MaxLen: 24, ASN: 64501},
+	}
+	if len(got) != 2 || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("Covering = %+v, want %+v", got, want)
+	}
+	if got := table.Covering(p(t, "192.0.2.0/24")); len(got) != 0 {
+		t.Fatalf("uncovered = %+v", got)
+	}
+}

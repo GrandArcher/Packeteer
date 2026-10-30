@@ -333,6 +333,13 @@ The Events page (#173) lists what the controller reports to notifiers ([EVENTS.m
 
 `GET /api/events` (viewer) takes `severity` (`info`, `warning`, `critical`; a floor), `q`, `from` and `to` (RFC 3339), and `limit` (1 to 1000, default 200). It returns `events` (`time`, `source`, `severity`, `kind`, `message`, `fields`, `help_url`), `doc_base`, `stored`, `now`, and `since` when storage is off.
 
+## Registry
+
+The Registry page (`/registry.html`, #289) shows the last registry hygiene scan from `GET /api/registry` ([registry.md](registry.md)): the scan parts with their status (an unreachable registry shows as an error, never as clean) and each finding with its severity (Error, Warning, Info), registry, subject, message, and the exact diff. It refreshes every minute and with Refresh. It only reads unless an admin pushes.
+
+- **Suggest only.** A finding with no pushable change says to submit the diff to that registry yourself. ROAs are always like this.
+- **Push.** With `registry.push_enabled` on, an admin sees Review and push on a finding a plugin can apply. It asks once more, naming the registry, operation, and key, and Confirm push sends the finding id and the digest of the diff on screen. A refusal (the scan changed, already pushed, a registry error) is shown and the page reloads. Other roles see the diff and no button. Every push is in the audit log.
+
 ## Dashboard and first run
 
 The dashboard (`/`) is built for a first run from the stock image with nothing but a mounted config file (#49):

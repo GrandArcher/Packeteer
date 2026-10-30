@@ -817,6 +817,22 @@ IRR origin check per provider path (#214, not on a public edge). Off by default.
 | `as_sets` | none | Provider name to as-set (for example `transit-a: AS-EXAMPLE` or `AS64500:AS-CUSTOMERS`). Each path of that provider shows whether its origin is in the set, expanded recursively. Display only. The provider must be configured. |
 | `prefer_registered` | `false` | `true` refuses a new improvement onto a provider whose learned path for the prefix is `not_registered` (candidate `why` "IRR not registered"). With several paths from one provider the worst state counts. `unknown` never blocks, and the native path is never refused. An active improvement whose path becomes not registered is retired through the normal path. |
 
+### `registry`
+
+Registry hygiene (#289, not on a public edge). Off by default. A scheduled scan compares the learned RIB with IRR route objects, RPKI, the as-set, and PeeringDB, and lists each difference with the change that would fix it on the Registry page and `GET /api/registry`. The scan only reads and works with no credentials. Pushing a change to a registry is a separate switch, off by default, and each push needs an admin to confirm its diff. Nothing is announced and the learned RIB is unchanged. See [registry.md](registry.md). IRR checks use the `irr.sources`; RPKI checks use `rpki`. Not combined with `ixp`. A change needs a restart.
+
+| Key | Default | Meaning |
+|---|---|---|
+| `enabled` | `false` | `true` turns the scan on. A block that is not enabled must not set any other key. |
+| `asns` | none | Required when enabled. The origin ASNs the network announces. A learned route is the network's when its origin (the last AS of the path, or `asn` for a route with an empty path) is one of them. |
+| `as_set` | none | The operator's as-set (for example `AS-EXAMPLE`), checked against the ASNs that follow `asns` on learned paths. Needs an `irr.sources` entry. |
+| `interval` | `24h` | Time between scans. 1h-168h. The first scan runs a minute after start. |
+| `headroom_percent` | `20` | Percent added to the announced prefix counts when a PeeringDB max-prefix value is suggested. 1-1000. |
+| `irr.source` | `RIPE` | The `source:` of generated route objects. A change is pushable only for `RIPE`; any other value gives RPSL to submit by hand. |
+| `irr.mnt_by` | none | The `mnt-by:` of generated route objects. Required to push through a `ripe` source. |
+| `push_enabled` | `false` | `true` allows `POST /api/registry/push`, which needs the admin role and an authenticated API. Needs a `sources` entry. |
+| `sources` | none | Registry plugins (`type`, optional `name`, `config`): `peeringdb` ([Registry source `peeringdb`](#registry-source-peeringdb)) reads PeeringDB and can push; `ripe` ([Registry source `ripe`](#registry-source-ripe)) pushes route objects. Names must differ. |
+
 ### `linkouts`
 
 The "open in" links on the prefix, ASN, and exchange-peer views (#211). Display only: the controller makes no request to any listed site. Every key is checked at load, and unknown keys are errors. A change needs a restart. See [ui.md](ui.md#link-outs).
@@ -1952,6 +1968,25 @@ Reads a mounted file and answers from memory. It is read again when its size or 
 |---|---|---|
 | `path` | none | Required. The file inside the container, for example `/etc/packeteer/irr/routes.db`. |
 | `format` | `rpsl` | `rpsl` or `bgpq4`. |
+
+### Registry source `peeringdb`
+
+Reads the network record (`net`), exchange connections (`netixlan`), facilities, and contacts of each `registry.asns` entry with GET, and compares them with the announced prefix counts and the configured exchange sessions (the exchange's `ix_id` comes from the `lookup` block). A push sets `info_prefixes4`, `info_prefixes6`, or a connection `speed` with PUT; it re-reads the record first and refuses when the field no longer holds the value the diff showed. Requests are paced as for `lookup`; redirects are not followed. The API key is `PACKETEER_PEERINGDB_API_KEY`, the same variable as `lookup`; a scan works without it, a push needs it.
+
+| Key | Default | Meaning |
+|---|---|---|
+| `base_url` | `https://www.peeringdb.com` | PeeringDB API. https is required when a key is set. |
+| `timeout` | `30s` | One request. 1s-2m. |
+
+### Registry source `ripe`
+
+Creates or deletes one `route` or `route6` object through the RIPE database REST API after an admin confirmed the diff. It reads nothing; the findings come from `irr.sources`. The maintainer credentials are `PACKETEER_RIPE_USER` and `PACKETEER_RIPE_PASSWORD`, read from the environment only when a change is pushed and sent only as basic authentication to `base_url`. Redirects are not followed.
+
+| Key | Default | Meaning |
+|---|---|---|
+| `base_url` | `https://rest.db.ripe.net` | RIPE database REST API. https, with a host and no credentials, query, or fragment. |
+| `source` | `RIPE` | `RIPE`, or `TEST` for the RIPE test database. |
+| `timeout` | `30s` | One request. 1s-2m. |
 
 ### Detector `baseline`
 

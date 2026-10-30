@@ -164,6 +164,7 @@ func (c *Config) applyDefaults() {
 	c.normalizeAnomaly()
 	c.normalizeRPKI()
 	c.normalizeIRR()
+	c.normalizeRegistry()
 	if c.Instance == "" {
 		c.Instance = c.Domain
 	}

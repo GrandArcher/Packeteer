@@ -43,6 +43,7 @@ func (c *Config) Validate() error {
 	c.validateSynthesize(add)
 	c.validateRPKI(add)
 	c.validateIRR(add)
+	c.validateRegistry(add)
 	c.validateInject(add)
 	c.validateIXP(add)
 	c.validateHerd(add)

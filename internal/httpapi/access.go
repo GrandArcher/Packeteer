@@ -107,6 +107,8 @@ func (s *Server) routeTable() []route {
 		{"POST /api/quarantine/release", operator, s.handleQuarantineRelease},
 		{"GET /api/leaks", viewer, s.handleLeaks},
 		{"POST /api/leaks/clear", operator, s.handleLeakClear},
+		{"GET /api/registry", viewer, s.handleRegistry},
+		{"POST /api/registry/push", admin, s.handleRegistryPush},
 		{"GET /api/troubleshoot", viewer, s.handleToolStatus},
 		{"GET /api/troubleshoot/lookingglass", viewer, s.handleLookingGlass},
 		{"POST /api/troubleshoot/probe", operator, s.handleToolProbe},

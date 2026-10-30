@@ -40,6 +40,10 @@ func (f *fakeIRR) ASSetMembers(_ context.Context, name string) ([]uint32, time.T
 	return f.sets[name], f.at, nil
 }
 
+func (f *fakeIRR) OriginPrefixes(context.Context, uint32) ([]netip.Prefix, time.Time, error) {
+	return nil, f.at, f.err
+}
+
 func (f *fakeIRR) ASName(_ context.Context, asn uint32) (string, time.Time, error) {
 	if f.noSets {
 		return "", time.Time{}, plugin.ErrIRRUnsupported

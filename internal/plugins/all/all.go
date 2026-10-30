@@ -39,6 +39,8 @@ import (
 	_ "github.com/GrandArcher/Packeteer/internal/plugins/prober/tcp"               // tcp prober
 	_ "github.com/GrandArcher/Packeteer/internal/plugins/prober/twamp"             // twamp prober (TWAMP-Light sender, reordering)
 	_ "github.com/GrandArcher/Packeteer/internal/plugins/prober/udp"               // udp prober
+	_ "github.com/GrandArcher/Packeteer/internal/plugins/registry/peeringdb"       // PeeringDB registry hygiene (reads, confirmed PUT)
+	_ "github.com/GrandArcher/Packeteer/internal/plugins/registry/ripe"            // RIPE database route object push (confirmed only)
 	_ "github.com/GrandArcher/Packeteer/internal/plugins/ribsource/bmp"            // BMP monitoring station (RIB source, leak source)
 	_ "github.com/GrandArcher/Packeteer/internal/plugins/rpki/ripestat"            // RIPEstat RPKI lookup, display only
 	_ "github.com/GrandArcher/Packeteer/internal/plugins/rpki/rtr"                 // RTR RPKI origin validation source

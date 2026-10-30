@@ -15,6 +15,7 @@ import (
 	"log/slog"
 	"net/netip"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -291,6 +292,26 @@ func (s *Source) ASSetMembers(_ context.Context, name string) ([]uint32, time.Ti
 	if err != nil {
 		return nil, time.Time{}, err
 	}
+	return out, d.at, nil
+}
+
+// OriginPrefixes returns the prefixes the file registers for asn. A bgpq4
+// range counts as its base prefix.
+func (s *Source) OriginPrefixes(_ context.Context, asn uint32) ([]netip.Prefix, time.Time, error) {
+	d, err := s.load()
+	if err != nil {
+		return nil, time.Time{}, err
+	}
+	var out []netip.Prefix
+	for p, spans := range d.routes {
+		for _, sp := range spans {
+			if sp.origin == asn {
+				out = append(out, p)
+				break
+			}
+		}
+	}
+	slices.SortFunc(out, func(a, b netip.Prefix) int { return a.Addr().Compare(b.Addr()) })
 	return out, d.at, nil
 }
 

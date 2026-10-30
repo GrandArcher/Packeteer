@@ -8,25 +8,25 @@ import (
 )
 
 func TestParseKey(t *testing.T) {
-	if k, err := parseKey("  "); err != nil || k != "" {
+	if k, err := ParseKey("  "); err != nil || k != "" {
 		t.Fatalf("blank: %q %v", k, err)
 	}
-	if k, err := parseKey(" " + docKey + "\n"); err != nil || k != docKey {
+	if k, err := ParseKey(" " + docKey + "\n"); err != nil || k != docKey {
 		t.Fatalf("trimmed: %q %v", k, err)
 	}
 	for _, bad := range []string{"a b", "a\tb", "a\x00b", "k\u00e9y", strings.Repeat("k", maxKeyLen+1)} {
-		if _, err := parseKey(bad); err == nil {
+		if _, err := ParseKey(bad); err == nil {
 			t.Errorf("%q accepted", bad)
 		}
 	}
 }
 
 func TestParseBaseDefaultsAndTrims(t *testing.T) {
-	u, err := parseBase("", "")
+	u, err := ParseBase("", "")
 	if err != nil || u.String() != DefaultBaseURL {
 		t.Fatalf("default %v %v", u, err)
 	}
-	u, err = parseBase("https://pdb.example.invalid/prefix/", docKey)
+	u, err = ParseBase("https://pdb.example.invalid/prefix/", docKey)
 	if err != nil || u.String() != "https://pdb.example.invalid/prefix" {
 		t.Fatalf("trim %v %v", u, err)
 	}
@@ -71,11 +71,11 @@ func TestParseIXFURL(t *testing.T) {
 func TestRedact(t *testing.T) {
 	key := "a b&c"
 	msg := "got " + key + " and " + url.QueryEscape(key) + " and " + url.PathEscape(key)
-	got := redact(msg, key)
+	got := Redact(msg, key)
 	if strings.Contains(got, "a b") || strings.Contains(got, "a+b") || strings.Contains(got, "a%20b") {
-		t.Fatalf("redact left the key: %q", got)
+		t.Fatalf("Redact left the key: %q", got)
 	}
-	if redact("plain", "") != "plain" {
+	if Redact("plain", "") != "plain" {
 		t.Fatal("empty key changed the message")
 	}
 }

@@ -181,3 +181,22 @@ func TestFileConfig(t *testing.T) {
 		t.Fatalf("default format = %q", s.cfg.Format)
 	}
 }
+
+// #289: the prefixes registered for an origin, from route objects and from
+// bgpq4 lists (a range counts as its base prefix).
+func TestOriginPrefixes(t *testing.T) {
+	ctx := context.Background()
+	s := newSource(t, "{path: "+copyFixture(t, "irr.db")+"}")
+	got, _, err := s.OriginPrefixes(ctx, 64496)
+	want := []netip.Prefix{netip.MustParsePrefix("198.51.100.0/24"), netip.MustParsePrefix("2001:db8::/32")}
+	if err != nil || !slices.Equal(got, want) {
+		t.Fatalf("rpsl = %v %v, want %v", got, err, want)
+	}
+	if got, _, _ = s.OriginPrefixes(ctx, 64511); len(got) != 0 {
+		t.Fatalf("unknown origin = %v", got)
+	}
+	b := newSource(t, "{path: "+copyFixture(t, "bgpq4.json")+", format: bgpq4}")
+	if got, _, err = b.OriginPrefixes(ctx, 64497); err != nil || !slices.Equal(got, []netip.Prefix{netip.MustParsePrefix("203.0.113.0/24")}) {
+		t.Fatalf("bgpq4 = %v %v", got, err)
+	}
+}

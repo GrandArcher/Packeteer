@@ -193,6 +193,38 @@ func (c *Client) ASSetMembers(ctx context.Context, name string) ([]uint32, time.
 	return out, time.Now(), nil
 }
 
+// OriginPrefixes returns the prefixes of the route and route6 objects whose
+// origin is asn: !g and !6 for irrd, an inverse origin query for ripe.
+func (c *Client) OriginPrefixes(ctx context.Context, asn uint32) ([]netip.Prefix, time.Time, error) {
+	key := "AS" + strconv.FormatUint(uint64(asn), 10)
+	var out []netip.Prefix
+	if c.cfg.Dialect == DialectIRRd {
+		for _, cmd := range []string{"!g", "!6"} {
+			body, _, err := c.irrd(ctx, cmd+key)
+			if err != nil {
+				return nil, time.Time{}, err
+			}
+			for _, tok := range strings.Fields(body) {
+				if p, err := netip.ParsePrefix(tok); err == nil {
+					out = append(out, p.Masked())
+				}
+			}
+		}
+	} else {
+		objs, err := c.ripeObjects(ctx, "-i origin -T route,route6 "+key)
+		if err != nil {
+			return nil, time.Time{}, err
+		}
+		for _, o := range objs {
+			if rt, ok := irr.Route(o); ok && rt.Origin == asn {
+				out = append(out, rt.Prefix)
+			}
+		}
+	}
+	slices.SortFunc(out, func(a, b netip.Prefix) int { return a.Addr().Compare(b.Addr()) })
+	return slices.Compact(out), time.Now(), nil
+}
+
 // ASName returns the as-name of the aut-num object for asn.
 func (c *Client) ASName(ctx context.Context, asn uint32) (string, time.Time, error) {
 	key := "AS" + strconv.FormatUint(uint64(asn), 10)
