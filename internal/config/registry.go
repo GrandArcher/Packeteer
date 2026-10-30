@@ -96,6 +96,9 @@ func (c *Config) validateRegistry(add func(string, ...any)) {
 	if r.ASSet != "" && !irr.ValidASSetName(r.ASSet) {
 		add("registry.as_set: %q is not an as-set name (for example AS-EXAMPLE)", r.ASSet)
 	}
+	if r.ASSet != "" && !c.IRROn() {
+		add("registry.as_set needs irr.enabled with an irr.sources entry to read the as-set from")
+	}
 	if r.Interval < registry.MinInterval || r.Interval > registry.MaxInterval {
 		add("registry.interval %s must be between %s and %s", r.Interval, registry.MinInterval, registry.MaxInterval)
 	}

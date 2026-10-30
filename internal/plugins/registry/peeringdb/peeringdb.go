@@ -392,7 +392,9 @@ func (c *Checker) Push(ctx context.Context, ch plugin.RegistryChange) error {
 		return fmt.Errorf("peeringdb: bad value %q", ch.New)
 	}
 	path := fmt.Sprintf("/api/%s/%d", ch.Class, id)
-	cur, err := c.get(ctx, path, nil)
+	// A detail read defaults to depth 2, which expands the *_set fields;
+	// depth 0 leaves them out so the PUT carries only the record's own fields.
+	cur, err := c.get(ctx, path, url.Values{"depth": {"0"}})
 	if err != nil {
 		return err
 	}

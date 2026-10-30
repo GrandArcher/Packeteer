@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
@@ -55,6 +56,12 @@ func newFake(t *testing.T) (*fakePDB, *Checker) {
 				return
 			}
 			data(w, []any{body})
+			return
+		}
+		if r.URL.Query().Get("depth") != "0" {
+			expanded := maps.Clone(f.net)
+			expanded["netixlan_set"] = []any{map[string]any{"id": 7}}
+			data(w, []any{expanded})
 			return
 		}
 		data(w, []any{f.net})
@@ -236,7 +243,7 @@ func TestMaxPrefixHeadroomAndMissingNet(t *testing.T) {
 		t.Fatalf("low headroom = %+v", mp)
 	}
 	if _, ok := kinds(fs)["pdb_maxprefix|AS64496 info_prefixes6"]; ok {
-		t.Fatal("6 announced with 2 listed and 20% headroom is enough")
+		t.Fatal("1 IPv6 prefix announced with 2 listed and 20% headroom is enough")
 	}
 
 	ff := facts()
@@ -247,8 +254,9 @@ func TestMaxPrefixHeadroomAndMissingNet(t *testing.T) {
 	}
 }
 
-// #289: Push re-reads the record, PUTs it with only the confirmed field
-// changed and the key in the Authorization header.
+// #289: Push re-reads the record at depth 0, PUTs it with only the
+// confirmed field changed, no expanded set, and the key in the
+// Authorization header.
 func TestPush(t *testing.T) {
 	f, c := newFake(t)
 	ch := plugin.RegistryChange{Registry: "peeringdb", Op: "update_field", Class: "net", Key: "42", Field: "info_prefixes4", Old: "1", New: "4"}
@@ -261,6 +269,9 @@ func TestPush(t *testing.T) {
 	put := f.puts[0]
 	if put["info_prefixes4"] != float64(4) || put["info_prefixes6"] != float64(10) || put["name"] != "Example Net" || put["id"] != float64(42) {
 		t.Fatalf("put body = %v", put)
+	}
+	if _, ok := put["netixlan_set"]; ok {
+		t.Fatalf("put body carries the expanded netixlan_set: %v", put)
 	}
 }
 

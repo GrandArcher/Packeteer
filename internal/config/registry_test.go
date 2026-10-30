@@ -7,6 +7,9 @@ import (
 )
 
 const registryBlock = `
+irr:
+  enabled: true
+  sources: [{type: whois, config: {address: "whois.example.net:43"}}]
 registry:
   enabled: true
   asns: [64496]
@@ -71,6 +74,7 @@ func TestRegistryRejects(t *testing.T) {
 		"no asns":         {"registry:\n  enabled: true\n", "registry.asns: at least one"},
 		"zero asn":        {"registry:\n  enabled: true\n  asns: [0]\n", "0 is not an AS number"},
 		"bad as-set":      {"registry:\n  enabled: true\n  asns: [64496]\n  as_set: nope\n", "not an as-set name"},
+		"as-set no irr":   {"registry:\n  enabled: true\n  asns: [64496]\n  as_set: AS-EXAMPLE\n", "registry.as_set needs irr.enabled"},
 		"short interval":  {"registry:\n  enabled: true\n  asns: [64496]\n  interval: 1m\n", "registry.interval"},
 		"headroom":        {"registry:\n  enabled: true\n  asns: [64496]\n  headroom_percent: 5000\n", "registry.headroom_percent"},
 		"bad mnt":         {"registry:\n  enabled: true\n  asns: [64496]\n  irr: {mnt_by: 'a b'}\n", "not a maintainer name"},

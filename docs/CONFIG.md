@@ -826,7 +826,7 @@ Registry hygiene (#289, not on a public edge). Off by default. A scheduled scan 
 |---|---|---|
 | `enabled` | `false` | `true` turns the scan on. A block that is not enabled must not set any other key. |
 | `asns` | none | Required when enabled. The origin ASNs the network announces. A learned route is the network's when its origin (the last AS of the path, or `asn` for a route with an empty path) is one of them. |
-| `as_set` | none | The operator's as-set (for example `AS-EXAMPLE`), checked against the ASNs that follow `asns` on learned paths. With `asn` in `asns`, the edge's own AS is not on its paths, so only paths through a provider with `type: customer` count; with no such provider the as-set check is skipped ([registry.md](registry.md)). Needs an `irr.sources` entry. |
+| `as_set` | none | The operator's as-set (for example `AS-EXAMPLE`), checked against the ASNs that follow `asns` on learned paths. With `asn` in `asns`, the edge's own AS is not on its paths, so only paths through a provider with `type: customer` count; with no such provider the as-set check is skipped ([registry.md](registry.md)). Needs `irr.enabled` with an `irr.sources` entry; the config is rejected without it. |
 | `interval` | `24h` | Time between scans. 1h-168h. The first scan runs a minute after start. |
 | `headroom_percent` | `20` | Percent added to the announced prefix counts when a PeeringDB max-prefix value is suggested. 1-1000. |
 | `irr` | `RIPE` source | The RPSL of generated route objects: `source` is the `source:` attribute (default `RIPE`; a change is pushable only for `RIPE` or `TEST`, matching the `ripe` source; any other value gives RPSL to submit by hand) and `mnt_by` is the `mnt-by:` attribute (required to push through a `ripe` source). |
