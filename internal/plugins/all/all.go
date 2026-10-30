@@ -12,6 +12,7 @@ import (
 	_ "github.com/GrandArcher/Packeteer/internal/plugins/exporter/kafka"          // Kafka events, decisions, flows
 	_ "github.com/GrandArcher/Packeteer/internal/plugins/exporter/nats"           // NATS events, decisions, flows
 	_ "github.com/GrandArcher/Packeteer/internal/plugins/exporter/otlp"           // OpenTelemetry spans, logs, and metrics
+	_ "github.com/GrandArcher/Packeteer/internal/plugins/exporter/snmpagent"      // read-only SNMP agent with the Packeteer MIB
 	_ "github.com/GrandArcher/Packeteer/internal/plugins/federation/mtls"         // mTLS multi-POP federation
 	_ "github.com/GrandArcher/Packeteer/internal/plugins/grpcplugin"              // grpc prober/source/notifier (long-running)
 	_ "github.com/GrandArcher/Packeteer/internal/plugins/irr/file"                // local IRR file source (RPSL or bgpq4)
@@ -25,6 +26,7 @@ import (
 	_ "github.com/GrandArcher/Packeteer/internal/plugins/lookup/peeringdb"        // PeeringDB / IX-F directory (read-only)
 	_ "github.com/GrandArcher/Packeteer/internal/plugins/notifier/smtp"           // smtp notifier
 	_ "github.com/GrandArcher/Packeteer/internal/plugins/notifier/snmptrap"       // snmptrap notifier
+	_ "github.com/GrandArcher/Packeteer/internal/plugins/notifier/syslog"         // RFC 5424 syslog notifier
 	_ "github.com/GrandArcher/Packeteer/internal/plugins/notifier/webhook"        // webhook notifier
 	_ "github.com/GrandArcher/Packeteer/internal/plugins/policy/maintenance"      // maintenance-window policy
 	_ "github.com/GrandArcher/Packeteer/internal/plugins/policy/rules"            // prefix/ASN/country routing policy

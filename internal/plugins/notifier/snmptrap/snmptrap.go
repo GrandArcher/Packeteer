@@ -1,14 +1,13 @@
 // Package snmptrap implements the "snmptrap" notifier: each event is sent
-// as an SNMPv2c or SNMPv3 trap to one receiver. The community and SNMPv3
-// passphrases are read from environment variables named in config.
+// as an SNMPv2c or SNMPv3 trap, or as an inform that the receiver
+// acknowledges, to one receiver. The community and SNMPv3 passphrases are
+// read from environment variables named in config.
 package snmptrap
 
 import (
 	"context"
-	"encoding/hex"
 	"fmt"
 	"net/netip"
-	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -16,16 +15,12 @@ import (
 
 	"github.com/gosnmp/gosnmp"
 
+	"github.com/GrandArcher/Packeteer/internal/plugins/snmpcfg"
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
 )
 
 // TypeName is the plugin type used in config.
 const TypeName = "snmptrap"
-
-// DefaultEnterpriseOID is NET-SNMP's netSnmpPlaypen arc, set aside for
-// local experiments. Packeteer has no enterprise number; set
-// enterprise_oid to your own arc for production receivers.
-const DefaultEnterpriseOID = "1.3.6.1.4.1.8072.9999.9999.7717"
 
 // Standard OIDs.
 const (
@@ -39,8 +34,10 @@ const (
 	DefaultTimeout = 5 * time.Second
 	MaxTimeout     = time.Minute
 	maxValue       = 1024
-	minPassphrase  = 8
-	maxUser        = 32
+
+	// informRetries is how often an unacknowledged inform is sent again.
+	// The notifier timeout covers all attempts.
+	informRetries = 2
 )
 
 func init() { plugin.Notifiers.Register(TypeName, New) }
@@ -58,6 +55,7 @@ type Config struct {
 	PrivProtocol  string        `yaml:"priv_protocol"`
 	PrivEnv       string        `yaml:"priv_env"`
 	EngineID      string        `yaml:"engine_id"`
+	Inform        bool          `yaml:"inform"`
 	EnterpriseOID string        `yaml:"enterprise_oid"`
 	Timeout       time.Duration `yaml:"timeout"`
 
@@ -74,16 +72,12 @@ type Notifier struct {
 	flags   gosnmp.SnmpV3MsgFlags
 	usm     *gosnmp.UsmSecurityParameters
 	base    string
+	inform  bool
 	timeout time.Duration
 	gate    *plugin.EventGate
 	started time.Time
 	now     func() time.Time
 }
-
-var (
-	envName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
-	oidRe   = regexp.MustCompile(`^1(\.(0|[1-9][0-9]{0,9}))+$`)
-)
 
 // New is the plugin factory. It does no network I/O.
 func New(c plugin.Config, e plugin.Env) (plugin.Notifier, error) {
@@ -117,32 +111,16 @@ func New(c plugin.Config, e plugin.Env) (plugin.Notifier, error) {
 		return nil, fmt.Errorf("port %d must be between 1 and 65535", cfg.Port)
 	}
 	n.port = uint16(port)
-	n.base = DefaultEnterpriseOID
-	if cfg.EnterpriseOID != "" {
-		n.base = strings.TrimPrefix(cfg.EnterpriseOID, ".")
-		if !oidRe.MatchString(n.base) {
-			return nil, fmt.Errorf("enterprise_oid %q is not a numeric OID", cfg.EnterpriseOID)
-		}
+	if n.base, err = snmpcfg.EnterpriseOID(cfg.EnterpriseOID); err != nil {
+		return nil, err
 	}
 	if cfg.Timeout < 0 || cfg.Timeout > MaxTimeout {
 		return nil, fmt.Errorf("timeout %s must be between 0 and %s", cfg.Timeout, MaxTimeout)
 	}
+	n.inform = cfg.Inform
 	n.timeout = cfg.Timeout
 	if n.timeout == 0 {
 		n.timeout = DefaultTimeout
-	}
-	secret := func(key, name string, minLen int) (string, error) {
-		if !envName.MatchString(name) {
-			return "", fmt.Errorf("%s is required and must be an environment variable name", key)
-		}
-		v := getenv(name)
-		if len(v) < minLen {
-			if v == "" {
-				return "", fmt.Errorf("%s: %s is not set", key, name)
-			}
-			return "", fmt.Errorf("%s: %s must be at least %d characters", key, name, minLen)
-		}
-		return v, nil
 	}
 	switch cfg.Version {
 	case "", "2c", "v2c":
@@ -151,7 +129,7 @@ func New(c plugin.Config, e plugin.Env) (plugin.Notifier, error) {
 			cfg.PrivProtocol != "" || cfg.PrivEnv != "" || cfg.EngineID != "" {
 			return nil, fmt.Errorf("version 2c uses community_env only")
 		}
-		if n.comm, err = secret("community_env", cfg.CommunityEnv, 1); err != nil {
+		if n.comm, err = snmpcfg.Secret(getenv, "community_env", cfg.CommunityEnv, 1); err != nil {
 			return nil, err
 		}
 	case "3", "v3":
@@ -159,52 +137,21 @@ func New(c plugin.Config, e plugin.Env) (plugin.Notifier, error) {
 		if cfg.CommunityEnv != "" {
 			return nil, fmt.Errorf("community_env is only used with version 2c")
 		}
-		usm := &gosnmp.UsmSecurityParameters{AuthenticationProtocol: gosnmp.NoAuth, PrivacyProtocol: gosnmp.NoPriv}
-		if usm.UserName, err = secret("username_env", cfg.UsernameEnv, 1); err != nil {
+		usm, flags, err := snmpcfg.V3{UsernameEnv: cfg.UsernameEnv, SecurityLevel: cfg.SecurityLevel,
+			AuthProtocol: cfg.AuthProtocol, AuthEnv: cfg.AuthEnv, PrivProtocol: cfg.PrivProtocol, PrivEnv: cfg.PrivEnv}.USM(getenv)
+		if err != nil {
 			return nil, err
 		}
-		if len(usm.UserName) > maxUser {
-			return nil, fmt.Errorf("username_env: longer than %d characters", maxUser)
-		}
-		id, err := hex.DecodeString(strings.TrimPrefix(strings.ToLower(cfg.EngineID), "0x"))
-		if err != nil || len(id) < 5 || len(id) > 32 {
-			return nil, fmt.Errorf("engine_id is required for version 3: 5 to 32 bytes of hex")
-		}
-		usm.AuthoritativeEngineID = string(id)
-		level := cfg.SecurityLevel
-		if level == "" {
-			level = "authPriv"
-		}
-		switch level {
-		case "noAuthNoPriv":
-			n.flags = gosnmp.NoAuthNoPriv
-		case "authNoPriv":
-			n.flags = gosnmp.AuthNoPriv
-		case "authPriv":
-			n.flags = gosnmp.AuthPriv
-		default:
-			return nil, fmt.Errorf("security_level %q is invalid (want noAuthNoPriv, authNoPriv, authPriv)", cfg.SecurityLevel)
-		}
-		if n.flags == gosnmp.NoAuthNoPriv && (cfg.AuthProtocol != "" || cfg.AuthEnv != "") {
-			return nil, fmt.Errorf("security_level noAuthNoPriv does not use auth")
-		}
-		if n.flags != gosnmp.AuthPriv && (cfg.PrivProtocol != "" || cfg.PrivEnv != "") {
-			return nil, fmt.Errorf("security_level %s does not use privacy", level)
-		}
-		if n.flags != gosnmp.NoAuthNoPriv {
-			if usm.AuthenticationProtocol, err = authProto(cfg.AuthProtocol); err != nil {
-				return nil, err
+		n.flags = flags
+		if cfg.Inform {
+			// The receiver is authoritative for an inform, so its engine ID
+			// is discovered, not configured.
+			if cfg.EngineID != "" {
+				return nil, fmt.Errorf("engine_id is not used with inform: the receiver's engine ID is discovered")
 			}
-			if usm.AuthenticationPassphrase, err = secret("auth_env", cfg.AuthEnv, minPassphrase); err != nil {
-				return nil, err
-			}
-		}
-		if n.flags == gosnmp.AuthPriv {
-			if usm.PrivacyProtocol, err = privProto(cfg.PrivProtocol); err != nil {
-				return nil, err
-			}
-			if usm.PrivacyPassphrase, err = secret("priv_env", cfg.PrivEnv, minPassphrase); err != nil {
-				return nil, err
+		} else {
+			if usm.AuthoritativeEngineID, err = snmpcfg.EngineID(cfg.EngineID); err != nil {
+				return nil, fmt.Errorf("%w (required for version 3 traps)", err)
 			}
 		}
 		n.usm = usm
@@ -212,42 +159,6 @@ func New(c plugin.Config, e plugin.Env) (plugin.Notifier, error) {
 		return nil, fmt.Errorf("version %q is invalid (want 2c or 3)", cfg.Version)
 	}
 	return n, nil
-}
-
-func authProto(s string) (gosnmp.SnmpV3AuthProtocol, error) {
-	switch strings.ToUpper(s) {
-	case "", "SHA":
-		return gosnmp.SHA, nil
-	case "SHA224":
-		return gosnmp.SHA224, nil
-	case "SHA256":
-		return gosnmp.SHA256, nil
-	case "SHA384":
-		return gosnmp.SHA384, nil
-	case "SHA512":
-		return gosnmp.SHA512, nil
-	case "MD5":
-		return gosnmp.MD5, nil
-	}
-	return 0, fmt.Errorf("auth_protocol %q is invalid (want SHA, SHA224, SHA256, SHA384, SHA512, MD5)", s)
-}
-
-func privProto(s string) (gosnmp.SnmpV3PrivProtocol, error) {
-	switch strings.ToUpper(s) {
-	case "", "AES":
-		return gosnmp.AES, nil
-	case "AES192":
-		return gosnmp.AES192, nil
-	case "AES256":
-		return gosnmp.AES256, nil
-	case "AES192C":
-		return gosnmp.AES192C, nil
-	case "AES256C":
-		return gosnmp.AES256C, nil
-	case "DES":
-		return gosnmp.DES, nil
-	}
-	return 0, fmt.Errorf("priv_protocol %q is invalid (want AES, AES192, AES256, AES192C, AES256C, DES)", s)
 }
 
 // EventGate implements plugin.Gated.
@@ -322,6 +233,10 @@ func (n *Notifier) Notify(ctx context.Context, e plugin.Event) error {
 		Context:   ctx,
 		MaxOids:   gosnmp.MaxOids,
 	}
+	if n.inform {
+		g.Retries = informRetries
+		g.Timeout = timeout / (informRetries + 1)
+	}
 	if n.version == gosnmp.Version3 {
 		g.SecurityModel = gosnmp.UserSecurityModel
 		g.MsgFlags = n.flags
@@ -331,7 +246,7 @@ func (n *Notifier) Notify(ctx context.Context, e plugin.Event) error {
 		return fmt.Errorf("snmptrap: %w", err)
 	}
 	defer g.Conn.Close()
-	if _, err := g.SendTrap(gosnmp.SnmpTrap{Variables: n.Varbinds(e)}); err != nil {
+	if _, err := g.SendTrap(gosnmp.SnmpTrap{Variables: n.Varbinds(e), IsInform: n.inform}); err != nil {
 		return fmt.Errorf("snmptrap: %w", err)
 	}
 	return nil

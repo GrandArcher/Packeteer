@@ -17,6 +17,7 @@ exporters:
 | `nats` | `events`, `decisions`, `flows` (default `events`, `decisions`) | JSON, core NATS subject `<subject_prefix>.<stream>` |
 | `otlp` | `decisions` (default), `events`, `metrics` | OTLP/HTTP JSON: a span per decision change (`/v1/traces`), a log record per event (`/v1/logs`), gauges and sums per metrics snapshot (`/v1/metrics`) |
 | `influxdb` | `events`, `decisions` (default), `metrics` | line protocol to the InfluxDB v2 write API (`/api/v2/write`) |
+| `snmpagent` | `metrics` | a read-only SNMP agent that serves the latest snapshot as the Packeteer MIB ([monitoring.md](monitoring.md)); it takes the stream but pushes nothing |
 | `ipfix` | `flows` | IPFIX (RFC 7011) over UDP, readable by pmacct, GoFlow2, ElastiFlow, Kentik and other collectors |
 
 Keys are in [CONFIG.md](CONFIG.md#exporters). Credentials come from environment variables named in the config.

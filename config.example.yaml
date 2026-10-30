@@ -698,6 +698,13 @@ plugin_dir: /etc/packeteer/plugins
 #   - type: ipfix                     # needs the flow source
 #     config:
 #       address: "collector.example.net:2055"
+#   - type: snmpagent                 # read-only SNMP agent, docs/monitoring.md
+#     config:
+#       listen: 192.0.2.10:161        # an address on this host; needs http.listen
+#       username_env: PACKETEER_SNMP_USER   # v3 authPriv (recommended)
+#       auth_env: PACKETEER_SNMP_AUTH
+#       priv_env: PACKETEER_SNMP_PRIV
+#       allow_from: [192.0.2.0/24]
 # Notifiers (docs/EVENTS.md). Each has its own events filter, min_severity,
 # and rate_limit. Secrets come from the container environment.
 # notifiers:
@@ -731,6 +738,12 @@ plugin_dir: /etc/packeteer/plugins
 #     config:
 #       address: 192.0.2.162
 #       community_env: PACKETEER_TRAP_COMMUNITY
+#       # inform: true                  # the receiver acknowledges each event
+#   - type: syslog                      # RFC 5424; docs/monitoring.md
+#     config:
+#       address: 192.0.2.51
+#       transport: tcp                  # udp, tcp, or tls
+#       min_severity: warning
 
 # Email report subscriptions (#34): a stored report as CSV on a UTC
 # schedule, sent by an smtp notifier (name it, or use its type). Needs

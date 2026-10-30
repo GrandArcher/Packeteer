@@ -270,3 +270,41 @@ exporters:
 		t.Fatalf("metrics stream, http on: code %d stderr %q", code, msg)
 	}
 }
+
+func TestCheckMonitoringConfig(t *testing.T) {
+	cfg := func(listen string) string {
+		return `mode: observe
+asn: 64512
+router_id: 192.0.2.10
+http: {listen: ` + listen + `}
+providers:
+  - {name: a, source_ip: 192.0.2.11, next_hop: 192.0.2.1}
+exporters:
+  - type: snmpagent
+    name: agent
+    config: {listen: "127.0.0.1:161", username_env: SNMP_USER, auth_env: SNMP_AUTH, priv_env: SNMP_PRIV}
+notifiers:
+  - type: snmptrap
+    config: {address: 192.0.2.162, community_env: SNMP_COMMUNITY, inform: true}
+  - type: syslog
+    config: {address: 192.0.2.51, transport: tcp, min_severity: warning}
+`
+	}
+	env := func(k string) string {
+		return map[string]string{"SNMP_USER": "nms", "SNMP_AUTH": "auth-pass-123", "SNMP_PRIV": "priv-pass-456", "SNMP_COMMUNITY": "c"}[k]
+	}
+	check := func(body string) (int, string) {
+		path := filepath.Join(t.TempDir(), "c.yaml")
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		var out, errOut bytes.Buffer
+		return run(context.Background(), []string{"-check", "-config", path}, env, &out, &errOut), errOut.String()
+	}
+	if code, msg := check(cfg(`"127.0.0.1:8080"`)); code != 0 {
+		t.Fatalf("code %d stderr %q", code, msg)
+	}
+	if code, msg := check(cfg(`""`)); code != 1 || !strings.Contains(msg, "agent") || !strings.Contains(msg, "http.listen") {
+		t.Fatalf("the agent reads /metrics, so it needs http.listen: code %d stderr %q", code, msg)
+	}
+}

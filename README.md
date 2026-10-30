@@ -253,8 +253,8 @@ Almost every part of Packeteer is a plugin selected by `type` in the config. Unk
 - **Scorers:** `weighted` (default), `commit`, `cost`.
 - **Policies:** `rules` (ignore, allow, deny, static, or VIP by prefix, origin ASN, or country) and `maintenance`.
 - **Announcers:** `gobgp` for outbound, plus the `gobgp` inbound and mitigation announcers ([inbound.md](docs/inbound.md), [mitigation.md](docs/mitigation.md)).
-- **Notifiers:** `webhook` (JSON, Slack, Teams, PagerDuty, templates), `smtp`, `snmptrap` ([EVENTS.md](docs/EVENTS.md)).
-- **Exporters:** `kafka`, `nats`, `otlp`, `influxdb`, `ipfix` (events, decisions, flows tagged with the chosen provider, and metric snapshots, [docs/export.md](docs/export.md)).
+- **Notifiers:** `webhook` (JSON, Slack, Teams, PagerDuty, templates), `smtp`, `snmptrap` (traps and informs), `syslog` ([EVENTS.md](docs/EVENTS.md), [docs/monitoring.md](docs/monitoring.md)).
+- **Exporters:** `kafka`, `nats`, `otlp`, `influxdb`, `ipfix`, `snmpagent` (a read-only SNMP agent with a MIB for any NMS) (events, decisions, flows tagged with the chosen provider, and metric snapshots, [docs/export.md](docs/export.md)).
 - **Telemetry:** `snmp` and `fixed` (labs only).
 - **Storage:** `sqlite` (report history, users, audit log, dashboards).
 - **Detection and safety:** detector `baseline` (flow anomaly detection, [anomaly.md](docs/anomaly.md)) and leak_source `bmp` and `rislive` ([leak-watch.md](docs/leak-watch.md)).

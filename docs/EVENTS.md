@@ -1,6 +1,6 @@
 # Events and notifications
 
-Packeteer emits the events below to every configured notifier (`notifiers:` in the config). Notifiers are plugins: `webhook` (with `slack`, `teams`, and `pagerduty` presets, or a custom template for SMS and chat gateways), `smtp`, `snmptrap`, and the out-of-process `exec` and `grpc`. Keys are in [CONFIG.md](CONFIG.md#notifier-filters-every-notifier).
+Packeteer emits the events below to every configured notifier (`notifiers:` in the config). Notifiers are plugins: `webhook` (with `slack`, `teams`, and `pagerduty` presets, or a custom template for SMS and chat gateways), `smtp`, `snmptrap`, `syslog`, and the out-of-process `exec` and `grpc`. Keys are in [CONFIG.md](CONFIG.md#notifier-filters-every-notifier).
 
 The same events, except `audit.recorded`, are kept for the Events page ([ui.md](ui.md#events-and-audit-log)), with or without a notifier. With storage, the write queue holds 256 events; when it is full, new events are dropped and logged.
 
@@ -143,7 +143,7 @@ docker run --network host --cap-add NET_RAW --cap-add NET_ADMIN \
 
 ## SNMP traps
 
-The notification OID is `<enterprise_oid>.0.<trap ID>` from the table. The varbinds after `sysUpTime.0` and `snmpTrapOID.0` are strings under `<enterprise_oid>.1`: `.1.0` kind, `.2.0` severity, `.3.0` message, `.4.0` time, `.5.0` fields, `.6.0` dedup key. Trap IDs are stable; new kinds get new numbers.
+The notification OID is `<enterprise_oid>.0.<trap ID>` from the table. The varbinds after `sysUpTime.0` and `snmpTrapOID.0` are strings under `<enterprise_oid>.1`: `.1.0` kind, `.2.0` severity, `.3.0` message, `.4.0` time, `.5.0` fields, `.6.0` dedup key. Trap IDs are stable; new kinds get new numbers. [deploy/mib/PACKETEER-MIB.txt](../deploy/mib/PACKETEER-MIB.txt) defines every notification and a test checks it against this table. `inform: true` sends the same content as an inform ([monitoring.md](monitoring.md)).
 
 ## SMS and other gateways
 

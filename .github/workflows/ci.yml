@@ -2933,6 +2933,25 @@ jobs:
             'snippet: ! Packeteer on FRR. Generated for review: nothing is applied.' 'writes: 0' \
             --absent 'mode-inject' 'Cannot reach'
 
+  snmp:
+    # SNMP agent, traps, informs, and syslog output against net-snmp
+    # (#212). Observe mode; nothing announces.
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - name: install net-snmp tools
+        # Ubuntu's snmp package lacks the IETF MIBs (SNMPv2-SMI and the rest)
+        # that PACKETEER-MIB imports; snmp-mibs-downloader (multiverse) ships them.
+        run: |
+          sudo add-apt-repository -y multiverse
+          sudo apt-get update && sudo apt-get install -y snmp snmptrapd snmp-mibs-downloader netcat-openbsd
+      - name: snmpwalk reads the MIB, snmptrapd receives traps and informs, syslog over udp and tcp (#212)
+        run: bash lab/e2e-snmp.sh
+
   exporters:
     # Each exporter against a real sink container (#207, #287): Kafka
     # (Redpanda), NATS, an OpenTelemetry collector, GoFlow2 for IPFIX, and

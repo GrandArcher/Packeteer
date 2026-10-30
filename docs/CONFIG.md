@@ -1504,6 +1504,13 @@ curl -u "$USER:$PASS" -X DELETE http://127.0.0.1:8080/api/maintenance/api-1
 | | `token_env` | required | Environment variable holding an API token with write access to the bucket. |
 | | `ca_file` | system roots | PEM for an `https` URL. |
 | | `streams` | `events`, `decisions` | Any of `events`, `decisions`, `metrics`. |
+| `snmpagent` | `listen` | required | UDP `ip:port` of the read-only SNMP agent, for example `127.0.0.1:161`. Takes the `metrics` stream only, so it needs `http.listen`. See [monitoring.md](monitoring.md). |
+| | `community_env` | none | Turns on v2c: the environment variable holding the community. |
+| | `username_env` | none | Turns on v3: the environment variable holding the USM user. At least one of `community_env` and `username_env` is required. |
+| | `security_level`, `auth_protocol`, `auth_env`, `priv_protocol`, `priv_env` | `authPriv`, `SHA`, none, `AES`, none | v3 keys, as for the [`snmptrap` notifier](#notifier-snmptrap), except that `priv_protocol: DES` is refused. Passphrases are at least 8 characters. A request that asks for a lower level than `security_level` is not answered. |
+| | `engine_id` | fixed | v3 only: the agent's engine ID, 5-32 bytes of hex. The default is the same on every install (`0x80007ed904` and `packeteer`), so set a different one on each instance an NMS polls, an HA pair included. |
+| | `enterprise_oid` | `1.3.6.1.4.1.8072.9999.9999.7717` | Base OID, as for `snmptrap`. Change it together with the `packeteer` assignment in the MIB. |
+| | `allow_from` | any | Addresses or prefixes that are answered. |
 | `ipfix` | `address` | required | Collector `host:port`, UDP. Takes `flows` only. |
 | | `observation_domain` | `1` | Sent in every message. |
 | | `template_interval` | `1m` | How often templates are sent again. |
@@ -1571,11 +1578,29 @@ One SNMPv2c or SNMPv3 trap per event to one receiver. Add another entry for a se
 | `auth_env` | none | Environment variable holding the auth passphrase (at least 8 characters). |
 | `priv_protocol` | `AES` | `AES`, `AES192`, `AES256`, `AES192C`, `AES256C`, or `DES`. |
 | `priv_env` | none | Environment variable holding the privacy passphrase (at least 8 characters). |
-| `engine_id` | none | Required for `3`: Packeteer's authoritative engine ID, 5-32 bytes of hex. Configure the same ID for the user on the receiver. |
+| `engine_id` | none | Required for `3` traps: Packeteer's authoritative engine ID, 5-32 bytes of hex. Configure the same ID for the user on the receiver. Not allowed with `inform`. |
+| `inform` | `false` | Send an inform instead of a trap: the receiver acknowledges it, an unacknowledged one is sent again twice within `timeout`, and a missing acknowledgement is a failed delivery. With `3` the receiver's engine ID is discovered. |
 | `enterprise_oid` | `1.3.6.1.4.1.8072.9999.9999.7717` | Base OID. The default sits under NET-SNMP's experimental `netSnmpPlaypen` arc; use your own enterprise arc in production. |
 | `timeout` | `5s` | At most 1m. |
 
 Plus the [filter keys](#notifier-filters-every-notifier). The trap OID is `<enterprise_oid>.0.<trap_id>` (trap IDs are in [EVENTS.md](EVENTS.md)). Varbinds are `sysUpTime.0`, `snmpTrapOID.0`, then strings under `<enterprise_oid>.1`: `.1.0` kind, `.2.0` severity, `.3.0` message, `.4.0` time (RFC 3339), `.5.0` fields (`k=v; k=v`, sorted), `.6.0` dedup key.
+
+### Notifier `syslog`
+
+One RFC 5424 message per event to one collector. The message ID is the event kind, the severity maps to the syslog severity (`info` 6, `warning` 4, `critical` 2), and the structured data carries `[packeteer@32473 kind severity dedup]` and, when the event has fields, `[fields@32473 ...]`. `32473` is the documentation enterprise number of RFC 5612: Packeteer has none. Audit entries are events (`audit.recorded`), so they go the same way. A newline in a message becomes a space.
+
+| Key | Default | Meaning |
+|---|---|---|
+| `address` | none | Required collector hostname or IP address. |
+| `port` | `514`; `6514` for `tls` | |
+| `transport` | `udp` | `udp` (RFC 5426, the free text is cut to fit 2048 bytes; each structured data value is cut at 512 bytes, so many long fields can still pass 2048), `tcp` (octet-counting frames, RFC 6587), or `tls` (RFC 5425; the collector's certificate is verified against `address`). |
+| `ca_file` | system roots | Absolute PEM path for a private CA. `tls` only. |
+| `facility` | `local0` | `user`, `daemon`, `auth`, `authpriv`, or `local0` to `local7`. |
+| `app_name` | `packeteer` | At most 48 printable ASCII characters. |
+| `hostname` | the host name | Sent as the HOSTNAME field. |
+| `timeout` | `5s` | At most 1m. |
+
+Plus the [filter keys](#notifier-filters-every-notifier). A `tcp` or `tls` connection is kept open and opened again after the collector closes it. A collector that is down fails the delivery; events are not queued for it.
 
 ### Notifier, prober, or source `exec`
 
