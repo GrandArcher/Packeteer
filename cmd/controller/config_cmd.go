@@ -27,6 +27,7 @@ const inventoryTimeout = 2 * time.Minute
 
 // inventoryPlan is one read of the inventory merged into the config file.
 type inventoryPlan struct {
+	log     *slog.Logger
 	cfg     *config.Config
 	current []byte
 	plan    configedit.InventoryPlan
@@ -34,7 +35,7 @@ type inventoryPlan struct {
 
 // planInventory reads the config at path, reads the inventory it names, and
 // plans the change. It writes nothing.
-func planInventory(ctx context.Context, path string, getenv func(string) string, log *slog.Logger) (inventoryPlan, error) {
+func planInventory(ctx context.Context, path string, getenv func(string) string, stderr io.Writer) (inventoryPlan, error) {
 	current, err := os.ReadFile(path)
 	if err != nil {
 		return inventoryPlan{}, err
@@ -43,9 +44,12 @@ func planInventory(ctx context.Context, path string, getenv func(string) string,
 	if err != nil {
 		return inventoryPlan{}, fmt.Errorf("%s: %w", path, err)
 	}
-	if err := applyRuntimeEnv(cfg, getenv); err != nil {
+	// The same start-up defaults as the daemon, so the audit record lands in
+	// the storage the controller keeps its audit log in.
+	if err := startConfig(cfg, getenv); err != nil {
 		return inventoryPlan{}, err
 	}
+	log := newLogger(stderr, cfg.Log.Level, cfg.Log.Format)
 	if cfg.Inventory == nil {
 		return inventoryPlan{}, errors.New("the config has no inventory block (inventory: {type: netbox, config: {...}})")
 	}
@@ -63,7 +67,7 @@ func planInventory(ctx context.Context, path string, getenv func(string) string,
 	if err != nil {
 		return inventoryPlan{}, err
 	}
-	return inventoryPlan{cfg: cfg, current: current, plan: plan}, nil
+	return inventoryPlan{log: log, cfg: cfg, current: current, plan: plan}, nil
 }
 
 // runConfig is `packeteer config plan|diff|apply`. plan and diff only read:
@@ -97,8 +101,7 @@ func runConfig(ctx context.Context, args []string, getenv func(string) string, s
 		fmt.Fprintf(stderr, "packeteer: config %s: %v\n", sub, err)
 		return 1
 	}
-	log := newLogger(stderr, "info", "text")
-	ip, err := planInventory(ctx, *path, getenv, log)
+	ip, err := planInventory(ctx, *path, getenv, stderr)
 	if err != nil {
 		return fail(err)
 	}
@@ -124,17 +127,18 @@ func runConfig(ctx context.Context, args []string, getenv func(string) string, s
 	if ip.plan.ID != *planID {
 		return fail(fmt.Errorf("the plan is now %s, not %s: the inventory or the file changed; run plan again", ip.plan.ID, *planID))
 	}
-	if err := applyInventory(ctx, *path, ip, *useGit, getenv, log, stdout); err != nil {
+	if err := applyInventory(ctx, *path, ip, *useGit, getenv, stdout); err != nil {
 		return fail(err)
 	}
 	return 0
 }
 
 // applyInventory writes the planned file. The audit store is opened before
-// the write, so a change that cannot be recorded is not made. With git, a
-// failed commit restores the old file.
-func applyInventory(ctx context.Context, path string, ip inventoryPlan, useGit bool, getenv func(string) string, log *slog.Logger, stdout io.Writer) error {
-	auditor, closeAudit, err := openCLIAuditor(ctx, ip.cfg, log, getenv)
+// the write, so a storage that cannot be opened stops the apply; a record
+// that then fails to write is logged, as for the ops API. With git, a failed
+// commit restores the old file.
+func applyInventory(ctx context.Context, path string, ip inventoryPlan, useGit bool, getenv func(string) string, stdout io.Writer) error {
+	auditor, closeAudit, err := openCLIAuditor(ctx, ip.cfg, ip.log, getenv)
 	if err != nil {
 		return err
 	}
@@ -190,11 +194,7 @@ func planSummary(p configedit.InventoryPlan) string {
 		for _, f := range c.Fields {
 			keys = append(keys, f.Field)
 		}
-		sign := "~"
-		if c.Action == "add" {
-			sign = "+"
-		}
-		parts = append(parts, sign+c.Name+"("+strings.Join(keys, ",")+")")
+		parts = append(parts, c.Sign()+c.Name+"("+strings.Join(keys, ",")+")")
 	}
 	return strings.Join(parts, " ")
 }

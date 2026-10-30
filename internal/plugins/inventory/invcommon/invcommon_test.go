@@ -20,33 +20,55 @@ func env(token string) func(string) string {
 
 func TestValidate(t *testing.T) {
 	good := Common{BaseURL: "https://netbox.example.invalid/", Tag: "packeteer"}
-	s, err := Validate(good, "TOK", env("lab-token"))
+	s, err := Validate(good)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if s.Base.String() != "https://netbox.example.invalid" || s.Timeout != DefaultTimeout || s.Tag != "packeteer" {
 		t.Fatalf("%+v", s)
 	}
-	if _, err := Validate(Common{BaseURL: "http://127.0.0.1:8080", Tag: "t"}, "TOK", env("lab-token")); err != nil {
+	if _, err := Validate(Common{BaseURL: "http://127.0.0.1:8080", Tag: "t"}); err != nil {
 		t.Fatalf("loopback http: %v", err)
 	}
 	for name, tc := range map[string]struct {
-		c     Common
+		c    Common
+		want string
+	}{
+		"http remote":      {Common{BaseURL: "http://netbox.example.invalid", Tag: "t"}, "must be https"},
+		"no tag":           {Common{BaseURL: good.BaseURL}, "tag is required"},
+		"bad tag":          {Common{BaseURL: good.BaseURL, Tag: "a b"}, "tag is required"},
+		"userinfo":         {Common{BaseURL: "https://u:p@netbox.example.invalid", Tag: "t"}, "no userinfo"},
+		"query":            {Common{BaseURL: "https://netbox.example.invalid/?a=b", Tag: "t"}, "no userinfo"},
+		"timeout too long": {Common{BaseURL: good.BaseURL, Tag: "t", Timeout: 1 << 62}, "timeout"},
+		"empty url":        {Common{Tag: "t"}, "base_url"},
+	} {
+		if _, err := Validate(tc.c); err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("%s: err %v, want %q", name, err, tc.want)
+		}
+	}
+}
+
+func TestToken(t *testing.T) {
+	s, err := Validate(Common{BaseURL: "https://netbox.example.invalid/lab-token", Tag: "t"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, _ := Validate(Common{BaseURL: "https://netbox.example.invalid", Tag: "t"})
+	if tok, err := Token(other, "TOK", env(" lab-token\n")); err != nil || tok != "lab-token" {
+		t.Fatalf("token %q err %v", tok, err)
+	}
+	for name, tc := range map[string]struct {
+		s     Settings
 		token string
 		want  string
 	}{
-		"no token":         {good, "", "set TOK"},
-		"http remote":      {Common{BaseURL: "http://netbox.example.invalid", Tag: "t"}, "lab-token", "must be https"},
-		"no tag":           {Common{BaseURL: good.BaseURL}, "lab-token", "tag is required"},
-		"bad tag":          {Common{BaseURL: good.BaseURL, Tag: "a b"}, "lab-token", "tag is required"},
-		"userinfo":         {Common{BaseURL: "https://u:p@netbox.example.invalid", Tag: "t"}, "lab-token", "no userinfo"},
-		"query":            {Common{BaseURL: "https://netbox.example.invalid/?a=b", Tag: "t"}, "lab-token", "no userinfo"},
-		"token in url":     {Common{BaseURL: "https://netbox.example.invalid/lab-token", Tag: "t"}, "lab-token", "must not contain the API token"},
-		"space in token":   {good, "a b", "invalid character"},
-		"timeout too long": {Common{BaseURL: good.BaseURL, Tag: "t", Timeout: 1 << 62}, "lab-token", "timeout"},
-		"empty url":        {Common{Tag: "t"}, "lab-token", "base_url"},
+		"missing":      {other, "", "set TOK"},
+		"space":        {other, "a b", "invalid character"},
+		"non ascii":    {other, "t\u00f6ken", "invalid character"},
+		"too long":     {other, strings.Repeat("a", maxTokenLen+1), "too long"},
+		"token in url": {s, "lab-token", "must not contain the API token"},
 	} {
-		if _, err := Validate(tc.c, "TOK", env(tc.token)); err == nil || !strings.Contains(err.Error(), tc.want) {
+		if _, err := Token(tc.s, "TOK", env(tc.token)); err == nil || !strings.Contains(err.Error(), tc.want) {
 			t.Errorf("%s: err %v, want %q", name, err, tc.want)
 		}
 	}
@@ -141,11 +163,11 @@ func listServer(t *testing.T, total int, check func(*http.Request)) *httptest.Se
 
 func client(t *testing.T, srv *httptest.Server, token string) *Client {
 	t.Helper()
-	s, err := Validate(Common{BaseURL: srv.URL, Tag: "t"}, "TOK", env(token))
+	s, err := Validate(Common{BaseURL: srv.URL, Tag: "t"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	return NewClient(s, "Token "+token)
+	return NewClient(s, "Token", token)
 }
 
 func TestGetAllPagesByOffsetAndSendsOnlyGET(t *testing.T) {

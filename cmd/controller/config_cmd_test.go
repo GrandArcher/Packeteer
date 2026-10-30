@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -54,7 +55,9 @@ func inventoryLab(t *testing.T, extra string) (path string, getenv func(string) 
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	env := map[string]string{"PACKETEER_NETBOX_TOKEN": "lab-token"}
+	// HTTP off keeps the start-up defaults from adding a storage the lab
+	// does not name.
+	env := map[string]string{"PACKETEER_NETBOX_TOKEN": "lab-token", HTTPListenEnv: "off"}
 	return path, func(k string) string { return env[k] }, &n
 }
 
@@ -184,6 +187,32 @@ func TestConfigApplyRefusals(t *testing.T) {
 	}
 }
 
+// The audit record goes where the daemon keeps its audit log, which is the
+// default sqlite store when HTTP is on and the file names no storage.
+func TestConfigUsesTheDaemonsStartDefaults(t *testing.T) {
+	path, getenv, _ := inventoryLab(t, "")
+	on := func(k string) string {
+		if k == HTTPListenEnv {
+			return ""
+		}
+		return getenv(k)
+	}
+	ip, err := planInventory(context.Background(), path, on, io.Discard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ip.cfg.Storage == nil || ip.cfg.Storage.Type != "sqlite" || !ip.cfg.AuthEnabled() {
+		t.Fatalf("storage %+v auth %v", ip.cfg.Storage, ip.cfg.AuthEnabled())
+	}
+	ip, err = planInventory(context.Background(), path, getenv, io.Discard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ip.cfg.Storage != nil {
+		t.Fatalf("storage %+v with HTTP off", ip.cfg.Storage)
+	}
+}
+
 func TestConfigNeedsAnInventoryAndAToken(t *testing.T) {
 	path, getenv, _ := inventoryLab(t, "")
 	bare := filepath.Join(t.TempDir(), "bare.yaml")
@@ -193,7 +222,12 @@ func TestConfigNeedsAnInventoryAndAToken(t *testing.T) {
 	if code, _, errs := runCfg(t, getenv, "plan", "-config", bare); code == 0 || !strings.Contains(errs, "no inventory block") {
 		t.Fatalf("no inventory: %d %q", code, errs)
 	}
-	if code, _, errs := runCfg(t, func(string) string { return "" }, "plan", "-config", path); code == 0 || !strings.Contains(errs, "PACKETEER_NETBOX_TOKEN") {
+	if code, _, errs := runCfg(t, func(k string) string {
+		if k == HTTPListenEnv {
+			return "off"
+		}
+		return ""
+	}, "plan", "-config", path); code == 0 || !strings.Contains(errs, "PACKETEER_NETBOX_TOKEN") {
 		t.Fatalf("no token: %d %q", code, errs)
 	}
 }

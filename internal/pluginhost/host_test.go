@@ -600,8 +600,13 @@ func TestInventoryIsCheckedAtLoadAndIsNoRIBSource(t *testing.T) {
 	if _, err := BuildInventory(cfg, Options{Getenv: env}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Build(cfg, Options{}); err == nil || !strings.Contains(err.Error(), "inventory (netbox)") || !strings.Contains(err.Error(), "PACKETEER_NETBOX_TOKEN") {
-		t.Fatalf("missing token: %v", err)
+	// The controller loads the config without the token; only a fetch reads it.
+	if _, err := Build(cfg, Options{}); err != nil {
+		t.Fatalf("build without a token: %v", err)
+	}
+	bad := load(t, "inventory:\n  type: netbox\n  config:\n    base_url: http://netbox.example.invalid\n    tag: packeteer\n")
+	if _, err := Build(bad, Options{}); err == nil || !strings.Contains(err.Error(), "inventory (netbox)") || !strings.Contains(err.Error(), "must be https") {
+		t.Fatalf("remote http: %v", err)
 	}
 	cfg = load(t, "inventory:\n  type: nosuch\n")
 	if _, err := Build(cfg, Options{}); err == nil || !strings.Contains(err.Error(), `unknown inventory type "nosuch"`) {

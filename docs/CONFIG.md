@@ -517,7 +517,7 @@ inventory:
 
 `base_url` (required, an http or https URL with a host and no userinfo, query, or fragment; https is required unless the host is a loopback address, and a URL that holds the token is refused). `tag` (required, 1-64 characters of letters, digits, `.`, `_`, or `-`): only records with this tag are read. `timeout` (default 30s, 1s-2m). The API token is `PACKETEER_NETBOX_TOKEN` (`type: netbox`) or `PACKETEER_PEERING_MANAGER_TOKEN` (`type: peeringmanager`), required, sent only as an `Authorization` header to `base_url`. Redirects are not followed. A response over 8 MiB, or a list of more than 100 pages of 200, is refused.
 
-The type and config are checked at load time, so `-check` finds a missing token. `packeteer config plan|diff [-config FILE]` prints the change to the providers; `config apply -plan ID [-git]` writes it. Adding, changing, or removing `inventory` needs a restart, and so does using the providers `apply` wrote (`providers` is restart-only). Rollback: remove `inventory`. Nothing was announced.
+The type and config are checked at load time. The token is read only by `plan`, `diff`, and `apply`, not at start. `packeteer config plan|diff [-config FILE]` prints the change to the providers; `config apply -plan ID [-git]` writes it. Adding, changing, or removing `inventory` needs a restart, and so does using the providers `apply` wrote (`providers` is restart-only). Rollback: remove `inventory`. Nothing was announced.
 
 ### `lookup`
 

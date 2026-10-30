@@ -44,43 +44,28 @@ type Common struct {
 	Timeout time.Duration `yaml:"timeout"`
 }
 
-// Settings is a validated Common and the API token.
+// Settings is a validated Common.
 type Settings struct {
 	Base    *url.URL
 	Tag     string
 	Timeout time.Duration
-	Token   string
 }
 
-// Validate checks c and the token read from tokenEnv. The token is required:
-// both systems refuse anonymous reads of the data used here. https is
-// required unless the host is a loopback address, which is how a lab runs.
-func Validate(c Common, tokenEnv string, getenv func(string) string) (Settings, error) {
-	token := strings.TrimSpace(getenv(tokenEnv))
-	if token == "" {
-		return Settings{}, fmt.Errorf("the API token is required: set %s", tokenEnv)
-	}
-	if len(token) > maxTokenLen {
-		return Settings{}, errors.New("API token is too long")
-	}
-	for _, r := range token {
-		if r > unicode.MaxASCII || !unicode.IsPrint(r) || unicode.IsSpace(r) {
-			return Settings{}, errors.New("API token has an invalid character")
-		}
-	}
+// Validate checks the config shape. https is required unless the host is a
+// loopback address, which is how a lab runs. The token is not read here:
+// the running controller loads the config but never reads the inventory, so
+// it need not hold the token. Token reads it for a fetch.
+func Validate(c Common) (Settings, error) {
 	raw := strings.TrimSpace(c.BaseURL)
 	u, err := url.Parse(raw)
 	if raw == "" || len(raw) > maxURLLen || err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
 		return Settings{}, errors.New("base_url must be an http or https URL with a host and no userinfo, query, or fragment")
 	}
-	if strings.Contains(raw, token) {
-		return Settings{}, errors.New("base_url must not contain the API token")
-	}
 	if u.Scheme != "https" && !loopback(u.Hostname()) {
 		return Settings{}, errors.New("base_url must be https (http is accepted only for a loopback address)")
 	}
 	u.Path = strings.TrimRight(u.Path, "/")
-	if !validTag(c.Tag) {
+	if !plugin.ValidLabel(c.Tag) {
 		return Settings{}, errors.New("tag is required: 1-64 characters of letters, digits, '.', '_' or '-'")
 	}
 	timeout := c.Timeout
@@ -90,7 +75,28 @@ func Validate(c Common, tokenEnv string, getenv func(string) string) (Settings, 
 	if timeout < minTimeout || timeout > maxTimeout {
 		return Settings{}, fmt.Errorf("timeout %s must be between %s and %s", timeout, minTimeout, maxTimeout)
 	}
-	return Settings{Base: u, Tag: c.Tag, Timeout: timeout, Token: token}, nil
+	return Settings{Base: u, Tag: c.Tag, Timeout: timeout}, nil
+}
+
+// Token reads the required API token from tokenEnv. A base URL that holds
+// the token is refused.
+func Token(s Settings, tokenEnv string, getenv func(string) string) (string, error) {
+	token := strings.TrimSpace(getenv(tokenEnv))
+	if token == "" {
+		return "", fmt.Errorf("the API token is required: set %s", tokenEnv)
+	}
+	if len(token) > maxTokenLen {
+		return "", errors.New("API token is too long")
+	}
+	for _, r := range token {
+		if r > unicode.MaxASCII || !unicode.IsPrint(r) || unicode.IsSpace(r) {
+			return "", errors.New("API token has an invalid character")
+		}
+	}
+	if strings.Contains(s.Base.String(), token) {
+		return "", errors.New("base_url must not contain the API token")
+	}
+	return token, nil
 }
 
 func loopback(host string) bool {
@@ -100,8 +106,6 @@ func loopback(host string) bool {
 	a, err := netip.ParseAddr(host)
 	return err == nil && a.IsLoopback()
 }
-
-func validTag(s string) bool { return plugin.ValidLabel(s) }
 
 // Client is a read-only REST client for one base URL.
 type Client struct {
@@ -113,10 +117,11 @@ type Client struct {
 
 var errNoRedirect = errors.New("redirects are not followed")
 
-// NewClient returns a client that sends authorization on every request.
-func NewClient(s Settings, authorization string) *Client {
+// NewClient returns a client that sends the token on every request, as
+// scheme followed by a space ("Token", "Bearer").
+func NewClient(s Settings, scheme, token string) *Client {
 	return &Client{
-		base: s.Base, auth: authorization, token: s.Token,
+		base: s.Base, auth: scheme + " " + token, token: token,
 		client: &http.Client{
 			Timeout:       s.Timeout,
 			CheckRedirect: func(*http.Request, []*http.Request) error { return errNoRedirect },

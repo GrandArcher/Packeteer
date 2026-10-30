@@ -32,6 +32,14 @@ type ProviderChange struct {
 	Fields []FieldChange
 }
 
+// Sign is "+" for an added provider and "~" for an updated one.
+func (c ProviderChange) Sign() string {
+	if c.Action == "add" {
+		return "+"
+	}
+	return "~"
+}
+
 // InventoryPlan is the change an inventory read would make to a config
 // file (#208). Nothing is written. YAML is the file after the change, and
 // ID names those exact bytes, so `apply` can refuse when the inventory or
@@ -161,11 +169,7 @@ func applyManaged(node *yaml.Node, p plugin.InventoryProvider) []FieldChange {
 // Format writes the plan as text for an operator to read before apply.
 func (p InventoryPlan) Format(w io.Writer) {
 	for _, c := range p.Changes {
-		sign := "~"
-		if c.Action == "add" {
-			sign = "+"
-		}
-		fmt.Fprintf(w, "%s %s\n", sign, c.Name)
+		fmt.Fprintf(w, "%s %s\n", c.Sign(), c.Name)
 		for _, f := range c.Fields {
 			if f.Old == "" {
 				fmt.Fprintf(w, "    %s: %s\n", f.Field, f.New)

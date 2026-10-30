@@ -3,58 +3,58 @@
 package all
 
 import (
-	_ "github.com/GrandArcher/Packeteer/internal/plugins/announcer/gobgp"    // gobgp announcer
-	_ "github.com/GrandArcher/Packeteer/internal/plugins/detector/baseline"  // baseline anomaly detector
-	_ "github.com/GrandArcher/Packeteer/internal/plugins/elector/lease"      // lease-file HA elector
-	_ "github.com/GrandArcher/Packeteer/internal/plugins/exec"               // exec prober/source/notifier
-	_ "github.com/GrandArcher/Packeteer/internal/plugins/exporter/influxdb"  // InfluxDB line protocol push
-	_ "github.com/GrandArcher/Packeteer/internal/plugins/exporter/ipfix"     // IPFIX flow re-export
-	_ "github.com/GrandArcher/Packeteer/internal/plugins/exporter/kafka"     // Kafka events, decisions, flows
-	_ "github.com/GrandArcher/Packeteer/internal/plugins/exporter/nats"      // NATS events, decisions, flows
-	_ "github.com/GrandArcher/Packeteer/internal/plugins/exporter/otlp"      // OpenTelemetry spans, logs, and metrics
-	_ "github.com/GrandArcher/Packeteer/internal/plugins/exporter/snmpagent" // read-only SNMP agent with the Packeteer MIB
-	_ "github.com/GrandArcher/Packeteer/internal/plugins/federation/mtls"    // mTLS multi-POP federation
-	_ "github.com/GrandArcher/Packeteer/internal/plugins/grpcplugin"         // grpc prober/source/notifier (long-running)
-	_ "github.com/GrandArcher/Packeteer/internal/plugins/inventory/netbox"
-	_ "github.com/GrandArcher/Packeteer/internal/plugins/inventory/peeringmanager"
-	_ "github.com/GrandArcher/Packeteer/internal/plugins/irr/file"                // local IRR file source (RPSL or bgpq4)
-	_ "github.com/GrandArcher/Packeteer/internal/plugins/irr/whois"               // IRR whois source (IRRd or RIPE style)
-	_ "github.com/GrandArcher/Packeteer/internal/plugins/ixpcore/icmp"            // IX inter-site core prober (observe-only)
-	_ "github.com/GrandArcher/Packeteer/internal/plugins/ixpcorrelate/topology"   // IX fabric incident correlator (observe-only)
-	_ "github.com/GrandArcher/Packeteer/internal/plugins/ixpfabric/icmp"          // IX fabric prober (observe-only)
-	_ "github.com/GrandArcher/Packeteer/internal/plugins/ixpmember/ixf"           // IX-F member import (read-only)
-	_ "github.com/GrandArcher/Packeteer/internal/plugins/ixprouteserver/birdseye" // Birdseye route-server watch (read-only)
-	_ "github.com/GrandArcher/Packeteer/internal/plugins/leaksource/rislive"      // RIPE RIS Live leak source
-	_ "github.com/GrandArcher/Packeteer/internal/plugins/lookup/peeringdb"        // PeeringDB / IX-F directory (read-only)
-	_ "github.com/GrandArcher/Packeteer/internal/plugins/notifier/smtp"           // smtp notifier
-	_ "github.com/GrandArcher/Packeteer/internal/plugins/notifier/snmptrap"       // snmptrap notifier
-	_ "github.com/GrandArcher/Packeteer/internal/plugins/notifier/syslog"         // RFC 5424 syslog notifier
-	_ "github.com/GrandArcher/Packeteer/internal/plugins/notifier/webhook"        // webhook notifier
-	_ "github.com/GrandArcher/Packeteer/internal/plugins/policy/maintenance"      // maintenance-window policy
-	_ "github.com/GrandArcher/Packeteer/internal/plugins/policy/rules"            // prefix/ASN/country routing policy
-	_ "github.com/GrandArcher/Packeteer/internal/plugins/prober/fixed"            // fixed (lab) prober
-	_ "github.com/GrandArcher/Packeteer/internal/plugins/prober/https"            // https prober (connect, TLS handshake, first byte)
-	_ "github.com/GrandArcher/Packeteer/internal/plugins/prober/icmp"             // icmp prober
-	_ "github.com/GrandArcher/Packeteer/internal/plugins/prober/sim"              // sim (lab) prober, seeded model, no packets
-	_ "github.com/GrandArcher/Packeteer/internal/plugins/prober/tcp"              // tcp prober
-	_ "github.com/GrandArcher/Packeteer/internal/plugins/prober/twamp"            // twamp prober (TWAMP-Light sender, reordering)
-	_ "github.com/GrandArcher/Packeteer/internal/plugins/prober/udp"              // udp prober
-	_ "github.com/GrandArcher/Packeteer/internal/plugins/ribsource/bmp"           // BMP monitoring station (RIB source, leak source)
-	_ "github.com/GrandArcher/Packeteer/internal/plugins/rpki/ripestat"           // RIPEstat RPKI lookup, display only
-	_ "github.com/GrandArcher/Packeteer/internal/plugins/rpki/rtr"                // RTR RPKI origin validation source
-	_ "github.com/GrandArcher/Packeteer/internal/plugins/rpki/vrpjson"            // HTTP JSON VRP origin validation source
-	_ "github.com/GrandArcher/Packeteer/internal/plugins/scorer/commit"           // commit scorer
-	_ "github.com/GrandArcher/Packeteer/internal/plugins/scorer/cost"             // cost scorer
-	_ "github.com/GrandArcher/Packeteer/internal/plugins/scorer/weighted"         // weighted scorer
-	_ "github.com/GrandArcher/Packeteer/internal/plugins/source/flow"             // netflow/ipfix/sflow target source
-	_ "github.com/GrandArcher/Packeteer/internal/plugins/source/outage"           // AS-path and circuit outage detector
-	_ "github.com/GrandArcher/Packeteer/internal/plugins/source/span"             // SPAN/mirror passive problem detector
-	_ "github.com/GrandArcher/Packeteer/internal/plugins/source/static"           // static target source
-	_ "github.com/GrandArcher/Packeteer/internal/plugins/source/traceroute"       // traceroute target discovery
-	_ "github.com/GrandArcher/Packeteer/internal/plugins/source/vip"              // VIP prefix/ASN target source
-	_ "github.com/GrandArcher/Packeteer/internal/plugins/sso/oidc"                // OIDC single sign-on
-	_ "github.com/GrandArcher/Packeteer/internal/plugins/storage/sqlite"          // sqlite history storage
-	_ "github.com/GrandArcher/Packeteer/internal/plugins/telemetry/fixed"         // fixed (lab) telemetry
-	_ "github.com/GrandArcher/Packeteer/internal/plugins/telemetry/snmp"          // SNMP interface telemetry
-	_ "github.com/GrandArcher/Packeteer/internal/plugins/whois/rdap"              // RDAP whois (troubleshooting)
+	_ "github.com/GrandArcher/Packeteer/internal/plugins/announcer/gobgp"          // gobgp announcer
+	_ "github.com/GrandArcher/Packeteer/internal/plugins/detector/baseline"        // baseline anomaly detector
+	_ "github.com/GrandArcher/Packeteer/internal/plugins/elector/lease"            // lease-file HA elector
+	_ "github.com/GrandArcher/Packeteer/internal/plugins/exec"                     // exec prober/source/notifier
+	_ "github.com/GrandArcher/Packeteer/internal/plugins/exporter/influxdb"        // InfluxDB line protocol push
+	_ "github.com/GrandArcher/Packeteer/internal/plugins/exporter/ipfix"           // IPFIX flow re-export
+	_ "github.com/GrandArcher/Packeteer/internal/plugins/exporter/kafka"           // Kafka events, decisions, flows
+	_ "github.com/GrandArcher/Packeteer/internal/plugins/exporter/nats"            // NATS events, decisions, flows
+	_ "github.com/GrandArcher/Packeteer/internal/plugins/exporter/otlp"            // OpenTelemetry spans, logs, and metrics
+	_ "github.com/GrandArcher/Packeteer/internal/plugins/exporter/snmpagent"       // read-only SNMP agent with the Packeteer MIB
+	_ "github.com/GrandArcher/Packeteer/internal/plugins/federation/mtls"          // mTLS multi-POP federation
+	_ "github.com/GrandArcher/Packeteer/internal/plugins/grpcplugin"               // grpc prober/source/notifier (long-running)
+	_ "github.com/GrandArcher/Packeteer/internal/plugins/inventory/netbox"         // NetBox provider inventory (read-only)
+	_ "github.com/GrandArcher/Packeteer/internal/plugins/inventory/peeringmanager" // Peering Manager provider inventory (read-only)
+	_ "github.com/GrandArcher/Packeteer/internal/plugins/irr/file"                 // local IRR file source (RPSL or bgpq4)
+	_ "github.com/GrandArcher/Packeteer/internal/plugins/irr/whois"                // IRR whois source (IRRd or RIPE style)
+	_ "github.com/GrandArcher/Packeteer/internal/plugins/ixpcore/icmp"             // IX inter-site core prober (observe-only)
+	_ "github.com/GrandArcher/Packeteer/internal/plugins/ixpcorrelate/topology"    // IX fabric incident correlator (observe-only)
+	_ "github.com/GrandArcher/Packeteer/internal/plugins/ixpfabric/icmp"           // IX fabric prober (observe-only)
+	_ "github.com/GrandArcher/Packeteer/internal/plugins/ixpmember/ixf"            // IX-F member import (read-only)
+	_ "github.com/GrandArcher/Packeteer/internal/plugins/ixprouteserver/birdseye"  // Birdseye route-server watch (read-only)
+	_ "github.com/GrandArcher/Packeteer/internal/plugins/leaksource/rislive"       // RIPE RIS Live leak source
+	_ "github.com/GrandArcher/Packeteer/internal/plugins/lookup/peeringdb"         // PeeringDB / IX-F directory (read-only)
+	_ "github.com/GrandArcher/Packeteer/internal/plugins/notifier/smtp"            // smtp notifier
+	_ "github.com/GrandArcher/Packeteer/internal/plugins/notifier/snmptrap"        // snmptrap notifier
+	_ "github.com/GrandArcher/Packeteer/internal/plugins/notifier/syslog"          // RFC 5424 syslog notifier
+	_ "github.com/GrandArcher/Packeteer/internal/plugins/notifier/webhook"         // webhook notifier
+	_ "github.com/GrandArcher/Packeteer/internal/plugins/policy/maintenance"       // maintenance-window policy
+	_ "github.com/GrandArcher/Packeteer/internal/plugins/policy/rules"             // prefix/ASN/country routing policy
+	_ "github.com/GrandArcher/Packeteer/internal/plugins/prober/fixed"             // fixed (lab) prober
+	_ "github.com/GrandArcher/Packeteer/internal/plugins/prober/https"             // https prober (connect, TLS handshake, first byte)
+	_ "github.com/GrandArcher/Packeteer/internal/plugins/prober/icmp"              // icmp prober
+	_ "github.com/GrandArcher/Packeteer/internal/plugins/prober/sim"               // sim (lab) prober, seeded model, no packets
+	_ "github.com/GrandArcher/Packeteer/internal/plugins/prober/tcp"               // tcp prober
+	_ "github.com/GrandArcher/Packeteer/internal/plugins/prober/twamp"             // twamp prober (TWAMP-Light sender, reordering)
+	_ "github.com/GrandArcher/Packeteer/internal/plugins/prober/udp"               // udp prober
+	_ "github.com/GrandArcher/Packeteer/internal/plugins/ribsource/bmp"            // BMP monitoring station (RIB source, leak source)
+	_ "github.com/GrandArcher/Packeteer/internal/plugins/rpki/ripestat"            // RIPEstat RPKI lookup, display only
+	_ "github.com/GrandArcher/Packeteer/internal/plugins/rpki/rtr"                 // RTR RPKI origin validation source
+	_ "github.com/GrandArcher/Packeteer/internal/plugins/rpki/vrpjson"             // HTTP JSON VRP origin validation source
+	_ "github.com/GrandArcher/Packeteer/internal/plugins/scorer/commit"            // commit scorer
+	_ "github.com/GrandArcher/Packeteer/internal/plugins/scorer/cost"              // cost scorer
+	_ "github.com/GrandArcher/Packeteer/internal/plugins/scorer/weighted"          // weighted scorer
+	_ "github.com/GrandArcher/Packeteer/internal/plugins/source/flow"              // netflow/ipfix/sflow target source
+	_ "github.com/GrandArcher/Packeteer/internal/plugins/source/outage"            // AS-path and circuit outage detector
+	_ "github.com/GrandArcher/Packeteer/internal/plugins/source/span"              // SPAN/mirror passive problem detector
+	_ "github.com/GrandArcher/Packeteer/internal/plugins/source/static"            // static target source
+	_ "github.com/GrandArcher/Packeteer/internal/plugins/source/traceroute"        // traceroute target discovery
+	_ "github.com/GrandArcher/Packeteer/internal/plugins/source/vip"               // VIP prefix/ASN target source
+	_ "github.com/GrandArcher/Packeteer/internal/plugins/sso/oidc"                 // OIDC single sign-on
+	_ "github.com/GrandArcher/Packeteer/internal/plugins/storage/sqlite"           // sqlite history storage
+	_ "github.com/GrandArcher/Packeteer/internal/plugins/telemetry/fixed"          // fixed (lab) telemetry
+	_ "github.com/GrandArcher/Packeteer/internal/plugins/telemetry/snmp"           // SNMP interface telemetry
+	_ "github.com/GrandArcher/Packeteer/internal/plugins/whois/rdap"               // RDAP whois (troubleshooting)
 )

@@ -66,19 +66,24 @@ func TestFetchKeepsTaggedAutonomousSystems(t *testing.T) {
 	}
 }
 
-func TestNewNeedsTokenAndTag(t *testing.T) {
-	for name, tc := range map[string]struct{ yaml, token, want string }{
-		"no token": {"base_url: http://127.0.0.1:1\ntag: t\n", "", TokenEnv},
-		"no tag":   {"base_url: http://127.0.0.1:1\n", "lab-token", "tag is required"},
-	} {
-		c, err := plugin.ConfigFromYAML(tc.yaml)
-		if err != nil {
-			t.Fatal(err)
-		}
-		_, err = New(c, plugin.Env{Getenv: func(string) string { return tc.token }})
-		if err == nil || !strings.Contains(err.Error(), tc.want) {
-			t.Errorf("%s: err %v, want %q", name, err, tc.want)
-		}
+func TestNewChecksTheConfigAndFetchNeedsTheToken(t *testing.T) {
+	c, err := plugin.ConfigFromYAML("base_url: http://127.0.0.1:1\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = New(c, plugin.Env{}); err == nil || !strings.Contains(err.Error(), "tag is required") {
+		t.Fatalf("no tag: %v", err)
+	}
+	c, err = plugin.ConfigFromYAML("base_url: http://127.0.0.1:1\ntag: t\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	inv, err := New(c, plugin.Env{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := inv.Fetch(context.Background()); err == nil || !strings.Contains(err.Error(), TokenEnv) {
+		t.Fatalf("fetch without a token: %v", err)
 	}
 	if !plugin.Inventories.Has(TypeName) {
 		t.Fatal("peeringmanager is not registered")

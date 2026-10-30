@@ -28,31 +28,26 @@ const fieldPrefix = "packeteer_"
 func init() { plugin.Inventories.Register(TypeName, New) }
 
 type source struct {
-	client *invcommon.Client
-	tag    string
+	settings invcommon.Settings
+	getenv   func(string) string
 }
 
-// New validates the config and the token. It does not dial.
+// New validates the config. It does not dial and does not read the token,
+// which only Fetch needs.
 func New(c plugin.Config, env plugin.Env) (plugin.Inventory, error) {
 	var cfg invcommon.Common
 	if err := c.Decode(&cfg); err != nil {
+		return nil, err
+	}
+	s, err := invcommon.Validate(cfg)
+	if err != nil {
 		return nil, err
 	}
 	getenv := env.Getenv
 	if getenv == nil {
 		getenv = func(string) string { return "" }
 	}
-	s, err := invcommon.Validate(cfg, TokenEnv, getenv)
-	if err != nil {
-		return nil, err
-	}
-	// Tokens from NetBox 4.5 on start with nbt_ and use Bearer; older
-	// ones use Token.
-	scheme := "Token "
-	if strings.HasPrefix(s.Token, "nbt_") {
-		scheme = "Bearer "
-	}
-	return &source{client: invcommon.NewClient(s, scheme+s.Token), tag: s.Tag}, nil
+	return &source{settings: s, getenv: getenv}, nil
 }
 
 type provider struct {
@@ -69,11 +64,21 @@ type asn struct {
 // Fetch reads the tagged providers. The provider's name is its NetBox slug
 // and its ASN is the lowest one NetBox lists for it.
 func (s *source) Fetch(ctx context.Context) (plugin.InventoryResult, error) {
+	token, err := invcommon.Token(s.settings, TokenEnv, s.getenv)
+	if err != nil {
+		return plugin.InventoryResult{}, err
+	}
+	// Tokens from NetBox 4.5 on start with nbt_ and use Bearer; older
+	// ones use Token.
+	scheme := "Token"
+	if strings.HasPrefix(token, "nbt_") {
+		scheme = "Bearer"
+	}
 	var (
 		list  []plugin.InventoryProvider
 		skips []plugin.InventorySkip
 	)
-	err := s.client.GetAll(ctx, "/api/circuits/providers/", url.Values{"tag": {s.tag}}, func(raw json.RawMessage) error {
+	err = invcommon.NewClient(s.settings, scheme, token).GetAll(ctx, "/api/circuits/providers/", url.Values{"tag": {s.settings.Tag}}, func(raw json.RawMessage) error {
 		var p provider
 		if err := json.Unmarshal(raw, &p); err != nil {
 			return fmt.Errorf("provider record: %w", err)

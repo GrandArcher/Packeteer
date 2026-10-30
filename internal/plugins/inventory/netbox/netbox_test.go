@@ -102,20 +102,23 @@ func TestFetchErrorDoesNotLeakTheToken(t *testing.T) {
 	}
 }
 
-func TestNewRejectsBadConfig(t *testing.T) {
-	for name, tc := range map[string]struct{ yaml, token, want string }{
-		"no token":    {"base_url: http://127.0.0.1:1\ntag: t\n", "", TokenEnv},
-		"unknown key": {"base_url: http://127.0.0.1:1\ntag: t\nwrite: true\n", "x", "write"},
-		"no tag":      {"base_url: http://127.0.0.1:1\n", "lab-token", "tag is required"},
+func TestNewChecksTheConfigAndFetchNeedsTheToken(t *testing.T) {
+	for name, tc := range map[string]struct{ yaml, want string }{
+		"unknown key": {"base_url: http://127.0.0.1:1\ntag: t\nwrite: true\n", "write"},
+		"no tag":      {"base_url: http://127.0.0.1:1\n", "tag is required"},
 	} {
 		c, err := plugin.ConfigFromYAML(tc.yaml)
 		if err != nil {
 			t.Fatal(err)
 		}
-		_, err = New(c, plugin.Env{Getenv: func(string) string { return tc.token }})
-		if err == nil || !strings.Contains(err.Error(), tc.want) {
+		if _, err = New(c, plugin.Env{}); err == nil || !strings.Contains(err.Error(), tc.want) {
 			t.Errorf("%s: err %v, want %q", name, err, tc.want)
 		}
+	}
+	// The controller loads the config without the token; only Fetch reads it.
+	inv := newPlugin(t, "http://127.0.0.1:1", "")
+	if _, err := inv.Fetch(context.Background()); err == nil || !strings.Contains(err.Error(), TokenEnv) {
+		t.Fatalf("fetch without a token: %v", err)
 	}
 	if !plugin.Inventories.Has(TypeName) {
 		t.Fatal("netbox is not registered")

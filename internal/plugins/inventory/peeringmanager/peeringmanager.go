@@ -27,25 +27,26 @@ const contextKey = "packeteer"
 func init() { plugin.Inventories.Register(TypeName, New) }
 
 type source struct {
-	client *invcommon.Client
-	tag    string
+	settings invcommon.Settings
+	getenv   func(string) string
 }
 
-// New validates the config and the token. It does not dial.
+// New validates the config. It does not dial and does not read the token,
+// which only Fetch needs.
 func New(c plugin.Config, env plugin.Env) (plugin.Inventory, error) {
 	var cfg invcommon.Common
 	if err := c.Decode(&cfg); err != nil {
+		return nil, err
+	}
+	s, err := invcommon.Validate(cfg)
+	if err != nil {
 		return nil, err
 	}
 	getenv := env.Getenv
 	if getenv == nil {
 		getenv = func(string) string { return "" }
 	}
-	s, err := invcommon.Validate(cfg, TokenEnv, getenv)
-	if err != nil {
-		return nil, err
-	}
-	return &source{client: invcommon.NewClient(s, "Token "+s.Token), tag: s.Tag}, nil
+	return &source{settings: s, getenv: getenv}, nil
 }
 
 type autonomousSystem struct {
@@ -60,16 +61,20 @@ type autonomousSystem struct {
 // part of the documented API. The provider's name is the slug of the
 // autonomous system's name.
 func (s *source) Fetch(ctx context.Context) (plugin.InventoryResult, error) {
+	token, err := invcommon.Token(s.settings, TokenEnv, s.getenv)
+	if err != nil {
+		return plugin.InventoryResult{}, err
+	}
 	var (
 		list  []plugin.InventoryProvider
 		skips []plugin.InventorySkip
 	)
-	err := s.client.GetAll(ctx, "/api/peering/autonomous-systems/", url.Values{}, func(raw json.RawMessage) error {
+	err = invcommon.NewClient(s.settings, "Token", token).GetAll(ctx, "/api/peering/autonomous-systems/", url.Values{}, func(raw json.RawMessage) error {
 		var a autonomousSystem
 		if err := json.Unmarshal(raw, &a); err != nil {
 			return fmt.Errorf("autonomous system record: %w", err)
 		}
-		if !tagged(a.Tags, s.tag) {
+		if !tagged(a.Tags, s.settings.Tag) {
 			return nil
 		}
 		name := invcommon.Slug(a.Name)
