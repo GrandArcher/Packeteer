@@ -61,27 +61,58 @@ func create() plugin.RegistryChange {
 	return plugin.RegistryChange{Registry: "ripe", Op: "create_object", Class: "route", Key: "203.0.113.0/24AS64496", Object: routeObj}
 }
 
+// storedObj is a database object whose descr, mnt-by, mnt-routes, and
+// remarks differ from what Packeteer would write, as a whois answer and as
+// the REST API returns it.
+const storedObj = "route:          203.0.113.0/24\n" +
+	"descr:          Customer link, moved in 2025\n" +
+	"origin:         AS64496\n" +
+	"mnt-by:         OTHER-MNT\n" +
+	"mnt-routes:     ROUTES-MNT\n" +
+	"remarks:        keep until the contract ends\n" +
+	"remarks:        second line,\n" +
+	"                continued\n" +
+	"source:         RIPE # Filtered\n"
+
+const storedREST = `{"objects":{"object":[{"type":"route","source":{"id":"ripe"},"attributes":{"attribute":[
+{"name":"route","value":"203.0.113.0/24"},
+{"name":"descr","value":"Customer link, moved in 2025"},
+{"name":"origin","value":"AS64496"},
+{"link":{"type":"locator","href":"https://rest.db.ripe.net/ripe/mntner/OTHER-MNT"},"name":"mnt-by","value":"OTHER-MNT","referenced-type":"mntner"},
+{"name":"mnt-routes","value":"ROUTES-MNT","referenced-type":"mntner"},
+{"name":"remarks","value":"keep until the contract ends"},
+{"name":"remarks","value":"second line, continued"},
+{"name":"source","value":"RIPE"}]}}]}}`
+
+func deletion() plugin.RegistryChange {
+	return plugin.RegistryChange{Registry: "ripe", Op: "delete_object", Class: "route", Key: "203.0.113.0/24AS64496", Object: storedObj}
+}
+
 // #289: a create is a POST of the object as REST JSON to the database and
-// class, with the maintainer credentials as basic auth; a delete is a
-// DELETE of the key.
+// class, with the maintainer credentials as basic auth; a delete first
+// reads the stored object without credentials, then DELETEs the key.
 func TestPush(t *testing.T) {
 	var got []request
 	p := newPusher(t, "{base_url: SRV}", func(w http.ResponseWriter, r *http.Request) {
 		b, _ := io.ReadAll(r.Body)
 		u, pw, _ := r.BasicAuth()
 		got = append(got, request{r.Method, r.URL.Path, r.URL.RawQuery, u, pw, string(b)})
-		w.WriteHeader(http.StatusOK)
+		if r.Method == http.MethodGet {
+			_, _ = io.WriteString(w, storedREST)
+		}
 	}, true)
 	ctx := context.Background()
 	if err := p.Push(ctx, create()); err != nil {
 		t.Fatal(err)
 	}
-	del := plugin.RegistryChange{Registry: "ripe", Op: "delete_object", Class: "route", Key: "203.0.113.0/24AS64496", Object: routeObj}
-	if err := p.Push(ctx, del); err != nil {
+	if err := p.Push(ctx, deletion()); err != nil {
 		t.Fatal(err)
 	}
-	if len(got) != 2 {
+	if len(got) != 3 {
 		t.Fatalf("requests = %+v", got)
+	}
+	if g := got[1]; g.method != "GET" || g.path != "/ripe/route/203.0.113.0/24AS64496" || g.query != "unfiltered" || g.user != "" || g.pass != "" {
+		t.Fatalf("read before delete = %+v", g)
 	}
 	c := got[0]
 	if c.method != "POST" || c.path != "/ripe/route" || c.user != user || c.pass != pass {
@@ -109,7 +140,7 @@ func TestPush(t *testing.T) {
 	if o.Source.ID != "RIPE" || strings.Join(names, " ") != want {
 		t.Fatalf("object = %+v (%s)", o, names)
 	}
-	d := got[1]
+	d := got[2]
 	if d.method != "DELETE" || d.path != "/ripe/route/203.0.113.0/24AS64496" || !strings.HasPrefix(d.query, "reason=") || d.user != user {
 		t.Fatalf("delete = %+v", d)
 	}
@@ -210,5 +241,47 @@ func TestConfig(t *testing.T) {
 		if (err != nil) != bad {
 			t.Errorf("%s: err = %v", cfg, err)
 		}
+	}
+}
+
+// #289: a delete is refused, and nothing is deleted, when the stored object
+// is gone, differs from the one shown, or cannot be read.
+func TestDeleteNeedsTheShownObject(t *testing.T) {
+	var deletes int
+	answer, code := storedREST, http.StatusOK
+	p := newPusher(t, "{base_url: SRV}", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodDelete {
+			deletes++
+			return
+		}
+		w.WriteHeader(code)
+		_, _ = io.WriteString(w, answer)
+	}, true)
+	ctx := context.Background()
+	for name, tc := range map[string]struct {
+		answer string
+		code   int
+		want   string
+	}{
+		"descr changed": {strings.Replace(storedREST, "moved in 2025", "moved in 2026", 1), http.StatusOK, "differs from the object shown"},
+		"remark added":  {strings.Replace(storedREST, `{"name":"source"`, `{"name":"remarks","value":"new"},{"name":"source"`, 1), http.StatusOK, "differs from the object shown"},
+		"gone":          {`{"errormessages":{}}`, http.StatusNotFound, "no longer in the database"},
+		"not json":      {"<html>", http.StatusOK, "not one REST object"},
+		"server error":  {"", http.StatusInternalServerError, "HTTP 500"},
+	} {
+		answer, code = tc.answer, tc.code
+		if err := p.Push(ctx, deletion()); err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("%s: err = %v", name, err)
+		}
+	}
+	// The template object is not what the database holds.
+	answer, code = storedREST, http.StatusOK
+	ch := deletion()
+	ch.Object = routeObj
+	if err := p.Push(ctx, ch); err == nil || !strings.Contains(err.Error(), "differs") {
+		t.Fatalf("template object = %v", err)
+	}
+	if deletes != 0 {
+		t.Fatalf("%d deletes after refusals", deletes)
 	}
 }

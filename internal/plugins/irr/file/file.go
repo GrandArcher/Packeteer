@@ -314,6 +314,12 @@ func (s *Source) OriginPrefixes(_ context.Context, asn uint32) ([]netip.Prefix, 
 	return out, d.at, nil
 }
 
+// RouteObjects is not served: the file is parsed into prefixes and
+// origins and keeps no object text.
+func (*Source) RouteObjects(context.Context, netip.Prefix) ([]plugin.IRRObject, time.Time, error) {
+	return nil, time.Time{}, plugin.ErrIRRUnsupported
+}
+
 // ASName returns the as-name of the file's aut-num object for asn.
 func (s *Source) ASName(_ context.Context, asn uint32) (string, time.Time, error) {
 	if s.cfg.Format == FormatBGPQ4 {

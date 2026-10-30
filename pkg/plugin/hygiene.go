@@ -46,7 +46,9 @@ type RegistrySession struct {
 	Exchange string
 	// IXID is the PeeringDB ix id of the exchange, 0 when unknown.
 	IXID int
-	// Addrs are the network's own addresses on the LAN.
+	// Addrs are the network's own router addresses on the peering LAN
+	// (exchanges[].local_lan_addrs). Empty means the connection records
+	// cannot be compared.
 	Addrs []netip.Addr
 	// SpeedMbps is the port speed, 0 when the config does not say.
 	SpeedMbps int

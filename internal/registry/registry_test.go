@@ -1,8 +1,10 @@
 package registry
 
 import (
+	"cmp"
 	"context"
 	"errors"
+	"fmt"
 	"net/netip"
 	"slices"
 	"strings"
@@ -19,12 +21,33 @@ type fakeIRR struct {
 	byOrigin map[uint32][]netip.Prefix
 	routes   map[netip.Prefix][]plugin.IRRRoute
 	sets     map[string][]uint32
-	err      error
-	noOrigin bool
+	// texts is the stored object text by database; unset ones get a short
+	// object.
+	texts     map[string]string
+	err       error
+	routesErr error
+	noOrigin  bool
+	noText    bool
 }
 
 func (f *fakeIRR) Routes(_ context.Context, p netip.Prefix) ([]plugin.IRRRoute, time.Time, error) {
-	return f.routes[p], time.Time{}, f.err
+	return f.routes[p], time.Time{}, cmp.Or(f.routesErr, f.err)
+}
+
+func (f *fakeIRR) RouteObjects(ctx context.Context, p netip.Prefix) ([]plugin.IRRObject, time.Time, error) {
+	if f.noText {
+		return nil, time.Time{}, plugin.ErrIRRUnsupported
+	}
+	routes, at, err := f.Routes(ctx, p)
+	var out []plugin.IRRObject
+	for _, rt := range routes {
+		text := f.texts[rt.Database]
+		if text == "" {
+			text = fmt.Sprintf("route: %s\norigin: AS%d\nsource: %s\n", rt.Prefix, rt.Origin, rt.Database)
+		}
+		out = append(out, plugin.IRRObject{IRRRoute: rt, Text: text})
+	}
+	return out, at, err
 }
 
 func (f *fakeIRR) OriginPrefixes(_ context.Context, asn uint32) ([]netip.Prefix, time.Time, error) {
@@ -175,7 +198,7 @@ func TestScanIRR(t *testing.T) {
 	if len(dup) != 1 || dup[0].Subject != "198.51.100.0/24 AS64496 RADB" || dup[0].Change != nil || dup[0].Pushable {
 		t.Fatalf("irr_duplicate = %+v (a RADB copy is text to submit, not a push)", dup)
 	}
-	if !strings.HasPrefix(dup[0].Diff, "- route:") || !strings.Contains(dup[0].Diff, "source:         RADB") {
+	if dup[0].Diff != "- route: 198.51.100.0/24\n- origin: AS64496\n- source: RADB" {
 		t.Fatalf("duplicate diff = %q", dup[0].Diff)
 	}
 }
@@ -301,6 +324,18 @@ func TestScanASSet(t *testing.T) {
 	un := got["asset_unseen"]
 	if len(un) != 1 || un[0].Subject != "AS-EXAMPLE AS64520" || un[0].Severity != plugin.RegistryInfo || un[0].Diff != "as-set: AS-EXAMPLE\n- members: AS64520\n" {
 		t.Fatalf("asset_unseen = %+v", un)
+	}
+
+	// An unknown customer cone would call every member unseen: skipped.
+	svc = newService(Config{ASSet: "AS-EXAMPLE"}, Deps{IRR: []IRRSource{{Name: "x", Plugin: src}}, Observe: func() Observed {
+		o := observed()
+		o.NoCone = "provider transit-a has no asn"
+		return o
+	}})
+	svc.Scan(context.Background())
+	r := svc.Report()
+	if sec := section(r, "as-set"); sec.Status != "skipped" || sec.Detail != "provider transit-a has no asn" || len(byKind(r)["asset_unseen"]) != 0 {
+		t.Fatalf("as-set without a cone = %+v %+v", sec, r.Findings)
 	}
 }
 
@@ -507,5 +542,78 @@ func TestDuplicateIsTextOnly(t *testing.T) {
 	dup := byKind(svc.Report())["irr_duplicate"]
 	if len(dup) != 1 || dup[0].Subject != "198.51.100.0/24 AS64496 RIPE" || dup[0].Change != nil || dup[0].Pushable || dup[0].Diff == "" {
 		t.Fatalf("irr_duplicate = %+v", dup)
+	}
+}
+
+// #289: a stale or duplicate object is shown, deleted, and returned for the
+// audit as the database stores it, not as our template would write it.
+func TestDeleteUsesStoredObject(t *testing.T) {
+	stale, live := pfx("192.0.2.0/24"), pfx("198.51.100.0/24")
+	ripeText := "route:          192.0.2.0/24\n" +
+		"descr:          Customer link, moved in 2025\n" +
+		"origin:         AS64496\n" +
+		"mnt-by:         OTHER-MNT\n" +
+		"mnt-routes:     ROUTES-MNT\n" +
+		"remarks:        keep until the contract ends\n" +
+		"source:         RIPE\n"
+	radbText := "route:      198.51.100.0/24\ndescr:      Old upstream registration\norigin:     AS64496\nmnt-by:     RADB-MNT\nremarks:    added by the previous operator\nsource:     RADB\n"
+	src := &fakeIRR{
+		byOrigin: map[uint32][]netip.Prefix{64496: {stale, live, pfx("203.0.113.0/24"), pfx("2001:db8::/32")}},
+		routes: map[netip.Prefix][]plugin.IRRRoute{
+			stale: {{Prefix: stale, Origin: 64496, Database: "RIPE"}},
+			live:  {{Prefix: live, Origin: 64496, Database: "RIPE"}, {Prefix: live, Origin: 64496, Database: "RADB"}},
+		},
+		texts: map[string]string{"RIPE": ripeText, "RADB": radbText},
+	}
+	chk := &fakeChecker{}
+	svc := newService(Config{IRRSource: "RIPE", PushDB: "RIPE", MntBy: "EXAMPLE-MNT", PushEnabled: true}, Deps{
+		IRR: []IRRSource{{Name: "x", Plugin: src}}, Checkers: []Checker{{Name: "ripe", Type: "ripe", Plugin: chk}},
+	})
+	for range 2 {
+		svc.Scan(context.Background())
+	}
+	got := byKind(svc.Report())
+	st := got["irr_stale"]
+	if len(st) != 1 || !st[0].Pushable || st[0].Change.Object != ripeText || st[0].Change.Key != "192.0.2.0/24AS64496" {
+		t.Fatalf("irr_stale = %+v", st)
+	}
+	wantDiff := "- route:          192.0.2.0/24\n- descr:          Customer link, moved in 2025\n- origin:         AS64496\n- mnt-by:         OTHER-MNT\n- mnt-routes:     ROUTES-MNT\n- remarks:        keep until the contract ends\n- source:         RIPE"
+	if st[0].Diff != wantDiff {
+		t.Fatalf("stale diff = %q, want %q", st[0].Diff, wantDiff)
+	}
+	dup := got["irr_duplicate"]
+	if len(dup) != 1 || dup[0].Diff != "- "+strings.ReplaceAll(strings.TrimSpace(radbText), "\n", "\n- ") || strings.Contains(dup[0].Diff, "EXAMPLE-MNT") {
+		t.Fatalf("irr_duplicate = %+v", dup)
+	}
+	ch, err := svc.Push(context.Background(), st[0].ID, st[0].Digest)
+	if err != nil || ch.Object != ripeText || len(chk.pushed) != 1 || chk.pushed[0].Object != ripeText {
+		t.Fatalf("push = %+v %v, plugin got %+v", ch, err, chk.pushed)
+	}
+}
+
+// #289: when the stored object cannot be read, the finding says so and
+// offers no diff and no delete, in any scan.
+func TestStaleWithoutStoredObject(t *testing.T) {
+	stale := pfx("192.0.2.0/24")
+	cases := map[string]struct {
+		src  *fakeIRR
+		want string
+	}{
+		"no text": {&fakeIRR{noText: true}, "source x keeps no object text, so no diff or delete is offered"},
+		"error":   {&fakeIRR{routesErr: errors.New("connection reset")}, "the object could not be read (x: connection reset), so no delete is offered"},
+	}
+	for name, tc := range cases {
+		tc.src.byOrigin = map[uint32][]netip.Prefix{64496: {stale, pfx("198.51.100.0/24"), pfx("203.0.113.0/24"), pfx("2001:db8::/32")}}
+		tc.src.routes = map[netip.Prefix][]plugin.IRRRoute{stale: {{Prefix: stale, Origin: 64496, Database: "RIPE"}}}
+		svc := newService(Config{IRRSource: "RIPE", PushDB: "RIPE", PushEnabled: true}, Deps{
+			IRR: []IRRSource{{Name: "x", Plugin: tc.src}}, Checkers: []Checker{{Name: "ripe", Type: "ripe", Plugin: &fakeChecker{}}},
+		})
+		for range 2 {
+			svc.Scan(context.Background())
+		}
+		st := byKind(svc.Report())["irr_stale"]
+		if len(st) != 1 || st[0].Diff != "" || st[0].Change != nil || st[0].Pushable || !strings.HasSuffix(st[0].Message, tc.want) {
+			t.Errorf("%s: irr_stale = %+v", name, st)
+		}
 	}
 }

@@ -692,6 +692,10 @@ type Exchange struct {
 	// Port is the one interface every peer shares (#151). Nil leaves each
 	// peer an independent provider.
 	Port *ExchangePort `yaml:"port"`
+	// LocalLANAddrs are this network's own router addresses on the peering
+	// LAN, as PeeringDB lists the connection (#289). Only registry hygiene
+	// reads them; a peer's source_ip is a probe source, not this.
+	LocalLANAddrs []string `yaml:"local_lan_addrs"`
 }
 
 // ExchangePort is an exchange's shared port. Its usage comes from a

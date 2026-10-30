@@ -598,6 +598,7 @@ Internet exchanges (#27, IRP 1.2.11). Each peer listed on an exchange is a provi
 | `group` | no | The peers' load-balancing group, as on providers. |
 | `peers` | yes | At least one. |
 | `port` | no | The shared IX port (#151); see below. |
+| `local_lan_addrs` | no | This network's own router addresses on the peering LAN, as PeeringDB lists the connection (`ipaddr4`, `ipaddr6`). Each inside `lans`, listed once, not a peer `next_hop`. Read only by [registry hygiene](registry.md); a peer's `source_ip` is a probe source, not this. |
 | `max_prefix_warn_pct` | `90` | Share of a peer's `max_prefix` at which `exchange.max_prefix` fires. 1 to 100. A peer with no `max_prefix` is not warned. |
 
 Each peer:
@@ -825,10 +826,10 @@ Registry hygiene (#289, not on a public edge). Off by default. A scheduled scan 
 |---|---|---|
 | `enabled` | `false` | `true` turns the scan on. A block that is not enabled must not set any other key. |
 | `asns` | none | Required when enabled. The origin ASNs the network announces. A learned route is the network's when its origin (the last AS of the path, or `asn` for a route with an empty path) is one of them. |
-| `as_set` | none | The operator's as-set (for example `AS-EXAMPLE`), checked against the ASNs that follow `asns` on learned paths. Needs an `irr.sources` entry. |
+| `as_set` | none | The operator's as-set (for example `AS-EXAMPLE`), checked against the ASNs that follow `asns` on learned paths. With `asn` in `asns`, a path from a neighbor that is not a provider (other than `type: customer`) or exchange peer counts as a customer's, which needs `asn` on those providers ([registry.md](registry.md)). Needs an `irr.sources` entry. |
 | `interval` | `24h` | Time between scans. 1h-168h. The first scan runs a minute after start. |
 | `headroom_percent` | `20` | Percent added to the announced prefix counts when a PeeringDB max-prefix value is suggested. 1-1000. |
-| `irr` | `RIPE` source | The RPSL of generated route objects: `source` is the `source:` attribute (default `RIPE`; a change is pushable only for `RIPE`, any other value gives RPSL to submit by hand) and `mnt_by` is the `mnt-by:` attribute (required to push through a `ripe` source). |
+| `irr` | `RIPE` source | The RPSL of generated route objects: `source` is the `source:` attribute (default `RIPE`; a change is pushable only for `RIPE` or `TEST`, matching the `ripe` source; any other value gives RPSL to submit by hand) and `mnt_by` is the `mnt-by:` attribute (required to push through a `ripe` source). |
 | `push_enabled` | `false` | `true` allows `POST /api/registry/push`, which needs the admin role and an authenticated API. Needs a `sources` entry. |
 | `sources` | none | Registry plugins (`type`, optional `name`, `config`): `peeringdb` ([Registry source `peeringdb`](#registry-source-peeringdb)) reads PeeringDB and can push; `ripe` ([Registry source `ripe`](#registry-source-ripe)) pushes route objects. Names must differ. |
 
@@ -1970,7 +1971,7 @@ Reads a mounted file and answers from memory. It is read again when its size or 
 
 ### Registry source `peeringdb`
 
-Reads the network record (`net`), exchange connections (`netixlan`), facilities, and contacts of each `registry.asns` entry with GET, and compares them with the announced prefix counts and the configured exchange sessions (the exchange's `ix_id` comes from the `lookup` block). A push sets `info_prefixes4`, `info_prefixes6`, or a connection `speed` with PUT; it re-reads the record first and refuses when the field no longer holds the value the diff showed. Requests are paced as for `lookup`; redirects are not followed. The API key is `PACKETEER_PEERINGDB_API_KEY`, the same variable as `lookup`; a scan works without it, a push needs it.
+Reads the network record (`net`), exchange connections (`netixlan`), facilities, and contacts of each `registry.asns` entry with GET, and compares them with the announced prefix counts and each exchange's `local_lan_addrs` and `port.capacity_mbps` (the exchange's `ix_id` comes from the `lookup` block). A push sets `info_prefixes4`, `info_prefixes6`, or a connection `speed` with PUT; it re-reads the record first and refuses when the field no longer holds the value the diff showed. Requests are paced as for `lookup`; redirects are not followed. The API key is `PACKETEER_PEERINGDB_API_KEY`, the same variable as `lookup`; a scan works without it, a push needs it.
 
 | Key | Default | Meaning |
 |---|---|---|
@@ -1979,7 +1980,7 @@ Reads the network record (`net`), exchange connections (`netixlan`), facilities,
 
 ### Registry source `ripe`
 
-Creates or deletes one `route` or `route6` object through the RIPE database REST API after an admin confirmed the diff. It reads nothing; the findings come from `irr.sources`. The maintainer credentials are `PACKETEER_RIPE_USER` and `PACKETEER_RIPE_PASSWORD`, read from the environment only when a change is pushed and sent only as basic authentication to `base_url`. Redirects are not followed.
+Creates or deletes one `route` or `route6` object through the RIPE database REST API after an admin confirmed the diff. The findings come from `irr.sources`. Before a delete it reads the object (`GET` with `unfiltered`, no credentials) and refuses unless it equals the object shown. The maintainer credentials are `PACKETEER_RIPE_USER` and `PACKETEER_RIPE_PASSWORD`, read from the environment only when a change is pushed and sent only as basic authentication to `base_url`. Redirects are not followed.
 
 | Key | Default | Meaning |
 |---|---|---|

@@ -1,9 +1,9 @@
-// Package ripe is the RIPE database registry plugin (#289). It reads
-// nothing: it applies one confirmed route or route6 object creation or
-// deletion through the RIPE database REST API (rest.db.ripe.net, or the
-// TEST database), with the maintainer credentials from the environment.
-// Findings come from the irr sources, not from here. It never announces
-// and never changes the learned RIB.
+// Package ripe is the RIPE database registry plugin (#289). It applies one
+// confirmed route or route6 object creation or deletion through the RIPE
+// database REST API (rest.db.ripe.net, or the TEST database), with the
+// maintainer credentials from the environment. The only read is the object
+// a delete is about to remove. Findings come from the irr sources, not from
+// here. It never announces and never changes the learned RIB.
 package ripe
 
 import (
@@ -15,6 +15,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"time"
 
@@ -127,6 +128,11 @@ func (p *Pusher) Push(ctx context.Context, ch plugin.RegistryChange) error {
 	if err != nil {
 		return err
 	}
+	if ch.Op == "delete_object" {
+		if err := p.unchanged(ctx, ch, obj); err != nil {
+			return err
+		}
+	}
 	if err := p.limit.Wait(ctx); err != nil {
 		return err
 	}
@@ -164,6 +170,62 @@ func (p *Pusher) Push(ctx context.Context, ch plugin.RegistryChange) error {
 		return fmt.Errorf("ripe: %s %s: HTTP %d", req.Method, req.URL.Path, resp.StatusCode)
 	}
 	return nil
+}
+
+// unchanged reads the stored object, unfiltered and without credentials,
+// and refuses unless it is the object that was shown: the delete is by key,
+// and the audit record must hold what was deleted.
+func (p *Pusher) unchanged(ctx context.Context, ch plugin.RegistryChange, shown irr.Object) error {
+	if err := p.limit.Wait(ctx); err != nil {
+		return err
+	}
+	u := *p.base
+	u.Path += "/" + strings.ToLower(p.source) + "/" + ch.Class + "/" + ch.Key
+	u.RawQuery = "unfiltered"
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
+	if err != nil {
+		return errors.New("ripe: bad url")
+	}
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("User-Agent", "packeteer")
+	resp, err := p.http.Do(req)
+	if err != nil {
+		return fmt.Errorf("ripe: reading %s %s: %w", ch.Class, ch.Key, err)
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBody+1))
+	switch {
+	case err != nil || len(body) > maxBody:
+		return errors.New("ripe: stored object unreadable or too large")
+	case resp.StatusCode == http.StatusNotFound:
+		return fmt.Errorf("ripe: %s %s is no longer in the database; rescan", ch.Class, ch.Key)
+	case resp.StatusCode != http.StatusOK:
+		return fmt.Errorf("ripe: GET %s: HTTP %d", req.URL.Path, resp.StatusCode)
+	}
+	var doc struct {
+		Objects struct {
+			Object []struct {
+				Attributes struct {
+					Attribute []irr.Attr `json:"attribute"`
+				} `json:"attributes"`
+			} `json:"object"`
+		} `json:"objects"`
+	}
+	if err := json.Unmarshal(body, &doc); err != nil || len(doc.Objects.Object) != 1 {
+		return errors.New("ripe: the stored object is not one REST object")
+	}
+	if !sameObject(shown, doc.Objects.Object[0].Attributes.Attribute) {
+		return fmt.Errorf("ripe: %s %s in the database differs from the object shown (changed, or the scan read a filtered or mirrored copy); rescan with a ripe dialect source", ch.Class, ch.Key)
+	}
+	return nil
+}
+
+// sameObject compares attributes in order, by lower-case name and by value
+// with whitespace runs folded (RPSL continuation lines).
+func sameObject(a irr.Object, b []irr.Attr) bool {
+	return slices.EqualFunc(a, b, func(x, y irr.Attr) bool {
+		return x.Name == strings.ToLower(y.Name) && strings.Join(strings.Fields(x.Value), " ") == strings.Join(strings.Fields(y.Value), " ")
+	})
 }
 
 // parse checks that the object text is the single object the key names,

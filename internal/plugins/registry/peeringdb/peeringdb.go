@@ -257,24 +257,37 @@ func (c *Checker) maxPrefix(net object, id int, asn uint32, f plugin.RegistryFac
 }
 
 // ixFindings compares netixlan records with the configured sessions of the
-// exchanges whose ix id is known.
+// exchanges whose ix id is known. Without the network's own LAN addresses
+// a session is not compared, and the finding says so.
 func ixFindings(ixlans []object, asn uint32, sessions []plugin.RegistrySession) []plugin.RegistryFinding {
 	var out []plugin.RegistryFinding
-	known := map[int]bool{}
+	checked := map[int]bool{}
 	for _, s := range sessions {
 		if s.IXID == 0 {
 			continue
 		}
-		known[s.IXID] = true
+		if len(s.Addrs) == 0 {
+			out = append(out, plugin.RegistryFinding{
+				Kind: "pdb_ix_unchecked", Severity: plugin.RegistryInfo, Registry: "peeringdb",
+				Subject: fmt.Sprintf("AS%d %s", asn, s.Exchange),
+				Message: fmt.Sprintf("exchanges %s sets no local_lan_addrs, so the PeeringDB connection records at ix %d are not compared", s.Exchange, s.IXID),
+			})
+			continue
+		}
+		checked[s.IXID] = true
 		for _, a := range s.Addrs {
 			rec, found := findIX(ixlans, s.IXID, a)
 			switch {
 			case !found:
+				diff := fmt.Sprintf("+ netixlan ix_id %d, asn %d, address %s", s.IXID, asn, a)
+				if s.SpeedMbps > 0 {
+					diff += fmt.Sprintf(", speed %d", s.SpeedMbps)
+				}
 				out = append(out, plugin.RegistryFinding{
 					Kind: "pdb_ix_missing", Severity: plugin.RegistryWarning, Registry: "peeringdb",
 					Subject: fmt.Sprintf("AS%d %s %s", asn, s.Exchange, a),
-					Message: fmt.Sprintf("the %s session from %s has no PeeringDB connection record", s.Exchange, a),
-					Diff:    fmt.Sprintf("+ netixlan ix_id %d, asn %d, address %s, speed %d", s.IXID, asn, a, s.SpeedMbps),
+					Message: fmt.Sprintf("%s at %s has no PeeringDB connection record", a, s.Exchange),
+					Diff:    diff,
 				})
 			case s.SpeedMbps > 0:
 				if have, ok := rec.num("speed"); ok && have != s.SpeedMbps {
@@ -292,7 +305,7 @@ func ixFindings(ixlans []object, asn uint32, sessions []plugin.RegistrySession) 
 	}
 	for _, rec := range ixlans {
 		ix, _ := rec.num("ix_id")
-		if !known[ix] {
+		if !checked[ix] {
 			continue
 		}
 		configured := false
@@ -301,9 +314,7 @@ func ixFindings(ixlans []object, asn uint32, sessions []plugin.RegistrySession) 
 			if a, err := netip.ParseAddr(rec.str(k)); err == nil {
 				listed = append(listed, a.String())
 				for _, s := range sessions {
-					for _, sa := range s.Addrs {
-						configured = configured || (s.IXID == ix && sa == a)
-					}
+					configured = configured || (s.IXID == ix && slices.Contains(s.Addrs, a))
 				}
 			}
 		}
@@ -311,7 +322,7 @@ func ixFindings(ixlans []object, asn uint32, sessions []plugin.RegistrySession) 
 			out = append(out, plugin.RegistryFinding{
 				Kind: "pdb_ix_stale", Severity: plugin.RegistryInfo, Registry: "peeringdb",
 				Subject: fmt.Sprintf("AS%d ix %d %s", asn, ix, strings.Join(listed, " ")),
-				Message: fmt.Sprintf("PeeringDB lists a connection at ix %d with %s and no configured session uses it", ix, strings.Join(listed, ", ")),
+				Message: fmt.Sprintf("PeeringDB lists a connection at ix %d with %s and no address in local_lan_addrs matches it", ix, strings.Join(listed, ", ")),
 			})
 		}
 	}

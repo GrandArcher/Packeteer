@@ -371,3 +371,37 @@ func TestOriginPrefixes(t *testing.T) {
 		t.Fatalf("ripe none = %v %v", got, err)
 	}
 }
+
+// #289: RouteObjects returns each matching object with its text as the
+// server sent it (no % lines), in databases order; the ripe dialect asks
+// unfiltered with -B, and an error answer is an error.
+func TestRouteObjects(t *testing.T) {
+	ctx := context.Background()
+	srv := newIRRd(t, map[string]string{"!r198.51.100.0/24": fixture(t, "irrd-route.txt")})
+	c := newClient(t, "{address: \""+srv.ln.Addr().String()+"\", databases: [radb, ripe], rate_per_minute: 600}")
+	objs, _, err := c.RouteObjects(ctx, netip.MustParsePrefix("198.51.100.0/24"))
+	if err != nil || len(objs) != 2 {
+		t.Fatalf("irrd = %+v %v", objs, err)
+	}
+	radb := "route:          198.51.100.0/24\ndescr:          EXAMPLE-NET second origin\norigin:         AS64497\nmnt-by:         MAINT-EXAMPLE\nsource:         RADB\n"
+	if objs[0].Database != "RADB" || objs[0].Origin != 64497 || objs[0].Text != radb {
+		t.Fatalf("first object = %+v", objs[0])
+	}
+	if objs[1].Database != "RIPE" || !strings.HasPrefix(objs[1].Text, "route:          198.51.100.0/24\ndescr:          EXAMPLE-NET\n") || !strings.HasSuffix(objs[1].Text, "rpki-ov-state:  valid\n") {
+		t.Fatalf("second object = %+v", objs[1])
+	}
+
+	addr, _ := ripeServer(t, map[string]string{
+		"-r -s RIPE -B -x -T route,route6 203.0.113.0/24": fixture(t, "ripe-route.txt"),
+		"-r -s RIPE -B -x -T route,route6 192.0.2.0/24":   fixture(t, "ripe-access-denied.txt"),
+	})
+	rc := newClient(t, "{address: \""+addr+"\", dialect: ripe, databases: [RIPE], rate_per_minute: 600}")
+	objs, _, err = rc.RouteObjects(ctx, netip.MustParsePrefix("203.0.113.0/24"))
+	want := "route:          203.0.113.0/24\ndescr:          EXAMPLE-NET\norigin:         AS64500\nmnt-by:         MAINT-EXAMPLE\ncreated:        2020-01-01T00:00:00Z\nlast-modified:  2024-05-06T07:08:09Z\nsource:         RIPE # Filtered\n"
+	if err != nil || len(objs) != 1 || objs[0].Text != want || objs[0].Origin != 64500 || objs[0].Database != "RIPE" {
+		t.Fatalf("ripe = %+v %v", objs, err)
+	}
+	if _, _, err = rc.RouteObjects(ctx, netip.MustParsePrefix("192.0.2.0/24")); err == nil {
+		t.Fatal("access denied read as no objects")
+	}
+}

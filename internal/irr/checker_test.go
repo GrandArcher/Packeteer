@@ -44,6 +44,10 @@ func (f *fakeIRR) OriginPrefixes(context.Context, uint32) ([]netip.Prefix, time.
 	return nil, f.at, f.err
 }
 
+func (f *fakeIRR) RouteObjects(context.Context, netip.Prefix) ([]plugin.IRRObject, time.Time, error) {
+	return nil, time.Time{}, plugin.ErrIRRUnsupported
+}
+
 func (f *fakeIRR) ASName(_ context.Context, asn uint32) (string, time.Time, error) {
 	if f.noSets {
 		return "", time.Time{}, plugin.ErrIRRUnsupported

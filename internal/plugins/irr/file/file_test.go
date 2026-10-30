@@ -199,4 +199,9 @@ func TestOriginPrefixes(t *testing.T) {
 	if got, _, err = b.OriginPrefixes(ctx, 64497); err != nil || !slices.Equal(got, []netip.Prefix{netip.MustParsePrefix("203.0.113.0/24")}) {
 		t.Fatalf("bgpq4 = %v %v", got, err)
 	}
+	// #289: a file keeps no object text, so registry hygiene offers no
+	// delete from it.
+	if _, _, err = s.RouteObjects(ctx, want[0]); !errors.Is(err, plugin.ErrIRRUnsupported) {
+		t.Fatalf("rpsl RouteObjects err = %v", err)
+	}
 }

@@ -1,6 +1,8 @@
 package main
 
 import (
+	"cmp"
+	"fmt"
 	"log/slog"
 	"net/netip"
 
@@ -45,20 +47,46 @@ func registryObserver(cfg *config.Config, view *rib.View) func() registry.Observ
 	for _, a := range cfg.Registry.ASNs {
 		own[a] = true
 	}
+	var upstream map[uint32]bool
+	noCone := ""
+	if own[cfg.ASN] {
+		upstream, noCone = upstreamASNs(cfg)
+	}
 	sessions := registrySessions(cfg)
 	return func() registry.Observed {
-		obs := registry.Observed{Ready: view.Ready(), Announced: map[netip.Prefix]uint32{}, Origins: map[netip.Prefix]map[uint32]bool{}, Downstream: map[uint32]bool{}, Sessions: sessions}
+		obs := registry.Observed{Ready: view.Ready(), Announced: map[netip.Prefix]uint32{}, Origins: map[netip.Prefix]map[uint32]bool{}, Downstream: map[uint32]bool{}, NoCone: noCone, Sessions: sessions}
 		if obs.Ready {
-			observeRIB(view, cfg.ASN, own, &obs)
+			observeRIB(view, cfg.ASN, own, upstream, &obs)
 		}
 		return obs
 	}
 }
 
+// upstreamASNs are the ASNs of the edge's transits and peers: every
+// provider but type customer, and every exchange peer. The edge's own ASN
+// is not on the paths it learns, so a path from any other neighbor is a
+// customer's. A provider without asn leaves that unknown.
+func upstreamASNs(cfg *config.Config) (map[uint32]bool, string) {
+	out := map[uint32]bool{}
+	for _, p := range cfg.Providers {
+		if p.Type == "customer" {
+			continue
+		}
+		asn := cmp.Or(p.PeerASN, p.ASN)
+		if asn == 0 {
+			return nil, fmt.Sprintf("provider %s has no asn, so routes from customers of AS%d cannot be told apart from its routes", p.Name, cfg.ASN)
+		}
+		out[asn] = true
+	}
+	return out, ""
+}
+
 // observeRIB fills obs from the view: the selected routes decide Announced,
 // and every learned path counts for Origins and Downstream. A route with an
-// empty AS path is one the edge originates, so its origin is localASN.
-func observeRIB(view *rib.View, localASN uint32, own map[uint32]bool, obs *registry.Observed) {
+// empty AS path is one the edge originates, so its origin is localASN. With
+// upstream set (localASN is one of own), a path whose first AS is not
+// upstream is a customer's, and all of it is downstream.
+func observeRIB(view *rib.View, localASN uint32, own, upstream map[uint32]bool, obs *registry.Observed) {
 	path := func(prefix netip.Prefix, asPath []uint32, selected bool) {
 		origin := netpfx.LastAS(asPath)
 		if len(asPath) == 0 {
@@ -73,14 +101,18 @@ func observeRIB(view *rib.View, localASN uint32, own map[uint32]bool, obs *regis
 			}
 			obs.Origins[prefix][origin] = true
 		}
+		from := len(asPath)
+		if upstream != nil && len(asPath) > 0 && !upstream[asPath[0]] {
+			from = 0
+		}
 		for i, a := range asPath {
-			if !own[a] {
-				continue
+			if own[a] {
+				from = min(from, i+1)
 			}
-			for _, d := range asPath[i+1:] {
-				if !own[d] {
-					obs.Downstream[d] = true
-				}
+		}
+		for _, d := range asPath[min(from, len(asPath)):] {
+			if !own[d] {
+				obs.Downstream[d] = true
 			}
 		}
 	}
@@ -93,9 +125,9 @@ func observeRIB(view *rib.View, localASN uint32, own map[uint32]bool, obs *regis
 	}
 }
 
-// registrySessions describes each configured exchange attachment: the
-// source addresses of its peers, the port speed, and the PeeringDB ix id
-// from the lookup block when it names the exchange.
+// registrySessions describes each configured exchange attachment: this
+// network's own LAN addresses (local_lan_addrs), the port speed, and the
+// PeeringDB ix id from the lookup block when it names the exchange.
 func registrySessions(cfg *config.Config) []plugin.RegistrySession {
 	ixIDs := map[string]int{}
 	if cfg.Lookup != nil && cfg.Lookup.Type == "peeringdb" {
@@ -117,10 +149,8 @@ func registrySessions(cfg *config.Config) []plugin.RegistrySession {
 		if ex.Port != nil {
 			s.SpeedMbps = int(ex.Port.CapacityMbps)
 		}
-		seen := map[netip.Addr]bool{}
-		for _, p := range ex.Peers {
-			if a, err := netip.ParseAddr(p.SourceIP); err == nil && !seen[a] {
-				seen[a] = true
+		for _, a := range ex.LocalLANAddrs {
+			if a, err := netip.ParseAddr(a); err == nil {
 				s.Addrs = append(s.Addrs, a)
 			}
 		}

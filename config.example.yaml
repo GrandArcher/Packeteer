@@ -349,6 +349,9 @@ scorer:
 #     # monthly fee: peers cost 0 per Mbps and may not set cost. The binding's
 #     # own commit_mbps is a placeholder (use 1); port.commit_mbps is the commit.
 #     port: {capacity_mbps: 10000, commit_mbps: 6000, port_cost: 1500}
+#     # This network's own router addresses on the LAN, as PeeringDB lists
+#     # the connection. Only registry hygiene reads them (#289).
+#     local_lan_addrs: [203.0.113.5]
 #     peers:
 #       - name: ix-peer-a
 #         asn: 64501

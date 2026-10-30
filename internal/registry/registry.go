@@ -100,7 +100,10 @@ type Observed struct {
 	// Downstream are the ASNs that follow a configured ASN on a learned
 	// AS path: the customer cone seen as transit.
 	Downstream map[uint32]bool
-	Sessions   []plugin.RegistrySession
+	// NoCone, when set, says why Downstream is incomplete; the as-set
+	// check is then skipped.
+	NoCone   string
+	Sessions []plugin.RegistrySession
 }
 
 // Deps are what the service reads and writes.

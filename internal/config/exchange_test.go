@@ -274,3 +274,27 @@ func TestExchangePortErrors(t *testing.T) {
 		}
 	}
 }
+
+// #289: local_lan_addrs are this network's own addresses on the LAN; they
+// must be on it, listed once, and not a peer's next hop.
+func TestExchangeLocalLANAddrs(t *testing.T) {
+	ok := edit(t, exchangeYAML, "    lans: [203.0.113.0/24]\n", "    lans: [203.0.113.0/24, 2001:db8:ffff::/64]\n    local_lan_addrs: [203.0.113.5, \"2001:db8:ffff::5\"]\n")
+	cfg, err := Parse([]byte(ok))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := cfg.Exchanges[0].LocalLANAddrs; len(got) != 2 || got[0] != "203.0.113.5" || got[1] != "2001:db8:ffff::5" {
+		t.Fatalf("local_lan_addrs = %v", got)
+	}
+	for name, tc := range map[string]struct{ addrs, want string }{
+		"not an address": {"[203.0.113.0/24]", `local_lan_addrs[0]: "203.0.113.0/24" is not an IP address`},
+		"off the lan":    {"[192.0.2.31]", "local_lan_addrs[0]: 192.0.2.31 is not inside the exchange lans"},
+		"twice":          {"[203.0.113.5, 203.0.113.5]", "local_lan_addrs[1]: 203.0.113.5 is listed twice"},
+		"peer next hop":  {"[203.0.113.11]", "local_lan_addrs[0]: 203.0.113.11 is a peer next_hop"},
+	} {
+		y := edit(t, exchangeYAML, "    lans: [203.0.113.0/24]\n", "    lans: [203.0.113.0/24]\n    local_lan_addrs: "+tc.addrs+"\n")
+		if _, err := Parse([]byte(y)); err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("%s: err = %v, want %q", name, err, tc.want)
+		}
+	}
+}

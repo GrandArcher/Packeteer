@@ -118,6 +118,31 @@ func ParseRPSL(r io.Reader, fn func(Object) error) error {
 	return flush()
 }
 
+// SplitRPSL cuts a whois answer into the text of each object, as the
+// server sent it: blank lines separate objects and % lines are dropped.
+func SplitRPSL(body string) []string {
+	var out []string
+	var b strings.Builder
+	flush := func() {
+		if b.Len() > 0 {
+			out = append(out, b.String())
+			b.Reset()
+		}
+	}
+	for _, line := range strings.Split(body, "\n") {
+		line = strings.TrimRight(line, "\r")
+		switch {
+		case strings.HasPrefix(line, "%"):
+		case strings.TrimSpace(line) == "":
+			flush()
+		default:
+			b.WriteString(line + "\n")
+		}
+	}
+	flush()
+	return out
+}
+
 func uncomment(s string) string {
 	if i := strings.IndexByte(s, '#'); i >= 0 {
 		s = s[:i]

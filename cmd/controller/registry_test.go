@@ -15,7 +15,8 @@ import (
 var registryConfig = strings.Replace(bmpConfig, "    - address: 192.0.2.254\n", "    - address: 192.0.2.254\n      add_path: true\n", 1) + `
 exchanges:
   - name: ix-lab
-    lans: [203.0.113.0/24]
+    lans: [203.0.113.0/24, "2001:db8:ffff::/64"]
+    local_lan_addrs: [203.0.113.5, "2001:db8:ffff::5"]
     port: {capacity_mbps: 10000}
     peers:
       - {name: ix-peer-a, asn: 64501, next_hop: 203.0.113.11, source_ip: 192.0.2.31, fwmark: 1}
@@ -59,7 +60,7 @@ func TestRegistryObserverReadsLearnedRIB(t *testing.T) {
 
 	own := map[uint32]bool{64496: true, 64512: true}
 	obs := registry.Observed{Announced: map[netip.Prefix]uint32{}, Origins: map[netip.Prefix]map[uint32]bool{}, Downstream: map[uint32]bool{}}
-	observeRIB(view, cfg.ASN, own, &obs)
+	observeRIB(view, cfg.ASN, own, nil, &obs)
 	wantAnnounced := map[netip.Prefix]uint32{netip.MustParsePrefix("198.51.100.0/24"): 64496, netip.MustParsePrefix("192.0.2.0/24"): 64512}
 	if !maps.Equal(obs.Announced, wantAnnounced) {
 		t.Fatalf("announced = %v, want %v", obs.Announced, wantAnnounced)
@@ -73,14 +74,55 @@ func TestRegistryObserverReadsLearnedRIB(t *testing.T) {
 
 	// No established session means the view is not ready, and then nothing
 	// is compared: an empty view must not read as every prefix unregistered.
-	if got := registryObserver(cfg, view)(); got.Ready || len(got.Announced) != 0 {
+	got := registryObserver(cfg, view)()
+	if got.Ready || len(got.Announced) != 0 {
 		t.Fatalf("observer on a view with no session = %+v", got)
+	}
+	// The local ASN 64512 is in registry.asns and the transits have no asn,
+	// so customer routes cannot be told apart and the as-set check skips.
+	if !strings.Contains(got.NoCone, "provider transit-a has no asn") {
+		t.Fatalf("no cone reason = %q", got.NoCone)
+	}
+
+	// The edge learns a direct customer's route as [64510] and its
+	// customer's as [64510 64511]; the local AS is not on either path. With
+	// the transits' ASNs known, both are downstream and the transit's own
+	// path is not.
+	send("198.51.100.128/25", 64510)
+	send("203.0.113.128/25", 64510, 64511)
+	obs = registry.Observed{Announced: map[netip.Prefix]uint32{}, Origins: map[netip.Prefix]map[uint32]bool{}, Downstream: map[uint32]bool{}}
+	observeRIB(view, cfg.ASN, own, map[uint32]bool{64500: true}, &obs)
+	if !maps.Equal(obs.Downstream, map[uint32]bool{64497: true, 64510: true, 64511: true}) {
+		t.Fatalf("downstream with the local ASN = %v, want AS64497, AS64510, AS64511", obs.Downstream)
 	}
 }
 
-// #289: a session lists the distinct source addresses of its peers, the
-// port speed, and the PeeringDB ix id from the lookup block; an exchange
-// the lookup does not name has ix id 0.
+// #289: the upstream ASNs are the providers' (not type customer) and the
+// exchange peers'; one provider without asn makes the cone unknown.
+func TestUpstreamASNs(t *testing.T) {
+	cfg, err := config.Parse([]byte(registryConfig))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if up, why := upstreamASNs(cfg); up != nil || !strings.Contains(why, "provider transit-a has no asn") {
+		t.Fatalf("without provider asn = %v %q", up, why)
+	}
+	y := strings.Replace(registryConfig, "    next_hop: 192.0.2.21\n", "    next_hop: 192.0.2.21\n    asn: 64500\n", 1)
+	y = strings.Replace(y, "    next_hop: 192.0.2.22\n", "    next_hop: 192.0.2.22\n    asn: 64499\n", 1)
+	y = strings.Replace(y, "    next_hop: 192.0.2.23\n", "    next_hop: 192.0.2.23\n    asn: 64510\n    type: customer\n", 1)
+	if cfg, err = config.Parse([]byte(y)); err != nil {
+		t.Fatal(err)
+	}
+	up, why := upstreamASNs(cfg)
+	want := map[uint32]bool{64500: true, 64499: true, 64501: true, 64502: true, 64503: true, 64504: true}
+	if why != "" || !maps.Equal(up, want) {
+		t.Fatalf("upstream = %v %q, want %v", up, why, want)
+	}
+}
+
+// #289: a session lists the network's own LAN addresses (not the peers'
+// probe sources), the port speed, and the PeeringDB ix id from the lookup
+// block; an exchange the lookup does not name has ix id 0.
 func TestRegistrySessions(t *testing.T) {
 	cfg, err := config.Parse([]byte(registryConfig))
 	if err != nil {
@@ -88,8 +130,8 @@ func TestRegistrySessions(t *testing.T) {
 	}
 	got := registrySessions(cfg)
 	want := []plugin.RegistrySession{
-		{Exchange: "ix-lab", IXID: 7, SpeedMbps: 10000, Addrs: []netip.Addr{netip.MustParseAddr("192.0.2.31"), netip.MustParseAddr("192.0.2.32")}},
-		{Exchange: "ix-other", Addrs: []netip.Addr{netip.MustParseAddr("192.0.2.33")}},
+		{Exchange: "ix-lab", IXID: 7, SpeedMbps: 10000, Addrs: []netip.Addr{netip.MustParseAddr("203.0.113.5"), netip.MustParseAddr("2001:db8:ffff::5")}},
+		{Exchange: "ix-other"},
 	}
 	if !slices.EqualFunc(got, want, func(a, b plugin.RegistrySession) bool {
 		return a.Exchange == b.Exchange && a.IXID == b.IXID && a.SpeedMbps == b.SpeedMbps && slices.Equal(a.Addrs, b.Addrs)

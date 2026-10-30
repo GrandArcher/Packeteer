@@ -119,30 +119,66 @@ func (s *Service) irrChange(op, db string, p netip.Prefix, origin uint32, object
 // that is no longer announced with that origin.
 func (s *Service) staleFindings(ctx context.Context, r registration) []plugin.RegistryFinding {
 	var out []plugin.RegistryFinding
+	var unread []string
 	seen := map[string]bool{}
 	for _, src := range s.deps.IRR {
-		routes, _, err := src.Plugin.Routes(ctx, r.prefix)
+		objs, err := storedRoutes(ctx, src, r.prefix)
 		if err != nil {
+			unread = append(unread, fmt.Sprintf("%s: %v", src.Name, err))
 			continue
 		}
-		for _, rt := range routes {
-			db := dbName(rt, src.Name)
-			if rt.Origin != r.origin || seen[db] {
+		for _, o := range objs {
+			db := dbName(o.IRRRoute, src.Name)
+			if o.Origin != r.origin || seen[db] {
 				continue
 			}
 			seen[db] = true
-			obj := routeObject(r.prefix, r.origin, db, s.cfg.MntBy)
-			f := plugin.RegistryFinding{
+			out = append(out, s.storedObject(plugin.RegistryFinding{
 				Kind: "irr_stale", Severity: plugin.RegistryInfo, Registry: "irr",
 				Subject: fmt.Sprintf("%s AS%d %s", r.prefix, r.origin, db),
 				Message: fmt.Sprintf("%s holds a route object for %s AS%d, which no learned route has", db, r.prefix, r.origin),
-				Diff:    "- " + strings.ReplaceAll(strings.TrimSpace(obj), "\n", "\n- "),
-			}
-			f.Change = s.irrChange("delete_object", db, r.prefix, r.origin, obj)
-			out = append(out, f)
+			}, o, src.Name, db, true))
 		}
 	}
+	if len(out) == 0 && len(unread) > 0 {
+		out = append(out, plugin.RegistryFinding{
+			Kind: "irr_stale", Severity: plugin.RegistryInfo, Registry: "irr",
+			Subject: fmt.Sprintf("%s AS%d", r.prefix, r.origin),
+			Message: fmt.Sprintf("a route object for %s AS%d is registered and no learned route has it; the object could not be read (%s), so no delete is offered", r.prefix, r.origin, strings.Join(unread, "; ")),
+		})
+	}
 	return out
+}
+
+// storedRoutes reads the route objects for p from src with their text. A
+// source that keeps no text answers with the routes and empty Text.
+func storedRoutes(ctx context.Context, src IRRSource, p netip.Prefix) ([]plugin.IRRObject, error) {
+	objs, _, err := src.Plugin.RouteObjects(ctx, p)
+	if !errors.Is(err, plugin.ErrIRRUnsupported) {
+		return objs, err
+	}
+	routes, _, err := src.Plugin.Routes(ctx, p)
+	out := make([]plugin.IRRObject, len(routes))
+	for i, rt := range routes {
+		out[i] = plugin.IRRObject{IRRRoute: rt}
+	}
+	return out, err
+}
+
+// storedObject gives a finding about an object in db the "-" diff of the
+// object as the source returned it and, when deletable, the delete of that
+// text. Without the text there is neither: an object rebuilt from our
+// template would not be what the database holds.
+func (s *Service) storedObject(f plugin.RegistryFinding, o plugin.IRRObject, source, db string, deletable bool) plugin.RegistryFinding {
+	if o.Text == "" {
+		f.Message += fmt.Sprintf("; source %s keeps no object text, so no diff or delete is offered", source)
+		return f
+	}
+	f.Diff = "- " + strings.ReplaceAll(strings.TrimRight(o.Text, "\n"), "\n", "\n- ")
+	if deletable {
+		f.Change = s.irrChange("delete_object", db, o.Prefix, o.Origin, o.Text)
+	}
+	return f
 }
 
 // conflictFindings looks at every route object for an announced prefix:
@@ -150,25 +186,31 @@ func (s *Service) staleFindings(ctx context.Context, r registration) []plugin.Re
 // one database.
 func (s *Service) conflictFindings(ctx context.Context, p netip.Prefix, origin uint32) []plugin.RegistryFinding {
 	var out []plugin.RegistryFinding
-	ours := map[string]bool{}
+	type stored struct {
+		obj    plugin.IRRObject
+		source string
+	}
+	ours := map[string]stored{}
 	foreign := map[string]bool{}
 	for _, src := range s.deps.IRR {
-		routes, _, err := src.Plugin.Routes(ctx, p)
+		objs, err := storedRoutes(ctx, src, p)
 		if err != nil {
 			continue
 		}
-		for _, rt := range routes {
-			db := dbName(rt, src.Name)
+		for _, o := range objs {
+			db := dbName(o.IRRRoute, src.Name)
 			switch {
-			case rt.Origin == origin:
-				ours[db] = true
-			case !s.asns[rt.Origin]:
-				if k := fmt.Sprintf("AS%d %s", rt.Origin, db); !foreign[k] {
+			case o.Origin == origin:
+				if _, ok := ours[db]; !ok {
+					ours[db] = stored{o, src.Name}
+				}
+			case !s.asns[o.Origin]:
+				if k := fmt.Sprintf("AS%d %s", o.Origin, db); !foreign[k] {
 					foreign[k] = true
 					out = append(out, plugin.RegistryFinding{
 						Kind: "irr_conflict", Severity: plugin.RegistryWarning, Registry: "irr",
 						Subject: fmt.Sprintf("%s %s", p, k),
-						Message: fmt.Sprintf("%s is announced with origin AS%d, and %s also registers AS%d as an origin for it", p, origin, db, rt.Origin),
+						Message: fmt.Sprintf("%s is announced with origin AS%d, and %s also registers AS%d as an origin for it", p, origin, db, o.Origin),
 					})
 				}
 			}
@@ -178,18 +220,16 @@ func (s *Service) conflictFindings(ctx context.Context, p netip.Prefix, origin u
 	// leftover; with no object there, deleting the others would delete every
 	// registration of a live prefix.
 	home := s.sourceName()
-	if len(ours) > 1 && ours[home] {
+	if _, ok := ours[home]; len(ours) > 1 && ok {
 		for _, db := range slices.Sorted(maps.Keys(ours)) {
 			if db == home {
 				continue
 			}
-			obj := routeObject(p, origin, db, s.cfg.MntBy)
-			out = append(out, plugin.RegistryFinding{
+			out = append(out, s.storedObject(plugin.RegistryFinding{
 				Kind: "irr_duplicate", Severity: plugin.RegistryInfo, Registry: "irr",
 				Subject: fmt.Sprintf("%s AS%d %s", p, origin, db),
 				Message: fmt.Sprintf("%s AS%d is registered in %s and in %s (registry.irr.source); the copy in %s may be left over from a move", p, origin, db, home, db),
-				Diff:    "- " + strings.ReplaceAll(strings.TrimSpace(obj), "\n", "\n- "),
-			})
+			}, ours[db].obj, ours[db].source, db, false))
 		}
 	}
 	return out
@@ -265,6 +305,9 @@ func (s *Service) scanASSet(ctx context.Context, obs Observed) ([]plugin.Registr
 	}
 	if len(s.deps.IRR) == 0 {
 		return nil, Section{Name: "as-set", Status: "skipped", Detail: "irr.sources is not configured"}
+	}
+	if obs.NoCone != "" {
+		return nil, Section{Name: "as-set", Status: "skipped", Detail: obs.NoCone}
 	}
 	members := map[uint32]bool{}
 	answered := 0

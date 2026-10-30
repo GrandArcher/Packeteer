@@ -246,6 +246,38 @@ func (c *Client) ASName(ctx context.Context, asn uint32) (string, time.Time, err
 	return "", time.Now(), nil
 }
 
+// RouteObjects returns the route and route6 objects for exactly prefix
+// with their text. The ripe dialect asks with -B, so the text is not
+// filtered.
+func (c *Client) RouteObjects(ctx context.Context, prefix netip.Prefix) ([]plugin.IRRObject, time.Time, error) {
+	prefix = prefix.Masked()
+	var body string
+	var err error
+	if c.cfg.Dialect == DialectIRRd {
+		body, _, err = c.irrd(ctx, "!r"+prefix.String())
+	} else {
+		body, err = c.ripeBody(ctx, "-B -x -T route,route6 "+prefix.String())
+	}
+	if err != nil {
+		return nil, time.Time{}, err
+	}
+	var out []plugin.IRRObject
+	for _, text := range irr.SplitRPSL(body) {
+		objs, err := parse(strings.NewReader(text))
+		if err != nil {
+			return nil, time.Time{}, err
+		}
+		if len(objs) != 1 {
+			continue
+		}
+		if rt, ok := irr.Route(objs[0]); ok && rt.Prefix == prefix {
+			out = append(out, plugin.IRRObject{IRRRoute: rt, Text: text})
+		}
+	}
+	slices.SortStableFunc(out, func(a, b plugin.IRRObject) int { return c.rank(a.Database) - c.rank(b.Database) })
+	return out, time.Now(), nil
+}
+
 func (c *Client) irrdObjects(ctx context.Context, query string) ([]irr.Object, error) {
 	body, found, err := c.irrd(ctx, query)
 	if err != nil || !found {
@@ -330,12 +362,21 @@ func readIRRd(br *bufio.Reader) (string, bool, error) {
 // ripeNoEntries is the RIPE database's answer when nothing matched.
 const ripeNoEntries = "%ERROR:101:"
 
-// ripeObjects sends one RIPE-style query with -r (no contact objects) and
-// -s for the databases, and parses the objects until the server closes.
+// ripeObjects sends one RIPE-style query and parses the objects.
 func (c *Client) ripeObjects(ctx context.Context, query string) ([]irr.Object, error) {
-	conn, br, done, err := c.open(ctx)
+	body, err := c.ripeBody(ctx, query)
 	if err != nil {
 		return nil, err
+	}
+	return parse(strings.NewReader(body))
+}
+
+// ripeBody sends one RIPE-style query with -r (no contact objects) and -s
+// for the databases, and reads the answer until the server closes.
+func (c *Client) ripeBody(ctx context.Context, query string) (string, error) {
+	conn, br, done, err := c.open(ctx)
+	if err != nil {
+		return "", err
 	}
 	defer done()
 	q := "-r "
@@ -343,21 +384,21 @@ func (c *Client) ripeObjects(ctx context.Context, query string) ([]irr.Object, e
 		q += "-s " + strings.Join(c.cfg.Databases, ",") + " "
 	}
 	if _, err := io.WriteString(conn, q+query+"\n"); err != nil {
-		return nil, fmt.Errorf("whois: %w", err)
+		return "", fmt.Errorf("whois: %w", err)
 	}
 	body, err := io.ReadAll(io.LimitReader(br, maxResponse+1))
 	if err != nil {
-		return nil, fmt.Errorf("whois: %w", err)
+		return "", fmt.Errorf("whois: %w", err)
 	}
 	if len(body) > maxResponse {
-		return nil, errors.New("whois: answer too large")
+		return "", errors.New("whois: answer too large")
 	}
 	for _, line := range strings.Split(string(body), "\n") {
 		if strings.HasPrefix(line, "%ERROR:") && !strings.HasPrefix(line, ripeNoEntries) {
-			return nil, fmt.Errorf("whois: server error: %s", strings.TrimSpace(strings.TrimPrefix(line, "%")))
+			return "", fmt.Errorf("whois: server error: %s", strings.TrimSpace(strings.TrimPrefix(line, "%")))
 		}
 	}
-	return parse(strings.NewReader(string(body)))
+	return string(body), nil
 }
 
 // open waits on the rate limit and dials. The timeout bounds the dial and

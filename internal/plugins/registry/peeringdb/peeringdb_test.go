@@ -167,6 +167,38 @@ func TestCheck(t *testing.T) {
 	}
 }
 
+// #289: an exchange without local_lan_addrs is not compared, and the scan
+// says so instead of calling every record stale; an unknown port speed is
+// left out of the diff.
+func TestIXNeedsLocalAddrs(t *testing.T) {
+	_, c := newFake(t)
+	f := facts()
+	f.Sessions = []plugin.RegistrySession{
+		{Exchange: "ix-example", IXID: 77, SpeedMbps: 10000},
+		{Exchange: "ix-other", IXID: 88, Addrs: []netip.Addr{netip.MustParseAddr("192.0.2.6")}},
+	}
+	fs, err := c.Check(context.Background(), f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := kinds(fs)
+	un := got["pdb_ix_unchecked|AS64496 ix-example"]
+	if un.Severity != plugin.RegistryInfo || un.Message != "exchanges ix-example sets no local_lan_addrs, so the PeeringDB connection records at ix 77 are not compared" {
+		t.Fatalf("unchecked = %+v", fs)
+	}
+	if m := got["pdb_ix_missing|AS64496 ix-other 192.0.2.6"]; m.Diff != "+ netixlan ix_id 88, asn 64496, address 192.0.2.6" {
+		t.Fatalf("missing without a speed = %+v", m)
+	}
+	if _, ok := got["pdb_ix_stale|AS64496 ix 88 192.0.2.5"]; !ok {
+		t.Fatalf("ix 88 record not compared: %+v", fs)
+	}
+	for _, x := range fs {
+		if strings.Contains(x.Subject, "ix 77") || x.Kind == "pdb_ix_speed" {
+			t.Errorf("ix 77 compared without addresses: %+v", x)
+		}
+	}
+}
+
 // #289: a count at or above the announced count but below the headroom is
 // info; at or above the headroom there is no finding; no record is a
 // finding of its own.
