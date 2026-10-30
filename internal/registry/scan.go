@@ -303,9 +303,6 @@ func (s *Service) scanASSet(ctx context.Context, obs Observed) ([]plugin.Registr
 	if s.cfg.ASSet == "" {
 		return nil, Section{Name: "as-set", Status: "skipped", Detail: "registry.as_set is not set"}
 	}
-	if len(s.deps.IRR) == 0 {
-		return nil, Section{Name: "as-set", Status: "skipped", Detail: "irr.sources is not configured"}
-	}
 	if obs.NoCone != "" {
 		return nil, Section{Name: "as-set", Status: "skipped", Detail: obs.NoCone}
 	}
@@ -346,7 +343,7 @@ func (s *Service) scanASSet(ctx context.Context, obs Observed) ([]plugin.Registr
 		out = append(out, plugin.RegistryFinding{
 			Kind: "asset_unseen", Severity: plugin.RegistryInfo, Registry: "as-set",
 			Subject: fmt.Sprintf("%s AS%d", s.cfg.ASSet, asn),
-			Message: fmt.Sprintf("AS%d is in %s (possibly through a nested set) and follows no registry.asns AS on any learned path; it may be a customer with no routes", asn, s.cfg.ASSet),
+			Message: fmt.Sprintf("AS%d is in %s (possibly through a nested set) and is not downstream of registry.asns on any learned path (customer cone); it may be a customer with no routes", asn, s.cfg.ASSet),
 			Diff:    asSetMember(s.cfg.ASSet, asn, false),
 		})
 	}
