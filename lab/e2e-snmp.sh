@@ -128,7 +128,7 @@ grep -Eq '^<134>1 .* packeteer - controller.started \[packeteer@32473' "$work/sy
 # The first metrics snapshot comes after 30 s.
 v2=(snmpget -v2c -c "$SNMP_COMMUNITY" -t 2 -r 0 "${mib[@]}" "$AGENT")
 for _ in $(seq 1 60); do
-  "${v2[@]}" PACKETEER-MIB::pktrMode.0 >/dev/null 2>&1 && break
+  "${v2[@]}" PACKETEER-MIB::pktrMode.0 2>&1 | grep -q 'STRING: "\?observe' && break
   sleep 2
 done
 out="$("${v2[@]}" PACKETEER-MIB::pktrMode.0)" || fail "the agent never answered"
