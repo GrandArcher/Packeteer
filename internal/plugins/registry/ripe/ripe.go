@@ -136,10 +136,9 @@ func (p *Pusher) Push(ctx context.Context, ch plugin.RegistryChange) error {
 	if err := p.limit.Wait(ctx); err != nil {
 		return err
 	}
-	u := *p.base
+	u := p.url(ch.Class)
 	var req *http.Request
 	if ch.Op == "create_object" {
-		u.Path += "/" + strings.ToLower(p.source) + "/" + ch.Class
 		body, err := json.Marshal(restObject(obj, p.source))
 		if err != nil {
 			return err
@@ -150,7 +149,7 @@ func (p *Pusher) Push(ctx context.Context, ch plugin.RegistryChange) error {
 		}
 		req.Header.Set("Content-Type", "application/json")
 	} else {
-		u.Path += "/" + strings.ToLower(p.source) + "/" + ch.Class + "/" + ch.Key
+		u.Path += "/" + ch.Key
 		u.RawQuery = url.Values{"reason": {"removed after operator confirmation in Packeteer"}}.Encode()
 		req, err = http.NewRequestWithContext(ctx, http.MethodDelete, u.String(), nil)
 		if err != nil {
@@ -172,6 +171,13 @@ func (p *Pusher) Push(ctx context.Context, ch plugin.RegistryChange) error {
 	return nil
 }
 
+// url is the REST address of a class in the configured database.
+func (p *Pusher) url(class string) url.URL {
+	u := *p.base
+	u.Path += "/" + strings.ToLower(p.source) + "/" + class
+	return u
+}
+
 // unchanged reads the stored object, unfiltered and without credentials,
 // and refuses unless it is the object that was shown: the delete is by key,
 // and the audit record must hold what was deleted.
@@ -179,8 +185,8 @@ func (p *Pusher) unchanged(ctx context.Context, ch plugin.RegistryChange, shown 
 	if err := p.limit.Wait(ctx); err != nil {
 		return err
 	}
-	u := *p.base
-	u.Path += "/" + strings.ToLower(p.source) + "/" + ch.Class + "/" + ch.Key
+	u := p.url(ch.Class)
+	u.Path += "/" + ch.Key
 	u.RawQuery = "unfiltered"
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
 	if err != nil {

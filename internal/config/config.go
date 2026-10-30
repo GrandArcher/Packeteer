@@ -598,7 +598,8 @@ type Provider struct {
 	NextHop  string `yaml:"next_hop"`
 	// ASN is the provider's own AS and Type is transit, peer, or customer.
 	// Both are labels for the Providers page and AS search; no decision
-	// reads them. 0 and "" mean not set.
+	// reads them. Registry hygiene reads Type customer as the customer
+	// cone (#289). 0 and "" mean not set.
 	ASN  uint32 `yaml:"asn"`
 	Type string `yaml:"type"`
 	// LocalPref, when set, is the local preference on routes steered to

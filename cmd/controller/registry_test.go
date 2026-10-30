@@ -78,45 +78,46 @@ func TestRegistryObserverReadsLearnedRIB(t *testing.T) {
 	if got.Ready || len(got.Announced) != 0 {
 		t.Fatalf("observer on a view with no session = %+v", got)
 	}
-	// The local ASN 64512 is in registry.asns and the transits have no asn,
-	// so customer routes cannot be told apart and the as-set check skips.
-	if !strings.Contains(got.NoCone, "provider transit-a has no asn") {
+	// The local ASN 64512 is in registry.asns and no provider is a
+	// customer, so customer routes cannot be told apart and the as-set
+	// check skips.
+	if !strings.Contains(got.NoCone, "no provider has type customer") {
 		t.Fatalf("no cone reason = %q", got.NoCone)
-	}
-
-	// The edge learns a direct customer's route as [64510] and its
-	// customer's as [64510 64511]; the local AS is not on either path. With
-	// the transits' ASNs known, both are downstream and the transit's own
-	// path is not.
-	send("198.51.100.128/25", 64510)
-	send("203.0.113.128/25", 64510, 64511)
-	obs = registry.Observed{Announced: map[netip.Prefix]uint32{}, Origins: map[netip.Prefix]map[uint32]bool{}, Downstream: map[uint32]bool{}}
-	observeRIB(view, cfg.ASN, own, map[uint32]bool{64500: true}, &obs)
-	if !maps.Equal(obs.Downstream, map[uint32]bool{64497: true, 64510: true, 64511: true}) {
-		t.Fatalf("downstream with the local ASN = %v, want AS64497, AS64510, AS64511", obs.Downstream)
 	}
 }
 
-// #289: the upstream ASNs are the providers' (not type customer) and the
-// exchange peers'; one provider without asn makes the cone unknown.
-func TestUpstreamASNs(t *testing.T) {
-	cfg, err := config.Parse([]byte(registryConfig))
+// #289: the edge's own ASN is not on the paths it learns. A path through a
+// provider of type customer is all downstream; a route-server member's, an
+// unlisted peer's, and a transit's paths are not.
+func TestRegistryCustomerCone(t *testing.T) {
+	cfg, err := config.Parse([]byte(strings.Replace(registryConfig, "    next_hop: 192.0.2.23\n", "    next_hop: 192.0.2.23\n    type: customer\n    bmp: prefer\n", 1)))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if up, why := upstreamASNs(cfg); up != nil || !strings.Contains(why, "provider transit-a has no asn") {
-		t.Fatalf("without provider asn = %v %q", up, why)
+	customers, why := customerProviders(cfg)
+	if why != "" || !maps.Equal(customers, map[string]bool{"transit-c": true}) {
+		t.Fatalf("customers = %v %q", customers, why)
 	}
-	y := strings.Replace(registryConfig, "    next_hop: 192.0.2.21\n", "    next_hop: 192.0.2.21\n    asn: 64500\n", 1)
-	y = strings.Replace(y, "    next_hop: 192.0.2.22\n", "    next_hop: 192.0.2.22\n    asn: 64499\n", 1)
-	y = strings.Replace(y, "    next_hop: 192.0.2.23\n", "    next_hop: 192.0.2.23\n    asn: 64510\n    type: customer\n", 1)
-	if cfg, err = config.Parse([]byte(y)); err != nil {
+	view, err := newRIB(cfg, nil)
+	if err != nil {
 		t.Fatal(err)
 	}
-	up, why := upstreamASNs(cfg)
-	want := map[uint32]bool{64500: true, 64499: true, 64501: true, 64502: true, 64503: true, 64504: true}
-	if why != "" || !maps.Equal(up, want) {
-		t.Fatalf("upstream = %v %q, want %v", up, why, want)
+	send := func(nextHop, prefix string, path ...uint32) {
+		view.ApplyRIB(plugin.RIBEvent{Kind: plugin.RIBPaths, Router: netip.MustParseAddr("192.0.2.254"), Peer: plugin.RIBPeer{LocRIB: true},
+			Paths: []plugin.RIBPath{{Prefix: netip.MustParsePrefix(prefix), NextHop: netip.MustParseAddr(nextHop), ASPath: path}}})
+	}
+	send("192.0.2.23", "198.51.100.0/25", 64510)
+	send("192.0.2.23", "198.51.100.128/25", 64510, 64511)
+	send("203.0.113.99", "203.0.113.0/25", 64520, 64521)
+	send("192.0.2.40", "203.0.113.128/25", 64530)
+	send("192.0.2.21", "2001:db8::/32", 64500, 64499)
+	obs := registry.Observed{Announced: map[netip.Prefix]uint32{}, Origins: map[netip.Prefix]map[uint32]bool{}, Downstream: map[uint32]bool{}}
+	observeRIB(view, cfg.ASN, map[uint32]bool{64512: true}, customers, &obs)
+	if rs, _ := view.RouteSnapshot(); len(rs) != 5 {
+		t.Fatalf("the view holds %d of the 5 paths: %+v", len(rs), rs)
+	}
+	if !maps.Equal(obs.Downstream, map[uint32]bool{64510: true, 64511: true}) {
+		t.Fatalf("downstream = %v, want only AS64510 and AS64511 behind transit-c", obs.Downstream)
 	}
 }
 

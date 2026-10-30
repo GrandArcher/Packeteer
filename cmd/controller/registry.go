@@ -1,7 +1,6 @@
 package main
 
 import (
-	"cmp"
 	"fmt"
 	"log/slog"
 	"net/netip"
@@ -47,47 +46,45 @@ func registryObserver(cfg *config.Config, view *rib.View) func() registry.Observ
 	for _, a := range cfg.Registry.ASNs {
 		own[a] = true
 	}
-	var upstream map[uint32]bool
+	var customers map[string]bool
 	noCone := ""
 	if own[cfg.ASN] {
-		upstream, noCone = upstreamASNs(cfg)
+		customers, noCone = customerProviders(cfg)
 	}
 	sessions := registrySessions(cfg)
 	return func() registry.Observed {
 		obs := registry.Observed{Ready: view.Ready(), Announced: map[netip.Prefix]uint32{}, Origins: map[netip.Prefix]map[uint32]bool{}, Downstream: map[uint32]bool{}, NoCone: noCone, Sessions: sessions}
 		if obs.Ready {
-			observeRIB(view, cfg.ASN, own, upstream, &obs)
+			observeRIB(view, cfg.ASN, own, customers, &obs)
 		}
 		return obs
 	}
 }
 
-// upstreamASNs are the ASNs of the edge's transits and peers: every
-// provider but type customer, and every exchange peer. The edge's own ASN
-// is not on the paths it learns, so a path from any other neighbor is a
-// customer's. A provider without asn leaves that unknown.
-func upstreamASNs(cfg *config.Config) (map[uint32]bool, string) {
-	out := map[uint32]bool{}
+// customerProviders names the providers of type customer. The edge's own
+// ASN is not on the paths it learns, so only a path through one of them
+// says the AS behind it is a customer: route-server members and peers or
+// transits Packeteer does not list arrive the same way.
+func customerProviders(cfg *config.Config) (map[string]bool, string) {
+	out := map[string]bool{}
 	for _, p := range cfg.Providers {
 		if p.Type == "customer" {
-			continue
+			out[p.Name] = true
 		}
-		asn := cmp.Or(p.PeerASN, p.ASN)
-		if asn == 0 {
-			return nil, fmt.Sprintf("provider %s has no asn, so routes from customers of AS%d cannot be told apart from its routes", p.Name, cfg.ASN)
-		}
-		out[asn] = true
+	}
+	if len(out) == 0 {
+		return nil, fmt.Sprintf("AS%d is in registry.asns and no provider has type customer, so the routes of its customers cannot be told apart", cfg.ASN)
 	}
 	return out, ""
 }
 
 // observeRIB fills obs from the view: the selected routes decide Announced,
 // and every learned path counts for Origins and Downstream. A route with an
-// empty AS path is one the edge originates, so its origin is localASN. With
-// upstream set (localASN is one of own), a path whose first AS is not
-// upstream is a customer's, and all of it is downstream.
-func observeRIB(view *rib.View, localASN uint32, own, upstream map[uint32]bool, obs *registry.Observed) {
-	path := func(prefix netip.Prefix, asPath []uint32, selected bool) {
+// empty AS path is one the edge originates, so its origin is localASN. A
+// path through one of customers (localASN is one of own) is all
+// downstream.
+func observeRIB(view *rib.View, localASN uint32, own map[uint32]bool, customers map[string]bool, obs *registry.Observed) {
+	path := func(prefix netip.Prefix, provider string, asPath []uint32, selected bool) {
 		origin := netpfx.LastAS(asPath)
 		if len(asPath) == 0 {
 			origin = localASN
@@ -102,7 +99,7 @@ func observeRIB(view *rib.View, localASN uint32, own, upstream map[uint32]bool, 
 			obs.Origins[prefix][origin] = true
 		}
 		from := len(asPath)
-		if upstream != nil && len(asPath) > 0 && !upstream[asPath[0]] {
+		if customers[provider] {
 			from = 0
 		}
 		for i, a := range asPath {
@@ -118,10 +115,10 @@ func observeRIB(view *rib.View, localASN uint32, own, upstream map[uint32]bool, 
 	}
 	routes, alts := view.RouteSnapshot()
 	for _, r := range routes {
-		path(r.Prefix, r.ASPath, true)
+		path(r.Prefix, r.Provider, r.ASPath, true)
 	}
 	for _, a := range alts {
-		path(a.Prefix, a.ASPath, false)
+		path(a.Prefix, a.Provider, a.ASPath, false)
 	}
 }
 

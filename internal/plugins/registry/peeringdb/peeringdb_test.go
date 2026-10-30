@@ -199,6 +199,27 @@ func TestIXNeedsLocalAddrs(t *testing.T) {
 	}
 }
 
+// #289: the IPv4 and IPv6 address of one connection record make one speed
+// finding, not two pushes of the same record.
+func TestIXSpeedOncePerRecord(t *testing.T) {
+	_, c := newFake(t)
+	f := facts()
+	f.Sessions[0].Addrs = []netip.Addr{netip.MustParseAddr("198.51.100.10"), netip.MustParseAddr("2001:db8::10")}
+	fs, err := c.Check(context.Background(), f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var speeds []string
+	for _, x := range fs {
+		if x.Kind == "pdb_ix_speed" {
+			speeds = append(speeds, x.Subject)
+		}
+	}
+	if len(speeds) != 1 || speeds[0] != "AS64496 ix-example 198.51.100.10 speed" {
+		t.Fatalf("speed findings = %v", speeds)
+	}
+}
+
 // #289: a count at or above the announced count but below the headroom is
 // info; at or above the headroom there is no finding; no record is a
 // finding of its own.

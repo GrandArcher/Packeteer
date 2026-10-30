@@ -262,6 +262,8 @@ func (c *Checker) maxPrefix(net object, id int, asn uint32, f plugin.RegistryFac
 func ixFindings(ixlans []object, asn uint32, sessions []plugin.RegistrySession) []plugin.RegistryFinding {
 	var out []plugin.RegistryFinding
 	checked := map[int]bool{}
+	// One record holds both address families; its speed is one finding.
+	speedSeen := map[int]bool{}
 	for _, s := range sessions {
 		if s.IXID == 0 {
 			continue
@@ -290,8 +292,9 @@ func ixFindings(ixlans []object, asn uint32, sessions []plugin.RegistrySession) 
 					Diff:    diff,
 				})
 			case s.SpeedMbps > 0:
-				if have, ok := rec.num("speed"); ok && have != s.SpeedMbps {
-					id, _ := rec.num("id")
+				id, _ := rec.num("id")
+				if have, ok := rec.num("speed"); ok && have != s.SpeedMbps && !speedSeen[id] {
+					speedSeen[id] = true
 					out = append(out, plugin.RegistryFinding{
 						Kind: "pdb_ix_speed", Severity: plugin.RegistryWarning, Registry: "peeringdb",
 						Subject: fmt.Sprintf("AS%d %s %s speed", asn, s.Exchange, a),

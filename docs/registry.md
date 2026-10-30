@@ -14,7 +14,7 @@ Each finding has a severity (`error`, `warning`, `info`), the registry it is abo
 | `irr_duplicate` | The same object is in more than one database beside the one in `registry.irr.source` (for example RADB after a move to RIPE). | The stored copy as text, never pushed |
 | `rpki_missing` | No ROA covers an announced prefix. | Text only (RIR portal) |
 | `rpki_maxlength`, `rpki_origin` | The prefix is RPKI invalid: the ROA's maxLength is shorter than the announcement, or no ROA names the origin. | Text only (RIR portal) |
-| `asset_missing` | An ASN seen after `registry.asns` on learned AS paths (a customer seen as transit) is not in `registry.as_set`. When `asn` is in `registry.asns`, every ASN of a path whose first AS is not a provider's (other than `type: customer`) or an exchange peer's also counts; that needs `asn` on every such provider, and without it the as-set check is skipped. | Text only |
+| `asset_missing` | An ASN seen after `registry.asns` on learned AS paths (a customer seen as transit) is not in `registry.as_set`. When `asn` is in `registry.asns`, every ASN of a path through a provider with `type: customer` also counts; route-server members and unlisted peers do not. With no such provider the as-set check is skipped and says why. | Text only |
 | `asset_unseen` | An as-set member never appears on a learned path. | Text only |
 | `pdb_net_missing`, `pdb_facility_missing` | No PeeringDB network record, or no facility listed. | Text only |
 | `pdb_maxprefix` | `info_prefixes4` or `info_prefixes6` is below the announced count plus `headroom_percent`. Peers size their max-prefix limit from it. | Field diff; a push for a `peeringdb` source |

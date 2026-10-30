@@ -392,12 +392,12 @@ func TestRouteObjects(t *testing.T) {
 	}
 
 	addr, _ := ripeServer(t, map[string]string{
-		"-r -s RIPE -B -x -T route,route6 203.0.113.0/24": fixture(t, "ripe-route.txt"),
+		"-r -s RIPE -B -x -T route,route6 203.0.113.0/24": fixture(t, "ripe-route-unfiltered.txt"),
 		"-r -s RIPE -B -x -T route,route6 192.0.2.0/24":   fixture(t, "ripe-access-denied.txt"),
 	})
 	rc := newClient(t, "{address: \""+addr+"\", dialect: ripe, databases: [RIPE], rate_per_minute: 600}")
 	objs, _, err = rc.RouteObjects(ctx, netip.MustParsePrefix("203.0.113.0/24"))
-	want := "route:          203.0.113.0/24\ndescr:          EXAMPLE-NET\norigin:         AS64500\nmnt-by:         MAINT-EXAMPLE\ncreated:        2020-01-01T00:00:00Z\nlast-modified:  2024-05-06T07:08:09Z\nsource:         RIPE # Filtered\n"
+	want := "route:          203.0.113.0/24\ndescr:          EXAMPLE-NET\norigin:         AS64500\nmnt-by:         MAINT-EXAMPLE\ncreated:        2020-01-01T00:00:00Z\nlast-modified:  2024-05-06T07:08:09Z\nnotify:         noc@example.net\nsource:         RIPE\n"
 	if err != nil || len(objs) != 1 || objs[0].Text != want || objs[0].Origin != 64500 || objs[0].Database != "RIPE" {
 		t.Fatalf("ripe = %+v %v", objs, err)
 	}
