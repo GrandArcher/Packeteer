@@ -306,8 +306,8 @@ profiles:
   # use documentation addresses and private ASNs. Probe results are
   # SIMULATED (the sim prober, a seeded delay and loss model per provider,
   # no packet sent) for the targets the vip source names, at most 100,000
-  # because the engine bounds its target set; the report labels every such
-  # figure. The per-million budgets are the `pr` numbers applied to paths
+  # (vip's max_targets limit; one source, so not all 3 million prefixes); the
+  # report labels every such figure. The per-million budgets are the `pr` numbers applied to paths
   # (prefixes times views); nothing was raised and nothing has measured this
   # profile yet, so a miss is a finding. Reconverge and shutdown are not
   # checked, as on `realtable`.

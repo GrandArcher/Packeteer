@@ -69,6 +69,7 @@ func TestSimulatedProfileRules(t *testing.T) {
 	base := simProfile(t)
 	for name, mut := range map[string]func(*Profile){
 		"simulate without vip":      func(p *Profile) { p.VIPTargets = 0 },
+		"simulate on two peers":     func(p *Profile) { p.Peers = 2 },
 		"peers beyond next hops":    func(p *Profile) { p.Peers = maxViews + 1 },
 		"peers with sessions":       func(p *Profile) { p.Sessions = 2 },
 		"negative scale":            func(p *Profile) { p.ScaleTo = -1 },
@@ -111,7 +112,7 @@ func TestSimulatedProfileRules(t *testing.T) {
 }
 
 // The generated config for a simulated run: observe, the sim prober and no
-// other, three providers per family with a type, ASN, cost, and a commit
+// other, providers per family (three with sessions and a customer) with a type, ASN, cost, and a commit
 // where one is modeled, and a model the sim prober accepts for every one of
 // those providers.
 func TestSimulatedConfigIsObserveWithOnlyTheSimProber(t *testing.T) {
@@ -135,7 +136,7 @@ func TestSimulatedConfigIsObserveWithOnlyTheSimProber(t *testing.T) {
 	if !slices.Equal(kinds, []string{"flow", "vip"}) {
 		t.Fatalf("sources %v: only the flow collector and the vip expansion, both of which only name targets", kinds)
 	}
-	if len(cfg.Providers) != 6 || len(cfg.BGP.Neighbors) != 3 {
+	if len(cfg.Providers) != 8 || len(cfg.BGP.Neighbors) != 3 {
 		t.Fatalf("%d providers, %d neighbors", len(cfg.Providers), len(cfg.BGP.Neighbors))
 	}
 	var names []string
@@ -152,7 +153,7 @@ func TestSimulatedConfigIsObserveWithOnlyTheSimProber(t *testing.T) {
 			}
 		}
 	}
-	if types["transit"] != 4 || types["peer"] != 2 {
+	if types["transit"] != 4 || types["peer"] != 2 || types["customer"] != 2 {
 		t.Fatalf("provider types %v", types)
 	}
 	if len(cfg.Telemetry) != 1 || !strings.Contains(text, "commit_mbps: 2000") || !strings.Contains(text, "commit_mbps: 1000") {
@@ -179,7 +180,7 @@ func TestSimulatedRoutesAreStatedAndDistinct(t *testing.T) {
 		}
 		seen[r.rtt] = true
 	}
-	for _, name := range []string{"transit-a", "transit-b", "ix-peer"} {
+	for _, name := range []string{"transit-a", "transit-b", "ix-peer", "customer-a"} {
 		if !strings.Contains(simProber(), "provider: "+name+",") || !strings.Contains(simProber(), "provider: "+name+"6,") {
 			t.Errorf("no model for %s on both families", name)
 		}
@@ -264,5 +265,31 @@ func TestSimulatedRunNeedsDumpAndScriptChecksProfile(t *testing.T) {
 		if !errors.As(err, &ee) || ee.ExitCode() != 2 || !strings.Contains(string(out), tc.want) {
 			t.Errorf("%s %v: %v %s", tc.env, tc.args, err, out)
 		}
+	}
+}
+
+// The arguments lab/soak.sh passes for the profile, which include
+// -multiply 1 from lab/realtable.sh, produce a config.
+func TestSimulatedConfigFromScriptArguments(t *testing.T) {
+	dir := t.TempDir()
+	budgets := filepath.Join(dir, "budgets.yaml")
+	profile := "profiles:\n  mini:\n    real: true\n    peers: 3\n    scale_to: 40\n    simulate: true\n    vip_targets: 100\n    duration: 10s\n    warmup: 2s\n    sample: 1s\n"
+	if err := os.WriteFile(budgets, []byte(profile), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out := filepath.Join(dir, "config.yaml")
+	args := []string{"-budgets", budgets, "-profile", "mini", "-multiply", "1", "-out", out, "-mrt", writeDump(t, "dump", v6Dump(t), false)}
+	if err := cmdConfig(args); err != nil {
+		t.Fatal(err)
+	}
+	text, err := os.ReadFile(out)
+	if err != nil || !strings.Contains(string(text), "- type: sim\n") || strings.Count(string(text), "    - address: 127.0.0.") != 3 || !strings.Contains(string(text), "asns: [") {
+		t.Fatalf("config %v:\n%s", err, text)
+	}
+	if err := os.WriteFile(budgets, []byte(strings.Replace(profile, "peers: 3", "peers: 2", 1)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := cmdConfig(args); err == nil || !strings.Contains(err.Error(), "peers must be 3") {
+		t.Fatalf("simulate on two peers: %v", err)
 	}
 }

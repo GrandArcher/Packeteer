@@ -14,7 +14,7 @@
 # prefixes with more-specifics of the dump's own prefixes, and gives it
 # SIMULATED probe results from the sim prober (a seeded delay and loss model
 # per provider; no packet is sent and nothing real is probed). MULTIPLY must
-# stay 1 then. It holds about 8 million paths: use a host with 32 GB or more.
+# stay 1 then. It holds 8 to 9 million paths (expect 18 to 23 GiB): use a host with 32 GB or more.
 #
 # MULTIPLY (default 1, at most 4) plays the table on that many sessions, so
 # Packeteer holds that many paths per prefix. REALTABLE_URL names the dump

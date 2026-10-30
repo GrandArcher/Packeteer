@@ -171,7 +171,7 @@ func loadReal(path string, o realOpts) (*realSet, error) {
 		return nil, err
 	}
 	if len(rows) == 0 {
-		return nil, errors.New("the largest peer has no usable routes")
+		return nil, errors.New("the played peers have no usable routes")
 	}
 	if o.scaleTo > 0 {
 		base := len(rows)

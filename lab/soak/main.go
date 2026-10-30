@@ -271,7 +271,7 @@ func run(ctx context.Context, o runOpts) (Result, error) {
 	}
 	before, _ := readP()
 	t0 := time.Now()
-	log.Printf("%d session(s) up; sending %d prefixes on each (%d per attribute set)", len(f.routers), p.Prefixes, tbl.setLen)
+	log.Printf("%d session(s) up; sending %d prefixes (%d per attribute set)", len(f.routers), p.Prefixes, tbl.setLen)
 	firsts := make([]chan struct{}, len(f.routers))
 	for k, rt := range f.routers {
 		firsts[k] = make(chan struct{})
@@ -433,7 +433,8 @@ loop:
 	}
 	if p.Simulate {
 		// The sim prober opens no socket, so the host's echo counter must
-		// not move; a move means a real probe left the lab.
+		// not move. On an idle lab host a move is a probe that left it; the
+		// counter was read once the container was already running.
 		if why := echoFault(o.procRoot, echo0); why != "" {
 			fail("%s", why)
 		}

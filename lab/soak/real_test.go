@@ -421,7 +421,7 @@ func TestRealtableScriptRefusesBadInput(t *testing.T) {
 	}
 }
 
-// v6Dump is a dump of two peers that both carry 2001:db8::/32 and only the
+// v6Dump is a dump of three peers that all carry 2001:db8::/32 and only the
 // first carries 2001:db8:1::/48, under different AS paths.
 func v6Dump(t *testing.T) []byte {
 	t.Helper()
@@ -429,12 +429,13 @@ func v6Dump(t *testing.T) []byte {
 	d.Write(mrtRecord(t, mrt.PEER_INDEX_TABLE, mrt.NewPeerIndexTable("192.0.2.250", "", []*mrt.Peer{
 		mrt.NewPeer("192.0.2.1", "192.0.2.1", 64496, true),
 		mrt.NewPeer("192.0.2.2", "192.0.2.2", 64497, true),
+		mrt.NewPeer("192.0.2.3", "192.0.2.3", 64498, true),
 	})))
 	attrs := func(origin uint32) []bgp.PathAttributeInterface {
 		return []bgp.PathAttributeInterface{bgp.NewPathAttributeOrigin(0), seqPath(64496, origin), bgp.NewPathAttributeMpReachNLRI("2001:db8::1", nil)}
 	}
 	d.Write(mrtRecord(t, mrt.RIB_IPV6_UNICAST, mrt.NewRib(0, bgp.NewIPv6AddrPrefix(32, "2001:db8::"),
-		[]*mrt.RibEntry{mrt.NewRibEntry(0, 1, 0, attrs(64500), false), mrt.NewRibEntry(1, 1, 0, attrs(64501), false)})))
+		[]*mrt.RibEntry{mrt.NewRibEntry(0, 1, 0, attrs(64500), false), mrt.NewRibEntry(1, 1, 0, attrs(64501), false), mrt.NewRibEntry(2, 1, 0, attrs(64503), false)})))
 	d.Write(mrtRecord(t, mrt.RIB_IPV6_UNICAST, mrt.NewRib(1, bgp.NewIPv6AddrPrefix(48, "2001:db8:1::"),
 		[]*mrt.RibEntry{mrt.NewRibEntry(0, 1, 0, attrs(64502), false)})))
 	return d.Bytes()

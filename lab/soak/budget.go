@@ -161,7 +161,9 @@ func loadProfile(path, name string) (Profile, error) {
 // Packeteer holds n paths per prefix, and rescales the budgets to the
 // paths.
 func (p *Profile) multiply(n int) error {
-	if n == 0 {
+	// A profile that plays peers already has one session per view; 1 is
+	// what lab/realtable.sh passes by default.
+	if n == 0 || (p.Peers > 0 && n == 1) {
 		return nil
 	}
 	p.Sessions = n
@@ -208,6 +210,9 @@ func (p Profile) validate() error {
 		}
 		if p.Peers < 0 || p.Peers > maxViews || (p.Peers > 0 && p.Sessions > 0) {
 			errs = append(errs, fmt.Errorf("peers %d: want 0 to %d, and not together with sessions", p.Peers, maxViews))
+		}
+		if p.Simulate && p.Peers != maxViews {
+			errs = append(errs, fmt.Errorf("simulate models %d providers with sessions: peers must be %d", maxViews, maxViews))
 		}
 		if p.ScaleTo < 0 {
 			errs = append(errs, errors.New("scale_to must not be negative"))
@@ -317,10 +322,10 @@ type Result struct {
 
 // TableInfo is what a real dump held: counts, never a prefix or an AS.
 type TableInfo struct {
-	Peers   int `json:"peers"`   // peers in the dump with routes
-	Views   int `json:"views"`   // peers played, one session each
-	IPv4    int `json:"ipv4"`    // distinct prefixes over the views
-	IPv6    int `json:"ipv6"`    //
+	Peers   int `json:"peers"` // peers in the dump with routes
+	Views   int `json:"views"` // peers played, one session each
+	IPv4    int `json:"ipv4"`  // distinct prefixes over the views
+	IPv6    int `json:"ipv6"`
 	Sets    int `json:"sets"`    // distinct attribute sets
 	Skipped int `json:"skipped"` // routes left out: malformed
 	Derived int `json:"derived"` // prefixes added by scale_to

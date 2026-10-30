@@ -30,10 +30,14 @@ type simRoute struct {
 	loss       float64
 }
 
-var simRoutes = [maxViews]simRoute{
+// The first maxViews routes are the three views' providers. The last is a
+// customer that has no session and so no learned route; it is configured
+// and probed so the Providers page has a customer row.
+var simRoutes = [maxViews + 1]simRoute{
 	{name: "transit-a", kind: "transit", asn: 64496, cost: 4, commitMbps: 2000, usageMbps: 900, rtt: 38, spread: 60, jitter: 2, loss: 0.4},
 	{name: "transit-b", kind: "transit", asn: 64497, cost: 6, commitMbps: 1000, usageMbps: 400, rtt: 30, spread: 60, jitter: 2, loss: 0.8},
 	{name: "ix-peer", kind: "peer", asn: 64498, cost: 0.5, rtt: 22, spread: 70, jitter: 3, loss: 1.5},
+	{name: "customer-a", kind: "customer", asn: 64499, rtt: 12, spread: 40, jitter: 1, loss: 0.1},
 }
 
 // simSeed fixes every simulated answer, so two runs of a profile agree.
@@ -167,27 +171,4 @@ func echoFault(procRoot string, before uint64) string {
 		return fmt.Sprintf("ICMP echo requests sent by the host moved from %d to %d during a simulated run: no probe may leave the lab", before, now)
 	}
 	return ""
-}
-
-// snmpCounter reads one column of /proc/net/snmp: a header line names the
-// columns of the line after it.
-func snmpCounter(s, proto, name string) (uint64, error) {
-	var names []string
-	for line := range strings.Lines(s) {
-		f := strings.Fields(line)
-		if len(f) == 0 || f[0] != proto {
-			continue
-		}
-		if names == nil {
-			names = f[1:]
-			continue
-		}
-		for j, n := range names {
-			if n == name && j+1 < len(f) {
-				return strconv.ParseUint(f[j+1], 10, 64)
-			}
-		}
-		break
-	}
-	return 0, fmt.Errorf("snmp: %s %s missing", proto, name)
 }

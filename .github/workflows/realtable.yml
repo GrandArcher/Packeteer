@@ -14,9 +14,9 @@ name: realtable
 #
 # Profile realtable3m (#103) plays three peers' views of the dump, grows the
 # table to 3 million prefixes, and gives it simulated probe results (a model;
-# no packet is sent). It holds about 8 million paths. The realtable runs
-# above peaked at about 3 GiB per million paths, so expect about 25 GiB;
-# name a runner with at least 32 GB. Nothing has measured this profile yet.
+# no packet is sent). It holds 8 to 9 million paths. The realtable runs above
+# peaked at 2.4 to 2.7 KiB a path, so expect 18 to 23 GiB; name a runner with
+# at least 32 GB. Nothing has measured this profile yet.
 on:
   workflow_dispatch:
     inputs:
