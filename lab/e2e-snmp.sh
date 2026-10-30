@@ -4,7 +4,8 @@
 # the snmpagent exporter (v2c and v3 authPriv) with deploy/mib/PACKETEER-MIB.txt
 # loaded, and snmptrapd receives the snmptrap notifier's v2c trap, v2c inform,
 # v3 trap, and v3 inform. Two netcat listeners take the syslog notifier over
-# UDP and TCP. Needs the net-snmp tools (apt: snmp snmptrapd) and nc.
+# UDP and TCP. Needs the net-snmp tools and IETF MIBs (apt: snmp snmptrapd
+# snmp-mibs-downloader) and nc.
 # Nothing here announces; there is no BGP session.
 set -euo pipefail
 cd "$(dirname "$0")/.."

@@ -47,7 +47,9 @@ storage:
 	}
 	runOnce := func() {
 		t.Helper()
-		ctx, cancel := context.WithTimeout(context.Background(), 600*time.Millisecond)
+		// The deadline also bounds the sqlite schema setup at start, which
+		// took over 600ms on a loaded CI runner.
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
 		var out, errOut bytes.Buffer
 		if code := run(ctx, []string{"-config", path}, noEnv, &out, &errOut); code != 0 {

@@ -57,6 +57,8 @@ docker run --network host --cap-add NET_RAW --cap-add NET_ADMIN \
 snmpwalk -v3 -l authPriv -u nms -a SHA -A ... -x AES -X ... -M +deploy/mib -m +PACKETEER-MIB 192.0.2.10 pktrStatus
 ```
 
+The MIB imports SNMPv2-SMI, SNMPv2-TC, and SNMPv2-CONF. On Debian and Ubuntu, net-snmp needs `snmp-mibs-downloader` for them.
+
 - Read only. A SET gets `notWritable`; GET, GETNEXT, and GETBULK are answered. A wrong community, a wrong user or key, or a request below the configured security level gets no answer.
 - Set `community_env` for v2c, `username_env` for v3, or both on the one UDP port. One of them is required: the agent is never open to anyone. Prefer v3 `authPriv`: v2c sends the community and the data in clear text. `allow_from` limits who is answered.
 - It serves the newest snapshot of [`GET /metrics`](API.md#metrics), taken every 30 seconds, so it needs `http.listen`, and it has no data for the first 30 seconds after start (every object answers noSuchObject). Poll no faster than every 30 seconds. `pktrDataAge` above 90 means the snapshots stopped.
