@@ -112,39 +112,35 @@ func readUDP(path string) (udpStats, error) {
 }
 
 func parseSNMP(s string) (udpStats, error) {
+	in, err := snmpCounter(s, "Udp:", "InDatagrams")
+	if err != nil {
+		return udpStats{}, err
+	}
+	drop, err := snmpCounter(s, "Udp:", "RcvbufErrors")
+	return udpStats{In: in, RcvbufErrors: drop}, err
+}
+
+// snmpCounter reads one column of /proc/net/snmp: a header line names the
+// columns of the line after it.
+func snmpCounter(s, proto, name string) (uint64, error) {
 	var names []string
 	for line := range strings.Lines(s) {
 		f := strings.Fields(line)
-		if len(f) == 0 || f[0] != "Udp:" {
+		if len(f) == 0 || f[0] != proto {
 			continue
 		}
 		if names == nil {
 			names = f[1:]
 			continue
 		}
-		var u udpStats
-		got := 0
 		for j, n := range names {
-			if j+1 >= len(f) {
-				break
-			}
-			v, err := strconv.ParseUint(f[j+1], 10, 64)
-			if err != nil {
-				continue
-			}
-			switch n {
-			case "InDatagrams":
-				u.In, got = v, got|1
-			case "RcvbufErrors":
-				u.RcvbufErrors, got = v, got|2
+			if n == name && j+1 < len(f) {
+				return strconv.ParseUint(f[j+1], 10, 64)
 			}
 		}
-		if got != 3 {
-			return u, errors.New("snmp: Udp InDatagrams or RcvbufErrors missing")
-		}
-		return u, nil
+		break
 	}
-	return udpStats{}, errors.New("snmp: no Udp lines")
+	return 0, fmt.Errorf("snmp: %s %s missing", proto, name)
 }
 
 // metrics is what the harness reads from Packeteer's /metrics.

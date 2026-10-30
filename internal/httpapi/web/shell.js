@@ -235,10 +235,12 @@ function shellRenderBanner(mode) {
   node.hidden = false;
 }
 
-// Synthesize announces routes that are not in the learned RIB (#122). The
-// text is the server's warning.
-function shellRenderSynthBanner(text) {
-  var node = document.getElementById("synth-banner");
+// A server warning shown on every page under the mode banner: synthesize
+// announces routes that are not in the learned RIB (#122), and simulated
+// probes are not measurements (#103). id names the banner, text is the
+// server's warning.
+function shellRenderNotice(id, text) {
+  var node = document.getElementById(id);
   if (!text) {
     if (node) node.hidden = true;
     return;
@@ -247,7 +249,7 @@ function shellRenderSynthBanner(text) {
     var mode = document.getElementById("banner");
     if (!mode) return;
     node = shellEl("div", "banner banner-warn", "");
-    node.id = "synth-banner";
+    node.id = id;
     node.setAttribute("role", "alert");
     mode.parentNode.insertBefore(node, mode.nextSibling);
   }
@@ -317,7 +319,8 @@ function shellRefresh() {
     if (!err) shellLastOK = new Date().toISOString();
     shellRenderBanner(ov && ov.mode);
     shellRenderAuthBanner(ov && ov.auth);
-    shellRenderSynthBanner(ov && ov.synthesize_warning);
+    shellRenderNotice("synth-banner", ov && ov.synthesize_warning);
+    shellRenderNotice("sim-banner", ov && ov.simulated_probes);
     shellRenderStatus(ov, ready, err);
     shellRenderConn(err);
   });

@@ -95,8 +95,9 @@ func writeDump(t *testing.T, name string, b []byte, gz bool) string {
 	return path
 }
 
-func wantTestDump(t *testing.T, rt *realTable) {
+func wantTestDump(t *testing.T, set *realSet) {
 	t.Helper()
+	rt := set.views[0]
 	// IPv4 first, ordered by set, then prefix; the IPv6 route follows.
 	want := []string{"198.51.100.0/24", "203.0.113.0/24", "192.0.2.0/24", "192.0.2.128/25", "2001:db8:1::/48"}
 	var got []string
@@ -113,8 +114,8 @@ func wantTestDump(t *testing.T, rt *realTable) {
 	if rt.entries[2].set == rt.entries[0].set || rt.entries[3].set == rt.entries[2].set || len(rt.sets) != 3 {
 		t.Fatalf("%d sets, entries %+v", len(rt.sets), rt.entries)
 	}
-	if rt.peers != 2 || rt.skipped != 0 {
-		t.Fatalf("peers %d skipped %d", rt.peers, rt.skipped)
+	if set.peers != 2 || set.skipped != 0 {
+		t.Fatalf("peers %d skipped %d", set.peers, set.skipped)
 	}
 }
 
@@ -123,14 +124,14 @@ func wantTestDump(t *testing.T, rt *realTable) {
 func TestLoadRealPicksLargestPeerAndGroupsBySet(t *testing.T) {
 	d := testDump(t)
 	for _, gz := range []bool{false, true} {
-		rt, err := loadReal(writeDump(t, "dump", d, gz))
+		rt, err := loadReal(writeDump(t, "dump", d, gz), realOpts{peers: 1})
 		if err != nil {
 			t.Fatal(err)
 		}
 		wantTestDump(t, rt)
 	}
-	rt, _ := loadReal(writeDump(t, "dump", d, false))
-	for i, set := range rt.sets {
+	rt, _ := loadReal(writeDump(t, "dump", d, false), realOpts{peers: 1})
+	for i, set := range rt.views[0].sets {
 		var types []bgp.BGPAttrType
 		for _, a := range set {
 			types = append(types, a.GetType())
@@ -141,7 +142,7 @@ func TestLoadRealPicksLargestPeerAndGroupsBySet(t *testing.T) {
 		}
 	}
 	info := rt.info()
-	if *info != (TableInfo{Peers: 2, IPv4: 4, IPv6: 1, Sets: 3}) {
+	if *info != (TableInfo{Peers: 2, Views: 1, IPv4: 4, IPv6: 1, Sets: 3, Paths: 5}) {
 		t.Fatalf("info %+v", info)
 	}
 }
@@ -149,7 +150,7 @@ func TestLoadRealPicksLargestPeerAndGroupsBySet(t *testing.T) {
 // A RouteViews dump is bzip2. The fixture is the test dump compressed with
 // a bzip2 tool.
 func TestLoadRealReadsBzip2(t *testing.T) {
-	rt, err := loadReal("testdata/tiny-dump.mrt.bz2")
+	rt, err := loadReal("testdata/tiny-dump.mrt.bz2", realOpts{peers: 1})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -157,19 +158,19 @@ func TestLoadRealReadsBzip2(t *testing.T) {
 }
 
 func TestLoadRealRejectsEmptyAndTruncated(t *testing.T) {
-	if _, err := loadReal(writeDump(t, "empty", nil, false)); err == nil {
+	if _, err := loadReal(writeDump(t, "empty", nil, false), realOpts{peers: 1}); err == nil {
 		t.Fatal("empty dump accepted")
 	}
 	d := testDump(t)
-	if _, err := loadReal(writeDump(t, "cut", d[:len(d)-9], false)); err == nil {
+	if _, err := loadReal(writeDump(t, "cut", d[:len(d)-9], false), realOpts{peers: 1}); err == nil {
 		t.Fatal("truncated dump accepted")
 	}
 	gz := writeDump(t, "whole.gz", d, true)
 	b, _ := os.ReadFile(gz)
-	if _, err := loadReal(writeDump(t, "cut.gz", b[:len(b)-12], false)); err == nil {
+	if _, err := loadReal(writeDump(t, "cut.gz", b[:len(b)-12], false), realOpts{peers: 1}); err == nil {
 		t.Fatal("truncated gzip download accepted")
 	}
-	if _, err := loadReal(filepath.Join(t.TempDir(), "absent")); err == nil {
+	if _, err := loadReal(filepath.Join(t.TempDir(), "absent"), realOpts{peers: 1}); err == nil {
 		t.Fatal("missing file accepted")
 	}
 }
@@ -181,11 +182,11 @@ func TestLoadRealRejectsEmptyAndTruncated(t *testing.T) {
 func TestRouterPlaysRealTable(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	src, err := loadReal(writeDump(t, "dump", testDump(t), false))
+	src, err := loadReal(writeDump(t, "dump", testDump(t), false), realOpts{peers: 1})
 	if err != nil {
 		t.Fatal(err)
 	}
-	tbl := newRealTable(src)
+	tbl := newRealTable(src.views[0])
 	rt := newTestRouter(t, ctx, 1, tbl, newAdvertised())
 	s := acceptFake(t, rt)
 	go rt.serve(ctx, make(chan struct{}))
@@ -266,13 +267,13 @@ func TestRouterPlaysRealTable(t *testing.T) {
 // The router appends the next hop to the set's attributes; that must not
 // write into the set the other sessions share.
 func TestRealAttrsAreNotShared(t *testing.T) {
-	src, err := loadReal(writeDump(t, "dump", testDump(t), false))
+	src, err := loadReal(writeDump(t, "dump", testDump(t), false), realOpts{peers: 1})
 	if err != nil {
 		t.Fatal(err)
 	}
-	a := append(src.attrs(0), bgp.NewPathAttributeNextHop("192.0.2.1"))
-	b := append(src.attrs(0), bgp.NewPathAttributeNextHop("192.0.2.2"))
-	if a[len(a)-1].(*bgp.PathAttributeNextHop).Value.String() != "192.0.2.1" || len(a) != len(src.sets[0])+1 {
+	a := append(src.views[0].attrs(0), bgp.NewPathAttributeNextHop("192.0.2.1"))
+	b := append(src.views[0].attrs(0), bgp.NewPathAttributeNextHop("192.0.2.2"))
+	if a[len(a)-1].(*bgp.PathAttributeNextHop).Value.String() != "192.0.2.1" || len(a) != len(src.views[0].sets[0])+1 {
 		t.Fatalf("a second append changed the first: %v %v", a[len(a)-1], b[len(b)-1])
 	}
 }
@@ -280,12 +281,12 @@ func TestRealAttrsAreNotShared(t *testing.T) {
 // A route from Packeteer on a real-table run is a fault, and the fault
 // names no prefix.
 func TestRealRouteFaultNamesNoPrefix(t *testing.T) {
-	src, err := loadReal(writeDump(t, "dump", testDump(t), false))
+	src, err := loadReal(writeDump(t, "dump", testDump(t), false), realOpts{peers: 1})
 	if err != nil {
 		t.Fatal(err)
 	}
 	p := netip.MustParsePrefix("198.51.100.0/24")
-	why := routeFault(p, goodComms, newRealTable(src))
+	why := routeFault(p, goodComms, newRealTable(src.views[0]))
 	if why == "" || strings.Contains(why, "198.51") {
 		t.Fatalf("fault %q", why)
 	}
@@ -304,7 +305,9 @@ func TestRealProfile(t *testing.T) {
 	if err := p.multiply(3); err != nil {
 		t.Fatal(err)
 	}
-	p.useReal(&realTable{entries: make([]realEntry, 1_000_000)})
+	if err := p.useReal(&realSet{prefixes: 1_000_000, views: []*realTable{{}}}); err != nil {
+		t.Fatal(err)
+	}
 	if p.Prefixes != 1_000_000 || p.sessions() != 3 {
 		t.Fatalf("prefixes %d sessions %d", p.Prefixes, p.sessions())
 	}
@@ -415,5 +418,161 @@ func TestRealtableScriptRefusesBadInput(t *testing.T) {
 		if !errors.As(err, &ee) || ee.ExitCode() != 2 || !strings.Contains(string(out), tc.want) {
 			t.Errorf("%s %v: %v %s", tc.env, tc.args, err, out)
 		}
+	}
+}
+
+// v6Dump is a dump of three peers that all carry 2001:db8::/32 and only the
+// first carries 2001:db8:1::/48, under different AS paths.
+func v6Dump(t *testing.T) []byte {
+	t.Helper()
+	var d bytes.Buffer
+	d.Write(mrtRecord(t, mrt.PEER_INDEX_TABLE, mrt.NewPeerIndexTable("192.0.2.250", "", []*mrt.Peer{
+		mrt.NewPeer("192.0.2.1", "192.0.2.1", 64496, true),
+		mrt.NewPeer("192.0.2.2", "192.0.2.2", 64497, true),
+		mrt.NewPeer("192.0.2.3", "192.0.2.3", 64498, true),
+	})))
+	attrs := func(origin uint32) []bgp.PathAttributeInterface {
+		return []bgp.PathAttributeInterface{bgp.NewPathAttributeOrigin(0), seqPath(64496, origin), bgp.NewPathAttributeMpReachNLRI("2001:db8::1", nil)}
+	}
+	d.Write(mrtRecord(t, mrt.RIB_IPV6_UNICAST, mrt.NewRib(0, bgp.NewIPv6AddrPrefix(32, "2001:db8::"),
+		[]*mrt.RibEntry{mrt.NewRibEntry(0, 1, 0, attrs(64500), false), mrt.NewRibEntry(1, 1, 0, attrs(64501), false), mrt.NewRibEntry(2, 1, 0, attrs(64503), false)})))
+	d.Write(mrtRecord(t, mrt.RIB_IPV6_UNICAST, mrt.NewRib(1, bgp.NewIPv6AddrPrefix(48, "2001:db8:1::"),
+		[]*mrt.RibEntry{mrt.NewRibEntry(0, 1, 0, attrs(64502), false)})))
+	return d.Bytes()
+}
+
+// Two views are two peers' routes: the peer with more routes is first, a
+// prefix a peer lacks is missing from its view, each view has its own
+// attributes and its own provider next hop.
+func TestLoadRealPlaysSeveralPeers(t *testing.T) {
+	set, err := loadReal(writeDump(t, "dump", testDump(t), false), realOpts{peers: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(set.views) != 2 || set.prefixes != 5 || set.paths != 6 || set.peers != 2 {
+		t.Fatalf("views %d prefixes %d paths %d peers %d", len(set.views), set.prefixes, set.paths, set.peers)
+	}
+	one, two := set.views[0], set.views[1]
+	if len(one.entries) != 5 || len(two.entries) != 1 || two.entries[0].prefix != netip.MustParsePrefix("198.51.100.0/24") {
+		t.Fatalf("view sizes %d and %d, second view %+v", len(one.entries), len(two.entries), two.entries)
+	}
+	if one.sets[one.entries[0].set] == nil || two.entries[0].set == one.entries[0].set {
+		t.Fatalf("the two peers' routes for one prefix share a set: %d vs %d", two.entries[0].set, one.entries[0].set)
+	}
+	var origins []uint32
+	for _, v := range set.views {
+		for _, e := range v.entries {
+			if e.prefix == netip.MustParsePrefix("198.51.100.0/24") {
+				origins = append(origins, originAS(v.sets[e.set]))
+			}
+		}
+	}
+	if !slices.Equal(origins, []uint32{64500, 64497}) {
+		t.Fatalf("origin of the prefix in each view: %v, want the two peers' own paths", origins)
+	}
+	for k, v := range set.views {
+		if tbl := newRealTable(v); !v.pinned || tbl.provider(0) != k {
+			t.Errorf("view %d: pinned %v provider %d", k, v.pinned, tbl.provider(0))
+		}
+	}
+	if _, err := loadReal(writeDump(t, "dump", testDump(t), false), realOpts{peers: 3}); err == nil || !strings.Contains(err.Error(), "fewer than") {
+		t.Fatalf("three views of a two-peer dump: %v", err)
+	}
+	if _, err := loadReal(writeDump(t, "dump", testDump(t), false), realOpts{peers: maxViews + 1}); err == nil {
+		t.Fatal("more views than provider next hops accepted")
+	}
+	solo, err := loadReal(writeDump(t, "dump", testDump(t), false), realOpts{peers: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tbl := newRealTable(solo.views[0]); solo.views[0].pinned || tbl.provider(0) != tbl.group(0)&1 {
+		t.Fatal("one view must keep the next hop by attribute set")
+	}
+}
+
+// scale_to adds more-specifics of the dump's own prefixes, with the
+// parent's attributes in every view that has the parent.
+func TestLoadRealScalesToTarget(t *testing.T) {
+	path := writeDump(t, "dump", v6Dump(t), false)
+	set, err := loadReal(path, realOpts{peers: 2, scaleTo: 40})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if set.prefixes != 40 || set.derived != 38 || set.views[0].v4 != 0 {
+		t.Fatalf("prefixes %d derived %d", set.prefixes, set.derived)
+	}
+	one, two := set.views[0], set.views[1]
+	if len(one.entries) != 40 || len(two.entries) != 39 {
+		t.Fatalf("view sizes %d and %d: the second peer lacks the one prefix only the first carries and its more-specifics", len(one.entries), len(two.entries))
+	}
+	seen := map[netip.Prefix]bool{}
+	for _, e := range one.entries {
+		if seen[e.prefix] {
+			t.Fatalf("%s twice", e.prefix)
+		}
+		seen[e.prefix] = true
+		if e.prefix.Bits() > 48 {
+			t.Fatalf("%s is longer than /48", e.prefix)
+		}
+		if !netip.MustParsePrefix("2001:db8::/32").Contains(e.prefix.Addr()) {
+			t.Fatalf("%s is outside the dump's space", e.prefix)
+		}
+	}
+	// Every derived prefix has the origin of an ancestor it sits inside, in
+	// each view that carries it.
+	for k, v := range set.views {
+		want := map[int]uint32{0: 64500, 1: 64501}[k]
+		for _, e := range v.entries {
+			o := originAS(v.sets[e.set])
+			if o != want && !(k == 0 && o == 64502) {
+				t.Fatalf("view %d: %s has origin %d", k, e.prefix, o)
+			}
+		}
+	}
+	again, err := loadReal(path, realOpts{peers: 2, scaleTo: 40})
+	if err != nil || !slices.Equal(again.views[0].entries, one.entries) {
+		t.Fatalf("a second load differs: %v", err)
+	}
+}
+
+func TestGrowRowsRefusesWhatItCannotDo(t *testing.T) {
+	row := func(p string) realRow { return realRow{prefix: netip.MustParsePrefix(p), sets: [maxViews]uint32{1}} }
+	if _, err := growRows([]realRow{row("192.0.2.0/24")}, 5); err == nil || !strings.Contains(err.Error(), "cannot reach") {
+		t.Fatalf("a /24 cannot be split: %v", err)
+	}
+	if _, err := growRows([]realRow{row("2001:db8::/32"), row("2001:db8:1::/48")}, 1); err == nil || !strings.Contains(err.Error(), "below") {
+		t.Fatalf("scale_to below the dump: %v", err)
+	}
+	rows, err := growRows([]realRow{row("2001:db8::/47"), row("2001:db8::/48")}, 3)
+	if err != nil || len(rows) != 3 || rows[2].prefix != netip.MustParsePrefix("2001:db8:1::/48") {
+		t.Fatalf("the half the dump has is not added again: %v %v", rows, err)
+	}
+	if got := halves(netip.MustParsePrefix("192.0.2.0/24")); got != [2]netip.Prefix{netip.MustParsePrefix("192.0.2.0/25"), netip.MustParsePrefix("192.0.2.128/25")} {
+		t.Fatalf("halves %v", got)
+	}
+	for _, tc := range []struct {
+		p    string
+		want bool
+	}{{"192.0.2.0/24", false}, {"192.0.2.0/25", false}, {"2001:db8::/47", true}, {"2001:db8::/48", false}, {"0.0.0.0/0", false}} {
+		if splittable(netip.MustParsePrefix(tc.p)) != tc.want {
+			t.Errorf("splittable(%s) = %v", tc.p, !tc.want)
+		}
+	}
+}
+
+// The vip source names the origins with the most routes in the first view,
+// leaving out one that alone holds more than a quarter of the target.
+func TestVIPASNs(t *testing.T) {
+	set, err := loadReal(writeDump(t, "dump", testDump(t), false), realOpts{peers: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 64500 holds three of the five routes, 64501 and 64502 one each.
+	got, err := vipASNs(set, 4)
+	if err != nil || !slices.Equal(got, []uint32{64501, 64502}) {
+		t.Fatalf("vipASNs = %v, %v", got, err)
+	}
+	if _, err := vipASNs(set, 1); err == nil {
+		t.Fatal("no ASN is small enough, yet no error")
 	}
 }

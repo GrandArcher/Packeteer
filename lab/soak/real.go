@@ -10,6 +10,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
+	"math/bits"
 	"net/netip"
 	"os"
 	"slices"
@@ -31,19 +33,36 @@ type realEntry struct {
 	set    uint32
 }
 
-// realTable is the chosen peer's routes, IPv4 first. Within a family the
-// entries are ordered by attribute set, so a router packs a set into
-// UPDATEs the way a router that groups its table dump by attributes does.
+// realTable is one session's view: a peer's routes, IPv4 first. Within a
+// family the entries are ordered by attribute set, so a router packs a set
+// into UPDATEs the way a router that groups its table dump by attributes
+// does.
 type realTable struct {
 	entries []realEntry
-	sets    [][]bgp.PathAttributeInterface // sorted by type code, with LOCAL_PREF
+	sets    [][]bgp.PathAttributeInterface // sorted by type code, with LOCAL_PREF; shared by every view
 	v4      int                            // entries[:v4] are IPv4
-	peers   int                            // peers in the dump with at least one route
-	skipped int                            // routes left out: malformed prefix or attributes
+	// pinned makes every route of this view use provider via as its next
+	// hop. Several views are several providers' routes to the same
+	// prefixes; one view alone keeps the next hop by attribute set.
+	pinned bool
+	via    int
 }
 
-func (t *realTable) info() *TableInfo {
-	return &TableInfo{Peers: t.peers, IPv4: t.v4, IPv6: len(t.entries) - t.v4, Sets: len(t.sets), Skipped: t.skipped}
+// realSet is what a dump gave the lab: one view per session, over the same
+// prefixes (a view lacks the prefixes its peer did not carry).
+type realSet struct {
+	views    []*realTable
+	prefixes int // distinct prefixes over all views
+	paths    int // routes over all views
+	peers    int // peers in the dump with at least one route
+	skipped  int // routes left out: malformed prefix or attributes
+	derived  int // prefixes added by realOpts.scaleTo
+	v4       int // distinct IPv4 prefixes
+}
+
+func (r *realSet) info() *TableInfo {
+	return &TableInfo{Peers: r.peers, Views: len(r.views), IPv4: r.v4, IPv6: r.prefixes - r.v4,
+		Sets: len(r.views[0].sets), Skipped: r.skipped, Derived: r.derived, Paths: r.paths}
 }
 
 // attrs is the attribute set of entry i. The slice has no spare capacity,
@@ -67,71 +86,212 @@ var keptTypes = map[uint8]bool{
 	uint8(bgp.BGP_ATTR_TYPE_LARGE_COMMUNITY):      true,
 }
 
-// loadReal reads the dump at path and returns the view of the peer with
-// the most routes.
-func loadReal(path string) (*realTable, error) {
+// realOpts says which views of the dump to play.
+type realOpts struct {
+	// peers is how many peers' views to play, the ones with the most
+	// routes, each on its own session. At least 1.
+	peers int
+	// scaleTo, when above the dump's prefix count, adds more-specifics of
+	// the dump's own prefixes (each half of a prefix, with the parent's
+	// attributes in every view that has the parent) until the table has
+	// this many prefixes. IPv4 stops at /24 and IPv6 at /48. Zero keeps the
+	// dump's table.
+	scaleTo int
+}
+
+// realRow is one prefix over all views.
+type realRow struct {
+	prefix netip.Prefix
+	sets   [maxViews]uint32 // per view: attribute set + 1; 0 when that peer has no route
+}
+
+// loadReal reads the dump at path and returns the views of the o.peers
+// peers with the most routes.
+func loadReal(path string, o realOpts) (*realSet, error) {
+	if o.peers < 1 || o.peers > maxViews {
+		return nil, fmt.Errorf("peers %d: want 1 to %d", o.peers, maxViews)
+	}
 	counts, err := peerRoutes(path)
 	if err != nil {
 		return nil, err
 	}
-	best, most := -1, 0
-	for peer, n := range counts {
-		if n > most || (n == most && int(peer) < best) {
-			best, most = int(peer), n
-		}
-	}
-	if best < 0 {
+	if len(counts) == 0 {
 		return nil, errors.New("no IPv4 or IPv6 unicast routes in the dump")
 	}
-	t := &realTable{peers: len(counts)}
+	if len(counts) < o.peers {
+		return nil, fmt.Errorf("the dump has %d peers with routes, fewer than the %d views asked for", len(counts), o.peers)
+	}
+	ranked := slices.Collect(maps.Keys(counts))
+	slices.SortFunc(ranked, func(a, b uint16) int { return cmp.Or(cmp.Compare(counts[b], counts[a]), cmp.Compare(a, b)) })
+	view := map[uint16]int{}
+	for k, peer := range ranked[:o.peers] {
+		view[peer] = k
+	}
+	out := &realSet{peers: len(counts)}
+	var sets [][]bgp.PathAttributeInterface
 	ids := map[string]uint32{}
+	var rows []realRow
 	err = eachRoute(path, func(p netip.Prefix, entries []byte, n int) error {
+		row := realRow{prefix: p}
+		found := false
 		for range n {
 			peer, attrs, rest, err := nextEntry(entries)
 			if err != nil {
 				return err
 			}
 			entries = rest
-			if int(peer) != best {
+			k, ok := view[peer]
+			if !ok {
 				continue
 			}
 			key, kept, err := splitAttrs(attrs)
 			if err != nil {
-				t.skipped++
+				out.skipped++
 				continue
 			}
 			id, ok := ids[key]
 			if !ok {
 				set, err := parseSet(kept)
 				if err != nil {
-					t.skipped++
+					out.skipped++
 					continue
 				}
-				id = uint32(len(t.sets))
+				id = uint32(len(sets))
 				ids[key] = id
-				t.sets = append(t.sets, set)
+				sets = append(sets, set)
 			}
-			t.entries = append(t.entries, realEntry{p, id})
+			row.sets[k], found = id+1, true
+		}
+		if found {
+			rows = append(rows, row)
 		}
 		return nil
 	})
 	if err != nil {
 		return nil, err
 	}
-	slices.SortFunc(t.entries, func(a, b realEntry) int {
-		return cmp.Or(
-			cmp.Compare(a.prefix.Addr().BitLen(), b.prefix.Addr().BitLen()), // 32 before 128
-			cmp.Compare(a.set, b.set),
-			a.prefix.Addr().Compare(b.prefix.Addr()),
-			cmp.Compare(a.prefix.Bits(), b.prefix.Bits()))
-	})
-	for t.v4 < len(t.entries) && t.entries[t.v4].prefix.Addr().Is4() {
-		t.v4++
+	if len(rows) == 0 {
+		return nil, errors.New("the played peers have no usable routes")
 	}
-	if len(t.entries) == 0 {
-		return nil, errors.New("the largest peer has no usable routes")
+	if o.scaleTo > 0 {
+		base := len(rows)
+		if rows, err = growRows(rows, o.scaleTo); err != nil {
+			return nil, err
+		}
+		out.derived = len(rows) - base
 	}
-	return t, nil
+	out.prefixes = len(rows)
+	for _, r := range rows {
+		if r.prefix.Addr().Is4() {
+			out.v4++
+		}
+	}
+	for k := range o.peers {
+		v := &realTable{sets: sets, pinned: o.peers > 1, via: k}
+		for _, r := range rows {
+			if id := r.sets[k]; id != 0 {
+				v.entries = append(v.entries, realEntry{r.prefix, id - 1})
+			}
+		}
+		slices.SortFunc(v.entries, func(a, b realEntry) int {
+			return cmp.Or(
+				cmp.Compare(a.prefix.Addr().BitLen(), b.prefix.Addr().BitLen()), // 32 before 128
+				cmp.Compare(a.set, b.set),
+				a.prefix.Addr().Compare(b.prefix.Addr()),
+				cmp.Compare(a.prefix.Bits(), b.prefix.Bits()))
+		})
+		for v.v4 < len(v.entries) && v.entries[v.v4].prefix.Addr().Is4() {
+			v.v4++
+		}
+		out.paths += len(v.entries)
+		out.views = append(out.views, v)
+	}
+	return out, nil
+}
+
+// Splitting stops at the longest prefix a public table carries.
+const (
+	maxSplitV4 = 24
+	maxSplitV6 = 48
+	minSplit   = 8
+)
+
+func splittable(p netip.Prefix) bool {
+	if p.Bits() < minSplit {
+		return false
+	}
+	if p.Addr().Is4() {
+		return p.Bits() < maxSplitV4
+	}
+	return p.Bits() < maxSplitV6
+}
+
+// halves are the two prefixes one bit longer than p.
+func halves(p netip.Prefix) [2]netip.Prefix {
+	b := p.Bits()
+	if p.Addr().Is4() {
+		a := p.Addr().As4()
+		a[b/8] |= 0x80 >> (b % 8)
+		return [2]netip.Prefix{netip.PrefixFrom(p.Addr(), b+1), netip.PrefixFrom(netip.AddrFrom4(a), b+1)}
+	}
+	a := p.Addr().As16()
+	a[b/8] |= 0x80 >> (b % 8)
+	return [2]netip.Prefix{netip.PrefixFrom(p.Addr(), b+1), netip.PrefixFrom(netip.AddrFrom16(a), b+1)}
+}
+
+// spread orders prefixes pseudo-randomly but the same way every run, so
+// the more-specifics are spread over the whole table and not the low end
+// of the address space.
+func spread(p netip.Prefix) uint64 {
+	a := p.Addr().As16()
+	x := binary.BigEndian.Uint64(a[:8]) ^ bits.RotateLeft64(binary.BigEndian.Uint64(a[8:]), 21) ^ uint64(p.Bits())<<56
+	x = (x ^ x>>30) * 0xbf58476d1ce4e5b9
+	x = (x ^ x>>27) * 0x94d049bb133111eb
+	return x ^ x>>31
+}
+
+// growRows adds more-specifics to rows until there are target prefixes. A
+// generation splits each prefix that can still be split, in spread order;
+// the children it adds are split in the next. A half the dump already has
+// is left as the dump has it.
+func growRows(rows []realRow, target int) ([]realRow, error) {
+	if target < len(rows) {
+		return nil, fmt.Errorf("scale_to %d is below the dump's %d prefixes", target, len(rows))
+	}
+	have := make(map[netip.Prefix]struct{}, target)
+	var frontier []int
+	for i, r := range rows {
+		have[r.prefix] = struct{}{}
+		if splittable(r.prefix) {
+			frontier = append(frontier, i)
+		}
+	}
+	rows = slices.Grow(rows, target-len(rows))
+	for len(rows) < target {
+		if len(frontier) == 0 {
+			return nil, fmt.Errorf("the dump cannot reach %d prefixes: splitting down to /%d and /%d stops at %d", target, maxSplitV4, maxSplitV6, len(rows))
+		}
+		slices.SortFunc(frontier, func(a, b int) int { return cmp.Compare(spread(rows[a].prefix), spread(rows[b].prefix)) })
+		var next []int
+		for _, pi := range frontier {
+			parent := rows[pi]
+			for _, c := range halves(parent.prefix) {
+				if len(rows) == target {
+					break
+				}
+				if _, ok := have[c]; ok {
+					continue
+				}
+				have[c] = struct{}{}
+				rows = append(rows, realRow{prefix: c, sets: parent.sets})
+				if splittable(c) {
+					next = append(next, len(rows)-1)
+				}
+			}
+		}
+		frontier = next
+	}
+	return rows, nil
 }
 
 // peerRoutes counts the routes of every peer in the dump.

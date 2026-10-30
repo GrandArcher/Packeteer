@@ -162,6 +162,17 @@ func TestSynthesizeSetupWarning(t *testing.T) {
 	}
 }
 
+func TestSimulatedProbesSetupNotice(t *testing.T) {
+	cfg := &config.Config{Probers: []config.PluginSpec{{Type: "fixed"}}}
+	if st := setupInfo(cfg, &pluginhost.Set{}); st.SimulatedProbes != "" {
+		t.Fatalf("notice with only a fixed prober: %q", st.SimulatedProbes)
+	}
+	cfg.Probers = append(cfg.Probers, config.PluginSpec{Type: "sim"})
+	if st := setupInfo(cfg, &pluginhost.Set{}); st.SimulatedProbes != config.SimulatedProbesNotice || !strings.Contains(st.SimulatedProbes, "simulated, not measured") {
+		t.Fatalf("notice = %q", st.SimulatedProbes)
+	}
+}
+
 // synthesize is restart-only: a reload that turns it on or changes it is
 // refused by name (#122).
 func TestSynthesizeIsRestartOnly(t *testing.T) {

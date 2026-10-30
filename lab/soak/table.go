@@ -70,7 +70,8 @@ func newTable(n int) table {
 	return t
 }
 
-// newRealTable plays a dump's view. setLen is the average run, for logs.
+// newRealTable plays one view of a dump. setLen is the average run, for
+// logs.
 func newRealTable(r *realTable) table {
 	return table{n: len(r.entries), real: r, setLen: max(1, len(r.entries)/max(1, len(r.sets)))}
 }
@@ -252,8 +253,15 @@ func (t table) group(i int) int {
 	return i / t.setLen
 }
 
-// provider is the index (0 or 1) of the provider entry i is native on.
-func (t table) provider(i int) int { return t.group(i) & 1 }
+// provider is the index of the provider entry i is native on: the view's
+// own when several views play several providers' routes, else 0 or 1 by
+// attribute set.
+func (t table) provider(i int) int {
+	if t.real != nil && t.real.pinned {
+		return t.real.via
+	}
+	return t.group(i) & 1
+}
 
 // attrSet is the path attributes of one group, besides the next hop.
 type attrSet struct {

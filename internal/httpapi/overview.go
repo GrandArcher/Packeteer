@@ -24,6 +24,9 @@ type Setup struct {
 	// SynthesizeWarning is config.SynthesizeWarning while synthesize is
 	// on (#122), else empty.
 	SynthesizeWarning string
+	// SimulatedProbes is config.SimulatedProbesNotice while a sim prober
+	// is configured (#103), else empty.
+	SimulatedProbes string
 }
 
 // Hint levels: todo is a step the operator still has to take before the
@@ -121,6 +124,9 @@ type Overview struct {
 	// SynthesizeWarning is set while synthesize is on (#122); every page
 	// shows it.
 	SynthesizeWarning string `json:"synthesize_warning,omitempty"`
+	// SimulatedProbes is set while a sim prober is configured (#103);
+	// every page shows it so no probe number reads as measured.
+	SimulatedProbes string `json:"simulated_probes,omitempty"`
 }
 
 // OverviewCounts are the headline numbers.
@@ -183,6 +189,7 @@ func BuildOverview(snap Snapshot, setup Setup, features []Feature) Overview {
 		BGP:      OverviewBGP{Configured: snap.BGPConfigured, Ready: snap.RIBReady, Peers: len(snap.Peers)},
 
 		SynthesizeWarning: setup.SynthesizeWarning,
+		SimulatedProbes:   setup.SimulatedProbes,
 	}
 	for _, p := range snap.Peers {
 		if p.Established {

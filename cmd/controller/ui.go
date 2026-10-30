@@ -200,5 +200,8 @@ func setupInfo(cfg *config.Config, plugins *pluginhost.Set) httpapi.Setup {
 	if cfg.Synthesizing() {
 		st.SynthesizeWarning = config.SynthesizeWarning
 	}
+	if cfg.SimulatedProbes() {
+		st.SimulatedProbes = config.SimulatedProbesNotice
+	}
 	return st
 }

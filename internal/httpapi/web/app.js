@@ -836,7 +836,10 @@ function renderHeadline(o) {
 function renderOverview(o) {
   renderBanner(o.mode);
   if (typeof shellRenderAuthBanner === "function") shellRenderAuthBanner(o.auth);
-  if (typeof shellRenderSynthBanner === "function") shellRenderSynthBanner(o.synthesize_warning);
+  if (typeof shellRenderNotice === "function") {
+    shellRenderNotice("synth-banner", o.synthesize_warning);
+    shellRenderNotice("sim-banner", o.simulated_probes);
+  }
   renderHeadline(o);
   renderTiles(o);
   renderSetup(o);
