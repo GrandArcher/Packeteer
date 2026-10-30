@@ -58,11 +58,14 @@ func TestRegistryObserverReadsLearnedRIB(t *testing.T) {
 	send("2001:db8::/32", 64500, 64499)
 
 	own := map[uint32]bool{64496: true, 64512: true}
-	obs := registry.Observed{Announced: map[netip.Prefix]uint32{}, Downstream: map[uint32]bool{}}
+	obs := registry.Observed{Announced: map[netip.Prefix]uint32{}, Origins: map[netip.Prefix]map[uint32]bool{}, Downstream: map[uint32]bool{}}
 	observeRIB(view, cfg.ASN, own, &obs)
 	wantAnnounced := map[netip.Prefix]uint32{netip.MustParsePrefix("198.51.100.0/24"): 64496, netip.MustParsePrefix("192.0.2.0/24"): 64512}
 	if !maps.Equal(obs.Announced, wantAnnounced) {
 		t.Fatalf("announced = %v, want %v", obs.Announced, wantAnnounced)
+	}
+	if !obs.Origins[netip.MustParsePrefix("198.51.100.0/24")][64496] || !obs.Origins[netip.MustParsePrefix("192.0.2.0/24")][64512] || len(obs.Origins) != 2 {
+		t.Fatalf("origins = %v", obs.Origins)
 	}
 	if !maps.Equal(obs.Downstream, map[uint32]bool{64497: true}) {
 		t.Fatalf("downstream = %v, want only AS64497 (the origin behind AS64496)", obs.Downstream)

@@ -1984,7 +1984,7 @@ Creates or deletes one `route` or `route6` object through the RIPE database REST
 | Key | Default | Meaning |
 |---|---|---|
 | `base_url` | `https://rest.db.ripe.net` | RIPE database REST API. https, with a host and no credentials, query, or fragment. |
-| `source` | `RIPE` | `RIPE`, or `TEST` for the RIPE test database. |
+| `source` | `RIPE` | `RIPE`, or `TEST` for the RIPE test database. With `push_enabled` and `registry.irr.source` of `RIPE` or `TEST`, both must name the same database. |
 | `timeout` | `30s` | One request. 1s-2m. |
 
 ### Detector `baseline`

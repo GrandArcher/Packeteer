@@ -1,6 +1,7 @@
 package config
 
 import (
+	"cmp"
 	"regexp"
 	"strings"
 	"time"
@@ -114,7 +115,17 @@ func (c *Config) validateRegistry(add func(string, ...any)) {
 			add("registry.sources[%d]: type is required", i)
 			continue
 		}
-		hasRIPE = hasRIPE || s.Type == "ripe"
+		if s.Type == "ripe" {
+			hasRIPE = true
+			var rc struct {
+				Source string `yaml:"source"`
+			}
+			if s.Config.Decode(&rc) == nil && r.PushEnabled && (r.IRR.Source == "RIPE" || r.IRR.Source == "TEST") {
+				if got := strings.ToUpper(cmp.Or(rc.Source, "RIPE")); got != r.IRR.Source {
+					add("registry.sources[%d]: the ripe source writes to %s and registry.irr.source is %s; set both to the same database", i, got, r.IRR.Source)
+				}
+			}
+		}
 		if n := s.InstanceName(); names[n] {
 			add("registry.sources[%d]: name %q is used twice; set name", i, n)
 		} else {

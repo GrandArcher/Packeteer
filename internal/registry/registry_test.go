@@ -456,3 +456,32 @@ func TestPushedMarkFollowsTheChange(t *testing.T) {
 		t.Fatalf("second change: %v, pushed %v", err, chk.pushed)
 	}
 }
+
+// #289: a route object for another of our own origins is live when any
+// learned path of the prefix has that origin, even if the selected path has
+// not. Without the Origins set it would be offered for deletion.
+func TestStaleIgnoresOtherOwnOrigin(t *testing.T) {
+	p := pfx("198.51.100.0/24")
+	src := &fakeIRR{
+		byOrigin: map[uint32][]netip.Prefix{64496: {p}, 64497: {p}},
+		routes:   map[netip.Prefix][]plugin.IRRRoute{p: {{Prefix: p, Origin: 64496, Database: "RIPE"}, {Prefix: p, Origin: 64497, Database: "RIPE"}}},
+	}
+	obs := func() Observed {
+		return Observed{Ready: true, Announced: map[netip.Prefix]uint32{p: 64496}, Origins: map[netip.Prefix]map[uint32]bool{p: {64496: true}}}
+	}
+	svc := newService(Config{ASNs: []uint32{64496, 64497}, IRRSource: "RIPE"}, Deps{Observe: obs, IRR: []IRRSource{{Name: "x", Plugin: src}}})
+	svc.Scan(context.Background())
+	if st := byKind(svc.Report())["irr_stale"]; len(st) != 1 || st[0].Subject != "198.51.100.0/24 AS64497 RIPE" {
+		t.Fatalf("with only the selected origin seen, AS64497 is stale: %+v", st)
+	}
+	svc = newService(Config{ASNs: []uint32{64496, 64497}, IRRSource: "RIPE"}, Deps{
+		Observe: func() Observed {
+			o := obs()
+			o.Origins[p][64497] = true
+			return o
+		}, IRR: []IRRSource{{Name: "x", Plugin: src}}})
+	svc.Scan(context.Background())
+	if st := byKind(svc.Report())["irr_stale"]; len(st) != 0 {
+		t.Fatalf("an origin seen on another learned path is live: %+v", st)
+	}
+}

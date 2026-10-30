@@ -69,7 +69,7 @@ func (s *Service) scanIRR(ctx context.Context, obs Observed) ([]plugin.RegistryF
 	}
 	var stale []registration
 	for r := range registered {
-		if o, ok := obs.Announced[r.prefix]; !ok || o != r.origin {
+		if !obs.Origins[r.prefix][r.origin] && obs.Announced[r.prefix] != r.origin {
 			stale = append(stale, r)
 		}
 	}

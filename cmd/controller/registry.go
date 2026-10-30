@@ -47,7 +47,7 @@ func registryObserver(cfg *config.Config, view *rib.View) func() registry.Observ
 	}
 	sessions := registrySessions(cfg)
 	return func() registry.Observed {
-		obs := registry.Observed{Ready: view.Ready(), Announced: map[netip.Prefix]uint32{}, Downstream: map[uint32]bool{}, Sessions: sessions}
+		obs := registry.Observed{Ready: view.Ready(), Announced: map[netip.Prefix]uint32{}, Origins: map[netip.Prefix]map[uint32]bool{}, Downstream: map[uint32]bool{}, Sessions: sessions}
 		if obs.Ready {
 			observeRIB(view, cfg.ASN, own, &obs)
 		}
@@ -55,29 +55,42 @@ func registryObserver(cfg *config.Config, view *rib.View) func() registry.Observ
 	}
 }
 
-// observeRIB fills obs from the view. A route with an empty AS path is one
-// the edge originates, so its origin is localASN. The walk keeps no route.
+// observeRIB fills obs from the view: the selected routes decide Announced,
+// and every learned path counts for Origins and Downstream. A route with an
+// empty AS path is one the edge originates, so its origin is localASN.
 func observeRIB(view *rib.View, localASN uint32, own map[uint32]bool, obs *registry.Observed) {
-	view.Find(func(r rib.Route) bool {
-		origin := netpfx.LastAS(r.ASPath)
-		if len(r.ASPath) == 0 {
+	path := func(prefix netip.Prefix, asPath []uint32, selected bool) {
+		origin := netpfx.LastAS(asPath)
+		if len(asPath) == 0 {
 			origin = localASN
 		}
 		if own[origin] {
-			obs.Announced[r.Prefix] = origin
+			if selected {
+				obs.Announced[prefix] = origin
+			}
+			if obs.Origins[prefix] == nil {
+				obs.Origins[prefix] = map[uint32]bool{}
+			}
+			obs.Origins[prefix][origin] = true
 		}
-		for i, a := range r.ASPath {
+		for i, a := range asPath {
 			if !own[a] {
 				continue
 			}
-			for _, d := range r.ASPath[i+1:] {
+			for _, d := range asPath[i+1:] {
 				if !own[d] {
 					obs.Downstream[d] = true
 				}
 			}
 		}
-		return false
-	}, nil, 0)
+	}
+	routes, alts := view.RouteSnapshot()
+	for _, r := range routes {
+		path(r.Prefix, r.ASPath, true)
+	}
+	for _, a := range alts {
+		path(a.Prefix, a.ASPath, false)
+	}
 }
 
 // registrySessions describes each configured exchange attachment: the

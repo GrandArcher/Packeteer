@@ -91,6 +91,10 @@ type Observed struct {
 	// Announced maps each learned prefix whose origin is one of the
 	// configured ASNs to that origin.
 	Announced map[netip.Prefix]uint32
+	// Origins are the configured ASNs seen as origin of any learned path
+	// of a prefix, not only the selected one: a route object for one of them
+	// is live, not stale.
+	Origins map[netip.Prefix]map[uint32]bool
 	// Downstream are the ASNs that follow a configured ASN on a learned
 	// AS path: the customer cone seen as transit.
 	Downstream map[uint32]bool
