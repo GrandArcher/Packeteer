@@ -40,3 +40,16 @@ func TestLookupRejectsUnknownKey(t *testing.T) {
 		t.Fatal("unknown lookup key accepted")
 	}
 }
+
+func TestInventoryParsesAndNeedsType(t *testing.T) {
+	cfg, err := Parse([]byte(minimalYAML + "inventory:\n  type: netbox\n  config:\n    tag: packeteer\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Inventory == nil || cfg.Inventory.Type != "netbox" || cfg.Mode != ModeObserve || cfg.Announcer != nil {
+		t.Fatalf("inventory %+v mode %s announcer %v", cfg.Inventory, cfg.Mode, cfg.Announcer)
+	}
+	if _, err := Parse([]byte(minimalYAML + "inventory:\n  config: {}\n")); err == nil || !strings.Contains(err.Error(), "inventory: type is required") {
+		t.Fatalf("err %v", err)
+	}
+}

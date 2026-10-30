@@ -228,6 +228,11 @@ type Config struct {
 	// Lookup is the read-only PeeringDB / IX-F directory (#153). Nil
 	// disables it. It never announces.
 	Lookup *PluginSpec `yaml:"lookup"`
+	// Inventory is the read-only NetBox / Peering Manager source that
+	// `packeteer config plan`, `diff`, and `apply` read providers from
+	// (#208). Nil disables it. The running controller never reads it and it
+	// never announces.
+	Inventory *PluginSpec `yaml:"inventory"`
 	// Herd is opt-in sharing of probe measurements with other operators
 	// (#260). Nil or disabled is off.
 	Herd *Herd `yaml:"herd"`

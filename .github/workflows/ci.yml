@@ -2952,6 +2952,20 @@ jobs:
       - name: snmpwalk reads the MIB, snmptrapd receives traps and informs, syslog over udp and tcp (#212)
         run: bash lab/e2e-snmp.sh
 
+  netbox:
+    # Providers read from a NetBox container (#208): config plan, diff, and
+    # apply -git, then -check on the written file. Observe mode; nothing
+    # announces.
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - name: NetBox container produces a valid config; the applied change is the planned one (#208)
+        run: bash lab/e2e-netbox.sh
+
   exporters:
     # Each exporter against a real sink container (#207, #287): Kafka
     # (Redpanda), NATS, an OpenTelemetry collector, GoFlow2 for IPFIX, and

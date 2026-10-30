@@ -35,6 +35,7 @@ func TestProgramTypesAreOnlyProbersSourcesNotifiers(t *testing.T) {
 		"irr":                   plugin.IRRs.Types(),
 		"rpki":                  plugin.RPKIs.Types(),
 		"lookup":                plugin.Lookups.Types(),
+		"inventory":             plugin.Inventories.Types(),
 		"ixp members":           plugin.MemberSources.Types(),
 		"ixp fabric":            plugin.FabricProbes.Types(),
 		"ixp route servers":     plugin.RouteServerWatches.Types(),

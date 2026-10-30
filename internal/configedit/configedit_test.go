@@ -353,12 +353,12 @@ func TestWriteFileKeepsOldWhenRestoreFails(t *testing.T) {
 		}
 		return nil
 	}
-	if err := writeFile(path, []byte("mode: inject\n"), old); err == nil || err.Error() != "disk full" || calls != 2 {
+	if err := WriteFile(path, []byte("mode: inject\n"), old); err == nil || err.Error() != "disk full" || calls != 2 {
 		t.Fatalf("restored: err %v, calls %d", err, calls)
 	}
 
 	overwrite = func(string, []byte) error { return errors.New("disk full") }
-	err := writeFile(path, []byte("mode: inject\n"), old)
+	err := WriteFile(path, []byte("mode: inject\n"), old)
 	if err == nil || !strings.Contains(err.Error(), "restoring the previous file failed too") {
 		t.Fatalf("err = %v", err)
 	}

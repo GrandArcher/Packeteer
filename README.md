@@ -184,6 +184,7 @@ Leave graceful restart off on the session. Guides:
 - [docs/leak-watch.md](docs/leak-watch.md) - how Packeteer keeps its routes inside your AS: the rails, and `leak_watch`, which withdraws and holds out a route seen outside the AS. Lab-proven only
 - [docs/precedence.md](docs/precedence.md) - which surface owns a prefix when mitigation, inbound, outbound, a leak hold, flap quarantine, and HA all want it, how the shared cap is spent, and which test proves each pair
 - [docs/policy-routing.md](docs/policy-routing.md) - probe sources behind the router
+- [docs/inventory.md](docs/inventory.md) - read providers, next hops, and communities from NetBox or Peering Manager, with `config plan`, `diff`, and `apply`
 - [docs/vrf.md](docs/vrf.md) - transit sessions in an internet VRF, probe routing per VRF, and partial-table or default-only providers
 - [docs/reordering.md](docs/reordering.md) - packet reordering per provider path (RFC 4737) with the shipped TWAMP-Light reflector, the ICMP estimate and its caveat, and the optional score weight
 - [docs/ui.md](docs/ui.md) - config editor and first-run wizard, custom dashboards, email report subscriptions, and improvement weights
