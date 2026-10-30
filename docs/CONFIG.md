@@ -828,8 +828,7 @@ Registry hygiene (#289, not on a public edge). Off by default. A scheduled scan 
 | `as_set` | none | The operator's as-set (for example `AS-EXAMPLE`), checked against the ASNs that follow `asns` on learned paths. Needs an `irr.sources` entry. |
 | `interval` | `24h` | Time between scans. 1h-168h. The first scan runs a minute after start. |
 | `headroom_percent` | `20` | Percent added to the announced prefix counts when a PeeringDB max-prefix value is suggested. 1-1000. |
-| `irr.source` | `RIPE` | The `source:` of generated route objects. A change is pushable only for `RIPE`; any other value gives RPSL to submit by hand. |
-| `irr.mnt_by` | none | The `mnt-by:` of generated route objects. Required to push through a `ripe` source. |
+| `irr` | `RIPE` source | The RPSL of generated route objects: `source` is the `source:` attribute (default `RIPE`; a change is pushable only for `RIPE`, any other value gives RPSL to submit by hand) and `mnt_by` is the `mnt-by:` attribute (required to push through a `ripe` source). |
 | `push_enabled` | `false` | `true` allows `POST /api/registry/push`, which needs the admin role and an authenticated API. Needs a `sources` entry. |
 | `sources` | none | Registry plugins (`type`, optional `name`, `config`): `peeringdb` ([Registry source `peeringdb`](#registry-source-peeringdb)) reads PeeringDB and can push; `ripe` ([Registry source `ripe`](#registry-source-ripe)) pushes route objects. Names must differ. |
 

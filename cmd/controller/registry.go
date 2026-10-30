@@ -39,9 +39,7 @@ func newRegistry(cfg *config.Config, plugins *pluginhost.Set, view *rib.View, rp
 }
 
 // registryObserver reads what the network announces from the selected
-// routes of the learned RIB. A route with an empty AS path is one the
-// edge originates, so its origin is the config asn. The walk keeps no
-// route: it only fills the two maps.
+// routes of the learned RIB.
 func registryObserver(cfg *config.Config, view *rib.View) func() registry.Observed {
 	own := map[uint32]bool{}
 	for _, a := range cfg.Registry.ASNs {
@@ -50,31 +48,36 @@ func registryObserver(cfg *config.Config, view *rib.View) func() registry.Observ
 	sessions := registrySessions(cfg)
 	return func() registry.Observed {
 		obs := registry.Observed{Ready: view.Ready(), Announced: map[netip.Prefix]uint32{}, Downstream: map[uint32]bool{}, Sessions: sessions}
-		if !obs.Ready {
-			return obs
+		if obs.Ready {
+			observeRIB(view, cfg.ASN, own, &obs)
 		}
-		view.Find(func(r rib.Route) bool {
-			origin := netpfx.LastAS(r.ASPath)
-			if len(r.ASPath) == 0 {
-				origin = cfg.ASN
-			}
-			if own[origin] {
-				obs.Announced[r.Prefix] = origin
-			}
-			for i, a := range r.ASPath {
-				if !own[a] {
-					continue
-				}
-				for _, d := range r.ASPath[i+1:] {
-					if !own[d] {
-						obs.Downstream[d] = true
-					}
-				}
-			}
-			return false
-		}, nil, 0)
 		return obs
 	}
+}
+
+// observeRIB fills obs from the view. A route with an empty AS path is one
+// the edge originates, so its origin is localASN. The walk keeps no route.
+func observeRIB(view *rib.View, localASN uint32, own map[uint32]bool, obs *registry.Observed) {
+	view.Find(func(r rib.Route) bool {
+		origin := netpfx.LastAS(r.ASPath)
+		if len(r.ASPath) == 0 {
+			origin = localASN
+		}
+		if own[origin] {
+			obs.Announced[r.Prefix] = origin
+		}
+		for i, a := range r.ASPath {
+			if !own[a] {
+				continue
+			}
+			for _, d := range r.ASPath[i+1:] {
+				if !own[d] {
+					obs.Downstream[d] = true
+				}
+			}
+		}
+		return false
+	}, nil, 0)
 }
 
 // registrySessions describes each configured exchange attachment: the

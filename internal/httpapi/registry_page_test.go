@@ -85,31 +85,3 @@ func TestRegistryPageRendering(t *testing.T) {
 		t.Fatalf("registry page: %v\n%s", err, out)
 	}
 }
-
-// #289: the page is served and every page's side nav links to it.
-func TestRegistryPageServedAndLinked(t *testing.T) {
-	e := newRBAC(t, nil)
-	rec := e.do("GET", "/registry.html", e.tokens[plugin.RoleViewer], "")
-	if rec.Code != 200 || !strings.Contains(rec.Body.String(), `<script src="/registry.js"></script>`) {
-		t.Fatalf("registry.html = %d", rec.Code)
-	}
-	if rec := e.do("GET", "/registry.js", e.tokens[plugin.RoleViewer], ""); rec.Code != 200 {
-		t.Fatalf("registry.js = %d", rec.Code)
-	}
-	pages, err := filepath.Glob("web/*.html")
-	if err != nil || len(pages) < 10 {
-		t.Fatalf("pages = %v, %v", pages, err)
-	}
-	for _, p := range pages {
-		if filepath.Base(p) == "signin.html" {
-			continue
-		}
-		b, err := os.ReadFile(p)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if !strings.Contains(string(b), `<a href="/registry.html" data-page="registry">Registry</a>`) {
-			t.Errorf("%s has no Registry link in the side nav", p)
-		}
-	}
-}

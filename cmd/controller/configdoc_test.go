@@ -35,6 +35,8 @@ import (
 	"github.com/GrandArcher/Packeteer/internal/plugins/prober/icmp"
 	"github.com/GrandArcher/Packeteer/internal/plugins/prober/tcp"
 	"github.com/GrandArcher/Packeteer/internal/plugins/prober/udp"
+	regpeeringdb "github.com/GrandArcher/Packeteer/internal/plugins/registry/peeringdb"
+	regripe "github.com/GrandArcher/Packeteer/internal/plugins/registry/ripe"
 	"github.com/GrandArcher/Packeteer/internal/plugins/ribsource/bmp"
 	"github.com/GrandArcher/Packeteer/internal/plugins/rpki/rtr"
 	"github.com/GrandArcher/Packeteer/internal/plugins/scorer/commit"
@@ -126,6 +128,10 @@ func TestConfigDocCoversStructs(t *testing.T) {
 		coreicmp.Config{},
 		config.CoreLink{},
 		peeringdb.Config{},
+		regpeeringdb.Config{},
+		regripe.Config{},
+		config.Registry{},
+		config.RegistryIRR{},
 		invcommon.Common{},
 	) {
 		if !strings.Contains(text, "`"+key+"`") {
