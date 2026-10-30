@@ -71,7 +71,7 @@ Restart the controller to use the new providers.
 
 With `-git`, the config file must be tracked in a git repository and have no uncommitted change; apply then commits the file alone, with the plan as the message and "Packeteer" as the author, and does not push. Mount the directory that holds the repository (the image includes `git`). If the commit fails, the old file is put back. The repository is yours: Packeteer never pushes.
 
-Every apply is an audit record (`CLI config apply`, method `system`, the user running it, the plan id, the providers and keys changed, the commit). Apply starts as the daemon does, so with HTTP on it uses the same storage as the controller (the default `sqlite` file when the config names none; mount the same data volume) and the record shows in `GET /api/audit`. Apply opens the storage before it writes, so a storage that cannot be opened stops the apply; a record that then fails to write is logged, as for the ops API. With HTTP off and no `storage`, the record is written to the log only.
+Every apply is an audit record (`CLI config apply`, method `system`, the user running it, the plan id, the providers and keys changed, the commit). Apply starts as the daemon does, so with HTTP on it uses the same storage as the controller (the default `sqlite` file when sign-in is on by default and the config names no storage; mount the same data volume) and the record shows in `GET /api/audit`. Apply opens the storage before it writes, so a storage that cannot be opened stops the apply; a record that then fails to write is logged, as for the ops API. With HTTP off and no `storage`, the record is written to the log only.
 
 Peering Manager is covered by unit tests against fixtures of its documented API; the lab runs NetBox only.
 
