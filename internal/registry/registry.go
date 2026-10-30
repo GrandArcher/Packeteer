@@ -146,7 +146,7 @@ type Section struct {
 
 // Report is the last scan.
 type Report struct {
-	Scanned     time.Time `json:"scanned,omitempty"`
+	Scanned     time.Time `json:"scanned,omitzero"`
 	PushEnabled bool      `json:"push_enabled"`
 	Sections    []Section `json:"sections"`
 	Findings    []Finding `json:"findings"`

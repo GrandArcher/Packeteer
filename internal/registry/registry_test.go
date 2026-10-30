@@ -3,6 +3,7 @@ package registry
 import (
 	"cmp"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/netip"
@@ -615,5 +616,26 @@ func TestStaleWithoutStoredObject(t *testing.T) {
 		if len(st) != 1 || st[0].Diff != "" || st[0].Change != nil || st[0].Pushable || !strings.HasSuffix(st[0].Message, tc.want) {
 			t.Errorf("%s: irr_stale = %+v", name, st)
 		}
+	}
+}
+
+// #289: before the first scan the report has no scan time at all. A zero
+// time.Time would marshal as 0001-01-01 and the page would read as clean, so
+// the field is left out of the JSON until a scan has finished.
+func TestReportBeforeFirstScanOmitsScanned(t *testing.T) {
+	svc := newService(Config{}, Deps{})
+	r := svc.Report()
+	if !r.Scanned.IsZero() {
+		t.Fatalf("Scanned = %v before any scan", r.Scanned)
+	}
+	b, err := json.Marshal(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(b), "scanned") || strings.Contains(string(b), "0001-01-01") {
+		t.Fatalf("report before the first scan carries a scan time: %s", b)
+	}
+	if len(r.Findings) != 0 {
+		t.Fatalf("findings before the first scan: %v", r.Findings)
 	}
 }
