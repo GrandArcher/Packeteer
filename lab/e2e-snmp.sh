@@ -61,7 +61,7 @@ providers:
     source_ip: 127.0.0.1
     next_hop: 192.0.2.1
   - name: lab-b
-    source_ip: 127.0.0.1
+    source_ip: 127.0.0.2
     next_hop: 192.0.2.2
 probe: {interval: 2s, timeout: 200ms, packets: 1}
 sources:
