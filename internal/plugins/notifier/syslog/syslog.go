@@ -37,7 +37,8 @@ const (
 	// an SD-ID without one is reserved by RFC 5424 for IANA.
 	sdID = "@32473"
 	// maxDatagram is the size RFC 5426 says a receiver SHOULD accept; the
-	// free text is cut to fit it. The structured data is never cut.
+	// free text is cut to fit it. Each structured data value is cut at
+	// maxSDValue, so the structured data alone can pass it.
 	maxDatagram = 2048
 	maxStream   = 8192
 	maxSDValue  = 512
@@ -321,7 +322,7 @@ func (n *Notifier) Notify(ctx context.Context, e plugin.Event) error {
 // treated as closed too: the notifier reconnects before the next event,
 // which still delivers.
 func alive(c net.Conn) bool {
-	// A deadline already past fails the read before it looks at the socket.
+	// With nothing to read on an open connection, the read times out at once.
 	_ = c.SetReadDeadline(time.Now().Add(time.Millisecond))
 	defer c.SetReadDeadline(time.Time{})
 	var b [1]byte
