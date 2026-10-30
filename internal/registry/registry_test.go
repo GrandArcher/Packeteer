@@ -128,7 +128,7 @@ func TestScanIRR(t *testing.T) {
 		},
 	}
 	chk := &fakeChecker{}
-	svc := newService(Config{IRRSource: "ripe", MntBy: "EXAMPLE-MNT", PushEnabled: true}, Deps{
+	svc := newService(Config{IRRSource: "ripe", PushDB: "RIPE", MntBy: "EXAMPLE-MNT", PushEnabled: true}, Deps{
 		IRR:      []IRRSource{{Name: "ripe", Plugin: ripe}},
 		Checkers: []Checker{{Name: "ripe", Type: "ripe", Plugin: chk}},
 	})
@@ -189,8 +189,9 @@ func TestIRRFindingsNotPushable(t *testing.T) {
 		checkers []Checker
 	}{
 		"push off":  {Config{IRRSource: "RIPE"}, []Checker{{Name: "ripe", Type: "ripe", Plugin: &fakeChecker{}}}},
-		"no plugin": {Config{IRRSource: "RIPE", PushEnabled: true}, nil},
-		"radb":      {Config{IRRSource: "RADB", PushEnabled: true}, []Checker{{Name: "ripe", Type: "ripe", Plugin: &fakeChecker{}}}},
+		"no plugin": {Config{IRRSource: "RIPE", PushDB: "RIPE", PushEnabled: true}, nil},
+		"radb":      {Config{IRRSource: "RADB", PushDB: "RIPE", PushEnabled: true}, []Checker{{Name: "ripe", Type: "ripe", Plugin: &fakeChecker{}}}},
+		"other db":  {Config{IRRSource: "RIPE", PushDB: "TEST", PushEnabled: true}, []Checker{{Name: "ripe", Type: "ripe", Plugin: &fakeChecker{}}}},
 	}
 	for name, tc := range cases {
 		svc := newService(tc.cfg, Deps{IRR: []IRRSource{{Name: "x", Plugin: src}}, Checkers: tc.checkers})
@@ -423,11 +424,11 @@ func TestDuplicateNeedsHomeObject(t *testing.T) {
 	}
 }
 
-// #289: registry.irr.source TEST makes a pushable object for the ripe
-// plugin's TEST database; any other non-RIPE source is text only.
+// #289: registry.irr.source TEST with a ripe source writing to TEST makes a
+// pushable object.
 func TestTestDatabaseChange(t *testing.T) {
 	src := &fakeIRR{byOrigin: map[uint32][]netip.Prefix{64496: {pfx("198.51.100.0/24"), pfx("2001:db8::/32")}}}
-	svc := newService(Config{IRRSource: "test", MntBy: "EXAMPLE-MNT", PushEnabled: true}, Deps{
+	svc := newService(Config{IRRSource: "test", PushDB: "TEST", MntBy: "EXAMPLE-MNT", PushEnabled: true}, Deps{
 		IRR: []IRRSource{{Name: "x", Plugin: src}}, Checkers: []Checker{{Name: "ripe", Type: "ripe", Plugin: &fakeChecker{}}},
 	})
 	svc.Scan(context.Background())
@@ -483,5 +484,28 @@ func TestStaleIgnoresOtherOwnOrigin(t *testing.T) {
 	svc.Scan(context.Background())
 	if st := byKind(svc.Report())["irr_stale"]; len(st) != 0 {
 		t.Fatalf("an origin seen on another learned path is live: %+v", st)
+	}
+}
+
+// #289: a leftover copy is text to submit by hand even when it sits in the
+// database the ripe source writes to; only the object the scan shows as
+// stale or missing is pushed.
+func TestDuplicateIsTextOnly(t *testing.T) {
+	p := pfx("198.51.100.0/24")
+	src := &fakeIRR{
+		byOrigin: map[uint32][]netip.Prefix{64496: {p, pfx("203.0.113.0/24"), pfx("2001:db8::/32")}},
+		routes: map[netip.Prefix][]plugin.IRRRoute{p: {
+			{Prefix: p, Origin: 64496, Database: "RADB"}, {Prefix: p, Origin: 64496, Database: "RIPE"},
+		}},
+	}
+	svc := newService(Config{IRRSource: "RADB", PushDB: "RIPE", MntBy: "EXAMPLE-MNT", PushEnabled: true}, Deps{
+		IRR: []IRRSource{{Name: "x", Plugin: src}}, Checkers: []Checker{{Name: "ripe", Type: "ripe", Plugin: &fakeChecker{}}},
+	})
+	for range 2 {
+		svc.Scan(context.Background())
+	}
+	dup := byKind(svc.Report())["irr_duplicate"]
+	if len(dup) != 1 || dup[0].Subject != "198.51.100.0/24 AS64496 RIPE" || dup[0].Change != nil || dup[0].Pushable || dup[0].Diff == "" {
+		t.Fatalf("irr_duplicate = %+v", dup)
 	}
 }

@@ -9,9 +9,9 @@ Each finding has a severity (`error`, `warning`, `info`), the registry it is abo
 | Kind | Meaning | Fix |
 |---|---|---|
 | `irr_missing` | A learned prefix originated by `registry.asns` has no route or route6 object for that origin in any `irr.sources` database. | RPSL to create; a push when `registry.irr.source` is `RIPE` (or `TEST`) and a `ripe` source is set |
-| `irr_stale` | A route object names a configured ASN for a prefix that is no longer announced. | RPSL to delete; a push for an object in the RIPE database when a `ripe` source is set, offered only when the previous scan showed it too |
+| `irr_stale` | A route object names a configured ASN for a prefix that is no longer announced. | RPSL to delete; a push for an object in the database the `ripe` source writes to, offered only when the previous scan showed it too. Stale means the learned RIB has no such prefix and origin; a prefix originated where Packeteer has no session or BMP feed looks stale, so read the diff before pushing |
 | `irr_conflict` | Another origin is registered for an announced prefix. | Text only |
-| `irr_duplicate` | The same object is in more than one database beside the one in `registry.irr.source` (for example RADB after a move to RIPE). | Text only |
+| `irr_duplicate` | The same object is in more than one database beside the one in `registry.irr.source` (for example RADB after a move to RIPE). | Text only, never pushed |
 | `rpki_missing` | No ROA covers an announced prefix. | Text only (RIR portal) |
 | `rpki_maxlength`, `rpki_origin` | The prefix is RPKI invalid: the ROA's maxLength is shorter than the announcement, or no ROA names the origin. | Text only (RIR portal) |
 | `asset_missing` | An ASN seen after `registry.asns` on learned AS paths (a customer seen as transit) is not in `registry.as_set`. | Text only |
@@ -30,12 +30,12 @@ IRR detection queries every configured `irr.sources` entry, so several registrie
 
 `registry.push_enabled: true` plus a `registry.sources` entry lets an admin push a finding that has a change. Only these can be pushed:
 
-- `ripe`: create or delete a `route` or `route6` object in the RIPE database (or its TEST database). Credentials: `PACKETEER_RIPE_USER` and `PACKETEER_RIPE_PASSWORD`.
+- `ripe`: create or delete a `route` or `route6` object in the one database the source writes to (RIPE, or TEST for the RIPE test database). An object in the other of the two is text only. Credentials: `PACKETEER_RIPE_USER` and `PACKETEER_RIPE_PASSWORD`.
 - `peeringdb`: set `info_prefixes4`, `info_prefixes6`, or a connection `speed`. Credential: `PACKETEER_PEERINGDB_API_KEY`.
 
 Other IRR databases (RADB, ARIN, and the rest) get the RPSL to submit by hand. Credentials come only from the environment and are never in the config, the API, the logs, or the audit record. The RIPE credentials are read when a change is pushed; the PeeringDB key is read at start and also sent on scan reads (the public data needs no key).
 
-Each push is `POST /api/registry/push` with the finding `id` and the `digest` of the diff that was shown. It needs the admin role and an authenticated API. The server refuses a digest that no longer matches the last scan, a change already pushed (a later scan that needs a different value is open again), and a finding without a change. The plugin re-reads the record first and refuses when the field no longer holds the value the diff showed. Every outcome, refusals and failures included, is in the audit log with the change. The Registry page shows the diff, asks for a second click, and then posts.
+Each push is `POST /api/registry/push` with the finding `id` and the `digest` of the diff that was shown. It needs the admin role and an authenticated API. The server refuses a digest that no longer matches the last scan, a change already pushed (a later scan that needs a different value is open again), and a finding without a change. The plugin re-reads the record first and refuses when the field no longer holds the value the diff showed. A refused or failed push is in the audit log, with the registry, class, and key once the request reaches the plugin; a success also holds the field values or the RPSL object. The Registry page shows the diff, asks for a second click, and then posts.
 
 ## Configure
 
@@ -58,4 +58,4 @@ The Registry page (`/registry.html`, [ui.md](ui.md#registry)) lists the scan sec
 
 ## Rollback
 
-Set `registry.enabled: false` and restart. A pushed change is a change in the registry: undo it there (delete the object, or set the PeeringDB field back). The audit entry holds the old and new values.
+Set `registry.enabled: false` and restart. A pushed change is a change in the registry: undo it there (delete the object, or set the PeeringDB field back). The audit entry of a push holds the old and new field values, or the RPSL object that was created or deleted, so a deleted object can be put back from it.

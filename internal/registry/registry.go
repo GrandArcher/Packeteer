@@ -55,11 +55,13 @@ var (
 
 // Config is the scan setup (registry block).
 type Config struct {
-	ASNs        []uint32
-	ASSet       string
-	Interval    time.Duration
-	Headroom    int
-	IRRSource   string
+	ASNs      []uint32
+	ASSet     string
+	Interval  time.Duration
+	Headroom  int
+	IRRSource string
+	// PushDB is the database the ripe source writes to, empty without one.
+	PushDB      string
 	MntBy       string
 	PushEnabled bool
 }

@@ -15,7 +15,6 @@ import (
 	"log/slog"
 	"net/netip"
 	"os"
-	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -311,7 +310,7 @@ func (s *Source) OriginPrefixes(_ context.Context, asn uint32) ([]netip.Prefix, 
 			}
 		}
 	}
-	slices.SortFunc(out, func(a, b netip.Prefix) int { return a.Addr().Compare(b.Addr()) })
+	netpfx.Sort(out)
 	return out, d.at, nil
 }
 

@@ -34,7 +34,7 @@ func newRegistry(cfg *config.Config, plugins *pluginhost.Set, view *rib.View, rp
 	}
 	return registry.New(registry.Config{
 		ASNs: r.ASNs, ASSet: r.ASSet, Interval: r.Interval, Headroom: r.HeadroomPercent,
-		IRRSource: r.IRR.Source, MntBy: r.IRR.MntBy, PushEnabled: r.PushEnabled,
+		IRRSource: r.IRR.Source, PushDB: r.PushDatabase(), MntBy: r.IRR.MntBy, PushEnabled: r.PushEnabled,
 	}, deps)
 }
 

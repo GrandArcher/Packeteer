@@ -39,8 +39,30 @@ func TestRegistryParses(t *testing.T) {
 
 func TestRegistryTestDatabasePushAccepted(t *testing.T) {
 	y := "registry:\n  enabled: true\n  asns: [64496]\n  push_enabled: true\n  irr: {source: test, mnt_by: EXAMPLE-MNT}\n  sources: [{type: ripe, config: {source: TEST}}]\n"
-	if _, err := Parse([]byte(minimalYAML + y)); err != nil {
+	cfg, err := Parse([]byte(minimalYAML + y))
+	if err != nil {
 		t.Fatal(err)
+	}
+	if got := cfg.Registry.PushDatabase(); got != "TEST" {
+		t.Fatalf("PushDatabase = %q, want TEST", got)
+	}
+}
+
+func TestRegistryPushDatabase(t *testing.T) {
+	for name, tc := range map[string]struct{ sources, want string }{
+		"default ripe": {"[{type: ripe}]", "RIPE"},
+		"lower case":   {"[{type: ripe, config: {source: test}}]", "TEST"},
+		"no ripe":      {"[{type: peeringdb}]", ""},
+		"bad config":   {"[{type: ripe, config: {source: [x]}}]", ""},
+		"first ripe":   {"[{type: peeringdb}, {type: ripe, name: a, config: {source: TEST}}, {type: ripe, name: b}]", "TEST"},
+	} {
+		cfg, err := Parse([]byte(minimalYAML + "registry:\n  enabled: true\n  asns: [64496]\n  sources: " + tc.sources + "\n"))
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if got := cfg.Registry.PushDatabase(); got != tc.want {
+			t.Errorf("%s: PushDatabase = %q, want %q", name, got, tc.want)
+		}
 	}
 }
 

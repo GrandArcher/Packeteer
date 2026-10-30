@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/GrandArcher/Packeteer/internal/registry"
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
@@ -92,11 +93,20 @@ func (s *Server) handleRegistryPush(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, code, map[string]string{"error": err.Error()})
 		return
 	}
-	detail := fmt.Sprintf("registry push %s", ch.Op)
-	if ch.Field != "" {
-		detail = fmt.Sprintf("registry push %s %s: %s -> %s", ch.Op, ch.Field, ch.Old, ch.New)
-	}
-	noteAudit(r, target, detail)
+	noteAudit(r, target, pushDetail(ch))
 	s.log.Info("registry change pushed through the API", "registry", ch.Registry, "op", ch.Op, "class", ch.Class, "key", ch.Key, "remote", r.RemoteAddr)
 	writeJSON(w, http.StatusOK, map[string]any{"pushed": true, "change": ch})
+}
+
+// pushDetail is the audit text of an applied change. It holds what an
+// operator needs to undo it: the old and new field value, or the RPSL object
+// that was created or deleted.
+func pushDetail(ch plugin.RegistryChange) string {
+	switch {
+	case ch.Field != "":
+		return fmt.Sprintf("registry push %s %s: %s -> %s", ch.Op, ch.Field, ch.Old, ch.New)
+	case ch.Object != "":
+		return fmt.Sprintf("registry push %s: %s", ch.Op, strings.ReplaceAll(strings.TrimSpace(ch.Object), "\n", "; "))
+	}
+	return "registry push " + ch.Op
 }

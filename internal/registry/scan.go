@@ -1,6 +1,7 @@
 package registry
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -64,7 +65,7 @@ func (s *Service) scanIRR(ctx context.Context, obs Observed) ([]plugin.RegistryF
 			Subject: fmt.Sprintf("%s AS%d", p, origin),
 			Message: fmt.Sprintf("%s is announced with origin AS%d and no route object registers it", p, origin),
 			Diff:    "+ " + strings.ReplaceAll(strings.TrimSpace(routeObject(p, origin, s.sourceName(), s.cfg.MntBy)), "\n", "\n+ "),
-			Change:  irrChange("create_object", s.sourceName(), p, origin, routeObject(p, origin, s.sourceName(), s.cfg.MntBy)),
+			Change:  s.irrChange("create_object", s.sourceName(), p, origin, routeObject(p, origin, s.sourceName(), s.cfg.MntBy)),
 		})
 	}
 	var stale []registration
@@ -74,10 +75,7 @@ func (s *Service) scanIRR(ctx context.Context, obs Observed) ([]plugin.RegistryF
 		}
 	}
 	slices.SortFunc(stale, func(a, b registration) int {
-		if c := a.prefix.Addr().Compare(b.prefix.Addr()); c != 0 {
-			return c
-		}
-		return int(a.origin) - int(b.origin)
+		return cmp.Or(a.prefix.Addr().Compare(b.prefix.Addr()), cmp.Compare(a.prefix.Bits(), b.prefix.Bits()), cmp.Compare(a.origin, b.origin))
 	})
 	inspect := announced
 	if len(stale) > maxInspect || len(inspect) > maxInspect {
@@ -102,10 +100,12 @@ func (s *Service) sourceName() string {
 	return s.cfg.IRRSource
 }
 
-// irrChange is a push for an object in the RIPE database (or its TEST
-// database); objects in any other registry are text to submit by hand.
-func irrChange(op, db string, p netip.Prefix, origin uint32, object string) *plugin.RegistryChange {
-	if db != "RIPE" && db != "TEST" {
+// irrChange is a push for an object in the database the ripe source writes
+// to (RIPE or its TEST database); objects in any other registry are text to
+// submit by hand. The plugin refuses a different database, so offering one
+// would only fail.
+func (s *Service) irrChange(op, db string, p netip.Prefix, origin uint32, object string) *plugin.RegistryChange {
+	if db != s.cfg.PushDB {
 		return nil
 	}
 	class := "route"
@@ -138,7 +138,7 @@ func (s *Service) staleFindings(ctx context.Context, r registration) []plugin.Re
 				Message: fmt.Sprintf("%s holds a route object for %s AS%d, which no learned route has", db, r.prefix, r.origin),
 				Diff:    "- " + strings.ReplaceAll(strings.TrimSpace(obj), "\n", "\n- "),
 			}
-			f.Change = irrChange("delete_object", db, r.prefix, r.origin, obj)
+			f.Change = s.irrChange("delete_object", db, r.prefix, r.origin, obj)
 			out = append(out, f)
 		}
 	}
@@ -184,14 +184,12 @@ func (s *Service) conflictFindings(ctx context.Context, p netip.Prefix, origin u
 				continue
 			}
 			obj := routeObject(p, origin, db, s.cfg.MntBy)
-			f := plugin.RegistryFinding{
+			out = append(out, plugin.RegistryFinding{
 				Kind: "irr_duplicate", Severity: plugin.RegistryInfo, Registry: "irr",
 				Subject: fmt.Sprintf("%s AS%d %s", p, origin, db),
 				Message: fmt.Sprintf("%s AS%d is registered in %s and in %s (registry.irr.source); the copy in %s may be left over from a move", p, origin, db, home, db),
 				Diff:    "- " + strings.ReplaceAll(strings.TrimSpace(obj), "\n", "\n- "),
-			}
-			f.Change = irrChange("delete_object", db, p, origin, obj)
-			out = append(out, f)
+			})
 		}
 	}
 	return out

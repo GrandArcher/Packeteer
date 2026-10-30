@@ -186,3 +186,14 @@ func TestRegistryPushOffAndFailure(t *testing.T) {
 		t.Fatalf("no registry: %d", rec.Code)
 	}
 }
+
+// #289: the audit text of an object push holds the RPSL, so a delete can be
+// undone from the log.
+func TestPushDetailHoldsObject(t *testing.T) {
+	ch := plugin.RegistryChange{Registry: "ripe", Op: "delete_object", Class: "route", Key: "192.0.2.0/24AS64496",
+		Object: "route:          192.0.2.0/24\norigin:         AS64496\nsource:         RIPE\n"}
+	want := "registry push delete_object: route:          192.0.2.0/24; origin:         AS64496; source:         RIPE"
+	if got := pushDetail(ch); got != want {
+		t.Fatalf("detail = %q, want %q", got, want)
+	}
+}

@@ -117,13 +117,8 @@ func (c *Config) validateRegistry(add func(string, ...any)) {
 		}
 		if s.Type == "ripe" {
 			hasRIPE = true
-			var rc struct {
-				Source string `yaml:"source"`
-			}
-			if s.Config.Decode(&rc) == nil && r.PushEnabled && (r.IRR.Source == "RIPE" || r.IRR.Source == "TEST") {
-				if got := strings.ToUpper(cmp.Or(rc.Source, "RIPE")); got != r.IRR.Source {
-					add("registry.sources[%d]: the ripe source writes to %s and registry.irr.source is %s; set both to the same database", i, got, r.IRR.Source)
-				}
+			if got := ripeDatabase(s); got != "" && r.PushEnabled && (r.IRR.Source == "RIPE" || r.IRR.Source == "TEST") && got != r.IRR.Source {
+				add("registry.sources[%d]: the ripe source writes to %s and registry.irr.source is %s; set both to the same database", i, got, r.IRR.Source)
 			}
 		}
 		if n := s.InstanceName(); names[n] {
@@ -141,4 +136,27 @@ func (c *Config) validateRegistry(add func(string, ...any)) {
 	if c.IXP != nil {
 		add("registry cannot be combined with ixp: IXP mode is observe-only and has no learned RIB of its own routes")
 	}
+}
+
+// ripeDatabase is the database a ripe source writes to: RIPE or TEST. It is
+// empty when the source config does not decode; the plugin reports that.
+func ripeDatabase(s PluginSpec) string {
+	var rc struct {
+		Source string `yaml:"source"`
+	}
+	if s.Config.Decode(&rc) != nil {
+		return ""
+	}
+	return strings.ToUpper(cmp.Or(rc.Source, "RIPE"))
+}
+
+// PushDatabase is the IRR database the first ripe source writes to, or
+// empty when there is none.
+func (r Registry) PushDatabase() string {
+	for _, s := range r.Sources {
+		if s.Type == "ripe" {
+			return ripeDatabase(s)
+		}
+	}
+	return ""
 }

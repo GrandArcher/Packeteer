@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"net/netip"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -362,7 +363,7 @@ func (c *Checker) contactFindings(pocs []object, as string) []plugin.RegistryFin
 // Push updates one field. It re-reads the record first and refuses when the
 // field no longer holds the value the diff showed.
 func (c *Checker) Push(ctx context.Context, ch plugin.RegistryChange) error {
-	if ch.Registry != TypeName || ch.Op != "update_field" || !allowedField(ch.Class, ch.Field) {
+	if ch.Registry != TypeName || ch.Op != "update_field" || !slices.Contains(pushable[ch.Class], ch.Field) {
 		return plugin.ErrRegistryNoPush
 	}
 	if c.apiKey == "" {
@@ -405,13 +406,4 @@ func (c *Checker) Push(ctx context.Context, ch plugin.RegistryChange) error {
 	req.Header.Set("Content-Type", "application/json")
 	_, err = c.do(req)
 	return err
-}
-
-func allowedField(class, field string) bool {
-	for _, f := range pushable[class] {
-		if f == field {
-			return true
-		}
-	}
-	return false
 }
