@@ -67,6 +67,10 @@ providers:
   - name: legacy
     source_ip: 192.0.2.12
     next_hop: 192.0.2.2
+storage:
+  type: sqlite
+  config:
+    path: $work/data/packeteer.db
 inventory:
   type: netbox
   config:
