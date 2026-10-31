@@ -283,10 +283,17 @@ func TestSampledTrafficRaisesNothing(t *testing.T) {
 	if p := s.prob.win.Problems(now, s.prob.th, 0); len(p) != 0 {
 		t.Fatalf("problems = %+v", p)
 	}
+	var seen bool
 	for _, tg := range targetsOf(t, s) {
-		if tg.Prefix == sGood24 && tg.Weight < 100_000 {
-			t.Fatalf("good target is not volume weighted: %+v", tg)
+		if tg.Prefix == sGood24 {
+			seen = true
+			if tg.Weight < 100_000 {
+				t.Fatalf("good target is not volume weighted: %+v", tg)
+			}
 		}
+	}
+	if !seen {
+		t.Fatal("good prefix missing from targets")
 	}
 }
 

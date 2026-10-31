@@ -728,7 +728,7 @@ func sampledIPv4(rec []byte) (observation, bool) {
 		return observation{}, false
 	}
 	o := observation{src: netip.AddrFrom4(src), dst: netip.AddrFrom4(dst), bytes: uint64(n), proto: protoByte(rec[4:8])}
-	o.tcpFlags, o.haveFlags = uint8(rec[27]), o.proto == 6
+	o.tcpFlags, o.haveFlags = rec[27], o.proto == 6
 	return o, true
 }
 
@@ -755,7 +755,7 @@ func sampledIPv6(rec []byte) (observation, bool) {
 		return observation{}, false
 	}
 	o := observation{src: netip.AddrFrom16(src), dst: netip.AddrFrom16(dst), bytes: uint64(n), proto: protoByte(rec[4:8])}
-	o.tcpFlags, o.haveFlags = uint8(rec[51]), o.proto == 6
+	o.tcpFlags, o.haveFlags = rec[51], o.proto == 6
 	return o, true
 }
 
