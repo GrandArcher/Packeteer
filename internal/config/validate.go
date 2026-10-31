@@ -56,6 +56,7 @@ func (c *Config) Validate() error {
 	c.validateInbound(add)
 	c.validateMitigation(add)
 	c.validateAnomaly(add)
+	c.validateThreatFeeds(add)
 	c.validateLeakWatch(add)
 	c.validateSubscriptions(add)
 	c.validateUpgrade(add)

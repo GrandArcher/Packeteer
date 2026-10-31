@@ -865,6 +865,30 @@ plugin_dir: /etc/packeteer/plugins
 #       action: flowspec_drop
 #       ttl: 30m
 
+# Threat-intelligence feeds (#134, lab-proven only; see
+# docs/threat-feeds.md). Off unless set. A listed network becomes a
+# mitigation rule only for an explicit rule below, only through the
+# mitigation block above (observe is a dry run), and only for a destination
+# that is an exact learned prefix. A failed fetch removes nothing.
+# threat_feeds:
+#   interval: 15m
+#   max_active: 4
+#   max_actions_per_hour: 6
+#   feeds:
+#     - name: drop-list
+#       type: http
+#       config:
+#         url: https://feeds.example.net/drop.txt
+#         format: cidr                # or json
+#         token_env: PACKETEER_FEED_TOKEN   # the token is never in this file
+#   rules:
+#     - name: bad-sources
+#       feed: drop-list
+#       match: source                 # listed networks are FlowSpec sources
+#       prefixes: [203.0.113.0/24]    # inside mitigation.allowlist
+#       action: flowspec_drop
+#       ttl: 1h
+
 # Inbound optimization (#25, lab-proven only; see docs/inbound.md). Off
 # unless set. Its own mode defaults to observe; suggest publishes the steer on
 # /api/inbound and as inbound.* events; inject also needs top-level mode:

@@ -38,6 +38,7 @@ import (
 	"github.com/GrandArcher/Packeteer/internal/inbound"
 	"github.com/GrandArcher/Packeteer/internal/linkout"
 	"github.com/GrandArcher/Packeteer/internal/ringlg"
+	"github.com/GrandArcher/Packeteer/internal/threatfeed"
 	"github.com/GrandArcher/Packeteer/internal/troubleshoot"
 	"github.com/GrandArcher/Packeteer/internal/verify"
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
@@ -78,6 +79,9 @@ type Options struct {
 	// Anomaly is traffic anomaly detection (#33). Nil means it is not
 	// configured.
 	Anomaly func() anomaly.Status
+	// ThreatFeeds is threat-intelligence feed ingest (#134). Nil means it
+	// is not configured.
+	ThreatFeeds func() threatfeed.Status
 	// Leaks is the leak watch (#199). Nil means it is not enabled.
 	Leaks LeakControl
 	// Federation is the central view of every instance (#30). Nil means
@@ -143,6 +147,7 @@ type Server struct {
 	verification func() []verify.Result
 	mitigation   MitigationControl
 	anomaly      func() anomaly.Status
+	threatFeeds  func() threatfeed.Status
 	leaks        LeakControl
 	// registry is registry hygiene (#289). Nil until SetRegistry.
 	registry   atomic.Pointer[registryHolder]
@@ -260,7 +265,7 @@ func New(opt Options) (*Server, error) {
 	if opt.Logger == nil {
 		opt.Logger = slog.Default()
 	}
-	s := &Server{addr: opt.Addr, user: opt.User, password: opt.Password, auth: opt.Auth, audit: opt.Audit, events: opt.Events, allowFrom: opt.AllowFrom, snap: opt.Snapshot, maint: opt.Maintenance, reports: opt.Reports, tools: opt.Tools, inbound: opt.Inbound, verification: opt.Verification, mitigation: opt.Mitigation, anomaly: opt.Anomaly, leaks: opt.Leaks, federation: opt.Federation, fedPush: opt.FederationPush, ha: opt.HA, export: opt.Export,
+	s := &Server{addr: opt.Addr, user: opt.User, password: opt.Password, auth: opt.Auth, audit: opt.Audit, events: opt.Events, allowFrom: opt.AllowFrom, snap: opt.Snapshot, maint: opt.Maintenance, reports: opt.Reports, tools: opt.Tools, inbound: opt.Inbound, verification: opt.Verification, mitigation: opt.Mitigation, anomaly: opt.Anomaly, threatFeeds: opt.ThreatFeeds, leaks: opt.Leaks, federation: opt.Federation, fedPush: opt.FederationPush, ha: opt.HA, export: opt.Export,
 		editor: opt.ConfigEditor, firstRun: opt.FirstRun, dashboards: opt.Dashboards, subs: opt.Subscriptions, upgrade: opt.Upgrade, log: opt.Logger}
 	setup := opt.Setup
 	s.setup.Store(&setup)
@@ -427,6 +432,9 @@ func (s *Server) metricsText(ctx context.Context) []byte {
 	}
 	if s.anomaly != nil {
 		_, _ = w.Write(AnomalyMetrics(s.anomaly()))
+	}
+	if s.threatFeeds != nil {
+		_, _ = w.Write(ThreatFeedMetrics(s.threatFeeds()))
 	}
 	if s.leaks != nil {
 		_, _ = w.Write(LeakMetrics(s.leaks.Status()))

@@ -1,0 +1,92 @@
+# Lab only (#134). Documentation prefixes, private and documentation ASNs.
+# A threat feed (lab/e2e-threat-feed.sh writes the list the feed container
+# serves) acts only through threat mitigation and only for the explicit
+# rules below. Listed sources become FlowSpec drops toward 198.51.100.0/24
+# (learned from transit-a through the edge) under max_active 2;
+# 203.0.113.0/24 is allowlisted but never learned, so neither a drop
+# toward it nor a listed 203.0.113.0/24 blackhole is ever announced.
+# Outbound thresholds are out of reach, so no outbound improvement is made.
+mode: inject
+asn: 64512
+router_id: 192.0.2.10
+packeteer_community: "64512:666"
+local_pref: 250
+max_improvements: 50
+hold_time: 5s
+thresholds:
+  min_loss_delta_pct: 90
+  min_rtt_delta_ms: 5000
+providers:
+  - name: transit-a
+    source_ip: 192.0.2.11
+    next_hop: 192.0.2.21
+  - name: transit-b
+    source_ip: 192.0.2.12
+    next_hop: 192.0.2.22
+allowlist:
+  prefixes:
+    - 198.51.100.0/24
+probe:
+  interval: 2s
+  timeout: 500ms
+  packets: 4
+bgp:
+  neighbors:
+    - address: 192.0.2.254
+      description: edge
+# The lab network is private to the job; the script reaches the API from
+# the host.
+http:
+  listen: 0.0.0.0:8080
+probers:
+  - type: fixed
+    config:
+      paths:
+        - provider: transit-a
+          rtt_ms: 10
+        - provider: transit-b
+          rtt_ms: 10
+announcer:
+  type: gobgp
+mitigation:
+  mode: inject
+  allowlist:
+    - 198.51.100.0/24
+    - 203.0.113.0/24
+  max_rules: 4
+  default_ttl: 10m
+  max_ttl: 1h
+  announcer:
+    type: gobgp
+    config:
+      marker: "64512:668"
+      blackhole:
+        next_hop: 192.0.2.66
+      flowspec: {}
+threat_feeds:
+  interval: 1m
+  max_active: 2
+  max_actions_per_hour: 10
+  feeds:
+    - name: lab-drop
+      type: http
+      config:
+        url: http://192.0.2.30:8000/drop.txt
+  # bad-dests is first so the max_active cap the sources reach never hides
+  # whether it would act on the unlearned 203.0.113.0/24.
+  rules:
+    - name: bad-dests
+      feed: lab-drop
+      prefixes: [203.0.113.0/24]
+      action: blackhole
+      ttl: 30m
+    - name: bad-sources
+      feed: lab-drop
+      match: source
+      prefixes: [198.51.100.0/24, 203.0.113.0/24]
+      action: flowspec_drop
+      ttl: 30m
+
+# Lab only: no sign-in, so the e2e scripts can read the API (#328).
+auth:
+  enabled: false

@@ -162,6 +162,7 @@ func (c *Config) applyDefaults() {
 	}
 	c.normalizeMitigation()
 	c.normalizeAnomaly()
+	c.normalizeThreatFeeds()
 	c.normalizeRPKI()
 	c.normalizeIRR()
 	c.normalizeRegistry()

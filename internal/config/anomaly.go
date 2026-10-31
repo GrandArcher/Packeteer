@@ -70,9 +70,11 @@ type AnomalyRule struct {
 
 // RulePrefixes is the parsed rule prefixes. Invalid entries are left out;
 // Validate reports them.
-func (r AnomalyRule) RulePrefixes() []netip.Prefix {
+func (r AnomalyRule) RulePrefixes() []netip.Prefix { return parseRulePrefixes(r.Prefixes) }
+
+func parseRulePrefixes(in []string) []netip.Prefix {
 	var out []netip.Prefix
-	for _, s := range r.Prefixes {
+	for _, s := range in {
 		if p, err := netip.ParsePrefix(s); err == nil && p == p.Masked() {
 			out = append(out, p)
 		}
@@ -165,53 +167,66 @@ func (c *Config) validateAnomaly(add func(string, ...any)) {
 			at("duplicate name")
 		}
 		names[r.Name] = true
-		if len(r.Prefixes) == 0 {
-			at("prefixes: at least one prefix is required")
-		}
-		for j, s := range r.Prefixes {
-			p, err := netip.ParsePrefix(s)
-			switch {
-			case err != nil:
-				at("prefixes[%d]: %q is not a valid CIDR", j, s)
-			case p != p.Masked():
-				at("prefixes[%d]: %q has host bits set (did you mean %s?)", j, s, p.Masked())
-			case p.Bits() == 0:
-				at("prefixes[%d]: %s would match every prefix", j, p)
-			case m != nil && !netpfx.CoveredBy(allow, p):
-				at("prefixes[%d]: %s is not inside mitigation.allowlist", j, p)
-			}
-		}
+		validateRulePrefixes(at, r.Prefixes, m != nil, allow)
 		if len(r.Protocols) > plugin.MaxFlowSpecProtocols {
 			at("at most %d protocols", plugin.MaxFlowSpecProtocols)
 		}
 		if !(r.MinMbps >= 0 && r.MinMbps <= 1e8) {
 			at("min_mbps %v must be between 0 and 100000000", r.MinMbps)
 		}
-		switch r.Action {
-		case plugin.MitigationBlackhole, plugin.MitigationFlowSpecDrop:
-			if r.Target != "" || r.RateMbps != 0 {
-				at("%s takes no target or rate_mbps", r.Action)
-			}
-		case plugin.MitigationRedirect, plugin.MitigationFlowSpecRedirect:
-			if r.Target == "" {
-				at("%s needs a target", r.Action)
-			}
-			if r.RateMbps != 0 {
-				at("%s takes no rate_mbps", r.Action)
-			}
-		case plugin.MitigationFlowSpecRateLimit:
-			if r.Target != "" {
-				at("%s takes no target", r.Action)
-			}
-			if !(r.RateMbps > 0 && r.RateMbps <= plugin.MaxFlowSpecRateMbps) {
-				at("rate_mbps %v must be above 0 and at most %d", r.RateMbps, plugin.MaxFlowSpecRateMbps)
-			}
-		default:
-			at("action %q is invalid (want %s, %s, %s, %s, or %s)", r.Action, plugin.MitigationBlackhole, plugin.MitigationRedirect,
-				plugin.MitigationFlowSpecDrop, plugin.MitigationFlowSpecRateLimit, plugin.MitigationFlowSpecRedirect)
-		}
+		validateRuleAction(at, r.Action, r.Target, r.RateMbps)
 		if m != nil && (r.TTL < MinMitigationTTL || r.TTL > m.MaxTTL) {
 			at("ttl %s must be between %s and mitigation.max_ttl (%s)", r.TTL, MinMitigationTTL, m.MaxTTL)
+		}
+	}
+}
+
+// validateRuleAction checks the mitigation request a config rule (anomaly
+// or threat feed) makes, as POST /api/mitigations would.
+func validateRuleAction(at func(string, ...any), action, target string, rateMbps float64) {
+	switch action {
+	case plugin.MitigationBlackhole, plugin.MitigationFlowSpecDrop:
+		if target != "" || rateMbps != 0 {
+			at("%s takes no target or rate_mbps", action)
+		}
+	case plugin.MitigationRedirect, plugin.MitigationFlowSpecRedirect:
+		if target == "" {
+			at("%s needs a target", action)
+		}
+		if rateMbps != 0 {
+			at("%s takes no rate_mbps", action)
+		}
+	case plugin.MitigationFlowSpecRateLimit:
+		if target != "" {
+			at("%s takes no target", action)
+		}
+		if !(rateMbps > 0 && rateMbps <= plugin.MaxFlowSpecRateMbps) {
+			at("rate_mbps %v must be above 0 and at most %d", rateMbps, plugin.MaxFlowSpecRateMbps)
+		}
+	default:
+		at("action %q is invalid (want %s, %s, %s, %s, or %s)", action, plugin.MitigationBlackhole, plugin.MitigationRedirect,
+			plugin.MitigationFlowSpecDrop, plugin.MitigationFlowSpecRateLimit, plugin.MitigationFlowSpecRedirect)
+	}
+}
+
+// validateRulePrefixes checks a config rule's prefixes: at least one, each
+// a masked CIDR that is not a default route and, when mitigation is
+// configured (checkAllow), inside its allowlist.
+func validateRulePrefixes(at func(string, ...any), prefixes []string, checkAllow bool, allow []netip.Prefix) {
+	if len(prefixes) == 0 {
+		at("prefixes: at least one prefix is required")
+	}
+	for j, s := range prefixes {
+		p, err := netip.ParsePrefix(s)
+		switch {
+		case err != nil:
+			at("prefixes[%d]: %q is not a valid CIDR", j, s)
+		case p != p.Masked():
+			at("prefixes[%d]: %q has host bits set (did you mean %s?)", j, s, p.Masked())
+		case p.Bits() == 0:
+			at("prefixes[%d]: %s would match every prefix", j, p)
+		case checkAllow && !netpfx.CoveredBy(allow, p):
+			at("prefixes[%d]: %s is not inside mitigation.allowlist", j, p)
 		}
 	}
 }
