@@ -13,10 +13,10 @@
 // Raw flow records are not stored: only per-bucket counters and the
 // templates needed to decode NetFlow v9 and IPFIX.
 //
-// With a problems block it also scores remote prefixes by TCP flags on
-// unsampled NetFlow v5, v9, and IPFIX records (internal/passive): outbound
-// connection attempts that never got past SYN, and resets from the remote
-// side. Problem prefixes are listed ahead of the busiest ones.
+// With a problems block it also scores remote prefixes by TCP flags
+// (internal/passive): on unsampled NetFlow v5, v9, and IPFIX records,
+// outbound connection attempts that never got past SYN and resets from the
+// remote side; on sampled NetFlow/IPFIX and sFlow, resets only. Problem prefixes are listed ahead of the busiest ones.
 //
 // With a transit block it also classifies traffic (#29): bytes whose source
 // is in transit.customers transit the network (customer-originated), the

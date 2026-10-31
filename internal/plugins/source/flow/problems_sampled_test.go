@@ -174,8 +174,8 @@ func TestSFlowFewSamplesAreNotJudged(t *testing.T) {
 		t.Fatalf("judged on three samples: %v", sig)
 	}
 	for _, tg := range targetsOf(t, s) {
-		if tg.Prefix == sBad24 && tg.Weight > 1000 {
-			t.Fatalf("problem target from three samples: %+v", tg)
+		if tg.Prefix == sBad24 {
+			t.Fatalf("target from three samples: %+v", tg)
 		}
 	}
 }

@@ -17,8 +17,9 @@ import (
 
 // Counts are problem counters for one prefix. A source adds deltas.
 type Counts struct {
-	// Flows is the number of TCP connections (span) or outbound TCP flow
-	// records (flow) seen toward the prefix. A sampled source adds each
+	// Flows is the number of TCP connections (span), outbound TCP flow
+	// records (unsampled flow), or sampled TCP records in either direction
+	// (sampled flow, sFlow) seen for the prefix. A sampled source adds each
 	// record weighted by its sampling rate, so Flows estimates real flows.
 	Flows uint64
 	// Samples is how many sampled records Flows is built from. It is zero
