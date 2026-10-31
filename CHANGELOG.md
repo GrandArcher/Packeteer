@@ -6,6 +6,7 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 
 ### Added
 
+- The `flow` `problems` block now scores sampled NetFlow/IPFIX and sFlow on inbound RST, with rate-weighted `min_flows` and a 10-sample floor (#133).
 - Registry hygiene: a read-only scan finds stale or missing IRR, RPKI, as-set, and PeeringDB records with the exact fix; an admin-confirmed push for RIPE and PeeringDB, off by default (#289).
 - Providers, next hops, and communities read from NetBox or Peering Manager (`inventory`), with `packeteer config plan`, `diff`, and `apply -plan ID [-git]` and an audit entry; lab-checked (#208).
 - Opt-in read-only SNMP agent (`snmpagent` exporter, v2c and v3) with a published MIB, SNMP informs, and a `syslog` (RFC 5424) notifier; lab-checked with snmpwalk and snmptrapd (#212).

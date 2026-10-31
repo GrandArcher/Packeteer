@@ -13,7 +13,8 @@ import (
 // collector dependencies the decoders themselves do not use. This reader
 // keeps only the destination and octet fields target discovery needs, plus
 // the source, protocol, and TCP flags that passive problem detection and
-// transit classification read. sFlow gives the source but no TCP flags.
+// transit classification read. sFlow gives the source and, from a sampled
+// header or record, the TCP flags of that one packet.
 
 const (
 	maxTemplates   = 4096
@@ -56,9 +57,12 @@ type observation struct {
 	proto     uint8
 	tcpFlags  uint8
 	haveFlags bool
-	// sampled is true when the exporter samples packets (rate above 1).
-	// A sampled record may hold only a SYN, so problem detection skips it.
+	// sampled is true when the exporter samples packets (rate above 1) or
+	// is sFlow, whose records are single packets at any rate. A sampled
+	// record may hold only a SYN, so problem detection counts only its
+	// RSTs. rate is the sampling interval, 0 when unknown.
 	sampled bool
+	rate    uint64
 }
 
 type fieldSpec struct {
@@ -173,6 +177,7 @@ func decodeV5(p []byte) ([]observation, error) {
 			tcpFlags:  rec[37],
 			haveFlags: true,
 			sampled:   rate > 1,
+			rate:      rate,
 		})
 	}
 	return out, nil
@@ -440,6 +445,7 @@ func (d *decoder) takeData(exp netip.Addr, version uint16, domain uint32, id uin
 			tcpFlags:  rec.tcpFlags,
 			haveFlags: rec.haveProto && rec.haveFlags && rec.src.IsValid(),
 			sampled:   rate > 1,
+			rate:      rate,
 		})
 	}
 	return obs, nil
@@ -705,6 +711,7 @@ func flowSample(body []byte, expanded bool) (observation, bool) {
 		r = 1
 	}
 	o.bytes = scale(o.bytes, r)
+	o.sampled, o.rate = true, r
 	return o, true
 }
 
@@ -720,7 +727,9 @@ func sampledIPv4(rec []byte) (observation, bool) {
 	if n == 0 {
 		return observation{}, false
 	}
-	return observation{src: netip.AddrFrom4(src), dst: netip.AddrFrom4(dst), bytes: uint64(n), proto: protoByte(rec[4:8])}, true
+	o := observation{src: netip.AddrFrom4(src), dst: netip.AddrFrom4(dst), bytes: uint64(n), proto: protoByte(rec[4:8])}
+	o.tcpFlags, o.haveFlags = rec[27], o.proto == 6
+	return o, true
 }
 
 // protoByte is an sFlow 32-bit protocol field, or 0 when it is out of
@@ -745,7 +754,9 @@ func sampledIPv6(rec []byte) (observation, bool) {
 	if n == 0 {
 		return observation{}, false
 	}
-	return observation{src: netip.AddrFrom16(src), dst: netip.AddrFrom16(dst), bytes: uint64(n), proto: protoByte(rec[4:8])}, true
+	o := observation{src: netip.AddrFrom16(src), dst: netip.AddrFrom16(dst), bytes: uint64(n), proto: protoByte(rec[4:8])}
+	o.tcpFlags, o.haveFlags = rec[51], o.proto == 6
+	return o, true
 }
 
 func sampledHeader(rec []byte) (observation, bool) {
@@ -815,7 +826,13 @@ func parseIPv4(b []byte, frameLen uint32) (observation, bool) {
 	if n == 0 {
 		return observation{}, false
 	}
-	return observation{src: netip.AddrFrom4(src), dst: netip.AddrFrom4(dst), bytes: uint64(n), proto: b[9]}, true
+	o := observation{src: netip.AddrFrom4(src), dst: netip.AddrFrom4(dst), bytes: uint64(n), proto: b[9]}
+	// The first fragment holds the TCP header; later ones do not.
+	ihl := int(b[0]&0x0f) * 4
+	if o.proto == 6 && ihl >= 20 && binary.BigEndian.Uint16(b[6:8])&0x1fff == 0 && len(b) > ihl+13 {
+		o.tcpFlags, o.haveFlags = b[ihl+13], true
+	}
+	return o, true
 }
 
 func parseIPv6(b []byte, frameLen uint32) (observation, bool) {
@@ -834,5 +851,9 @@ func parseIPv6(b []byte, frameLen uint32) (observation, bool) {
 		return observation{}, false
 	}
 	// The next header; extension headers are not followed.
-	return observation{src: netip.AddrFrom16(src), dst: netip.AddrFrom16(dst), bytes: uint64(n), proto: b[6]}, true
+	o := observation{src: netip.AddrFrom16(src), dst: netip.AddrFrom16(dst), bytes: uint64(n), proto: b[6]}
+	if o.proto == 6 && len(b) > 40+13 {
+		o.tcpFlags, o.haveFlags = b[40+13], true
+	}
+	return o, true
 }

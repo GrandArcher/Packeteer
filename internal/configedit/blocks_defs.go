@@ -85,9 +85,9 @@ func (f Field) with(sub ...Field) Field {
 // flowExtras are the optional blocks of a flow source (problems, transit,
 // subranges), under its config.
 var flowExtras = []Field{
-	field("problems", "Passive problem detection", "Counts TCP timeouts and resets in unsampled flow records and probes the prefixes that fail. Measures only.", KindGroup).with(
+	field("problems", "Passive problem detection", "Counts TCP timeouts and resets in unsampled flow records, and inbound resets in sampled and sFlow records, and probes the prefixes that fail. Measures only.", KindGroup).with(
 		field("local", "Your networks", "Local source networks, one per row. Required when this is on.", KindCIDRs).req(),
-		field("failure_pct", "Failure share", "A prefix is a problem when this share of its flows fail.", KindFloat).rng(0, 100).dflt("20"),
+		field("failure_pct", "Failure share", "A prefix is a problem when this share of its flows fail (of its sampled records, when sampled).", KindFloat).rng(0, 100).dflt("20"),
 		field("min_flows", "Minimum flows", "Flows needed in the window before a prefix can be a problem.", KindInt).atLeast(0).dflt("10"),
 		field("max_targets", "Most problem prefixes", "Cap on listed problem prefixes.", KindInt).rng(1, 100000).dflt("100"),
 	),

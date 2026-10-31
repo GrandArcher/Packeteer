@@ -253,9 +253,9 @@ scorer:
 #       aggregate_v6: 48
 #       exclude:
 #         - 192.0.2.0/24              # destinations inside these prefixes are ignored
-#       # problems:                 # optional: score TCP failures from unsampled v5/v9/IPFIX
+#       # problems:                 # optional: score TCP failures from v5/v9/IPFIX/sFlow flags
 #       #   local: [192.0.2.0/24]     # your own networks
-#       #   failure_pct: 20           # SYN-without-ACK plus remote RST, % of flows
+#       #   failure_pct: 20           # SYN-without-ACK (unsampled only) plus remote RST, % of flows
 #       #   min_flows: 10
 #       # transit:                  # optional: classify transit (customer-originated) vs local traffic
 #       #   customers: [198.51.100.0/24]  # source networks of your customers; any other source is local
