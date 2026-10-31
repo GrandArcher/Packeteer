@@ -2,7 +2,7 @@
 // GeoLite2-Country.mmdb) that the operator mounts into the container, and
 // lists the networks of a country. Threat mitigation (#28) uses it to turn
 // a FlowSpec rule's source countries into source prefixes. No database is
-// shipped, and nothing is downloaded.
+// shipped; Fetcher can download one when the operator sets geoip.url.
 package geoip
 
 import (

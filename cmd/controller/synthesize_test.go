@@ -153,22 +153,22 @@ func TestSynthesizeEndToEnd(t *testing.T) {
 
 func TestSynthesizeSetupWarning(t *testing.T) {
 	cfg := &config.Config{}
-	if st := setupInfo(cfg, &pluginhost.Set{}); st.SynthesizeWarning != "" {
+	if st := setupInfo(cfg, &pluginhost.Set{}, nil); st.SynthesizeWarning != "" {
 		t.Fatalf("warning without synthesize: %q", st.SynthesizeWarning)
 	}
 	cfg.Synthesize = &config.Synthesize{Enabled: true}
-	if st := setupInfo(cfg, &pluginhost.Set{}); !strings.Contains(st.SynthesizeWarning, "NOT in the learned RIB") {
+	if st := setupInfo(cfg, &pluginhost.Set{}, nil); !strings.Contains(st.SynthesizeWarning, "NOT in the learned RIB") {
 		t.Fatalf("warning = %q", st.SynthesizeWarning)
 	}
 }
 
 func TestSimulatedProbesSetupNotice(t *testing.T) {
 	cfg := &config.Config{Probers: []config.PluginSpec{{Type: "fixed"}}}
-	if st := setupInfo(cfg, &pluginhost.Set{}); st.SimulatedProbes != "" {
+	if st := setupInfo(cfg, &pluginhost.Set{}, nil); st.SimulatedProbes != "" {
 		t.Fatalf("notice with only a fixed prober: %q", st.SimulatedProbes)
 	}
 	cfg.Probers = append(cfg.Probers, config.PluginSpec{Type: "sim"})
-	if st := setupInfo(cfg, &pluginhost.Set{}); st.SimulatedProbes != config.SimulatedProbesNotice || !strings.Contains(st.SimulatedProbes, "simulated, not measured") {
+	if st := setupInfo(cfg, &pluginhost.Set{}, nil); st.SimulatedProbes != config.SimulatedProbesNotice || !strings.Contains(st.SimulatedProbes, "simulated, not measured") {
 		t.Fatalf("notice = %q", st.SimulatedProbes)
 	}
 }

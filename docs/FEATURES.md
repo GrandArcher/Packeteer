@@ -160,6 +160,7 @@ Unit tests replay simulated NetFlow v5, IPFIX, and sFlow exports (documentation 
 | Allow / deny / static provider / VIP policies by prefix | done | v0.2 | policy (`rules`) | #20 | no |
 | Policies by ASN | done | v0.2 | policy (`rules`) | #20 | no |
 | Policies by country (GeoIP) | done | v0.2 | policy (`rules`) | #20 | no |
+| GeoIP country database: where to get and mount one, and an opt-in download that refreshes the file on a schedule (`geoip` block, account in `PACKETEER_GEOIP_USER`/`PACKETEER_GEOIP_KEY`, none bundled); the Overview checklist flags an unreadable database or a failing download | done (#135) | v0.9 | core (`internal/geoip`, `geoip`) ([geoip.md](geoip.md)) | #135 | no |
 | Provider exclusions | done | v0.1 | scorer | #7 | no |
 | Maintenance windows | done (#177: the Policies page lists current, upcoming, and finished windows and opens and closes on-demand ones; the API takes `start` and `end`) | v0.2, v0.7 | policy (`maintenance`) | #20, #177 | no |
 | Inject allowlist (Packeteer safety addition) | done | v0.1 | core + announcer | #7, #8 | no |

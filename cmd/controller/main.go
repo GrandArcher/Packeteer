@@ -27,6 +27,7 @@ import (
 	"github.com/GrandArcher/Packeteer/internal/config"
 	"github.com/GrandArcher/Packeteer/internal/exchange"
 	"github.com/GrandArcher/Packeteer/internal/export"
+	"github.com/GrandArcher/Packeteer/internal/geoip"
 	"github.com/GrandArcher/Packeteer/internal/herd"
 	"github.com/GrandArcher/Packeteer/internal/httpapi"
 	"github.com/GrandArcher/Packeteer/internal/inbound"
@@ -228,6 +229,13 @@ func run(ctx context.Context, args []string, getenv func(string) string, stdout,
 			return code
 		}
 	}
+	var geo *geoip.Fetcher
+	if !*check && !*notifyTest {
+		if geo, err = startGeoIP(ctx, cfg, getenv, log); err != nil {
+			fmt.Fprintf(stderr, "packeteer: refusing to start: %v\n", err)
+			return 1
+		}
+	}
 	plugins, err := preflight(cfg, log, getenv, httpUser, false)
 	if err != nil {
 		fmt.Fprintf(stderr, "packeteer: refusing to start: %v\n", err)
@@ -400,7 +408,10 @@ func run(ctx context.Context, args []string, getenv func(string) string, stdout,
 		return 0
 	}
 	var upMgr *upgrade.Manager
-	code := daemon(ctx, cfg, plugins, log, httpUser, httpPass, *path, getenv, &upMgr)
+	if geo != nil {
+		go geo.Run(ctx)
+	}
+	code := daemon(ctx, cfg, plugins, log, httpUser, httpPass, *path, getenv, &upMgr, geo)
 	// The daemon has withdrawn and stopped. A prepared upgrade or rollback
 	// starts its binary now; the new process learns the RIB before it injects.
 	return finishUpgrade(ctx, upMgr, code, args, log)
@@ -447,7 +458,7 @@ func preflight(cfg *config.Config, log *slog.Logger, getenv func(string) string,
 	return plugins, nil
 }
 
-func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, log *slog.Logger, httpUser, httpPass, path string, getenv func(string) string, upgradeOut **upgrade.Manager) int {
+func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, log *slog.Logger, httpUser, httpPass, path string, getenv func(string) string, upgradeOut **upgrade.Manager, geo *geoip.Fetcher) int {
 	// SIGHUP reloads online keys (#27, #128). Registered first: Go's
 	// default for SIGHUP ends the process.
 	hup := make(chan os.Signal, 1)
@@ -652,7 +663,7 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 			Maintenance: maint, Reports: reports, Tools: tools, Inbound: inboundStatus, Verification: verificationStatus, Mitigation: mitAPI, Anomaly: anomAPI, ThreatFeeds: feedsAPI, Leaks: leakAPI,
 			Federation: fed.status, FederationPush: fedPush, HA: haStatus, Export: exportStats(exp),
 			ConfigEditor: editorAPI, FirstRun: firstRunAPI, Dashboards: dashboardStore(plugins), Subscriptions: subsAPI,
-			Setup: setupInfo(cfg, plugins), Upgrade: upgradeAPI, Linkouts: linkout.New(cfg.Linkouts), RingLG: ringlg.New(cfg.RingLG, version), Atlas: atl,
+			Setup: setupInfo(cfg, plugins, geo), Upgrade: upgradeAPI, Linkouts: linkout.New(cfg.Linkouts), RingLG: ringlg.New(cfg.RingLG, version), Atlas: atl,
 			System: systemFacts(plugins, &sysEngine, health, irrChecker, atl), Usage: usageReader(plugins),
 		})
 		if err != nil {
@@ -1040,7 +1051,7 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 	rl := &reloader{
 		path: path, getenv: getenv, httpUser: httpUser, log: log, cur: cfg, ctl: ctl, poke: poke,
 		exp: exp, flowTags: exportFlowTags,
-		plugins: plugins, engine: engine, perASN: asnLimiter, decider: decider, fed: fed, col: col,
+		geo: geo, plugins: plugins, engine: engine, perASN: asnLimiter, decider: decider, fed: fed, col: col,
 		watch: watch, live: live, preview: preview.PreviewConfig, dispatch: dispatch, hist: rec, inb: inb, mit: mit,
 		flowSpecUp: view != nil && mitigationFlowSpec(cfg, plugins),
 		opts:       pluginhost.Options{Logger: log, Getenv: getenv, PluginDir: getenv(PluginDirEnv)},

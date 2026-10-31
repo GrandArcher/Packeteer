@@ -447,3 +447,37 @@ func TestOverviewSimulatedProbes(t *testing.T) {
 		t.Fatalf("json = %s %v", body, err)
 	}
 }
+
+// #135: the checklist flags country rules whose database cannot be read and
+// a failing download; with neither it says nothing about GeoIP.
+func TestOverviewGeoIPHints(t *testing.T) {
+	ids := func(st GeoIPState) map[string]Hint {
+		o := BuildOverview(Assemble(firstRun()), Setup{GeoIP: func() GeoIPState { return st }}, nil)
+		m := map[string]Hint{}
+		for _, h := range o.Setup {
+			m[h.ID] = h
+		}
+		return m
+	}
+	got := ids(GeoIPState{})
+	if _, ok := got["geoip-missing"]; ok {
+		t.Fatalf("hint without a problem: %+v", got)
+	}
+	if _, ok := got["geoip-update"]; ok {
+		t.Fatalf("hint without a problem: %+v", got)
+	}
+
+	got = ids(GeoIPState{Unreadable: []string{"/etc/packeteer/a.mmdb", "/etc/packeteer/b.mmdb"}, UpdateError: "geoip: download from geoip.example.net: 401 Unauthorized"})
+	miss := got["geoip-missing"]
+	if miss.Level != HintWarn || !strings.Contains(miss.Detail, "/etc/packeteer/a.mmdb, /etc/packeteer/b.mmdb") || miss.DocURL != DocBase+"docs/geoip.md" {
+		t.Fatalf("geoip-missing = %+v", miss)
+	}
+	upd := got["geoip-update"]
+	if upd.Level != HintWarn || !strings.Contains(upd.Detail, "401 Unauthorized") {
+		t.Fatalf("geoip-update = %+v", upd)
+	}
+	o := BuildOverview(Assemble(firstRun()), Setup{GeoIP: func() GeoIPState { return GeoIPState{Unreadable: []string{"/x"}} }}, nil)
+	if o.Counts.Warnings < 1 {
+		t.Fatalf("warnings = %d", o.Counts.Warnings)
+	}
+}

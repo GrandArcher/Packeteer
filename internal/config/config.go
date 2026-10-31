@@ -227,6 +227,9 @@ type Config struct {
 	// RingLG is the opt-in "Seen from NLNOG RING" panel on the prefix page
 	// (#283). Off by default; display only.
 	RingLG ringlg.Config `yaml:"ring_lg"`
+	// GeoIP downloads the country database that geoip_db reads (#135).
+	// Off unless url is set.
+	GeoIP GeoIP `yaml:"geoip"`
 	// Atlas is the opt-in RIPE Atlas measurements with the operator's own
 	// key and credits (#213). Off by default; display only.
 	Atlas atlas.Config `yaml:"atlas"`

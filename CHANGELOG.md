@@ -6,6 +6,7 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 
 ### Added
 
+- GeoIP country database: docs/geoip.md and an opt-in `geoip` download (URL, account in env vars, refresh); the Overview checklist flags an unreadable database or failing download (#135).
 - Threat-intelligence feed ingest (`threat_feeds`, `http` feed): listed networks become mitigation rules only for explicit rules, through mitigation, capped; lab-proven (#134).
 - The `flow` `problems` block now scores sampled NetFlow/IPFIX and sFlow on inbound RST, with rate-weighted `min_flows` and a 10-sample floor (#133).
 - Registry hygiene: a read-only scan finds stale or missing IRR, RPKI, as-set, and PeeringDB records with the exact fix; an admin-confirmed push for RIPE and PeeringDB, off by default (#289).

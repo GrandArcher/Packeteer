@@ -709,7 +709,7 @@ Threat mitigation (#28, lab-proven only, not on a public edge): RTBH, BGP redire
 | `default_ttl` | `1h` (or `max_ttl` when shorter) | Lifetime of a rule whose request names no `ttl`. At least 1s, at most `max_ttl`. |
 | `max_ttl` | `24h` | Longest `ttl` a request may ask for. 1s-168h. Every rule expires. |
 | `local_pref` | top-level `local_pref` | Local preference on mitigation routes. Keep it above the edge's native routes. |
-| `geoip_db` | none | Absolute path to a MaxMind-format country database you mount (for example `GeoLite2-Country.mmdb`). FlowSpec rules with `source_countries` need it; each country is expanded to its networks (merged where adjacent) when the rule is added. None is shipped or downloaded. Unreadable at startup: Packeteer refuses to start. |
+| `geoip_db` | none | Absolute path to a MaxMind-format country database you mount (for example `GeoLite2-Country.mmdb`). FlowSpec rules with `source_countries` need it; each country is expanded to its networks (merged where adjacent) when the rule is added. None is shipped; [`geoip`](#geoip) can download one. Unreadable at startup: Packeteer refuses to start. |
 | `announcer` | none | `inject`: required. In-process only: `type: gobgp` (see [Mitigation announcer `gobgp`](#mitigation-announcer-gobgp)). In `observe` it is optional and only supplies the catalog (redirect targets). |
 
 With FlowSpec configured on the announcer and `mode: inject`, every iBGP session also offers the IPv4 and IPv6 FlowSpec address families (RFC 8955). In `observe` the sessions are unchanged.
@@ -896,6 +896,16 @@ ring_lg:
   cache_ttl: 10m
 ```
 
+### `geoip`
+
+Downloads the country database that `geoip_db` reads (#135). Off unless `url` is set. The account comes only from `PACKETEER_GEOIP_USER` and `PACKETEER_GEOIP_KEY` (both or neither). It only feeds country rules and announces nothing. A change needs a restart. Sources, terms, and the file formats are in [geoip.md](geoip.md).
+
+| Key | Default | Meaning |
+|---|---|---|
+| `url` | none (off) | Download address: `https`, or `http` on a loopback address. No credentials in the URL. |
+| `path` | none | Required with `url`. Absolute path of the file Packeteer writes, on a writable volume. Point `geoip_db` at it. |
+| `refresh` | `168h` | How often the file is fetched again (`24h` to `720h`). It is also fetched on start when missing or older than this. |
+
 ### `atlas`
 
 The opt-in RIPE Atlas integration (#213). With `enabled: false` (the default), or with `PACKETEER_ATLAS_API_KEY` unset, nothing calls Atlas. The key comes only from that environment variable, is sent only in the `Authorization` header, and is never logged or returned by the API. Atlas results are display only: they never feed a decision, a scorer, or an announcer, and nothing here moves a route. Every key is checked at load, and unknown keys are errors. A change needs a restart. Credit costs, the panel, and hosting your own probe are in [atlas.md](atlas.md).
@@ -1073,6 +1083,7 @@ Set these in the container. They are not keys in the YAML file. `PACKETEER_HTTP_
 | `PACKETEER_HTTP_USER` | Basic auth user. Set together with the password, or set neither. |
 | `PACKETEER_HTTP_PASSWORD` | Basic auth password. |
 | `PACKETEER_ADMIN_USER` | With `auth`: the first admin's name (default `admin`). |
+| `PACKETEER_GEOIP_USER`, `PACKETEER_GEOIP_KEY` | Basic-authentication account for the [`geoip`](#geoip) download (#135; for MaxMind, the account ID and the license key). Set both or neither. Sent only over https or to a loopback address, never logged or returned. |
 | `PACKETEER_ATLAS_API_KEY` | Your RIPE Atlas API key for the [`atlas`](#atlas) block (#213). Sent only in the `Authorization` header to the Atlas API, never logged or returned. Unset: the integration makes no request. |
 | `PACKETEER_ADMIN_PASSWORD` | With `auth`: creates that admin at start when no user has the name (12-256 characters). An existing user is not changed, so a password set through the API survives a restart. Not written to the log. |
 
@@ -1484,7 +1495,7 @@ At least one weight must be positive.
 
 | Key | Default | Meaning |
 |---|---|---|
-| `geoip_db` | none | Path of a MaxMind-format country database (for example GeoLite2-Country) mounted into the container. Required when a rule lists `countries`. Read once at startup; restart to load a new file. Packeteer does not ship one. |
+| `geoip_db` | none | Path of a MaxMind-format country database (for example GeoLite2-Country) mounted into the container. Required when a rule lists `countries`. Read once at startup; restart to load a new file. Packeteer does not ship one; [`geoip`](#geoip) can download one. |
 | `rules` | none | Required, 1-10000 entries. |
 
 Each rule:

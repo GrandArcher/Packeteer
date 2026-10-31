@@ -16,6 +16,7 @@ import (
 	"github.com/GrandArcher/Packeteer/internal/blast"
 	"github.com/GrandArcher/Packeteer/internal/config"
 	"github.com/GrandArcher/Packeteer/internal/export"
+	"github.com/GrandArcher/Packeteer/internal/geoip"
 	"github.com/GrandArcher/Packeteer/internal/history"
 	"github.com/GrandArcher/Packeteer/internal/httpapi"
 	"github.com/GrandArcher/Packeteer/internal/inbound"
@@ -356,6 +357,7 @@ type reloader struct {
 	httpUser string
 	log      *slog.Logger
 	cur      *config.Config
+	geo      *geoip.Fetcher
 	view     neighborView
 	rib      *rib.View
 	ctl      announcerCtl
@@ -617,7 +619,7 @@ func (r *reloader) applyOnline(ctx context.Context, next *config.Config, online 
 		r.decider.SetConfig(pc)
 	}
 	if r.setup != nil && (slices.Contains(online, "max_improvements") || slices.Contains(online, "sources")) {
-		r.setup(setupInfo(next, r.plugins))
+		r.setup(setupInfo(next, r.plugins, r.geo))
 	}
 	if r.fed != nil {
 		max := 0
