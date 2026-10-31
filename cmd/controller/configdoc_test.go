@@ -53,6 +53,7 @@ import (
 	"github.com/GrandArcher/Packeteer/internal/plugins/storage/sqlite"
 	telemetryfixed "github.com/GrandArcher/Packeteer/internal/plugins/telemetry/fixed"
 	"github.com/GrandArcher/Packeteer/internal/plugins/telemetry/snmp"
+	"github.com/GrandArcher/Packeteer/internal/plugins/threatfeed/httpfeed"
 	"github.com/GrandArcher/Packeteer/internal/plugins/whois/rdap"
 )
 
@@ -117,6 +118,7 @@ func TestConfigDocCoversStructs(t *testing.T) {
 		lease.Config{},
 		oidc.Config{},
 		baseline.Config{},
+		httpfeed.Config{},
 		rtr.Config{},
 		irrwhois.Config{},
 		irrfile.Config{},

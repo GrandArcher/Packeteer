@@ -27,6 +27,7 @@ func TestProgramTypesAreOnlyProbersSourcesNotifiers(t *testing.T) {
 		"whois":                 plugin.Whoises.Types(),
 		"exporters":             plugin.Exporters.Types(),
 		"detectors":             plugin.Detectors.Types(),
+		"threat feeds":          plugin.ThreatFeeds.Types(),
 		"electors":              plugin.Electors.Types(),
 		"federations":           plugin.Federations.Types(),
 		"rib sources":           plugin.RIBSources.Types(),

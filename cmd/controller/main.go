@@ -42,6 +42,7 @@ import (
 	"github.com/GrandArcher/Packeteer/internal/snippet"
 	"github.com/GrandArcher/Packeteer/internal/subscribe"
 	"github.com/GrandArcher/Packeteer/internal/syshealth"
+	"github.com/GrandArcher/Packeteer/internal/threatfeed"
 	"github.com/GrandArcher/Packeteer/internal/upgrade"
 	"github.com/GrandArcher/Packeteer/internal/verify"
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
@@ -343,6 +344,10 @@ func run(ctx context.Context, args []string, getenv func(string) string, stdout,
 		fmt.Fprintf(stdout, "anomaly: detector=%s interval=%s rules=%d max_active=%d max_actions_per_hour=%d (acts only through mitigation, for an explicit rule)\n",
 			a.Detector.Type, a.Interval, len(a.Rules), a.MaxActive, a.MaxActionsPerHour)
 	}
+	if t := cfg.ThreatFeeds; t != nil {
+		fmt.Fprintf(stdout, "threat_feeds: feeds=%d rules=%d interval=%s max_active=%d max_actions_per_hour=%d (acts only through mitigation, for an explicit rule)\n",
+			len(t.Feeds), len(t.Rules), t.Interval, t.MaxActive, t.MaxActionsPerHour)
+	}
 	if cfg.LeakWatching() {
 		fmt.Fprintf(stdout, "leak_watch: on sources=%d (withdraws a leaked injected route and holds it out until cleared)\n", len(plugins.LeakSources))
 	}
@@ -511,6 +516,16 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 	if anom != nil {
 		anomAPI = anom.Status
 	}
+	// Threat feeds (#134) act only through mit, for explicit rules.
+	feeds, ferr := newThreatFeeds(cfg, plugins, mit, poke, log)
+	if ferr != nil {
+		log.Error("refusing to start", "err", ferr)
+		return 1
+	}
+	var feedsAPI func() threatfeed.Status
+	if feeds != nil {
+		feedsAPI = feeds.Status
+	}
 	pktLimiter := packetLimiter(cfg)
 	asnLimiter := perASNLimits(cfg, func() *rib.View { return view })
 	tools, terr := newTools(cfg, plugins, pktLimiter, asnLimiter, func() *rib.View { return view })
@@ -634,7 +649,7 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 		httpSrv, err = httpapi.New(httpapi.Options{
 			Addr: addr, User: httpUser, Password: httpPass, Snapshot: col.Snapshot, Logger: log,
 			Auth: authSvc, Audit: audit, Events: evlog, AllowFrom: cfg.HTTPAllowFrom(),
-			Maintenance: maint, Reports: reports, Tools: tools, Inbound: inboundStatus, Verification: verificationStatus, Mitigation: mitAPI, Anomaly: anomAPI, Leaks: leakAPI,
+			Maintenance: maint, Reports: reports, Tools: tools, Inbound: inboundStatus, Verification: verificationStatus, Mitigation: mitAPI, Anomaly: anomAPI, ThreatFeeds: feedsAPI, Leaks: leakAPI,
 			Federation: fed.status, FederationPush: fedPush, HA: haStatus, Export: exportStats(exp),
 			ConfigEditor: editorAPI, FirstRun: firstRunAPI, Dashboards: dashboardStore(plugins), Subscriptions: subsAPI,
 			Setup: setupInfo(cfg, plugins), Upgrade: upgradeAPI, Linkouts: linkout.New(cfg.Linkouts), RingLG: ringlg.New(cfg.RingLG, version), Atlas: atl,
@@ -683,6 +698,7 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 		return 1
 	}
 	setAnomalyRIB(anom, view)
+	setThreatFeedRIB(feeds, view)
 	inb, err = newInbound(cfg, plugins, view, func() int { return ctl.Active() }, mit, lw.Held, log)
 	if err != nil {
 		log.Error("refusing to start", "err", err)
@@ -1009,6 +1025,15 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 		go func() {
 			defer loopWG.Done()
 			anom.Run(loopCtx)
+		}()
+	}
+	if feeds != nil {
+		// Stopped with the decision loop, before the shutdown withdraw, so
+		// it cannot add a rule after it.
+		loopWG.Add(1)
+		go func() {
+			defer loopWG.Done()
+			feeds.Run(loopCtx)
 		}()
 	}
 

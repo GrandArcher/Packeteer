@@ -69,6 +69,7 @@ The image entrypoint is the same binary. Flags go after the image name.
 | `inbound` | none | no | Inbound commit control: steer inbound traffic for your own prefixes away from a provider over commit with prepends and TE communities. Off unless set; its own `mode` defaults to `observe`. See [`inbound`](#inbound). Lab-proven only. |
 | `mitigation` | none | no | Threat mitigation: RTBH (blackhole), BGP redirect, and FlowSpec (drop, rate-limit, redirect, by source country too) for exact learned prefixes, added through `/api/mitigations`. Off unless set; its own `mode` defaults to `observe`. See [`mitigation`](#mitigation). Lab-proven only. |
 | `anomaly` | none | no | Automatic traffic anomaly (DDoS) detection: a detector plugin baselines flow volumes per destination prefix and IP protocol from a `flow` source and reports anomalies; an explicit rule can turn one into a mitigation rule, rate-limited and capped. Needs `mitigation` for rules. Off unless set. See [`anomaly`](#anomaly). Lab-proven only. |
+| `threat_feeds` | none | no | Threat-intelligence feed ingest (#134): feed plugins fetch lists of networks; an explicit rule turns a listed network into a mitigation rule, rate-limited and capped. Needs `mitigation`. Off unless set. See [`threat_feeds`](#threat_feeds). Lab-proven only. |
 | `upgrade` | off | no | Version check, one-click upgrade, and rollback in Settings (#196). Needs `public_key`. See [`upgrade`](#upgrade). Never upgrades without an admin's confirmation; does not announce. |
 | `leak_watch` | none | no | Watches for Packeteer's routes outside the AS and withdraws a leaked route (one prefix, never in bulk), holding it out until an operator clears it. Off unless `enabled: true`. See [`leak_watch`](#leak_watch) and [leak-watch.md](leak-watch.md). Lab-proven only. |
 | `linkouts` | defaults | no | Which "open in" links the prefix, ASN, and provider pages show, custom URL templates, and `hide_internal` (#211). Display only; Packeteer requests none of those sites. See [`linkouts`](#linkouts). |
@@ -742,6 +743,33 @@ Each rule:
 | `ttl` | `mitigation.default_ttl` | The rule's lifetime, 1s to `mitigation.max_ttl`. The rule is removed earlier when the anomaly clears. |
 
 A rule the detector added is removed when its anomaly clears. The detector never replaces a rule someone else holds for the same key, adds nothing on an HA standby, and does not add a rule again for an anomaly whose rule expired or was deleted. When the flow source fails three rounds in a row, every anomaly clears, its rule is removed, and the baselines are learned again. Rollback: remove `rules` (alerts only) or the whole block and restart; a restart holds no rule.
+
+### `threat_feeds`
+
+Threat-intelligence feed ingest (#134, lab-proven only, not on a public edge). The full contract is in [threat-feeds.md](threat-feeds.md). Needs [`mitigation`](#mitigation): every rule goes through it (its `mode`, allowlist, `max_rules`, TTL, community, and NO_EXPORT apply; `observe` is a dry run), and only for a destination that is an exact prefix in the learned RIB.
+
+| Key | Default | Meaning |
+|---|---|---|
+| `interval` | `15m` | How often every feed is fetched, `1m`-`24h`. |
+| `max_active` | `4` (at most `mitigation.max_rules`) | Mitigation rules the feeds hold at once, 1 to `mitigation.max_rules`. |
+| `max_actions_per_hour` | `6` | Mitigation rules the feeds may add in any rolling hour, 1-1000. |
+| `feeds` | none | Required, 1-16. Feed plugins, each `type` (and optional `name`, `config`): `http` ([Threat feed `http`](#threat-feed-http)). Names (or types) are unique, and each feed must be read by a rule. In-process only. |
+| `rules` | none | Required, 1-100. Each listed network is checked against every rule that reads its feed, in order. |
+
+Each rule:
+
+| Key | Default | Meaning |
+|---|---|---|
+| `name` | none | Required, unique, at most 64 characters. |
+| `feed` | none | Required. The name of the feed the rule reads. |
+| `match` | `destination` | `destination`: a listed network that equals or sits inside one of `prefixes` is the mitigation rule's destination. `source`: a listed network is the FlowSpec `source` match of a rule toward each of `prefixes` of its address family; needs a FlowSpec action. |
+| `prefixes` | none | Required. Each must be inside `mitigation.allowlist`; no default route, no host bits. |
+| `action` | none | Required. `blackhole`, `redirect`, `flowspec_drop`, `flowspec_rate_limit`, or `flowspec_redirect`, as on `POST /api/mitigations`. Checked against the mitigation announcer's catalog at startup. |
+| `target` | none | `redirect` and `flowspec_redirect`: a catalog target name. |
+| `rate_mbps` | none | `flowspec_rate_limit`: above 0, at most 100000. |
+| `ttl` | `mitigation.default_ttl` | Each rule's lifetime, 1s to `mitigation.max_ttl`. |
+
+A rule is removed when a successful fetch no longer lists its network. A failed fetch removes and adds nothing; rules already held stay until their TTL. An expired rule is added again while the feed lists the network; one removed or replaced by someone else is not. Feeds never replace a rule someone else holds and add nothing on an HA standby. Rollback: remove the block and restart; a restart holds no rule.
 
 ### `leak_watch`
 
@@ -2005,6 +2033,16 @@ The built-in anomaly detector (#33). For each destination prefix and IP protocol
 | `trigger_rounds` | `2` | Anomalous rounds in a row before an anomaly opens. 1-1000. |
 | `clear_rounds` | `3` | Normal rounds in a row before it clears. 1-1000. |
 | `max_keys` | `10000` | Keys tracked; new keys past it are not tracked. 1-1000000. An idle key is forgotten once its mean decays to nothing. |
+
+### Threat feed `http`
+
+The built-in threat feed (#134). It GETs the whole list every `threat_feeds.interval`. A non-2xx answer, a body over 16 MiB, more than 100000 entries, or any line that does not parse fails the fetch; the controller never acts on part of a list. It never announces.
+
+| Key | Default | Meaning |
+|---|---|---|
+| `url` | none | Required. Absolute `http` or `https` URL without credentials or query string. |
+| `format` | `cidr` | `cidr`: one CIDR or bare address per line; blank lines skipped; text after `#` or `;` is the entry's comment (`192.0.2.0/24 ; SBL1`). `json`: `{"entries": [{"prefix": "192.0.2.0/24", "comment": "..."}]}`; other keys are ignored. Host bits, a default route, or an IPv4-mapped IPv6 prefix fail the fetch. |
+| `token_env` | none | Name of an environment variable holding a bearer token, sent as `Authorization: Bearer`. Unset sends none. The token is never read from the config file; a set name whose variable is empty refuses to start. |
 
 ### Announcer `gobgp`
 

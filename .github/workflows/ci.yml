@@ -2807,6 +2807,8 @@ jobs:
         run: bash lab/e2e-mitigation.sh
       - name: FRR anomaly lab (synthetic-flow sensitivity, no rule no announce, unlearned prefix never announced, FlowSpec drop, clear, session loss, SIGTERM, restart, SIGKILL)
         run: bash lab/e2e-anomaly.sh
+      - name: FRR threat feed lab (#134; listed sources as FlowSpec drops under max_active, unlearned destination never announced, failed fetch withdraws nothing, delist, session loss, SIGTERM, restart, SIGKILL)
+        run: bash lab/e2e-threat-feed.sh
       - name: FRR more-specific lab (learned more-specifics only, route cap, RIB leave, SIGTERM, SIGKILL)
         run: bash lab/e2e-more-specific.sh
       - name: FRR synthesize lab (#122; synthesized /25 inside a learned /24 with community, marker, NO_EXPORT; route cap holds a second; covering-prefix leave, SIGTERM, SIGKILL; nothing reaches the other transit)
