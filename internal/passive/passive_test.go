@@ -163,3 +163,27 @@ func TestSignals(t *testing.T) {
 		t.Fatalf("signals after the window = %v", got)
 	}
 }
+
+// A sampled count is rate-weighted, so Flows alone says little: it also
+// needs MinSamples records, in both Score and the judged check.
+func TestMinSamples(t *testing.T) {
+	th := Thresholds{FailurePct: 20, MinFlows: 10, MinSamples: 10}
+	few := Counts{Flows: 3000, Samples: 3, Resets: 3000}
+	if s, _ := th.Score(few); s != 0 || th.judged(few) {
+		t.Fatalf("three samples: score %v judged %v", s, th.judged(few))
+	}
+	enough := Counts{Flows: 10_000, Samples: 10, Resets: 6000}
+	if s, r := th.Score(enough); s != 3 || len(r) != 1 || !th.judged(enough) {
+		t.Fatalf("ten samples: score %v reasons %v", s, r)
+	}
+	// An unsampled count has no samples and keeps the plain min_flows rule.
+	if s, _ := th.Score(Counts{Flows: 10, Resets: 5}); s != 2.5 {
+		t.Fatalf("unsampled score = %v", s)
+	}
+	var c Counts
+	c.add(Counts{Samples: 2})
+	c.add(Counts{Samples: 3})
+	if c.Samples != 5 {
+		t.Fatalf("Samples = %d", c.Samples)
+	}
+}

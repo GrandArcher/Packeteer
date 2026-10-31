@@ -82,6 +82,10 @@ const (
 	defaultProblemFailurePct = 20
 	defaultProblemMinFlows   = 10
 	defaultProblemMaxTargets = 100
+	// minSampledRecords is the fewest sampled records behind a problem
+	// verdict. Rate-weighted flows alone would let one sample at 1:1000
+	// stand for a thousand flows.
+	minSampledRecords = 10
 
 	defaultTransitSharePct = 50
 	maxTransitCustomers    = 10000
@@ -427,7 +431,7 @@ func newProblems(c *ProblemsConfig, window time.Duration, maxPrefixes int) (*pro
 	if c.MaxTargets > maxPrefixes {
 		return nil, fmt.Errorf("problems.max_targets %d exceeds max_prefixes %d: the window cannot hold that many targets", c.MaxTargets, maxPrefixes)
 	}
-	th := passive.Thresholds{FailurePct: c.FailurePct, MinFlows: c.MinFlows}
+	th := passive.Thresholds{FailurePct: c.FailurePct, MinFlows: c.MinFlows, MinSamples: minSampledRecords}
 	if err := th.Validate(); err != nil {
 		return nil, fmt.Errorf("problems: %w", err)
 	}
@@ -1092,7 +1096,7 @@ func (s *Source) setSubranges(t *plugin.Target, subs []subRank, left *int) {
 // counters, and lookup it calls are safe for concurrent use.
 func (s *Source) apply(at time.Time, obs []observation) {
 	for _, o := range obs {
-		if s.prob != nil && o.haveFlags && !o.sampled && o.proto == 6 {
+		if s.prob != nil && o.haveFlags && o.proto == 6 {
 			s.noteProblem(at, o)
 		}
 		dst := o.dst.Unmap()
@@ -1111,28 +1115,46 @@ func (s *Source) apply(at time.Time, obs []observation) {
 	}
 }
 
-// noteProblem scores one unsampled TCP record. An outbound record whose
+// noteProblem scores one TCP record. An unsampled outbound record whose
 // flags hold SYN without ACK never completed its handshake. An inbound
 // record with RST is a reset from the remote side. Records between two
 // local or two remote addresses are ignored.
+//
+// A sampled record (sampled NetFlow or IPFIX, or sFlow) stands for rate
+// flows or packets and may hold only the SYN of a healthy handshake, so
+// SYN without ACK is not a timeout. Every sampled record to or from the
+// remote counts as rate flows, and an inbound RST as rate resets: the
+// failure ratio is then the share of the prefix's sampled TCP records that
+// are resets.
 func (s *Source) noteProblem(at time.Time, o observation) {
 	src, dst := o.src.Unmap(), o.dst.Unmap()
 	srcLocal, dstLocal := passive.Contains(s.prob.local, src), passive.Contains(s.prob.local, dst)
-	var remote netip.Addr
+	w := uint64(1)
 	var d passive.Counts
+	if o.sampled {
+		w = max(o.rate, 1)
+		d.Samples = 1
+	}
+	var remote netip.Addr
 	switch {
 	case srcLocal && !dstLocal:
 		remote = dst
-		d.Flows = 1
-		if o.tcpFlags&tcpSYN != 0 && o.tcpFlags&tcpACK == 0 {
+		d.Flows = w
+		if !o.sampled && o.tcpFlags&tcpSYN != 0 && o.tcpFlags&tcpACK == 0 {
 			d.Timeouts = 1
 		}
 	case dstLocal && !srcLocal:
 		remote = src
-		if o.tcpFlags&tcpRST == 0 {
+		rst := o.tcpFlags&tcpRST != 0
+		if !rst && !o.sampled {
 			return
 		}
-		d.Resets = 1
+		if o.sampled {
+			d.Flows = w
+		}
+		if rst {
+			d.Resets = w
+		}
 	default:
 		return
 	}

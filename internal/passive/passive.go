@@ -18,8 +18,13 @@ import (
 // Counts are problem counters for one prefix. A source adds deltas.
 type Counts struct {
 	// Flows is the number of TCP connections (span) or outbound TCP flow
-	// records (flow) seen toward the prefix.
+	// records (flow) seen toward the prefix. A sampled source adds each
+	// record weighted by its sampling rate, so Flows estimates real flows.
 	Flows uint64
+	// Samples is how many sampled records Flows is built from. It is zero
+	// for a source that sees every flow. An estimate from a handful of
+	// samples is not judged (Thresholds.MinSamples).
+	Samples uint64
 	// Timeouts are handshakes the remote side never answered.
 	Timeouts uint64
 	// Resets are RSTs sent by the remote side.
@@ -36,6 +41,7 @@ type Counts struct {
 
 func (c *Counts) add(d Counts) {
 	c.Flows += d.Flows
+	c.Samples += d.Samples
 	c.Timeouts += d.Timeouts
 	c.Resets += d.Resets
 	c.Segments += d.Segments
@@ -81,13 +87,16 @@ func pct(n, d uint64) float64 {
 
 // Thresholds decide when a prefix is a problem. A zero percentage or RTT
 // disables that check. MinSegments guards the retransmission ratio;
-// MinFlows guards the failure ratio and the RTT average.
+// MinFlows guards the failure ratio and the RTT average. MinSamples is the
+// fewest sampled records a sampled count needs before the failure ratio
+// applies, however large the rate-weighted Flows is.
 type Thresholds struct {
 	RetransPct  float64
 	FailurePct  float64
 	RTT         time.Duration
 	MinSegments uint64
 	MinFlows    uint64
+	MinSamples  uint64
 }
 
 // Validate rejects out-of-range values and a set with every check off.
@@ -143,7 +152,7 @@ func (t Thresholds) Score(c Counts) (float64, []string) {
 	if c.Segments >= minSegs {
 		check(c.RetransPct(), t.RetransPct, ReasonRetrans)
 	}
-	if c.Flows >= minFlows {
+	if t.flowsJudged(c) {
 		check(c.FailurePct(), t.FailurePct, ReasonFailure)
 	}
 	if c.RTTSamples >= minFlows && t.RTT > 0 {
@@ -322,7 +331,13 @@ func (w *Window) Signals(now time.Time, t Thresholds) map[netip.Prefix]bool {
 // judged reports whether c has enough flows or segments for Score to
 // apply any check to it.
 func (t Thresholds) judged(c Counts) bool {
-	return c.Flows >= max(t.MinFlows, 1) || c.Segments >= max(t.MinSegments, 1)
+	return t.flowsJudged(c) || c.Segments >= max(t.MinSegments, 1)
+}
+
+// flowsJudged reports whether c has enough flows for the failure ratio. A
+// sampled count also needs MinSamples records behind its weighted total.
+func (t Thresholds) flowsJudged(c Counts) bool {
+	return c.Flows >= max(t.MinFlows, 1) && (c.Samples == 0 || c.Samples >= t.MinSamples)
 }
 
 // Fresh reports which problems are new since the previous call. A prefix

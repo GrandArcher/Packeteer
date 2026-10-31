@@ -63,13 +63,6 @@ func TestFlowProblemsFromNetFlowV5(t *testing.T) {
 		v5tcp{src: local, dst: good, flags: tcpSYN, proto: 17},                   // UDP
 	)
 	s.ingest(now, exp, buildV5TCP(0, recs))
-	// Sampled exports are skipped: a sampled record may hold only a SYN.
-	var sampled []v5tcp
-	for i := 0; i < 20; i++ {
-		sampled = append(sampled, v5tcp{src: local, dst: good, flags: tcpSYN})
-	}
-	s.ingest(now, exp, buildV5TCP(100, sampled))
-
 	tot := s.prob.win.Totals(now)
 	b, g := tot[netip.MustParsePrefix("203.0.113.0/24")].Counts, tot[netip.MustParsePrefix("198.51.100.0/24")].Counts
 	if b.Flows != 10 || b.Timeouts != 6 || b.Resets != 1 || g.Flows != 10 || g.Timeouts != 0 || g.Resets != 1 {

@@ -122,7 +122,7 @@ sources:
 
 Allow UDP/2055 on the host firewall from the router only. The socket is not authenticated. Flow targets are probe targets: they are not announced unless they are also in the learned RIB and pass the inject checks.
 
-To also score failing destinations from the same export, add a `problems` block. It needs unsampled v5, v9, or IPFIX records that carry the source address, protocol, and TCP flags; leave `packet-sampling` off. An outbound record with SYN and no ACK is a handshake that was never answered, and an inbound RST is a remote reset.
+To also score failing destinations from the same export, add a `problems` block. It needs v5, v9, or IPFIX records that carry the source address, protocol, and TCP flags. With `packet-sampling` off, an outbound record with SYN and no ACK is a handshake that was never answered, and an inbound RST is a remote reset. With sampling on, only inbound RSTs count, as a share of sampled records, with lower confidence (see [CONFIG.md](CONFIG.md)).
 
 ```yaml
   - type: flow
