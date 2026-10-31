@@ -33,7 +33,7 @@ func newAnomaly(cfg *config.Config, plugins *pluginhost.Set, mit *mitigation.Con
 	}
 	var rules []anomaly.Rule
 	for i, r := range a.Rules {
-		if err := checkAnomalyAction(r, mit); err != nil {
+		if err := checkRuleAction(r.Action, r.Target, mit); err != nil {
 			return nil, fmt.Errorf("anomaly.rules[%d] (%s): %w", i, r.Name, err)
 		}
 		rules = append(rules, anomaly.Rule{Name: r.Name, Prefixes: r.RulePrefixes(), Protocols: r.Protocols, MinMbps: r.MinMbps,
@@ -87,32 +87,32 @@ func anomalySource(a *config.Anomaly, plugins *pluginhost.Set) (plugin.FlowCount
 	return src, found[0], nil
 }
 
-// checkAnomalyAction refuses a rule the mitigation announcer cannot carry.
-// Without an announcer (observe) every rule is a dry run and the targets
-// cannot be checked.
-func checkAnomalyAction(r config.AnomalyRule, mit *mitigation.Controller) error {
+// checkRuleAction refuses an anomaly or threat feed rule the mitigation
+// announcer cannot carry. Without an announcer (observe) every rule is a
+// dry run and the targets cannot be checked.
+func checkRuleAction(action, target string, mit *mitigation.Controller) error {
 	if mit == nil {
-		return errors.New("anomaly rules need mitigation")
+		return errors.New("the rule needs mitigation")
 	}
 	cat, fs := mit.Catalog(), mit.FlowSpecCatalog()
 	if len(cat.BlackholeNextHops) == 0 && len(cat.Targets) == 0 && !fs.Enabled {
 		return nil // no announcer
 	}
-	switch r.Action {
+	switch action {
 	case plugin.MitigationBlackhole:
 		if !cat.Blackhole {
 			return errors.New("blackhole is not configured on the mitigation announcer")
 		}
 	case plugin.MitigationRedirect:
-		if _, ok := cat.Target(r.Target); !ok {
-			return fmt.Errorf("unknown redirect target %q", r.Target)
+		if _, ok := cat.Target(target); !ok {
+			return fmt.Errorf("unknown redirect target %q", target)
 		}
 	case plugin.MitigationFlowSpecRedirect:
-		if _, ok := fs.Target(r.Target); !ok {
-			return fmt.Errorf("unknown flowspec redirect target %q", r.Target)
+		if _, ok := fs.Target(target); !ok {
+			return fmt.Errorf("unknown flowspec redirect target %q", target)
 		}
 	}
-	if plugin.IsFlowSpec(r.Action) && !fs.Enabled {
+	if plugin.IsFlowSpec(action) && !fs.Enabled {
 		return errors.New("flowspec is not configured on the mitigation announcer")
 	}
 	return nil

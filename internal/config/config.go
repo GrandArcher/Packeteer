@@ -171,6 +171,10 @@ type Config struct {
 	// Anomaly is automatic traffic anomaly detection (#33). It acts only
 	// through Mitigation, and only for an explicit rule. Nil disables it.
 	Anomaly *Anomaly `yaml:"anomaly"`
+	// ThreatFeeds turns external threat-intelligence lists into mitigation
+	// rules (#134). It acts only through Mitigation, and only for an
+	// explicit rule. Nil disables it.
+	ThreatFeeds *ThreatFeeds `yaml:"threat_feeds"`
 	// LeakWatch withdraws and holds out an injected route that shows up
 	// outside the AS (#199). Nil or disabled is off.
 	LeakWatch *LeakWatch `yaml:"leak_watch"`

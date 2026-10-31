@@ -259,7 +259,7 @@ Almost every part of Packeteer is a plugin selected by `type` in the config. Unk
 - **Exporters:** `kafka`, `nats`, `otlp`, `influxdb`, `ipfix`, `snmpagent` (a read-only SNMP agent with a MIB for any NMS) (events, decisions, flows tagged with the chosen provider, and metric snapshots, [docs/export.md](docs/export.md)).
 - **Telemetry:** `snmp` and `fixed` (labs only).
 - **Storage:** `sqlite` (report history, users, audit log, dashboards).
-- **Detection and safety:** detector `baseline` (flow anomaly detection, [anomaly.md](docs/anomaly.md)) and leak_source `bmp` and `rislive` ([leak-watch.md](docs/leak-watch.md)).
+- **Detection and safety:** detector `baseline` (flow anomaly detection, [anomaly.md](docs/anomaly.md)), threat_feed `http` (threat-intelligence lists, [threat-feeds.md](docs/threat-feeds.md)), and leak_source `bmp` and `rislive` ([leak-watch.md](docs/leak-watch.md)).
 - **Clusters:** elector `lease` (active/standby, [ha.md](docs/ha.md)) and federation `mtls` (several POPs, [multi-pop.md](docs/multi-pop.md)).
 - **Sign-in and lookups:** sso `oidc` ([auth.md](docs/auth.md)) and whois `rdap` (troubleshooting).
 

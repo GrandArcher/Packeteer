@@ -75,6 +75,10 @@ type Set struct {
 	// It never announces; the core acts on its anomalies only through
 	// threat mitigation and only for an explicit rule.
 	Detector *Instance[plugin.Detector]
+	// ThreatFeeds fetch threat-intelligence lists (threat_feeds.feeds,
+	// #134). They never announce; the core acts on a listed network only
+	// through threat mitigation and only for an explicit rule.
+	ThreatFeeds []Instance[plugin.ThreatFeed]
 	// LeakSources feed the leak watch (leak_watch.sources, #199). They
 	// only read; the core decides what to withdraw.
 	LeakSources []Instance[plugin.LeakSource]
@@ -188,6 +192,9 @@ func Build(cfg *config.Config, opts Options) (*Set, error) {
 			s.Detector = &b[0]
 		}
 	}
+	if cfg.ThreatFeeds != nil {
+		s.ThreatFeeds = build(plugin.ThreatFeeds, "threat_feeds.feeds", cfg.ThreatFeeds.Feeds, base, &errs)
+	}
 	if cfg.LeakWatching() {
 		s.LeakSources = build(plugin.LeakSources, "leak_watch.sources", cfg.LeakWatch.Sources, base, &errs)
 	}
@@ -293,6 +300,9 @@ func (s *Set) all() []namedLifecycle {
 	}
 	if s.Detector != nil {
 		add(plugin.KindDetector, s.Detector.Name, s.Detector.Plugin)
+	}
+	for _, p := range s.ThreatFeeds {
+		add(plugin.KindThreatFeed, p.Name, p.Plugin)
 	}
 	for _, p := range s.LeakSources {
 		add(plugin.KindLeakSource, p.Name, p.Plugin)
