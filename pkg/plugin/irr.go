@@ -37,6 +37,13 @@ type IRRRoute struct {
 	Database string
 }
 
+// IRRObject is one stored route or route6 object with its RPSL text as the
+// source returned it.
+type IRRObject struct {
+	IRRRoute
+	Text string
+}
+
 // ErrIRRUnsupported is returned by a source for a lookup its data cannot
 // answer (a bgpq4 file has no as-set or aut-num objects). The source is
 // left out of that answer instead of making it unknown.
@@ -53,6 +60,13 @@ type IRR interface {
 	// ASSetMembers returns the AS numbers in an as-set, expanded
 	// recursively.
 	ASSetMembers(ctx context.Context, name string) ([]uint32, time.Time, error)
+	// OriginPrefixes returns the prefixes of the route and route6 objects
+	// naming asn as origin (registry hygiene, #289).
+	OriginPrefixes(ctx context.Context, asn uint32) ([]netip.Prefix, time.Time, error)
+	// RouteObjects is Routes with the stored text of each object, so a
+	// delete shows and records what the database holds (#289). A source
+	// that keeps no object text returns ErrIRRUnsupported.
+	RouteObjects(ctx context.Context, prefix netip.Prefix) ([]IRRObject, time.Time, error)
 	// ASName returns the as-name of the aut-num object for asn, empty
 	// when there is none.
 	ASName(ctx context.Context, asn uint32) (string, time.Time, error)

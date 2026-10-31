@@ -87,6 +87,9 @@ type Set struct {
 	// IRRSources answer IRR lookups (irr.sources, #214). They are asked in
 	// order and never announce.
 	IRRSources []Instance[plugin.IRR]
+	// RegistryCheckers are the registry.sources (#289): they read PeeringDB
+	// and apply a change a person confirmed. None announces.
+	RegistryCheckers []Instance[plugin.RegistryChecker]
 
 	mu      sync.RWMutex
 	started []namedLifecycle
@@ -199,6 +202,9 @@ func Build(cfg *config.Config, opts Options) (*Set, error) {
 	if cfg.IRROn() {
 		s.IRRSources = build(plugin.IRRs, "irr.sources", cfg.IRR.Sources, base, &errs)
 	}
+	if cfg.RegistryOn() {
+		s.RegistryCheckers = build(plugin.RegistryCheckers, "registry.sources", cfg.Registry.Sources, base, &errs)
+	}
 	if cfg.Troubleshoot.Whois != nil {
 		if b := build(plugin.Whoises, "troubleshoot.whois", []config.PluginSpec{*cfg.Troubleshoot.Whois}, base, &errs); len(b) == 1 {
 			s.Whois = &b[0]
@@ -299,6 +305,9 @@ func (s *Set) all() []namedLifecycle {
 	}
 	for _, p := range s.IRRSources {
 		add(plugin.KindIRR, p.Name, p.Plugin)
+	}
+	for _, p := range s.RegistryCheckers {
+		add(plugin.KindRegistry, p.Name, p.Plugin)
 	}
 	for _, p := range s.Probers {
 		add(plugin.KindProber, p.Name, p.Plugin)

@@ -349,6 +349,9 @@ scorer:
 #     # monthly fee: peers cost 0 per Mbps and may not set cost. The binding's
 #     # own commit_mbps is a placeholder (use 1); port.commit_mbps is the commit.
 #     port: {capacity_mbps: 10000, commit_mbps: 6000, port_cost: 1500}
+#     # This network's own router addresses on the LAN, as PeeringDB lists
+#     # the connection. Only registry hygiene reads them (#289).
+#     local_lan_addrs: [203.0.113.5]
 #     peers:
 #       - name: ix-peer-a
 #         asn: 64501
@@ -456,6 +459,27 @@ scorer:
 #         address: rr.ntt.net:43
 #         dialect: irrd
 #         databases: [RIPE, ARIN, APNIC, AFRINIC, LACNIC, RADB, NTTCOM, ALTDB, LEVEL3]
+
+# Registry hygiene (off by default; docs/registry.md). A scheduled read-only
+# scan compares the learned RIB with IRR route objects (irr.sources), RPKI,
+# an as-set, and PeeringDB, and lists each difference with the exact fix on
+# the Registry page. It announces nothing. Pushing a change is off unless
+# push_enabled, needs an admin to confirm each diff, and reads credentials
+# only from PACKETEER_PEERINGDB_API_KEY, PACKETEER_RIPE_USER, and
+# PACKETEER_RIPE_PASSWORD. as_set and the IRR checks need irr enabled.
+# registry:
+#   enabled: false
+#   asns: [64496]
+#   as_set: AS-EXAMPLE
+#   interval: 24h
+#   headroom_percent: 20
+#   irr:
+#     source: RIPE
+#     mnt_by: EXAMPLE-MNT
+#   push_enabled: false
+#   sources:
+#     - type: peeringdb
+#     - type: ripe
 
 # Multi-POP (off by default; docs/multi-pop.md). One instance per POP,
 # joined over mutual TLS. A provider in another domain is measured by the

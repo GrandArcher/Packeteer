@@ -188,6 +188,10 @@ type Config struct {
 	// IRR is the IRR origin check per learned path (#214). Nil or disabled
 	// is off.
 	IRR *IRR `yaml:"irr"`
+	// Registry is registry hygiene (#289): a scheduled, read-only scan of
+	// IRR, RPKI, as-set, and PeeringDB drift. Nil or disabled is off. It
+	// never announces.
+	Registry *Registry `yaml:"registry"`
 
 	// Instance and Domain name this instance and its routing domain (POP)
 	// for multi-POP federation (#30). Instance defaults to Domain.
@@ -594,7 +598,8 @@ type Provider struct {
 	NextHop  string `yaml:"next_hop"`
 	// ASN is the provider's own AS and Type is transit, peer, or customer.
 	// Both are labels for the Providers page and AS search; no decision
-	// reads them. 0 and "" mean not set.
+	// reads them. Registry hygiene reads Type customer as the customer
+	// cone (#289). 0 and "" mean not set.
 	ASN  uint32 `yaml:"asn"`
 	Type string `yaml:"type"`
 	// LocalPref, when set, is the local preference on routes steered to
@@ -688,6 +693,10 @@ type Exchange struct {
 	// Port is the one interface every peer shares (#151). Nil leaves each
 	// peer an independent provider.
 	Port *ExchangePort `yaml:"port"`
+	// LocalLANAddrs are this network's own router addresses on the peering
+	// LAN, as PeeringDB lists the connection (#289). Only registry hygiene
+	// reads them; a peer's source_ip is a probe source, not this.
+	LocalLANAddrs []string `yaml:"local_lan_addrs"`
 }
 
 // ExchangePort is an exchange's shared port. Its usage comes from a

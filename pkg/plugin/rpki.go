@@ -68,5 +68,21 @@ type RPKI interface {
 	Status() RPKIStatus
 }
 
+// RPKIVRP is one validated ROA payload.
+type RPKIVRP struct {
+	Prefix netip.Prefix
+	MaxLen uint8
+	ASN    uint32
+}
+
+// RPKICovering is implemented by a source that can list the payloads
+// covering a prefix. Registry hygiene (#289) reads it to say why a prefix is
+// invalid; a source without it is validated only.
+type RPKICovering interface {
+	// Covering returns the payloads whose prefix covers p, or nil while the
+	// source has no fresh data.
+	Covering(p netip.Prefix) []RPKIVRP
+}
+
 // RPKIs is the registry for origin-validation plugins.
 var RPKIs = NewRegistry[RPKI](KindRPKI)

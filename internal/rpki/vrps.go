@@ -141,3 +141,22 @@ func (t *VRPs) Validate(prefix netip.Prefix, origin uint32) plugin.RPKIValidity 
 	}
 	return plugin.RPKINotFound
 }
+
+// Covering returns every payload whose prefix covers prefix, shortest
+// first.
+func (t *VRPs) Covering(prefix netip.Prefix) []plugin.RPKIVRP {
+	if t == nil || !prefix.IsValid() {
+		return nil
+	}
+	prefix = prefix.Masked()
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	var out []plugin.RPKIVRP
+	for i := 0; i <= prefix.Bits(); i++ {
+		cover := netip.PrefixFrom(prefix.Addr(), i).Masked()
+		for _, e := range t.m[cover] {
+			out = append(out, plugin.RPKIVRP{Prefix: cover, MaxLen: e.maxLen, ASN: e.asn})
+		}
+	}
+	return out
+}

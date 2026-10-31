@@ -8,10 +8,10 @@ import (
 	"unicode"
 )
 
-// parseKey accepts an empty key (anonymous) or a single token. PeeringDB
+// ParseKey accepts an empty key (anonymous) or a single token. PeeringDB
 // publishes no key grammar; the checks only reject values that cannot be
 // a header token or that would need encoding.
-func parseKey(raw string) (string, error) {
+func ParseKey(raw string) (string, error) {
 	k := strings.TrimSpace(raw)
 	if k == "" {
 		return "", nil
@@ -27,7 +27,9 @@ func parseKey(raw string) (string, error) {
 	return k, nil
 }
 
-func parseBase(raw, key string) (*url.URL, error) {
+// ParseBase checks base_url: http or https with a host, https when a key is
+// set, and no key inside it. An empty value is DefaultBaseURL.
+func ParseBase(raw, key string) (*url.URL, error) {
 	if strings.TrimSpace(raw) == "" {
 		raw = DefaultBaseURL
 	}
@@ -104,7 +106,8 @@ func urlHasKey(raw string, u *url.URL, key string) bool {
 	return false
 }
 
-func redact(msg, key string) string {
+// Redact removes the API key from an error message.
+func Redact(msg, key string) string {
 	if key == "" || msg == "" {
 		return msg
 	}

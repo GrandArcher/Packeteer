@@ -130,6 +130,19 @@ func (c *Client) Validate(prefix netip.Prefix, origin uint32) plugin.RPKIValidit
 	return cache.Validate(prefix, origin)
 }
 
+// Covering lists the payloads covering p. Data older than staleness is
+// none.
+func (c *Client) Covering(p netip.Prefix) []plugin.RPKIVRP {
+	c.mu.Lock()
+	stale := c.cfg.Stale(c.updated, time.Now())
+	cache := c.cache
+	c.mu.Unlock()
+	if stale {
+		return nil
+	}
+	return cache.Covering(p)
+}
+
 // Status reports the source's health. Updated is when the document says
 // it was generated, so a cache that keeps serving an old file goes stale.
 func (c *Client) Status() plugin.RPKIStatus {

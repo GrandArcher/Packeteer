@@ -203,7 +203,7 @@ While the streak is short and this evaluation compared the paths, that prefix is
 | `source_ip` | yes, except in another domain | Source address of probes. Unique across providers unless every provider on it sets a distinct `fwmark` or `dscp`. Must be configured on the host. Same address family as `next_hop`. Must be empty for a provider in another `domain`. |
 | `next_hop` | yes | BGP next hop used if this provider is selected. Also how a learned route is matched to a provider. For a provider in another domain, the address this POP's routers reach that POP's exit at across the backbone. |
 | `asn` | no | The provider's own AS, 1 to 4294967295. A label: the Providers page shows it with the type and AS search finds the provider by it. No decision reads it. `0` or omitted is not set. |
-| `type` | no | `transit`, `peer`, or `customer`. A label shown on the Providers page; no decision reads it. Omitted is not set. |
+| `type` | no | `transit`, `peer`, or `customer`. A label shown on the Providers page; no decision reads it. Registry hygiene counts the paths through a `customer` provider as the customer cone ([registry.md](registry.md)). Omitted is not set. |
 | `local_pref` | no | Local preference on routes steered to this provider (#132). Wins over `local_pref_cause` and the global `local_pref`. Omit it to use those. `0` is rejected in every mode. Set it above the edge's native local preference. |
 | `communities` | no | Extra communities on routes steered to this provider (#132), added after the cause's. The export policy does not match them. The same rules as [`communities_cause`](#communities_cause): at most 16, standard or large, no duplicates, not `packeteer_community`, and no `0:x` or `65535:x`. Omit it for none. An unknown provider name is rejected. Changing it requires a restart. |
 | `domain` | no | Routing domain (POP) the provider exits in (#30). Empty or equal to the top-level `domain` is local. A provider in another domain is not probed here: the peer there measures it. Needs `federation` and an `inter_dc_rtt` entry for the domain; `bmp` and `add_path` do not apply. |
@@ -598,6 +598,7 @@ Internet exchanges (#27, IRP 1.2.11). Each peer listed on an exchange is a provi
 | `group` | no | The peers' load-balancing group, as on providers. |
 | `peers` | yes | At least one. |
 | `port` | no | The shared IX port (#151); see below. |
+| `local_lan_addrs` | no | This network's own router addresses on the peering LAN, as PeeringDB lists the connection (`ipaddr4`, `ipaddr6`). Each inside `lans`, listed once, not a peer `next_hop`. Read only by [registry hygiene](registry.md); a peer's `source_ip` is a probe source, not this. |
 | `max_prefix_warn_pct` | `90` | Share of a peer's `max_prefix` at which `exchange.max_prefix` fires. 1 to 100. A peer with no `max_prefix` is not warned. |
 
 Each peer:
@@ -816,6 +817,21 @@ IRR origin check per provider path (#214, not on a public edge). Off by default.
 | `staleness` | `24h` (`refresh` when longer) | How long an answer is used after its data time (the lookup time for `whois`, the file's modification time for `file`). Older is `unknown`. At least `refresh`, at most 720h. |
 | `as_sets` | none | Provider name to as-set (for example `transit-a: AS-EXAMPLE` or `AS64500:AS-CUSTOMERS`). Each path of that provider shows whether its origin is in the set, expanded recursively. Display only. The provider must be configured. |
 | `prefer_registered` | `false` | `true` refuses a new improvement onto a provider whose learned path for the prefix is `not_registered` (candidate `why` "IRR not registered"). With several paths from one provider the worst state counts. `unknown` never blocks, and the native path is never refused. An active improvement whose path becomes not registered is retired through the normal path. |
+
+### `registry`
+
+Registry hygiene (#289, not on a public edge). Off by default. A scheduled scan compares the learned RIB with IRR route objects, RPKI, the as-set, and PeeringDB, and lists each difference with the change that would fix it on the Registry page and `GET /api/registry`. The scan only reads and works with no credentials. Pushing a change to a registry is a separate switch, off by default, and each push needs an admin to confirm its diff. Nothing is announced and the learned RIB is unchanged. See [registry.md](registry.md). IRR checks use the `irr.sources`; RPKI checks use `rpki`. Not combined with `ixp`. A change needs a restart.
+
+| Key | Default | Meaning |
+|---|---|---|
+| `enabled` | `false` | `true` turns the scan on. A block that is not enabled must not set any other key. |
+| `asns` | none | Required when enabled. The origin ASNs the network announces. A learned route is the network's when its origin (the last AS of the path, or `asn` for a route with an empty path) is one of them. |
+| `as_set` | none | The operator's as-set (for example `AS-EXAMPLE`), checked against the ASNs that follow `asns` on learned paths. With `asn` in `asns`, the edge's own AS is not on its paths, so only paths through a provider with `type: customer` count; with no such provider the as-set check is skipped ([registry.md](registry.md)). Needs `irr.enabled` with an `irr.sources` entry; the config is rejected without it. |
+| `interval` | `24h` | Time between scans. 1h-168h. The first scan runs a minute after start. |
+| `headroom_percent` | `20` | Percent added to the announced prefix counts when a PeeringDB max-prefix value is suggested. 1-1000. |
+| `irr` | `RIPE` source | The RPSL of generated route objects: `source` is the `source:` attribute (default `RIPE`; a change is pushable only for `RIPE` or `TEST`, matching the `ripe` source; any other value gives RPSL to submit by hand) and `mnt_by` is the `mnt-by:` attribute (required to push through a `ripe` source). |
+| `push_enabled` | `false` | `true` allows `POST /api/registry/push`, which needs the admin role and an authenticated API. Needs a `sources` entry. |
+| `sources` | none | Registry plugins (`type`, optional `name`, `config`): `peeringdb` ([Registry source `peeringdb`](#registry-source-peeringdb)) reads PeeringDB and can push; `ripe` ([Registry source `ripe`](#registry-source-ripe)) pushes route objects. Names must differ. |
 
 ### `linkouts`
 
@@ -1952,6 +1968,25 @@ Reads a mounted file and answers from memory. It is read again when its size or 
 |---|---|---|
 | `path` | none | Required. The file inside the container, for example `/etc/packeteer/irr/routes.db`. |
 | `format` | `rpsl` | `rpsl` or `bgpq4`. |
+
+### Registry source `peeringdb`
+
+Reads the network record (`net`), exchange connections (`netixlan`), facilities, and contacts of each `registry.asns` entry with GET, and compares them with the announced prefix counts and each exchange's `local_lan_addrs` and `port.capacity_mbps` (the exchange's `ix_id` comes from the `lookup` block). A push sets `info_prefixes4`, `info_prefixes6`, or a connection `speed` with PUT; it re-reads the record first and refuses when the field no longer holds the value the diff showed. Requests are paced as for `lookup`; redirects are not followed. The API key is `PACKETEER_PEERINGDB_API_KEY`, the same variable as `lookup`; a scan works without it, a push needs it.
+
+| Key | Default | Meaning |
+|---|---|---|
+| `base_url` | `https://www.peeringdb.com` | PeeringDB API. https is required when a key is set. |
+| `timeout` | `30s` | One request. 1s-2m. |
+
+### Registry source `ripe`
+
+Creates or deletes one `route` or `route6` object through the RIPE database REST API after an admin confirmed the diff. The findings come from `irr.sources`. Before a delete it reads the object (`GET` with `unfiltered`, no credentials) and refuses unless it equals the object shown. The maintainer credentials are `PACKETEER_RIPE_USER` and `PACKETEER_RIPE_PASSWORD`, read from the environment only when a change is pushed and sent only as basic authentication to `base_url`. Redirects are not followed.
+
+| Key | Default | Meaning |
+|---|---|---|
+| `base_url` | `https://rest.db.ripe.net` | RIPE database REST API. https, with a host and no credentials, query, or fragment. |
+| `source` | `RIPE` | `RIPE`, or `TEST` for the RIPE test database. With `push_enabled` and `registry.irr.source` of `RIPE` or `TEST`, both must name the same database. |
+| `timeout` | `30s` | One request. 1s-2m. |
 
 ### Detector `baseline`
 

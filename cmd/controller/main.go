@@ -253,6 +253,13 @@ func run(ctx context.Context, args []string, getenv func(string) string, stdout,
 			fmt.Fprintf(stdout, "ixp core: %s (%d links to other sites, observe-only, never announces)\n", cfg.IXP.Core.Type, len(cfg.IXP.CoreLinks))
 		}
 	}
+	if cfg.RegistryOn() {
+		push := "off"
+		if cfg.Registry.PushEnabled {
+			push = "on (each change needs an admin to confirm its diff)"
+		}
+		fmt.Fprintf(stdout, "registry: scan every %s, push %s (never announces)\n", cfg.Registry.Interval, push)
+	}
 	if cfg.Lookup != nil {
 		fmt.Fprintf(stdout, "lookup: %s (read-only, never announces)\n", cfg.Lookup.Type)
 	}
@@ -793,6 +800,8 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 	wireSuggestions(cfg, httpSrv, view)
 	wireMitigationCandidates(httpSrv, mit, view)
 	wireLookup(plugins, httpSrv)
+	regSvc := newRegistry(cfg, plugins, view, rpkiSet, log)
+	wireRegistry(regSvc, httpSrv)
 	wireIXPMembers(plugins, httpSrv, dispatch.Emit)
 	wireIXPFabric(cfg, plugins, httpSrv)
 	wireIXPRouteServers(plugins, httpSrv, dispatch.Emit)
@@ -872,6 +881,13 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 		go func() {
 			defer loopWG.Done()
 			irrChecker.Run(loopCtx)
+		}()
+	}
+	if regSvc != nil {
+		loopWG.Add(1)
+		go func() {
+			defer loopWG.Done()
+			regSvc.Run(loopCtx)
 		}()
 	}
 	if reorderMon != nil {

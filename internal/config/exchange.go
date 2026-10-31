@@ -133,6 +133,7 @@ func (c *Config) validateExchanges(add func(string, ...any)) {
 			add("%s: peers: at least one peer is required", label)
 		}
 		validateExchangePort(ex, label, add)
+		validateLocalLANAddrs(ex, lans, label, add)
 		for j, p := range ex.Peers {
 			pl := fmt.Sprintf("%s: peers[%d]", label, j)
 			if p.Name != "" {
@@ -165,6 +166,32 @@ func (e Exchange) ExchangeLANs() []netip.Prefix {
 		}
 	}
 	return out
+}
+
+// validateLocalLANAddrs checks that each own address is an address on one
+// of the exchange's LANs, listed once, and not a peer's next hop.
+func validateLocalLANAddrs(ex Exchange, lans []netip.Prefix, label string, add func(string, ...any)) {
+	hops := map[netip.Addr]bool{}
+	for _, p := range ex.Peers {
+		if a, err := netip.ParseAddr(p.NextHop); err == nil {
+			hops[a] = true
+		}
+	}
+	seen := map[netip.Addr]bool{}
+	for i, s := range ex.LocalLANAddrs {
+		a, err := netip.ParseAddr(s)
+		switch {
+		case err != nil || a.Zone() != "":
+			add("%s: local_lan_addrs[%d]: %q is not an IP address", label, i, s)
+		case len(lans) > 0 && !slices.ContainsFunc(lans, func(l netip.Prefix) bool { return l.Contains(a) }):
+			add("%s: local_lan_addrs[%d]: %s is not inside the exchange lans", label, i, a)
+		case seen[a]:
+			add("%s: local_lan_addrs[%d]: %s is listed twice", label, i, a)
+		case hops[a]:
+			add("%s: local_lan_addrs[%d]: %s is a peer next_hop, not this network's address", label, i, a)
+		}
+		seen[a] = true
+	}
 }
 
 // maxPortMbps matches the snmp telemetry bound on a commit.

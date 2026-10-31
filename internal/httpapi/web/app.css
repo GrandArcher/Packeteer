@@ -576,3 +576,7 @@ main:focus { outline: none; }
 .pf-head { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .pf-detail, .pf-fix { margin: 4px 0; white-space: pre-line; }
 #pf-snippet { overflow-x: auto; padding: 8px 12px; border: 1px solid var(--muted); border-radius: 4px; }
+
+/* Registry hygiene findings (#289). */
+.badge.sev-error { color: #fff; background: #9d1c2a; }
+.badge.sev-info { color: #3b4a59; background: #e7eef5; }

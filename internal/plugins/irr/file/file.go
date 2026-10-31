@@ -294,6 +294,32 @@ func (s *Source) ASSetMembers(_ context.Context, name string) ([]uint32, time.Ti
 	return out, d.at, nil
 }
 
+// OriginPrefixes returns the prefixes the file registers for asn. A bgpq4
+// range counts as its base prefix.
+func (s *Source) OriginPrefixes(_ context.Context, asn uint32) ([]netip.Prefix, time.Time, error) {
+	d, err := s.load()
+	if err != nil {
+		return nil, time.Time{}, err
+	}
+	var out []netip.Prefix
+	for p, spans := range d.routes {
+		for _, sp := range spans {
+			if sp.origin == asn {
+				out = append(out, p)
+				break
+			}
+		}
+	}
+	netpfx.Sort(out)
+	return out, d.at, nil
+}
+
+// RouteObjects is not served: the file is parsed into prefixes and
+// origins and keeps no object text.
+func (*Source) RouteObjects(context.Context, netip.Prefix) ([]plugin.IRRObject, time.Time, error) {
+	return nil, time.Time{}, plugin.ErrIRRUnsupported
+}
+
 // ASName returns the as-name of the file's aut-num object for asn.
 func (s *Source) ASName(_ context.Context, asn uint32) (string, time.Time, error) {
 	if s.cfg.Format == FormatBGPQ4 {

@@ -119,11 +119,11 @@ func New(c plugin.Config, env plugin.Env) (plugin.Lookup, error) {
 	if getenv == nil {
 		getenv = func(string) string { return "" }
 	}
-	key, err := parseKey(getenv(APIKeyEnv))
+	key, err := ParseKey(getenv(APIKeyEnv))
 	if err != nil {
 		return nil, err
 	}
-	base, err := parseBase(cfg.BaseURL, key)
+	base, err := ParseBase(cfg.BaseURL, key)
 	if err != nil {
 		return nil, err
 	}
@@ -324,9 +324,9 @@ func (s *Source) fetch(ctx context.Context) {
 
 func (s *Source) publishErr(err error) {
 	s.mu.Lock()
-	s.view.Error = redact(err.Error(), s.apiKey)
+	s.view.Error = Redact(err.Error(), s.apiKey)
 	s.mu.Unlock()
-	s.log.Warn("peeringdb lookup failed", "err", redact(err.Error(), s.apiKey))
+	s.log.Warn("peeringdb lookup failed", "err", Redact(err.Error(), s.apiKey))
 }
 
 func (s *Source) pull(ctx context.Context) (plugin.LookupView, error) {
@@ -390,12 +390,12 @@ func (s *Source) pull(ctx context.Context) (plugin.LookupView, error) {
 			return plugin.LookupView{}, ctx.Err()
 		}
 		if err != nil {
-			ixfErr[ex.name] = redact(err.Error(), s.apiKey)
+			ixfErr[ex.name] = Redact(err.Error(), s.apiKey)
 			continue
 		}
 		rows, err := decodeIXF(body)
 		if err != nil {
-			ixfErr[ex.name] = redact(err.Error(), s.apiKey)
+			ixfErr[ex.name] = Redact(err.Error(), s.apiKey)
 			continue
 		}
 		ixfRows[ex.name] = rows
@@ -429,7 +429,7 @@ func (s *Source) get(ctx context.Context, rawURL string, auth bool) ([]byte, err
 		if errors.Is(err, errNoRedirect) {
 			return nil, errors.New("lookup: redirects are not followed")
 		}
-		return nil, errors.New("lookup: " + redact(err.Error(), s.apiKey))
+		return nil, errors.New("lookup: " + Redact(err.Error(), s.apiKey))
 	}
 	defer resp.Body.Close()
 	body, err := io.ReadAll(io.LimitReader(resp.Body, s.maxBytes+1))

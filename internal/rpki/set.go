@@ -112,3 +112,16 @@ func (s *Set) LookupDisplay(prefix netip.Prefix, origin uint32) plugin.RPKIAnswe
 	}
 	return a
 }
+
+// Covering lists the payloads covering prefix in the source Lookup would
+// use. It is nil when that source cannot list them.
+func (s *Set) Covering(prefix netip.Prefix) []plugin.RPKIVRP {
+	src, _, ok := s.active()
+	if !ok {
+		return nil
+	}
+	if c, ok := src.(plugin.RPKICovering); ok {
+		return c.Covering(prefix)
+	}
+	return nil
+}
