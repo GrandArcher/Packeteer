@@ -82,10 +82,23 @@ type Rule struct {
 	TTLText  string         `json:"ttl"`
 }
 
+// Widest listed networks a source rule acts on: an RIR's largest block.
+// A wider source would drop most traffic toward the protected prefixes, so
+// a feed that lists one (by mistake or compromised) is not followed.
+const (
+	MinSourceBitsV4 = 8
+	MinSourceBitsV6 = 12
+)
+
 // destinations is where a listed network leads under r: itself when it is
 // inside r's prefixes (match destination), or each of r's prefixes of its
-// address family (match source).
+// address family (match source), unless it is wider than the source floor.
 func (r Rule) destinations(e netip.Prefix) []netip.Prefix {
+	if r.Match == config.ThreatMatchSource {
+		if (e.Addr().Is4() && e.Bits() < MinSourceBitsV4) || (e.Addr().Is6() && e.Bits() < MinSourceBitsV6) {
+			return nil
+		}
+	}
 	var out []netip.Prefix
 	for _, p := range r.Prefixes {
 		switch {
@@ -227,21 +240,23 @@ func (c *Controller) SetRIB(rib RIB) {
 func (c *Controller) Run(ctx context.Context) {
 	t := time.NewTicker(Tick)
 	defer t.Stop()
-	now := time.Now()
 	for {
-		c.Round(ctx, now)
+		c.Round(ctx, time.Now)
 		select {
 		case <-ctx.Done():
 			return
-		case now = <-t.C:
+		case <-t.C:
 		}
 	}
 }
 
-// Round fetches the feeds that are due, then reconciles the rules.
-func (c *Controller) Round(ctx context.Context, now time.Time) {
+// Round fetches the feeds that are due, then reconciles the rules. The
+// clock is read again after the fetches, which can take a while: a rule the
+// mitigation controller expired must not look removed before its expiry.
+func (c *Controller) Round(ctx context.Context, clock func() time.Time) {
 	for _, f := range c.cfg.Feeds {
 		st := c.feeds[f.Name]
+		now := clock()
 		// Only Round writes lastFetch, so this read needs no lock.
 		if !st.lastFetch.IsZero() && now.Sub(st.lastFetch) < c.cfg.Interval {
 			continue
@@ -256,6 +271,7 @@ func (c *Controller) Round(ctx context.Context, now time.Time) {
 		c.storeLocked(st, now, entries, err)
 		c.mu.Unlock()
 	}
+	now := clock()
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.last = now

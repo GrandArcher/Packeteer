@@ -9,8 +9,9 @@
 # rule turns each into a FlowSpec drop toward 198.51.100.0/24 under
 # max_active 2. Checked on the routers themselves:
 #  - three listed sources: only the first two drops reach the edge
-#    (max_active), with the marker and no-export, never on transit-b, and
-#    the unicast path is untouched;
+#    (max_active), never on transit-b (no-export), and the unicast path is
+#    untouched (the marker is checked by the Go daemon test, since FRR's
+#    flowspec output does not show communities);
 #  - a listed 203.0.113.0/24 (allowlisted, not learned) is never announced,
 #    as a blackhole or as a drop destination;
 #  - a failed fetch (404) withdraws nothing;
@@ -38,9 +39,9 @@ set_feed() {
 	mv "$FEED_DIR/drop.tmp" "$FEED_DIR/drop.txt"
 }
 
-# 203.0.113.0/24 is listed last: bad-dests cannot announce it (not
-# learned), and as a source toward 198.51.100.0/24 it stays behind the
-# max_active cap for the whole run.
+# 203.0.113.0/24 is listed last: bad-dests (checked first) cannot announce
+# it (not learned), and as a source toward 198.51.100.0/24 it stays behind
+# the max_active cap for the whole run.
 set_feed "192.0.2.101 ; lab bot 1" "192.0.2.102" "192.0.2.103" "203.0.113.0/24 ; not learned"
 
 echo "building path check"
@@ -186,6 +187,11 @@ need_log 'threat feed mitigations waiting.*max_active \(2\)' "the cap was not re
 grep -q 'threat feed lab-drop (rule bad-sources): 192.0.2.101/32 listed: lab bot 1' <<<"$(api mitigations)" ||
 	{ echo "the mitigation rule does not name the feed and entry" >&2; dump; exit 1; }
 never 6 "a listed destination that is not learned was announced" unlearned
+if log_has 'threat feed mitigation (added|refused).*rule=bad-dests'; then
+	echo "the destination rule acted on an unlearned prefix" >&2
+	dump
+	exit 1
+fi
 fs_drops 192.0.2.101 192.0.2.102 || { echo "a third drop passed max_active" >&2; dump; exit 1; }
 native || { echo "FlowSpec changed the unicast path" >&2; dump; exit 1; }
 

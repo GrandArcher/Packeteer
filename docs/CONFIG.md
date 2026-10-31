@@ -762,7 +762,7 @@ Each rule:
 |---|---|---|
 | `name` | none | Required, unique, at most 64 characters. |
 | `feed` | none | Required. The name of the feed the rule reads. |
-| `match` | `destination` | `destination`: a listed network that equals or sits inside one of `prefixes` is the mitigation rule's destination. `source`: a listed network is the FlowSpec `source` match of a rule toward each of `prefixes` of its address family; needs a FlowSpec action. |
+| `match` | `destination` | `destination`: a listed network that equals or sits inside one of `prefixes` is the mitigation rule's destination. `source`: a listed network is the FlowSpec `source` match of a rule toward each of `prefixes` of its address family; needs a FlowSpec action; a listed network shorter than /8 (IPv4) or /12 (IPv6) is ignored. |
 | `prefixes` | none | Required. Each must be inside `mitigation.allowlist`; no default route, no host bits. |
 | `action` | none | Required. `blackhole`, `redirect`, `flowspec_drop`, `flowspec_rate_limit`, or `flowspec_redirect`, as on `POST /api/mitigations`. Checked against the mitigation announcer's catalog at startup. |
 | `target` | none | `redirect` and `flowspec_redirect`: a catalog target name. |

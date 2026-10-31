@@ -26,7 +26,8 @@ import (
 // environment. Three listed sources become FlowSpec drops toward the
 // learned prefix, but max_active 2 lets only the first two reach the edge,
 // tagged and NO_EXPORT. A listed destination that is allowlisted but not
-// learned is never announced. Shutdown withdraws the drops.
+// learned is never announced (its rule is checked first, so the cap does
+// not hide it). Shutdown withdraws the drops.
 func TestDaemonThreatFeedFlowSpecCapWithdraw(t *testing.T) {
 	var fetches, unauthorized atomic.Int32
 	feed := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -87,8 +88,8 @@ threat_feeds:
       type: http
       config: {url: "%s/drop.txt", token_env: LAB_FEED_TOKEN}
   rules:
-    - {name: bad-sources, feed: lab-drop, match: source, prefixes: [203.0.113.0/24], action: flowspec_drop, ttl: 10m}
     - {name: bad-dests, feed: lab-drop, prefixes: [203.0.113.0/24], action: blackhole, ttl: 10m}
+    - {name: bad-sources, feed: lab-drop, match: source, prefixes: [203.0.113.0/24], action: flowspec_drop, ttl: 10m}
 `, httpPort, port, feed.URL)
 	path := filepath.Join(t.TempDir(), "c.yaml")
 	if err := os.WriteFile(path, []byte(cfg), 0o600); err != nil {
@@ -152,6 +153,9 @@ threat_feeds:
 	}
 	if _, _, ok := packeteerPath(t, srv, "203.0.113.128/25"); ok {
 		t.Fatal("a listed destination that is not learned was announced")
+	}
+	if !strings.Contains(logs.String(), "threat feed fetched") || strings.Contains(logs.String(), "rule=bad-dests") {
+		t.Fatalf("the destination rule acted on an unlearned prefix:\n%s", logs.String())
 	}
 	if fetches.Load() != 1 || unauthorized.Load() != 0 {
 		t.Fatalf("fetches = %d unauthorized = %d", fetches.Load(), unauthorized.Load())

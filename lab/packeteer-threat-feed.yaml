@@ -72,17 +72,19 @@ threat_feeds:
       type: http
       config:
         url: http://192.0.2.30:8000/drop.txt
+  # bad-dests is first so the max_active cap the sources reach never hides
+  # whether it would act on the unlearned 203.0.113.0/24.
   rules:
+    - name: bad-dests
+      feed: lab-drop
+      prefixes: [203.0.113.0/24]
+      action: blackhole
+      ttl: 30m
     - name: bad-sources
       feed: lab-drop
       match: source
       prefixes: [198.51.100.0/24, 203.0.113.0/24]
       action: flowspec_drop
-      ttl: 30m
-    - name: bad-dests
-      feed: lab-drop
-      prefixes: [203.0.113.0/24]
-      action: blackhole
       ttl: 30m
 
 # Lab only: no sign-in, so the e2e scripts can read the API (#328).

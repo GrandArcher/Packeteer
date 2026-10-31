@@ -175,6 +175,10 @@ func (l *list) add(s, comment string) error {
 	if err != nil {
 		a, aerr := netip.ParseAddr(s)
 		if aerr != nil || a.Zone() != "" {
+			// The text is untrusted and ends up in logs and on the API.
+			if len(s) > 64 {
+				s = s[:64] + "..."
+			}
 			return fmt.Errorf("%q is not a CIDR or an address", s)
 		}
 		p = netip.PrefixFrom(a, a.BitLen())

@@ -189,7 +189,7 @@ func newLab(t *testing.T, mode, body string, rules []Rule, mut func(*Config)) *l
 func (l *lab) round(d time.Duration) Status {
 	l.t.Helper()
 	l.now = l.now.Add(d)
-	l.ctl.Round(context.Background(), l.now)
+	l.ctl.Round(context.Background(), func() time.Time { return l.now })
 	if err := l.mit.Sync(context.Background(), l.now); err != nil {
 		l.t.Fatal(err)
 	}
@@ -468,5 +468,63 @@ func TestNewChecks(t *testing.T) {
 	bad.Rules = []Rule{dstRule("r", victim)}
 	if _, err := New(bad, mit, quiet()); err == nil || !strings.Contains(err.Error(), "unknown feed") {
 		t.Fatalf("unknown feed: %v", err)
+	}
+}
+
+// slowFeed runs during before each fetch, as a slow feed would let the
+// decision loop run meanwhile.
+type slowFeed struct {
+	plugin.ThreatFeed
+	during func()
+}
+
+func (s slowFeed) Fetch(ctx context.Context) ([]plugin.ThreatEntry, error) {
+	s.during()
+	return s.ThreatFeed.Fetch(ctx)
+}
+
+// A rule that expires while a slow fetch runs is seen as expired, not as
+// removed by an operator: the clock is read again after the fetches.
+func TestExpiryDuringSlowFetchIsNotRemoval(t *testing.T) {
+	var l *lab
+	slow := false
+	l = newLab(t, config.ModeInject, "192.0.2.1\n", []Rule{srcRule("srcs", victim)}, func(c *Config) {
+		c.Interval = time.Minute
+		c.Feeds[0].Plugin = slowFeed{ThreatFeed: c.Feeds[0].Plugin, during: func() {
+			if slow {
+				l.now = l.now.Add(30 * time.Second)
+				if err := l.mit.Sync(context.Background(), l.now); err != nil {
+					t.Error(err)
+				}
+			}
+		}}
+	})
+	first := l.round(0).Proposals[0].Mitigation
+	slow = true
+	st := l.round(29*time.Minute + 50*time.Second)
+	if len(st.Proposals) != 1 || st.Proposals[0].State != StateMitigating || st.Proposals[0].Mitigation == first {
+		t.Fatalf("expiry during a slow fetch: %+v", st.Proposals)
+	}
+}
+
+// A source rule does not follow a listed network wider than an RIR's
+// largest block.
+func TestSourceFloor(t *testing.T) {
+	l := newLab(t, config.ModeInject, "0.0.0.0/1\n128.0.0.0/1\n192.0.2.1\n", []Rule{srcRule("srcs", victim)}, nil)
+	st := l.round(0)
+	if _, fs, _ := l.ann.onWire(); len(fs) != 1 || !fs[[2]netip.Prefix{victim, netip.MustParsePrefix("192.0.2.1/32")}] || st.Held != 1 {
+		t.Fatalf("wide sources followed: %v %+v", fs, st)
+	}
+	v6 := srcRule("v6", netip.MustParsePrefix("2001:db8:1::/48"))
+	if got := v6.destinations(netip.MustParsePrefix("2000::/3")); got != nil {
+		t.Fatalf("2000::/3 as a source: %v", got)
+	}
+	if got := v6.destinations(netip.MustParsePrefix("2001:db8::/32")); len(got) != 1 {
+		t.Fatalf("2001:db8::/32 as a source: %v", got)
+	}
+	// The floor is for sources only: a destination rule is bounded by its
+	// prefixes and the learned RIB.
+	if got := dstRule("d", victim).destinations(victim); len(got) != 1 {
+		t.Fatalf("destination: %v", got)
 	}
 }

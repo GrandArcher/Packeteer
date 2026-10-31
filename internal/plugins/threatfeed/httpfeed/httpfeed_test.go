@@ -29,7 +29,7 @@ func prefixes(es []plugin.ThreatEntry) []string {
 }
 
 func TestParseCIDR(t *testing.T) {
-	got, err := ParseCIDR([]byte("; Spamhaus-style header\n\n198.51.100.0/24 ; SBL1\r\n192.0.2.7\n  2001:db8::/48 # lab\n198.51.100.0/24\n203.0.113.0/24 ; \x07bellé\n"))
+	got, err := ParseCIDR([]byte("; Spamhaus-style header\n\n198.51.100.0/24 ; SBL1\r\n192.0.2.7\n  2001:db8::/48 # lab\n198.51.100.0/24\n203.0.113.0/24 ; \x07bell\xc3\xa9\n"))
 	if err != nil {
 		t.Fatal(err)
 	}
