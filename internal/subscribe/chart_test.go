@@ -216,8 +216,8 @@ func TestBuildTimeSeriesMailHasChartsAndCSV(t *testing.T) {
 	if len(m.Attachments) != 1 || m.Attachments[0].ContentType != "text/csv" || !strings.Contains(string(m.Attachments[0].Data), "2026-09-01,all,1,") {
 		t.Fatalf("csv attachment = %+v", m.Attachments)
 	}
-	// Three buckets have rows (all, problem, better_20 and better_50 on day 1):
-	// all four, two charts each.
+	// All four buckets have rows (day 1 is better by more than 50%), two
+	// charts each.
 	if len(m.Inline) != 8 {
 		t.Fatalf("inline images = %d, want 8 (loss and latency for 4 buckets)", len(m.Inline))
 	}
@@ -232,7 +232,7 @@ func TestBuildTimeSeriesMailHasChartsAndCSV(t *testing.T) {
 			t.Errorf("%s size %v", a.Name, b)
 		}
 	}
-	for _, want := range []string{"All destinations", "Problem prefixes", "20% or more better", "50% or more better", "Dashed orange", "Solid blue", `alt="Loss (%), All destinations`, "attached as CSV"} {
+	for _, want := range []string{"All destinations", "Problem prefixes", "20% or more better", "50% or more better", "Dashed orange", "Solid blue", "<b>Loss (%)</b>", "<b>Latency (ms)</b>", `alt="Loss (%), All destinations`, "attached as CSV"} {
 		if !strings.Contains(m.HTML, want) {
 			t.Errorf("html lacks %q", want)
 		}

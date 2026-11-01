@@ -19,7 +19,7 @@ var bucketLabels = map[string]string{
 }
 
 type mailChart struct {
-	CID, Alt string
+	CID, Title, Alt string
 }
 
 type mailBucket struct {
@@ -35,7 +35,7 @@ var chartsHTML = template.Must(template.New("charts").Parse(`<!DOCTYPE html>
 {{if .Buckets}}<p><span style="color: #D55E00;"><b>Dashed orange</b>: before, the native path.</span>
 <span style="color: #0072B2;"><b>Solid blue</b>: after, the chosen path.</span> One point per UTC day.</p>
 {{range .Buckets}}<h3 style="font-size: 15px;">{{.Label}} ({{.Days}} day(s) with data)</h3>
-{{range .Charts}}<p><img src="cid:{{.CID}}" alt="{{.Alt}}" width="640" height="240"></p>
+{{range .Charts}}<p style="margin-bottom: 2px;"><b>{{.Title}}</b><br><img src="cid:{{.CID}}" alt="{{.Alt}}" width="640" height="240"></p>
 {{end}}{{end}}{{else}}<p>No before/after data in this range. A day needs an improvement and probe history for both its native and its chosen provider.</p>
 {{end}}</body></html>
 `))
@@ -68,7 +68,7 @@ func addCharts(m *plugin.ReportMail, rows []history.TimeSeriesRow, from, to time
 			}
 			cid := fmt.Sprintf("%s-%s@packeteer.invalid", bucket, metric.id)
 			m.Inline = append(m.Inline, plugin.Attachment{Name: fmt.Sprintf("%s-%s.png", bucket, metric.id), ContentType: "image/png", Data: img, ContentID: cid})
-			mb.Charts = append(mb.Charts, mailChart{CID: cid, Alt: fmt.Sprintf("%s (%s), %s: dashed line before, solid line after, one point per day", metric.title, metric.unit, mb.Label)})
+			mb.Charts = append(mb.Charts, mailChart{CID: cid, Title: fmt.Sprintf("%s (%s)", metric.title, metric.unit), Alt: fmt.Sprintf("%s (%s), %s: dashed line before, solid line after, one point per day", metric.title, metric.unit, mb.Label)})
 		}
 		data.Buckets = append(data.Buckets, mb)
 	}

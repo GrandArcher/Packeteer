@@ -13,7 +13,7 @@ import (
 	"github.com/GrandArcher/Packeteer/internal/history"
 )
 
-// Chart size and plot margins in pixels.
+// Chart size, plot margins, dash pattern, and glyph metrics, in pixels.
 const (
 	chartW, chartH                         = 640, 240
 	marginL, marginR, marginT, marginB     = 44, 14, 12, 24
@@ -56,8 +56,8 @@ type point struct {
 // chartPNG draws one metric of one bucket's rows between the days of from
 // and to: a dashed before line and a solid after line, one point per UTC
 // day. A day with no row breaks the line, and a lone day is a square.
-// Labels are digits only; the title and units are in the email text, so no
-// font is needed.
+// Labels are digits only; the caption with the title and unit is in the
+// email HTML, so no font is needed.
 func chartPNG(rows []history.TimeSeriesRow, from, to time.Time, m chartMetric) ([]byte, error) {
 	var before, after []point
 	first, last := math.MaxInt, math.MinInt

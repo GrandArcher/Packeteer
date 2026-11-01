@@ -653,18 +653,17 @@ report_subscriptions:
     to: [finance@example.net]
 ```
 
-Each send is one email from the named `smtp` notifier: a short text body (report, range, row count) and the report as a CSV attachment, the same rows `/api/reports/<report>?format=csv` returns for the range ending at the send time.
+Each send is one email from the named `smtp` notifier: a short text body (report, range, row count) and the report as a CSV attachment, the same rows `/api/reports/<report>?format=csv` returns for the range ending at the send time. The notifier's event filters do not apply to reports; a subscription's `to` replaces the notifier's recipients. Recipients come only from the file; the API cannot add one.
 
-A `timeseries` subscription (#136) also sends the [Graphs](#graphs) charts. The email holds a text part and an HTML part, and the HTML shows two inline PNGs, loss (%) and latency (ms), for each of the four destination buckets that has rows in the range: a dashed orange line for before (the native path), a solid blue line for after (the chosen path), one point per UTC day, and a break on a day with no row. Each PNG is 640x240 and is drawn by the controller itself from the same rows as the CSV; nothing is fetched and no rendering service is used. A range with no rows gets an HTML part that says so and no images. The CSV stays attached, and a client that shows only text still gets the text part. Other reports send no charts. Add `timeseries` to `report_subscriptions` with `days: 7` for a weekly view:
+A `timeseries` subscription (#136) also sends the [Graphs](#graphs) charts. The email holds a text part and an HTML part, and the HTML shows two inline PNGs, each under a caption (Loss (%) and Latency (ms)), for each of the four destination buckets that has rows in the range: a dashed orange line for before (the native path), a solid blue line for after (the chosen path), one point per UTC day, and a break on a day with no row. Each PNG is 640x240 and is drawn by the controller itself from the same rows as the CSV; nothing is fetched and no rendering service is used. A range with no rows gets an HTML part that says so and no images. The CSV stays attached, and a client that shows only text still gets the text part. Other reports send no charts. A weekly one:
 
 ```yaml
 report_subscriptions:
   - name: weekly-graphs
     report: timeseries
     schedule: weekly
-    days: 7
     notifier: mail
-``` The notifier's event filters do not apply to reports; a subscription's `to` replaces the notifier's recipients. Recipients come only from the file; the API cannot add one.
+```
 
 At start the controller refuses an unknown report name or a notifier that cannot send reports (webhook, SNMP trap, exec). A failed send is logged, counted, and shown on `/api/subscriptions`, and tried again at the next scheduled time. Sends missed while the controller was down are not replayed. `POST /api/subscriptions/<name>/send` (operator) sends one now for the range ending now, without moving the schedule.
 
