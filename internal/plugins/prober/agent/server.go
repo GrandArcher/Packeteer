@@ -171,9 +171,8 @@ func (p *Prober) servePoll(w http.ResponseWriter, r *http.Request) {
 
 	timer := time.NewTimer(p.cfg.PollWait)
 	defer timer.Stop()
-	free := req.Free
 	for {
-		if tasks := p.take(a, free); len(tasks) > 0 {
+		if tasks := p.take(a, req.Free); len(tasks) > 0 {
 			p.respond(w, a, agentwire.PollResponse{Tasks: tasks})
 			return
 		}
