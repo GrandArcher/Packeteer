@@ -16,13 +16,14 @@ import (
 type fakeSource struct {
 	mu      sync.Mutex
 	queries []history.Query
+	h       plugin.History
 }
 
 func (f *fakeSource) Report(_ context.Context, q history.Query) (history.Report, error) {
 	f.mu.Lock()
 	f.queries = append(f.queries, q)
 	f.mu.Unlock()
-	return history.Build(plugin.History{}, q)
+	return history.Build(f.h, q)
 }
 
 type fakeSender struct {

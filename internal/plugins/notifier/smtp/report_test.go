@@ -107,3 +107,84 @@ func decodeB64(s string) (string, error) {
 	b, err := base64.StdEncoding.DecodeString(strings.NewReplacer("\r", "", "\n", "").Replace(s))
 	return string(b), err
 }
+
+func TestSendReportWithHTMLAndInlineImages(t *testing.T) {
+	f := newFake(t, &fakeServer{})
+	y := "host: 127.0.0.1\ntls: none\nport: " + strconv.Itoa(f.port()) + "\nfrom: packeteer@example.invalid\nto: [noc@example.invalid]"
+	n, err := newNotifier(t, y, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	png := []byte("\x89PNG\r\n\x1a\nnot really an image, but binary \x00\x01\x02")
+	html := "<html><body><p>Caf\u00e9 report</p><img src=\"cid:loss@packeteer.invalid\"></body></html>"
+	err = n.(plugin.ReportSender).SendReport(context.Background(), plugin.ReportMail{
+		Subscription: "graphs", Report: "timeseries", Subject: "timeseries report",
+		Text: "plain body", HTML: html,
+		Inline:      []plugin.Attachment{{Name: "loss.png", ContentType: "image/png", Data: png, ContentID: "<loss@packeteer.invalid>"}},
+		Attachments: []plugin.Attachment{{Name: "timeseries.csv", ContentType: "text/csv", Data: []byte("day,bucket\r\n")}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	msg, err := mail.ReadMessage(strings.NewReader(f.data))
+	if err != nil {
+		t.Fatal(err)
+	}
+	next := func(mr *multipart.Reader, wantType string) *multipart.Part {
+		t.Helper()
+		p, err := mr.NextPart()
+		if err != nil {
+			t.Fatalf("want %s part: %v", wantType, err)
+		}
+		if mt, _, _ := mime.ParseMediaType(p.Header.Get("Content-Type")); mt != wantType {
+			t.Fatalf("part type %q, want %q", mt, wantType)
+		}
+		return p
+	}
+	sub := func(p *multipart.Part) *multipart.Reader {
+		t.Helper()
+		_, params, err := mime.ParseMediaType(p.Header.Get("Content-Type"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return multipart.NewReader(p, params["boundary"])
+	}
+	_, params, _ := mime.ParseMediaType(msg.Header.Get("Content-Type"))
+	mixed := multipart.NewReader(msg.Body, params["boundary"])
+	alt := sub(next(mixed, "multipart/alternative"))
+	text := next(alt, "text/plain")
+	if b, _ := io.ReadAll(quotedprintable.NewReader(text)); string(b) != "plain body" {
+		t.Fatalf("text = %q", b)
+	}
+	rel := sub(next(alt, "multipart/related"))
+	htmlPart := next(rel, "text/html")
+	if b, _ := io.ReadAll(quotedprintable.NewReader(htmlPart)); !strings.Contains(string(b), `src="cid:loss@packeteer.invalid"`) || !strings.Contains(string(b), "Caf\u00e9") {
+		t.Fatalf("html = %q", b)
+	}
+	img := next(rel, "image/png")
+	if got := img.Header.Get("Content-ID"); got != "<loss@packeteer.invalid>" {
+		t.Fatalf("Content-ID = %q", got)
+	}
+	if d, _, _ := mime.ParseMediaType(img.Header.Get("Content-Disposition")); d != "inline" {
+		t.Fatalf("image disposition %q", d)
+	}
+	raw, _ := io.ReadAll(img)
+	if dec, err := decodeB64(string(raw)); err != nil || dec != string(png) {
+		t.Fatalf("image bytes differ: %v", err)
+	}
+	if _, err := rel.NextPart(); err != io.EOF {
+		t.Fatalf("extra related part: %v", err)
+	}
+	if _, err := alt.NextPart(); err != io.EOF {
+		t.Fatalf("extra alternative part: %v", err)
+	}
+	csv := next(mixed, "text/csv")
+	if d, _, _ := mime.ParseMediaType(csv.Header.Get("Content-Disposition")); d != "attachment" || csv.FileName() != "timeseries.csv" {
+		t.Fatalf("csv part %q %q", d, csv.FileName())
+	}
+	if _, err := mixed.NextPart(); err != io.EOF {
+		t.Fatalf("extra part: %v", err)
+	}
+}

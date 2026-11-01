@@ -357,22 +357,26 @@ func (n *Notifier) SendReport(ctx context.Context, m plugin.ReportMail) error {
 	return nil
 }
 
-// reportMessage renders a multipart/mixed message: a quoted-printable
-// text part and one base64 part per attachment.
+// reportMessage renders a multipart/mixed message. Without HTML it holds a
+// quoted-printable text part and one base64 part per attachment. With HTML
+// the first part is multipart/alternative: the text, then multipart/related
+// with the HTML and its inline images, so a client that shows HTML shows
+// the images in place and one that does not still has the text.
 func (n *Notifier) reportMessage(m plugin.ReportMail, to []string) []byte {
 	var b bytes.Buffer
 	subject := headerSafe(m.Subject)
 	if n.subject != "" {
 		subject = n.subject + " " + subject
 	}
-	boundary := fmt.Sprintf("packeteer-%x", sha256.Sum256([]byte(m.Subscription+"\x00"+m.Subject+"\x00"+m.Text)))[:40]
+	sum := fmt.Sprintf("%x", sha256.Sum256([]byte(m.Subscription+"\x00"+m.Subject+"\x00"+m.Text+"\x00"+m.HTML)))
+	mixed, alt, rel := "packeteer-"+sum[:40], "packeteer-alt-"+sum[:36], "packeteer-rel-"+sum[:36]
 	hdr := [][2]string{
 		{"From", n.from},
 		{"To", strings.Join(to, ", ")},
 		{"Subject", mime.QEncoding.Encode("utf-8", subject)},
 		{"Date", n.now().Format(time.RFC1123Z)},
 		{"MIME-Version", "1.0"},
-		{"Content-Type", `multipart/mixed; boundary="` + boundary + `"`},
+		{"Content-Type", `multipart/mixed; boundary="` + mixed + `"`},
 		{"X-Packeteer-Report", headerSafe(m.Report)},
 		{"X-Packeteer-Subscription", headerSafe(m.Subscription)},
 	}
@@ -380,33 +384,56 @@ func (n *Notifier) reportMessage(m plugin.ReportMail, to []string) []byte {
 		fmt.Fprintf(&b, "%s: %s\r\n", h[0], h[1])
 	}
 	b.WriteString("\r\n")
-	fmt.Fprintf(&b, "--%s\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Transfer-Encoding: quoted-printable\r\n\r\n", boundary)
-	qp := quotedprintable.NewWriter(&b)
-	_, _ = qp.Write([]byte(strings.ReplaceAll(m.Text, "\n", "\r\n")))
+	if m.HTML == "" {
+		writeQP(&b, mixed, "text/plain", m.Text)
+	} else {
+		fmt.Fprintf(&b, "--%s\r\nContent-Type: multipart/alternative; boundary=\"%s\"\r\n\r\n", mixed, alt)
+		writeQP(&b, alt, "text/plain", m.Text)
+		fmt.Fprintf(&b, "--%s\r\nContent-Type: multipart/related; boundary=\"%s\"\r\n\r\n", alt, rel)
+		writeQP(&b, rel, "text/html", m.HTML)
+		for _, a := range m.Inline {
+			cid := strings.NewReplacer("<", "", ">", "").Replace(headerSafe(a.ContentID))
+			writeBase64(&b, rel, a, "inline", "Content-ID: <"+cid+">\r\n")
+		}
+		fmt.Fprintf(&b, "--%s--\r\n--%s--\r\n", rel, alt)
+	}
+	for _, a := range m.Attachments {
+		writeBase64(&b, mixed, a, "attachment", "")
+	}
+	fmt.Fprintf(&b, "--%s--\r\n", mixed)
+	return b.Bytes()
+}
+
+// writeQP writes one quoted-printable UTF-8 part of a multipart body.
+func writeQP(b *bytes.Buffer, boundary, contentType, text string) {
+	fmt.Fprintf(b, "--%s\r\nContent-Type: %s; charset=utf-8\r\nContent-Transfer-Encoding: quoted-printable\r\n\r\n", boundary, contentType)
+	qp := quotedprintable.NewWriter(b)
+	_, _ = qp.Write([]byte(strings.ReplaceAll(text, "\n", "\r\n")))
 	_ = qp.Close()
 	b.WriteString("\r\n")
-	for _, a := range m.Attachments {
-		ct := a.ContentType
-		if ct == "" {
-			ct = "application/octet-stream"
-		}
-		name := strings.Map(func(r rune) rune {
-			if r == '"' || r == '\\' || r < 0x20 || r == 0x7f {
-				return '_'
-			}
-			return r
-		}, a.Name)
-		fmt.Fprintf(&b, "--%s\r\nContent-Type: %s\r\nContent-Transfer-Encoding: base64\r\nContent-Disposition: attachment; filename=\"%s\"\r\n\r\n",
-			boundary, headerSafe(ct), name)
-		enc := base64.StdEncoding.EncodeToString(a.Data)
-		for len(enc) > 76 {
-			b.WriteString(enc[:76] + "\r\n")
-			enc = enc[76:]
-		}
-		b.WriteString(enc + "\r\n")
+}
+
+// writeBase64 writes one base64 part with the given disposition; extra is
+// more header lines, each ending in CRLF.
+func writeBase64(b *bytes.Buffer, boundary string, a plugin.Attachment, disposition, extra string) {
+	ct := a.ContentType
+	if ct == "" {
+		ct = "application/octet-stream"
 	}
-	fmt.Fprintf(&b, "--%s--\r\n", boundary)
-	return b.Bytes()
+	name := strings.Map(func(r rune) rune {
+		if r == '"' || r == '\\' || r < 0x20 || r == 0x7f {
+			return '_'
+		}
+		return r
+	}, a.Name)
+	fmt.Fprintf(b, "--%s\r\nContent-Type: %s\r\nContent-Transfer-Encoding: base64\r\n%sContent-Disposition: %s; filename=\"%s\"\r\n\r\n",
+		boundary, headerSafe(ct), extra, disposition, name)
+	enc := base64.StdEncoding.EncodeToString(a.Data)
+	for len(enc) > 76 {
+		b.WriteString(enc[:76] + "\r\n")
+		enc = enc[76:]
+	}
+	b.WriteString(enc + "\r\n")
 }
 
 // headerSafe removes CR and LF so a message or field cannot add headers.

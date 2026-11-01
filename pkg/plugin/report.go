@@ -11,6 +11,11 @@ type ReportMail struct {
 	Subject      string
 	// Text is the plain-text body.
 	Text string
+	// HTML is an optional HTML body. When set, a sender that supports it
+	// sends the text and the HTML as alternatives and shows Inline images
+	// in the HTML by their ContentID ("cid:" URLs).
+	HTML   string
+	Inline []Attachment
 	// To overrides the notifier's recipients when not empty. It comes
 	// from the config file, never from an API request.
 	To          []string
@@ -22,6 +27,9 @@ type Attachment struct {
 	Name        string
 	ContentType string
 	Data        []byte
+	// ContentID names an Inline image for "cid:" references; it is empty
+	// on a downloadable attachment.
+	ContentID string
 }
 
 // ReportSender is optional on a Notifier: it sends a stored report on a
