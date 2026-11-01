@@ -29,8 +29,9 @@ import (
 func newTools(cfg *config.Config, plugins *pluginhost.Set, lim *rate.Limiter, perASN *probe.ASNLimits, view func() *rib.View) (*troubleshoot.Tools, error) {
 	var providers []probe.Provider
 	for _, p := range cfg.Providers {
-		if cfg.Remote(p) {
-			// Measured by the peer in its domain (#30), never probed here.
+		if !cfg.LocalProbe(p) {
+			// Measured by the peer in its domain (#30) or by probe agents
+			// (#230), never probed from here.
 			continue
 		}
 		src, err := parseAddr(p.SourceIP)
@@ -91,6 +92,14 @@ func newEngine(cfg *config.Config, plugins *pluginhost.Set, log *slog.Logger, on
 	for _, p := range cfg.Providers {
 		if cfg.Remote(p) {
 			// Measured by the peer in its domain (#30), never probed here.
+			continue
+		}
+		if p.Site != "" {
+			hop, err := parseAddr(p.NextHop)
+			if err != nil {
+				return nil, err
+			}
+			providers = append(providers, probe.Provider{Name: p.Name, Site: p.Site, SiteV6: !hop.Is4()})
 			continue
 		}
 		src, err := parseAddr(p.SourceIP)

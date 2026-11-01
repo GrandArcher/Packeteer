@@ -267,6 +267,12 @@ func (c *Config) Remote(p Provider) bool {
 	return p.Domain != "" && p.Domain != c.Domain
 }
 
+// LocalProbe reports whether this host probes provider p itself: it is in
+// this routing domain and no probe agents measure it (#230).
+func (c *Config) LocalProbe(p Provider) bool {
+	return !c.Remote(p) && p.Site == ""
+}
+
 // More-specific injection defaults and bounds (#56).
 const (
 	DefaultMoreSpecificMaxRoutes = 100
@@ -654,6 +660,11 @@ type Provider struct {
 	// source_ip: the peer in that domain measures it, and next_hop is how
 	// this POP's routers reach it across the backbone.
 	Domain string `yaml:"domain"`
+	// Site (#230) makes probe agents at that site measure the provider
+	// from where its traffic leaves. Needs a probers entry of type agent.
+	// source_ip, fwmark, and dscp must be empty: the agent declares its
+	// own. The edge router's path check does not apply.
+	Site string `yaml:"site"`
 	// PathCheck is the first-hop probe-path check for this provider
 	// (#150). Nil or true checks; false opts out, for a source_ip whose
 	// traffic does not leave the edge directly through next_hop.

@@ -71,7 +71,7 @@ func (e Entry) Ident() string {
 func Entries(cfg *config.Config) []Entry {
 	var out []Entry
 	for _, p := range cfg.Providers {
-		if cfg.Remote(p) {
+		if !cfg.LocalProbe(p) {
 			continue
 		}
 		src, serr := netip.ParseAddr(p.SourceIP)

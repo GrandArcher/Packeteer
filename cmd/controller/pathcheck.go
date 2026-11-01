@@ -78,7 +78,7 @@ type pathChecker struct {
 func pathTargets(cfg *config.Config) []pathTarget {
 	var out []pathTarget
 	for _, p := range cfg.Providers {
-		if cfg.Remote(p) || !p.PathCheckOn() {
+		if !cfg.LocalProbe(p) || !p.PathCheckOn() {
 			continue
 		}
 		src, serr := netip.ParseAddr(p.SourceIP)

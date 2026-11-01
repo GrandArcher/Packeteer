@@ -88,7 +88,7 @@ func (p *preflightSource) providers(ctx context.Context, cfg *config.Config) []c
 	}
 	var out []checks.Provider
 	for _, pr := range cfg.Providers {
-		if cfg.Remote(pr) {
+		if !cfg.LocalProbe(pr) {
 			continue
 		}
 		row := checks.Provider{Name: pr.Name, SourceIP: pr.SourceIP, NextHop: pr.NextHop, Egress: checks.EgressUnchecked}

@@ -14,7 +14,10 @@ RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
     -o /out/packeteer ./cmd/controller \
  && CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
     go build -trimpath -ldflags "-s -w -X main.version=${VERSION}" \
-    -o /out/packeteer-reflector ./cmd/reflector
+    -o /out/packeteer-reflector ./cmd/reflector \
+ && CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
+    go build -trimpath -ldflags "-s -w -X main.version=${VERSION}" \
+    -o /out/packeteer-agent ./cmd/agent
 
 # ---- runtime stage ----
 # Alpine (not distroless) so exec plugins written as shell scripts work in the
@@ -26,6 +29,9 @@ COPY --from=build /out/packeteer /usr/local/bin/packeteer
 # TWAMP-Light reflector for the reordering measurement (#224). Run it on a
 # responder host: docker run ... --entrypoint packeteer-reflector IMAGE
 COPY --from=build /out/packeteer-reflector /usr/local/bin/packeteer-reflector
+# Probe agent for remote sites (#230). Run it on a host inside the network
+# being measured: docker run ... --entrypoint packeteer-agent IMAGE
+COPY --from=build /out/packeteer-agent /usr/local/bin/packeteer-agent
 COPY config.example.yaml /etc/packeteer/config.example.yaml
 
 # Runs as root inside the container: raw ICMP sockets and BGP port 179 need

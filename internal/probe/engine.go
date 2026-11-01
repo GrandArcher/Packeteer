@@ -9,6 +9,7 @@ import (
 	"net/netip"
 	"slices"
 	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -34,13 +35,29 @@ type Provider struct {
 	// Marking tags this provider's probe packets when its Source is shared
 	// with other providers (#157).
 	Marking sockmark.Marking
+	// Site, when set, makes the provider measured only by probe agents at
+	// that site (#230). Source and Marking are then unset: the agent
+	// knows its own source address and tag for the provider.
+	Site string
+	// SiteV6 is the address family of a site provider's probe source,
+	// which this host cannot see: targets of the other family are skipped
+	// as for a local provider.
+	SiteV6 bool
+}
+
+// is4 reports whether the provider probes IPv4 targets.
+func (p Provider) is4() bool {
+	if p.Site != "" {
+		return !p.SiteV6
+	}
+	return p.Source.Is4()
 }
 
 // Request builds a probe request from this provider toward target, with
 // its tag.
 func (p Provider) Request(target netip.Addr, count int, timeout time.Duration) plugin.ProbeRequest {
 	return plugin.ProbeRequest{Provider: p.Name, Source: p.Source, Target: target,
-		Count: count, Timeout: timeout, Mark: p.Marking.Mark, DSCP: p.Marking.DSCP}
+		Count: count, Timeout: timeout, Mark: p.Marking.Mark, DSCP: p.Marking.DSCP, Site: p.Site}
 }
 
 // NamedProber is one entry of the ordered prober chain.
@@ -166,6 +183,11 @@ type Result struct {
 	// decision engine adds passive agreement for the path that carries the
 	// traffic. Measurement only unless thresholds.require_evidence is on.
 	Confidence Confidence `json:"confidence"`
+	// Site and Agent are the site and probe agent (#230) that took the
+	// measurement, comma-separated when the hosts behind Stats came from
+	// several. Empty for a measurement taken on this host.
+	Site  string `json:"site,omitempty"`
+	Agent string `json:"agent,omitempty"`
 	// Share is the raw evidence behind Stats and the target sources that
 	// listed the prefix, kept only for Options.OnBatch (herd, #260). It is
 	// nil in stored results.
@@ -194,6 +216,7 @@ func (r Result) OK() bool { return r.Err == "" }
 type ProviderStatus struct {
 	Name   string     `json:"name"`
 	Source netip.Addr `json:"source"`
+	Site   string     `json:"site,omitempty"` // probe agents' site (#230); Source is then unset
 	Up     bool       `json:"up"`
 	Reason string     `json:"reason,omitempty"`
 	Since  time.Time  `json:"since"`
@@ -408,7 +431,7 @@ func New(providers []Provider, probers []NamedProber, sources []NamedSource, opt
 		indWake: make(chan struct{}, 1)}
 	now := opt.Now()
 	for _, p := range providers {
-		e.status[p.Name] = ProviderStatus{Name: p.Name, Source: p.Source, Up: true, Since: now}
+		e.status[p.Name] = ProviderStatus{Name: p.Name, Source: p.Source, Site: p.Site, Up: true, Since: now}
 	}
 	return e, nil
 }
@@ -1166,7 +1189,7 @@ func (e *Engine) runRound(ctx context.Context, allow func(plugin.Target) bool, m
 		}
 		probed[t.Prefix] = struct{}{}
 		for _, p := range e.providers {
-			if p.Source.Is4() != t.Host.Is4() {
+			if p.is4() != t.Host.Is4() {
 				continue // provider cannot reach this address family
 			}
 			pin, candidates := targetProbeAddrs(t)
@@ -1814,6 +1837,12 @@ func (e *Engine) probeOne(ctx context.Context, p Provider, prefix netip.Prefix, 
 		return res, false
 	}
 	defer func() { <-sem }()
+	if p.Site != "" {
+		// The prober memory is per host and shared with local providers,
+		// which skip agent probers; a site provider must neither read
+		// nor feed it.
+		return e.runChain(ctx, res, p, count, 0, nil)
+	}
 	return e.runChain(ctx, res, p, count, e.proberStart(host), func(i int) { e.noteProber(host, i) })
 }
 
@@ -1827,6 +1856,11 @@ func (e *Engine) runChain(ctx context.Context, res Result, p Provider, count, st
 	var fallback *Result
 	for i := start; i < len(e.probers); i++ {
 		pr := e.probers[i]
+		// A provider with a site is measured only by probe agents (#230),
+		// and an agent prober serves only such providers.
+		if _, remote := pr.Prober.(plugin.RemoteProber); remote != (p.Site != "") {
+			continue
+		}
 		if err := e.opt.PerASN.Wait(ctx, host, count); err != nil {
 			errs = append(errs, fmt.Errorf("rate limit: %w", err))
 			break
@@ -1850,6 +1884,7 @@ func (e *Engine) runChain(ctx context.Context, res Result, p Provider, count, st
 		}
 		r := res
 		r.Prober, r.Stats, r.Time = pr.Name, Compute(raw), e.opt.Now()
+		r.Site, r.Agent = raw.Site, raw.Agent
 		if e.keepShare() {
 			r.Share = &Share{Hosts: []HostRaw{{Sent: raw.Sent, RTTs: slices.Clone(raw.RTTs)}}}
 		}
@@ -1866,6 +1901,9 @@ func (e *Engine) runChain(ctx context.Context, res Result, p Provider, count, st
 	}
 	if fallback != nil {
 		return *fallback, false
+	}
+	if len(errs) == 0 {
+		errs = append(errs, errors.New("no prober can serve this provider"))
 	}
 	res.Err, res.Time = errors.Join(errs...).Error(), e.opt.Now()
 	return res, false
@@ -1920,8 +1958,15 @@ func combineHosts(provider string, prefix netip.Prefix, hosts []netip.Addr, samp
 	res.Time = used[len(used)-1].res.Time
 	parts := make([]Stats, len(used))
 	answered := false
+	sites, agents := map[string]bool{}, map[string]bool{}
 	for i, s := range used {
 		parts[i] = s.res.Stats
+		if s.res.Site != "" {
+			sites[s.res.Site] = true
+		}
+		if s.res.Agent != "" {
+			agents[s.res.Agent] = true
+		}
 		if s.res.Share != nil {
 			if res.Share == nil {
 				res.Share = &Share{}
@@ -1934,7 +1979,13 @@ func combineHosts(provider string, prefix netip.Prefix, hosts []netip.Addr, samp
 		}
 	}
 	res.Stats = combineStats(parts)
+	res.Site, res.Agent = joinNames(sites), joinNames(agents)
 	return res
+}
+
+// joinNames is the sorted, comma-separated keys of set.
+func joinNames(set map[string]bool) string {
+	return strings.Join(slices.Sorted(maps.Keys(set)), ",")
 }
 
 // combineStats pools per-host statistics. RTT is the reply-weighted mean.

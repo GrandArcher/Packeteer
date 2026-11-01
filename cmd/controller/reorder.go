@@ -23,7 +23,7 @@ func newReorderMonitor(cfg *config.Config, log *slog.Logger, lim probe.Limiter, 
 	}
 	var providers []probe.Provider
 	for _, p := range cfg.Providers {
-		if cfg.Remote(p) {
+		if !cfg.LocalProbe(p) {
 			continue
 		}
 		src, err := parseAddr(p.SourceIP)

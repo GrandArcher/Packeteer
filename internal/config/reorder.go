@@ -177,7 +177,7 @@ func (c *Config) reorderCycle() time.Duration {
 	}
 	trains := 0
 	for _, p := range c.Providers {
-		if !c.Remote(p) {
+		if c.LocalProbe(p) {
 			trains += perProvider
 		}
 	}

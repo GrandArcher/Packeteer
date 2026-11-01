@@ -201,13 +201,14 @@ While the streak is short and this evaluation compared the paths, that prefix is
 | Key | Required | Meaning |
 |---|---|---|
 | `name` | yes | Unique. |
-| `source_ip` | yes, except in another domain | Source address of probes. Unique across providers unless every provider on it sets a distinct `fwmark` or `dscp`. Must be configured on the host. Same address family as `next_hop`. Must be empty for a provider in another `domain`. |
+| `source_ip` | yes, except in another domain or with a `site` | Source address of probes. Unique across providers unless every provider on it sets a distinct `fwmark` or `dscp`. Must be configured on the host. Same address family as `next_hop`. Must be empty for a provider in another `domain`. |
 | `next_hop` | yes | BGP next hop used if this provider is selected. Also how a learned route is matched to a provider. For a provider in another domain, the address this POP's routers reach that POP's exit at across the backbone. |
 | `asn` | no | The provider's own AS, 1 to 4294967295. A label: the Providers page shows it with the type and AS search finds the provider by it. No decision reads it. `0` or omitted is not set. |
 | `type` | no | `transit`, `peer`, or `customer`. A label shown on the Providers page; no decision reads it. Registry hygiene counts the paths through a `customer` provider as the customer cone ([registry.md](registry.md)). Omitted is not set. |
 | `local_pref` | no | Local preference on routes steered to this provider (#132). Wins over `local_pref_cause` and the global `local_pref`. Omit it to use those. `0` is rejected in every mode. Set it above the edge's native local preference. |
 | `communities` | no | Extra communities on routes steered to this provider (#132), added after the cause's. The export policy does not match them. The same rules as [`communities_cause`](#communities_cause): at most 16, standard or large, no duplicates, not `packeteer_community`, and no `0:x` or `65535:x`. Omit it for none. An unknown provider name is rejected. Changing it requires a restart. |
 | `domain` | no | Routing domain (POP) the provider exits in (#30). Empty or equal to the top-level `domain` is local. A provider in another domain is not probed here: the peer there measures it. Needs `federation` and an `inter_dc_rtt` entry for the domain; `bmp` and `add_path` do not apply. |
+| `site` | no | Site whose probe agents measure this provider (#230, [agents.md](agents.md)). Letters, digits, `_`, `.`, `-`, at most 64 characters. Needs a `probers` entry of type `agent`. `source_ip`, `fwmark`, and `dscp` must be empty (the agent declares them), and it cannot be combined with `domain`. `next_hop` stays required, and its address family is the family the provider is probed in: the agent's `source_ip` for it must be the same family. `path_check` does not apply. |
 | `exclude` | no | `true`: still probe, never select for an improvement. |
 | `group` | no | Load-balancing group. Empty means the provider is not in a group. Letters, digits, `_`, `.`, `-`, at most 64 characters, starting with a letter or digit. |
 | `precedence` | no | Commit-control preference. Lower is preferred. `0` or omitted means 100. 0-10000. The highest precedence among providers that can take commit traffic is the last resort. |
@@ -1118,6 +1119,22 @@ Built-in types are listed in [PLUGINS.md](PLUGINS.md). Their `config` keys:
 |---|---|---|
 | `socket` | `auto` | `auto` (raw, then unprivileged datagram), `raw`, `udp`. |
 | `packet_interval` | `100ms` | Not negative. Spacing between echoes in one run. |
+
+### Prober `agent`
+
+The controller side of the probe agents (#230, [agents.md](agents.md)). It serves only providers with a `site`, and probes for them go to the agents at that site. It listens for agents over mutual TLS 1.3 and never announces.
+
+| Key | Default | Meaning |
+|---|---|---|
+| `listen` | required | `host:port` agents connect to. |
+| `cert_file`, `key_file` | required | PEM certificate and key the controller presents. |
+| `ca_file` | required | PEM CA that signs the controller's and every agent's certificate. |
+| `crl_file` | none | PEM CRL signed by a CA in `ca_file`. Read at start (an unreadable or unsigned list is an error) and again within a second of a change. A listed agent is refused and not used. |
+| `agents` | required | Agents that may connect, 1-256: `name` (the certificate CN or a DNS SAN, unique) and `max_pps` (packets per second sent to that agent, 1-100000, default 100). |
+| `poll_wait` | `5s` | How long an idle agent's poll is held, 100ms-30s. It is the agent's heartbeat. |
+| `max_age` | 3 x `poll_wait` | How long an agent stays usable after it last called, longer than `poll_wait`, at most 10m. |
+
+The agent's own file (`packeteer-agent -config`) has `controller_url`, `server_name`, `cert_file`, `key_file`, `ca_file`, `site`, `providers` (`name`, `source_ip`, `fwmark`, `dscp`), `prober` (`type`, `config`; default `icmp`), and `max_concurrent` (default 8, at most 256; one poll takes at most 64 tasks). Unknown keys are errors.
 
 ### Prober `tcp`
 
