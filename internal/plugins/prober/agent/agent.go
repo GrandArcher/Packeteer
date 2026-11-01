@@ -143,7 +143,7 @@ func New(c plugin.Config, env plugin.Env) (plugin.Prober, error) {
 	if cfg.PollWait == 0 {
 		cfg.PollWait = DefaultPollWait
 	}
-	if cfg.PollWait < 100*time.Millisecond || cfg.PollWait > 30*time.Second {
+	if cfg.PollWait < 100*time.Millisecond || cfg.PollWait > agentwire.MaxPollWait {
 		return nil, fmt.Errorf("poll_wait %s must be between 100ms and 30s", cfg.PollWait)
 	}
 	if cfg.MaxAge == 0 {

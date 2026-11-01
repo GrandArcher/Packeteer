@@ -95,7 +95,11 @@ func newEngine(cfg *config.Config, plugins *pluginhost.Set, log *slog.Logger, on
 			continue
 		}
 		if p.Site != "" {
-			providers = append(providers, probe.Provider{Name: p.Name, Site: p.Site})
+			hop, err := parseAddr(p.NextHop)
+			if err != nil {
+				return nil, err
+			}
+			providers = append(providers, probe.Provider{Name: p.Name, Site: p.Site, SiteV6: !hop.Is4()})
 			continue
 		}
 		src, err := parseAddr(p.SourceIP)

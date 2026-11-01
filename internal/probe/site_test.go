@@ -2,6 +2,7 @@ package probe
 
 import (
 	"context"
+	"net/netip"
 	"strings"
 	"sync"
 	"testing"
@@ -108,5 +109,35 @@ func TestSourceUnavailableFromAnAgentFailsOnlyThatProviderClosed(t *testing.T) {
 				t.Errorf("%s must stay up", st.Name)
 			}
 		}
+	}
+}
+
+// A site provider is probed only toward targets of its own address family,
+// as a local provider is, so an agent is never asked for the other one.
+func TestSiteProviderKeepsToItsAddressFamily(t *testing.T) {
+	var mu sync.Mutex
+	asked := map[string][]string{}
+	remote := remoteProber{&fakeProber{fn: func(_ context.Context, req plugin.ProbeRequest) (plugin.ProbeResult, error) {
+		mu.Lock()
+		asked[req.Provider] = append(asked[req.Provider], req.Target.String())
+		mu.Unlock()
+		return plugin.ProbeResult{Sent: req.Count, RTTs: ms(40), Site: req.Site, Agent: "agent-1"}, nil
+	}}}
+	pfx6 := netip.MustParsePrefix("2001:db8:1::/48")
+	e, err := New([]Provider{{Name: "far4", Site: "dc-b"}, {Name: "far6", Site: "dc-b", SiteV6: true}},
+		[]NamedProber{{Name: "agents", Prober: remote}}, src(plugin.Target{Prefix: pfx1}, plugin.Target{Prefix: pfx6}), opts())
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.RunOnce(context.Background())
+	for provider, targets := range asked {
+		for _, tg := range targets {
+			if is6 := netip.MustParseAddr(tg).Is6(); is6 != (provider == "far6") {
+				t.Errorf("%s was asked to probe %s", provider, tg)
+			}
+		}
+	}
+	if len(asked["far4"]) == 0 || len(asked["far6"]) == 0 {
+		t.Fatalf("asked = %v, want both providers measured", asked)
 	}
 }

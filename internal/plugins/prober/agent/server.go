@@ -171,7 +171,7 @@ func (p *Prober) servePoll(w http.ResponseWriter, r *http.Request) {
 
 	timer := time.NewTimer(p.cfg.PollWait)
 	defer timer.Stop()
-	free := min(req.Free, agentwire.MaxTasksPerPoll)
+	free := req.Free
 	for {
 		if tasks := p.take(a, free); len(tasks) > 0 {
 			p.respond(w, a, agentwire.PollResponse{Tasks: tasks})
@@ -195,6 +195,9 @@ func (p *Prober) servePoll(w http.ResponseWriter, r *http.Request) {
 }
 
 func checkPoll(req agentwire.PollRequest) error {
+	if req.Free < 1 || req.Free > agentwire.MaxTasksPerPoll {
+		return fmt.Errorf("free %d must be between 1 and %d", req.Free, agentwire.MaxTasksPerPoll)
+	}
 	if !agentwire.NameRE.MatchString(req.Site) {
 		return fmt.Errorf("site %q is not a valid name", req.Site)
 	}

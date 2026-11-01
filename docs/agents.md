@@ -1,6 +1,6 @@
 # Distributed probe agents (#230)
 
-Lab-proven only, not on a public edge. Default mode stays `observe`.
+Tested in process over mutual TLS only (no container lab job yet); not proven on a public edge. Default mode stays `observe`.
 
 A probe agent is a small process you run inside your own network (another POP, a site behind an edge router, a data center). It measures a provider from where that provider's traffic leaves and reports to one central controller. It is not the herd ([herd.md](herd.md)), which shares measurements between different networks.
 

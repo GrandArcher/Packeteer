@@ -29,6 +29,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/GrandArcher/Packeteer/internal/agentwire"
+	"github.com/GrandArcher/Packeteer/internal/sockmark"
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
 )
 
@@ -36,8 +37,9 @@ import (
 const (
 	DefaultMaxConcurrent = 8
 	maxConcurrentLimit   = 256
-	// pollSlack is how long past the controller's poll_wait a poll may
-	// take before the agent gives up on it.
+	// pollSlack is added to the longest poll the controller may hold
+	// (agentwire.MaxPollWait) for the bound on one poll. A connection that
+	// goes silent is dropped after it and the poll is retried.
 	pollSlack = 10 * time.Second
 	minRetry  = time.Second
 	maxRetry  = 15 * time.Second
@@ -97,6 +99,8 @@ type Agent struct {
 	resultURL string
 	client    *http.Client
 	sem       chan struct{} // one slot per running probe
+	// pollTimeout bounds one poll call.
+	pollTimeout time.Duration
 }
 
 // Load reads and strictly decodes an agent config file.
@@ -136,7 +140,7 @@ func New(cfg Config, prober plugin.Prober, log *slog.Logger) (*Agent, error) {
 	if cfg.CertFile == "" || cfg.KeyFile == "" || cfg.CAFile == "" {
 		return nil, errors.New("cert_file, key_file, and ca_file are required (mutual TLS)")
 	}
-	a := &Agent{cfg: cfg, log: log, providers: map[string]provider{}, sem: make(chan struct{}, cfg.MaxConcurrent),
+	a := &Agent{cfg: cfg, log: log, pollTimeout: agentwire.MaxPollWait + pollSlack, providers: map[string]provider{}, sem: make(chan struct{}, cfg.MaxConcurrent),
 		pollURL: "https://" + u.Host + agentwire.PollPath, resultURL: "https://" + u.Host + agentwire.ResultsPath}
 	if len(cfg.Providers) == 0 || len(cfg.Providers) > agentwire.MaxProviders {
 		return nil, fmt.Errorf("providers: list between 1 and %d", agentwire.MaxProviders)
@@ -152,8 +156,8 @@ func New(cfg Config, prober plugin.Prober, log *slog.Logger) (*Agent, error) {
 		if err != nil {
 			return nil, fmt.Errorf("providers[%d] (%s): source_ip %q is not an IP address", i, p.Name, p.SourceIP)
 		}
-		if p.DSCP < 0 || p.DSCP > 63 {
-			return nil, fmt.Errorf("providers[%d] (%s): dscp %d must be between 0 and 63", i, p.Name, p.DSCP)
+		if p.DSCP < 0 || p.DSCP > sockmark.MaxDSCP {
+			return nil, fmt.Errorf("providers[%d] (%s): dscp %d must be between 0 and %d", i, p.Name, p.DSCP, sockmark.MaxDSCP)
 		}
 		a.providers[p.Name] = provider{source: src, mark: p.FwMark, dscp: uint8(p.DSCP)}
 		a.names = append(a.names, p.Name)
@@ -245,7 +249,7 @@ func sleep(ctx context.Context, d time.Duration) {
 func (a *Agent) poll(ctx context.Context, free int) ([]agentwire.Task, error) {
 	var resp agentwire.PollResponse
 	req := agentwire.PollRequest{Site: a.cfg.Site, Providers: a.names, Free: free}
-	if err := a.post(ctx, a.pollURL, req, &resp, 0); err != nil {
+	if err := a.post(ctx, a.pollURL, req, &resp, a.pollTimeout); err != nil {
 		return nil, err
 	}
 	if len(resp.Tasks) > free {
@@ -319,6 +323,9 @@ func (a *Agent) request(t agentwire.Task) (plugin.ProbeRequest, error) {
 	target, err := netip.ParseAddr(t.Target)
 	if err != nil {
 		return plugin.ProbeRequest{}, fmt.Errorf("target %q is not an IP address", t.Target)
+	}
+	if target.Is4() != p.source.Is4() {
+		return plugin.ProbeRequest{}, fmt.Errorf("target %s is not in the address family of provider %s source %s", target, t.Provider, p.source)
 	}
 	if t.Count < 1 || t.Count > agentwire.MaxCount || t.TimeoutMS < 1 || t.TimeoutMS > agentwire.MaxTimeoutMS {
 		return plugin.ProbeRequest{}, fmt.Errorf("count %d or timeout %dms outside the limits", t.Count, t.TimeoutMS)

@@ -2,8 +2,12 @@ package agent
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"io"
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"net/netip"
 	"os"
 	"path/filepath"
@@ -95,6 +99,7 @@ func TestRequestUsesTheDeclaredSourceAndRefusesTheRest(t *testing.T) {
 		"bad target":          {Provider: "carrier-a", Target: "host", Count: 3, TimeoutMS: 200},
 		"too many packets":    {Provider: "carrier-a", Target: "198.51.100.7", Count: agentwire.MaxCount + 1, TimeoutMS: 200},
 		"long timeout":        {Provider: "carrier-a", Target: "198.51.100.7", Count: 3, TimeoutMS: agentwire.MaxTimeoutMS + 1},
+		"other family":        {Provider: "carrier-a", Target: "2001:db8::7", Count: 3, TimeoutMS: 200},
 		"zero packets":        {Provider: "carrier-a", Target: "198.51.100.7", TimeoutMS: 200},
 	} {
 		if _, err := a.request(task); err == nil {
@@ -124,5 +129,50 @@ func TestAgentRunsNothingWithoutAController(t *testing.T) {
 	}
 	if n := p.calls.Load(); n != 0 {
 		t.Fatalf("%d probes ran with no controller", n)
+	}
+}
+
+// A connection that goes silent, such as a dropped NAT mapping, does not
+// hang the agent: the poll times out and is tried again.
+func TestPollTimesOutOnASilentController(t *testing.T) {
+	ca := pkitest.New(t)
+	srvLeaf := ca.Issue(t, "controller")
+	agentLeaf := ca.Issue(t, "agent-a")
+	var polls atomic.Int32
+	release := make(chan struct{})
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		polls.Add(1)
+		select {
+		case <-release:
+		case <-r.Context().Done():
+		}
+	}))
+	cert, err := tls.LoadX509KeyPair(srvLeaf.CertFile, srvLeaf.KeyFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	caPEM, err := os.ReadFile(ca.CAFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pool := x509.NewCertPool()
+	pool.AppendCertsFromPEM(caPEM)
+	srv.TLS = &tls.Config{Certificates: []tls.Certificate{cert}, ClientCAs: pool, ClientAuth: tls.RequireAndVerifyClientCert}
+	srv.StartTLS()
+	defer srv.Close()
+	defer close(release)
+
+	cfg := testConfig(t, srv.URL)
+	cfg.CertFile, cfg.KeyFile, cfg.CAFile, cfg.ServerName = agentLeaf.CertFile, agentLeaf.KeyFile, ca.CAFile, "controller"
+	a, err := New(cfg, &countProber{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.pollTimeout = 200 * time.Millisecond
+	ctx, cancel := context.WithTimeout(context.Background(), 2500*time.Millisecond)
+	defer cancel()
+	_ = a.Run(ctx)
+	if n := polls.Load(); n < 2 {
+		t.Fatalf("%d polls reached the silent controller, want a retry after the timeout", n)
 	}
 }

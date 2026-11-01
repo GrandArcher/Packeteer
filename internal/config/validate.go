@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/GrandArcher/Packeteer/internal/agentwire"
 	"github.com/GrandArcher/Packeteer/internal/exchange"
 	"github.com/GrandArcher/Packeteer/internal/netpfx"
 	"github.com/GrandArcher/Packeteer/internal/sockmark"
@@ -229,7 +230,7 @@ func (c *Config) validateProviders(add func(string, ...any)) {
 // validateSite checks a provider measured by probe agents (#230).
 func (c *Config) validateSite(p Provider, label string, add func(string, ...any)) {
 	switch {
-	case !validProviderGroup(p.Site):
+	case !agentwire.NameRE.MatchString(p.Site):
 		add("%s: site %q must be 1-64 characters of letters, digits, '_', '.' or '-', starting with a letter or digit", label, p.Site)
 	case c.Remote(p):
 		add("%s: site and domain cannot both be set (a peer measures a provider in another domain)", label)

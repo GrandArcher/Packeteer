@@ -283,7 +283,7 @@ func TestProbeInFlightFailsWhenItsAgentDies(t *testing.T) {
 	}
 }
 
-func TestRevokedCertificateIsRefusedAtStartAndWhileRunning(t *testing.T) {
+func TestRevokedCertificateIsRefusedAtStart(t *testing.T) {
 	l := newLab(t, 0, "agent-ok", "agent-bad")
 	bad := l.ca.Issue(t, "agent-bad")
 	l.ca.WriteCRL(t, l.crl, 2, bad)
@@ -304,7 +304,6 @@ func TestRevokedCertificateIsRefusedAtStartAndWhileRunning(t *testing.T) {
 	if !strings.Contains(l.logs.String(), "certificate revoked") {
 		t.Fatalf("no refusal logged: %s", l.logs.String())
 	}
-
 }
 
 func TestRevokingARunningAgentStopsUsingIt(t *testing.T) {
@@ -524,4 +523,15 @@ func mustCfg(t *testing.T, y string) plugin.Config {
 		t.Fatal(err)
 	}
 	return c
+}
+
+func TestPollRejectsBadFree(t *testing.T) {
+	l := newLab(t, 0, "agent-a")
+	leaf := l.ca.Issue(t, "agent-a")
+	for _, free := range []int{-1, 0, agentwire.MaxTasksPerPoll + 1} {
+		body, _ := json.Marshal(agentwire.PollRequest{Site: "site-a", Providers: []string{"carrier-a"}, Free: free})
+		if got := postAs(t, l, leaf, agentwire.PollPath, body); got != http.StatusBadRequest {
+			t.Errorf("free %d: status %d, want 400", free, got)
+		}
+	}
 }

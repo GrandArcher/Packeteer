@@ -39,6 +39,18 @@ type Provider struct {
 	// that site (#230). Source and Marking are then unset: the agent
 	// knows its own source address and tag for the provider.
 	Site string
+	// SiteV6 is the address family of a site provider's probe source,
+	// which this host cannot see: targets of the other family are skipped
+	// as for a local provider.
+	SiteV6 bool
+}
+
+// is4 reports whether the provider probes IPv4 targets.
+func (p Provider) is4() bool {
+	if p.Site != "" {
+		return !p.SiteV6
+	}
+	return p.Source.Is4()
 }
 
 // Request builds a probe request from this provider toward target, with
@@ -1177,7 +1189,7 @@ func (e *Engine) runRound(ctx context.Context, allow func(plugin.Target) bool, m
 		}
 		probed[t.Prefix] = struct{}{}
 		for _, p := range e.providers {
-			if p.Site == "" && p.Source.Is4() != t.Host.Is4() {
+			if p.is4() != t.Host.Is4() {
 				continue // provider cannot reach this address family
 			}
 			pin, candidates := targetProbeAddrs(t)

@@ -5,7 +5,10 @@
 // uses the ones it declares for the provider.
 package agentwire
 
-import "regexp"
+import (
+	"regexp"
+	"time"
+)
 
 // Paths the controller serves, over mutual TLS.
 const (
@@ -23,6 +26,8 @@ const (
 	MaxProviders = 64
 	// MaxTasksPerPoll is the most tasks one poll may return.
 	MaxTasksPerPoll = 64
+	// MaxPollWait is the longest a controller may hold an idle poll.
+	MaxPollWait = 30 * time.Second
 	// MaxBody bounds a request body on both sides.
 	MaxBody = 1 << 20
 )

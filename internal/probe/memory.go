@@ -83,7 +83,7 @@ func (e *Engine) liveHosts(targets []plugin.Target) map[netip.Addr]struct{} {
 	live := make(map[netip.Addr]struct{})
 	for _, t := range targets {
 		for _, p := range e.providers {
-			if t.Host.IsValid() && p.Site == "" && p.Source.Is4() != t.Host.Is4() {
+			if t.Host.IsValid() && p.is4() != t.Host.Is4() {
 				continue
 			}
 			pin, candidates := targetProbeAddrs(t)
