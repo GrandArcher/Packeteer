@@ -145,6 +145,9 @@ type Config struct {
 	// Subranges turns on sub-range measurement inside wide prefixes
 	// (#121). Off when omitted.
 	Subranges *SubrangesConfig `yaml:"subranges"`
+	// EBPF turns on the eBPF flow collector (#229). Off when omitted. It
+	// can replace listen or run beside it.
+	EBPF *EBPFConfig `yaml:"ebpf"`
 }
 
 // SubrangesConfig is the flow source's sub-range measurement block (#121).
@@ -262,6 +265,11 @@ type Source struct {
 	sub  *subranges
 	ctr  *counters
 
+	ebpf      *EBPFConfig
+	openFlows func(string, int) (flowReader, error)
+	ebpfEvery time.Duration
+	ebpfRun   *ebpfRun
+
 	// connMu guards conns and gen. Start after Stop binds again: a reload
 	// can replace a flow source that keeps the same listen address.
 	connMu sync.Mutex
@@ -280,8 +288,12 @@ func New(c plugin.Config, env plugin.Env) (plugin.TargetSource, error) {
 	if err := c.Decode(&cfg); err != nil {
 		return nil, err
 	}
-	if len(cfg.Listen) == 0 {
-		return nil, fmt.Errorf("listen is required (omit the flow source to disable collection)")
+	if len(cfg.Listen) == 0 && cfg.EBPF == nil {
+		return nil, fmt.Errorf("listen or ebpf is required (omit the flow source to disable collection)")
+	}
+	eb, err := newEBPF(cfg.EBPF)
+	if err != nil {
+		return nil, err
 	}
 	seen := map[string]bool{}
 	var listen []string
@@ -398,6 +410,9 @@ func New(c plugin.Config, env plugin.Env) (plugin.TargetSource, error) {
 		dec:          &decoder{},
 		win:          win,
 		ctr:          newCounters(cfg.MaxPrefixes),
+		ebpf:         eb,
+		openFlows:    openFlows,
+		ebpfEvery:    ebpfPoll,
 	}, nil
 }
 
@@ -646,7 +661,7 @@ func (s *Source) Start(ctx context.Context) error {
 		return err
 	}
 	s.connMu.Lock()
-	if len(s.conns) > 0 {
+	if len(s.conns) > 0 || s.ebpfRun != nil {
 		s.connMu.Unlock()
 		return errors.New("flow source already started")
 	}
@@ -676,6 +691,9 @@ func (s *Source) Start(ctx context.Context) error {
 	s.gen++
 	gen := s.gen
 	s.connMu.Unlock()
+	if s.ebpf != nil {
+		s.startEBPF(ctx)
+	}
 	q := make(chan batch, s.workers*queuePerWorker)
 	for range s.workers {
 		s.wg.Add(1)
@@ -709,6 +727,7 @@ func (s *Source) Stop(ctx context.Context) error {
 	gen := s.gen
 	s.connMu.Unlock()
 	s.closeGen(gen)
+	s.stopEBPF()
 	done := make(chan struct{})
 	go func() {
 		s.wg.Wait()

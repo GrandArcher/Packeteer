@@ -241,6 +241,9 @@ scorer:
 #       listen:
 #         - "0.0.0.0:2055"            # NetFlow v5/v9 and IPFIX
 #         - "0.0.0.0:6343"            # sFlow
+#       # ebpf:                     # optional unsampled collector on this host: counts every packet leaving the interface. docs/ebpf.md
+#       #   interface: eth0
+#       #   max_entries: 65536
 #       window: 5m
 #       top_n: 100                  # priority tier, probed every probe.interval. An active improvement stays probed after it falls off the list, until the improvement retires
 #       max_targets: 100            # cap. 0 or omitted matches top_n. Up to 100000 and max_prefixes. A larger value also returns the next prefixes
@@ -268,6 +271,7 @@ scorer:
 #   - type: span                # passive problem detection from a mirror port. Needs NET_RAW.
 #     config:                   # Does not announce; problem prefixes are probed first.
 #       interface: eth1         # mirror NIC; or pcap_file: /etc/packeteer/span.pcap (lab replay)
+#       # ebpf: false           # true: capture through an eBPF ring buffer (Linux 6.6, BPF + NET_ADMIN); falls back to AF_PACKET. docs/ebpf.md
 #       local:
 #         - 192.0.2.0/24        # your own networks (required)
 #       window: 5m

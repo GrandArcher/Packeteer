@@ -6,6 +6,7 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 
 ### Added
 
+- Optional eBPF data path: `span` `ebpf: true` captures through a ring buffer and a `flow` `ebpf` block counts every packet unsampled; both fall back when unsupported (#229).
 - Report subscriptions: a `timeseries` email carries the before/after loss and latency charts as inline PNGs drawn in the controller, with the CSV still attached (#136).
 - GeoIP country database: docs/geoip.md and an opt-in `geoip` download (URL, account in env vars, refresh); the Overview checklist flags an unreadable database or failing download (#135).
 - Threat-intelligence feed ingest (`threat_feeds`, `http` feed): listed networks become mitigation rules only for explicit rules, through mitigation, capped; lab-proven (#134).

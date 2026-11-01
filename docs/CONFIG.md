@@ -1281,7 +1281,9 @@ Off unless this source is listed. NetFlow v5, NetFlow v9, IPFIX, and sFlow v5. R
 
 | Key | Default | Bounds |
 |---|---|---|
-| `listen` | none | Required. One `host:port` or a list. Host is an IP address or empty. Duplicate addresses are errors. |
+| `listen` | none | One `host:port` or a list. Host is an IP address or empty. Duplicate addresses are errors. Required unless `ebpf` is set. |
+| `ebpf.interface` | none | Turns on the eBPF flow collector (#229, [ebpf.md](ebpf.md)): every packet leaving this Ethernet interface is counted in the kernel, unsampled. Needs Linux 6.6, `BPF` and `NET_ADMIN`. If it cannot load, the source logs a warning and keeps `listen`. |
+| `ebpf` `max_entries` | 65536 | 1024-4194304. Kernel flow table size (source, destination, protocol). The least recently used flow is evicted past it. |
 | `window` | `5m` | `1s`-`24h`. |
 | `top_n` | 100 | 1-100000, and at most `max_prefixes`. Priority tier, probed every `probe.interval`. |
 | `max_targets` | `top_n` | 0 matches `top_n`. Otherwise from `top_n` through 100000, and at most `max_prefixes`. Cap on the probed set. |
@@ -1371,6 +1373,7 @@ A remote prefix is a problem when retransmissions / data segments >= `retrans_pc
 | `interface` | none | The mirror interface inside the container (host networking). Exactly one of `interface` or `pcap_file`. |
 | `pcap_file` | none | Absolute path to a classic pcap (not pcapng) mounted into the container. Replayed once at startup with its timestamps shifted to now. For labs and incident review. |
 | `promiscuous` | true | Interface capture only. Promiscuous mode is a socket membership: the kernel drops it when the socket closes or the process dies. |
+| `ebpf` | false | Interface capture only (#229, [ebpf.md](ebpf.md)). Reads frame heads from an eBPF ring buffer instead of an AF_PACKET socket. If the program cannot load (kernel older than 6.6, missing `BPF`/`NET_ADMIN`, a tun device), the source logs a warning and uses AF_PACKET. Ring buffer overflows are counted in `packeteer_truncated_total{limit="ebpf_ring_full"}`. |
 | `local` | none | Required. Your own networks, CIDRs, no host bits, no default route, no duplicates. |
 | `exclude` | none | Remote CIDRs to ignore, no host bits, no duplicates. |
 | `window` | `5m` | `10s`-`24h`. |
