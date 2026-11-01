@@ -22,11 +22,11 @@ Not done: the programs do not track TCP state or RTT in the kernel, and they do 
 
 ## Lab tests and CPU per Gbit
 
-CI runs these as root on a veth pair (`.github/workflows/ci.yml`, step "eBPF data path"): the same frames give the same `span` counts on both paths, a tun device falls back, and a 40-packet burst that a 1:1000 sampler cannot export is counted exactly by the flow collector. Run them yourself on a Linux 6.6 host:
+CI runs these as root on a veth pair (`.github/workflows/ci.yml`, step "eBPF data path"): the same frames give the same `span` counts on both paths, a tun device falls back, and a 40-packet burst that a 1:1000 sampler model never exports to the `listen` collector is counted exactly by the eBPF collector of the same source. Run them yourself on a Linux 6.6 host:
 
 ```
 go test -c -o span.test ./internal/plugins/source/span/
 sudo ./span.test -test.run EBPF -test.v
 ```
 
-`TestEBPFCPUPerGbit` sends 200,000 frames of 1,514 bytes through each path and logs the process CPU above a no-capture baseline, per Gbit. The numbers depend on the machine; read them from the CI log or your own run.
+`TestEBPFCPUPerGbit` sends 200,000 frames of 1,502 bytes through each path and logs the process CPU above a no-capture baseline, per Gbit. The numbers depend on the machine; read them from the CI log or your own run.

@@ -3,7 +3,6 @@
 package span
 
 import (
-	"context"
 	"net"
 	"net/netip"
 	"testing"
@@ -38,32 +37,14 @@ func newInjector(t *testing.T, dev string) *injector {
 
 func (j *injector) send(b []byte) error { return unix.Sendto(j.fd, b, 0, j.to) }
 
-func startLab(t *testing.T, y string) *Source {
-	t.Helper()
-	s := mustSource(t, y)
-	ctx, cancel := context.WithCancel(context.Background())
-	t.Cleanup(cancel)
-	if err := s.Start(ctx); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		stop, c := context.WithTimeout(context.Background(), 5*time.Second)
-		defer c()
-		if err := s.Stop(stop); err != nil {
-			t.Errorf("stop: %v", err)
-		}
-	})
-	return s
-}
-
 // The eBPF path and the AF_PACKET path read the same traffic on a veth
 // pair and must give the same counts (#229).
 func TestEBPFVethSameMetricsAsAFPacket(t *testing.T) {
 	labtest.RequireRoot(t)
 	dev, _ := labtest.Veth(t, "192.0.2.1/24")
 	y := "interface: " + dev + "\npromiscuous: false\nlocal: [192.0.2.0/24, \"2001:db8:1::/48\"]\n"
-	raw := startLab(t, y)
-	kern := startLab(t, y+"ebpf: true\n")
+	raw := startSource(t, mustSource(t, y))
+	kern := startSource(t, mustSource(t, y+"ebpf: true\n"))
 	if _, ok := kern.cap.(ebpfCapture); !ok {
 		t.Fatalf("ebpf: true used %T; the lab kernel must support TCX (Linux 6.6)", kern.cap)
 	}
@@ -71,12 +52,8 @@ func TestEBPFVethSameMetricsAsAFPacket(t *testing.T) {
 		t.Fatal("ebpf off used the eBPF path")
 	}
 	j := newInjector(t, dev)
-	for _, p := range fixturePackets() {
-		if p.dst.Addr() != retransV4 && p.src.Addr() != retransV4 {
-			continue
-		}
-		p.vlan = 0
-		if err := j.send(frame(p)); err != nil {
+	for _, f := range retransFrames() {
+		if err := j.send(f); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -92,7 +69,7 @@ func TestEBPFVethSameMetricsAsAFPacket(t *testing.T) {
 func TestEBPFUnsupportedDeviceFallsBack(t *testing.T) {
 	labtest.RequireRoot(t)
 	dev := labtest.Tun(t)
-	s := startLab(t, "interface: "+dev+"\npromiscuous: false\nebpf: true\nlocal: [192.0.2.0/24]\n")
+	s := startSource(t, mustSource(t, "interface: "+dev+"\npromiscuous: false\nebpf: true\nlocal: [192.0.2.0/24]\n"))
 	if _, ok := s.cap.(ebpfCapture); ok {
 		t.Fatal("eBPF attached to a device without an Ethernet header")
 	}

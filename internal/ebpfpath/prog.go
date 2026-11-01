@@ -250,18 +250,18 @@ func CaptureProgram(ringFD, dropsFD int) asm.Instructions {
 	return b.insns
 }
 
-// Frame returns the captured frame of one ring buffer record and the
-// length the frame had on the wire. ok is false for a malformed record.
-func Frame(rec []byte) (frame []byte, wire int, ok bool) {
+// Frame returns the captured frame of one ring buffer record. ok is false
+// for a malformed record.
+func Frame(rec []byte) (frame []byte, ok bool) {
 	if len(rec) < recordHeader {
-		return nil, 0, false
+		return nil, false
 	}
 	wireLen := binary.NativeEndian.Uint32(rec[0:4])
 	capLen := binary.NativeEndian.Uint32(rec[4:8])
 	if capLen == 0 || capLen > SnapLen || int(capLen) > len(rec)-recordHeader || capLen > wireLen {
-		return nil, 0, false
+		return nil, false
 	}
-	return rec[recordHeader : recordHeader+int(capLen)], int(wireLen), true
+	return rec[recordHeader : recordHeader+int(capLen)], true
 }
 
 // FlowKey identifies one counted flow.

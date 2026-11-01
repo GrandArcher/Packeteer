@@ -666,9 +666,11 @@ func TestMetricsRIBPrefixes(t *testing.T) {
 		t.Fatalf("truncation series missing or not a zero counter:\n%s", bare)
 	}
 	col := NewCollector("test", "observe", nil)
-	col.SetTruncated(func() map[string]uint64 { return map[string]uint64{"max_prefixes": 7, "max_flows": 3, "workers": 5} })
+	col.SetTruncated(func() map[string]uint64 {
+		return map[string]uint64{"max_prefixes": 7, "max_flows": 3, "workers": 5, "ebpf_ring_full": 9}
+	})
 	got := string(Metrics(col.Snapshot()))
-	for _, want := range []string{`packeteer_truncated_total{limit="max_prefixes"} 7`, `packeteer_truncated_total{limit="max_flows"} 3`, `packeteer_truncated_total{limit="workers"} 5`} {
+	for _, want := range []string{`packeteer_truncated_total{limit="max_prefixes"} 7`, `packeteer_truncated_total{limit="max_flows"} 3`, `packeteer_truncated_total{limit="workers"} 5`, `packeteer_truncated_total{limit="ebpf_ring_full"} 9`} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("metrics missing %s\n%s", want, got)
 		}

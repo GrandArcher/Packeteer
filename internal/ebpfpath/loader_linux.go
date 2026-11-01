@@ -156,7 +156,7 @@ func (c *Capture) Read(buf []byte) (int, error) {
 			}
 			return 0, err
 		}
-		frame, _, ok := Frame(c.rec.RawSample)
+		frame, ok := Frame(c.rec.RawSample)
 		if !ok {
 			continue
 		}

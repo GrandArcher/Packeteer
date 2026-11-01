@@ -67,6 +67,12 @@ func (s *Source) startEBPF(ctx context.Context) {
 	pctx, cancel := context.WithCancel(ctx)
 	run := &ebpfRun{cancel: cancel}
 	s.connMu.Lock()
+	if s.ebpfRun != nil {
+		s.connMu.Unlock()
+		cancel()
+		_ = f.Close()
+		return
+	}
 	s.ebpfRun = run
 	s.connMu.Unlock()
 	s.log.Info("flow eBPF collector", "interface", s.ebpf.Interface, "max_entries", s.ebpf.MaxEntries)

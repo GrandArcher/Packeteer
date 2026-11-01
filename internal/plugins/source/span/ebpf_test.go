@@ -55,6 +55,12 @@ func startEBPFSource(t *testing.T, y string, ebpf, raw func(string, bool, time.D
 	t.Helper()
 	s := mustSource(t, y)
 	s.openEBPF, s.openRaw = ebpf, raw
+	return startSource(t, s)
+}
+
+// startSource starts s and stops it when the test ends.
+func startSource(t *testing.T, s *Source) *Source {
+	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	if err := s.Start(ctx); err != nil {

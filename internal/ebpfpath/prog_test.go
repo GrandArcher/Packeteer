@@ -34,7 +34,7 @@ func TestProgramsAssemble(t *testing.T) {
 	}
 }
 
-// Every path out of the capture program returns TCX_NEXT (-1): the
+// Every path out of both programs returns TCX_NEXT (-1): the
 // program must never drop or redirect traffic.
 func TestProgramsOnlyReturnNext(t *testing.T) {
 	for name, insns := range map[string]asm.Instructions{
@@ -91,9 +91,9 @@ func rec(wire, capLen uint32, payload int) []byte {
 }
 
 func TestFrame(t *testing.T) {
-	f, wire, ok := Frame(rec(1500, 60, SnapLen))
-	if !ok || wire != 1500 || len(f) != 60 || f[59] != 59 {
-		t.Fatalf("frame len=%d wire=%d ok=%v", len(f), wire, ok)
+	f, ok := Frame(rec(1500, 60, SnapLen))
+	if !ok || len(f) != 60 || f[59] != 59 {
+		t.Fatalf("frame len=%d ok=%v", len(f), ok)
 	}
 	for name, b := range map[string][]byte{
 		"short header":        {1, 2, 3},
@@ -102,7 +102,7 @@ func TestFrame(t *testing.T) {
 		"capture over record": rec(1500, 100, 50),
 		"capture over wire":   rec(40, 60, SnapLen),
 	} {
-		if _, _, ok := Frame(b); ok {
+		if _, ok := Frame(b); ok {
 			t.Errorf("%s accepted", name)
 		}
 	}
