@@ -53,7 +53,7 @@ func TestStartGeoIPFeedsCountryRules(t *testing.T) {
 	// rules.New opens the file, so the policy builds only because the
 	// download landed first.
 	policySet(t, [2]string{"rules", fmt.Sprintf("geoip_db: %s\nrules: [{name: xa, action: deny, providers: [transit-a], countries: [XA]}]", path)})
-	if st := f.Status(); st.LastError != "" || st.LastCheck.IsZero() {
+	if st := f.Status(); st.LastError != "" {
 		t.Fatalf("status = %+v", st)
 	}
 }

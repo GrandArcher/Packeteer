@@ -39,9 +39,6 @@ const (
 
 // Status is the outcome of the download, for the setup checklist.
 type Status struct {
-	// LastCheck is the last attempt, successful or not. Zero before the
-	// first one.
-	LastCheck time.Time
 	// LastError is empty after a successful check.
 	LastError string
 }
@@ -55,9 +52,8 @@ type Fetcher struct {
 	client *http.Client
 	log    *slog.Logger
 
-	mu   sync.Mutex
-	last time.Time
-	err  string
+	mu  sync.Mutex
+	err string
 }
 
 // NewFetcher builds a fetcher from a validated block. user and key are the
@@ -83,11 +79,11 @@ func NewFetcher(cfg config.GeoIP, user, key string, log *slog.Logger) (*Fetcher,
 	return f, nil
 }
 
-// Status reports the last attempt.
+// Status reports the outcome of the last attempt.
 func (f *Fetcher) Status() Status {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return Status{LastCheck: f.last, LastError: f.err}
+	return Status{LastError: f.err}
 }
 
 // Start fetches once when the file is missing or older than the refresh
@@ -124,7 +120,6 @@ func (f *Fetcher) Refresh(ctx context.Context) (err error) {
 	defer func() {
 		f.mu.Lock()
 		defer f.mu.Unlock()
-		f.last = time.Now()
 		f.err = ""
 		if err != nil {
 			f.err = err.Error()

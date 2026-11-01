@@ -94,7 +94,7 @@ func TestRefreshFormats(t *testing.T) {
 			if got := networks(t, path, "XB"); len(got) != 1 || got[0] != "2001:db8::/32" {
 				t.Fatalf("XB networks = %v", got)
 			}
-			if st := f.Status(); st.LastError != "" || st.LastCheck.IsZero() {
+			if st := f.Status(); st.LastError != "" {
 				t.Fatalf("status = %+v", st)
 			}
 			if left, _ := filepath.Glob(filepath.Join(filepath.Dir(path), ".geoip-*")); len(left) != 0 {
@@ -203,7 +203,7 @@ func TestRefreshFailureKeepsFile(t *testing.T) {
 			if left, _ := filepath.Glob(filepath.Join(filepath.Dir(path), ".geoip-*")); len(left) != 0 {
 				t.Fatalf("temp files left: %v", left)
 			}
-			if st := f.Status(); st.LastError == "" || st.LastCheck.IsZero() {
+			if st := f.Status(); st.LastError == "" {
 				t.Fatalf("status = %+v", st)
 			}
 		})
@@ -244,7 +244,6 @@ func TestStart(t *testing.T) {
 	if err := f.Start(ctx); err != nil || calls.Load() != 1 {
 		t.Fatalf("missing file: err=%v calls=%d", err, calls.Load())
 	}
-	f.Refresh(ctx)
 	calls.Store(0)
 	if err := f.Start(ctx); err != nil || calls.Load() != 0 {
 		t.Fatalf("fresh file: err=%v calls=%d", err, calls.Load())
