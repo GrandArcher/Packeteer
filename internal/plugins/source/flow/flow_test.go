@@ -468,8 +468,8 @@ func TestListenFailure(t *testing.T) {
 
 func TestConfigErrors(t *testing.T) {
 	tests := map[string]string{
-		"":                             "listen is required",
-		"listen: []":                   "listen is required",
+		"":                             "listen or ebpf is required",
+		"listen: []":                   "listen or ebpf is required",
 		"listen: not-a-port":           "not host:port",
 		"listen: example.invalid:2055": "must be an IP address",
 		"listen: 127.0.0.1:99999":      "port",

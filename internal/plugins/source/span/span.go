@@ -75,9 +75,13 @@ func init() { plugin.Sources.Register(TypeName, New) }
 
 // Config is the span source's config block.
 type Config struct {
-	Interface   string        `yaml:"interface"`
-	PcapFile    string        `yaml:"pcap_file"`
-	Promiscuous *bool         `yaml:"promiscuous"`
+	Interface   string `yaml:"interface"`
+	PcapFile    string `yaml:"pcap_file"`
+	Promiscuous *bool  `yaml:"promiscuous"`
+	// EBPF captures with the eBPF data path instead of an AF_PACKET
+	// socket (#229). Off by default. When the kernel or the container
+	// cannot load it, the source logs a warning and uses AF_PACKET.
+	EBPF        bool          `yaml:"ebpf"`
 	Local       []string      `yaml:"local"`
 	Exclude     []string      `yaml:"exclude"`
 	Window      time.Duration `yaml:"window"`
@@ -104,11 +108,14 @@ type Source struct {
 	iface      string
 	pcapFile   string
 	promisc    bool
+	useEBPF    bool
 	exclude    []netip.Prefix
 	agg4, agg6 int
 	th         passive.Thresholds
 	maxTargets int
 	now        func() time.Time
+	openEBPF   func(string, bool, time.Duration) (capture, error)
+	openRaw    func(string, bool, time.Duration) (capture, error)
 
 	win   *passive.Window
 	trk   *tracker
@@ -121,6 +128,7 @@ type Source struct {
 	dropMu  sync.Mutex
 	dropped map[netip.Prefix]struct{}
 
+	capMu    sync.Mutex
 	cap      capture
 	stop     chan struct{}
 	stopOnce sync.Once
@@ -144,6 +152,9 @@ func New(c plugin.Config, env plugin.Env) (plugin.TargetSource, error) {
 	}
 	if cfg.PcapFile != "" && cfg.Promiscuous != nil {
 		return nil, fmt.Errorf("promiscuous applies only to interface capture")
+	}
+	if cfg.PcapFile != "" && cfg.EBPF {
+		return nil, fmt.Errorf("ebpf applies only to interface capture")
 	}
 	if cfg.PcapFile != "" && !filepath.IsAbs(cfg.PcapFile) {
 		return nil, fmt.Errorf("pcap_file %q must be an absolute path inside the container", cfg.PcapFile)
@@ -252,12 +263,15 @@ func New(c plugin.Config, env plugin.Env) (plugin.TargetSource, error) {
 		iface:      cfg.Interface,
 		pcapFile:   cfg.PcapFile,
 		promisc:    promisc,
+		useEBPF:    cfg.EBPF,
 		exclude:    exclude,
 		agg4:       cfg.AggregateV4,
 		agg6:       cfg.AggregateV6,
 		th:         th,
 		maxTargets: cfg.MaxTargets,
 		now:        time.Now,
+		openEBPF:   openEBPF,
+		openRaw:    openCapture,
 		win:        passive.NewWindow(cfg.Window, cfg.MaxPrefixes),
 		stop:       make(chan struct{}),
 	}
@@ -277,7 +291,13 @@ func New(c plugin.Config, env plugin.Env) (plugin.TargetSource, error) {
 // Truncated is how many prefixes and connections the caps turned away
 // since start.
 func (s *Source) Truncated() map[string]uint64 {
-	return map[string]uint64{"max_prefixes": s.win.Truncated(), "max_flows": s.trk.droppedTotal()}
+	out := map[string]uint64{"max_prefixes": s.win.Truncated(), "max_flows": s.trk.droppedTotal()}
+	s.capMu.Lock()
+	if e, ok := s.cap.(ebpfCapture); ok {
+		out["ebpf_ring_full"] = e.drops()
+	}
+	s.capMu.Unlock()
+	return out
 }
 
 // Fresh tells the probe engine to read Targets every round: the list
@@ -358,15 +378,36 @@ func (s *Source) Start(ctx context.Context) error {
 		}()
 		return nil
 	}
-	c, err := openCapture(s.iface, s.promisc, readTimeout)
+	c, err := s.openLive()
 	if err != nil {
 		return err
 	}
+	s.capMu.Lock()
 	s.cap = c
-	s.log.Info("span capturing", "interface", s.iface, "promiscuous", s.promisc)
+	s.capMu.Unlock()
 	s.wg.Add(1)
 	go s.readLoop(ctx, c)
 	return nil
+}
+
+// openLive opens the eBPF path when asked, and falls back to AF_PACKET
+// when it cannot load: an old kernel, a missing capability, or a seccomp
+// profile that blocks bpf(2) must not stop the source.
+func (s *Source) openLive() (capture, error) {
+	if s.useEBPF {
+		c, err := s.openEBPF(s.iface, s.promisc, readTimeout)
+		if err == nil {
+			s.log.Info("span capturing", "interface", s.iface, "path", "ebpf", "promiscuous", s.promisc)
+			return c, nil
+		}
+		s.log.Warn("span eBPF path unavailable, using AF_PACKET", "interface", s.iface, "err", err)
+	}
+	c, err := s.openRaw(s.iface, s.promisc, readTimeout)
+	if err != nil {
+		return nil, err
+	}
+	s.log.Info("span capturing", "interface", s.iface, "path", "af_packet", "promiscuous", s.promisc)
+	return c, nil
 }
 
 // Stop ends capture or replay and waits for the reader.
