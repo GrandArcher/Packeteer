@@ -1837,6 +1837,12 @@ func (e *Engine) probeOne(ctx context.Context, p Provider, prefix netip.Prefix, 
 		return res, false
 	}
 	defer func() { <-sem }()
+	if p.Site != "" {
+		// The prober memory is per host and shared with local providers,
+		// which skip agent probers; a site provider must neither read
+		// nor feed it.
+		return e.runChain(ctx, res, p, count, 0, nil)
+	}
 	return e.runChain(ctx, res, p, count, e.proberStart(host), func(i int) { e.noteProber(host, i) })
 }
 

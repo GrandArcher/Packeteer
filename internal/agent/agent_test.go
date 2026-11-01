@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/json"
 	"io"
 	"log/slog"
 	"net/http"
@@ -132,21 +133,14 @@ func TestAgentRunsNothingWithoutAController(t *testing.T) {
 	}
 }
 
-// A connection that goes silent, such as a dropped NAT mapping, does not
-// hang the agent: the poll times out and is tried again.
-func TestPollTimesOutOnASilentController(t *testing.T) {
+// tlsController serves h over mutual TLS and returns the agent config
+// that trusts it.
+func tlsController(t *testing.T, h http.Handler) Config {
+	t.Helper()
 	ca := pkitest.New(t)
 	srvLeaf := ca.Issue(t, "controller")
 	agentLeaf := ca.Issue(t, "agent-a")
-	var polls atomic.Int32
-	release := make(chan struct{})
-	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		polls.Add(1)
-		select {
-		case <-release:
-		case <-r.Context().Done():
-		}
-	}))
+	srv := httptest.NewUnstartedServer(h)
 	cert, err := tls.LoadX509KeyPair(srvLeaf.CertFile, srvLeaf.KeyFile)
 	if err != nil {
 		t.Fatal(err)
@@ -159,11 +153,25 @@ func TestPollTimesOutOnASilentController(t *testing.T) {
 	pool.AppendCertsFromPEM(caPEM)
 	srv.TLS = &tls.Config{Certificates: []tls.Certificate{cert}, ClientCAs: pool, ClientAuth: tls.RequireAndVerifyClientCert}
 	srv.StartTLS()
-	defer srv.Close()
-	defer close(release)
-
+	t.Cleanup(srv.Close)
 	cfg := testConfig(t, srv.URL)
 	cfg.CertFile, cfg.KeyFile, cfg.CAFile, cfg.ServerName = agentLeaf.CertFile, agentLeaf.KeyFile, ca.CAFile, "controller"
+	return cfg
+}
+
+// A connection that goes silent, such as a dropped NAT mapping, does not
+// hang the agent: the poll times out and is tried again.
+func TestPollTimesOutOnASilentController(t *testing.T) {
+	var polls atomic.Int32
+	release := make(chan struct{})
+	cfg := tlsController(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		polls.Add(1)
+		select {
+		case <-release:
+		case <-r.Context().Done():
+		}
+	}))
+	defer close(release)
 	a, err := New(cfg, &countProber{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatal(err)
@@ -174,5 +182,31 @@ func TestPollTimesOutOnASilentController(t *testing.T) {
 	_ = a.Run(ctx)
 	if n := polls.Load(); n < 2 {
 		t.Fatalf("%d polls reached the silent controller, want a retry after the timeout", n)
+	}
+}
+
+// The controller refuses a poll that offers more slots than one poll may
+// return, so an agent with a larger max_concurrent offers only that many.
+func TestPollOffersAtMostOnePollsWorth(t *testing.T) {
+	var free atomic.Int32
+	cfg := tlsController(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req agentwire.PollRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		free.Store(int32(req.Free))
+		_ = json.NewEncoder(w).Encode(agentwire.PollResponse{})
+	}))
+	cfg.MaxConcurrent = 200
+	a, err := New(cfg, &countProber{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	_ = a.Run(ctx)
+	if got := free.Load(); got != agentwire.MaxTasksPerPoll {
+		t.Fatalf("poll offered %d free slots, want %d", got, agentwire.MaxTasksPerPoll)
 	}
 }

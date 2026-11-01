@@ -203,7 +203,7 @@ func (a *Agent) Run(ctx context.Context) error {
 	}()
 	retry, failing := minRetry, false
 	for ctx.Err() == nil {
-		free := cap(a.sem) - len(a.sem)
+		free := min(cap(a.sem)-len(a.sem), agentwire.MaxTasksPerPoll)
 		if free == 0 {
 			sleep(ctx, 50*time.Millisecond)
 			continue

@@ -10,6 +10,7 @@ mode: observe
 asn: 64512
 router_id: 192.0.2.10
 probers:
+  - type: fixed
   - type: agent
     config: {}
 providers:
@@ -36,8 +37,15 @@ func TestProviderSite(t *testing.T) {
 			t.Errorf("%s: err = %v, want %q", name, err, tc.want)
 		}
 	}
-	noAgent := strings.Replace(siteBase, "  - type: agent\n    config: {}\n", "  - type: fixed\n", 1) + "  - {name: far, site: dc-b, next_hop: 203.0.113.12}\n"
+	noAgent := strings.Replace(siteBase, "  - type: agent\n    config: {}\n", "", 1) + "  - {name: far, site: dc-b, next_hop: 203.0.113.12}\n"
 	if _, err := Parse([]byte(noAgent)); err == nil || !strings.Contains(err.Error(), "site requires a probers entry of type agent") {
 		t.Errorf("no agent prober: err = %v", err)
+	}
+}
+
+func TestAgentOnlyProbersCannotMeasureLocalProviders(t *testing.T) {
+	agentOnly := strings.Replace(siteBase, "  - type: fixed\n", "", 1) + "  - {name: far, site: dc-b, next_hop: 203.0.113.12}\n"
+	if _, err := Parse([]byte(agentOnly)); err == nil || !strings.Contains(err.Error(), "no probers entry other than agent") {
+		t.Fatalf("err = %v, want a rejection of the local provider", err)
 	}
 }

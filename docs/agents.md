@@ -47,7 +47,7 @@ probers:
         - name: agent-b
 ```
 
-Keys are in [CONFIG.md](CONFIG.md#prober-agent). A provider with a `site` needs a `probers` entry of type `agent`, and the agent prober is used only for such providers; list the usual probers too for providers without a site. A site provider is probed toward targets of its `next_hop` address family, so the agent's `source_ip` for it must be that family (use one provider per family for dual stack). `path_check`, `probe.reorder`, and `probe.indirect` do not apply to a provider with a site, because they start from the controller host.
+Keys are in [CONFIG.md](CONFIG.md#prober-agent). A provider with a `site` needs a `probers` entry of type `agent`, and the agent prober is used only for such providers; a provider without a site needs one of the usual probers too; a config with such a provider and only `agent` probers is rejected. A site provider is probed toward targets of its `next_hop` address family, so the agent's `source_ip` for it must be that family (use one provider per family for dual stack). `path_check`, `probe.reorder`, and `probe.indirect` do not apply to a provider with a site, because they start from the controller host.
 
 ## Agent config
 

@@ -178,6 +178,9 @@ func (c *Config) validateProviders(add func(string, ...any)) {
 				add("%s: fwmark and dscp must be empty for a provider in domain %s (the peer there measures it)", label, p.Domain)
 			}
 		} else if p.Site == "" {
+			if !slices.ContainsFunc(c.Probers, func(s PluginSpec) bool { return s.Type != "agent" }) {
+				add("%s: no probers entry other than agent can measure a provider without a site", label)
+			}
 			if src, err = netip.ParseAddr(p.SourceIP); err != nil {
 				add("%s: source_ip %q is not a valid IP address", label, p.SourceIP)
 			} else {

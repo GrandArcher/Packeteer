@@ -1134,7 +1134,7 @@ The controller side of the probe agents (#230, [agents.md](agents.md)). It serve
 | `poll_wait` | `5s` | How long an idle agent's poll is held, 100ms-30s. It is the agent's heartbeat. |
 | `max_age` | 3 x `poll_wait` | How long an agent stays usable after it last called, longer than `poll_wait`, at most 10m. |
 
-The agent's own file (`packeteer-agent -config`) has `controller_url`, `server_name`, `cert_file`, `key_file`, `ca_file`, `site`, `providers` (`name`, `source_ip`, `fwmark`, `dscp`), `prober` (`type`, `config`; default `icmp`), and `max_concurrent` (default 8, at most 256). Unknown keys are errors.
+The agent's own file (`packeteer-agent -config`) has `controller_url`, `server_name`, `cert_file`, `key_file`, `ca_file`, `site`, `providers` (`name`, `source_ip`, `fwmark`, `dscp`), `prober` (`type`, `config`; default `icmp`), and `max_concurrent` (default 8, at most 256; one poll takes at most 64 tasks). Unknown keys are errors.
 
 ### Prober `tcp`
 

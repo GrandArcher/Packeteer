@@ -60,7 +60,7 @@ type Config struct {
 	CRLFile string `yaml:"crl_file"`
 	// Agents lists the agents that may connect. A certificate whose CN or
 	// DNS SAN is not listed is refused, so removing an entry and
-	// reloading revokes that agent too.
+	// restarting revokes that agent too.
 	Agents []Agent `yaml:"agents"`
 	// PollWait is how long the controller holds an agent's poll when it
 	// has no work (default 5s). It is the agent's heartbeat.

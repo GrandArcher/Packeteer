@@ -141,3 +141,25 @@ func TestSiteProviderKeepsToItsAddressFamily(t *testing.T) {
 		t.Fatalf("asked = %v, want both providers measured", asked)
 	}
 }
+
+// Local and site providers probe the same hosts. The prober that answered
+// for one kind must not become the other kind's starting point.
+func TestSiteAndLocalProvidersKeepMeasuredOverManyRounds(t *testing.T) {
+	remote := remoteProber{&fakeProber{fn: func(_ context.Context, req plugin.ProbeRequest) (plugin.ProbeResult, error) {
+		return plugin.ProbeResult{Sent: req.Count, RTTs: ms(40), Site: req.Site, Agent: "agent-1"}, nil
+	}}}
+	for name, probers := range map[string][]NamedProber{
+		"agent last":  {{Name: "local", Prober: &fakeProber{fn: ok(10)}}, {Name: "agents", Prober: remote}},
+		"agent first": {{Name: "agents", Prober: remote}, {Name: "local", Prober: &fakeProber{fn: ok(10)}}},
+	} {
+		e := siteFixture(t, probers...)
+		for round := 1; round < 4; round++ {
+			e.RunOnce(context.Background())
+			for _, provider := range []string{"transit-a", "far"} {
+				if r := siteResult(t, e, provider); !r.OK() {
+					t.Errorf("%s round %d: %s = %+v, want a measurement", name, round, provider, r)
+				}
+			}
+		}
+	}
+}
