@@ -935,7 +935,7 @@ atlas:
 
 ### `report_subscriptions`
 
-Scheduled email report subscriptions (#34). Each entry emails one stored report (the same one `/api/reports/<report>` serves) as a CSV attachment. Needs `storage` (reports come from stored history) and a notifier of type `smtp`. Times are UTC. A failed send is logged, shown on `/api/subscriptions`, and tried again at the next scheduled time; sends missed while the controller was down are not replayed. Operators can send one at once with `POST /api/subscriptions/<name>/send`. Recipients come only from this file. Does not announce. See [ui.md](ui.md).
+Scheduled email report subscriptions (#34). Each entry emails one stored report (the same one `/api/reports/<report>` serves) as a CSV attachment; `timeseries` also gets its charts as inline PNGs (#136). Needs `storage` (reports come from stored history) and a notifier of type `smtp`. Times are UTC. A failed send is logged, shown on `/api/subscriptions`, and tried again at the next scheduled time; sends missed while the controller was down are not replayed. Operators can send one at once with `POST /api/subscriptions/<name>/send`. Recipients come only from this file. Does not announce. See [ui.md](ui.md).
 
 | Key | Default | Meaning |
 |---|---|---|
@@ -1634,7 +1634,7 @@ One plain-text email per event. The relay credentials are environment variables;
 
 Plus the [filter keys](#notifier-filters-every-notifier). Messages carry `X-Packeteer-Event` and `X-Packeteer-Severity` headers for mail rules. CR and LF are stripped from header values.
 
-An `smtp` notifier also sends [`report_subscriptions`](#report_subscriptions): one multipart email per report with a text summary and the CSV attached, headers `X-Packeteer-Report` and `X-Packeteer-Subscription`. The filter keys do not apply to reports; a subscription's `to` replaces the notifier's `to`.
+An `smtp` notifier also sends [`report_subscriptions`](#report_subscriptions): one multipart email per report with a text summary and the CSV attached (for `timeseries`, also an HTML part with inline PNG charts), headers `X-Packeteer-Report` and `X-Packeteer-Subscription`. The filter keys do not apply to reports; a subscription's `to` replaces the notifier's `to`.
 
 ### Notifier `snmptrap`
 

@@ -792,6 +792,10 @@ plugin_dir: /etc/packeteer/plugins
 #     weekday: monday
 #     at: "06:00"               # UTC
 #     notifier: smtp
+#   - name: weekly-graphs         # timeseries also sends loss and latency charts (#136)
+#     report: timeseries
+#     schedule: weekly
+#     notifier: smtp
 #   - name: monthly-savings
 #     report: savings
 #     schedule: monthly

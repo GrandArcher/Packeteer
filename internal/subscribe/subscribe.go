@@ -272,10 +272,16 @@ func Build(ctx context.Context, src Source, sub config.ReportSubscription, to ti
 	fmt.Fprintf(&text, "Rows: %d (CSV attached)\n\n", rep.Len())
 	text.WriteString("The same report is on the dashboard and at /api/reports/" + sub.Report + ".\n")
 	text.WriteString("Change or remove this subscription under report_subscriptions in the config file.\n")
-	return plugin.ReportMail{
+	mail := plugin.ReportMail{
 		Subscription: sub.Name, Report: sub.Report, To: sub.To,
 		Subject:     fmt.Sprintf("%s report %s", sub.Report, to.Format(time.DateOnly)),
 		Text:        text.String(),
 		Attachments: []plugin.Attachment{{Name: fmt.Sprintf("packeteer-%s-%s-%s.csv", sub.Report, from.Format(stamp), to.Format(stamp)), ContentType: "text/csv", Data: csv.Bytes()}},
-	}, nil
+	}
+	if rows, ok := rep.Rows.([]history.TimeSeriesRow); ok {
+		if err := addCharts(&mail, rows, from, to); err != nil {
+			return plugin.ReportMail{}, fmt.Errorf("report %s charts: %w", sub.Report, err)
+		}
+	}
+	return mail, nil
 }
