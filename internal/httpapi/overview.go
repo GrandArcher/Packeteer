@@ -27,6 +27,19 @@ type Setup struct {
 	// SimulatedProbes is config.SimulatedProbesNotice while a sim prober
 	// is configured (#103), else empty.
 	SimulatedProbes string
+	// GeoIP reports the state of the country databases (#135). Nil when no
+	// country rule and no download is configured.
+	GeoIP func() GeoIPState
+}
+
+// GeoIPState is what the setup checklist reads about the country databases.
+type GeoIPState struct {
+	// Unreadable lists the geoip_db files that country rules read and that
+	// cannot be opened now.
+	Unreadable []string
+	// UpdateError is the last error of the geoip download, empty when the
+	// last check worked or none ran.
+	UpdateError string
 }
 
 // Hint levels: todo is a step the operator still has to take before the
@@ -108,6 +121,7 @@ type Feature struct {
 // optional features, and a setup checklist. Read-only.
 type Overview struct {
 	meta
+	geoip     GeoIPState
 	Started   bool             `json:"started"`
 	Sources   []string         `json:"sources"`
 	Providers []ProviderHealth `json:"providers"`
@@ -190,6 +204,9 @@ func BuildOverview(snap Snapshot, setup Setup, features []Feature) Overview {
 
 		SynthesizeWarning: setup.SynthesizeWarning,
 		SimulatedProbes:   setup.SimulatedProbes,
+	}
+	if setup.GeoIP != nil {
+		out.geoip = setup.GeoIP()
 	}
 	for _, p := range snap.Peers {
 		if p.Established {
@@ -402,6 +419,16 @@ func setupHints(o Overview) []Hint {
 		add("rib", HintWarn, "No probed prefix is in the learned RIB",
 			"The edge router does not advertise any probed prefix exactly. Probe the exact prefixes your edge learns; only those can be compared with the current exit or ever be steered.",
 			"docs/CONFIG.md#source-static", FixTargets)
+	}
+	if len(o.geoip.Unreadable) > 0 {
+		add("geoip-missing", HintWarn, "Country rules have no readable database",
+			"A rule lists countries but "+strings.Join(o.geoip.Unreadable, ", ")+" cannot be read. Mount a MaxMind-format country database there, or set geoip.url to download one.",
+			"docs/geoip.md", FixPlugins)
+	}
+	if o.geoip.UpdateError != "" {
+		add("geoip-update", HintWarn, "The GeoIP database download is failing",
+			"The file stays as it is and the download is tried again at the next interval. Last error: "+o.geoip.UpdateError,
+			"docs/geoip.md", "")
 	}
 	history := false
 	for _, f := range o.Features {

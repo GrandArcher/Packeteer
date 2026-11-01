@@ -12,6 +12,7 @@ import (
 
 	"github.com/GrandArcher/Packeteer/internal/config"
 	"github.com/GrandArcher/Packeteer/internal/configedit"
+	"github.com/GrandArcher/Packeteer/internal/geoip"
 	"github.com/GrandArcher/Packeteer/internal/httpapi"
 	"github.com/GrandArcher/Packeteer/internal/pluginhost"
 	"github.com/GrandArcher/Packeteer/internal/plugins/oop"
@@ -189,8 +190,8 @@ func programSpecs(cfg *config.Config) []programSpec {
 
 // setupInfo is what the dashboard's first-run checklist reads from the
 // loaded config (#49): the target source types and the cap.
-func setupInfo(cfg *config.Config, plugins *pluginhost.Set) httpapi.Setup {
-	st := httpapi.Setup{DegradedLossPct: cfg.Probe.DegradedLossPct, DownLossPct: cfg.Probe.DownLossPct}
+func setupInfo(cfg *config.Config, plugins *pluginhost.Set, geo *geoip.Fetcher) httpapi.Setup {
+	st := httpapi.Setup{DegradedLossPct: cfg.Probe.DegradedLossPct, DownLossPct: cfg.Probe.DownLossPct, GeoIP: geoipSetup(cfg, geo)}
 	if cfg.MaxImprovements != nil {
 		st.MaxImprovements = *cfg.MaxImprovements
 	}

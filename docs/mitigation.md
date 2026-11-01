@@ -65,7 +65,7 @@ Every key is in [CONFIG.md](CONFIG.md#mitigation).
 
 ### Country policies (GeoIP)
 
-`source_countries` (up to 8 ISO codes) turns a FlowSpec rule into one rule per network of those countries, read from `mitigation.geoip_db` when the rule is added. Adjacent networks are merged first. The database is yours: mount it read-only (`-v "$PWD/GeoLite2-Country.mmdb:/etc/packeteer/GeoLite2-Country.mmdb:ro"`). Packeteer ships and downloads none. A country with no networks in the database is refused; one that needs more routes than `max_rules` is refused. The networks are fixed when the rule is added; add the rule again to pick up a newer database.
+`source_countries` (up to 8 ISO codes) turns a FlowSpec rule into one rule per network of those countries, read from `mitigation.geoip_db` when the rule is added. Adjacent networks are merged first. The database is yours: mount it read-only (`-v "$PWD/GeoLite2-Country.mmdb:/etc/packeteer/GeoLite2-Country.mmdb:ro"`). Packeteer ships none; the optional `geoip` block can download one ([geoip.md](geoip.md)). A country with no networks in the database is refused; one that needs more routes than `max_rules` is refused. The networks are fixed when the rule is added; add the rule again to pick up a newer database.
 
 ## API
 

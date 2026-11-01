@@ -63,6 +63,7 @@ func (c *Config) Validate() error {
 	c.Linkouts.Validate(add)
 	c.RingLG.Validate(add)
 	c.Atlas.Validate(add)
+	c.validateGeoIP(add)
 	c.Verify.Validate(add)
 
 	return errors.Join(errs...)

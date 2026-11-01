@@ -80,7 +80,7 @@ func allowedURL(raw string) (*url.URL, error) {
 	if err != nil || u.Host == "" {
 		return nil, fmt.Errorf("bad URL %q", raw)
 	}
-	if u.Scheme == "https" || (u.Scheme == "http" && config.LoopbackHost(u.Hostname())) {
+	if config.SecureURL(u) {
 		return u, nil
 	}
 	return nil, fmt.Errorf("refusing non-https URL %q", raw)

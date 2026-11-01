@@ -956,6 +956,16 @@ plugin_dir: /etc/packeteer/plugins
 #   cache_ttl: 10m
 #   timeout: 10s
 
+# GeoIP country database download (#135, docs/geoip.md). Off unless url is set.
+# Country rules (a rules policy with countries, mitigation source_countries)
+# read the file at geoip_db; Packeteer ships none. The account comes from the
+# PACKETEER_GEOIP_USER and PACKETEER_GEOIP_KEY environment variables (never put
+# it in this file). Read the database's terms first.
+# geoip:
+#   path: /var/lib/packeteer/GeoLite2-Country.mmdb
+#   url: https://download.maxmind.com/geoip/databases/GeoLite2-Country/download?suffix=tar.gz
+#   refresh: 168h
+
 # RIPE Atlas (#213, docs/atlas.md). Off unless enabled, and idle until the
 # PACKETEER_ATLAS_API_KEY environment variable holds your own API key (never
 # put it in this file). Creates ping or traceroute measurements of a prefix's
