@@ -92,7 +92,7 @@ func (c *Config) validateUpgrade(add func(string, ...any)) {
 	}
 	if pu, err := url.Parse(u.APIURL); err != nil || pu.Host == "" || pu.User != nil || pu.RawQuery != "" || pu.Fragment != "" {
 		add("upgrade.api_url %q must be an https URL with a host", u.APIURL)
-	} else if pu.Scheme != "https" && !(pu.Scheme == "http" && LoopbackHost(pu.Hostname())) {
+	} else if !SecureURL(pu) {
 		add("upgrade.api_url %q must be https (http only for a loopback address)", u.APIURL)
 	}
 	if !filepath.IsAbs(u.Dir) {
@@ -104,6 +104,12 @@ func (c *Config) validateUpgrade(add func(string, ...any)) {
 	if u.CheckInterval != 0 && !u.Enabled {
 		add("upgrade.check_interval needs upgrade.enabled: true")
 	}
+}
+
+// SecureURL reports whether u is https, or http to a loopback host (a local
+// mirror and the tests' fake servers).
+func SecureURL(u *url.URL) bool {
+	return u.Scheme == "https" || (u.Scheme == "http" && LoopbackHost(u.Hostname()))
 }
 
 // LoopbackHost reports whether h is localhost or a loopback address.

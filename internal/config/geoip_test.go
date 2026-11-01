@@ -34,7 +34,7 @@ func TestGeoIPRejects(t *testing.T) {
 		"refresh too low": {"path: /tmp/c.mmdb\n  url: https://geoip.example.net/c.mmdb\n  refresh: 1h", "geoip.refresh"},
 		"refresh too big": {"path: /tmp/c.mmdb\n  url: https://geoip.example.net/c.mmdb\n  refresh: 2160h", "geoip.refresh"},
 		"path only":       {"path: /tmp/c.mmdb", "geoip.url is required"},
-		"unknown key":     {"path: /tmp/c.mmdb\n  url: https://geoip.example.net/c.mmdb\n  key: x", "key"},
+		"unknown key":     {"path: /tmp/c.mmdb\n  url: https://geoip.example.net/c.mmdb\n  key: x", "field key not found"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			_, err := Parse([]byte(minimalYAML + "geoip:\n  " + tc.block + "\n"))

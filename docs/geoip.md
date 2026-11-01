@@ -49,9 +49,10 @@ Then set `geoip_db: /var/lib/packeteer/GeoLite2-Country.mmdb` on the `rules` pol
 What it does:
 
 - On start it downloads the file when it is missing or older than `refresh`, before the policies read it. A failed first download is logged and the start goes on; a country rule then refuses the start if the file is not there.
+- The file age is the server's `Last-Modified`, so once a release is older than `refresh` every start sends one conditional request. Keep `refresh` at 24h or more and do not restart in a loop.
 - Every `refresh` it asks again with `If-Modified-Since`, so an unchanged file is not downloaded again.
 - It accepts a raw `.mmdb`, a gzip of one, or a gzip tar archive holding one (the MaxMind form). A download is written next to the file, must parse as a country database with at least one network, and is then renamed over the old file. Any other result leaves the old file in place.
-- A download over 128 MiB is refused. A redirect to plain http is refused. The account is sent only over https (or to a loopback address) and is never logged or returned by the API.
+- A download over 128 MiB is refused. A redirect to plain http is refused (except to a loopback address). The account is sent only over https (or to a loopback address) and is never logged or returned by the API.
 - A refreshed file is read at the next start. The download does not reload running policies.
 - `PACKETEER_GEOIP_USER` and `PACKETEER_GEOIP_KEY` go together (HTTP basic authentication: for MaxMind, the account ID and the license key). A source that needs no account, such as a mirror you host, needs neither.
 

@@ -141,6 +141,9 @@ func TestRefreshBasicAuthAndConditional(t *testing.T) {
 	if after, _ := os.ReadFile(path); !bytes.Equal(before, after) {
 		t.Fatal("a 304 changed the file")
 	}
+	if calls.Load() != 2 {
+		t.Fatalf("server calls = %d, want 2", calls.Load())
+	}
 	if f.Status().LastError != "" {
 		t.Fatalf("status after 304 = %+v", f.Status())
 	}

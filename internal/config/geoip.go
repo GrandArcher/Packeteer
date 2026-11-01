@@ -49,7 +49,7 @@ func (c *Config) validateGeoIP(add func(string, ...any)) {
 	}
 	if pu, err := url.Parse(g.URL); err != nil || pu.Host == "" || pu.User != nil || pu.Fragment != "" {
 		add("geoip.url %q must be an https URL with a host, without credentials (the account comes from the environment)", g.URL)
-	} else if pu.Scheme != "https" && !(pu.Scheme == "http" && LoopbackHost(pu.Hostname())) {
+	} else if !SecureURL(pu) {
 		add("geoip.url %q must be https (http only for a loopback address)", g.URL)
 	}
 	if !filepath.IsAbs(g.Path) {

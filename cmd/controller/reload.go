@@ -618,7 +618,7 @@ func (r *reloader) applyOnline(ctx context.Context, next *config.Config, online 
 	if r.decider != nil {
 		r.decider.SetConfig(pc)
 	}
-	if r.setup != nil && (slices.Contains(online, "max_improvements") || slices.Contains(online, "sources")) {
+	if r.setup != nil && (slices.Contains(online, "max_improvements") || slices.Contains(online, "sources") || slices.Contains(online, "policies")) {
 		r.setup(setupInfo(next, r.plugins, r.geo))
 	}
 	if r.fed != nil {

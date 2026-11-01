@@ -44,10 +44,6 @@ type Status struct {
 	LastCheck time.Time
 	// LastError is empty after a successful check.
 	LastError string
-	// Refresh is the configured interval.
-	Refresh time.Duration
-	// Path is the database file.
-	Path string
 }
 
 // Fetcher keeps one database file fresh from a URL. It writes only that
@@ -58,7 +54,6 @@ type Fetcher struct {
 	key    string
 	client *http.Client
 	log    *slog.Logger
-	now    func() time.Time
 
 	mu   sync.Mutex
 	last time.Time
@@ -72,14 +67,14 @@ func NewFetcher(cfg config.GeoIP, user, key string, log *slog.Logger) (*Fetcher,
 	if (user == "") != (key == "") {
 		return nil, fmt.Errorf("geoip: set both %s and %s, or neither", UserEnv, KeyEnv)
 	}
-	f := &Fetcher{cfg: cfg, user: user, key: key, log: log, now: time.Now}
+	f := &Fetcher{cfg: cfg, user: user, key: key, log: log}
 	f.client = &http.Client{
 		Timeout: fetchTimeout,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			if len(via) >= maxRedirect {
 				return errors.New("too many redirects")
 			}
-			if req.URL.Scheme != "https" && !config.LoopbackHost(req.URL.Hostname()) {
+			if !config.SecureURL(req.URL) {
 				return errors.New("redirect to a non-https address refused")
 			}
 			return nil
@@ -92,7 +87,7 @@ func NewFetcher(cfg config.GeoIP, user, key string, log *slog.Logger) (*Fetcher,
 func (f *Fetcher) Status() Status {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return Status{LastCheck: f.last, LastError: f.err, Refresh: f.cfg.Refresh, Path: f.cfg.Path}
+	return Status{LastCheck: f.last, LastError: f.err}
 }
 
 // Start fetches once when the file is missing or older than the refresh
@@ -100,7 +95,7 @@ func (f *Fetcher) Status() Status {
 // returned and also kept in Status; the caller decides whether the start
 // can go on.
 func (f *Fetcher) Start(ctx context.Context) error {
-	if fi, err := os.Stat(f.cfg.Path); err == nil && f.now().Sub(fi.ModTime()) < f.cfg.Refresh {
+	if fi, err := os.Stat(f.cfg.Path); err == nil && time.Since(fi.ModTime()) < f.cfg.Refresh {
 		return nil
 	}
 	return f.Refresh(ctx)
@@ -129,7 +124,7 @@ func (f *Fetcher) Refresh(ctx context.Context) (err error) {
 	defer func() {
 		f.mu.Lock()
 		defer f.mu.Unlock()
-		f.last = f.now()
+		f.last = time.Now()
 		f.err = ""
 		if err != nil {
 			f.err = err.Error()
@@ -140,7 +135,7 @@ func (f *Fetcher) Refresh(ctx context.Context) (err error) {
 		return fmt.Errorf("geoip: %w", err)
 	}
 	if f.key != "" {
-		if req.URL.Scheme != "https" && !config.LoopbackHost(req.URL.Hostname()) {
+		if !config.SecureURL(req.URL) {
 			return errors.New("geoip: refusing to send the account over plain http")
 		}
 		req.SetBasicAuth(f.user, f.key)
