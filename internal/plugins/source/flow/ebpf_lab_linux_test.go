@@ -92,13 +92,23 @@ func TestEBPFSeesBurstThatSampledFlowMisses(t *testing.T) {
 		t.Fatalf("targets = %+v", ts)
 	}
 
-	// The sampler is not blind: a long enough flow does reach it.
+	// The sampler is not blind: the 1000th packet is exported, and the
+	// listener scales that one sample to rate packets. The burst alone
+	// added nothing through it.
 	for range rate - burst {
 		if dg := router.observe(netip.MustParseAddr("192.0.2.1"), netip.MustParseAddr("192.0.2.77"), ipBytes); dg != nil {
 			exported++
+			if _, err := exporter.Write(dg); err != nil {
+				t.Fatal(err)
+			}
 		}
 	}
 	if exported != 1 {
 		t.Fatalf("a 1:%d sampler exported %d samples of %d packets, want 1", rate, exported, rate)
+	}
+	want := uint64(burst*ipBytes + rate*ipBytes)
+	waitFor(t, "sample counted", func() bool { return volumeOf(t, s, "192.0.2.0/24") >= want })
+	if got := volumeOf(t, s, "192.0.2.0/24"); got != want {
+		t.Fatalf("counted %d bytes, want %d (burst plus one scaled sample)", got, want)
 	}
 }

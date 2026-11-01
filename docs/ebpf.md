@@ -18,7 +18,7 @@ The flow collector sees traffic of the host it runs on. Where a router samples 1
 - The kernel detaches the programs when the process exits, however it exits. GRO or LRO on the interface merge segments before tc sees them; the AF_PACKET path sees the same merged frames.
 - Ring buffer overflows are counted in `packeteer_truncated_total{limit="ebpf_ring_full"}`. The flow table is capped by `max_entries`; the kernel evicts the least recently used flow.
 
-Not done: the programs do not track TCP state or RTT in the kernel, and they do not match probe replies. The userspace tracker does both from the frame heads, so `span` results are those of the raw-socket path.
+Not done: the programs do not track TCP state, RTT, retransmits, or loss in the kernel. The userspace span tracker does that from the frame heads, so `span` results are those of the raw-socket path. Probe capture and reply matching still use the probers' own raw sockets; the eBPF path does not replace them.
 
 ## Lab tests and CPU per Gbit
 
