@@ -126,6 +126,10 @@ type ProbeRequest struct {
 	// the prober's configured port. The prober chain leaves it zero; the
 	// reordering monitor sets it per responder.
 	Port uint16
+	// Site, when set, is the site (#230) whose probe agents must run this
+	// request. Only a RemoteProber serves a request with a Site, and a
+	// RemoteProber serves only those.
+	Site string
 }
 
 // ProbeResult is the raw outcome of one probe run. The core computes loss,
@@ -144,6 +148,9 @@ type ProbeResult struct {
 	// Phases, when set, holds one entry per reply in RTTs (same index): the
 	// stages of an application-level reply. Only the https prober fills it.
 	Phases []Phases
+	// Site and Agent name the site and the probe agent (#230) that took
+	// the measurement. Only a RemoteProber sets them.
+	Site, Agent string
 }
 
 // Phases times the stages of one https probe reply. The reply's RTT is
@@ -160,6 +167,13 @@ type Phases struct {
 type Prober interface {
 	Lifecycle
 	Probe(ctx context.Context, req ProbeRequest) (ProbeResult, error)
+}
+
+// RemoteProber is a Prober that measures from other hosts (probe agents,
+// #230) and serves a ProbeRequest that names a Site.
+type RemoteProber interface {
+	Prober
+	Remote()
 }
 
 // ---- Target source ----

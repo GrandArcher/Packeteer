@@ -32,6 +32,7 @@ import (
 	_ "github.com/GrandArcher/Packeteer/internal/plugins/notifier/webhook"         // webhook notifier
 	_ "github.com/GrandArcher/Packeteer/internal/plugins/policy/maintenance"       // maintenance-window policy
 	_ "github.com/GrandArcher/Packeteer/internal/plugins/policy/rules"             // prefix/ASN/country routing policy
+	_ "github.com/GrandArcher/Packeteer/internal/plugins/prober/agent"             // probe agent prober (distributed agents, mTLS)
 	_ "github.com/GrandArcher/Packeteer/internal/plugins/prober/fixed"             // fixed (lab) prober
 	_ "github.com/GrandArcher/Packeteer/internal/plugins/prober/https"             // https prober (connect, TLS handshake, first byte)
 	_ "github.com/GrandArcher/Packeteer/internal/plugins/prober/icmp"              // icmp prober

@@ -117,6 +117,9 @@ providers:
     # add_path: true          # route check from iBGP add-path paths (needs a neighbor with add_path)
     # fwmark: 101             # share source_ip with other providers: tag probes with a Linux fwmark and/or
     # dscp: 10                #   a DSCP (1-63), distinct per source_ip. `packeteer -pbr linux` prints the routing for it (#157)
+  # - name: transit-c         # measured by probe agents at a site (#230, docs/agents.md): no source_ip, fwmark, or dscp
+  #   site: dc-b              #   (the agent declares them); needs the `agent` prober below
+  #   next_hop: 192.0.2.3
 
 allowlist:
   prefixes: []
@@ -172,6 +175,16 @@ probers:
   #                           # HTTPS, use it as the only entry in probers.
   #     server_name: www.example.com
   #     path: /
+  # - type: agent             # probe agents (#230, docs/agents.md): serves only providers with a site. They call
+  #   config:                 # this listener over mutual TLS; the controller never dials out. Probing only.
+  #     listen: 0.0.0.0:9444
+  #     cert_file: /etc/packeteer/certs/controller.crt
+  #     key_file: /etc/packeteer/certs/controller.key
+  #     ca_file: /etc/packeteer/certs/ca.crt
+  #     crl_file: /etc/packeteer/certs/agents.crl   # optional revocation list
+  #     agents:
+  #       - name: agent-b     # certificate CN or DNS SAN
+  #         max_pps: 100
   # - type: udp               # optional fallback. A reply or ICMP port-unreachable counts.
   #   config:
   #     port: 33434

@@ -287,6 +287,10 @@ func run(ctx context.Context, args []string, getenv func(string) string, stdout,
 			fmt.Fprintf(stdout, "  - %s domain=%s next_hop=%s (measured by the peer there)\n", p.Name, p.Domain, p.NextHop)
 			continue
 		}
+		if p.Site != "" {
+			fmt.Fprintf(stdout, "  - %s site=%s next_hop=%s (measured by probe agents there)\n", p.Name, p.Site, p.NextHop)
+			continue
+		}
 		tag := ""
 		if p.FwMark != 0 {
 			tag += fmt.Sprintf(" fwmark=%d", p.FwMark)

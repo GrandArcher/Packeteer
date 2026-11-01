@@ -130,6 +130,8 @@ type Provider struct {
 	Group      string `json:"group,omitempty"`
 	Precedence int    `json:"precedence,omitempty"`
 	CCDisable  bool   `json:"cc_disable,omitempty"`
+	// Site is the site whose probe agents measure the provider (#230).
+	Site string `json:"site,omitempty"`
 	// Exchange and PeerASN are set on an Internet exchange peer (#27).
 	Exchange string `json:"exchange,omitempty"`
 	PeerASN  uint32 `json:"peer_asn,omitempty"`
@@ -153,6 +155,10 @@ type Probe struct {
 	// did not record the set.
 	Targets []string `json:"targets,omitempty"`
 	Prober  string   `json:"prober,omitempty"`
+	// Site and Agent are the site and probe agent that took the
+	// measurement (#230).
+	Site  string `json:"site,omitempty"`
+	Agent string `json:"agent,omitempty"`
 	// Indirect is true when every in-prefix address was silent and
 	// Target is this provider's traceroute hop toward the prefix (#123).
 	Indirect bool `json:"indirect,omitempty"`
@@ -543,7 +549,7 @@ func assembleProviders(in Input) []Provider {
 	for _, p := range in.Providers {
 		row := Provider{
 			Name: p.Name, Source: p.SourceIP, NextHop: p.NextHop, ASN: p.ASN, Type: p.Type, Exclude: p.Exclude,
-			Group: p.Group, Precedence: p.Precedence, CCDisable: p.CCDisable, Domain: p.Domain,
+			Group: p.Group, Precedence: p.Precedence, CCDisable: p.CCDisable, Domain: p.Domain, Site: p.Site,
 			Exchange: p.Exchange, PeerASN: p.PeerASN,
 		}
 		if st, ok := status[p.Name]; ok {
@@ -958,6 +964,8 @@ func probeFrom(r probe.Result) Probe {
 	p := Probe{
 		Provider:    r.Provider,
 		Prober:      r.Prober,
+		Site:        r.Site,
+		Agent:       r.Agent,
 		Indirect:    r.Indirect,
 		OK:          r.OK(),
 		Confidence:  r.Confidence,

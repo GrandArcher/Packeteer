@@ -6,6 +6,7 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 
 ### Added
 
+- Distributed probe agents: `packeteer-agent` probes from provider sites over mutual TLS with revocation; `providers[].site` and an `agent` prober; a lost agent fails its provider closed (#230).
 - Optional eBPF data path: `span` `ebpf: true` captures through a ring buffer and a `flow` `ebpf` block counts every packet unsampled; both fall back when unsupported (#229).
 - Report subscriptions: a `timeseries` email carries the before/after loss and latency charts as inline PNGs drawn in the controller, with the CSV still attached (#136).
 - GeoIP country database: docs/geoip.md and an opt-in `geoip` download (URL, account in env vars, refresh); the Overview checklist flags an unreadable database or failing download (#135).

@@ -163,6 +163,9 @@ func (c *Config) validateProviders(add func(string, ...any)) {
 		}
 		var src netip.Addr
 		var err error
+		if p.Site != "" {
+			c.validateSite(p, label, add)
+		}
 		if p.DSCP < 0 || p.DSCP > sockmark.MaxDSCP {
 			add("%s: dscp %d must be between 0 and %d", label, p.DSCP, sockmark.MaxDSCP)
 		}
@@ -173,10 +176,12 @@ func (c *Config) validateProviders(add func(string, ...any)) {
 			if p.FwMark != 0 || p.DSCP != 0 {
 				add("%s: fwmark and dscp must be empty for a provider in domain %s (the peer there measures it)", label, p.Domain)
 			}
-		} else if src, err = netip.ParseAddr(p.SourceIP); err != nil {
-			add("%s: source_ip %q is not a valid IP address", label, p.SourceIP)
-		} else {
-			sources[src] = sources[src].admit(src, p, label, add)
+		} else if p.Site == "" {
+			if src, err = netip.ParseAddr(p.SourceIP); err != nil {
+				add("%s: source_ip %q is not a valid IP address", label, p.SourceIP)
+			} else {
+				sources[src] = sources[src].admit(src, p, label, add)
+			}
 		}
 		nh, err := netip.ParseAddr(p.NextHop)
 		if err != nil {
@@ -218,6 +223,20 @@ func (c *Config) validateProviders(add func(string, ...any)) {
 				add("%s: add_path does not apply with bmp only (iBGP paths are ignored for it)", label)
 			}
 		}
+	}
+}
+
+// validateSite checks a provider measured by probe agents (#230).
+func (c *Config) validateSite(p Provider, label string, add func(string, ...any)) {
+	switch {
+	case !validProviderGroup(p.Site):
+		add("%s: site %q must be 1-64 characters of letters, digits, '_', '.' or '-', starting with a letter or digit", label, p.Site)
+	case c.Remote(p):
+		add("%s: site and domain cannot both be set (a peer measures a provider in another domain)", label)
+	case p.SourceIP != "" || p.FwMark != 0 || p.DSCP != 0:
+		add("%s: source_ip, fwmark, and dscp must be empty for a provider with a site (the agent declares them)", label)
+	case !slices.ContainsFunc(c.Probers, func(s PluginSpec) bool { return s.Type == "agent" }):
+		add("%s: site requires a probers entry of type agent", label)
 	}
 }
 

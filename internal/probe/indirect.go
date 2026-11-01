@@ -114,7 +114,9 @@ func inPrefixSilent(prefix netip.Prefix, hosts []netip.Addr, samples []hostSampl
 // is false when the normal result stands. Every packet waits on the
 // global rate limit inside probeOne.
 func (e *Engine) probeIndirect(ctx context.Context, j job, hosts []netip.Addr, samples []hostSample) (res Result, down, ok bool) {
-	if !e.indirectEnabled() {
+	// The trace starts from this host's source address, which a provider
+	// measured by probe agents (#230) does not have here.
+	if !e.indirectEnabled() || j.provider.Site != "" {
 		return Result{}, false, false
 	}
 	k := key{j.provider.Name, j.target.Prefix}

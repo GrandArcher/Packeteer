@@ -29,13 +29,13 @@ Milestones:
 | v0.6 | 8 | 7 |
 | v0.7 | 3 | 3 |
 | v0.8 | 20 | 16 |
-| v0.9 | 14 | 12 |
+| v0.9 | 15 | 13 |
 | won't do | 2 | - |
-| **total** | 126 | 112 |
+| **total** | 127 | 113 |
 
 | Status | Count |
 |---|---|
-| done | 112 |
+| done | 113 |
 | partial | 11 |
 | in progress | 0 |
 | planned | 1 |
@@ -289,6 +289,7 @@ Rollback: remove `exchanges` and `bgp.as_path` and restart; online reconfigurati
 |---|---|---|---|---|---|
 | Multiple routing domains with inter-DC RTT | done (lab-proven) | v0.4 | federation (`mtls`) + core (`internal/federation`) | #30 | no (lab-proven) |
 | Central management of many instances | partial (central view lab-proven): an admin pushes `thresholds` and `policies` to every instance, tested with two in-process instances; the push is not in the multi-POP lab yet (#137) | v0.4 | federation (`mtls`) + API/UI (`/api/federation`) | #30, #137 | no (lab-proven) |
+| Distributed probe agents inside the operator's own network (`packeteer-agent`: probing only, outbound-only mutual TLS with per-agent identity and CRL revocation; each agent declares its site and the source address and tag per provider; `providers[].site` binds a provider to a site; probes spread across a site's agents under a per-agent `max_pps`; results tagged by `site` and `agent`; a stale, hung-up, or revoked agent is not used and its provider fails closed) | done (#230: tested in process over real mutual TLS with two agents at two sites; no container lab job yet; `probe.reorder`, `probe.indirect`, and the path check do not apply to a provider with a site) | v0.9 | prober (`agent`) + core (`internal/agent`, `cmd/agent`) ([agents.md](agents.md)) | #230 | no |
 | Herd: opt-in shared measurements between operators (phase 1: local store, signed pull API with mutual TLS pinned to per-node keys, static peers, per-vantage view, preview and served-response audit, local resource limits; hub list of signed member entries as seeds, with `herd entry` and `herd hub-check`; dashboard page with world view, mesh, map, monitors, search, and opt-in outside sources) | partial: phase 1 of docs/design/herd.md (lab-proven) plus the hub (#261) and the dashboard (#296), unit and integration tests only, not lab-proven; no peer exchange, RPKI validation of identities, hints, or crowd threshold yet; advisory only, never read by `Decide` and never announces; off by default | v0.8, v0.9 | core (`internal/herd`, `internal/outside`) + storage (`sqlite`) + API + UI | #87, #260, #261, #296 | no (lab-proven: phase 1 only; hub and dashboard: no) |
 
 Multi-POP (#30, [multi-pop.md](multi-pop.md)): one Packeteer instance per POP (routing domain), joined by a `federation` plugin. The built-in `mtls` plugin serves each instance's snapshot over HTTPS with mutual TLS 1.3 (certificates from a mounted CA; unknown client certificates get 403) and polls its peers; it never announces or decides. A snapshot carries the instance's own providers (health and telemetry), its fresh measurements through them, how its traffic for each learned probed prefix leaves, and its improvements.

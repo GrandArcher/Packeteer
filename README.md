@@ -181,6 +181,7 @@ Leave graceful restart off on the session. Guides:
 - [docs/routers.md](docs/routers.md) - what every router guide shares, what happens when the native path disappears, and exchange peers
 - [docs/route-reflector.md](docs/route-reflector.md) - several edge routers, per-router provider reachability, route reflectors, Internet exchange peers, and SIGHUP reload of neighbors, thresholds, policies, and sources
 - [docs/multi-pop.md](docs/multi-pop.md) - several POPs (routing domains) federated over mutual TLS: inter-DC RTT in the path cost, global commit across POPs, and the central view. Lab-proven only
+- [docs/agents.md](docs/agents.md) - probe agents you run inside your own network (other POPs, sites), controlled by one controller over mutual TLS with per-agent identity and revocation. Probing only. Lab-proven only
 - [docs/leak-watch.md](docs/leak-watch.md) - how Packeteer keeps its routes inside your AS: the rails, and `leak_watch`, which withdraws and holds out a route seen outside the AS. Lab-proven only
 - [docs/precedence.md](docs/precedence.md) - which surface owns a prefix when mitigation, inbound, outbound, a leak hold, flap quarantine, and HA all want it, how the shared cap is spent, and which test proves each pair
 - [docs/policy-routing.md](docs/policy-routing.md) - probe sources behind the router
