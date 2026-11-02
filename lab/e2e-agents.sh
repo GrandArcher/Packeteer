@@ -6,7 +6,7 @@
 # transit-b; both probe 198.51.100.1, which one FRR edge learns as
 # 198.51.100.0/24 with transit-a as the native exit. Documentation prefixes
 # and a private ASN only. Nothing is announced: after each step the edge
-# holds only its own path for the prefix after each step. Checked in order:
+# holds only its own path for the prefix. Checked in order:
 #  1. probes are split across both agents and attributed: transit-a's row
 #     names site dc-a and agent-a with the delayed RTT, transit-b's names
 #     dc-b and agent-b with the fast one, and the controller recommends
