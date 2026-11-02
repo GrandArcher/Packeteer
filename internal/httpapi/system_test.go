@@ -214,6 +214,18 @@ func TestBuildSystemHAFederationAndBGP(t *testing.T) {
 			t.Errorf("a view with neighbors not yet added reads as BMP alone: %+v", c)
 		}
 	}
+	rows := 0
+	for _, c := range got.Components {
+		if c.Kind == KindBGP {
+			rows++
+			if strings.Contains(c.Detail, "BMP alone") {
+				t.Errorf("a view with an iBGP neighbor reads as BMP alone: %+v", c)
+			}
+		}
+	}
+	if rows != 1 {
+		t.Errorf("iBGP rows with one neighbor = %d, want 1", rows)
+	}
 	none := BuildSystem(Snapshot{Mode: "observe"}, SystemFacts{}, nil, nil)
 	if c := find(t, none, KindBGP, "iBGP"); c.State != StateIdle {
 		t.Errorf("no neighbors = %+v", c)

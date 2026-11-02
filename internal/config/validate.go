@@ -469,7 +469,7 @@ func (c *Config) validatePlugins(add func(string, ...any)) {
 // read its BMP paths, and nothing can announce, since announcers use the
 // iBGP session. The external policy feed is the way to act on decisions.
 func (c *Config) validateBMPAlone(add func(string, ...any)) {
-	if len(c.RIBSources) == 0 || len(c.BGP.Neighbors) > 0 {
+	if len(c.RIBSources) == 0 || len(c.BGP.Neighbors) > 0 || c.IXP != nil {
 		return
 	}
 	const alone = "without bgp.neighbors the RIB view is learned over BMP alone; set bmp: prefer or only"

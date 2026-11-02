@@ -236,7 +236,7 @@ What each column adds:
 
 Findings:
 
-- **BIRD 3.1.7 BMP** sends peer up and routes only for BGP sessions that come up while the station is connected. After Packeteer restarts, BIRD reconnects to the station but sends no routes for sessions that were already up, and restarting those protocols does not help. Until BIRD fixes this, restart BIRD (or its BMP protocol) after Packeteer restarts, or use iBGP add-path instead. The lab starts Packeteer before the edge and skips the restart step on BIRD 3.
+- **BIRD 3.1.7 BMP** sends peer up and routes only for BGP sessions that come up while the station is connected. After Packeteer restarts, BIRD reconnects to the station but sends no routes for sessions that were already up, and restarting those protocols does not help. Until BIRD fixes this, restart BIRD (or its BMP protocol) after Packeteer restarts, or use iBGP add-path instead. The lab starts Packeteer before the edge and skips the restart step on BIRD 3. With BMP alone, whether the view then stays not ready is untested: the `bmponly` cell restarts the edge, not the station.
 - **BIRD** treats iBGP sessions as multihop. Set `direct;` on the Packeteer session so that next hops on the LAN resolve without an IGP table.
 - **GoBGP** has no per-neighbor import policy outside route-server mode. Both filters are global policies that match on a `neighbor-set`.
 

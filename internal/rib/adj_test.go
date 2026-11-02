@@ -3,6 +3,7 @@ package rib
 import (
 	"net/netip"
 	"runtime"
+	"strconv"
 	"testing"
 )
 
@@ -116,4 +117,37 @@ func (v *View) putAdj(p netip.Prefix, paths map[adjKey]Route) {
 		return
 	}
 	v.adj[p] = s
+}
+
+// BenchmarkPathSetManyPaths measures the linear find in pathSet with the
+// path counts of an add-path feed. A path update replaces one key of
+// n, and a withdraw plus re-announce removes it and appends it again.
+func BenchmarkPathSetManyPaths(b *testing.B) {
+	nbr := netip.MustParseAddr("192.0.2.254")
+	for _, n := range []int{2, 8, 32, 64} {
+		var s pathSet[adjKey]
+		for i := 0; i < n; i++ {
+			s.set(adjKey{neighbor: nbr, id: uint32(i)}, Route{PathID: uint32(i)})
+		}
+		last := adjKey{neighbor: nbr, id: uint32(n - 1)}
+		b.Run("update/"+strconv.Itoa(n), func(b *testing.B) {
+			b.ReportAllocs()
+			for i := 0; i < b.N; i++ {
+				s.set(last, Route{PathID: uint32(i)})
+			}
+			if !s.has(last) || s.n != n {
+				b.Fatalf("n = %d", s.n)
+			}
+		})
+		b.Run("withdraw-announce/"+strconv.Itoa(n), func(b *testing.B) {
+			b.ReportAllocs()
+			for i := 0; i < b.N; i++ {
+				s.del(last)
+				s.set(last, Route{PathID: uint32(i)})
+			}
+			if !s.has(last) || s.n != n {
+				b.Fatalf("n = %d", s.n)
+			}
+		})
+	}
 }

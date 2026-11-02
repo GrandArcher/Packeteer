@@ -62,6 +62,7 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 
 ### Fixed
 
+- `ixp` with `rib_sources` and no `bgp.neighbors` is refused (#482).
 - Why panel: a commit or cost steer kept while a performance switch confirms no longer says the planner decided the thresholds or that the cap was not reached for lack of a better path (#448).
 - `POST /api/atlas/measure` answers the documented 404 when Atlas is off even with API writes disabled, not 403 (#447).
 - install.sh waits for the first admin after /healthz so a follow-on API call is not 401 (HTTP listens before bootstrap, #328; unblocks onboarding lab #221).
