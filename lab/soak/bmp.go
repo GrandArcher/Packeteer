@@ -32,9 +32,6 @@ func newBMPRouter(id, port int, tbl table, adv *advertised) *router {
 	return &router{id: id, tbl: tbl, adv: adv, bmpPort: port, out: newAdjOut()}
 }
 
-// bmpPeerAS is the provider peer's AS, a documentation ASN.
-func bmpPeerAS(prov int) uint32 { return docASNs[prov] }
-
 // bmpPeer is the per-peer header of provider prov's session in one
 // family: the post-policy Adj-RIB-In of a global peer.
 func bmpPeer(prov int, v4 bool) *gobmp.BMPPeerHeader {
@@ -43,7 +40,7 @@ func bmpPeer(prov int, v4 bool) *gobmp.BMPPeerHeader {
 		addr = nextHopsV4[prov]
 	}
 	return gobmp.NewBMPPeerHeader(gobmp.BMP_PEER_TYPE_GLOBAL, gobmp.BMP_PEER_FLAG_POST_POLICY, 0, addr,
-		bmpPeerAS(prov), nextHopsV4[prov], float64(time.Now().Unix()))
+		docASNs[prov], nextHopsV4[prov], float64(time.Now().Unix()))
 }
 
 // dialBMP opens the BMP session: Initiation, then a peer up for every
@@ -73,7 +70,7 @@ func (r *router) dialBMP() error {
 				local = routerIDs[r.id]
 			}
 			sent := bgp.NewBGPOpenMessage(labASN, holdTime, routerIDs[r.id], nil)
-			recv := bgp.NewBGPOpenMessage(uint16(bmpPeerAS(prov)), holdTime, nextHopsV4[prov], nil)
+			recv := bgp.NewBGPOpenMessage(uint16(docASNs[prov]), holdTime, nextHopsV4[prov], nil)
 			msgs = append(msgs, gobmp.NewBMPPeerUpNotification(*bmpPeer(prov, v4), local, 179, 179, sent, recv))
 		}
 	}

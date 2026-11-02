@@ -1913,7 +1913,7 @@ With `rib_sources` and no `bgp.neighbors` (#237), the RIB view is learned over B
 - Send Loc-RIB where the router supports it, so the native provider is the router's choice and not the shortest-AS-path estimate.
 - BIRD 3.1.7 sends no peer up or routes for sessions already up when the station restarts ([routers.md](routers.md#interop-matrix)). With BMP alone the view then stays not ready, and nothing is steered, until BIRD's BMP protocol is restarted.
 - `bgp.neighbors` cannot be added on SIGHUP to a view started without them; restart.
-- `packeteer_bmp_peer_up{router,peer}` is 1 for each peer (`peer="loc-rib"` for the Loc-RIB) a BMP session reports up, and `packeteer_bmp_peer_adj_rib_in{router,peer}` is the router's Adj-RIB-In count from its last Statistics Report. The System page lists each router under the RIB source row.
+- `packeteer_bmp_peer_up{router,peer}` is 1 for each peer (`peer="loc-rib"` for the Loc-RIB) a BMP session reports up, and `packeteer_bmp_peer_adj_rib_in{router,peer}` is the router's Adj-RIB-In count from its last Statistics Report. The System page shows the RIB source row as "N routers up, M down" and names the routers that are down.
 
 **Rollback:** add `bgp.neighbors` back (and an announcer if you inject) and restart.
 

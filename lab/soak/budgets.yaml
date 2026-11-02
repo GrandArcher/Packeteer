@@ -92,10 +92,9 @@ profiles:
   # prefix arrives twice, as the post-policy Adj-RIB-In path of each of
   # the two providers' peers. The budgets are the `pr` per-million numbers
   # per prefix, not per path, so two BMP paths must fit where `pr` holds
-  # one iBGP path. In-process at 200,000 prefixes the BMP store holds 1,400
-  # bytes of heap a prefix against 1,466 for the iBGP session. No CI run
-  # has measured this profile before #237; a miss is a finding in the BMP
-  # path store, not a reason to raise a number.
+  # one iBGP path. No CI run has measured this profile before #237; a
+  # miss is a finding in the BMP path store, not a reason to raise a
+  # number.
   bmp:
     bmp: true
     prefixes: 1250000

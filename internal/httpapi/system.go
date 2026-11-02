@@ -284,9 +284,8 @@ func bgpRows(snap Snapshot) []Component {
 	if !snap.BGPConfigured {
 		return []Component{{Kind: KindBGP, Name: "iBGP", State: StateIdle, Detail: "no bgp.neighbors: the current exit of a prefix is unknown"}}
 	}
-	if len(snap.Peers) == 0 {
-		// A view with no iBGP neighbor is learned over BMP alone (#237);
-		// the RIB source rows carry its routers.
+	if snap.BMPAlone {
+		// The RIB source rows count the routers (#237).
 		return []Component{{Kind: KindBGP, Name: "iBGP", State: StateIdle, Detail: "no bgp.neighbors: the RIB view is learned over BMP alone"}}
 	}
 	var rows []Component

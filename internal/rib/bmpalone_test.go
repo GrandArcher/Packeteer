@@ -41,6 +41,9 @@ func TestBMPAloneNeedsAProviderOnBMP(t *testing.T) {
 // it ready and learned again.
 func TestBMPAloneReadyFollowsTheFeed(t *testing.T) {
 	v := bmpAloneView(t)
+	if !v.BMPAlone() {
+		t.Fatal("a view with no neighbors is not BMP alone")
+	}
 	if v.Ready() {
 		t.Fatal("ready before any BMP session")
 	}

@@ -1889,6 +1889,10 @@ func decodeAttrs(attrs []*anypb.Any) (netip.Addr, []uint32, uint32, []uint32, []
 
 // ---- queries ----
 
+// BMPAlone reports whether the view has no iBGP neighbors and is learned
+// over BMP alone (#237).
+func (v *View) BMPAlone() bool { return v.bmpAlone }
+
 // Ready reports whether at least one session is established. One session
 // going down does not make the view unready; paths from that neighbor are
 // removed instead. When no session is up the view is stale and consumers

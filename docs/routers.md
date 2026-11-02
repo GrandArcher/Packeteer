@@ -215,10 +215,10 @@ The `interop` workflow (`.github/workflows/interop.yml`, #53) runs weekly, on de
 
 | Edge | iBGP (best path) | add-path | BMP (post-policy) | BMP alone |
 |---|---|---|---|---|
-| FRR 10.2.4 | yes | yes | yes | yes |
+| FRR 10.2.4 | yes | yes | yes | cell added in #237, not yet run in CI |
 | BIRD 2 (Debian 2.17) | yes | yes | not available (built without BMP) | not available |
-| BIRD 3 (Debian 3.1) | yes | yes | yes, with one gap (below) | yes, with the same gap |
-| GoBGP (the version in `go.mod`) | yes | yes | yes | yes |
+| BIRD 3 (Debian 3.1) | yes | yes | yes, with one gap (below) | cell added in #237, not yet run in CI; the gap is untested there, since the cell restarts the edge, not the station |
+| GoBGP (the version in `go.mod`) | yes | yes | yes | cell added in #237, not yet run in CI |
 | MikroTik CHR 7.23.7 | yes (`lab/e2e-chr.sh`, [details](mikrotik.md#tested-in-ci-chr-in-qemu)) | not exercised | not exercised | not exercised |
 
 Every cell checks:

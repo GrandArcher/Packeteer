@@ -36,6 +36,7 @@ type Input struct {
 	Thresholds policy.Thresholds
 
 	BGPConfigured bool
+	BMPAlone      bool // the RIB view has no iBGP neighbors (#237)
 	RIBReady      bool
 	RIBPrefixes   int // prefixes in the learned view
 	Peers         []rib.PeerState
@@ -89,6 +90,7 @@ type Snapshot struct {
 	At            time.Time
 	DecidedAt     time.Time
 	BGPConfigured bool
+	BMPAlone      bool
 	RIBReady      bool
 	RIBPrefixes   int
 
@@ -476,6 +478,7 @@ func Assemble(in Input) Snapshot {
 		At:                 in.At.UTC(),
 		DecidedAt:          in.DecidedAt,
 		BGPConfigured:      in.BGPConfigured,
+		BMPAlone:           in.BMPAlone,
 		RIBReady:           in.RIBReady,
 		RIBPrefixes:        in.RIBPrefixes,
 		Providers:          assembleProviders(in),

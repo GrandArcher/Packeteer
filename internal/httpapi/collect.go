@@ -207,6 +207,7 @@ func (c *Collector) Snapshot() Snapshot {
 	}
 	if view != nil {
 		in.BGPConfigured = true
+		in.BMPAlone = view.BMPAlone()
 		in.RIBReady = view.Ready()
 		in.RIBPrefixes = view.Len()
 		in.Peers = view.Peers()
