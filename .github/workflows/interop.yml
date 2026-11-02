@@ -24,6 +24,9 @@ on:
       - internal/plugins/announcer/**
       - internal/plugins/ribsource/bmp/**
       - internal/rib/**
+      - internal/extpolicy/**
+      - cmd/policy/**
+      - examples/external-policy/**
 
 permissions:
   contents: read
@@ -37,11 +40,16 @@ jobs:
       fail-fast: false
       matrix:
         router: [frr, bird2, bird3, gobgp]
-        feature: [ibgp, addpath, bmp]
+        feature: [ibgp, addpath, bmp, external]
         exclude:
           # Debian's BIRD 2 is built without the BMP protocol.
           - router: bird2
             feature: bmp
+          # The external policy feed cell (#232) renders BIRD static routes.
+          - router: frr
+            feature: external
+          - router: gobgp
+            feature: external
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7

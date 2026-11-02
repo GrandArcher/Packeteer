@@ -153,3 +153,30 @@ func TestInjectedRejects(t *testing.T) {
 		t.Error(err)
 	}
 }
+
+// A static route from the external policy feed (#232) has no BGP next hop
+// attribute: the next hop is the "via" gateway. The output is shaped like
+// BIRD 2 and BIRD 3 print a static route with BGP attributes set.
+func TestBIRDStaticFeedRoute(t *testing.T) {
+	native := "                     unicast [transit_a 22:50:05.661] (100) [AS64496?]\n\tvia 192.0.2.21 on eth0\n\tBGP.next_hop: 192.0.2.21\n\tBGP.local_pref: 100\n"
+	for name, raw := range map[string]string{
+		"bird2": "BIRD 2.17.5 ready.\nTable master4:\n198.51.100.0/24      unicast [packeteer_feed4 22:50:07.930] * (200)\n\tvia 192.0.2.22 on eth0\n\tType: static univ\n\tBGP.local_pref: 250\n\tBGP.community: (64512,666) (65535,65281)\n" + native,
+		"bird3": "BIRD 3.1.7 ready.\nTable master4:\n198.51.100.0/24      unicast [packeteer_feed4 22:53:49.421] * (200)\n\tvia 192.0.2.22 on eth0\n\tpreference: 200\n\tsource: static\n\tbgp_local_pref: 250\n\tbgp_community: (64512,666) (65535,65281)\n" + native,
+	} {
+		paths, err := Parse("bird", prefix, raw)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if len(paths) != 2 || paths[0].NextHop != "192.0.2.22" || paths[1].NextHop != "192.0.2.21" {
+			t.Fatalf("%s: %+v", name, paths)
+		}
+		w := Want{Mode: "injected", Peer: "packeteer_feed4", Protocol: "packeteer_feed4", Community: "64512:666", NextHop: "192.0.2.22", LocalPref: 250}
+		if err := Check(paths, w); err != nil {
+			t.Errorf("%s: %v", name, err)
+		}
+		w.NextHop = "192.0.2.21"
+		if err := Check(paths, w); err == nil {
+			t.Errorf("%s: injected passed with the wrong next hop", name)
+		}
+	}
+}

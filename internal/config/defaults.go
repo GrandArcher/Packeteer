@@ -62,6 +62,7 @@ func (c *Config) applyDefaults() {
 	c.defaultPathCheck()
 	c.defaultExchangeHealth()
 	c.defaultExchangeMaxPrefix()
+	c.defaultExternalPolicy()
 	if c.Probe.MinReplies == 0 {
 		c.Probe.MinReplies = DefaultProbeMinReplies
 	}

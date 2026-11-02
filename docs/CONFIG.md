@@ -821,6 +821,20 @@ Synthesized routes count toward `more_specific.max_routes` (100 when the `more_s
 
 A synthesized route is withdrawn with its decision (flip-back, TTL), the round C is missing from the learned RIB (no 5s confirm window: S never hides C from the router), when S stops being measured or a rail above fails, when the RIB is not ready (session loss), on SIGTERM, on an HA standby, and when the leak watch sees it outside the AS. A SIGKILL or crash drops the session and the router removes it; graceful restart stays off. While Packeteer steers C itself, the router stops sending C to Packeteer, so C missing is not read as a leave; S then goes with C's own decision (retire, TTL, or the same leave rule). The block is restart-only. Rollback: `synthesize.enabled: false` and restart.
 
+### `external_policy`
+
+External policy feed (#232, lab-proven only, not on a public edge). Contract: [external-policy.md](external-policy.md). Publishes the outbound routes the announce controller puts on the wire, read-only over TLS, for your own BGP daemon to apply. It carries routes only in `mode: inject`. With it enabled, `mode: inject` runs without `announcer` and the session only learns. Refused with `ixp`.
+
+| Key | Default | Meaning |
+|---|---|---|
+| `enabled` | `false` | `true` publishes the routes. `false` publishes an empty, expired set, so consumers drop everything. Reloads online. |
+| `listen` | required | `host:port` of the TLS listener. `GET /v1/recommendations` (JSON) and the gRPC `Watch` stream share it. |
+| `cert_file`, `key_file` | required | PEM certificate and key of the listener. |
+| `token_env` | `PACKETEER_POLICY_TOKEN` | Environment variable holding the bearer token (16 characters or more). Without it the controller refuses to start. |
+| `ttl` | three `probe.interval`s | How long a consumer keeps the routes after the last decision round renewed them; at least three probe intervals. Reloads online. |
+
+`listen`, `cert_file`, `key_file`, `token_env`, and adding or removing the block need a restart. Rollback: `enabled: false` and reload (with no `announcer`, set `mode: observe` in the same change).
+
 ### `rpki`
 
 Shared RPKI origin validation (#158, #200, not on a public edge). Off by default. A source reads the operator's RPKI cache (Routinator, rpki-client, StayRTR, FORT) over RTR or as VRP JSON and labels each learned path's origin: `valid`, `invalid`, `notfound`, or `unknown`. The learned RIB is never changed and nothing is announced. Validity is shown on `/api/decisions` candidates and the prefix card's learned paths, each with the source that answered and its data time, and on leak watch entries with the source. The exchange peers show validity counts only. Every learned path of a probed prefix is recorded per provider and origin AS in history (`storage`), shown on the prefix timeline. `avoid_invalid` only refuses a new improvement; it never blocks a withdraw, and the learned-RIB rule, allowlist, cap, community + NO_EXPORT, hold time, and withdraw rules are unchanged.
@@ -1086,6 +1100,7 @@ Set these in the container. They are not keys in the YAML file. `PACKETEER_HTTP_
 | `PACKETEER_ADMIN_USER` | With `auth`: the first admin's name (default `admin`). |
 | `PACKETEER_GEOIP_USER`, `PACKETEER_GEOIP_KEY` | Basic-authentication account for the [`geoip`](#geoip) download (#135; for MaxMind, the account ID and the license key). Set both or neither. Sent only over https or to a loopback address, never logged or returned. |
 | `PACKETEER_ATLAS_API_KEY` | Your RIPE Atlas API key for the [`atlas`](#atlas) block (#213). Sent only in the `Authorization` header to the Atlas API, never logged or returned. Unset: the integration makes no request. |
+| `PACKETEER_POLICY_TOKEN` | Bearer token of the [`external_policy`](#external_policy) feed (#232), unless `token_env` names another variable. Never logged. |
 | `PACKETEER_ADMIN_PASSWORD` | With `auth`: creates that admin at start when no user has the name (12-256 characters). An existing user is not changed, so a password set through the API survives a restart. Not written to the log. |
 
 `${VAR}` expansion applies inside a webhook `url`, webhook `headers` values, and an `exec` or `grpc` plugin's `env` values. It is not applied to the rest of the file.
@@ -1099,7 +1114,7 @@ Set these in the container. They are not keys in the YAML file. `PACKETEER_HTTP_
 - `packeteer_community` is set and valid (standard or large)
 - `local_pref` is non-zero. Any `local_pref_cause` value and any `providers[].local_pref` that is set is non-zero too (`0` is rejected in every mode)
 - any `communities_cause` list and any `providers[].communities` list follows the rules under [`communities_cause`](#communities_cause)
-- `announcer` is set (`type: gobgp`)
+- `announcer` is set (`type: gobgp`), or `external_policy.enabled` is true (the feed is then the only output)
 - `hold_time` is positive
 - both threshold deltas are positive
 - `more_specific_bits` is absent (`more_specific` is the replacement; it is off by default). `synthesize` does not change this

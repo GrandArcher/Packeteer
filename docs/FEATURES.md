@@ -29,13 +29,13 @@ Milestones:
 | v0.6 | 8 | 7 |
 | v0.7 | 3 | 3 |
 | v0.8 | 20 | 16 |
-| v0.9 | 15 | 13 |
+| v0.9 | 16 | 14 |
 | won't do | 2 | - |
-| **total** | 127 | 113 |
+| **total** | 128 | 114 |
 
 | Status | Count |
 |---|---|
-| done | 113 |
+| done | 114 |
 | partial | 11 |
 | in progress | 0 |
 | planned | 1 |
@@ -290,6 +290,7 @@ Rollback: remove `exchanges` and `bgp.as_path` and restart; online reconfigurati
 | Multiple routing domains with inter-DC RTT | done (lab-proven) | v0.4 | federation (`mtls`) + core (`internal/federation`) | #30 | no (lab-proven) |
 | Central management of many instances | partial (central view lab-proven): an admin pushes `thresholds` and `policies` to every instance, tested with two in-process instances; the push is not in the multi-POP lab yet (#137) | v0.4 | federation (`mtls`) + API/UI (`/api/federation`) | #30, #137 | no (lab-proven) |
 | Distributed probe agents inside the operator's own network (`packeteer-agent`: probing only, outbound-only mutual TLS with per-agent identity and CRL revocation; each agent declares its site and the source address and tag per provider; `providers[].site` binds a provider to a site; probes spread across a site's agents under a per-agent `max_pps`; results tagged by `site` and `agent`; a stale, hung-up, or revoked agent is not used and its provider fails closed) | done (#230: tested in process over real mutual TLS with two agents at two sites, and in a Docker lab job with the controller and two agent containers (#478); `probe.reorder`, `probe.indirect`, and the path check do not apply to a provider with a site) | v0.9 | prober (`agent`) + core (`internal/agent`, `cmd/agent`) ([agents.md](agents.md)) | #230, #478 | no |
+| External policy feed: the outbound routes inject would announce, published read-only for the operator's own BGP daemon (JSON and a gRPC stream over TLS with a bearer token; TTL and heartbeat; a toggle beside the announcer, so feed only, announcer only, or both) | done (#232: `external_policy`, off by default, routes only in `mode: inject`; the announce controller drives the feed like an announcer, so it carries the same routes under the same rails; `enabled` and `ttl` reload online and turning it off publishes an empty, expired set; reference consumer `packeteer-policy` renders BIRD or OpenBGPD config and reloads, or speaks the ExaBGP process API; lab `lab/e2e-interop.sh bird2\|bird3 external`: BIRD applies the feed, matches the inject route, and drops it at the TTL after SIGKILL; OpenBGPD and ExaBGP are not in the lab. Not built: a RIB view from BMP alone (feed only still needs `bgp.neighbors`), and the guided-inject preflight still asks for an announcer) | v0.9 | core (`internal/extpolicy`, `cmd/policy`) ([external-policy.md](external-policy.md)) | #232 | no (lab-proven) |
 | Herd: opt-in shared measurements between operators (phase 1: local store, signed pull API with mutual TLS pinned to per-node keys, static peers, per-vantage view, preview and served-response audit, local resource limits; hub list of signed member entries as seeds, with `herd entry` and `herd hub-check`; dashboard page with world view, mesh, map, monitors, search, and opt-in outside sources) | partial: phase 1 of docs/design/herd.md (lab-proven) plus the hub (#261) and the dashboard (#296), unit and integration tests only, not lab-proven; no peer exchange, RPKI validation of identities, hints, or crowd threshold yet; advisory only, never read by `Decide` and never announces; off by default | v0.8, v0.9 | core (`internal/herd`, `internal/outside`) + storage (`sqlite`) + API + UI | #87, #260, #261, #296 | no (lab-proven: phase 1 only; hub and dashboard: no) |
 
 Multi-POP (#30, [multi-pop.md](multi-pop.md)): one Packeteer instance per POP (routing domain), joined by a `federation` plugin. The built-in `mtls` plugin serves each instance's snapshot over HTTPS with mutual TLS 1.3 (certificates from a mounted CA; unknown client certificates get 403) and polls its peers; it never announces or decides. A snapshot carries the instance's own providers (health and telemetry), its fresh measurements through them, how its traffic for each learned probed prefix leaves, and its improvements.

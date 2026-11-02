@@ -4,7 +4,8 @@
 // applies the same check whatever the router:
 //
 //	frr:   vtysh -c 'show bgp ipv4 unicast 198.51.100.0/24 json'
-//	bird:  birdc show route all 198.51.100.0/24   (BIRD 2 and 3)
+//	bird:  birdc show route all 198.51.100.0/24   (BIRD 2 and 3; a static
+//	       route's next hop is its "via" gateway)
 //	gobgp: gobgp global rib -a ipv4 198.51.100.0/24 -j
 //
 //	interopcheck -format bird -prefix 198.51.100.0/24 -want injected -nexthop 192.0.2.22
@@ -282,6 +283,13 @@ func parseBIRD(prefix, raw string) ([]Path, error) {
 			continue
 		}
 		if cur == nil {
+			continue
+		}
+		// A static route (the external policy feed, #232) has no BGP next
+		// hop attribute; its gateway is the "via" line. A BGP route's
+		// bgp_next_hop, printed after it, replaces it.
+		if f := strings.Fields(line); len(f) >= 2 && f[0] == "via" && cur.NextHop == "" {
+			cur.NextHop = f[1]
 			continue
 		}
 		key, val, ok := strings.Cut(strings.TrimSpace(line), ":")

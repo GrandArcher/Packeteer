@@ -3,7 +3,9 @@
 # eBGP transits. Documentation addresses (RFC 5737) and documentation /
 # private ASNs only. Brought up by lab/e2e-interop.sh, which sets
 # PACKETEER_LAB_DIR (the fixed prober's state.yaml), INTEROP_PACKETEER_CONFIG,
-# INTEROP_BIRD_CONF, and INTEROP_GOBGP_DIR.
+# INTEROP_BIRD_CONF, and INTEROP_GOBGP_DIR; the external cell (#232) also
+# INTEROP_FEED_DIR (packeteer-policy and the rendered routes) and
+# INTEROP_POLICY_TOKEN.
 name: packeteer-interop
 x-frr: &frr
   image: quay.io/frrouting/frr:10.2.4
@@ -20,6 +22,7 @@ x-bird: &bird
     BIRD_CONF: ${INTEROP_BIRD_CONF:-bird.conf}
   volumes:
     - ./bird:/etc/bird:ro
+    - ${INTEROP_FEED_DIR:-feed}:/opt/feed
 services:
   edge-frr:
     <<: [*frr, *edge]
@@ -90,12 +93,15 @@ services:
     environment:
       PACKETEER_CONFIG: /etc/packeteer/config.yaml
       PACKETEER_LOG_LEVEL: debug
+      PACKETEER_POLICY_TOKEN: ${INTEROP_POLICY_TOKEN:-}
     volumes:
       - ${INTEROP_PACKETEER_CONFIG:-./packeteer.yaml}:/etc/packeteer/config.yaml:ro
       - ${PACKETEER_LAB_DIR}:/etc/packeteer/probes:ro
     networks:
       lab:
         ipv4_address: 192.0.2.10
+volumes:
+  feed:
 networks:
   lab:
     driver: bridge

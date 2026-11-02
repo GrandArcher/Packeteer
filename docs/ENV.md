@@ -18,6 +18,7 @@ Set these on the container (`-e NAME`). Secrets belong here, never in the config
 | `PACKETEER_RIPE_USER`, `PACKETEER_RIPE_PASSWORD` | Maintainer account for the `registry` `ripe` source (#289). Read only when a confirmed change is pushed, sent only as basic authentication to `base_url`, and never in the API, a log line, or the audit record. |
 | `PACKETEER_IXP_MANAGER_API_KEY` | IXP Manager API key for `ixp.members` type `ixf` (#161) and, when that import is the manager export, for the fabric prober's Can Ping GET (#162). Sent only as the `X-IXP-Manager-API-Key` header, never in the URL. The log records the key identifier; the secret is never logged. |
 | `PACKETEER_GEOIP_USER`, `PACKETEER_GEOIP_KEY` | Basic-authentication account for the `geoip` country database download (#135; for MaxMind, the account ID and the license key). Set both or neither. Sent only over https or to a loopback address, never logged or returned. |
+| `PACKETEER_POLICY_TOKEN` | Bearer token of the `external_policy` feed (#232) unless `token_env` names another variable. At least 16 characters; compared in constant time and never logged. `packeteer-policy` reads the same variable by default. See [external-policy.md](external-policy.md). |
 | `PACKETEER_ATLAS_API_KEY` | Your RIPE Atlas API key for the `atlas` block (#213). Sent only in the `Authorization` header to the Atlas API, never logged, never in the URL, and never in `GET /api/atlas`, the System page, or an error. Unset means the integration makes no request. |
 
 ## Referenced from config

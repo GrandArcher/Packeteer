@@ -10,6 +10,7 @@ import (
 
 	"github.com/GrandArcher/Packeteer/internal/announce"
 	"github.com/GrandArcher/Packeteer/internal/config"
+	"github.com/GrandArcher/Packeteer/internal/extpolicy"
 	"github.com/GrandArcher/Packeteer/internal/inbound"
 	"github.com/GrandArcher/Packeteer/internal/mitigation"
 	"github.com/GrandArcher/Packeteer/internal/pluginhost"
@@ -154,10 +155,15 @@ func formatCommunityOverrides(cfg *config.Config) string {
 	return b.String()
 }
 
-func newController(cfg *config.Config, plugins *pluginhost.Set, view *rib.View, inb *inbound.Controller, mit *mitigation.Controller, held func(netip.Prefix) bool, origins *rpki.Set, log *slog.Logger) (*announce.Controller, error) {
+func newController(cfg *config.Config, plugins *pluginhost.Set, view *rib.View, inb *inbound.Controller, mit *mitigation.Controller, held func(netip.Prefix) bool, origins *rpki.Set, feed *extpolicy.Feed, log *slog.Logger) (*announce.Controller, error) {
 	var ann plugin.Announcer
 	if plugins.Announcer != nil {
 		ann = plugins.Announcer.Plugin
+	}
+	if feed != nil {
+		// The feed records what the announcer accepted, so it carries the
+		// same routes under the same rails (#232).
+		ann = extpolicy.NewMirror(ann, feed)
 	}
 	causeLP, providerLP := localPrefTables(cfg)
 	causeC, providerC := communityTables(cfg)

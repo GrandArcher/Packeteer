@@ -318,7 +318,7 @@ func run(ctx context.Context, args []string, getenv func(string) string, stdout,
 	}
 	switch {
 	case cfg.Mode == config.ModeInject:
-		fmt.Fprintf(stdout, "announce: %s local_pref=%d%s%s\n", plugins.Announcer.Type, cfg.LocalPref, formatLocalPrefOverrides(cfg), formatCommunityOverrides(cfg))
+		fmt.Fprintf(stdout, "announce: %s local_pref=%d%s%s\n", announcingVia(cfg, plugins), cfg.LocalPref, formatLocalPrefOverrides(cfg), formatCommunityOverrides(cfg))
 		if ms := cfg.MoreSpecific; ms != nil && ms.Enabled {
 			fmt.Fprintf(stdout, "announce more_specific: learned more-specifics only, max_routes=%d\n", ms.MaxRoutes)
 		}
@@ -719,10 +719,31 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 		log.Error("refusing to start", "err", err)
 		return 1
 	}
-	ctl, err = newController(cfg, plugins, view, inb, mit, lw.Held, rpkiSet, log)
+	policyFeed, feedSrv, err := newPolicyFeed(cfg, getenv, log)
 	if err != nil {
 		log.Error("refusing to start", "err", err)
 		return 1
+	}
+	ctl, err = newController(cfg, plugins, view, inb, mit, lw.Held, rpkiSet, policyFeed, log)
+	if err != nil {
+		log.Error("refusing to start", "err", err)
+		return 1
+	}
+	if feedSrv != nil {
+		if err := feedSrv.Start(); err != nil {
+			log.Error("refusing to start", "err", err)
+			return 1
+		}
+		defer func() {
+			// Every return closes the feed before the listener: an
+			// open stream gets the empty, expired set and ends.
+			policyFeed.Close()
+			stopCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if err := feedSrv.Shutdown(stopCtx); err != nil {
+				log.Warn("external policy feed shutdown", "err", err)
+			}
+		}()
 	}
 	mit.SetOutbound(ctl.Injected)
 	verifier = newSteerVerifier(cfg, decider, inb, plugins, log)
@@ -960,6 +981,7 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 					leading = false
 				}
 				mitChanges, err := standbyRound(now, ctl, inb, mit, log)
+				policyFeed.Touch(now, nil)
 				anomChanges := anom.Changes()
 				if rec != nil {
 					recordMitigations(rec, mitChanges)
@@ -981,6 +1003,7 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 			}
 			verified, backedOut, revertedIn := verifier.check(loopCtx, now, ctl.Injected, in.Results)
 			changes, err := runDecision(now, decider, in, ctl, log, snap.Mode, engine)
+			policyFeed.Touch(now, decider.Improvements())
 			changes = append(backedOut, changes...)
 			atlasAfterMoves(atl, ctl.Injected, changes, in.Results)
 			fed.publish(now, in, decider.Improvements())
@@ -1054,7 +1077,7 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 
 	rl := &reloader{
 		path: path, getenv: getenv, httpUser: httpUser, log: log, cur: cfg, ctl: ctl, poke: poke,
-		exp: exp, flowTags: exportFlowTags,
+		exp: exp, flowTags: exportFlowTags, feed: policyFeed,
 		geo: geo, plugins: plugins, engine: engine, perASN: asnLimiter, decider: decider, fed: fed, col: col,
 		watch: watch, live: live, preview: preview.PreviewConfig, dispatch: dispatch, hist: rec, inb: inb, mit: mit,
 		flowSpecUp: view != nil && mitigationFlowSpec(cfg, plugins),
@@ -1108,7 +1131,7 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 
 	announcing := "disabled"
 	if cfg.Mode == config.ModeInject {
-		announcing = plugins.Announcer.Type
+		announcing = announcingVia(cfg, plugins)
 	}
 	log.Info("packeteer running", "version", version, "mode", cfg.Mode, "bgp_neighbors", len(cfg.BGP.Neighbors), "announce", announcing)
 	if cfg.Synthesizing() {
@@ -1131,6 +1154,8 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 	// withdraws again) and finally drop the session. Graceful restart is never
 	// enabled, so a missed withdraw still disappears with the session.
 	withdrawErr := errors.Join(mit.WithdrawAll(stopCtx), inb.WithdrawAll(stopCtx), ctl.WithdrawAll(stopCtx))
+	// Consumers drop every route now rather than at the TTL.
+	policyFeed.Close()
 	exportFlowTags.set("", nil, nil)
 	if withdrawErr != nil {
 		log.Error("withdraw on shutdown", "err", withdrawErr)

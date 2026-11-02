@@ -147,7 +147,11 @@ type Config struct {
 	Sources   []PluginSpec `yaml:"sources"`
 	Scorer    *PluginSpec  `yaml:"scorer"`
 	Announcer *PluginSpec  `yaml:"announcer"`
-	Notifiers []PluginSpec `yaml:"notifiers"`
+	// ExternalPolicy publishes the routes the announcer puts on the wire
+	// for the operator's own BGP daemon (#232). With it enabled, inject
+	// may run without an announcer: the session then only learns.
+	ExternalPolicy *ExternalPolicy `yaml:"external_policy"`
+	Notifiers      []PluginSpec    `yaml:"notifiers"`
 	// Exporters push decisions, events, and tagged flow records to Kafka,
 	// NATS, an OTLP collector, or an IPFIX collector (#207). Empty is off.
 	// They only read; they never announce.
