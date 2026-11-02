@@ -66,6 +66,9 @@ func (c *Config) validateIXP(add func(string, ...any)) {
 	if c.IXP == nil {
 		return
 	}
+	if len(c.RIBSources) > 0 && len(c.BGP.Neighbors) == 0 {
+		add("rib_sources without bgp.neighbors builds a BMP-alone RIB view, which ixp mode does not use; remove rib_sources")
+	}
 	if c.Mode == ModeInject {
 		add("ixp forbids mode inject: IXP mode is observe-only and never announces")
 	}

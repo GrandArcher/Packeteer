@@ -468,13 +468,8 @@ func (c *Config) validatePlugins(add func(string, ...any)) {
 // (#237): the RIB view is learned over BMP alone, so every provider has to
 // read its BMP paths, and nothing can announce, since announcers use the
 // iBGP session. The external policy feed is the way to act on decisions.
-// IXP mode does not use the RIB view, so it is refused here (#482).
 func (c *Config) validateBMPAlone(add func(string, ...any)) {
-	if len(c.RIBSources) == 0 || len(c.BGP.Neighbors) > 0 {
-		return
-	}
-	if c.IXP != nil {
-		add("rib_sources without bgp.neighbors builds a BMP-alone RIB view, which ixp mode does not use; remove rib_sources")
+	if len(c.RIBSources) == 0 || len(c.BGP.Neighbors) > 0 || c.IXP != nil {
 		return
 	}
 	const alone = "without bgp.neighbors the RIB view is learned over BMP alone; set bmp: prefer or only"
