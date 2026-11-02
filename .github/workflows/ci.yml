@@ -3118,7 +3118,7 @@ jobs:
           load: true
           tags: packeteer:ci
           build-args: VERSION=ci-${{ github.sha }}
-      - name: BMP load test (#237; stock image, mounted config, observe, no bgp.neighbors, full-table synthetic RIB over BMP Adj-RIB-In and Loc-RIB, sustained IPFIX, churn, budgets in lab/soak/budgets.yaml)
+      - name: BMP load test (#237; stock image, mounted config, observe, no bgp.neighbors, full-table synthetic RIB over BMP post-policy Adj-RIB-In with two paths a prefix, sustained IPFIX, churn, budgets in lab/soak/budgets.yaml)
         env:
           SOAK_OUT: load-bmp-result.json
         run: bash lab/soak.sh packeteer:ci bmp

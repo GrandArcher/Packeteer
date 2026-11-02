@@ -181,8 +181,7 @@ func TestBMPPathsInline(t *testing.T) {
 
 // TestBMPPathsAreCompact locks the BMP layout at full-table scale (#237):
 // one path per prefix stays inline, and an Adj-RIB-In path next to the
-// Loc-RIB path is a two-entry slice. The map per prefix this replaced
-// measured about 1,300 and 1,870 bytes a prefix.
+// Loc-RIB path is a two-entry slice.
 func TestBMPPathsAreCompact(t *testing.T) {
 	const n = 50000
 	for _, tc := range []struct {
