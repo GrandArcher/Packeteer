@@ -342,3 +342,16 @@ func TestIXPCoreConfig(t *testing.T) {
 		t.Fatalf("inject with core: %v", err)
 	}
 }
+
+// rib_sources without bgp.neighbors is a BMP-alone RIB view (#237), which
+// ixp mode does not use (#482).
+func TestIXPRefusesBMPAlone(t *testing.T) {
+	src := "rib_sources:\n  - type: bmp\n    config:\n      routers: [192.0.2.254]\n"
+	_, err := Parse([]byte(minimalYAML + "ixp: {}\n" + src))
+	if err == nil || !strings.Contains(err.Error(), "ixp mode does not use") {
+		t.Fatalf("ixp with rib_sources and no neighbors: err = %v", err)
+	}
+	if _, err := Parse([]byte(minimalYAML + "ixp: {}\n")); err != nil {
+		t.Errorf("ixp alone: %v", err)
+	}
+}

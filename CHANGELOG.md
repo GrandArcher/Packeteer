@@ -4,6 +4,10 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 
 ## [Unreleased]
 
+### Fixed
+
+- `ixp` with `rib_sources` and no `bgp.neighbors` is refused; BIRD 3 station-restart gap marked untested; path-store benchmark added (#482).
+
 ### Added
 
 - BMP alone as the RIB view: no `bgp.neighbors`, ready only while a BMP feed reports a peer, withdraw on feed loss; BMP peer metrics, interop cell `bmponly`, and a `bmp` load profile (#237).
