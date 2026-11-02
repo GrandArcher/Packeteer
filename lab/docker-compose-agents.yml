@@ -1,0 +1,100 @@
+# Probe agent lab (#478). One FRR edge, the controller in observe mode, and
+# two packeteer-agent containers at two sites, dc-a (transit-a) and dc-b
+# (transit-b), all measuring one target. Documentation addresses (RFC 5737)
+# and a private ASN only. Brought up by lab/e2e-agents.sh, which sets
+# PACKETEER_LAB_DIR: certs/ holds the per-run certificates and CRLs from
+# lab/mkcerts.
+name: packeteer-e2e-agents
+x-agent: &agent
+  image: packeteer:e2e
+  depends_on:
+    - packeteer
+    - target
+  cap_add:
+    - NET_RAW
+    - NET_ADMIN
+services:
+  edge:
+    image: quay.io/frrouting/frr:10.2.4
+    hostname: edge
+    privileged: true
+    entrypoint: ["/bin/sh", "/etc/frr/start.sh"]
+    volumes:
+      - ./frr:/etc/frr
+    networks:
+      lab:
+        ipv4_address: 192.0.2.254
+  packeteer:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+      args:
+        VERSION: e2e
+    image: packeteer:e2e
+    depends_on:
+      - edge
+    cap_add:
+      - NET_RAW
+      - NET_ADMIN
+      - NET_BIND_SERVICE
+    environment:
+      PACKETEER_CONFIG: /etc/packeteer/config.yaml
+      PACKETEER_LOG_LEVEL: debug
+    volumes:
+      - ./packeteer-agents.yaml:/etc/packeteer/config.yaml:ro
+      - ${PACKETEER_LAB_DIR}/certs:/etc/packeteer/certs:ro
+    networks:
+      lab:
+        ipv4_address: 192.0.2.10
+  # The kernel answers ICMP for 198.51.100.1.
+  target:
+    image: alpine:3.22
+    cap_add:
+      - NET_ADMIN
+    command: ["/bin/sh", "-c", "ip addr add 198.51.100.1/32 dev lo && sleep infinity"]
+    healthcheck:
+      test: ["CMD-SHELL", "ip addr show lo | grep -q 198.51.100.1"]
+      interval: 1s
+      retries: 30
+    networks:
+      lab:
+        ipv4_address: 192.0.2.30
+  # Site dc-a is 40ms slower than dc-b, so the controller recommends
+  # transit-b while both agents are up.
+  agent-a:
+    <<: *agent
+    entrypoint:
+      - /bin/sh
+      - -c
+      - >-
+        apk add --no-cache iproute2 >/dev/null &&
+        tc qdisc add dev eth0 root netem delay 40ms &&
+        ip route add 198.51.100.1/32 via 192.0.2.30 &&
+        exec /usr/local/bin/packeteer-agent -config /etc/packeteer/agent.yaml
+    volumes:
+      - ./agent-site-a.yaml:/etc/packeteer/agent.yaml:ro
+      - ${PACKETEER_LAB_DIR}/certs:/etc/packeteer/certs:ro
+    networks:
+      lab:
+        ipv4_address: 192.0.2.11
+  agent-b:
+    <<: *agent
+    entrypoint:
+      - /bin/sh
+      - -c
+      - >-
+        ip route add 198.51.100.1/32 via 192.0.2.30 &&
+        exec /usr/local/bin/packeteer-agent -config /etc/packeteer/agent.yaml
+    volumes:
+      - ./agent-site-b.yaml:/etc/packeteer/agent.yaml:ro
+      - ${PACKETEER_LAB_DIR}/certs:/etc/packeteer/certs:ro
+    networks:
+      lab:
+        ipv4_address: 192.0.2.12
+networks:
+  lab:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 192.0.2.0/24
+          gateway: 192.0.2.3

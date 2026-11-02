@@ -1,6 +1,6 @@
 # Distributed probe agents (#230)
 
-Tested in process over mutual TLS only (no container lab job yet); not proven on a public edge. Default mode stays `observe`.
+Tested in process over mutual TLS and in a Docker lab with two agent containers (`lab/e2e-agents.sh`); not proven on a public edge. Default mode stays `observe`.
 
 A probe agent is a small process you run inside your own network (another POP, a site behind an edge router, a data center). It measures a provider from where that provider's traffic leaves and reports to one central controller. It is not the herd ([herd.md](herd.md)), which shares measurements between different networks.
 
@@ -94,6 +94,8 @@ docker run --network host --cap-add NET_RAW --cap-add NET_ADMIN \
 
 ## Testing
 
-`go test ./internal/plugins/prober/agent` starts a controller and agents over real mutual TLS on loopback and checks the split across agents and sites, the per-site attribution, a killed agent failing its provider closed, revocation at start and while running, unlisted and foreign certificates, rate limits, and forged answers. There is no container lab job for it yet.
+`go test ./internal/plugins/prober/agent` starts a controller and agents over real mutual TLS on loopback and checks the split across agents and sites, the per-site attribution, a killed agent failing its provider closed, revocation at start and while running, unlisted and foreign certificates, rate limits, and forged answers.
+
+`lab/e2e-agents.sh` (CI job `e2e`, #478) runs the stock image as the controller in `observe` mode and as two `packeteer-agent` containers at sites `dc-a` and `dc-b`, with a throwaway CA and CRLs from `lab/mkcerts`. It checks that each provider is measured by its own site's agent and the result names that site and agent; that a SIGKILLed agent fails its provider closed, its provider is unusable in `/api/decisions`, and the recommendation to it goes away until the agent returns; and that swapping in a CRL that lists an agent makes the running controller refuse it, also after the agent restarts. Documentation addresses and a private ASN only; nothing is announced.
 
 Rollback: remove the `agent` prober and the `site` keys and restart; stop the agents.

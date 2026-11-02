@@ -1,0 +1,53 @@
+# Lab only (lab/e2e-agents.sh, #478). Observe mode: nothing is announced.
+# Both providers are measured by probe agents (#230), one agent per site,
+# over mutual TLS with certificates generated for the run.
+# Documentation prefixes and a private ASN only.
+mode: observe
+asn: 64512
+router_id: 192.0.2.10
+hold_time: 3s
+thresholds:
+  min_rtt_delta_ms: 15
+allowlist:
+  prefixes:
+    - 198.51.100.0/24
+providers:
+  - name: transit-a
+    site: dc-a
+    next_hop: 192.0.2.1
+  - name: transit-b
+    site: dc-b
+    next_hop: 192.0.2.2
+probe:
+  interval: 2s
+  timeout: 500ms
+  packets: 4
+bgp:
+  neighbors:
+    - address: 192.0.2.254
+      description: edge
+sources:
+  - type: static
+    config:
+      targets:
+        - prefix: 198.51.100.0/24
+          host: 198.51.100.1
+probers:
+  - type: agent
+    config:
+      listen: 0.0.0.0:9444
+      cert_file: /etc/packeteer/certs/controller.crt
+      key_file: /etc/packeteer/certs/controller.key
+      ca_file: /etc/packeteer/certs/ca.crt
+      crl_file: /etc/packeteer/certs/agents.crl
+      # An agent is stale 3s after its last call, so the lab does not wait
+      # for the 15s default.
+      poll_wait: 1s
+      max_age: 3s
+      agents:
+        - name: agent-a
+        - name: agent-b
+http:
+  listen: 0.0.0.0:8080
+auth:
+  enabled: false
