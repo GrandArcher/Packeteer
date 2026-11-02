@@ -213,13 +213,13 @@ Whatever the router, check the two filters with its show commands before you set
 
 The `interop` workflow (`.github/workflows/interop.yml`, #53) runs weekly, on demand, and on pull requests that touch the lab, the announcer, or the BMP station. Each cell runs `lab/e2e-interop.sh <router> <feature>`. One simulated edge of that router type (`lab/interop/`) sits between the Packeteer image (inject, mounted config) and two simulated FRR eBGP transits. The edge config is the same in every cell: accept from Packeteer only with `64512:666`, export nothing to eBGP, hold time 9s, graceful restart off, add-path send offered. Lab only, with documentation prefixes and ASNs.
 
-| Edge | iBGP (best path) | add-path | BMP (post-policy) |
-|---|---|---|---|
-| FRR 10.2.4 | yes | yes | yes |
-| BIRD 2 (Debian 2.17) | yes | yes | not available (built without BMP) |
-| BIRD 3 (Debian 3.1) | yes | yes | yes, with one gap (below) |
-| GoBGP (the version in `go.mod`) | yes | yes | yes |
-| MikroTik CHR 7.23.7 | yes (`lab/e2e-chr.sh`, [details](mikrotik.md#tested-in-ci-chr-in-qemu)) | not exercised | not exercised |
+| Edge | iBGP (best path) | add-path | BMP (post-policy) | BMP alone |
+|---|---|---|---|---|
+| FRR 10.2.4 | yes | yes | yes | yes |
+| BIRD 2 (Debian 2.17) | yes | yes | not available (built without BMP) | not available |
+| BIRD 3 (Debian 3.1) | yes | yes | yes, with one gap (below) | yes; the gap is untested there, since the cell restarts the edge, not the station |
+| GoBGP (the version in `go.mod`) | yes | yes | yes | yes |
+| MikroTik CHR 7.23.7 | yes (`lab/e2e-chr.sh`, [details](mikrotik.md#tested-in-ci-chr-in-qemu)) | not exercised | not exercised | not exercised |
 
 Every cell checks:
 
@@ -232,6 +232,7 @@ What each column adds:
 - **iBGP:** the route stays while the edge no longer sends the native path. Flip-back withdraws it, and restoring the probes injects it again. SIGTERM withdraws it. A frozen process (`docker pause`) keeps the route until the edge's 9s hold timer expires. SIGKILL drops it with the session.
 - **add-path** (`bgp.neighbors[].add_path`): the edge sends transit-b's inactive path with a path ID. When transit-b withdraws, the route check retires the steer at once, well inside the 5m `hold_time`. The steer returns when transit-b announces again. Then SIGTERM, restart, and SIGKILL.
 - **BMP** (`rib_sources`, `bmp: only`): transit-b's path reaches Packeteer only over BMP. The cell repeats the add-path withdraw, re-announce, and SIGTERM steps. After a restart, the edge must refeed the new station before SIGKILL.
+- **BMP alone** (`bmponly`, #237, `lab/interop/packeteer-bmponly.yaml`): no `bgp.neighbors` and no announcer; the decision goes out on the [external policy feed](external-policy.md). Both transits' paths arrive over BMP and none over iBGP, and the feed lists exactly the route inject would send. The edge is stopped: the BMP feed drops, `packeteer_bgp_ready` reads 0, and the feed empties. The edge returns: BMP reconnects and the route comes back. The first check above does not apply, since Packeteer has no session to the edge; the edge must keep its native path and never hold a route from Packeteer.
 
 Findings:
 

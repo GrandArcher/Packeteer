@@ -52,8 +52,22 @@ func TestExternalPolicyInjectWithoutAnnouncer(t *testing.T) {
 	if _, err := Parse([]byte(noAnn + strings.Replace(feedBlock, "enabled: true", "enabled: false", 1))); err == nil {
 		t.Fatal("inject with a disabled feed and no announcer accepted")
 	}
-	if _, err := Parse([]byte(strings.Replace(noAnn, "bgp:\n  neighbors:\n    - address: 192.0.2.1\n", "", 1) + feedBlock)); err == nil || !strings.Contains(err.Error(), "bgp.neighbors") {
-		t.Fatalf("feed only still needs the learning session: %v", err)
+	if _, err := Parse([]byte(strings.Replace(noAnn, "bgp:\n  neighbors:\n    - address: 192.0.2.1\n", "", 1) + feedBlock)); err == nil || !strings.Contains(err.Error(), "bgp.neighbors entry, or rib_sources") {
+		t.Fatalf("feed only with no RIB view: %v", err)
+	}
+}
+
+// A feed-only inject config can learn the RIB over BMP alone (#237).
+func TestExternalPolicyBMPAlone(t *testing.T) {
+	noBGP := strings.Replace(injectYAML, "bgp:\n  neighbors:\n    - address: 192.0.2.1\n", "", 1)
+	noBGP = strings.Replace(noBGP, "    next_hop: 192.0.2.1\n", "    next_hop: 192.0.2.1\n    bmp: only\n", 1)
+	src := "rib_sources:\n  - type: bmp\n    config:\n      routers: [192.0.2.254]\n"
+	feedOnly := strings.Replace(noBGP, "announcer:\n  type: gobgp\n", "", 1) + src + feedBlock
+	if _, err := Parse([]byte(feedOnly)); err != nil {
+		t.Fatalf("feed only over BMP alone: %v", err)
+	}
+	if _, err := Parse([]byte(noBGP + src + feedBlock)); err == nil || !strings.Contains(err.Error(), "announcer requires bgp.neighbors") {
+		t.Fatalf("announcer without an iBGP session: %v", err)
 	}
 }
 

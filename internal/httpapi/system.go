@@ -284,6 +284,10 @@ func bgpRows(snap Snapshot) []Component {
 	if !snap.BGPConfigured {
 		return []Component{{Kind: KindBGP, Name: "iBGP", State: StateIdle, Detail: "no bgp.neighbors: the current exit of a prefix is unknown"}}
 	}
+	if snap.BMPAlone {
+		// The RIB source rows count the routers (#237).
+		return []Component{{Kind: KindBGP, Name: "iBGP", State: StateIdle, Detail: "no bgp.neighbors: the RIB view is learned over BMP alone"}}
+	}
 	var rows []Component
 	for _, p := range snap.Peers {
 		label, connecting := bgpWords(p.State, p.Established)
@@ -536,7 +540,7 @@ func announcerRow(a *PluginFact, snap Snapshot, ha *plugin.ElectorStatus) Compon
 	case ha != nil && ha.Role == plugin.RoleStandby:
 		c.Detail = "announces nothing while this instance is standby"
 	case !snap.RIBReady:
-		c.State, c.Error = StateDegraded, "no iBGP session is established: injected routes are withdrawn"
+		c.State, c.Error = StateDegraded, "the RIB view is not ready (no iBGP session, or with BMP alone no BMP feed): injected routes are withdrawn"
 	default:
 		c.State = StateOK
 		c.Detail = "may announce allowlisted prefixes that are in the learned RIB"

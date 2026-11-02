@@ -36,10 +36,14 @@ type Input struct {
 	Thresholds policy.Thresholds
 
 	BGPConfigured bool
+	BMPAlone      bool // the RIB view has no iBGP neighbors (#237)
 	RIBReady      bool
 	RIBPrefixes   int // prefixes in the learned view
 	Peers         []rib.PeerState
-	Routes        map[netip.Prefix]rib.Route
+	// BMPPeers are the peers BMP sessions report up, with the router's
+	// Adj-RIB-In count when it sent one (#237). Metrics only.
+	BMPPeers []rib.BMPPeer
+	Routes   map[netip.Prefix]rib.Route
 	// Paths are every learned path for those same prefixes, including
 	// inactive add-path and BMP paths. Assemble does not walk the RIB.
 	Paths map[netip.Prefix][]rib.Route
@@ -86,6 +90,7 @@ type Snapshot struct {
 	At            time.Time
 	DecidedAt     time.Time
 	BGPConfigured bool
+	BMPAlone      bool
 	RIBReady      bool
 	RIBPrefixes   int
 
@@ -114,6 +119,9 @@ type Snapshot struct {
 	// Truncated is packeteer_truncated_total. It is not part of the
 	// JSON API.
 	Truncated map[string]uint64 `json:"-"`
+	// BMPPeers are packeteer_bmp_peer_up and
+	// packeteer_bmp_peer_adj_rib_in. They are not part of the JSON API.
+	BMPPeers []rib.BMPPeer `json:"-"`
 	// ASNMap groups measured prefixes by origin ASN and provider site.
 	// It is display only and is not a routing decision.
 	ASNMap []ASNNode
@@ -445,8 +453,8 @@ type Peer struct {
 }
 
 // Ready reports whether the process should receive traffic-steering work.
-// BGP that is not configured does not block readiness. BGP that is
-// configured does, until at least one session is established.
+// A RIB view that is not configured does not block readiness. One that is
+// configured (bgp.neighbors, or rib_sources alone) does, until it is ready.
 func (s Snapshot) Ready() bool {
 	if !s.Started {
 		return false
@@ -470,6 +478,7 @@ func Assemble(in Input) Snapshot {
 		At:                 in.At.UTC(),
 		DecidedAt:          in.DecidedAt,
 		BGPConfigured:      in.BGPConfigured,
+		BMPAlone:           in.BMPAlone,
 		RIBReady:           in.RIBReady,
 		RIBPrefixes:        in.RIBPrefixes,
 		Providers:          assembleProviders(in),
@@ -479,6 +488,7 @@ func Assemble(in Input) Snapshot {
 		Improvements:       assembleImprovements(in),
 		Quarantined:        assembleQuarantine(in.Quarantined),
 		Peers:              assemblePeers(in.Peers),
+		BMPPeers:           in.BMPPeers,
 		Telemetry:          assembleTelemetry(in.Telemetry, in.Providers),
 		Exchanges:          in.Exchanges,
 		Reorder:            assembleReorder(in.Reorder),

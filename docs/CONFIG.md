@@ -55,7 +55,7 @@ The image entrypoint is the same binary. Flags go after the image name.
 | `log` | `info` / `text` | no | Process log. |
 | `http` | `127.0.0.1:8080` | no | Read-only dashboard, API, and metrics. |
 | `bgp` | no neighbors | inject: at least one neighbor | iBGP sessions. |
-| `rib_sources` | none | no | Route feeds into the RIB view from outside the iBGP session: `type: bmp` is a BMP monitoring station. Needs `bgp.neighbors`. Learn-only, in-process only; does not announce. See [RIB source `bmp`](#rib-source-bmp). |
+| `rib_sources` | none | no | Route feeds into the RIB view from outside the iBGP session: `type: bmp` is a BMP monitoring station. Without `bgp.neighbors` the view is learned over BMP alone ([BMP alone](#bmp-alone)). Learn-only, in-process only; does not announce. See [RIB source `bmp`](#rib-source-bmp). |
 | `plugin_dir` | `/etc/packeteer/plugins` | no | Directory for out-of-process plugins. |
 | `probers` | `icmp`, then `tcp` | no | Ordered. For each address, the next prober runs when an earlier one errors or gets no reply at all. Every probe run starts again at the first prober. |
 | `sources` | none | no | Probe targets. With none, the process starts and probes nothing. |
@@ -1858,7 +1858,7 @@ Used under `troubleshoot.whois`. Asks an RDAP server (RFC 9082/9083) about an ad
 
 ### RIB source `bmp`
 
-A BMP monitoring station (RFC 7854; Loc-RIB per RFC 9069). Edge routers connect to it and stream the routes they accepted from each BGP peer (post-policy Adj-RIB-In), so Packeteer sees every provider's path for a prefix, including paths the router did not select (an inactive IX or backup transit path), without a full iBGP feed. It never sends BGP and never announces. Lab-proven only (`lab/e2e-bmp.sh`).
+A BMP monitoring station (RFC 7854; Loc-RIB per RFC 9069). Edge routers connect to it and stream the routes they accepted from each BGP peer (post-policy Adj-RIB-In), so Packeteer sees every provider's path for a prefix, including paths the router did not select (an inactive IX or backup transit path), without a full iBGP feed, or with no iBGP session at all ([BMP alone](#bmp-alone)). It never sends BGP and never announces. Lab-proven only: `lab/e2e-bmp.sh`, the `bmp` and `bmponly` cells of the [interop matrix](routers.md#interop-matrix) (FRR, BIRD 3, GoBGP), and the `bmp` load profile ([performance.md](performance.md#bmp-alone-237)).
 
 ```yaml
 providers:
@@ -1897,11 +1897,25 @@ With several monitored edges, a BMP path counts for a provider's route check onl
 
 **Packeteer's own routes.** A router reports Packeteer's injected route back over BMP: in the Adj-RIB-In of Packeteer's iBGP session and, once it wins, in Loc-RIB. Its next hop is the steered provider. Packeteer ignores every path on a peer whose BGP ID is its `router_id`, and every path tagged with `packeteer_community` (a standard community or a large community), so an injected route never keeps its prefix in the view or passes its own route check. Keep `packeteer_community` on the route through the router's import policy (the lab edge does) so Loc-RIB still carries it. The own-session filter covers only the router Packeteer peers with. If Packeteer's route is reflected to another monitored router (a route reflector, whose Adj-RIB-In shows the reflector's BGP ID, not `router_id`), only the community identifies it. An import policy or reflector that strips the community would let the injected route keep its prefix learned. The controller logs a warning at startup whenever a provider uses `prefer` or `only`, as a reminder.
 
-**Failure.** The view is ready only while an iBGP session is up (the announcer needs it); BMP never makes it ready. When a router's BMP session ends (TCP close, termination, read error, TCP keepalive timeout, `idle_timeout`, shutdown), every path from that router is dropped. A router that dies without closing TCP keeps its paths until TCP keepalive gives up (about 30s) or `idle_timeout` fires, whichever is first; during that time an `only` or `prefer` route check can still pass on those paths. A peer down drops that peer's paths. A peer whose messages cannot be decoded is treated as down until its next peer up. A peer that negotiated add-path with the router (the router's OPEN offers receive and the peer's offers send, for example an IX route server) is decoded with path identifiers: each of its paths is kept, and a withdraw removes only the path with the same identifier. Improvements that lose their provider's path then retire through the route check; a prefix that leaves the view is retired as before.
+**Failure.** With `bgp.neighbors` the view is ready only while an iBGP session is up (the announcer needs it); BMP never makes it ready. Without them see [BMP alone](#bmp-alone). When a router's BMP session ends (TCP close, termination, read error, TCP keepalive timeout, `idle_timeout`, shutdown), every path from that router is dropped. A router that dies without closing TCP keeps its paths until TCP keepalive gives up (about 30s) or `idle_timeout` fires, whichever is first; during that time an `only` or `prefer` route check can still pass on those paths. A peer down drops that peer's paths. A peer whose messages cannot be decoded is treated as down until its next peer up. A peer that negotiated add-path with the router (the router's OPEN offers receive and the peer's offers send, for example an IX route server) is decoded with path identifiers: each of its paths is kept, and a withdraw removes only the path with the same identifier. Improvements that lose their provider's path then retire through the route check; a prefix that leaves the view is retired as before.
 
 FRR sends BMP with `-M bmp` on bgpd and a `bmp targets` block (`bmp connect <station> port 11019`, `bmp monitor ipv4 unicast post-policy`, optionally `bmp monitor ipv4 unicast loc-rib`, and `bmp stats interval` if you set `idle_timeout`); see `lab/frr-bmp/frr.conf`. FRR sends peer up and peer down with the policy flag clear; the station applies them to the peer whichever table is monitored. FRR offers add-path Receive on every session by default; with a peer that does not offer send, that is not negotiated add-path and is decoded normally.
 
 **Rollback:** set every provider's `bmp` to `off` (or remove it) and restart; the view falls back to the iBGP RIB. Remove `rib_sources` too to stop the station listening.
+
+#### BMP alone
+
+With `rib_sources` and no `bgp.neighbors` (#237), the RIB view is learned over BMP alone: no iBGP session to the router is needed.
+
+- Every provider, and every exchange, needs `bmp: prefer` or `only`; validation names the ones that do not.
+- Nothing can announce: `announcer`, `inbound.announcer`, and `mitigation.announcer` are refused, since they publish on the iBGP session. `mode: inject` is allowed with [`external_policy`](external-policy.md) alone, which publishes the routes inject would send for your own BGP daemon. `ha` and `herd` still need `bgp.neighbors`.
+- The view is ready while at least one monitored router reports a BGP peer, or its Loc-RIB, up. A router whose session ends drops its paths. When the last one goes the view is not ready, `packeteer_ready` and `packeteer_bgp_ready` read 0, every improvement is retired, and the feed publishes an empty set. A router that reconnects is a new session: its paths and readiness return as it reports peers and routes again. A router that dies without closing TCP is noticed by TCP keepalive (about 30s) or `idle_timeout`.
+- Send Loc-RIB where the router supports it, so the native provider is the router's choice and not the shortest-AS-path estimate.
+- BIRD 3.1.7 sends no peer up or routes for sessions already up when the station restarts ([routers.md](routers.md#interop-matrix)). With BMP alone the view then stays not ready, and nothing is steered, until BIRD's BMP protocol is restarted.
+- `bgp.neighbors` cannot be added on SIGHUP to a view started without them; restart.
+- `packeteer_bmp_peer_up{router,peer}` is 1 for each peer (`peer="loc-rib"` for the Loc-RIB) a BMP session reports up, and `packeteer_bmp_peer_adj_rib_in{router,peer}` is the router's Adj-RIB-In count from its last Statistics Report. The System page shows the RIB source row as "N routers up, M down" and names the routers that are down.
+
+**Rollback:** add `bgp.neighbors` back (and an announcer if you inject) and restart.
 
 ### Federation `mtls`
 

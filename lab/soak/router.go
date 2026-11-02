@@ -64,6 +64,9 @@ type router struct {
 	ln   net.Listener
 	slow int // bytes a second Packeteer's messages are read at; 0 reads at once
 	cap  int // routes Packeteer may hold on this session (max_improvements)
+	// bmpPort is Packeteer's BMP station port when the router is played
+	// over BMP instead of iBGP (bmp.go); ln is nil then.
+	bmpPort int
 
 	mu    sync.Mutex // serializes writes on c and guards c and ended
 	c     net.Conn   // nil between sessions
@@ -91,8 +94,11 @@ func startRouter(ctx context.Context, id, port int, tbl table, adv *advertised) 
 }
 
 // accept waits for Packeteer and opens a session. Connections from any
-// other address are refused.
+// other address are refused. Over BMP the router connects instead.
 func (r *router) accept() error {
+	if r.bmpPort != 0 {
+		return r.dialBMP()
+	}
 	for {
 		c, err := r.ln.Accept()
 		if err != nil {
@@ -261,6 +267,11 @@ func (r *router) readLoop(c net.Conn, ended chan struct{}) {
 	if r.slow > 0 {
 		src = &throttle{r: c, bps: r.slow}
 	}
+	if r.bmpPort != 0 {
+		// The station sends nothing; the read ends when it closes.
+		_, _ = io.Copy(io.Discard, c)
+		return
+	}
 	last := time.Now()
 	for {
 		_ = c.SetReadDeadline(time.Now().Add(holdTime * time.Second))
@@ -325,7 +336,9 @@ func (r *router) flap() bool {
 func (r *router) established() bool { return r.up.Load() }
 
 func (r *router) stop() {
-	_ = r.ln.Close()
+	if r.ln != nil {
+		_ = r.ln.Close()
+	}
 	r.mu.Lock()
 	if r.c != nil {
 		_ = r.c.Close()
@@ -333,8 +346,12 @@ func (r *router) stop() {
 	r.mu.Unlock()
 }
 
-// endOfRIB marks the table complete for both families.
+// endOfRIB marks the table complete for both families. The BMP station
+// reads no End-of-RIB, so the BMP router sends none.
 func (r *router) endOfRIB() error {
+	if r.bmpPort != 0 {
+		return nil
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.c == nil {
@@ -359,7 +376,7 @@ const maxNLRI = 256
 // entry can never be overtaken by an announce of it.
 func (r *router) update(from, to int, withdraw bool) error {
 	skip := func(i int) bool { return !withdraw && r.adv.withdrawn(i) }
-	batch := make([]*bgp.BGPMessage, 0, 64)
+	batch := make([][]byte, 0, 64)
 	for i := from; i < to; {
 		r.mu.Lock()
 		if r.c == nil {
@@ -376,12 +393,17 @@ func (r *router) update(from, to int, withdraw bool) error {
 			for j < to && j-i < maxNLRI && r.tbl.group(j) == r.tbl.group(i) && (j < r.tbl.v4n()) == (i < r.tbl.v4n()) && !skip(j) {
 				j++
 			}
-			batch = append(batch, r.message(i, j, withdraw))
+			msgs, err := r.encode(i, j, withdraw)
+			if err != nil {
+				r.mu.Unlock()
+				return err
+			}
+			batch = append(batch, msgs...)
 			i = j
 		}
 		var err error
 		for _, m := range batch {
-			if err = writeMsg(r.c, m); err != nil {
+			if _, err = r.c.Write(m); err != nil {
 				break
 			}
 		}
@@ -393,8 +415,23 @@ func (r *router) update(from, to int, withdraw bool) error {
 	return nil
 }
 
+// encode is the wire form of the UPDATE for entries [i, j): the UPDATE on
+// an iBGP session, or its BMP route monitoring messages.
+func (r *router) encode(i, j int, withdraw bool) ([][]byte, error) {
+	if r.bmpPort != 0 {
+		return r.bmpRoutes(i, j, withdraw)
+	}
+	b, err := r.message(i, j, withdraw).Serialize()
+	return [][]byte{b}, err
+}
+
 // message is one UPDATE for entries [i, j), which share family and group.
 func (r *router) message(i, j int, withdraw bool) *bgp.BGPMessage {
+	return r.messageVia(i, j, withdraw, r.tbl.provider(i))
+}
+
+// messageVia is message with the next hop of provider prov.
+func (r *router) messageVia(i, j int, withdraw bool, prov int) *bgp.BGPMessage {
 	if i < r.tbl.v4n() {
 		nlri := make([]*bgp.IPAddrPrefix, 0, j-i)
 		for k := i; k < j; k++ {
@@ -404,7 +441,7 @@ func (r *router) message(i, j int, withdraw bool) *bgp.BGPMessage {
 		if withdraw {
 			return bgp.NewBGPUpdateMessage(nlri, nil, nil)
 		}
-		return bgp.NewBGPUpdateMessage(nil, append(r.attrs(i), bgp.NewPathAttributeNextHop(nextHopsV4[r.tbl.provider(i)])), nlri)
+		return bgp.NewBGPUpdateMessage(nil, append(r.attrs(i), bgp.NewPathAttributeNextHop(nextHopsV4[prov])), nlri)
 	}
 	nlri := make([]bgp.AddrPrefixInterface, 0, j-i)
 	for k := i; k < j; k++ {
@@ -414,7 +451,7 @@ func (r *router) message(i, j int, withdraw bool) *bgp.BGPMessage {
 	if withdraw {
 		return bgp.NewBGPUpdateMessage(nil, []bgp.PathAttributeInterface{bgp.NewPathAttributeMpUnreachNLRI(nlri)}, nil)
 	}
-	return bgp.NewBGPUpdateMessage(nil, append(r.attrs(i), bgp.NewPathAttributeMpReachNLRI(nextHopsV6[r.tbl.provider(i)], nlri)), nil)
+	return bgp.NewBGPUpdateMessage(nil, append(r.attrs(i), bgp.NewPathAttributeMpReachNLRI(nextHopsV6[prov], nlri)), nil)
 }
 
 func (r *router) attrs(i int) []bgp.PathAttributeInterface {

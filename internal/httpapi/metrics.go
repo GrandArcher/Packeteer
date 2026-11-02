@@ -44,7 +44,7 @@ func Metrics(s Snapshot) []byte {
 
 	writeGauge(&b, "packeteer_up", "1 while the HTTP server is serving.",
 		sample{value: 1})
-	writeGauge(&b, "packeteer_ready", "1 after startup when the RIB is ready if BGP is configured.",
+	writeGauge(&b, "packeteer_ready", "1 after startup when the RIB view is ready, if one is configured.",
 		sample{value: boolFloat(s.Ready())})
 	writeGauge(&b, "packeteer_build_info", "Process version and operating mode. The value is always 1.",
 		sample{labels: []lbl{{"version", s.Version}, {"mode", s.Mode}}, value: 1})
@@ -142,9 +142,9 @@ func Metrics(s Snapshot) []byte {
 	if s.BGPConfigured && !s.RIBReady {
 		bgpReady = 0
 	}
-	writeGauge(&b, "packeteer_bgp_configured", "1 if bgp.neighbors is set.",
+	writeGauge(&b, "packeteer_bgp_configured", "1 if a RIB view is configured: bgp.neighbors, or rib_sources alone.",
 		sample{value: boolFloat(s.BGPConfigured)})
-	writeGauge(&b, "packeteer_bgp_ready", "1 if BGP is not configured or at least one iBGP session is established.",
+	writeGauge(&b, "packeteer_bgp_ready", "1 if no RIB view is configured or it is ready: an iBGP session is established or, with BMP alone, a BMP session reports a peer up.",
 		sample{value: bgpReady})
 
 	var telUp, telIn, telOut, telIn95, telOut95, telUsage, telCommit, telSamples []sample
@@ -194,6 +194,20 @@ func Metrics(s Snapshot) []byte {
 		}
 		writeGauge(&b, "packeteer_bgp_session_up", "1 if the iBGP session is established.", sessionUp...)
 		writeGauge(&b, "packeteer_bgp_session", "1 if the iBGP session is currently in this FSM state.", sessionState...)
+		var bmpUp, bmpCount []sample
+		for _, p := range s.BMPPeers {
+			peer := p.Peer.String()
+			if p.LocRIB {
+				peer = "loc-rib"
+			}
+			l := []lbl{{"router", p.Router.String()}, {"peer", peer}}
+			bmpUp = append(bmpUp, sample{labels: l, value: 1})
+			if p.AdjRIBIn != nil {
+				bmpCount = append(bmpCount, sample{labels: l, value: float64(*p.AdjRIBIn)})
+			}
+		}
+		writeGauge(&b, "packeteer_bmp_peer_up", "1 for each BGP peer (or Loc-RIB) a BMP session reports up; a peer that goes down leaves the list.", bmpUp...)
+		writeGauge(&b, "packeteer_bmp_peer_adj_rib_in", "The router's Adj-RIB-In route count for the peer from its last BMP Statistics Report.", bmpCount...)
 	}
 
 	var ixPrefixes, ixImps, ixDiscovered, ixReach, ixRTT, ixLoss, ixDegraded, ixAdjRIBIn []sample

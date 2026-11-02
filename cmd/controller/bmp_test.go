@@ -164,3 +164,54 @@ func TestWarnBMPSelfFilter(t *testing.T) {
 		t.Fatalf("large community treated as unset: %s", buf.String())
 	}
 }
+
+// Without bgp.neighbors the view is built from rib_sources alone (#237): it
+// is ready only while the BMP feed reports a peer, the feed's loss makes it
+// not ready (the decision engine then retires every improvement), and a
+// reload cannot add iBGP neighbors to it.
+func TestBMPAloneView(t *testing.T) {
+	alone := strings.Replace(bmpConfig, "bgp:\n  neighbors:\n    - address: 192.0.2.254\n", "", 1)
+	alone = strings.Replace(alone, "    next_hop: 192.0.2.23\n", "    next_hop: 192.0.2.23\n    bmp: prefer\n", 1)
+	cfg, err := config.Parse([]byte(alone))
+	if err != nil {
+		t.Fatal(err)
+	}
+	view, err := newRIB(cfg, nil)
+	if err != nil || view == nil {
+		t.Fatalf("view = %v, %v", view, err)
+	}
+	set, err := pluginhost.Build(cfg, pluginhost.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sink func(plugin.RIBEvent)
+	set.RIBSources[0].Plugin = &sinkSpy{RIBSource: set.RIBSources[0].Plugin, got: &sink}
+	if err := wireRIBSources(set, view, nil, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	gate := ribGate{v: view}
+	if gate.Ready() {
+		t.Fatal("ready before the BMP feed")
+	}
+	edge := netip.MustParseAddr("192.0.2.254")
+	p := netip.MustParsePrefix("198.51.100.0/24")
+	nh := netip.MustParseAddr("192.0.2.21")
+	sink(plugin.RIBEvent{Kind: plugin.RIBPeerUp, Router: edge, Peer: plugin.RIBPeer{Address: nh}})
+	sink(plugin.RIBEvent{Kind: plugin.RIBPaths, Router: edge, Peer: plugin.RIBPeer{Address: nh},
+		Paths: []plugin.RIBPath{{Prefix: p, NextHop: nh, ASPath: []uint32{64496}}}, PostPolicy: true})
+	if !gate.Ready() || !gate.Contains(p) {
+		t.Fatalf("ready=%v contains=%v with the feed up", gate.Ready(), gate.Contains(p))
+	}
+	sink(plugin.RIBEvent{Kind: plugin.RIBRouterDown, Router: edge})
+	if gate.Ready() || gate.Contains(p) {
+		t.Fatalf("ready=%v contains=%v after the feed dropped", gate.Ready(), gate.Contains(p))
+	}
+
+	next, err := config.Parse([]byte(alone + "bgp:\n  neighbors:\n    - address: 192.0.2.254\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := planReload(cfg, next, nil); err == nil || !strings.Contains(err.Error(), "learned over BMP alone") {
+		t.Fatalf("adding neighbors online: %v", err)
+	}
+}

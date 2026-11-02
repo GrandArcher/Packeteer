@@ -182,7 +182,7 @@ func parseMetrics(r io.Reader) (metrics, error) {
 			m.FlowPrefixesTracked = v
 		case name == "packeteer_go_mutex_wait_seconds_total":
 			m.MutexWaitSeconds = v
-		case strings.HasPrefix(name, "packeteer_bgp_session_up{"):
+		case strings.HasPrefix(name, "packeteer_bgp_session_up{"), strings.HasPrefix(name, "packeteer_bmp_peer_up{"):
 			m.SessionUp = m.SessionUp || v == 1
 		}
 	}

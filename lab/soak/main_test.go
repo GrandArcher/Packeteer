@@ -238,12 +238,12 @@ func TestActivePerHourScalesAfterWarmup(t *testing.T) {
 }
 
 func TestBudgetFileProfilesAndGeneratedConfig(t *testing.T) {
-	for _, name := range []string{"smoke", "pr", "soak", "routes3m", "large", "rate"} {
+	for _, name := range []string{"smoke", "pr", "soak", "routes3m", "large", "rate", "bmp"} {
 		p, err := loadProfile("budgets.yaml", name)
 		if err != nil {
 			t.Fatal(err)
 		}
-		cfgText := packeteerConfig(p, ports{BGP: 11179, Flow: 12055, HTTP: 18081}, "/var/lib/packeteer")
+		cfgText := packeteerConfig(p, ports{BGP: 11179, BMP: 11119, Flow: 12055, HTTP: 18081}, "/var/lib/packeteer")
 		switch name {
 		case "smoke":
 			if p.Budgets != (Budgets{}) {
@@ -292,6 +292,18 @@ func TestBudgetFileProfilesAndGeneratedConfig(t *testing.T) {
 			wantBudget(t, name, "peak", p.Budgets.RSSPeakMB, 24576)
 			wantBudget(t, name, "growth", p.Budgets.RSSGrowthMB, 1536)
 			wantBudget(t, name, "slope", p.Budgets.RSSSlopeMB, 768)
+		case "bmp":
+			// BMP alone (#237): the pr table and per-prefix budgets, no
+			// iBGP session, every provider on BMP.
+			if !p.BMP || p.Prefixes != 1250000 {
+				t.Fatalf("bmp profile %+v", p)
+			}
+			wantBudget(t, name, "learn", p.Budgets.LearnSeconds, 90)
+			wantBudget(t, name, "peak", p.Budgets.RSSPeakMB, 6144)
+			if strings.Contains(cfgText, "neighbors:") || !strings.Contains(cfgText, "rib_sources:\n  - type: bmp\n") ||
+				!strings.Contains(cfgText, `listen: "127.0.0.1:11119"`) || strings.Count(cfgText, ", bmp: only}") != 4 {
+				t.Fatalf("bmp config:\n%s", cfgText)
+			}
 		case "pr":
 			if p.Prefixes != 1250000 {
 				t.Fatalf("pr prefixes changed: %d", p.Prefixes)
@@ -308,7 +320,7 @@ func TestBudgetFileProfilesAndGeneratedConfig(t *testing.T) {
 				t.Fatal("pr must keep rate_limit_pps 100000")
 			}
 		}
-		if name == "pr" || name == "soak" || name == "large" {
+		if name == "pr" || name == "soak" || name == "large" || name == "bmp" {
 			if p.Prefixes < 1000000 {
 				t.Fatalf("%s: %d prefixes is not full-table sized", name, p.Prefixes)
 			}
@@ -364,6 +376,9 @@ func TestBudgetFileProfilesAndGeneratedConfig(t *testing.T) {
 	}
 	if !strings.Contains(string(ci), "bash lab/soak.sh packeteer:ci pr\n") {
 		t.Fatal("load job must keep running the pr profile")
+	}
+	if !strings.Contains(string(ci), "bash lab/soak.sh packeteer:ci bmp\n") {
+		t.Fatal("load-bmp job must run the bmp profile")
 	}
 }
 

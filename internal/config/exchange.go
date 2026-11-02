@@ -84,8 +84,8 @@ func (c *Config) validateExchanges(add func(string, ...any)) {
 	if len(c.Exchanges) == 0 {
 		return
 	}
-	if len(c.BGP.Neighbors) == 0 {
-		add("exchanges require bgp.neighbors (a peer is used only while the router shows its path for the prefix)")
+	if len(c.BGP.Neighbors) == 0 && len(c.RIBSources) == 0 {
+		add("exchanges require bgp.neighbors or rib_sources (a peer is used only while the router shows its path for the prefix)")
 	}
 	addPath := slices.ContainsFunc(c.BGP.Neighbors, func(n BGPNeighbor) bool { return n.AddPath })
 	// Peers included: a neighbor list naming both would be ambiguous.

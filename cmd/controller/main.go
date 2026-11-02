@@ -303,9 +303,12 @@ func run(ctx context.Context, args []string, getenv func(string) string, stdout,
 	for _, ex := range cfg.Exchanges {
 		fmt.Fprintf(stdout, "exchange %s: lans=%s peers=%d (route-checked)\n", ex.Name, strings.Join(ex.LANs, ","), len(ex.Peers))
 	}
-	if len(cfg.BGP.Neighbors) == 0 {
+	switch {
+	case len(cfg.BGP.Neighbors) == 0 && len(cfg.RIBSources) > 0:
+		fmt.Fprintln(stdout, "bgp: no bgp.neighbors; the RIB view is learned over BMP alone (rib_sources)")
+	case len(cfg.BGP.Neighbors) == 0:
 		fmt.Fprintln(stdout, "bgp: disabled (no bgp.neighbors)")
-	} else {
+	default:
 		fmt.Fprintf(stdout, "bgp neighbors (%d, learn-only):\n", len(cfg.BGP.Neighbors))
 		for _, n := range cfg.BGP.Neighbors {
 			fmt.Fprintf(stdout, "  - %s %s%s\n", n.Address, n.Description, routerSummary(n))

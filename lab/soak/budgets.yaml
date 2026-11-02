@@ -86,6 +86,41 @@ profiles:
       # for the sketch's error.
       min_passive_tracked: 50000
 
+  # BMP alone (#237), every pull request (CI job `load-bmp`). The same
+  # observe workload and table as `pr`, but Packeteer has no
+  # bgp.neighbors: the harness plays the edge router's BMP client and each
+  # prefix arrives twice, as the post-policy Adj-RIB-In path of each of
+  # the two providers' peers. The budgets are the `pr` per-million numbers
+  # per prefix, not per path, so two BMP paths must fit where `pr` holds
+  # one iBGP path. No CI run has measured this profile before #237; a
+  # miss is a finding in the BMP path store, not a reason to raise a
+  # number.
+  bmp:
+    bmp: true
+    prefixes: 1250000
+    duration: 10m
+    warmup: 3m
+    sample: 5s
+    flow_rate: 20000
+    flow_hot: 5000
+    flow_top_n: 2000
+    static_targets: 1000
+    churn: 6000
+    budgets:
+      learn_seconds_per_mprefix: 72
+      rss_peak_mb_per_mprefix: 4915.2
+      rss_growth_mb_per_mprefix: 307.2
+      rss_slope_mb_per_mprefix: 153.6
+      cpu_avg_cores: 2.0
+      threads: 64
+      udp_drop_pct: 5
+      api_p99_ms: 1500
+      reconverge_seconds: 30
+      shutdown_seconds: 20
+      min_measured: 2500
+      min_active_per_hour: 180000
+      min_passive_tracked: 50000
+
   # Opt-in (#103). Not the `load` job and not soak.yml. A human passes
   # the name: `bash lab/soak.sh IMAGE routes3m`. Same workload as `pr`
   # except the table is 3 million prefixes, with the `pr` per-million

@@ -557,7 +557,9 @@ scorer:
 
 # BMP monitoring station (RIB source). Edge routers stream their post-policy
 # Adj-RIB-In (routes they accepted) here, so Packeteer sees inactive IX and backup paths without a
-# full iBGP feed. Needs bgp.neighbors (the announcer uses that session).
+# full iBGP feed. Without bgp.neighbors the RIB view is learned over BMP
+# alone: every provider needs bmp prefer or only, and nothing announces
+# (use external_policy to act on decisions).
 # Providers opt in with `bmp: prefer` or `bmp: only`; those get a route
 # check: no improvement onto a provider that is not advertising the exact
 # prefix, and an active one is retired when it withdraws. Learn-only; never

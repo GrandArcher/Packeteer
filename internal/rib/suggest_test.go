@@ -31,9 +31,9 @@ func TestSuggestNextHopsReadsOnly(t *testing.T) {
 	})
 	bmpPfx := netip.MustParsePrefix("192.0.2.0/24")
 	bmpHop := netip.MustParseAddr("198.51.100.9")
-	v.bmp[bmpPfx] = map[bmpPathKey]Route{
-		{}: {Prefix: bmpPfx, NextHop: bmpHop, ASPath: []uint32{64497}},
-	}
+	var bs pathSet[bmpPathKey]
+	bs.set(bmpPathKey{}, Route{Prefix: bmpPfx, NextHop: bmpHop, ASPath: []uint32{64497}})
+	v.bmp[bmpPfx] = bs
 	for _, p := range []netip.Prefix{pfx, other, bmpPfx} {
 		v.republishLocked(p)
 	}

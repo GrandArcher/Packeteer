@@ -4,6 +4,7 @@
 # prefixes and documentation/private ASNs, simulated routers in Docker.
 #
 #	bash lab/e2e-interop.sh frr|bird2|bird3|gobgp ibgp|addpath|bmp
+#	bash lab/e2e-interop.sh frr|bird3|gobgp bmponly
 #	bash lab/e2e-interop.sh bird2|bird3 external
 #
 # The edge (192.0.2.254, AS 64512) learns 198.51.100.0/24 from two FRR
@@ -44,6 +45,14 @@
 #          3. flip-back removes it; restoring the probes brings it back.
 #          4. SIGTERM: the feed goes and the edge drops the route.
 #          5. SIGKILL: the route stays until the feed's 10s TTL, then goes.
+# bmponly  RIB view from BMP alone (#237, lab/interop/packeteer-bmponly.yaml):
+#          no bgp.neighbors and no announcer; the decision is published on
+#          the external policy feed.
+#          1. both transits' paths arrive over BMP, none over iBGP; the
+#             feed lists exactly the route inject would send.
+#          2. the edge stops: the BMP feed drops, the view is not ready,
+#             and the feed empties.
+#          3. the edge comes back: BMP reconnects and the route returns.
 set -euo pipefail
 
 router=${1:-}
@@ -53,7 +62,7 @@ frr) format=frr ;;
 bird2 | bird3) format=bird ;;
 gobgp) format=gobgp ;;
 *)
-	echo "usage: $0 frr|bird2|bird3|gobgp ibgp|addpath|bmp" >&2
+	echo "usage: $0 frr|bird2|bird3|gobgp ibgp|addpath|bmp|bmponly" >&2
 	exit 2
 	;;
 esac
@@ -62,8 +71,9 @@ ibgp) config=packeteer.yaml ;;
 addpath) config=packeteer-addpath.yaml ;;
 bmp) config=packeteer-bmp.yaml ;;
 external) config=packeteer-external.yaml ;;
+bmponly) config=packeteer-bmponly.yaml ;;
 *)
-	echo "usage: $0 frr|bird2|bird3|gobgp ibgp|addpath|bmp" >&2
+	echo "usage: $0 frr|bird2|bird3|gobgp ibgp|addpath|bmp|bmponly" >&2
 	exit 2
 	;;
 esac
@@ -71,9 +81,20 @@ if [ "$feature" = external ] && [ "$format" != bird ]; then
 	echo "the external cell runs on bird2 and bird3 only" >&2
 	exit 2
 fi
-if [ "$router$feature" = bird2bmp ]; then
+if [ "$router$feature" = bird2bmp ] || [ "$router$feature" = bird2bmponly ]; then
 	echo "BIRD 2 packages are built without the BMP protocol; use bird3" >&2
 	exit 2
+fi
+
+# BMP cells: the edge streams BMP to Packeteer's station. Feed cells:
+# Packeteer publishes the external policy feed over TLS.
+bmp_feed=false
+if [ "$feature" = bmp ] || [ "$feature" = bmponly ]; then
+	bmp_feed=true
+fi
+feed=false
+if [ "$feature" = external ] || [ "$feature" = bmponly ]; then
+	feed=true
 fi
 
 root=$(cd "$(dirname "$0")/.." && pwd)
@@ -96,16 +117,14 @@ chmod 0644 "$lab_dir/probes/state.yaml"
 export PACKETEER_LAB_DIR="$lab_dir/probes"
 export INTEROP_PACKETEER_CONFIG="./$config"
 export INTEROP_BIRD_CONF=bird.conf
-if [ "$feature" = bmp ]; then
+if $bmp_feed; then
 	INTEROP_BIRD_CONF=bird-bmp.conf
 fi
 # The external cell checks the edge's static route from the feed, not a
 # path on the Packeteer session.
 check_args=()
 feed_url=https://192.0.2.10:9443
-if [ "$feature" = external ]; then
-	INTEROP_BIRD_CONF=bird-external.conf
-	check_args=(-protocol packeteer_feed4 -peer packeteer_feed4)
+if $feed; then
 	# Lab-only certificate and token, made fresh for each run.
 	openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes -days 1 \
 		-subj /CN=packeteer-lab -addext subjectAltName=IP:192.0.2.10 \
@@ -113,6 +132,10 @@ if [ "$feature" = external ]; then
 	chmod 0644 "$lab_dir/probes/key.pem" "$lab_dir/probes/cert.pem"
 	INTEROP_POLICY_TOKEN=$(openssl rand -hex 24)
 	export INTEROP_POLICY_TOKEN
+fi
+if [ "$feature" = external ]; then
+	INTEROP_BIRD_CONF=bird-external.conf
+	check_args=(-protocol packeteer_feed4 -peer packeteer_feed4)
 	echo "building packeteer-policy"
 	mkdir -p "$lab_dir/feed"
 	CGO_ENABLED=0 go build -o "$lab_dir/feed/packeteer-policy" ./cmd/policy
@@ -129,7 +152,7 @@ if [ "$router" = gobgp ]; then
 	mkdir -p "$lab_dir/gobgp"
 	GOBIN="$lab_dir/gobgp" CGO_ENABLED=0 go install "github.com/osrg/gobgp/v3/cmd/gobgpd@$ver" "github.com/osrg/gobgp/v3/cmd/gobgp@$ver"
 	cp lab/interop/gobgp/gobgpd.toml "$lab_dir/gobgp/gobgpd.toml"
-	if [ "$feature" = bmp ]; then
+	if $bmp_feed; then
 		cat lab/interop/gobgp/bmp.toml >>"$lab_dir/gobgp/gobgpd.toml"
 	fi
 	chmod -R a+rX "$lab_dir/gobgp"
@@ -190,9 +213,11 @@ dump_bgp() {
 		"${compose[@]}" exec -T "$edge" /opt/gobgp/gobgp neighbor 192.0.2.10 >&2 || true
 		"${compose[@]}" exec -T "$edge" /opt/gobgp/gobgp global rib -a ipv4 >&2 || true ;;
 	esac
-	if [ "$feature" = external ]; then
+	if $feed; then
 		echo "---- external policy feed ----" >&2
 		feed_doc >&2 || true
+	fi
+	if [ "$feature" = external ]; then
 		echo "---- packeteer-policy ----" >&2
 		cat "$lab_dir/feed/consumer.log" >&2 || true
 		cat "$lab_dir/feed/routes.conf" >&2 || true
@@ -226,7 +251,7 @@ feed_lists_unlearned() {
 # guard: on every sample, nothing Packeteer never learned is on the edge.
 guard() {
 	local p
-	if [ "$feature" = external ] && feed_lists_unlearned >"$lab_dir/guard.feed"; then
+	if $feed && feed_lists_unlearned >"$lab_dir/guard.feed"; then
 		echo "SAFETY: the feed lists a prefix no router advertised" >&2
 		cat "$lab_dir/guard.feed" >&2
 		dump_bgp
@@ -369,6 +394,20 @@ feed_is_inject() {
 		communities: ["64512:666", "65535:65281"], cause: "performance"}' >/dev/null
 }
 
+# feed_empty: the feed lists no route.
+feed_empty() {
+	feed_doc | jq -e '(.routes | length) == 0' >/dev/null
+}
+
+# rib_ready <0|1>: packeteer_bgp_ready, which with BMP alone follows the
+# BMP feed.
+rib_ready() {
+	"${compose[@]}" exec -T packeteer wget -qO- http://127.0.0.1:8080/metrics 2>/dev/null | grep -qx "packeteer_bgp_ready $1"
+}
+
+# no_ibgp_paths: Packeteer's view holds no path learned over iBGP.
+no_ibgp_paths() { ! glass | grep -q '"source":"ibgp"'; }
+
 # session_quiet: no route arrived on the Packeteer session.
 session_quiet() {
 	local out
@@ -507,6 +546,33 @@ external)
 		echo "route went in ${gone}s, before the feed's TTL could expire" >&2
 		exit 1
 	fi
+	;;
+bmponly)
+	echo "1. BMP alone: both transits' paths arrive over BMP; the feed lists the inject route"
+	wait_for "bmp session" 45 log_has 'bmp session up'
+	wait_for "view ready on the BMP feed" 45 rib_ready 1
+	wait_for "transit-a path from BMP" 30 glass_has 192.0.2.21 bmp
+	wait_for "transit-b path from BMP" 10 glass_has 192.0.2.22 bmp
+	if ! no_ibgp_paths; then
+		echo "Packeteer learned a path over iBGP; this cell does not prove BMP alone" >&2
+		exit 1
+	fi
+	wait_for "the feed lists exactly the inject route" 90 feed_is_inject
+	hold_for 5 "the edge keeps its native path (nothing announces)" native
+
+	echo "2. the edge stops: the BMP feed drops, the view is not ready, the feed empties"
+	start=$(date +%s)
+	"${compose[@]}" stop -t 10 "$edge"
+	wait_for "view not ready without the BMP feed" 30 rib_ready 0
+	wait_for "feed empty without the BMP feed" 15 feed_empty
+	echo "feed empty $(($(date +%s) - start))s after the edge stopped"
+	wait_for "the station logged the session end" 5 log_has 'bmp session (down|ended)'
+
+	echo "3. the edge returns: BMP reconnects and the route comes back"
+	"${compose[@]}" start "$edge"
+	wait_for "view ready again" 60 rib_ready 1
+	wait_for "transit-b path from BMP after reconnect" 30 glass_has 192.0.2.22 bmp
+	wait_for "the feed lists the inject route again" 90 feed_is_inject
 	;;
 bmp)
 	echo "1. BMP: transit-b's inactive path is seen only over BMP"

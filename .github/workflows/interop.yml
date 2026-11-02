@@ -40,11 +40,13 @@ jobs:
       fail-fast: false
       matrix:
         router: [frr, bird2, bird3, gobgp]
-        feature: [ibgp, addpath, bmp, external]
+        feature: [ibgp, addpath, bmp, bmponly, external]
         exclude:
           # Debian's BIRD 2 is built without the BMP protocol.
           - router: bird2
             feature: bmp
+          - router: bird2
+            feature: bmponly
           # The external policy feed cell (#232) renders BIRD static routes.
           - router: frr
             feature: external

@@ -34,7 +34,7 @@ func TestLookupSkipsEmptyLengths(t *testing.T) {
 }
 
 func TestPathSetPromoteAndDemote(t *testing.T) {
-	var s pathSet
+	var s pathSet[adjKey]
 	k1 := adjKey{id: 1}
 	k2 := adjKey{id: 2}
 	s.set(k1, Route{PathID: 1})
@@ -57,7 +57,7 @@ func TestPathSetPromoteAndDemote(t *testing.T) {
 // prefix stays inline. The old map-per-prefix was about 700 bytes.
 func TestSinglePathAdjIsCompact(t *testing.T) {
 	const n = 50000
-	v := &View{adj: map[netip.Prefix]pathSet{}}
+	v := &View{adj: map[netip.Prefix]pathSet[adjKey]{}}
 	nh := netip.MustParseAddr("192.0.2.1")
 	nbr := netip.MustParseAddr("192.0.2.254")
 	runtime.GC()
@@ -84,7 +84,7 @@ func TestSinglePathAdjIsCompact(t *testing.T) {
 
 func BenchmarkLookup(b *testing.B) {
 	const n = 20000
-	v := &View{routes: map[netip.Prefix]*Route{}, adj: map[netip.Prefix]pathSet{}}
+	v := &View{routes: map[netip.Prefix]*Route{}, adj: map[netip.Prefix]pathSet[adjKey]{}}
 	addrs := make([]netip.Addr, n)
 	for i := 0; i < n; i++ {
 		a := netip.AddrFrom4([4]byte{byte(i >> 16), byte(i >> 8), byte(i), 1})
@@ -107,7 +107,7 @@ func BenchmarkLookup(b *testing.B) {
 // putAdj replaces the iBGP paths for p. Tests build a view without a
 // session. An empty paths map removes p.
 func (v *View) putAdj(p netip.Prefix, paths map[adjKey]Route) {
-	var s pathSet
+	var s pathSet[adjKey]
 	for k, rt := range paths {
 		s.set(k, rt)
 	}
