@@ -8,8 +8,10 @@ name: packeteer-e2e-agents
 x-agent: &agent
   image: packeteer:e2e
   depends_on:
-    - packeteer
-    - target
+    packeteer:
+      condition: service_started
+    target:
+      condition: service_healthy
   cap_add:
     - NET_RAW
     - NET_ADMIN
@@ -69,7 +71,7 @@ services:
       - >-
         apk add --no-cache iproute2 >/dev/null &&
         tc qdisc add dev eth0 root netem delay 40ms &&
-        ip route add 198.51.100.1/32 via 192.0.2.30 &&
+        ip route replace 198.51.100.1/32 via 192.0.2.30 &&
         exec /usr/local/bin/packeteer-agent -config /etc/packeteer/agent.yaml
     volumes:
       - ./agent-site-a.yaml:/etc/packeteer/agent.yaml:ro
@@ -83,7 +85,7 @@ services:
       - /bin/sh
       - -c
       - >-
-        ip route add 198.51.100.1/32 via 192.0.2.30 &&
+        ip route replace 198.51.100.1/32 via 192.0.2.30 &&
         exec /usr/local/bin/packeteer-agent -config /etc/packeteer/agent.yaml
     volumes:
       - ./agent-site-b.yaml:/etc/packeteer/agent.yaml:ro

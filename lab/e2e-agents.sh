@@ -5,8 +5,8 @@
 # transit-a through a 40ms netem delay, agent-b (site dc-b) measures
 # transit-b; both probe 198.51.100.1, which one FRR edge learns as
 # 198.51.100.0/24 with transit-a as the native exit. Documentation prefixes
-# and a private ASN only. Nothing is announced: on every check the edge
-# holds only its own path for the prefix. Checked in order:
+# and a private ASN only. Nothing is announced: after each step the edge
+# holds only its own path for the prefix after each step. Checked in order:
 #  1. probes are split across both agents and attributed: transit-a's row
 #     names site dc-a and agent-a with the delayed RTT, transit-b's names
 #     dc-b and agent-b with the fast one, and the controller recommends
@@ -121,14 +121,20 @@ recommends() {
 		'[.improvements[] | select(.prefix == $p and .provider == $n)] | length == 1' >/dev/null
 }
 
+# No improvement is recommended, while the prefix is still decided.
 recommends_nothing() {
-	api /api/improvements | jq -e '(.improvements | length) == 0' >/dev/null
+	api /api/improvements | jq -e '(.improvements | length) == 0' >/dev/null &&
+		api /api/decisions | jq -e --arg p "$prefix" '[.decisions[] | select(.prefix == $p)] | length == 1' >/dev/null
 }
 
-# No decision counts the provider as usable.
+# The prefix is still decided, with the provider as a candidate that is
+# not usable and the other provider's candidate still usable.
 unusable() {
-	api /api/decisions | jq -e --arg p "$prefix" --arg n "$1" \
-		'[.decisions[] | select(.prefix == $p) | .candidates[] | select(.provider == $n and .usable)] | length == 0' >/dev/null
+	api /api/decisions | jq -e --arg p "$prefix" --arg n "$1" --arg o "$2" \
+		'[.decisions[] | select(.prefix == $p) | .candidates] as $c
+		| ($c | length) == 1 and
+		([$c[0][] | select(.provider == $n)] | length == 1 and all(.usable | not)) and
+		([$c[0][] | select(.provider == $o and .usable)] | length == 1)' >/dev/null
 }
 
 revoked_refusals() {
@@ -139,7 +145,7 @@ refusals_over() {
 	[ "$(revoked_refusals)" -gt "$1" ]
 }
 
-# The agent logs once per process when the controller refuses it.
+# The agent logs once per failure streak when the controller refuses it.
 agent_b_failures() {
 	logs agent-b | grep -c 'controller answered 403: certificate revoked' || true
 }
@@ -168,8 +174,9 @@ holds "observe mode: the edge keeps only its native path" 5 edge_native_only
 echo "2. a killed agent's data goes stale and decisions stop using it"
 "${compose[@]}" kill -s KILL agent-b
 wait_for "transit-b failed closed" 30 provider_down transit-b "no usable probe agent"
-wait_for "transit-b unusable in decisions" 30 unusable transit-b
+wait_for "transit-b unusable in decisions" 30 unusable transit-b transit-a
 wait_for "no recommendation without transit-b" 30 recommends_nothing
+logs packeteer | grep -q 'probe agent stale; its data is not used.*agent=agent-b' || fail "controller never marked agent-b stale"
 b_time=$(probe_row transit-b | jq -r '.time // ""')
 a_time=$(probe_row transit-a | jq -r '.time')
 sleep 6
@@ -178,7 +185,7 @@ if [ -n "$b_time" ] && measured_after transit-b "$b_time"; then
 fi
 measured_after transit-a "$a_time" || fail "transit-a stopped being measured when agent-b died"
 provider_up transit-a || fail "agent-b's death took transit-a down"
-unusable transit-b || fail "transit-b is usable in decisions again"
+unusable transit-b transit-a || fail "transit-b is usable in decisions again"
 recommends_nothing || fail "a recommendation came back without transit-b"
 edge_native_only || fail "something was announced"
 "${compose[@]}" start agent-b
