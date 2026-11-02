@@ -3,7 +3,12 @@
 // names the instance as CN and DNS SAN and is valid for a day. The files
 // are generated on every run in a temporary directory and never committed.
 //
-// Usage: mkcerts DIR NAME...
+// With -revoke NAME it also writes two CA-signed revocation lists for the
+// probe agent lab (lab/e2e-agents.sh, #478): empty.crl lists nothing and
+// revoked.crl lists NAME's certificate. The CA key is not kept, so both are
+// made up front and the script swaps one for the other.
+//
+// Usage: mkcerts [-revoke NAME] DIR NAME...
 package main
 
 import (
@@ -13,6 +18,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
+	"flag"
 	"fmt"
 	"math/big"
 	"os"
@@ -21,17 +27,19 @@ import (
 )
 
 func main() {
-	if len(os.Args) < 3 {
-		fmt.Fprintln(os.Stderr, "usage: mkcerts DIR NAME...")
+	revoke := flag.String("revoke", "", "also write empty.crl and revoked.crl, the latter listing this NAME's certificate")
+	flag.Parse()
+	if flag.NArg() < 2 {
+		fmt.Fprintln(os.Stderr, "usage: mkcerts [-revoke NAME] DIR NAME...")
 		os.Exit(2)
 	}
-	if err := run(os.Args[1], os.Args[2:]); err != nil {
+	if err := run(flag.Arg(0), flag.Args()[1:], *revoke); err != nil {
 		fmt.Fprintln(os.Stderr, "mkcerts:", err)
 		os.Exit(1)
 	}
 }
 
-func run(dir string, names []string) error {
+func run(dir string, names []string, revoke string) error {
 	now := time.Now()
 	caKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
@@ -40,7 +48,7 @@ func run(dir string, names []string) error {
 	caTmpl := &x509.Certificate{
 		SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: "packeteer-lab-ca"},
 		NotBefore: now.Add(-time.Hour), NotAfter: now.Add(24 * time.Hour),
-		IsCA: true, BasicConstraintsValid: true, KeyUsage: x509.KeyUsageCertSign,
+		IsCA: true, BasicConstraintsValid: true, KeyUsage: x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
 	}
 	caDER, err := x509.CreateCertificate(rand.Reader, caTmpl, caTmpl, &caKey.PublicKey, caKey)
 	if err != nil {
@@ -53,6 +61,7 @@ func run(dir string, names []string) error {
 	if err := writePEM(filepath.Join(dir, "ca.crt"), "CERTIFICATE", caDER); err != nil {
 		return err
 	}
+	var revokedSerial *big.Int
 	for i, name := range names {
 		key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 		if err != nil {
@@ -68,6 +77,9 @@ func run(dir string, names []string) error {
 		if err != nil {
 			return err
 		}
+		if name == revoke {
+			revokedSerial = tmpl.SerialNumber
+		}
 		kder, err := x509.MarshalECPrivateKey(key)
 		if err != nil {
 			return err
@@ -79,7 +91,31 @@ func run(dir string, names []string) error {
 			return err
 		}
 	}
-	return nil
+	if revoke == "" {
+		return nil
+	}
+	if revokedSerial == nil {
+		return fmt.Errorf("-revoke %q is not one of the names", revoke)
+	}
+	if err := writeCRL(filepath.Join(dir, "empty.crl"), now, caCert, caKey, nil); err != nil {
+		return err
+	}
+	return writeCRL(filepath.Join(dir, "revoked.crl"), now, caCert, caKey, revokedSerial)
+}
+
+func writeCRL(path string, now time.Time, ca *x509.Certificate, key *ecdsa.PrivateKey, revoked *big.Int) error {
+	var entries []x509.RevocationListEntry
+	if revoked != nil {
+		entries = append(entries, x509.RevocationListEntry{SerialNumber: revoked, RevocationTime: now})
+	}
+	der, err := x509.CreateRevocationList(rand.Reader, &x509.RevocationList{
+		Number: big.NewInt(1), ThisUpdate: now.Add(-time.Hour), NextUpdate: now.Add(24 * time.Hour),
+		RevokedCertificateEntries: entries,
+	}, ca, key)
+	if err != nil {
+		return err
+	}
+	return writePEM(path, "X509 CRL", der)
 }
 
 // writePEM uses 0644: the lab mounts the directory read-only into

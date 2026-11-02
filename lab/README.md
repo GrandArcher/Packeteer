@@ -84,6 +84,10 @@ Probe results and usage come from `lab/probes/multipop/` files the script swaps.
 
 (4) With x-a and y-a within the threshold and x-b at 60+10ms (so the steer through POP B flips back to native), x-a at 60 of its own 100 and x-b at 60 in POP B put carrier X at 120: the prefix moves to y-a (`192.0.2.2`, cause commit). (5) POP B's usage drops to 5 and the commit steer is released. (6) A blackhole route between the two Packeteer instances (#308) withdraws the steer within 15s, both `/api/federation` views show the peer stale and the global commit incomplete, nothing steers for 20s, and after the route is removed exactly one re-steer returns. (7) SIGTERM of packeteer-a withdraws, and SIGKILL drops the route with the session within the 9s hold timer.
 
+`lab/e2e-agents.sh` is the probe agent lab (#478) on its own topology (`lab/docker-compose-agents.yml`): the FRR edge of the main lab, the controller in observe mode (`lab/packeteer-agents.yaml`), and two `packeteer-agent` containers (`lab/agent-site-a.yaml`, `lab/agent-site-b.yaml`) at sites `dc-a` (transit-a) and `dc-b` (transit-b) over mutual TLS. The certificates and two CRLs come from `lab/mkcerts -revoke agent-b` per run. Both agents probe `198.51.100.1`; agent-a sits behind a 40ms netem delay. After each step the edge holds only its own path for `198.51.100.0/24`.
+
+The script checks: (1) each provider's probe row names its site and agent and has that agent's RTT, and the controller recommends transit-b. (2) SIGKILL on agent-b makes transit-b fail closed (`no usable probe agent`), its decisions candidate unusable, and the recommendation disappear while agent-a keeps measuring; starting agent-b brings them back. (3) Swapping in the CRL that lists agent-b's certificate makes the running controller refuse it (`certificate revoked`), fail transit-b closed, and refuse a restarted agent-b too, with agent-a unaffected.
+
 `lab/e2e-herd.sh` is herd phase 1 (#260) on its own topology (`lab/docker-compose-herd.yml`): three Packeteer members in observe mode (member-a 192.0.2.10 in US, member-b 192.0.2.11 in DE, member-c 192.0.2.12 in JP) behind one FRR edge (`lab/frr-herd-edge`) that learns `192.0.2.128/26` with path `64501 64510` from an upstream (`lab/frr-herd-upstream`, 192.0.2.21), which also owns `192.0.2.130` so the members' real ICMP probes are answered. Keys come from `lab/mkherdkeys` per run; no seed is configured and nothing talks to a real herd. member-a and member-b share at origin-ASN level and list what they share; member-c excludes `192.0.2.0/24`, so it records and serves nothing but pulls from both.
 
 It checks: (1) every member pulls both peers without failures and the edge holds no route from a member. (2) `GET /api/herd/vantages?origin_asn=64510` shows one vantage per member and country (a: itself and b; c: a and b and none of its own; b: itself and a), never merged. (3) The preview on a and b is signed, origin-level, and holds no prefix, provider name, or AS path; member-c's preview is empty. (4) Each served pull is in the audit log as `herd.serve`. (5) With member-b paused (a peer that never answers), a and c report b failing, member-a keeps probing and stays ready. (6) SIGTERM stops member-a. Limit defaults are exercised here, not tuned.
@@ -122,6 +126,7 @@ bash lab/e2e-vrf.sh
 bash lab/e2e-leak-watch.sh
 bash lab/e2e-multipop.sh
 bash lab/e2e-herd.sh
+bash lab/e2e-agents.sh
 bash lab/e2e-ha.sh
 PACKETEER_DOCS_DIR=. bash lab/e2e-docs.sh docs/walkthrough.md
 ```
