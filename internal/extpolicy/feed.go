@@ -113,16 +113,34 @@ func (f *Feed) set(r plugin.Route) {
 	f.mu.Unlock()
 }
 
+// del and clear also drop the route from the published set at once, so a
+// withdraw outside a decision round (leak watch, HA step-down, a reload
+// that leaves inject) reaches consumers without waiting for the next Touch.
 func (f *Feed) del(p netip.Prefix) {
 	f.mu.Lock()
-	delete(f.wire, p.Masked())
-	f.mu.Unlock()
+	defer f.mu.Unlock()
+	p = p.Masked()
+	delete(f.wire, p)
+	f.unpublishLocked(func(r Route) bool { return r.Prefix == p })
 }
 
 func (f *Feed) clear() {
 	f.mu.Lock()
+	defer f.mu.Unlock()
 	clear(f.wire)
-	f.mu.Unlock()
+	f.unpublishLocked(func(Route) bool { return true })
+}
+
+func (f *Feed) unpublishLocked(drop func(Route) bool) {
+	if f.closed {
+		return
+	}
+	next := slices.DeleteFunc(slices.Clone(f.routes), drop)
+	if len(next) != len(f.routes) {
+		f.routes = next
+		f.rev++
+		f.notifyLocked()
+	}
 }
 
 // Touch publishes what is on the wire after a decision round and renews
@@ -222,8 +240,8 @@ func (f *Feed) Close() {
 	f.notifyLocked()
 }
 
-// Routes is the number of routes a consumer applies now: zero while the
-// feed is off, closed, or expired.
+// Routes is the count (not the list) of routes a consumer applies now:
+// zero while the feed is off, closed, or expired.
 func (f *Feed) Routes() int {
 	return len(f.Document().Routes)
 }

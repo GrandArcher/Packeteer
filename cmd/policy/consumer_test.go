@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -103,9 +104,12 @@ func TestConsumerKeepsUntilExpiry(t *testing.T) {
 // Stopping the consumer applies the empty set.
 func TestConsumerRunDropsOnStop(t *testing.T) {
 	out := &recorder{}
+	waiting := make(chan struct{})
+	var once sync.Once
 	c := &consumer{
 		fetch: func(ctx context.Context, _ uint64, wait bool) (extpolicy.Document, error) {
 			if wait {
+				once.Do(func() { close(waiting) })
 				<-ctx.Done()
 				return extpolicy.Document{}, ctx.Err()
 			}
@@ -116,9 +120,10 @@ func TestConsumerRunDropsOnStop(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() { c.run(ctx); close(done) }()
-	deadline := time.Now().Add(5 * time.Second)
-	for len(c.applied) == 0 && time.Now().Before(deadline) {
-		time.Sleep(10 * time.Millisecond)
+	select {
+	case <-waiting:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the consumer never applied the document and waited")
 	}
 	cancel()
 	<-done

@@ -311,3 +311,44 @@ func TestMirrorChecksWithoutAnnouncer(t *testing.T) {
 		t.Fatalf("feed has %d routes, want only the valid one", n)
 	}
 }
+
+// A withdraw outside a decision round (leak watch, HA step-down, a reload
+// that leaves inject) reaches the published document at once, with a new
+// revision and a change signal, without waiting for the next Touch.
+func TestMirrorWithdrawPublishesAtOnce(t *testing.T) {
+	now := time.Unix(1_800_000_000, 0)
+	rib := &fakeRIB{ready: true, learned: map[netip.Prefix]bool{pA: true, pB: true}}
+	feed := New(true, 30*time.Second, func() time.Time { return now })
+	m := NewMirror(newFakeAnn(), feed)
+	_ = controller(t, m, rib, 50).Sync(context.Background(), imps()[:2])
+	feed.Touch(now, imps())
+	if n := len(feed.Document().Routes); n != 2 {
+		t.Fatalf("feed has %d routes, want 2", n)
+	}
+	rev := feed.Document().Revision
+	ch, _ := feed.Changed()
+	if err := m.Withdraw(context.Background(), pA); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-ch:
+	default:
+		t.Fatal("Withdraw did not signal a change")
+	}
+	doc := feed.Document()
+	if len(doc.Routes) != 1 || doc.Routes[0].Prefix != pB || doc.Revision == rev {
+		t.Fatalf("after Withdraw: rev %d routes %+v, want only %s at a new revision", doc.Revision, doc.Routes, pB)
+	}
+	ch, _ = feed.Changed()
+	if err := m.WithdrawAll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-ch:
+	default:
+		t.Fatal("WithdrawAll did not signal a change")
+	}
+	if n := len(feed.Document().Routes); n != 0 {
+		t.Fatalf("after WithdrawAll the feed has %d routes", n)
+	}
+}

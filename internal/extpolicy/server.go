@@ -50,7 +50,6 @@ type Server struct {
 	feed *Feed
 	log  *slog.Logger
 	cfg  ServerConfig
-	cert tls.Certificate
 	hash [sha256.Size]byte
 	grpc *grpc.Server
 	srv  *http.Server
@@ -69,7 +68,7 @@ func NewServer(feed *Feed, cfg ServerConfig, log *slog.Logger) (*Server, error) 
 	if err != nil {
 		return nil, fmt.Errorf("external_policy: cert_file/key_file: %w", err)
 	}
-	s := &Server{feed: feed, log: log, cfg: cfg, cert: cert, hash: sha256.Sum256([]byte(cfg.Token))}
+	s := &Server{feed: feed, log: log, cfg: cfg, hash: sha256.Sum256([]byte(cfg.Token))}
 	s.grpc = grpc.NewServer()
 	s.grpc.RegisterService(&serviceDesc, s)
 	s.srv = &http.Server{
