@@ -18,6 +18,7 @@ import (
 	api "github.com/osrg/gobgp/v3/api"
 
 	"github.com/GrandArcher/Packeteer/internal/announce"
+	"github.com/GrandArcher/Packeteer/internal/config"
 	"github.com/GrandArcher/Packeteer/internal/plugins/scorer/weighted"
 	"github.com/GrandArcher/Packeteer/internal/policy"
 	"github.com/GrandArcher/Packeteer/internal/probe"
@@ -134,6 +135,8 @@ func runIX(t *testing.T, edge *msEdge, httpPort int, cfg string) *ixDaemon {
 			return "lab"
 		case HTTPPassEnv:
 			return "lab-only"
+		case config.DefaultPolicyTokenEnv:
+			return "lab-only-token-0123456789"
 		}
 		return ""
 	}

@@ -4,6 +4,7 @@
 # prefixes and documentation/private ASNs, simulated routers in Docker.
 #
 #	bash lab/e2e-interop.sh frr|bird2|bird3|gobgp ibgp|addpath|bmp
+#	bash lab/e2e-interop.sh bird2|bird3 external
 #
 # The edge (192.0.2.254, AS 64512) learns 198.51.100.0/24 from two FRR
 # eBGP transits; transit-b prepends, so transit-a is native. transit-b is
@@ -31,6 +32,18 @@
 #          GoBGP) and SIGKILL drops the route. BIRD 3 does not refeed
 #          sessions that were already up when the station reconnects, so
 #          that step is skipped there (docs/routers.md).
+# external external policy feed, BIRD only (#232,
+#          lab/interop/packeteer-external.yaml): no announcer, the session
+#          only learns; packeteer-policy on the edge renders the feed into
+#          static routes and runs birdc configure.
+#          1. the edge's best is the feed's static route, with what inject
+#             would send (next hop 192.0.2.22, local-pref 250, 64512:666,
+#             no-export); the feed lists exactly that route; nothing
+#             arrives on the BGP session.
+#          2. it stays while the edge no longer sends the native path.
+#          3. flip-back removes it; restoring the probes brings it back.
+#          4. SIGTERM: the feed goes and the edge drops the route.
+#          5. SIGKILL: the route stays until the feed's 10s TTL, then goes.
 set -euo pipefail
 
 router=${1:-}
@@ -48,11 +61,16 @@ case "$feature" in
 ibgp) config=packeteer.yaml ;;
 addpath) config=packeteer-addpath.yaml ;;
 bmp) config=packeteer-bmp.yaml ;;
+external) config=packeteer-external.yaml ;;
 *)
 	echo "usage: $0 frr|bird2|bird3|gobgp ibgp|addpath|bmp" >&2
 	exit 2
 	;;
 esac
+if [ "$feature" = external ] && [ "$format" != bird ]; then
+	echo "the external cell runs on bird2 and bird3 only" >&2
+	exit 2
+fi
 if [ "$router$feature" = bird2bmp ]; then
 	echo "BIRD 2 packages are built without the BMP protocol; use bird3" >&2
 	exit 2
@@ -80,6 +98,29 @@ export INTEROP_PACKETEER_CONFIG="./$config"
 export INTEROP_BIRD_CONF=bird.conf
 if [ "$feature" = bmp ]; then
 	INTEROP_BIRD_CONF=bird-bmp.conf
+fi
+# The external cell checks the edge's static route from the feed, not a
+# path on the Packeteer session.
+check_args=()
+feed_url=https://192.0.2.10:9443
+if [ "$feature" = external ]; then
+	INTEROP_BIRD_CONF=bird-external.conf
+	check_args=(-protocol packeteer_feed4 -peer packeteer_feed4)
+	# Lab-only certificate and token, made fresh for each run.
+	openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes -days 1 \
+		-subj /CN=packeteer-lab -addext subjectAltName=IP:192.0.2.10 \
+		-keyout "$lab_dir/probes/key.pem" -out "$lab_dir/probes/cert.pem" 2>/dev/null
+	chmod 0644 "$lab_dir/probes/key.pem" "$lab_dir/probes/cert.pem"
+	INTEROP_POLICY_TOKEN=$(openssl rand -hex 24)
+	export INTEROP_POLICY_TOKEN
+	echo "building packeteer-policy"
+	mkdir -p "$lab_dir/feed"
+	CGO_ENABLED=0 go build -o "$lab_dir/feed/packeteer-policy" ./cmd/policy
+	cp examples/external-policy/bird.conf.tmpl "$lab_dir/probes/cert.pem" "$lab_dir/feed/"
+	: >"$lab_dir/feed/routes.conf"
+	chmod 0777 "$lab_dir/feed"
+	chmod a+r "$lab_dir/feed"/*
+	export INTEROP_FEED_DIR="$lab_dir/feed"
 fi
 if [ "$router" = gobgp ]; then
 	# The edge runs the GoBGP release Packeteer itself links (go.mod).
@@ -112,9 +153,9 @@ edge_is() {
 	local out
 	out=$(edge_show "$1" 2>&1) || true
 	if [ "$2" = injected ]; then
-		"$check_bin" -format "$format" -prefix "$1" -want injected -nexthop "$3" <<<"$out"
+		"$check_bin" -format "$format" -prefix "$1" "${check_args[@]}" -want injected -nexthop "$3" <<<"$out"
 	else
-		"$check_bin" -format "$format" -prefix "$1" -want "$2" <<<"$out"
+		"$check_bin" -format "$format" -prefix "$1" "${check_args[@]}" -want "$2" <<<"$out"
 	fi
 }
 
@@ -149,6 +190,13 @@ dump_bgp() {
 		"${compose[@]}" exec -T "$edge" /opt/gobgp/gobgp neighbor 192.0.2.10 >&2 || true
 		"${compose[@]}" exec -T "$edge" /opt/gobgp/gobgp global rib -a ipv4 >&2 || true ;;
 	esac
+	if [ "$feature" = external ]; then
+		echo "---- external policy feed ----" >&2
+		feed_doc >&2 || true
+		echo "---- packeteer-policy ----" >&2
+		cat "$lab_dir/feed/consumer.log" >&2 || true
+		cat "$lab_dir/feed/routes.conf" >&2 || true
+	fi
 	echo "---- packeteer looking glass / decisions ----" >&2
 	glass >&2 || true
 	echo >&2
@@ -156,9 +204,34 @@ dump_bgp() {
 	echo >&2
 }
 
+# feed_doc prints the feed's JSON document, read with the lab token.
+feed_doc() {
+	curl -sS --max-time 3 --cacert "$lab_dir/probes/cert.pem" \
+		-H "Authorization: Bearer $INTEROP_POLICY_TOKEN" "$feed_url/v1/recommendations"
+}
+
+# feed_lists_unlearned: the feed carries a prefix no router advertised.
+feed_lists_unlearned() {
+	local doc p
+	doc=$(feed_doc 2>/dev/null) || return 1
+	for p in "${unlearned[@]}"; do
+		if jq -e --arg p "$p" '.routes[] | select(.prefix == $p)' <<<"$doc" >/dev/null; then
+			echo "$doc"
+			return 0
+		fi
+	done
+	return 1
+}
+
 # guard: on every sample, nothing Packeteer never learned is on the edge.
 guard() {
 	local p
+	if [ "$feature" = external ] && feed_lists_unlearned >"$lab_dir/guard.feed"; then
+		echo "SAFETY: the feed lists a prefix no router advertised" >&2
+		cat "$lab_dir/guard.feed" >&2
+		dump_bgp
+		exit 1
+	fi
 	for p in "${unlearned[@]}"; do
 		if ! edge_is "$p" absent 2>"$lab_dir/guard.err"; then
 			if grep -q "Packeteer path" "$lab_dir/guard.err"; then
@@ -288,6 +361,29 @@ sigkill() {
 	echo "route gone $(($(date +%s) - start))s after SIGKILL (hold ${hold}s)"
 }
 
+# feed_is_inject: the feed lists exactly the route inject mode sends in the
+# ibgp cell, with time left on it.
+feed_is_inject() {
+	feed_doc | jq -e '.expires_in_ms > 0 and (.routes | length) == 1 and (.routes[0] | del(.reason)) == {
+		prefix: "198.51.100.0/24", provider: "transit-b", next_hop: "192.0.2.22", local_pref: 250,
+		communities: ["64512:666", "65535:65281"], cause: "performance"}' >/dev/null
+}
+
+# session_quiet: no route arrived on the Packeteer session.
+session_quiet() {
+	local out
+	out=$("${compose[@]}" exec -T "$edge" birdc -s /run/bird/bird.ctl show route protocol packeteer 2>&1) || return 1
+	if grep -q 'via' <<<"$out"; then
+		echo "a route arrived on the Packeteer session: $out" >&2
+		return 1
+	fi
+}
+
+start_consumer() {
+	"${compose[@]}" exec -d -e PACKETEER_POLICY_TOKEN="$INTEROP_POLICY_TOKEN" "$edge" sh -c \
+		"exec /opt/feed/packeteer-policy -url $feed_url -ca-file /opt/feed/cert.pem -template /opt/feed/bird.conf.tmpl -out /opt/feed/routes.conf -reload 'birdc -s /run/bird/bird.ctl configure' >>/opt/feed/consumer.log 2>&1"
+}
+
 echo "building lab"
 "${compose[@]}" build
 # Packeteer (and its BMP station) first: BIRD 3 only sends BMP peer up for
@@ -370,6 +466,47 @@ addpath)
 	"${compose[@]}" start packeteer
 	wait_for "steer after restart" 60 injected
 	sigkill
+	;;
+external)
+	start_consumer
+	echo "1. the edge applies the feed's route, which is the route inject sends"
+	wait_for "edge best is the feed's route via transit-b" 90 injected
+	wait_for "the feed lists exactly the inject route" 10 feed_is_inject
+	wait_for "nothing on the Packeteer session" 10 session_quiet
+	wait_for "nothing exported to the transits" 10 transits_clean
+
+	echo "2. the route stays while the edge no longer sends the native path"
+	hold_for 10 "the feed's route" injected
+
+	echo "3. flip-back removes the route; restoring the probes brings it back"
+	cp lab/probes/prefer-a.yaml "$lab_dir/probes/state.yaml.new"
+	mv "$lab_dir/probes/state.yaml.new" "$lab_dir/probes/state.yaml"
+	wait_for "flip-back to transit-a" 45 native
+	cp lab/probes/prefer-b.yaml "$lab_dir/probes/state.yaml.new"
+	mv "$lab_dir/probes/state.yaml.new" "$lab_dir/probes/state.yaml"
+	wait_for "the feed's route again" 45 injected
+
+	echo "4. SIGTERM: the feed goes and the edge drops the route"
+	"${compose[@]}" stop -t 20 packeteer
+	wait_for "route gone after SIGTERM" 20 native
+
+	echo "5. SIGKILL: the route stays until the feed's TTL, then goes"
+	"${compose[@]}" start packeteer
+	wait_for "the feed's route after restart" 60 injected
+	cid=$(packeteer_cid)
+	start=$(date +%s)
+	docker kill -s KILL "$cid"
+	# The consumer's expiry is the TTL from the renewal it last read: a
+	# round renews at least every 2s probe interval and a change or a 3.3s
+	# heartbeat brings it, so at least 10 - 2 - 3.3s are left at the kill.
+	hold_for 3 "route before the TTL" injected
+	wait_for "route gone after the TTL" 20 native
+	gone=$(($(date +%s) - start))
+	echo "route gone ${gone}s after SIGKILL (ttl 10s)"
+	if [ "$gone" -lt 5 ]; then
+		echo "route went in ${gone}s, before the feed's TTL could expire" >&2
+		exit 1
+	fi
 	;;
 bmp)
 	echo "1. BMP: transit-b's inactive path is seen only over BMP"

@@ -84,6 +84,9 @@ func (c *Config) validateIXP(add func(string, ...any)) {
 	if c.Synthesize != nil {
 		add("ixp forbids synthesize: IXP mode never announces")
 	}
+	if c.ExternalPolicy != nil {
+		add("ixp forbids external_policy: IXP mode never publishes routes")
+	}
 	c.validateVantages(add)
 	c.validateCoreLinks(add)
 	if c.IXP.Correlate != nil && c.IXP.Fabric == nil {

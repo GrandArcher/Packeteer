@@ -403,6 +403,18 @@ scorer:
 # announcer:
 #   type: gobgp
 #
+# External policy feed (#232, off by default; docs/external-policy.md):
+# publishes the routes inject would announce, read-only over TLS, for your
+# own BGP daemon (packeteer-policy renders BIRD/OpenBGPD config or speaks
+# ExaBGP). Enabled, inject runs without an announcer and the session only
+# learns. The token comes from PACKETEER_POLICY_TOKEN.
+# external_policy:
+#   enabled: false
+#   listen: 192.0.2.10:9443
+#   cert_file: /etc/packeteer/tls/feed.crt
+#   key_file: /etc/packeteer/tls/feed.key
+#   ttl: 90s
+#
 # More-specific injection (off by default; docs/design/more-specific.md).
 # With it, an improvement also announces the more-specifics inside its
 # prefix that a neighbor advertises in the learned RIB (never a prefix

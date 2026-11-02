@@ -16,6 +16,7 @@ import (
 	"github.com/GrandArcher/Packeteer/internal/blast"
 	"github.com/GrandArcher/Packeteer/internal/config"
 	"github.com/GrandArcher/Packeteer/internal/export"
+	"github.com/GrandArcher/Packeteer/internal/extpolicy"
 	"github.com/GrandArcher/Packeteer/internal/geoip"
 	"github.com/GrandArcher/Packeteer/internal/history"
 	"github.com/GrandArcher/Packeteer/internal/httpapi"
@@ -218,6 +219,10 @@ func classify(a, b *config.Config) (restart, online []string) {
 			pr, po := modeKeys(name, x.(*config.Mitigation), y.(*config.Mitigation), func(b *config.Mitigation) *string { return &b.Mode })
 			restart = append(restart, pr...)
 			online = append(online, po...)
+		case "external_policy":
+			pr, po := policyFeedKeys(x.(*config.ExternalPolicy), y.(*config.ExternalPolicy))
+			restart = append(restart, pr...)
+			online = append(online, po...)
 		default:
 			if sameYAML(x, y) {
 				continue
@@ -296,6 +301,30 @@ func modeKeys[T any](name string, a, b *T, mode func(*T) *string) (restart, onli
 	}
 	if am != bm {
 		online = append(online, name+".mode")
+	}
+	return restart, online
+}
+
+// policyFeedKeys splits an external_policy change (#232): enabled and ttl
+// apply online; the listener, certificate, and token are restart-only, as
+// is the block appearing or disappearing.
+func policyFeedKeys(a, b *config.ExternalPolicy) (restart, online []string) {
+	if a == nil || b == nil {
+		if a != b {
+			restart = append(restart, "external_policy")
+		}
+		return restart, nil
+	}
+	ac, bc := *a, *b
+	ac.Enabled, bc.Enabled, ac.TTL, bc.TTL = false, false, 0, 0
+	if !sameYAML(ac, bc) {
+		restart = append(restart, "external_policy")
+	}
+	if a.Enabled != b.Enabled {
+		online = append(online, "external_policy.enabled")
+	}
+	if a.TTL != b.TTL {
+		online = append(online, "external_policy.ttl")
 	}
 	return restart, online
 }
@@ -395,6 +424,8 @@ type reloader struct {
 	// exp and flowTags feed the flow tap of a source added online (#207).
 	exp      *export.Dispatcher
 	flowTags *exportTags
+	// feed is the external policy feed (#232), nil without the block.
+	feed *extpolicy.Feed
 }
 
 func (r *reloader) setCur(next *config.Config) {
@@ -617,6 +648,9 @@ func (r *reloader) applyOnline(ctx context.Context, next *config.Config, online 
 	}
 	if r.decider != nil {
 		r.decider.SetConfig(pc)
+	}
+	if slices.Contains(online, "external_policy.enabled") || slices.Contains(online, "external_policy.ttl") {
+		setPolicyFeed(r.feed, next, r.log)
 	}
 	if r.setup != nil && (slices.Contains(online, "max_improvements") || slices.Contains(online, "sources") || slices.Contains(online, "policies")) {
 		r.setup(setupInfo(next, r.plugins, r.geo))

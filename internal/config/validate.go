@@ -46,6 +46,7 @@ func (c *Config) Validate() error {
 	c.validateIRR(add)
 	c.validateRegistry(add)
 	c.validateInject(add)
+	c.validateExternalPolicy(add)
 	c.validateIXP(add)
 	c.validateHerd(add)
 
@@ -540,8 +541,8 @@ func (c *Config) validateInject(add func(string, ...any)) {
 		if c.LocalPref == 0 {
 			add("mode inject requires local_pref (the local preference set on injected routes)")
 		}
-		if c.Announcer == nil {
-			add("mode inject requires an announcer")
+		if c.Announcer == nil && !c.ExternalPolicyOn() {
+			add("mode inject requires an announcer or external_policy.enabled")
 		}
 		if c.HoldTime <= 0 {
 			add("mode inject requires a positive hold_time")
