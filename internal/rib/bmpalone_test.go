@@ -151,24 +151,24 @@ func TestBMPPeerAdjRIBInCount(t *testing.T) {
 	}
 }
 
-// One BMP path per prefix is held inline, a second promotes the prefix to
-// a map, and withdrawing back to one releases it.
+// One BMP path per prefix is held inline, a second makes a two-entry
+// slice, and withdrawing back to one stores it inline again.
 func TestBMPPathsInline(t *testing.T) {
 	v := bmpAloneView(t)
 	v.ApplyRIB(paths(edge, transitA, announce(lab, transitA, 64496)))
 	if s := v.bmp[lab]; s.n != 1 || s.many != nil {
-		t.Fatalf("one path: n=%d map=%v", s.n, s.many != nil)
+		t.Fatalf("one path: n=%d many=%v", s.n, s.many != nil)
 	}
 	v.ApplyRIB(paths(edge, transitB, announce(lab, transitB, 64497)))
 	if s := v.bmp[lab]; s.n != 2 || s.many == nil {
-		t.Fatalf("two paths: n=%d map=%v", s.n, s.many != nil)
+		t.Fatalf("two paths: n=%d many=%v", s.n, s.many != nil)
 	}
 	if got := v.Paths(lab); len(got) != 2 {
 		t.Fatalf("paths = %+v", got)
 	}
 	v.ApplyRIB(paths(edge, transitA, plugin.RIBPath{Prefix: lab, Withdraw: true}))
 	if s := v.bmp[lab]; s.n != 1 || s.many != nil || s.one.Provider != "transit-b" {
-		t.Fatalf("after withdraw: n=%d map=%v one=%+v", s.n, s.many != nil, s.one)
+		t.Fatalf("after withdraw: n=%d many=%v one=%+v", s.n, s.many != nil, s.one)
 	}
 	v.ApplyRIB(plugin.RIBEvent{Kind: plugin.RIBRouterDown, Router: edge})
 	if _, ok := v.bmp[lab]; ok || v.Len() != 0 {

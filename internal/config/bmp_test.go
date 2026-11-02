@@ -49,6 +49,7 @@ func TestBMPAloneConfig(t *testing.T) {
 		"provider off":   {second, "providers[1] (transit-b): without bgp.neighbors the RIB view is learned over BMP alone"},
 		"announcer":      {alone + "announcer:\n  type: gobgp\n", "announcer requires bgp.neighbors"},
 		"inbound":        {alone + "inbound:\n  performance: {}\n  announcer:\n    type: gobgp\n", "inbound.announcer requires bgp.neighbors"},
+		"mitigation":     {alone + "mitigation:\n  announcer:\n    type: gobgp\n", "mitigation.announcer requires bgp.neighbors"},
 		"herd unchanged": {alone + "herd:\n  enabled: true\n", "herd needs bgp.neighbors"},
 	} {
 		_, err := Parse([]byte(tc.yaml))

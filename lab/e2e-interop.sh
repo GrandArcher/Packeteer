@@ -566,7 +566,7 @@ bmponly)
 	wait_for "view not ready without the BMP feed" 30 rib_ready 0
 	wait_for "feed empty without the BMP feed" 15 feed_empty
 	echo "feed empty $(($(date +%s) - start))s after the edge stopped"
-	need_log 'bmp session down'
+	wait_for "the station logged the session end" 5 log_has 'bmp session (down|ended)'
 
 	echo "3. the edge returns: BMP reconnects and the route comes back"
 	"${compose[@]}" start "$edge"
