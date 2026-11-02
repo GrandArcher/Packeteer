@@ -6,6 +6,7 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 
 ### Added
 
+- BMP alone as the RIB view: no `bgp.neighbors`, ready only while a BMP feed reports a peer, withdraw on feed loss; BMP peer metrics, interop cell `bmponly`, and a `bmp` load profile (#237).
 - Docker lab job for probe agents: controller and two `packeteer-agent` containers at two sites; checks per-site attribution, a killed agent failing closed, and a revoked certificate (#478).
 - External policy feed (`external_policy`): inject routes over TLS with a token, JSON and gRPC, with a TTL; `packeteer-policy` applies them to BIRD (lab-tested), OpenBGPD or ExaBGP (#232).
 - Distributed probe agents: `packeteer-agent` probes from provider sites over mutual TLS with revocation; `providers[].site` and an `agent` prober; a lost agent fails its provider closed (#230).

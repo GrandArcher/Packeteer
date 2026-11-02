@@ -70,6 +70,7 @@ func commonFlags(fs *flag.FlagSet) (budgets, profile *string, multiply *int, pt 
 	multiply = fs.Int("multiply", 0, "play the table on this many sessions, so Packeteer holds that many paths per prefix (1 to 4; default the profile's)")
 	pt = &ports{}
 	fs.IntVar(&pt.BGP, "bgp-port", 11179, "router port on 127.0.0.1")
+	fs.IntVar(&pt.BMP, "bmp-port", 11119, "Packeteer BMP station port on 127.0.0.1 (a profile with bmp: true)")
 	fs.IntVar(&pt.Flow, "flow-port", 12055, "Packeteer IPFIX port on 127.0.0.1")
 	fs.IntVar(&pt.HTTP, "http-port", 18081, "Packeteer ops API port on 127.0.0.1")
 	return
@@ -237,9 +238,14 @@ func run(ctx context.Context, o runOpts) (Result, error) {
 		if o.real != nil {
 			view = newRealTable(o.real.views[k%len(o.real.views)])
 		}
-		rt, err := startRouter(ctx, k, o.pt.BGP, view, f.adv)
-		if err != nil {
-			return r, err
+		var rt *router
+		if p.BMP {
+			rt = newBMPRouter(k, o.pt.BMP, view, f.adv)
+		} else {
+			var err error
+			if rt, err = startRouter(ctx, k, o.pt.BGP, view, f.adv); err != nil {
+				return r, err
+			}
 		}
 		defer rt.stop()
 		rt.cap = p.Inject
@@ -264,8 +270,9 @@ func run(ctx context.Context, o runOpts) (Result, error) {
 		return r, fmt.Errorf("a simulated run checks that no ICMP echo leaves the host, and cannot read the counter: %w", echoErr)
 	}
 
-	// Learn: Packeteer connects to every router and each session opens
-	// with a full-table dump, as on a real edge.
+	// Learn: Packeteer connects to every router (over BMP the router
+	// connects to Packeteer) and each session opens with a full-table
+	// dump, as on a real edge.
 	if err := acceptAll(f, 2*time.Minute); err != nil {
 		return r, err
 	}
@@ -443,7 +450,7 @@ loop:
 		fail("packeteer_ready was 0 in %d samples during the soak", notReady)
 	}
 	if sessionDown > 0 {
-		fail("no iBGP session was up in %d samples during the soak", sessionDown)
+		fail("no iBGP session or BMP peer was up in %d samples during the soak", sessionDown)
 	}
 	if r.SessionDrops > 0 {
 		fail("%d session(s) ended during the soak without a flap", r.SessionDrops)

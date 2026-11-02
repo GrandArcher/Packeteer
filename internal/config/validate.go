@@ -412,9 +412,7 @@ func (c *Config) validatePlugins(add func(string, ...any)) {
 	if c.LeakWatching() {
 		validateSpecs("leak_watch.sources", c.LeakWatch.Sources)
 	}
-	if len(c.RIBSources) > 0 && len(c.BGP.Neighbors) == 0 {
-		add("rib_sources requires at least one bgp.neighbors entry (the RIB view and the announcer use the iBGP session)")
-	}
+	c.validateBMPAlone(add)
 	if c.Scorer != nil && c.Scorer.Type == "cost" {
 		priced := 0
 		for _, p := range c.Providers {
@@ -463,6 +461,40 @@ func (c *Config) validatePlugins(add func(string, ...any)) {
 		if len(c.BGP.Neighbors) == 0 {
 			add("ha requires bgp.neighbors (an instance may lead only while its RIB view is ready)")
 		}
+	}
+}
+
+// validateBMPAlone checks a config with rib_sources and no bgp.neighbors
+// (#237): the RIB view is learned over BMP alone, so every provider has to
+// read its BMP paths, and nothing can announce, since announcers use the
+// iBGP session. The external policy feed is the way to act on decisions.
+func (c *Config) validateBMPAlone(add func(string, ...any)) {
+	if len(c.RIBSources) == 0 || len(c.BGP.Neighbors) > 0 {
+		return
+	}
+	const alone = "without bgp.neighbors the RIB view is learned over BMP alone; set bmp: prefer or only"
+	exchanges := map[string]bool{}
+	for i, p := range c.Providers {
+		switch {
+		case p.BMP == BMPPrefer || p.BMP == BMPOnly:
+		case p.Exchange != "":
+			if !exchanges[p.Exchange] {
+				exchanges[p.Exchange] = true
+				add("exchanges (%s): %s", p.Exchange, alone)
+			}
+		default:
+			add("providers[%d] (%s): %s", i, p.Name, alone)
+		}
+	}
+	const why = "requires bgp.neighbors (it announces on the iBGP session); without them use external_policy"
+	if c.Announcer != nil {
+		add("announcer %s", why)
+	}
+	if c.Inbound != nil && c.Inbound.Announcer != nil {
+		add("inbound.announcer %s", why)
+	}
+	if c.Mitigation != nil && c.Mitigation.Announcer != nil {
+		add("mitigation.announcer %s", why)
 	}
 }
 
@@ -532,8 +564,8 @@ func (c *Config) validateInject(add func(string, ...any)) {
 		if len(c.Allowlist.Prefixes) == 0 {
 			add("mode inject requires a non-empty allowlist.prefixes")
 		}
-		if len(c.BGP.Neighbors) == 0 {
-			add("mode inject requires at least one bgp.neighbors entry")
+		if len(c.BGP.Neighbors) == 0 && len(c.RIBSources) == 0 {
+			add("mode inject requires at least one bgp.neighbors entry, or rib_sources with external_policy")
 		}
 		if c.PacketeerCommunity == "" {
 			add("mode inject requires packeteer_community to tag injected routes")

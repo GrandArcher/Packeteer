@@ -204,6 +204,10 @@ func TestBuildSystemHAFederationAndBGP(t *testing.T) {
 	if c.State != StateDown || c.Detail != "never seen" || strings.Contains(c.Error, "token=zzz") {
 		t.Errorf("silent peer = %+v", c)
 	}
+	alone := BuildSystem(Snapshot{Mode: "observe", BGPConfigured: true}, SystemFacts{}, nil, nil)
+	if c := find(t, alone, KindBGP, "iBGP"); c.State != StateIdle || !strings.Contains(c.Detail, "BMP alone") {
+		t.Errorf("a view learned over BMP alone = %+v", c)
+	}
 	none := BuildSystem(Snapshot{Mode: "observe"}, SystemFacts{}, nil, nil)
 	if c := find(t, none, KindBGP, "iBGP"); c.State != StateIdle {
 		t.Errorf("no neighbors = %+v", c)

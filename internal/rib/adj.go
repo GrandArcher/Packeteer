@@ -1,20 +1,33 @@
 package rib
 
-// pathSet is the iBGP paths for one prefix.
+import "slices"
+
+// pathSet is the paths for one prefix from one kind of source, keyed by
+// adjKey (iBGP) or bmpPathKey (BMP).
 //
-// A full table is almost all single-path prefixes (no add-path). Those
-// are stored inline. A map per prefix is a few hundred bytes of header
-// on top of the route, and at a million prefixes that header is a large
-// part of the heap the load test measures. A second path promotes the
-// set to a map; dropping back to one path releases it.
-type pathSet struct {
+// A full table is almost all single-path prefixes (no add-path, or one
+// BMP peer per prefix). Those are stored inline. Several paths (add-path,
+// or BMP Adj-RIB-In next to Loc-RIB) are a small slice searched in order:
+// a map per prefix is a few hundred bytes of header on top of the routes,
+// and at a million prefixes that header is a large part of the heap the
+// load test measures. Dropping back to one path stores it inline again.
+type pathSet[K comparable] struct {
 	n    int
-	key  adjKey
+	key  K
 	one  Route
-	many map[adjKey]Route
+	many []keyedRoute[K]
 }
 
-func (s *pathSet) set(k adjKey, rt Route) {
+type keyedRoute[K comparable] struct {
+	key K
+	rt  Route
+}
+
+func (s *pathSet[K]) find(k K) int {
+	return slices.IndexFunc(s.many, func(e keyedRoute[K]) bool { return e.key == k })
+}
+
+func (s *pathSet[K]) set(k K, rt Route) {
 	if s.n == 0 {
 		s.key, s.one, s.n = k, rt, 1
 		return
@@ -24,16 +37,21 @@ func (s *pathSet) set(k adjKey, rt Route) {
 			s.one = rt
 			return
 		}
-		s.many = make(map[adjKey]Route, 2)
-		s.many[s.key] = s.one
-		s.one = Route{}
+		s.many = make([]keyedRoute[K], 1, 2)
+		s.many[0] = keyedRoute[K]{s.key, s.one}
+		var zero K
+		s.key, s.one = zero, Route{}
 	}
-	s.many[k] = rt
+	if i := s.find(k); i >= 0 {
+		s.many[i].rt = rt
+	} else {
+		s.many = append(s.many, keyedRoute[K]{k, rt})
+	}
 	s.n = len(s.many)
 }
 
 // del removes k. It reports whether the set is now empty.
-func (s *pathSet) del(k adjKey) bool {
+func (s *pathSet[K]) del(k K) bool {
 	if s.n == 0 {
 		return true
 	}
@@ -41,21 +59,20 @@ func (s *pathSet) del(k adjKey) bool {
 		if s.key != k {
 			return false
 		}
-		*s = pathSet{}
+		*s = pathSet[K]{}
 		return true
 	}
-	if _, ok := s.many[k]; !ok {
+	i := s.find(k)
+	if i < 0 {
 		return false
 	}
-	delete(s.many, k)
+	s.many = slices.Delete(s.many, i, i+1)
 	switch len(s.many) {
 	case 0:
-		*s = pathSet{}
+		*s = pathSet[K]{}
 		return true
 	case 1:
-		for kk, rt := range s.many {
-			s.key, s.one = kk, rt
-		}
+		s.key, s.one = s.many[0].key, s.many[0].rt
 		s.many = nil
 		s.n = 1
 		return false
@@ -65,30 +82,29 @@ func (s *pathSet) del(k adjKey) bool {
 	}
 }
 
-func (s *pathSet) has(k adjKey) bool {
+func (s *pathSet[K]) has(k K) bool {
 	if s.n == 0 {
 		return false
 	}
 	if s.many == nil {
 		return s.key == k
 	}
-	_, ok := s.many[k]
-	return ok
+	return s.find(k) >= 0
 }
 
-func (s *pathSet) update(k adjKey, rt Route) {
+func (s *pathSet[K]) update(k K, rt Route) {
 	if s.many == nil {
 		if s.n == 1 && s.key == k {
 			s.one = rt
 		}
 		return
 	}
-	if _, ok := s.many[k]; ok {
-		s.many[k] = rt
+	if i := s.find(k); i >= 0 {
+		s.many[i].rt = rt
 	}
 }
 
-func (s *pathSet) each(fn func(adjKey, Route)) {
+func (s *pathSet[K]) each(fn func(K, Route)) {
 	if s == nil || s.n == 0 {
 		return
 	}
@@ -96,7 +112,7 @@ func (s *pathSet) each(fn func(adjKey, Route)) {
 		fn(s.key, s.one)
 		return
 	}
-	for k, rt := range s.many {
-		fn(k, rt)
+	for _, e := range s.many {
+		fn(e.key, e.rt)
 	}
 }

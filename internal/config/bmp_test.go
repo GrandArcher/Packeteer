@@ -25,10 +25,31 @@ func TestBMPConfig(t *testing.T) {
 		t.Fatalf("parsed: %+v %+v", c.Providers[0], c.RIBSources)
 	}
 	for name, tc := range map[string]struct{ yaml, want string }{
-		"bad usage":    {strings.Replace(bmpYAML, "bmp: PREFER", "bmp: always", 1), `bmp "always" is invalid`},
-		"no source":    {strings.Replace(bmpYAML, "rib_sources:\n  - type: bmp\n    config:\n      routers: [192.0.2.254]\n", "", 1), "bmp prefer requires a rib_sources entry"},
-		"no neighbors": {strings.Replace(bmpYAML, "bgp:\n  neighbors:\n    - address: 192.0.2.254\n", "", 1), "rib_sources requires at least one bgp.neighbors"},
-		"source type":  {strings.Replace(bmpYAML, "type: bmp", "name: x", 1), "rib_sources[0]: type is required"},
+		"bad usage":   {strings.Replace(bmpYAML, "bmp: PREFER", "bmp: always", 1), `bmp "always" is invalid`},
+		"no source":   {strings.Replace(bmpYAML, "rib_sources:\n  - type: bmp\n    config:\n      routers: [192.0.2.254]\n", "", 1), "bmp prefer requires a rib_sources entry"},
+		"source type": {strings.Replace(bmpYAML, "type: bmp", "name: x", 1), "rib_sources[0]: type is required"},
+	} {
+		_, err := Parse([]byte(tc.yaml))
+		if err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("%s: err = %v, want %q", name, err, tc.want)
+		}
+	}
+}
+
+// Without bgp.neighbors the RIB view is learned over BMP alone (#237):
+// every provider reads BMP, and nothing announces on a session that does
+// not exist.
+func TestBMPAloneConfig(t *testing.T) {
+	alone := strings.Replace(bmpYAML, "bgp:\n  neighbors:\n    - address: 192.0.2.254\n", "", 1)
+	if _, err := Parse([]byte(alone)); err != nil {
+		t.Fatalf("observe over BMP alone: %v", err)
+	}
+	second := strings.Replace(alone, "    bmp: PREFER\n", "    bmp: PREFER\n  - name: transit-b\n    source_ip: 192.0.2.12\n    next_hop: 192.0.2.2\n", 1)
+	for name, tc := range map[string]struct{ yaml, want string }{
+		"provider off":   {second, "providers[1] (transit-b): without bgp.neighbors the RIB view is learned over BMP alone"},
+		"announcer":      {alone + "announcer:\n  type: gobgp\n", "announcer requires bgp.neighbors"},
+		"inbound":        {alone + "inbound:\n  performance: {}\n  announcer:\n    type: gobgp\n", "inbound.announcer requires bgp.neighbors"},
+		"herd unchanged": {alone + "herd:\n  enabled: true\n", "herd needs bgp.neighbors"},
 	} {
 		_, err := Parse([]byte(tc.yaml))
 		if err == nil || !strings.Contains(err.Error(), tc.want) {

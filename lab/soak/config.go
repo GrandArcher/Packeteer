@@ -11,6 +11,7 @@ import (
 // Ports on the host network. The container and the harness share it.
 type ports struct {
 	BGP  int // the harness's router; Packeteer connects to it
+	BMP  int // Packeteer's BMP station; a bmp profile's router connects to it
 	Flow int // Packeteer's IPFIX collector
 	HTTP int // Packeteer's ops API
 }
@@ -59,15 +60,18 @@ thresholds:
   min_rtt_delta_ms: 15
 providers:
 %sallowlist:
-%sbgp:
-  neighbors:
-`, mode, labASN, lp, maxImp, hold, providerLines(p), allow)
-	for k := range p.sessions() {
-		desc := "soak-router"
-		if k > 0 {
-			desc = fmt.Sprintf("soak-router-%d", k)
+%s`, mode, labASN, lp, maxImp, hold, providerLines(p), allow)
+	if p.BMP {
+		fmt.Fprintf(&b, "rib_sources:\n  - type: bmp\n    config:\n      listen: \"127.0.0.1:%d\"\n      routers: [%s]\n", pt.BMP, routerAddrs[0])
+	} else {
+		b.WriteString("bgp:\n  neighbors:\n")
+		for k := range p.sessions() {
+			desc := "soak-router"
+			if k > 0 {
+				desc = fmt.Sprintf("soak-router-%d", k)
+			}
+			fmt.Fprintf(&b, "    - address: %s\n      port: %d\n      local_address: %s\n      description: %s\n", routerAddrs[k], pt.BGP, peerAddr, desc)
 		}
-		fmt.Fprintf(&b, "    - address: %s\n      port: %d\n      local_address: %s\n      description: %s\n", routerAddrs[k], pt.BGP, peerAddr, desc)
 	}
 	if p.Inject > 0 {
 		b.WriteString("announcer:\n  type: gobgp\n")
@@ -175,11 +179,15 @@ func rateLimit(p Profile) int {
 // one per view, as lab providers with a type, an ASN, and a cost (#103).
 func providerLines(p Profile) string {
 	if !p.Simulate {
-		return fmt.Sprintf(`  - {name: transit-a, source_ip: 192.0.2.11, next_hop: %s}
-  - {name: transit-b, source_ip: 192.0.2.12, next_hop: %s}
-  - {name: transit-a6, source_ip: "2001:db8:ffff::11", next_hop: "%s"}
-  - {name: transit-b6, source_ip: "2001:db8:ffff::12", next_hop: "%s"}
-`, nextHopsV4[0], nextHopsV4[1], nextHopsV6[0], nextHopsV6[1])
+		bmp := ""
+		if p.BMP {
+			bmp = ", bmp: only"
+		}
+		return fmt.Sprintf(`  - {name: transit-a, source_ip: 192.0.2.11, next_hop: %[1]s%[5]s}
+  - {name: transit-b, source_ip: 192.0.2.12, next_hop: %[2]s%[5]s}
+  - {name: transit-a6, source_ip: "2001:db8:ffff::11", next_hop: "%[3]s"%[5]s}
+  - {name: transit-b6, source_ip: "2001:db8:ffff::12", next_hop: "%[4]s"%[5]s}
+`, nextHopsV4[0], nextHopsV4[1], nextHopsV6[0], nextHopsV6[1], bmp)
 	}
 	var b strings.Builder
 	for k, r := range simRoutes {

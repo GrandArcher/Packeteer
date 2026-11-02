@@ -91,6 +91,9 @@ func planReload(cur, next *config.Config, table []plugin.RouterExport) (reloadPl
 	if len(next.BGP.Neighbors) == 0 {
 		return plan, errors.New("restart required: bgp.neighbors cannot become empty while running")
 	}
+	if len(cur.BGP.Neighbors) == 0 {
+		return plan, errors.New("restart required: the RIB view is learned over BMP alone; adding bgp.neighbors needs a restart")
+	}
 	sessions, err := neighborPlan(cur, next, table)
 	if err != nil {
 		return plan, err

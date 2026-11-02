@@ -67,10 +67,11 @@ func (g ribGate) ProviderPath(p netip.Prefix, provider string) ([]uint32, bool) 
 	return g.v.ProviderPath(p, provider)
 }
 
-// newRIB builds the learn-only RIB view, or returns nil when no BGP
-// neighbors are configured.
+// newRIB builds the learn-only RIB view, or returns nil when neither BGP
+// neighbors nor RIB sources are configured. With RIB sources and no
+// neighbors the view is learned over BMP alone (#237).
 func newRIB(cfg *config.Config, log *slog.Logger) (*rib.View, error) {
-	if len(cfg.BGP.Neighbors) == 0 {
+	if len(cfg.BGP.Neighbors) == 0 && len(cfg.RIBSources) == 0 {
 		return nil, nil
 	}
 	rid, err := parseAddr(cfg.RouterID)
@@ -201,7 +202,7 @@ func wireRIBSources(plugins *pluginhost.Set, view *rib.View, health *syshealth.T
 		return nil
 	}
 	if view == nil {
-		return errors.New("rib_sources require bgp.neighbors")
+		return errors.New("rib_sources need the RIB view")
 	}
 	for _, s := range plugins.RIBSources {
 		s.Plugin.SetRIBSink(ribSink(view, health, s.Name, mon, emit))

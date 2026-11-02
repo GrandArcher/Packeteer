@@ -18,7 +18,7 @@ Three deployments:
 | unset | `true` | Feed only. The session to the edge learns and announces nothing. |
 | set | `true` | Both, for example the feed for a second site's daemon while injecting locally. |
 
-`mode: inject` still needs `bgp.neighbors`: the RIB view comes from that session (and optional `rib_sources`, which need it too). A RIB view from BMP alone, with no iBGP session, is not built.
+`mode: inject` needs a RIB view: `bgp.neighbors`, or with feed only a `rib_sources` BMP station and no iBGP session at all (#237, [BMP alone](CONFIG.md#bmp-alone)). Then the feed empties whenever the BMP feed drops.
 
 ## Config
 

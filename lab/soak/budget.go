@@ -77,8 +77,13 @@ type Profile struct {
 	// OutageTargets is how many static targets lose every packet on
 	// transit-a, so the outage source has an incident to find. Zero has
 	// no outage source.
-	OutageTargets int     `yaml:"outage_targets"`
-	Budgets       Budgets `yaml:"budgets"`
+	OutageTargets int `yaml:"outage_targets"`
+	// BMP plays the router's BMP client instead of an iBGP peer (#237):
+	// Packeteer has no bgp.neighbors and learns the table over BMP alone,
+	// each prefix as every provider peer's post-policy Adj-RIB-In path
+	// (bmp.go). Observe, one router, the synthetic table.
+	BMP     bool    `yaml:"bmp"`
+	Budgets Budgets `yaml:"budgets"`
 
 	realPaths int      // set by useReal
 	vipASNs   []uint32 // set by useReal on a simulated run
@@ -253,6 +258,9 @@ func (p Profile) validate() error {
 	}
 	if p.Inject > 10000 || p.VIPTargets > 100000 {
 		errs = append(errs, errors.New("inject is at most 10000 (max_improvements) and vip_targets at most 100000"))
+	}
+	if p.BMP && (p.Real || p.Sessions > 1 || p.Inject != 0 || p.FlapEvery != 0 || p.SlowPeerBPS != 0) {
+		errs = append(errs, errors.New("bmp plays one router of the synthetic table in observe: real, sessions, inject, flap_every and slow_peer_bps must be unset"))
 	}
 	if p.OutageTargets > p.StaticTargets || (p.OutageTargets > 0 && p.OutageTargets < 3) {
 		errs = append(errs, errors.New("outage_targets must be 3 (the outage source's min_prefixes) to static_targets"))
