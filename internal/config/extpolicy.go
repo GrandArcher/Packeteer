@@ -59,7 +59,7 @@ func (c *Config) validateExternalPolicy(add func(string, ...any)) {
 		return
 	}
 	if c.Synthesize != nil {
-		add("external_policy cannot be combined with synthesize: synthesized sub-ranges are not in the learned RIB and the feed lists only exact learned prefixes")
+		add("external_policy cannot be combined with synthesize: synthesized sub-ranges are not in the learned RIB and the feed lists only prefixes in the learned RIB")
 	}
 	if _, port, err := net.SplitHostPort(e.Listen); err != nil || port == "" {
 		add("external_policy.listen %q must be host:port", e.Listen)
