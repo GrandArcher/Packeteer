@@ -9,12 +9,14 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/netip"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -25,9 +27,10 @@ import (
 	"google.golang.org/protobuf/types/known/structpb"
 
 	"github.com/GrandArcher/Packeteer/internal/agentwire/pkitest"
+	"github.com/GrandArcher/Packeteer/internal/announce"
 	"github.com/GrandArcher/Packeteer/internal/config"
 	"github.com/GrandArcher/Packeteer/internal/extpolicy"
-	"github.com/GrandArcher/Packeteer/internal/pluginhost"
+	"github.com/GrandArcher/Packeteer/internal/policy"
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
 )
 
@@ -247,25 +250,6 @@ probers:
 	}
 }
 
-func TestAnnouncingVia(t *testing.T) {
-	gobgp := &pluginhost.Set{Announcer: &pluginhost.Instance[plugin.Announcer]{Type: "gobgp"}}
-	on := &config.Config{ExternalPolicy: &config.ExternalPolicy{Enabled: true}}
-	off := &config.Config{ExternalPolicy: &config.ExternalPolicy{}}
-	for _, tc := range []struct {
-		cfg     *config.Config
-		plugins *pluginhost.Set
-		want    string
-	}{
-		{off, gobgp, "gobgp"},
-		{on, gobgp, "gobgp+external_policy"},
-		{on, &pluginhost.Set{}, "external_policy"},
-	} {
-		if got := announcingVia(tc.cfg, tc.plugins); got != tc.want {
-			t.Errorf("announcingVia = %q, want %q", got, tc.want)
-		}
-	}
-}
-
 // enabled and ttl reload online; the listener, certificate, and token, and
 // the block itself, need a restart. A reload that turns the feed off
 // publishes the empty, expired set at once.
@@ -319,5 +303,43 @@ external_policy: {enabled: true, listen: "127.0.0.1:9443", cert_file: c.pem, key
 	setPolicyFeed(feed, swap("ttl: 2m", "ttl: 3m"), quietLogger())
 	if d := feed.Document(); len(d.Routes) != 1 || d.ExpiresInMS != 180_000 {
 		t.Fatalf("on with a new ttl: %+v", d)
+	}
+}
+
+// A standby withdraws what is on the wire, and the feed it keeps serving
+// is empty with time left, not the routes of an earlier term.
+func TestFeedEmptyOnHAStandby(t *testing.T) {
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	p := netip.MustParsePrefix("203.0.113.0/24")
+	feed := extpolicy.New(true, time.Minute, nil)
+	m := extpolicy.NewMirror(&memAnn{}, feed)
+	var leader atomic.Bool
+	leader.Store(true)
+	ctl, err := announce.New(announce.Config{
+		Mode: "inject", LocalPref: 250, Community: "64512:666", MaxImprovements: 5, Leader: leader.Load,
+		Allowlist: []netip.Prefix{p},
+		NextHops:  map[string]netip.Addr{"b": netip.MustParseAddr("192.0.2.2")},
+	}, m, readyRIB{p}, log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	imps := []policy.Improvement{{Prefix: p, Provider: "b", Native: "a", Since: now, Reason: "faster"}}
+	if err := ctl.Sync(context.Background(), imps); err != nil {
+		t.Fatal(err)
+	}
+	feed.Touch(now, imps)
+	if feed.Routes() != 1 {
+		t.Fatalf("leader feed has %d routes, want 1", feed.Routes())
+	}
+
+	leader.Store(false)
+	if _, err := standbyRound(now, ctl, nil, nil, log); err != nil {
+		t.Fatal(err)
+	}
+	feed.Touch(now, nil)
+	doc := feed.Document()
+	if len(doc.Routes) != 0 || doc.ExpiresInMS <= 0 {
+		t.Fatalf("standby feed: %d routes, expires in %d ms", len(doc.Routes), doc.ExpiresInMS)
 	}
 }

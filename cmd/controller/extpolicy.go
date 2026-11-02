@@ -10,8 +10,7 @@ import (
 )
 
 // newPolicyFeed builds the external policy feed and its server (#232) when
-// the block is set, enabled or not, so enabled can change online. The
-// token is read from the environment and never logged.
+// the block is set. The token is read from the environment and never logged.
 func newPolicyFeed(cfg *config.Config, getenv func(string) string, log *slog.Logger) (*extpolicy.Feed, *extpolicy.Server, error) {
 	e := cfg.ExternalPolicy
 	if e == nil {

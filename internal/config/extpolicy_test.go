@@ -86,3 +86,20 @@ func TestIXPRefusesExternalPolicy(t *testing.T) {
 		t.Fatalf("ixp with the feed: %v", err)
 	}
 }
+
+// Synthesized sub-ranges are not in the learned RIB; the feed would list
+// them, so the two blocks are refused together, enabled or not.
+func TestExternalPolicyRefusesSynthesize(t *testing.T) {
+	for _, synth := range []string{
+		synthBlock,
+		"synthesize: {covering_prefixes: [198.51.100.0/24]}\n",
+	} {
+		_, err := Parse([]byte(injectYAML + synth + feedBlock))
+		if err == nil || !strings.Contains(err.Error(), "external_policy cannot be combined with synthesize") {
+			t.Fatalf("feed with synthesize %q: %v", synth, err)
+		}
+	}
+	if _, err := Parse([]byte(injectYAML + synthBlock)); err != nil {
+		t.Fatalf("synthesize without the feed: %v", err)
+	}
+}

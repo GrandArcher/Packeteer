@@ -15,9 +15,6 @@ import (
 // the only output (no announcing session). Each call goes to inner first;
 // the feed records a route only once inner accepted it, so it lists exactly
 // what is on the wire.
-//
-// The plugin host starts and stops inner; the controller closes the feed
-// on shutdown after the withdraw.
 type Mirror struct {
 	plugin.Base
 	inner plugin.Announcer

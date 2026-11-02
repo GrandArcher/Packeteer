@@ -93,7 +93,7 @@ func (s *Server) Start() error {
 			s.log.Error("external policy feed stopped", "err", err)
 		}
 	}()
-	s.log.Info("external policy feed listening", "addr", ln.Addr().String())
+	s.log.Info("external policy feed listening", "addr", s.Addr())
 	return nil
 }
 

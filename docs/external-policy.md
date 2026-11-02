@@ -6,7 +6,7 @@ Lab-proven only (`lab/e2e-interop.sh bird2|bird3 external`), not on a public edg
 
 ## What is in the feed
 
-The feed is a toggle beside the embedded announcer, not a separate decision path. The outbound announce controller drives it the same way it drives the `gobgp` announcer, so every route in it went through the same `Decide` output and the same rails: `allowlist.prefixes`, `max_improvements`, the learned-RIB check (never a prefix the RIB view has not learned), the leak-watch hold, flap quarantine, and the withdraw on stale data, RIB session loss, HA standby, and shutdown. With an announcer configured, a route is listed only after the announcer accepted it, so both outputs carry the same routes.
+The feed is a toggle beside the embedded announcer, not a separate decision path. The outbound announce controller drives it the same way it drives the `gobgp` announcer, so every route in it went through the same `Decide` output and the same rails: `allowlist.prefixes`, `max_improvements`, the learned-RIB check (never a prefix the RIB view has not learned), the leak-watch hold, flap quarantine, and the withdraw on stale data, RIB session loss, HA standby, and shutdown. `external_policy` is refused together with a `synthesize` block, because a synthesized sub-range is not in the learned RIB. With an announcer configured, a route is listed only after the announcer accepted it, so both outputs carry the same routes.
 
 The feed carries routes only in `mode: inject`. In observe and suggest it is empty. Inbound steers and mitigation rules are not in it.
 
