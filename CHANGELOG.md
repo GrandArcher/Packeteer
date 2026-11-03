@@ -11,6 +11,8 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 ### Upgrade notes
 
 - `packeteer-policy` exits with code 2 without `-community` (your `packeteer_community`) or with a non-loopback `http` `-url`; add `-community`, and `-allow` with your allowlist (#488).
+- Remove `0.0.0.0/0` or `::/0` from `allowlist.prefixes`; a config with one no longer loads (#486).
+
 ### Changed
 
 - `allowlist.prefixes` rejects `0.0.0.0/0` and `::/0` (a config with one no longer loads) and logs a warning for an entry shorter than /8 (#486).
