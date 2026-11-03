@@ -946,12 +946,12 @@ func TestAllowlistRejectsDefaultRoute(t *testing.T) {
 		}
 	}
 
-	cfg, err := Parse([]byte(edit(t, injectYAML, "    - 198.51.100.0/24", "    - 192.0.0.0/7\n    - 198.51.100.0/24")))
+	cfg, err := Parse([]byte(edit(t, injectYAML, "    - 198.51.100.0/24", "    - fc00::/7\n    - 198.51.100.0/24")))
 	if err != nil {
 		t.Fatal(err)
 	}
 	w := cfg.AllowlistWarnings()
-	if len(w) != 1 || !strings.Contains(w[0], "192.0.0.0/7 is shorter than /8") {
+	if len(w) != 1 || !strings.Contains(w[0], "fc00::/7 is shorter than /8") {
 		t.Fatalf("warnings = %q", w)
 	}
 	cfg, err = Parse([]byte(injectYAML))

@@ -4,9 +4,14 @@ import (
 	"context"
 	"net/netip"
 	"testing"
+	"time"
 
 	"github.com/osrg/gobgp/v3/pkg/server"
 
+	"github.com/GrandArcher/Packeteer/internal/config"
+	"github.com/GrandArcher/Packeteer/internal/inbound"
+	"github.com/GrandArcher/Packeteer/internal/mitigation"
+	"github.com/GrandArcher/Packeteer/internal/rib"
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
 )
 
@@ -24,12 +29,23 @@ func speakerPaths(t *testing.T, srv *server.BgpServer, prefix string) int {
 }
 
 // sharedSpeaker binds the outbound, inbound, and mitigation announcers to
-// one speaker, as inject with all three does.
-func sharedSpeaker(t *testing.T) (*fakeRouter, *server.BgpServer, *Announcer, *InboundAnnouncer, *MitigationAnnouncer) {
+// one speaker, as inject with all three does. The router originates
+// learned, next hop 192.0.2.1, before the session comes up.
+func sharedSpeaker(t *testing.T, learned ...string) (*fakeRouter, *rib.View, *Announcer, *InboundAnnouncer, *MitigationAnnouncer) {
 	t.Helper()
 	r := newRouter(t)
+	for _, s := range learned {
+		p := netip.MustParsePrefix(s)
+		addLocal(t, r.srv, plugin.Route{Prefix: p, NextHop: netip.MustParseAddr("192.0.2.1"), LocalPref: 100, Communities: []string{"64496:1"}})
+	}
 	v := newView(t, r)
 	eventually(t, "session", v.Ready)
+	for _, s := range learned {
+		eventually(t, "learned "+s, func() bool {
+			_, ok := v.Exact(netip.MustParsePrefix(s))
+			return ok
+		})
+	}
 	out := mustAnnouncer(t)
 	if err := out.Bind(v.Server(), "64512:666"); err != nil {
 		t.Fatal(err)
@@ -43,7 +59,23 @@ func sharedSpeaker(t *testing.T) (*fakeRouter, *server.BgpServer, *Announcer, *I
 	if err := m.Bind(v.Server(), "64512:666", allow, 2); err != nil {
 		t.Fatal(err)
 	}
-	return r, v.Server(), out, in, m
+	return r, v, out, in, m
+}
+
+// viewRIB is the learned RIB view as the inbound and mitigation
+// controllers read it.
+type viewRIB struct{ v *rib.View }
+
+func (g viewRIB) Ready() bool { return g.v.Ready() }
+
+func (g viewRIB) Contains(p netip.Prefix) bool {
+	_, ok := g.v.Exact(p)
+	return ok
+}
+
+func (g viewRIB) NextHop(p netip.Prefix) (netip.Addr, bool) {
+	rt, ok := g.v.Exact(p)
+	return rt.NextHop, ok
 }
 
 // TestSharedPrefixImplicitReplaceAndDeleteByPath records the GoBGP v3.37
@@ -55,7 +87,8 @@ func sharedSpeaker(t *testing.T) (*fakeRouter, *server.BgpServer, *Announcer, *I
 // prefix (TestRuleAddedMidRoundWaitsForInbound).
 func TestSharedPrefixImplicitReplaceAndDeleteByPath(t *testing.T) {
 	ctx := context.Background()
-	r, srv, _, in, m := sharedSpeaker(t)
+	r, v, _, in, m := sharedSpeaker(t)
+	srv := v.Server()
 	own := netip.MustParsePrefix("203.0.113.0/24")
 
 	if err := in.Announce(ctx, plugin.InboundRoute{
@@ -172,5 +205,79 @@ func TestOutboundWithdrawAllKeepsFailedDeletes(t *testing.T) {
 	out.mu.Unlock()
 	if !kept {
 		t.Fatal("a failed delete was dropped from the tracked paths")
+	}
+}
+
+// TestControllersKeepOnePathOnSharedPrefix is the after-the-fix half of
+// TestSharedPrefixImplicitReplaceAndDeleteByPath: the real inbound and
+// mitigation controllers on the real announcers and speaker. A rule added
+// between the inbound and mitigation syncs of one round waits for inbound
+// to release the prefix, so the speaker never holds the mitigation route
+// over the steer and the steer's withdraw cannot remove it.
+func TestControllersKeepOnePathOnSharedPrefix(t *testing.T) {
+	ctx := context.Background()
+	own := netip.MustParsePrefix("203.0.113.0/24")
+	r, v, _, in, m := sharedSpeaker(t, own.String())
+	srv := v.Server()
+	t0 := time.Date(2026, 11, 3, 12, 0, 0, 0, time.UTC)
+
+	mit, err := mitigation.New(mitigation.Config{
+		Mode: config.ModeInject, Allowlist: []netip.Prefix{own}, MaxRules: 2,
+		DefaultTTL: time.Hour, MaxTTL: 2 * time.Hour, LocalPref: 250, Community: "64512:666",
+	}, m, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := mit.SetRIB(viewRIB{v}); err != nil {
+		t.Fatal(err)
+	}
+	inb, err := inbound.New(inbound.Config{
+		Mode: config.ModeInject, Prefixes: []netip.Prefix{own}, Allowlist: []netip.Prefix{own},
+		Community: "64512:666", LocalPref: 1, MaxImprovements: 5,
+		HoldTime: 5 * time.Minute, TTL: time.Hour, MaxAge: 5 * time.Minute,
+		Providers: []string{"transit-a", "transit-b"},
+		Excluded:  mit.Holds,
+	}, in, viewRIB{v}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mit.SetInbound(inb.OnWire)
+	inb.Evaluate(t0, []plugin.Usage{
+		{Provider: "transit-a", CommitMbps: 100, Samples: 10, InMbps95: 150, OutMbps95: 10, Updated: t0},
+		{Provider: "transit-b", CommitMbps: 100, Samples: 10, InMbps95: 20, OutMbps95: 10, Updated: t0},
+	})
+	onRouter := func(nh string) func() bool {
+		return func() bool {
+			g, ok := fromUs(collect(t, r.srv, v4Family), own.String())
+			return ok && g.nextHop == nh && speakerPaths(t, srv, own.String()) == 1
+		}
+	}
+
+	if err := inb.Sync(ctx); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "the steer route", onRouter("192.0.2.1"))
+	if _, err := mit.Add(mitigation.Request{Prefix: own, Action: plugin.MitigationBlackhole, TTL: 10 * time.Minute}, t0); err != nil {
+		t.Fatal(err)
+	}
+	if err := mit.Sync(ctx, t0); err != nil {
+		t.Fatal(err)
+	}
+	if mit.Active() != 0 {
+		t.Fatal("rule announced over the steer route")
+	}
+	eventually(t, "the steer route kept", onRouter("192.0.2.1"))
+
+	for i := 1; i <= 2; i++ {
+		if err := inb.Sync(ctx); err != nil {
+			t.Fatal(err)
+		}
+		if err := mit.Sync(ctx, t0.Add(time.Duration(i)*time.Second)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	eventually(t, "exactly the blackhole route", onRouter("192.0.2.66"))
+	if mit.Active() != 1 || inb.OnWire(own) {
+		t.Fatalf("mitigation active %d, inbound on %v", mit.Active(), inb.OnWire(own))
 	}
 }
