@@ -4,6 +4,10 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 
 ## [Unreleased]
 
+## [0.9.0] - Unreleased
+
+Lab-proven additions for evidence, explanations, registries, exporters, and plugins: RPKI and IRR per provider path, decision explanations, an SNMP agent, gRPC plugins, probe agents, an external policy feed, BMP alone, and a refreshed UI, none field-proven (#54).
+
 ### Added
 
 - BMP alone as the RIB view: no `bgp.neighbors`, ready only while a BMP feed reports a peer, withdraw on feed loss; BMP peer metrics, interop cell `bmponly`, and a `bmp` load profile (#237).
@@ -59,9 +63,12 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 ### Changed
 
 - The `icmp` prober sends each run as one train at `packet_interval` without waiting for each reply; a reply counts until `timeout` after the last send (#224).
+- Dependencies: grpc 1.85.0, golang.org/x/net 0.62.0, gosnmp 1.47.0, modernc.org/sqlite 1.61.0, actions/setup-node 7 (#439, #440, #471, #472, #473).
 
 ### Fixed
 
+- docs/atlas.md says which addresses Atlas refuses and when (#446).
+- A history test no longer depends on the wall clock (#444).
 - `ixp` with `rib_sources` and no `bgp.neighbors` is refused (#482).
 - Why panel: a commit or cost steer kept while a performance switch confirms no longer says the planner decided the thresholds or that the cap was not reached for lack of a better path (#448).
 - `POST /api/atlas/measure` answers the documented 404 when Atlas is off even with API writes disabled, not 403 (#447).
@@ -73,6 +80,20 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 - Herd stats and trimming read per-member counters kept by triggers (`herd_stats`) instead of scanning the herd table on the shared sqlite connection (#393).
 - RIB: full-table reads (routes, search, next-hop counts) use a sorted snapshot and work in short lock runs, so a UI or API read no longer delays BGP updates (#382).
 - Probe: a down provider no longer starves the others; a timed-out round stores finished results, and no performance move is made until one round measures every provider (#381).
+
+### Upgrade notes
+
+- No config key was removed or renamed since 0.8.0, and the shipped default stays `mode: observe`; run `-check` on the new image first.
+- Off until you add the block: `synthesize`, `verify`, `atlas`, `ring_lg`, `exporters`, `threat_feeds`, `inventory`, `registry`, `external_policy`, `irr`, `geoip`, `probe.reorder`, `agent` prober.
+- `thresholds.med_tie_break` is on by default (`med_margin` 20): a neighbor's MED can break ties between its exits; set `med_tie_break: false` to keep 0.8 decisions (#303).
+- A configured flow `problems` block now also scores sFlow and sampled NetFlow/IPFIX, on inbound resets only (#133).
+- Unset by default: `providers[]` keys `asn`, `type`, `site`, `interface_capacity_threshold_pct`, and `thresholds.require_evidence`, `probe.exclude`, `probe.per_asn_pps`; `workers` is 4 (#384, #385).
+- `http.config_editor` is now unset by default instead of `false`: the editor opens only during first-run setup (all provider `source_ip` in 192.0.2.0/24); `false` still forces it off (#416).
+- The `icmp` prober sends each run as one train and waits `timeout` after the last send, so a slow reply that was loss may now count (#224).
+- A provider with no reply holds only its share of probe workers, and no performance move is made until a round measures every provider (#381).
+- An `rpki` source is fresh by its data time, not its last fetch, so a server serving old data falls through to the next source (#200).
+- New secret variables for opt-in blocks (`PACKETEER_POLICY_TOKEN`, `PACKETEER_ATLAS_API_KEY`, `PACKETEER_GEOIP_*`, `PACKETEER_RIPE_*`) are listed in docs/ENV.md.
+- Some UI labels changed and Overview has no Mode tile, so scripts that read page text should use the API (#349, #351).
 
 ## [0.8.0] - 2026-10-20
 

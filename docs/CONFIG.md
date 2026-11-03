@@ -1328,6 +1328,8 @@ Off unless this source is listed. NetFlow v5, NetFlow v9, IPFIX, and sFlow v5. R
 | `aggregate_v6` | 48 | 1-128. |
 | `exclude` | none | CIDRs to ignore, no host bits, no duplicates. |
 
+NetFlow v9 and IPFIX templates are kept in memory per exporter address and observation domain (capped) and are not written out.
+
 A destination inside an `exchanges[].lans` prefix is ignored the same way as `exclude` (#145): it is not aggregated, and it is not the candidate host. That includes an address no learned route covers, which would otherwise become `aggregate_v4` or `aggregate_v6`. Those bytes are not in the window, the volume, or the anomaly counters.
 
 With `--network host`, `listen` binds host UDP ports. Do not publish them. Each time bucket keeps at most `max_prefixes` prefixes (20000 by default). Those exact cells are what become probe targets and what the commit scorer reads as volume. It also counts bytes per destination prefix and IP protocol since it started (at most `max_prefixes` keys; a key idle for an hour is forgotten), which [`anomaly`](#anomaly) reads for its baselines. Each bucket also keeps a fixed HyperLogLog (4096 registers, 4 KiB) of every prefix offered to it, including ones the exact map refused (#125). A 5-minute window is about 30 buckets, about 120 KiB.

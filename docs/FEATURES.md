@@ -14,31 +14,32 @@ Milestones:
 - **v0.3**: inbound optimization, BMP, multiple routers and IX, FlowSpec/RTBH, transit optimization.
 - **v0.4**: multi-POP, HA, RBAC, anomaly detection, remaining UI and ops features.
 - **v0.5**: hardening and polish on the rows above. Dashboard clarity and the first-run checklist (#49), CI-tested quickstart, walkthrough, troubleshooting, and router guides (#50), load and soak budgets and the flow-ingest fix (#51), MikroTik CHR in QEMU on CI (#52), and the router interop matrix (#53) are done. They are not new capability rows, so the counts below are unchanged. Field feedback from observe-mode deployments (#54) is still open. Lab-proven only; the safety rules above are unchanged.
-- **v0.6**: gaps found in the 2026-10-07 review of prefix selection, measurement, and the UI. The partial rows say what is missing and link their issue; keeping an improved prefix probed after its source drops it is done (#116), an RTT win can also require a percent of the current path while a new performance move waits for consecutive fresh rounds (#117), the probe engine remembers which prober a host answers (#120), a host qualifies by reply count and RTT spread, with a wide spread escalated to a full probe (#119), and a flow prefix stays eligible on a byte floor or a percent of the window, with `top_n` the priority tier inside a larger capped set (#118), and the probe scheduler stores each prefix whose probes all finished, even when the round times out, while a flow sketch counts prefixes past the exact cell cap (#125). 1 new row is planned, 1 is won't do, and leak watch is done (#199); its RPKI-invalid flag is done (#200), its NLNOG RING source is a follow-up, and `synthesize` requires it (#122). The recount does not change any behavior.
+- **v0.6**: gaps found in the 2026-10-07 review of prefix selection, measurement, and the UI. The partial rows say what is missing and link their issue; keeping an improved prefix probed after its source drops it is done (#116), an RTT win can also require a percent of the current path while a new performance move waits for consecutive fresh rounds (#117), the probe engine remembers which prober a host answers (#120), a host qualifies by reply count and RTT spread, with a wide spread escalated to a full probe (#119), and a flow prefix stays eligible on a byte floor or a percent of the window, with `top_n` the priority tier inside a larger capped set (#118), and the probe scheduler stores each prefix whose probes all finished, even when the round times out, while a flow sketch counts prefixes past the exact cell cap (#125). 1 row is won't do, and leak watch is done (#199); its RPKI-invalid flag is done (#200), and `synthesize` (#122) is a v0.9 row. The recount does not change any behavior.
 - **v0.7**: exchange (IX) visibility for an edge network: the exchange view, IX LAN health, route-server vs bilateral views, offload and potential-peers reports, and the dashboard pages.
 - **v0.8**: Internet exchanges and shared measurements: IXP observe-only mode (member import, fabric probes, route-server history and signals, incident correlation, member pages, multi-site health), RPKI labels, probe multiplexing and the path check, the shared IX port, PeeringDB lookup, events from measured health, settings forms for most config blocks, and the opt-in herd and its hub. Partial rows say what is missing.
+- **v0.9**: evidence and explanations (decision checks, probe confidence, steer verification, reordering, the `https` prober, probe agents, `probe.exclude`), registries (RPKI and IRR per provider path, registry hygiene, NetBox and Peering Manager), outputs (exporters, an SNMP agent, syslog, an external policy feed, BMP alone), plugin work (gRPC plugins, the author guide), opt-in outside sources (herd page, Atlas, NLNOG RING, threat feeds, GeoIP), MED and overload protection, `synthesize`, and the UI refresh. Lab only; partial rows say what is missing.
 
 ## Summary
 
 | Milestone | Rows | Done |
 |---|---|---|
 | v0.1 | 24 | 23 |
-| v0.2 | 25 | 24 |
+| v0.2 | 25 | 25 |
 | v0.3 | 17 | 17 |
-| v0.4 | 13 | 10 |
-| v0.6 | 8 | 7 |
+| v0.4 | 13 | 11 |
+| v0.6 | 7 | 7 |
 | v0.7 | 3 | 3 |
 | v0.8 | 20 | 16 |
-| v0.9 | 16 | 14 |
+| v0.9 | 31 | 28 |
 | won't do | 2 | - |
-| **total** | 128 | 114 |
+| **total** | 142 | 130 |
 
 | Status | Count |
 |---|---|
-| done | 114 |
-| partial | 11 |
+| done | 130 |
+| partial | 10 |
 | in progress | 0 |
-| planned | 1 |
+| planned | 0 |
 | won't do | 2 |
 
 Recount (2026-10-07): the earlier 79 of 82 counted 13 rows as done that cover only part of the intended behavior, and missed 6 behaviors. Those rows are now partial and the 6 are listed. The Internet exchanges row was split (#159): it stays one done row, four exchange gaps are partial, and three are planned. The counts above are taken from the table: Rows is every capability row of that milestone, Done is how many of them are done; the rest are partial or planned (v0.1 includes the three rows tagged v0.1, v0.5). Scale is tracked as a budget, not a row: the load test learns a 1,250,000-prefix table and measures 3,000 prefixes with a prober that sends no packets ([performance.md](performance.md)). Since #383 a lab soak also runs inject mode on 2 to 4 sessions of the whole table with flaps, a slow peer, and the outage and vip sources, and reports withdraw latency, lock wait, and decide and probe loop gaps. An opt-in lab job (#342) replays a real RIPE RIS or RouteViews table in observe mode and reports the same figures ([performance.md](performance.md)).
