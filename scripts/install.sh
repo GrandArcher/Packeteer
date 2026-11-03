@@ -5,7 +5,7 @@
 # UI takes it from there.
 #
 #   sh install.sh                      # into ./packeteer, image from main
-#   PACKETEER_VERSION=0.8.0 sh install.sh   # a release (config from its tag)
+#   PACKETEER_VERSION=0.9.0 sh install.sh   # a release (config from its tag)
 #
 # PACKETEER_DIR       where config.yaml and plugins/ live (default ./packeteer)
 # PACKETEER_VERSION   an image tag; "edge" (default) is the build from main
