@@ -4,7 +4,6 @@
 package outbound
 
 import (
-	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -47,7 +46,7 @@ func Expand(s, prefix string, getenv func(string) string) (string, error) {
 	return out, nil
 }
 
-var errTooMany = errors.New("stopped after 3 redirects")
+var errTooMany = fmt.Errorf("stopped after %d redirects", maxRedirects)
 
 // sameHost reports whether to is on the host and port of from, with the
 // same scheme or an upgrade from http to https.

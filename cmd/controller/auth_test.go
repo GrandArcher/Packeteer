@@ -375,7 +375,7 @@ func TestFirstRunNeedsThePasswordFile(t *testing.T) {
 	ctx := context.Background()
 	for name, file := range map[string]string{
 		"no storage directory": "",
-		"unwritable directory": filepath.Join(t.TempDir(), "missing", firstRunPasswordFile),
+		"missing directory":    filepath.Join(t.TempDir(), "missing", firstRunPasswordFile),
 	} {
 		st := authtest.New()
 		var logs bytes.Buffer

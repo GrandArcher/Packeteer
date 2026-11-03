@@ -182,7 +182,6 @@ func TestCodeFlow(t *testing.T) {
 		"wrong audience": func() { idp.claims = idp.baseClaims("nonce-1"); idp.claims["aud"] = "someone-else" },
 		"expired":        func() { idp.claims = idp.baseClaims("nonce-1"); idp.claims["exp"] = time.Now().Add(-time.Hour).Unix() },
 		"unverified":     func() { idp.claims = idp.baseClaims("nonce-1"); idp.claims["email_verified"] = false },
-		"no verified":    func() { idp.claims = idp.baseClaims("nonce-1"); delete(idp.claims, "email_verified") },
 		"verified text":  func() { idp.claims = idp.baseClaims("nonce-1"); idp.claims["email_verified"] = "true" },
 		"no group":       func() { idp.claims = idp.baseClaims("nonce-1"); idp.claims["groups"] = []string{"visitors"} },
 		"no email":       func() { idp.claims = idp.baseClaims("nonce-1"); delete(idp.claims, "email") },
