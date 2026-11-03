@@ -84,10 +84,10 @@ Lab-proven additions for evidence, explanations, registries, exporters, and plug
 ### Upgrade notes
 
 - No config key was removed or renamed since 0.8.0, and the shipped default stays `mode: observe`; run `-check` on the new image first.
-- Off until you add the block: `synthesize`, `verify`, `atlas`, `ring_lg`, `exporters`, `threat_feeds`, `inventory`, `registry`, `external_policy`, `irr`, `probe.reorder`, `agent`.
+- Off until you add the block: `synthesize`, `verify`, `atlas`, `ring_lg`, `exporters`, `threat_feeds`, `inventory`, `registry`, `external_policy`, `irr`, `geoip`, `probe.reorder`, `agent` prober.
 - `thresholds.med_tie_break` is on by default (`med_margin` 20): a neighbor's MED can break ties between its exits; set `med_tie_break: false` to keep 0.8 decisions (#303).
 - A configured flow `problems` block now also scores sFlow and sampled NetFlow/IPFIX, on inbound resets only (#133).
-- New keys are unset: `require_evidence`, `probe.exclude`, `probe.per_asn_pps`, `providers[].asn`, `type`, `site`, `interface_capacity_threshold_pct`; flow and SNMP `workers` are 4 (#384, #385).
+- Unset by default: `providers[]` keys `asn`, `type`, `site`, `interface_capacity_threshold_pct`, and `thresholds.require_evidence`, `probe.exclude`, `probe.per_asn_pps`; `workers` is 4 (#384, #385).
 - `http.config_editor` is now unset by default instead of `false`: the editor opens only during first-run setup (all provider `source_ip` in 192.0.2.0/24); `false` still forces it off (#416).
 - The `icmp` prober sends each run as one train and waits `timeout` after the last send, so a slow reply that was loss may now count (#224).
 - A provider with no reply holds only its share of probe workers, and no performance move is made until a round measures every provider (#381).
