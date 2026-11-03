@@ -1,10 +1,10 @@
 # Changelog
 
-All notable changes to Packeteer are documented here. Versions are Git tags on `main`. The image tags `ghcr.io/grandarcher/packeteer:<version>` (for example `:0.8.0`) and `:latest` are published from each `v<version>` tag. `:edge` tracks `main`.
+All notable changes to Packeteer are documented here. Versions are Git tags on `main`. The image tags `ghcr.io/grandarcher/packeteer:<version>` (for example `:0.9.0`) and `:latest` are published from each `v<version>` tag. `:edge` tracks `main`.
 
 ## [Unreleased]
 
-## [0.9.0] - Unreleased
+## [0.9.0] - 2026-11-02
 
 Lab-proven additions for evidence, explanations, registries, exporters, and plugins: RPKI and IRR per provider path, decision explanations, an SNMP agent, gRPC plugins, probe agents, an external policy feed, BMP alone, and a refreshed UI, none field-proven (#54).
 
@@ -380,7 +380,8 @@ First release. An observe-first BGP path performance controller in one container
 - Communities are RFC 1997 (two 16-bit integers). `router_id` is IPv4.
 - RouterOS, Junos, and IOS snippets are documentation. The automated BGP test is the FRR lab.
 
-[Unreleased]: https://github.com/GrandArcher/Packeteer/compare/v0.8.0...HEAD
+[Unreleased]: https://github.com/GrandArcher/Packeteer/compare/v0.9.0...HEAD
+[0.9.0]: https://github.com/GrandArcher/Packeteer/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/GrandArcher/Packeteer/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/GrandArcher/Packeteer/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/GrandArcher/Packeteer/compare/v0.5.0...v0.6.0
