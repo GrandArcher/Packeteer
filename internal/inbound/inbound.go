@@ -386,6 +386,20 @@ func (c *Controller) Reserved(p netip.Prefix) bool {
 	return slices.Contains(c.cfg.Prefixes, p.Masked())
 }
 
+// OnWire reports whether a steer route for p is on the wire. Mitigation
+// waits on it (#486): its route and a steer route for one prefix share one
+// NLRI, so announcing over the steer would replace it, and the steer's
+// later withdraw would remove the mitigation route.
+func (c *Controller) OnWire(p netip.Prefix) bool {
+	if c == nil {
+		return false
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	_, on := c.active[p.Masked()]
+	return on
+}
+
 // Active is the number of steer routes on the wire.
 func (c *Controller) Active() int {
 	if c == nil {

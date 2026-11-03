@@ -241,3 +241,36 @@ func TestRememberSpeakerIgnoresNil(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// TestApplyRuntimeAllowlistShrinkWithdrawsUnchangedRoute is #486: the
+// improvement does not change, so the allowlist check must come before the
+// unchanged-route shortcut or the route stays on the wire.
+func TestApplyRuntimeAllowlistShrinkWithdrawsUnchangedRoute(t *testing.T) {
+	ctx := context.Background()
+	ann := &fakeAnn{}
+	rib := memRIB{ready: true, has: map[netip.Prefix]bool{pfx("198.51.100.0/24"): true, pfx("203.0.113.0/24"): true}}
+	c, err := New(testCfg(), ann, rib, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	imps := []policy.Improvement{imp("198.51.100.0/24", "b"), imp("203.0.113.0/24", "b")}
+	if err := c.Sync(ctx, imps); err != nil {
+		t.Fatal(err)
+	}
+	if ann.count() != 2 {
+		t.Fatalf("announced %d routes, want 2", ann.count())
+	}
+	if err := c.ApplyRuntime(ctx, "inject", []netip.Prefix{pfx("203.0.113.0/24")}, 50); err != nil {
+		t.Fatal(err)
+	}
+	err = c.Sync(ctx, imps)
+	if err == nil || !strings.Contains(err.Error(), "198.51.100.0/24 is not allowlisted") {
+		t.Fatalf("sync after the shrink: %v", err)
+	}
+	if _, on := ann.routes[pfx("198.51.100.0/24")]; on || c.Injected(pfx("198.51.100.0/24")) {
+		t.Fatal("route outside the shrunk allowlist is still on the wire")
+	}
+	if _, on := ann.routes[pfx("203.0.113.0/24")]; !on || ann.withdraws != 1 || ann.all != 0 {
+		t.Fatalf("routes %v, withdraws %d, withdraw-all %d; want only the uncovered route withdrawn", ann.routes, ann.withdraws, ann.all)
+	}
+}

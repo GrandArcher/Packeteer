@@ -210,8 +210,10 @@ type Controller struct {
 	catalog plugin.MitigationCatalog
 	fsCat   plugin.FlowSpecCatalog
 	rib     RIB
-	// outbound reports prefixes the outbound announcer has on the wire.
+	// outbound and inbound report prefixes those announcers have on the
+	// wire.
 	outbound func(netip.Prefix) bool
+	inbound  func(netip.Prefix) bool
 	log      *slog.Logger
 
 	mu    sync.Mutex
@@ -349,6 +351,18 @@ func (c *Controller) SetOutbound(injected func(netip.Prefix) bool) {
 	c.outbound = injected
 }
 
+// SetInbound is SetOutbound for the inbound announcer's steer routes. The
+// rule waits until inbound has released the prefix, which it does once the
+// rule exists (Holds). Call it before the first Sync.
+func (c *Controller) SetInbound(onWire func(netip.Prefix) bool) {
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.inbound = onWire
+}
+
 // Catalog is the announcer's catalog (empty without an announcer).
 func (c *Controller) Catalog() plugin.MitigationCatalog { return c.catalog }
 
@@ -367,6 +381,9 @@ func (c *Controller) Active() int {
 
 // pendingOutbound is Rule.Pending while outbound still announces the prefix.
 const pendingOutbound = "waiting for outbound to release the prefix"
+
+// pendingInbound is Rule.Pending while inbound still steers the prefix.
+const pendingInbound = "waiting for inbound to release the prefix"
 
 // pendingRIB is Rule.Pending while a rule waits for its prefix in the RIB.
 const pendingRIB = "not in the learned RIB"
@@ -743,13 +760,17 @@ func (c *Controller) syncUnicastLocked(ctx context.Context) error {
 			r.Pending = pendingRIB
 			continue
 		}
-		// A rule added after this round's outbound Sync meets the outbound
-		// route here. It is announced next round, once outbound has
-		// released the prefix. The check runs under c.mu, so the outbound
-		// controller must not call into this one while Sync runs; both are
-		// driven from the one decision loop.
+		// A rule added after this round's outbound or inbound Sync meets
+		// that route here. It is announced next round, once the other
+		// controller has released the prefix. The checks run under c.mu,
+		// so neither controller may call into this one while Sync runs;
+		// all three are driven from the one decision loop.
 		if !on && c.outbound != nil && c.outbound(p) {
 			r.Pending = pendingOutbound
+			continue
+		}
+		if !on && c.inbound != nil && c.inbound(p) {
+			r.Pending = pendingInbound
 			continue
 		}
 		mr := plugin.MitigationRoute{Prefix: p, Action: r.Action, Target: r.Target, LocalPref: c.cfg.LocalPref, Community: c.cfg.Community}
