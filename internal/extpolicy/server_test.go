@@ -7,7 +7,9 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net"
 	"net/http"
+	"net/netip"
 	"os"
 	"strconv"
 	"strings"
@@ -27,6 +29,8 @@ import (
 )
 
 const testToken = "lab-only-token-0123456789"
+
+var loopback = netip.MustParseAddr("127.0.0.1")
 
 func startServer(t *testing.T, feed *Feed) (*Server, *tls.Config) {
 	t.Helper()
@@ -85,11 +89,19 @@ func TestServerJSON(t *testing.T) {
 		t.Cleanup(func() { resp.Body.Close() })
 		return resp
 	}
-	for _, tok := range []string{"", "wrong-token-0123456789"} {
-		if resp := do(http.MethodGet, tok); resp.StatusCode != http.StatusUnauthorized {
-			t.Errorf("token %q: status %d", tok, resp.StatusCode)
-		}
+	if resp := do(http.MethodGet, "wrong-token-0123456789"); resp.StatusCode != http.StatusUnauthorized || !resp.Close {
+		t.Errorf("wrong token: status %d, connection kept %v", resp.StatusCode, !resp.Close)
 	}
+	// The wrong token started a backoff: even the right token is refused
+	// until it ends, without being compared.
+	if resp := do(http.MethodGet, testToken); resp.StatusCode != http.StatusTooManyRequests || resp.Header.Get("Retry-After") != "1" || !resp.Close {
+		t.Errorf("right token during the backoff: status %d, Retry-After %q", resp.StatusCode, resp.Header.Get("Retry-After"))
+	}
+	srv.bad.ok(loopback)
+	if resp := do(http.MethodGet, ""); resp.StatusCode != http.StatusUnauthorized {
+		t.Errorf("no token: status %d", resp.StatusCode)
+	}
+	srv.bad.ok(loopback)
 	if resp := do(http.MethodPost, testToken); resp.StatusCode != http.StatusMethodNotAllowed {
 		t.Errorf("POST: status %d", resp.StatusCode)
 	}
@@ -160,6 +172,7 @@ func TestServerWatch(t *testing.T) {
 		t.Errorf("wrong token: %v", err)
 	}
 	stop()
+	srv.bad.ok(loopback)
 
 	st, stop = watch(t, srv, tlsCfg, testToken)
 	defer stop()
@@ -245,5 +258,116 @@ func TestServerLongPoll(t *testing.T) {
 	d, _, took := get("?wait=" + strconv.FormatUint(feedNow, 10))
 	if len(d.Routes) != 1 || d.Revision == feedNow || took > 5*time.Second {
 		t.Errorf("change: %+v after %s, want the new route before the heartbeat", d, took)
+	}
+}
+
+// Each wrong token in a row doubles the time an address is refused, up to
+// backoffMax; a right token clears it; an address is forgotten after
+// backoffForget; the table stays bounded. IPv6 addresses share their /64.
+func TestBackoff(t *testing.T) {
+	now := time.Unix(1_800_000_000, 0)
+	b := newBackoff(func() time.Time { return now })
+	a := netip.MustParseAddr("192.0.2.1")
+	if b.wait(a) != 0 {
+		t.Fatal("a new address backs off")
+	}
+	if !b.fail(a) || b.wait(a) != time.Second {
+		t.Fatalf("first failure: wait %s, want 1s and a log", b.wait(a))
+	}
+	if b.fail(a) || b.wait(a) != 2*time.Second {
+		t.Fatalf("second failure: wait %s, want 2s and no second log", b.wait(a))
+	}
+	for range 10 {
+		b.fail(a)
+	}
+	if b.wait(a) != backoffMax {
+		t.Fatalf("wait %s, want the %s cap", b.wait(a), backoffMax)
+	}
+	now = now.Add(backoffMax)
+	if b.wait(a) != 0 {
+		t.Fatal("still refused after the backoff")
+	}
+	b.fail(a)
+	if b.wait(a) != backoffMax {
+		t.Fatalf("a failure soon after keeps the count: wait %s", b.wait(a))
+	}
+	b.ok(a)
+	if b.wait(a) != 0 || !b.fail(a) || b.wait(a) != time.Second {
+		t.Fatal("a right token did not clear the count")
+	}
+	now = now.Add(backoffForget)
+	if !b.fail(a) || b.wait(a) != time.Second {
+		t.Fatal("an address idle for backoffForget was not forgotten")
+	}
+
+	v6 := netip.MustParseAddr("2001:db8:1:2::1")
+	b.fail(v6)
+	if b.wait(netip.MustParseAddr("2001:db8:1:2::99")) != time.Second || b.wait(netip.MustParseAddr("2001:db8:1:3::1")) != 0 {
+		t.Error("IPv6 backoff is not per /64")
+	}
+
+	b = newBackoff(func() time.Time { return now })
+	for i := range maxBackoffKeys {
+		b.fail(netip.AddrFrom4([4]byte{10, byte(i >> 16), byte(i >> 8), byte(i)}))
+	}
+	extra := netip.MustParseAddr("198.51.100.1")
+	if b.fail(extra) || b.wait(extra) != 0 || len(b.fails) != maxBackoffKeys {
+		t.Fatalf("a full table tracked a new address: %d entries", len(b.fails))
+	}
+	now = now.Add(backoffForget)
+	if !b.fail(extra) || len(b.fails) != 1 {
+		t.Fatalf("forgotten entries were not pruned: %d entries", len(b.fails))
+	}
+}
+
+// The listener holds at most maxConns connections; one more waits until a
+// connection closes. An authorized long poll is not cut by a timeout.
+func TestServerConnCap(t *testing.T) {
+	feed := New(true, 6*time.Second, nil)
+	feed.Touch(time.Now(), nil)
+	srv, tlsCfg := startServer(t, feed)
+	if srv.srv.IdleTimeout != idleTimeout || srv.srv.ReadTimeout != 0 || srv.srv.WriteTimeout != 0 {
+		t.Errorf("timeouts: idle %s, read %s, write %s", srv.srv.IdleTimeout, srv.srv.ReadTimeout, srv.srv.WriteTimeout)
+	}
+	var held []net.Conn
+	defer func() {
+		for _, c := range held {
+			c.Close()
+		}
+	}()
+	for range maxConns {
+		c, err := net.Dial("tcp", srv.Addr())
+		if err != nil {
+			t.Fatal(err)
+		}
+		held = append(held, c)
+	}
+	get := func(timeout time.Duration, query string) (int, error) {
+		client := &http.Client{Transport: &http.Transport{TLSClientConfig: tlsCfg}, Timeout: timeout}
+		defer client.CloseIdleConnections()
+		req, _ := http.NewRequest(http.MethodGet, "https://"+srv.Addr()+DocumentPath+query, nil)
+		req.Header.Set("Authorization", "Bearer "+testToken)
+		resp, err := client.Do(req)
+		if err != nil {
+			return 0, err
+		}
+		defer resp.Body.Close()
+		return resp.StatusCode, nil
+	}
+	if code, err := get(500*time.Millisecond, ""); err == nil {
+		t.Fatalf("connection %d was served (status %d)", maxConns+1, code)
+	}
+	held[0].Close()
+	held = held[1:]
+	if code, err := get(5*time.Second, ""); err != nil || code != http.StatusOK {
+		t.Fatalf("after a connection closed: %d %v", code, err)
+	}
+	for _, c := range held {
+		c.Close()
+	}
+	held = nil
+	start := time.Now()
+	if code, err := get(10*time.Second, "?wait="+strconv.FormatUint(feed.Document().Revision, 10)); err != nil || code != http.StatusOK || time.Since(start) < 1500*time.Millisecond {
+		t.Errorf("long poll: %d %v after %s, want the 2s heartbeat", code, err, time.Since(start))
 	}
 }

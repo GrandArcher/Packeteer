@@ -420,7 +420,7 @@ session_quiet() {
 
 start_consumer() {
 	"${compose[@]}" exec -d -e PACKETEER_POLICY_TOKEN="$INTEROP_POLICY_TOKEN" "$edge" sh -c \
-		"exec /opt/feed/packeteer-policy -url $feed_url -ca-file /opt/feed/cert.pem -template /opt/feed/bird.conf.tmpl -out /opt/feed/routes.conf -reload 'birdc -s /run/bird/bird.ctl configure' >>/opt/feed/consumer.log 2>&1"
+		"exec /opt/feed/packeteer-policy -url $feed_url -ca-file /opt/feed/cert.pem -community 64512:666 -allow 198.51.100.0/24 -template /opt/feed/bird.conf.tmpl -out /opt/feed/routes.conf -reload 'birdc -s /run/bird/bird.ctl configure' >>/opt/feed/consumer.log 2>&1"
 }
 
 echo "building lab"

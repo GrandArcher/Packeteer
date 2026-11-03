@@ -4,6 +4,14 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 
 ## [Unreleased]
 
+### Security
+
+- `packeteer-policy` requires https (http only to loopback) and `-community`, checks each route (NO_EXPORT, communities, `-allow`); GR off in the examples; feed token backoff, connection cap (#488).
+
+### Upgrade notes
+
+- `packeteer-policy` exits with code 2 without `-community` (your `packeteer_community`) or with a non-loopback `http` `-url`; add `-community`, and `-allow` with your allowlist (#488).
+
 ## [0.9.0] - 2026-11-02
 
 Lab-proven additions for evidence, explanations, registries, exporters, and plugins: RPKI and IRR per provider path, decision explanations, an SNMP agent, gRPC plugins, probe agents, an external policy feed, BMP alone, and a refreshed UI, none field-proven (#54).
