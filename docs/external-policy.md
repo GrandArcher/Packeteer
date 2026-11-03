@@ -102,7 +102,7 @@ packeteer-policy -url https://192.0.2.10:9443 -ca-file /etc/packeteer-policy/ca.
 
 Examples in [examples/external-policy](../examples/external-policy):
 
-- `bird.conf.tmpl`: one static protocol per family and a `packeteer_feed_session` BGP template with graceful restart and long-lived graceful restart off; include the rendered file at the top level of `bird.conf`, before the protocols, and build the session to the edge `from packeteer_feed_session`. A static route has preference 200, so it wins over the BGP paths. Lab-proven with BIRD 2 and 3.
+- `bird.conf.tmpl`: one static protocol per family and a `packeteer_feed_session` BGP template with graceful restart and long-lived graceful restart off; include the rendered file at the top level of `bird.conf` and build the session to the edge `from packeteer_feed_session` after the include. A static route has preference 200, so it wins over the BGP paths. Lab-proven with BIRD 2 and 3.
 - `openbgpd.conf.tmpl`: `network ... set { nexthop ... }` lines for `include` in `bgpd.conf`, reloaded with `bgpctl reload`. Set `announce restart no` on the neighbor to the edge. Rendering is tested; OpenBGPD itself is not in the lab.
 - `exabgp.conf`: an ExaBGP 4 `process` running `packeteer-policy -exabgp`, with `graceful-restart disable` on the neighbor. Output is tested; ExaBGP itself is not in the lab.
 

@@ -89,12 +89,12 @@ func TestServerJSON(t *testing.T) {
 		t.Cleanup(func() { resp.Body.Close() })
 		return resp
 	}
-	if resp := do(http.MethodGet, "wrong-token-0123456789"); resp.StatusCode != http.StatusUnauthorized {
-		t.Errorf("wrong token: status %d", resp.StatusCode)
+	if resp := do(http.MethodGet, "wrong-token-0123456789"); resp.StatusCode != http.StatusUnauthorized || !resp.Close {
+		t.Errorf("wrong token: status %d, connection kept %v", resp.StatusCode, !resp.Close)
 	}
 	// The wrong token started a backoff: even the right token is refused
 	// until it ends, without being compared.
-	if resp := do(http.MethodGet, testToken); resp.StatusCode != http.StatusTooManyRequests || resp.Header.Get("Retry-After") != "1" {
+	if resp := do(http.MethodGet, testToken); resp.StatusCode != http.StatusTooManyRequests || resp.Header.Get("Retry-After") != "1" || !resp.Close {
 		t.Errorf("right token during the backoff: status %d, Retry-After %q", resp.StatusCode, resp.Header.Get("Retry-After"))
 	}
 	srv.bad.ok(loopback)

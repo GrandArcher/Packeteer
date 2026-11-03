@@ -137,6 +137,8 @@ func (s *Server) handler() http.Handler {
 		// While an address backs off its token is not even compared, so
 		// guessing runs no faster than the backoff allows.
 		if wait := s.bad.wait(ip); wait > 0 {
+			// A refused client gives its connection slot back at once.
+			w.Header().Set("Connection", "close")
 			w.Header().Set("Retry-After", strconv.Itoa(int((wait+time.Second-1)/time.Second)))
 			http.Error(w, "too many failed tokens", http.StatusTooManyRequests)
 			return
@@ -145,6 +147,7 @@ func (s *Server) handler() http.Handler {
 			if s.bad.fail(ip) {
 				s.log.Warn("external policy feed: wrong bearer token; backing off", "remote", ip)
 			}
+			w.Header().Set("Connection", "close")
 			w.Header().Set("WWW-Authenticate", `Bearer realm="packeteer"`)
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
