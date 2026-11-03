@@ -14,6 +14,17 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 
 - `packeteer-policy` exits with code 2 without `-community` (your `packeteer_community`) or with a non-loopback `http` `-url`; add `-community`, and `-allow` with your allowlist (#488).
 - Rename webhook/`otlp` variables to `PACKETEER_WEBHOOK_*`/`PACKETEER_OTLP_*` (others fail at start); use final URLs; OIDC without `email_verified`: `username_claim: sub` (#489).
+- Remove `0.0.0.0/0` or `::/0` from `allowlist.prefixes`; a config with one no longer loads (#486).
+
+### Changed
+
+- `allowlist.prefixes` rejects `0.0.0.0/0` and `::/0` (a config with one no longer loads) and logs a warning for an entry shorter than /8 (#486).
+
+### Fixed
+
+- A mitigation rule waits until an inbound steer on its prefix is withdrawn, so the steer's withdraw cannot remove the mitigation route (#486).
+- Outbound `WithdrawAll` removes only outbound routes, by UUID; inbound steer and mitigation routes stay with their controllers (#486).
+- The outbound allowlist is checked before the unchanged-route shortcut, so a reload that shrinks it withdraws an unchanged improvement (#486).
 
 ## [0.9.0] - 2026-11-02
 

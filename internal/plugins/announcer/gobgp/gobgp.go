@@ -8,8 +8,8 @@
 // The speaker's export policy accepts only local routes that have the
 // configured community and rejects everything else, so learned routes are
 // never reflected and an extra community alone never matches. Graceful
-// restart is not enabled: Stop withdraws every Packeteer route, and a dead
-// process drops the session.
+// restart is not enabled: each announcer's Stop withdraws its own routes,
+// and a dead process drops the session.
 package gobgp
 
 import (
@@ -310,35 +310,37 @@ func (a *Announcer) Withdraw(ctx context.Context, p netip.Prefix) error {
 	return nil
 }
 
-// WithdrawAll removes every locally originated path (v4 and v6). Learned
-// routes are not local, so they stay.
+// WithdrawAll removes every route this announcer published, by UUID.
+// Inbound steer and mitigation routes share the speaker and are left to
+// their own controllers (#486): a family-wide delete would remove them
+// while those controllers still count them as on the wire. A failed
+// delete keeps its prefix, so the next call tries it again.
 func (a *Announcer) WithdrawAll(ctx context.Context) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if a.srv == nil {
 		return nil
 	}
-	return a.withdrawAllLocked(ctx)
-}
-
-func (a *Announcer) withdrawAllLocked(ctx context.Context) error {
 	var errs []error
-	for _, fam := range []*api.Family{v4Family, v6Family} {
-		if err := a.srv.DeletePath(ctx, &api.DeletePathRequest{Family: fam}); err != nil {
-			errs = append(errs, err)
+	n := 0
+	for p, on := range a.paths {
+		if err := a.srv.DeletePath(ctx, &api.DeletePathRequest{Uuid: on.uuid, Family: familyOf(p)}); err != nil {
+			errs = append(errs, fmt.Errorf("%s: %w", p, err))
+			continue
 		}
+		delete(a.paths, p)
+		n++
 	}
+	a.log.Info("withdrew all", "prefixes", n)
 	if err := errors.Join(errs...); err != nil {
 		return fmt.Errorf("gobgp announcer: withdraw all: %w", err)
 	}
-	n := len(a.paths)
-	a.paths = map[netip.Prefix]announced{}
-	a.log.Info("withdrew all", "prefixes", n)
 	return nil
 }
 
-// Stop withdraws every announced route. The BGP session itself belongs to
-// the RIB view and is not shut down here. Graceful restart is never enabled.
+// Stop withdraws the routes this announcer published. The BGP session
+// belongs to the RIB view and is not shut down here. Graceful restart is
+// never enabled.
 func (a *Announcer) Stop(ctx context.Context) error { return a.WithdrawAll(ctx) }
 
 func (a *Announcer) validate(r plugin.Route) error {

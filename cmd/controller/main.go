@@ -749,6 +749,7 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 		}()
 	}
 	mit.SetOutbound(ctl.Injected)
+	mit.SetInbound(inb.OnWire)
 	verifier = newSteerVerifier(cfg, decider, inb, plugins, log)
 	verifierRef.Store(verifier)
 	if view != nil {
@@ -1143,6 +1144,9 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 	}
 	if cfg.SimulatedProbes() {
 		log.Warn(config.SimulatedProbesNotice)
+	}
+	for _, w := range cfg.AllowlistWarnings() {
+		log.Warn(w)
 	}
 	_ = engine.Run(ctx)
 

@@ -237,7 +237,7 @@ The flow volume is read like commit control reads it (a source with traffic data
 
 | Key | Meaning |
 |---|---|
-| `prefixes` | CIDRs with no host bits. Duplicates are errors. |
+| `prefixes` | CIDRs with no host bits. Duplicates and `0.0.0.0/0` or `::/0` are errors. An entry shorter than /8 loads with a warning in the log, at start and on each reload. |
 
 A learned prefix is eligible when it is equal to an entry or more specific and inside it. Packeteer still announces that learned prefix, not a prefix it invented. An entry of `198.51.100.0/24` allows `198.51.100.0/24` and `198.51.100.128/25` when the router advertised that exact prefix. It does not allow a shorter prefix that covers the entry. An entry that overlaps any `exchanges[].lans` prefix is a load error in every mode, including `observe`: equal to the LAN, more specific and inside it, or a supernet that contains it. Adjacent prefixes do not overlap.
 

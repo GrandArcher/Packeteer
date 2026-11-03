@@ -622,19 +622,21 @@ func (c *Controller) syncImprovementLocked(ctx context.Context, im policy.Improv
 	} else if !on && !c.rib.Contains(p) {
 		return fmt.Errorf("announce: %s is not in the RIB", p)
 	}
-	// A cause change can keep the provider and the AS path and still need a
-	// new local preference or a new community list on the wire.
-	lp := c.localPref(im.Provider, im.Cause)
-	comms := c.routeCommunities(im)
-	if on && !s.moreSpecific() && s.provider == im.Provider && s.localPref == lp && slices.Equal(s.communities, comms) && slices.Equal(s.asPath, c.routePath(p, im.Covering, im.Provider)) {
-		return nil
-	}
+	// Before the unchanged shortcut: a reload can shrink the allowlist
+	// under a route that is already on the wire (#486).
 	if !netpfx.CoveredBy(c.cfg.Allowlist, p) {
 		var err error
 		if on {
 			err = c.withdrawLocked(ctx, p)
 		}
 		return errors.Join(err, fmt.Errorf("announce: %s is not allowlisted", p))
+	}
+	// A cause change can keep the provider and the AS path and still need a
+	// new local preference or a new community list on the wire.
+	lp := c.localPref(im.Provider, im.Cause)
+	comms := c.routeCommunities(im)
+	if on && !s.moreSpecific() && s.provider == im.Provider && s.localPref == lp && slices.Equal(s.communities, comms) && slices.Equal(s.asPath, c.routePath(p, im.Covering, im.Provider)) {
+		return nil
 	}
 	if (c.cfg.MoreSpecific || c.cfg.Synthesize != nil) && !on {
 		need := 1

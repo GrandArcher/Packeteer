@@ -187,8 +187,8 @@ func TestInboundAnnounceWithdrawAndCrash(t *testing.T) {
 		return !steer && imp
 	})
 
-	// The gobgp announcer's WithdrawAll removes every local path; the
-	// inbound WithdrawAll afterwards must not fail.
+	// The gobgp announcer's WithdrawAll leaves the steer route (#486);
+	// the inbound WithdrawAll removes it.
 	if err := in.Announce(ctx, plugin.InboundRoute{
 		Prefix: own, NextHop: nh, LocalPref: 1, Community: "64512:666", Away: []string{"transit-a"},
 	}); err != nil {
