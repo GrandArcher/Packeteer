@@ -94,12 +94,15 @@ When Packeteer's route is best, a normal iBGP session stops sending the native p
 
 Pull the new image and recreate the container; the config and the `packeteer-data` volume carry over. Run `-check` with your config on the new image first. No config key was removed or renamed, the default stays `mode: observe`, and Packeteer withdraws its routes when the old container stops (`docker stop -t 30`).
 
-What can change without a new key:
+What can change without you adding a block:
 
+- `thresholds.med_tie_break` is on by default with `med_margin: 20`: a neighbor's MED can break ties between its exits and change an outbound decision. Set `med_tie_break: false` to keep the 0.8 decisions (#303).
+- A configured flow `problems` block now also scores sFlow and sampled NetFlow and IPFIX, on inbound resets only (#133).
+- Flow and SNMP `workers` default to 4 (#384, #385).
 - `http.config_editor` is unset by default instead of `false`. The editor and setup wizard open for an admin only while first-run setup is pending (every provider `source_ip` in 192.0.2.0/24). A real config keeps them off; `false` forces them off (#416).
 - The `icmp` prober sends each run as one train at `packet_interval` and waits `timeout` after the last send, so a slow reply that was loss may now count as a reply (#224).
 - A provider that never answers holds at most its share of the probe workers, and no performance move is made for a prefix until one round measures every provider (#381).
 - An `rpki` source is fresh while its data time is inside `staleness`, not its last fetch, so a server serving old data falls through to the next source (#200).
 - Some dashboard labels changed and Overview has no Mode tile (#349, #351). Scripts should read the API.
 
-Everything else is a block that is off until you add it: `synthesize`, `verify`, `atlas`, `ring_lg`, `exporters`, `threat_feeds`, `inventory`, `registry`, `external_policy`, `irr`, `probe.reorder`, and the `agent` prober. Their secrets are environment variables only ([ENV.md](ENV.md)). To go back to 0.8, run the old image with the config from before the upgrade; a 0.8 binary refuses the new keys, so remove any block you added.
+The other new keys are off or unset until you set them: `thresholds.require_evidence`, `probe.exclude`, `probe.per_asn_pps`, `providers[].asn`, `type`, `site`, `interface_capacity_threshold_pct`, and the blocks `synthesize`, `verify`, `atlas`, `ring_lg`, `exporters`, `threat_feeds`, `inventory`, `registry`, `external_policy`, `irr`, `geoip`, `probe.reorder`, and the `agent` prober. Their secrets are environment variables only ([ENV.md](ENV.md)). To go back to 0.8, run the old image with the config from before the upgrade; a 0.8 binary refuses the new keys, so remove any block you added.

@@ -21,11 +21,11 @@ The feature matrix is [docs/FEATURES.md](docs/FEATURES.md).
 - **Settings forms.** The Settings page edits most blocks of the config with guided inputs (federation and the inbound and mitigation inject and exec plugins stay YAML), a Preview diff, and the raw YAML under Advanced ([docs/ui.md](docs/ui.md#settings-form)).
 - **Explain and check (v0.9).** Every decision lists its checks in order with a counterfactual (the Why? panel, #201). Samples and candidates carry a confidence level, and `thresholds.require_evidence` refuses an ICMP-only performance move (#202). Opt-in `verify` checks that traffic moved after a steer and backs out an inbound one that did not (#305). `packeteer whatif` and the blast-radius preview show what a change would do before it is applied (#204, #227). The provider scorecard ranks transits by measured loss and latency (#209).
 - **Registries (v0.9).** `rpki` labels each provider's learned path from your RTR or VRP JSON data (#200), `irr` adds an IRR origin check beside it (#214), and `registry` finds stale or missing IRR, RPKI, as-set, and PeeringDB records, with an admin-confirmed push for RIPE and PeeringDB that is off by default (#289). `inventory` reads providers, next hops, and communities from NetBox or Peering Manager (#208).
-- **Probing (v0.9).** An `https` prober (#306), reordering per provider path (#224), `probe.exclude` and `probe.per_asn_pps` (#203), probe agents inside your own network over mutual TLS (#230), an optional eBPF data path (#229), and a GeoIP database download (#135). Steering also gained inbound MED (#303) and overload protection per provider (#307).
-- **Outputs (v0.9).** `exporters` push events, decisions, and flows to Kafka, NATS, OTLP, InfluxDB, or IPFIX (#207, #287). A read-only SNMP agent with a MIB, SNMP informs, and a `syslog` notifier serve an existing NMS (#212). The `external_policy` feed publishes the routes inject would announce for your own BIRD, OpenBGPD, or ExaBGP (#232). BMP alone can be the whole RIB view (#237). `grpc` plugins keep a prober, source, or notifier running (#286, [guide](docs/PLUGIN_AUTHORING.md)).
+- **Probing (v0.9).** An `https` prober (#306), passive problem scoring from sampled flow and sFlow (#133), an opt-in 3-million-prefix real-table lab profile with a `sim` prober (#103), reordering per provider path (#224), `probe.exclude` and `probe.per_asn_pps` (#203), probe agents inside your own network over mutual TLS (#230), an optional eBPF data path (#229), and a GeoIP database download (#135). Steering also gained inbound MED (#303) and overload protection per provider (#307).
+- **Outputs (v0.9).** `exporters` push events, decisions, and flows to Kafka, NATS, OTLP, InfluxDB, or IPFIX (#207, #287). A read-only SNMP agent with a MIB, SNMP informs, and a `syslog` notifier serve an existing NMS (#212). The `external_policy` feed publishes the routes inject would announce for your own BIRD, OpenBGPD, or ExaBGP (#232; only BIRD is lab-tested). A `timeseries` report email carries before and after charts (#136). BMP alone can be the whole RIB view (#237). `grpc` plugins keep a prober, source, or notifier running (#286, [guide](docs/PLUGIN_AUTHORING.md)).
 - **Opt-in outside data (v0.9).** The herd page (#296), RIPE Atlas measurements (#213), the NLNOG RING looking-glass panel (#283), and threat-intelligence feeds that become mitigation rules only through explicit rules (#134). All are off by default and display only, except a threat rule you write.
 
-Everything in v0.9 is lab-proven (simulated routers or sink containers, documentation prefixes) or tested on fixtures only; [docs/FEATURES.md](docs/FEATURES.md) says which for each row. Registry hygiene, herd, and the eBPF data path are partial. Nothing is field-proven (#54).
+Everything in v0.9 is lab-proven (simulated routers or sink containers, documentation prefixes) or tested on fixtures only; [docs/FEATURES.md](docs/FEATURES.md) says which for each row. Registry hygiene, onboarding, herd, and the eBPF data path are partial. Nothing is field-proven (#54).
 
 ![Overview](docs/assets/ui-overview.png)
 
@@ -264,7 +264,7 @@ Scrape `http://127.0.0.1:8080/metrics` on the host with an API token (`Authoriza
 
 Almost every part of Packeteer is a plugin selected by `type` in the config. Unknown types and unknown keys inside a plugin `config` block refuse startup. The built-ins, by kind:
 
-- **Probers:** `icmp`, `tcp`, `udp`, `https`, `agent` (probe agents at your own sites, [agents.md](docs/agents.md)), `sim` and `fixed` (labs only).
+- **Probers:** `icmp`, `tcp`, `udp`, `https`, `twamp` (reordering trains to a reflector), `agent` (probe agents at your own sites, [agents.md](docs/agents.md)), `sim` and `fixed` (labs only).
 - **Target sources:** `static`, `flow` (NetFlow, IPFIX, sFlow), `traceroute`, `vip`, `outage`, `span` (mirror port or pcap; needs `NET_RAW`).
 - **Route feeds:** rib_source `bmp` (BMP and add-path from the routers, or BMP alone).
 - **Scorers:** `weighted` (default), `commit`, `cost`.
@@ -277,7 +277,7 @@ Almost every part of Packeteer is a plugin selected by `type` in the config. Unk
 - **Detection and safety:** detector `baseline` (flow anomaly detection, [anomaly.md](docs/anomaly.md)), threat_feed `http` (threat-intelligence lists, [threat-feeds.md](docs/threat-feeds.md)), and leak_source `bmp` and `rislive` ([leak-watch.md](docs/leak-watch.md)).
 - **Clusters:** elector `lease` (active/standby, [ha.md](docs/ha.md)) and federation `mtls` (several POPs, [multi-pop.md](docs/multi-pop.md)).
 - **Sign-in and lookups:** sso `oidc` ([auth.md](docs/auth.md)) and whois `rdap` (troubleshooting).
-- **Origin data and registries:** rpki `rtr`, `json`; irr `whois`, `file`; registry `peeringdb`, `ripe`; inventory `netbox`, `peeringmanager` ([registry.md](docs/registry.md), [inventory.md](docs/inventory.md)). They read, and only a confirmed registry push writes outside.
+- **Origin data and registries:** rpki `rtr`, `json`, and `ripestat` (display only); irr `whois`, `file`; registry `peeringdb`, `ripe`; inventory `netbox`, `peeringmanager` ([registry.md](docs/registry.md), [inventory.md](docs/inventory.md)). They read, and only a confirmed registry push writes outside.
 
 Only the announcers and the plugins that feed route decisions can put a route on the session, and those are compiled in only. An `exec` plugin is any executable you mount at `/etc/packeteer/plugins`; it works in the stock image as a prober, a target source, or a notifier, speaking one JSON request and one JSON reply per call. A `grpc` plugin is the same kind of program kept running over gRPC, for probers that hold state. None of them is an announcer.
 
@@ -332,16 +332,16 @@ Status on main for the 0.9.0 release (not tagged yet), capability rows per miles
 | v0.4 | 13 | 11 |
 | v0.6 | 7 | 7 |
 | v0.7 | 3 | 3 |
-| v0.8 | 19 | 15 |
-| v0.9 | 29 | 27 |
+| v0.8 | 20 | 16 |
+| v0.9 | 31 | 28 |
 | won't do | 2 | - |
-| **Total** | 139 | 128 |
+| **Total** | 142 | 130 |
 
 v0.1 is the outbound loop: probes, static and flow targets, an iBGP RIB, scoring with hysteresis, optional injection, the read-only UI and API, the container, and the FRR lab. v0.2 adds cost and commit control, SNMP, policies, alerts, and reports. v0.3 adds inbound optimization, BMP and add-path, multiple routers and IX, RTBH/FlowSpec mitigation, transit classification, and capped more-specific injection, all lab-proven. v0.4 adds multi-POP federation, active/standby HA and backup, RBAC/SSO/audit, flow-baseline anomaly detection that mitigates only on explicit rules, and the remaining UI rows. v0.5 is hardening on that matrix: dashboard clarity and a first-run checklist, CI-tested install and walkthrough docs, load and soak budgets, a MikroTik CHR lab in CI, and a scheduled router interop matrix. Field feedback from real observe-mode deployments (#54) is still open. v0.6 closes the gaps from the 2026-10-07 review of prefix selection, measurement, and the UI, adds flap quarantine, live apply, scale budgets up to multi-million path tables, upgrade from the UI, and a failure-mode e2e matrix. v0.7 adds exchange (IX) visibility for an edge network: an exchange view, IX LAN health probes, route-server vs bilateral prefix views, offload and potential-peers reports, dashboard widgets, Commit & Cost, Reports, search, System, and maintenance pages, and link-outs.
 
 v0.8 is about Internet exchanges and shared measurements: IXP observe-only mode with IX-F import, fabric probes, Birdseye route-server history and signals, fabric incident correlation, member pages, and multi-site health; RPKI origin labels; probe multiplexing with a PBR generator and a probe-path check; a shared IX port; PeeringDB lookup; BMP exchange peer monitoring; events from measured provider health; settings forms for most blocks of the config (the raw YAML covers the rest); and the opt-in herd with its hub. Some rows are partial: the shared IX port, potential peers, exchange autoconfig, the settings form, and herd (phase 1 and the hub; the hub has unit and integration tests only, not lab-proven). The rows say what is missing. No row is field-proven yet (#54), and none of it relaxes the safety rules above.
 
-v0.9 (this release, not tagged yet) is about evidence, explanations, and plugins: the Why? panel and confidence on every decision, steer verification, RPKI and IRR per provider path, registry hygiene, NetBox and Peering Manager inventory, exporters, an SNMP agent, gRPC plugins, probe agents, an external policy feed, BMP alone, MED and overload protection, and a refreshed UI (plain language, phone layout, keyboard and screen reader access, provider latency and loss). The opt-in `synthesize` block is lab only. Two v0.9 rows are partial (the eBPF data path and registry hygiene), and herd keeps its v0.8 gaps. Nothing is field-proven (#54). The shipped config and every example stay `mode: observe`.
+v0.9 (this release, not tagged yet) is about evidence, explanations, and plugins: the Why? panel and confidence on every decision, steer verification, RPKI and IRR per provider path, registry hygiene, NetBox and Peering Manager inventory, exporters, an SNMP agent, gRPC plugins, probe agents, an external policy feed, BMP alone, MED and overload protection, and a refreshed UI (plain language, phone layout, keyboard and screen reader access, provider latency and loss). The opt-in `synthesize` block is lab only. Three v0.9 rows are partial (the eBPF data path, registry hygiene, and onboarding, which does not read the router over a management API) and herd keeps its v0.8 gaps. Nothing is field-proven (#54). The shipped config and every example stay `mode: observe`.
 
 ## Upgrades
 
@@ -352,7 +352,10 @@ The Settings page can also upgrade in place (#196). It is off by default. It nee
 ### From 0.8 to 0.9
 
 - No config key was removed or renamed since 0.8, and the default stays `mode: observe`. Run `docker run --rm -v "$PWD/config.yaml:/etc/packeteer/config.yaml:ro" ghcr.io/grandarcher/packeteer:<new tag> -check` first.
-- Every new block is off until you add it: `synthesize`, `verify`, `atlas`, `ring_lg`, `exporters`, `threat_feeds`, `inventory`, `registry`, `external_policy`, `irr`, `probe.reorder`, and the `agent` prober. New secrets are environment variables only ([ENV.md](docs/ENV.md)).
+- Every new block is off until you add it: `synthesize`, `verify`, `atlas`, `ring_lg`, `exporters`, `threat_feeds`, `inventory`, `registry`, `external_policy`, `irr`, `geoip`, `probe.reorder`, and the `agent` prober. New secrets are environment variables only ([ENV.md](docs/ENV.md)).
+- `thresholds.med_tie_break` is on by default with `med_margin: 20`: a neighbor's MED can break ties between its exits and change an outbound decision. Set `med_tie_break: false` to keep the 0.8 decisions (#303).
+- A configured flow `problems` block now also scores sFlow and sampled NetFlow and IPFIX, on inbound resets only (#133).
+- New keys default to off or unset: `thresholds.require_evidence`, `probe.exclude`, `probe.per_asn_pps` (0), `providers[].asn`, `type`, `site`, and `interface_capacity_threshold_pct`, and the `geoip` download. Flow and SNMP `workers` are 4 (#384, #385). Every key and default: [CONFIG.md](docs/CONFIG.md).
 - `http.config_editor` is unset by default instead of `false`. The config editor and setup wizard open for an admin only while the first-run setup is pending (every provider `source_ip` in 192.0.2.0/24); a real config keeps them off, and `false` forces them off (#416).
 - The `icmp` prober sends each run as one train and waits `timeout` after the last send, so a slow reply that was counted as loss may now count as a reply (#224).
 - A provider that never answers holds only its share of the probe workers, and no performance move is made for a prefix until one round measures every provider (#381).

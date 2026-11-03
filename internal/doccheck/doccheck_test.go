@@ -3,9 +3,11 @@
 package doccheck
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -24,13 +26,21 @@ type count struct{ rows, done int }
 var milestoneCell = regexp.MustCompile(`^v0\.\d+(, v0\.\d+)*$`)
 
 // tableCounts counts the capability rows of docs/FEATURES.md by the first
-// milestone of each row, the rule the Summary section states.
-func tableCounts(t *testing.T, features string) map[string]count {
+// milestone of each row, the rule the Summary section states. It also counts
+// rows by status. A row it cannot place fails the test, so a malformed row
+// cannot drop out of the counts.
+func tableCounts(t *testing.T, features string) (map[string]count, map[string]int) {
 	t.Helper()
-	got := map[string]count{}
+	byMilestone := map[string]count{}
+	byStatus := map[string]int{}
 	for _, line := range strings.Split(features, "\n") {
-		cells := strings.Split(line, "|")
+		// A literal pipe inside a cell is written \| and is not a separator.
+		cells := strings.Split(strings.ReplaceAll(line, `\|`, "\x00"), "|")
 		if len(cells) < 7 || strings.TrimSpace(cells[0]) != "" {
+			continue
+		}
+		name := strings.TrimSpace(cells[1])
+		if name == "Feature" || strings.HasPrefix(name, "---") {
 			continue
 		}
 		status := strings.TrimSpace(cells[2])
@@ -42,20 +52,33 @@ func tableCounts(t *testing.T, features string) map[string]count {
 		case milestoneCell.MatchString(ms):
 			key = strings.Split(ms, ",")[0]
 		default:
-			continue
+			t.Fatalf("FEATURES.md row %q: milestone %q is not v0.N", name, ms)
 		}
-		c := got[key]
+		word := strings.Fields(strings.NewReplacer(":", " ", "(", " ", ",", " ", ";", " ").Replace(status))[0]
+		if word == "in" {
+			word = "in progress"
+		}
+		switch word {
+		case "done", "partial", "in progress", "planned", "won't":
+		default:
+			t.Fatalf("FEATURES.md row %q: unknown status %q", name, status)
+		}
+		c := byMilestone[key]
 		c.rows++
-		if strings.HasPrefix(status, "done") {
+		if word == "done" {
 			c.done++
 		}
-		got[key] = c
+		byMilestone[key] = c
+		if word == "won't" {
+			word = "won't do"
+		}
+		byStatus[word]++
 	}
-	return got
+	return byMilestone, byStatus
 }
 
-// summaryCounts reads "| v0.N | rows | done |" lines from one section of a
-// document, from the heading to the next "## " heading.
+// summaryCounts reads "| v0.N | rows | done |" lines (and the bold total
+// row) from one section of a document, from the heading to the next "## ".
 func summaryCounts(t *testing.T, doc, heading string) map[string]count {
 	t.Helper()
 	i := strings.Index(doc, heading)
@@ -66,15 +89,20 @@ func summaryCounts(t *testing.T, doc, heading string) map[string]count {
 	if j := strings.Index(section, "\n## "); j >= 0 {
 		section = section[:j]
 	}
-	row := regexp.MustCompile(`(?m)^\| (v0\.\d+|won't do) \| (\d+) \| (\d+|-) \|$`)
+	row := regexp.MustCompile(`(?m)^\| (?:\*\*)?(v0\.\d+|won't do|[Tt]otal)(?:\*\*)? \| (?:\*\*)?(\d+)(?:\*\*)? \| (?:\*\*)?(\d+|-)(?:\*\*)? \|$`)
 	got := map[string]count{}
 	for _, m := range row.FindAllStringSubmatch(section, -1) {
 		var c count
-		c.rows = atoi(t, m[2])
-		if m[3] != "-" {
-			c.done = atoi(t, m[3])
+		var err error
+		if c.rows, err = strconv.Atoi(m[2]); err != nil {
+			t.Fatal(err)
 		}
-		got[m[1]] = c
+		if m[3] != "-" {
+			if c.done, err = strconv.Atoi(m[3]); err != nil {
+				t.Fatal(err)
+			}
+		}
+		got[strings.ToLower(m[1])] = c
 	}
 	if len(got) == 0 {
 		t.Fatalf("no count rows under %q", heading)
@@ -82,34 +110,39 @@ func summaryCounts(t *testing.T, doc, heading string) map[string]count {
 	return got
 }
 
-func atoi(t *testing.T, s string) int {
-	t.Helper()
-	n := 0
-	for _, r := range s {
-		n = n*10 + int(r-'0')
-	}
-	return n
-}
-
 func TestFeatureCountsMatchTable(t *testing.T) {
 	features := read(t, "docs", "FEATURES.md")
-	table := tableCounts(t, features)
+	table, status := tableCounts(t, features)
 	if table["v0.9"].rows == 0 {
 		t.Fatalf("no v0.9 rows parsed: %v", table)
 	}
+	want := map[string]count{}
+	var total count
+	for ms, c := range table {
+		want[ms] = c
+		total.rows += c.rows
+		total.done += c.done
+	}
+	want["total"] = total
 	for name, doc := range map[string]map[string]count{
 		"docs/FEATURES.md Summary": summaryCounts(t, features, "## Summary"),
 		"README.md Features":       summaryCounts(t, read(t, "README.md"), "## Features"),
 	} {
-		for ms, want := range table {
-			if doc[ms] != want {
-				t.Errorf("%s: %s is %+v, the table has %+v", name, ms, doc[ms], want)
+		for ms, w := range want {
+			if doc[ms] != w {
+				t.Errorf("%s: %s is %+v, the table has %+v", name, ms, doc[ms], w)
 			}
 		}
 		for ms := range doc {
-			if _, ok := table[ms]; !ok && ms != "total" {
+			if _, ok := want[ms]; !ok {
 				t.Errorf("%s: %s has no rows in the table", name, ms)
 			}
+		}
+	}
+	for st, n := range status {
+		row := fmt.Sprintf("| %s | %d |", st, n)
+		if !strings.Contains(features, "\n"+row+"\n") {
+			t.Errorf("FEATURES.md status table lacks %q", row)
 		}
 	}
 }

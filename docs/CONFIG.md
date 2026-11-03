@@ -1380,8 +1380,6 @@ Sub-ranges of one prefix are probed one after another, like the prefix addresses
 
 A round that runs past the staleness window fails safe (stale data withdraws an improvement), but lower `max_total` or `max_subranges`, or raise `probe.rate_limit_pps`, if `/api/probes` shows results going stale. When two sources send sub-ranges for the same prefix, the first source in `sources` order wins and the later list is ignored. A prefix that only the decision state still keeps in the probe set (an active improvement no source lists any more) is measured on its addresses, not on its last sub-ranges.
 
-When more than one source sends sub-ranges for the same prefix, the first source that sent them wins and later lists are ignored; a pin from any source removes them. A sub-range whose probe errors counts as full loss for that provider.
-
 `/api/decisions` lists the sub-ranges on the decision (`subranges`: prefix, weight, each provider's score, and `best`), and sets `heterogeneous: true` when two of them have different best providers. The dashboard prefix card shows a "heterogeneous" badge and the sub-range table. Sub-ranges are measured only and never announced: the decision still steers only the learned prefix, and the allowlist, learned-RIB check, community and NO_EXPORT, `max_improvements`, hold time, and withdraw rules are unchanged. Announcing a sub-range is the separate, opt-in `synthesize` design (#122), which this block does not turn on. Rollback: remove `subranges` and restart.
 
 | Key | Default | Bounds |

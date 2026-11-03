@@ -6,7 +6,7 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 
 ## [0.9.0] - Unreleased
 
-Lab-proven additions for evidence, explanations, registries, exporters, and plugins: RPKI and IRR per provider path, decision explanations, a read-only SNMP agent, gRPC plugins, probe agents, an external policy feed, BMP alone, and a refreshed UI. Nothing here is field-proven (#54).
+Lab-proven additions for evidence, explanations, registries, exporters, and plugins: RPKI and IRR per provider path, decision explanations, an SNMP agent, gRPC plugins, probe agents, an external policy feed, BMP alone, and a refreshed UI, none field-proven (#54).
 
 ### Added
 
@@ -67,7 +67,8 @@ Lab-proven additions for evidence, explanations, registries, exporters, and plug
 
 ### Fixed
 
-- Atlas panel wording for refused addresses, and the history test no longer depends on the wall clock (#446, #444).
+- docs/atlas.md says which addresses Atlas refuses and when (#446).
+- A history test no longer depends on the wall clock (#444).
 - `ixp` with `rib_sources` and no `bgp.neighbors` is refused (#482).
 - Why panel: a commit or cost steer kept while a performance switch confirms no longer says the planner decided the thresholds or that the cap was not reached for lack of a better path (#448).
 - `POST /api/atlas/measure` answers the documented 404 when Atlas is off even with API writes disabled, not 403 (#447).
@@ -82,8 +83,11 @@ Lab-proven additions for evidence, explanations, registries, exporters, and plug
 
 ### Upgrade notes
 
-- No config key was removed or renamed since 0.8.0, and the shipped default stays `mode: observe`; run `-check` with your config on the new image first.
-- New blocks are off until you add them: `synthesize`, `verify`, `atlas`, `ring_lg`, `exporters`, `threat_feeds`, `inventory`, `registry`, `external_policy`, `irr`, `probe.reorder`, `agent`.
+- No config key was removed or renamed since 0.8.0, and the shipped default stays `mode: observe`; run `-check` on the new image first.
+- Off until you add the block: `synthesize`, `verify`, `atlas`, `ring_lg`, `exporters`, `threat_feeds`, `inventory`, `registry`, `external_policy`, `irr`, `probe.reorder`, `agent`.
+- `thresholds.med_tie_break` is on by default (`med_margin` 20): a neighbor's MED can break ties between its exits; set `med_tie_break: false` to keep 0.8 decisions (#303).
+- A configured flow `problems` block now also scores sFlow and sampled NetFlow/IPFIX, on inbound resets only (#133).
+- New keys are unset: `require_evidence`, `probe.exclude`, `probe.per_asn_pps`, `providers[].asn`, `type`, `site`, `interface_capacity_threshold_pct`; flow and SNMP `workers` are 4 (#384, #385).
 - `http.config_editor` is now unset by default instead of `false`: the editor opens only during first-run setup (all provider `source_ip` in 192.0.2.0/24); `false` still forces it off (#416).
 - The `icmp` prober sends each run as one train and waits `timeout` after the last send, so a slow reply that was loss may now count (#224).
 - A provider with no reply holds only its share of probe workers, and no performance move is made until a round measures every provider (#381).
