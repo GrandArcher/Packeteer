@@ -338,8 +338,9 @@ func (a *Announcer) WithdrawAll(ctx context.Context) error {
 	return nil
 }
 
-// Stop withdraws the routes this announcer published. The BGP session itself belongs to
-// the RIB view and is not shut down here. Graceful restart is never enabled.
+// Stop withdraws the routes this announcer published. The BGP session
+// belongs to the RIB view and is not shut down here. Graceful restart is
+// never enabled.
 func (a *Announcer) Stop(ctx context.Context) error { return a.WithdrawAll(ctx) }
 
 func (a *Announcer) validate(r plugin.Route) error {
