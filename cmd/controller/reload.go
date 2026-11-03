@@ -433,6 +433,11 @@ type reloader struct {
 
 func (r *reloader) setCur(next *config.Config) {
 	r.cur = next
+	if r.log != nil {
+		for _, w := range next.AllowlistWarnings() {
+			r.log.Warn("config reload: " + w)
+		}
+	}
 	if r.live != nil {
 		r.live.set(next)
 	}

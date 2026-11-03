@@ -933,3 +933,32 @@ func TestProbeExcludeAndPerASNCap(t *testing.T) {
 		t.Fatalf("defaults: per_asn_pps=%d exclude=%+v", plain.Probe.PerASNPPS, plain.Probe.Exclude)
 	}
 }
+
+// TestAllowlistRejectsDefaultRoute is #486: a /0 entry would allow every
+// prefix, as the mitigation allowlist already refuses. A short entry
+// loads with a warning.
+func TestAllowlistRejectsDefaultRoute(t *testing.T) {
+	for _, p := range []string{"0.0.0.0/0", "::/0"} {
+		y := edit(t, injectYAML, "    - 198.51.100.0/24", "    - "+p)
+		_, err := Parse([]byte(y))
+		if err == nil || !strings.Contains(err.Error(), "allowlist.prefixes[0]: "+p+" would allow every prefix") {
+			t.Errorf("%s: err = %v", p, err)
+		}
+	}
+
+	cfg, err := Parse([]byte(edit(t, injectYAML, "    - 198.51.100.0/24", "    - 192.0.0.0/7\n    - 198.51.100.0/24")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := cfg.AllowlistWarnings()
+	if len(w) != 1 || !strings.Contains(w[0], "192.0.0.0/7 is shorter than /8") {
+		t.Fatalf("warnings = %q", w)
+	}
+	cfg, err = Parse([]byte(injectYAML))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if w := cfg.AllowlistWarnings(); len(w) != 0 {
+		t.Fatalf("warnings for /24 and /48 entries: %q", w)
+	}
+}
