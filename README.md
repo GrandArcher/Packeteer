@@ -371,7 +371,7 @@ The Settings page can also upgrade in place (#196). It is off by default. It nee
     enabled: false
   ```
 
-- No config key was removed or renamed since 0.7. Run `docker run --rm -v "$PWD/config.yaml:/etc/packeteer/config.yaml:ro" ghcr.io/grandarcher/packeteer:0.8.0 -check` first.
+- No config key was removed or renamed since 0.7. Run `docker run --rm -v "$PWD/config.yaml:/etc/packeteer/config.yaml:ro" ghcr.io/grandarcher/packeteer:<new tag> -check` first.
 - Provider health labels on the dashboard now follow measured loss: no reply or loss at `probe.down_loss_pct` is `down`, loss at `probe.degraded_loss_pct` is `degraded` (#343). They do not change a decision.
 - The probe-path check (#150) is on by default. A provider whose probes do not leave through its `next_hop` is marked down with the reason `probe path mismatch`, for example one reached across another router. Set `path_check: false` on that provider or exchange peer, or `probe.path_check.enabled: false` for all ([CONFIG.md](docs/CONFIG.md#probepath_check)).
 - New events reach every notifier that does not filter them: `provider.down`, `provider.degraded`, and `bgp.session_not_established` (#347). Limit them with the notifier's `events` and `min_severity` ([CONFIG.md](docs/CONFIG.md#notifier-filters-every-notifier)).
